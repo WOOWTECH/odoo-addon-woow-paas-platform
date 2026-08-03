@@ -282,7 +282,10 @@ class ProjectProject(models.Model):
         # source, never inferred from an attacker-controllable context value.
         # ⚠ The branch below selects on ``env.uid``, NOT on ``env.is_superuser()``
         #   — and ``sudo()`` does NOT reach the SUPERUSER branch. Odoo 18
-        #   ``odoo/models.py:6290-6291`` (sudo() docstring), verbatim:
+        #   ``odoo/models.py``'s ``BaseModel.sudo()`` docstring, verbatim
+        #   (symbol, not line number — this box carries two distinct odoo trees
+        #   whose copies of this file differ by 16 lines, so a line number is
+        #   only ever right for one of them and the doc never says which):
         #     "The superuser mode does not change the current user, and simply
         #      bypasses access rights checks."
         #   So ``sudo()`` sets ``env.su`` and leaves ``uid`` alone; only a real

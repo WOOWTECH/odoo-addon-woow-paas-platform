@@ -22,18 +22,34 @@ cloud_service ═══ M:N: project_cloud_service_rel ═══► project.proj
 
 `cloud_service.unlink()` 不會連坐刪 project，也不會 trigger `mcp_server.project_id` cascade（cascade 只在 `project.unlink()` 才 fire）— 結果 cloud_service 走了，sidecar-backed user-scope mcp_server row 留在 DB，URL 指向已不存在的 sidecar = zombie。
 
-> ⚠ **關於 `project.cloud_service_id` 的 `ondelete='set null'`（2026-08 補記，刻意不下定論）**：
-> 本 doc 舊版把「`project.cloud_service_id` 是 `ondelete='set null'`」當成 zombie 成因的機制。
+> ⚠ **關於 `project.cloud_service_id` 的 `ondelete='set null'`（2026-08 實測補記）**：
 > 今天 `cloud_service ↔ project` 已是 **M:N**（`project_cloud_service_rel`，`cloud_service.py:332-339` /
 > `project_project.py:20-29`），單數 `cloud_service_id` 退化成 `compute` + `inverse` + `store=True` 的
 > deprecated 欄位（`project_project.py:31-45`，欄位定義內**沒有**再宣告 `ondelete`）。
-> **但「欄位定義沒寫 `ondelete`」≠「DB FK 不是 SET NULL」**——Odoo 對非 required 的 stored M2O 預設就建
-> `ON DELETE SET NULL`，而 migration `18.0.1.0.26` 是**刻意保留** column（`post-migrate.py` 的
-> `Keep the cloud_service_id column`）、全程沒有任何 drop/alter FK。develop 上也還有五處在主張 set null
-> （`cloud_service.py:3105` docstring、`test_mcp_integration.py` 四處斷言訊息）。
-> ⇒ **實際 FK 語意未經 DB 量測，本 doc 不對它下判斷。** 本 pattern 需要的前提只有一句：
-> **刪 service 不會連坐刪 project** —— 這句無論 FK 是 set-null 還是只拆 M:N rel 列都成立。
-> 要定案請跑 `\d+ project_project` / `information_schema.referential_constraints` 看 `confdeltype`。
+> 這一度讓人以為「set null 已不存在」，但**「欄位定義沒寫 `ondelete`」≠「DB FK 不是 SET NULL」**。
+>
+> **量出來了：FK 仍然是 `ON DELETE SET NULL`。**
+> 量測方法（自己重量一次，別信這段文字會永遠成立）：
+> ```sql
+> SELECT c.conname, c.confdeltype
+> FROM pg_constraint c JOIN pg_class t ON t.oid = c.conrelid
+> JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = ANY(c.conkey)
+> WHERE t.relname='project_project' AND c.contype='f'
+>   AND a.attname='cloud_service_id';
+> -- → project_project_cloud_service_id_fkey | n     （confdeltype 'n' = SET NULL）
+> ```
+> 欄位本身也還在且 nullable。原因：`cloud_service_id` 仍是 `store=True` 的 Many2one 且**沒有**
+> `ondelete=`，Odoo 對非 required 的 stored M2O schema sync 預設就建 `ON DELETE SET NULL`；
+> migration `18.0.1.0.26` 又是**刻意保留** column（`post-migrate.py` 的 `Keep the cloud_service_id column`）、
+> 全程沒有任何 drop/alter FK，所以升版路徑也維持同一個語意。
+> ⇒ **develop 上仍在主張 set null 的那幾處都是對的，不要「順手修正」它們**：
+> `cloud_service.py:3105` docstring、`test_mcp_integration.py` 四處斷言訊息，
+> **以及本 doc 自己 §為什麼不靠 `@api.constrains` 兜底 的第一條**（`service.unlink()` → `cloud_service_id`
+> 變 NULL）——盤這種清單時最容易漏掉的就是自己這一份，那正是 #547 的根因形狀。
+>
+> 話雖如此，本 pattern 需要的前提比 FK 語意弱得多，只有一句：**刪 service 不會連坐刪 project**
+> —— 這句無論 FK 是 set-null 還是只拆 M:N rel 列都成立，寫處方時優先靠它。
+> ⚠ 上面的量測跑在一個 fresh install 的 DB 上；既有環境若有人手動改過 FK，以你自己重跑的結果為準。
 
 **不適用**：
 

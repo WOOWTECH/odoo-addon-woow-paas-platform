@@ -1554,9 +1554,13 @@ class AiAssistantController(Controller):
         project = request.env['project.project'].sudo().create(vals)
         # ⚠ CORRECTION (#547): an earlier version of this comment claimed
         # "sudo().create() leaves create_uid=SUPERUSER". That is FALSE.
-        # ``odoo/models.py:5130`` does ``vals.setdefault('create_uid',
-        # self.env.uid)`` and ``sudo()`` does not change uid
-        # (``odoo/models.py:6290-6291``), so create_uid here is the TENANT.
+        # ``odoo/models.py``'s ``BaseModel.create()`` does
+        # ``vals.setdefault('create_uid', self.env.uid)`` (the magic-field
+        # block under ``if self._log_access:``) and ``sudo()`` does not change
+        # uid (see the ``sudo()`` docstring on ``BaseModel``), so it is the
+        # TENANT. Symbols, not line numbers: this box carries two distinct odoo
+        # trees whose copies of that file differ by 16 lines, so a line number
+        # is only ever right for one of them.
         # D2=A: subscribe the caller as a follower so the
         # project_rule_workspace_member message_partner_ids sub-leg passes —
         # required for unbound projects (no workspace member leg) and harmless

@@ -312,8 +312,8 @@ class TestPhaseDBootstrapOwnerHint(TransactionCase):
 
         The hint is trusted ONLY on the SUPERUSER path — a genuine root env
         (uid == 1), NOT ``.sudo()`` (#547: sudo leaves uid untouched, see
-        ``odoo/models.py:6290-6291``). A normal caller must not be able to
-        assign 'owner' to an arbitrary partner via
+        ``odoo/models.py``'s ``BaseModel.sudo()`` docstring). A normal caller
+        must not be able to assign 'owner' to an arbitrary partner via
         ``bootstrap_owner_partner_id``. A normal user's create owns ITSELF and
         the hinted third-party partner gets no owner row. This locks the
         /simplify tightening — without it, reverting the hint to "wins on any
@@ -349,8 +349,9 @@ class TestPhaseDBootstrapOwnerHint(TransactionCase):
         This locks the branch selector in ``project_project.create()``
         (``if self.env.uid == SUPERUSER_ID:``). It is a *branch selector*, not a
         bypass guard: ``sudo()`` sets ``env.su`` but leaves ``uid`` alone
-        (``odoo/models.py:6290-6291`` — "The superuser mode does not change the
-        current user"), so a tenant's ``.sudo().create()`` must fall into the
+        (``odoo/models.py``'s ``BaseModel.sudo()`` docstring — "The superuser
+        mode does not change the current user"), so a tenant's
+        ``.sudo().create()`` must fall into the
         else-branch and take ``env.user.partner_id`` as owner. Flipping the
         selector to ``env.is_superuser()`` routes it into the SUPERUSER branch,
         which returns early with no hint → the project gets ZERO project_access
@@ -398,7 +399,7 @@ class TestPhaseDBootstrapOwnerHint(TransactionCase):
         project = scoped.sudo().create({'name': f'fpa14s-{suffix}'})
         self.assertEqual(
             project.create_uid.id, user.id,
-            "sudo() must not change create_uid (odoo/models.py:5130 does "
+            "sudo() must not change create_uid (BaseModel.create() does "
             "vals.setdefault('create_uid', self.env.uid) and sudo() leaves uid "
             "alone) — if this fails the whole premise of this test is void.",
         )

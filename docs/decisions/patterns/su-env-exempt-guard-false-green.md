@@ -43,7 +43,7 @@ if 'subdomain_prefix' in vals and not self.env.su:
 
 ### 第三撞 —— 逃生口本身被 RPC 偽造（#522 / PR#537）
 
-前兩撞把豁免從 `env.su` 換成 context key，su-env 假綠是關掉了，但逃生口的**值**還是裸真值。`/web/dataset/call_kw` 把 caller 的 context 原封不動交給 ORM —— `addons/web/controllers/dataset.py:32-36` 直接 `call_kw(request.env[model], method, args, kwargs)`（kwargs 未過濾），`odoo/api.py:530-532` 再 `kwargs = dict(kwargs)` / `context = kwargs.pop('context', None) or {}` / `recs = recs.with_context(context)`。注意那是**位置參數**＝整包取代不是 merge（`odoo/models.py:6362-6376` 的 `with_context` docstring 明證），所以那次呼叫的 `env.context` 完全由 caller 決定。
+前兩撞把豁免從 `env.su` 換成 context key，su-env 假綠是關掉了，但逃生口的**值**還是裸真值。`/web/dataset/call_kw` 把 caller 的 context 原封不動交給 ORM —— `addons/web/controllers/dataset.py` 的 `DataSet.call_kw` route handler 直接 `call_kw(request.env[model], method, args, kwargs)`（kwargs 未過濾），`odoo/api.py` 的 module-level `call_kw()` 再 `kwargs = dict(kwargs)` / `context = kwargs.pop('context', None) or {}` / `recs = recs.with_context(context)`。注意那是**位置參數**＝整包取代不是 merge（`odoo/models.py` 的 `BaseModel.with_context()` docstring 明證），所以那次呼叫的 `env.context` 完全由 caller 決定。
 
 ⇒ **任何能經 `/web/dataset/call_kw` 觸及本 model 的非系統帳號**，只要在 payload 多塞一把 `context: {"sa_internal_identity_write": true}`，guard 覆蓋的每個欄位就全開；18.0 實測 `canonical_name` 被改寫並 commit 進 Postgres（#522 的 sandbox 實測用的是一個只有 `base.group_user` 的 workspace owner，見 `src/tests/test_security_access_identity_anchor_522.py:88-94`）。
 
@@ -57,7 +57,7 @@ if 'subdomain_prefix' in vals and not self.env.su:
 2. **`sudo()` 路徑靜默繞過**：`env.su` 豁免不只放行測試，也放行任何 `record.sudo().write(...)` 的內部 / controller 路徑。identity invariant 是「對**所有人**包含 superuser 都不可變」的 hard invariant，用 su 當逃生口等於把逃生口開給每一條 sudo 呼叫。
 3. **`create()` 不經 `write()`**：`super().create()` 不會走 model 的 `write()` override，所以「只在 `write()` 放 guard」對 create-time 注入完全無效。不可變欄位的守線**必須同時覆蓋 create（vals 注入）與 write（事後改值）**，缺一邊就是半套。
 4. **per-call 明示 opt-in 才是對的逃生口形狀**：`record.with_context(...).write({...})` 是一次呼叫的明示宣告，只有唯一合法的初始化 / 維修路徑會設；不像 `env.su` 是一整類呼叫的隱式屬性。預設沒人設它 → 預設對所有人關閉 → 測試在 su env 下也能真正走到 deny。
-5. **但 context 是使用者可寫的**：`call_kw` 把 caller 的 context **整包換進** env（`odoo/api.py:530-532` 是 `with_context(context)` 位置參數，不是 merge），所以「key 存在且為真」這種判斷等於把逃生口開在 RPC payload 上。逃生口必須綁在 **JSON 表達不出來的東西**上 —— 模組層級私有 sentinel 物件 + `is` 比對：
+5. **但 context 是使用者可寫的**：`call_kw` 把 caller 的 context **整包換進** env（`odoo/api.py` 的 module-level `call_kw()` 是 `with_context(context)` 位置參數，不是 merge），所以「key 存在且為真」這種判斷等於把逃生口開在 RPC payload 上。逃生口必須綁在 **JSON 表達不出來的東西**上 —— 模組層級私有 sentinel 物件 + `is` 比對：
 
    ```python
    class _InternalIdentityWrite:

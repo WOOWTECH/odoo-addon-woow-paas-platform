@@ -72,9 +72,11 @@ class AgentTemplate(models.Model):
         attack chain and bypass logic.
         """
         # ⚠ bypass 判準必須是 env.is_superuser()，不可寫 env.uid == SUPERUSER_ID：
-        # Odoo 的 sudo() 只把 env.su 設 True，**uid 不變** —— odoo/models.py:6290-6291
-        # 的 sudo() docstring 逐字：「The superuser mode does not change the current
-        # user, and simply bypasses access rights checks.」
+        # Odoo 的 sudo() 只把 env.su 設 True，**uid 不變** —— 見 odoo/models.py 的
+        # BaseModel.sudo() docstring 逐字：「The superuser mode does not change the
+        # current user, and simply bypasses access rights checks.」
+        #（刻意記符號不記行號：同一台機器上可能同時存在兩份自稱 18.0 的 odoo，
+        #  同一個檔案的行號差 16 行，任何一個數字都只對其中一份為真）
         # 用 uid 比對會讓所有 .sudo() 合法寫入路徑掉進 grantor 檢查 → 假性 ValidationError。
         if self.env.is_superuser() or self.env.user.has_group('base.group_system'):
             return  # bypass — admin / migration / cron all need to write across projects
@@ -186,7 +188,7 @@ Create direction 也走 `@api.constrains('project_ids')` trigger — Odoo 在 cr
 
 **Bypass 路徑風險評估**：
 
-- SUPERUSER bypass：判準是 `env.is_superuser()`（即 `env.su`），涵蓋兩種入口：uid 真的是 1 的 root env（install hook / migrate / `api.Environment(cr, SUPERUSER_ID, {})`），以及任何 `.sudo()` recordset。**`sudo()` 不改 uid，只把 `su` 設 True** —— `odoo/models.py:6290-6291` 的 docstring 逐字：「The superuser mode does not change the current user, and simply bypasses access rights checks.」；`odoo/api.py` 的 `__new__` 又有 `if uid == SUPERUSER_ID: su = True`，所以 `is_superuser()` 是 `uid == SUPERUSER_ID` 的**嚴格超集**。**不可**用 `env.uid == SUPERUSER_ID` 代替 —— 那會漏掉全部 `.sudo()` 路徑，把合法 seeding / bootstrap 一起擋掉（silent functional regression，見下方 Anti-patterns 表）。
+- SUPERUSER bypass：判準是 `env.is_superuser()`（即 `env.su`），涵蓋兩種入口：uid 真的是 1 的 root env（install hook / migrate / `api.Environment(cr, SUPERUSER_ID, {})`），以及任何 `.sudo()` recordset。**`sudo()` 不改 uid，只把 `su` 設 True** —— `odoo/models.py` 的 `BaseModel.sudo()` docstring 逐字：「The superuser mode does not change the current user, and simply bypasses access rights checks.」；`odoo/api.py` 的 `__new__` 又有 `if uid == SUPERUSER_ID: su = True`，所以 `is_superuser()` 是 `uid == SUPERUSER_ID` 的**嚴格超集**。**不可**用 `env.uid == SUPERUSER_ID` 代替 —— 那會漏掉全部 `.sudo()` 路徑，把合法 seeding / bootstrap 一起擋掉（silent functional regression，見下方 Anti-patterns 表）。
   ⚠ 「cron 走 SUPERUSER」這句要小心：`ir.cron` 以 cron 記錄上的 `user_id` 執行，常是 admin（uid=2）而非 OdooBot（uid=1），那種情況兩種判準都不放行、只靠 `base.group_system` 那一腿過。
 - `base.group_system` bypass：Odoo std `Settings` 群，比 `base.group_user` 高一階；一般 tenant user 沒 group_system；本 PaaS 平台 group_system 通常只給 platform admin（操作 backend）
 
@@ -262,7 +264,7 @@ agent_template.project_ids 寫 attempt
 | 「Python constraint 用 `write()` override 而非 `@api.constrains`」 | Create direction 漏守 — attacker 透過 `create({'m2m_field': [(6, 0, [legit, victim])]})` 一招過 |
 | 「Constraint loop 用 `tmpl.project_ids - tmpl._origin.project_ids`（delta-only）」 | 從 `_origin` 取 diff 看似聰明，但對 create direction 無 `_origin`；且 future regression：若 constraint 改成 delta-only，攻擊者改 `create + immediate write` 兩步同樣繞 — **always loop full m2m membership** |
 | 「Constraint 漏 `is_superuser()` 或 `has_group('base.group_system')` bypass」 | Migration / cron / admin form 全擋住 — silent functional regression |
-| 「Bypass 寫成 `env.uid == SUPERUSER_ID` 而非 `env.is_superuser()`」 | `sudo()` 不改 uid（只設 `env.su`；`odoo/models.py:6290-6291` docstring）⇒ 所有 `.sudo()` 合法路徑都繞不過 constraint。後果鏈：`project.project.sudo().create()` → bootstrap `project_access.sudo().create({'role':'owner'})` → grantor 查無 row → `ASSIGNABLE_ROLES_BY_ROLE.get(None, [])` = `[]` → `AccessError` → 租戶連 project 都建不了 |
+| 「Bypass 寫成 `env.uid == SUPERUSER_ID` 而非 `env.is_superuser()`」 | `sudo()` 不改 uid（只設 `env.su`；`odoo/models.py` 的 `BaseModel.sudo()` docstring）⇒ 所有 `.sudo()` 合法路徑都繞不過 constraint。後果鏈：`project.project.sudo().create()` → bootstrap `project_access.sudo().create({'role':'owner'})` → grantor 查無 row → `ASSIGNABLE_ROLES_BY_ROLE.get(None, [])` = `[]` → `AccessError` → 租戶連 project 都建不了 |
 | 「Constraint 用 `env.user.has_group('base.group_user')` 反向 deny」 | 任何 internal user 都過 group_user check（Odoo std），結果什麼都 deny — pattern 反向實作 |
 | 「Constraint `search([(..., '=', user.id)], limit=1)` 沒走 `sudo()`」 | base.group_user 對 `project_access` 的 ir.rule 收緊 user 只看自己 row → constraint 評估 victim B 上 attacker 是否有 row 看到 empty → 誤判 deny 為 missing access (correct effect) — 但邊界情境若 ir.rule 對 `project_access` 改寬鬆，constraint 邏輯隨之變動 → **走 `sudo()` 鎖死 ground truth**。⚠ 2026-08 實況：本 doc 自稱的 canonical 實作 `src/models/agent_template.py:113-115` 用的是**未 sudo** 的 `proj.project_access_ids.filtered(...)`（O2M 讀取，受 `project_access` 的 ir.rule 影響）——**這一列是 doc 對 code 的要求，code 尚未照做**，方向與本 doc 其他條相反，別誤讀成現況描述 |
 | 「`is_public=True` 路徑漏走 constraint」 | `is_public` template 本意是「ignore project_ids」，但若 attacker set `is_public=True` + 帶 victim project 進 `project_ids` — `_check_visibility_consistency` 允許（is_public=True 不要求 project_ids），但 grantor constraint 對非空 `project_ids` 仍應評估 — 否則 attacker 用 is_public 旁路 |

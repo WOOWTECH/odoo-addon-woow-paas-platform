@@ -128,11 +128,11 @@ Trial 語意是 **per-service（per-entity）一生一次**（#367 的第二顆 
 
 > 為什麼第三方的 auto-invoice cron 兜不住這個洞（#547 靜態複查，2026-08）：
 > `sh_subscription/data/subscription_cron.xml:5-14` 的 `ir.cron`（每日一次、`model._sh_create_auto_invoice()`）
-> **沒有宣告 `active` 欄位** ⇒ 取 `ir.cron.active` 的預設 `True`（`odoo/addons/base/models/ir_cron.py:73`），
+> **沒有宣告 `active` 欄位** ⇒ 取 `ir.cron.active` 的預設 `True`（`odoo/addons/base/models/ir_cron.py` 的 `ir.cron` model 上 `active = fields.Boolean(default=True)`），
 > 也就是說它是開著的。但它的實作有 bug：`_sh_create_auto_invoice`（`sh_subscription_subscription.py:373-406`）
 > 標了 `@api.model`，迴圈變數是 `subscription`，第 `:377` 行卻寫
 > `invoice_vals = self._generate_invoice_vals()` —— **`self` 是 model-level 空 recordset**。
-> Odoo 對空 recordset 讀欄位回 null 值而不拋錯（`odoo/fields.py:1224-1227`；`.id` 回 `False`，`odoo/fields.py:5335-5336`），
+> Odoo 對空 recordset 讀欄位回 null 值而不拋錯（`odoo/fields.py` 的 `Field.__get__`，`if not record._ids:` 那條 null-record 分支；`.id` 回 `False` 見同檔 `Id.__get__` 的 `if size == 0: return False`），
 > 所以那組 vals 是 `sh_subscription_id=False` / `partner_id=False` / `journal_id=False` 的空殼
 > （`journal_id` 在 `account.move` 是 `required=True`，所以實際上要嘛 create 直接拋錯、要嘛生出一張
 > 與該訂閱毫無關聯的發票——**兩個方向都不會為那筆訂閱補開首期發票**），而 `:381-391` 仍會把
