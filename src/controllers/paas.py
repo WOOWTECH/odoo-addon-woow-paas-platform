@@ -2974,7 +2974,11 @@ class PaasController(HiddenChainMixin, Controller):
                 'internal_port': template.default_port,
                 'helm_release_name': helm_release_name,
                 'helm_namespace': helm_namespace,
-                'helm_values': json.dumps(merged_values),
+                # #559：helm_values 有 groups=，放在 create vals 裡會讓租戶身分的
+                # create 直接 AccessError。改在 create 之後以提權入口寫入
+                # （`_apply_helm_values` 套用與 create() 相同的敏感值剝除）。
+                # **刻意不 sudo 整個 create** —— 那會連 ir.rule 的 create 檢查
+                # 一起繞掉，那是 #519 的範圍，不在本單。
                 'helm_chart_version': template.helm_chart_version,
                 # #332：allocated_* 改讀選定 plan 規格、0 值 fallback template.min_*
                 **CloudService._allocated_vals_from(template, plan),
@@ -3006,6 +3010,7 @@ class PaasController(HiddenChainMixin, Controller):
                 if admin_password else CloudService
             )
             service = service_model.create(service_vals)
+            service._apply_helm_values(merged_values)  # #559
 
             # ⚠ 順序刻意：所有「還可能失敗」的落庫步驟都排在建訂閱**之前**。
             # `_create_and_confirm_subscription` 會同步寄出訂閱確認信
@@ -3188,7 +3193,7 @@ class PaasController(HiddenChainMixin, Controller):
                         }
 
             # Filter user values to only allowed keys, reject unauthorized
-            existing_values = json.loads(service.helm_values) if service.helm_values else {}
+            existing_values = service._helm_values_dict()  # #559：唯一入口
             filtered_user_values, rejected_keys = self._filter_allowed_helm_values(values, service.template_id)
             if rejected_keys:
                 return {'success': False, 'error': f'Unauthorized configuration keys: {", ".join(rejected_keys)}'}
@@ -3256,13 +3261,16 @@ class PaasController(HiddenChainMixin, Controller):
 
             # Transition to upgrading BEFORE calling operator so the
             # frontend gets an immediate response with state='upgrading'.
-            service.write({
+            # #559：helm_values 這一格走提權入口，其餘欄位維持使用者身分寫入
+            # （ir.rule 對它們照常生效）。兩次 write 在同一個 transaction 內。
+            service._apply_helm_values(merged_values, extra_vals={
                 'state': 'suspended' if halted else 'upgrading',
-                'helm_values': json.dumps(merged_values),
                 # #552: 與 upgrade_kwargs 用同一個 `resolved_version`，兩處語意不
                 # 分岔（原式 `version or service.helm_chart_version` 在 fallback
                 # 之後恆等於 `resolved_version`）。這是升級**前**的樂觀值；成功後
                 # 由背景執行緒以 operator 回報的實際版本覆蓋。
+                # #559：`helm_values` 已移出這個 write，改由 `_apply_helm_values`
+                # 以提權入口寫入（欄位加了 groups=，租戶身分寫不進來）。
                 'helm_chart_version': resolved_version,
                 # ⚠ `fields.Datetime.now()`（UTC）而**不是** `datetime.now()`
                 # （本機時區）。#489 讓這個欄位從「前台顯示用」變成 age timeout
@@ -3719,17 +3727,21 @@ class PaasController(HiddenChainMixin, Controller):
                         'init_retries': 0,
                         'init_error': False,
                     }
-                    if template.mcp_api_key_helm_path and service.helm_values:
+                    merged_helm_values = None
+                    if template.mcp_api_key_helm_path:
                         try:
-                            current_values = json.loads(service.helm_values)
+                            # #559：走 model 的唯一入口（欄位有 groups=）
+                            current_values = service._helm_values_dict()
                             api_key_nested = self._unflatten_dotpath_keys(
                                 {template.mcp_api_key_helm_path: real_api_key}
                             )
-                            updated_values = self._deep_merge(current_values, api_key_nested)
-                            update_vals['helm_values'] = json.dumps(updated_values)
+                            merged_helm_values = self._deep_merge(current_values, api_key_nested)
                         except (json.JSONDecodeError, TypeError):
                             _logger.warning("Failed to update helm_values with real API key for service %s", service.name)
-                    service.write(update_vals)
+                    if merged_helm_values is not None:
+                        service._apply_helm_values(merged_helm_values, extra_vals=update_vals)
+                    else:
+                        service.write(update_vals)
                     _logger.info(
                         "n8n init succeeded for service %s, API key and helm_values updated",
                         service.name,
@@ -3923,9 +3935,11 @@ class PaasController(HiddenChainMixin, Controller):
                 'helm_namespace': service.helm_namespace,
                 'helm_release_name': service.helm_release_name,
                 'helm_chart_version': service.helm_chart_version,
+                # #559：helm_values 有 groups='base.group_system'，屬性直讀會
+                # AccessError。走 model 的唯一入口——租戶看得到的仍是遮罩後的值
+                # （#535），只是 ORM 直讀那條側門被關上了。
                 'helm_values': self._sanitize_helm_values(
-                    json.loads(service.helm_values) if service.helm_values else {},
-                    service.template_id,
+                    service._helm_values_dict(), service.template_id,
                 ),
                 'internal_port': service.internal_port,
                 'allocated_vcpu': service.allocated_vcpu,

@@ -320,3 +320,6 @@ from . import test_poll_teardown_rollback_525
 from . import test_update_project_mcp_residue_525_b4
 # fix: #554 MCP sync／connection test 失敗被雙層吞掉 → API 回 success:True（#525 B1／B2 的真修法）
 from . import test_mcp_sync_failure_visibility_554
+# fix: #559 cloud_service.helm_values 缺欄位級授權 —— 租戶可用 call_kw 直讀明文憑證
+# 繞過 #535 的 controller 遮罩層（實測坐實）；補 groups= ＋ 提權入口 ＋ 租戶身分覆蓋
+from . import test_helm_values_field_acl_559
