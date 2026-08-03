@@ -2420,7 +2420,23 @@ class CloudService(models.Model):
             )
         except PaaSOperatorError as e:
             if e.status_code == 404 and self.state == 'deleting':
-                self.unlink()
+                # #525 B5：與 controller 的 `_update_service_status` 同形，缺陷
+                # 也同形——`unlink()` 中途拋錯 → 例外逸出這個 except handler
+                # （同層 sibling 的 `except Exception` 接不到）→ 被唯一呼叫端
+                # `_cron_check_deploying_services` 迴圈的 catch-all 吞掉 → cron
+                # 照常 commit 刪一半的狀態。
+                #
+                # ⚠ **今天這條分支不可達**：唯一的生產呼叫端 cron 的 domain 是
+                # `state in ('deploying','upgrading','initializing')`（本檔
+                # `_cron_check_deploying_services`），不含 `deleting`，所以
+                # `self.state == 'deleting'` 在被呼叫到時恆為 False。這裡的
+                # savepoint 是**結構防護**：domain 一旦補上 `deleting`（controller
+                # 側的 `_list_services` 就是這樣列的），殘留立刻可達，而那時不會
+                # 有人記得回來補這一行。形態同
+                # `subscription_lifecycle_cron._cron_enforce_subscription_lifecycle`
+                # 的 per-item savepoint。
+                with self.env.cr.savepoint():
+                    self.unlink()
             else:
                 _logger.warning("Error polling status for %s: %s", self.name, e)
             return

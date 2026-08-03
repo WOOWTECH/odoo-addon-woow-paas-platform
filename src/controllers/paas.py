@@ -3616,7 +3616,22 @@ class PaasController(HiddenChainMixin, Controller):
                 CloudService = request.env['woow_paas_platform.cloud_service']
                 service = CloudService.browse(service_id)
                 if service.exists() and service.state == 'deleting':
-                    service.unlink()
+                    # #525 B5：`CloudService.unlink()` 是多步驟 teardown（sidecar
+                    # MCP 刪除 → `super().unlink()` → 訂閱結算＋按比例退點），中途
+                    # 拋錯就留下刪一半的狀態。而這一行在 `except` handler **內**：
+                    # Python 不讓同層 sibling 的 `except Exception`（本函式末尾）
+                    # 接到它，例外直接逸出本函式，落到唯一可達的呼叫端
+                    # `_list_services` 的 catch-all 被吞掉 → request 正常結束 →
+                    # Odoo 照常 commit 那半套刪除，端點還回 `success: True`。
+                    #
+                    # 用 savepoint 而非 `cr.rollback()`：走到這裡之前，
+                    # `_list_services` 的輪詢迴圈可能已對**其他**服務寫下
+                    # `state='running'`，整個 rollback 會把它們一起撤掉（判準見
+                    # #525 留言「try 之前是否有要保留的寫入」→ 有 ⇒ 必須
+                    # savepoint）。savepoint 只回捲這一次 teardown，例外照常往外
+                    # 傳、服務留在 `deleting`，下一輪 poll 再重試。
+                    with request.env.cr.savepoint():
+                        service.unlink()
             else:
                 _logger.warning("Error polling service status: %s", str(e))
 
