@@ -178,6 +178,7 @@ class TestMcpSyncFailureVisibility(HttpCase):
 
     # ── 陽性對照：成功時 API 回 True 且 state 變 connected ─────────────
     def test_positive_control_project_sync_succeeds(self):
+        """[陽性對照]"""
         with self._succeed_async_sync():
             result = self._project_action('sync')
 
@@ -188,6 +189,7 @@ class TestMcpSyncFailureVisibility(HttpCase):
             '成功路徑必須把 state 寫成 connected——探針有鑑別力的證明')
 
     def test_positive_control_project_test_succeeds(self):
+        """[陽性對照]"""
         with self._succeed_async_test():
             result = self._project_action('test')
 
@@ -199,6 +201,7 @@ class TestMcpSyncFailureVisibility(HttpCase):
 
     # ── 主斷言：sync 失敗必須回 success: False ───────────────────────
     def test_project_sync_failure_is_reported(self):
+        """[缺陷探針]"""
         with self._fail_async_sync():
             result = self._project_action('sync')
 
@@ -215,6 +218,7 @@ class TestMcpSyncFailureVisibility(HttpCase):
             '（回 %r）' % (result,))
 
     def test_service_sync_failure_is_reported(self):
+        """[缺陷探針]"""
         with self._fail_async_sync():
             result = self._service_action('sync')
 
@@ -229,6 +233,7 @@ class TestMcpSyncFailureVisibility(HttpCase):
 
     # ── 主斷言：connection test 失敗必須回 success: False ─────────────
     def test_project_connection_test_failure_is_reported(self):
+        """[缺陷探針]"""
         with self._fail_async_test():
             result = self._project_action('test')
 
@@ -242,6 +247,7 @@ class TestMcpSyncFailureVisibility(HttpCase):
             '連線測試失敗時 API 不得回報成功（回 %r）' % (result,))
 
     def test_service_connection_test_failure_is_reported(self):
+        """[缺陷探針]"""
         with self._fail_async_test():
             result = self._service_action('test')
 
@@ -256,6 +262,7 @@ class TestMcpSyncFailureVisibility(HttpCase):
 
     # ── 錯誤訊息要帶得出來（裁決點 2：controller 讀 state_message）────
     def test_failure_surfaces_the_underlying_reason(self):
+        """[缺陷探針]"""
         with self._fail_async_sync():
             result = self._project_action('sync')
 
@@ -270,6 +277,7 @@ class TestMcpSyncFailureVisibility(HttpCase):
 
     # ── 稽核紀錄不得被回捲（否決 (a) raise 的那條理由）───────────────
     def test_failure_keeps_the_error_state_audit_trail(self):
+        """[回歸守衛]"""
         with self._fail_async_sync():
             self._project_action('sync')
 
@@ -307,6 +315,7 @@ class TestMcpActionReturnContract(TransactionCase):
         return patch.object(McpServer, '_async_sync_tools', _ok)
 
     def test_sync_tools_returns_true_on_success(self):
+        """[回歸守衛]"""
         with self._succeed_async_sync():
             result = self.server.action_sync_tools()
 
@@ -315,6 +324,7 @@ class TestMcpActionReturnContract(TransactionCase):
         self.assertEqual(self.server.state, 'connected')
 
     def test_sync_tools_returns_false_on_failure(self):
+        """[缺陷探針]"""
         with self._fail_async_sync():
             result = self.server.action_sync_tools()
 
@@ -327,6 +337,7 @@ class TestMcpActionReturnContract(TransactionCase):
             '無從分辨成敗（實得 %r）' % (result,))
 
     def test_test_connection_returns_true_on_success(self):
+        """[缺陷探針]"""
         async def _ok(self):
             return True
         with patch.object(McpServer, '_async_test_connection', _ok):
@@ -338,6 +349,7 @@ class TestMcpActionReturnContract(TransactionCase):
             '現行碼兩條分支都沒有 return 語句' % (result,))
 
     def test_test_connection_returns_false_on_failure(self):
+        """[缺陷探針]"""
         with patch.object(McpServer, '_async_test_connection',
                           side_effect=ConnectionError(_SYNC_FAILURE)):
             result = self.server.action_test_connection()
@@ -351,7 +363,7 @@ class TestMcpActionReturnContract(TransactionCase):
 
     # ── 裁決點 5：兩支 bool 語意必須一致 ─────────────────────────────
     def test_sync_tools_and_safe_variant_agree_on_bool_semantics(self):
-        """兩支同回 bool 卻語意相反，是未來最容易踩的坑。"""
+        """[缺陷探針] 兩支同回 bool 卻語意相反，是未來最容易踩的坑。"""
         self.server.write({'auto_created': True, 'sync_retry_count': 0})
 
         with self._succeed_async_sync():
@@ -427,7 +439,7 @@ class TestMcpSyncPartialWriteReachability(TransactionCase):
         return sorted(self.server.sudo().tool_ids.mapped('name'))
 
     def test_third_tool_with_unserializable_schema_aborts_mid_loop(self):
-        """前提斷言：這條路徑真的會在迴圈中途炸，而且前兩個已經落地。"""
+        """[前提斷言] 前提斷言：這條路徑真的會在迴圈中途炸，而且前兩個已經落地。"""
         tools = [
             _FakeTool('tool_a', 'first', {'type': 'object'}),
             _FakeTool('tool_b', 'second', {'type': 'object'}),
@@ -444,7 +456,7 @@ class TestMcpSyncPartialWriteReachability(TransactionCase):
             'sync 中途失敗必須回報失敗（實得 %r）' % (result,))
 
     def test_failed_sync_leaves_no_half_written_tool_list(self):
-        """半寫入的 tool 列不得隨 request commit 落地。"""
+        """[缺陷探針] 半寫入的 tool 列不得隨 request commit 落地。"""
         tools = [
             _FakeTool('tool_a', 'first', {'type': 'object'}),
             _FakeTool('tool_b', 'second', {'type': 'object'}),
@@ -459,7 +471,7 @@ class TestMcpSyncPartialWriteReachability(TransactionCase):
             '半同步狀態（實得 %r）' % (self._tool_names(),))
 
     def test_failed_resync_does_not_deactivate_surviving_tools(self):
-        """既有 tool 列在一次失敗的 re-sync 之後必須原封不動。"""
+        """[回歸守衛] 既有 tool 列在一次失敗的 re-sync 之後必須原封不動。"""
         async def _ok(self):
             return True
 

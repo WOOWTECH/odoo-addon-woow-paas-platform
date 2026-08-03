@@ -183,6 +183,7 @@ class TestUpdateProjectMcpServerResidue(HttpCase):
     #  陽性對照：兩個入口在成功時，探針都看得見新值
     # ================================================================
     def test_positive_control_project_update_persists(self):
+        """[陽性對照]"""
         self.assertEqual(self._stored_name(), _ORIGINAL_NAME,
                          'fixture 前提：一開始是原名')
 
@@ -196,6 +197,7 @@ class TestUpdateProjectMcpServerResidue(HttpCase):
             '成功 update 後 DB 必須是新名字——探針有鑑別力的證明')
 
     def test_positive_control_service_update_persists(self):
+        """[陽性對照]"""
         result, error = self._service_update(name=_NEW_NAME)
 
         self.assertIsNone(error, '成功路徑不該有框架層錯誤：%r' % (error,))
@@ -209,7 +211,7 @@ class TestUpdateProjectMcpServerResidue(HttpCase):
     #  前提：注入確實發生在新值寫入之後
     # ================================================================
     def test_injection_fires_after_the_new_value_is_written(self):
-        """注入點若跑到寫入之前，殘留根本不會產生，下面兩條「沒有殘留」
+        """[前提斷言] 注入點若跑到寫入之前，殘留根本不會產生，下面兩條「沒有殘留」
         就退化成恆真——而假綠與真綠的輸出一模一樣。"""
         seen = []
         with self._fail_post_write_validation(recorder=seen):
@@ -228,6 +230,7 @@ class TestUpdateProjectMcpServerResidue(HttpCase):
     #  對照組實測：不包 try 的那支真的不留殘留（本修法的前提）
     # ================================================================
     def test_legacy_service_update_leaves_no_residue(self):
+        """[對照組實測]"""
         with self._fail_post_write_validation():
             result, error = self._service_update(name=_NEW_NAME)
 
@@ -244,6 +247,7 @@ class TestUpdateProjectMcpServerResidue(HttpCase):
     #  主斷言：project-centric 那支不得留下殘留
     # ================================================================
     def test_project_update_leaves_no_residue(self):
+        """[缺陷探針]"""
         with self._fail_post_write_validation():
             result, error = self._project_update(name=_NEW_NAME)
 
@@ -283,6 +287,7 @@ class TestUpdateProjectMcpServerResidue(HttpCase):
             [('name', '=', name)])
 
     def test_positive_control_project_create_persists(self):
+        """[陽性對照]"""
         result, error = self._project_create('B4 Created OK')
 
         self.assertIsNone(error, '成功路徑不該有框架層錯誤：%r' % (error,))
@@ -293,7 +298,7 @@ class TestUpdateProjectMcpServerResidue(HttpCase):
             '成功 create 後記錄必須在——探針有鑑別力的證明')
 
     def test_create_injection_fires_after_the_row_is_inserted(self):
-        """注入點若跑到 INSERT 之前，孤兒記錄根本不會產生，下面兩條「沒有殘留」
+        """[前提斷言] 注入點若跑到 INSERT 之前，孤兒記錄根本不會產生，下面兩條「沒有殘留」
         就退化成恆真。"""
         seen = []
         with self._fail_post_write_validation(recorder=seen):
@@ -309,7 +314,7 @@ class TestUpdateProjectMcpServerResidue(HttpCase):
             '「沒有殘留」的斷言才有守到東西；實得 %r' % (seen[0],))
 
     def test_legacy_service_create_leaves_no_residue(self):
-        """對照組實測：不包 try 的那支真的不留殘留。"""
+        """[對照組實測] 對照組實測：不包 try 的那支真的不留殘留。"""
         with self._fail_post_write_validation():
             result, error = self._service_create('B4 Svc Create Boom')
 
@@ -322,6 +327,7 @@ class TestUpdateProjectMcpServerResidue(HttpCase):
             '這條若紅，代表「拿掉 try 就能靠框架回捲」的前提不成立。')
 
     def test_project_create_leaves_no_residue(self):
+        """[缺陷探針]"""
         with self._fail_post_write_validation():
             result, error = self._project_create('B4 Proj Create Boom')
 
@@ -337,6 +343,7 @@ class TestUpdateProjectMcpServerResidue(HttpCase):
     #  一致性：兩個入口對同一個 model 例外的可觀察行為必須相同
     # ================================================================
     def test_both_entry_points_agree_on_failure(self):
+        """[缺陷探針]"""
         with self._fail_post_write_validation():
             project_result, project_error = self._project_update(name=_NEW_NAME)
         project_name_after = self._stored_name()
