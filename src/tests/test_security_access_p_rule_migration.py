@@ -110,7 +110,23 @@ class TestPRuleMigration(TransactionCase):
 
     def test_cursor_bypass_flag_cleared_after_migrate(self):
         """migration 用 cursor flag 跳過 email 配額；finally 必須清掉，否則洩漏
-        到後續 transaction 靜默關閉配額。"""
+        到後續 transaction 靜默關閉配額。
+
+        ⚠️ 截至 2026-08-03，這條是紅的——**紅的原因不是測試壞了，是它撞到一個
+        真缺陷**（#543）。fixture 建 decision=allow + email_domain 的 legacy
+        policy 時，撞上 2026-08-02 才加入的 `_check_allow_policy_no_bulk_grant`
+        （`security_access_access_policy_rule.py:158` 主動呼叫，非
+        `@api.constrains`），而 `migrations/18.0.1.0.39/post-migrate.py` 的
+        `Rule.create` 沒有繞過該守衛 ⇒ 任何仍停在 < 18.0.1.0.39 且帶
+        allow × (email_domain|everyone) flat policy 的 DB（主要是從舊備份還原
+        的情境）升版會中斷。
+
+        把 fixture 改成 deny 一行就能讓它轉綠，**但那是用假綠掩蓋真缺陷**，
+        刻意不做。修好 #543 之後它會自然轉綠。
+
+        本測試原本要驗的安全斷言（flag 不洩漏）另經獨立探針驗證為通過，
+        migration 的 try/finally 是對的——見 #543 內文。
+        """
         self._add_legacy_flat_cols()
         try:
             self._make_legacy_policy(
