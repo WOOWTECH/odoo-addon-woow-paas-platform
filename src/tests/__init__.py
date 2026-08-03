@@ -293,3 +293,6 @@ from . import test_security_access_p_rule_migration
 # fix: #535 租戶填入的憑證（type: password）在服務詳情 API 明文回傳 —— 遮罩改 spec-driven
 # ＋ read/write 同契約（遮罩後的星號不得被存檔寫回真憑證，D1 實測坐實）
 from . import test_credential_mask_spec_driven_535
+# fix: #552 chart 版本帳本——四條成功路徑回寫 operator 回報的實際版本
+# ＋ reconfigure 的 version fallback（原本恆傳 None ⇒ 全部 15 個 template 都不釘版）
+from . import test_chart_version_ledger_552

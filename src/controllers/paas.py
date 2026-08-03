@@ -3105,6 +3105,31 @@ class PaasController(HiddenChainMixin, Controller):
                     # All addons deselected — remove addon-specific helm values
                     service._remove_addon_helm_values(merged_values)
 
+            # #552: reconfigure 的 chart version fallback。**主執行緒**解析，兩個
+            # 消費端（下面的 write ＋ upgrade_kwargs）共用同一個值。
+            #
+            # `version` 這個參數**永遠是 None**：前端三個入口都不帶它
+            # （services/cloud_service.js:451 的 `version = null` 預設，:458 只在
+            # 有值時才塞進 params；ConfigurationTab「儲存設定」／EditDomainModal
+            # 「改網域」／AddonsTab「改 addon」都只傳 3 個參數）。⇒ 送進
+            # `upgrade_release` 的 `version` 恆為 None ⇒ operator 不帶 `--version`
+            # ⇒ helm 解析成 registry **當下的 latest**。這條路與 template 有沒有
+            # 填版號無關，**全部 15 個 template 的 reconfigure 都不釘版**：
+            # mcp-* 釘 0.1.5、home-assistant 釘 0.2.1 的 pin 在這裡完全沒作用。
+            #
+            # fallback 順序＝「這台服務現在跑的版本」優先於「商品目前釘的版本」：
+            # reconfigure 的語意是改設定、不是升版，所以先原地釘住 service 已知的
+            # 版本；service 沒有記錄（legacy）才退到 template 的 pin。
+            #
+            # ⚠ 刻意**不**在 `PaasOperatorClient.upgrade_release` 加 fail-closed
+            # guard：那條路走背景執行緒，失敗回不到前端，會讓全部 15 個商品的
+            # 「儲存設定」靜默壞掉（#552 修法順序：fallback 先於 fail-closed）。
+            resolved_version = (
+                version
+                or service.helm_chart_version
+                or service.template_id.helm_chart_version
+            )
+
             # #482: 停權中的服務 reconfigure 後不得停在 'upgrading' —— poll
             # (_cron_check_deploying_services 掃 deploying/upgrading/initializing)
             # 會把容器型一路收斂成 running＝帳面復權，而 _do_resume 的 guard 又
@@ -3118,7 +3143,11 @@ class PaasController(HiddenChainMixin, Controller):
             service.write({
                 'state': 'suspended' if halted else 'upgrading',
                 'helm_values': json.dumps(merged_values),
-                'helm_chart_version': version or service.helm_chart_version,
+                # #552: 與 upgrade_kwargs 用同一個 `resolved_version`，兩處語意不
+                # 分岔（原式 `version or service.helm_chart_version` 在 fallback
+                # 之後恆等於 `resolved_version`）。這是升級**前**的樂觀值；成功後
+                # 由背景執行緒以 operator 回報的實際版本覆蓋。
+                'helm_chart_version': resolved_version,
                 # ⚠ `fields.Datetime.now()`（UTC）而**不是** `datetime.now()`
                 # （本機時區）。#489 讓這個欄位從「前台顯示用」變成 age timeout
                 # 的**判定用**錨：伺服器時區若不是 UTC，錨與 `fields.Datetime.now()`
@@ -3146,7 +3175,9 @@ class PaasController(HiddenChainMixin, Controller):
                 release_name=service.helm_release_name,
                 chart=service.template_id.helm_chart_name,
                 values=assembled_values,
-                version=version,
+                # #552: 見上方 `resolved_version` 的說明——這裡原本傳恆為 None 的
+                # `version`，等於把版本決定權交給 registry 的 latest。
+                version=resolved_version,
                 reset_values=True,
             )
             operator_url = client.base_url
@@ -3184,6 +3215,17 @@ class PaasController(HiddenChainMixin, Controller):
                         if svc.exists() and svc.state in ('upgrading', 'suspended'):
                             svc.write({
                                 'helm_revision': release_info.get('revision', svc.helm_revision + 1),
+                                # #552: 第四條回寫路徑。upgrade 成功後才拿得到
+                                # helm 真正解析出來的 chart 版本（fallback 都空
+                                # 時仍是 registry latest，此時這行是唯一知道裝了
+                                # 哪一版的地方）。`or svc.helm_chart_version` ＝
+                                # 對舊版 operator 向後相容：讀不到就保留原值，
+                                # 不把帳本洗成空。回寫對象是 per-service 欄位，
+                                # 不是 template（seed noupdate=0＋healer 會還原）。
+                                'helm_chart_version': (
+                                    release_info.get('chart_version')
+                                    or svc.helm_chart_version
+                                ),
                             })
                 except Exception as exc:
                     _logger.error("Background upgrade failed for service %s: %s", service_id, exc)

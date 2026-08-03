@@ -479,6 +479,16 @@ class CloudService(models.Model):
                 'init_error': False,
                 'init_retries': 0,
                 'helm_revision': release_info.get('revision', self.helm_revision),
+                # #552: redeploy runs a real helm upgrade carrying
+                # `template.helm_chart_version` (possibly empty ⇒ registry latest),
+                # so it can move the deployed chart version. Record what the
+                # operator resolved; `or self.helm_chart_version` keeps the old
+                # value when talking to an operator that does not report it yet.
+                # Per-service field only — see `_execute_deploy` for why the
+                # template record must never be written back to.
+                'helm_chart_version': (
+                    release_info.get('chart_version') or self.helm_chart_version
+                ),
                 'last_upgraded_at': fields.Datetime.now(),
             })
             # #482: upgrade 用 chart 預設把 replicas 渲染回去了，收回停機。
@@ -640,7 +650,10 @@ class CloudService(models.Model):
             raise UserError("PaaS Operator not configured. Contact administrator.")
 
         try:
-            client.reset_release_config(
+            # #552: the response is no longer discarded — it carries the chart
+            # version helm resolved for this upgrade (both operator branches,
+            # config_json and helm_secret, report it).
+            reset_result = client.reset_release_config(
                 namespace=self.helm_namespace,
                 release_name=self.helm_release_name,
                 chart=self.template_id.helm_chart_name,
@@ -726,6 +739,15 @@ class CloudService(models.Model):
         self.write({
             'state': 'suspended' if halted else 'upgrading',
             'error_message': False,
+            # #552: reset carries `template.helm_chart_version` into helm upgrade
+            # (see the F-461-2 drift log above — this path really does change the
+            # chart), so it is one of the four places the ledger must be refreshed.
+            # `or self.helm_chart_version` = backward compatibility with an
+            # operator whose reset response has no `chart_version` yet.
+            # Per-service field only — never `template.helm_chart_version`.
+            'helm_chart_version': (
+                (reset_result or {}).get('chart_version') or self.helm_chart_version
+            ),
             'last_upgraded_at': fields.Datetime.now(),
         })
         self._rescale_halted_after_upgrade(client)
@@ -859,6 +881,24 @@ class CloudService(models.Model):
             # Helm install done — update release info and clean up deploy params
             self.write({
                 'helm_revision': release_info.get('revision', 1),
+                # #552: record the chart version helm ACTUALLY resolved. With an
+                # empty `template.helm_chart_version` no `--version` is sent and
+                # helm picks the registry's latest — the ledger used to keep the
+                # (empty) template value forever, so the tenant's service-detail
+                # page showed a version nobody had verified.
+                #
+                # ⚠ Written to **cloud_service** (per-service), never to
+                # `template.helm_chart_version`: the seed is `noupdate=0` and the
+                # healer at the tail of `data/cloud_app_templates.xml` clears
+                # `ir.model.data.noupdate` on every `-u`, so a hand-written
+                # template value is silently reverted by the next release (same
+                # discipline as `cloud_app_template.py` `_DEFAULT_GLOBAL_INSTANCE_CAPS`).
+                #
+                # `or self.helm_chart_version` keeps backward compatibility with
+                # an operator that predates the field: unknown ⇒ keep, never blank.
+                'helm_chart_version': (
+                    release_info.get('chart_version') or self.helm_chart_version
+                ),
                 'deployed_at': fields.Datetime.now(),
                 'deploy_params': False,
             })
