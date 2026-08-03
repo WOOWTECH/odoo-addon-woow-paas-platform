@@ -93,6 +93,7 @@
                             onUpdate.bind="onHelmValueUpdate"
                             showAdvanced="state.showAdvanced"
                             errors="state.errors"
+                            passwordBlankMeansUnchanged="true"
                         />
                         <t t-if="hasOptionalSettings">
                             <button

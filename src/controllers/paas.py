@@ -53,6 +53,41 @@ _ADDON_REMOVAL_SAFE_STATES = frozenset({
     'uninstalled', 'uninstallable', 'not_found'})
 
 
+# #535：`helm_value_specs` 解析失敗的哨兵。與「template 本來就沒有 specs」必須分得開
+# ——後者是正常狀態（例 `cloud_app_ha_paas`），前者代表無從得知哪些鍵是租戶填的憑證，
+# 遮罩層只能 fail-closed 全遮。用哨兵而不是 None／{}，是因為那兩個值都可能是合法結果。
+SPECS_UNPARSEABLE = object()
+
+
+# #535：`_lookup_helm_value` 的「這個鍵不存在」哨兵。不能用 None——helm_values 裡
+# 的 null 是合法值，拿 None 當「不存在」會把它與真的 null 混為一談。
+_HELM_VALUE_MISSING = object()
+
+
+def _lookup_helm_value(values: dict, key: str) -> Any:
+    """依前端 ``getSpecValue`` 的順序查一個 spec key：先 flat、再 dot-path。
+
+    #535：後端要判斷「使用者送回來的值 == 我們剛才顯示給他看的值」，就必須用
+    **與前端相同的查法**取出「顯示值」。前端 ``ConfigurationTab.getSpecValue``
+    ／``HelmValueForm.getValue`` 都是先試字面 key 再試 dot-path（舊資料真的可能
+    以 ``'auth.anthropicApiKey'`` 當字面鍵落庫），只實作其中一種會對另一種形態
+    誤判成「不存在」而放行遮罩值。
+    """
+    if not isinstance(values, dict):
+        return _HELM_VALUE_MISSING
+    if key in values:
+        return values[key]
+    parts = key.split('.')
+    if len(parts) == 1:
+        return _HELM_VALUE_MISSING
+    cursor: Any = values
+    for part in parts:
+        if not isinstance(cursor, dict) or part not in cursor:
+            return _HELM_VALUE_MISSING
+        cursor = cursor[part]
+    return cursor
+
+
 PORTAL_SETTINGS_FLAG = 'woow_paas_platform.portal_project_settings_editable'
 
 
@@ -2315,14 +2350,15 @@ class PaasController(HiddenChainMixin, Controller):
             )
             return default
 
-    def _parse_helm_value_specs(self, template: Any) -> dict[str, list]:
-        """Parse helm_value_specs JSON from a template record.
+    @staticmethod
+    def _parse_helm_value_specs_or_fail(template: Any) -> Any:
+        """Parse helm_value_specs, returning ``SPECS_UNPARSEABLE`` on failure.
 
-        Args:
-            template: CloudAppTemplate record
-
-        Returns:
-            dict with 'required' and 'optional' lists, or empty dict if no specs
+        #535：遮罩層必須分得出「這個 template 本來就沒有 specs」與「specs 在那裡但
+        我讀不懂」——前者代表沒有租戶填入的憑證可遮（正常，例如 ``cloud_app_ha_paas``），
+        後者代表**無從得知哪些鍵是憑證**，只能 fail-closed 全遮。
+        ``_parse_helm_value_specs`` 把兩者都壓成 ``{}``（顯示路徑要的優雅降級），
+        所以判定端不能用它的回傳值分辨。這裡是單一 parser，兩個 wrapper 共用。
         """
         if not template or not template.helm_value_specs:
             return {}
@@ -2347,24 +2383,73 @@ class PaasController(HiddenChainMixin, Controller):
                 return specs
             except (json.JSONDecodeError, TypeError):
                 _logger.error("Invalid helm_value_specs for template %s", template.name)
-                return {}
+                return SPECS_UNPARSEABLE
 
     @staticmethod
-    def _sanitize_helm_values(values: dict, template: Any) -> dict:
+    def _parse_helm_value_specs(template: Any) -> dict[str, list]:
+        """Parse helm_value_specs JSON from a template record.
+
+        Args:
+            template: CloudAppTemplate record
+
+        Returns:
+            dict with 'required' and 'optional' lists, or empty dict if no specs
+        """
+        specs = PaasController._parse_helm_value_specs_or_fail(template)
+        return {} if specs is SPECS_UNPARSEABLE else specs
+
+    @staticmethod
+    def _password_spec_paths(specs: Any) -> set[tuple[str, ...]]:
+        """從 helm_value_specs 取出所有 ``type: password`` 的鍵路徑。
+
+        回傳的每個元素是一條 path tuple。同一把 key 收兩種形態：
+
+        * ``tuple(key.split('.'))`` —— 巢狀落庫形態（``_unflatten_dotpath_keys``
+          把 ``auth.anthropicApiKey`` 攤成 ``{'auth': {'anthropicApiKey': ...}}``）。
+        * ``(key,)`` —— 扁平落庫形態。前端 ``getSpecValue`` 就是「先試 flat key
+          再試 dot-path」，代表舊資料真的可能以字面 ``'auth.anthropicApiKey'``
+          當鍵存在，只認巢狀會漏掉那一種。
+
+        ⚠ 任何結構異常（specs 不是 dict、group 不是 list、spec 不是 dict）都讓
+        例外往外拋，由呼叫端 fail-closed 接住——這裡不做 best-effort 略過，因為
+        「只解析出一部分憑證鍵」的結果與「全部解析成功」長得一模一樣，會靜默漏遮。
+        """
+        paths: set[tuple[str, ...]] = set()
+        for group in ('required', 'optional'):
+            for spec in specs.get(group) or []:
+                if spec.get('type') != 'password':
+                    continue
+                key = spec.get('key')
+                if not key:
+                    continue
+                paths.add(tuple(key.split('.')))
+                paths.add((key,))
+        return paths
+
+    @classmethod
+    def _sanitize_helm_values(cls, values: dict, template: Any) -> dict:
         """Remove secret values from helm_values before exposing in API responses.
 
-        Replaces values under 'secret' (legacy n8n_owner_password pattern),
-        ``config.sensitive`` (mcp-admin-core secret channel — admin_password 等)
-        AND ``auth.apiServerKey`` (#530 hermes gateway key) with masked versions.
-        The mask is path-aware so it keeps ``config`` / ``auth`` objects intact
-        while redacting only the sensitive leaves.
+        遮罩由**兩種來源**疊起來，缺一不可：
 
-        ⚠ path-aware 的代價：**新增一條敏感值通道時必須在這裡補它的路徑**。#530 的
-        gateway key 落在 ``auth.apiServerKey``，既有的兩條路徑（top-level ``secret``
-        子樹、``config.sensitive`` 葉節點）都掃不到它——照抄 admin_password 的做法
-        而沒補這裡，那把 key 就會原樣從服務詳情 API 流出，且**只掃 config.sensitive
-        的既有測試不會紅**。與 model 端 ``_strip_mcp_sensitive_values``（不落庫）是
-        兩道獨立防線，新增敏感路徑要**兩邊都補**。
+        1. **spec-driven（#535，主力）**：template 的 ``helm_value_specs`` 裡每一條
+           ``type: password`` 都是租戶親手填的憑證，一律全遮。這條讓「新增一個
+           password 欄位」自動被涵蓋——不必回來補程式碼。
+        2. **三條 hardcoded path（既有，不可移除）**：top-level ``secret`` 子樹、
+           ``config.sensitive`` 葉節點、``auth.apiServerKey``。這些鍵**不在**
+           ``helm_value_specs`` 裡（它們由平台自己注入，租戶看不到也填不到），
+           spec-driven 涵蓋不到，所以是**增加一層**而不是取代。
+
+        ⚠ **不得連坐同層的非憑證欄位**：只遮 spec 點名的那一格。PostgreSQL 家族
+        seed 的 ``auth.username`` / ``auth.database`` 與 ``auth.*ApiKey`` 同層，
+        整個 ``auth`` 子樹全遮會讓那些 template 的設定分頁變成一排 ``***``（#530
+        已經踩過一次）。
+
+        🔴 **遮罩與前端回填是同一個契約**（#535 D1 實測）：只改這裡而不改
+        ``ConfigurationTab``，租戶按一次存檔就會把星號當成自己的輸入送回來，
+        ``_deep_merge`` 讓它覆蓋既有值 ⇒ **平台把租戶的管理員密碼改成 ``***``**。
+        前端側的對應改動見 ``ConfigurationTab.startEditing/validateForm/saveChanges``，
+        後端側的兜底見 ``_drop_unchanged_password_values``。
 
         Mask surface: prefix 8 chars + '...' when long enough, else '***'.
         Depth bounded at 5 to bound CPU on adversarial payloads.
@@ -2399,6 +2484,42 @@ class PaasController(HiddenChainMixin, Controller):
                 return [_mask_secret_tree(item, masker) for item in value]
             return masker(value)
 
+        # --- spec-driven 憑證鍵（#535）＋ fail-closed 判定 -------------------
+        #
+        # 「無從得知哪些鍵是憑證」時全遮，而不是全放。舊碼收了 template 參數卻
+        # 整段沒用到，於是傳什麼 template 進來輸出都一樣——連「傳錯 template」都
+        # 沒有任何測試會紅。
+        parsed_specs = cls._parse_helm_value_specs_or_fail(template)
+        if not template or parsed_specs is SPECS_UNPARSEABLE:
+            _logger.error(
+                "Cannot determine credential keys for helm_values (template=%s); "
+                "masking every value fail-closed.", template,
+            )
+            return _mask_secret_tree(values, _mask_value_fully)
+        try:
+            password_paths = cls._password_spec_paths(parsed_specs)
+        except Exception:
+            # 結構壞掉（specs 不是 dict／group 不是 list／spec 不是 dict）＝同樣
+            # 屬於「讀不懂」，與 JSON 解析失敗同一類，走同一條 fail-closed。
+            _logger.exception(
+                "Malformed helm_value_specs structure for template %s; "
+                "masking every value fail-closed.", template,
+            )
+            return _mask_secret_tree(values, _mask_value_fully)
+
+        def _is_password_path(child_path: tuple[str, ...]) -> bool:
+            """spec 的鍵路徑比對——與同函式既有兩條 path 分支一樣採**尾綴**比對。
+
+            ``config.sensitive`` 用 ``child_path[-2:]``、``auth.apiServerKey`` 亦然，
+            也就是這個函式整體是深度無關的。spec-driven 若改用「從根錨定」就會與
+            旁邊兩條的語意不一致（同一份 doc 素材點名的「兩層 path 語意不對稱」正是
+            這種東西），且對「值被搬到別的父節點底下」這種形態失去覆蓋。
+            尾綴比對只會多遮同名的那一格，不會連坐同層鄰居。
+            """
+            return any(
+                child_path[-len(p):] == p for p in password_paths
+            )
+
         def _mask_secrets(d: dict, path: tuple[str, ...] = (), depth: int = 0) -> dict:
             result = {}
             for key, val in d.items():
@@ -2419,6 +2540,11 @@ class PaasController(HiddenChainMixin, Controller):
                     # （PostgreSQL 家族 seed 的 auth.username／auth.database），全遮
                     # 會讓那些 template 的設定分頁變成一排 ***。
                     result[key] = _mask_value_fully(val)
+                elif _is_password_path(child_path):
+                    # #535：租戶經 helm_value_specs（type: password）填入的憑證。
+                    # 排在遞迴分支**之前**——值萬一是 dict（未來的複合憑證），要整棵
+                    # 遮掉而不是下鑽後逐格放行。
+                    result[key] = _mask_secret_tree(val, _mask_value_fully)
                 elif isinstance(val, dict) and depth < 5:
                     result[key] = _mask_secrets(val, child_path, depth + 1)
                 else:
@@ -2482,6 +2608,48 @@ class PaasController(HiddenChainMixin, Controller):
             )
 
         return filtered, rejected
+
+    @classmethod
+    def _drop_masked_echo_values(
+        cls, flat_values: dict[str, Any], existing_values: dict[str, Any] | None, template: Any,
+    ) -> dict[str, Any]:
+        """#535：把「使用者原封送回遮罩值」的欄位從 reconfigure payload 剔除。
+
+        read 端遮罩與 write 端回填是**同一個契約**。前端 ``startEditing()`` 會把
+        API 回來的值全量回填進表單，所以租戶只要按一次存檔、連碰都不用碰密碼欄，
+        被遮成 ``'***'`` 的憑證就會原封送回來，經 ``_deep_merge`` 覆蓋掉 DB 裡的
+        真值——**平台自己把租戶的 Odoo 管理員密碼改成 ``'***'``**（#535 D1 實測，
+        `odooPassword` 從 ``PLAIN_PW_D1_PROBE`` 變成 ``'***'``）。
+
+        主修法在前端（password 欄位空白起始、留白＝不變更）。這裡是**兜底**：
+        前端 bundle 與後端不是原子部署，租戶在升級當下已經開著的分頁跑的還是舊
+        JS，那個窗口內照樣會送回星號。
+
+        判準是「送回來的值 **等於我們剛才顯示給他看的值**、且與實值不同」⇒ 這格
+        沒有變更。對沒被遮罩的欄位，顯示值就是實值，條件恆假 ⇒ **對非憑證欄位是
+        no-op**，不會連坐（這是刻意寫成兩個條件而不是只比對 ``'***'`` 字面值的
+        原因：後者會擋掉某個租戶真的想把 smtpHost 設成 ``'***'`` 的自由）。
+        """
+        if not flat_values:
+            return flat_values
+
+        existing = existing_values or {}
+        shown = cls._sanitize_helm_values(dict(existing), template)
+
+        kept: dict[str, Any] = {}
+        for key, value in flat_values.items():
+            shown_value = _lookup_helm_value(shown, key)
+            real_value = _lookup_helm_value(existing, key)
+            if (shown_value is not _HELM_VALUE_MISSING
+                    and value == shown_value
+                    and shown_value != real_value):
+                _logger.info(
+                    "Dropping unchanged masked value for helm key %r on reconfigure "
+                    "(client echoed the mask back)", key,
+                )
+                continue
+            kept[key] = value
+        return kept
 
     def _list_services(self, workspace: Any) -> dict[str, Any]:
         """List all services in a workspace."""
@@ -2915,6 +3083,11 @@ class PaasController(HiddenChainMixin, Controller):
             # service-detail API (_sanitize_helm_values masks 'secret' dicts AND
             # #357 config.sensitive.* — both secret channels).
             filtered_user_values = {k: v for k, v in filtered_user_values.items() if not k.startswith('_init.')}
+            # #535：租戶原封送回的遮罩值 ＝「這格沒變更」，不是新密碼。見該 helper
+            # 的 docstring（D1 實測：不擋的話存檔一次就把真憑證覆蓋成 '***'）。
+            filtered_user_values = self._drop_masked_echo_values(
+                filtered_user_values, existing_values, service.template_id,
+            )
             nested_user_values = self._unflatten_dotpath_keys(filtered_user_values)
             merged_values = self._deep_merge(existing_values, nested_user_values)
 
