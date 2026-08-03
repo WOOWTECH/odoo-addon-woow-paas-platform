@@ -83,6 +83,16 @@ except Exception as e:
 
 現行 code：`src/models/mcp_server.py` 的 `action_sync_tools` / `action_test_connection`（docstring 內含本 pitfall 的 in-code 指針）。
 
+## 為什麼機械化狀態是 `—`（已評估並否決，不是還沒評估）
+
+考慮過的 gate：repo-lint 掃出所有 `<button type="object" name="X">`，比對對應的 Python method 是否可能 `return` 一個 dict。**評估後否決**：
+
+- **AST 判不出變數 return**。`return result` / `return vals` / `return self._build_payload()` 都是合法寫法，靜態分析追不到型別 ⇒ 只抓得到 `return {...}` 這種字面 dict 的形態。
+- 本 repo 對新增 gate 的既有判準是：**AST gate 只認一種語法形態時，守的是寫法不是不變式**，而且**比沒有 gate 更糟——reviewer 會因為「有 gate 守著」而降低警戒**。新增 gate 必須拿 repo 內既有的等價 idiom 做注入式驗證、**≥3 種形態都實測擋得住**。（前例：`check_mixin_subscription_sudo` 只匹配裸讀 `self.subscription_id`，而 `self.mapped(...)` 與 `for rec in self: rec.x` 實測漏抓，偏偏後者是現行消費者都在用的活 idiom。）
+- 這個 gate 必然大量漏抓 ⇒ 達不到那個門檻 ⇒ **不做**。
+
+⇒ 這條靠 doc + review 守，不靠 gate。**若日後有人重新評估，請先回答「怎麼處理變數 return」**——那是這個 gate 過不了的關口，不是實作細節。
+
 ## Prevention
 
 - **改 model method 的回傳型別前，先 grep 它的名字有沒有出現在 XML `<button name="...">` 裡**，而不只是 grep Python 呼叫端。
