@@ -296,3 +296,7 @@ from . import test_credential_mask_spec_driven_535
 # fix: #552 chart 版本帳本——四條成功路徑回寫 operator 回報的實際版本
 # ＋ reconfigure 的 version fallback（原本恆傳 None ⇒ 全部 15 個 template 都不釘版）
 from . import test_chart_version_ledger_552
+
+# fix: #552 層 1 —— seed template 的 helm_chart_version 不得留空
+# （留空 ⇒ helm 不帶 version 旗標 ⇒ 抓 registry 當下 latest、帳本記空）
+from . import test_seed_chart_version_pin_552
