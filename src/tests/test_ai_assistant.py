@@ -54,12 +54,20 @@ class TestAIAssistantIntegration(TransactionCase):
         self.assertIsInstance(client, AIClient)
 
     def test_ai_client_from_assistant_no_config(self):
-        """AIClient.from_assistant should raise if assistant has no config."""
+        """AIClient.from_assistant should raise if assistant has no config.
+
+        用 ``new()`` 建 in-memory record：上游 ai_base_gt 已把 ``config_id``
+        設成 required（DB NOT NULL），``create()`` 這條路建不出無 config 的
+        assistant。``from_assistant`` 的 no-config 分支因此在 ORM 路徑上不可
+        達，但它仍是 sudo/raw-SQL 寫入後的最後一道防線，值得留著被覆蓋。
+        """
         from ..models.ai_client import AIClient, AIClientError
 
-        assistant_no_config = self.env['ai.assistant'].create({
+        assistant_no_config = self.env['ai.assistant'].new({
             'name': 'NoConfigBot',
         })
+        self.assertFalse(assistant_no_config.config_id,
+                         "前提：這筆 assistant 必須真的沒有 config")
         with self.assertRaises(AIClientError):
             AIClient.from_assistant(assistant_no_config)
 
@@ -175,7 +183,17 @@ class TestDiscussChannelAI(TransactionCase):
             'name': 'History Channel',
             'channel_type': 'channel',
         })
-        user_partner = self.env.user.partner_id
+        # 不能用 self.env.user.partner_id：TransactionCase 的 uid=1 是
+        # __system__，其 partner 正是 base.partner_root（OdooBot），而
+        # _get_chat_history 刻意把 OdooBot 併進 AI partner 集合 ⇒ 這筆
+        # 「使用者訊息」會被判成 assistant。要拿一個真正的一般使用者。
+        human = self.env['res.users'].create({
+            'name': 'Chat Human',
+            'login': 'chat_human_t2',
+        })
+        user_partner = human.partner_id
+        self.assertNotEqual(user_partner, self.env.ref('base.partner_root'),
+                            "前提：發話者不能是 OdooBot，否則角色判定必然錯")
         ai_partner = self.ai_assistant.partner_id
 
         # Post a user message
@@ -205,7 +223,10 @@ class TestDiscussChannelAI(TransactionCase):
         """_post_ai_reply should generate and post AI response."""
         mock_client = MagicMock()
         mock_client.build_messages.return_value = [{'role': 'user', 'content': 'hello'}]
-        mock_client.chat_completion.return_value = 'AI says hello back'
+        # 生產碼已改走 chat_completion_with_tools(messages, mcp_tools)（MCP
+        # 工具呼叫）；只 mock 舊的 chat_completion 會讓 MagicMock 本身被當成
+        # 回覆內容貼進訊息 body。
+        mock_client.chat_completion_with_tools.return_value = 'AI says hello back'
         MockAIClient.from_assistant.return_value = mock_client
 
         channel = self.env['discuss.channel'].create({
