@@ -80,7 +80,7 @@
       "docs": [
         "docs/decisions/patterns/seed-agent-template-design.md — seeded default 的設計依據與 invariant",
         "docs/tracking/pitfalls/default-agent-template-project-bind-silent-autoenable.md — default 被綁 project → auto-enable 靜默全失效；demo 與 default 分工勿互換",
-        "CLAUDE.md「Seeded 平台預設 agent_template 的 tenant-neutral invariant」條 — post_init 未設才指、不覆寫 admin 已選"
+        "CLAUDE.md — 「Seeded 平台預設 agent_template 的 tenant-neutral invariant」條：post_init 未設才指、不覆寫 admin 已選"
       ]
     },
     {
