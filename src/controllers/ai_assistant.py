@@ -1552,11 +1552,20 @@ class AiAssistantController(Controller):
             vals['use_agent_runtime'] = True
 
         project = request.env['project.project'].sudo().create(vals)
-        # D2=A: sudo().create() leaves create_uid=SUPERUSER, so the
-        # project_rule_workspace_member create_uid sub-leg never matches the
-        # caller. Subscribe the caller as a follower so the message_partner_ids
-        # sub-leg passes — required for unbound projects (no workspace member
-        # leg) and harmless for bound ones (workspace member leg still primary).
+        # ⚠ CORRECTION (#547): an earlier version of this comment claimed
+        # "sudo().create() leaves create_uid=SUPERUSER". That is FALSE.
+        # ``odoo/models.py:5130`` does ``vals.setdefault('create_uid',
+        # self.env.uid)`` and ``sudo()`` does not change uid
+        # (``odoo/models.py:6290-6291``), so create_uid here is the TENANT.
+        # D2=A: subscribe the caller as a follower so the
+        # project_rule_workspace_member message_partner_ids sub-leg passes —
+        # required for unbound projects (no workspace member leg) and harmless
+        # for bound ones (workspace member leg still primary).
+        # ⚠ The ORIGINAL justification for this call ("needed because create_uid
+        # doesn't match the caller") rests on the false premise above, so
+        # whether this workaround is still necessary needs a separate
+        # evaluation — do NOT delete it on the strength of this correction
+        # alone. Tracked for a follow-up ticket (#547 PR description).
         project.sudo().message_subscribe(
             partner_ids=[request.env.user.partner_id.id],
         )

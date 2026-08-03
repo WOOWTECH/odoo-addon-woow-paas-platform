@@ -280,13 +280,26 @@ class ProjectProject(models.Model):
         # Resolve the owner-partner to bootstrap (HC-2
         # [[constraint-input-trust-expansion]]): authority comes from a trusted
         # source, never inferred from an attacker-controllable context value.
-        # - SUPERUSER path (sudo: paas-operator provisioning / cron / install /
-        #   migration): only an EXPLICIT ``bootstrap_owner_partner_id`` hint —
-        #   set by a trusted caller naming the real human owner — bootstraps;
-        #   a bare SUPERUSER create with NO hint does NOT auto-own.
-        # - Normal self-service create: the authenticated user owns the project.
-        #   The hint is NOT honoured here — a non-trusted caller must not be able
-        #   to assign ownership to an arbitrary partner via the context.
+        # ⚠ The branch below selects on ``env.uid``, NOT on ``env.is_superuser()``
+        #   — and ``sudo()`` does NOT reach the SUPERUSER branch. Odoo 18
+        #   ``odoo/models.py:6290-6291`` (sudo() docstring), verbatim:
+        #     "The superuser mode does not change the current user, and simply
+        #      bypasses access rights checks."
+        #   So ``sudo()`` sets ``env.su`` and leaves ``uid`` alone; only a real
+        #   root env (uid == 1) takes the SUPERUSER branch. An earlier version of
+        #   this comment listed "sudo" as an entry point of that branch — it was
+        #   wrong, and it is the kind of wrong that gets "fixed" by making the
+        #   code match the comment (see the ⚠ note below the else-branch).
+        # - SUPERUSER path — a genuine root env (uid == 1): cron / install /
+        #   migration, i.e. ``api.Environment(cr, SUPERUSER_ID, {})``. Only an
+        #   EXPLICIT ``bootstrap_owner_partner_id`` hint — set by a trusted
+        #   caller naming the real human owner — bootstraps; a bare SUPERUSER
+        #   create with NO hint does NOT auto-own.
+        # - Everything else, INCLUDING every ``.sudo()`` call from a tenant
+        #   request (``ai_assistant.py`` self-service project create): the
+        #   authenticated user owns the project. The hint is NOT honoured here —
+        #   a non-trusted caller must not be able to assign ownership to an
+        #   arbitrary partner via the context.
         #
         # ⚠ SET-SITE INVARIANT (for whoever adds the FIRST writer of this hint):
         #   There is NO production set-site today (only tests set it). When a
@@ -304,6 +317,14 @@ class ProjectProject(models.Model):
                 return projects
             partner = self.env['res.partner'].browse(hint_partner_id).exists()
         else:
+            # ⚠ LOAD-BEARING: switching the branch selector above to
+            #   ``env.is_superuser()`` would route every tenant ``.sudo()``
+            #   create into the SUPERUSER branch, which returns early without a
+            #   hint — the tenant's own project would get ZERO project_access
+            #   rows (invisible / unreachable / undeletable; see
+            #   src/controllers/paas.py:353). This line is the only place in the
+            #   repo that grants a tenant the 'owner' row.
+            #   Locked by test_FPA14_non_root_sudo_create_self_owns.
             partner = self.env.user.partner_id
         if not partner:
             return projects

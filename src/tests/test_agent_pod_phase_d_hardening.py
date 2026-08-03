@@ -56,6 +56,7 @@ import os
 import uuid
 from unittest.mock import MagicMock, patch
 
+from odoo import SUPERUSER_ID
 from odoo.tests.common import HttpCase, TransactionCase, tagged
 
 # Frozen env names (plan §"軟契約 env 名" table).
@@ -309,8 +310,10 @@ class TestPhaseDBootstrapOwnerHint(TransactionCase):
     def test_FPA14_normal_user_hint_ignored_self_owns(self):
         """Regression: a normal (non-trusted) create IGNORES the owner hint.
 
-        The hint is trusted ONLY on the sudo/SUPERUSER path (HC-2): a normal
-        caller must not be able to assign 'owner' to an arbitrary partner via
+        The hint is trusted ONLY on the SUPERUSER path — a genuine root env
+        (uid == 1), NOT ``.sudo()`` (#547: sudo leaves uid untouched, see
+        ``odoo/models.py:6290-6291``). A normal caller must not be able to
+        assign 'owner' to an arbitrary partner via
         ``bootstrap_owner_partner_id``. A normal user's create owns ITSELF and
         the hinted third-party partner gets no owner row. This locks the
         /simplify tightening — without it, reverting the hint to "wins on any
@@ -337,5 +340,74 @@ class TestPhaseDBootstrapOwnerHint(TransactionCase):
             self._owner_rows(project, victim),
             "F-PA-14 guard: a normal user must NOT assign 'owner' to an "
             "arbitrary partner via bootstrap_owner_partner_id — the hint is "
-            "trusted only on the sudo/SUPERUSER path (HC-2).",
+            "trusted only on a genuine root env (uid == 1), not on .sudo().",
+        )
+
+    def test_FPA14_non_root_sudo_create_self_owns(self):
+        """#547 — a NON-ROOT user's ``.sudo().create()`` must own ITSELF.
+
+        This locks the branch selector in ``project_project.create()``
+        (``if self.env.uid == SUPERUSER_ID:``). It is a *branch selector*, not a
+        bypass guard: ``sudo()`` sets ``env.su`` but leaves ``uid`` alone
+        (``odoo/models.py:6290-6291`` — "The superuser mode does not change the
+        current user"), so a tenant's ``.sudo().create()`` must fall into the
+        else-branch and take ``env.user.partner_id`` as owner. Flipping the
+        selector to ``env.is_superuser()`` routes it into the SUPERUSER branch,
+        which returns early with no hint → the project gets ZERO project_access
+        rows.
+
+        Call-order matters and IS the discriminating part:
+        ``with_user(non-root)`` sets ``su=False`` (``odoo/api.py`` only
+        auto-sets ``su`` when ``uid == SUPERUSER_ID``); the following
+        ``.sudo()`` flips ``su`` back to True while ``uid`` stays that user.
+        Reversing it — or calling ``.sudo()`` on the bare ``TransactionCase``
+        env, whose uid is already 1 — makes ``sudo()`` a no-op
+        (``odoo/models.py``: ``if flag == self.env.su: return self``) and the
+        test degenerates into one that passes under BOTH predicates. The three
+        older F-PA-14 tests have exactly that shape, which is why none of them
+        covers this line.
+        """
+        suffix = uuid.uuid4().hex[:6]
+        user = self.env['res.users'].sudo().create({
+            'name': f'fpa14-sudo-{suffix}',
+            'login': f'fpa14sudo_{uuid.uuid4().hex[:8]}',
+            'groups_id': [(6, 0, [
+                self.env.ref('base.group_user').id,
+                self.env.ref('project.group_project_manager').id,
+            ])],
+        })
+        # Premise assertion: this test's discriminating power rests entirely on
+        # `user` being non-root. If a later edit swaps the fixture for
+        # with_user(1) — or drops with_user() so uid falls back to the env
+        # default — the assertions below would keep passing for the wrong
+        # reason. Assert the premise, not just the conclusion.
+        self.assertNotEqual(
+            user.id, SUPERUSER_ID,
+            "premise broken: the fixture user must NOT be root, otherwise "
+            "both uid-comparison and is_superuser() take the same branch and "
+            "this test silently degenerates into a tautology.",
+        )
+
+        scoped = self.env['project.project'].with_user(user)
+        self.assertFalse(
+            scoped.env.su,
+            "premise broken: with_user(non-root) must leave su=False before "
+            "the .sudo() below flips it — otherwise the su transition under "
+            "test never happens.",
+        )
+        project = scoped.sudo().create({'name': f'fpa14s-{suffix}'})
+        self.assertEqual(
+            project.create_uid.id, user.id,
+            "sudo() must not change create_uid (odoo/models.py:5130 does "
+            "vals.setdefault('create_uid', self.env.uid) and sudo() leaves uid "
+            "alone) — if this fails the whole premise of this test is void.",
+        )
+        self.assertTrue(
+            self._owner_rows(project, user.partner_id),
+            "#547: a non-root .sudo().create() must give the CALLER an 'owner' "
+            "project_access row. If this goes red, the branch selector in "
+            "project_project.create() was probably switched to "
+            "env.is_superuser() — which sends every tenant sudo create into "
+            "the SUPERUSER branch and leaves the project with no access row "
+            "at all (invisible / unreachable / undeletable).",
         )
