@@ -18,15 +18,38 @@ class TestProvisionUniqueIndex(TransactionCase):
                       self.env['woow_paas_platform.cloud_service']._fields)
 
     def test_partial_unique_index_present(self):
+        """provision_partner_id 的 partial unique index 必須存在（#336 DB backstop）。
+
+        ⚠ 不可回到 ``pg_indexes ... indexname LIKE '%provision_partner%'`` 取
+        ``rows[0]``：該欄位另有 ``index=True``（cloud_service.py 的欄位定義）產生
+        的 Odoo 自動 btree index ``..._cloud_service__provision_partner_id_index``，
+        名字同樣含 ``provision_partner`` 而同時命中，但 ``pg_indexes`` **不保證回
+        傳順序** → 取第一筆是不決定性的（flaky）。且它的 indexdef 含欄位名、只缺
+        WHERE 子句，紅起來會紅在「IS NOT NULL」而非「找不到 index」，症狀誤導。
+
+        改以 ``pg_index`` 系統欄位做**語意**篩選（``indisunique`` ＝ UNIQUE、
+        ``indpred IS NOT NULL`` ＝ partial／帶 WHERE 條件），與索引命名及回傳順序
+        都無關；普通 btree index 在 SQL 層就被排除，不會進到斷言。
+        """
         self.env.cr.execute("""
-            SELECT indexdef FROM pg_indexes
-            WHERE tablename = 'woow_paas_platform_cloud_service'
-              AND indexname LIKE '%%provision_partner%%'
+            SELECT idx.relname, pg_get_indexdef(i.indexrelid)
+            FROM pg_index i
+            JOIN pg_class idx ON idx.oid = i.indexrelid
+            JOIN pg_class tbl ON tbl.oid = i.indrelid
+            WHERE tbl.relname = 'woow_paas_platform_cloud_service'
+              AND i.indisunique          -- UNIQUE
+              AND i.indpred IS NOT NULL  -- partial（帶 WHERE 條件）
         """)
-        rows = self.env.cr.fetchall()
-        self.assertTrue(rows, 'partial unique index 應存在')
-        self.assertIn('provision_partner_id', rows[0][0])
-        self.assertIn('IS NOT NULL', rows[0][0].upper())
+        partial_uniques = dict(self.env.cr.fetchall())
+        # 刻意不在 SQL/Python 端先用欄位名過濾再斷言欄位名——那會讓斷言恆真。
+        # 下面兩條各自守不同的事：建在該單一欄位上、且 WHERE 條件正是「非空」。
+        on_field = [ddl for ddl in partial_uniques.values()
+                    if '(provision_partner_id)' in ddl]
+        self.assertEqual(
+            len(on_field), 1,
+            'provision_partner_id 應恰有一個 partial unique index；'
+            f'該表上所有 partial unique index＝{partial_uniques}')
+        self.assertIn('WHERE (provision_partner_id IS NOT NULL)', on_field[0])
 
     def test_second_provision_row_same_partner_rejected(self):
         partner = self.env['res.partner'].create({'name': 'Dup Provision'})
