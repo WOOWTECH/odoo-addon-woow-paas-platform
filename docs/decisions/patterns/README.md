@@ -4,12 +4,15 @@
 >
 > CLAUDE.md「Known patterns」段已指針化（不再雙寫子集）；**本表為完整 33 條**。路徑觸發的自動導引由 pattern-guard hook 供給（對照表 `.claude/hooks/pattern-guard-map.json`）。pattern slug 為 AI 自組 cross-link identifier，請勿更名（會斷交聯）。
 
-## 維護慣例（新增 pattern doc 時）
+## 維護慣例（新增**或修改** pattern doc 時）
 
 1. **同步登錄本索引**：新增 `patterns/<slug>.md` 時，務必在本檔「何時必看（按主題分組）」對應主題表補一行（pattern slug + 何時觸發 / 必看），並在「完整檔案清單」加一筆連結；同時更新頂部「完整 N 條」計數。
 2. **評估是否綁特定路徑**：若該 pattern 有明確的觸發檔案路徑（如 `src/security/`、`src/controllers/`、特定 model 檔）——則**額外**在 `.claude/hooks/pattern-guard-map.json` 對應 class 的 `docs` append 一行（`路徑 — 一句何時必看`），或新增 class；hook 會在編輯該路徑時自動餵給模型。純判斷類（無路徑可綁）的 pattern **只留本索引**，並登記進 `scripts/audit/repo-lint.py` 的 `PATTERN_DOC_MAP_EXEMPT`（附理由）。**勿再把守線散文寫回 CLAUDE.md**（該段已指針化，雙寫必漂移）。
+3. 🔴 **改了 doc 的處方，就要改它在本索引的那一行摘要**（#547 收尾）。理由不是整潔——**這一行是 pattern-guard 推播時讀者第一眼看到的東西**，doc 本體修好而摘要沒跟上，等於「一份被修正過的 doc 配一行還在教舊做法的索引」，危害不比原本的錯 doc 小。
+   實例（本次真的發生）：`su-env-exempt-guard-false-green` 的處方在 #522／PR#537 之後從「context-key escape hatch」收緊成「**private sentinel**、值用 `is` 比對、不可裸真值」，doc 本體與 H1 標題都改了，**索引那一行沒改** —— 照舊摘要去實作，寫出來的正是 #522 實測打穿過的形態（裸真值可從 RPC payload 偽造）。
+   ⚠ **這條沒有機械強制**（見下方限制聲明：散文語意不可機械驗證）。可用的低成本自查：**doc 的 H1 標題改了，就把索引那一行當成過期**——H1 通常就是處方的一句話版本。
 
-> 🔒 上面兩條由 repo-lint 的 `pattern-doc-registry` check 機械強制（#547）：本目錄、pattern-guard-map、本索引的兩個登記面與頂部計數必須互為**雙射**，且 map 的每個 `docs` 條目都必須是**存在的檔案路徑**（`pattern-guard.py` 自己不驗證它印出來的路徑）。
+> 🔒 上面第 1、2 條由 repo-lint 的 `pattern-doc-registry` check 機械強制（#547）：本目錄、pattern-guard-map、本索引的兩個登記面與頂部計數必須互為**雙射**，且 map 的每個 `docs` 條目都必須是**存在的檔案路徑**（`pattern-guard.py` 自己不驗證它印出來的路徑）。
 >
 > ⚠ 它保證的**只有名單一致與路徑存在**——**不驗證任何一份 doc 的內容是否與現行程式碼相符**。「repo-lint 綠」不代表這些 pattern 是對的（#547 的原型錯誤就是把「有守線」讀成「守線是對的」）；行號過期、處方與 code 相反、否定式散文主張（例「本 codebase 不是 M2M」）一律抓不到，那些留給人。
 
