@@ -1278,5 +1278,22 @@
              and docs/tracking/pitfalls/seed-noupdate-sticky-template-links.md. -->
         <function model="woow_paas_platform.cloud_app_template"
                   name="_heal_sticky_helm_value_specs"/>
+
+        <!-- #552 層 4：升級期的活體檢查。層 4 起，helm_chart_version 留空的商品會被
+             供給閘門擋在購買前 —— 而那個失效形態**完全靜默**：商品從貨架上消失、
+             marketplace 少一張卡、沒有任何錯誤。
+
+             真正的風險窗口是「seed 值沒寫進去、但模組版號照樣推進」：ir_model_data
+             的 noupdate 若為 true，-u 會靜默 skip 掉 record 更新（見上方 healer 與
+             seed-noupdate-sticky pitfall），而 prod 的 module-version-gate
+             （initContainer）只驗版號有沒有推進、**不驗 seed 欄位值**。兩者一分離，
+             就是「guard 生效 ＋ 四個在售商品版號仍空 ＝ 全掛且零紅燈」。
+
+             刻意只 log ERROR 而**不** raise：raise 會讓 initContainer exit 1、pod 卡在
+             Init ＝ 把資料狀態問題升級成停機。要改成硬擋是營運決策，不在本 PR。
+             位置必須在上面那個 healer **之後** —— 它才是把 noupdate 清掉、讓 seed 值
+             真的落地的那一步；排在它之前會讀到升級前的舊值而誤報。 -->
+        <function model="woow_paas_platform.cloud_app_template"
+                  name="_warn_unpinned_active_templates"/>
     </data>
 </odoo>

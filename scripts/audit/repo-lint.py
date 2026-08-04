@@ -1690,6 +1690,70 @@ def check_pattern_doc_registry(root):
 
 # ---------------------------------------------------------------- modes
 
+AVAILABILITY_JUDGE_FILE = "src/models/cloud_app_template.py"
+AVAILABILITY_JUDGE_FUNC = "_reject_reason_for_new_instance"
+AVAILABILITY_LABEL_FILE = "src/static/src/paas/utils/availability_label.js"
+AVAILABILITY_LABEL_MAP_RE = re.compile(
+    r"const\s+REASON_LABELS\s*=\s*\{(.*?)\}", re.S)
+AVAILABILITY_LABEL_KEY_RE = re.compile(r"^\s*(\w+)\s*:", re.M)
+
+
+def check_availability_reason_labels(root):
+    """後端能回的每個 availability reason，前端都要有明確文案。
+
+    #552 層 4 的實地教訓：``availabilityLabel`` 原本是
+    ``reason === "paused" ? "暫停販售" : "已售罄"`` —— 一個三元式，**任何**新增的
+    reason 都會掉進 else 被渲染成「已售罄」。新增 ``unpinned_chart``（平台端沒釘
+    chart 版本）時，租戶看到的會是「已售罄」：一句**假話**，而且會讓營運去查根本
+    不存在的名額問題。
+
+    這類漂移沒有任何測試會變紅（後端測後端判準、本 repo 沒有前端測試基礎設施），
+    與 check_gateway_copy_gate_anchor 是同一個家族——兩邊各自都「看起來對」。
+
+    判準只要求**涵蓋**（後端 ⊆ 前端），不要求相等：前端多留一個舊 slug 的文案是
+    無害的（後端不再回它而已），少一個才是說謊。
+    """
+    judge_path = os.path.join(root, AVAILABILITY_JUDGE_FILE)
+    label_path = os.path.join(root, AVAILABILITY_LABEL_FILE)
+    if not (os.path.exists(judge_path) and os.path.exists(label_path)):
+        return []  # fail-open：檔案搬家由其他 gate／測試負責，這裡不重複報
+
+    with open(judge_path, encoding="utf-8") as f:
+        tree = ast.parse(f.read())
+    judge = next(
+        (n for n in ast.walk(tree)
+         if isinstance(n, ast.FunctionDef) and n.name == AVAILABILITY_JUDGE_FUNC),
+        None)
+    if judge is None:
+        return ["%s：找不到 %s，availability reason 涵蓋檢查失效（探針壞掉不是通過）"
+                % (AVAILABILITY_JUDGE_FILE, AVAILABILITY_JUDGE_FUNC)]
+
+    # 回傳字串常數 ＝ 一個 reason slug；`return None`／`return` 是放行，不算。
+    backend = {
+        n.value.value for n in ast.walk(judge)
+        if isinstance(n, ast.Return) and isinstance(n.value, ast.Constant)
+        and isinstance(n.value.value, str)
+    }
+    if not backend:
+        return ["%s：%s 一個 reason 字串都抽不到——探針失去鑑別力（後端 ⊆ 前端 "
+                "在空集合上恆真）" % (AVAILABILITY_JUDGE_FILE, AVAILABILITY_JUDGE_FUNC)]
+
+    with open(label_path, encoding="utf-8") as f:
+        js = f.read()
+    map_match = AVAILABILITY_LABEL_MAP_RE.search(js)
+    if not map_match:
+        return ["%s：找不到 REASON_LABELS 對照表。若改回三元式，任何新 reason 都會被"
+                "靜默渲染成別的狀態（#552）" % AVAILABILITY_LABEL_FILE]
+    frontend = set(AVAILABILITY_LABEL_KEY_RE.findall(map_match.group(1)))
+
+    missing = sorted(backend - frontend)
+    if missing:
+        return ["%s：後端 %s 會回 %s，但 REASON_LABELS 沒有對應文案 ⇒ 前端會顯示"
+                "fallback 而不是這個狀態的真實描述（#552）"
+                % (AVAILABILITY_LABEL_FILE, AVAILABILITY_JUDGE_FUNC, missing)]
+    return []
+
+
 def run_all(root):
     violations = (check_controller_sudo(root)
                   + check_owl_template(root)
@@ -1707,7 +1771,8 @@ def run_all(root):
                   + check_mixin_subscription_sudo(root)
                   + check_config_parameter_uninstall(root)
                   + check_duplicate_class_methods(root)
-                  + check_pattern_doc_registry(root))
+                  + check_pattern_doc_registry(root)
+                  + check_availability_reason_labels(root))
     if violations:
         print("repo-lint：%d 個違規" % len(violations))
         for v in violations:
@@ -1719,7 +1784,8 @@ def run_all(root):
           "conceal-instances / reset-budget-ladder / transition-anchor-utc / "
           "assertlogs-numeric-level / mixin-subscription-sudo / "
           "config-parameter-uninstall / duplicate-class-methods / "
-          "pattern-doc-registry）")
+          "pattern-doc-registry / "
+          "availability-reason-labels）")
     return 0
 
 

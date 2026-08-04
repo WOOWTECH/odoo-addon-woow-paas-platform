@@ -35,10 +35,23 @@ the transaction CURSOR (shared across all envs) rather than the context, and
 env.flush_all() forces the deferred recompute to run NOW while the flag is still
 set, mirroring 18.0.1.0.37. sa_skip_route_sync (context) keeps the row moves from
 calling the operator — CF converges via the per-route re-sync, not per-row here.
+
+Second cursor flag — sa_skip_bulk_grant_check (#543): _check_allow_policy_no_bulk_grant
+(#352, added 2026-08-02, ~2 months AFTER this migration) rejects an allow policy
+carrying an include rule of type email_domain / everyone. Legacy flat policies were
+written straight into the policy table's flat columns and never passed that guard,
+so a DB still on < 18.0.1.0.39 holding one aborts the whole upgrade here (the guard
+is called explicitly inside Rule.create, so it fires even for a direct rule-table
+write that no @api.constrains on the policy would catch).
+Blocking the upgrade does not remove the bulk grant: the data already exists in flat
+form and this migration only reshapes it. So historical rows are grandfathered
+through and then listed as WARNINGs (see _warn_grandfathered_bulk_grants); a user
+authoring a NEW bulk-grant policy carries no flag and is still rejected.
 """
 import logging
 
 from odoo import api, SUPERUSER_ID
+from odoo.exceptions import ValidationError
 
 _logger = logging.getLogger(__name__)
 
@@ -79,6 +92,36 @@ def _heal_email_quota_seed(env):
             "on %s seeded plan(s) (sticky-noupdate upgrade path).", healed)
 
 
+def _warn_grandfathered_bulk_grants(policies):
+    """列出被 #543 bypass 放行的 allow × bulk-grant 歷史政策。
+
+    用**守衛自己**當分類器，而不是在這裡再抄一份 _BULK_GRANT_RULE_TYPES——
+    issue #543 的根因正是「守衛清單」與「migration bypass 清單」是分離的兩份，
+    再複製一次只會多一個會漂移的副本。#352 的 rule_type 集合日後若擴大，這裡
+    自動跟著擴大。
+
+    呼叫端必須在 cursor flag 清掉之後才呼叫本函式，否則守衛會直接 return，
+    這份清單會是空的（列不出來 ≠ 沒有）。
+    """
+    grandfathered = []
+    for pol in policies.exists():
+        try:
+            pol._check_allow_policy_no_bulk_grant()
+        except ValidationError:
+            grandfathered.append(pol)
+    if not grandfathered:
+        return
+    _logger.warning(
+        "18.0.1.0.39 P-rule migration: %s legacy policy(ies) carry an allow + "
+        "bulk-grant Include rule predating the #352 guard and were migrated "
+        "AS-IS (aborting the upgrade would not have removed the grant — the "
+        "flat columns already held it). Each admits an unbounded number of "
+        "people while counting as zero Cloudflare Access seats; re-author them "
+        "with an 'Email list' Include rule. Policies: %s",
+        len(grandfathered),
+        ', '.join('id=%s %r' % (p.id, p.name or '') for p in grandfathered))
+
+
 def migrate(cr, version):
     env = api.Environment(cr, SUPERUSER_ID, {})
     _heal_email_quota_seed(env)
@@ -105,10 +148,18 @@ def migrate(cr, version):
 
     created = 0
     skipped = 0
+    migrated_ids = []
     # sa_skip_policy_quota (CURSOR flag): the include-rule create fires
     # _check_emails_per_policy, also via the deferred stored-related recompute in
     # a context-stripped env; the cursor flag survives that env reconstruction.
     cr.sa_skip_policy_quota = True
+    # sa_skip_bulk_grant_check (CURSOR flag, #543): grandfather pre-#352 flat
+    # policies past _check_allow_policy_no_bulk_grant. NOT the same reasoning as
+    # the quota flag above — a context flag was measured to work on this path
+    # too; cursor is chosen for coverage (that guard has three call sites) and so
+    # both bypasses are cleared by the one finally below. See the guard's
+    # docstring for the measurement.
+    cr.sa_skip_bulk_grant_check = True
     try:
         for rec in rows:
             pol = Policy.browse(rec['id'])
@@ -125,12 +176,18 @@ def migrate(cr, version):
                 'rule_type': rule_type,
                 'rule_value': rule_value,
             })
+            migrated_ids.append(pol.id)
             created += 1
         # Force pending recomputes (+ their constraint re-fire) to run NOW,
-        # while the bypass flag is still set.
+        # while the bypass flags are still set.
         env.flush_all()
     finally:
         cr.sa_skip_policy_quota = False
+        cr.sa_skip_bulk_grant_check = False
+
+    # Flags are cleared by now (see the function's docstring — running this
+    # while the bypass is still on would silently report nothing).
+    _warn_grandfathered_bulk_grants(Policy.browse(migrated_ids))
 
     _logger.info(
         "18.0.1.0.39 P-rule migration done: created %s include rule(s) from "

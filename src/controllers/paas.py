@@ -3424,6 +3424,23 @@ class PaasController(HiddenChainMixin, Controller):
                 )
                 return
 
+            # #552 (a)：poll 是**唯一**抓得到「非由 Odoo 發起的 chart 變動」的路徑。
+            # 另外四條回寫都掛在平台自己觸發的操作上（首裝／redeploy／reset／
+            # reconfigure）；有人直接對叢集下 `helm upgrade`（維運手動、CD、其他
+            # 系統）時它們一條都不會跑。#552 內文「已排除的錯誤因果」記的 stg
+            # `svc-bd9d6ed3` 就是這個形態：Odoo 帳本 rev2/0.1.0、叢集 rev3/0.1.1，
+            # 而 Odoo 的 write_date 停在前一天 ⇒ 那次 upgrade 不是平台發起的。
+            #
+            # 綁成 dict 與 `helm_revision` 一起走，是為了讓下面**四個** write 分支
+            # 不可能各自漏掉一個欄位——新增第五個分支時也會自動跟上。
+            # `or service.helm_chart_version` ＝ 舊 operator 沒有這個欄位時保留原值。
+            release_facts = {
+                'helm_revision': helm_revision,
+                'helm_chart_version': (
+                    release.get('chart_version') or service.helm_chart_version
+                ),
+            }
+
             # Determine new state based on release status.
             #
             # #423 W5a：就緒判定已收斂為單一事實源
@@ -3459,7 +3476,7 @@ class PaasController(HiddenChainMixin, Controller):
                         # Pods ready but need post-deploy init → transition to initializing
                         service.write({
                             'state': 'initializing',
-                            'helm_revision': helm_revision,
+                            **release_facts,
                             'error_message': False,
                         })
                         self._run_post_deploy_init(service)
@@ -3472,7 +3489,7 @@ class PaasController(HiddenChainMixin, Controller):
                         # Addon selection changed during upgrade → need module list refresh
                         service.write({
                             'state': 'initializing',
-                            'helm_revision': helm_revision,
+                            **release_facts,
                             'error_message': False,
                             'init_retries': 0,
                             'init_error': False,
@@ -3483,7 +3500,7 @@ class PaasController(HiddenChainMixin, Controller):
                         # No init needed or already done → running.
                         service.write({
                             'state': 'running',
-                            'helm_revision': helm_revision,
+                            **release_facts,
                             'error_message': False,
                         })
                 # else: still deploying/waiting for pods
@@ -3491,7 +3508,7 @@ class PaasController(HiddenChainMixin, Controller):
             elif release_status == 'failed':
                 service.write({
                     'state': 'error',
-                    'helm_revision': helm_revision,
+                    **release_facts,
                     'error_message': release.get('description', 'Deployment failed'),
                 })
 

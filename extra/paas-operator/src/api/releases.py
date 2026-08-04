@@ -4,6 +4,7 @@ import json
 import logging
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, Query, status
@@ -85,6 +86,29 @@ router = APIRouter(prefix="/api/releases", tags=["releases"])
 helm_service = HelmService()
 k8s_service = KubernetesService()
 cloudflare_service = CloudflareService()
+
+
+def _chart_ref_is_remote(chart: Optional[str]) -> bool:
+    """chart ref 會不會被 helm 重新「解析」成某個版本（＝有跳版風險）。
+
+    #552：`--version` 只對**需要解析**的 ref 有意義——OCI ref（``oci://...``）與
+    classic repo ref（``bitnami/postgresql``）沒有 `--version` 就取 registry 當下
+    最新的那一版。反過來，**本機路徑或 .tgz 的版本寫在 chart 自己的 Chart.yaml
+    裡**，helm 根本不會去查任何 registry，`--version` 對它是 no-op。
+
+    所以判準是「helm 需不需要去外面查」，用「這是不是一個存在的本機路徑」表達
+    ——這正是 helm 自己的第一步。刻意不寫成 ``oci://`` 前綴白名單：那會漏掉
+    classic ``repo/chart`` 形式（一樣會跳版），而漏掉的方向是 fail-open。
+
+    ⚠ 這個區分不是為了測試方便：integration 測試用本機 chart 目錄，而生產一律是
+    ``oci://``。把本機 chart 也擋掉等於宣稱一件不成立的事（本機 chart 不會跳版）。
+    """
+    if not chart:
+        # chart 缺席時 `helm_service.upgrade` 自己會 raise ValueError（helm 不保存
+        # 原始 chart URL）。那是另一個錯誤，不歸本閘門管——這裡回 False 讓它照原路
+        # 拋出自己的訊息，不要偽裝成「沒釘版本」。
+        return False
+    return not Path(chart).exists()
 
 
 def _ensure_image_pull_secrets(
@@ -874,6 +898,27 @@ def reset_release_config(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="sensitive_values.config.sensitive.admin_password is required",
+        )
+
+    # #552 層 4 —— fail-closed，**刻意放在載體分流之前**。
+    #
+    # reset 是一次真正的 `helm upgrade`（兩條分支都是），而 `helm_service.upgrade`
+    # 對 chart 是必填的（helm 不保存原始 chart URL）。⇒ chart 一定會被重新解析，
+    # 少了 `--version` 就是「拿 registry 當下最新的那一版」——租戶按一下換密碼，
+    # 底層 chart 靜默跳版，`--atomic` 只在失敗時回滾、成功跳版永久生效。
+    #
+    # ⚠ 位置是這道閘門的重點：下一行就依 `admin_password_carrier` 分流成
+    # `_reset_via_helm_secret` 與底下的 config_json 路，兩條**各有自己的**
+    # `helm_service.upgrade(` 呼叫點。守在任一個呼叫點必漏另一條（open-design /
+    # hermes-agent 走 helm_secret 那條）。守在分流**之前**一次涵蓋兩條。
+    if _chart_ref_is_remote(request.chart) and not request.version:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "reset-config requires an explicit chart version for remote chart "
+                "refs — without it Helm resolves the registry's latest and silently "
+                "bumps the tenant's chart"
+            ),
         )
 
     if request.admin_password_carrier == "helm_secret":

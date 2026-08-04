@@ -18,12 +18,12 @@ class TestMaxPerPartnerField(TransactionCase):
         Template = self.env['woow_paas_platform.cloud_app_template']
         self.assertIn('max_per_partner', Template._fields)
         # 不設 max_per_partner 的 fixture → 驗 default==0（驗「欄位 default 語意」，
-        # 而非舊法「存在某 0 值 seed」；helm 值鏡射 setUp / seed 慣例）。
+        # 而非舊法「存在某 0 值 seed」；helm 值鏡射 setUp / seed 慣例；#552 層 4 後 seed 慣例＝釘版）。
         tpl = Template.create({
             'name': 'default-probe', 'slug': 'default-probe',
             'helm_repo_url': '',
             'helm_chart_name': 'oci://example.com/default-probe',
-            'helm_chart_version': '',
+            'helm_chart_version': '1.0.0',
         })
         self.assertEqual(tpl.max_per_partner, 0)
 
@@ -49,13 +49,14 @@ class TestMaxPerPartnerEnforcement(TransactionCase):
             'name': 'ws-b', 'owner_id': self.user_b.id,
         })
         # cloud_app_template：name/helm_repo_url/helm_chart_name/helm_chart_version
-        # 為 required（Task 0 校驗）；helm 值鏡射 seed 慣例（repo/version 空字串）。
+        # 為 required（Task 0 校驗）；helm 值鏡射 seed 慣例（repo 空字串）。
+        # ⚠ version 不可留空：#552 層 4 起空版號＝不可購買，create 會被擋。
         self.tpl = self.env['woow_paas_platform.cloud_app_template'].create({
             'name': 'limit-tpl', 'slug': 'limit-tpl',
             'max_per_partner': 1,
             'helm_repo_url': '',
             'helm_chart_name': 'oci://example.com/limit-tpl',
-            'helm_chart_version': '',
+            'helm_chart_version': '1.0.0',
         })
 
     def _svc_vals(self, ws):
