@@ -305,6 +305,7 @@ class CloudService(models.Model):
     )
     helm_values = fields.Text(
         string='Helm Values',
+        groups='base.group_system',
         help='JSON object with Helm values used for deployment',
     )
     helm_revision = fields.Integer(
@@ -1078,9 +1079,8 @@ class CloudService(models.Model):
         """
         self.ensure_one()
         template = self.template_id
-        values = self._strip_mcp_sensitive_values(
-            json.loads(self.helm_values) if self.helm_values else {}
-        ) or {}
+        # #559：helm_values 有 groups=，屬性直讀會 AccessError。走唯一入口。
+        values = self._strip_mcp_sensitive_values(self._helm_values_dict()) or {}
 
         # Inject StorageClass for PVC lifecycle management
         storage_class = self.env['ir.config_parameter'].sudo().get_param(
@@ -1713,6 +1713,54 @@ class CloudService(models.Model):
         if isinstance(auth, dict):
             auth.pop('apiServerKey', None)
         return result
+
+    # ------------------------------------------------------------------
+    # #559：helm_values 的欄位級授權（groups='base.group_system'）之後，
+    # 平台程式碼存取它的**唯二**入口。
+    #
+    # 為什麼欄位要有 groups=：`helm_values` 裝的是租戶親手填的憑證
+    # （odooPassword／smtpPassword／auth.*ApiKey）。#535 把服務詳情 API 的遮罩
+    # 改成 spec-driven，但那道遮罩在 **controller 層**；欄位本身沒有 groups= 時，
+    # 租戶可以直接打 `POST /web/dataset/call_kw` 送 `read(['helm_values'])`
+    # **繞過整個 controller 遮罩層**拿到明文。實測坐實（#559）：最低權限
+    # （workspace role=guest）的 `base.group_user` 租戶讀得到完整明文，而同一條
+    # 路徑上讀 `n8n_owner_password`（有 groups=）會被 AccessError 擋下
+    # ——鑑別項證明了「有 groups= 就會被擋」在這條路徑上確實生效。
+    #
+    # 為什麼要這兩個 helper：groups= 擋的不只是 RPC，**連平台自己的 ORM 屬性存取
+    # 也一併擋掉**（實測：`_format_service` 的 `service.helm_values` 直接拋
+    # AccessError，租戶的服務詳情頁與 reconfigure 全掛）。租戶**應該**看得到自己
+    # 的設定——只是要走 BFF、經 `_sanitize_helm_values` 遮罩後才出去。所以合法路徑
+    # 需要提權，而提權集中在這裡、不散落成一堆 `.sudo()`。
+    #
+    # ⚠ 呼叫端的義務：這兩個 helper **只提升欄位級權限，不做記錄級授權**。
+    # 呼叫前必須已經確認呼叫者有權碰這筆 service（controller 端是
+    # `workspace.check_user_access()` ＋ ir.rule 在 browse 後的第一次讀）。
+    # 不要在「還沒授權的 recordset」上呼叫它們——那才是
+    # docs/decisions/patterns/orm-vs-endpoint-acl-test-coverage.md 講的那種洞。
+    # ------------------------------------------------------------------
+
+    def _helm_values_dict(self):
+        """讀出 helm_values 並解析成 dict（空值／未設定回 ``{}``）。
+
+        解析失敗時**照原樣拋出**，與改動前各呼叫點的行為一致（那些點原本就是
+        裸 ``json.loads``）——不在這裡吞掉，免得壞掉的 JSON 變成靜默的空設定。
+        """
+        self.ensure_one()
+        raw = self.sudo().helm_values
+        return json.loads(raw) if raw else {}
+
+    def _apply_helm_values(self, values, extra_vals=None):
+        """寫回 helm_values（會套用與 ``create()`` 相同的敏感值剝除）。
+
+        ``extra_vals`` 裡的其他欄位**刻意不提權**、走呼叫者自己的身分寫入，
+        這樣 ir.rule 對它們照常生效——提權只落在 helm_values 這一格。
+        """
+        self.ensure_one()
+        if extra_vals:
+            self.write(extra_vals)
+        stripped = self._strip_mcp_sensitive_values(values)
+        self.sudo().write({'helm_values': json.dumps(stripped)})
 
     def _has_mcp_admin_secret(self):
         self.ensure_one()
@@ -2570,17 +2618,21 @@ class CloudService(models.Model):
                     'init_retries': 0,
                     'init_error': False,
                 }
-                if template.mcp_api_key_helm_path and self.helm_values:
+                merged_helm_values = None
+                if template.mcp_api_key_helm_path:
                     try:
-                        current_values = json.loads(self.helm_values)
+                        # #559：走唯一入口（欄位有 groups=，屬性直讀會 AccessError）
+                        current_values = self._helm_values_dict()
                         api_key_nested = _unflatten_dotpath_keys(
                             {template.mcp_api_key_helm_path: real_api_key}
                         )
-                        updated_values = _deep_merge(current_values, api_key_nested)
-                        update_vals['helm_values'] = json.dumps(updated_values)
+                        merged_helm_values = _deep_merge(current_values, api_key_nested)
                     except (json.JSONDecodeError, TypeError):
                         _logger.warning("Failed to update helm_values with real API key for service %s", self.name)
-                self.write(update_vals)
+                if merged_helm_values is not None:
+                    self._apply_helm_values(merged_helm_values, extra_vals=update_vals)
+                else:
+                    self.write(update_vals)
                 _logger.info("n8n init succeeded for service %s (via cron)", self.name)
             else:
                 self._record_init_failure(result.get('error', 'Unknown error'))
