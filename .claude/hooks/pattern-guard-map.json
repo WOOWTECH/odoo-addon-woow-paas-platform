@@ -108,8 +108,8 @@
     },
     {
       "class": "subscription-billing",
-      "pattern": "^src/models/sh_subscription[a-z_]*\\.py$",
-      "why": "subscription 日期/計費邏輯與第三方 sh_subscription addon 深耦合，date helper 與 plan 強制覆寫有既往翻車史（#324/#327/#366）",
+      "pattern": "^src/models/(sh_subscription[a-z_]*|subscription_lifecycle_mixin)\\.py$",
+      "why": "subscription 日期/計費邏輯與第三方 sh_subscription addon 深耦合，date helper 與 plan 強制覆寫有既往翻車史（#324/#327/#366）。⚠ 必須含 subscription_lifecycle_mixin.py：plan-driven-date-helper 講的 _force_trial_dates_from_plan / _force_active_dates_from_plan 就住在那個檔，只綁 sh_subscription* 會讓改那兩個 helper 的人永遠收不到這份 doc",
       "docs": [
         "docs/decisions/patterns/plan-driven-date-helper.md — subscription 日期由 plan 強制覆寫（trial/non-trial）且與第三方 onchange 有 post-confirm coupling 時",
         "docs/decisions/patterns/template-vs-plan-property-boundary.md — plan 級 vs template 級屬性邊界（有人提議 plan 加 image 欄位時必讀）"
