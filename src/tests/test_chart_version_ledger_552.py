@@ -151,19 +151,16 @@ class TestExecuteDeployRecordsActualChartVersion(_Base):
             service._execute_deploy()
         return client
 
-    def test_records_version_resolved_by_helm_when_template_pin_is_empty(self):
-        """空 pin ⇒ helm 挑 registry latest ⇒ 這是唯一知道裝了哪一版的機會。
-
-        n8n / odoo 兩個**在售**商品現在就是空 pin（postgresql / redis 已下架），
-        所以這不是假想案例。
-        """
-        template = self._template('n8n-552', '')
-        service = self._service(template, state='pending', chart_version='')
-
-        self._deploy(service, {'revision': 1, 'chart_version': '2.0.1'})
-
-        self._assert_ledger_moved_but_template_untouched(
-            service, template, '2.0.1', '')
+    # ⚠ 這裡原本有一條 `test_records_version_resolved_by_helm_when_template_pin_
+    # is_empty`（空 pin 首裝 ⇒ 記下 helm 挑的 latest）。#552 **層 4** 之後那個情境
+    # 已經**結構上不可達**：空 pin 的 template 在 `create()` 就被供給閘門擋下，
+    # 連 `_execute_deploy` 也有 backstop。留著它只會變成一條「測試造出產品碼不
+    # 允許的狀態」的假情境。
+    #
+    # 它原本要守的東西沒有消失，只是換了地方：
+    #   * 「回寫的是 operator 回報值而不是 pin」→ 下面那條（pin 0.1.5、回報 0.1.6）
+    #   * 「空 pin 不得部署」→ `test_chart_pin_fail_closed_552.py` 的
+    #     `TestFirstInstallGate` / `TestExecuteDeployBackstop`
 
     def test_records_version_even_when_it_differs_from_the_pin(self):
         """有 pin 也要記 operator 回報值——pin 是「要求」，回報值是「事實」。"""
@@ -365,8 +362,14 @@ class TestReconfigureVersionFallback(_Base):
         執行緒裡、回不到前端 ⇒ 全部 15 個商品靜默壞掉。判空要往前移到購買前的
         閘門，不是這裡（#552 修法順序：fallback 先於 fail-closed）。
         """
-        template = self._template('reconf-blank-552', '')
-        service = self._service(template, chart_version=False)
+        # ⚠ 順序：先用**釘版的** template 把服務建起來，再把兩邊清空。#552 層 4
+        # 之後空版號的 template 在 `create()` 就會被供給閘門擋下——順序反過來，
+        # 測試會在抵達受測步驟之前就死，而那個 error 長得跟「reconfigure 被擋」
+        # 一模一樣。可達性沒有變（管理員把已上架商品的版本清掉即可重現）。
+        template = self._template('reconf-blank-552', '1.0.0')
+        service = self._service(template, chart_version='1.0.0')
+        template.write({'helm_chart_version': ''})
+        service.write({'helm_chart_version': False})
 
         client = self._client()
         result = self._run_update(service, client)

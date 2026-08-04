@@ -92,7 +92,10 @@ class _CapFixtureMixin:
             'slug': slug,
             'helm_repo_url': '',
             'helm_chart_name': 'oci://example.invalid/%s' % slug,
-            'helm_chart_version': '',
+            # #552 層 4：空版號現在會讓 template 直接不可購買（reason
+            # `unpinned_chart`），會**遮蔽**本檔要測的 paused／sold_out 判定。
+            # 釘一個版本 ＝ 讓 fixture 回到「正常上架商品」的形狀，本檔的判準不變。
+            'helm_chart_version': '1.0.0',
         }
         vals.update(extra)
         return self.env['%s.cloud_app_template' % MOD].create(vals)

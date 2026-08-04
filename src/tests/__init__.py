@@ -300,3 +300,7 @@ from . import test_chart_version_ledger_552
 # fix: #552 層 1 —— seed template 的 helm_chart_version 不得留空
 # （留空 ⇒ helm 不帶 version 旗標 ⇒ 抓 registry 當下 latest、帳本記空）
 from . import test_seed_chart_version_pin_552
+
+# fix: #552 層 4 —— 沒釘 chart 版本就不准部署（首裝共同咽喉／存量 pending backstop／
+# redeploy），＋ poll 補第五條帳本回寫路徑（抓非平台發起的 chart 變動）
+from . import test_chart_pin_fail_closed_552
