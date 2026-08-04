@@ -2014,8 +2014,16 @@ class PaasController(HiddenChainMixin, Controller):
         if not server.exists() or server.project_id.cloud_service_id.id != service.id:
             return {'success': False, 'error': 'MCP Server not found'}
 
+        # #554：`action_sync_tools` 自帶 catch-all，失敗時**不會**拋到這裡——
+        # 只能靠它的 bool 回傳值判讀，否則一律回 success: True（使用者看到
+        # 「同步成功」，實際 tool 清單處於半同步狀態）。失敗原因讀 callee 剛寫
+        # 進去的 `state_message`。外層 try 留著接非預期例外（例如格式化階段）。
         try:
-            server.action_sync_tools()
+            if not server.action_sync_tools():
+                reason = server.state_message or 'Unknown error'
+                _logger.warning(
+                    'MCP sync failed for server %s: %s', server.name, reason)
+                return {'success': False, 'error': f'Sync failed: {reason}'}
         except Exception as e:
             _logger.warning('MCP sync failed for server %s: %s', server.name, e)
             return {'success': False, 'error': f'Sync failed: {e}'}
@@ -2032,8 +2040,14 @@ class PaasController(HiddenChainMixin, Controller):
         if not server.exists() or server.project_id.cloud_service_id.id != service.id:
             return {'success': False, 'error': 'MCP Server not found'}
 
+        # #554：同 `_sync_mcp_server`——callee 自帶 catch-all，只能判讀 bool。
         try:
-            server.action_test_connection()
+            if not server.action_test_connection():
+                reason = server.state_message or 'Unknown error'
+                return {
+                    'success': False,
+                    'error': f'Connection test failed: {reason}',
+                }
         except Exception as e:
             return {'success': False, 'error': f'Connection test failed: {e}'}
 
@@ -2293,23 +2307,24 @@ class PaasController(HiddenChainMixin, Controller):
             return {'success': False, 'error': url_error}
 
         McpServer = request.env['woow_paas_platform.mcp_server'].sudo()
-        try:
-            server = McpServer.create({
-                'name': name,
-                'url': url,
-                'transport': params.get('transport', 'sse'),
-                'api_key': params.get('api_key', ''),
-                'headers_json': params.get('headers_json', ''),
-                'description': params.get('description', ''),
-                'scope': 'user',
-                'project_id': project.id,
-                # #271: URL↔flag consistency IS now enforced — see
-                # _validate_mcp_url(sidecar_backed=...) above + the model
-                # @api.constrains _check_sidecar_url_in_cluster.
-                'sidecar_backed': bool(params.get('sidecar_backed', False)),
-            })
-        except ValidationError as e:
-            return {'success': False, 'error': str(e)}
+        # #525 B4：與 `_update_project_mcp_server` 同理**刻意不包 try**——對齊
+        # service-centric 的 `_create_mcp_server`（那支的 `McpServer.create(...)`
+        # 同樣裸露、直接 return）。只改 update 會把「update 包／不包不一致」
+        # 換成「create 包、update 不包」的新不一致。
+        server = McpServer.create({
+            'name': name,
+            'url': url,
+            'transport': params.get('transport', 'sse'),
+            'api_key': params.get('api_key', ''),
+            'headers_json': params.get('headers_json', ''),
+            'description': params.get('description', ''),
+            'scope': 'user',
+            'project_id': project.id,
+            # #271: URL↔flag consistency IS now enforced — see
+            # _validate_mcp_url(sidecar_backed=...) above + the model
+            # @api.constrains _check_sidecar_url_in_cluster.
+            'sidecar_backed': bool(params.get('sidecar_backed', False)),
+        })
         return {'success': True, 'data': self._format_mcp_server(server)}
 
     def _resolve_project_mcp(self, project, params: dict):
@@ -2338,10 +2353,16 @@ class PaasController(HiddenChainMixin, Controller):
             if field_name in params:
                 vals[field_name] = params[field_name]
         if vals:
-            try:
-                server.write(vals)
-            except ValidationError as e:
-                return {'success': False, 'error': str(e)}
+            # #525 B4：這裡**刻意不包 try**——對齊 service-centric 的
+            # `_update_mcp_server`。Odoo 18 的 `write()` 是先寫後驗
+            # （`models.py` 的 `field.write(...)` 在 `_validate_fields(...)` 之前），
+            # 所以把 ValidationError 接下來改回 `success: False` 會讓新值隨
+            # request 正常 commit ⇒ 使用者看到「更新失敗」但記錄已經被改。
+            # 讓它傳到 JSON-RPC dispatcher，框架不 commit、整筆回捲，才是一致的。
+            # 順帶解掉第二層不一致：`mcp_server.write()` 在 `super().write()` 之後
+            # 才推 mcp snapshot，中途拋例外時 DB 已變而 running pod 內的
+            # `mcp.json` 仍是舊值——回捲之後兩邊都不變，不會漂移。
+            server.write(vals)
         return {'success': True, 'data': self._format_mcp_server(server)}
 
     def _delete_project_mcp_server(self, project, params: dict) -> dict[str, Any]:
@@ -2355,8 +2376,13 @@ class PaasController(HiddenChainMixin, Controller):
         server, error = self._resolve_project_mcp(project, params)
         if error:
             return error
+        # #554：見 `_sync_mcp_server` 的註記——callee 自帶 catch-all，判讀 bool。
         try:
-            server.action_sync_tools()
+            if not server.action_sync_tools():
+                reason = server.state_message or 'Unknown error'
+                _logger.warning(
+                    'MCP sync failed for server %s: %s', server.name, reason)
+                return {'success': False, 'error': f'Sync failed: {reason}'}
         except Exception as e:
             _logger.warning('MCP sync failed for server %s: %s', server.name, e)
             return {'success': False, 'error': f'Sync failed: {e}'}
@@ -2366,8 +2392,14 @@ class PaasController(HiddenChainMixin, Controller):
         server, error = self._resolve_project_mcp(project, params)
         if error:
             return error
+        # #554：同上。
         try:
-            server.action_test_connection()
+            if not server.action_test_connection():
+                reason = server.state_message or 'Unknown error'
+                return {
+                    'success': False,
+                    'error': f'Connection test failed: {reason}',
+                }
         except Exception as e:
             return {'success': False, 'error': f'Connection test failed: {e}'}
         return {
