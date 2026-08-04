@@ -3,7 +3,7 @@ title: 發佈到 Production 的標準作業流程（SOP）
 category: guides
 status: active
 created: 2026-06-14
-updated: 2026-08-02
+updated: 2026-08-04
 tags: [paas, release, production, fleet, gitops, helm, ci-cd, sop]
 related:
   - docs/tracking/pitfalls/ci-addon-ref-empty-drifting-default-branch.md
@@ -176,6 +176,24 @@ grep -rnE 'version:|tag:' /tmp/paas-app-bundle-cd/*/fleet.yaml /tmp/paas-app-bun
 
 **何時**：本 addon（`src/`）改動要上 prod。
 
+> **🔴 步驟 0：pre-flight 起點實查——發版單本身是要被查證的對象，不是依據**
+>
+> 發版單（或前一輪留下的 note）寫的「prod 現役版本」「本次要發什麼」**都是快照，會過期**。三次實例各壞在不同地方：
+>
+> | 壞在哪 | 實例 | 後果 |
+> |---|---|---|
+> | **起點版本抄舊 note** | 發版單寫「現役 `.73`」，實為 `.75`（熱修已上線） | 範圍多算 9 個 commit、把已上線的東西列為本次交付、回滾指令指到錯的版本 |
+> | **只查發版單點名的 pin** | 發版單把某個 operator 修復列為本次交付，實際它走 operator 管線早已獨立上線 | 誤列（若照著回滾會動到不該動的東西） |
+> | **漏列另一條管線** | 發版單 §2 只寫 image，漏了 operator **chart**；而該 chart 版本才補上新商品開通所需的 ClusterRole 權限 | 租戶付款後開通必敗，且無訊號 |
+>
+> ⇒ **pre-flight 三條，缺一不可：**
+>
+> 1. **起點一律以 live 實查為準**：prod DB `ir_module_module.latest_version` ＋ pod imageID **digest**，兩者交叉。**不要用發版單、note 或前一輪的紀錄當起點。**
+> 2. 🔴 **獨立查 CD repo 的近期 commit，而不只查發版單點名的那些 pin**。「照發版單逐項驗收」**擋不掉誤列**——被誤列的那一項在發版單上看起來完全正常，只有比對 CD main 的實際歷史才會發現它早就上線了（或根本屬於另一條管線）。做法：`git -C <cd> log --oneline -15 main` 逐條對照本次範圍。
+> 3. **本 repo 有兩條獨立發版線**（`src/**` → paas-odoo image；`extra/paas-operator/**` → operator image；operator chart 又是第三個軸）。**「merge 進 develop」≠「隨下次 paas-odoo 發版上線」**——按變更路徑分流，不要按 commit 落在哪個版號區間分流。
+>
+> （第 2 條的價值在於：即使該現象**已經記在文件裡**，那一輪仍是靠實查 CD main HEAD 才發現的。⇒ 知道有這回事不能取代每次實查。）
+
 > **🔴 S1 陷阱：`image.tag` 與 `image.digest` 必須「兩者同改」**
 >
 > `paas-odoo/values-prod.yaml` 的 `image` 區塊**同時有 `tag` 與 `digest`**，Bitnami common 以 **`repository@digest`** 渲染 —— **digest 優先於 tag**（prod Deployment 的實際 image 字串**完全沒有 tag 段**）。
@@ -184,11 +202,28 @@ grep -rnE 'version:|tag:' /tmp/paas-app-bundle-cd/*/fleet.yaml /tmp/paas-app-bun
 >
 > → 下表**步驟 6 必須 `image.tag` ＋ `image.digest` 兩者同改**，diff 裡要同時看到 `tag:` 與 `digest:` 兩行；**rollback（§8）同理**。
 
-> **⚙️ module upgrade 走 CD 兩段式（有 seed 變更時必跑）**
+> **⚙️ module upgrade：先判斷 seed 變更落在哪個 addon，再決定走哪條路**
 >
 > prod odoo 是 **Bitnami chart**，`ODOO_SKIP_MODULES_UPDATE` 預設 **`yes`** → **換 image 後 boot 不會自動跑 `-u`** → **`noupdate=0` 的 seed XML data 不會 reload**（新 template、chart pin、方案價格等 seed 變更**全部不生效**：image 換了、版號跳了，功能卻像沒改）。
 >
-> → **有 seed 變更的發版必須跑 `-u`**，程序是兩張 PR：
+> **自 2026-08-01 起，`woow_paas_platform` 這一個模組已由 CD 的 `module-version-gate` initContainer 自動處理**（`woow-paas/paas-app-bundle-cd#77` A′、PR#81／#82）。gate 在主容器啟動前比對 image manifest 版號與 DB `ir_module_module.latest_version`，不一致就跑 `odoo-bin -u woow_paas_platform --stop-after-init`，跑完再讀一次 DB 版號複驗，不相等就 `exit 1` 讓 pod 卡在 Init（詳見 §5.1.5）。
+>
+> 🔴 **但兩者的涵蓋範圍不同，不能把 gate 讀成「兩段式作廢」**：
+>
+> | | 涵蓋範圍 |
+> |---|---|
+> | `module-version-gate` | **只有 `woow_paas_platform` 一個模組**（指令裡寫死模組名） |
+> | `ODOO_SKIP_MODULES_UPDATE` | Bitnami entrypoint 的**全域**開關，涵蓋所有已安裝模組 |
+>
+> ⇒ **判準：發版前看 seed diff 落在哪個 addon。**
+>
+> - **變更全部落在 `woow_paas_platform/` 內** → gate 自己會處理，**不需要** PR-A／PR-B 的 `SKIP` 來回，也就沒有 §5.1.2 的曝險窗。照舊 SOP 多開那兩張 PR，等於**白開一個 ≤30 分鐘的曝險窗**。
+> - **變更落在相依 addon**（`sh_subscription` 系列、`ecpay` 系列等，見 `src/__manifest__.py` 的 `depends`）→ **gate 不會碰它們**，仍須走下方兩段式。
+> - **判斷方法**：`git diff <上一版 tag>..<本次 tag> --name-only | grep -v '^src/'`——命中非本 addon 的 addon 路徑就走兩段式；不確定就當作要走（多跑一次 `-u` 是冪等的，漏跑是靜默失效）。
+>
+> ⚠ **未驗**：`SKIP="no"` 時 Bitnami entrypoint **實際會升哪些模組**（全部已安裝模組？只有 `-u` 清單？）**沒有人實測過**。上表的「涵蓋所有已安裝模組」是依 entrypoint 語意的推斷，不是實測結論。真要依賴這條做決策前請先實測並回填。
+>
+> **兩段式（相依 addon 有 seed 變更時）**：
 > **PR-A（promote）**：換 `image.tag` ＋ `image.digest`，並設 `ODOO_SKIP_MODULES_UPDATE="no"`（boot 自動跑 `-u`）
 > → **驗證** → **PR-B（收官）**：切回 `"yes"`。
 >
@@ -197,6 +232,8 @@ grep -rnE 'version:|tag:' /tmp/paas-app-bundle-cd/*/fleet.yaml /tmp/paas-app-bun
 ```
 步驟                                                      驗證
 ────────────────────────────────────────────────────── ──────────────────────────────
+0. pre-flight 起點實查（見上方「步驟 0」引言）           DB latest_version + pod digest
+   ⚠ 不要用發版單/note 當起點；另獨立掃 CD 近期 commit    git -C cd log --oneline -15 main
 1. 本 repo bump src/__manifest__.py version              grep version src/__manifest__.py
    （格式 18.0.{major}.{minor}.{patch}；現行 prod 版號
      見 §2 版本矩陣——勿在本表硬編，會腐化）
@@ -216,20 +253,31 @@ grep -rnE 'version:|tag:' /tmp/paas-app-bundle-cd/*/fleet.yaml /tmp/paas-app-bun
    paas-odoo/values-prod.yaml 的                         tag: 與 digest: 兩行
    image.tag ＋ image.digest（兩者同改、缺一 = no-op；
    digest 優先於 tag，見上方 S1 陷阱）
-   本次含 seed（noupdate=0）變更 → 同一張 PR 一併設
-   ODOO_SKIP_MODULES_UPDATE="no"（boot 自動跑 -u）
+   ⚠ SKIP 開關「只在 seed 變更落到相依 addon 時」才設
+   "no"；只動 woow_paas_platform 者由 module-version-gate
+   自理，多設 = 白開曝險窗（判準見上方引言）
 7. tea PR（zh-tw）→ merge main                           tea pr list
 8. 等 Fleet reconcile（~30–60s）                         見 §7
+   ⚠ 單副本 Recreate：本步必有 3–10 分停機、502 屬預期    §9 坑 #14
 9. 驗證 prod pod 跑新 digest                             見 §7「pod digest」
-   有跑 -u 時另看 boot log 的 module update 段           log 無 ERROR / CRITICAL
+   ＋ §5.1.5 三層驗收：①gate 有跑 ②-u 無錯               ③psql 讀回本次 seed 欄位
+   （②的 Updating modules 輸出取不到，用替代證據鏈）      —— ③ 沒有任何自動化涵蓋
 10. 站點 smoke：/woow /odoo /my                          見 §7 (6)；fail → §8 rollback
-11. PR-B（收官）：ODOO_SKIP_MODULES_UPDATE 改回 "yes"    驗證通過後 30 分鐘內 merge
+11.〔僅當步驟 6 設過 SKIP="no"〕PR-B 收官：改回 "yes"    驗證通過後 30 分鐘內 merge
     → merge main → 等 Fleet reconcile                    （曝險窗規則見 §5.1.2）
-12. 三重確認 SKIP 已回 "yes"                             見 §5.1.3 收官三重確認
+12.〔同上條件〕三重確認 SKIP 已回 "yes"                  見 §5.1.3 收官三重確認
     （deployment spec / pod env / Fleet 無 drift）
 ```
 
-> **無 seed 變更的發版**（純 Python / OWL 邏輯改動，沒動 `noupdate=0` 的 XML data）可略過 `ODOO_SKIP_MODULES_UPDATE` 的來回，步驟 6 不設 `"no"`、步驟 11/12 免做 —— 但**判斷「有沒有 seed 變更」要看 diff，不是憑印象**；不確定就當作有，走完整兩段式。
+> **判斷要不要動 `ODOO_SKIP_MODULES_UPDATE`，看兩軸**（都要看 diff，不是憑印象）：
+>
+> | 有沒有 `noupdate=0` seed／schema 變更 | 變更落在哪 | 做法 |
+> |---|---|---|
+> | 沒有（純 Python / OWL 邏輯） | — | 不設 `"no"`、步驟 11/12 免做。⚠ 版號仍會 bump ⇒ gate 仍會跑一次 `-u`，那是冪等的、不影響 |
+> | 有 | 只在 `src/`（＝`woow_paas_platform`） | **不設 `"no"`**——gate 自己會處理（§5.1.5）。多設一輪等於白開曝險窗 |
+> | 有 | 含相依 addon（`sh_subscription`／`ecpay` 等） | 走完整兩段式（步驟 6 設 `"no"`、11/12 收官） |
+>
+> **不確定就當作「含相依 addon」走完整兩段式**——多跑一次 `-u` 是冪等的，漏跑是靜默失效。
 
 > **odoo chart（Bitnami `28.2.10`）** 平常不動；只有要升 Odoo 框架本身時才改 `paas-odoo/fleet.yaml` 的 `helm.version`（**高風險**：schema / addon 相容性，須先 stg / sandbox 驗證穩定，**勿與 image bump 同 PR**）。
 
@@ -398,6 +446,86 @@ image 端現在有錨點了（第三行），「烤錯 ref」與「addon 根本�
 
 失效形態的完整敘事見 [`docs/tracking/pitfalls/ci-addon-ref-empty-drifting-default-branch.md`](../../tracking/pitfalls/ci-addon-ref-empty-drifting-default-branch.md)。
 
+#### 5.1.5 🔴 `-u` 真的生效了嗎：三層驗收（缺一層就有靜默失效）
+
+「模組升級成功」不是一個信號，是**三件會各自獨立失敗的事**。三層的失效形態都是靜默的，而且**上層通過不蘊含下層通過**：
+
+| 層 | 問的問題 | 誰負責 | 不驗會怎樣 |
+|---|---|---|---|
+| ① | `-u` **有沒有被觸發** | `module-version-gate`（cd#77，2026-08-01 上 prod） | image 換了、版號跳了、功能像沒改 |
+| ② | `-u` **跑完有沒有出錯** | 人工看 boot log 的證據鏈 | migration 半途失敗但 pod 起來了 |
+| ③ | **seed 值有沒有真的寫進 DB** | **人工 psql 讀回**（本節重點） | ①② 全綠、pod 正常、seed 值仍是舊的 |
+
+##### ① gate 做了什麼、以及它的 post-verify 只保證什麼
+
+gate 是 `paas-odoo` deployment 的 **initContainer**（不是 sidecar、不是 postStart），所以它在主容器啟動**之前**跑完：
+
+1. 讀 image 內 `__manifest__.py` 的版號、讀 DB `ir_module_module.latest_version`（只認 `state='installed'`）；
+2. 兩者相等 → `skip`；DB 無 installed 記錄 → `skip`；**讀不到 image 版號 → `exit 1`**（寧可擋住 pod 也不靜默跳過）；
+3. 不相等 → `odoo-bin -u woow_paas_platform --stop-after-init`；
+4. **post-verify**：重讀 DB 版號，**不等於 image 版號就 `exit 1`**，讓 pod 卡在 Init。
+
+> gate 自己的註解把理由寫得很清楚：**對「側效果本身」取證，而不是對「我跑過那個指令」取證**——`odoo-bin` 回 0 只證明「`-u` 沒失敗」，不證明「DB 版號真的推進」。這個心智模型值得往外套用。
+
+##### ③ 🔴 post-verify 不涵蓋 seed 值——這兩件事會分離
+
+**post-verify 只保證 `latest_version` 推進，不保證任何一筆 `noupdate=0` 的 seed 值被寫入。** 兩者可以一個成立、另一個不成立：
+
+- 若 `ir_model_data.noupdate` 對某批 seed 仍是 `true`（歷史 DB 的 sticky flag，見 [`seed-noupdate-sticky-template-links.md`](../../tracking/pitfalls/seed-noupdate-sticky-template-links.md)），ORM 會**靜默 skip** 掉那些 record 的更新；
+- 而模組版號**照樣推進** ⇒ post-verify 通過 ⇒ pod 正常起來。
+
+**實測坐實（PR#561，2026-08-03）**：在還原成 sticky 狀態的 DB 上跑第一次 `-u`——**`exit 0`、log 中 `ERROR`/`CRITICAL` 各 0 筆、四個目標欄位仍是空字串**；跑第二次才寫進去。也就是說，**這個失效沒有任何紅燈**。
+
+⇒ **所以本節要求第三層驗收：發版後人工 psql 讀回本次變更的關鍵 seed 欄位，確認真的是新值。**
+
+> ⚠ **查詢寫進 `.sql` 檔再 `-f`，不要用 `psql -c "…"` 內嵌。** SQL 裡的單引號（`''`、`'<<EMPTY>>'`）
+> 要穿過 `kubectl exec -- bash -c '…'` 的外層單引號，逐層轉義極易出錯，而**錯法的症狀是
+> `ERROR: syntax error` 或欄位被當識別字**，看起來像 DB 有問題。下面這個形態是實跑驗證過的：
+
+```bash
+CTX=woow-k3s
+POD=paas-odoo-postgresql-0
+
+# 1) 本地寫查詢（換成本次實際變更的 model / 欄位）
+cat > /tmp/seed-verify.sql <<'SQL'
+SELECT slug, COALESCE(NULLIF(helm_chart_version,''),'<<EMPTY>>') AS ver, is_active
+  FROM woow_paas_platform_cloud_app_template ORDER BY slug;
+SQL
+
+# 2) 送進 pod 再用 -f 執行（避開多層引號轉義）
+kubectl --context $CTX cp /tmp/seed-verify.sql paas-system/$POD:/tmp/seed-verify.sql
+kubectl --context $CTX exec -n paas-system $POD -- bash -c \
+  'PGPASSWORD=$(cat $POSTGRES_PASSWORD_FILE) psql -U $POSTGRES_USER -d $POSTGRES_DATABASE -f /tmp/seed-verify.sql'
+```
+
+若讀回仍是舊值，**先查 sticky flag 再決定怎麼做**（不要直接重跑一次了事——要知道是不是命中本節這個形態）：
+
+```sql
+SELECT noupdate, count(*) FROM ir_model_data
+ WHERE module='woow_paas_platform' AND model='<本次變更的 model>' GROUP BY noupdate;
+-- 全部 f = 沒有 sticky flag，值沒進去的原因在別處，往 -u 的 log 查
+-- 出現 t   = 命中本節描述的形態，需要第二次 -u（檔尾 healer 會在第一次 -u 清掉 flag）
+```
+
+> **「pod 起來了」與「gate log 說 module update 完成」都不能取代這一層。** 三個信號證明三件不同的事，第 ③ 層沒有任何自動化涵蓋。
+
+##### ② `-u` 的過程證據：bitnami 的輸出拿不到，改用替代證據鏈
+
+**⚠ Bitnami odoo 的 `Updating modules` 步驟輸出不進 stdout，pod 內也沒有 log 檔**（`.80`／`.88` 兩次發版各撞一次）。所以**「在 boot log 裡找 `Running migration [18.0.1.0.XX>]` 字樣」這種驗收要求根本取不到**，不要再花時間找，也不要因為找不到就判定 migration 沒跑。
+
+可用的替代證據鏈（四條合起來的證據力等價）：
+
+| 證據 | 讀什麼 |
+|---|---|
+| `-u` 起訖 | boot log 的 `Updating modules` → `** Odoo setup finished! **`（實測量級：兩版 88 秒、八版 90 秒——**耗時與版數不成正比**，主要是模組載入的固定成本，別拿耗時推斷「有沒有真的升」） |
+| 無殘留 migration | registry 行的 **`N modules loaded in X s, 0 queries`**——`0 queries` 代表這一輪只 load registry、沒有再寫 schema |
+| 版號推進 | DB `ir_module_module.latest_version` == 本次版號且 `state='installed'` |
+| 收官輪對照 | 第二輪（gate `skip` 或 `SKIP=yes`）的 boot log **不應再出現 `Updating modules`**，且 `0 queries` 仍成立 |
+
+> **`0 queries` 是「這一輪沒再跑 migration」的硬證據**，配合 digest 不變一起看。收官後的第二輪 pod 若仍出現 `Updating modules`，代表宣告態沒收回去（走 §5.1.3 三重確認排查）。
+
+> ⚠ **boot log 的 Traceback 不等於發版失敗，但要看時間戳。** 已知的固定噪音：`ir_cron` 的 `Base: Auto-vacuum internal data` 跑 `_file_gc` 會噴 `FileNotFoundError`／`PermissionError`（追蹤 issue #503，根因是 filestore root-owned）。**判定手法＝看 Traceback 的時間戳是否落在 `Registry loaded` 之後**——之後的屬於 cron 噪音，之前的才和 `-u` 有關。這是每天固定出現的噪音，所以「boot log 0 筆 Traceback」這條驗收**每次都要人工重判**，不能寫成機械斷言。
+
 ### 5.2 paas-operator 上 prod
 
 **注意**：operator 有**兩個版號軸** — image（來源 `extra/paas-operator/`）與 chart（來源 `woow-paas-charts`）。
@@ -558,6 +686,22 @@ prod **無自動 promote**，是手動把 stg 驗證過的值搬到 prod：
 
 ## 7. 驗證（verify）recipes
 
+> **🔴 驗收通則：某個信號「沒有對象可驗」時，要如實回報「沒有可抽驗的實例」——不是打勾，也不是略過。**
+>
+> 實例：某輪發版的驗收項「既有 cloud service 未受損」，當時 prod 的 cloud service 是 **0 筆** ⇒ 這一項**無對象可驗**。
+>
+> 為什麼要特別寫成規則：**「沒有東西可驗」與「驗過了、沒問題」在勾選表上長得一模一樣**——都是一個打勾。
+> 差別只存在於執行者當下的腦子裡，一旦回報出去就永久消失，而下一個人會把那個勾讀成「這條有被證明過」。
+>
+> ⇒ 三選一，**不得只寫「✅」**：
+> - `✅ 已驗（N 個實例，逐一列出）`
+> - `⊘ 無對象可驗（母體為 0，說明為什麼是 0）` ← 本節要求的形態
+> - `⚠ 未驗（說明原因與風險）`
+>
+> 這條**不限於發版**：任何「對既有資料無副作用」「不影響現有租戶」類的驗收，母體都可能是空的。
+> 母體為 0 時該信號的**鑑別力也是 0**——它沒有排除任何東西，紀錄要如實反映這件事。
+> （同源紀律：陰性結論要配陽性對照；集合比較在空集合上恆真。）
+
 ```bash
 CTX=woow-k3s
 
@@ -632,6 +776,14 @@ Fleet GitOps 的 rollback = **把 pin 值改回上一個已知良好版本**：
 | 10 | 手動 `helm uninstall` agent-runtime release | 繞過 operator owner → state 不一致 | 走 operator DELETE 端點（§5.3 連結） |
 | 11 | 把比 prod 現役**更舊或非超集**的 image/chart 推上 prod | 靜默回歸：prod 失去現役版本已有的修復（如 operator D1-D6 生命週期 teardown、Access 契約） | promote 前過超集 gate：`git merge-base --is-ancestor <現役來源 commit> <新來源 commit>`；manifest/版號單調不退；chart 用 `git log` 確認模板 wiring（如 `AGENT_RUNTIME_SKILL_RUNNER_ENABLED` env passthrough）沒被砍（見 §5.2.1 step 0） |
 | 12 | 人工 `workflow_dispatch` 重跑 `build-image.yml` 忘填 `addon_ref` | image 從**移動中的 `develop` HEAD** 烤出來——不可重現、含未發版 commit、發版紀錄與 image 內容脫鉤；「預設分支是誰」不在版控裡（Gitea repo 設定、CI 零校驗），被改成 `main` 就直接變版號倒退。**CI 全綠、`image_tag` 與 `digest` 都是新的 → 坑 #4 的 digest 驗法對此完全無效**，要到 pod 跑 `-u` 才現形 | 重跑必填 `addon_ref=v{版號}`；驗 build log **三行錨點**（`at ref:`／`Cloned addon version:`／`Image addon version:`，§5.1.4——前兩行同源屬 source 端，第三行才是 image 端）。**三行都要跟本次預期版號比，不是比「三行互不互相一致」**——填錯 ref 時三行會一致地顯示錯的版號。paas-odoo-ci 有兩道 fail-closed：`addon_ref` 留空且非 `stg-*` → `exit 1`（#46，擋本列這個缺陷）；image 版號與 clone 不符 → `exit 1` 且擋在 push 之前（#50，擋的是另一類）。`stg-*` 的 `develop` fallback 刻意保留，`deploy-stg` 依賴它 |
+| 13 | 用 `tea actions runs list` 判斷 CI 有沒有被觸發 | 它**只列出部分 completed run**，會漏掉實際已成功的那一次 → 誤判「CI 沒觸發」→ 刪 tag 重推 ＋ 手動 dispatch ＝ **同一版被 build 三次**（實例：多出兩個 build，其中一個卡在 approval 要另外 `/reject` 清掉） | 判「有沒有觸發」不要用 `runs list`。改用 Gitea API 查全狀態，或直接看 approval issue／registry 有沒有出現預期 tag。**任何「查不到＝不存在」的結論都要換一種信號複驗**（同族：`tea pulls list` 也會回空表假陰性） |
+| 14 | 把發版當下的短暫 502 或「pod 三分鐘才 ready」當成異常 | 誤判成回歸、觸發不必要的 rollback | `paas-odoo` 是**單副本 ＋ `updateStrategy: Recreate`** ⇒ **每一輪 CD merge 必有 3–10 分鐘停機**（含收官那輪），期間 502 是預期。另外 startupProbe `initialDelaySeconds=180` ⇒ **即使不跑 `-u` 也要 ~3 分鐘才 Ready**，那是 probe 延遲主導、不是 boot 慢。⇒ 發版挑離峰；收官 PR 也算一次停機，要一併算進窗口 |
+| 15 | 請乾淨端（人類 `!`）跑 git 指令時沒帶 `git -C <repo>` | 對方的 cwd 不一定是你以為的那個 repo → **在別的 repo 誤 commit**（實例：本該進 CD repo 的 commit 落到 `woow_paas_platform` 的 develop 上，內容還是無關的設定檔） | **給別人執行的 git 指令一律帶 `git -C <絕對路徑>`，不依賴 cwd。** 誤 commit 的補救是 `git reset --soft HEAD~1`＋`git restore --staged`（本例零損失，但那是運氣） |
+| 16 | 用裸 SQL 盤點 template 曝光數，發現與前台不符就以為回歸 | 誤判：DB 15 筆 vs 前台 12 張，實為 12 顯示 ＋ 1 hidden ＋ 2 `is_active=false` | **裸 SQL 不會排除 inactive，Odoo ORM `search` 會。** 盤點曝光數的 SQL 必須自己帶條件；⚠ 欄位名是 **`is_active` 不是 `active`**，且 `is_hidden` 對既有 row 可能是 **`NULL` 不是 `false`**（比較時用 falsy 語意，別寫 `= false`） |
+| 17 | 把 Longhorn snapshot 當成「有備份」 | snapshot **存在同一顆 volume 內** ⇒ volume 毀就一起沒。它只救得了邏輯錯誤（誤刪、migration 寫壞），救不了儲存層故障 | snapshot 是**還原錨點**不是備份（§5.1.1）。另：volume 上有 `recurring-job-group/default: enabled` label **不代表機制存在**——曾實查 prod **0 個 recurring job 物件、0 個 backup、backup-target 未設定**，label 只是個標籤。**「label 存在 ≠ 機制存在」是最容易誤判成「有保護」的形態**（追蹤 issue #504） |
+| 18 | 讓 agent 代按 prod build 的 approval gate | 繞過 human-in-the-loop。實例：agent 的輸入緩衝殘留「幫我留 `/approve`」並主動詢問要不要代按，**被系統的 NOT-USER-INPUT 標記證明無人類授權**才攔下 | **prod approval gate 只能人類本人按**，agent 一律不得代 approve（即使 agent 手上有可用 token、即使 `ALLOW_SELF_APPROVE=true`）。留言內容 trim 後須**精確等於** `/approve`；**最保險是網頁點**。CLI 語法坑：`tea comment <repo> <idx>` **錯**（repo 字串會被當 index 去 ParseInt），正解 `tea comments --repo <owner/repo> <idx> "/approve"`（複數、`--repo` 走 flag）。⏱ gate **逾時 180 分鐘**後該 run 會以 failure 結束（曾實際發生，`/approve` 沒送出去）——恢復走 §5.1.4「CI 失敗要重跑時」的 `workflow_dispatch`（**必填 `addon_ref`**），不要用刪 tag 再重推的方式繞 |
+| 19 | 相信另一條 lane（CD agent／teammate）回報的「已建 branch／已 push／已 merge」 | 實例：同一 session 兩次 fabrication（假 commit、假 branch＋假 diff，磁碟／local／remote 全查無）；另一次「已 merge PR」首報實為 open | **寫入類主張一律用自己的工具鏈獨立查證**：`git ls-remote`／`git worktree list`／`tea pr <n>`／`git show origin/main:<file>`。「寫入成功」的回報與「查證過的事實」是兩件事 |
+| 20 | 以為 agent 能自動化整條發版鏈 | harness 的 auto-mode classifier 會擋掉其中幾步（實測：`longhorn-system` 的 `apply`＝建 snapshot、prod postgres 的 `psql exec`），流程會卡在中間 | 這些**由人類以 `!` 親跑**（也符合共用叢集 scope 鐵律：`longhorn-system` 不在本 repo 可操作的 namespace 內）。agent 可做的是**唯讀 cross-check**（`get snapshot` 讀 `readyToUse`）。⚠ 但 `kubectl exec deploy/paas-odoo -- odoo shell`（唯讀 search/read）是**通過**的 ⇒ DB 層的驗證多半可以自己來，不必每次都找人 |
 
 ---
 
@@ -666,6 +818,11 @@ Fleet GitOps 的 rollback = **把 pin 值改回上一個已知良好版本**：
 
 ```
 [ ] 0. 前置：`tailscale status` 已連；kubectl --context woow-k3s 可連；tea login 已設 default
+[ ] 0.5 pre-flight 起點實查（§5.1「步驟 0」）——不得用發版單/note 當起點
+       起點 = prod DB latest_version ＋ pod imageID digest（兩者交叉）
+       ＋ 獨立掃 CD repo 近期 commit（`git -C <cd> log --oneline -15 main`），
+         不只查發版單點名的那些 pin —— 照發版單逐項驗收擋不掉「誤列」
+       ＋ 按變更路徑分流兩條發版線（src/** vs extra/paas-operator/**；chart 是第三軸）
 [ ] 1. 確認目標 image 已在 JCR（CI 綠燈 + registry 查得到 tag）
 [ ] 1.5（paas-odoo）驗 image 裝的是本次那個 ref 的 addon（§5.1.4、§9 坑 #12）
        CI 綠燈、新 image_tag、新 digest **都證明不了這件事**
@@ -689,19 +846,32 @@ Fleet GitOps 的 rollback = **把 pin 值改回上一個已知良好版本**：
 [ ] 3. clone/pull paas-app-bundle-cd，改對應 <component>/values-<env>.yaml image.tag
        （和/或 fleet.yaml version）；保留 §6 prod 專屬欄位
        paas-odoo：image.tag 與 image.digest 必須「同改」（digest 優先，只改 tag = no-op，§5.1）
-       paas-odoo 且本次有 seed（noupdate=0）變更：同 PR 設 ODOO_SKIP_MODULES_UPDATE="no"（PR-A）
+       paas-odoo 的 ODOO_SKIP_MODULES_UPDATE：**只在** seed 變更落到相依 addon 時才設 "no"（PR-A）
+       只動 woow_paas_platform 者由 module-version-gate 自理，設了等於白開曝險窗（§5.1 引言判準）
 [ ] 4. 自我核對 diff：只動 pin 值，未誤改 namespace/tunnel/prefix/replica
 [ ] 5. tea PR（zh-tw 描述）→ 等審核 → merge main
 [ ] 6. 等 Fleet reconcile：kubectl -n fleet-local get gitrepo paas-app-bundle
        → COMMIT == CD main HEAD 且 STATUS 空
 [ ] 7. 閉環驗證：pod imageID(digest) == 預期新版；deploy readyReplicas 滿
 [ ] 8. 站點 smoke：/woow /odoo /my 回 HTTP 2xx/3xx（4xx/5xx/000 重試 ≤3 次仍失敗 → 立即 §8 rollback）
-[ ] 8.5（paas-odoo 且本次跑了 -u）驗證通過後「≤30 分鐘內」merge PR-B 把
+[ ] 7.5（paas-odoo）§5.1.5 三層驗收 —— 三件會各自獨立失敗的事，上層過不蘊含下層過
+       ① -u 有被觸發：gate 的 post-verify（DB latest_version 推進；不推進 pod 會卡 Init）
+       ② -u 跑完沒出錯：`Updating modules` → `Odoo setup finished!` ＋ registry 行 `0 queries`
+          ⚠ bitnami 的 Updating modules 輸出**不進 stdout**，找不到 `Running migration` 字樣是正常的
+          ⚠ Traceback 要看時間戳：落在 `Registry loaded` 之後的是 ir_cron 固定噪音（issue #503）
+       ③ 🔴 seed 值真的寫進 DB：**人工 psql 讀回本次變更的欄位**，確認是新值
+          ①② 全綠但 ③ 失敗是可能的（sticky ir_model_data.noupdate ⇒ 版號推進但 record 靜默 skip）
+          這一層**沒有任何自動化涵蓋**，不能用「pod 起來了」或「gate log 說完成」代替
+[ ] 8.5（僅當步驟 3 設過 SKIP="no"）驗證通過後「≤30 分鐘內」merge PR-B 把
        ODOO_SKIP_MODULES_UPDATE 收回 "yes"（曝險窗，§5.1.2），再過 §5.1.3 收官三重確認：
        deployment spec / running pod env / Fleet BundleDeployment nonModified=true
+       ⚠ 收官那輪 merge 也是一次 Recreate ⇒ 再一次 3–10 分停機，要算進窗口（§9 坑 #14）
 [ ] 9.（agent-runtime 換版）另走 §5.3 連結的 reap SOP，勿用一般 rollback/restart
 [ ] 10. 任一步失敗 → §8 rollback（改回前一版 digest 對應 tag + digest → merge）
         已跑過 -u 者：image 退版「不會」回退 schema，DB 層還原走 §5.1.1 的 pre-release snapshot
+[ ] 11. 回報：每一項驗收標明 ✅已驗（列實例數）／⊘無對象可驗（說明母體為何是 0）／⚠未驗（說明原因）
+        🔴 **不得只寫「✅」**——「沒有東西可驗」與「驗過了」在勾選表上長得一模一樣，
+        差別只存在於執行者當下的腦子裡，回報出去就永久消失（§7 驗收通則）
 ```
 
 ---
