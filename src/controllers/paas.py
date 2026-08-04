@@ -11,7 +11,9 @@ from typing import Any
 from urllib.parse import urlparse
 
 from odoo import fields
-from odoo.exceptions import AccessError, UserError, ValidationError
+from odoo.exceptions import (
+    AccessDenied, AccessError, MissingError, UserError, ValidationError,
+)
 from psycopg2 import OperationalError
 from odoo.http import request, route, Controller
 
@@ -1238,13 +1240,58 @@ class PaasController(HiddenChainMixin, Controller):
         if not access or access.role not in [ROLE_OWNER, ROLE_ADMIN]:
             return {'success': False, 'error': 'Admin access required'}
 
+        # #553：原本是「一律 `str(e)`」——連 ORM 例外都照吐給租戶。分類比照
+        # `_create_service`（#520／PR #523）與上方 `api_service_skip_trial`
+        # （#525 A1／PR #527）。本端點 side-effect-free（`_skip_trial_estimate`
+        # 只讀不寫），所以**不需要** rollback／savepoint，只需要分類訊息。
         try:
             estimate = service._skip_trial_estimate()
+
+        except (AccessDenied, AccessError, MissingError) as e:
+            # `UserError` 在 Odoo 18 有**四個**子類（`odoo/exceptions.py`）：
+            # `AccessDenied`(:45)、`AccessError`(:64)、`MissingError`(:85)、
+            # `ValidationError`(:94)。這裡攔前三個，只有 `ValidationError` 走原文。
+            #
+            # 🔴 `AccessDenied` 是 `UserError` 的**平行**子類，**不是**
+            # `AccessError` 的子類 —— 只寫 `except AccessError` 攔不到它，它會落進
+            # 下面的 `except (ValidationError, UserError)` 走原文。
+            #
+            # 三者都不是「講給租戶聽」的業務規則：`AccessError` 的訊息帶內部
+            # model／欄位技術名；`MissingError` 的原文是 `Record does not exist or
+            # has been deleted.\n(Record: woow_paas_platform.cloud_service(42,),
+            # User: 2)`——model 技術名、記錄 id、內部 uid 全在裡面；`AccessDenied`
+            # 是認證失敗（預設訊息 "Access Denied" 雖無害，但它可帶自訂訊息，且
+            # 「登入憑證錯誤」本來就不該被包裝成本端點的業務回應）。
+            #
+            # ⚠ 兩處參照實作（`_create_service` / `api_service_skip_trial`）目前
+            # 只擋 `AccessError`，`MissingError` 與 `AccessDenied` 仍走原文分支。
+            # 收斂那兩處屬既有已發版程式碼的改動，另開 follow-up（#567）追，
+            # 不夾帶在本 PR。
+            _logger.error(
+                "ORM error estimating skip-trial for service %s: %s\n%s",
+                service_id, e, traceback.format_exc(),
+            )
+            return {'success': False,
+                    'error': 'An error occurred while estimating the skip-trial charge.'}
+
+        except (ValidationError, UserError) as e:
+            # 業務規則例外（沒有訂閱、訂閱非 in_progress、不在試用期）：訊息本來
+            # 就是寫給使用者看的，原文回前端。統一成泛用字串的話，真正的原因只留
+            # 在 server log，使用者與第一線支援都無從排錯。
+            message = str(e)
+            _logger.warning(
+                "Skip trial estimate rejected for service %s: %s",
+                service_id, message,
+            )
+            return {'success': False, 'error': message}
+
         except Exception as e:
             _logger.error(
-                "Error estimating skip-trial for service %s: %s", service_id, e,
+                "Error estimating skip-trial for service %s: %s\n%s",
+                service_id, e, traceback.format_exc(),
             )
-            return {'success': False, 'error': str(e)}
+            return {'success': False,
+                    'error': 'An error occurred while estimating the skip-trial charge.'}
 
         return {'success': True, 'data': estimate}
 
@@ -1535,8 +1582,31 @@ class PaasController(HiddenChainMixin, Controller):
             # current-user env，ir.rule 才會繼續驗這位 admin 對該 service 的可及性
             # （sudo 會連這層一起關掉，等於把 workspace 邊界交給本 handler 獨力承擔）。
             new_password = service._reset_admin_password()
-        except UserError as e:
+
+        except (AccessDenied, AccessError, MissingError) as e:
+            # #553 的同一個外洩面：`UserError` 的四個子類裡，只有 `ValidationError`
+            # 是「講給租戶聽」的業務規則，其餘三個帶的是 ORM 內部識別字（model
+            # 技術名／記錄 id／內部 uid）或認證失敗。原本只寫 `except UserError`，
+            # 於是它們全被原文吐到租戶畫面。
+            #
+            # 🔴 `AccessDenied` 是 `UserError` 的**平行**子類、**不是**
+            # `AccessError` 的子類，必須各自列名——漏掉它就會落進下面的原文分支
+            # （分類清單見 `api_service_skip_trial_estimate` 該處註解）。
+            _logger.error(
+                "[#357] ORM error resetting admin password for service %s: %s\n%s",
+                service.id, str(e), traceback.format_exc(),
+            )
+            return {
+                'success': False,
+                'error': 'Reset failed. Check operator logs for details.',
+            }
+
+        except (ValidationError, UserError) as e:
+            # model 端刻意寫給租戶看的業務訊息：服務未 running、正在升級請稍候
+            # （#357 C11）、逾時後的「狀態未知，請稍後重按 Reset」（#461 C11′）。
+            # 租戶要靠它決定下一步，統一成泛用字串會把「等一分鐘再試」變成「壞了」。
             return {'success': False, 'error': str(e)}
+
         except Exception as e:
             _logger.error(
                 "[#357] reset-admin-password failed for service %s: %s\n%s",
@@ -1549,7 +1619,21 @@ class PaasController(HiddenChainMixin, Controller):
 
         # #530：Reset 同時換發 gateway API key，一併一次性回傳。訊息用複數形是
         # 因為租戶要回 MCP 那端重填 key——只說「密碼」會讓人以為 gateway 沒動。
-        gateway = self._gateway_credentials(service)
+        #
+        # #525 B3：走到這一行代表密碼**已經生效**（model 端的提交點已經跨過）。
+        # 以下純屬回應組裝，任何失敗都不得把它翻轉成失敗回應或 500——後者更糟，
+        # 框架會回捲整筆交易，變成「叢集是新密碼、DB 是舊密碼、租戶什麼都沒拿到」。
+        # gateway 憑證是附加品，取不到就少交付一把（租戶可再 Reset），但那把
+        # **已生效的 admin 密碼**一定要送出去。
+        try:
+            gateway = self._gateway_credentials(service)
+        except Exception:
+            _logger.exception(
+                "[#530] gateway credential lookup failed for service %s after a "
+                "successful password reset — delivering the admin password only",
+                service.id,
+            )
+            gateway = {}
         message = (
             'Admin password reset. Save the new password now — '
             'it will not be shown again.'

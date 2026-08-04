@@ -305,3 +305,8 @@ from . import test_seed_chart_version_pin_552
 # fix: #552 層 4 —— 沒釘 chart 版本就不准部署（首裝共同咽喉／存量 pending backstop／
 # redeploy），＋ poll 補第五條帳本回寫路徑（抓非平台發起的 chart 變動）
 from . import test_chart_pin_fail_closed_552
+# fix: #553 skip-trial-estimate 回傳例外原文 → 外洩 Odoo 內部 model／欄位技術名
+from . import test_skip_trial_estimate_error_leak_553
+# fix: #525 B3 reset-admin-password 在提交點之後失敗被回報成「重設失敗」→
+# 已生效的一次性明文密碼永久遺失（此處**不得**補 rollback，理由見該檔開頭）
+from . import test_reset_admin_password_post_commit_525b3

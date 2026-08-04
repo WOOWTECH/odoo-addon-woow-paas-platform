@@ -3,6 +3,8 @@ import logging
 import secrets
 import uuid
 
+from psycopg2 import OperationalError
+
 from odoo import _, api, fields, models
 from odoo.exceptions import UserError, ValidationError
 
@@ -738,11 +740,52 @@ class CloudService(models.Model):
             )
             raise UserError("Reset failed. Check service status and retry.") from e
 
-        # #530：兩把憑證一起落庫。提交點語意不變（C11′ commit-on-secret）——2xx
-        # 代表兩者都已是叢集權威值，2xx 之前的任何失敗都保證叢集仍是舊憑證。
-        self._set_admin_password_secret(
-            new_password, gateway_api_key=new_gateway_api_key,
-        )
+        # ================= 提交點（C11′ commit-on-secret）之後 =================
+        #
+        # #525 B3：從這裡開始，「新密碼已生效」已經是**既成事實**——operator 回了
+        # 2xx，新憑證就是叢集的權威值，而且不會再被回退（helm --atomic 自己回捲、
+        # config.json patch 失敗會還原備份，能失敗的全在 2xx 之前）。
+        #
+        # 因此提交點之後的每一步都只是**記帳**（落庫、stamp state、停權回收），
+        # 不是「reset 有沒有成功」的判準。讓記帳的例外往外拋 ⇒ controller 回
+        # `success: False` ⇒ 告訴租戶「沒換」。那句話是假的，代價也不對稱：
+        # 明文只顯示這一次、平台刻意沒有回讀端點（憑證一律一次性），租戶因此
+        # **永久拿不到**唯一能登入 admin GUI 的那把密碼，還會拿已失效的舊密碼
+        # 反覆重試。所以這兩段的例外一律不外拋（`OperationalError` 除外，見下）。
+        #
+        # 🔴 這裡**刻意不補** `cr.rollback()`。#525 把本處列為 B 級（外觀與 #520
+        # 同構、因果相反）正是這個理由：回捲會把已落庫的新密碼退回舊值，而叢集
+        # 已經是新值 ⇒ 從「一致但租戶不知情」變成「DB 與叢集不一致」，管理員連
+        # admin GUI 都登不進去，之後的 redeploy 還會拿 DB 的舊值去覆寫叢集。
+        #
+        # 用 `cr.savepoint()` 而非裸 try：Python 層例外會在 ORM cache 留下待
+        # flush 的髒值，不清掉的話它會在本 request 稍後（甚至 controller 之外的
+        # commit）再炸一次 → 變成 500 並回捲整筆交易，正好是我們要避免的形態。
+        # `_FlushingSavepoint.rollback` 會先 `cr.clear()` 再 ROLLBACK TO SAVEPOINT。
+        #
+        # 兩段分開包，是因為**回捲單位不同**：憑證落庫必須在記帳失敗時存活下來
+        # （它是與叢集一致的那個事實）；記帳則整組成立或整組不成立。
+        try:
+            with self.env.cr.savepoint():
+                # #530：兩把憑證一起落庫。2xx 代表兩者都已是叢集權威值。
+                self._set_admin_password_secret(
+                    new_password, gateway_api_key=new_gateway_api_key,
+                )
+        except OperationalError:
+            # #518：並發／連線類 DB 例外（SerializationFailure 40001 等）必須傳
+            # 出去讓 Odoo 的 `retrying()` 看見；此刻交易已 aborted，吞掉只會讓
+            # 後續 flush 再炸。重播整個 handler 會重跑一次 reset（另鑄一把新密碼
+            # 重新下發），結果仍然是一致的。
+            raise
+        except Exception:
+            _logger.exception(
+                "[#525 B3] reset-admin-password could NOT store the new "
+                "credentials for service %s (id=%s) although the operator "
+                "already applied them — cluster and DB now disagree; the live "
+                "password is being returned to the tenant so they can still "
+                "sign in, but a later redeploy would re-supply the old value",
+                self.name, self.id,
+            )
 
         # `last_upgraded_at` 同 action_redeploy：reset 走的是同一條 helm
         # upgrade 管線，不記錨就會讓 #489 的 age timeout 拿首裝時間當起點。
@@ -752,24 +795,43 @@ class CloudService(models.Model):
         # 情境是服務先被 reconfigure 汙染（suspended → upgrading → poll →
         # running）而 pre_suspend_state 仍在：此時 _is_halted() 仍為真＝它其實
         # 還在停權中，reset 完必須把它收回停機，而不是留下一台跑著的欠費服務。
-        halted = self._is_halted()
+        try:
+            with self.env.cr.savepoint():
+                halted = self._is_halted()
+                self.write({
+                    'state': 'suspended' if halted else 'upgrading',
+                    'error_message': False,
+                    # #552: reset carries `template.helm_chart_version` into helm
+                    # upgrade (see the F-461-2 drift log above — this path really
+                    # does change the chart), so it is one of the four places the
+                    # ledger must be refreshed. `or self.helm_chart_version` =
+                    # backward compatibility with an operator whose reset response
+                    # has no `chart_version` yet.
+                    # Per-service field only — never `template.helm_chart_version`.
+                    #
+                    # #525 B3：帳本更新與 state stamp 同屬「記帳」，一起進 savepoint。
+                    # 它失敗時整組回捲（帳本維持舊值＝與失敗前一致），但**不會**
+                    # 波及上一段已落庫的憑證，也不會翻轉「密碼已生效」的回應。
+                    'helm_chart_version': (
+                        (reset_result or {}).get('chart_version')
+                        or self.helm_chart_version
+                    ),
+                    'last_upgraded_at': fields.Datetime.now(),
+                })
+                self._rescale_halted_after_upgrade(client)
+        except OperationalError:
+            raise
+        except Exception:
+            # 記帳整組回捲 ⇒ state 留在 'running'。代價是前端少一輪 upgrading
+            # 輪詢（服務仍會自己收斂），遠小於讓租戶永久拿不到已生效的密碼。
+            _logger.exception(
+                "[#525 B3] reset-admin-password bookkeeping failed for service "
+                "%s (id=%s) AFTER the new credentials took effect — the reset "
+                "itself stands and the password is being returned; platform-side "
+                "state/last_upgraded_at/helm_chart_version may be stale",
+                self.name, self.id,
+            )
 
-
-        self.write({
-            'state': 'suspended' if halted else 'upgrading',
-            'error_message': False,
-            # #552: reset carries `template.helm_chart_version` into helm upgrade
-            # (see the F-461-2 drift log above — this path really does change the
-            # chart), so it is one of the four places the ledger must be refreshed.
-            # `or self.helm_chart_version` = backward compatibility with an
-            # operator whose reset response has no `chart_version` yet.
-            # Per-service field only — never `template.helm_chart_version`.
-            'helm_chart_version': (
-                (reset_result or {}).get('chart_version') or self.helm_chart_version
-            ),
-            'last_upgraded_at': fields.Datetime.now(),
-        })
-        self._rescale_halted_after_upgrade(client)
         return new_password
 
     # ------------------------------------------------------------------ #
