@@ -310,3 +310,8 @@ from . import test_skip_trial_estimate_error_leak_553
 # fix: #525 B3 reset-admin-password 在提交點之後失敗被回報成「重設失敗」→
 # 已生效的一次性明文密碼永久遺失（此處**不得**補 rollback，理由見該檔開頭）
 from . import test_reset_admin_password_post_commit_525b3
+# fix: #525 B5 輪詢器收屍（`_update_service_status` 404 分支）的 `unlink()` 中途
+# 失敗 → 例外逸出 except handler → 被 `_list_services` 的 catch-all 接住，而
+# catch-all 自己 log `svc.name` 撞 MissingError 再逸出 ⇒ 今天是整支清單端點 500；
+# 那道保護只有一個 token 寬（實測：log 改成不會拋 ⇒ 殘留立刻落地）
+from . import test_poll_teardown_rollback_525
