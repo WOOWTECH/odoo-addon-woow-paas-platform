@@ -95,10 +95,12 @@ Fail-open：hook 模式下任何內部錯誤 → exit 0，絕不擋開發。
 """
 import ast
 import glob
+import io
 import json
 import os
 import re
 import sys
+import tokenize
 import xml.etree.ElementTree as ET
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -192,6 +194,80 @@ def read_baseline_pairs(path):
     return result
 
 
+_SUDO_CALL_RE = re.compile(r"\.sudo\(")
+
+
+def _blank_range(out, src, start, end):
+    """把 out[start:end] 的非換行字元換成空白（換行留著才不會位移行號）。"""
+    for i in range(start, end):
+        if src[i] != "\n":
+            out[i] = " "
+
+
+# f-string 的 replacement field 裡是**真的**呼叫點（``f"{rec.sudo().name}"``），必須被算到。
+# Python 3.12 起 tokenize 把 f-string 拆成 FSTRING_START／FSTRING_MIDDLE／FSTRING_END，
+# 字面部分才是 FSTRING_MIDDLE、field 內是一般 token ⇒ 留白 STRING 與 FSTRING_MIDDLE
+# 自然就保留了 field。3.11 以下整個 f-string 是單一 STRING token，直接留白會把 field
+# 裡的真呼叫一起吃掉 ⇒ **靜默少算**，正是本 check 要防的假陰性。
+# 這裡 fail-loud 而不是寫一條 ≤3.11 相容分支：本專案兩個執行環境都 >= 3.12
+# （CI 的 docker.gitea.com/runner-images:ubuntu-latest 實測 3.12.3），一條在任何實際
+# 路徑上都跑不到的分支，等於在 gate 自己的實作裡留一段沒有東西會驗的程式碼（#576）。
+_MIN_PYTHON = (3, 12)
+
+
+def _blank_python_comments_and_strings(src):
+    """把 Python 的 COMMENT／STRING／FSTRING_MIDDLE 原地換成**等長空白**。
+
+    註解與字串字面裡的 ``.sudo(`` 不是呼叫點——docstring 在描述用法、錯誤訊息
+    在引述寫法，兩者在語意上都不生效。一併留白字串不會漏掉動態呼叫：動態呼叫
+    （``getattr(rec, "sudo")()``）根本不長成 ``.sudo(`` 這個字面。
+
+    ⚠ 必須逐 token 換成**等長**空白，不可用 " ".join(tokens) 重組來源：後者會在
+    ``record.sudo(`` 中間插入空白，regex 全部對不上，量出來每個 controller 都是
+    0——而 0 看起來像個合理答案（「所以全都是註解？」）。留白策略與既有的
+    _strip_xml_comments 相同，行號與所有非註解字元的相對位置都保留。
+
+    語法錯誤的檔會讓 tokenize 丟 TokenError／IndentationError／SyntaxError：
+    **往外拋**，由呼叫端 fail-loud。不可 except 後退回全文計數——那會讓一個語法
+    錯的檔靜默回到「註解也算呼叫點」的舊行為。
+    """
+    if sys.version_info < _MIN_PYTHON:
+        raise RuntimeError(
+            "repo-lint 需要 Python >= %d.%d 才能正確計數 controller 的 .sudo( 呼叫點"
+            "（目前是 %d.%d.%d）。3.11 以下 tokenize 把整個 f-string 當成單一 STRING "
+            "token，留白時會連 replacement field 裡的真呼叫一起吃掉 ⇒ 靜默少算，正是 "
+            "#576 要修的假陰性。本專案 CI（docker.gitea.com/runner-images:ubuntu-latest）"
+            "與開發環境都已 >= %d.%d，故此處 fail-loud 而不做相容降級。"
+            % (_MIN_PYTHON + sys.version_info[:3] + _MIN_PYTHON))
+    line_starts = [0]
+    for idx, ch in enumerate(src):
+        if ch == "\n":
+            line_starts.append(idx + 1)
+    out = list(src)
+
+    def offset(pos):
+        row, col = pos
+        return line_starts[row - 1] + col
+
+    blanked = (tokenize.COMMENT, tokenize.STRING, tokenize.FSTRING_MIDDLE)
+    for tok in tokenize.generate_tokens(io.StringIO(src).readline):
+        if tok.type in blanked:
+            _blank_range(out, src, offset(tok.start), offset(tok.end))
+    return "".join(out)
+
+
+def controller_sudo_count(fp):
+    """單檔的 ``.sudo(`` 呼叫點數——check 與 --update-baseline 的**唯一**入口。
+
+    兩邊共用同一個函式，是為了讓「baseline 與 check 對同一份檔案得出不同數字」
+    在結構上不可能發生。#576 之前是兩處各寫一次 re.findall，只改一邊就會漂移，
+    症狀是「跑完 --update-baseline 之後 check 仍然紅」。
+    """
+    with open(fp, encoding="utf-8", errors="replace") as f:
+        src = f.read()
+    return len(_SUDO_CALL_RE.findall(_blank_python_comments_and_strings(src)))
+
+
 # ---------------------------------------------------------------- checks
 
 def check_controller_sudo(root, only_file=None):
@@ -204,8 +280,14 @@ def check_controller_sudo(root, only_file=None):
         if not os.path.exists(fp):
             continue
         rel = os.path.relpath(fp, root).replace(os.sep, "/")
-        with open(fp, encoding="utf-8", errors="replace") as f:
-            count = len(re.findall(r"\.sudo\(", f.read()))
+        try:
+            count = controller_sudo_count(fp)
+        except (tokenize.TokenError, IndentationError, SyntaxError) as exc:
+            violations.append(
+                "%s：tokenize 失敗（%s）——這個檔語法有問題，.sudo( 呼叫點無從判定。"
+                "本 check 刻意不退回全文計數（那會讓語法錯的檔靜默回到「註解也算呼叫點」"
+                "的舊行為，是 #576 修掉的缺陷）。先修語法再跑一次。" % (rel, exc))
+            continue
         allowed = baseline.get(rel, 0)
         if count > allowed:
             violations.append(
@@ -218,11 +300,15 @@ def check_controller_sudo(root, only_file=None):
 
 
 def current_sudo_counts(root):
+    """--update-baseline 的來源；判準與 check_controller_sudo 共用同一個入口。
+
+    這裡刻意**不** catch tokenize 例外：語法錯的檔要讓 --update-baseline 直接炸，
+    不能靜默寫出一個用舊判準（含註解）算出來的 baseline。
+    """
     counts = {}
     for fp in sorted(glob.glob(os.path.join(root, "src/controllers/*.py"))):
         rel = os.path.relpath(fp, root).replace(os.sep, "/")
-        with open(fp, encoding="utf-8", errors="replace") as f:
-            counts[rel] = len(re.findall(r"\.sudo\(", f.read()))
+        counts[rel] = controller_sudo_count(fp)
     return counts
 
 
