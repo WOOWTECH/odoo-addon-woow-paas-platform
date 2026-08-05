@@ -1,11 +1,30 @@
 name: repo-lint
 on:
   pull_request:
+    # 🔴 這份白名單的維護義務：**新 check 讀哪些檔，這裡就要有哪些檔**。
+    # 少一條不會有任何訊號——job 不是紅也不是綠，它根本不出現。
+    #
     # #461：extra/paas-operator/** 持有 reset 預算階梯的**內層**常數
     # （RESET_HARD_CAP_SECONDS 等）。沒有這一行，「只改 operator 常數」的 PR
     # 不會觸發 repo-lint ⇒ check_reset_budget_ladder 對它完全休眠（#463 同型的
     # CI paths 盲點：gate 寫好了卻不會被跑到）。
-    paths: ["src/**", "scripts/audit/**", "extra/paas-operator/**"]
+    #
+    # #547：pattern-doc-registry 的輸入是「pattern doc 目錄 ／ pattern-guard-map
+    # ／ 索引 README ／ map 指到的每一個檔」。這四者原本**整批落在白名單外**
+    # ⇒ 只改 doc、或只改 map 的 PR 不觸發 repo-lint，新 check 對「doc 被改壞」
+    # 這一半完全休眠（S1 沒有 S2 等於沒做）。
+    #   - docs/decisions/patterns/**：pattern doc 本體與索引 README
+    #   - docs/tracking/pitfalls/**：map 有 6 個條目指到這裡
+    #   - .claude/hooks/**        ：pattern-guard-map.json 與 hook 本體
+    #   - CLAUDE.md               ：map 的 seed-default-template class 指到它
+    paths:
+      - "src/**"
+      - "scripts/audit/**"
+      - "extra/paas-operator/**"
+      - "docs/decisions/patterns/**"
+      - "docs/tracking/pitfalls/**"
+      - ".claude/hooks/**"
+      - "CLAUDE.md"
 jobs:
   repo-lint:
     runs-on: ubuntu-latest

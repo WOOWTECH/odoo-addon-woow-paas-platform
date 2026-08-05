@@ -732,10 +732,12 @@ class AgentSession(models.Model):
         (D4 fail-closed), then 2nd-layer sanitized (D3). Oversized or
         unparsable → '' (drop, log)."""
         keys = self._ctx_parse_context_keys(service.template_id)
-        if not keys or not service.helm_values:
+        if not keys:
             return ''
         try:
-            data = json.loads(service.helm_values)
+            # #559：helm_values 有 groups='base.group_system'，屬性直讀會
+            # AccessError。走 model 的唯一入口。
+            data = service._helm_values_dict()
         except (ValueError, TypeError):
             _logger.warning(
                 'helm_values JSON parse failed for cloud_service %s',

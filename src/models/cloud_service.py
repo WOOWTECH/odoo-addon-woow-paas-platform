@@ -3,6 +3,8 @@ import logging
 import secrets
 import uuid
 
+from psycopg2 import OperationalError
+
 from odoo import _, api, fields, models
 from odoo.exceptions import UserError, ValidationError
 
@@ -303,6 +305,7 @@ class CloudService(models.Model):
     )
     helm_values = fields.Text(
         string='Helm Values',
+        groups='base.group_system',
         help='JSON object with Helm values used for deployment',
     )
     helm_revision = fields.Integer(
@@ -443,6 +446,25 @@ class CloudService(models.Model):
             # chart 升版新增的預設能自然補位。見 docs/decisions/patterns/
             # helm-reset-values-unified-pipeline.md。
             template = self.template_id
+            # #552 層 4：redeploy 帶 `template.helm_chart_version` 做 helm upgrade，
+            # 空值 ⇒ 不帶 `--version` ⇒ **升到 registry 當下的 latest**，而
+            # `reset_values=True` 又讓 values 以新版 chart 的預設重新渲染。這條路
+            # 沒有 role gate（後台 button ＋ `call_kw`），一次誤按就是不可逆的跳版。
+            #
+            # ⚠ 這裡用 `UserError` 而不是靜默略過或背景失敗：本方法是**同步**的，
+            # 例外會直接回到呼叫端（後台 UI／RPC）。實查全 repo，`action_redeploy`
+            # 沒有任何 cron／自動化呼叫端（只有 `cloud_service_views.xml` 的兩顆
+            # button），所以擋下來一定有人看得到，不會變成靜默失敗。
+            #
+            # 刻意**不**退回 `self.helm_chart_version`：redeploy 的語意就是「重新
+            # 套用商品當前釘的版本」（允許夾帶升版），改讀服務自己的版本會把它
+            # 悄悄變成另一個功能。要放行就去把 template 的版本填上。
+            if not template.helm_chart_version:
+                raise UserError(
+                    f"無法重新部署：商品「{template.name}」尚未指定 chart 版本。"
+                    f"直接部署會抓 registry 當下的最新版（不可逆的跳版）。"
+                    f"請先在商品設定填入版本再重試。"
+                )
             values = self._assemble_deploy_values()['values']
             sensitive_values = self._build_mcp_sensitive_values()
             try:
@@ -479,6 +501,16 @@ class CloudService(models.Model):
                 'init_error': False,
                 'init_retries': 0,
                 'helm_revision': release_info.get('revision', self.helm_revision),
+                # #552: redeploy runs a real helm upgrade carrying
+                # `template.helm_chart_version` (possibly empty ⇒ registry latest),
+                # so it can move the deployed chart version. Record what the
+                # operator resolved; `or self.helm_chart_version` keeps the old
+                # value when talking to an operator that does not report it yet.
+                # Per-service field only — see `_execute_deploy` for why the
+                # template record must never be written back to.
+                'helm_chart_version': (
+                    release_info.get('chart_version') or self.helm_chart_version
+                ),
                 'last_upgraded_at': fields.Datetime.now(),
             })
             # #482: upgrade 用 chart 預設把 replicas 渲染回去了，收回停機。
@@ -640,7 +672,10 @@ class CloudService(models.Model):
             raise UserError("PaaS Operator not configured. Contact administrator.")
 
         try:
-            client.reset_release_config(
+            # #552: the response is no longer discarded — it carries the chart
+            # version helm resolved for this upgrade (both operator branches,
+            # config_json and helm_secret, report it).
+            reset_result = client.reset_release_config(
                 namespace=self.helm_namespace,
                 release_name=self.helm_release_name,
                 chart=self.template_id.helm_chart_name,
@@ -706,11 +741,52 @@ class CloudService(models.Model):
             )
             raise UserError("Reset failed. Check service status and retry.") from e
 
-        # #530：兩把憑證一起落庫。提交點語意不變（C11′ commit-on-secret）——2xx
-        # 代表兩者都已是叢集權威值，2xx 之前的任何失敗都保證叢集仍是舊憑證。
-        self._set_admin_password_secret(
-            new_password, gateway_api_key=new_gateway_api_key,
-        )
+        # ================= 提交點（C11′ commit-on-secret）之後 =================
+        #
+        # #525 B3：從這裡開始，「新密碼已生效」已經是**既成事實**——operator 回了
+        # 2xx，新憑證就是叢集的權威值，而且不會再被回退（helm --atomic 自己回捲、
+        # config.json patch 失敗會還原備份，能失敗的全在 2xx 之前）。
+        #
+        # 因此提交點之後的每一步都只是**記帳**（落庫、stamp state、停權回收），
+        # 不是「reset 有沒有成功」的判準。讓記帳的例外往外拋 ⇒ controller 回
+        # `success: False` ⇒ 告訴租戶「沒換」。那句話是假的，代價也不對稱：
+        # 明文只顯示這一次、平台刻意沒有回讀端點（憑證一律一次性），租戶因此
+        # **永久拿不到**唯一能登入 admin GUI 的那把密碼，還會拿已失效的舊密碼
+        # 反覆重試。所以這兩段的例外一律不外拋（`OperationalError` 除外，見下）。
+        #
+        # 🔴 這裡**刻意不補** `cr.rollback()`。#525 把本處列為 B 級（外觀與 #520
+        # 同構、因果相反）正是這個理由：回捲會把已落庫的新密碼退回舊值，而叢集
+        # 已經是新值 ⇒ 從「一致但租戶不知情」變成「DB 與叢集不一致」，管理員連
+        # admin GUI 都登不進去，之後的 redeploy 還會拿 DB 的舊值去覆寫叢集。
+        #
+        # 用 `cr.savepoint()` 而非裸 try：Python 層例外會在 ORM cache 留下待
+        # flush 的髒值，不清掉的話它會在本 request 稍後（甚至 controller 之外的
+        # commit）再炸一次 → 變成 500 並回捲整筆交易，正好是我們要避免的形態。
+        # `_FlushingSavepoint.rollback` 會先 `cr.clear()` 再 ROLLBACK TO SAVEPOINT。
+        #
+        # 兩段分開包，是因為**回捲單位不同**：憑證落庫必須在記帳失敗時存活下來
+        # （它是與叢集一致的那個事實）；記帳則整組成立或整組不成立。
+        try:
+            with self.env.cr.savepoint():
+                # #530：兩把憑證一起落庫。2xx 代表兩者都已是叢集權威值。
+                self._set_admin_password_secret(
+                    new_password, gateway_api_key=new_gateway_api_key,
+                )
+        except OperationalError:
+            # #518：並發／連線類 DB 例外（SerializationFailure 40001 等）必須傳
+            # 出去讓 Odoo 的 `retrying()` 看見；此刻交易已 aborted，吞掉只會讓
+            # 後續 flush 再炸。重播整個 handler 會重跑一次 reset（另鑄一把新密碼
+            # 重新下發），結果仍然是一致的。
+            raise
+        except Exception:
+            _logger.exception(
+                "[#525 B3] reset-admin-password could NOT store the new "
+                "credentials for service %s (id=%s) although the operator "
+                "already applied them — cluster and DB now disagree; the live "
+                "password is being returned to the tenant so they can still "
+                "sign in, but a later redeploy would re-supply the old value",
+                self.name, self.id,
+            )
 
         # `last_upgraded_at` 同 action_redeploy：reset 走的是同一條 helm
         # upgrade 管線，不記錨就會讓 #489 的 age timeout 拿首裝時間當起點。
@@ -720,15 +796,43 @@ class CloudService(models.Model):
         # 情境是服務先被 reconfigure 汙染（suspended → upgrading → poll →
         # running）而 pre_suspend_state 仍在：此時 _is_halted() 仍為真＝它其實
         # 還在停權中，reset 完必須把它收回停機，而不是留下一台跑著的欠費服務。
-        halted = self._is_halted()
+        try:
+            with self.env.cr.savepoint():
+                halted = self._is_halted()
+                self.write({
+                    'state': 'suspended' if halted else 'upgrading',
+                    'error_message': False,
+                    # #552: reset carries `template.helm_chart_version` into helm
+                    # upgrade (see the F-461-2 drift log above — this path really
+                    # does change the chart), so it is one of the four places the
+                    # ledger must be refreshed. `or self.helm_chart_version` =
+                    # backward compatibility with an operator whose reset response
+                    # has no `chart_version` yet.
+                    # Per-service field only — never `template.helm_chart_version`.
+                    #
+                    # #525 B3：帳本更新與 state stamp 同屬「記帳」，一起進 savepoint。
+                    # 它失敗時整組回捲（帳本維持舊值＝與失敗前一致），但**不會**
+                    # 波及上一段已落庫的憑證，也不會翻轉「密碼已生效」的回應。
+                    'helm_chart_version': (
+                        (reset_result or {}).get('chart_version')
+                        or self.helm_chart_version
+                    ),
+                    'last_upgraded_at': fields.Datetime.now(),
+                })
+                self._rescale_halted_after_upgrade(client)
+        except OperationalError:
+            raise
+        except Exception:
+            # 記帳整組回捲 ⇒ state 留在 'running'。代價是前端少一輪 upgrading
+            # 輪詢（服務仍會自己收斂），遠小於讓租戶永久拿不到已生效的密碼。
+            _logger.exception(
+                "[#525 B3] reset-admin-password bookkeeping failed for service "
+                "%s (id=%s) AFTER the new credentials took effect — the reset "
+                "itself stands and the password is being returned; platform-side "
+                "state/last_upgraded_at/helm_chart_version may be stale",
+                self.name, self.id,
+            )
 
-
-        self.write({
-            'state': 'suspended' if halted else 'upgrading',
-            'error_message': False,
-            'last_upgraded_at': fields.Datetime.now(),
-        })
-        self._rescale_halted_after_upgrade(client)
         return new_password
 
     # ------------------------------------------------------------------ #
@@ -801,6 +905,44 @@ class CloudService(models.Model):
         mcp_api_key = params.get('mcp_api_key')
 
         try:
+            # #552 層 4 —— **backstop，不是主閘門**。主閘門在可購買性裁決點
+            # （`cloud_app_template._reject_reason_for_new_instance`），擋在收錢之前。
+            #
+            # 🔴 **這不是過渡期保險，是永久涵蓋——不要當成清得掉的舊碼。**
+            # 主閘門掛在 `CloudService.create()` 上，所以它只看得到**新建**的列。
+            # 有一條當前就存在、可重複觸發的路徑會讓一台服務走進 `_execute_deploy`
+            # 而**完全不經過 create**：
+            #
+            #     controllers/ha_paas.py 的 provision 重試 —— 既有服務處於 `error`
+            #     時，它 `existing.sudo().write({'state': 'pending'})` 再觸發 deploy
+            #     cron。**是 write 不是 create** ⇒ `_enforce_supply_gate` 不會跑，
+            #     cron 隨後直接呼叫本方法。這條路上**只有這道 backstop 接得住**。
+            #
+            # （另一種同樣接不到主閘門的列：閘門上線前就已經躺在 `pending` 的服務。
+            # 那個確實是過渡期的，但它**不是**本 backstop 存在的唯一理由。）
+            #
+            # 而 install 不帶 `--version` 就是 registry latest。
+            #
+            # 🔴 **位置在 `try` 之內是必要條件，不是風格**。放在 try 外面時，例外
+            # 會直接穿過本方法，落進 `_cron_process_pending_deploys` 的泛用
+            # `except Exception` —— 訊息被換成「Unexpected error during
+            # deployment. Check server logs.」，租戶與第一線都無從排錯（#520 症狀
+            # 4 同型）。實測踩過一次：`state` 確實變成 error，但 `error_message`
+            # 完全不提版本，看起來就像基礎設施故障。
+            #
+            # ⚠ 例外型別同理**必須**是 `PaaSOperatorError`：底下那個 handler 才會
+            # 把 detail 寫進 `error_message`。兩個條件（位置＋型別）少一個都會讓
+            # 這道 backstop 退化成「擋下來了，但沒人知道為什麼」。
+            if not template.helm_chart_version:
+                raise PaaSOperatorError(
+                    'chart version not pinned',
+                    detail=(
+                        f'商品「{template.name}」尚未指定部署版本，為避免部署到'
+                        f'未知的 chart 版本已中止開通。請在 seed 釘版後重新發版'
+                        f'（#552）。'
+                    ),
+                )
+
             # Create namespace (409 = already exists, OK)
             cpu_limit, memory_limit, storage_limit = self._compute_ns_quota(
                 self.workspace_id,
@@ -859,6 +1001,24 @@ class CloudService(models.Model):
             # Helm install done — update release info and clean up deploy params
             self.write({
                 'helm_revision': release_info.get('revision', 1),
+                # #552: record the chart version helm ACTUALLY resolved. With an
+                # empty `template.helm_chart_version` no `--version` is sent and
+                # helm picks the registry's latest — the ledger used to keep the
+                # (empty) template value forever, so the tenant's service-detail
+                # page showed a version nobody had verified.
+                #
+                # ⚠ Written to **cloud_service** (per-service), never to
+                # `template.helm_chart_version`: the seed is `noupdate=0` and the
+                # healer at the tail of `data/cloud_app_templates.xml` clears
+                # `ir.model.data.noupdate` on every `-u`, so a hand-written
+                # template value is silently reverted by the next release (same
+                # discipline as `cloud_app_template.py` `_DEFAULT_GLOBAL_INSTANCE_CAPS`).
+                #
+                # `or self.helm_chart_version` keeps backward compatibility with
+                # an operator that predates the field: unknown ⇒ keep, never blank.
+                'helm_chart_version': (
+                    release_info.get('chart_version') or self.helm_chart_version
+                ),
                 'deployed_at': fields.Datetime.now(),
                 'deploy_params': False,
             })
@@ -919,9 +1079,8 @@ class CloudService(models.Model):
         """
         self.ensure_one()
         template = self.template_id
-        values = self._strip_mcp_sensitive_values(
-            json.loads(self.helm_values) if self.helm_values else {}
-        ) or {}
+        # #559：helm_values 有 groups=，屬性直讀會 AccessError。走唯一入口。
+        values = self._strip_mcp_sensitive_values(self._helm_values_dict()) or {}
 
         # Inject StorageClass for PVC lifecycle management
         storage_class = self.env['ir.config_parameter'].sudo().get_param(
@@ -1554,6 +1713,54 @@ class CloudService(models.Model):
         if isinstance(auth, dict):
             auth.pop('apiServerKey', None)
         return result
+
+    # ------------------------------------------------------------------
+    # #559：helm_values 的欄位級授權（groups='base.group_system'）之後，
+    # 平台程式碼存取它的**唯二**入口。
+    #
+    # 為什麼欄位要有 groups=：`helm_values` 裝的是租戶親手填的憑證
+    # （odooPassword／smtpPassword／auth.*ApiKey）。#535 把服務詳情 API 的遮罩
+    # 改成 spec-driven，但那道遮罩在 **controller 層**；欄位本身沒有 groups= 時，
+    # 租戶可以直接打 `POST /web/dataset/call_kw` 送 `read(['helm_values'])`
+    # **繞過整個 controller 遮罩層**拿到明文。實測坐實（#559）：最低權限
+    # （workspace role=guest）的 `base.group_user` 租戶讀得到完整明文，而同一條
+    # 路徑上讀 `n8n_owner_password`（有 groups=）會被 AccessError 擋下
+    # ——鑑別項證明了「有 groups= 就會被擋」在這條路徑上確實生效。
+    #
+    # 為什麼要這兩個 helper：groups= 擋的不只是 RPC，**連平台自己的 ORM 屬性存取
+    # 也一併擋掉**（實測：`_format_service` 的 `service.helm_values` 直接拋
+    # AccessError，租戶的服務詳情頁與 reconfigure 全掛）。租戶**應該**看得到自己
+    # 的設定——只是要走 BFF、經 `_sanitize_helm_values` 遮罩後才出去。所以合法路徑
+    # 需要提權，而提權集中在這裡、不散落成一堆 `.sudo()`。
+    #
+    # ⚠ 呼叫端的義務：這兩個 helper **只提升欄位級權限，不做記錄級授權**。
+    # 呼叫前必須已經確認呼叫者有權碰這筆 service（controller 端是
+    # `workspace.check_user_access()` ＋ ir.rule 在 browse 後的第一次讀）。
+    # 不要在「還沒授權的 recordset」上呼叫它們——那才是
+    # docs/decisions/patterns/orm-vs-endpoint-acl-test-coverage.md 講的那種洞。
+    # ------------------------------------------------------------------
+
+    def _helm_values_dict(self):
+        """讀出 helm_values 並解析成 dict（空值／未設定回 ``{}``）。
+
+        解析失敗時**照原樣拋出**，與改動前各呼叫點的行為一致（那些點原本就是
+        裸 ``json.loads``）——不在這裡吞掉，免得壞掉的 JSON 變成靜默的空設定。
+        """
+        self.ensure_one()
+        raw = self.sudo().helm_values
+        return json.loads(raw) if raw else {}
+
+    def _apply_helm_values(self, values, extra_vals=None):
+        """寫回 helm_values（會套用與 ``create()`` 相同的敏感值剝除）。
+
+        ``extra_vals`` 裡的其他欄位**刻意不提權**、走呼叫者自己的身分寫入，
+        這樣 ir.rule 對它們照常生效——提權只落在 helm_values 這一格。
+        """
+        self.ensure_one()
+        if extra_vals:
+            self.write(extra_vals)
+        stripped = self._strip_mcp_sensitive_values(values)
+        self.sudo().write({'helm_values': json.dumps(stripped)})
 
     def _has_mcp_admin_secret(self):
         self.ensure_one()
@@ -2261,7 +2468,23 @@ class CloudService(models.Model):
             )
         except PaaSOperatorError as e:
             if e.status_code == 404 and self.state == 'deleting':
-                self.unlink()
+                # #525 B5：與 controller 的 `_update_service_status` 同形，缺陷
+                # 也同形——`unlink()` 中途拋錯 → 例外逸出這個 except handler
+                # （同層 sibling 的 `except Exception` 接不到）→ 被唯一呼叫端
+                # `_cron_check_deploying_services` 迴圈的 catch-all 吞掉 → cron
+                # 照常 commit 刪一半的狀態。
+                #
+                # ⚠ **今天這條分支不可達**：唯一的生產呼叫端 cron 的 domain 是
+                # `state in ('deploying','upgrading','initializing')`（本檔
+                # `_cron_check_deploying_services`），不含 `deleting`，所以
+                # `self.state == 'deleting'` 在被呼叫到時恆為 False。這裡的
+                # savepoint 是**結構防護**：domain 一旦補上 `deleting`（controller
+                # 側的 `_list_services` 就是這樣列的），殘留立刻可達，而那時不會
+                # 有人記得回來補這一行。形態同
+                # `subscription_lifecycle_cron._cron_enforce_subscription_lifecycle`
+                # 的 per-item savepoint。
+                with self.env.cr.savepoint():
+                    self.unlink()
             else:
                 _logger.warning("Error polling status for %s: %s", self.name, e)
             return
@@ -2395,17 +2618,21 @@ class CloudService(models.Model):
                     'init_retries': 0,
                     'init_error': False,
                 }
-                if template.mcp_api_key_helm_path and self.helm_values:
+                merged_helm_values = None
+                if template.mcp_api_key_helm_path:
                     try:
-                        current_values = json.loads(self.helm_values)
+                        # #559：走唯一入口（欄位有 groups=，屬性直讀會 AccessError）
+                        current_values = self._helm_values_dict()
                         api_key_nested = _unflatten_dotpath_keys(
                             {template.mcp_api_key_helm_path: real_api_key}
                         )
-                        updated_values = _deep_merge(current_values, api_key_nested)
-                        update_vals['helm_values'] = json.dumps(updated_values)
+                        merged_helm_values = _deep_merge(current_values, api_key_nested)
                     except (json.JSONDecodeError, TypeError):
                         _logger.warning("Failed to update helm_values with real API key for service %s", self.name)
-                self.write(update_vals)
+                if merged_helm_values is not None:
+                    self._apply_helm_values(merged_helm_values, extra_vals=update_vals)
+                else:
+                    self.write(update_vals)
                 _logger.info("n8n init succeeded for service %s (via cron)", self.name)
             else:
                 self._record_init_failure(result.get('error', 'Unknown error'))
@@ -2953,6 +3180,20 @@ class CloudService(models.Model):
             if reason == 'paused':
                 raise SupplyGateError(_(
                     '「%(tpl)s」目前暫停販售。', tpl=template.name))
+            if reason == 'unpinned_chart':
+                # #552 層 4：這是**平台端設定缺陷**不是營運狀態，所以 log 成 error
+                # ——租戶看到的是下面那句，但營運要在 log 裡看得到是哪個 template。
+                # 只在真的有人嘗試開通時才 log（判準本身每次 marketplace 渲染都會
+                # 跑一次，寫在裁決點會洗版）。
+                _logger.error(
+                    "供給閘門擋下開通：template %s (id=%s, slug=%s) 沒有 "
+                    "helm_chart_version ⇒ helm 會解析成 registry 當下的 latest。"
+                    "請在 seed 釘版後重新發版（#552）。",
+                    template.name, template.id, template.slug,
+                )
+                raise SupplyGateError(_(
+                    '「%(tpl)s」目前無法開通：平台尚未指定此商品的部署版本。'
+                    '請聯繫客服。', tpl=template.name))
             if reason == 'sold_out':
                 raise SupplyGateError(_(
                     '「%(tpl)s」目前已售罄，暫時無法開通新的實例。',

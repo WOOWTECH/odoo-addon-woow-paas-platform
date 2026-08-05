@@ -11,7 +11,9 @@ from typing import Any
 from urllib.parse import urlparse
 
 from odoo import fields
-from odoo.exceptions import AccessError, UserError, ValidationError
+from odoo.exceptions import (
+    AccessDenied, AccessError, MissingError, UserError, ValidationError,
+)
 from psycopg2 import OperationalError
 from odoo.http import request, route, Controller
 
@@ -1238,13 +1240,58 @@ class PaasController(HiddenChainMixin, Controller):
         if not access or access.role not in [ROLE_OWNER, ROLE_ADMIN]:
             return {'success': False, 'error': 'Admin access required'}
 
+        # #553：原本是「一律 `str(e)`」——連 ORM 例外都照吐給租戶。分類比照
+        # `_create_service`（#520／PR #523）與上方 `api_service_skip_trial`
+        # （#525 A1／PR #527）。本端點 side-effect-free（`_skip_trial_estimate`
+        # 只讀不寫），所以**不需要** rollback／savepoint，只需要分類訊息。
         try:
             estimate = service._skip_trial_estimate()
+
+        except (AccessDenied, AccessError, MissingError) as e:
+            # `UserError` 在 Odoo 18 有**四個**子類（`odoo/exceptions.py`）：
+            # `AccessDenied`(:45)、`AccessError`(:64)、`MissingError`(:85)、
+            # `ValidationError`(:94)。這裡攔前三個，只有 `ValidationError` 走原文。
+            #
+            # 🔴 `AccessDenied` 是 `UserError` 的**平行**子類，**不是**
+            # `AccessError` 的子類 —— 只寫 `except AccessError` 攔不到它，它會落進
+            # 下面的 `except (ValidationError, UserError)` 走原文。
+            #
+            # 三者都不是「講給租戶聽」的業務規則：`AccessError` 的訊息帶內部
+            # model／欄位技術名；`MissingError` 的原文是 `Record does not exist or
+            # has been deleted.\n(Record: woow_paas_platform.cloud_service(42,),
+            # User: 2)`——model 技術名、記錄 id、內部 uid 全在裡面；`AccessDenied`
+            # 是認證失敗（預設訊息 "Access Denied" 雖無害，但它可帶自訂訊息，且
+            # 「登入憑證錯誤」本來就不該被包裝成本端點的業務回應）。
+            #
+            # ⚠ 兩處參照實作（`_create_service` / `api_service_skip_trial`）目前
+            # 只擋 `AccessError`，`MissingError` 與 `AccessDenied` 仍走原文分支。
+            # 收斂那兩處屬既有已發版程式碼的改動，另開 follow-up（#567）追，
+            # 不夾帶在本 PR。
+            _logger.error(
+                "ORM error estimating skip-trial for service %s: %s\n%s",
+                service_id, e, traceback.format_exc(),
+            )
+            return {'success': False,
+                    'error': 'An error occurred while estimating the skip-trial charge.'}
+
+        except (ValidationError, UserError) as e:
+            # 業務規則例外（沒有訂閱、訂閱非 in_progress、不在試用期）：訊息本來
+            # 就是寫給使用者看的，原文回前端。統一成泛用字串的話，真正的原因只留
+            # 在 server log，使用者與第一線支援都無從排錯。
+            message = str(e)
+            _logger.warning(
+                "Skip trial estimate rejected for service %s: %s",
+                service_id, message,
+            )
+            return {'success': False, 'error': message}
+
         except Exception as e:
             _logger.error(
-                "Error estimating skip-trial for service %s: %s", service_id, e,
+                "Error estimating skip-trial for service %s: %s\n%s",
+                service_id, e, traceback.format_exc(),
             )
-            return {'success': False, 'error': str(e)}
+            return {'success': False,
+                    'error': 'An error occurred while estimating the skip-trial charge.'}
 
         return {'success': True, 'data': estimate}
 
@@ -1535,8 +1582,31 @@ class PaasController(HiddenChainMixin, Controller):
             # current-user env，ir.rule 才會繼續驗這位 admin 對該 service 的可及性
             # （sudo 會連這層一起關掉，等於把 workspace 邊界交給本 handler 獨力承擔）。
             new_password = service._reset_admin_password()
-        except UserError as e:
+
+        except (AccessDenied, AccessError, MissingError) as e:
+            # #553 的同一個外洩面：`UserError` 的四個子類裡，只有 `ValidationError`
+            # 是「講給租戶聽」的業務規則，其餘三個帶的是 ORM 內部識別字（model
+            # 技術名／記錄 id／內部 uid）或認證失敗。原本只寫 `except UserError`，
+            # 於是它們全被原文吐到租戶畫面。
+            #
+            # 🔴 `AccessDenied` 是 `UserError` 的**平行**子類、**不是**
+            # `AccessError` 的子類，必須各自列名——漏掉它就會落進下面的原文分支
+            # （分類清單見 `api_service_skip_trial_estimate` 該處註解）。
+            _logger.error(
+                "[#357] ORM error resetting admin password for service %s: %s\n%s",
+                service.id, str(e), traceback.format_exc(),
+            )
+            return {
+                'success': False,
+                'error': 'Reset failed. Check operator logs for details.',
+            }
+
+        except (ValidationError, UserError) as e:
+            # model 端刻意寫給租戶看的業務訊息：服務未 running、正在升級請稍候
+            # （#357 C11）、逾時後的「狀態未知，請稍後重按 Reset」（#461 C11′）。
+            # 租戶要靠它決定下一步，統一成泛用字串會把「等一分鐘再試」變成「壞了」。
             return {'success': False, 'error': str(e)}
+
         except Exception as e:
             _logger.error(
                 "[#357] reset-admin-password failed for service %s: %s\n%s",
@@ -1549,7 +1619,21 @@ class PaasController(HiddenChainMixin, Controller):
 
         # #530：Reset 同時換發 gateway API key，一併一次性回傳。訊息用複數形是
         # 因為租戶要回 MCP 那端重填 key——只說「密碼」會讓人以為 gateway 沒動。
-        gateway = self._gateway_credentials(service)
+        #
+        # #525 B3：走到這一行代表密碼**已經生效**（model 端的提交點已經跨過）。
+        # 以下純屬回應組裝，任何失敗都不得把它翻轉成失敗回應或 500——後者更糟，
+        # 框架會回捲整筆交易，變成「叢集是新密碼、DB 是舊密碼、租戶什麼都沒拿到」。
+        # gateway 憑證是附加品，取不到就少交付一把（租戶可再 Reset），但那把
+        # **已生效的 admin 密碼**一定要送出去。
+        try:
+            gateway = self._gateway_credentials(service)
+        except Exception:
+            _logger.exception(
+                "[#530] gateway credential lookup failed for service %s after a "
+                "successful password reset — delivering the admin password only",
+                service.id,
+            )
+            gateway = {}
         message = (
             'Admin password reset. Save the new password now — '
             'it will not be shown again.'
@@ -1930,8 +2014,16 @@ class PaasController(HiddenChainMixin, Controller):
         if not server.exists() or server.project_id.cloud_service_id.id != service.id:
             return {'success': False, 'error': 'MCP Server not found'}
 
+        # #554：`action_sync_tools` 自帶 catch-all，失敗時**不會**拋到這裡——
+        # 只能靠它的 bool 回傳值判讀，否則一律回 success: True（使用者看到
+        # 「同步成功」，實際 tool 清單處於半同步狀態）。失敗原因讀 callee 剛寫
+        # 進去的 `state_message`。外層 try 留著接非預期例外（例如格式化階段）。
         try:
-            server.action_sync_tools()
+            if not server.action_sync_tools():
+                reason = server.state_message or 'Unknown error'
+                _logger.warning(
+                    'MCP sync failed for server %s: %s', server.name, reason)
+                return {'success': False, 'error': f'Sync failed: {reason}'}
         except Exception as e:
             _logger.warning('MCP sync failed for server %s: %s', server.name, e)
             return {'success': False, 'error': f'Sync failed: {e}'}
@@ -1948,8 +2040,14 @@ class PaasController(HiddenChainMixin, Controller):
         if not server.exists() or server.project_id.cloud_service_id.id != service.id:
             return {'success': False, 'error': 'MCP Server not found'}
 
+        # #554：同 `_sync_mcp_server`——callee 自帶 catch-all，只能判讀 bool。
         try:
-            server.action_test_connection()
+            if not server.action_test_connection():
+                reason = server.state_message or 'Unknown error'
+                return {
+                    'success': False,
+                    'error': f'Connection test failed: {reason}',
+                }
         except Exception as e:
             return {'success': False, 'error': f'Connection test failed: {e}'}
 
@@ -2209,23 +2307,24 @@ class PaasController(HiddenChainMixin, Controller):
             return {'success': False, 'error': url_error}
 
         McpServer = request.env['woow_paas_platform.mcp_server'].sudo()
-        try:
-            server = McpServer.create({
-                'name': name,
-                'url': url,
-                'transport': params.get('transport', 'sse'),
-                'api_key': params.get('api_key', ''),
-                'headers_json': params.get('headers_json', ''),
-                'description': params.get('description', ''),
-                'scope': 'user',
-                'project_id': project.id,
-                # #271: URL↔flag consistency IS now enforced — see
-                # _validate_mcp_url(sidecar_backed=...) above + the model
-                # @api.constrains _check_sidecar_url_in_cluster.
-                'sidecar_backed': bool(params.get('sidecar_backed', False)),
-            })
-        except ValidationError as e:
-            return {'success': False, 'error': str(e)}
+        # #525 B4：與 `_update_project_mcp_server` 同理**刻意不包 try**——對齊
+        # service-centric 的 `_create_mcp_server`（那支的 `McpServer.create(...)`
+        # 同樣裸露、直接 return）。只改 update 會把「update 包／不包不一致」
+        # 換成「create 包、update 不包」的新不一致。
+        server = McpServer.create({
+            'name': name,
+            'url': url,
+            'transport': params.get('transport', 'sse'),
+            'api_key': params.get('api_key', ''),
+            'headers_json': params.get('headers_json', ''),
+            'description': params.get('description', ''),
+            'scope': 'user',
+            'project_id': project.id,
+            # #271: URL↔flag consistency IS now enforced — see
+            # _validate_mcp_url(sidecar_backed=...) above + the model
+            # @api.constrains _check_sidecar_url_in_cluster.
+            'sidecar_backed': bool(params.get('sidecar_backed', False)),
+        })
         return {'success': True, 'data': self._format_mcp_server(server)}
 
     def _resolve_project_mcp(self, project, params: dict):
@@ -2254,10 +2353,16 @@ class PaasController(HiddenChainMixin, Controller):
             if field_name in params:
                 vals[field_name] = params[field_name]
         if vals:
-            try:
-                server.write(vals)
-            except ValidationError as e:
-                return {'success': False, 'error': str(e)}
+            # #525 B4：這裡**刻意不包 try**——對齊 service-centric 的
+            # `_update_mcp_server`。Odoo 18 的 `write()` 是先寫後驗
+            # （`models.py` 的 `field.write(...)` 在 `_validate_fields(...)` 之前），
+            # 所以把 ValidationError 接下來改回 `success: False` 會讓新值隨
+            # request 正常 commit ⇒ 使用者看到「更新失敗」但記錄已經被改。
+            # 讓它傳到 JSON-RPC dispatcher，框架不 commit、整筆回捲，才是一致的。
+            # 順帶解掉第二層不一致：`mcp_server.write()` 在 `super().write()` 之後
+            # 才推 mcp snapshot，中途拋例外時 DB 已變而 running pod 內的
+            # `mcp.json` 仍是舊值——回捲之後兩邊都不變，不會漂移。
+            server.write(vals)
         return {'success': True, 'data': self._format_mcp_server(server)}
 
     def _delete_project_mcp_server(self, project, params: dict) -> dict[str, Any]:
@@ -2271,8 +2376,13 @@ class PaasController(HiddenChainMixin, Controller):
         server, error = self._resolve_project_mcp(project, params)
         if error:
             return error
+        # #554：見 `_sync_mcp_server` 的註記——callee 自帶 catch-all，判讀 bool。
         try:
-            server.action_sync_tools()
+            if not server.action_sync_tools():
+                reason = server.state_message or 'Unknown error'
+                _logger.warning(
+                    'MCP sync failed for server %s: %s', server.name, reason)
+                return {'success': False, 'error': f'Sync failed: {reason}'}
         except Exception as e:
             _logger.warning('MCP sync failed for server %s: %s', server.name, e)
             return {'success': False, 'error': f'Sync failed: {e}'}
@@ -2282,8 +2392,14 @@ class PaasController(HiddenChainMixin, Controller):
         server, error = self._resolve_project_mcp(project, params)
         if error:
             return error
+        # #554：同上。
         try:
-            server.action_test_connection()
+            if not server.action_test_connection():
+                reason = server.state_message or 'Unknown error'
+                return {
+                    'success': False,
+                    'error': f'Connection test failed: {reason}',
+                }
         except Exception as e:
             return {'success': False, 'error': f'Connection test failed: {e}'}
         return {
@@ -2858,7 +2974,11 @@ class PaasController(HiddenChainMixin, Controller):
                 'internal_port': template.default_port,
                 'helm_release_name': helm_release_name,
                 'helm_namespace': helm_namespace,
-                'helm_values': json.dumps(merged_values),
+                # #559：helm_values 有 groups=，放在 create vals 裡會讓租戶身分的
+                # create 直接 AccessError。改在 create 之後以提權入口寫入
+                # （`_apply_helm_values` 套用與 create() 相同的敏感值剝除）。
+                # **刻意不 sudo 整個 create** —— 那會連 ir.rule 的 create 檢查
+                # 一起繞掉，那是 #519 的範圍，不在本單。
                 'helm_chart_version': template.helm_chart_version,
                 # #332：allocated_* 改讀選定 plan 規格、0 值 fallback template.min_*
                 **CloudService._allocated_vals_from(template, plan),
@@ -2890,6 +3010,7 @@ class PaasController(HiddenChainMixin, Controller):
                 if admin_password else CloudService
             )
             service = service_model.create(service_vals)
+            service._apply_helm_values(merged_values)  # #559
 
             # ⚠ 順序刻意：所有「還可能失敗」的落庫步驟都排在建訂閱**之前**。
             # `_create_and_confirm_subscription` 會同步寄出訂閱確認信
@@ -3072,7 +3193,7 @@ class PaasController(HiddenChainMixin, Controller):
                         }
 
             # Filter user values to only allowed keys, reject unauthorized
-            existing_values = json.loads(service.helm_values) if service.helm_values else {}
+            existing_values = service._helm_values_dict()  # #559：唯一入口
             filtered_user_values, rejected_keys = self._filter_allowed_helm_values(values, service.template_id)
             if rejected_keys:
                 return {'success': False, 'error': f'Unauthorized configuration keys: {", ".join(rejected_keys)}'}
@@ -3105,6 +3226,31 @@ class PaasController(HiddenChainMixin, Controller):
                     # All addons deselected — remove addon-specific helm values
                     service._remove_addon_helm_values(merged_values)
 
+            # #552: reconfigure 的 chart version fallback。**主執行緒**解析，兩個
+            # 消費端（下面的 write ＋ upgrade_kwargs）共用同一個值。
+            #
+            # `version` 這個參數**永遠是 None**：前端三個入口都不帶它
+            # （services/cloud_service.js:451 的 `version = null` 預設，:458 只在
+            # 有值時才塞進 params；ConfigurationTab「儲存設定」／EditDomainModal
+            # 「改網域」／AddonsTab「改 addon」都只傳 3 個參數）。⇒ 送進
+            # `upgrade_release` 的 `version` 恆為 None ⇒ operator 不帶 `--version`
+            # ⇒ helm 解析成 registry **當下的 latest**。這條路與 template 有沒有
+            # 填版號無關，**全部 15 個 template 的 reconfigure 都不釘版**：
+            # mcp-* 釘 0.1.5、home-assistant 釘 0.2.1 的 pin 在這裡完全沒作用。
+            #
+            # fallback 順序＝「這台服務現在跑的版本」優先於「商品目前釘的版本」：
+            # reconfigure 的語意是改設定、不是升版，所以先原地釘住 service 已知的
+            # 版本；service 沒有記錄（legacy）才退到 template 的 pin。
+            #
+            # ⚠ 刻意**不**在 `PaasOperatorClient.upgrade_release` 加 fail-closed
+            # guard：那條路走背景執行緒，失敗回不到前端，會讓全部 15 個商品的
+            # 「儲存設定」靜默壞掉（#552 修法順序：fallback 先於 fail-closed）。
+            resolved_version = (
+                version
+                or service.helm_chart_version
+                or service.template_id.helm_chart_version
+            )
+
             # #482: 停權中的服務 reconfigure 後不得停在 'upgrading' —— poll
             # (_cron_check_deploying_services 掃 deploying/upgrading/initializing)
             # 會把容器型一路收斂成 running＝帳面復權，而 _do_resume 的 guard 又
@@ -3115,10 +3261,17 @@ class PaasController(HiddenChainMixin, Controller):
 
             # Transition to upgrading BEFORE calling operator so the
             # frontend gets an immediate response with state='upgrading'.
-            service.write({
+            # #559：helm_values 這一格走提權入口，其餘欄位維持使用者身分寫入
+            # （ir.rule 對它們照常生效）。兩次 write 在同一個 transaction 內。
+            service._apply_helm_values(merged_values, extra_vals={
                 'state': 'suspended' if halted else 'upgrading',
-                'helm_values': json.dumps(merged_values),
-                'helm_chart_version': version or service.helm_chart_version,
+                # #552: 與 upgrade_kwargs 用同一個 `resolved_version`，兩處語意不
+                # 分岔（原式 `version or service.helm_chart_version` 在 fallback
+                # 之後恆等於 `resolved_version`）。這是升級**前**的樂觀值；成功後
+                # 由背景執行緒以 operator 回報的實際版本覆蓋。
+                # #559：`helm_values` 已移出這個 write，改由 `_apply_helm_values`
+                # 以提權入口寫入（欄位加了 groups=，租戶身分寫不進來）。
+                'helm_chart_version': resolved_version,
                 # ⚠ `fields.Datetime.now()`（UTC）而**不是** `datetime.now()`
                 # （本機時區）。#489 讓這個欄位從「前台顯示用」變成 age timeout
                 # 的**判定用**錨：伺服器時區若不是 UTC，錨與 `fields.Datetime.now()`
@@ -3146,7 +3299,9 @@ class PaasController(HiddenChainMixin, Controller):
                 release_name=service.helm_release_name,
                 chart=service.template_id.helm_chart_name,
                 values=assembled_values,
-                version=version,
+                # #552: 見上方 `resolved_version` 的說明——這裡原本傳恆為 None 的
+                # `version`，等於把版本決定權交給 registry 的 latest。
+                version=resolved_version,
                 reset_values=True,
             )
             operator_url = client.base_url
@@ -3184,6 +3339,17 @@ class PaasController(HiddenChainMixin, Controller):
                         if svc.exists() and svc.state in ('upgrading', 'suspended'):
                             svc.write({
                                 'helm_revision': release_info.get('revision', svc.helm_revision + 1),
+                                # #552: 第四條回寫路徑。upgrade 成功後才拿得到
+                                # helm 真正解析出來的 chart 版本（fallback 都空
+                                # 時仍是 registry latest，此時這行是唯一知道裝了
+                                # 哪一版的地方）。`or svc.helm_chart_version` ＝
+                                # 對舊版 operator 向後相容：讀不到就保留原值，
+                                # 不把帳本洗成空。回寫對象是 per-service 欄位，
+                                # 不是 template（seed noupdate=0＋healer 會還原）。
+                                'helm_chart_version': (
+                                    release_info.get('chart_version')
+                                    or svc.helm_chart_version
+                                ),
                             })
                 except Exception as exc:
                     _logger.error("Background upgrade failed for service %s: %s", service_id, exc)
@@ -3382,6 +3548,23 @@ class PaasController(HiddenChainMixin, Controller):
                 )
                 return
 
+            # #552 (a)：poll 是**唯一**抓得到「非由 Odoo 發起的 chart 變動」的路徑。
+            # 另外四條回寫都掛在平台自己觸發的操作上（首裝／redeploy／reset／
+            # reconfigure）；有人直接對叢集下 `helm upgrade`（維運手動、CD、其他
+            # 系統）時它們一條都不會跑。#552 內文「已排除的錯誤因果」記的 stg
+            # `svc-bd9d6ed3` 就是這個形態：Odoo 帳本 rev2/0.1.0、叢集 rev3/0.1.1，
+            # 而 Odoo 的 write_date 停在前一天 ⇒ 那次 upgrade 不是平台發起的。
+            #
+            # 綁成 dict 與 `helm_revision` 一起走，是為了讓下面**四個** write 分支
+            # 不可能各自漏掉一個欄位——新增第五個分支時也會自動跟上。
+            # `or service.helm_chart_version` ＝ 舊 operator 沒有這個欄位時保留原值。
+            release_facts = {
+                'helm_revision': helm_revision,
+                'helm_chart_version': (
+                    release.get('chart_version') or service.helm_chart_version
+                ),
+            }
+
             # Determine new state based on release status.
             #
             # #423 W5a：就緒判定已收斂為單一事實源
@@ -3417,7 +3600,7 @@ class PaasController(HiddenChainMixin, Controller):
                         # Pods ready but need post-deploy init → transition to initializing
                         service.write({
                             'state': 'initializing',
-                            'helm_revision': helm_revision,
+                            **release_facts,
                             'error_message': False,
                         })
                         self._run_post_deploy_init(service)
@@ -3430,7 +3613,7 @@ class PaasController(HiddenChainMixin, Controller):
                         # Addon selection changed during upgrade → need module list refresh
                         service.write({
                             'state': 'initializing',
-                            'helm_revision': helm_revision,
+                            **release_facts,
                             'error_message': False,
                             'init_retries': 0,
                             'init_error': False,
@@ -3441,7 +3624,7 @@ class PaasController(HiddenChainMixin, Controller):
                         # No init needed or already done → running.
                         service.write({
                             'state': 'running',
-                            'helm_revision': helm_revision,
+                            **release_facts,
                             'error_message': False,
                         })
                 # else: still deploying/waiting for pods
@@ -3449,7 +3632,7 @@ class PaasController(HiddenChainMixin, Controller):
             elif release_status == 'failed':
                 service.write({
                     'state': 'error',
-                    'helm_revision': helm_revision,
+                    **release_facts,
                     'error_message': release.get('description', 'Deployment failed'),
                 })
 
@@ -3473,7 +3656,22 @@ class PaasController(HiddenChainMixin, Controller):
                 CloudService = request.env['woow_paas_platform.cloud_service']
                 service = CloudService.browse(service_id)
                 if service.exists() and service.state == 'deleting':
-                    service.unlink()
+                    # #525 B5：`CloudService.unlink()` 是多步驟 teardown（sidecar
+                    # MCP 刪除 → `super().unlink()` → 訂閱結算＋按比例退點），中途
+                    # 拋錯就留下刪一半的狀態。而這一行在 `except` handler **內**：
+                    # Python 不讓同層 sibling 的 `except Exception`（本函式末尾）
+                    # 接到它，例外直接逸出本函式，落到唯一可達的呼叫端
+                    # `_list_services` 的 catch-all 被吞掉 → request 正常結束 →
+                    # Odoo 照常 commit 那半套刪除，端點還回 `success: True`。
+                    #
+                    # 用 savepoint 而非 `cr.rollback()`：走到這裡之前，
+                    # `_list_services` 的輪詢迴圈可能已對**其他**服務寫下
+                    # `state='running'`，整個 rollback 會把它們一起撤掉（判準見
+                    # #525 留言「try 之前是否有要保留的寫入」→ 有 ⇒ 必須
+                    # savepoint）。savepoint 只回捲這一次 teardown，例外照常往外
+                    # 傳、服務留在 `deleting`，下一輪 poll 再重試。
+                    with request.env.cr.savepoint():
+                        service.unlink()
             else:
                 _logger.warning("Error polling service status: %s", str(e))
 
@@ -3529,17 +3727,21 @@ class PaasController(HiddenChainMixin, Controller):
                         'init_retries': 0,
                         'init_error': False,
                     }
-                    if template.mcp_api_key_helm_path and service.helm_values:
+                    merged_helm_values = None
+                    if template.mcp_api_key_helm_path:
                         try:
-                            current_values = json.loads(service.helm_values)
+                            # #559：走 model 的唯一入口（欄位有 groups=）
+                            current_values = service._helm_values_dict()
                             api_key_nested = self._unflatten_dotpath_keys(
                                 {template.mcp_api_key_helm_path: real_api_key}
                             )
-                            updated_values = self._deep_merge(current_values, api_key_nested)
-                            update_vals['helm_values'] = json.dumps(updated_values)
+                            merged_helm_values = self._deep_merge(current_values, api_key_nested)
                         except (json.JSONDecodeError, TypeError):
                             _logger.warning("Failed to update helm_values with real API key for service %s", service.name)
-                    service.write(update_vals)
+                    if merged_helm_values is not None:
+                        service._apply_helm_values(merged_helm_values, extra_vals=update_vals)
+                    else:
+                        service.write(update_vals)
                     _logger.info(
                         "n8n init succeeded for service %s, API key and helm_values updated",
                         service.name,
@@ -3733,9 +3935,11 @@ class PaasController(HiddenChainMixin, Controller):
                 'helm_namespace': service.helm_namespace,
                 'helm_release_name': service.helm_release_name,
                 'helm_chart_version': service.helm_chart_version,
+                # #559：helm_values 有 groups='base.group_system'，屬性直讀會
+                # AccessError。走 model 的唯一入口——租戶看得到的仍是遮罩後的值
+                # （#535），只是 ORM 直讀那條側門被關上了。
                 'helm_values': self._sanitize_helm_values(
-                    json.loads(service.helm_values) if service.helm_values else {},
-                    service.template_id,
+                    service._helm_values_dict(), service.template_id,
                 ),
                 'internal_port': service.internal_port,
                 'allocated_vcpu': service.allocated_vcpu,

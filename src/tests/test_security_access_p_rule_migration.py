@@ -46,19 +46,35 @@ class TestPRuleMigration(TransactionCase):
             "DROP COLUMN IF EXISTS rule_type, "
             "DROP COLUMN IF EXISTS rule_value" % self._POL_TABLE)
 
+    #: 建 policy 時用來滿足 at-least-one-include 的**鷹架** rule，之後整批被
+    #: raw SQL 刪掉。刻意寫死成安全型別（不吃 rule_type 參數）——見
+    #: _make_legacy_policy 的說明。
+    _SCAFFOLD_RULE = {'group': 'include', 'rule_type': 'ip_range',
+                      'rule_value': '10.0.0.0/8'}
+
     def _make_legacy_policy(self, decision, rule_type, rule_value, prefix):
         """Create a policy, then force it into the pre-.39 shape: flat columns
         set + its rule rows removed (raw SQL — an ORM unlink of the last include
-        would trip the new constraint)."""
+        would trip the new constraint).
+
+        鷹架 rule 固定用 ip_range，**不**用參數的 rule_type（#543）：policy 一定
+        要帶至少一條 include 才建得起來，但那條 rule 建完立刻被下面的 DELETE 清
+        掉，migrate() 只讀 flat 欄位（post-migrate.py 的 SELECT 走 raw SQL，完全
+        不看 rule 表），所以鷹架的型別對受測程式碼**零影響**。
+
+        反過來，若鷹架照抄參數，decision='allow' × rule_type='email_domain' 這組
+        會在 ORM create 當場撞上 _check_allow_policy_no_bulk_grant（#352），測試
+        直接死在 fixture、`migrate()` 那行**永遠不會被執行**——探針壞在抵達受測
+        程式碼之前，而失敗輸出跟「migration 真的有缺陷」長得一模一樣。
+        """
         sa = self.SA.create(
             {'name': 'PRM GW ' + prefix, 'workspace_id': self.workspace.id})
         route = self.Route.create({
             'security_access_id': sa.id, 'subdomain_prefix': prefix})
         pol = self.Policy.create({
             'route_id': route.id, 'name': 'flat-' + prefix,
-            'decision': decision, 'rule_ids': [(0, 0, {
-                'group': 'include', 'rule_type': rule_type,
-                'rule_value': rule_value})]})
+            'decision': decision,
+            'rule_ids': [(0, 0, dict(self._SCAFFOLD_RULE))]})
         self.env.cr.execute(
             "DELETE FROM %s WHERE policy_id = %%s" % self._RULE_TABLE,
             (pol.id,))
@@ -109,23 +125,16 @@ class TestPRuleMigration(TransactionCase):
             self._drop_legacy_flat_cols()
 
     def test_cursor_bypass_flag_cleared_after_migrate(self):
-        """migration 用 cursor flag 跳過 email 配額；finally 必須清掉，否則洩漏
-        到後續 transaction 靜默關閉配額。
+        """migration 的兩個 cursor bypass flag 在 finally 必須清掉，否則洩漏到
+        後續 transaction——sa_skip_policy_quota 會靜默關閉 email 配額，
+        sa_skip_bulk_grant_check 會靜默關閉 #352 的整批放行守衛。
 
-        ⚠️ 截至 2026-08-03，這條是紅的——**紅的原因不是測試壞了，是它撞到一個
-        真缺陷**（#543）。fixture 建 decision=allow + email_domain 的 legacy
-        policy 時，撞上 2026-08-02 才加入的 `_check_allow_policy_no_bulk_grant`
-        （`security_access_access_policy_rule.py:158` 主動呼叫，非
-        `@api.constrains`），而 `migrations/18.0.1.0.39/post-migrate.py` 的
-        `Rule.create` 沒有繞過該守衛 ⇒ 任何仍停在 < 18.0.1.0.39 且帶
-        allow × (email_domain|everyone) flat policy 的 DB（主要是從舊備份還原
-        的情境）升版會中斷。
-
-        把 fixture 改成 deny 一行就能讓它轉綠，**但那是用假綠掩蓋真缺陷**，
-        刻意不做。修好 #543 之後它會自然轉綠。
-
-        本測試原本要驗的安全斷言（flag 不洩漏）另經獨立探針驗證為通過，
-        migration 的 try/finally 是對的——見 #543 內文。
+        fixture 落在 allow × email_domain 這個交集上，所以本測試同時是 #543 的
+        迴歸測試：migration 若沒繞過 `_check_allow_policy_no_bulk_grant`
+        （`security_access_access_policy_rule.py` 的 `create()` 主動呼叫，非
+        `@api.constrains`），`migrate()` 會拋 ValidationError——那正是任何仍停在
+        < 18.0.1.0.39 且帶 allow × (email_domain|everyone) flat policy 的 DB
+        （主要是從舊備份還原的情境）升版中斷的形狀。
         """
         self._add_legacy_flat_cols()
         try:
@@ -135,5 +144,10 @@ class TestPRuleMigration(TransactionCase):
             self.assertFalse(
                 getattr(self.env.cr, 'sa_skip_policy_quota', False),
                 "cursor bypass flag must be cleared after migrate() returns")
+            self.assertFalse(
+                getattr(self.env.cr, 'sa_skip_bulk_grant_check', False),
+                "sa_skip_bulk_grant_check must be cleared after migrate() "
+                "returns — a leak silently disables the #352 bulk-grant guard "
+                "for the rest of the transaction")
         finally:
             self._drop_legacy_flat_cols()

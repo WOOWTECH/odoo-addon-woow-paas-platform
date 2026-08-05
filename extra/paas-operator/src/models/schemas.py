@@ -294,6 +294,17 @@ class ReleaseInfo(BaseModel):
     revision: int
     status: ReleaseStatus
     chart: str
+    # #552: the chart **version** actually resolved by Helm. Both parsers used to
+    # throw it away (`_parse_release_info` read only `metadata.name`;
+    # `_parse_list_release_info` split it off and dropped the tail), so the
+    # platform could never record what it really installed — and with an empty
+    # `--version` Helm resolves to the registry's *latest*, which nobody logged.
+    #
+    # ⚠ MUST stay `Optional[str] = None`: making it required would break every
+    # direct `ReleaseInfo(...)` construction in the test-suite AND the
+    # backward-compatibility contract with an older operator deployment (Odoo
+    # reads `None` ⇒ keeps its current value rather than blanking the ledger).
+    chart_version: Optional[str] = None
     app_version: str
     updated: str
     description: Optional[str] = None

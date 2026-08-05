@@ -288,8 +288,38 @@ from . import test_gateway_capability_payload_530
 # （2026-08-03 拆成兩張 PR：P-rule 那批帶一條紅燈見 #543，避免污染 develop 全綠基準）
 from . import test_ai_assistant
 # T2：本檔自建立起未被匯入 ⇒ Odoo test loader 收不到、3 條測試從未執行過
-# ⚠️ 其中 1 條目前是紅的，紅的原因是 #543 的真缺陷（不是測試壞了）——詳見該檔註解
+# （#543 已修：原本紅的那條是 fixture 撞 #352 守衛，鷹架 rule 改安全型別後
+#  才真的跑到 migrate()，見該檔 _make_legacy_policy 說明）
 from . import test_security_access_p_rule_migration
 # fix: #535 租戶填入的憑證（type: password）在服務詳情 API 明文回傳 —— 遮罩改 spec-driven
 # ＋ read/write 同契約（遮罩後的星號不得被存檔寫回真憑證，D1 實測坐實）
 from . import test_credential_mask_spec_driven_535
+# fix: #552 chart 版本帳本——四條成功路徑回寫 operator 回報的實際版本
+# ＋ reconfigure 的 version fallback（原本恆傳 None ⇒ 全部 15 個 template 都不釘版）
+from . import test_chart_version_ledger_552
+
+# fix: #552 層 1 —— seed template 的 helm_chart_version 不得留空
+# （留空 ⇒ helm 不帶 version 旗標 ⇒ 抓 registry 當下 latest、帳本記空）
+from . import test_seed_chart_version_pin_552
+
+# fix: #552 層 4 —— 沒釘 chart 版本就不准部署（首裝共同咽喉／存量 pending backstop／
+# redeploy），＋ poll 補第五條帳本回寫路徑（抓非平台發起的 chart 變動）
+from . import test_chart_pin_fail_closed_552
+# fix: #553 skip-trial-estimate 回傳例外原文 → 外洩 Odoo 內部 model／欄位技術名
+from . import test_skip_trial_estimate_error_leak_553
+# fix: #525 B3 reset-admin-password 在提交點之後失敗被回報成「重設失敗」→
+# 已生效的一次性明文密碼永久遺失（此處**不得**補 rollback，理由見該檔開頭）
+from . import test_reset_admin_password_post_commit_525b3
+# fix: #525 B5 輪詢器收屍（`_update_service_status` 404 分支）的 `unlink()` 中途
+# 失敗 → 例外逸出 except handler → 被 `_list_services` 的 catch-all 接住，而
+# catch-all 自己 log `svc.name` 撞 MissingError 再逸出 ⇒ 今天是整支清單端點 500；
+# 那道保護只有一個 token 寬（實測：log 改成不會拋 ⇒ 殘留立刻落地）
+from . import test_poll_teardown_rollback_525
+# fix: #525 B4 _update_project_mcp_server 吞 ValidationError → 欄位已改、API 說失敗
+# （結構缺陷，目前潛伏；含「不包 try 的對照組真的不留殘留」實測）
+from . import test_update_project_mcp_residue_525_b4
+# fix: #554 MCP sync／connection test 失敗被雙層吞掉 → API 回 success:True（#525 B1／B2 的真修法）
+from . import test_mcp_sync_failure_visibility_554
+# fix: #559 cloud_service.helm_values 缺欄位級授權 —— 租戶可用 call_kw 直讀明文憑證
+# 繞過 #535 的 controller 遮罩層（實測坐實）；補 groups= ＋ 提權入口 ＋ 租戶身分覆蓋
+from . import test_helm_values_field_acl_559

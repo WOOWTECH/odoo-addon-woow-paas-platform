@@ -71,8 +71,14 @@ class AgentTemplate(models.Model):
         Pattern: constraint-input-trust-expansion. See pattern doc for the full
         attack chain and bypass logic.
         """
-        SUPERUSER_ID = 1
-        if self.env.uid == SUPERUSER_ID or self.env.user.has_group('base.group_system'):
+        # ⚠ bypass 判準必須是 env.is_superuser()，不可寫 env.uid == SUPERUSER_ID：
+        # Odoo 的 sudo() 只把 env.su 設 True，**uid 不變** —— 見 odoo/models.py 的
+        # BaseModel.sudo() docstring 逐字：「The superuser mode does not change the
+        # current user, and simply bypasses access rights checks.」
+        #（刻意記符號不記行號：同一台機器上可能同時存在兩份自稱 18.0 的 odoo，
+        #  同一個檔案的行號差 16 行，任何一個數字都只對其中一份為真）
+        # 用 uid 比對會讓所有 .sudo() 合法寫入路徑掉進 grantor 檢查 → 假性 ValidationError。
+        if self.env.is_superuser() or self.env.user.has_group('base.group_system'):
             return  # bypass — admin / migration / cron all need to write across projects
 
         grantor_partner = self.env.user.partner_id
@@ -182,10 +188,42 @@ Create direction 也走 `@api.constrains('project_ids')` trigger — Odoo 在 cr
 
 **Bypass 路徑風險評估**：
 
-- SUPERUSER bypass：Odoo `env.uid == SUPERUSER_ID` 只能由 `sudo()` / install hook / migrate context 進入 — 不會被 controller-level user code 觸發
+- SUPERUSER bypass：判準是 `env.is_superuser()`（即 `env.su`），涵蓋兩種入口：uid 真的是 1 的 root env（install hook / migrate / `api.Environment(cr, SUPERUSER_ID, {})`），以及任何 `.sudo()` recordset。**`sudo()` 不改 uid，只把 `su` 設 True** —— `odoo/models.py` 的 `BaseModel.sudo()` docstring 逐字：「The superuser mode does not change the current user, and simply bypasses access rights checks.」；`odoo/api.py` 的 `__new__` 又有 `if uid == SUPERUSER_ID: su = True`，所以 `is_superuser()` 是 `uid == SUPERUSER_ID` 的**嚴格超集**。**不可**用 `env.uid == SUPERUSER_ID` 代替 —— 那會漏掉全部 `.sudo()` 路徑，把合法 seeding / bootstrap 一起擋掉（silent functional regression，見下方 Anti-patterns 表）。
+  ⚠ 「cron 走 SUPERUSER」這句要小心：`ir.cron` 以 cron 記錄上的 `user_id` 執行，常是 admin（uid=2）而非 OdooBot（uid=1），那種情況兩種判準都不放行、只靠 `base.group_system` 那一腿過。
 - `base.group_system` bypass：Odoo std `Settings` 群，比 `base.group_user` 高一階；一般 tenant user 沒 group_system；本 PaaS 平台 group_system 通常只給 platform admin（操作 backend）
 
-兩條 bypass 都比 m2m write 通用 surface 窄；不會放大 attack surface。
+**surface 有多窄，要看今天有沒有 tenant-reachable 的 sudo write-site**：把 bypass 從 `uid == 1` 放寬到 `is_superuser()`，等於把「任何 tenant 可觸發、且伺服器端有 `.sudo()` 的寫入路徑」都納入 bypass —— 而本 repo 的 tenant 請求**大量**在伺服器端走 `.sudo()`（例：`src/controllers/ai_assistant.py:1554` `request.env['project.project'].sudo().create(vals)`）。實查：今天**零個** tenant-reachable 的路徑會寫 `agent_template.project_ids`（`src/controllers/` 與 `src/services/` 內對 agent_template 的引用全是 resolve / read，無 `.sudo().write({'project_ids'…})`）。這是**今日事實不是結構保證**——新增這種 write-site 時必須重估。
+
+**⚠ 兩種語意不要混用（`is_superuser()` vs `uid == SUPERUSER_ID`）**：
+
+| 用途 | 正確判準 | 理由 |
+|------|---------|------|
+| **Bypass guard**（constraint / ACL 檢查要放行系統路徑） | `env.is_superuser()` | 必須涵蓋 `.sudo()`；漏掉 = 擋死合法 seeding / bootstrap |
+| **Branch selector**（判「這個 env 背後有沒有真人」，決定記名給誰） | `env.uid == SUPERUSER_ID` | 要的是「真 root env」；`.sudo()` 背後仍有真人，其 `env.user` 才是該記名的對象 |
+
+本 repo 的 bypass guard 都用 `is_superuser()`（`agent_template.py:108`、`project_access.py:136`）。
+另有一處用 `uid == SUPERUSER_ID`：`project_project.py:314`（下方 §Forward-looking invariant 的 owner-bootstrap）。
+
+> 🔴 **對那一行，本 doc 只下「載重」的判斷，不下「刻意」的判斷。**
+>
+> **載重是可證的**：`/woow` 自助建 project 走 `ai_assistant.py:1554` 的
+> `project.project.sudo().create()`（uid 是租戶本人、su=True），現況落 else 分支
+> → `:328 partner = self.env.user.partner_id` → `:341` 建 owner 列。若改成 `is_superuser()`
+> 會落 if 分支、無 hint 即 `:317 return projects` ⇒ **租戶建的 project 一列 `project_access` 都沒有**
+> （孤兒：看不到、進不去、刪不掉，後果見 `src/controllers/paas.py:353` 註解）。
+> 而全 repo 建立 owner 列的地方就只有 `:341` 這一處。
+>
+> **「刻意」則未經證實**：同一個檔案 `:293-295` 的註解、以及
+> `src/tests/test_agent_pod_phase_d_hardening.py` 的兩處 docstring / 斷言訊息，
+> 原本都把 `.sudo()` 寫成「進得了 SUPERUSER 分支」——**三處印著相反的心智模型**
+> （本次 #547 已一併更正這三處文字，但那只證明今天的文字對，不證明當初的判準是設計出來的）。
+> 而且在本次補測之前，**沒有任何測試鎖住它**：F-PA-14 的三條測試裡，兩條在 uid 已是 1 的
+> `TransactionCase` env 上呼叫 `.sudo()`（依 `odoo/models.py` 的 `if flag == self.env.su: return self`
+> 是 no-op），一條是 `.with_user()` 不帶 `.sudo()`（su=False）——三條在兩種判準下都綠。
+>
+> ⇒ 它在行為上恰好是對的。**把良性巧合封成規範，就是下一輪的 #547**，所以本 doc 只把它列為
+> 「改了會壞、動之前先看測試」，不把它當作「兩種語意」的正面示範。真正的守線是那條
+> regression test（見 §Test scaffolding 的 HC3.7）。
 
 ### 為什麼比 [[two-layer-acl-lockstep]] 更窄但 cross-cut
 
@@ -226,8 +264,9 @@ agent_template.project_ids 寫 attempt
 | 「Python constraint 用 `write()` override 而非 `@api.constrains`」 | Create direction 漏守 — attacker 透過 `create({'m2m_field': [(6, 0, [legit, victim])]})` 一招過 |
 | 「Constraint loop 用 `tmpl.project_ids - tmpl._origin.project_ids`（delta-only）」 | 從 `_origin` 取 diff 看似聰明，但對 create direction 無 `_origin`；且 future regression：若 constraint 改成 delta-only，攻擊者改 `create + immediate write` 兩步同樣繞 — **always loop full m2m membership** |
 | 「Constraint 漏 `is_superuser()` 或 `has_group('base.group_system')` bypass」 | Migration / cron / admin form 全擋住 — silent functional regression |
+| 「Bypass 寫成 `env.uid == SUPERUSER_ID` 而非 `env.is_superuser()`」 | `sudo()` 不改 uid（只設 `env.su`；`odoo/models.py` 的 `BaseModel.sudo()` docstring）⇒ 所有 `.sudo()` 合法路徑都繞不過 constraint。後果鏈：`project.project.sudo().create()` → bootstrap `project_access.sudo().create({'role':'owner'})` → grantor 查無 row → `ASSIGNABLE_ROLES_BY_ROLE.get(None, [])` = `[]` → `AccessError` → 租戶連 project 都建不了 |
 | 「Constraint 用 `env.user.has_group('base.group_user')` 反向 deny」 | 任何 internal user 都過 group_user check（Odoo std），結果什麼都 deny — pattern 反向實作 |
-| 「Constraint `search([(..., '=', user.id)], limit=1)` 沒走 `sudo()`」 | base.group_user 對 `project_access` 的 ir.rule 收緊 user 只看自己 row → constraint 評估 victim B 上 attacker 是否有 row 看到 empty → 誤判 deny 為 missing access (correct effect) — 但邊界情境若 ir.rule 對 `project_access` 改寬鬆，constraint 邏輯隨之變動 → **走 `sudo()` 鎖死 ground truth** |
+| 「Constraint `search([(..., '=', user.id)], limit=1)` 沒走 `sudo()`」 | base.group_user 對 `project_access` 的 ir.rule 收緊 user 只看自己 row → constraint 評估 victim B 上 attacker 是否有 row 看到 empty → 誤判 deny 為 missing access (correct effect) — 但邊界情境若 ir.rule 對 `project_access` 改寬鬆，constraint 邏輯隨之變動 → **走 `sudo()` 鎖死 ground truth**。⚠ 2026-08 實況：本 doc 自稱的 canonical 實作 `src/models/agent_template.py:113-115` 用的是**未 sudo** 的 `proj.project_access_ids.filtered(...)`（O2M 讀取，受 `project_access` 的 ir.rule 影響）——**這一列是 doc 對 code 的要求，code 尚未照做**，方向與本 doc 其他條相反，別誤讀成現況描述 |
 | 「`is_public=True` 路徑漏走 constraint」 | `is_public` template 本意是「ignore project_ids」，但若 attacker set `is_public=True` + 帶 victim project 進 `project_ids` — `_check_visibility_consistency` 允許（is_public=True 不要求 project_ids），但 grantor constraint 對非空 `project_ids` 仍應評估 — 否則 attacker 用 is_public 旁路 |
 | 「在 `_check_mcp_subset` 或其他 `_check_*_subset` 內預期 `project_ids` 已被驗證」 | 兩 constraint Odoo `@api.constrains` 不保證 evaluation order — `_check_mcp_subset` 評估時若 `project_ids` 已含 victim，subset 結果含 victim's MCP → 即使 grantor constraint 後 raise，rollback timing 內 subset error message 可能 leak「victim project 上有 MCP X」訊息 — 細節：**raise 必須 raise 不可信任的 element 名，不可 leak 衍生資訊** |
 
@@ -239,10 +278,14 @@ agent_template.project_ids 寫 attempt
 |------|-----------|--------------|--------------|----------|
 | HC3.1 | write `[(4, B)]` to T(project_ids=[A]) | admin/owner | none | `ValidationError` |
 | HC3.2 | write `[(4, B)]` to T(project_ids=[A]) | admin/owner | admin/owner | success |
-| HC3.3 | sudo() context write same as HC3.1 | (n/a) | (n/a) | success (bypass) |
+| HC3.3 | **非 root user** 的 `.with_user(attacker).sudo()` write same as HC3.1 | admin/owner on A only | none | success (bypass) |
 | HC3.4 | base.group_system user write same as HC3.1 | (n/a) | (n/a) | success (bypass) |
 
 **HC3.1 是 reproducer，HC3.2/3/4 鎖 bypass path** — 後續 PR 若把 bypass 改窄（如拿掉 group_system bypass）立刻 trip HC3.4。
+
+⚠ **HC3.3 必須用「真實非 root user ＋ `.sudo()`」建構。** 若直接在 `TransactionCase` 的 `self.env`（uid 本來就是 1，`odoo/tests/common.py` 的 `api.Environment(cls.cr, odoo.SUPERUSER_ID, {})`）上呼叫 `.sudo()`，那是 no-op（`odoo/models.py` 的 `sudo()`: `if flag == self.env.su: return self`），`uid == SUPERUSER_ID` 與 `is_superuser()` 兩種寫法都會通過 → **這條 test 零鑑別力**，擋不住把 bypass 寫回 uid 比對的 regression。順序是關鍵：`with_user(非 root)` 會設 `su=False`（`api.py` 只有 uid==1 才自動 su），接著 `.sudo()` 把 su 打回 True 而 uid 仍是那個 user。現行 `src/tests/test_agent_pod_phase_a_acl_new_models.py` 的 HC3.3 正是無鑑別力的形狀，待收緊。
+
+**HC3.7（branch selector 的守線，#547 補）**：以**非 root user** 走 `.with_user(u).sudo().create()` 建 project，斷言 `u` 拿到 `role='owner'` 的 `project_access` 列。這條鎖的是 `project_project.py:314` 那個 branch selector —— 把它改成 `is_superuser()` 會讓租戶自助建的 project 零 owner 列。**測試本身要斷言前提** `u.id != SUPERUSER_ID`：這條測試的鑑別力完全建立在 `u` 是非 root 上，前提一旦被改掉（改成 `with_user(1)` 或直接 `.sudo()` 不帶 `with_user`）就會靜默退化成恆真。落地見 `src/tests/test_agent_pod_phase_d_hardening.py` 的 `test_FPA14_non_root_sudo_create_self_owns`。
 
 ### 補完整 matrix（建議但非必要）
 
@@ -259,6 +302,12 @@ agent_template.project_ids 寫 attempt
 本 pattern 在 epic 內第四度出現（Phase A HC-3 m2m grantor → Phase B HC-2 WS payload→claims → Phase C C-1 token_use → **Phase D F-PA-14 owner-bootstrap hint**），每次技術 surface 不同、抽象同一。Phase D 的 instance 是 `project.project.create()` 的 owner-bootstrap：
 
 ```python
+# NOTE: 這裡是 branch selector 不是 bypass guard，所以判準是 uid 比對而非
+# is_superuser()（見上方「兩種語意不要混用」）。sudo() 背後有真人時必須落
+# else 分支，讓他自己成為 owner —— /woow 自助建 project 正是走
+# ai_assistant.py:1554 的 project.project.sudo().create()。
+# ⚠ 這一行是**載重**的（改成 is_superuser() 會讓租戶建的 project 零 owner 列），
+#   但「當初是刻意設計成兩種語意」未經證實。改動前先看 HC3.7 那條 regression test。
 if self.env.uid == SUPERUSER_ID:
     hint_partner_id = self.env.context.get('bootstrap_owner_partner_id')
     if not hint_partner_id: return projects   # 無 hint → 不 auto-own
@@ -273,9 +322,9 @@ else:
 
 > `bootstrap_owner_partner_id` 是 **superuser-only 的 out-of-band channel**；其值必須 **server-authoritative**（來自 provisioning record，或已認證真人自己的 partner_id），**任何 controller 不得從 `kw` / `params` / inbound `context` 填入**。
 >
-> 今日 production **零 set-site**（grep 確認，唯一 consumer 是 `project_project.py:130` read-site）。未來某 phase 接 operator provisioning 真 set-site 時，**違反此條 = 把 bootstrap 便利退化成 ownership-assignment 原語（B1 復發）**。set-site 作者必須確認 hint 來源是 server 算的（非 request body）—— Odoo 18 `request.env.context` 不 merge request body（`JsonRPCDispatcher` 把 JSON `params` 放 `request.params` plain kwargs，不進 `request.env.context`），但若 controller 顯式 `with_context(bootstrap_owner_partner_id=kw[...])` 把 untrusted 值傳下去就破功。
+> 今日 production **零 set-site**（`git grep -n bootstrap_owner_partner_id -- src/` 全部命中：production 只有 `project_project.py:315` 這個 read-site 與 `:295` 的說明註解，其餘全在 `src/tests/`）。未來某 phase 接 operator provisioning 真 set-site 時，**違反此條 = 把 bootstrap 便利退化成 ownership-assignment 原語（B1 復發）**。set-site 作者必須確認 hint 來源是 server 算的（非 request body）—— Odoo 18 `request.env.context` 不 merge request body（`JsonRPCDispatcher` 把 JSON `params` 放 `request.params` plain kwargs，不進 `request.env.context`），但若 controller 顯式 `with_context(bootstrap_owner_partner_id=kw[...])` 把 untrusted 值傳下去就破功。
 
-read-site comment（`project_project.py:119-128`）已就地警告此 SET-SITE invariant（[[two-layer-acl-lockstep]] 精神：knowledge 同時落 pattern doc + code-site）。
+read-site comment（`project_project.py:304-313`，`⚠ SET-SITE INVARIANT` 那段）已就地警告此 invariant（[[two-layer-acl-lockstep]] 精神：knowledge 同時落 pattern doc + code-site）。
 
 ## See also
 

@@ -59,7 +59,8 @@
         "docs/decisions/patterns/external-resource-env-token-naming.md — 動 canonical_name / generate_subdomain 命名根時的 env token 注入與 create↔delete 對稱",
         "docs/decisions/patterns/helm-reset-values-unified-pipeline.md — 動 cloud_service 部署路徑（_assemble_deploy_values／action_redeploy／_reset_admin_password）時：既存 release 升級走全量 values 統一管線＋reset_values 語意，禁 reuse_values=True（repo-lint 攔）",
         "docs/decisions/patterns/hidden-template-presentation-chain.md — 動 /woow 曝光點或**既有服務的操作端點**時：先分層（曝光層 is_hidden vs 實例層 conceal_instances，#471），實例層判準用 template_id.conceal_instances（repo-lint check_conceal_instances_gate 機械攔），gate 要放在能力/狀態判準之前",
-        "docs/decisions/patterns/reset-async-budget-ladder.md — 動 _reset_admin_password 的落庫／狀態語意時：提交點＝operator 回 2xx（commit-on-secret，C11′），2xx 前失敗保證叢集仍是舊密碼所以刻意不落庫、成功必 stamp upgrading 交給 cron／前端輪詢收斂；改提交點要連同不變式一起重寫，勿照舊 C11「已生效」語意把它「修正」回去"
+        "docs/decisions/patterns/reset-async-budget-ladder.md — 動 _reset_admin_password 的落庫／狀態語意時：提交點＝operator 回 2xx（commit-on-secret，C11′），2xx 前失敗保證叢集仍是舊密碼所以刻意不落庫、成功必 stamp upgrading 交給 cron／前端輪詢收斂；改提交點要連同不變式一起重寫，勿照舊 C11「已生效」語意把它「修正」回去",
+        "docs/decisions/patterns/post-commit-bookkeeping-rollback-unit.md — 動「先對外部系統下達不可回捲的變更、再寫 DB」的 method（_reset_admin_password／_execute_deploy／action_redeploy／遠端 provision）時：先定位提交點，再問這個 except 落在哪一側——之後的例外只是**記帳**失敗，不得翻轉回應語意、不得補 cr.rollback()（會把「一致但租戶不知情」換成 DB↔叢集不一致）；回捲單位要對齊事實邊界（憑證落庫與衍生記帳分開包 cr.savepoint()），OperationalError 一律外拋（#518）"
       ]
     },
     {
@@ -80,7 +81,7 @@
       "docs": [
         "docs/decisions/patterns/seed-agent-template-design.md — seeded default 的設計依據與 invariant",
         "docs/tracking/pitfalls/default-agent-template-project-bind-silent-autoenable.md — default 被綁 project → auto-enable 靜默全失效；demo 與 default 分工勿互換",
-        "CLAUDE.md「Seeded 平台預設 agent_template 的 tenant-neutral invariant」條 — post_init 未設才指、不覆寫 admin 已選"
+        "CLAUDE.md — 「Seeded 平台預設 agent_template 的 tenant-neutral invariant」條：post_init 未設才指、不覆寫 admin 已選"
       ]
     },
     {
@@ -107,8 +108,8 @@
     },
     {
       "class": "subscription-billing",
-      "pattern": "^src/models/sh_subscription[a-z_]*\\.py$",
-      "why": "subscription 日期/計費邏輯與第三方 sh_subscription addon 深耦合，date helper 與 plan 強制覆寫有既往翻車史（#324/#327/#366）",
+      "pattern": "^src/models/(sh_subscription[a-z_]*|subscription_lifecycle_mixin)\\.py$",
+      "why": "subscription 日期/計費邏輯與第三方 sh_subscription addon 深耦合，date helper 與 plan 強制覆寫有既往翻車史（#324/#327/#366）。⚠ 必須含 subscription_lifecycle_mixin.py：plan-driven-date-helper 講的 _force_trial_dates_from_plan / _force_active_dates_from_plan 就住在那個檔，只綁 sh_subscription* 會讓改那兩個 helper 的人永遠收不到這份 doc",
       "docs": [
         "docs/decisions/patterns/plan-driven-date-helper.md — subscription 日期由 plan 強制覆寫（trial/non-trial）且與第三方 onchange 有 post-confirm coupling 時",
         "docs/decisions/patterns/template-vs-plan-property-boundary.md — plan 級 vs template 級屬性邊界（有人提議 plan 加 image 欄位時必讀）"

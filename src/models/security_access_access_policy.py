@@ -138,7 +138,41 @@ class SecurityAccessAccessPolicy(models.Model):
         程式碼在讀，補完本檢查後席位數與實際放行人數之間仍然沒有連線（#521）。
         另外 allow + include + ``ip_range``（如 ``0.0.0.0/0``）與 ``country``
         同樣不計人頭卻會佔席位，是第三、四條繞過路徑，**不在本次範圍**。
+
+        ## migration bypass：``cr.sa_skip_bulk_grant_check``（#543）
+
+        本守衛 2026-08-02 才加入（#352），而把 flat policy 轉成 include rule 的
+        ``migrations/18.0.1.0.39/post-migrate.py`` 早在 2026-06-13 就存在。任何
+        仍停在 ``< 18.0.1.0.39`` 且帶 allow × (email_domain|everyone) flat policy
+        的 DB（**主要是從舊備份還原**，不是日常升版）升版時，migration 的
+        ``Rule.create`` 會撞上這條守衛而**整個升版中斷**。
+
+        擋住升版並不會讓那筆 bulk-grant 資料消失——它在 pre-P-rule 時代就已經
+        寫在 policy 的 flat 欄位裡了。migration 只是**換形狀**，不改語意；真正
+        該擋的是「使用者現在新寫一條」，那條路徑不帶本 flag，照擋。
+
+        因此 ``.39`` migration 以本 flag 讓歷史資料 grandfather 通過，並在
+        migration 結束後**逐筆 WARNING 列出**這些政策（用本方法自己判定，不另
+        抄一份 rule_type 清單），讓它們可見而非被靜默漂白。
+
+        flag 放在 **transaction CURSOR** 而非 context。⚠ 這裡**不**照抄
+        ``sa_skip_policy_quota`` 的理由：那條的 context-stripped 論證是針對
+        ``_check_policy_quota``（trigger 含 ``security_access_id``，會被 stored
+        related 的延遲重算在 context-stripped env 裡再觸發一次）；本守衛的
+        trigger 是 ``decision`` / ``rule_ids``，不在那條重算路徑上。**實測
+        context flag 在 .39 的路徑上一樣有效**（#543 的鑑別實驗：把本判斷改成
+        ``self.env.context.get(...)`` 並在 ``Rule.with_context`` 帶上，A–E 五組
+        結果與 cursor 版完全相同）。
+
+        仍選 cursor 的理由是**涵蓋面**而非該路徑必要：本方法有三個呼叫端
+        （``Rule.create`` / ``Rule.write`` 的顯式呼叫、以及自身的
+        ``@api.constrains``），context flag 必須逐一掛對；cursor 是整個
+        transaction 共用，migration 只要在同一個 ``finally`` 裡與
+        ``sa_skip_policy_quota`` 一起清掉即可，日後 migration 若長出 write
+        路徑也不會靜默漏掉 bypass。
         """
+        if getattr(self.env.cr, 'sa_skip_bulk_grant_check', False):
+            return
         for pol in self:
             if pol.decision != 'allow':
                 continue

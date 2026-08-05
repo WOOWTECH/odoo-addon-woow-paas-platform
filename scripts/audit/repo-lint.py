@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """repo-lint：把「假綠家族」pitfall 轉成機械 gate 的靜態檢查工具。
 
-十四個 check（每條都對應一個已翻車的 pitfall，訊息內附文件指針）：
+十五個 check（每條都對應一個已翻車的 pitfall，訊息內附文件指針）：
 
 1. controller-sudo   src/controllers/*.py 的 .sudo( 呼叫點數量對 baseline 白名單；
                      新增 sudo() 必須有意識地更新 baseline（附 justification）。
@@ -75,6 +75,15 @@
                      `write()` 覆蓋掉 #279 擋 workspace 重指派的租戶隔離守衛，針對性測試
                      涵蓋不到、只有全套會紅。測試檔同樣涵蓋（重複 test method ＝前一個
                      永不執行的無聲假綠）。
+15. pattern-doc-registry  pattern doc 的三方登記表必須互為雙射（目錄實況 ／
+                     `.claude/hooks/pattern-guard-map.json` 的 docs 條目 ／
+                     `docs/decisions/patterns/README.md` 索引），且 map 的每個 docs
+                     條目都必須是**存在的檔案路徑**。#547 的根因是沒有任何機制會在
+                     doc 與 code 分歧時提醒任何人，而三份名單當下就已經對不上
+                     （32／30／31）；pattern-guard.py 又完全不驗證它印出來的路徑存在
+                     ⇒ 讀不到的東西被當必讀件餵給模型。
+                     ⚠ 只保證名單雙射與路徑存在，**不驗證 doc 內容與程式碼相符**。
+                     依據 docs/decisions/patterns/README.md「維護慣例」
 
 用法：
   scripts/audit/repo-lint.py --all                # 全 repo 掃描（CI / merge 前手動）
@@ -86,10 +95,12 @@ Fail-open：hook 模式下任何內部錯誤 → exit 0，絕不擋開發。
 """
 import ast
 import glob
+import io
 import json
 import os
 import re
 import sys
+import tokenize
 import xml.etree.ElementTree as ET
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -183,6 +194,80 @@ def read_baseline_pairs(path):
     return result
 
 
+_SUDO_CALL_RE = re.compile(r"\.sudo\(")
+
+
+def _blank_range(out, src, start, end):
+    """把 out[start:end] 的非換行字元換成空白（換行留著才不會位移行號）。"""
+    for i in range(start, end):
+        if src[i] != "\n":
+            out[i] = " "
+
+
+# f-string 的 replacement field 裡是**真的**呼叫點（``f"{rec.sudo().name}"``），必須被算到。
+# Python 3.12 起 tokenize 把 f-string 拆成 FSTRING_START／FSTRING_MIDDLE／FSTRING_END，
+# 字面部分才是 FSTRING_MIDDLE、field 內是一般 token ⇒ 留白 STRING 與 FSTRING_MIDDLE
+# 自然就保留了 field。3.11 以下整個 f-string 是單一 STRING token，直接留白會把 field
+# 裡的真呼叫一起吃掉 ⇒ **靜默少算**，正是本 check 要防的假陰性。
+# 這裡 fail-loud 而不是寫一條 ≤3.11 相容分支：本專案兩個執行環境都 >= 3.12
+# （CI 的 docker.gitea.com/runner-images:ubuntu-latest 實測 3.12.3），一條在任何實際
+# 路徑上都跑不到的分支，等於在 gate 自己的實作裡留一段沒有東西會驗的程式碼（#576）。
+_MIN_PYTHON = (3, 12)
+
+
+def _blank_python_comments_and_strings(src):
+    """把 Python 的 COMMENT／STRING／FSTRING_MIDDLE 原地換成**等長空白**。
+
+    註解與字串字面裡的 ``.sudo(`` 不是呼叫點——docstring 在描述用法、錯誤訊息
+    在引述寫法，兩者在語意上都不生效。一併留白字串不會漏掉動態呼叫：動態呼叫
+    （``getattr(rec, "sudo")()``）根本不長成 ``.sudo(`` 這個字面。
+
+    ⚠ 必須逐 token 換成**等長**空白，不可用 " ".join(tokens) 重組來源：後者會在
+    ``record.sudo(`` 中間插入空白，regex 全部對不上，量出來每個 controller 都是
+    0——而 0 看起來像個合理答案（「所以全都是註解？」）。留白策略與既有的
+    _strip_xml_comments 相同，行號與所有非註解字元的相對位置都保留。
+
+    語法錯誤的檔會讓 tokenize 丟 TokenError／IndentationError／SyntaxError：
+    **往外拋**，由呼叫端 fail-loud。不可 except 後退回全文計數——那會讓一個語法
+    錯的檔靜默回到「註解也算呼叫點」的舊行為。
+    """
+    if sys.version_info < _MIN_PYTHON:
+        raise RuntimeError(
+            "repo-lint 需要 Python >= %d.%d 才能正確計數 controller 的 .sudo( 呼叫點"
+            "（目前是 %d.%d.%d）。3.11 以下 tokenize 把整個 f-string 當成單一 STRING "
+            "token，留白時會連 replacement field 裡的真呼叫一起吃掉 ⇒ 靜默少算，正是 "
+            "#576 要修的假陰性。本專案 CI（docker.gitea.com/runner-images:ubuntu-latest）"
+            "與開發環境都已 >= %d.%d，故此處 fail-loud 而不做相容降級。"
+            % (_MIN_PYTHON + sys.version_info[:3] + _MIN_PYTHON))
+    line_starts = [0]
+    for idx, ch in enumerate(src):
+        if ch == "\n":
+            line_starts.append(idx + 1)
+    out = list(src)
+
+    def offset(pos):
+        row, col = pos
+        return line_starts[row - 1] + col
+
+    blanked = (tokenize.COMMENT, tokenize.STRING, tokenize.FSTRING_MIDDLE)
+    for tok in tokenize.generate_tokens(io.StringIO(src).readline):
+        if tok.type in blanked:
+            _blank_range(out, src, offset(tok.start), offset(tok.end))
+    return "".join(out)
+
+
+def controller_sudo_count(fp):
+    """單檔的 ``.sudo(`` 呼叫點數——check 與 --update-baseline 的**唯一**入口。
+
+    兩邊共用同一個函式，是為了讓「baseline 與 check 對同一份檔案得出不同數字」
+    在結構上不可能發生。#576 之前是兩處各寫一次 re.findall，只改一邊就會漂移，
+    症狀是「跑完 --update-baseline 之後 check 仍然紅」。
+    """
+    with open(fp, encoding="utf-8", errors="replace") as f:
+        src = f.read()
+    return len(_SUDO_CALL_RE.findall(_blank_python_comments_and_strings(src)))
+
+
 # ---------------------------------------------------------------- checks
 
 def check_controller_sudo(root, only_file=None):
@@ -195,8 +280,14 @@ def check_controller_sudo(root, only_file=None):
         if not os.path.exists(fp):
             continue
         rel = os.path.relpath(fp, root).replace(os.sep, "/")
-        with open(fp, encoding="utf-8", errors="replace") as f:
-            count = len(re.findall(r"\.sudo\(", f.read()))
+        try:
+            count = controller_sudo_count(fp)
+        except (tokenize.TokenError, IndentationError, SyntaxError) as exc:
+            violations.append(
+                "%s：tokenize 失敗（%s）——這個檔語法有問題，.sudo( 呼叫點無從判定。"
+                "本 check 刻意不退回全文計數（那會讓語法錯的檔靜默回到「註解也算呼叫點」"
+                "的舊行為，是 #576 修掉的缺陷）。先修語法再跑一次。" % (rel, exc))
+            continue
         allowed = baseline.get(rel, 0)
         if count > allowed:
             violations.append(
@@ -209,11 +300,15 @@ def check_controller_sudo(root, only_file=None):
 
 
 def current_sudo_counts(root):
+    """--update-baseline 的來源；判準與 check_controller_sudo 共用同一個入口。
+
+    這裡刻意**不** catch tokenize 例外：語法錯的檔要讓 --update-baseline 直接炸，
+    不能靜默寫出一個用舊判準（含註解）算出來的 baseline。
+    """
     counts = {}
     for fp in sorted(glob.glob(os.path.join(root, "src/controllers/*.py"))):
         rel = os.path.relpath(fp, root).replace(os.sep, "/")
-        with open(fp, encoding="utf-8", errors="replace") as f:
-            counts[rel] = len(re.findall(r"\.sudo\(", f.read()))
+        counts[rel] = controller_sudo_count(fp)
     return counts
 
 
@@ -1420,7 +1515,330 @@ def check_duplicate_class_methods(root, only_file=None):
     return violations
 
 
+# ---------------------------------------------------------------- #547 登記表雙射
+
+PATTERN_DOC_DIR = "docs/decisions/patterns"
+PATTERN_DOC_INDEX = "docs/decisions/patterns/README.md"
+PATTERN_GUARD_MAP = ".claude/hooks/pattern-guard-map.json"
+# 本 check 的處方與「維護慣例」都寫在索引檔自己裡（1. 同步登錄索引 2. 有路徑才進 map）。
+PATTERN_REGISTRY_DOC = PATTERN_DOC_INDEX
+
+# 刻意**不**納 pattern-guard-map 的 pattern doc（＋理由）。
+#
+# 依據 docs/decisions/patterns/README.md「維護慣例」第 2 條：「純判斷類（無路徑可綁）
+# 的 pattern **只留本索引**」。這兩份守的是 agent hand-off 當下的**事件**，不是某個
+# 檔案路徑——硬塞進 map 只會讓某個 class 的必讀清單再長一份、稀釋 payload（#547 的
+# 危害機制正是「這份 doc 一定會被讀到」）。
+#
+# 🔴 這裡不是待辦清單，是設計裁決，每加一筆都要在 PR 說明理由。而且它是**雙向**被
+# 守的：列在這裡卻其實已經進了 map（或檔案已不存在）一樣會紅，所以它不能拿來洗白
+# 「還沒登記」的 doc。
+PATTERN_DOC_MAP_EXEMPT = {
+    "docs/decisions/patterns/plan-gap-stop-and-report.md":
+        "agent 執行 hand-off 撞到 plan gap 時的處置紀律；觸發條件是事件不是路徑",
+    "docs/decisions/patterns/phase-leader-brief-as-pointer-not-source.md":
+        "brief 與 source-of-truth 衝突時的處置紀律；同上，無檔案路徑可綁",
+}
+
+_PATTERN_INDEX_LINK_RE = re.compile(r"^\s*-\s*\[[^\]]*\]\(([^)]+)\)\s*$")
+_PATTERN_INDEX_WIKILINK_RE = re.compile(r"^\[\[([^\]]+)\]\]$")
+_PATTERN_INDEX_COUNT_RE = re.compile(r"完整\s*(\d+)\s*條")
+
+
+def _pattern_doc_files(root):
+    """目錄實況：`docs/decisions/patterns/*.md`（索引檔 README.md 自己不算一份）。"""
+    out = set()
+    for path in glob.glob(os.path.join(root, PATTERN_DOC_DIR, "*.md")):
+        base = os.path.basename(path)
+        if base == "README.md":
+            continue
+        out.add("%s/%s" % (PATTERN_DOC_DIR, base))
+    return out
+
+
+def _pattern_guard_map_entries(root):
+    """回 (entries, errors)。entries 是 (class, path, raw) 三元組。
+
+    路徑取條目的 em-dash 前段——map 的登記格式是 `路徑 — 一句何時必看`
+    （README.md「維護慣例」2 明訂）。取**第一個** em-dash 之前，所以描述裡再出現
+    em-dash 不影響。
+    """
+    path = os.path.join(root, PATTERN_GUARD_MAP)
+    if not os.path.exists(path):
+        return [], ["%s 不存在——pattern-guard hook 的對照表是本檢查的登記表之一，"
+                    "缺檔等於整條守線消失（見 %s）。"
+                    % (PATTERN_GUARD_MAP, PATTERN_REGISTRY_DOC)]
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except (ValueError, OSError) as exc:
+        # fail-loud：解析不了就**停在這裡**。拿空清單去比對會得出「map 什麼都沒登記」
+        # 這種誤導的 violation 海，真因（JSON 壞了）反而被淹掉。
+        return [], ["%s 解析失敗：%s。pattern-guard.py 對此是 fail-open（`except: allow()`）"
+                    "⇒ JSON 一壞，11 個 class 的必讀守線全部靜默失效，**沒有任何訊號**"
+                    "（見 %s）。" % (PATTERN_GUARD_MAP, exc, PATTERN_REGISTRY_DOC)]
+    entries, errors = [], []
+    classes = data.get("classes")
+    if not isinstance(classes, list):
+        return [], ["%s 缺少 `classes` 陣列（見 %s）。"
+                    % (PATTERN_GUARD_MAP, PATTERN_REGISTRY_DOC)]
+    for idx, cls in enumerate(classes):
+        name = cls.get("class") or "#%d" % idx
+        pattern = cls.get("pattern")
+        if not pattern:
+            errors.append("%s：class `%s` 沒有 `pattern`，pattern-guard.py 會 KeyError "
+                          "→ 全域 fail-open（見 %s）。"
+                          % (PATTERN_GUARD_MAP, name, PATTERN_REGISTRY_DOC))
+        else:
+            try:
+                re.compile(pattern)
+            except re.error as exc:
+                # pattern-guard.py:64 對 re.error 是 `continue` ⇒ 這個 class 整個
+                # 消失、**不會有任何錯誤訊息**。編不起來的 regex 必須在 CI 就紅。
+                errors.append("%s：class `%s` 的 pattern 編不起來（%s）。pattern-guard.py "
+                              "對 re.error 是靜默 `continue` ⇒ 這個 class 的守線整條"
+                              "消失且沒有任何訊號（見 %s）。"
+                              % (PATTERN_GUARD_MAP, name, exc, PATTERN_REGISTRY_DOC))
+        for raw in cls.get("docs") or []:
+            entries.append((name, raw.split("—", 1)[0].strip(), raw))
+    return entries, errors
+
+
+def _pattern_index_registers(root):
+    """回 (toc, topic, counts, errors)：README 索引的三個登記面。
+
+    - toc   ：「完整檔案清單」的 markdown 連結目標
+    - topic ：「何時必看」各主題表**第一欄**的 `[[slug]]`（只認第一欄——描述欄裡的
+              交叉引用不是登記，把它算進去會讓「只被別人提到、自己沒有列」的 doc
+              誤判成已登記）
+    - counts：頂部「完整 N 條」宣告的所有 N
+    """
+    path = os.path.join(root, PATTERN_DOC_INDEX)
+    if not os.path.exists(path):
+        return set(), set(), [], [
+            "%s 不存在——它是 pattern doc 的人工索引，缺檔等於 CLAUDE.md 指針化之後"
+            "沒有任何地方列得出完整清單（見 %s）。"
+            % (PATTERN_DOC_INDEX, PATTERN_REGISTRY_DOC)]
+    with open(path, encoding="utf-8", errors="replace") as f:
+        lines = f.read().splitlines()
+    toc, topic, section = set(), set(), None
+    for line in lines:
+        if line.startswith("## "):
+            if line.startswith("## 完整檔案清單"):
+                section = "toc"
+            elif line.startswith("## 何時必看"):
+                section = "topic"
+            else:
+                section = None
+            continue
+        if section == "toc":
+            m = _PATTERN_INDEX_LINK_RE.match(line)
+            if m:
+                toc.add("%s/%s" % (PATTERN_DOC_DIR, os.path.basename(m.group(1))))
+        elif section == "topic" and line.lstrip().startswith("|"):
+            first = line.strip().strip("|").split("|")[0].strip()
+            m = _PATTERN_INDEX_WIKILINK_RE.match(first)
+            if m:
+                topic.add("%s/%s.md" % (PATTERN_DOC_DIR, m.group(1)))
+    counts = [int(n) for n in _PATTERN_INDEX_COUNT_RE.findall("\n".join(lines))]
+    return toc, topic, counts, []
+
+
+def _registry_diff(violations, actual, registered, what, fix, extra="", reverse=True):
+    """把兩個集合的差報成 violation。
+
+    🔴 這裡刻意寫成集合差而不是 `for x in 登記表: assert exists(x)`。後者是宣告式
+    清單的經典假綠洞：**把一筆從登記表拿掉＝迴圈少跑一輪＝照樣綠**，缺陷沒修但顏色
+    是對的（見 seed-topology-invariants.md：會下降的量不可用 monotonic 守衛）。
+
+    `reverse=False` 用在「登記表 → 目錄」那個方向**已經有更精確的訊息**的情況
+    （map 那一側由 dangling-ref 逐筆點名 class，豁免清單那一側有自己的訊息）。
+    刻意不做的事要寫成參數而不是註解——INJ-4 實測過：註解寫「反向不報」而程式碼照
+    報，同一次注入被報成兩筆。
+    """
+    for rel in sorted(actual - registered):
+        violations.append(
+            "%s：目錄裡有這份 pattern doc，但 %s 沒有登記它。%s%s（見 %s）"
+            % (rel, what, fix, extra, PATTERN_REGISTRY_DOC))
+    if not reverse:
+        return
+    for rel in sorted(registered - actual):
+        violations.append(
+            "%s：%s 登記了它，但 `%s/` 裡沒有這個檔案（改名／刪除沒同步？）。"
+            "登記表指向不存在的檔案，讀的人會以為那份守線還在（見 %s）"
+            % (rel, what, PATTERN_DOC_DIR, PATTERN_REGISTRY_DOC))
+
+
+def check_pattern_doc_registry(root):
+    """pattern doc 的三方登記表必須互為雙射，且 map 指到的路徑必須是存在的檔案。
+
+    #547 的根因：`docs/decisions/patterns/` 有 6 份文件教的做法與現行程式碼相反、
+    16 份行號過期，而**沒有任何機制**會在任何時候提醒任何人回頭看 doc。這條 check
+    補的是那一環的**地基**——先讓「同一份名單有三個登記處而且現在就對不上」變成紅的。
+
+    三方（實測 develop c723a44d：目錄 32 / map 30 / README 索引 31，三個數字互不相等）：
+
+    1. `docs/decisions/patterns/*.md` 的目錄實況（索引檔 README.md 自己不算）
+    2. `.claude/hooks/pattern-guard-map.json` 的 `docs` 條目（＋刻意豁免清單）
+    3. `docs/decisions/patterns/README.md` 的「何時必看」表與「完整檔案清單」，
+       外加頂部「完整 N 條」的計數宣告
+
+    再加一條 dangling-ref：**map 的每個 docs 條目都必須是存在的檔案路徑**。
+    `pattern-guard.py` 全檔只 `json.load` 這份 map，對 docs 條目沒有任何
+    `os.path.exists` ⇒ 它會把根本不存在的路徑當必讀件印給模型（實例：本 check
+    上線前 map 裡有一筆 `CLAUDE.md「Seeded…」條`，那不是路徑）。
+
+    ⚠ **覆蓋邊界**（必須寫明，否則下一個人會把「這條綠」讀成「這些 doc 是對的」，
+    那正是 #547 的原型錯誤換一個載體重演）：
+
+    - 本 check 只保證**三方名單互為雙射、且 map 指到的檔案存在**。
+    - 它**不驗證** doc 的內容與程式碼是否相符——contradicts-code 與行號過期一份都
+      抓不到。
+    - 它**不涵蓋**否定式散文主張（例 `cloud-service-unlink-override-cleanup.md`
+      寫「不是 M2M」而 `cloud_service.py` 是 `fields.Many2many`），也**不涵蓋**同名
+      符號的語意改變（`sa_internal_identity_write` 從 `True` 變成模組層 sentinel
+      物件——符號還在、語意全變）。這兩類**留給人**，本 gate 不假裝涵蓋。
+    - `docs/tracking/pitfalls/` 只被 dangling-ref 涵蓋（map 有指到才驗存在），
+      **沒有**雙射——那個目錄的索引另有慣例，不在本 check 範圍。
+    """
+    violations = []
+    entries, map_errors = _pattern_guard_map_entries(root)
+    violations.extend(map_errors)
+    if map_errors and not entries:
+        return violations  # map 整份壞掉，往下比對只會產生誤導的 violation 海
+
+    # (1) dangling-ref：全部 docs 條目（不限 patterns/），路徑部分必須是存在的檔案。
+    for cls_name, path, raw in entries:
+        if not os.path.isfile(os.path.join(root, path)):
+            violations.append(
+                "%s：class `%s` 的必讀件 %r 不是存在的檔案路徑。pattern-guard.py 不驗證"
+                "它印出來的路徑，會把讀不到的東西當必讀件餵給模型；登記格式是"
+                "`路徑 — 一句何時必看`（em-dash 前必須是 repo 相對路徑）（見 %s）"
+                % (PATTERN_GUARD_MAP, cls_name, path, PATTERN_REGISTRY_DOC))
+
+    actual = _pattern_doc_files(root)
+    mapped = {p for _, p, _ in entries
+              if p.startswith(PATTERN_DOC_DIR + "/") and p.endswith(".md")
+              and os.path.basename(p) != "README.md"}
+    exempt = set(PATTERN_DOC_MAP_EXEMPT)
+
+    # (2) 目錄 ↔ map（＋刻意豁免）。集合等值，不是「迭代登記表」。
+    for rel in sorted(mapped & exempt):
+        violations.append(
+            "%s：同時出現在 %s 與 `PATTERN_DOC_MAP_EXEMPT`（刻意不納管清單）。"
+            "兩者互斥——已經有路徑可綁就不該掛在豁免清單上，請從豁免清單移除（見 %s）"
+            % (rel, PATTERN_GUARD_MAP, PATTERN_REGISTRY_DOC))
+    for rel in sorted(exempt - actual):
+        violations.append(
+            "%s：列在 `PATTERN_DOC_MAP_EXEMPT`（刻意不納管清單）卻不在 `%s/` 裡。"
+            "豁免比它豁免的東西活得久＝下一份同名 doc 會無聲繼承這個豁免，"
+            "請刪掉這筆（見 %s）"
+            % (rel, PATTERN_DOC_DIR, PATTERN_REGISTRY_DOC))
+    # 反向（登記表有、目錄沒有）在這一腿關掉：map 那側由上面 (1) 的 dangling-ref
+    # 逐筆點名 class（訊息更精確），豁免清單那側由緊接在上面的兩條專屬訊息負責。
+    # 開著會讓同一個根因被報成兩筆——INJ-4 實測。
+    _registry_diff(
+        violations, actual, mapped | exempt, PATTERN_GUARD_MAP,
+        "有觸發路徑的 pattern 要在對應 class 的 `docs` append 一行"
+        "（`路徑 — 一句何時必看`）；",
+        extra="純判斷類（無路徑可綁）則加進 `scripts/audit/repo-lint.py` 的 "
+              "`PATTERN_DOC_MAP_EXEMPT` 並在 PR 寫下理由，**不要**為了讓 gate 變綠"
+              "硬塞進 map。",
+        reverse=False)
+
+    toc, topic, counts, index_errors = _pattern_index_registers(root)
+    violations.extend(index_errors)
+    if index_errors:
+        return violations
+
+    # (3) 目錄 ↔ README 的兩個登記面。
+    _registry_diff(violations, actual, toc, "%s 的「完整檔案清單」" % PATTERN_DOC_INDEX,
+                   "補一行 `- [slug](slug.md)`；")
+    _registry_diff(violations, actual, topic, "%s 的「何時必看」表" % PATTERN_DOC_INDEX,
+                   "在對應主題表補一列 `| [[slug]] | 何時觸發 / 必看 |`；")
+
+    # (4) 頂部的計數宣告。它是人讀索引時唯一的「是不是完整」訊號，漂掉就沒人會發現
+    #     少了一份。零命中同樣算紅——那句宣告被刪掉＝這個訊號消失。
+    if not counts:
+        violations.append(
+            "%s：頂部找不到「完整 N 條」的計數宣告。那是讀索引的人唯一能自證清單完整"
+            "的地方，刪掉它等於把「少了一份」變回無聲（見 %s）"
+            % (PATTERN_DOC_INDEX, PATTERN_REGISTRY_DOC))
+    for n in counts:
+        if n != len(actual):
+            violations.append(
+                "%s：頂部宣告「完整 %d 條」，但 `%s/` 實際有 %d 份 pattern doc。"
+                "新增／刪除 doc 時要一起更新這個數字（見 %s）"
+                % (PATTERN_DOC_INDEX, n, PATTERN_DOC_DIR, len(actual),
+                   PATTERN_REGISTRY_DOC))
+    return violations
+
+
 # ---------------------------------------------------------------- modes
+
+AVAILABILITY_JUDGE_FILE = "src/models/cloud_app_template.py"
+AVAILABILITY_JUDGE_FUNC = "_reject_reason_for_new_instance"
+AVAILABILITY_LABEL_FILE = "src/static/src/paas/utils/availability_label.js"
+AVAILABILITY_LABEL_MAP_RE = re.compile(
+    r"const\s+REASON_LABELS\s*=\s*\{(.*?)\}", re.S)
+AVAILABILITY_LABEL_KEY_RE = re.compile(r"^\s*(\w+)\s*:", re.M)
+
+
+def check_availability_reason_labels(root):
+    """後端能回的每個 availability reason，前端都要有明確文案。
+
+    #552 層 4 的實地教訓：``availabilityLabel`` 原本是
+    ``reason === "paused" ? "暫停販售" : "已售罄"`` —— 一個三元式，**任何**新增的
+    reason 都會掉進 else 被渲染成「已售罄」。新增 ``unpinned_chart``（平台端沒釘
+    chart 版本）時，租戶看到的會是「已售罄」：一句**假話**，而且會讓營運去查根本
+    不存在的名額問題。
+
+    這類漂移沒有任何測試會變紅（後端測後端判準、本 repo 沒有前端測試基礎設施），
+    與 check_gateway_copy_gate_anchor 是同一個家族——兩邊各自都「看起來對」。
+
+    判準只要求**涵蓋**（後端 ⊆ 前端），不要求相等：前端多留一個舊 slug 的文案是
+    無害的（後端不再回它而已），少一個才是說謊。
+    """
+    judge_path = os.path.join(root, AVAILABILITY_JUDGE_FILE)
+    label_path = os.path.join(root, AVAILABILITY_LABEL_FILE)
+    if not (os.path.exists(judge_path) and os.path.exists(label_path)):
+        return []  # fail-open：檔案搬家由其他 gate／測試負責，這裡不重複報
+
+    with open(judge_path, encoding="utf-8") as f:
+        tree = ast.parse(f.read())
+    judge = next(
+        (n for n in ast.walk(tree)
+         if isinstance(n, ast.FunctionDef) and n.name == AVAILABILITY_JUDGE_FUNC),
+        None)
+    if judge is None:
+        return ["%s：找不到 %s，availability reason 涵蓋檢查失效（探針壞掉不是通過）"
+                % (AVAILABILITY_JUDGE_FILE, AVAILABILITY_JUDGE_FUNC)]
+
+    # 回傳字串常數 ＝ 一個 reason slug；`return None`／`return` 是放行，不算。
+    backend = {
+        n.value.value for n in ast.walk(judge)
+        if isinstance(n, ast.Return) and isinstance(n.value, ast.Constant)
+        and isinstance(n.value.value, str)
+    }
+    if not backend:
+        return ["%s：%s 一個 reason 字串都抽不到——探針失去鑑別力（後端 ⊆ 前端 "
+                "在空集合上恆真）" % (AVAILABILITY_JUDGE_FILE, AVAILABILITY_JUDGE_FUNC)]
+
+    with open(label_path, encoding="utf-8") as f:
+        js = f.read()
+    map_match = AVAILABILITY_LABEL_MAP_RE.search(js)
+    if not map_match:
+        return ["%s：找不到 REASON_LABELS 對照表。若改回三元式，任何新 reason 都會被"
+                "靜默渲染成別的狀態（#552）" % AVAILABILITY_LABEL_FILE]
+    frontend = set(AVAILABILITY_LABEL_KEY_RE.findall(map_match.group(1)))
+
+    missing = sorted(backend - frontend)
+    if missing:
+        return ["%s：後端 %s 會回 %s，但 REASON_LABELS 沒有對應文案 ⇒ 前端會顯示"
+                "fallback 而不是這個狀態的真實描述（#552）"
+                % (AVAILABILITY_LABEL_FILE, AVAILABILITY_JUDGE_FUNC, missing)]
+    return []
+
 
 def run_all(root):
     violations = (check_controller_sudo(root)
@@ -1438,7 +1856,9 @@ def run_all(root):
                   + check_assertlogs_numeric_level(root)
                   + check_mixin_subscription_sudo(root)
                   + check_config_parameter_uninstall(root)
-                  + check_duplicate_class_methods(root))
+                  + check_duplicate_class_methods(root)
+                  + check_pattern_doc_registry(root)
+                  + check_availability_reason_labels(root))
     if violations:
         print("repo-lint：%d 個違規" % len(violations))
         for v in violations:
@@ -1449,7 +1869,9 @@ def run_all(root):
           "gateway-copy-gate / "
           "conceal-instances / reset-budget-ladder / transition-anchor-utc / "
           "assertlogs-numeric-level / mixin-subscription-sudo / "
-          "config-parameter-uninstall / duplicate-class-methods）")
+          "config-parameter-uninstall / duplicate-class-methods / "
+          "pattern-doc-registry / "
+          "availability-reason-labels）")
     return 0
 
 
@@ -1528,6 +1950,11 @@ def run_hook():
             violations = check_data_noupdate(root, only_file=abs_path)
             if re.match(r"^src/data/subscription_(products|template_links).*\.xml$", rel):
                 violations += check_seed_topology(root)
+        elif re.match(r"^(docs/decisions/patterns/|\.claude/hooks/)", rel):
+            # #547：不變式跨「目錄／map／README 索引」三方，壞掉的是**另外兩份名單**
+            # 而不是你剛編輯的那個檔 ⇒ 不做 only_file 切片，整條重算
+            # （同 check_admin_gui_gate_anchor 的形狀）。
+            violations = check_pattern_doc_registry(root)
         elif ladder:
             # extra/paas-operator/** 不在上面任何分支，但它持有階梯的內層常數。
             violations = []

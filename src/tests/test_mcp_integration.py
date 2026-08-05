@@ -600,6 +600,25 @@ class TestMCPServerSyncSafe(TransactionCase):
             'name': 'Sync Safe Project',
             'cloud_service_id': cls.service.id,
         })
+        # #554：把 McpServer 的 `_constraint_methods` cache 先烘熱。
+        #
+        # 它是 memoized property（`models.py`）——第一次被讀時用 `getmembers`
+        # 掃整個 class 找帶 `_constrains` 屬性的 method，算完寫回 cls。若那一刻
+        # 正好落在 `@patch(..._async_sync_tools)` 生效期間，掃描會碰到 AsyncMock，
+        # 而 MagicMock 對任何屬性名都會自動生出一個 mock ⇒ `_constrains` 存在
+        # ⇒ 被誤判成 constraint method ⇒ `api.constrains(*func._constrains(self))`
+        # 拿到 coroutine ⇒ `TypeError: argument after * must be an iterable`。
+        #
+        # 本 class 的三條測試原本都在 patch 內才第一次 create McpServer，所以
+        # 三條全部 ERROR ——「#554 要改的那個契約，它的既有守線從來沒執行過」。
+        # 在 patch 之外先建一筆把 cache 烘熱，每條測試才量得到自己要守的行為。
+        cls.McpServer.sudo().create({
+            'name': 'Sync Safe Cache Warmer',
+            'url': 'http://localhost:3000/mcp',
+            'transport': 'streamable_http',
+            'scope': 'user',
+            'project_id': cls.project.id,
+        })
 
     @patch('odoo.addons.woow_paas_platform.models.mcp_server.McpServer._async_sync_tools')
     def test_sync_safe_success(self, mock_async):
