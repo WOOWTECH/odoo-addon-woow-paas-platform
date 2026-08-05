@@ -300,7 +300,12 @@ class TestProjectDecoupleFrontendEndpoint(HttpCase):
             "unbound project purely by ``user_partner in "
             "project.message_partner_ids``, with no create_uid leg — so "
             "without this subscribe the creator can see her project but gets "
-            "'Access denied' from the task endpoints (T4/T5 setup go red).",
+            "'Access denied' from the task endpoints (T4/T5 setup go red). "
+            "That helper is NOT missing a leg by accident: its docstring "
+            "names ``mcp_server_rule_workspace_user`` leg 2 as what it "
+            "mirrors, and that rule is follower-only. The rule set itself is "
+            "split (project/project_task carry create_uid, mcp_server/"
+            "mcp_tool do not), so aligning them is a four-way decision.",
         )
 
     # ================================================================= #

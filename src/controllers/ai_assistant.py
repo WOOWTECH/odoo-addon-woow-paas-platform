@@ -1583,9 +1583,19 @@ class AiAssistantController(Controller):
         # ``{'success': False, 'error': 'Access denied'}`` for the project's
         # own creator (T4 and T5 both went red in their setup).
         #
-        # ⇒ Removing it requires first giving ``_check_project_access`` a
-        # create_uid leg (i.e. making the two layers symmetric). Until then
-        # this subscribe is what makes an unbound project usable by its owner.
+        # ⇒ Do NOT "fix" this by bolting a create_uid leg onto
+        # ``_check_project_access``. That helper's docstring names the rule it
+        # mirrors — ``mcp_server_rule_workspace_user`` leg 2 — and THAT rule is
+        # follower-only, so the helper is faithful to what it claims to mirror.
+        # Adding a create_uid leg would make it diverge from its own stated
+        # reference, which the same docstring says re-opens the IDOR surface.
+        #
+        # The unbound leg is genuinely inconsistent across the rule set (see
+        # ir_rules.xml): project + project_task carry ``follower OR
+        # create_uid``, while mcp_server + mcp_tool are follower-only. So the
+        # real question is a four-way symmetry decision across those rules and
+        # this helper — not a one-line patch here. Until that is decided, this
+        # subscribe is what makes an unbound project usable by its owner.
         # It also has a user-visible side effect beyond ACL: it makes the
         # creator a chatter follower, hence a recipient of notifications on
         # her own project. That part is intended, not incidental.
