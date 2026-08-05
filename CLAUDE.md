@@ -204,22 +204,16 @@ Follow-up 追蹤：`docs/tracking/followups/follow-ups.md`（隨 cycle 持續累
 
 ## Docs organisation
 
-`docs/` 採 **6 類混合 + 1 工具自管理區**（詳見 `docs/README.md`）。新檔前先決定類別：
-
-| 目錄                | 何時用                                                                                          |
-| ------------------- | ----------------------------------------------------------------------------------------------- |
-| `docs/guides/`      | 寫「如何做 X」的步驟（onboarding、deployment、testing）                                         |
-| `docs/reference/`   | 寫「是什麼 / 有什麼」的事實規格（API、feature spec）                                            |
-| `docs/decisions/`   | 寫「為什麼這樣設計」的論述（philosophy、refactor、pattern、PR review）                          |
-| `docs/plans/`       | 啟動 epic / 大功能前寫 design+implementation 雙檔（按季度子目錄歸檔，例 `docs/plans/2026-Q2/`） |
-| `docs/tracking/`    | 記錄 incident、pitfall、follow-up、test report                                                  |
-| `docs/archived/`    | 不再使用但保留考古（不主動建檔）                                                                |
-| `docs/superpowers/` | obra/superpowers plugin 自動寫入區（不算主題類）                                                |
+**找文件** → [`docs/index.md`](docs/index.md)（依「我現在想做什麼」routing，篇數由
+`scripts/audit/gen-docs-index.py` 即時算出）。**寫新文件該放哪** → [`docs/README.md`](docs/README.md)
+（分類定義與決策樹，權威來源）。這兩份不在本檔複述——先前複述的版本已漂移成錯的
+（本檔曾寫「6 類 + 1 工具自管理區」，實際是 6 類 + 3 個輔助區）。
 
 **工具指令**：
 
 - `/docs:new <category> <name>` — 建新 doc（產 frontmatter 模板）
 - `/docs:promote ccpm:<feature-name>` 或 `/docs:promote superpowers:<file>` — 把 ccpm epic / superpowers 探索 promote 到主結構
+- 動過 `docs/` 結構後跑 `python3 scripts/audit/gen-docs-index.py` 重產索引（`--check` 可驗是否同步）
 
 **CI 策略**：
 

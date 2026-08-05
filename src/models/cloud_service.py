@@ -2338,7 +2338,7 @@ class CloudService(models.Model):
             # `unknown`。既有碼對這些一律靜置等下一輪——**但它們同樣會永久卡**：
             # helm 的 subprocess 被 SIGKILL 在 rollback 途中就會把 release 留在
             # `pending-rollback`，沒有任何東西會再推它（同
-            # `reference_helm_atomic_failure_double_timeout` 的實錄）。故一併
+            # `docs/reference/gotchas/helm-atomic-failure-double-timeout.md` 的實錄）。故一併
             # 納入封頂：狀態不動，只是讓 age timeout 有話可說。
             # （限縮在受管狀態，避免給 `deleting` / `initializing` 添 log 噪音。）
             #

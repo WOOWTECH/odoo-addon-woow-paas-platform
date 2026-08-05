@@ -1,5 +1,9 @@
 # docs/ — 文件導引
 
+> **只是想找一份既有文件？** 走 [`index.md`](index.md)——它依「我現在想做什麼」routing，
+> 篇數由 `scripts/audit/gen-docs-index.py` 即時算出。
+> **本檔負責的是另一件事：寫新檔時該放哪一類。**
+
 本 repo 的文件採 **6 類混合分類**，每類負責一種「文件使用情境」。寫新檔之前先看：**你想讓讀者「做什麼」？**
 
 ## 6 類速覽
@@ -7,11 +11,11 @@
 | 目錄 | 用途 | 你會在這找到… |
 |------|------|--------------|
 | [`guides/`](guides/README.md) | **任務導向** — 操作手冊（如何做 X） | k8s setup、testing guide、新人 onboarding、tutorial |
-| [`reference/`](reference/README.md) | **查找導向** — 規格、API、藍圖 | feature spec、API contract、架構生命週期圖、design 檔（.pen） |
+| [`reference/`](reference/README.md) | **查找導向** — 規格、API、藍圖 | feature spec、API contract、架構生命週期圖、design 檔（.pen）、[`gotchas/`](reference/gotchas/) 框架與基礎設施的行為陷阱 |
 | [`decisions/`](decisions/README.md) | **解釋導向** — 為什麼這樣設計 | philosophy、refactor 決策、可複用 pattern、PR review verdict |
 | [`plans/`](plans/README.md) | **過程紀錄** — 工作計畫雙檔 | YYYY-MM-DD-<slug>-design.md + -implementation.md、季度歸檔、journal |
-| [`tracking/`](tracking/README.md) | **問題與追蹤** — issue / pitfall / follow-up | sandbox 故障、incident timeline、技術債清單、test report |
-| [`archived/`](archived/README.md) | **歷史檔案** — 不再使用但保留考古 | ccpm-v1 context、退役 plan |
+| [`tracking/`](tracking/README.md) | **問題與追蹤** — issue / pitfall / follow-up / 收官紀錄 | sandbox 故障、incident timeline、技術債清單、test report、[`landings/`](tracking/landings/) 已收官 issue 的落地紀錄 |
+| [`archived/`](archived/README.md) | **歷史檔案** — 不再使用但保留考古 | ccpm-v1 context、退役 plan、[`memory/`](archived/memory/) 已被其他載體取代的 memory |
 
 加上三個不算主題類的輔助區：
 
