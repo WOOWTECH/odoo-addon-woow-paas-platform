@@ -44,14 +44,19 @@ Red expectation today (pre-implementation):
   → ``result['success']`` is False → assertion red.
   Even if dispatcher guard were bypassed (call passes through to
   ``_create_project``), the follower assertion would still fail because
-  ``ai_assistant.py:1228`` does ``sudo().create(vals)`` with no
+  ``ai_assistant._create_project`` does ``sudo().create(vals)`` with no
   ``message_subscribe`` (hidden trap per plan §Root cause B).
+  (Symbol, not line number — #586: the old ``:1228`` had drifted ~295
+  lines. See #586 for whether that follower subscribe is still needed.)
 
 * T2.alice — fails at ``self.assertEqual(visible, project_id_set)``:
-  even if the endpoint succeeded under sudo, ``create_uid=SUPERUSER``
-  + no follower subscribe → both dual-leg sub-legs evaluate False for
-  Alice → ``search([('id','=',pid)])`` returns empty → Alice can't see
-  her own project.
+  no follower subscribe → the follower sub-leg evaluates False for Alice.
+  ⚠ CORRECTION (#586, Refs #547): this bullet used to add
+  "``create_uid=SUPERUSER``" and conclude "**both** dual-leg sub-legs
+  evaluate False". That premise is FALSE — ``sudo()`` does not change
+  uid, so create_uid is Alice and the creator sub-leg is TRUE. Whether
+  that sub-leg alone already makes the project visible (making the
+  follower subscribe redundant *for ACL*) is what #586 measures.
 
 * T2.bob — passes trivially today (Bob never subscribed; ir.rule denies
   him). Regression lock so a future leg-2 widening that accidentally
@@ -62,14 +67,23 @@ Red expectation today (pre-implementation):
 Note on plan brief inconsistency (deliberate divergence — flagged in
 leader report): the hand-off brief mentioned asserting ``create_uid ==
 portal_user``. Plan D2=A explicitly keeps ``sudo().create()`` and uses
-``message_subscribe`` as the trust route, so ``create_uid`` will
-**remain** SUPERUSER post-fix. These tests therefore assert the
-follower-membership contract (the actual D2=A invariant) rather than a
-create_uid identity that would only hold under the rejected D2=B
-``with_user`` approach. Test 2 is the load-bearing creator-authority
-test — it verifies the *outcome* (creator can read own project)
-regardless of which mechanism establishes the authority, so even if
-implementation later switches D2=B the contract assertion still locks.
+``message_subscribe`` as the trust route, so these tests assert the
+follower-membership contract rather than a create_uid identity.
+
+⚠ CORRECTION (#586, Refs #547): the sentence that used to justify that
+choice — "``create_uid`` will **remain** SUPERUSER post-fix" — is FALSE.
+``sudo()`` does not change uid (see the ``sudo()`` docstring on
+``BaseModel``), so ``create_uid`` is the calling tenant both before and
+after D2=A. The *choice* to assert followers rather than create_uid is
+still defensible (it pins the D2=A mechanism), but the stated reason for
+it was wrong, and the ir.rule's unbound leg is ``follower OR creator`` —
+so the creator sub-leg may already carry the visibility on its own.
+Measuring that is exactly what #586 does.
+
+Test 2 is the load-bearing creator-authority test — it verifies the
+*outcome* (creator can read own project) regardless of which mechanism
+establishes the authority, so even if implementation later switches
+D2=B the contract assertion still locks.
 """
 import json as json_lib
 import uuid
@@ -170,7 +184,8 @@ class TestProjectDecoupleFrontendEndpoint(HttpCase):
            ``{'success': False, 'error': 'cloud_service_id is required
            for create'}`` for completely unbound payloads → first
            ``assertTrue(result.success)`` fails.
-        2. After dispatcher fix, ``_create_project`` (line 1228) still
+        2. After dispatcher fix, ``_create_project`` (symbol, not a line
+           number — #586) still
            does ``sudo().create(vals)`` without any
            ``message_subscribe`` — so the
            ``creator partner in message_partner_ids`` assertion fails.
@@ -246,25 +261,51 @@ class TestProjectDecoupleFrontendEndpoint(HttpCase):
         )
 
         # ---- Hidden-trap contract (D2=A — follower subscribe) --------- #
-        # Plan §Hidden trap: sudo().create() leaves create_uid=SUPERUSER
-        # so the ir.rule create_uid sub-leg is False for the real user;
-        # the follower sub-leg must be wired up explicitly by the
-        # controller via message_subscribe. Without this, the user
-        # cannot see / read / update their own freshly-created project
-        # (T2 covers the visibility consequence).
+        # ⚠ CORRECTION (#586, Refs #547): the plan's §Hidden trap reasoning
+        # that used to be quoted here — "sudo().create() leaves
+        # create_uid=SUPERUSER so the ir.rule create_uid sub-leg is False
+        # for the real user" — is FALSE, and the controller says so at the
+        # call site. ``BaseModel.create()`` does
+        # ``vals.setdefault('create_uid', self.env.uid)`` and ``sudo()``
+        # does not change uid (see the ``sudo()`` docstring on
+        # ``BaseModel``), so create_uid IS the tenant here.
+        #
+        # The rule's unbound leg is an OR of two sub-legs (see
+        # ir_rules.xml :: project_rule_workspace_member domain_force):
+        #     cloud_service_ids == False
+        #     AND (message_partner_ids in [partner] OR create_uid == user)
+        # so the creator sub-leg alone may already satisfy it, which would
+        # make the follower sub-leg redundant *for visibility*.
+        #
+        # 🔴 That is a reading of the code, NOT a measurement — #586 is the
+        # ticket that measures it. Until it concludes, this assertion stays
+        # and pins the current implementation (message_subscribe). Note it
+        # pins a *mechanism*, not an outcome; T2 below pins the outcome and
+        # survives a change of mechanism. If #586 concludes the call can go,
+        # THIS assertion is the one to rewrite — and the follower/chatter
+        # notification behaviour has to be judged separately from ACL.
         self.assertIn(
             self.alice.partner_id,
             project.message_partner_ids,
-            "T1 (hidden trap, plan §Root cause B + D2=A): creator's "
-            "partner is NOT a follower of the freshly-created unbound "
-            "project. ai_assistant._create_project (line ~1228) must "
-            "call ``project.sudo().message_subscribe(partner_ids=["
-            "request.env.user.partner_id.id])`` immediately after "
-            "``sudo().create(vals)``. Otherwise the dual-leg "
-            "ir.rule.project_rule_workspace_member message_partner_ids "
-            "sub-leg fails and Alice cannot see her own project — see "
-            "T2 for the visibility consequence and plan §Hidden trap "
-            "for the chain of evidence.",
+            "T1: creator's partner is NOT a follower of the freshly-created "
+            "unbound project. ``ai_assistant._create_project`` must call "
+            "``project.sudo().message_subscribe(partner_ids=["
+            "request.env.user.partner_id.id])`` immediately after its "
+            "``sudo().create(vals)`` (symbol, not a line number — the old "
+            "message named a line that had drifted ~295 lines). "
+            "#586 measured why this is load-bearing, and it is NOT ir.rule "
+            "visibility: the rule's unbound leg is ``follower OR creator`` "
+            "and the creator leg alone keeps T2 green. It is the CONTROLLER "
+            "that needs the follower — ``_check_project_access`` resolves an "
+            "unbound project purely by ``user_partner in "
+            "project.message_partner_ids``, with no create_uid leg — so "
+            "without this subscribe the creator can see her project but gets "
+            "'Access denied' from the task endpoints (T4/T5 setup go red). "
+            "That helper is NOT missing a leg by accident: its docstring "
+            "names ``mcp_server_rule_workspace_user`` leg 2 as what it "
+            "mirrors, and that rule is follower-only. The rule set itself is "
+            "split (project/project_task carry create_uid, mcp_server/"
+            "mcp_tool do not), so aligning them is a four-way decision.",
         )
 
     # ================================================================= #
@@ -288,11 +329,17 @@ class TestProjectDecoupleFrontendEndpoint(HttpCase):
            → ``project_id is None`` → KeyError in the follow-up search.
            To keep the failure trace clean and pin the actual ACL bug,
            we ``assertTrue(result.success)`` first.
-        2. After dispatcher fix but before message_subscribe:
-           ``project.create_uid = SUPERUSER``, no follower → both
-           dual-leg sub-legs False for Alice → her search returns
-           empty → assertion fails with the dual-leg-leg-2 message
-           pointing at plan §Hidden trap.
+        2. After dispatcher fix but before message_subscribe: no follower
+           was wired up, so the follower sub-leg is False for Alice.
+
+           ⚠ CORRECTION (#586, Refs #547): the original wording here said
+           ``project.create_uid = SUPERUSER`` and concluded "both dual-leg
+           sub-legs False". That premise is FALSE — ``sudo()`` does not
+           change uid, so create_uid is Alice, and the creator sub-leg is
+           TRUE. Whether Alice could therefore already read her project
+           without the follower sub-leg is exactly what #586 measures; the
+           historical red described above is kept as narrative, but do not
+           reason from its stated cause.
 
         Bob's assertion is a regression lock: today's ir.rule already
         denies him (single-leg path returns nothing for unbound), and
@@ -331,15 +378,17 @@ class TestProjectDecoupleFrontendEndpoint(HttpCase):
         ])
         self.assertEqual(
             visible_alice.ids, [project_id],
-            "T2 (plan §Hidden trap, D2=A contract): Alice cannot read "
-            "her own unbound project after endpoint create. Root cause "
-            "is sudo().create() — create_uid=SUPERUSER means ir.rule "
-            "project_rule_workspace_member's create_uid sub-leg is "
-            "False; the message_partner_ids sub-leg also fails because "
-            "the controller does not auto-subscribe. Fix: add "
-            "``project.sudo().message_subscribe(partner_ids=["
-            "request.env.user.partner_id.id])`` in "
-            f"_create_project. Got visible={visible_alice.ids!r}.",
+            "T2 (load-bearing outcome test): Alice cannot read her own "
+            "unbound project after endpoint create. ⚠ CORRECTION (#586, "
+            "Refs #547): this message used to blame "
+            "'create_uid=SUPERUSER' — that premise is FALSE. sudo() does "
+            "not change uid, so create_uid IS Alice and the create_uid "
+            "sub-leg of ir.rule project_rule_workspace_member is TRUE. "
+            "If this assertion is red, the unbound leg as a whole failed "
+            "— check the rule's domain_force (cloud_service_ids == False "
+            "AND (follower OR creator)) rather than assuming the "
+            "follower sub-leg is the only thing holding it up. "
+            f"Got visible={visible_alice.ids!r}.",
         )
 
         # ---- Bob (cross-user, non-follower) must NOT see ------------- #

@@ -1561,15 +1561,44 @@ class AiAssistantController(Controller):
         # TENANT. Symbols, not line numbers: this box carries two distinct odoo
         # trees whose copies of that file differ by 16 lines, so a line number
         # is only ever right for one of them.
-        # D2=A: subscribe the caller as a follower so the
-        # project_rule_workspace_member message_partner_ids sub-leg passes —
-        # required for unbound projects (no workspace member leg) and harmless
-        # for bound ones (workspace member leg still primary).
-        # ⚠ The ORIGINAL justification for this call ("needed because create_uid
-        # doesn't match the caller") rests on the false premise above, so
-        # whether this workaround is still necessary needs a separate
-        # evaluation — do NOT delete it on the strength of this correction
-        # alone. Tracked for a follow-up ticket (#547 PR description).
+        # D2=A: subscribe the caller as a follower. LOAD-BEARING — measured
+        # under #586, keep it.
+        #
+        # The reason is NOT the one this comment used to give. That one
+        # ("sudo().create() leaves create_uid=SUPERUSER so the ir.rule
+        # create_uid sub-leg is False") was disproved by #547: create_uid is
+        # the tenant, and ``project_rule_workspace_member``'s unbound leg is
+        # ``follower OR create_uid``, so for *ir.rule visibility* the follower
+        # sub-leg genuinely is redundant. #586 measured that: with this call
+        # removed, the creator still reads her own unbound project and an
+        # unrelated user still cannot (T2 stayed green).
+        #
+        # What actually breaks without it is the CONTROLLER layer, which is
+        # stricter than the rule layer: ``_check_project_access`` resolves an
+        # unbound project purely by follower membership
+        # (``user_partner in project.message_partner_ids``) and has no
+        # create_uid leg at all. So dropping this call leaves the creator able
+        # to *see* her project via ir.rule but unable to act on it through the
+        # endpoints — #586 measured `/api/support/tasks` create returning
+        # ``{'success': False, 'error': 'Access denied'}`` for the project's
+        # own creator (T4 and T5 both went red in their setup).
+        #
+        # ⇒ Do NOT "fix" this by bolting a create_uid leg onto
+        # ``_check_project_access``. That helper's docstring names the rule it
+        # mirrors — ``mcp_server_rule_workspace_user`` leg 2 — and THAT rule is
+        # follower-only, so the helper is faithful to what it claims to mirror.
+        # Adding a create_uid leg would make it diverge from its own stated
+        # reference, which the same docstring says re-opens the IDOR surface.
+        #
+        # The unbound leg is genuinely inconsistent across the rule set (see
+        # ir_rules.xml): project + project_task carry ``follower OR
+        # create_uid``, while mcp_server + mcp_tool are follower-only. So the
+        # real question is a four-way symmetry decision across those rules and
+        # this helper — not a one-line patch here. Until that is decided, this
+        # subscribe is what makes an unbound project usable by its owner.
+        # It also has a user-visible side effect beyond ACL: it makes the
+        # creator a chatter follower, hence a recipient of notifications on
+        # her own project. That part is intended, not incidental.
         project.sudo().message_subscribe(
             partner_ids=[request.env.user.partner_id.id],
         )
