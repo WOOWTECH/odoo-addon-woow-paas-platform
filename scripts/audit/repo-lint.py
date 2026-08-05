@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """repo-lint：把「假綠家族」pitfall 轉成機械 gate 的靜態檢查工具。
 
-十五個 check（每條都對應一個已翻車的 pitfall，訊息內附文件指針）：
+十八個 check 函式，歸為下列十六條規則（7. capability-gate 一條由三個函式實作：
+slug 集合成員／admin-gui 錨點／gateway 文案錨點）。每條都對應一個已翻車的
+pitfall，訊息內附文件指針：
 
 1. controller-sudo   src/controllers/*.py 的 .sudo( 呼叫點數量對 baseline 白名單；
                      新增 sudo() 必須有意識地更新 baseline（附 justification）。
@@ -49,19 +51,17 @@
                      不得用 `datetime.now()`（本機時區）——Odoo Datetime 契約是 UTC
                      naive，非 UTC 伺服器上 age timeout 會靜默失效或誤殺，而容器時區
                      是 UTC 所以**測不出來**，只能靠 gate（#489）。
+11. assertlogs-numeric-level  src/tests/** 的 assertLogs/assertNoLogs 不得用字串
+                     `'INFO'` 當 level——Odoo 的 addLevelName(RUNBOT=25, "INFO") 覆寫
+                     了名稱→數值表，字串會解析成 25 ⇒ `_logger.info()`(20) 全被擋掉：
+                     assertLogs 恆紅（且紅得像被測 code 掉了 log）、assertNoLogs 恆綠。
+                     改傳數值 logging.INFO（#492）。
 12. mixin-subscription-sudo  src/models/subscription_lifecycle_mixin.py 內不得裸讀
                      `self.subscription_id`——那是對 sh.subscription.subscription 的
                      relation traversal，而 workspace 擁有權不給 Odoo 群組，典型租戶
                      會在 env cache 落空時撞 AccessError（SH delete/provision、
                      CS update/delete 全中，#29）。統一走 `_sub()`（sudo）。
                      依據 docs/decisions/patterns/orm-vs-endpoint-acl-test-coverage.md
-
-11. assertlogs-numeric-level  src/tests/** 的 assertLogs/assertNoLogs 不得用字串
-                     `'INFO'` 當 level——Odoo 的 addLevelName(RUNBOT=25, "INFO") 覆寫
-                     了名稱→數值表，字串會解析成 25 ⇒ `_logger.info()`(20) 全被擋掉：
-                     assertLogs 恆紅（且紅得像被測 code 掉了 log）、assertNoLogs 恆綠。
-                     改傳數值 logging.INFO（#492）。
-
 13. config-parameter-uninstall  res_config_settings.py 每個 `config_parameter=` 的 key
                      必須登記進 src/hooks.py 的 `_CONFIG_PARAMETERS`。Odoo 卸載 addon
                      **不會**清 ir.config_parameter，漏登記＝卸載後留下孤兒設定（重裝
@@ -84,6 +84,14 @@
                      ⇒ 讀不到的東西被當必讀件餵給模型。
                      ⚠ 只保證名單雙射與路徑存在，**不驗證 doc 內容與程式碼相符**。
                      依據 docs/decisions/patterns/README.md「維護慣例」
+16. availability-reason-labels  src/models/cloud_app_template.py 的
+                     `_reject_reason_for_new_instance` 能回的每個 reason slug，
+                     src/static/src/paas/utils/availability_label.js 的 REASON_LABELS
+                     都要有對應文案。缺一個就掉進 fallback ⇒ 對租戶顯示**另一個狀態**
+                     的描述（#552：新增 unpinned_chart 時租戶看到「已售罄」，一句假話，
+                     還會讓營運去查根本不存在的名額問題）。與 7(c) 同一個家族——兩邊
+                     各自都「看起來對」，沒有任何測試會變紅。只查涵蓋（後端 ⊆ 前端），
+                     前端多留舊 slug 的文案無害。
 
 用法：
   scripts/audit/repo-lint.py --all                # 全 repo 掃描（CI / merge 前手動）
@@ -1811,6 +1819,9 @@ AVAILABILITY_LABEL_FILE = "src/static/src/paas/utils/availability_label.js"
 AVAILABILITY_LABEL_MAP_RE = re.compile(
     r"const\s+REASON_LABELS\s*=\s*\{(.*?)\}", re.S)
 AVAILABILITY_LABEL_KEY_RE = re.compile(r"^\s*(\w+)\s*:", re.M)
+# #596：這條不變式跨後端判準與前端文案表兩個檔，hook 模式要靠這個集合前置判斷
+# 「有沒有動到它」（同 RESET_LADDER_FILES 的形狀）。
+AVAILABILITY_REASON_FILES = (AVAILABILITY_JUDGE_FILE, AVAILABILITY_LABEL_FILE)
 
 
 def check_availability_reason_labels(root):
@@ -1949,6 +1960,10 @@ def run_hook():
         # 一處），所以只要動到其中任一檔就整條重算，不做 only_file 切片。
         ladder = (check_reset_budget_ladder(root)
                   if rel in RESET_LADDER_FILES else [])
+        # #552／#596：availability reason 的涵蓋同樣是**跨檔**不變式（後端 judge ／
+        # 前端 REASON_LABELS），壞掉的是另一個檔 ⇒ 一樣整條重算、不做 only_file 切片。
+        availability = (check_availability_reason_labels(root)
+                        if rel in AVAILABILITY_REASON_FILES else [])
         if re.match(r"^src/controllers/.*\.py$", rel):
             violations = check_controller_sudo(root, only_file=abs_path)
             violations += check_reuse_values(root, only_file=abs_path)
@@ -1984,12 +1999,14 @@ def run_hook():
             # 而不是你剛編輯的那個檔 ⇒ 不做 only_file 切片，整條重算
             # （同 check_admin_gui_gate_anchor 的形狀）。
             violations = check_pattern_doc_registry(root)
-        elif ladder:
-            # extra/paas-operator/** 不在上面任何分支，但它持有階梯的內層常數。
+        elif ladder or availability:
+            # extra/paas-operator/** 不在上面任何分支，但它持有階梯的內層常數；
+            # 跨檔集合搬到不匹配任何分支的位置時，這裡也接得住。
             violations = []
         else:
             return 0
         violations += ladder
+        violations += availability
         if violations:
             print(json.dumps({
                 "decision": "block",
