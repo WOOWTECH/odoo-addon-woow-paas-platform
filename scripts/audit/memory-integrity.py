@@ -52,8 +52,54 @@
     python3 scripts/audit/memory-integrity.py --threshold 3  # 整段消失的行數門檻
     python3 scripts/audit/memory-integrity.py --memory-dir X # 改指定目錄（測試用）
 
+⚠ **只能從主 checkout 跑，不能從 worktree（或任何其他 clone）跑。** memory 目錄的
+  slug 由**腳本自身的絕對路徑**推導（`repo_root()` → `memory_dir()`），所以從
+  `…/wt-xxx/scripts/audit/` 跑會去找 `…-wt-xxx/memory` 而得到：
+
+      ✗ 找不到 memory 目錄：/Users/…/-Users-…-wt-memgate/memory
+
+  這是 fail-closed、不是假綠（exit 1），但**基準跑不起來時後續每一組注入驗證都無
+  意義**——實遇：有人在 worktree 拿到這行、照樣往下跑注入，整輪結論全部作廢。
+  要在別的 checkout 驗證請一律帶 `--memory-dir <路徑>` 指向真實或副本目錄。
+  同理，本工具**不註冊進 `repo-lint.py` 的 `run_all`**：它檢查的不是 repo 內容，
+  註冊進去會讓 repo-lint 在任何非主 checkout 的環境（含 CI runner）永遠紅。
+
 exit 1 = 有發現，exit 0 = 乾淨。輸出一律列「是哪一個」而不是「差幾個」——
 數字沒有可證偽性，任何聽起來合理的解釋都會被接受；集合差立刻可證偽。
+
+────────────────────────────────────────────────────────────────────────
+已知限制（2026-08-05 盤點，修法追蹤於 issue #595）
+────────────────────────────────────────────────────────────────────────
+
+1. 🔴 **`name:` 與檔名對不上的 memory 檔，`silent-truncation` 完全不覆蓋——而且
+   與「沒有快照」在輸出上不可區分。**
+
+   `all_snapshots()` 以快照 frontmatter 的 `name:` + `.md` 去比對現況檔名集合，
+   對不上就 `continue`。實測 124 檔中 **45 檔**如此（例
+   `reference_kubectl_woow_k3s.md` 的 `name: kubectl-woow-k3s`——少了 `reference_`
+   前綴、且 kebab vs snake 不一致）。
+
+   本 check 只印得出「其中 72 檔有快照可比對」，**看的人會把差額歸因成「另外 52 檔
+   只是還沒有快照」**（暫時沒檢查），而其中 45 檔是**結構性永久盲區**（永遠不會被
+   檢查）。這兩件事的後果完全不同，輸出卻一模一樣。本檔的稽核記錄
+   `docs/tracking/memory-integrity-audit-2026-08-05.md` 初版正是這樣寫錯的。
+
+   ⇒ 在修好之前：**「其中 N 檔有快照可比對」不可讀成「其餘的暫時沒資料」。**
+
+2. 🔴 **「整段消失」與「內容被搬到別的檔」在單檔比對下輸出完全相同。**
+
+   本 check 逐檔比對，看不到跨檔搬移。判定某筆 finding 是不是真遺失，必須先問
+   「這些行是不是在 memory 目錄的**別處**還活著」。實例：`任何聽起來合理的解釋都會
+   被接受` 被報成消失，實際是搬到了
+   `feedback_completeness_check_output_which_not_how_many.md`。
+
+   逐字比對這一步是機械的（99 行中 2 行逐字存在於別的檔）；但「改寫後搬移」目前
+   **不好機械化**——試過兩種關鍵片段探針，因門檻與 markdown 剝除方式不同而得出互相
+   矛盾的數字。在做進 gate 之前，這一步只能人工，且**必須做**，否則會把搬移報成遺失。
+
+3. MEMORY.md 本身沒有 `name:` frontmatter，`silent-truncation` 不涵蓋它
+   （`all_snapshots()` 對讀不到 `name:` 的快照直接跳過）。索引檔的完整性只靠
+   `index-links` 的斷鏈／孤兒對帳守住，內容遺失沒有守。
 """
 
 import os
