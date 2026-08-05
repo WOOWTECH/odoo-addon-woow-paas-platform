@@ -204,33 +204,19 @@ def _blank_range(out, src, start, end):
             out[i] = " "
 
 
-def _blank_outside_fstring_fields(out, src, start, end):
-    """f-string 專用：只留白 ``{...}`` **之外**的字元，field 內是真的程式碼。
-
-    只有 Python ≤3.11 會走到這裡——那時整個 f-string 是單一 STRING token。
-    3.12+ 的 tokenize 已把 field 拆成獨立 token，字面部分是 FSTRING_MIDDLE。
-    """
-    depth = 0
-    i = start
-    while i < end:
-        ch = src[i]
-        if depth == 0 and ch in "{}" and i + 1 < end and src[i + 1] == ch:
-            out[i] = out[i + 1] = " "      # ``{{`` / ``}}`` 是轉義，不是 field
-            i += 2
-            continue
-        if ch == "{":
-            depth += 1
-            out[i] = " "
-        elif ch == "}" and depth > 0:
-            depth -= 1
-            out[i] = " "
-        elif depth == 0 and ch != "\n":
-            out[i] = " "
-        i += 1
+# f-string 的 replacement field 裡是**真的**呼叫點（``f"{rec.sudo().name}"``），必須被算到。
+# Python 3.12 起 tokenize 把 f-string 拆成 FSTRING_START／FSTRING_MIDDLE／FSTRING_END，
+# 字面部分才是 FSTRING_MIDDLE、field 內是一般 token ⇒ 留白 STRING 與 FSTRING_MIDDLE
+# 自然就保留了 field。3.11 以下整個 f-string 是單一 STRING token，直接留白會把 field
+# 裡的真呼叫一起吃掉 ⇒ **靜默少算**，正是本 check 要防的假陰性。
+# 這裡 fail-loud 而不是寫一條 ≤3.11 相容分支：本專案兩個執行環境都 >= 3.12
+# （CI 的 docker.gitea.com/runner-images:ubuntu-latest 實測 3.12.3），一條在任何實際
+# 路徑上都跑不到的分支，等於在 gate 自己的實作裡留一段沒有東西會驗的程式碼（#576）。
+_MIN_PYTHON = (3, 12)
 
 
 def _blank_python_comments_and_strings(src):
-    """把 Python 的 COMMENT／STRING 原地換成**等長空白**，回傳同長度的字串。
+    """把 Python 的 COMMENT／STRING／FSTRING_MIDDLE 原地換成**等長空白**。
 
     註解與字串字面裡的 ``.sudo(`` 不是呼叫點——docstring 在描述用法、錯誤訊息
     在引述寫法，兩者在語意上都不生效。一併留白字串不會漏掉動態呼叫：動態呼叫
@@ -241,36 +227,32 @@ def _blank_python_comments_and_strings(src):
     0——而 0 看起來像個合理答案（「所以全都是註解？」）。留白策略與既有的
     _strip_xml_comments 相同，行號與所有非註解字元的相對位置都保留。
 
-    f-string 的 replacement field 裡是**真的**呼叫點，兩條版本路徑都必須保留它：
-    3.12+ 只留白 FSTRING_MIDDLE（字面部分），≤3.11 整串是 STRING 故改走大括號
-    深度掃描。兩條路徑對同一份檔案要得出同一個數字，否則 CI 與本機會不一致。
-
     語法錯誤的檔會讓 tokenize 丟 TokenError／IndentationError／SyntaxError：
     **往外拋**，由呼叫端 fail-loud。不可 except 後退回全文計數——那會讓一個語法
     錯的檔靜默回到「註解也算呼叫點」的舊行為。
     """
+    if sys.version_info < _MIN_PYTHON:
+        raise RuntimeError(
+            "repo-lint 需要 Python >= %d.%d 才能正確計數 controller 的 .sudo( 呼叫點"
+            "（目前是 %d.%d.%d）。3.11 以下 tokenize 把整個 f-string 當成單一 STRING "
+            "token，留白時會連 replacement field 裡的真呼叫一起吃掉 ⇒ 靜默少算，正是 "
+            "#576 要修的假陰性。本專案 CI（docker.gitea.com/runner-images:ubuntu-latest）"
+            "與開發環境都已 >= %d.%d，故此處 fail-loud 而不做相容降級。"
+            % (_MIN_PYTHON + sys.version_info[:3] + _MIN_PYTHON))
     line_starts = [0]
     for idx, ch in enumerate(src):
         if ch == "\n":
             line_starts.append(idx + 1)
     out = list(src)
-    fstring_middle = getattr(tokenize, "FSTRING_MIDDLE", None)
 
     def offset(pos):
         row, col = pos
         return line_starts[row - 1] + col
 
+    blanked = (tokenize.COMMENT, tokenize.STRING, tokenize.FSTRING_MIDDLE)
     for tok in tokenize.generate_tokens(io.StringIO(src).readline):
-        start, end = offset(tok.start), offset(tok.end)
-        if tok.type == tokenize.COMMENT or (
-                fstring_middle is not None and tok.type == fstring_middle):
-            _blank_range(out, src, start, end)
-        elif tok.type == tokenize.STRING:
-            prefix_len = len(tok.string) - len(tok.string.lstrip("bBfFrRuU"))
-            if "f" in tok.string[:prefix_len].lower():
-                _blank_outside_fstring_fields(out, src, start, end)
-            else:
-                _blank_range(out, src, start, end)
+        if tok.type in blanked:
+            _blank_range(out, src, offset(tok.start), offset(tok.end))
     return "".join(out)
 
 
