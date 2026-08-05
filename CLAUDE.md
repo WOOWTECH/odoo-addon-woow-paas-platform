@@ -104,37 +104,7 @@ pytest tests/ -v --cov=src
 
 #### PaaS Operator Integration Tests (real K8s)
 
-Catch contract drift that unit-test mocks hide (BUG-7/8/9 class — workload-type, HTTP
-contract, RBAC). **No CI runner** — these must run locally before merging changes under
-`extra/paas-operator/`.
-
-```bash
-cd extra/paas-operator
-
-# 首次：抓 operator Dockerfile 釘的同一顆 helm 3.13.3（⚠ 不要用系統 helm，見下表）
-mkdir -p /tmp/helm3 && curl -fsSL \
-  https://get.helm.sh/helm-v3.13.3-darwin-arm64.tar.gz | tar xz -C /tmp/helm3
-
-# First time only: install deps（用 repo 內 .venv 的 python3.11，系統 3.9 會在 collection 期即炸）
-.venv/bin/pip install -r requirements.txt
-
-# 用只含目標 context 的 kubeconfig，免動使用者當前 context
-kubectl config view --raw --minify --flatten --context=docker-desktop > /tmp/kubeconfig-dd.yaml
-
-# Run
-KUBECONFIG=/tmp/kubeconfig-dd.yaml HELM_BINARY=/tmp/helm3/darwin-arm64/helm \
-    .venv/bin/pytest -m integration tests/integration/ -v
-```
-
-| 變數                           | 為什麼                                                                                                                |
-| ------------------------------ | --------------------------------------------------------------------------------------------------------------------- |
-| `HELM_BINARY`                  | ⚠ **不可用 `$(which helm)`**：Homebrew 的 helm 已是 **v4**（2026-07-28 實測 v4.2.3），而 helm 4 的 `--post-renderer` **改吃 plugin 名、不再吃執行檔路徑**。本 repo 的 #317 PVC-keep post-renderer 傳的正是路徑，且 install/upgrade 兩條路都無條件帶上 → **整套會在第一步 install 就 500**（`Helm installation failed`），看起來像被測程式壞掉、其實是 helm 版本不相容。用 operator Dockerfile 釘的 **3.13.3**（`ARG HELM_VERSION=3.13.3`），不要為了跑測試把系統 helm 降版 |
-| `API_KEY` / `NAMESPACE_PREFIX` | 不用設，`app_client` fixture 自動 set（`"integration-test-key"` + `"paas-ws-test-op-"`）                                                  |
-| `REQUIRE_KUBEVIRT`             | 設 `1` 時，KubeVirt/CDI 相關測試由「無 CRD 就 skip」升級為 **fail**。驗收 VM 型 workload（#423）時必設，否則 skip 會被誤讀成通過 |
-
-⚠ **KubeVirt/CDI 測試需要有 CRD 的叢集**：docker-desktop 沒有，那幾支會 skip。要真正驗到 VM 路徑，用 woow-k3s（#423 W0 已裝 KubeVirt v1.8.0 + CDI v1.64.0）並帶 `REQUIRE_KUBEVIRT=1`。
-
-Cluster 殘留風險：測試用唯一 namespace `paas-ws-test-op-{uuid8}`，正常 teardown 會刪；中斷或 cleanup 失敗會留下，需要時手動 `kubectl delete ns paas-ws-test-op-<x>`。詳細請見 `extra/paas-operator/tests/integration/README.md`。
+**No CI runner** — 改動 `extra/paas-operator/` 合併前必須本機跑 integration tests（真 K8s；unit-test mocks 蓋不住的 contract drift）。完整 recipe（⚠ helm 必須用 3.13.3 不可用系統 helm、`REQUIRE_KUBEVIRT`、殘留 namespace 清理）見 **`paas-operator-dev` skill**（`.claude/skills/paas-operator-dev/SKILL.md`）與 `extra/paas-operator/tests/integration/README.md`。
 
 ### K8s Dev Sandbox (Recommended)
 
@@ -144,45 +114,7 @@ in-repo `.claude/skills/k8s-dev-sandbox/` 僅剩未進通用 plugin 的 woow 專
 
 ### PaaS Operator Local Development
 
-When the PaaS Operator is running in Kubernetes without Ingress, use port-forward to access it locally:
-
-```bash
-# Port forward the paas-operator service to localhost:8000
-kubectl port-forward -n paas-system svc/paas-operator 8000:80
-
-# Verify connection
-curl http://localhost:8000/health
-```
-
-**Get API Key from Kubernetes Secret:**
-
-```bash
-kubectl get secret -n paas-system paas-operator-secret -o jsonpath='{.data.api-key}' | base64 -d
-```
-
-**Odoo Configuration (Settings → Woow PaaS):**
-
-- **PaaS Operator URL**: `http://localhost:8000` (本機 Odoo) 或 `http://host.docker.internal:8000` (Docker Odoo)
-- **PaaS Operator API Key**: (value from secret above)
-
-> **Note**: The port-forward session must remain active while testing. If you close the terminal, re-run the port-forward command.
-
-**Docker 網路注意事項：**
-
-當 Odoo 運行在 Docker 容器中時，容器內的 `localhost` 指向容器本身，而非宿主機。因此需要使用 `host.docker.internal` 來連接宿主機上的 port-forward：
-
-| Odoo 運行環境 | PaaS Operator URL                  |
-| ------------- | ---------------------------------- |
-| 本機直接運行  | `http://localhost:8000`            |
-| Docker 容器   | `http://host.docker.internal:8000` |
-
-```bash
-# 確認 port-forward 正在運行
-kubectl port-forward -n paas-system svc/paas-operator 8000:80
-
-# 從 Docker 容器內測試連線
-docker exec -it <odoo-container> curl http://host.docker.internal:8000/health
-```
+無 Ingress 時用 port-forward 連本機 operator。指令、API key 取得、Odoo 設定值與 Docker 容器要改用 `host.docker.internal` 的注意事項，見 **`paas-operator-dev` skill**（`.claude/skills/paas-operator-dev/SKILL.md`）。
 
 ### Release & Build paas-odoo Image
 
@@ -196,24 +128,7 @@ docker exec -it <odoo-container> curl http://host.docker.internal:8000/health
 
 ### Directory Structure
 
-```
-woow_paas_platform/
-├── src/                          # Odoo addon 源碼（models / controllers / OWL app at /woow，數量見各目錄）
-│   ├── __manifest__.py
-│   ├── controllers/              # HTTP / JSON API（paas、billing、dashboard、ai_assistant、smart_home、profile、ha_api、ha_paas、oauth2、portal、reconcile_report、security_access、agent_runtime_skill、agent_runtime_webhook）
-│   ├── models/                   # Workspace、CloudService、Wallet/Billing、AI、MCP、OAuth2、SmartHome、Subscription、Project/Account...
-│   ├── views/                    # backend XML views + menu
-│   ├── data/                     # demo data、cron、subscription products、templates
-│   ├── security/                 # ir.model.access.csv、ir_rules.xml
-│   └── static/src/paas/          # Standalone OWL App（layout / pages / components / services / core/router.js / styles）
-├── extra/
-│   ├── paas-operator/            # FastAPI service 包 Helm CLI（helm chart 已移至 woow-paas-charts repo）
-│   └── cloudflare/               # Cloudflare 整合
-├── docs/                         # 6 類 docs（guides / reference / decisions / plans / tracking / archived + superpowers）
-└── .claude/skills/               # Project skills（ccpm、k8s-dev-sandbox、deploy-stg、deploy-local、build-operator、ecpay、playwright-cli、retro）
-```
-
-詳細結構與檔案列表已交由其他文件維護，避免雙寫漂移：
+頂層佈局：`src/`（Odoo addon 源碼＋`static/src/paas/` standalone OWL app）、`extra/paas-operator/`（FastAPI 包 Helm CLI；helm chart 已移至 woow-paas-charts repo）、`extra/cloudflare/`、`docs/`、`.claude/skills/`。細節用 `ls` 看即可；詳細結構與檔案列表已交由其他文件維護，避免雙寫漂移：
 
 - 模組總覽：`README.md`
 - 子系統 spec：`docs/reference/features/`
@@ -231,26 +146,7 @@ The module provides an independent frontend application:
 
 ### API Endpoints
 
-實際 endpoints 分散在 `src/controllers/` 多個檔案：
-
-| Controller                 | 範圍                                                                                    |
-| -------------------------- | --------------------------------------------------------------------------------------- |
-| `paas.py`                  | 主入口 `/woow`、cloud-services 端點（templates、services、plans、trial、addon-removal） |
-| `billing.py`               | wallet、payment-methods、subscriptions、invoices、topup                                 |
-| `dashboard.py`             | 首頁 summary                                                                            |
-| `ai_assistant.py`          | AI providers / agents、chat、support                                                    |
-| `smart_home.py`            | smart home 模板與裝置                                                                   |
-| `profile.py`               | `/api/me` partner self-update                                                           |
-| `ha_api.py`                | Home Assistant API proxy                                                                |
-| `ha_paas.py`               | HA PaaS 0 元開通（`/api/ha-paas/provision`、`/api/ha-paas/status`）                     |
-| `oauth2.py`                | OAuth2 server endpoints                                                                 |
-| `portal.py`                | 原生 portal 頁擴充（project/task view values 注入 agent 卡片；無自有 route）            |
-| `reconcile_report.py`      | 對帳報表（`/api/reconcile-report/list`、`/api/reconcile-report/reverify`）              |
-| `security_access.py`       | workspace Security Access CRUD 與 routes（`/api/workspaces/<id>/security-accesses`…）  |
-| `agent_runtime_skill.py`   | agent-runtime skill bundle（`/api/agent-runtimes/skill-bundle`）                        |
-| `agent_runtime_webhook.py` | agent-runtime 狀態回呼（`/api/agent-runtimes/webhook/state-update`）                    |
-
-完整端點與 OWL hash-based 路由詳見 `docs/reference/api/`，或直接 grep `@route` 與 `src/static/src/paas/core/router.js`。
+實際 endpoints 分散在 `src/controllers/` 多個檔案（各檔案範圍看檔名與其 `@route` 即明；唯一例外 `portal.py` **沒有自有 route**——它覆寫原生 `ProjectCustomerPortal` 的 view-value hook 注入 agent 卡片，grep `@route` 找不到它）。完整端點與 OWL hash-based 路由詳見 `docs/reference/api/`，或直接 grep `@route` 與 `src/static/src/paas/core/router.js`。
 
 ### Odoo Module Patterns
 
@@ -395,8 +291,7 @@ export class SubscriptionCard extends Component {
 ### Odoo Module
 
 - Odoo version: 18.0
-- Odoo core modules: `base`, `web`, `project`, `mail`, `bus`
-- Third-party addons: 權威清單見 `src/__manifest__.py` 的 `depends`（含 ai_base_gt、odoo_ai_assistant_chatgpt_connector、sh_subscription 系列、ecpay 系列等）
+- Odoo core modules 與 third-party addons: 權威清單見 `src/__manifest__.py` 的 `depends`（含 ai_base_gt、odoo_ai_assistant_chatgpt_connector、sh_subscription 系列、ecpay 系列等）
 - External fonts: Google Fonts (Manrope, Outfit), Material Symbols
 
 ### PaaS Operator Service
