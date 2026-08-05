@@ -348,6 +348,25 @@ def check_owl_template(root, only_file=None):
     return violations
 
 
+_NOUPDATE_DECL_RE = re.compile(r"<data[^>]*\bnoupdate=[\"']1[\"']")
+
+
+def data_file_declares_noupdate(fp):
+    """單檔是否有**生效中**的 ``<data noupdate="1">``。
+
+    比對前先剝 XML 註解（沿用既有的 _strip_xml_comments，它已經是「留白不刪除」
+    的正確策略）：被 ``<!-- -->`` 包住的舊寫法在語意上不生效。把它當成生效宣告，
+    會逼人為一個**不存在的** sticky 風險去更新 baseline，而 baseline 一旦先被撐大，
+    日後真的有人在該檔加 ``noupdate="1"`` 時 gate 就不會響了——假陽性當場製造出
+    一個假陰性（#576）。
+
+    check 與 --update-baseline 共用這**唯一**入口，讓「baseline 與 check 對同一份
+    檔案得出不同判定」在結構上不可能發生（同 controller_sudo_count 的理由）。
+    """
+    with open(fp, encoding="utf-8", errors="replace") as f:
+        return _NOUPDATE_DECL_RE.search(_strip_xml_comments(f.read())) is not None
+
+
 def check_data_noupdate(root, only_file=None):
     baseline = set(read_baseline_pairs(NOUPDATE_BASELINE))
     violations = []
@@ -357,9 +376,7 @@ def check_data_noupdate(root, only_file=None):
         if not os.path.exists(fp):
             continue
         rel = os.path.relpath(fp, root).replace(os.sep, "/")
-        with open(fp, encoding="utf-8", errors="replace") as f:
-            has_noupdate = re.search(r"<data[^>]*\bnoupdate=[\"']1[\"']", f.read()) is not None
-        if has_noupdate and rel not in baseline:
+        if data_file_declares_noupdate(fp) and rel not in baseline:
             violations.append(
                 "%s：新增了 noupdate=\"1\" 的 data 檔。noupdate flag 會寫進 ir.model.data 變 sticky，"
                 "其他 data 檔對同一 record 的 -u 更新會被靜默 skip（fresh install 綠 ≠ 升級路徑綠，見 %s）。"
@@ -369,12 +386,12 @@ def check_data_noupdate(root, only_file=None):
 
 
 def current_noupdate_files(root):
+    """--update-baseline 的來源；判準與 check_data_noupdate 共用同一個入口。"""
     files = []
     for fp in sorted(glob.glob(os.path.join(root, "src/data/*.xml"))):
         rel = os.path.relpath(fp, root).replace(os.sep, "/")
-        with open(fp, encoding="utf-8", errors="replace") as f:
-            if re.search(r"<data[^>]*\bnoupdate=[\"']1[\"']", f.read()):
-                files.append(rel)
+        if data_file_declares_noupdate(fp):
+            files.append(rel)
     return files
 
 
@@ -1540,7 +1557,11 @@ PATTERN_DOC_MAP_EXEMPT = {
         "brief 與 source-of-truth 衝突時的處置紀律；同上，無檔案路徑可綁",
 }
 
-_PATTERN_INDEX_LINK_RE = re.compile(r"^\s*-\s*\[[^\]]*\]\(([^)]+)\)\s*$")
+# 只收「同目錄的裸 .md 檔名」。舊寫法 `([^)]+)` 完全不設限，「完整檔案清單」段裡
+# **任何** markdown 連結都被當成登記項——外部 URL 經 os.path.basename 之後會變成一份
+# 憑空的 pattern doc（`https://…/x.md` → `x.md`），訊息還寫「改名／刪除沒同步？」，
+# 把人導去找一個從來不存在的檔案（#576）。含 :// 或路徑分隔的目標一律不是登記項。
+_PATTERN_INDEX_LINK_RE = re.compile(r"^\s*-\s*\[[^\]]*\]\(([A-Za-z0-9._-]+\.md)\)\s*$")
 _PATTERN_INDEX_WIKILINK_RE = re.compile(r"^\[\[([^\]]+)\]\]$")
 _PATTERN_INDEX_COUNT_RE = re.compile(r"完整\s*(\d+)\s*條")
 
@@ -1640,7 +1661,15 @@ def _pattern_index_registers(root):
             m = _PATTERN_INDEX_WIKILINK_RE.match(first)
             if m:
                 topic.add("%s/%s.md" % (PATTERN_DOC_DIR, m.group(1)))
-    counts = [int(n) for n in _PATTERN_INDEX_COUNT_RE.findall("\n".join(lines))]
+    # 「完整 N 條」只認**頂部宣告**（第一個 `## ` 之前）。舊寫法 findall 全檔，訊息卻
+    # 寫「頂部宣告」⇒ 任何人往散文寫一句含數字的話（「本節的判準完整 7 條」）就會觸發，
+    # 而訊息把人導向頂部那行——那裡的數字已經是對的，照著去改永遠修不好（#576）。
+    # 選限縮範圍而不是改寫訊息：訊息已經對讀者承諾了「頂部」這個語意，讓實作對齊承諾
+    # 比放寬承諾好，而且限縮同時消滅了假陽性，改訊息只是讓假陽性比較好懂。
+    header_end = next((i for i, line in enumerate(lines) if line.startswith("## ")),
+                      len(lines))
+    counts = [int(n) for n in
+              _PATTERN_INDEX_COUNT_RE.findall("\n".join(lines[:header_end]))]
     return toc, topic, counts, []
 
 
