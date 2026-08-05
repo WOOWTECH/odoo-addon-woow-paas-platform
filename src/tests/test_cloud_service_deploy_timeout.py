@@ -330,7 +330,7 @@ class TestModelPollTimeout(_Base):
         兩層 poll 原本對 ``pending-install`` / ``pending-upgrade`` /
         ``pending-rollback`` 一律靜置等下一輪。但被 SIGKILL 腰斬的 rollback 會
         把 release 永久留在 ``pending-rollback``，沒有任何東西會再推它
-        （``reference_helm_atomic_failure_double_timeout`` 的實錄）——就緒判定
+        （``docs/reference/gotchas/helm-atomic-failure-double-timeout.md`` 的實錄）——就緒判定
         根本不會被呼叫，所以這條路必須自己有話可說。
         """
         svc = self._make_service('container',

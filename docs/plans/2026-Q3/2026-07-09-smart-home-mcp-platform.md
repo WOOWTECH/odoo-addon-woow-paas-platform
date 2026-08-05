@@ -570,7 +570,7 @@ odoo -c odoo.conf -u woow_paas_platform --test-enable \
   --test-tags /woow_paas_platform --stop-after-init
 ```
 
-Expected: 綠（0 failure）。已知非本 PR 的 flake：agent-runtime env `ns-left-set`（缺 `AGENT_RUNTIME_NAMESPACE_SECRET` 環境變數，非回歸，見 `reference_odoo_test_docker_desktop_paas_image`）。**除該既有 flake 外任何紅都要停下排查**（用 systematic-debugging，不硬過）。
+Expected: 綠（0 failure）。已知非本 PR 的 flake：agent-runtime env `ns-left-set`（缺 `AGENT_RUNTIME_NAMESPACE_SECRET` 環境變數，非回歸，見 `docs/guides/testing/odoo-test-docker-desktop-paas-image.md`）。**除該既有 flake 外任何紅都要停下排查**（用 systematic-debugging，不硬過）。
 
 - [ ] **Step 4: Commit**
 
