@@ -95,10 +95,12 @@ Fail-open：hook 模式下任何內部錯誤 → exit 0，絕不擋開發。
 """
 import ast
 import glob
+import io
 import json
 import os
 import re
 import sys
+import tokenize
 import xml.etree.ElementTree as ET
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -192,6 +194,98 @@ def read_baseline_pairs(path):
     return result
 
 
+_SUDO_CALL_RE = re.compile(r"\.sudo\(")
+
+
+def _blank_range(out, src, start, end):
+    """把 out[start:end] 的非換行字元換成空白（換行留著才不會位移行號）。"""
+    for i in range(start, end):
+        if src[i] != "\n":
+            out[i] = " "
+
+
+def _blank_outside_fstring_fields(out, src, start, end):
+    """f-string 專用：只留白 ``{...}`` **之外**的字元，field 內是真的程式碼。
+
+    只有 Python ≤3.11 會走到這裡——那時整個 f-string 是單一 STRING token。
+    3.12+ 的 tokenize 已把 field 拆成獨立 token，字面部分是 FSTRING_MIDDLE。
+    """
+    depth = 0
+    i = start
+    while i < end:
+        ch = src[i]
+        if depth == 0 and ch in "{}" and i + 1 < end and src[i + 1] == ch:
+            out[i] = out[i + 1] = " "      # ``{{`` / ``}}`` 是轉義，不是 field
+            i += 2
+            continue
+        if ch == "{":
+            depth += 1
+            out[i] = " "
+        elif ch == "}" and depth > 0:
+            depth -= 1
+            out[i] = " "
+        elif depth == 0 and ch != "\n":
+            out[i] = " "
+        i += 1
+
+
+def _blank_python_comments_and_strings(src):
+    """把 Python 的 COMMENT／STRING 原地換成**等長空白**，回傳同長度的字串。
+
+    註解與字串字面裡的 ``.sudo(`` 不是呼叫點——docstring 在描述用法、錯誤訊息
+    在引述寫法，兩者在語意上都不生效。一併留白字串不會漏掉動態呼叫：動態呼叫
+    （``getattr(rec, "sudo")()``）根本不長成 ``.sudo(`` 這個字面。
+
+    ⚠ 必須逐 token 換成**等長**空白，不可用 " ".join(tokens) 重組來源：後者會在
+    ``record.sudo(`` 中間插入空白，regex 全部對不上，量出來每個 controller 都是
+    0——而 0 看起來像個合理答案（「所以全都是註解？」）。留白策略與既有的
+    _strip_xml_comments 相同，行號與所有非註解字元的相對位置都保留。
+
+    f-string 的 replacement field 裡是**真的**呼叫點，兩條版本路徑都必須保留它：
+    3.12+ 只留白 FSTRING_MIDDLE（字面部分），≤3.11 整串是 STRING 故改走大括號
+    深度掃描。兩條路徑對同一份檔案要得出同一個數字，否則 CI 與本機會不一致。
+
+    語法錯誤的檔會讓 tokenize 丟 TokenError／IndentationError／SyntaxError：
+    **往外拋**，由呼叫端 fail-loud。不可 except 後退回全文計數——那會讓一個語法
+    錯的檔靜默回到「註解也算呼叫點」的舊行為。
+    """
+    line_starts = [0]
+    for idx, ch in enumerate(src):
+        if ch == "\n":
+            line_starts.append(idx + 1)
+    out = list(src)
+    fstring_middle = getattr(tokenize, "FSTRING_MIDDLE", None)
+
+    def offset(pos):
+        row, col = pos
+        return line_starts[row - 1] + col
+
+    for tok in tokenize.generate_tokens(io.StringIO(src).readline):
+        start, end = offset(tok.start), offset(tok.end)
+        if tok.type == tokenize.COMMENT or (
+                fstring_middle is not None and tok.type == fstring_middle):
+            _blank_range(out, src, start, end)
+        elif tok.type == tokenize.STRING:
+            prefix_len = len(tok.string) - len(tok.string.lstrip("bBfFrRuU"))
+            if "f" in tok.string[:prefix_len].lower():
+                _blank_outside_fstring_fields(out, src, start, end)
+            else:
+                _blank_range(out, src, start, end)
+    return "".join(out)
+
+
+def controller_sudo_count(fp):
+    """單檔的 ``.sudo(`` 呼叫點數——check 與 --update-baseline 的**唯一**入口。
+
+    兩邊共用同一個函式，是為了讓「baseline 與 check 對同一份檔案得出不同數字」
+    在結構上不可能發生。#576 之前是兩處各寫一次 re.findall，只改一邊就會漂移，
+    症狀是「跑完 --update-baseline 之後 check 仍然紅」。
+    """
+    with open(fp, encoding="utf-8", errors="replace") as f:
+        src = f.read()
+    return len(_SUDO_CALL_RE.findall(_blank_python_comments_and_strings(src)))
+
+
 # ---------------------------------------------------------------- checks
 
 def check_controller_sudo(root, only_file=None):
@@ -204,8 +298,14 @@ def check_controller_sudo(root, only_file=None):
         if not os.path.exists(fp):
             continue
         rel = os.path.relpath(fp, root).replace(os.sep, "/")
-        with open(fp, encoding="utf-8", errors="replace") as f:
-            count = len(re.findall(r"\.sudo\(", f.read()))
+        try:
+            count = controller_sudo_count(fp)
+        except (tokenize.TokenError, IndentationError, SyntaxError) as exc:
+            violations.append(
+                "%s：tokenize 失敗（%s）——這個檔語法有問題，.sudo( 呼叫點無從判定。"
+                "本 check 刻意不退回全文計數（那會讓語法錯的檔靜默回到「註解也算呼叫點」"
+                "的舊行為，是 #576 修掉的缺陷）。先修語法再跑一次。" % (rel, exc))
+            continue
         allowed = baseline.get(rel, 0)
         if count > allowed:
             violations.append(
@@ -218,11 +318,15 @@ def check_controller_sudo(root, only_file=None):
 
 
 def current_sudo_counts(root):
+    """--update-baseline 的來源；判準與 check_controller_sudo 共用同一個入口。
+
+    這裡刻意**不** catch tokenize 例外：語法錯的檔要讓 --update-baseline 直接炸，
+    不能靜默寫出一個用舊判準（含註解）算出來的 baseline。
+    """
     counts = {}
     for fp in sorted(glob.glob(os.path.join(root, "src/controllers/*.py"))):
         rel = os.path.relpath(fp, root).replace(os.sep, "/")
-        with open(fp, encoding="utf-8", errors="replace") as f:
-            counts[rel] = len(re.findall(r"\.sudo\(", f.read()))
+        counts[rel] = controller_sudo_count(fp)
     return counts
 
 
