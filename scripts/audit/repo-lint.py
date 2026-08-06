@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """repo-lint：把「假綠家族」pitfall 轉成機械 gate 的靜態檢查工具。
 
-二十個 check 函式，歸為下列十八條規則（7. capability-gate 一條由三個函式實作：
+二十一個 check 函式，歸為下列十九條規則（7. capability-gate 一條由三個函式實作：
 slug 集合成員／admin-gui 錨點／gateway 文案錨點；這個一對多關係的顯式映射表是
 `REPO_LINT_RULES`，由第 17 條機械對帳，所以下面這兩個數字不會再靜默漂掉）。
 每條都對應一個已翻車的 pitfall，訊息內附文件指針：
@@ -119,6 +119,22 @@ slug 集合成員／admin-gui 錨點／gateway 文案錨點；這個一對多關
                      ⚠ 只比對兩份副本是否相等，**不驗證清單本身完整**（漏列一個實際
                      在用的 namespace 需要對照叢集實況，屬於人的工作）。
                      依據 docs/guides/deployment/shared-cluster-paas-scope-guard.md
+19. poll-release-facts-single-source  poll 有**兩份實作**（cron 走
+                     src/models/cloud_service.py 的 `_poll_and_update_status`、租戶打
+                     端點走 src/controllers/paas.py 的 `_update_service_status`），
+                     帳本回寫的欄位集合必須來自同一個 producer `_release_facts`：兩份
+                     都要呼叫它，且兩份內都不得再把 helm_revision／helm_chart_version
+                     當 dict 字面鍵列出。#627 的形態：兩份各自組 write vals，controller
+                     那份寫了 chart_version、cron 那份沒寫，而唯一斷言「release_facts
+                     必須到得了每個 write 分支」的測試**整份只驅動 controller** ⇒ cron
+                     那份整份沒回寫也全綠，#552 層① 的第五條回寫路徑在無人值守時失效，
+                     stg 實地漂移 3 天零告警。**同一功能有兩份實作時，覆蓋率要問的是
+                     「每一份都被驅動了嗎」。**
+                     ⚠ 只守**結構**（單一 producer 沒被繞過），不驗證兩份跑出來的值
+                     相同——那由 src/tests/test_poll_mirror_release_facts_627.py 的
+                     `TestBothPollImplementationsWriteTheSameFields` 實跑兩份比對。
+                     形態層擋「結構已退化但還沒漂」，行為層擋「改個寫法繞過形態判準」。
+                     依據 docs/tracking/pitfalls/reaped-since-single-path-stamp-gc-immunity.md
 
 用法：
   scripts/audit/repo-lint.py --all                # 全 repo 掃描（CI / merge 前手動）
@@ -1733,6 +1749,113 @@ def _registry_diff(violations, actual, registered, what, fix, extra="", reverse=
             % (rel, what, PATTERN_DOC_DIR, PATTERN_REGISTRY_DOC))
 
 
+#: #627：poll 有兩份實作，帳本回寫的欄位集合必須來自同一個 producer。
+POLL_MODEL_FILE = "src/models/cloud_service.py"
+POLL_CONTROLLER_FILE = "src/controllers/paas.py"
+POLL_RELEASE_FACTS_FILES = (POLL_MODEL_FILE, POLL_CONTROLLER_FILE)
+#: (檔案, 函式名)：兩份 poll 實作的進入點。
+_POLL_IMPLEMENTATIONS = (
+    (POLL_MODEL_FILE, "_poll_and_update_status"),
+    (POLL_CONTROLLER_FILE, "_update_service_status"),
+)
+#: 這些欄位只能由 `_release_facts` 產出，不得在 poll 實作內逐條列出。
+_RELEASE_FACT_KEYS = ("helm_revision", "helm_chart_version")
+_RELEASE_FACTS_PRODUCER = "_release_facts"
+
+
+def check_poll_release_facts_single_source(root):
+    """兩份 poll 實作的帳本回寫欄位必須來自同一個 producer（#627）。
+
+    #627 的形態：poll 有**兩份實作** —— `PaasController._update_service_status`
+    （租戶打端點時走）與 `CloudService._poll_and_update_status`（**cron** 走）。
+    兩份各自組自己的 write vals，於是 controller 那份寫了 `helm_chart_version`、
+    cron 那份只寫 `helm_revision`。而唯一斷言「`release_facts` 必須到得了每個
+    write 分支」的測試**整份只驅動 controller** ⇒ cron 那份整份沒回寫也全綠，
+    #552 層① 的第五條回寫路徑在無人值守時失效，實地漂移 3 天無告警。
+
+    修法是把欄位集合收斂到 `CloudService._release_facts`。**本 gate 守的是那個
+    收斂不被還原**：任何人把欄位再 inline 回任一份實作，當下就紅——不必等到兩份
+    再次漂移、也不必等到有人想起要驗另一份。
+
+    判準兩條，缺一不可：
+    1. 兩份實作都必須呼叫 `_release_facts`（沒呼叫＝自己組 vals，收斂被繞過）。
+    2. 兩份實作內都不得出現 `helm_revision` / `helm_chart_version` 當 dict 字面
+       鍵（出現＝逐路徑列欄位的寫法回來了，正是 #627 的成因）。
+
+    ⚠ 覆蓋邊界：這是**結構**守衛，守「單一 producer 沒被繞過」。它不驗證
+    `_release_facts` 回傳的內容對不對，也不驗證兩份實作跑出來的值相同——那是行為
+    層的事，由 `src/tests/test_poll_mirror_release_facts_627.py` 的
+    `TestBothPollImplementationsWriteTheSameFields` 實際跑兩份實作比對。形態層與
+    不變式層各守各的：只有形態層會被「改個寫法」繞過，只有行為層抓不到「今天還沒
+    漂但結構已經退化」。
+
+    🔴 fail-loud：檔案讀不到、parse 不了、找不到目標函式，一律當違規。靜默
+    `return []` 會讓這條 gate 在函式改名的當下永久沉默且看起來永遠是綠的——那正是
+    它要防的形態換一個載體重演。
+    """
+    violations = []
+    producer_seen = False
+
+    for rel, func_name in _POLL_IMPLEMENTATIONS:
+        path = os.path.join(root, rel)
+        try:
+            with open(path, encoding="utf-8") as f:
+                tree = ast.parse(f.read())
+        except (OSError, SyntaxError, ValueError) as exc:
+            violations.append(
+                "%s：讀不到或 parse 失敗（%s）——poll 單一 producer 的守線整條失去"
+                "鑑別力。解析失敗當違規而不是無事，否則本 gate 會靜默恆綠（#627）"
+                % (rel, exc))
+            continue
+
+        target = None
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef):
+                if node.name == func_name:
+                    target = node
+                if node.name == _RELEASE_FACTS_PRODUCER and rel == POLL_MODEL_FILE:
+                    producer_seen = True
+
+        if target is None:
+            violations.append(
+                "%s：找不到 poll 實作 `%s`。函式改名或被移走時本 gate 會失去目標，"
+                "而失去目標與「沒有違規」的輸出一模一樣 ⇒ 當違規處理。改名的話請一併"
+                "更新 `_POLL_IMPLEMENTATIONS`（#627）" % (rel, func_name))
+            continue
+
+        calls_producer = any(
+            isinstance(n, ast.Call)
+            and isinstance(n.func, ast.Attribute)
+            and n.func.attr == _RELEASE_FACTS_PRODUCER
+            for n in ast.walk(target))
+        if not calls_producer:
+            violations.append(
+                "%s::%s 沒有呼叫 `%s`——poll 的帳本回寫欄位必須來自單一 producer。"
+                "自己組 write vals 就是 #627 的成因：兩份實作各漏各的，而只驅動其中"
+                "一份的測試全綠。依據 docs/decisions/patterns/README.md 與 #627"
+                % (rel, func_name, _RELEASE_FACTS_PRODUCER))
+
+        for node in ast.walk(target):
+            if not isinstance(node, ast.Dict):
+                continue
+            for key in node.keys:
+                if (isinstance(key, ast.Constant)
+                        and key.value in _RELEASE_FACT_KEYS):
+                    violations.append(
+                        "%s::%s 第 %d 行把 `%s` 當 dict 字面鍵寫死——release 事實欄位"
+                        "只能經由 `%s` 取得。逐路徑列欄位正是 #627 的成因（今天漏一個"
+                        "欄位、明天加第三個欄位時再漏一次）"
+                        % (rel, func_name, getattr(key, "lineno", -1),
+                           key.value, _RELEASE_FACTS_PRODUCER))
+
+    if not producer_seen:
+        violations.append(
+            "%s 沒有定義 `%s`——兩份 poll 實作的欄位集合失去單一來源，#627 的收斂被"
+            "還原了" % (POLL_MODEL_FILE, _RELEASE_FACTS_PRODUCER))
+
+    return violations
+
+
 def check_pattern_doc_registry(root):
     """pattern doc 的三方登記表必須互為雙射，且 map 指到的路徑必須是存在的檔案。
 
@@ -2052,6 +2175,8 @@ REPO_LINT_RULES = {
     "availability-reason-labels": ("check_availability_reason_labels",),
     "repo-lint-docstring-registry": ("check_repo_lint_docstring_registry",),
     "kubectl-ns-whitelist-sync": ("check_kubectl_ns_whitelist_sync",),
+    "poll-release-facts-single-source": (
+        "check_poll_release_facts_single_source",),
 }
 
 # 刻意不掛 hook 分派的 check：{函式名: 理由}。現況是空的（每一條都掛得到 hook）。
@@ -2359,7 +2484,8 @@ def run_all(root):
                   + check_pattern_doc_registry(root)
                   + check_availability_reason_labels(root)
                   + check_repo_lint_docstring_registry(root)
-                  + check_kubectl_ns_whitelist_sync(root))
+                  + check_kubectl_ns_whitelist_sync(root)
+                  + check_poll_release_facts_single_source(root))
     if violations:
         print("repo-lint：%d 個違規" % len(violations))
         for v in violations:
@@ -2421,6 +2547,10 @@ def run_hook():
         # 前端 REASON_LABELS），壞掉的是另一個檔 ⇒ 一樣整條重算、不做 only_file 切片。
         availability = (check_availability_reason_labels(root)
                         if rel in AVAILABILITY_REASON_FILES else [])
+        # #627：poll 的兩份實作分別在 model 與 controller，欄位集合是**跨檔**不變式
+        # ⇒ 動到任一份就整條重算，不做 only_file 切片（同 ladder／availability）。
+        poll_facts = (check_poll_release_facts_single_source(root)
+                      if rel in POLL_RELEASE_FACTS_FILES else [])
         if re.match(r"^src/controllers/.*\.py$", rel):
             violations = check_controller_sudo(root, only_file=abs_path)
             violations += check_reuse_values(root, only_file=abs_path)
@@ -2467,7 +2597,7 @@ def run_hook():
             # 白名單的兩份副本互為對方的判準：改哪一邊，壞掉的都是「兩份是否一致」這個
             # 跨檔不變式本身 ⇒ 不做 only_file 切片，動到任一份就整條重算。
             violations = check_kubectl_ns_whitelist_sync(root)
-        elif ladder or availability:
+        elif ladder or availability or poll_facts:
             # extra/paas-operator/** 不在上面任何分支，但它持有階梯的內層常數；
             # 跨檔集合搬到不匹配任何分支的位置時，這裡也接得住。
             violations = []
@@ -2475,6 +2605,7 @@ def run_hook():
             return 0
         violations += ladder
         violations += availability
+        violations += poll_facts
         if violations:
             print(json.dumps({
                 "decision": "block",
