@@ -6,24 +6,37 @@ name: manifest-version-gate
 # 而且判準由**排隊順序**決定——rebase 完到真正 merge 之間 develop 可能又被別人 bump 過
 # ⇒ 檢查時機必須是「每次 push 都重跑」，不是「rebase 後檢查一次」。
 #
-# ⚠ 已知殘留缺口（誠實標明）：pull_request 事件只在**本 PR 被 push** 時觸發。
-# 別人 merge 進 develop **不會**讓本 PR 的 gate 自動重跑 ⇒ 綠燈可能在 merge 前過期。
-# 收掉它需要 merge queue 或「合併前要求分支 up-to-date」的分支保護，不在本 workflow 內。
+# 綠燈過期的缺口，現況（2026-08-06）：**已由 repo 設定收掉，不是由本 workflow 收掉**。
+# pull_request 事件只在**本 PR 被 push** 時觸發，別人 merge 進 develop 不會讓本 PR 的
+# gate 自動重跑——這一點沒有變，workflow 層也關不掉。真正關掉它的是 develop 分支保護的
+# `block_on_outdated_branch=True`：PR 落後 base 就不准 merge ⇒ 必須先 rebase ⇒ rebase
+# 的 push 會重跑本 gate ⇒ merge 當下的綠燈必然是對「當下 develop」驗出來的。
+# ⚠ 這個閉合**依賴那個設定持續開著**。若哪天 block_on_outdated_branch 被關掉，缺口原樣
+# 回來（綠燈可能在 merge 前過期），而且不會有任何訊號。
 on:
   pull_request:
-    # 白名單的維護義務見 repo-lint.yml 開頭那段（#461／#547：paths 少一條，job 不是紅
-    # 也不是綠，它**根本不出現**）。這裡刻意只放兩類、且第一類是單一 broad glob：
+    # 🔴 這裡刻意**沒有 paths 白名單**——每一個 PR 都無條件跑。
     #
-    #   - "src/**"  gate 的判準只可能因為 src/ 底下有改動而變紅（manifest 版號、
-    #               migration 目錄都在 src/ 內）。沒動 src/ 的 PR 判定必然是
-    #               out-of-scope pass ⇒ 不跑它是無損的，不是漏檢。
-    #               ⚠ 刻意不列舉 src/models/**、src/tests/** 這類子路徑——那才會腐化。
-    #   - gate 自身 改動 gate 就要重新證明 gate 還會動（本 PR 自己就是第一個案例：
-    #               它只動 .gitea/ 與 scripts/，若沒有這兩條就沒有任何一次真實執行）。
-    paths:
-      - "src/**"
-      - ".gitea/workflows/manifest-version-gate.yml"
-      - "scripts/ci/**"
+    # 原本有 `paths: ["src/**", 本檔, "scripts/ci/**"]`，當時的理由是：「gate 的判準只
+    # 可能因為 src/ 底下有改動而變紅，沒動 src/ 的 PR 判定必然是 out-of-scope pass
+    # ⇒ 不跑它是無損的，不是漏檢。」
+    #
+    # **那個推理在「本 gate 不是 required status check」的前提下正確；前提一翻轉，結論
+    # 就反過來。** Gitea／GitHub 的 required status check 判準是「該 context **存在**
+    # 且成功」。paths 沒命中時 workflow 根本不觸發 ⇒ 該 context **不存在**——不是紅也
+    # 不是綠。⇒ 設成 required 之後，純 docs PR 會永遠缺一個 check、**永遠不能 merge**。
+    # 「不跑它是無損的」在 required 之後變成「不跑它就卡死」。
+    #
+    # 實證（不是推論）：PR#599 的 head `5098936d` 只動了 .gitea/ 與 scripts/ci/，該
+    # commit 的 statuses **只有 manifest-version-gate 一個 context**——repo-lint 與
+    # lychee 這兩個 workflow 當時都存在於 repo，卻因 paths 沒命中而完全沒有留下 context。
+    #
+    # 代價：每個 PR 多跑約 7 秒。行為不變——沒動 src/ 的 PR 本來就會判 out-of-scope
+    # pass（見 scripts/ci/manifest-version-gate.py :: classify_bump_requirement），
+    # 差別只在「有沒有留下一個 context 讓 required check 看得到」。
+    #
+    # 什麼時候可以改回白名單：**只有在本 gate 不再是 required status check 時。**
+    # 在那之前，加任何 paths／branches 過濾都等同於讓所有被過濾掉的 PR 無法合併。
 
 jobs:
   manifest-version-gate:
