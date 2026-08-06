@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """repo-lint：把「假綠家族」pitfall 轉成機械 gate 的靜態檢查工具。
 
-十八個 check 函式，歸為下列十六條規則（7. capability-gate 一條由三個函式實作：
-slug 集合成員／admin-gui 錨點／gateway 文案錨點）。每條都對應一個已翻車的
-pitfall，訊息內附文件指針：
+十九個 check 函式，歸為下列十七條規則（7. capability-gate 一條由三個函式實作：
+slug 集合成員／admin-gui 錨點／gateway 文案錨點；這個一對多關係的顯式映射表是
+`REPO_LINT_RULES`，由第 17 條機械對帳，所以下面這兩個數字不會再靜默漂掉）。
+每條都對應一個已翻車的 pitfall，訊息內附文件指針：
 
 1. controller-sudo   src/controllers/*.py 的 .sudo( 呼叫點數量對 baseline 白名單；
                      新增 sudo() 必須有意識地更新 baseline（附 justification）。
@@ -92,6 +93,19 @@ pitfall，訊息內附文件指針：
                      還會讓營運去查根本不存在的名額問題）。與 7(c) 同一個家族——兩邊
                      各自都「看起來對」，沒有任何測試會變紅。只查涵蓋（後端 ⊆ 前端），
                      前端多留舊 slug 的文案無害。
+17. repo-lint-docstring-registry  本檔檔頭與實作互為雙射：上面的編號條目名 ↔
+                     `REPO_LINT_RULES` 映射表 ↔ `run_all()` 實際呼叫的 check_*，
+                     編號 1..N 連續遞增，開頭宣告的兩個數字也要對得上。#596 修好了
+                     檔頭三處過期內容（「十五個 check」與實際不符、漏登記一條、11 與
+                     12 顛倒），但那是症狀——**沒有任何 gate 會在下次漂移時變紅**，
+                     同一個形態會原樣復發且復發時一樣零訊號。檔頭不是裝飾：它是後續
+                     維護者判斷「這支工具守了什麼」的第一手資料，說謊的成本不是美觀
+                     問題。順帶守兩條同型不變式：定義了 check_* 卻沒進 run_all（gate
+                     寫好了沒人跑）、進了 run_all 卻沒掛 run_hook 分派（＝#596 本體，
+                     CI 會抓而 hook 完全沉默）；後者可用 `REPO_LINT_HOOK_EXEMPT`
+                     具名豁免。解析失敗在 `--all` 下算違規、不算無事——自檢寫成
+                     fail-open 就是「永久沉默且看起來永遠是綠的」。
+                     ⚠ 只對帳名單／編號／數字，**不驗證條目描述與 check 行為相符**。
 
 用法：
   scripts/audit/repo-lint.py --all                # 全 repo 掃描（CI / merge 前手動）
@@ -1880,6 +1894,330 @@ def check_availability_reason_labels(root):
     return []
 
 
+# --------------------------------------------- repo-lint 檔頭 ↔ 實作對帳（#598）
+
+REPO_LINT_SELF_REL = "scripts/audit/repo-lint.py"
+# 本條守的是**本檔自己**，沒有外部 pattern doc；權威敘述就是上面的檔頭。
+REPO_LINT_REGISTRY_REF = "見本檔檔頭與 #598"
+
+# 檔頭的編號條目（＝規則）→ 實作它的 check 函式名。
+#
+# 🔴 這張表是「一條規則可以由多個函式實作」這個一對多關係的**唯一顯式表達**，也是
+#    檔頭與 run_all() 之間唯一的橋。刻意不寫成 `函式數 - 2` 這類差額常數：那種寫法
+#    在第二條一對多規則出現的當下會**靜默算對總數卻對錯人**（#598 工單明列）。
+# 🔴 新增一條 check 要同時動四處：這張表、檔頭條目、run_all()、run_hook() 分派。
+#    四處互相對帳，少改任何一處都會紅——那正是 #596 缺的機制（當時只修了症狀）。
+# 順序即檔頭條目順序；run_all() 的通過訊息直接由它產生，好讓「守了哪些線」少一份
+# 手抄清單。實證：PR #608 在 .gitea/workflows/repo-lint.yml 寫「17 條 check」，而
+# 當時檔頭寫「十八個 check 函式、十六條規則」，run_all() 的通過訊息又列了 17 個
+# 名字——三份散文三個數字，#596 修完不到一天就長出第四處同型漂移。
+REPO_LINT_RULES = {
+    "controller-sudo": ("check_controller_sudo",),
+    "owl-template": ("check_owl_template",),
+    "data-noupdate": ("check_data_noupdate",),
+    "reuse-values": ("check_reuse_values",),
+    "seed-topology": ("check_seed_topology",),
+    "test-env-restore": ("check_test_env_restore",),
+    "capability-gate": ("check_slug_capability_gate",
+                        "check_admin_gui_gate_anchor",
+                        "check_gateway_copy_gate_anchor"),
+    "conceal-instances": ("check_conceal_instances_gate",),
+    "reset-budget-ladder": ("check_reset_budget_ladder",),
+    "transition-anchor-utc": ("check_transition_anchor_utc",),
+    "assertlogs-numeric-level": ("check_assertlogs_numeric_level",),
+    "mixin-subscription-sudo": ("check_mixin_subscription_sudo",),
+    "config-parameter-uninstall": ("check_config_parameter_uninstall",),
+    "duplicate-class-methods": ("check_duplicate_class_methods",),
+    "pattern-doc-registry": ("check_pattern_doc_registry",),
+    "availability-reason-labels": ("check_availability_reason_labels",),
+    "repo-lint-docstring-registry": ("check_repo_lint_docstring_registry",),
+}
+
+# 刻意不掛 hook 分派的 check：{函式名: 理由}。現況是空的（每一條都掛得到 hook）。
+# 要豁免就必須寫下理由——豁免這個動作會出現在 diff 裡可被覆核，靜默漏掛不會
+# （#596 本體＝漏掛 run_hook：CI 會抓、hook 完全沉默，而兩者的輸出一模一樣）。
+REPO_LINT_HOOK_EXEMPT = {}
+
+# 條目格式：行首 `N. rule-name` ＋兩個以上空白 ＋說明；續行一律縮排（縮排的行不會
+# 被當成新條目）。`(?=\s)` 是為了不把名字截半就收工。
+_REPO_LINT_ENTRY_RE = re.compile(r"^(\d+)\.[ \t]+([a-z0-9][a-z0-9-]*)(?=\s)", re.M)
+# 計數宣告只認**檔頭區**（第一條編號條目之前）。#576 的教訓：findall 掃全文會被
+# 條目說明裡任何一句含數字的散文觸發，而訊息把人導向開頭那行——那裡的數字已經是
+# 對的，照著去改永遠修不好。限縮範圍同時消滅假陽性，改寫訊息只是讓假陽性好懂。
+_REPO_LINT_FUNC_COUNT_RE = re.compile(r"([〇零一二兩三四五六七八九十\d]+)個\s*check\s*函式")
+_REPO_LINT_RULE_COUNT_RE = re.compile(r"([〇零一二兩三四五六七八九十\d]+)條規則")
+_CN_NUMERALS = {"〇": 0, "零": 0, "一": 1, "二": 2, "兩": 2, "三": 3, "四": 4,
+                "五": 5, "六": 6, "七": 7, "八": 8, "九": 9}
+
+
+def _cn_int(text):
+    """「十九」／「19」→ 19；認不得回 None。只支援 0–99（本檔的規模）。"""
+    text = text.strip()
+    if text.isdigit():
+        return int(text)
+    head, sep, tail = text.partition("十")
+    if not sep:
+        return _CN_NUMERALS.get(text) if len(text) == 1 else None
+    if len(head) > 1 or len(tail) > 1:
+        return None
+    tens = 1 if not head else _CN_NUMERALS.get(head)
+    ones = 0 if not tail else _CN_NUMERALS.get(tail)
+    if tens is None or ones is None:
+        return None
+    return tens * 10 + ones
+
+
+def _repo_lint_check_calls(node):
+    """node 底下所有 `check_*(...)` 呼叫的函式名（含重複；不保證原始碼順序）。"""
+    return [n.func.id for n in ast.walk(node)
+            if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+            and n.func.id.startswith("check_")]
+
+
+def _repo_lint_module_literal(tree, name):
+    """讀 module 層 `NAME = <literal>` 的值；找不到或不是 literal 回 None。"""
+    for node in tree.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        if not any(isinstance(t, ast.Name) and t.id == name for t in node.targets):
+            continue
+        try:
+            return ast.literal_eval(node.value)
+        except (ValueError, SyntaxError, TypeError):
+            return None
+    return None
+
+
+def _dups(seq):
+    return sorted({x for x in seq if seq.count(x) > 1})
+
+
+def check_repo_lint_docstring_registry(root):
+    """本檔的檔頭 docstring 與實作必須互為雙射（#598）。
+
+    檔頭是「這支工具到底守了哪些線」的唯一敘述來源，也是 #596 當初能被發現的線索
+    來源。在此之前它是純散文：新增 check 卻忘了改檔頭**不會有任何訊號**，同一個
+    漂移原樣復發。#596／PR #597 修的是症狀（三處過期內容），這條 check 補的是機制
+    ——判準永遠是「改壞它，什麼會變紅？」。
+
+    對帳四件（前三件是 #598 指定的最低要求）：
+
+    1. 數量：檔頭開頭宣告的「N 個 check 函式／M 條規則」要對得上 run_all() 實際
+       呼叫的 check_* 個數與檔頭編號條目數。一對多（7. capability-gate 由三個函式
+       實作）走 `REPO_LINT_RULES` 這張顯式映射表，**不是**寫死差額。
+    2. 編號 1..M 連續且嚴格遞增（#596 的第三處問題就是 11 與 12 顛倒）。
+    3. 名稱互為雙射：條目名 ↔ `REPO_LINT_RULES` 的鍵 ↔ run_all() 呼叫的函式名。
+       只比數字的話，「數量相等但名字錯配」完全抓不到。
+    4. 兩條同型不變式：module 層定義了 check_* 卻沒進 run_all()（gate 寫好了沒人
+       跑）、進了 run_all() 卻沒掛 run_hook() 分派（＝#596 本體：CI 會抓、hook 完全
+       沉默，而兩者的輸出一模一樣）。後者可用 `REPO_LINT_HOOK_EXEMPT` 具名豁免。
+
+    每一條違規都點名**是哪一個**（哪個函式沒登記／哪個條目沒有實作／哪兩個編號錯位），
+    不是「差幾個」——只報數量等於報了一個沒法行動的訊號。
+
+    🔴 fail-loud：讀不到／parse 不了／檔頭抽不到條目，一律當違規。這是 repo-lint
+    檢查自己，若解析失敗就 `return []`，它會在檔頭格式一改的當下**永久沉默、而且
+    看起來永遠是綠的**——那正是本 check 要防的形態換一個載體重演。（檔頭最後一行的
+    「Fail-open」講的是 hook 模式的全域 except：hook 不擋開發，`--all` 必須紅，
+    兩者不衝突。）
+
+    ⚠ 覆蓋邊界：只保證名單／編號／數字三者對得上，**不驗證條目的描述文字與該 check
+    的實際行為相符**。描述寫錯、pitfall 指針過期、依據文件被刪，本 gate 一個都抓不到
+    ——那留給人。把這條綠讀成「檔頭寫的都是真的」就是 #547 的原型錯誤換一個載體。
+    """
+    ref = REPO_LINT_REGISTRY_REF
+    self_rel = REPO_LINT_SELF_REL
+    path = os.path.join(root, self_rel)
+    try:
+        with open(path, encoding="utf-8") as f:
+            src = f.read()
+        tree = ast.parse(src)
+    except (OSError, SyntaxError, ValueError) as exc:
+        return ["%s：讀不到或 parse 失敗（%s）——檔頭對帳整條失去鑑別力。解析失敗當"
+                "違規而不是無事，否則這條 check 會靜默恆綠（%s）" % (self_rel, exc, ref)]
+
+    doc = ast.get_docstring(tree)
+    if not doc:
+        return ["%s：module docstring 不見了。它是這支工具唯一的規則敘述來源，刪掉它"
+                "等於把「守了哪些線」變回無人知曉（%s）" % (self_rel, ref)]
+
+    first = _REPO_LINT_ENTRY_RE.search(doc)
+    if not first:
+        return ["%s：檔頭抽不到任何 `N. rule-name` 編號條目——探針失去鑑別力（雙射在"
+                "空集合上恆真）。格式是行首 `1. controller-sudo   說明…`、續行縮排"
+                "（%s）" % (self_rel, ref)]
+    entries = [(int(n), name) for n, name in _REPO_LINT_ENTRY_RE.findall(doc)]
+    header = doc[:first.start()]
+
+    top = {n.name: n for n in tree.body if isinstance(n, ast.FunctionDef)}
+    missing_fn = [n for n in ("run_all", "run_hook") if n not in top]
+    if missing_fn:
+        return ["%s：找不到 %s()——檔頭對帳的實作側探針壞掉，不是通過（%s）"
+                % (self_rel, "()／".join(missing_fn), ref)]
+
+    rules = _repo_lint_module_literal(tree, "REPO_LINT_RULES")
+    if not isinstance(rules, dict) or not rules:
+        return ["%s：讀不到 `REPO_LINT_RULES` 映射表（或它是空的）。那是「規則 ↔ 實作"
+                "函式」一對多關係的唯一顯式表達，沒有它就只剩寫死差額常數一途，"
+                "第二條一對多規則出現時會靜默算對總數卻對錯人（%s）" % (self_rel, ref)]
+    exempt = _repo_lint_module_literal(tree, "REPO_LINT_HOOK_EXEMPT")
+    if not isinstance(exempt, dict):
+        return ["%s：讀不到 `REPO_LINT_HOOK_EXEMPT`（要是 dict literal）。它是 hook "
+                "分派的具名豁免清單，讀不到就無法分辨「刻意不掛」與「漏掛」（%s）"
+                % (self_rel, ref)]
+
+    called = _repo_lint_check_calls(top["run_all"])
+    called_set = set(called)
+    hooked = set(_repo_lint_check_calls(top["run_hook"]))
+    defined = {n.name for n in tree.body
+               if isinstance(n, ast.FunctionDef) and n.name.startswith("check_")}
+    doc_names = [name for _, name in entries]
+    num_of = {name: num for num, name in entries}
+    violations = []
+
+    # (1) 編號 1..N 連續且嚴格遞增。
+    nums = [n for n, _ in entries]
+    expected = list(range(1, len(entries) + 1))
+    if sorted(nums) != expected:
+        for n in _dups(nums):
+            violations.append(
+                "%s：檔頭編號 %d 出現 %d 次（%s）——重號會讓「第幾條」指到兩個地方，"
+                "後續全部錯位（%s）"
+                % (self_rel, n, nums.count(n),
+                   "／".join(nm for k, nm in entries if k == n), ref))
+        for n in expected:
+            if n not in nums:
+                violations.append(
+                    "%s：檔頭缺編號 %d（共 %d 條，編號應為 1..%d 連續）——是不是刪掉一"
+                    "條卻沒把後面重新編號？（%s）"
+                    % (self_rel, n, len(entries), len(entries), ref))
+        for n in sorted(set(nums) - set(expected)):
+            violations.append(
+                "%s：檔頭條目 `%s` 編號 %d 超出總數 %d（%s）"
+                % (self_rel, dict(entries).get(n, "?"), n, len(entries), ref))
+    elif nums != expected:
+        # 集合對但順序不對 ＝ 純置換，逐一點名錯位的那幾條（#596 的 11／12 顛倒）。
+        for pos, (n, name) in enumerate(entries, start=1):
+            if n != pos:
+                violations.append(
+                    "%s：檔頭第 %d 個條目 `%s` 的編號寫成 %d——編號必須嚴格遞增"
+                    "（兩條顛倒時兩邊都會被點名，#596 的第三處問題就是這個）（%s）"
+                    % (self_rel, pos, name, n, ref))
+
+    # (2) 條目名 ↔ REPO_LINT_RULES 的鍵：雙射。
+    for name in _dups(doc_names):
+        violations.append(
+            "%s：檔頭有 %d 條條目都叫 `%s`——名稱是對帳的鍵，重名會讓其中一條無論"
+            "怎麼漂移都對得上（%s）" % (self_rel, doc_names.count(name), name, ref))
+    for name in sorted(set(doc_names) - set(rules)):
+        violations.append(
+            "%s：檔頭第 %d 條 `%s` 在 `REPO_LINT_RULES` 裡沒有對應項——條目說有這條"
+            "規則，卻查不到是哪個函式實作它（%s）"
+            % (self_rel, num_of[name], name, ref))
+    for name in sorted(set(rules) - set(doc_names)):
+        violations.append(
+            "%s：`REPO_LINT_RULES` 登記了 `%s`（%s），檔頭卻沒有這條編號條目——實作"
+            "側有守線、敘述側查無此條，讀檔頭的人不會知道它存在（%s）"
+            % (self_rel, name, "／".join(rules.get(name) or ("?",)), ref))
+
+    # (2b) 順序也要一致。`REPO_LINT_RULES` 的順序就是 run_all() 通過訊息的順序，
+    #      與檔頭編號順序分岔會讓兩份清單看起來像在講不同的東西。上面的註解已經
+    #      宣稱「順序即檔頭條目順序」——沒被強制的宣稱遲早變成假話，所以宣稱了就
+    #      得有 gate（memory: feedback_comment_env_state_claims_expire）。
+    if set(doc_names) == set(rules) and list(rules) != doc_names:
+        for pos, (want, got) in enumerate(zip(doc_names, rules), start=1):
+            if want != got:
+                violations.append(
+                    "%s：`REPO_LINT_RULES` 第 %d 項是 `%s`，檔頭第 %d 條卻是 `%s`"
+                    "——兩份清單順序不一致（通過訊息由映射表產生，會與檔頭編號對不上）"
+                    "（%s）" % (self_rel, pos, got, pos, want, ref))
+                break
+
+    # (3) REPO_LINT_RULES 的函式 ↔ run_all() 實際呼叫：雙射。
+    mapped, owner = [], {}
+    for rule, fns in rules.items():
+        if isinstance(fns, str) or not isinstance(fns, (list, tuple)) or not fns:
+            violations.append(
+                "%s：`REPO_LINT_RULES['%s']` 必須是非空的函式名 tuple（現在是 %r）"
+                "——寫成字串會被逐字元拆開，對帳會得出一堆單字母的假違規（%s）"
+                % (self_rel, rule, fns, ref))
+            continue
+        for fn in fns:
+            mapped.append(fn)
+            owner.setdefault(fn, rule)
+    for fn in _dups(mapped):
+        violations.append(
+            "%s：`%s` 被 %d 條規則同時登記——一個函式只能屬於一條規則，否則函式數與"
+            "規則數的差額對不回去（%s）" % (self_rel, fn, mapped.count(fn), ref))
+    for fn in sorted(set(mapped) - called_set):
+        violations.append(
+            "%s：`REPO_LINT_RULES` 說 `%s`（規則 %s）是實作，但 run_all() 沒有呼叫它"
+            "——檔頭宣稱守著的線根本沒人跑（%s）"
+            % (self_rel, fn, owner.get(fn, "?"), ref))
+    for fn in sorted(called_set - set(mapped)):
+        violations.append(
+            "%s：run_all() 呼叫了 `%s`，但 `REPO_LINT_RULES` 沒有任何一條規則登記它"
+            "——新增 check 忘了同步檔頭，正是 #596 的形態（%s）" % (self_rel, fn, ref))
+    for fn in _dups(called):
+        violations.append(
+            "%s：run_all() 呼叫 `%s` %d 次——同一條 check 跑兩遍，違規訊息會重複、"
+            "函式計數也會多算（%s）" % (self_rel, fn, called.count(fn), ref))
+
+    # (4a) 定義了卻沒進 run_all()：gate 寫好了沒人跑。
+    for fn in sorted(defined - called_set):
+        violations.append(
+            "%s：module 層定義了 `%s` 卻沒有出現在 run_all()——寫好的 gate 一次都不會"
+            "被執行，而輸出與「跑了而且沒事」完全相同（%s）" % (self_rel, fn, ref))
+    for fn in sorted(called_set - defined):
+        violations.append(
+            "%s：run_all() 呼叫 `%s`，但本檔 module 層沒有這個函式定義（%s）"
+            % (self_rel, fn, ref))
+
+    # (4b) 進了 run_all() 卻沒掛 run_hook() 分派 ＝ #596 本體。
+    for fn in sorted(called_set - hooked - set(exempt)):
+        violations.append(
+            "%s：`%s` 在 run_all() 裡，卻沒有出現在 run_hook() 的分派——CI 會抓、"
+            "hook 模式完全沉默，而「沒違規」與「根本沒跑到」的輸出一模一樣（#596）。"
+            "確定不需要 hook 就把它加進 `REPO_LINT_HOOK_EXEMPT` 並寫下理由（%s）"
+            % (self_rel, fn, ref))
+    for fn in sorted(set(exempt) - called_set):
+        violations.append(
+            "%s：`REPO_LINT_HOOK_EXEMPT` 列了 `%s`，但 run_all() 根本沒有這條 check"
+            "——豁免比它豁免的東西活得久，下一個同名函式會無聲繼承它（%s）"
+            % (self_rel, fn, ref))
+    for fn in sorted(set(exempt) & hooked):
+        violations.append(
+            "%s：`%s` 同時列在 `REPO_LINT_HOOK_EXEMPT` 與 run_hook() 分派裡，兩者"
+            "互斥——已經掛上了就把豁免刪掉，別讓清單教下一個人錯的事（%s）"
+            % (self_rel, fn, ref))
+
+    # (5) 檔頭區的兩個計數宣告。零命中同樣算紅——那個訊號被刪掉了。
+    for label, regex, actual, what in (
+            ("N 個 check 函式", _REPO_LINT_FUNC_COUNT_RE, len(called_set),
+             "run_all() 實際呼叫的 check_* 個數"),
+            ("M 條規則", _REPO_LINT_RULE_COUNT_RE, len(entries),
+             "檔頭的編號條目數")):
+        claims = regex.findall(header)
+        if not claims:
+            violations.append(
+                "%s：檔頭區（第一條編號條目之前）找不到「%s」的宣告。那是讀的人唯一"
+                "能自證清單完整的訊號，刪掉它等於把「少了一條」變回無聲（%s）"
+                % (self_rel, label, ref))
+            continue
+        for raw in claims:
+            claimed = _cn_int(raw)
+            if claimed is None:
+                violations.append(
+                    "%s：檔頭的「%s」寫成 %r，看不懂（只支援 0–99 的中文數字或阿拉伯"
+                    "數字）——看不懂就等於沒有這個訊號（%s）" % (self_rel, label, raw, ref))
+            elif claimed != actual:
+                violations.append(
+                    "%s：檔頭宣告「%s」＝%d，但 %s＝%d。新增／刪除 check 時要一起更新"
+                    "這個數字（#596 的第一處問題就是它停在「十五個」而實際 18 個）（%s）"
+                    % (self_rel, label, claimed, what, actual, ref))
+    return violations
+
+
 def run_all(root):
     violations = (check_controller_sudo(root)
                   + check_owl_template(root)
@@ -1898,20 +2236,17 @@ def run_all(root):
                   + check_config_parameter_uninstall(root)
                   + check_duplicate_class_methods(root)
                   + check_pattern_doc_registry(root)
-                  + check_availability_reason_labels(root))
+                  + check_availability_reason_labels(root)
+                  + check_repo_lint_docstring_registry(root))
     if violations:
         print("repo-lint：%d 個違規" % len(violations))
         for v in violations:
             print("  ✗ " + v)
         return 1
-    print("repo-lint：全部通過（controller-sudo / owl-template / data-noupdate / "
-          "reuse-values / seed-topology / test-env-restore / capability-gate / "
-          "gateway-copy-gate / "
-          "conceal-instances / reset-budget-ladder / transition-anchor-utc / "
-          "assertlogs-numeric-level / mixin-subscription-sudo / "
-          "config-parameter-uninstall / duplicate-class-methods / "
-          "pattern-doc-registry / "
-          "availability-reason-labels）")
+    # 規則清單由 REPO_LINT_RULES 產生，不手抄。手抄的那版活到最後是這樣的：它列了
+    # 17 個名字（16 條規則＋誤列的 gateway-copy-gate），而同一個檔的檔頭寫「十八個
+    # check 函式、十六條規則」——同一支工具三個數字。少一份清單就少一處會漂的散文。
+    print("repo-lint：全部通過（%s）" % " / ".join(REPO_LINT_RULES))
     return 0
 
 
@@ -1999,6 +2334,13 @@ def run_hook():
             # 而不是你剛編輯的那個檔 ⇒ 不做 only_file 切片，整條重算
             # （同 check_admin_gui_gate_anchor 的形狀）。
             violations = check_pattern_doc_registry(root)
+        elif rel == REPO_LINT_SELF_REL:
+            # #598：本 check 的輸入就是這個檔自己（檔頭 ↔ REPO_LINT_RULES ↔ run_all
+            # ↔ run_hook），沒有 only_file 切片可言——編輯者改的就是被檢查的那一份。
+            # 🔴 漏掛這一支就是 #596 的形態本身：CI 會抓、hook 完全沉默，而「沒違規」
+            # 與「根本沒跑到」的輸出一模一樣。check 自己會對帳這件事（4b），所以下一個
+            # 人漏掛時會在 CI 被點名，而不是靠誰記得。
+            violations = check_repo_lint_docstring_registry(root)
         elif ladder or availability:
             # extra/paas-operator/** 不在上面任何分支，但它持有階梯的內層常數；
             # 跨檔集合搬到不匹配任何分支的位置時，這裡也接得住。
