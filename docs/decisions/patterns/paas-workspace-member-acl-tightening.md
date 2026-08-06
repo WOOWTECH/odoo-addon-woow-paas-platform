@@ -108,7 +108,9 @@ Plan §D8=A 的論證：當未來引入任何 M2M widget / view ref / 標準 Odo
 ## See also
 
 - [[odoo-addon-std-rule-symmetric-deactivation]] — 若 model 是 Odoo std，必須對等拔 std rule
-- [[cloud-service-project-decouple]] §Invariants — 整個 refactor 對 ACL 的 5 個 invariant
+- [[cloud-service-project-decouple]] §Invariants — 該 refactor 的不變式清單，**並非全部關於 ACL**；
+  其中含直接約束本 pattern 的條目（Odoo std rule 維持 `active=false`、`base.group_user` 的 RWCU 必須
+  配 ir.rule 框住），動 project / task 的 ACL 前整段過一遍（刻意不寫條數——寫下就會漂，見 #615）
 - [[cross-workspace-task-data-leak]] — 漏掉本 pattern 第 3 步（std rule deactivation）的後果
 - 關鍵 code 樣板：
   - `src/security/ir.model.access.csv:26-27`（CSV row 對 Odoo std model）
