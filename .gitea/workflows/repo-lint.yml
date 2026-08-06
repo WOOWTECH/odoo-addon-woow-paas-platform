@@ -14,7 +14,9 @@ on:
     # ⇒ 只改 doc、或只改 map 的 PR 不觸發 repo-lint，新 check 對「doc 被改壞」
     # 這一半完全休眠（S1 沒有 S2 等於沒做）。
     #   - docs/decisions/patterns/**：pattern doc 本體與索引 README
-    #   - docs/tracking/pitfalls/**：map 有 6 個條目指到這裡
+    #   - docs/tracking/pitfalls/**：map 有條目指到這裡（同上，不寫個數——這行原本
+    #     寫死一個個數，#598 實測時它已經與 map 實際不符：靜默漂掉，而且沒有任何
+    #     東西會發現。個數要即時的請直接數 pattern-guard-map.json）
     #   - .claude/hooks/**        ：pattern-guard-map.json 與 hook 本體
     #   - CLAUDE.md               ：map 的 seed-default-template class 指到它
     #
@@ -44,9 +46,12 @@ on:
       # #538 工單 7：seed generator 的測試也由本 workflow 跑（見下方自我測試步驟）。
       # 只把它加進那一步的清單、不加這條 paths，就是半套——改壞 generator 的 PR
       # 仍然不觸發 repo-lint，那支測試對它最該守的改動照樣休眠（#461 同型）。
-      # ⚠ 實查過才加：17 條 check 沒有任何一條讀 scripts/seed/ 底下的檔
-      #   （audit hook 攔截 684 次 repo 內存取，scripts/seed 命中 0），所以
+      # ⚠ 實查過才加：現有 check 沒有任何一條讀 scripts/seed/ 底下的檔（當時實測：
+      #   audit hook 攔截 684 次 repo 內存取，scripts/seed 命中 0），所以
       #   seed-only PR 只是多跑一次既有的全樹掃描，不會誤報。
+      #   刻意不寫「N 條 check」——狀態會過期，規則不會（同本檔上面 required 那段的
+      #   判準）。#598 實測過：把這裡的數字改成 999，`--all` 照樣 exit=0、零訊號，
+      #   而 repo-lint 的檔頭對帳 gate 管不到 .gitea/ 底下的散文。
       - "scripts/seed/**"
       - "extra/paas-operator/**"
       - "docs/decisions/patterns/**"
