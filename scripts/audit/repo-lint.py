@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """repo-lint：把「假綠家族」pitfall 轉成機械 gate 的靜態檢查工具。
 
-十九個 check 函式，歸為下列十七條規則（7. capability-gate 一條由三個函式實作：
+二十個 check 函式，歸為下列十八條規則（7. capability-gate 一條由三個函式實作：
 slug 集合成員／admin-gui 錨點／gateway 文案錨點；這個一對多關係的顯式映射表是
 `REPO_LINT_RULES`，由第 17 條機械對帳，所以下面這兩個數字不會再靜默漂掉）。
 每條都對應一個已翻車的 pitfall，訊息內附文件指針：
@@ -106,6 +106,19 @@ slug 集合成員／admin-gui 錨點／gateway 文案錨點；這個一對多關
                      具名豁免。解析失敗在 `--all` 下算違規、不算無事——自檢寫成
                      fail-open 就是「永久沉默且看起來永遠是綠的」。
                      ⚠ 只對帳名單／編號／數字，**不驗證條目描述與 check 行為相符**。
+18. kubectl-ns-whitelist-sync  kubectl 可操作 namespace 的白名單同時寫在 CLAUDE.md
+                     的表格與 docs/guides/deployment/shared-cluster-paas-scope-guard.md
+                     的散文裡，兩份副本的集合必須相等。2026-08-06 實地教訓：平台自己
+                     的 Fleet 注入 secret 全住在 `fleet-local`，paas-app-bundle-cd 的
+                     文件早就把 `kubectl -n fleet-local` 寫成標準程序，而本 repo 的白
+                     名單漏列它 ⇒ 兩份文件對同一個 namespace 給出相反指引，讀者照先讀
+                     到的那份做，兩個方向都零訊號。不去重成一份是因為兩份服務不同讀者
+                     （CLAUDE.md 每 session 自動載入；guard doc 是 pattern-guard hook
+                     推給人讀的敘事版，抽走清單等於被強制讀的那份不再直接寫出規則）
+                     ——**必要重複就該機械化同步**。
+                     ⚠ 只比對兩份副本是否相等，**不驗證清單本身完整**（漏列一個實際
+                     在用的 namespace 需要對照叢集實況，屬於人的工作）。
+                     依據 docs/guides/deployment/shared-cluster-paas-scope-guard.md
 
 用法：
   scripts/audit/repo-lint.py --all                # 全 repo 掃描（CI / merge 前手動）
@@ -1894,6 +1907,113 @@ def check_availability_reason_labels(root):
     return []
 
 
+# --------------------------------------- kubectl namespace 白名單雙寫對帳（2026-08-06）
+
+KUBECTL_NS_CLAUDE_MD = "CLAUDE.md"
+KUBECTL_NS_GUARD_DOC = "docs/guides/deployment/shared-cluster-paas-scope-guard.md"
+KUBECTL_NS_DOC_REF = "見 %s「適用範圍」段" % KUBECTL_NS_GUARD_DOC
+# CLAUDE.md 側：`### ` 標題錨在「只能操作以下 namespace」，清單是它到下一個標題之間的表格。
+KUBECTL_NS_HEADING_RE = re.compile(r"^#{2,4} .*只能操作以下 namespace.*$", re.M)
+KUBECTL_NS_NEXT_HEADING_RE = re.compile(r"^#{1,6} ", re.M)
+# 表格列的第一格必須以 backtick 名字開頭；`| Namespace | 用途 |` 與 `| --- | --- |` 天然被濾掉。
+KUBECTL_NS_ROW_RE = re.compile(r"^\|\s*`([^`]+)`", re.M)
+# guard doc 側：單行散文，項目以全形直線分隔，每項第一個 backtick 才是 namespace
+#（`fleet-local`（**僅限 `paas-*` 前綴資源**）這種帶限定語的項目會有第二個 backtick）。
+KUBECTL_NS_GUARD_LINE_RE = re.compile(r"^kubectl 在 woow-k3s context.*只能操作.*$", re.M)
+KUBECTL_NS_TOKEN_RE = re.compile(r"`([^`]+)`")
+
+
+def _kubectl_ns_from_claude_md(text):
+    """回傳 (namespace 集合, 錯誤訊息 or None)。抽不到一律當錯誤，不回空集合。"""
+    heading = KUBECTL_NS_HEADING_RE.search(text)
+    if not heading:
+        return set(), ("%s：找不到「只能操作以下 namespace」那個標題 ⇒ 白名單對帳失去"
+                       "鑑別力。標題改寫時要一起更新 KUBECTL_NS_HEADING_RE（%s）"
+                       % (KUBECTL_NS_CLAUDE_MD, KUBECTL_NS_DOC_REF))
+    rest = text[heading.end():]
+    nxt = KUBECTL_NS_NEXT_HEADING_RE.search(rest)
+    section = rest[:nxt.start()] if nxt else rest
+    names = {m.group(1) for m in KUBECTL_NS_ROW_RE.finditer(section)}
+    if not names:
+        return set(), ("%s：該段落抽不到任何表格列 ⇒ 兩份清單的比對會在空集合上恆真"
+                       "（探針壞掉不是通過）（%s）" % (KUBECTL_NS_CLAUDE_MD, KUBECTL_NS_DOC_REF))
+    return names, None
+
+
+def _kubectl_ns_from_guard_doc(text):
+    """回傳 (namespace 集合, 錯誤訊息 or None)。抽不到一律當錯誤，不回空集合。"""
+    line = KUBECTL_NS_GUARD_LINE_RE.search(text)
+    if not line:
+        return set(), ("%s：找不到「kubectl 在 woow-k3s context…只能操作…」那一行 ⇒ 白名單"
+                       "對帳失去鑑別力（%s）" % (KUBECTL_NS_GUARD_DOC, KUBECTL_NS_DOC_REF))
+    body = line.group(0).split("：", 1)[-1]
+    names = set()
+    for seg in body.split("｜"):
+        token = KUBECTL_NS_TOKEN_RE.search(seg)
+        if token:
+            names.add(token.group(1))
+    if not names:
+        return set(), ("%s：那一行抽不到任何 namespace ⇒ 比對會在空集合上恆真"
+                       "（探針壞掉不是通過）（%s）" % (KUBECTL_NS_GUARD_DOC, KUBECTL_NS_DOC_REF))
+    return names, None
+
+
+def check_kubectl_ns_whitelist_sync(root):
+    """kubectl 可操作 namespace 的白名單寫在兩個檔案裡，兩份必須逐字相等。
+
+    2026-08-06 實地教訓：平台自己的 Fleet 注入 secret 全住在 ``fleet-local``，而
+    ``paas-app-bundle-cd`` 的 CLAUDE.md／README 早就把 ``kubectl get secret -n
+    fleet-local``、``kubectl patch bundle -n fleet-local`` 寫成標準平台程序——但本
+    repo 的白名單**沒有列入它**。於是兩份文件對同一個 namespace 給出相反指引，而讀
+    者會照先讀到的那份做。
+
+    🔴 這條守的不是「清單內容對不對」（那是人的判斷），是**兩份副本不許分歧**。
+    白名單型守線漏列一個實際天天在用的項目，效果不是更安全，而是守線被繞過（照 CD
+    repo 那份做）或讓人卡住（照本 repo 這份做）——兩個方向都不會有任何訊號。
+
+    為什麼不去重成一份：兩份服務不同讀者。CLAUDE.md 每個 session 自動載入，agent
+    不讀額外文件就要拿得到清單；guard doc 是 pattern-guard hook 推給人讀的敘事版，
+    把清單抽走等於被強制讀的那份不再直接寫出規則。**必要重複就該機械化同步**，而不
+    是靠人記得改一邊要同步另一邊——這正是本 gate 存在的理由。
+
+    ⚠ 覆蓋邊界：只比對兩份**副本**的 namespace 集合是否相等。清單漏了某個實際在用
+    的 namespace（＝#618 修的那個問題本體）本 gate 一個都抓不到——那需要對照叢集實
+    況，屬於人的工作。把這條綠讀成「白名單是完整的」就是原型錯誤換一個載體。
+    """
+    claude_path = os.path.join(root, KUBECTL_NS_CLAUDE_MD)
+    guard_path = os.path.join(root, KUBECTL_NS_GUARD_DOC)
+    missing = [rel for rel, p in ((KUBECTL_NS_CLAUDE_MD, claude_path),
+                                  (KUBECTL_NS_GUARD_DOC, guard_path))
+               if not os.path.exists(p)]
+    if missing:
+        # 🔴 刻意不 fail-open：這兩個檔是守線本體，任一不見就是清單只剩一份副本
+        #    ——而「只剩一份」正好是本 gate 唯一無法察覺分歧的狀態。
+        return ["%s：檔案不存在 ⇒ kubectl namespace 白名單少了一份副本，雙寫對帳失去"
+                "鑑別力（%s）" % ("／".join(missing), KUBECTL_NS_DOC_REF)]
+
+    with open(claude_path, encoding="utf-8") as f:
+        claude_names, err_a = _kubectl_ns_from_claude_md(f.read())
+    with open(guard_path, encoding="utf-8") as f:
+        guard_names, err_b = _kubectl_ns_from_guard_doc(f.read())
+    errors = [e for e in (err_a, err_b) if e]
+    if errors:
+        return errors
+
+    only_claude = sorted(claude_names - guard_names)
+    only_guard = sorted(guard_names - claude_names)
+    if not (only_claude or only_guard):
+        return []
+    # 點名「是哪一個」而不是「差幾個」：只報數量等於報了一個沒法行動的訊號。
+    parts = []
+    if only_claude:
+        parts.append("只在 %s 有：%s" % (KUBECTL_NS_CLAUDE_MD, only_claude))
+    if only_guard:
+        parts.append("只在 %s 有：%s" % (KUBECTL_NS_GUARD_DOC, only_guard))
+    return ["kubectl namespace 白名單兩份副本分歧（%s）⇒ 兩份文件會對同一個 namespace "
+            "給出相反指引，而讀者照先讀到的那份做。改一邊必須同步另一邊（%s）"
+            % ("；".join(parts), KUBECTL_NS_DOC_REF)]
+
+
 # --------------------------------------------- repo-lint 檔頭 ↔ 實作對帳（#598）
 
 REPO_LINT_SELF_REL = "scripts/audit/repo-lint.py"
@@ -1931,6 +2051,7 @@ REPO_LINT_RULES = {
     "pattern-doc-registry": ("check_pattern_doc_registry",),
     "availability-reason-labels": ("check_availability_reason_labels",),
     "repo-lint-docstring-registry": ("check_repo_lint_docstring_registry",),
+    "kubectl-ns-whitelist-sync": ("check_kubectl_ns_whitelist_sync",),
 }
 
 # 刻意不掛 hook 分派的 check：{函式名: 理由}。現況是空的（每一條都掛得到 hook）。
@@ -2237,7 +2358,8 @@ def run_all(root):
                   + check_duplicate_class_methods(root)
                   + check_pattern_doc_registry(root)
                   + check_availability_reason_labels(root)
-                  + check_repo_lint_docstring_registry(root))
+                  + check_repo_lint_docstring_registry(root)
+                  + check_kubectl_ns_whitelist_sync(root))
     if violations:
         print("repo-lint：%d 個違規" % len(violations))
         for v in violations:
@@ -2341,6 +2463,10 @@ def run_hook():
             # 與「根本沒跑到」的輸出一模一樣。check 自己會對帳這件事（4b），所以下一個
             # 人漏掛時會在 CI 被點名，而不是靠誰記得。
             violations = check_repo_lint_docstring_registry(root)
+        elif rel in (KUBECTL_NS_CLAUDE_MD, KUBECTL_NS_GUARD_DOC):
+            # 白名單的兩份副本互為對方的判準：改哪一邊，壞掉的都是「兩份是否一致」這個
+            # 跨檔不變式本身 ⇒ 不做 only_file 切片，動到任一份就整條重算。
+            violations = check_kubectl_ns_whitelist_sync(root)
         elif ladder or availability:
             # extra/paas-operator/** 不在上面任何分支，但它持有階梯的內層常數；
             # 跨檔集合搬到不匹配任何分支的位置時，這裡也接得住。
