@@ -9,8 +9,9 @@ name: manifest-version-gate
 # 綠燈過期的缺口，現況（2026-08-06）：**已由 repo 設定收掉，不是由本 workflow 收掉**。
 # pull_request 事件只在**本 PR 被 push** 時觸發，別人 merge 進 develop 不會讓本 PR 的
 # gate 自動重跑——這一點沒有變，workflow 層也關不掉。真正關掉它的是 develop 分支保護的
-# `block_on_outdated_branch=True`：PR 落後 base 就不准 merge ⇒ 必須先 rebase ⇒ rebase
-# 的 push 會重跑本 gate ⇒ merge 當下的綠燈必然是對「當下 develop」驗出來的。
+# `block_on_outdated_branch`（**開關現值一律看分支保護設定，權威在那邊、此處刻意不複述**）：
+# 開著時 PR 落後 base 就不准 merge ⇒ 必須先 rebase ⇒ rebase 的 push 會重跑本 gate
+# ⇒ merge 當下的綠燈必然是對「當下 develop」驗出來的。
 # ⚠ 這個閉合**依賴那個設定持續開著**。若哪天 block_on_outdated_branch 被關掉，缺口原樣
 # 回來（綠燈可能在 merge 前過期），而且不會有任何訊號。
 on:
