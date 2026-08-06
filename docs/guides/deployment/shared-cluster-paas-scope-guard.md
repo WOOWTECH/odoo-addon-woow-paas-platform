@@ -10,7 +10,10 @@
 
 **How to apply**（權威 namespace 清單，2026-07-08 Eugene 拍板並已寫入 **project CLAUDE.md「kubectl」段**）：
 
-kubectl 在 woow-k3s context **只能操作**：`paas-ws-*`（prod 租戶）｜`paas-ws-stg-*`（stg 租戶）｜`paas-system`（prod 平台系統）｜`paas-stg-system`（stg 平台系統）｜`paas-cloudflare-system`（prod CF tunnel/ingress）｜`paas-stg-cloudflare-system`（stg CF tunnel/ingress）｜`dev-sandbox-*`（開發 sandbox）。**其餘 namespace 絕對不碰**。
+kubectl 在 woow-k3s context **只能操作**：`paas-ws-*`（prod 租戶）｜`paas-ws-stg-*`（stg 租戶）｜`paas-system`（prod 平台系統）｜`paas-stg-system`（stg 平台系統）｜`paas-cloudflare-system`（prod CF tunnel/ingress）｜`paas-stg-cloudflare-system`（stg CF tunnel/ingress）｜`dev-sandbox-*`（開發 sandbox）｜`fleet-local`（**僅限 `paas-*` 前綴資源**）。**其餘 namespace 絕對不碰**。
+
+⚠ **`fleet-local` 是清單裡唯一按資源名前綴授權、而非整個 ns 授權的項目**（2026-08-06 補列）。平台 Fleet 的 GitRepo／Bundle 與 `valuesFrom` 注入 secret（`paas-operator-fleet-secrets` 等）都住在這個 ns，`paas-app-bundle-cd` 的 CLAUDE.md／README 也把 `kubectl get secret ... -n fleet-local`、`kubectl patch bundle -n fleet-local`（force sync）寫成標準平台程序——**但這個 ns 同時住著叢集上其他部署的 Fleet 資源**，所以授權止於 `paas-*` 前綴，其餘一律不碰。
+補列的觸發點：查 `paas-operator-fleet-secrets` 是否覆寫 git 的 `registry.username` 時，發現本清單與 CD repo 的文件對同一個 ns 給出相反指引——**漏列一個實際天天在用的 ns，效果不是更安全，是讓守線被繞過或讓人卡住**。
 
 **適用範圍（2026-07-08 Eugene 補充）**：此鐵律綁「**paas 平台的開發/維運**」事務（woow_paas_platform repo 及其派出的 agent/workflow）。`woow-machines-operator` agent（/Users/eugene/cmux/woow-machines-operator，prod/stg 主機全域維運）**必須能完整操作所有 ns**、不受此限——需要動非清單 ns 時的正確路徑＝升級給該 agent／叢集運維，不是平台側自己動手。
 
