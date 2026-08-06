@@ -196,7 +196,8 @@ _CONFIG_PARAMETERS = [
 
 唯二留本檔的高頻 invariant：
 
-- **CloudService / Project decoupling**：7 條 Invariants 見 `docs/decisions/refactor/cloud-service-project-decouple.md`。
+- **CloudService / Project decoupling**：Invariants 見 `docs/decisions/refactor/cloud-service-project-decouple.md`
+  的 §Invariants（該段即權威清單；此處刻意不寫條數——寫下就會漂，見 #615）。
 - **Seeded `agent_template_default` 必須 tenant-neutral**（unbound + 無 user-scope 綁定；經 sudo 廣播為全租戶 fallback）。綁定當下有 code guard fail-loud（`src/models/agent_template.py:125`）；設計依據 `docs/decisions/patterns/seed-agent-template-design.md`；與 `agent_template_demo`（draft、可綁 project 測試）分工勿互換。
 
 可機械判定的守線改進 `scripts/audit/repo-lint.py`（gate 比散文強）。
