@@ -126,16 +126,34 @@ def _drop_call_line(src, inside, call):
     raise AssertionError("%s() 裡找不到 %s(——注入工具失效" % (inside, call))
 
 
-def _blank_call_line(src, inside, call):
-    """把 inside() 內 `violations = call(root)` 換成 `violations = []`
-    （模擬「hook 分派忘了掛」，語法仍合法）。"""
+def _blank_call_lines(src, inside, call):
+    """把 inside() 內**每一處** `… = call(root…)` 換成 `… = []`（模擬「hook 分派忘了
+    掛」，語法仍合法）。
+
+    🔴 一定要換掉全部出現處。像 `check_gateway_copy_gate_anchor` 在 run_hook 裡有
+    兩個分支各叫一次，只換一處的話它仍留在呼叫集合裡 ⇒ 注入等於沒發生，而測試會
+    照樣綠（注入無效與「gate 正確」在輸出上完全相同）。所以換完之後再 parse 一次
+    自檢：它必須真的不在 inside() 的呼叫集合裡。
+    """
     lo, hi = _fn_line_range(src, inside)
     lines = src.splitlines(True)
+    hits = 0
     for i in range(lo, hi):
         if call + "(" in lines[i]:
-            lines[i] = re.sub(r"=\s*%s\(root\)" % re.escape(call), "= []", lines[i])
-            return "".join(lines)
-    raise AssertionError("%s() 裡找不到 %s(——注入工具失效" % (inside, call))
+            new = re.sub(r"=\s*%s\(root[^)]*\)" % re.escape(call), "= []", lines[i])
+            assert new != lines[i], (
+                "第 %d 行不是 `… = %s(root…)` 的形態，注入工具改不動它：%r"
+                % (i + 1, call, lines[i]))
+            lines[i] = new
+            hits += 1
+    assert hits, "%s() 裡找不到 %s(——注入工具失效" % (inside, call)
+    out = "".join(lines)
+    fn = next(n for n in ast.parse(out).body
+              if isinstance(n, ast.FunctionDef) and n.name == inside)
+    assert call not in rl._repo_lint_check_calls(fn), (
+        "%s 仍出現在 %s() 裡（只 blank 了 %d 處？）——注入沒生效，測試會假綠"
+        % (call, inside, hits))
+    return out
 
 
 # ------------------------------------------------------------ 共用 TestCase
@@ -318,7 +336,7 @@ class TestInjectionImplementationDrift(InjectionCase):
     def test_check_missing_from_run_hook(self):
         # #596 本體：CI 會抓、hook 完全沉默。
         target = "check_pattern_doc_registry"
-        v = self.audit(_blank_call_line(_REAL_SRC, "run_hook", target))
+        v = self.audit(_blank_call_lines(_REAL_SRC, "run_hook", target))
         self.assertMentions(v, target, "沒有出現在 run_hook() 的分派")
 
     def test_new_check_not_registered(self):
@@ -339,15 +357,110 @@ class TestInjectionImplementationDrift(InjectionCase):
         v = self.audit(src)
         self.assertMentions(v, "check_long_gone", "豁免比它豁免的東西活得久")
 
-    def test_exemption_silences_hook_check_only_for_named_one(self):
-        # 豁免有效（具名的那個不再報），但**只**對具名的那個有效。
-        target = "check_pattern_doc_registry"
-        src = _blank_call_line(_REAL_SRC, "run_hook", target)
-        src = src.replace(
+    def test_exemption_silences_only_the_named_check(self):
+        """豁免必須是**逐項扣除**，不是「EXEMPT 非空就跳過整個 4b」的全域開關。
+
+        🔴 這支的前一版只 blank 一個 check 再豁免它，唯一的斷言又是否定性的
+        （`assertNoMention`）。那樣的構造裡根本不存在「未豁免、且不在 run_hook」的
+        第二個 check ⇒ 測試名承諾的 "only" 那一半驗不到，而且 check 整個 fail-open
+        時它必然通過（實測：把 check 函式體插 `return []`，全套 22 支變紅、這支仍綠）。
+        改成 blank 兩個、只豁免其中一個，並加上一句**肯定性**斷言。四格實測：
+
+            實作\\注入          舊注入(blank 1)   新注入(blank 2, 豁免 1)
+            逐項扣除（正確）        綠                綠   ← 陰性對照成立
+            全域開關（錯誤）        綠                紅
+        """
+        exempted = "check_pattern_doc_registry"
+        # run_hook 裡有兩個分支各叫一次，`_blank_call_lines` 會兩處都換掉並自檢。
+        still_red = "check_gateway_copy_gate_anchor"
+        src = _blank_call_lines(_REAL_SRC, "run_hook", exempted)
+        src = _blank_call_lines(src, "run_hook", still_red)
+        patched = src.replace(
             "REPO_LINT_HOOK_EXEMPT = {}",
-            "REPO_LINT_HOOK_EXEMPT = {'%s': '理由'}" % target)
+            "REPO_LINT_HOOK_EXEMPT = {'%s': '理由'}" % exempted)
+        self.assertNotEqual(patched, src, "注入工具失效——豁免清單的宣告變了")
+        v = self.audit(patched)
+        # 具名的那個被消音……
+        self.assertNoMention(v, exempted)
+        # ……未豁免的那個仍被點名。這是唯一的肯定性斷言，也是 fail-open 時會紅的那句。
+        self.assertMentions(v, still_red, "沒有出現在 run_hook() 的分派")
+
+
+# ------------------------------------------------------------ 特異性（不得誤擋）
+
+def _append_entry(src, name, num_hint=None):
+    """在檔頭最後一條條目之後補一條（編號接續）。"""
+    def mutate(head):
+        ms = _entries(head)
+        num = num_hint or int(ms[-1].group(1)) + 1
+        idx = head.index("\n用法：")
+        return head[:idx] + "%d. %s  測試用的新條目。\n" % (num, name) + head[idx:]
+    return _edit_doc(src, mutate)
+
+
+class TestSpecificity(InjectionCase):
+    """合法改動不得被誤擋。
+
+    🔴 這一類測試在「只驗改壞→紅」的測試集裡是隱形的：一條恆紅的 gate 每次注入都
+    變紅，敏感度測試全綠，看起來完美——直到它擋住正當工作，然後被人整條拿掉。所以
+    敏感度與特異性要成對，缺一半的測試集不知道自己缺了什麼。
+    """
+
+    def test_new_check_registered_in_all_four_places_is_green(self):
+        rule, fn = "brand-new-thing", "check_brand_new_thing"
+        src = _REAL_SRC
+        # (1) run_all：接在最後一項後面
+        src = src.replace(
+            "                  + check_repo_lint_docstring_registry(root))",
+            "                  + check_repo_lint_docstring_registry(root)\n"
+            "                  + %s(root))" % fn)
+        self.assertNotEqual(src, _REAL_SRC, "注入工具失效——run_all 的尾行變了")
+        # (2) REPO_LINT_RULES：順序要與檔頭條目一致，所以也接在最後
+        before = src
+        src = src.replace(
+            '    "repo-lint-docstring-registry": ("check_repo_lint_docstring_registry",),\n}',
+            '    "repo-lint-docstring-registry": ("check_repo_lint_docstring_registry",),\n'
+            '    "%s": ("%s",),\n}' % (rule, fn))
+        self.assertNotEqual(src, before, "注入工具失效——映射表的尾項變了")
+        # (3) run_hook 分派
+        before = src
+        src = src.replace(
+            "        elif rel == REPO_LINT_SELF_REL:\n",
+            '        elif rel == "src/brand_new.py":\n'
+            "            violations = %s(root)\n"
+            "        elif rel == REPO_LINT_SELF_REL:\n" % fn)
+        self.assertNotEqual(src, before, "注入工具失效——run_hook 的分支變了")
+        # (4) 函式定義
+        src += "\n\ndef %s(root):\n    return []\n" % fn
+        # (5) 檔頭：補條目 ＋ 兩個計數各 +1
+        src = _append_entry(src, rule)
+        src = _bump_count(src, rl._REPO_LINT_FUNC_COUNT_RE)
+        src = _bump_count(src, rl._REPO_LINT_RULE_COUNT_RE)
+
+        self.assertEqual(self.audit(src), [],
+                         "四處都正確登記的新 check 被誤擋——gate 過度敏感，"
+                         "正當工作會被擋住")
+
+    def test_same_change_missing_only_the_docstring_entry_is_red(self):
+        # 上一支的陰性對照：同一組改動只少做第 (5) 步 ⇒ 必須紅。否則「綠」可能來自
+        # gate 根本沒看這些東西，而不是來自它們真的對得上。
+        rule, fn = "brand-new-thing", "check_brand_new_thing"
+        src = _REAL_SRC.replace(
+            "                  + check_repo_lint_docstring_registry(root))",
+            "                  + check_repo_lint_docstring_registry(root)\n"
+            "                  + %s(root))" % fn)
+        src = src.replace(
+            '    "repo-lint-docstring-registry": ("check_repo_lint_docstring_registry",),\n}',
+            '    "repo-lint-docstring-registry": ("check_repo_lint_docstring_registry",),\n'
+            '    "%s": ("%s",),\n}' % (rule, fn))
+        src = src.replace(
+            "        elif rel == REPO_LINT_SELF_REL:\n",
+            '        elif rel == "src/brand_new.py":\n'
+            "            violations = %s(root)\n"
+            "        elif rel == REPO_LINT_SELF_REL:\n" % fn)
+        src += "\n\ndef %s(root):\n    return []\n" % fn
         v = self.audit(src)
-        self.assertNoMention(v, "沒有出現在 run_hook() 的分派")
+        self.assertMentions(v, rule, "檔頭卻沒有這條編號條目")
 
 
 # ------------------------------------------------------------ fail-loud
