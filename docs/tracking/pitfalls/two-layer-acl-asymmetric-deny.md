@@ -43,7 +43,7 @@ Reproducible attack chain:
 
 ### Plan AC scope blindness
 
-Plan §Acceptance criteria AC #42 only 列 `ai_assistant.py:_check_project_access` 擴入 follower check：
+Plan §Acceptance criteria AC #42 only 列 `src/controllers/ai_assistant.py:_check_project_access` 擴入 follower check：
 
 > 42. `src/controllers/ai_assistant.py:_check_project_access`（line 43-61）unbound carve-out 從 `return True` 改：
 >     ```python
