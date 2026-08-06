@@ -1,0 +1,57 @@
+name: manifest-version-gate
+
+# #538：PR 的 manifest 版號必須嚴格大於**當下的** origin/develop。
+#
+# 為什麼是 CI 而不是 repo-lint.py：repo-lint 是純靜態檢查，這條要比對**遠端當下的值**。
+# 而且判準由**排隊順序**決定——rebase 完到真正 merge 之間 develop 可能又被別人 bump 過
+# ⇒ 檢查時機必須是「每次 push 都重跑」，不是「rebase 後檢查一次」。
+#
+# ⚠ 已知殘留缺口（誠實標明）：pull_request 事件只在**本 PR 被 push** 時觸發。
+# 別人 merge 進 develop **不會**讓本 PR 的 gate 自動重跑 ⇒ 綠燈可能在 merge 前過期。
+# 收掉它需要 merge queue 或「合併前要求分支 up-to-date」的分支保護，不在本 workflow 內。
+on:
+  pull_request:
+    # 白名單的維護義務見 repo-lint.yml 開頭那段（#461／#547：paths 少一條，job 不是紅
+    # 也不是綠，它**根本不出現**）。這裡刻意只放兩類、且第一類是單一 broad glob：
+    #
+    #   - "src/**"  gate 的判準只可能因為 src/ 底下有改動而變紅（manifest 版號、
+    #               migration 目錄都在 src/ 內）。沒動 src/ 的 PR 判定必然是
+    #               out-of-scope pass ⇒ 不跑它是無損的，不是漏檢。
+    #               ⚠ 刻意不列舉 src/models/**、src/tests/** 這類子路徑——那才會腐化。
+    #   - gate 自身 改動 gate 就要重新證明 gate 還會動（本 PR 自己就是第一個案例：
+    #               它只動 .gitea/ 與 scripts/，若沒有這兩條就沒有任何一次真實執行）。
+    paths:
+      - "src/**"
+      - ".gitea/workflows/manifest-version-gate.yml"
+      - "scripts/ci/**"
+
+jobs:
+  manifest-version-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout（PR head，不是 merge 結果）
+        uses: actions/checkout@v4
+        with:
+          # 🔴 fetch-depth: 0 是必要的，不是效能取捨。
+          # shallow clone 算不出 merge-base ⇒ 無從得知本 PR 到底動了哪些檔案。
+          # gate 偵測到 shallow 會直接 fail-loud（刻意不退回「猜一個檔案清單」）。
+          fetch-depth: 0
+          # 刻意檢查 PR 自己的 head 而不是預設的 merge 結果：gate 的判準是
+          # 「**作者寫下的版號**是否嚴格大於 develop」。檢查 merge 結果的話，
+          # 「PR 低於 develop」那種情形會先在 merge ref 生成階段變成衝突或被 base 覆蓋，
+          # gate 看到的就不是作者實際寫的值了。
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: 取回 base 分支
+        run: git fetch --no-tags origin "${{ github.event.pull_request.base.ref }}"
+
+      # 🔴 先自測再判 PR。理由（#538 驗收段）：一道從沒被看過會失敗的檢查，
+      # 與一道什麼都沒檢查的檢查，輸出長得一模一樣。這一步把「上線時驗過一次」
+      # 升級成「每次跑都重新證明比較器還活著」——特別是跨百位那兩個方向。
+      - name: 自測（比較器 + 三點 diff + 豁免判準）
+        run: python3 scripts/ci/test_manifest_version_gate.py
+
+      - name: 檢查 manifest 版號嚴格遞增
+        run: |
+          python3 scripts/ci/manifest-version-gate.py \
+            --base-ref "origin/${{ github.event.pull_request.base.ref }}"
