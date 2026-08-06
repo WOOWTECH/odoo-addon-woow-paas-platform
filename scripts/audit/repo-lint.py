@@ -2175,8 +2175,7 @@ REPO_LINT_RULES = {
     "availability-reason-labels": ("check_availability_reason_labels",),
     "repo-lint-docstring-registry": ("check_repo_lint_docstring_registry",),
     "kubectl-ns-whitelist-sync": ("check_kubectl_ns_whitelist_sync",),
-    "poll-release-facts-single-source": (
-        "check_poll_release_facts_single_source",),
+    "poll-release-facts-single-source": ("check_poll_release_facts_single_source",),
 }
 
 # 刻意不掛 hook 分派的 check：{函式名: 理由}。現況是空的（每一條都掛得到 hook）。
