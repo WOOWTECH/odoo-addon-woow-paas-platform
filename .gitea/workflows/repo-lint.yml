@@ -41,6 +41,13 @@ on:
       # manifest-version-gate，repo-lint 完全沒有留下 context。
       # （manifest-version-gate.yml 舊版的 paths 也是這樣把自己列進去的。）
       - ".gitea/workflows/repo-lint.yml"
+      # #538 工單 7：seed generator 的測試也由本 workflow 跑（見下方自我測試步驟）。
+      # 只把它加進那一步的清單、不加這條 paths，就是半套——改壞 generator 的 PR
+      # 仍然不觸發 repo-lint，那支測試對它最該守的改動照樣休眠（#461 同型）。
+      # ⚠ 實查過才加：17 條 check 沒有任何一條讀 scripts/seed/ 底下的檔
+      #   （audit hook 攔截 684 次 repo 內存取，scripts/seed 命中 0），所以
+      #   seed-only PR 只是多跑一次既有的全樹掃描，不會誤報。
+      - "scripts/seed/**"
       - "extra/paas-operator/**"
       - "docs/decisions/patterns/**"
       - "docs/tracking/pitfalls/**"
@@ -53,34 +60,67 @@ jobs:
       - uses: actions/checkout@v4
       - run: python3 scripts/audit/repo-lint.py --all
 
-      # scripts/audit/ 底下的自我測試。原本一支都沒有被任何 CI 跑到——
+      # scripts/ 底下的自我測試。這些原本一支都沒有被任何 CI 跑到——
       # test_audit_411_classifier.py 從加進來就沒跑過，test_memory_integrity.py
-      # 是 #606 新增的守衛，做出來的當下就處在「驗過一次、但不會被持續驗證」狀態
-      # （memory: feedback_verified_once_is_not_continuously_verified）。
+      # 是 #606 新增的守衛，做出來的當下就處在「驗過一次、但不會被持續驗證」狀態，
+      # test_generate_plan_variants.py 則守著 seed generator（改價／增減變體都要重跑
+      # 它）卻同樣沒人跑（memory: feedback_verified_once_is_not_continuously_verified）。
       #
-      # 🔴 放進 scripts/audit/ 的 test_*.py 契約：**不得有外部依賴**。
+      # 🔴 放進下列目錄的 test_*.py 契約：**不得有外部依賴**。
       #   不可依賴 ~/.claude/、kubeconfig、helm、網路、Odoo、特定 cwd——CI 容器一樣
       #   都沒有。用 glob 收（而不是逐一列名）是為了讓未來新增的自動被納入，不重演
       #   「新增了但沒人跑」；代價就是任何人放一支需要特殊環境的進來會直接弄紅 CI。
-      #   需要環境的測試請放別處，不要放這個目錄。
-      #   （本步驟納入時實測：兩支在 env -i、空 HOME、cwd=/ 下皆綠且不寫 HOME。）
+      #   需要環境的測試請放別處，不要放這些目錄。
+      #   （納入時實測：三支在 env -i、空 HOME、cwd=/ 下皆綠且不寫 HOME。）
       #
-      # glob 沒命中要當失敗：若哪天命名慣例改掉（例如變成 *_test.py），這一步會
-      # 靜靜地一支都不跑而且照樣是綠的——那正是本步驟要修的那個形態本身。
-      - name: scripts/audit 自我測試
+      # 🔴 落空守衛的語意是「**宣告清單裡的每個目錄各自**至少要跑到一支」，不是
+      #   「合計至少一支」。差別在於後者自帶假綠洞：scripts/seed/ 的測試整批被刪或
+      #   改名時，迴圈只是少跑幾輪，合計仍 > 0 ⇒ 照樣綠，而那批測試已經沒人守了。
+      #   守衛的鑑別力來自「跑了幾輪」，輪數若由被測物自己決定，被測物就能自己關掉
+      #   對自己的檢查——所以把 floor（目錄清單）折進迴圈，而不是只拿來比對總數
+      #   （memory: feedback_declarative_list_gate_needs_floor_folded_in，#522 同型）。
+      #   代價：某個目錄哪天合理地不再有測試，這步會紅到有人把它從清單刪掉為止。
+      #   那是刻意的摩擦——刪清單這個動作會出現在 diff 裡可被覆核，靜默少跑不會。
+      - name: scripts/ 自我測試
         run: |
           set -u
           rc=0
-          found=0
-          for t in scripts/audit/test_*.py; do
-            [ -e "$t" ] || continue
-            found=$((found + 1))
-            echo "──────── $t"
-            python3 "$t" || rc=1
+          total=0
+          # 宣告式清單（寫死在 for 裡，不經變數展開——zsh 不做 word splitting，
+          # 用變數會在本機 zsh 下靜默變成單一 token 而空跑）
+          for d in scripts/audit scripts/seed; do
+            if [ ! -d "$d" ]; then
+              echo "✗ 宣告的目錄不存在：$d/（清單與實體不同步，不是靜默略過）"
+              rc=1
+              continue
+            fi
+            found=0
+            for t in "$d"/test_*.py; do
+              [ -e "$t" ] || continue
+              found=$((found + 1))
+              echo "──────── $t"
+              python3 "$t" || rc=1
+            done
+            if [ "$found" -eq 0 ]; then
+              echo "✗ $d/ 底下一支 test_*.py 都沒命中——該目錄的測試整批休眠，與「全部通過」輸出相同，故當失敗"
+              rc=1
+              continue
+            fi
+            echo "──────── $d/ 跑了 $found 支"
+            total=$((total + found))
           done
-          if [ "$found" -eq 0 ]; then
-            echo "✗ scripts/audit/test_*.py 一支都沒命中——glob 落空與「全部通過」輸出相同，故當失敗"
-            exit 1
+          # 完備性：scripts/ 底下不該有「沒人跑」的 test_*.py。這條是為了不必再開
+          # 第三張工單——#607 收 scripts/audit、本次收 scripts/seed，都是事後才發現
+          # 的；有了這條，下一個新目錄會在加進來的當下就紅。
+          unrun=$(find scripts -name 'test_*.py' -not -path '*/__pycache__/*' \
+                    ! -path 'scripts/audit/*' \
+                    ! -path 'scripts/seed/*' \
+                    ! -path 'scripts/ci/test_manifest_version_gate.py' | sort)
+          if [ -n "$unrun" ]; then
+            echo "✗ 以下 test_*.py 沒有任何 CI 會跑到——新增測試時要一併決定誰跑它："
+            echo "$unrun" | sed 's/^/      /'
+            echo "  （scripts/ci/test_manifest_version_gate.py 由 manifest-version-gate.yml 跑，故豁免）"
+            rc=1
           fi
-          echo "──────── 本步驟共跑了 $found 支"
+          echo "──────── 合計 $total 支"
           exit $rc
