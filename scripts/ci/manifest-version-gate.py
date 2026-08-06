@@ -39,11 +39,19 @@ develop 可能又被別人 bump 過。所以檢查時機必須是**每次 push �
   內才免 bump。寫成「有動 `src/tests/` 就免」的話，把一行實作塞進測試 PR 就能繞過；
   universal 判準讓**繞路動作本身成為觸發條件**。
 
-已知殘留缺口（誠實標明，不宣稱已覆蓋）
-------------------------------------
-`pull_request` 事件只在 **PR 自己被 push** 時觸發。**別人 merge 進 develop 不會讓本 PR 的
-gate 自動重跑** ⇒ 綠燈可能在 merge 前就過期。收掉它需要 merge queue 或「合併前要求分支
-up-to-date」的分支保護設定，不在本腳本能力範圍內。
+綠燈過期的缺口：**由 repo 設定收掉，不是由這支腳本或 workflow 收掉**
+----------------------------------------------------------------
+`pull_request` 事件只在 **PR 自己被 push** 時觸發，別人 merge 進 develop 不會讓本 PR 的
+gate 自動重跑——這一點沒變。真正關掉它的是 develop 分支保護的
+`block_on_outdated_branch=True`（2026-08-06 起）：PR 落後 base 就不准 merge ⇒ 必須先
+rebase ⇒ rebase 的 push 重跑本 gate ⇒ merge 當下的綠燈必然是對「當下 develop」驗出來的。
+
+⚠ 這個閉合**依賴那個設定持續開著**；被關掉的話缺口原樣回來，且不會有任何訊號。
+
+另：本 gate 的 workflow **刻意沒有 paths 白名單**，每個 PR 都無條件跑——因為它要當
+required status check，而 paths 沒命中時該 context 不存在（不是紅也不是綠），required
+判準永遠不滿足 ⇒ 純 docs PR 會卡死。理由與實證見
+`.gitea/workflows/manifest-version-gate.yml` 的 `on.pull_request` 註解。
 
 跑法：
     python3 scripts/ci/manifest-version-gate.py                      # 預設比 origin/develop
