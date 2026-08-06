@@ -93,7 +93,7 @@ class CloudService(models.Model):
         )
 ```
 
-（上面是**節錄**：真實的 `unlink()`（`src/models/cloud_service.py:3098-3179`）在同一個 `for service in self:` 迴圈裡還有 F-ENV-5 helm fail-loud guard，迴圈外還有 #318 訂閱結算 / #278 quota 回推 / #279 workspace reconcile。要改那支 method 前請讀原檔，不要拿本節當完整實作。）
+（上面是**節錄**：真實的 `unlink()`（`src/models/cloud_service.py` 的 `CloudService.unlink`）在同一個 `for service in self:` 迴圈裡還有 F-ENV-5 helm fail-loud guard，迴圈外還有 #318 訂閱結算 / #278 quota 回推 / #279 workspace reconcile。要改那支 method 前請讀原檔，不要拿本節當完整實作。）
 
 [[cloud-service-unlink-override-cleanup]] pattern 的延伸 — filter 條件擴**兩個**維度（flag + URL ownership），pattern 本身不破。⚠ 兩維度是 AND 不是二選一：只留 prefix 會誤殺「external 但 URL 剛好是 in-cluster」的合法 row（見下方「endpoint 不 enforce」）；只留 flag 會在 M:N 下誤殺別的 service 的 sidecar MCP。
 
@@ -204,15 +204,16 @@ def migrate(cr, version):
 ### 2026-05 Phase A 補記：M:N 之後 filter 要再窄一維
 
 `cloud_service.project_ids` 已從 One2many 改為 **Many2many**（`project_cloud_service_rel`，
-`src/models/cloud_service.py:332-339`；反向 `project.cloud_service_ids`，
-`src/models/project_project.py:20-29`）。同一個 project 可同時綁 svc_A 與 svc_B，
+`src/models/cloud_service.py` 的 `project_ids` 欄位；反向 `project.cloud_service_ids`，
+`src/models/project_project.py` 的 `cloud_service_ids` 欄位）。同一個 project 可同時綁 svc_A 與 svc_B，
 `self.project_ids.mapped('mcp_server_ids')` 因此會撈到**別的 service 的** sidecar MCP。
 
 只用 flag 的 filter 在 M:N 下＝拆 svc_A 會連坐清掉 svc_B 仍在服務中的 sidecar MCP。
 落地做法是加第二維 **URL ownership**：`_sidecar_url_prefix()`
-（`http://{helm_release_name}-mcp.{helm_namespace}.svc.cluster.local`，
-`cloud_service.py:3196-3212`）＋ `_collect_sidecar_user_mcps()`（`:3181-3194`），
-兩條 path 共用（call site：`:2660-2661` 與 `:3159-3161`）。
+（`http://{helm_release_name}-mcp.{helm_namespace}.svc.cluster.local`）＋
+`_collect_sidecar_user_mcps()`（兩者都在 `src/models/cloud_service.py`），
+兩條 path 共用（call site：`_do_cleanup` 與 `CloudService.unlink` 的
+`for service in self:` per-record loop）。
 
 ⚠ **#271 的 in-cluster invariant 不是這一維的保證。** 它讓 sidecar_backed row 至少一定是
 in-cluster URL，縮小了 prefix filter 漏抓的面；但 invariant **不保證 URL 屬於本 service** ——
@@ -225,7 +226,7 @@ prefix filter 漏掉變 orphan —— 這是**已知殘留缺口**，與下面�
 `sidecar_backed=False`，連 prefix 都不看。）
 
 ⚠ 殘留缺口 2：`url_prefix is None`（service 無 helm identity）時仍退回廣義 filter
-（`cloud_service.py:3190-3191`），此路徑在 M:N 下仍會誤殺他人 row。新增 cleanup path
+（`_collect_sidecar_user_mcps` 裡的 `if url_prefix is None: return candidates`），此路徑在 M:N 下仍會誤殺他人 row。新增 cleanup path
 時**不要**複製這個 fallback 的語意當成安全預設。
 
 ### 為什麼 endpoint 不 enforce「flag ⇔ URL 形態一致」
@@ -306,8 +307,8 @@ PR #47 用 `auto_created` 表「自動建」。Cycle 4 拆 auto-create 後：
 - 關鍵 code：
   - `src/models/mcp_server.py` `sidecar_backed` field — readonly Boolean
   - `src/models/mcp_server.py:152` `_check_sidecar_url_in_cluster` — #271 硬 constraint（sidecar_backed=True ⟹ in-cluster URL，無 bypass）
-  - `src/models/cloud_service.py:3181-3194` `_collect_sidecar_user_mcps` + `:3196-3212` `_sidecar_url_prefix` — 雙 path 共用的 filter（flag **AND** URL prefix）
-  - `src/models/cloud_service.py:2660-2661`（`_do_cleanup`）與 `:3159-3161`（`unlink()` per-record loop）— 兩條 call site
+  - `src/models/cloud_service.py` 的 `_collect_sidecar_user_mcps` + `_sidecar_url_prefix` — 雙 path 共用的 filter（flag **AND** URL prefix）
+  - 同檔 `_do_cleanup` 與 `CloudService.unlink` 的 `for service in self:` per-record loop — 上面那組 helper 的兩條 call site
   - `src/controllers/paas.py:_create_project_mcp_server` — endpoint payload 寫入
   - `src/static/src/paas/pages/project-detail/sections/McpServersSection.js:submitForm` — frontend flow 區分
   - `src/migrations/18.0.1.0.25/post-migrate.py` — idempotent backfill `auto_created → sidecar_backed`
