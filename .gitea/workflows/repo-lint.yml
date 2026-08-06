@@ -58,6 +58,11 @@ on:
       - "docs/tracking/pitfalls/**"
       - ".claude/hooks/**"
       - "CLAUDE.md"
+      # kubectl-ns-whitelist-sync 的**第二份**輸入。CLAUDE.md 已在上一行，但這條
+      # check 比的是兩份副本是否相等 ⇒ 只列一份的話，「只改 guard doc」的 PR 不觸發
+      # repo-lint，gate 對它最該守的那一半（有人在敘事版增減 namespace）完全休眠，
+      # 而輸出與「跑了而且沒事」完全相同（#461／#547 同型）。
+      - "docs/guides/deployment/shared-cluster-paas-scope-guard.md"
 jobs:
   repo-lint:
     runs-on: ubuntu-latest

@@ -45,6 +45,26 @@ _spec.loader.exec_module(rl)
 _REAL_SRC = _GATE_PATH.read_text(encoding="utf-8")
 _DOC_END = '\n"""\n'
 
+# 「在尾端追加一條新 check」這個注入手法需要兩個錨點：run_all() 的最後一行呼叫，以及
+# REPO_LINT_RULES 的最後一項。兩者**從被測模組推導**，不寫死當下最後一條 check 的名字。
+#
+# 🔴 為什麼：寫死的版本在「有人真的在尾端新增一條 check」的當天會靜默不匹配，
+#    `str.replace()` 找不到就原樣回傳 ⇒ 注入沒發生 ⇒ 那幾支測試改為驗證一份**未突變**
+#    的原始碼。下游的 assertNotEqual 絆線會擋住（設計正確），但它只說「注入工具失效」，
+#    不會說是哪個錨點、為什麼——2026-08-06 新增 kubectl-ns-whitelist-sync 時實際踩到，
+#    三處錨點同時失效。推導版讓這個維護動作直接消失。
+# ⚠ 假設：最後一條規則是一對一（單一實作函式），且它就是 run_all() 的最後一個呼叫。
+#    下面兩行 assert 把「假設不成立」變成 import 期就大聲失敗，而不是靜默失去鑑別力。
+_LAST_RULE, _LAST_RULE_FNS = list(rl.REPO_LINT_RULES.items())[-1]
+_LAST_FN = _LAST_RULE_FNS[-1]
+_RUN_ALL_TAIL = "                  + %s(root))" % _LAST_FN
+_RULES_TAIL = '    "%s": ("%s",),\n}' % (_LAST_RULE, _LAST_FN)
+assert _RUN_ALL_TAIL in _REAL_SRC, (
+    "推導不出 run_all() 的尾行（%r）——注入工具失效，不是測試通過。"
+    "若最後一條規則改成多函式實作，這裡的推導假設要一起改" % _RUN_ALL_TAIL)
+assert _RULES_TAIL in _REAL_SRC, (
+    "推導不出 REPO_LINT_RULES 的尾項（%r）——注入工具失效，不是測試通過" % _RULES_TAIL)
+
 
 # ------------------------------------------------------------ 注入工具
 
@@ -341,9 +361,8 @@ class TestInjectionImplementationDrift(InjectionCase):
 
     def test_new_check_not_registered(self):
         src = _REAL_SRC.replace(
-            "                  + check_repo_lint_docstring_registry(root))",
-            "                  + check_repo_lint_docstring_registry(root)\n"
-            "                  + check_brand_new_thing(root))")
+            _RUN_ALL_TAIL,
+            _RUN_ALL_TAIL[:-1] + "\n                  + check_brand_new_thing(root))")
         self.assertNotEqual(src, _REAL_SRC, "注入工具失效——run_all 的尾行變了")
         src += "\n\ndef check_brand_new_thing(root):\n    return []\n"
         v = self.audit(src)
@@ -411,16 +430,12 @@ class TestSpecificity(InjectionCase):
         src = _REAL_SRC
         # (1) run_all：接在最後一項後面
         src = src.replace(
-            "                  + check_repo_lint_docstring_registry(root))",
-            "                  + check_repo_lint_docstring_registry(root)\n"
-            "                  + %s(root))" % fn)
+            _RUN_ALL_TAIL, _RUN_ALL_TAIL[:-1] + "\n                  + %s(root))" % fn)
         self.assertNotEqual(src, _REAL_SRC, "注入工具失效——run_all 的尾行變了")
         # (2) REPO_LINT_RULES：順序要與檔頭條目一致，所以也接在最後
         before = src
         src = src.replace(
-            '    "repo-lint-docstring-registry": ("check_repo_lint_docstring_registry",),\n}',
-            '    "repo-lint-docstring-registry": ("check_repo_lint_docstring_registry",),\n'
-            '    "%s": ("%s",),\n}' % (rule, fn))
+            _RULES_TAIL, _RULES_TAIL[:-1] + '    "%s": ("%s",),\n}' % (rule, fn))
         self.assertNotEqual(src, before, "注入工具失效——映射表的尾項變了")
         # (3) run_hook 分派
         before = src
@@ -446,13 +461,10 @@ class TestSpecificity(InjectionCase):
         # gate 根本沒看這些東西，而不是來自它們真的對得上。
         rule, fn = "brand-new-thing", "check_brand_new_thing"
         src = _REAL_SRC.replace(
-            "                  + check_repo_lint_docstring_registry(root))",
-            "                  + check_repo_lint_docstring_registry(root)\n"
-            "                  + %s(root))" % fn)
+            _RUN_ALL_TAIL, _RUN_ALL_TAIL[:-1] + "\n                  + %s(root))" % fn)
+        self.assertNotEqual(src, _REAL_SRC, "注入工具失效——run_all 的尾行變了")
         src = src.replace(
-            '    "repo-lint-docstring-registry": ("check_repo_lint_docstring_registry",),\n}',
-            '    "repo-lint-docstring-registry": ("check_repo_lint_docstring_registry",),\n'
-            '    "%s": ("%s",),\n}' % (rule, fn))
+            _RULES_TAIL, _RULES_TAIL[:-1] + '    "%s": ("%s",),\n}' % (rule, fn))
         src = src.replace(
             "        elif rel == REPO_LINT_SELF_REL:\n",
             '        elif rel == "src/brand_new.py":\n'
