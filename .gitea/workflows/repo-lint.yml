@@ -35,6 +35,12 @@ on:
     paths:
       - "src/**"
       - "scripts/audit/**"
+      # 本檔自己：改動 gate 就要重新證明 gate 還會動。少了這條，「只改 repo-lint.yml」
+      # 的 PR 不會觸發 repo-lint ⇒ 改動無法自我驗證，而且輸出與「改壞了但沒跑到」
+      # 完全相同。實證：PR#605 只動 .gitea/，該 commit 的 statuses 只有
+      # manifest-version-gate，repo-lint 完全沒有留下 context。
+      # （manifest-version-gate.yml 舊版的 paths 也是這樣把自己列進去的。）
+      - ".gitea/workflows/repo-lint.yml"
       - "extra/paas-operator/**"
       - "docs/decisions/patterns/**"
       - "docs/tracking/pitfalls/**"
@@ -46,3 +52,35 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: python3 scripts/audit/repo-lint.py --all
+
+      # scripts/audit/ 底下的自我測試。原本一支都沒有被任何 CI 跑到——
+      # test_audit_411_classifier.py 從加進來就沒跑過，test_memory_integrity.py
+      # 是 #606 新增的守衛，做出來的當下就處在「驗過一次、但不會被持續驗證」狀態
+      # （memory: feedback_verified_once_is_not_continuously_verified）。
+      #
+      # 🔴 放進 scripts/audit/ 的 test_*.py 契約：**不得有外部依賴**。
+      #   不可依賴 ~/.claude/、kubeconfig、helm、網路、Odoo、特定 cwd——CI 容器一樣
+      #   都沒有。用 glob 收（而不是逐一列名）是為了讓未來新增的自動被納入，不重演
+      #   「新增了但沒人跑」；代價就是任何人放一支需要特殊環境的進來會直接弄紅 CI。
+      #   需要環境的測試請放別處，不要放這個目錄。
+      #   （本步驟納入時實測：兩支在 env -i、空 HOME、cwd=/ 下皆綠且不寫 HOME。）
+      #
+      # glob 沒命中要當失敗：若哪天命名慣例改掉（例如變成 *_test.py），這一步會
+      # 靜靜地一支都不跑而且照樣是綠的——那正是本步驟要修的那個形態本身。
+      - name: scripts/audit 自我測試
+        run: |
+          set -u
+          rc=0
+          found=0
+          for t in scripts/audit/test_*.py; do
+            [ -e "$t" ] || continue
+            found=$((found + 1))
+            echo "──────── $t"
+            python3 "$t" || rc=1
+          done
+          if [ "$found" -eq 0 ]; then
+            echo "✗ scripts/audit/test_*.py 一支都沒命中——glob 落空與「全部通過」輸出相同，故當失敗"
+            exit 1
+          fi
+          echo "──────── 本步驟共跑了 $found 支"
+          exit $rc
