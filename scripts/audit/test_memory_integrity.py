@@ -67,8 +67,7 @@ class TestRepoRelativeResolution(FixtureCase):
     def test_repo_relative_link_resolves(self):
         self.repo_file("docs/tracking/landings/501-global-cap-landing.md")
         self.index("- [x](docs/tracking/landings/501-global-cap-landing.md)")
-        # 注入探針（#538 工單 6）：故意改壞，確認 CI 真的會紅；下一個 commit 還原
-        self.assertEqual(self.audit().dead, ["PROBE-607-DELIBERATE-FAILURE"])
+        self.assertEqual(self.audit().dead, [])
 
     def test_memory_relative_link_still_resolves(self):
         # 迴歸：memory 內部互連是原本就有的形態，不能因為新增 repo 基準而壞掉
