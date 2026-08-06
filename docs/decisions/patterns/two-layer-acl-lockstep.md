@@ -198,8 +198,8 @@ Controller helper 是「sudo path 的 carve-out 邊界 explicit Python expressio
 - [[cross-workspace-task-data-leak]] — sub-model 對等性原則（不同 model 之間 ACL 對等 — 與本 pattern 「同 model 多層」對稱）
 - 關鍵 code：
   - `src/security/ir_rules.xml` `mcp_server_rule_workspace_user` + `mcp_tool_rule_workspace_user` — Layer 1 dual-leg domain
-  - `src/controllers/ai_assistant.py:_check_project_access:44-58` — Layer 2a unbound carve-out
-  - `src/controllers/paas.py:_resolve_project_access:1495-1519` — Layer 2b unbound carve-out（HC-2 hotfix 對齊）
+  - `src/controllers/ai_assistant.py:_check_project_access` — Layer 2a unbound carve-out
+  - `src/controllers/paas.py:_resolve_project_access` — Layer 2b unbound carve-out（HC-2 hotfix 對齊）
   - `src/tests/test_mcp_acl_unbound_isolation.py` — H 段 12-method matrix（含 Layer 1 / Layer 2a / Layer 2b 三層獨立 lock）
 - 上游 Odoo 原理：
   - sudo() 只 bypass `ir.rule` 與 `ir.model.access`，不 bypass `@api.constrains` — 但 sudo path 後的 controller field access 完全繞 ir.rule
