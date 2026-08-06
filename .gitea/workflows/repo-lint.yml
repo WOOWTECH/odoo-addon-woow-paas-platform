@@ -19,15 +19,19 @@ on:
     #   - CLAUDE.md               ：map 的 seed-default-template class 指到它
     #
     # ⚠ 適用範圍：以上「維護白名單」的義務只適用於**非 required status check** 的 job。
-    # 一旦某個 check 被設成 required，paths 白名單的性質就從「省時間」翻轉成「卡死」——
+    # 一旦某個 check 進了 required 清單，paths 白名單的性質就從「省時間」翻轉成「卡死」——
     # 沒命中時該 context **不存在**（不是紅也不是綠），而 required 的判準是「context
     # 存在且成功」⇒ 被過濾掉的 PR 永遠湊不齊 check、永遠不能 merge。
-    # 那種 job 必須**無條件執行**，範例見 .gitea/workflows/manifest-version-gate.yml
-    # 的 on.pull_request 註解（#538 的 gate 就是為此拿掉了 paths）。
     #
-    # repo-lint 目前**不是** required（develop 分支保護 enable_status_check=False）。
-    # 若哪天要把 repo-lint 設成 required，**必須先拿掉這份白名單**——否則只動
-    # docs/guides/ 或 .gitea/ 的 PR 會立刻卡死。
+    # 🔴 判準（刻意只寫規則、不寫當下狀態——狀態會過期，規則不會）：
+    #   **任何 workflow 要進 required 清單之前，必須先確認它沒有 paths／branches 過濾；
+    #     有就得先拿掉。** 對 repo-lint 而言＝要設成 required 就必須先刪掉下面這份 paths，
+    #     否則只動 docs/guides/**、.gitea/**、scripts/ci/** … 的 PR 會立刻永遠卡死。
+    #   已按此判準改成無條件執行的範例：.gitea/workflows/manifest-version-gate.yml（#538）。
+    #
+    # repo-lint 現在是不是 required，**看 develop 分支保護的 status_check_contexts**
+    # ——那是權威來源，刻意不在此複述。（本行原本複述過一個布林值，設定一改就成了活的假話；
+    # 那正是本檔上下文所要防的形態，見 #538 的三張後續工單。）
     paths:
       - "src/**"
       - "scripts/audit/**"
