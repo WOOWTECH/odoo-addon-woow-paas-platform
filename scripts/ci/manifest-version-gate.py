@@ -43,8 +43,9 @@ develop 可能又被別人 bump 過。所以檢查時機必須是**每次 push �
 ----------------------------------------------------------------
 `pull_request` 事件只在 **PR 自己被 push** 時觸發，別人 merge 進 develop 不會讓本 PR 的
 gate 自動重跑——這一點沒變。真正關掉它的是 develop 分支保護的
-`block_on_outdated_branch=True`（2026-08-06 起）：PR 落後 base 就不准 merge ⇒ 必須先
-rebase ⇒ rebase 的 push 重跑本 gate ⇒ merge 當下的綠燈必然是對「當下 develop」驗出來的。
+`block_on_outdated_branch`（2026-08-06 起；**開關現值一律看分支保護設定，此處刻意不複述**）：
+開著時 PR 落後 base 就不准 merge ⇒ 必須先 rebase ⇒ rebase 的 push 重跑本 gate
+⇒ merge 當下的綠燈必然是對「當下 develop」驗出來的。
 
 ⚠ 這個閉合**依賴那個設定持續開著**；被關掉的話缺口原樣回來，且不會有任何訊號。
 
