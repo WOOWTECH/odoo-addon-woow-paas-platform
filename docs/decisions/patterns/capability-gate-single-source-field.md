@@ -89,7 +89,10 @@ CloudAppTemplate.has_admin_gui          ← ① 能力的唯一事實源（model
 ## Gate（機械化落點）
 
 `scripts/audit/repo-lint.py` 的 **capability-gate** check（#460 S2），CI（`.gitea/workflows/repo-lint.yml`）
-與 PostToolUse hook 兩邊都跑。兩條規則**方向相反**，刻意互補：
+與 PostToolUse hook 兩邊都跑。規則**方向相反**，刻意互補——一條禁**已知的壞形態**，其餘每條各鎖住
+一個「唯一的對形態」錨點。**新能力上線就會多一個錨點，此處刻意不寫條數**（同 #605 判準：只寫規則、
+不寫當下狀態——狀態會過期，規則不會）；權威清單是 `scripts/audit/repo-lint.py` 的
+`REPO_LINT_RULES["capability-gate"]`，下表隨之增修：
 
 | 規則 | 語意 | 擋掉的東西 |
 |---|---|---|

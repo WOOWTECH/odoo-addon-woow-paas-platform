@@ -72,7 +72,7 @@
 
 | pattern | 何時觸發 / 必看 |
 |---|---|
-| [[capability-gate-single-source-field]] | 某能力「誰有／誰沒有」同時被後端授權與前端 UI 判斷（Reset 密碼按鈕、專屬分頁 / 操作入口）→ 判準必須是後端 model 欄位經 payload 鏡射，前端**不得**用 `slug ∈ 名單` 自己算一份（漂移方向必然是「後端放行、前端按不到」＝修復不可達，#357 C01 → #460 的 8 選 5）；新模板上架時有人問「要不要也加進前端名單」就是味道。前端 fail-closed（缺欄位視同 False）；repo-lint capability-gate 兩條規則（禁壞形態 + 鎖 `t-if` 鏈追得到 `has_admin_gui`）機械強制；單值 identity（`slug === 'odoo'`）與列表 `filter` 不在 scope |
+| [[capability-gate-single-source-field]] | 某能力「誰有／誰沒有」同時被後端授權與前端 UI 判斷（Reset 密碼按鈕、專屬分頁 / 操作入口）→ 判準必須是後端 model 欄位經 payload 鏡射，前端**不得**用 `slug ∈ 名單` 自己算一份（漂移方向必然是「後端放行、前端按不到」＝修復不可達，#357 C01 → #460 的 8 選 5）；新模板上架時有人問「要不要也加進前端名單」就是味道。前端 fail-closed（缺欄位視同 False）；repo-lint capability-gate 機械強制：禁壞形態 + 逐一鎖住每個對形態錨點（Reset 按鈕的 `t-if` 鏈追得到 `has_admin_gui`、"Gateway API Key" 文案的 `t-if` 鏈追得到 `has_gateway`）——能力增加就多一個錨點，故不寫條數；單值 identity（`slug === 'odoo'`）與列表 `filter` 不在 scope |
 
 ### Agent / hand-off 紀律（maestri 多 phase agent pod 工作流）
 
