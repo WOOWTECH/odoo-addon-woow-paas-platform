@@ -60,6 +60,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | `paas-cloudflare-system` | prod 環境中的 cloudflare tunnel（主要用在 ingress） |
 | `paas-stg-cloudflare-system` | stg 環境中的 cloudflare tunnel（主要用在 ingress） |
 | `dev-sandbox-*` | 開發時的 dev sandbox |
+| `fleet-local`（**僅限 `paas-*` 前綴資源**） | 平台 Fleet 的 GitRepo／Bundle，以及 `valuesFrom` 注入用 secret（`paas-operator-fleet-secrets`、`paas-operator-stg-fleet-secrets`、`paas-odoo-fleet-secrets`…） |
+
+⚠ **`fleet-local` 是本表唯一「按資源名前綴授權」而非整個 ns 授權的項目**——它同時住著叢集上其他部署的 Fleet 資源，`paas-*` 以外的 GitRepo／Bundle／secret 一律不碰。之所以必須列進來：平台自己的 Fleet 注入 secret 全部住在這裡，`paas-app-bundle-cd` 的 CLAUDE.md／README 也把 `kubectl get secret ... -n fleet-local`、`kubectl patch bundle -n fleet-local`（force sync）寫成標準平台程序，本表漏列會讓兩份文件對同一個 ns 給出相反指引（2026-08-06 查 `paas-operator-fleet-secrets` 時撞到）。
 
 其餘 namespace 屬叢集上其他部署（客戶實例、gitea、longhorn-system 等），**絕對不碰**。跨 ns 唯讀盤點（get/list）僅供歸屬分流——非上述 namespace 的資源只列不動，嚴禁任何寫入/刪除；叢集級設定（default StorageClass、Longhorn settings 等）影響全叢集，動之前須與叢集運維協調。（實例教訓：2026-07-08 盤點 48 顆 Released PV，其中 ~39 顆屬其他部署，差點被當平台殘留清理——見 issue #319。）
 
