@@ -38,6 +38,7 @@ from odoo.exceptions import UserError
 from odoo.tests.common import TransactionCase
 
 from odoo.addons.woow_paas_platform.models.cloud_app_template import SupplyGateError
+from .test_poll_mirror_release_facts_627 import _stale_sync_at
 
 _CLIENT_PATH = (
     'odoo.addons.woow_paas_platform.services.paas_operator'
@@ -448,7 +449,15 @@ class TestUpgradeTimeWarning(_Base):
 
 
 class TestPollRecordsOutOfBandChartVersion(_Base):
-    """(a) 第五條回寫路徑：poll 是唯一抓得到「非平台發起的變動」的地方。"""
+    """(a) 第五條回寫路徑：poll 是唯一抓得到「非平台發起的變動」的地方。
+
+    #642 §4.1 ④：running／error／initializing×2 這四支各補上
+    `last_release_sync_at` 的基準線＋前進斷言——與姊妹檔
+    `test_poll_mirror_release_facts_627.py` 對 model 那份 poll 的覆蓋同形，這裡
+    補的是 controller 那份。`_stale_sync_at()` 從那個檔案匯入，不在本檔手抄
+    第二份：這正是 #627 的教訓（兩份實作、只驅動一份的測試全綠）在測試 helper
+    層級的同構版本。
+    """
 
     def _poll(self, service, status_payload):
         from odoo.addons.woow_paas_platform.controllers.paas import PaasController
@@ -481,7 +490,12 @@ class TestPollRecordsOutOfBandChartVersion(_Base):
         """stg `svc-bd9d6ed3` 的形態：叢集被別人 upgrade 了，平台四條路徑都沒跑。"""
         template = self._template('poll-552c', '0.1.0')
         service = self._service(template, state='deploying')
-        service.write({'helm_chart_version': '0.1.0', 'helm_revision': 2})
+        stale_sync_at = _stale_sync_at()
+        service.write({
+            'helm_chart_version': '0.1.0',
+            'helm_revision': 2,
+            'last_release_sync_at': stale_sync_at,
+        })
 
         self._poll(service, self._status())
 
@@ -490,6 +504,10 @@ class TestPollRecordsOutOfBandChartVersion(_Base):
             service.helm_chart_version, '0.1.1',
             'poll 是唯一抓得到非平台發起之 chart 變動的路徑；不回寫的話帳本'
             '永遠停在最後一次由 Odoo 發起的操作')
+        self.assertGreater(
+            service.last_release_sync_at, stale_sync_at,
+            '#642 §4.1 ④：這條 write 分支必須把 last_release_sync_at 從基準線'
+            '前進——語意是「最後一次問過 operator」，不是「值有沒有變」')
 
     def test_failed_release_branch_also_records_it(self):
         """`release_facts` 必須到得了**每個** write 分支，不只 happy path。
@@ -498,12 +516,20 @@ class TestPollRecordsOutOfBandChartVersion(_Base):
         """
         template = self._template('pollfail-552c', '0.1.0')
         service = self._service(template, state='deploying')
-        service.write({'helm_chart_version': '0.1.0'})
+        stale_sync_at = _stale_sync_at()
+        service.write({
+            'helm_chart_version': '0.1.0',
+            'last_release_sync_at': stale_sync_at,
+        })
 
         self._poll(service, self._status(status='failed', description='boom'))
 
         self.assertEqual(service.state, 'error', '前提：走的是 failed 分支')
         self.assertEqual(service.helm_chart_version, '0.1.1')
+        self.assertGreater(
+            service.last_release_sync_at, stale_sync_at,
+            '就算走的是 error 分支，release_facts 仍然被展開進去，'
+            'last_release_sync_at 也必須前進')
 
     def test_old_operator_without_the_field_keeps_the_value(self):
         template = self._template('polllegacy-552c', '0.1.0')
@@ -552,13 +578,21 @@ class TestPollRecordsOutOfBandChartVersion(_Base):
         template = self._template(
             'pollinit-552c', '0.1.0', post_deploy_init_type='n8n')
         service = self._service(template, state='deploying')
-        service.write({'helm_chart_version': '0.1.0', 'helm_revision': 2})
+        stale_sync_at = _stale_sync_at()
+        service.write({
+            'helm_chart_version': '0.1.0',
+            'helm_revision': 2,
+            'last_release_sync_at': stale_sync_at,
+        })
 
         self._poll_with_init_stubbed(service, self._status())
 
         self.assertEqual(service.state, 'initializing', '前提：走的是這條分支')
         self.assertEqual(service.helm_revision, 3, '前提：這條 poll 真的寫了')
         self.assertEqual(service.helm_chart_version, '0.1.1')
+        self.assertGreater(
+            service.last_release_sync_at, stale_sync_at,
+            '首裝分支同樣必須把 last_release_sync_at 從基準線前進')
 
     def test_initializing_branch_from_upgrading_records_it(self):
         """→ `initializing`（升級後補 init：`upgrading` ＋ `addon_update_pending`）。
@@ -569,10 +603,12 @@ class TestPollRecordsOutOfBandChartVersion(_Base):
         template = self._template(
             'pollupg-552c', '0.1.0', post_deploy_init_type='n8n')
         service = self._service(template, state='upgrading')
+        stale_sync_at = _stale_sync_at()
         service.write({
             'helm_chart_version': '0.1.0',
             'helm_revision': 2,
             'addon_update_pending': True,
+            'last_release_sync_at': stale_sync_at,
         })
 
         self._poll_with_init_stubbed(service, self._status())
@@ -580,3 +616,7 @@ class TestPollRecordsOutOfBandChartVersion(_Base):
         self.assertEqual(service.state, 'initializing', '前提：走的是這條分支')
         self.assertEqual(service.helm_revision, 3, '前提：這條 poll 真的寫了')
         self.assertEqual(service.helm_chart_version, '0.1.1')
+        self.assertGreater(
+            service.last_release_sync_at, stale_sync_at,
+            '「chart 剛被換過」最可能發生的這一刻，last_release_sync_at 也必須'
+            '前進，不能只顧 chart_version')
