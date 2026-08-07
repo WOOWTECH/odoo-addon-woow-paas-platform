@@ -102,15 +102,30 @@ ORM-layer atomic — caller 不需要記得呼叫 `_do_cleanup` 才行。詳見 
 ### 3. Regression test 鎖 direct-unlink path（不是只測 `_do_cleanup`）
 
 ```python
-def test_direct_service_unlink_via_controller_cleans_user_mcp(self):
+# Test（示意，非逐字）：src/tests/test_mcp_integration.py 的
+# TestMCPServerCascadeDelete.test_blocker2_unlink_override_cleans_user_mcp_without_do_cleanup
+# （⚠ **不在** test_mcp_project_lifecycle.py，該檔 blocker2 相關為 0 次）
+def test_blocker2_unlink_override_cleans_user_mcp_without_do_cleanup(self):
     """Caller直接 service.unlink() 不經 _do_cleanup — user-scope MCP 仍須被清。"""
-    service = self._make_service()
-    project = self._make_project(cloud_service_id=service.id)
-    user_mcp = self._make_mcp(project_id=project.id, scope='user')
+    service = self.Service.create({
+        'name': 'Direct Unlink Service',
+        'helm_release_name': 'direct-unlink',
+        'helm_namespace': 'paas-ws-du',
+    })
+    project = self.env['project.project'].sudo().create({
+        'name': f'{service.name} Project',
+        'cloud_service_id': service.id,
+    })
+    user_mcp = self.McpServer.sudo().create({
+        'url': 'http://direct-unlink-mcp.paas-ws-du.svc.cluster.local:3000/mcp',
+        'scope': 'user',
+        'project_id': project.id,
+    })
+    mcp_id = user_mcp.id
 
     service.unlink()  # NOT via _do_cleanup
 
-    self.assertFalse(user_mcp.exists())
+    self.assertFalse(self.McpServer.sudo().browse(mcp_id).exists())
 ```
 
 只測 `_do_cleanup` 不夠 — controller direct call path 必須有獨立 case。

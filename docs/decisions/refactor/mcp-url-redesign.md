@@ -176,7 +176,7 @@ user_mcps = self.project_ids.mapped('mcp_server_ids').filtered(
 
 雙路徑成對改寫是 [[cloud-service-unlink-override-cleanup]] pattern 的延伸 — pattern doc 已記「filter 條件擴一個維度」可預期變動，不破壞 pattern 本身。
 
-Regression lock：`test_mcp_sidecar_backed_lifecycle.py` 4-method paired fixture（sidecar-backed cleanup + external preserve）× 2 路徑（`_do_cleanup` + `unlink()`）。
+Regression lock：`test_mcp_sidecar_backed_lifecycle.py` paired fixture（sidecar-backed cleanup + external preserve）× 2 路徑（`_do_cleanup` + `unlink()`），另含 #271 加的 prefix 比對那支。
 
 ### Inv #10 — UI shortcut「Add Sidecar MCP」create path 必帶 `sidecar_backed=True`
 

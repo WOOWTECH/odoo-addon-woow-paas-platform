@@ -151,18 +151,34 @@ safety net；`_do_cleanup` 是 lifecycle-aware 順序保證。兩者**功能重�
 ### 3. Regression test 鎖正反兩面
 
 ```python
+# Test（示意，非逐字）：src/tests/test_mcp_integration.py 的
+# TestMCPServerCascadeDelete。真實檔另有 workspace / template 的 setUpClass、
+# sidecar_backed 條件式餵料，且 unlink 後一律**先存 id 再 browse 重讀**
+# （unlink 過的 recordset 自身 exists() 不可靠）。
 def test_blocker2_unlink_override_cleans_user_mcp_without_do_cleanup(self):
     """Direct service.unlink() (not via _do_cleanup) must still clean
     user-scope MCP — covers controller paths that call unlink() directly
     after their own helm uninstall."""
-    service = self._make_service()
-    project = self._make_project(cloud_service_id=service.id)
-    user_mcp = self._make_mcp(project_id=project.id, scope='user')
+    service = self.Service.create({
+        'name': 'Direct Unlink Service',
+        'helm_release_name': 'direct-unlink',
+        'helm_namespace': 'paas-ws-du',
+    })
+    project = self.env['project.project'].sudo().create({
+        'name': f'{service.name} Project',
+        'cloud_service_id': service.id,
+    })
+    user_mcp = self.McpServer.sudo().create({
+        'url': 'http://direct-unlink-mcp.paas-ws-du.svc.cluster.local:3000/mcp',
+        'scope': 'user',
+        'project_id': project.id,
+    })
+    mcp_id = user_mcp.id
 
     service.unlink()  # NOT via _do_cleanup
 
     self.assertFalse(
-        user_mcp.exists(),
+        self.McpServer.sudo().browse(mcp_id).exists(),
         "user-scope MCP must be unlinked by unlink() override "
         "even when caller bypasses _do_cleanup",
     )
@@ -170,12 +186,16 @@ def test_blocker2_unlink_override_cleans_user_mcp_without_do_cleanup(self):
 def test_blocker2_unlink_override_skips_system_mcp(self):
     """System-scope MCP must NOT be touched by the unlink() override
     (it belongs to platform admin, not to the service being deleted)."""
-    service = self._make_service()
-    system_mcp = self._make_mcp(scope='system')  # not bound to this service
+    service = self.Service.create({'name': 'System Safe Service', ...})
+    system_mcp = self.McpServer.sudo().create({
+        'name': 'Platform System MCP',
+        'scope': 'system',        # ◄── 無 project_id，不綁任何 service
+    })
+    sys_id = system_mcp.id
 
     service.unlink()
 
-    self.assertTrue(system_mcp.exists())
+    self.assertTrue(self.McpServer.sudo().browse(sys_id).exists())
 ```
 
 四面守 — 少任何一層 filter 都會 red：忘 `scope == 'user'` → 砍到 system MCP；忘 `sidecar_backed` → 砍到使用者自帶的 external MCP；忘 URL prefix → M:N 下砍到同 project 其他 service 的 sidecar MCP；filter 過嚴 → 自己的 sidecar MCP 變孤兒。
