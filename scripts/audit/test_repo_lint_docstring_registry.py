@@ -53,17 +53,54 @@ _DOC_END = '\n"""\n'
 #    的原始碼。下游的 assertNotEqual 絆線會擋住（設計正確），但它只說「注入工具失效」，
 #    不會說是哪個錨點、為什麼——2026-08-06 新增 kubectl-ns-whitelist-sync 時實際踩到，
 #    三處錨點同時失效。推導版讓這個維護動作直接消失。
-# ⚠ 假設：最後一條規則是一對一（單一實作函式），且它就是 run_all() 的最後一個呼叫。
-#    下面兩行 assert 把「假設不成立」變成 import 期就大聲失敗，而不是靜默失去鑑別力。
+# 🔴 錨點一律**從真實原始碼抓出來**，不照假想的格式重建它。
+#
+#    這條絆線已經開火過**兩次**，兩次的成因都是「一個沒被寫下來的隱含假設」：
+#      1. 2026-08-06 新增 kubectl-ns-whitelist-sync：舊版**寫死規則名** ⇒ 尾項一換就
+#         不匹配（三處錨點同時失效）。修法＝改成從模組推導名字。
+#      2. 2026-08-07 新增 poll-release-facts-single-source（#627）：推導版仍然
+#         **假設尾項排成單行** `    "rule": ("fn",),\n}`，而該項因名稱長而換行 ⇒
+#         `str.replace()` 找不到 ⇒ 注入不會發生。
+#
+#    ⇒ 判準：**重建字串就是在複述一份格式假設**，而格式假設一旦沒寫下來就會在下一個
+#    人手上以新形態復發。改成用 regex 從 `_REAL_SRC` **抓出實際那段文字**，排版怎麼
+#    寫都找得到，而且抓到的必然逐字存在（下游用 `str.replace()` 注入，這是硬需求）。
+#
+# ⚠ 仍然成立的假設（列出來，不要再讓它們是隱含的）：
+#    (a) 最後一條規則是**一對一**（單一實作函式），且它就是 run_all() 的最後一個呼叫；
+#    (b) run_all() 的最後一個呼叫**自成一行**（縮排多少不拘）；
+#    (c) `REPO_LINT_RULES` 以獨立一行的 `}` 收尾。
+#    下面的 assert 把「假設不成立」變成 **import 期就大聲失敗**，而不是靜默失去鑑別力。
 _LAST_RULE, _LAST_RULE_FNS = list(rl.REPO_LINT_RULES.items())[-1]
 _LAST_FN = _LAST_RULE_FNS[-1]
-_RUN_ALL_TAIL = "                  + %s(root))" % _LAST_FN
-_RULES_TAIL = '    "%s": ("%s",),\n}' % (_LAST_RULE, _LAST_FN)
-assert _RUN_ALL_TAIL in _REAL_SRC, (
-    "推導不出 run_all() 的尾行（%r）——注入工具失效，不是測試通過。"
-    "若最後一條規則改成多函式實作，這裡的推導假設要一起改" % _RUN_ALL_TAIL)
-assert _RULES_TAIL in _REAL_SRC, (
-    "推導不出 REPO_LINT_RULES 的尾項（%r）——注入工具失效，不是測試通過" % _RULES_TAIL)
+
+
+def _derive_anchor(pattern, what, hint):
+    """從真實原始碼抓錨點文字（而不是照假想格式重建）。
+
+    回傳值**必然逐字存在於 `_REAL_SRC`**——下游用 `str.replace()` 注入，這是硬需求。
+    """
+    match = re.search(pattern, _REAL_SRC, re.S)
+    assert match, (
+        "推導不出%s——**注入工具失效，不是測試通過**。%s" % (what, hint))
+    return match.group(1)
+
+
+# 結尾字元有契約：下游用 `[:-1]` 剝掉尾字元再接新項 ⇒ run_all 尾錨必須以 `)` 收尾、
+# rules 尾錨必須以 `}` 收尾。regex 已保證這兩件事。
+_RUN_ALL_TAIL = _derive_anchor(
+    r"\n([^\n]*\+ %s\(root\)\))" % re.escape(_LAST_FN),
+    "run_all() 的尾行（最後一個呼叫 %s）" % _LAST_FN,
+    "假設 (a)(b)：最後一條規則須為一對一、且該呼叫自成一行")
+_RULES_TAIL = _derive_anchor(
+    r'\n(    "%s":.*?\n\})' % re.escape(_LAST_RULE),
+    "REPO_LINT_RULES 的尾項（%s）" % _LAST_RULE,
+    "假設 (c)：該 dict 須以獨立一行的 } 收尾。"
+    "⚠ 尾項排成幾行不拘——本推導刻意不假設單行（#627 踩過）")
+assert _RUN_ALL_TAIL.endswith(")"), (
+    "run_all 尾錨必須以 ) 收尾，下游 [:-1] 依賴它：%r" % _RUN_ALL_TAIL)
+assert _RULES_TAIL.endswith("}"), (
+    "rules 尾錨必須以 } 收尾，下游 [:-1] 依賴它：%r" % _RULES_TAIL)
 
 
 # ------------------------------------------------------------ 注入工具

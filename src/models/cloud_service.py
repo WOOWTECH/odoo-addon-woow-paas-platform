@@ -2447,6 +2447,36 @@ class CloudService(models.Model):
         if (self.import_progress or None) != progress:
             self.sudo().write({'import_progress': progress or False})
 
+    def _release_facts(self, release):
+        """operator 回報的 release 事實 → 帳本回寫欄位。**兩份 poll 的單一來源。**
+
+        #627：poll 有**兩份實作** —— `PaasController._update_service_status`
+        （租戶打 list／detail 端點時走）與本模組的 `_poll_and_update_status`
+        （**cron** 走）。原本兩份各自組自己的 write vals，結果 controller 那份
+        寫了 `helm_chart_version`、cron 這份只寫 `helm_revision`，而唯一斷言
+        「`release_facts` 必須到得了每個 write 分支」的測試**整份只驅動
+        controller** ⇒ cron 那份整份沒有回寫也全綠（#552 層① 的第五條回寫路徑
+        因此在無人值守時失效）。
+
+        ⇒ **欄位集合收斂在這裡**：兩份實作都必須經由本方法取得 write vals。日後
+        新增第三個 release 事實欄位時，兩份會同時跟上，不會再各漏各的。
+
+        ⚠ 這裡刻意**只收斂「寫什麼」，不收斂「什麼時候寫」** —— 兩份的控制流
+        （post-deploy init 的兩套實作、404／`deleting` 分支的 savepoint 差異，見
+        `tests/test_poll_teardown_rollback_525.py`）差異是另一件事，收斂它的爆炸
+        半徑遠大於本修法，見 #627 的討論。
+
+        `or self.helm_chart_version`＝舊 operator 不回這個欄位（或回空字串）時
+        **保留帳本原值**：未知不得覆蓋成空。
+        """
+        self.ensure_one()
+        return {
+            'helm_revision': release.get('revision', self.helm_revision),
+            'helm_chart_version': (
+                release.get('chart_version') or self.helm_chart_version
+            ),
+        }
+
     def _poll_and_update_status(self, client):
         """Poll operator and transition state for a single service.
 
@@ -2494,12 +2524,15 @@ class CloudService(models.Model):
 
         release = status.get('release', {})
         release_status = release.get('status', '')
-        helm_revision = release.get('revision', self.helm_revision)
-
         # Re-fetch for optimistic locking
         service = self.browse(self.id)
         if not service.exists() or service.state != original_state:
             return
+
+        # #627：欄位集合來自 `_release_facts`（與 controller 那份同一個來源），
+        # **不要**在下面的 write 分支裡各自列欄位——那正是 cron 這份漏掉
+        # `helm_chart_version` 的方式。
+        release_facts = service._release_facts(release)
 
         # 進度先落地（與就緒判定無關，且未就緒時才是最有用的時候）。
         service._store_import_progress(status)
@@ -2524,7 +2557,7 @@ class CloudService(models.Model):
                 if needs_init and original_state == 'deploying':
                     service.write({
                         'state': 'initializing',
-                        'helm_revision': helm_revision,
+                        **release_facts,
                         'error_message': False,
                     })
                     service._model_run_post_deploy_init(client)
@@ -2535,7 +2568,7 @@ class CloudService(models.Model):
                 elif needs_init and original_state == 'upgrading' and service.addon_update_pending:
                     service.write({
                         'state': 'initializing',
-                        'helm_revision': helm_revision,
+                        **release_facts,
                         'error_message': False,
                         'init_retries': 0,
                         'init_error': False,
@@ -2545,14 +2578,14 @@ class CloudService(models.Model):
                 else:
                     service.write({
                         'state': 'running',
-                        'helm_revision': helm_revision,
+                        **release_facts,
                         'error_message': False,
                     })
 
         elif release_status == 'failed':
             service.write({
                 'state': 'error',
-                'helm_revision': helm_revision,
+                **release_facts,
                 'error_message': release.get('description', 'Deployment failed'),
             })
 
