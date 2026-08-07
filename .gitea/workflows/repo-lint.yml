@@ -63,6 +63,20 @@ on:
       # repo-lint，gate 對它最該守的那一半（有人在敘事版增減 namespace）完全休眠，
       # 而輸出與「跑了而且沒事」完全相同（#461／#547 同型）。
       - "docs/guides/deployment/shared-cluster-paas-scope-guard.md"
+      # #626 doc-symbol-anchor 的**第二類**輸入：錨點指到的 code 檔。docs 側兩個目錄
+      # 已在上面（patterns / pitfalls），code 側今天全落在 src/** 與
+      # extra/paas-operator/**（也已在上面）——這兩條補的是**候選索引**那一半：
+      # 本 check 用「路徑後綴唯一解析」決定 `paas.py:foo` 指的是哪個檔，所以在 repo
+      # 任何地方新增一個同 basename 的 .py/.js 都可能把原本唯一的錨點變成歧義 ⇒ 紅。
+      # 實查 git ls-files（不是猜）：src / extra/paas-operator / scripts/{audit,seed}
+      # / .claude/hooks 之外，今天實際住著 .py/.js 的只剩 scripts/{ci,maintenance}
+      # 與 tests/ 這兩處。scripts/** 是既有兩條 scripts/{audit,seed}/** 的超集，刻意
+      # 不刪那兩條——它們各自帶著自己的理由（#538 工單 7 / 自我測試步驟），刪掉會把
+      # 那段理由一起弄丟。
+      # ⚠ 已知邊界：**全新的頂層目錄**放 .py/.js 仍不會觸發本 workflow，那種 PR 造成
+      #   的歧義要等下一個命中白名單的 PR 或手動 --all 才會紅。
+      - "scripts/**"
+      - "tests/**"
 jobs:
   repo-lint:
     runs-on: ubuntu-latest

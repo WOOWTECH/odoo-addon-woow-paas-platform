@@ -310,7 +310,7 @@ PR #47 用 `auto_created` 表「自動建」。Cycle 4 拆 auto-create 後：
   - `src/models/cloud_service.py` 的 `_collect_sidecar_user_mcps` + `_sidecar_url_prefix` — 雙 path 共用的 filter（flag **AND** URL prefix）
   - 同檔 `_do_cleanup` 與 `CloudService.unlink` 的 `for service in self:` per-record loop — 上面那組 helper 的兩條 call site
   - `src/controllers/paas.py:_create_project_mcp_server` — endpoint payload 寫入
-  - `src/static/src/paas/pages/project-detail/sections/McpServersSection.js:submitForm` — frontend flow 區分
+  - `src/static/src/paas/pages/project-detail/sections/McpServersSection.js:saveServer` — frontend flow 區分（`isSidecarFlow` 決定 payload 帶不帶 `sidecar_backed`）
   - `src/migrations/18.0.1.0.25/post-migrate.py` — idempotent backfill `auto_created → sidecar_backed`
   - `src/tests/test_mcp_sidecar_backed_lifecycle.py` — paired fixture 鎖雙路徑兩方向（⚠ 該檔部分斷言失敗訊息仍逐字複述**沒有 prefix 維度**的舊 filter 字串，斷言本體正確、字串未更新，別把它當契約讀）
   - `src/tests/test_agent_pod_phase_a_cloud_service_mn.py` — M:N 下不跨 service 連坐（`test_do_cleanup_unlinks_only_own_sidecar_mcp` / `test_unlink_override_narrows_same_way`）
