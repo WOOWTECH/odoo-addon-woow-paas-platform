@@ -28,7 +28,7 @@ ROUTES = [
         ("guides/deployment", "上 prod／stg、發版、升版、image 重釘"),
         ("guides/testing", "跑測試、E2E、本機沙盒"),
         ("guides/development", "開發期工具與架構"),
-        ("guides/frameworks", "ccpm / superpowers / SuperClaude 用法"),
+        ("guides/frameworks", "superpowers / SuperClaude 用法"),
     ]),
     ("我要查一個事實或規格", "reference/", [
         ("reference/api", "HTTP / JSON API 端點"),

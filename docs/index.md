@@ -4,7 +4,7 @@
 > 分類的定義與寫新檔該放哪，見 [`README.md`](README.md)。
 > 本檔由 `scripts/audit/gen-docs-index.py` 產生，數字即時算出——**不要手改**。
 
-目前共 **435** 份文件（含 `archived/` 109 份）。
+目前共 **639** 份文件（含 `archived/` 311 份）。
 
 ## 我要照步驟做一件事
 
@@ -13,7 +13,7 @@
 | [`guides/deployment/`](guides/deployment/) | 上 prod／stg、發版、升版、image 重釘 | 13 |
 | [`guides/testing/`](guides/testing/) | 跑測試、E2E、本機沙盒 | 8 |
 | [`guides/development/`](guides/development/) | 開發期工具與架構 | 3 |
-| [`guides/frameworks/`](guides/frameworks/) | ccpm / superpowers / SuperClaude 用法 | 3 |
+| [`guides/frameworks/`](guides/frameworks/) | superpowers / SuperClaude 用法 | 2 |
 
 ## 我要查一個事實或規格
 
@@ -28,7 +28,7 @@
 
 | 去哪 | 內容 | 篇數 |
 |---|---|---|
-| [`decisions/patterns/`](decisions/patterns/) | 可複用的設計 pattern（有 hook 強制閱讀） | 33 |
+| [`decisions/patterns/`](decisions/patterns/) | 可複用的設計 pattern（有 hook 強制閱讀） | 34 |
 | [`decisions/philosophy/`](decisions/philosophy/) | 整體取向 | 1 |
 | [`decisions/refactor/`](decisions/refactor/) | 重構決策 | 6 |
 | [`decisions/reviews/`](decisions/reviews/) | PR review 裁決 | 8 |
@@ -44,7 +44,7 @@
 | 去哪 | 內容 | 篇數 |
 |---|---|---|
 | [`tracking/landings/`](tracking/landings/) | 已收官 issue 的落地紀錄（檔名帶 issue 編號） | 68 |
-| [`tracking/pitfalls/`](tracking/pitfalls/) | 撞牆時對照：症狀 → 根因 | 38 |
+| [`tracking/pitfalls/`](tracking/pitfalls/) | 撞牆時對照：症狀 → 根因 | 39 |
 | [`tracking/followups/`](tracking/followups/) | 尚未收掉的追蹤項 | 2 |
 | [`tracking/test-reports/`](tracking/test-reports/) | E2E / 測試報告 | 2 |
 
@@ -52,7 +52,7 @@
 
 | 去哪 | 內容 | 篇數 |
 |---|---|---|
-| [`archived/`](archived/) | 不再使用但保留考古（含 `archived/memory/`：已被其他載體取代的 memory） | 109 |
+| [`archived/`](archived/) | 不再使用但保留考古（含 `archived/memory/`：已被其他載體取代的 memory） | 311 |
 | [`scout/`](scout/) | 決策前偵察，拍板後 promote 到 plans/ 或 decisions/ | 2 |
 | [`agents/`](agents/) | mattpocock-skills 工具自管理區 | 2 |
 | [`superpowers/`](superpowers/) | obra/superpowers plugin 自管理區 | 1 |

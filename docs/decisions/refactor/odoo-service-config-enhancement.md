@@ -4,16 +4,16 @@ category: decisions
 status: active
 created: 2026-05-19T05:54:44Z
 updated: 2026-05-19T05:54:44Z
-source: .claude/epics/archived/odoo-service-config-enhancement/epic.md
+source: docs/archived/ccpm-v2/epics/odoo-service-config-enhancement/epic.md
 promoted-at: 2026-05-19T05:54:44Z
 related:
-  - .claude/prds/odoo-service-config-enhancement.md
+  - docs/archived/ccpm-v2/prds/odoo-service-config-enhancement.md
   - docs/reference/features/odoo-service-config.md
 ---
 
 # Odoo Service Config Enhancement — Architecture Decisions
 
-> 此檔由 `/docs:promote ccpm:odoo-service-config-enhancement` 從 ccpm epic 升級而來。原 epic 為 `backlog` 狀態，本決策可作為未來實作參考。
+> 此檔於 2026-05-19 由 ccpm epic 升級而來（ccpm 已於 2026-08-07 退役，原始 epic 見 [`docs/archived/ccpm-v2/epics/odoo-service-config-enhancement/`](../../archived/ccpm-v2/epics/odoo-service-config-enhancement/epic.md)）。原 epic 為 `backlog` 狀態，本決策可作為未來實作參考。
 
 針對 Cloud Service 部署 Odoo 時的 admin 帳密 bug 與 SMTP 設定缺失，這份文件凍結三個架構決策（含 trade-off）。
 
