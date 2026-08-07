@@ -327,3 +327,6 @@ from . import test_helm_values_field_acl_559
 # 都沒回寫 helm_chart_version（回寫只存在於 controller 那一份）；本檔驅動 model
 # 那一份，並加一支「兩份實作寫入欄位集合必須相同」的結構守衛
 from . import test_poll_mirror_release_facts_627
+# feat: #627 (i) 對帳 cron —— poll 對 running 不可達，故補一條每日低頻的
+# reconciliation（只讀→比對→回寫 release 事實，絕不碰 state）＋ last_release_sync_at
+from . import test_reconcile_release_facts_627i

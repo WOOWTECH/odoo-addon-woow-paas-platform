@@ -317,6 +317,21 @@ class CloudService(models.Model):
         string='Chart Version',
         help='Version of the Helm chart currently deployed',
     )
+    last_release_sync_at = fields.Datetime(
+        string='Last Release Sync At',
+        help=(
+            "最後一次從 operator 取得 release 事實（chart 版本／revision）的時間。"
+            "注意語意：是「最後一次**問過**」，不是「最後一次**值有變**」——"
+            "租戶要知道的是眼前這個版本號多新，而不是它上次改是什麼時候。\n\n"
+            "⚠ 這個欄位由 #627 (i) 的每日 reconciliation cron 每天 stamp 一次，"
+            "**代價是 `write_date` 從此每天變動**：在此之前，`write_date` 停留在"
+            "「最後一次平台自己動這筆服務」的時間，可以拿來判斷「這筆帳本多久沒被"
+            "碰過」。#552／#627 的調查就用過那個訊號兩次（判定某次 helm upgrade "
+            "不是 Odoo 發起的、以及證明升版沒有順手回寫帳本）。**那個診斷能力從本"
+            "版起消失** —— 要判斷「平台最後一次主動操作這筆服務」請改看 "
+            "`last_upgraded_at` / `deployed_at`，不要再用 `write_date`。"
+        ),
+    )
 
     # Resources
     allocated_vcpu = fields.Integer(
@@ -1864,6 +1879,120 @@ class CloudService(models.Model):
                     service.name, service.id,
                 )
 
+    def _cron_reconcile_release_facts(self):
+        """#627 (i)：抓「非由 Odoo 發起」的 chart 變動——**唯一會看 running 的路徑**。
+
+        ## 為什麼需要獨立一條
+
+        #552 層① 的第五條回寫路徑是 poll，設計目的就是抓「有人直接對叢集下
+        `helm upgrade`、Odoo 完全不知道」。但 poll 的兩個入口與
+        ``_cron_check_deploying_services`` 的 domain **都只收轉移狀態**
+        （deploying／upgrading／initializing／deleting）——而那種變動發生時服務正是
+        ``running`` ⇒ **要抓的場景與能執行的場景不相交**（#627 缺陷 (i)，stg
+        `svc-bd9d6ed3` 漂移 3 天無人發現）。
+
+        ## 與 ``_poll_and_update_status`` 的根本差異：**絕不碰 state**
+
+        那個函式會依 release status 推狀態機（deployed→running、failed→error…）。
+        對 ``running`` 服務跑它，等於讓一條對帳工作去改生命週期狀態——叢集暫時不健康
+        就會把租戶的服務打成 ``error``，而 error 沒有任何路徑會自己 poll 回來。
+        ⇒ **本 cron 只做「讀 → 比對 → 回寫 release 事實」**，一行 state 都不寫。
+        repo-lint 的 ``poll-release-facts-single-source`` 判準 5 機械強制這件事。
+
+        ## 頻率：每日一次，先不要調快
+
+        漂移的後果是**帳面錯誤不是服務中斷** ⇒ 不需要分鐘級偵測。要不要縮短請看下面
+        那條 log 累積出來的資料，**不要用直覺**——目前對「漂移多常發生」的全部認識
+        只有 stg 一筆軼事。
+
+        ## Log：**改 0 筆也要印**，而且要印出掃描範圍與是哪幾筆
+
+        只在有改動時才記，會讓「一直沒漂移」與「cron 根本沒跑」的日誌畫面完全相同；
+        只印筆數不印範圍，則會讓「suspended 沒漂移」與「suspended 根本沒被看」相同。
+        兩者是同一個家族，差別只在它升到了範圍那一層。
+
+        ## ⚠ 代價：`write_date` 從此每天變動
+
+        本 cron 每天都會 stamp ``last_release_sync_at``（即使沒有漂移），而那是一次
+        真正的 ORM write ⇒ ``write_date`` 每天都會動。**在此之前 `write_date` 可以
+        用來判斷「這筆帳本多久沒被平台碰過」，#552／#627 的調查用過它兩次**（判定
+        某次 helm upgrade 不是 Odoo 發起的、以及證明升版沒有順手回寫）。那個診斷
+        能力從本版起消失——要判斷「平台最後一次主動操作」請改看 ``last_upgraded_at``
+        ／``deployed_at``。這個取捨是刻意接受的（#627 留言有記）。
+        """
+        from ..services.paas_operator import get_paas_operator_client
+
+        services = self.search([('state', '=', 'running')])
+
+        # 掃描範圍要能被讀出來：只印「掃描 N 筆」會讓「範圍外的沒漂移」與「範圍外的
+        # 根本沒被看」畫面相同。逐狀態點名，不是只給總數。
+        out_of_scope = {}
+        for svc in self.search([('state', '!=', 'running')]):
+            out_of_scope[svc.state] = out_of_scope.get(svc.state, 0) + 1
+        scope_note = (
+            '另有 %s 不在本 cron 範圍' % ' / '.join(
+                '%s %d' % (state, count)
+                for state, count in sorted(out_of_scope.items()))
+            if out_of_scope else '無其他狀態的服務')
+
+        client = get_paas_operator_client(self.env)
+        if not client:
+            # 沒有 client 時**大聲說**：靜默 return 會讓「operator 沒設定」與
+            # 「掃過了都沒漂移」的日誌畫面相同，正是本 cron 要避免的形態。
+            _logger.warning(
+                "reconcile-release-facts: operator client 未設定，本輪未執行"
+                "（掃描範圍本應為 %d 筆 running，%s）", len(services), scope_note)
+            return
+
+        changed, failed = [], []
+        for service in services:
+            try:
+                # 逐筆 savepoint：一筆失敗不得中斷整批。用 savepoint 而非裸 try 是
+                # 因為 OperationalError 之後 cursor 已不可用，後續會連帶全部失敗。
+                with self.env.cr.savepoint():
+                    status = client.get_status(
+                        namespace=service.helm_namespace,
+                        release_name=service.helm_release_name,
+                        include_vm=service._needs_vm_status(),
+                    )
+                    facts = service._release_facts(status.get('release', {}))
+                    # 舊值必須**在寫入之前**收起來：寫完之後 `service[field]` already
+                    # 是新值，log 就只印得出「現在是什麼」而不是「從什麼變成什麼」，
+                    # 而後者才是判斷漂移頻率與幅度的那份母體資料。
+                    drift = {
+                        field: (service[field], value)
+                        for field, value in facts.items()
+                        if field != 'last_release_sync_at'
+                        and service[field] != value
+                    }
+                    # 有沒有漂移都寫同一個 dict：`drift` 只用於 log。
+                    #
+                    # 為什麼不在無漂移時只寫 `last_release_sync_at` 那一格：那會在這裡
+                    # 出現一個 release 事實欄位的**字面鍵**，也就是 #627 的成因形態
+                    # （逐路徑列欄位），repo-lint 判準 2 會擋。而且沒有好處——版本欄位
+                    # 寫進相同的值本來就沒有語意變化，`write_date` 反正每天都會動
+                    # （見本方法 docstring 的代價段）。
+                    service.write(facts)
+                    if drift:
+                        changed.append((service, drift))
+            except Exception as exc:
+                failed.append((service, exc))
+
+        _logger.info(
+            "reconcile-release-facts: 掃描 %d 筆 running（%s），%d 筆漂移已修正"
+            "%s", len(services), scope_note, len(changed),
+            ("，%d 筆讀取失敗" % len(failed)) if failed else "")
+        for service, drift in changed:
+            _logger.info(
+                "  id=%s %s  %s", service.id, service.name,
+                '  '.join(
+                    '%s %s→%s' % (field, old or '(空)', new or '(空)')
+                    for field, (old, new) in sorted(drift.items())))
+        for service, exc in failed:
+            _logger.warning(
+                "  id=%s %s 讀取失敗：%s（本筆略過，不影響其餘）",
+                service.id, service.name, exc)
+
     # ------------------------------------------------------------------ #
     #  就緒判定：兩層共用的單一事實源（#423 W5a）                          #
     # ------------------------------------------------------------------ #
@@ -2475,6 +2604,15 @@ class CloudService(models.Model):
             'helm_chart_version': (
                 release.get('chart_version') or self.helm_chart_version
             ),
+            # #627 (i)：`last_release_sync_at` 也走這個咽喉 ⇒ **三個寫入者**
+            # （兩份 poll ＋ reconciliation cron）自動全部 stamp，不必逐路徑補。
+            # 這正是本方法存在的理由，也避免這個新欄位重演 #627。
+            #
+            # ⚠ 語意是「最後一次**問過** operator」，不是「最後一次值有變」——
+            # 所以無漂移時 reconciliation cron 仍會寫它（見該 cron 的 docstring）。
+            # ⚠ 必須 `fields.Datetime.now()`（UTC naive）不能 `datetime.now()`
+            # （本機時區）；repo-lint 的 transition-anchor-utc 已把本欄位納入覆蓋。
+            'last_release_sync_at': fields.Datetime.now(),
         }
 
     def _poll_and_update_status(self, client):

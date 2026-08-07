@@ -516,3 +516,67 @@ class TestPollRecordsOutOfBandChartVersion(_Base):
 
         self.assertEqual(service.helm_revision, 3, '前提：這條 poll 真的寫了')
         self.assertEqual(service.helm_chart_version, '0.1.0')
+
+    # ------------------------------------------------------------------ #
+    #  #627：上面那支 `test_failed_release_branch_also_records_it` 的      #
+    #  docstring 宣稱「必須到得了**每個** write 分支」，但實際只驅動了      #
+    #  4 條裡的 2 條（→ running、→ error）。兩條 `initializing` 分支從來    #
+    #  沒有任何測試對 `release_facts` 的內容斷言。                          #
+    #                                                                     #
+    #  ⇒ 「守錯層」只是表層問題（models 鏡像整份沒被驅動，見                #
+    #     test_poll_mirror_release_facts_627.py）；底下還有一層是          #
+    #     **在守對的那一層也沒守全**。以下兩支把 controller 補齊。          #
+    # ------------------------------------------------------------------ #
+
+    def _poll_with_init_stubbed(self, service, status_payload):
+        """驅動 poll，但把 post-deploy init 擋掉。
+
+        兩條 `initializing` 分支寫完 `release_facts` 之後會呼叫真正的 init（會去打
+        operator 的 init 端點）。本檔要驗的是回寫，不是 init。
+        """
+        from odoo.addons.woow_paas_platform.controllers.paas import PaasController
+
+        client = MagicMock()
+        client.get_status.return_value = status_payload
+        fake_request = MagicMock()
+        fake_request.env = self.env
+        with patch(f'{_CONTROLLER}.get_paas_operator_client', return_value=client), \
+                patch(f'{_CONTROLLER}.request', new=fake_request), \
+                patch(f'{_CONTROLLER}.PaasController._run_post_deploy_init',
+                      return_value=None):
+            PaasController()._update_service_status(service)
+        service.invalidate_recordset()
+
+    def test_initializing_branch_from_deploying_records_it(self):
+        """→ `initializing`（首裝：需要 init ＋ 原狀態 `deploying`）。"""
+        template = self._template(
+            'pollinit-552c', '0.1.0', post_deploy_init_type='n8n')
+        service = self._service(template, state='deploying')
+        service.write({'helm_chart_version': '0.1.0', 'helm_revision': 2})
+
+        self._poll_with_init_stubbed(service, self._status())
+
+        self.assertEqual(service.state, 'initializing', '前提：走的是這條分支')
+        self.assertEqual(service.helm_revision, 3, '前提：這條 poll 真的寫了')
+        self.assertEqual(service.helm_chart_version, '0.1.1')
+
+    def test_initializing_branch_from_upgrading_records_it(self):
+        """→ `initializing`（升級後補 init：`upgrading` ＋ `addon_update_pending`）。
+
+        這條分支正是「chart 剛被換過」最可能發生的時刻——漏掉它等於在最該記錄的那
+        一刻不記錄。
+        """
+        template = self._template(
+            'pollupg-552c', '0.1.0', post_deploy_init_type='n8n')
+        service = self._service(template, state='upgrading')
+        service.write({
+            'helm_chart_version': '0.1.0',
+            'helm_revision': 2,
+            'addon_update_pending': True,
+        })
+
+        self._poll_with_init_stubbed(service, self._status())
+
+        self.assertEqual(service.state, 'initializing', '前提：走的是這條分支')
+        self.assertEqual(service.helm_revision, 3, '前提：這條 poll 真的寫了')
+        self.assertEqual(service.helm_chart_version, '0.1.1')
