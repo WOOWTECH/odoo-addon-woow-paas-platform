@@ -80,6 +80,14 @@
                             <t t-if="props.service.helm_chart_version">
                                 <span class="o_woow_version_badge" t-esc="props.service.helm_chart_version"/>
                             </t>
+                            <!-- #627 (i)/E：版本號可能過期（對帳每日一次）⇒ 把「多新」
+                                 講出來，而不是讓平台假裝一直準確。刻意只加這一行、
+                                 不重排版面。 -->
+                            <t t-if="props.service.last_release_sync_at">
+                                <small class="o_woow_sync_hint text-muted d-block">
+                                    最後同步於 <t t-esc="props.service.last_release_sync_at"/>
+                                </small>
+                            </t>
                         </span>
                     </div>
 

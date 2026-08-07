@@ -21,5 +21,24 @@
             <field name="interval_type">minutes</field>
             <field name="active" eval="True"/>
         </record>
+        <!-- Cron: 對帳 running 服務的 release 事實（#627 (i)）
+
+             上面那條 cron 只掃轉移狀態，抓不到「非由 Odoo 發起的 chart 變動」——
+             那種變動發生時服務正是 running。本條補上，且**絕不碰 state**。
+
+             ⚠ 頻率刻意是每日一次：漂移的後果是帳面錯誤不是服務中斷。要不要縮短，
+                看 cron 那條 log 累積的資料再決定，不要用直覺。
+             ⚠ 本檔是 <data noupdate="1">：這筆 record 在升級時**會**被建立（noupdate
+                只擋既有 record 被更新），但**日後改這裡的 interval 不會生效**——要改
+                頻率得改 DB 或走 migration。 -->
+        <record id="ir_cron_reconcile_release_facts" model="ir.cron">
+            <field name="name">Cloud Service: Reconcile Release Facts</field>
+            <field name="model_id" ref="model_woow_paas_platform_cloud_service"/>
+            <field name="state">code</field>
+            <field name="code">model._cron_reconcile_release_facts()</field>
+            <field name="interval_number">1</field>
+            <field name="interval_type">days</field>
+            <field name="active" eval="True"/>
+        </record>
     </data>
 </odoo>

@@ -3934,6 +3934,10 @@ class PaasController(HiddenChainMixin, Controller):
                 'helm_namespace': service.helm_namespace,
                 'helm_release_name': service.helm_release_name,
                 'helm_chart_version': service.helm_chart_version,
+                # #627 (i)/E：讓「這個版本號多新」對租戶可見。B 那條對帳 cron 每日
+                # 一次 ⇒ 最多一個週期的偵測延遲，這個欄位就是那個延遲的誠實揭露，
+                # 不是裝飾——沒有它，平台等於假裝自己一直是準的。
+                'last_release_sync_at': service.last_release_sync_at,
                 # #559：helm_values 有 groups='base.group_system'，屬性直讀會
                 # AccessError。走 model 的唯一入口——租戶看得到的仍是遮罩後的值
                 # （#535），只是 ORM 直讀那條側門被關上了。

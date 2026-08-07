@@ -49,6 +49,7 @@ slug 集合成員／admin-gui 錨點／gateway 文案錨點；這個一對多關
                      kill helm ⇒ release 卡 pending-rollback（真機實測）。
                      依據 docs/decisions/patterns/reset-async-budget-ladder.md
 10. transition-anchor-utc  src/**（除 src/tests/）寫 deployed_at / last_upgraded_at
+                     / last_release_sync_at（#627 (i) 納入，同屬 operator 事實時間錨）
                      不得用 `datetime.now()`（本機時區）——Odoo Datetime 契約是 UTC
                      naive，非 UTC 伺服器上 age timeout 會靜默失效或誤殺，而容器時區
                      是 UTC 所以**測不出來**，只能靠 gate（#489）。
@@ -1258,7 +1259,10 @@ def check_transition_anchor_utc(root, only_file=None):
     測試環境的容器時區是 UTC，所以這個缺陷**測不出來**——只能靠 gate。
     （合併前 `controllers/paas.py` 的 reconfigure 路徑正是這個寫法。）
     """
-    anchor_fields = {"deployed_at", "last_upgraded_at"}
+    # #627 (i)：`last_release_sync_at` 同屬「從 operator 事實 stamp 的時間錨」，
+    # 一併納入——同一類坑（Odoo Datetime 契約是 UTC naive，`datetime.now()` 回本機
+    # 時區），成本幾乎為零。
+    anchor_fields = {"deployed_at", "last_upgraded_at", "last_release_sync_at"}
     violations = []
     files = [only_file] if only_file else sorted(
         glob.glob(os.path.join(root, "src/**/*.py"), recursive=True))
@@ -1753,86 +1757,134 @@ def _registry_diff(violations, actual, registered, what, fix, extra="", reverse=
 POLL_MODEL_FILE = "src/models/cloud_service.py"
 POLL_CONTROLLER_FILE = "src/controllers/paas.py"
 POLL_RELEASE_FACTS_FILES = (POLL_MODEL_FILE, POLL_CONTROLLER_FILE)
-#: (檔案, 函式名)：兩份 poll 實作的進入點。
+#: (檔案, 函式名)：兩份 **poll** 實作的進入點——它們會做狀態轉移，故受判準 3／4 管。
 _POLL_IMPLEMENTATIONS = (
     (POLL_MODEL_FILE, "_poll_and_update_status"),
     (POLL_CONTROLLER_FILE, "_update_service_status"),
 )
-#: 這些欄位只能由 `_release_facts` 產出，不得在 poll 實作內逐條列出。
-_RELEASE_FACT_KEYS = ("helm_revision", "helm_chart_version")
+#: #627 (i)：對帳 cron 是**第三個** release 事實寫入者。它受判準 1／2 管（必須經由
+#: producer、不得列字面鍵），另外受**判準 5** 管：它絕不可以寫 `state`。
+_RECONCILE_IMPLEMENTATION = (POLL_MODEL_FILE, "_cron_reconcile_release_facts")
+#: 判準 1／2 的適用範圍＝所有 release 事實寫入者（兩份 poll ＋ 對帳 cron）。
+#: #627 的教訓就是「N 份實作各寫一次」，所以新增寫入者必須加進這裡。
+_RELEASE_FACT_WRITERS = _POLL_IMPLEMENTATIONS + (_RECONCILE_IMPLEMENTATION,)
+#: 這些欄位只能由 `_release_facts` 產出，不得在任何寫入者內逐條列出。
+_RELEASE_FACT_KEYS = ("helm_revision", "helm_chart_version",
+                      "last_release_sync_at")
 _RELEASE_FACTS_PRODUCER = "_release_facts"
 
 
 def check_poll_release_facts_single_source(root):
-    """兩份 poll 實作的帳本回寫欄位必須來自同一個 producer（#627）。
+    """release 事實的寫入必須經由單一 producer，且逐分支帶到（#627）。
 
     #627 的形態：poll 有**兩份實作** —— `PaasController._update_service_status`
     （租戶打端點時走）與 `CloudService._poll_and_update_status`（**cron** 走）。
     兩份各自組自己的 write vals，於是 controller 那份寫了 `helm_chart_version`、
-    cron 那份只寫 `helm_revision`。而唯一斷言「`release_facts` 必須到得了每個
-    write 分支」的測試**整份只驅動 controller** ⇒ cron 那份整份沒回寫也全綠，
-    #552 層① 的第五條回寫路徑在無人值守時失效，實地漂移 3 天無告警。
+    cron 那份只寫 `helm_revision`。而唯一斷言「`release_facts` 必須到得了每個 write
+    分支」的測試**整份只驅動 controller** ⇒ cron 那份整份沒回寫也全綠，#552 層① 的
+    第五條回寫路徑在無人值守時失效，stg 實地漂移 3 天無告警。
 
-    修法是把欄位集合收斂到 `CloudService._release_facts`。**本 gate 守的是那個
-    收斂不被還原**：任何人把欄位再 inline 回任一份實作，當下就紅——不必等到兩份
-    再次漂移、也不必等到有人想起要驗另一份。
+    ## 五條判準
 
-    判準兩條，缺一不可：
-    1. 兩份實作都必須呼叫 `_release_facts`（沒呼叫＝自己組 vals，收斂被繞過）。
-    2. 兩份實作內都不得出現 `helm_revision` / `helm_chart_version` 當 dict 字面
-       鍵（出現＝逐路徑列欄位的寫法回來了，正是 #627 的成因）。
+    1. **每個寫入者都要呼叫 `_release_facts`**（兩份 poll ＋ #627 (i) 的對帳 cron）。
+       沒呼叫＝自己組 vals，收斂被繞過。
+    2. **任何寫入者內都不得出現 release 事實欄位當 dict 字面鍵**。出現＝逐路徑列欄位
+       的寫法回來了，正是 #627 的成因。
+    3. **兩份 poll 內每一個設定 `'state'` 的 `.write({...})` 都必須帶
+       `**release_facts` 展開。** ⚠ 這條是 v2 補的：v1 只驗判準 1／2，而**刪掉單一
+       分支的展開時兩者都不會紅**（`calls_producer` 仍為 True、也沒新增字面鍵）——
+       實測確認過。v1 的 docstring 卻宣稱「守單一 producer 沒被繞過」，那句話在分支層
+       是假的。**宣告範圍大於守備範圍就是在製造假的安心感。**
+    4. **每份 poll 至少要有一個「設 `'state'` 的 write」**。判準 3 對「一條 write 都
+       沒有」是**恆真**的 ⇒ 整段被重構掉時 gate 會靜默變成永遠綠。刻意用**下限 1**
+       而不是釘死當下的 4：釘死等於把「現在有 4 條分支」這個當下事實寫成契約，合理的
+       重構（合併分支）會誤殺。守的是「gate 還有目標」，不是「分支數不許變」。
+    5. **對帳 cron 不得寫 `state`。** 那條 cron 的核心安全性質就是「只對帳、不推狀態
+       機」——對 running 服務跑狀態轉移，叢集一時不健康就會把租戶服務打成 `error`，
+       而 error 沒有任何路徑會自己 poll 回來。這條把那個性質變成機械強制。
 
-    ⚠ 覆蓋邊界：這是**結構**守衛，守「單一 producer 沒被繞過」。它不驗證
-    `_release_facts` 回傳的內容對不對，也不驗證兩份實作跑出來的值相同——那是行為
-    層的事，由 `src/tests/test_poll_mirror_release_facts_627.py` 的
-    `TestBothPollImplementationsWriteTheSameFields` 實際跑兩份實作比對。形態層與
-    不變式層各守各的：只有形態層會被「改個寫法」繞過，只有行為層抓不到「今天還沒
-    漂但結構已經退化」。
+    ## 例外機制：**刻意不提供**
+
+    今天的誤報數是 0（實測：兩份 poll 各 4 條 write 全部設 `'state'` 且全部已帶展開；
+    404／`deleting` 分支是 `unlink()` 不是 `write()`，天生不在判準 3 範圍內）。
+
+    日後若真的出現正當例外，本 gate **不提供程式碼端豁免**（沒有 `# noqa` 之類的
+    出口）——作者必須來改這個函式並寫下理由，那個 diff 帶著具名理由、review 看得到。
+    ⇒ 「白名單＋具名理由」的載體就是本原始碼本身。刻意不預先建一份空白名單：那等於
+    在沒有任何使用者的情況下先造好一個逃生門，而**空的**白名單失效時更沒人會發現。
+
+    ## 覆蓋邊界（寫明，不重蹈 v1 的過度宣稱）
+
+    - 只看**列名函式本體內**的 `.write()`。若有人把 write 搬進被它們呼叫的 helper，
+      AST 走不到 ⇒ 看不見。這是已知邊界。
+    - 只守**結構**，不驗證 `_release_facts` 回傳的內容對不對、也不驗證各實作跑出來的
+      值相同——那是行為層的事，由
+      `src/tests/test_poll_mirror_release_facts_627.py` 的
+      `TestBothPollImplementationsWriteTheSameFields` 實跑比對。
+      形態層擋「結構已退化但還沒漂」，行為層擋「改個寫法繞過形態判準」。
 
     🔴 fail-loud：檔案讀不到、parse 不了、找不到目標函式，一律當違規。靜默
-    `return []` 會讓這條 gate 在函式改名的當下永久沉默且看起來永遠是綠的——那正是
-    它要防的形態換一個載體重演。
+    `return []` 會讓這條 gate 在函式改名的當下永久沉默且看起來永遠是綠的。
     """
     violations = []
     producer_seen = False
+    trees = {}
 
-    for rel, func_name in _POLL_IMPLEMENTATIONS:
-        path = os.path.join(root, rel)
+    for rel in dict.fromkeys(f for f, _ in _RELEASE_FACT_WRITERS):
         try:
-            with open(path, encoding="utf-8") as f:
-                tree = ast.parse(f.read())
+            with open(os.path.join(root, rel), encoding="utf-8") as f:
+                trees[rel] = ast.parse(f.read())
         except (OSError, SyntaxError, ValueError) as exc:
             violations.append(
-                "%s：讀不到或 parse 失敗（%s）——poll 單一 producer 的守線整條失去"
-                "鑑別力。解析失敗當違規而不是無事，否則本 gate 會靜默恆綠（#627）"
+                "%s：讀不到或 parse 失敗（%s）——release 事實單一 producer 的守線整條"
+                "失去鑑別力。解析失敗當違規而不是無事，否則本 gate 會靜默恆綠（#627）"
                 % (rel, exc))
-            continue
 
-        target = None
+    def _find(rel, func_name):
+        tree = trees.get(rel)
+        if tree is None:
+            return None
         for node in ast.walk(tree):
-            if isinstance(node, ast.FunctionDef):
-                if node.name == func_name:
-                    target = node
-                if node.name == _RELEASE_FACTS_PRODUCER and rel == POLL_MODEL_FILE:
-                    producer_seen = True
+            if isinstance(node, ast.FunctionDef) and node.name == func_name:
+                return node
+        return None
 
+    if _find(POLL_MODEL_FILE, _RELEASE_FACTS_PRODUCER) is not None:
+        producer_seen = True
+
+    def _state_writes(func):
+        """該函式內所有「設 `'state'` 的 `.write({...})`」。"""
+        found = []
+        for node in ast.walk(func):
+            if not (isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "write"
+                    and node.args
+                    and isinstance(node.args[0], ast.Dict)):
+                continue
+            keys = [k.value for k in node.args[0].keys
+                    if isinstance(k, ast.Constant)]
+            if "state" in keys:
+                found.append(node.args[0])
+        return found
+
+    # 判準 1／2：所有寫入者
+    for rel, func_name in _RELEASE_FACT_WRITERS:
+        target = _find(rel, func_name)
         if target is None:
             violations.append(
-                "%s：找不到 poll 實作 `%s`。函式改名或被移走時本 gate 會失去目標，"
-                "而失去目標與「沒有違規」的輸出一模一樣 ⇒ 當違規處理。改名的話請一併"
-                "更新 `_POLL_IMPLEMENTATIONS`（#627）" % (rel, func_name))
+                "%s：找不到 release 事實寫入者 `%s`。函式改名或被移走時本 gate 會失去"
+                "目標，而失去目標與「沒有違規」的輸出一模一樣 ⇒ 當違規處理。改名請一併"
+                "更新 `_RELEASE_FACT_WRITERS`（#627）" % (rel, func_name))
             continue
 
-        calls_producer = any(
-            isinstance(n, ast.Call)
-            and isinstance(n.func, ast.Attribute)
-            and n.func.attr == _RELEASE_FACTS_PRODUCER
-            for n in ast.walk(target))
-        if not calls_producer:
+        if not any(isinstance(n, ast.Call)
+                   and isinstance(n.func, ast.Attribute)
+                   and n.func.attr == _RELEASE_FACTS_PRODUCER
+                   for n in ast.walk(target)):
             violations.append(
-                "%s::%s 沒有呼叫 `%s`——poll 的帳本回寫欄位必須來自單一 producer。"
-                "自己組 write vals 就是 #627 的成因：兩份實作各漏各的，而只驅動其中"
-                "一份的測試全綠。依據 docs/decisions/patterns/README.md 與 #627"
+                "%s::%s 沒有呼叫 `%s`——release 事實必須來自單一 producer。自己組 write"
+                " vals 就是 #627 的成因：N 份實作各漏各的，而只驅動其中一份的測試全綠"
                 % (rel, func_name, _RELEASE_FACTS_PRODUCER))
 
         for node in ast.walk(target):
@@ -1848,10 +1900,44 @@ def check_poll_release_facts_single_source(root):
                         % (rel, func_name, getattr(key, "lineno", -1),
                            key.value, _RELEASE_FACTS_PRODUCER))
 
+    # 判準 3／4：兩份 poll 的每一條 state-write 都要帶展開，且至少要有一條
+    for rel, func_name in _POLL_IMPLEMENTATIONS:
+        target = _find(rel, func_name)
+        if target is None:
+            continue  # 判準 1 已經點名過
+        writes = _state_writes(target)
+        if not writes:
+            violations.append(
+                "%s::%s 內找不到任何「設 `'state'` 的 write」——判準 3 對零條 write 是"
+                "**恆真**的，這代表本 gate 對該函式已失去鑑別力。整段被重構掉時要當違規"
+                "而不是靜默通過（#627 判準 4）" % (rel, func_name))
+            continue
+        for dict_node in writes:
+            unpacked = [ast.unparse(v) for k, v in
+                        zip(dict_node.keys, dict_node.values) if k is None]
+            if "release_facts" not in unpacked:
+                violations.append(
+                    "%s::%s 第 %d 行的 write 設了 `'state'` 卻沒有帶 `**release_facts`"
+                    "——每一條狀態轉移都必須同時把 operator 回報的 release 事實落庫，"
+                    "否則那條分支就是下一個 #627（v1 的判準只看函式層，刪掉單一分支的"
+                    "展開不會紅，實測確認過）"
+                    % (rel, func_name, getattr(dict_node, "lineno", -1)))
+
+    # 判準 5：對帳 cron 不得推狀態機
+    rel, func_name = _RECONCILE_IMPLEMENTATION
+    target = _find(rel, func_name)
+    if target is not None:
+        for dict_node in _state_writes(target):
+            violations.append(
+                "%s::%s 第 %d 行寫了 `'state'`——對帳 cron 的核心安全性質是**只對帳、"
+                "不推狀態機**。對 running 服務做狀態轉移，叢集一時不健康就會把租戶服務"
+                "打成 `error`，而 error 沒有任何路徑會自己 poll 回來（#627 (i)）"
+                % (rel, func_name, getattr(dict_node, "lineno", -1)))
+
     if not producer_seen:
         violations.append(
-            "%s 沒有定義 `%s`——兩份 poll 實作的欄位集合失去單一來源，#627 的收斂被"
-            "還原了" % (POLL_MODEL_FILE, _RELEASE_FACTS_PRODUCER))
+            "%s 沒有定義 `%s`——release 事實的欄位集合失去單一來源，#627 的收斂被還原了"
+            % (POLL_MODEL_FILE, _RELEASE_FACTS_PRODUCER))
 
     return violations
 
