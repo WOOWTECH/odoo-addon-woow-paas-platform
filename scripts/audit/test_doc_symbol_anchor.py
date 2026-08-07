@@ -180,6 +180,40 @@ def _mirror_repo(src, dst):
     return dst
 
 
+def _walk_rel(root):
+    """套用**鏡像的剪枝規則**走一棵樹，回 `{相對路徑: 種類}`（file／dir／symlink）。
+
+    剪枝用的是 `_mirror_ignore`（＝ gate 自己的清單），所以來源與鏡像用同一把尺量；
+    手寫第二份判準的話，「鏡像少了什麼」會混進「兩邊剪枝規則不同」的雜訊。
+    `os.walk` 不跟隨 symlink（`followlinks=False`），所以指向目錄的 symlink 只會被
+    記成一個 symlink 條目，不會把目標整棵樹算進來。
+    """
+    ignore = _mirror_ignore(root)
+    out = {}
+    for dirpath, dirnames, filenames in os.walk(root):
+        skip = ignore(dirpath, list(dirnames) + filenames)
+        dirnames[:] = [d for d in dirnames if d not in skip]
+        rel_dir = os.path.relpath(dirpath, root).replace(os.sep, "/")
+        rel_dir = "" if rel_dir == "." else rel_dir
+        for name in dirnames + [f for f in filenames if f not in skip]:
+            rel = ("%s/%s" % (rel_dir, name)) if rel_dir else name
+            path = os.path.join(dirpath, name)
+            out[rel] = ("symlink" if os.path.islink(path)
+                        else "dir" if os.path.isdir(path) else "file")
+    return out
+
+
+def _symlinks_in(root):
+    """這棵樹（剪枝後）的 symlink 清單：`{相對路徑: 目標}`。
+
+    判準是 `os.path.islink`＝**工作目錄的實況**，不是 `git ls-files`。兩者不等價，
+    而且差別剛好落在最安靜的那一側：`docs/meeting` 是 `.gitignore` 掉的，
+    `git ls-files -s | awk '$1=="120000"'` **永遠看不到它**（#630 查到的）。
+    """
+    return {rel: os.readlink(os.path.join(root, rel))
+            for rel, kind in _walk_rel(root).items() if kind == "symlink"}
+
+
 def setUpModule():
     """把真實 repo 複製一份出來注入。
 
@@ -794,31 +828,114 @@ class TestMirrorSourcing(unittest.TestCase):
         self.assertTrue(os.path.isfile(os.path.join(dst, "src/models/thing.py")),
                         "剪過頭了——該留的 code 檔不見了")
 
-    def test_mirror_of_the_real_repo_survives_every_symlink_dangling(self):
-        """真實 repo 佈局的 CI 重現：把副本裡**每一個** symlink 弄斷再建鏡像。
+    #: 零 symlink 時，「絕不解參照」這個不變式仍然由這幾支守著（它們用自己造的樹，
+    #: 不依賴 repo 現況）。下面的 skip 訊息會引用它們——**引用會過期**，所以 skip
+    #: 之前先驗它們真的還在，別讓那句話變成沒有人守的空話（#634）。
+    _SYNTHETIC_SYMLINK_GUARDS = (
+        "test_mirror_survives_a_dangling_symlink",
+        "test_mirror_does_not_follow_a_live_symlink_out_of_the_repo",
+    )
 
-        合成小樹證明的是「函式對這個形態成立」；這一條證明的是「**今天這個 repo**
-        放進 CI 那種環境仍然建得起來」。兩者少一個都不夠：合成樹不知道 repo 裡到底
-        有哪些 symlink，真實 repo 在本機又永遠不會 dangling。
+    def test_mirror_of_the_real_repo_is_faithful(self):
+        """真實佈局：鏡像必須與來源**逐項對得上**（剪枝之外，不能少、不能多、種類不變）。
+
+        這一支刻意**不依賴樹裡有沒有 symlink**，所以在 CI（零 symlink）也照樣有鑑別
+        力——它守的是「`_mirror_ignore` 沒有剪過頭／剪不夠」以及「複製沒有把某種東西
+        換成另一種」，而判準套在**真實的 500+ 檔佈局**上，不是合成的三檔小樹。
+
+        它同時是 `test_mirror_covers_every_symlink_in_the_real_tree` 那支 skip 掉時的
+        兜底：真實佈局的那次複製不會白跑。少了它，零 symlink 環境下「真實佈局」這個
+        維度就完全沒有東西在驗了（#634）。
         """
+        raw = os.path.join(self.tmp, "raw")
+        # 先凍結一份快照再比對——直接拿活的工作目錄當基準的話，測試期間任何寫入
+        # （編輯器自動存檔、別的 agent）都會變成一個看不懂的紅。
+        shutil.copytree(str(_REPO_ROOT), raw, symlinks=True,
+                        ignore=_mirror_ignore(str(_REPO_ROOT)))
+        dst = os.path.join(self.tmp, "mirror")
+        _mirror_repo(raw, dst)
+
+        want, got = _walk_rel(raw), _walk_rel(dst)
+        self.assertTrue(want, "來源快照是空的——比對失去意義")
+        # 點名「是哪一個」而不是「差幾個」：只報數量等於報了一個沒法行動的訊號。
+        self.assertEqual(sorted(set(want) - set(got)), [],
+                         "鏡像少了這些條目 ⇒ 剪枝過頭")
+        self.assertEqual(sorted(set(got) - set(want)), [],
+                         "鏡像多了這些條目 ⇒ 剪枝沒生效")
+        self.assertEqual(
+            sorted(k for k in set(want) & set(got) if want[k] != got[k]), [],
+            "這些條目的種類變了（symlink 被解參照成一般檔／目錄就會出現在這裡）")
+        self.assertTrue(_live_anchors(dst),
+                        "鏡像逐項對得上，卻推導不出任何錨點 ⇒ 內容壞了")
+
+    def test_mirror_covers_every_symlink_in_the_real_tree(self):
+        """真實佈局 × symlink：把樹裡**每一個** symlink 弄斷，鏡像仍要建得起來，
+        而且每一個都要原樣還在鏡像裡。
+
+        🔴 這一支的價值來自**發現**——驗的是「repo 裡那些**沒有人列舉過**的 symlink」。
+        所以它有一個前提：**這棵樹真的有 symlink**。前提不成立時它不是「通過」，是
+        「沒有驗到」，而這兩件事必須在輸出裡長得不一樣（#634）。
+
+        ⚠ 舊版**有** floor，但守錯維度：它斷言 `anchors` 非空（＝鏡像建得起來、docs
+        還在），而那個條件在零 symlink 時**照樣成立** ⇒ 完全擋不住 ccpm 被移除
+        （#631／PR #633）造成的退化。真正的覆蓋量是 `broken` 那個清單，舊版只把它放
+        進**失敗訊息**（`broken or "（無）"`——寫得出這個 fallback，就代表當時已經想到
+        它可能為空，只是沒把它變成判準）。**floor 存在 ≠ floor 守對東西。**
+
+        為什麼是 skip 而不是 fail：CI 與任何 worktree 的樹裡**永遠**是零 symlink
+        （ccpm 走了，`docs/meeting` 是 gitignored 的），fail 會讓它在 CI 上**永遠紅**
+        ——而永遠紅的 gate 教會大家忽略它，比現在的沉默更糟。工單也明確禁止「為了讓
+        它有東西可驗而在 repo 裡放一個 symlink 當 fixture」（那是為了測試改變被測對象）。
+        skip 的代價是它不擋 merge，所以補了兩件事讓它不只是一句話：
+        (1) skip 前先驗「還有誰在守」是真的（見 `_SYNTHETIC_SYMLINK_GUARDS`）；
+        (2) 真實佈局那次複製由 `test_mirror_of_the_real_repo_is_faithful` 接手，
+            不會因為這支 skip 就整個維度落空。
+        """
+        if not _symlinks_in(str(_REPO_ROOT)):
+            missing = [n for n in self._SYNTHETIC_SYMLINK_GUARDS
+                       if not callable(getattr(self, n, None))]
+            self.assertEqual(
+                missing, [],
+                "下面的 skip 訊息宣稱「不變式仍由 %s 守著」，但這幾支已經不在了 ⇒ "
+                "那句話會變成沒有人守的空話。要嘛把它們找回來，要嘛改寫這裡的訊息"
+                % (missing,))
+            self.skipTest(
+                "這棵樹（%s，剪枝後）一個 symlink 都沒有 ⇒ **本支此刻沒有驗到任何"
+                "東西**，不是「通過」。這在 CI 與 worktree 是預期狀態：#631／PR #633 "
+                "移除 ccpm 時刪掉了 repo 最後一個被追蹤的 symlink。"
+                "「絕不解參照」的不變式仍由 %s 守著（已確認它們還在），真實佈局那一半"
+                "由 test_mirror_of_the_real_repo_is_faithful 接手。"
+                "唯一還會讓本支真的跑起來的環境是**開發者的主 checkout**，它有 "
+                "gitignored 的 docs/meeting -> …/0-0.footage/meeting；"
+                "`git ls-files` 那種查法看不到它，要用 `find -type l`。"
+                % (_REPO_ROOT, list(self._SYNTHETIC_SYMLINK_GUARDS)))
+
         raw = os.path.join(self.tmp, "raw")
         # 原始複製本身用 symlinks=True——這一步不能踩它要測的那個坑
         shutil.copytree(str(_REPO_ROOT), raw, symlinks=True,
                         ignore=_mirror_ignore(str(_REPO_ROOT)))
-        broken = []
-        for dirpath, dirnames, filenames in os.walk(raw):
-            for name in list(dirnames) + filenames:
-                path = os.path.join(dirpath, name)
-                if os.path.islink(path):
-                    os.remove(path)
-                    os.symlink("/nonexistent-ci-probe", path)
-                    broken.append(os.path.relpath(path, raw))
+        inventory = _symlinks_in(raw)
+        # 🔴 覆蓋量的 floor 折在這裡（而不是只出現在失敗訊息裡）：來源有 symlink、
+        #    快照裡卻沒有 ⇒ 連原始複製都解參照了，後面全部白做。
+        self.assertTrue(inventory,
+                        "來源有 symlink，快照裡卻一個都沒有 ⇒ 原始複製把它們解參照了")
+
+        for rel in sorted(inventory):
+            path = os.path.join(raw, rel)
+            os.remove(path)
+            os.symlink("/nonexistent-ci-probe", path)
         dst = os.path.join(self.tmp, "mirror")
-        _mirror_repo(raw, dst)   # 修復前：這行丟 shutil.Error
-        anchors = _live_anchors(dst)
-        self.assertTrue(anchors,
-                        "鏡像建起來了卻推導不出任何錨點 ⇒ 這條測試在驗一棵空樹"
-                        "（弄斷的 symlink：%s）" % (broken or "（無）"))
+        _mirror_repo(raw, dst)   # PR #630 修復前：這行丟 shutil.Error
+
+        # 逐一斷言，不是只驗「沒炸」——「沒炸」也可能是某一條被靜默跳過。
+        for rel in sorted(inventory):
+            link = os.path.join(dst, rel)
+            self.assertTrue(os.path.islink(link),
+                            "%s 在鏡像裡不是 symlink（原目標 %s）" % (rel, inventory[rel]))
+            self.assertEqual(os.readlink(link), "/nonexistent-ci-probe", rel)
+        self.assertTrue(_live_anchors(dst),
+                        "鏡像建起來了卻推導不出任何錨點 ⇒ 內容壞了（弄斷的 symlink：%s）"
+                        % sorted(inventory))
 
 
 # --------------------------------------------------------- 鑑別力自檢
