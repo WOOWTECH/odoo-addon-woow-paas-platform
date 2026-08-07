@@ -215,11 +215,20 @@ def _blank_call_lines(src, inside, call):
 
 # ------------------------------------------------------------ 共用 TestCase
 
+_REGISTRY_BASELINE_REL = rl.REPO_LINT_REGISTRY_BASELINE_REL
+
+
 class InjectionCase(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
         self.root = self._tmp.name
-        os.makedirs(os.path.join(self.root, "scripts", "audit"))
+        os.makedirs(os.path.join(self.root, "scripts", "audit", "baselines"))
+        # #613：floor 的第二份輸入。`check_repo_lint_docstring_registry` 本身不讀它，
+        # 但 TestHookMode 是**端對端**跑整支腳本的——少了這個檔，floor 會（正確地）
+        # fail-loud 說「讀不到 baseline」，於是「乾淨檔案不該 block」那支會紅在一個
+        # 與檔頭對帳無關的理由上。tmp root 要是**最小但完整**的 root，不是只有被測檔。
+        shutil.copy(os.path.join(str(_REPO_ROOT), _REGISTRY_BASELINE_REL),
+                    os.path.join(self.root, _REGISTRY_BASELINE_REL))
         self.addCleanup(self._tmp.cleanup)
 
     def write(self, src):
