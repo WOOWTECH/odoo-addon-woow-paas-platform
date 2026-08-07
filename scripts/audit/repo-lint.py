@@ -106,7 +106,19 @@ slug 集合成員／admin-gui 錨點／gateway 文案錨點；這個一對多關
                      CI 會抓而 hook 完全沉默）；後者可用 `REPO_LINT_HOOK_EXEMPT`
                      具名豁免。解析失敗在 `--all` 下算違規、不算無事——自檢寫成
                      fail-open 就是「永久沉默且看起來永遠是綠的」。
+                     🔴 本條守的是**一致性**，不是**存在性**：把一條 check 的四處
+                     一起刪掉，四處依然完全一致 ⇒ 全綠（#613 實測）。補那個洞的是
+                     `repo_lint_registry_floor()`＋`baselines/repo-lint-registry.txt`
+                     ——baseline 登記過的規則／函式名一個都不准消失，要調降必須顯式跑
+                     `--update-baseline`。它由 `run_all()` 直接呼叫、刻意不叫
+                     `check_*`（叫了就會被本條的雙射收編，變成同樣「四處一起刪就靜默
+                     消失」的一員）；反過來「run_all／run_hook 有沒有呼叫它」由本條的
+                     第 (6) 點守，兩者互相守著對方的存在。
                      ⚠ 只對帳名單／編號／數字，**不驗證條目描述與 check 行為相符**。
+                     ⚠ 4b 只驗 ast 層「函式名有沒有出現在 run_hook」，**不驗執行時
+                     到不到得了**（搬進永不匹配的分支照樣綠，#612）。可達性由
+                     scripts/audit/test_repo_lint_hook_dispatch.py 用真實 repo 路徑
+                     實跑 run_hook() 驗證。
 18. kubectl-ns-whitelist-sync  kubectl 可操作 namespace 的白名單同時寫在 CLAUDE.md
                      的表格與 docs/guides/deployment/shared-cluster-paas-scope-guard.md
                      的散文裡，兩份副本的集合必須相等。2026-08-06 實地教訓：平台自己
@@ -2529,6 +2541,20 @@ REPO_LINT_SELF_REL = "scripts/audit/repo-lint.py"
 # 本條守的是**本檔自己**，沒有外部 pattern doc；權威敘述就是上面的檔頭。
 REPO_LINT_REGISTRY_REF = "見本檔檔頭與 #598"
 
+# #613：登記表的不可下降 floor。檔頭對帳守的是**一致性**，把一條 check 的四處
+# （檔頭條目／映射表／run_all／run_hook）**一起刪掉**時四處仍然一致 ⇒ 全綠，守線
+# 就這樣消失。floor 補的是**存在性**：baseline 登記過的名字一個都不准消失。
+REPO_LINT_REGISTRY_BASELINE_REL = "scripts/audit/baselines/repo-lint-registry.txt"
+REPO_LINT_REGISTRY_BASELINE = os.path.join(BASELINE_DIR, "repo-lint-registry.txt")
+# floor 的兩份輸入（本檔 ＋ baseline 檔）——動到任一份，hook 都要重算。
+REPO_LINT_REGISTRY_FILES = (REPO_LINT_SELF_REL, REPO_LINT_REGISTRY_BASELINE_REL)
+# 🔴 floor 刻意**不叫 `check_*`**。叫了就會被上面那組雙射（檔頭 ↔ REPO_LINT_RULES ↔
+#    run_all ↔ run_hook）收編，於是它自己也變成「四處一起刪就靜默消失」的一員——
+#    那正是它要修的形態。名字獨立出來，run_all() 直接呼叫，而「run_all/run_hook 有沒有
+#    呼叫它」由 check_repo_lint_docstring_registry 的第 (6) 條守。兩者互相守著對方：
+#    刪掉任何一個都會紅，兩個一起刪才會綠——而那是一個大到瞞不住的 diff。
+REPO_LINT_FLOOR_FN = "repo_lint_registry_floor"
+
 # 檔頭的編號條目（＝規則）→ 實作它的 check 函式名。
 #
 # 🔴 這張表是「一條規則可以由多個函式實作」這個一對多關係的**唯一顯式表達**，也是
@@ -2622,6 +2648,93 @@ def _repo_lint_module_literal(tree, name):
 
 def _dups(seq):
     return sorted({x for x in seq if seq.count(x) > 1})
+
+
+def _repo_lint_calls_named(node, name):
+    """node 底下有沒有 `name(...)` 呼叫（floor 不是 check_*，走不了上面那個 helper）。"""
+    return any(isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+               and n.func.id == name for n in ast.walk(node))
+
+
+def repo_lint_registry_names(root):
+    """本檔目前登記了哪些規則與哪些 check 函式——floor 與 baseline 產生器的單一真相源。
+
+    回傳 `(規則名 list, run_all() 呼叫的 check 函式名 list)`，兩者都已排序；讀不到／
+    parse 不了／映射表不成形回 **None**。回 None 而不是回空 tuple 是刻意的：呼叫端要
+    有辦法分辨「今天一條都沒有」與「探針壞了」，前者該紅在別的地方，後者必須自己紅
+    ——`⊆` 判準在空集合上恆真，讓探針失敗靜默退化成空集合就等於永久假綠。
+    """
+    try:
+        with open(os.path.join(root, REPO_LINT_SELF_REL), encoding="utf-8") as f:
+            tree = ast.parse(f.read())
+    except (OSError, SyntaxError, ValueError):
+        return None
+    rules = _repo_lint_module_literal(tree, "REPO_LINT_RULES")
+    run_all_fn = next((n for n in tree.body if isinstance(n, ast.FunctionDef)
+                       and n.name == "run_all"), None)
+    if not isinstance(rules, dict) or not rules or run_all_fn is None:
+        return None
+    return sorted(rules), sorted(set(_repo_lint_check_calls(run_all_fn)))
+
+
+def repo_lint_registry_floor(root):
+    """不可下降的 floor：baseline 登記過的規則／check 函式，一個都不准消失（#613）。
+
+    第 17 條（檔頭對帳）守的是**四處一致**，不是**存在**。把一條 check 的四處一起
+    刪掉，四處依然完全一致 ⇒ `--all` 全綠，通過訊息只是少一個名字，沒有任何訊號。
+    實測（develop 0c64397c、未加本 floor 時）：刪掉 `conceal-instances` 的四處
+    exit=0；刪掉 `repo-lint-docstring-registry` 自己的四處也 exit=0。
+
+    形狀比照 `baselines/seed-topology.txt`：要調降必須顯式跑 `--update-baseline`，
+    那個動作會出現在 diff 裡被覆核，靜默少一條不會。
+
+    🔴 判準是 **baseline ⊆ 現況**（不是相等），而且記的是**名字不是數量**：
+
+      * 記名字：純數量的 floor 對「刪掉 A、同時新增 B」完全沉默（總數不變）。記名字
+        嚴格更強，而且違規時說得出**是哪一條**不見了——「差幾個」是沒法行動的訊號。
+      * 用 ⊆：相等會讓每一次合法新增都被擋到有人跑 `--update-baseline` 為止，而一條
+        會擋住正當工作的 gate 活不久（#613 明列「新增一條 check 必須維持綠」）。
+      * ⚠ ⊆ 的已知代價：**新增但還沒進 baseline 的規則不受 floor 保護**（它不在
+        baseline 裡，刪掉時 floor 沉默）。補法是新增 check 後跑 `--update-baseline`。
+        這個缺口有可執行的紀錄，見 test_repo_lint_registry_floor.py 的
+        `test_the_known_gap_of_a_subset_floor`——寫成測試而不是散文，才不會過期成假話。
+
+    🔴 fail-loud：baseline 讀不到／是空的／本檔 parse 不了，一律當違規。`⊆` 在空集合
+    上恆真，所以「探針壞掉」與「全部通過」的輸出完全相同——那正是本 floor 要防的形態
+    換一個載體重演。
+    """
+    rel = REPO_LINT_REGISTRY_BASELINE_REL
+    ref = ("要調降就跑 `%s --update-baseline`——那個動作會出現在 diff 裡被覆核，"
+           "靜默少一條不會（#613）" % REPO_LINT_SELF_REL)
+    path = os.path.join(root, rel)
+    if not os.path.exists(path):
+        return ["%s：讀不到 floor baseline。沒有它，「把一條 check 的四處一起刪掉」"
+                "就完全沒有訊號——四處仍然一致，檔頭對帳照樣全綠（%s）" % (rel, ref)]
+    recorded = set(read_baseline_pairs(path))
+    if not recorded:
+        return ["%s：floor baseline 裡沒有任何登記。空的 baseline 讓「baseline ⊆ 現況」"
+                "恆真（空集合是任何集合的子集），探針失去鑑別力而輸出與「全部通過」"
+                "一模一樣（%s）" % (rel, ref)]
+    names = repo_lint_registry_names(root)
+    if names is None:
+        return ["%s：讀不到或 parse 失敗，floor 拿不到現況登記表——解析失敗當違規而不是"
+                "無事，否則這條 floor 會靜默恆綠（%s）" % (REPO_LINT_SELF_REL, ref)]
+    rules, fns = names
+    current = {"rule:" + name for name in rules} | {"fn:" + name for name in fns}
+    violations = []
+    for entry in sorted(recorded - current):
+        kind, _, name = entry.partition(":")
+        if kind == "rule":
+            violations.append(
+                "%s：baseline 登記過規則 `rule:%s`，現在的 `REPO_LINT_RULES` 已經沒有"
+                "它了。整條守線被刪掉時四處仍然一致 ⇒ 檔頭對帳全綠、通過訊息只是少一"
+                "個名字，沒有任何人會發現（#613）。%s" % (rel, name, ref))
+        else:
+            violations.append(
+                "%s：baseline 登記過 check 函式 `fn:%s`，現在的 run_all() 已經不呼叫"
+                "它了——寫好的 gate 連同它的登記一起消失，零訊號（#613）。%s"
+                % (rel, name, ref))
+    return violations
 
 
 def check_repo_lint_docstring_registry(root):
@@ -2847,11 +2960,32 @@ def check_repo_lint_docstring_registry(root):
                     "%s：檔頭宣告「%s」＝%d，但 %s＝%d。新增／刪除 check 時要一起更新"
                     "這個數字（#596 的第一處問題就是它停在「十五個」而實際 18 個）（%s）"
                     % (self_rel, label, claimed, what, actual, ref))
+
+    # (6) floor 的存在性（#613）。上面五條全部是「四處互相對帳」，對「四處一起消失」
+    #     一律沉默——補那個洞的是 `repo_lint_registry_floor()`，而它**不是** check_*，
+    #     所以不在任何一組雙射裡。沒有這一條，有人把 floor 從 run_all() 拿掉就會靜默
+    #     恆綠，#613 的洞原樣復發。反向（有人刪掉本 check 的四處）由 floor 守：兩者
+    #     互相守著對方，刪掉任何一個都會紅。
+    for holder in ("run_all", "run_hook"):
+        if not _repo_lint_calls_named(top[holder], REPO_LINT_FLOOR_FN):
+            violations.append(
+                "%s：%s() 沒有呼叫 `%s`——那是登記表的不可下降 floor，拿掉它之後「把一"
+                "條 check 的四處一起刪掉」會完全沒有訊號（四處仍然一致，本 check 照樣"
+                "全綠）。它與本 check 互相守著對方的存在，刻意不寫成 check_* 以免被"
+                "同一組雙射收編（#613）（%s）"
+                % (self_rel, holder, REPO_LINT_FLOOR_FN, ref))
     return violations
 
 
 def run_all(root):
-    violations = (check_controller_sudo(root)
+    # 🔴 floor 排在最前面，而且**直接寫在這裡**、不做成第 21 條 check（#613）。
+    #    理由是驗收條件本身：「把 check_repo_lint_docstring_registry 自己的四處一起
+    #    刪掉必須紅」。任何寫在某條 check 裡的 floor 都會跟著那條 check 一起被刪掉，
+    #    然後靜默恆綠——那是本 issue 要修的形態換一個載體重演。run_all() 是這支工具的
+    #    入口，刪掉它工具就不存在了；而「run_all() 有沒有呼叫 floor」由第 17 條的
+    #    (6) 守。
+    violations = (repo_lint_registry_floor(root)
+                  + check_controller_sudo(root)
                   + check_owl_template(root)
                   + check_data_noupdate(root)
                   + check_reuse_values(root)
@@ -2908,10 +3042,28 @@ def update_baseline(root):
                 "調整前必讀 %s\n" % SEED_TOPOLOGY_DOC)
         for key, value in sorted(topology.items()):
             f.write("%d\t%s\n" % (value, key))
-    print("baseline 已更新：%s（%d 檔）、%s（%d 檔）、%s（%d 個計數）"
+    names = repo_lint_registry_names(root)
+    if names is None:
+        print("✗ 讀不到 %s 的登記表（parse 失敗？）——floor baseline 不更新。"
+              "把讀不到寫成「產生一份空的」等於一鍵關掉這條守線（#613）"
+              % REPO_LINT_SELF_REL)
+        return 1
+    registry = ["rule:" + name for name in names[0]] + ["fn:" + name for name in names[1]]
+    with open(REPO_LINT_REGISTRY_BASELINE, "w", encoding="utf-8") as f:
+        f.write("# repo-lint 登記表的不可下降 floor（repo-lint.py --update-baseline 產生）\n")
+        f.write("# 這份清單**只准長不准縮**：少了任何一個名字，run_all() 會點名是哪一個"
+                "不見了。\n")
+        f.write("# 整條守線被刪掉時「四處」仍然一致 ⇒ 第 17 條檔頭對帳全綠，只有這份 "
+                "floor 會紅（#613）。\n")
+        f.write("# 左欄的 1 沒有意義（沿用 read_baseline_pairs 的 value<TAB>key 格式），"
+                "判準是右欄名字的集合。\n")
+        for entry in sorted(registry):
+            f.write("1\t%s\n" % entry)
+    print("baseline 已更新：%s（%d 檔）、%s（%d 檔）、%s（%d 個計數）、%s（%d 個名字）"
           % (os.path.relpath(SUDO_BASELINE), len(counts),
              os.path.relpath(NOUPDATE_BASELINE), len(files),
-             os.path.relpath(SEED_TOPOLOGY_BASELINE), len(topology)))
+             os.path.relpath(SEED_TOPOLOGY_BASELINE), len(topology),
+             os.path.relpath(REPO_LINT_REGISTRY_BASELINE), len(registry)))
     return 0
 
 
@@ -2945,6 +3097,11 @@ def run_hook():
         # 任何既有分支會接到（漏掛的話 CI 會抓、hook 完全沉默＝#596 的形態本身）。
         anchors = (check_doc_symbol_anchor(root)
                    if _doc_symbol_anchor_watches(rel) else [])
+        # #613：floor 的輸入是**兩份**（本檔的登記表 ＋ baseline 檔），而壞掉的常常是
+        # 另一份——有人「調降」baseline，或有人刪掉一條 check 的四處。跨檔不變式，
+        # 一樣整條重算、不做 only_file 切片（同 ladder／availability／poll_facts）。
+        floor = (repo_lint_registry_floor(root)
+                 if rel in REPO_LINT_REGISTRY_FILES else [])
         if re.match(r"^src/controllers/.*\.py$", rel):
             violations = check_controller_sudo(root, only_file=abs_path)
             violations += check_reuse_values(root, only_file=abs_path)
@@ -2991,10 +3148,11 @@ def run_hook():
             # 白名單的兩份副本互為對方的判準：改哪一邊，壞掉的都是「兩份是否一致」這個
             # 跨檔不變式本身 ⇒ 不做 only_file 切片，動到任一份就整條重算。
             violations = check_kubectl_ns_whitelist_sync(root)
-        elif ladder or availability or poll_facts or anchors:
+        elif ladder or availability or poll_facts or anchors or floor:
             # extra/paas-operator/** 與 docs/tracking/pitfalls/** 不在上面任何分支，
             # 但前者持有階梯的內層常數、後者是 doc-symbol-anchor 的一半輸入；
-            # 跨檔集合搬到不匹配任何分支的位置時，這裡也接得住。
+            # baselines/repo-lint-registry.txt（floor 的另一份輸入）同樣不在上面任何
+            # 分支。跨檔集合搬到不匹配任何分支的位置時，這裡也接得住。
             violations = []
         else:
             return 0
@@ -3002,6 +3160,7 @@ def run_hook():
         violations += availability
         violations += poll_facts
         violations += anchors
+        violations += floor
         if violations:
             print(json.dumps({
                 "decision": "block",
