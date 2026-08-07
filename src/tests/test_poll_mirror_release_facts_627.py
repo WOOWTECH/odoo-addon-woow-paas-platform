@@ -63,6 +63,25 @@ from odoo.tests.common import TransactionCase
 _MODEL_PATH = 'odoo.addons.woow_paas_platform.models.cloud_service.CloudService'
 
 
+def _stale_sync_at():
+    """`last_release_sync_at` 的基準線：前一天，讓「有沒有前進」有鑑別力。
+
+    不用 `False`——`False` 只能斷言「truthy」，蓋章值凍結在某個非 False
+    的舊值時 truthy 斷言仍會誤放；「前進」才是這個欄位的真實語意（見
+    `_release_facts` docstring：語意是「最後一次問過」不是「最後一次值有
+    變」）。
+
+    模組層級函式而非 `_Base` 方法：`test_chart_pin_fail_closed_552.py`
+    守 controller 那份 poll 的四條 write 分支，需要同一個基準線邏輯，但
+    它有自己的 `_Base`（不同的 `_template`／`_service` fixture）。手抄
+    第二份是這次要收斂的那個洞的同形——改成模組層級函式讓它直接
+    `from .test_poll_mirror_release_facts_627 import _stale_sync_at`，
+    與本檔的既有慣例一致（見 `test_portal_agent_persist.py` 匯入
+    `test_portal_agent_page.PortalAgentFixture` 的同型寫法）。
+    """
+    return fields.Datetime.now() - timedelta(days=1)
+
+
 class _Base(TransactionCase):
 
     def setUp(self):
@@ -100,16 +119,6 @@ class _Base(TransactionCase):
         vals.update(extra)
         return self.Service.create(vals)
 
-    def _stale_sync_at(self):
-        """`last_release_sync_at` 的基準線：前一天，讓「有沒有前進」有鑑別力。
-
-        不用 `False`——`False` 只能斷言「truthy」，蓋章值凍結在某個非 False
-        的舊值時 truthy 斷言仍會誤放；「前進」才是這個欄位的真實語意（見
-        `_release_facts` docstring：語意是「最後一次問過」不是「最後一次值有
-        變」）。
-        """
-        return fields.Datetime.now() - timedelta(days=1)
-
     def _status(self, **release_overrides):
         """operator `get_status` 的回應。
 
@@ -144,7 +153,7 @@ class TestCronPollMirrorRecordsChartVersion(_Base):
         """→ `running`（不需要 post-deploy init）。"""
         template = self._template('poll-run-627')
         service = self._service(template, state='deploying')
-        stale_sync_at = self._stale_sync_at()
+        stale_sync_at = _stale_sync_at()
         service.write({
             'helm_chart_version': '0.1.0',
             'helm_revision': 2,
@@ -168,7 +177,7 @@ class TestCronPollMirrorRecordsChartVersion(_Base):
         """→ `error`（release status `failed`）。"""
         template = self._template('poll-err-627')
         service = self._service(template, state='deploying')
-        stale_sync_at = self._stale_sync_at()
+        stale_sync_at = _stale_sync_at()
         service.write({
             'helm_chart_version': '0.1.0',
             'helm_revision': 2,
@@ -189,7 +198,7 @@ class TestCronPollMirrorRecordsChartVersion(_Base):
         """→ `initializing`（首裝：需要 init ＋ 原狀態 `deploying`）。"""
         template = self._template('poll-init-627', post_deploy_init_type='n8n')
         service = self._service(template, state='deploying')
-        stale_sync_at = self._stale_sync_at()
+        stale_sync_at = _stale_sync_at()
         service.write({
             'helm_chart_version': '0.1.0',
             'helm_revision': 2,
@@ -214,7 +223,7 @@ class TestCronPollMirrorRecordsChartVersion(_Base):
         """
         template = self._template('poll-upg-627', post_deploy_init_type='n8n')
         service = self._service(template, state='upgrading')
-        stale_sync_at = self._stale_sync_at()
+        stale_sync_at = _stale_sync_at()
         service.write({
             'helm_chart_version': '0.1.0',
             'helm_revision': 2,
@@ -318,7 +327,7 @@ class TestBothPollImplementationsWriteTheSameFields(_Base):
         service.invalidate_recordset()
 
     def test_two_implementations_agree_on_every_release_fact(self):
-        stale_sync_at = self._stale_sync_at()
+        stale_sync_at = _stale_sync_at()
         stale = {
             'helm_chart_version': '0.1.0',
             'helm_revision': 2,
