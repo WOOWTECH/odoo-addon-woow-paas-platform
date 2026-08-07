@@ -3530,7 +3530,6 @@ class PaasController(HiddenChainMixin, Controller):
             release = status.get('release', {})
 
             release_status = release.get('status', '')
-            helm_revision = release.get('revision', service.helm_revision)
 
             # Re-fetch service to get latest state (optimistic locking)
             CloudService = request.env['woow_paas_platform.cloud_service']
@@ -3555,15 +3554,15 @@ class PaasController(HiddenChainMixin, Controller):
             # `svc-bd9d6ed3` 就是這個形態：Odoo 帳本 rev2/0.1.0、叢集 rev3/0.1.1，
             # 而 Odoo 的 write_date 停在前一天 ⇒ 那次 upgrade 不是平台發起的。
             #
-            # 綁成 dict 與 `helm_revision` 一起走，是為了讓下面**四個** write 分支
-            # 不可能各自漏掉一個欄位——新增第五個分支時也會自動跟上。
-            # `or service.helm_chart_version` ＝ 舊 operator 沒有這個欄位時保留原值。
-            release_facts = {
-                'helm_revision': helm_revision,
-                'helm_chart_version': (
-                    release.get('chart_version') or service.helm_chart_version
-                ),
-            }
+            # 綁成 dict 一起走，是為了讓下面**四個** write 分支不可能各自漏掉一個
+            # 欄位——新增第五個分支時也會自動跟上。
+            #
+            # #627：欄位集合本身已收斂到 model 的 `_release_facts`（**兩份 poll
+            # 實作的單一來源**）。原本這裡是一份 inline dict，而 cron 走的
+            # `CloudService._poll_and_update_status` 是另一份 —— 那一份只寫了
+            # `helm_revision`，於是「四個分支不會各漏」這件事在**本函式內**成立，
+            # 跨到另一份實作就整份漏掉。**不要把欄位寫回這裡。**
+            release_facts = service._release_facts(release)
 
             # Determine new state based on release status.
             #

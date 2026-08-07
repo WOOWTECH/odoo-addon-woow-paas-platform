@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""doc-symbol-anchor（repo-lint 第 19 條）的 A/B 注入測試（#626）。
+"""doc-symbol-anchor（repo-lint 第 20 條）的 A/B 注入測試（#626）。
 
 被測的 check 問一件事：**hook 必讀件裡 `path:symbol` 錨點的符號，今天還在不在**。
 這支測試問的是被測 check 的同一個問題的上一層：**改壞它，會不會紅、紅得對不對、

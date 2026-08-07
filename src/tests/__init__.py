@@ -323,3 +323,7 @@ from . import test_mcp_sync_failure_visibility_554
 # fix: #559 cloud_service.helm_values 缺欄位級授權 —— 租戶可用 call_kw 直讀明文憑證
 # 繞過 #535 的 controller 遮罩層（實測坐實）；補 groups= ＋ 提權入口 ＋ 租戶身分覆蓋
 from . import test_helm_values_field_acl_559
+# fix: #627 (ii) cron 走的 poll 鏡像 `_poll_and_update_status` 四個 write 分支
+# 都沒回寫 helm_chart_version（回寫只存在於 controller 那一份）；本檔驅動 model
+# 那一份，並加一支「兩份實作寫入欄位集合必須相同」的結構守衛
+from . import test_poll_mirror_release_facts_627
