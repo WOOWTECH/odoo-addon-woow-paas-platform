@@ -114,8 +114,8 @@ def _create_project_mcp_server(self, project_id, params):
 ```
 
 ```javascript
-// Frontend `McpServersSection.js:submitForm`
-submitForm(formData) {
+// Frontend（示意，非逐字）：McpServersSection.js 的 saveServer()
+saveServer() {
     const payload = {
         name: this.state.formName,
         url: this.state.formUrl,
