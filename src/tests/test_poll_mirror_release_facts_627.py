@@ -365,6 +365,15 @@ class TestBothPollImplementationsWriteTheSameFields(_Base):
                 # 時間戳不比「兩份是否相等」：各自呼叫 fields.Datetime.now()
                 # 落在不同秒是常態，硬要求相等會種下 flaky。真正的判準是兩份
                 # 都必須把值從基準線往前推。
+                #
+                # ⚠ 這個型別分派假設「日後任何新增的 datetime 型 release 事實
+                # 欄位都是同一種 stamp 語意」（基準線設在 stale_sync_at 之前）。
+                # 若未來加的是別種 datetime 欄位（不是「最後一次問過」語意），
+                # `stale` 字典沒有幫它種對應基準線，這裡會用 stale_sync_at 去比
+                # 一個從未被種過基準線的欄位——大概率 TypeError（None 與
+                # datetime 比較）而不是靜默通過。方向正確（fail-loud 好過靜默
+                # 放行），但踩到時看這裡：需要幫新欄位也種一份對應基準線，或把
+                # 判準從「型別」細化成「欄位名單」。
                 self.assertGreater(
                     svc_model[field], stale_sync_at,
                     'models 鏡像沒有把 `%s` 從基準線前進' % field)
