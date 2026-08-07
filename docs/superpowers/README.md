@@ -1,6 +1,6 @@
 # superpowers/ — 工具自管理區
 
-**obra/superpowers plugin** 的 brainstorming / writing-plans skill 會自動寫入這裡。**不是主題類目錄**，類似 `.claude/prds/_drafts/` 的角色。
+**obra/superpowers plugin** 的 brainstorming / writing-plans skill 會自動寫入這裡。**不是主題類目錄**，是工具的暫存／草稿區。
 
 ## 為什麼存在
 
@@ -17,7 +17,6 @@ obra/superpowers 是 Plugin 形式安裝（`~/.claude/plugins/cache/claude-plugi
 
 - 保留探索痕跡（rejected options、persona 觀點）
 - 多 agent 同步時可回查
-- 與 `.claude/prds/_drafts/` 同性質
 
 ## promote 規則
 

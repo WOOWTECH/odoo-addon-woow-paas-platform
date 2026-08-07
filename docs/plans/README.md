@@ -37,7 +37,6 @@
 - plan 引用 spec 或 decision 用相對路徑
 - journal 不強制 frontmatter，保留輕量
 
-## 與 ccpm / superpowers 的關係
+## 與 superpowers 的關係
 
-- ccpm 的 epic / task 走 `.claude/epics/<name>/`，不放這 — 完成 archive 後透過 `/docs:promote` 把決策 promote
 - superpowers writing-plans 輸出在 `docs/superpowers/plans/`，promote 後可進 `plans/<quarter>/`

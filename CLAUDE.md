@@ -9,7 +9,6 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Standalone OWL Application** - Independent frontend at `/woow` with hash-based routing
 - **Configuration Settings** - System settings via `res.config.settings`
 - **Menu Structure** - Root menu "Woow PaaS" ready for child items
-- **Claude Code PM** - Project management integration
 
 ### Cloud Services
 
@@ -216,7 +215,7 @@ Follow-up 追蹤：`docs/tracking/followups/follow-ups.md`（隨 cycle 持續累
 **工具指令**：
 
 - `/docs:new <category> <name>` — 建新 doc（產 frontmatter 模板）
-- `/docs:promote ccpm:<feature-name>` 或 `/docs:promote superpowers:<file>` — 把 ccpm epic / superpowers 探索 promote 到主結構
+- `/docs:promote superpowers:<file>` — 把 superpowers 探索 promote 到主結構
 - 動過 `docs/` 結構後跑 `python3 scripts/audit/gen-docs-index.py` 重產索引（`--check` 可驗是否同步）
 
 **CI 策略**：
@@ -308,42 +307,38 @@ export class SubscriptionCard extends Component {
 
 ## Framework integration
 
-本 repo 同時用三套 Claude Code framework，各自 scope 與整合點不同。**詳細使用指南漸進載入** — 需要哪套再讀對應檔，不要一次全載：
+本 repo 同時用兩套 Claude Code framework，各自 scope 與整合點不同。**詳細使用指南漸進載入** — 需要哪套再讀對應檔，不要一次全載：
 
 | Framework                                                                                                                      | Scope / 安裝形式                                | 主要用途                                                                             | 詳細指南                                                                         |
 | ------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------- | ------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------- |
-| **ccpm**（[automazeio/ccpm](https://github.com/automazeio/ccpm)）                                                              | Project skill — symlink `.claude/skills/ccpm`   | spec-driven PM：PRD → Epic → GitHub issues → 平行 agents                             | [`docs/guides/frameworks/ccpm.md`](docs/guides/frameworks/ccpm.md)               |
 | **superpowers**（[obra/superpowers](https://github.com/obra/superpowers)）                                                     | User-scope plugin（SessionStart hook 自動注入） | 16+ skills：brainstorming / writing-plans / TDD / debugging / code-review / worktree | [`docs/guides/frameworks/superpowers.md`](docs/guides/frameworks/superpowers.md) |
 | **SuperClaude_Framework**（[SuperClaude-Org/SuperClaude_Framework](https://github.com/SuperClaude-Org/SuperClaude_Framework)） | User-scope `~/.claude/commands/sc/*`            | 30+ slash commands；本 repo 只用 `/sc:brainstorm` + ad hoc 其他                      | [`docs/guides/frameworks/superclaude.md`](docs/guides/frameworks/superclaude.md) |
 
-### 共用整合點：`/docs:promote`
+### 整合點：`/docs:promote`
 
-ccpm 或 superpowers 的長期價值產出，透過 `/docs:promote` 升級到 `docs/` 主結構（6 類，見上方 Docs organisation）：
+superpowers 的長期價值產出，透過 `/docs:promote` 升級到 `docs/` 主結構（6 類，見上方 Docs organisation）：
 
 ```
-/docs:promote ccpm:<feature-name>           # 從 .claude/epics/ 或 .claude/prds/
 /docs:promote superpowers:<filename>        # 從 docs/superpowers/{specs,plans}/
 ```
 
-### 新 feature 探索入口：`/brainstorm-sc-to-ccpm`
+### 新 feature 探索入口
 
-`/sc:brainstorm`（SuperClaude）多 persona 探索 → 塑形 ccpm-compliant PRD → 進 ccpm tree：
+`/sc:brainstorm`（SuperClaude）或 superpowers `brainstorming` skill 做探索式對話。**兩者產出都沒有自動流向主結構**——`/sc:brainstorm` 寫 `claudedocs/`（git-ignored），superpowers 寫 `docs/superpowers/`（工具自管理區）；要留下來得手動走 `/docs:new` 或 `/docs:promote`。
 
-```
-/brainstorm-sc-to-ccpm <feature-slug>
-```
+實際要開工的項目**開 Gitea issue**（`tea` CLI，見下方 Agent skills）。
 
 ### 不啟用清單
 
-- **`/sc:pm`**（SuperClaude）— 預設寫 `docs/{temp,patterns,pdca,mistakes,checklists}/`，與本 repo 6 類結構衝突；PM 工作流由 ccpm 承擔
-- **ccpm v1**（散置 `agents/` `commands/pm/` `rules/` `scripts/pm/`）— 已遷移到 v2 Agent Skill，舊 context dir archive 到 `docs/archived/ccpm-v1/context/`
+- **`/sc:pm`**（SuperClaude）— 預設寫 `docs/{temp,patterns,pdca,mistakes,checklists}/`，與本 repo 6 類結構衝突；PM 工作流走 Gitea issues
+- **ccpm**（[automazeio/ccpm](https://github.com/automazeio/ccpm)）— **2026-08-07 停用**（#631）。實際 PM 早已走 Gitea issues，`.claude/epics/` 近三個月無異動。歷史產出（23 份 PRD ＋ 23 個 epic）archive 到 [`docs/archived/ccpm-v2/`](docs/archived/ccpm-v2/README.md)；更早的 v1 context 在 `docs/archived/ccpm-v1/context/`
 
-### 三套之間的關係
+### 兩套之間的關係
 
-- **ccpm** 是主 PM 工具（owns `.claude/prds/` + `.claude/epics/`）
+- **PM 不由 framework 承擔**——走 Gitea issues（`tea` CLI）。這不是規劃，是實況：近期工作（#598 / #614 / #615 / #621 / #626 / #627…）全部 issue-driven
 - **superpowers** 是輔助工具集（owns `docs/superpowers/` 工具自管理區）
-- **SuperClaude** 是 ad hoc command 庫（產出多在 `claudedocs/` git-ignored，唯 `/sc:brainstorm` 透過 `/brainstorm-sc-to-ccpm` 接 ccpm）
-- **superpowers `brainstorming`** 與 **`/sc:brainstorm`** 功能重疊：本 repo 統一走 `/brainstorm-sc-to-ccpm`（SuperClaude 路徑，與 ccpm schema 對齊較好）
+- **SuperClaude** 是 ad hoc command 庫（產出多在 `claudedocs/` git-ignored）
+- **superpowers `brainstorming`** 與 **`/sc:brainstorm`** 功能重疊：擇一即可，兩者產出都要**手動** promote 才進主結構
 
 ## Agent skills
 
