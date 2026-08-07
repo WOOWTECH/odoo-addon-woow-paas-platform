@@ -41,12 +41,11 @@ class McpServer(models.Model):
     _name = 'woow_paas_platform.mcp_server'
 
     sidecar_backed = fields.Boolean(
+        string='Sidecar Backed',
         default=False,
         readonly=True,
-        help='Whether this MCP record was populated from a backing service sidecar '
-             'URL hint. Row is tied to the backing cloud_service lifecycle: cleanup '
-             'when service is removed. user-provided external URLs (sidecar_backed=False) '
-             'are NOT cleaned up.'
+        help='MCP record was populated from a sidecar URL hint and is tied to '
+             'the backing cloud service lifecycle',
     )
 ```
 
@@ -100,17 +99,19 @@ class CloudService(models.Model):
 ### 3. Create path 必設 flag
 
 ```python
-# Endpoint `paas.py:_create_project_mcp_server`
-def _create_project_mcp_server(self, project_id, params):
-    # ... validate ...
+# Endpoint（示意，非逐字）：src/controllers/paas.py 的 _create_project_mcp_server
+def _create_project_mcp_server(self, project, params: dict) -> dict[str, Any]:
+    # ... validate（#271 起含 _validate_mcp_url(url, sidecar_backed=...)）...
     vals = {
         'name': params['name'],
         'url': params['url'],
         'scope': 'user',
-        'project_id': project_id,
+        'project_id': project.id,   # ◄── 收的是 project **recordset**，不是 id
         'sidecar_backed': bool(params.get('sidecar_backed', False)),  # ◄── endpoint 收 payload
     }
-    return McpServer.create(vals)
+    server = McpServer.create(vals)
+    # ◄── 回的是 JSON-able dict，不是 record；照 `return McpServer.create(...)` 寫呼叫端會錯
+    return {'success': True, 'data': self._format_mcp_server(server)}
 ```
 
 ```javascript
@@ -130,34 +131,49 @@ saveServer() {
 ### 4. Test 雙 fixture paired 驗證
 
 ```python
-class TestMcpSidecarBackedLifecycle(TransactionCase):
-    def _seed_service_with_dual_user_mcps(self):
+# Test（示意，非逐字）：src/tests/test_mcp_sidecar_backed_lifecycle.py 的
+# TestSidecarBackedLifecycleFilter。真實檔另有 workspace / template 的 setUp、
+# _do_cleanup 前對 get_paas_operator_client 的 patch，以及 unlink 後改用
+# with_context(active_test=False).browse(id) 重讀（recordset 自身的 exists() 不可靠）。
+class TestSidecarBackedLifecycleFilter(TransactionCase):
+    def _seed_service_with_dual_user_mcps(self, name_prefix='SBL', release_name='sbl-svc'):
         """Seed one sidecar-backed + one external MCP on the same service."""
-        service = self._make_service()
-        project = self._make_project(cloud_service_id=service.id)
-        sidecar_mcp = self._make_mcp(
-            project_id=project.id, scope='user',
-            url=f"http://{service.helm_release_name}-mcp.{service.helm_namespace}.svc.cluster.local:3000/mcp",
-            sidecar_backed=True,
-        )
-        external_mcp = self._make_mcp(
-            project_id=project.id, scope='user',
-            url="https://mcp.example.com/sse",
-            sidecar_backed=False,
-        )
-        return service, sidecar_mcp, external_mcp
+        service = self.Service.sudo().create({
+            'name': f'{name_prefix} Service',
+            'helm_release_name': release_name,
+            'helm_namespace': 'paas-ws-sbl',
+        })
+        project = self.Project.sudo().create({
+            'name': f'{name_prefix} Project',
+            'cloud_service_id': service.id,
+        })
+        sidecar_mcp = self.McpServer.sudo().create({
+            'project_id': project.id, 'scope': 'user',
+            'url': f'http://{release_name}-mcp.paas-ws-sbl.svc.cluster.local:3001/mcp',
+            'sidecar_backed': True,
+        })
+        external_mcp = self.McpServer.sudo().create({
+            'project_id': project.id, 'scope': 'user',
+            'url': 'https://mcp.example.com/sse',
+            'sidecar_backed': False,
+        })
+        return service, project, sidecar_mcp, external_mcp   # ◄── 四元組
 
+    # ◄── paired 的兩半是**兩支獨立測試**，不是同一支裡的兩個 assert
     def test_do_cleanup_unlinks_sidecar_backed_only(self):
-        service, sidecar_mcp, external_mcp = self._seed_service_with_dual_user_mcps()
+        service, project, sidecar_mcp, external_mcp = self._seed_service_with_dual_user_mcps()
+        sidecar_id = sidecar_mcp.id
         service._do_cleanup()
-        self.assertFalse(sidecar_mcp.exists(),
+        self.assertFalse(self.McpServer.sudo().browse(sidecar_id).exists(),
                          "sidecar-backed must be cleaned when service torn down")
-        self.assertTrue(external_mcp.exists(),
-                        "external MCP must be preserved (URL physically independent)")
 
-    def test_unlink_override_unlinks_sidecar_backed_only(self):
-        """Same paired assertion via unlink() override path — caller-agnostic safety net."""
+    def test_do_cleanup_preserves_external_user_mcp(self):
+        """同 fixture 的另一半：external MCP 必須活過 sibling 的 cleanup。"""
         # ...
+
+    # unlink() override path 走同樣的 paired 兩支（caller-agnostic safety net）：
+    # test_unlink_override_unlinks_sidecar_backed_only /
+    # test_unlink_override_preserves_external_user_mcp
 ```
 
 **雙 fixture paired** 是核心 — 單一 fixture 永遠分不清「沒清是因為 filter 對 / 還是因為根本沒進 cleanup」。

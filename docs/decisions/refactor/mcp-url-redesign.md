@@ -184,7 +184,7 @@ Regression lock：`test_mcp_sidecar_backed_lifecycle.py` 4-method paired fixture
 
 **enforcement 點**：
 - Endpoint `paas.py._create_project_mcp_server` 接受 `params.get('sidecar_backed', False)` 寫入 ORM
-- Frontend `McpServersSection.js:submitForm` line 157：`payload.sidecar_backed = !!this.state.isSidecarFlow`（user 點「Add Sidecar MCP」按鈕走 sidecar flow → flag=True；點「Add External MCP」走 external flow → flag=False）
+- Frontend `McpServersSection.js:saveServer`：`payload.sidecar_backed = !!this.state.isSidecarFlow`（user 點「Add Sidecar MCP」按鈕走 sidecar flow → flag=True；點「Add External MCP」走 external flow → flag=False）
 
 **故意不 enforce「sidecar_backed ⇔ cluster.local URL」一致性**（plan AC #28）— frontend 負責 mental model，endpoint 不擋；user 可手動把 sidecar URL 貼到 External form 或反之。詳見 test report §7 「3 條 GREEN regression lock」設計意圖。
 
