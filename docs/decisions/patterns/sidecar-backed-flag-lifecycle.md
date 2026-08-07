@@ -120,10 +120,17 @@ saveServer() {
     const payload = {
         name: this.state.formName,
         url: this.state.formUrl,
-        sidecar_backed: !!this.state.isSidecarFlow,  // ◄── UI flow 區分
     };
     // sidecar flow（點「Add Sidecar MCP」按鈕走 sidecar-hint prefill）
     // external flow（點「Add External MCP」按鈕空白 form）
+    if (this.state.editingServer) {
+        // ◄── update path **不帶** sidecar_backed：flag 是 create-time 決定的
+        //     物理依賴事實，既有 row 的值不因改 URL/名稱而重算
+        return this.support.updateProjectMcpServer(
+            this.projectId, this.state.editingServer.id, payload,
+        );
+    }
+    payload.sidecar_backed = !!this.state.isSidecarFlow;  // ◄── 只有 create 帶，UI flow 區分
     return this.support.createProjectMcpServer(this.projectId, payload);
 }
 ```
@@ -328,7 +335,7 @@ PR #47 用 `auto_created` 表「自動建」。Cycle 4 拆 auto-create 後：
   - `src/controllers/paas.py:_create_project_mcp_server` — endpoint payload 寫入
   - `src/static/src/paas/pages/project-detail/sections/McpServersSection.js:saveServer` — frontend flow 區分（`isSidecarFlow` 決定 payload 帶不帶 `sidecar_backed`）
   - `src/migrations/18.0.1.0.25/post-migrate.py` — idempotent backfill `auto_created → sidecar_backed`
-  - `src/tests/test_mcp_sidecar_backed_lifecycle.py` — paired fixture 鎖雙路徑兩方向（⚠ 該檔部分斷言失敗訊息仍逐字複述**沒有 prefix 維度**的舊 filter 字串，斷言本體正確、字串未更新，別把它當契約讀）
+  - `src/tests/test_mcp_sidecar_backed_lifecycle.py` — paired fixture 鎖雙路徑兩方向，另含 #271 加的 prefix 比對那支（⚠ 該檔部分斷言失敗訊息仍逐字複述**沒有 prefix 維度**的舊 filter 字串，斷言本體正確、字串未更新，別把它當契約讀）
   - `src/tests/test_agent_pod_phase_a_cloud_service_mn.py` — M:N 下不跨 service 連坐（`test_do_cleanup_unlinks_only_own_sidecar_mcp` / `test_unlink_override_narrows_same_way`）
 - [[cloud-service-unlink-override-cleanup]] 與本檔的**收斂規範（兩份不得各寫各的）**：雙 path 一律
   `service._collect_sidecar_user_mcps(service._sidecar_url_prefix())`；語意 =
