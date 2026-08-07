@@ -124,6 +124,62 @@ def _dead_symbol_for(root, target, seed):
 _MIRROR = None
 
 
+def _mirror_ignore(root):
+    """`copytree` 的 ignore callable —— **直接沿用被測模組自己的剪枝清單**。
+
+    鏡像的取材範圍 ≡ gate 的掃描範圍，同一份來源。手抄第二份的話，有人加一條剪枝時
+    兩邊會分岔，而分岔的症狀是「鏡像裡的候選集合與真實 repo 不同」⇒ 歧義判定在鏡像上
+    給出另一個答案，測試綠得毫無意義。
+
+    順帶把 `.claude/worktrees`（在 `_DOC_SYMBOL_ANCHOR_PRUNE_RELS` 裡）剪掉：主
+    checkout 底下住著 6 份完整 repo 副本、共 65MB。沒剪的話鏡像會有 7 份 repo，而 CI
+    只有 1 份——同一個病灶的另一面（**鏡像取「工作目錄」而不是「該被掃描的內容」**）。
+    """
+    root = os.path.abspath(root)
+
+    def ignore(dirpath, names):
+        rel = os.path.relpath(os.path.abspath(dirpath), root).replace(os.sep, "/")
+        rel = "" if rel == "." else rel
+        return {n for n in names
+                if n in rl._DOC_SYMBOL_ANCHOR_PRUNE_NAMES
+                or ("%s/%s" % (rel, n) if rel else n)
+                in rl._DOC_SYMBOL_ANCHOR_PRUNE_RELS}
+
+    return ignore
+
+
+def _mirror_repo(src, dst):
+    """把 repo 複製一份出來注入（鏡像取材的**唯一**入口）。
+
+    🔴 `symlinks=True`＝**絕不解參照**。`copytree` 的預設是 `symlinks=False`：遇到
+    symlink 會去讀它指到的東西再複製一份內容。那讓這支測試依賴 **repo 外**的檔案存
+    不存在，而那正是一個教科書等級的「本機綠／CI 紅」——本 repo 追蹤著一個 symlink
+    `.claude/skills/ccpm -> /Users/eugene/Documents/SKILL/ccpm/skill/ccpm`，開發機上
+    目標存在（複製成功、全綠），CI 容器裡不存在（`shutil.Error: [Errno 2]`）⇒
+    `setUpModule` 直接炸，`Ran 0 tests`，40 支一支都沒跑，而 gate 本體是綠的（PR #630
+    run 1853）。
+
+    🔴 修的是**這一類**不是那一個。寫死 `ignore(".claude")` 或 `ignore("ccpm")` 只擋
+    今天這一個名字，下一個 symlink 進 repo 的當天會以一模一樣的形態再炸一次。而且
+    `git ls-files -s | awk '$1=="120000"'` 只列得出**被追蹤的** symlink（今天就那一
+    個）——工作目錄裡還有 `.gitignore` 掉的 `docs/meeting ->
+    /Users/eugene/Documents/woow/0-0.footage/meeting`，它在 `docs/` **裡面**，解參照
+    的話會把整個會議影音目錄複製進 /tmp。`symlinks=True` 兩個一起解決，而且對「未來
+    第三個」也成立。
+
+    為什麼**不**改成「只取 git 追蹤的內容」（那樣鏡像 ≡ CI 看到的東西，最徹底）：那要
+    跑 `git ls-files`，等於把對 `git` 執行檔的依賴帶進 `scripts/audit/`——該目錄的硬
+    契約是不得有外部依賴，而且這支測試的驗收包含 `env -i`（**沒有 PATH**），`git` 在
+    那裡跑不起來 ⇒ 必然要寫一條「找不到 git 就退回 copytree」的 fallback，而那條
+    fallback 平時沒有東西會驗它。取捨的關鍵是**剩下風險的方向**：不用 git 的話，工作
+    目錄裡一個未追蹤的 `.py` 會多一個候選 ⇒ 可能製造 basename 歧義 ⇒ **本機紅、CI
+    綠**（吵，但看得見）。symlink 那個 bug 是**本機綠、CI 紅**（安靜，看不見）。這是拿
+    一個安靜的失敗換一個吵的失敗，不是接受一個新的安靜失敗。
+    """
+    shutil.copytree(src, dst, symlinks=True, ignore=_mirror_ignore(src))
+    return dst
+
+
 def setUpModule():
     """把真實 repo 複製一份出來注入。
 
@@ -132,10 +188,7 @@ def setUpModule():
     """
     global _MIRROR
     _MIRROR = tempfile.mkdtemp(prefix="doc-symbol-anchor-")
-    shutil.copytree(
-        str(_REPO_ROOT), os.path.join(_MIRROR, "repo"),
-        ignore=shutil.ignore_patterns(".git", "__pycache__", "node_modules",
-                                      "*.pyc", ".venv", "venv"))
+    _mirror_repo(str(_REPO_ROOT), os.path.join(_MIRROR, "repo"))
 
 
 def tearDownModule():
@@ -670,6 +723,102 @@ class TestHookDispatch(MirrorCase):
         payload = json.loads(self._hook(operator_file) or "{}")
         self.assertEqual(payload.get("decision"), "block")
         self.assertIn(dead, payload["reason"])
+
+
+# --------------------------------------------------------- 鏡像取材（PR #630 CI 紅）
+
+class TestMirrorSourcing(unittest.TestCase):
+    """鏡像**只能**依賴 repo 內的東西。
+
+    這一類故障的形態：`setUpModule` 炸 ⇒ `Ran 0 tests` ⇒ 40 支一支都沒跑，而
+    `--all` 是綠的 ⇒ 看起來像「gate 沒問題、測試環境有點小狀況」。實際上這支測試
+    在 CI 上的鑑別力是 **0**。
+
+    🔴 這幾條刻意設計成**在本機就會紅**。上一輪我驗收跑了 `env -i` ＋ 空 HOME ＋
+    `cwd=/` 全綠——那三招一個都動不到「repo 外的 symlink 目標存不存在」。這條 gate
+    的整個賣點就是「本機測不到的漂移要有機械偵測」，它自己的測試不能是例外。
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="mirror-src-")
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+
+    def _tree(self, name="src"):
+        root = os.path.join(self.tmp, name)
+        for rel_dir in rl.DOC_SYMBOL_ANCHOR_DIRS:
+            _write(root, rel_dir + "/README.md", "# 佔位\n")
+        _write(root, "src/models/thing.py", "def real_symbol():\n    pass\n")
+        return root
+
+    def test_mirror_survives_a_dangling_symlink(self):
+        """🔴 PR #630 的回歸守衛：CI 容器裡 `.claude/skills/ccpm` 的目標不存在。"""
+        root = self._tree()
+        os.makedirs(os.path.join(root, ".claude", "skills"), exist_ok=True)
+        os.symlink("/nonexistent-ci-probe",
+                   os.path.join(root, ".claude", "skills", "ccpm"))
+        dst = os.path.join(self.tmp, "mirror")
+        _mirror_repo(root, dst)  # symlinks=False 會在這裡丟 shutil.Error
+        self.assertTrue(os.path.islink(os.path.join(dst, ".claude/skills/ccpm")),
+                        "斷掉的 symlink 應該原樣複製成 symlink")
+        self.assertEqual(rl.check_doc_symbol_anchor(dst), [],
+                         "鏡像建起來了但 check 跑不動 ⇒ 鏡像不完整")
+
+    def test_mirror_does_not_follow_a_live_symlink_out_of_the_repo(self):
+        """特異性的另一半：目標**存在**時也不准解參照。
+
+        `docs/meeting -> /Users/eugene/Documents/woow/0-0.footage/meeting` 是工作目錄
+        裡真實存在（`.gitignore` 掉）的一條，解參照會把整個會議影音複製進 /tmp。
+        只驗「斷掉的 symlink 不會炸」抓不到這一半——它不會炸，只會很慢很大。
+        """
+        outside = os.path.join(self.tmp, "outside")
+        _write(outside, "big.md", "x" * 4096)
+        root = self._tree()
+        os.symlink(outside, os.path.join(root, "docs", "meeting"))
+        dst = os.path.join(self.tmp, "mirror")
+        _mirror_repo(root, dst)
+        link = os.path.join(dst, "docs/meeting")
+        self.assertTrue(os.path.islink(link), "鏡像把 symlink 解參照複製了內容")
+        self.assertEqual(os.readlink(link), outside)
+        self.assertFalse(os.path.isfile(os.path.join(dst, "docs/meeting/big.md.copy")))
+
+    def test_mirror_prunes_exactly_what_the_gate_prunes(self):
+        """剪枝清單同源：鏡像取材範圍 ≡ gate 掃描範圍。"""
+        root = self._tree()
+        _write(root, ".claude/worktrees/wt/src/models/thing.py", "def real_symbol():\n    pass\n")
+        _write(root, "node_modules/pkg/index.js", "export const x = 1;\n")
+        dst = os.path.join(self.tmp, "mirror")
+        _mirror_repo(root, dst)
+        for pruned in (".claude/worktrees", "node_modules"):
+            self.assertFalse(os.path.exists(os.path.join(dst, pruned)),
+                             "%s 應該被剪掉（gate 自己也剪它）" % pruned)
+        self.assertTrue(os.path.isfile(os.path.join(dst, "src/models/thing.py")),
+                        "剪過頭了——該留的 code 檔不見了")
+
+    def test_mirror_of_the_real_repo_survives_every_symlink_dangling(self):
+        """真實 repo 佈局的 CI 重現：把副本裡**每一個** symlink 弄斷再建鏡像。
+
+        合成小樹證明的是「函式對這個形態成立」；這一條證明的是「**今天這個 repo**
+        放進 CI 那種環境仍然建得起來」。兩者少一個都不夠：合成樹不知道 repo 裡到底
+        有哪些 symlink，真實 repo 在本機又永遠不會 dangling。
+        """
+        raw = os.path.join(self.tmp, "raw")
+        # 原始複製本身用 symlinks=True——這一步不能踩它要測的那個坑
+        shutil.copytree(str(_REPO_ROOT), raw, symlinks=True,
+                        ignore=_mirror_ignore(str(_REPO_ROOT)))
+        broken = []
+        for dirpath, dirnames, filenames in os.walk(raw):
+            for name in list(dirnames) + filenames:
+                path = os.path.join(dirpath, name)
+                if os.path.islink(path):
+                    os.remove(path)
+                    os.symlink("/nonexistent-ci-probe", path)
+                    broken.append(os.path.relpath(path, raw))
+        dst = os.path.join(self.tmp, "mirror")
+        _mirror_repo(raw, dst)   # 修復前：這行丟 shutil.Error
+        anchors = _live_anchors(dst)
+        self.assertTrue(anchors,
+                        "鏡像建起來了卻推導不出任何錨點 ⇒ 這條測試在驗一棵空樹"
+                        "（弄斷的 symlink：%s）" % (broken or "（無）"))
 
 
 # --------------------------------------------------------- 鑑別力自檢
