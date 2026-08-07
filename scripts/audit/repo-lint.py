@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """repo-lint：把「假綠家族」pitfall 轉成機械 gate 的靜態檢查工具。
 
-二十一個 check 函式，歸為下列十九條規則（7. capability-gate 一條由三個函式實作：
+二十二個 check 函式，歸為下列二十條規則（7. capability-gate 一條由三個函式實作：
 slug 集合成員／admin-gui 錨點／gateway 文案錨點；這個一對多關係的顯式映射表是
 `REPO_LINT_RULES`，由第 17 條機械對帳，所以下面這兩個數字不會再靜默漂掉）。
 每條都對應一個已翻車的 pitfall，訊息內附文件指針：
@@ -135,6 +135,28 @@ slug 集合成員／admin-gui 錨點／gateway 文案錨點；這個一對多關
                      `TestBothPollImplementationsWriteTheSameFields` 實跑兩份比對。
                      形態層擋「結構已退化但還沒漂」，行為層擋「改個寫法繞過形態判準」。
                      依據 docs/tracking/pitfalls/reaped-since-single-path-stamp-gc-immunity.md
+20. doc-symbol-anchor  docs/decisions/patterns/** 與 docs/tracking/pitfalls/**
+                     （pattern-guard hook 的必讀件）裡形如 `path/to/file.py:symbol`
+                     的錨點，該符號今天必須存在於該檔。**只驗存在性**——不驗行號、
+                     不驗內容、不驗語意，所以沒有閾值、不會誤報。#616 當初寫「不建議
+                     做 gate」，否決的是**驗行號**那條路（要容忍合理位移就得有閾值，
+                     鬆了恆綠、緊了天天誤報）；「def X 還在不在」是另一條路，不在那
+                     句話的涵蓋範圍內。scope 限縮到 hook 必讀件是實測決定的：全 docs/
+                     有 2473 處帶行號的錨點 ⇒ gate 絕不能要求「不得有行號」；
+                     docs/plans/ 的 27 組 path:symbol 更有 13 組符號已不存在——那是
+                     **時點文件**（某季的設計稿），符號後來改名是正常的，納入等於要求
+                     歷史文件跟著 code 走。限縮到必讀件時「找不到」＝0。
+                     三條處理規則（都是實測撞出來的，不是預想）：(a) 圍欄內不驗——
+                     two-layer-acl-asymmetric-deny.md 的 ```bash 區塊裡是 `grep -rn`
+                     的逐字輸出重現，那些指標的用途是**舉證**不是導航，過期是正常的
+                     甚至必要的，改掉等於偽造史料；(b) repo 外的檔跳過——
+                     `binary.py:content_common` 是 Odoo 核心，「檔不存在」與「檔在、
+                     符號不在」必須分開判；(c) 路徑必須唯一解析——repo 裡有兩個
+                     `ai_assistant.py`（只有 controllers 那個有該符號），用 basename
+                     取第一個命中會製造**純由解析策略產生的假陽性**（#606 的
+                     memory-integrity「不讓同 basename 冒充入口」同型）。
+                     ⚠ 只驗符號存在，**不驗 doc 的敘述與該符號的行為相符**。
+                     依據 #626（處方出處 #616／#623／PR #625）
 
 用法：
   scripts/audit/repo-lint.py --all                # 全 repo 掃描（CI / merge 前手動）
@@ -2137,6 +2159,284 @@ def check_kubectl_ns_whitelist_sync(root):
             % ("；".join(parts), KUBECTL_NS_DOC_REF)]
 
 
+# ------------------------------------- doc 的 code 符號錨點還在不在（#626／#616）
+
+# scope 刻意只收 pattern-guard hook 的必讀件。這不是保守，是**實測**（01cca0f2 上量）：
+# 全 docs/ 有 2473 處帶行號的 code 錨點（散在 225 份 doc）⇒ gate 絕不能要求「不得有
+# 行號錨點」，那會一次紅 2473 處；docs/plans/ 的 27 組 path:symbol 更有 13 組符號已經
+# 不存在——那是**時點文件**，描述當時的設計，符號後來改名是正常的。限縮到必讀件時
+# 「符號找不到」＝0，今天可以綠上線。本 gate 只驗**已經用符號名的那些**＝「守住已經
+# 修好的」而非「強制全部修好」，存量行號錨點漸進替換（同 seed-topology 那種 floor）。
+DOC_SYMBOL_ANCHOR_DIRS = ("docs/decisions/patterns", "docs/tracking/pitfalls")
+# 只認 .py／.js：這兩種本 repo 有可靠的符號抽法（AST／去噪後的識別字集合）。.xml 的
+# record id、.yml 的 key 不匹配錨點形態 ⇒ **不檢查**，也不假裝檢查過（要納入請先想好
+# 那個副檔名的符號抽法，不要放寬 regex 讓它掉進「抽不到就算過」）。
+DOC_SYMBOL_ANCHOR_EXTS = ("py", "js")
+DOC_SYMBOL_ANCHOR_REF = "見本檔檔頭第 20 條與 #626"
+
+# 圍欄：行首（≤3 空白）連續 3 個以上的 ` 或 ~，收在同字元、不短於開頭的那一行。
+_MD_FENCE_RE = re.compile(r"^[ \t]{0,3}(`{3,}|~{3,})[^\n]*$", re.M)
+# 錨點形態：`<路徑><.py|.js>:<符號>`。左界 (?<![\w./-]) 擋掉把別的字尾當路徑開頭；
+# 符號允許 `Class.method` 這種點鏈（每一段都要在該檔裡找得到，見下）。
+# 冒號後**必須**是識別字起頭，所以 `foo.py:581`、`foo.py:43-61`、`foo.py:81 _x` 這些
+# 帶行號的舊式指標天然不匹配——本 gate 不驗行號，也不逼人把行號拿掉。
+_DOC_SYMBOL_ANCHOR_RE = re.compile(
+    r"(?<![\w./-])([A-Za-z0-9_][A-Za-z0-9_./-]*\.(?:%s)):"
+    r"([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)"
+    % "|".join(DOC_SYMBOL_ANCHOR_EXTS))
+
+# 候選索引要剪掉的目錄。虛擬環境／node_modules 裡有成千上萬個 .py，不剪掉會讓
+# **每一個** bare basename 都變成「歧義」⇒ 一個純由掃描範圍製造的整片假陽性。
+# `.claude/worktrees` 同理而且更陰險：在主 checkout 上跑 --all 時，每個 worktree
+# 都是整個 repo 的副本，不剪掉就是「所有錨點同時歧義」。
+_DOC_SYMBOL_ANCHOR_PRUNE_NAMES = frozenset((
+    ".git", "node_modules", "__pycache__", ".venv", "venv", ".tox",
+    ".mypy_cache", ".pytest_cache", ".ruff_cache", "site-packages",
+))
+_DOC_SYMBOL_ANCHOR_PRUNE_RELS = frozenset((".claude/worktrees",))
+_JS_IDENT_RE = re.compile(r"[A-Za-z_$][A-Za-z0-9_$]*")
+
+
+def _blank_md_fences(text):
+    """把 markdown 圍欄區塊換成**等長空白**（換行保留，行號不位移）。
+
+    🔴 這條排除規則不是體貼，是實測撞出來的：
+    docs/tracking/pitfalls/two-layer-acl-asymmetric-deny.md 的 ```bash 區塊裡是
+    `$ grep -rn …` 的**逐字輸出重現**，用來重建「AC #42 漏列 paas.py」這個事件。
+    那些指標的用途是**舉證**不是導航，過期是正常的、甚至是必要的——改掉等於偽造
+    史料。同一份 doc 的圍欄裡還有 5 處不帶目錄的 `ai_assistant.py:_check_project_access`
+    （引述當時的 code 註解），沒有這條規則它們會各自被判成「basename 歧義」。
+
+    未閉合的圍欄一律當「開到檔尾」——寧可少驗幾個錨點，也不要把後半份 doc 的程式碼
+    範例當成散文來解析。
+    """
+    out = list(text)
+    opened = None
+    for m in _MD_FENCE_RE.finditer(text):
+        token = m.group(1)
+        if opened is None:
+            opened = m
+        elif token[0] == opened.group(1)[0] and len(token) >= len(opened.group(1)):
+            _blank_range(out, text, opened.start(), m.end())
+            opened = None
+    if opened is not None:
+        _blank_range(out, text, opened.start(), len(text))
+    return "".join(out)
+
+
+def _doc_symbol_anchors(text):
+    """回傳 doc 裡的 [(行號, 路徑, 符號)]（圍欄內的已被排除）。
+
+    刻意**不**要求錨點被 backtick 包起來。慣例上它們都是 inline code，但 backtick
+    只是排版；把它當觸發條件的話，拿掉一對 backtick 就能讓 gate 靜默——那正是本
+    工具整個檔在防的形態。實測過兩種寫法在今天的 scope 上結果**完全相同**（18 個
+    錨點一字不差），所以選了不可被排版繞過的那個。
+    """
+    body = _blank_md_fences(text)
+    return [(body.count("\n", 0, m.start()) + 1, m.group(1), m.group(2))
+            for m in _DOC_SYMBOL_ANCHOR_RE.finditer(body)]
+
+
+def _repo_code_files(root):
+    """repo 內所有可被錨點指到的 code 檔（repo 相對路徑，正斜線）。"""
+    files = set()
+    for dirpath, dirnames, filenames in os.walk(root):
+        rel_dir = os.path.relpath(dirpath, root).replace(os.sep, "/")
+        rel_dir = "" if rel_dir == "." else rel_dir
+        dirnames[:] = [
+            d for d in dirnames
+            if d not in _DOC_SYMBOL_ANCHOR_PRUNE_NAMES
+            and ("%s/%s" % (rel_dir, d) if rel_dir else d)
+            not in _DOC_SYMBOL_ANCHOR_PRUNE_RELS
+        ]
+        for name in filenames:
+            if "." in name and name.rsplit(".", 1)[-1] in DOC_SYMBOL_ANCHOR_EXTS:
+                files.add(("%s/%s" % (rel_dir, name)) if rel_dir else name)
+    return files
+
+
+def _resolve_anchor_file(path, files, top_dirs):
+    """把錨點的路徑解析成唯一的 repo 相對路徑。
+
+    回傳 `(rel, status, candidates)`，status ∈ ``exact`` / ``unique`` /
+    ``ambiguous`` / ``dead`` / ``outside``。
+
+    🔴 **嚴格解析**：解析不到唯一的檔就 fail，不挑第一個命中。理由是實測——repo 裡
+    有兩個 `ai_assistant.py`（`src/models/` 沒有 `_check_project_access`、
+    `src/controllers/` 有），#626 的可行性評估用 basename glob 取第一個命中時命中了
+    `src/models/` 那個，於是報「符號找不到」：**一個純粹由解析策略製造的假陽性**。
+    另一種選擇是「任一候選有該符號即通過」，但那是相反方向的說謊——`post-migrate.py`
+    在本 repo 有 33 個同名檔，「33 個裡有一個有」對讀者的導航價值是零。嚴格解析的
+    代價只有一次性的：把錨點補足目錄前綴（實測全 scope 只需補 2 處）。
+
+    ``dead`` 與 ``outside`` 的分界：路徑帶目錄、且第一段是 repo 內**實際存在的頂層
+    目錄**（`src/`、`extra/`…）就當它宣稱自己是 repo 相對路徑 ⇒ 找不到＝指標已死；
+    否則當它是 repo 外的檔（Odoo 核心的 `binary.py`、`addons/base/models/ir_rule.py`、
+    別的 repo 的 `paas-agent-runtime/…`）⇒ 跳過。沒有這個分界，`src/models/typo.py:x`
+    這種打錯字的錨點會被「檔不存在就跳過」靜默吃掉。
+    """
+    norm = path.lstrip("./")
+    if norm in files:
+        return norm, "exact", [norm]
+    candidates = sorted(r for r in files if r.endswith("/" + norm))
+    if len(candidates) == 1:
+        return candidates[0], "unique", candidates
+    if candidates:
+        return None, "ambiguous", candidates
+    head = norm.split("/", 1)[0]
+    if "/" in norm and head in top_dirs:
+        return None, "dead", []
+    return None, "outside", []
+
+
+def _anchor_file_symbols(rel, abs_path):
+    """該檔今天有哪些符號名。回 `(集合, 錯誤訊息 or None)`；抽不出來時集合是 None。
+
+    Python 走 AST：def／class 名、任何 Store context 的 Name（module 常數、Odoo 的
+    欄位宣告、class 屬性）、`self.x = …` 的屬性名、import 進來的名字。收 import 是
+    刻意的——符號搬到別的 module 但仍 import 進這個檔時，doc 的指標**還是走得到**。
+
+    JS 沒有 parser 可用（scripts/audit 的硬契約是不得有外部依賴），判準是「剝掉註解
+    與字串字面值後，這個識別字還在程式碼裡出現」。比 Python 側寬：抓得到「改名／
+    刪掉」（定義與呼叫點會一起消失），抓不到「定義搬走、只剩呼叫」。寬的方向是**不
+    誤報**，符合本 gate「純存在性、無閾值」的定位。
+    """
+    try:
+        with open(abs_path, encoding="utf-8") as f:
+            text = f.read()
+    except (OSError, UnicodeDecodeError) as exc:
+        return None, "讀不到這個檔（%s）" % exc
+    if rel.endswith(".py"):
+        try:
+            tree = ast.parse(text)
+        except SyntaxError as exc:
+            return None, "Python 語法錯誤，抽不出符號表（%s）" % exc
+        names = set()
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                names.add(node.name)
+            elif isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+                names.add(node.id)
+            elif isinstance(node, ast.Attribute) and isinstance(node.ctx, ast.Store):
+                names.add(node.attr)
+            elif isinstance(node, ast.alias):
+                names.add((node.asname or node.name).split(".", 1)[0])
+        return names, None
+    return set(_JS_IDENT_RE.findall(_strip_js_noise(text))), None
+
+
+def check_doc_symbol_anchor(root):
+    """hook 必讀件裡的 `path:symbol` 錨點，符號今天必須還在（#626）。
+
+    PR #625（#616／#623）把四份 doc 的絕對行號指標換成**符號名主鍵**，處方有了，
+    但沒有任何機制守它：明天有人改了 code 卻沒改 doc，不會有任何東西變紅——「驗過
+    一次 ≠ 會被持續驗證」。這條 check 就是那個機制。
+
+    判準是**純存在性**（def X 在不在），沒有閾值所以不會誤報，也刻意不驗行號：
+    #616 當初否決 gate 的理由「要容忍合理位移就得有閾值，鬆了恆綠、緊了天天誤報」
+    只成立於「驗行號」那條路。
+
+    ⚠ 只驗符號存在，**不驗 doc 的敘述與該符號的行為相符**（那要讀懂散文，不是靜態
+    檢查能做的）。
+    """
+    # 這個 root 到底有沒有本 check 的輸入領域？宣告目錄的**頂層**（今天全是 `docs/`）
+    # 一個都不存在時，這裡根本不是本 repo 的 checkout——hook 模式的 root 由
+    # CLAUDE_PROJECT_DIR 決定，可以被指到任何地方（別的 repo、測試用的 tmp fixture、
+    # sparse checkout）。對「不是我的樹」報違規只是噪音，而且因為本 check 對**任何**
+    # .py／.js 編輯都會被分派到，那個噪音會變成「每次編輯都 block」。同
+    # check_availability_reason_labels 的 fail-open 判準：輸入不在就不重複報。
+    # ⚠ 分界刻意畫在頂層目錄、不是宣告目錄本身：`docs/` 還在而
+    #   `docs/tracking/pitfalls/` 不見了，那正是要抓的漂移，下面的 floor 會紅。
+    #   實證：這條分界是被 test_repo_lint_docstring_registry.py 的 hook fixture
+    #   （root 只有 scripts/audit/repo-lint.py 一個檔）逼出來的，不是預想。
+    if not any(os.path.isdir(os.path.join(root, rel_dir.split("/", 1)[0]))
+               for rel_dir in DOC_SYMBOL_ANCHOR_DIRS):
+        return []
+    violations = []
+    docs = []
+    for rel_dir in DOC_SYMBOL_ANCHOR_DIRS:
+        found = sorted(glob.glob(os.path.join(root, rel_dir, "**", "*.md"),
+                                 recursive=True))
+        if not found:
+            # floor 折進迴圈：宣告了目錄卻一份 doc 都沒掃到，與「全部通過」的輸出
+            # 一模一樣。目錄改名／搬家時要紅在這裡，不是靜默少跑一圈
+            # （memory: feedback_declarative_list_gate_needs_floor_folded_in）。
+            violations.append(
+                "%s/：宣告在 scope 裡卻一份 .md 都沒掃到 ⇒ 這個目錄的錨點整批不會被"
+                "檢查，而輸出與「全部通過」相同（%s）" % (rel_dir, DOC_SYMBOL_ANCHOR_REF))
+        docs.extend(found)
+    if not docs:
+        return violations
+
+    files = _repo_code_files(root)
+    top_dirs = {n for n in os.listdir(root) if os.path.isdir(os.path.join(root, n))}
+    symbol_cache = {}
+    for doc_path in docs:
+        rel_doc = os.path.relpath(doc_path, root).replace(os.sep, "/")
+        try:
+            with open(doc_path, encoding="utf-8") as f:
+                text = f.read()
+        except (OSError, UnicodeDecodeError) as exc:
+            violations.append("%s：讀不到這份 doc（%s）⇒ 它的錨點整份沒被檢查（%s）"
+                              % (rel_doc, exc, DOC_SYMBOL_ANCHOR_REF))
+            continue
+        for line, path, symbol in _doc_symbol_anchors(text):
+            where = "%s:%d" % (rel_doc, line)
+            shown = "`%s:%s`" % (path, symbol)
+            target, status, candidates = _resolve_anchor_file(path, files, top_dirs)
+            if status == "outside":
+                continue  # repo 外的檔（Odoo 核心／別的 repo）：不是我們能保證的東西
+            if status == "ambiguous":
+                violations.append(
+                    "%s：錨點 %s 的路徑 `%s` 在 repo 內有 %d 個候選（%s）⇒ 解析不到"
+                    "唯一的檔。請把路徑補到足以唯一識別（例如 `src/controllers/%s`）。"
+                    "挑第一個命中是不行的——那會製造純由解析策略產生的假陽性／假陰性"
+                    "（%s）"
+                    % (where, shown, path, len(candidates), "、".join(candidates),
+                       path, DOC_SYMBOL_ANCHOR_REF))
+                continue
+            if status == "dead":
+                violations.append(
+                    "%s：錨點 %s 的路徑以 repo 內既有的頂層目錄 `%s` 開頭，卻找不到"
+                    "這個檔（也沒有任何檔以它為路徑後綴）⇒ 指標已死。若它指的是 repo "
+                    "外的檔，請不要寫成 repo 相對路徑的樣子（%s）"
+                    % (where, shown, path.lstrip("./").split("/", 1)[0],
+                       DOC_SYMBOL_ANCHOR_REF))
+                continue
+            if target not in symbol_cache:
+                symbol_cache[target] = _anchor_file_symbols(
+                    target, os.path.join(root, target))
+            names, error = symbol_cache[target]
+            if names is None:
+                violations.append(
+                    "%s：錨點 %s 指到的 %s %s ⇒ 判不了「符號還在不在」。探針壞掉不算"
+                    "通過（%s）" % (where, shown, target, error, DOC_SYMBOL_ANCHOR_REF))
+                continue
+            missing = [seg for seg in symbol.split(".") if seg not in names]
+            if missing:
+                violations.append(
+                    "%s：錨點 %s 的符號 %s 在 %s 裡已經不存在了 ⇒ doc 的 code 指標指向"
+                    "死路。改 code 時要一起改 doc（或把指標換成今天真實存在的符號名）"
+                    "——符號名主鍵的用途就是「不必跟著行號漂」，但前提是符號本身還在"
+                    "（%s）"
+                    % (where, shown, "／".join("`%s`" % s for s in missing), target,
+                       DOC_SYMBOL_ANCHOR_REF))
+    return violations
+
+
+def _doc_symbol_anchor_watches(rel):
+    """這個檔被編輯時要不要重跑 doc-symbol-anchor（hook 分派用）。
+
+    兩類輸入都要接住：scope 內的 doc（錨點本體），以及**任何** .py／.js——改 code
+    可能讓 doc 的符號錨點失效，而且新增一個同 basename 的檔會讓原本唯一解析的錨點
+    變成歧義。刻意不寫成 `src/**`：被引用的符號也住在 extra/paas-operator/**。
+    """
+    if "." in rel and rel.rsplit(".", 1)[-1] in DOC_SYMBOL_ANCHOR_EXTS:
+        return True
+    return rel.endswith(".md") and any(
+        rel.startswith(d + "/") for d in DOC_SYMBOL_ANCHOR_DIRS)
+
+
 # --------------------------------------------- repo-lint 檔頭 ↔ 實作對帳（#598）
 
 REPO_LINT_SELF_REL = "scripts/audit/repo-lint.py"
@@ -2176,6 +2476,7 @@ REPO_LINT_RULES = {
     "repo-lint-docstring-registry": ("check_repo_lint_docstring_registry",),
     "kubectl-ns-whitelist-sync": ("check_kubectl_ns_whitelist_sync",),
     "poll-release-facts-single-source": ("check_poll_release_facts_single_source",),
+    "doc-symbol-anchor": ("check_doc_symbol_anchor",),
 }
 
 # 刻意不掛 hook 分派的 check：{函式名: 理由}。現況是空的（每一條都掛得到 hook）。
@@ -2484,7 +2785,8 @@ def run_all(root):
                   + check_availability_reason_labels(root)
                   + check_repo_lint_docstring_registry(root)
                   + check_kubectl_ns_whitelist_sync(root)
-                  + check_poll_release_facts_single_source(root))
+                  + check_poll_release_facts_single_source(root)
+                  + check_doc_symbol_anchor(root))
     if violations:
         print("repo-lint：%d 個違規" % len(violations))
         for v in violations:
@@ -2550,6 +2852,13 @@ def run_hook():
         # ⇒ 動到任一份就整條重算，不做 only_file 切片（同 ladder／availability）。
         poll_facts = (check_poll_release_facts_single_source(root)
                       if rel in POLL_RELEASE_FACTS_FILES else [])
+        # #626：doc 的符號錨點同樣是**跨檔**不變式，而且兩端都會壞——改 doc（寫錯符號
+        # 名）與改 code（把被引用的符號改名／刪掉）都讓它失效，所以兩類輸入都要接住，
+        # 一樣整條重算。分派條件寫成函式而不是 rel 前綴列表：被引用的 code 同時住在
+        # src/** 與 extra/paas-operator/**，而 docs/tracking/pitfalls/** 底下**沒有**
+        # 任何既有分支會接到（漏掛的話 CI 會抓、hook 完全沉默＝#596 的形態本身）。
+        anchors = (check_doc_symbol_anchor(root)
+                   if _doc_symbol_anchor_watches(rel) else [])
         if re.match(r"^src/controllers/.*\.py$", rel):
             violations = check_controller_sudo(root, only_file=abs_path)
             violations += check_reuse_values(root, only_file=abs_path)
@@ -2596,8 +2905,9 @@ def run_hook():
             # 白名單的兩份副本互為對方的判準：改哪一邊，壞掉的都是「兩份是否一致」這個
             # 跨檔不變式本身 ⇒ 不做 only_file 切片，動到任一份就整條重算。
             violations = check_kubectl_ns_whitelist_sync(root)
-        elif ladder or availability or poll_facts:
-            # extra/paas-operator/** 不在上面任何分支，但它持有階梯的內層常數；
+        elif ladder or availability or poll_facts or anchors:
+            # extra/paas-operator/** 與 docs/tracking/pitfalls/** 不在上面任何分支，
+            # 但前者持有階梯的內層常數、後者是 doc-symbol-anchor 的一半輸入；
             # 跨檔集合搬到不匹配任何分支的位置時，這裡也接得住。
             violations = []
         else:
@@ -2605,6 +2915,7 @@ def run_hook():
         violations += ladder
         violations += availability
         violations += poll_facts
+        violations += anchors
         if violations:
             print(json.dumps({
                 "decision": "block",
