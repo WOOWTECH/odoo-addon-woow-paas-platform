@@ -946,10 +946,22 @@
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/hermes-agent</field>
             <!-- #530：0.1.0 → 0.1.1（charts PR woow-paas-charts#69 加 gateway 反向代理
-                 子路徑）。chart 版本 bump 與本欄位必須同一次變更一起動，否則平台指向
-                 不存在的 chart 版本；平台端沒有 chart values 的任何副本，**這條沒有
-                 測試守得住**，是已知的人工紀律缺口。 -->
-            <field name="helm_chart_version">0.1.1</field>
+                 子路徑）。
+                 woow-paas-charts#74：0.1.1 → 0.1.2（charts PR woow-paas-charts#75）——
+                 webui container 內完全沒有 hermes-agent 原始碼，建 profile 回 500、
+                 chat 回 AIAgent not available。0.1.2 加 initContainer 從 agent image 複製
+                 /opt/hermes 到 emptyDir、webui 唯讀掛載並設 HERMES_WEBUI_AGENT_DIR，另把
+                 GATEWAY_API_KEY 更名為 HERMES_WEBUI_GATEWAY_API_KEY、加
+                 HERMES_WEBUI_CHAT_BACKEND=gateway。三者皆由 chart 的 deployment.yaml 直接
+                 渲染成 container env、不是 values 鍵，本 seed 無對應鍵可改。0.1.2 對 values
+                 的唯一新增是 webui.initResources（有 chart 預設 50m/64Mi～500m/256Mi），
+                 且 init container 不抬高 pod effective limits（k8s 取 max(init, sum(regular))，
+                 agent 單顆 limits 就已遠大於它）⇒ 下方 min_vcpu／min_ram_gb 的 3× headroom
+                 推導不受影響，本次只動版本號。
+                 chart 版本 bump 與本欄位必須同一次變更一起動，否則平台指向不存在的 chart
+                 版本；平台端沒有 chart values 的任何副本，**這條沒有測試守得住**，是已知
+                 的人工紀律缺口（測試只鎖住本欄位宣告了什麼，鎖不住那個版本是否真的已發佈）。 -->
+            <field name="helm_chart_version">0.1.2</field>
             <field name="helm_default_values">{"image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/hermes-agent", "tag": "20260727.1502@sha256:ce3c49a7f332a6bad607d81cbd7fefe76062263469595c1a19ba80f27629f00f"}, "agent": {"resources": {"requests": {"cpu": "200m", "memory": "1Gi"}, "limits": {"cpu": "2", "memory": "6Gi"}}}, "dashboard": {"bindHost": "0.0.0.0", "externalPath": "/dashboard", "username": "admin"}, "gateway": {"externalPath": "/gateway"}, "webui": {"image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/hermes-webui", "tag": "20260727.2228@sha256:98d48222bab03b385e6417875c0605d32c88a98b62e68e80c87fdc156b4c3f5f"}, "resources": {"requests": {"cpu": "250m", "memory": "512Mi"}, "limits": {"cpu": "1", "memory": "2Gi"}}}, "service": {"port": 8080, "name": ""}, "authProxy": {"enabled": true, "basicAuth": true, "basicAuthUsername": "admin", "workerProcesses": 2, "image": {"repository": "nginxinc/nginx-unprivileged", "tag": "1.27-alpine"}}, "console": {"enabled": true, "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/open-design-console", "tag": "20260720.0332@sha256:2b91c4ad4a6a94d1735c8aa7a6c18ec05491d9db31fa455f5e5da1cbb52b0f92"}, "externalPath": "/console", "resources": {"requests": {"cpu": "50m", "memory": "64Mi"}, "limits": {"cpu": "200m", "memory": "512Mi"}}}, "persistence": {"data": {"size": "5Gi"}}, "postgresql": {"enabled": false}, "redis": {"enabled": false}}</field>
             <field name="helm_value_specs">{"required": [], "optional": [
                 {"key": "auth.minimaxApiKey", "label": "MiniMax API Key", "type": "password",
