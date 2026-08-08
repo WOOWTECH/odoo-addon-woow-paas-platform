@@ -34,7 +34,7 @@ related:
 >
 > **2026-07-25 更新（§5.1 大改）**：prod odoo `.75→.78` rollout 後複驗，發現 §5.1 步驟表與實際做法嚴重脫節，本次補齊四件事：① **S1 陷阱**——`paas-odoo/values-prod.yaml` 同時有 `image.tag` 與 `image.digest`，Bitnami common 以 `repository@digest` 渲染、**digest 優先於 tag**，**只改 tag 是 no-op 且會偽裝成發版成功**（§5.1 步驟 5 修正，§8 rollback 同步修正）；② **CD 兩段式 module upgrade 正式入表**——Bitnami chart `ODOO_SKIP_MODULES_UPDATE` 預設 `yes`，換 image 後 boot **不會**跑 `-u`、`noupdate=0` 的 seed XML 不會 reload，故**有 seed 變更的發版必須跑 `-u`**：PR-A（`"no"`）→ 驗證 → PR-B（`"yes"`）；③ **`-u` 曝險窗上限 = 驗證通過後 ≤30 分鐘**，加上收官三重確認；④ **發版前 DB snapshot 正式入表**（步驟 5，排在 promote 之前）—— prod DB 無離線備份（`backups.longhorn.io` 空、backuptarget 未設），snapshot 是**唯一**還原錨點，且**必須驗 `readyToUse=true`**（曾有 `markRemoved=true` 的假錨點），**由人類操作者親跑**。新增 §5.1.1 / §5.1.2 / §5.1.3。
 >
-> **2026-08-08 更新（S1 陷阱補第三處 pin）**：**`paas-odoo` 的 image pin 是三處，不是兩處** —— `values-prod.yaml` 的 `module-version-gate` initContainer 另有一個**寫死的 `image: …@sha256:…`**。本次把「兩者同改」全面改為「三處同進同退」（§2 pin 位置欄、§4 心智模型 3、§5.1 S1 陷阱、§5.1 步驟表步驟 6、§5.1.4 已知極限表、§5.1.5 ①、§8 rollback 步驟 1／2、§9 新增坑 #21、§11 checklist step 3／10），並補上兩件原本沒寫的事：① **漏改 gate 是與 S1 原型不同的失效形態** —— image 真的換了、三方 digest 閉環全過，但 gate 拿**自己那顆舊 image** 的版號去比對而判定「版本一致」，安靜跳過該跑的 `-u` ⇒ 新 code 跑在舊 schema 上；② **rollback 方向是它的鏡像** ⇒ 舊 code 跑在新 schema 上，且 §8 原本的 `grep -E '(tag|digest):'` 對 gate 那一行**零命中**（前綴是 `image:`），已修正。
+> **2026-08-08 更新（S1 陷阱補第三處 pin）**：**`paas-odoo` 的 image pin 是三處，不是兩處** —— `values-prod.yaml` 的 `module-version-gate` initContainer 另有一個**寫死的 `image: …@sha256:…`**。本次把「兩者同改」全面改為「三處同進同退」（§2 pin 位置欄、§4 心智模型 3、§5.1 S1 陷阱、§5.1 步驟表步驟 6、§5.1.4 已知極限表、§5.1.5 ①、§8 rollback 步驟 1／2、§9 新增坑 #21、§11 checklist step 3／10），並補上兩件原本沒寫的事：① **漏改 gate 是與 S1 原型不同的失效形態** —— image 真的換了、三方 digest 閉環全過，但 gate 拿**自己那顆舊 image** 的版號去比對而判定「版本一致」，安靜跳過該跑的 `-u` ⇒ 新 code 跑在舊 schema 上；② **rollback 方向是它的鏡像** ⇒ 舊 code 跑在新 schema 上，且 §8 原本的 `grep -E '(tag|digest):'` 對 gate 那一行**零命中**（前綴是 `image:`），已修正。③ 新增**發版後唯一接得住此缺陷的檢查**（§5.1.5 ①、§11 step 7）：同一顆 pod 上 gate initContainer 與主容器的 imageID 比對，**2026-08-08 於 prod `paas-system` 實跑驗證＋陽性對照**。⚠ 該 jsonpath **必須**帶 `[?(@.name=="module-version-gate")]` 篩選器 —— `paas-odoo` 有兩個 initContainer（另一個是 `busybox` 的 `patch-odoo-conf`），寫成 `initContainerStatuses[*]` 會讓那一行永遠含 busybox digest ⇒ **連 pin 完全同步時都報紅**，等於做出一個沒有鑑別力、幾次之後就被當噪音忽略的檢查。
 >
 > **這個縫是怎麼長出來的（時間線）**：S1 陷阱段寫於 **2026-07-25**（`.75→.78` rollout 後的 §5.1 大改），當時 `values-prod.yaml` 確實**只有兩處** pin，「兩者同改」在那個時點是完整的。`module-version-gate` 是 **2026-08-01** 才引入的（`paas-app-bundle-cd#77` A′、PR#81／#82；本 repo landing 見 [`docs/tracking/landings/cd77-module-version-gate.md`](../../tracking/landings/cd77-module-version-gate.md)），它新增了第三處寫死的 pin —— **而 S1 段沒有跟著回頭更新**。上方 2026-07-25 那條註記刻意保留原文不改：它記錄的是「當時為真」，抹掉它就看不出這條縫的成因。CD repo 那側同步得比較完整（`docs/promote-acceptance-checklist.md` §1b、`values-prod.yaml` 該行上方註解、promote commit `9ee287e` 的 body 都寫了「三處同步」），**落差只發生在本 repo 的 SOP** ⇒ 兩份文件對同一個動作給出不同步數的指引，照 SOP 做的人會漏。
 
@@ -140,6 +140,13 @@ grep -rnE 'version:|tag:|digest:|image:' /tmp/paas-app-bundle-cd/*/fleet.yaml /t
 
 > 🔴 **上面兩條的 `initContainerStatuses` 與 `digest:|image:` 都是必要的，不是順手加的**：`paas-odoo` 的 image pin 有**三處**（§5.1 S1 陷阱），第三處是 `module-version-gate` **initContainer** 寫死的 `image:`。
 > 舊版本這兩條指令**對它同時盲**——pod 側只列 `containerStatuses`（照不到 init 容器實際跑的那顆）、檔案側只 grep `version:|tag:`（gate 那行的前綴是 `image:`，`digest:` 也一併漏）。**盤點指令漏掉某個 pin，比沒有盤點指令更糟**：它會產生一份看起來完整的清單。
+>
+> ⚠ **這裡的 `initContainerStatuses[*]` 是對的，但不要把這個寫法搬去做「gate 與主容器是否同一顆」的比對。** 兩者目的不同：
+>
+> | 用途 | 寫法 | 為什麼 |
+> |------|------|--------|
+> | **盤點**（本節） | `initContainerStatuses[*]` | 要列出**全部** init 容器 —— `paas-odoo` 有兩個（`patch-odoo-conf` 用 `busybox:1.37`、`module-version-gate` 用 paas-odoo），**busybox 那顆也是一個 pin**，本來就該出現在清單裡 |
+> | **相等性比對**（§5.1.5 ①） | `initContainerStatuses[?(@.name=="module-version-gate")]` | 用 `[*]` 會把 busybox 的 digest 一起印進同一行 ⇒ **與主容器永遠不可能逐字相同 ⇒ 永遠報紅**，連 pin 完全同步時都紅 |
 
 ---
 
@@ -508,17 +515,32 @@ gate 是 `paas-odoo` deployment 的 **initContainer**（不是 sidecar、不是 
 >
 > **本節 ①②③ 三層驗收接不住它**——① 問的是「gate 有沒有跑」，而 gate 跑了、也做出了 `skip` 的決定；②③ 都建立在「`-u` 該跑」的前提上，前提被 `skip` 掉時它們是**空真**（沒有 `Updating modules` 可看、seed 值本來就沒被要求改）。
 >
-> **但發版後仍有一條補得回來的檢查**：`skip` 掉時，pod 上主容器與 initContainer 的 imageID 會**分岔**，直接比對即可（②③ 同步時兩者必然相同）：
+> **但發版後仍有一條補得回來的檢查**：`skip` 掉時，同一顆 pod 上 **`module-version-gate` 這個 initContainer** 與主容器的 imageID 會**分岔**，直接比對即可（②③ 同步時兩者必然相同）：
 >
 > ```bash
-> # 同一顆 pod 上，gate（init）與主容器跑的是不是同一個 digest
+> # 同一顆 pod 上，gate 與主容器跑的是不是同一個 digest
 > kubectl --context woow-k3s -n paas-system get pods -l app.kubernetes.io/name=odoo \
->   -o jsonpath='{range .items[*]}{.metadata.name}{"\n  init: "}{.status.initContainerStatuses[*].imageID}{"\n  main: "}{.status.containerStatuses[*].imageID}{"\n"}{end}'
+>   -o jsonpath='{range .items[*]}{.metadata.name}{"\n  gate: "}{.status.initContainerStatuses[?(@.name=="module-version-gate")].imageID}{"\n  main: "}{.status.containerStatuses[*].imageID}{"\n"}{end}'
 > # 兩行 digest 必須逐字相同；不同 = 命中本節這個缺陷（§9 坑 #21）
 > ```
 >
+> 🔴 **`[?(@.name=="module-version-gate")]` 這個篩選器是必要的，寫成 `initContainerStatuses[*]` 會做出一個永遠報紅的檢查。** 這顆 pod 有**兩個** initContainer —— `patch-odoo-conf`（`busybox:1.37`）與 `module-version-gate`。`[*]` 會把兩顆的 imageID 都印進同一行，於是那一行**永遠**含 busybox 的 digest，**與 `main:` 永遠不可能逐字相同**。
+> 這不是「等分岔時才會誤判」：**pin 完全同步（＝應該全綠）的狀態下它就已經在報紅**，從一開始就沒有鑑別力。而一個永遠紅燈的檢查跑幾次就會被當噪音忽略，最後等同不存在 —— 對一條掛著「發版後唯一接得住此缺陷」名義的檢查來說，那是最壞的結局。
+>
+> **實測（2026-08-08，prod `paas-system`，pod `paas-odoo-744b4fc67-t4w8l`，三處 pin 同步狀態）**：
+>
+> ```
+> paas-odoo-744b4fc67-t4w8l
+>   gate: jcr-prod.woowtech.io/woow-paas-docker-local/paas-odoo@sha256:2a14f05086a2…405f
+>   main: jcr-prod.woowtech.io/woow-paas-docker-local/paas-odoo@sha256:2a14f05086a2…405f
+> ```
+>
+> **陽性對照（同次實跑）**：把篩選條件換成不存在的 `no-such-container`，輸出為 `[]`（空）。⇒ 篩選器確實在篩，上面 `gate:` 那行有值是**真的匹配到**，不是「反正兩邊都印出來」。
+> （對照下，錯誤的 `[*]` 版本在同一顆 pod 上印出的 `init:` 行是 `busybox@sha256:9532d8c3… <paas-odoo digest>` 兩個值。）
+>
 > 這個比對是**相對**的（比兩者是否相等，不是比對某個絕對值），所以不受 §2 提到的「prod+stg 共 cluster、containerd digest dedup 報 stg repo 別名」干擾——真的是同一顆時，兩邊會報同一個別名。
-> ⚠ **本指令未在 prod 實跑驗證過**（撰寫本節時無 VPN／不在授權操作範圍），形態為標準 jsonpath，第一次用請先確認欄位有值再據以判斷。
+>
+> ⚠ **判讀前先確認兩行都有值。** 兩行**皆空**不是「相等 ⇒ 通過」，是探針壞了（label selector 沒選到 pod、jsonpath 打錯、ns 錯）—— 空字串等於空字串會給出一個假綠，而這正是本節在講的那類失效換一層再犯一次。上面的陽性對照就是為了把「有值」與「篩對了」分開證明。
 
 ##### ③ 🔴 post-verify 不涵蓋 seed 值——這兩件事會分離
 
@@ -847,7 +869,7 @@ Fleet GitOps 的 rollback = **把 pin 值改回上一個已知良好版本**：
 | 18 | 讓 agent 代按 prod build 的 approval gate | 繞過 human-in-the-loop。實例：agent 的輸入緩衝殘留「幫我留 `/approve`」並主動詢問要不要代按，**被系統的 NOT-USER-INPUT 標記證明無人類授權**才攔下 | **prod approval gate 只能人類本人按**，agent 一律不得代 approve（即使 agent 手上有可用 token、即使 `ALLOW_SELF_APPROVE=true`）。留言內容 trim 後須**精確等於** `/approve`；**最保險是網頁點**。CLI 語法坑：`tea comment <repo> <idx>` **錯**（repo 字串會被當 index 去 ParseInt），正解 `tea comments --repo <owner/repo> <idx> "/approve"`（複數、`--repo` 走 flag）。⏱ gate **逾時 180 分鐘**後該 run 會以 failure 結束（曾實際發生，`/approve` 沒送出去）——恢復走 §5.1.4「CI 失敗要重跑時」的 `workflow_dispatch`（**必填 `addon_ref`**），不要用刪 tag 再重推的方式繞 |
 | 19 | 相信另一條 lane（CD agent／teammate）回報的「已建 branch／已 push／已 merge」 | 實例：同一 session 兩次 fabrication（假 commit、假 branch＋假 diff，磁碟／local／remote 全查無）；另一次「已 merge PR」首報實為 open | **寫入類主張一律用自己的工具鏈獨立查證**：`git ls-remote`／`git worktree list`／`tea pr <n>`／`git show origin/main:<file>`。「寫入成功」的回報與「查證過的事實」是兩件事 |
 | 20 | 以為 agent 能自動化整條發版鏈 | harness 的 auto-mode classifier 會擋掉其中幾步（實測：`longhorn-system` 的 `apply`＝建 snapshot、prod postgres 的 `psql exec`），流程會卡在中間 | 這些**由人類以 `!` 親跑**（也符合共用叢集 scope 鐵律：`longhorn-system` 不在本 repo 可操作的 namespace 內）。agent 可做的是**唯讀 cross-check**（`get snapshot` 讀 `readyToUse`）。⚠ 但 `kubectl exec deploy/paas-odoo -- odoo shell`（唯讀 search/read）是**通過**的 ⇒ DB 層的驗證多半可以自己來，不必每次都找人 |
-| 21 | promote／rollback 改了 `image.tag`＋`image.digest`，**漏掉 `module-version-gate` initContainer 那個寫死的 `image`**（S1 陷阱 ③） | **與坑 #4 是不同的失效形態，#4 的 digest 驗法對它完全無效**：image 真的換了、pod imageID digest 真的是新的、三方閉環全過 —— 但 gate 比對的是**自己那顆舊 image** 的版號，與同樣是舊的 DB 版號相等 ⇒ 安靜 `skip` 掉該跑的 `-u`（主容器 `ODOO_SKIP_MODULES_UPDATE=yes` 也不補跑）⇒ **新 code 跑在舊 schema／舊 seed 上**，要到功能驗收才現形。rollback 方向為鏡像：**舊 code 跑在新 schema 上** | 改 values 時三處同改／同退（§5.1 步驟 6、§8 步驟 2）；grep 要含 `image:`（gate 那行的前綴不是 `digest:`）；CD repo `docs/promote-acceptance-checklist.md` §1b 有對應檢查。**沒有 runtime 檢查涵蓋這一項** —— gate 讀不到主容器的 image 字串，守線只存在於改檔那一刻（§5.1.5） |
+| 21 | promote／rollback 改了 `image.tag`＋`image.digest`，**漏掉 `module-version-gate` initContainer 那個寫死的 `image`**（S1 陷阱 ③） | **與坑 #4 是不同的失效形態，#4 的 digest 驗法對它完全無效**：image 真的換了、pod imageID digest 真的是新的、三方閉環全過 —— 但 gate 比對的是**自己那顆舊 image** 的版號，與同樣是舊的 DB 版號相等 ⇒ 安靜 `skip` 掉該跑的 `-u`（主容器 `ODOO_SKIP_MODULES_UPDATE=yes` 也不補跑）⇒ **新 code 跑在舊 schema／舊 seed 上**，要到功能驗收才現形。rollback 方向為鏡像：**舊 code 跑在新 schema 上** | 改 values 時三處同改／同退（§5.1 步驟 6、§8 步驟 2）；grep 要含 `image:`（gate 那行的前綴不是 `digest:`）；CD repo `docs/promote-acceptance-checklist.md` §1b 有對應檢查。**叢集沒有任何 runtime 檢查涵蓋這一項**（gate 讀不到主容器的 image 字串、Fleet／Helm 也不比對這兩個值），主守線在改檔那一刻。發版後唯一接得住它的是**同一顆 pod 上 gate initContainer 與主容器的 imageID 比對**（§5.1.5 ①，2026-08-08 prod 實測；jsonpath 必須用 `[?(@.name=="module-version-gate")]` 篩選，寫 `[*]` 會因另一個 busybox init 容器而永遠報紅） |
 
 ---
 
@@ -921,9 +943,14 @@ Fleet GitOps 的 rollback = **把 pin 值改回上一個已知良好版本**：
 [ ] 6. 等 Fleet reconcile：kubectl -n fleet-local get gitrepo paas-app-bundle
        → COMMIT == CD main HEAD 且 STATUS 空
 [ ] 7. 閉環驗證：pod imageID(digest) == 預期新版；deploy readyReplicas 滿
-       ＋（paas-odoo）**同一顆 pod 的 initContainerStatuses 與 containerStatuses
-         imageID 逐字相同** —— 這是發版後唯一接得住「漏改 gate image」的檢查
+       ＋（paas-odoo）**同一顆 pod 上 name=="module-version-gate" 那個
+         initContainer 的 imageID 與 containerStatuses 的 imageID 逐字相同**
+         —— 這是發版後唯一接得住「漏改 gate image」的檢查
          （§9 坑 #21；三層驗收接不住它，指令見 §5.1.5 ①）
+         🔴 jsonpath 必須帶 [?(@.name=="module-version-gate")] 篩選器：
+            pod 有兩個 initContainer（另一個是 busybox 的 patch-odoo-conf），
+            寫 initContainerStatuses[*] 會永遠含 busybox digest ⇒ 永遠報紅
+         🔴 兩行皆空 ≠ 通過（＝探針壞了）；先確認兩行都有值再判讀
 [ ] 8. 站點 smoke：/woow /odoo /my 回 HTTP 2xx/3xx（4xx/5xx/000 重試 ≤3 次仍失敗 → 立即 §8 rollback）
 [ ] 7.5（paas-odoo）§5.1.5 三層驗收 —— 三件會各自獨立失敗的事，上層過不蘊含下層過
        ① -u 有被觸發：gate 的 post-verify（DB latest_version 推進；不推進 pod 會卡 Init）
