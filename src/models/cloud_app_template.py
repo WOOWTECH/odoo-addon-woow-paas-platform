@@ -315,7 +315,8 @@ class CloudAppTemplate(models.Model):
     # #471：原本 is_hidden 一個旗標同時承載「不上架」與「既有實例整條鏈消失」兩種
     # 語意。對 HA PaaS（租戶入口是 App、不是 /woow）恰好無害，套到「暫時下架的一般
     # 商品」就變成破壞性的——租戶手上 state=running 的服務詳情頁打不開、rollback／
-    # change-plan／MCP 設定全不可達（#464 實測 hermes-agent）。而「不可購買」這件事
+    # change-plan／MCP 設定全不可達（#464 實測：上架／下架是常見營運動作，不能因
+    # 翻旗標就把既有實例打掉）。而「不可購買」這件事
     # 本來就已由 plan 層 storefront_hidden 承擔，兩層縱深早有前例。故拆成：
     #
     #   is_hidden          ＝ 曝光層。marketplace 不列、template 詳情/plans 不可讀、

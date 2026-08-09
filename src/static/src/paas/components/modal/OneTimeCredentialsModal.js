@@ -48,6 +48,9 @@ export class OneTimeCredentialsModal extends Component {
  * ⚠ 完整 gateway 網址一律用後端給的 `gateway_url`，**前端不拼字串**：子路徑是
  * chart 的值（seed 的 gateway.externalPath），在前端再拼一次就等於多一份會與
  * chart 無聲漂移的副本，而漂移的結果是一條看起來正常的死鏈。
+ *
+ * （chart 0.1.3 起 hermes-agent 移除 webui container，nginx `/` 直連 dashboard；
+ * 憑證的對應入口只剩 console 與 dashboard 兩個，admin_password 仍是同一組）
  */
 export function buildOneTimeCredentials(data) {
     const credentials = [];
@@ -55,7 +58,7 @@ export function buildOneTimeCredentials(data) {
         credentials.push({
             label: "Admin Password",
             value: data.admin_password,
-            hint: "Web UI、console 與 dashboard 共用這一組（帳號 admin）。",
+            hint: "console 與 dashboard 共用這一組（帳號 admin）。",
         });
     }
     if (data && data.gateway_api_key) {

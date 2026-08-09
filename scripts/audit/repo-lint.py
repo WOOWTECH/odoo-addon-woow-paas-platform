@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """repo-lint：把「假綠家族」pitfall 轉成機械 gate 的靜態檢查工具。
 
-二十二個 check 函式，歸為下列二十條規則（7. capability-gate 一條由三個函式實作：
+二十三個 check 函式，歸為下列二十一條規則（7. capability-gate 一條由三個函式實作：
 slug 集合成員／admin-gui 錨點／gateway 文案錨點；這個一對多關係的顯式映射表是
 `REPO_LINT_RULES`，由第 17 條機械對帳，所以下面這兩個數字不會再靜默漂掉）。
 每條都對應一個已翻車的 pitfall，訊息內附文件指針：
@@ -170,6 +170,15 @@ slug 集合成員／admin-gui 錨點／gateway 文案錨點；這個一對多關
                      memory-integrity「不讓同 basename 冒充入口」同型）。
                      ⚠ 只驗符號存在，**不驗 doc 的敘述與該符號的行為相符**。
                      依據 #626（處方出處 #616／#623／PR #625）
+21. hermes-agent-013-seed  cloud_app_hermes_agent record 必須對齊 chart 0.1.3：
+                     ``helm_chart_version`` 必須是 `0.1.3`、``helm_default_values``
+                     不得含 `webui` block 或 `dashboard.externalPath`。0.1.3 移除
+                     webui container、dashboard 改走 root URL（nginx `/` 直連），
+                     任一條件失效 ⇒ OAuth ``redirect_uri`` 打到 404 subpath
+                     （chart 用舊 subpath 轉發、平台仍組 root URL）。守線只鎖
+                     「block 不在」的最小必要條件；image pin / dashboard 內容
+                     細節由 test_hermes_agent_seed_424 機械斷言。
+                     依據 feat/hermes-agent-013-cleanup（chart 0.1.3 contract change）
 
 用法：
   scripts/audit/repo-lint.py --all                # 全 repo 掃描（CI / merge 前手動）
@@ -1214,6 +1223,94 @@ def check_gateway_copy_gate_anchor(root):
                 "見 %s）。"
                 % (rel, line_no, GATEWAY_FIELD,
                    "／".join(exprs) or "(無 t-if)", ADMIN_GUI_FIELD, CAPABILITY_GATE_DOC))
+    return violations
+
+
+def check_hermes_agent_013_seed(root):
+    """hermes-agent record 必須對齊 chart 0.1.3 seed 形態（防 regression）。
+
+    0.1.3 移除 webui container、dashboard 改走 root URL（nginx `/` 直連），
+    對應的平台 seed 形態：
+
+    - ``helm_chart_version`` 必須是 ``0.1.3``（pin 升版）
+    - ``helm_default_values`` 不得含 ``webui`` block（chart 不再 render 那顆
+      container）
+    - ``helm_default_values.dashboard`` 不得含 ``externalPath``（dashboard 不再
+      走 subpath）
+
+    任一條件失效 ⇒ OAuth ``redirect_uri`` 會打到 404 subpath（chart 用舊 subpath
+    轉發，平台仍組 root URL），租戶拿到一條看起來正常的死鏈。``#424①`` 的合約
+    變更（`HERMES_DASHBOARD_PUBLIC_URL` 由 ``/dashboard`` 變 root URL）正是
+    為了把這條路徑鏈完全打通。
+
+    反例：有人升 chart 但沒同步 seed、或從舊 chart 回退卻留著舊 block。守線
+    本身不驗 image pin / dashboard 內容細節（那些由 test_hermes_agent_seed_424
+    機械斷言）；本條只守「block 不在」這個**最小必要條件**——升版時最容易漏改、
+    漏改後整鏈不動。
+    """
+    violations = []
+    target = 'woow_paas_platform.cloud_app_hermes_agent'
+    for fp in sorted(glob.glob(os.path.join(root, "src/data/*.xml"))):
+        rel = os.path.relpath(fp, root).replace(os.sep, "/")
+        try:
+            tree = ET.parse(fp)
+        except ET.ParseError:
+            continue
+        record = None
+        for rec in tree.iter('record'):
+            for v in rec.attrib.values():
+                if v == target:
+                    record = rec
+                    break
+            if record is not None:
+                break
+        if record is None:
+            continue
+        # 1) chart version 必須 = 0.1.3
+        version_found = False
+        for fld in record.iter('field'):
+            if fld.attrib.get('name') == 'helm_chart_version':
+                version_found = True
+                if (fld.text or '').strip() != '0.1.3':
+                    violations.append(
+                        "%s：cloud_app_hermes_agent.helm_chart_version = %r "
+                        "≠ '0.1.3'。chart 0.1.3 移除 webui container、dashboard 改"
+                        "走 root URL；平台端 `_inject_dashboard_public_url` 與 "
+                        "`HERMES_DASHBOARD_PUBLIC_URL` 合約已對齊 0.1.3，chart "
+                        "version 必須同動（見 PR feat/hermes-agent-013-cleanup）"
+                        % (rel, (fld.text or '').strip()))
+                break
+        if not version_found:
+            violations.append(
+                "%s：cloud_app_hermes_agent 缺 helm_chart_version 欄位" % rel)
+        # 2) helm_default_values 不得含 webui / dashboard.externalPath
+        for fld in record.iter('field'):
+            if fld.attrib.get('name') != 'helm_default_values':
+                continue
+            raw = (fld.text or '').strip()
+            if not raw:
+                continue
+            try:
+                values = json.loads(raw)
+            except (ValueError, TypeError):
+                continue  # JSON 壞掉由其他 check 報
+            # webui block（key 開頭的 `"webui":`）
+            if 'webui' in values:
+                violations.append(
+                    "%s：cloud_app_hermes_agent.helm_default_values 仍含 `webui`"
+                    " block。chart 0.1.3 起 webui container 已移除（nginx `/` 直連"
+                    " dashboard）；seed 留著會被 chart 當成 subpath 轉發，OAuth "
+                    "redirect_uri 與平台 `_inject_dashboard_public_url` 對不起"
+                    "來" % rel)
+            # dashboard.externalPath
+            dash = values.get('dashboard')
+            if isinstance(dash, dict) and 'externalPath' in dash:
+                violations.append(
+                    "%s：cloud_app_hermes_agent.helm_default_values.dashboard"
+                    ".externalPath 仍存在。chart 0.1.3 起 dashboard 走 root URL，"
+                    "留著 externalPath 會被 chart 當成 subpath 轉發，OAuth "
+                    "redirect_uri 打到 404 subpath" % rel)
+            break
     return violations
 
 
@@ -2290,6 +2387,13 @@ _DOC_SYMBOL_ANCHOR_RE = re.compile(
 _DOC_SYMBOL_ANCHOR_PRUNE_NAMES = frozenset((
     ".git", "node_modules", "__pycache__", ".venv", "venv", ".tox",
     ".mypy_cache", ".pytest_cache", ".ruff_cache", "site-packages",
+    # `.maestri/` 只住 maestro plugin 的 role 與其下的 worktree checkout
+    # （典型路徑 `.maestri/roles/<uuid>/.claude/worktrees/<branch>/`）。剪掉理由
+    # 與上方 `.claude/worktrees` 相同：它是整個 repo 的副本，不剪會讓每一個 bare
+    # basename（`paas.py`、`helm.py`、`ha_paas.py`...）都被掃出兩個候選，純由掃
+    # 描範圍製造整片假陽性。`_DOC_SYMBOL_ANCHOR_PRUNE_RELS` 抓的是 top-level
+    # `.claude/worktrees`，覆蓋不到這個嵌套變體。
+    ".maestri",
 ))
 _DOC_SYMBOL_ANCHOR_PRUNE_RELS = frozenset((".claude/worktrees",))
 _JS_IDENT_RE = re.compile(r"[A-Za-z_$][A-Za-z0-9_$]*")
@@ -2589,6 +2693,7 @@ REPO_LINT_RULES = {
     "kubectl-ns-whitelist-sync": ("check_kubectl_ns_whitelist_sync",),
     "poll-release-facts-single-source": ("check_poll_release_facts_single_source",),
     "doc-symbol-anchor": ("check_doc_symbol_anchor",),
+    "hermes-agent-013-seed": ("check_hermes_agent_013_seed",),
 }
 
 # 刻意不掛 hook 分派的 check：{函式名: 理由}。現況是空的（每一條都掛得到 hook）。
@@ -3006,7 +3111,8 @@ def run_all(root):
                   + check_repo_lint_docstring_registry(root)
                   + check_kubectl_ns_whitelist_sync(root)
                   + check_poll_release_facts_single_source(root)
-                  + check_doc_symbol_anchor(root))
+                  + check_doc_symbol_anchor(root)
+                  + check_hermes_agent_013_seed(root))
     if violations:
         print("repo-lint：%d 個違規" % len(violations))
         for v in violations:
@@ -3132,6 +3238,11 @@ def run_hook():
             violations = check_data_noupdate(root, only_file=abs_path)
             if re.match(r"^src/data/subscription_(products|template_links).*\.xml$", rel):
                 violations += check_seed_topology(root)
+            # hermes-agent 0.1.3 seed 形態：不分 only_file，因為對 hermes-agent
+            # record 來說，**唯一**的 carrier 是 src/data/cloud_app_templates.xml，
+            # 編到該檔就是改它；其他 src/data/*.xml 動到時也順便跑（cheap parse，
+            # 找不到 hermes-agent record 就跳過）
+            violations += check_hermes_agent_013_seed(root)
         elif re.match(r"^(docs/decisions/patterns/|\.claude/hooks/)", rel):
             # #547：不變式跨「目錄／map／README 索引」三方，壞掉的是**另外兩份名單**
             # 而不是你剛編輯的那個檔 ⇒ 不做 only_file 切片，整條重算
