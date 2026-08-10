@@ -8,7 +8,7 @@
 2. **評估機械化**（`/retro` skill 的分流，按強度優先）：可 grep/parse 判定 → `scripts/audit/repo-lint.py` 加 check；綁特定路徑 → `.claude/hooks/pattern-guard-map.json` append；皆不可 → 狀態欄留 `—`。
 3. 教訓已被 code guard / gate 取代時，更新狀態欄並讓 doc 記錄 guard 位置（file:line）。
 
-## 索引（38 條）
+## 索引（40 條）
 
 | pitfall | 一行症狀 | 機械化狀態 |
 | --- | --- | --- |
@@ -21,6 +21,8 @@
 | [assertlogs-string-level-shadowed-by-odoo](assertlogs-string-level-shadowed-by-odoo.md) | `assertLogs(level='INFO')` 在 Odoo 進程是 setLevel(25)（netsvc addLevelName 覆寫 `_nameToLevel`）→ 守 `_logger.info` 的測試**引入即恆紅**、訊息卻長得像 code 掉了 log；`assertNoLogs` 版本則恆綠 | repo-lint `check_assertlogs_numeric_level`（第 11 條）|
 | [cf-ns-orphan-no-account-gc](cf-ns-orphan-no-account-gc.md) | CF/ns 孤兒無帳號級反向 GC；繞過 Odoo unlink 的刪除 → stored id 蒸發成永久孤兒；SmartHome 連 fail-loud guard 都沒有 | — |
 | [ci-addon-ref-empty-drifting-default-branch](ci-addon-ref-empty-drifting-default-branch.md) | 人工重跑 build 忘填 `addon_ref` → CI clone 移動中的預設分支 HEAD；CI 全綠、image_tag 與 digest 全新、pod digest 閉環全對，但 image 內容是另一個版本（要到 pod 跑 `-u` 才現形） | CI 兩道 fail-closed（`paas-odoo-ci/build-image.yml`，跨 repo）：`addon_ref` 必填（#46，擋本條）＋ image↔clone 版號比對擋在 push 前（#50，擋另一類）；SOP §11 checklist 1.5 降為複核（**ref 填錯 CI 一律全綠**，只有 `at ref:` vs 發版單抓得到） |
+| [ci-local-kubectl-cp-root-owned-addons](ci-local-kubectl-cp-root-owned-addons.md) | ci-local sandbox 的 `/mnt/extra-addons` 整棵 root-owned、容器跑 `uid=100(odoo)` → `kubectl cp` 熱蓋檔案被 **`tar` 誤報成「Cannot open: File exists」**（同一個目標改用 `cat >` 則誠實回 Permission denied）；繞法 `kubectl debug --target` 借 root chown，**且 chown 必須用數字 `100:101`**——busybox debug image 用名字回 unknown user/group 卻不中斷指令，做完與沒做長得一樣 | — |
+| [ci-local-stale-pod-green-tests-on-old-code](ci-local-stale-pod-green-tests-on-old-code.md) | ci-local 的 code 是 image 快照，pod 一重建就退回舊版、前一輪 `kubectl cp` 的修補全消失；**失效是靜默的**：`1/1 Running` 無警告、`test.sh` 照跑照綠，而那個綠燈驗的是舊碼 → 沒先讀 pod 內版號就跑測試＝產出有測試數字佐證但錨點錯掉的假驗收 | — |
 | [ci-workflow-container-missing-node](ci-workflow-container-missing-node.md) | CI `container: <lang-image>` 缺 node → checkout exit 127 → pytest 從沒跑到（false green）；本 repo Odoo CI 不受影響 | — |
 | [cross-repo-artifact-landing-assumption](cross-repo-artifact-landing-assumption.md) | plan 假設部署 artifact 落 cross-repo X 實際落本 repo Y → impl 前按「修改誰的 deployment」勘查實體落點 | — |
 | [cross-workspace-task-data-leak](cross-workspace-task-data-leak.md) | CAQA B1 incident：跨 workspace task 資料外洩 | — |

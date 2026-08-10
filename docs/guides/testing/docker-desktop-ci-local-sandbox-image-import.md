@@ -23,6 +23,14 @@
    - req.txt 拿掉 `fastembed`（拉 onnxruntime ~200MB），**同時**要
      `sed -i '/^fastembed/d' /mnt/extra-addons/woow_paas_platform/requirements.txt`
      ——`pre_init_hook._check_python_dependencies()` 會逐行驗 importable、缺的就現場 pip install。
+   - 🔴 **`USER odoo` 之前務必補一行 `RUN chown -R odoo:odoo /mnt/extra-addons`**
+     ——`COPY` 是以 root 進行的，少了這行，`/mnt/extra-addons` 底下**整棵是 `root:root`**，
+     而容器以 `uid=100(odoo)` 執行 ⇒ 之後任何 `kubectl cp`／`kubectl exec … 'cat > f'`
+     熱蓋檔案都會被擋（而且 `kubectl cp` 的錯誤訊息會說謊成「File exists」）。
+     這正是 `Dockerfile.dev` 一直都有、而繞過 `build.sh` 時被一併繞掉的那行。
+     詳見 [ci-local-kubectl-cp-root-owned-addons](../../tracking/pitfalls/ci-local-kubectl-cp-root-owned-addons.md)。
+     （2026-08-10 補；當日 host 磁碟 100% 禁止 build，**此行尚未重建 image 實測**——
+     下次重建的人請順手驗 `docker run --rm <tag> find /mnt/extra-addons -not -user odoo | head` 為空。）
    - 建置約 6 分鐘、image 約 2.2GB。
 
 2. **匯進 node 的 containerd**（kind node 的 image store 與 Docker daemon **是兩套**，
@@ -42,5 +50,12 @@
 
 **排錯教訓**：`docker build ... | tail -40` 會讓 Bash 的 exit code 變成 `tail` 的 0
 ——背景任務通知報 "exit code 0" 但實際 build 失敗。**看輸出本體，別信被管線洗過的 exit code。**
+
+**用這條 recipe 建出來的 sandbox 有兩個已知的坑**（開跑前先掃一眼）：
+
+- [ci-local-kubectl-cp-root-owned-addons](../../tracking/pitfalls/ci-local-kubectl-cp-root-owned-addons.md)
+  —— 熱蓋檔案進 pod 撞 root-owned 目錄，`kubectl cp` 誤報「File exists」
+- [ci-local-stale-pod-green-tests-on-old-code](../../tracking/pitfalls/ci-local-stale-pod-green-tests-on-old-code.md)
+  —— pod 重建後靜默退回 image 烤進去的舊碼，**測試照樣全綠**
 
 相關：[[reference_woow_playwright_e2e_gotchas]]、[[reference_k8s_sandbox_test_gotchas]]

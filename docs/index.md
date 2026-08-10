@@ -4,7 +4,7 @@
 > 分類的定義與寫新檔該放哪，見 [`README.md`](README.md)。
 > 本檔由 `scripts/audit/gen-docs-index.py` 產生，數字即時算出——**不要手改**。
 
-目前共 **639** 份文件（含 `archived/` 311 份）。
+目前共 **641** 份文件（含 `archived/` 311 份）。
 
 ## 我要照步驟做一件事
 
@@ -44,7 +44,7 @@
 | 去哪 | 內容 | 篇數 |
 |---|---|---|
 | [`tracking/landings/`](tracking/landings/) | 已收官 issue 的落地紀錄（檔名帶 issue 編號） | 68 |
-| [`tracking/pitfalls/`](tracking/pitfalls/) | 撞牆時對照：症狀 → 根因 | 39 |
+| [`tracking/pitfalls/`](tracking/pitfalls/) | 撞牆時對照：症狀 → 根因 | 41 |
 | [`tracking/followups/`](tracking/followups/) | 尚未收掉的追蹤項 | 2 |
 | [`tracking/test-reports/`](tracking/test-reports/) | E2E / 測試報告 | 2 |
 
