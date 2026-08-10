@@ -43,7 +43,7 @@
     },
     {
       "class": "model-write-guard",
-      "pattern": "^src/models/(agent_session|agent_template|security_access|smart_home|cloud_service|mcp_server|skill)[a-z_]*\\.py$",
+      "pattern": "^src/models/(agent_session|agent_template|security_access|smart_home|cloud_service|mcp_server|skill|workspace_access|workspace)[a-z_]*\\.py$",
       "why": "這些 model 有 write()/create() invariant guard（identity anchor / scope flip / state stamp），改壞會假綠或孤兒資源",
       "docs": [
         "docs/decisions/patterns/su-env-exempt-guard-false-green.md — invariant guard 不可用 env.su / has_group 豁免（TransactionCase 是 su env → 假綠）",

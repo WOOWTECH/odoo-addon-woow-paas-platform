@@ -76,9 +76,19 @@ class Workspace(models.Model):
             if not vals.get('slug'):
                 vals['slug'] = self._generate_slug(vals.get('name', ''))
         workspaces = super().create(vals_list)
-        # Create owner access for each workspace
+        # Create owner access for each workspace.
+        #
+        # `.sudo()` is required (#556): the caller of Workspace.create() is
+        # often a bare tenant with no existing workspace_access row anywhere
+        # in the brand-new workspace, so the model-layer create() guard on
+        # workspace_access (_check_assignable_role) would otherwise reject
+        # this very bootstrap write (grantor=None ⇒ allowed=[]). Owner is
+        # taken from workspace.owner_id (server-decided), not env.user — HA
+        # PaaS auto-provision (ha_paas.py) calls this through auth='none'
+        # with env.uid a public user, not env.user, so deriving from
+        # env.user here would silently mis-attribute that path's owner row.
         for workspace in workspaces:
-            self.env['woow_paas_platform.workspace_access'].create({
+            self.env['woow_paas_platform.workspace_access'].sudo().create({
                 'workspace_id': workspace.id,
                 'user_id': workspace.owner_id.id,
                 'role': ROLE_OWNER,

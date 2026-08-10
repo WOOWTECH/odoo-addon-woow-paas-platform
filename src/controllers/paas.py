@@ -731,10 +731,12 @@ class PaasController(HiddenChainMixin, Controller):
         #
         # 殘留視窗在 `models.py` 的 `_create` 尾端：INSERT 已下 →
         # `records._validate_fields(...)` → `records.check_access('create')`。
-        # 目前的規則與 constraint 下這條路徑不完全可達（`_check_owner_count` 只在
-        # role=='owner' 時拋，而 `ASSIGNABLE_ROLES` 不含 owner；`workspace_access`
-        # 的 create rule 對 `base.group_user` 全開）——但那是**設定**擋著，不是這段
-        # 程式有守。收緊 create rule 或加一條 `@api.constrains` 殘留立即可達，所以
+        # #556 之後，這個呼叫者（admin/owner，已通過上面的 required_role 檢查）
+        # 一律經 `workspace_access.py` 的 `create()` model guard
+        # （`_check_assignable_role`，INSERT **之前**）與
+        # `workspace_access_rule_owner_admin_manage`（`perm_create=True`）放行，
+        # 不會撞到 `_check_owner_count`（role 不是 owner）或 create 方向的
+        # ir.rule 拒絕——注入點仍然只能落在 `_validate_fields` 這個真實視窗，
         # 結構上照 A1／A2 同一形態修掉。
         try:
             with request.env.cr.savepoint():
