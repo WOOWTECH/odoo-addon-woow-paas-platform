@@ -25,29 +25,6 @@
             <field name="perm_unlink" eval="False"/>
         </record>
 
-        <!-- WorkspaceAccess: Users can read/write access records for workspaces they're members of -->
-        <record id="workspace_access_rule_member_access" model="ir.rule">
-            <field name="name">WorkspaceAccess: member access only</field>
-            <field name="model_id" ref="model_woow_paas_platform_workspace_access"/>
-            <field name="domain_force">[('workspace_id.access_ids.user_id', '=', user.id)]</field>
-            <field name="groups" eval="[(4, ref('base.group_user'))]"/>
-            <field name="perm_read" eval="True"/>
-            <field name="perm_write" eval="True"/>
-            <field name="perm_create" eval="False"/>
-            <field name="perm_unlink" eval="False"/>
-        </record>
-
-        <!-- WorkspaceAccess: Any user can create access records (for invitations) -->
-        <record id="workspace_access_rule_create" model="ir.rule">
-            <field name="name">WorkspaceAccess: anyone can create</field>
-            <field name="model_id" ref="model_woow_paas_platform_workspace_access"/>
-            <field name="domain_force">[(1, '=', 1)]</field>
-            <field name="groups" eval="[(4, ref('base.group_user'))]"/>
-            <field name="perm_read" eval="False"/>
-            <field name="perm_write" eval="False"/>
-            <field name="perm_create" eval="True"/>
-            <field name="perm_unlink" eval="False"/>
-        </record>
     </data>
 
     <!-- Refactor-managed rules (noupdate=0): module owns the definitive domain,
@@ -680,6 +657,60 @@
         <record id="project_access_rule_admin_full" model="ir.rule">
             <field name="name">ProjectAccess: admin full CRUD (group_system bypass)</field>
             <field name="model_id" ref="model_woow_paas_platform_project_access"/>
+            <field name="domain_force">[(1, '=', 1)]</field>
+            <field name="groups" eval="[(4, ref('base.group_system'))]"/>
+            <field name="perm_read" eval="True"/>
+            <field name="perm_write" eval="True"/>
+            <field name="perm_create" eval="True"/>
+            <field name="perm_unlink" eval="True"/>
+        </record>
+
+        <!-- workspace_access (#556 — retires workspace_access_rule_member_access /
+             workspace_access_rule_create, formerly in the noupdate="1" block at
+             the top of this file; see src/migrations/18.0.1.0.119/post-migrate.py
+             for why those two had to be DELETEd rather than edited in place).
+             4-rule shape mirrors project_access above. -->
+
+        <record id="workspace_access_rule_member_read" model="ir.rule">
+            <field name="name">WorkspaceAccess: workspace member read</field>
+            <field name="model_id" ref="model_woow_paas_platform_workspace_access"/>
+            <field name="domain_force">[('workspace_id.access_ids', 'any', [('user_id', '=', user.id)])]</field>
+            <field name="groups" eval="[(4, ref('base.group_user'))]"/>
+            <field name="perm_read" eval="True"/>
+            <field name="perm_write" eval="False"/>
+            <field name="perm_create" eval="False"/>
+            <field name="perm_unlink" eval="False"/>
+        </record>
+
+        <record id="workspace_access_rule_owner_admin_manage" model="ir.rule">
+            <field name="name">WorkspaceAccess: workspace owner/admin manage</field>
+            <field name="model_id" ref="model_woow_paas_platform_workspace_access"/>
+            <field name="domain_force">[('workspace_id.access_ids', 'any', [('user_id', '=', user.id), ('role', 'in', ['owner', 'admin'])])]</field>
+            <field name="groups" eval="[(4, ref('base.group_user'))]"/>
+            <field name="perm_read" eval="True"/>
+            <field name="perm_write" eval="True"/>
+            <field name="perm_create" eval="True"/>
+            <field name="perm_unlink" eval="True"/>
+        </record>
+
+        <!-- self 是 member_read 的嚴格子集今天（有列 ⇒ 是成員 ⇒ member_read
+             已涵蓋全 ws）。刻意保留：(i) 與 project_access 四條樣板 1:1；
+             (ii) 授權面零增量，但若未來 member_read 被收窄，成員至少還看
+             得到自己的成員身分——不要當「多餘規則」順手刪掉。 -->
+        <record id="workspace_access_rule_self" model="ir.rule">
+            <field name="name">WorkspaceAccess: self introspection</field>
+            <field name="model_id" ref="model_woow_paas_platform_workspace_access"/>
+            <field name="domain_force">[('user_id', '=', user.id)]</field>
+            <field name="groups" eval="[(4, ref('base.group_user'))]"/>
+            <field name="perm_read" eval="True"/>
+            <field name="perm_write" eval="False"/>
+            <field name="perm_create" eval="False"/>
+            <field name="perm_unlink" eval="False"/>
+        </record>
+
+        <record id="workspace_access_rule_admin_full" model="ir.rule">
+            <field name="name">WorkspaceAccess: admin full CRUD (group_system bypass)</field>
+            <field name="model_id" ref="model_woow_paas_platform_workspace_access"/>
             <field name="domain_force">[(1, '=', 1)]</field>
             <field name="groups" eval="[(4, ref('base.group_system'))]"/>
             <field name="perm_read" eval="True"/>
