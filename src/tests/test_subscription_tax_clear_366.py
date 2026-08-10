@@ -65,7 +65,8 @@ class TestSeedProductCorpusIntact(TransactionCase):
     # 真正的守線是下面兩條零丟棄斷言；這個數字允許隨 seed 成長調高。
     # 267 → 269：#423 W5b 新增 HAOS 兩顆 base product（月/年，無加購變體）。
     # 269 → 271：#494 新增 Hermes Agent 兩顆 base product（月/年，無加購變體）。
-    _MIN_SEEDED_PRODUCTS = 271
+    # 271 → 273：#661 新增 Home Assistant 完整版兩顆 base product（月/年，無加購變體）。
+    _MIN_SEEDED_PRODUCTS = 273
 
     def test_no_seed_product_is_silently_dropped(self):
         imd = self.env['ir.model.data'].sudo().search([

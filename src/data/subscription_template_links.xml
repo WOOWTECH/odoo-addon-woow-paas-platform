@@ -81,6 +81,20 @@
                    eval="[(6, 0, [ref('plan_haos_monthly'), ref('plan_haos_yearly')])]"/>
         </record>
 
+        <!-- #661：Home Assistant 完整版（容器型，完整整合集）template ↔ 兩 base plan
+             （3000/24000）。v1 不做加購變體，故 subscription_template_links_variants.xml
+             沒有對應的 (4,) append。本檔 <data noupdate="0"> ＋ (6, 0, [...]) 全量 reset
+             ＝ 每次 -u 都把 DB 的 M2M 重寫成檔案內容（links 必 noupdate=0 鐵律，見
+             docs/tracking/pitfalls/seed-noupdate-sticky-template-links.md）⇒ 既有 DB
+             直接生效、無需 migration。
+             ⚠ 勿與 cloud_app_ha_paas（免費精簡版，plan 刻意 orphan、見下方註解）或
+             cloud_app_haos（VM 型 HAOS，4500/36000）互掛：三者是不同產品。 -->
+        <record id="cloud_app_ha_full" model="woow_paas_platform.cloud_app_template">
+            <field name="subscription_plan_ids"
+                   eval="[(6, 0, [ref('plan_ha_full_monthly'),
+                                  ref('plan_ha_full_yearly')])]"/>
+        </record>
+
         <!-- #494：Hermes Agent 完整應用 template ↔ 兩 base plan（4500/36000）。
              #424① 上架時定價未拍板、刻意不掛 plan；拍板後比照 #431 解封（翻
              is_hidden ＋掛 plan），本檔 noupdate=0 ＋ (6, 0, [...]) 全量 reset ⇒
