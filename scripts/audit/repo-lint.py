@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """repo-lint：把「假綠家族」pitfall 轉成機械 gate 的靜態檢查工具。
 
-二十三個 check 函式，歸為下列二十一條規則（7. capability-gate 一條由三個函式實作：
-slug 集合成員／admin-gui 錨點／gateway 文案錨點；這個一對多關係的顯式映射表是
-`REPO_LINT_RULES`，由第 17 條機械對帳，所以下面這兩個數字不會再靜默漂掉）。
+二十六個 check 函式，歸為下列二十三條規則（其中兩條各由多個函式實作：第 7 條
+capability-gate 由三個函式——slug 集合成員／admin-gui 錨點／gateway 文案錨點；第 22 條
+security-rule-lifecycle 由兩個函式——ir.rule 的出生地／退役名字。這個一對多關係的顯式
+映射表是 `REPO_LINT_RULES`，由第 17 條機械對帳，所以上面這兩個數字不會再靜默漂掉）。
 每條都對應一個已翻車的 pitfall，訊息內附文件指針：
 
 1. controller-sudo   src/controllers/*.py 的 .sudo( 呼叫點數量對 baseline 白名單；
@@ -181,6 +182,42 @@ slug 集合成員／admin-gui 錨點／gateway 文案錨點；這個一對多關
                      與「版號不得倒退」這兩個最小必要條件；image pin /
                      dashboard 內容細節由 test_hermes_agent_seed_424 機械斷言。
                      依據 feat/hermes-agent-013-cleanup（chart 0.1.3 contract change）
+22. security-rule-lifecycle  ir.rule 宣告的**出生地**與**退役名字**兩件事（#659 ①②，
+                     兩個函式；同一個機制的兩端＝`ir_model_data.noupdate` 的 sticky 語意）：
+                     (a) 任何 `<record model="ir.rule">` 落在 `noupdate="1"` 區塊即 fail。
+                         noupdate 是 sticky 的：`-u` 不重寫欄位、把 record 搬到
+                         `noupdate="0"` 區塊翻不了旗標、從 XML 刪掉也不會清除 ⇒ 規則
+                         寫錯**只能下 migration DELETE 修**。這正是 #556 的可修復性
+                         根因，而第 3 條 data-noupdate 只掃 `src/data/*.xml` 的**檔案
+                         層**，`src/security/ir_rules.xml` 從來不在射程內——授權規則
+                         全住在那裡。既有兩條（#658 的待辦）由 in-code grandfather
+                         清單收錄，**雙向**對帳（修好了要求把那一行刪掉，否則同名
+                         record 日後會無聲繼承豁免）。
+                     (b) #556 已用 migration `18.0.1.0.122` DELETE 退役的兩個 xmlid
+                         不得再有 `<record>` 宣告。帶回來的後果不對稱：既有環境的
+                         migration 只跑一次不會再刪，fresh install 卻照 XML 重建
+                         ⇒ 授權洞無聲重開、零測試會紅。判準是「有沒有 `<record id=…>`
+                         宣告」而**不是**「檔案裡有沒有這個字串」——那兩個名字今天仍
+                         合法出現在註解／migration／landing doc 裡。
+                     ⚠ 只驗宣告位置與名字，**不驗規則的 domain 對不對**。
+                     依據 docs/tracking/landings/556-workspace-access-authz-landing.md
+23. workspace-access-rule-directions  `woow_paas_platform.workspace_access` 的
+                     `perm_write` / `perm_create` / `perm_unlink` **各至少要有一條對
+                     `base.group_user` 生效**的 ir.rule（#659 ③，#519 的地基）。缺任
+                     一方向：`_get_rules` 對租戶查無 rule ⇒ `_compute_domain` 回空
+                     domain ＝該方向**完全不設限**，而 ACL 給 base.group_user 的是
+                     `1,1,1,1`。這是最容易被「這條規則看起來多餘」順手簡化掉、失效又
+                     完全無聲的一種。🔴 判準刻意**不是**「這個 model 有沒有任一條
+                     ir.rule」：`_get_rules` 的 SQL 只收 `r.global OR r.id IN (使用者
+                     所屬 group 的 rule)`，所以只掛 `base.group_system` 的
+                     `*_rule_admin_full` 對純 base.group_user 帳號完全不構成限制；本
+                     repo 每個 model 都配一條 admin_full ⇒ 寬判準會把「洞開著」讀成
+                     「有守」，而且補一條 admin_full 就能讓 gate 轉綠卻沒修任何東西
+                     （#524 在 prod DB 實測過的假綠形態）。`perm_read` 刻意不納入：
+                     #659 指定的是寫入面，且今天有 workspace_access_rule_member_read
+                     ——寫在這裡免得下一個人以為讀方向也被守著。
+                     ⚠ 只驗**存在性**，不驗 domain 寫得對不對。
+                     依據 docs/tracking/landings/556-workspace-access-authz-landing.md
 
 用法：
   scripts/audit/repo-lint.py --all                # 全 repo 掃描（CI / merge 前手動）
@@ -1341,6 +1378,367 @@ def check_hermes_agent_013_seed(root):
                     "留著 externalPath 會被 chart 當成 subpath 轉發，OAuth "
                     "redirect_uri 打到 404 subpath" % rel)
             break
+    return violations
+
+
+# ------------------------------------------------------------ #659 ir.rule 三條守線
+# 三條守線共用同一份「module 全部 <record> 宣告」的靜態視圖（`module_record_declarations`）：
+#   (1) check_security_rule_noupdate        ir.rule 不得**出生**在 noupdate="1" 區塊
+#   (2) check_retired_rule_xmlid            #556 退役的 xmlid 不得**復活**
+#   (3) check_workspace_access_rule_directions  workspace_access 的寫入方向不得**留空**
+# 前兩條是同一個機制的兩端（`ir_model_data.noupdate` 的 sticky 語意），第三條守的是
+# 活的授權面 ⇒ 前兩條合成一條規則、第三條自成一條（見檔頭 22／23）。
+IR_RULE_MODEL = "ir.rule"
+SECURITY_RULES_REL = "src/security/ir_rules.xml"
+SECURITY_RULE_DOC = "docs/tracking/landings/556-workspace-access-authz-landing.md"
+# 自家 module 的 xmlid 前綴：`<record id="woow_paas_platform.x">` 與 `<record id="x">`
+# 在 Odoo 眼裡是同一個 record，判準必須看得出來。只剝自家前綴——`base.group_user`
+# 之類的外模組 xmlid 原樣保留（剝掉會讓 group 判定錯位）。
+MODULE_XMLID_PREFIX = "woow_paas_platform."
+
+# (1) 已經住在 noupdate="1" 區塊的既有 ir.rule：**只准縮不准長**的 grandfather 清單。
+# 這兩條是 #658 的待辦（搬出去要配 migration DELETE，不在 #659 範圍），本 gate 只負責
+# 收錄它們，否則守線第一天就紅。
+# 🔴 刻意寫成 in-code 常數而不是 `baselines/*.txt`：`--update-baseline` 會一次重產**全部**
+# baseline，任何人為了別的理由（改 seed 拓撲、新增一條 check）跑它，就會把新冒出來的
+# 違規一起靜默吸收——那是 baseline 機制的已知代價，而這份清單守的是安全面。寫在 code
+# 裡時「放行一條新的 rule」必然出現在同一處 diff，覆核看得到。
+SECURITY_RULE_NOUPDATE_ALLOWED = {
+    "workspace_rule_member_access": "#658（workspace model 的成員讀寫規則）",
+    "workspace_rule_create": "#658（workspace model 的建立規則）",
+}
+
+# (2) #556 已用 migration 18.0.1.0.122 DELETE 退役的 xmlid：不得再有 <record> 宣告。
+RETIRED_RULE_XMLIDS = {
+    "workspace_access_rule_member_access": "18.0.1.0.122",
+    "workspace_access_rule_create": "18.0.1.0.122",
+}
+
+# (3) 守哪個 model 的哪幾個方向。model 端錨在 `<field name="model_id" ref="…"/>` 的
+# xmlid（那是 XML 端**唯一**的 model 身分），方向只列寫入三向——`perm_read` 今天有
+# `workspace_access_rule_member_read` 守著，而 #659 指定的是寫入面；不納入是**刻意的
+# 決定**而不是漏掉，寫在這裡免得下一個人以為讀方向也被守著。
+WORKSPACE_ACCESS_MODEL_REF = "model_woow_paas_platform_workspace_access"
+# 租戶帳號實際持有的群組。`base.group_system` 不算——見 (3) 的 docstring。
+TENANT_GROUP_XMLID = "base.group_user"
+IR_RULE_WRITE_DIRECTIONS = ("perm_write", "perm_create", "perm_unlink")
+
+
+def _security_rule_xml_files(root):
+    """module 裡可能宣告 `<record>` 的 XML（排除 `src/static/` 的 OWL template）。
+
+    刻意**不**綁死 `src/security/ir_rules.xml` 單一檔名：ir.rule 可以宣告在任何 data
+    XML，而「有人把 record 搬到別的檔」不該讓守線靜默解除——那正是「selector 從未命中
+    的 no-op gate」家族（本 repo 記錄有案：gate 內部判準逐行讀都對，但整條沒在跑，
+    而它的名字照樣印在通過清單裡）。
+    """
+    files = []
+    for fp in sorted(glob.glob(os.path.join(root, "src/**/*.xml"), recursive=True)):
+        rel = os.path.relpath(fp, root).replace(os.sep, "/")
+        if rel.startswith("src/static/"):
+            continue
+        files.append((rel, fp))
+    return files
+
+
+def _security_rule_watches(rel):
+    """三條守線的 hook 分派條件：module 的非 static XML。
+
+    與 `_security_rule_xml_files` 用同一個判準（前綴／後綴），所以「hook 接得到的檔」
+    與「CI 掃描的檔」在結構上不可能分岔。寫成 `rel == SECURITY_RULES_REL` 會讓 record
+    搬到別的 data 檔時，守線與 hook 一起沉默。
+    """
+    return (rel.startswith("src/") and rel.endswith(".xml")
+            and not rel.startswith("src/static/"))
+
+
+def _xml_bool(raw, default):
+    """Odoo `str2bool` 的判定；認不得回 `default`（Odoo 那邊是直接 raise）。"""
+    val = (raw or "").strip().lower()
+    if val in ("y", "yes", "1", "true", "t", "on"):
+        return True
+    if val in ("n", "no", "0", "false", "f", "off"):
+        return False
+    return default
+
+
+def _strip_module_prefix(xmlid):
+    """`woow_paas_platform.x` → `x`；其餘（含 `base.` 開頭）原樣保留。"""
+    if xmlid.startswith(MODULE_XMLID_PREFIX):
+        return xmlid[len(MODULE_XMLID_PREFIX):]
+    return xmlid
+
+
+def _effective_noupdate(elem, parents):
+    """這個 record 的**生效** noupdate：往上找第一個顯式宣告 noupdate 的祖先。
+
+    對齊 Odoo 18 `xml_import._tag_root`（`odoo/tools/convert.py`）——它對每一層
+    `<odoo>`／`<data>`／`<openerp>` 做 `nodeattr2bool(el, 'noupdate', self.noupdate)`
+    推進一個 stack，所以**最近的顯式宣告勝出、其餘繼承外層**。因此：
+
+      * `<odoo noupdate="1">` 底下的裸 record 也算 noupdate（不是只有 `<data noupdate="1">`
+        才算）——只認 `<data>` 的判準會被這個合法佈局整條繞過；
+      * `<odoo noupdate="1"><data noupdate="0">` 底下的算 noupdate=0（內層覆寫外層）。
+
+    ⚠ 認不得的值一律當 True：Odoo 那邊 `str2bool` 會 raise ⇒ 模組根本載不起來，這裡
+    寧可紅在 gate 也不要靜默放行。
+    """
+    cur = parents.get(elem)
+    while cur is not None:
+        raw = cur.get("noupdate")
+        if raw is not None and raw.strip():
+            return _xml_bool(raw, True)
+        cur = parents.get(cur)
+    return False
+
+
+def module_record_declarations(root):
+    """回 `(records, errors)`：module 全部 `<record>` 宣告的靜態視圖。
+
+    `records` 每項是 `{"rel", "xmlid", "model", "noupdate", "fields"}`；`fields` 是
+    `{欄位名: <field> Element}`——保留 Element 才讀得到 `ref=` 屬性（既有的
+    `_record_fields` 只讀 eval／text，對 `<field name="model_id" ref="…"/>` 會拿到
+    空字串，用它做 model 判定就是一條永不命中的 selector）。
+
+    用 XML parser 而不是 regex 是刻意的：屬性順序（`<record id model>` vs
+    `<record model id>`）、單／雙引號、多個或巢狀的 `<data>` 區塊、註解裡的假 record
+    ——四種形態 regex 都會做錯，而做錯的方向是**靜默零命中**。`ET.parse` 預設就丟掉
+    註解，所以「註解裡提到退役的 xmlid」天然不會誤報（那兩個名字今天仍合法出現在
+    `ir_rules.xml` 的註解、migration 與 docstring 裡）。
+
+    `errors` 是 parse 不了的檔，呼叫端一律當違規（fail-loud）。
+    """
+    records, errors = [], []
+    for rel, fp in _security_rule_xml_files(root):
+        try:
+            tree = ET.parse(fp)
+        except (ET.ParseError, OSError, ValueError) as exc:
+            errors.append((rel, exc))
+            continue
+        parents = {child: parent for parent in tree.getroot().iter()
+                   for child in parent}
+        for rec in tree.getroot().iter("record"):
+            fields = {}
+            for fld in rec.findall("field"):
+                name = fld.get("name")
+                if name and name not in fields:
+                    fields[name] = fld
+            records.append({
+                "rel": rel,
+                "xmlid": _strip_module_prefix(rec.get("id") or ""),
+                "model": rec.get("model") or "",
+                "noupdate": _effective_noupdate(rec, parents),
+                "fields": fields,
+            })
+    return records, errors
+
+
+def _ir_rule_premise(records, errors, what):
+    """三條守線共用的 fail-loud 前提：parse 失敗、或一條 ir.rule 都抽不到。
+
+    `src/security/ir_rules.xml` 今天有數十條 ir.rule；抽到 0 條**只可能**是 selector
+    壞了。而這三條守線裡有兩條是負向判準（「不得出現 X」「不得住在 Y」），負向判準
+    在空集合上恆真 ⇒「探針從未命中」與「乾淨」的輸出完全相同。所以回違規、不回 []。
+    """
+    violations = [
+        "%s：XML parse 失敗（%s）——「%s」的輸入讀不到。解析失敗當違規而不是無事，"
+        "否則這條守線會在檔案格式一改的當下永久沉默且看起來永遠是綠的"
+        % (rel, exc, what) for rel, exc in errors]
+    if not any(rec["model"] == IR_RULE_MODEL for rec in records):
+        violations.append(
+            "%s：整個 module 掃不到任何 `<record model=\"%s\">`——「%s」的 selector 壞了"
+            "（該檔今天有數十條）。負向判準在空集合上恆真，這時的「沒有違規」與「探針"
+            "從未命中」輸出一模一樣（見 %s）"
+            % (SECURITY_RULES_REL, IR_RULE_MODEL, what, SECURITY_RULE_DOC))
+    return violations
+
+
+def check_security_rule_noupdate(root):
+    """`<record model="ir.rule">` 不得住在 `noupdate="1"` 區塊（#659 ①）。
+
+    #556 的**可修復性**根因就是這個：rule 出生在 `noupdate="1"` 區塊，而
+    `ir_model_data.noupdate` 是 sticky 的 ⇒ (a) `-u` 不會重寫欄位、(b) 把 `<record>`
+    搬到 `noupdate="0"` 區塊也翻不了旗標、(c) 從 XML 刪掉同樣不會清除它 ⇒ 唯一的修法
+    是下 migration DELETE。一條寫錯的授權規則因此**不能用改 XML 修好**，而寫的當下
+    完全沒有訊號。
+
+    既有第 3 條 `data-noupdate` 擋不到這個形態：它只掃 `src/data/*.xml` 的**檔案層**
+    （「這個檔有沒有宣告 noupdate="1"」），`src/security/ir_rules.xml` 從來不在射程內，
+    而授權規則正好全住在那裡。
+
+    `SECURITY_RULE_NOUPDATE_ALLOWED` 是**只准縮不准長**的 grandfather 清單，而且**雙向**
+    對帳：清單裡的 xmlid 若已經不在 noupdate 區塊（#658 修好了），這裡會要求把那一行
+    刪掉。理由不是整潔——留著的話，日後有人以同一個 xmlid 新建一條 rule 進 noupdate
+    區塊會被**靜默放行**（清單比它豁免的東西活得久，下一個同名 record 無聲繼承它）。
+    """
+    what = "ir.rule 不得出生在 noupdate=1 區塊"
+    records, errors = module_record_declarations(root)
+    violations = _ir_rule_premise(records, errors, what)
+    seen_allowed = set()
+    for rec in records:
+        if rec["model"] != IR_RULE_MODEL or not rec["noupdate"]:
+            continue
+        xmlid = rec["xmlid"]
+        if xmlid in SECURITY_RULE_NOUPDATE_ALLOWED:
+            seen_allowed.add(xmlid)
+            continue
+        violations.append(
+            "%s：`<record id=\"%s\" model=\"ir.rule\">` 落在 noupdate=\"1\" 區塊。"
+            "`ir_model_data.noupdate` 是 sticky 的：`-u` 不重寫欄位、把 record 搬到 "
+            "noupdate=\"0\" 區塊翻不了旗標、從 XML 刪掉也不會清除 ⇒ 這條規則寫錯之後"
+            "**只能下 migration DELETE 修**（#556 的可修復性根因）。把它宣告在 "
+            "`<data noupdate=\"0\">` 區塊；真的必須 noupdate 才加進 "
+            "`SECURITY_RULE_NOUPDATE_ALLOWED` 並寫下理由（見 %s）"
+            % (rec["rel"], xmlid or "(無 id)", SECURITY_RULE_DOC))
+    for xmlid in sorted(set(SECURITY_RULE_NOUPDATE_ALLOWED) - seen_allowed):
+        violations.append(
+            "%s：`SECURITY_RULE_NOUPDATE_ALLOWED` 還列著 `%s`（%s），但現在已經沒有"
+            "任何 noupdate=\"1\" 區塊裡的 ir.rule 叫這個名字——已經修好了就把那一行"
+            "刪掉。留著的話，日後有人用同一個 xmlid 新建一條 rule 進 noupdate 區塊會"
+            "被**靜默放行**（豁免比它豁免的東西活得久）"
+            % (REPO_LINT_SELF_REL, xmlid,
+               SECURITY_RULE_NOUPDATE_ALLOWED[xmlid]))
+    return violations
+
+
+def check_retired_rule_xmlid(root):
+    """#556 退役的 ir.rule xmlid 不得以 `<record>` 復活（#659 ②）。
+
+    `workspace_access_rule_member_access` / `workspace_access_rule_create` 是 #556 用
+    migration `18.0.1.0.122` **DELETE** 退役的（它們出生在 noupdate="1" 區塊，改 XML
+    修不動——見 ① 的 docstring）。把 `<record>` 帶回來（rebase／merge 復原、或有人
+    「補回不小心刪掉的規則」）的後果是不對稱的：
+
+      * 既有環境：migration 只跑一次，不會再 DELETE ⇒ 一時看不出來；
+      * fresh install：XML 照樣重建它們 ⇒ 洞原樣重開，而且沒有任何測試會變紅。
+
+    判準是「有沒有 `<record id=…>` 宣告」，**不是**「檔案裡有沒有這個字串」——那兩個
+    名字今天仍**合法**出現在 `ir_rules.xml` 的註解、migration 與 landing doc 裡，用
+    字串判準會把史料當違規（假陽性當場逼人刪掉註解，而註解正是下一個人唯一的線索）。
+    `ET.parse` 丟掉註解，所以這個區分是解析層免費拿到的。
+
+    不限 `model="ir.rule"`：同一個 xmlid 換一個 model 復活同樣會在 `ir_model_data`
+    佔回那個名字，而「退役」的語意是這個名字整個不再使用。
+    """
+    what = "退役 xmlid 不得復活"
+    records, errors = module_record_declarations(root)
+    violations = _ir_rule_premise(records, errors, what)
+    for rec in records:
+        version = RETIRED_RULE_XMLIDS.get(rec["xmlid"])
+        if not version:
+            continue
+        violations.append(
+            "%s：`<record id=\"%s\" model=\"%s\">` 是 #556 已用 migration %s DELETE "
+            "退役的 xmlid，不得再宣告。帶回來的後果不對稱：既有環境的 migration 只跑"
+            "一次不會再刪，而 fresh install 會照 XML 重建它 ⇒ 授權洞無聲重開，且沒有"
+            "任何測試會紅。要恢復這條規則請開新 issue 走新 xmlid ＋ 新 migration，"
+            "不要復用退役名字（見 %s）"
+            % (rec["rel"], rec["xmlid"], rec["model"] or "(無 model)", version,
+               SECURITY_RULE_DOC))
+    return violations
+
+
+def _rule_model_ref(fields):
+    """rule 綁的 model xmlid（`<field name="model_id" ref="…"/>`）；抽不到回 None。
+
+    `ref=` 屬性是常態，`eval="ref('…')"` 也合法 ⇒ 兩種都接。只認 `ref=` 的話，換成
+    eval 形態的當天判定會靜默變成「這條 rule 不綁任何 model」。
+    """
+    fld = fields.get("model_id")
+    if fld is None:
+        return None
+    ref = (fld.get("ref") or "").strip()
+    if ref:
+        return _strip_module_prefix(ref)
+    hit = re.search(r"ref\(\s*['\"]([^'\"]+)['\"]", fld.get("eval") or "")
+    return _strip_module_prefix(hit.group(1)) if hit else None
+
+
+def _rule_group_xmlids(fields):
+    """rule 掛的 group xmlid 集合；**沒宣告 `groups` 欄位回 None**（＝ global rule）。
+
+    回 None 與回 `set()` 必須分辨：Odoo 的 `global` 是 computed（`not groups`），global
+    rule 對所有人 AND 生效、對租戶也構成限制；而「宣告了 groups 但抽不到 ref」是探針
+    看不懂的形態，呼叫端要有辦法區分。這裡把後者回成空集合，由呼叫端當「不涵蓋租戶」
+    處理（fail-loud 方向：紅，不是綠）。
+    """
+    fld = fields.get("groups")
+    if fld is None:
+        return None
+    raw = (fld.get("eval") or fld.text or "")
+    return set(re.findall(r"ref\(\s*['\"]([^'\"]+)['\"]", raw))
+
+
+def _rule_flag(fields, name):
+    """讀 ir.rule 的布林欄位（`perm_*` / `active`）。
+
+    🔴 **欄位沒宣告＝True**：Odoo 的 `ir.rule.perm_read/write/create/unlink` 與
+    `active` 全部 `default=True`。把「沒寫」當 False 會讓一條省略 `perm_write` 的
+    rule（合法且真的套用在 write 上）被判成沒守 write 方向——判定與 Odoo 實際行為
+    相反。認不得的值當 False（保守方向：算成「這個方向沒被涵蓋」⇒ 紅）。
+    """
+    fld = fields.get(name)
+    if fld is None:
+        return True
+    return _xml_bool(fld.get("eval") or fld.text or "", False)
+
+
+def check_workspace_access_rule_directions(root):
+    """`workspace_access` 的每個寫入方向都要有一條**對租戶生效**的 ir.rule（#659 ③）。
+
+    `perm_write` / `perm_create` / `perm_unlink` 各至少一條。缺任一方向，Odoo 的
+    `ir.rule._get_rules` 對該使用者查無 rule、`_compute_domain` 回空 domain
+    ＝**該方向完全不設限**，而 `ir.model.access` 給 `base.group_user` 的是 `1,1,1,1`
+    ⇒ 任何內部帳號可對任何租戶的 workspace_access 列做該操作。這是 #519 的地基，也是
+    最容易被「這條規則看起來多餘」順手簡化掉、且失效**完全無聲**的一種。
+
+    🔴 判準刻意**不是**「這個 model 有沒有任一條 ir.rule」：`_get_rules` 的 SQL 只收
+    `r.global OR r.id IN (使用者所屬 group 的 rule)`，所以一條只掛 `base.group_system`
+    的 `*_rule_admin_full` 對純 `base.group_user` 租戶帳號**完全不構成任何限制**。本
+    repo 的命名慣例正好讓每個 model 都配一條 `admin_full` ⇒ 寬判準會把「洞開著」讀成
+    「有守」，而且「補一條 admin_full」就能讓 gate 轉綠卻沒修任何東西。這個假綠不是
+    理論風險：#524（smart_home 無 record rule）當初就是拿嚴判準配陽性對照在 prod DB
+    實測才收斂的。實測本 repo 現況：刪掉 `workspace_access_rule_owner_admin_manage`
+    之後，寬判準三個方向全綠（`admin_full` 頂上去了），嚴判準三個方向全紅。
+
+    因此涵蓋一個方向的條件是：`active` 且 該 `perm_*` 為真 且（沒宣告 groups＝global
+    ／或 groups 含 `base.group_user`）。
+
+    ⚠ 只驗**存在性**（哪個方向有沒有規則），不驗 domain 寫得對不對——一條
+    `[(1, '=', 1)]` 的 group_user rule 會被算成「有守」。domain 語意由
+    `src/tests/` 的行為測試守（見 docs/tracking/landings/556-workspace-access-authz-landing.md）。
+    """
+    what = "workspace_access 寫入方向存在性"
+    records, errors = module_record_declarations(root)
+    violations = _ir_rule_premise(records, errors, what)
+    covered = {direction: [] for direction in IR_RULE_WRITE_DIRECTIONS}
+    for rec in records:
+        if rec["model"] != IR_RULE_MODEL:
+            continue
+        if _rule_model_ref(rec["fields"]) != WORKSPACE_ACCESS_MODEL_REF:
+            continue
+        fields = rec["fields"]
+        if not _rule_flag(fields, "active"):
+            continue
+        groups = _rule_group_xmlids(fields)
+        if groups is not None and TENANT_GROUP_XMLID not in groups:
+            continue  # 只掛 group_system（或其他群組）⇒ 對租戶不構成限制
+        for direction in IR_RULE_WRITE_DIRECTIONS:
+            if _rule_flag(fields, direction):
+                covered[direction].append(rec["xmlid"])
+    for direction in IR_RULE_WRITE_DIRECTIONS:
+        if covered[direction]:
+            continue
+        violations.append(
+            "%s：`%s` 沒有任何一條對 `%s` 生效的 ir.rule 涵蓋 `%s` 方向（active 且 "
+            "%s=True 且 groups 含 %s 或無 groups）。Odoo `_get_rules` 對租戶查無 rule "
+            "⇒ `_compute_domain` 回空 domain ＝**該方向完全不設限**，而 ACL 給 "
+            "base.group_user 的是 1,1,1,1 ⇒ 任何內部帳號可對任何租戶的列做這個操作"
+            "（#519 的地基）。⚠ 只掛 base.group_system 的 `*_rule_admin_full` **不算**"
+            "涵蓋：它對純 base.group_user 帳號完全不生效，補它只會讓 gate 轉綠而洞還"
+            "在（見 %s）"
+            % (SECURITY_RULES_REL, WORKSPACE_ACCESS_MODEL_REF, TENANT_GROUP_XMLID,
+               direction, direction, TENANT_GROUP_XMLID, SECURITY_RULE_DOC))
     return violations
 
 
@@ -2724,6 +3122,9 @@ REPO_LINT_RULES = {
     "poll-release-facts-single-source": ("check_poll_release_facts_single_source",),
     "doc-symbol-anchor": ("check_doc_symbol_anchor",),
     "hermes-agent-013-seed": ("check_hermes_agent_013_seed",),
+    "security-rule-lifecycle": ("check_security_rule_noupdate",
+                                "check_retired_rule_xmlid"),
+    "workspace-access-rule-directions": ("check_workspace_access_rule_directions",),
 }
 
 # 刻意不掛 hook 分派的 check：{函式名: 理由}。現況是空的（每一條都掛得到 hook）。
@@ -3142,7 +3543,10 @@ def run_all(root):
                   + check_kubectl_ns_whitelist_sync(root)
                   + check_poll_release_facts_single_source(root)
                   + check_doc_symbol_anchor(root)
-                  + check_hermes_agent_013_seed(root))
+                  + check_hermes_agent_013_seed(root)
+                  + check_security_rule_noupdate(root)
+                  + check_retired_rule_xmlid(root)
+                  + check_workspace_access_rule_directions(root))
     if violations:
         print("repo-lint：%d 個違規" % len(violations))
         for v in violations:
@@ -3238,6 +3642,17 @@ def run_hook():
         # 一樣整條重算、不做 only_file 切片（同 ladder／availability／poll_facts）。
         floor = (repo_lint_registry_floor(root)
                  if rel in REPO_LINT_REGISTRY_FILES else [])
+        # #659：三條 ir.rule 守線的輸入是**module 的全部非 static XML**（record 可以
+        # 宣告在任何 data 檔），而且第三條本身是跨檔存在性判準 ⇒ 不做 only_file 切片，
+        # 動到任一份就整條重算（同 ladder／availability／poll_facts／floor）。
+        # 分派條件與掃描範圍共用 `_security_rule_watches`／`_security_rule_xml_files`
+        # 的同一個判準，兩者不可能分岔。src/security/*.xml 不在下面任何分支底下
+        # （只有 src/static 與 src/data 的 .xml 有分支），漏接就會是「CI 會抓、hook
+        # 完全沉默」的 #596 形態。
+        security_rules = (check_security_rule_noupdate(root)
+                          + check_retired_rule_xmlid(root)
+                          + check_workspace_access_rule_directions(root)
+                          if _security_rule_watches(rel) else [])
         if re.match(r"^src/controllers/.*\.py$", rel):
             violations = check_controller_sudo(root, only_file=abs_path)
             violations += check_reuse_values(root, only_file=abs_path)
@@ -3289,10 +3704,11 @@ def run_hook():
             # 白名單的兩份副本互為對方的判準：改哪一邊，壞掉的都是「兩份是否一致」這個
             # 跨檔不變式本身 ⇒ 不做 only_file 切片，動到任一份就整條重算。
             violations = check_kubectl_ns_whitelist_sync(root)
-        elif ladder or availability or poll_facts or anchors or floor:
+        elif ladder or availability or poll_facts or anchors or floor or security_rules:
             # extra/paas-operator/** 與 docs/tracking/pitfalls/** 不在上面任何分支，
             # 但前者持有階梯的內層常數、後者是 doc-symbol-anchor 的一半輸入；
-            # baselines/repo-lint-registry.txt（floor 的另一份輸入）同樣不在上面任何
+            # baselines/repo-lint-registry.txt（floor 的另一份輸入）與
+            # src/security/*.xml（三條 ir.rule 守線的主要 carrier）同樣不在上面任何
             # 分支。跨檔集合搬到不匹配任何分支的位置時，這裡也接得住。
             violations = []
         else:
@@ -3302,6 +3718,7 @@ def run_hook():
         violations += poll_facts
         violations += anchors
         violations += floor
+        violations += security_rules
         if violations:
             print(json.dumps({
                 "decision": "block",
