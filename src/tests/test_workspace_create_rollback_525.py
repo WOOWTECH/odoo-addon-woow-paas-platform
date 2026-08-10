@@ -162,7 +162,16 @@ class TestCreateWorkspaceLeavesNoOrphan(HttpCase):
 
         orphan = self.Workspace.sudo().create({
             'name': 'WS 525 A2 orphan', 'owner_id': self.admin_user.id})
-        orphan.access_ids.sudo().unlink()          # ← 拆成孤兒
+        # #556 B2：workspace_access.unlink() 現在守「不得移除最後一個
+        # owner」，連 .sudo() 呼叫都擋（照抄 project_access.unlink() 的
+        # 不變式，無 sudo 豁免）——ORM unlink() 造不出孤兒了。production
+        # 的孤兒本來就不是「先建好再刪掉」，是 owner-access create 那段
+        # 從未插入過（見本檔檔頭）；改走 DB 層直接 DELETE，繞過 Python
+        # unlink() override，忠實重現「這一列從未存在」的真實孤兒形狀。
+        self.env.cr.execute(
+            "DELETE FROM woow_paas_platform_workspace_access "
+            "WHERE workspace_id = %s", (orphan.id,))
+        self.env.invalidate_all()
         self.assertFalse(orphan.access_ids, 'fixture 前提：孤兒沒有任何授權列')
 
         names = self._listed_names()
@@ -176,7 +185,12 @@ class TestCreateWorkspaceLeavesNoOrphan(HttpCase):
     def test_orphan_workspace_holds_the_slug_it_is_invisible_in(self):
         orphan = self.Workspace.sudo().create({
             'name': _WS_NAME, 'owner_id': self.admin_user.id})
-        orphan.access_ids.sudo().unlink()
+        # #556 B2：見上一條測試的註解——ORM unlink() 現在擋最後一個
+        # owner，連 sudo 都擋，改走 DB 層直接 DELETE 繞過它。
+        self.env.cr.execute(
+            "DELETE FROM woow_paas_platform_workspace_access "
+            "WHERE workspace_id = %s", (orphan.id,))
+        self.env.invalidate_all()
         self.assertEqual(orphan.slug, _WS_SLUG, 'fixture 前提：孤兒佔住該 slug')
 
         # DB 層看得到（unique_slug 是 SQL constraint，不看 ir.rule）
