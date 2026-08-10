@@ -171,13 +171,15 @@ slug 集合成員／admin-gui 錨點／gateway 文案錨點；這個一對多關
                      ⚠ 只驗符號存在，**不驗 doc 的敘述與該符號的行為相符**。
                      依據 #626（處方出處 #616／#623／PR #625）
 21. hermes-agent-013-seed  cloud_app_hermes_agent record 必須對齊 chart 0.1.3：
-                     ``helm_chart_version`` 必須是 `0.1.3`、``helm_default_values``
-                     不得含 `webui` block 或 `dashboard.externalPath`。0.1.3 移除
-                     webui container、dashboard 改走 root URL（nginx `/` 直連），
-                     任一條件失效 ⇒ OAuth ``redirect_uri`` 打到 404 subpath
-                     （chart 用舊 subpath 轉發、平台仍組 root URL）。守線只鎖
-                     「block 不在」的最小必要條件；image pin / dashboard 內容
-                     細節由 test_hermes_agent_seed_424 機械斷言。
+                     ``helm_chart_version`` 不得低於 `0.1.3`（floor，不是
+                     pin——升版自由，降版回到 webui 時代才擋）、
+                     ``helm_default_values`` 不得含 `webui` block 或
+                     `dashboard.externalPath`。0.1.3 移除 webui container、
+                     dashboard 改走 root URL（nginx `/` 直連），任一條件失效 ⇒
+                     OAuth ``redirect_uri`` 打到 404 subpath（chart 用舊
+                     subpath 轉發、平台仍組 root URL）。守線只鎖「block 不在」
+                     與「版號不得倒退」這兩個最小必要條件；image pin /
+                     dashboard 內容細節由 test_hermes_agent_seed_424 機械斷言。
                      依據 feat/hermes-agent-013-cleanup（chart 0.1.3 contract change）
 
 用法：
@@ -1226,13 +1228,18 @@ def check_gateway_copy_gate_anchor(root):
     return violations
 
 
+_HERMES_AGENT_CHART_FLOOR = (0, 1, 3)  # chart 0.1.3 起 webui 移除、dashboard 走 root
+
+
 def check_hermes_agent_013_seed(root):
     """hermes-agent record 必須對齊 chart 0.1.3 seed 形態（防 regression）。
 
     0.1.3 移除 webui container、dashboard 改走 root URL（nginx `/` 直連），
     對應的平台 seed 形態：
 
-    - ``helm_chart_version`` 必須是 ``0.1.3``（pin 升版）
+    - ``helm_chart_version`` 不得低於 ``0.1.3``（**floor，不是 pin**：升版是
+      常態要放行，降版回到 webui 時代才擋。比較用 int tuple，不可用字串——
+      ``'0.1.10' < '0.1.3'`` 字串比較是 True，但語意上 0.1.10 > 0.1.3）
     - ``helm_default_values`` 不得含 ``webui`` block（chart 不再 render 那顆
       container）
     - ``helm_default_values.dashboard`` 不得含 ``externalPath``（dashboard 不再
@@ -1245,45 +1252,68 @@ def check_hermes_agent_013_seed(root):
 
     反例：有人升 chart 但沒同步 seed、或從舊 chart 回退卻留著舊 block。守線
     本身不驗 image pin / dashboard 內容細節（那些由 test_hermes_agent_seed_424
-    機械斷言）；本條只守「block 不在」這個**最小必要條件**——升版時最容易漏改、
-    漏改後整鏈不動。
+    機械斷言）；本條只守「block 不在」與「版號不得倒退」這兩個**最小必要條件**
+    ——升版時最容易漏改、漏改後整鏈不動。
     """
     violations = []
-    target = 'woow_paas_platform.cloud_app_hermes_agent'
+    target_id = 'cloud_app_hermes_agent'
+    # 同一個 id 的 record 會跨多個 data 檔分次宣告欄位（Odoo 慣例：
+    # subscription_template_links.xml 只補 subscription_plan_ids，不重複整個
+    # template）。逐檔獨立驗證會把「這個檔沒宣告 helm_chart_version」誤判成
+    # 「缺欄位」——必須先把同一個 id 的所有 <record> 跨檔彙整成一顆有效
+    # record，語意才對得上 Odoo 實際的欄位合併行為。
+    records = []  # [(rel, <Element record>), ...]
     for fp in sorted(glob.glob(os.path.join(root, "src/data/*.xml"))):
         rel = os.path.relpath(fp, root).replace(os.sep, "/")
         try:
             tree = ET.parse(fp)
         except ET.ParseError:
             continue
-        record = None
         for rec in tree.iter('record'):
-            for v in rec.attrib.values():
-                if v == target:
-                    record = rec
-                    break
-            if record is not None:
-                break
-        if record is None:
-            continue
-        # 1) chart version 必須 = 0.1.3
-        version_found = False
+            if rec.attrib.get('id') == target_id:
+                records.append((rel, rec))
+    if not records:
+        return violations
+    files = sorted({rel for rel, _ in records})
+
+    # 1) chart version 不得低於 floor（0.1.3）；floor 不是 pin，升版必須放行
+    version_hit = None
+    for rel, record in records:
         for fld in record.iter('field'):
             if fld.attrib.get('name') == 'helm_chart_version':
-                version_found = True
-                if (fld.text or '').strip() != '0.1.3':
-                    violations.append(
-                        "%s：cloud_app_hermes_agent.helm_chart_version = %r "
-                        "≠ '0.1.3'。chart 0.1.3 移除 webui container、dashboard 改"
-                        "走 root URL；平台端 `_inject_dashboard_public_url` 與 "
-                        "`HERMES_DASHBOARD_PUBLIC_URL` 合約已對齊 0.1.3，chart "
-                        "version 必須同動（見 PR feat/hermes-agent-013-cleanup）"
-                        % (rel, (fld.text or '').strip()))
+                version_hit = (rel, (fld.text or '').strip())
                 break
-        if not version_found:
+        if version_hit:
+            break
+    if version_hit is None:
+        violations.append(
+            "%s：cloud_app_hermes_agent 缺 helm_chart_version 欄位（已跨全部"
+            "宣告此 id 的檔案彙整，皆未宣告）" % "／".join(files))
+    else:
+        rel, raw_version = version_hit
+        parts = raw_version.split('.')
+        if len(parts) != 3 or not all(p.isdigit() for p in parts):
             violations.append(
-                "%s：cloud_app_hermes_agent 缺 helm_chart_version 欄位" % rel)
-        # 2) helm_default_values 不得含 webui / dashboard.externalPath
+                "%s：cloud_app_hermes_agent.helm_chart_version = %r "
+                "版號形態無法解析（必須是 N.N.N 形式的整數版號），不予放行"
+                % (rel, raw_version))
+        else:
+            version_tuple = tuple(int(p) for p in parts)
+            if version_tuple < _HERMES_AGENT_CHART_FLOOR:
+                violations.append(
+                    "%s：cloud_app_hermes_agent.helm_chart_version = %r "
+                    "低於 floor %s——這是 floor 不是 pin：升版自由，降版才擋。"
+                    "chart 0.1.3 移除 webui container、dashboard 改走 root "
+                    "URL；平台端 `_inject_dashboard_public_url` 與 "
+                    "`HERMES_DASHBOARD_PUBLIC_URL` 合約已對齊 0.1.3，version "
+                    "不得回退到 webui 時代（見 PR feat/hermes-agent-013-cleanup）"
+                    % (rel, raw_version,
+                       ".".join(str(n) for n in _HERMES_AGENT_CHART_FLOOR)))
+
+    # 2) helm_default_values 不得含 webui / dashboard.externalPath（逐一檢查每個
+    #    有宣告這個欄位的 record 區塊，不只挑第一顆——理論上任何一份檔案重新
+    #    宣告了帶 webui 的 helm_default_values 都必須被抓到）。
+    for rel, record in records:
         for fld in record.iter('field'):
             if fld.attrib.get('name') != 'helm_default_values':
                 continue
