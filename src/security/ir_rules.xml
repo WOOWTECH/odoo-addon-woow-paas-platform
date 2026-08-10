@@ -667,7 +667,7 @@
 
         <!-- workspace_access (#556 — retires workspace_access_rule_member_access /
              workspace_access_rule_create, formerly in the noupdate="1" block at
-             the top of this file; see src/migrations/18.0.1.0.119/post-migrate.py
+             the top of this file; see src/migrations/18.0.1.0.122/post-migrate.py
              for why those two had to be DELETEd rather than edited in place).
              4-rule shape mirrors project_access above. -->
 

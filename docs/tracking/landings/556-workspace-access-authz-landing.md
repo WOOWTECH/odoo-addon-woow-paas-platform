@@ -73,7 +73,7 @@ Odoo 的 O2M cross-tuple 語意會讓攻擊者用「別人那列的 role」＋�
    owner。project_access 目前有同型潛在洞（無此保護），**刻意不在本 PR 順手修**，記
    follow-up。
 
-### migration：DELETE 退役、新規則一律新 xmlid（`18.0.1.0.119`）
+### migration：DELETE 退役、新規則一律新 xmlid（`18.0.1.0.122`）
 
 `ir_model_data.noupdate=true` 一旦成立：
 
@@ -93,9 +93,17 @@ Odoo 的 O2M cross-tuple 語意會讓攻擊者用「別人那列的 role」＋�
   `noupdate=true` 的同名 xmlid 而 skip（不更新）→ migration 接著把它 DELETE 掉 →
   該 rule 整條消失且不會被重建（ir.rule 對某 model+operation 完全沒有規則時等於
   **不設限**，比「規則太鬆」更糟）。
-- migration 目錄 `18.0.1.0.119` **必須配** `src/__manifest__.py` 版號同步 bump——只建
+- migration 目錄 `18.0.1.0.122` **必須配** `src/__manifest__.py` 版號同步 bump——只建
   目錄不 bump manifest＝永不執行且無任何錯誤訊息（`odoo/modules/migration.py::compare`
   的執行條件是 `installed_version < 目錄版號 <= manifest 版號`）。
+- **版號視窗陷阱的第二個實例（rebase 時親身撞到）**：本 PR 開發期間 `develop` 併發
+  前進到 `18.0.1.0.121`（純 manifest bump，無對應 migration）。若沿用原提的 `119`，
+  `installed_version=121` 對 `目錄版號=119` 是 `121 < 119` 為假 ⇒ migration **不會
+  執行**，舊脆弱 rule 在已裝到 121 的環境上永久不會被退役——與「只建目錄不 bump
+  manifest」同一種失效形狀，只是這次是 manifest **被別人併發 bump 超過**，不是自己
+  漏 bump。rebase 時把 manifest 與 migration 目錄**一起**改成 `122`（嚴格大於
+  develop 當下的 121）解決；已用 121-base 版號視窗實測驗證（見下方「write-pivot」段
+  的驗收記錄）。
 
 ### `workspace.py:81` 的 sudo bootstrap（陷阱2：雞生蛋）
 
@@ -147,11 +155,21 @@ role、真實端點 `update_role`、sudo 路徑）。本機用 docker harness �
 拿掉這段 guard 重跑：3 條攻擊測試如預期紅（`{'result': True}`，攻擊真的成功），2 條
 控制測試維持綠（非 fixture 壞掉）；補回 guard 後全綠、既有回歸零受影響。
 
-**manifest 維持 `18.0.1.0.119` 不再 bump**：pivot 修法是純 model guard（`write()`
-內的 Python 判斷），不涉及 ir.rule／ACL／data XML，不需要新的 migration 目錄；整個
-PR（含 write-pivot 補丁）以同一個模組版號原子落地。已用 docker harness 的 `-i`
-fresh install 與 `-u` 升級兩條路徑都驗過 guard 在（見上方 migration 段落與 V2/V4
-驗收結果）。
+**manifest／migration 從 118 一路提到 `18.0.1.0.122`，不是 `119`**：write-pivot 修法
+本身是純 model guard（`write()` 內的 Python 判斷），不涉及 ir.rule／ACL／data XML，
+不需要自己的 migration——這件事沒變。但本 PR 開發期間 `develop` 併發前進到
+`18.0.1.0.121`（另一批 commit 連續 bump manifest、無對應 migration，純為過 CI 的
+manifest-version-gate）。rebase 回 `origin/develop` 時撞到兩個問題：(a) `src/__manifest__.py`
+的版號欄位衝突（唯一衝突檔，安全碼零衝突）；(b) 更嚴重的——沿用原提的 `119` 會落入
+migration 版號視窗陷阱本身：`installed_version=121` 對 `目錄版號=119` 是
+`121 < 119` 為假，migration **不會執行**，舊脆弱 rule 在已裝到 121 的環境上永久不會
+退役，修復靜默失效（與陷阱 1 同一種失效形狀，這次是版號被**別人併發超前**而非自己
+漏 bump）。解法：manifest 與 migration 目錄一起改成 `122`（嚴格大於 121），整個 PR
+（含 write-pivot 補丁）以同一個模組版號原子落地。已用 docker harness 的 `-i` fresh
+install、`-u` 升級（118-base），以及 rebase 後新增的**121-base 版號視窗實測**（以
+`origin/develop`@121 `-i` 安裝、再用 rebased branch `-u` 升級，確認 log 印出
+`Running migration [18.0.1.0.122` 且該行之後舊兩條 rule 被退役、四條新 rule 恰好
+存在、A1 攻擊仍被擋）三條路徑都驗過 guard 在。
 
 **已知非問題（審查時不必深究）**：guard 用 `vals['workspace_id'] != rec.workspace_id.id`
 做 int 比較。真實 Odoo client（`/web/dataset/call_kw` 與 OWL 前端）一律送 Many2one

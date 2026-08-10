@@ -24,7 +24,7 @@ workspace 的成員權限**，而 API 說失敗。
 - `check_access('create')`（ir.rule 層）的 `AccessError` 發生在 INSERT
   **之後**（`odoo/models.py:5292`），不是之前——這正是 #556 的核心根因，不
   是本檔的巧合。`workspace_access_rule_create` 已在 #556 退役（DELETE
-  migration，見 `src/migrations/18.0.1.0.119/post-migrate.py`）；create
+  migration，見 `src/migrations/18.0.1.0.122/post-migrate.py`）；create
   方向現在由 model `create()` guard（`_check_assignable_role`，發生在
   INSERT **之前**）與新的 `workspace_access_rule_owner_admin_manage` /
   `_admin_full`（`perm_create=True` 僅限 owner/admin/`group_system`）共同

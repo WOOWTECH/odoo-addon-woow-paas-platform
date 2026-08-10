@@ -1,4 +1,8 @@
-"""18.0.1.0.119 — #556 workspace_access 授權重構：退役兩條脆弱 rule。
+"""18.0.1.0.122 — #556 workspace_access 授權重構：退役兩條脆弱 rule。
+
+（develop 在本 PR 開發期間併發前進到 18.0.1.0.121（純 manifest bump、無對應
+migration），本 migration 與 manifest 一起提到 122——嚴格大於 121，確保對已安裝
+121 的環境這支 migration 仍會執行，不會落入版號視窗陷阱。）
 
 舊的 workspace_access_rule_member_access（perm_write=True、domain 無 role 條件）
 與 workspace_access_rule_create（domain [(1,'=',1)]、perm_create=True）住在
