@@ -975,26 +975,27 @@
             <field name="default_port">8080</field>
             <field name="ingress_enabled" eval="True"/>
 
-            <!-- Resource Requirements（v1.1 §8.8 定值；chart 0.1.3 起 webui container
-                 已移除，本段合計隨之更新）。min_vcpu／min_ram_gb 驅動 workspace ns
+            <!-- Resource Requirements（v1.1 §8.8 定值；chart 0.1.3 已移除 webui
+                 container，本段合計即 0.1.3 現況）。min_vcpu／min_ram_gb 驅動 workspace ns
                  quota（cloud_service._compute_ns_quota：
                  max(sum(存活 service allocated_*)×3, floor)）。本 template 的 plan
                  刻意不設 cs_* → allocated_* 走 min_* fallback（見 subscription_products.xml
                  的 plan_hermes_agent_* 註解）。3× headroom 必須蓋得住**全容器** limits：
                  - memory：agent 6Gi + console 512Mi + authProxy sidecar 128Mi
-                   ＝ 6.5Gi → min_ram_gb = 3.0（÷3 上取；無 DB 拓撲）— 仍採舊值是
-                   故意：歷史已賣出的服務仍帶 webui limits，0.1.3 升版後 quota 必須
-                   還蓋得住回退相容。
+                   ＝ 6.625Gi → min_ram_gb = 2.5（÷3 上取的最小夠用值；無 DB 拓撲）
                  - cpu：agent 2 + console 0.2 + authProxy sidecar 0.2 ＝ 2.4
-                   → min_vcpu = 2（÷3 上取；同樣保守）
-                 ⚠ **min_vcpu 1→2 是 #456 的修法**（2026-07-28 stg 實證）：舊值的邊際
-                 貢獻只有 +3 < 3.4，但空 workspace 有 8 vCPU floor 蓋著，所以 #424① 的
-                 E2E 全綠、**一放進既有服務的共用 workspace 才露餡**——主 pod 永久卡
-                 FailedCreate(exceeded quota: limits.cpu=3200m)，而 DB／UI 照樣顯示
-                 Running（調度失敗不反映在服務狀態）。守線因此斷言**邊際貢獻**而非含
-                 floor 的 quota 值，否則缺陷值 1 會假綠。
-                 ⚠ RAM headroom 只剩 2.5Gi（9Gi − 6.5Gi）、CPU 剩 3.6：**任何一邊
-                 加容器或調高 limits 都必須同時重算本欄**——守線＝
+                   → min_vcpu = 1（÷3 上取的最小夠用值）
+                 ⚠ **兩欄皆為 minimal sufficient step**——quota 是 workspace 級天花板，
+                 灌水等於把同 workspace 其他服務的保護一起放鬆；
+                 test_min_ram_is_the_minimal_sufficient_step／
+                 test_min_vcpu_is_the_minimal_sufficient_step 兩條「擋太大」守線鎖死。
+                 #456（2026-07-28 stg 實證）曾因 min_vcpu=1 的邊際貢獻只有 +3、蓋不住
+                 0.1.2 時代（含 webui）合計 3.4 vCPU 而在共用 workspace 炸開
+                 （FailedCreate exceeded quota，DB／UI 照樣顯示 Running，調度失敗不反映在
+                 服務狀態）；0.1.3 移除 webui 後合計降到 2.4 < 3，min_vcpu=1 的根因已消失，
+                 故調降回 1。
+                 ⚠ RAM headroom 只剩 0.875Gi（7.5Gi − 6.625Gi）、CPU 剩 0.6（3 − 2.4）：
+                 **任何一邊加容器或調高 limits 都必須同時重算本欄**——守線＝
                  test_min_ram_covers_all_container_limits ／
                  test_min_vcpu_covers_all_container_limits（皆由 seed values 現算、不硬編，
                  加了就紅；另各有一條擋灌水的 minimal-step）。#380 血訓＝quota 不足 →
@@ -1005,11 +1006,11 @@
                  /api/ha-paas/provision），建 cloud_service 時務必比照 marketplace
                  路徑（controllers/paas.py `_create_service`）帶上 allocated_vcpu／
                  allocated_ram_gb／allocated_storage_gb（`_allocated_vals_from`）——
-                 這三欄無預設值，漏帶則 quota 落到 floor 8Gi < 本服務 8.63Gi 全容器
-                 limits → pod FailedCreate。ha_paas.py 的 provision 沒帶是因為 HA 只
-                 吃 1Gi、floor 蓋得住，勿照抄。 -->
-            <field name="min_vcpu">2</field>
-            <field name="min_ram_gb">3.0</field>
+                 這三欄無預設值，漏帶則 quota 落到 floor 8Gi ≥ 本服務 6.625Gi 全容器
+                 limits，目前仍蓋得住；一旦本服務合計超過 8Gi floor 才會 pod FailedCreate。
+                 ha_paas.py 的 provision 沒帶是因為 HA 只吃 1Gi、floor 蓋得住，勿照抄。 -->
+            <field name="min_vcpu">1</field>
+            <field name="min_ram_gb">2.5</field>
             <field name="min_storage_gb">5</field>
 
             <!-- MCP 能力不在本 template：本體是完整應用，其 MCP 是「agent 去接外部 MCP
@@ -1031,8 +1032,8 @@
             <field name="admin_password_carrier">helm_secret</field>
             <field name="post_deploy_init_type">none</field>
 
-            <!-- 每帳號限一：agent limits 6Gi 是平台最重的單一容器（全容器合計 8.625Gi
-                 ／3.4 CPU），避免同帳號開多台把 workspace quota 吃乾。#494 定價上架後
+            <!-- 每帳號限一：agent limits 6Gi 是平台最重的單一容器（全容器合計 6.625Gi
+                 ／2.4 CPU），避免同帳號開多台把 workspace quota 吃乾。#494 定價上架後
                  仍維持 1——這條的理由是資源面而非「內部試用」，要放寬得先重算 quota
                  模型。守線＝test_max_per_partner_one。 -->
             <field name="max_per_partner" eval="1"/>
