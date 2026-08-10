@@ -31,6 +31,21 @@ class/method 命名直接對應其 §5.2 攻擊向編號 A1/A1'/A2/A3/A4/A5 與 
 剛插入的那一列自己滿足（EXISTS 現讀）。若有人「順手把 A1 的 payload 對齊
 A1'」，整組測試對 #556 核心攻擊向就會歸零，而清單看起來仍是全綠（analysis.md
 §4 理由 1、§0.1）。**不可修改 A1 的 role 值，也不可刪掉 A1' 這組對照。**
+
+## write-pivot（獨立驗收 verify556 找到的殘留洞，A1 的第二條 payload）
+
+`create` 方向的自助加入（A1）關掉了，但 `write` 方向留了一條等價繞道：任何
+`base.group_user` 都能先合法自建一個 workspace（P6 設計行為，她在那裡是
+owner），再把自己那列 access row 用
+`write([row_id], {'workspace_id': 受害workspace, 'role': 'admin'})` **搬進**
+受害 workspace——ir.rule 的 write 檢查只查 **pre-write** 狀態（她在來源 ws
+確實是 owner，放行）、寫完不重查目的地；`_check_assignable_role` 原本也只用
+`rec.workspace_id.id`（**來源**、非 vals 裡的目的地）判定。`TestWorkspace
+AccessWritePivotGuard` 是這個洞的永久回歸測試，改寫自 verify556 的探針
+（`/tmp/wt556v/probe/test_v556_pivot.py`）。修法採 identity anchor：
+`workspace_id`／`user_id` 建立後不可變（非 superuser 且非 group_system 不得
+在 write 中改變這兩個欄位的值），因為沒有任何合法租戶流程需要重指派一列
+access row 屬於哪個 workspace／哪個 user。
 """
 import json
 import uuid
@@ -463,3 +478,100 @@ class TestWorkspaceAccessHaPaasBootstrap(HttpCase):
         rows = WorkspaceAccess.sudo().search([
             ('user_id', '=', self.user.id), ('role', '=', ROLE_OWNER)])
         self.assertTrue(rows, 'HA PaaS provision 必須仍能建出 owner access 列')
+
+
+@tagged('post_install', '-at_install')
+class TestWorkspaceAccessWritePivotGuard(_WorkspaceAccess556Fixture):
+    """write-pivot（見檔頭「write-pivot」段）——A1 的第二條 payload，由獨立
+    驗收 agent（verify556）發現，analysis.md 與最初的攻擊向清單都沒列到。
+
+    `workspace_id`／`user_id` 是建立後不可變的 identity anchor：任何
+    `base.group_user` 都能合法自建 workspace（P6）成為 owner，若允許她把
+    自己那列 access row 的 `workspace_id` 改指到受害 workspace，等同繞過
+    A1 擋下的 create 方向、從 write 方向重新拿到同一個結果。
+    """
+
+    def _own_ws_as_mallory(self, name):
+        """Mallory 用完全合法的 P6 路徑自建 workspace，取得 owner 列。"""
+        result = self._post_api('/api/workspaces', {'action': 'create', 'name': name})
+        self.assertTrue(result.get('success'), 'P6 自建 workspace 應成功（回 %r）' % result)
+        ws_id = result['data']['id']
+        row = self.WorkspaceAccess.sudo().search([
+            ('workspace_id', '=', ws_id), ('user_id', '=', self.mallory.id)])
+        self.assertEqual(row.role, ROLE_OWNER, 'fixture 前提：Mallory 是自己 ws 的 owner')
+        return ws_id, row
+
+    def test_pivot_self_owned_row_write_into_victim_workspace_denied(self):
+        """一步 pivot：`write({'workspace_id': W1, 'role': 'admin'})`——
+        改前 guard 的 `_check_assignable_role` 用 `rec.workspace_id.id`
+        （來源 ws，Mallory 在那裡是 owner）判定，角色檢查整個問錯了
+        workspace；ir.rule 的 write 檢查同樣只查 pre-write（來源）狀態。
+        """
+        self.authenticate(self.mallory_login, self.mallory_login)
+        _ws_id, row = self._own_ws_as_mallory('Mallory WS pivot-1')
+        result = self._call_kw(
+            'woow_paas_platform.workspace_access', 'write',
+            [[row.id], {'workspace_id': self.ws1.id, 'role': ROLE_ADMIN}])
+        self._assert_access_error(
+            result, 'Mallory 不得把自己的 owner 列 pivot 進 W1 並升級成 admin')
+        self.assertFalse(
+            self.WorkspaceAccess.sudo().search([
+                ('workspace_id', '=', self.ws1.id), ('user_id', '=', self.mallory.id)]),
+            'pivot 被拒後，Mallory 在 W1 不得有任何 access 列')
+
+    def test_pivot_third_party_row_write_into_victim_workspace_denied(self):
+        """A3 的 pivot 繞道版：Mallory 在自己的 ws 建一列給 Bob（第三方），
+        再把那一列 write 搬進 W1——只改 `workspace_id`，不改 `role`。"""
+        self.authenticate(self.mallory_login, self.mallory_login)
+        ws_id, _row = self._own_ws_as_mallory('Mallory WS pivot-2')
+        create_result = self._call_kw(
+            'woow_paas_platform.workspace_access', 'create',
+            [{'workspace_id': ws_id, 'user_id': self.bob.id, 'role': ROLE_ADMIN}])
+        self._assert_call_kw_ok(
+            create_result, 'Mallory 在自己的 ws 建一列給 Bob 應成功（fixture 前提）')
+        bob_row_id = create_result['result']
+        result = self._call_kw(
+            'woow_paas_platform.workspace_access', 'write',
+            [[bob_row_id], {'workspace_id': self.ws1.id}])
+        self._assert_access_error(result, 'Mallory 不得把 Bob 的列 pivot 進 W1')
+        self.assertFalse(
+            self.WorkspaceAccess.sudo().search([
+                ('workspace_id', '=', self.ws1.id), ('user_id', '=', self.bob.id)]),
+            'pivot 被拒後，Bob 在 W1 不得有任何 access 列')
+
+    def test_pivot_user_id_reassignment_denied(self):
+        """`user_id` 是另一半 identity anchor：Mallory 把自己 ws 裡的 owner
+        列直接 write `user_id` 改成 Bob——若通過，Bob 會在完全沒經過 invite
+        /transfer_ownership 的情況下無聲變成該 ws 的 owner。與 workspace_id
+        方向對稱，同一道 guard 守。"""
+        self.authenticate(self.mallory_login, self.mallory_login)
+        _ws_id, row = self._own_ws_as_mallory('Mallory WS pivot-3')
+        result = self._call_kw(
+            'woow_paas_platform.workspace_access', 'write',
+            [[row.id], {'user_id': self.bob.id}])
+        self._assert_access_error(result, 'Mallory 不得把自己的列 user_id 改指向 Bob')
+        row.invalidate_recordset()
+        self.assertEqual(row.user_id.id, self.mallory.id, '拒絕後 user_id 不得變動')
+
+    def test_pivot_admin_group_system_can_still_repoint_anchors(self):
+        """陽性對照：`group_system` bypass 通道必須維持暢通——identity
+        anchor guard 不可誤傷既有的 group_system 全權維護路徑（鎖 C5／
+        `workspace_access_rule_admin_full` 的既有語意，防 over-correction）。
+        """
+        self.authenticate('admin', 'admin')
+        result = self._call_kw(
+            'woow_paas_platform.workspace_access', 'write',
+            [[self.carol_access.id], {'workspace_id': self.ws2.id}])
+        self._assert_call_kw_ok(
+            result, 'group_system 呼叫者 repoint workspace_id 不應被 identity anchor guard 誤擋')
+
+    def test_pivot_control_direct_create_still_denied(self):
+        """陽性對照：同一個 Mallory 直接 create 進 W1 依然被擋（與 A1 同一
+        條斷言，這裡重申只是為了證明本測試組的 fixture／身分沒有壞掉——
+        如果連這條都綠，代表壞的是 fixture 不是 pivot guard 生效）。"""
+        self.authenticate(self.mallory_login, self.mallory_login)
+        result = self._call_kw(
+            'woow_paas_platform.workspace_access', 'create',
+            [{'workspace_id': self.ws1.id, 'user_id': self.mallory.id, 'role': ROLE_ADMIN}])
+        self._assert_access_error(
+            result, 'FIXTURE 前提：直接 create 進 W1 必須仍被擋（不是本測試組的重點，是陽性對照）')

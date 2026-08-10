@@ -140,6 +140,38 @@ class WorkspaceAccess(models.Model):
         return super().create(vals_list)
 
     def write(self, vals):
+        # #556 write-pivot (found by independent verification, not in the
+        # original analysis): workspace_id / user_id are membership
+        # IDENTITY ANCHORS — no legitimate tenant flow ever re-points an
+        # existing access row at a different workspace or a different
+        # user (invite/role-change/remove all operate on `role` only, on
+        # a row whose workspace_id/user_id stay fixed for its lifetime).
+        # Without this, a caller who legitimately self-created their OWN
+        # workspace (P6 bootstrap — they really are that row's owner) can
+        # write([their_own_row_id], {'workspace_id': <victim_ws>, 'role':
+        # 'admin'}) on their own row: ir.rule's write check evaluates only
+        # the PRE-write state (still their own workspace, still owner ⇒
+        # passes) and never re-evaluates the post-write target; and
+        # `_check_assignable_role` below reads `rec.workspace_id.id` —
+        # also the pre-write/SOURCE workspace, not the vals-supplied
+        # target — so a self-owned row can be "moved" straight into a
+        # victim workspace with an attacker-chosen role. This must run
+        # first, before the source-workspace-scoped checks below, and
+        # must compare the ACTUAL new value against the current one (not
+        # merely whether the key is present) so a no-op write (UI
+        # batch-send of unmodified fields) is not mistakenly blocked.
+        if not self.env.is_superuser() and not self.env.user.has_group('base.group_system'):
+            for rec in self:
+                if 'workspace_id' in vals and vals['workspace_id'] != rec.workspace_id.id:
+                    raise AccessError(
+                        "Cannot re-point an access row (id=%s) to a "
+                        "different workspace." % rec.id
+                    )
+                if 'user_id' in vals and vals['user_id'] != rec.user_id.id:
+                    raise AccessError(
+                        "Cannot re-point an access row (id=%s) to a "
+                        "different user." % rec.id
+                    )
         # Owner-row protection applies to every write on an owner row,
         # regardless of which fields are being changed — ir.rule cannot
         # express this because record rules evaluate the CALLER's pre-write
