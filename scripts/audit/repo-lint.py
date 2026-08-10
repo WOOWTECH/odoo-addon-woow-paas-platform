@@ -205,9 +205,11 @@ security-rule-lifecycle 由兩個函式——ir.rule 的出生地／退役名字
                      `perm_write` / `perm_create` / `perm_unlink` **各至少要有一條對
                      `base.group_user` 生效**的 ir.rule（#659 ③，#519 的地基）。缺任
                      一方向：`_get_rules` 對租戶查無 rule ⇒ `_compute_domain` 回空
-                     domain ＝該方向**完全不設限**，而 ACL 給 base.group_user 的是
-                     `1,1,1,1`。這是最容易被「這條規則看起來多餘」順手簡化掉、失效又
-                     完全無聲的一種。🔴 判準刻意**不是**「這個 model 有沒有任一條
+                     domain ＝該方向**在規則層完全不設限**。這是最容易被「這條規則看
+                     起來多餘」順手簡化掉、失效又完全無聲的一種。判準**與 ACL 脫鉤**
+                     （縱深防禦；訊息會即時讀出 ACL 實值，但不寫死——寫死的版本印在
+                     #556 修復前的樹上就是假話，#659 驗收 F3）。
+                     🔴 判準刻意**不是**「這個 model 有沒有任一條
                      ir.rule」：`_get_rules` 的 SQL 只收 `r.global OR r.id IN (使用者
                      所屬 group 的 rule)`，所以只掛 `base.group_system` 的
                      `*_rule_admin_full` 對純 base.group_user 帳號完全不構成限制；本
@@ -228,6 +230,7 @@ hook 模式輸出 {"decision":"block","reason":...} 讓 model 立即自我修正
 Fail-open：hook 模式下任何內部錯誤 → exit 0，絕不擋開發。
 """
 import ast
+import csv
 import glob
 import io
 import json
@@ -1390,6 +1393,9 @@ def check_hermes_agent_013_seed(root):
 # 活的授權面 ⇒ 前兩條合成一條規則、第三條自成一條（見檔頭 22／23）。
 IR_RULE_MODEL = "ir.rule"
 SECURITY_RULES_REL = "src/security/ir_rules.xml"
+# 只給違規訊息用（印 ACL 實值），**不參與任何 pass/fail 判準**——見
+# `_workspace_access_acl_note` 與 `check_workspace_access_rule_directions` 的 docstring。
+ACL_CSV_REL = "src/security/ir.model.access.csv"
 SECURITY_RULE_DOC = "docs/tracking/landings/556-workspace-access-authz-landing.md"
 # 自家 module 的 xmlid 前綴：`<record id="woow_paas_platform.x">` 與 `<record id="x">`
 # 在 Odoo 眼裡是同一個 record，判準必須看得出來。只剝自家前綴——`base.group_user`
@@ -1452,8 +1458,49 @@ def _security_rule_watches(rel):
             and not rel.startswith("src/static/"))
 
 
-def _xml_bool(raw, default):
-    """Odoo `str2bool` 的判定；認不得回 `default`（Odoo 那邊是直接 raise）。"""
+def _noupdate_attr_is_true(raw):
+    """`noupdate="…"` 的值判定，**逐字對齊 `odoo/tools/convert.py` 的 `str2bool`**。
+
+    🔴 Odoo 有**兩個**同名 `str2bool`，語意不同，而 XML 的 `noupdate` 走的是
+    `convert.py` 那份：
+
+      * `odoo/tools/convert.py`：`return value.lower() not in ('0', 'false', 'off')`
+        ——**純黑名單**，只有這三個字（外加空字串走 default）是 False，其餘**全部**是
+        True。`no` / `No` / `f` / `n` / `banana` 都是 True，而且**永不 raise**。
+      * `odoo/tools/misc.py`：白名單／黑名單雙表，認不得會 raise。convert.py **沒有**
+        import 它（該檔只從 misc import `file_open, file_path, SKIPPED_ELEMENT_TYPES`），
+        所以它對 noupdate 完全不適用。
+
+    這個區分是本檔踩過的實例：原本照 misc.py 那份寫（白名單），於是
+    `<data noupdate="no">` 底下的 ir.rule 在 Odoo 是 sticky noupdate、gate 卻放行
+    ⇒ 一條確定可用的靜默繞過路徑（#659 驗收 F1，端到端坐實 repo-lint EXIT=0）。
+    現實分佈上 Odoo 18 核心 addons 只出現 `1`/`0`/`True`/`False`，本 repo 只有 `1`/`0`
+    ——所以它不是「明天就會撞到」，但**寫自然否定的人會靜默中招，想繞過的人有確定路徑**。
+
+    ⚠ 本函式只服務 `noupdate` 這一條路徑。`perm_*` / `active` 走的是 `<field>` 的
+    `eval`（`safe_eval`），判定不同，由 `_field_literal_bool` 負責——兩條路徑刻意
+    不共用一個函式，共用就會有一邊被另一邊的需求拖偏（F1 的成因正是共用）。
+
+    要重新核對 Odoo 端請直接對真樹做（不要照抄本 docstring）：用 `ast` 從
+    `odoo/tools/convert.py` 抽出 `str2bool` / `nodeattr2bool` 的函式原文再 exec，
+    餵值比對。實測 `odoo-17.0` 與 `odoo-18.0` 兩份樹的 `convert.py::str2bool` 逐字相同。
+    """
+    return raw.strip().lower() not in ("0", "false", "off")
+
+
+def _field_literal_bool(raw, default):
+    """`<field name="perm_write" eval="True"/>` 這類**布林字面**的判定。
+
+    這條路徑不經 `nodeattr2bool`——Odoo 是把 `eval` 的內容丟給 `safe_eval`，所以
+    `True` / `False` / `1` / `0` 都是 Python 字面。本函式只認字面，認不得回 `default`
+    （呼叫端一律傳保守值，見 `_rule_flag`）。
+
+    ⚠ 已知偏差（安全方向，刻意不修）：純 text 形態 `<field name="perm_write">no</field>`
+    在 Odoo 會走 ORM 的 Boolean 轉換 ⇒ `bool('no')` ＝ True，本函式判 False。方向是
+    「gate 說沒涵蓋、實際涵蓋了」＝過嚴誤報，不會製造假綠；而現實中沒人這樣寫布林欄位。
+    寫下來是為了不讓下一個人以為這格已經對齊（#659 驗收 F2 同型：偏差要寫成已知，不要
+    留一個看起來完備的判準）。
+    """
     val = (raw or "").strip().lower()
     if val in ("y", "yes", "1", "true", "t", "on"):
         return True
@@ -1470,7 +1517,12 @@ def _strip_module_prefix(xmlid):
 
 
 def _effective_noupdate(elem, parents):
-    """這個 record 的**生效** noupdate：往上找第一個顯式宣告 noupdate 的祖先。
+    """這個 record 的**生效** noupdate，回 `(bool, 決定它的那個屬性原文或 None)`。
+
+    回原文而不只是 bool，是為了讓違規訊息印出**實際**寫在檔案裡的值。原本訊息逐字
+    寫「落在 `noupdate="1"` 區塊」，但 sticky 的值不只 `1`（見下）——用 `noupdate="no"`
+    繞過時訊息會叫讀者去找一個檔案裡不存在的字串（同 F3 那族：訊息斷言了它沒驗過的
+    東西）。
 
     對齊 Odoo 18 `xml_import._tag_root`（`odoo/tools/convert.py`）——它對每一層
     `<odoo>`／`<data>`／`<openerp>` 做 `nodeattr2bool(el, 'noupdate', self.noupdate)`
@@ -1480,16 +1532,23 @@ def _effective_noupdate(elem, parents):
         才算）——只認 `<data>` 的判準會被這個合法佈局整條繞過；
       * `<odoo noupdate="1"><data noupdate="0">` 底下的算 noupdate=0（內層覆寫外層）。
 
-    ⚠ 認不得的值一律當 True：Odoo 那邊 `str2bool` 會 raise ⇒ 模組根本載不起來，這裡
-    寧可紅在 gate 也不要靜默放行。
+    「顯式宣告」的判準也逐字對齊 `nodeattr2bool`：屬性不存在、空字串、或只有空白
+    （`if not node.get(attr)` ／ `if not val`）都回 default ＝**繼承外層**，所以這裡
+    是 `continue` 往上找而不是當成 False。
+
+    值本身的判定見 `_noupdate_attr_is_true`（convert.py 的**純黑名單** str2bool）：
+    只有 `0` / `false` / `off` 是 False，`no` / `f` / `n` / 任何認不得的字都是 True，
+    而且 Odoo 端**永不 raise**（`noupdate="banana"` 模組照樣載得起來、且是 sticky）。
+    本 docstring 原本寫「Odoo 那邊會 raise」——那是引用了 `misc.py` 那份不相干的
+    str2bool，結果碰巧對而理由是錯的（#659 驗收 F1）。
     """
     cur = parents.get(elem)
     while cur is not None:
         raw = cur.get("noupdate")
         if raw is not None and raw.strip():
-            return _xml_bool(raw, True)
+            return _noupdate_attr_is_true(raw), raw.strip()
         cur = parents.get(cur)
-    return False
+    return False, None
 
 
 def module_record_declarations(root):
@@ -1523,11 +1582,14 @@ def module_record_declarations(root):
                 name = fld.get("name")
                 if name and name not in fields:
                     fields[name] = fld
+            sticky, raw = _effective_noupdate(rec, parents)
             records.append({
                 "rel": rel,
                 "xmlid": _strip_module_prefix(rec.get("id") or ""),
                 "model": rec.get("model") or "",
-                "noupdate": _effective_noupdate(rec, parents),
+                "noupdate": sticky,
+                # 決定 noupdate 的那個屬性原文（訊息用；沒有任何祖先宣告時是 None）
+                "noupdate_raw": raw,
                 "fields": fields,
             })
     return records, errors
@@ -1582,14 +1644,21 @@ def check_security_rule_noupdate(root):
         if xmlid in SECURITY_RULE_NOUPDATE_ALLOWED:
             seen_allowed.add(xmlid)
             continue
+        raw = rec.get("noupdate_raw")
+        hint = ""
+        if raw is not None and raw.lower() not in ("1", "true"):
+            # 印實值，並說明為什麼這個字也是 sticky——否則讀者會以為只有 "1" 算。
+            hint = ("（Odoo `convert.py::str2bool` 是純黑名單：只有 `0`／`false`／`off` "
+                    "是 False，`%s` 一樣讓整個區塊 sticky）" % raw)
         violations.append(
-            "%s：`<record id=\"%s\" model=\"ir.rule\">` 落在 noupdate=\"1\" 區塊。"
+            "%s：`<record id=\"%s\" model=\"ir.rule\">` 落在 noupdate=\"%s\" 區塊%s。"
             "`ir_model_data.noupdate` 是 sticky 的：`-u` 不重寫欄位、把 record 搬到 "
             "noupdate=\"0\" 區塊翻不了旗標、從 XML 刪掉也不會清除 ⇒ 這條規則寫錯之後"
             "**只能下 migration DELETE 修**（#556 的可修復性根因）。把它宣告在 "
             "`<data noupdate=\"0\">` 區塊；真的必須 noupdate 才加進 "
             "`SECURITY_RULE_NOUPDATE_ALLOWED` 並寫下理由（見 %s）"
-            % (rec["rel"], xmlid or "(無 id)", SECURITY_RULE_DOC))
+            % (rec["rel"], xmlid or "(無 id)", raw if raw is not None else "1", hint,
+               SECURITY_RULE_DOC))
     for xmlid in sorted(set(SECURITY_RULE_NOUPDATE_ALLOWED) - seen_allowed):
         violations.append(
             "%s：`SECURITY_RULE_NOUPDATE_ALLOWED` 還列著 `%s`（%s），但現在已經沒有"
@@ -1657,10 +1726,20 @@ def _rule_model_ref(fields):
 def _rule_group_xmlids(fields):
     """rule 掛的 group xmlid 集合；**沒宣告 `groups` 欄位回 None**（＝ global rule）。
 
-    回 None 與回 `set()` 必須分辨：Odoo 的 `global` 是 computed（`not groups`），global
-    rule 對所有人 AND 生效、對租戶也構成限制；而「宣告了 groups 但抽不到 ref」是探針
-    看不懂的形態，呼叫端要有辦法區分。這裡把後者回成空集合，由呼叫端當「不涵蓋租戶」
-    處理（fail-loud 方向：紅，不是綠）。
+    回 None 與回 `set()` 的分辨是刻意的，但兩者底下其實混著**兩種語意不同**的輸入，
+    這裡如實寫清楚（#659 驗收 F2）：
+
+      * **沒宣告 `groups` 欄位** → None。Odoo 的 `global` 是 computed（`ir_rule.py ::
+        _compute_global` ＝ `not rule.groups`），global rule 對所有人 AND 生效 ⇒ 對租戶
+        構成限制 ⇒ 呼叫端算它涵蓋。這格判對。
+      * **宣告了但一個 ref 都抽不到**，而這裡面又分兩種：
+        - `eval="[]"` / `eval="[(6, 0, [])]"`（**顯式空 m2m**）：Odoo 那邊 `not groups`
+          為真 ⇒ 同樣是 global ⇒ 實際涵蓋全體租戶，而本函式回空集合、呼叫端判「不涵蓋」
+          ⇒ **過嚴誤報**（gate 紅、實際有守）。方向安全，刻意不修行為——修它要能區分
+          「空 list」與「看不懂的 eval」，而後者必須維持保守。已知偏差寫在這裡，不要
+          讀成「這格已經對齊」。
+        - 看不懂的 eval 形態（變數、函式呼叫）：回空集合＝當「不涵蓋租戶」，紅不是綠。
+          這才是原本 docstring 寫的 fail-loud 理由真正適用的那一半。
     """
     fld = fields.get("groups")
     if fld is None:
@@ -1676,11 +1755,45 @@ def _rule_flag(fields, name):
     `active` 全部 `default=True`。把「沒寫」當 False 會讓一條省略 `perm_write` 的
     rule（合法且真的套用在 write 上）被判成沒守 write 方向——判定與 Odoo 實際行為
     相反。認不得的值當 False（保守方向：算成「這個方向沒被涵蓋」⇒ 紅）。
+
+    ⚠ 走 `_field_literal_bool` 而**不是** `noupdate` 那條路徑的判定：這裡是 `<field>`
+    的 `eval`（`safe_eval` 的 Python 字面），`noupdate` 是 XML 屬性（`nodeattr2bool` 的
+    純黑名單）。兩者在 Odoo 就是不同的函式，gate 這邊也刻意不共用——F1 的成因正是
+    共用一個 helper 讓 noupdate 那條路徑被字面判準拖偏。
     """
     fld = fields.get(name)
     if fld is None:
         return True
-    return _xml_bool(fld.get("eval") or fld.text or "", False)
+    return _field_literal_bool(fld.get("eval") or fld.text or "", False)
+
+
+def _workspace_access_acl_note(root):
+    """違規訊息用的 ACL 實值子句；讀不到／查無該列一律回空字串。
+
+    只服務**訊息**，不參與 pass/fail（判準與 ACL 脫鉤，見呼叫端 docstring）。所以這裡
+    刻意 fail-soft：讀不到就少一句話，不會把一條安全守線變成「因為 csv 讀不到而紅」。
+
+    存在的理由是反面：原本這句話把 `1,1,1,1` **寫死在訊息裡**，而那是今天才成立的值
+    ⇒ 印在別的樹上就是假話（#659 驗收 F3）。即時讀出來的值不會過期；讀不到時省略整句
+    比印一個猜測好。
+    """
+    path = os.path.join(root, ACL_CSV_REL)
+    try:
+        with open(path, encoding="utf-8") as fh:
+            rows = list(csv.DictReader(fh))
+    except (OSError, UnicodeDecodeError, csv.Error):
+        return ""
+    for row in rows:
+        model = _strip_module_prefix((row.get("model_id:id") or "").strip())
+        group = (row.get("group_id:id") or "").strip()
+        if model != WORKSPACE_ACCESS_MODEL_REF or group != TENANT_GROUP_XMLID:
+            continue
+        perms = [(row.get("perm_" + name) or "0").strip()
+                 for name in ("read", "write", "create", "unlink")]
+        return ("；%s 今天給 %s 的 ACL 是 %s（read,write,create,unlink）——本判準與這個"
+                "值無關，寫出來只是讓你判斷今天是否可被利用"
+                % (ACL_CSV_REL, TENANT_GROUP_XMLID, ",".join(perms)))
+    return ""
 
 
 def check_workspace_access_rule_directions(root):
@@ -1688,9 +1801,16 @@ def check_workspace_access_rule_directions(root):
 
     `perm_write` / `perm_create` / `perm_unlink` 各至少一條。缺任一方向，Odoo 的
     `ir.rule._get_rules` 對該使用者查無 rule、`_compute_domain` 回空 domain
-    ＝**該方向完全不設限**，而 `ir.model.access` 給 `base.group_user` 的是 `1,1,1,1`
-    ⇒ 任何內部帳號可對任何租戶的 workspace_access 列做該操作。這是 #519 的地基，也是
-    最容易被「這條規則看起來多餘」順手簡化掉、且失效**完全無聲**的一種。
+    ＝**該方向在規則層完全不設限**。這是 #519 的地基，也是最容易被「這條規則看起來
+    多餘」順手簡化掉、且失效**完全無聲**的一種。
+
+    判準**刻意與 ACL 脫鉤**：本 check 不讀 `ir.model.access.csv`，缺方向就紅，即使
+    ACL 今天恰好擋著該操作。理由是縱深防禦——ACL 日後被放寬時規則層必須已經在，而
+    「ACL 現在擋著」這件事沒有任何守線盯著（編輯 ACL csv 接不到本 gate）。
+    ⚠ 因此違規訊息**不得寫死 ACL 的現值**：#659 驗收 V2 實測，原本逐字寫「ACL 給
+    base.group_user 的是 1,1,1,1」的訊息印在 #556 修復前的樹上時是假話（那時是
+    `1,1,1,0`）。訊息現在由 `_workspace_access_acl_note()` 即時讀出實值，讀不到就整句
+    省略（訊息用途，不 fail-loud）。
 
     🔴 判準刻意**不是**「這個 model 有沒有任一條 ir.rule」：`_get_rules` 的 SQL 只收
     `r.global OR r.id IN (使用者所屬 group 的 rule)`，所以一條只掛 `base.group_system`
@@ -1732,13 +1852,13 @@ def check_workspace_access_rule_directions(root):
         violations.append(
             "%s：`%s` 沒有任何一條對 `%s` 生效的 ir.rule 涵蓋 `%s` 方向（active 且 "
             "%s=True 且 groups 含 %s 或無 groups）。Odoo `_get_rules` 對租戶查無 rule "
-            "⇒ `_compute_domain` 回空 domain ＝**該方向完全不設限**，而 ACL 給 "
-            "base.group_user 的是 1,1,1,1 ⇒ 任何內部帳號可對任何租戶的列做這個操作"
-            "（#519 的地基）。⚠ 只掛 base.group_system 的 `*_rule_admin_full` **不算**"
-            "涵蓋：它對純 base.group_user 帳號完全不生效，補它只會讓 gate 轉綠而洞還"
-            "在（見 %s）"
+            "⇒ `_compute_domain` 回空 domain ＝**該方向在規則層完全不設限**，任何內部"
+            "帳號對任何租戶的列都沒有列層級過濾（#519 的地基）。⚠ 只掛 "
+            "base.group_system 的 `*_rule_admin_full` **不算**涵蓋：它對純 "
+            "base.group_user 帳號完全不生效，補它只會讓 gate 轉綠而洞還在（見 %s）%s"
             % (SECURITY_RULES_REL, WORKSPACE_ACCESS_MODEL_REF, TENANT_GROUP_XMLID,
-               direction, direction, TENANT_GROUP_XMLID, SECURITY_RULE_DOC))
+               direction, direction, TENANT_GROUP_XMLID, SECURITY_RULE_DOC,
+               _workspace_access_acl_note(root)))
     return violations
 
 

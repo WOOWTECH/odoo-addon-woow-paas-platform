@@ -19,6 +19,17 @@ gate，名字照樣印在通過清單裡，內部判準逐行讀也都對。本 
 而且注入工具自帶絆線（`InjectionFailed`）：錨點沒命中時 **raise**，不會靜默回傳一份
 未突變的原始碼讓測試假綠。
 
+## 🔴 `TestNoupdateNegativeSideIsNotAnEscape`＝一條實際存在過的靜默逃逸路徑的回歸測試
+
+原始實作把 `noupdate` 的值判定寫成 `misc.py :: str2bool` 的白名單語意，於是
+`<data noupdate="no">` 底下的 ir.rule **在 Odoo 是 sticky noupdate、gate 卻放行**
+（獨立驗收 #659 F1 端到端坐實 `repo-lint EXIT=0`）。根因是 Odoo 有**兩個**同名
+`str2bool`：`convert.py` 自己定義了一個**純黑名單**版（`value.lower() not in
+('0','false','off')`，永不 raise），XML 的 `noupdate` 走的是那一份。當時 38 支測試
+**一支都沒有測否定側**——肯定側（`1/true/yes/on`）全對，所以整組看起來完備。
+⇒ 教訓不是「少測一個值」，是**布林判準的兩側要分別列舉**；只驗肯定側的表對否定側
+零鑑別力。
+
 ## 敏感度與特異性成對
 
 只驗「改壞→紅」的測試集裡，一條恆紅的 gate 看起來完美——直到它擋住正當工作然後被人
@@ -38,10 +49,10 @@ model 都配一條 admin_full ⇒ 寬判準會把「洞開著」讀成「有守�
 `reference_odoo_group_system_only_rule_does_not_constrain_group_user`，#524 在 prod DB
 配陽性對照實測過）。那一支測試就是把「寬判準會綠、嚴判準會紅」釘死成契約。
 
-## 本檔自己的鑑別力（2026-08-10 實測，附可重跑的配方）
+## 本檔自己的鑑別力（2026-08-10 / 08-11 實測，附可重跑的配方）
 
-「38 支全綠」對一份**沒有鑑別力**的測試檔完全是同一個輸出。所以做過反向實驗：把
-`repo-lint.py` 逐一突變成「錯的設計」再跑本檔，五個突變**全部**被抓到（每次都還原）：
+「全綠」對一份**沒有鑑別力**的測試檔完全是同一個輸出。所以做過反向實驗：把
+`repo-lint.py` 逐一突變成「錯的設計」再跑本檔，八個突變**全部**被抓到（每次都還原）：
 
   | 突變（把 gate 改成錯的設計）                     | 該紅的測試 |
   | ------------------------------------------------ | ---------- |
@@ -50,10 +61,15 @@ model 都配一條 admin_full ⇒ 寬判準會把「洞開著」讀成「有守�
   | `_ir_rule_premise` 改成 `return []`（fail-open） | `TestFailLoud` 全 7 支 |
   | xmlid 不做 module 前綴正規化                     | `test_module_prefixed_form_is_also_red` |
   | 拿掉 allowlist 的反向對帳                        | `test_an_allowlist_entry_with_no_matching_record_is_red` |
+  | `noupdate` 判定退回 `misc.py` 白名單（＝F1 的洞） | `TestNoupdateNegativeSideIsNotAnEscape` 全 7 支 |
+  | 訊息把 ACL 值寫死回 `1,1,1,1`                    | `TestViolationMessageDoesNotAssertStaleFacts` 全 3 支 |
+  | 訊息把 `noupdate` 值寫死回 `1`                   | `test_every_sticky_spelling_is_red_and_prints_the_actual_value` |
 
-要重跑就照這張表逐條改 `repo-lint.py` 再跑本檔（每條改完務必還原）。這五個突變不是
+要重跑就照這張表逐條改 `repo-lint.py` 再跑本檔（每條改完務必還原）。這八個突變不是
 隨便挑的——它們一一對應三條守線的**設計決定**，也就是下一個人最可能「順手簡化」掉
-的那幾處。
+的那幾處。⚠ 重跑時**注入前先確認錨點命中恰好一次**：08-11 那輪有一條錨點縮排寫錯 ⇒
+命中 0 次，`str.replace` 原樣回傳，若沒有那道 assert 就會把「注入根本沒發生」讀成
+「gate 有問題／沒問題」。
 
 ## 不動 repo 一個字
 
@@ -159,19 +175,28 @@ def grandfathered_block():
     return '    <data noupdate="1">\n%s\n    </data>' % "\n\n".join(records)
 
 
+# `data_noupdate` 的兩個特殊值——三種佈局都是 Odoo 合法的，而它們的 noupdate 判定
+# 各不相同，所以 fixture 要表達得出來（只認 `<data noupdate="1">` 的判準會被另外兩種
+# 整條繞過）。
+NO_DATA_BLOCK = None          # 完全不包 <data>，record 直接掛 <odoo>
+DATA_WITHOUT_NOUPDATE = "<data-no-attr>"   # 包 <data> 但**不宣告** noupdate ⇒ 繼承外層
+
+
 def data_file(records, data_noupdate="0", root_noupdate=None, prologue="",
               grandfathered=True):
     """把 record 包成一份可 parse 的 data XML。
 
-    `data_noupdate=None` ＝**沒有 `<data>` 包層**（record 直接掛在 `<odoo>` 底下）。
-    Odoo 允許這個佈局，而且 `<odoo noupdate="1">` 一樣會讓底下的 record 變 sticky
-    ——只認 `<data noupdate="1">` 的判準會被這個合法形狀整條繞過，所以 fixture 要有它。
+    `data_noupdate` 吃三種值：具體字串（`<data noupdate="…">`）、`NO_DATA_BLOCK`
+    （沒有 `<data>` 包層，record 直接掛在 `<odoo>` 底下）、`DATA_WITHOUT_NOUPDATE`
+    （有 `<data>` 但不宣告該屬性 ⇒ 繼承外層，對齊 `nodeattr2bool` 的 default）。
     """
     root_attr = "" if root_noupdate is None else ' noupdate="%s"' % root_noupdate
     blocks = [grandfathered_block()] if grandfathered else []
     body = "\n\n".join(records)
-    if data_noupdate is None:
+    if data_noupdate is NO_DATA_BLOCK:
         blocks.append(body)
+    elif data_noupdate == DATA_WITHOUT_NOUPDATE:
+        blocks.append("    <data>\n%s\n    </data>" % body)
     else:
         blocks.append('    <data noupdate="%s">\n%s\n    </data>'
                       % (data_noupdate, body))
@@ -219,6 +244,13 @@ class Fixture(object):
     def text(self):
         with open(os.path.join(self.root, self.rel), encoding="utf-8") as fh:
             return fh.read()
+
+    def write_acl(self, read="1", write="1", create="1", unlink="1"):
+        """寫一份 `ir.model.access.csv`——只影響**違規訊息**，不影響 pass/fail。"""
+        self.write("src/security/ir.model.access.csv", (
+            "id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink\n"
+            "access_wa_user,woow_paas_platform.workspace_access.user,%s,%s,%s,%s,%s,%s\n"
+            % (_WA_REF, _TENANT, read, write, create, unlink)))
 
     # -------------------------------------------------- 被測 check
     def noupdate(self):
@@ -448,6 +480,115 @@ class TestNoupdateBlockInjection(unittest.TestCase):
         self.assertEqual(fixture.noupdate(), [])
 
 
+# ------------------------------------------------------------ ① noupdate 值語意（F1）
+
+# 逐字抄自 `odoo/tools/convert.py`：`str2bool(value)` ＝
+# `value.lower() not in ('0', 'false', 'off')`（**純黑名單**，永不 raise），
+# `nodeattr2bool` 先 `strip()`、空字串回 default（＝繼承外層）。
+# 🔴 convert.py **自己定義**這個 str2bool，沒有 import `misc.py` 那份白名單版
+# （該檔只從 misc import file_open / file_path / SKIPPED_ELEMENT_TYPES）。#659 驗收 F1
+# 就是照 misc.py 那份寫造成的：`<data noupdate="no">` 在 Odoo 是 sticky、gate 卻放行。
+#
+# 表的出處要重新核對時**別照抄本註解**：用 `ast` 從真的 convert.py 抽出 str2bool 的
+# 函式原文再 exec，餵值比對（實測 odoo-17.0 與 odoo-18.0 兩份樹逐字相同）。這裡不直接
+# 讀 Odoo 原始碼是因為 CI 容器沒有那棵樹，而本檔的契約是零外部依賴。
+_NOUPDATE_STICKY = ("1", "true", "True", "TRUE", "yes", "Yes", "on", "t", "y",
+                    "no", "No", "NO", "f", "n", "banana", " 1 ", " no ")
+_NOUPDATE_NOT_STICKY = ("0", "false", "False", "off", "OFF", " 0 ")
+
+
+class TestNoupdateValueSemantics(unittest.TestCase):
+    """helper 層：`noupdate` 的值判定必須逐字對齊 convert.py 的黑名單語意。"""
+
+    def test_sticky_values(self):
+        for raw in _NOUPDATE_STICKY:
+            with self.subTest(noupdate=raw):
+                self.assertTrue(rl._noupdate_attr_is_true(raw),
+                                "Odoo 的 str2bool 對 %r 回 True（只有 0/false/off 是 "
+                                "False）——判 False 就是一條靜默放行路徑" % raw)
+
+    def test_not_sticky_values(self):
+        for raw in _NOUPDATE_NOT_STICKY:
+            with self.subTest(noupdate=raw):
+                self.assertFalse(rl._noupdate_attr_is_true(raw),
+                                 "%r 在 Odoo 是 noupdate=0，判 True 會誤擋正常宣告" % raw)
+
+    def test_the_two_boolean_paths_are_separate_functions(self):
+        """`noupdate`（XML 屬性）與 `perm_*`（field eval）在 Odoo 是不同函式。
+
+        共用一個 helper 正是 F1 的成因，所以這裡釘住「兩個函式都存在」。刻意**不**
+        斷言兩者對某個值的判定不同——`_field_literal_bool` 的 text 形態偏差是已知的
+        過嚴誤報（見它的 docstring），把偏差寫成契約會讓未來真的去對齊時被自己的測試擋。
+        """
+        self.assertTrue(callable(rl._noupdate_attr_is_true))
+        self.assertTrue(callable(rl._field_literal_bool))
+
+    def test_field_literal_bool_handles_safe_eval_literals(self):
+        for raw, want in (("True", True), ("1", True), ("False", False), ("0", False)):
+            with self.subTest(raw=raw):
+                self.assertIs(rl._field_literal_bool(raw, None), want)
+
+
+class TestNoupdateNegativeSideIsNotAnEscape(unittest.TestCase):
+    """端到端：Odoo 視為 sticky 的**否定側**寫法不得放行（#659 驗收 F1 的回歸測試）。"""
+
+    def _probe(self, data_noupdate, root_noupdate=None):
+        return Fixture(self, data_file([rule_xml("f1_probe_rule")],
+                                       data_noupdate=data_noupdate,
+                                       root_noupdate=root_noupdate))
+
+    def test_every_sticky_spelling_is_red_and_prints_the_actual_value(self):
+        for raw in ("no", "No", "NO", "f", "n", "banana"):
+            with self.subTest(noupdate=raw):
+                got = self._probe(raw).noupdate()
+                self.assertEqual(len(got), 1,
+                                 "<data noupdate=%r> 在 Odoo 是 sticky noupdate，gate "
+                                 "放行＝一條確定可用的繞過路徑：%s" % (raw, blob(got)))
+                self.assertIn("f1_probe_rule", got[0])
+                # 訊息必須印**實際**寫在檔裡的值：寫死 noupdate="1" 會叫讀者去 grep 一個
+                # 檔案裡不存在的字串（同 F3 那族——訊息斷言它沒驗過的東西）。
+                self.assertIn('noupdate="%s"' % raw, got[0],
+                              "訊息沒印出實際的 noupdate 值：%s" % got[0])
+
+    def test_inheritance_from_the_odoo_root_is_red(self):
+        """`<odoo noupdate="no">` 的兩種繼承佈局都必須紅。
+
+        (a) 裸 record（沒有 `<data>` 包層）；(b) 有 `<data>` 但**不宣告** noupdate
+        ⇒ `nodeattr2bool` 回 default ＝繼承外層。verify659 的 F1 報告指名的就是 (b)。
+        """
+        for layout, data_noupdate in (("裸 record", NO_DATA_BLOCK),
+                                      ("<data> 不宣告", DATA_WITHOUT_NOUPDATE)):
+            with self.subTest(layout=layout):
+                got = self._probe(data_noupdate, root_noupdate="no").noupdate()
+                self.assertEqual(len(got), 1,
+                                 "%s 沒有繼承 <odoo noupdate=\"no\">：%s"
+                                 % (layout, blob(got)))
+                self.assertIn("f1_probe_rule", got[0])
+                self.assertIn('noupdate="no"', got[0])
+
+    def test_inheritance_of_a_non_sticky_root_stays_green(self):
+        """陽性對照：`<odoo noupdate="0"><data>`（不宣告）繼承 False，不得被擋。"""
+        for data_noupdate in (NO_DATA_BLOCK, DATA_WITHOUT_NOUPDATE):
+            with self.subTest(data_noupdate=data_noupdate):
+                self.assertEqual(
+                    self._probe(data_noupdate, root_noupdate="0").noupdate(), [])
+
+    def test_non_sticky_spellings_stay_green(self):
+        """陽性對照：Odoo 視為 noupdate=0 的寫法不得變紅（防過度修正）。"""
+        for raw in ("0", "false", "False", "off", "OFF"):
+            with self.subTest(noupdate=raw):
+                self.assertEqual(self._probe(raw).noupdate(), [],
+                                 "noupdate=%r 是正常宣告，不該被擋" % raw)
+
+    def test_a_blank_attribute_falls_back_to_the_inherited_value(self):
+        """`noupdate=""`／全空白 ⇒ `nodeattr2bool` 回 default ＝繼承外層，不是 False。"""
+        self.assertEqual(self._probe("").noupdate(), [],
+                         "外層沒有宣告 ⇒ 繼承 False ⇒ 該綠")
+        got = self._probe("   ", root_noupdate="1").noupdate()
+        self.assertTrue(any("f1_probe_rule" in v for v in got),
+                        "空白 noupdate 應該繼承外層的 1，而不是被當成 0：%s" % blob(got))
+
+
 # ------------------------------------------------------------ ② 退役 xmlid
 
 class TestRetiredXmlidInjection(unittest.TestCase):
@@ -637,6 +778,52 @@ class TestDirectionExistence(unittest.TestCase):
             data_noupdate="0"))
         got = fixture.directions()
         self.assertEqual(self._directions_named(got), sorted(_DIRECTIONS), blob(got))
+
+
+# ------------------------------------------------------------ ③ 訊息不得寫死會過期的值
+
+class TestViolationMessageDoesNotAssertStaleFacts(unittest.TestCase):
+    """訊息裡的 ACL 值必須是**讀出來的**，不是寫死的（#659 驗收 F3）。
+
+    原本訊息逐字寫「ACL 給 base.group_user 的是 1,1,1,1」。那是**今天**才成立的值
+    （#556 修復前是 `1,1,1,0`），而這條 check 根本不讀 ACL ⇒ 同一條訊息印在舊樹上就是
+    假話。本 repo 反覆被「宣稱過期成假話」咬過，所以這裡把「訊息反映實況」釘成契約。
+
+    pass/fail 判準仍**與 ACL 脫鉤**（縱深防禦），下面第三支就是釘這件事。
+    """
+
+    def _red_fixture(self, **acl):
+        fixture = Fixture(self, data_file([member_read_rule()], data_noupdate="0"))
+        if acl:
+            fixture.write_acl(**acl)
+        return fixture
+
+    def test_the_message_reflects_the_acl_file_it_reads(self):
+        got = self._red_fixture(read="1", write="1", create="1", unlink="0").directions()
+        self.assertTrue(got, "fixture 只有 read rule，三個寫入方向該紅")
+        self.assertIn("1,1,1,0", blob(got),
+                      "訊息沒有反映 fixture 裡的 ACL 實值 ⇒ 它印的是寫死的常數")
+        self.assertNotIn("1,1,1,1", blob(got),
+                         "訊息印出了 fixture 裡不存在的 ACL 值——寫死的斷言又回來了")
+
+    def test_a_missing_acl_file_only_drops_the_clause(self):
+        """讀不到 ACL 只少一句話，不得讓一條安全守線變成「因為 csv 不見而紅／而綠」。"""
+        got = self._red_fixture().directions()          # 沒有寫 ACL csv
+        self.assertEqual(len(got), len(_DIRECTIONS),
+                         "違規條數不該受 ACL csv 有無影響：%s" % blob(got))
+        self.assertNotIn("ACL 是", blob(got))
+        self.assertNotIn("1,1,1", blob(got))
+
+    def test_pass_fail_stays_decoupled_from_the_acl(self):
+        """ACL 全關（0,0,0,0）時方向缺失照樣紅——判準與 ACL 脫鉤。
+
+        縱深防禦：ACL 日後被放寬時規則層必須已經在，而「ACL 現在擋著」沒有任何守線盯著。
+        """
+        got = self._red_fixture(read="0", write="0", create="0", unlink="0").directions()
+        self.assertEqual(len(got), len(_DIRECTIONS),
+                         "ACL 全關就不報了 ⇒ 判準被 ACL 綁住了，縱深防禦沒了：%s"
+                         % blob(got))
+        self.assertIn("0,0,0,0", blob(got))
 
 
 # ------------------------------------------------------------ fail-loud
