@@ -1477,9 +1477,17 @@ def _noupdate_attr_is_true(raw):
     現實分佈上 Odoo 18 核心 addons 只出現 `1`/`0`/`True`/`False`，本 repo 只有 `1`/`0`
     ——所以它不是「明天就會撞到」，但**寫自然否定的人會靜默中招，想繞過的人有確定路徑**。
 
-    ⚠ 本函式只服務 `noupdate` 這一條路徑。`perm_*` / `active` 走的是 `<field>` 的
-    `eval`（`safe_eval`），判定不同，由 `_field_literal_bool` 負責——兩條路徑刻意
-    不共用一個函式，共用就會有一邊被另一邊的需求拖偏（F1 的成因正是共用）。
+    ⚠ **空字串／全空白由呼叫端負責，本函式不處理**：`nodeattr2bool` 的
+    `if not node.get(attr)` ／ `if not val` 是回 `default`（＝繼承外層），而本函式對
+    `""` 與 `"   "` 都回 **True**（`"" not in ('0','false','off')`）。那個守衛住在
+    `_effective_noupdate` 的 `if raw is not None and raw.strip():`。本函式是具名的獨立
+    helper、可能被別處重用，所以這件事必須寫在這裡——否則下一個呼叫端會以為它自己就是
+    完整的 `nodeattr2bool`，而 `noupdate=""` 會被判成 sticky（誤擋方向）。
+
+    ⚠ 本函式只服務 `noupdate` 這一條路徑。`perm_*` / `active` 走的是 `<field>` 的值
+    （`eval` 交給 `safe_eval`；純 text 則命中 `convert.py:421-422` 的 str2bool），判定
+    不同，由 `_field_literal_bool` 負責——兩條路徑刻意不共用一個函式，共用就會有一邊被
+    另一邊的需求拖偏（F1 的成因正是共用）。
 
     要重新核對 Odoo 端請直接對真樹做（不要照抄本 docstring）：用 `ast` 從
     `odoo/tools/convert.py` 抽出 `str2bool` / `nodeattr2bool` 的函式原文再 exec，
@@ -1489,17 +1497,35 @@ def _noupdate_attr_is_true(raw):
 
 
 def _field_literal_bool(raw, default):
-    """`<field name="perm_write" eval="True"/>` 這類**布林字面**的判定。
+    """`<field name="perm_write" eval="True"/>` 這類**布林欄位值**的判定。
 
-    這條路徑不經 `nodeattr2bool`——Odoo 是把 `eval` 的內容丟給 `safe_eval`，所以
-    `True` / `False` / `1` / `0` 都是 Python 字面。本函式只認字面，認不得回 `default`
-    （呼叫端一律傳保守值，見 `_rule_flag`）。
+    這條路徑**不經** `nodeattr2bool`（那是 XML 屬性用的，見 `_noupdate_attr_is_true`）。
+    `<field>` 的布林值在 Odoo 有兩條不同的路：
 
-    ⚠ 已知偏差（安全方向，刻意不修）：純 text 形態 `<field name="perm_write">no</field>`
-    在 Odoo 會走 ORM 的 Boolean 轉換 ⇒ `bool('no')` ＝ True，本函式判 False。方向是
-    「gate 說沒涵蓋、實際涵蓋了」＝過嚴誤報，不會製造假綠；而現實中沒人這樣寫布林欄位。
-    寫下來是為了不讓下一個人以為這格已經對齊（#659 驗收 F2 同型：偏差要寫成已知，不要
-    留一個看起來完備的判準）。
+      1. **`eval="…"`（常態）**：`_eval_xml` 交給 `safe_eval` ⇒ 拿到的是 Python 物件
+         （`True` / `False` / `1` / `0`），`_tag_record` 的 `isinstance(f_val, str)` 為
+         False，**不會**再過任何 str2bool。
+      2. **純 text `<field name="perm_write">0</field>`**：`_eval_xml` 回字串 ⇒ 命中
+         `convert.py` 的 `elif field_type == 'boolean' and isinstance(f_val, str):
+         f_val = str2bool(f_val)`（`odoo/tools/convert.py:421-422`）——**還是那份純
+         黑名單 str2bool**，不是 Python 的 `bool()`。
+
+    本函式只認字面，認不得回 `default`（呼叫端一律傳保守值，見 `_rule_flag`）。
+
+    ⚠ 本 docstring 原本寫「純 text 形態在 Odoo 走 ORM 的 Boolean 轉換 ⇒ `bool('no')`
+    ＝ True」——**機制引用錯了**，而且錯得有後果：照 `bool()` 推論會得出
+    `<field name="perm_write">0</field>` 在 Odoo 是 True（`bool('0')` ＝ True），
+    實際上 `str2bool('0')` ＝ False，**答案相反**。本函式對 `0` 判 False（＝與 Odoo
+    一致），所以**程式碼一直是對的，只有解釋會把下一個人導向錯結論**。這正是 F1 的
+    成因形態（引用了同名但不同語意的函式），剛被咬過所以連「原本錯在哪」一起留著。
+
+    ⚠ 已知偏差（全部落在**過嚴誤報**方向，刻意不修）：純 text 的 `no` / `n` / `f` /
+    任何認不得的字，Odoo 的黑名單判 True、本函式判 False。逐格實測（Odoo 端用 ast 從
+    真 convert.py 抽出 str2bool 再 exec）：`1/True/true/on/yes/t/y` 與
+    `0/false/False/off` 共 11 格一致，`no/n/f/banana` 4 格過嚴。方向是「gate 說沒涵蓋、
+    實際涵蓋了」＝紅不是綠，不會製造假綠；而現實中沒人用 text 形態寫布林欄位。
+    寫下來是為了不讓下一個人以為這格已經對齊（#659 驗收 F2 同型：偏差要寫成已知，
+    不要留一個看起來完備的判準）。
     """
     val = (raw or "").strip().lower()
     if val in ("y", "yes", "1", "true", "t", "on"):
