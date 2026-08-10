@@ -108,6 +108,57 @@ Plan B 收緊 create 方向後，一個全新使用者對自己那個**全新** 
 `Workspace.sudo().create(...)`，外層 sudo 已讓內層 `self.env.su=True`，不受此問題影響，
 但若照抄 uid 分支去判斷，反而會誤判走錯分支）。
 
+### write-pivot：identity anchor guard（獨立驗收發現，補在同一 PR）
+
+實作完成後的獨立對抗式驗收（verify556，opus，全新 context）另外找到 A1 的第二條
+payload——analysis.md 與最初的攻擊向清單都沒列到：任何 `base.group_user` 都能先合法
+自建一個 workspace（P6 設計行為，她在那裡是 owner），再把自己那列 access row 用
+`write([row_id], {'workspace_id': 受害workspace, 'role': 'admin'})` **搬進**受害
+workspace。兩層都沒守到：
+
+1. **ir.rule 層**：Odoo 的 `write()` 只在寫入**前**查 rule，寫完不重查——「從我是
+   owner/admin 的來源 ws 搬一列到受害 ws」通過的是**來源**狀態的
+   `owner_admin_manage`（對照：`create` 是 INSERT **後**才查，才有 #556 原本那個洞；
+   pivot 是同一族問題在 write 方向的鏡像）。
+2. **model guard 層**：`write()` 完全沒看 `vals` 裡的 `workspace_id`——
+   `_check_assignable_role(vals['role'], rec.workspace_id.id)` 用的是**舊**（來源）
+   workspace，角色檢查整個問錯了工作區；`user_id` 同理沒人看。
+
+**修法（approach b，identity anchor）**：`workspace_id`／`user_id` 是建立後不可變的
+anchor——非 superuser 且非 `group_system` 的呼叫者，若 `vals` 要把這兩個欄位改成不同
+值，一律 `AccessError`（沿用既有 guard 的 su/group_system 豁免，與 B1/B2 一致）。理由：
+沒有任何合法租戶流程需要重指派一列 access row 屬於哪個 workspace／哪個 user（invite／
+改角色／移除都只動 `role`）。屬 [[scope-flip-write-guard-not-ir-rule]] 的射程——
+`workspace_id` 就是 tenancy scope 欄位。
+
+比較用「值是否真的改變」而非「key 是否在 vals 裡」（同一 pattern 的既有教訓）：no-op
+送出原值＋同時改 `role` 的合法流程（陽性對照鎖住）不受影響。
+
+`TestWorkspaceAccessWritePivotGuard`（`test_workspace_access_authz_556.py`）是永久回歸
+測試，改寫自 verify556 的兩份探針（`/tmp/woow-556/pivot-probe.py` 攻擊向、
+`/tmp/woow-556/anchor-probe.py` 繞道與過度修正對照），涵蓋：一步 pivot（改
+`workspace_id`+`role`）、第三方植入的 pivot 版（只改 `workspace_id`）、owner 改別人
+列的 `user_id`、呼叫者改自己列的 `user_id`、`copy()` 繞道（底層走 `create()`，驗證
+真的沒有另一條路）、workspace 的 one2many `access_ids` inverse command（`(1, id,
+vals)` 與 `(4, id)`）繞道——**其中 `(4, id)` 那條配了獨立的 sudo 陽性對照**（若拿掉
+guard，同樣的命令形態在 sudo 下必須真的把列搬過去；沒有這條對照，「沒位移」有可能只
+是命令形態本身無效，不能當作守住的證據），以及三條陽性對照（no-op anchor 值＋合法改
+role、真實端點 `update_role`、sudo 路徑）。本機用 docker harness 以 `git stash` 暫時
+拿掉這段 guard 重跑：3 條攻擊測試如預期紅（`{'result': True}`，攻擊真的成功），2 條
+控制測試維持綠（非 fixture 壞掉）；補回 guard 後全綠、既有回歸零受影響。
+
+**manifest 維持 `18.0.1.0.119` 不再 bump**：pivot 修法是純 model guard（`write()`
+內的 Python 判斷），不涉及 ir.rule／ACL／data XML，不需要新的 migration 目錄；整個
+PR（含 write-pivot 補丁）以同一個模組版號原子落地。已用 docker harness 的 `-i`
+fresh install 與 `-u` 升級兩條路徑都驗過 guard 在（見上方 migration 段落與 V2/V4
+驗收結果）。
+
+**已知非問題（審查時不必深究）**：guard 用 `vals['workspace_id'] != rec.workspace_id.id`
+做 int 比較。真實 Odoo client（`/web/dataset/call_kw` 與 OWL 前端）一律送 Many2one
+的整數 id，已實測驗證；若有人手寫 raw HTTP 送字串型 id（非 Odoo 官方 client 行為），
+`'3' != 3` 恆真、guard 一律視為「有改變」而擋下（保守方向，不會漏擋，只是理論上可能誤
+擋一個沒人會送的畸形 payload）。
+
 ## 與 #519 的關係
 
 修復後 `role` 對非成員 / 一般 `user`/`guest` 成員都不可寫（row-level 靠 ir.rule 收窄、
@@ -134,6 +185,8 @@ create-level 靠 model guard 補齊 ir.rule 在 create 方向的自我滿足漏�
   workspace 恰產生一列 owner access（鎖 sudo bootstrap）、`admin`/`group_system` 對
   workspace_access 四向 CRUD 全通（鎖 ACL admin 列 + `admin_full` rule）、HA PaaS
   provision（sudo 路徑）仍能開通並建出 owner 列。
+- **`TestWorkspaceAccessWritePivotGuard`**：write-pivot identity anchor guard 的永久
+  回歸測試，見上方「write-pivot」段。
 
 同步更新 `test_invite_member_rollback_525.py` 檔頭與 `_invite_member`（`paas.py`）內的
 兩處註解——它們原本寫「`check_access('create')` 的 AccessError 發生在 INSERT 之前」與
@@ -143,8 +196,11 @@ create-level 靠 model guard 補齊 ir.rule 在 create 方向的自我滿足漏�
 
 ## Not in scope（另開 follow-up，不在本 PR 順手改）
 
-- `project_access` 自身兩處同型潛在洞：`_check_assignable_role` 在 `role` 缺省時
-  early-return；沒有 owner 列保護、admin 可降級 owner。
+- **`project_access` 有一模一樣形狀的 write-pivot 洞**（`project_access.py` 的
+  `write()` 同樣只在 `'role' in vals` 時查、且查的是 `rec.project_id.id`）——與 #556
+  修復前的 `workspace_access` 同一族問題，本 PR 刻意**不動 `project_access`**（避免擴大
+  本次改動的爆炸半徑），記 follow-up；連同 analysis.md §4 原本已列的兩個
+  `project_access` 潛在洞（`role` 缺省 early-return、無 owner 列保護）一起處理。
 - `workspace_rule_member_access`（`ir_rules.xml`，同一個 noupdate=1 區塊）
   `perm_write=True` 且 domain 無 role 條件——任何 `guest`/`user` 成員都能改 workspace
   本體的 name/description/state（含 archive）。#556 的相鄰問題，不是 #556。
@@ -152,6 +208,12 @@ create-level 靠 model guard 補齊 ir.rule 在 create 方向的自我滿足漏�
   真解要在 `create()` 內對非 superuser 強制覆寫，低嚴重度）。
 - `scripts/audit/repo-lint.py` 的機械 gate（noupdate 覆蓋 `ir_rules.xml`、退役 xmlid
   黑名單、write/create/unlink 方向存在性守衛）——留 Phase 3b，等核心修復先驗過。
+- **`transfer_ownership`（死碼）若未來被喚醒，會被新 anchor guard 打壞**：它連續兩次
+  `self.write({'role': ROLE_ADMIN})` / `new_owner_access.write({'role': ROLE_OWNER})`，
+  第二次呼叫時 grantor（呼叫者自己那列）已經因第一次 write 落地成 'admin'，
+  `ASSIGNABLE_ROLES_BY_ROLE['admin']` 不含 `'owner'` ⇒ 會被 `_check_assignable_role`
+  擋下（非 anchor guard，是既有的 B1 角色檢查）。今天無人呼叫，不影響本次修復；若日後
+  要復活這條方法，必須改走 sudo 或重新設計成單一 atomic 呼叫。
 
 ## 相關 pattern
 
