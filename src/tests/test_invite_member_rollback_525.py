@@ -21,8 +21,18 @@ workspace 的成員權限**，而 API 說失敗。
   controller 的 `ASSIGNABLE_ROLES`（admin/user/guest）擋掉了 owner。
 - `unique_user_workspace` 撞車拋的是 psycopg2 `IntegrityError`，交易當場毀損，
   最終是框架層錯誤而非「靜默殘留」。
-- `check_access('create')` 的 `AccessError` 發生在 INSERT **之前**，零殘留；
-  而 `workspace_access_rule_create` 目前對 `base.group_user` 全開。
+- `check_access('create')`（ir.rule 層）的 `AccessError` 發生在 INSERT
+  **之後**（`odoo/models.py:5292`），不是之前——這正是 #556 的核心根因，不
+  是本檔的巧合。`workspace_access_rule_create` 已在 #556 退役（DELETE
+  migration，見 `src/migrations/18.0.1.0.119/post-migrate.py`）；create
+  方向現在由 model `create()` guard（`_check_assignable_role`，發生在
+  INSERT **之前**）與新的 `workspace_access_rule_owner_admin_manage` /
+  `_admin_full`（`perm_create=True` 僅限 owner/admin/`group_system`）共同
+  把關。本測試以 `admin`（`base.group_system`）身分跑，guard 對
+  `group_system` 直接放行（`_check_assignable_role` 的兩道豁免之一）——
+  admin 的 create 呼叫今天不會被 #556 的任何一層擋下，下面「INSERT 已下 →
+  `_validate_fields` 才跑」的視窗依然是唯一可用的注入點，這段結論本身不受
+  #556 影響。
 
 真正產生殘留的視窗在 `models.py` 的「INSERT 已下 → `_validate_fields` 才跑」之間。
 本檔用 patch 在那個視窗注入例外來取得可達的 RED——**這是模擬一個今天還不存在的
