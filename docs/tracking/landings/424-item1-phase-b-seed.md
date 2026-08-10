@@ -21,10 +21,19 @@ merge → publish-charts 自動發佈）。腳本已備在 scratchpad（odoo she
 Apple Silicon arm64，而 agent image 是單一 amd64 manifest、webui 釘 amd64 子 manifest。
 
 **契約教訓（跨 repo seed 對 chart）**：光靠派工文件的 values 契約摘要不夠——直接 fetch
-chart 的 `values.yaml` 逐鍵核對，抓到摘要沒寫的 4 個缺鍵（`authProxy.image` /
-`workerProcesses` / `dashboard.bindHost` / `dashboard.externalPath`），其中 bindHost 是
+chart 的 `values.yaml` 逐鍵核對，抓到摘要沒寫的 3 個缺鍵（`authProxy.image` /
+`workerProcesses` / `dashboard.bindHost`），其中 bindHost 是
 安全閘位（loopback 會靜默關掉上游 fail-closed auth gate）。做法見
 [[reference_cross_repo_seed_verify_against_chart_values]]。
+
+> **2026-08-10 補（chart 0.1.3，feat/hermes-agent-013-cleanup）**：原第 4 個
+> `dashboard.externalPath` 在 0.1.3 起從 seed 移除——dashboard 改走 root URL（nginx `/`
+> 直連），OAuth `redirect_uri` 由平台 `_inject_dashboard_public_url` 注入 root URL。
+> 留著 `externalPath` 會被 chart 當成 subpath 轉發，與平台注入對不起來（OAuth 回呼
+> 打到 404 subpath）。守線＝scripts/audit/repo-lint.py 的 `hermes-agent-013-seed`
+> 與 test_hermes_agent_seed_424 的 `test_dashboard_gates_explicit` /
+> `test_dashboard_external_path_matches_injector` /
+> `test_inject_dashboard_public_url` 三條。
 
 **挖到的地雷（已寫進 seed 註解）**：`allocated_vcpu/ram_gb/storage_gb` 三欄無預設值，
 ns quota＝`sum(allocated_ram_gb)×3` 且 floor 只有 8Gi < hermes 全容器 limits 8.625Gi。

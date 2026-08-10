@@ -39,3 +39,41 @@ Eugene 要親測，stg DB（woow-k3s `dev-sandbox-stg` ns、pod stg-odoo-dev-san
 UI E2E（07-28/29 全鏈 PASS）：marketplace 卡片→configure（plan 自動選取）→Launch 建立→pods 3/3+1/1→外部路由（無憑證 401、webui/dashboard 登入頁 200、console 200、`/api/health` ok）→列表/詳情頁（ONLINE、chart 0.1.0）→刪除清理無殘留。存活服務＝svc 60（`svc-bcb0aa5b`，https://paas-cs-5a105e8b-532079c5.woowtech.io，密碼在 ns secret `svc-bcb0aa5b-hermes-agent-secrets` 的 admin_password）。**衍生 #456**：plan cs_vcpu=1 的 quota 邊際 +3 < 主 pod limits 3.4 CPU → 共用 workspace 第 1 筆永久卡 0/1 而 DB/UI 照樣 running（空 workspace 靠 8 vCPU floor 蓋住、S1-S8 測不到）；正式 plan cs_vcpu 須 ≥2 或 min_vcpu 改 ÷3 上取公式。
 
 關聯 [[project_424_item2_hermes_agent_image]]、[[reference_hermes_agent_web_dist_patch_constraints]]、[[project_433_seed_topology_landing]]。
+
+## 0.1.3 transition（2026-08-10，feat/hermes-agent-013-cleanup）
+
+chart `hermes-agent 0.1.3`（woow-paas-charts 移除 webui container，nginx `/` 直連
+dashboard）上線需平台端同動：
+
+**contract change**：`_inject_dashboard_public_url` 對 hermes-agent slug 由
+``https://{sub}.{domain}/dashboard`` 改為 ``https://{sub}.{domain}``（root URL）。
+**`HERMES_DASHBOARD_PUBLIC_URL` 從 `/dashboard` 變 root URL**——MCP Server /
+OAuth client 須重新註冊 callback URL 到 root path，**升版前必須先告知所有
+hermes-agent 租戶**。
+
+**seed 同步**：
+- `helm_chart_version` 0.1.1 → 0.1.3
+- `helm_default_values.webui` block 整個移除
+- `helm_default_values.dashboard.externalPath` 移除
+
+**SPA 0.19.0 不動**——SPA fetch bug 由 chart 0.1.3 把 dashboard 移到 root 自動修復，
+無需改 image。
+
+**rollback SOP**：若需從 0.1.3 回退到 0.1.x，須同動 (a) chart version pin (b) 加回
+`webui` block 與 `dashboard.externalPath` (c) `_inject_dashboard_public_url` 邏輯
+反轉——三件必須同 PR、否則 OAuth redirect_uri 立刻 404。三項分別在 seed 與
+cloud_service.py，**不可只翻一個**。
+
+**公告窗口**：MCP server 須事先重新註冊 callback URL（root）才能升版；窗口最短
+應 ≥24h（給 OAuth client 端的 cache TTL 與輪換時間）。本工單由 caller 在升版當天
+公告，發版單（`/woow:deploy`）附上此 SOP 連結。
+
+**守線**：scripts/audit/repo-lint.py 的 `hermes-agent-013-seed`（檔頭已登錄）；
+test_hermes_agent_seed_424 的 `test_dashboard_gates_explicit` /
+`test_dashboard_external_path_matches_injector` /
+`test_inject_dashboard_public_url` 三條機械斷言。
+
+**跨 repo 順序**：必須等 chart 0.1.3 PR 合併 + 在 OCI registry 驗證可 `helm pull`
+才合併本 PR；另一個 teammate 開 chart PR（在 woow-paas-charts repo，
+target=main），本 PR 在 odoo-addons/woow_paas_platform（target=develop）。
+chart 先 merge → 幾分鐘後驗證 → 平台才能 merge。

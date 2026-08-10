@@ -4,15 +4,15 @@
 鏡射 test_opendesign_seed_380.py（金樣板 SOP）＋ test_ha_paas_seed_woowtech_image.py
 （hidden template ＋ 原子綁定）兩者的結構。本檔守的是「錯了就靜默壞掉」的點：
 
-- **image 雙釘**：webui 已由 Phase A（woow-paas-charts）鏡像進 jcr-prod 並補釘
-  tag@digest，``_PENDING_IMAGE_KEYS`` 因此為空；``test_webui_image_pinned_digest``
-  自「交付前刻意恆紅」轉為**回歸守線**（防 tag 被改回 PENDING 佔位或掉 @sha256）
-  ——佔位被部署出去就是 Init:ErrImagePull（HA PaaS 2026-07-23 stg 實證的同一 bug class）。
+- **image 雙釘**：chart 0.1.3 起 hermes-agent 移除 webui container（nginx `/`
+  直連 dashboard），seed 的 `webui` block 連同 `HERMES_WEBUI_IMAGE` /
+  `WEBUI_PENDING_TAG` 常數與 `test_webui_image_pinned_digest` 一併刪除；agent
+  與 console 兩顆仍走 `#424①` 既有雙釘流程。
 - **quota 蓋不住全容器 limits**：#380 血訓，min_ram_gb×3 不足 → pod FailedCreate
   → 對外永遠 CF 502。這裡用**結構關係**斷言（由 seed values 現算），不硬編數字：
-  一條擋太小、一條擋太大（＝把契約 v1.1 §8.8 的「÷3 上取」規則機械化）。無 DB
-  拓撲下 limits 合計 8.625Gi（agent 6 + webui 2 + console 0.5 + authProxy 0.125）
-  → min_ram_gb=3.0，headroom 只剩 0.375Gi，**加任何容器都會撞紅**（刻意）。
+  一條擋太小、一條擋太大（＝把契約 v1.1 §8.8 的「÷3 上取」規則機械化）。0.1.3
+  起無 DB 拓撲下 limits 合計 6.625Gi（agent 6 + console 0.5 + authProxy 0.125）
+  → min_ram_gb=3.0（仍採舊值，刻意保守：升版時 quota 必須蓋得住回退相容）。
 - **DB 開關 lock-step**：Step 0 若翻案要開內建 pg/redis，storageClass path_map ／
   min_ram_gb ／ min_storage_gb 三處必須同 PR 一起動，否則 PVC 拿不到 StorageClass
   或 quota 不足。三條 lock-step 測試把它們綁死。
@@ -45,8 +45,10 @@ from odoo.tests.common import HttpCase, TransactionCase, tagged
 
 PLATFORM_REGISTRY = 'jcr-prod.woowtech.io/'
 HERMES_AGENT_IMAGE = 'jcr-prod.woowtech.io/woow-paas-docker-local/hermes-agent'
-HERMES_WEBUI_IMAGE = 'jcr-prod.woowtech.io/woow-paas-docker-local/hermes-webui'
-WEBUI_PENDING_TAG = 'PENDING_PHASE_A_WEBUI_DIGEST'
+# chart 0.1.3 起 hermes-agent 移除 webui container（nginx `/` 直連 dashboard），
+# seed 的 `webui` block 不再存在；HERMES_WEBUI_IMAGE／WEBUI_PENDING_TAG 與
+# `test_webui_image_pinned_digest` 連同 ``_PENDING_IMAGE_KEYS`` 一併撤掉。
+# 若日後 chart 把 webui 加回，連同下列全套恢復並重新走 digest 雙釘流程。
 
 # 尚未釘 digest 的 image 座標白名單（顯式、可 review）。每一筆都必須另有一條專屬的
 # fail-loud 測試扛紅；補釘後從這裡移除。**只允許暫時性項目**，不是長期豁免清單。
@@ -67,8 +69,8 @@ AUTH_PROXY_LIMIT_GI = 128 / 1024.0
 
 # 同上，CPU 側：chart values 的 `authProxy.resources.limits.cpu`（200m）。2026-07-31
 # 以 `helm show values oci://…/hermes-agent --version 0.1.0` 向 registry 直驗，非轉抄。
-# #456 的 stg 事件訊息（exceeded quota: limits.cpu=3200m）正是主 pod 的
-# agent 2000m ＋ webui 1000m ＋ 本 sidecar 200m，可交叉印證。
+# #456 的 stg 事件訊息（exceeded quota: limits.cpu=3200m）0.1.3 起改為：
+# agent 2000m ＋ console 200m ＋ 本 sidecar 200m ＝ 2.4 vCPU（邊際貢獻 2 蓋得住）。
 AUTH_PROXY_LIMIT_CPU = 0.2
 
 
@@ -200,35 +202,49 @@ class TestHermesAgentTemplateSeed(TransactionCase):
         self.assertEqual(self._values()['authProxy']['workerProcesses'], 2)
 
     def test_dashboard_gates_explicit(self):
-        """dashboard 的兩個「設錯就靜默失去防護／靜默不對外」鍵明寫。
+        """dashboard 的「設錯就靜默失去防護」鍵明寫（chart 0.1.3 起無 externalPath）。
 
         - bindHost 非 loopback ⇒ 上游 fail-closed auth gate **保持啟用**（改成
           127.0.0.1 就只剩 nginx 一層）。
-        - externalPath 空字串 ⇒ dashboard 根本不對外路由，但平台照樣把
-          dashboardPublicUrl 當 OAuth redirect_uri 發出去 → 靜默死鏈。
+        - chart 0.1.3 起 dashboard 不走 subpath：nginx `/` 直連，OAuth
+          ``redirect_uri`` ＝root URL（由平台 ``_inject_dashboard_public_url`` 每
+          次注入；見 test_dashboard_injector_outputs_root_url）。故 seed 不得帶
+          ``dashboard.externalPath``——留著就等於告訴 chart 走舊 subpath，與平台
+          注入的 root URL 對不起來。
         """
         dashboard = self._values()['dashboard']
         self.assertEqual(
             dashboard['bindHost'], '0.0.0.0',
             'loopback 綁定會關掉 dashboard 自身的 fail-closed 登入閘')
-        self.assertTrue(dashboard['externalPath'], 'externalPath 為空＝dashboard 不對外')
+        self.assertNotIn(
+            'externalPath', dashboard,
+            'chart 0.1.3 起 dashboard 不走 subpath——seed 不該帶 externalPath')
         self.assertEqual(dashboard['username'], 'admin')
 
     def test_dashboard_external_path_matches_injector(self):
-        """跨層 lock-step：seed 的 dashboard.externalPath ＝平台注入 URL 的尾綴。
+        """跨層 lock-step：seed 無 externalPath，平台注入的 URL 也無 suffix。
 
-        chart 用 externalPath 決定 auth-proxy 把 /dashboard/ 轉去哪、以及 ttyd 式的
-        資產前綴；平台則把 `{public}/dashboard` 當 OAuth redirect_uri 的權威值送進
-        `config.dashboardPublicUrl`。兩者任一單獨改動 → 授權回呼打到不存在的路徑，
-        而且**兩邊各自看起來都正常**。這條把它們綁死。
+        chart 0.1.3 起 dashboard 走 root URL（nginx `/`），平台
+        ``_inject_dashboard_public_url`` 對 hermes-agent slug 直接輸出 root URL，
+        兩側都不得殘留 ``/dashboard`` suffix（任一側單獨漏改都會把 OAuth 回呼打到
+        404 subpath）。與 0.1.x 時代的 `dashboard.externalPath` 鎖步合約已被新形態
+        取代——本條把「兩側都不得有 suffix」機械化為字串層斷言。
         """
-        external_path = self._values()['dashboard']['externalPath']
+        dashboard = self._values()['dashboard']
+        self.assertNotIn(
+            'externalPath', dashboard,
+            'seed 仍帶 dashboard.externalPath：會被 chart 當成 subpath 轉發 → OAuth'
+            ' redirect_uri 打到 /dashboard 而非 root')
         injected = self.env['woow_paas_platform.cloud_service']._inject_dashboard_public_url(
             {}, 'hermes-agent', 'https://svc-abc.woowtech.io',
         )['config']['dashboardPublicUrl']
         self.assertEqual(
-            injected, 'https://svc-abc.woowtech.io' + external_path,
-            '平台注入的 dashboardPublicUrl 尾綴與 seed 的 dashboard.externalPath 不一致')
+            injected, 'https://svc-abc.woowtech.io',
+            '平台注入的 dashboardPublicUrl 必須是 root URL（chart 0.1.3）')
+        self.assertNotIn(
+            '/dashboard', injected,
+            '平台注入的 URL 不該帶 /dashboard suffix（chart 0.1.3 移除 webui，'
+            'OAuth redirect_uri 走 root）')
 
     def test_gateway_external_path_explicit(self):
         """#530：gateway 的對外子路徑明寫（缺鍵／空字串＝gateway 永遠不對外）。
@@ -303,12 +319,11 @@ class TestHermesAgentTemplateSeed(TransactionCase):
 
     # ── chart / image pin ───────────────────────────────────────────────────
     def test_chart_oci_pin(self):
-        """chart＝woow-paas-charts 發佈的獨立 hermes-agent OCI chart 0.1.2。
+        """chart＝woow-paas-charts 發佈的獨立 hermes-agent OCI chart 0.1.3。
 
-        #530 把版本從 0.1.0 推到 0.1.1（charts PR #69 新增 gateway 反向代理子路徑）；
-        woow-paas-charts#74 再推到 0.1.2（charts PR #75）——webui container 內完全沒有
-        hermes-agent 原始碼，建 profile 回 500、chat 回 AIAgent not available；0.1.2 以
-        initContainer 從 agent image 複製 /opt/hermes 到 emptyDir 供 webui 唯讀掛載。
+        版本演進：0.1.0 → 0.1.1（#530，charts PR #69 新增 gateway 反向代理子路徑）→
+        0.1.3（移除 webui container，nginx `/` 直連 dashboard；webui 移除細節見
+        test_webui_block_removed）。
         這條斷言是刻意鎖精確值的少數例外：跨 repo chart 版本是**平台指向哪一顆已發佈
         artifact** 的宣告，不是會自然演進的 living schema——寫成 `>=` 只會讓「chart 沒
         跟著發版」這個真正的失效模式假綠。平台端沒有 chart values 的任何副本，鍵名
@@ -319,7 +334,7 @@ class TestHermesAgentTemplateSeed(TransactionCase):
         self.assertEqual(
             tpl.helm_chart_name,
             'oci://jcr-prod.woowtech.io/woow-paas-docker-local/hermes-agent')
-        self.assertEqual(tpl.helm_chart_version, '0.1.2')
+        self.assertEqual(tpl.helm_chart_version, '0.1.3')
 
     def test_agent_image_pinned_digest(self):
         """agent image＝#424② 交付的衍生 image（含 MCP OAuth build-time patch），雙釘。
@@ -336,25 +351,17 @@ class TestHermesAgentTemplateSeed(TransactionCase):
             build_tag, r'^\d{8}\.\d{4}$', 'build tag 應為 UTC 時間戳 YYYYMMDD.HHMM')
         self.assertEqual(len(digest), len('sha256:') + 64, digest)
 
-    def test_webui_image_pinned_digest(self):
-        """webui image 必須雙釘 tag@sha256（鏡像進 jcr-prod 後已補釘）。
+    def test_webui_block_removed(self):
+        """chart 0.1.3 起 webui container 移除；seed 不得帶 `webui` block。
 
-        歷史：本條在鏡像交付前**刻意恆紅、不 skip** —— 留 PENDING 佔位部署出去就是
-        Init:ErrImagePull（HA PaaS 2026-07-23 stg 實證的同一 bug class）。
-        WEBUI_PENDING_TAG 斷言留著，防止有人回退成佔位。
-
-        釘的是 multi-arch OCI index 底下的 **amd64 子 manifest** digest，與
-        open-design-console 現行 seed 同款（agent image 本身即單一 amd64 manifest，
-        整個 pod 本來就 amd64-only）。
+        nginx `/` 直連 dashboard（取代舊 `/`＝webui＋`/dashboard/` 雙入口）；
+        ``webui`` block 若存留，chart 仍會 render 那顆 container，pod 起來多一條
+        dead path（basic-auth 與 dashboard form-auth 形狀疊加，登入閘互踢）。
+        守線＝斷言 block 本身不存在。
         """
-        image = self._values()['webui']['image']
-        self.assertEqual(image['repository'], HERMES_WEBUI_IMAGE)
-        tag = image['tag']
-        self.assertNotEqual(
-            tag, WEBUI_PENDING_TAG,
-            'Phase A 的 webui 鏡像 tag@digest 尚未補釘（PR 合併前必補真值）')
-        self.assertNotEqual(tag, 'latest', '不得留 latest 可變 tag')
-        self.assertIn('@sha256:', tag, 'webui image 必須雙釘 tag@sha256')
+        self.assertNotIn(
+            'webui', self._values(),
+            'chart 0.1.3 起 webui container 已移除，seed 不該帶 webui block')
 
     def test_console_image_shared_with_opendesign(self):
         """console 直接重用 open-design 的 baked image，且與該 seed **同一 tag@digest**。
@@ -478,13 +485,14 @@ class TestHermesAgentTemplateSeed(TransactionCase):
     def _seed_container_limits_gi(self):
         """由 seed values 現算「本服務全容器 limits.memory」總和（GiB）。
 
-        涵蓋 agent／webui（daemon pod）＋ console（獨立 Deployment，同 ns 同 quota）
+        涵蓋 agent（daemon pod，chart 0.1.3 起獨自存在，webui 已合進 nginx `/`）
+        ＋ console（獨立 Deployment，同 ns 同 quota）
         ＋ auth-proxy sidecar（chart 契約值，見 AUTH_PROXY_LIMIT_GI）；DB 開啟時
         另計 pg／redis。刻意用「現算」而非硬編：resources 一改，斷言自動跟上。
         """
         values = self._values()
         total = AUTH_PROXY_LIMIT_GI
-        for path in (('agent',), ('webui',), ('console',),
+        for path in (('agent',), ('console',),
                      ('postgresql',), ('redis',)):
             node = values.get(path[0]) or {}
             if not node or node.get('enabled') is False:
@@ -497,13 +505,14 @@ class TestHermesAgentTemplateSeed(TransactionCase):
     def _seed_container_limits_cpu(self):
         """CPU 側的對稱版本：由 seed values 現算「本服務全容器 limits.cpu」總和。
 
-        #456 的根因就在這條線上：邊際需求 3.4（agent 2 ＋ webui 1 ＋ console 0.2
-        ＋ auth-proxy 0.2）> 邊際貢獻 min_vcpu×3。RAM 早有守線、CPU 沒有，所以
-        「共用 workspace 才露餡」的缺口一路活到 stg。
+        #456 的根因就在這條線上：0.1.x 邊際需求 3.4（agent 2 ＋ webui 1 ＋
+        console 0.2 ＋ auth-proxy 0.2）> 邊際貢獻 min_vcpu×3。RAM 早有守線、CPU
+        沒有，所以「共用 workspace 才露餡」的缺口一路活到 stg。0.1.3 起合計降到
+        2.4（webui 移除），min_vcpu=2 的邊際貢獻 6 蓋得住。
         """
         values = self._values()
         total = AUTH_PROXY_LIMIT_CPU
-        for key in ('agent', 'webui', 'console', 'postgresql', 'redis'):
+        for key in ('agent', 'console', 'postgresql', 'redis'):
             node = values.get(key) or {}
             if not node or node.get('enabled') is False:
                 continue
@@ -660,9 +669,13 @@ class TestHermesAgentTemplateSeed(TransactionCase):
                 vals['allocated_storage_gb'], tpl.min_storage_gb, xmlid)
 
     def test_resources_present_on_every_seeded_container(self):
-        """每個 seed 覆寫的容器都要 requests+limits 齊備（paas-ws quota 缺一即 FailedCreate）。"""
+        """每個 seed 覆寫的容器都要 requests+limits 齊備（paas-ws quota 缺一即 FailedCreate）。
+
+        chart 0.1.3 起只剩 agent（daemon pod）與 console（獨立 Deployment）兩顆
+        走 seed 覆寫的容器——webui 已合併進 nginx `/`，auth-proxy sidecar 走 chart
+        契約值（不在 seed）。"""
         values = self._values()
-        for key in ('agent', 'webui', 'console'):
+        for key in ('agent', 'console'):
             resources = values[key].get('resources')
             self.assertTrue(resources, '%s 缺 resources' % key)
             for side in ('requests', 'limits'):
@@ -673,7 +686,7 @@ class TestHermesAgentTemplateSeed(TransactionCase):
                         '%s.resources.%s 缺 %s' % (key, side, dim))
 
     def test_single_data_pvc(self):
-        """單顆 5Gi data PVC（agent /opt/data ＋ webui ~/.hermes 共用同一顆 RWO）。"""
+        """單顆 5Gi data PVC（agent /opt/data；0.1.3 起 webui ~/.hermes 不再寫入）。"""
         data = self._values()['persistence']['data']
         self.assertEqual(data['size'], '5Gi')
         self.assertEqual(
@@ -718,13 +731,22 @@ class TestHermesAgentTemplateSeed(TransactionCase):
             'min_storage_gb 應等於 seed 所有 PVC 容量總和')
 
     def test_description_mentions_gate_and_dashboard(self):
-        """description／full_description 說明 basic-auth 單一閘與 /dashboard 對外形態。"""
+        """description／full_description 說明 basic-auth 單一閘與 root URL 對外形態。
+
+        chart 0.1.3 起 dashboard 走 root URL（nginx `/`），不再有 `/dashboard` 字串
+        ——若 seed description 又把舊 subpath 寫進去，租戶會照舊字串連線拿到 404，
+        而 seed 與 chart 兩側各自看起來都正常。守住的是「對外形態描述＝現行合約」。
+        """
         tpl = self._tpl()
         text = (tpl.description or '') + (tpl.full_description or '')
         self.assertIn('basic-auth', text)
         self.assertIn('admin', text)
-        self.assertIn('/dashboard', text)
         self.assertIn('console', text)
+        # chart 0.1.3 起 dashboard 不走 /dashboard subpath
+        self.assertNotIn(
+            '/dashboard', text,
+            'description 仍寫 /dashboard subpath：與 0.1.3 root URL 合約不一致，'
+            '租戶照舊字串會拿到 404')
 
 
 @tagged('post_install', '-at_install')
@@ -789,7 +811,8 @@ class TestHermesAgentPlansSeed(TransactionCase):
         `min_vcpu=2` 的修法會被整個繞過，#456 原地復發。
 
         另外 `_apply_plan_spec_overlay` 會把 cs_* 疊成 resources.requests/limits，
-        與本 seed 已寫死的 agent／webui／console resources 打架。
+        與本 seed 已寫死的 agent／console resources 打架（chart 0.1.3 起 webui 已
+        從 seed 移除）。
         """
         for xmlid in self.EXPECTED:
             plan = self._plan(xmlid)
@@ -898,20 +921,25 @@ class TestHermesAgentValueInjection(TransactionCase):
 
     # ── injector 單元 ───────────────────────────────────────────────────────
     def test_inject_dashboard_public_url(self):
-        """hermes-agent：注入 config.dashboardPublicUrl＝公開根位址 + /dashboard。"""
+        """hermes-agent：注入 config.dashboardPublicUrl＝公開根位址（chart 0.1.3 root URL）。
+
+        0.1.x 時代 suffix 為 ``/dashboard``（chart 走 subpath，OAuth redirect_uri 帶尾綴）。
+        0.1.3 移除 webui、nginx ``/`` 直連 dashboard：上游把 root URL 當 OAuth
+        ``redirect_uri`` 的權威來源，suffix 變多餘且會把回呼打到 404 subpath。
+        """
         values = self.CloudService._inject_dashboard_public_url(
             {}, 'hermes-agent', 'https://svc-abc.woowtech.io')
         self.assertEqual(
             values['config']['dashboardPublicUrl'],
-            'https://svc-abc.woowtech.io/dashboard')
+            'https://svc-abc.woowtech.io')
 
     def test_inject_dashboard_public_url_strips_trailing_slash(self):
-        """根位址帶尾斜線也不能產出 //dashboard（OAuth redirect_uri 逐字比對會 mismatch）。"""
+        """根位址帶尾斜線也要正規化掉（OAuth redirect_uri 逐字比對會 mismatch）。"""
         values = self.CloudService._inject_dashboard_public_url(
             {}, 'hermes-agent', 'https://svc-abc.woowtech.io/')
         self.assertEqual(
             values['config']['dashboardPublicUrl'],
-            'https://svc-abc.woowtech.io/dashboard')
+            'https://svc-abc.woowtech.io')
 
     def test_inject_dashboard_public_url_noop_for_other_templates(self):
         """其他 template 一律 no-op（不得把不認識的鍵塞進別人的 values）。"""
@@ -1032,9 +1060,10 @@ class TestHermesAgentValueInjection(TransactionCase):
         self.assertTrue(values['networkPolicy']['apiServerCidrs'])
         paas_domain = self.env['ir.config_parameter'].sudo().get_param(
             'woow_paas_platform.paas_domain', 'woowtech.io')
+        # chart 0.1.3：dashboard 走 root URL（nginx `/` 直連），不再有 /dashboard suffix
         self.assertEqual(
             values['config']['dashboardPublicUrl'],
-            'https://hermes-test-424.%s/dashboard' % paas_domain)
+            'https://hermes-test-424.%s' % paas_domain)
         # 3) ingress expose（template.ingress_enabled ＋ subdomain）
         self.assertEqual(
             assembled['expose_config'],

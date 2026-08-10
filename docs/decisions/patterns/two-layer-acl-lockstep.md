@@ -132,8 +132,8 @@ ir.rule 在 ORM 層守 — 對「`record.with_user(env.user).read()`」path 完�
 
 **本節收的判準是這個「形態」，不是「controller 裡有沒有出現 `.sudo()`」** — `.sudo()` 在 controller 層是常見且正當的寫法，光是出現 `.sudo()` 不構成本 pattern 的成員。抽出本 pattern 時的原始案例都在 `src/controllers/paas.py`（都是底線開頭的 helper method，不是 `@route` endpoint）：
 
-- `paas.py:_resolve_project_access` 用 `request.env['project.project'].sudo().browse(project_id)` 後手動 walk `project.cloud_service_id.workspace_id` 找 access — sudo browse 後**ir.rule 不會 evaluate**
-- `paas.py:_create_project_mcp_server` 用 `McpServer.sudo().create({...})` 注入 row — sudo create 後**ir.rule create direction 不會 evaluate**
+- `src/controllers/paas.py:_resolve_project_access` 用 `request.env['project.project'].sudo().browse(project_id)` 後手動 walk `project.cloud_service_id.workspace_id` 找 access — sudo browse 後**ir.rule 不會 evaluate**
+- `src/controllers/paas.py:_create_project_mcp_server` 用 `McpServer.sudo().create({...})` 注入 row — sudo create 後**ir.rule create direction 不會 evaluate**
 
 **⚠ 這串與上方圖的判準不同，不要互相對數。** 圖列的 Layer 1 / Layer 2a / Layer 2b 是 **enforcement 層**；這串列的是 **sudo 繞過風險路徑**。最容易被誤放進這串的是圖裡 Layer 2a 的 `src/controllers/ai_assistant.py:_check_project_access` — 它的 portal leg 也寫了 sudo（`return project.sudo()._portal_partner_can_access(user.partner_id)`），但這個 sudo 的結果**直接就是授權判斷的答案**（helper 的布林值原封不動 return 出去），它是**執法點**不是繞過點，所以不在這串裡。
 

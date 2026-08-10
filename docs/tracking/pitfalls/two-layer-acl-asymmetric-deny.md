@@ -52,7 +52,7 @@ Plan §Acceptance criteria AC #42 only 列 `src/controllers/ai_assistant.py:_che
 >         return user_partner in project.message_partner_ids
 >     ```
 
-但**沒列 `paas.py:_resolve_project_access` 對等改寫**。Plan 寫的 reasoning：「ACL **兩個 enforcement layer 不一致** → IDOR 仍 leak」— 但只把「兩個 layer」理解為「ir.rule + ai_assistant.py」，**沒列舉 paas.py 也是第三 layer**。
+但**沒列 `src/controllers/paas.py:_resolve_project_access` 對等改寫**。Plan 寫的 reasoning：「ACL **兩個 enforcement layer 不一致** → IDOR 仍 leak」— 但只把「兩個 layer」理解為「ir.rule + ai_assistant.py」，**沒列舉 paas.py 也是第三 layer**。
 
 ### CAQA verdict 對 plan AC 對齊 = 對「sub-surface 完整性」漏 verify
 

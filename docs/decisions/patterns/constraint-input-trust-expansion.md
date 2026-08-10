@@ -34,7 +34,7 @@ Attacker (A admin):
 
 **Pattern 同 family（兼具歷史 context）**：
 
-- PR #54 cycle 4 HC-2 `paas.py:_resolve_project_access` 對 unbound non-follower 不收緊 — Layer 2 carve-out 信任 attacker 已在自己 project 有 access 的事實，silent 把 ROLE_OWNER 給沒 access 的 unbound project。差別是「rule 信任 attacker-writable carve-out condition」vs「rule 信任 attacker-writable m2m membership」— 抽象起來都是「ACL 評估時信任 attacker 可影響的 input」
+- PR #54 cycle 4 HC-2 `src/controllers/paas.py:_resolve_project_access` 對 unbound non-follower 不收緊 — Layer 2 carve-out 信任 attacker 已在自己 project 有 access 的事實，silent 把 ROLE_OWNER 給沒 access 的 unbound project。差別是「rule 信任 attacker-writable carve-out condition」vs「rule 信任 attacker-writable m2m membership」— 抽象起來都是「ACL 評估時信任 attacker 可影響的 input」
 - agent_template `_check_mcp_subset` 對 attacker-writable `project_ids` 做 `t.project_ids.mapped('mcp_server_ids')` subset check — 同 m2m 邏輯：attacker 加 B 進 project_ids → B's user-scope MCP 跟著被視為合法 subset；雖然 HC-3 Python constraint 從 grantor authority 端切斷，但 reader 要明白 `_check_mcp_subset` **不能單獨依賴自己的 subset 邏輯擋 attack** — 必須與 grantor constraint 配合
 
 **不適用**：

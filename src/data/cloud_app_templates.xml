@@ -818,8 +818,8 @@
 
              ⚠ 與既有 cloud_app_mcp_hermes（slug mcp-hermes、chart mcp-server、image
              hermes-mcp-admin）是**不同產品**：那是 Hermes 的 MCP server，本筆是 Hermes
-             Agent 完整應用（gateway + webui + dashboard）。xmlid／slug／顯示名刻意區隔，
-             勿 reuse、勿互抄 helm values。
+             Agent 完整應用（gateway + dashboard；chart 0.1.3 起 webui 合併進 nginx `/`）。
+             xmlid／slug／顯示名刻意區隔，勿 reuse、勿互抄 helm values。
 
              **已定價開賣**（#494，Eugene 2026-07-31 拍板月 4500／年 36000＋7 天 trial）：
              is_hidden=False ＋ 掛 plan_hermes_agent_{monthly,yearly}（links.xml）。
@@ -845,6 +845,10 @@
              - webui＝上游 ghcr.io/nesquena/hermes-webui 鏡像進 jcr-prod（平台鐵律零
                :latest／全雙釘），鏡像走 CI mirror workflow（run #1203）。已補釘
                20260727.2228@sha256:98d48222…（digest 向 registry 直驗，非轉抄）。
+               ⚠ **chart 0.1.3 起 webui container 已移除**（nginx `/` 直連 dashboard），
+               seed 的 `webui` block 不再寫入；本 image 段保留為「曾用過」的歷史註解
+               （mirror 流程仍在跑，新 chart 版號若回退到 0.1.x 可直接取回），不再被
+               seed 引用。
                ⚠ 該 tag 是 **multi-arch OCI index**（amd64／arm64／2 個 attestation），
                此處釘的是 **amd64 子 manifest** 的 digest、不是 index digest
                （index＝sha256:b42e3ea3…）——與 open-design-console 現行 seed 同款
@@ -864,12 +868,13 @@
                雙釘 tag@sha256，非 jcr-prod 的基礎設施 image 只要求非空且非 latest。
                （要不要把它也升級成 digest 雙釘＝跨 repo 政策題，待裁決，不在本 PR 自作主張。）
 
-             auth（單一閘，Eugene 2026-07-27 拍板 Q3；形狀依契約 v1.1 修訂）：平台生成
-             **一組** admin_password 餵四個入口，故 has_admin_gui=True 複用 #357 供給鏈
-             （config.sensitive.admin_password；不入 git values）。Elmo 原本三組獨立密碼
-             不沿用。⚠ 四個入口的**認證形狀不同**（v1.1 §8.3 實測）：
-               - `/`（webui）／`/console/`（ttyd）→ nginx basic-auth
-               - `/dashboard/` → 上游**表單登入**，nginx 對此 location **關 basic-auth**
+             auth（單一閘，Eugene 2026-07-27 拍板 Q3；chart 0.1.3 起改為三個入口）：
+             平台生成 **一組** admin_password 餵三個入口，故 has_admin_gui=True 複用
+             #357 供給鏈（config.sensitive.admin_password；不入 git values）。Elmo
+             原本三組獨立密碼不沿用。⚠ 三個入口的**認證形狀不同**（v1.1 §8.3 實測，
+             0.1.3 移除 webui container 後）：
+               - `/console/`（ttyd）→ nginx basic-auth（仍由 authProxy 外閘承擔）
+               - `/`（dashboard）→ 上游**表單登入**，nginx 對此 location **關 basic-auth**
                  （否則雙重登入形狀疊加）；dashboard 非 loopback 綁定時 fail-closed（無
                  auth provider 直接拒啟動），且上游已移除 HERMES_DASHBOARD_INSECURE。
                  chart 另須自產**穩定 session secret**（lookup 持久化），否則 pod 一重啟
@@ -877,7 +882,8 @@
              seed 明寫的 auth 相關鍵（皆為「設錯就靜默失去防護」型，故重申防 chart
              預設漂移；鍵名與形狀已對 charts/hermes-agent/values.yaml 逐一核對）：
                - `authProxy.enabled` / `basicAuth`（**扁平布林**，不是巢狀物件）/
-                 `basicAuthUsername`：webui 路由的外閘
+                 `basicAuthUsername`：console 路由的外閘（0.1.3 起 webui 已合進 `/`，
+                 不再由 nginx basic-auth 蓋）
                - `authProxy.workerProcesses: 2`：nginx 基底 image 預設
                  `worker_processes auto`＝每個 **host** CPU 一個 worker 且不看 cgroup，
                  排到 256 vCPU node 會 fork 256 個 worker 撐爆 128Mi limit →
@@ -885,24 +891,23 @@
                - `dashboard.bindHost: "0.0.0.0"`：**非 loopback 才會讓上游的 fail-closed
                  auth gate 保持啟用**（改 127.0.0.1 等於把 dashboard 自身登入關掉、只剩
                  nginx 一層）。pod IP 在租戶 NetworkPolicy 下本來就出不了 namespace。
-               - `dashboard.externalPath: "/dashboard"`：**必須與平台注入的
-                 `config.dashboardPublicUrl` 尾綴一字不差**（空字串＝dashboard 根本不對外
-                 路由，但平台照樣把 URL 當 OAuth redirect_uri 發出去 → 靜默死鏈）。
-                 跨層 lock-step 由 test_dashboard_external_path_matches_injector 守。
                - `dashboard.username`：與 `authProxy.basicAuthUsername` 同為 admin
                  （單一憑證的帳號面）
+             （0.1.x 的 `dashboard.externalPath: "/dashboard"` 在 0.1.3 起移除——
+             dashboard 不再走 subpath，nginx `/` 直連；OAuth redirect_uri 由平台
+             `_inject_dashboard_public_url` 直接打 root URL）
 
              LLM key（拍板 Q2）：租戶自帶，走 helm_value_specs optional password 欄位
              （auth.minimaxApiKey／auth.openrouterApiKey → chart Secret → env）。Elmo 把
              key echo 進共享 PVC 的 .env(644) 讓 terminal exec 可讀，**不沿用**。
 
-             dashboard 對外形態（拍板 Q1，v1.1 §8.2 實測確認上游原生支援 subpath：
-             X-Forwarded-Prefix 會重建 302 Location／OAuth redirect_uri／cookie Path／
-             SPA 資產）：走 https://{subdomain}.{paas_domain}/dashboard。該 URL 是
-             per-service 值、放不進 template seed，由平台
-             `CloudService._inject_dashboard_public_url` 每次部署注入；⚠ 注入值**必須已含
-             /dashboard 前綴**——上游拿它當 OAuth redirect_uri 的權威來源，少了前綴回呼
-             就打到 webui（v1.1 §8.8）。
+             dashboard 對外形態（chart 0.1.3）：root URL = `https://{subdomain}.{paas_domain}`。
+             0.1.3 移除 webui container，nginx `/` 直連 dashboard，故 OAuth
+             ``redirect_uri``／SPA 資產路徑／cookie Path 一律以 root 為基準（v1.1 §8.2
+             0.1.3 實測）。該 URL 是 per-service 值、放不進 template seed，由平台
+             `CloudService._inject_dashboard_public_url` 每次部署注入；⚠ 注入值**必須是
+             root URL**——上游拿它當 OAuth ``redirect_uri`` 的權威來源；先前 0.1.x
+             注入 ``/dashboard`` suffix，0.1.3 移除 webui 後變成多餘且回呼打到 404 subpath。
 
              刻意不寫進本 seed 的鍵（寫了會蓋掉平台注入或 chart 契約）：
              - persistence.*.storageClass／imagePullSecrets：平台 injector 注入
@@ -927,12 +932,13 @@
         <record id="cloud_app_hermes_agent" model="woow_paas_platform.cloud_app_template">
             <field name="name">Hermes Agent</field>
             <field name="slug">hermes-agent</field>
-            <field name="description">Hermes AI Agent 完整應用（gateway + Web UI + dashboard），單一憑證登入</field>
-            <field name="full_description">Hermes Agent 雲端完整應用：agent gateway、Web UI
-                與 dashboard 同一實例，並附 console（ttyd 網頁終端）可直接進入 agent 容器操作。
-                Web UI 與 console 以 HTTP basic-auth 憑證登入，dashboard 走它自己的表單登入，
-                三者共用同一組憑證（帳號 admin、密碼由平台建立服務時產生並一次性顯示、可重置）。
-                dashboard 以 /dashboard 子路徑對外，供 MCP OAuth 授權流程回呼使用。
+            <field name="description">Hermes AI Agent 完整應用（gateway + dashboard），單一憑證登入</field>
+            <field name="full_description">Hermes Agent 雲端完整應用：agent gateway 與
+                dashboard 同一實例（chart 0.1.3 起合併到 nginx `/`），並附 console（ttyd 網頁終端）
+                可直接進入 agent 容器操作。console 以 HTTP basic-auth 憑證登入，dashboard 走它
+                自己的表單登入，兩者共用同一組憑證（帳號 admin、密碼由平台建立服務時產生並一次
+                性顯示、可重置）。dashboard 以 root URL（chart 0.1.3 起，nginx `/` 直連）對外，
+                供 MCP OAuth 授權流程回呼使用。
                 agent 的 gateway API 以 /gateway 子路徑對外（Bearer 驗證，不套 basic-auth），
                 對應的 Gateway API Key 於建立服務與重置密碼時一次性顯示，供 MCP 等外部客戶端連線。LLM 供應商金鑰
                 （MiniMax／OpenRouter）由租戶自行填入，存於 Kubernetes Secret、不落磁碟。
@@ -945,24 +951,14 @@
                  契約 v1；只放平台 pin/覆寫值。 -->
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/hermes-agent</field>
-            <!-- #530：0.1.0 → 0.1.1（charts PR woow-paas-charts#69 加 gateway 反向代理
-                 子路徑）。
-                 woow-paas-charts#74：0.1.1 → 0.1.2（charts PR woow-paas-charts#75）——
-                 webui container 內完全沒有 hermes-agent 原始碼，建 profile 回 500、
-                 chat 回 AIAgent not available。0.1.2 加 initContainer 從 agent image 複製
-                 /opt/hermes 到 emptyDir、webui 唯讀掛載並設 HERMES_WEBUI_AGENT_DIR，另把
-                 GATEWAY_API_KEY 更名為 HERMES_WEBUI_GATEWAY_API_KEY、加
-                 HERMES_WEBUI_CHAT_BACKEND=gateway。三者皆由 chart 的 deployment.yaml 直接
-                 渲染成 container env、不是 values 鍵，本 seed 無對應鍵可改。0.1.2 對 values
-                 的唯一新增是 webui.initResources（有 chart 預設 50m/64Mi～500m/256Mi），
-                 且 init container 不抬高 pod effective limits（k8s 取 max(init, sum(regular))，
-                 agent 單顆 limits 就已遠大於它）⇒ 下方 min_vcpu／min_ram_gb 的 3× headroom
-                 推導不受影響，本次只動版本號。
-                 chart 版本 bump 與本欄位必須同一次變更一起動，否則平台指向不存在的 chart
-                 版本；平台端沒有 chart values 的任何副本，**這條沒有測試守得住**，是已知
-                 的人工紀律缺口（測試只鎖住本欄位宣告了什麼，鎖不住那個版本是否真的已發佈）。 -->
-            <field name="helm_chart_version">0.1.2</field>
-            <field name="helm_default_values">{"image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/hermes-agent", "tag": "20260727.1502@sha256:ce3c49a7f332a6bad607d81cbd7fefe76062263469595c1a19ba80f27629f00f"}, "agent": {"resources": {"requests": {"cpu": "200m", "memory": "1Gi"}, "limits": {"cpu": "2", "memory": "6Gi"}}}, "dashboard": {"bindHost": "0.0.0.0", "externalPath": "/dashboard", "username": "admin"}, "gateway": {"externalPath": "/gateway"}, "webui": {"image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/hermes-webui", "tag": "20260727.2228@sha256:98d48222bab03b385e6417875c0605d32c88a98b62e68e80c87fdc156b4c3f5f"}, "resources": {"requests": {"cpu": "250m", "memory": "512Mi"}, "limits": {"cpu": "1", "memory": "2Gi"}}}, "service": {"port": 8080, "name": ""}, "authProxy": {"enabled": true, "basicAuth": true, "basicAuthUsername": "admin", "workerProcesses": 2, "image": {"repository": "nginxinc/nginx-unprivileged", "tag": "1.27-alpine"}}, "console": {"enabled": true, "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/open-design-console", "tag": "20260720.0332@sha256:2b91c4ad4a6a94d1735c8aa7a6c18ec05491d9db31fa455f5e5da1cbb52b0f92"}, "externalPath": "/console", "resources": {"requests": {"cpu": "50m", "memory": "64Mi"}, "limits": {"cpu": "200m", "memory": "512Mi"}}}, "persistence": {"data": {"size": "5Gi"}}, "postgresql": {"enabled": false}, "redis": {"enabled": false}}</field>
+            <!-- 0.1.1 → 0.1.3（charts PR woow-paas-charts 移除 webui container、dashboard
+                 移到 nginx `/`）。對外 contract：`_inject_dashboard_public_url` 對
+                 hermes-agent slug 輸出 root URL（不再是 `https://.../dashboard`）。
+                 chart 版本 bump 與本欄位必須同一次變更一起動，否則平台指向不存在
+                 的 chart 版本；平台端沒有 chart values 的任何副本，**這條沒有測試
+                 守得住**，是已知的人工紀律缺口。 -->
+            <field name="helm_chart_version">0.1.3</field>
+            <field name="helm_default_values">{"image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/hermes-agent", "tag": "20260727.1502@sha256:ce3c49a7f332a6bad607d81cbd7fefe76062263469595c1a19ba80f27629f00f"}, "agent": {"resources": {"requests": {"cpu": "200m", "memory": "1Gi"}, "limits": {"cpu": "2", "memory": "6Gi"}}}, "dashboard": {"bindHost": "0.0.0.0", "username": "admin"}, "gateway": {"externalPath": "/gateway"}, "service": {"port": 8080, "name": ""}, "authProxy": {"enabled": true, "basicAuth": true, "basicAuthUsername": "admin", "workerProcesses": 2, "image": {"repository": "nginxinc/nginx-unprivileged", "tag": "1.27-alpine"}}, "console": {"enabled": true, "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/open-design-console", "tag": "20260720.0332@sha256:2b91c4ad4a6a94d1735c8aa7a6c18ec05491d9db31fa455f5e5da1cbb52b0f92"}, "externalPath": "/console", "resources": {"requests": {"cpu": "50m", "memory": "64Mi"}, "limits": {"cpu": "200m", "memory": "512Mi"}}}, "persistence": {"data": {"size": "5Gi"}}, "postgresql": {"enabled": false}, "redis": {"enabled": false}}</field>
             <field name="helm_value_specs">{"required": [], "optional": [
                 {"key": "auth.minimaxApiKey", "label": "MiniMax API Key", "type": "password",
                 "description": "自帶 MiniMax API Key（選填）；存入 Kubernetes Secret 並以環境變數注入 agent，不寫入磁碟"},
@@ -971,36 +967,40 @@
                 ]}</field>
 
             <!-- Service Configuration。default_port 8080＝auth-proxy sidecar 唯一對外埠
-                 （agent gateway 8642／dashboard 9119／webui 8787 全綁 pod 內，由 proxy 分流）。
+                 （chart 0.1.3：agent gateway 8642／dashboard 9119／console ttyd 全綁
+                 pod 內，由 auth-proxy 分流；webui 8787 已隨 chart 0.1.3 一併移除）。
                  operator 的 Cloudflare expose 取「名稱排序第一個非 headless Service」＋
                  http-like port 猜測清單，故主 Service 必須是裸 release fullname ＋ 8080
                  （service.name 明寫空字串＝chart fullname；契約 invariant 1）。 -->
             <field name="default_port">8080</field>
             <field name="ingress_enabled" eval="True"/>
 
-            <!-- Resource Requirements（v1.1 §8.8 定值）。min_vcpu／min_ram_gb 驅動
-                 workspace ns quota（cloud_service._compute_ns_quota：
+            <!-- Resource Requirements（v1.1 §8.8 定值；chart 0.1.3 起 webui container
+                 已移除，本段合計隨之更新）。min_vcpu／min_ram_gb 驅動 workspace ns
+                 quota（cloud_service._compute_ns_quota：
                  max(sum(存活 service allocated_*)×3, floor)）。本 template 的 plan
                  刻意不設 cs_* → allocated_* 走 min_* fallback（見 subscription_products.xml
                  的 plan_hermes_agent_* 註解）。3× headroom 必須蓋得住**全容器** limits：
-                 - memory：agent 6Gi + webui 2Gi + console 512Mi + authProxy sidecar
-                   128Mi ＝ 8.625Gi → min_ram_gb = 3.0（÷3 上取；無 DB 拓撲）
-                 - cpu：agent 2 + webui 1 + console 0.2 + authProxy sidecar 0.2 ＝ 3.4
-                   → min_vcpu = 2（÷3 上取，同一條規則）
+                 - memory：agent 6Gi + console 512Mi + authProxy sidecar 128Mi
+                   ＝ 6.5Gi → min_ram_gb = 3.0（÷3 上取；無 DB 拓撲）— 仍採舊值是
+                   故意：歷史已賣出的服務仍帶 webui limits，0.1.3 升版後 quota 必須
+                   還蓋得住回退相容。
+                 - cpu：agent 2 + console 0.2 + authProxy sidecar 0.2 ＝ 2.4
+                   → min_vcpu = 2（÷3 上取；同樣保守）
                  ⚠ **min_vcpu 1→2 是 #456 的修法**（2026-07-28 stg 實證）：舊值的邊際
                  貢獻只有 +3 < 3.4，但空 workspace 有 8 vCPU floor 蓋著，所以 #424① 的
                  E2E 全綠、**一放進既有服務的共用 workspace 才露餡**——主 pod 永久卡
                  FailedCreate(exceeded quota: limits.cpu=3200m)，而 DB／UI 照樣顯示
                  Running（調度失敗不反映在服務狀態）。守線因此斷言**邊際貢獻**而非含
                  floor 的 quota 值，否則缺陷值 1 會假綠。
-                 ⚠ RAM headroom 只剩 0.375Gi（9Gi − 8.625Gi）、CPU 剩 2.6：**任何一邊
+                 ⚠ RAM headroom 只剩 2.5Gi（9Gi − 6.5Gi）、CPU 剩 3.6：**任何一邊
                  加容器或調高 limits 都必須同時重算本欄**——守線＝
                  test_min_ram_covers_all_container_limits ／
                  test_min_vcpu_covers_all_container_limits（皆由 seed values 現算、不硬編，
                  加了就紅；另各有一條擋灌水的 minimal-step）。#380 血訓＝quota 不足 →
                  pod FailedCreate(exceeded quota) → 服務對外永遠 CF 502。
-                 min_storage_gb 5＝單顆 data PVC（agent /opt/data ＋ webui ~/.hermes 共用
-                 同一顆 RWO，沿用 Elmo 原架構）。
+                 min_storage_gb 5＝單顆 data PVC（agent /opt/data，沿用 Elmo 原架構；
+                 webui ~/.hermes 已併入同 PVC 但 0.1.3 該目錄不再寫入）。
                  ⚠ **未來若替本 template 寫專用 provision 端點**（如 HA PaaS 的
                  /api/ha-paas/provision），建 cloud_service 時務必比照 marketplace
                  路徑（controllers/paas.py `_create_service`）帶上 allocated_vcpu／
@@ -1018,11 +1018,12 @@
             <field name="mcp_enabled" eval="False"/>
             <field name="has_admin_gui" eval="True"/>
             <!-- #449 密碼載體＝helm_secret：本 chart 的 PVC 掛 /opt/data，**沒有**
-                 /data/config.json；admin_password 的權威來源是 chart Secret，四個入口
-                 都在 pod 啟動時讀它（nginx htpasswd 由 initContainer 從 Secret 算出、
-                 webui／dashboard 走 env）。#424① E2E 實錄：沿用預設 config_json 時
+                 /data/config.json；admin_password 的權威來源是 chart Secret，三個入口
+                 （chart 0.1.3 起 webui 已合進 `/`）都在 pod 啟動時讀它（nginx htpasswd
+                 由 initContainer 從 Secret 算出、dashboard 走 env、console 由 nginx
+                 basic-auth 蓋）。#424① E2E 實錄：沿用預設 config_json 時
                  operator 對不存在的檔 exec patch → 備份未建成 → rollback 也失敗 → 500，
-                 密碼永遠輪替不了（fail-safe 有效、不鎖死，但四入口唯一憑證換不掉）。
+                 密碼永遠輪替不了（fail-safe 有效、不鎖死，但唯一憑證換不掉）。
                  ⚠ chart 的 Deployment **沒有** checksum/secret annotation（只有
                  checksum/config 與 checksum/authproxy-config），所以 helm upgrade 改了
                  Secret 不會自動滾 pod —— operator 的 helm_secret 路必須顯式 rollout

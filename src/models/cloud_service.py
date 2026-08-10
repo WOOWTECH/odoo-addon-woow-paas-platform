@@ -1429,14 +1429,16 @@ class CloudService(models.Model):
         這個值（平台以 Cloudflare tunnel 對外，不走 chart 的 ingress），與
         ``_inject_allowed_origins``（#380）同一 family，由唯一知道 host 的平台補上。
 
-        對外形態＝subpath（Eugene 2026-07-27 拍板 Q1；上游原生支援已實測確認——
-        ``X-Forwarded-Prefix`` 會一併重建 302 Location／OAuth ``redirect_uri``／
-        cookie Path／SPA 資產路徑）：``https://{subdomain}.{paas_domain}/dashboard``，
-        由 chart 的 auth-proxy sidecar 轉給 127.0.0.1:9119。
+        對外形態＝**root URL**（chart 0.1.3 移除 webui container，nginx ``/``
+        直連 dashboard，故 OAuth ``redirect_uri``／SPA 資產路徑／cookie Path 一律
+        以 root 為基準）：
+        ``https://{subdomain}.{paas_domain}``，
+        由 chart 的 auth-proxy 轉給 127.0.0.1:9119。
 
-        ⚠ 注入值**必須已含 ``/dashboard`` 前綴**：上游直接拿這個值當 OAuth
-        ``redirect_uri`` 的權威來源，只給根位址的話回呼會打到 webui（``/``）而不是
-        dashboard，授權流程靜默失敗。
+        ⚠ 注入值**必須是 root URL**：上游直接拿這個值當 OAuth ``redirect_uri``
+        的權威來源；先前 0.1.x（含 0.1.1）注入 ``/dashboard`` suffix，OAuth
+        回呼路徑與 SPA fetch 才能落到 dashboard，0.1.3 移除 webui 後 suffix
+        變成多餘且會把回呼打到 404 subpath。
 
         無此 value path 的 chart 一律 no-op。
 
@@ -1448,15 +1450,14 @@ class CloudService(models.Model):
         Returns:
             Modified values dict
         """
-        # slug → (value paths, 該 chart 的對外子路徑)
+        # slug → value paths（hermes-agent 0.1.3 起為 root URL，無 suffix）
         path_map = {
-            'hermes-agent': ([('config', 'dashboardPublicUrl')], '/dashboard'),
+            'hermes-agent': [('config', 'dashboardPublicUrl')],
         }
-        entry = path_map.get(template_slug)
-        if not entry or not base_url:
+        paths = path_map.get(template_slug)
+        if not paths or not base_url:
             return values
-        paths, subpath = entry
-        public_url = '%s%s' % (base_url.rstrip('/'), subpath)
+        public_url = base_url.rstrip('/')
         for path in paths:
             d = values
             for key in path[:-1]:
