@@ -330,3 +330,7 @@ from . import test_poll_mirror_release_facts_627
 # feat: #627 (i) 對帳 cron —— poll 對 running 不可達，故補一條每日低頻的
 # reconciliation（只讀→比對→回寫 release 事實，絕不碰 state）＋ last_release_sync_at
 from . import test_reconcile_release_facts_627i
+# fix: #556 workspace_access 授權重構 —— ACL unlink=0 + ir.rule create/write
+# 自我滿足 + model 無 create()/write()/unlink() 守衛，讓非成員可自助加入/
+# 植入第三方，admin 可經 0-owner 視窗自我升 owner（HttpCase，group_user-only）
+from . import test_workspace_access_authz_556
