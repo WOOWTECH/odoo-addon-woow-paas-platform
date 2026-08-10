@@ -1032,11 +1032,17 @@
             <field name="admin_password_carrier">helm_secret</field>
             <field name="post_deploy_init_type">none</field>
 
-            <!-- 每帳號限一：agent limits 6Gi 是平台最重的單一容器（全容器合計 6.625Gi
-                 ／2.4 CPU），避免同帳號開多台把 workspace quota 吃乾。#494 定價上架後
-                 仍維持 1——這條的理由是資源面而非「內部試用」，要放寬得先重算 quota
-                 模型。守線＝test_max_per_partner_one。 -->
-            <field name="max_per_partner" eval="1"/>
+            <!-- 每帳號**不限台數**：0＝不限（欄位語意見 cloud_app_template.py 的 help），
+                 `CloudService.create()` 的計數守衛對本 template 整條不進迴圈、不取
+                 advisory lock。資源面事實（與上方 min_* 同一份 0.1.3 現況）仍在：agent
+                 limits 6Gi、全容器合計 6.625Gi／2.4 CPU，是平台上最重的服務之一（單一
+                 容器僅次於 cloud_app_opendesign 的 8Gi）——但這只決定每台佔多少
+                 workspace ns quota（`_compute_ns_quota` 以 workspace 內存活 service 的
+                 allocated_* ×3 動態重算，多一台 quota 就跟著長），不再換算成每帳號的
+                 台數上限。⚠ 這一行不可省略：0 與欄位 default 同值，刪掉之後 DB 讀起來
+                 一樣是 0，只有 seed XML 本體看得出差別——守線＝
+                 test_max_per_partner_unlimited（該條同時驗 DB 值與本行的存在）。 -->
+            <field name="max_per_partner" eval="0"/>
 
             <field name="is_active" eval="True"/>
             <!-- #494 定價拍板解封（曝光層）；conceal_instances 刻意不設，見上方註解。 -->

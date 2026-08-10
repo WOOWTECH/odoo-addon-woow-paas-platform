@@ -40,8 +40,10 @@
 （MCP OAuth 回呼前提）與 ``_assemble_deploy_values`` 對 hermes-agent 的全量輸出。
 """
 import json
+import xml.etree.ElementTree as ET
 
 from odoo.tests.common import HttpCase, TransactionCase, tagged
+from odoo.tools import file_open
 
 PLATFORM_REGISTRY = 'jcr-prod.woowtech.io/'
 HERMES_AGENT_IMAGE = 'jcr-prod.woowtech.io/woow-paas-docker-local/hermes-agent'
@@ -147,9 +149,27 @@ class TestHermesAgentTemplateSeed(TransactionCase):
         self.assertEqual(
             len(base), 2, '恰兩筆 base plan（月／年）；v1 不做席數加購變體')
 
-    def test_max_per_partner_one(self):
-        """每帳號限一（agent limits 6Gi 是平台最重單容器，防同帳號吃乾 ws quota）。"""
-        self.assertEqual(self._tpl().max_per_partner, 1)
+    def test_max_per_partner_unlimited(self):
+        """每帳號不限台數：0＝不限，平台層不設本 template 的每帳號實例上限。
+
+        ⚠ 只驗 DB 值是不夠的：0 同時是 `max_per_partner` 的**欄位 default**，所以
+        「seed 顯式寫 0」與「seed 那一行整個被刪掉」讀起來一模一樣、都會綠。故本條
+        一併驗 seed XML 本體，要求該 record 顯式帶著這個欄位——兩層合起來才分得出
+        「刻意放寬」與「不小心漏寫」。
+        """
+        self.assertEqual(self._tpl().max_per_partner, 0)
+        with file_open('woow_paas_platform/data/cloud_app_templates.xml') as f:
+            rec = ET.parse(f).getroot().find(
+                ".//record[@id='cloud_app_hermes_agent']")
+        self.assertIsNotNone(rec, 'seed 內找不到 cloud_app_hermes_agent record')
+        field = rec.find("field[@name='max_per_partner']")
+        self.assertIsNotNone(
+            field,
+            'seed 必須「顯式」宣告 max_per_partner=0：刪掉那一行 DB 讀起來仍是 0'
+            '（欄位 default），上面那條 assertEqual 察覺不到')
+        self.assertEqual(
+            field.get('eval'), '0',
+            'seed 的 max_per_partner 必須是 0（不限）；改動此值請同步本條守線')
 
     def test_distinct_from_mcp_hermes(self):
         """與既有 cloud_app_mcp_hermes 是不同產品：slug／chart／image 全不同。
