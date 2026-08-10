@@ -575,3 +575,117 @@ class TestWorkspaceAccessWritePivotGuard(_WorkspaceAccess556Fixture):
             [{'workspace_id': self.ws1.id, 'user_id': self.mallory.id, 'role': ROLE_ADMIN}])
         self._assert_access_error(
             result, 'FIXTURE 前提：直接 create 進 W1 必須仍被擋（不是本測試組的重點，是陽性對照）')
+
+    # ------------------------------------------------------------------ #
+    # 獨立驗收（verify556）對 anchor guard 的追加探針：繞道 + 過度修正對照   #
+    # ------------------------------------------------------------------ #
+    def test_pivot_owner_cannot_repoint_member_user_id(self):
+        """W1 的合法 owner Alice 把 Carol 的列 user_id 改指向 Mallory——
+        她原本對這一列有完整 write 權（owner_admin_manage rule 命中），
+        唯一擋她的只能是 identity anchor guard 本身：不是「身分不足」，
+        是「這個操作（重指派既有列的 user_id）本身被禁」。與
+        `test_pivot_user_id_reassignment_denied` 互補：那條是呼叫者改
+        自己的列，這條是 owner 改別人的列。"""
+        self.authenticate(self.alice_login, self.alice_login)
+        result = self._call_kw(
+            'woow_paas_platform.workspace_access', 'write',
+            [[self.carol_access.id], {'user_id': self.mallory.id}])
+        self._assert_access_error(
+            result, 'owner 也不得把既有成員列的 user_id 改指向第三方')
+        self.carol_access.invalidate_recordset()
+        self.assertEqual(self.carol_access.user_id.id, self.carol.id,
+                         '拒絕後 user_id 不得變動')
+
+    def test_pivot_copy_bypass_denied(self):
+        """不經 `write()`，改用 `copy({'workspace_id': W1, 'role': 'admin'})`
+        把自己的列複製進受害 workspace——`copy()` 底層走 `create()`，理論上
+        早該被 B1 的 create guard 擋住；這裡驗證真的沒有繞道。"""
+        self.authenticate(self.mallory_login, self.mallory_login)
+        _ws_id, row = self._own_ws_as_mallory('Mallory WS pivot-copy')
+        result = self._call_kw(
+            'woow_paas_platform.workspace_access', 'copy',
+            [[row.id], {'workspace_id': self.ws1.id, 'role': ROLE_ADMIN}])
+        self.assertFalse(
+            self.WorkspaceAccess.sudo().search([
+                ('workspace_id', '=', self.ws1.id), ('user_id', '=', self.mallory.id)]),
+            'copy() 繞道成功：Mallory 用 copy 進了 W1（回 %r）' % result)
+
+    def test_pivot_o2m_inverse_command_bypass_denied(self):
+        """不直接寫 access 列，改從 workspace 的 one2many `access_ids` 下
+        inverse command——command `(1, id, vals)` 是「改該列」、command
+        `(4, id)` 是「連結該列」，兩者底層都會呼叫到 comodel 的 `write()`，
+        應該同樣被 anchor guard 擋。command 4 的形態是否真的對本 model 有
+        效，由 `test_pivot_o2m_command4_shape_is_effective_control` 陽性
+        對照鎖住——沒有它，「沒位移」有可能只是命令形態本身無效，不能當作
+        守住的證據。
+        """
+        self.authenticate(self.mallory_login, self.mallory_login)
+        ws_id, row = self._own_ws_as_mallory('Mallory WS pivot-o2m')
+
+        result_a = self._call_kw(
+            'woow_paas_platform.workspace', 'write',
+            [[ws_id], {'access_ids': [[1, row.id, {'workspace_id': self.ws1.id}]]}])
+        self.assertFalse(
+            self.WorkspaceAccess.sudo().search([
+                ('workspace_id', '=', self.ws1.id), ('user_id', '=', self.mallory.id)]),
+            'o2m command 1 繞道成功（回 %r）' % result_a)
+
+        result_b = self._call_kw(
+            'woow_paas_platform.workspace', 'write',
+            [[ws_id], {'access_ids': [[4, self.carol_access.id]]}])
+        self.carol_access.invalidate_recordset()
+        self.assertEqual(
+            self.carol_access.workspace_id.id, self.ws1.id,
+            'o2m command 4 繞道成功：Carol 的列被拉出 W1（回 %r）' % result_b)
+        # 只斷言「沒位移」對「命令根本沒被執行」零鑑別力——必須同時證明這次
+        # 呼叫真的被擋下（有 error），否則本條測試等於沒測。
+        self._assert_access_error(
+            result_b,
+            'command 4 沒有位移但也沒被拒 ⇒ 可能整條被靜默忽略，本測試對此路徑零鑑別力')
+
+    def test_pivot_o2m_command4_shape_is_effective_control(self):
+        """陽性對照（鎖上一條測試的鑑別力）：同樣的 `(4, id)` 命令形態，
+        改由 sudo 下，必須真的把列搬過去。若這條也沒效果，代表上一條的
+        「沒位移」只是命令形態本身無效（探針壞在取樣層），不能當成守住的
+        證據。"""
+        ws = self.Workspace.sudo().create(
+            {'name': 'Ctrl WS pivot-o2m', 'owner_id': self.bob.id})
+        ws.sudo().write({'access_ids': [(4, self.carol_access.id)]})
+        self.carol_access.invalidate_recordset()
+        self.assertEqual(
+            self.carol_access.workspace_id.id, ws.id,
+            'sudo 下 command 4 也沒搬動 ⇒ 這個命令形態在本 model 上無效，'
+            '上一條測試對該路徑沒有鑑別力')
+
+    def test_pivot_noop_anchor_values_and_role_change_still_work(self):
+        """陽性對照（防過度修正）：`workspace_id`/`user_id` 帶**原值**送出
+        （UI 整批送欄位常見）＋同時改 role，必須成功——guard 若寫成『key
+        在 vals 裡就擋』而非『值真的改變才擋』，這條會紅（合法的改角色
+        流程被打死）。"""
+        self.authenticate(self.alice_login, self.alice_login)
+        result = self._call_kw(
+            'woow_paas_platform.workspace_access', 'write',
+            [[self.carol_access.id],
+             {'workspace_id': self.ws1.id, 'user_id': self.carol.id, 'role': ROLE_GUEST}])
+        self._assert_call_kw_ok(result, 'no-op anchor 值 + 合法改 role 不應被誤擋')
+        self.carol_access.invalidate_recordset()
+        self.assertEqual(self.carol_access.role, ROLE_GUEST)
+
+    def test_pivot_endpoint_role_change_still_works(self):
+        """陽性對照：走真正的產品端點（`update_role`）確認沒被新 guard
+        誤傷。"""
+        self.authenticate(self.alice_login, self.alice_login)
+        result = self._post_api(
+            '/api/workspaces/%s/members/%s' % (self.ws1.id, self.carol_access.id),
+            {'action': 'update_role', 'role': ROLE_ADMIN})
+        self.assertTrue(
+            result.get('success'),
+            'owner 改 role 端點不應被 anchor guard 誤傷（回 %r）' % result)
+        self.carol_access.invalidate_recordset()
+        self.assertEqual(self.carol_access.role, ROLE_ADMIN)
+
+    def test_pivot_sudo_path_still_unrestricted(self):
+        """陽性對照：平台級 sudo 路徑（superuser）不受 anchor guard
+        影響——資料修復／未來若喚醒 `transfer_ownership` 仍可換位。"""
+        self.carol_access.sudo().write({'user_id': self.bob.id})
+        self.assertEqual(self.carol_access.sudo().user_id.id, self.bob.id)
