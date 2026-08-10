@@ -4,7 +4,7 @@
 >
 > 原 description："#424① Hermes Agent CS 化收官：chart 0.1.0＋seed PR#446（.80，hidden 待定價）；E2E S1-S8 PASS；衍生 #448/#449；apiServerCidrs 四筆與 post-DNAT 教訓"
 
-2026-07-28 #424① 收官。**chart `hermes-agent 0.1.0`**（woow-paas-charts PR #58，Bellows）＋ **seed PR #446**（develop `448e5714`、`18.0.1.0.80`，Dovetail）。`cloud_app_hermes_agent` 以 **is_hidden=True 不掛 plan** 上架（不可購買；定價拍板後比照 #431 解封，勿與 `cloud_app_mcp_hermes`／slug `mcp-hermes` 混淆——不同產品）。
+2026-07-28 #424① 收官。**chart `hermes-agent 0.1.0`**（woow-paas-charts PR #58，Bellows）＋ **seed PR #446**（develop `448e5714`、`18.0.1.0.80`，Dovetail）。`cloud_app_hermes_agent`（2026-07-28 當時）以 **is_hidden=True 不掛 plan** 上架（不可購買；定價拍板後比照 #431 解封，勿與 `cloud_app_mcp_hermes`／slug `mcp-hermes` 混淆——不同產品；**2026-07-31 起已依 #494 正式解封，見下方「stg 臨時解封」節末的更新**）。
 
 ## 架構落點
 
@@ -32,9 +32,11 @@ S1–S8 PASS（quota used 8832Mi=8.625Gi 實地印證測試算式；深健康 `/
 
 ## stg 臨時解封（2026-07-28，DB 直改非 code）
 
-Eugene 要親測，stg DB（woow-k3s `dev-sandbox-stg` ns、pod stg-odoo-dev-sandbox-odoo、db `woow_stg`——**stg.woowtech.io 的 Odoo 在 dev-sandbox-stg 不在 paas-stg-system**）直改：template 46 `is_hidden=False`＋新建 0 元測試 plan **id 268**（copy 自 plan_mcp_hermes_monthly；1c/3G/5G、月繳、sh_trial=False、storefront_hidden=False）掛上 M2M。已獨立唯讀驗證。**下次 stg 部署 `-u` 會把 is_hidden 翻回 True**（templates seed noupdate=0）；plan 268＋link 不受影響（hermes-agent 在 links seed 無 (6,0) 記錄）→ 重翻一行即可。正式解封仍待定價，比照 #431（seed＋migration 雙軌）。
+Eugene 要親測，stg DB（woow-k3s `dev-sandbox-stg` ns、pod stg-odoo-dev-sandbox-odoo、db `woow_stg`——**stg.woowtech.io 的 Odoo 在 dev-sandbox-stg 不在 paas-stg-system**）直改：template 46 `is_hidden=False`＋新建 0 元測試 plan **id 268**（copy 自 plan_mcp_hermes_monthly；1c/3G/5G、月繳、sh_trial=False、storefront_hidden=False）掛上 M2M。已獨立唯讀驗證。（2026-07-28 當時預測，07-29 已驗證成立一次：）**下次 stg 部署 `-u` 會把 is_hidden 翻回 True**（templates seed noupdate=0）；plan 268＋link 不受影響（hermes-agent 在 links seed 無 (6,0) 記錄）→ 重翻一行即可。正式解封仍待定價，比照 #431（seed＋migration 雙軌）。
 
-07-29 #449 F-449-1 升版 `-u` 如預期翻回 → **已重解封**（BEFORE True→AFTER hits=1；plan 268/link 實測未受 -u 影響，驗證了「重翻一行即可」）。svc60 密碼經 reset E2E 輪替，DB cloud_service_secret 與 ns Secret 一致。之後每次 stg 升版重複此一行 write 即可。
+07-29 #449 F-449-1 升版 `-u` 如預期翻回 → **已重解封**（BEFORE True→AFTER hits=1；plan 268/link 實測未受 -u 影響，驗證了「重翻一行即可」）。svc60 密碼經 reset E2E 輪替，DB cloud_service_secret 與 ns Secret 一致。（**此後這條「每次 stg 升版重複翻一行」的敘述已被下方 2026-07-31 起的正式解封取代**——seed 永久改為 False 後 `-u` 已無 True 值可翻，無需再手動重翻。）
+
+**2026-07-31 起已正式解封（#494，commit `fa10bccd`）**：`cloud_app_hermes_agent` 的 `is_hidden` 在 seed 永久改為 `eval="False"`（非本節 07-28 的臨時 DB 直改），定價 4,500/36,000＋7 天 trial 依 #494 拍板上架。**上一段「下次 `-u` 會翻回 True」自此不再成立**——seed 本身已無 `True` 值可翻，`-u` 只是 idempotent 套用既有的 `False`。2026-08-10 查證（#653）：seed（`src/data/cloud_app_templates.xml` 的 `cloud_app_hermes_agent`）`is_hidden` 仍為 `False`；stg 升版 `.119`→`.121` 跑完 `-u` 後，DB `is_hidden` 查詢結果為 `f`，與 seed 一致、未被翻回。
 
 UI E2E（07-28/29 全鏈 PASS）：marketplace 卡片→configure（plan 自動選取）→Launch 建立→pods 3/3+1/1→外部路由（無憑證 401、webui/dashboard 登入頁 200、console 200、`/api/health` ok）→列表/詳情頁（ONLINE、chart 0.1.0）→刪除清理無殘留。存活服務＝svc 60（`svc-bcb0aa5b`，https://paas-cs-5a105e8b-532079c5.woowtech.io，密碼在 ns secret `svc-bcb0aa5b-hermes-agent-secrets` 的 admin_password）。**衍生 #456**：plan cs_vcpu=1 的 quota 邊際 +3 < 主 pod limits 3.4 CPU → 共用 workspace 第 1 筆永久卡 0/1 而 DB/UI 照樣 running（空 workspace 靠 8 vCPU floor 蓋住、S1-S8 測不到）；正式 plan cs_vcpu 須 ≥2 或 min_vcpu 改 ÷3 上取公式。
 
