@@ -334,3 +334,6 @@ from . import test_reconcile_release_facts_627i
 # 自我滿足 + model 無 create()/write()/unlink() 守衛，讓非成員可自助加入/
 # 植入第三方，admin 可經 0-owner 視窗自我升 owner（HttpCase，group_user-only）
 from . import test_workspace_access_authz_556
+# feat: #661 HA 完整版（ha-full）上架 seed —— chart↔image 產品線雙向綁定守線
+# ＋ quota lockstep 現算 ＋ base plan/product/M2M（3000/24000）
+from . import test_ha_full_seed_661
