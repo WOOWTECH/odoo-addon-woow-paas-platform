@@ -289,14 +289,19 @@
             <field name="tags">["mcp", "hermes", "mcp-server", "ai"]</field>
 
             <!-- Helm Configuration (OCI; chart from woow-paas-docker-local).
-                 helm_chart_version 0.1.1 + image tag pinned to git-sha post-merge
-                 (PR #5 → CI run 717; was latest at pilot; see design spec 契約補遺/階段3).
+                 image 雙釘 git-sha@sha256（hermes-mcp-admin；woow-mcp-server #18 合進 main
+                 的 merge commit 614ae663，帶 MCP 連線守衛／`PUT /api/config/connection`
+                 partial patch／連線 URL 不再預填錯誤 default 三項修復，#679）。該 digest 是
+                 單一 manifest.v2（linux/amd64），非 multi-arch index，故直接釘它即可。
+                 ⛔ 換 tag 一律逐筆改：同一個 monorepo commit 會產出多個 app image
+                 （如 cloud_app_mcp_n8n 的 n8n-mcp-admin），git-sha 相同但 digest 不同——
+                 全域替換 git-sha 會造出 tag 新／digest 舊、helm 靜默沿用舊 image 的組合。
                  OCI repo: B 解（pilot 重用 image repo woow-paas-docker-local；
                  GA 遷專用 woow-paas-charts-local，見 spec 階段3 follow-up）. -->
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/mcp-server</field>
             <field name="helm_chart_version">0.1.5</field>
-            <field name="helm_default_values">{"app": "hermes", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/hermes-mcp-admin", "tag": "ed098b6070cde0c74ed0bccb47a33d6fdf40d9c6@sha256:0f1a34cd33864529c56c5aefdd0e47de6751787069bf85fde1ece01b1ae18d95"}, "service": {"port": 8080}, "envPrefix": "HERMES_", "persistence": {"enabled": true, "size": "5Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "128Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}}</field>
+            <field name="helm_default_values">{"app": "hermes", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/hermes-mcp-admin", "tag": "614ae663fadd91c76972f60017a76d2627bea87e@sha256:49bde49c367ff237fd92ab31907dff7c75e8db558af4d886233ef7e1da599883"}, "service": {"port": 8080}, "envPrefix": "HERMES_", "persistence": {"enabled": true, "size": "5Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "128Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}}</field>
             <field name="helm_value_specs">{"required": [], "optional": []}</field>
 
             <!-- Service Configuration -->
