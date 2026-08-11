@@ -148,7 +148,11 @@ class WorkspaceAccess(models.Model):
             # with_context(default_workspace_id=<受害 workspace>,
             # default_role='owner') 且 vals 不放 workspace_id 就整道繞過
             # （#664，同型於 PR #666 留言 6583 §1 的 H1）。
-            # single-source-of-truth 版本不會因為未來多一個欄位又漏一次
+            # single-source-of-truth 版本保證的是「同一個欄位」的解析方式
+            # 不會漂（role／workspace_id 永遠照 Odoo 自己的順序解析，不會有
+            # 人手動重演漏掉其中一步）——它不會自動涵蓋未來新增的授權相關
+            # 欄位；日後若新增一個會影響授權判定的欄位，仍要手動把它加進
+            # `_check_assignable_role` 的參數與呼叫端。
             # （`ProjectAccess.create`，`project_access.py`，是這個修法的
             # 樣板，已通過兩輪獨立對抗式覆核，PR #666 留言 6583/6595）。
             resolved = self._add_missing_default_values(vals)
@@ -252,18 +256,32 @@ class WorkspaceAccess(models.Model):
         family (no legitimate change path at all); the su/group_system
         exemption is therefore correct here, not a hole.
 
-        ``target_role`` / ``workspace_id`` are resolved by the caller via
-        ``_add_missing_default_values`` (Odoo's own default-resolution
-        function — the same one ``_prepare_create_values`` uses internally)
-        before being passed in, so both already reflect the value Odoo will
-        actually persist, not the raw ``vals`` dict. This function's own
-        early-return below is therefore only a defensive guard against a
-        genuinely absent value (no vals key AND no context default AND no
-        field-level default) — that case still reaches the DB's
-        ``required=True`` constraint and fails closed; it is NOT the place
-        `workspace_id` used to be resolved from context (#664, mirrors
-        `ProjectAccess._check_assignable_role`'s `project_id` fix in
-        `project_access.py`, PR #666 comment 6583 "H1" / 6595).
+        This function has two callers with different resolution needs —
+        the "already reflects the value Odoo will persist" property below
+        is per-caller, not a blanket guarantee of this function itself:
+
+        - ``create()`` passes ``target_role`` / ``workspace_id`` already
+          resolved via ``_add_missing_default_values`` (Odoo's own
+          default-resolution function — the same one
+          ``_prepare_create_values`` uses internally), because ``create``
+          is the only direction where an RPC caller can inject a value
+          through context ``default_<field>`` (#664, mirrors
+          `ProjectAccess._check_assignable_role`'s `project_id` fix in
+          `project_access.py`, PR #666 comment 6583 "H1" / 6595).
+        - ``write()`` passes the raw ``vals['role']`` / ``rec.workspace_id.id``
+          straight through, unresolved — this is correct, not a gap:
+          Odoo's own `write()` never applies `default_get`/context-default
+          resolution (that machinery is wired into `_prepare_create_values`,
+          which only `create()` goes through — verified against
+          `odoo/models.py`, no `default_get`/`_add_missing_default_values`
+          call anywhere in `BaseModel.write()`'s body), so there is no
+          context-injected value for a write-direction caller to resolve.
+
+        This function's own early-return below is therefore only a
+        defensive guard against a genuinely absent value — on the create
+        path, no vals key AND no context default AND no field-level
+        default; that case still reaches the DB's ``required=True``
+        constraint and fails closed.
         """
         if not workspace_id:
             return
