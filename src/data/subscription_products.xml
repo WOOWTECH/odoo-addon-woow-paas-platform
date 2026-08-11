@@ -1149,6 +1149,59 @@
             <field name="service_type">cloud_service</field>
         </record>
 
+        <!-- Home Assistant 完整版（ha-full，#661）base plan：單級距 月 3000／年 24000
+             （年×8，全平台一致）。定價拍板：對標同為「容器型單一應用」的 MCP admin 三型
+             與 Odoo Manage MCP（3000/24000），低於走 VM、含 Supervisor／Add-on／備份的
+             Home Assistant OS（4500/36000）——兩者的價差正好對應 ha-full 商品文案裡
+             明列的「本版沒有的三項」。
+
+             **v1 不做加購變體**（單機自用、席數不適用；規格升級留後續），故 generator 的
+             subscription_products_variants.xml 沒有本 family、
+             docs/plans/2026-Q3/2026-07-19-cloud-services-220-manifest.md 亦無需增列
+             （同 HAOS／Hermes Agent 慣例）。
+
+             ⚠ **刻意不設 cs_vcpu／cs_ram_gb／cs_storage_gb**（沿用 opendesign／haos／
+             hermes-agent 形制）。這三欄非空會讓 `_allocated_vals_from` 改吃 plan 值、
+             蓋掉 template 的 min_*（1／1.0／10），而那三個是經 chart values.yaml
+             「PLATFORM QUOTA LOCKSTEP」推導的 ns quota 用量；蓋掉會讓 pod 撞
+             `exceeded quota`，而唯一可見症狀是「服務永遠 CF 502」。守線＝
+             src/tests/test_ha_full_seed_661.py 的 test_plans_do_not_override_cs_spec。 -->
+        <record id="plan_ha_full_monthly" model="sh.subscription.plan">
+            <field name="name">Home Assistant 完整版 雲端訂閱服務 月繳</field>
+            <field name="sh_duration">1</field>
+            <field name="sh_unit">month</field>
+            <field name="sh_plan_price">3000</field>
+            <field name="sh_override_product" eval="True"/>
+            <field name="sh_no_of_billing_cycle">-1</field>
+            <field name="sh_never_expire" eval="True"/>
+            <field name="sh_trial" eval="True"/>
+            <field name="sh_trial_duration">7</field>
+            <field name="sh_trial_unit">day</field>
+            <field name="sh_start_immediately" eval="False"/>
+            <field name="sh_is_close_by_customer" eval="True"/>
+            <field name="sh_reminder"
+                   eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
+            <field name="service_type">cloud_service</field>
+        </record>
+
+        <record id="plan_ha_full_yearly" model="sh.subscription.plan">
+            <field name="name">Home Assistant 完整版 雲端訂閱服務 年繳</field>
+            <field name="sh_duration">1</field>
+            <field name="sh_unit">year</field>
+            <field name="sh_plan_price">24000</field>
+            <field name="sh_override_product" eval="True"/>
+            <field name="sh_no_of_billing_cycle">-1</field>
+            <field name="sh_never_expire" eval="True"/>
+            <field name="sh_trial" eval="True"/>
+            <field name="sh_trial_duration">7</field>
+            <field name="sh_trial_unit">day</field>
+            <field name="sh_start_immediately" eval="False"/>
+            <field name="sh_is_close_by_customer" eval="True"/>
+            <field name="sh_reminder"
+                   eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
+            <field name="service_type">cloud_service</field>
+        </record>
+
         <!-- Hermes Agent 完整應用（#424 ① 上架 → #494 定價解封）base plan：
              單級距 月 4500／年 36000（年×8）＋7 天 trial。定價拍板 Eugene
              2026-07-31，對標同為「完整應用」的 Open Design 雲端訂閱服務（同價）。
@@ -1800,6 +1853,29 @@
             <field name="purchase_ok" eval="False"/>
             <field name="sh_product_subscribe" eval="True"/>
             <field name="sh_subscription_plan_id" ref="plan_haos_yearly"/>
+            <field name="taxes_id" eval="[(6, 0, [])]"/>
+        </record>
+
+        <!-- Home Assistant 完整版（ha-full，#661）base product：taxes_id 明寫空、pts 免稅（#366）。 -->
+        <record id="product_ha_full_monthly" model="product.product">
+            <field name="name">Home Assistant 完整版 雲端訂閱服務 月繳 Subscription</field>
+            <field name="type">service</field>
+            <field name="list_price">3000</field>
+            <field name="sale_ok" eval="True"/>
+            <field name="purchase_ok" eval="False"/>
+            <field name="sh_product_subscribe" eval="True"/>
+            <field name="sh_subscription_plan_id" ref="plan_ha_full_monthly"/>
+            <field name="taxes_id" eval="[(6, 0, [])]"/>
+        </record>
+
+        <record id="product_ha_full_yearly" model="product.product">
+            <field name="name">Home Assistant 完整版 雲端訂閱服務 年繳 Subscription</field>
+            <field name="type">service</field>
+            <field name="list_price">24000</field>
+            <field name="sale_ok" eval="True"/>
+            <field name="purchase_ok" eval="False"/>
+            <field name="sh_product_subscribe" eval="True"/>
+            <field name="sh_subscription_plan_id" ref="plan_ha_full_yearly"/>
             <field name="taxes_id" eval="[(6, 0, [])]"/>
         </record>
 

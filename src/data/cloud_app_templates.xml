@@ -1290,6 +1290,185 @@
             <field name="workload_type">vm</field>
         </record>
 
+        <!-- Home Assistant 完整版（ha-full，#661）：Home Assistant **Container**
+             安裝方式（官方兩種安裝方式之一）的完整整合集版本。走 #380 金樣板上架 SOP；
+             chart＝woow-paas-charts 的 charts/home-assistant-full 0.1.1（本 seed 的鍵名
+             已對 registry 上的 0.1.1 逐鍵核對——`helm show chart` 實拉成功，chart digest
+             sha256:557567721d303c8ffba2535d9dbc0ef7d23a2cb2a80096d89150a6a52f600aed；
+             非轉抄交接 note）。
+
+             ⚠ **三條並行產品線，不是升級關係**（chart Chart.yaml「THREE-WAY PRODUCT
+             SPLIT」）：
+               - 本筆 ha-full：容器，image woowtech-ha-full，整合集完整（911 個
+                 config-flow handler）、28 個 custom component 全部 dormant、無
+                 woow_provision。
+               - cloud_app_ha_paas（slug ha-paas）：容器，image woowtech-ha（整合精簡至
+                 ~125）、9 個 component、woow_provision 首開自動啟用。0 元自動開通、
+                 is_hidden=True、conceal_instances=True、max_per_partner=1。
+               - cloud_app_haos（slug haos）：KubeVirt VM 跑真正的 HAOS 作業系統
+                 （Supervisor／Add-on／HAOS 更新／備份）。
+             xmlid／slug／chart／image 刻意全部區隔，勿 reuse、勿互抄 helm values。
+
+             ⚠ **不要把既有 ha-paas 租戶「升級」到本 template**（chart Chart.yaml 明令）。
+             既有租戶 PVC 上是 v1 的 seed 形狀（.storage 有參照 woow_provision 的 config
+             entry、configuration.yaml 被 append 過 http: 區塊），而 seed 用 `cp -rn`
+             永不覆寫 → 舊檔原封不動 → chart 會走進「租戶自有 http 區塊」分支只印
+             WARNING。換 chart ＋ 換 image **不是升級，是資料形狀遷移**，要做須另寫 runbook。
+
+             ⚠ **刻意不設 max_per_partner**（與 ha-paas 的 1 相反，這是刻意的）：本線與
+             精簡版無關聯、可並存，租戶想開幾台都可以。也不進
+             `models/cloud_app_template.py` 的 `_DEFAULT_GLOBAL_INSTANCE_CAPS`
+             （非限量商品）。
+
+             ⚠ 原子變更鐵律（chart Chart.yaml「OPERATOR COUPLING」）：
+             helm_chart_version 與 helm_default_values.image.* **必須同一次變更一起動**。
+             chart templates 刻意移除 `default .Chart.AppVersion` fallback（appVersion
+             2026.7.2 追的是 HA core，woowtech registry 永遠不會有該 tag），image.tag
+             留空會 render 失敗而非靜默產生拉不到的 image。守線測試＝
+             src/tests/test_ha_full_seed_661.py（chart name 含 `-full` ⟺ image repo 含
+             `-full`，雙向）。
+
+             ⚠ **chart 必須 0.1.1，不可回退 0.1.0**：0.1.0 的
+             `seed.requiredComponents` 預設值是 `woow_panel_frontend`——那個目錄是**前端
+             建置專案**（package.json／rollup.config.js／src/），沒有 manifest.json 也沒有
+             `__init__.py`，不是 HA integration。sentinel 3 檢查的是 */manifest.json，
+             所以該錨點永遠過不了，首次真叢集安裝每個租戶都卡 Init:CrashLoopBackOff
+             重啟 10 次。0.1.1 已改為 woow_cover_entity（第一方、v2-only、且**已確認帶
+             manifest.json**——第三個條件正是 0.1.0 挑錨點時漏掉的）。
+
+             ✅ image.tag 已釘首建真值（paas-odoo-ci run #1864、2026-08-07 01:04 UTC；
+             digest 經 skopeo 從 registry 反讀 manifest bytes 自算 sha256 硬驗，非
+             best-effort）。**本線刻意不推 `:latest`**，tag 是唯一可變座標，故一律雙釘
+             tag@sha256。 -->
+        <record id="cloud_app_ha_full" model="woow_paas_platform.cloud_app_template">
+            <field name="name">Home Assistant 完整版</field>
+            <field name="slug">ha-full</field>
+            <field name="description">容器版 Home Assistant，整合集完整（911 個設定入口）、28 個內建整合任你挑，1 vCPU／1 GB RAM／10 GB 磁碟</field>
+            <field name="full_description">Home Assistant 完整版雲端服務：採 Home Assistant 官方
+                兩種安裝方式中的 **Container** 方式，跑的是完整的 Home Assistant Core，
+                **整合集完全不做精簡**——911 個具設定入口的官方整合全部保留，可直接在
+                「設定 → 裝置與服務 → 新增整合」搜尋加入。另內建 28 個 woow 精選整合，
+                其中 26 個可直接從上述畫面加入。
+                首次開通後你拿到的是一套**乾淨的 Home Assistant**：所有內建整合都預先放好
+                但一律不自動啟用，由你自己挑要用哪些、什麼時候用——不會有任何你沒同意過的
+                裝置或自動化被預先建立。開通後於瀏覽器完成初始設定（建立你自己的管理者帳號）
+                即可使用；平台不持有你的 Home Assistant 帳密。
+                **本版沒有下列三項功能，購買前請務必確認**（這是 Home Assistant 官方對
+                Container 安裝方式的既有限制，非平台刪減）：**① 沒有 Add-on 商店**
+                （官方新稱「Apps」）；**② 沒有內建備份**；**③ 沒有一鍵更新**。
+                因此倚賴 Add-on 的整合（如 Thread、Z-Wave）在本版沒有現成支援。
+                若你需要 Add-on 商店、備份快照與系統一鍵更新，請改選「Home Assistant OS」
+                方案——那是跑完整 HAOS 作業系統的專屬虛擬機。
+                對外僅曝露 Home Assistant 網頁介面（8123 埠）。欠費停權時服務會停止
+                （資料磁碟保留），恢復繳費後啟動、資料原樣還在。
+                刪除服務即為全新開通——重新建立將使用全新的磁碟，不會沿用先前的資料；
+                原服務的資料磁碟依平台保留政策保留 7 天後回收，逾期無法復原。</field>
+            <field name="category">container</field>
+            <!-- 與 cloud_app_haos／cloud_app_ha_paas 同為 container 分類，讓 Home Assistant
+                 系列產品在前台同一格；租戶靠上面 full_description 的「沒有這三項」與
+                 HAOS 文案的「三項原生可用」一眼分辨。 -->
+            <field name="tags">["home-assistant", "smart-home", "container", "ha-full"]</field>
+
+            <field name="documentation_url">https://www.home-assistant.io/installation/</field>
+
+            <!-- Helm Configuration（OCI；chart 由 woow-paas-charts 發佈）。 -->
+            <field name="helm_repo_url"></field>
+            <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/home-assistant-full</field>
+            <field name="helm_chart_version">0.1.1</field>
+            <!-- 只放「平台 pin／覆寫」與「設錯就靜默失去性質」的鍵。逐鍵理由：
+
+                 - image.repository/tag：平台 pin 慣例（雙釘 tag@sha256）。見上方原子變更鐵律。
+                 - persistence.mountPath /config：HA config 目錄固定值，chart 明令不可改。
+                 - persistence.size 10Gi：與 min_storage_gb 齊（quota lockstep，見下）。
+                   ⚠ PVC 只能長大不能縮——縮小會讓整個 `helm upgrade` 被 API server 拒絕。
+                 - service.port/targetPort 8123：HA 前端埠，＝default_port。
+                 - ingress.*：對外走平台 subdomain + Cloudflare tunnel，故明寫關閉
+                   （沿用 ha-paas 形制；本 chart 有 ingress 區塊，與 haos 不同）。
+                 - haProxy 四鍵：見下方獨立說明。
+                 - resources：與 min_* 對齊（quota lockstep）。
+
+                 🔴 **haProxy 四個鍵全部顯式寫，不吃 chart 預設**。Cloudflare tunnel
+                 一定帶 `X-Forwarded-For`，而 aiohttp 在 `use_x_forwarded_for` 未開時對
+                 這種請求**一律回 400**。症狀極具欺騙性——pod `Running`、probe 全綠，但
+                 外部 100% 請求 400。四鍵現值與 chart 0.1.1 預設相同，明寫是防 chart 端
+                 預設漂移把反代閘關掉（Helm 對未知鍵靜默忽略，改名不會報錯、只會安靜地
+                 退回預設）。image 端已用真 busybox awk + 真 image 做過 A/B 對照實測：
+                 trusted_proxies 不含來源網段 → 帶 XFF 的請求 **400**；含 → **302 →
+                 /onboarding.html**（先重現 400 才證明得了機制生效）。
+                 trustedProxies＝woow-k3s 實際 Pod CIDR（4 node podCIDR 實查皆
+                 10.42.X.0/24 → cluster 10.42.0.0/16）。
+                 ⚠ 與 ha-paas 不同：本 chart 的 http 設定走 chart 管理的 `!include`
+                 fragment 且 fragmentManaged 預設每次啟動覆寫，所以 trustedProxies 設錯
+                 **可以用 helm upgrade 救回來**（v1 的 append-if-absent 是首次 provision
+                 限定，設錯一次就永久 400）。
+
+                 刻意**不**寫進本 seed 的鍵：
+                 - 🔴 **seed.requiredComponents**：chart 0.1.1 的預設值已經是正確的
+                   `["woow_cover_entity"]`（已對 registry 上的 0.1.1 `helm show values`
+                   核對，非轉抄）。覆寫它只會多一份會漂的複本，而這個鍵一旦寫錯是
+                   **fail-closed**（sentinel 3 把 pod 擋在 Init，看得見），不屬於上面
+                   「設錯就靜默失去性質」那一類，沒有明寫的理由。
+                   ⚠ 交接 note「ha-handoff」第 86 行的 helm_default_values 範本寫的是
+                   `{"requiredComponents":["woow_panel_frontend"]}`——**那正是 0.1.0 的
+                   錯錨點**，照抄等於把已修好的 bug 用 values 覆寫回去。該 note 第 128 行
+                   已自行標記此處待修。
+                 - imagePullSecrets：chart 預設已是 paas-registry（image 在私有 JCR），
+                   operator `_ensure_image_pull_secrets` 另有一層。
+                 - nodeSelector：chart 預設已釘 kubernetes.io/arch=amd64（image 僅
+                   amd64，排到 arm64 會 exec format error CrashLoop）。且 helm deep-merge
+                   下 `{}` 蓋不掉，要清得寫 null——所以連鍵都不該出現。
+                 - persistence.storageClass：平台 `_inject_storage_class` 每次部署注入。
+                 - networkPolicy.allowAllEgress：chart 預設 true 且**必須維持**（HACS
+                   要從 github.com 下載；DNS-only egress 會讓它變成裝不了東西的整合，
+                   且沒有清楚錯誤）。平台沒有理由覆寫。 -->
+            <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/woowtech-ha-full","tag":"20260807.0054@sha256:90ffa1089be1f60585f6e26ef318d93a79a940075da9e3ec0ae513e54b3d0a6a"},"persistence":{"mountPath":"/config","size":"10Gi"},"service":{"port":8123,"targetPort":8123},"ingress":{"enabled":false,"host":"","className":""},"haProxy":{"seedConfiguration":true,"useXForwardedFor":true,"trustedProxies":["10.42.0.0/16"],"fragmentManaged":true},"resources":{"requests":{"cpu":"500m","memory":"1Gi"},"limits":{"cpu":"2","memory":"2Gi"}}}</field>
+            <!-- 租戶無需（也不該）填任何部署參數：HA 的所有設定都在開通後於它自己的
+                 網頁介面完成。空 specs ＝ 前台不渲染任何自訂欄位。 -->
+            <field name="helm_value_specs">{"required": [], "optional": []}</field>
+
+            <!-- Service Configuration。8123＝HA 前端埠；對外＝平台 subdomain +
+                 Cloudflare tunnel。 -->
+            <field name="default_port">8123</field>
+            <field name="ingress_enabled" eval="True"/>
+
+            <!-- Resource Requirements —— quota lockstep（chart values.yaml「PLATFORM
+                 QUOTA LOCKSTEP」）。workspace ns quota ＝ 存活 service 的 allocated_*
+                 加總 × 3（`cloud_service._compute_ns_quota`），本 template 的 plan cs_*
+                 皆為 0 → allocated_* 走 fallback 取這三個 min_*（`_allocated_vals_from`）：
+                   Σlimits.cpu    = 2    → min_vcpu       = 1  貢獻 3 vCPU
+                   Σlimits.memory = 2Gi  → min_ram_gb     = 1.0 貢獻 3Gi
+                   PVC            = 10Gi → min_storage_gb = 10  貢獻 30Gi
+                 🔴 **min_ram_gb 不可低於 1.0**：填 0.5 只貢獻 1Gi，同 workspace 併存
+                 其他服務時 pod 會 `exceeded quota`，而唯一可見症狀是「服務永遠 CF 502」。
+                 ⚠ 日後把 limits.memory 調到 3Gi 以上，min_ram_gb 必須同一次調高。
+                 守線＝test_ha_full_seed_661.TestHaFullQuotaLockstep（由 seed values 現算、
+                 不硬編：改 resources／persistence.size 而不同步這裡就會紅）。 -->
+            <field name="min_vcpu">1</field>
+            <field name="min_ram_gb">1.0</field>
+            <field name="min_storage_gb">10</field>
+
+            <!-- MCP 能力不在本 template（HA 的 MCP 生態由 smart_home／mcp-* 系列承擔）。 -->
+            <field name="mcp_enabled" eval="False"/>
+            <!-- has_admin_gui=False：HA 的管理者帳號由**租戶自己**在首次開機的 onboarding
+                 畫面建立，平台不生成、不持有、也無從重置（同 cloud_app_haos）。開了這個
+                 旗標會讓平台憑空生一組 admin_password 塞進 config.sensitive（chart 沒有
+                 對應鍵＝白生），並在前台長出一顆按了必失敗的「重置密碼」按鈕（#460 能力
+                 gate 直接鏡射本欄位）。admin_password_carrier 因此維持預設、不具意義。 -->
+            <field name="has_admin_gui" eval="False"/>
+            <field name="post_deploy_init_type">none</field>
+
+            <!-- max_per_partner 刻意不設（＝不限）。見上方註解。 -->
+
+            <field name="is_active" eval="True"/>
+            <!-- is_hidden 維持預設 False（上架前台販售）。刻意不寫 `<field name="is_hidden">`：
+                 `-u` 對既有 record 只 write XML 列出的欄位，沒列出的欄位手改 DB 之後會存活
+                 ——那是營運的逃生門（沿用 cloud_app_haos 的立場）。
+                 售罄／停售請走 #501 的供給閘門（ir.config_parameter，營運在 Odoo 設定畫面
+                 調整、不必發版），不要翻 is_hidden——那是**下架**不是售罄。誤翻
+                 conceal_instances 更糟：已付費租戶手上 state=running 的服務會整條被鎖住。
+                 完整分工見 docs/decisions/patterns/hidden-template-presentation-chain.md。 -->
+        </record>
+
         <!-- Healer: DBs first installed under the historical <data noupdate="1"> block
              carry a sticky ir.model.data.noupdate flag on these seeds, so the corrected
              helm_value_specs above is silently skipped on -u. <function> runs on every
