@@ -1913,8 +1913,10 @@ def check_workspace_access_rule_directions(root):
     「ACL 現在擋著」這件事沒有任何守線盯著（編輯 ACL csv 接不到本 gate）。
     ⚠ 因此違規訊息**不得寫死 ACL 的現值**：#659 驗收 V2 實測，原本逐字寫「ACL 給
     base.group_user 的是 1,1,1,1」的訊息印在 #556 修復前的樹上時是假話（那時是
-    `1,1,1,0`）。訊息現在由 `_workspace_access_acl_note()` 即時讀出實值，讀不到就整句
-    省略（訊息用途，不 fail-loud）。
+    `1,1,1,0`）。訊息現在由 `_model_acl_note(root, model_ref)` 即時讀出實值，讀不到就
+    整句省略（訊息用途，不 fail-loud）。（#658 把它從 `_workspace_access_acl_note()`
+    改名並加上 `model_ref` 參數，好讓第 24 條 gate 共用同一支；這行 docstring 當時漏改，
+    指著一個已經不存在的函式名。）
 
     🔴 判準刻意**不是**「這個 model 有沒有任一條 ir.rule」：`_get_rules` 的 SQL 只收
     `r.global OR r.id IN (使用者所屬 group 的 rule)`，所以一條只掛 `base.group_system`
