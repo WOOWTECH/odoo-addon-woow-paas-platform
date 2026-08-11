@@ -104,7 +104,8 @@ Refactor 前的耦合：`mcp_server` 有 `cloud_service_id` M2O 指向 `woow_paa
 
 **為什麼 rule split 對**：
 - ACL layer 直接 enforce — row-level 區分用 record rule 表達是 Odoo idiom
-- 既有 codebase pattern：`workspace_rule_member_access`（read-only）+ `workspace_rule_create`（create-only）已是 split idiom（`ir_rules.xml` line 5-26）
+- 既有 codebase pattern：`workspace_rule_member_read`（read-only）+ `workspace_rule_anyone_create`（create-only）已是 split idiom（見 `src/security/ir_rules.xml`）
+  - ⚠ #658 更正：這兩個名字原本是 `workspace_rule_member_access` / `workspace_rule_create`（已 migration 退役改名），且前者當時**不是 read-only**（`perm_write=True` 且 domain 無 role 條件，＝ #658 的洞本身）。行號指標一併移除（會漂）。
 - 對等 mcp_tool sub-model 同步拆（B1 對等性）
 - sudo() context 不被 rule 卡，`_model_auto_create_mcp_server` + demo data + admin manual create 路徑都保留
 

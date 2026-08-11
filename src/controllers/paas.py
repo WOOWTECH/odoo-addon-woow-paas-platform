@@ -351,9 +351,11 @@ class PaasController(HiddenChainMixin, Controller):
         #
         # 孤兒的兩個後果都不會讓使用者察覺，只會累積：
         #   1. `_list_workspaces` 是從 `workspace_access` 反查的，而 ir.rule
-        #      `workspace_rule_member_access` 的 domain 也是 `access_ids.user_id`
+        #      `workspace_rule_member_read` 的 domain 同樣錨在 `access_ids` 的
+        #      成員關係（`('access_ids', 'any', [('user_id', '=', user.id)])`）
         #      ⇒ 沒有 access 列的 workspace 對每個非 superuser 都不存在：看不到、
-        #      進不去、刪不掉。
+        #      進不去、刪不掉。（#658 之前這條規則叫 `workspace_rule_member_access`
+        #      且讀寫合一；讀方向的判準沒變，只有寫方向被收窄到 owner/admin。）
         #   2. `unique_slug` 是 DB 層 constraint、不看 ir.rule，但 `_generate_slug`
         #      用的是**使用者身分**的 `search_count`、看不到孤兒 ⇒ 同名重試會產生
         #      同一個 slug → 撞 unique → IntegrityError → 交易毀損 → 框架層 500。

@@ -14,9 +14,11 @@ controller 只呼叫一次 `Workspace.create()`，但 model 覆寫（`workspace.
 孤兒的兩個後果都不會讓使用者察覺，只會累積：
 
 1. **完全不可見**——`_list_workspaces` 是**從 workspace_access 反查** workspace
-   的，而 `ir.rule` `workspace_rule_member_access` 的 domain 是
-   `[('access_ids.user_id', '=', user.id)]`。沒有 access 列的 workspace 對每一個
-   非 superuser 都不存在：看不到、進不去、刪不掉。
+   的，而 `ir.rule` `workspace_rule_member_read` 的 domain 是
+   `[('access_ids', 'any', [('user_id', '=', user.id)])]`。沒有 access 列的
+   workspace 對每一個非 superuser 都不存在：看不到、進不去、刪不掉。
+   （#658 之前這條叫 `workspace_rule_member_access`、讀寫合一；本段依賴的是
+   **讀**方向的判準，而讀方向沒有被 #658 動到。）
 2. **永久佔住 slug**——`unique_slug` 是 DB 層 constraint，**不看 ir.rule**；而
    `_generate_slug` 用的是**使用者身分**的 `search_count`，看不到孤兒。於是
    「DB 說這個 slug 有人用了」與「產生器說沒人用」同時成立，使用者拿不回自己
