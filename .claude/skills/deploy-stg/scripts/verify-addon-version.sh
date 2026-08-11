@@ -148,6 +148,7 @@ extract_manifest_version() {
 # parse_manifest_version <path> —— 檔案版的 extract_manifest_version。
 parse_manifest_version() {
     local path="${1:-}"
+    # shellcheck disable=SC2034  # 由 tests/test-verify-addon-version.sh source 進去讀
     EXTRACT_REASON=""
     if [ -z "$path" ]; then
         _vav_extract_fail "parse_manifest_version：未提供路徑"
