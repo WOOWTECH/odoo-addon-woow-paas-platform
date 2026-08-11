@@ -1640,7 +1640,11 @@ class PaasController(HiddenChainMixin, Controller):
             'Admin password reset. Save the new password now — '
             'it will not be shown again.'
         )
-        if gateway:
+        # #672：判準是 payload 裡**真的有 gateway key**，不是 payload 非空——
+        # 同一個 dict 現在也可能只帶 dashboard_url（兩個閘門各判各的）。用非空當
+        # 判準的話，那種服務會收到一句「Gateway API Key 已重設」的假話，而租戶會
+        # 回 MCP 那端去換一把根本沒換過的 key。
+        if gateway.get('gateway_api_key'):
             message = (
                 'Admin password and Gateway API Key reset. Save both now — '
                 'they will not be shown again. Update the Gateway API Key '
@@ -2814,7 +2818,7 @@ class PaasController(HiddenChainMixin, Controller):
 
     @staticmethod
     def _gateway_credentials(service: Any) -> dict[str, Any]:
-        """#530：組出 gateway 憑證的**一次性**交付 payload（明文 key ＋ 完整網址）。
+        """#530／#672：組出 MCP 連線的**一次性**交付 payload（明文 key ＋ 完整網址）。
 
         建立服務與 Reset 兩條既有回應共用這一處，形狀才不會分岔。**刻意沒有回讀
         端點**——本 repo 的憑證一律一次性，新增回讀等於開一條新的外洩面並要自行
@@ -2835,15 +2839,36 @@ class PaasController(HiddenChainMixin, Controller):
         放 controller 而非 model：本 method 讀出明文，而授權只存在 controller 層
         （#357 C05）。回傳明文的 model 方法一律 private 且只有單一 controller 入口，
         這裡不新增第二個那樣的 model 方法。
+
+        ## #672：dashboard 這一格（`dashboard_url`）
+
+        MCP admin GUI 的「Dashboard REST API」區要填**三格**（URL／帳號／密碼），
+        平台原本只交付了兩格：帳號是 GUI 預設的 `admin`（正確），密碼是
+        `admin_password`——**URL 從未交付**，而 GUI 內建預設
+        `http://hermes-agent-svc:9119` 在本平台 host 與 port 都不存在。三格缺一格
+        ＝整個管理面壞掉（MCP 的 10 個 tool 有 8 個走 Dashboard REST API；空字串
+        會讓 httpx 直接丟 `UnsupportedProtocol`）。租戶拿不到、也猜不到這個值。
+
+        值本身不是新算的：`service._dashboard_public_url()` 與注入給 agent 的
+        `HERMES_DASHBOARD_PUBLIC_URL` 讀同一張 value path 表（見 model 端
+        `_DASHBOARD_PUBLIC_URL_VALUE_PATHS`），所以交出去的就是平台已經對 chart
+        宣告過的那一個 URL。
+
+        ⚠ **兩個閘門刻意各判各的**，dashboard 不掛在 gateway 的條件下：兩者是不同
+        的 chart 能力（gateway 有子路徑、dashboard 是 root），今天恰好只有
+        hermes-agent 兩者兼具。綁在一起的話，哪天有 chart 只具其一，交付就會整組
+        消失或整組多出來——而兩種錯法都不會有任何一端報錯。
         """
+        creds: dict[str, Any] = {}
         secret = service._get_secret_record()
         gateway_url = service._gateway_public_url()
-        if not secret or not secret.gateway_api_key or not gateway_url:
-            return {}
-        return {
-            'gateway_api_key': secret.gateway_api_key,
-            'gateway_url': gateway_url,
-        }
+        if secret and secret.gateway_api_key and gateway_url:
+            creds['gateway_api_key'] = secret.gateway_api_key
+            creds['gateway_url'] = gateway_url
+        dashboard_url = service._dashboard_public_url()
+        if dashboard_url:
+            creds['dashboard_url'] = dashboard_url
+        return creds
 
     def _create_service(self, workspace: Any, template_id: int | None, name: str | None, values: dict[str, Any] | None, odoo_addon_ids: list[int] | None = None, plan_id: int | None = None) -> dict[str, Any]:
         """Create a new cloud service."""
@@ -3057,8 +3082,9 @@ class PaasController(HiddenChainMixin, Controller):
             # 不提供回取 API。
             if admin_password:
                 resp_data['admin_password'] = admin_password
-            # #530: gateway API key ＋ 完整網址，同樣是一次性。有 gateway 對外
-            # 路徑的 chart 才交付（見 _gateway_credentials）。
+            # #530/#672: gateway API key ＋ 完整網址、dashboard REST API 的根網址，
+            # 同樣是一次性。兩組各有自己的閘門，只有具備該能力的 chart 才交付
+            # （見 _gateway_credentials）。
             resp_data.update(self._gateway_credentials(service))
             return {
                 'success': True,

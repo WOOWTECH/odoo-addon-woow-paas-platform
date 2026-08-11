@@ -138,6 +138,32 @@ _STUCK_SUSPENDED_STATES_497 = ('deploying', 'upgrading', 'initializing', 'error'
 # 契約，不該靜默漂移。
 _UNCONFIRMED_WORKLOAD_MARKER_497 = '#497 已收斂但無法確認 workload 已停機'
 
+# #424①／#672：把服務自身的對外根位址交給「需要知道自己公開位址」的 chart 的
+# value path 對照表。**這張表是「這個 chart 有沒有對外 dashboard」的唯一事實源**，
+# 被兩件事讀：
+#
+#   (a) 部署時注入 —— `_inject_dashboard_public_url`（→ `HERMES_DASHBOARD_PUBLIC_URL`）
+#   (b) 一次性憑證交付 —— `_dashboard_public_url` → controller `_gateway_credentials`
+#
+# 兩邊讀同一張表，「交給租戶的 URL」與「注入給 agent 的 URL」才**必然**是同一個。
+# 各自維護一份的話，漂移那天兩邊都不會報錯：agent 的 OAuth 回呼照舊正確，只有租戶
+# 手上那條 MCP 連線是死的（#672 的形狀——而它一路無聲，直到租戶回報整個管理面壞掉）。
+#
+# 為什麼判準是 value path，而不是像 gateway 那樣讀 seed（`gateway.externalPath`）：
+# dashboard 的對外形態是 **root URL、沒有子路徑**（chart 0.1.3 移除 webui container、
+# nginx `/` 直連 dashboard，`/dashboard/` 是硬 404），所以 seed 裡**沒有**可推導的
+# 路徑值可讀——0.1.3 正是把 `dashboard.externalPath` 整個拿掉的那一版。能表達「這個
+# chart 有對外 dashboard」的事實只剩「平台會不會告訴它自己的公開位址」，也就是這張表。
+#
+# ⚠ 這**不是**新增 slug allowlist（#530 review 否決過的那個做法）：allowlist 是為了
+# 某個判斷另立第二份名單、與 chart 的事實各自演化；這裡的表是 chart schema 知識
+# （值要寫進哪個鍵）本來就只有這一份、且早於本次改動就存在，判斷是從它**推導**出來
+# 的。本次改動沒有新增任何名單，也沒有借用 `template.has_admin_gui`（那是
+# admin_password 的閘門，8 個 has_admin_gui 模板裡只有 1 個有 dashboard 對外形態）。
+_DASHBOARD_PUBLIC_URL_VALUE_PATHS = {
+    'hermes-agent': [('config', 'dashboardPublicUrl')],
+}
+
 
 def _unflatten_dotpath_keys(flat_dict):
     """Convert flat dot-path keys to nested dict.
@@ -1442,6 +1468,11 @@ class CloudService(models.Model):
 
         無此 value path 的 chart 一律 no-op。
 
+        #672：對照表已上移為 module 層的 ``_DASHBOARD_PUBLIC_URL_VALUE_PATHS``
+        ——同一張表現在也是「要不要把這個 URL 交給租戶」的判準
+        （``_dashboard_public_url``）。放在方法內部的話，交付端只能自己另寫一份
+        判斷，而那份會與這裡各自演化。
+
         Args:
             values: Helm values dict（就地修改並回傳）
             template_slug: Template identifier（例 'hermes-agent'）
@@ -1450,11 +1481,7 @@ class CloudService(models.Model):
         Returns:
             Modified values dict
         """
-        # slug → value paths（hermes-agent 0.1.3 起為 root URL，無 suffix）
-        path_map = {
-            'hermes-agent': [('config', 'dashboardPublicUrl')],
-        }
-        paths = path_map.get(template_slug)
+        paths = _DASHBOARD_PUBLIC_URL_VALUE_PATHS.get(template_slug)
         if not paths or not base_url:
             return values
         public_url = base_url.rstrip('/')
@@ -1634,6 +1661,30 @@ class CloudService(models.Model):
             # 服務都去查一次 paas_domain（_public_base_url 走 ir.config_parameter）。
             return ''
         return self._build_gateway_public_url(external_path, self._public_base_url())
+
+    def _dashboard_public_url(self):
+        """本服務 dashboard REST API 的對外網址（chart 不吃／服務無 subdomain 回 ''）。
+
+        #672 的交付判準本體：controller 的 `_gateway_credentials` 用它決定要不要把
+        這條網址交給租戶。判準兩層，與 gateway 同一種分層——
+        「chart 有沒有對外 dashboard」是 template 的屬性
+        （`_DASHBOARD_PUBLIC_URL_VALUE_PATHS`，同時也是注入端的事實源），
+        「這台服務有沒有對外根位址」是 service 的屬性（subdomain）。兩個都成立才交得
+        出東西：半條網址不是憑證，交出去只會讓租戶去 debug 一個不存在的端點。
+
+        回傳值形態是 **root URL、不帶任何子路徑**（chart 0.1.3 移除 webui container、
+        nginx `/` 直連 dashboard，`/dashboard/` 是硬 404）。這正是 #530 那個坑的鏡像：
+        那次是漏了 gateway 的子路徑，這次是**多**了 dashboard 的——兩種都是一條看起來
+        正常的死鏈，且都不會有任何一端報錯。正規化（`rstrip('/')`）與注入端同一行邏輯，
+        所以「交付值 ≡ 注入值」是可斷言的（見
+        test_dashboard_url_equals_the_url_injected_into_the_chart）。
+        """
+        self.ensure_one()
+        if not _DASHBOARD_PUBLIC_URL_VALUE_PATHS.get(self.template_id.slug):
+            # 短路：絕大多數 template 不吃這個值，先擋掉才不會為了清單裡的每一列服務
+            # 都去查一次 paas_domain（_public_base_url 走 ir.config_parameter）。
+            return ''
+        return self._public_base_url().rstrip('/')
 
     def _get_secret_record(self):
         self.ensure_one()

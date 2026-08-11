@@ -6,7 +6,7 @@
 
 2026-08-02～03 落地。**問題**：租戶部署 Hermes Agent＋Hermes MCP 後，MCP 的 Gateway API 區永遠 Disconnected。**兩個成因**：(a) gateway 跑在容器 8642，但 CS 對外只有 authproxy:8080，nginx 完全沒有指向 8642 的 location；跨 ns 直連被租戶隔離 NetPol 擋（實測 connection refused，同 ns 對照組可達）。(b) API key 由 chart 自產、平台從未讀取，租戶拿不到值。
 
-**影響面實測**：MCP 的 10 個 tool 只有 2 個依賴 gateway（`hermes_chat` 打 `/v1/responses`、`hermes_inspect(capabilities)` 打 `/v1/capabilities`），其餘 8 個走 Dashboard REST API ⇒ **dashboard 填對就能用 8 成**。dashboard_url 在 0.1.x 必須帶 `/dashboard` 尾綴（nginx `/dashboard/` → `127.0.0.1:9119/`），填服務根 URL 會打到 WebUI。
+**影響面實測**：MCP 的 10 個 tool 只有 2 個依賴 gateway（`hermes_chat` 打 `/v1/responses`、`hermes_inspect(capabilities)` 打 `/v1/capabilities`），其餘 8 個走 Dashboard REST API ⇒ **dashboard 填對就能用 8 成**。dashboard_url **在 0.1.x 當時**必須帶 `/dashboard` 尾綴（nginx `/dashboard/` → `127.0.0.1:9119/`），填服務根 URL 會打到 WebUI；**0.1.3 起正好相反**——webui container 移除、nginx `/` 直連 dashboard，dashboard_url 必須是**服務根 URL、不帶任何子路徑**，帶 `/dashboard` 會打到硬 404（見下方 2026-08-10 補記）。⚠ 這「8 成靠 dashboard」正是 #672 的爆炸半徑：平台從未交付 dashboard URL 這一格，租戶手上三格缺一格＝管理面整組失效。
 
 > **2026-08-10 補（chart 0.1.3，feat/hermes-agent-013-cleanup）**：hermes-agent 已
 > 移除 dashboard subpath。0.1.3 起 dashboard 走 root URL（nginx `/` 直連 dashboard

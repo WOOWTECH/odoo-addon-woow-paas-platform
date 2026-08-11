@@ -45,12 +45,19 @@ export class OneTimeCredentialsModal extends Component {
  * #530：收斂在這裡而非各頁自己組——兩個入口交付同一組憑證，各寫一份會讓文案、
  * 順序與「有沒有帶 gateway」的判斷漂移，而租戶只會看到其中一邊。
  *
- * ⚠ 完整 gateway 網址一律用後端給的 `gateway_url`，**前端不拼字串**：子路徑是
- * chart 的值（seed 的 gateway.externalPath），在前端再拼一次就等於多一份會與
- * chart 無聲漂移的副本，而漂移的結果是一條看起來正常的死鏈。
+ * ⚠ 網址一律用後端給的值（`gateway_url` / `dashboard_url`），**前端不拼字串**：
+ * gateway 的子路徑是 chart 的值（seed 的 gateway.externalPath），在前端再拼一次
+ * 就等於多一份會與 chart 無聲漂移的副本，而漂移的結果是一條看起來正常的死鏈。
+ * dashboard 同理——**不要拿 `gateway_url` 去掉 `/gateway` 反推**，那樣兩條網址
+ * 會被綁成同一個假設，而它們的形態刻意不同（見下方 hint）。
  *
  * （chart 0.1.3 起 hermes-agent 移除 webui container，nginx `/` 直連 dashboard；
  * 憑證的對應入口只剩 console 與 dashboard 兩個，admin_password 仍是同一組）
+ *
+ * #672：dashboard 這一格原本整個沒有交付。MCP 的「Dashboard REST API」區要填
+ * URL＋帳號＋密碼三格，平台只交付了密碼，而三格缺一格＝MCP 管理面整組失效。
+ * 缺的不只是值，也是**指路**——原本只有 Gateway API URL 的 hint 寫了「填進 MCP
+ * 哪一區」，Admin Password 沒寫，於是租戶只把有指路的那一格填進 MCP。
  */
 export function buildOneTimeCredentials(data) {
     const credentials = [];
@@ -58,7 +65,7 @@ export function buildOneTimeCredentials(data) {
         credentials.push({
             label: "Admin Password",
             value: data.admin_password,
-            hint: "console 與 dashboard 共用這一組（帳號 admin）。",
+            hint: "console 與 dashboard 共用這一組（帳號 admin）。也要填進 MCP 連線設定的 Dashboard REST API 區（搭配下方的 Dashboard API URL）。",
         });
     }
     if (data && data.gateway_api_key) {
@@ -72,7 +79,14 @@ export function buildOneTimeCredentials(data) {
         credentials.push({
             label: "Gateway API URL",
             value: data.gateway_url,
-            hint: "這是完整位址（含子路徑）；只填服務根網址會連不上。",
+            hint: "填進 MCP 連線設定的 Gateway API Server 區。這是完整位址（含子路徑）；只填服務根網址會連不上。⚠ 僅限這一格——下面的 Dashboard API URL 相反，要填不帶子路徑的根網址。",
+        });
+    }
+    if (data && data.dashboard_url) {
+        credentials.push({
+            label: "Dashboard API URL",
+            value: data.dashboard_url,
+            hint: "填進 MCP 連線設定的 Dashboard REST API 區（帳號 admin，密碼用上面的 Admin Password）。這是服務根網址，不帶任何子路徑。",
         });
     }
     return credentials;
