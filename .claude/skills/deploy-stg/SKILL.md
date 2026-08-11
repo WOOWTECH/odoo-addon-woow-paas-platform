@@ -189,6 +189,35 @@ STATUSES=$(tea api -r "${CI_REPO}" "repos/{owner}/{repo}/actions/tasks?limit=10"
 > 另注意：runner 全叢集僅 1 個 slot，若有 prod build 卡 approval gate 會佔住 runner
 > 讓 stg build 長時間 queued（paas-odoo-ci#30）——同樣別重推，先看 runner log 在忙什麼。
 
+> 🔴 **agent harness 直接跑完整 `deploy-stg.sh`（不帶 `--image`，讓它自己建 tag ＋
+> 輪詢 CI）常在 `exit 5` 結束、且極難正確診斷**（2026-08-11 實測：08:12:13 開始，
+> 08:41:31 才發現卡死，白跑 29 分鐘）。三個誤診特徵缺一都會判錯：
+>
+> 1. `deploy-stg.sh` 裡 **grep 不到任何 `exit 5`** ⇒ 不是 script 自己退的
+> 2. `POLL_TIMEOUT=900`（15 分）卻跑了 29 分鐘 ⇒ 也不是 script 自己 timeout（真
+>    timeout 會印 `Timeout: CI not completed after 900s` 並 `exit 1`）
+> 3. log 停在 `Main branch SHA: …` 之後沒有下一行，看起來像卡在建 tag，但 tag 其實
+>    已建好、CI 也已成功
+>
+> **根因**：上面 Step 5 輪詢迴圈裡**反覆執行的** `sleep` 被 harness 砍掉。⚠ 單發
+> 前景 `sleep` 能正常跑完，所以「先跑個 sleep 探針測測看」會得到 `exit 0`，反而
+> 誤導你以為完整跑法沒問題。
+>
+> **正解**：不要讓 agent 自己跑輪詢迴圈，改走兩段式——先建 tag 觸發 CI，自己用
+> `tea api` 查 `status=="success"`（查法同上一個 callout），確認後再用
+> `--image <full-image>` 收尾（該路徑不經過 Step 5 的 poll 迴圈）。
+>
+> **`exit 5` ≠ 沒有副作用**：那次已留下建好的 tag 與一次成功的 CI build ⇒ 收尾
+> 直接補 `--image`，**不要重跑**整支 script（會觸發 triple build）。
+>
+> 🔴 **macOS 沒有 `setsid`**：想真 detach 而寫 `nohup setsid bash … &` 會**靜默**
+> 變成 `nohup: setsid: No such file or directory` 且整個沒啟動。真 detach 改用
+> `python3 -c "import subprocess; subprocess.Popen([...], start_new_session=True)"`。
+>
+> **`create.sh` 印的 `Waiting for pods to be ready... condition met` 可能是舊
+> pod 的**：deployment 策略是 `Recreate`，該時點舊 pod 還在服務；之後才真的在等
+> 新 pod，中間約 5 分鐘完全無輸出，很像卡死但不是——別在這段 kill 它。
+
 ### Step 6: 部署到 Sandbox（委派 woow-dev plugin）
 
 deploy-stg **不再自帶 create.sh**，改委派給 woow-dev plugin 的 `/woow-dev:k8s-dev-sandbox`（同一套引擎，避免重複程式）。`deploy-stg.sh` 內建 resolver 依序定位 plugin 的 `create.sh`：`$WOOWPRD_PLUGIN_ROOT`（env 覆寫）→ `plugins-local/woowprd` → marketplace cache（`cache/*/woow-dev/*`，相容舊名 `woowprd`；多版本取最新）→ cache 根遞迴 fallback（不綁 plugin 名）；全部落空才 fail-loud。
