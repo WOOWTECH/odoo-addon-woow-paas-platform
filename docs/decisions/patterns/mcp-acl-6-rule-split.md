@@ -172,7 +172,7 @@ perm 不同」是 Odoo idiom。既有 codebase pattern `workspace_rule_member_re
 `workspace_rule_anyone_create`（create-only）已是 split idiom（見 `src/security/ir_rules.xml`）。
 
 > ⚠ 兩處更正（#658）：這兩個名字原本是 `workspace_rule_member_access` /
-> `workspace_rule_create`，已由 `src/migrations/18.0.1.0.126/post-migrate.py` 退役改名；
+> `workspace_rule_create`，已由 `src/migrations/18.0.1.0.127/post-migrate.py` 退役改名；
 > 且原本那條 `workspace_rule_member_access` **不是 read-only**（`perm_read` 與 `perm_write`
 > 都是 True、domain 無 role 條件，任何 guest 成員都能寫 workspace 本體——那正是 #658 的洞）。
 > 引用它當「read/create split」的樣板在當時就不準確；現在的 `workspace_rule_member_read`

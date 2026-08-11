@@ -346,5 +346,5 @@ from . import test_project_access_authz_657
 from . import test_workspace_access_authz_664
 # fix: #658 workspace 本體的寫入授權 —— ir.rule 讀寫拆開（收窄到 owner/admin）
 # ＋ model 層 identity anchor（owner_id / slug，create 與 write 兩個方向）
-# ＋ migration 18.0.1.0.126 退役兩條 sticky 舊 rule（HttpCase，group_user-only）
+# ＋ migration 18.0.1.0.127 退役兩條 sticky 舊 rule（HttpCase，group_user-only）
 from . import test_workspace_authz_658

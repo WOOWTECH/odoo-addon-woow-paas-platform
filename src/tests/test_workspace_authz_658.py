@@ -28,7 +28,7 @@
 - **Layer 1（ir.rule）**：讀寫拆開。`workspace_rule_member_read`（全體成員讀）＋
   `workspace_rule_owner_admin_manage`（owner/admin 讀寫）＋
   `workspace_rule_anyone_create`＋`workspace_rule_owner_unlink`（縱深防禦，
-  ACL 今天仍擋 unlink）。舊的兩條由 `src/migrations/18.0.1.0.126/post-migrate.py`
+  ACL 今天仍擋 unlink）。舊的兩條由 `src/migrations/18.0.1.0.127/post-migrate.py`
   DELETE 退役（`ir_model_data.noupdate` 是 sticky 的，改 XML 修不動）。
 - **Layer 2（model 層 identity anchor）**：只有 Layer 1 的話，**admin 仍然能改
   `owner_id`** ⇒ admin 可以把擁有權連同計費歸屬搶走，且完全繞過
@@ -37,17 +37,30 @@
 
 ## 為什麼 create 方向也要守（X7-X10）
 
-只錨 `write()` 的話，「slug 是伺服器決定的」這句話是**假的**：`create()` 原本
-`if not vals.get('slug')` 才產生，呼叫端自帶 slug 就照收，而 `create` 對租戶是
-開放的（ACL create=1 ＋ `workspace_rule_anyone_create` domain `[(1,'=',1)]`）。
-攻擊者用 `/web/dataset/call_kw` 直接 create 一個 slug 撞到受害者 namespace 的
-workspace，之後在自己的 workspace 部署服務就會落進受害者的 K8s namespace。
+`create()` 原本 `if not vals.get('slug')` 才產生，呼叫端自帶 slug 就照收，而
+`create` 對租戶是開放的（ACL create=1 ＋ `workspace_rule_anyone_create` domain
+`[(1,'=',1)]`）。攻擊者用 `/web/dataset/call_kw` 直接 create 一個 slug 撞到受害者
+namespace 的 workspace，之後在自己的 workspace 部署服務就會落進受害者的 K8s
+namespace。X7-X10、X14 關掉的是「呼叫端**直接指定** slug／owner_id」這一族通道。
+
+🔴 **但「slug 由伺服器決定」這句話即使加了 create 守衛也仍然是假的**，不要那樣讀：
+`_generate_slug()` 對 `[a-z0-9_-]` 字串是恆等函式，租戶把同一個字串放進 `name`
+就得到逐字相同的 slug（`name` 本來就該由租戶自由指定）。這條通道**本 PR 沒有關**，
+它是先前就存在的，修它要動 slug 生成或 namespace 推導（會波及既有部署與 #525 A2
+已鎖死的行為）⇒ 另開 issue。守門測試見 `test_X8b_*`。
 
 而 create 方向的守衛**不能看 raw vals**：context 的 `default_<field>` 是 RPC
 用戶端可控的（`call_kw` 整份取代 context、不是 merge），default 要到
 `_prepare_create_values` → `_add_missing_default_values` → `default_get` 才補上
-（`default_get` 第一順位就是讀 `default_<field>`）。X9/X10 是這個形態的攻擊測試
+（`default_get` 第一順位就是讀 `default_<field>`）。X9/X10 覆蓋這個形態
 （#657 F2 / #664 的同型；本 repo 已經在同一行踩過兩次）。
+
+⚠ 兩者的鑑別對象**不同**，實測分辨過，不要混為一談：
+- **X10（`default_owner_id`）在 develop 上真的打得穿**（實測：uid=1 的呼叫下
+  `default_owner_id=2` 落地成 `owner_id=2`）——那是一條活的洞。
+- **X9（`default_slug`）在 develop 上打不穿**：develop 的 `create()` 在
+  `super().create()` 之前就把 `vals['slug']` 填好了，context 補不進來。X9 鑑別的是
+  **本 PR 的守衛讀 `resolved` 還是讀 raw `vals`**——把它改回 `vals`，X9 是唯一會紅的。
 
 ## TDD 紀律（照抄 #556 / #657，一字不可省）
 
@@ -92,7 +105,7 @@ from odoo.addons.woow_paas_platform.services.naming import make_namespace
 # 誤讀成「我的 anchor 有效」（#657 覆核抓到過的形態）。
 GUARD_OWNER_NEEDLE = 'Cannot change the owner of workspace'
 GUARD_SLUG_NEEDLE = 'Cannot change the slug of workspace'
-GUARD_CREATE_SLUG_NEEDLE = 'Cannot choose a workspace slug'
+GUARD_CREATE_SLUG_NEEDLE = 'Cannot supply a workspace slug'
 GUARD_CREATE_OWNER_NEEDLE = 'Cannot create a workspace owned by another user'
 ALL_GUARD_NEEDLES = (
     GUARD_OWNER_NEEDLE, GUARD_SLUG_NEEDLE,
@@ -223,10 +236,17 @@ class _Workspace658Fixture(HttpCase):
 class TestWorkspaceAttackVectors658(_Workspace658Fixture):
     """X 系列——攻擊向量。
 
-    **實測 RED（`origin/develop` @ dfd991ba，只換測試檔）：X1-X10 ＋ X13 會紅，
-    X11／X12 不會。** 後兩條保留為回歸對照並在各自 docstring 標明零鑑別力——
-    不標的話，下一個人會把「12 條攻擊測試全綠」讀成「12 條攻擊都被本 PR 擋住」，
-    而其中兩條在修復前就已經是綠的。
+    本 class 共 **15 條**：X1-X14 ＋ X8b。
+
+    **實測 RED（`origin/develop` @ dfd991ba，只換測試檔）＝ X1-X10、X13、X14 會紅
+    （12 條）；X11／X12／X8b 不會。**
+
+    - X11／X12 是**回歸對照**，各自 docstring 標明對本 PR 零鑑別力（X11 由 #556 的
+      子模型守衛擋、X12 由成員 domain 擋，兩者在修復前就是綠的）。
+    - X8b 是**已知殘留缺口的守門測試**，它斷言的是今天仍然通的那條通道，兩邊都綠。
+
+    不標的話，下一個人會把「攻擊測試全綠」讀成「這些攻擊都被本 PR 擋住」，而其中
+    三條在修復前就已經是綠的。條數與紅綠歸屬都是實測填的，不是數 docstring 數出來的。
     """
 
     # ---------------------------------------------------------------- #
@@ -368,32 +388,80 @@ class TestWorkspaceAttackVectors658(_Workspace658Fixture):
             self.Workspace.sudo().search([('name', '=', 'planted on alice')]),
             '記錄不得落地')
 
-    def test_X8_tenant_cannot_choose_slug_on_create(self):
-        """🔴 租戶 create 時自帶 `slug` —— 修復前成功，且直接撞到受害者 namespace。
+    def test_X8_tenant_cannot_supply_slug_on_create(self):
+        """🔴 租戶 create 時自帶 `slug` —— 修復前成功。
 
         `create()` 原本是 `if not vals.get('slug')` 才產生 ⇒ 呼叫端自帶就照收。
-        只錨 `write()` 不錨 `create()` 的修法，會讓「slug 由伺服器決定」這句話
-        變成假的。
+
+        ⚠ **本條只證明「vals 的 `slug` 鍵這條通道被關掉」，不證明租戶無法選
+        namespace。** 第一版的 docstring 寫「直接撞到受害者 namespace」，那是假的
+        ——W1 的 slug 是 `w1-658`（`make_namespace` → `paas-ws-b8182a2d`），
+        而 payload 的 `ws-137425` → `paas-ws-7d82ce00`，兩者不相等；那句話沒有任何
+        斷言支撐它。第一版還附了一句
+        `assertTrue(victim_ns.startswith('paas-ws-'))` 當「前提」，但
+        `make_namespace` 的回傳值恆以該前綴開頭 ⇒ **恆真式**，量不到任何東西。
+        兩者都已移除。
+
+        真正的殘留缺口（`name` 鍵可推導出同樣的 slug）見
+        `test_X8b_name_derives_the_slug_verbatim_documented_gap` 與
+        `workspace.py::_check_tenant_create_anchors` 的 docstring。
         """
-        victim_ns = make_namespace(self.w1.sudo().slug)
         self.authenticate(self.mallory_login, self.mallory_login)
         result = self._call_kw(
             'woow_paas_platform.workspace', 'create',
             [{'name': 'ns squatter', 'slug': 'ws-137425'}])
         self._assert_model_guard_denied(
             result, GUARD_CREATE_SLUG_NEEDLE, 'create 不得自帶 slug')
-        planted = self.Workspace.sudo().search([('name', '=', 'ns squatter')])
-        self.assertFalse(planted, '記錄不得落地')
-        self.assertTrue(victim_ns.startswith('paas-ws-'),
-                        '前提：namespace 推導函式有被實際呼叫到')
+        self.assertFalse(
+            self.Workspace.sudo().search([('name', '=', 'ns squatter')]),
+            '記錄不得落地')
+
+    def test_X8b_name_derives_the_slug_verbatim_documented_gap(self):
+        """📌 **已知殘留缺口的守門測試**（不是攻擊測試，也不是回歸對照）。
+
+        `_generate_slug()` 對 `[a-z0-9_-]` 字串是恆等函式，所以租戶把字串從
+        `slug` 鍵搬到 `name` 鍵，就拿到逐字相同的 slug ——X8 關掉的通道旁邊還開著
+        一條。本條把這個**現況**釘住，目的是：日後有人修好 slug 生成（讓它不再由
+        租戶完全決定）時，這條會**變紅**，逼他回來更新
+        `workspace.py::_check_tenant_create_anchors` 的 docstring 與相關 issue，
+        而不是讓那段「殘留缺口」的說明默默過期成假話。
+
+        ⚠ 這條刻意**不**斷言 namespace 真的撞上受害者（那要靠 preimage 搜尋，
+        不是單元測試該做的事），只斷言「slug 逐字等於租戶給的 name」這個機制。
+        """
+        self.authenticate(self.mallory_login, self.mallory_login)
+        result = self._call_kw(
+            'woow_paas_platform.workspace', 'create',
+            [{'name': 'ws-137425'}])
+        self._assert_ok(result, 'name 這條通道今天是通的（這正是缺口本身）')
+        ws = self.Workspace.sudo().browse(result['result'])
+        self.assertEqual(
+            ws.slug, 'ws-137425',
+            '缺口的機制：slug 逐字等於租戶給的 name。這條變紅代表 slug 生成被改'
+            '過了 —— 請一併更新 workspace.py 的 docstring 與 follow-up issue')
+        self.assertEqual(
+            make_namespace(ws.slug), make_namespace('ws-137425'),
+            'namespace 完全由租戶提供的字串決定')
 
     def test_X9_tenant_cannot_inject_slug_via_context_default(self):
         """🔴 `with_context(default_slug=...)` ＋ vals **不放** slug。
 
         這是 #657 F2／#664 的同型：context 的 `default_<field>` 是 RPC 用戶端
-        可控的，而 default 是在 `super().create()` 內部才補上的。守衛只看 raw
-        vals 的話這道整個繞過。本檔的存在就是要讓「逐欄位重演 Odoo 解析規則」
-        這種寫法在第一天就紅。
+        可控的，而 default 是在 `super().create()` 內部才補上的。
+
+        ⚠ **本條鑑別的是「我的守衛讀 `resolved` 還是讀 raw `vals`」，不是
+        「develop 上這條通道打得穿」。** 實測（odoo shell，develop 源碼）：
+
+            vals 不放 slug ＋ context default_slug='ws-137425' -> slug='x9-probe-a'
+
+        也就是 develop 上 `default_slug` **不會落地**——develop 的 `create()` 在
+        `super().create()` 之前就把 `vals['slug']` 填成由 name 推導的值，
+        `_add_missing_default_values` 因此不會再從 context 補。所以本條在 develop
+        上變紅是因為**整個守衛不存在**（create 直接成功），不是因為注入成功。
+        對照組 `test_X10_*` 才是真的在 develop 上打得穿的那一半（實測
+        `default_owner_id=2` 在 uid=1 的呼叫下確實落地成 owner_id=2）。
+
+        留著它的理由：把 `resolved` 改回 `vals` 的那一天，這條會是唯一變紅的測試。
         """
         self.authenticate(self.mallory_login, self.mallory_login)
         result = self._call_kw(

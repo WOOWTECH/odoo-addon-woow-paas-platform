@@ -101,15 +101,32 @@ class Workspace(models.Model):
         繞過（#657 F2／#664 的同型）。這裡呼叫 Odoo 自己那支解析函式而不是逐
         欄位重演它的規則——逐欄位重演會漏下一個欄位（#657 的同一行修了兩次）。
 
-        `slug`：伺服器決定，只能由 `_generate_slug()` 產生。它是
-        `make_namespace()` / `make_service_subdomain()`（`src/services/naming.py`）
-        的唯一輸入，而兩者都是 `md5(slug)[:8]` ＝ **32 bit 截斷**：`UNIQUE(slug)`
-        只擋得住字面相同的 slug，擋不住兩個不同 slug 映到同一個 namespace／
-        subdomain。實測通用碰撞在 137,426 個候選內就出現（`ws-83256` 與
-        `ws-137425` 同為 `7d82ce00`）；針對特定受害者的 32-bit preimage 期望
-        2^32 次 md5，用 python hashlib 單執行緒實測約 0.6 小時，換 C／GPU 是
-        分鐘級。⇒ 讓租戶指定 slug ＝ 讓租戶指定自己的服務要部署進哪個 K8s
-        namespace。這不是「防漂移」，是跨租戶邊界。
+        `slug`：擋掉呼叫端**直接指定** slug 的兩條通道（vals 的 `slug` 鍵、context
+        的 `default_slug`）。
+
+        🔴 **這道守衛「不」等於「slug 由伺服器決定」——不要那樣讀它。** 下面
+        `create()` 產生 slug 的方式是 `_generate_slug(resolved['name'])`，而
+        `_generate_slug()` 對 `[a-z0-9_-]` 字串**是恆等函式**（它只做小寫化、
+        刪掉非 word/空白/連字號的字元、把空白／連字號序列併成單一 `-`）。⇒ 租戶把同一個字串
+        從 `slug` 鍵搬到 `name` 鍵，就得到逐字相同的 slug。`name` 是租戶本來就
+        該能自由指定的欄位（`_create_workspace` 只做 `.strip()`），所以這條通道
+        **本守衛完全沒有關掉**，本 PR 也沒有關掉它。
+
+        為什麼這件事有份量：`slug` 是 `make_namespace()` /
+        `make_service_subdomain()`（`src/services/naming.py`）的唯一輸入，而兩者
+        都是 `md5(slug)[:8]` ＝ **32 bit 截斷**。`UNIQUE(slug)` 只擋得住字面相同
+        的 slug，擋不住兩個不同 slug 映到同一個 namespace／subdomain。實測通用
+        碰撞在 137,426 個候選內就出現（`ws-83256` 與 `ws-137425` 同為
+        `7d82ce00`）；針對特定受害者的 32-bit preimage 期望 2^32 次 md5（用
+        python hashlib 單執行緒量到的速率換算約 0.6 小時，換 C／GPU 是分鐘級），
+        而且**目標值不必猜**——它逐字印在該租戶每個公開子網域裡
+        （`paas-cs-{ws_hash}-{svc_hash}`）。
+
+        ⇒ 殘留缺口：租戶仍可經 `name` 讓自己的服務落進別人的 K8s namespace。
+        這是**先前就存在**的（本 PR 沒有引入），修它要動 slug 生成或 namespace
+        推導，兩者都會波及既有部署與 #525 A2 已鎖死的行為，爆炸半徑與本單不同
+        ⇒ 另開 issue，不在這裡順手改。**在那張單修好之前，不要在任何地方寫
+        「slug 由伺服器決定」。**
 
         `owner_id`：workspace 的計費／配額歸屬（見 `write()` 的註解）。租戶只能
         建立**自己**擁有的 workspace；`owner_id` 指向別人等於把一個 workspace
@@ -118,8 +135,9 @@ class Workspace(models.Model):
         """
         if resolved.get('slug'):
             raise AccessError(
-                "Cannot choose a workspace slug: it is server-generated "
-                "(it determines the Kubernetes namespace and public subdomain)."
+                "Cannot supply a workspace slug: it is derived from the name "
+                "by the server (it feeds the Kubernetes namespace and public "
+                "subdomain derivation)."
             )
         owner_id = resolved.get('owner_id')
         if owner_id and owner_id != self.env.uid:
@@ -206,7 +224,25 @@ class Workspace(models.Model):
 
         `name` / `description` / `state` 刻意**不**錨：那三個 owner/admin 本來就
         該能改，交給 ir.rule 那一層（`paas.py::_update_workspace` 已要求
-        `required_role=ROLE_ADMIN`，兩層同判準）。
+        `required_role=ROLE_ADMIN`，ORM 層則由
+        `workspace_rule_owner_admin_manage` 收到同一組角色）。
+        ⚠ 兩層的**角色門檻**相同，但**射程**不同，不要讀成「完全等價」：
+        `_update_workspace` 只寫得到 `name` / `description`（它自己組
+        `update_vals`），ORM 這一層放行的是 owner/admin 對本 model 的**任何**
+        非錨定欄位，包含 `state`（＝ archive）與 `member_count`。也就是說
+        **admin 可以走 ORM archive 一個 workspace**，而產品面的
+        `_delete_workspace` 是 owner-only、且沒有對應的 unarchive 端點
+        （`action_restore()` 沒有任何 controller 呼叫它）。這是本 PR **沒有**
+        改變的既有行為（develop 上 guest 都做得到，現在收到 owner/admin），
+        但收窄之後它就成了 admin 相對於產品意圖
+        （`get_role_permissions()` 說 `ROLE_ADMIN.can_delete=False`）的落差
+        ⇒ 已記在 PR 內文的「沒有做的事」與 follow-up issue，不在本單射程。
+
+        `member_count` 也**不**錨：它是 stored compute 且無 inverse（＝公開
+        `write()` 寫得進去、值會落地，實測 owner 身分可寫入 9999），但全 repo
+        沒有任何授權或配額判準讀它（只有 `paas.py` 的 API 回應與兩個 OWL
+        模板），下一次 `access_ids` 變動就被重算蓋回。判準是「有沒有守衛拿它
+        做身分比對」，不是「它是不是 compute」。
 
         比對「新值 != 現值」而不是「key 有沒有出現」，這樣前端整批送出未修改欄位的
         no-op write 不會被誤擋（同 `workspace_access.write()` / `project_access.write()`）。

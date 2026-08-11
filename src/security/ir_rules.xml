@@ -2,7 +2,7 @@
 <odoo>
     <!-- (#658) 這個檔案曾經以一個 <data noupdate="1"> 區塊開頭，裡面住著
          workspace_rule_member_access（perm_write=True、domain 無 role 條件）與
-         workspace_rule_create。兩條都已由 src/migrations/18.0.1.0.126/post-migrate.py
+         workspace_rule_create。兩條都已由 src/migrations/18.0.1.0.127/post-migrate.py
          DELETE 退役，取代它們的四條規則宣告在下面的 <data noupdate="0"> 區塊。
          這兩個 xmlid 已列入 scripts/audit/repo-lint.py 的 RETIRED_RULE_XMLIDS，
          不得以 <record> 復活（fresh install 會照 XML 重建 ⇒ 洞無聲重開）。 -->
@@ -649,7 +649,7 @@
 
         <!-- workspace (#658 — retires workspace_rule_member_access /
              workspace_rule_create, formerly in the noupdate="1" block at the top
-             of this file; see src/migrations/18.0.1.0.126/post-migrate.py for why
+             of this file; see src/migrations/18.0.1.0.127/post-migrate.py for why
              those two had to be DELETEd rather than edited in place).
 
              退役的那條 member_access 是 perm_read + perm_write 合一、domain 只有
@@ -662,7 +662,9 @@
              點鏈：點鏈在一個 workspace 有多列 access 時是**跨列**匹配（A 列滿足
              user_id、B 列滿足 role），等於沒有 role 條件。這是 #556 的根因之一。
 
-             刻意**沒有** workspace_rule_admin_full（本 repo 其他 model 都有一條）：
+             刻意**沒有** workspace_rule_admin_full（本檔 13 個自有 model 的 ir.rule
+             裡有 11 個配了一條；另一個沒有的是 cloud_service——實際數過，不要寫成
+             「其他每個 model 都有」）：
              那會把 base.group_system 從「只看得到自己是成員的 workspace」放寬成
              全部可見，而本次是收窄授權的安全修復，同一個 PR 裡混入擴權會讓覆核
              無法分辨兩者。今天也沒有任何流程需要它——平台管理員若真要接手某個

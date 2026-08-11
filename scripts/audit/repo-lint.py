@@ -1426,11 +1426,14 @@ MODULE_XMLID_PREFIX = "woow_paas_platform."
 SECURITY_RULE_NOUPDATE_ALLOWED = {}
 
 # (2) 已用 migration DELETE 退役的 xmlid：不得再有 <record> 宣告。
+# 值＝「退役它的 migration 版號（出處 issue）」。issue 編號寫在**值**裡而不是違規訊息
+# 的字面裡：訊息原本寫死「是 #556 已用 migration … 退役的」，#658 加進兩個條目之後那句話
+# 對它們就是假的（同一個坑 #659 驗收 F3 記過一次——訊息不得寫死當下才成立的事實）。
 RETIRED_RULE_XMLIDS = {
-    "workspace_access_rule_member_access": "18.0.1.0.122",  # #556
-    "workspace_access_rule_create": "18.0.1.0.122",  # #556
-    "workspace_rule_member_access": "18.0.1.0.126",  # #658
-    "workspace_rule_create": "18.0.1.0.126",  # #658
+    "workspace_access_rule_member_access": "18.0.1.0.122（#556）",
+    "workspace_access_rule_create": "18.0.1.0.122（#556）",
+    "workspace_rule_member_access": "18.0.1.0.127（#658）",
+    "workspace_rule_create": "18.0.1.0.127（#658）",
 }
 
 # (3) 守哪個 model 的哪幾個方向。model 端錨在 `<field name="model_id" ref="…"/>` 的
@@ -1713,11 +1716,14 @@ def check_security_rule_noupdate(root):
 
 
 def check_retired_rule_xmlid(root):
-    """#556 退役的 ir.rule xmlid 不得以 `<record>` 復活（#659 ②）。
+    """已退役的 ir.rule xmlid 不得以 `<record>` 復活（#659 ②）。
 
-    `workspace_access_rule_member_access` / `workspace_access_rule_create` 是 #556 用
-    migration `18.0.1.0.122` **DELETE** 退役的（它們出生在 noupdate="1" 區塊，改 XML
-    修不動——見 ① 的 docstring）。把 `<record>` 帶回來（rebase／merge 復原、或有人
+    今天列管四個：`workspace_access_rule_member_access` / `workspace_access_rule_create`
+    （#556，migration `18.0.1.0.122`）與 `workspace_rule_member_access` /
+    `workspace_rule_create`（#658，migration `18.0.1.0.127`）。四個都出生在
+    noupdate="1" 區塊、改 XML 修不動（見 ① 的 docstring），只能 DELETE 退役。
+    ⚠ 權威清單是 `RETIRED_RULE_XMLIDS` 本身，不是這段散文——新增條目時**不必**
+    回來改這裡的枚舉，但也不要把這裡讀成完整清單。把 `<record>` 帶回來（rebase／merge 復原、或有人
     「補回不小心刪掉的規則」）的後果是不對稱的：
 
       * 既有環境：migration 只跑一次，不會再 DELETE ⇒ 一時看不出來；
@@ -1739,7 +1745,7 @@ def check_retired_rule_xmlid(root):
         if not version:
             continue
         violations.append(
-            "%s：`<record id=\"%s\" model=\"%s\">` 是 #556 已用 migration %s DELETE "
+            "%s：`<record id=\"%s\" model=\"%s\">` 是已用 migration %s DELETE "
             "退役的 xmlid，不得再宣告。帶回來的後果不對稱：既有環境的 migration 只跑"
             "一次不會再刪，而 fresh install 會照 XML 重建它 ⇒ 授權洞無聲重開，且沒有"
             "任何測試會紅。要恢復這條規則請開新 issue 走新 xmlid ＋ 新 migration，"

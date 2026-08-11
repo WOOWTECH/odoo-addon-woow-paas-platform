@@ -1,4 +1,4 @@
-"""18.0.1.0.126 — #658 workspace 本體授權重構：退役兩條脆弱 rule。
+"""18.0.1.0.127 — #658 workspace 本體授權重構：退役兩條脆弱 rule。
 
 舊的 workspace_rule_member_access（perm_read + perm_write 合一、domain
 `[('access_ids.user_id', '=', user.id)]`、**無 role 條件**）與
