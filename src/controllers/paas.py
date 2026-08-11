@@ -2854,6 +2854,11 @@ class PaasController(HiddenChainMixin, Controller):
         `_DASHBOARD_PUBLIC_URL_VALUE_PATHS`），所以交出去的就是平台已經對 chart
         宣告過的那一個 URL。
 
+        ⚠ 上面「三個閘門都從 seed 推導」那句**只適用 gateway**：dashboard 沒有可讀
+        的 seed 值（它的對外形態是 root URL，chart 0.1.3 正是把 `dashboard.externalPath`
+        拿掉的那一版），判準因此落在注入表上——那張表以 slug 為鍵，但它是**既有的**
+        chart schema 知識、不是為這個判斷另立的名單。完整理由見 model 端該常數的註解。
+
         ⚠ **兩個閘門刻意各判各的**，dashboard 不掛在 gateway 的條件下：兩者是不同
         的 chart 能力（gateway 有子路徑、dashboard 是 root），今天恰好只有
         hermes-agent 兩者兼具。綁在一起的話，哪天有 chart 只具其一，交付就會整組
