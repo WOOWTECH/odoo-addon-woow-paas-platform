@@ -77,6 +77,11 @@ on:
       #   的歧義要等下一個命中白名單的 PR 或手動 --all 才會紅。
       - "scripts/**"
       - "tests/**"
+      # #665 deploy-stg 的 addon 版號 post-check gate 與它的判定層自測。這道 gate
+      # 平常只在**跑 deploy-stg 時**才會被行使，所以「改壞了」與「還沒人部署」在
+      # 沒有 CI 的情況下輸出完全相同——要等到下一次真的部署 stg 才會發現，而那正是
+      # 最不想遇到意外的時刻。列進來讓它每個 PR 都被證明還會動。
+      - ".claude/skills/deploy-stg/**"
 jobs:
   repo-lint:
     runs-on: ubuntu-latest
@@ -144,6 +149,59 @@ jobs:
             echo "✗ 以下 test_*.py 沒有任何 CI 會跑到——新增測試時要一併決定誰跑它："
             echo "$unrun" | sed 's/^/      /'
             echo "  （scripts/ci/test_manifest_version_gate.py 由 manifest-version-gate.yml 跑，故豁免）"
+            rc=1
+          fi
+          echo "──────── 合計 $total 支"
+          exit $rc
+
+      # .claude/skills/ 底下的 bash 自我測試。第一支是 #665 的 deploy-stg addon 版號
+      # post-check（`tests/test-verify-addon-version.sh`）。
+      #
+      # 為什麼要有這一步：那道 gate 只在**跑 deploy-stg 時**才被行使，而 deploy-stg
+      # 不常跑。gate 的比較器改壞了跟「這陣子沒人部署」在沒有 CI 的情況下輸出一模一樣
+      # ⇒ 會等到下一次真的要部署 stg 才炸（memory:
+      # feedback_verified_once_is_not_continuously_verified）。verify-addon-version.sh
+      # 執行時本來就會先跑一次同一支自測，這一步是把那個保證**提前到 PR**。
+      #
+      # 🔴 契約與上一步相同：放進 `.claude/skills/*/tests/` 的測試**不得有外部依賴**
+      #   （kubeconfig / 叢集 / 網路 / Odoo / 特定 cwd 都沒有）。需要環境的測試放別處。
+      # 🔴 floor 同樣折進迴圈：目錄宣告了卻不存在、或存在卻一支都沒命中，都判失敗——
+      #   否則測試整批被刪或改名時，這步只是少跑幾輪，輸出仍與「全部通過」相同。
+      - name: .claude/skills/ 自我測試（bash）
+        run: |
+          set -u
+          rc=0
+          total=0
+          # 宣告式清單（寫死在 for 裡，不經變數展開）
+          for d in .claude/skills/deploy-stg/tests; do
+            if [ ! -d "$d" ]; then
+              echo "✗ 宣告的目錄不存在：$d/（清單與實體不同步，不是靜默略過）"
+              rc=1
+              continue
+            fi
+            found=0
+            for t in "$d"/test-*.sh; do
+              [ -e "$t" ] || continue
+              found=$((found + 1))
+              echo "──────── $t"
+              bash "$t" || rc=1
+            done
+            if [ "$found" -eq 0 ]; then
+              echo "✗ $d/ 底下一支 test-*.sh 都沒命中——該目錄的測試整批休眠，與「全部通過」輸出相同，故當失敗"
+              rc=1
+              continue
+            fi
+            echo "──────── $d/ 跑了 $found 支"
+            total=$((total + found))
+          done
+          # 完備性：`.claude/skills/*/tests/` 底下不該有「沒人跑」的測試。
+          # 只掃 tests/ 目錄（不是全 skills/），所以 k8s-dev-sandbox 那種需要真叢集的
+          # scripts/test.sh 不會被誤收——它本來就不是無外部相依的單元測試。
+          unrun=$(find .claude/skills -path '*/tests/*' -name '*.sh' \
+                    ! -path '.claude/skills/deploy-stg/tests/*' | sort)
+          if [ -n "$unrun" ]; then
+            echo "✗ 以下 .claude/skills/*/tests/ 的測試沒有任何 CI 會跑到——新增時要一併決定誰跑它："
+            echo "$unrun" | sed 's/^/      /'
             rc=1
           fi
           echo "──────── 合計 $total 支"

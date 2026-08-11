@@ -16,6 +16,10 @@
 #   --interval <seconds>  Poll interval (default: 30)
 #   --context <name>      kubectl context (default: woow-k3s; override only when
 #                         intentionally targeting a different cluster)
+#   --post-check-timeout <seconds>
+#                         addon 版號 post-check 的收斂等待秒數 (default: 300)。
+#                         部署完成後比對 DB 的 ir_module_module 版號與 image 內
+#                         manifest；不一致就非 0 退出（#665）。
 #   -h, --help            Show usage
 #
 # Prerequisites:
@@ -56,6 +60,14 @@ SKIP_BUILD=false
 INGRESS=false
 POLL_TIMEOUT=900
 POLL_INTERVAL=30
+# DB 前綴：deploy-stg 是這個值的來源（傳給 create.sh 決定 DB 名，也給 post-check
+# 推同一個 DB 名）。以前這串 woow_ 在兩個 CREATE_ARGS 各寫死一次，抽成變數是為了讓
+# post-check 與實際部署的 DB 必然是同一顆——不然 gate 可能對著另一個 DB 判綠燈。
+DB_PREFIX="woow_"
+# addon 版號 post-check 的收斂等待（#665）。綠燈通常是瞬間的（create.sh 回來時
+# odoo pod 已 ready）；這個 timeout 是留給「升級真的正在跑」的情形，避免把慢升級
+# 誤判成漏升。真的漏升時會等滿再紅——那是刻意的，寧可慢也不要假綠。
+POST_CHECK_TIMEOUT=300
 # Staging always targets woow-k3s — this is the only valid stg destination,
 # and hardcoding the default closes the cross-cluster footgun (current
 # kubectl context could be anything, e.g. docker-desktop). --context still
@@ -99,8 +111,15 @@ while [[ $# -gt 0 ]]; do
             KUBE_CONTEXT="$2"
             shift 2
             ;;
+        --post-check-timeout)
+            POST_CHECK_TIMEOUT="$2"
+            shift 2
+            ;;
         -h|--help)
-            head -29 "$0" | tail -27
+            # 印檔頭註解（第 3 行起，到第一個非註解行為止）。原本寫死 `head -29 |
+            # tail -27`，新增一個選項就會把說明靜默截掉一行——而截掉的樣子跟「本來
+            # 就沒寫」完全一樣。
+            awk 'NR>2 && /^#/ {sub(/^# ?/, ""); print; next} NR>2 {exit}' "$0"
             exit 0
             ;;
         -*)
@@ -209,6 +228,53 @@ echo -e "${BLUE}Delegating sandbox creation to woow-dev plugin:${NC} ${PLUGIN_CR
 # web.base.url + freeze 的 seed 已宣告式化：.sandbox.yml 的 config_params_stg，
 # 由 plugin create.sh 在部署時 diff-aware 套用（值變才 restart、失敗則 create 非零退出）。
 
+# --- 部署 + 收尾 post-check（兩條路徑共用）---
+#
+# 抽成函式的理由不只是去重：`--image` 那條路以前是 create.sh 一跑完就 `exit 0`，
+# 連 `kubectl get pods` 都沒有，收尾檢查自然也漏掉一整條。**部署的路徑有兩條、
+# 驗證的路徑只有一條**正是 #665 這類無聲失效的溫床，所以兩條合流到同一個收尾。
+VERIFY_ADDON_SH="${SCRIPT_DIR}/verify-addon-version.sh"
+
+deploy_and_postcheck() {
+    local create_args=(--repo "$PROJECT_ROOT" --context "$KUBE_CONTEXT" \
+        --db-prefix "$DB_PREFIX" --yes --branch "$SLUG" --image "$FULL_IMAGE" --mode stg)
+    if [ "$INGRESS" = true ]; then
+        create_args+=(--ingress)
+    fi
+    bash "$PLUGIN_CREATE_SH" "${create_args[@]}"
+
+    local namespace="dev-sandbox-${SLUG}"
+    echo ""
+    echo -e "${BLUE}Verifying deployment...${NC}"
+    kubectl get pods -n "$namespace"
+
+    # 🔴 #665 post-check：換 image **不會**升 addon，而漏升時 helm 綠燈／pod
+    #    1/1 Running／logs 乾淨，與成功長得一模一樣。這道 gate 讓那條路徑變紅，
+    #    且必須讓整支 script 非 0 退出（`set -e` 會接手）——只印 warning 的話，
+    #    自動化呼叫端一樣看不見，等於沒做。
+    if [ ! -f "$VERIFY_ADDON_SH" ]; then
+        echo -e "${RED}ERROR: 找不到 addon 版號 post-check：${VERIFY_ADDON_SH}${NC}" >&2
+        echo -e "${YELLOW}沒有 post-check 就無從得知 addon 到底升了沒 —— 視為部署失敗（#665），不 fallback 成「跳過」。${NC}" >&2
+        return 1
+    fi
+    bash "$VERIFY_ADDON_SH" \
+        --slug "$SLUG" \
+        --context "$KUBE_CONTEXT" \
+        --db-prefix "$DB_PREFIX" \
+        --pod-image "$FULL_IMAGE" \
+        --repo "$PROJECT_ROOT" \
+        --timeout "$POST_CHECK_TIMEOUT"
+
+    echo ""
+    echo -e "${GREEN}========================================${NC}"
+    echo -e "${GREEN}  Staging deployment complete!${NC}"
+    echo -e "${GREEN}========================================${NC}"
+    echo -e "  Namespace: ${namespace}"
+    echo -e "  Image:     ${FULL_IMAGE}"
+    echo -e "  Addon Ref: ${ADDON_REF}"
+    echo ""
+}
+
 # Check tea login (not needed for --image override)
 if [ -z "$IMAGE_OVERRIDE" ]; then
     if ! tea login list &>/dev/null; then
@@ -253,12 +319,8 @@ FULL_IMAGE="${REGISTRY_HOST}/${IMAGE_PATH}:${DOCKER_TAG}"
 if [ -n "$IMAGE_OVERRIDE" ]; then
     FULL_IMAGE="$IMAGE_OVERRIDE"
     echo -e "${BLUE}Using provided image: ${FULL_IMAGE}${NC}"
-    # Jump to deploy
-    CREATE_ARGS=(--repo "$PROJECT_ROOT" --context "$KUBE_CONTEXT" --db-prefix woow_ --yes --branch "$SLUG" --image "$FULL_IMAGE" --mode stg)
-    if [ "$INGRESS" = true ]; then
-        CREATE_ARGS+=(--ingress)
-    fi
-    bash "$PLUGIN_CREATE_SH" "${CREATE_ARGS[@]}"
+    # Jump to deploy（收尾與正常路徑共用同一個 post-check，見 deploy_and_postcheck）
+    deploy_and_postcheck
     exit 0
 fi
 
@@ -375,23 +437,4 @@ fi
 echo ""
 echo -e "${BLUE}Deploying to sandbox...${NC}"
 
-CREATE_ARGS=(--repo "$PROJECT_ROOT" --context "$KUBE_CONTEXT" --db-prefix woow_ --yes --branch "$SLUG" --image "$FULL_IMAGE" --mode stg)
-if [ "$INGRESS" = true ]; then
-    CREATE_ARGS+=(--ingress)
-fi
-bash "$PLUGIN_CREATE_SH" "${CREATE_ARGS[@]}"
-
-# --- Verify ---
-NAMESPACE="dev-sandbox-${SLUG}"
-echo ""
-echo -e "${BLUE}Verifying deployment...${NC}"
-kubectl get pods -n "$NAMESPACE"
-
-echo ""
-echo -e "${GREEN}========================================${NC}"
-echo -e "${GREEN}  Staging deployment complete!${NC}"
-echo -e "${GREEN}========================================${NC}"
-echo -e "  Namespace: ${NAMESPACE}"
-echo -e "  Image:     ${FULL_IMAGE}"
-echo -e "  Addon Ref: ${ADDON_REF}"
-echo ""
+deploy_and_postcheck

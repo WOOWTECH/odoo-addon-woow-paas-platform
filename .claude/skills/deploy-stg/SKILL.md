@@ -24,6 +24,7 @@ usage: |
 | `--skip-build` | 否 | - | 跳過建立 tag，僅輪詢已存在 tag 的 CI 狀態 |
 | `--image <full>` | 否 | - | 直接指定完整 image（跳過 CI 建置），格式: `registry/repo:tag` |
 | `--ingress` | 否 | - | 啟用 Ingress（`{slug}.woowtech.io`） |
+| `--post-check-timeout <s>` | 否 | `300` | addon 版號 post-check 等待 DB 收斂的秒數（見 Step 8） |
 
 ## 前置條件
 
@@ -232,18 +233,58 @@ restart）、值變了 upsert + rollout restart（解 `ir.config_parameter` in-p
 > POST 被 Chrome 擋 Mixed Content，使用者無法完成綁卡/加值。`freeze=True` 防止 Odoo
 > 在第一次 authenticated request 時改回去。
 
-### Step 8: 驗證部署
+### Step 8: 驗證部署 + addon 版號 post-check gate（#665）
+
+`deploy-stg.sh` 收尾會列 pod，然後跑 **addon 版號 post-check**
+（`scripts/verify-addon-version.sh`）。不一致 ⇒ 整支 script 非 0 退出，且**不會**印
+`Staging deployment complete!`。
+
+**為什麼要這道 gate：換 image 不會升 addon。**
+
+- plugin `create.sh` 只下 `--set odoo.updateModules=web`（odoo deployment args 恆為
+  `-u web`，不含 `woow_paas_platform`）
+- `create.sh` 的 `-i <modules>` install 分支只在 DB **未初始化**時跑，既有 stg DB 整段被 skip
+- `.sandbox/post-create.sh` 是純 psql seed，不碰 `ir_module_module`
+
+⇒ 對既有 sandbox，整條路徑沒有任何一步對 `woow_paas_platform` 下 `-u`。過去幾次「換
+image 就升上去了」是**僥倖**——前一輪 upgrade Job 把模組留在 `state='to upgrade'`，
+Odoo 的 registry load 會把它撿起來跑完。前一輪若乾淨收在 `installed`，同樣的 deploy
+就**靜默不升**：helm 綠燈、pod `1/1 Running`、`kubectl logs` 乾淨，DB 版號停在舊版。
+
+**判準**：
+
+| | 值 |
+|---|---|
+| 期望 | **pod 正在跑的 image 內** `custom-addons/<module>/__manifest__.py` 的 `version` |
+| 實際 | DB `ir_module_module.latest_version`，且 `state` 必須是 `installed` |
+
+期望值取自 image 而不是本機 working tree，是因為判準要問的是「跑著的 code 與 DB 有沒有
+對上」；而且 stg 的 CI 一律 clone `develop`，拿 working tree 當基準在 feature branch 上
+會天天誤報。本機 repo 版號仍會印出來當**參考值**（非判準）。
+
+失敗時**只報紅、不自動補跑升級**——自動 `-u` 會與正在服務的 pod 搶同一顆 DB 做
+migration，而手動 upgrade Job 有 ResourceQuota 與 filestore RWO nodeSelector 兩個非顯然
+的陷阱。補升級照 [`docs/guides/deployment/stg-db-manual-upgrade-recipe.md`](../../../docs/guides/deployment/stg-db-manual-upgrade-recipe.md) 走。
+
+**單獨執行**（不重跑部署，隨時可查 stg 現況）：
 
 ```bash
-NAMESPACE="dev-sandbox-${SLUG}"
+# 預設：拿 pod 正在跑的 image 當期望值
+.claude/skills/deploy-stg/scripts/verify-addon-version.sh --slug stg --context woow-k3s --timeout 0
 
-echo "Checking deployment status..."
-kubectl get pods -n "$NAMESPACE"
-kubectl wait --for=condition=ready pod -l app=odoo -n "$NAMESPACE" --timeout=300s
+# 問「我手上這份 code 有沒有上到 stg」：改用本機 manifest 當期望值
+.claude/skills/deploy-stg/scripts/verify-addon-version.sh --slug stg --context woow-k3s \
+  --manifest src/__manifest__.py --timeout 0
+```
 
-echo "Staging deployed successfully!"
-echo "  Namespace: ${NAMESPACE}"
-echo "  Image:     ${FULL_IMAGE}"
+exit code：`0` 一致、`1` 版號判定失敗、`2` 取樣／環境錯誤（**取樣不到 ≠ 沒問題**）。
+
+**gate 自己的自測**：每次跑 post-check 都會先跑一次判定層自測
+（`tests/test-verify-addon-version.sh`，純函式、零外部相依），自測紅或自測檔不見就直接
+判失敗。同一支測試也由 `repo-lint` workflow 在 PR 上跑。
+
+```bash
+bash .claude/skills/deploy-stg/tests/test-verify-addon-version.sh
 ```
 
 ### Step 9: 完成通知
@@ -286,3 +327,7 @@ say -r 180 "主人，staging 環境部署完成了"
 | CI 輪詢 timeout | CI build 時間過長 | 使用 `--timeout` 增加等待時間，或到 Gitea UI 檢查 |
 | Helm install 失敗 | kubectl 未連線或權限不足 | 確認 kubeconfig 和 RBAC |
 | Pod CrashLoopBackOff | Odoo 啟動失敗 | `kubectl logs -n dev-sandbox-stg <pod>` 檢查日誌 |
+| `addon 版號 post-check 失敗（#665）`，DB 版號落後 | deploy-stg 本來就沒有升 addon 的步驟（見 Step 8） | 照 [`stg-db-manual-upgrade-recipe.md`](../../../docs/guides/deployment/stg-db-manual-upgrade-recipe.md) 跑 upgrade Job，再重跑 post-check |
+| post-check 說 `找不到可用的 odoo pod` | rollout 還沒收斂到本次的 image，或 image 字串不符 | 等 rollout 完成後單獨重跑 post-check；**不要**當成「沒問題」略過 |
+| post-check 說 `讀不到 image 內的 manifest` | 該 image 的 addons 路徑不是預設值 | 用 `--addons-path` 指定；讀不到一律當失敗，不會 fallback |
+| `判定層自測未通過` | gate 的比較器本身壞了 | 跑 `bash .claude/skills/deploy-stg/tests/test-verify-addon-version.sh` 看細節；在修好之前 post-check 的綠燈都不可信 |
