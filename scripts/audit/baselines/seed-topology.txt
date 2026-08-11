@@ -1,9 +1,9 @@
 # seed 拓撲計數（repo-lint.py --update-baseline 產生）
 # 純靜態 parse src/data/subscription_{products,template_links}*.xml，與 DB 無關。
 # 這裡的數字變動時，check_seed_topology 會列出所有該一起檢視的位置。調整前必讀 docs/decisions/patterns/seed-topology-invariants.md
-55	base_plans
-52	linked_bases
-271	subscription_products
-26	tiers
+57	base_plans
+54	linked_bases
+273	subscription_products
+27	tiers
 216	variant_plans
-52	visible_linked_bases
+54	visible_linked_bases
