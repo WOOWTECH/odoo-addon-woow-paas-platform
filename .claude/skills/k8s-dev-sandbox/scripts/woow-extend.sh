@@ -4,7 +4,7 @@
 # 延長 Kubernetes 中 Odoo 開發沙盒的存活時間
 #
 # Usage:
-#   .claude/skills/k8s-dev-sandbox/scripts/extend.sh [NAME] [OPTIONS]
+#   .claude/skills/k8s-dev-sandbox/scripts/woow-extend.sh [NAME] [OPTIONS]
 #
 # Arguments:
 #   NAME                Sandbox name (slug). If not provided, auto-detect from current branch.
@@ -14,9 +14,9 @@
 #   -h, --help          Show usage
 #
 # Examples:
-#   .claude/skills/k8s-dev-sandbox/scripts/extend.sh --ttl 48h
-#   .claude/skills/k8s-dev-sandbox/scripts/extend.sh epic-smarthome --ttl 168h
-#   .claude/skills/k8s-dev-sandbox/scripts/extend.sh --ttl 0
+#   .claude/skills/k8s-dev-sandbox/scripts/woow-extend.sh --ttl 48h
+#   .claude/skills/k8s-dev-sandbox/scripts/woow-extend.sh epic-smarthome --ttl 168h
+#   .claude/skills/k8s-dev-sandbox/scripts/woow-extend.sh --ttl 0
 
 set -euo pipefail
 
