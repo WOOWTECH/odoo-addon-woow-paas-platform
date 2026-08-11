@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """repo-lint：把「假綠家族」pitfall 轉成機械 gate 的靜態檢查工具。
 
-二十六個 check 函式，歸為下列二十三條規則（其中兩條各由多個函式實作：第 7 條
+二十七個 check 函式，歸為下列二十四條規則（其中兩條各由多個函式實作：第 7 條
 capability-gate 由三個函式——slug 集合成員／admin-gui 錨點／gateway 文案錨點；第 22 條
 security-rule-lifecycle 由兩個函式——ir.rule 的出生地／退役名字。這個一對多關係的顯式
 映射表是 `REPO_LINT_RULES`，由第 17 條機械對帳，所以上面這兩個數字不會再靜默漂掉）。
@@ -219,6 +219,19 @@ security-rule-lifecycle 由兩個函式——ir.rule 的出生地／退役名字
                      #659 指定的是寫入面，且今天有 workspace_access_rule_member_read
                      ——寫在這裡免得下一個人以為讀方向也被守著。
                      ⚠ 只驗**存在性**，不驗 domain 寫得對不對。
+                     依據 docs/tracking/landings/556-workspace-access-authz-landing.md
+24. workspace-rule-directions  同第 23 條的判準，套在
+                     `woow_paas_platform.workspace`（workspace **本體**，不是成員列）。
+                     #658：這個 model 原本只有一條 perm_read+perm_write 合一、domain
+                     無 role 條件的 rule，任何 guest 成員都能改 `owner_id`（訂閱帳單
+                     partner ＋ max_per_partner 配額的錨）與 `slug`（K8s namespace／
+                     公開 subdomain 的唯一輸入）。修復把讀寫拆開後，`perm_write` 只剩
+                     `workspace_rule_owner_admin_manage` 一條在守 —— 它被「順手簡化」
+                     掉的當下，租戶對 workspace 本體的寫入就完全不設限，而且無聲。
+                     刻意寫成獨立一條而不是併進第 23 條：第 23 條的名字已經進了
+                     `baselines/repo-lint-registry.txt` 這個只准長不准縮的 floor，改名
+                     要跑 `--update-baseline`，而那支會一次重產**全部** baseline、
+                     順手吸收掉別處新冒出來的違規（#613 記錄有案）。附加一條不會。
                      依據 docs/tracking/landings/556-workspace-access-authz-landing.md
 
 用法：
@@ -1384,17 +1397,18 @@ def check_hermes_agent_013_seed(root):
     return violations
 
 
-# ------------------------------------------------------------ #659 ir.rule 三條守線
-# 三條守線共用同一份「module 全部 <record> 宣告」的靜態視圖（`module_record_declarations`）：
+# ------------------------------------------------------------ #659 ir.rule 四條守線
+# 四條守線共用同一份「module 全部 <record> 宣告」的靜態視圖（`module_record_declarations`）：
 #   (1) check_security_rule_noupdate        ir.rule 不得**出生**在 noupdate="1" 區塊
-#   (2) check_retired_rule_xmlid            #556 退役的 xmlid 不得**復活**
+#   (2) check_retired_rule_xmlid            退役的 xmlid 不得**復活**
 #   (3) check_workspace_access_rule_directions  workspace_access 的寫入方向不得**留空**
-# 前兩條是同一個機制的兩端（`ir_model_data.noupdate` 的 sticky 語意），第三條守的是
-# 活的授權面 ⇒ 前兩條合成一條規則、第三條自成一條（見檔頭 22／23）。
+#   (4) check_workspace_rule_directions     workspace 本體的寫入方向不得**留空**（#658）
+# 前兩條是同一個機制的兩端（`ir_model_data.noupdate` 的 sticky 語意），後兩條守的是
+# 活的授權面 ⇒ 前兩條合成一條規則、後兩條各自成一條（見檔頭 22／23／24）。
 IR_RULE_MODEL = "ir.rule"
 SECURITY_RULES_REL = "src/security/ir_rules.xml"
 # 只給違規訊息用（印 ACL 實值），**不參與任何 pass/fail 判準**——見
-# `_workspace_access_acl_note` 與 `check_workspace_access_rule_directions` 的 docstring。
+# `_model_acl_note` 與 `_rule_direction_violations` 的 docstring。
 ACL_CSV_REL = "src/security/ir.model.access.csv"
 SECURITY_RULE_DOC = "docs/tracking/landings/556-workspace-access-authz-landing.md"
 # 自家 module 的 xmlid 前綴：`<record id="woow_paas_platform.x">` 與 `<record id="x">`
@@ -1403,21 +1417,20 @@ SECURITY_RULE_DOC = "docs/tracking/landings/556-workspace-access-authz-landing.m
 MODULE_XMLID_PREFIX = "woow_paas_platform."
 
 # (1) 已經住在 noupdate="1" 區塊的既有 ir.rule：**只准縮不准長**的 grandfather 清單。
-# 這兩條是 #658 的待辦（搬出去要配 migration DELETE，不在 #659 範圍），本 gate 只負責
-# 收錄它們，否則守線第一天就紅。
+# 🔴 #658 把原本列在這裡的 workspace_rule_member_access / workspace_rule_create 退役掉
+# 之後，這份清單已經空了——**空是正確的終態，不要為了「留個範例」塞東西回來**。
 # 🔴 刻意寫成 in-code 常數而不是 `baselines/*.txt`：`--update-baseline` 會一次重產**全部**
 # baseline，任何人為了別的理由（改 seed 拓撲、新增一條 check）跑它，就會把新冒出來的
 # 違規一起靜默吸收——那是 baseline 機制的已知代價，而這份清單守的是安全面。寫在 code
 # 裡時「放行一條新的 rule」必然出現在同一處 diff，覆核看得到。
-SECURITY_RULE_NOUPDATE_ALLOWED = {
-    "workspace_rule_member_access": "#658（workspace model 的成員讀寫規則）",
-    "workspace_rule_create": "#658（workspace model 的建立規則）",
-}
+SECURITY_RULE_NOUPDATE_ALLOWED = {}
 
-# (2) #556 已用 migration 18.0.1.0.122 DELETE 退役的 xmlid：不得再有 <record> 宣告。
+# (2) 已用 migration DELETE 退役的 xmlid：不得再有 <record> 宣告。
 RETIRED_RULE_XMLIDS = {
-    "workspace_access_rule_member_access": "18.0.1.0.122",
-    "workspace_access_rule_create": "18.0.1.0.122",
+    "workspace_access_rule_member_access": "18.0.1.0.122",  # #556
+    "workspace_access_rule_create": "18.0.1.0.122",  # #556
+    "workspace_rule_member_access": "18.0.1.0.126",  # #658
+    "workspace_rule_create": "18.0.1.0.126",  # #658
 }
 
 # (3) 守哪個 model 的哪幾個方向。model 端錨在 `<field name="model_id" ref="…"/>` 的
@@ -1425,6 +1438,9 @@ RETIRED_RULE_XMLIDS = {
 # `workspace_access_rule_member_read` 守著，而 #659 指定的是寫入面；不納入是**刻意的
 # 決定**而不是漏掉，寫在這裡免得下一個人以為讀方向也被守著。
 WORKSPACE_ACCESS_MODEL_REF = "model_woow_paas_platform_workspace_access"
+# workspace **本體**（#658）。與上面那個是不同的 model：一個是成員關係列、一個是
+# 被保護的資源本身，兩者的 rule 集合互相獨立，缺哪一邊都不會讓另一邊變紅。
+WORKSPACE_MODEL_REF = "model_woow_paas_platform_workspace"
 # 租戶帳號實際持有的群組。`base.group_system` 不算——見 (3) 的 docstring。
 TENANT_GROUP_XMLID = "base.group_user"
 IR_RULE_WRITE_DIRECTIONS = ("perm_write", "perm_create", "perm_unlink")
@@ -1793,7 +1809,7 @@ def _rule_flag(fields, name):
     return _field_literal_bool(fld.get("eval") or fld.text or "", False)
 
 
-def _workspace_access_acl_note(root):
+def _model_acl_note(root, model_ref):
     """違規訊息用的 ACL 實值子句；讀不到／查無該列一律回空字串。
 
     只服務**訊息**，不參與 pass/fail（判準與 ACL 脫鉤，見呼叫端 docstring）。所以這裡
@@ -1812,7 +1828,7 @@ def _workspace_access_acl_note(root):
     for row in rows:
         model = _strip_module_prefix((row.get("model_id:id") or "").strip())
         group = (row.get("group_id:id") or "").strip()
-        if model != WORKSPACE_ACCESS_MODEL_REF or group != TENANT_GROUP_XMLID:
+        if model != model_ref or group != TENANT_GROUP_XMLID:
             continue
         perms = [(row.get("perm_" + name) or "0").strip()
                  for name in ("read", "write", "create", "unlink")]
@@ -1820,6 +1836,49 @@ def _workspace_access_acl_note(root):
                 "值無關，寫出來只是讓你判斷今天是否可被利用"
                 % (ACL_CSV_REL, TENANT_GROUP_XMLID, ",".join(perms)))
     return ""
+
+
+def _rule_direction_violations(root, model_ref, what):
+    """第 23／24 條共用的實作：`model_ref` 的三個寫入方向各要有一條租戶生效的 rule。
+
+    🔴 刻意**不叫 `check_*`**：叫了就會被第 17 條那組雙射（檔頭條目 ↔
+    `REPO_LINT_RULES` ↔ `run_all()` 實際呼叫）當成一條獨立的 check 函式，而它不是
+    ——它是兩條 check 的共用實作。同一個理由見 `_repo_lint_registry_floor`。
+
+    涵蓋一個方向的條件：`active` 且該 `perm_*` 為真 且（沒宣告 groups＝global／或
+    groups 含 `base.group_user`）。判準與 ACL 脫鉤，理由見兩個呼叫端的 docstring。
+    """
+    records, errors = module_record_declarations(root)
+    violations = _ir_rule_premise(records, errors, what)
+    covered = {direction: [] for direction in IR_RULE_WRITE_DIRECTIONS}
+    for rec in records:
+        if rec["model"] != IR_RULE_MODEL:
+            continue
+        if _rule_model_ref(rec["fields"]) != model_ref:
+            continue
+        fields = rec["fields"]
+        if not _rule_flag(fields, "active"):
+            continue
+        groups = _rule_group_xmlids(fields)
+        if groups is not None and TENANT_GROUP_XMLID not in groups:
+            continue  # 只掛 group_system（或其他群組）⇒ 對租戶不構成限制
+        for direction in IR_RULE_WRITE_DIRECTIONS:
+            if _rule_flag(fields, direction):
+                covered[direction].append(rec["xmlid"])
+    for direction in IR_RULE_WRITE_DIRECTIONS:
+        if covered[direction]:
+            continue
+        violations.append(
+            "%s：`%s` 沒有任何一條對 `%s` 生效的 ir.rule 涵蓋 `%s` 方向（active 且 "
+            "%s=True 且 groups 含 %s 或無 groups）。Odoo `_get_rules` 對租戶查無 rule "
+            "⇒ `_compute_domain` 回空 domain ＝**該方向在規則層完全不設限**，任何內部"
+            "帳號對任何租戶的列都沒有列層級過濾（#519 的地基）。⚠ 只掛 "
+            "base.group_system 的 `*_rule_admin_full` **不算**涵蓋：它對純 "
+            "base.group_user 帳號完全不生效，補它只會讓 gate 轉綠而洞還在（見 %s）%s"
+            % (SECURITY_RULES_REL, model_ref, TENANT_GROUP_XMLID,
+               direction, direction, TENANT_GROUP_XMLID, SECURITY_RULE_DOC,
+               _model_acl_note(root, model_ref)))
+    return violations
 
 
 def check_workspace_access_rule_directions(root):
@@ -1854,38 +1913,31 @@ def check_workspace_access_rule_directions(root):
     `[(1, '=', 1)]` 的 group_user rule 會被算成「有守」。domain 語意由
     `src/tests/` 的行為測試守（見 docs/tracking/landings/556-workspace-access-authz-landing.md）。
     """
-    what = "workspace_access 寫入方向存在性"
-    records, errors = module_record_declarations(root)
-    violations = _ir_rule_premise(records, errors, what)
-    covered = {direction: [] for direction in IR_RULE_WRITE_DIRECTIONS}
-    for rec in records:
-        if rec["model"] != IR_RULE_MODEL:
-            continue
-        if _rule_model_ref(rec["fields"]) != WORKSPACE_ACCESS_MODEL_REF:
-            continue
-        fields = rec["fields"]
-        if not _rule_flag(fields, "active"):
-            continue
-        groups = _rule_group_xmlids(fields)
-        if groups is not None and TENANT_GROUP_XMLID not in groups:
-            continue  # 只掛 group_system（或其他群組）⇒ 對租戶不構成限制
-        for direction in IR_RULE_WRITE_DIRECTIONS:
-            if _rule_flag(fields, direction):
-                covered[direction].append(rec["xmlid"])
-    for direction in IR_RULE_WRITE_DIRECTIONS:
-        if covered[direction]:
-            continue
-        violations.append(
-            "%s：`%s` 沒有任何一條對 `%s` 生效的 ir.rule 涵蓋 `%s` 方向（active 且 "
-            "%s=True 且 groups 含 %s 或無 groups）。Odoo `_get_rules` 對租戶查無 rule "
-            "⇒ `_compute_domain` 回空 domain ＝**該方向在規則層完全不設限**，任何內部"
-            "帳號對任何租戶的列都沒有列層級過濾（#519 的地基）。⚠ 只掛 "
-            "base.group_system 的 `*_rule_admin_full` **不算**涵蓋：它對純 "
-            "base.group_user 帳號完全不生效，補它只會讓 gate 轉綠而洞還在（見 %s）%s"
-            % (SECURITY_RULES_REL, WORKSPACE_ACCESS_MODEL_REF, TENANT_GROUP_XMLID,
-               direction, direction, TENANT_GROUP_XMLID, SECURITY_RULE_DOC,
-               _workspace_access_acl_note(root)))
-    return violations
+    return _rule_direction_violations(
+        root, WORKSPACE_ACCESS_MODEL_REF, "workspace_access 寫入方向存在性")
+
+
+def check_workspace_rule_directions(root):
+    """`workspace` **本體**的每個寫入方向都要有一條對租戶生效的 ir.rule（#658）。
+
+    判準與 `check_workspace_access_rule_directions`（#659 ③）逐字相同，只是換一個
+    model——兩個 model 的 rule 集合互相獨立，守住成員關係列不代表守住了被保護的資源
+    本身。#658 的洞正是這個分岔：`workspace_access` 在 #556 收窄成四條 role-aware
+    rule 之後，`workspace` 本體仍只有一條 perm_read+perm_write 合一、domain 無 role
+    條件的 `workspace_rule_member_access`，任何 guest 成員照樣能改 `owner_id`
+    （帳單 partner ＋ 配額計數的錨）與 `slug`（K8s namespace／subdomain 的唯一輸入）。
+
+    修復後 `perm_write` 方向只剩 `workspace_rule_owner_admin_manage` 一條在守，
+    `perm_unlink` 只剩 `workspace_rule_owner_unlink`。後者今天**不放行任何東西**
+    （ACL 的 `perm_unlink=0` 擋在前面，而 ir.rule 只會限縮不會授予），所以它看起來
+    最像「多餘、順手刪掉」的那一條——這條 gate 就是為了讓那一刀變紅。
+
+    ⚠ 與第 23 條一樣只驗**存在性**，不驗 domain 寫得對不對：一條
+    `[(1, '=', 1)]` 的 group_user rule 會被算成「有守」。domain 語意由
+    `src/tests/test_workspace_authz_658.py` 的行為測試守。
+    """
+    return _rule_direction_violations(
+        root, WORKSPACE_MODEL_REF, "workspace 寫入方向存在性")
 
 
 def _template_is_hidden_via_service_lines(src):
@@ -3271,6 +3323,7 @@ REPO_LINT_RULES = {
     "security-rule-lifecycle": ("check_security_rule_noupdate",
                                 "check_retired_rule_xmlid"),
     "workspace-access-rule-directions": ("check_workspace_access_rule_directions",),
+    "workspace-rule-directions": ("check_workspace_rule_directions",),
 }
 
 # 刻意不掛 hook 分派的 check：{函式名: 理由}。現況是空的（每一條都掛得到 hook）。
@@ -3692,7 +3745,8 @@ def run_all(root):
                   + check_hermes_agent_013_seed(root)
                   + check_security_rule_noupdate(root)
                   + check_retired_rule_xmlid(root)
-                  + check_workspace_access_rule_directions(root))
+                  + check_workspace_access_rule_directions(root)
+                  + check_workspace_rule_directions(root))
     if violations:
         print("repo-lint：%d 個違規" % len(violations))
         for v in violations:
@@ -3798,6 +3852,7 @@ def run_hook():
         security_rules = (check_security_rule_noupdate(root)
                           + check_retired_rule_xmlid(root)
                           + check_workspace_access_rule_directions(root)
+                          + check_workspace_rule_directions(root)
                           if _security_rule_watches(rel) else [])
         if re.match(r"^src/controllers/.*\.py$", rel):
             violations = check_controller_sudo(root, only_file=abs_path)
