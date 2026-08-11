@@ -133,8 +133,12 @@ class ProjectAccess(models.Model):
             # 第一版只補了 role，漏掉 project_id，攻擊者用
             # with_context(default_project_id=<受害 project>,
             # default_role='owner') 且 vals 不放 project_id 就整道繞過
-            # （PR #666 留言 6583 §1，H1）。single-source-of-truth 版本不會
-            # 因為未來多一個欄位又漏一次。
+            # （PR #666 留言 6583 §1，H1）。single-source-of-truth 版本保證
+            # 的是「同一個欄位」的解析方式不會漂（role／project_id 永遠照
+            # Odoo 自己的順序解析，不會有人手動重演漏掉其中一步）——它不會
+            # 自動涵蓋未來新增的授權相關欄位；日後若新增一個會影響授權判定
+            # 的欄位，仍要手動把它加進 `_check_assignable_role` 的參數與
+            # 呼叫端（#664，PR #666 留言 6616）。
             resolved = self._add_missing_default_values(vals)
             self._check_assignable_role(
                 resolved.get('role') or ROLE_USER,
@@ -240,18 +244,34 @@ class ProjectAccess(models.Model):
         sudo) and for ``base.group_system`` (parallel to the
         ``project_access_rule_admin_full`` ir.rule).
 
-        ``target_role`` / ``project_id`` are resolved by the caller via
-        ``_add_missing_default_values`` (Odoo's own default-resolution
-        function — the same one ``_prepare_create_values`` uses internally)
-        before being passed in, so both already reflect the value Odoo will
-        actually persist, not the raw ``vals`` dict. This function's own
-        early-return below is therefore only a defensive guard against a
-        genuinely absent value (no vals key AND no context default AND no
-        field-level default) — that case still reaches the DB's
-        ``required=True`` constraint and fails closed; it is NOT the place
-        resolving `project_id` from context used to be missing (#657 H1,
-        PR #666 comment 6583 §1 — a prior version of this function was the
-        gap).
+        This function has two callers with different resolution needs —
+        the "already reflects the value Odoo will persist" property below
+        is per-caller, not a blanket guarantee of this function itself
+        (#664, PR #666 comment 6616 — this docstring originally stated the
+        claim unconditionally, which is false for the ``write()`` caller):
+
+        - ``create()`` passes ``target_role`` / ``project_id`` already
+          resolved via ``_add_missing_default_values`` (Odoo's own
+          default-resolution function — the same one
+          ``_prepare_create_values`` uses internally), because ``create``
+          is the only direction where an RPC caller can inject a value
+          through context ``default_<field>`` — a prior version of this
+          function read raw ``vals`` here and missed exactly that (#657
+          H1, PR #666 comment 6583 §1).
+        - ``write()`` passes the raw ``vals['role']`` / ``rec.project_id.id``
+          straight through, unresolved — this is correct, not a gap:
+          Odoo's own `write()` never applies `default_get`/context-default
+          resolution (that machinery is wired into `_prepare_create_values`,
+          which only `create()` goes through — verified against
+          `odoo/models.py`, no `default_get`/`_add_missing_default_values`
+          call anywhere in `BaseModel.write()`'s body), so there is no
+          context-injected value for a write-direction caller to resolve.
+
+        This function's own early-return below is therefore only a
+        defensive guard against a genuinely absent value — on the create
+        path, no vals key AND no context default AND no field-level
+        default; that case still reaches the DB's ``required=True``
+        constraint and fails closed.
         """
         if not project_id:
             return
