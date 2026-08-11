@@ -7,10 +7,19 @@
   ② `check_retired_rule_xmlid`                已退役的 xmlid 不得**復活**
   ③ `check_workspace_access_rule_directions`  workspace_access 的寫入方向不得**留空**
 
+  ④ `check_workspace_rule_directions`         workspace **本體**的寫入方向不得**留空**
+
 ⚠ ② 原本寫「#556 退役的 xmlid」——#658 又退役了 `workspace_rule_member_access` /
-`workspace_rule_create`（migration `18.0.1.0.127`），權威清單是 `RETIRED_RULE_XMLIDS`
-本身，不是這段散文。⚠ #658 另外新增了第四條 gate `check_workspace_rule_directions`
-（workspace **本體**的寫入方向），**本檔目前沒有覆蓋它**——那是已知缺口，不是已測。
+`workspace_rule_create`（migration `18.0.1.0.129`），權威清單是 `RETIRED_RULE_XMLIDS`
+本身，不是這段散文。
+
+④ 是 #658 新增的。它與 ③ 共用實作（`_rule_direction_violations`），所以**判準那一半
+由 ③ 的測試覆蓋**；④ 自己真正沒被驗的是**它的錨點**——`WORKSPACE_MODEL_REF` 到底指向
+哪個 model。錨點指錯 ⇒ selector 永不命中 ⇒ **它會永遠是綠的，而名字照樣印在通過清單
+裡**（本 repo 記錄有案的 no-op gate 家族）。③ 的測試**結構上不可能**涵蓋這一格：它們
+注入的是 `workspace_access` 的 record，④ 指錯 model 時那些測試一條都不會變色。
+所以本檔對 ④ 只留一支最小注入測試，錨在「它看的是 workspace 本體」這個唯一的區別點
+——見 `TestWorkspaceModelDirectionAnchor`。
 
 ## 為什麼第一支測試是注入，不是「clean tree 全綠」
 
@@ -76,15 +85,53 @@ model 都配一條 admin_full ⇒ 寬判準會把「洞開著」讀成「有守�
 命中 0 次，`str.replace` 原樣回傳，若沒有那道 assert 就會把「注入根本沒發生」讀成
 「gate 有問題／沒問題」。
 
-🔴 **跑這份配方一定要先 `rm -rf scripts/audit/__pycache__` 並用 `python3 -B`。**
-本檔用 `importlib` 從**檔案路徑**載 `repo-lint.py`，走的是 `SourceFileLoader`，而它的
-bytecode cache 驗證判準是 `(mtime 秒, size)` 這兩個值。就地突變很容易同時避開兩者：
-`"18.0.1.0.127（#658）"` → `"18.0.1.0.999（#658）"` **長度完全相同**，而 `cp` 還原又
-常常落在同一秒 ⇒ `.pyc` 被判定仍然有效，載進來的是**舊的** bytecode。
-2026-08-11 實測（#675 追加 A）：磁碟上明明是 `127`，不清 cache 讀到的是 `999`。
-後果是紅綠讀數**兩個方向都會錯**——那一輪先把「其實會紅」讀成綠（以為新測試沒有
-鑑別力），還原之後又把乾淨的樹讀成紅。這個陷阱**只在就地突變測試裡**咬人（正常跑
-`repo-lint.py` 是 `__main__`、不吃 cache），所以它不是產品問題，是這份配方的問題。
+## 🔴 跑上面那份配方之前先讀這段：它對 `.pyc` stale cache **毫無防備，失敗方向是假綠**
+
+上面那張突變表的形態是「**就地改 `repo-lint.py` 的原始碼 → 跑本檔 → 還原**」。
+本檔用 `importlib` 從**檔案路徑**載 `repo-lint.py`，走 `SourceFileLoader`，而它的
+bytecode cache 驗證判準只有 `(mtime 秒, size)` 兩個值。就地突變非常容易同時避開兩者：
+
+  - **替換值長度相同** ⇒ size 不變。`"…0.129（#658）"` → `"…0.999（#658）"` 正是這種
+    （改版號、翻一個字元、`True`↔`Fals`… 都會踩到）。
+  - **突變與 `cp` 還原落在同一秒** ⇒ mtime 的秒數不變。
+
+兩個一起成立，Python 就判定 `__pycache__/repo-lint.cpython-3xx.pyc` 仍然有效，載進來的
+是**舊的** bytecode——你改的東西根本沒生效。
+
+🔴 **後果的形狀比機制重要：失敗方向是「回報綠」。**
+2026-08-11（#675 追加 A）實測：磁碟上明明是 `127`，不清 cache 讀到的是 `999`；那一輪
+RED 驗證**兩個方向都錯**——先把「其實會紅」的兩支讀成綠（差一點據此下結論「新寫的測試
+沒有鑑別力」，**與事實完全相反**），還原之後又把乾淨的樹讀成紅。
+⇒ 拿到「突變了卻沒紅」時**先懷疑探針，不要先懷疑測試**。
+
+**可照抄的配方（每一次突變迴圈都照這樣做）：**
+
+    # 1) 備份
+    cp scripts/audit/repo-lint.py /tmp/rl.bak
+    # 2) 突變（務必自檢錨點「命中恰好一次」，沒命中就中止——見 InjectionFailed 的理由）
+    python3 - <<'"'"'EOF'"'"'
+    ...
+    EOF
+    # 3) 清 cache 並用 -B 跑
+    rm -rf scripts/audit/__pycache__ && python3 -B -m unittest scripts.audit.test_repo_lint_security_rules
+    # 4) 還原
+    cp /tmp/rl.bak scripts/audit/repo-lint.py
+    # 5) 再清一次 cache 跑，確認回綠（少了這步，還原有沒有生效也不知道）
+    rm -rf scripts/audit/__pycache__ && python3 -B -m unittest scripts.audit.test_repo_lint_security_rules
+
+**兩道獨立的防線，兩道都要：**
+
+  1. `rm -rf scripts/audit/__pycache__` **＋** `python3 -B`。`-B` 只擋**寫入**，既有的
+     `.pyc` 照樣會被讀 ⇒ 少了 `rm -rf` 等於沒防。
+  2. **選突變值時避開「長度相同」**（例：把 `18.0.1.0.129` 改成 `18.0.1.0.9999` 而不是
+     `18.0.1.0.999`）。這是第二道保險，**不能取代第一道**——mtime 同秒仍可單獨咬人。
+
+一句話判準：**改完原始碼之後，先驗「跑起來讀到的值真的變了」再看紅綠。**
+
+⚠ 這個陷阱**只咬「改 `repo-lint.py` 自己」那種突變**。本檔測試內部的注入都在
+`tempfile` 假 root 上做（改的是 XML 資料檔，不是被 import 的 Python 模組），不受影響；
+正常跑 `python3 scripts/audit/repo-lint.py` 是 `__main__`、也不吃 cache。所以它不是
+產品問題，是**這份配方**的問題。
 
 ## 不動 repo 一個字
 
@@ -124,7 +171,7 @@ def retirement_migration(provenance):
 
     🔴 刻意不寫死任何一支 migration 的版號（`18.0.1.0.122` 那份寫法是 #658 撞到的
     F1）：寫死的版號把「當時唯一的退役事件」凍成契約，第二次退役（#658 的
-    `18.0.1.0.127`）發生的當天那條測試就失去靶子，而它的失敗訊息會說「名字不在
+    `18.0.1.0.129`）發生的當天那條測試就失去靶子，而它的失敗訊息會說「名字不在
     migration 裡」——把讀的人導向完全錯誤的方向（以為退役機制壞了）。
 
     版號從值裡解析而不是另外維護一張表：`RETIRED_RULE_XMLIDS` 已經是那份對應關係的
@@ -483,7 +530,7 @@ class TestCleanTreeIsGreen(unittest.TestCase):
 
         🔴 判準從「形態」搬到「不變式」（#658 撞到的 F1）：原本寫死讀
         `src/migrations/18.0.1.0.122/post-migrate.py`——那是當時**唯一**的退役事件。
-        #658 在 `18.0.1.0.127` 退役了第二批，那兩個名字當然不在 122 裡，於是這支報
+        #658 在 `18.0.1.0.129` 退役了第二批，那兩個名字當然不在 122 裡，於是這支報
         「名字不在 migration 裡了」，把讀的人導向「退役機制被改壞了」這個錯誤方向。
 
         不變式是：**每個退役名字，都能在「退役它的那支」migration 裡找到**。
@@ -989,6 +1036,54 @@ class TestDirectionExistence(unittest.TestCase):
 
 
 # ------------------------------------------------------------ ③ 訊息不得寫死會過期的值
+
+class TestWorkspaceModelDirectionAnchor(unittest.TestCase):
+    """④ `check_workspace_rule_directions` 的**錨點**——唯一 ③ 涵蓋不到的那一格。
+
+    ④ 與 ③ 共用 `_rule_direction_violations`，判準那一半由 ③ 的測試守著。④ 自己
+    獨有的只有一個輸入：`WORKSPACE_MODEL_REF`（要看 workspace **本體**，不是
+    workspace_access）。把它指錯 ⇒ selector 永不命中 ⇒ ④ 永遠回 `[]`、`--all` 照樣
+    把它列進通過清單 ＝ 一條看起來在守、實際沒在跑的 no-op gate。
+
+    🔴 ③ 的測試**結構上不可能**抓到這個：它們注入的全是 `workspace_access` 的
+    record，④ 指錯 model 時那些測試一條都不會變色。所以這裡只需要**一支**測試，
+    但它必須錨在那個區別點上——注入 workspace **本體**那條 manage rule 的缺陷，
+    斷言 ④ 轉紅**而且訊息點名 workspace 本體的 model**。
+
+    ⚠ 這支也是「就地突變再跑」的形態 —— 見檔頭 `.pyc` 那一段的配方
+    （本檔的注入都在 tempfile 假 root 上做，不動真檔案，所以不受那個陷阱影響；
+    受影響的是**改 `repo-lint.py` 自己**的那種突變）。
+    """
+
+    MANAGE_RULE = "workspace_rule_owner_admin_manage"
+
+    def test_flipping_the_workspace_manage_rule_reds_gate4_and_names_the_workspace_model(self):
+        fixture = Fixture.from_real(self)
+        self.assertEqual(rl.check_workspace_rule_directions(fixture.root), [],
+                         "注入前就紅了——基準壞掉")
+        clean = fixture.text()
+
+        # 注入：把 workspace 本體 manage rule 的 perm_write 翻掉（注入工具自帶絆線，
+        # 錨點沒命中會 raise InjectionFailed 而不是靜默回傳未突變的原始碼）。
+        fixture.flip_perm(self.MANAGE_RULE, "perm_write")
+
+        got = rl.check_workspace_rule_directions(fixture.root)
+        self.assertEqual(len(got), 1, "④ 應該恰好報一條（perm_write）：%s" % blob(got))
+        self.assertIn("perm_write", got[0], "訊息沒點名是哪個方向")
+        self.assertIn(rl.WORKSPACE_MODEL_REF, got[0],
+                      "訊息沒點名 workspace **本體** 的 model——④ 的錨點可能指錯了")
+        self.assertNotIn(rl.WORKSPACE_ACCESS_MODEL_REF, got[0],
+                         "④ 報的是 workspace_access ⇒ 錨點指到 ③ 的 model 了")
+
+        # 特異性：同一個注入不得讓 ③ 變色（證明兩條 gate 的錨點真的分開）。
+        self.assertEqual(
+            rl.check_workspace_access_rule_directions(fixture.root), [],
+            "動 workspace 本體的 rule 卻讓 ③ 也紅了 ⇒ 兩條 gate 的 model 錨點沒有分開")
+
+        fixture.write(fixture.rel, clean)
+        self.assertEqual(rl.check_workspace_rule_directions(fixture.root), [],
+                         "還原後仍紅——紅的原因不是注入，是 fixture／環境")
+
 
 class TestViolationMessageDoesNotAssertStaleFacts(unittest.TestCase):
     """訊息裡的 ACL 值必須是**讀出來的**，不是寫死的（#659 驗收 F3）。
