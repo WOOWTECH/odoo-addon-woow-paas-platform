@@ -51,6 +51,24 @@ self._check_assignable_role(resolved.get('role') or ROLE_USER, resolved.get('wor
 | **Y2**（normal / orphan 各一條） | 同上兩組，走 workspace_id 半邊 | 同上 | `AccessError` | workspace_id 半邊，`vals.get('workspace_id')` 為 `None` 時整道守衛**不管 role 是什麼**都不執行 |
 | **Y3** | 對照組：role／workspace_id 全部明寫在 vals，不透過任何 context default | `AccessError`（守衛本來就會擋） | `AccessError` | 單一差異變數對照——Y0/Y2 與這條的唯一差異就是欄位在 vals 還是 context，這就是洞的存在證明 |
 
+## 機制陽性對照（leader1 裁決，2026-08-11，覆核 §Q2）
+
+Y0/Y1/Y2/Y2-orphan 全部斷言的是「被擋」，Y3 斷言的是「值寫在 vals 也被擋」——沒有任何一
+條斷言「context default 這個機制本身還有效」。若日後 Odoo 的 context-default 解析機制被
+改壞（版本升級、context 被清洗、`with_context` 用錯），Y0-Y2 會因為 payload 根本沒驅動任
+何東西而**全部意外變綠**，外觀上與「守衛擋住了」一模一樣——develop 上跑出的 RED 只證明
+了當時那個 payload 可驅動，是一次性證據，不是會持續跑的測試。`test_context_default_
+mechanism_is_effective` 用一個豁免身分（`base.group_system`，繞過 `_check_assignable_
+role` 本身，讓這條測試只測「機制」不測「守衛」）送出與 Y0/Y1 同型的 context-default
+payload（vals 完全不放 `role`／`workspace_id`，兩者都只放在 context），斷言 (a) 列真的被
+建出來、(b) 落地的 role 確實是 `owner`、(c) `workspace_id` 確實是 context 給的那個。三個
+斷言缺一不可——只斷言「建出來了」不足以證明 context default 真的被套用（也可能是欄位
+default 或某個巧合值）。目標選 orphan workspace（借用 Y1/Y2-orphan 的 fixture）是為了避開
+`_check_owner_count`——那道不變式對 superuser／group_system 沒有豁免，若在有 owner 列的
+workspace 上跑，這條陽性對照本身就會被不相干的不變式擋下。這條同時覆蓋了本次修法新程式
+路徑對 superuser／group_system 的豁免分支（`_add_missing_default_values` 現在對這兩種身
+分也會跑）。
+
 ## orphan workspace 怎麼建（#664 補正留言 §3）
 
 租戶自己造不出「無 owner 列的 workspace」——刪 `res.users` 是
@@ -324,6 +342,38 @@ class TestWorkspaceAccess664AttackVectors(_WorkspaceAccess664Fixture):
             self.WorkspaceAccess.sudo().search([
                 ('workspace_id', '=', self.ws1.id), ('user_id', '=', self.eve.id)]),
             '拒絕必須發生在 INSERT 之前——不得留下殘留列')
+
+    # ---------------------------------------------------------------- #
+    #  機制陽性對照（leader1 裁決，2026-08-11，見檔頭「機制陽性對照」段）  #
+    # ---------------------------------------------------------------- #
+    def test_context_default_mechanism_is_effective(self):
+        """證明 context-default 解析機制本身還活著，不只是「守衛擋住了」的
+        外觀。用 `group_system`（豁免身分，繞過 `_check_assignable_role`
+        本身）送出與 Y0/Y1 同型的 payload——vals 完全不放 `role` 與
+        `workspace_id`，兩者都只放在 context——三個斷言缺一不可：
+        (a) 列真的被建出來，(b) 落地的 role 確實是 `owner`（不是欄位
+        default 的 `user`），(c) `workspace_id` 確實是 context 給的那個
+        （不是 False 或某個巧合值）。目標用 orphan workspace 避開
+        `_check_owner_count`（那道不變式對 group_system 沒有豁免）。
+        """
+        orphan = self._make_orphan_workspace(self.frank, self.dave, 'PMech-orphan-664')
+        self.authenticate('admin', 'admin')
+        result = self._call_kw(
+            'woow_paas_platform.workspace_access', 'create',
+            [{'user_id': self.eve.id}],
+            {'context': {'default_role': ROLE_OWNER, 'default_workspace_id': orphan.id}})
+        self._assert_call_kw_ok(
+            result, 'group_system 用純 context-default payload（vals 不放 '
+                    'role/workspace_id）建列應成功（機制陽性對照，回 %r）' % result)
+        new_id = result['result']
+        row = self.WorkspaceAccess.sudo().browse(new_id)
+        self.assertEqual(
+            row.role, ROLE_OWNER,
+            'context 的 default_role 必須真的落地成 owner——若不是，代表 '
+            'context-default 機制本身沒被驅動，Y0/Y1/Y2 對它零鑑別力')
+        self.assertEqual(
+            row.workspace_id.id, orphan.id,
+            'context 的 default_workspace_id 必須真的落地成 orphan——同上')
 
 
 @tagged('post_install', '-at_install')
