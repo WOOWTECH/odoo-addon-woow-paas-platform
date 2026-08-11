@@ -133,8 +133,12 @@ class ProjectAccess(models.Model):
             # 第一版只補了 role，漏掉 project_id，攻擊者用
             # with_context(default_project_id=<受害 project>,
             # default_role='owner') 且 vals 不放 project_id 就整道繞過
-            # （PR #666 留言 6583 §1，H1）。single-source-of-truth 版本不會
-            # 因為未來多一個欄位又漏一次。
+            # （PR #666 留言 6583 §1，H1）。single-source-of-truth 版本保證
+            # 的是「同一個欄位」的解析方式不會漂（role／project_id 永遠照
+            # Odoo 自己的順序解析，不會有人手動重演漏掉其中一步）——它不會
+            # 自動涵蓋未來新增的授權相關欄位；日後若新增一個會影響授權判定
+            # 的欄位，仍要手動把它加進 `_check_assignable_role` 的參數與
+            # 呼叫端（#664，PR #666 留言 6616）。
             resolved = self._add_missing_default_values(vals)
             self._check_assignable_role(
                 resolved.get('role') or ROLE_USER,
