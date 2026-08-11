@@ -239,17 +239,59 @@ restart）、值變了 upsert + rollout restart（解 `ir.config_parameter` in-p
 （`scripts/verify-addon-version.sh`）。不一致 ⇒ 整支 script 非 0 退出，且**不會**印
 `Staging deployment complete!`。
 
-**為什麼要這道 gate：換 image 不會升 addon。**
+**先講結論：換 image ✅ 會升 addon。這道 gate 驗的不是「有沒有升」，而是「升級有沒有
+收斂完成」。**
+
+底下三條原始碼觀察都是**真的**，別把它們一起丟掉：
 
 - plugin `create.sh` 只下 `--set odoo.updateModules=web`（odoo deployment args 恆為
   `-u web`，不含 `woow_paas_platform`）
 - `create.sh` 的 `-i <modules>` install 分支只在 DB **未初始化**時跑，既有 stg DB 整段被 skip
 - `.sandbox/post-create.sh` 是純 psql seed，不碰 `ir_module_module`
 
-⇒ 對既有 sandbox，整條路徑沒有任何一步對 `woow_paas_platform` 下 `-u`。過去幾次「換
-image 就升上去了」是**僥倖**——前一輪 upgrade Job 把模組留在 `state='to upgrade'`，
-Odoo 的 registry load 會把它撿起來跑完。前一輪若乾淨收在 `installed`，同樣的 deploy
-就**靜默不升**：helm 綠燈、pod `1/1 Running`、`kubectl logs` 乾淨，DB 版號停在舊版。
+⇒ 沒有任何一步**顯式**對 `woow_paas_platform` 下 `-u`。**但這不等於它不會被升**——漏掉的
+是 Odoo 的 **reverse-dependency 傳播**：
+
+| 環節 | 憑據（Odoo 18 原始碼，本機樹 `AREA-odoo/odoo-18.0/`） |
+|---|---|
+| CLI `-u` 走的就是 `button_upgrade()` | `odoo/modules/loading.py:458-462` |
+| `button_upgrade()` 把**依賴被升模組的模組**一併標 `to upgrade` | `odoo/addons/base/models/ir_module.py:706-714`（查 `dependency.name == 當前模組名` → 取 `dep.module_id`） |
+| 而且是**遞移**的（`while` 迴圈取閉包，非只一層） | 同上 `:699-712` |
+| `woow_paas_platform` 是 `web` 的 dependent | `src/__manifest__.py` `depends` 直接含 `web`；**且**經 `project` / `bus` 兩條間接鏈同樣到 `web` |
+
+⇒ `-u web` 連帶升 `woow_paas_platform`，**不需要 `stg-upgrade-N` Job**。因為直接鏈與間接
+鏈同時成立，就算哪天有人把 `web` 從 `depends` 拿掉，傳播照樣經 `project` / `bus` 生效——
+這個結論不是靠單一一行 manifest 撐著的。
+
+**那 gate 還有什麼用？** 傳播會被觸發 ≠ 升級會收斂完成。仍然會靜默失效的形態：模組卡在
+`to upgrade`、migration 中途炸掉、模組被反安裝、psql 探針壞掉回空值——這些一樣是 helm 綠燈、
+pod `1/1 Running`、`kubectl logs` 乾淨。**gate 驗的是終態，不是路徑。**
+
+<details>
+<summary>⚠ 2026-08-11 之前這裡寫的是相反的結論（保留原文，因為這個坑值得看得見）</summary>
+
+原文：
+
+> ~~⇒ 對既有 sandbox，整條路徑沒有任何一步對 `woow_paas_platform` 下 `-u`。過去幾次「換~~
+> ~~image 就升上去了」是**僥倖**——前一輪 upgrade Job 把模組留在 `state='to upgrade'`，~~
+> ~~Odoo 的 registry load 會把它撿起來跑完。前一輪若乾淨收在 `installed`，同樣的 deploy~~
+> ~~就**靜默不升**：helm 綠燈、pod `1/1 Running`、`kubectl logs` 乾淨，DB 版號停在舊版。~~
+
+**這個結論在 2026-08-11 被一次乾淨的對照實驗推翻**：起點 DB `installed | .123`（無殘留
+`to upgrade` 可被撿）→ 換 image → 無任何人為介入 → DB `installed | .124`。
+
+⚠ **錯在哪一層很重要**：上面那三條 `create.sh` 原始碼觀察**本身是對的**，錯的是從它們推出
+的**因果**——把「沒人顯式下 `-u`」等同於「不會升」，漏掉 reverse-dependency 傳播這一環。
+所以修正保留了觀察、只換掉推論。
+
+⚠ 同日早上曾把「新 pod 啟動 61 秒時 `to upgrade | .121`」判讀成「昨晚 Job 的殘留」。不是——
+那是這次 `-u web` 傳播標記後、升級**進行中**的快照。
+
+📌 **這個說法在本 repo 已被講反三次**（2026-06-02 F-DT-4 原報 → 同日 8 分鐘後自己撤回；
+2026-08-03 本 skill 與 `stg-upgrade-recipe-dev-sandbox.md`；2026-08-11 早上 issue #665 與
+本檔）。要再寫「換 image 不會升 addon」之前，請先跑一次上表的原始碼查證。
+
+</details>
 
 **判準**：
 
@@ -264,7 +306,20 @@ Odoo 的 registry load 會把它撿起來跑完。前一輪若乾淨收在 `inst
 
 失敗時**只報紅、不自動補跑升級**——自動 `-u` 會與正在服務的 pod 搶同一顆 DB 做
 migration，而手動 upgrade Job 有 ResourceQuota 與 filestore RWO nodeSelector 兩個非顯然
-的陷阱。補升級照 [`docs/guides/deployment/stg-db-manual-upgrade-recipe.md`](../../../docs/guides/deployment/stg-db-manual-upgrade-recipe.md) 走。
+的陷阱。
+
+**紅燈時的處置順序（別直接跳去跑 Job）**：
+
+1. **先等**：`-u web` 的傳播升級要跑完才會落到 `installed`。rollout 剛收斂就查會抓到
+   `to upgrade` 的**進行中**快照——那不是失敗。單獨重跑 post-check 確認。
+2. **再看 log**：`kubectl --context woow-k3s -n dev-sandbox-stg logs deploy/stg-odoo-dev-sandbox-odoo`
+   找 `Running migration [<ver>>] post-migrate` 與 `Modules loaded.`。傳播有被觸發、但
+   migration 途中炸了，錯誤會在這裡。
+3. **確認傳播鏈還在**：`src/__manifest__.py` 的 `depends`（直接 `web`，或間接經 `project` /
+   `bus`）。整條斷了才是「真的沒被升」。
+4. **最後才是** 手動 upgrade Job，照
+   [`docs/guides/deployment/stg-db-manual-upgrade-recipe.md`](../../../docs/guides/deployment/stg-db-manual-upgrade-recipe.md)。
+   它在傳播沒發生、或要單獨升某個模組時仍然有用，**但不是 deploy-stg 的必要步驟**。
 
 **單獨執行**（不重跑部署，隨時可查 stg 現況）：
 
@@ -327,7 +382,7 @@ say -r 180 "主人，staging 環境部署完成了"
 | CI 輪詢 timeout | CI build 時間過長 | 使用 `--timeout` 增加等待時間，或到 Gitea UI 檢查 |
 | Helm install 失敗 | kubectl 未連線或權限不足 | 確認 kubeconfig 和 RBAC |
 | Pod CrashLoopBackOff | Odoo 啟動失敗 | `kubectl logs -n dev-sandbox-stg <pod>` 檢查日誌 |
-| `addon 版號 post-check 失敗（#665）`，DB 版號落後 | deploy-stg 本來就沒有升 addon 的步驟（見 Step 8） | 照 [`stg-db-manual-upgrade-recipe.md`](../../../docs/guides/deployment/stg-db-manual-upgrade-recipe.md) 跑 upgrade Job，再重跑 post-check |
+| `addon 版號 post-check 失敗（#665）`，DB 版號落後 | **不是**「deploy-stg 沒有升 addon 的步驟」——`-u web` 會經 reverse-dependency 傳播升它（見 Step 8）。落後代表**升級沒收斂**：還在跑、migration 炸了、或模組被卡住 | 照 Step 8「紅燈時的處置順序」：先重跑 post-check 確認不是進行中快照 → 查 odoo pod log 的 `post-migrate` / `Modules loaded.` → 確認 `depends` 傳播鏈未斷 → 都排除了才跑手動 upgrade Job |
 | post-check 說 `找不到可用的 odoo pod` | rollout 還沒收斂到本次的 image，或 image 字串不符 | 等 rollout 完成後單獨重跑 post-check；**不要**當成「沒問題」略過 |
 | post-check 說 `讀不到 image 內的 manifest` | 該 image 的 addons 路徑不是預設值 | 用 `--addons-path` 指定；讀不到一律當失敗，不會 fallback |
 | `判定層自測未通過` | gate 的比較器本身壞了 | 跑 `bash .claude/skills/deploy-stg/tests/test-verify-addon-version.sh` 看細節；在修好之前 post-check 的綠燈都不可信 |

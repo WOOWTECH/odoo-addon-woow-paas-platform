@@ -6,19 +6,51 @@
 # ---------------------------------------------------------------------------
 # 為什麼需要這道 gate
 # ---------------------------------------------------------------------------
-# deploy-stg 換 image **不會**升 addon：
+# 🔴 先講結論：deploy-stg 換 image **會**升 addon。本 gate 驗的不是「有沒有升」，
+#    而是「升級有沒有**收斂完成**」。
+#
+# 下面三條 create.sh 原始碼觀察是**對的**，不要因為結論改了就把它們一起刪掉：
 #   - plugin create.sh 只下 `--set odoo.updateModules=web`（deployment args 恆為
 #     `-u web`，不含 woow_paas_platform）
 #   - create.sh 的 `-i <modules>` install 分支只在 DB **未初始化**時跑，既有 stg DB
 #     整段被 skip
 #   - `.sandbox/post-create.sh` 是純 psql seed，完全不碰 ir_module_module
-# ⇒ 對既有 sandbox 而言，整條路徑沒有任何一步對 woow_paas_platform 下 `-u`。
+# ⇒ 沒有任何一步**顯式**對 woow_paas_platform 下 `-u`。**但這不等於它不會被升。**
 #
-# 過去幾次「換 image 就升上去了」是**僥倖**：前一輪的 stg-upgrade Job 把模組留在 DB 的
-# `state='to upgrade'`，而 Odoo 只要看到這個狀態，任何後續啟動的 registry load 都會把它
-# 撿起來跑完（不論該次啟動帶不帶 `-u`）。前一輪若乾淨收在 `installed`，同樣的 deploy
-# 就會**靜默不升**——helm 綠燈、pod 1/1 Running、kubectl logs 沒有任何錯誤訊號，
-# DB 版號卻停在舊版。這正是本 gate 要讓它變紅的東西。
+# 漏掉的是 Odoo 的 reverse-dependency 傳播（Odoo 18 原始碼，本機樹 AREA-odoo/odoo-18.0/）：
+#   - CLI `-u` 走的就是 button_upgrade()          odoo/modules/loading.py:458-462
+#   - button_upgrade() 把「依賴被升模組的模組」    odoo/addons/base/models/
+#     一併標記 to upgrade                          ir_module.py:706-714
+#   - 而且是**遞移**的（while 迴圈取閉包）         同上 :699-712
+#   - woow_paas_platform 是 web 的 dependent      src/__manifest__.py 的 depends 直接
+#                                                  含 web；**且**經 project / bus 兩條
+#                                                  間接鏈同樣到 web
+# ⇒ `-u web` 連帶升 woow_paas_platform，不需要 stg-upgrade-N Job。直接鏈與間接鏈同時
+#   成立，所以這個結論不是靠單一一行 manifest 撐著的。
+#
+# 那 gate 還有什麼用？**傳播會被觸發 ≠ 升級會收斂完成。** 仍然會靜默失效的形態：
+# 模組卡在 to upgrade、migration 中途炸掉、模組被反安裝、psql 探針壞掉回空值——
+# 這些一樣是 helm 綠燈、pod 1/1 Running、kubectl logs 乾淨、DB 版號停在舊版。
+# 本 gate 驗的是**終態**（版號 + state=installed），不是路徑。
+#
+# ---------------------------------------------------------------------------
+# ⚠ 2026-08-11 之前這裡寫的是相反的結論（保留，因為這個坑值得看得見）
+# ---------------------------------------------------------------------------
+# 原文大意：「換 image **不會**升 addon；過去幾次升上去了是**僥倖**——前一輪 upgrade
+# Job 把模組留在 state='to upgrade'，Odoo 的 registry load 會把它撿起來跑完；前一輪
+# 若乾淨收在 installed，同樣的 deploy 就會靜默不升。」
+#
+# 這個結論在 2026-08-11 被一次乾淨的對照實驗推翻：起點 DB `installed | .123`
+# （**無**殘留 to upgrade 可被撿）→ 換 image → 零人為介入 → DB `installed | .124`。
+#
+# ⚠ 錯在哪一層很重要：上面那三條 create.sh 觀察**本身是對的**，錯的是從它們推出的
+#   **因果**——把「沒人顯式下 -u」等同於「不會升」，漏掉 reverse-dependency 傳播。
+#   所以本次修正保留觀察、只換掉推論。
+#
+# 📌 這個說法在本 repo 已被講反三次（2026-06-02 F-DT-4 原報 → 同日 8 分鐘後自己撤回；
+#    2026-08-03 SKILL.md 與 stg-upgrade-recipe-dev-sandbox.md；2026-08-11 早上
+#    issue #665 與本檔）。要再寫「換 image 不會升 addon」之前，請先跑一次上面那四行
+#    原始碼查證——它們指向的是**框架語意**（Odoo 18 原始碼），不是會過期的環境狀態。
 #
 # ---------------------------------------------------------------------------
 # 判準
@@ -44,8 +76,17 @@
 # 個 registry 對同一顆 DB 做 migration，與正在服務的 pod 打架。而且既有的手動 upgrade
 # Job recipe 有兩個非顯然的陷阱（ResourceQuota `limits.cpu`、filestore RWO PVC 需
 # nodeSelector 同 node），不是一行指令能安全複製的。
-# ⇒ 本 gate 只負責**讓失效可見**，修復手段指向
-#    docs/guides/deployment/stg-db-manual-upgrade-recipe.md。
+# ⇒ 本 gate 只負責**讓失效可見**。
+#
+# 🔴 紅燈時**不要**第一步就去跑 upgrade Job（那是舊敘述留下的反射動作）。順序是：
+#   1. 先等 + 單獨重跑本 script —— `-u web` 的傳播升級要跑完才落到 installed，
+#      rollout 剛收斂就查會抓到 `to upgrade` 的**進行中**快照，那不是失敗。
+#   2. 查 odoo pod log 找 `Running migration [<ver>>] post-migrate` 與 `Modules loaded.`
+#      —— 傳播有被觸發但 migration 途中炸了，錯誤在這裡。
+#   3. 確認傳播鏈還在（src/__manifest__.py 的 depends：直接 web，或間接經 project/bus）。
+#      整條斷了才是「真的沒被升」。
+#   4. 都排除了，才走 docs/guides/deployment/stg-db-manual-upgrade-recipe.md 的手動 Job。
+#      它在傳播沒發生、或要單獨升某個模組時仍然有用，**但不是 deploy-stg 的必要步驟**。
 #
 # ---------------------------------------------------------------------------
 # Usage
