@@ -319,11 +319,10 @@ vav_main() {
     TIMEOUT=300
     INTERVAL=10
     SELF_TEST=true
-    local slug_given=false
 
     while [ $# -gt 0 ]; do
         case "$1" in
-            --slug)         SLUG="$2"; slug_given=true; shift 2 ;;
+            --slug)         SLUG="$2"; shift 2 ;;
             --namespace)    NAMESPACE="$2"; shift 2 ;;
             --module)       MODULE="$2"; shift 2 ;;
             --db)           DB_NAME="$2"; shift 2 ;;
@@ -359,8 +358,6 @@ vav_main() {
     if [ -z "$REPO_ROOT" ]; then
         REPO_ROOT="$(cd "${VAV_SCRIPT_DIR}/../../../.." && pwd)"
     fi
-    # slug_given 目前只影響可讀性訊息，保留變數避免未來誤刪推導分支
-    [ "$slug_given" = true ] || true
 
     echo ""
     echo -e "${VAV_BLUE}Post-check：addon 版號（#665）${VAV_NC}"
