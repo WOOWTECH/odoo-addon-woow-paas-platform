@@ -16,10 +16,13 @@
   `cloud_service.py` 的 `max_per_partner` 上限與 `_find_active_for_partner` 都以
   `workspace_id.owner_id.partner_id` 計數；`paas.py::_delete_workspace` 的授權判準
   就是 `workspace.owner_id.id != user.id`。
-- **`slug`** —— K8s namespace 與公開 subdomain 的唯一輸入
-  （`src/services/naming.py::make_namespace` / `make_service_subdomain`）。
-  兩者都是 `md5(slug)[:8]` ＝ **32 bit 截斷**，`UNIQUE(slug)` 只擋得住字面相同的
+- **`slug`** —— 本 PR 當時它是 K8s namespace 與公開 subdomain 的唯一輸入
+  （`src/services/naming.py::make_namespace` / `make_service_subdomain`），而兩者
+  都是 `md5(slug)[:8]` ＝ **32 bit 截斷**，`UNIQUE(slug)` 只擋得住字面相同的
   slug，擋不住兩個不同 slug 映到同一個 namespace。
+  📌 **#677 之後這段是歷史**：namespace／subdomain 改吃 stored `ws_hash`
+  （伺服器產生 ＋ DB `UNIQUE`），`slug` 只剩公開識別字的角色。錨死 slug 的理由
+  也隨之改成「它是唯一識別字、改寫可以踩掉別人的重試路徑（#525 A2）」。
 - **`access_ids` / `service_ids` 兩個 One2many** —— 對 workspace 寫 o2m command
   會穿透到子模型。
 
@@ -98,7 +101,10 @@ from odoo.addons.woow_paas_platform.models.workspace_access import (
     ROLE_OWNER,
     ROLE_USER,
 )
-from odoo.addons.woow_paas_platform.services.naming import make_namespace
+# `generate_ws_hash` ＝ **修復前**（#677 之前）的 namespace 推導公式。本檔只在
+# 「記錄當初為什麼要錨死 slug」與「證明兩個 slug 在舊公式下相撞」時用它；今天的
+# namespace 身分是 `workspace.ws_hash`，不經這支函式。
+from odoo.addons.woow_paas_platform.services.naming import generate_ws_hash
 
 # `workspace.py` 兩道守衛的訊息特徵字串。用它區分「model 層守衛擋的」與「ir.rule
 # 擋的」——兩者在 RPC 上都是 AccessError，不分辨的話會把「其實是 ir.rule 擋的」
@@ -325,15 +331,22 @@ class TestWorkspaceAttackVectors658(_Workspace658Fixture):
     def test_X5_admin_cannot_repoint_slug_to_victim_namespace(self):
         """🔴 **admin** 改 `slug` —— Layer 1 放行，只有 Layer 2 擋得住。
 
-        slug 是 `make_namespace()` 的唯一輸入。這裡順便斷言攻擊的**動機**是真的：
-        兩個不同的 slug 字面值可以映到同一個 K8s namespace（`md5(slug)[:8]` ＝
-        32 bit 截斷），所以 `UNIQUE(slug)` 擋不住跨租戶 namespace 碰撞。
+        ⚠ **這條 docstring 的原始動機在 #677 修好後已經過期了**，改寫如下，不要照
+        原樣讀：slug 曾經是 `make_namespace()` 的唯一輸入，兩個不同的 slug 字面值
+        可以映到同一個 K8s namespace（`md5(slug)[:8]` ＝ 32 bit 截斷）。#677 之後
+        namespace 由 stored `ws_hash` 決定，slug **不再**決定 namespace，所以本條
+        現在守的是 slug 作為公開識別字／`UNIQUE(slug)` 佔位的 immutability
+        （改寫別人的 slug 可以踩掉他的重試路徑，見 #525 A2）。
+
+        下面保留的碰撞前提斷言改用 `generate_ws_hash`（＝**修復前**的推導公式），
+        它記錄的是「當初為什麼要錨死 slug」這段歷史，不是今天的推導路徑。
         """
-        # 前提：兩個不同 slug 真的會映到同一個 namespace（否則這條攻擊無意義）。
+        # 歷史前提：修復前兩個不同 slug 真的會映到同一個 namespace。
         self.assertNotEqual('ws-83256', 'ws-137425')
         self.assertEqual(
-            make_namespace('ws-83256'), make_namespace('ws-137425'),
-            '前提：md5(slug)[:8] 是 32 bit 截斷，不同 slug 可映到同一 namespace')
+            generate_ws_hash('ws-83256'), generate_ws_hash('ws-137425'),
+            '前提（修復前的推導）：md5(slug)[:8] 是 32 bit 截斷，不同 slug 可映到'
+            '同一 namespace。#677 之後 namespace 不再吃 slug，這條只記錄歷史動機')
 
         self.authenticate(self.dave_login, self.dave_login)
         result = self._call_kw(
@@ -395,12 +408,13 @@ class TestWorkspaceAttackVectors658(_Workspace658Fixture):
 
         ⚠ **本條只證明「vals 的 `slug` 鍵這條通道被關掉」，不證明租戶無法選
         namespace。** 第一版的 docstring 寫「直接撞到受害者 namespace」，那是假的
-        ——W1 的 slug 是 `w1-658`（`make_namespace` → `paas-ws-b8182a2d`），
+        ——W1 的 slug 是 `w1-658`（當時的公式 `md5(slug)[:8]` → `paas-ws-b8182a2d`），
         而 payload 的 `ws-137425` → `paas-ws-7d82ce00`，兩者不相等；那句話沒有任何
         斷言支撐它。第一版還附了一句
-        `assertTrue(victim_ns.startswith('paas-ws-'))` 當「前提」，但
-        `make_namespace` 的回傳值恆以該前綴開頭 ⇒ **恆真式**，量不到任何東西。
-        兩者都已移除。
+        `assertTrue(victim_ns.startswith('paas-ws-'))` 當「前提」，但 namespace
+        的回傳值恆以該前綴開頭 ⇒ **恆真式**，量不到任何東西。兩者都已移除。
+        （上面兩個 `paas-ws-*` 實值是 #677 修法前的推導結果，留著是為了讓這段
+        自我更正的敘事讀得懂；今天的 namespace 不再由 slug 決定。）
 
         真正的殘留缺口（`name` 鍵可推導出同樣的 slug）見
         `test_X8b_name_derives_the_slug_verbatim_documented_gap` 與
@@ -426,8 +440,15 @@ class TestWorkspaceAttackVectors658(_Workspace658Fixture):
         `workspace.py::_check_tenant_create_anchors` 的 docstring 與相關 issue，
         而不是讓那段「殘留缺口」的說明默默過期成假話。
 
+        📌 **#677 的更新（缺口的後果變了，機制沒變）**：`slug` 仍然由租戶完全決定
+        （所以本條第一個斷言照舊、也照舊是綠的），但 namespace／公開子網域已經改
+        由伺服器產生的 stored `ws_hash` 決定 ⇒ 租戶決定 slug 不再等於租戶決定
+        namespace。原本第三個斷言 `make_namespace(ws.slug) == …`（＝「namespace
+        完全由租戶提供的字串決定」）**在修法後為假**，換成下面那條反向斷言。
+
         ⚠ 這條刻意**不**斷言 namespace 真的撞上受害者（那要靠 preimage 搜尋，
-        不是單元測試該做的事），只斷言「slug 逐字等於租戶給的 name」這個機制。
+        不是單元測試該做的事）。跨租戶碰撞的守門測試在
+        `test_workspace_ns_hash_677.py`。
         """
         self.authenticate(self.mallory_login, self.mallory_login)
         result = self._call_kw(
@@ -439,9 +460,20 @@ class TestWorkspaceAttackVectors658(_Workspace658Fixture):
             ws.slug, 'ws-137425',
             '缺口的機制：slug 逐字等於租戶給的 name。這條變紅代表 slug 生成被改'
             '過了 —— 請一併更新 workspace.py 的 docstring 與 follow-up issue')
+        # #677：同一個攻擊者再建一個「舊公式下與上面那個相撞」的 slug。斷言用
+        # 兩列相異（由 `UNIQUE(ws_hash)` **確定性**保證），不用
+        # `ws_hash != generate_ws_hash(slug)`——後者有 2^-32 的隨機假紅面。
+        second = self._call_kw(
+            'woow_paas_platform.workspace', 'create', [{'name': 'ws-83256'}])
+        self._assert_ok(second, '第二個 workspace 也該建得起來')
+        ws2 = self.Workspace.sudo().browse(second['result'])
         self.assertEqual(
-            make_namespace(ws.slug), make_namespace('ws-137425'),
-            'namespace 完全由租戶提供的字串決定')
+            generate_ws_hash(ws.slug), generate_ws_hash(ws2.slug),
+            '前提：這兩個 slug 在**修復前**的公式下相撞（否則下一條斷言無意義）')
+        self.assertNotEqual(
+            ws.ws_hash, ws2.ws_hash,
+            '#677：namespace 身分不得再是租戶所提供字串的函數。這條變紅代表有人'
+            '把 ws_hash 改回從 slug 推導 —— 那會把 #677 整條洞放回來')
 
     def test_X9_tenant_cannot_inject_slug_via_context_default(self):
         """🔴 `with_context(default_slug=...)` ＋ vals **不放** slug。

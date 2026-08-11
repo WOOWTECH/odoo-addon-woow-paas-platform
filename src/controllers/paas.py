@@ -2918,9 +2918,12 @@ class PaasController(HiddenChainMixin, Controller):
         ns_prefix = request.env['ir.config_parameter'].sudo().get_param(
             'woow_paas_platform.namespace_prefix', 'paas-ws-'
         )
-        subdomain = make_service_subdomain(workspace.slug, reference_id, name)
+        # #677：namespace／subdomain 吃 workspace 的 **stored** `ws_hash`，不是
+        # `slug`——slug 由租戶提供的 name 逐字決定，而舊的 `md5(slug)[:8]` 是 32-bit
+        # 截斷 ⇒ 租戶搜得出一個 name 讓自己的 release 落進別人的 namespace。
+        subdomain = make_service_subdomain(workspace.ws_hash, reference_id, name)
         helm_release_name = f"svc-{reference_id[:8]}"
-        helm_namespace = make_namespace(workspace.slug, prefix=ns_prefix)
+        helm_namespace = make_namespace(workspace.ws_hash, prefix=ns_prefix)
 
         # Filter user values to only allowed keys, then merge with defaults
         # Note: silently filter on create (frontend may send defaults alongside user values)

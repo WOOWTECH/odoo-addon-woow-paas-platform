@@ -1,4 +1,4 @@
-"""18.0.1.0.129 — #658 workspace 本體授權重構：退役兩條脆弱 rule。
+"""18.0.1.0.129 — #658 workspace 本體授權重構：退役兩條脆弱 rule ＋ #677 ws_hash 回填。
 
 🔴 為什麼是 129，而 develop 的歷史上看起來「留了 127 給它」？
 （會看到 `git log` 上 develop 從 126 直接跳到 128、中間空著 127 而覺得奇怪的人，
@@ -43,7 +43,29 @@ ir_rules.xml 的 <data noupdate="1"> 區塊。noupdate 是 sticky 的：
 post-migrate DELETE 掉」⇒ 那條 rule 在升級後直接消失、不會被重建，等於把
 授權規則整條刪掉。所以走 #556 驗證過的路：舊名 DELETE 退役、新規則用新
 xmlid 宣告在 <data noupdate="0"> 區塊。
+
+────────────────────────────────────────────────────────────────────────────
+Step 3（#677）—— 回填 `woow_paas_platform_workspace.ws_hash`
+
+#677 把 K8s namespace／公開子網域的身分從「租戶決定的 `slug` 的 `md5[:8]`」改成
+一個 stored、伺服器產生、DB `UNIQUE` 的 `ws_hash` 欄位。
+
+🔴 **回填值必須逐字等於舊公式的結果 `md5(slug)[:8]`**，這是「改推導不會動到既有
+部署」的**全部**依據：`cloud_service.helm_namespace` / `subdomain` 是存起來的，但
+`smart_home._generate_subdomain()` / `_generate_tunnel_name()` 與
+`security_access._generate_canonical_name()` 是**每次呼叫重新推導**的。回填成舊值
+之後，那三條路徑算出來的字串與修復前 byte-identical ⇒ 既有 tunnel／DNS／ingress
+全部不漂移。用隨機值回填會讓既有 SmartHome 的子網域在下一次推導時整批改變。
+
+`slug` 為 NULL 的列用 `''` 參與雜湊（＝ `md5('')[:8]` = `d41d8cd9`），與修復前
+`generate_ws_hash(slug)` 對空字串的行為一致；`UNIQUE(slug)` 只保證一列這種資料。
+
+⚠ **既有資料就已經碰撞的話，這支 migration 會 raise 而不是自作主張改名。** 那是
+事故（兩個租戶已經共用一個 K8s namespace）不是 bug，處置要人來決定；靜默挑一列
+改名會讓那一列的既有部署當場失聯。訊息裡直接列出撞在一起的 workspace id。
+────────────────────────────────────────────────────────────────────────────
 """
+import hashlib
 import logging
 
 _logger = logging.getLogger(__name__)
@@ -88,3 +110,56 @@ def migrate(cr, version):
         WHERE module = 'woow_paas_platform' AND model = 'ir.rule' AND name IN %s
         """, (_NEW,))
     _logger.info("#658 cleared noupdate on new workspace rule xmlids (%s rows)", cr.rowcount)
+
+    _backfill_ws_hash(cr)
+
+
+def _backfill_ws_hash(cr):
+    """Step 3（#677）—— 見檔頭。回填 `ws_hash = md5(slug)[:8]`，碰撞則 raise。
+
+    只回填 `ws_hash IS NULL` 的列 ⇒ 冪等，重跑不會覆寫任何已經有值的列
+    （包含後來新建、拿到隨機值的 workspace）。
+    """
+    cr.execute(
+        "SELECT id, COALESCE(slug, '') FROM woow_paas_platform_workspace "
+        "WHERE ws_hash IS NULL ORDER BY id")
+    rows = cr.fetchall()
+    if not rows:
+        _logger.info("#677 ws_hash backfill: nothing to do")
+        return
+
+    by_hash = {}
+    for ws_id, slug in rows:
+        legacy = hashlib.md5(slug.encode()).hexdigest()[:8]
+        by_hash.setdefault(legacy, []).append(ws_id)
+
+    # 既有列之間互撞。
+    clashes = {h: ids for h, ids in by_hash.items() if len(ids) > 1}
+    # 與已經有值的列相撞（重跑、或人工修過資料的情況）。
+    cr.execute(
+        "SELECT ws_hash, id FROM woow_paas_platform_workspace "
+        "WHERE ws_hash IN %s", (tuple(by_hash),))
+    for taken_hash, taken_id in cr.fetchall():
+        clashes.setdefault(taken_hash, list(by_hash[taken_hash])).append(taken_id)
+
+    if clashes:
+        raise ValueError(
+            "#677 ws_hash backfill aborted: %s legacy namespace hash(es) are "
+            "already shared by more than one workspace — these tenants are "
+            "ALREADY colliding in Kubernetes today: %s. This is an incident, not "
+            "a migration problem: renaming either side would silently orphan its "
+            "deployed Helm releases / Cloudflare records, so it needs a human "
+            "decision. Resolve the collisions, then re-run the upgrade."
+            % (len(clashes),
+               '; '.join('%s -> workspace ids %s' % (h, sorted(ids))
+                         for h, ids in sorted(clashes.items()))))
+
+    cr.execute(
+        """
+        UPDATE woow_paas_platform_workspace
+        SET ws_hash = SUBSTRING(MD5(COALESCE(slug, '')) FROM 1 FOR 8)
+        WHERE ws_hash IS NULL
+        """)
+    _logger.info(
+        "#677 ws_hash backfill: %s workspace row(s) stamped with their legacy "
+        "md5(slug)[:8] (byte-identical to the pre-fix derivation)", cr.rowcount)

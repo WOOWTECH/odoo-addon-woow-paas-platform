@@ -1,9 +1,33 @@
 import hashlib
 import re
 
+# 一個 workspace 的 namespace 身分碼字面形狀：8 個小寫 hex。
+#
+# 這個形狀是**契約**，不是實作細節：operator 的
+# ``cloudflare.py:generate_subdomain`` 用 ``namespace.replace('paas-ws-', '')``
+# 取後綴、``reconstruct_mcp_subdomain`` 也依賴它，而 K8s namespace 必須是
+# DNS-1123 label。維持與舊 ``md5(slug)[:8]`` 同字集同長度 ⇒ 換掉推導方式**不會**
+# 動到任何跨 repo 的命名契約。
+WS_HASH_RE = re.compile(r'^[0-9a-f]{8}$')
+
 
 def generate_ws_hash(slug: str) -> str:
-    """Generate 8-char hex hash from workspace slug."""
+    """⚠ **legacy 推導**：``md5(slug)[:8]``。新的推導路徑不得再呼叫它（#677）。
+
+    保留的兩個理由，都不是「拿它算新名字」：
+
+    1. ``src/migrations/18.0.1.0.129/post-migrate.py`` 用它回填既有 workspace 的
+       ``ws_hash`` —— 回填值必須逐字等於**舊公式的結果**，既有部署才不會漂移。
+    2. 測試拿它當「修復前的期望值」現算（寫死字面常數會假綠）。
+
+    🔴 為什麼不能再拿它推導新名字：``slug`` 由租戶提供的 ``name`` 逐字決定
+    （``Workspace._generate_slug()`` 對 ``[a-z0-9_-]`` 是恆等函式），而 ``[:8]``
+    是 **32 bit 截斷** ⇒ 租戶離線搜一個 name 就能讓自己的 workspace 映到別人的
+    K8s namespace（目標值逐字印在受害者每個公開子網域上，不必猜）。即使沒有攻擊
+    者，N 個 workspace 的生日碰撞機率約 N²/2^33（N=10,000 時約 1.2%）。
+    ⇒ namespace 身分改成 ``workspace.ws_hash``（伺服器產生、DB UNIQUE），見
+    ``models/workspace.py::_generate_ws_hash``。
+    """
     return hashlib.md5(slug.encode()).hexdigest()[:8]
 
 
@@ -12,9 +36,28 @@ def generate_resource_hash(reference_id: str, name: str) -> str:
     return hashlib.md5((reference_id + name).encode()).hexdigest()[:8]
 
 
-def make_namespace(slug: str, prefix: str = 'paas-ws-') -> str:
+def _require_ws_hash(ws_hash) -> str:
+    """守門：下面的 maker 收的是 ``workspace.ws_hash``，**不是** ``workspace.slug``。
+
+    🔴 這是「漏改一個呼叫點」的絆線。沒有它，漏改的呼叫點會安靜地產出
+    ``paas-ws-ws-137425`` / ``paas-cs-my-workspace-…`` 這種**看起來很像對的**名字：
+    仍然是合法的 DNS label、仍然以正確前綴開頭、仍然部署得起來，只是指向一個不存在
+    於任何 workspace 記錄上的 namespace。空值／``False``（欄位沒回填）同樣落在
+    raise 這一側 ＝ fail-closed，不會產出 ``paas-ws-False``。
+    """
+    if not isinstance(ws_hash, str) or not WS_HASH_RE.match(ws_hash):
+        raise ValueError(
+            "ws_hash must be 8 lowercase hex chars, got %r. These helpers take "
+            "workspace.ws_hash (the stored, server-generated namespace identity), "
+            "NOT workspace.slug — the slug is tenant-controlled and its md5[:8] is "
+            "a 32-bit truncation (#677)." % (ws_hash,)
+        )
+    return ws_hash
+
+
+def make_namespace(ws_hash: str, prefix: str = 'paas-ws-') -> str:
     """Generate K8s namespace name: {prefix}{ws_hash}."""
-    return f"{prefix}{generate_ws_hash(slug)}"
+    return f"{prefix}{_require_ws_hash(ws_hash)}"
 
 
 def _env_token(env: str = '') -> str:
@@ -43,19 +86,19 @@ def _env_token(env: str = '') -> str:
     return f"{slug}-" if slug else ''
 
 
-def make_service_subdomain(slug: str, reference_id: str, name: str, env: str = '') -> str:
+def make_service_subdomain(ws_hash: str, reference_id: str, name: str, env: str = '') -> str:
     """Generate cloud service subdomain: paas-{env}-cs-{ws_hash}-{svc_hash}."""
-    return f"paas-{_env_token(env)}cs-{generate_ws_hash(slug)}-{generate_resource_hash(reference_id, name)}"
+    return f"paas-{_env_token(env)}cs-{_require_ws_hash(ws_hash)}-{generate_resource_hash(reference_id, name)}"
 
 
-def make_smarthome_subdomain(slug: str, reference_id: str, name: str, env: str = '') -> str:
+def make_smarthome_subdomain(ws_hash: str, reference_id: str, name: str, env: str = '') -> str:
     """Generate smart home subdomain: paas-{env}-sm-{ws_hash}-{sm_hash}."""
-    return f"paas-{_env_token(env)}sm-{generate_ws_hash(slug)}-{generate_resource_hash(reference_id, name)}"
+    return f"paas-{_env_token(env)}sm-{_require_ws_hash(ws_hash)}-{generate_resource_hash(reference_id, name)}"
 
 
-def make_security_access_subdomain(slug: str, reference_id: str, name: str, env: str = '') -> str:
+def make_security_access_subdomain(ws_hash: str, reference_id: str, name: str, env: str = '') -> str:
     """Generate security access subdomain: paas-{env}-sa-{ws_hash}-{sa_hash}."""
-    return f"paas-{_env_token(env)}sa-{generate_ws_hash(slug)}-{generate_resource_hash(reference_id, name)}"
+    return f"paas-{_env_token(env)}sa-{_require_ws_hash(ws_hash)}-{generate_resource_hash(reference_id, name)}"
 
 
 def reconstruct_mcp_subdomain(namespace: str, release_name: str) -> str:

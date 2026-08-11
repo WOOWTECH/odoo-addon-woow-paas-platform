@@ -18,6 +18,18 @@ related:
 
 > **性質：偵察（scout）文件，非決策。** 本文是動工前的衝擊分析與打分，尚未拍板。若日後成案，應 promote 成 `docs/plans/` 雙檔（design + implementation）；若拍板不做或做法定案，結論落 `docs/decisions/`。
 
+> 🔴 **ERRATA（2026-08-11、#677）：本文多處寫的 `ws_hash` ＝ `md5(slug)[:8]` 已經不是現況。**
+> `ws_hash` 現在是 `woow_paas_platform.workspace` 上的 **stored 欄位**（伺服器產生的
+> `secrets.token_hex(4)` ＋ DB `UNIQUE(ws_hash)`），**不再是 slug 的函數**——`slug` 由租戶
+> 提供的 `name` 逐字推導，而 `[:8]` 是 32-bit 截斷，兩者相加讓租戶可以決定自己落在哪個
+> K8s namespace（#677）。既有 workspace 由 migration `18.0.1.0.129` 回填成舊公式的結果。
+>
+> 本文 §2.4 末條與 §3 的結論「**別動 `paas-ws-{md5(slug)[:8]}` 就安全**」在**命名形狀**這一層
+> 仍然成立、也確實被遵守了：`paas-ws-{8 小寫 hex}` 的字面形狀與長度完全沒變，所以
+> `reconstruct_mcp_subdomain` ↔ operator `generate_subdomain` 的跨 repo 契約零影響。
+> 變的只是那 8 碼**從哪裡來**。讀本文評估任何 ns 改制時，把「slug 是輸入」整段換成
+> 「`workspace.ws_hash` 是輸入」。
+
 ## 0. TL;DR
 
 **提案**（Elmo，2026-07-01 會議議題 5）：一個 PaaS workspace（裡面可以放 cloud service / Security Access / Smart Home）**只用一顆 k8s namespace**，該 workspace 的每個 cloud service type 都灌進這顆 ns；跨 workspace 的 ns 之間網路隔離、同 ns 內自然互通。
