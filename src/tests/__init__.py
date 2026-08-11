@@ -341,3 +341,6 @@ from . import test_ha_full_seed_661
 # 守衛被跳過 / 無 owner 列保護，與 #556 同構但刻意不在該 PR 內順手修
 # （HttpCase，group_user-only）
 from . import test_project_access_authz_657
+# fix: #664 workspace_access.create() 的 context-default 繞過 —— role 與
+# workspace_id 兩個同型半邊，與 #657 同構（HttpCase，group_user-only）
+from . import test_workspace_access_authz_664
