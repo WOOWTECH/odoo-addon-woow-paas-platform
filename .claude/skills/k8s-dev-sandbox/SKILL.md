@@ -18,40 +18,40 @@ usage: |
 > **建立 / 管理沙盒請用 `/woow-dev:k8s-dev-sandbox <command>`**（需帶 `--repo "$(git rev-parse --show-toplevel)"` 與 `--context`）。
 > `deploy-stg` 也已改為委派 plugin `create.sh`（見 `deploy-stg` skill）。
 > **本 in-repo 版僅保留 woow 專屬、未進通用 plugin 的工具**（綁 `woow_paas_platform` model / stg 環境）：
-> - `test` — 沙盒內跑模組測試（`scripts/test.sh`）
-> - `extend` — 延長 TTL（`scripts/extend.sh`；供 `test --keep-on-fail`）
+> - `test` — 沙盒內跑模組測試（`scripts/woow-test.sh`）
+> - `extend` — 延長 TTL（`scripts/woow-extend.sh`；供 `test --keep-on-fail`）
 > - 內部 helper：`scripts/e2e-seed.sh`（tests/e2e/skill 的 skill fixture seeder）、`scripts/e2e-seed-reset-button.sh`（tests/e2e/service-reset-button 的 CloudService fixture seeder）、`scripts/seed-from-stg.sh`（從 stg clone DB + filestore）
 > 設計與實作：`docs/plans/2026-Q2/2026-06-11-k8s-sandbox-plugin-port-{design,implementation}.md`。
 
 ## 子命令參考（in-repo 保留部分）
 
-| 子命令                 | 說明                 | 對應腳本            |
-| ---------------------- | -------------------- | ------------------- |
-| `test <name> [opts]`   | 在沙盒中執行模組測試 | `scripts/test.sh`   |
-| `extend <name> [opts]` | 延長沙盒 TTL         | `scripts/extend.sh` |
+| 子命令                 | 說明                 | 對應腳本                  |
+| ---------------------- | -------------------- | -------------------------- |
+| `test <name> [opts]`   | 在沙盒中執行模組測試 | `scripts/woow-test.sh`   |
+| `extend <name> [opts]` | 延長沙盒 TTL         | `scripts/woow-extend.sh` |
 
 > 其餘子命令（`create` / `destroy` / `list` / `status` / `logs` / `build` / `up` / `down`）**已移除** → 請用 `/woow-dev:k8s-dev-sandbox`。
 
 ### `test <name> [--module <mod>] [--keep-on-fail]`
 
 ```bash
-cd <PROJECT_ROOT> && bash .claude/skills/k8s-dev-sandbox/scripts/test.sh <name> <args>
+cd <PROJECT_ROOT> && bash .claude/skills/k8s-dev-sandbox/scripts/woow-test.sh <name> <args>
 ```
 
 - `--module <name>` — 要測試的模組（預設 `woow_paas_platform`）
-- `--keep-on-fail` — 測試失敗時延長沙盒 TTL 24h 以便除錯（呼叫 `extend.sh`）
+- `--keep-on-fail` — 測試失敗時延長沙盒 TTL 24h 以便除錯（呼叫 `woow-extend.sh`）
 
 ### `extend <name> [--ttl <duration>]`
 
 ```bash
-cd <PROJECT_ROOT> && bash .claude/skills/k8s-dev-sandbox/scripts/extend.sh <name> --ttl <duration>
+cd <PROJECT_ROOT> && bash .claude/skills/k8s-dev-sandbox/scripts/woow-extend.sh <name> --ttl <duration>
 ```
 
 - `--ttl <duration>` — Go duration，如 `24h` / `168h` / `0`（永不過期）
 
 ## 內部 helper（非直接子命令）
 
-- `scripts/e2e-seed.sh <slug> [--reset|--purge]` — 把 e2e skill fixture seed 進「已存在」的沙盒（沙盒須先用 `/woow-dev:k8s-dev-sandbox create` 建好）。由 `test.sh` 與 `tests/e2e/skill` 使用。
+- `scripts/e2e-seed.sh <slug> [--reset|--purge]` — 把 e2e skill fixture seed 進「已存在」的沙盒（沙盒須先用 `/woow-dev:k8s-dev-sandbox create` 建好）。由 `woow-test.sh` 與 `tests/e2e/skill` 使用。
 - `scripts/e2e-seed-reset-button.sh <slug> [--manifest <path>|--purge]` — 把 Reset 按鈕可見性 e2e 的 fixture（1 workspace ＋ 4 個代表模板的 `state=running` CloudService）seed 進已存在的沙盒，並輸出 fixture manifest JSON 給 spec 讀。由 `tests/e2e/service-reset-button` 使用（#464）。
 - `scripts/seed-from-stg.sh` — 從 stg 環境 clone DB + filestore 到本地沙盒（woow-k3s 專屬）。
 

@@ -226,7 +226,7 @@ class _NonRunningRemovalCase(_AddonRemovalCase):
     ⚠ 每個具體 class **必須自己定義 test method**（哪怕只是一行轉呼）。實測 Odoo 18
     的 test 收集不會把只從 base/mixin 繼承來的 test method 算進去：原本寫成 mixin
     帶 ``test_*``＋4 個空 body 的 class，7 個 class 只跑到 6 個 test（4 個非 running
-    class 各 0 個），**靜默不跑、不報錯**——正是 test.sh 那種假綠。
+    class 各 0 個），**靜默不跑、不報錯**——正是 woow-test.sh 那種假綠。
     """
 
     def _assert_non_running_rejected(self):

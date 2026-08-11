@@ -112,7 +112,7 @@ pytest tests/ -v --cov=src
 
 本機開發與測試首選（namespace 隔離、TTL 自動清理、可跑測試）。**已移植成 `woow-dev` plugin 通用工具（舊名 `woowprd`），優先用 `/woow-dev:k8s-dev-sandbox <command>`**（onboard / create / up / list / status / logs / test / extend / destroy / build；被測 repo 的子命令帶 `--repo "$(git rev-parse --show-toplevel)"`，`create`/`destroy` 必帶 `--context`）。架構、三種模式（local hostPath / ci-local / stg 的 addons 路徑差異）、平台 seed 的 `.sandbox/{pre-install,post-create}.sh` opt-in hook 詳見 plugin 的 SKILL.md；移植設計見 `docs/plans/2026-Q2/2026-06-11-k8s-sandbox-plugin-port-{design,implementation}.md`。
 
-in-repo `.claude/skills/k8s-dev-sandbox/` 僅剩未進通用 plugin 的 woow 專屬工具：`test.sh`（沙盒內跑模組測試，`--keep-on-fail`）、`extend.sh`（TTL）、`e2e-seed.sh` / `seed-from-stg.sh`（e2e fixture / stg clone helper）。
+in-repo `.claude/skills/k8s-dev-sandbox/` 僅剩未進通用 plugin 的 woow 專屬工具：`woow-test.sh`（沙盒內跑模組測試，`--keep-on-fail`）、`woow-extend.sh`（TTL）、`e2e-seed.sh` / `seed-from-stg.sh`（e2e fixture / stg clone helper）。
 
 ### PaaS Operator Local Development
 

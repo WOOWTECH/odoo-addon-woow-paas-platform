@@ -8,7 +8,7 @@
   `odoo.exceptions.UserError: 你嘗試安裝的模組 woow_paas_platform 需要依賴模組 ai_base_gt` + `Database initialization may have issues`（**warning 級，不中斷**）。
 - DB 內 `ir_module_module`：`woow_paas_platform` / `project` / `portal` 全部 `uninstalled`；`ai_base_gt` **連 row 都沒有**（addons path 根本看不到它）。
 - pod 內 `/mnt/extra-addons-ext/` 是空的；host 側被掛載的目錄也存在但是空的。
-- 之後跑 `test.sh` 會被 0-test false-green guard 擋下（見 [[sandbox-module-test-false-green]]），但 create 階段沒有等價的硬擋。
+- 之後跑 `woow-test.sh` 會被 0-test false-green guard 擋下（見 [[sandbox-module-test-false-green]]），但 create 階段沒有等價的硬擋。
 
 ## Why it happens
 
