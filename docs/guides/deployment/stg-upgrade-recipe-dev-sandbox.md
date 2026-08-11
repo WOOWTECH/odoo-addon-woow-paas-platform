@@ -4,10 +4,18 @@
 >
 > 原 description：stg（dev-sandbox-stg）升版三步 recipe——build stg-* tag→upgrade job（nodeSelector 釘同 node 避 RWO Multi-Attach）→helm 換 tag；含 log 位置與硬驗版號的三方證據
 
+> 🔴 **本檔的定位（2026-08-11 修正）**：這是**手動** upgrade Job 的 recipe，**不是
+> `/woow:deploy-stg` 的必要步驟**。標準 deploy-stg 換 image 就會經 Odoo 的
+> reverse-dependency 傳播升 `woow_paas_platform`（機制見下方
+> [§換 image 會不會升 addon](#換-image-會不會升-addon2026-08-11-定案)）。本檔的 Job
+> 在「傳播沒發生」「要單獨升某個模組」「要在換 image **之前**先把 DB 升好」這些情境仍然
+>有用——但它不是每次部署都要跑的東西。
+
 stg 的 Odoo 在 **`dev-sandbox-stg`**（woow-k3s context），不是 `paas-stg-system`：deploy
 `stg-odoo-dev-sandbox-odoo`、pg `stg-odoo-dev-sandbox-postgres-0`、DB `woow_stg`、helm
-release `stg`（chart `odoo-dev-sandbox`）。**addon src 烤在 image 裡**，所以升版必須正序：
-build image → 跑 `-u` job → 換 deploy image。顛倒就是拿舊 code 跑新 seed。
+release `stg`（chart `odoo-dev-sandbox`）。**addon src 烤在 image 裡**，所以**當你選擇走
+本檔這條手動路線時**順序不可顛倒：build image → 跑 `-u` job → 換 deploy image。顛倒就是
+拿舊 code 跑新 seed。
 
 **1. build**：`tea api -X POST -r woow-paas/paas-odoo-ci "repos/{owner}/{repo}/tags"
 -f tag_name=stg-YYYYMMDD.HHMM -f target=<main SHA>`。`stg-*` tag 的 workflow **預設 clone
@@ -44,18 +52,59 @@ agent-browser，勿用 Maestri portal（[[reference_maestri_portal_woow_spa_wedg
 相關：[[project_494_hermes_pricing_landing]]、[[reference_deploy_stg_gotchas]]、
 [[reference_stg_db_manual_upgrade_recipe]]
 
-## 2026-08-03 實跑版（.88 → .97，全程成功，含一條會讓舊 recipe 失效的更正）
+## 換 image 會不會升 addon？（2026-08-11 定案）
 
-🔴 **前提更正**：本檔舊版與 [[reference_deploy_stg_gotchas]] 都寫過「stg entrypoint 自帶 `-u woow_paas_platform`，換 image 就會自動 migrate」。**2026-08-03 實查已不成立**：
+**會。** `woow_paas_platform` 是 `web` 的 dependent，`-u web` 經 Odoo 的
+reverse-dependency 傳播連帶升它。
 
-```
-$ kubectl -n dev-sandbox-stg get deploy stg-odoo-dev-sandbox-odoo -o json | ...
-  command: ["odoo"]   args: ["-u","web","-c","/etc/odoo/odoo.conf"]     ← 只有 web
-```
+| 環節 | 憑據（Odoo 18 原始碼，本機樹 `AREA-odoo/odoo-18.0/`） |
+|---|---|
+| CLI `-u` 走的就是 `button_upgrade()` | `odoo/modules/loading.py:458-462` |
+| `button_upgrade()` 把**依賴被升模組的模組**一併標 `to upgrade` | `odoo/addons/base/models/ir_module.py:706-714`（查 `dependency.name == 當前模組名` → 取 `dep.module_id`） |
+| 而且是**遞移**的（`while` 迴圈取閉包，非只一層） | 同上 `:699-712` |
+| `woow_paas_platform` 是 `web` 的 dependent | `src/__manifest__.py` 的 `depends` 直接含 `web`；**且**經 `project` / `bus` 兩條間接鏈同樣到 `web` |
 
-⇒ **換 image 不會升 addon**。升級 Job 從「加速用的最佳化」變成**必要步驟**，少了它 DB 永遠停在舊版且**沒有任何錯誤訊號**。
+直接鏈與間接鏈同時成立 ⇒ 這個結論不是靠單一一行 manifest 撐著的。
 
-### 三階段，順序不可顛倒
+**對照實驗（2026-08-11）**：起點 DB `installed | .123`（**無**殘留 `to upgrade` 可被撿）→
+換 image 到含 `.124` 的 image → deployment args 仍只有 `["-u","web",...]` → **零人為介入**
+（事後 `get jobs` 只有 116/118/119/121）→ 結果 DB `installed | .124`。
+
+⇒ 升級 Job 是**選用**，不是每次部署的必要步驟。真正的驗收在
+`.claude/skills/deploy-stg/scripts/verify-addon-version.sh`（#665 post-check gate）：
+它驗**終態**（版號 + `state=installed`），因為「傳播被觸發」≠「升級收斂完成」。
+
+<details>
+<summary>⚠ 2026-08-03 這裡寫的是相反的結論（保留原文，因為這個坑值得看得見）</summary>
+
+原文：
+
+> ## 2026-08-03 實跑版（.88 → .97，全程成功，含一條會讓舊 recipe 失效的更正）
+>
+> 🔴 **前提更正**：本檔舊版與 [[reference_deploy_stg_gotchas]] 都寫過「stg entrypoint 自帶 `-u woow_paas_platform`，換 image 就會自動 migrate」。**2026-08-03 實查已不成立**：
+>
+> ```
+> $ kubectl -n dev-sandbox-stg get deploy stg-odoo-dev-sandbox-odoo -o json | ...
+>   command: ["odoo"]   args: ["-u","web","-c","/etc/odoo/odoo.conf"]     ← 只有 web
+> ```
+>
+> ~~⇒ **換 image 不會升 addon**。升級 Job 從「加速用的最佳化」變成**必要步驟**，少了它 DB 永遠停在舊版且**沒有任何錯誤訊號**。~~
+
+⚠ **錯在哪一層很重要**：上面那個 `kubectl get deploy` 的觀察（args 只有 `-u web`、不含
+`woow_paas_platform`）**本身是對的，至今仍成立**。錯的是從它推出的**因果**——把「沒人顯式
+對該模組下 `-u`」等同於「不會升」，漏掉 reverse-dependency 傳播這一環。所以這次修正保留
+了觀察、只換掉推論。
+
+📌 **這個說法在本 repo 已被講反三次**（2026-06-02 F-DT-4 原報 → 同日 8 分鐘後自己撤回；
+2026-08-03 本檔與 deploy-stg SKILL.md；2026-08-11 早上 issue #665 與 gate 腳本檔頭）。
+要再寫「換 image 不會升 addon」之前，請先跑一次上表的原始碼查證——它們指向的是**框架語意**
+（Odoo 18 原始碼），不是會過期的環境狀態。
+
+</details>
+
+### 走手動路線時的三階段，順序不可顛倒
+
+（下列順序只在你**選擇**走本檔的手動 Job 時適用；標準 deploy-stg 不需要 Phase 2。）
 
 1. **build image**（`paas-odoo-ci` 建 `stg-<UTC時戳>` tag → image tag = 去掉 `stg-` 前綴）。零前台影響。
 2. **升 DB**（Job）——**必須在換 image 之前**。顛倒＝新程式碼跑在舊 schema 上。
