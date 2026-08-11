@@ -145,7 +145,7 @@ if [ -n "$KUBE_CONTEXT" ]; then
     kubectl config use-context "$KUBE_CONTEXT" >/dev/null
 fi
 
-# --- 如果未提供名稱，從 branch 自動偵測（同 woow-test.sh:92-101）---
+# --- 如果未提供名稱，從 branch 自動偵測（邏輯同 woow-test.sh 的「從 branch 自動偵測 SLUG」區塊）---
 if [ -z "$SLUG" ]; then
     BRANCH=$(git -C "$PROJECT_ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
     SLUG=$(echo "$BRANCH" \
@@ -187,7 +187,9 @@ if [ "$POD_READY" != "True" ]; then
     exit 2
 fi
 
-# --- 取得 DB 名稱：優先讀 secret（同 woow-test.sh:135），fallback 用 slug 推導（同 create.sh:196）---
+# --- 取得 DB 名稱：優先讀 secret（邏輯同 woow-test.sh 讀取 "${FULLNAME}-secret" 的
+#     postgres-database 區塊），fallback 用 slug 推導（語意同 woow-dev plugin create.sh 的
+#     compute_db_name()；該檔在外部 plugin repo，行號對不上，故不標行號）---
 DB_NAME=$(kubectl get secret -n "$NAMESPACE" "${FULLNAME}-secret" \
     -o jsonpath='{.data.postgres-database}' 2>/dev/null | base64 -d 2>/dev/null || echo "")
 if [ -z "$DB_NAME" ]; then

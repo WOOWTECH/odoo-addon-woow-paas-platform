@@ -98,7 +98,7 @@ D1 / D3 / D4 / D5 / D6 由 leader 拍板（2026-05-18 brainstorm）；D2 invento
 23. Own-workspace user **可以** read / write / create / unlink 自己 workspace 內的 user-scope mcp_server（防 over-correction）。
 24. `ir.model.access.csv` row：`mcp_server` / `mcp_tool` 給 `base.group_user` 的 RWCU 維持 `1,1,1,1`（**CSV 為 hard cap，rule 細控 row-level**）。Admin row（`group_system`）不變。
 
-**為何 CSV 維持 1,1,1,1 而非降 perm_create=0**：CSV access right 是 model-level binary cap，無法表達「user 可建 scope=user / 不可建 scope=system」這種 row-level 區分。若 CSV 改 perm_create=0 會把所有 create 都堵掉（含合法的 user-scope create path），等於把語意決定塞錯層。Rule 層 enforce 才是 Odoo idiom（見 `workspace_rule_member_access` + `workspace_rule_create` 既有 split pattern）。<br>⚠ #658 後記（此段保留當時原文）：那兩個 xmlid 已由 `src/migrations/18.0.1.0.127/post-migrate.py` 退役，現名 `workspace_rule_member_read` / `workspace_rule_anyone_create`；且當時稱它為 split pattern 並不準確——`workspace_rule_member_access` 的 `perm_read` 與 `perm_write` 都是 True。
+**為何 CSV 維持 1,1,1,1 而非降 perm_create=0**：CSV access right 是 model-level binary cap，無法表達「user 可建 scope=user / 不可建 scope=system」這種 row-level 區分。若 CSV 改 perm_create=0 會把所有 create 都堵掉（含合法的 user-scope create path），等於把語意決定塞錯層。Rule 層 enforce 才是 Odoo idiom（見 `workspace_rule_member_access` + `workspace_rule_create` 既有 split pattern）。<br>⚠ #658 後記（此段保留當時原文）：那兩個 xmlid 已由 `src/migrations/18.0.1.0.129/post-migrate.py` 退役，現名 `workspace_rule_member_read` / `workspace_rule_anyone_create`；且當時稱它為 split pattern 並不準確——`workspace_rule_member_access` 的 `perm_read` 與 `perm_write` 都是 True。
 
 ### Backend / Frontend view
 

@@ -1445,8 +1445,8 @@ SECURITY_RULE_NOUPDATE_ALLOWED = {}
 RETIRED_RULE_XMLIDS = {
     "workspace_access_rule_member_access": "18.0.1.0.122（#556）",
     "workspace_access_rule_create": "18.0.1.0.122（#556）",
-    "workspace_rule_member_access": "18.0.1.0.127（#658）",
-    "workspace_rule_create": "18.0.1.0.127（#658）",
+    "workspace_rule_member_access": "18.0.1.0.129（#658）",
+    "workspace_rule_create": "18.0.1.0.129（#658）",
 }
 
 # (3) 守哪個 model 的哪幾個方向。model 端錨在 `<field name="model_id" ref="…"/>` 的
@@ -1733,7 +1733,7 @@ def check_retired_rule_xmlid(root):
 
     今天列管四個：`workspace_access_rule_member_access` / `workspace_access_rule_create`
     （#556，migration `18.0.1.0.122`）與 `workspace_rule_member_access` /
-    `workspace_rule_create`（#658，migration `18.0.1.0.127`）。四個都出生在
+    `workspace_rule_create`（#658，migration `18.0.1.0.129`）。四個都出生在
     noupdate="1" 區塊、改 XML 修不動（見 ① 的 docstring），只能 DELETE 退役。
     ⚠ 權威清單是 `RETIRED_RULE_XMLIDS` 本身，不是這段散文——新增條目時**不必**
     回來改這裡的枚舉，但也不要把這裡讀成完整清單。把 `<record>` 帶回來（rebase／merge 復原、或有人
