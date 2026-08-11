@@ -1,6 +1,6 @@
 ---
 name: ci-local-stale-pod-green-tests-on-old-code
-description: ci-local sandbox 的 code 是 image 快照，pod 一被重建就回到 image 烤進去的舊版、前一輪 kubectl cp 的修補全消失——而且失效是靜默的：pod 1/1 Running 無警告、test.sh 照跑照綠，那個綠燈驗的是舊碼；沒先讀 pod 內版號就跑測試，會產出一份有測試數字佐證但錨點錯掉的假驗收報告
+description: ci-local sandbox 的 code 是 image 快照，pod 一被重建就回到 image 烤進去的舊版、前一輪 kubectl cp 的修補全消失——而且失效是靜默的：pod 1/1 Running 無警告、woow-test.sh 照跑照綠，那個綠燈驗的是舊碼；沒先讀 pod 內版號就跑測試，會產出一份有測試數字佐證但錨點錯掉的假驗收報告
 metadata:
   type: pitfall
 ---
@@ -23,7 +23,7 @@ metadata:
 pod 重建之後：
 
 - `kubectl get pod` 顯示 `1/1 Running`、`RESTARTS 0`，**沒有任何錯誤或警告**。
-- 直接跑 `test.sh` 完整 suite，測試**照樣執行、照樣可能全綠**——image 裡烤的是目標 commit
+- 直接跑 `woow-test.sh` 完整 suite，測試**照樣執行、照樣可能全綠**——image 裡烤的是目標 commit
   之前的碼，那份碼在它自己的世界裡是自洽的（舊 seed 值配舊測試基準，該過的照樣過）。
 - 唯一可能露餡的地方，是「這次剛好改的欄位有具名判準測試」。但**若新舊值都能通過同一組
   判準**（例如兩個值都「夠用」，只有「是否最小」的判準能分辨），連測試結果都不會告訴你
@@ -69,9 +69,9 @@ pod `hermes013-odoo-dev-sandbox-odoo-7c4dc98597-94l8b`，`startTime 2026-08-10T0
 
 任何讓 pod 重新排程的事件——`helm upgrade` / rollout、OOM、node 驅逐、甚至只是
 `kubectl delete pod` 讓 controller 重建——都會從**同一份 image** 長出乾淨的容器層，
-先前疊上去的修補不會被帶過去。跑一次 `test.sh` 就會發生一次：它在測試成功與失敗**兩條路徑
+先前疊上去的修補不會被帶過去。跑一次 `woow-test.sh` 就會發生一次：它在測試成功與失敗**兩條路徑
 的最後都會** `kubectl rollout restart`（測試用 `--stop-after-init`，跑完要把 odoo 拉回來），
-見 `.claude/skills/k8s-dev-sandbox/scripts/test.sh`。
+見 `.claude/skills/k8s-dev-sandbox/scripts/woow-test.sh`。
 
 本次研判是 sandbox 在驗收窗口內經歷了一次 pod 重建：namespace 的
 `sandbox.woow.tw/expires = 2026-08-11T05:42:32Z`（24h TTL ⇒ 標記寫於 `05:42:32Z`）與 pod 的
@@ -89,7 +89,7 @@ pod `hermes013-odoo-dev-sandbox-odoo-7c4dc98597-94l8b`，`startTime 2026-08-10T0
 
 1. **不持久**：如上，補丁只活在容器可寫層，下一次 pod 重建就沒了。就算這次補成功、suite 也
    真的測到新碼，**那個「測到新碼」的狀態本身是脆弱的**——它隨時會因為下一次 rollout 消失
-   （而 `test.sh` 自己每跑一次就製造一次 rollout），不是穩定可重現的驗收環境。
+   （而 `woow-test.sh` 自己每跑一次就製造一次 rollout），不是穩定可重現的驗收環境。
 2. **不可寫**：目標檔／目錄是 `root:root` `0644`/`0755`，容器執行身分是 `uid=100(odoo)`
    ⇒ 連「趁 pod 還沒重建先補上去」都走不通。當次實測兩種寫法都被擋：
 
@@ -160,7 +160,7 @@ grep -n version src/__manifest__.py
 
 ## 機械化狀態：`—`（已評估、落點明確，但本次是純 doc PR 不動 code）
 
-與姊妹篇不同，**這條有明確可掛載點**：`.claude/skills/k8s-dev-sandbox/scripts/test.sh` 在跑測試
+與姊妹篇不同，**這條有明確可掛載點**：`.claude/skills/k8s-dev-sandbox/scripts/woow-test.sh` 在跑測試
 **之前**對帳「pod 內的 code」與「期望的 commit」，不一致就 fail-loud（它已經有一道
 「0 tests 也報綠」的 false-green guard，同一個位置再加一道同型的）。兩種判準與各自的弱點：
 
@@ -180,6 +180,6 @@ grep -n version src/__manifest__.py
   [docker-desktop-ci-local-sandbox-image-import](../../guides/testing/docker-desktop-ci-local-sandbox-image-import.md)、
   [odoo-sandbox-ci-local-two-track-test](../../guides/testing/odoo-sandbox-ci-local-two-track-test.md)
 - 同 family（**綠燈本身可能是假的**）：
-  - [[sandbox-module-test-false-green]] — `test.sh` 只看 exit code ⇒ 0 tests 也報綠
+  - [[sandbox-module-test-false-green]] — `woow-test.sh` 只看 exit code ⇒ 0 tests 也報綠
   - [[tag-scoped-test-misses-full-u-failures]] — 驗綠的 scope 不對 ⇒ 漏抓
   - [[provision-e2e-green-on-chart-defaults]] — e2e 綠，但驗證跑在 chart 預設值上

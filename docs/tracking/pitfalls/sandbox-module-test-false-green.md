@@ -1,15 +1,15 @@
 ---
 name: sandbox-module-test-false-green
-description: K8s dev sandbox 跑 test.sh 印「✅ All tests passed」但實際 `0 failed, 0 error(s) of 0 tests`（false green）— 模組沒裝起來 + `-u` no-op + bare `--test-tags <module>` 不命中，三因疊加
+description: K8s dev sandbox 跑 woow-test.sh 印「✅ All tests passed」但實際 `0 failed, 0 error(s) of 0 tests`（false green）— 模組沒裝起來 + `-u` no-op + bare `--test-tags <module>` 不命中，三因疊加
 metadata:
   type: pitfall
 ---
 
-# Pitfall: K8s dev sandbox `test.sh` false green — 0 tests 也報「✅ All tests passed」
+# Pitfall: K8s dev sandbox `woow-test.sh` false green — 0 tests 也報「✅ All tests passed」
 
-> 來源：feat/project-setting 一次本機 sandbox 測試 session（2026-06-01）。`test.sh` 報綠，但 Odoo log 實際是 `0 failed, 0 error(s) of 0 tests` —— **一個 test 都沒跑**。test.sh 只看 `kubectl exec` 的 exit code（0）就印 banner，而 `odoo -u <uninstalled-module>` 對沒裝起來的模組是 no-op，exit 0、0 tests。改用 `-i woow_paas_platform --test-enable --test-tags /woow_paas_platform` 後實跑 **1142 tests**，false green 才破。
+> 來源：feat/project-setting 一次本機 sandbox 測試 session（2026-06-01）。`woow-test.sh` 報綠，但 Odoo log 實際是 `0 failed, 0 error(s) of 0 tests` —— **一個 test 都沒跑**。woow-test.sh 只看 `kubectl exec` 的 exit code（0）就印 banner，而 `odoo -u <uninstalled-module>` 對沒裝起來的模組是 no-op，exit 0、0 tests。改用 `-i woow_paas_platform --test-enable --test-tags /woow_paas_platform` 後實跑 **1142 tests**，false green 才破。
 >
-> test.sh / CLAUDE.md 的修正另以小修分支處理（見本檔 §How to avoid 末段）。
+> woow-test.sh / CLAUDE.md 的修正另以小修分支處理（見本檔 §How to avoid 末段）。
 
 ## Symptom
 
@@ -24,7 +24,7 @@ metadata:
 ```
 
 - banner 綠，但 `of 0 tests` —— **沒有任何 test 被 collect / 執行**。
-- `test.sh` 的結果判斷只看 `TEST_EXIT_CODE -eq 0`（`kubectl exec` 的回傳），不檢查 log 裡的 `N tests` 計數，所以 0 tests 也算「passed」。
+- `woow-test.sh` 的結果判斷只看 `TEST_EXIT_CODE -eq 0`（`kubectl exec` 的回傳），不檢查 log 裡的 `N tests` 計數，所以 0 tests 也算「passed」。
 - 對照：模組真的裝起來、tag 對的時候，log 會是 `... of 1142 tests`（feat/project-setting 當時的實測數）。
 
 ## Why it happens
@@ -40,7 +40,7 @@ psycopg2.errors.UniqueViolation: ... pg_type_typname_nsp_index
 ```
 
 安裝中止 → 模組停在 **uninstalled** 狀態，但 sandbox 仍報 created（create 流程沒因此 fail）。
-之後 `test.sh` 跑 `odoo -u woow_paas_platform`（`-u` = update **已安裝** 模組）對 uninstalled 模組是 **no-op**：不裝、不更新、不跑它的 test，exit 0、0 tests。
+之後 `woow-test.sh` 跑 `odoo -u woow_paas_platform`（`-u` = update **已安裝** 模組）對 uninstalled 模組是 **no-op**：不裝、不更新、不跑它的 test，exit 0、0 tests。
 
 → 首裝要用 `-i`（install），或先確認模組 `state=installed` 再用 `-u`。
 
@@ -83,11 +83,11 @@ Odoo `--test-tags` 的語意：bare token（`woow_paas_platform`）被當成「*
 
 這是 **環境問題（缺 demo data），非程式回歸**。判斷某次紅是不是真 regression 時，看**失敗 test 檔的領域是否與本次改動檔交集** —— 全部落在 billing/subscription 而你沒動那塊，就是環境問題不是回歸。
 
-### test.sh / CLAUDE.md 修正（另以小修分支處理）
+### woow-test.sh / CLAUDE.md 修正（另以小修分支處理）
 
 本 pitfall 對應兩處要修，已標記另開小修分支處理：
 
-- `.claude/skills/k8s-dev-sandbox/scripts/test.sh`：`--test-tags "$MODULE"` → `--test-tags "/$MODULE"`，並在結果判斷補「看 log `N tests` 計數，不是只看 exit code」的提醒（防 0 tests false green）。注意這只修「tag 語意」與「假綠提醒」兩半，**修不了主因**（uninstalled 模組下 `-u` 仍 no-op，tag 改對也是 0 tests）—— 真正擋住 false green 的是先確認 `state=installed`（首裝用 `-i`，見上方 §How to avoid item 2）。
+- `.claude/skills/k8s-dev-sandbox/scripts/woow-test.sh`：`--test-tags "$MODULE"` → `--test-tags "/$MODULE"`，並在結果判斷補「看 log `N tests` 計數，不是只看 exit code」的提醒（防 0 tests false green）。注意這只修「tag 語意」與「假綠提醒」兩半，**修不了主因**（uninstalled 模組下 `-u` 仍 no-op，tag 改對也是 0 tests）—— 真正擋住 false green 的是先確認 `state=installed`（首裝用 `-i`，見上方 §How to avoid item 2）。
 - `CLAUDE.md`「Run tests for this module」區塊：`--test-tags woow_paas_platform` → `--test-tags /woow_paas_platform`。
 
 ## Related

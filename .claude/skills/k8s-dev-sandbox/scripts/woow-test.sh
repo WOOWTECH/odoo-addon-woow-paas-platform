@@ -4,7 +4,7 @@
 # 在 Kubernetes 沙盒環境中執行 Odoo 測試套件
 #
 # Usage:
-#   .claude/skills/k8s-dev-sandbox/scripts/test.sh [NAME] [OPTIONS]
+#   .claude/skills/k8s-dev-sandbox/scripts/woow-test.sh [NAME] [OPTIONS]
 #
 # Arguments:
 #   NAME                Sandbox name (slug). If not provided, auto-detect from current branch.
@@ -15,10 +15,10 @@
 #   -h, --help          Show usage
 #
 # Examples:
-#   .claude/skills/k8s-dev-sandbox/scripts/test.sh
-#   .claude/skills/k8s-dev-sandbox/scripts/test.sh epic-smarthome
-#   .claude/skills/k8s-dev-sandbox/scripts/test.sh --module sale_management
-#   .claude/skills/k8s-dev-sandbox/scripts/test.sh epic-smarthome --module woow_paas_platform --keep-on-fail
+#   .claude/skills/k8s-dev-sandbox/scripts/woow-test.sh
+#   .claude/skills/k8s-dev-sandbox/scripts/woow-test.sh epic-smarthome
+#   .claude/skills/k8s-dev-sandbox/scripts/woow-test.sh --module sale_management
+#   .claude/skills/k8s-dev-sandbox/scripts/woow-test.sh epic-smarthome --module woow_paas_platform --keep-on-fail
 
 set -euo pipefail
 
@@ -214,11 +214,11 @@ else
     if [ "$KEEP_ON_FAIL" = true ]; then
         echo ""
         echo -e "${YELLOW}Extending sandbox TTL by 24h for debugging...${NC}"
-        if [ -x "${SCRIPT_DIR}/extend.sh" ]; then
-            "${SCRIPT_DIR}/extend.sh" "$SLUG" --ttl 24h
+        if [ -x "${SCRIPT_DIR}/woow-extend.sh" ]; then
+            "${SCRIPT_DIR}/woow-extend.sh" "$SLUG" --ttl 24h
             echo -e "${YELLOW}⚠️  Tests failed. Sandbox TTL extended by 24h for debugging.${NC}"
         else
-            echo -e "${YELLOW}⚠️  extend.sh not found. Manually extend TTL if needed.${NC}"
+            echo -e "${YELLOW}⚠️  woow-extend.sh not found. Manually extend TTL if needed.${NC}"
         fi
     fi
 

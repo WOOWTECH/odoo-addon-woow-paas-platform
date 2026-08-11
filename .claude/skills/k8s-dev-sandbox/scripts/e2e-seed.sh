@@ -20,7 +20,7 @@
 #
 # Options:
 #   --context <name>    kubectl context (optional). If omitted, use the active context
-#                       (same behaviour as test.sh). Provide it for standalone runs.
+#                       (same behaviour as woow-test.sh). Provide it for standalone runs.
 #   --name <skill>      Skill name to seed (default: browser-e2e-skill — MUST match spec).
 #   --version <v>       Skill version (default: 1.0.0).
 #   --project <name>    Holder project name (default: e2e-skill-fixture).
@@ -135,7 +135,7 @@ if ! command -v kubectl >/dev/null 2>&1; then
     exit 2
 fi
 
-# --- 切換 context（提供才切；否則沿用 active context，與 test.sh 一致）---
+# --- 切換 context（提供才切；否則沿用 active context，與 woow-test.sh 一致）---
 if [ -n "$KUBE_CONTEXT" ]; then
     if ! kubectl config get-contexts -o name 2>/dev/null | grep -qx "$KUBE_CONTEXT"; then
         echo -e "${RED}ERROR: kubectl context '${KUBE_CONTEXT}' not found in kubeconfig.${NC}" >&2
@@ -145,7 +145,7 @@ if [ -n "$KUBE_CONTEXT" ]; then
     kubectl config use-context "$KUBE_CONTEXT" >/dev/null
 fi
 
-# --- 如果未提供名稱，從 branch 自動偵測（同 test.sh:92-101）---
+# --- 如果未提供名稱，從 branch 自動偵測（同 woow-test.sh:92-101）---
 if [ -z "$SLUG" ]; then
     BRANCH=$(git -C "$PROJECT_ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
     SLUG=$(echo "$BRANCH" \
@@ -187,7 +187,7 @@ if [ "$POD_READY" != "True" ]; then
     exit 2
 fi
 
-# --- 取得 DB 名稱：優先讀 secret（同 test.sh:135），fallback 用 slug 推導（同 create.sh:196）---
+# --- 取得 DB 名稱：優先讀 secret（同 woow-test.sh:135），fallback 用 slug 推導（同 create.sh:196）---
 DB_NAME=$(kubectl get secret -n "$NAMESPACE" "${FULLNAME}-secret" \
     -o jsonpath='{.data.postgres-database}' 2>/dev/null | base64 -d 2>/dev/null || echo "")
 if [ -z "$DB_NAME" ]; then
