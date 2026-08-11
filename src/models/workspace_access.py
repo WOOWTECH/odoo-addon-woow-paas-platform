@@ -126,15 +126,35 @@ class WorkspaceAccess(models.Model):
     @api.model_create_multi
     def create(self, vals_list):
         for vals in vals_list:
-            # ⚠ Unlike project_access.py:134 (`if not target_role or not
-            # project_id: return`), do NOT early-return when 'role' is
-            # omitted from vals — that would let a create-direction payload
-            # skip this guard entirely and fall back on nothing but the
-            # ir.rule's create check (which, per #556's root cause, is
-            # evaluated AFTER the row is already inserted and can be
-            # self-satisfied by the very row being created). Both an
-            # explicit role='admin' payload and an omitted-role payload
-            # must go through the SAME check here.
+            # Do NOT early-return when 'role' is omitted from vals — that
+            # would let a create-direction payload skip this guard entirely
+            # and fall back on nothing but the ir.rule's create check
+            # (which, per #556's root cause, is evaluated AFTER the row is
+            # already inserted and can be self-satisfied by the very row
+            # being created). Both an explicit role='admin' payload and an
+            # omitted-role payload must go through the SAME check here.
+            #
+            # ⚠ `effective_role` below only resolves `role` from raw
+            # `vals.get(...)`, NOT from Odoo's own default-resolution
+            # (`_add_missing_default_values`) — so a role omitted from vals
+            # AND supplied only via `with_context(default_role=...)` still
+            # reaches this check correctly (Selection field default is
+            # baked into `ROLE_USER` here), but `workspace_id` below is
+            # read the same raw way, which is the OPEN half of the same
+            # class of bug: `ProjectAccess.create`
+            # (`project_access.py`) went through an independent-review
+            # round (#657 / PR #666 comment 6583 "H1") that found its
+            # sibling gap — a `default_project_id`-only context payload
+            # bypassing the guard entirely — and fixed it by resolving
+            # the WHOLE vals dict through `_add_missing_default_values`
+            # once, rather than re-deriving each field's Odoo-default
+            # resolution by hand (that hand-rolled approach is exactly
+            # what silently missed the second field the first time).
+            # `WorkspaceAccess.create` has the SAME shape of gap on
+            # `workspace_id` and has NOT been fixed here — tracked at #664,
+            # not in scope for #657. Do not treat this function as a
+            # correct reference to copy from; `ProjectAccess.create` is the
+            # current correct template.
             effective_role = vals.get('role') or ROLE_USER
             self._check_assignable_role(effective_role, vals.get('workspace_id'))
         return super().create(vals_list)
@@ -195,10 +215,11 @@ class WorkspaceAccess(models.Model):
             who cannot directly unlink the owner's row cannot open a
             0-owner window that way either);
         (b) the last owner row of a workspace cannot be removed at all,
-            even by the owner themselves (mirrors project_access.unlink(),
-            src/models/project_access.py:89-104) — checked only once (a)
-            has cleared, so the AUTHORIZATION denial (AccessError) and the
-            INVARIANT denial (ValidationError) stay distinguishable.
+            even by the owner themselves (mirrors
+            `ProjectAccess.unlink` in project_access.py) — checked only
+            once (a) has cleared, so the AUTHORIZATION denial
+            (AccessError) and the INVARIANT denial (ValidationError) stay
+            distinguishable.
         """
         for rec in self:
             if rec.role != ROLE_OWNER:
