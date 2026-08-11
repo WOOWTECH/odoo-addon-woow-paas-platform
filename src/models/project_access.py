@@ -122,36 +122,57 @@ class ProjectAccess(models.Model):
     @api.model_create_multi
     def create(self, vals_list):
         for vals in vals_list:
-            # #657 gap 2 — 不可在 role 缺省時 early-return。
-            # 缺省時 Odoo 會在 super().create() 內用 `default_get` 補值
-            # （odoo/models.py :: BaseModel._prepare_create_values →
-            #  _add_missing_default_values → default_get），而 default_get 的
-            # 第一順位是 context 的 `default_role` ——那是 RPC 用戶端可控的。
-            # 所以守衛必須用「Odoo 實際會寫進去的那個值」來判，而不是 raw vals，
-            # 否則 with_context(default_role='owner') + 不放 role 就整道繞過。
-            # 這裡刻意逐字重現 Odoo 的解析順序：key 存在就用它（即使是 False，
-            # 那種 payload 會在 DB 層因 required 而失敗，fail-closed），
-            # key 不存在才走 default_get。
-            if 'role' in vals:
-                effective_role = vals['role']
-            else:
-                effective_role = self.default_get(['role']).get('role') or ROLE_USER
-            self._check_assignable_role(effective_role, vals.get('project_id'))
+            # #657 gap 2 — 守衛必須看「Odoo 實際會寫進去的值」而不是 raw
+            # vals。context 的 `default_<field>` 是 RPC 用戶端可控的，而
+            # default 是在 super().create() 內部才補上的（odoo/models.py ::
+            # BaseModel._prepare_create_values → _add_missing_default_values
+            # → default_get，default_get 第一順位就是 context 的
+            # `default_<field>`）。這裡直接呼叫 Odoo 自己那支解析函式
+            # （`_add_missing_default_values`，`_prepare_create_values` 內部
+            # 用的正是它），而不是逐欄位重演它的規則——逐欄位重演會漏：
+            # 第一版只補了 role，漏掉 project_id，攻擊者用
+            # with_context(default_project_id=<受害 project>,
+            # default_role='owner') 且 vals 不放 project_id 就整道繞過
+            # （PR #666 留言 6583 §1，H1）。single-source-of-truth 版本不會
+            # 因為未來多一個欄位又漏一次。
+            resolved = self._add_missing_default_values(vals)
+            self._check_assignable_role(
+                resolved.get('role') or ROLE_USER,
+                resolved.get('project_id'),
+            )
         return super().create(vals_list)
 
     def write(self, vals):
         # #657 gap 1 — identity anchors。與 workspace_access.write() 同型
-        # （src/models/workspace_access.py 的 #556 註解區塊）。project_id /
-        # partner_id 是成員關係的「身分錨點」：invite / 改 role / 移除成員
-        # 這三條正常流程都只動 `role`，沒有任何合法流程會把一列既有的 access
-        # 重新指向另一個 project 或另一個 partner。少了這道守衛，一個合法自建
-        # project 的人（他真的是自己那列的 owner）可以 write([自己那列],
-        # {'project_id': <受害 project>, 'role': 'admin'})：ir.rule 的 write
-        # 檢查只評估 PRE-write 狀態（還在自己的 project、還是 owner ⇒ 放行）、
-        # 永遠不會重新評估搬過去之後的目的地；而下面的 `_check_assignable_role`
-        # 讀的是 `rec.project_id.id` ——也是來源而非目的地。兩層都沒守到。
-        # 比對的是「新值 != 現值」而不是「key 有沒有出現」，這樣前端整批送出
-        # 未修改欄位的 no-op write 不會被誤擋。
+        # （src/models/workspace_access.py 的 #556 註解區塊，該側錨的是
+        # workspace_id / user_id 而非 project_id / partner_id — 那個 model
+        # 沒有中介 compute）。project_id / partner_id / user_id 是成員關係的
+        # 「身分錨點」：invite / 改 role / 移除成員這三條正常流程都只動
+        # `role`，沒有任何合法流程會把一列既有的 access 重新指向另一個
+        # project、另一個 partner、或另一個 user。少了這道守衛，一個合法
+        # 自建 project 的人（他真的是自己那列的 owner）可以 write([自己那
+        # 列], {'project_id': <受害 project>, 'role': 'admin'})：ir.rule 的
+        # write 檢查只評估 PRE-write 狀態（還在自己的 project、還是 owner ⇒
+        # 放行）、永遠不會重新評估搬過去之後的目的地；而下面的
+        # `_check_assignable_role` 讀的是 `rec.project_id.id` ——也是來源
+        # 而非目的地。兩層都沒守到。比對的是「新值 != 現值」而不是「key
+        # 有沒有出現」，這樣前端整批送出未修改欄位的 no-op write 不會被
+        # 誤擋。
+        #
+        # `user_id` 錨定（#657 F2，PR #666 留言 6583 §5.1）：user_id 是
+        # `@api.depends('partner_id')` 的 stored compute，但它「是
+        # compute」不代表「不可寫」——沒有 `inverse` 的 stored compute，
+        # write() 不會拒絕，值會直接落地，只是不會被依賴欄位的重算覆蓋
+        # 回來（`_compute_user_id` 只在 `partner_id` 變動時觸發，而
+        # `partner_id` 已被上面這段錨死，這個值不會自己回來）。更關鍵的
+        # 是：`user_id` 才是本模組每一條 ir.rule 與 `_check_assignable_role`
+        # / `_check_owner_row_protected` 的 grantor lookup 實際比對的授權
+        # 鍵，`partner_id` 只是顯示欄位。放著 `user_id` 不錨，admin 可以把
+        # 別人那列的 `user_id` 改指到任意帳號：可反覆鎖住真 owner
+        # （grantor lookup 用 `limit=1` + `_order='role desc'`，字串降序
+        # `user > owner > guest > admin` 讓新插入的第二列贏過原本的 owner
+        # 列），也可以發出成員清單上看不出來的授權（外人拿到存取權，畫面
+        # 上顯示的仍是原本那個人）。
         if not self.env.is_superuser() and not self.env.user.has_group('base.group_system'):
             for rec in self:
                 if 'project_id' in vals and vals['project_id'] != rec.project_id.id:
@@ -163,6 +184,11 @@ class ProjectAccess(models.Model):
                     raise AccessError(
                         "Cannot re-point an access row (id=%s) to a "
                         "different partner." % rec.id
+                    )
+                if 'user_id' in vals and vals['user_id'] != rec.user_id.id:
+                    raise AccessError(
+                        "Cannot re-point an access row (id=%s) to a "
+                        "different user." % rec.id
                     )
         # #657 gap 3 — 每一次 write 都檢查目標列是否為 owner 列，不論改哪個
         # 欄位（見 _check_owner_row_protected docstring）。
@@ -214,12 +240,21 @@ class ProjectAccess(models.Model):
         sudo) and for ``base.group_system`` (parallel to the
         ``project_access_rule_admin_full`` ir.rule).
 
-        ``target_role`` is resolved by the caller into the *effective* role
-        (raw vals, or Odoo's own default resolution) before being passed in
-        — this function no longer lets an empty value through on its own.
+        ``target_role`` / ``project_id`` are resolved by the caller via
+        ``_add_missing_default_values`` (Odoo's own default-resolution
+        function — the same one ``_prepare_create_values`` uses internally)
+        before being passed in, so both already reflect the value Odoo will
+        actually persist, not the raw ``vals`` dict. This function's own
+        early-return below is therefore only a defensive guard against a
+        genuinely absent value (no vals key AND no context default AND no
+        field-level default) — that case still reaches the DB's
+        ``required=True`` constraint and fails closed; it is NOT the place
+        resolving `project_id` from context used to be missing (#657 H1,
+        PR #666 comment 6583 §1 — a prior version of this function was the
+        gap).
         """
         if not project_id:
-            return  # 缺 project_id 由 required=True 擋掉
+            return
         if self.env.is_superuser():
             return
         if self.env.user.has_group('base.group_system'):
