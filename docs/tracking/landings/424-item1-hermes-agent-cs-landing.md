@@ -10,7 +10,7 @@
 
 - 一 pod 三容器（agent＋webui＋nginx auth-proxy :8080 唯一對外）＋獨立 console（ttyd，open-design pattern）；DB/Redis **不需要**（實測 hermes_cli 用 sqlite，Elmo compose 的 pg/redis 是空掛）。
 - image 三顆全雙釘：agent `20260727.1502@ce3c49a7…`（②產物）、webui `20260727.2228@98d48222…`（mirror-image workflow 首筆；**釘 per-arch amd64 child 非 index**——open-design-console 同慣例）、console 沿用 open-design-console。
-- 單一 admin_password 餵四入口；dashboard 走 `/dashboard/` subpath（X-Forwarded-Prefix 原生支援）；`HERMES_DASHBOARD_PUBLIC_URL` per-service 注入且**必含 /dashboard 前綴**（OAuth redirect_uri 權威源）。
+- 單一 admin_password 餵四入口；**0.1.0～0.1.1 當時** dashboard 走 `/dashboard/` subpath（X-Forwarded-Prefix 原生支援）、`HERMES_DASHBOARD_PUBLIC_URL` per-service 注入且必含 `/dashboard` 前綴（OAuth redirect_uri 權威源）。**chart 0.1.3 起改為 root URL**（webui container 移除、nginx `/` 直連 dashboard，`/dashboard/` 已是硬 404）：注入值與交付給租戶的 Dashboard API URL 一律**不帶任何子路徑**——詳見本檔末「0.1.3 transition」節與 #672。
 - Elmo pilot 的叢集全域 ClusterRole、明文密碼 env、cloudflared per-instance tunnel 全數不搬。
 
 ## E2E（stg 真叢集，S1–S9）
