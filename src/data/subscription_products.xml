@@ -1209,8 +1209,9 @@
              是不同商品，勿互掛、勿互抄——守線＝test_hermes_agent_seed_424 的
              test_distinct_from_mcp_hermes_plans。
 
-             **v1 不做加購變體**（席數不適用：單一 agent 實例、單一憑證，且
-             max_per_partner=1），故 generator 的 subscription_products_variants.xml
+             **v1 不做加購變體**（席數不適用：一個 service 實例內就是單一 agent、單一
+             憑證，沒有「多加一席」可賣；這與**同帳號能開幾台**無關——max_per_partner
+             已放寬為 0＝不限），故 generator 的 subscription_products_variants.xml
              沒有本 family、docs/plans/2026-Q3/2026-07-19-cloud-services-220-manifest.md
              亦無需增列（同 HAOS 慣例）。
 
