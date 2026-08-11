@@ -33,12 +33,12 @@ Plan: `docs/plans/2026-Q2/2026-05-28-skill-e2e-and-is-latest-drift-fix.md` Task 
    # 冪等 seed：建 project + draft skill 並 commit
    bash .claude/skills/k8s-dev-sandbox/scripts/e2e-seed.sh feat-skill-list --context docker-desktop
    # 或與 module test 一併跑（測試通過後自動 seed）：
-   bash .claude/skills/k8s-dev-sandbox/scripts/test.sh feat-skill-list --e2e-seed
+   bash .claude/skills/k8s-dev-sandbox/scripts/woow-test.sh feat-skill-list --e2e-seed
    ```
 
    - `e2e-seed.sh` 的 `--name` / `--version` 預設（`browser-e2e-skill` / `1.0.0`）必須與 spec 的
      `SKILL_E2E_NAME` 對齊，spec 才找得到列。
-   - spec 會把該筆推進到 archived，所以重跑請帶 `--reset`（`test.sh --e2e-seed` 已預設帶）；
+   - spec 會把該筆推進到 archived，所以重跑請帶 `--reset`（`woow-test.sh --e2e-seed` 已預設帶）；
      要清掉 fixture 用 `e2e-seed.sh <slug> --purge`。
 
 4. **建立 screenshot 目錄**：

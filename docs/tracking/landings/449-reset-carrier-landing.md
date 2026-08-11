@@ -19,4 +19,4 @@
 - 主發現①（→issue #461）：**首次 reset 機率性逾時**（120.6s/121.0s→重按 49.9s/76.7s）＝RWO detach/attach＋跨節點 image pull；fail-safe 實證成立；根因＝平台 120s 與 operator 最壞 540s 是互不知情的獨立預算。
 - 主發現②（→issue #460，high）：**前端 Reset 按鈕仍 slug 白名單**（ServiceDetailPage.js:174），has_admin_gui 8 筆有 5 筆按不到（#375 三型起就漏）；修法雙邊＝payload 補 has_admin_gui＋前端改讀＋守線。
 - 環境遺留：paas-ws-stg-5a105e8b quota limits.cpu 留 12（#456 已留言；翻回=服務起不來）；tmpl46 重解封交 leader1；svc60 密碼已輪替為平台 32 字元制式（DB 與 ns Secret 不一致時以 Secret 為準＝發生過 timeout）。
-- 附帶缺陷（#424 領域未修）：hermes dashboard 前端 fetch('/auth/password-login') 漏 /dashboard 前綴＝真瀏覽器表單登入壞。
+- 附帶缺陷（#424 領域，**已隨 chart 0.1.3 消滅，語意並已翻轉**）：2026-07-29 當時 dashboard 掛在 `/dashboard/` subpath，其前端 fetch('/auth/password-login') 漏 `/dashboard` 前綴＝真瀏覽器表單登入壞。**0.1.3 起 nginx `/` 直連 dashboard（webui container 移除、`/dashboard/` 改為硬 404），root 的 `/auth/password-login` 才是對的**——本條不再成立，勿照當年的值去「補前綴」（見 424-item1 landing 的「0.1.3 transition」節與 #672）。

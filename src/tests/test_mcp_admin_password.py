@@ -744,3 +744,201 @@ class TestMcpAdminPassword(TransactionCase):
             self._secret_of(self.service).gateway_api_key,
             '沒有 gateway 的 chart 連 key 都不該鑄（finding 3：不然那 7 個 chart '
             '會收到一把平台不打算給它的憑證）')
+
+    # ------------------------------------------------------------------
+    # #672：Dashboard REST API URL 的交付（三格缺一格＝整個管理面壞掉）
+    #
+    # MCP admin GUI 的 Dashboard 區要填 URL＋帳號＋密碼三格，平台原本只交付了
+    # 密碼（帳號 GUI 預設 admin 正確）。缺 URL 時 MCP 端 `dashboard_url` 留空，
+    # httpx 丟 UnsupportedProtocol ⇒ `hermes_config`／`hermes_gateway`／
+    # `hermes_model` 與 `hermes_inspect` 的三個分支**全部**失效（8/10 個 tool
+    # 走 Dashboard REST API，只有 2 個走 gateway）。
+    # ------------------------------------------------------------------
+
+    def _paas_domain(self):
+        return self.env['ir.config_parameter'].sudo().get_param(
+            'woow_paas_platform.paas_domain', 'woowtech.io')
+
+    def test_dashboard_url_delivered_as_the_service_root(self):
+        """交付端補上第三格：值＝服務根網址，**不帶任何子路徑**。
+
+        形態斷言不是風格問題：chart 0.1.3 把 `/dashboard/` 改成硬 404（nginx `/`
+        直連 dashboard），所以帶尾綴的值今天是一條 404 死鏈。同一支測試裡對照
+        gateway——它**是**子路徑形態——才證明兩者的差異是刻意的，而不是誰把另一個
+        的值抄過來（抄過來也會是一條看起來正常的死鏈）。
+        """
+        service = self._make_hermes_service(subdomain='hermes-dash-root')
+        root = 'https://hermes-dash-root.%s' % self._paas_domain()
+
+        data = self.controller._gateway_credentials(service)
+
+        self.assertEqual(
+            data.get('dashboard_url'), root,
+            'dashboard 這一格必須交付服務根網址（MCP 的 Dashboard REST API 區）')
+        self.assertEqual(
+            data.get('gateway_url'), root + '/gateway',
+            '陽性對照：同一台服務的 gateway 仍是**子路徑**形態 —— 兩格形狀刻意不同')
+
+    def test_dashboard_url_equals_the_url_injected_into_the_chart(self):
+        """交付給租戶的值，必須就是注入給 chart 的那一個（跨層 lock-step）。
+
+        平台已經把同一個 URL 以 `config.dashboardPublicUrl`
+        （→ `HERMES_DASHBOARD_PUBLIC_URL`）告訴 agent 自己「你的 dashboard 對外
+        在這裡」。交付端若自己另算一份，兩份就會各自演化——而漂移的那一天兩邊都
+        不會報錯：agent 的 OAuth 回呼照舊正確，只有租戶手上那條 MCP 連線是死的。
+        """
+        service = self._make_hermes_service(subdomain='hermes-dash-lockstep')
+        injected = service._assemble_deploy_values()[
+            'values']['config']['dashboardPublicUrl']
+
+        self.assertTrue(
+            injected,
+            '前置：injector 要真的注入得出值 —— 否則下面的相等在空字串上恆真')
+        self.assertEqual(
+            self.controller._gateway_credentials(service).get('dashboard_url'),
+            injected,
+            '交付值必須與注入給 chart 的 dashboardPublicUrl 同源（不得各算一份）')
+
+    def test_create_delivers_the_dashboard_url_end_to_end(self):
+        """呼叫點①建立服務：response 帶得到第四項。
+
+        `_gateway_credentials` 有兩個呼叫點，只驗 method 本身的話，任一呼叫點忘了
+        接（或接了卻被覆蓋）都測不出來——而租戶只走這兩條路。
+        """
+        with self._patch_paas_request():
+            result = self.controller._create_service(
+                workspace=self.workspace,
+                template_id=self.env.ref(
+                    'woow_paas_platform.cloud_app_hermes_agent').id,
+                name='Hermes create probe',
+                values={},
+                plan_id=self.env.ref(
+                    'woow_paas_platform.plan_hermes_agent_monthly').id,
+            )
+        self.assertTrue(result.get('success'), result.get('error'))
+        service = self.env['woow_paas_platform.cloud_service'].browse(
+            result['data']['id'])
+        self.assertTrue(
+            service.subdomain,
+            '前置：建立路徑要配得到 subdomain —— 否則「沒交付」的原因會是算不出位址')
+        self.assertEqual(
+            result['data'].get('dashboard_url'),
+            'https://%s.%s' % (service.subdomain, self._paas_domain()),
+            '建立服務的一次性 response 必須帶 dashboard_url')
+        self.assertTrue(
+            result['data'].get('gateway_url'),
+            '陽性對照：gateway 兩格照舊交付（否則本條可能只是整個 payload 沒接上）')
+
+    @patch(
+        'odoo.addons.woow_paas_platform.services.paas_operator.get_paas_operator_client'
+    )
+    def test_reset_delivers_the_dashboard_url_end_to_end(self, get_client):
+        """呼叫點②Reset：response 同樣帶得到第四項。
+
+        Reset 是租戶弄丟憑證後的**唯一**補發入口（平台刻意不做回讀端點）。這條
+        漏掉的話，租戶重設完照樣拿不到 URL，還會以為「重發過了、應該齊了」。
+        """
+        client = MagicMock()
+        client.reset_release_config.return_value = {
+            'helm_revision': 9, 'rollout_awaited': False,
+        }
+        get_client.return_value = client
+        service = self._make_hermes_service(subdomain='hermes-dash-reset')
+
+        with self._patch_paas_request():
+            result = self.controller.api_service_reset_admin_password(
+                workspace_id=self.workspace.id,
+                service_id=service.id,
+            )
+
+        self.assertTrue(result.get('success'), result.get('error'))
+        self.assertTrue(
+            result['data'].get('admin_password'),
+            '陽性對照：Reset 本來就交付的密碼還在（否則本條是在測一個壞掉的端點）')
+        self.assertEqual(
+            result['data'].get('dashboard_url'),
+            'https://hermes-dash-reset.%s' % self._paas_domain(),
+            'Reset 的一次性 response 必須帶 dashboard_url')
+
+    def test_dashboard_url_withheld_when_the_chart_has_no_dashboard(self):
+        """反向：沒有 dashboard value path 的 chart 不得交付這一項。
+
+        比照 #530 的分層閘門精神——交出一條**不存在的網址**比不交更糟：它看起來
+        像產品保證，租戶會拿它去 debug 一個根本不存在的端點。
+
+        兩個陽性對照先立，否則這條會在錯誤的理由下變綠：
+        1. 受測服務**有** subdomain——否則 withhold 的真正原因會變成「算不出公開
+           位址」，判別器就指錯了東西。
+        2. 同一支測試裡，有 dashboard 的 chart 確實交付得出來——否則「一律不交付」
+           （功能整個沒接上）也會讓這條綠。
+        """
+        self.service.subdomain = 'mcp-odoo-dash-probe'
+        self.assertTrue(
+            self.service._public_base_url(),
+            '前置：服務要算得出公開位址 —— 否則 withhold 的原因是「沒有位址」'
+            '而不是「這個 chart 沒有 dashboard」')
+        self.assertIn(
+            'dashboard_url',
+            self.controller._gateway_credentials(
+                self._make_hermes_service(subdomain='hermes-dash-control')),
+            '陽性對照：有 dashboard 的 chart 必須交付得出來')
+
+        self.assertNotIn(
+            'dashboard_url', self.controller._gateway_credentials(self.service),
+            'chart 沒有 dashboard 對外形態時不得交付一條它自己不承認的網址')
+
+    def test_dashboard_url_withheld_without_a_public_base_url(self):
+        """反向（另一半）：算不出公開根位址就不交付——半條網址不是憑證。
+
+        與 gateway 同一種分層：chart 有沒有 dashboard 是 template 的屬性，服務有
+        沒有對外位址是 service 的屬性，兩個都要成立才交得出東西。
+        """
+        service = self._make_hermes_service(subdomain='hermes-dash-nosub')
+        self.assertIn(
+            'dashboard_url', self.controller._gateway_credentials(service),
+            '前置：有 subdomain 時交付得出來 —— 沒有這行，下面的 assertNotIn 可能'
+            '只是因為功能整個沒接上')
+
+        service.subdomain = False
+
+        self.assertNotIn(
+            'dashboard_url', self.controller._gateway_credentials(service),
+            '沒有對外根位址時不得交付 dashboard_url')
+
+    def test_gateway_and_dashboard_gates_are_independent(self):
+        """兩個閘門必須各判各的：有 gateway、沒 dashboard 的 chart 只交付 gateway。
+
+        把 dashboard 塞進 gateway 的 `if` 裡也會讓上面每一條綠（今天只有
+        hermes-agent 兩者兼具），但那是把兩個不同的 chart 能力綁成一個——哪天有
+        chart 只具其一，交付就會整組消失或整組多出來，而兩種錯法都不會有測試變紅。
+        """
+        gw_only = self.env['woow_paas_platform.cloud_app_template'].create({
+            'name': 'Gateway-only chart',
+            'slug': 'gw-only-no-dashboard',
+            'category': 'mcp',
+            'helm_repo_url': '',
+            'helm_chart_name': 'oci://example/gw-only',
+            'helm_chart_version': '0.1.0',
+            'mcp_enabled': False,
+            'has_admin_gui': True,
+            'helm_default_values': json.dumps(
+                {'gateway': {'externalPath': '/gw-672'}}),
+        })
+        service = self.env['woow_paas_platform.cloud_service'].create({
+            'name': 'Gateway-only probe',
+            'workspace_id': self.workspace.id,
+            'template_id': gw_only.id,
+            'state': 'running',
+            'subdomain': 'gw-only-672',
+            'helm_namespace': 'paas-ws-test',
+            'helm_release_name': 'svc-gw-only-672',
+        })
+
+        data = self.controller._gateway_credentials(service)
+
+        self.assertTrue(
+            data.get('gateway_url'),
+            '前置：這個 chart 有 gateway，gateway 兩格必須照常交付')
+        self.assertNotIn(
+            'dashboard_url', data,
+            '有 gateway 不蘊含有 dashboard —— 兩個閘門必須各判各的')

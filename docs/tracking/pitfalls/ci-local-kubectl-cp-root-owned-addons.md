@@ -198,11 +198,11 @@ ci-local 模式的 `/mnt/extra-addons` 是**烤進 image 的層，沒有掛任�
 
 `kubectl rollout restart` 會用同一顆 image 起全新 container，檔案系統從 image layer
 重新展開 ⇒ 前一個 pod 實例上的 chown 與 cp **全部蒸發**。而
-`.claude/skills/k8s-dev-sandbox/scripts/test.sh` 在**測試成功與失敗兩條路徑的最後都會**
+`.claude/skills/k8s-dev-sandbox/scripts/woow-test.sh` 在**測試成功與失敗兩條路徑的最後都會**
 `kubectl rollout restart` + `rollout status`（因為測試用 `--stop-after-init` 會把 odoo
 停掉，要重新拉起來）。
 
-⇒ **跑一次 `test.sh`，熱蓋進去的東西就沒了。** 事後在新 pod 上覆查：owner 回到
+⇒ **跑一次 `woow-test.sh`，熱蓋進去的東西就沒了。** 事後在新 pod 上覆查：owner 回到
 `root:root`、檔案內容也回到 image 烤進去的舊值。
 
 好處是不需要（也無法）手動 revert；壞處是「改一次 → 跑測試 → 再改一次」的每一輪都得
@@ -267,5 +267,5 @@ recipe 腳本化的人，請把上面那條 `find` 檢查一起帶進去。
 - ci-local 跑測試的其他坑：
   [odoo-sandbox-ci-local-two-track-test](../../guides/testing/odoo-sandbox-ci-local-two-track-test.md)
 - 同 family（**別信工具給的成功／失敗訊號，去看被操作對象的實際狀態**）：
-  - [[sandbox-module-test-false-green]] — `test.sh` 只看 exit code ⇒ 0 tests 也報綠
+  - [[sandbox-module-test-false-green]] — `woow-test.sh` 只看 exit code ⇒ 0 tests 也報綠
   - [[readonly-audit-default-report-overwrites-repo]] — exit 0 且無警告，但檔案已被洗掉

@@ -32,7 +32,7 @@ teammate 用一次到位 recipe 量到 `origin/develop` baseline ＝ **29 failed
 
 **判定手法（可複用）**：跑完後查 DB——sale journal 存在、但測試當下的 error 說找不到它 ⇒ 證明它是**測試之後**才建的。對照組更硬：兩段式跑的 DB `sh_journal_id=1`，三個一次到位的 DB 全是 NULL。
 
-**為什麼要記這次**：本檔早就寫了這條，teammate 仍踩——因為這是**我的** memory，派出去的 agent 讀不到。散文落點無效，正確落點是 repo 內的機械檢查（例如 `test.sh` 跑完偵測 error 訊息裡出現大量 journal 類 traceback 就 fail-loud 提示 recipe 錯），或至少寫進 CLAUDE.md 的測試段落。**派工時要主動把 recipe 講明，不要假設對方會查到。**
+**為什麼要記這次**：本檔早就寫了這條，teammate 仍踩——因為這是**我的** memory，派出去的 agent 讀不到。散文落點無效，正確落點是 repo 內的機械檢查（例如 `woow-test.sh` 跑完偵測 error 訊息裡出現大量 journal 類 traceback 就 fail-loud 提示 recipe 錯），或至少寫進 CLAUDE.md 的測試段落。**派工時要主動把 recipe 講明，不要假設對方會查到。**
 
 危險性在於差集法看似嚴謹卻會遮蔽：它只抓得到「新引入的紅」，抓不到「本來就沒跑起來的測試裡的回歸」——當 PR 改動範圍與失效測試範圍有交集時（該次是 subscription/wallet 對上 `_create_service` 的訂閱建立），差集分析完全不能替代乾淨基準實跑。
 

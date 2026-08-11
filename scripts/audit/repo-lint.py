@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """repo-lint：把「假綠家族」pitfall 轉成機械 gate 的靜態檢查工具。
 
-二十七個 check 函式，歸為下列二十四條規則（其中兩條各由多個函式實作：第 7 條
+二十八個 check 函式，歸為下列二十五條規則（其中兩條各由多個函式實作：第 7 條
 capability-gate 由三個函式——slug 集合成員／admin-gui 錨點／gateway 文案錨點；第 22 條
 security-rule-lifecycle 由兩個函式——ir.rule 的出生地／退役名字。這個一對多關係的顯式
 映射表是 `REPO_LINT_RULES`，由第 17 條機械對帳，所以上面這兩個數字不會再靜默漂掉）。
@@ -220,7 +220,20 @@ security-rule-lifecycle 由兩個函式——ir.rule 的出生地／退役名字
                      ——寫在這裡免得下一個人以為讀方向也被守著。
                      ⚠ 只驗**存在性**，不驗 domain 寫得對不對。
                      依據 docs/tracking/landings/556-workspace-access-authz-landing.md
-24. workspace-rule-directions  同第 23 條的判準，套在
+24. one-time-credential-render  後端一次性憑證 payload（src/controllers/paas.py 的
+                     `_gateway_credentials`）交付的每一個 key，前端
+                     `OneTimeCredentialsModal.js` 的 `buildOneTimeCredentials` 都要
+                     讀得到（`data.<key>`）。沒讀到＝那一格永遠不顯示，而**一次性**
+                     憑證錯過就沒有第二次（平台刻意不做回讀端點，只能 Reset 換發）。
+                     與第 16 條 availability-reason-labels、第 7(c) 條同一個家族：
+                     兩邊各自都「看起來對」，本 repo 沒有前端測試基礎設施，沒有任何
+                     測試會變紅。這是 #672 的另一半——那次是後端整個沒交付 dashboard
+                     URL（後端測試守得住），本條守的是「交付了但前端沒渲染」。
+                     只查涵蓋（後端 ⊆ 前端），前端多讀一個後端不再送的 key 無害。
+                     ⚠ 只驗 key 有沒有被讀到，**不驗文案對不對**——hint 指錯區、漏了
+                     指路（#672 的直接成因）一個都抓不到，那留給人。
+                     依據 docs/tracking/landings/530-gateway-landing-542-baseline.md
+25. workspace-rule-directions  同第 23 條的判準，套在
                      `woow_paas_platform.workspace`（workspace **本體**，不是成員列）。
                      #658：這個 model 原本只有一條 perm_read+perm_write 合一、domain
                      無 role 條件的 rule，任何 guest 成員都能改 `owner_id`（訂閱帳單
@@ -2879,6 +2892,107 @@ def check_availability_reason_labels(root):
     return []
 
 
+# ------------------------------ 一次性憑證：後端交付 ⊆ 前端渲染（#672）
+
+ONE_TIME_CRED_BACKEND_FILE = "src/controllers/paas.py"
+ONE_TIME_CRED_BACKEND_FUNC = "_gateway_credentials"
+ONE_TIME_CRED_MODAL_FILE = (
+    "src/static/src/paas/components/modal/OneTimeCredentialsModal.js")
+ONE_TIME_CRED_BUILDER = "buildOneTimeCredentials"
+# builder 的 body：從 `export function buildOneTimeCredentials(` 到第一個行首 `}`。
+ONE_TIME_CRED_BUILDER_RE = re.compile(
+    r"export function buildOneTimeCredentials\s*\([^)]*\)\s*\{(.*?)\n\}", re.S)
+# 前端讀後端 payload 的唯一形態：`data.<key>`（`data && data.foo` 也命中）。
+ONE_TIME_CRED_DATA_KEY_RE = re.compile(r"\bdata\.([A-Za-z_][A-Za-z0-9_]*)")
+# 跨檔不變式，hook 模式靠這個集合前置判斷「有沒有動到它」（同 AVAILABILITY_REASON_FILES）。
+ONE_TIME_CRED_FILES = (ONE_TIME_CRED_BACKEND_FILE, ONE_TIME_CRED_MODAL_FILE)
+
+
+def _one_time_cred_backend_keys(func):
+    """從 `_gateway_credentials` 的 AST 抽出它會交付的 payload key。
+
+    兩種形態都收：`creds['x'] = ...`（現況）與 `return {'x': ..., 'y': ...}`
+    （#672 之前的形狀）。只認常數字串 key——動態 key 抽不出來也不該靜默略過，
+    但那形態今天不存在，真的出現時 backend 集合會少一個名字，由呼叫端的
+    「抽不到任何 key ⇒ 違規」與這裡的涵蓋判準一起收斂到「看得見的紅」。
+    """
+    keys = set()
+    for node in ast.walk(func):
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if (isinstance(target, ast.Subscript)
+                        and isinstance(target.slice, ast.Constant)
+                        and isinstance(target.slice.value, str)):
+                    keys.add(target.slice.value)
+        elif isinstance(node, ast.Return) and isinstance(node.value, ast.Dict):
+            for key in node.value.keys:
+                if isinstance(key, ast.Constant) and isinstance(key.value, str):
+                    keys.add(key.value)
+    return keys
+
+
+def check_one_time_credential_render(root):
+    """後端交付的每一項一次性憑證，前端都要渲染得出來。
+
+    #672 的另一半。那次的缺口是**後端**根本沒交付 dashboard URL，租戶手上 MCP 的
+    Dashboard 區三格缺一格 ⇒ 管理面整組失效；後端測試補得上。但同一條邊界還有反向
+    的一段沒有任何守線：後端交付了、前端的 `buildOneTimeCredentials` 忘了讀，那一格
+    就永遠不顯示——而**一次性**憑證錯過就沒有第二次（平台刻意不做回讀端點，租戶只能
+    跑 Reset 換發，而 Reset 會連帶換掉 gateway key，等於逼他重接一次線）。
+
+    這類漂移沒有任何測試會變紅：後端測後端 payload（本 repo 的測試就是這樣寫的），
+    而前端沒有測試基礎設施。與 `check_availability_reason_labels`／
+    `check_gateway_copy_gate_anchor` 同一個家族——兩邊各自都「看起來對」。
+
+    判準只要求**涵蓋**（後端 ⊆ 前端）不要求相等：前端多留一個後端不再送的 key，
+    效果只是那段 `if` 永遠不成立（無害）；少一個才是租戶拿不到東西。
+
+    ⚠ 覆蓋邊界：只驗 key 有沒有被讀到，**不驗文案**。hint 指錯區、根本沒指路（#672
+    的直接成因就是 Admin Password 沒說要填進 MCP）本 gate 一個都抓不到。把這條綠讀成
+    「憑證視窗說得清楚」是錯的。
+    """
+    backend_path = os.path.join(root, ONE_TIME_CRED_BACKEND_FILE)
+    modal_path = os.path.join(root, ONE_TIME_CRED_MODAL_FILE)
+    if not (os.path.exists(backend_path) and os.path.exists(modal_path)):
+        return []  # fail-open：檔案搬家由其他 gate／測試負責，這裡不重複報
+
+    try:
+        with open(backend_path, encoding="utf-8") as f:
+            tree = ast.parse(f.read())
+    except (OSError, SyntaxError, ValueError) as exc:
+        return ["%s：讀不到或 parse 失敗（%s）——一次性憑證的涵蓋檢查失效"
+                % (ONE_TIME_CRED_BACKEND_FILE, exc)]
+    func = next(
+        (n for n in ast.walk(tree)
+         if isinstance(n, ast.FunctionDef) and n.name == ONE_TIME_CRED_BACKEND_FUNC),
+        None)
+    if func is None:
+        return ["%s：找不到 %s，一次性憑證的涵蓋檢查失效（探針壞掉不是通過）。改名的話"
+                "本 check 的常數要跟著改" % (ONE_TIME_CRED_BACKEND_FILE,
+                                            ONE_TIME_CRED_BACKEND_FUNC)]
+    backend = _one_time_cred_backend_keys(func)
+    if not backend:
+        return ["%s：%s 一個 payload key 都抽不到——探針失去鑑別力（後端 ⊆ 前端 在空"
+                "集合上恆真）" % (ONE_TIME_CRED_BACKEND_FILE, ONE_TIME_CRED_BACKEND_FUNC)]
+
+    with open(modal_path, encoding="utf-8") as f:
+        js = f.read()
+    body = ONE_TIME_CRED_BUILDER_RE.search(js)
+    if not body:
+        return ["%s：找不到 %s 的函式本體。它是兩個入口（建立／Reset）共用的唯一組裝點，"
+                "拆掉的話「哪些憑證會被顯示」就散回各頁各寫一份（#530）"
+                % (ONE_TIME_CRED_MODAL_FILE, ONE_TIME_CRED_BUILDER)]
+    frontend = set(ONE_TIME_CRED_DATA_KEY_RE.findall(body.group(1)))
+
+    missing = sorted(backend - frontend)
+    if missing:
+        return ["%s：後端 %s 會交付 %s，但 %s 沒有讀 data.<key> ⇒ 那一格永遠不顯示，"
+                "而一次性憑證錯過就沒有第二次（#672）"
+                % (ONE_TIME_CRED_MODAL_FILE, ONE_TIME_CRED_BACKEND_FUNC, missing,
+                   ONE_TIME_CRED_BUILDER)]
+    return []
+
+
 # --------------------------------------- kubectl namespace 白名單雙寫對帳（2026-08-06）
 
 KUBECTL_NS_CLAUDE_MD = "CLAUDE.md"
@@ -3329,6 +3443,7 @@ REPO_LINT_RULES = {
     "security-rule-lifecycle": ("check_security_rule_noupdate",
                                 "check_retired_rule_xmlid"),
     "workspace-access-rule-directions": ("check_workspace_access_rule_directions",),
+    "one-time-credential-render": ("check_one_time_credential_render",),
     "workspace-rule-directions": ("check_workspace_rule_directions",),
 }
 
@@ -3752,6 +3867,7 @@ def run_all(root):
                   + check_security_rule_noupdate(root)
                   + check_retired_rule_xmlid(root)
                   + check_workspace_access_rule_directions(root)
+                  + check_one_time_credential_render(root)
                   + check_workspace_rule_directions(root))
     if violations:
         print("repo-lint：%d 個違規" % len(violations))
@@ -3860,6 +3976,11 @@ def run_hook():
                           + check_workspace_access_rule_directions(root)
                           + check_workspace_rule_directions(root)
                           if _security_rule_watches(rel) else [])
+        # #672：一次性憑證的涵蓋也是**跨檔**不變式（後端 payload ／ 前端組裝點），
+        # 而且壞掉的常常是另一個檔——後端補一項憑證、前端忘了讀，紅的是前端那份。
+        # ⇒ 不做 only_file 切片，動到任一份就整條重算（同 ladder／availability）。
+        one_time_cred = (check_one_time_credential_render(root)
+                         if rel in ONE_TIME_CRED_FILES else [])
         if re.match(r"^src/controllers/.*\.py$", rel):
             violations = check_controller_sudo(root, only_file=abs_path)
             violations += check_reuse_values(root, only_file=abs_path)
@@ -3911,7 +4032,8 @@ def run_hook():
             # 白名單的兩份副本互為對方的判準：改哪一邊，壞掉的都是「兩份是否一致」這個
             # 跨檔不變式本身 ⇒ 不做 only_file 切片，動到任一份就整條重算。
             violations = check_kubectl_ns_whitelist_sync(root)
-        elif ladder or availability or poll_facts or anchors or floor or security_rules:
+        elif (ladder or availability or poll_facts or anchors or floor
+                or security_rules or one_time_cred):
             # extra/paas-operator/** 與 docs/tracking/pitfalls/** 不在上面任何分支，
             # 但前者持有階梯的內層常數、後者是 doc-symbol-anchor 的一半輸入；
             # baselines/repo-lint-registry.txt（floor 的另一份輸入）與
@@ -3926,6 +4048,7 @@ def run_hook():
         violations += anchors
         violations += floor
         violations += security_rules
+        violations += one_time_cred
         if violations:
             print(json.dumps({
                 "decision": "block",
