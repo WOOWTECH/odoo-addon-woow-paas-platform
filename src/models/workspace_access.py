@@ -134,29 +134,28 @@ class WorkspaceAccess(models.Model):
             # being created). Both an explicit role='admin' payload and an
             # omitted-role payload must go through the SAME check here.
             #
-            # ⚠ `effective_role` below only resolves `role` from raw
-            # `vals.get(...)`, NOT from Odoo's own default-resolution
-            # (`_add_missing_default_values`) — so a role omitted from vals
-            # AND supplied only via `with_context(default_role=...)` still
-            # reaches this check correctly (Selection field default is
-            # baked into `ROLE_USER` here), but `workspace_id` below is
-            # read the same raw way, which is the OPEN half of the same
-            # class of bug: `ProjectAccess.create`
-            # (`project_access.py`) went through an independent-review
-            # round (#657 / PR #666 comment 6583 "H1") that found its
-            # sibling gap — a `default_project_id`-only context payload
-            # bypassing the guard entirely — and fixed it by resolving
-            # the WHOLE vals dict through `_add_missing_default_values`
-            # once, rather than re-deriving each field's Odoo-default
-            # resolution by hand (that hand-rolled approach is exactly
-            # what silently missed the second field the first time).
-            # `WorkspaceAccess.create` has the SAME shape of gap on
-            # `workspace_id` and has NOT been fixed here — tracked at #664,
-            # not in scope for #657. Do not treat this function as a
-            # correct reference to copy from; `ProjectAccess.create` is the
-            # current correct template.
-            effective_role = vals.get('role') or ROLE_USER
-            self._check_assignable_role(effective_role, vals.get('workspace_id'))
+            # #664 — 守衛必須看「Odoo 實際會寫進去的值」而不是 raw vals。
+            # context 的 `default_<field>` 是 RPC 用戶端可控的，而 default
+            # 是在 super().create() 內部才補上的（odoo/models.py ::
+            # BaseModel._prepare_create_values → _add_missing_default_values
+            # → default_get，default_get 第一順位就是 context 的
+            # `default_<field>`）。這裡直接呼叫 Odoo 自己那支解析函式
+            # （`_add_missing_default_values`，`_prepare_create_values` 內部
+            # 用的正是它），而不是逐欄位重演它的規則——逐欄位重演會漏：
+            # 這個檔案先前的版本只手動重演了 role 半邊（且評論宣稱這樣「仍
+            # 正確」，那是錯的——見下方 `_check_assignable_role` 的
+            # docstring），`workspace_id` 半邊完全沒補，攻擊者用
+            # with_context(default_workspace_id=<受害 workspace>,
+            # default_role='owner') 且 vals 不放 workspace_id 就整道繞過
+            # （#664，同型於 PR #666 留言 6583 §1 的 H1）。
+            # single-source-of-truth 版本不會因為未來多一個欄位又漏一次
+            # （`ProjectAccess.create`，`project_access.py`，是這個修法的
+            # 樣板，已通過兩輪獨立對抗式覆核，PR #666 留言 6583/6595）。
+            resolved = self._add_missing_default_values(vals)
+            self._check_assignable_role(
+                resolved.get('role') or ROLE_USER,
+                resolved.get('workspace_id'),
+            )
         return super().create(vals_list)
 
     def write(self, vals):
@@ -252,9 +251,22 @@ class WorkspaceAccess(models.Model):
         change path that only needs gating), not the su-env-exempt-guard
         family (no legitimate change path at all); the su/group_system
         exemption is therefore correct here, not a hole.
+
+        ``target_role`` / ``workspace_id`` are resolved by the caller via
+        ``_add_missing_default_values`` (Odoo's own default-resolution
+        function — the same one ``_prepare_create_values`` uses internally)
+        before being passed in, so both already reflect the value Odoo will
+        actually persist, not the raw ``vals`` dict. This function's own
+        early-return below is therefore only a defensive guard against a
+        genuinely absent value (no vals key AND no context default AND no
+        field-level default) — that case still reaches the DB's
+        ``required=True`` constraint and fails closed; it is NOT the place
+        `workspace_id` used to be resolved from context (#664, mirrors
+        `ProjectAccess._check_assignable_role`'s `project_id` fix in
+        `project_access.py`, PR #666 comment 6583 "H1" / 6595).
         """
         if not workspace_id:
-            return  # missing workspace_id is caught by required=True
+            return
         if self.env.is_superuser():
             return
         if self.env.user.has_group('base.group_system'):
