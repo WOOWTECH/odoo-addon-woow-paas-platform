@@ -251,6 +251,330 @@ class TestCli(FixtureCase):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# index-links 的可達性判準（#693：索引 ＝ MEMORY.md ＋ 它直連的那一層）
+#
+# 🔴 這一組的第一條測試刻意是**注入一個真正無入口的檔、確認仍然報紅**，不是
+#    「跑一遍看乾不乾淨」。本次改動把孤兒判定從「只讀 MEMORY.md」放寬成「從
+#    MEMORY.md 出發的可達性」，放寬類的改動只有一種災難性失敗模式：放寬到抓不到
+#    真孤兒——而那個狀態的輸出（✓ 孤兒 0）與「真的沒有孤兒」完全一樣。
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestIndexReachesThroughTopicFiles(FixtureCase):
+
+    def test_file_with_no_entry_at_all_is_still_an_orphan(self):
+        """🔴 陽性對照：從 MEMORY.md 完全到不了的檔，放寬之後仍然是孤兒。
+
+        這是本次改動不可協商的 invariant。它若不紅，下面每一條綠燈都不證明任何事。
+        """
+        self.memory_file("topic_x.md", "- [有入口](reference_linked.md)")
+        self.memory_file("reference_linked.md")
+        self.memory_file("reference_unreachable.md")   # 沒有任何人連它
+        self.index("- [t](topic_x.md)")
+        self.assertEqual(self.audit().orphan, ["reference_unreachable.md"])
+
+    def test_file_linked_only_from_a_topic_file_is_not_an_orphan(self):
+        """反向 case（#693 本體）：索引外移到 topic 檔之後不得被判成孤兒。"""
+        self.memory_file("topic_x.md", "- [a](reference_a.md)\n- [b](reference_b.md)")
+        self.memory_file("reference_a.md")
+        self.memory_file("reference_b.md")
+        self.index("- [t](topic_x.md)")
+        result = self.audit()
+        self.assertEqual(result.orphan, [])
+        self.assertEqual(result.dead, [])
+
+    def test_entry_depth_records_which_hop_gave_the_entry(self):
+        """深度要留在結果裡——不然「索引往更深處搬」這種漂移沒有任何跡象。"""
+        self.memory_file("topic_x.md", "- [a](reference_a.md)")
+        self.memory_file("reference_a.md")
+        self.index("- [t](topic_x.md)")
+        depth = self.audit().entry_depth
+        self.assertEqual(depth["topic_x.md"], 1)      # MEMORY.md 直連
+        self.assertEqual(depth["reference_a.md"], 2)  # 經 topic 檔
+
+    def test_a_non_index_memory_file_does_not_hand_out_entries(self):
+        """自己就沒有入口的檔，連出去的東西也不算有入口（否則孤兒可以互相掩護）。"""
+        self.memory_file("orphan_hub.md", "- [x](reference_x.md)")
+        self.memory_file("reference_x.md")
+        self.index("（沒有任何連結）")
+        self.assertEqual(self.audit().orphan,
+                         ["orphan_hub.md", "reference_x.md"])
+
+    def test_third_level_file_is_still_an_orphan(self):
+        """跳數上限 1：MEMORY.md → topic_a → topic_b 之後那一層不算入口。
+
+        這條把「為什麼不做無上限遞迴」釘住。判準是官方機制：MEMORY.md 開場載入，
+        topic 檔按需讀取——深度 2 的條目有一條開場就載入的路由行帶過去，深度 3
+        的沒有，只有讀過整條鏈才會撞見。
+        """
+        self.memory_file("topic_a.md", "- [b](topic_b.md)")
+        self.memory_file("topic_b.md", "- [deep](reference_deep.md)")
+        self.memory_file("reference_deep.md")
+        self.index("- [a](topic_a.md)")
+        result = self.audit()
+        self.assertEqual(result.orphan, ["reference_deep.md"])
+        self.assertEqual(result.entry_depth["topic_b.md"], 2)
+
+    def test_cycle_between_index_files_terminates(self):
+        """循環引用靠 visited set，不靠跳數上限——上限是可以被調大的。"""
+        self.memory_file("topic_a.md", "- [b](topic_b.md)\n- [x](reference_x.md)")
+        self.memory_file("topic_b.md", "- [a](topic_a.md)")
+        self.memory_file("reference_x.md")
+        self.index("- [a](topic_a.md)")
+        result = mi.audit_index_links(self.mem, self.root, hops=5)
+        self.assertEqual(result.orphan, [])
+        visited = [name for name, _ in result.sources]
+        self.assertEqual(visited.count("topic_a.md"), 1, "同一個索引檔只該走訪一次")
+
+    def test_dead_link_inside_a_topic_file_is_reported(self):
+        """🔴 斷鏈判定必須跟著入口一起搬進 topic 檔，否則等於一起弄丟。"""
+        self.memory_file("topic_x.md", "- [沒了](reference_gone.md)")
+        self.index("- [t](topic_x.md)")
+        result = self.audit()
+        self.assertEqual(result.dead, ["reference_gone.md"])
+        self.assertEqual(result.dead_sources["reference_gone.md"], ["topic_x.md"])
+
+    def test_dead_link_in_memory_md_still_reported(self):
+        """迴歸：MEMORY.md 自己的斷鏈不能因為改了資料源而漏掉。"""
+        self.index("- [x](docs/gone.md)")
+        self.assertEqual(self.audit().dead, ["docs/gone.md"])
+
+    def test_repo_doc_linked_from_the_index_is_not_read_as_an_index(self):
+        """repo doc 是索引的目的地、不是索引的一部分——它內部的連結兩邊都不算。
+
+        它自己的相對連結以**它所在目錄**為基準，而 resolve_link() 只試 memory 與
+        repo root ⇒ 讀進來當索引會系統性製造假斷鏈。
+        """
+        self.memory_file("reference_only_in_doc.md")
+        self.repo_file("docs/x.md",
+                       "- [a](reference_only_in_doc.md)\n- [b](docs/never-existed.md)")
+        self.index("- [doc](docs/x.md)")
+        result = self.audit()
+        self.assertEqual(result.orphan, ["reference_only_in_doc.md"],
+                         "repo doc 連到的 memory 檔不因此取得入口")
+        self.assertEqual(result.dead, [], "repo doc 內部的連結不進斷鏈判定")
+
+    def test_cli_reports_the_depth_spread(self):
+        self.memory_file("topic_x.md", "- [a](reference_a.md)")
+        self.memory_file("reference_a.md")
+        self.index("- [t](topic_x.md)")
+        proc = subprocess.run(
+            [sys.executable, str(_GATE_PATH), "--links",
+             "--memory-dir", self.mem, "--repo-root", self.root],
+            capture_output=True, text=True)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("入口深度", proc.stdout)
+        self.assertIn("深度 1 1 檔", proc.stdout)
+        self.assertIn("深度 2 1 檔", proc.stdout)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# wiki-link 對帳（#693 之 3a）與 MEMORY.md 大小黃燈（3b）
+#
+# 🔴 兩者都是 **warning-only**。memory-links-guard 看 returncode 決定 block，
+#    讓它們改變 exit code 等於自己造一個新的卡死——那正是本 issue 要修的東西。
+#    TestWarningsDoNotAffectExitCode 就是釘這一條的。
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestWikiLinkReconciliation(FixtureCase):
+
+    def wiki(self):
+        return mi.audit_wiki_links(self.mem, self.root)
+
+    def test_unresolved_wiki_link_is_reported(self):
+        """陽性對照：指不到任何載體的 [[name]] 必須被點名。"""
+        self.memory_file("reference_a.md", "參考 [[reference_never_written]]")
+        self.index("- [a](reference_a.md)")
+        result = self.wiki()
+        self.assertEqual(sorted(result.unresolved), ["reference_never_written"])
+        self.assertEqual(result.unresolved["reference_never_written"],
+                         ["reference_a.md"])
+
+    def test_resolved_by_basename(self):
+        self.memory_file("reference_a.md", "見 [[reference_b]]")
+        self.memory_file("reference_b.md")
+        self.index("- [a](reference_a.md)", "- [b](reference_b.md)")
+        self.assertEqual(self.wiki().unresolved, {})
+
+    def test_resolved_by_frontmatter_name(self):
+        """`name:` 與檔名不一致是本目錄的既有形態（已知限制 1），必須解析得到。"""
+        _write(os.path.join(self.mem, "reference_kubectl_woow_k3s.md"),
+               "---\nname: kubectl-woow-k3s\n---\n內容\n")
+        self.memory_file("reference_a.md", "見 [[kubectl-woow-k3s]]")
+        self.index("- [a](reference_a.md)")
+        self.assertEqual(self.wiki().unresolved, {})
+
+    def test_resolved_across_kebab_snake_and_prefix_mismatch(self):
+        """`[[deploy-stg-gotchas]]` ↔ `reference_deploy_stg_gotchas.md`。"""
+        self.memory_file("reference_deploy_stg_gotchas.md")
+        self.memory_file("reference_a.md", "見 [[deploy-stg-gotchas]]")
+        self.index("- [a](reference_a.md)", "- [d](reference_deploy_stg_gotchas.md)")
+        self.assertEqual(self.wiki().unresolved, {})
+
+    def test_trailing_md_suffix_is_tolerated(self):
+        self.memory_file("reference_b.md")
+        self.memory_file("reference_a.md", "見 [[reference_b.md]]")
+        self.index("- [a](reference_a.md)", "- [b](reference_b.md)")
+        self.assertEqual(self.wiki().unresolved, {})
+
+    def test_repo_doc_target_resolves(self):
+        self.repo_file("docs/guides/testing/x.md")
+        self.memory_file("reference_a.md", "見 [[docs/guides/testing/x]]")
+        self.index("- [a](reference_a.md)")
+        self.assertEqual(self.wiki().unresolved, {})
+
+    def test_shell_test_syntax_in_a_fenced_block_is_not_a_wiki_link(self):
+        """🔴 誤報風險最高的一條：`[[ ... ]]` 與 wiki-link 同形。"""
+        self.memory_file(
+            "reference_a.md",
+            "```bash\nif [[ \"${GITHUB_REF_NAME}\" == stg-* ]]; then :; fi\n```")
+        self.index("- [a](reference_a.md)")
+        result = self.wiki()
+        self.assertEqual(result.unresolved, {})
+        self.assertEqual(result.targets, [])
+        self.assertEqual(result.occurrences, 0, "fenced block 內的整段都該被剝掉")
+
+    def test_posix_class_in_inline_code_is_not_a_wiki_link(self):
+        self.memory_file("reference_a.md", "用 `grep -E '[[:space:]]+'` 過濾")
+        self.index("- [a](reference_a.md)")
+        result = self.wiki()
+        self.assertEqual(result.occurrences, 0)
+        self.assertEqual(result.unresolved, {})
+
+    def test_placeholder_in_chinese_is_skipped_not_reported(self):
+        """示意用的中文佔位符不是壞掉的參照，列進 skipped、不進 unresolved。"""
+        self.memory_file("reference_a.md", "改名時把 [[舊檔名]] 一起換掉")
+        self.index("- [a](reference_a.md)")
+        result = self.wiki()
+        self.assertEqual(result.unresolved, {})
+        self.assertEqual(result.skipped, ["舊檔名"])
+
+    def test_bare_posix_class_outside_code_is_skipped(self):
+        self.memory_file("reference_a.md", "regex 寫 [[:space:]] 就會爆")
+        self.index("- [a](reference_a.md)")
+        self.assertEqual(self.wiki().unresolved, {})
+
+    def test_wiki_link_does_not_grant_an_index_entry(self):
+        """🔴 正文的 [[name]] 是聯想連結、不是索引行——不得讓孤兒免罰。
+
+        規格自己說「link liberally」，把它算成入口，孤兒判定會退化成永遠不會紅。
+        """
+        self.memory_file("topic_x.md", "只用 wiki 形態提到 [[reference_a]]")
+        self.memory_file("reference_a.md")
+        self.index("- [t](topic_x.md)")
+        self.assertEqual(self.audit().orphan, ["reference_a.md"])
+
+
+class TestIndexSizeMeasurement(FixtureCase):
+
+    def size(self):
+        return mi.index_size(os.path.join(self.mem, "MEMORY.md"))
+
+    def test_limits_are_the_official_constants(self):
+        """上限與比例是 Claude Code 自己的常數，不是本機觀測值——改動要有新證據。
+
+        v2.1.228 bundle：`Nse=25000`（bytes cap）、`DJ=200`（line cap）、
+        `S9p=0.7`（壓縮目標比例）。官方文件：「first 200 lines … or the first
+        25KB, whichever comes first」。
+        """
+        self.assertEqual(mi.INDEX_BYTE_LIMIT, 25_000)
+        self.assertEqual(mi.INDEX_LINE_LIMIT, 200)
+        self.assertEqual(mi.INDEX_WARN_RATIO, 0.7)
+
+    def test_frontmatter_is_not_counted(self):
+        """官方口徑：frontmatter 先被剝除才計入（v2.1.211+）。"""
+        _write(os.path.join(self.mem, "MEMORY.md"),
+               "---\ntitle: x\nnote: " + "y" * 500 + "\n---\n短內容\n")
+        size = self.size()
+        self.assertLess(size.loaded_bytes, 100)
+        self.assertGreater(size.raw_bytes, 500)
+        self.assertEqual(size.lines, 1)
+
+    def test_block_level_html_comment_is_not_counted(self):
+        _write(os.path.join(self.mem, "MEMORY.md"),
+               "一行\n<!--\n" + "註解" * 200 + "\n-->\n兩行\n")
+        size = self.size()
+        self.assertEqual(size.lines, 2)
+        self.assertLess(size.loaded_bytes, 100)
+
+    def test_comment_inside_a_code_fence_is_counted(self):
+        """保守方向：少剝一點 ⇒ 黃燈提早亮；多剝會讓它晚亮，那才會咬人。"""
+        _write(os.path.join(self.mem, "MEMORY.md"),
+               "一行\n```html\n<!-- 這是範例 -->\n```\n")
+        self.assertEqual(self.size().lines, 4)
+
+    def test_inline_comment_with_trailing_content_is_kept(self):
+        _write(os.path.join(self.mem, "MEMORY.md"), "<!-- 註 --> 後面還有正文\n")
+        self.assertEqual(self.size().lines, 1)
+
+    def test_warn_fires_at_the_compaction_line_not_at_the_hard_limit(self):
+        line = "x" * 499 + "\n"
+        _write(os.path.join(self.mem, "MEMORY.md"), line * 40)   # 20,000 bytes
+        size = self.size()
+        self.assertTrue(size.warn)
+        self.assertFalse(size.over)
+
+    def test_under_the_compaction_line_is_quiet(self):
+        _write(os.path.join(self.mem, "MEMORY.md"), ("x" * 499 + "\n") * 20)
+        size = self.size()
+        self.assertFalse(size.warn)
+        self.assertFalse(size.over)
+
+    def test_line_count_alone_can_trip_the_warning(self):
+        _write(os.path.join(self.mem, "MEMORY.md"), "短\n" * 150)
+        size = self.size()
+        self.assertTrue(size.warn)
+        self.assertLess(size.loaded_bytes, mi.INDEX_BYTE_LIMIT * 0.7)
+
+
+class TestWarningsDoNotAffectExitCode(FixtureCase):
+    """🔴 hook 是看 returncode 決定 block 的。這一組守的是「不要造新的卡死」。"""
+
+    def run_cli(self):
+        return subprocess.run(
+            [sys.executable, str(_GATE_PATH), "--links",
+             "--memory-dir", self.mem, "--repo-root", self.root],
+            capture_output=True, text=True)
+
+    def test_unresolved_wiki_link_alone_exits_zero(self):
+        self.memory_file("reference_a.md", "見 [[reference_never_written]]")
+        self.index("- [a](reference_a.md)")
+        proc = self.run_cli()
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("reference_never_written", proc.stdout)
+        self.assertIn("warning-only", proc.stdout)
+
+    def test_oversized_index_alone_exits_zero(self):
+        _write(os.path.join(self.mem, "MEMORY.md"), ("x" * 499 + "\n") * 60)
+        proc = self.run_cli()
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("超過**載入上限**".replace("**", ""), proc.stdout.replace("**", ""))
+
+    def test_yellow_light_alone_exits_zero(self):
+        _write(os.path.join(self.mem, "MEMORY.md"), ("x" * 499 + "\n") * 40)
+        proc = self.run_cli()
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("建議壓縮線", proc.stdout)
+
+    def test_size_line_is_always_printed_even_when_clean(self):
+        """block 文案要引用這一行，所以它不能只有超標才出現。"""
+        self.index("（空）")
+        proc = self.run_cli()
+        self.assertEqual(proc.returncode, 0)
+        self.assertIn("[index-links] MEMORY.md ", proc.stdout)
+        self.assertIn("/ 25,000 bytes", proc.stdout)
+
+    def test_a_real_orphan_still_exits_one_with_the_warnings_present(self):
+        """陰性對照：警告在場時，真正的 finding 仍然要把 exit code 打紅。"""
+        _write(os.path.join(self.mem, "MEMORY.md"), ("x" * 499 + "\n") * 40)
+        self.memory_file("reference_lonely.md", "見 [[reference_never_written]]")
+        proc = self.run_cli()
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("reference_lonely.md", proc.stdout)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # silent-truncation（#683：跨檔搬移扣除 + baseline 豁免）
 #
 # 🔴 這一組的第一條測試刻意是**注入真消失必須報紅**，不是「跑一遍看乾不乾淨」。

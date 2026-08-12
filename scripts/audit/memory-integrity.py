@@ -7,9 +7,9 @@
 
 兩個 check（各對應一次真實翻車，兩次都是零訊號）：
 
-1. index-links     MEMORY.md 的連結與 memory 目錄實體對帳，雙向：
+1. index-links     **索引**的連結與 memory 目錄實體對帳，雙向：
                    (a) 斷鏈——索引連到的檔不存在；
-                   (b) 孤兒——檔案存在但索引沒連到，等於失去入口。
+                   (b) 孤兒——檔案存在但索引到不了，等於失去入口。
                    相對路徑會**同時**以兩個基準嘗試解析（memory 目錄優先、
                    再來 repo root），見 `resolve_link()`；
                    「算不算某個 memory 檔的入口」則一律看**解析結果落在哪**，
@@ -21,6 +21,19 @@
                    的引用」——全程沒有任何錯誤訊息。其中 5 篇是檔案還在、入口全失，
                    不查就永遠讀不到。
                    ⚠ 斷鏈與孤兒是**不同機制**，只驗一邊會漏另一邊。
+
+                   🔴 「索引」不等於「MEMORY.md 這一個檔」（#693）。官方機制是
+                   MEMORY.md 開場載入、**細節外移到 topic 檔**、topic 檔按需讀取，
+                   所以索引是 MEMORY.md **加上它直接連到的那一層**，見
+                   `index_sources()` 與 `INDEX_HOP_LIMIT` 的推導。舊版只讀
+                   MEMORY.md 一個檔 ⇒ 照官方做法把整段索引搬進 topic 檔，那些
+                   連結對本 check 直接消失、107 個健康檔同時被判成孤兒
+                   （2026-08-12 實測），而 memory-links-guard 會把 finding 升級成
+                   block ⇒ 之後**每一次** memory 寫入都被擋住。
+
+                   另外兩件事只印警告、**不影響 exit code**（見 `IndexLinkResult.ok`）：
+                   wiki-link 對帳（`audit_wiki_links()`）與 MEMORY.md 大小黃燈
+                   （`index_size()`）。兩者為什麼刻意不進 exit code，見各自的 docstring。
 
 2. silent-truncation
                    用 `~/.claude/file-history/<session>/<hash>@vN`（Claude Code 在
@@ -213,6 +226,76 @@ VOLATILE_FIELD = re.compile(r"^\s*(modified|originSessionId|updated):")
 LINK = re.compile(r"\]\(([^)]+\.md)\)")
 NAME_FIELD = re.compile(r"^name:\s*(\S+)\s*$", re.M)
 
+# ── 索引的可達範圍（#693）────────────────────────────────────────────────
+# 「索引」＝ MEMORY.md ＋ 它**直接**連到的 memory 檔（topic 檔）。跳數上限 1。
+#
+# 為什麼是 1 而不是「整張連結圖遞迴」——判準是**官方機制下 Claude 找不找得到**，
+# 不是「圖上連不連得到」（https://code.claude.com/docs/en/memory 原文）：
+#
+#   「The first 200 lines of MEMORY.md, or the first 25KB, whichever comes first,
+#     are loaded at the start of every conversation.」
+#   「Topic files like debugging.md or patterns.md are **not loaded at startup**.
+#     Claude reads them on demand using its standard file tools.」
+#
+# ⇒ 深度 1（MEMORY.md 裡的連結）：開場就在 context 裡，零次主動讀取即可見。
+#   深度 2（topic 檔裡的連結）：要一次主動讀取，而**那次讀取由 MEMORY.md 裡
+#   那條開場就載入的路由行帶過去** ⇒ 設計上找得到。
+#   深度 3＋：路由行本身也埋在一個要先被讀出來的檔裡，只有「剛好讀過整條鏈」
+#   才會撞見 ⇒ 那不是入口，是巧合。
+#
+# 另一個理由是 gate 的形狀：harness 規格叫 memory 檔正文「link liberally」互連，
+# 所以無上限遞迴會讓幾乎每個檔都經由某條順手連結變成「可達」——孤兒判定會退化成
+# 永遠不會紅。把索引收在官方明文背書的那一層（索引 → topic 檔），check 才留得住
+# 它的證偽能力。實測支持：本機現況 memory 檔最大深度 2、topic→topic 連結 0，
+# 兩種定義今天的孤兒集合相同（都是 0），所以這個選擇今天零成本、只在未來分岔。
+#
+# ⚠ 「算索引」用**位置**判（MEMORY.md 直連），不用**檔名前綴**（`topic_`）判。
+#   前綴版本會更緊一點，但它把一個本地命名慣例寫死成判準，而官方文件舉的 topic
+#   檔例子是 `debugging.md`／`patterns.md`——沒有前綴。有人照官方那樣命名索引檔，
+#   前綴版就會把它底下整批條目報成孤兒 ⇒ 又是一次 #693 的誤報卡死。
+#   前綴版本想堵的漏（正文順手連結免罰）另有更貼題的一道堵著：wiki-link 不算入口
+#   （見 `audit_wiki_links()`）。本語料庫的順手互連一律是 `[[name]]`，memory 檔裡的
+#   markdown `](x.md)` 實際上就是索引行。實測：前綴版與位置版今天的孤兒集合相同。
+#
+# 🔴 不可協商的 invariant：從 MEMORY.md 完全到不了的 memory 檔，仍然是孤兒。
+INDEX_HOP_LIMIT = 1
+
+# ── MEMORY.md 的載入上限（官方機制，不是本機觀測值）──────────────────────
+# 官方：「first 200 lines … or the first 25KB, whichever comes first」。
+# 25KB ＝ 25,000 bytes（十進位 K，不是 25×1024）——不是從觀測值反推的：
+# v2.1.228 的 bundle 裡兩個 cap 常數是 `Nse=25000`、`DJ=200`。
+# （對得上 harness 顯示的「24.4KB」：25000/1024 = 24.41；25×1024 會顯示成 25.0。）
+INDEX_BYTE_LIMIT = 25_000
+INDEX_LINE_LIMIT = 200
+# 建議壓縮線 ＝ 上限 × 0.7。這個比例是 Claude Code 自己的常數，不是我們湊的：
+# v2.1.228 的 bundle 裡 `S9p=0.7`，兩個 targetDesc 都算成
+# `Math.floor(cap * 0.7)`（bytes 版與 lines 版共用）；對得上官方錯誤模板的
+# 「200 lines → under 140 lines」與實際觀測到的「24.4KB → under 17.1KB」。
+# ⚠ 同一段程式的**觸發**門檻是 0.8（`EJb=0.8`）——harness 要到 80% 才開口。
+#    我們刻意提早到 0.7（＝壓縮線本身）：等 harness 開口時已經只剩 20% 餘裕。
+#    另外對中文索引 bytes 永遠先於行數觸頂，密度自己量（載入 bytes ÷ 行數）：
+#    2026-08-12 實測 12,324 / 68 ≈ 181 B/行 ⇒ 25,000 bytes 約當 138 行，
+#    也就是 200 行那個心理閾值**永遠不會先亮**。
+INDEX_WARN_RATIO = 0.7
+
+# 官方量測口徑（v2.1.211+）：「YAML frontmatter and block-level HTML comments are
+# stripped before the index is loaded, so they don't count toward the limits.」
+FRONTMATTER_BLOCK = re.compile(r"\A---[ \t]*\r?\n.*?\r?\n---[ \t]*\r?\n", re.S)
+CODE_FENCE = re.compile(r"^\s*(?:```|~~~)")
+BLOCK_COMMENT_OPEN = re.compile(r"^[ \t]*<!--")
+INLINE_CODE = re.compile(r"`[^`]*`")
+
+# memory 檔正文的 `[[name]]` 互連。⚠ 這個形狀與 shell 的 `[[ ... ]]` 測試、
+# POSIX character class `[[:space:]]` 完全同形，所以掃之前**必須**先剝掉
+# fenced code block 與 inline code span，見 `code_stripped()`。
+WIKI_LINK = re.compile(r"\[\[([^\[\]\n]+)\]\]")
+# 「長得像 memory 名稱」的形狀：ASCII 開頭、不含空白／引號／`$`。用形狀而不是
+# 黑名單，是因為噪音的種類是開放的（shell 語法、regex class、中文佔位符…），
+# 列舉永遠追不完，而「合法名稱長什麼樣」是封閉的。
+WIKI_NAME_SHAPE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_./-]{1,119}$")
+# memory 檔名的既有前綴（解析 wiki-link 時要能容忍前綴不一致，見已知限制 1）
+MEMORY_NAME_PREFIXES = ("reference_", "feedback_", "project_", "user_", "topic_")
+
 # 指向別筆記憶／文件的參照有三種寫法，2026-08-05 整併把大量 [[wiki-link]] 改寫成
 # repo docs 路徑。比對前統一成同一個 token，否則**純粹的改寫會被報成內容消失**——
 # 判準要問「內容有沒有消失」，不是「字面有沒有變」。
@@ -303,47 +386,370 @@ def _is_memory_entry(resolved, mem):
 
 
 @dataclasses.dataclass
+class IndexSize:
+    loaded_bytes: int   # 官方口徑（剝除 frontmatter 與 block-level HTML 註解）後的 bytes
+    raw_bytes: int      # 磁碟上的原始大小，只用來說明兩者差多少
+    lines: int          # 同口徑下的行數
+
+    @property
+    def over(self):
+        return (self.loaded_bytes > INDEX_BYTE_LIMIT
+                or self.lines > INDEX_LINE_LIMIT)
+
+    @property
+    def warn(self):
+        return (self.loaded_bytes > INDEX_BYTE_LIMIT * INDEX_WARN_RATIO
+                or self.lines > INDEX_LINE_LIMIT * INDEX_WARN_RATIO)
+
+
+def loaded_index_text(text):
+    """把 MEMORY.md 的原文換算成「真正會被載入的內容」。
+
+    官方量測口徑（v2.1.211+）：「The check measures only the content that loads:
+    YAML frontmatter and block-level HTML comments are stripped before the index
+    is loaded, so they don't count toward the limits.」
+
+    ⚠ fenced code block 裡的 `<!-- -->` **不剝**。這一條沒有官方明文（官方只在
+    CLAUDE.md 那一節寫「Comments inside code blocks are preserved」），所以是刻意
+    選的保守方向：少剝一點 ⇒ 量到的值偏大 ⇒ 黃燈**提早**亮。反過來多剝會讓黃燈
+    晚亮，那才是會咬人的方向。
+    """
+    text = FRONTMATTER_BLOCK.sub("", text, count=1)
+    out, in_fence, in_comment = [], False, False
+    for line in text.splitlines():
+        if in_comment:
+            if "-->" in line:
+                in_comment = False
+            continue
+        if CODE_FENCE.match(line):
+            in_fence = not in_fence
+            out.append(line)
+            continue
+        if not in_fence and BLOCK_COMMENT_OPEN.match(line):
+            if "-->" not in line:
+                in_comment = True
+                continue
+            # 同一行開合：`-->` 後面還有內容就不是 block-level，整行保留
+            if not line.split("-->", 1)[1].strip():
+                continue
+        out.append(line)
+    return "\n".join(out) + "\n" if out else ""
+
+
+def index_size(path):
+    """量 MEMORY.md 的載入量（bytes / 行），供黃燈與 block 文案使用。"""
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            text = fh.read()
+    except OSError:
+        return IndexSize(0, 0, 0)
+    loaded = loaded_index_text(text)
+    return IndexSize(
+        loaded_bytes=len(loaded.encode("utf-8")),
+        raw_bytes=len(text.encode("utf-8")),
+        lines=len(loaded.splitlines()),
+    )
+
+
+def print_index_size(size):
+    """印出 MEMORY.md 的大小與上限。**無條件印**，不是只有超標才印。
+
+    這一行同時是 memory-links-guard block 文案要引用的那一行（它從輸出裡撈
+    `[index-links] MEMORY.md ` 開頭這行），所以格式改動要一起改 hook 的擷取。
+    """
+    warn_bytes = int(INDEX_BYTE_LIMIT * INDEX_WARN_RATIO)
+    warn_lines = int(INDEX_LINE_LIMIT * INDEX_WARN_RATIO)
+    extra = ("" if size.loaded_bytes == size.raw_bytes
+             else f"，磁碟原始 {size.raw_bytes:,}（差額＝frontmatter／HTML 註解）")
+    print(f"[index-links] MEMORY.md {size.loaded_bytes:,} / {INDEX_BYTE_LIMIT:,} bytes"
+          f"（{size.loaded_bytes * 100 // INDEX_BYTE_LIMIT}%）、"
+          f"{size.lines} / {INDEX_LINE_LIMIT} 行"
+          f"（{size.lines * 100 // INDEX_LINE_LIMIT}%）"
+          f"；建議壓縮線 {warn_bytes:,} bytes / {warn_lines} 行{extra}")
+    if size.over:
+        print(f"  ⚠ MEMORY.md 已**超過**載入上限——超出的部分下次 session 根本不會載入"
+              f"（丟的是尾端，最新 append 的條目最先隱形）。")
+    elif size.warn:
+        print(f"  ⚠ MEMORY.md 已越過建議壓縮線（上限 × {INDEX_WARN_RATIO}）。")
+    if size.warn:
+        # 這裡刻意給做法而不只是給警告：撞到這一行的人下一步就是動索引，
+        # 沒講清楚「怎麼縮」的話最容易的動作是刪內容（有損）。
+        print(f"     壓縮做法：把細節或整段索引搬進 topic 檔（官方指定做法，本 check"
+              f"認得 {INDEX_HOP_LIMIT} 跳內的 topic 檔入口），不要靠刪條目硬壓。")
+    # 🔴 黃燈**不回傳任何狀態**，也不影響 exit code：hook 看 returncode 決定 block，
+    #    讓趨勢提醒能擋住寫入，就是自己造一個新的卡死。守衛：
+    #    test_memory_integrity.py::TestWarningsDoNotAffectExitCode。
+
+
+def code_stripped(text):
+    """剝除 fenced code block 與 inline code span 後的文字。
+
+    掃 `[[...]]` 之前**必須**先過這一關：`[[ "$X" == y ]]`（shell test）與
+    `[[:space:]]`（POSIX character class）跟 wiki-link 同形，而它們幾乎只出現在
+    程式碼裡。2026-08-12 實測：本機 memory 目錄剝除前 527 次命中、剝除後 508 次；
+    剝掉的 19 次逐一看過，全部不是活的參照——shell test、`[[:space:]]`／
+    `[[:digit:]]`、`[[...]]` 省略號，以及引用在 code span 裡的示範名稱。
+    """
+    out, in_fence = [], False
+    for line in text.splitlines():
+        if CODE_FENCE.match(line):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            continue
+        out.append(INLINE_CODE.sub("", line))
+    return "\n".join(out)
+
+
+def _norm_name(text):
+    """kebab↔snake 正規化：`deploy-stg-gotchas` 與 `deploy_stg_gotchas` 同一個 key。"""
+    return re.sub(r"[-_]+", "_", text).strip("_").lower()
+
+
+def _strip_name_prefix(text):
+    for prefix in MEMORY_NAME_PREFIXES:
+        if text.startswith(prefix):
+            return text[len(prefix):]
+    return text
+
+
+def memory_name_index(mem, names):
+    """建 wiki-link target → memory 檔名 的解析表。
+
+    四層 key，愈後面愈寬鬆（查的順序也是這個順序）：
+
+      1. 檔名去掉 `.md`
+      2. frontmatter 的 `name:` ——已知限制 1 記載過：`name:` 與檔名系統性不一致
+         （例 `reference_kubectl_woow_k3s.md` 的 `name: kubectl-woow-k3s`），
+         而 `[[...]]` 寫的通常是 `name:` 那一版。
+      3. 1、2 各自 kebab↔snake 正規化後的形式
+      4. 3 再去掉 `reference_/feedback_/…` 前綴——前綴不一致是同一條路徑的另一種
+         表現（`[[deploy-stg-gotchas]]` vs `reference_deploy_stg_gotchas.md`）。
+
+    ⚠ 第 4 層可能撞名（去前綴後兩個檔同 key）。撞到時**先來的贏**（`names` 已排序
+    ⇒ 結果是確定的），因為這張表只用來判「指不指得到東西」這種 warning-only 的
+    問題，指到兩個候選中的哪一個不影響任何 exit code。
+    """
+    exact, by_name, norm, norm_noprefix = {}, {}, {}, {}
+    for filename in sorted(names):
+        stem = filename[:-3]
+        exact.setdefault(stem, filename)
+        norm.setdefault(_norm_name(stem), filename)
+        norm_noprefix.setdefault(_strip_name_prefix(_norm_name(stem)), filename)
+        try:
+            with open(os.path.join(mem, filename), encoding="utf-8",
+                      errors="replace") as fh:
+                head = fh.read(400)
+        except OSError:
+            continue
+        match = NAME_FIELD.search(head)
+        if match:
+            by_name.setdefault(match.group(1), filename)
+            norm.setdefault(_norm_name(match.group(1)), filename)
+            norm_noprefix.setdefault(
+                _strip_name_prefix(_norm_name(match.group(1))), filename)
+    return exact, by_name, norm, norm_noprefix
+
+
+@dataclasses.dataclass
+class WikiLinkResult:
+    occurrences: int    # 剝除 code 後掃到的 `[[...]]` 次數
+    targets: list       # 形態像名稱的 unique target（排序）
+    skipped: list       # 形態不像名稱、判定為語法噪音／佔位符而略過的 unique 值
+    unresolved: dict    # target -> 它出現在哪些 memory 檔（排序）
+
+
+def audit_wiki_links(mem, root):
+    """memory 檔正文的 `[[name]]` 互連對帳——**warning-only，不進 exit code**。
+
+    為什麼要對帳：harness 規格要求 memory 檔正文用 `[[name]]` 互連，而 `LINK`
+    只認 markdown 形態 `](x.md)` ⇒ 在這之前，整批 wiki-link **完全不在對帳範圍**。
+    也就是舊版 gate 同時做到了兩件最糟的事：對健康檔誤報孤兒（#693 本體），
+    對真正指不到東西的參照零覆蓋。
+
+    🔴 為什麼**不**進 exit code（這是本函式最重要的一個決定）：
+
+      1. harness 規格明文允許指不到的 wiki-link——「Link liberally — a `[[name]]`
+         that doesn't match an existing memory yet is fine; it marks something
+         worth writing later, not an error.」讓規格允許的東西擋住寫入，就是把
+         #693 的形狀原封不動再造一次。
+      2. 實測未解析率不是零：本機 144 個 target 有 8 個解析不到（多為已遷進
+         `docs/` 而改名、或指向還沒寫的記憶）。這些是有價值的漂移訊號，但它們
+         **既有且不斷產生** ⇒ 進 exit code 等於永久 block。
+      3. #683 的既有結論：誤報率高的檢查比沒有檢查更糟（會消耗信任額度）。
+
+    🔴 wiki-link 也**不**算孤兒判定的入口。理由是同一條機制：正文的 `[[name]]`
+    是「相關記憶」的聯想連結，不是索引行；把它算成入口，等於幾乎每個檔都能靠
+    某條順手連結免罰，孤兒判定會退化成永遠不會紅。實測支持：本機 MEMORY.md 與
+    全部 topic 檔的 wiki-link 數都是 0（索引一律用 markdown 連結），兩種形態在
+    現實用法上本來就分工清楚。
+    """
+    names = {f for f in os.listdir(mem) if f.endswith(".md") and f != "MEMORY.md"}
+    exact, by_name, norm, norm_noprefix = memory_name_index(mem, names)
+
+    occurrences, seen, skipped = 0, {}, set()
+    for filename in sorted(names | {"MEMORY.md"}):
+        try:
+            with open(os.path.join(mem, filename), encoding="utf-8",
+                      errors="replace") as fh:
+                text = fh.read()
+        except OSError:
+            continue
+        for hit in WIKI_LINK.findall(code_stripped(text)):
+            occurrences += 1
+            if WIKI_NAME_SHAPE.match(hit):
+                seen.setdefault(hit, set()).add(filename)
+            else:
+                skipped.add(hit)
+
+    def resolves(target):
+        stem = target[:-3] if target.endswith(".md") else target
+        if (exact.get(stem) or by_name.get(stem) or norm.get(_norm_name(stem))
+                or norm_noprefix.get(_strip_name_prefix(_norm_name(stem)))):
+            return True
+        # `[[docs/guides/testing/x]]` 這種以 wiki 形態寫的 repo 文件參照也算解析得到
+        candidate = stem + ".md"
+        return os.path.isfile(os.path.join(root, candidate))
+
+    return WikiLinkResult(
+        occurrences=occurrences,
+        targets=sorted(seen),
+        skipped=sorted(skipped),
+        unresolved={t: sorted(where) for t, where in sorted(seen.items())
+                    if not resolves(t)},
+    )
+
+
+# wiki-link 未解析清單最多列幾筆（warning-only 的東西不該灌爆 hook 的 reason 視窗）
+WIKI_LIST_LIMIT = 10
+
+
+def print_wiki_links(wiki):
+    """印 wiki-link 對帳結果。⚠ 這裡**不回傳狀態**——見 `audit_wiki_links()` 的 🔴。"""
+    noise = f"，另略過 {len(wiki.skipped)} 個語法噪音／佔位符" if wiki.skipped else ""
+    print(f"[index-links] wiki-link ⚠ warning-only（不影響 exit code）："
+          f"[[…]] {wiki.occurrences} 次 / {len(wiki.targets)} 個 target{noise}"
+          f"；指不到任何載體 {len(wiki.unresolved)} 個")
+    for target in list(wiki.unresolved)[:WIKI_LIST_LIMIT]:
+        where = "、".join(wiki.unresolved[target][:3])
+        more = "…" if len(wiki.unresolved[target]) > 3 else ""
+        print(f"  ⚠ [[{target}]] 指不到 memory 檔或 repo 文件（出現在 {where}{more}）")
+    if len(wiki.unresolved) > WIKI_LIST_LIMIT:
+        print(f"  ⚠ …另 {len(wiki.unresolved) - WIKI_LIST_LIMIT} 個未解析 target")
+
+
+def read_links(path):
+    """讀一個檔裡的 markdown `](x.md)` 連結。讀不到就當沒有連結（不是致命錯）。"""
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            return LINK.findall(fh.read())
+    except OSError:
+        return []
+
+
+def index_sources(mem, root, hops=INDEX_HOP_LIMIT):
+    """從 MEMORY.md 出發，收集「算索引」的檔，回 `[(路徑, 深度)]`（深度 0 ＝ MEMORY.md）。
+
+    BFS + visited set。visited set 不是為了效能，是為了循環引用：topic 檔互指
+    （A 連 B、B 連 A）在無防護的走訪下是無窮迴圈。現行 hops=1 讓循環在結構上
+    不可能發生，但這個保護必須寫在這裡而不是靠常數——常數是可以被調大的。
+
+    🔴 只有**解析結果落在 memory 目錄裡**的檔會被當成索引往下走，repo docs 不會。
+    兩個理由，第二個是實務上更致命的那個：
+
+      1. 索引是 memory 的索引；repo doc 是索引的**目的地**，不是索引的一部分。
+      2. repo doc 內部的相對連結以**它自己所在目錄**為基準（`docs/tracking/x.md`
+         裡的 `y.md` 指的是 `docs/tracking/y.md`），而 `resolve_link()` 只試
+         memory 與 repo root 兩個基準 ⇒ 把 repo doc 讀進來當索引，會**系統性地**
+         製造一批假斷鏈。實測：把 MEMORY.md 直連的 repo docs 納入索引，孤兒集合
+         與不納入完全相同（＝零收益），卻要付這個誤報成本。
+    """
+    start = os.path.join(mem, "MEMORY.md")
+    order, visited, queue = [(start, 0)], {os.path.realpath(start)}, [(start, 0)]
+    while queue:
+        path, depth = queue.pop(0)
+        if depth >= hops:
+            continue
+        for target in read_links(path):
+            resolved, _ = resolve_link(target, mem, root)
+            if resolved is None or not _is_memory_entry(resolved, mem):
+                continue
+            key = os.path.realpath(resolved)
+            if key in visited:
+                continue
+            visited.add(key)
+            order.append((resolved, depth + 1))
+            queue.append((resolved, depth + 1))
+    return order
+
+
+@dataclasses.dataclass
 class IndexLinkResult:
-    total: int          # MEMORY.md 裡的連結條數
+    total: int          # 所有索引檔裡的連結條數（不只 MEMORY.md）
     on_disk: list       # memory 目錄下的個別檔（不含 MEMORY.md）
     dead: list          # 索引連到但兩個基準都找不到的 target（原字面、去重排序）
-    orphan: list        # 檔案存在但沒有任何連結解析到它
+    orphan: list        # 檔案存在但索引到不了
     root: str           # 實際使用的 repo 相對路徑基準
     tried: dict         # target -> 試過的候選路徑
+    sources: list       # 被當成索引讀進來的檔名 [(檔名, 深度)]，深度 0 ＝ MEMORY.md
+    entry_depth: dict   # memory 檔名 -> 最短入口深度（1 ＝ MEMORY.md 直連）
+    dead_sources: dict  # 斷鏈 target -> 它出現在哪些索引檔（不然不知道要去哪修）
+    size: "IndexSize"   # MEMORY.md 的載入量測（黃燈用；**不進 ok**）
+    wiki: "WikiLinkResult"  # wiki-link 對帳（warning-only；**不進 ok**）
 
     @property
     def ok(self):
+        # 🔴 只有斷鏈與孤兒決定 exit code。`size`（黃燈）與 `wiki`（未解析的
+        # [[name]]）**刻意不在這裡**——memory-links-guard 是看 returncode 決定
+        # block 的，把它們算進來等於自己造一個新的卡死，而這兩件事都不是
+        # 「索引壞掉」：黃燈是趨勢提醒，未解析 wiki-link 更是 harness 規格明文
+        # 允許的（"a [[name]] that doesn't match an existing memory yet is fine;
+        # it marks something worth writing later, not an error"）。
+        # 守衛：test_memory_integrity.py::TestWarningsDoNotAffectExitCode。
         return not self.dead and not self.orphan
 
 
-def audit_index_links(mem, root):
-    """MEMORY.md 連結 ↔ memory 目錄實體的雙向對帳（純邏輯，不印任何東西）。"""
-    with open(os.path.join(mem, "MEMORY.md"), encoding="utf-8") as fh:
-        targets = LINK.findall(fh.read())
+def audit_index_links(mem, root, hops=INDEX_HOP_LIMIT):
+    """索引 ↔ memory 目錄實體的雙向對帳（純邏輯，不印任何東西）。
 
+    「索引」的定義見 `index_sources()` 與 `INDEX_HOP_LIMIT`。斷鏈與孤兒**都**
+    以同一組索引檔為資料源：入口跟著搬進 topic 檔，斷鏈判定就必須一起跟過去，
+    否則「把索引外移」會用完全一樣的方式把斷鏈偵測也一起弄丟。
+    """
+    sources = index_sources(mem, root, hops)
     on_disk = {f for f in os.listdir(mem) if f.endswith(".md") and f != "MEMORY.md"}
 
-    dead, linked, tried = set(), set(), {}
-    for target in targets:
-        resolved, candidates = resolve_link(target, mem, root)
-        tried[target] = candidates
-        if resolved is None:
-            dead.add(target)
-        elif _is_memory_entry(resolved, mem):
-            linked.add(os.path.basename(resolved))
+    total, dead, tried, dead_sources, entry_depth = 0, set(), {}, {}, {}
+    for path, depth in sources:
+        where = os.path.basename(path)
+        for target in read_links(path):
+            total += 1
+            resolved, candidates = resolve_link(target, mem, root)
+            tried[target] = candidates
+            if resolved is None:
+                dead.add(target)
+                dead_sources.setdefault(target, set()).add(where)
+            elif _is_memory_entry(resolved, mem):
+                name = os.path.basename(resolved)
+                entry_depth[name] = min(entry_depth.get(name, depth + 1), depth + 1)
 
     return IndexLinkResult(
-        total=len(targets),
+        total=total,
         on_disk=sorted(on_disk),
         dead=sorted(dead),
-        orphan=sorted(on_disk - linked),
+        orphan=sorted(on_disk - set(entry_depth)),
         root=root,
         tried=tried,
+        sources=[(os.path.basename(p), d) for p, d in sources],
+        entry_depth=entry_depth,
+        dead_sources={t: sorted(w) for t, w in dead_sources.items()},
+        size=index_size(os.path.join(mem, "MEMORY.md")),
+        wiki=audit_wiki_links(mem, root),
     )
 
 
 def check_index_links(mem, root):
-    """MEMORY.md 連結 ↔ memory 目錄實體，雙向對帳。"""
+    """索引 ↔ memory 目錄實體，雙向對帳。"""
     index = os.path.join(mem, "MEMORY.md")
     if not os.path.isfile(index):
         print(f"✗ [index-links] 找不到 {index}")
@@ -351,19 +757,35 @@ def check_index_links(mem, root):
 
     result = audit_index_links(mem, root)
 
+    extensions = len(result.sources) - 1      # 扣掉 MEMORY.md 自己
     print(f"[index-links] 連結 {result.total} 條，memory 個別檔 {len(result.on_disk)} 個")
     # 相對路徑解析成什麼完全取決於這兩個基準，而且跑錯 checkout 時**沒有別的跡象**
     # （會表現成一批莫名其妙的斷鏈）。所以無條件印出來，不管有沒有發現。
     print(f"              相對路徑基準：memory = {mem}")
     print(f"                            repo   = {root}")
+    print_index_size(result.size)
+    # 入口深度分佈無條件印出：hop 上限是一個判準，而判準的實際涵蓋面只有在
+    # 「現在有幾個檔靠深度 2 才有入口」這個數字上才看得見。哪天索引開始往更深
+    # 的地方搬，這一行會先變（深度 2 的量暴增、或出現貼著上限的檔），比等到
+    # 一批孤兒炸出來早。
+    hist = {}
+    for name in result.on_disk:
+        if name in result.entry_depth:
+            hist[result.entry_depth[name]] = hist.get(result.entry_depth[name], 0) + 1
+    spread = "、".join(f"深度 {d} {hist[d]} 檔" for d in sorted(hist)) or "（無）"
+    print(f"              入口深度（索引跳數上限 {INDEX_HOP_LIMIT}）：{spread}"
+          f"；索引 ＝ MEMORY.md ＋ {extensions} 個直連檔")
+
     for target in result.dead:
         print(f"  ✗ 斷鏈（索引連到但檔案不存在）：{target}")
+        print(f"        出現在：{'、'.join(result.dead_sources[target])}")
         for candidate in result.tried[target]:
             print(f"        查過：{candidate}")
     for name in result.orphan:
-        print(f"  ✗ 孤兒（檔案存在但索引沒連到）：{name}")
+        print(f"  ✗ 孤兒（檔案存在但從 MEMORY.md 到不了）：{name}")
     if result.ok:
         print("  ✓ 斷鏈 0、孤兒 0")
+    print_wiki_links(result.wiki)
     return 0 if result.ok else 1
 
 
