@@ -45,12 +45,22 @@ gate（`paas.py:1410` / `:1456` / `:1464`）今天都已經是 owner/admin，全
 11 處 `write` ＋ 1 處 `unlink`，**只被兩個讀取端點呼叫**：`_list_services`（list）
 與 `_get_service`（get）。兩者的分支都只有 `check_user_access(user)`、**無
 required_role**（gate 只掛在 create/update/delete 分支上），recordset 也非 sudo。
-⇒ 只收窄 rule、不動 poll 的話：
+⇒ 只收窄 rule、不動 poll 的話，**兩條路徑都是靜默失敗**：
 
-- `_get_service`：**無 try/except** ⇒ AccessError 直接拋 ⇒ guest/user 打開
-  部署中服務的詳情頁直接失敗。
-- `_list_services`：迴圈有 `except Exception` ⇒ AccessError 被吞成 warning ⇒
-  **不會 500，但服務狀態永遠不更新**。這種只吞不炸的回歸，沒有測試就等於沒人會發現。
+`_update_service_status` 自己最外層就有 `except Exception`（`paas.py`，try 從
+`client.get_status()` 起、涵蓋每一處寫入），AccessError 在那裡就被降級成 warning log
+⇒ **端點照樣回 success**，服務狀態卻永遠停在 deploying / upgrading / initializing。
+沒有 500、沒有錯誤訊息、前台只是一直轉圈。
+
+📌 這一段在中間狀態的實測中被修正過：原本以為 `_get_service` 沒有自己的
+try/except ⇒ AccessError 會逸出成 JSON-RPC error，所以兩條路徑「一條炸、一條靜默」。
+實測 B1 的失敗是 `'deploying' != 'running'`——`_assert_ok` **先通過了**。上游那個
+catch-all 讓 detail 端點也是靜默的。⇒ 斷言一律落在「狀態有沒有推進」；落在「端點有沒有
+回 error」上的話，B1 與 B2 兩條都會恆綠。
+
+B1 與 B2 因此測的是同一種**失敗模式**，但驅動的是**不同呼叫鏈**（`_get_service` 單筆
+／`_list_services` 迴圈），兩條都要留——同一功能有兩份呼叫路徑時，覆蓋率要問的是
+「每一條都被驅動了嗎」（#627 的教訓）。
 
 修法是 poll 的**寫入**改系統身分（`sys_service`，見 `paas.py` 的 `#676` 註解）。
 B1/B2/B3 是那條修法的守線：它們必須在「只收窄 rule、還沒改 sudo」的中間狀態下
@@ -525,9 +535,13 @@ class TestPollPathNotBrokenByAuthz676(_CloudService676Fixture):
     def test_B1_guest_get_transitional_service_still_polls(self):
         """guest 打 detail 端點（`action='get'`）poll 一個部署中的服務。
 
-        `_get_service` **沒有 try/except**，`api_workspace_service` 外層也沒有
-        ⇒ poll 的寫入若被 rule 擋，AccessError 直接變成 JSON-RPC error，
-        租戶的服務詳情頁直接失敗。
+        驅動 `_get_service` → `_update_service_status` 這條**單筆**呼叫鏈
+        （B2 驅動 `_list_services` 的迴圈那條）。
+
+        ⚠ 斷言落在「狀態有沒有推進」而不是「端點有沒有回 error」：
+        `_update_service_status` 的 catch-all 會把 AccessError 降級成 warning，
+        端點照樣回 success。中間狀態實測確認過這一點（`_assert_ok` 通過、
+        state 斷言才紅）。
         """
         svc = self._service(self.template, self.w1, 'Deploying 676',
                             state='deploying')
