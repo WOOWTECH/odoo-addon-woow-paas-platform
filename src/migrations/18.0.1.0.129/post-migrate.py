@@ -19,11 +19,21 @@
     ⇒ 最終取 129（嚴格大於 develop 當下的 128）。
 
 ⚠ 教訓寫在這裡供下一個人參考：**不要靠「幫你留一個版號」，要在合併的當下重查**
-develop 的 manifest 實值。若日後又需要改號，同時要動的有 10 個檔案（manifest、本目錄名、
-本 docstring、`src/security/ir_rules.xml` 兩處註解、`src/tests/__init__.py`、
-`src/tests/test_workspace_authz_658.py` 檔頭、`scripts/audit/repo-lint.py` 的
-`RETIRED_RULE_XMLIDS` 值、docs 三份），漏一個都不會有錯誤訊息；
-驗法：`git grep -ln "18\\.0\\.1\\.0\\.1[0-9][0-9]"` 只該剩新版號。
+develop 的 manifest 實值。若日後又需要改號，載體遠不只 manifest 與本目錄名：版號
+字面散在 `src/security/ir_rules.xml` 的註解、`src/tests/` 數個檔、`scripts/audit/`
+數個檔、docs 數份…，漏一個都不會有任何錯誤訊息。
+
+⚠ **這裡刻意不寫「共 N 個檔」**——那是個會單調變動的純量，寫下就會漂（本行原本
+寫「10 個檔案」並列舉其中 7 個；#675 覆核 F4 自檢時實測 `git grep -l` 是 **14** 個，
+naming.py／test_repo_lint_security_rules.py／test_workspace_ns_hash_677.py 都不在
+那份列舉裡）。要清單就現算：
+
+    git grep -ln "18\\.0\\.1\\.0\\.129"        # 新版號的全部載體
+    git grep -ln "18\\.0\\.1\\.0\\.<舊版號>"   # 必須**零命中**才算改完
+
+（原本的驗法寫 `git grep -ln "18\\.0\\.1\\.0\\.1[0-9][0-9]"` 只該剩新版號，那也是
+假的：`.122` / `.124` 等舊 migration 的版號本來就合法留在樹上，同一次實測是 20 個
+檔、10 個不同版號。範圍要收在「這一支的舊版號」，不是整個 1xx 區間。）
 
 舊的 workspace_rule_member_access（perm_read + perm_write 合一、domain
 `[('access_ids.user_id', '=', user.id)]`、**無 role 條件**）與
@@ -51,14 +61,39 @@ Step 3（#677）—— 回填 `woow_paas_platform_workspace.ws_hash`
 一個 stored、伺服器產生、DB `UNIQUE` 的 `ws_hash` 欄位。
 
 🔴 **回填值必須逐字等於舊公式的結果 `md5(slug)[:8]`**，這是「改推導不會動到既有
-部署」的**全部**依據：`cloud_service.helm_namespace` / `subdomain` 是存起來的，但
-`smart_home._generate_subdomain()` / `_generate_tunnel_name()` 與
-`security_access._generate_canonical_name()` 是**每次呼叫重新推導**的。回填成舊值
-之後，那三條路徑算出來的字串與修復前 byte-identical ⇒ 既有 tunnel／DNS／ingress
-全部不漂移。用隨機值回填會讓既有 SmartHome 的子網域在下一次推導時整批改變。
+部署」的依據——但機制**不是**「有些路徑會每次重新推導」。實查全部四個產名點
+（`git grep make_namespace / make_service_subdomain / make_security_access_subdomain
+/ make_smarthome_subdomain -- src`，排除 tests）：
+
+  - `cloud_service.helm_namespace` / `subdomain`：在 `controllers/paas.py`、
+    `controllers/ha_paas.py` 建立 service 的當下算一次、存進欄位；
+  - `security_access.canonical_name`：`_generate_canonical_name()` **只**被
+    `create()` 呼叫，算一次寫進 stored 欄位（之後由 write guard 鎖住）；
+  - `smart_home.subdomain` / `tunnel_name`：`_generate_subdomain()` /
+    `_generate_tunnel_name()` **只**被 provision 路徑呼叫，結果存進欄位，而該路徑
+    對已有 `tunnel_id` 的列會先 raise。
+
+⇒ **既有列一律不重推**。（原文寫那三支「是每次呼叫重新推導的」，並據此說用隨機值
+回填會讓既有 SmartHome 子網域「整批改變」——與實況相反：它們是不讀 stored 值的
+推導函式沒錯，但呼叫點只在 create／provision。#675 覆核 F4 自檢時抓到。）
+
+真正需要回填成舊值的是**下一次推導**：一個既有 workspace 在升級後新建 CloudService
+時，`helm_namespace` 是拿當下的 `ws_hash` 現算的 ⇒ 隨機值會讓新服務落進
+`paas-ws-{新值}`，與同一個 workspace 既有服務所在的 `paas-ws-{md5(slug)[:8]}`
+**分家**（既有服務不會動，但那個 workspace 從此橫跨兩個 namespace）。回填成舊值
+之後那條路徑算出來的字串與修復前 byte-identical。
 
 `slug` 為 NULL 的列用 `''` 參與雜湊（＝ `md5('')[:8]` = `d41d8cd9`），與修復前
-`generate_ws_hash(slug)` 對空字串的行為一致；`UNIQUE(slug)` 只保證一列這種資料。
+`generate_ws_hash(slug)` 對空字串的行為一致。
+⚠ **`''` 只會有一列（`UNIQUE(slug)` 擋得住字面重複），但 NULL 不受 `UNIQUE` 限制**
+——Postgres 的 UNIQUE 允許任意多列 NULL。實測（直接對 `unique_slug` 這條 constraint
+下 INSERT，非經 ORM）：兩列 `slug=NULL` → `INSERT 0 2`；對照組兩列 `slug=''` →
+`duplicate key value violates unique constraint "..._unique_slug"`。
+所以「空 slug 最多一列」是假的：`''` 那一列與任意多列 NULL 會**一起**落在
+`d41d8cd9` 上並觸發下面那個 abort。行為是對的（fail-closed），錯的只有理由——
+原文寫「`UNIQUE(slug)` 只保證一列這種資料」，那句話會讓日後撞到這個 abort 的人
+跑去找「為什麼有兩列 NULL，UNIQUE 不是擋著嗎」（#675 覆核 F4）。今天 `create()`
+兩個版本都把 slug 填成 `''` 而非 NULL，所以多列 NULL 不是可達路徑。
 
 ⚠ **既有資料就已經碰撞的話，這支 migration 會 raise 而不是自作主張改名。** 那是
 事故（兩個租戶已經共用一個 K8s namespace）不是 bug，處置要人來決定；靜默挑一列
