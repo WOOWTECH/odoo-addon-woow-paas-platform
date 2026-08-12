@@ -344,7 +344,19 @@ class WorkspaceAccess(models.Model):
         )
 
     def transfer_ownership(self, new_owner_id: int) -> None:
-        """Transfer ownership to another user"""
+        """Transfer ownership to another user.
+
+        ⚠ **死碼，且對非 superuser 呼叫者已經壞了**（#556 landing doc 的 Not-in-scope
+        段落已記載，#658 複驗仍成立）：`src/` 裡沒有任何 controller／OWL 呼叫它。
+        壞在下面連續兩次 write 的順序——第一次把呼叫者自己那列降成 admin，第二次
+        要指派 `owner` 時 `_check_assignable_role` 查到的 grantor 已經是 admin，而
+        `ASSIGNABLE_ROLES_BY_ROLE['admin']` 不含 `'owner'` ⇒ AccessError。
+
+        #658 又多了一道：最後那行 `self.workspace_id.write({'owner_id': ...})` 會撞
+        `Workspace.write()` 的 owner_id identity anchor。**這不是本方法今天壞掉的
+        原因**（它在 #658 之前就已經走不到那一行了），但要復活這條方法時兩道都要處理：
+        整段改走 `sudo()`，或重新設計成單一 atomic 呼叫。不要只修其中一道。
+        """
         self.ensure_one()
         if self.role != ROLE_OWNER:
             raise ValidationError('Only the current owner can transfer ownership.')

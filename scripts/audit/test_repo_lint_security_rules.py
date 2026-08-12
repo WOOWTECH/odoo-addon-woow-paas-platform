@@ -4,8 +4,37 @@
 守的三條（實作見 `repo-lint.py` 檔頭第 22／23 條）：
 
   ① `check_security_rule_noupdate`            ir.rule 不得**出生**在 noupdate="1" 區塊
-  ② `check_retired_rule_xmlid`                #556 退役的 xmlid 不得**復活**
+  ② `check_retired_rule_xmlid`                已退役的 xmlid 不得**復活**
   ③ `check_workspace_access_rule_directions`  workspace_access 的寫入方向不得**留空**
+
+  ④ `check_workspace_rule_directions`         workspace **本體**的寫入方向不得**留空**
+
+⚠ ② 原本寫「#556 退役的 xmlid」——#658 又退役了 `workspace_rule_member_access` /
+`workspace_rule_create`（migration `18.0.1.0.131`），權威清單是 `RETIRED_RULE_XMLIDS`
+本身，不是這段散文。
+
+④ 是 #658 新增的。它與 ③ 共用實作（`_rule_direction_violations`），所以**判準那一半
+由 ③ 的測試覆蓋**；④ 自己真正沒被驗的是**它的錨點**——`WORKSPACE_MODEL_REF` 到底指向
+哪個 model。錨點指錯 ⇒ selector 永不命中 ⇒ **它會永遠是綠的，而名字照樣印在通過清單
+裡**（本 repo 記錄有案的 no-op gate 家族）。③ 的測試**結構上不可能**涵蓋這一格：它們
+注入的是 `workspace_access` 的 record，④ 指錯 model 時那些測試一條都不會變色。
+所以本檔對 ④ 的測試全部錨在「它看的是 workspace 本體」這個唯一的區別點
+——見 `TestWorkspaceModelDirectionAnchor`。
+
+🔴 #675 覆核補的兩格（原本那一支最小注入測試對它們**零鑑別力**）：
+
+  * **F1 錨點被複製貼上**：原本那支注入的是「翻掉 workspace 本體 manage rule 的
+    perm_write」，而 `WORKSPACE_MODEL_REF` 一旦被貼成 `WORKSPACE_ACCESS_MODEL_REF`
+    的值，④ 看的就是 ③ 那組真的存在、真的有 rule 的 record ⇒ 那個注入對它毫無影響、
+    全綠。覆核者實測到底：再把 workspace 本體四條 rule 全刪，`--all` 仍 EXIT=0。
+    ⇒ `TestWorkspaceModelDirectionAnchor` 現在同時守「打錯字」「複製貼上」「錨點
+    對不到任何 rule」三種形態，外加一支**存在性證明**（兩個錨點的 rule 集合非空
+    且不相交＝兩層判準真的是兩層）與一支注入手法自身的絆線。
+  * **F2 `RETIRED_RULE_XMLIDS` 沒有成員 floor**：本檔②的每一支都是拿那份清單自己
+    當迴圈來源，少一個名字只會少跑一輪 ⇒ 覆核者實測拿掉兩個條目，repo-lint EXIT=0、
+    `Ran 52 tests OK`，零訊號。floor 現在是獨立列舉的 `RETIRED_RULE_XMLIDS_FLOOR`
+    （見它的註解），並折進 `test_every_floor_name_is_individually_blocked_by_the_gate`
+    的迴圈。
 
 ## 為什麼第一支測試是注入，不是「clean tree 全綠」
 
@@ -71,6 +100,54 @@ model 都配一條 admin_full ⇒ 寬判準會把「洞開著」讀成「有守�
 命中 0 次，`str.replace` 原樣回傳，若沒有那道 assert 就會把「注入根本沒發生」讀成
 「gate 有問題／沒問題」。
 
+## 🔴 跑上面那份配方之前先讀這段：它對 `.pyc` stale cache **毫無防備，失敗方向是假綠**
+
+上面那張突變表的形態是「**就地改 `repo-lint.py` 的原始碼 → 跑本檔 → 還原**」。
+本檔用 `importlib` 從**檔案路徑**載 `repo-lint.py`，走 `SourceFileLoader`，而它的
+bytecode cache 驗證判準只有 `(mtime 秒, size)` 兩個值。就地突變非常容易同時避開兩者：
+
+  - **替換值長度相同** ⇒ size 不變。`"…0.131（#658）"` → `"…0.999（#658）"` 正是這種
+    （改版號、翻一個字元、`True`↔`Fals`… 都會踩到）。
+  - **突變與 `cp` 還原落在同一秒** ⇒ mtime 的秒數不變。
+
+兩個一起成立，Python 就判定 `__pycache__/repo-lint.cpython-3xx.pyc` 仍然有效，載進來的
+是**舊的** bytecode——你改的東西根本沒生效。
+
+🔴 **後果的形狀比機制重要：失敗方向是「回報綠」。**
+2026-08-11（#675 追加 A）實測：磁碟上明明是 `127`，不清 cache 讀到的是 `999`；那一輪
+RED 驗證**兩個方向都錯**——先把「其實會紅」的兩支讀成綠（差一點據此下結論「新寫的測試
+沒有鑑別力」，**與事實完全相反**），還原之後又把乾淨的樹讀成紅。
+⇒ 拿到「突變了卻沒紅」時**先懷疑探針，不要先懷疑測試**。
+
+**可照抄的配方（每一次突變迴圈都照這樣做）：**
+
+    # 1) 備份
+    cp scripts/audit/repo-lint.py /tmp/rl.bak
+    # 2) 突變（務必自檢錨點「命中恰好一次」，沒命中就中止——見 InjectionFailed 的理由）
+    python3 - <<'"'"'EOF'"'"'
+    ...
+    EOF
+    # 3) 清 cache 並用 -B 跑
+    rm -rf scripts/audit/__pycache__ && python3 -B -m unittest scripts.audit.test_repo_lint_security_rules
+    # 4) 還原
+    cp /tmp/rl.bak scripts/audit/repo-lint.py
+    # 5) 再清一次 cache 跑，確認回綠（少了這步，還原有沒有生效也不知道）
+    rm -rf scripts/audit/__pycache__ && python3 -B -m unittest scripts.audit.test_repo_lint_security_rules
+
+**兩道獨立的防線，兩道都要：**
+
+  1. `rm -rf scripts/audit/__pycache__` **＋** `python3 -B`。`-B` 只擋**寫入**，既有的
+     `.pyc` 照樣會被讀 ⇒ 少了 `rm -rf` 等於沒防。
+  2. **選突變值時避開「長度相同」**（例：把 `18.0.1.0.131` 改成 `18.0.1.0.9999` 而不是
+     `18.0.1.0.999`）。這是第二道保險，**不能取代第一道**——mtime 同秒仍可單獨咬人。
+
+一句話判準：**改完原始碼之後，先驗「跑起來讀到的值真的變了」再看紅綠。**
+
+⚠ 這個陷阱**只咬「改 `repo-lint.py` 自己」那種突變**。本檔測試內部的注入都在
+`tempfile` 假 root 上做（改的是 XML 資料檔，不是被 import 的 Python 模組），不受影響；
+正常跑 `python3 scripts/audit/repo-lint.py` 是 `__main__`、也不吃 cache。所以它不是
+產品問題，是**這份配方**的問題。
+
 ## 不動 repo 一個字
 
 所有注入都在 `tempfile.mkdtemp()` 造的假 repo root 上做（`<tmp>/src/security/ir_rules.xml`），
@@ -89,6 +166,7 @@ model 都配一條 admin_full ⇒ 寬判準會把「洞開著」讀成「有守�
 import importlib.util
 import os
 import pathlib
+import re
 import shutil
 import tempfile
 import unittest
@@ -97,7 +175,28 @@ _GATE_PATH = pathlib.Path(__file__).with_name("repo-lint.py")
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 _REAL_RULES_REL = "src/security/ir_rules.xml"
 _REAL_RULES = _REPO_ROOT / _REAL_RULES_REL
-_RETIREMENT_MIGRATION = _REPO_ROOT / "src/migrations/18.0.1.0.122/post-migrate.py"
+_MIGRATIONS_ROOT = _REPO_ROOT / "src/migrations"
+
+# `RETIRED_RULE_XMLIDS` 的值形如 `"18.0.1.0.122（#556）"`——版號在前，出處 issue 在後。
+_VERSION_IN_PROVENANCE = re.compile(r"^\s*([0-9][0-9.]*)")
+
+
+def retirement_migration(provenance):
+    """從 `RETIRED_RULE_XMLIDS` 的**值**推導出「退役它的那支 migration」的路徑。
+
+    🔴 刻意不寫死任何一支 migration 的版號（`18.0.1.0.122` 那份寫法是 #658 撞到的
+    F1）：寫死的版號把「當時唯一的退役事件」凍成契約，第二次退役（#658 的
+    `18.0.1.0.131`）發生的當天那條測試就失去靶子，而它的失敗訊息會說「名字不在
+    migration 裡」——把讀的人導向完全錯誤的方向（以為退役機制壞了）。
+
+    版號從值裡解析而不是另外維護一張表：`RETIRED_RULE_XMLIDS` 已經是那份對應關係的
+    單一真相源，再開一份就會漂。解析不出來回 None，由呼叫端當**失敗**處理
+    （不是靜默略過——那會讓這條測試在值的格式改掉的當天無聲失去鑑別力）。
+    """
+    hit = _VERSION_IN_PROVENANCE.match(provenance or "")
+    if not hit:
+        return None
+    return _MIGRATIONS_ROOT / hit.group(1) / "post-migrate.py"
 
 
 def _load_gate():
@@ -115,6 +214,38 @@ _TENANT = rl.TENANT_GROUP_XMLID
 _ADMIN_GROUP = "base.group_system"
 _PERMS = ("perm_read", "perm_write", "perm_create", "perm_unlink")
 _DIRECTIONS = rl.IR_RULE_WRITE_DIRECTIONS
+
+# 🔴 ② 的**成員 floor**：這幾個名字**逐一列舉**，不是 `assertTrue(清單非空)`（#675 覆核 F2）。
+#
+# 為什麼不能只驗「非空」：`RETIRED_RULE_XMLIDS` 是「fresh install 不會重建那幾條退役
+# rule」的**唯一**機制，而本檔幾乎每一支②的測試都是拿 `rl.RETIRED_RULE_XMLIDS` 自己
+# 當迴圈的來源 ⇒ 從清單裡拿掉一個名字，那些迴圈只是**少跑一輪**，總數仍 > 0、輸出與
+# 全部通過完全相同。覆核者實測：
+#
+#     拿掉 #658 新加的兩個條目 → repo-lint EXIT=0、unittest Ran 52 tests OK   ← 零訊號
+#     對照：拿掉 #556 那兩個條目 → 同樣 52 tests OK（舊條目也沒被釘住）
+#     反向對照：SECURITY_RULE_NOUPDATE_ALLOWED 塞回一條 → FAILED (failures=9)  ← 那一側有守住
+#
+# 危險在於後果**不對稱**、而且兩層防禦可以被**單一事件**同時解除：清單與
+# `src/security/ir_rules.xml` 的 `<record>` 是同一張 PR 動的兩個檔，一次 rebase／merge
+# 還原就可能同時帶回 `<record>` 並帶走清單條目 ⇒ 已升級環境無感（migration 只跑一次），
+# fresh install 靜默重建那條 rule ＝ #556／#658 的寫入洞原樣重開，沒有任何測試會紅。
+# 這個 floor 住在**第三個檔**（本檔），所以那個單一事件掃不到它。
+#
+# 判準寫在不變式層：只釘**名字**（「這個名字被 migration DELETE 退役過，永遠不得
+# 從清單消失」），**不釘**值裡的版號字串——版號在本 PR 期間被推過三次，把它凍成
+# 契約等於再多一個改號時要同步的載體（而 migration 檔頭數的那份清單已經漏過）。
+# 「名字 → 退役它的那支 migration」由 `retirement_migration()` 從值即時推導並驗證。
+#
+# ⚠ 這份 floor **只准長不准縮**。真的要讓一個名字退出列管（例如那條 rule 以新 xmlid
+# 正式回歸），請連同這裡一起刪並在 PR 寫下理由——那個動作會出現在 diff 裡被覆核，
+# 靜默少跑一輪不會。
+RETIRED_RULE_XMLIDS_FLOOR = (
+    "workspace_access_rule_member_access",   # #556 / migration 18.0.1.0.122
+    "workspace_access_rule_create",          # #556 / migration 18.0.1.0.122
+    "workspace_rule_member_access",          # #658 / migration 18.0.1.0.131
+    "workspace_rule_create",                 # #658 / migration 18.0.1.0.131
+)
 
 
 class InjectionFailed(AssertionError):
@@ -308,8 +439,43 @@ class Fixture(object):
             raise InjectionFailed("`%s.%s` 沒有被翻成 %s——注入沒生效" % (xmlid, perm, value))
         return self
 
+    def append_noupdate_block(self, record):
+        """**自己造**一個 `<data noupdate="1">` 區塊（掛在 `</odoo>` 之前）再放 record。
+
+        🔴 與 `insert_into_noupdate_block` 的差別是錨點的層次，這正是 #658 撞到的 F3：
+        那一支從「樹上**現有**的 noupdate 區塊」推導錨點，而「樹上有這種區塊」是
+        #658 之前的**形態**——#658 的整個目的就是消滅它 ⇒ 錨點消失、注入靜默不發生、
+        gate 回 0 條，測試讀成「gate 沒抓到」。判準必須錨在不變式（「gate 對
+        noupdate 區塊裡的 ir.rule 必須報違規」），不是錨在「這棵樹現在長什麼樣」。
+
+        `</odoo>` 是 XML 結構的必然，不是佈局選擇，所以它是安全的錨點。
+        """
+        text = self.text()
+        anchor = "</odoo>"
+        if anchor not in text:
+            raise InjectionFailed(
+                "fixture 沒有 `%s` 收尾——這不是佈局差異，是檔案壞了" % anchor)
+        block = '    <data noupdate="1">\n%s\n    </data>\n\n' % record
+        mutated = text.replace(anchor, block + anchor, 1)
+        if mutated == text:
+            raise InjectionFailed("插入後原始碼一字未變——注入失效")
+        self.write(self.rel, mutated)
+        # 絆線：用**與 gate 無關的獨立判準**（純字串）自檢注入真的發生了。少了這一段，
+        # 「gate 沒抓到」與「東西根本沒注入成功」的輸出都是 `0 != 1`，分不出來。
+        after = self.text()
+        if '<data noupdate="1">' not in after:
+            raise InjectionFailed("noupdate 區塊沒有寫進去——注入沒生效，測試會假綠")
+        if record.strip().splitlines()[0].strip() not in after:
+            raise InjectionFailed("注入的 record 沒有出現在檔案裡——注入沒生效")
+        return self
+
     def insert_into_noupdate_block(self, record):
-        """把一顆 record 插進**第一個 `<data noupdate="1">` 區塊**的結尾。"""
+        """把一顆 record 插進**第一個 `<data noupdate="1">` 區塊**的結尾。
+
+        ⚠ 錨點是「樹上已經有這種區塊」——真檔案在 #658 之後**沒有**了，所以這支只
+        適用於合成 fixture（`data_file(...)` 預設會帶一個）。要對真檔案注入請改用
+        `append_noupdate_block()`。
+        """
         text = self.text()
         opener = '<data noupdate="1">'
         start = text.find(opener)
@@ -329,6 +495,51 @@ class Fixture(object):
 
 def blob(violations):
     return "\n".join(violations)
+
+
+def allow_temporarily(case, **entries):
+    """暫時把名字塞進 ① 的 grandfather 清單，測試結束一定還原。
+
+    #658 把真樹的 `SECURITY_RULE_NOUPDATE_ALLOWED` 清空了（那是它的目的），於是 ①
+    的**兩端**——放行與反向對帳——都失去現實驅動者。清空是好事，但守線的分支不能因此
+    變成沒人跑過的死碼，所以改用合成驅動。
+
+    用 `addCleanup` 還原**內容**而不是重新綁一個新 dict：`repo-lint.py` 裡的判準讀的
+    是模組層那個物件本身，換掉綁定會讓還原對已經取得參照的地方失效。
+    """
+    original = dict(rl.SECURITY_RULE_NOUPDATE_ALLOWED)
+
+    def restore():
+        rl.SECURITY_RULE_NOUPDATE_ALLOWED.clear()
+        rl.SECURITY_RULE_NOUPDATE_ALLOWED.update(original)
+
+    case.addCleanup(restore)
+    rl.SECURITY_RULE_NOUPDATE_ALLOWED.update(entries)
+
+
+def anchor_temporarily(case, **constants):
+    """暫時改掉 `repo-lint.py` 的 model 錨點常數（`WORKSPACE_MODEL_REF` 等），測試結束一定還原。
+
+    改的是**模組物件上的字串屬性**，不是就地改原始碼再重新 import ⇒ 不吃檔頭那段
+    `.pyc` stale cache 的陷阱（那個陷阱只咬後者）。兩條 check 在**呼叫當下**才讀這
+    兩個模組層常數，所以 setattr 這種改法真的會影響判定——這件事本身由下面
+    `test_the_anchor_patch_actually_reaches_the_gate` 當絆線釘住。
+
+    改完立刻用**與被測 gate 無關的獨立判準**（直接讀回屬性）自檢：少了它，「patch 沒
+    生效」與「gate 沒抓到」的輸出完全相同，而這正是本檔絆線哲學要防的那一格。
+    """
+    original = {name: getattr(rl, name) for name in constants}
+
+    def restore():
+        for name, value in original.items():
+            setattr(rl, name, value)
+
+    case.addCleanup(restore)
+    for name, value in constants.items():
+        setattr(rl, name, value)
+        if getattr(rl, name) != value:
+            raise InjectionFailed(
+                "`rl.%s` 沒有被改成 %r——注入失效，**不是測試通過**" % (name, value))
 
 
 # ------------------------------------------------------------ 陽性對照（現實錨點）
@@ -351,34 +562,82 @@ class TestCleanTreeIsGreen(unittest.TestCase):
         self.assertGreaterEqual(len(rules), 20,
                                 "掃到的 ir.rule 太少——**探針沒走到 repo，不是 repo 變小了**")
 
-    def test_the_grandfather_path_is_exercised_by_reality(self):
-        """真檔案裡確實有 noupdate 區塊的 ir.rule ⇒ ① 的放行分支被現實驅動過。
+    def test_the_grandfather_allowlist_and_the_tree_agree_and_are_empty(self):
+        """🔴 ① 的 grandfather 清單與真樹的 noupdate 區塊必須**互相一致，而且都是空的**。
 
-        沒有這一支的話，① 在真 repo 上的綠可能只是「noupdate 區塊裡什麼都沒有」，
-        而 grandfather 清單是否真的被用到完全沒有訊號（清單恆綠 ≠ 清單有效）。
+        這一支原本斷言的是相反的事——「真檔案裡確實有 noupdate 區塊的 ir.rule」。
+        那是 #658 之前的**形態**，而 #658 的整個目的就是消滅它，所以它在修好的當天
+        必然變紅（#658 撞到的 F2）。它的失敗訊息自己就寫著「#658 修好了嗎？那就把
+        grandfather 清單清掉」——作者預見到這一刻，只是沒寫下清掉之後該長什麼樣。
+
+        清掉之後該長的樣子就是這一支：**把「已經清乾淨」變成受監視的不變式**。
+        空清單是好事，但「空」本身要有東西盯著，否則下一個人加回一條沒人會發現
+        （而 ① 對清單裡的名字是**放行**的，加回去就是靜默豁免）。
+
+        判準保留了原本那條**雙向一致性**斷言（清單 == 樹上實況），只是現在兩邊都應為
+        空集合；它仍然抓得到「有人只改一邊」。放行分支本身不靠這一支驅動——它現在由
+        `test_grandfathered_records_are_allowed` 用**合成**驅動（見那一支的 docstring）。
         """
         records, _ = rl.module_record_declarations(str(_REPO_ROOT))
         in_noupdate = {r["xmlid"] for r in records
                        if r["model"] == rl.IR_RULE_MODEL and r["noupdate"]}
-        self.assertTrue(in_noupdate,
-                        "真檔案的 noupdate 區塊裡一條 ir.rule 都沒有——① 的放行分支"
-                        "從未被現實驅動（#658 修好了嗎？那就把 grandfather 清單清掉）")
-        self.assertEqual(in_noupdate, set(rl.SECURITY_RULE_NOUPDATE_ALLOWED),
-                         "noupdate 區塊的 ir.rule 與 grandfather 清單不相等——① 應該"
-                         "已經在報違規了，這支的前提與 gate 的判定分岔了")
+        self.assertEqual(
+            in_noupdate, set(rl.SECURITY_RULE_NOUPDATE_ALLOWED),
+            "noupdate 區塊的 ir.rule 與 grandfather 清單不相等——① 應該已經在報違規了，"
+            "這支的前提與 gate 的判定分岔了")
+        self.assertEqual(
+            in_noupdate, set(),
+            "真樹的 noupdate 區塊又住進了 ir.rule。ir_model_data.noupdate 是 sticky 的："
+            "寫錯的授權規則不能用改 XML 修好，只能下 migration DELETE 退役（#556 的可修復性"
+            "根因、#658 的 workspace 側）。要新增請走 `<data noupdate=\"0\">`；真的必須 "
+            "noupdate 才把名字加進 SECURITY_RULE_NOUPDATE_ALLOWED 並寫下理由——**而且要記得"
+            "同時更新這一支**，因為它現在盯的就是「這裡是空的」")
 
     def test_retired_names_still_live_in_code_and_are_not_flagged(self):
         """特異性的真實靶子：退役名字今天仍**合法**以文字形式存在。
 
-        migration 的 `_RETIRED` tuple 是這兩個名字的權威載體（它就是靠名字去 DELETE
+        migration 的 `_RETIRED` tuple 是那些名字的權威載體（它就是靠名字去 DELETE
         的），永遠會留著。字串判準會把它當違規；② 判的是「有沒有 `<record id=…>`
         宣告」，所以必須綠。
+
+        🔴 判準從「形態」搬到「不變式」（#658 撞到的 F1）：原本寫死讀
+        `src/migrations/18.0.1.0.122/post-migrate.py`——那是當時**唯一**的退役事件。
+        #658 在 `18.0.1.0.131` 退役了第二批，那兩個名字當然不在 122 裡，於是這支報
+        「名字不在 migration 裡了」，把讀的人導向「退役機制被改壞了」這個錯誤方向。
+
+        不變式是：**每個退役名字，都能在「退役它的那支」migration 裡找到**。
+        該去哪一支由 `RETIRED_RULE_XMLIDS` 的值自己說（版號就在值裡），所以第三次、
+        第四次退役都不必回來改這支。
         """
-        text = _RETIREMENT_MIGRATION.read_text(encoding="utf-8")
-        for xmlid in rl.RETIRED_RULE_XMLIDS:
-            self.assertIn(xmlid, text,
-                          "%s 不在 migration 裡了——本支測試失去靶子，請確認退役機制"
-                          "是否被改動" % xmlid)
+        missing = [x for x in RETIRED_RULE_XMLIDS_FLOOR
+                   if x not in rl.RETIRED_RULE_XMLIDS]
+        self.assertEqual(
+            missing, [],
+            "RETIRED_RULE_XMLIDS 少了這些名字：%s。它們各自被一支 migration DELETE "
+            "退役過，而這份清單是「fresh install 不會重建它們」的**唯一**機制——少一個"
+            "就是那條授權 rule 在新裝環境靜默復活（已升級環境無感，沒有任何測試會紅）。"
+            "⚠ 這裡刻意列舉名字而不是 `assertTrue(非空)`：下面的迴圈是拿清單自己當"
+            "來源的，少一個名字只會**少跑一輪**，輸出與全部通過一模一樣"
+            "（#675 覆核 F2 實測：拿掉兩個條目 → repo-lint EXIT=0、52 tests OK）"
+            % (missing,))
+        for xmlid, provenance in sorted(rl.RETIRED_RULE_XMLIDS.items()):
+            with self.subTest(xmlid=xmlid):
+                path = retirement_migration(provenance)
+                # 絆線：先分辨「版號解析不出來／migration 不存在」與「名字不在裡面」。
+                # 少了這兩道，三種病因的訊息會全部長成「名字不在 migration 裡」。
+                self.assertIsNotNone(
+                    path,
+                    "RETIRED_RULE_XMLIDS['%s'] = %r 解析不出版號——值的格式應為"
+                    "「版號（#issue）」" % (xmlid, provenance))
+                self.assertTrue(
+                    path.is_file(),
+                    "RETIRED_RULE_XMLIDS['%s'] = %r 指向 %s，但那支 migration 不存在"
+                    "——版號寫錯、或 migration 被改名／刪掉（**不是**「名字找不到」）"
+                    % (xmlid, provenance, path.relative_to(_REPO_ROOT)))
+                self.assertIn(
+                    xmlid, path.read_text(encoding="utf-8"),
+                    "%s 不在 %s 裡——退役它的那支 migration 沒有提到它，退役機制與"
+                    "清單分岔了" % (xmlid, path.relative_to(_REPO_ROOT)))
         self.assertEqual(rl.check_retired_rule_xmlid(str(_REPO_ROOT)), [])
 
     def test_a_faithful_copy_of_the_real_file_is_green(self):
@@ -391,11 +650,35 @@ class TestCleanTreeIsGreen(unittest.TestCase):
 class TestNoupdateBlockInjection(unittest.TestCase):
     """敏感度①：ir.rule 落在 noupdate="1" 區塊必須紅且點名 xmlid。"""
 
-    def test_new_rule_in_the_real_noupdate_block_is_red_then_green(self):
+    def test_a_new_rule_in_a_synthesised_noupdate_block_is_red_then_green(self):
+        """真檔案的複本 ＋ **自己造**的 noupdate 區塊 → 必須紅且點名 → 還原 → 綠。
+
+        🔴 錨點從形態層搬到不變式層（#658 撞到的 F3）：原本是往「真檔案裡**現有**的
+        `<data noupdate="1">` 區塊」注入，而 #658 把那個區塊整個消滅了 ⇒ 注入工具的
+        錨點失效、`insert_into_noupdate_block` 找不到區塊、gate 回 0 條，測試讀成
+        「gate 沒抓到」。要驗的不變式是「gate 對 noupdate 區塊裡的 ir.rule 必須報
+        違規」，那跟這棵樹現在有沒有那種區塊無關，所以自己造一個。
+
+        基準仍用真檔案複本（不是手抄 fixture）：手抄的會與真實佈局脫鉤。
+        注入工具自帶絆線（見 `append_noupdate_block`），所以「gate 沒抓到」與
+        「東西根本沒注入成功」分得出來——兩者原本的輸出都是 `0 != 1`。
+        """
         fixture = Fixture.from_real(self)
         self.assertEqual(fixture.noupdate(), [], "注入前就紅了——基準壞掉")
         clean = fixture.text()
-        fixture.insert_into_noupdate_block(
+        # 前提：這棵樹現在沒有任何 ir.rule 住在 noupdate 區塊，所以必須自己造一個。
+        # ⚠ 判準用 **parse 出來的 record**，不是字串比對 `<data noupdate="1">`——
+        # 那串字今天合法地出現在 ir_rules.xml 的**註解**裡（#658 留下的檔頭說明），
+        # 字串判準會在這裡誤判。這正是本檔一直在講的「形態層 vs 不變式層」，
+        # 寫這支的時候我自己先踩了一次。
+        records, _ = rl.module_record_declarations(fixture.root)
+        self.assertEqual(
+            [r["xmlid"] for r in records
+             if r["model"] == rl.IR_RULE_MODEL and r["noupdate"]], [],
+            "真檔案的複本裡已經有 noupdate 區塊的 ir.rule——這支的『自己造一個』前提要"
+            "重新檢視（而且 test_the_grandfather_allowlist_and_the_tree_agree_and_are_empty"
+            " 應該已經紅了）")
+        fixture.append_noupdate_block(
             rule_xml("injected_rule_for_gate_test", model_ref="model_woow_paas_platform_workspace"))
         got = fixture.noupdate()
         self.assertEqual(len(got), 1, "應該恰好報一條：%s" % blob(got))
@@ -448,19 +731,51 @@ class TestNoupdateBlockInjection(unittest.TestCase):
                         "拆掉註解後仍然綠 ⇒ 上面那句綠沒有鑑別力")
 
     def test_grandfathered_records_are_allowed(self):
-        """#658 的兩條必須放行，否則守線第一天就紅。"""
-        fixture = Fixture(self, data_file([member_read_rule()], data_noupdate="0"))
-        self.assertEqual(fixture.noupdate(), [])
+        """① 的放行分支——**合成**驅動（#658 之後真樹的清單已經是空的）。
+
+        🔴 這一支原本靠現實驅動（「#658 的兩條必須放行」），而 #658 把那兩條退役掉之後
+        它退化成恆真：`data_file()` 的 grandfather 區塊由空清單組出來 ⇒ 區塊是空的 ⇒
+        斷言變成「一份沒有違規的檔案沒有違規」。它照樣是綠的，所以不會有人發現放行
+        分支已經沒有任何驅動者——**這正是 F2 那支要防的死碼，只是它自己也倒了**。
+
+        改成自己造一顆住在 noupdate 區塊的 rule ＋ 暫時把它加進清單。
+        敏感度（不在清單裡→紅且點名）與放行（在清單裡→不報它）**成對**：少了前半，
+        「放行生效」與「① 對這份 fixture 根本沒在跑」的輸出完全相同。
+        """
+        xmlid = "synthetic_grandfathered_rule"
+        fixture = Fixture(self, data_file(
+            [rule_xml(xmlid, model_ref="model_woow_paas_platform_workspace")],
+            data_noupdate="1", grandfathered=False))
+
+        before = fixture.noupdate()
+        self.assertTrue(
+            any(xmlid in v for v in before),
+            "不在 grandfather 清單裡卻沒被報 ⇒ ① 對這份 fixture 根本沒在跑，"
+            "下面那句「放行」會是假綠：%s" % blob(before))
+
+        allow_temporarily(self, **{xmlid: "合成驅動（本測試）；真樹的清單是空的"})
+        after = fixture.noupdate()
+        self.assertEqual(
+            after, [],
+            "加進 grandfather 清單後仍有違規 ⇒ 放行分支沒有生效：%s" % blob(after))
 
     def test_an_allowlist_entry_with_no_matching_record_is_red(self):
-        """反向：清單比它豁免的東西活得久 ⇒ 同名 record 日後會無聲繼承豁免。"""
+        """反向對帳：清單比它豁免的東西活得久 ⇒ 同名 record 日後會無聲繼承豁免。
+
+        🔴 同樣改成合成驅動：原本斷言 `len(got) == len(SECURITY_RULE_NOUPDATE_ALLOWED)`，
+        清單空掉之後那是 `0 == 0`，for 迴圈一次都不跑 ⇒ 恆真。反向對帳是 ① 的兩端
+        之一（另一端是放行），兩端都必須有驅動者。
+        """
+        ghost = "allowlisted_but_absent_rule"
         fixture = Fixture(self, data_file([tenant_manage_rule()], data_noupdate="0",
                                           grandfathered=False))
+        self.assertEqual(fixture.noupdate(), [], "注入前就紅了——基準壞掉")
+
+        allow_temporarily(self, **{ghost: "合成驅動（本測試）"})
         got = fixture.noupdate()
-        self.assertEqual(len(got), len(rl.SECURITY_RULE_NOUPDATE_ALLOWED),
-                         "每個沒有對應 record 的清單項都該被點名一次：%s" % blob(got))
-        for xmlid in rl.SECURITY_RULE_NOUPDATE_ALLOWED:
-            self.assertIn(xmlid, blob(got))
+        self.assertEqual(len(got), 1,
+                         "清單項沒有對應 record 時該恰好報一條：%s" % blob(got))
+        self.assertIn(ghost, got[0], "訊息沒點名是哪一個清單項——沒法行動的訊號")
 
     def test_only_the_offending_record_is_named(self):
         """點名精確度：grandfather 兩條在同一份檔裡照樣放行，只報新增那一條。"""
@@ -632,20 +947,75 @@ class TestRetiredXmlidInjection(unittest.TestCase):
         self.assertTrue(any(retired in v for v in fixture.retired()))
 
     def test_only_a_comment_mentioning_the_name_is_green(self):
-        """🔴 特異性核心：現況就有註解提到那兩個名字，字串判準會誤報。"""
-        note = ("    <!-- #556 退役了 %s 與 %s，見 migration 18.0.1.0.122 -->\n"
-                % tuple(sorted(rl.RETIRED_RULE_XMLIDS)))
+        """🔴 特異性核心：現況就有註解提到那些名字，字串判準會誤報。
+
+        🔴 註解改成吃**任意條數**（#658 撞到的 E1）：原本的 format 字串寫死兩個
+        `%s`，把「退役清單恰好有 2 條」凍成契約；#658 加到 4 條的當天它拋
+        `TypeError: not all arguments converted`——那是個**看起來像程式壞了**的訊息，
+        完全指不出真正的成因（清單長大了）。條數是會長的，不是不變式。
+
+        絆線：先斷言註解真的帶上了**每一個**名字。少了它，若註解的組法哪天靜默漏掉
+        某些名字，這支照樣綠——而它本來要驗的就是「那些名字出現在註解裡不會被誤報」，
+        名字沒出現就等於沒驗到。
+        """
+        names = sorted(rl.RETIRED_RULE_XMLIDS)
+        self.assertTrue(names, "退役清單是空的——這支失去靶子（見 F1 那支的同款斷言）")
+        note = ("    <!-- 退役紀錄（各自的 migration 見 RETIRED_RULE_XMLIDS）：%s -->\n"
+                % "、".join(names))
+        for xmlid in names:
+            self.assertIn(xmlid, note,
+                          "註解沒帶上 %s——fixture 沒有涵蓋它，這支對它零鑑別力" % xmlid)
+
         fixture = Fixture(self, data_file([tenant_manage_rule()],
                                           data_noupdate="0", prologue=note))
         self.assertEqual(fixture.retired(), [],
                          "只在註解裡提到退役名字被當成違規——那會逼人刪掉史料")
         # 肯定性對照：同一份 fixture 加上真的 <record> 就必須紅（證明上面的綠不是
-        # 因為整條 check 對這份 fixture 沒在跑）。
-        retired = sorted(rl.RETIRED_RULE_XMLIDS)[0]
-        fixture.write(fixture.rel, data_file(
-            [rule_xml(retired), tenant_manage_rule()], data_noupdate="0", prologue=note))
-        self.assertTrue(any(retired in v for v in fixture.retired()),
-                        "加了真的 <record> 卻還是綠 ⇒ 上面那句綠沒有鑑別力")
+        # 因為整條 check 對這份 fixture 沒在跑）。**逐一**驗每個名字，這樣清單長大時
+        # 新加的那個也真的被驅動到，而不是永遠只測 sorted()[0] 那一個。
+        for retired in names:
+            with self.subTest(xmlid=retired):
+                fixture.write(fixture.rel, data_file(
+                    [rule_xml(retired), tenant_manage_rule()],
+                    data_noupdate="0", prologue=note))
+                self.assertTrue(any(retired in v for v in fixture.retired()),
+                                "加了真的 <record> 卻還是綠 ⇒ 上面那句綠沒有鑑別力")
+
+    def test_every_floor_name_is_individually_blocked_by_the_gate(self):
+        """🔴 #675 覆核 F2：floor **折進迴圈**，而且迴圈的來源是 floor、不是被測清單。
+
+        上面幾支（`test_only_a_comment_mentioning_the_name_is_green` 的肯定性對照、
+        `test_resurrected_record_is_red_then_green`）確實也逐一驗過名字——但它們的
+        迴圈是拿 `rl.RETIRED_RULE_XMLIDS` **自己**當來源。清單少一個名字，那些迴圈
+        只是少跑一輪，`Ran 52 tests OK` 一字不變（覆核者實測：拿掉本 PR 新加的兩個
+        條目、或 #556 的兩個，兩種都零訊號）。
+
+        ⇒ 迴圈的**輪數不能由被測物自己決定**，否則被測物可以自己關掉對自己的檢查
+        （memory: `feedback_declarative_list_gate_needs_floor_folded_in`，#522／#613
+        同型）。這一支的輪數固定來自 `RETIRED_RULE_XMLIDS_FLOOR`，所以任何一個名字
+        從 `RETIRED_RULE_XMLIDS` 消失，對應的 subTest 就會紅**並且點名是哪一個**
+        （不是「差幾個」——memory:
+        `feedback_completeness_check_output_which_not_how_many`）。
+
+        兩層一起驗，缺一不可：**登記**（名字還在清單裡）與**行為**（gate 真的擋得
+        下這個名字的 `<record>`）。只驗登記的話，`check_retired_rule_xmlid` 哪天被
+        改成對某些名字放行也不會有訊號。
+        """
+        for xmlid in RETIRED_RULE_XMLIDS_FLOOR:
+            with self.subTest(xmlid=xmlid):
+                self.assertIn(
+                    xmlid, rl.RETIRED_RULE_XMLIDS,
+                    "`%s` 不在 RETIRED_RULE_XMLIDS 裡了 ⇒ fresh install 會照 "
+                    "src/security/ir_rules.xml 重建這條退役 rule，而已升級環境的 "
+                    "migration 只跑一次不會再刪它 ⇒ 授權洞在新裝環境無聲重開。"
+                    "要恢復這條規則請走**新 xmlid ＋ 新 migration**，不要把名字從"
+                    "清單拿掉（#675 覆核 F2）" % xmlid)
+                fixture = self._fixture_with(xmlid)
+                got = fixture.retired()
+                self.assertTrue(
+                    any(xmlid in v for v in got),
+                    "把 `<record id=\"%s\">` 放回去，② 卻沒有報違規 ⇒ 這個名字雖然"
+                    "登記著，gate 對它沒有實際攔截行為：%s" % (xmlid, blob(got)))
 
     def test_a_live_rule_with_a_different_name_is_green(self):
         """特異性：新 xmlid（#556 的替代規則）不得被誤擋。"""
@@ -781,6 +1151,219 @@ class TestDirectionExistence(unittest.TestCase):
 
 
 # ------------------------------------------------------------ ③ 訊息不得寫死會過期的值
+
+class TestWorkspaceModelDirectionAnchor(unittest.TestCase):
+    """④ `check_workspace_rule_directions` 的**錨點**——唯一 ③ 涵蓋不到的那一格。
+
+    ④ 與 ③ 共用 `_rule_direction_violations`，判準那一半由 ③ 的測試守著。④ 自己
+    獨有的只有一個輸入：`WORKSPACE_MODEL_REF`（要看 workspace **本體**，不是
+    workspace_access）。把它指錯 ⇒ selector 永不命中 ⇒ ④ 永遠回 `[]`、`--all` 照樣
+    把它列進通過清單 ＝ 一條看起來在守、實際沒在跑的 no-op gate。
+
+    🔴 ③ 的測試**結構上不可能**抓到這個：它們注入的全是 `workspace_access` 的
+    record，④ 指錯 model 時那些測試一條都不會變色。所以這裡只需要**一支**測試，
+    但它必須錨在那個區別點上——注入 workspace **本體**那條 manage rule 的缺陷，
+    斷言 ④ 轉紅**而且訊息點名 workspace 本體的 model**。
+
+    ⚠ 這支也是「就地突變再跑」的形態 —— 見檔頭 `.pyc` 那一段的配方
+    （本檔的注入都在 tempfile 假 root 上做，不動真檔案，所以不受那個陷阱影響；
+    受影響的是**改 `repo-lint.py` 自己**的那種突變）。
+    """
+
+    MANAGE_RULE = "workspace_rule_owner_admin_manage"
+
+    def test_flipping_the_workspace_manage_rule_reds_gate4_and_names_the_workspace_model(self):
+        fixture = Fixture.from_real(self)
+        self.assertEqual(rl.check_workspace_rule_directions(fixture.root), [],
+                         "注入前就紅了——基準壞掉")
+        clean = fixture.text()
+
+        # 注入：把 workspace 本體 manage rule 的 perm_write 翻掉（注入工具自帶絆線，
+        # 錨點沒命中會 raise InjectionFailed 而不是靜默回傳未突變的原始碼）。
+        fixture.flip_perm(self.MANAGE_RULE, "perm_write")
+
+        got = rl.check_workspace_rule_directions(fixture.root)
+        # 🔴 下面這兩行是「錨點漂到**第三個** model」那一格的唯一守衛（gate 層攔不
+        #    住，見 repo-lint.py `_rule_direction_anchor_violations` 的「已知殘留」
+        #    段）。它們有效的理由是上面那個注入錨在**寫死的 MANAGE_RULE xmlid**
+        #    ——錨點一漂，翻 workspace manage rule 的 perm_write 就打空 ⇒ got 縮成
+        #    [] ⇒ 第一行紅；漂到一個剛好也缺方向的 model 時 len(got) 仍可能是 1，
+        #    那時由第二行（訊息點的方向對不上）接手。
+        #    ⇒ 不要「簡化」掉這兩行，也不要把 MANAGE_RULE 改成從 WORKSPACE_MODEL_REF
+        #    推導（注入會跟著錨點一起漂，這一格就沒有守衛了）。
+        self.assertEqual(len(got), 1, "④ 應該恰好報一條（perm_write）：%s" % blob(got))
+        self.assertIn("perm_write", got[0], "訊息沒點名是哪個方向")
+        # ⚠ 下面這行是**自我指涉**的：違規訊息本來就把 `model_ref` 內插進去，而這裡
+        #    讀的就是同一個常數 ⇒ 只要 got 非空它就恆綠，對錨點漂移零鑑別力。**不是
+        #    它在守這一格**（#675 覆核 §1.1）。真的把「錨點沒指到 ③ 那個 model」釘住
+        #    的是再下一行的 assertNotIn——它讀的是**另一個**常數，所以會紅。
+        self.assertIn(rl.WORKSPACE_MODEL_REF, got[0],
+                      "訊息沒點名 workspace **本體** 的 model——④ 的錨點可能指錯了")
+        self.assertNotIn(rl.WORKSPACE_ACCESS_MODEL_REF, got[0],
+                         "④ 報的是 workspace_access ⇒ 錨點指到 ③ 的 model 了")
+
+        # 特異性：同一個注入不得讓 ③ 變色（證明兩條 gate 的錨點真的分開）。
+        self.assertEqual(
+            rl.check_workspace_access_rule_directions(fixture.root), [],
+            "動 workspace 本體的 rule 卻讓 ③ 也紅了 ⇒ 兩條 gate 的 model 錨點沒有分開")
+
+        fixture.write(fixture.rel, clean)
+        self.assertEqual(rl.check_workspace_rule_directions(fixture.root), [],
+                         "還原後仍紅——紅的原因不是注入，是 fixture／環境")
+
+    # ------------------------------------------------------------------ #
+    #  #675 覆核 F1：錨點被**複製貼上**成姊妹 check 的值時的靜默退化          #
+    # ------------------------------------------------------------------ #
+    #  上面那一支守的是「錨點指到一個沒有 rule 的地方」（打錯字形態）。它對
+    #  **複製貼上**形態零鑑別力：`WORKSPACE_MODEL_REF` 被改成
+    #  `WORKSPACE_ACCESS_MODEL_REF` 的值之後，④ 看的是 ③ 那組真的存在、真的有
+    #  rule 的 record ⇒ 三個方向全被涵蓋、上面那支的注入（翻 workspace 本體 manage
+    #  rule 的 perm_write）對它一點影響都沒有 ⇒ **綠**。覆核者實測到底：再把
+    #  workspace 本體四條 rule 全刪掉，`--all` 仍然 EXIT=0。
+    #  ⇒ 打錯字會紅、複製貼上不會，而相鄰宣告的兩個常數＋共用實作正是誘發複製貼上
+    #  的形態（#612／#613 的「兩層判準退化成一層」同型）。
+
+    def _workspace_rule_xmlids(self, root):
+        """真樹上綁在 workspace **本體**的 ir.rule xmlid（從真相源推導，不寫死名字）。
+
+        寫死那四個名字會讓這幾支在「規則正當改名」的當天紅在錯的地方（本檔已經被
+        `18.0.1.0.122` 那種寫死版號咬過一次，見 `retirement_migration`）。
+        """
+        records, _ = rl.module_record_declarations(root)
+        return sorted({r["xmlid"] for r in records
+                       if r["model"] == rl.IR_RULE_MODEL
+                       and rl._rule_model_ref(r["fields"]) == rl.WORKSPACE_MODEL_REF})
+
+    def test_the_anchor_patch_actually_reaches_the_gate(self):
+        """絆線：`anchor_temporarily` 這種改法必須真的影響判定。
+
+        下面兩支都靠「改模組層常數 → gate 轉紅」來驗。如果 gate 哪天把錨點在 import
+        當下就綁進 closure／預設參數，setattr 就再也影響不到它 ⇒ 那兩支會靜默退化成
+        「注入根本沒發生」，而輸出與「gate 正確」完全相同。所以先用一個**不需要
+        F1 修法也一定會紅**的錨點（指到一個不存在的 model）證明這條路是通的。
+        """
+        fixture = Fixture.from_real(self)
+        self.assertEqual(rl.check_workspace_rule_directions(fixture.root), [],
+                         "注入前就紅了——基準壞掉")
+        anchor_temporarily(self, WORKSPACE_MODEL_REF="model_no_such_model_at_all")
+        got = rl.check_workspace_rule_directions(fixture.root)
+        self.assertTrue(got, "改掉模組層錨點常數之後 gate 沒有任何反應 ⇒ 它不是在呼叫"
+                             "當下讀這個常數，下面兩支的注入手法已經失效")
+        self.assertTrue(
+            any("model_no_such_model_at_all" in v for v in got),
+            "紅了但訊息裡沒有注入的值 ⇒ 紅的原因可能不是這次注入：%s" % blob(got))
+
+    def test_an_anchor_pointing_at_a_model_with_no_declared_rule_says_the_anchor_is_broken(self):
+        """錨點對不到任何**宣告出來的** ir.rule ⇒ 必須說「錨點壞了」。
+
+        沒有這一層，同一個症狀只會產生三條「這個方向沒人守」——而那句話會把讀的人
+        導向「去補 rule」，實際該做的是改常數。兩種病因的修法相反，訊息必須分得開。
+        """
+        fixture = Fixture.from_real(self)
+        anchor_temporarily(self, WORKSPACE_MODEL_REF="model_woow_paas_platform_workspaces_typo")
+        got = rl.check_workspace_rule_directions(fixture.root)
+        self.assertTrue(
+            any("錨點" in v and "對不到任何" in v for v in got),
+            "沒有任何一條違規說是錨點壞了：%s" % blob(got))
+
+    def test_copy_pasting_the_sibling_anchor_over_this_one_is_red_from_both_gates(self):
+        """🔴 #675 覆核 F1 的直接回歸：兩個錨點相同 ⇒ ③ 與 ④ **兩條都要紅**。
+
+        兩條 check 互相把對方的常數當 `sibling_ref` 傳進去，所以不論被複製貼上的是
+        哪一個常數，兩條都會報。單向傳的話只有一條會紅，而報紅的會是「被抄走的
+        受害者」那一條——訊息指向錯的地方。
+        """
+        fixture = Fixture.from_real(self)
+        self.assertEqual(rl.check_workspace_rule_directions(fixture.root), [],
+                         "注入前就紅了——基準壞掉")
+        self.assertEqual(rl.check_workspace_access_rule_directions(fixture.root), [],
+                         "注入前就紅了——基準壞掉")
+
+        anchor_temporarily(self, WORKSPACE_MODEL_REF=rl.WORKSPACE_ACCESS_MODEL_REF)
+
+        for name, got in (
+                ("④ workspace 本體", rl.check_workspace_rule_directions(fixture.root)),
+                ("③ workspace_access", rl.check_workspace_access_rule_directions(fixture.root))):
+            with self.subTest(gate=name):
+                self.assertTrue(
+                    any("同一個值" in v for v in got),
+                    "%s 沒有報「兩個錨點是同一個值」——複製貼上形態靜默通過了：%s"
+                    % (name, blob(got)))
+
+    def test_the_copy_pasted_anchor_stays_red_even_with_every_workspace_rule_deleted(self):
+        """🔴 覆核者實測到底的那一格：M5 ＋ 四條 rule 全刪，原本 `--all` 仍 EXIT=0。
+
+        這一支把那個組合釘死成紅。它與上一支不是重複：上一支證明「複製貼上會紅」，
+        這一支證明「複製貼上**掩蓋不了**真正的缺口」——後者才是 F1 的實際後果
+        （四條授權規則整組消失卻沒有任何訊號）。
+        """
+        fixture = Fixture.from_real(self)
+        names = self._workspace_rule_xmlids(fixture.root)
+        self.assertTrue(
+            names,
+            "真樹上綁在 %s 的 ir.rule 一條都沒有——前提不成立，下面的「刪掉」是空操作"
+            % rl.WORKSPACE_MODEL_REF)
+        for xmlid in names:
+            fixture.drop_record(xmlid)          # 自帶絆線：沒命中會 raise
+        self.assertEqual(
+            self._workspace_rule_xmlids(fixture.root), [],
+            "四條 rule 沒有真的被刪光——注入失效")
+
+        anchor_temporarily(self, WORKSPACE_MODEL_REF=rl.WORKSPACE_ACCESS_MODEL_REF)
+        got = rl.check_workspace_rule_directions(fixture.root)
+        self.assertTrue(
+            got,
+            "workspace 本體的 ir.rule 已經一條不剩，④ 卻回零違規——它正在看 ③ 那組 "
+            "record（#675 覆核 F1 實測的 EXIT=0 形態又回來了）")
+
+    def test_the_two_direction_gates_look_at_disjoint_non_empty_rule_sets(self):
+        """真樹上的存在性：兩個錨點互異，而且各自真的有 ir.rule 在身上。
+
+        ⚠ **這一支不守「錨點漂到第三個 model」那一格**，別照名字讀成它在守：它只是
+        拿兩個常數**當下的值**去真樹上取集合，所以錨點漂到另一個「也有 rule 的」
+        model 時，互異仍成立、兩邊仍非空、仍不相交 ⇒ 三條斷言全綠。守那一格
+        的是上面那支注入測試的 `assertEqual(len(got), 1)` ＋
+        `assertIn("perm_write", got[0])`，理由寫在那裡的註解與 `repo-lint.py`
+        `_rule_direction_anchor_violations` 的「已知殘留」段（#675 覆核 §1.1）。
+
+        逐條寫清楚這裡各自證了什麼，免得下一個人以為三條都在出力：
+
+          * `assertNotEqual`（互異）——與 gate 第一層同判準，這裡是測試層的 floor。
+          * `assertTrue(names)`（各自有靶）——與 gate 第二層同判準，同上。只有注入
+            測試的話，一份把錨點指到「沒有任何 rule 的 model」的樹仍可能全綠，因為
+            每支注入只證明「某個特定的改壞會紅」。
+          * `assertEqual(A & B, set())`（不相交）——**是前一條的定理，不是獨立檢查**：
+            `rl._rule_model_ref()` 對每一筆 record 只回**一個**值，所以只要兩個錨點
+            互異，兩個集合就必然不相交；`assertNotEqual` 先跑，它綠了這行不可能紅。
+            留著當那條不變式的自我說明，不要把它算進涵蓋率。
+
+        判準寫在**不變式層**而不是形態層（不點名那四個 xmlid）：規則正當改名的當天，
+        形態層的版本會紅在完全錯誤的地方。
+        """
+        root = str(_REPO_ROOT)
+        records, errors = rl.module_record_declarations(root)
+        self.assertEqual(errors, [], "有 XML parse 不了，下面的集合都不可信")
+        by_anchor = {}
+        for ref in (rl.WORKSPACE_MODEL_REF, rl.WORKSPACE_ACCESS_MODEL_REF):
+            by_anchor[ref] = {r["xmlid"] for r in records
+                              if r["model"] == rl.IR_RULE_MODEL
+                              and rl._rule_model_ref(r["fields"]) == ref}
+
+        self.assertNotEqual(
+            rl.WORKSPACE_MODEL_REF, rl.WORKSPACE_ACCESS_MODEL_REF,
+            "兩條 direction gate 的 model 錨點是同一個值 ⇒ 第 25 條退化成第 23 條的"
+            "複本（#675 覆核 F1）")
+        for ref, names in sorted(by_anchor.items()):
+            with self.subTest(model_ref=ref):
+                self.assertTrue(
+                    names,
+                    "`%s` 在真樹上對不到任何一條宣告出來的 ir.rule——這條 gate 的"
+                    "負向判準在空集合上恆真，它現在是 no-op" % ref)
+        self.assertEqual(
+            by_anchor[rl.WORKSPACE_MODEL_REF] & by_anchor[rl.WORKSPACE_ACCESS_MODEL_REF],
+            set(),
+            "兩條 gate 看的是同一批 record ⇒ 它們不是兩層判準，是同一層的兩個名字")
+
 
 class TestViolationMessageDoesNotAssertStaleFacts(unittest.TestCase):
     """訊息裡的 ACL 值必須是**讀出來的**，不是寫死的（#659 驗收 F3）。
@@ -928,6 +1511,17 @@ class TestInjectionToolTripwires(unittest.TestCase):
                                           grandfathered=False))
         with self.assertRaises(InjectionFailed):
             fixture.insert_into_noupdate_block(rule_xml("x"))
+
+    def test_appending_a_noupdate_block_without_the_closing_root_raises(self):
+        """`append_noupdate_block` 的絆線也要被測到。
+
+        新的注入工具與舊的一樣，錨點失效時必須 **raise** 而不是靜默回傳一份未突變的
+        原始碼——那會讓 F3 那支把「東西根本沒注入」讀成「gate 沒抓到」（兩者的輸出
+        都是 `0 != 1`）。注入工具本身沒有絆線的話，絆線哲學只寫在 docstring 裡。
+        """
+        fixture = Fixture(self, '<?xml version="1.0"?>\n<odoo>\n')
+        with self.assertRaises(InjectionFailed):
+            fixture.append_noupdate_block(rule_xml("x"))
 
     def test_flip_touches_only_the_target_record(self):
         """陽性對照：翻 perm 位只該動目標那一顆，不該掃到全檔的同名字串。"""

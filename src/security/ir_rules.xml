@@ -1,31 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <odoo>
-    <data noupdate="1">
-        <!-- Workspace: Users can read/write workspaces where they are members -->
-        <record id="workspace_rule_member_access" model="ir.rule">
-            <field name="name">Workspace: member access only</field>
-            <field name="model_id" ref="model_woow_paas_platform_workspace"/>
-            <field name="domain_force">[('access_ids.user_id', '=', user.id)]</field>
-            <field name="groups" eval="[(4, ref('base.group_user'))]"/>
-            <field name="perm_read" eval="True"/>
-            <field name="perm_write" eval="True"/>
-            <field name="perm_create" eval="False"/>
-            <field name="perm_unlink" eval="False"/>
-        </record>
-
-        <!-- Workspace: Any user can create new workspaces -->
-        <record id="workspace_rule_create" model="ir.rule">
-            <field name="name">Workspace: anyone can create</field>
-            <field name="model_id" ref="model_woow_paas_platform_workspace"/>
-            <field name="domain_force">[(1, '=', 1)]</field>
-            <field name="groups" eval="[(4, ref('base.group_user'))]"/>
-            <field name="perm_read" eval="False"/>
-            <field name="perm_write" eval="False"/>
-            <field name="perm_create" eval="True"/>
-            <field name="perm_unlink" eval="False"/>
-        </record>
-
-    </data>
+    <!-- (#658) 這個檔案曾經以一個 <data noupdate="1"> 區塊開頭，裡面住著
+         workspace_rule_member_access（perm_write=True、domain 無 role 條件）與
+         workspace_rule_create。兩條都已由 src/migrations/18.0.1.0.131/post-migrate.py
+         DELETE 退役，取代它們的四條規則宣告在下面的 <data noupdate="0"> 區塊。
+         這兩個 xmlid 已列入 scripts/audit/repo-lint.py 的 RETIRED_RULE_XMLIDS，
+         不得以 <record> 復活（fresh install 會照 XML 重建 ⇒ 洞無聲重開）。 -->
 
     <!-- Refactor-managed rules (noupdate=0): module owns the definitive domain,
          so module updates re-apply edits. Admin tweaks here will be reverted on
@@ -305,8 +285,10 @@
              into two rules per model so read direction stays universally true
              for system-scope (Invariant #6) while create/write/unlink are
              scoped to user-scope rows in the caller's own workspace. Pattern
-             mirrors workspace_rule_member_access + workspace_rule_create
-             above. Migration 18.0.1.0.24 step 5 retires the old two xmlids
+             mirrors workspace_rule_member_read + workspace_rule_anyone_create
+             above (那兩個名字在 #658 之前叫 workspace_rule_member_access /
+             workspace_rule_create，已退役——見檔頭註解). Migration
+             18.0.1.0.24 step 5 retires the old two xmlids
              to prevent OR-combine with these new rules on `-u`. -->
 
         <!-- McpServer: system-scope is universally READABLE only (Invariant #6).
@@ -662,6 +644,82 @@
             <field name="perm_read" eval="True"/>
             <field name="perm_write" eval="True"/>
             <field name="perm_create" eval="True"/>
+            <field name="perm_unlink" eval="True"/>
+        </record>
+
+        <!-- workspace (#658 — retires workspace_rule_member_access /
+             workspace_rule_create, formerly in the noupdate="1" block at the top
+             of this file; see src/migrations/18.0.1.0.131/post-migrate.py for why
+             those two had to be DELETEd rather than edited in place).
+
+             退役的那條 member_access 是 perm_read + perm_write 合一、domain 只有
+             `access_ids.user_id`、完全沒有 role 條件 ⇒ 任何 guest／user 成員都能
+             寫 workspace 本體，包含 `owner_id`（訂閱帳單 partner 與 max_per_partner
+             配額的錨）與 `slug`（K8s namespace／公開 subdomain 的唯一輸入）。讀寫
+             在此拆開：讀維持全體成員，寫收窄到 owner/admin。
+
+             domain 一律用 `('access_ids', 'any', [...])` 而不是 `access_ids.role`
+             點鏈：點鏈在一個 workspace 有多列 access 時是**跨列**匹配（A 列滿足
+             user_id、B 列滿足 role），等於沒有 role 條件。這是 #556 的根因之一。
+
+             刻意**沒有** workspace_rule_admin_full（本檔 13 個自有 model 的 ir.rule
+             裡有 11 個配了一條；另一個沒有的是 cloud_service——實際數過，不要寫成
+             「其他每個 model 都有」）：
+             那會把 base.group_system 從「只看得到自己是成員的 workspace」放寬成
+             全部可見，而本次是收窄授權的安全修復，同一個 PR 裡混入擴權會讓覆核
+             無法分辨兩者。今天也沒有任何流程需要它——平台管理員若真要接手某個
+             workspace，已可經 workspace_access_rule_admin_full 建立自己的成員列
+             （那條規則本來就給 group_system 全 CRUD），或直接走 sudo。 -->
+
+        <record id="workspace_rule_member_read" model="ir.rule">
+            <field name="name">Workspace: workspace member read</field>
+            <field name="model_id" ref="model_woow_paas_platform_workspace"/>
+            <field name="domain_force">[('access_ids', 'any', [('user_id', '=', user.id)])]</field>
+            <field name="groups" eval="[(4, ref('base.group_user'))]"/>
+            <field name="perm_read" eval="True"/>
+            <field name="perm_write" eval="False"/>
+            <field name="perm_create" eval="False"/>
+            <field name="perm_unlink" eval="False"/>
+        </record>
+
+        <record id="workspace_rule_owner_admin_manage" model="ir.rule">
+            <field name="name">Workspace: workspace owner/admin manage</field>
+            <field name="model_id" ref="model_woow_paas_platform_workspace"/>
+            <field name="domain_force">[('access_ids', 'any', [('user_id', '=', user.id), ('role', 'in', ['owner', 'admin'])])]</field>
+            <field name="groups" eval="[(4, ref('base.group_user'))]"/>
+            <field name="perm_read" eval="True"/>
+            <field name="perm_write" eval="True"/>
+            <field name="perm_create" eval="False"/>
+            <field name="perm_unlink" eval="False"/>
+        </record>
+
+        <record id="workspace_rule_anyone_create" model="ir.rule">
+            <field name="name">Workspace: anyone can create</field>
+            <field name="model_id" ref="model_woow_paas_platform_workspace"/>
+            <field name="domain_force">[(1, '=', 1)]</field>
+            <field name="groups" eval="[(4, ref('base.group_user'))]"/>
+            <field name="perm_read" eval="False"/>
+            <field name="perm_write" eval="False"/>
+            <field name="perm_create" eval="True"/>
+            <field name="perm_unlink" eval="False"/>
+        </record>
+
+        <!-- unlink 方向今天由 ACL 擋死（ir.model.access.csv 的 access_workspace_user
+             給 base.group_user 的 perm_unlink=0），所以這條規則今天不放行任何東西
+             ——ir.rule 只會**限縮**、不會授予。存在的理由是縱深防禦＋讓 repo-lint
+             的方向存在性 gate（check_workspace_rule_directions）能涵蓋 unlink：
+             ACL 日後若被放寬，規則層必須已經在，否則 `_get_rules` 對租戶查無 rule
+             ⇒ `_compute_domain` 回空 domain ＝ 該方向在規則層完全不設限。
+             收到 owner 而不是 owner/admin，是對齊 get_role_permissions() 宣告的
+             產品意圖（ROLE_ADMIN 的 can_delete=False，只有 owner 是 True）。 -->
+        <record id="workspace_rule_owner_unlink" model="ir.rule">
+            <field name="name">Workspace: owner may unlink (defence in depth; ACL blocks today)</field>
+            <field name="model_id" ref="model_woow_paas_platform_workspace"/>
+            <field name="domain_force">[('access_ids', 'any', [('user_id', '=', user.id), ('role', '=', 'owner')])]</field>
+            <field name="groups" eval="[(4, ref('base.group_user'))]"/>
+            <field name="perm_read" eval="False"/>
+            <field name="perm_write" eval="False"/>
+            <field name="perm_create" eval="False"/>
             <field name="perm_unlink" eval="True"/>
         </record>
 

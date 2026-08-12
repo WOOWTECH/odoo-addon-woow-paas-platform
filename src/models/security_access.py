@@ -316,17 +316,22 @@ class SecurityAccess(models.Model):
         )
 
     def _generate_canonical_name(self):
+        """#677：hash 種子是 workspace 的 **stored** `ws_hash`，不是 `slug`。
+
+        `slug` 由租戶提供的 `name` 逐字決定，而舊種子是它的 `md5[:8]`（32-bit
+        截斷）⇒ 租戶搜得出一個 name，讓自己的 SA 子網域落在受害者的 ws_hash 段上。
+        原本「slug 空就退回 `name.lower()`」的 fallback 一併移除：`workspace_id` 是
+        `required=True`，而靜默退回 name 推導正是這個洞的形狀；ws_hash 缺值交給
+        `naming.py::_require_ws_hash` fail-loud。
+        """
         self.ensure_one()
-        workspace = self.workspace_id
-        slug = (workspace.slug if hasattr(workspace, 'slug') and workspace.slug
-                else workspace.name.lower().replace(' ', '-'))
         # L3: 注入 env token（prod=空 token、stg=paas-stg-sa-）。env 來源為顯式
         # config_parameter，不從 namespace_prefix 隱式推導。token 只在 create 首算
         # 一次寫入（見 create()），事後 immutable（write guard），故跨 prod/stg 不漂移。
         deploy_env = self.env['ir.config_parameter'].sudo().get_param(
             'woow_paas_platform.deploy_env', 'prod')
         return make_security_access_subdomain(
-            slug, self.reference_id, self.name, env=deploy_env)
+            self.workspace_id.ws_hash, self.reference_id, self.name, env=deploy_env)
 
     @api.model_create_multi
     def create(self, vals_list):

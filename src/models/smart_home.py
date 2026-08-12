@@ -120,10 +120,20 @@ class SmartHome(models.Model):
             )
         return client
 
-    def _naming_slug(self):
-        """Workspace slug used as the stable hash seed for Cloudflare naming."""
-        workspace = self.workspace_id
-        return workspace.slug if hasattr(workspace, 'slug') else workspace.name.lower().replace(' ', '-')
+    def _naming_ws_hash(self):
+        """Workspace 的 **stored** namespace 身分碼，Cloudflare 命名的 hash 種子。
+
+        #677 之前這裡回的是 `workspace.slug`，而 slug 由租戶提供的 `name` 逐字決定、
+        namespace 是它的 `md5[:8]`（32-bit 截斷）⇒ 租戶可以讓自己的子網域落在別人
+        的 ws_hash 段上。現在回 stored `ws_hash`（伺服器產生、DB `UNIQUE`）。
+
+        原本那個「`slug` 取不到就退回 `name.lower()`」的 fallback 一併移除：
+        `workspace_id` 是 `required=True`，該分支在空 recordset 上本來就會炸
+        （`False.lower()`）；而讓它靜默退回 name 推導，正是這個洞的形狀。ws_hash
+        缺值時交給 `naming.py::_require_ws_hash` fail-loud（fail-closed，不會產出
+        `paas-sm-False-...`）。
+        """
+        return self.workspace_id.ws_hash
 
     def _generate_subdomain(self):
         """Generate the public subdomain (= user-facing hostname base).
@@ -133,7 +143,7 @@ class SmartHome(models.Model):
         mutating the hostname (DP2). The env token rides the internal tunnel
         name instead — see ``_generate_tunnel_name``.
         """
-        return make_smarthome_subdomain(self._naming_slug(), self.reference_id, self.name)
+        return make_smarthome_subdomain(self._naming_ws_hash(), self.reference_id, self.name)
 
     def _generate_tunnel_name(self):
         """Generate the Cloudflare *tunnel display name*, carrying the deploy-env token.
@@ -154,7 +164,7 @@ class SmartHome(models.Model):
         env = self.env['ir.config_parameter'].sudo().get_param(
             'woow_paas_platform.deploy_env', 'prod')
         return make_smarthome_subdomain(
-            self._naming_slug(), self.reference_id, self.name, env=env)
+            self._naming_ws_hash(), self.reference_id, self.name, env=env)
 
     def _get_paas_domain(self):
         """Get PaaS domain from system settings."""
