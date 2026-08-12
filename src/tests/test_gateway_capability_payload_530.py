@@ -19,7 +19,7 @@
     若有人把 slug 對照表搬回來，這支會回 False。
   * B：slug 是 ``hermes-agent``、``has_admin_gui=True``，但 seed **沒有** gateway
     → 必須 False。若有人拿 ``has_admin_gui`` 當交付判準（＝ #530 review 抓到的
-    原缺陷：8 個 has_admin_gui=True 的模板裡只有 1 個真有 gateway，其餘 7 個的
+    原缺陷：has_admin_gui=True 的模板裡只有 hermes-agent 真有 gateway，其餘的
     租戶會被告知一件永遠不會發生的事），這支會回 True。
   * C：seed 有 gateway 但服務沒有 subdomain → False（判準是**完整網址**組不組得
     出來，不是「chart 有沒有這個鍵」）。
@@ -153,7 +153,7 @@ class TestGatewayCapabilityPayload530(TransactionCase):
         這支是原缺陷的雙生：前端文案原本判 ``hasAdminGui``，而 has_admin_gui=True
         的 8 個模板（mcp-odoo／mcp-odoo-manage／mcp-n8n／mcp-k8s／mcp-vk／
         mcp-opendesign／open-design／hermes-agent）中只有 hermes-agent 真的有
-        gateway ⇒ 其餘 7 個的租戶被告知「Reset 會一併換發 Gateway API Key」，
+        gateway ⇒ 其餘的租戶被告知「Reset 會一併換發 Gateway API Key」，
         而那件事永遠不會發生。
         """
         template = self._make_template('hermes-agent', has_admin_gui=True,
