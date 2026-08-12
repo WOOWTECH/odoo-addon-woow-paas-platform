@@ -34,13 +34,65 @@
             <field name="perm_unlink" eval="False"/>
         </record>
 
-        <!-- CloudService: only workspace members may see / mutate services in that ws.
+        <!-- CloudService: only workspace members may see services in that ws.
              Plugs the pre-existing ACL gap surfaced by D2=A — Task form's M2M widget
-             walks ORM directly, so a controller-only filter is insufficient. -->
-        <record id="cloud_service_rule_workspace_member" model="ir.rule">
-            <field name="name">CloudService: workspace member access only</field>
+             walks ORM directly, so a controller-only filter is insufficient.
+
+             (#676 — retires `cloud_service_rule_workspace_member`, which was
+             perm_read/write/create/unlink **all True** with domain
+             `[('workspace_id.access_ids.user_id', '=', user.id)]` and **no role
+             condition** ⇒ any member, including `role='guest'`, had full CRUD over
+             every service in that workspace — `unlink` included, which runs
+             `CloudService.unlink()`'s helm teardown (irreversible). The model layer
+             adds nothing: `cloud_service.py`'s create/write/unlink overrides carry
+             only integrity and cleanup logic, and `ir.model.access.csv` grants
+             base.group_user 1,1,1,1 ⇒ **the ir.rule is the only line of defence**.
+             `write()`'s own comment had already written down the fix (#519): "根因是
+             租戶對本 model 有直接 write 權…正解是收緊 ACL".
+
+             ⚠ 退役方式與 #556／#658 不同，**不需要 migration**：那兩次的舊 rule 出生在
+             `<data noupdate="1">`（sticky，改 XML 修不動，只能 DELETE）；這一條住在本檔
+             唯一的 `<data noupdate="0">` 區塊裡，所以從 XML 移除後由 Odoo 自己清掉——
+             `ir_model_data._process_end` 只掃 `COALESCE(noupdate, false) != True` 的列，
+             不在 `loaded_xmlids` 裡的直接 unlink。也因此**刻意不列入** repo-lint 的
+             `RETIRED_RULE_XMLIDS`：那份清單的語意是「sticky、只能靠 migration DELETE」，
+             它的違規訊息寫死了「已用 migration X DELETE 退役」，塞進去會讓 gate 吐出一句
+             對本條為假的話。防復活由行為測試承擔（ir.rule 是 OR 語意 ⇒ 把那條全開 rule
+             帶回來，guest 立刻又寫得動 ⇒ `test_cloud_service_authz_676.py` 的 A1-A6 會紅）。
+
+             界線（Eugene 拍板）：guest/user 讀；owner/admin 讀寫建刪。**不放寬到 user**
+             ——controller 的 create/update/delete 三個 gate（`paas.py`）今天都已經是
+             owner/admin，放寬 ORM 層會讓它比 UI 更鬆。
+
+             🔴 收窄這一條會連帶影響**讀取**端點：poll（`_update_service_status` 與其下游
+             `_run_post_deploy_init`）只被 `_list_services` / `_get_service` 呼叫，而那兩個
+             分支沒有 role gate ⇒ 那條路徑的寫入已改走系統身分，見 `paas.py` 的 #676 註解。
+             刪掉那邊的 `sys_service`，租戶的服務會**永遠停在轉移態**——而且不會有任何
+             錯誤浮出來：`_update_service_status` 的 catch-all 把 AccessError 降級成
+             warning log，端點照樣回 success（中間狀態實測）。 -->
+        <record id="cloud_service_rule_member_read" model="ir.rule">
+            <field name="name">CloudService: workspace member read</field>
             <field name="model_id" ref="model_woow_paas_platform_cloud_service"/>
-            <field name="domain_force">[('workspace_id.access_ids.user_id', '=', user.id)]</field>
+            <!-- `any` 而非點鏈：這條今天只有一個條件、兩種寫法等價，但與下面那條寫成
+                 同一形態，(a) 讀者不會以為形態差異帶有語意，(b) 日後有人往這裡加第二個
+                 條件時不會落進跨列匹配的陷阱（#556 根因之一）。 -->
+            <field name="domain_force">[('workspace_id.access_ids', 'any', [('user_id', '=', user.id)])]</field>
+            <field name="groups" eval="[(4, ref('base.group_user'))]"/>
+            <field name="perm_read" eval="True"/>
+            <field name="perm_write" eval="False"/>
+            <field name="perm_create" eval="False"/>
+            <field name="perm_unlink" eval="False"/>
+        </record>
+
+        <!-- 寫入方向收窄到 owner/admin。domain 用 `('workspace_id.access_ids', 'any', […])`
+             把 `user_id` 與 `role` 綁在**同一列** access 上——寫成
+             `workspace_id.access_ids.role` 點鏈的話是**跨列**匹配（A 列滿足 user_id、
+             B 列滿足 role），一個 workspace 只要同時有 owner 和 guest 兩列，guest 就通過，
+             等於沒有 role 條件。這是 #556 的根因之一。 -->
+        <record id="cloud_service_rule_owner_admin_manage" model="ir.rule">
+            <field name="name">CloudService: workspace owner/admin manage</field>
+            <field name="model_id" ref="model_woow_paas_platform_cloud_service"/>
+            <field name="domain_force">[('workspace_id.access_ids', 'any', [('user_id', '=', user.id), ('role', 'in', ['owner', 'admin'])])]</field>
             <field name="groups" eval="[(4, ref('base.group_user'))]"/>
             <field name="perm_read" eval="True"/>
             <field name="perm_write" eval="True"/>
