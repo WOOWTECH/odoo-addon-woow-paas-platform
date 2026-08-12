@@ -3577,6 +3577,35 @@ class PaasController(HiddenChainMixin, Controller):
                 _logger.debug("Service %s no longer exists, skipping status update", service_id)
                 return
 
+            # #676：poll 的**寫入**走系統身分，讀取仍走呼叫者身分。
+            #
+            # 為什麼需要：`cloud_service` 的 ir.rule 已把 write/create/unlink 收窄到
+            # workspace 的 owner/admin（`security/ir_rules.xml`）。但本函式的唯一兩個
+            # 呼叫端是 `_list_services` 與 `_get_service`，而它們所在的
+            # `action='list'` / `action='get'` 分支**沒有 role gate**（只有
+            # `workspace.check_user_access(user)`，gate 掛在 create/update/delete 分支
+            # 上）⇒ 任何成員（含 guest）都會走到這裡。
+            #
+            # 這裡寫的是 operator 回報的**叢集事實**（state / release facts /
+            # error_message），不是呼叫者的寫入意圖，所以提權不擴大使用者的控制面：
+            # 值全部來自 `client.get_status()`，呼叫者無法指定。cron 走的孿生實作
+            # `CloudService._poll_and_update_status` 本來就跑在排程身分下，本改動是
+            # 讓兩份實作在「用什麼身分寫」這件事上對齊。
+            #
+            # 🔴 不提權的話**不會有任何錯誤浮出來**：整個 try 區塊（`:3558` 起）被下面
+            # 的 `except Exception` 接住並降級成 warning log ⇒ 端點照樣回 success，
+            # 服務狀態卻永遠停在 deploying/upgrading/initializing，前台一直轉圈。
+            # 守線是 `tests/test_cloud_service_authz_676.py` 的 B 系列（斷言必須落在
+            # 「狀態有沒有推進」，落在「端點有沒有回 error」上會恆綠）。
+            #
+            # ⚠ 邊界刻意顯式且最小：只有 `sys_service` 這個名字底下的寫入被提權，
+            # 讀取（`service.state` / `service.template_id` / `service._is_release_ready`）
+            # 一律維持呼叫者身分。**不要**把下面的 `service` 全部換成 `sys_service`
+            # 圖省事——那會讓提權隱式流過整個子樹，下一個人看不出邊界在哪，也會順帶
+            # 蓋掉 `n8n_owner_password`（`groups='base.group_system'`）這類欄位級 ACL
+            # 今天實際擋著的東西。
+            sys_service = service.sudo()
+
             # Only proceed if state hasn't changed since we started
             if service.state != original_state:
                 _logger.debug(
@@ -3635,7 +3664,7 @@ class PaasController(HiddenChainMixin, Controller):
 
                     if needs_init and original_state == 'deploying':
                         # Pods ready but need post-deploy init → transition to initializing
-                        service.write({
+                        sys_service.write({
                             'state': 'initializing',
                             **release_facts,
                             'error_message': False,
@@ -3648,7 +3677,7 @@ class PaasController(HiddenChainMixin, Controller):
 
                     elif needs_init and original_state == 'upgrading' and service.addon_update_pending:
                         # Addon selection changed during upgrade → need module list refresh
-                        service.write({
+                        sys_service.write({
                             'state': 'initializing',
                             **release_facts,
                             'error_message': False,
@@ -3659,7 +3688,7 @@ class PaasController(HiddenChainMixin, Controller):
 
                     else:
                         # No init needed or already done → running.
-                        service.write({
+                        sys_service.write({
                             'state': 'running',
                             **release_facts,
                             'error_message': False,
@@ -3667,7 +3696,7 @@ class PaasController(HiddenChainMixin, Controller):
                 # else: still deploying/waiting for pods
 
             elif release_status == 'failed':
-                service.write({
+                sys_service.write({
                     'state': 'error',
                     **release_facts,
                     'error_message': release.get('description', 'Deployment failed'),
@@ -3684,7 +3713,10 @@ class PaasController(HiddenChainMixin, Controller):
                 service._log_not_ready(stuck_detail)
 
             if stuck_detail:
-                service._check_transition_timeout(stuck_detail)
+                # #676：`_check_transition_timeout` 逾時會 `write({'state': 'error', …})`
+                # （`models/cloud_service.py`），所以它也要走系統身分——判定用的
+                # `last_upgraded_at` 仍是從呼叫者身分讀到的同一筆記錄。
+                sys_service._check_transition_timeout(stuck_detail)
 
         except PaaSOperatorError as e:
             if e.status_code == 404:
@@ -3697,9 +3729,15 @@ class PaasController(HiddenChainMixin, Controller):
                     # MCP 刪除 → `super().unlink()` → 訂閱結算＋按比例退點），中途
                     # 拋錯就留下刪一半的狀態。而這一行在 `except` handler **內**：
                     # Python 不讓同層 sibling 的 `except Exception`（本函式末尾）
-                    # 接到它，例外直接逸出本函式，落到唯一可達的呼叫端
+                    # 接到它，例外直接逸出本函式，落到呼叫端
                     # `_list_services` 的 catch-all 被吞掉 → request 正常結束 →
                     # Odoo 照常 commit 那半套刪除，端點還回 `success: True`。
+                    #
+                    # 📌 #676 更正：呼叫端**不只** `_list_services`，還有
+                    # `_get_service`（detail 端點的 `action='get'`），而那一條
+                    # **沒有** catch-all ⇒ 同一個例外在 detail 端點上不是被吞掉、
+                    # 是直接變成 JSON-RPC error。原文寫「唯一可達的呼叫端」是漏數。
+                    # 兩個呼叫端都不帶 role gate，見下方 `sys_service` 的說明。
                     #
                     # 用 savepoint 而非 `cr.rollback()`：走到這裡之前，
                     # `_list_services` 的輪詢迴圈可能已對**其他**服務寫下
@@ -3707,8 +3745,16 @@ class PaasController(HiddenChainMixin, Controller):
                     # #525 留言「try 之前是否有要保留的寫入」→ 有 ⇒ 必須
                     # savepoint）。savepoint 只回捲這一次 teardown，例外照常往外
                     # 傳、服務留在 `deleting`，下一輪 poll 再重試。
+                    #
+                    # #676：teardown 走系統身分（同本函式主幹的 `sys_service`）。
+                    # 這裡的判定條件 `state == 'deleting'` 是**平台自己**先寫下的
+                    # （`_delete_service` 在 owner/admin gate 之後寫的），而觸發條件是
+                    # operator 回 404 ＝ release 已經不在叢集上——兩者呼叫者都影響不到，
+                    # 所以 guest 打 list 只能讓這件「cron 遲早也會做」的事早一點發生，
+                    # 不構成新的刪除通道。
+                    sys_service = service.sudo()
                     with request.env.cr.savepoint():
-                        service.unlink()
+                        sys_service.unlink()
             else:
                 _logger.warning("Error polling service status: %s", str(e))
 
@@ -3723,7 +3769,14 @@ class PaasController(HiddenChainMixin, Controller):
 
         On success: transitions to 'running' and auto-creates MCP server.
         On failure: increments retry counter; after 5 retries → 'error' state.
+
+        #676：狀態回寫走 `sys_service`（系統身分），理由與 `_update_service_status`
+        的 `sys_service` 同一條——本函式只從那裡被呼叫，而那條路徑的兩個端點
+        （list / get）沒有 role gate。同樣**只提權寫入**：`template` 與
+        `service.n8n_owner_*` 等讀取維持呼叫者身分。
         """
+        # 邊界在這一行；下面每一處寫入都掛在這個名字上，讀取一律用 `service`。
+        sys_service = service.sudo()
         template = service.template_id
 
         if template.post_deploy_init_type == 'n8n':
@@ -3775,10 +3828,19 @@ class PaasController(HiddenChainMixin, Controller):
                             merged_helm_values = self._deep_merge(current_values, api_key_nested)
                         except (json.JSONDecodeError, TypeError):
                             _logger.warning("Failed to update helm_values with real API key for service %s", service.name)
+                    # #676：原本是
+                    # `service._apply_helm_values(merged, extra_vals=update_vals)`。
+                    # 拆開的理由不是風格：`_apply_helm_values` 的 docstring 明寫
+                    # 「extra_vals 裡的其他欄位**刻意不提權**、走呼叫者自己的身分寫入，
+                    # 這樣 ir.rule 對它們照常生效——提權只落在 helm_values 這一格」。
+                    # 把系統身分的 recordset 餵進去，那句話在這條路徑上就變成假的，
+                    # 而它讀起來像全域保證。拆成「狀態回寫掛 sys_service、helm_values
+                    # 仍由 `_apply_helm_values` 自己提權」之後，那句宣稱維持全域為真，
+                    # 提權邊界也直接顯示在呼叫點上，不必到被呼叫函式裡才看得出來。
+                    # 順序與原本一致（先 extra_vals 再 helm_values）。
+                    sys_service.write(update_vals)
                     if merged_helm_values is not None:
-                        service._apply_helm_values(merged_helm_values, extra_vals=update_vals)
-                    else:
-                        service.write(update_vals)
+                        service._apply_helm_values(merged_helm_values)
                     _logger.info(
                         "n8n init succeeded for service %s, API key and helm_values updated",
                         service.name,
@@ -3795,7 +3857,7 @@ class PaasController(HiddenChainMixin, Controller):
                             'state': 'error',
                             'error_message': f'n8n initialization failed after {retries} retries: {error_msg}',
                         })
-                    service.write(vals)
+                    sys_service.write(vals)
                     _logger.warning(
                         "n8n init attempt %d failed for service %s: %s",
                         retries, service.name, error_msg,
@@ -3812,7 +3874,7 @@ class PaasController(HiddenChainMixin, Controller):
                         'state': 'error',
                         'error_message': f'n8n initialization failed: {str(e)}',
                     })
-                service.write(vals)
+                sys_service.write(vals)
                 _logger.warning(
                     "n8n init exception (attempt %d) for service %s: %s",
                     retries, service.name, e,
@@ -3831,7 +3893,7 @@ class PaasController(HiddenChainMixin, Controller):
                 )
 
                 if result.get('success'):
-                    service.write({
+                    sys_service.write({
                         'state': 'running',
                         'init_retries': 0,
                         'init_error': False,
@@ -3855,7 +3917,7 @@ class PaasController(HiddenChainMixin, Controller):
                             'state': 'error',
                             'error_message': f'Odoo initialization failed after {retries} retries: {error_msg}',
                         })
-                    service.write(vals)
+                    sys_service.write(vals)
                     _logger.warning(
                         "Odoo init attempt %d failed for service %s: %s",
                         retries, service.name, error_msg,
@@ -3872,7 +3934,7 @@ class PaasController(HiddenChainMixin, Controller):
                         'state': 'error',
                         'error_message': f'Odoo initialization failed: {str(e)}',
                     })
-                service.write(vals)
+                sys_service.write(vals)
                 _logger.warning(
                     "Odoo init exception (attempt %d) for service %s: %s",
                     retries, service.name, e,

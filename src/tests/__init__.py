@@ -352,3 +352,8 @@ from . import test_workspace_authz_658
 # 推導 ＋ namespace 是 md5(slug)[:8] 的 32-bit 截斷。改用 stored `ws_hash` 欄位
 # ＋ DB 層 UNIQUE（呼叫者身分的 search 在跨租戶下是瞎的）（HttpCase，group_user-only）
 from . import test_workspace_ns_hash_677
+# fix: #676 cloud_service 的 ir.rule 無 role 條件 ⇒ guest 成員可對該 workspace 的
+# 每一筆服務全 CRUD（含走 helm 清理的 unlink）。A 系列＝讀寫拆開後的授權矩陣；
+# B 系列＝收窄引入的回歸守線（poll 只被 list/get 兩個無 role gate 的讀取端點呼叫，
+# 其寫入改走系統身分）（HttpCase，group_user-only）
+from . import test_cloud_service_authz_676
