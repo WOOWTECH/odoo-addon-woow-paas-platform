@@ -2,7 +2,7 @@
 
 > `docs/decisions/patterns/` 收錄跨 refactor cycle 抽出的可複用 pattern。**改動相關 model / ACL / lifecycle / 測試前，先在此表定位適用 pattern，再點進細節**——這是避免 B1-class data leak 與同類 bug 重炸的第一道導引。
 >
-> CLAUDE.md「Known patterns」段已指針化（不再雙寫子集）；**本表為完整 33 條**。路徑觸發的自動導引由 pattern-guard hook 供給（對照表 `.claude/hooks/pattern-guard-map.json`）。pattern slug 為 AI 自組 cross-link identifier，請勿更名（會斷交聯）。
+> CLAUDE.md「Known patterns」段已指針化（不再雙寫子集）；**本表為完整 34 條**。路徑觸發的自動導引由 pattern-guard hook 供給（對照表 `.claude/hooks/pattern-guard-map.json`）。pattern slug 為 AI 自組 cross-link identifier，請勿更名（會斷交聯）。
 
 ## 維護慣例（新增**或修改** pattern doc 時）
 
@@ -65,6 +65,7 @@
 |---|---|
 | [[phase-versioned-test-assertion]] | phase test 硬編當時 schema 快照值（manifest version `== "x"` / constraint 名 / 欄位 count），後續 phase 合法演進同塊 schema 時撞 test-vs-test red → 改用 monotonic `>=` / 存在性斷言鎖 intent（**前提是被守的量 monotonic**；會下降的量見 [[seed-topology-invariants]]） |
 | [[seed-topology-invariants]] | test 硬編 seed 拓撲計數（base plan 數 / 掛 template 的 plan 數 / 訂閱 product 總數 / tier 數）時：這些量**非 monotonic**（純翻 `storefront_hidden`、`active_test` 過濾、seed xmlid 真刪都會讓它下降），`>=` 守衛會裝反、`> 0` 等於刪掉 test → 改集合等值 / 零丟棄 / 結構關係；含 `noupdate=0` 可解析 XML 而 `noupdate=1` 不可的不對稱（出自 #433） |
+| [[default-credential-functional-test-blindspot]] | 兩個觸發點，任一成立就強制換尺判一次：**(T1)** 動 `src/data/cloud_app_templates.xml`、而該 image/chart 有帶身分的入口（admin GUI / 管理 API / DB 帳號 / webhook secret）→ 必須明答「憑證由平台鑄造（欄位寫 True ＋ 納入家族級覆蓋率守線）還是租戶自設（寫 False ＋ 留 WHY）」，**兩者都沒做＝值靜默落到上游預設，而它在 diff 上跟「租戶自設」長得一樣**；**(T2)** 調查／驗收途中讀到某值來自上游 `_DEFAULT_CONFIG` / chart 預設 / 硬編 fallback 且欄位名含 password/token/key/secret → 停一次單獨判。判準＝「這個值是不是全世界都知道」（值印得出來嗎／後面有沒有第二道門／**錯憑證的陽性對照**），不是「能不能動」——功能軸對這一格恆綠，加功能測試加的還是功能測試。⚠ 守線的量化域要取 chart 座標，**不可用閘門欄位本身篩**（＝用漏洞當濾網，#686 躲過既有全稱斷言的原因） |
 | [[credential-claim-test-fixture-coupling]] | 硬化共用 credential 路徑（token 加 required claim / secret optional→required fail-closed）→ 所有自建該 credential 的 test fixture 都 forward-coupled，須 lock-step 補，否則紅（好：暴露）或假綠（壞：繞過 gate） |
 | [[unittest-mock-dual-namespace-patch]] | 用 `unittest.mock.patch` 攔一個被多 module 共用的 helper（client factory / `requests.post` / `uuid4`），且各 module 用不同 import 形式（頂部 `from m import name` vs function-local import）→ `patch` 是 rebind namespace attribute 非改寫 function，一個 symbol 經 N 個 namespace 使用就要 N 個 patch target；少打一個讓那條路徑 fall through 真 client（false confidence 或 BlockedRequest 紅）；fix 半套 mock 是「補上缺的」非「搬去別處」 |
 
@@ -88,6 +89,7 @@
 - [cloud-service-unlink-override-cleanup](cloud-service-unlink-override-cleanup.md)
 - [constraint-input-trust-expansion](constraint-input-trust-expansion.md)
 - [credential-claim-test-fixture-coupling](credential-claim-test-fixture-coupling.md)
+- [default-credential-functional-test-blindspot](default-credential-functional-test-blindspot.md)
 - [external-resource-env-token-naming](external-resource-env-token-naming.md)
 - [helm-reset-values-unified-pipeline](helm-reset-values-unified-pipeline.md)
 - [hidden-template-presentation-chain](hidden-template-presentation-chain.md)
