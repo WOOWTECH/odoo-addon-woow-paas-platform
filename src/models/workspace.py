@@ -300,7 +300,7 @@ class Workspace(models.Model):
         既有部署，但**機制不是「已部署的名字會跟著變」**：`helm_namespace` /
         `subdomain` / `canonical_name` 都是建立／provision 當下算一次就存起來的
         欄位，既有列一律不重推（四個產名點的呼叫點實查列在
-        `src/migrations/18.0.1.0.129/post-migrate.py` 的檔頭）。後果落在**下一次
+        `src/migrations/18.0.1.0.131/post-migrate.py` 的檔頭）。後果落在**下一次
         推導**：改掉 ws_hash 之後，同一個 workspace 新建的服務會拿當下的值現算
         ⇒ 落進 `paas-ws-{新值}`，與既有服務所在的 namespace 分家。
 

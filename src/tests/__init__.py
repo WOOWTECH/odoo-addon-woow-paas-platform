@@ -346,7 +346,7 @@ from . import test_project_access_authz_657
 from . import test_workspace_access_authz_664
 # fix: #658 workspace 本體的寫入授權 —— ir.rule 讀寫拆開（收窄到 owner/admin）
 # ＋ model 層 identity anchor（owner_id / slug，create 與 write 兩個方向）
-# ＋ migration 18.0.1.0.129 退役兩條 sticky 舊 rule（HttpCase，group_user-only）
+# ＋ migration 18.0.1.0.131 退役兩條 sticky 舊 rule（HttpCase，group_user-only）
 from . import test_workspace_authz_658
 # fix: #677 租戶可經 workspace name 決定自己的 K8s namespace —— slug 由 name 逐字
 # 推導 ＋ namespace 是 md5(slug)[:8] 的 32-bit 截斷。改用 stored `ws_hash` 欄位

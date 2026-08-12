@@ -285,7 +285,7 @@ helm_namespace = make_namespace(workspace.ws_hash, prefix=ns_prefix)     # paas-
 
 > 命名工具集中在 `src/services/naming.py`：`make_namespace()`（`paas-ws-` 前綴 + workspace 的 `ws_hash`）、`make_service_subdomain()`（`paas-cs-{ws_hash}-{svc_hash}`，`svc_hash` 對 `reference_id + name` 加鹽雜湊）。namespace 前綴可由 `ir.config_parameter` `woow_paas_platform.namespace_prefix` 覆寫。
 >
-> 🔴 **`ws_hash` 是 workspace 上的 stored 欄位，不是 slug 的雜湊（#677）。** 修法前它是 `md5(workspace.slug)[:8]`，而 `slug` 由租戶提供的 `name` 逐字推導、`[:8]` 是 32-bit 截斷 ⇒ 租戶離線搜一個 name 就能讓自己的 Helm release 落進別人的 namespace。現在 `ws_hash` 由伺服器產生（`secrets.token_hex(4)`）＋ DB `UNIQUE(ws_hash)`；既有 workspace 由 migration `18.0.1.0.129` 回填成舊公式的值——既有列的 `helm_namespace` / `subdomain` 是存起來的、本來就不會被重推，回填守的是**下一次推導**（同一個 workspace 新建的服務仍落在既有 namespace，不會分家）。`naming.py` 的 maker 收到非 8-hex 一律 raise（漏改呼叫點的絆線）。
+> 🔴 **`ws_hash` 是 workspace 上的 stored 欄位，不是 slug 的雜湊（#677）。** 修法前它是 `md5(workspace.slug)[:8]`，而 `slug` 由租戶提供的 `name` 逐字推導、`[:8]` 是 32-bit 截斷 ⇒ 租戶離線搜一個 name 就能讓自己的 Helm release 落進別人的 namespace。現在 `ws_hash` 由伺服器產生（`secrets.token_hex(4)`）＋ DB `UNIQUE(ws_hash)`；既有 workspace 由 migration `18.0.1.0.131` 回填成舊公式的值——既有列的 `helm_namespace` / `subdomain` 是存起來的、本來就不會被重推，回填守的是**下一次推導**（同一個 workspace 新建的服務仍落在既有 namespace，不會分家）。`naming.py` 的 maker 收到非 8-hex 一律 raise（漏改呼叫點的絆線）。
 
 **4.3.3 值處理與 API Key 注入**
 
@@ -821,7 +821,7 @@ def _generate_ws_hash(self):
 ```
 
 - `ws_hash`：workspace 上的 **stored 欄位**，伺服器產生的 8 個小寫 hex。
-  🔴 **不是 slug 的雜湊（#677）**：修法前是 `md5(workspace.slug)[:8]`，而 slug 由租戶提供的 `name` 逐字推導、`[:8]` 是 32-bit 截斷 ⇒ 租戶搜得出一個 name 讓自己的服務落進別人的 namespace（目標值逐字印在受害者每個公開子網域上）。既有 workspace 由 migration `18.0.1.0.129` 回填成舊公式的結果 ⇒ 該 workspace **下一次**推導（新建服務）算出的 namespace 與修復前 byte-identical；既有列存下來的名字不受影響，它們不會被重推。
+  🔴 **不是 slug 的雜湊（#677）**：修法前是 `md5(workspace.slug)[:8]`，而 slug 由租戶提供的 `name` 逐字推導、`[:8]` 是 32-bit 截斷 ⇒ 租戶搜得出一個 name 讓自己的服務落進別人的 namespace（目標值逐字印在受害者每個公開子網域上）。既有 workspace 由 migration `18.0.1.0.131` 回填成舊公式的結果 ⇒ 該 workspace **下一次**推導（新建服務）算出的 namespace 與修復前 byte-identical；既有列存下來的名字不受影響，它們不會被重推。
 - `svc_hash`：以 `reference_id`（UUID）+ 服務名稱加鹽取 md5 前 8 碼，確保相同服務名稱在不同場景下不會產生相同的 subdomain。
 - 對應的 K8s namespace 由 `make_namespace(ws_hash, prefix='paas-ws-')` 產生為 `paas-ws-{ws_hash}`（前綴可由 `woow_paas_platform.namespace_prefix` 覆寫）。smart home / security access 另有 `paas-sm-` / `paas-sa-` 前綴的 twin。
 

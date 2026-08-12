@@ -31,7 +31,7 @@
 - **Layer 1（ir.rule）**：讀寫拆開。`workspace_rule_member_read`（全體成員讀）＋
   `workspace_rule_owner_admin_manage`（owner/admin 讀寫）＋
   `workspace_rule_anyone_create`＋`workspace_rule_owner_unlink`（縱深防禦，
-  ACL 今天仍擋 unlink）。舊的兩條由 `src/migrations/18.0.1.0.129/post-migrate.py`
+  ACL 今天仍擋 unlink）。舊的兩條由 `src/migrations/18.0.1.0.131/post-migrate.py`
   DELETE 退役（`ir_model_data.noupdate` 是 sticky 的，改 XML 修不動）。
 - **Layer 2（model 層 identity anchor）**：只有 Layer 1 的話，**admin 仍然能改
   `owner_id`** ⇒ admin 可以把擁有權連同計費歸屬搶走，且完全繞過

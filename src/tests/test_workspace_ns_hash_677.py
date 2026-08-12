@@ -38,10 +38,10 @@
 ## 既有部署不漂移（本修法可行的前提）
 
 四個產名點都是**建立／provision 當下算一次、存進欄位**（呼叫點實查列在
-`src/migrations/18.0.1.0.129/post-migrate.py` 的檔頭）⇒ 既有列一律不重推，存下來的
+`src/migrations/18.0.1.0.131/post-migrate.py` 的檔頭）⇒ 既有列一律不重推，存下來的
 字串不會因為 `ws_hash` 換值而改變。
 
-所以 migration `18.0.1.0.129/post-migrate.py` step 3 把既有列回填成 `md5(slug)[:8]`
+所以 migration `18.0.1.0.131/post-migrate.py` step 3 把既有列回填成 `md5(slug)[:8]`
 （＝**舊公式的逐字結果**）守的**不是**既有列，而是**下一次推導**：同一個 workspace
 在升級後新建服務時，`helm_namespace` 是拿當下的 `ws_hash` 現算的 ⇒ 回填成別的值會讓
 新服務落進 `paas-ws-{新值}`、與既有服務分家。N8 釘的正是這件事（回填後三個 maker
@@ -425,7 +425,7 @@ class TestWorkspaceNamespaceHash677(HttpCase):
         """🔴 回填成 `md5(slug)[:8]` 的既有 workspace，推導結果必須與修復前**逐字相同**。
 
         這是「改推導不會動到既有部署」的契約：migration
-        （`18.0.1.0.129/post-migrate.py` step 3）把既有列回填成舊公式的結果，所以
+        （`18.0.1.0.131/post-migrate.py` step 3）把既有列回填成舊公式的結果，所以
         本測試模擬回填後，`make_namespace` / `make_service_subdomain` /
         `make_security_access_subdomain` 三者都必須吐出與修復前一模一樣的字串。
 

@@ -23,7 +23,7 @@ def generate_ws_hash(slug: str) -> str:
 
     保留的兩個理由，都不是「拿它算新名字」：
 
-    1. ``src/migrations/18.0.1.0.129/post-migrate.py`` 用它回填既有 workspace 的
+    1. ``src/migrations/18.0.1.0.131/post-migrate.py`` 用它回填既有 workspace 的
        ``ws_hash`` —— 回填值必須逐字等於**舊公式的結果**，那個 workspace **之後**
        新建的服務才會落回既有服務所在的 namespace。（既有列存下來的名字本來就不會
        被重推，所以回填守的不是它們；呼叫點實查見該 migration 的檔頭。）

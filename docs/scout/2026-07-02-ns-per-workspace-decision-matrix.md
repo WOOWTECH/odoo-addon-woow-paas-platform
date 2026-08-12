@@ -22,7 +22,7 @@ related:
 > `ws_hash` 現在是 `woow_paas_platform.workspace` 上的 **stored 欄位**（伺服器產生的
 > `secrets.token_hex(4)` ＋ DB `UNIQUE(ws_hash)`），**不再是 slug 的函數**——`slug` 由租戶
 > 提供的 `name` 逐字推導，而 `[:8]` 是 32-bit 截斷，兩者相加讓租戶可以決定自己落在哪個
-> K8s namespace（#677）。既有 workspace 由 migration `18.0.1.0.129` 回填成舊公式的結果。
+> K8s namespace（#677）。既有 workspace 由 migration `18.0.1.0.131` 回填成舊公式的結果。
 >
 > 本文 §2.4 末條與 §3 的結論「**別動 `paas-ws-{md5(slug)[:8]}` 就安全**」在**命名形狀**這一層
 > 仍然成立、也確實被遵守了：`paas-ws-{8 小寫 hex}` 的字面形狀與長度完全沒變，所以

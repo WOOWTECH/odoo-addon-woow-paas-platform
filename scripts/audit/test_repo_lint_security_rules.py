@@ -10,7 +10,7 @@
   ④ `check_workspace_rule_directions`         workspace **本體**的寫入方向不得**留空**
 
 ⚠ ② 原本寫「#556 退役的 xmlid」——#658 又退役了 `workspace_rule_member_access` /
-`workspace_rule_create`（migration `18.0.1.0.129`），權威清單是 `RETIRED_RULE_XMLIDS`
+`workspace_rule_create`（migration `18.0.1.0.131`），權威清單是 `RETIRED_RULE_XMLIDS`
 本身，不是這段散文。
 
 ④ 是 #658 新增的。它與 ③ 共用實作（`_rule_direction_violations`），所以**判準那一半
@@ -106,7 +106,7 @@ model 都配一條 admin_full ⇒ 寬判準會把「洞開著」讀成「有守�
 本檔用 `importlib` 從**檔案路徑**載 `repo-lint.py`，走 `SourceFileLoader`，而它的
 bytecode cache 驗證判準只有 `(mtime 秒, size)` 兩個值。就地突變非常容易同時避開兩者：
 
-  - **替換值長度相同** ⇒ size 不變。`"…0.129（#658）"` → `"…0.999（#658）"` 正是這種
+  - **替換值長度相同** ⇒ size 不變。`"…0.131（#658）"` → `"…0.999（#658）"` 正是這種
     （改版號、翻一個字元、`True`↔`Fals`… 都會踩到）。
   - **突變與 `cp` 還原落在同一秒** ⇒ mtime 的秒數不變。
 
@@ -138,7 +138,7 @@ RED 驗證**兩個方向都錯**——先把「其實會紅」的兩支讀成綠
 
   1. `rm -rf scripts/audit/__pycache__` **＋** `python3 -B`。`-B` 只擋**寫入**，既有的
      `.pyc` 照樣會被讀 ⇒ 少了 `rm -rf` 等於沒防。
-  2. **選突變值時避開「長度相同」**（例：把 `18.0.1.0.129` 改成 `18.0.1.0.9999` 而不是
+  2. **選突變值時避開「長度相同」**（例：把 `18.0.1.0.131` 改成 `18.0.1.0.9999` 而不是
      `18.0.1.0.999`）。這是第二道保險，**不能取代第一道**——mtime 同秒仍可單獨咬人。
 
 一句話判準：**改完原始碼之後，先驗「跑起來讀到的值真的變了」再看紅綠。**
@@ -186,7 +186,7 @@ def retirement_migration(provenance):
 
     🔴 刻意不寫死任何一支 migration 的版號（`18.0.1.0.122` 那份寫法是 #658 撞到的
     F1）：寫死的版號把「當時唯一的退役事件」凍成契約，第二次退役（#658 的
-    `18.0.1.0.129`）發生的當天那條測試就失去靶子，而它的失敗訊息會說「名字不在
+    `18.0.1.0.131`）發生的當天那條測試就失去靶子，而它的失敗訊息會說「名字不在
     migration 裡」——把讀的人導向完全錯誤的方向（以為退役機制壞了）。
 
     版號從值裡解析而不是另外維護一張表：`RETIRED_RULE_XMLIDS` 已經是那份對應關係的
@@ -243,8 +243,8 @@ _DIRECTIONS = rl.IR_RULE_WRITE_DIRECTIONS
 RETIRED_RULE_XMLIDS_FLOOR = (
     "workspace_access_rule_member_access",   # #556 / migration 18.0.1.0.122
     "workspace_access_rule_create",          # #556 / migration 18.0.1.0.122
-    "workspace_rule_member_access",          # #658 / migration 18.0.1.0.129
-    "workspace_rule_create",                 # #658 / migration 18.0.1.0.129
+    "workspace_rule_member_access",          # #658 / migration 18.0.1.0.131
+    "workspace_rule_create",                 # #658 / migration 18.0.1.0.131
 )
 
 
@@ -602,7 +602,7 @@ class TestCleanTreeIsGreen(unittest.TestCase):
 
         🔴 判準從「形態」搬到「不變式」（#658 撞到的 F1）：原本寫死讀
         `src/migrations/18.0.1.0.122/post-migrate.py`——那是當時**唯一**的退役事件。
-        #658 在 `18.0.1.0.129` 退役了第二批，那兩個名字當然不在 122 裡，於是這支報
+        #658 在 `18.0.1.0.131` 退役了第二批，那兩個名字當然不在 122 裡，於是這支報
         「名字不在 migration 裡了」，把讀的人導向「退役機制被改壞了」這個錯誤方向。
 
         不變式是：**每個退役名字，都能在「退役它的那支」migration 裡找到**。
