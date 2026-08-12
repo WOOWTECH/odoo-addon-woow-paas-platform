@@ -32,8 +32,14 @@ naming.py／test_repo_lint_security_rules.py／test_workspace_ns_hash_677.py 都
     git grep -ln "18\\.0\\.1\\.0\\.<舊版號>"   # 必須**零命中**才算改完
 
 （原本的驗法寫 `git grep -ln "18\\.0\\.1\\.0\\.1[0-9][0-9]"` 只該剩新版號，那也是
-假的：`.122` / `.124` 等舊 migration 的版號本來就合法留在樹上，同一次實測是 20 個
-檔、10 個不同版號。範圍要收在「這一支的舊版號」，不是整個 1xx 區間。）
+假的：整個 1xx 區間裡本來就合法住著別的東西——`.122` 這種**舊 migration** 的版號、
+`scripts/ci/` 的 manifest 版號 gate 拿來當**例值**的版號、以及
+`.claude/skills/deploy-stg/tests/` 裡當**測試 fixture** 的版號字面。範圍要收在
+「這一支的舊版號」，不是整個 1xx 區間。
+⚠ 這一段上一版把 `.124` 說成「舊 migration」——它其實是 deploy-stg 版號比較器的
+測試 fixture（`test-verify-addon-version.sh`）；真的有 migration 目錄的 1xx 版號要
+用 `ls src/migrations/` 現看，不要從 grep 命中推定。同一段還寫了「20 個檔、10 個不同
+版號」，那與上一段「刻意不寫共 N 個檔」自相矛盾、同樣會漂，一併拿掉。）
 
 舊的 workspace_rule_member_access（perm_read + perm_write 合一、domain
 `[('access_ids.user_id', '=', user.id)]`、**無 role 條件**）與

@@ -37,16 +37,21 @@
 
 ## 既有部署不漂移（本修法可行的前提）
 
-`cloud_service.helm_namespace` / `subdomain` 都是**存起來的**欄位，推導只發生在建立
-當下；migration `18.0.1.0.129/post-migrate.py` step 3 把既有列回填成
-`md5(slug)[:8]` ＝**舊公式的逐字結果** ⇒ 既有 workspace 的 namespace／subdomain
-byte-identical。N8 把這個契約釘住。
+四個產名點都是**建立／provision 當下算一次、存進欄位**（呼叫點實查列在
+`src/migrations/18.0.1.0.129/post-migrate.py` 的檔頭）⇒ 既有列一律不重推，存下來的
+字串不會因為 `ws_hash` 換值而改變。
 
-⚠ 例外路徑（每次呼叫重新推導、不是只在建立當下算一次）：
-`smart_home._generate_subdomain()` / `_generate_tunnel_name()` 與
-`security_access._generate_canonical_name()`。回填保證它們算出同一個值，而 N10 更
-進一步斷言「再推導錨在 stored hash 上，slug 事後怎麼變都不影響」——比「再推導不會
-發生」強，因為它不依賴呼叫點盤點的完整性。
+所以 migration `18.0.1.0.129/post-migrate.py` step 3 把既有列回填成 `md5(slug)[:8]`
+（＝**舊公式的逐字結果**）守的**不是**既有列，而是**下一次推導**：同一個 workspace
+在升級後新建服務時，`helm_namespace` 是拿當下的 `ws_hash` 現算的 ⇒ 回填成別的值會讓
+新服務落進 `paas-ws-{新值}`、與既有服務分家。N8 釘的正是這件事（回填後三個 maker
+吐出的字串與修復前 byte-identical），不是「既有列沒被動過」。
+
+⚠ `smart_home._generate_subdomain()` / `_generate_tunnel_name()` 與
+`security_access._generate_canonical_name()` 這三支**函式本身**不讀 stored 值、每次
+呼叫都重推（但呼叫點仍然只在 create／provision，見上）。N10 就錨在這個函式層的性質
+上：「再推導錨在 stored hash 上，slug 事後怎麼變都不影響」——比「再推導不會發生」強，
+因為它不依賴呼叫點盤點的完整性。
 
 ## TDD 紀律（照抄 #556／#657／#658，一字不可省）
 
@@ -370,8 +375,9 @@ class TestWorkspaceNamespaceHash677(HttpCase):
 
         用 owner（而不是 guest）是刻意的：owner 通過
         `workspace_rule_owner_admin_manage`，所以這條在「只收窄 ir.rule」的修法下
-        完全不會變紅。同時它也守住既有部署——事後改 ws_hash 會讓已部署服務**存下來
-        的** `helm_namespace` 與重新推導出來的值分岔。
+        完全不會變紅。同時它也守住既有部署，但機制是**下一次推導**：既有列存下來的
+        `helm_namespace` 不會被重推（見檔頭），改掉 ws_hash 之後該 workspace 新建的
+        服務會落進另一個 namespace、與既有服務分家。
         """
         attacker_ws = self._attacker_creates_colliding_workspace()
         victim_hash = self.victim_ws.sudo().ws_hash
@@ -527,7 +533,7 @@ class TestWorkspaceNamespaceHash677(HttpCase):
             '斷言的意義所在；它若恆真則整支測試沒有守到任何東西）')
 
     # ================================================================== #
-    #  N10 —— §1.2 的例外：每次重新推導的路徑錨在 stored hash 上            #
+    #  N10 —— 函式層：每次重推的產名函式錨在 stored hash 上                 #
     # ================================================================== #
     def test_N10_rederivation_is_anchored_on_the_stored_hash_not_on_the_slug(self):
         """🔴 `smart_home._generate_subdomain()` 是**每次呼叫重新推導**的；改了

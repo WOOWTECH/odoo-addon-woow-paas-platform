@@ -1183,8 +1183,20 @@ class TestWorkspaceModelDirectionAnchor(unittest.TestCase):
         fixture.flip_perm(self.MANAGE_RULE, "perm_write")
 
         got = rl.check_workspace_rule_directions(fixture.root)
+        # 🔴 下面這兩行是「錨點漂到**第三個** model」那一格的唯一守衛（gate 層攔不
+        #    住，見 repo-lint.py `_rule_direction_anchor_violations` 的「已知殘留」
+        #    段）。它們有效的理由是上面那個注入錨在**寫死的 MANAGE_RULE xmlid**
+        #    ——錨點一漂，翻 workspace manage rule 的 perm_write 就打空 ⇒ got 縮成
+        #    [] ⇒ 第一行紅；漂到一個剛好也缺方向的 model 時 len(got) 仍可能是 1，
+        #    那時由第二行（訊息點的方向對不上）接手。
+        #    ⇒ 不要「簡化」掉這兩行，也不要把 MANAGE_RULE 改成從 WORKSPACE_MODEL_REF
+        #    推導（注入會跟著錨點一起漂，這一格就沒有守衛了）。
         self.assertEqual(len(got), 1, "④ 應該恰好報一條（perm_write）：%s" % blob(got))
         self.assertIn("perm_write", got[0], "訊息沒點名是哪個方向")
+        # ⚠ 下面這行是**自我指涉**的：違規訊息本來就把 `model_ref` 內插進去，而這裡
+        #    讀的就是同一個常數 ⇒ 只要 got 非空它就恆綠，對錨點漂移零鑑別力。**不是
+        #    它在守這一格**（#675 覆核 §1.1）。真的把「錨點沒指到 ③ 那個 model」釘住
+        #    的是再下一行的 assertNotIn——它讀的是**另一個**常數，所以會紅。
         self.assertIn(rl.WORKSPACE_MODEL_REF, got[0],
                       "訊息沒點名 workspace **本體** 的 model——④ 的錨點可能指錯了")
         self.assertNotIn(rl.WORKSPACE_ACCESS_MODEL_REF, got[0],
@@ -1305,14 +1317,28 @@ class TestWorkspaceModelDirectionAnchor(unittest.TestCase):
             "record（#675 覆核 F1 實測的 EXIT=0 形態又回來了）")
 
     def test_the_two_direction_gates_look_at_disjoint_non_empty_rule_sets(self):
-        """🔴 存在性證明：兩層判準真的是兩層，不是同一層的複本（#612 的收斂形態）。
+        """真樹上的存在性：兩個錨點互異，而且各自真的有 ir.rule 在身上。
 
-        上面幾支是**注入**（改壞 → 紅）。只有注入測試的話，一份把兩個錨點指到同一
-        個 model 的樹仍然可能全綠——因為每一支注入都只證明「某個特定的改壞會紅」，
-        沒有一支證明「今天這棵樹上兩條 gate 各自有靶、而且靶不重疊」。
+        ⚠ **這一支不守「錨點漂到第三個 model」那一格**，別照名字讀成它在守：它只是
+        拿兩個常數**當下的值**去真樹上取集合，所以錨點漂到另一個「也有 rule 的」
+        model 時，互異仍成立、兩邊仍非空、仍不相交 ⇒ 三條斷言全綠。守那一格
+        的是上面那支注入測試的 `assertEqual(len(got), 1)` ＋
+        `assertIn("perm_write", got[0])`，理由寫在那裡的註解與 `repo-lint.py`
+        `_rule_direction_anchor_violations` 的「已知殘留」段（#675 覆核 §1.1）。
 
-        判準刻意寫在**不變式層**（非空 ＋ 不相交），不是形態層（不點名那四個 xmlid）：
-        規則正當改名的當天，形態層的版本會紅在完全錯誤的地方。
+        逐條寫清楚這裡各自證了什麼，免得下一個人以為三條都在出力：
+
+          * `assertNotEqual`（互異）——與 gate 第一層同判準，這裡是測試層的 floor。
+          * `assertTrue(names)`（各自有靶）——與 gate 第二層同判準，同上。只有注入
+            測試的話，一份把錨點指到「沒有任何 rule 的 model」的樹仍可能全綠，因為
+            每支注入只證明「某個特定的改壞會紅」。
+          * `assertEqual(A & B, set())`（不相交）——**是前一條的定理，不是獨立檢查**：
+            `rl._rule_model_ref()` 對每一筆 record 只回**一個**值，所以只要兩個錨點
+            互異，兩個集合就必然不相交；`assertNotEqual` 先跑，它綠了這行不可能紅。
+            留著當那條不變式的自我說明，不要把它算進涵蓋率。
+
+        判準寫在**不變式層**而不是形態層（不點名那四個 xmlid）：規則正當改名的當天，
+        形態層的版本會紅在完全錯誤的地方。
         """
         root = str(_REPO_ROOT)
         records, errors = rl.module_record_declarations(root)

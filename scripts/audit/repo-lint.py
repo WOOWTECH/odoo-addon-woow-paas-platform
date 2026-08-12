@@ -1903,9 +1903,27 @@ def _rule_direction_anchor_violations(records, model_ref, sibling_ref, what):
     ⚠ **已知殘留**（寫出來，不要讀成「錨點已經被完全釘死」）：把錨點改成**第三個**
     真的有 rule 的 model（例如 `model_woow_paas_platform_cloud_service`）時，這兩層
     都攔不下來——互異成立、靶也存在。那不是複製貼上的形態（要另外去別處抄一個名字
-    來），本 gate 不涵蓋；那一格由 `scripts/audit/test_repo_lint_security_rules.py`
-    的 `TestWorkspaceModelDirectionAnchor` 用真樹上的存在性證明守著（兩個錨點各自
-    的 rule 集合必須**非空且不相交**，並且第 25 條的訊息必須點名 workspace 本體）。
+    來），本 gate 不涵蓋。
+
+    那一格今天由 `scripts/audit/test_repo_lint_security_rules.py` 的
+    `TestWorkspaceModelDirectionAnchor` 那支**注入**測試扛著
+    （`test_flipping_the_workspace_manage_rule_reds_gate4_…`），而且扛住它的是這兩行：
+
+        fixture.flip_perm(self.MANAGE_RULE, "perm_write")   # 錨在寫死的 rule xmlid
+        got = rl.check_workspace_rule_directions(fixture.root)
+        self.assertEqual(len(got), 1, ...)          # ← 漂到別的 model ⇒ got 縮成 []
+        self.assertIn("perm_write", got[0], ...)    # ← 漂到「剛好也缺方向」的 model 時接手
+
+    它有效的理由是**注入錨在真相源**（寫死的 `MANAGE_RULE` xmlid），不是錨在被測的
+    `WORKSPACE_MODEL_REF` 上：翻 workspace manage rule 的 `perm_write` 對別的 model
+    沒有任何影響，錨點一漂注入就打空。
+    🔴 **不要把 `MANAGE_RULE` 改成從 `WORKSPACE_MODEL_REF` 推導**（例如「找出綁在這
+    個錨點上的那條 manage rule」）——注入會跟著錨點一起漂，這一格就沒有守衛了。
+
+    ⚠ 同 class 的 `test_the_two_direction_gates_look_at_disjoint_non_empty_rule_sets`
+    **不**守這一格（它在這種漂移下必然是綠的，理由寫在它自己的 docstring 裡），不要
+    把它讀成這裡的守衛——本段上一版就是那樣寫的，而照那個寫法「簡化」掉注入測試，
+    唯一的守衛會在沒有任何訊號的情況下消失（#675 覆核 §1.1）。
     """
     violations = []
     if model_ref == sibling_ref:

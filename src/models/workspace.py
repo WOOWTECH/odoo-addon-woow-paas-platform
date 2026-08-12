@@ -297,9 +297,12 @@ class Workspace(models.Model):
         輸入。放行的話，攻擊者連 md5 preimage 都不用搜——直接把受害者的 ws_hash
         寫上去就行（那還會撞上 `UNIQUE(ws_hash)` 拋 IntegrityError，但那是 DB 的
         功勞，而且是把整筆交易炸掉的形態，不是一個守得住的授權判準）。它同時保護
-        既有部署：事後改 ws_hash 會讓已部署服務**存下來的** `helm_namespace` 與
-        重新推導出來的值分岔（`smart_home._generate_subdomain()` 這種每次呼叫都
-        重推的路徑會立刻算出不一樣的子網域）。
+        既有部署，但**機制不是「已部署的名字會跟著變」**：`helm_namespace` /
+        `subdomain` / `canonical_name` 都是建立／provision 當下算一次就存起來的
+        欄位，既有列一律不重推（四個產名點的呼叫點實查列在
+        `src/migrations/18.0.1.0.129/post-migrate.py` 的檔頭）。後果落在**下一次
+        推導**：改掉 ws_hash 之後，同一個 workspace 新建的服務會拿當下的值現算
+        ⇒ 落進 `paas-ws-{新值}`，與既有服務所在的 namespace 分家。
 
         `slug` 同樣錨死，但**理由已經跟 namespace 無關**（#677 之後 namespace 不
         再由 slug 推導）：它是對外露出的識別字，且 `UNIQUE(slug)` 讓改寫可以踩掉
