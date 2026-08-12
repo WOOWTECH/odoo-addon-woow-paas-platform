@@ -219,9 +219,14 @@ create-level 靠 model guard 補齊 ir.rule 在 create 方向的自我滿足漏�
   修復前的 `workspace_access` 同一族問題，本 PR 刻意**不動 `project_access`**（避免擴大
   本次改動的爆炸半徑），記 follow-up；連同 analysis.md §4 原本已列的兩個
   `project_access` 潛在洞（`role` 缺省 early-return、無 owner 列保護）一起處理。
-- `workspace_rule_member_access`（`ir_rules.xml`，同一個 noupdate=1 區塊）
+- ~~`workspace_rule_member_access`（`ir_rules.xml`，同一個 noupdate=1 區塊）
   `perm_write=True` 且 domain 無 role 條件——任何 `guest`/`user` 成員都能改 workspace
-  本體的 name/description/state（含 archive）。#556 的相鄰問題，不是 #556。
+  本體的 name/description/state（含 archive）。#556 的相鄰問題，不是 #556。~~
+  **已由 #658 修復**（migration `18.0.1.0.131`）。⚠ 當時這行低估了範圍：實際可寫的
+  還有 `owner_id`（訂閱帳單 partner ＋ `max_per_partner` 配額的錨，也是
+  `_delete_workspace` 的授權判準）與 `slug`（K8s namespace／subdomain 的唯一輸入），
+  以及 `access_ids` / `service_ids` 兩個 o2m 反向通道。完整形狀見
+  `src/tests/test_workspace_authz_658.py` 的檔頭。
 - `invited_by_id` 無 `readonly`，攻擊者可偽造稽核欄位（`readonly` 不阻擋 ORM/RPC 寫入，
   真解要在 `create()` 內對非 superuser 強制覆寫，低嚴重度）。
 - `scripts/audit/repo-lint.py` 的機械 gate（noupdate 覆蓋 `ir_rules.xml`、退役 xmlid

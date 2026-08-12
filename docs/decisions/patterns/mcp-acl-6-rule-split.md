@@ -168,8 +168,15 @@ escalation surface**：
 「ACL 補丁不解 root cause」。
 
 **Split 把 read direction 與 create direction 分到不同 rule** — record rule 直接 enforce「per-scope
-perm 不同」是 Odoo idiom。既有 codebase pattern `workspace_rule_member_access`（read-only）+
-`workspace_rule_create`（create-only）已是 split idiom（`ir_rules.xml` line 5-26 前次 refactor 落地）。
+perm 不同」是 Odoo idiom。既有 codebase pattern `workspace_rule_member_read`（read-only）+
+`workspace_rule_anyone_create`（create-only）已是 split idiom（見 `src/security/ir_rules.xml`）。
+
+> ⚠ 兩處更正（#658）：這兩個名字原本是 `workspace_rule_member_access` /
+> `workspace_rule_create`，已由 `src/migrations/18.0.1.0.131/post-migrate.py` 退役改名；
+> 且原本那條 `workspace_rule_member_access` **不是 read-only**（`perm_read` 與 `perm_write`
+> 都是 True、domain 無 role 條件，任何 guest 成員都能寫 workspace 本體——那正是 #658 的洞）。
+> 引用它當「read/create split」的樣板在當時就不準確；現在的 `workspace_rule_member_read`
+> 才真的是 read-only。行號指標一併移除（會漂）。
 
 ### 為什麼需要第 3 條 `admin_full` rule（不能省）
 
