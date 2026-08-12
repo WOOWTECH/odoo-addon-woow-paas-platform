@@ -245,6 +245,12 @@ security-rule-lifecycle 由兩個函式——ir.rule 的出生地／退役名字
                      `baselines/repo-lint-registry.txt` 這個只准長不准縮的 floor，改名
                      要跑 `--update-baseline`，而那支會一次重產**全部** baseline、
                      順手吸收掉別處新冒出來的違規（#613 記錄有案）。附加一條不會。
+                     🔴 本條與第 23 條共用實作，兩者唯一的差別是 model 錨點那**一個
+                     字串** ⇒ 把它複製貼上成第 23 條的值，本條就靜默退化成第 23 條的
+                     複本（#675 覆核實測：workspace 本體四條 rule 全刪掉仍然 EXIT=0；
+                     打錯字會紅、複製貼上不會）。所以「兩個錨點互異、且各自真的對得到
+                     一條宣告出來的 ir.rule」是被機械檢查的前提，見
+                     `_rule_direction_anchor_violations`。
                      依據 docs/tracking/landings/556-workspace-access-authz-landing.md
 
 用法：
@@ -1417,7 +1423,9 @@ def check_hermes_agent_013_seed(root):
 #   (3) check_workspace_access_rule_directions  workspace_access 的寫入方向不得**留空**
 #   (4) check_workspace_rule_directions     workspace 本體的寫入方向不得**留空**（#658）
 # 前兩條是同一個機制的兩端（`ir_model_data.noupdate` 的 sticky 語意），後兩條守的是
-# 活的授權面 ⇒ 前兩條合成一條規則、後兩條各自成一條（見檔頭 22／23／24）。
+# 活的授權面 ⇒ 前兩條合成一條規則、後兩條各自成一條（見檔頭 22／23／**25**——
+# 第 24 條是 one-time-credential-render，與本組無關；原本這裡寫「24」，是 #658
+# 附加第四條守線時沒跟上檔頭實際落點的過期指標，#675 覆核 F1 順手查證修正）。
 IR_RULE_MODEL = "ir.rule"
 SECURITY_RULES_REL = "src/security/ir_rules.xml"
 # 只給違規訊息用（印 ACL 實值），**不參與任何 pass/fail 判準**——見
@@ -1456,6 +1464,11 @@ RETIRED_RULE_XMLIDS = {
 WORKSPACE_ACCESS_MODEL_REF = "model_woow_paas_platform_workspace_access"
 # workspace **本體**（#658）。與上面那個是不同的 model：一個是成員關係列、一個是
 # 被保護的資源本身，兩者的 rule 集合互相獨立，缺哪一邊都不會讓另一邊變紅。
+# 🔴 這兩行**相鄰宣告**、而兩條 check 共用 `_rule_direction_violations` ⇒ 把下面這個
+# 值複製貼上成上面那個是有訊號地雷的：#675 覆核實測，這麼一改之後 workspace 本體四條
+# rule 全刪掉 gate 仍然 EXIT=0（打錯字會紅、複製貼上不會）。所以「兩個錨點必須互異、
+# 且各自真的有 ir.rule」現在是被 gate 檢查的前提，見 `_rule_direction_anchor_violations`
+# ——不要把那道前提當成多餘的自我檢查刪掉。
 WORKSPACE_MODEL_REF = "model_woow_paas_platform_workspace"
 # 租戶帳號實際持有的群組。`base.group_system` 不算——見 (3) 的 docstring。
 TENANT_GROUP_XMLID = "base.group_user"
@@ -1857,18 +1870,87 @@ def _model_acl_note(root, model_ref):
     return ""
 
 
-def _rule_direction_violations(root, model_ref, what):
-    """第 23／24 條共用的實作：`model_ref` 的三個寫入方向各要有一條租戶生效的 rule。
+def _rule_direction_anchor_violations(records, model_ref, sibling_ref, what):
+    """第 23／25 條的**錨點**前提：兩個 model 錨點互異，且各自真的有 ir.rule 在身上。
+
+    🔴 存在的理由是一條實測過的靜默逃逸（#675 覆核 F1）：把 `WORKSPACE_MODEL_REF`
+    改成 `WORKSPACE_ACCESS_MODEL_REF` 的值——也就是**複製貼上**的典型結果——之後，
+
+        違規數=0；再把 workspace 本體四條 rule 全刪（剩餘 <record> 數 = 0）：
+        違規數=0     EXIT=0
+
+    **四條 rule 全刪掉、gate 仍然全綠。** 打錯字會紅（錨點對不到任何 rule ⇒ 三個
+    方向全紅），但複製貼上到「另一個真的存在、而且真的有 rule 的 model」不會——而
+    共用實作（`_rule_direction_violations`）＋兩個相鄰宣告的常數正是誘發複製貼上的
+    形態。這與 #612／#613 記錄的「兩層判準退化成一層的複本」同型：判準本身逐行讀
+    都對，錯的是它**看的是誰**。
+
+    所以兩層都要，缺一不可，而且它們抓的不是同一件事：
+
+      1. **互異**（`model_ref != sibling_ref`）：擋的就是上面那個複製貼上。兩個錨點
+         相同時第 25 條看的是第 23 條那組 rule ⇒ 第 25 條退化成第 23 條的複本。
+         兩個呼叫端互相把對方傳進來當 `sibling_ref`，所以不論被複製貼上的是哪一個
+         常數，**兩條 check 都會紅**（單向傳只有一條會紅，而報紅的那條會是「被抄走
+         的受害者」那一條，訊息指向錯的地方）。
+      2. **各自有靶**：`model_ref` 至少要對到一條**宣告出來的** `<record
+         model="ir.rule">`。這一層刻意**不看** `active` ／ groups ／方向旗標（那是
+         判準層的事）——它證明的只是「錨點指到的 model 真的存在於這份 XML 裡」。
+         `_ir_rule_premise` 只斷言 module 層抽得到 ir.rule，對 per-model 的錨點零
+         鑑別力；沒有這一層，「錨點指到一個沒有任何 rule 的 model」與「這個 model
+         的 rule 被刪光了」兩種病因的輸出完全相同（都是三條方向違規），而修法方向
+         相反（前者要改常數，後者要補 rule）。
+
+    ⚠ **已知殘留**（寫出來，不要讀成「錨點已經被完全釘死」）：把錨點改成**第三個**
+    真的有 rule 的 model（例如 `model_woow_paas_platform_cloud_service`）時，這兩層
+    都攔不下來——互異成立、靶也存在。那不是複製貼上的形態（要另外去別處抄一個名字
+    來），本 gate 不涵蓋；那一格由 `scripts/audit/test_repo_lint_security_rules.py`
+    的 `TestWorkspaceModelDirectionAnchor` 用真樹上的存在性證明守著（兩個錨點各自
+    的 rule 集合必須**非空且不相交**，並且第 25 條的訊息必須點名 workspace 本體）。
+    """
+    violations = []
+    if model_ref == sibling_ref:
+        violations.append(
+            "%s：「%s」與它的姊妹 check 的 model 錨點是同一個值（`%s`）——兩條 check "
+            "共用 `_rule_direction_violations`，錨點一旦相同，後者看的就是前者那組 "
+            "ir.rule ⇒ **兩層判準退化成一層**。實測後果：workspace 本體的 ir.rule "
+            "全部刪光，gate 仍然 EXIT=0（#675 覆核 F1）。兩個常數相鄰宣告、實作又共用"
+            "，複製貼上不會有任何訊號（打錯字才會紅）。請確認 `WORKSPACE_MODEL_REF` "
+            "指的是 workspace **本體**、`WORKSPACE_ACCESS_MODEL_REF` 指的是成員關係列"
+            % (REPO_LINT_SELF_REL, what, model_ref))
+    declared = any(rec["model"] == IR_RULE_MODEL
+                   and _rule_model_ref(rec["fields"]) == model_ref
+                   for rec in records)
+    if not declared:
+        violations.append(
+            "%s：「%s」的 model 錨點 `%s` 在整個 module 裡對不到任何一條宣告出來的 "
+            "`<record model=\"%s\">`。這一層不看 active／groups／方向旗標（那是判準層"
+            "的事），它證明的只是「錨點指到的 model 真的存在於這份 XML」⇒ 這條紅代表"
+            "**錨點壞了**（常數打錯字、model 改名、或指到一個根本沒有 rule 的 model）"
+            "，**不是**「少寫了幾條 rule」。`_ir_rule_premise` 只斷言 module 層抽得到 "
+            "ir.rule，對 per-model 的錨點沒有鑑別力（#675 覆核 F1）"
+            % (SECURITY_RULES_REL, what, model_ref, IR_RULE_MODEL))
+    return violations
+
+
+def _rule_direction_violations(root, model_ref, sibling_ref, what):
+    """第 23／25 條共用的實作：`model_ref` 的三個寫入方向各要有一條租戶生效的 rule。
 
     🔴 刻意**不叫 `check_*`**：叫了就會被第 17 條那組雙射（檔頭條目 ↔
     `REPO_LINT_RULES` ↔ `run_all()` 實際呼叫）當成一條獨立的 check 函式，而它不是
     ——它是兩條 check 的共用實作。同一個理由見 `_repo_lint_registry_floor`。
+
+    🔴 **共用實作就是 #675 覆核 F1 的成因**：兩條 check 之間唯一的差別只剩 `model_ref`
+    這一個字串，於是「把它複製貼上成姊妹 check 的值」會讓後者靜默變成前者的複本。
+    `sibling_ref` 參數存在的唯一目的就是讓那件事變成違規——見
+    `_rule_direction_anchor_violations`。
 
     涵蓋一個方向的條件：`active` 且該 `perm_*` 為真 且（沒宣告 groups＝global／或
     groups 含 `base.group_user`）。判準與 ACL 脫鉤，理由見兩個呼叫端的 docstring。
     """
     records, errors = module_record_declarations(root)
     violations = _ir_rule_premise(records, errors, what)
+    violations += _rule_direction_anchor_violations(
+        records, model_ref, sibling_ref, what)
     covered = {direction: [] for direction in IR_RULE_WRITE_DIRECTIONS}
     for rec in records:
         if rec["model"] != IR_RULE_MODEL:
@@ -1935,7 +2017,8 @@ def check_workspace_access_rule_directions(root):
     `src/tests/` 的行為測試守（見 docs/tracking/landings/556-workspace-access-authz-landing.md）。
     """
     return _rule_direction_violations(
-        root, WORKSPACE_ACCESS_MODEL_REF, "workspace_access 寫入方向存在性")
+        root, WORKSPACE_ACCESS_MODEL_REF, WORKSPACE_MODEL_REF,
+        "workspace_access 寫入方向存在性")
 
 
 def check_workspace_rule_directions(root):
@@ -1956,9 +2039,16 @@ def check_workspace_rule_directions(root):
     ⚠ 與第 23 條一樣只驗**存在性**，不驗 domain 寫得對不對：一條
     `[(1, '=', 1)]` 的 group_user rule 會被算成「有守」。domain 語意由
     `src/tests/test_workspace_authz_658.py` 的行為測試守。
+
+    🔴 本 check 與第 23 條之間唯一的差別就是 `WORKSPACE_MODEL_REF` 這一個字串，所以
+    「它到底指向哪個 model」本身是要被守的前提，而不是可以靠讀 code 目視確認的細節
+    ——#675 覆核實測：把它複製貼上成 `WORKSPACE_ACCESS_MODEL_REF` 的值之後，本 check
+    退化成第 23 條的複本，workspace 本體四條 rule 全刪掉仍然 EXIT=0。那道前提現在由
+    `_rule_direction_anchor_violations` 機械檢查（互異 ＋ 各自有靶）。
     """
     return _rule_direction_violations(
-        root, WORKSPACE_MODEL_REF, "workspace 寫入方向存在性")
+        root, WORKSPACE_MODEL_REF, WORKSPACE_ACCESS_MODEL_REF,
+        "workspace 寫入方向存在性")
 
 
 def _template_is_hidden_via_service_lines(src):
