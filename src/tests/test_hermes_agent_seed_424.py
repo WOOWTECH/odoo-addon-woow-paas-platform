@@ -1015,7 +1015,10 @@ class TestHermesAgentValueInjection(TransactionCase):
         ``auth.apiServerKey``——這條讓那個決定變成**要動測試才過得去**的顯式動作，
         而不是順手改 seed 的副作用。
         """
-        for xmlid in ('cloud_app_mcp_odoo', 'cloud_app_mcp_odoo_manage',
+        # #686：mcp-hermes（pilot）原本不在這張清單裡——與 has_admin_gui 漏的是
+        # 同一格（「複製 hermes 生出來的衍生品」都列了，被複製的那個沒列）。
+        for xmlid in ('cloud_app_mcp_hermes',
+                      'cloud_app_mcp_odoo', 'cloud_app_mcp_odoo_manage',
                       'cloud_app_mcp_n8n', 'cloud_app_mcp_k8s', 'cloud_app_mcp_vk',
                       'cloud_app_mcp_opendesign', 'cloud_app_opendesign',
                       'cloud_app_haos', 'cloud_app_ha_paas'):

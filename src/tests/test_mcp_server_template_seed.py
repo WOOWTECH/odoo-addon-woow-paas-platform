@@ -1,7 +1,48 @@
-"""Seed assertions for MCP server cloud service templates (hermes / odoo / n8n)."""
+"""Seed assertions for the mcp-server chart family of cloud service templates.
+
+家族成員（7 個，判準＝``helm_chart_name`` 以 ``/mcp-server`` 結尾）：
+hermes（pilot）／odoo／odoo-manage／n8n／k8s／vk／opendesign。
+
+## 為什麼是兩層 mixin（#686）
+
+原本只有一層 ``_McpServerSeedAssertions``，而它**是以 hermes 為反例寫的**——
+``test_template_overrides_chart_default_mcp_command`` 斷言
+``command != 'hermes-mcp-server'``，語意就是「別的 app 不可沿用 hermes 預設」。
+於是 pilot 自己**結構上加不進來**：不是被忘了，是這個 mixin 的形狀讓它加不進去。
+後果是 ``has_admin_gui`` 這條家族不變式從來沒守到 hermes，seed 也真的漏了
+（#686：admin GUI 掛公開根 URL、密碼落到 mcp-admin-core 內建的字面 ``admin``）。
+
+修法是**拆層**而不是硬塞：
+
+* ``_McpServerFamilyAssertions``——家族不變式，**7 個成員全部繼承**。
+* ``_McpServerSeedAssertions``——僅適用於「非 hermes」的那一條（必須顯式覆寫
+  chart 的 hermes 形預設 command）。
+
+啟動命令在**兩層都有斷言、但語意不同**：家族層守「宣告的契約與 seed 一致」
+（hermes 宣告 ``EXPECT_MCP_COMMAND = None``＝刻意吃 chart 預設），衍生層再多守
+「非 hermes 必須顯式覆寫且不得沿用 hermes 預設」。
+
+## 為什麼還要 ``TestMcpServerFamilyCoverage``
+
+#686 真正的教訓不是「漏了 hermes 這一格」，而是「漏格不會有人發現」——新上架一筆
+mcp-server chart 的 template 只要忘了寫測試子類，家族不變式對它就等於不存在，而
+測試輸出與全數覆蓋時**一模一樣**。所以覆蓋率本身要被斷言，判準取自 seed 的結構
+（chart 名），不是硬編清單。
+"""
 import json
 
 from odoo.tests.common import TransactionCase
+
+# 家族判準：chart 座標的尾段。與 test_admin_password_carrier_449.py 的
+# MCP_SERVER_CHART_SUFFIX 同源（該檔用它決定 admin_password 載體），刻意不共用
+# 常數——兩邊各自宣告才會在 chart 改名時各自紅，而不是一起靜默失效。
+MCP_SERVER_CHART_SUFFIX = '/mcp-server'
+
+# chart mcp-server 0.1.5 的 config.nonSensitive 預設是 hermes 形的
+# （values.yaml: config.nonSensitive.mcp_server.command）。hermes 靠它拿到啟動
+# 命令；其餘 app 必須覆寫，否則子行程從不 spawn、MCP endpoint 靜默 502 而
+# /healthz 與 GUI 看起來都正常（GAP-O1）。
+CHART_DEFAULT_MCP_COMMAND = 'hermes-mcp-server'
 
 
 def _assert_storage_resources_aligned(tc, tmpl):
@@ -26,83 +67,16 @@ def _assert_storage_resources_aligned(tc, tmpl):
         'resources.limits.cpu must match advertised min_vcpu')
 
 
-class TestMcpServerTemplateSeed(TransactionCase):
-    """The mcp-hermes template must be seeded tenant-neutral and sidecar-free."""
-
-    def test_hermes_template_seeded(self):
-        tmpl = self.env.ref('woow_paas_platform.cloud_app_mcp_hermes')
-        self.assertEqual(tmpl.slug, 'mcp-hermes')
-        self.assertEqual(tmpl.category, 'mcp')
-        self.assertTrue(tmpl.is_active)
-        self.assertEqual(tmpl.default_port, 8080)
-        self.assertTrue(tmpl.ingress_enabled)
-
-    def test_hermes_template_is_not_sidecar_backed(self):
-        """MCP capability is built into the body, NOT a sidecar."""
-        tmpl = self.env.ref('woow_paas_platform.cloud_app_mcp_hermes')
-        self.assertFalse(tmpl.mcp_enabled)
-        self.assertFalse(tmpl.mcp_sidecar_image)
-
-    def test_hermes_template_no_post_deploy_init(self):
-        """config seed handled by chart initContainer; no post-deploy action."""
-        tmpl = self.env.ref('woow_paas_platform.cloud_app_mcp_hermes')
-        self.assertEqual(tmpl.post_deploy_init_type, 'none')
-
-    def test_hermes_template_uses_mcp_server_chart(self):
-        tmpl = self.env.ref('woow_paas_platform.cloud_app_mcp_hermes')
-        self.assertIn('mcp-server', tmpl.helm_chart_name)
-        self.assertTrue(tmpl.helm_chart_name.startswith('oci://'))
-
-    def test_hermes_storage_and_resources_match_advertised_spec(self):
-        """#268: PVC size + container limits must equal the advertised spec."""
-        tmpl = self.env.ref('woow_paas_platform.cloud_app_mcp_hermes')
-        _assert_storage_resources_aligned(self, tmpl)
-
-    def test_hermes_plans_seeded_at_odoo_pricing(self):
-        # #330 定價重定：Hermes T1＝1500／15000（沿用 xmlid、原地改 T1）
-        monthly = self.env.ref('woow_paas_platform.plan_mcp_hermes_monthly')
-        yearly = self.env.ref('woow_paas_platform.plan_mcp_hermes_yearly')
-        self.assertEqual(monthly.sh_plan_price, 1500)
-        self.assertEqual(monthly.sh_unit, 'month')
-        self.assertEqual(yearly.sh_plan_price, 15000)
-        self.assertEqual(yearly.sh_unit, 'year')
-
-    def test_hermes_products_link_plans(self):
-        prod_m = self.env.ref('woow_paas_platform.product_mcp_hermes_monthly')
-        self.assertEqual(prod_m.type, 'service')
-        self.assertTrue(prod_m.sh_product_subscribe)
-        self.assertEqual(
-            prod_m.sh_subscription_plan_id,
-            self.env.ref('woow_paas_platform.plan_mcp_hermes_monthly'),
-        )
-
-    def test_hermes_template_linked_to_plans(self):
-        tmpl = self.env.ref('woow_paas_platform.cloud_app_mcp_hermes')
-        linked = tmpl.subscription_plan_ids
-        self.assertIn(self.env.ref('woow_paas_platform.plan_mcp_hermes_monthly'), linked)
-        self.assertIn(self.env.ref('woow_paas_platform.plan_mcp_hermes_yearly'), linked)
-
-    def test_hermes_plans_not_shared_with_other_service_types(self):
-        """The cross-service-type constraint must not be tripped by the seed."""
-        monthly = self.env.ref('woow_paas_platform.plan_mcp_hermes_monthly')
-        sh = self.env['woow_paas_platform.smart_home_template'].search(
-            [('subscription_plan_ids', 'in', monthly.ids)])
-        sa = self.env['woow_paas_platform.security_access_template'].search(
-            [('subscription_plan_ids', 'in', monthly.ids)])
-        self.assertFalse(sh)
-        self.assertFalse(sa)
-
-
-class _McpServerSeedAssertions:
-    """Shared seed assertions for an mcp-* cloud service template.
+class _McpServerFamilyAssertions:
+    """mcp-server chart 家族的**家族不變式**——7 個成員全部必須繼承。
 
     Subclasses bind app-specific xmlids/values. This mixin is intentionally
     NOT a TransactionCase, so Odoo's test runner would skip it and only run
-    the concrete odoo / n8n subclasses below — except that without
+    the concrete subclasses below — except that without
     ``allow_inherited_tests_method = True`` the runner also walks past every
     ``test_*`` method defined HERE (mixin is not in the subclass'
     ``__dict__``), so the subclasses silently contributed 0 tests (false-green,
-    #356). The flag propagates via the MRO to both concrete subclasses.
+    #356). The flag propagates via the MRO to every concrete subclass.
     """
 
     # #356: collect inherited test_* methods from this mixin via the subclasses.
@@ -115,22 +89,38 @@ class _McpServerSeedAssertions:
     PROD_M = None
     IMAGE_REPO_SUFFIX = None  # e.g. 'odoo-mcp-admin'
     APP = None  # helm values `app:` selector, e.g. 'odoo'
-    EXPECT_ENV_PREFIX = ''  # odoo/n8n run with empty envPrefix (hermes uses 'HERMES_')
-    EXPECT_MCP_COMMAND = None  # config.nonSensitive.mcp_server.command per app
-    # odoo is live; n8n is seeded inactive pending the A2 launcher (GAP-N1).
+    EXPECT_ENV_PREFIX = ''  # odoo/n8n/k8s/vk/opendesign 空；hermes 用 'HERMES_'
+    # seed 覆寫的 config.nonSensitive.mcp_server.command。**None＝刻意不覆寫、
+    # 吃 chart 預設**（只有 pilot hermes 是這個形態）。
+    EXPECT_MCP_COMMAND = None
+    # 上架與否；目前 7 個成員都是 True，欄位保留給未來待上架的成員。
     EXPECT_ACTIVE = True
+    # 月繳／年繳定價。hermes 是 1500／15000（#330 定價重定），其餘齊一 3000／24000。
+    EXPECT_PLAN_PRICE_M = 3000
+    EXPECT_PLAN_PRICE_Y = 24000
+
+    def _values(self):
+        return json.loads(self.env.ref(self.TMPL).helm_default_values)
+
+    @staticmethod
+    def _seeded_mcp_command(values):
+        """seed 有沒有覆寫 ``mcp_server.command``；沒有回 None（＝吃 chart 預設）。"""
+        return (
+            values.get('config', {}).get('nonSensitive', {})
+            .get('mcp_server', {}).get('command')
+        )
 
     def test_template_seeded(self):
         tmpl = self.env.ref(self.TMPL)
         self.assertEqual(tmpl.slug, self.SLUG)
         self.assertEqual(tmpl.category, 'mcp')
         self.assertEqual(tmpl.is_active, self.EXPECT_ACTIVE)
-        # External port is unified 8080 across all three apps (design D7).
+        # External port is unified 8080 across the whole family (design D7).
         self.assertEqual(tmpl.default_port, 8080)
         self.assertTrue(tmpl.ingress_enabled)
 
     def test_template_is_not_sidecar_backed(self):
-        """MCP capability is built into the body, NOT the n8n-mcp sidecar."""
+        """MCP capability is built into the body, NOT a sidecar."""
         tmpl = self.env.ref(self.TMPL)
         self.assertFalse(tmpl.mcp_enabled)
         self.assertFalse(tmpl.mcp_sidecar_image)
@@ -142,16 +132,21 @@ class _McpServerSeedAssertions:
 
     def test_template_uses_mcp_server_chart(self):
         tmpl = self.env.ref(self.TMPL)
-        self.assertIn('mcp-server', tmpl.helm_chart_name)
         self.assertTrue(tmpl.helm_chart_name.startswith('oci://'))
+        # endswith（而非 assertIn）：與 TestMcpServerFamilyCoverage 及 #449 載體
+        # 守線同一個判準，family 成員資格才不會兩處各認各的。
+        self.assertTrue(
+            tmpl.helm_chart_name.endswith(MCP_SERVER_CHART_SUFFIX),
+            '%s 的 chart 座標 %r 不以 %s 結尾——家族成員資格的判準就是它，'
+            '不符合的話 TestMcpServerFamilyCoverage 也看不到這一筆' % (
+                self.SLUG, tmpl.helm_chart_name, MCP_SERVER_CHART_SUFFIX))
 
     def test_template_helm_values_use_camelcase_envprefix(self):
         """camelCase guard (design 階段1 守線): the values key must be
         ``envPrefix``, not ``env_prefix`` — helm silently ignores unknown
         keys and falls back to the chart default, which mis-configures
         odoo/n8n (empty envPrefix) without any error."""
-        tmpl = self.env.ref(self.TMPL)
-        values = json.loads(tmpl.helm_default_values)
+        values = self._values()
         self.assertIn('envPrefix', values)
         self.assertNotIn('env_prefix', values)
         # Assert the VALUE, not just the key: the most likely copy-paste error
@@ -163,45 +158,56 @@ class _McpServerSeedAssertions:
         # External service port stays 8080 regardless of internal app port.
         self.assertEqual(values['service']['port'], 8080)
 
-    def test_template_overrides_chart_default_mcp_command(self):
-        """GAP-O1/N1 guard: the shared chart's DEFAULT config is hermes-shaped
-        (config.nonSensitive.mcp_server.command='hermes-mcp-server'). odoo/n8n
-        MUST override that command in helm_default_values, otherwise the chart
-        seeds odoo/n8n with the hermes launch command, the wrong child process
-        is spawned (or none), and the MCP endpoint silently 502s while /healthz
-        and the GUI still look fine. Asserts the per-app command is set and is
-        NOT the stale hermes default — the highest-value runtime footgun in the
-        whole replication (caught at odoo layer-2, not by unit tests before)."""
-        tmpl = self.env.ref(self.TMPL)
-        values = json.loads(tmpl.helm_default_values)
-        command = values['config']['nonSensitive']['mcp_server']['command']
-        self.assertEqual(command, self.EXPECT_MCP_COMMAND)
-        self.assertNotEqual(command, 'hermes-mcp-server')
+    def test_template_launch_command_matches_declared_contract(self):
+        """seed 的啟動命令必須等於子類宣告的契約（``EXPECT_MCP_COMMAND``）。
+
+        兩個方向都守：宣告了值卻沒 seed（或 seed 錯值）＝子行程 spawn 不起來；
+        宣告 None（＝刻意吃 chart 的 hermes 形預設，只有 pilot 適用）卻在 seed
+        裡偷偷覆寫，也會紅——要改吃自己的命令就得同時改宣告，是一次刻意的動作，
+        不會是複製貼上滑過去的。
+
+        衍生層 ``_McpServerSeedAssertions`` 另有更強的一條（非 hermes **必須**
+        顯式覆寫且不得等於 chart 預設）；這裡是 7 個成員都成立的那一半。
+        """
+        command = self._seeded_mcp_command(self._values())
+        self.assertEqual(
+            command, self.EXPECT_MCP_COMMAND,
+            '%s：seed 的 config.nonSensitive.mcp_server.command 是 %r，'
+            '但測試類宣告的契約是 %r（None＝刻意吃 chart 預設 %r）' % (
+                self.SLUG, command, self.EXPECT_MCP_COMMAND,
+                CHART_DEFAULT_MCP_COMMAND))
 
     def test_template_requires_platform_admin_password(self):
-        """#357 C01+C02：admin_password 供給契約的 seed 側守線。
+        """#357 C01+C02 / #686：admin_password 供給契約的 seed 側守線。
 
-        C01（has_admin_gui）：這三個 template 的 admin GUI 內建於 image，需平台供給
+        C01（has_admin_gui）：家族成員的 admin GUI 內建於 image，需平台供給
         admin_password。閘門必須是 has_admin_gui——不能用 mcp_enabled，後者是「外掛
-        MCP sidecar」語意、對 body-內建的這三者恆 False（見
+        MCP sidecar」語意、對 body-內建的家族成員恆 False（見
         test_template_is_not_sidecar_backed），拿它當閘門 create() 會過濾成空集合、
         secret 從不建立、租戶拿到一組永不生效的密碼（#357 根因）。
 
+        沒有這個欄位的後果不是「密碼比較弱」而是**沒有密碼**：平台從不鑄造，
+        mcp-admin-core 落到內建 fallback ``admin_password = "admin"``，admin GUI
+        又掛在服務公開根 URL 上（#686 在 stg 實測 ``POST /api/auth/login
+        {"password":"admin"}`` → 200）。
+
         C02（requiredFields）：chart mcp-server 0.1.5 的 config.requiredFields 預設
         8 條，覆寫語意是 REPLACE 而非 merge（deployment.yaml 用 join "," 餵
-        initContainer 的 SEED_REQUIRED_PATHS）。本波平台只供給 admin_password 一條，
+        initContainer 的 SEED_REQUIRED_PATHS）。平台只供給 admin_password 一條，
         故必須覆寫成單條——connection.*（租戶自行在 GUI 填）與 mcp_auth_token
-        （不在本波）若留在 requiredFields，initContainer 會因缺值讓 pod 永遠卡 Init。
+        （不由平台供給）若留在 requiredFields，initContainer 會因缺值讓**每個新
+        租戶的 pod 永遠卡 Init**。
         """
         tmpl = self.env.ref(self.TMPL)
         self.assertTrue(
             tmpl.has_admin_gui,
-            'admin GUI 內建 → 必須 has_admin_gui=True 才會觸發平台供給 admin_password')
-        values = json.loads(tmpl.helm_default_values)
-        self.assertTrue(values['config']['requireFields'])
-        self.assertEqual(values['config']['sensitive'], {})
+            'admin GUI 內建 → 必須 has_admin_gui=True 才會觸發平台供給 '
+            'admin_password；否則落到 mcp-admin-core 的字面 "admin"（#686）')
+        config = self._values()['config']
+        self.assertTrue(config['requireFields'])
+        self.assertEqual(config['sensitive'], {})
         self.assertEqual(
-            values['config']['requiredFields'], ['admin_password'],
+            config['requiredFields'], ['admin_password'],
             'requiredFields 覆寫＝REPLACE：只列本波真正供給的路徑，'
             '多列一條就讓 pod 卡 Init')
 
@@ -211,13 +217,12 @@ class _McpServerSeedAssertions:
         512Mi-vs-1G drift this issue fixed."""
         _assert_storage_resources_aligned(self, self.env.ref(self.TMPL))
 
-    def test_plans_seeded_at_odoo_pricing(self):
-        # Wave B 重定：MCP odoo/n8n 月 3000 不動、年 30000→24000（×8 對齊）
+    def test_plans_seeded_at_expected_pricing(self):
         monthly = self.env.ref(self.PLAN_M)
         yearly = self.env.ref(self.PLAN_Y)
-        self.assertEqual(monthly.sh_plan_price, 3000)
+        self.assertEqual(monthly.sh_plan_price, self.EXPECT_PLAN_PRICE_M)
         self.assertEqual(monthly.sh_unit, 'month')
-        self.assertEqual(yearly.sh_plan_price, 24000)
+        self.assertEqual(yearly.sh_plan_price, self.EXPECT_PLAN_PRICE_Y)
         self.assertEqual(yearly.sh_unit, 'year')
 
     def test_products_link_plans(self):
@@ -259,6 +264,61 @@ class _McpServerSeedAssertions:
                 [('subscription_plan_ids', 'in', plan.ids)])
             self.assertFalse(sh, "%s leaked to smart_home" % plan_ref)
             self.assertFalse(sa, "%s leaked to security_access" % plan_ref)
+
+
+class _McpServerSeedAssertions(_McpServerFamilyAssertions):
+    """家族不變式 **＋ 僅適用於「非 hermes」的那一條**。
+
+    這一層放的是語意上就排除 pilot 的斷言：chart 的 config 預設是 hermes 形的，
+    所以「必須覆寫掉 hermes 預設」對 hermes 本身不成立。hermes 走
+    ``_McpServerFamilyAssertions``，不繼承本類。
+    """
+
+    def test_template_overrides_chart_default_mcp_command(self):
+        """GAP-O1/N1 guard: the shared chart's DEFAULT config is hermes-shaped
+        (config.nonSensitive.mcp_server.command='hermes-mcp-server'). 非 pilot 的
+        成員 MUST override that command in helm_default_values, otherwise the chart
+        seeds them with the hermes launch command, the wrong child process
+        is spawned (or none), and the MCP endpoint silently 502s while /healthz
+        and the GUI still look fine. Asserts the per-app command is set and is
+        NOT the stale hermes default — the highest-value runtime footgun in the
+        whole replication (caught at odoo layer-2, not by unit tests before)."""
+        command = self._seeded_mcp_command(self._values())
+        self.assertIsNotNone(
+            command,
+            '%s 必須在 seed 顯式覆寫 mcp_server.command；留空＝沿用 chart 的 '
+            'hermes 形預設，子行程 spawn 不起來而 /healthz 與 GUI 仍正常' % self.SLUG)
+        self.assertEqual(command, self.EXPECT_MCP_COMMAND)
+        self.assertNotEqual(command, CHART_DEFAULT_MCP_COMMAND)
+
+
+class TestMcpServerTemplateSeed(_McpServerFamilyAssertions, TransactionCase):
+    """mcp-hermes（pilot）：家族不變式全繼承。
+
+    #686 之前這個類別是手寫、直接繼承 TransactionCase，比 mixin 更早存在，於是
+    ``has_admin_gui`` / ``config.requireFields`` 兩條家族不變式從來沒守到它——
+    seed 漏的那一格與守線漏的那一格是同一格。
+
+    ``EXPECT_MCP_COMMAND = None``：hermes 刻意**不**覆寫 chart 的
+    ``config.nonSensitive``，靠 chart 預設拿到 ``hermes-mcp-server`` ＋ args ＋
+    內部 port 8000。#686 補 ``config.requireFields`` / ``requiredFields`` 時已用
+    ``helm template``（chart 0.1.5、helm 3.13.3）實測：補上 ``config`` 區塊後
+    render 出來的 ``config.base.json`` 與補之前**逐位元組相同**（helm 對 map 是
+    深合併，不是整個 config 物件取代）。
+    """
+
+    SLUG = 'mcp-hermes'
+    TMPL = 'woow_paas_platform.cloud_app_mcp_hermes'
+    PLAN_M = 'woow_paas_platform.plan_mcp_hermes_monthly'
+    PLAN_Y = 'woow_paas_platform.plan_mcp_hermes_yearly'
+    PROD_M = 'woow_paas_platform.product_mcp_hermes_monthly'
+    IMAGE_REPO_SUFFIX = 'hermes-mcp-admin'
+    APP = 'hermes'
+    EXPECT_ENV_PREFIX = 'HERMES_'
+    EXPECT_MCP_COMMAND = None  # 刻意吃 chart 預設，見類別 docstring
+    # #330 定價重定：Hermes T1＝1500／15000（沿用 xmlid、原地改 T1）
+    EXPECT_PLAN_PRICE_M = 1500
+    EXPECT_PLAN_PRICE_Y = 15000
 
 
 class TestMcpOdooTemplateSeed(_McpServerSeedAssertions, TransactionCase):
@@ -311,3 +371,129 @@ class TestMcpOdooManageTemplateSeed(_McpServerSeedAssertions, TransactionCase):
     IMAGE_REPO_SUFFIX = 'odoo-manage-mcp-admin'
     APP = 'odoo-manage'
     EXPECT_MCP_COMMAND = 'mcp-server-odoo'
+
+
+class TestMcpK8sTemplateSeed(_McpServerSeedAssertions, TransactionCase):
+    """mcp-k8s template（#375）：kubernetes-mcp-server，Go binary 原生 http。
+
+    治理三 toggle／tools.disabled 的真傳導語意由 test_mcp_3type_seed_375.py 守；
+    這裡守的是家族不變式那一層（#686 之前 k8s 沒有繼承任何一條）。
+    """
+
+    SLUG = 'mcp-k8s'
+    TMPL = 'woow_paas_platform.cloud_app_mcp_k8s'
+    PLAN_M = 'woow_paas_platform.plan_mcp_k8s_monthly'
+    PLAN_Y = 'woow_paas_platform.plan_mcp_k8s_yearly'
+    PROD_M = 'woow_paas_platform.product_mcp_k8s_monthly'
+    IMAGE_REPO_SUFFIX = 'k8s-mcp-admin'
+    APP = 'k8s'
+    EXPECT_MCP_COMMAND = 'k8s-mcp-http'
+
+
+class TestMcpVkTemplateSeed(_McpServerSeedAssertions, TransactionCase):
+    """mcp-vk template（#375）：vibe-kanban-mcp，經 supergateway 橋 stdio。"""
+
+    SLUG = 'mcp-vk'
+    TMPL = 'woow_paas_platform.cloud_app_mcp_vk'
+    PLAN_M = 'woow_paas_platform.plan_mcp_vk_monthly'
+    PLAN_Y = 'woow_paas_platform.plan_mcp_vk_yearly'
+    PROD_M = 'woow_paas_platform.product_mcp_vk_monthly'
+    IMAGE_REPO_SUFFIX = 'vk-mcp-admin'
+    APP = 'vk'
+    EXPECT_MCP_COMMAND = 'supergateway'
+
+
+class TestMcpOpenDesignTemplateSeed(_McpServerSeedAssertions, TransactionCase):
+    """mcp-opendesign template（#375）：vendored od_mcp_server，supergateway 橋。
+
+    ⚠ 與 ``cloud_app_opendesign``（Open Design 完整應用，chart open-design、
+    basic-auth 由 nginx auth-proxy 閘）是兩筆不同的 template，勿互抄。
+    """
+
+    SLUG = 'mcp-opendesign'
+    TMPL = 'woow_paas_platform.cloud_app_mcp_opendesign'
+    PLAN_M = 'woow_paas_platform.plan_mcp_opendesign_monthly'
+    PLAN_Y = 'woow_paas_platform.plan_mcp_opendesign_yearly'
+    PROD_M = 'woow_paas_platform.product_mcp_opendesign_monthly'
+    IMAGE_REPO_SUFFIX = 'opendesign-mcp-admin'
+    APP = 'opendesign'
+    EXPECT_MCP_COMMAND = 'supergateway'
+
+
+def _all_subclasses(cls):
+    """遞迴收集子類（兩層 mixin ⇒ 具體類不一定是直接子類）。"""
+    found = set()
+    for sub in cls.__subclasses__():
+        found.add(sub)
+        found |= _all_subclasses(sub)
+    return found
+
+
+class TestMcpServerFamilyCoverage(TransactionCase):
+    """覆蓋率本身是斷言：每一筆 mcp-server chart 的 seed 都要有測試類綁著。
+
+    #686 的教訓不是「漏了 hermes」，是「漏格不會有人發現」——hermes 的
+    ``has_admin_gui`` 從未被斷言，而測試輸出與全數覆蓋時一模一樣。原 issue 甚至
+    把覆蓋率判成 3/7（誤：k8s／vk／opendesign 的 ``has_admin_gui`` 其實由
+    test_mcp_3type_seed_375.py 守著，只是**家族其餘不變式**沒守）——連盤點都會出錯，
+    正說明這件事不能靠人工清點。
+
+    判準取自 seed 的結構（chart 座標），不是硬編清單：新上架一筆 mcp-server chart
+    的 template 卻沒寫測試子類就會紅，而單純改動既有 template 不會。
+    """
+
+    def _family_templates(self):
+        """seed 裡所有走 mcp-server chart 的 template；**保證非空**。
+
+        非空是這條全稱斷言的取樣層陽性對照：chart 座標改名／seed 未載入時，
+        search 會回空集合、迴圈整個跳過、測試照樣綠——而假綠的輸出與真綠一模一樣
+        （對齊 test_admin_password_carrier_449.py 的同型守法）。
+        """
+        templates = self.env['woow_paas_platform.cloud_app_template'].with_context(
+            active_test=False,
+        ).search([])
+        family = templates.filtered(
+            lambda t: (t.helm_chart_name or '').endswith(MCP_SERVER_CHART_SUFFIX))
+        self.assertTrue(
+            family,
+            '走 mcp-server chart 的 template 一筆都沒有。這不代表「全部都有測試」，'
+            '而是探針讀不到東西（chart 座標改名／seed 未載入）——此時本條覆蓋率'
+            '守線等於不存在。')
+        return family
+
+    def test_every_mcp_server_chart_template_has_a_seed_test_class(self):
+        covered = {
+            cls.TMPL for cls in _all_subclasses(_McpServerFamilyAssertions)
+            if getattr(cls, 'TMPL', None)
+        }
+        missing = []
+        for template in self._family_templates():
+            xmlid = template.get_external_id().get(template.id)
+            if xmlid not in covered:
+                missing.append('%s（%s）' % (xmlid or '(無 xmlid)', template.slug))
+        # 輸出「是哪一個」而不是「差幾個」：差幾個沒辦法直接動手。
+        self.assertFalse(
+            missing,
+            '下列 mcp-server chart template 沒有任何 _McpServerFamilyAssertions '
+            '子類綁著它，家族不變式（has_admin_gui／requiredFields／envPrefix…）'
+            '對它等於不存在：%s。請在 test_mcp_server_template_seed.py 補一個具體'
+            '測試類（非 pilot 走 _McpServerSeedAssertions，pilot 走 '
+            '_McpServerFamilyAssertions）。' % '、'.join(missing))
+
+    def test_every_seed_test_class_points_at_a_real_family_template(self):
+        """反向：測試類宣告的 TMPL 必須真的是一筆 mcp-server chart 的 seed。
+
+        沒有這一條的話，把上一條的紅燈「修掉」的最省事作法是隨便掛一個 TMPL
+        字串——覆蓋率數字對了、斷言卻跑在別的（甚至不存在的）record 上。
+        """
+        family_xmlids = {
+            t.get_external_id().get(t.id) for t in self._family_templates()
+        }
+        for cls in _all_subclasses(_McpServerFamilyAssertions):
+            tmpl = getattr(cls, 'TMPL', None)
+            if not tmpl:
+                continue
+            self.assertIn(
+                tmpl, family_xmlids,
+                '%s.TMPL=%r 不是走 mcp-server chart 的 seed template' % (
+                    cls.__name__, tmpl))
