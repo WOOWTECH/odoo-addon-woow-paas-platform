@@ -70,6 +70,64 @@ class MemoryLinksGuardTest(unittest.TestCase):
             self.assertIn("斷鏈", out["reason"])
             self.assertIn("孤兒", out["reason"])
 
+    def test_block_reason_offers_the_topic_file_route_and_the_current_size(self):
+        """🔴 #693：這道 gate 誤報時，舊文案會**主動教**人把連結搬回 MEMORY.md。
+
+        MEMORY.md 有載入上限，照著做等於製造一個比原問題更嚴重的問題。所以文案
+        必須同時給出另一條合法路徑（在既有 topic 檔補一行），並把目前大小／上限
+        端出來，讓讀的人看得到搬回索引的代價。
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            mem = self.make_memory_dir(tmp)
+            with open(os.path.join(mem, "MEMORY.md"), "w", encoding="utf-8") as fh:
+                fh.write("- [不存在的檔](missing_target.md)\n")
+
+            proc = run_guard(hook_json(os.path.join(mem, "MEMORY.md")))
+
+            out = json.loads(proc.stdout)
+            self.assertEqual(out["decision"], "block")
+            self.assertIn("topic 檔", out["reason"])
+            self.assertIn("載入上限", out["reason"])
+            # 目前大小／上限那一行必須真的在 reason 裡（不是只講「有上限」）
+            self.assertIn("MEMORY.md ", out["reason"])
+            self.assertIn("/ 25,000 bytes", out["reason"])
+
+    def test_orphan_reachable_through_a_topic_file_does_not_block(self):
+        """🔴 #693 迴歸：照官方做法把索引外移到 topic 檔，不得再擋住 memory 寫入。
+
+        這正是本 issue 的症狀：`--links` 判一批孤兒 → hook 升級成 block →
+        之後每一次 memory 目錄的寫入都被擋住。
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            mem = self.make_memory_dir(tmp)
+            with open(os.path.join(mem, "MEMORY.md"), "w", encoding="utf-8") as fh:
+                fh.write("- [主題檔](topic_x.md)\n")
+            with open(os.path.join(mem, "topic_x.md"), "w", encoding="utf-8") as fh:
+                fh.write("- [a](reference_a.md)\n- [b](reference_b.md)\n")
+            for name in ("reference_a.md", "reference_b.md"):
+                with open(os.path.join(mem, name), "w", encoding="utf-8") as fh:
+                    fh.write(f"---\nname: {name[:-3]}\n---\n內容\n")
+
+            proc = run_guard(hook_json(os.path.join(mem, "reference_a.md")))
+
+            self.assertEqual(proc.returncode, 0)
+            self.assertEqual(proc.stdout.strip(), "",
+                             "經 topic 檔可達的檔不得被判孤兒、更不得 block")
+
+    def test_warning_only_findings_do_not_block(self):
+        """wiki-link 指不到東西、索引越過壓縮線——都只是提醒，不能擋寫入。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            mem = self.make_memory_dir(tmp)
+            with open(os.path.join(mem, "MEMORY.md"), "w", encoding="utf-8") as fh:
+                fh.write("- [a](reference_a.md)\n" + ("x" * 499 + "\n") * 40)
+            with open(os.path.join(mem, "reference_a.md"), "w", encoding="utf-8") as fh:
+                fh.write("---\nname: reference_a\n---\n見 [[reference_never_written]]\n")
+
+            proc = run_guard(hook_json(os.path.join(mem, "reference_a.md")))
+
+            self.assertEqual(proc.returncode, 0)
+            self.assertEqual(proc.stdout.strip(), "")
+
     def test_green_clean_index_stays_silent(self):
         with tempfile.TemporaryDirectory() as tmp:
             mem = self.make_memory_dir(tmp)
