@@ -15,6 +15,7 @@
 import importlib.util
 import os
 import pathlib
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -568,6 +569,146 @@ class TestCleanFixtureIsQuiet(TruncationFixtureCase):
         proc = self.run_cli()
         self.assertEqual(proc.returncode, 0)
         self.assertIn("這不等於「沒有遺失」，是**沒有檢查**", proc.stdout)
+
+
+class TestMemoryDirFlagRetargets(TruncationFixtureCase):
+    """`--memory-dir` 必須真的換掉**被檢查的目錄**，而不只是換掉一個路徑字串。
+
+    比照 `TestCli::test_repo_root_flag_actually_changes_the_base` 的否定對照寫法：
+    同一條命令，只換 `--memory-dir`，結論就必須跟著換——而且要換到**點得出名字**
+    的程度（不同的檔名），不是只換 exit code。只驗 exit code 的話，「flag 被靜默
+    忽略、兩次都跑同一個目錄」在某些 fixture 下也會剛好給出不同結果。
+    """
+
+    def setUp(self):
+        super().setUp()
+        # 第二組完全獨立的 memory + file-history，代表「另一個語料庫」
+        self.mem2 = os.path.join(self._tmp.name, "memory2")
+        self.history2 = os.path.join(self._tmp.name, "file-history2")
+        os.makedirs(self.mem2)
+        os.makedirs(self.history2)
+        self.lose_beta()                                   # 語料 1：reference_a.md 掉了 Beta
+        _write(os.path.join(self.mem2, "reference_b.md"),
+               self._doc("reference_b.md", HEADER))
+        _write(os.path.join(self.history2, "session-1", "reference_b@v1"),
+               self._doc("reference_b.md", HEADER + GAMMA))  # 語料 2：reference_b.md 掉了 Gamma
+
+    def _run(self, mem, history):
+        return subprocess.run(
+            [sys.executable, str(_GATE_PATH), "--truncation",
+             "--memory-dir", mem, "--file-history", history, "--baseline", self.baseline],
+            capture_output=True, text=True)
+
+    def test_flag_selects_which_corpus_is_checked(self):
+        first = self._run(self.mem, self.history)
+        second = self._run(self.mem2, self.history2)
+        self.assertEqual(first.returncode, 1, first.stdout)
+        self.assertEqual(second.returncode, 1, second.stdout)
+        # 點得出名字：兩次報的是不同的檔，證明目標目錄真的換了
+        self.assertIn("reference_a.md 疑似整段消失", first.stdout)
+        self.assertNotIn("reference_b.md", first.stdout)
+        self.assertIn("reference_b.md 疑似整段消失", second.stdout)
+        self.assertNotIn("reference_a.md", second.stdout)
+
+    def test_baseline_defaults_to_the_sibling_of_whichever_dir_was_given(self):
+        """baseline 預設位置必須跟著 `--memory-dir` 走，不是跟著本機 HOME 走。
+
+        這條同時是隱私守衛：baseline 若沒跟著走，測試就會寫進**真實**的
+        `~/.claude/projects/<slug>/` 底下。
+        """
+        expected = os.path.join(os.path.dirname(self.mem2),
+                                mi.BASELINE_FILENAME)
+        self.assertEqual(mi.baseline_path(self.mem2), expected)
+        proc = subprocess.run(
+            [sys.executable, str(_GATE_PATH), "--memory-dir", self.mem2,
+             "--file-history", self.history2,          # 刻意不帶 --baseline
+             "--waive", "reference_b.md", "--reason", "section-rewrite"],
+            capture_output=True, text=True)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertTrue(os.path.isfile(expected), "baseline 沒有落在 --memory-dir 的兄弟位置")
+        self.assertTrue(expected.startswith(self._tmp.name),
+                        "baseline 落到 fixture 之外＝可能寫進真實 memory 目錄旁")
+
+
+class TestMissingMemoryDirStaysFailClosed(TruncationFixtureCase):
+    """fail-closed 不可以因為新增提示訊息而退化成「印個提示然後繼續跑」。"""
+
+    MODES = (["--links"], ["--truncation"], ["--detail", "x.md"],
+             ["--waive", "x.md", "--reason", "section-rewrite"])
+
+    def test_every_mode_exits_one_and_checks_nothing(self):
+        missing = os.path.join(self._tmp.name, "nope")
+        for mode in self.MODES:
+            with self.subTest(mode=" ".join(mode)):
+                proc = subprocess.run(
+                    [sys.executable, str(_GATE_PATH), *mode, "--memory-dir", missing],
+                    capture_output=True, text=True)
+                self.assertEqual(proc.returncode, 1, proc.stdout)
+                self.assertIn("找不到 memory 目錄", proc.stdout)
+                # 沒有任何一個 check 的表頭 ⇒ 真的什麼都沒跑，不是印完提示照跑
+                self.assertNotIn("[silent-truncation]", proc.stdout)
+                self.assertNotIn("[index-links]", proc.stdout)
+
+    def test_explicit_path_does_not_get_the_worktree_lecture(self):
+        """使用者自己給了路徑時，講推導機制只會把人帶去查不存在的問題。"""
+        proc = subprocess.run(
+            [sys.executable, str(_GATE_PATH), "--truncation",
+             "--memory-dir", os.path.join(self._tmp.name, "nope")],
+            capture_output=True, text=True)
+        self.assertIn("--memory-dir 指定的路徑", proc.stdout)
+        self.assertNotIn("worktree", proc.stdout)
+
+
+class TestDerivedPathFailureIsActionable(unittest.TestCase):
+    """推導出來的目錄不存在時，訊息必須帶**可照抄的**修正指令。
+
+    這條守的是 2026-08-12 的實遇：有人在 worktree 撞到「找不到 memory 目錄」，
+    據此結論「這支工具沒有 --memory-dir」並開單要求新增一個早就存在的 flag。
+    警告當時就寫在檔頭 docstring 裡——所以判準不是「有沒有寫」，是「撞牆的人
+    在終端上看不看得到」。
+    """
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        # 造一棵假 worktree：<tmp>/wt/scripts/audit/<gate>，讓 repo_root() 推導到 <tmp>/wt
+        self.tree = os.path.join(self._tmp.name, "wt")
+        self.copy = os.path.join(self.tree, "scripts", "audit", _GATE_PATH.name)
+        os.makedirs(os.path.dirname(self.copy))
+        shutil.copy(str(_GATE_PATH), self.copy)
+
+    def run_bare(self):
+        """不帶 --memory-dir ⇒ 走推導路徑（那個 slug 目錄必然不存在）。"""
+        return subprocess.run([sys.executable, self.copy, "--truncation"],
+                              capture_output=True, text=True)
+
+    def test_worktree_is_detected_and_main_checkout_is_filled_in(self):
+        _write(os.path.join(self.tree, ".git"),
+               "gitdir: /somewhere/main-repo/.git/worktrees/wt\n")
+        proc = self.run_bare()
+        self.assertEqual(proc.returncode, 1, proc.stdout)
+        self.assertIn("--memory-dir", proc.stdout, "沒告訴人有這個 flag")
+        self.assertIn("主 checkout ＝ /somewhere/main-repo", proc.stdout)
+        # 可照抄＝路徑已經幫你算好填進去了，不是叫你自己推 slug
+        self.assertIn(mi.memory_dir("/somewhere/main-repo"), proc.stdout)
+
+    def test_says_repo_root_will_not_fix_it(self):
+        """開單者試了三種 --repo-root 組合——訊息要主動擋掉這條岔路。"""
+        self.assertIn("--repo-root", self.run_bare().stdout)
+
+    def test_non_worktree_still_gets_the_flag_and_an_example(self):
+        os.makedirs(os.path.join(self.tree, ".git"))     # 一般 clone：.git 是目錄
+        proc = self.run_bare()
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("--memory-dir", proc.stdout)
+        self.assertNotIn("主 checkout ＝", proc.stdout)
+
+    def test_submodule_gitdir_is_not_mistaken_for_a_worktree(self):
+        _write(os.path.join(self.tree, ".git"), "gitdir: ../.git/modules/foo\n")
+        self.assertIsNone(mi.main_checkout(self.tree))
+
+    def test_main_checkout_returns_none_without_any_git_marker(self):
+        self.assertIsNone(mi.main_checkout(self.tree))
 
 
 class TestArgvIsStrict(TruncationFixtureCase):
