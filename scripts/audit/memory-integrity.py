@@ -84,6 +84,16 @@
      意義**——實遇：有人在 worktree 拿到這行、照樣往下跑注入，整輪結論全部作廢。
      要在別的 checkout 驗證請一律帶 `--memory-dir <路徑>` 指向真實或副本目錄。
 
+     🔴 2026-08-12 又踩一次，形態不同、更值得記：有人在 worktree 撞到上面那行，
+     據此得出「**這支工具沒有 `--memory-dir`**、在 worktree 無法對真實 memory 驗證」
+     並開單要求新增一個**從第一版就存在**的 flag（本段自己就寫著它）。同時還試了
+     `--repo-root` 的三種組合——那個 flag 跟 memory 目錄的推導完全無關（見下面第 2 點），
+     所以三種都失敗，反而強化了「沒有這個能力」的錯誤結論。
+     ⇒ 病灶不是讀的人，是**投放位置**：警告在檔頭 docstring，撞牆的人看到的卻是終端上
+     孤零零一行「找不到 memory 目錄」。所以 `print_memory_dir_hint()` 現在會在**失敗
+     的那一刻**印出可整行照抄的修正指令（worktree 還會反推主 checkout 幫你填好路徑）。
+     這條的通則見 memory: 文件裡「可照抄的範本」勝過正文警告。
+
   2. 🔴 但 repo 相對路徑的基準（`--repo-root` 預設值）**不會 fail-closed**：它就是
      腳本所在的那個 checkout。帶了 `--memory-dir` 之後第 1 點的守門被繞過，基準就
      悄悄變成 **worktree root**——那棵樹是該分支的內容，不是 develop 的。分支上還沒
@@ -692,6 +702,62 @@ def waive(mem, name, reason, file_history=FILE_HISTORY, baseline=None):
     return 0
 
 
+def main_checkout(root):
+    """從 worktree root 反推主 checkout；不是 worktree（或看不出來）就回 None。
+
+    worktree 的 `<root>/.git` 是**檔案**不是目錄，內容是
+    `gitdir: /path/to/main/.git/worktrees/<name>`——直接讀它就拿得到主 checkout，
+    不必開 subprocess 叫 git（這支腳本在任何環境都要能跑，包含沒有 git 的容器）。
+
+    ⚠ submodule 的 `.git` 也是檔案（`gitdir: ../.git/modules/foo`），所以 pattern
+    必須錨在 `/.git/worktrees/` 而不是只看「有沒有 gitdir:」。
+    """
+    marker = os.path.join(root, ".git")
+    if not os.path.isfile(marker):
+        return None
+    try:
+        with open(marker, encoding="utf-8", errors="replace") as fh:
+            head = fh.read(4096)
+    except OSError:
+        return None
+    match = re.search(r"^gitdir:\s*(.+?)/\.git/worktrees/", head, re.M)
+    return match.group(1) if match else None
+
+
+def print_memory_dir_hint(root, argv, explicit):
+    """找不到 memory 目錄時，印出**可照抄的修正指令**。
+
+    🔴 為什麼是「可照抄的指令」而不是再寫一段警告：本檔 docstring 從一開始就有
+    `--memory-dir`（用法段一行、⚠ 段兩處），而 2026-08-12 仍有人在 worktree 撞到
+    這行、據此得出「這支工具沒有 --memory-dir、在 worktree 無法對真實 memory 驗證」
+    並開單要求新增一個**早就存在**的 flag。
+
+    ⇒ 那不是讀的人的問題，是投放位置的問題：警告寫在檔頭 docstring，而撞牆的人看到
+    的是終端上孤零零一行「找不到 memory 目錄」。修正指令必須出現在**失敗的那一刻**，
+    而且要能整行貼上去就跑（見 memory: 可照抄的範本勝過正文警告）。
+
+    `explicit=True`（使用者自己帶了 --memory-dir）時**不要**講 worktree——那時候
+    路徑是他給的，講推導機制只會把人帶去查一個不存在的問題。
+    """
+    if explicit:
+        print("  ↑ 這是 --memory-dir 指定的路徑，不是推導出來的——先確認路徑有沒有打錯。")
+        return
+    print("  memory 目錄由**腳本自身的絕對路徑**推導（repo 路徑 → Claude projects slug），")
+    print("  所以從 worktree／任何其他 clone 跑一定找不到。")
+    print("  ⚠ `--repo-root` 修不了這個——它只改 index-links 解析相對路徑的基準，")
+    print("     跟 memory 目錄的推導完全無關。要改目標目錄一律用 `--memory-dir`。")
+    tree = main_checkout(root)
+    if tree:
+        print(f"  偵測到這裡是 worktree，主 checkout ＝ {tree}")
+        print("  照抄這行就能對真實 memory 對帳：")
+        print(f"    python3 {os.path.abspath(__file__)} \\")
+        print(f"      {' '.join(argv) or '--truncation'} \\")
+        print(f'      --memory-dir "{memory_dir(tree)}"')
+    else:
+        print("  帶 --memory-dir <路徑> 指向真實或副本目錄，例如：")
+        print(f'    --memory-dir "{memory_dir(root)}"')
+
+
 # 認得的旗標；True＝後面要跟一個值。未列出的一律拒絕，見 `validate_argv()`。
 KNOWN_FLAGS = {
     "--links": False, "--truncation": False,
@@ -737,12 +803,15 @@ def main(argv):
         # 在別的 checkout／fixture 上對帳時明確指定；預設是腳本所在的那棵樹，
         # 從 worktree 跑時**那就是 worktree root**（見檔頭 ⚠ 第 2 點）。
         root = argv[argv.index("--repo-root") + 1]
-    if "--memory-dir" in argv:
+    explicit_mem = "--memory-dir" in argv
+    if explicit_mem:
         mem = argv[argv.index("--memory-dir") + 1]
     else:
         mem = memory_dir(repo_root())
     if not os.path.isdir(mem):
+        # fail-closed（exit 1）不變；變的只有「訊息有沒有告訴你下一步」。
         print(f"✗ 找不到 memory 目錄：{mem}")
+        print_memory_dir_hint(root, argv, explicit_mem)
         return 1
 
     threshold = 3
