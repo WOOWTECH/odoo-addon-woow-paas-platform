@@ -159,7 +159,7 @@ _UNCONFIRMED_WORKLOAD_MARKER_497 = '#497 已收斂但無法確認 workload 已�
 # 某個判斷另立第二份名單、與 chart 的事實各自演化；這裡的表是 chart schema 知識
 # （值要寫進哪個鍵）本來就只有這一份、且早於本次改動就存在，判斷是從它**推導**出來
 # 的。本次改動沒有新增任何名單，也沒有借用 `template.has_admin_gui`（那是
-# admin_password 的閘門，8 個 has_admin_gui 模板裡只有 1 個有 dashboard 對外形態）。
+# admin_password 的閘門，has_admin_gui 模板裡只有 hermes-agent 有 dashboard 對外形態）。
 _DASHBOARD_PUBLIC_URL_VALUE_PATHS = {
     'hermes-agent': [('config', 'dashboardPublicUrl')],
 }
@@ -1636,7 +1636,7 @@ class CloudService(models.Model):
         仍在跑），只是平台沒有網址可以交給租戶。
 
         為什麼鑄造也要判、而不是「先鑄好、之後 chart 支援了就能用」：`has_admin_gui`
-        的 8 個模板裡只有 hermes-agent 有 gateway，其餘 7 個 chart 會收到一個平台
+        的模板裡只有 hermes-agent 有 gateway，其餘 chart 會收到一個平台
         並不打算給它的 `auth.apiServerKey`。今天無害純粹是因為 mcp-server／
         open-design chart 沒有宣告 `auth` 區塊、也沒有 values.schema.json——是**隱性
         契約**：哪天 mcp-server 補了 `auth:`（很合理的演進），這幾顆就會無聲吃下一
@@ -1724,8 +1724,8 @@ class CloudService(models.Model):
         #530：gateway API key 走 ``auth.apiServerKey``——chart 憑證解析優先序的第一段
         就是「顯式 values 值」，所以平台供給的 per-service key 會勝過 chart 自產。
         它有**自己的**閘門 ``_chart_has_gateway``（seed 的 gateway.externalPath），
-        不與 admin_password 的 ``has_admin_gui`` 共用：has_admin_gui=True 的 8 個模板
-        裡只有 hermes-agent 有 gateway，共用閘門會把這個鍵送給另外 7 個並不吃它的
+        不與 admin_password 的 ``has_admin_gui`` 共用：has_admin_gui=True 的模板
+        裡只有 hermes-agent 有 gateway，共用閘門會把這個鍵送給其餘並不吃它的
         chart（今天無害只因那些 chart 沒宣告 auth 區塊——隱性契約，見
         ``_chart_has_gateway`` 的 docstring）。兩個閘門都不是 slug allowlist。
         """

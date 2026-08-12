@@ -2836,7 +2836,7 @@ class PaasController(HiddenChainMixin, Controller):
 
         三個閘門（鑄造／供給／交付）都從 seed 的 `gateway.externalPath` 推導，
         **沒有任何一處是 slug allowlist**，也不再借用 `template.has_admin_gui`
-        （那是 admin_password 的閘門；8 個 has_admin_gui 模板裡只有 1 個有 gateway）。
+        （那是 admin_password 的閘門；has_admin_gui 模板裡只有 hermes-agent 有 gateway）。
 
         放 controller 而非 model：本 method 讀出明文，而授權只存在 controller 層
         （#357 C05）。回傳明文的 model 方法一律 private 且只有單一 controller 入口，
@@ -3939,8 +3939,8 @@ class PaasController(HiddenChainMixin, Controller):
             # #530：前端「Reset 會一併換發 Gateway API Key」那句文案的唯一資料入口
             # （ServiceDetailPage 的 hasGateway getter）。值＝**交付判準本體**
             # （service._gateway_public_url() 非空），與 _gateway_credentials 讀同一個
-            # method——不得改判 template.has_admin_gui：那 8 個模板裡只有 hermes-agent
-            # 真的有 gateway，用它當 gate 等於對另外 7 個模板的租戶宣告一件永遠不會
+            # method——不得改判 template.has_admin_gui：那些模板裡只有 hermes-agent
+            # 真的有 gateway，用它當 gate 等於對其餘模板的租戶宣告一件永遠不會
             # 發生的事。放在 service 層而非 template 子物件，因為判準含「這台服務有沒有
             # 對外根位址」（subdomain），那是 service 的屬性不是 template 的。
             'has_gateway': bool(service._gateway_public_url()),

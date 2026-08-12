@@ -141,7 +141,7 @@
                       - hasAdminGui → 這顆 Reset 按鈕在不在（憑證鑄造閘門）
                       - hasGateway  → Reset 會不會真的交付 gateway 憑證
                                       （交付閘門＝後端 _gateway_public_url() 非空）
-                    只判前者的話，has_admin_gui=True 的 8 個模板有 7 個沒有 gateway，
+                    只判前者的話，has_admin_gui=True 的模板裡除 hermes-agent 外都沒有 gateway，
                     它們的租戶會讀到一句永遠不會發生的承諾。守線：repo-lint
                     check_gateway_copy_gate_anchor ＋ test_gateway_capability_payload_530。
                 -->

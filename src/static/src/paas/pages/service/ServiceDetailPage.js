@@ -195,7 +195,7 @@ export class ServiceDetailPage extends Component {
      *
      * 判準是後端交付判準本體的鏡射（payload 的 `has_gateway`
      * ＝ `service._gateway_public_url()` 非空），**不是** `hasAdminGui`：
-     * has_admin_gui=True 的 8 個模板裡只有 hermes-agent 有 gateway，用
+     * has_admin_gui=True 的模板裡只有 hermes-agent 有 gateway，用
      * hasAdminGui 當 gate 等於對另外 7 個模板的租戶宣告一件永遠不會發生的事
      * （見 capability-gate-single-source-field：能力判準收斂到後端單一欄位）。
      * fail-closed（`=== true`）：欄位缺席（舊快取／漏帶的 payload）一律不顯示。

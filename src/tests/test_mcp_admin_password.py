@@ -380,7 +380,7 @@ class TestMcpAdminPassword(TransactionCase):
         self.assertFalse(
             secret.gateway_api_key,
             'chart 沒有 gateway 對外路徑時不得鑄 gateway key（見 finding 3：'
-            '那 7 個 chart 會收到一把平台並不打算給它的憑證）')
+            '其餘 chart 會收到一把平台並不打算給它的憑證）')
         self.assertTrue(self.service._has_mcp_admin_secret())
         # 密碼不得外洩到 helm_values（git/API 可見面）。
         self.assertNotIn('old-password', self.service.helm_values or '')
@@ -392,7 +392,7 @@ class TestMcpAdminPassword(TransactionCase):
         鏡射上一條 admin_password 的形狀，但判別器**不同**：admin_password 的閘門
         是 ``has_admin_gui``，gateway key 的閘門是 ``_chart_has_gateway``（seed 的
         gateway.externalPath）。review finding 3：兩者共用會把這把 key 送給 8 個
-        has_admin_gui 模板中沒有 gateway 的那 7 個——今天無害只因那些 chart 沒宣告
+        has_admin_gui 模板中沒有 gateway 的那些——今天無害只因那些 chart 沒宣告
         ``auth`` 區塊，是隱性契約。負面對照在
         ``test_create_supplies_admin_password_end_to_end``（同 fixture、無 gateway、
         必須沒有這個鍵）。
@@ -742,7 +742,7 @@ class TestMcpAdminPassword(TransactionCase):
             'chart 沒有 gateway 對外路徑時不得交付 gateway 憑證')
         self.assertFalse(
             self._secret_of(self.service).gateway_api_key,
-            '沒有 gateway 的 chart 連 key 都不該鑄（finding 3：不然那 7 個 chart '
+            '沒有 gateway 的 chart 連 key 都不該鑄（finding 3：不然那些 chart '
             '會收到一把平台不打算給它的憑證）')
 
     # ------------------------------------------------------------------
