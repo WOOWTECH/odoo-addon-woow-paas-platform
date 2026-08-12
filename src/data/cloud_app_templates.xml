@@ -297,11 +297,29 @@
                  （如 cloud_app_mcp_n8n 的 n8n-mcp-admin），git-sha 相同但 digest 不同——
                  全域替換 git-sha 會造出 tag 新／digest 舊、helm 靜默沿用舊 image 的組合。
                  OCI repo: B 解（pilot 重用 image repo woow-paas-docker-local；
-                 GA 遷專用 woow-paas-charts-local，見 spec 階段3 follow-up）. -->
+                 GA 遷專用 woow-paas-charts-local，見 spec 階段3 follow-up）.
+
+                 #686 config 區塊：只補 requireFields／requiredFields／sensitive，
+                 **刻意不寫 config.nonSensitive**——hermes 是 pilot，chart 的
+                 config.nonSensitive 預設本來就是 hermes 形的
+                 （mcp_server.command=hermes-mcp-server ＋ args ＋ 內部 port 8000），
+                 其餘家族成員才必須覆寫（GAP-O1）。
+                 ⚠ 這裡不是推論：已用 helm 3.13.3 對 chart mcp-server 0.1.5 跑
+                 `helm template` 實測，補上 config 區塊前後 render 出來的
+                 ConfigMap config.base.json **逐位元組相同**（helm 對 map 是深合併、
+                 不是整個 config 物件取代），且以「顯式覆寫 nonSensitive」的陽性對照
+                 確認過探針看得見差異。若哪天有人在這裡補 config.nonSensitive，
+                 test_mcp_server_template_seed 的
+                 test_template_launch_command_matches_declared_contract 會紅。
+                 ⛔ requiredFields 是 REPLACE 不是 merge（chart deployment.yaml 用
+                 join "," 餵 initContainer 的 SEED_REQUIRED_PATHS，chart 預設 8 條）：
+                 只能列平台真正供給的 admin_password。connection.* 是租戶自己在 admin
+                 GUI 填的、mcp_auth_token 也不由平台供給，任何一條列進去都會讓
+                 **每個新租戶的 pod 永遠卡 Init**。 -->
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/mcp-server</field>
             <field name="helm_chart_version">0.1.5</field>
-            <field name="helm_default_values">{"app": "hermes", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/hermes-mcp-admin", "tag": "614ae663fadd91c76972f60017a76d2627bea87e@sha256:49bde49c367ff237fd92ab31907dff7c75e8db558af4d886233ef7e1da599883"}, "service": {"port": 8080}, "envPrefix": "HERMES_", "persistence": {"enabled": true, "size": "5Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "128Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}}</field>
+            <field name="helm_default_values">{"app": "hermes", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/hermes-mcp-admin", "tag": "614ae663fadd91c76972f60017a76d2627bea87e@sha256:49bde49c367ff237fd92ab31907dff7c75e8db558af4d886233ef7e1da599883"}, "service": {"port": 8080}, "envPrefix": "HERMES_", "persistence": {"enabled": true, "size": "5Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "128Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}}}</field>
             <field name="helm_value_specs">{"required": [], "optional": []}</field>
 
             <!-- Service Configuration -->
@@ -315,6 +333,23 @@
 
             <!-- MCP capability is built into the service body; NO sidecar -->
             <field name="mcp_enabled" eval="False" />
+            <!-- #686 / #357 C01：image（hermes-mcp-admin）內建 mcp-admin-core 的 admin
+                 GUI，且它掛在服務**公開根 URL** 上（MCP pod 單一容器、無 authproxy
+                 sidecar）。has_admin_gui 是平台鑄造 admin_password 的**唯一**判準，
+                 與 mcp_enabled 正交——後者是「外掛 MCP sidecar」語意，對 body-內建的
+                 家族成員恆 False，拿它當閘門 create() 會過濾成空集合。
+                 #357 接線時只補了 odoo／n8n／odoo-manage 三筆，漏了 pilot 這一筆
+                 ⇒ 平台從不鑄密碼 ⇒ 落到 mcp-admin-core 內建 fallback
+                 admin_password="admin"（stg svc-b2e8a605 實測：
+                 POST /api/auth/login {"password":"admin"} → 200，
+                 {"password":"wrong-xyz"} → 401 為陽性對照，證明 200 不是 fail-open）。
+                 migration：本 xmlid 首建於 de5c07d9（2026-06-29），晚於 noupdate=0
+                 收斂 d1cb2e32（2026-04-06），既有 DB 的 ir.model.data.noupdate=False
+                 ⇒ -u 直接重套，無需 migration。
+                 ⚠ 翻旗標**不會**追溯改掉既有實例的密碼：chart 的 seed-config.py 是
+                 seed-if-absent（/data/config.json 已存在就早退），既有實例要脫離字面
+                 admin 必須有人主動按一次 Reset——那是營運決策，不在本 PR 範圍。 -->
+            <field name="has_admin_gui" eval="True" />
             <field name="post_deploy_init_type">none</field>
 
             <field name="is_active" eval="True" />
