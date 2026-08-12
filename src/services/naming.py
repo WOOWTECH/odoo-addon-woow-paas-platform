@@ -8,7 +8,14 @@ import re
 # 取後綴、``reconstruct_mcp_subdomain`` 也依賴它，而 K8s namespace 必須是
 # DNS-1123 label。維持與舊 ``md5(slug)[:8]`` 同字集同長度 ⇒ 換掉推導方式**不會**
 # 動到任何跨 repo 的命名契約。
-WS_HASH_RE = re.compile(r'^[0-9a-f]{8}$')
+# 🔴 錨點是 `\A` / `\Z`，**不是** `^` / `$`：Python 的 `$` 會 match「字串結尾」**或**
+# 「結尾換行之前」⇒ `'deadbeef\n'` 會通過 `^[0-9a-f]{8}$` 這道守門，而
+# ``make_namespace`` 據此產出 ``'paas-ws-deadbeef\n'`` ——一個帶換行的**非法
+# DNS-1123 label**，爆點會落在很遠的 K8s 那端（#675 覆核 F3 實測）。錨點寫在
+# pattern 自己身上而不是靠呼叫端改用 ``fullmatch()``：這個常數是共用的，下一個
+# 呼叫端用 ``match()`` 或 ``search()`` 都必須是安全的。
+# 行為（尾隨空白一律拒絕）由 ``src/tests/test_workspace_ns_hash_677.py`` 的 N11 釘住。
+WS_HASH_RE = re.compile(r'\A[0-9a-f]{8}\Z')
 
 
 def generate_ws_hash(slug: str) -> str:

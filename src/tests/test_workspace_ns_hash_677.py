@@ -468,6 +468,65 @@ class TestWorkspaceNamespaceHash677(HttpCase):
                          'paas-ws-' + LEGACY_COLLIDING_HASH)
 
     # ================================================================== #
+    #  N11 —— 絆線錨在「字串結尾」，不是「結尾換行之前」（#675 覆核 F3）    #
+    # ================================================================== #
+    def test_N11_trailing_whitespace_never_slips_past_the_hash_guard(self):
+        r"""🔴 Python `re` 的 `$` 會 match「字串結尾」**或**「結尾換行之前」。
+
+        ⇒ `re.compile(r'^[0-9a-f]{8}$').match('deadbeef\n')` 是 **PASS**，而
+        `make_namespace` 據此產出 `'paas-ws-deadbeef\n'` —— 一個帶換行的
+        **非法 DNS-1123 label**。K8s 那端才會炸，而爆點離成因很遠。
+
+        今天**不可被租戶觸發**：三個產值來源（`secrets.token_hex(4)` /
+        Postgres `MD5()` / privileged 顯式指定）都不會帶換行。所以這不是活的洞——
+        但這支 helper 的 docstring 自稱是「漏改一個呼叫點」的 fail-closed 絆線，而
+        model 層**沒有** `@api.constrains` 釘 `ws_hash` 的形狀（`group_system` 帳號
+        或資料修復腳本可以寫進任意字串），⇒ 這道守門是那個形狀今天唯一的判準，它
+        自己不能有結構性的缺口。
+
+        🔴 判準寫在**行為層**，不是形態層：不斷言 `WS_HASH_RE.pattern` 長什麼樣。
+        `re.fullmatch`、`\Z`、或整個換掉驗證方式都該是綠的，只要「尾隨空白一律
+        拒絕」這件事成立——把 `\Z` 這個**寫法**凍成契約會讓下一個人正當地改寫實作
+        時紅在錯的地方（本檔家族已經被寫死版號咬過一次，見檔頭）。
+
+        N9 對這一格結構上零鑑別力：它那組 bad 值（`''` / `None` / 大寫 / 7 位 /
+        int）全都落在 `{8}` 或 `isinstance` 那一層，沒有一個能行使 `$` 的語意。
+        """
+        base = LEGACY_COLLIDING_HASH          # 8 個小寫 hex，本身合法（下方陽性對照）
+        # 每一個都是「合法 8-hex ＋ 尾隨（或前導）空白」。只有 `base + '\n'` 會被
+        # `$` 放行，其餘本來就會被擋——它們在這裡是**特異性**的一半：證明這支不是
+        # 只有那一個 magic case 才紅，而是整類尾隨空白都關著。
+        for bad in (base + '\n', base + '\r\n', base + '\n\n', base + '\r',
+                    base + ' ', base + '\t', '\n' + base, ' ' + base):
+            with self.subTest(bad=bad):
+                with self.assertRaises(
+                        ValueError,
+                        msg='make_namespace(%r) 必須 raise —— 帶尾隨空白的值會產出'
+                            '非法 DNS-1123 label' % (bad,)):
+                    make_namespace(bad)
+                with self.assertRaises(
+                        ValueError,
+                        msg='make_service_subdomain(%r) 必須 raise' % (bad,)):
+                    make_service_subdomain(bad, 'ref', 'name')
+                with self.assertRaises(
+                        ValueError,
+                        msg='make_security_access_subdomain(%r) 必須 raise' % (bad,)):
+                    make_security_access_subdomain(bad, 'ref', 'name')
+
+        # 陽性對照 ①：合法值不得被誤擋（否則上面全紅只是因為「什麼都擋」）。
+        self.assertEqual(make_namespace(base), 'paas-ws-' + base)
+
+        # 陽性對照 ②／後果層：守門放行的東西必須真的是合法 DNS-1123 label。
+        # 這一句才是上面那組斷言**為什麼**重要——沒有它，守門與「產出的名字合不合法」
+        # 之間沒有任何東西連著，下一個人可以把守門放寬而不覺得有損失。
+        dns_1123_label = re.compile(r'\A[a-z0-9]([-a-z0-9]*[a-z0-9])?\Z')
+        self.assertRegex(make_namespace(base), dns_1123_label)
+        self.assertNotRegex(
+            'paas-ws-' + base + '\n', dns_1123_label,
+            '前提：帶換行的 namespace 真的不是合法 DNS-1123 label（這句是上面那組'
+            '斷言的意義所在；它若恆真則整支測試沒有守到任何東西）')
+
+    # ================================================================== #
     #  N10 —— §1.2 的例外：每次重新推導的路徑錨在 stored hash 上            #
     # ================================================================== #
     def test_N10_rederivation_is_anchored_on_the_stored_hash_not_on_the_slug(self):
