@@ -6,9 +6,10 @@ import uuid
 from psycopg2 import OperationalError
 
 from odoo import _, api, fields, models
-from odoo.exceptions import UserError, ValidationError
+from odoo.exceptions import AccessError, UserError, ValidationError
 
 from .cloud_app_template import SupplyGateError
+from .workspace_access import ROLE_ADMIN
 
 _logger = logging.getLogger(__name__)
 
@@ -3155,6 +3156,127 @@ class CloudService(models.Model):
             )
             return False
 
+    @api.model
+    def _assert_binding_authorized(self, service_ids):
+        """#698：變更 project／task 與 cloud_service 的關聯需要 owner／admin。
+
+        呼叫者是 ``cloud_service_binding_guard`` mixin（唯一入口；四個受保護
+        欄位共用這一個判準）。``service_ids`` 已經是「這次寫入實際**新增 ∪
+        移除**」的集合，兩個方向套同一條線。
+
+        為什麼 ir.rule 不夠：Many2many 的 ``(3)``/``(4)``/``(6)`` 只改 relation
+        表，Odoo 不會對 comodel 做任何權限檢查（#698；完整說明見
+        ``cloud_service_binding_guard.py`` 檔頭）。
+
+        判準走 ``workspace.check_user_access(user, required_role=ROLE_ADMIN)``
+        （``ROLE_HIERARCHY`` ⇒ admin 與 owner 通過），刻意不自己再寫一套 role
+        比較——#556 的根因就是同一個判準有兩種寫法。
+
+        ⚠ 一律以 ``sudo()`` 解析 service 與 workspace：判準要看**真實歸屬**，
+        不能被呼叫者自己的讀取權限左右。讀不到的 service 若因此被跳過檢查，
+        守衛就會在「攻擊者對受害者 service 沒有 read」——也就是最該擋的那格
+        ——失效。``check_user_access`` 收的 ``user`` 仍是原始呼叫者
+        （``sudo()`` 不改 uid）。
+        """
+        if not service_ids or self.env.su:
+            return
+        user = self.env.user
+        services = self.sudo().browse(sorted(service_ids)).exists()
+        denied = services.filtered(
+            lambda svc: not svc.workspace_id.check_user_access(
+                user, required_role=ROLE_ADMIN)
+        )
+        if denied:
+            raise AccessError(
+                "只有 workspace 的 owner／admin 才能變更 cloud_service 綁定"
+                "（新增或移除皆同）。被拒絕的 cloud_service："
+                "woow_paas_platform.cloud_service %s"
+                % ', '.join('#%s' % svc_id for svc_id in denied.ids)
+            )
+
+    def _assert_reverse_binding_authorized(self, vals):
+        """#698 反向端：從 **service 側**寫 `project_ids`（同一張 relation 表
+        的另一頭）。
+
+        ⚠ **這一端不能用 `cloud_service_binding_guard` 的 after-diff**，原因是
+        結構性的，不是實作偷懶：那個 mixin 在 ``super().write()`` **之後**比對
+        差異再判斷授權，而這一端的判準是「呼叫者對那個 project 有沒有 write」
+        ——綁定一旦寫進去，那個 project 就落進呼叫者的 bound 分支
+        （`cloud_service_ids.workspace_id.access_ids.user_id`），事後檢查反而
+        **通過**。實測過：接上 mixin 之後攻擊照樣成功（RPC 回 True）。
+        自我實現的判準必須前置評估。
+
+        判準用 Odoo 自己的 ``check_access('write')``，不複製一套 project 授權
+        邏輯——`project_rule_workspace_member` 有 bound／unbound 兩條分支，
+        抄過來必然漂。
+
+        ## 候選 id 收集為什麼是**刻意的**超集（不要「修」成精確判斷）
+
+        下面只從指令 tuple 的 id 位置撈整數，**不判斷 add／remove、不套用指令
+        語意**，再併上**寫入前**的 `self.project_ids`。這不是還沒做完——它是
+        本修法的核心取捨：
+
+        - 精確判斷 add／remove 就必須重演 x2many 的指令語意，而那正是同一個
+          issue 在 project／task 側**刻意避開**的陷阱（見
+          `cloud_service_binding_guard` 檔頭與 #657：逐一重演框架的解析規則，
+          就是會漏掉下一個形態）。這一端不能用 after-diff（理由見上），所以
+          「不重演」的代價只能由「收保守超集」來付。
+        - 反過來若改成精確集合，漏判一個形態的後果是**靜默放行**——與本 issue
+          的原始缺陷同一種失敗模式。
+
+        ⇒ 收窄這裡之前先問：新寫法在**未知的**指令形態下會漏還是會過寬？只有
+        「仍然只會過寬」的寫法才可以取代它。
+
+        ## 這個候選集實際保證什麼（#705 F3：舊版的宣稱是假的）
+
+        ⚠ 舊版只撈指令裡的 id，於是 `(5, 0, 0)`（`command[1]` 是 falsy、
+        `command[2]` 非 list）與 `(6, 0, [])` 的候選集是**空的**，而
+        `(6, 0, [保留的])` 永遠不含被移除的那些 ⇒ **移除方向整條沒有被檢查**，
+        卻在同一份 docstring 裡寫著「撈到的是超集、只會過寬不會過窄」。
+        那句話對移除方向為假，而它是寫給未來維護者的判準。
+
+        現在的保證，逐方向寫清楚：
+
+        - **新增方向**：新綁上的 project id 必然出現在指令 tuple 裡
+          ⇒ 落在候選集內。唯一例外是 `(0, 0, vals)`（就地新建 project）——它的
+          id 當下還不存在，無從檢查；但那個 project 是呼叫者自己建的、且它的
+          `create` 會走 `project.project` 側的 mixin，所以不是提權面。
+        - **移除方向**：被解掉的 project 必然在**寫入前**的 `self.project_ids`
+          裡 ⇒ 由下面那行 `self.sudo().project_ids.ids` 覆蓋，與指令形態無關。
+        - ⇒ 候選集 ⊇（新增 ∪ 移除），指令形態不影響這個包含關係。
+
+        ## 與 project 側的不對稱（刻意，且只有這裡記著）
+
+        同一個 `(6, 0, [])`：**project 側擋得住**（mixin 的 after-diff 看得見
+        「綁定少了一顆」，判準是 service 的 workspace 角色，寫入前後都一樣
+        ⇒ after-diff 安全）；**反向端擋不住**，因為這一端的判準
+        （`project.check_access('write')`）會被寫入本身改掉，只能前置評估、
+        只能靠候選集是超集。兩端用不同機制不是實作不一致，是判準性質不同。
+
+        ⚠ 併入舊值不會誤傷合法呼叫者：能走到這裡的人必然是該 service 所屬
+        workspace 的 owner／admin（#676 的 rule），而
+        `project_rule_workspace_member` 的 bound 分支
+        （`cloud_service_ids.workspace_id.access_ids.user_id`，**無 role 條件**）
+        讓該 workspace 的任何成員對「綁著這顆 service 的每一個 project」都有
+        write ⇒ 多檢查到的那些必然通過。行為面由 `Z4` 鎖住。
+        """
+        commands = vals.get('project_ids')
+        if not commands or self.env.su:
+            return
+        # 移除方向的舊值：與指令形態無關，`(5)`／`(6, 0, [])` 也涵蓋得到。
+        # sudo ⇒ 看真實歸屬，不被呼叫者自己的讀取權限縮窄（縮窄＝漏檢）。
+        candidates = set(self.sudo().project_ids.ids)
+        for command in commands:
+            if not isinstance(command, (list, tuple)) or len(command) < 2:
+                continue
+            if isinstance(command[1], int) and command[1]:
+                candidates.add(command[1])
+            if len(command) > 2 and isinstance(command[2], (list, tuple)):
+                candidates |= {i for i in command[2] if isinstance(i, int)}
+        if candidates:
+            self.env['project.project'].browse(sorted(candidates)) \
+                .exists().check_access('write')
+
     def write(self, vals):
         """#279 Path B: a CloudService's ``workspace_id`` / ``project_ids`` binding
         change shifts which workspaces its bound projects can reach, so re-render the
@@ -3163,6 +3285,9 @@ class CloudService(models.Model):
         side, which fire no project hook even though ``project.workspace_ids``
         recomputes.
         """
+        # #698 反向端：前置檢查（見 `_assert_reverse_binding_authorized` 的
+        # docstring——這一端的判準會被寫入本身改掉，事後檢查無效）。
+        self._assert_reverse_binding_authorized(vals)
         # [F: revoke-txn low] A deployed CS's namespace identity (paas-ws-{hash}) is
         # fixed at create; retargeting workspace_id would leave the pod in the OLD ns
         # while agent egress is re-pointed at the new workspace → silent reach break to
@@ -3475,6 +3600,14 @@ class CloudService(models.Model):
         ⚠ 本方法對所有入口一律生效、無 su/group 豁免（否則 TransactionCase 假綠，
         見 docs/decisions/patterns/su-env-exempt-guard-false-green.md）。
         """
+        # #698 反向端：create 也能帶 `project_ids`（同一張 relation 表的另一頭），
+        # 且同樣必須前置檢查——建完之後那個 project 就落進呼叫者的 bound 分支。
+        # 🔴 #705 F1：必須看**框架解析後**的 vals。`default_project_ids` 是在
+        # `BaseModel.create` 內部才展開的（見 `cloud_service_binding_guard.create`
+        # 的說明），只看 raw vals 會讓整道前置檢查跳過。
+        for vals in vals_list:
+            self._assert_reverse_binding_authorized(
+                self._add_missing_default_values(vals))
         normalized_vals_list = []
         for vals in vals_list:
             normalized = dict(vals)
