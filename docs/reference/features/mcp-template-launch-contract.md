@@ -7,8 +7,10 @@
 平台 mcp-server chart 的 `config.nonSensitive.mcp_server.{command,args}` 是 admin 容器內要拉起的 MCP 子行程；mcp-admin-core `process.py:64` 直接 `exec [command]+args`、proxy 連 `mcp_server.port`（localhost HTTP，`proxy.py` 轉發 `/private_TOKEN/{path}`→`127.0.0.1:port/{path}`）。故**子行程必須在 port 上講 SSE/StreamableHTTP**。
 
 **判別規則（決定 command）**：
-- 底層 MCP server **stdio-only**（無 http transport）→ 經 core 的 `mcp_admin_core.mcp_sse_wrapper` 包：`command=python`、`args=[-m, mcp_admin_core.mcp_sse_wrapper, <module.path:server_obj>, --port, 8000]`。wrapper 需要一個 **module-level 低階 `Server` 物件**（`server:server`）。標準 `cloud_app_mcp_odoo` 走這條（底層 `odoo-mcp-server 0.1.3` stdio-only）。
-- 底層 server **原生 http**（有 `--transport`/自帶 port）→ 直跑其 console script。n8n（`command=n8n-mcp-http`、`args=[--port,3000]`）與 **ivnvxd Manage（#338）** 走這條。
+- 底層 MCP server **stdio-only**（無 http transport）→ 經 core 的 `mcp_admin_core.mcp_sse_wrapper` 包：`command=python`、`args=[-m, mcp_admin_core.mcp_sse_wrapper, <module.path:server_obj>, --port, 8000]`。wrapper 需要一個 **module-level 低階 `Server` 物件**（`server:server`）。標準 `cloud_app_mcp_odoo` **首建時**（image `9d10944`、底層 `odoo-mcp-server 0.1.3` stdio-only）走這條，2026-07-14 重釘 image 後已改走下一條（#708）。
+- 底層 server **原生 http**（有 `--transport`/自帶 port）→ 直跑其 console script。n8n（`command=n8n-mcp-http`、`args=[--port,3000]`）、**ivnvxd Manage（#338）**，以及**標準 `cloud_app_mcp_odoo`（image `7b5944c4` 起，#708）**走這條：`command=odoo-mcp`、`args=[--transport, streamable-http, --host, 127.0.0.1, --port, 8000]`。
+
+**⚠ 重釘 image ＝ 必須重新套用上面這條判別規則（#708 的實際翻車）**：2026-07-14 commit `6fb93163` 把 odoo 的 image 從 `9d10944` 重釘到 `7b5944c4`（底層從 `odoo-mcp-server 0.1.3` 換成 tuanle96 `odoo-mcp`），diff 卻只有版號＋`image.tag` 兩行，同一個 JSON 裡的 `mcp_server.{command,args}` 沒跟著換 → wrapper 去 import 新 image 裡不存在的 `mcp_server_odoo`，**此後每一台新開的實例 `/mcp` 一律 502**。這個失敗沒有任何響亮訊號：pod `1/1 Ready`（探針只探 wrapper 自己的 `/healthz`）、admin GUI 綠、子行程 traceback 被 logging 設定吞掉。判別規則寫在這裡沒有用，因為重釘的人根本不會想到要來讀它——`src/tests/test_mcp_server_template_seed.py::TestMcpOdooTemplateSeed` 因此加了 `EXPECT_IMAGE_TAG` lockstep：image 一改測試就紅，把人帶回這條規則。
 
 **#338 Manage 版真相（實查 image 打包源 woow-mcp-server #14）**：
 - image 打包 **ivnvxd `mcp-server-odoo` 0.7.1**（FastMCP），正確啟動＝`command=mcp-server-odoo`、`args=[--transport, streamable-http, --host, 127.0.0.1, --port, 8000]`。
