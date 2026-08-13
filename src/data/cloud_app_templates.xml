@@ -357,10 +357,11 @@
 
         <!-- MCP Server: Odoo — MCP built into the body, NOT a sidecar. Copies the
              hermes pilot contract; differs only in container internals (image,
-             app selector, internal SSE port 8000 handled by the image proxy).
-             Image pinned to git-sha 9d10944 (CI run 717), which already includes
-             the shared proxy Host+Origin fix (commit 4be649c, verified ancestor)
-             — so the design 階段4「複製前必補 proxy Origin」item is satisfied. -->
+             app selector, internal port 8000 handled by the image proxy).
+             Image 現行釘在 git-sha 7b5944c4（2026-07-14 commit 6fb93163 重釘，
+             取代首建的 9d10944）。proxy Host+Origin 這一關對這顆 image 由 stg 實測
+             直接證成（#708：走 admin proxy 的 /mcp 全綠，見下方 GAP-O1 段），
+             不再依賴「commit 4be649c 是 9d10944 祖先」那條對舊 image 的推論。 -->
         <record id="cloud_app_mcp_odoo" model="woow_paas_platform.cloud_app_template">
             <field name="name">Odoo MCP Server</field>
             <field name="slug">mcp-odoo</field>
@@ -376,15 +377,25 @@
                  config.nonSensitive.mcp_server OVERRIDES the chart's hermes-shaped
                  default config (chart default command='hermes-mcp-server'); without it
                  odoo's child process never spawns → MCP endpoint silent 502 (GAP-O1).
-                 GAP-O1: odoo-mcp-server 0.1.3 is stdio-only (no `odoo-mcp-server`
-                 console script, no transport flag); the correct launch wraps the stdio
-                 server via mcp-admin-core's mcp_sse_wrapper. Verified by woow-mcp-server
-                 (SSE handshake 200 + MCP initialize + list_tools 7 tools). odoo's MCP
-                 subprocess needs NO sensitive config to start. -->
+                 GAP-O1（#708 依現行釘的 image 7b5944c4 重寫）：這顆 image 裝的是
+                 tuanle96 odoo-mcp（dist woow_odoo_mcp_server 1.0.0 / odoo_mcp 1.1.0），
+                 沒有 mcp_server_odoo 模組，且自帶 console script odoo-mcp、原生支援
+                 transport=streamable-http，故直跑 console script、不經 mcp-admin-core
+                 的 mcp_sse_wrapper（形狀與 cloud_app_mcp_odoo_manage 一致）。
+                 舊註記的「odoo-mcp-server 0.1.3 stdio-only、須經 wrapper 包」是首建
+                 image 9d10944 的事實，2026-07-14 重釘（commit 6fb93163）後就不成立，
+                 但同一個 JSON 裡的 command/args 漏改，之後每一台新實例的 /mcp 一律
+                 502（wrapper 內 ModuleNotFoundError: mcp_server_odoo，且該 traceback
+                 被 logging 設定吞掉、pod log 看起來健康）。
+                 ⚠ 重釘 image 時必須同步實查新 image 的 MCP 入口並覆核本區 command/args；
+                 seed 是 seed-if-absent（/data/config.json 存在就跳過），改這裡只止血
+                 未來的新部署，救不了既有實例。
+                 stg 實測（#708，svc-fbc97612）：initialize 200、tools/list 41 tools、
+                 tools/call 真的打到 Odoo XML-RPC。odoo 子行程啟動仍不需 sensitive。 -->
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/mcp-server</field>
             <field name="helm_chart_version">0.1.5</field>
-            <field name="helm_default_values">{"app": "odoo", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/odoo-mcp-admin", "tag": "7b5944c483779b35f74903b9a875440a06577888@sha256:f76fc569565aadeff34d5a7a6515b89959d9136f0c349f4f0f0d0a4073d67876"}, "service": {"port": 8080}, "envPrefix": "", "persistence": {"enabled": true, "size": "5Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "128Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}, "nonSensitive": {"mcp_server": {"command": "python", "args": ["-m", "mcp_admin_core.mcp_sse_wrapper", "mcp_server_odoo.server:server", "--port", "8000"], "port": 8000, "env_prefix": ""}}}}</field>
+            <field name="helm_default_values">{"app": "odoo", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/odoo-mcp-admin", "tag": "7b5944c483779b35f74903b9a875440a06577888@sha256:f76fc569565aadeff34d5a7a6515b89959d9136f0c349f4f0f0d0a4073d67876"}, "service": {"port": 8080}, "envPrefix": "", "persistence": {"enabled": true, "size": "5Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "128Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}, "nonSensitive": {"mcp_server": {"command": "odoo-mcp", "args": ["--transport", "streamable-http", "--host", "127.0.0.1", "--port", "8000"], "port": 8000, "env_prefix": ""}}}}</field>
             <field name="helm_value_specs">{"required": [], "optional": []}</field>
 
             <!-- Service Configuration -->

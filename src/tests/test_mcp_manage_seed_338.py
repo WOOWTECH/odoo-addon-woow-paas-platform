@@ -27,9 +27,16 @@ class TestMcpManageTemplateSeed(TransactionCase):
 
     def test_mcp_server_launch_uses_native_streamable_http(self):
         """啟動契約守線：ivnvxd mcp-server-odoo 0.7.1 用 FastMCP、原生 StreamableHTTP，
-        直跑 console script（比照 n8n），NOT 標準 odoo 的 mcp_sse_wrapper 包。骨架的
-        mcp_server_odoo_manage.server:server 是 Wave A 佔位猜測、對 ivnvxd 不存在，若回退到
-        wrapper spec 會 ImportError；此測鎖定正確入口。"""
+        直跑 console script（比照 n8n）。骨架的 mcp_server_odoo_manage.server:server 是
+        Wave A 佔位猜測、對 ivnvxd 不存在，若回退到 wrapper spec 會 ImportError；此測
+        鎖定正確入口。
+
+        本段原本寫「NOT 標準 odoo 的 mcp_sse_wrapper 包」——那是**首建 image 時期**的
+        對比：當時標準 cloud_app_mcp_odoo 底層是 stdio-only 的 odoo-mcp-server 0.1.3，
+        整個家族只有它走 wrapper。標準版自 #708 起（image 重釘到 7b5944c4、底層換成
+        tuanle96 odoo-mcp）也改成直跑 console script，兩張 template 因此變成同一種形狀、
+        不再互為反例。下方的 assertNotIn 守的是「Manage 自己不得回退成 wrapper」，與標準
+        版走哪一條無關，故不受這次更正影響。"""
         tpl = self.env.ref('woow_paas_platform.cloud_app_mcp_odoo_manage')
         mcp = json.loads(tpl.helm_default_values)['config']['nonSensitive']['mcp_server']
         self.assertEqual(mcp['command'], 'mcp-server-odoo')
