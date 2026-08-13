@@ -46,7 +46,12 @@ class TestMcpManageTemplateSeed(TransactionCase):
         self.assertEqual(mcp['port'], 8000)
 
     def test_description_mentions_prereq(self):
-        """租戶側前置說明（API Key／addon）放 description（#338 工作項 3）。"""
+        """租戶側前置說明（建立 API Key）放 description（#338 工作項 3）。
+
+        原 docstring 寫「API Key／addon」——那個「addon」指的是已被 #713 推翻的
+        前置需求（平台沒有、也不能提供 mcp_server addon，且租戶無任何途徑自行安裝，
+        見 #713 comment 7039）。斷言本身只看 API Key，不受影響；此處只清掉會誤導
+        下一個讀者的過期敘述。"""
         tpl = self.env.ref('woow_paas_platform.cloud_app_mcp_odoo_manage')
         self.assertIn('API Key', tpl.description or '')
 
