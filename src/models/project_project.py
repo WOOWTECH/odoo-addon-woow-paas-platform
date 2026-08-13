@@ -15,7 +15,19 @@ _REACH_LOCK_NS = 0x52454143
 
 
 class ProjectProject(models.Model):
-    _inherit = 'project.project'
+    # #698：掛上綁定守衛 mixin（唯一實作，四個入口共用）。它自己 override
+    # write/create，所以本 class **不需要**、也不應該再手動呼叫守衛。
+    # `_inherit` 一旦是 list，Odoo 就**不再**自動從它推出 `_name`
+    # （`_build_model` 只在 `_inherit` 是字串時代入）⇒ 少了 `_name` 會被當成
+    # 一個全新 model，直接撞 'use the same table and columns'。
+    _name = 'project.project'
+    _inherit = ['project.project',
+                'woow_paas_platform.cloud_service_binding_guard']
+
+    # 載體＝M:N；`cloud_service_id` 只作為觸發器（它是 cloud_service_ids[:1]
+    # 的 stored compute，寫它會經 inverse 轉成內層 M:N write）。
+    _cs_binding_fields = ('cloud_service_ids',)
+    _cs_binding_triggers = ('cloud_service_id',)
 
     # ------------------------------------------------------------------ #
     # M:N cloud_service binding (Phase A — agent-runtime-pod epic).      #
