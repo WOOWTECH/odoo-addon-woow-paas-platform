@@ -364,3 +364,9 @@ from . import test_cloud_service_authz_676
 # 唯一實作），新增與移除兩個方向都套 owner/admin。本檔同時守 #676 的 (0)/(1)/(2)
 # 仍由 cloud_service 自己那層擋（HttpCase，group_user-only，全走 call_kw）
 from . import test_project_cs_m2m_authz_698
+# fix: #705 覆核 findings 的守線。F1＝`default_<field>` context／`ir.default`／
+# `copy()` 這族「值不在呼叫者 raw vals 裡」的來源不得繞過 create 守衛；
+# F2＝compute 導出的綁定不是呼叫者新增的（空 key 不得炸掉 task create）；
+# F3＝反向端候選集必須含移除方向的舊值（判準＝強制否決，不是「有沒有被擋」）；
+# F6＝cross-project move 不觸發守衛的真正理由是 key gate（HttpCase，全走 call_kw）
+from . import test_project_cs_m2m_authz_705
