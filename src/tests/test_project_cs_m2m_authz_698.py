@@ -358,6 +358,17 @@ class TestBindingGuardRemoveDirection(_Binding698Fixture):
     成員可見；無 service ⇒ 只有 follower／`create_uid` 可見。解掉最後一個
     關聯＝把可見性從「整個 workspace」翻成「建立者一人」，一般路徑救不回
     （連 admin 都讀不到那個 project）。所以守衛兩個方向都要守。
+
+    ⚠ **本 class 只守 `write` 那條路，E7 沒有被完全關掉。** 同 workspace 的
+    guest 直接 `unlink` 那個 project 可以達成同一個結果（而且更徹底）：
+    `project_rule_workspace_member` 的 `perm_unlink` 是 `False`，而
+    **`perm_unlink=False` 的語意是「這條 rule 不參與 unlink 檢查」，不是
+    「禁止 unlink」**——ir.rule 只會限縮、不會授予，一個方向上沒有任何 rule
+    ⇒ 該方向不受 rule 限制。它是本 repo 唯一一條 `project.project` 的 rule，
+    而 `src/security/ir.model.access.csv:41` 給 `base.group_user` 是
+    `1,1,1,1` ⇒ ACL 也不擋。實測（PR #705 覆核留言 `#issuecomment-6960`
+    的 F4）：guest 刪得掉。範圍限於**同 workspace 內**（完全無關的 project
+    連 read 都沒有）。另開 issue 追蹤，不在 #698 的修法範圍。
     """
 
     def _owner_project_bound_to_svc_a(self):

@@ -164,8 +164,19 @@
 - **當前剩餘觸發路徑**（合法操作，非攻擊）：
   1. 使用者 A 在 W1 為 task 加 W1 服務 X 為 extras
   2. **有權限的人**把 task cross-project move 到 W2 的 project（AC #13 設計成
-     「extras 保留」）——移動改的是 `project_id`，不是服務欄位，所以 #698 的
-     綁定守衛不會觸發（它比對的是綁定集合，而綁定沒變）
+     「extras 保留」）。#698 的綁定守衛不觸發，理由是**它的 key gate**：
+     move 寫的是 `project_id`，而 `project_id` 既不在 `_cs_binding_fields`
+     也不在 `_cs_binding_triggers` 裡 ⇒ 守衛連 snapshot 都不做
+     （`src/models/cloud_service_binding_guard.py` 的 `_cs_binding_diff_fields`）
+     - ⚠ **不是**因為「綁定沒變」（本條 2026-08-13 首版曾這樣寫，是假的）。
+       `primary_cloud_service_id` 是 `@api.depends('project_id.cloud_service_ids')`
+       的 stored compute，move **會**改綁定集合。實測證據：
+       `src/tests/test_project_cs_m2m_authz_705.py` 的
+       `TestCrossProjectMoveReasonF6.test_X3b_move_changes_binding_and_is_not_blocked`
+       斷言 move 之後 `primary_cloud_service_id` 從 svc_a 變成 svc_a2
+     - 這個區別要緊：用「沒東西可看」當理由，會讓讀者以為 after-diff 的形狀
+       已經涵蓋 move 這一格。實際上守衛只是沒被叫起來——**動 key gate 的人
+       會讓這條合法操作開始 raise**（該測試就是這個交互作用的回歸鎖）
   3. W2 member 在該 task chatter 觸發 AI 自動回覆
   4. AI prompt 內含 X 的 service.name / subdomain（公開域名）/ template name /
      sanitized helm_values
