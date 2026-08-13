@@ -31,6 +31,13 @@ rule ⇒ 受害者 workspace 進入 reach 集合，`_reconcile_agent_runtime_rea
   的移除，一律以「relation 實際變成什麼」被看見；
 - 未來多出來的指令形態不需要回頭改這裡。
 
+**比對範圍＝呼叫者這次指名的載體欄位**（``_cs_binding_diff_fields``），不是
+「record 上全部的載體欄位」。差別只在 create 側看得出來，但很致命：
+``task.primary_cloud_service_id`` 是 compute 導出的，全比對會把「系統從
+project 既有合法綁定算出來的值」當成呼叫者新增的綁定（#705 F2）。而閘門本身
+看的是**框架解析後**的 vals（``_add_missing_default_values``），否則
+``default_<field>`` context ／ ``ir.default`` 整族來源都繞得過去（#705 F1）。
+
 代價是「先執行再檢查」，靠 ``AccessError`` 讓整個交易回滾——與
 ``_reconcile_agent_runtime_reach`` 的 GRANT fail-loud 同一個模式。守衛跑在
 ``super().write()`` 之內，所以 ``ProjectProject.write`` 那層的 operator 推送
@@ -84,7 +91,30 @@ class CloudServiceBindingGuard(models.AbstractModel):
     # ------------------------------------------------------------------ #
     #  snapshot / diff                                                     #
     # ------------------------------------------------------------------ #
-    def _cs_binding_snapshot(self):
+    def _cs_binding_diff_fields(self, keys):
+        """這次寫入要比對**哪幾個載體欄位**（回傳 tuple，空 ⇒ 守衛不啟動）。
+
+        只比對「呼叫者這次**指名要改**的」載體欄位。這一格同時撐起兩件事：
+
+        1. **compute 導出的綁定不算呼叫者新增的**（#705 F2）。
+           ``task.primary_cloud_service_id`` 是
+           ``@api.depends('project_id.cloud_service_ids')`` 的 stored compute：
+           在一個**已合法綁定**的 project 裡建 task，它會被自動算成該 project
+           的第一顆 service。呼叫者沒有指名它 ⇒ 不是他綁的 ⇒ 不該要求他是
+           owner／admin。舊實作在 create 側把 ``before`` 當成空的、又比對
+           **全部**載體欄位，於是每一個這樣的 task create 都被拒絕。
+        2. **觸發器欄位**（``project.cloud_service_id``）的效果落在載體上而不是
+           自己身上 ⇒ 只要 vals 提到觸發器就退回「全部載體都比對」。
+
+        ⚠ 這**不是**在解析 x2many 指令語意（#657 的陷阱）——它只問「vals 裡有
+        沒有這個 key」，授權判斷仍然一律看 ``super()`` 之後的實際 diff。
+        """
+        keys = set(keys)
+        if keys & set(self._cs_binding_triggers):
+            return tuple(self._cs_binding_fields)
+        return tuple(f for f in self._cs_binding_fields if f in keys)
+
+    def _cs_binding_snapshot(self, fnames):
         """回傳 ``{record_id: {fname: frozenset(service_ids)}}``（實際落地值）。
 
         ``flush`` + ``invalidate`` 是必要的：欄位值可能還在待重算佇列裡，而
@@ -95,7 +125,7 @@ class CloudServiceBindingGuard(models.AbstractModel):
         id 集合若留在 cache，呼叫者後續讀同一個欄位就會拿到不該看見的
         record（cache 不分 su 的另一面）。
         """
-        fnames = tuple(self._cs_binding_fields)
+        fnames = tuple(fnames)
         if not fnames or not self:
             return {}
         self.flush_recordset(fnames)
@@ -107,12 +137,12 @@ class CloudServiceBindingGuard(models.AbstractModel):
         self.invalidate_recordset(fnames)
         return snapshot
 
-    def _cs_binding_assert(self, before):
+    def _cs_binding_assert(self, before, fnames):
         """比對 ``before`` 與現況，對**新增與移除**的 service 各自要求授權。"""
-        fnames = tuple(self._cs_binding_fields)
+        fnames = tuple(fnames)
         if not fnames or self.env.su:
             return
-        after = self._cs_binding_snapshot()
+        after = self._cs_binding_snapshot(fnames)
         touched = set()
         for record_id, fields_after in after.items():
             fields_before = before.get(record_id, {})
@@ -126,17 +156,6 @@ class CloudServiceBindingGuard(models.AbstractModel):
     # ------------------------------------------------------------------ #
     #  攔截點                                                              #
     # ------------------------------------------------------------------ #
-    def _cs_binding_in(self, keys):
-        """vals 是否觸及受保護欄位。
-
-        只用 key 交集決定「要不要 snapshot」，**不用它決定授權**——授權一律
-        看實際 diff。間接路徑也蓋得到：`project.cloud_service_id` 的 inverse
-        會發出一個內層 ``write({'cloud_service_ids': ...})``，那一層自己會被
-        這個攔截點抓到。
-        """
-        return bool(set(keys) & (set(self._cs_binding_fields)
-                                 | set(self._cs_binding_triggers)))
-
     @api.model_create_multi
     def create(self, vals_list):
         """create 也要守。
@@ -145,16 +164,38 @@ class CloudServiceBindingGuard(models.AbstractModel):
         了——但那是 Odoo 對 create 的 ir.rule 檢查發生在寫入**之後**（新記錄
         必須落在 domain 內）的副作用，不是任何人設計的防線：只要換一條
         `perm_create` 較寬的 rule、或該路徑改走 sudo，它就靜默打開。
+
+        🔴 **閘門看的必須是框架解析後的 vals，不是呼叫者送進來的 raw vals**
+        （#705 F1）。``default_<field>`` context 與 ``ir.default`` 是在
+        ``BaseModel.create`` **內部**（``_prepare_create_values`` →
+        ``_add_missing_default_values``）才被展開成欄位值的，也就是在下面那句
+        ``super().create()`` **底下**。看 raw vals 的閘門在那一刻 key 還不存在
+        ⇒ 守衛整道不執行 ⇒ 綁定照樣落地。實測（#705 F1）：把 payload 從
+        ``args`` 搬到 ``kwargs.context`` 的 ``default_cloud_service_ids``，
+        #698 的主攻擊完整復原，三個 model 都中。
+
+        ⚠ 這裡呼叫 ``self._add_missing_default_values(vals)`` 是**刻意不自己
+        重演解析規則**：``default_`` context、``ir.default``、欄位 ``default=``
+        是三個來源，逐一重演就是會漏掉下一個（#657，同一行修了兩次）。代價是
+        這一輪 ``default_get`` 會被算兩次（我們一次、``super().create()`` 內
+        一次）；我們不把解析結果餵回 ``super()``，因為那會改動 create 真正收到
+        的 vals，副作用面比多算一次 ``default_get`` 大得多。
         """
+        fnames = set()
+        for vals in vals_list:
+            fnames.update(
+                self._cs_binding_diff_fields(self._add_missing_default_values(vals)))
         records = super().create(vals_list)
-        if any(self._cs_binding_in(vals) for vals in vals_list):
-            records._cs_binding_assert({})
+        if fnames:
+            records._cs_binding_assert(
+                {}, [f for f in self._cs_binding_fields if f in fnames])
         return records
 
     def write(self, vals):
-        guarded = self._cs_binding_in(vals)
-        before = self._cs_binding_snapshot() if guarded else None
+        """write 側不受 ``default_`` 影響（default 只在 create 套用）。"""
+        fnames = self._cs_binding_diff_fields(vals)
+        before = self._cs_binding_snapshot(fnames) if fnames else None
         res = super().write(vals)
-        if guarded:
-            self._cs_binding_assert(before)
+        if fnames:
+            self._cs_binding_assert(before, fnames)
         return res

@@ -3194,7 +3194,6 @@ class CloudService(models.Model):
                 % ', '.join('#%s' % svc_id for svc_id in denied.ids)
             )
 
-    @api.model
     def _assert_reverse_binding_authorized(self, vals):
         """#698 反向端：從 **service 側**寫 `project_ids`（同一張 relation 表
         的另一頭）。
@@ -3214,26 +3213,59 @@ class CloudService(models.Model):
         ## 候選 id 收集為什麼是**刻意的**超集（不要「修」成精確判斷）
 
         下面只從指令 tuple 的 id 位置撈整數，**不判斷 add／remove、不套用指令
-        語意**。這不是還沒做完——它是本修法的核心取捨：
+        語意**，再併上**寫入前**的 `self.project_ids`。這不是還沒做完——它是
+        本修法的核心取捨：
 
         - 精確判斷 add／remove 就必須重演 x2many 的指令語意，而那正是同一個
           issue 在 project／task 側**刻意避開**的陷阱（見
           `cloud_service_binding_guard` 檔頭與 #657：逐一重演框架的解析規則，
           就是會漏掉下一個形態）。這一端不能用 after-diff（理由見上），所以
           「不重演」的代價只能由「收保守超集」來付。
-        - 失敗方向是 **fail-closed**：超集 ⇒ 檢查範圍只會過寬、不會過窄。多檢
-          查到的那些，正是呼叫者自己在 vals 裡指名要動的 project；要求他對它們
-          有 write，語意上站得住。
         - 反過來若改成精確集合，漏判一個形態的後果是**靜默放行**——與本 issue
           的原始缺陷同一種失敗模式。
 
         ⇒ 收窄這裡之前先問：新寫法在**未知的**指令形態下會漏還是會過寬？只有
         「仍然只會過寬」的寫法才可以取代它。
+
+        ## 這個候選集實際保證什麼（#705 F3：舊版的宣稱是假的）
+
+        ⚠ 舊版只撈指令裡的 id，於是 `(5, 0, 0)`（`command[1]` 是 falsy、
+        `command[2]` 非 list）與 `(6, 0, [])` 的候選集是**空的**，而
+        `(6, 0, [保留的])` 永遠不含被移除的那些 ⇒ **移除方向整條沒有被檢查**，
+        卻在同一份 docstring 裡寫著「撈到的是超集、只會過寬不會過窄」。
+        那句話對移除方向為假，而它是寫給未來維護者的判準。
+
+        現在的保證，逐方向寫清楚：
+
+        - **新增方向**：新綁上的 project id 必然出現在指令 tuple 裡
+          ⇒ 落在候選集內。唯一例外是 `(0, 0, vals)`（就地新建 project）——它的
+          id 當下還不存在，無從檢查；但那個 project 是呼叫者自己建的、且它的
+          `create` 會走 `project.project` 側的 mixin，所以不是提權面。
+        - **移除方向**：被解掉的 project 必然在**寫入前**的 `self.project_ids`
+          裡 ⇒ 由下面那行 `self.sudo().project_ids.ids` 覆蓋，與指令形態無關。
+        - ⇒ 候選集 ⊇（新增 ∪ 移除），指令形態不影響這個包含關係。
+
+        ## 與 project 側的不對稱（刻意，且只有這裡記著）
+
+        同一個 `(6, 0, [])`：**project 側擋得住**（mixin 的 after-diff 看得見
+        「綁定少了一顆」，判準是 service 的 workspace 角色，寫入前後都一樣
+        ⇒ after-diff 安全）；**反向端擋不住**，因為這一端的判準
+        （`project.check_access('write')`）會被寫入本身改掉，只能前置評估、
+        只能靠候選集是超集。兩端用不同機制不是實作不一致，是判準性質不同。
+
+        ⚠ 併入舊值不會誤傷合法呼叫者：能走到這裡的人必然是該 service 所屬
+        workspace 的 owner／admin（#676 的 rule），而
+        `project_rule_workspace_member` 的 bound 分支
+        （`cloud_service_ids.workspace_id.access_ids.user_id`，**無 role 條件**）
+        讓該 workspace 的任何成員對「綁著這顆 service 的每一個 project」都有
+        write ⇒ 多檢查到的那些必然通過。行為面由 `Z4` 鎖住。
         """
         commands = vals.get('project_ids')
         if not commands or self.env.su:
             return
-        candidates = set()
+        # 移除方向的舊值：與指令形態無關，`(5)`／`(6, 0, [])` 也涵蓋得到。
+        # sudo ⇒ 看真實歸屬，不被呼叫者自己的讀取權限縮窄（縮窄＝漏檢）。
+        candidates = set(self.sudo().project_ids.ids)
         for command in commands:
             if not isinstance(command, (list, tuple)) or len(command) < 2:
                 continue
@@ -3570,8 +3602,12 @@ class CloudService(models.Model):
         """
         # #698 反向端：create 也能帶 `project_ids`（同一張 relation 表的另一頭），
         # 且同樣必須前置檢查——建完之後那個 project 就落進呼叫者的 bound 分支。
+        # 🔴 #705 F1：必須看**框架解析後**的 vals。`default_project_ids` 是在
+        # `BaseModel.create` 內部才展開的（見 `cloud_service_binding_guard.create`
+        # 的說明），只看 raw vals 會讓整道前置檢查跳過。
         for vals in vals_list:
-            self._assert_reverse_binding_authorized(vals)
+            self._assert_reverse_binding_authorized(
+                self._add_missing_default_values(vals))
         normalized_vals_list = []
         for vals in vals_list:
             normalized = dict(vals)
