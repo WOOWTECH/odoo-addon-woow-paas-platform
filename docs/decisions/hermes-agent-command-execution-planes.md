@@ -27,6 +27,9 @@ issues:
 `svc-03224fdb-hermes-agent-…` / container `hermes-agent` / chart `hermes-agent-0.1.3` /
 Hermes Agent v0.19.0 / 上游 image `nousresearch/hermes-agent@sha256:a2a0a2da…`。
 runtime 觀測與 build-time 檢查皆於 **2026-08-13** 完成，全程唯讀（pod 內零寫入）。
+另有四項 pod 內唯讀觀測（`stat` / `test -w` / `id` 與 `/proc/<daemon>/status` / daemon 執行期
+`environ` 白名單 grep）由 leader4 於本檔撰寫前補齊——它們把 §8 原本三條「尚未直接觀測」
+的邊界收掉了，出處見 §9。
 
 **本檔記的是已查證的架構事實與已拍板的約束；待辦在 #717 / #718，不在此複述。**
 
@@ -42,9 +45,9 @@ runtime 觀測與 build-time 檢查皆於 **2026-08-13** 完成，全程唯讀�
    pod 重建即失。**持久**與**三面可見**是兩根獨立的軸，只修一軸的方案都不完整。
 3. **`/opt/data/.local/bin` 是上游刻意留的空位**（五條交叉證據支持的推導；上游無明文，見
    §3）——它在 image 烘進的 PATH 上、在 PVC 上，但從沒有任何 build 或 boot 流程建立它。
-4. **兩條安全事實並列**（不是一主一附）：L3 的 root PATH shadowing 通道（今日**潛伏**，
-   任何首次建出該目錄的行動者都會把它轉現行）＋ 第四面的 `shell=True` **沒有接
-   approval gate**（L6 有）。
+4. **兩條安全事實並列**（不是一主一附）：L3 的 root PATH shadowing 通道（今日**潛伏**——
+   目錄尚未建出，但**租戶對其父目錄的寫入權已實測**，任何首次建出該目錄的行動者都會把它
+   轉現行）＋ 第四面的 `shell=True` **沒有接 approval gate**（L6 有）。
 5. **已拍板**：rc 由租戶自理；平台可在租戶空間留「不會被執行的命名結構」，不得留「會被
    執行的內容」。apt 與 nvm 類明文不支援——這是設計決策，不是缺陷。
 
@@ -60,7 +63,7 @@ runtime 觀測與 build-time 檢查皆於 **2026-08-13** 完成，全程唯讀�
 | | **L3** console exec | **L5** agent terminal tool | **L6** TUI bang-escape | **第四面** `_run_setup_command` |
 |---|---|---|---|---|
 | 入口 | `/console/`（ttyd → `connect.sh` → `kubectl exec -it <daemon-pod> -c hermes-agent -- /bin/bash`） | agent（LLM）呼叫 terminal / file / code tool | TUI 內 `!cmd`，**以及訊息內插 `{!cmd}`** | dashboard API `/api/memory/providers/{name}/setup` 系列，**含被動觸發** |
-| 身分 | **root** uid=0（gid 0、附加 group 10000） | hermes uid=10000 | hermes uid=10000 | 繼承 dashboard daemon（uid hermes） |
+| 身分 | **root** uid=0（gid 0、附加 group 10000） | hermes uid=10000 | hermes uid=10000 | 繼承 dashboard daemon ＝ hermes uid=10000 |
 | `$HOME` | `/root` | `/opt/data/home` | `/opt/data` | `/opt/data` |
 | 在 PVC？ | ❌ overlay，**重建即失** | ✅ | ✅ | ✅ |
 | shell | non-login interactive bash | `bash -l`（做一次 snapshot） | `/bin/sh` ＝ **dash** | `bash -c`（僅 `install_cmd` 一處）／**其餘四個呼叫點連 shell 都沒有** |
@@ -71,6 +74,11 @@ runtime 觀測與 build-time 檢查皆於 **2026-08-13** 完成，全程唯讀�
 
 **三面 PATH 的交集只有 `/usr/local/bin`、`/usr/bin`、`/bin`——全部在 image layer。**
 `/proc/mounts` 實測：整個容器只有 `/opt/data` 是 Longhorn PVC，其餘皆 overlay。
+
+**身分與 `$HOME` 的直接證據**（leader4 補充觀測）：`id hermes` → `uid=10000(hermes)`，且
+dashboard daemon 的 `/proc/<pid>/status` 的 `Uid` 也是 **10000** ⇒ **租戶面與 daemon 是同一個
+uid**，不是兩個湊巧都叫 hermes 的身分。daemon 的執行期環境亦已直接讀到：
+`HERMES_HOME=/opt/data`、`HOME=/opt/data`（與 s6 run script、`getent passwd hermes` 三路一致）。
 
 第四面的四個 candidate 與現況：`/usr/local/bin` ✅ 存在（**今天唯一真被前插的一格**）、
 `/opt/data/.local/bin` ❌、`.brv-cli` bin ❌、`.npm-global` bin ❌
@@ -133,6 +141,10 @@ container——差別只在「組環境變數的程式路徑」。
    runtime 的 UserHomeDir fallback）在 **L5 面內部**就與 `$HOME` 打架。
 
 ⇒ **chart 改 `env: HOME=` 只動得到 L3**；「單一旋鈕統一 HOME」不存在。
+
+第 2、4 條先前只有靜態旁證（s6 run script 逐字、`getent`）。daemon 的**執行期**環境已由
+leader4 直接讀到——`HERMES_HOME=/opt/data`、`HOME=/opt/data`——三路一致，所以「`HERMES_HOME`
+可能落 `Path.home()/".hermes"` fallback」這個分支已排除。
 
 ### 2.2 同名的 `~/.local/bin` 是兩個不同的實體目錄
 
@@ -211,15 +223,16 @@ shell，不在 Python 的呼叫鏈上，組裝端 grep 遍所有 `env["PATH"]=` 
 
 - `/opt/data/.local/bin` 位於 L3（**uid=0**）PATH 的**第 3 格**，排在 `/usr/local/bin`
   （第 5）、`/usr/bin`（第 7）**之前**。
-- 父目錄 `/opt/data/.local` ＝ `drwxr-xr-x hermes hermes`，而 agent 面的身分就是同一個
-  uid ⇒ 租戶可在其下 `mkdir`。
+- 父目錄 `/opt/data/.local` ＝ `hermes:hermes 755`，且**以 hermes 身分實測 `test -w` 回
+  WRITABLE** ⇒ 租戶確實可在其下 `mkdir`。（同批 `stat` 實測：`/opt/data` 為
+  `hermes:hermes 700`、`/opt/data/plugins` 為 `hermes:hermes 755`，三者皆 `test -w` 通過。）
 - ⇒ 租戶放一個叫 `ls` / `git` 的檔案，**下一位在 `/console/` 打那個指令的支援工程師就以
   uid 0 執行租戶的碼**。
 - **這條通道與任何改動無關，今天就存在**（image 的 PATH 排序造成）；它處於**潛伏態**
-  只是因為那個目錄尚未被建出。
+  只是因為那個目錄尚未被建出——**不是因為租戶建不出來**。
 - **第四面共用同一格**：`_memory_provider_setup_env()` 的 candidate 就是同一個實體目錄
-  （inode 23）。因兩面同 uid，這**不構成新的權限升級**——它繼承的是同一條既有通道，不是
-  新的洞。
+  （inode 23）。兩面同 uid（`id hermes` 與 daemon 的 `/proc/<pid>/status` 皆為 10000，
+  §1.1），故這**不構成新的權限升級**——它繼承的是同一條既有通道，不是新的洞。
 - 🔴 **潛伏→現行的觸發器**：任何**首次**在 `/opt/data/.local/` 建出 `bin/` 的行動者，
   包含 initContainer、也包含第四面自己跑 `pip / uv install --user`。這是「建目錄」與
   「安全圍堵」必須同批發的原因（#717）。
@@ -256,11 +269,16 @@ shell，不在 Python 的呼叫鏈上，組裝端 grep 遍所有 `env["PATH"]=` 
   一處（patch `web_dist` 的 MCP OAuth 按鈕顯示條件，見
   [hermes-agent-web-dist-patch-constraints](../reference/features/hermes-agent-web-dist-patch-constraints.md)），
   未觸及 Python 端。處置見 #718。
-- **結構性弱點，今日不可利用**：`_install_memory_provider_pip_dependencies` 把缺件直接
-  展開進 argv，無 `-` 開頭／VCS spec／`--index-url` 白名單。今日不可利用（bundled
-  manifest 內容乾淨、`/opt/hermes/plugins/memory/*` 為 `root:root 755`、租戶無寫入權）。
-  user-installed provider 的 manifest 是租戶可控的，但**兩端是否相接尚未驗證**——列為
-  未解疑問，不是結論（§8-5）。
+- **結構性弱點**：`_install_memory_provider_pip_dependencies` 把缺件直接展開進 argv，無
+  `-` 開頭／VCS spec／`--index-url` 白名單。**經 bundled provider 這條路今日不可利用**
+  （bundled manifest 內容乾淨、`/opt/hermes/plugins/memory/*` 為 `root:root 755`、租戶無
+  寫入權）。
+  ⚠ 但 **user-installed provider 這條路的兩道前置關卡都已實測通過**：掃描路徑由
+  `HERMES_HOME=/opt/data` 確定為 `/opt/data/plugins/<name>/`，而該目錄實測
+  `hermes:hermes 755` 且 `test -w` 為 WRITABLE ⇒ **manifest 確實是租戶可控的**。
+  仍未驗的只剩最後一段：user-installed 的 `pip_dependencies` 是否真的流進上述無白名單的
+  argv 展開（函式端已驗、租戶輸入端已驗，**相接與否未驗**）。這一段仍是未解疑問、不是
+  結論（§8-2）。
 
 ---
 
@@ -317,7 +335,7 @@ L6 的定位是**受限逃生口**，文件講清楚即可。它繼承承載 gat
 | 對象 | 判定與理由 |
 |---|---|
 | **apt** | 明文不支援。系統層、root-only（`dpkg`／apt 快取皆 root-only，實測 L5/L6 物理裝不成），落點在 `/usr/bin`、`/var/lib/dpkg` 等 image layer ⇒ **設計上就不該持久**。需要系統套件請開 issue |
-| **nvm 及同類 rc-function 版本管理器** | 明文不支援。本質要 rc 被 source，而 L6／第四面物理上不讀 rc；替代方案＝走已收斂 prefix 的 `npm i -g`。（⚠「nvm 預設寫 `.bashrc`、而 L5 讀 `.profile`」是文件層級推論，未實測——見 §8-9） |
+| **nvm 及同類 rc-function 版本管理器** | 明文不支援。本質要 rc 被 source，而 L6／第四面物理上不讀 rc；替代方案＝走已收斂 prefix 的 `npm i -g`。（⚠「nvm 預設寫 `.bashrc`、而 L5 讀 `.profile`」是文件層級推論，未實測——見 §8-6） |
 | **`curl -o` 手動下載** | 無旋鈕可自動收斂，租戶需遵守「裝到 canonical 目錄」這**一條**規則——但已從「每個面每個工具各一條規則」降為唯一一條、且在任何面都成立 |
 | **`npm install -g` 在 L5/L6** | 預設 global prefix `/usr/local` 對 uid 10000 不可寫（`root:root drwxr-xr-x`，`test -w` 實測）⇒ EACCES |
 | **pip / pipx** | 容器內**不存在**（連 `.venv` 的 python 都 `No module named pip`）；`ensurepip` 模組在，故 pip 可 bootstrap。`uv` / `uvx` 在 `/usr/local/bin` |
@@ -369,6 +387,10 @@ bash: tea: command not found      ← bash 面
   ＝**探針壞了**，不是「這個面沒設這些變數」。可用 `su hermes -c '…'`（**不帶** `-`，
   非 login shell，不觸發讀 profile）借同 uid 的讀取權限；界線是——`su hermes -c 'echo $PATH'`
   就變成回顯自己的輸入，沒有鑑別力。
+  🔴 **本案就吃過這個虧**：五條調查線全用 root 讀而撞 `Permission denied`，於是把
+  `HERMES_HOME` 的實際值當成「查不到的事實」寫進殘留未知；換成 `su hermes -c` 之後一次
+  就讀到（`HERMES_HOME=/opt/data`）。**探針權限不足留下的空白，會被寫成「事實未知」而不是
+  「探針該換」——後者才是真相。**
 - `tr "\0" "\n" < /proc/self/environ` 會**靜默回 0 bytes**，`cat … | tr` 回正常內容（同一個
   sh、可重現，機制未查明）⇒ 讀 environ 一律用 `cat … | tr` 形式。
 - **整包 dump environ 會外洩機密**：daemon environ 內含 `API_SERVER_KEY`、
@@ -385,24 +407,23 @@ bash: tea: command not found      ← bash 面
 
 ## 8. 本檔的證據邊界（尚未直接觀測的項目，明列以免被當成已驗）
 
-1. **`HERMES_HOME` 的實際值未直接觀測**——只有 s6 run script、`getent`、`/opt/data/plugins`
-   存在三條靜態旁證。⇒ user-installed provider 的掃描落點是 `/opt/data/plugins/<name>/`
-   還是 `/opt/data/home/.hermes/plugins/`，懸而未決。
-2. **`hermes` 的數值 uid 未經 `id hermes` 直接確認**（各線都稱 uid 10000，但沒有一線報過
-   `id hermes`）⇒ §4.1「同 uid ⇒ 不構成新的權限升級」建立在此之上。
-3. **`/opt/data` 本身的 owner/mode 未回報** ⇒ 租戶對 `/opt/data/plugins/<name>/` 的寫入權
-   未以 `test -w` 實測（`hermes:hermes 755` 是 `ls` 的推導）。
-4. **`_run_setup_command` 另外三個呼叫點（5891 / 5925 / 5997）的觸發條件無人回報** ⇒
+1. **`_run_setup_command` 另外三個呼叫點（5891 / 5925 / 5997）的觸發條件無人回報** ⇒
    被動觸發面可能不只 5859。
-5. **user-installed provider 的 `pip_dependencies` 是否流進 §4.2 那條無白名單 argv 展開**
-   ——函式端已驗、租戶輸入端已驗，**相接與否未驗**。這是疑問，不是主張。
-6. **Cloudflare tunnel / ingress 外層**是否對 `/api/memory*` 另有限制——pod 內查不到，
+2. **user-installed provider 的 `pip_dependencies` 是否流進 §4.2 那條無白名單 argv 展開**
+   ——函式端已驗、租戶輸入端已驗（掃描落點與可寫性都已實測，見 §4.2），**只剩相接與否
+   未驗**。這是疑問，不是主張。
+3. **Cloudflare tunnel / ingress 外層**是否對 `/api/memory*` 另有限制——pod 內查不到，
    需叢集側確認。
-7. **上游對 `.local/bin` 留白的「意圖」沒有明文**（§3 的證據邊界）。
-8. **`tools/approval.py` 是否涵蓋 L5 的 session-bootstrap 靜默 source 路徑，未追。**
+4. **上游對 `.local/bin` 留白的「意圖」沒有明文**（§3 的證據邊界）。
+5. **`tools/approval.py` 是否涵蓋 L5 的 session-bootstrap 靜默 source 路徑，未追。**
    ⚠ 提問方式要先修正：`_prepend_shell_init` 在本 pod 是**死碼**（只在 `login=True` 跑，
    snapshot 健康時該值恆 False），真正 source `.profile` 的是 `bash -l` 的原生 login 語意。
-9. **nvm 實際寫哪個 rc 是文件層級推論**，未實測。
+6. **nvm 實際寫哪個 rc 是文件層級推論**，未實測。
+
+**已從本節移除（原 1–3 項，現皆為實測）**：`HERMES_HOME` 的實際值（＝`/opt/data`）、
+`hermes` 的數值 uid（＝10000，且與 daemon 同 uid）、`/opt/data`／`/opt/data/.local`／
+`/opt/data/plugins` 三者的 owner・mode 與 `test -w` 可寫性。出處見 §9；促成它們被讀到的
+探針換法見 §7.3 第 2 條。
 
 ---
 
@@ -420,6 +441,7 @@ bash: tea: command not found      ← bash 面
 | 5 | `console-run-setup-command-fourth-plane.md` | 第四執行面確認、inode 判別式、approval gate 缺口 |
 | — | `hermes-image-build-investigation.md` | build-time 側：PATH 來源、§3 的留白證據鏈、`/etc/profile` 原廠性 |
 | — | maestri note `hermes-exec-planes-evidence` | 使用者第一手三面實測與 §7.1 的判別式邊界 |
+| — | leader4 的 pod 內唯讀補充觀測 | `stat -c "%n %U:%G %a"` 三目錄、`su hermes -c 'test -w …'` 三目錄、`id hermes` ＋ daemon `/proc/<pid>/status` 的 `Uid`、`su hermes -c 'cat /proc/<pid>/environ \| tr …'` 白名單 grep ⇒ 收掉 §8 原 1–3 項 |
 
 > 這些材料是**五輪演進**，早期結論已被後期推翻（例如第一輪的「把 tea 搬到
 > `/opt/data/.local/bin`」已撤回、第二輪的「`/proc/…/environ` 與 daemon 逐字相同」與
