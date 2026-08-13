@@ -51,7 +51,7 @@
 |---|----------|--------|-------|------|--------|
 | F1 | medium | refactor | 1 | ACL 對等性 checklist 持久化 | doc-only ✅（本 doc 已寫進 [[odoo-addon-std-rule-symmetric-deactivation]]） |
 | F2 | medium | refactor | 1 | `_sanitize_helm_values` 同名異實重命名 | 待新 PR |
-| F3 | medium | refactor | 1 | Cross-workspace incompatible extras 注 AI prompt | 待設計 |
+| F3 | low（#698 前為 medium） | refactor | 1 | **cross-project move 保留的 extras 仍注 AI prompt**（#698 已堵掉「直接寫 task 服務欄位」那條更短的路） | 待設計 |
 | F4 | medium | pre-existing | 1 | `_check_project_access` / `_check_task_access` 對 unbound IDOR | 待新 PR |
 | F5 | medium | refactor (deferred) | 1 | Migration xmlid drift 防呆 assertion | 使用者 accept 不加本 PR；待新 PR |
 | F6 | medium | refactor | 1 | D9 階段 2 — sanitizer 升級 whitelist 模式 | 等 telemetry，待新 PR |
@@ -149,20 +149,52 @@
 
 ---
 
-## F3 — Cross-workspace incompatible extras 仍注入 AI prompt
+## F3 — cross-project move 保留的 extras 仍注入 AI prompt（#698 已堵掉更短的那條路）
 
-- **Severity**: medium（非 secret leak，但違反多租戶資訊隔離精神）
-- **Origin**: 本次 refactor 對 task cross-project move 設計成「extras 保留」（AC #13），但 `_get_cloud_service_context` 走 `sudo()` 取 extras（`src/models/discuss_channel.py:267-280`），sanitizer 只去 secret 不去 cross-workspace
-- **觸發路徑**：
+> **2026-08-13 更新（#698）**。本條原本記的觸發路徑是「task 被 cross-project
+> move」，而且那個前提被當成**唯一**入口在評估嚴重度。#698 實測證偽：還有一條
+> 短得多的路——攻擊者對**自己的** task 直接寫 `primary_cloud_service_id` /
+> `extra_cloud_service_ids`，就能把任意租戶的 service 塞進自己的 agent prompt，
+> 完全不需要任何 move、也不需要對那筆 service 有 read。那條路已由 #698 的
+> `cloud_service_binding_guard` 堵住（owner／admin 才能改綁定，兩個方向都守）。
+> **本條剩下的是原本那條**：合法的 cross-project move。
+
+- **Severity**: low（#698 之前記為 medium——那個評級建立在「唯一入口是 move」
+  的前提上；真正撐起 medium 的是 #698 那條短路徑，它已修）
+- **當前剩餘觸發路徑**（合法操作，非攻擊）：
   1. 使用者 A 在 W1 為 task 加 W1 服務 X 為 extras
-  2. Task 被 cross-project move 到 W2（B 的 project）
+  2. **有權限的人**把 task cross-project move 到 W2 的 project（AC #13 設計成
+     「extras 保留」）。#698 的綁定守衛不觸發，理由是**它的 key gate**：
+     move 寫的是 `project_id`，而 `project_id` 既不在 `_cs_binding_fields`
+     也不在 `_cs_binding_triggers` 裡 ⇒ 守衛連 snapshot 都不做
+     （`src/models/cloud_service_binding_guard.py` 的 `_cs_binding_diff_fields`）
+     - ⚠ **不是**因為「綁定沒變」（本條 2026-08-13 首版曾這樣寫，是假的）。
+       `primary_cloud_service_id` 是 `@api.depends('project_id.cloud_service_ids')`
+       的 stored compute，move **會**改綁定集合。實測證據：
+       `src/tests/test_project_cs_m2m_authz_705.py` 的
+       `TestCrossProjectMoveReasonF6.test_X3b_move_changes_binding_and_is_not_blocked`
+       斷言 move 之後 `primary_cloud_service_id` 從 svc_a 變成 svc_a2
+     - 這個區別要緊：用「沒東西可看」當理由，會讓讀者以為 after-diff 的形狀
+       已經涵蓋 move 這一格。實際上守衛只是沒被叫起來——**動 key gate 的人
+       會讓這條合法操作開始 raise**（該測試就是這個交互作用的回歸鎖）
   3. W2 member 在該 task chatter 觸發 AI 自動回覆
-  4. AI prompt 內包含 X 的 service.name / subdomain（公開域名）/ template name / sanitized helm_values
-- **洩漏內容**：service.name（可能含租戶業務語意）、subdomain、template name、helm_values（secret 已 redact 但保留 chart 配置）
+  4. AI prompt 內含 X 的 service.name / subdomain（公開域名）/ template name /
+     sanitized helm_values
+- **洩漏內容**：service.name（可能含租戶業務語意）、subdomain、template name、
+  helm_values（secret 已 redact 但保留 chart 配置）
+- **實作指標（原記載已過期）**：`_get_cloud_service_context`
+  （`src/models/discuss_channel.py`）自 2026-06-05 起只是**委派**給
+  `agent_session._build_system_context`；真正組裝服務區塊、也真正走 `sudo()`
+  的是 `agent_session._ctx_services_sections` / `_ctx_service_block`
+  （`_build_system_context_unsafe` 以 `project.task.sudo().search` 取 task）。
+  要落地過濾請改那裡，改 `discuss_channel` 只會漏掉另外兩條 chat path。
 - **建議落點**：
-  - `_get_cloud_service_context` 過濾 `incompatible_extra_cloud_service_ids`，cross-workspace extras 即使存在也不注入
-  - 或對 cross-workspace extras 注入時降級為「placeholder 提示 + service name only」（無 helm_values / subdomain）
-- **設計待議**：兩個方向各有 UX tradeoff（過濾 = AI 不知道有 extras / placeholder = 部分資訊但複雜），由使用者決定
+  - `_ctx_services_sections` 過濾 `incompatible_extra_cloud_service_ids`，
+    cross-workspace extras 即使存在也不注入
+  - 或對 cross-workspace extras 注入時降級為「placeholder 提示 + service name
+    only」（無 helm_values / subdomain）
+- **設計待議**：兩個方向各有 UX tradeoff（過濾 = AI 不知道有 extras /
+  placeholder = 部分資訊但複雜），由使用者決定
 
 ---
 

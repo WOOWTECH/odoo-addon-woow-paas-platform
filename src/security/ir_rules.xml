@@ -31,6 +31,17 @@
             <field name="perm_read" eval="True"/>
             <field name="perm_write" eval="True"/>
             <field name="perm_create" eval="True"/>
+            <!-- ⚠ `perm_unlink="False"` means "this rule takes no part in the unlink
+                 check" — NOT "unlink is forbidden". ir.rule only ever restricts, it
+                 never grants; a direction with no rule at all is a direction with no
+                 row-level filter. This is the ONLY project.project rule in this repo
+                 and ir.model.access.csv:41 grants base.group_user 1,1,1,1, so today
+                 any internal user CAN unlink every project they can see. Measured in
+                 PR #705's independent review (see #issuecomment-6960, finding F4);
+                 #698's binding guard only covers write/create, so E7 (unbind → the
+                 project disappears for the whole workspace) is still reachable via
+                 unlink within the same workspace. Tracked separately — do not read
+                 this flag as a deletion guard. -->
             <field name="perm_unlink" eval="False"/>
         </record>
 

@@ -17,6 +17,10 @@ from . import res_config_settings
 from . import workspace
 from . import workspace_access
 from . import project_access
+# #698 綁定守衛 mixin — 必須排在**所有繼承者之前**（cloud_service、
+# project_project、project_task），否則 registry 建立時會撞
+# "inherits from non-existing model"。
+from . import cloud_service_binding_guard
 from . import cloud_app_template
 from . import cloud_service_secret
 from . import smart_home_template
