@@ -408,8 +408,13 @@ class TestMcpOdooManageTemplateSeed(_McpServerSeedAssertions, TransactionCase):
 
     Active（image 真接線: odoo-manage-mcp-admin 雙釘 digest, woow-mcp-server #14 打包
     ivnvxd/mcp-server-odoo 0.7.1）. 底層 server 用 FastMCP、原生 StreamableHTTP，故直跑
-    console script `mcp-server-odoo`（NOT 標準 odoo 的 mcp_sse_wrapper 包）——ivnvxd 無
-    module-level server 物件，wrapper spec 對它不存在. EXPECT_ACTIVE defaults to True.
+    console script `mcp-server-odoo`——ivnvxd 無 module-level server 物件，wrapper spec
+    對它不存在. EXPECT_ACTIVE defaults to True.
+
+    這裡原本補了一句「NOT 標準 odoo 的 mcp_sse_wrapper 包」，那是**首建 image 時期**的
+    對比（標準版底層 odoo-mcp-server 0.1.3 stdio-only、家族只有它走 wrapper）。標準版
+    自 #708 起改成直跑 console script（見 TestMcpOdooTemplateSeed），兩張已是同一種
+    形狀，該對比不再成立。
     """
 
     SLUG = 'mcp-odoo-manage'
