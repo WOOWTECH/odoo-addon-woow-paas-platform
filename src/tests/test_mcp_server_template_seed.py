@@ -331,9 +331,58 @@ class TestMcpOdooTemplateSeed(_McpServerSeedAssertions, TransactionCase):
     PROD_M = 'woow_paas_platform.product_mcp_odoo_monthly'
     IMAGE_REPO_SUFFIX = 'odoo-mcp-admin'
     APP = 'odoo'
-    # odoo-mcp-server 0.1.3 is stdio-only; launched via core's mcp_sse_wrapper
-    # (GAP-O1: architecture.md's 'odoo-mcp-server --transport sse' is stale).
-    EXPECT_MCP_COMMAND = 'python'
+    # 現行釘的 image（7b5944c4）裝的是 tuanle96 odoo-mcp：自帶 console script
+    # ``odoo-mcp``、原生 streamable-http，故直跑 console script、不經 core 的
+    # mcp_sse_wrapper（#708）。首建 image 9d10944 的 odoo-mcp-server 0.1.3 才是
+    # stdio-only + wrapper，那份事實隨 2026-07-14 重釘（6fb93163）就失效了。
+    EXPECT_MCP_COMMAND = 'odoo-mcp'
+    # 與上面那條 launch spec 綁成 lockstep 的常數，見
+    # test_image_repin_must_recheck_launch_spec。
+    EXPECT_IMAGE_TAG = '7b5944c483779b35f74903b9a875440a06577888@sha256:f76fc569565aadeff34d5a7a6515b89959d9136f0c349f4f0f0d0a4073d67876'
+
+    def test_mcp_server_launch_spec_matches_image_entrypoint(self):
+        """#708：只釘 command 不夠，args 整組也要釘。
+
+        實際炸掉的是 args——重釘後 ``command`` 仍是完全合法的 ``python``，家族層
+        「有覆寫 chart 預設」那條也照樣綠；死在 args 裡的
+        ``-m mcp_admin_core.mcp_sse_wrapper mcp_server_odoo.server:server``
+        指向新 image 裡不存在的模組，子行程 ModuleNotFoundError 立刻死，proxy 對
+        ``/private_TOKEN/mcp`` 回 502，而 ``/healthz`` 與 admin GUI 全綠。
+        """
+        mcp = self._values()['config']['nonSensitive']['mcp_server']
+        self.assertNotIn(
+            'mcp_admin_core.mcp_sse_wrapper', mcp['args'],
+            '現行 image 原生講 streamable-http，不得回退成 wrapper 包——'
+            '它沒有 mcp_server_odoo 模組，wrapper 會 ModuleNotFoundError')
+        self.assertEqual(
+            mcp['args'],
+            ['--transport', 'streamable-http', '--host', '127.0.0.1',
+             '--port', '8000'])
+        self.assertEqual(mcp['port'], 8000)
+        # proxy 連的是 mcp_server.port，子行程綁的是 args 裡的 port：兩者一旦
+        # 不一致，症狀與「子行程沒起來」一模一樣（502），但原因完全不同。
+        self.assertEqual(
+            mcp['args'][mcp['args'].index('--port') + 1], str(mcp['port']),
+            'args 的 port 必須等於 proxy 讀的 mcp_server.port')
+
+    def test_image_repin_must_recheck_launch_spec(self):
+        """#708 lockstep：image 一被重釘這條就紅，逼下一個人覆核 launch spec。
+
+        這正是 2026-07-14 重釘（commit 6fb93163）漏掉的那一步——那次 diff 只動
+        了版號與 image.tag 兩行，同一個 JSON 裡的 command/args 留在舊 image 的
+        寫法，測試全綠，此後每一台新開的實例 /mcp 都是 502。
+
+        本測**不**（也不可能）驗 image 裡裝了什麼；它只保證「換 image」與「覆核
+        啟動指令」不能再各自獨立發生。只掛在 odoo 這一格是刻意的：#708 的範疇是
+        這一張 template，家族其餘成員要不要一起上 lockstep 另議。
+        """
+        self.assertEqual(
+            self._values()['image']['tag'], self.EXPECT_IMAGE_TAG,
+            'image 被重釘了：請先實查新 image 的 MCP 入口（有沒有 console '
+            'script？原生支援哪些 transport？模組名是什麼？），據以確認或修正本 '
+            'class 的 EXPECT_MCP_COMMAND 與 launch args，最後才把 '
+            'EXPECT_IMAGE_TAG 更新成新 tag。判別規則見 '
+            'docs/reference/features/mcp-template-launch-contract.md 與 #708。')
 
 
 class TestMcpN8nTemplateSeed(_McpServerSeedAssertions, TransactionCase):
