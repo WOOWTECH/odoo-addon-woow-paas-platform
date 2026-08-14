@@ -372,6 +372,11 @@ class WorkspaceAccess(models.Model):
            不是合法流程（語意是「我把我的 owner 身分交出去」），放行只會讓下面那段
            降級／升級的配對錯位、最後撞 `_check_owner_count` 拋出一個與授權無關的
            ValidationError。
+           🔴 更根本的理由（覆核補上）：少了這個條件，這道閘的語意會退化成
+           「**你是 owner 就能對任何一列做 transfer**」——它擋的是**身分**、擋不住
+           **標的**。而 #583 的整個教訓正是「守衛要同時綁對呼叫者與標的」：只綁一邊
+           就是同一類缺陷換個位置長出來（舊版綁了標的沒綁呼叫者，這裡若只綁呼叫者
+           就是把它鏡像翻過來）。
         3. **豁免 `is_superuser()` 與 `base.group_system`**。這屬於
            scope-flip-write-guard 家族（有合法變更路徑、只需要設閘），不是
            su-env-exempt-guard 家族（根本沒有合法路徑）——理由與
