@@ -139,6 +139,12 @@ read -r -d '' SEED_PY <<'PYEOF' || true
 import json
 import os
 
+# #519：cloud_service 的建立要經平台自己的開閘 helper。`odoo shell` 是
+# in-process，import 得到那個模組層級的 sentinel（RPC 呼叫端則不行）。
+from odoo.addons.woow_paas_platform.models.cloud_service import (
+    _internal_provision,
+)
+
 WS_NAME = os.environ.get("RESET_BTN_E2E_WS", "reset-button-e2e-ws")
 PURGE = os.environ.get("RESET_BTN_E2E_PURGE", "") == "1"
 
@@ -187,7 +193,7 @@ else:
             ("template_id", "=", tpl.id),
         ], limit=1)
         if not svc:
-            svc = Service.create({
+            svc = _internal_provision(Service).create({
                 "workspace_id": ws.id,
                 "template_id": tpl.id,
                 "name": "e2e-%s" % tpl.slug,

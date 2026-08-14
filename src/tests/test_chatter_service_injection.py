@@ -20,6 +20,7 @@ D7 (unbound still injects project/task); AC #15/16 fixtures opt-in via
 template.agent_context_keys per D4 (fail-closed helm_values whitelist).
 """
 from odoo.tests.common import TransactionCase
+from ..models.cloud_service import _internal_provision
 
 
 class _ChatterFixture:
@@ -46,13 +47,13 @@ class _ChatterFixture:
             'helm_chart_version': '1.0.0',
             'min_vcpu': 1, 'min_ram_gb': 1.0, 'min_storage_gb': 1,
         })
-        self.svc_primary = Service.sudo().create({
+        self.svc_primary = _internal_provision(Service.sudo()).create({
             'name': 'Primary Svc',
             'workspace_id': self.workspace.id,
             'template_id': self.template.id,
             'subdomain': 'primary-svc',
         })
-        self.svc_extra = Service.sudo().create({
+        self.svc_extra = _internal_provision(Service.sudo()).create({
             'name': 'Extra Svc',
             'workspace_id': self.workspace.id,
             'template_id': self.template.id,

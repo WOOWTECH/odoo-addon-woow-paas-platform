@@ -12,6 +12,7 @@ import uuid
 
 from odoo.exceptions import ValidationError
 from odoo.tests.common import TransactionCase, tagged
+from ..models.cloud_service import _internal_provision
 
 
 @tagged('post_install', '-at_install')
@@ -40,7 +41,7 @@ class TestMcpSidecarUrlInvariant(TransactionCase):
             'helm_chart_version': '1.0.0',
             'min_vcpu': 1, 'min_ram_gb': 1.0, 'min_storage_gb': 1,
         })
-        cls.service = cls.Service.sudo().create({
+        cls.service = _internal_provision(cls.Service.sudo()).create({
             'name': 'Inv Svc',
             'workspace_id': cls.workspace.id,
             'template_id': cls.template.id,

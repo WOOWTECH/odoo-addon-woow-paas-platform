@@ -51,6 +51,7 @@ from odoo.exceptions import AccessError
 
 import json as json_lib
 import uuid
+from ..models.cloud_service import _internal_provision
 
 
 def _new_internal_user(env, login, name=None, with_password=False):
@@ -189,7 +190,7 @@ class TestMcpAclUnboundIsolation(TransactionCase):
             'helm_chart_version': '1.0.0',
             'min_vcpu': 1, 'min_ram_gb': 1.0, 'min_storage_gb': 1,
         })
-        self.bound_service = Service.sudo().create({
+        self.bound_service = _internal_provision(Service.sudo()).create({
             'name': 'H Bound Svc',
             'workspace_id': self.ws_alice.id,
             'template_id': self.template.id,

@@ -65,6 +65,7 @@ from odoo.exceptions import ValidationError
 from odoo.tests.common import HttpCase, tagged
 
 from odoo.addons.woow_paas_platform.models.mcp_server import McpServer
+from ..models.cloud_service import _internal_provision
 
 _ORIGINAL_NAME = 'B4 Original MCP Name'
 _NEW_NAME = 'B4 Renamed By Update'
@@ -99,7 +100,7 @@ class TestUpdateProjectMcpServerResidue(HttpCase):
             'helm_chart_version': '1.0.0',
             'min_vcpu': 1, 'min_ram_gb': 1.0, 'min_storage_gb': 1,
         })
-        self.service = self.env['woow_paas_platform.cloud_service'].sudo().create({
+        self.service = _internal_provision(self.env['woow_paas_platform.cloud_service'].sudo()).create({
             'name': 'B4 Service',
             'workspace_id': self.workspace.id,
             'template_id': self.template.id,

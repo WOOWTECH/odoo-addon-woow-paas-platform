@@ -24,6 +24,7 @@ from odoo.exceptions import AccessError
 from odoo.tests.common import TransactionCase
 
 from odoo.addons.woow_paas_platform.controllers.paas import PaasController
+from ..models.cloud_service import _internal_provision
 
 
 class _TenantServiceFixture(TransactionCase):
@@ -56,7 +57,7 @@ class _TenantServiceFixture(TransactionCase):
             'role': 'guest',
         })
         self.template = self.env.ref('woow_paas_platform.cloud_app_odoo')
-        self.service = self.env['woow_paas_platform.cloud_service'].create({
+        self.service = _internal_provision(self.env['woow_paas_platform.cloud_service']).create({
             'name': 't559-svc',
             'workspace_id': self.workspace.id,
             'template_id': self.template.id,

@@ -105,6 +105,7 @@ from odoo.addons.woow_paas_platform.models.workspace_access import (
 # 「記錄當初為什麼要錨死 slug」與「證明兩個 slug 在舊公式下相撞」時用它；今天的
 # namespace 身分是 `workspace.ws_hash`，不經這支函式。
 from odoo.addons.woow_paas_platform.services.naming import generate_ws_hash
+from ..models.cloud_service import _internal_provision
 
 # `workspace.py` 兩道守衛的訊息特徵字串。用它區分「model 層守衛擋的」與「ir.rule
 # 擋的」——兩者在 RPC 上都是 AccessError，不分辨的話會把「其實是 ir.rule 擋的」
@@ -610,7 +611,7 @@ class TestWorkspaceAttackVectors658(_Workspace658Fixture):
             'helm_chart_name': 'tmpl-658', 'helm_chart_version': '1.0.0',
             'min_vcpu': 1, 'min_ram_gb': 1.0, 'min_storage_gb': 1,
         })
-        svc = self.env['woow_paas_platform.cloud_service'].sudo().create({
+        svc = _internal_provision(self.env['woow_paas_platform.cloud_service'].sudo()).create({
             'name': 'Svc in W1 658',
             'workspace_id': self.w1.id, 'template_id': template.id,
         })

@@ -4,6 +4,7 @@ from unittest.mock import MagicMock, patch
 
 from odoo.tests.common import TransactionCase
 from odoo.exceptions import AccessError, ValidationError
+from ..models.cloud_service import _internal_provision
 
 
 class TestCloudService(TransactionCase):
@@ -33,7 +34,7 @@ class TestCloudService(TransactionCase):
 
     def test_create_service_minimal(self):
         """Test creating a service with minimal fields."""
-        service = self.Service.create({
+        service = _internal_provision(self.Service).create({
             'name': 'My Service',
             'workspace_id': self.workspace.id,
             'template_id': self.template.id,
@@ -46,7 +47,7 @@ class TestCloudService(TransactionCase):
 
     def test_service_default_state(self):
         """Test that new services start in pending state."""
-        service = self.Service.create({
+        service = _internal_provision(self.Service).create({
             'name': 'Pending Service',
             'workspace_id': self.workspace.id,
             'template_id': self.template.id,
@@ -55,7 +56,7 @@ class TestCloudService(TransactionCase):
 
     def test_service_state_transitions(self):
         """Test valid state transitions."""
-        service = self.Service.create({
+        service = _internal_provision(self.Service).create({
             'name': 'State Test',
             'workspace_id': self.workspace.id,
             'template_id': self.template.id,
@@ -79,7 +80,7 @@ class TestCloudService(TransactionCase):
 
     def test_service_error_state(self):
         """Test setting error state with message."""
-        service = self.Service.create({
+        service = _internal_provision(self.Service).create({
             'name': 'Error Service',
             'workspace_id': self.workspace.id,
             'template_id': self.template.id,
@@ -95,7 +96,7 @@ class TestCloudService(TransactionCase):
 
     def test_service_helm_configuration(self):
         """Test setting Helm configuration."""
-        service = self.Service.create({
+        service = _internal_provision(self.Service).create({
             'name': 'Helm Service',
             'workspace_id': self.workspace.id,
             'template_id': self.template.id,
@@ -127,9 +128,9 @@ class TestCloudService(TransactionCase):
         # 的 _strip_mcp_sensitive_values 才有東西可剝。原本 fixture 的 helm_values
         # 根本沒有 sensitive 子樹 → assertNotIn 恆真 → 把 strip 實作整段刪掉測試照樣
         # 綠（vacuous assertion＝零鑑別力，正是本輪 WIP 全是紙上綠的典型）。
-        service = self.Service.with_context(
+        service = _internal_provision(self.Service.with_context(
             mcp_admin_password='secret-password',
-        ).create({
+        )).create({
             'name': 'MCP Service',
             'workspace_id': self.workspace.id,
             'template_id': template.id,
@@ -163,7 +164,7 @@ class TestCloudService(TransactionCase):
 
     def test_service_network_configuration(self):
         """Test network configuration fields."""
-        service = self.Service.create({
+        service = _internal_provision(self.Service).create({
             'name': 'Network Service',
             'workspace_id': self.workspace.id,
             'template_id': self.template.id,
@@ -178,7 +179,7 @@ class TestCloudService(TransactionCase):
 
     def test_service_resource_allocation(self):
         """Test resource allocation from template."""
-        service = self.Service.create({
+        service = _internal_provision(self.Service).create({
             'name': 'Resource Service',
             'workspace_id': self.workspace.id,
             'template_id': self.template.id,
@@ -193,7 +194,7 @@ class TestCloudService(TransactionCase):
 
     def test_service_belongs_to_workspace(self):
         """Test that service is properly linked to workspace."""
-        service = self.Service.create({
+        service = _internal_provision(self.Service).create({
             'name': 'Workspace Service',
             'workspace_id': self.workspace.id,
             'template_id': self.template.id,
@@ -204,7 +205,7 @@ class TestCloudService(TransactionCase):
 
     def test_service_delete_cascade(self):
         """Test that service is deleted when workspace is deleted."""
-        service = self.Service.create({
+        service = _internal_provision(self.Service).create({
             'name': 'Cascade Service',
             'workspace_id': self.workspace.id,
             'template_id': self.template.id,
@@ -229,9 +230,9 @@ class TestCloudService(TransactionCase):
             'mcp_enabled': False,
             'has_admin_gui': True,
         })
-        service = self.Service.with_context(
+        service = _internal_provision(self.Service.with_context(
             mcp_admin_password='secret-password',
-        ).create({
+        )).create({
             'name': 'Secret Cascade',
             'workspace_id': self.workspace.id,
             'template_id': template.id,
@@ -257,9 +258,9 @@ class TestCloudService(TransactionCase):
             'mcp_enabled': False,
             'has_admin_gui': True,
         })
-        service = self.Service.with_context(
+        service = _internal_provision(self.Service.with_context(
             mcp_admin_password='secret-password',
-        ).create({
+        )).create({
             'name': 'Secret ACL',
             'workspace_id': self.workspace.id,
             'template_id': template.id,
@@ -299,12 +300,12 @@ class TestCloudService(TransactionCase):
 
     def test_multiple_services_per_workspace(self):
         """Test creating multiple services in same workspace."""
-        service1 = self.Service.create({
+        service1 = _internal_provision(self.Service).create({
             'name': 'Service 1',
             'workspace_id': self.workspace.id,
             'template_id': self.template.id,
         })
-        service2 = self.Service.create({
+        service2 = _internal_provision(self.Service).create({
             'name': 'Service 2',
             'workspace_id': self.workspace.id,
             'template_id': self.template.id,
@@ -318,7 +319,7 @@ class TestCloudService(TransactionCase):
         """Test timestamp fields."""
         from datetime import datetime
 
-        service = self.Service.create({
+        service = _internal_provision(self.Service).create({
             'name': 'Timestamp Service',
             'workspace_id': self.workspace.id,
             'template_id': self.template.id,
@@ -330,7 +331,7 @@ class TestCloudService(TransactionCase):
 
     def test_service_upgrade_revision(self):
         """Test incrementing revision on upgrade."""
-        service = self.Service.create({
+        service = _internal_provision(self.Service).create({
             'name': 'Upgrade Service',
             'workspace_id': self.workspace.id,
             'template_id': self.template.id,
@@ -349,13 +350,13 @@ class TestCloudService(TransactionCase):
 
     def test_search_services_by_state(self):
         """Test searching services by state."""
-        self.Service.create({
+        _internal_provision(self.Service).create({
             'name': 'Running Service',
             'workspace_id': self.workspace.id,
             'template_id': self.template.id,
             'state': 'running',
         })
-        self.Service.create({
+        _internal_provision(self.Service).create({
             'name': 'Pending Service',
             'workspace_id': self.workspace.id,
             'template_id': self.template.id,
@@ -380,12 +381,12 @@ class TestCloudService(TransactionCase):
             'helm_chart_version': '1.0.0',
         })
 
-        self.Service.create({
+        _internal_provision(self.Service).create({
             'name': 'Service T1',
             'workspace_id': self.workspace.id,
             'template_id': self.template.id,
         })
-        self.Service.create({
+        _internal_provision(self.Service).create({
             'name': 'Service T2',
             'workspace_id': self.workspace.id,
             'template_id': template2.id,
@@ -411,7 +412,7 @@ class TestCloudService(TransactionCase):
         Mock the paas-operator client and assert the exact positional
         argument order, since this is precisely what the bug confused.
         """
-        service = self.Service.create({
+        service = _internal_provision(self.Service).create({
             'name': 'Cleanup Probe',
             'workspace_id': self.workspace.id,
             'template_id': self.template.id,
@@ -452,7 +453,7 @@ class TestCloudService(TransactionCase):
         bug (controller ``_delete_service`` already passed subdomain on
         develop), decoupled from this fix; tracked as issue #207.
         """
-        service = self.Service.create({
+        service = _internal_provision(self.Service).create({
             'name': 'Route Teardown Probe',
             'workspace_id': self.workspace.id,
             'template_id': self.template.id,
@@ -485,7 +486,7 @@ class TestCloudService(TransactionCase):
         若誤把已刪的 A 也算進去會得到 "60"/"60Gi"/"300Gi"，
         assert_called_once_with 會抓到。
         """
-        self.serviceA = self.Service.create({
+        self.serviceA = _internal_provision(self.Service).create({
             'name': 'Survivor Probe A',
             'workspace_id': self.workspace.id,
             'template_id': self.template.id,
@@ -495,7 +496,7 @@ class TestCloudService(TransactionCase):
             'allocated_ram_gb': 10.0,
             'allocated_storage_gb': 50,
         })
-        self.serviceB = self.Service.create({
+        self.serviceB = _internal_provision(self.Service).create({
             'name': 'Survivor Probe B',
             'workspace_id': self.workspace.id,
             'template_id': self.template.id,
@@ -603,7 +604,7 @@ class TestCloudServiceChangePlanTrialMode(TransactionCase):
             "name": "CS Trial Mode WS",
             "owner_id": self.owner.id,
         })
-        self.service = self.CloudService.create({
+        self.service = _internal_provision(self.CloudService).create({
             "name": "CS Trial Mode Service",
             "workspace_id": self.workspace.id,
             "template_id": self.template.id,
@@ -880,7 +881,7 @@ class TestAssembleDeployValues411(TransactionCase):
             'min_vcpu': 1, 'min_ram_gb': 1.0, 'min_storage_gb': 1,
             'ingress_enabled': True,
         })
-        self.od_service = self.Service.create({
+        self.od_service = _internal_provision(self.Service).create({
             'name': 'OD Service',
             'workspace_id': self.workspace.id,
             'template_id': self.od_template.id,
@@ -972,9 +973,9 @@ class TestAssembleDeployValues411(TransactionCase):
             'helm_chart_name': 'mcp-server', 'helm_chart_version': '1.0.0',
             'mcp_enabled': False, 'has_admin_gui': True,
         })
-        service = self.Service.with_context(
+        service = _internal_provision(self.Service.with_context(
             mcp_admin_password='seed-pw',
-        ).create({
+        )).create({
             'name': 'MCP Svc 411',
             'workspace_id': self.workspace.id,
             'template_id': mcp_template.id,

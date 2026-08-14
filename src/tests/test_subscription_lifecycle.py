@@ -6,6 +6,7 @@ from dateutil.relativedelta import relativedelta
 
 from odoo.tests.common import TransactionCase
 from odoo.exceptions import UserError
+from ..models.cloud_service import _internal_provision
 
 
 class TestSubscriptionLifecycleMixin(TransactionCase):
@@ -44,7 +45,7 @@ class TestSubscriptionLifecycleMixin(TransactionCase):
             'template_id': self.template.id,
             **kwargs,
         }
-        return self.CloudService.create(vals)
+        return _internal_provision(self.CloudService).create(vals)
 
     def _create_smarthome(self, **kwargs):
         vals = {
@@ -409,7 +410,7 @@ class TestSubscriptionLifecycleCron(TransactionCase):
         mock_client = MagicMock()
         mock_get_client.return_value = mock_client
 
-        service = self.CloudService.create({
+        service = _internal_provision(self.CloudService).create({
             'name': 'Expired Service',
             'workspace_id': self.workspace.id,
             'template_id': self.template.id,
@@ -439,7 +440,7 @@ class TestSubscriptionLifecycleCron(TransactionCase):
         mock_client = MagicMock()
         mock_get_client.return_value = mock_client
 
-        service = self.CloudService.create({
+        service = _internal_provision(self.CloudService).create({
             'name': 'Grace Period Service',
             'workspace_id': self.workspace.id,
             'template_id': self.template.id,
@@ -467,7 +468,7 @@ class TestSubscriptionLifecycleCron(TransactionCase):
         mock_client = MagicMock()
         mock_get_client.return_value = mock_client
 
-        service = self.CloudService.create({
+        service = _internal_provision(self.CloudService).create({
             'name': 'Renewed Service',
             'workspace_id': self.workspace.id,
             'template_id': self.template.id,

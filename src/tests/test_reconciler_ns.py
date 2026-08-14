@@ -19,6 +19,7 @@ from ..services.reconciler import (
     compute_orphans,
     classify_candidates,
 )
+from ..models.cloud_service import _internal_provision
 
 
 @tagged('post_install', '-at_install')
@@ -75,7 +76,7 @@ class TestNamespaceLeftSetUnion(TransactionCase):
 
     def test_collect_left_set_unions_cs_and_agent_ns(self):
         """CS.helm_namespace ∪ agent_session.helm_namespace 都要進 namespace_names。"""
-        self.CS.create({
+        _internal_provision(self.CS).create({
             'name': 'CS-w', 'workspace_id': self.ws.id, 'template_id': self.template.id,
             'helm_namespace': 'paas-ws-w', 'helm_release_name': 'app-w', 'state': 'running',
         })
@@ -91,7 +92,7 @@ class TestNamespaceLeftSetUnion(TransactionCase):
 
     def test_deleting_cs_ns_excluded(self):
         """state='deleting' 的 CS ns 不進左集（過渡態，即將消失，避免誤判為活躍）。"""
-        self.CS.create({
+        _internal_provision(self.CS).create({
             'name': 'CS-del', 'workspace_id': self.ws.id, 'template_id': self.template.id,
             'helm_namespace': 'paas-ws-deleting', 'helm_release_name': 'app-d',
             'state': 'deleting',
@@ -102,11 +103,11 @@ class TestNamespaceLeftSetUnion(TransactionCase):
 
     def test_shared_ns_deduped(self):
         """多 CS 共用同一 helm_namespace → set 去重（非唯一鍵）。"""
-        self.CS.create({
+        _internal_provision(self.CS).create({
             'name': 'CS-a', 'workspace_id': self.ws.id, 'template_id': self.template.id,
             'helm_namespace': 'paas-ws-shared', 'helm_release_name': 'app-a', 'state': 'running',
         })
-        self.CS.create({
+        _internal_provision(self.CS).create({
             'name': 'CS-b', 'workspace_id': self.ws.id, 'template_id': self.template.id,
             'helm_namespace': 'paas-ws-shared', 'helm_release_name': 'app-b', 'state': 'running',
         })
@@ -116,7 +117,7 @@ class TestNamespaceLeftSetUnion(TransactionCase):
 
     def test_empty_helm_namespace_not_in_left_set(self):
         """未部署 CS（helm_namespace 為 False）不入左集（in-flight 半完成不誤當持有）。"""
-        self.CS.create({
+        _internal_provision(self.CS).create({
             'name': 'CS-nofield', 'workspace_id': self.ws.id, 'template_id': self.template.id,
             'state': 'pending',
         })

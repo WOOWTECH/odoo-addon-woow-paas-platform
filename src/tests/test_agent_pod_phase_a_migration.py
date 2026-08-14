@@ -65,6 +65,7 @@ import re
 import uuid
 
 from odoo.tests.common import TransactionCase, tagged
+from ..models.cloud_service import _internal_provision
 
 
 _MIGRATION_DIR = os.path.abspath(
@@ -196,7 +197,7 @@ class TestPhaseAMigrationBehaviour(TransactionCase):
             'helm_chart_version': '1.0.0',
             'min_vcpu': 1, 'min_ram_gb': 1.0, 'min_storage_gb': 1,
         })
-        self.svc = self.Service.sudo().create({
+        self.svc = _internal_provision(self.Service.sudo()).create({
             'name': f'M svc {self.suffix}',
             'workspace_id': self.ws.id,
             'template_id': self.tmpl.id,

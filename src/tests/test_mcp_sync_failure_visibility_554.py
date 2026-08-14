@@ -50,6 +50,7 @@ from unittest.mock import patch
 from odoo.tests.common import HttpCase, TransactionCase, tagged
 
 from odoo.addons.woow_paas_platform.models.mcp_server import McpServer
+from ..models.cloud_service import _internal_provision
 
 _SYNC_FAILURE = 'injected: MCP endpoint unreachable'
 
@@ -73,7 +74,7 @@ def _seed_mcp_world(env, tag, owner=None):
         'helm_chart_version': '1.0.0',
         'min_vcpu': 1, 'min_ram_gb': 1.0, 'min_storage_gb': 1,
     })
-    service = env['woow_paas_platform.cloud_service'].sudo().create({
+    service = _internal_provision(env['woow_paas_platform.cloud_service'].sudo()).create({
         'name': f'554 Service {tag}',
         'workspace_id': workspace.id,
         'template_id': template.id,

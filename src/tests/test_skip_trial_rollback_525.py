@@ -66,6 +66,7 @@ from unittest.mock import patch
 
 from odoo.exceptions import AccessError
 from odoo.tests.common import HttpCase, tagged
+from ..models.cloud_service import _internal_provision
 
 _GENERIC_ERROR = 'An error occurred while skipping the trial period.'
 
@@ -139,7 +140,7 @@ class TestSkipTrialFailureLeavesNoResidue(HttpCase):
             'helm_chart_name': 'oci://example.invalid/app-525',
             'helm_chart_version': '0.0.0',
             'is_active': True, 'is_hidden': False})
-        self.service = self.env['woow_paas_platform.cloud_service'].sudo().create({
+        self.service = _internal_provision(self.env['woow_paas_platform.cloud_service'].sudo()).create({
             'name': 'Svc 525', 'workspace_id': self.workspace.id,
             'template_id': template.id, 'subscription_id': self.sub.id})
 

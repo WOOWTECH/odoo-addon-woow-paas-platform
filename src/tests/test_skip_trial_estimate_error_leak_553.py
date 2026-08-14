@@ -36,6 +36,7 @@ from odoo.addons.woow_paas_platform.controllers.paas import PaasController
 from odoo.addons.woow_paas_platform.models.subscription_lifecycle_mixin import (
     SubscriptionLifecycleMixin,
 )
+from ..models.cloud_service import _internal_provision
 
 _GENERIC_ERROR = 'An error occurred while estimating the skip-trial charge.'
 _INTERNAL_MODEL = 'woow_paas_platform.cloud_service'
@@ -63,7 +64,7 @@ class TestSkipTrialEstimateErrorLeak553(TransactionCase):
         })
         # 刻意不掛 subscription_id：陽性對照要的就是「沒有訂閱」這條真實的
         # 前置條件失敗（`_skip_trial_estimate` 第一道 raise UserError）。
-        self.service = self.CloudService.create({
+        self.service = _internal_provision(self.CloudService).create({
             'name': 'Estimate Leak Svc 553',
             'workspace_id': self.workspace.id,
             'template_id': self.template.id,

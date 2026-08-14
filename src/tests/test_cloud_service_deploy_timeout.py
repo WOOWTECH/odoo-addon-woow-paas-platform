@@ -31,6 +31,7 @@ from unittest.mock import MagicMock, patch
 
 from odoo import fields
 from odoo.tests.common import TransactionCase
+from ..models.cloud_service import _internal_provision
 
 
 # 容器型的預設門檻（分鐘）。實作端以模組常數提供，測試這裡獨立寫一份——
@@ -128,7 +129,7 @@ class _Base(TransactionCase):
             vals[anchor_field] = (
                 fields.Datetime.now() - timedelta(minutes=anchor_minutes_ago)
             )
-        return self.Service.create(vals)
+        return _internal_provision(self.Service).create(vals)
 
     def _poll(self, svc, status_body):
         """跑 model 層 poll（mock 掉 operator client）。"""

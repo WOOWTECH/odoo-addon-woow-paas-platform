@@ -41,6 +41,7 @@ from unittest.mock import MagicMock, patch
 
 from odoo.exceptions import UserError
 from odoo.tests.common import TransactionCase
+from ..models.cloud_service import _internal_provision
 
 
 class _Base(TransactionCase):
@@ -73,7 +74,7 @@ class _Base(TransactionCase):
         })
 
     def _service(self, template, state='running'):
-        return self.Service.create({
+        return _internal_provision(self.Service).create({
             'name': 'svc-482',
             'workspace_id': self.workspace.id,
             'template_id': template.id,

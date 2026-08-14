@@ -56,6 +56,7 @@ from datetime import date, timedelta
 from unittest.mock import MagicMock, patch
 
 from odoo.tests.common import TransactionCase
+from ..models.cloud_service import _internal_provision
 
 
 # 殘留記號的固定前綴。scale 失敗但 state 已收斂時寫進 ``error_message``，讓 prod
@@ -119,7 +120,7 @@ class _Base(TransactionCase):
             'helm_release_name': f'svc-497-{state}',
         }
         vals.update(kwargs)
-        return self.Service.create(vals)
+        return _internal_provision(self.Service).create(vals)
 
     def _converge(self, client=None):
         """跑 migration 的 model 方法（operator client 被 patch 掉）。"""

@@ -27,6 +27,7 @@ from ..services.paas_operator import (
     PaaSOperatorError,
     PaaSOperatorConnectionError,
 )
+from ..models.cloud_service import _internal_provision
 
 _logger = logging.getLogger(__name__)
 
@@ -3046,7 +3047,7 @@ class PaasController(HiddenChainMixin, Controller):
                 CloudService.with_context(mcp_admin_password=admin_password)
                 if admin_password else CloudService
             )
-            service = service_model.create(service_vals)
+            service = _internal_provision(service_model).create(service_vals)
             service._apply_helm_values(merged_values)  # #559
 
             # ⚠ 順序刻意：所有「還可能失敗」的落庫步驟都排在建訂閱**之前**。

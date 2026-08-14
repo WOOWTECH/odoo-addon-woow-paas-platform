@@ -58,6 +58,7 @@ import uuid
 from unittest.mock import MagicMock, patch
 
 from odoo.tests.common import TransactionCase, tagged
+from ..models.cloud_service import _internal_provision
 
 # 檔案開頭的 Boundary 段宣稱「Helm uninstall path itself — mocked away」；下面兩條
 # 拆除 teardown 的測試就用這個 patch target 兌現那句話（原本是拿 blanket
@@ -107,7 +108,7 @@ class TestPhaseACloudServiceM2NReverse(TransactionCase):
             'helm_chart_version': '1.0.0',
             'min_vcpu': 1, 'min_ram_gb': 1.0, 'min_storage_gb': 1,
         })
-        self.svc = self.Service.sudo().create({
+        self.svc = _internal_provision(self.Service.sudo()).create({
             'name': f'Svc {suffix}',
             'workspace_id': self.ws.id,
             'template_id': self.tmpl.id,
@@ -213,14 +214,14 @@ class TestPhaseACleanupFilterDelineation(TransactionCase):
             'helm_chart_version': '1.0.0',
             'min_vcpu': 1, 'min_ram_gb': 1.0, 'min_storage_gb': 1,
         })
-        self.svc_a = self.Service.sudo().create({
+        self.svc_a = _internal_provision(self.Service.sudo()).create({
             'name': f'Svc A {suffix}',
             'workspace_id': self.ws.id,
             'template_id': self.tmpl.id,
             'helm_release_name': f'svc-a-{suffix}',
             'helm_namespace': f'paas-ws-a-{suffix}',
         })
-        self.svc_b = self.Service.sudo().create({
+        self.svc_b = _internal_provision(self.Service.sudo()).create({
             'name': f'Svc B {suffix}',
             'workspace_id': self.ws.id,
             'template_id': self.tmpl.id,

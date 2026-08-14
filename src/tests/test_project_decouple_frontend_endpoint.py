@@ -89,6 +89,7 @@ import json as json_lib
 import uuid
 
 from odoo.tests.common import HttpCase, tagged
+from ..models.cloud_service import _internal_provision
 
 
 # --------------------------------------------------------------------------- #
@@ -490,7 +491,7 @@ class TestProjectDecoupleFrontendEndpoint(HttpCase):
             'helm_chart_version': '1.0.0',
             'min_vcpu': 1, 'min_ram_gb': 1.0, 'min_storage_gb': 1,
         })
-        svc_alice = Service.sudo().create({
+        svc_alice = _internal_provision(Service.sudo()).create({
             'name': f'FED T3 Svc {sfx}',
             'workspace_id': ws_alice.id,
             'template_id': template.id,
@@ -703,7 +704,7 @@ class TestProjectDecoupleFrontendEndpoint(HttpCase):
             'helm_chart_version': '1.0.0',
             'min_vcpu': 1, 'min_ram_gb': 1.0, 'min_storage_gb': 1,
         })
-        svc_alice = Service.sudo().create({
+        svc_alice = _internal_provision(Service.sudo()).create({
             'name': f'FED T4 Svc {sfx}',
             'workspace_id': ws_alice.id,
             'template_id': template.id,
@@ -948,7 +949,7 @@ class TestProjectDecoupleFrontendEndpoint(HttpCase):
             'helm_chart_version': '1.0.0',
             'min_vcpu': 1, 'min_ram_gb': 1.0, 'min_storage_gb': 1,
         })
-        svc_alice = Service.sudo().create({
+        svc_alice = _internal_provision(Service.sudo()).create({
             'name': f'FED T5 Svc {sfx}',
             'workspace_id': ws_alice.id,
             'template_id': template.id,

@@ -40,6 +40,7 @@ import json
 from unittest.mock import MagicMock, patch
 
 from odoo.tests.common import TransactionCase
+from ..models.cloud_service import _internal_provision
 
 _CLIENT_PATH = (
     'odoo.addons.woow_paas_platform.services.paas_operator'
@@ -116,7 +117,7 @@ class _Base(TransactionCase):
             'helm_values': json.dumps({'config': {'nonSensitive': {}}}),
         }
         vals.update(extra)
-        service = self.Service.create(vals)
+        service = _internal_provision(self.Service).create(vals)
         # create 之後才寫，避免 create 的預設／onchange 蓋掉受測的起始值。
         service.write({'helm_chart_version': chart_version or False})
         return service
@@ -245,7 +246,7 @@ class TestResetAdminPasswordRecordsActualChartVersion(_Base):
             'reset-552-%s' % carrier.replace('_', '-'), chart_version,
             category='mcp', has_admin_gui=True, admin_password_carrier=carrier,
         )
-        service = self.Service.with_context(mcp_admin_password='old-pw').create({
+        service = _internal_provision(self.Service.with_context(mcp_admin_password='old-pw')).create({
             'name': 'svc-552-reset-%s' % carrier,
             'workspace_id': self.workspace.id,
             'template_id': template.id,

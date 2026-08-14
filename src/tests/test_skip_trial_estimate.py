@@ -14,6 +14,7 @@ from datetime import date, timedelta
 
 from odoo.exceptions import UserError
 from odoo.tests.common import TransactionCase, tagged
+from ..models.cloud_service import _internal_provision
 
 
 @tagged('post_install', '-at_install')
@@ -110,7 +111,7 @@ class TestSkipTrialEstimate(TransactionCase):
             'sh_taxes_ids': [(6, 0, [self.tax_15.id])],
             'state': 'in_progress',
         })
-        service = self.CloudService.sudo().create({
+        service = _internal_provision(self.CloudService.sudo()).create({
             'name': 'Skip Trial Estimate Svc',
             'workspace_id': self.workspace.id,
             'template_id': self.template.id,

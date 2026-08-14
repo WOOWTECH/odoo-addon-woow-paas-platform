@@ -94,6 +94,7 @@ from odoo.addons.woow_paas_platform.models.sh_subscription_fix import (
 from odoo.addons.woow_paas_platform.services.paas_operator import (
     PaaSOperatorError,
 )
+from ..models.cloud_service import _internal_provision
 
 _CTRL = 'odoo.addons.woow_paas_platform.controllers.paas'
 _SVC = 'odoo.addons.woow_paas_platform.services.paas_operator'
@@ -148,7 +149,7 @@ class TestPollTeardownLeavesNoHalfDeletedService(HttpCase):
             'is_active': True, 'is_hidden': False})
 
         # `deleting` ＋ 有 helm 身分 ＝ 輪詢器收屍分支的入口條件。
-        self.service = self.env['woow_paas_platform.cloud_service'].sudo().create({
+        self.service = _internal_provision(self.env['woow_paas_platform.cloud_service'].sudo()).create({
             'name': 'Svc 525 B5',
             'workspace_id': self.workspace.id,
             'template_id': self.template.id,
