@@ -26,6 +26,8 @@
   一個誰也不看的 key 的情況下繼續全綠。
 """
 
+import uuid
+
 from odoo.exceptions import AccessError
 from odoo.tests.common import TransactionCase
 
@@ -240,8 +242,12 @@ class TestGateCoversNonObviousLandingPaths(_GateFixture):
         with self.assertRaises(ProvisionGateError):
             plain.copy({'name': 'copy forged'})
         self.assertEqual(self._rows_named('copy forged'), 0)
-        # 陽性對照：走開閘 helper 就複製得出來
-        self.assertTrue(_internal_provision(plain).copy({'name': 'copy ok'}))
+        # 陽性對照：走開閘 helper 就複製得出來。
+        # ⚠ 必須另給 `reference_id`：那個欄位有 UNIQUE 約束卻**沒有** `copy=False`
+        # ⇒ 裸 `copy()` 本來就會撞 UniqueViolation，與本閘無關。不給的話這條陽性
+        # 對照會因為別的原因紅，而那個紅看起來像「開閘 helper 沒作用」。
+        self.assertTrue(_internal_provision(plain).copy({
+            'name': 'copy ok', 'reference_id': str(uuid.uuid4())}))
 
     def test_nested_create_through_project_m2m_goes_through_the_gate(self):
         """`project.cloud_service_ids` 的 `(0, 0, vals)` 也會建出 cloud_service。
