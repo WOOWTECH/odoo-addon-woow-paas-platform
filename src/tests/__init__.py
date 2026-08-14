@@ -372,3 +372,12 @@ from . import test_project_cs_m2m_authz_698
 from . import test_project_cs_m2m_authz_705
 from . import test_cloud_service_provision_gate_519
 from . import test_cloud_service_subscription_binding_519
+
+# fix: #583 transfer_ownership 的授權守衛檢查「被操作那筆記錄」而非呼叫者身分
+# （`if self.role != ROLE_OWNER` 的 `self` 是呼叫端指定的 access 列）。RED 是
+# TestTransferOwnershipGateIsCallerScoped 那三條：共用同一個 payload、只換身分，
+# 修法前三條都回 ValidationError（＝閘門放行、倒在後段商業驗證），修法後只有
+# owner 那條還是（陽性對照，不可刪）。可達性已用真 RPC 實證：守衛確實被通過，
+# 但完整奪權鏈被 #556 的 _check_owner_row_protected 擋在步驟 4
+# （HttpCase，group_user-only，全走 call_kw）
+from . import test_workspace_transfer_ownership_authz_583
