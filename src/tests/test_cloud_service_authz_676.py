@@ -326,7 +326,7 @@ class TestCloudServiceWriteAuthz676(_CloudService676Fixture):
     def test_A10_owner_can_write_and_unlink(self):
         self._assert_can_read_write_unlink(self.alice_login, 'owner')
 
-    def test_A11_even_owner_and_admin_cannot_create_over_rpc(self):
+    def test_A12_even_owner_and_admin_cannot_create_over_rpc(self):
         """#519：`create` 對**任何** RPC 呼叫端都不通，不論身分。
 
         這條原本藏在 A9／A10 裡當「admin／owner 建得起來」的陽性對照。#519 把那個
