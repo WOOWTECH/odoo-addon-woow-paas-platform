@@ -3695,6 +3695,11 @@ def check_sh_subscription_group_isolation(root, only_file=None):
     依據 docs/decisions/519-cloud-service-provision-gate.md
     """
     violations = []
+    if not _addon_source_tree_present(root):
+        # 同第 26 條：不是本 addon 的 root，本條沒有輸入。今天的分派條件
+        # （`rel.startswith("src/")`）剛好踩不到 TestHookMode 的合成 root，但那是
+        # 巧合不是設計——同一個陷阱擺著就會有人踩。
+        return violations
     exts = (".xml", ".csv", ".py")
     if only_file:
         files = [only_file]
