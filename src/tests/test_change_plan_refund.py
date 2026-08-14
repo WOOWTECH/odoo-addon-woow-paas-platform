@@ -128,9 +128,12 @@ class TestChangePlanRefund(TransactionCase):
         """
         # Use real cloud_service + sub so the wizard's onchange chain works.
         Workspace = self.env['woow_paas_platform.workspace'].sudo()
+        # ⚠ `owner_id` 是 `res.users` 的 m2o，原本塞的是 **partner id**（既有的
+        # fixture bug，只是一直沒有東西去讀它）。#519 提案 B 會讀
+        # `workspace_id.owner_id.partner_id` 來比對訂閱歸屬，於是它現在會出事。
         ws = Workspace.create({
             'name': 'BUG5 ws', 'slug': 'bug5ws',
-            'owner_id': self.partner.id,
+            'owner_id': self.owner.id,
         })
         Service = self.env['woow_paas_platform.cloud_service'].sudo()
         template = self.env['woow_paas_platform.cloud_app_template'].sudo().search([], limit=1)
