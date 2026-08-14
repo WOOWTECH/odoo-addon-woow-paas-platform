@@ -136,13 +136,14 @@ if ! command -v kubectl >/dev/null 2>&1; then
 fi
 
 # --- 切換 context（提供才切；否則沿用 active context，與 woow-test.sh 一致）---
+# #32：切換走 KUBECONFIG overlay，只作用在本次執行 —— 原本的 `kubectl config
+# use-context` 會把操作者 shell 的 default context 留在這裡設的值。
+# 本檔不在 #32 本文列的清單裡（它只點名 deploy-stg.sh:161），是照「誰會寫到
+# ~/.kube/config」反查資源側枚舉出來的；同一個缺陷、同一個修法。
+# shellcheck source=../../lib/kube-context.sh
+source "${PROJECT_ROOT}/.claude/skills/lib/kube-context.sh"
 if [ -n "$KUBE_CONTEXT" ]; then
-    if ! kubectl config get-contexts -o name 2>/dev/null | grep -qx "$KUBE_CONTEXT"; then
-        echo -e "${RED}ERROR: kubectl context '${KUBE_CONTEXT}' not found in kubeconfig.${NC}" >&2
-        exit 2
-    fi
-    echo -e "${BLUE}Using kubectl context:${NC} ${GREEN}${KUBE_CONTEXT}${NC}"
-    kubectl config use-context "$KUBE_CONTEXT" >/dev/null
+    wk_require_context "$KUBE_CONTEXT" e2e-seed "$PROJECT_ROOT" || exit 2
 fi
 
 # --- 如果未提供名稱，從 branch 自動偵測（邏輯同 woow-test.sh 的「從 branch 自動偵測 SLUG」區塊）---
