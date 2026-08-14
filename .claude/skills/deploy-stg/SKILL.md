@@ -25,6 +25,23 @@ usage: |
 | `--image <full>` | 否 | - | 直接指定完整 image（跳過 CI 建置），格式: `registry/repo:tag` |
 | `--ingress` | 否 | - | 啟用 Ingress（`{slug}.woowtech.io`） |
 | `--post-check-timeout <s>` | 否 | `300` | addon 版號 post-check 等待 DB 收斂的秒數（見 Step 8） |
+| `--context <name>` | 否 | `woow-k3s` | kubectl context。**必須在 `.sandbox.yml` 的 `allowed_kube_contexts_stg` 內**（見下） |
+
+### kubectl context 守衛（#32）
+
+兩件事跟以前不一樣：
+
+1. **本腳本不再改動你的全域 kubectl context**。切換走一份只含 `current-context` 的
+   私有 KUBECONFIG overlay，`~/.kube/config` 全程不動。以前跑完 deploy-stg，shell 的
+   default context 會停在腳本設的值 —— footgun 只是被推遲到下一條指令。
+2. **`--context` 的值受值域白名單管制**，不再只是「非 woow-k3s 就印個警告」。允許值
+   來自 repo 根 `.sandbox.yml` 的 `allowed_kube_contexts_stg`（目前 `[woow-k3s]`）。
+   可用性檢查（存在於 kubeconfig、連得上）驗不出「這個 context 是不是這次任務該用的
+   那一個」—— `docker-desktop` 全過，卻是 stg 部署最不該打的叢集（#722）。
+
+真的要打別的叢集：改 `.sandbox.yml`（會過 review），或 `SANDBOX_ALLOW_ANY_KUBE_CONTEXT=1`
+明示覆寫（會大聲警告）。實作在 `.claude/skills/lib/kube-context.sh`，測試
+`.claude/skills/lib/kube-context_test.sh`。
 
 ## 前置條件
 

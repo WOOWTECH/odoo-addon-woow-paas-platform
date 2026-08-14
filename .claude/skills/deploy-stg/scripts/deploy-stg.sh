@@ -143,23 +143,21 @@ for cmd in tea jq kubectl helm git; do
     fi
 done
 
-# Verify the kubectl context exists in kubeconfig, then switch + export
-# so child scripts (notably create.sh) inherit the same target.
-if ! kubectl config get-contexts -o name 2>/dev/null | grep -qx "$KUBE_CONTEXT"; then
-    echo -e "${RED}ERROR: kubectl context '${KUBE_CONTEXT}' not found in kubeconfig.${NC}" >&2
-    echo -e "${YELLOW}Available contexts:${NC}" >&2
-    kubectl config get-contexts -o name 2>/dev/null | sed 's/^/  /' >&2 || true
+# kubectl context 守衛（#32）。原本這裡是「驗存在 → warn → kubectl config use-context」，
+# 有兩個問題，共用 helper 一次收掉：
+#   Part A  use-context 改的是 ~/.kube/config —— 腳本跑完，操作者 shell 的 default
+#           context 就停在這裡設的值。#32 的重現步驟就是這條。改用 KUBECONFIG overlay，
+#           切換只作用在本次執行，全域全程不動。
+#   Part B  「非 woow-k3s 只警告」是可以被略過的訊號。改為對 .sandbox.yml 宣告的
+#           allowed_kube_contexts_stg 做值域比對，不在名單內就擋；真要打別的叢集用
+#           SANDBOX_ALLOW_ANY_KUBE_CONTEXT=1 明示（大聲警告）。
+# shellcheck source=../../lib/kube-context.sh
+source "${PROJECT_ROOT}/.claude/skills/lib/kube-context.sh"
+WK_REPO_ROOT="$PROJECT_ROOT"
+if ! wk_require_context "$KUBE_CONTEXT" stg "$PROJECT_ROOT"; then
     echo -e "${YELLOW}Default for stg is 'woow-k3s'; override with --context only if you really mean it.${NC}" >&2
     exit 1
 fi
-# Loud echo: if the operator is overriding away from woow-k3s, make it
-# obvious before any helm/kubectl operation runs.
-if [[ "$KUBE_CONTEXT" != "woow-k3s" ]]; then
-    echo -e "${YELLOW}WARNING: targeting non-default context '${KUBE_CONTEXT}' (stg default is 'woow-k3s').${NC}"
-fi
-echo -e "${BLUE}Using kubectl context:${NC} ${GREEN}${KUBE_CONTEXT}${NC}"
-kubectl config use-context "$KUBE_CONTEXT" >/dev/null
-export KUBE_CONTEXT
 
 # --- Resolve woow-dev plugin's k8s-dev-sandbox create.sh ---
 #
@@ -246,7 +244,10 @@ deploy_and_postcheck() {
     local namespace="dev-sandbox-${SLUG}"
     echo ""
     echo -e "${BLUE}Verifying deployment...${NC}"
-    kubectl get pods -n "$namespace"
+    # 顯式 --context：本檔其餘 kubectl/helm 都是委派出去且各自帶 context，這是唯一
+    # 一個吃 ambient context 的呼叫點。overlay 已經把它導對了，帶上旗標是第二道保險
+    # ——這樣就算 overlay 機制被拿掉，這行也不會靜默改打別的叢集。
+    kubectl --context "$KUBE_CONTEXT" get pods -n "$namespace"
 
     # 🔴 #665 post-check：換 image **不會**升 addon，而漏升時 helm 綠燈／pod
     #    1/1 Running／logs 乾淨，與成功長得一模一樣。這道 gate 讓那條路徑變紅，

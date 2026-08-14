@@ -46,6 +46,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **IMPORTANT**: kubectl 請明確指定 `--context`。
 
+本 repo 的 skill script（`deploy-stg` / `e2e-seed*`）走共用守衛
+[`.claude/skills/lib/kube-context.sh`](.claude/skills/lib/kube-context.sh)（#32）：切換
+context 只作用在該次執行（**不再改動 `~/.kube/config`**），且值受 `.sandbox.yml` 的
+`allowed_kube_contexts[_<task>]` 值域白名單管制 —— 「這個 context 可用」與「這個 context
+是這次任務該用的那一個」是兩個維度，後者才是 cross-cluster 事故的內容。逃生門
+`SANDBOX_ALLOW_ANY_KUBE_CONTEXT=1`。woow-dev plugin 端有對應的同名機制與同一個宣告鍵。
+
 ### ⛔ 鐵律：woow-k3s 是共用叢集，本 repo（paas 平台開發/維運）的 kubectl 只能操作以下 namespace
 
 > 適用範圍＝**paas 平台相關的開發與維運**（本 repo 及其派出的 agent/workflow）。叢集**全域**維運屬 `woow-machines-operator` agent 職責（可完整操作所有 ns）——需要動非下表 namespace 時，透過該 agent / 叢集運維處理，不要在本 repo 事務中自己動手。
