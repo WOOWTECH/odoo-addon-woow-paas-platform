@@ -440,10 +440,17 @@
             <field name="name">Odoo Manage MCP</field>
             <field name="slug">mcp-odoo-manage</field>
             <field name="description">Odoo Manage MCP — 以 API Key 連接目標 Odoo，全模組 CRUD 操作</field>
-            <field name="full_description">Odoo Manage MCP server：透過 API Key 連接目標 Odoo
-                實例，提供跨全模組的 CRUD 操作能力（無個人權限範圍限制），適合小團隊統一管理。
-                租戶前置需求：目標 Odoo 需 (1) 建立 API Key（設定 → 開發人員 → API 金鑰），
-                (2) 安裝提供 /mcp 認證端點的 MCP addon 以啟用權限模型。</field>
+            <field name="full_description">Odoo Manage MCP server：以 Odoo API Key 經原生
+                XML-RPC 連接目標 Odoo 實例，提供跨全模組的 CRUD（建立／讀取／更新／刪除）
+                操作能力，適合小團隊統一管理。
+                ⚠ 權限範圍：本服務「不」在 MCP 這一層限縮可存取的模組與動作——所有操作
+                都以該 API Key 所屬的 Odoo 使用者身分執行，該使用者能做的讀取、寫入與
+                刪除，接上的 AI 用戶端全都做得到，且無法只開放其中一部分。請依最小權限
+                原則，另建一個權限範圍相稱的 Odoo 使用者來產生金鑰，不要拿管理員帳號的
+                金鑰接上。
+                租戶前置需求：於目標 Odoo 建立 API Key（設定 → 開發人員 → API 金鑰），
+                並於本服務 admin 介面的 Connection 頁填入 Odoo 網址、資料庫名稱、
+                使用者與該金鑰。</field>
             <field name="category">mcp</field>
             <field name="tags">["mcp", "odoo", "mcp-server", "manage", "ai"]</field>
 
