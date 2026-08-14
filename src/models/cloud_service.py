@@ -90,6 +90,14 @@ def _is_internal_provision(env):
             is _INTERNAL_PROVISION)
 
 
+class SubscriptionBindingError(AccessError):
+    """#519 提案 B：這一次 `subscription_id` 的綁定不合法。
+
+    獨立型別的用途同 `ProvisionGateError`／`SupplyGateError`——讓測試斷言例外
+    **型別**而非文案片段，而且要能和「被 ACL 擋下」（同樣是 `AccessError`）分開。
+    """
+
+
 class ProvisionGateError(AccessError):
     """#519：這一筆 cloud_service 不是從平台的開通流程來的。
 
@@ -532,6 +540,25 @@ class CloudService(models.Model):
                 woow_paas_cloud_service_provision_partner_uniq
             ON woow_paas_platform_cloud_service (provision_partner_id)
             WHERE provision_partner_id IS NOT NULL
+        """)
+        # #519 提案 B：一筆訂閱至多對應一筆 cloud_service。
+        #
+        # 為什麼是 DB 索引而不是 Python COUNT：本檔 `create()` 的 docstring 已經
+        # 記過——Odoo 的 cursor 是 **REPEATABLE READ**，取 advisory lock **不會**
+        # 刷新 snapshot ⇒ check-after-act 在並發下無效（那正是 `max_per_partner`
+        # 至今仍可被繞過的原因，#518）。而「一筆訂閱至多對應一筆 service」正好就是
+        # partial unique index 表達得出的「至多一列」，比照上面 provision_partner_id
+        # 的既有先例。
+        #
+        # ⚠ 既有重複列會讓這一句直接失敗（psycopg2 UniqueViolation）。那個失敗訊息
+        # 讀不出「是哪幾筆」，所以偵測與可讀的錯誤由
+        # `migrations/18.0.1.0.139/pre-migrate.py` 先做掉；這裡只負責建索引，並且
+        # 對 fresh install 與 `-u` 兩條路徑都冪等（`IF NOT EXISTS`）。
+        self.env.cr.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS
+                woow_paas_cloud_service_subscription_uniq
+            ON woow_paas_platform_cloud_service (subscription_id)
+            WHERE subscription_id IS NOT NULL
         """)
 
     # ------------------------------------------------------------------ #
@@ -3281,6 +3308,49 @@ class CloudService(models.Model):
                 % ', '.join('#%s' % svc_id for svc_id in denied.ids)
             )
 
+    def _assert_subscription_binding(self, check_state=True):
+        """#519 提案 B：`subscription_id` 的**綁定當下**判準。
+
+        不變式（守衛成立後）：任一 cloud_service 的 `subscription_id` 在**綁上去
+        的那一刻**必然是一筆 `sh_partner_id == workspace_id.owner_id.partner_id`
+        且 `state == 'in_progress'` 的訂閱；再配合 DB 的 partial unique index，
+        一筆 in_progress 訂閱最多被一筆 cloud_service 指向。
+
+        ## 🔴 這是 transition guard，不是常駐不變式
+
+        訂閱到期／關閉之後**仍然合法地**綁在 service 上——`_cron_enforce_
+        subscription_lifecycle` 正是靠「找得到指向已過期訂閱的服務」才做得到停權。
+        所以 `state` 這一格只在**綁定真的改變的那一次**檢查（`check_state=True`），
+        事後不回頭驗。寫成常駐不變式的話，任何一次無關的 write 都會把「訂閱已到期
+        但服務還在停權流程裡」這個**正常狀態**判成違規。
+
+        ## 兩側為什麼都不可由呼叫端控制
+
+        * 訂閱側：租戶對 `sh.subscription.subscription` 零 ACL row；他唯一造得出
+          訂閱的路是第三方 addon 的 `/renew-subscription`（sudo controller，另見
+          #725），而那條鑄出來的停在 `state='draft'` ⇒ 過不了 `in_progress` 這格。
+          **只驗歸屬不驗狀態會被無限鑄幣打穿**，這一格不可省。
+        * workspace 側：`owner_id` 只能指向呼叫者自己（`workspace.py` 的 create 端
+          守衛），且事後不可改（#658 的 identity anchor）⇒ 可控方向與判準要求的
+          方向一致。
+
+        兩側都用 `.sudo()` 讀：這是**授權判斷**，不可以被呼叫者自己的讀取權限縮窄
+        （縮窄＝漏檢）。租戶對訂閱本來就沒有讀權限，不 sudo 這裡會變成 AccessError
+        而不是判斷。
+        """
+        for record in self.sudo():
+            sub = record.subscription_id
+            if not sub:
+                continue
+            owner_partner = record.workspace_id.owner_id.partner_id
+            if not owner_partner or sub.sh_partner_id != owner_partner:
+                raise SubscriptionBindingError(_(
+                    '這筆訂閱不屬於本服務的 workspace 擁有者，不可綁定。'))
+            if check_state and sub.state != 'in_progress':
+                raise SubscriptionBindingError(_(
+                    '只能綁定生效中（in_progress）的訂閱，目前狀態為 %(state)s。',
+                    state=sub.state or 'unset'))
+
     def _assert_reverse_binding_authorized(self, vals):
         """#698 反向端：從 **service 側**寫 `project_ids`（同一張 relation 表
         的另一頭）。
@@ -3421,10 +3491,36 @@ class CloudService(models.Model):
         # 歸屬／狀態／唯一性（租戶可把自己 service 的 subscription_id 指向別人的
         # 活訂閱以逃避停權）。那是 #519 提案 B，見
         # `docs/decisions/519-cloud-service-provision-gate.md`。
+        # #519 提案 B：`subscription_id` 的綁定守衛（write 端）。
+        #
+        # `write()` **不**套 `default_get`（`_add_missing_default_values` 在
+        # `odoo/models.py` 全檔唯一呼叫點在 `_prepare_create_values` 裡，只有 create
+        # 會經過），所以這一端直接讀 vals 是安全的——create 端才需要讀落地值。
+        #
+        # 只在綁定**真的改變**時檢查：整批送出未修改欄位（前端常態）不得誤擋，而且
+        # 事後回頭驗會把「訂閱已到期、服務還在停權流程裡」這個正常狀態判成違規。
+        rebinding = self.browse()
+        if 'subscription_id' in vals:
+            new_sub_id = vals['subscription_id'] or False
+            rebinding = self.filtered(
+                lambda r: (r.subscription_id.id or False) != new_sub_id)
+            if not new_sub_id and rebinding:
+                # 解除綁定對誰都不開放：`_cron_enforce_subscription_lifecycle` 的
+                # domain 是 `subscription_id != False` ⇒ 清空指標＝讓這筆服務**永久**
+                # 脫離生命週期管理（停權／結算都再也摸不到它）。平台自己也沒有任何
+                # 一條路徑會這樣寫（全 repo 只有兩處寫這個欄位，都是指向新訂閱）。
+                raise SubscriptionBindingError(_(
+                    '不可解除服務與訂閱的綁定。'))
         tracked = 'workspace_id' in vals or 'project_ids' in vals
         projects = self.mapped('project_ids') if tracked else self.browse()
         old = {p.id: set(p.workspace_ids.ids) for p in projects}
         res = super().write(vals)
+        if rebinding:
+            rebinding._assert_subscription_binding()
+        elif 'workspace_id' in vals:
+            # 換 workspace 會換掉判準的另一半（owner 的 partner）。只驗歸屬、不驗
+            # 狀態——這一次沒有動到綁定，訂閱早就到期也仍然合法。
+            self._assert_subscription_binding(check_state=False)
         if tracked:
             # Union of projects bound before AND after (a project_ids write can add or
             # drop bindings); each reconciles against its own pre-write reach set.
@@ -3740,6 +3836,14 @@ class CloudService(models.Model):
             normalized_vals_list.append(normalized)
 
         records = super().create(normalized_vals_list)
+        # #519 提案 B：讀**落地值**，不讀 vals。`default_subscription_id`（context）
+        # 與 `ir.default`（租戶自己寫得了的持久化載體）都是在 `BaseModel.create`
+        # 內部才展開的，只看 raw vals 會讓整道檢查跳過——這正是 C4 那條陷阱。判準
+        # 本身沒有「自我實現」問題（訂閱的 sh_partner_id / state 不會因為這次
+        # create 而改變），所以事後檢查是安全的，與同方法內 `_enforce_supply_gate`
+        # / `max_per_partner` 的既有形狀一致。post-super raise 的 rollback 義務已由
+        # #520 在 `controllers/paas.py` 處理過。
+        records._assert_subscription_binding()
         self._claim_global_cap_slots(records)
         # 收集需 enforcement 的 (template_id, partner_id)，排序去重後依序取鎖：
         # 排序消除多筆跨組的 lock-ordering 死鎖；max_per_partner=0 常態集合為空、零開銷。
