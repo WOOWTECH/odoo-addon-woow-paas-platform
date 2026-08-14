@@ -31,14 +31,14 @@ class TestSkipTrialEstimate(TransactionCase):
         self.Subscription = self.env['sh.subscription.subscription']
         self.Tax = self.env['account.tax']
 
-        self.partner = self.env['res.partner'].create({
-            'name': 'Skip Trial Test User',
-            'email': 'skip-trial-estimate@test.example',
-        })
-
         self.workspace = self.Workspace.create({
             'name': 'Skip Trial Estimate WS',
         })
+        # #519 提案 B：訂閱的 sh_partner_id 必須是 workspace owner 的 partner
+        # （`controllers/paas.py` 就是這樣下單的：partner = workspace.owner_id.
+        # partner_id）。原本這裡另建一個與 workspace 無關的 partner，是 production
+        # 產不出來的組合。
+        self.partner = self.workspace.owner_id.partner_id
 
         self.template = self.Template.create({
             'name': 'Skip Trial Estimate App',
