@@ -7,6 +7,7 @@ from odoo.exceptions import UserError
 from odoo.tests.common import TransactionCase
 
 from odoo.addons.woow_paas_platform.controllers.paas import PaasController
+from ..models.cloud_service import _internal_provision
 
 
 class TestMcpAdminPassword(TransactionCase):
@@ -34,9 +35,9 @@ class TestMcpAdminPassword(TransactionCase):
         # controller._create_service 要求 plan_id；上面兩個 template 都沒掛
         # subscription_plan_ids，故 controller 不做歸屬檢查，借現成 seed plan 即可。
         self.plan = self.env.ref('woow_paas_platform.plan_mcp_odoo_monthly')
-        self.service = self.env['woow_paas_platform.cloud_service'].with_context(
+        self.service = _internal_provision(self.env['woow_paas_platform.cloud_service'].with_context(
             mcp_admin_password='old-password',
-        ).create({
+        )).create({
             'name': 'MCP Odoo',
             'workspace_id': self.workspace.id,
             'template_id': self.template.id,
@@ -461,9 +462,9 @@ class TestMcpAdminPassword(TransactionCase):
             'mcp_enabled': True,      # 外掛 sidecar
             'has_admin_gui': False,   # 但沒有 admin-core GUI
         })
-        service = self.env['woow_paas_platform.cloud_service'].with_context(
+        service = _internal_provision(self.env['woow_paas_platform.cloud_service'].with_context(
             mcp_admin_password='should-not-be-stored',
-        ).create({
+        )).create({
             'name': 'Sidecar n8n',
             'workspace_id': self.workspace.id,
             'template_id': sidecar_tmpl.id,
@@ -649,7 +650,7 @@ class TestMcpAdminPassword(TransactionCase):
 
     def _make_hermes_service(self, subdomain='hermes-gw-530'):
         """建一台 hermes-agent 服務（真 seed template，才有 gateway 對外路徑）。"""
-        return self.env['woow_paas_platform.cloud_service'].create({
+        return _internal_provision(self.env['woow_paas_platform.cloud_service']).create({
             'name': 'Hermes gateway probe',
             'workspace_id': self.workspace.id,
             'template_id': self.env.ref(
@@ -924,7 +925,7 @@ class TestMcpAdminPassword(TransactionCase):
             'helm_default_values': json.dumps(
                 {'gateway': {'externalPath': '/gw-672'}}),
         })
-        service = self.env['woow_paas_platform.cloud_service'].create({
+        service = _internal_provision(self.env['woow_paas_platform.cloud_service']).create({
             'name': 'Gateway-only probe',
             'workspace_id': self.workspace.id,
             'template_id': gw_only.id,

@@ -70,6 +70,7 @@ from odoo.tests import HttpCase, tagged
 from odoo.addons.woow_paas_platform.models.workspace_access import (
     ROLE_ADMIN, ROLE_GUEST, ROLE_OWNER, ROLE_USER,
 )
+from ..models.cloud_service import _internal_provision
 
 _CS = 'woow_paas_platform.cloud_service'
 _PROJECT = 'project.project'
@@ -176,7 +177,7 @@ class _Binding698Fixture(HttpCase):
             'helm_values': json.dumps({'config': {'nonSensitive': {}}}),
         }
         vals.update(extra)
-        return self.Service.sudo().create(vals)
+        return _internal_provision(self.Service.sudo()).create(vals)
 
     # ------------------------------------------------------------------ #
     #  RPC helper                                                         #

@@ -12,6 +12,7 @@ import logging
 from odoo.http import Controller, Response, request, route
 
 from .oauth2 import verify_oauth_token
+from ..models.cloud_service import _internal_provision
 
 _logger = logging.getLogger(__name__)
 _HA_PAAS_APP_TEMPLATE = 'woow_paas_platform.cloud_app_ha_paas'
@@ -275,7 +276,9 @@ class HAPaaSController(Controller):
         deploy_params = {}
         if tpl.ingress_enabled:
             deploy_params['expose_config'] = {'enabled': True, 'subdomain': subdomain}
-        svc = env['woow_paas_platform.cloud_service'].sudo().with_company(company).create({
+        svc = _internal_provision(
+            env['woow_paas_platform.cloud_service'].sudo().with_company(company)
+        ).create({
             'workspace_id': ws.id, 'template_id': tpl.id, 'name': 'HA PaaS',
             'reference_id': reference_id, 'state': 'pending', 'subdomain': subdomain,
             'internal_port': tpl.default_port,

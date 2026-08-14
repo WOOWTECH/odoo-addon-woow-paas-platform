@@ -16,6 +16,7 @@ from ..services.reconciler import LeftSet, collect_left_set
 from odoo.addons.woow_paas_platform.models.security_access import (
     _internal_identity as _internal,
 )
+from ..models.cloud_service import _internal_provision
 
 
 @tagged('post_install', '-at_install')
@@ -120,7 +121,7 @@ class TestCollectLeftSet(TransactionCase):
         MCP subdomain = generate_subdomain(ns, release)+'-mcp'；只收 subdomain 不重建 MCP
         的版本，'myapp-115223fa-mcp' 缺席 → 活躍 MCP DNS/ingress 被誤判孤兒。
         """
-        self.CS.create({
+        _internal_provision(self.CS).create({
             'name': 'CS1', 'workspace_id': self.ws.id, 'template_id': self.template.id,
             'subdomain': 'paas-cs-aaa-bbb',
             'helm_release_name': 'myapp', 'helm_namespace': 'paas-ws-115223fa',
@@ -132,7 +133,7 @@ class TestCollectLeftSet(TransactionCase):
 
     def test_cs_without_helm_fields_skips_mcp(self):
         """CS 缺 helm_release_name / helm_namespace（未部署）→ 不亂湊 MCP subdomain。"""
-        self.CS.create({
+        _internal_provision(self.CS).create({
             'name': 'CS2', 'workspace_id': self.ws.id, 'template_id': self.template.id,
             'subdomain': 'paas-cs-ccc-ddd',
         })

@@ -31,6 +31,7 @@ HA PaaS 既有隱藏鏈（workspace／dashboard／billing 全鏈）的零回歸�
 """
 from odoo.tests.common import HttpCase, TransactionCase, tagged
 from odoo.exceptions import ValidationError
+from ..models.cloud_service import _internal_provision
 
 _NOT_FOUND = 'Service not found'
 
@@ -154,7 +155,7 @@ class _ServiceMatrixCase(HttpCase):
         self.tpl = self._template()
         self.ws = self.env['woow_paas_platform.workspace'].create({
             'name': 'WS 471 %s' % self.tpl.slug, 'owner_id': self.admin_user.id})
-        self.svc = self.env['woow_paas_platform.cloud_service'].create({
+        self.svc = _internal_provision(self.env['woow_paas_platform.cloud_service']).create({
             'workspace_id': self.ws.id, 'template_id': self.tpl.id,
             'name': 'svc-471', 'reference_id': 'test-471-%s' % self.tpl.slug,
             'state': 'running', 'subdomain': 'svc-471-%s' % self.tpl.slug,

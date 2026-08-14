@@ -17,6 +17,7 @@
 from unittest.mock import MagicMock, patch
 
 from odoo.tests.common import TransactionCase
+from ..models.cloud_service import _internal_provision
 
 
 class _Base(TransactionCase):
@@ -40,7 +41,7 @@ class _Base(TransactionCase):
         })
 
     def _service(self, state='running'):
-        return self.Service.create({
+        return _internal_provision(self.Service).create({
             'name': 'svc-haos',
             'workspace_id': self.workspace.id,
             'template_id': self.template.id,
@@ -137,7 +138,7 @@ class TestRunStrategyIsSourcedFromState(_Base):
             'helm_chart_version': '1.0.0',
             'workload_type': 'container',
         })
-        svc = self.Service.create({
+        svc = _internal_provision(self.Service).create({
             'name': 'svc-container',
             'workspace_id': self.workspace.id,
             'template_id': container_tpl.id,

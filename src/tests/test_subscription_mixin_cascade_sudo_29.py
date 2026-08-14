@@ -52,6 +52,7 @@ from odoo.addons.woow_paas_platform.controllers.paas import PaasController
 from odoo.addons.woow_paas_platform.controllers.smart_home import (
     SmartHomeController,
 )
+from ..models.cloud_service import _internal_provision
 
 
 def _patch_sh_request(env):
@@ -334,7 +335,7 @@ class TestSubscriptionMixinSudoCloudService(
             'helm_chart_version': '1.0.0',
             'min_vcpu': 1, 'min_ram_gb': 1.0, 'min_storage_gb': 1,
         })
-        return self.env['woow_paas_platform.cloud_service'].create({
+        return _internal_provision(self.env['woow_paas_platform.cloud_service']).create({
             'name': 'Mixin Sudo Service',
             'workspace_id': self.workspace.id,
             'template_id': template.id,
@@ -501,7 +502,7 @@ class TestCloudServiceEndpointMixinSudo(TransactionCase):
             'helm_chart_version': '1.0.0',
             'min_vcpu': 1, 'min_ram_gb': 1.0, 'min_storage_gb': 1,
         })
-        self.service = self.env['woow_paas_platform.cloud_service'].create({
+        self.service = _internal_provision(self.env['woow_paas_platform.cloud_service']).create({
             'name': 'CS Endpoint Sudo Service',
             'workspace_id': self.workspace.id,
             'template_id': template.id,

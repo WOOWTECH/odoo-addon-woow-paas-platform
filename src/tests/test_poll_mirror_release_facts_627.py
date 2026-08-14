@@ -59,6 +59,7 @@ from unittest.mock import MagicMock, patch
 
 from odoo import fields
 from odoo.tests.common import TransactionCase
+from ..models.cloud_service import _internal_provision
 
 _MODEL_PATH = 'odoo.addons.woow_paas_platform.models.cloud_service.CloudService'
 
@@ -117,7 +118,7 @@ class _Base(TransactionCase):
             'helm_values': json.dumps({'config': {'nonSensitive': {}}}),
         }
         vals.update(extra)
-        return self.Service.create(vals)
+        return _internal_provision(self.Service).create(vals)
 
     def _status(self, **release_overrides):
         """operator `get_status` 的回應。

@@ -47,6 +47,7 @@ import uuid
 from unittest.mock import patch
 
 from odoo.tests.common import HttpCase, tagged
+from ..models.cloud_service import _internal_provision
 
 
 def _new_user(env, login, name=None):
@@ -137,14 +138,14 @@ class TestProjectMcpFixture(HttpCase):
         })
 
         # ---- Cloud services ----------------------------------------- #
-        self.service_w1_a = self.Service.sudo().create({
+        self.service_w1_a = _internal_provision(self.Service.sudo()).create({
             'name': 'PMC W1 Svc A',
             'workspace_id': self.ws_w1.id,
             'template_id': self.template.id,
             'helm_release_name': 'pmc-w1-a',
             'helm_namespace': 'paas-ws-pmc-w1-a',
         })
-        self.service_w1_b = self.Service.sudo().create({
+        self.service_w1_b = _internal_provision(self.Service.sudo()).create({
             'name': 'PMC W1 Svc B',
             'workspace_id': self.ws_w1.id,
             'template_id': self.template.id,

@@ -47,6 +47,7 @@ import json as json_lib
 import uuid
 
 from odoo.tests.common import HttpCase, tagged
+from ..models.cloud_service import _internal_provision
 
 
 # --------------------------------------------------------------------------- #
@@ -143,35 +144,35 @@ class TestProjectDetailFixture(HttpCase):
         })
 
         # ---- Cloud services ----------------------------------------- #
-        self.service_w1_a = self.Service.sudo().create({
+        self.service_w1_a = _internal_provision(self.Service.sudo()).create({
             'name': 'PD W1 Svc A',
             'workspace_id': self.ws_w1.id,
             'template_id': self.template.id,
             'helm_release_name': 'pd-w1-a',
             'helm_namespace': 'paas-ws-pd-w1-a',
         })
-        self.service_w1_b = self.Service.sudo().create({
+        self.service_w1_b = _internal_provision(self.Service.sudo()).create({
             'name': 'PD W1 Svc B',
             'workspace_id': self.ws_w1.id,
             'template_id': self.template.id,
             'helm_release_name': 'pd-w1-b',
             'helm_namespace': 'paas-ws-pd-w1-b',
         })
-        self.service_w1_c = self.Service.sudo().create({
+        self.service_w1_c = _internal_provision(self.Service.sudo()).create({
             'name': 'PD W1 Svc C',
             'workspace_id': self.ws_w1.id,
             'template_id': self.template.id,
             'helm_release_name': 'pd-w1-c',
             'helm_namespace': 'paas-ws-pd-w1-c',
         })
-        self.service_w2_a = self.Service.sudo().create({
+        self.service_w2_a = _internal_provision(self.Service.sudo()).create({
             'name': 'PD W2 Svc A',
             'workspace_id': self.ws_w2.id,
             'template_id': self.template.id,
             'helm_release_name': 'pd-w2-a',
             'helm_namespace': 'paas-ws-pd-w2-a',
         })
-        self.service_w2_b = self.Service.sudo().create({
+        self.service_w2_b = _internal_provision(self.Service.sudo()).create({
             'name': 'PD W2 Svc B',
             'workspace_id': self.ws_w2.id,
             'template_id': self.template.id,

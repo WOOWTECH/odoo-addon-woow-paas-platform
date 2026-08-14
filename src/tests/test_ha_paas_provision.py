@@ -8,6 +8,7 @@ from datetime import timedelta
 
 from odoo import fields
 from odoo.tests.common import HttpCase, TransactionCase
+from ..models.cloud_service import _internal_provision
 
 
 class TestProvisionUniqueIndex(TransactionCase):
@@ -58,14 +59,14 @@ class TestProvisionUniqueIndex(TransactionCase):
             {'name': 'w1', 'owner_id': self.env.user.id})
         ws2 = self.env['woow_paas_platform.workspace'].create(
             {'name': 'w2', 'owner_id': self.env.user.id})
-        self.env['woow_paas_platform.cloud_service'].create({
+        _internal_provision(self.env['woow_paas_platform.cloud_service']).create({
             'workspace_id': ws1.id, 'template_id': tpl.id, 'name': 'ha1',
             'reference_id': 'r1', 'state': 'running', 'subdomain': 's1',
             'provision_partner_id': partner.id})
         from psycopg2 import IntegrityError
         with self.assertRaises(IntegrityError):
             with self.env.cr.savepoint():
-                self.env['woow_paas_platform.cloud_service'].create({
+                _internal_provision(self.env['woow_paas_platform.cloud_service']).create({
                     'workspace_id': ws2.id, 'template_id': tpl.id, 'name': 'ha2',
                     'reference_id': 'r2', 'state': 'running', 'subdomain': 's2',
                     'provision_partner_id': partner.id})

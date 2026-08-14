@@ -60,6 +60,7 @@ from odoo.addons.woow_paas_platform.models.workspace_access import (
     ROLE_OWNER,
     ROLE_USER,
 )
+from ..models.cloud_service import _internal_provision
 
 
 def _new_group_user(env, name):
@@ -387,7 +388,7 @@ class TestWorkspaceAccessPositiveControls(_WorkspaceAccess556Fixture):
         """`workspace_rule_...`（cloud_service 側的既有 ir.rule）與本次修改
         無關，不該被誤傷。"""
         template = self.env.ref('woow_paas_platform.cloud_app_odoo')
-        service = self.env['woow_paas_platform.cloud_service'].sudo().create({
+        service = _internal_provision(self.env['woow_paas_platform.cloud_service'].sudo()).create({
             'name': 'p5-svc-556', 'workspace_id': self.ws1.id,
             'template_id': template.id,
             'helm_release_name': 'p5-556', 'helm_namespace': 'paas-ws-p5-556'})

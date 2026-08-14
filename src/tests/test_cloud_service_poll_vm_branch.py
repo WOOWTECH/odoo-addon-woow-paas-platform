@@ -26,6 +26,7 @@ container fail-closed（Step 1 新語意）、以及兩層 poll 的端到端鎖�
 from unittest.mock import MagicMock, patch
 
 from odoo.tests.common import TransactionCase
+from ..models.cloud_service import _internal_provision
 
 
 # KubeVirt 的 VM 跑在 virt-launcher pod 裡，而 haos chart 把
@@ -84,7 +85,7 @@ class _Base(TransactionCase):
             'workload_type': workload_type,
             'post_deploy_init_type': 'none',
         })
-        return self.Service.create({
+        return _internal_provision(self.Service).create({
             'name': f'svc-{workload_type}',
             'workspace_id': self.workspace.id,
             'template_id': template.id,

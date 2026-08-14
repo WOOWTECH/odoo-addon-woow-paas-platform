@@ -33,6 +33,7 @@ import logging
 from unittest.mock import MagicMock, patch
 
 from odoo.tests.common import TransactionCase
+from ..models.cloud_service import _internal_provision
 
 _MODEL_LOGGER = 'odoo.addons.woow_paas_platform.models.cloud_service'
 _CLIENT_PATH = (
@@ -79,7 +80,7 @@ class _Base(TransactionCase):
             'helm_values': json.dumps({'config': {'nonSensitive': {}}}),
         }
         vals.update(extra)
-        return self.Service.create(vals)
+        return _internal_provision(self.Service).create(vals)
 
     def _client(self, **release_overrides):
         release = {'status': 'deployed', 'revision': 3, 'chart_version': '0.1.1'}

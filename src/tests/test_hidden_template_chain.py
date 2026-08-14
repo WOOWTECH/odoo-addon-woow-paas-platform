@@ -18,6 +18,7 @@ from odoo.tests.common import HttpCase, TransactionCase, tagged
 from odoo.addons.woow_paas_platform.tests.test_conceal_instances_split_471 import (
     make_hidden_only_template,
 )
+from ..models.cloud_service import _internal_provision
 
 
 class TestHAPaaSSeed(TransactionCase):
@@ -105,7 +106,7 @@ class TestHiddenChainSsotIsConcealInstances(TransactionCase):
         ws = self.env['woow_paas_platform.workspace'].create({
             'name': 'WS hidden-only 471',
             'owner_id': self.env.ref('base.user_admin').id})
-        svc = self.env['woow_paas_platform.cloud_service'].create({
+        svc = _internal_provision(self.env['woow_paas_platform.cloud_service']).create({
             'workspace_id': ws.id, 'template_id': self.hidden_only.id,
             'name': 'svc-chain-471', 'reference_id': 'test-chain-471',
             'state': 'running', 'subdomain': 'svc-chain-471'})
@@ -134,7 +135,7 @@ class TestHiddenChainFiltering(HttpCase):
         # 由 admin 擁有的 hidden HA PaaS 服務＋0 元訂閱（owner 本人也不該看到）
         self.ws = self.env['woow_paas_platform.workspace'].create({
             'name': 'HA PaaS WS 336', 'owner_id': self.admin_user.id})
-        self.svc = self.env['woow_paas_platform.cloud_service'].create({
+        self.svc = _internal_provision(self.env['woow_paas_platform.cloud_service']).create({
             'workspace_id': self.ws.id, 'template_id': self.tpl.id,
             'name': 'ha-paas', 'reference_id': 'test-ha-ref-336',
             'state': 'running', 'subdomain': 'ha-test-336',

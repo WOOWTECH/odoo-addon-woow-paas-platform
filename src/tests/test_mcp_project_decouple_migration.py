@@ -39,6 +39,7 @@ import importlib.util
 import os
 
 from odoo.tests.common import TransactionCase, tagged
+from ..models.cloud_service import _internal_provision
 
 
 _MIGRATION_PATH = os.path.abspath(
@@ -215,7 +216,7 @@ class TestMcpProjectDecoupleMigrationBehavior(TransactionCase):
             'helm_chart_version': '1.0.0',
             'min_vcpu': 1, 'min_ram_gb': 1.0, 'min_storage_gb': 1,
         })
-        self.service = Service.sudo().create({
+        self.service = _internal_provision(Service.sudo()).create({
             'name': 'Svc MCP Migration',
             'workspace_id': self.workspace.id,
             'template_id': self.template.id,
@@ -337,7 +338,7 @@ class TestMcpProjectDecoupleMigrationBehavior(TransactionCase):
         # First seed an orphan row (user-scope, no project mapping).
         # Setup a service that has no support project to make this row orphan.
         Service = self.env['woow_paas_platform.cloud_service']
-        orphan_service = Service.sudo().create({
+        orphan_service = _internal_provision(Service.sudo()).create({
             'name': 'Orphan Svc',
             'workspace_id': self.workspace.id,
             'template_id': self.template.id,
@@ -402,7 +403,7 @@ class TestMcpProjectDecoupleMigrationBehavior(TransactionCase):
 
         # Seed a service WITHOUT a support project (so backfill fails to find a project).
         Service = self.env['woow_paas_platform.cloud_service']
-        orphan_service = Service.sudo().create({
+        orphan_service = _internal_provision(Service.sudo()).create({
             'name': 'Orphan Svc 2',
             'workspace_id': self.workspace.id,
             'template_id': self.template.id,

@@ -41,6 +41,7 @@ import json as json_lib
 import uuid
 
 from odoo.tests.common import HttpCase, tagged
+from ..models.cloud_service import _internal_provision
 
 
 def _new_user(env, login, name=None):
@@ -124,7 +125,7 @@ class TestSidecarHintEndpoint(HttpCase):
 
         # ---- Services + Projects ----------------------------------- #
         # Bound, mcp_enabled — hint should succeed.
-        self.service_bound_mcp = self.Service.sudo().create({
+        self.service_bound_mcp = _internal_provision(self.Service.sudo()).create({
             'name': 'SHP Bound Svc MCP',
             'workspace_id': self.ws_w1.id,
             'template_id': self.template_mcp.id,
@@ -138,7 +139,7 @@ class TestSidecarHintEndpoint(HttpCase):
         })
 
         # Bound, mcp_disabled — hint should fail.
-        self.service_bound_no_mcp = self.Service.sudo().create({
+        self.service_bound_no_mcp = _internal_provision(self.Service.sudo()).create({
             'name': 'SHP Bound Svc NoMCP',
             'workspace_id': self.ws_w1.id,
             'template_id': self.template_no_mcp.id,

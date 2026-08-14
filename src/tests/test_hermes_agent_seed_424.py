@@ -44,6 +44,7 @@ import xml.etree.ElementTree as ET
 
 from odoo.tests.common import HttpCase, TransactionCase, tagged
 from odoo.tools import file_open
+from ..models.cloud_service import _internal_provision
 
 PLATFORM_REGISTRY = 'jcr-prod.woowtech.io/'
 HERMES_AGENT_IMAGE = 'jcr-prod.woowtech.io/woow-paas-docker-local/hermes-agent'
@@ -1049,7 +1050,7 @@ class TestHermesAgentValueInjection(TransactionCase):
             'name': 'Hermes WS 424',
             'owner_id': self.env.ref('base.user_admin').id,
         })
-        return self.CloudService.create({
+        return _internal_provision(self.CloudService).create({
             'workspace_id': ws.id,
             'template_id': self.tpl.id,
             'name': 'hermes-agent',

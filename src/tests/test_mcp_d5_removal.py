@@ -44,6 +44,7 @@ import os
 
 from odoo.tests.common import TransactionCase, tagged
 from odoo.exceptions import ValidationError
+from ..models.cloud_service import _internal_provision
 
 
 @tagged('post_install', '-at_install')
@@ -72,7 +73,7 @@ class TestMcpD5RemovalAndUnboundAllowed(TransactionCase):
             'helm_chart_version': '1.0.0',
             'min_vcpu': 1, 'min_ram_gb': 1.0, 'min_storage_gb': 1,
         })
-        self.bound_service = self.Service.sudo().create({
+        self.bound_service = _internal_provision(self.Service.sudo()).create({
             'name': 'Bound Svc D5',
             'workspace_id': self.workspace.id,
             'template_id': self.template.id,

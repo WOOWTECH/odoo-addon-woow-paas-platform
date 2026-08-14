@@ -9,6 +9,7 @@ Red expectation in current code: ``project.task`` has neither
 """
 from odoo.tests.common import TransactionCase
 from odoo.exceptions import AccessError, ValidationError
+from ..models.cloud_service import _internal_provision
 
 
 class _ExtrasFixtureMixin:
@@ -50,15 +51,15 @@ class _ExtrasFixtureMixin:
             'min_vcpu': 1, 'min_ram_gb': 1.0, 'min_storage_gb': 1,
         })
 
-        self.svc_w1_primary = Service.sudo().create({
+        self.svc_w1_primary = _internal_provision(Service.sudo()).create({
             'name': 'Svc W1 primary',
             'workspace_id': self.w1.id, 'template_id': self.template.id,
         })
-        self.svc_w1_extra = Service.sudo().create({
+        self.svc_w1_extra = _internal_provision(Service.sudo()).create({
             'name': 'Svc W1 extra',
             'workspace_id': self.w1.id, 'template_id': self.template.id,
         })
-        self.svc_w2 = Service.sudo().create({
+        self.svc_w2 = _internal_provision(Service.sudo()).create({
             'name': 'Svc W2',
             'workspace_id': self.w2.id, 'template_id': self.template.id,
         })
@@ -126,7 +127,7 @@ class TestTaskExtrasFieldsExist(TransactionCase, _ExtrasFixtureMixin):
     def test_ac10_primary_updates_when_project_rebound(self):
         """AC #10: store=True related — re-binding project propagates."""
         # bind project_w1 to a new service via sudo
-        new_svc = self.env['woow_paas_platform.cloud_service'].sudo().create({
+        new_svc = _internal_provision(self.env['woow_paas_platform.cloud_service'].sudo()).create({
             'name': 'Svc W1 rebind',
             'workspace_id': self.w1.id,
             'template_id': self.template.id,

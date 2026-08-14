@@ -13,6 +13,7 @@ from odoo.tests.common import TransactionCase
 
 from odoo.addons.woow_paas_platform.controllers.paas import PaasController
 from odoo.addons.woow_paas_platform.models.workspace_access import ROLE_USER
+from ..models.cloud_service import _internal_provision
 
 
 class _McpServiceFixture(TransactionCase):
@@ -45,9 +46,9 @@ class _McpServiceFixture(TransactionCase):
             # 這行，那些斷言會因為「根本沒有 key」而恆真（assertNotIn '' 家族）。
             'helm_default_values': json.dumps({'gateway': {'externalPath': '/gateway'}}),
         })
-        self.service = self.env['woow_paas_platform.cloud_service'].with_context(
+        self.service = _internal_provision(self.env['woow_paas_platform.cloud_service'].with_context(
             mcp_admin_password='old-password',
-        ).create({
+        )).create({
             'name': 'MCP Odoo',
             'workspace_id': self.workspace.id,
             'template_id': self.template.id,
@@ -297,7 +298,7 @@ class TestResetAdminPasswordSanitisation(_McpServiceFixture):
         走真正的落庫入口（``create()`` 的 vals 正規化），不是直接呼 strip helper
         ——要證明的是「這條路徑上的值不會留下」，不是「helper 可以被呼叫」。
         """
-        service = self.env['woow_paas_platform.cloud_service'].create({
+        service = _internal_provision(self.env['woow_paas_platform.cloud_service']).create({
             'name': 'Gateway strip probe',
             'workspace_id': self.workspace.id,
             'template_id': self.template.id,
@@ -326,7 +327,7 @@ class TestResetAdminPasswordSanitisation(_McpServiceFixture):
         這裡連 32 一起斷言，換弱時兩把憑證會一起紅。
         """
         svc_a, svc_b = [
-            self.env['woow_paas_platform.cloud_service'].create({
+            _internal_provision(self.env['woow_paas_platform.cloud_service']).create({
                 'name': f'MCP Odoo gw {suffix}',
                 'workspace_id': self.workspace.id,
                 'template_id': self.template.id,
@@ -353,7 +354,7 @@ class TestResetAdminPasswordSanitisation(_McpServiceFixture):
         鑑別力：把 ``_generate_admin_password`` 改成回傳固定字串 → 這裡紅。
         """
         svc_a, svc_b = [
-            self.env['woow_paas_platform.cloud_service'].create({
+            _internal_provision(self.env['woow_paas_platform.cloud_service']).create({
                 'name': f'MCP Odoo {suffix}',
                 'workspace_id': self.workspace.id,
                 'template_id': self.template.id,

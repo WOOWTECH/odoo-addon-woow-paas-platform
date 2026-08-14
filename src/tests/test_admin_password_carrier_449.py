@@ -22,6 +22,7 @@ import json
 from unittest.mock import MagicMock, patch
 
 from odoo.tests.common import TransactionCase
+from ..models.cloud_service import _internal_provision
 
 MCP_SERVER_CHART_SUFFIX = '/mcp-server'
 
@@ -151,9 +152,9 @@ class TestAdminPasswordCarrierForwarded(TransactionCase):
             # 那個鍵，形狀當然相同，那條斷言就退化成恆真。
             'helm_default_values': json.dumps({'gateway': {'externalPath': '/gateway'}}),
         })
-        return self.env['woow_paas_platform.cloud_service'].with_context(
+        return _internal_provision(self.env['woow_paas_platform.cloud_service'].with_context(
             mcp_admin_password='old-password',
-        ).create({
+        )).create({
             'name': 'Carrier service %s' % carrier,
             'workspace_id': self.workspace.id,
             'template_id': template.id,
