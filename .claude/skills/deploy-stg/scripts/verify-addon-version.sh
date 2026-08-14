@@ -202,6 +202,31 @@ parse_manifest_version() {
     extract_manifest_version < "$path"
 }
 
+# vav_repo_behind_count <repo_root> —— 本機 branch 落後其 upstream 幾個 commit（#723）。
+#
+# 印 "<behind>\t<upstream_ref>"，回 0；沒有 upstream、查不到、或根本沒落後時回 1 且不印。
+# 用途只有一個：讓下面那行「參考：本機 repo manifest = ...」在落後情境下不再是裸版號。
+# 落後時它印的是一個與本次部署無關的值，卻長得像判準 —— 點出落差才有用。
+#
+# 🔴 這裡刻意**不 fetch**：post-check 是部署收尾（可能離線、也可能被單獨重跑），不該為了
+#    一行參考說明去打網路。比對基準是上一次 fetch 的 remote-tracking ref ⇒ 落後數只會
+#    低估、不會高估，印出來的落後是真的落後（deploy-stg.sh 開頭那道 Step 1.5 才負責先
+#    fetch 再比，那裡「同步」要能被相信）。
+vav_repo_behind_count() {
+    local root="${1:-}" upstream="" counts="" behind=""
+    [ -n "$root" ] && [ -d "$root" ] || return 1
+    upstream="$(git -C "$root" rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null || true)"
+    [ -n "$upstream" ] || return 1
+    # `A..B` 只算領先，落後那半邊恆為 0 且無訊號 —— #723 的整個成因。
+    # `--left-right --count A...B` 一次給 "<只在 A><TAB><只在 B>" ＝ "<behind> <ahead>"。
+    counts="$(git -C "$root" rev-list --left-right --count "${upstream}...HEAD" 2>/dev/null || true)"
+    [ -n "$counts" ] || return 1
+    behind="${counts%%[[:space:]]*}"
+    case "$behind" in ''|*[!0-9]*) return 1 ;; esac
+    [ "$behind" -gt 0 ] || return 1
+    printf '%s\t%s' "$behind" "$upstream"
+}
+
 # evaluate_module_row <psql_row> <expected_version> —— 判定層。
 #
 # psql_row 是 `psql -tA` 的單列輸出，形態 `<state>|<latest_version>`；模組不存在時
@@ -457,9 +482,16 @@ vav_main() {
     # 的 CI 一律 clone develop，在 feature branch 上與 working tree 天然不同 ⇒ 拿它
     # 判紅就是天天誤報，而會誤報的 gate 三次之後就沒人看了。
     local repo_manifest="${REPO_ROOT}/src/__manifest__.py" repo_version=""
+    local behind_info="" behind_n="" behind_ref=""
     if repo_version="$(parse_manifest_version "$repo_manifest" 2>/dev/null)"; then
         if [ "$repo_version" != "$expected" ]; then
             echo -e "  ${VAV_YELLOW}參考：本機 repo manifest = ${repo_version}（與部署版本不同；非判準）${VAV_NC}"
+            # #723：落後 remote 時，上面那行是**純噪音** —— 它印的是一個與本次部署無關
+            # 的版號，卻長得像判準。有落差就直接講落差，比印一個裸版號有用。
+            if behind_info="$(vav_repo_behind_count "$REPO_ROOT")"; then
+                IFS=$'\t' read -r behind_n behind_ref <<< "$behind_info"
+                echo -e "  ${VAV_YELLOW}      └ 本機落後 ${behind_ref} ${behind_n} 個 commit ⇒ 上面那個版號與本次部署無關（#723）${VAV_NC}"
+            fi
         else
             echo -e "  參考：本機 repo manifest = ${repo_version}（相同）"
         fi
