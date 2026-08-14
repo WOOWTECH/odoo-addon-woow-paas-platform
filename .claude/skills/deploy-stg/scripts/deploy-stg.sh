@@ -143,6 +143,106 @@ for cmd in tea jq kubectl helm git; do
     fi
 done
 
+# --- Step 1.5：本機 checkout vs 這次要部署的內容（#723）---
+#
+# 這裡以前（只寫在 SKILL.md、沒有實作）算的是「領先」：
+#     AHEAD=$(git rev-list --count @{upstream}..HEAD)
+# 領先確實該報 —— 未 push 的 commit 不會被 CI clone 到、不會進 image。但單向的
+# `A..B` 天生只回答一半：**落後時 AHEAD=0，整道檢查全綠**。本機比 remote 舊時零
+# 訊號，部署者會理所當然地以為「我看到的 code ＝ 部上去的 code」。
+#
+# 2026-08-14 的實例：本機 develop 落後 origin/develop 22 個 commit（manifest .132
+# vs .136），`AHEAD=0` 讓派工者把「develop 與 upstream 同步」寫進工單，再據此推出
+# 「DB 版號已等於 develop manifest ⇒ post-check 必然綠、綠燈沒有鑑別力」。兩句都錯
+# （版號實際從 .132 升到 .136），而且是靠 teammate 回報時提一句才發現的。
+#
+# 🔴 落後**不阻擋部署**：CI 一律 clone remote（push `stg-*` tag 時 paas-odoo-ci 的
+#    Validate addon ref 套 staging 慣例 `develop`），落後不影響 image 內容，只影響
+#    部署者的預期。這是資訊，不是錯誤 —— 做成 gate 只會被 `|| true` 掉。
+#
+# 兩個方向一次拿到：`git rev-list --left-right --count A...B` 印 "<只在 A><TAB><只在 B>"，
+# 取 A=@{upstream}、B=HEAD ⇒ 就是 "<behind> <ahead>"。
+echo -e "${BLUE}Checking local checkout vs remote...${NC}"
+
+# manifest 版號共用 verify-addon-version.sh 的 parser（它 source 進來只提供純函式、
+# 不跑 main）。刻意不在這裡再寫一份 regex —— 兩份解析遲早漂移成不同答案。
+# 檔案不在就只報 commit 差距：版號是輔助資訊，缺它不該擋部署（post-check 那道 gate
+# 才對它 fail-loud）。
+if [ -f "${SCRIPT_DIR}/verify-addon-version.sh" ]; then
+    # shellcheck source=./verify-addon-version.sh
+    source "${SCRIPT_DIR}/verify-addon-version.sh"
+fi
+
+# <git-ref> → 該 ref 的 manifest 版號；讀不到印 "?"。
+# 🔴 一律走 `git show <ref>:<path>`，**不讀 working tree** —— 拿本機檔案冒充 remote
+#    的值，正是 #723 那個錯誤前提的來源。
+manifest_version_at_ref() {
+    local ref="$1" out=""
+    if declare -f extract_manifest_version >/dev/null 2>&1; then
+        out="$(git -C "$PROJECT_ROOT" show "${ref}:src/__manifest__.py" 2>/dev/null \
+               | extract_manifest_version 2>/dev/null || true)"
+    fi
+    printf '%s' "${out:-?}"
+}
+
+GIT_BRANCH="$(git -C "$PROJECT_ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo '(unknown)')"
+UPSTREAM_REF="$(git -C "$PROJECT_ROOT" rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null || true)"
+
+if [ -n "$IMAGE_OVERRIDE" ]; then
+    # --image 這條路根本不 build：部署內容由那顆既有 image 決定，與本機、與 remote
+    # develop 都無關。印本機/remote 版號在這裡是純噪音，只講清楚這件事。
+    echo -e "  本次使用 --image 指定既有 image，不觸發 CI build。"
+    echo -e "  ⇒ 部署內容由 ${IMAGE_OVERRIDE} 決定，與本機 checkout（${GIT_BRANCH}）無關。"
+elif [ -z "$UPSTREAM_REF" ]; then
+    echo -e "${YELLOW}  branch ${GIT_BRANCH} 沒有 upstream，無從比對本機與 remote。${NC}"
+    echo -e "${YELLOW}  CI 仍會 clone remote develop —— 這次部署的內容與本機 checkout 無關。${NC}"
+else
+    # 比對基準是 remote-tracking ref，它只反映**上一次 fetch**。不先更新的話，
+    # 「同步」可能是拿一份過期的 origin/develop 比出來的 —— 那是假綠，比沒有這道
+    # 檢查更糟。fetch 只動 remote-tracking ref，不碰 working tree 也不動本地分支。
+    if ! git -C "$PROJECT_ROOT" fetch --quiet origin 2>/dev/null; then
+        echo -e "${YELLOW}  （git fetch 失敗；以下比對基於上一次 fetch 的 remote-tracking ref，可能過期）${NC}"
+    fi
+    SYNC_COUNTS="$(git -C "$PROJECT_ROOT" rev-list --left-right --count "${UPSTREAM_REF}...HEAD" 2>/dev/null || printf '0\t0')"
+    # `|| true`：herestring 會補尾端換行所以 read 正常回 0，但這道檢查是純資訊性的，
+    # 不值得為了任何一種讀取失敗讓 set -e 把整支部署腳本殺掉。
+    read -r BEHIND AHEAD <<< "$SYNC_COUNTS" || true
+    BEHIND="${BEHIND:-0}"
+    AHEAD="${AHEAD:-0}"
+
+    if [ "$AHEAD" -gt 0 ]; then
+        echo -e "${YELLOW}  ⚠️  本機有 ${AHEAD} 個未 push 的 commit —— 這些不會被包進 image：${NC}"
+        # 截斷並**明說截了幾個**：branch 的 upstream 不是 develop 時 AHEAD 可能是三位數
+        # （實測對 origin/main 為 886），整串倒出來會把下面真正要看的訊息推出螢幕。
+        git -C "$PROJECT_ROOT" log --oneline --max-count=10 "${UPSTREAM_REF}..HEAD" | sed 's/^/      /'
+        if [ "$AHEAD" -gt 10 ]; then
+            echo -e "      …（共 ${AHEAD} 個，只列最新 10 個）"
+        fi
+    fi
+
+    if [ "$BEHIND" -gt 0 ]; then
+        LOCAL_VERSION="$(manifest_version_at_ref HEAD)"
+        REMOTE_VERSION="$(manifest_version_at_ref "$UPSTREAM_REF")"
+        echo -e "${YELLOW}  ⚠️  本機 ${GIT_BRANCH} 落後 ${UPSTREAM_REF} ${BEHIND} 個 commit。${NC}"
+        echo -e "      manifest 版號：本機 HEAD = ${LOCAL_VERSION} ／ ${UPSTREAM_REF} = ${REMOTE_VERSION}"
+        echo -e "      ⇒ 這次部署的內容來自 remote，不是你手上這份。落後**不阻擋部署**（CI 吃 remote，image 是對的）。"
+        echo -e "${YELLOW}      但別拿本機版號推論 post-check 會是什麼結果 —— 那正是 #723 的來源。${NC}"
+    fi
+
+    if [ "$AHEAD" -eq 0 ] && [ "$BEHIND" -eq 0 ]; then
+        echo -e "  ${GREEN}本機 ${GIT_BRANCH} 與 ${UPSTREAM_REF} 同步${NC}（manifest $(manifest_version_at_ref HEAD)）"
+    fi
+
+    # upstream 不是 origin/develop 時，上面比的那個 ref 根本不是這次會被烤的東西 ——
+    # 不講清楚的話，這段新輸出自己就會變成下一個錯誤前提。
+    if [ "$UPSTREAM_REF" != "origin/develop" ]; then
+        DEVELOP_VERSION="$(manifest_version_at_ref origin/develop)"
+        echo -e "${YELLOW}  注意：stg build 一律烤 develop（paas-odoo-ci 對 stg-* tag 的 staging 慣例），${NC}"
+        echo -e "${YELLOW}  與上面比對的 ${UPSTREAM_REF} 不是同一個 ref。origin/develop manifest = ${DEVELOP_VERSION}${NC}"
+    fi
+fi
+echo ""
+
 # kubectl context 守衛（#32）。原本這裡是「驗存在 → warn → kubectl config use-context」，
 # 有兩個問題，共用 helper 一次收掉：
 #   Part A  use-context 改的是 ~/.kube/config —— 腳本跑完，操作者 shell 的 default

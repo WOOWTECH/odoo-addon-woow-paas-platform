@@ -106,20 +106,53 @@ if ! tea login list &>/dev/null; then
 fi
 ```
 
-### Step 1.5: 檢查未 push 的 commit
+### Step 1.5: 本機 checkout vs 這次要部署的內容（#723）
 
-CI 從 remote clone 程式碼，本機未 push 的 commit 不會被包含在 image 中。必須在觸發 CI 前檢查。
+**已實作在 `deploy-stg.sh`**（Prerequisites 之後自動跑），不需要手動執行任何指令。
+
+以前這裡只是一段寫在文件裡、算「領先」的 snippet：
 
 ```bash
-# 檢查當前 branch 是否有未 push 的 commit
-AHEAD=$(git rev-list --count @{upstream}..HEAD 2>/dev/null || echo "0")
-if [ "$AHEAD" -gt 0 ]; then
-  echo "⚠️  本機有 ${AHEAD} 個未 push 的 commit："
-  git log --oneline @{upstream}..HEAD
-  echo ""
-  echo "CI 會 clone remote 程式碼，這些 commit 不會被包含在 image 中。"
-  # 提示使用者先 push，或由 Claude 自動 push 後繼續
-fi
+AHEAD=$(git rev-list --count @{upstream}..HEAD)   # ❌ 只回答一半
+```
+
+領先確實該報 —— 未 push 的 commit 不會被 CI clone 到、不會進 image。但單向的 `A..B`
+天生只算得到領先：**落後時 `AHEAD=0`、整道檢查全綠**。本機比 remote 舊時零訊號，
+部署者於是理所當然地以為「我看到的 code ＝ 部上去的 code」。
+
+2026-08-14 的實例：本機 develop 落後 origin/develop 22 個 commit（manifest `.132` vs
+`.136`），`AHEAD=0` 讓派工者把「develop 與 upstream 同步」寫進工單，再據此推出
+「DB 版號已等於 develop manifest ⇒ post-check 必然綠、綠燈沒有鑑別力」—— 兩句都錯，
+而且是靠 teammate 回報時提一句「git status 顯示 behind 22」才發現的。
+
+現在一次拿兩個方向：
+
+```bash
+git rev-list --left-right --count "@{upstream}...HEAD"   # 輸出 "<behind>\t<ahead>"
+```
+
+行為：
+
+- **領先 > 0** → 警告未 push 的 commit 不會進 image（列最新 10 個；超過會明說截了幾個）
+- **落後 > 0** → 印落後數與**兩邊的 manifest 版號**。remote 版號一律走
+  `git show <upstream>:src/__manifest__.py`，**不讀 working tree** —— 拿本機檔案冒充
+  remote 的值，正是那個錯誤前提的來源
+- **落後不阻擋部署**。CI 本來就吃 remote，image 是對的，壞的只是部署者的預期。
+  這是資訊不是錯誤，做成 gate 只會被繞過
+- 比對前先 `git fetch --quiet origin`：基準若是過期的 remote-tracking ref，「同步」
+  就是假綠 —— 比沒有這道檢查更糟
+- `--image` 覆寫時不比版號，改講「部署內容由那顆 image 決定，與本機 checkout 無關」
+- upstream 不是 `origin/develop` 時額外點出「stg build 一律烤 develop」，免得這段
+  新輸出自己變成下一個錯誤前提
+
+實際輸出（本機落後 27 個 commit）：
+
+```
+Checking local checkout vs remote...
+  ⚠️  本機 develop 落後 origin/develop 27 個 commit。
+      manifest 版號：本機 HEAD = 18.0.1.0.136 ／ origin/develop = 18.0.1.0.139
+      ⇒ 這次部署的內容來自 remote，不是你手上這份。落後**不阻擋部署**（CI 吃 remote，image 是對的）。
+      但別拿本機版號推論 post-check 會是什麼結果 —— 那正是 #723 的來源。
 ```
 
 ### Step 2: 解析參數
@@ -231,9 +264,29 @@ STATUSES=$(tea api -r "${CI_REPO}" "repos/{owner}/{repo}/actions/tasks?limit=10"
 > 變成 `nohup: setsid: No such file or directory` 且整個沒啟動。真 detach 改用
 > `python3 -c "import subprocess; subprocess.Popen([...], start_new_session=True)"`。
 >
-> **`create.sh` 印的 `Waiting for pods to be ready... condition met` 可能是舊
-> pod 的**：deployment 策略是 `Recreate`，該時點舊 pod 還在服務；之後才真的在等
-> 新 pod，中間約 5 分鐘完全無輸出，很像卡死但不是——別在這段 kill 它。
+> 🔴 **那段「`condition met` 之後約 5 分鐘完全無輸出」不是在等新 pod，是在空等一顆
+> 永遠不會 Ready 的 pod**（#724，2026-08-15 已修，標的在 plugin repo `cc/woowprd`）。
+>
+> `create.sh` 的第一個 `kubectl wait` 選 `app.kubernetes.io/instance=$SLUG` 的**所有**
+> pod，涵蓋 TTL CronJob 跑完留下的 `Succeeded` pod ——「`Succeeded` 的 pod 永遠不會有
+> `Ready=true`」⇒ **必然**跑滿 300s 才逾時，接著印一段長得像失敗的
+> `Pods did not become ready within 300s` / `may not be fully ready`，再由第二個
+> component-scoped 的 wait（只等 odoo）立刻收斂成功。整條路徑**從不失敗，只固定浪費
+> 300 秒**——這就是它兩個多月沒被當 bug 追的原因：它不產生錯誤，只產生延遲，形狀是
+> 「全新 sandbox 第一次順、之後每次都卡」，很容易被歸因成「環境變慢了」。
+>
+> 修法：`create.sh` 的 selector 排除帶 Job 標記的 pod。實測對照（`dev-sandbox-stg`，
+> 現場有一顆 `Succeeded` 的 `*-ttl-*` pod）：舊 selector `5:01.25`、新 selector
+> `0.58s`，兩者都對三顆長駐 pod 回 `condition met`。
+>
+> ⚠ **plugin PR 合併 ≠ 你本機生效**：`claude plugin update` 只比對 `plugin.json` 的
+> `version`，沒 bump 就冪等 skip（回報成功但 cache 一行沒動）。本機還看得到那 5 分鐘，
+> 就是還在跑舊版 —— 走 `uninstall` + `install`，並驗 `installed_plugins.json` 的
+> `gitCommitSha`。
+>
+> 仍然成立的部分：`condition met` 那幾行**可能是舊 pod** 的（deployment 策略是
+> `Recreate`，該時點舊 pod 還在服務）。要確認新 pod 起來了看 Step 8 的 post-check，
+> 別看這幾行。
 
 ### Step 6: 部署到 Sandbox（委派 woow-dev plugin）
 
@@ -348,7 +401,8 @@ pod `1/1 Running`、`kubectl logs` 乾淨。**gate 驗的是終態，不是路�
 
 期望值取自 image 而不是本機 working tree，是因為判準要問的是「跑著的 code 與 DB 有沒有
 對上」；而且 stg 的 CI 一律 clone `develop`，拿 working tree 當基準在 feature branch 上
-會天天誤報。本機 repo 版號仍會印出來當**參考值**（非判準）。
+會天天誤報。本機 repo 版號仍會印出來當**參考值**（非判準）；本機落後 remote 時會多印
+一行落差（#723）——落後情境下那個裸版號與本次部署無關，卻長得像判準。
 
 失敗時**只報紅、不自動補跑升級**——自動 `-u` 會與正在服務的 pod 搶同一顆 DB 做
 migration，而手動 upgrade Job 有 ResourceQuota 與 filestore RWO nodeSelector 兩個非顯然

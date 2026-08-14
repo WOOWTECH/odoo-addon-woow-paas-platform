@@ -115,6 +115,7 @@ echo "0. 測試骨架本身"
 assert_eq "被測純函式已載入（evaluate_module_row）" "$(type -t evaluate_module_row 2>/dev/null)" "function"
 assert_eq "被測純函式已載入（extract_manifest_version）" "$(type -t extract_manifest_version 2>/dev/null)" "function"
 assert_eq "被測純函式已載入（compute_db_name_local）" "$(type -t compute_db_name_local 2>/dev/null)" "function"
+assert_eq "被測純函式已載入（vav_repo_behind_count）" "$(type -t vav_repo_behind_count 2>/dev/null)" "function"
 # source 時不得執行 main（否則測試會去打叢集）
 assert_eq "source 不觸發 main" "${VAV_MAIN_RAN:-no}" "no"
 
@@ -227,6 +228,62 @@ echo "4. DB 名推導"
 
 assert_eq "slug=stg" "$(compute_db_name_local stg woow_)" "woow_stg"
 assert_eq "slug 內的 '-' 換成 '_'" "$(compute_db_name_local stg-test woow_)" "woow_stg_test"
+
+# =============================================================================
+# 5. 落後 upstream 的偵測（#723）
+# =============================================================================
+# 純本地 git，不碰網路：用同一個 repo 裡的另一條 branch 當 upstream
+# （`branch.<n>.remote=.` 就是 git 對本地 upstream 的正規寫法）。
+#
+# 🔴 紅燈案例排前面同樣是刻意的：本函式「不落後」時的正確行為是**什麼都不印、回 1**，
+#    而那與「函式壞掉」的輸出一模一樣。所以先證明它在該回 1 的每種情況都回 1，
+#    最後那條「落後 2 個 commit」才是唯一有鑑別力的陽性對照。
+echo "5. 落後 upstream 的偵測（#723）"
+
+_git_tmp="${TMPDIR:-/tmp}/vav-git-$$"
+_git() { git -C "$_git_tmp" -c user.email=t@t -c user.name=t "$@"; }
+
+vav_repo_behind_count "" >/dev/null 2>&1
+assert_eq "沒給 repo 路徑 → rc=1" "$?" "1"
+
+vav_repo_behind_count "${TMPDIR:-/tmp}/vav-no-such-dir-$$" >/dev/null 2>&1
+assert_eq "路徑不存在 → rc=1" "$?" "1"
+
+mkdir -p "$_git_tmp"
+vav_repo_behind_count "$_git_tmp" >/dev/null 2>&1
+assert_eq "不是 git repo → rc=1" "$?" "1"
+
+_git init -q 2>/dev/null
+printf 'a\n' > "$_git_tmp/f"; _git add -A >/dev/null 2>&1; _git commit -qm a >/dev/null 2>&1
+_git branch -M work >/dev/null 2>&1
+_git branch upstream-sim >/dev/null 2>&1
+
+vav_repo_behind_count "$_git_tmp" >/dev/null 2>&1
+assert_eq "有 git repo 但沒設 upstream → rc=1" "$?" "1"
+
+_git config branch.work.remote . >/dev/null 2>&1
+_git config branch.work.merge refs/heads/upstream-sim >/dev/null 2>&1
+
+vav_repo_behind_count "$_git_tmp" >/dev/null 2>&1
+assert_eq "有 upstream 且同步 → rc=1（不落後就不該印）" "$?" "1"
+
+# 只領先不落後：這正是舊寫法唯一看得見的那半邊，本函式不該對它有反應
+printf 'b\n' > "$_git_tmp/f"; _git add -A >/dev/null 2>&1; _git commit -qm b >/dev/null 2>&1
+vav_repo_behind_count "$_git_tmp" >/dev/null 2>&1
+assert_eq "只領先 1（不落後）→ rc=1" "$?" "1"
+
+# 陽性對照：upstream 前進 2 個 commit，work 落後 2
+_git checkout -q upstream-sim >/dev/null 2>&1
+printf 'u1\n' > "$_git_tmp/g"; _git add -A >/dev/null 2>&1; _git commit -qm u1 >/dev/null 2>&1
+printf 'u2\n' > "$_git_tmp/g"; _git add -A >/dev/null 2>&1; _git commit -qm u2 >/dev/null 2>&1
+_git checkout -q work >/dev/null 2>&1
+
+_behind_out="$(vav_repo_behind_count "$_git_tmp" 2>/dev/null)"
+assert_eq "落後 2 個 commit → rc=0" "$?" "0"
+assert_eq "輸出 '<behind>\\t<upstream>'" "$_behind_out" "$(printf '2\tupstream-sim')"
+
+rm -rf "$_git_tmp"
+unset -f _git
 
 # =============================================================================
 echo ""
