@@ -188,9 +188,15 @@ fixpoint，再找 receiver 落在那些 handle 上的 `.create(` / `.copy(`。
 
 | PR | 內容 | 行為變更 |
 |---|---|---|
-| PR1 | sentinel／`_internal_provision()` helper ＋ 把所有建立點改成經 helper | **無**（還沒有閘） |
-| PR2 | `create()` 加 raise ＋ 驗收測試 ＋ repo-lint allowlist gate ＋ 後台 view `create="false"` ＋ 改寫 `cloud_service.py` 那段與本方向矛盾的舊註解 | 有 |
-| PR3 | 提案 B：`subscription_id` 的歸屬＋狀態＋唯一性（含 migration 建 partial unique index） | 有 |
+| PR1（#727，已合併） | sentinel／`_internal_provision()` helper ＋ 把所有建立點改成經 helper | **無**（還沒有閘） |
+| PR2（#729） | `create()` 加 raise ＋ 驗收測試 ＋ repo-lint 第 26 條 allowlist gate ＋ 後台 view `create="false"` ＋ 改寫 `cloud_service.py` 那段與本方向矛盾的舊註解 | 有 |
+| PR3（#734） | 提案 B：`subscription_id` 的歸屬＋狀態＋唯一性（索引在 `init()`；migration 只做重複列偵測）＋ repo-lint 第 27 條 | 有 |
+
+⚠ PR1 的枚舉漏了一處：`test_global_instance_cap_501.py` 的 `_make_service` 用**字串
+內插**組 model 名（`env['%s.cloud_service' % MOD]`），而那輪的 AST 判準只認字面 model
+名 ⇒ 整支 helper 沒被遷移（在 PR2 補上）。**下次做同類枚舉時，`env[...]` 的 slice 不是
+字面常數的那一整類要單獨列出來看**，不要預先猜它是不是目標 model。production 側用同一
+支探針掃過：非 tests 的 `.py` 共 4 處動態 model 名，全部是 `search`／`search_count`。
 
 ## 明確不在本輪範圍
 
