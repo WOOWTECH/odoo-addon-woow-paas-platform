@@ -221,9 +221,12 @@ class TestSubscriptionBindingUniqueness(_BindingFixture):
         Python 端 count-after-act 在同一個 tx 裡拿不到新 snapshot（#518）。"""
         self.svc_alice.write({'subscription_id': self.sub_alice.id})
         svc2 = self._service(self.ws_a, 'B519 svc alice 2')
+        # 包一層 savepoint：UniqueViolation 會讓整個 PG 交易進入 aborted 狀態，
+        # 不還原的話後面的 teardown 會跟著炸，紅燈的歸因就變成「teardown 壞了」。
         with self.assertRaises(IntegrityError), mute_logger('odoo.sql_db'):
-            svc2.write({'subscription_id': self.sub_alice.id})
-            self.env.flush_all()
+            with self.env.cr.savepoint(flush=False):
+                svc2.write({'subscription_id': self.sub_alice.id})
+                self.env.flush_all()
 
     def test_null_subscription_ids_do_not_collide(self):
         """陽性對照：partial index 只約束非 NULL 值。兩筆未掛訂閱的服務必須共存
