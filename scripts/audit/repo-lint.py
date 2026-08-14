@@ -3555,6 +3555,26 @@ REPO_LINT_FLOOR_FN = "repo_lint_registry_floor"
 # 手抄清單。實證：PR #608 在 .gitea/workflows/repo-lint.yml 寫「17 條 check」，而
 # 當時檔頭寫「十八個 check 函式、十六條規則」，run_all() 的通過訊息又列了 17 個
 # 名字——三份散文三個數字，#596 修完不到一天就長出第四處同型漂移。
+# 「這個 root 是不是本 addon 的原始碼樹」的判準。
+#
+# 🔴 為什麼需要它：下面這條 gate 的輸入是**整棵 src/**，而 hook 模式會被餵到不是本
+# repo 的 root——`scripts/audit/test_repo_lint_docstring_registry.py` 的 TestHookMode
+# 就是把 repo-lint.py 複製進一個臨時 root 端對端跑整支腳本（那是 #596 唯一該有的
+# 驗收：hook 分派真的接得到這個檔嗎）。在那種 root 底下「掃不到任何 src/ 檔案」會被
+# 本條的**存在性對照**判成違規，於是一個乾淨的檔案被 block。
+#
+# ⚠ 判準刻意用 `src/__manifest__.py` 而不是本條自己的錨點檔：
+#   * 真 repo 裡 manifest 一定在 ⇒ 存在性對照**全部照常生效**，即使有人把
+#     `src/models/cloud_service.py` 整個刪掉也照樣紅（那才是要抓的漂移）。
+#   * manifest 都不在的 root，本 addon 根本不存在，本條沒有輸入可談。
+#   ⇒ 這是「有沒有輸入」的前置條件，不是把判準放寬。
+_ADDON_MANIFEST_REL = "src/__manifest__.py"
+
+
+def _addon_source_tree_present(root):
+    return os.path.exists(os.path.join(root, _ADDON_MANIFEST_REL))
+
+
 PROVISION_SENTINEL_DOC = "docs/decisions/519-cloud-service-provision-gate.md"
 PROVISION_SENTINEL_DEF = "src/models/cloud_service.py"
 # 開閘符號**只准**出現在這些檔（外加 src/tests/ 整個目錄）。新增一條開閘路徑就會
@@ -3594,6 +3614,8 @@ def check_provision_sentinel_allowlist(root, only_file=None):
     依據 docs/decisions/519-cloud-service-provision-gate.md
     """
     violations = []
+    if not _addon_source_tree_present(root):
+        return violations          # 不是本 addon 的 root，本條沒有輸入（見上方註解）
     # (a) 陽性對照：定義檔必須真的有這些符號。沒有＝符號被改名／被刪，下面的掃描
     #     會一個都掃不到而恆綠——那是「探針壞掉時輸出與沒問題一模一樣」的形態。
     def_src = _read_repo_file(root, PROVISION_SENTINEL_DEF)
