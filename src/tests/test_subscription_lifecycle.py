@@ -364,11 +364,10 @@ class TestSubscriptionLifecycleMixin(TransactionCase):
             'sh_subscription_plan_id': plan.id,
         })
 
-        sub = Subscription.create(sub_vals)
-
-        # Force state (bypass normal workflow for testing)
-        if state != 'draft':
-            sub.write({'state': state})
+        # #519 提案 B：綁定守衛是 **transition guard**——綁上去的那一刻訂閱必須是
+        # in_progress。production 也是這個順序（先綁一筆生效中的訂閱，之後它才過期／
+        # 取消），所以這裡先以 in_progress 建立並綁定，最後才寫成受測的目標狀態。
+        sub = Subscription.create(dict(sub_vals, state='in_progress'))
 
         # Set additional fields. 打錯的欄位名必須大聲炸掉：靜默丟棄會讓呼叫端在
         # 「我設過 sh_end_date」的假前提下跑斷言（例如 grace period 測試實際上
@@ -382,6 +381,9 @@ class TestSubscriptionLifecycleMixin(TransactionCase):
             sub.write({key: val})
 
         entity.write({'subscription_id': sub.id})
+        # 綁好之後才落到受測狀態（含 draft——語意上等同「這筆訂閱後來變成 draft」）。
+        if state != 'in_progress':
+            sub.write({'state': state})
         return sub
 
 

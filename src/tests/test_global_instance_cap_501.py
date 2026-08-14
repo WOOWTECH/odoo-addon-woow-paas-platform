@@ -68,6 +68,7 @@ from odoo.tests.common import HttpCase, TransactionCase, tagged
 from odoo.addons.woow_paas_platform.models.cloud_app_template import SupplyGateError
 
 import json
+from ..models.cloud_service import _internal_provision
 
 MOD = 'woow_paas_platform'
 CAP_KEY = MOD + '.global_instance_cap.%s'
@@ -126,7 +127,10 @@ class _CapFixtureMixin:
             'template_id': template.id,
         }
         vals.update(extra)
-        return self.env['%s.cloud_service' % MOD].create(vals)
+        # #519：本檔用字串內插組 model 名（`'%s.cloud_service' % MOD`），
+        # PR #727 那輪的 AST 枚舉只認字面 model 名，整支 helper 因此被漏掉。
+        return _internal_provision(
+            self.env['%s.cloud_service' % MOD]).create(vals)
 
     def _fill_to_cap(self, template, cap):
         """把 template 填滿到剛好 cap 台，每台各屬不同帳號。"""

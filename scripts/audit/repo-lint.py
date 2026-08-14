@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """repo-lint：把「假綠家族」pitfall 轉成機械 gate 的靜態檢查工具。
 
-二十八個 check 函式，歸為下列二十五條規則（其中兩條各由多個函式實作：第 7 條
+三十個 check 函式，歸為下列二十七條規則（其中兩條各由多個函式實作：第 7 條
 capability-gate 由三個函式——slug 集合成員／admin-gui 錨點／gateway 文案錨點；第 22 條
 security-rule-lifecycle 由兩個函式——ir.rule 的出生地／退役名字。這個一對多關係的顯式
 映射表是 `REPO_LINT_RULES`，由第 17 條機械對帳，所以上面這兩個數字不會再靜默漂掉）。
@@ -252,6 +252,35 @@ security-rule-lifecycle 由兩個函式——ir.rule 的出生地／退役名字
                      一條宣告出來的 ir.rule」是被機械檢查的前提，見
                      `_rule_direction_anchor_violations`。
                      依據 docs/tracking/landings/556-workspace-access-authz-landing.md
+26. provision-sentinel-allowlist  #519 的 cloud_service 開閘符號
+                     （`_INTERNAL_PROVISION` / `_internal_provision` /
+                     `woow_internal_provision`）只准出現在 allowlist 列名的檔
+                     （外加 `src/tests/`）。閘的不變式是「沒有任何 RPC 呼叫端建得出
+                     cloud_service」；RPC 端偽造不了 sentinel（JSON 載不了物件身分），
+                     所以剩下**唯一**的繞法是讓平台自己的碼替攻擊者開閘——一支新的
+                     sudo'd controller 把呼叫者的 vals 往下送並開閘，閘就等於沒有，
+                     而那件事不會讓任何測試變紅，只會讓 diff 多一行。
+                     🔴 本條有兩個自身的假綠面，各配一個對照：(a) sentinel 若被改名，
+                     判準的 regex 會掃不到任何東西而恆綠 ⇒ 定義檔
+                     `src/models/cloud_service.py` 必須真的含有那幾個名字，否則本條
+                     直接紅；(b) allowlist 不准養殭屍——列了卻已經不再開閘的檔要拿掉，
+                     否則名單會慢慢長成「反正都在名單上」而失去審查意義。
+                     依據 docs/decisions/519-cloud-service-provision-gate.md
+27. sh-subscription-group-isolation  平台不得把第三方 `sh_subscription` 的
+                     `group_user_sh_subscription` / `group_manager_sh_subscription`
+                     用 `implied_ids` / `groups_id` 發給任何群組。#519 提案 B 的兩個
+                     判準（訂閱的 `sh_partner_id` 與 `state` 租戶都改不動）錨定在
+                     「租戶對 `sh.subscription.subscription` 零 ACL row」這個**第三方**
+                     前提上；那個前提被一行 `implied_ids` 破壞掉時，B 會**無聲**失效
+                     ——不會有任何測試變紅，因為 B 的測試驗的是守衛擋不擋得住，不是
+                     租戶有沒有別的路可以走。
+                     🔴 判準是**授予的形狀**不是「有沒有提到這個名字」：`_sub()` 的
+                     docstring 寫著「read ACL 只發給這兩個群組」（那是 sudo traversal
+                     存在的理由），回歸測試也具名引用它們來斷言租戶**沒有**被塞進去
+                     ——把那些判成違規會逼人刪掉守線的說明文字。反過來，本條自己的
+                     「零命中」可能是掃描範圍壞掉，所以配一個一定找得到的字串
+                     （`base.group_user`）當存在性對照。
+                     依據 docs/decisions/519-cloud-service-provision-gate.md
 
 用法：
   scripts/audit/repo-lint.py --all                # 全 repo 掃描（CI / merge 前手動）
@@ -3526,6 +3555,199 @@ REPO_LINT_FLOOR_FN = "repo_lint_registry_floor"
 # 手抄清單。實證：PR #608 在 .gitea/workflows/repo-lint.yml 寫「17 條 check」，而
 # 當時檔頭寫「十八個 check 函式、十六條規則」，run_all() 的通過訊息又列了 17 個
 # 名字——三份散文三個數字，#596 修完不到一天就長出第四處同型漂移。
+# 「這個 root 是不是本 addon 的原始碼樹」的判準。
+#
+# 🔴 為什麼需要它：下面這條 gate 的輸入是**整棵 src/**，而 hook 模式會被餵到不是本
+# repo 的 root——`scripts/audit/test_repo_lint_docstring_registry.py` 的 TestHookMode
+# 就是把 repo-lint.py 複製進一個臨時 root 端對端跑整支腳本（那是 #596 唯一該有的
+# 驗收：hook 分派真的接得到這個檔嗎）。在那種 root 底下「掃不到任何 src/ 檔案」會被
+# 本條的**存在性對照**判成違規，於是一個乾淨的檔案被 block。
+#
+# ⚠ 判準刻意用 `src/__manifest__.py` 而不是本條自己的錨點檔：
+#   * 真 repo 裡 manifest 一定在 ⇒ 存在性對照**全部照常生效**，即使有人把
+#     `src/models/cloud_service.py` 整個刪掉也照樣紅（那才是要抓的漂移）。
+#   * manifest 都不在的 root，本 addon 根本不存在，本條沒有輸入可談。
+#   ⇒ 這是「有沒有輸入」的前置條件，不是把判準放寬。
+_ADDON_MANIFEST_REL = "src/__manifest__.py"
+
+
+def _addon_source_tree_present(root):
+    return os.path.exists(os.path.join(root, _ADDON_MANIFEST_REL))
+
+
+PROVISION_SENTINEL_DOC = "docs/decisions/519-cloud-service-provision-gate.md"
+PROVISION_SENTINEL_DEF = "src/models/cloud_service.py"
+# 開閘符號**只准**出現在這些檔（外加 src/tests/ 整個目錄）。新增一條開閘路徑就會
+# 撞 gate ⇒ 強制走審查。這正是 #519 提案 A 唯一真實的殘留風險：未來某支 sudo'd
+# controller 把呼叫者 context 往下傳並自己開閘。
+PROVISION_SENTINEL_ALLOWLIST = {
+    PROVISION_SENTINEL_DEF,                      # sentinel 的定義處
+    "src/controllers/paas.py",                   # marketplace 下單
+    "src/controllers/ha_paas.py",                # HA provision（auth=none + Bearer）
+    ".claude/skills/k8s-dev-sandbox/scripts/e2e-seed-reset-button.sh",   # odoo shell seed
+}
+PROVISION_SENTINEL_ALLOW_PREFIXES = ("src/tests/",)
+# 判準的錨點。三個一起找是刻意的：只找函式名的話，把 sentinel 改名成別的字
+# （`_provision_ok` 之類）會讓整條 gate 掃不到任何東西 ⇒ 恆綠。下面的 (a) 用定義
+# 檔當陽性對照把這個假綠關掉。
+_PROVISION_SENTINEL_RE = re.compile(
+    r"_INTERNAL_PROVISION|_internal_provision|woow_internal_provision")
+
+
+_PROVISION_SENTINEL_ROOTS = ("src/", "scripts/", "extra/", ".claude/")
+_PROVISION_SENTINEL_EXTS = (".py", ".sh", ".js", ".xml")
+
+
+def _provision_sentinel_watches(rel):
+    """hook 分派判準：與 check 的掃描範圍共用同一個定義，兩者不可能分岔。"""
+    return (rel.startswith(_PROVISION_SENTINEL_ROOTS)
+            and rel.endswith(_PROVISION_SENTINEL_EXTS))
+
+
+def check_provision_sentinel_allowlist(root, only_file=None):
+    """#519 開閘符號的 allowlist：只有列名的檔（＋ src/tests/）能開閘。
+
+    A 的不可偽造性錨定在「開閘的地方就這幾處、而且每一處都被審過」。RPC 端偽造
+    不了 sentinel（JSON 載不了物件身分），所以剩下唯一的路是**讓平台自己的碼替
+    攻擊者開閘**——一支新的 sudo'd controller 把呼叫者的 vals 往下送並開閘，閘就
+    等於沒有。那件事不會讓任何測試變紅，只會讓 diff 多一行。
+    依據 docs/decisions/519-cloud-service-provision-gate.md
+    """
+    violations = []
+    if not _addon_source_tree_present(root):
+        return violations          # 不是本 addon 的 root，本條沒有輸入（見上方註解）
+    # (a) 陽性對照：定義檔必須真的有這些符號。沒有＝符號被改名／被刪，下面的掃描
+    #     會一個都掃不到而恆綠——那是「探針壞掉時輸出與沒問題一模一樣」的形態。
+    def_src = _read_repo_file(root, PROVISION_SENTINEL_DEF)
+    if def_src is None or not _PROVISION_SENTINEL_RE.search(def_src):
+        violations.append(
+            "%s：找不到 #519 的開閘符號（`_INTERNAL_PROVISION` / "
+            "`_internal_provision` / `woow_internal_provision`）。本條的判準就是這幾個"
+            "名字，錨點消失時整條 gate 會掃不到任何東西而恆綠——改名請同步改"
+            "`_PROVISION_SENTINEL_RE`，刪除請連同本條一起刪並說明（見 %s）。"
+            % (PROVISION_SENTINEL_DEF, PROVISION_SENTINEL_DOC))
+
+    exts = _PROVISION_SENTINEL_EXTS
+    if only_file:
+        files = [only_file]
+    else:
+        files = []
+        for sub in ("src", "scripts", "extra", ".claude"):
+            base = os.path.join(root, sub)
+            for dirpath, dirnames, filenames in os.walk(base):
+                dirnames[:] = [d for d in dirnames
+                               if d not in (".git", "node_modules", "__pycache__",
+                                            "worktrees")]
+                for fn in filenames:
+                    if fn.endswith(exts):
+                        files.append(os.path.join(dirpath, fn))
+    seen = set()
+    for fp in sorted(files):
+        if not os.path.exists(fp):
+            continue
+        rel = os.path.relpath(fp, root).replace(os.sep, "/")
+        if rel == REPO_LINT_SELF_REL:
+            continue                     # 本檔自己就寫著那幾個名字
+        src = None
+        with open(fp, encoding="utf-8", errors="replace") as f:
+            src = f.read()
+        if not _PROVISION_SENTINEL_RE.search(src):
+            continue
+        seen.add(rel)
+        if rel in PROVISION_SENTINEL_ALLOWLIST:
+            continue
+        if rel.startswith(PROVISION_SENTINEL_ALLOW_PREFIXES):
+            continue
+        violations.append(
+            "%s：出現 #519 的 cloud_service 開閘符號，但這個檔不在 allowlist 上。"
+            "開閘＝讓一條路徑繞過「沒有任何 RPC 呼叫端建得出 cloud_service」這條"
+            "不變式；新增開閘路徑必須顯式加進 `PROVISION_SENTINEL_ALLOWLIST` 並在 PR "
+            "裡說明為什麼那條路徑的授權是自足的（見 %s）。"
+            % (rel, PROVISION_SENTINEL_DOC))
+    # (b) allowlist 不准養殭屍：列了卻已經不再開閘的檔要拿掉，否則 allowlist 會慢慢
+    #     長成「反正都在名單上」而失去審查意義。only_file 模式看不到全 repo，跳過。
+    if not only_file:
+        for rel in sorted(PROVISION_SENTINEL_ALLOWLIST - seen):
+            violations.append(
+                "%s：列在 `PROVISION_SENTINEL_ALLOWLIST` 但檔案裡已經沒有開閘符號"
+                "（殭屍條目）。請從 allowlist 移除——名單只反映**現在真的會開閘**的"
+                "路徑才有審查價值（見 %s）。" % (rel, PROVISION_SENTINEL_DOC))
+    return violations
+
+
+SH_SUB_GROUP_DOC = "docs/decisions/519-cloud-service-provision-gate.md"
+# 第三方 sh_subscription 的兩個群組。平台**永遠不該**引用它們：一旦其中任何一個被
+# implied 給 `base.group_user` / `base.group_portal`，租戶就能直接改自己訂閱的
+# `state` / `sh_partner_id`，#519 提案 B 的兩個判準同時失效——而且是**無聲**失效。
+_SH_SUB_GROUP_NAMES = ("group_user_sh_subscription", "group_manager_sh_subscription")
+# 反向的存在性對照：這個字串在被掃的檔案裡一定找得到。找不到＝掃描範圍錯了／檔案讀
+# 不到，那時候「零命中」是探針壞掉，不是「真的沒有」。
+_SH_SUB_SCAN_CONTROL = "base.group_user"
+
+
+def check_sh_subscription_group_isolation(root, only_file=None):
+    """平台不得把 sh_subscription 的群組發給租戶群組。
+
+    #519 提案 B 的判準（訂閱的 `sh_partner_id` 與 `state` 租戶都改不動）錨定在
+    **第三方 addon 的 ACL** 上：租戶對 `sh.subscription.subscription` 零 ACL row。
+    那個前提哪天被一行 `groups_id` / implied_ids 破壞掉，B 會靜默失效——沒有任何
+    測試會紅，因為 B 的測試驗的是守衛擋不擋得住，不是租戶有沒有別的路可以走。
+    依據 docs/decisions/519-cloud-service-provision-gate.md
+    """
+    violations = []
+    if not _addon_source_tree_present(root):
+        # 同第 26 條：不是本 addon 的 root，本條沒有輸入。今天的分派條件
+        # （`rel.startswith("src/")`）剛好踩不到 TestHookMode 的合成 root，但那是
+        # 巧合不是設計——同一個陷阱擺著就會有人踩。
+        return violations
+    exts = (".xml", ".csv", ".py")
+    if only_file:
+        files = [only_file]
+    else:
+        files = []
+        for dirpath, dirnames, filenames in os.walk(os.path.join(root, "src")):
+            dirnames[:] = [d for d in dirnames if d not in ("__pycache__",)]
+            for fn in filenames:
+                if fn.endswith(exts):
+                    files.append(os.path.join(dirpath, fn))
+    control_seen = False
+    for fp in sorted(files):
+        if not os.path.exists(fp):
+            continue
+        rel = os.path.relpath(fp, root).replace(os.sep, "/")
+        with open(fp, encoding="utf-8", errors="replace") as f:
+            src = f.read()
+        if _SH_SUB_SCAN_CONTROL in src:
+            control_seen = True
+        # 判準是**授予的形狀**（`implied_ids` / `groups_id` 與群組名同一行），不是
+        # 「有沒有提到這個名字」。單純提到它的地方全都是本條想要的紀律，不是違規：
+        # `subscription_lifecycle_mixin._sub()` 的 docstring 就寫著「read ACL 只發給
+        # 這兩個群組」（那正是 sudo traversal 存在的理由），而
+        # `test_subscription_mixin_cascade_sudo_29` 具名引用它們來斷言租戶**沒有**被
+        # 塞進去。把那些判成違規會逼人刪掉守線的說明文字。
+        # ⚠ 已知限制：`implied_ids` 與群組名被寫成跨行時掃不到。真實的授予寫法
+        # （`eval="[(4, ref('...'))]"` 單行、`groups_id = [(4, ...)]` 單行）都在同一行。
+        for line_no, line in enumerate(src.splitlines(), 1):
+            if not ("groups_id" in line or "implied_ids" in line):
+                continue
+            for name in _SH_SUB_GROUP_NAMES:
+                if name in line:
+                    violations.append(
+                        "%s:%d：引用了第三方 sh_subscription 的群組 `%s`。#519 提案 B "
+                        "的兩個判準（訂閱的 sh_partner_id 與 state 租戶都改不動）錨定在"
+                        "「租戶對 sh.subscription.subscription 零 ACL」上——把這個群組"
+                        "發給租戶群組會讓 B **無聲**失效（沒有任何測試會紅）。真的需要"
+                        "的話請在 PR 裡說明並同步重評 B（見 %s）。"
+                        % (rel, line_no, name, SH_SUB_GROUP_DOC))
+    # 探針壞掉時輸出與「真的沒問題」一模一樣 ⇒ 用一個一定找得到的字串當存在性對照。
+    if not only_file and not control_seen:
+        violations.append(
+            "scripts/audit/repo-lint.py：`check_sh_subscription_group_isolation` 掃了 "
+            "%d 個檔卻連 `%s` 都沒看到 —— 掃描範圍壞了，這條的「零命中」是假的。"
+            % (len(files), _SH_SUB_SCAN_CONTROL))
+    return violations
+
+
 REPO_LINT_RULES = {
     "controller-sudo": ("check_controller_sudo",),
     "owl-template": ("check_owl_template",),
@@ -3555,6 +3777,8 @@ REPO_LINT_RULES = {
     "workspace-access-rule-directions": ("check_workspace_access_rule_directions",),
     "one-time-credential-render": ("check_one_time_credential_render",),
     "workspace-rule-directions": ("check_workspace_rule_directions",),
+    "provision-sentinel-allowlist": ("check_provision_sentinel_allowlist",),
+    "sh-subscription-group-isolation": ("check_sh_subscription_group_isolation",),
 }
 
 # 刻意不掛 hook 分派的 check：{函式名: 理由}。現況是空的（每一條都掛得到 hook）。
@@ -3978,7 +4202,9 @@ def run_all(root):
                   + check_retired_rule_xmlid(root)
                   + check_workspace_access_rule_directions(root)
                   + check_one_time_credential_render(root)
-                  + check_workspace_rule_directions(root))
+                  + check_workspace_rule_directions(root)
+                  + check_provision_sentinel_allowlist(root)
+                  + check_sh_subscription_group_isolation(root))
     if violations:
         print("repo-lint：%d 個違規" % len(violations))
         for v in violations:
@@ -4091,6 +4317,16 @@ def run_hook():
         # ⇒ 不做 only_file 切片，動到任一份就整條重算（同 ladder／availability）。
         one_time_cred = (check_one_time_credential_render(root)
                          if rel in ONE_TIME_CRED_FILES else [])
+        # #519：開閘 allowlist 是**跨檔**不變式（allowlist ↔ 符號實際出現的位置），
+        # 而且它的第二個判準——allowlist 有沒有養殭屍條目——只有全 repo 掃得出來
+        # ⇒ 不做 only_file 切片，動到任何一個受監看的檔就整條重算。
+        provision = (check_provision_sentinel_allowlist(root)
+                     if _provision_sentinel_watches(rel) else [])
+        # #519 提案 B：判準是「全 repo 都不准出現那兩個群組名」＋一個存在性對照，
+        # 兩者都要全 repo 掃才成立 ⇒ 不做 only_file 切片。
+        sh_sub_groups = (check_sh_subscription_group_isolation(root)
+                         if rel.startswith("src/")
+                         and rel.endswith((".xml", ".csv", ".py")) else [])
         if re.match(r"^src/controllers/.*\.py$", rel):
             violations = check_controller_sudo(root, only_file=abs_path)
             violations += check_reuse_values(root, only_file=abs_path)
@@ -4143,7 +4379,7 @@ def run_hook():
             # 跨檔不變式本身 ⇒ 不做 only_file 切片，動到任一份就整條重算。
             violations = check_kubectl_ns_whitelist_sync(root)
         elif (ladder or availability or poll_facts or anchors or floor
-                or security_rules or one_time_cred):
+                or security_rules or one_time_cred or provision or sh_sub_groups):
             # extra/paas-operator/** 與 docs/tracking/pitfalls/** 不在上面任何分支，
             # 但前者持有階梯的內層常數、後者是 doc-symbol-anchor 的一半輸入；
             # baselines/repo-lint-registry.txt（floor 的另一份輸入）與
@@ -4159,6 +4395,8 @@ def run_hook():
         violations += floor
         violations += security_rules
         violations += one_time_cred
+        violations += provision
+        violations += sh_sub_groups
         if violations:
             print(json.dumps({
                 "decision": "block",

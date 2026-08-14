@@ -234,6 +234,22 @@ class _CloudService676Fixture(HttpCase):
             'cloud_service', text,
             msg + '（歸因：擋下來的必須是 cloud_service 這一層，回 %r）' % result)
 
+    def _assert_provision_gate_denied(self, result, msg):
+        """斷言被 **#519 的建立閘**擋下，而不是被 #676 的 ir.rule 擋下。
+
+        `create` 這一格在 #519 之後換了守門人：閘在 `CloudService.create()` 的
+        第一行，比 `super().create()` 裡的 `check_access('create')` 更早 ⇒ 對
+        **任何** RPC 呼叫端（含 owner／admin）都是拒絕，而且歸因是閘不是 rule。
+        分辨得出來才有意義——`_assert_cloud_service_rule_denied` 在這裡會綠得
+        毫無資訊（兩者都是 AccessError 家族）。
+        """
+        self.assertIn('error', result, msg + '（沒有被擋，回 %r）' % result)
+        text = self._error_text(result)
+        self.assertIn('ProvisionGateError', text,
+                      msg + '（歸因：必須是 #519 的建立閘，回 %r）' % text)
+        self.assertIn('開通流程', text,
+                      msg + '（歸因：訊息必須可分辨，回 %r）' % text)
+
     def _assert_ok(self, result, msg):
         self.assertNotIn('error', result, msg + '（回 %r）' % result)
 
@@ -270,69 +286,72 @@ class TestCloudServiceWriteAuthz676(_CloudService676Fixture):
     # ---------------------------------------------------------------- #
     #  陽性對照——先證明這些操作在 owner/admin 身分下真的做得到           #
     # ---------------------------------------------------------------- #
-    def test_A9_admin_can_write_create_unlink(self):
-        """admin 四方向全通。**這是 A1-A6 的陽性對照**：沒有它，那六條的
-        AccessError 可能來自欄位不存在／記錄不存在／constraint，而不是 rule。
+    def _assert_can_read_write_unlink(self, login, label):
+        """read / write / unlink 三方向全通。**這是 A1-A6 的陽性對照**：沒有它，
+        那六條的 AccessError 可能來自欄位不存在／記錄不存在／constraint，而不是
+        rule。
+
+        ⚠ `create` 不在這裡（#519 之後那一格對誰都不通，見
+        `test_A11_*`）。unlink 的主體因此改用**伺服器端**（開閘 helper）建立的
+        service——原本是「自己經 RPC 建一筆再刪掉」，那條路關掉之後若不補主體，
+        unlink 的陽性對照會連同 create 一起消失，A3／A6 的綠燈就退化成「攻擊被擋」
+        與「這條路徑本來就不通」分不出來。
         """
-        self.authenticate(self.dave_login, self.dave_login)
-
-        read = self._call_kw(
-            'woow_paas_platform.cloud_service', 'read',
-            [[self.svc.id], ['name']])
-        self._assert_ok(read, 'admin 必須讀得到')
-
-        written = self._call_kw(
-            'woow_paas_platform.cloud_service', 'write',
-            [[self.svc.id], {'name': 'renamed by admin'}])
-        self._assert_ok(written, 'admin 必須寫得動')
-        self.assertEqual(self.svc.sudo().name, 'renamed by admin',
-                         'admin 的寫入必須真的落地（不是被吞掉回 True）')
-
-        created = self._call_kw(
-            'woow_paas_platform.cloud_service', 'create',
-            [{'name': 'created by admin', 'workspace_id': self.w1.id,
-              'template_id': self.template.id}])
-        self._assert_ok(created, 'admin 必須建得起來')
-        new_id = created['result']
-        self.assertTrue(
-            self.Service.sudo().browse(new_id).exists(),
-            'admin 建立的記錄必須真的存在')
-
-        removed = self._call_kw(
-            'woow_paas_platform.cloud_service', 'unlink', [[new_id]])
-        self._assert_ok(removed, 'admin 必須刪得掉')
-        self.assertFalse(
-            self.Service.sudo().browse(new_id).exists(),
-            'admin 的刪除必須真的落地')
-
-    def test_A10_owner_can_write_create_unlink(self):
-        """owner 四方向全通（同上，另一個陽性對照身分）。"""
-        self.authenticate(self.alice_login, self.alice_login)
+        disposable = self._service(self.template, self.w1,
+                                   'Svc disposable %s 676' % label)
+        self.authenticate(login, login)
 
         self._assert_ok(
             self._call_kw('woow_paas_platform.cloud_service', 'read',
                           [[self.svc.id], ['name']]),
-            'owner 必須讀得到')
+            '%s 必須讀得到' % label)
 
         written = self._call_kw(
             'woow_paas_platform.cloud_service', 'write',
-            [[self.svc.id], {'name': 'renamed by owner'}])
-        self._assert_ok(written, 'owner 必須寫得動')
-        self.assertEqual(self.svc.sudo().name, 'renamed by owner',
-                         'owner 的寫入必須真的落地')
-
-        created = self._call_kw(
-            'woow_paas_platform.cloud_service', 'create',
-            [{'name': 'created by owner', 'workspace_id': self.w1.id,
-              'template_id': self.template.id}])
-        self._assert_ok(created, 'owner 必須建得起來')
-        new_id = created['result']
+            [[self.svc.id], {'name': 'renamed by %s' % label}])
+        self._assert_ok(written, '%s 必須寫得動' % label)
+        self.assertEqual(self.svc.sudo().name, 'renamed by %s' % label,
+                         '%s 的寫入必須真的落地（不是被吞掉回 True）' % label)
 
         removed = self._call_kw(
-            'woow_paas_platform.cloud_service', 'unlink', [[new_id]])
-        self._assert_ok(removed, 'owner 必須刪得掉')
-        self.assertFalse(self.Service.sudo().browse(new_id).exists(),
-                         'owner 的刪除必須真的落地')
+            'woow_paas_platform.cloud_service', 'unlink', [[disposable.id]])
+        self._assert_ok(removed, '%s 必須刪得掉' % label)
+        self.assertFalse(
+            self.Service.sudo().browse(disposable.id).exists(),
+            '%s 的刪除必須真的落地' % label)
+
+    def test_A9_admin_can_write_and_unlink(self):
+        self._assert_can_read_write_unlink(self.dave_login, 'admin')
+
+    def test_A10_owner_can_write_and_unlink(self):
+        self._assert_can_read_write_unlink(self.alice_login, 'owner')
+
+    def test_A13_even_owner_and_admin_cannot_create_over_rpc(self):
+        """#519：`create` 對**任何** RPC 呼叫端都不通，不論身分。
+
+        這條原本藏在 A9／A10 裡當「admin／owner 建得起來」的陽性對照。#519 把那個
+        能力拿掉了——不變式換了，測試的價值不是消失而是反轉：現在要證明的是**連
+        這兩個最有權限的身分都擋**。擋 guest 證不了這件事（A2／A5 已覆蓋 guest）。
+        """
+        for login, label in ((self.dave_login, 'admin'),
+                             (self.alice_login, 'owner')):
+            with self.subTest(role=label):
+                self.authenticate(login, login)
+                name = 'created by %s 676' % label
+                # 可達性（自帶）：同一身分、同一條 RPC 路徑上有一個會成功的呼叫。
+                self._assert_ok(
+                    self._call_kw('woow_paas_platform.cloud_service', 'write',
+                                  [[self.svc.id], {'name': 'reachable %s' % label}]),
+                    '可達性前提：%s 對這筆服務寫得動' % label)
+                result = self._call_kw(
+                    'woow_paas_platform.cloud_service', 'create',
+                    [{'name': name, 'workspace_id': self.w1.id,
+                      'template_id': self.template.id}])
+                self._assert_provision_gate_denied(
+                    result, '%s 也不得經 RPC 建立 cloud_service' % label)
+                self.assertFalse(
+                    self.Service.sudo().search([('name', '=', name)]),
+                    '「沒有 raise」與「沒有寫進去」是兩件事，這裡驗後者')
 
     # ---------------------------------------------------------------- #
     #  guest —— 讀得到、寫不動                                           #
@@ -368,14 +387,22 @@ class TestCloudServiceWriteAuthz676(_CloudService676Fixture):
                          '值不得落地（被擋卻仍寫進去＝守衛在 super() 之後）')
 
     def test_A2_guest_cannot_create(self):
+        """#519 之後這一格的守門人是建立閘，不是 #676 的 rule（見
+        `_assert_provision_gate_denied` 的說明）。"""
         self.authenticate(self.gary_login, self.gary_login)
+        # 可達性（自帶）：同一身分、同一條 RPC 路徑上有一個會成功的呼叫。少了它，
+        # 下面的「被擋」可能只是身分／路徑根本不通。
+        self._assert_ok(
+            self._call_kw('woow_paas_platform.cloud_service', 'read',
+                          [[self.svc.id], ['name']]),
+            '可達性前提：guest 必須讀得到這筆服務')
         before = self.Service.sudo().search_count(
             [('workspace_id', '=', self.w1.id)])
         result = self._call_kw(
             'woow_paas_platform.cloud_service', 'create',
             [{'name': 'created by guest', 'workspace_id': self.w1.id,
               'template_id': self.template.id}])
-        self._assert_cloud_service_rule_denied(
+        self._assert_provision_gate_denied(
             result, 'guest 不得建立 cloud_service')
         self.assertEqual(
             self.Service.sudo().search_count([('workspace_id', '=', self.w1.id)]),
@@ -434,7 +461,7 @@ class TestCloudServiceWriteAuthz676(_CloudService676Fixture):
             'woow_paas_platform.cloud_service', 'create',
             [{'name': 'created by user', 'workspace_id': self.w1.id,
               'template_id': self.template.id}])
-        self._assert_cloud_service_rule_denied(
+        self._assert_provision_gate_denied(
             result, 'role=user 不得建立 cloud_service')
         self.assertEqual(
             self.Service.sudo().search_count([('workspace_id', '=', self.w1.id)]),
