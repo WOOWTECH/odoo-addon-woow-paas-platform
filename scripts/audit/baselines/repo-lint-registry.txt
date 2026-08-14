@@ -26,6 +26,7 @@
 1	fn:check_reuse_values
 1	fn:check_security_rule_noupdate
 1	fn:check_seed_topology
+1	fn:check_sh_subscription_group_isolation
 1	fn:check_slug_capability_gate
 1	fn:check_test_env_restore
 1	fn:check_transition_anchor_utc
@@ -53,6 +54,7 @@
 1	rule:reuse-values
 1	rule:security-rule-lifecycle
 1	rule:seed-topology
+1	rule:sh-subscription-group-isolation
 1	rule:test-env-restore
 1	rule:transition-anchor-utc
 1	rule:workspace-access-rule-directions

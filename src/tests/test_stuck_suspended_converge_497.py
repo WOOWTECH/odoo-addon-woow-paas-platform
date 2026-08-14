@@ -475,12 +475,15 @@ class TestLifecycleCronResumesHaltedRows497(_Base):
             'sh_partner_id': self.env.user.partner_id.id,
             'product_id': product_tmpl.product_variant_id.id,
             'sh_subscription_plan_id': plan.id,
-            'state': state,
+            # #519 提案 B：綁定當下必須是 in_progress（transition guard）；
+            # production 也是先綁生效中的訂閱、之後它才過期。
+            'state': 'in_progress',
             'sh_start_date': date.today() - timedelta(days=30),
             'sh_end_date': date.today() + timedelta(days=30),
         })
-        sub.write({'state': state})
         entity.write({'subscription_id': sub.id})
+        if state != 'in_progress':
+            sub.write({'state': state})
         return sub
 
     def test_cron_resumes_a_row_whose_state_was_polluted(self):
