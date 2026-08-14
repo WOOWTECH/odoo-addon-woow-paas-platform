@@ -12,6 +12,26 @@ install_modules: [base, web, woow_paas_platform]
 db_prefix: woow_
 post_create_hook: .sandbox/post-create.sh
 
+# kubectl context 值域白名單（#32 / #722）——「這個 context 是不是這次任務該用的那一個」。
+# 既有守衛只驗可用性（存在於 kubeconfig、連得上），而 docker-desktop 兩關全過卻是 stg
+# 部署最不該打的叢集。這份宣告由本 repo 擁有（plugin 是通用工具，不得內建叢集名）。
+#
+# 值的推導方式，不要照抄結論：**問這個模式的 artifact 來源是不是綁在某個 node 上**。
+#   local     hostPath 掛本機 src/ ⇒ 只有本機 node 看得到 ⇒ 綁 docker-desktop
+#   ci-local  程式碼打進 image ⇒ 任何叢集都拉得到 ⇒ 兩邊都合法
+#             （#433 就是在 woow-k3s 跑 ci-local 全套測試，見
+#              docs/guides/testing/odoo-sandbox-ci-local-two-track-test.md）
+#   stg       staging 只有一個目的地
+# 無後綴的那筆是 fallback：給沒有 mode 概念的任務（destroy / shell / logs / status /
+# test / extend / onboard）用，語義是「這個 repo 認得的叢集」。
+#
+# 鍵名打錯會讓守衛靜默失效，故 plugin 對近似鍵 fail-loud。要臨時打別的叢集：
+# SANDBOX_ALLOW_ANY_KUBE_CONTEXT=1（會大聲警告），不要偷改這份清單。
+allowed_kube_contexts: [docker-desktop, woow-k3s]
+allowed_kube_contexts_local: [docker-desktop]
+allowed_kube_contexts_ci_local: [docker-desktop, woow-k3s]
+allowed_kube_contexts_stg: [woow-k3s]
+
 # local 模式第三方相依 addon 來源：__manifest__.py depends 含 6 個非核心 addon
 # （ai_base_gt / odoo_ai_assistant_chatgpt_connector / sh_subscription* /
 #   payment_ecpay_ecpg / ecpay_invoice_tw），不在本 repo 內。值由 ${VAR} 從 onboarding
