@@ -68,13 +68,18 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-if [ -n "$KUBE_CONTEXT" ]; then
-    kubectl config use-context "$KUBE_CONTEXT" >/dev/null
-fi
-
 # --- 自動偵測 sandbox slug（同 e2e-seed.sh）---
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
+
+# #32：這支原本連「context 存不存在」都沒驗，直接 use-context 未經檢查的輸入，是三處
+# 裡最弱的一份。改走共用守衛（驗存在 + 值域白名單 + kubeconfig 隔離）。
+# 註：PROJECT_ROOT 的計算被搬到此區塊之前 —— 守衛要用它找 .sandbox.yml。
+# shellcheck source=../../lib/kube-context.sh
+source "${PROJECT_ROOT}/.claude/skills/lib/kube-context.sh"
+if [ -n "$KUBE_CONTEXT" ]; then
+    wk_require_context "$KUBE_CONTEXT" e2e-seed "$PROJECT_ROOT" || exit 2
+fi
 
 if [ -z "$SLUG" ]; then
     BRANCH=$(git -C "$PROJECT_ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
