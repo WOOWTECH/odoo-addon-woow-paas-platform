@@ -78,29 +78,9 @@ A 關掉的是「誰能建」，關不掉「已合法建立的 service 事後把
 
 ### 不變式
 
-> 任一 cloud_service 的 `subscription_id` **在綁上去的那一刻**必然是一筆
-> `sh_partner_id == workspace_id.owner_id.partner_id` 且 `state='in_progress'`
-> 的訂閱；且一筆訂閱最多被一筆 cloud_service 指向。
-
-### 🔴 這是 transition guard，不是常駐不變式（實作時修正的一格）
-
-原始評估把 B 寫成「任一 cloud_service 的 `subscription_id` **必然**是一筆
-`in_progress` 訂閱」。**那個寫法在今天的碼上是錯的**：訂閱到期／關閉之後仍然合法
-地綁在服務上——`_cron_enforce_subscription_lifecycle` 正是靠「找得到指向已過期訂閱
-的服務」才做得到停權。寫成常駐不變式的實作會把「訂閱已到期但服務還在停權流程裡」
-這個**正常狀態**判成違規，而且它會在最不該紅的地方紅（停權流程自己）。
-
-⇒ 狀態這一格只在**綁定真的改變的那一次**檢查。判別式是「讓一筆已到期的訂閱留在
-原位再寫一次同值，必須不被擋」（§9 的 B5，實作在
-`test_cloud_service_subscription_binding_519.py::test_B5_*`）。
-
-### 另一格：解除綁定一律拒絕
-
-`_cron_enforce_subscription_lifecycle` 的 domain 是 `subscription_id != False`
-⇒ 把指標清空不是「回到未開通狀態」，是**永久脫離生命週期管理**（停權／結算都再也
-摸不到它）。全 repo 只有兩處寫這個欄位，都是指向新訂閱，沒有任何合法路徑會清空它。
-（尚未掛訂閱的服務寫 `False` 不算解除綁定——marketplace 下單流程在建立與掛訂閱之間
-就處在那個狀態。）
+> 一筆 `state='in_progress'` 的 `sh.subscription.subscription` 最多只能被一筆
+> cloud_service 指向；且任一 cloud_service 的 `subscription_id` 必然是一筆
+> `sh_partner_id == workspace_id.owner_id.partner_id` 的訂閱。
 
 ### 洞怎麼來的
 
@@ -135,19 +115,6 @@ draft 轉 `in_progress`。
 advisory lock **不會**刷新 snapshot ⇒ check-after-act 在並發下無效（那正是
 `max_per_partner` 至今仍可繞的原因，#518）。而「一筆訂閱至多對應一筆 service」正好
 就是 partial unique index 表達得出的「至多一列」。
-
-**索引由 `CloudService.init()` 建，不是由 migration 建**（實作時修正的第二格）：
-原始評估寫「B 因此需要一支 migration」，但本 model 已有同款先例——
-`provision_partner_id` 的 partial unique index 就掛在 `init()` 裡，`CREATE UNIQUE
-INDEX IF NOT EXISTS` 是 Odoo 原生 hook、每次 install / `-u` 自動跑、冪等，同時涵蓋
-新裝與升級兩條路徑。migration 仍然需要，但它的職責只有一件事：**在那句 SQL 之前先
-偵測既有重複列**，把 `psycopg2.UniqueViolation`（讀不出是哪幾筆）換成講得清楚的
-錯誤。
-
-migration 刻意 `raise` 而不是「偵測到重複就跳過建索引」：跳過的話升級會成功、索引
-靜默不存在，於是**大家都以為並發保護在那裡、其實不在**——那正是本輪要修掉的假綠
-形態。⚠ 這代表**有重複列的環境升級會停住**，是刻意的取捨；PR 內附維運用的偵測
-查詢。
 
 ## 被實查否決的四種形狀（省下下一個人的試錯）
 
