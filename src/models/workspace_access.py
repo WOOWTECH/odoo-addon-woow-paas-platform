@@ -343,23 +343,88 @@ class WorkspaceAccess(models.Model):
             "access row (workspace %s)." % rec.workspace_id.id
         )
 
+    @api.model
+    def _check_caller_owns_transfer(self, rec):
+        """(#583) 授權閘：呼叫者必須是**這個 workspace 的 owner**，且操作的是他
+        自己那一列。判準取自 `env.uid` 反查出來的 access 列，**不從被操作的記錄
+        推導**。
+
+        原本的守衛是 `if rec.role != ROLE_OWNER: raise ValidationError(...)` ——
+        `rec` 是呼叫端指定的 access 列，攻擊者只要挑一筆 `role == 'owner'` 的記錄
+        （也就是現任 owner 自己那筆）當 `self`，守衛就通過；它從頭到尾沒有問過
+        `env.user` 是誰。⚠ **它讀起來完全像一個正確的守衛**，這是它活到現在的原因。
+
+        真 RPC 實證（2026-08-14，`origin/develop` f55eccc6）：固定 payload
+        `transfer_ownership([owner 那筆], <不存在的 uid>)`，guest / admin / owner
+        三種身分的回應**逐字相同**（都倒在後段的 new_owner 商業驗證）⇒ 舊守衛對
+        呼叫者身分的鑑別力是 **0**。行為守線見
+        `src/tests/test_workspace_transfer_ownership_authz_583.py` 的
+        `TestTransferOwnershipGateIsCallerScoped`（三條共用同一 payload、只換身分）。
+
+        三個設計選擇，都刻意與本檔既有兩道守衛（`_check_assignable_role` /
+        `_check_owner_row_protected`）對齊，不要各自漂：
+
+        1. **用 `sudo()` 查呼叫者那一列**。授權閘的強度等於它依賴項的最弱保護——
+           若改用呼叫者自己的讀取權限去查，這道閘就會隨 `ir.rule` 的鬆緊而變，
+           而 rule 的收窄／放寬是另一條演進線。`_check_owner_row_protected` 用的
+           也是 `self.sudo().search`。
+        2. **`rec` 必須就是呼叫者自己那一列**。owner 拿別人的 access 列來當 `self`
+           不是合法流程（語意是「我把我的 owner 身分交出去」），放行只會讓下面那段
+           降級／升級的配對錯位、最後撞 `_check_owner_count` 拋出一個與授權無關的
+           ValidationError。
+        3. **豁免 `is_superuser()` 與 `base.group_system`**。這屬於
+           scope-flip-write-guard 家族（有合法變更路徑、只需要設閘），不是
+           su-env-exempt-guard 家族（根本沒有合法路徑）——理由與
+           `_check_assignable_role` docstring 那段相同。`group_system` 本來就有
+           `workspace_access_rule_admin_full` 的全 CRUD，走直接 write 也做得到同樣
+           的事，在這裡擋它只會製造一道繞得過去的假防線。
+        """
+        if self.env.is_superuser():
+            return
+        if self.env.user.has_group('base.group_system'):
+            return
+        # sudo：閘門不依賴呼叫者的讀取權限（理由見 docstring 第 1 點）。
+        # `rec.id` 不觸發讀取，所以非成員也走得到這裡、由本閘門 fail closed，
+        # 而不是靠 ir.rule 碰巧先擋下來。
+        workspace_id = rec.sudo().workspace_id.id
+        caller_access = self.sudo().search([
+            ('workspace_id', '=', workspace_id),
+            # env.uid，不是 context：call_kw 讓呼叫者整包替換 context
+            # （`odoo/api.py::call_kw` 是 with_context(context) 位置參數、非 merge），
+            # 從 context 取身分等於讓攻擊者自己填。
+            ('user_id', '=', self.env.uid),
+        ], limit=1)
+        if (caller_access
+                and caller_access.role == ROLE_OWNER
+                and caller_access.id == rec.id):
+            return
+        raise AccessError(
+            "Only the workspace owner may transfer ownership, and only from "
+            "their own access row (workspace %s)." % workspace_id
+        )
+
     def transfer_ownership(self, new_owner_id: int) -> None:
         """Transfer ownership to another user.
 
         ⚠ **死碼，且對非 superuser 呼叫者已經壞了**（#556 landing doc 的 Not-in-scope
-        段落已記載，#658 複驗仍成立）：`src/` 裡沒有任何 controller／OWL 呼叫它。
-        壞在下面連續兩次 write 的順序——第一次把呼叫者自己那列降成 admin，第二次
-        要指派 `owner` 時 `_check_assignable_role` 查到的 grantor 已經是 admin，而
-        `ASSIGNABLE_ROLES_BY_ROLE['admin']` 不含 `'owner'` ⇒ AccessError。
+        段落已記載，#658 複驗仍成立，#583 的可達性實證再次復現）：`src/` 裡沒有任何
+        controller／OWL 呼叫它。壞在下面連續兩次 write 的順序——第一次把呼叫者自己
+        那列降成 admin，第二次要指派 `owner` 時 `_check_assignable_role` 查到的
+        grantor 已經是 admin，而 `ASSIGNABLE_ROLES_BY_ROLE['admin']` 不含 `'owner'`
+        ⇒ AccessError。
 
         #658 又多了一道：最後那行 `self.workspace_id.write({'owner_id': ...})` 會撞
         `Workspace.write()` 的 owner_id identity anchor。**這不是本方法今天壞掉的
         原因**（它在 #658 之前就已經走不到那一行了），但要復活這條方法時兩道都要處理：
         整段改走 `sudo()`，或重新設計成單一 atomic 呼叫。不要只修其中一道。
+
+        ⚠ #583 只修**授權閘**（`_check_caller_owns_transfer`），刻意**不**順手修上面
+        那兩道功能性缺陷——「復活它還是刪掉它」是產品決策。因此本方法今天對合法
+        owner 仍然走不完；閘門本身的正確性由行為測試獨立守住（見
+        `_check_caller_owns_transfer` 的 docstring）。
         """
         self.ensure_one()
-        if self.role != ROLE_OWNER:
-            raise ValidationError('Only the current owner can transfer ownership.')
+        self._check_caller_owns_transfer(self)
 
         new_owner_access = self.search([
             ('workspace_id', '=', self.workspace_id.id),
