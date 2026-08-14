@@ -371,3 +371,4 @@ from . import test_project_cs_m2m_authz_698
 # F6＝cross-project move 不觸發守衛的真正理由是 key gate（HttpCase，全走 call_kw）
 from . import test_project_cs_m2m_authz_705
 from . import test_cloud_service_provision_gate_519
+from . import test_cloud_service_subscription_binding_519
