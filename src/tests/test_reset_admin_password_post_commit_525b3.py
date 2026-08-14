@@ -39,6 +39,7 @@ from odoo.tests.common import TransactionCase, tagged
 
 from odoo.addons.woow_paas_platform.controllers.paas import PaasController
 from odoo.addons.woow_paas_platform.models.cloud_service import CloudService
+from ..models.cloud_service import _internal_provision
 
 _OPERATOR_CLIENT = (
     'odoo.addons.woow_paas_platform.services.paas_operator.'
@@ -71,9 +72,9 @@ class TestResetAdminPasswordPostCommit525B3(TransactionCase):
             # admin_password 供給鏈的閘門（#357 C01）：controller 的 400 閘也讀它
             'has_admin_gui': True,
         })
-        self.service = self.env['woow_paas_platform.cloud_service'].with_context(
+        self.service = _internal_provision(self.env['woow_paas_platform.cloud_service'].with_context(
             mcp_admin_password=_OLD_PASSWORD,
-        ).create({
+        )).create({
             'name': 'Reset Post-commit Svc',
             'workspace_id': self.workspace.id,
             'template_id': self.template.id,

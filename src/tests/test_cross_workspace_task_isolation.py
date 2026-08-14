@@ -31,6 +31,7 @@ The own-workspace path must keep working (sanity).
 """
 from odoo.tests.common import TransactionCase
 from odoo.exceptions import AccessError
+from ..models.cloud_service import _internal_provision
 
 
 class TestTaskCrossWorkspaceACL(TransactionCase):
@@ -83,7 +84,7 @@ class TestTaskCrossWorkspaceACL(TransactionCase):
         # Bob's W2 has a bound project + one task. Default privacy_visibility
         # on project is 'employees' (Odoo std), which is exactly the value
         # the std task_visibility_rule's leak leg matches.
-        self.svc_bob = Service.sudo().create({
+        self.svc_bob = _internal_provision(Service.sudo()).create({
             'name': 'Svc Bob (B1)',
             'workspace_id': self.ws_bob.id,
             'template_id': self.template.id,

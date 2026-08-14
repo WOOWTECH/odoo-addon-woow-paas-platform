@@ -13,6 +13,7 @@ AssertionError (B can see A's unbound project — the bug we are fixing).
 """
 from odoo.tests.common import TransactionCase
 from odoo.exceptions import ValidationError, AccessError
+from ..models.cloud_service import _internal_provision
 
 
 class TestProjectDecouple(TransactionCase):
@@ -36,7 +37,7 @@ class TestProjectDecouple(TransactionCase):
             'min_ram_gb': 1.0,
             'min_storage_gb': 1,
         })
-        self.service = self.Service.create({
+        self.service = _internal_provision(self.Service).create({
             'name': 'Service Decouple',
             'workspace_id': self.workspace.id,
             'template_id': self.template.id,
@@ -143,7 +144,7 @@ class TestProjectUnboundACL(TransactionCase):
             'min_ram_gb': 1.0,
             'min_storage_gb': 1,
         })
-        self.service = self.Service.sudo().create({
+        self.service = _internal_provision(self.Service.sudo()).create({
             'name': 'Svc Shared Decouple',
             'workspace_id': self.workspace.id,
             'template_id': self.template.id,

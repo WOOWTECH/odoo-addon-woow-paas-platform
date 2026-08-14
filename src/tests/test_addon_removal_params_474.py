@@ -24,6 +24,7 @@ import json
 from unittest.mock import MagicMock, patch
 
 from odoo.tests.common import HttpCase, tagged
+from ..models.cloud_service import _internal_provision
 
 # 端點取 client 的名字是在 controller 模組的 namespace 上解析的（``from ..services
 # .paas_operator import get_paas_operator_client``），patch services 那一側對它無效。
@@ -50,7 +51,7 @@ class _AddonRemovalCase(HttpCase):
             'name': 'WS 474', 'owner_id': self.admin_user.id})
         self.addon = self.env['woow_paas_platform.cloud_odoo_addon'].create({
             'name': 'Sales 474', 'technical_name': _TECH_NAME})
-        self.svc = self.env['woow_paas_platform.cloud_service'].create({
+        self.svc = _internal_provision(self.env['woow_paas_platform.cloud_service']).create({
             'workspace_id': self.ws.id, 'template_id': self.tpl.id,
             'name': 'svc-474', 'reference_id': 'test-474',
             'state': self.service_state, 'subdomain': 'svc-474',

@@ -11,6 +11,7 @@ import json
 from unittest.mock import patch
 
 from odoo.tests.common import TransactionCase
+from ..models.cloud_service import _internal_provision
 
 
 class _ContextFixture:
@@ -36,13 +37,13 @@ class _ContextFixture:
             'helm_chart_version': '1.0.0',
             'min_vcpu': 1, 'min_ram_gb': 1.0, 'min_storage_gb': 1,
         })
-        self.svc_primary = Service.sudo().create({
+        self.svc_primary = _internal_provision(Service.sudo()).create({
             'name': 'Primary Svc',
             'workspace_id': self.workspace.id,
             'template_id': self.template.id,
             'subdomain': 'primary-svc',
         })
-        self.svc_extra = Service.sudo().create({
+        self.svc_extra = _internal_provision(Service.sudo()).create({
             'name': 'Extra Svc',
             'workspace_id': self.workspace.id,
             'template_id': self.template.id,
@@ -141,7 +142,7 @@ class TestAgentContextServices(TransactionCase, _ContextFixture):
 
     def test_services_capped_at_five(self):
         Service = self.env['woow_paas_platform.cloud_service']
-        extras = Service.sudo().create([{
+        extras = _internal_provision(Service.sudo()).create([{
             'name': f'Bulk Svc {i}',
             'workspace_id': self.workspace.id,
             'template_id': self.template.id,
@@ -262,7 +263,7 @@ class TestAgentContextBudget(TransactionCase, _ContextFixture):
     def test_over_budget_drops_config_first(self):
         # 1500+1500 desc caps + many services push > 8000 with configs
         Service = self.env['woow_paas_platform.cloud_service']
-        extras = Service.sudo().create([{
+        extras = _internal_provision(Service.sudo()).create([{
             'name': f'Budget Svc {i}',
             'workspace_id': self.workspace.id,
             'template_id': self.template.id,

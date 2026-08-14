@@ -3,6 +3,7 @@ import json
 from unittest.mock import patch, MagicMock
 
 from odoo.tests.common import HttpCase, TransactionCase
+from ..models.cloud_service import _internal_provision
 
 
 class TestCloudAPI(HttpCase):
@@ -84,7 +85,7 @@ class TestCloudAPI(HttpCase):
 
     def test_create_service(self):
         """Test creating a service via model."""
-        service = self.Service.create({
+        service = _internal_provision(self.Service).create({
             'name': 'Test Service',
             'workspace_id': self.workspace.id,
             'template_id': self.template.id,
@@ -98,7 +99,7 @@ class TestCloudAPI(HttpCase):
 
     def test_get_service_details(self):
         """Test getting service details."""
-        service = self.Service.create({
+        service = _internal_provision(self.Service).create({
             'name': 'Detail Service',
             'workspace_id': self.workspace.id,
             'template_id': self.template.id,
@@ -114,12 +115,12 @@ class TestCloudAPI(HttpCase):
     def test_list_workspace_services(self):
         """Test listing all services in a workspace."""
         # Create multiple services
-        self.Service.create({
+        _internal_provision(self.Service).create({
             'name': 'Service 1',
             'workspace_id': self.workspace.id,
             'template_id': self.template.id,
         })
-        self.Service.create({
+        _internal_provision(self.Service).create({
             'name': 'Service 2',
             'workspace_id': self.workspace.id,
             'template_id': self.template.id,
@@ -132,7 +133,7 @@ class TestCloudAPI(HttpCase):
 
     def test_update_service_state(self):
         """Test updating service state."""
-        service = self.Service.create({
+        service = _internal_provision(self.Service).create({
             'name': 'State Service',
             'workspace_id': self.workspace.id,
             'template_id': self.template.id,
@@ -147,12 +148,12 @@ class TestCloudAPI(HttpCase):
         # Create another workspace
         workspace2 = self.Workspace.create({'name': 'Workspace 2'})
 
-        service1 = self.Service.create({
+        service1 = _internal_provision(self.Service).create({
             'name': 'Service WS1',
             'workspace_id': self.workspace.id,
             'template_id': self.template.id,
         })
-        service2 = self.Service.create({
+        service2 = _internal_provision(self.Service).create({
             'name': 'Service WS2',
             'workspace_id': workspace2.id,
             'template_id': self.template.id,
@@ -195,7 +196,7 @@ class TestCloudAPI(HttpCase):
 
     def test_service_reference_id_generated(self):
         """Test that reference_id is generated for services."""
-        service = self.Service.create({
+        service = _internal_provision(self.Service).create({
             'name': 'Ref Service',
             'workspace_id': self.workspace.id,
             'template_id': self.template.id,
@@ -232,7 +233,7 @@ class TestCloudAPI(HttpCase):
 
     def test_service_error_message(self):
         """Test storing error message on service."""
-        service = self.Service.create({
+        service = _internal_provision(self.Service).create({
             'name': 'Error Service',
             'workspace_id': self.workspace.id,
             'template_id': self.template.id,
@@ -374,7 +375,7 @@ class TestCloudServiceController(TransactionCase):
     def test_service_subdomain_uniqueness(self):
         """Test that subdomain uniqueness is enforced."""
         # Create first service with subdomain
-        service1 = self.Service.create({
+        service1 = _internal_provision(self.Service).create({
             'name': 'Service 1',
             'workspace_id': self.workspace.id,
             'template_id': self.template_with_specs.id,
@@ -385,7 +386,7 @@ class TestCloudServiceController(TransactionCase):
 
         # Try to create another service with same subdomain
         with self.assertRaises(Exception):  # Should raise IntegrityError
-            self.Service.create({
+            _internal_provision(self.Service).create({
                 'name': 'Service 2',
                 'workspace_id': self.workspace.id,
                 'template_id': self.template_with_specs.id,
@@ -395,7 +396,7 @@ class TestCloudServiceController(TransactionCase):
     def test_service_reference_id_uniqueness(self):
         """Test that reference_id uniqueness is enforced."""
         # Create first service with reference_id
-        service1 = self.Service.create({
+        service1 = _internal_provision(self.Service).create({
             'name': 'Service 1',
             'workspace_id': self.workspace.id,
             'template_id': self.template_with_specs.id,
@@ -406,7 +407,7 @@ class TestCloudServiceController(TransactionCase):
 
         # Try to create another service with same reference_id
         with self.assertRaises(Exception):  # Should raise IntegrityError
-            self.Service.create({
+            _internal_provision(self.Service).create({
                 'name': 'Service 2',
                 'workspace_id': self.workspace.id,
                 'template_id': self.template_with_specs.id,
@@ -415,7 +416,7 @@ class TestCloudServiceController(TransactionCase):
 
     def test_service_state_transitions(self):
         """Test valid service state transitions."""
-        service = self.Service.create({
+        service = _internal_provision(self.Service).create({
             'name': 'State Test Service',
             'workspace_id': self.workspace.id,
             'template_id': self.template_with_specs.id,
@@ -444,7 +445,7 @@ class TestCloudServiceController(TransactionCase):
 
     def test_service_helm_revision_tracking(self):
         """Test that helm_revision is properly tracked."""
-        service = self.Service.create({
+        service = _internal_provision(self.Service).create({
             'name': 'Revision Test Service',
             'workspace_id': self.workspace.id,
             'template_id': self.template_with_specs.id,

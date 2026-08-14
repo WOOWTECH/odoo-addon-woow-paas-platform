@@ -56,6 +56,7 @@ Red expectation today (Phase A implementation has NOT started):
 import uuid
 
 from odoo.tests.common import TransactionCase, tagged
+from ..models.cloud_service import _internal_provision
 
 
 @tagged('post_install', '-at_install')
@@ -84,14 +85,14 @@ class TestPhaseATaskChainedSchema(TransactionCase):
             'helm_chart_version': '1.0.0',
             'min_vcpu': 1, 'min_ram_gb': 1.0, 'min_storage_gb': 1,
         })
-        self.svc_a = self.Service.sudo().create({
+        self.svc_a = _internal_provision(self.Service.sudo()).create({
             'name': f'Svc A {suffix}',
             'workspace_id': self.ws_a.id,
             'template_id': self.tmpl.id,
             'helm_release_name': f'svc-a-{suffix}',
             'helm_namespace': f'paas-ws-a-{suffix}',
         })
-        self.svc_b = self.Service.sudo().create({
+        self.svc_b = _internal_provision(self.Service.sudo()).create({
             'name': f'Svc B {suffix}',
             'workspace_id': self.ws_b.id,
             'template_id': self.tmpl.id,
@@ -329,7 +330,7 @@ class TestPhaseATaskChainedSchema(TransactionCase):
         """
         project = self._create_cross_workspace_project()
         # Add a third cloud_service so we can swap a third in.
-        svc_c = self.Service.sudo().create({
+        svc_c = _internal_provision(self.Service.sudo()).create({
             'name': f'Svc C {uuid.uuid4().hex[:8]}',
             'workspace_id': self.ws_a.id,
             'template_id': self.tmpl.id,
@@ -368,7 +369,7 @@ class TestPhaseATaskChainedSchema(TransactionCase):
         cloud_service no longer in the project's set (orphan FK).
         """
         project = self._create_cross_workspace_project()
-        svc_c = self.Service.sudo().create({
+        svc_c = _internal_provision(self.Service.sudo()).create({
             'name': f'Svc C {uuid.uuid4().hex[:8]}',
             'workspace_id': self.ws_a.id,
             'template_id': self.tmpl.id,

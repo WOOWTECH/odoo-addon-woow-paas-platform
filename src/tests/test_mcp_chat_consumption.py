@@ -44,6 +44,7 @@ import uuid
 from unittest.mock import MagicMock, patch
 
 from odoo.tests.common import TransactionCase, tagged
+from ..models.cloud_service import _internal_provision
 
 
 @tagged('post_install', '-at_install')
@@ -91,7 +92,7 @@ class TestMcpChatConsumption(TransactionCase):
             'mcp_transport': 'streamable_http',
             'mcp_endpoint_path': '/mcp',
         })
-        self.service = self.Service.sudo().create({
+        self.service = _internal_provision(self.Service.sudo()).create({
             'name': 'Svc Chat MCP',
             'workspace_id': self.workspace.id,
             'template_id': self.template.id,
@@ -338,7 +339,7 @@ class TestAiAssistantControllerMcpToolsForChannel(TransactionCase):
             'helm_chart_version': '1.0.0',
             'min_vcpu': 1, 'min_ram_gb': 1.0, 'min_storage_gb': 1,
         })
-        self.service = self.Service.sudo().create({
+        self.service = _internal_provision(self.Service.sudo()).create({
             'name': 'Svc Ctrl MCP',
             'workspace_id': self.workspace.id,
             'template_id': self.template.id,

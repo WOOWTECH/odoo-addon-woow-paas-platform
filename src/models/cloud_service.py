@@ -13,6 +13,64 @@ from .workspace_access import ROLE_ADMIN
 
 _logger = logging.getLogger(__name__)
 
+
+# ------------------------------------------------------------------------- #
+#  #519：cloud_service 建立閘的「開閘」把手（sentinel）                       #
+# ------------------------------------------------------------------------- #
+#
+# 這一批只搬呼叫點、**還沒有閘門**（`create()` 尚未 raise），行為與遷移前完全
+# 相同；閘門與其驗收測試在下一張 PR。先落地把手的理由是讓「哪些路徑是平台自己
+# 的伺服器端開通碼」這件事先被逐點標記出來、可獨立審查，而不是和 30 行的安全
+# 改動混在同一個 diff 裡。
+#
+# 為什麼把手的值必須是這個**私有物件**、不能是 `True`／字串／任何 JSON 值：
+# `/web/dataset/call_kw` 把呼叫端送來的 context **整包**換進 env
+# （`odoo/api.py::call_kw`：`context = kwargs.pop('context', None) or {}` →
+# `recs.with_context(context)`，位置參數＝取代不是 merge），所以任何 JSON
+# 表達得出的判準，RPC 呼叫端在 payload 裡多加一個 key 就打開了。這不是推論：
+# #522 在 18.0 上實測過同一件事——一個只有 `base.group_user` 的租戶送
+# `context={'sa_internal_identity_write': true}` 就改寫了 `canonical_name`，
+# 而且新值真的 commit 進 Postgres。JSON 載不了物件身分，`is` 比對才擋得住。
+#
+# 本把手與 `models/security_access.py` 的 `_INTERNAL_IDENTITY_WRITE`
+# （`:64-102`）同構——那是本 repo 已被 #522 實測過的同一套機制，這裡刻意逐字
+# 沿用它的形狀，不另發明。
+class _InternalProvision:
+    """平台伺服器端開通碼的 marker type —— 見上方註解。"""
+
+    __slots__ = ()
+
+    def __repr__(self):
+        return '<internal provision>'
+
+
+_INTERNAL_PROVISION = _InternalProvision()
+
+#: 唯一的逃生口 context key。key 本身不是判準（呼叫端當然抄得到這個字串），
+#: 判準是它的**值身分**，見 `_is_internal_provision`。
+_INTERNAL_PROVISION_CTX_KEY = 'woow_internal_provision'
+
+
+def _internal_provision(records):
+    """回傳「唯一被允許建立 cloud_service」的那個 context 底下的 ``records``。
+
+    比照 `security_access.py` 的 `_internal_identity(records)`：開閘掛在**會讓
+    記錄落地的那一次呼叫**上，不掛在 model handle 的綁定處——唯讀 handle 一律
+    不帶這個 context，逃生口的表面積就只有真正的建立點。
+
+    ``with_context(**kwargs)`` 是 merge，所以 `.sudo()` / `.with_user()` /
+    後續 `with_context(foo=...)` 都保留這個把手。
+    """
+    return records.with_context(
+        **{_INTERNAL_PROVISION_CTX_KEY: _INTERNAL_PROVISION})
+
+
+def _is_internal_provision(env):
+    """判準：**只**比對 context 裡那個值的物件身分（`is`），不讀 vals／su／user。"""
+    return (env.context.get(_INTERNAL_PROVISION_CTX_KEY)
+            is _INTERNAL_PROVISION)
+
+
 # #336（Wave A）：計數「活躍實例」時排除的刪除終態。CloudService 刪除走真 unlink
 # （record 離場），故 state 值集內唯一「即將釋放、不應佔用配額」的過渡態
 # 為 'deleting'（Task 0 校驗：值集無 deleted／terminated）。

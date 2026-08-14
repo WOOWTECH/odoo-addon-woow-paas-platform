@@ -39,6 +39,7 @@ from odoo.tests.common import TransactionCase
 
 from odoo.addons.woow_paas_platform.models.cloud_app_template import SupplyGateError
 from .test_poll_mirror_release_facts_627 import _stale_sync_at
+from ..models.cloud_service import _internal_provision
 
 _CLIENT_PATH = (
     'odoo.addons.woow_paas_platform.services.paas_operator'
@@ -89,7 +90,7 @@ class _Base(TransactionCase):
             'helm_values': json.dumps({'config': {'nonSensitive': {}}}),
         }
         vals.update(extra)
-        return self.Service.create(vals)
+        return _internal_provision(self.Service).create(vals)
 
 
 class TestPurchasabilityJudge(_Base):
@@ -166,7 +167,7 @@ class TestFirstInstallGate(_Base):
         template.write({'helm_chart_version': ''})
 
         with self.assertRaises(SupplyGateError):
-            self.Service.sudo().create({
+            _internal_provision(self.Service.sudo()).create({
                 'name': 'svc-ha-552c',
                 'workspace_id': self.workspace.id,
                 'template_id': template.id,
@@ -357,7 +358,7 @@ class TestGuardDoesNotBlockShippedProducts(_Base):
         少了它，operator 的閘門與平台的行為各自都「看起來對」。
         """
         template = self.env.ref('woow_paas_platform.cloud_app_opendesign')
-        service = self.Service.with_context(mcp_admin_password='old-pw').create({
+        service = _internal_provision(self.Service.with_context(mcp_admin_password='old-pw')).create({
             'name': 'svc-552c-od',
             'workspace_id': self.workspace.id,
             'template_id': template.id,

@@ -36,6 +36,7 @@ import uuid
 from unittest.mock import MagicMock, patch
 
 from odoo.tests.common import TransactionCase, tagged
+from ..models.cloud_service import _internal_provision
 
 
 @tagged('post_install', '-at_install')
@@ -106,7 +107,7 @@ class TestMcpProjectLifecycle(TransactionCase):
             backed user-scope MCP must be cleaned up by both _do_cleanup
             and unlink override paths per AC #21 / #22).
         """
-        service = self.Service.sudo().create({
+        service = _internal_provision(self.Service.sudo()).create({
             'name': f'{name_prefix} Service',
             'workspace_id': self.workspace.id,
             'template_id': self.template.id,

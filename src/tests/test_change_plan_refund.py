@@ -16,6 +16,7 @@ compute, since the controller path requires an HTTP request fixture.
 from datetime import date, timedelta
 
 from odoo.tests.common import TransactionCase
+from ..models.cloud_service import _internal_provision
 
 
 class TestChangePlanRefund(TransactionCase):
@@ -135,7 +136,7 @@ class TestChangePlanRefund(TransactionCase):
         template = self.env['woow_paas_platform.cloud_app_template'].sudo().search([], limit=1)
         if not template:
             self.skipTest("No cloud_app_template available in test DB")
-        svc = Service.create({
+        svc = _internal_provision(Service).create({
             'name': 'BUG5 svc',
             'workspace_id': ws.id,
             'template_id': template.id,
@@ -203,7 +204,7 @@ class TestChangePlanRefundIsRefundTyped(TransactionCase):
         ws = self.env['woow_paas_platform.workspace'].create({
             'name': 'CP Refund WS', 'owner_id': self.owner.id,
         })
-        self.service = self.env['woow_paas_platform.cloud_service'].create({
+        self.service = _internal_provision(self.env['woow_paas_platform.cloud_service']).create({
             'name': 'CP Refund Svc', 'workspace_id': ws.id,
             'template_id': template.id,
         })

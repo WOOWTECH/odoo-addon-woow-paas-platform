@@ -20,6 +20,7 @@ import json
 from odoo.tests.common import TransactionCase
 
 from odoo.addons.woow_paas_platform.controllers.paas import PaasController
+from ..models.cloud_service import _internal_provision
 
 
 class TestServicePayloadHasAdminGui462(TransactionCase):
@@ -50,7 +51,7 @@ class TestServicePayloadHasAdminGui462(TransactionCase):
         })
 
     def _make_service(self, template):
-        return self.env['woow_paas_platform.cloud_service'].create({
+        return _internal_provision(self.env['woow_paas_platform.cloud_service']).create({
             'name': f'svc-{template.slug}',
             'workspace_id': self.workspace.id,
             'template_id': template.id,

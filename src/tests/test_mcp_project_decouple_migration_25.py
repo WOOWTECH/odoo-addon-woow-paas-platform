@@ -25,6 +25,7 @@ import importlib.util
 import os
 
 from odoo.tests.common import TransactionCase, tagged
+from ..models.cloud_service import _internal_provision
 
 
 _MIGRATION_PATH = os.path.abspath(
@@ -111,7 +112,7 @@ class TestMigration25SidecarBackedBackfill(TransactionCase):
             'helm_chart_version': '1.0.0',
             'min_vcpu': 1, 'min_ram_gb': 1.0, 'min_storage_gb': 1,
         })
-        self.service = self.Service.sudo().create({
+        self.service = _internal_provision(self.Service.sudo()).create({
             'name': 'Svc Mig25',
             'workspace_id': self.workspace.id,
             'template_id': self.template.id,
