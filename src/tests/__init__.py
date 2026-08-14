@@ -370,6 +370,7 @@ from . import test_project_cs_m2m_authz_698
 # F3＝反向端候選集必須含移除方向的舊值（判準＝強制否決，不是「有沒有被擋」）；
 # F6＝cross-project move 不觸發守衛的真正理由是 key gate（HttpCase，全走 call_kw）
 from . import test_project_cs_m2m_authz_705
+from . import test_cloud_service_provision_gate_519
 
 # fix: #583 transfer_ownership 的授權守衛檢查「被操作那筆記錄」而非呼叫者身分
 # （`if self.role != ROLE_OWNER` 的 `self` 是呼叫端指定的 access 列）。RED 是

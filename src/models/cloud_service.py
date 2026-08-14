@@ -15,13 +15,32 @@ _logger = logging.getLogger(__name__)
 
 
 # ------------------------------------------------------------------------- #
-#  #519：cloud_service 建立閘的「開閘」把手（sentinel）                       #
+#  #519：cloud_service 的建立閘（private sentinel）                           #
 # ------------------------------------------------------------------------- #
 #
-# 這一批只搬呼叫點、**還沒有閘門**（`create()` 尚未 raise），行為與遷移前完全
-# 相同；閘門與其驗收測試在下一張 PR。先落地把手的理由是讓「哪些路徑是平台自己
-# 的伺服器端開通碼」這件事先被逐點標記出來、可獨立審查，而不是和 30 行的安全
-# 改動混在同一個 diff 裡。
+# 不變式：**沒有任何 RPC 呼叫端**（裸 ORM／XML-RPC／JSON-RPC／`call_kw`，不論
+# 身分、不論送什麼 vals 或 context）能讓一筆 cloud_service 落地。只有明示開閘
+# 的平台伺服器端 in-process 碼建得出來。閘門在 `create()` 的第一行。
+#
+# 為什麼守線只能長在這裡（#519 的裁決，見
+# `docs/decisions/519-cloud-service-provision-gate.md`）：ACL／`ir.rule` 那層
+# 對本案結構性無效——owner 資格是**可自我滿足**的（任何 `base.group_user` 帳號
+# 免費自建 workspace → `workspace.py` 用 `.sudo()` 自動補一列 role=owner 的
+# access → 滿足 #676 的 `cloud_service_rule_owner_admin_manage`）。而「自建
+# workspace 即為 owner」是**產品設計**、不是缺陷，所以不動那一層。
+#
+# 判準**只讀** context 裡那個值的**物件身分**（`is` 比對），刻意不讀：
+#   * `vals`（raw 或 `_add_missing_default_values` 解析後都不讀）——租戶對
+#     `ir.default` 有完整 CRUD（Odoo 18 base `ir.model.access.csv` 的
+#     `access_ir_default_group_user` 是 1,1,1,1，且 `ir.default.set()` 是
+#     `@api.model`、不查權限）⇒ `default_<欄位>` 有**持久化**載體，任何讀 vals
+#     的守衛都會被繞過。不讀 vals ⇒ 那條陷阱在本形狀下結構上不存在。
+#   * `env.su`——`TransactionCase` 預設就是 su env，讀它會在每個測試裡靜默停用
+#     守衛，正是測試本該證明它有效的地方
+#     （`docs/decisions/patterns/su-env-exempt-guard-false-green.md`）。
+#   * `env.user` / `env.uid`——`controllers/ha_paas.py` 的 `auth='none'` 路徑下
+#     `env.user` 是空 recordset，讀它會誤判。
+#   * workspace role / `has_group()`——讀了就把上面那條產品設計變成守衛的旁路。
 #
 # 為什麼把手的值必須是這個**私有物件**、不能是 `True`／字串／任何 JSON 值：
 # `/web/dataset/call_kw` 把呼叫端送來的 context **整包**換進 env
@@ -69,6 +88,16 @@ def _is_internal_provision(env):
     """判準：**只**比對 context 裡那個值的物件身分（`is`），不讀 vals／su／user。"""
     return (env.context.get(_INTERNAL_PROVISION_CTX_KEY)
             is _INTERNAL_PROVISION)
+
+
+class ProvisionGateError(AccessError):
+    """#519：這一筆 cloud_service 不是從平台的開通流程來的。
+
+    獨立型別的用途與 `SupplyGateError` 相同——**讓測試斷言例外型別而非文案
+    片段**。這裡尤其必要：基底 `AccessError` 同時也是 ACL／`ir.rule` 拒絕會丟
+    的型別，只斷言 `AccessError` 分不出「被本閘擋下」與「被 ACL 擋下」，那正是
+    這道守線最容易假綠的地方（現有的 ACL 測試本來就在斷言 `AccessError`）。
+    """
 
 
 # #336（Wave A）：計數「活躍實例」時排除的刪除終態。CloudService 刪除走真 unlink
@@ -3371,10 +3400,27 @@ class CloudService(models.Model):
         #    `state` 是 nullable Selection（無 `required=True`），插一個
         #    `write({'state': False})` 當跳板即可整段跳過。
         #
-        # 根因是租戶對本 model 有直接 write 權（`ir.model.access.csv`，#519）。用
-        # write() 守衛打地鼠會引入誤傷卻仍留下繞道；正解是收緊 ACL，一旦租戶沒有
-        # 直接 write 權，所有繞過路徑一次關閉。**create() 的閘門是防意外、不是安全
-        # 邊界**——不要在這裡補守衛來製造「已經守住」的錯覺。
+        # ⚠ 這段原本寫著「正解是收緊 ACL……create() 的閘門是防意外、不是安全
+        # 邊界——不要在這裡補守衛來製造已經守住的錯覺」。**那個前提在 #519 已被
+        # 推翻**，整段改寫如下，否則 repo 裡會留下一句權威語氣的話，教未來維護者
+        # 不要信現在真的存在的那道守線。
+        #
+        # 為什麼「收緊 ACL」不是正解：owner 資格**可自我滿足**——任何
+        # `base.group_user` 帳號免費自建 workspace 就自動成為該 workspace 的
+        # owner，滿足 #676 的 `cloud_service_rule_owner_admin_manage`。而「自建
+        # workspace 即為 owner」是**產品設計**（2026-08-14 裁決），所以 ACL／
+        # ir.rule 那層對本案結構性無效，不動它。
+        #
+        # 現在的分工：**`create()` 的閘門就是安全邊界**（模組頂端
+        # `_INTERNAL_PROVISION`，對所有入口含 superuser 一律生效），它保證沒有
+        # 任何 RPC 呼叫端建得出 cloud_service。上面那兩條「為什麼這裡不放全域上限
+        # 守衛」的理由**仍然成立且仍然適用**（誤傷刪除失敗的善後路徑、擋不完），
+        # 不因為 create 有閘了就該把它加回來——那是配額語意，不是身分語意。
+        #
+        # 真正還開著、且**要在 write() 這一端處理**的，是 `subscription_id` 的
+        # 歸屬／狀態／唯一性（租戶可把自己 service 的 subscription_id 指向別人的
+        # 活訂閱以逃避停權）。那是 #519 提案 B，見
+        # `docs/decisions/519-cloud-service-provision-gate.md`。
         tracked = 'workspace_id' in vals or 'project_ids' in vals
         projects = self.mapped('project_ids') if tracked else self.browse()
         old = {p.id: set(p.workspace_ids.ids) for p in projects}
@@ -3657,7 +3703,21 @@ class CloudService(models.Model):
 
         ⚠ 本方法對所有入口一律生效、無 su/group 豁免（否則 TransactionCase 假綠，
         見 docs/decisions/patterns/su-env-exempt-guard-false-green.md）。
+
+        #519 建立閘：整個方法的第一件事就是拒絕非平台開通脈絡的建立。放在最前面
+        是刻意的——後面每一段（`_assert_reverse_binding_authorized`、
+        `super().create()` 的 INSERT、`_claim_global_cap_slots` 的衝突列 UPDATE）
+        都有副作用或成本，被拒絕的呼叫不該碰到其中任何一段。完整論證見模組頂端
+        `_INTERNAL_PROVISION` 的註解。
         """
+        # #519：唯一對所有入口（含 sudo、含 superuser、含 TransactionCase 的 su
+        # env）都生效的那一層。判準只有一個：context 裡那個值是不是**那一個**
+        # 模組層級私有物件。不讀 vals、不讀 env.su、不讀 env.user、不讀 role。
+        if not _is_internal_provision(self.env):
+            raise ProvisionGateError(_(
+                '雲端服務只能由平台的開通流程建立（%(model)s）。'
+                '請改從服務市集下單，不要直接寫入這個 model。',
+                model=self._name))
         # #698 反向端：create 也能帶 `project_ids`（同一張 relation 表的另一頭），
         # 且同樣必須前置檢查——建完之後那個 project 就落進呼叫者的 bound 分支。
         # 🔴 #705 F1：必須看**框架解析後**的 vals。`default_project_ids` 是在

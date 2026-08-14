@@ -19,6 +19,7 @@
 1	fn:check_owl_template
 1	fn:check_pattern_doc_registry
 1	fn:check_poll_release_facts_single_source
+1	fn:check_provision_sentinel_allowlist
 1	fn:check_repo_lint_docstring_registry
 1	fn:check_reset_budget_ladder
 1	fn:check_retired_rule_xmlid
@@ -46,6 +47,7 @@
 1	rule:owl-template
 1	rule:pattern-doc-registry
 1	rule:poll-release-facts-single-source
+1	rule:provision-sentinel-allowlist
 1	rule:repo-lint-docstring-registry
 1	rule:reset-budget-ladder
 1	rule:reuse-values

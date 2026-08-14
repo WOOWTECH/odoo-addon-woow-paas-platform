@@ -592,15 +592,40 @@ class TestBindingGuardDownstream(_Binding698Fixture):
 
 @tagged('post_install', '-at_install')
 class TestCloudServiceRuleStillGuards676(_Binding698Fixture):
-    """#676 的回歸：`(0)`/`(1)`/`(2)` 仍必須由 **cloud_service 自己那層**擋。
+    """#676 的回歸：`(1)`/`(2)` 仍必須由 **cloud_service 自己那層**擋。
 
-    本修法沒有取代 #676——它補的是 rule 碰不到的 `(3)/(4)/(6)`。這三格如果
+    本修法沒有取代 #676——它補的是 rule 碰不到的 `(3)/(4)/(6)`。這幾格如果
     改由綁定守衛擋，代表 #676 的 rule 已經被誰改壞了（守衛只看綁定變化，
     `(1)` 這種「改欄位但不動關聯」的操作它完全看不見）。
+
+    ## 🔴 `(0)` 這一格在 #519 之後換了守門人（本 class 的分工變了）
+
+    `(0, 0, vals)` 會走進 `CloudService.create()`，而 #519 的 sentinel 閘就在
+    那支方法的**第一行**——比 `super().create()` 裡的 `check_access('create')`
+    更早。所以 `(0)` 現在對**任何** RPC 呼叫端（含 owner）都是拒絕，而且拒絕
+    的歸因是 #519 的閘、不是 #676 的 rule。
+
+    ⇒ 這一格**已經不再能驗 #676**（rule 根本到不了），這件事必須寫下來，否則
+    S1 會變成「通過，但通過的原因跟它宣稱守的東西無關」的假綠。#676 在 `(1)` /
+    `(2)` 兩格仍然是唯一的守門人，那兩格才是本 class 的回歸價值所在。
+
+    ## 可達性由每一條測試自帶（原本靠 S4 隱含保證）
+
+    S4 原本是「owner 對 `(0)`/`(1)`/`(2)` 都做得到」的可達性陽性對照，其他攻擊
+    測試靠它隱含證明「這條路徑是通的」。#519 之後 S4 反轉成負向斷言，那個隱含
+    保證就沒了 ⇒ 每一條攻擊測試改成**自帶可達性斷言**（先證明同一個身分、同一
+    條 RPC 路徑、同一個 project 上的良性寫入會成功，再驗攻擊被擋），`(1)`/`(2)`
+    的正向可達性則由新的 S5 用**伺服器端建立**的 service 承接。
     """
 
-    def test_S1_cmd0_create_via_relation_denied_by_cloud_service_rule(self):
+    def test_S1_cmd0_create_via_relation_denied_by_provision_gate(self):
         pid = self._new_project_as(self.gary_login)
+        # 可達性（自帶，不再依賴 S4）：同一個身分、同一條 RPC 路徑、同一個
+        # project 上的良性寫入必須成功。沒有這一步，下面的「被擋」可能只是因為
+        # project 根本沒建起來或 RPC 路徑不通——那種綠燈零鑑別力。
+        self._assert_ok(
+            self._call_kw(_PROJECT, 'write', [[pid], {'name': 'P698 renamed'}]),
+            'S1 可達性：guest 對自己的 project 做良性寫入必須成功')
         res = self._call_kw(_PROJECT, 'write', [[pid], {
             'cloud_service_ids': [(0, 0, {
                 'name': 'forged by guest',
@@ -609,8 +634,13 @@ class TestCloudServiceRuleStillGuards676(_Binding698Fixture):
             })],
         }])
         self.assertIn('error', res, 'S1：不得建得起來（回 %r）' % res)
-        self.assertIn('cloud_service', self._error_text(res),
-                      'S1：歸因必須是 cloud_service 那一層')
+        text = self._error_text(res)
+        self.assertIn('cloud_service', text,
+                      'S1：歸因必須是 cloud_service 那一層（回 %r）' % text)
+        self.assertIn('開通流程', text,
+                      'S1：#519 之後這一格的守門人是建立閘，不是 #676 的 rule；'
+                      '歸因換人時這條必須紅，否則它會靜默退化成驗別的東西'
+                      '（回 %r）' % text)
         self.assertFalse(
             self.Service.sudo().search([('name', '=', 'forged by guest')]),
             'S1：偽造的 service 不得存在')
@@ -647,9 +677,29 @@ class TestCloudServiceRuleStillGuards676(_Binding698Fixture):
                       'S3：歸因必須是 cloud_service 那一層')
         self.assertTrue(self.svc_a.sudo().exists(), 'S3：service 必須還在')
 
-    def test_S4_positive_control_owner_can_012(self):
-        """陽性對照：owner 對 `(0)`/`(1)`/`(2)` 三種指令都做得到。"""
+    def test_S4_cmd0_create_via_relation_denied_even_for_owner(self):
+        """#519：`(0)` 對 **owner** 也一樣建不出來。
+
+        這條原本是「owner 對 `(0)`/`(1)`/`(2)` 都做得到」的陽性對照。#519 把
+        `(0)` 的不變式反轉成「**沒有任何 RPC 呼叫端**建得出 cloud_service，不論
+        身分」，所以它的價值不是消失而是反轉：現在要證明的是**連 owner 都擋**。
+
+        身分刻意用 `aowner`（對 `self.wa` 有 owner 角色、#676 的 rule 放行、
+        `_assert_ok` 級別的合法使用者）——擋住這個身分才說明閘的判準真的與角色
+        無關；拿 guest 來測擋得住，證不了這件事（S1 已經覆蓋 guest）。
+        """
         pid = self._new_project_as(self.aowner_login)
+        # 可達性（自帶）：同一個 owner、同一條 RPC 路徑、同一個 project 上的良性
+        # 寫入必須成功，且他對這條 relation 本身有寫入權（(4) 綁既有 service）。
+        # 少了這兩步，下面的「被擋」可能只是身分／路徑根本不通。
+        self._assert_ok(
+            self._call_kw(_PROJECT, 'write', [[pid], {'name': 'PA698 renamed'}]),
+            'S4 可達性：owner 對自己的 project 做良性寫入必須成功')
+        self._assert_ok(
+            self._call_kw(_PROJECT, 'write', [
+                [pid], {'cloud_service_ids': [(4, self.svc_a.id)]}]),
+            'S4 可達性：owner 對 cloud_service_ids 這條 relation 本身寫得動')
+
         res0 = self._call_kw(_PROJECT, 'write', [[pid], {
             'cloud_service_ids': [(0, 0, {
                 'name': 'created by owner 698',
@@ -657,23 +707,46 @@ class TestCloudServiceRuleStillGuards676(_Binding698Fixture):
                 'template_id': self.template.id,
             })],
         }])
-        self._assert_ok(res0, '陽性對照 (0)')
-        new_svc = self.Project.sudo().browse(pid).cloud_service_ids.filtered(
-            lambda s: s.name == 'created by owner 698')
-        self.assertTrue(new_svc, '陽性對照 (0)：新 service 必須落地')
+        self.assertIn('error', res0,
+                      'S4：#519 之後 owner 也不得經 RPC 建出 cloud_service'
+                      '（回 %r）' % res0)
+        self.assertIn('開通流程', self._error_text(res0),
+                      'S4：歸因必須是 #519 的建立閘（回 %r）'
+                      % self._error_text(res0))
+        self.assertFalse(
+            self.Service.sudo().search([('name', '=', 'created by owner 698')]),
+            'S4：「沒有 raise」與「沒有寫進去」是兩件事，這裡驗後者')
+
+    def test_S5_positive_control_owner_can_12_on_server_made_service(self):
+        """`(1)`/`(2)` 的可達性陽性對照——S2／S3 的鑑別力靠它。
+
+        原本這個保證附在 S4 的 `(0)` 上（owner 自己經 RPC 建一筆再改再刪）。
+        #519 把 `(0)` 關掉之後，若不補這一條，S2／S3 的綠燈就會退化成「攻擊被
+        擋」與「這條指令路徑本來就不通」分不出來——那正是 #668 ② 記過的形態。
+        改用**伺服器端**（開閘 helper）建立 service 當主體，指令路徑本身照樣走
+        完整的 RPC。
+        """
+        pid = self._new_project_as(self.aowner_login)
+        svc = self._service(self.template, self.wa, 'server made 698')
+        self._assert_ok(
+            self._call_kw(_PROJECT, 'write', [
+                [pid], {'cloud_service_ids': [(4, svc.id)]}]),
+            '陽性對照 (4)：owner 綁得上自己 workspace 的 service')
+        self.assertIn(svc.id, self._bound(pid),
+                      '陽性對照 (4)：綁定必須真的落地')
 
         res1 = self._call_kw(_PROJECT, 'write', [[pid], {
-            'cloud_service_ids': [(1, new_svc.id, {'name': 'renamed by owner'})],
+            'cloud_service_ids': [(1, svc.id, {'name': 'renamed by owner'})],
         }])
         self._assert_ok(res1, '陽性對照 (1)')
-        self.assertEqual(new_svc.sudo().name, 'renamed by owner',
+        self.assertEqual(svc.sudo().name, 'renamed by owner',
                          '陽性對照 (1)：改名必須落地')
 
         with patch.object(type(self.Service), '_cleanup_helm', return_value=True):
             res2 = self._call_kw(_PROJECT, 'write', [
-                [pid], {'cloud_service_ids': [(2, new_svc.id)]}])
+                [pid], {'cloud_service_ids': [(2, svc.id)]}])
         self._assert_ok(res2, '陽性對照 (2)')
-        self.assertFalse(new_svc.sudo().exists(),
+        self.assertFalse(svc.sudo().exists(),
                          '陽性對照 (2)：service 必須真的消失')
 
 
