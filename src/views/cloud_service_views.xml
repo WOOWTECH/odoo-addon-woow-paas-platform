@@ -5,7 +5,8 @@
         <field name="name">woow_paas_platform.cloud_service.form</field>
         <field name="model">woow_paas_platform.cloud_service</field>
         <field name="arch" type="xml">
-            <form string="Cloud Service">
+            <!-- #519：同 list view，後台不提供 Create（理由見 list 的註解）。 -->
+            <form string="Cloud Service" create="false">
                 <header>
                     <button name="action_redeploy" type="object"
                             string="Redeploy" icon="fa-refresh"
@@ -86,7 +87,11 @@
         <field name="name">woow_paas_platform.cloud_service.list</field>
         <field name="model">woow_paas_platform.cloud_service</field>
         <field name="arch" type="xml">
-            <list string="Cloud Services">
+            <!-- #519：後台不提供 Create。cloud_service 只能由平台的開通流程建立
+                 （`create()` 的 sentinel 閘），後台裸建一筆沒有 helm release、
+                 沒有訂閱的 service 本來就會被 deploy cron 撿去部署。閘加上去之後
+                 那顆按鈕會固定報錯，留著只是誤導。 -->
+            <list string="Cloud Services" create="false">
                 <field name="name"/>
                 <field name="workspace_id"/>
                 <field name="template_id"/>
