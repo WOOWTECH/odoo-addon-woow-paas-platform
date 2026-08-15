@@ -746,6 +746,72 @@ class TestSecurityAccessAccessControl(TransactionCase):
         # the over-quota policy must not have landed
         self.assertEqual(len(self._sa_policies(sa)), 1)
 
+    def test_policy_quota_zero_is_unlimited_at_controller(self):
+        """#743 陽性對照 A（controller 層）：quota=0 ⇒ 不限。
+
+        這一層必測，不能只測 model：controller 的預檢是 `existing >= quota`，
+        quota=0 時 `0 >= 0` 成立，會在 Policy.create() 之前就 return
+        structured error——model 的 0 豁免根本走不到。前端（AddPolicyModal）
+        走的正是這條路，所以只修 model 的話使用者感知到的行為完全沒變，
+        而 model-only 的測試會是綠的。"""
+        mc = self._mock()
+        sa = self._active_sa(mc)
+        plan = self.env['sh.subscription.plan'].create({
+            'name': 'AC Zero Quota Plan', 'sh_duration': 1, 'sh_unit': 'month',
+            'sh_plan_price': 100, 'sh_no_of_billing_cycle': -1,
+            'sa_max_access_policies': 0})
+        sub = self.env['sh.subscription.subscription'].create({
+            'sh_partner_id': self.env.user.partner_id.id,
+            'state': 'in_progress'})
+        sub.sh_subscription_plan_id = plan.id
+        sa.subscription_id = sub.id
+        # 釘死「預檢有跑到 quota 那一行」——沒 sub / 沒 plan 會整段跳過，
+        # 那時 create 成功與「0 豁免生效」輸出相同。
+        self.assertTrue(sa.sudo().subscription_id.sh_subscription_plan_id)
+        with _patch_request(self.env), \
+                patch(MOCK_GET_CLIENT, return_value=mc), \
+                patch(MOCK_GET_CLIENT_MODEL, return_value=mc):
+            for idx in (1, 2):
+                res = self.controller._create_policy(sa, {
+                    'name': 'z%d' % idx, 'decision': 'allow',
+                    'rule_type': 'email_list',
+                    'rule_value': 'u%d@z.com' % idx})
+                self.assertTrue(res['success'], res.get('error'))
+        self.assertEqual(len(self._sa_policies(sa)), 2)
+
+    def test_policy_quota_positive_still_enforced_at_controller(self):
+        """#743 陽性對照 B（controller 層）：正值 quota 仍要擋。
+
+        與 test_policy_quota_enforced_at_controller 不同軸：那條 quota=1，
+        第一筆就是邊界；這條 quota=2 驗「用滿 2 筆仍可、第 3 筆才擋」，
+        確保 0 豁免沒有被寫成「任何 quota 都放行」。"""
+        mc = self._mock()
+        sa = self._active_sa(mc)
+        plan = self.env['sh.subscription.plan'].create({
+            'name': 'AC Two Quota Plan', 'sh_duration': 1, 'sh_unit': 'month',
+            'sh_plan_price': 100, 'sh_no_of_billing_cycle': -1,
+            'sa_max_access_policies': 2})
+        sub = self.env['sh.subscription.subscription'].create({
+            'sh_partner_id': self.env.user.partner_id.id,
+            'state': 'in_progress'})
+        sub.sh_subscription_plan_id = plan.id
+        sa.subscription_id = sub.id
+        with _patch_request(self.env), \
+                patch(MOCK_GET_CLIENT, return_value=mc), \
+                patch(MOCK_GET_CLIENT_MODEL, return_value=mc):
+            for idx in (1, 2):
+                ok = self.controller._create_policy(sa, {
+                    'name': 'q%d' % idx, 'decision': 'allow',
+                    'rule_type': 'email_list',
+                    'rule_value': 'u%d@q.com' % idx})
+                self.assertTrue(ok['success'], ok.get('error'))
+            over = self.controller._create_policy(sa, {
+                'name': 'q3', 'decision': 'allow',
+                'rule_type': 'email_list', 'rule_value': 'u3@q.com'})
+        self.assertFalse(over['success'])
+        self.assertIn('quota', over['error'].lower())
+        self.assertEqual(len(self._sa_policies(sa)), 2)
+
     def test_create_policy_invalid_rule_rejected(self):
         mc = self._mock()
         sa = self._active_sa(mc)

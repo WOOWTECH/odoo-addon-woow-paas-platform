@@ -23,7 +23,10 @@ class ShSubscriptionPlanSaQuota(models.Model):
     sa_max_access_policies = fields.Integer(
         string='SA Max Access Policies',
         default=0,
-        help='Security Access: max access policies (enforced in P2).',
+        help='Security Access: max access policies (enforced in P2). '
+             '0 = unlimited (NOT "none allowed" — sa_max_routes above uses the '
+             'opposite convention for 0; see #743). No seeded plan sets 0 '
+             'today; the CS access variant is specced to.',
     )
     sa_max_custom_domains = fields.Integer(
         string='SA Max Custom Domains',

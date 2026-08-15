@@ -342,6 +342,18 @@ class SecurityAccessAccessPolicy(models.Model):
         # _check_policy_quota. Honours the cursor-level sa_skip_policy_quota flag
         # so the migration fan-out (and the stored-related recompute that fires
         # this constraint in a context-stripped env) can bypass it.
+        #
+        # Two different plan fields, one shared convention for 0 (#743): this
+        # constraint's sa_max_emails_per_policy and _check_policy_quota's
+        # sa_max_access_policies both read 0 as "unlimited". They did NOT until
+        # #743 — this one already exempted 0 while _check_policy_quota treated
+        # it as "not a single policy allowed", which is why a plan carrying
+        # sa_max_access_policies = 0 could not create its first policy (#521).
+        # Change one convention, change the other, and keep both in step with
+        # the controller pre-check in
+        # controllers/security_access.py::_create_policy.
+        # NOT a module-wide rule: a third field, sa_max_routes, deliberately
+        # keeps 0 = none allowed (see its help text and _check_route_quota).
         if getattr(self.env.cr, 'sa_skip_policy_quota', False):
             return
         for pol in self:
@@ -379,13 +391,6 @@ class SecurityAccessAccessPolicy(models.Model):
         # both come from _anchor()/_anchor_plan() so the scope of the count and
         # the source of the quota can never drift apart.
         #
-        # ⚠ 這個檢查目前把 `sa_max_access_policies == 0` 讀成「一條都不准」。
-        # CS 變體的方案正是 0（＝政策數不限，設計拍板 4）⇒ **T1（#743）把 0
-        # 改成 unlimited 之前，CS 錨定的第一條 policy 就會撞這裡**。兩票並行、
-        # 無 blocker：本票只負責「計數與方案來源跟著錨點走」，0 的語意翻轉是
-        # #743 的標的，刻意不在這裡順手改（同一個 if 兩張 PR 各改一半會在
-        # rebase 時互相吃掉）。
-        #
         # sa_skip_policy_quota: the P2.5 migration fan-out copies the OLD single
         # shared app's legacy policy set onto EACH protected route (behaviour-
         # equivalent re-home, not a user adding capacity). The quota was a per-SA
@@ -403,6 +408,17 @@ class SecurityAccessAccessPolicy(models.Model):
         # The cursor is shared by every env in the transaction, so a flag set on
         # it survives the recompute env reconstruction. Set + cleared by the
         # migration around its one-shot data move.
+        #
+        # quota 0 = unlimited (#743), same convention _check_emails_per_policy
+        # above uses for its own field — see the note there for why the two
+        # fields used to disagree. The CS access variant is specced to carry
+        # sa_max_access_policies = 0 meaning "no cap on policy count" (#521
+        # design 拍板 4, not yet built); before #743 that would have rejected
+        # its very first policy. The BFF pre-check in
+        # controllers/security_access.py::_create_policy carries the same
+        # exemption and runs FIRST — a fix here alone is unreachable from the UI.
+        # sa_max_routes is deliberately NOT part of this: 0 there still means
+        # none allowed.
         if getattr(self.env.cr, 'sa_skip_policy_quota', False):
             return
         for pol in self:
@@ -410,6 +426,8 @@ class SecurityAccessAccessPolicy(models.Model):
             if not plan:
                 continue
             quota = plan.sa_max_access_policies
+            if not quota:  # 0 = unlimited, same as _check_emails_per_policy
+                continue
             anchor = pol._anchor()
             anchor_field = ('cloud_service_id'
                             if pol.cloud_service_id else 'security_access_id')
