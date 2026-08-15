@@ -2,10 +2,29 @@ from odoo import api, fields, models
 from odoo.exceptions import ValidationError
 
 
-class SecurityAccessAccessPolicy(models.Model):
-    """One reusable Cloudflare Access policy on a ROUTE (P2.5 per-route).
+def _arc_violation(label, has_route, has_cs):
+    """回傳 exclusive arc 的違規訊息，或 ``None``（合法）。
 
-    Mirrors the route sub-model: rows are the desired-state, the parent route
+    單一文案來源：create 前置檢查與 `@api.constrains` 兩個呼叫點共用，否則
+    同一個違規在兩條路徑上會給出兩種說法。
+    """
+    if has_route and has_cs:
+        return (
+            "Access policy %r is anchored on BOTH an Application Route and a "
+            "Cloud Service. A policy belongs to exactly one Cloudflare Access "
+            "application, so it must carry exactly one anchor." % label)
+    if not has_route and not has_cs:
+        return (
+            "Access policy %r has no anchor. Set either an Application Route "
+            "or a Cloud Service — an unanchored policy can never be pushed to "
+            "Cloudflare and is invisible to its own workspace." % label)
+    return None
+
+
+class SecurityAccessAccessPolicy(models.Model):
+    """One reusable Cloudflare Access policy on a ROUTE or on a CLOUD SERVICE.
+
+    Mirrors the route sub-model: rows are the desired-state, the parent anchor
     pushes the full set declaratively to the operator (no per-row CF call).
     cf_policy_id stores the Cloudflare reusable-policy id after sync.
 
@@ -15,6 +34,26 @@ class SecurityAccessAccessPolicy(models.Model):
     existing ir.rule walk and the SA-level policy quota keep working
     (the related store materialises a real column the ir.rule domain / quota
     count can traverse), but it is no longer the field a caller binds.
+
+    #744（CS Access Control T2）：錨點擴成 **exclusive arc** ——
+    ``route_id`` XOR ``cloud_service_id``。cloud service 買了 AC 席位後可以在
+    自己的 subdomain 上開 Cloudflare Access 保護，而**刻意不建隱形 SA**：
+    SA route 的 DNS 機制會把 CNAME 改指 SA 專屬 tunnel，CS 流量走的是平台共用
+    tunnel，掛進去即斷線（設計拍板 2，見
+    ``docs/plans/2026-Q3/2026-08-15-cs-access-control-design.md``）。因此
+    policy 這個 model 原地擴充、不開平行 model——守衛（#352 整批放行、quota、
+    ≥1 include）長兩份就會漂移（拍板 9）。
+
+    arc 是 **exclusive** 而不是「兩個都可空的 nullable M2O」，這點由三個
+    觸點一起保證（create 前置 ``_assert_anchor_arc_vals``、write 側
+    ``@api.constrains``、以及**兩個方向都蓋得到**的 SQL CHECK ``anchor_arc``；
+    分成三處的理由見各自的 docstring——簡言之 create 的 INSERT 早於 Python
+    constraint，而 CHECK 的訊息不可讀）：
+    ir.rule 的 workspace walk 是**逐錨點**寫的（route 走
+    ``security_access_id.workspace_id``、CS 走 ``cloud_service_id.workspace_id``），
+    一列若兩個錨點皆空就走不到任何 workspace ⇒ 對租戶不可見（fail-closed，
+    不是外洩），但同時也**永遠同步不到 Cloudflare**——所以要在寫入當下就擋，
+    不要留一個只能靠人工發現的孤兒形狀。
 
     P-rule (2026-06): a policy is now a CONTAINER of selector rules
     (``rule_ids``) split into include (OR) / require (AND) / exclude (NOT)
@@ -28,12 +67,39 @@ class SecurityAccessAccessPolicy(models.Model):
     _description = 'Security Access — Access Policy'
     _order = 'sequence, id'
 
+    #: #744：錨點的 exclusive arc。DB 層是**唯一**對所有寫入路徑（含裸 SQL、含
+    #: superuser、含繞過 `_validate_fields` 的批次 migration）都生效的那一層；
+    #: 兩個 Python 觸點（`_assert_anchor_arc_vals` / `_check_anchor_exclusive_arc`）
+    #: 負責的是「訊息看得懂」，不是「擋得住」。
+    #:
+    #: ⚠ constraint key 刻意取短：Odoo 的實際名字是 `{table}_{key}`，本 model
+    #: 的 table 名 48 字元，超過 63 就會被 `sql.make_identifier` 換成雜湊名
+    #: （`_add_sql_constraints`），migration 的存在性驗證要跟著改查雜湊名。
+    #: `anchor_arc` ⇒ 59 字元，維持可讀且可直接查。
+    _sql_constraints = [
+        (
+            'anchor_arc',
+            'CHECK((route_id IS NULL) <> (cloud_service_id IS NULL))',
+            'An Access policy must be anchored on exactly one of '
+            'Application Route / Cloud Service.',
+        ),
+    ]
+
     route_id = fields.Many2one(
         comodel_name='woow_paas_platform.security_access_route',
-        string='Application Route', required=True, ondelete='cascade',
+        string='Application Route', ondelete='cascade',
         index=True,
         help='The route this policy protects. Each protected route is its own '
-             'Cloudflare Access application with its own policy set.',
+             'Cloudflare Access application with its own policy set. '
+             'Exactly one of route_id / cloud_service_id is set (#744).',
+    )
+    cloud_service_id = fields.Many2one(
+        comodel_name='woow_paas_platform.cloud_service',
+        string='Cloud Service', ondelete='cascade',
+        index=True,
+        help='The cloud service this policy protects (#744). Its public '
+             'subdomain is its own Cloudflare Access application. '
+             'Exactly one of route_id / cloud_service_id is set.',
     )
     security_access_id = fields.Many2one(
         comodel_name='woow_paas_platform.security_access',
@@ -41,7 +107,8 @@ class SecurityAccessAccessPolicy(models.Model):
         related='route_id.security_access_id', store=True, index=True,
         help='Derived from route_id; kept stored so the ir.rule workspace walk '
              'and the SA-level policy quota can traverse it. The real binding '
-             'is route_id.',
+             'is route_id. Empty on a cloud-service-anchored policy — that '
+             'half walks cloud_service_id.workspace_id instead (#744).',
     )
     name = fields.Char(string='Name', required=True)
     decision = fields.Selection(
@@ -67,6 +134,75 @@ class SecurityAccessAccessPolicy(models.Model):
     )
     sequence = fields.Integer(string='Evaluation Order', default=10)
     cf_policy_id = fields.Char(string='CF Policy ID', copy=False)
+
+    # ------------------------------------------------------------------ #
+    #  #744：錨點 exclusive arc ＋ 「這一列屬於哪個訂閱」的單一裁決處       #
+    # ------------------------------------------------------------------ #
+
+    @api.model
+    def _assert_anchor_arc_vals(self, vals):
+        """create 側的 arc 檢查——必須在 ``super().create()`` 的 INSERT 之前。
+
+        為什麼不能只靠底下的 ``@api.constrains``：Odoo 的 ``_create()`` 先送
+        INSERT、**之後**才跑 Python constraint（``odoo/models.py`` 的
+        ``_create``：``records._validate_fields(...)`` 在 INSERT 之後），所以
+        create 方向永遠是 PostgreSQL 的 CHECK 先炸——拿到的是
+        ``CheckViolation: ..._anchor_arc``，說不出錯在哪，而且交易當場 abort。
+        write 方向相反（``write()`` 把值排進 ``towrite`` 延後 flush，
+        ``_validate_fields`` 先跑），那一側交給 constrains 就夠。
+
+        傳進來的 vals 必須是**框架解析後**的（``_add_missing_default_values``）：
+        ``default_route_id`` 之類是在 ``super().create()`` 內部才展開的，只看
+        raw vals 會讓「用 context default 塞錨點」整道跳過（#705 F1 同形狀）。
+        """
+        message = _arc_violation(
+            vals.get('name') or '<new>',
+            bool(vals.get('route_id')), bool(vals.get('cloud_service_id')))
+        if message:
+            raise ValidationError(message)
+
+    @api.constrains('route_id', 'cloud_service_id')
+    def _check_anchor_exclusive_arc(self):
+        """route_id XOR cloud_service_id —— 兩者皆空與兩者皆填都拒（write 側）。
+
+        與 ``_sql_constraints`` 的 ``anchor_arc`` 是**同一條不變式的兩層**，
+        不是二選一：SQL CHECK 是唯一擋得住裸 SQL／批次 migration／
+        ``_validate_fields`` 跑不到的路徑的那層，本方法負責在 write 方向給出
+        講得出「錯在哪」的訊息（PG 的 CHECK 違反只回 constraint 名字）。
+        """
+        for pol in self:
+            message = _arc_violation(
+                pol.name or pol.id, bool(pol.route_id),
+                bool(pol.cloud_service_id))
+            if message:
+                raise ValidationError(message)
+
+    def _anchor(self):
+        """這一列的錨點記錄：cloud_service（#744）或 route 的 SA。
+
+        **唯一**的「這條 policy 歸誰管」裁決處。quota 與 email 上限都讀它，
+        免得兩處各自 walk 一次錨點、日後長出第三個錨點時漏改其中一處。
+        arc 保證至多一邊有值，所以 ``or`` 不會遮蔽另一邊。
+        """
+        self.ensure_one()
+        return self.cloud_service_id or self.security_access_id
+
+    def _anchor_plan(self):
+        """錨點訂閱的方案；沒有訂閱／沒有方案 ⇒ 空 recordset（grandfathered）。
+
+        ``sudo()``：典型租戶對 ``sh.subscription.subscription`` 沒有讀權，
+        constraint 走的是租戶自己的 env（見 ``subscription_lifecycle_mixin``
+        的同款註解）。
+        """
+        self.ensure_one()
+        anchor = self._anchor()
+        Plan = self.env['sh.subscription.plan']
+        if not anchor:
+            return Plan.browse()
+        sub = anchor.sudo().subscription_id
+        if not sub:
+            return Plan.browse()
+        return sub.sh_subscription_plan_id
 
     @api.constrains('rule_ids')
     def _check_at_least_one_include(self):
@@ -209,11 +345,14 @@ class SecurityAccessAccessPolicy(models.Model):
         if getattr(self.env.cr, 'sa_skip_policy_quota', False):
             return
         for pol in self:
-            sa = pol.security_access_id
-            sub = sa.sudo().subscription_id if sa else False
-            if not sub or not sub.sh_subscription_plan_id:
+            # #744：錨點走 _anchor_plan()，CS 錨定的 policy 因此吃**它自己**
+            # 訂閱方案的上限。原本直讀 security_access_id：CS 錨定時那個欄位
+            # 恆空 ⇒ 整條 continue，上限對 CS 靜默失效（症狀與「方案不限」
+            # 完全相同，沒有任何訊號分得出來）。
+            plan = pol._anchor_plan()
+            if not plan:
                 continue
-            quota = sub.sh_subscription_plan_id.sa_max_emails_per_policy
+            quota = plan.sa_max_emails_per_policy
             if not quota:  # 0 = unlimited
                 continue
             count = 0
@@ -224,14 +363,28 @@ class SecurityAccessAccessPolicy(models.Model):
             if count > quota:
                 raise ValidationError(
                     "Email quota exceeded: plan '%s' allows %d email(s) per "
-                    "policy." % (sub.sh_subscription_plan_id.name, quota))
+                    "policy." % (plan.name, quota))
 
-    @api.constrains('security_access_id', 'route_id')
+    @api.constrains('security_access_id', 'route_id', 'cloud_service_id')
     def _check_policy_quota(self):
         # P2.5: the quota is an SA-LEVEL total (plan.sa_max_access_policies is
         # a per-SA allowance, not per-route), so count every policy across all
         # of the SA's routes via the stored related security_access_id. Policies
         # now bind to routes, but the budget is still pooled per Security Access.
+        #
+        # #744: the same shape, one anchor over — a CS-anchored policy pools
+        # per CLOUD SERVICE (that is the entity carrying the subscription), so
+        # the count is scoped by whichever anchor this row actually has. The
+        # anchor also decides WHICH subscription's plan supplies the number;
+        # both come from _anchor()/_anchor_plan() so the scope of the count and
+        # the source of the quota can never drift apart.
+        #
+        # ⚠ 這個檢查目前把 `sa_max_access_policies == 0` 讀成「一條都不准」。
+        # CS 變體的方案正是 0（＝政策數不限，設計拍板 4）⇒ **T1（#743）把 0
+        # 改成 unlimited 之前，CS 錨定的第一條 policy 就會撞這裡**。兩票並行、
+        # 無 blocker：本票只負責「計數與方案來源跟著錨點走」，0 的語意翻轉是
+        # #743 的標的，刻意不在這裡順手改（同一個 if 兩張 PR 各改一半會在
+        # rebase 時互相吃掉）。
         #
         # sa_skip_policy_quota: the P2.5 migration fan-out copies the OLD single
         # shared app's legacy policy set onto EACH protected route (behaviour-
@@ -253,16 +406,18 @@ class SecurityAccessAccessPolicy(models.Model):
         if getattr(self.env.cr, 'sa_skip_policy_quota', False):
             return
         for pol in self:
-            sa = pol.security_access_id
-            sub = sa.sudo().subscription_id
-            if not sub or not sub.sh_subscription_plan_id:
+            plan = pol._anchor_plan()
+            if not plan:
                 continue
-            quota = sub.sh_subscription_plan_id.sa_max_access_policies
-            count = self.search_count([('security_access_id', '=', sa.id)])
+            quota = plan.sa_max_access_policies
+            anchor = pol._anchor()
+            anchor_field = ('cloud_service_id'
+                            if pol.cloud_service_id else 'security_access_id')
+            count = self.search_count([(anchor_field, '=', anchor.id)])
             if count > quota:
                 raise ValidationError(
                     "Access policy quota exceeded: plan '%s' allows %d "
-                    "polic(ies)." % (sub.sh_subscription_plan_id.name, quota))
+                    "polic(ies)." % (plan.name, quota))
 
     # Atomicity scope: mirror the route sub-model's savepoint so a
     # create/write/unlink whose Access re-sync raises rolls the DB row back and
@@ -282,6 +437,14 @@ class SecurityAccessAccessPolicy(models.Model):
     # route._sync_access_to_operator (it no-ops without a live tunnel / when the
     # route is not protected), so create/write/unlink just call the route sync
     # and let the route decide. This keeps the gate single-sourced on the route.
+    #
+    # 🔴 #744 / T3 接手處（#745）：下面三個 override 的 re-sync 都寫成
+    # `self.mapped('route_id')` —— 對 **CS 錨定**的 policy 那個 mapped 是空集，
+    # 所以今天一條 CS policy 的 create/write/unlink **不會**打 operator。這是
+    # 現階段正確的（CS 側還沒有任何東西會建 Cloudflare Access app），但它是
+    # 「什麼都沒發生」型的沉默，看不出是刻意還是漏掉 —— 所以寫在這裡：
+    # T3 補上 CS 的 `_sync_access_to_operator()` 時，這三處要一起改成走錨點
+    # 分派，而不是各自再加一個 `mapped('cloud_service_id')` 分支。
 
     @api.model_create_multi
     def create(self, vals_list):
@@ -300,14 +463,31 @@ class SecurityAccessAccessPolicy(models.Model):
                     'group': 'include', 'rule_type': rt,
                     'rule_value': rv or False})]
             # Sparse precedence: a new policy lands at max(sequence)+10 within
-            # its route (not the flat default 10), so policies never all collide
-            # on one precedence — the reorder UI then renumbers in 10s. An
-            # explicit sequence in vals is respected.
-            if not vals.get('sequence') and vals.get('route_id'):
+            # its ANCHOR (not the flat default 10), so policies never all
+            # collide on one precedence — the reorder UI then renumbers in 10s.
+            # An explicit sequence in vals is respected.
+            #
+            # #744：per-anchor，不是 per-route。CF precedence 的作用域就是
+            # 「一個 Access application」＝一個錨點，所以 CS 錨定的 policy 要
+            # 跟自己那台 CS 的既有 policy 比，不能沿用 route 那條（CS 錨定時
+            # route_id 恆空 ⇒ 舊寫法整段跳過，每一條都落在 sequence=10 上，
+            # 之後在 CF 撞成同一個 precedence）。
+            #
+            # ⚠ 這裡讀 raw vals 是**刻意**的，與 `_assert_anchor_arc_vals` 讀
+            # 解析後 vals 的理由不衝突：sequence 是體驗（precedence 不要都撞在
+            # 10），錨點是安全（不能自帶別人的錨點）。用 default context 塞
+            # route_id 的呼叫端會在下一行的 arc 檢查被判定，這裡不必重算一次。
+            anchor_field = next(
+                (f for f in ('route_id', 'cloud_service_id') if vals.get(f)),
+                None)
+            if not vals.get('sequence') and anchor_field:
                 last = self.search(
-                    [('route_id', '=', vals['route_id'])],
+                    [(anchor_field, '=', vals[anchor_field])],
                     order='sequence desc, id desc', limit=1)
                 vals['sequence'] = (last.sequence + 10) if last else 10
+            # #744：arc 的 create 側。必須在 `super().create()` 之前——INSERT
+            # 一旦送出去，擋下來的就是 PG 的 CHECK（訊息不可讀且交易 abort）。
+            self._assert_anchor_arc_vals(self._add_missing_default_values(vals))
         with self.env.cr.savepoint():
             policies = super().create(vals_list)
             # Guarantee the ≥1-include invariant even when rule_ids was absent
@@ -328,7 +508,7 @@ class SecurityAccessAccessPolicy(models.Model):
             if (not self.env.context.get('sa_skip_route_sync')
                     and any(k in vals for k in (
                         'name', 'decision', 'sequence', 'route_id',
-                        'rule_ids'))):
+                        'cloud_service_id', 'rule_ids'))):
                 for route in self.mapped('route_id'):
                     route._sync_access_to_operator()
         return result
@@ -375,6 +555,10 @@ class SecurityAccessAccessPolicy(models.Model):
         return {
             'id': self.id, 'name': self.name, 'decision': self.decision,
             'sequence': self.sequence, 'route_id': self.route_id.id,
+            # #744：兩個錨點都送。前端（T4）判「這條 policy 掛在哪」不必回頭
+            # 猜——`route_id` 在 CS 錨定時是 False，只讀它會把 CS 的 policy 讀成
+            # 「掛在 route 0」。
+            'cloud_service_id': self.cloud_service_id.id,
             'include': self._rules_by_group('include'),
             'require': self._rules_by_group('require'),
             'exclude': self._rules_by_group('exclude'),

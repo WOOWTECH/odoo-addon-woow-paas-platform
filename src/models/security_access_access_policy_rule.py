@@ -22,6 +22,12 @@ class SecurityAccessAccessPolicyRule(models.Model):
     （鏡像 policy 子模型）。route_id 經 policy_id 兩跳 stored related 物化
     （policy_id.security_access_id），讓 ir.rule workspace walk 與 SA-level
     email 配額 count 可 traverse。
+
+    #744：父 policy 的錨點變成 exclusive arc 之後，本子模型**必須對等鏡射**
+    第二個錨點（`cloud_service_id`），否則 CS 錨定的 policy 底下這張表的
+    ir.rule domain 兩腿皆假 ⇒ 租戶連自己那條 selector rule 都建不出來、讀不到。
+    這是 [[unbound-project-acl-dual-leg]] 明列的「sub-model 必須對等改」那一條
+    （那邊的教訓是漏改 = leak；本案方向相反是 fail-closed，但同樣是壞的）。
     """
 
     _name = 'woow_paas_platform.security_access_access_policy_rule'
@@ -40,7 +46,14 @@ class SecurityAccessAccessPolicyRule(models.Model):
         string='Security Access',
         related='policy_id.security_access_id', store=True, index=True,
         help='Derived from policy_id (two hops); kept stored so the ir.rule '
-             'workspace walk and the SA-level email quota can traverse it.',
+             'workspace walk and the SA-level email quota can traverse it. '
+             'Empty when the parent policy is anchored on a cloud service.',
+    )
+    cloud_service_id = fields.Many2one(
+        comodel_name='woow_paas_platform.cloud_service',
+        string='Cloud Service',
+        related='policy_id.cloud_service_id', store=True, index=True,
+        help='#744：父 policy 的另一半錨點，同樣 store=True 讓 ir.rule 走得到。',
     )
     group = fields.Selection(
         selection=[
