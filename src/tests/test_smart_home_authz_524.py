@@ -617,12 +617,21 @@ class TestSmartHomeTunnelAnchor524(_SmartHome524Fixture):
         """
         self.authenticate(self.alice_login, self.alice_login)
 
-        # (a) 注入 anchor 欄位 + 一個非 anchor 的對照欄位
-        self._assert_ok(
-            self._call_kw('ir.default', 'set',
-                          ['woow_paas_platform.smart_home', 'tunnel_id',
-                           self.b_tunnel_uuid, True]),
-            'ir.default.set 必須成功（租戶對 ir.default 有 CRUD）')
+        # (a) 注入兩個 anchor 欄位 + 一個非 anchor 的對照欄位
+        #
+        # 為什麼只注入 `tunnel_id` / `tunnel_name`、不注入 `tunnel_token`：
+        # `ir.default.create/write` 會呼叫 `_check_accessible_field_id()`，對非 su
+        # 身分做 `model.check_field_access_rights('write', [field.name])`
+        # （`odoo/addons/base/models/ir_default.py`）⇒ 帶 `groups=` 的
+        # `tunnel_token` 這條載體對租戶本來就走不通。**恰好是沒有欄位級遮罩的那兩個
+        # 錨點可達**——而它們正是決定「打向哪一個 Cloudflare 物件」的那兩個。
+        for field, value in (('tunnel_id', self.b_tunnel_uuid),
+                             ('tunnel_name', 'stolen-name')):
+            self._assert_ok(
+                self._call_kw('ir.default', 'set',
+                              ['woow_paas_platform.smart_home', field,
+                               value, True]),
+                'ir.default.set(%s) 必須成功（租戶對 ir.default 有 CRUD）' % field)
         self._assert_ok(
             self._call_kw('ir.default', 'set',
                           ['woow_paas_platform.smart_home', 'ha_port',
@@ -656,6 +665,10 @@ class TestSmartHomeTunnelAnchor524(_SmartHome524Fixture):
             home.tunnel_id,
             '#524 覆核 HIGH：ir.default 注入的 tunnel_id 不得落地（實得 %r）'
             % home.tunnel_id)
+        self.assertFalse(
+            home.tunnel_name,
+            '#524 覆核 HIGH：ir.default 注入的 tunnel_name 也不得落地（實得 %r）'
+            % home.tunnel_name)
 
     def test_C10_default_context_injection_cannot_seed_the_anchor(self):
         """同族的**另一個載體**：`default_<field>` context。
