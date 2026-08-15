@@ -812,6 +812,14 @@ class SecurityAccessController(Controller):
         # two-layer quota: constraint re-checks at ORM layer (lock-step with
         # the model's _check_policy_quota — an SA-LEVEL total). sudo on
         # subscription_id read only: portal owners lack ACL on the subscription.
+        #
+        # quota 0 = unlimited (#743), in step with the model constraint. This
+        # pre-check runs BEFORE Policy.create(), so without the exemption here
+        # the model's exemption is unreachable from the UI: `existing >= quota`
+        # is 0 >= 0 on the very first policy of a zero-quota plan, and the
+        # request never gets far enough for the constraint to have an opinion.
+        # (This is only about sa_max_access_policies — the route pre-check above
+        # keeps sa_max_routes at 0 = none allowed.)
         sub = sa.sudo().subscription_id
         Policy = request.env[
             "woow_paas_platform.security_access_access_policy"]
@@ -819,7 +827,7 @@ class SecurityAccessController(Controller):
             quota = sub.sh_subscription_plan_id.sa_max_access_policies
             existing = Policy.search_count(
                 [("security_access_id", "=", sa.id)])
-            if existing >= quota:
+            if quota and existing >= quota:
                 return {"success": False,
                         "error": "Access policy quota exceeded: plan allows "
                                  "%d polic(ies)" % quota}
