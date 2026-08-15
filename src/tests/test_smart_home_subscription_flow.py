@@ -15,9 +15,9 @@ from unittest.mock import patch, MagicMock
 from odoo.tests.common import TransactionCase
 
 from odoo.addons.woow_paas_platform.controllers.smart_home import (
-from .smart_home_fixture import sh_model  # #524：建立閘 fixture helper
     SmartHomeController,
 )
+from .smart_home_fixture import sh_model  # #524：建立閘 fixture helper
 
 
 def _patch_request(env):

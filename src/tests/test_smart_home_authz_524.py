@@ -51,6 +51,7 @@ import json
 import uuid
 from unittest.mock import MagicMock, patch
 
+from odoo.exceptions import UserError
 from odoo.tests import HttpCase, tagged
 
 from odoo.addons.woow_paas_platform.models.workspace_access import (
@@ -514,6 +515,30 @@ class TestSmartHomeTunnelAnchor524(_SmartHome524Fixture):
     # ---------------------------------------------------------------- #
     #  陽性對照：伺服器端合法寫入點必須穿得過錨點閘                      #
     # ---------------------------------------------------------------- #
+    #
+    # ⚠ C6／C7 走的是**伺服器端身分**（`.sudo()`），不是租戶的 HTTP 端點——
+    #    這是刻意的，而且理由是量出來的、不是省事：
+    #
+    #    在 `origin/develop 5c641b7f`（**本 PR 的任何改動都還沒進去**）上實測，
+    #    只有 `base.group_user` 的 workspace owner 打
+    #    `POST /api/workspaces/<ws>/smarthomes/<id> {action: provision}` 會拿到
+    #      You do not have enough rights to access the fields "tunnel_token" …
+    #      Operation: write  User: 178
+    #    而記錄停在 `state='provisioning'`、`tunnel_id` 為空。
+    #    根因是 `tunnel_token` 自 model 誕生（PR #115, 2026-02-28）就帶
+    #    `groups='base.group_system'`，而 `_provision_smarthome` 用的是**非 sudo**
+    #    的租戶 recordset ⇒ 租戶經 `/woow` 的 provision **從來沒有通過**。
+    #    同理 `action='delete'` 也一律撞 ACL `unlink=0`。
+    #    既有測試沒抓到，是因為它們全在 `TransactionCase`（superuser env）裡呼叫
+    #    `action_provision()`。
+    #
+    #    ⇒ 那是**與 #524 無關的既有缺陷**，依工單紀律不在本 PR 順手修（已回報）。
+    #    但錨點閘要證明的是「**伺服器端合法寫入點穿得過去**」，那條路徑正是
+    #    `action_provision` / `_cleanup_tunnel` 內部的 write，所以在這裡以
+    #    `.sudo()` 驅動它是**對準受測對象**，不是繞過守線：錨點守衛對 su／sudo
+    #    一律生效（見 `_INTERNAL_IDENTITY_WRITE` 的註解），sudo 打不開它。
+    #    租戶身分那一側的陽性對照由 A0e／A0f（owner/admin 經 call_kw 寫得動）
+    #    與 B5（正常下單流程開得出來）承擔。
     def test_C6_positive_control_provision_still_stores_the_anchor(self):
         """`action_provision` 是錨點的合法寫入點 —— 沒開閘就會被自己的守衛擋死。"""
         home = self._order_smart_home(self.alice_login, self.w1, 'to provision')
@@ -521,12 +546,7 @@ class TestSmartHomeTunnelAnchor524(_SmartHome524Fixture):
 
         client = self._operator_client()
         with self._patched_operator(client):
-            res = self._post_json(
-                '/api/workspaces/%d/smarthomes/%d' % (self.w1.id, home.id),
-                {'action': 'provision'})
-        payload = self._assert_ok(res, 'provision 端點不該回 JSON-RPC error')
-        self.assertTrue(payload.get('success'),
-                        '陽性對照：正常 provision 必須成功（回 %r）' % payload)
+            home.sudo().action_provision()
         home.invalidate_recordset()
         self.assertTrue(client.create_tunnel.called,
                         'operator 必須真的被呼叫（否則測到的是空跑）')
@@ -534,6 +554,9 @@ class TestSmartHomeTunnelAnchor524(_SmartHome524Fixture):
             home.tunnel_id, client.create_tunnel.return_value['tunnel_id'],
             '#524 陽性對照：provision 寫進來的錨點必須落地'
             '（沒落地＝錨點閘把正當的路一起擋掉了）')
+        self.assertEqual(
+            home.tunnel_name, client.create_tunnel.return_value['tunnel_name'],
+            '#524 陽性對照：tunnel_name 也是錨點，同樣要寫得進來')
         self.assertEqual(home.state, 'active')
 
     def test_C7_positive_control_teardown_still_clears_the_anchor(self):
@@ -541,22 +564,27 @@ class TestSmartHomeTunnelAnchor524(_SmartHome524Fixture):
         home = self._order_smart_home(self.alice_login, self.w1, 'to teardown')
         client = self._operator_client()
         with self._patched_operator(client):
-            self._post_json(
-                '/api/workspaces/%d/smarthomes/%d' % (self.w1.id, home.id),
-                {'action': 'provision'})
+            home.sudo().action_provision()
             home.invalidate_recordset()
             provisioned_uuid = home.tunnel_id
             self.assertTrue(provisioned_uuid, '前提：provision 有把 tunnel 存下來')
 
-            res = self._post_json(
-                '/api/workspaces/%d/smarthomes/%d' % (self.w1.id, home.id),
-                {'action': 'delete'})
-        payload = self._assert_ok(res, 'delete 端點不該回 JSON-RPC error')
-        self.assertTrue(payload.get('success'),
-                        '陽性對照：正常刪除必須成功（回 %r）' % payload)
+            home.sudo().action_delete()
         client.delete_tunnel.assert_called_once_with(provisioned_uuid)
         self.assertFalse(self.SmartHome.sudo().browse(home.id).exists(),
-                         '記錄必須真的被刪掉')
+                         '記錄必須真的被刪掉'
+                         '（還在＝`_cleanup_tunnel` 沒能清掉錨點、unlink fail-loud）')
+
+    def test_C8_sudo_alone_does_not_open_the_anchor_gate(self):
+        """鑑別項：C6／C7 用 sudo 驅動，所以必須證明 sudo **本身**打不開錨點閘。
+
+        沒有這一條，C6／C7 的綠燈就與「守衛對 sudo 無效」不可區分——而那正是
+        `su-env-exempt-guard-false-green.md` 記的那個陷阱。
+        """
+        with self.assertRaises(UserError) as ctx:
+            self.sh1.sudo().write({'tunnel_id': self.b_tunnel_uuid})
+        self.assertIn("'tunnel_id' is immutable", str(ctx.exception))
+        self.assertNotEqual(self.sh1.sudo().tunnel_id, self.b_tunnel_uuid)
 
 
 class TestSmartHomeRefreshStatusLockstep524(_SmartHome524Fixture):
@@ -572,9 +600,14 @@ class TestSmartHomeRefreshStatusLockstep524(_SmartHome524Fixture):
         home = self._order_smart_home(self.alice_login, self.w1, 'for refresh')
         client = self._operator_client()
         with self._patched_operator(client):
-            self._post_json(
-                '/api/workspaces/%d/smarthomes/%d' % (self.w1.id, home.id),
-                {'action': 'provision'})
+            # sudo 驅動 provision 的理由同 C6／C7 上方的長註解（既有缺陷，
+            # 與 #524 無關）——這裡只是要把記錄推到「有 tunnel_id」的狀態，
+            # 因為 `action_refresh_status` 對沒有 tunnel_id 的記錄會提早 return
+            # ⇒ 不推到這個狀態，D1 會在「根本沒走到 write」的前提上恆綠。
+            home.sudo().action_provision()
+        home.invalidate_recordset()
+        self.assertTrue(home.tunnel_id,
+                        '前提：refresh_status 只有在有 tunnel_id 時才會 write')
 
         self.authenticate(self.carol_login, self.carol_login)
         res = self._post_json(
@@ -592,9 +625,10 @@ class TestSmartHomeRefreshStatusLockstep524(_SmartHome524Fixture):
         home = self._order_smart_home(self.alice_login, self.w1, 'for refresh ok')
         client = self._operator_client()
         with self._patched_operator(client):
-            self._post_json(
-                '/api/workspaces/%d/smarthomes/%d' % (self.w1.id, home.id),
-                {'action': 'provision'})
+            home.sudo().action_provision()
+            home.invalidate_recordset()
+            self.assertTrue(home.tunnel_id, '前提：要有 tunnel_id 才會真的 write')
+            self.authenticate(self.alice_login, self.alice_login)
             res = self._post_json(
                 '/api/workspaces/%d/smarthomes/%d' % (self.w1.id, home.id),
                 {'action': 'refresh_status'})
