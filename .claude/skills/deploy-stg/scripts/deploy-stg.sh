@@ -267,13 +267,19 @@ fi
 # shellcheck source=./plugin-resolve.sh
 source "${SCRIPT_DIR}/plugin-resolve.sh"
 
-if ! PLUGIN_CREATE_SH="$(resolve_plugin_create_sh)"; then
+# ⚠ 刻意不寫 `PLUGIN_CREATE_SH="$(resolve_plugin_create_sh)"`：`$( )` 是 subshell，
+#   函式回填的 PLUGIN_RESOLVE_TRIED（下面失敗訊息的唯一資料來源）會跟著 subshell 一起
+#   消失，訊息就只能退回手寫常數——而手寫的那份與實際查找漂開時是零訊號的（#728 本體）。
+if ! resolve_plugin_create_sh >/dev/null; then
     echo -e "${RED}ERROR: 找不到 woow-dev plugin 的 k8s-dev-sandbox create.sh。${NC}" >&2
     echo -e "${YELLOW}deploy-stg 已改為委派給 woow-dev plugin 建沙盒（不再自帶 create.sh）。${NC}" >&2
-    echo -e "${YELLOW}請安裝 woow-dev plugin，或設 WOOWPRD_PLUGIN_ROOT 指向其根目錄。${NC}" >&2
-    echo -e "${YELLOW}  已找：\$WOOWPRD_PLUGIN_ROOT / ~/.claude/plugins-local/woowprd / ~/.claude/plugins/cache/*/{woow-dev,woowprd}/* / cache 遞迴 fallback${NC}" >&2
+    echo -e "${YELLOW}請安裝 woow-dev plugin，或設 WOOWPRD_PLUGIN_ROOT 指向 plugin 根${NC}" >&2
+    echo -e "${YELLOW}（例：<plugin-repo>/plugins/woow-dev；指到 repo 根也接得住）。${NC}" >&2
+    echo -e "${YELLOW}已找過（依序，* 為 glob）：${NC}" >&2
+    plugin_resolve_tried_report | sed 's/^/  /' >&2
     exit 1
 fi
+PLUGIN_CREATE_SH="$PLUGIN_RESOLVE_PATH"
 echo -e "${BLUE}Delegating sandbox creation to woow-dev plugin:${NC} ${PLUGIN_CREATE_SH}"
 
 # web.base.url + freeze 的 seed 已宣告式化：.sandbox.yml 的 config_params_stg，
