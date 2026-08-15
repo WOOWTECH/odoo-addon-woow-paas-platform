@@ -62,6 +62,13 @@ Odoo core `ir_rule.py::_get_rules` 的 SQL 只選 **global rule（無 groups）*
    適用 rule 帶 `perm_unlink`）另列一段**不阻擋**——今天 `project.project` 就落在
    那裡，那是 PR #705 覆核 F4 已追蹤的既有缺口，不屬 #524。用 `--strict` 可把
    advisory 一併升為阻擋（等那條修好後即可在 CI 打開）。
+5. **`group_id` 為空的 ACL 列（global access）已納入檢查，但 rule 判準只到
+   Internal User。** 空 group ＝ 不綁任何群組 ⇒ 對所有人開放（含 portal／public），
+   **比 `base.group_user` 更寬**。它一度被整個跳過（PR #738 覆核 round1 MEDIUM）——
+   那不該只被降級成盲區，因為「更寬的授權反而不檢查」是比 #524 更糟的形狀，
+   所以改成納入檢查並在輸出點名。但本 gate 的 rule 判準仍只問「有沒有對 Internal
+   User 生效的 rule」，**portal／public 身分不在判準內**：那類 ACL 應該連 global
+   `ir.rule`（無 groups）一起配，或改綁具體群組。
 
 ## 用法
 
@@ -188,15 +195,29 @@ def build_xmlid_index(model_names):
 
 
 def parse_acl(csv_path, xmlid_index):
-    """回傳 ``{model_name: set(已授予的方向)}``（只看 `base.group_user` 的列）。
+    """回傳 ``({model_name: set(已授予的方向)}, unresolved, global_models)``。
+
+    收兩種列：
+
+    * `group_id:id` 是 `base.group_user` —— 本 gate 的主要對象
+    * `group_id:id` **為空** —— Odoo 語意是 **global access**（不綁任何群組 ⇒ 對
+      所有人開放，含 portal／public），**比 `base.group_user` 更寬**
+
+    🔴 第二種原本被 `continue` 整個跳過（PR #738 覆核 round1 MEDIUM）。那是一個
+    比 #524 更糟的形狀：有人把某個 workspace-scoped model 的 ACL 列 group 留空
+    （複製列漏帶、或想開 portal 忘了配 rule），這道**專門防 #524 重演**的 gate
+    會回綠燈，而洞比 #524 還大。「更寬的授權反而不檢查」不能寫成盲區——盲區的
+    語意是「這一類我看不到」，但這一類我看得到，只是判準寫錯了。
 
     另回傳無法解析成 model 的 xmlid 列，讓它們**列出來**而不是被靜默丟掉。
     """
     granted = {}
     unresolved = []
+    global_models = set()
     with open(csv_path, encoding='utf-8') as fh:
         for row in csv.DictReader(fh):
-            if (row.get('group_id:id') or '').strip() != INTERNAL_USER_GROUP:
+            group = (row.get('group_id:id') or '').strip()
+            if group not in ('', INTERNAL_USER_GROUP):
                 continue
             raw = (row.get('model_id:id') or '').strip()
             key = raw.split('.')[-1]
@@ -208,7 +229,9 @@ def parse_acl(csv_path, xmlid_index):
                      if (row.get(p) or '0').strip() in ('1', 'True', 'true')}
             granted.setdefault(model, set())
             granted[model] |= perms
-    return granted, unresolved
+            if group == '':
+                global_models.add(model)
+    return granted, unresolved, global_models
 
 
 def parse_rules(xml_path, xmlid_index):
@@ -268,6 +291,7 @@ BLIND_SPOTS = (
     "只看**本 repo** 的 `ir.model.access.csv` 與 `ir_rules.xml`。"
     "相依模組授予的 ACL／宣告的 rule 不在視野內。",
     "**逐方向覆蓋只是 advisory**（`--strict` 可升為阻擋）。主判準是 model 層級。",
+    "ACL 的 `group_id` 為空（global access）**已納入檢查**（比 base.group_user 更寬，不該只被列成盲區）；但本 gate 的 rule 判準仍只問「對 Internal User 生效」，**portal/public 身分不在判準內**。",
 )
 
 
@@ -309,7 +333,7 @@ def run(repo_root, strict=False, out=sys.stdout):
     models = collect_models(py_files)
     fields_by_model = resolve_inherited_fields(models)
     xmlid_index = build_xmlid_index(models.keys())
-    acl_granted, acl_unresolved = parse_acl(acl_csv, xmlid_index)
+    acl_granted, acl_unresolved, acl_global = parse_acl(acl_csv, xmlid_index)
     rules = parse_rules(rules_xml, xmlid_index)
 
     workspace_models = sorted(
@@ -341,6 +365,14 @@ def run(repo_root, strict=False, out=sys.stdout):
     print("", file=out)
     print("涵蓋範圍內的 model（%d）：%s"
           % (len(in_scope), ', '.join(in_scope) or '（無）'), file=out)
+    global_in_scope = sorted(m for m in in_scope if m in acl_global)
+    if global_in_scope:
+        print("⚠ 其中這些的 ACL 有 **group_id 為空**的列（= global access，比 "
+              "base.group_user 更寬、含 portal/public）：%s" % ', '.join(global_in_scope),
+              file=out)
+        print("  本 gate 只驗到「有沒有對 Internal User 生效的 rule」；"
+              "portal/public 身分不在本判準內——那類 ACL 應該連 global ir.rule "
+              "一起配，或改綁具體群組。", file=out)
     if no_acl:
         print("有 workspace_id 但本 repo 的 ACL 未對 base.group_user 開放（%d，"
               "不檢查、列出以免靜默漏掉）：%s"

@@ -187,21 +187,45 @@ def _is_internal_identity_write(env):
 
 
 def _strip_identity_anchors(env, vals_list):
-    """create() 側：丟掉呼叫端自帶的身分錨點。
+    """create() 側：把身分錨點**明示寫成空**，讓它不可能由呼叫端決定。
 
     `super().create()` 不會繞經 `write()`，所以只靠 write 守衛會留下一個
     create-time squat：一筆全新的列在還沒 provision 之前就綁上受害者的 tunnel
     ——而 `action_provision` 的 `if self.tunnel_id:` 分支會因此**跳過**建立 tunnel。
     對**所有人**生效（含 superuser），sentinel context 是唯一豁免。
 
-    採「剝除」而非 raise：`copy()` 與一般資料載入要能繼續運作——一份不帶錨點的
+    🔴 **為什麼是 `vals[field] = False` 而不是 `vals.pop(field)`**（PR #738 覆核
+    round1 的 HIGH，實測紅過）：
+
+    `super().create()` 內部會呼叫 `_add_missing_default_values(vals)`，把「vals 裡
+    **缺席**」的欄位從 `ir.default` / `default_<field>` context / 欄位 default 補
+    回來。`pop` 恰恰把 anchor 變成**缺席** ⇒ 預設值在剝除**之後**才落地：
+
+        pop（key 消失）→ super().create() → _add_missing_default_values 補回來
+
+    實測（沙盒、真 HTTP、只掛 `base.group_user` 的租戶）：
+    `ir.default.set('woow_paas_platform.smart_home', 'tunnel_id', <受害者 UUID>,
+    user_id=True)` 之後走**正常下單端點**建立，記錄一出生 `tunnel_id` 就是攻擊者
+    選的值——繞過的是 create 的預設值通道，不是 write 守衛。
+
+    ⚠ 「先 `_add_missing_default_values(vals)` 解析、再從解析結果 pop」**同樣是錯
+    的**：pop 之後 key 又缺席，`super().create()` 內部會再解析一次、再補一次。
+    解析後的 vals 適合用來**判斷**（`cloud_service` 的 #705 F1 就是拿它做前置檢查），
+    不適合用來**剝除**。
+
+    把 key **留在 vals 裡並給定 falsy 值**才是一次涵蓋所有載體的做法：
+    `_add_missing_default_values` 只補「不在 vals 裡」的欄位，而且結尾是
+    `defaults.update(values)`（呼叫端的值永遠壓過 default）⇒ 兩層都擋住，
+    而且不必逐個載體去堵（逐載體補正是 #657 同一行修兩次的原因）。
+
+    採「寫空」而非 raise：`copy()` 與一般資料載入要能繼續運作——一份不帶錨點的
     複本正是複本該有的樣子。
     """
     if _is_internal_identity_write(env):
         return
     for vals in vals_list:
         for field in _IDENTITY_ANCHOR_FIELDS:
-            vals.pop(field, None)
+            vals[field] = False
 
 
 def _reject_identity_anchor_writes(env, vals):
@@ -556,7 +580,19 @@ class SmartHome(models.Model):
                 "[SH] tunnel deleted sh=%s tunnel=%s", self.id, self.tunnel_id,
             )
             # #524：清空錨點也是寫錨點 —— 走同一個 sentinel 逃生口。
-            _internal_identity(self).write({'tunnel_id': False})
+            #
+            # **三個錨點一起清**（PR #738 覆核 round1 LOW）：tunnel 已經不存在了，
+            # 留著 `tunnel_name` / `tunnel_token` 是過期的憑證與名稱。前者會經
+            # `to_dict()` 出現在 API 回應（cron 的 `_do_cleanup` 路徑會把記錄留在
+            # `state='deleting'`，那筆資料因此活得比 tunnel 久）；後者是 tunnel 憑證
+            # 本身，雖有 `groups='base.group_system'` 遮罩、也不驅動任何後續呼叫，
+            # 但沒有任何理由留一份指向已刪除資源的憑證。
+            #
+            # ⚠ 順序不變：**清空只在 `delete_tunnel` 成功之後**。失敗時三個都保留，
+            # `unlink()` 的 fail-loud guard 與 `_do_cleanup` 的重試分支都判
+            # `if self.tunnel_id:`，語意不受本次擴充影響。
+            _internal_identity(self).write({
+                field: False for field in _IDENTITY_ANCHOR_FIELDS})
         except Exception as e:
             _logger.warning(
                 "[SH] tunnel cleanup failed sh=%s: %s — kept for retry",

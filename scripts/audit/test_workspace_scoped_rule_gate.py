@@ -229,6 +229,60 @@ class TestAclGateInteraction(unittest.TestCase):
         self.assertIn(SMART_HOME, out.split('未對 base.group_user 開放')[1])
 
 
+class TestGlobalAccessRowIsInScope(unittest.TestCase):
+    """`group_id` 為空 ＝ global access，**比 base.group_user 更寬**，必須被檢查。
+
+    PR #738 覆核 round1 MEDIUM：這類列原本被 `continue` 整個跳過 ⇒ 有人把某個
+    workspace-scoped model 的 ACL 列 group 留空、又沒配 rule，這道專門防 #524
+    重演的 gate 會回綠燈，而洞比 #524 更大。
+    """
+
+    def _make_global_row(self, repo, drop_rules):
+        rows = repo.read(ACL).split('\n')
+        out = []
+        replaced = 0
+        for r in rows:
+            if r.startswith('access_smart_home_user,'):
+                parts = r.split(',')
+                self.assertEqual(parts[3], 'base.group_user',
+                                 'fixture 前提：第 4 欄應該是 group_id')
+                parts[3] = ''            # ← group 留空 = global access
+                r = ','.join(parts)
+                replaced += 1
+            out.append(r)
+        self.assertEqual(replaced, 1, 'fixture 前提：應該只改到那一列')
+        repo.write(ACL, '\n'.join(out))
+        if drop_rules:
+            xml = repo.read(RULES)
+            for xmlid in ('smart_home_rule_member_read',
+                          'smart_home_rule_owner_admin_manage'):
+                xml = _drop_rule(xml, xmlid)
+            repo.write(RULES, xml)
+
+    def test_global_row_without_any_rule_is_flagged(self):
+        """🔴 這一格就是修復前會漏掉的那個：更寬的授權 + 零 rule ⇒ 必須紅。"""
+        with _Repo() as repo:
+            self._make_global_row(repo, drop_rules=True)
+            code, out = repo.run()
+        self.assertEqual(code, 1, out)
+        self.assertIn(SMART_HOME, out.split('❌ 違規')[1])
+
+    def test_global_row_is_named_in_the_output(self):
+        """有 rule 時仍要**點名**它是 global access——判準只到 Internal User。"""
+        with _Repo() as repo:
+            self._make_global_row(repo, drop_rules=False)
+            code, out = repo.run()
+        self.assertEqual(code, 0, out)
+        self.assertIn('group_id 為空', out)
+        self.assertIn(SMART_HOME, out.split('group_id 為空')[1])
+
+    def test_baseline_has_no_global_row(self):
+        """鑑別力前提：未突變的 repo 不該有 global 列，否則上兩條零資訊。"""
+        with _Repo() as repo:
+            _code, out = repo.run()
+        self.assertNotIn('group_id 為空', out)
+
+
 class TestBlindSpotsAreAlwaysPrinted(unittest.TestCase):
     """盲區必須出現在**gate 自己的輸出**裡，紅綠皆然。
 

@@ -587,6 +587,117 @@ class TestSmartHomeTunnelAnchor524(_SmartHome524Fixture):
                          '記錄必須真的被刪掉'
                          '（還在＝`_cleanup_tunnel` 沒能清掉錨點、unlink fail-loud）')
 
+    # ---------------------------------------------------------------- #
+    #  C9-C11：create 側**不得只看 raw vals**（PR #738 覆核 round1 HIGH）  #
+    # ---------------------------------------------------------------- #
+    #
+    # 第一版的 `_strip_identity_anchors` 是 `vals.pop(field, None)` ⇒ 只碰呼叫端
+    # 傳進來的那個 dict。而 `super().create()` 內部會呼叫
+    # `_add_missing_default_values(vals)`，把「vals 裡**缺席**」的欄位從
+    # `ir.default` / `default_<field>` context 補回來——**`pop` 剛好把 anchor
+    # 變成缺席**，於是預設值在 strip 之後才落地。時序：
+    #
+    #     pop（key 消失） → super().create() → _add_missing_default_values 補回來
+    #
+    # ⇒ 租戶只要 `ir.default.set(..., 'tunnel_id', <受害者 UUID>, user_id=True)`
+    #   再走**正常下單端點**，記錄一出生就帶著別人的 tunnel UUID，接著走刪除端點
+    #   就是 §第二節那條破壞性路徑——**繞過的是 create 的預設值通道，不是 write 守衛**。
+    #
+    # 這是本 repo 的慣犯（`#657` 同一行修過兩次、`#705` F1 在 cloud_service 實測過）。
+    def test_C9_ir_default_injection_cannot_seed_the_anchor(self):
+        """🔴 租戶用 `ir.default` 注入 `tunnel_id` 預設值，走正常下單流程建立。
+
+        鑑別力靠**兩段陽性對照**，缺一不可：
+          (a) 注入本身要成功——`ir.default.get()` 讀得回注入值。少了它，
+              「tunnel_id 是空的」與「`ir.default.set` 根本沒寫進去」分不出來。
+          (b) 同一支 `ir.default` 機制對**非 anchor 欄位**（`ha_port`）必須**真的
+              生效**。少了它，「anchor 沒被注入」與「這個 Odoo 版本的 ir.default
+              對 create 根本不作用」分不出來——那會讓本測試在守衛被拿掉之後
+              **仍然是綠的**。
+        """
+        self.authenticate(self.alice_login, self.alice_login)
+
+        # (a) 注入 anchor 欄位 + 一個非 anchor 的對照欄位
+        self._assert_ok(
+            self._call_kw('ir.default', 'set',
+                          ['woow_paas_platform.smart_home', 'tunnel_id',
+                           self.b_tunnel_uuid, True]),
+            'ir.default.set 必須成功（租戶對 ir.default 有 CRUD）')
+        self._assert_ok(
+            self._call_kw('ir.default', 'set',
+                          ['woow_paas_platform.smart_home', 'ha_port',
+                           4321, True]),
+            'ir.default.set（對照欄位）必須成功')
+
+        # 讀回用 ORM 直查 `ir.default` 的列，**不是** `_call_kw('ir.default','get')`
+        # ——`ir.default.get` 在 Odoo 18 不是 RPC 可呼叫的 public method
+        #（`odoo/service/model.py::get_public_method` 直接 AttributeError），
+        # 第一版用它寫，測試是紅的但**紅在探針上**，不是紅在被測的守衛上。
+        # 這裡要證明的只是「租戶那一次 set 真的在 DB 留下列」，用哪個管道讀不影響。
+        stored = self.env['ir.default'].sudo().search([
+            ('field_id.model', '=', 'woow_paas_platform.smart_home'),
+            ('field_id.name', '=', 'tunnel_id'),
+            ('user_id', '=', self.alice.id),
+        ])
+        self.assertTrue(
+            stored, '陽性對照 (a)：租戶的 ir.default.set 必須真的落庫')
+        self.assertIn(
+            self.b_tunnel_uuid, stored.json_value,
+            '陽性對照 (a)：落庫的值必須是攻擊者選的那個，否則本測試零鑑別力')
+
+        home = self._order_smart_home(
+            self.alice_login, self.w1, 'ordered with ir.default injection')
+
+        self.assertEqual(
+            home.ha_port, 4321,
+            '陽性對照 (b)：ir.default 對**非 anchor 欄位**必須真的生效——'
+            '不生效的話，下面那條斷言就算守衛被拿掉也會是綠的')
+        self.assertFalse(
+            home.tunnel_id,
+            '#524 覆核 HIGH：ir.default 注入的 tunnel_id 不得落地（實得 %r）'
+            % home.tunnel_id)
+
+    def test_C10_default_context_injection_cannot_seed_the_anchor(self):
+        """同族的**另一個載體**：`default_<field>` context。
+
+        ⚠ 這一條測的是**機制**不是可達性：`/api/workspaces/*` 是 `type="json"`
+        route，`request.env` 的 context 來自 session 而非呼叫端 payload，所以租戶
+        今天走不到這條。留它的理由是「不要逐載體補」——判準若寫成「解析後的落地
+        值」，兩個載體會被同一行程式碼涵蓋；若哪天有人只堵了 `ir.default`，
+        這條會紅。
+        """
+        model = _platform_order(
+            self.SmartHome.sudo().with_context(
+                default_tunnel_id=self.b_tunnel_uuid,
+                default_ha_port=4322))
+        rec = model.create({'name': 'ctx default injection',
+                            'workspace_id': self.w1.id})
+        self.assertEqual(
+            rec.ha_port, 4322,
+            '陽性對照：`default_<field>` context 對非 anchor 欄位必須真的生效')
+        self.assertFalse(
+            rec.tunnel_id,
+            '#524 覆核 HIGH：`default_tunnel_id` 也不得落地（實得 %r）'
+            % rec.tunnel_id)
+
+    def test_C11_server_side_hatch_still_wins_over_defaults(self):
+        """陽性對照：開了身分錨點閘的伺服器端碼，仍然寫得進錨點。
+
+        沒有這一條，C9／C10 的綠燈與「create 側乾脆把 anchor 永遠鎖死、
+        連 provision 都寫不進去」分不出來——那會是把正當的路一起擋掉。
+        （C6 是從 `action_provision` 那一側證明同一件事，這一條是直接對
+        `create` 這一格證明。）
+        """
+        rec = sh_model(self.env).sudo().with_context(
+            default_tunnel_id='should-be-ignored').create({
+                'name': 'server side anchored create',
+                'workspace_id': self.w1.id,
+                'tunnel_id': 'server-chosen-tunnel',
+            })
+        self.assertEqual(
+            rec.tunnel_id, 'server-chosen-tunnel',
+            '開閘的伺服器端 create 必須寫得進錨點（顯式值優先於 default）')
+
     def test_C8_sudo_alone_does_not_open_the_anchor_gate(self):
         """鑑別項：C6／C7 用 sudo 驅動，所以必須證明 sudo **本身**打不開錨點閘。
 
