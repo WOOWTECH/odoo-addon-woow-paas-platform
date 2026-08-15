@@ -39,14 +39,31 @@ class TestP2_5Migration(TransactionCase):
             {'name': 'MIG WS'})
         self.migrate = _migrate_fn()
 
-    def _make_route_id_nullable(self):
-        """In a REAL upgrade Odoo adds the new required route_id column nullable
-        and can't apply NOT NULL because legacy rows violate it (it logs +
-        leaves it nullable), which is exactly the state this migration runs in.
-        A fresh test DB has the full NOT NULL constraint, so drop it to recreate
-        the upgrade shape, then null the legacy policy's route_id."""
+    def _relax_schema_to_legacy_upgrade_shape(self):
+        """把 schema 還原成「真實升級時這支 migration 實際跑在其中」的形狀。
+
+        兩件事，同一個理由——**兩者在真實升級當下都不在**，而 fresh test DB
+        兩者都有：
+
+        1. ``route_id`` 的 NOT NULL：真實升級時 Odoo 加上這個新 required 欄位，
+           但因為既有列違反而套不上 NOT NULL（它只 log 一行、把欄位留成
+           nullable）。
+        2. ``anchor_arc`` CHECK（#744）：同一個道理更強——legacy 列的兩個錨點
+           **都是空的**，`_add_sql_constraints` 加不上，於是被排進
+           `Registry._constraint_queue`，等這支 post-migrate 把 route_id 填好
+           之後才在 `finalize_constraints()` 補上（`odoo/modules/registry.py`；
+           post-migrate 在 `load_module_graph` 內、finalize 在 `load_modules`
+           外，順序是保證的）。fresh test DB 沒有那段歷史 ⇒ constraint 一開始
+           就在，legacy shape 造不出來（症狀是 `CheckViolation:
+           ..._anchor_arc`）。
+
+        DDL 在 `TransactionCase` 內會隨測試 rollback，不會外溢。
+        """
         self.env.cr.execute(
             "ALTER TABLE %s ALTER COLUMN route_id DROP NOT NULL" % self._POL_TABLE)
+        self.env.cr.execute(
+            "ALTER TABLE %s DROP CONSTRAINT IF EXISTS %s_anchor_arc"
+            % (self._POL_TABLE, self._POL_TABLE))
 
     def _null_policy_route(self, pol, sa):
         self.env.cr.execute(
@@ -82,7 +99,7 @@ class TestP2_5Migration(TransactionCase):
         """Legacy SA-level login/session + a NULL-route policy → re-homed onto
         the SA's protected route; SA access_app_id cleared."""
         self._add_legacy_columns()
-        self._make_route_id_nullable()
+        self._relax_schema_to_legacy_upgrade_shape()
         try:
             sa = self.SA.create({'name': 'MIG GW',
                                  'workspace_id': self.workspace.id})
@@ -129,7 +146,7 @@ class TestP2_5Migration(TransactionCase):
         """Re-running finds no NULL-route_id legacy policy and no orphan
         access_app_id → no further change."""
         self._add_legacy_columns()
-        self._make_route_id_nullable()
+        self._relax_schema_to_legacy_upgrade_shape()
         try:
             sa = self.SA.create({'name': 'MIG GW2',
                                  'workspace_id': self.workspace.id})
@@ -169,7 +186,7 @@ class TestP2_5Migration(TransactionCase):
         the primary (or only the first protected route) leaves r2 at the '24h'
         default and trips the r2 asserts below."""
         self._add_legacy_columns()
-        self._make_route_id_nullable()
+        self._relax_schema_to_legacy_upgrade_shape()
         try:
             sa = self.SA.create({'name': 'MIG GW3',
                                  'workspace_id': self.workspace.id})
@@ -220,7 +237,7 @@ class TestP2_5Migration(TransactionCase):
         migration must preserve the 'public' intent: clear is_protected on every
         route of an SA whose legacy master toggle was off."""
         self._add_legacy_columns()
-        self._make_route_id_nullable()
+        self._relax_schema_to_legacy_upgrade_shape()
         try:
             sa = self.SA.create({'name': 'MIG GW Disabled',
                                  'workspace_id': self.workspace.id})
@@ -268,7 +285,7 @@ class TestP2_5Migration(TransactionCase):
         gates). Guards against an over-eager clear that strips protection from a
         legitimately-enabled SA."""
         self._add_legacy_columns()
-        self._make_route_id_nullable()
+        self._relax_schema_to_legacy_upgrade_shape()
         try:
             sa = self.SA.create({'name': 'MIG GW Enabled',
                                  'workspace_id': self.workspace.id})
@@ -300,7 +317,7 @@ class TestP2_5Migration(TransactionCase):
         ValidationError → migrate() abort（紅）；修後 migration 內跳過 quota。
         """
         self._add_legacy_columns()
-        self._make_route_id_nullable()
+        self._relax_schema_to_legacy_upgrade_shape()
         try:
             sa = self.SA.create({'name': 'MIG GW Quota',
                                  'workspace_id': self.workspace.id})
