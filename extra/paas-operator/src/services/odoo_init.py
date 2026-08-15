@@ -237,7 +237,8 @@ class OdooInitService:
         1. Parses odoo.conf to get the database name
         2. Opens a registry cursor as SUPERUSER_ID
         3. Calls ir.module.module.update_list()
-        4. Removes stale module records (state=uninstalled, files not on disk)
+        4. Removes stale module records — **自管 addon 專屬**：state=uninstalled、
+           名字在 /all-addons/catalog.json 裡、而且已經不在磁碟上
         5. Commits the transaction
 
         Odoo's update_list() never deletes module records for addons that are
@@ -249,7 +250,9 @@ class OdooInitService:
         artifacts). Installed modules are left alone for the pre-check
         uninstall flow to handle.
 
-        腳本本體見 ``src/services/odoo_scripts/update_module_list.py``。
+        ⛔ 第 4 步的刪除候選集必須是自管 addon 清單的子集（#748）——沒有這層
+        域限制時它會把 Odoo core 的 record 整批刪掉。理由與 fail-safe 行為寫在
+        腳本本體：``src/services/odoo_scripts/update_module_list.py``。
 
         Args:
             namespace: Kubernetes namespace.
@@ -316,5 +319,17 @@ class OdooInitService:
             data.get("updated", 0),
             data.get("cleaned", 0),
         )
+
+        # #748 fail-safe：自管 addon 清單或磁碟探針拿不到時，腳本會跳過整段
+        # cleanup 而不是退化成大範圍刪除。跳過本身是安全的，但必須留痕——
+        # 否則「Apps 清單一直有殘影」會查不出是這裡靜默停工造成的。
+        skipped = data.get("cleanup_skipped")
+        if skipped:
+            logger.warning(
+                "Stale module record cleanup skipped for %s/%s: %s",
+                namespace,
+                pod_name,
+                skipped,
+            )
 
         return data

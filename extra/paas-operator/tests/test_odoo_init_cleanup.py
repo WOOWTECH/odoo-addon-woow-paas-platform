@@ -23,6 +23,7 @@ Eugene 的裁決是**域限制**而不是「把 on_disk 探針修準」：刪除
 import contextlib
 import io
 import json
+import logging
 import sys
 import types
 from unittest.mock import MagicMock, patch
@@ -541,6 +542,45 @@ def test_shipped_command_carries_the_script_under_test():
     command = service.k8s.exec_in_pod.call_args.kwargs["command"]
     assert command[:2] == ["/opt/bitnami/odoo/venv/bin/python3", "-c"]
     assert command[2] == SCRIPT
+
+
+def _run_service_update(stdout_payload):
+    service = odoo_init.OdooInitService(k8s_service=MagicMock())
+    service.k8s.exec_in_pod.return_value = MagicMock(
+        stdout=json.dumps(stdout_payload)
+    )
+    return service._update_module_list("ns-1", "pod-1", "container-1")
+
+
+def test_service_warns_when_cleanup_was_skipped(caplog):
+    """跳過 cleanup 要在 operator 日誌留痕（#748 需求 3 的「記 log」）。"""
+    with caplog.at_level(logging.WARNING, logger="src.services.odoo_init"):
+        _run_service_update(
+            {
+                "success": True,
+                "added": 3,
+                "updated": 0,
+                "cleaned": 0,
+                "cleanup_skipped": "managed addon catalog unavailable: x",
+            }
+        )
+
+    warnings = [
+        record.getMessage()
+        for record in caplog.records
+        if record.levelno == logging.WARNING
+    ]
+    assert any("cleanup skipped" in text.lower() for text in warnings), warnings
+
+
+def test_service_stays_quiet_when_cleanup_ran(caplog):
+    """陰性對照：沒跳過就不該有 WARNING，否則上一條分不出訊號與雜訊。"""
+    with caplog.at_level(logging.WARNING, logger="src.services.odoo_init"):
+        _run_service_update(
+            {"success": True, "added": 3, "updated": 0, "cleaned": 1}
+        )
+
+    assert [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING] == []
 
 
 def test_script_only_imports_stdlib_and_odoo():
