@@ -151,9 +151,21 @@ class _SmartHome524Fixture(HttpCase):
     #  fixture builders（一律開閘 + sudo：fixture 不該被受測的守線擋住）   #
     # ------------------------------------------------------------------ #
     def _smart_home(self, workspace, name, **extra):
+        """建一筆 fixture 記錄，並把開閘 context **洗掉**再交出去。
+
+        🔴 `with_env(self.env)` 不是排版——`with_context` 是 merge 而且
+        `.sudo()` / `.browse()` 都保留它，所以 `sh_model(...).create(...)` 回來的
+        recordset **自帶兩個 sentinel**。直接把它交給測試，等於每個後續操作都在
+        開閘狀態下跑：`self.sh1.sudo().write({'tunnel_id': ...})` 會成功，
+        而那正是 C8 要證明它**不**成功的那一格。
+
+        這不是假設，是實測：第一版少了這一行，C8 就以「UserError not raised」
+        紅掉——fixture 自己把受測守衛關掉了。C 系列其餘各條走真 HTTP（獨立 env、
+        沒有這個 context）所以照樣綠 ⇒ **只有 C8 那個 su 鑑別項抓得到**。
+        """
         vals = {'name': name, 'workspace_id': workspace.id}
         vals.update(extra)
-        return sh_model(self.env).sudo().create(vals)
+        return sh_model(self.env).sudo().create(vals).with_env(self.env)
 
     # ------------------------------------------------------------------ #
     #  RPC helper                                                        #
