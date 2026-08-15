@@ -290,7 +290,10 @@ STATUSES=$(tea api -r "${CI_REPO}" "repos/{owner}/{repo}/actions/tasks?limit=10"
 
 ### Step 6: 部署到 Sandbox（委派 woow-dev plugin）
 
-deploy-stg **不再自帶 create.sh**，改委派給 woow-dev plugin 的 `/woow-dev:k8s-dev-sandbox`（同一套引擎，避免重複程式）。`deploy-stg.sh` 內建 resolver 依序定位 plugin 的 `create.sh`：`$WOOWPRD_PLUGIN_ROOT`（env 覆寫）→ `plugins-local/woowprd` → marketplace cache（`cache/*/woow-dev/*`，相容舊名 `woowprd`；多版本取最新）→ cache 根遞迴 fallback（不綁 plugin 名）；全部落空才 fail-loud。
+deploy-stg **不再自帶 create.sh**，改委派給 woow-dev plugin 的 `/woow-dev:k8s-dev-sandbox`（同一套引擎，避免重複程式）。解析 plugin `create.sh` 的邏輯在 [`scripts/plugin-resolve.sh`](scripts/plugin-resolve.sh)，依序：`$WOOWPRD_PLUGIN_ROOT`（env 覆寫，語意＝**plugin 根**，指到 repo 根也接得住）→ `plugins-local`（放的是整個 plugin repo，故多一層 `plugins/<plugin>/`）→ marketplace cache（`cache/*/woow-dev/*`，相容舊名 `woowprd`；多版本取最新）→ cache 根遞迴 fallback（不綁 plugin 名）；全部落空才 fail-loud。
+
+> 🔴 **兩種 base 形狀不共用同一段相對路徑**（#728）：cache 底下的 `<mkt>/<plugin>/<ver>/` 已經是 plugin 根，`plugins-local/<repo>/` 卻是 marketplace 根。#728 之前只有一段 plugin 根形狀的相對路徑，於是 `plugins-local` 的 dev copy **永不命中**、一路落到 cache —— 在 plugins-local 改完程式跑 deploy-stg，跑的其實是 cache 舊版，而 helm 綠、部署成功、行為是舊的。**要確認這次跑的是哪一份，只能看 `Delegating sandbox creation to woow-dev plugin:` 那行印出的路徑。**
+> 反向陷阱同樣要記住：把 `plugins/<plugin>/` 一律併進相對路徑，會把 cache 那兩條（目前多數人唯一在用的路徑）全部打壞。守衛在 `tests/test-resolve-plugin-create-sh.sh` 的 B 組。
 
 ```bash
 FULL_IMAGE="jcr-prod.woowtech.io/woow-paas-docker-local/paas-odoo-stg:${DOCKER_TAG}"

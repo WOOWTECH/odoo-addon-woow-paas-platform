@@ -261,66 +261,25 @@ fi
 
 # --- Resolve woow-dev plugin's k8s-dev-sandbox create.sh ---
 #
-# deploy-stg 把「建沙盒」委派給 woow-dev plugin 的 create.sh（即
-# /woow-dev:k8s-dev-sandbox 的引擎），不再自帶一份重複的 create.sh。
-# CLAUDE_PLUGIN_ROOT 在純 bash 不可用，故依序解析 plugin 安裝路徑：
-#   1) WOOWPRD_PLUGIN_ROOT env 覆寫（最高優先；指到的檔存在才採用，否則往下）
-#   2) 本機 dev copy（plugins-local，開發中的活版本）
-#   3) marketplace cache（cache/<market>/<plugin>/<ver>/skills/...）。plugin 目錄名
-#      改過：現行 `woow-dev`（優先），舊 `woowprd`（相容）。同名可能並存多版本目錄
-#      → 收集後 version-sort 倒序取最新（1.10.0 > 1.9.0）。
-#   4) fallback：不綁 plugin 名，cache 根下遞迴搜同一相對路徑，避免未來 plugin 再
-#      改名（如 woow-dev → 其他）整組又壞掉。
-# 註：bash nullglob off，glob 不匹配會留 literal → `[ -f ]` 失敗自動跳過。
-# 註：本函式只在 `if ! ...`（set -e 暫停）context 呼叫，故內部非零回傳不會誤殺主流程；
-#     每個成功分支都顯式 `return 0`，避免 pipefail 下 sort|head 的 SIGPIPE 汙染回傳值。
-resolve_plugin_create_sh() {
-    local rel="skills/k8s-dev-sandbox/scripts/create.sh"
-    local cache_root="$HOME/.claude/plugins/cache"
-    local c glob_mid newest
+# 解析器本體與其完整設計註解移到 scripts/plugin-resolve.sh —— 理由是可測：
+# 本檔是頂層命令式流程（無 main() 守衛），source 進測試就會開始打 CI 與叢集，
+# 解析函式無從單獨行使。測試在 tests/test-resolve-plugin-create-sh.sh。
+# shellcheck source=./plugin-resolve.sh
+source "${SCRIPT_DIR}/plugin-resolve.sh"
 
-    # 優先序 1-2：確定路徑（env override 最高優先），命中即回。
-    for c in \
-        ${WOOWPRD_PLUGIN_ROOT:+"${WOOWPRD_PLUGIN_ROOT}/${rel}"} \
-        "$HOME/.claude/plugins-local/woowprd/${rel}"; do
-        [ -f "$c" ] && { printf '%s\n' "$c"; return 0; }
-    done
-
-    # 優先序 3：marketplace cache，現行名 woow-dev 優先、舊名 woowprd 相容。
-    for glob_mid in woow-dev woowprd; do
-        local -a hits=()
-        for c in "$cache_root/"*"/${glob_mid}/"*"/${rel}"; do
-            [ -f "$c" ] && hits+=("$c")
-        done
-        if [ "${#hits[@]}" -gt 0 ]; then
-            newest="$(printf '%s\n' "${hits[@]}" | sort -Vr | head -n1)"
-            [ -n "$newest" ] || newest="${hits[0]}"  # sort -V 缺席時退化為 glob 第一筆
-            printf '%s\n' "$newest"
-            return 0
-        fi
-    done
-
-    # 優先序 4（fallback）：cache 根下遞迴搜同一相對路徑，同樣取版本最新。
-    local -a fhits=()
-    while IFS= read -r c; do
-        [ -n "$c" ] && fhits+=("$c")
-    done < <(find "$cache_root" -type f -path "*/${rel}" 2>/dev/null)
-    if [ "${#fhits[@]}" -gt 0 ]; then
-        newest="$(printf '%s\n' "${fhits[@]}" | sort -Vr | head -n1)"
-        [ -n "$newest" ] || newest="${fhits[0]}"
-        printf '%s\n' "$newest"
-        return 0
-    fi
-    return 1
-}
-
-if ! PLUGIN_CREATE_SH="$(resolve_plugin_create_sh)"; then
+# ⚠ 刻意不寫 `PLUGIN_CREATE_SH="$(resolve_plugin_create_sh)"`：`$( )` 是 subshell，
+#   函式回填的 PLUGIN_RESOLVE_TRIED（下面失敗訊息的唯一資料來源）會跟著 subshell 一起
+#   消失，訊息就只能退回手寫常數——而手寫的那份與實際查找漂開時是零訊號的（#728 本體）。
+if ! resolve_plugin_create_sh >/dev/null; then
     echo -e "${RED}ERROR: 找不到 woow-dev plugin 的 k8s-dev-sandbox create.sh。${NC}" >&2
     echo -e "${YELLOW}deploy-stg 已改為委派給 woow-dev plugin 建沙盒（不再自帶 create.sh）。${NC}" >&2
-    echo -e "${YELLOW}請安裝 woow-dev plugin，或設 WOOWPRD_PLUGIN_ROOT 指向其根目錄。${NC}" >&2
-    echo -e "${YELLOW}  已找：\$WOOWPRD_PLUGIN_ROOT / ~/.claude/plugins-local/woowprd / ~/.claude/plugins/cache/*/{woow-dev,woowprd}/* / cache 遞迴 fallback${NC}" >&2
+    echo -e "${YELLOW}請安裝 woow-dev plugin，或設 WOOWPRD_PLUGIN_ROOT 指向 plugin 根${NC}" >&2
+    echo -e "${YELLOW}（例：<plugin-repo>/plugins/woow-dev；指到 repo 根也接得住）。${NC}" >&2
+    echo -e "${YELLOW}已找過（依序，* 為 glob）：${NC}" >&2
+    plugin_resolve_tried_report | sed 's/^/  /' >&2
     exit 1
 fi
+PLUGIN_CREATE_SH="$PLUGIN_RESOLVE_PATH"
 echo -e "${BLUE}Delegating sandbox creation to woow-dev plugin:${NC} ${PLUGIN_CREATE_SH}"
 
 # web.base.url + freeze 的 seed 已宣告式化：.sandbox.yml 的 config_params_stg，
