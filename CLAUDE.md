@@ -85,6 +85,8 @@ E2E 測試依場景選工具（皆 `--headed`，看得到瀏覽器）：
 
 本地 e2e / 整合測試一律走 `k8s-dev-sandbox` skill，不要用 docker compose。
 
+E2E／smoke test 產物（截圖、log）先送交使用者或把路徑列進報告，之後才清理；清理只刪自己本次建立的資源。
+
 ## Development Commands
 
 ### Run Odoo with this addon
