@@ -30,6 +30,7 @@ dual-leg 有兩個方向都會壞：
 """
 import json
 import uuid
+from unittest.mock import MagicMock, patch
 
 from odoo.tests import HttpCase, tagged
 
@@ -384,12 +385,27 @@ class TestCsAccessAnchorOverTenantRpc(_CsAccessAclFixture):
         """陽性對照：同一個租戶、同一筆記錄、同一條 RPC，一般 access 欄位寫得動。
 
         沒有它，H2/H3 的「被擋」可能只是因為 alice 對這筆記錄根本沒有寫入權。
+
+        #745 之後這個 write 會**真的**去打 operator（`is_protected` 進了
+        `_CS_ACCESS_SYNC_FIELDS`），所以要 mock 掉出站呼叫。刻意**不**用
+        `cs_skip_access_sync` 繞過：這條的全部價值就是「租戶身分的 write 從頭到
+        尾走得完」，用 skip 會讓它少走 sync 那一段——而 sync 正是 #739 同構缺陷
+        最可能落在的位置。
         """
+        client = MagicMock()
+        client.sync_access_app.return_value = {
+            'app_id': 'app-h1-744', 'policy_ids': [], 'allowed_idps': [],
+            'unresolved_idp_types': [], 'orphaned_policy_ids': []}
         self.authenticate(self.alice_login, self.alice_login)
+        with patch('odoo.addons.woow_paas_platform.services.paas_operator.'
+                   'get_paas_operator_client', return_value=client):
+            result = self._write_service({'is_protected': True,
+                                          'session_duration': '8h'})
         self._assert_ok(
-            self._write_service({'is_protected': True,
-                                 'session_duration': '8h'}),
-            'W1 owner 應該改得動自己服務的 access 設定')
+            result, 'W1 owner 應該改得動自己服務的 access 設定')
+        self.assertTrue(
+            client.sync_access_app.called,
+            '租戶身分的 access 寫入必須真的推到 operator（#745 H 系列同源）')
         self.svc_w1.invalidate_recordset()
         self.assertTrue(self.svc_w1.is_protected)
 

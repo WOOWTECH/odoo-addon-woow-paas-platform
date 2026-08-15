@@ -385,3 +385,13 @@ from . import test_smart_home_authz_524
 from . import test_cs_access_control_model_744
 from . import test_cs_access_acl_744
 from . import test_cs_access_arc_migration_744
+
+# feat: #745 CS AC T3 —— CS 的 operator access sync／CF 命名 env token／錨點
+# 分派／reconciler 左集／access endpoints。RED 的三個群集：C 系列（policy 與
+# rule 的 sync 觸點寫死 `mapped('route_id')`，對 CS 錨定是空集 ⇒ 完全不打
+# operator）、D1（`_push_access_teardown` 是 NotImplementedError seam）、
+# E 系列（左集蒐不到 CS 的 access_app_id / cf_policy_id ⇒ L4 判孤兒）。
+# H 系列是票面第 6 點的硬驗收：只掛 base.group_user 的租戶走真 HTTP endpoint，
+# 斷言 operator 真的被呼叫且 `access_app_id` 真的落地（#739 同構）。
+from . import test_cs_access_sync_745
+from . import test_cs_access_endpoints_745

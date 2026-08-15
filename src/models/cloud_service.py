@@ -1,3 +1,4 @@
+import contextlib
 import json
 import logging
 import secrets
@@ -8,6 +9,7 @@ from psycopg2 import OperationalError
 from odoo import _, api, fields, models
 from odoo.exceptions import AccessError, UserError, ValidationError
 
+from ..services.naming import make_cs_access_canonical_name
 from .cloud_app_template import SupplyGateError
 from .workspace_access import ROLE_ADMIN
 
@@ -112,6 +114,14 @@ def _is_internal_provision(env):
 # Postgres。見 docs/decisions/patterns/su-env-exempt-guard-false-green.md。
 _CS_ACCESS_IDENTITY_ANCHOR_FIELDS = (
     'access_app_id',    # WHICH CF Access application this service configures
+)
+
+# #745：改到這幾個欄位就要把整份 desired state 重推給 operator。
+#
+# 只列**租戶設定得了**的那幾個：`access_app_id` / `access_unresolved_idp_types`
+# 是 sync 自己的回存值，列進來會讓每一次回存再觸發一次 sync（無窮遞迴）。
+_CS_ACCESS_SYNC_FIELDS = (
+    'is_protected', 'login_google', 'login_email_otp', 'session_duration',
 )
 
 
@@ -3182,28 +3192,206 @@ class CloudService(models.Model):
         base = self._public_base_url()
         return base.split('://', 1)[-1] if base else ''
 
-    def _push_access_teardown(self, app_id, policy_ids, app_name, hostname):
-        """🔴 T3（#745）接手處：實際打 operator 的 `PUT /api/access/sync`。
+    def _access_to_dict(self):
+        """本服務 Access 設定的對外形狀（#745）。
 
-        本票（T2）只落 model 層的 hook 與狀態欄位，**刻意不實作這個呼叫**：
-        送出去的 payload 需要 CS 側的 CF reusable-policy 命名前綴（帶 env
-        token，見 design checklist 6，且 CS subdomain 本身沒有 env token ⇒
-        命名不可反推自 subdomain），那是 T3 連同 sync 一起拍的決策，先在這裡
-        猜一個會變成之後很難發現的錯前綴。
+        單一裁決處：`_format_service` 的 detail payload 與兩支 access endpoint
+        的回應都讀它，三處各拼一次就會漂移（前端只會發現其中一處對）。
 
-        為什麼是 `NotImplementedError` 而不是安靜的 no-op：no-op 會讓
-        `_teardown_cs_access` 回 True ⇒ 呼叫端把「根本沒清」當成「清乾淨了」
-        並清掉 `access_app_id`，孤兒就此永久失去重試錨點且零訊號。丟例外則被
-        `_teardown_cs_access` 收成 False ⇒ 走 fail-loud 那一側，方向是對的。
-
-        今天這條路徑**不可達**：唯一會寫 `access_app_id` 的是 sentinel 保護的
-        sync 回存，而 sync 要 T3 才存在 ⇒ 現況每一筆 CS 的 `access_app_id` 恆
-        空，`_teardown_cs_access` 在第一個 if 就回 True。
+        **刻意不吐** `access_app_id`：那是伺服器擁有的 Cloudflare 物件 id，前端
+        一格都用不到，吐出去只是把身分錨點的值送給每一個看得到這個頁面的成員。
+        `access_unresolved_idp_types` 相反——它是「登入限制被靜默放寬了」的訊號，
+        不讓租戶看到才是問題。
         """
-        raise NotImplementedError(
-            "CS Access teardown 尚未接上 operator（T3 / #745）: "
-            "app_id=%s policies=%s name=%s host=%s" % (
-                app_id, policy_ids, app_name, hostname))
+        self.ensure_one()
+        return {
+            'is_protected': self.is_protected,
+            'session_duration': self.session_duration,
+            'login_google': self.login_google,
+            'login_email_otp': self.login_email_otp,
+            'access_unresolved_idp_types':
+                self.access_unresolved_idp_types or '',
+            'hostname': self._access_hostname(),
+            'access_policies': [p.to_dict() for p in self.access_policy_ids],
+        }
+
+    def _access_canonical_name(self):
+        """本服務在 Cloudflare Access 上的命名根（帶 env token，#745）。
+
+        單一裁決處：sync 與 teardown 兩條 payload 都讀它，兩邊各算一次就是漂移
+        的起點。實際公式與「為什麼不能反推自 `subdomain`」寫在
+        `services/naming.py::make_cs_access_canonical_name`。
+        """
+        self.ensure_one()
+        deploy_env = self.env['ir.config_parameter'].sudo().get_param(
+            'woow_paas_platform.deploy_env', 'prod')
+        return make_cs_access_canonical_name(
+            self.workspace_id.ws_hash, self.reference_id, self.name,
+            env=deploy_env)
+
+    def _get_operator_client(self):
+        """operator client；未設定就 fail-loud。
+
+        刻意**不**回 None 讓呼叫端靜默跳過：Access 是安全功能，「設定寫進 DB 但
+        沒人告訴 Cloudflare」＝租戶以為已保護、實際完全開放（fail-open）。
+        """
+        from ..services.paas_operator import get_paas_operator_client
+        client = get_paas_operator_client(self.env)
+        if not client:
+            raise UserError(_(
+                "PaaS Operator is not configured. "
+                "Please set Operator URL and API Key in Settings → Woow PaaS."
+            ))
+        return client
+
+    def _build_existing_policy_ids(self):
+        """operator 這一輪必須刪掉的舊 reusable policy id（形態同 SA route）。
+
+        平常是尚存列的 `cf_policy_id`；policy 的 unlink 會先跑
+        `super().unlink()` 才 re-sync，所以剛被刪那幾列的 cf id 已經不在 DB 裡
+        ——不由 context 補進來的話，operator（唯一的刪除來源就是這個清單）永遠
+        不會刪它們，每刪一條 policy 就漏一顆永久 CF 孤兒。
+        """
+        self.ensure_one()
+        ids = [p.cf_policy_id for p in self.access_policy_ids if p.cf_policy_id]
+        for cf_id in self.env.context.get('sa_unlinked_cf_policy_ids') or []:
+            if cf_id and cf_id not in ids:
+                ids.append(cf_id)
+        return ids
+
+    def _build_access_payload(self):
+        """本服務的 desired-state payload（operator `PUT /api/access/sync`）。
+
+        逐欄位鏡射 `SecurityAccessRoute._build_access_payload`——operator 那端只
+        有一個 `AccessSyncRequest` schema，兩邊形狀分家只會在 422 才發現，而 422
+        說不出是哪一邊寫錯。保護粒度是整個 subdomain（拍板 5），所以
+        `protected_hostnames` 恆為 `[primary_hostname]` 或空。
+        """
+        self.ensure_one()
+        login_idp_types = []
+        if self.login_google:
+            login_idp_types.append('google')
+        if self.login_email_otp:
+            login_idp_types.append('onetimepin')
+        hostname = self._access_hostname()
+        protected = [hostname] if (self.is_protected and hostname) else []
+        canonical = self._access_canonical_name()
+        return {
+            'enabled': bool(self.is_protected),
+            'canonical_name': canonical,
+            # app display name：與 SA route 同慣例（走對外可見的那個名字，
+            # env 區隔靠 per-env `paas_domain`）。env token 掛在 canonical，
+            # 那才是 reusable policy 前綴的來源。
+            'app_name': self.subdomain or canonical,
+            'primary_hostname': hostname,
+            'protected_hostnames': protected,
+            'session_duration': self.session_duration or '24h',
+            'login_idp_types': login_idp_types,
+            'policies': [{
+                'name': p.name, 'decision': p.decision,
+                'precedence': p.sequence,
+                'include': p._rules_by_group('include'),
+                'require': p._rules_by_group('require'),
+                'exclude': p._rules_by_group('exclude'),
+            } for p in self.access_policy_ids.sorted(
+                key=lambda x: (x.sequence, x.id))],
+            'existing_app_id': self.access_app_id or None,
+            'existing_policy_ids': self._build_existing_policy_ids(),
+        }
+
+    def _sync_access_to_operator(self):
+        """把本服務完整的 Access 狀態推給 operator（冪等宣告式）。
+
+        liveness gate 三道，各擋一種「推出去只會製造垃圾」的情形：
+
+        * **沒有 `subdomain`** ⇒ 沒有可保護的 hostname，Access app 的錨點本身
+          不存在。
+        * **`state == 'deleting'`** ⇒ teardown 已經跑過（`_do_cleanup`），再推
+          一次等於把剛拆掉的 app 建回來，而且沒有任何後續路徑會再拆它。
+        * **未保護且沒有存過 app id** ⇒ 這台服務從來沒有 Access app，是真正的
+          no-op（不是「假裝成功」）。
+
+        `is_protected=False` 但存過 app id ⇒ 送 `enabled=False` 的 payload
+        （operator 據此拆 app＋policies），成功後才清掉存著的 id。
+
+        與 SA route 的刻意差異：**沒有 `force` 旁路**。SA 需要它是因為
+        provision/resume 會在 state 尚未回到 'active' 時做收斂；CS 的
+        suspend/resume 依設計完全不碰 Access app（design checklist 7），沒有這種
+        收斂點，多開一個旁路只會多一條沒人走、也沒人測的分支。
+        """
+        self.ensure_one()
+        if not self.subdomain:
+            return
+        if self.state == 'deleting':
+            return
+        if not self.is_protected and not self.access_app_id:
+            return
+        client = self._get_operator_client()
+        result = client.sync_access_app(self._build_access_payload())
+        # operator 重指 app 之後刪不掉的舊 reusable policy＝**永久** CF 孤兒
+        # （沒有任何後續 re-sync 會再碰到它們），所以要讓它在 log 裡看得見。
+        orphaned = result.get('orphaned_policy_ids') or []
+        if orphaned:
+            _logger.warning(
+                "[CLOUD_SVC] access sync service=%s (%s) left %d orphan CF "
+                "policy(ies): %s", self.id, self.subdomain, len(orphaned),
+                ', '.join(orphaned))
+        # 身分錨點：只有 sentinel 路徑寫得動（對所有人生效，含 superuser）。
+        _internal_cs_access_identity(self).access_app_id = (
+            result.get('app_id') or False)
+        # operator 的 fail-open 訊號：要求了但 CF 帳號上沒有對應 IdP 的登入方式
+        # ——登入限制被靜默放寬了，刻意曝光而不是丟掉。
+        unresolved = result.get('unresolved_idp_types') or []
+        new_unresolved = ', '.join(unresolved) if unresolved else False
+        if self.access_unresolved_idp_types != new_unresolved:
+            self.access_unresolved_idp_types = new_unresolved
+        # 回傳的 policy id 依 (sequence, id) 順序對映回列——與 payload 送出去的
+        # 排序是同一條 key，錯開就會把 A 的 cf id 記到 B 頭上。
+        returned = result.get('policy_ids') or []
+        policies = self.access_policy_ids.sorted(
+            key=lambda x: (x.sequence, x.id))
+        for pol, cf_id in zip(policies, returned):
+            if pol.cf_policy_id != cf_id:
+                pol.cf_policy_id = cf_id
+        if not result.get('app_id'):
+            # 已拆除 ⇒ 清掉這台服務底下 policy 的過期 cf id
+            for pol in self.access_policy_ids:
+                if pol.cf_policy_id:
+                    pol.cf_policy_id = False
+
+    def _push_access_teardown(self, app_id, policy_ids, app_name, hostname):
+        """拆除用的最小 `enabled=False` payload（#745 接上 T2 留的 seam）。
+
+        與 `_sync_access_to_operator` 分開的理由和 SA 的 `_teardown_route_access`
+        一樣：呼叫端（unlink / `_do_cleanup`）手上只剩**捕捉下來的 id**，記錄
+        可能正在消失中，不能再去 walk `access_policy_ids`。
+
+        本方法不吞例外——`_teardown_cs_access` 負責把它收成 False（fail-loud 那
+        一側）。安靜的 no-op 會讓呼叫端把「根本沒清」當成「清乾淨了」並清掉
+        `access_app_id`，孤兒就此永久失去重試錨點且零訊號。
+        """
+        self.ensure_one()
+        client = self._get_operator_client()
+        canonical = self._access_canonical_name()
+        result = client.sync_access_app({
+            'enabled': False,
+            'canonical_name': canonical,
+            'app_name': app_name or canonical,
+            'primary_hostname': hostname or '',
+            'protected_hostnames': [],
+            'session_duration': '24h',
+            'login_idp_types': [],
+            'policies': [],
+            'existing_app_id': app_id or None,
+            'existing_policy_ids': policy_ids or [],
+        })
+        orphaned = result.get('orphaned_policy_ids') or []
+        if orphaned:
+            _logger.warning(
+                "[CLOUD_SVC] access teardown service=%s app=%s left %d orphan "
+                "policy(ies): %s", self.id, app_id, len(orphaned),
+                ', '.join(orphaned))
+        return result
 
     def _teardown_cs_access(self, app_id, policy_ids, app_name, hostname):
         """拆掉本服務的 Cloudflare Access app（＋ reusable policies）。
@@ -3778,18 +3966,40 @@ class CloudService(models.Model):
         tracked = 'workspace_id' in vals or 'project_ids' in vals
         projects = self.mapped('project_ids') if tracked else self.browse()
         old = {p.id: set(p.workspace_ids.ids) for p in projects}
-        res = super().write(vals)
-        if rebinding:
-            rebinding._assert_subscription_binding()
-        elif 'workspace_id' in vals:
-            # 換 workspace 會換掉判準的另一半（owner 的 partner）。只驗歸屬、不驗
-            # 狀態——這一次沒有動到綁定，訂閱早就到期也仍然合法。
-            self._assert_subscription_binding(check_state=False)
-        if tracked:
-            # Union of projects bound before AND after (a project_ids write can add or
-            # drop bindings); each reconciles against its own pre-write reach set.
-            for project in (projects | self.mapped('project_ids')):
-                project._reconcile_agent_runtime_reach(old.get(project.id, set()))
+        # #745：Access 設定的寫入與 operator sync 必須是同一個原子單位。
+        #
+        # 沒有 savepoint 時的失效形狀：BFF 端點把 sync 的例外收成
+        # `{'success': False, ...}` 這個**正常回應**回去，交易照樣 commit ⇒ DB
+        # 宣稱「已保護」而 Cloudflare 上什麼都沒有。方向是 fail-open——租戶看到
+        # 一個開著的開關，服務其實完全公開。SA route 的 write() 為同一個理由包
+        # savepoint（那邊的註解也寫明：這只保證 Odoo 這一側原子，operator 那側
+        # 是宣告式全狀態推送、沒有補償動作，殘留分歧靠下一次冪等 re-sync 收斂）。
+        #
+        # 只在真的碰到 access 欄位時才開 savepoint：其餘寫入路徑（每分鐘的 poll、
+        # helm 狀態回寫…）一行都不變，不替它們付 savepoint 的成本。
+        access_sync = (
+            not self.env.context.get('cs_skip_access_sync')
+            and any(k in vals for k in _CS_ACCESS_SYNC_FIELDS))
+        with contextlib.ExitStack() as stack:
+            if access_sync:
+                stack.enter_context(self.env.cr.savepoint())
+            res = super().write(vals)
+            if rebinding:
+                rebinding._assert_subscription_binding()
+            elif 'workspace_id' in vals:
+                # 換 workspace 會換掉判準的另一半（owner 的 partner）。只驗歸屬、不驗
+                # 狀態——這一次沒有動到綁定，訂閱早就到期也仍然合法。
+                self._assert_subscription_binding(check_state=False)
+            if tracked:
+                # Union of projects bound before AND after (a project_ids write can add or
+                # drop bindings); each reconciles against its own pre-write reach set.
+                for project in (projects | self.mapped('project_ids')):
+                    project._reconcile_agent_runtime_reach(old.get(project.id, set()))
+            if access_sync:
+                # liveness gate 在 `_sync_access_to_operator` 裡（沒有 subdomain
+                # ／deleting／從未保護過都是 no-op），這裡只負責轉發。
+                for service in self:
+                    service._sync_access_to_operator()
         return res
 
     @api.model
