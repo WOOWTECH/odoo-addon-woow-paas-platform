@@ -90,6 +90,94 @@ def _is_internal_provision(env):
             is _INTERNAL_PROVISION)
 
 
+# ------------------------------------------------------------------------- #
+#  #744：CS Access 的身分錨點（private sentinel，形狀抄 #522/#524）           #
+# ------------------------------------------------------------------------- #
+#
+# 身分錨點＝「這一列綁的是**哪一個** Cloudflare 物件」的欄位。`access_app_id`
+# 決定了之後的 sync／teardown 會去動帳號裡的哪一個 Access application——租戶
+# 把它改成別人的 app id，平台就會拿受害者的 Access 設定去覆寫或刪除，而這一列
+# 仍然帶著**自己** workspace 的 ir.rule 祝福（rule 擋的是「動哪一筆」，擋不到
+# 「在自己那一筆裡填別人的 id」）。
+#
+# 為什麼另立一套而不共用上面的 `_INTERNAL_PROVISION`：兩者的語意不同——那個是
+# 「這一次建立來自平台開通流程」，本組是「這一次寫入是伺服器在回存 Cloudflare
+# 剛發回來的 id」。共用一把手，等於讓開通路徑順便獲得改寫 Access 錨點的能力
+# （`security_access.py` 把 `sa_internal_prefix_write` 與
+# `sa_internal_identity_write` 分開，理由同）。
+#
+# 值必須是**私有物件**、判準必須是 `is`：`/web/dataset/call_kw` 把呼叫端的
+# context 整包換進 env，任何 JSON 表達得出的判準（True／1／"true"）在 RPC
+# payload 多一個 key 就打開了——#522 在 18.0 上實測過並且值真的 commit 進
+# Postgres。見 docs/decisions/patterns/su-env-exempt-guard-false-green.md。
+_CS_ACCESS_IDENTITY_ANCHOR_FIELDS = (
+    'access_app_id',    # WHICH CF Access application this service configures
+)
+
+
+class _InternalCsAccessIdentityWrite:
+    """CS Access 身分錨點回存的 marker type —— 見上方註解。"""
+
+    __slots__ = ()
+
+    def __repr__(self):
+        return '<internal cs access identity write>'
+
+
+_INTERNAL_CS_ACCESS_IDENTITY_WRITE = _InternalCsAccessIdentityWrite()
+
+#: key 本身不是判準（呼叫端當然抄得到這個字串），判準是它的**值身分**。
+_CS_ACCESS_IDENTITY_CTX_KEY = 'woow_cs_access_identity_write'
+
+
+def _internal_cs_access_identity(records):
+    """回傳「唯一被允許寫 CS Access 身分錨點」的那個 context 底下的 ``records``。"""
+    return records.with_context(
+        **{_CS_ACCESS_IDENTITY_CTX_KEY: _INTERNAL_CS_ACCESS_IDENTITY_WRITE})
+
+
+def _is_internal_cs_access_identity_write(env):
+    return (env.context.get(_CS_ACCESS_IDENTITY_CTX_KEY)
+            is _INTERNAL_CS_ACCESS_IDENTITY_WRITE)
+
+
+def _strip_cs_access_identity_anchors(env, vals_list):
+    """create() 側：把身分錨點**壓成 False**，不是 pop。
+
+    `super().create()` 不經過 `write()`，只守 write 會留下 create-time squat：
+    一列剛落地就綁在受害者的 Access app 上，之後任何 sync／teardown 都會動到
+    對方的資源。對**所有人**生效（含 superuser），sentinel 是唯一豁免。
+    選擇「壓值」而不是「raise」：`copy()` 與一般資料載入照樣要能跑，而一份
+    不帶錨點的複本正是複本該有的樣子。
+
+    🔴 為什麼是**壓成 False** 而不是 `vals.pop(...)`：`pop` 只清得掉呼叫端
+    寫在 vals 裡的那一份，而 `default_<欄位>` 是在 `super().create()` 內部的
+    `_add_missing_default_values` 才展開的——租戶對 `ir.default` 有完整 CRUD
+    （Odoo 18 base ACL 的 `access_ir_default_group_user` 是 1,1,1,1），`call_kw`
+    也直接把呼叫端 context 換進 env ⇒ 送 `context={'default_access_app_id':
+    '<victim>'}` 就能繞過整道 pop，而且守衛不會有任何訊號（#519／#705 是本
+    repo 已經踩過的同一個形狀）。vals 裡的明確值優先於 default，所以壓成
+    False 是「連 default 那條路一起關掉」的最小寫法；`access_app_id` 本來就
+    沒有 default 且 `copy=False`，壓 False 與剝掉在語意上等價。
+    """
+    if _is_internal_cs_access_identity_write(env):
+        return
+    for vals in vals_list:
+        for field in _CS_ACCESS_IDENTITY_ANCHOR_FIELDS:
+            vals[field] = False
+
+
+def _reject_cs_access_identity_anchor_writes(env, vals):
+    """write() 側：拒絕搬動錨點，且要吵。對所有人生效（含 superuser）。"""
+    if _is_internal_cs_access_identity_write(env):
+        return
+    for field in _CS_ACCESS_IDENTITY_ANCHOR_FIELDS:
+        if field in vals:
+            raise UserError(
+                "Field '%s' is immutable after creation." % field
+            )
+
+
 class SubscriptionBindingError(AccessError):
     """#519 提案 B：這一次 `subscription_id` 的綁定不合法。
 
@@ -414,6 +502,64 @@ class CloudService(models.Model):
     internal_port = fields.Integer(
         string='Internal Port',
         help='Internal port where the service is listening',
+    )
+
+    # ------------------------------------------------------------------ #
+    #  #744 CS Access Control：整組鏡射 SA route 的 access 欄位            #
+    #  （設計拍板 10，見 docs/plans/2026-Q3/                              #
+    #   2026-08-15-cs-access-control-design.md）                          #
+    # ------------------------------------------------------------------ #
+    #
+    # 語意逐欄對齊 `security_access.py` 的 `SecurityAccessRoute`——**刻意鏡射
+    # 而不是共用**：兩者的載體不同（route 掛 SA 專屬 tunnel，CS 走平台共用
+    # tunnel），但送到 operator 的 Access payload 是同一份 hostname 級的宣告，
+    # 所以欄位集必須一致，否則 T3 的 payload builder 會被迫在兩邊各寫一套。
+    #
+    # ⚠ 這些欄位刻意**沒有** `groups=`。本 model 已經有一批
+    # `groups='base.group_system'` 的欄位（helm_values / deploy_params /
+    # mcp_auth_token…），照抄看起來很自然，但 #739 的教訓正是反過來的：欄位級
+    # `groups=` 會讓**平台自己**走租戶身分的寫入路徑吃 AccessError，而
+    # superuser TransactionCase 看不見（欄位級 groups 在 su env 不生效）⇒
+    # 「從來沒成功過」可以整整潛伏到 stg 實測才浮出來。`access_app_id` 要的是
+    # 「不可被租戶搬動」，那是身分錨點守衛（見模組頂端
+    # `_CS_ACCESS_IDENTITY_ANCHOR_FIELDS`）的職責，它對所有人生效且在 su env
+    # 下照樣 fire——用對工具，不要用會假綠的那個。
+    is_protected = fields.Boolean(
+        string='Access Protected',
+        default=False,
+        help='開啟後本服務的公開 subdomain 由 Cloudflare Access 保護：所有'
+             '訪客都必須先通過 Access 驗證。粒度是整個 subdomain（拍板 5）。',
+    )
+    session_duration = fields.Selection(
+        selection=[
+            ('30m', '30 minutes'), ('1h', '1 hour'), ('8h', '8 hours'),
+            ('24h', '24 hours'), ('168h', '7 days'),
+        ],
+        string='Access Session Duration',
+        default='24h',
+        help='通過驗證後多久需要重新登入（本服務）。',
+    )
+    login_google = fields.Boolean(string='Access Login: Google', default=False)
+    login_email_otp = fields.Boolean(
+        string='Access Login: Email OTP', default=False)
+    access_app_id = fields.Char(
+        string='CF Access App ID', copy=False,
+        help='本服務的 Cloudflare Access Application id（sync 後回存）。'
+             '身分錨點：只有伺服器端 sentinel 路徑寫得動。',
+    )
+    access_policy_ids = fields.One2many(
+        comodel_name='woow_paas_platform.security_access_access_policy',
+        inverse_name='cloud_service_id',
+        string='Access Policies',
+        help='本服務的 Access 政策（與 SA route 共用 policy model，'
+             '錨點是 exclusive arc，見 #744）。',
+    )
+    access_unresolved_idp_types = fields.Char(
+        string='Unresolved Login Methods', copy=False,
+        help='上次 sync 時「有要求、但 Cloudflare 帳號上找不到對應 IdP」的登入'
+             '方式（如 google）。非空代表登入限制**被靜默放寬**了——若解析後'
+             '的集合變空，Access app 會 fallback 成全部可用 IdP。刻意曝光而'
+             '不是丟掉。',
     )
 
     # Helm Release Info
@@ -3021,8 +3167,104 @@ class CloudService(models.Model):
     #  Subscription lifecycle: suspend / resume / cleanup                #
     # ------------------------------------------------------------------ #
 
+    # ------------------------------------------------------------------ #
+    #  #744：CS Access teardown（形態比照 SA `_teardown_route_access`）     #
+    # ------------------------------------------------------------------ #
+
+    def _access_hostname(self):
+        """本服務受 Access 保護的主機名（無 subdomain 回 ''）。
+
+        與 `_public_base_url()` 同源但只回 host——Cloudflare Access app 的錨
+        是 hostname 不是 URL（payload 無 scheme），兩處各自組一次 domain 是
+        漂移的起點。
+        """
+        self.ensure_one()
+        base = self._public_base_url()
+        return base.split('://', 1)[-1] if base else ''
+
+    def _push_access_teardown(self, app_id, policy_ids, app_name, hostname):
+        """🔴 T3（#745）接手處：實際打 operator 的 `PUT /api/access/sync`。
+
+        本票（T2）只落 model 層的 hook 與狀態欄位，**刻意不實作這個呼叫**：
+        送出去的 payload 需要 CS 側的 CF reusable-policy 命名前綴（帶 env
+        token，見 design checklist 6，且 CS subdomain 本身沒有 env token ⇒
+        命名不可反推自 subdomain），那是 T3 連同 sync 一起拍的決策，先在這裡
+        猜一個會變成之後很難發現的錯前綴。
+
+        為什麼是 `NotImplementedError` 而不是安靜的 no-op：no-op 會讓
+        `_teardown_cs_access` 回 True ⇒ 呼叫端把「根本沒清」當成「清乾淨了」
+        並清掉 `access_app_id`，孤兒就此永久失去重試錨點且零訊號。丟例外則被
+        `_teardown_cs_access` 收成 False ⇒ 走 fail-loud 那一側，方向是對的。
+
+        今天這條路徑**不可達**：唯一會寫 `access_app_id` 的是 sentinel 保護的
+        sync 回存，而 sync 要 T3 才存在 ⇒ 現況每一筆 CS 的 `access_app_id` 恆
+        空，`_teardown_cs_access` 在第一個 if 就回 True。
+        """
+        raise NotImplementedError(
+            "CS Access teardown 尚未接上 operator（T3 / #745）: "
+            "app_id=%s policies=%s name=%s host=%s" % (
+                app_id, policy_ids, app_name, hostname))
+
+    def _teardown_cs_access(self, app_id, policy_ids, app_name, hostname):
+        """拆掉本服務的 Cloudflare Access app（＋ reusable policies）。
+
+        契約逐字對齊 `SecurityAccess._teardown_route_access`：乾淨拆完回
+        ``True``（呼叫端才可以清掉存著的 app id），失敗回 ``False`` 且**不**
+        丟例外——由呼叫端決定要 fail-loud（unlink）還是落 error 狀態
+        （`_do_cleanup`）。`access_app_id` 只在 True 時清除，失敗一律保留：
+        那個 id 是唯一的重試錨點，清掉就變成永久 CF 孤兒且沒有任何路徑找得回
+        來（[[two-stage-remote-provision-idempotency]]）。
+
+        沒有 app id 也沒有 policy id ⇒ 這台服務從來沒有 Access app，直接回
+        True（不是「假裝成功」，是真的沒有東西要拆）。
+        """
+        self.ensure_one()
+        if not app_id and not policy_ids:
+            return True
+        try:
+            self._push_access_teardown(
+                app_id=app_id, policy_ids=policy_ids,
+                app_name=app_name, hostname=hostname)
+            return True
+        except Exception as e:
+            _logger.warning(
+                "[CLOUD_SVC] access teardown failed service=%s app=%s: %s",
+                self.id, app_id, e)
+            return False
+
+    def _teardown_access_if_any(self):
+        """本服務目前的 Access 狀態 → 拆除，成功才清 id。回傳是否乾淨。
+
+        單一裁決處：unlink（fail-loud）與 `_do_cleanup`（落 error 狀態）兩條
+        路徑共用，免得兩邊各自組一次 policy id 清單而漏掉其中一種。
+        """
+        self.ensure_one()
+        pol_ids = [p.cf_policy_id for p in self.access_policy_ids
+                   if p.cf_policy_id]
+        if not self.access_app_id and not pol_ids:
+            return True
+        ok = self._teardown_cs_access(
+            app_id=self.access_app_id or None,
+            policy_ids=pol_ids,
+            app_name=self.subdomain or self.helm_release_name,
+            hostname=self._access_hostname(),
+        )
+        if ok:
+            # 身分錨點：清除也只有 sentinel 路徑寫得動。
+            _internal_cs_access_identity(self).access_app_id = False
+            for pol in self.access_policy_ids:
+                if pol.cf_policy_id:
+                    pol.cf_policy_id = False
+        return ok
+
     def _do_suspend(self):
-        """Scale down Helm release to 0 replicas."""
+        """Scale down Helm release to 0 replicas.
+
+        #744：**刻意不動 Access app**。停權是「機器停下來」，由 helm 層縮到 0
+        replica 處理；Access 設定是租戶的組態，停權期間拆掉它，復權時就得重建
+        並重新拿一個 app id——中間任何一步失敗都會讓一台復權的服務變成無保護
+        對外曝光（fail-open 的方向）。設計拍板明列此項（design checklist 7）。
+        """
         self.ensure_one()
         _logger.info(
             "[CLOUD_SVC] _do_suspend service=%s name=%s state=%s sub=%s",
@@ -3215,6 +3457,24 @@ class CloudService(models.Model):
                     'error_message': f'Cleanup failed: {e}',
                 })
                 return
+
+        # Step 2.5 — #744：拆掉本服務的 Cloudflare Access app（＋ reusable
+        # policies）。放在 helm 之後、狀態改寫之前，理由與 SA 的 `_do_cleanup`
+        # 同一條：寫 'deleting' 是一個**成功訊號**，在 CF 還留著一個 Access
+        # app 的情況下寫下去，維運看到的「已清乾淨」與「清失敗」長得一模一樣。
+        # 失敗改落 'error' + error_message，且 `access_app_id` 保留 ⇒ 下一輪
+        # cron 重入時 `_teardown_access_if_any` 會再試一次。
+        if not self._teardown_access_if_any():
+            self.write({
+                'state': 'error',
+                'error_message': 'Cloudflare Access teardown failed; the '
+                                 'Access application is still live. Will '
+                                 'retry on the next cron pass.',
+            })
+            _logger.warning(
+                "[CLOUD_SVC] _do_cleanup incomplete service=%s access_app=%s "
+                "(state=error)", self.id, self.access_app_id)
+            return
 
         # Step 3 — mark state so cron/UI know teardown is in progress.
         self.write({'state': 'deleting'})
@@ -3442,6 +3702,10 @@ class CloudService(models.Model):
         side, which fire no project hook even though ``project.workspace_ids``
         recomputes.
         """
+        # #744：Access 身分錨點是硬不變式，對**所有人**（含 superuser、含
+        # sudo'd controller）擋，唯一豁免是模組私有 sentinel。放在方法第一行
+        # ——後面每一段都有副作用或成本，被拒絕的呼叫不該碰到其中任何一段。
+        _reject_cs_access_identity_anchor_writes(self.env, vals)
         # #698 反向端：前置檢查（見 `_assert_reverse_binding_authorized` 的
         # docstring——這一端的判準會被寫入本身改掉，事後檢查無效）。
         self._assert_reverse_binding_authorized(vals)
@@ -3814,6 +4078,11 @@ class CloudService(models.Model):
                 '雲端服務只能由平台的開通流程建立（%(model)s）。'
                 '請改從服務市集下單，不要直接寫入這個 model。',
                 model=self._name))
+        # #744：Access 身分錨點的 create 側。**不是**被上面那道閘覆蓋掉的冗餘
+        # ——開通閘擋的是「誰能建」，本組擋的是「建的時候能不能自帶別人的 CF
+        # Access app id」，而開通流程本身（走 `_internal_provision`）是被上面
+        # 放行的那一類呼叫者。兩個把手刻意分開，開通不順便獲得搬錨點的能力。
+        _strip_cs_access_identity_anchors(self.env, vals_list)
         # #698 反向端：create 也能帶 `project_ids`（同一張 relation 表的另一頭），
         # 且同樣必須前置檢查——建完之後那個 project 就落進呼叫者的 bound 分支。
         # 🔴 #705 F1：必須看**框架解析後**的 vals。`default_project_ids` 是在
@@ -3900,6 +4169,13 @@ class CloudService(models.Model):
         (and its M:N rows) are gone their ``workspace_ids`` recompute — dropping
         workspaces only reachable via this service — so each is reconciled as a pure
         revoke (best-effort; the enforcing cron is authoritative).
+
+        #744：同一個 fail-loud 家族再加一員——Cloudflare Access app 與 helm
+        release 一樣，不得比記錄長壽。`access_policy_ids` 是 ``ondelete=
+        'cascade'``，DB 的 FK cascade 會**繞過** Python `unlink()` 把子列直接
+        帶走 ⇒ 刪完之後那些 `cf_policy_id` 就再也拿不到，operator 唯一的刪除
+        入口（existing_policy_ids）永遠收不到它們。所以拆除必須在
+        `super().unlink()` 之前完成。
         """
         # #318: 在 super().unlink() 前捕獲仍 in_progress 的關聯訂閱。
         # subscription_id 是 ondelete='set null'（只保護反向），刪 service
@@ -3935,6 +4211,22 @@ class CloudService(models.Model):
                             service.helm_release_name, service.helm_namespace,
                         )
                     )
+            # #744 Access fail-loud guard：Cloudflare Access app 不得比記錄長
+            # 壽。拆在 `super().unlink()` **之前**——這是與 SA route 那條的刻意
+            # 差異：route 的 cf policy id 住在會被 DB cascade 帶走的子列上，所以
+            # 那邊被迫「先抓 id、刪完再拆、失敗用 savepoint 回捲」；CS 這裡在
+            # 刪除前 `access_app_id` 與 `access_policy_ids.cf_policy_id` 都還
+            # 在手上，直接先拆再刪，失敗就 raise（什麼都還沒刪 ⇒ 記錄與 id 原
+            # 樣留著當重試錨點），不需要 savepoint 這層機關。少一個機制少一份
+            # 誤解，不變式（清不掉 ⇒ fail-loud ⇒ 保留 id 供重試）完全相同。
+            if not service._teardown_access_if_any():
+                raise UserError(
+                    "Cloudflare Access teardown failed; the Access "
+                    "application for '%s' is still live. The service record "
+                    "was kept so the deletion can be retried." % (
+                        service.name or service.id,
+                    )
+                )
             user_mcps = service._collect_sidecar_user_mcps(
                 service._sidecar_url_prefix()
             )

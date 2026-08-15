@@ -382,3 +382,6 @@ from . import test_cloud_service_subscription_binding_519
 # （HttpCase，group_user-only，全走 call_kw）
 from . import test_workspace_transfer_ownership_authz_583
 from . import test_smart_home_authz_524
+from . import test_cs_access_control_model_744
+from . import test_cs_access_acl_744
+from . import test_cs_access_arc_migration_744

@@ -310,11 +310,34 @@
                  group_system admin outside the workspace is not locked out by
                  the member-scoped domain.
              See docs/decisions/patterns/two-layer-acl-lockstep.md +
-             paas-workspace-member-acl-tightening.md. -->
+             paas-workspace-member-acl-tightening.md.
+
+             #744（CS Access Control）：policy 的錨點變成 exclusive arc
+             （`route_id` XOR `cloud_service_id`），所以下面兩條 workspace 規則
+             的 domain 都改成 **dual-leg**：
+               leg 1 — route 錨定，走 stored related `security_access_id`（原樣）
+               leg 2 — CS 錨定，走 `cloud_service_id.workspace_id`
+             兩腿 OR。CS 錨定的列 `security_access_id` 恆空 ⇒ 沒有 leg 2 的話
+             那些列對**自己 workspace 的租戶**兩腿皆假：讀不到、建不了、改不動
+             （方向是 fail-closed，不是外洩，但 T3/T4 會整條死在這裡）。
+
+             為什麼是 dual-leg 而不是「另外加三條 CS 版規則」（Odoo 同群組的
+             rule 是 OR 合併，兩種寫法邏輯等價）：理由取自
+             [[unbound-project-acl-dual-leg]] §「為什麼是 dual-leg domain 而非
+             兩條獨立 rule」——**perm direction 改一次只動一處**。這裡的讀/寫
+             切分（member 讀、owner+admin 寫）是這組規則的全部價值，拆成兩份就
+             會有人只收緊其中一份，而兩份分歧是靜默的。
+
+             ⚠ 不需要 [[unbound-project-acl-dual-leg]] 的「外層 AND 鎖 scope」：
+             那條防的是「新 row 的某個欄位值讓 domain 恆真 ⇒ create 方向永久
+             放行」。本案兩腿都終結在 `workspace.access_ids` 的成員比對上，沒有
+             任何一腿在缺值時為真——錨點兩個都空的列（若 `anchor_arc` CHECK 沒
+             擋住）兩腿皆假 ⇒ 對誰都不可見。方向正確，但**這也代表 ir.rule
+             這層看不出 arc 壞掉**，arc 的守線只有 model 那兩層。 -->
         <record id="security_access_access_policy_rule_workspace_member" model="ir.rule">
             <field name="name">SecurityAccessAccessPolicy: workspace member read</field>
             <field name="model_id" ref="model_woow_paas_platform_security_access_access_policy"/>
-            <field name="domain_force">[('security_access_id.workspace_id.access_ids.user_id', '=', user.id)]</field>
+            <field name="domain_force">['|', ('security_access_id.workspace_id.access_ids.user_id', '=', user.id), ('cloud_service_id.workspace_id.access_ids.user_id', '=', user.id)]</field>
             <field name="groups" eval="[(4, ref('base.group_user'))]"/>
             <field name="perm_read" eval="True"/>
             <field name="perm_write" eval="False"/>
@@ -325,7 +348,7 @@
         <record id="security_access_access_policy_rule_owner_admin_manage" model="ir.rule">
             <field name="name">SecurityAccessAccessPolicy: workspace owner/admin manage</field>
             <field name="model_id" ref="model_woow_paas_platform_security_access_access_policy"/>
-            <field name="domain_force">[('security_access_id.workspace_id.access_ids', 'any', [('user_id', '=', user.id), ('role', 'in', ['owner', 'admin'])])]</field>
+            <field name="domain_force">['|', ('security_access_id.workspace_id.access_ids', 'any', [('user_id', '=', user.id), ('role', 'in', ['owner', 'admin'])]), ('cloud_service_id.workspace_id.access_ids', 'any', [('user_id', '=', user.id), ('role', 'in', ['owner', 'admin'])])]</field>
             <field name="groups" eval="[(4, ref('base.group_user'))]"/>
             <field name="perm_read" eval="True"/>
             <field name="perm_write" eval="True"/>
@@ -354,11 +377,18 @@
              rule, bypassing both the BFF role gate and the policy-level rule.
              Walks the parent SA's workspace.access_ids via the stored related
              security_access_id (= policy_id.security_access_id, two hops). Same
-             two-layer-acl-lockstep discipline as the policy rules above. -->
+             two-layer-acl-lockstep discipline as the policy rules above.
+
+             #744：**sub-model 必須與 parent 對等改 dual-leg**
+             （[[unbound-project-acl-dual-leg]] 明列的一條；那邊漏改的後果是
+             leak，本案方向相反是 fail-closed，但同樣是壞的——CS 錨定的 policy
+             底下租戶連一條 selector rule 都建不出來，而錯誤訊息會指向這張表，
+             沒人會聯想到是 parent 換了錨點）。第二腿走同樣兩跳物化的
+             `cloud_service_id`（= policy_id.cloud_service_id）。 -->
         <record id="security_access_access_policy_rule_rule_workspace_member" model="ir.rule">
             <field name="name">SecurityAccessAccessPolicyRule: workspace member read</field>
             <field name="model_id" ref="model_woow_paas_platform_security_access_access_policy_rule"/>
-            <field name="domain_force">[('security_access_id.workspace_id.access_ids.user_id', '=', user.id)]</field>
+            <field name="domain_force">['|', ('security_access_id.workspace_id.access_ids.user_id', '=', user.id), ('cloud_service_id.workspace_id.access_ids.user_id', '=', user.id)]</field>
             <field name="groups" eval="[(4, ref('base.group_user'))]"/>
             <field name="perm_read" eval="True"/>
             <field name="perm_write" eval="False"/>
@@ -369,7 +399,7 @@
         <record id="security_access_access_policy_rule_rule_owner_admin_manage" model="ir.rule">
             <field name="name">SecurityAccessAccessPolicyRule: workspace owner/admin manage</field>
             <field name="model_id" ref="model_woow_paas_platform_security_access_access_policy_rule"/>
-            <field name="domain_force">[('security_access_id.workspace_id.access_ids', 'any', [('user_id', '=', user.id), ('role', 'in', ['owner', 'admin'])])]</field>
+            <field name="domain_force">['|', ('security_access_id.workspace_id.access_ids', 'any', [('user_id', '=', user.id), ('role', 'in', ['owner', 'admin'])]), ('cloud_service_id.workspace_id.access_ids', 'any', [('user_id', '=', user.id), ('role', 'in', ['owner', 'admin'])])]</field>
             <field name="groups" eval="[(4, ref('base.group_user'))]"/>
             <field name="perm_read" eval="True"/>
             <field name="perm_write" eval="True"/>
