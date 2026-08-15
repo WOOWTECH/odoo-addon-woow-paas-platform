@@ -342,6 +342,15 @@ if [ -z "$IMAGE_OVERRIDE" ]; then
         echo -e "Run: tea login add --name gitea --url https://git-prod.woowtech.io --token <your-token>" >&2
         exit 1
     fi
+
+    # tea login list 只讀本機設定檔、不打網路；token 過期／CF Access 攔截要真的打 API 才看得到。
+    # CF Access 依出口 IP 決定放行與否，所以不能靠「偵測 CF 攔截頁」，只能正向驗 JSON 的 login 欄位
+    #（CF HTML 頁／401／空輸出三種故障 jq 都會 fail）。
+    if ! tea api /api/v1/user 2>/dev/null | jq -er '.login' >/dev/null; then
+        echo -e "${RED}Error: git-prod auth probe failed（token 過期或 CF Access 攔截）${NC}" >&2
+        echo -e "人工處理後再跑：401 → 重發 token；CF Access → 瀏覽器重登。分流表見 docs/guides/development/tea-cli-write-gotchas.md" >&2
+        exit 1
+    fi
 fi
 
 # Agent-runtime enablement: only the NAMESPACE secret must be supplied by the

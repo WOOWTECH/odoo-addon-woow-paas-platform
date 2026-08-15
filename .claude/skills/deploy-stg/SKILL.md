@@ -104,6 +104,14 @@ if ! tea login list &>/dev/null; then
   echo "Run: tea login add --name gitea --url https://git-prod.woowtech.io --token <your-token>"
   exit 1
 fi
+
+# 真網路 auth probe：tea login list 只讀本機設定檔，token 過期／CF Access 攔截時照樣綠。
+# CF Access 依出口 IP 決定放行與否，probe 不能靠偵測 CF 頁，只能正向驗 JSON 的 login 欄位。
+if ! tea api /api/v1/user 2>/dev/null | jq -er '.login' >/dev/null; then
+  echo "Error: git-prod auth probe failed（token 過期或 CF Access 攔截）"
+  echo "人工處理後再跑；分流表見 docs/guides/development/tea-cli-write-gotchas.md"
+  exit 1
+fi
 ```
 
 ### Step 1.5: 本機 checkout vs 這次要部署的內容（#723）
@@ -478,6 +486,7 @@ say -r 180 "主人，staging 環境部署完成了"
 | 問題 | 可能原因 | 解決方式 |
 |------|----------|----------|
 | `No tea login configured` | 未設定 tea login | `tea login add --name gitea --url https://git-prod.woowtech.io --token <your-token>` |
+| `git-prod auth probe failed` | token 過期或 CF Access 攔截（`tea login list` 綠不代表 API 打得通） | 401 → 重發 token；CF Access → 瀏覽器重登；分流表見 `docs/guides/development/tea-cli-write-gotchas.md` |
 | 建立 tag 失敗（tea api 回傳錯誤） | Token 權限不足或 repo 不存在 | 確認 token 有 `repo` scope，確認 CI_REPO 路徑正確 |
 | Tag already exists | 同名 tag 已存在 | 使用 `--tag` 指定不同名稱，或手動到 Gitea 刪除舊 tag |
 | CI run not found（持續等待） | CI workflow 未被觸發 | 到 Gitea UI 檢查 workflow 設定是否正確匹配 `stg-*` tag |
