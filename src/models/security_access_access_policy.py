@@ -549,7 +549,7 @@ class SecurityAccessAccessPolicy(models.Model):
         # (delete-old-then-create), which _build_access_payload derives from the
         # SURVIVING rows. Once the row is gone its cf id never enters that list,
         # so the operator never deletes the policy → permanent CF orphan, one
-        # leaked per unlink. Inject the captured ids per-ROUTE on the resync so
+        # leaked per unlink. Inject the captured ids per-ANCHOR on the resync so
         # the operator reaps them.
         #
         # #745：key 帶上 model 名——route 與 cloud_service 的 id 各自從 1 開始，

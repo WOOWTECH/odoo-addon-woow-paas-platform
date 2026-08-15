@@ -226,6 +226,28 @@ class TestCsAccessConfigEndpointAuthz(_CsAccessEndpointFixture):
             res = self._access_config({'is_protected': True})
         self.assertFalse(res.get('success'))
 
+    def test_G6b_cannot_protect_a_service_with_no_public_address(self):
+        """沒有對外 hostname ⇒ 開啟保護必須被擋，而且不得留下 `is_protected`。
+
+        不擋的話這個寫入會成功、UI 顯示「已保護」，而 model 層的 liveness gate
+        第一道就 return ⇒ Cloudflare 上一個物件都沒有。那是**對租戶無聲的謊**，
+        不是 no-op。陰性對照在同一條裡：關閉方向永遠不擋。
+        """
+        self.svc.sudo().subdomain = False
+        self.authenticate(self.alice_login, self.alice_login)
+        client = self._mock()
+        with patch(MOCK_GET_CLIENT, return_value=client):
+            res = self._access_config({'is_protected': True})
+        self.assertFalse(res.get('success'), '沒有 hostname 卻能開啟保護')
+        self.assertFalse(client.sync_access_app.called)
+        self.svc.invalidate_recordset()
+        self.assertFalse(self.svc.is_protected,
+                         'DB 不得留下一個什麼都沒保護到的 True')
+
+        with patch(MOCK_GET_CLIENT, return_value=client):
+            res = self._access_config({'is_protected': False})
+        self._assert_ok(res, '關閉方向在任何情況下都必須做得到')
+
     def test_G7_server_owned_fields_are_never_client_settable(self):
         """白名單：`access_app_id` / `access_unresolved_idp_types` 只有伺服器寫。
 

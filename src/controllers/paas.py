@@ -1811,6 +1811,15 @@ class PaasController(HiddenChainMixin, Controller):
         vals = {}
         if 'is_protected' in kwargs:
             vals['is_protected'] = bool(kwargs['is_protected'])
+            # 沒有對外 hostname ⇒ 沒有可以掛 Access app 的錨點。不擋的話這個
+            # 寫入會**成功**、UI 顯示「已保護」，而 `_sync_access_to_operator`
+            # 的第一道 gate 就 return，Cloudflare 上一個物件都不會有——一個對
+            # 租戶而言完全無聲的謊。關閉方向（False）不擋：任何情況下都必須
+            # 關得掉。
+            if vals['is_protected'] and not service._access_hostname():
+                return {'success': False,
+                        'error': 'This service has no public address to '
+                                 'protect yet.'}
         for f in ('login_google', 'login_email_otp'):
             if f in kwargs:
                 vals[f] = bool(kwargs[f])
