@@ -10,7 +10,7 @@ from typing import Any
 
 from odoo.http import request, route, Controller
 
-from ..models.smart_home import _internal_provision
+from ..models.smart_home import _platform_order
 from ..models.workspace_access import ROLE_OWNER, ROLE_ADMIN
 
 _logger = logging.getLogger(__name__)
@@ -502,10 +502,10 @@ class SmartHomeController(Controller):
         try:
             # #524：這是全 repo **唯一**合法的 smart_home 建立點——閘門在
             # `SmartHome.create()` 的第一行，開閘掛在這一次呼叫上（不掛在上面
-            # 那個 model handle 的綁定處，見 `_internal_provision` 的 docstring）。
+            # 那個 model handle 的綁定處，見 `_platform_order` 的 docstring）。
             # 走到這裡之前，workspace 歸屬與 owner/admin 兩道閘已在
             # `api_smarthomes` 做完，`template`／`plan` 的驗證也已完成。
-            smarthome = _internal_provision(SmartHome).create(vals)
+            smarthome = _platform_order(SmartHome).create(vals)
             # Create subscription
             partner = workspace.owner_id.partner_id
             _logger.info(

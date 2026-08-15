@@ -7,7 +7,7 @@
 ## 為什麼需要它
 
 `SmartHome.create()` 從 #524 起有一道**對所有入口一律生效、無 su 豁免**的建立閘
-（`models/smart_home.py` 的 `_INTERNAL_PROVISION`）。既有測試裡有 130 處直接
+（`models/smart_home.py` 的 `_PLATFORM_ORDER`）。既有測試裡有 130 處直接
 `create()` 的 fixture，它們建的是「已存在的 smart_home」這個**前提**，不是在測
 建立路徑本身 ⇒ 一律經此 helper 開閘。
 
@@ -22,18 +22,18 @@
    連 `_internal_identity` 一起開了（fixture 常需要在 create 時就把 tunnel 欄位
    擺好，否則 `_strip_identity_anchors` 會**靜默**丟掉它們，測試會在一個與預期
    不同的前提上跑）。要測錨點就用 `env['woow_paas_platform.smart_home']` 原生
-   handle 加 `_internal_provision` 單獨開建立閘。
+   handle 加 `_platform_order` 單獨開建立閘。
 """
-from ..models.smart_home import _internal_identity, _internal_provision
+from ..models.smart_home import _internal_identity, _platform_order
 
 _MODEL = 'woow_paas_platform.smart_home'
 
 
 def sh_model(env):
     """回傳一個「建立閘 ＋ 身分錨點閘」都開著的 smart_home model handle。"""
-    return _internal_provision(_internal_identity(env[_MODEL]))
+    return _platform_order(_internal_identity(env[_MODEL]))
 
 
 def open_gates(records):
     """同 `sh_model`，但作用在既有的 recordset／handle 上。"""
-    return _internal_provision(_internal_identity(records))
+    return _platform_order(_internal_identity(records))

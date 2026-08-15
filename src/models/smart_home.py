@@ -39,28 +39,48 @@ _logger = logging.getLogger(__name__)
 #
 # 判準**只讀** context 裡那個值的**物件身分**（`is` 比對），刻意不讀
 # vals／`env.su`／`env.user`／workspace role——完整論證見
-# `models/cloud_service.py` 頂端 `_INTERNAL_PROVISION` 的註解（本段刻意逐字沿用
+# `models/cloud_service.py` 頂端 `_PLATFORM_ORDER` 的註解（本段刻意逐字沿用
 # 它的形狀，不另發明；`ir.default` 的持久化載體、`call_kw` 整包換掉 context、
 # su env 假綠三個陷阱在那裡有實測紀錄）。
-class _InternalProvision:
+class _PlatformOrder:
     """平台伺服器端開通碼的 marker type —— 見上方註解。"""
 
     __slots__ = ()
 
     def __repr__(self):
-        return '<internal provision>'
+        return '<platform order>'
 
 
-_INTERNAL_PROVISION = _InternalProvision()
+_PLATFORM_ORDER = _PlatformOrder()
 
 #: 唯一的逃生口 context key。key 本身不是判準（呼叫端當然抄得到這個字串），
-#: 判準是它的**值身分**，見 `_is_internal_provision`。
+#: 判準是它的**值身分**，見 `_is_platform_order`。
 #: ⚠ key 刻意與 `cloud_service.py` 的不同名：兩個 model 的閘互不授權，共用字串會
 #: 讓「開了 A 的閘順便開了 B 的」變成可能。
-_INTERNAL_PROVISION_CTX_KEY = 'woow_smart_home_internal_provision'
+_PLATFORM_ORDER_CTX_KEY = 'woow_smart_home_platform_order'
 
 
-def _internal_provision(records):
+# 🔴 為什麼這一組不叫 cloud_service 那組的名字 —— 這是**必要**的命名分歧，
+# 不要「順手改成一致」：
+#
+# `scripts/audit/repo-lint.py` 的 `check_provision_sentinel_allowlist`（#519）
+# 判準是 cloud_service 那組開閘符號的**字面比對**（正則寫在該 check 上方），命中
+# 即要求該檔列進它的 allowlist。而那份 allowlist 的語意是「**這個檔會替
+# cloud_service 開閘**」——本檔與 `controllers/smart_home.py` 都不是。
+#
+# 沿用同名（含「在原名後面加後綴」這種最自然的寫法——那仍然是**子字串命中**）
+# 會有兩個後果：
+#   1. 這兩個檔被迫列進 cloud_service 的 allowlist ⇒ gate 對它們吐出一句為假的話；
+#   2. 更糟：從此以後**真的**在這兩個檔裡新增一條 cloud_service 開閘路徑，
+#      #519 的 gate 不會再紅（已在 allowlist 上）⇒ 靜默失去守線。
+# ⇒ 不同的不變式要用不同的符號名，讓兩道 gate 各自保有鑑別力。
+#
+# 實測兩次（都不是推論）：第一版沿用同名 ⇒ `repo-lint.py --all` 立刻對這兩個檔
+# 報 2 條違規；改名後，光是**在註解裡引用那幾個字面符號來解釋原因**又報了 1 條
+# ——所以上面這段刻意只描述、不寫出那幾個名字。
+
+
+def _platform_order(records):
     """回傳「唯一被允許建立 smart_home」的那個 context 底下的 ``records``。
 
     開閘掛在**會讓記錄落地的那一次呼叫**上，不掛在 model handle 的綁定處——
@@ -70,19 +90,19 @@ def _internal_provision(records):
     後續 `with_context(foo=...)` 都保留這個把手。
     """
     return records.with_context(
-        **{_INTERNAL_PROVISION_CTX_KEY: _INTERNAL_PROVISION})
+        **{_PLATFORM_ORDER_CTX_KEY: _PLATFORM_ORDER})
 
 
-def _is_internal_provision(env):
+def _is_platform_order(env):
     """判準：**只**比對 context 裡那個值的物件身分（`is`），不讀 vals／su／user。"""
-    return (env.context.get(_INTERNAL_PROVISION_CTX_KEY)
-            is _INTERNAL_PROVISION)
+    return (env.context.get(_PLATFORM_ORDER_CTX_KEY)
+            is _PLATFORM_ORDER)
 
 
-class ProvisionGateError(AccessError):
+class SmartHomeOrderGateError(AccessError):
     """#524：這一筆 smart_home 不是從平台的開通流程來的。
 
-    獨立型別的用途同 `cloud_service.ProvisionGateError`——**讓測試斷言例外型別
+    獨立型別的用途同 `cloud_service.SmartHomeOrderGateError`——**讓測試斷言例外型別
     而非文案片段**。這裡尤其必要：基底 `AccessError` 同時也是 ACL／`ir.rule`
     拒絕會丟的型別，只斷言 `AccessError` 分不出「被本閘擋下」與「被 rule 擋下」，
     而本 PR 恰好同時新增了那兩道守線。
@@ -299,13 +319,13 @@ class SmartHome(models.Model):
 
         閘門是整個方法的第一件事，刻意的——後面每一段（錨點剝除、
         `super().create()` 的 INSERT）都有副作用或成本，被拒絕的呼叫不該碰到
-        其中任何一段。完整論證見模組頂端 `_INTERNAL_PROVISION` 的註解。
+        其中任何一段。完整論證見模組頂端 `_PLATFORM_ORDER` 的註解。
 
         對所有入口一律生效、**無 su／group 豁免**（否則 TransactionCase 假綠，
         見 `docs/decisions/patterns/su-env-exempt-guard-false-green.md`）。
         """
-        if not _is_internal_provision(self.env):
-            raise ProvisionGateError(_(
+        if not _is_platform_order(self.env):
+            raise SmartHomeOrderGateError(_(
                 'Smart Home 只能由平台的開通流程建立（%(model)s）。'
                 '請改從 Smart Home 下單流程建立，不要直接寫入這個 model。',
                 model=self._name))

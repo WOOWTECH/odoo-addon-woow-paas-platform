@@ -38,7 +38,7 @@
 - **否定性斷言一律配陽性對照**：斷言「被擋下來」之前先證明同一個操作在 owner
   身分下會成功——否則 AccessError 可能來自欄位不存在／記錄不存在／constraint，
   而「擋住了」跟「探針壞了」輸出長得一模一樣。
-- **逐條標明是哪一層擋的**：三道守線都是 `AccessError` 家族（`ProvisionGateError`
+- **逐條標明是哪一層擋的**：三道守線都是 `AccessError` 家族（`SmartHomeOrderGateError`
   繼承 `AccessError`；錨點守衛丟 `UserError`），只斷言 `AccessError` 會讓三者
   互相頂替——把 rule 改回全開，測試照樣綠。
 - W1 刻意掛滿 owner/admin/user/guest **四列** access：`('access_ids', 'any', [...])`
@@ -57,7 +57,7 @@ from odoo.tests import HttpCase, tagged
 from odoo.addons.woow_paas_platform.models.workspace_access import (
     ROLE_ADMIN, ROLE_GUEST, ROLE_OWNER, ROLE_USER,
 )
-from ..models.smart_home import _internal_provision
+from ..models.smart_home import _platform_order
 from .smart_home_fixture import sh_model
 
 _MODEL = 'woow_paas_platform.smart_home'
@@ -211,11 +211,11 @@ class _SmartHome524Fixture(HttpCase):
         """斷言被 **建立閘**擋下，而不是被 record rule 擋下。
 
         分辨得出來才有意義——`_assert_smart_home_rule_denied` 在這裡會綠得毫無
-        資訊（`ProvisionGateError` 繼承 `AccessError`，兩者都命中 smart_home）。
+        資訊（`SmartHomeOrderGateError` 繼承 `AccessError`，兩者都命中 smart_home）。
         """
         self.assertIn('error', result, msg + '（沒有被擋，回 %r）' % result)
         text = self._error_text(result)
-        self.assertIn('ProvisionGateError', text,
+        self.assertIn('SmartHomeOrderGateError', text,
                       msg + '（歸因：必須是 #524 的建立閘，回 %r）' % text)
         self.assertIn('開通流程', text,
                       msg + '（歸因：訊息必須可分辨，回 %r）' % text)
@@ -419,7 +419,7 @@ class TestSmartHomeCreateGate524(_SmartHome524Fixture):
             self._call_kw(
                 _MODEL, 'create',
                 [{'name': 'forged ctx', 'workspace_id': self.w1.id}],
-                {'context': {'woow_smart_home_internal_provision': True}}),
+                {'context': {'woow_smart_home_platform_order': True}}),
             '#524：JSON 載不了物件身分，帶 key 也開不了閘')
 
     def test_B5_positive_control_normal_order_flow_still_works(self):
@@ -486,7 +486,7 @@ class TestSmartHomeTunnelAnchor524(_SmartHome524Fixture):
         否則一筆全新的列可以在 provision 之前就綁上受害者的 tunnel，而
         `action_provision` 的 `if self.tunnel_id:` 分支會因此跳過建立 tunnel。
         """
-        squatted = _internal_provision(self.SmartHome.sudo()).create({
+        squatted = _platform_order(self.SmartHome.sudo()).create({
             'name': 'squat attempt',
             'workspace_id': self.w1.id,
             'tunnel_id': self.b_tunnel_uuid,
