@@ -1606,6 +1606,17 @@ reviewer Phase D §6 新發現，無一 high-severity / 無一 code 缺陷。**R
   route。**修法**：operator line 1322 前綴改用 payload 的 `app_name`（this route 的 subdomain）取代
   `canonical_name`。需 operator image 重建 → **建議併入下次 operator bump**（如 F-SA-4 ② 的 prod bump 一起帶）。
   owner=platform。
+  🔴 **2026-08-15（#745）新增的約束——動這個修法前務必先讀**：CS Access Control 上線後，
+  `canonical_name` 不只是 SA 的欄位了。CS 送的 `canonical_name` 是
+  `make_cs_access_canonical_name()`（**帶 env token**），而它送的 `app_name` 是
+  `cloud_service.subdomain`（**沒有** env token —— `controllers/paas.py` 建 subdomain 時沒傳
+  `env=`）。所以「把 operator 的前綴從 `canonical_name` 改成 `app_name`」會**順手把 CS 那一半的
+  env token 拿掉**，而 `docs/decisions/patterns/external-resource-env-token-naming.md` 的可行性表
+  明寫「Access 物件裡穩定帶 env 的只有 reusable policy name，不是 app name」。改動本身在 prod
+  完全看不出差別（prod 的 env token 是空字串），只有 stg 的 CF 物件會失去歸屬標記。
+  ⇒ 真要修 F-SA-7，正解是**在 Odoo 這一側送對前綴**（SA 的 `_build_access_payload` 改送 route
+  自己的名字當 `canonical_name`），不是改 operator 那一行——這樣兩個錨點各自決定自己的前綴，
+  CS 的 env token 不受影響。
 
 ## 2026-06-13 — SA Policy rule 子模型過渡 compat shim 待移除
 

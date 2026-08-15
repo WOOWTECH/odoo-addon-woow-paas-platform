@@ -26,7 +26,7 @@
 會成功」。沒有它，`ValidationError` 可能來自 fixture 壞掉、欄位不存在、或一個
 「什麼都擋」的壞 guard——那三種情況下所有負向斷言都會為了錯的理由變綠。
 """
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from odoo.exceptions import UserError, ValidationError
 from odoo.tests.common import TransactionCase
@@ -409,10 +409,21 @@ class TestCsAccessIdentityAnchor(_CsAccessFixture):
         """陽性對照 2：一般 access 設定欄位不受守衛影響。
 
         守衛若誤擋整個 write，租戶連開關保護都做不到，而 C4/C5 依然全綠。
+
+        #745 之後這個 write 會**真的**去打 operator（`is_protected` 進了
+        `_CS_ACCESS_SYNC_FIELDS`），所以要 mock 掉出站呼叫。刻意**不**用
+        `cs_skip_access_sync` 繞過：那會讓這條陽性對照少走一段真實路徑，而
+        它的全部價值就是「一般欄位的 write 從頭到尾走得完」。
         """
-        self.svc.write({
-            'is_protected': True, 'login_google': True,
-            'session_duration': '8h'})
+        client = MagicMock()
+        client.sync_access_app.return_value = {
+            'app_id': 'app-c7', 'policy_ids': [], 'allowed_idps': [],
+            'unresolved_idp_types': [], 'orphaned_policy_ids': []}
+        with patch('odoo.addons.woow_paas_platform.services.paas_operator.'
+                   'get_paas_operator_client', return_value=client):
+            self.svc.write({
+                'is_protected': True, 'login_google': True,
+                'session_duration': '8h'})
         self.assertTrue(self.svc.is_protected)
         self.assertTrue(self.svc.login_google)
         self.assertEqual(self.svc.session_duration, '8h')
@@ -440,9 +451,16 @@ class TestCsAccessTeardown(_CsAccessFixture):
         self.svc = self._service(subdomain='td744')
 
     def _with_access_app(self, service, app_id='app-td-1'):
-        """把服務推到「有 Access app」的狀態（只有 sentinel 路徑寫得動）。"""
-        _internal_cs_access_identity(service).write({
-            'is_protected': True, 'access_app_id': app_id})
+        """把服務推到「有 Access app」的狀態（只有 sentinel 路徑寫得動）。
+
+        `cs_skip_access_sync`（#745）：這是**佈景設定**不是受測動作。T3 之後
+        寫 `is_protected` 會觸發真的 operator push，沒有這個抑制的話 fixture
+        會死在「PaaS Operator is not configured」上——而那個 error 跟本組要測
+        的 teardown 行為完全無關。與 SA fixture 用 `sa_skip_route_sync` 同款。
+        """
+        _internal_cs_access_identity(service).with_context(
+            cs_skip_access_sync=True).write({
+                'is_protected': True, 'access_app_id': app_id})
         return service
 
     def test_D1_unlink_without_access_app_does_not_call_the_seam(self):
@@ -460,7 +478,10 @@ class TestCsAccessTeardown(_CsAccessFixture):
         """有 app id ⇒ 拆除照打，且帶著刪除前才拿得到的 id。"""
         svc = self._with_access_app(self._service(
             name='td2', subdomain='td744-2'))
-        pol = self.Policy.create(self._policy_vals(cloud_service_id=svc.id))
+        # `sa_skip_route_sync`（#745）：這台服務現在是 is_protected + 有 app id
+        # 的狀態，所以建 policy 會觸發真的 operator push。這裡是佈景不是受測動作。
+        pol = self.Policy.with_context(sa_skip_route_sync=True).create(
+            self._policy_vals(cloud_service_id=svc.id))
         pol.cf_policy_id = 'cf-pol-1'
         with patch(self._SEAM, autospec=True, return_value=None) as seam:
             svc.unlink()
@@ -516,7 +537,9 @@ class TestCsAccessTeardown(_CsAccessFixture):
         """陽性對照：拆乾淨 ⇒ 清掉 app id 與 cf policy id，狀態進 'deleting'。"""
         svc = self._with_access_app(self._service(
             name='td5', subdomain='td744-5'), app_id='app-td-5')
-        pol = self.Policy.create(self._policy_vals(cloud_service_id=svc.id))
+        # 同 D2：佈景設定，抑制 T3 之後才存在的 per-row operator push。
+        pol = self.Policy.with_context(sa_skip_route_sync=True).create(
+            self._policy_vals(cloud_service_id=svc.id))
         pol.cf_policy_id = 'cf-pol-5'
         with patch(self._SEAM, autospec=True, return_value=None):
             svc._do_cleanup()

@@ -1698,6 +1698,297 @@ class PaasController(HiddenChainMixin, Controller):
 
         return self._get_service_revisions(service)
 
+    # ==================== Access Control (#745, per-service) ============
+    #
+    # 形狀比照 SA 的 access-config／access-policies 組
+    # （`controllers/security_access.py`），差別只在**錨點**：SA 那邊 Access app
+    # 是 per-route（一個 SA 底下 N 條 route，各自一個 app），所以有 SA-level
+    # bridge ＋ per-route 兩支 config；CS 自己就是錨點（一台服務一個 subdomain
+    # 一個 app，拍板 5 的整站粒度），兩者收斂成一支 `access-config`。
+    #
+    # 四步骨架與 SA 逐字相同，順序也刻意一致：workspace 可見性 → service 釘住
+    # → role gate（owner/admin 才寫）→ 訂閱閘。`list` 是唯一跳過後兩步的分支
+    # （成員讀得到自己服務的 policy），與 SA 的 access-policies 同款。
+
+    def _get_workspace_service_or_error(self, workspace_id: int,
+                                        service_id: int,
+                                        require_manage: bool = True):
+        """解析 (workspace, service) 並跑完授權四步；失敗回 (None, error_dict)。
+
+        單一裁決處：兩支端點共用，免得其中一支日後少掉一步而另一支還在
+        （SA 那邊 `refresh_status` 曾因為被分在 read 那側而漏掉 role gate）。
+
+        `service` 釘在 `workspace_id` 上（`service.workspace_id.id !=
+        workspace_id` ⇒ 找不到），所以 URL 上換一個別人的 service id 得到的是
+        「Service not found」而不是別人的資料；`conceal_instances` 的模板一併
+        當作不存在，與同檔其他 service 端點同款。
+        """
+        user = request.env.user
+        workspace = request.env['woow_paas_platform.workspace'].browse(
+            workspace_id)
+        if not workspace.exists():
+            return None, {'success': False,
+                          'error': 'Workspace not found or access denied'}
+        access = workspace.check_user_access(user)
+        if not access:
+            return None, {'success': False,
+                          'error': 'Workspace not found or access denied'}
+        service = request.env['woow_paas_platform.cloud_service'].browse(
+            service_id)
+        if (not service.exists() or service.workspace_id.id != workspace_id
+                or service.template_id.conceal_instances):
+            return None, {'success': False, 'error': 'Service not found'}
+        if not require_manage:
+            return service, None
+        if access.role not in [ROLE_OWNER, ROLE_ADMIN]:
+            return None, {'success': False,
+                          'error': 'Insufficient permissions'}
+        try:
+            service._check_operation_allowed(operation='write')
+        except Exception as e:
+            return None, {'success': False, 'error': str(e)}
+        return service, None
+
+    @route("/api/workspaces/<int:workspace_id>/services/<int:service_id>/access-config",
+           auth="user", methods=["POST"], type="json")
+    def api_service_access_config(self, workspace_id: int, service_id: int,
+                                  **kwargs: Any) -> dict[str, Any]:
+        """本服務的 Cloudflare Access 開關與登入方式（拍板 5：整站粒度）。"""
+        service, error = self._get_workspace_service_or_error(
+            workspace_id, service_id)
+        if error:
+            return error
+        return self._update_service_access_config(service, kwargs)
+
+    @route("/api/workspaces/<int:workspace_id>/services/<int:service_id>/access-policies",
+           auth="user", methods=["POST"], type="json")
+    def api_service_access_policies(self, workspace_id: int, service_id: int,
+                                    action: str = 'list',
+                                    **kwargs: Any) -> dict[str, Any]:
+        """本服務的 Access policy CRUD ＋ reorder。"""
+        if action == 'list':
+            # 讀：workspace 成員即可，且**不 sudo**——ir.rule 才是守線
+            # （orm-vs-endpoint-acl-test-coverage）。非成員在上一步就被擋掉。
+            service, error = self._get_workspace_service_or_error(
+                workspace_id, service_id, require_manage=False)
+            if error:
+                return error
+            policies = request.env[
+                'woow_paas_platform.security_access_access_policy'].search(
+                    [('cloud_service_id', '=', service.id)])
+            return {'success': True, 'data': [p.to_dict() for p in policies]}
+
+        service, error = self._get_workspace_service_or_error(
+            workspace_id, service_id)
+        if error:
+            return error
+        if action == 'create':
+            return self._create_service_access_policy(service, kwargs)
+        elif action == 'update':
+            return self._update_service_access_policy(
+                service, kwargs.get('policy_id'), kwargs)
+        elif action == 'delete':
+            return self._delete_service_access_policy(
+                service, kwargs.get('policy_id'))
+        elif action == 'reorder':
+            return self._reorder_service_access_policies(service, kwargs)
+        return {'success': False, 'error': f'Unknown action: {action}'}
+
+    # ---- Access Control helpers ----
+
+    def _update_service_access_config(self, service, kwargs) -> dict[str, Any]:
+        """白名單寫入。
+
+        🔴 只有這四個欄位是 client 設定得了的。`access_app_id` /
+        `access_unresolved_idp_types` 是伺服器在 sync 之後回存的值——前者另有
+        model 層的身分錨點守衛（對所有人生效），但**白名單仍然是必要的第一層**：
+        守衛丟的是 `UserError`，那會讓一個順手多帶欄位的合法請求整個失敗，而不
+        是靜靜忽略它；後者則完全沒有 model 層守衛，白名單是它唯一的防線。
+
+        `is_protected` 用 `in kwargs` 判而不是 `kwargs.get()`：關閉保護送的是
+        `False`，truthy 判斷會讓「關閉」這個動作整個消失（而回應仍然是 success）。
+        """
+        vals = {}
+        if 'is_protected' in kwargs:
+            vals['is_protected'] = bool(kwargs['is_protected'])
+            # 沒有對外 hostname ⇒ 沒有可以掛 Access app 的錨點。不擋的話這個
+            # 寫入會**成功**、UI 顯示「已保護」，而 `_sync_access_to_operator`
+            # 的第一道 gate 就 return，Cloudflare 上一個物件都不會有——一個對
+            # 租戶而言完全無聲的謊。關閉方向（False）不擋：任何情況下都必須
+            # 關得掉。
+            if vals['is_protected'] and not service._access_hostname():
+                return {'success': False,
+                        'error': 'This service has no public address to '
+                                 'protect yet.'}
+        for f in ('login_google', 'login_email_otp'):
+            if f in kwargs:
+                vals[f] = bool(kwargs[f])
+        if kwargs.get('session_duration'):
+            vals['session_duration'] = kwargs['session_duration']
+        try:
+            if vals:
+                service.write(vals)
+            return {'success': True, 'data': service._access_to_dict()}
+        except Exception as e:
+            _logger.exception(
+                "[CLOUD_SVC] Failed to update access config service=%s: %s",
+                service.id, e)
+            return {'success': False, 'error': str(e)}
+
+    def _service_policy(self, service, policy_id):
+        """釘在這台服務上的 policy——跨服務／未知 id 一律回空集。
+
+        用 `search` 帶 `cloud_service_id` 條件而不是 filter
+        `service.access_policy_ids`：兩者等價，但 search 走的是 ir.rule 過濾後
+        的可見集合，語意上「找不到」與「看不到」收斂成同一個回應。
+        """
+        return request.env[
+            'woow_paas_platform.security_access_access_policy'].search(
+                [('id', '=', policy_id),
+                 ('cloud_service_id', '=', service.id)], limit=1)
+
+    def _create_service_access_policy(self, service, kwargs) -> dict[str, Any]:
+        if not kwargs.get('name'):
+            return {'success': False, 'error': 'name is required'}
+        # 兩層 quota：model 的 `_check_policy_quota` 是權威，這裡是為了回一句
+        # 人看得懂的話。**0 = unlimited**（#743）——沒有這個豁免，model 那邊的
+        # 豁免從 UI 不可達（`existing >= quota` 在 0 >= 0 時第一條就擋掉），而
+        # CS access 變體的規格正是 `sa_max_access_policies = 0`（拍板 4）。
+        # `sudo()` 只用在讀訂閱：租戶對 `sh.subscription.subscription` 沒有讀權。
+        Policy = request.env[
+            'woow_paas_platform.security_access_access_policy']
+        sub = service.sudo().subscription_id
+        if sub and sub.sh_subscription_plan_id:
+            quota = sub.sh_subscription_plan_id.sa_max_access_policies
+            existing = Policy.search_count(
+                [('cloud_service_id', '=', service.id)])
+            if quota and existing >= quota:
+                return {'success': False,
+                        'error': 'Access policy quota exceeded: plan allows '
+                                 '%d polic(ies)' % quota}
+        # 白名單：`cloud_service_id` 由**已 gate 過的 service** 決定，不讀
+        # kwargs——client 送什麼錨點都無效。`cf_policy_id` / `route_id` 同理。
+        create_vals = {
+            'cloud_service_id': service.id,
+            'name': kwargs['name'],
+            'decision': kwargs.get('decision', 'allow'),
+        }
+        # sequence 稀疏配號交給 model（max+10）；client 明給才照它的。
+        if 'sequence' in kwargs:
+            create_vals['sequence'] = kwargs['sequence']
+        rule_commands = self._build_access_rule_commands(kwargs)
+        if rule_commands is not None:
+            create_vals['rule_ids'] = rule_commands
+        try:
+            pol = Policy.create(create_vals)
+            return {'success': True, 'data': pol.to_dict()}
+        except Exception as e:
+            _logger.exception(
+                "[CLOUD_SVC] Failed to create access policy service=%s: %s",
+                service.id, e)
+            return {'success': False, 'error': str(e)}
+
+    _ACCESS_RULE_GROUPS = ('include', 'require', 'exclude')
+
+    def _build_access_rule_commands(self, kwargs):
+        """include/require/exclude → One2many create commands。
+
+        逐條白名單到 group/rule_type/rule_value：client 不得在子規則上夾帶
+        `cf_policy_id` / `policy_id` / 任何其他欄位（mass-assignment 守衛，與
+        policy 本身同一套紀律）。三個 group key 一個都沒有 ⇒ 回 None，讓呼叫端
+        自己決定（CS 這邊是「不帶 rule_ids」，交給 model 的
+        `_check_at_least_one_include` fail-loud；刻意**不**接 SA 那條 legacy
+        flat `rule_type`/`rule_value` 相容層——那是 P-rule 過渡期的遺物，新路徑
+        沒有 in-flight client 需要它）。
+        """
+        if not any(g in kwargs for g in self._ACCESS_RULE_GROUPS):
+            return None
+        commands = []
+        for grp in self._ACCESS_RULE_GROUPS:
+            for r in kwargs.get(grp) or []:
+                if not isinstance(r, dict):
+                    continue
+                commands.append((0, 0, {
+                    'group': grp,
+                    'rule_type': r.get('rule_type'),
+                    'rule_value': r.get('rule_value'),
+                }))
+        return commands
+
+    def _update_service_access_policy(self, service, policy_id,
+                                      kwargs) -> dict[str, Any]:
+        pol = self._service_policy(service, policy_id)
+        if not pol:
+            return {'success': False, 'error': 'Policy not found'}
+        vals = {}
+        for f in ('name', 'decision', 'sequence'):
+            if f in kwargs:
+                vals[f] = kwargs[f]
+        write_pol = pol
+        rule_commands = self._build_access_rule_commands(kwargs)
+        if rule_commands is not None:
+            # 整組取代。delete-before-create（`(5,0,0)` + creates）讓 email 上限
+            # 只看新規則；中間那個空集會踩到「≥1 include」檢查，所以用
+            # `sa_rule_replace` 抑制逐條檢查——policy 層的 @api.constrains 驗最終
+            # 狀態。
+            vals['rule_ids'] = [(5, 0, 0)] + rule_commands
+            write_pol = pol.with_context(sa_rule_replace=True)
+        try:
+            if vals:
+                write_pol.write(vals)
+            return {'success': True, 'data': pol.to_dict()}
+        except Exception as e:
+            _logger.exception(
+                "[CLOUD_SVC] Failed to update access policy %s: %s",
+                policy_id, e)
+            return {'success': False, 'error': str(e)}
+
+    def _delete_service_access_policy(self, service,
+                                      policy_id) -> dict[str, Any]:
+        pol = self._service_policy(service, policy_id)
+        if not pol:
+            return {'success': False, 'error': 'Policy not found'}
+        try:
+            pol.unlink()
+            return {'success': True, 'data': {'message': 'Policy deleted'}}
+        except Exception as e:
+            _logger.exception(
+                "[CLOUD_SVC] Failed to delete access policy %s: %s",
+                policy_id, e)
+            return {'success': False, 'error': str(e)}
+
+    def _reorder_service_access_policies(self, service,
+                                         kwargs) -> dict[str, Any]:
+        """重寫 precedence。逐筆寫入抑制 sync，結束後只推一次完整狀態。
+
+        不抑制的話 N 條 policy 會打 N 次 operator，而且中間每一次送出去的都是
+        **半排好**的順序——Cloudflare 會依序看到幾組不同的 precedence，最後才
+        收斂。跨服務／未知的 policy_id 靜默略過（絕不寫到別人的列），而計數器
+        走「被釘住的那些」而非原索引，略過一筆不會在號碼上留洞。
+        """
+        policy_ids = kwargs.get('policy_ids') or []
+        if not isinstance(policy_ids, list):
+            return {'success': False, 'error': 'policy_ids must be a list'}
+        reordered = []
+        try:
+            seq = 0
+            for pid in policy_ids:
+                pol = self._service_policy(service, pid)
+                if not pol:
+                    continue
+                seq += 10
+                pol.with_context(sa_skip_route_sync=True).write(
+                    {'sequence': seq})
+                reordered.append(pol.id)
+            if reordered:
+                service._sync_access_to_operator()
+            return {'success': True, 'data': {'reordered': reordered}}
+        except Exception as e:
+            _logger.exception(
+                "[CLOUD_SVC] Failed to reorder access policies service=%s: %s",
+                service.id, e)
+            return {'success': False, 'error': str(e)}
+
     # ==================== Addon Module Operations ====================
 
     def _assess_addon_removal(
@@ -4045,6 +4336,12 @@ class PaasController(HiddenChainMixin, Controller):
                 'helm_values': self._sanitize_helm_values(
                     service._helm_values_dict(), service.template_id,
                 ),
+                # #745：Access 設定（拍板 10 的欄位組）。只掛在 detail 那一側
+                # ——Access 頁籤只存在於 detail 頁，而 list 端點會為一個
+                # workspace 的**每一台**服務各 walk 一次 `access_policy_ids`。
+                # 顯示條件本身（`ac_max_access_seats > 0`）走 `subscription`，
+                # 那個 key 兩側都有，所以精簡版不會因此少掉判斷依據。
+                'access': service._access_to_dict(),
                 'internal_port': service.internal_port,
                 'allocated_vcpu': service.allocated_vcpu,
                 'allocated_ram_gb': service.allocated_ram_gb,

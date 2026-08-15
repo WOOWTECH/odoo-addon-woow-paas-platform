@@ -590,6 +590,21 @@ class SubscriptionLifecycleMixin(models.AbstractModel):
             'plan_id': sub.sh_subscription_plan_id.id if sub.sh_subscription_plan_id else None,
             'plan_name': sub.sh_subscription_plan_id.name if sub.sh_subscription_plan_id else None,
             'plan_price': sub.sh_plan_price,
+            # #745：Access 頁籤的顯示條件（設計拍板 6：只有 `> 0` 才出現）。
+            #
+            # 欄位名逐字保留 `ac_` 前綴，不學 plans 端點剝掉：那邊剝得掉是因為
+            # 整個 dict 的 scope 就是「這個方案的上限」，這裡是混合欄位的
+            # subscription dict，剝掉之後 `max_access_seats` 讀起來像是「這筆
+            # 訂閱已用/可用席數」，而它的語意是**方案上限**（`ac_` 家族＝
+            # capability-orthogonal 的上限值，OQ-C 拍板）。
+            #
+            # 值恆為 int（無方案時 0）：前端的判準是 `> 0`，回 None 會讓
+            # `null > 0` 在 JS 裡默默成立為 false 沒錯，但一旦有人寫成
+            # `>= 1` 之外的比較就不再安全，且「沒方案」與「方案沒買席位」在
+            # 這個判準下本來就該同義。
+            'ac_max_access_seats': (
+                sub.sh_subscription_plan_id.ac_max_access_seats
+                if sub.sh_subscription_plan_id else 0),
             'is_trial': sub.sh_trial,
             'trial_end_date': sub.sh_trial_end_date.isoformat() if sub.sh_trial_end_date else None,
             'start_date': sub.sh_start_date.isoformat() if sub.sh_start_date else None,
