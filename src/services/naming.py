@@ -100,6 +100,32 @@ def make_service_subdomain(ws_hash: str, reference_id: str, name: str, env: str 
     return f"paas-{_env_token(env)}cs-{_require_ws_hash(ws_hash)}-{generate_resource_hash(reference_id, name)}"
 
 
+def make_cs_access_canonical_name(ws_hash: str, reference_id: str, name: str, env: str = '') -> str:
+    """CloudService 的 Cloudflare Access 命名根（#745）。
+
+    operator 把它當成 reusable policy 名的前綴（``f"{canonical}: {policy}"``，
+    ``extra/paas-operator/src/services/cloudflare.py``），而那是整組 Access 物件
+    裡**唯一穩定帶得動 env token 的欄位**（app display name 走使用者可見的名字，
+    見 ``docs/decisions/patterns/external-resource-env-token-naming.md`` 的可行性表）。
+
+    公式刻意與 ``make_service_subdomain`` 同一條：那就是這台服務在 Cloudflare 上
+    的身分，policy 名帶上它，維運在 CF 後台一眼看得出屬於哪台服務。
+
+    🔴 **不可以改成讀 ``cloud_service.subdomain``**：那個欄位是 create 當下用
+    ``env=''`` 算出來存下的（``controllers/paas.py`` 的 ``make_service_subdomain``
+    呼叫沒有傳 ``env=``），所以「拿 stored subdomain 當前綴」在 prod 與本函式
+    **逐字節相同**、到 stg 才變成一個無法自證環境歸屬的 CF 物件——一個在 prod
+    完全看不出差別的錯誤。env 一律由呼叫端顯式傳入（來源＝
+    ``woow_paas_platform.deploy_env`` config_parameter），不從別的字串反推
+    （pattern 守則 2）。
+
+    非 lookup key：Access 的反查全走 stored id（``existing_app_id`` /
+    ``existing_policy_ids``），所以本函式的輸出改變不會讓任何刪除路徑找不到東西
+    （pattern 守則 3/4）——這也是它可以現算、不必存成 immutable 欄位的理由。
+    """
+    return make_service_subdomain(ws_hash, reference_id, name, env=env)
+
+
 def make_smarthome_subdomain(ws_hash: str, reference_id: str, name: str, env: str = '') -> str:
     """Generate smart home subdomain: paas-{env}-sm-{ws_hash}-{sm_hash}."""
     return f"paas-{_env_token(env)}sm-{_require_ws_hash(ws_hash)}-{generate_resource_hash(reference_id, name)}"

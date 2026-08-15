@@ -115,7 +115,11 @@ class _CsAccessSyncFixture(TransactionCase):
             sa_skip_route_sync=True).create(vals)
         if cf_policy_id:
             pol.cf_policy_id = cf_policy_id
-        return pol
+        # 🔴 `create()` 回的 recordset **帶著呼叫時的 context**——直接回它，
+        # 之後對這筆 policy 的每一次 write 都還套著 `sa_skip_route_sync=True`，
+        # 於是「錨點分派沒接好」與「fixture 把 sync 關掉了」在測試輸出上長得
+        # 一模一樣（C2 實際踩過：write 分派已經寫好了，測試仍然紅）。
+        return pol.with_context(sa_skip_route_sync=False)
 
     def _route(self):
         sa = self.env['woow_paas_platform.security_access'].sudo().create(
@@ -410,7 +414,7 @@ class TestPolicyAnchorDispatch(_CsAccessSyncFixture):
         self.assertTrue(client.sync_access_app.called, 'rule unlink 同上')
 
 
-class TestCsAccessTeardown(_CsAccessSyncFixture):
+class TestCsAccessTeardownPush(_CsAccessSyncFixture):
     """D 系列：T2 留下的 `_push_access_teardown` seam 真的接上 operator。"""
 
     def test_D1_teardown_pushes_a_disabled_payload(self):

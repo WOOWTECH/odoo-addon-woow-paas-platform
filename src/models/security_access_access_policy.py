@@ -456,13 +456,24 @@ class SecurityAccessAccessPolicy(models.Model):
     # route is not protected), so create/write/unlink just call the route sync
     # and let the route decide. This keeps the gate single-sourced on the route.
     #
-    # 🔴 #744 / T3 接手處（#745）：下面三個 override 的 re-sync 都寫成
-    # `self.mapped('route_id')` —— 對 **CS 錨定**的 policy 那個 mapped 是空集，
-    # 所以今天一條 CS policy 的 create/write/unlink **不會**打 operator。這是
-    # 現階段正確的（CS 側還沒有任何東西會建 Cloudflare Access app），但它是
-    # 「什麼都沒發生」型的沉默，看不出是刻意還是漏掉 —— 所以寫在這裡：
-    # T3 補上 CS 的 `_sync_access_to_operator()` 時，這三處要一起改成走錨點
-    # 分派，而不是各自再加一個 `mapped('cloud_service_id')` 分支。
+    # #745：三個 override 的 re-sync 一律走 `_access_sync_targets()`（錨點分派），
+    # 不再寫死 `mapped('route_id')`。理由見該方法的 docstring。
+
+    def _access_sync_targets(self):
+        """這批 policy 該重推的錨點記錄（route 與 cloud_service 混合清單）。
+
+        單一裁決處。改成分派而不是在三個 override 各加一個
+        `mapped('cloud_service_id')` 分支，是因為漏改其中一處的症狀是**什麼都
+        不會發生**：沒有例外、沒有 log，DB 有一條 policy 而 Cloudflare 上沒有
+        對應的規則——與「推了而且成功」在輸出上不可區分。
+
+        回 list 而非 recordset：兩個錨點是不同 model，union 不起來。兩邊都有
+        `_sync_access_to_operator()`（各自帶自己的 liveness gate），呼叫端不必
+        知道拿到的是哪一種。exclusive arc 保證每一列恰好落在其中一邊，所以不會
+        有同一次變更被兩個錨點各推一次的情形。
+        """
+        return list(self.mapped('route_id')) + list(
+            self.mapped('cloud_service_id'))
 
     @api.model_create_multi
     def create(self, vals_list):
@@ -516,8 +527,8 @@ class SecurityAccessAccessPolicy(models.Model):
             # this so the row re-home does NOT call the operator (CF converges
             # via the explicit re-sync those flows issue, not per-row here).
             if not self.env.context.get('sa_skip_route_sync'):
-                for route in policies.mapped('route_id'):
-                    route._sync_access_to_operator()
+                for anchor in policies._access_sync_targets():
+                    anchor._sync_access_to_operator()
         return policies
 
     def write(self, vals):
@@ -527,12 +538,12 @@ class SecurityAccessAccessPolicy(models.Model):
                     and any(k in vals for k in (
                         'name', 'decision', 'sequence', 'route_id',
                         'cloud_service_id', 'rule_ids'))):
-                for route in self.mapped('route_id'):
-                    route._sync_access_to_operator()
+                for anchor in self._access_sync_targets():
+                    anchor._sync_access_to_operator()
         return result
 
     def unlink(self):
-        affected = self.mapped('route_id')
+        affected = self._access_sync_targets()
         # Capture each doomed row's cf_policy_id BEFORE super().unlink() wipes
         # it. The operator deletes reusable policies only via existing_policy_ids
         # (delete-old-then-create), which _build_access_payload derives from the
@@ -540,17 +551,22 @@ class SecurityAccessAccessPolicy(models.Model):
         # so the operator never deletes the policy → permanent CF orphan, one
         # leaked per unlink. Inject the captured ids per-ROUTE on the resync so
         # the operator reaps them.
-        doomed_by_route = {}
+        #
+        # #745：key 帶上 model 名——route 與 cloud_service 的 id 各自從 1 開始，
+        # 只用 id 當 key 會把 route#3 的孤兒 id 餵給 cloud_service#3。
+        doomed_by_anchor = {}
         for pol in self:
-            if pol.cf_policy_id and pol.route_id:
-                doomed_by_route.setdefault(
-                    pol.route_id.id, []).append(pol.cf_policy_id)
+            anchor = pol.route_id or pol.cloud_service_id
+            if pol.cf_policy_id and anchor:
+                doomed_by_anchor.setdefault(
+                    (anchor._name, anchor.id), []).append(pol.cf_policy_id)
         with self.env.cr.savepoint():
             result = super().unlink()
-            for route in affected:
-                if route.exists():
-                    doomed = doomed_by_route.get(route.id) or []
-                    route.with_context(
+            for anchor in affected:
+                if anchor.exists():
+                    doomed = doomed_by_anchor.get(
+                        (anchor._name, anchor.id)) or []
+                    anchor.with_context(
                         sa_unlinked_cf_policy_ids=doomed
                     )._sync_access_to_operator()
         return result

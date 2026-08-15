@@ -129,8 +129,11 @@ class _CsAccessEndpointFixture(HttpCase):
         }
         if sequence is not None:
             vals['sequence'] = sequence
-        return self.Policy.sudo().with_context(
+        pol = self.Policy.sudo().with_context(
             sa_skip_route_sync=True).create(vals)
+        # context 會跟著 recordset 走——不清掉的話之後的 write 都被抑制，
+        # 症狀與「分派沒接好」不可區分（見 test_cs_access_sync_745 的同段註解）。
+        return pol.with_context(sa_skip_route_sync=False)
 
     # ------------------------------------------------------------------ #
     #  真 HTTP helper                                                      #
@@ -394,8 +397,11 @@ class TestCsAccessTenantRpcChain(_CsAccessEndpointFixture):
         with patch(MOCK_GET_CLIENT, return_value=client):
             res = self._access_policies({
                 'action': 'create', 'name': 'h2', 'decision': 'allow',
-                'include': [{'rule_type': 'email_domain',
-                             'rule_value': 'example.com'}]})
+                # ⚠ 用 email_list 不是 email_domain：allow × include ×
+                # email_domain 會被 #352 的整批放行守衛擋下（那是正確行為），
+                # 而它的錯誤訊息會讓這條測試看起來像是「租戶路徑壞了」。
+                'include': [{'rule_type': 'email_list',
+                             'rule_value': 'h2@example.com'}]})
         self._assert_ok(res, '租戶建 policy 必須成功')
         self.assertTrue(client.sync_access_app.called,
                         '租戶建的 policy 沒有推到 CF ⇒ 設定了等於沒設定')

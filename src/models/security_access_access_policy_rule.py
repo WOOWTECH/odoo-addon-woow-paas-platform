@@ -137,11 +137,13 @@ class SecurityAccessAccessPolicyRule(models.Model):
         return bool(ctx.get('sa_skip_route_sync') or ctx.get('sa_rule_replace'))
 
     # Atomicity + sync: mirror the policy sub-model. A rule create/write/unlink
-    # re-syncs its policy's ROUTE (the route owns the declarative full-state
-    # push to the operator). Wrapped in a savepoint so a sync raise rolls the
-    # rule row back. The liveness gate lives inside route._sync_access_to_operator
-    # (no-ops without a live tunnel / unprotected route), so we always call it
-    # and let the route decide. _suppress_route_sync() skips the per-rule call
+    # re-syncs its policy's ANCHOR — the route, or (#745) the cloud_service —
+    # which owns the declarative full-state push to the operator; the dispatch
+    # itself lives in policy._access_sync_targets(). Wrapped in a savepoint so a
+    # sync raise rolls the rule row back. The liveness gate lives inside the
+    # anchor's own _sync_access_to_operator (no-ops without a live tunnel /
+    # unprotected route / a CS with no subdomain), so we always call it and let
+    # the anchor decide. _suppress_route_sync() skips the per-rule call
     # for migration/provision bulk moves (sa_skip_route_sync) and for a
     # policy-driven rule-set replace (sa_rule_replace), where the policy's own
     # write() owns the final full-state sync.
@@ -170,8 +172,11 @@ class SecurityAccessAccessPolicyRule(models.Model):
             # 的寫法，直接對 rule 表寫入的路徑（含 API）整條漏掉。
             policies._check_allow_policy_no_bulk_grant()
             if not self._suppress_route_sync():
-                for route in rules.mapped('policy_id.route_id'):
-                    route._sync_access_to_operator()
+                # #745：走 policy 的錨點分派（route 或 cloud_service），不是
+                # `mapped('policy_id.route_id')`——CS 錨定時那個 mapped 是空集，
+                # 症狀是「規則改了但 Cloudflare 不知道」且完全無聲。
+                for anchor in policies._access_sync_targets():
+                    anchor._sync_access_to_operator()
         return rules
 
     def write(self, vals):
@@ -189,13 +194,13 @@ class SecurityAccessAccessPolicyRule(models.Model):
                     and any(k in vals for k in (
                         'group', 'rule_type', 'rule_value', 'sequence',
                         'policy_id'))):
-                for route in policies.mapped('route_id'):
-                    route._sync_access_to_operator()
+                for anchor in policies._access_sync_targets():
+                    anchor._sync_access_to_operator()
         return result
 
     def unlink(self):
         policies = self.mapped('policy_id')
-        routes = policies.mapped('route_id')
+        anchors = policies._access_sync_targets()
         with self.env.cr.savepoint():
             result = super().unlink()
             # Removing a rule can drop the last Include — re-validate surviving
@@ -207,8 +212,9 @@ class SecurityAccessAccessPolicyRule(models.Model):
             if not self.env.context.get('sa_rule_replace'):
                 policies.exists()._check_at_least_one_include()
             if not self._suppress_route_sync():
-                for route in routes.exists():
-                    route._sync_access_to_operator()
+                for anchor in anchors:
+                    if anchor.exists():
+                        anchor._sync_access_to_operator()
         return result
 
     def to_dict(self):

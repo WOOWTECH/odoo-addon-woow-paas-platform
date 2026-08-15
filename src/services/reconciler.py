@@ -59,7 +59,12 @@ def collect_left_set(env) -> LeftSet:
       走 ``route_id`` binding 鏈（dotted ``mapped`` 自動展開兩層）；**不**走 policy 的 store=True
       related ``security_access_id``（design B.3 警示：那只供 ir.rule/quota，非真 binding）。
     - **CS**：``subdomain`` + 重建的 MCP sidecar subdomain（``reconstruct_mcp_subdomain``，
-      與 operator deploy/teardown 同源；缺 helm 欄位的未部署 CS 不亂湊）。
+      與 operator deploy/teardown 同源；缺 helm 欄位的未部署 CS 不亂湊）+ **（#745）**
+      ``access_app_id`` 與 ``access_policy_ids.cf_policy_id``。
+      🔴 CS 的 Access policy 走的是 policy 錨點 exclusive arc 的**另一條腿**
+      （``cloud_service_id``），上面 SA 那條 ``route_id`` walk 在結構上到不了它們
+      ——不是漏一個欄位，是漏一整條 arc。漏掉的後果不是少算：右集是 CF 帳號級
+      list-all，看得到這些活著的 app／policy，不在左集就是**孤兒候選**。
     - **SM**：``tunnel_id``（dedicated 反查鍵）+ ``subdomain``。
     """
     ls = LeftSet()
@@ -77,6 +82,11 @@ def collect_left_set(env) -> LeftSet:
     # ── CS ──
     cs = env['woow_paas_platform.cloud_service'].sudo().search([])
     ls.subdomains |= _clean(cs.mapped('subdomain'))
+    # #745：CS 錨定的 Cloudflare Access app 與 reusable policy。dotted mapped 走
+    # 的是 policy arc 的 CS 那一腿（`access_policy_ids` 的 inverse 是
+    # `cloud_service_id`），與 :75 的 SA 腿對稱、互不重疊。
+    ls.access_app_ids |= _clean(cs.mapped('access_app_id'))
+    ls.access_policy_ids |= _clean(cs.mapped('access_policy_ids.cf_policy_id'))
     for service in cs:
         if service.helm_release_name and service.helm_namespace:
             ls.subdomains.add(
