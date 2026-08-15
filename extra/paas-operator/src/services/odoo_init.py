@@ -13,6 +13,7 @@ Uses two execution strategies inside the Odoo container:
 import json
 import logging
 import time
+from pathlib import Path
 
 from src.services.helm import KubectlException, KubernetesService
 
@@ -24,6 +25,15 @@ READY_RETRY_DELAY = 5  # seconds (total wait: 150s)
 
 # Timeout for the module list update operation
 MODULE_UPDATE_TIMEOUT = 120  # seconds
+
+# 容器內執行的 module list 更新腳本。原始碼放在獨立檔案（而非本檔的字串常數）
+# 有兩個理由：一是它就是普通 Python、看得懂也 lint 得到；二是測試可以拿到
+# 「與 kubectl exec 送進去的完全同一份 bytes」在假 odoo 環境下執行。
+# import 時就讀進來——檔案不見要在 operator 啟動當下就炸，不要等到某個租戶
+# 部署到一半才發現。
+UPDATE_MODULE_LIST_SCRIPT = (
+    Path(__file__).resolve().parent / "odoo_scripts" / "update_module_list.py"
+).read_text(encoding="utf-8")
 
 
 class OdooInitError(Exception):
@@ -239,6 +249,8 @@ class OdooInitService:
         artifacts). Installed modules are left alone for the pre-check
         uninstall flow to handle.
 
+        腳本本體見 ``src/services/odoo_scripts/update_module_list.py``。
+
         Args:
             namespace: Kubernetes namespace.
             pod_name: Name of the Odoo pod.
@@ -252,47 +264,11 @@ class OdooInitService:
         """
         logger.info("Updating Odoo module list via direct ORM access...")
 
-        update_script = (
-            "import odoo, json, sys, os\n"
-            "try:\n"
-            "    odoo.tools.config.parse_config("
-            "['-c', '/opt/bitnami/odoo/conf/odoo.conf', '--no-http'])\n"
-            "    db_name = odoo.tools.config['db_name']\n"
-            "    if not db_name:\n"
-            '        print(json.dumps({"success": False, '
-            '"error": "No db_name found in odoo.conf"}))\n'
-            "        sys.exit(1)\n"
-            "    registry = odoo.registry(db_name)\n"
-            "    with registry.cursor() as cr:\n"
-            "        env = odoo.api.Environment(cr, odoo.SUPERUSER_ID, {})\n"
-            "        result = env['ir.module.module'].update_list()\n"
-            "        added = result[0] if isinstance(result, (list, tuple)) else 0\n"
-            "        updated = result[1] if isinstance(result, (list, tuple)) else 0\n"
-            "        # Cleanup stale uninstalled module records not on disk\n"
-            "        addons_path = odoo.tools.config['addons_path'].split(',')\n"
-            "        on_disk = set()\n"
-            "        for p in addons_path:\n"
-            "            p = p.strip()\n"
-            "            if os.path.isdir(p):\n"
-            "                on_disk.update(d for d in os.listdir(p)"
-            " if os.path.isdir(os.path.join(p, d)))\n"
-            "        stale = env['ir.module.module'].search([\n"
-            "            ('state', '=', 'uninstalled'),\n"
-            "            ('name', 'not in', list(on_disk)),\n"
-            "            ('name', '!=', 'base'),\n"
-            "        ])\n"
-            "        cleaned = len(stale)\n"
-            "        if stale:\n"
-            "            stale.unlink()\n"
-            "        cr.commit()\n"
-            '        print(json.dumps({"success": True, '
-            '"added": added, "updated": updated, "cleaned": cleaned}))\n'
-            "except Exception as e:\n"
-            '    print(json.dumps({"success": False, "error": str(e)}))\n'
-            "    sys.exit(1)\n"
-        )
-
-        command = ["/opt/bitnami/odoo/venv/bin/python3", "-c", update_script]
+        command = [
+            "/opt/bitnami/odoo/venv/bin/python3",
+            "-c",
+            UPDATE_MODULE_LIST_SCRIPT,
+        ]
 
         try:
             result = self.k8s.exec_in_pod(
