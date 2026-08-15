@@ -108,9 +108,27 @@ def migrate(cr, version):
                 "[744] CHECK `%s` 尚未存在（多半是從 P2.5 前一路升上來、"
                 "Odoo 把它排進 constraint queue）——就地補建", _CONSTRAINT)
             try:
-                cr.execute(
-                    "ALTER TABLE %s ADD CONSTRAINT %s %s"
-                    % (_TABLE, _CONSTRAINT, _CHECK_DEF))
+                # 🔴 必須包 savepoint。上一步已經證明沒有違規列，所以「補建
+                # 因為壞資料而失敗」不會發生——但**別的原因**會（lock timeout、
+                # 權限、名稱衝突…）。任何 SQL 失敗都會把整個 transaction 打成
+                # aborted 狀態，之後第 3 步查 route_id 可空性的那句 SELECT 會
+                # 丟 `InFailedSqlTransaction`——一個**沒有人捕捉**的例外，它會
+                # 蓋掉底下精心組出來的 UserError，把「講得清楚地停下來」換成
+                # 一個看不出所以然的 psycopg2 錯誤。整支腳本的價值就在那句
+                # 訊息上，不能讓它被自己的修復動作弄丟。
+                #
+                # `flush=False`：這裡沒有 ORM env 可 flush（migration 的 cursor
+                # 不見得掛得到 registry），且 Odoo 自己在同一種操作上就是這樣
+                # 用的（`odoo/tools/sql.py :: add_constraint`）。
+                #
+                # `Savepoint.__exit__` 只 rollback、**不吞例外**
+                # （`odoo/sql_db.py :: Savepoint`），所以順序是：savepoint 先
+                # 回捲把 transaction 救回乾淨狀態，再由下面的 except 接住轉成
+                # 可讀訊息。兩者缺一不可。
+                with cr.savepoint(flush=False):
+                    cr.execute(
+                        "ALTER TABLE %s ADD CONSTRAINT %s %s"
+                        % (_TABLE, _CONSTRAINT, _CHECK_DEF))
             except Exception as exc:  # noqa: BLE001 — 轉成可讀訊息後 raise
                 problems.append(
                     "SQL CHECK `%s` 不存在且補建失敗：%s" % (_CONSTRAINT, exc))

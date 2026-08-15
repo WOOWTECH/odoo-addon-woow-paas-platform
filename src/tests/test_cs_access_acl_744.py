@@ -345,3 +345,75 @@ class TestPolicyRuleSubModelParity(_CsAccessAclFixture):
         self._assert_ok(result, 'bob 讀不到自己 workspace 的 selector rule')
         self.assertTrue(result.get('result'),
                         'bob 應該讀得到自己 workspace 的 selector rule')
+
+
+class TestCsAccessAnchorOverTenantRpc(_CsAccessAclFixture):
+    """H 系列：`access_app_id` 身分錨點在**真實租戶 RPC 路徑**上也擋得住。
+
+    覆核意見（非阻塞）：C 系列全部跑在 superuser `TransactionCase`。守衛本身是
+    `write()` override 的一般碼、判準只比對 context 值的物件身分，su 與否不影響
+    ——但「不影響」是推導，這裡把它換成觀測：同一條 `/web/dataset/call_kw`
+    路徑，同一個只掛 `base.group_user` 的租戶帳號。
+
+    這也是 #522 當年真正被利用的那條路徑（`call_kw` 把呼叫端 context 整包換進
+    env），su env 的測試在定義上碰不到它。
+
+    ⚠ 歸因是這組的重點：alice 是 W1 的 owner，對這筆 cloud_service **有** ir.rule
+    給的完整寫入權（H1 陽性對照證明），所以擋下來的必須是**身分錨點守衛的
+    `UserError`**，不是 ir.rule 的 `AccessError`。只斷言「被擋了」的話，把守衛
+    整段刪掉、改成任何一種讓她沒有寫入權的世界，測試照樣綠。
+    """
+
+    _CS = 'woow_paas_platform.cloud_service'
+
+    def _write_service(self, vals, ctx=None):
+        return self._call_kw(
+            self._CS, 'write', [[self.svc_w1.id], vals],
+            {'context': ctx} if ctx is not None else None)
+
+    def _assert_anchor_guard_denied(self, result, msg):
+        self.assertIn('error', result, msg + '（沒有被擋，回 %r）' % result)
+        text = self._error_text(result)
+        self.assertIn('UserError', text,
+                      msg + '（歸因：必須是身分錨點守衛，不是 ir.rule 的 '
+                            'AccessError，回 %r）' % text)
+        self.assertIn('access_app_id', text,
+                      msg + '（訊息要指名是哪個欄位，回 %r）' % text)
+
+    def test_H1_owner_can_write_ordinary_access_fields(self):
+        """陽性對照：同一個租戶、同一筆記錄、同一條 RPC，一般 access 欄位寫得動。
+
+        沒有它，H2/H3 的「被擋」可能只是因為 alice 對這筆記錄根本沒有寫入權。
+        """
+        self.authenticate(self.alice_login, self.alice_login)
+        self._assert_ok(
+            self._write_service({'is_protected': True,
+                                 'session_duration': '8h'}),
+            'W1 owner 應該改得動自己服務的 access 設定')
+        self.svc_w1.invalidate_recordset()
+        self.assertTrue(self.svc_w1.is_protected)
+
+    def test_H2_tenant_cannot_move_the_access_app_anchor(self):
+        """租戶經真 RPC 搬錨點 ⇒ 被身分錨點守衛擋下。"""
+        self.authenticate(self.alice_login, self.alice_login)
+        self._assert_anchor_guard_denied(
+            self._write_service({'access_app_id': 'victim-app-id'}),
+            '租戶經 RPC 改得動 access_app_id')
+        self.svc_w1.invalidate_recordset()
+        self.assertFalse(self.svc_w1.access_app_id)
+
+    def test_H3_forged_context_does_not_open_the_hatch_over_rpc(self):
+        """偽造 context 值打不開逃生口——這正是 #522 實際被利用的形狀。
+
+        `call_kw` 把呼叫端 context **整包**換進 env，所以任何 JSON 表達得出的
+        判準在這條路徑上都是敞開的。sentinel 是物件身分，JSON 載不動。
+        """
+        self.authenticate(self.alice_login, self.alice_login)
+        for value in (True, 1, 'true', ['x'], {'k': 'v'}):
+            self._assert_anchor_guard_denied(
+                self._write_service(
+                    {'access_app_id': 'victim-app-id'},
+                    ctx={'woow_cs_access_identity_write': value}),
+                '偽造值 %r 經 RPC 打開了逃生口' % (value,))
+        self.svc_w1.invalidate_recordset()
+        self.assertFalse(self.svc_w1.access_app_id)
