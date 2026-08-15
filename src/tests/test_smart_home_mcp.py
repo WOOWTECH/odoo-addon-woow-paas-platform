@@ -10,6 +10,7 @@ from datetime import timedelta
 
 from odoo import fields
 from odoo.tests.common import TransactionCase, HttpCase, tagged
+from .smart_home_fixture import sh_model  # #524：建立閘 fixture helper
 
 
 class TestSmartHomeMcpPlanField(TransactionCase):
@@ -50,7 +51,7 @@ class TestSmartHomeToDictMcp(TransactionCase):
     def setUp(self):
         super().setUp()
         self.Plan = self.env['sh.subscription.plan']
-        self.SmartHome = self.env['woow_paas_platform.smart_home']
+        self.SmartHome = sh_model(self.env)
         self.Workspace = self.env['woow_paas_platform.workspace']
         self.Subscription = self.env['sh.subscription.subscription']
 
@@ -201,7 +202,7 @@ class TestSmartHomeMcpEndpoints(HttpCase):
             'sh_subscription_plan_id': self.plan_mcp.id, 'list_price': 400.0,
         })
 
-        self.home = self.env['woow_paas_platform.smart_home'].sudo().create({
+        self.home = sh_model(self.env).sudo().create({
             'name': 'MCP EP HA',
             'workspace_id': self.workspace.id,
             'state': 'active',

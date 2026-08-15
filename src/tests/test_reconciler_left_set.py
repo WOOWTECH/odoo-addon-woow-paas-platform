@@ -17,6 +17,7 @@ from odoo.addons.woow_paas_platform.models.security_access import (
     _internal_identity as _internal,
 )
 from ..models.cloud_service import _internal_provision
+from .smart_home_fixture import sh_model  # #524：建立閘 fixture helper
 
 
 @tagged('post_install', '-at_install')
@@ -41,7 +42,7 @@ class TestCollectLeftSet(TransactionCase):
         cls.Route = cls.env['woow_paas_platform.security_access_route']
         cls.Policy = cls.env['woow_paas_platform.security_access_access_policy']
         cls.CS = cls.env['woow_paas_platform.cloud_service']
-        cls.SM = cls.env['woow_paas_platform.smart_home']
+        cls.SM = sh_model(cls.env)
 
     def _make_sa_route_policy(self, suffix, *, tunnel_id, dns_id, app_id, cf_policy_id):
         sa = self.SA.create({'name': f'SA-{suffix}', 'workspace_id': self.ws.id})

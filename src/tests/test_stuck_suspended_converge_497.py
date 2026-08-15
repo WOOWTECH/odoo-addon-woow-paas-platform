@@ -57,6 +57,7 @@ from unittest.mock import MagicMock, patch
 
 from odoo.tests.common import TransactionCase
 from ..models.cloud_service import _internal_provision
+from .smart_home_fixture import sh_model  # #524：建立閘 fixture helper
 
 
 # 殘留記號的固定前綴。scale 失敗但 state 已收斂時寫進 ``error_message``，讓 prod
@@ -90,7 +91,7 @@ class _Base(TransactionCase):
     def setUp(self):
         super().setUp()
         self.Service = self.env['woow_paas_platform.cloud_service']
-        self.SmartHome = self.env['woow_paas_platform.smart_home']
+        self.SmartHome = sh_model(self.env)
         self.workspace = self.env['woow_paas_platform.workspace'].create({
             'name': '497 Workspace',
         })

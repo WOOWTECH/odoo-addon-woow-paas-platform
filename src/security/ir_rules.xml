@@ -111,6 +111,78 @@
             <field name="perm_unlink" eval="True"/>
         </record>
 
+        <!-- SmartHome（#524）：本 model 在此之前**一條 rule 都沒有**，而
+             `ir.model.access.csv` 給 `base.group_user` 的是 `1,1,1,0`
+             ⇒ ir.rule 這一層是空的，任何已登入租戶對**全站**的 smart_home
+             有 read/write。三軸實測（真 HTTP `/web/dataset/call_kw`、身分只掛
+             `base.group_user`、每軸配陽性對照）皆成立，含 `tunnel_id` 明文外洩。
+
+             形態沿用 #676 給 cloud_service 落地的那兩條（讀維持全體成員、寫入
+             收窄到 owner/admin），**刻意不沿用 SecurityAccess 的三規則組**：
+             那組多的第三條是 `security_access_rule_admin_full`
+             （`base.group_system` 全開），而 SA 有 backend 表單需要它。
+
+             🔴 **本 model 刻意不加 `*_rule_admin_full`**，判準是「有沒有真的
+             呼叫者」不是「sibling 有所以抄」（#524 覆核時逐項查過）：
+               * `src/views/` 下**沒有任何**綁 `woow_paas_platform.smart_home`
+                 的 view／action（只有 `smart_home_template_views.xml`）
+                 ⇒ 沒有後台維運介面
+               * `PaaS: Enforce Subscription Lifecycle` cron 以 `user_id=1`
+                 （`__system__`）執行 ⇒ superuser 本來就繞過 ir.rule
+               * 其餘伺服器端讀取點全部 `.sudo()`：`workspace.py`（cascade
+                 cleanup）、`services/reconciler.py`、`controllers/ha_api.py`
+               * `wizard/change_subscription_plan_wizard.py` 雖有
+                 `smart_home_id`，但全 repo 無 view／action／呼叫者
+             ⇒ 加了會是一條沒有消費者的放寬。日後真的長出後台用例再補。
+
+             domain 一律用 `('workspace_id.access_ids', 'any', [...])` 把
+             `user_id` 與 `role` 綁在**同一列** access 上。寫成
+             `workspace_id.access_ids.role` 點鏈是**跨列**匹配（A 列滿足
+             user_id、B 列滿足 role），一個 workspace 只要同時有 owner 和 guest
+             兩列，guest 就通過 ⇒ 等於沒有 role 條件（#556 的根因之一）。
+
+             ⚠ 收窄 write 會連帶咬到 `controllers/smart_home.py` 的
+             `refresh_status` 分支——它原本沒有 role gate，而
+             `action_refresh_status()` 內部是 `self.write(...)`
+             ⇒ `role=user` 成員會吃到裸 `AccessError`（訊息會洩漏 model 技術名
+             與 rule 名，且行為變成 state-dependent：未 provision 時成功、
+             provision 後失敗）。已比照 SecurityAccess 的同一處前例
+             （`controllers/security_access.py` 的 refresh_status 註解）把該分支
+             併入 owner/admin gate。這是 two-layer-acl-lockstep 的要求，不是附帶重構。
+
+             ⚠ 這兩條擋的是「**動哪一筆**」，擋不到「在自己那一筆裡填別人的
+             Cloudflare tunnel UUID」——那條由 `models/smart_home.py` 的
+             `_IDENTITY_ANCHOR_FIELDS`（#524 第二節，形態抄 #522/#537）負責。 -->
+        <record id="smart_home_rule_member_read" model="ir.rule">
+            <field name="name">SmartHome: workspace member read</field>
+            <field name="model_id" ref="model_woow_paas_platform_smart_home"/>
+            <field name="domain_force">[('workspace_id.access_ids', 'any', [('user_id', '=', user.id)])]</field>
+            <field name="groups" eval="[(4, ref('base.group_user'))]"/>
+            <field name="perm_read" eval="True"/>
+            <field name="perm_write" eval="False"/>
+            <field name="perm_create" eval="False"/>
+            <field name="perm_unlink" eval="False"/>
+        </record>
+
+        <!-- 寫入方向收窄到 owner/admin。`perm_create` 在這裡是 True，但**建立這
+             一格真正的守門人不是它**：任何 `base.group_user` 帳號都能免費自建
+             workspace 並自動成為 owner（`workspace.py` 用 `.sudo()` 補一列
+             role=owner 的 access），所以 owner 資格是**可自我滿足**的，rule 擋不住
+             「繞過下單流程自建」（#519 對 cloud_service 的裁決，這裡同構）。
+             第 3 軸的閘在 `SmartHome.create()` 第一行（sentinel）。
+             `perm_unlink` 同理只是形態一致——ACL 的 `access_smart_home_user` 本來
+             就是 `unlink=0`，租戶刪不掉。 -->
+        <record id="smart_home_rule_owner_admin_manage" model="ir.rule">
+            <field name="name">SmartHome: workspace owner/admin manage</field>
+            <field name="model_id" ref="model_woow_paas_platform_smart_home"/>
+            <field name="domain_force">[('workspace_id.access_ids', 'any', [('user_id', '=', user.id), ('role', 'in', ['owner', 'admin'])])]</field>
+            <field name="groups" eval="[(4, ref('base.group_user'))]"/>
+            <field name="perm_read" eval="True"/>
+            <field name="perm_write" eval="True"/>
+            <field name="perm_create" eval="True"/>
+            <field name="perm_unlink" eval="True"/>
+        </record>
+
         <!-- SecurityAccess: read/write split so the ir.rule layer is in
              lock-step with the BFF (controllers/security_access.py), which
              gates every mutation behind role owner/admin + the subscription

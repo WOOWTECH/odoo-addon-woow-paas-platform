@@ -89,6 +89,17 @@ jobs:
       - uses: actions/checkout@v4
       - run: python3 scripts/audit/repo-lint.py --all
 
+      # #524 ③：workspace-scoped model 必須有「對 Internal User 生效」的 record
+      # rule。刻意是**獨立檔案、不併進 repo-lint.py**（PR #517 動過那支，兩張單
+      # 同時改同一個檔案會撞）。
+      #
+      # 為什麼要有這一步，而不是只靠下一步的 test_*.py glob：那些測試跑的是
+      # **複製到 tmp 的副本**，證明的是「判準本身有鑑別力」；這一步跑的是
+      # **這個 PR 的實際樹**，證明的是「這棵樹現在是乾淨的」。兩者不可互相取代
+      # ——判準對、但這次 PR 剛好新增了一個沒 rule 的 model，只有這一步會紅。
+      - name: workspace-scoped record rule gate (#524)
+        run: python3 scripts/audit/workspace_scoped_rule_gate.py
+
       # scripts/ 底下的自我測試。這些原本一支都沒有被任何 CI 跑到——
       # test_audit_411_classifier.py 從加進來就沒跑過，test_memory_integrity.py
       # 是 #606 新增的守衛，做出來的當下就處在「驗過一次、但不會被持續驗證」狀態，

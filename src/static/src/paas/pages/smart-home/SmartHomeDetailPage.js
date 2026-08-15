@@ -48,6 +48,11 @@ export class SmartHomeDetailPage extends Component {
             deleting: false,
             deleteError: null,
             refreshing: false,
+            // #524：refresh 失敗的**專用**通道。刻意不共用 `state.error`——
+            // 那一格在 template 是整頁的 "Unable to load smart home" 錯誤狀態
+            // （`t-elif="state.error"` 會把整個內容區換掉），拿它報一次 refresh
+            // 失敗等於把使用者踢出頁面，比原本的靜默還糟。
+            refreshError: null,
             showSkipTrialModal: false,
             showChangePlanModal: false,
             domain: "woowtech.io",
@@ -153,12 +158,28 @@ export class SmartHomeDetailPage extends Component {
     // Refresh status
     async refreshStatus() {
         this.state.refreshing = true;
+        this.state.refreshError = null;
         const result = await workspaceService.refreshSmartHomeStatus(
             this.props.workspaceId,
             this.props.homeId
         );
         if (result.success) {
             this.state.home = result.data;
+        } else {
+            // #524：refresh_status 的後端 gate 從「全體成員」收窄到 owner/admin
+            //（`action_refresh_status()` 內部是 self.write，而 smart_home 的 write
+            // ir.rule 現在只發給 owner/admin）⇒ role=user / guest 會拿到
+            // "Insufficient permissions"。
+            //
+            // 原本這裡**沒有 else**：失敗被整個吞掉，按鈕看起來只是沒反應。
+            // 那正是本 repo 反覆記錄的那種失敗——「擋住了」與「壞掉了」對使用者
+            // 輸出完全相同。至少要說出來。
+            //
+            // ⚠ 更完整的作法是依 role 直接把按鈕藏起來，但這個頁面今天完全沒有
+            // role 的資料流（grep 不到任何 role/isOwner/canEdit），要接是另一個
+            // 範圍的改動 —— 已回報，不在本 PR。
+            this.state.refreshError =
+                result.error || "Failed to refresh smart home status";
         }
         this.state.refreshing = false;
     }

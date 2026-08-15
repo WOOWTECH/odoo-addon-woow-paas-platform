@@ -4,6 +4,7 @@ from unittest.mock import patch
 
 from odoo.tests.common import TransactionCase
 from ..models.cloud_service import _internal_provision
+from .smart_home_fixture import sh_model  # #524：建立閘 fixture helper
 
 
 class _DeleteFixture(TransactionCase):
@@ -205,7 +206,7 @@ class TestSmartHomeUnlinkSettlesSubscription(TransactionCase):
 
     def setUp(self):
         super().setUp()
-        self.SmartHome = self.env['woow_paas_platform.smart_home']
+        self.SmartHome = sh_model(self.env)
         self.Plan = self.env['sh.subscription.plan']
         self.WalletTx = self.env['wallet.transaction']
         self.plan = self.Plan.create({

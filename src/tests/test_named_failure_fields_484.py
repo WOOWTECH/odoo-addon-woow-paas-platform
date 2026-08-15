@@ -45,6 +45,7 @@ from unittest.mock import MagicMock, patch
 from odoo.exceptions import UserError
 from odoo.tests.common import TransactionCase, tagged
 from ..models.cloud_service import _internal_provision
+from .smart_home_fixture import sh_model  # #524：建立閘 fixture helper
 
 # 兩個 model 都在**自己的 module namespace** 頂部 `from ..services.paas_operator import
 # get_paas_operator_client`，所以 patch 目標是使用者所在的 module，不是定義處
@@ -79,7 +80,7 @@ class _SmartHomeCase(TransactionCase):
         super().setUp()
         self.workspace = self.env['woow_paas_platform.workspace'].create({
             'name': 'WS 484'})
-        self.sh = self.env['woow_paas_platform.smart_home'].create({
+        self.sh = sh_model(self.env).create({
             'name': 'SH 484',
             'reference_id': 'sh-484',
             'workspace_id': self.workspace.id,

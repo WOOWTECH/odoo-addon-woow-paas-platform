@@ -71,6 +71,13 @@
                             </t>
                             Refresh
                         </WoowButton>
+                        <!-- #524：refresh 被 owner/admin gate 擋下時要說出來。
+                             原本這裡什麼都沒有，失敗被前端整個吞掉 ⇒ 按鈕看起來
+                             只是沒反應，「被擋住」與「壞掉了」對使用者輸出相同。 -->
+                        <div t-if="state.refreshError" class="o_woow_error_message">
+                            <WoowIcon name="'error'" size="16"/>
+                            <span t-esc="state.refreshError"/>
+                        </div>
                         <WoowButton
                             variant="'secondary'"
                             size="'md'"
