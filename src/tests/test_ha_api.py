@@ -8,6 +8,7 @@ from unittest.mock import patch, MagicMock
 
 from odoo import fields
 from odoo.tests.common import TransactionCase
+from .smart_home_fixture import sh_model  # #524：建立閘 fixture helper
 
 
 class TestHAApiBase(TransactionCase):
@@ -17,7 +18,7 @@ class TestHAApiBase(TransactionCase):
         super().setUp()
         self.Workspace = self.env['woow_paas_platform.workspace']
         self.WorkspaceAccess = self.env['woow_paas_platform.workspace_access']
-        self.SmartHome = self.env['woow_paas_platform.smart_home']
+        self.SmartHome = sh_model(self.env)
         self.OAuthClient = self.env['woow_paas_platform.oauth_client']
         self.OAuthToken = self.env['woow_paas_platform.oauth_token']
 

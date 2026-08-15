@@ -23,6 +23,7 @@ from odoo.addons.woow_paas_platform.models.security_access import (
     _internal_identity as _internal,
 )
 from ..models.cloud_service import _internal_provision
+from .smart_home_fixture import sh_model  # #524：建立閘 fixture helper
 
 
 def _mock_sh():
@@ -40,7 +41,7 @@ class TestWorkspaceCascadeCleanup(TransactionCase):
     def setUp(self):
         super().setUp()
         self.Workspace = self.env['woow_paas_platform.workspace']
-        self.SmartHome = self.env['woow_paas_platform.smart_home']
+        self.SmartHome = sh_model(self.env)
         self.SA = self.env['woow_paas_platform.security_access']
 
     def test_workspace_unlink_tears_down_tunneled_smarthome(self):

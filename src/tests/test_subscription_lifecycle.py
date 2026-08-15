@@ -7,6 +7,7 @@ from dateutil.relativedelta import relativedelta
 from odoo.tests.common import TransactionCase
 from odoo.exceptions import UserError
 from ..models.cloud_service import _internal_provision
+from .smart_home_fixture import sh_model  # #524：建立閘 fixture helper
 
 
 class TestSubscriptionLifecycleMixin(TransactionCase):
@@ -16,7 +17,7 @@ class TestSubscriptionLifecycleMixin(TransactionCase):
         super().setUp()
         self.Workspace = self.env['woow_paas_platform.workspace']
         self.CloudService = self.env['woow_paas_platform.cloud_service']
-        self.SmartHome = self.env['woow_paas_platform.smart_home']
+        self.SmartHome = sh_model(self.env)
         self.Template = self.env['woow_paas_platform.cloud_app_template']
 
         self.workspace = self.Workspace.create({'name': 'Test WS'})
@@ -515,7 +516,7 @@ class TestForceTrialDatesFromPlan(TransactionCase):
 
     def setUp(self):
         super().setUp()
-        self.SmartHome = self.env['woow_paas_platform.smart_home']
+        self.SmartHome = sh_model(self.env)
         self.Workspace = self.env['woow_paas_platform.workspace']
         self.Plan = self.env['sh.subscription.plan']
 
@@ -697,7 +698,7 @@ class TestForceActiveDatesFromPlan(TransactionCase):
 
     def setUp(self):
         super().setUp()
-        self.SmartHome = self.env['woow_paas_platform.smart_home']
+        self.SmartHome = sh_model(self.env)
         self.Workspace = self.env['woow_paas_platform.workspace']
         self.Plan = self.env['sh.subscription.plan']
 

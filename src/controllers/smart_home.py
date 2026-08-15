@@ -10,6 +10,7 @@ from typing import Any
 
 from odoo.http import request, route, Controller
 
+from ..models.smart_home import _internal_provision
 from ..models.workspace_access import ROLE_OWNER, ROLE_ADMIN
 
 _logger = logging.getLogger(__name__)
@@ -89,28 +90,34 @@ class SmartHomeController(Controller):
 
         if action == "get":
             return {"success": True, "data": smarthome.to_dict()}
-        elif action == "delete":
-            access = workspace.check_user_access(request.env.user)
-            if not access or access.role not in [ROLE_OWNER, ROLE_ADMIN]:
-                return {"success": False, "error": "Insufficient permissions"}
-            try:
-                smarthome._check_operation_allowed(operation='write')
-            except Exception as e:
-                return {"success": False, "error": str(e)}
-            return self._delete_smarthome(smarthome)
-        elif action == "provision":
-            access = workspace.check_user_access(request.env.user)
-            if not access or access.role not in [ROLE_OWNER, ROLE_ADMIN]:
-                return {"success": False, "error": "Insufficient permissions"}
-            try:
-                smarthome._check_operation_allowed(operation='write')
-            except Exception as e:
-                return {"success": False, "error": str(e)}
-            return self._provision_smarthome(smarthome)
-        elif action == "refresh_status":
-            return self._refresh_status(smarthome)
-        else:
+
+        if action not in ("delete", "provision", "refresh_status"):
             return {"success": False, "error": f"Unknown action: {action}"}
+
+        # 以下全部是 mutation，一律先過 owner/admin。
+        #
+        # #524：`refresh_status` 從「與 get 同群、無 role gate」搬到這裡。理由與
+        # `controllers/security_access.py` 的同一處前例逐字相同：本 PR 把
+        # smart_home 的 write 收窄到 `smart_home_rule_owner_admin_manage` 之後，
+        # `action_refresh_status()` 內部的 `self.write(update_vals)` 會讓一個
+        # role='user' 成員吃到**裸 AccessError** —— `str(e)` 會把 model 技術名與
+        # rule 名洩漏給租戶，而且行為變成 state-dependent（`tunnel_id` 還沒設時
+        # 提早 return 所以成功、provision 之後才失敗）。
+        # 這是 two-layer-acl-lockstep 的要求，不是附帶重構。
+        access = workspace.check_user_access(request.env.user)
+        if not access or access.role not in [ROLE_OWNER, ROLE_ADMIN]:
+            return {"success": False, "error": "Insufficient permissions"}
+
+        if action == "refresh_status":
+            return self._refresh_status(smarthome)
+
+        try:
+            smarthome._check_operation_allowed(operation='write')
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+        if action == "delete":
+            return self._delete_smarthome(smarthome)
+        return self._provision_smarthome(smarthome)
 
     @route(
         "/api/workspaces/<int:workspace_id>/smarthomes/<int:smarthome_id>/change-plan",
@@ -493,7 +500,12 @@ class SmartHomeController(Controller):
             vals["ha_port"] = ha_port
 
         try:
-            smarthome = SmartHome.create(vals)
+            # #524：這是全 repo **唯一**合法的 smart_home 建立點——閘門在
+            # `SmartHome.create()` 的第一行，開閘掛在這一次呼叫上（不掛在上面
+            # 那個 model handle 的綁定處，見 `_internal_provision` 的 docstring）。
+            # 走到這裡之前，workspace 歸屬與 owner/admin 兩道閘已在
+            # `api_smarthomes` 做完，`template`／`plan` 的驗證也已完成。
+            smarthome = _internal_provision(SmartHome).create(vals)
             # Create subscription
             partner = workspace.owner_id.partner_id
             _logger.info(

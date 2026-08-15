@@ -381,3 +381,4 @@ from . import test_cloud_service_subscription_binding_519
 # 但完整奪權鏈被 #556 的 _check_owner_row_protected 擋在步驟 4
 # （HttpCase，group_user-only，全走 call_kw）
 from . import test_workspace_transfer_ownership_authz_583
+from . import test_smart_home_authz_524

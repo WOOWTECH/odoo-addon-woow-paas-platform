@@ -53,6 +53,7 @@ from odoo.addons.woow_paas_platform.controllers.smart_home import (
     SmartHomeController,
 )
 from ..models.cloud_service import _internal_provision
+from .smart_home_fixture import sh_model  # #524：建立閘 fixture helper
 
 
 def _patch_sh_request(env):
@@ -312,7 +313,7 @@ class TestSubscriptionMixinSudoSmartHome(
     _label = 'sh'
 
     def _make_entity(self):
-        return self.env['woow_paas_platform.smart_home'].create({
+        return sh_model(self.env).create({
             'name': 'Mixin Sudo Home',
             'workspace_id': self.workspace.id,
         })
@@ -390,7 +391,7 @@ class TestSmartHomeDetailEndpointMixinSudo(TransactionCase):
             'name': 'SH Endpoint Sudo WS',
             'owner_id': self.owner.id,
         })
-        self.smart_home = self.env['woow_paas_platform.smart_home'].create({
+        self.smart_home = sh_model(self.env).create({
             'name': 'SH Endpoint Sudo Home',
             'workspace_id': self.workspace.id,
         })

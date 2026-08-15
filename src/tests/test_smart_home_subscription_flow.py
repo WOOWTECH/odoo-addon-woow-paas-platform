@@ -15,6 +15,7 @@ from unittest.mock import patch, MagicMock
 from odoo.tests.common import TransactionCase
 
 from odoo.addons.woow_paas_platform.controllers.smart_home import (
+from .smart_home_fixture import sh_model  # #524：建立閘 fixture helper
     SmartHomeController,
 )
 
@@ -33,7 +34,7 @@ class TestSmartHomeSubscriptionFlow(TransactionCase):
     def setUp(self):
         super().setUp()
         self.SHTemplate = self.env['woow_paas_platform.smart_home_template']
-        self.SmartHome = self.env['woow_paas_platform.smart_home']
+        self.SmartHome = sh_model(self.env)
         self.Workspace = self.env['woow_paas_platform.workspace']
         self.Plan = self.env['sh.subscription.plan']
 
@@ -222,7 +223,7 @@ class TestSmartHomeSkipTrialEndpoints(TransactionCase):
 
     def setUp(self):
         super().setUp()
-        self.SmartHome = self.env['woow_paas_platform.smart_home']
+        self.SmartHome = sh_model(self.env)
         self.SHTemplate = self.env['woow_paas_platform.smart_home_template']
         self.Workspace = self.env['woow_paas_platform.workspace']
         self.WorkspaceAccess = self.env['woow_paas_platform.workspace_access']
@@ -366,7 +367,7 @@ class TestSmartHomeChangePlanACL(TransactionCase):
     def setUp(self):
         super().setUp()
         self.controller = SmartHomeController()
-        self.SmartHome = self.env['woow_paas_platform.smart_home']
+        self.SmartHome = sh_model(self.env)
         self.SHTemplate = self.env['woow_paas_platform.smart_home_template']
         self.Workspace = self.env['woow_paas_platform.workspace']
         self.WorkspaceAccess = self.env['woow_paas_platform.workspace_access']
@@ -451,7 +452,7 @@ class TestSmartHomeChangePlanCascadeSudo(TransactionCase):
 
     def setUp(self):
         super().setUp()
-        self.SmartHome = self.env['woow_paas_platform.smart_home']
+        self.SmartHome = sh_model(self.env)
         self.SHTemplate = self.env['woow_paas_platform.smart_home_template']
         self.Workspace = self.env['woow_paas_platform.workspace']
         self.Plan = self.env['sh.subscription.plan']
@@ -608,7 +609,7 @@ class TestSmartHomeChangePlanTrialMode(TransactionCase):
 
     def setUp(self):
         super().setUp()
-        self.SmartHome = self.env['woow_paas_platform.smart_home']
+        self.SmartHome = sh_model(self.env)
         self.SHTemplate = self.env['woow_paas_platform.smart_home_template']
         self.Workspace = self.env['woow_paas_platform.workspace']
         self.Plan = self.env['sh.subscription.plan']
@@ -866,7 +867,7 @@ class TestSmartHomeMutatingEndpointsRoleCheck(TransactionCase):
 
     def setUp(self):
         super().setUp()
-        self.SmartHome = self.env['woow_paas_platform.smart_home']
+        self.SmartHome = sh_model(self.env)
         self.SHTemplate = self.env['woow_paas_platform.smart_home_template']
         self.Workspace = self.env['woow_paas_platform.workspace']
         self.WorkspaceAccess = self.env['woow_paas_platform.workspace_access']

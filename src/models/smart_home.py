@@ -1,8 +1,8 @@
 import logging
 import uuid
 
-from odoo import fields, models
-from odoo.exceptions import UserError
+from odoo import _, api, fields, models
+from odoo.exceptions import AccessError, UserError
 
 from ..services.naming import make_smarthome_subdomain
 
@@ -13,6 +13,189 @@ from ..services.paas_operator import (
 )
 
 _logger = logging.getLogger(__name__)
+
+
+# ------------------------------------------------------------------------- #
+#  #524 第 1 節：smart_home 的建立閘（private sentinel）                      #
+# ------------------------------------------------------------------------- #
+#
+# 不變式：**沒有任何 RPC 呼叫端**（裸 ORM／XML-RPC／JSON-RPC／`call_kw`，不論
+# 身分、不論送什麼 vals 或 context）能讓一筆 smart_home 落地。只有明示開閘的
+# 平台伺服器端 in-process 碼建得出來。閘門在 `create()` 的第一行。
+#
+# 為什麼 ir.rule 那層擋不到（#519 對 cloud_service 的裁決，本 model 同構）：
+# owner 資格是**可自我滿足**的——任何 `base.group_user` 帳號免費自建 workspace
+# → `workspace.py` 用 `.sudo()` 自動補一列 role=owner 的 access → 滿足
+# `smart_home_rule_owner_admin_manage`。「自建 workspace 即為 owner」是產品設計、
+# 不是缺陷，所以不動那一層。
+#
+# 為什麼繞過下單流程建出來的孤兒列是有害的（#524 實測，不是推論）：
+# `subscription_lifecycle_mixin._is_subscription_active()` 對「沒有訂閱」回
+# **True**（原文註解：`No subscription = unrestricted (admin/legacy)`）
+# ⇒ 一筆 `subscription_id` 為空的 smart_home 通得過
+# `_check_operation_allowed(operation='write')` ⇒ 租戶可以用它打
+# `/api/workspaces/<ws>/smarthomes/<id>` 的 `action='provision'`，
+# **開出一條真的、在計費的 Cloudflare tunnel，而平台側零訂閱零扣款**。
+#
+# 判準**只讀** context 裡那個值的**物件身分**（`is` 比對），刻意不讀
+# vals／`env.su`／`env.user`／workspace role——完整論證見
+# `models/cloud_service.py` 頂端 `_INTERNAL_PROVISION` 的註解（本段刻意逐字沿用
+# 它的形狀，不另發明；`ir.default` 的持久化載體、`call_kw` 整包換掉 context、
+# su env 假綠三個陷阱在那裡有實測紀錄）。
+class _InternalProvision:
+    """平台伺服器端開通碼的 marker type —— 見上方註解。"""
+
+    __slots__ = ()
+
+    def __repr__(self):
+        return '<internal provision>'
+
+
+_INTERNAL_PROVISION = _InternalProvision()
+
+#: 唯一的逃生口 context key。key 本身不是判準（呼叫端當然抄得到這個字串），
+#: 判準是它的**值身分**，見 `_is_internal_provision`。
+#: ⚠ key 刻意與 `cloud_service.py` 的不同名：兩個 model 的閘互不授權，共用字串會
+#: 讓「開了 A 的閘順便開了 B 的」變成可能。
+_INTERNAL_PROVISION_CTX_KEY = 'woow_smart_home_internal_provision'
+
+
+def _internal_provision(records):
+    """回傳「唯一被允許建立 smart_home」的那個 context 底下的 ``records``。
+
+    開閘掛在**會讓記錄落地的那一次呼叫**上，不掛在 model handle 的綁定處——
+    唯讀 handle 一律不帶這個 context，逃生口的表面積就只有真正的建立點。
+
+    ``with_context(**kwargs)`` 是 merge，所以 `.sudo()` / `.with_user()` /
+    後續 `with_context(foo=...)` 都保留這個把手。
+    """
+    return records.with_context(
+        **{_INTERNAL_PROVISION_CTX_KEY: _INTERNAL_PROVISION})
+
+
+def _is_internal_provision(env):
+    """判準：**只**比對 context 裡那個值的物件身分（`is`），不讀 vals／su／user。"""
+    return (env.context.get(_INTERNAL_PROVISION_CTX_KEY)
+            is _INTERNAL_PROVISION)
+
+
+class ProvisionGateError(AccessError):
+    """#524：這一筆 smart_home 不是從平台的開通流程來的。
+
+    獨立型別的用途同 `cloud_service.ProvisionGateError`——**讓測試斷言例外型別
+    而非文案片段**。這裡尤其必要：基底 `AccessError` 同時也是 ACL／`ir.rule`
+    拒絕會丟的型別，只斷言 `AccessError` 分不出「被本閘擋下」與「被 rule 擋下」，
+    而本 PR 恰好同時新增了那兩道守線。
+    """
+
+
+# ------------------------------------------------------------------------- #
+#  #524 第 2 節：tunnel 身分錨點（形態抄 #522／PR #537 的 security_access）    #
+# ------------------------------------------------------------------------- #
+#
+# 錨點＝**決定這一列驅動的是「哪一個」Cloudflare 物件**的欄位。移動它不是「改一個
+# 設定」，是把整列重新瞄準別人的資源，而該列仍保有自己 workspace 的 ir.rule 祝福。
+#
+# 這道守衛與上面的 record rule **層次不同，缺一不可**（#524 實測，mock 掉 operator
+# client，沒有真的對外送）：
+#
+#     1. 租戶 A 以非成員身分讀到租戶 B 的 `tunnel_id`（本 PR 第 1 節已擋）
+#     2. 租戶 A 把那個 UUID 寫進**自己**那一筆記錄——這一步 record rule 擋不到，
+#        因為他對自己的記錄本來就有合法 write 權
+#     3. 租戶 A 走正常刪除端點 → `unlink()` 先跑 `_cleanup_tunnel()`，
+#        平台拿**平台級 API key** 送出 `delete_tunnel(<B 的 UUID>)`
+#     4. 之後才因 ACL `unlink=0` 回失敗
+#
+# ⚠ 第 3 與第 4 的順序是這條路徑成立的關鍵：`_cleanup_tunnel()` 在
+# `super().unlink()`（ACL 檢查所在）**之前**呼叫 ⇒ 「租戶刪不掉自己的記錄」這個
+# 既有限制攔不住外部副作用。端點回的是失敗，Cloudflare 側的動作已經發生。
+#
+# #522 在 sibling model `security_access` 上是同一個缺口，已由 PR #537 以
+# `_IDENTITY_ANCHOR_FIELDS` + sentinel 修掉；**smart_home 是那次沒覆蓋到的同型
+# 缺口**（`security_access.py:37` 的註解自陳 tunnel_id「added later, was simply
+# never covered」——同一句話今天原封不動適用於本 model）。
+#
+# NOT 錨點，刻意的（判準＝「改了它會不會改變某個 Cloudflare 呼叫打向哪裡」）：
+#   * `connector_id` / `connector_type` / `tunnel_status` / `tunnel_uptime` /
+#     `tunnel_route`——poll 回來的狀態或顯示字串，偽造只改畫面
+#   * `ha_port`——使用者自選，指向租戶自己主機上的埠
+#   * `subdomain` / `reference_id`——`subdomain` 確實會進
+#     `configure_tunnel(hostname=...)`，但 `tunnel_id` 一旦鎖住，它只能重指
+#     **自己**那條 tunnel（且 `subdomain` 有 DB UNIQUE，搶不走別人的）；
+#     `reference_id` 是它的 hash 種子，同理。兩者屬**非跨租戶**的次級問題，
+#     未在本單實測，依工單紀律不順手改——已回報 leader4 另評。
+_IDENTITY_ANCHOR_FIELDS = (
+    'tunnel_id',      # WHICH Cloudflare tunnel this row drives (#524)
+    'tunnel_name',    # its CF-side name, mirrored back from create_tunnel
+    'tunnel_token',   # the tunnel credential itself
+)
+
+
+class _InternalIdentityWrite:
+    """Marker type for the identity-anchor escape hatch — see below."""
+
+    __slots__ = ()
+
+    def __repr__(self):
+        return '<internal identity write>'
+
+
+#: 唯一的逃生口：伺服器端 provision／teardown 碼把 Cloudflare 剛回傳的 id 存進來時
+#: 明示開閘。值必須是**這個物件**而不是 `True`／字串——`/web/dataset/call_kw` 把
+#: 呼叫端的 context 整包換進 env，任何 JSON 表達得出的判準，呼叫端在 payload 裡多加
+#: 一個 key 就打開了。這不是推論：#522 在 18.0 上實測過，一個只有 `base.group_user`
+#: 的租戶送 `context={"sa_internal_identity_write": true}` 就改寫了 SA 的
+#: `canonical_name`，而且新值真的 commit 進 Postgres。JSON 載不了物件身分。
+#:
+#: 同樣刻意**不是** `env.su` 豁免：su 會在每個 `TransactionCase`（su env）與每條
+#: `sudo()` 路徑上靜默停用守衛，正是測試本該證明它有效的地方
+#: （`docs/decisions/patterns/su-env-exempt-guard-false-green.md`）。
+_INTERNAL_IDENTITY_WRITE = _InternalIdentityWrite()
+
+_INTERNAL_IDENTITY_CTX_KEY = 'woow_smart_home_internal_identity_write'
+
+
+def _internal_identity(records):
+    """回傳「唯一被允許寫入身分錨點」的那個 context 底下的 ``records``。"""
+    return records.with_context(
+        **{_INTERNAL_IDENTITY_CTX_KEY: _INTERNAL_IDENTITY_WRITE})
+
+
+def _is_internal_identity_write(env):
+    return (env.context.get(_INTERNAL_IDENTITY_CTX_KEY)
+            is _INTERNAL_IDENTITY_WRITE)
+
+
+def _strip_identity_anchors(env, vals_list):
+    """create() 側：丟掉呼叫端自帶的身分錨點。
+
+    `super().create()` 不會繞經 `write()`，所以只靠 write 守衛會留下一個
+    create-time squat：一筆全新的列在還沒 provision 之前就綁上受害者的 tunnel
+    ——而 `action_provision` 的 `if self.tunnel_id:` 分支會因此**跳過**建立 tunnel。
+    對**所有人**生效（含 superuser），sentinel context 是唯一豁免。
+
+    採「剝除」而非 raise：`copy()` 與一般資料載入要能繼續運作——一份不帶錨點的
+    複本正是複本該有的樣子。
+    """
+    if _is_internal_identity_write(env):
+        return
+    for vals in vals_list:
+        for field in _IDENTITY_ANCHOR_FIELDS:
+            vals.pop(field, None)
+
+
+def _reject_identity_anchor_writes(env, vals):
+    """write() 側：拒絕移動錨點，而且要大聲。
+
+    對**所有人**生效（含 superuser）——理由見 `_INTERNAL_IDENTITY_WRITE`。
+    """
+    if _is_internal_identity_write(env):
+        return
+    for field in _IDENTITY_ANCHOR_FIELDS:
+        if field in vals:
+            raise UserError(
+                "Field '%s' is immutable after creation." % field
+            )
 
 
 class SmartHome(models.Model):
@@ -109,6 +292,30 @@ class SmartHome(models.Model):
 
     # Timestamps
     deployed_at = fields.Datetime(string='Deployed At')
+
+    @api.model_create_multi
+    def create(self, vals_list):
+        """#524：建立閘 ＋ 身分錨點的 create 側。
+
+        閘門是整個方法的第一件事，刻意的——後面每一段（錨點剝除、
+        `super().create()` 的 INSERT）都有副作用或成本，被拒絕的呼叫不該碰到
+        其中任何一段。完整論證見模組頂端 `_INTERNAL_PROVISION` 的註解。
+
+        對所有入口一律生效、**無 su／group 豁免**（否則 TransactionCase 假綠，
+        見 `docs/decisions/patterns/su-env-exempt-guard-false-green.md`）。
+        """
+        if not _is_internal_provision(self.env):
+            raise ProvisionGateError(_(
+                'Smart Home 只能由平台的開通流程建立（%(model)s）。'
+                '請改從 Smart Home 下單流程建立，不要直接寫入這個 model。',
+                model=self._name))
+        _strip_identity_anchors(self.env, vals_list)
+        return super().create(vals_list)
+
+    def write(self, vals):
+        """#524：身分錨點的 write 側 —— 見模組頂端 `_IDENTITY_ANCHOR_FIELDS`。"""
+        _reject_identity_anchor_writes(self.env, vals)
+        return super().write(vals)
 
     def _get_operator_client(self):
         """Get PaaS Operator client instance."""
@@ -242,6 +449,11 @@ class SmartHome(models.Model):
                 'subdomain': subdomain,
             }
 
+            # #524：`tunnel_vals` 含身分錨點（tunnel_id / tunnel_name /
+            # tunnel_token）⇒ 這是那道守衛唯一該開的閘之一。開閘掛在**這幾次
+            # 寫入**上，不掛在 `self` 上，逃生口的表面積就只有真正的存值點。
+            anchored = _internal_identity(self)
+
             if result.get('dns_failed'):
                 # operator 把 CF 的 DNS 例外就地吞成 HTTP 200 ＋ dns_failed=True
                 # （api/tunnels.py）——平台側 client 只在 HTTP >= 400 才 raise，所以
@@ -252,7 +464,7 @@ class SmartHome(models.Model):
                 # self-heal」——那個假設對 SmartHome 不成立：src/data/ 底下沒有任何
                 # smart-home cron，沒有東西會回來補這筆 DNS。所以這裡必須留下
                 # 人看得懂、修得動的訊息，而不是一句籠統的失敗。
-                self.write(dict(
+                anchored.write(dict(
                     tunnel_vals,
                     state='error',
                     error_message=(
@@ -270,7 +482,7 @@ class SmartHome(models.Model):
                 )
                 return
 
-            self.write(dict(
+            anchored.write(dict(
                 tunnel_vals,
                 state='active',
                 deployed_at=fields.Datetime.now(),
@@ -323,7 +535,8 @@ class SmartHome(models.Model):
             _logger.info(
                 "[SH] tunnel deleted sh=%s tunnel=%s", self.id, self.tunnel_id,
             )
-            self.tunnel_id = False
+            # #524：清空錨點也是寫錨點 —— 走同一個 sentinel 逃生口。
+            _internal_identity(self).write({'tunnel_id': False})
         except Exception as e:
             _logger.warning(
                 "[SH] tunnel cleanup failed sh=%s: %s — kept for retry",
