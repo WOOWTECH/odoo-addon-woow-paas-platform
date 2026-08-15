@@ -1,4 +1,4 @@
-"""#744：`18.0.1.0.143/post-migrate.py` 的四種世界。
+"""#744：`18.0.1.0.144/post-migrate.py` 的四種世界。
 
 這支 migration 的**全部價值**是那句 `UserError`：升級出事時，維運拿到的要是
 「哪一項不成立、為什麼」，不是一個看不出所以然的 psycopg2 錯誤。所以測的不是
@@ -30,13 +30,13 @@ from odoo.tools import mute_logger
 _TABLE = 'woow_paas_platform_security_access_access_policy'
 _CONSTRAINT = '%s_anchor_arc' % _TABLE
 _VERSION = '18.0.1.0.142'  # 任何非空字串即可（腳本只用它判斷不是 fresh install）
-_LOGGER = 'odoo.addons.woow_paas_platform.migrations.18.0.1.0.143.post-migrate'
+_LOGGER = 'odoo.addons.woow_paas_platform.migrations.18.0.1.0.144.post-migrate'
 
 
 def _migrate_fn():
     """以檔案路徑載入 migration（版本目錄不是 Python package，import 不到）。"""
     here = os.path.dirname(os.path.dirname(__file__))
-    path = os.path.join(here, 'migrations', '18.0.1.0.143', 'post-migrate.py')
+    path = os.path.join(here, 'migrations', '18.0.1.0.144', 'post-migrate.py')
     spec = importlib.util.spec_from_file_location('arc_post_migrate', path)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
