@@ -121,16 +121,19 @@ security-rule-lifecycle 由兩個函式——ir.rule 的出生地／退役名字
                      scripts/audit/test_repo_lint_hook_dispatch.py 用真實 repo 路徑
                      實跑 run_hook() 驗證。
 18. kubectl-ns-whitelist-sync  kubectl 可操作 namespace 的白名單同時寫在 CLAUDE.md
-                     的表格與 docs/guides/deployment/shared-cluster-paas-scope-guard.md
-                     的散文裡，兩份副本的集合必須相等。2026-08-06 實地教訓：平台自己
+                     的表格、docs/guides/deployment/shared-cluster-paas-scope-guard.md
+                     的散文，與 .claude/hooks/kubectl-ns-guard.py 的 ALLOWED_NAMESPACES
+                     常數（2026-08-16 起的 Bash 層機器守線）裡，三份副本的集合必須相
+                     等。2026-08-06 實地教訓：平台自己
                      的 Fleet 注入 secret 全住在 `fleet-local`，paas-app-bundle-cd 的
                      文件早就把 `kubectl -n fleet-local` 寫成標準程序，而本 repo 的白
                      名單漏列它 ⇒ 兩份文件對同一個 namespace 給出相反指引，讀者照先讀
-                     到的那份做，兩個方向都零訊號。不去重成一份是因為兩份服務不同讀者
+                     到的那份做，兩個方向都零訊號。不去重成一份是因為三份服務不同讀者
                      （CLAUDE.md 每 session 自動載入；guard doc 是 pattern-guard hook
-                     推給人讀的敘事版，抽走清單等於被強制讀的那份不再直接寫出規則）
+                     推給人讀的敘事版，抽走清單等於被強制讀的那份不再直接寫出規則；
+                     ns-guard hook 要毫秒級判定，清單必須內嵌成常數）
                      ——**必要重複就該機械化同步**。
-                     ⚠ 只比對兩份副本是否相等，**不驗證清單本身完整**（漏列一個實際
+                     ⚠ 只比對三份副本是否相等，**不驗證清單本身完整**（漏列一個實際
                      在用的 namespace 需要對照叢集實況，屬於人的工作）。
                      依據 docs/guides/deployment/shared-cluster-paas-scope-guard.md
 19. poll-release-facts-single-source  poll 有**兩份實作**（cron 走
@@ -3136,6 +3139,10 @@ def check_one_time_credential_render(root):
 
 KUBECTL_NS_CLAUDE_MD = "CLAUDE.md"
 KUBECTL_NS_GUARD_DOC = "docs/guides/deployment/shared-cluster-paas-scope-guard.md"
+# 第三份副本（2026-08-16）：Bash 層 PreToolUse hook 的 fail-closed 白名單常數。
+# hook 要在「不讀別的檔」的前提下毫秒級判定 ⇒ 清單必須內嵌 ⇒ 又一份必要重複，
+# 同樣交給本 gate 機械化同步，不靠人記得三改。
+KUBECTL_NS_HOOK_FILE = ".claude/hooks/kubectl-ns-guard.py"
 KUBECTL_NS_DOC_REF = "見 %s「適用範圍」段" % KUBECTL_NS_GUARD_DOC
 # CLAUDE.md 側：`### ` 標題錨在「只能操作以下 namespace」，清單是它到下一個標題之間的表格。
 KUBECTL_NS_HEADING_RE = re.compile(r"^#{2,4} .*只能操作以下 namespace.*$", re.M)
@@ -3146,6 +3153,9 @@ KUBECTL_NS_ROW_RE = re.compile(r"^\|\s*`([^`]+)`", re.M)
 #（`fleet-local`（**僅限 `paas-*` 前綴資源**）這種帶限定語的項目會有第二個 backtick）。
 KUBECTL_NS_GUARD_LINE_RE = re.compile(r"^kubectl 在 woow-k3s context.*只能操作.*$", re.M)
 KUBECTL_NS_TOKEN_RE = re.compile(r"`([^`]+)`")
+# hook 側：ALLOWED_NAMESPACES tuple 字面量，抽引號字串。
+KUBECTL_NS_HOOK_TUPLE_RE = re.compile(r"ALLOWED_NAMESPACES\s*=\s*\(([^)]*)\)", re.S)
+KUBECTL_NS_HOOK_ITEM_RE = re.compile(r"\"([^\"]+)\"|'([^']+)'")
 
 
 def _kubectl_ns_from_claude_md(text):
@@ -3183,8 +3193,23 @@ def _kubectl_ns_from_guard_doc(text):
     return names, None
 
 
+def _kubectl_ns_from_hook(text):
+    """回傳 (namespace 集合, 錯誤訊息 or None)。抽不到一律當錯誤，不回空集合。"""
+    m = KUBECTL_NS_HOOK_TUPLE_RE.search(text)
+    if not m:
+        return set(), ("%s：找不到 ALLOWED_NAMESPACES tuple ⇒ 白名單對帳失去鑑別力。"
+                       "常數改名時要一起更新 KUBECTL_NS_HOOK_TUPLE_RE（%s）"
+                       % (KUBECTL_NS_HOOK_FILE, KUBECTL_NS_DOC_REF))
+    names = {a or b for a, b in KUBECTL_NS_HOOK_ITEM_RE.findall(m.group(1))}
+    if not names:
+        return set(), ("%s：tuple 抽不到任何 namespace ⇒ 比對會在空集合上恆真"
+                       "（探針壞掉不是通過）（%s）"
+                       % (KUBECTL_NS_HOOK_FILE, KUBECTL_NS_DOC_REF))
+    return names, None
+
+
 def check_kubectl_ns_whitelist_sync(root):
-    """kubectl 可操作 namespace 的白名單寫在兩個檔案裡，兩份必須逐字相等。
+    """kubectl 可操作 namespace 的白名單寫在三個檔案裡，三份必須逐字相等。
 
     2026-08-06 實地教訓：平台自己的 Fleet 注入 secret 全住在 ``fleet-local``，而
     ``paas-app-bundle-cd`` 的 CLAUDE.md／README 早就把 ``kubectl get secret -n
@@ -3196,46 +3221,54 @@ def check_kubectl_ns_whitelist_sync(root):
     白名單型守線漏列一個實際天天在用的項目，效果不是更安全，而是守線被繞過（照 CD
     repo 那份做）或讓人卡住（照本 repo 這份做）——兩個方向都不會有任何訊號。
 
-    為什麼不去重成一份：兩份服務不同讀者。CLAUDE.md 每個 session 自動載入，agent
+    為什麼不去重成一份：三份服務不同讀者。CLAUDE.md 每個 session 自動載入，agent
     不讀額外文件就要拿得到清單；guard doc 是 pattern-guard hook 推給人讀的敘事版，
-    把清單抽走等於被強制讀的那份不再直接寫出規則。**必要重複就該機械化同步**，而不
-    是靠人記得改一邊要同步另一邊——這正是本 gate 存在的理由。
+    把清單抽走等於被強制讀的那份不再直接寫出規則；kubectl-ns-guard hook（2026-08-16
+    起的第三份）要在不讀別的檔的前提下毫秒級判定，清單必須內嵌成常數。**必要重複
+    就該機械化同步**，而不是靠人記得改一份要同步其餘——這正是本 gate 存在的理由。
 
-    ⚠ 覆蓋邊界：只比對兩份**副本**的 namespace 集合是否相等。清單漏了某個實際在用
+    ⚠ 覆蓋邊界：只比對三份**副本**的 namespace 集合是否相等。清單漏了某個實際在用
     的 namespace（＝#618 修的那個問題本體）本 gate 一個都抓不到——那需要對照叢集實
     況，屬於人的工作。把這條綠讀成「白名單是完整的」就是原型錯誤換一個載體。
     """
-    claude_path = os.path.join(root, KUBECTL_NS_CLAUDE_MD)
-    guard_path = os.path.join(root, KUBECTL_NS_GUARD_DOC)
-    missing = [rel for rel, p in ((KUBECTL_NS_CLAUDE_MD, claude_path),
-                                  (KUBECTL_NS_GUARD_DOC, guard_path))
-               if not os.path.exists(p)]
+    sources = (
+        (KUBECTL_NS_CLAUDE_MD, _kubectl_ns_from_claude_md),
+        (KUBECTL_NS_GUARD_DOC, _kubectl_ns_from_guard_doc),
+        (KUBECTL_NS_HOOK_FILE, _kubectl_ns_from_hook),
+    )
+    missing = [rel for rel, _ in sources
+               if not os.path.exists(os.path.join(root, rel))]
     if missing:
-        # 🔴 刻意不 fail-open：這兩個檔是守線本體，任一不見就是清單只剩一份副本
-        #    ——而「只剩一份」正好是本 gate 唯一無法察覺分歧的狀態。
-        return ["%s：檔案不存在 ⇒ kubectl namespace 白名單少了一份副本，雙寫對帳失去"
+        # 🔴 刻意不 fail-open：這三個檔是守線本體，任一不見就是清單少一份副本
+        #    ——而「少一份」正好是本 gate 無法察覺該份分歧的狀態。
+        return ["%s：檔案不存在 ⇒ kubectl namespace 白名單少了一份副本，對帳失去"
                 "鑑別力（%s）" % ("／".join(missing), KUBECTL_NS_DOC_REF)]
 
-    with open(claude_path, encoding="utf-8") as f:
-        claude_names, err_a = _kubectl_ns_from_claude_md(f.read())
-    with open(guard_path, encoding="utf-8") as f:
-        guard_names, err_b = _kubectl_ns_from_guard_doc(f.read())
-    errors = [e for e in (err_a, err_b) if e]
+    copies, errors = {}, []
+    for rel, extract in sources:
+        with open(os.path.join(root, rel), encoding="utf-8") as f:
+            names, err = extract(f.read())
+        copies[rel] = names
+        if err:
+            errors.append(err)
     if errors:
         return errors
 
-    only_claude = sorted(claude_names - guard_names)
-    only_guard = sorted(guard_names - claude_names)
-    if not (only_claude or only_guard):
-        return []
-    # 點名「是哪一個」而不是「差幾個」：只報數量等於報了一個沒法行動的訊號。
+    # 點名「是哪一個、在哪幾份」而不是「差幾個」：只報數量等於報了一個沒法行動
+    # 的訊號。訊息同時列出「有的」與「缺的」兩邊，讀者不用自己反推。
+    order = [rel for rel, _ in sources]
     parts = []
-    if only_claude:
-        parts.append("只在 %s 有：%s" % (KUBECTL_NS_CLAUDE_MD, only_claude))
-    if only_guard:
-        parts.append("只在 %s 有：%s" % (KUBECTL_NS_GUARD_DOC, only_guard))
-    return ["kubectl namespace 白名單兩份副本分歧（%s）⇒ 兩份文件會對同一個 namespace "
-            "給出相反指引，而讀者照先讀到的那份做。改一邊必須同步另一邊（%s）"
+    for name in sorted(set().union(*copies.values())):
+        have = [rel for rel in order if name in copies[rel]]
+        if len(have) == len(order):
+            continue
+        lack = [rel for rel in order if name not in copies[rel]]
+        parts.append("`%s` 只在 %s 有、缺於 %s"
+                     % (name, "／".join(have), "／".join(lack)))
+    if not parts:
+        return []
+    return ["kubectl namespace 白名單三份副本分歧（%s）⇒ 副本會對同一個 namespace "
+            "給出相反指引，而讀者照先讀到的那份做。改一份必須同步三份（%s）"
             % ("；".join(parts), KUBECTL_NS_DOC_REF)]
 
 

@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
-"""kubectl namespace 白名單雙寫對帳 gate 的 A/B 注入測試。
+"""kubectl namespace 白名單三份副本對帳 gate 的 A/B 注入測試。
 
 這支測試的存在理由跟被測的 check 一樣：**「現在是綠的」不是驗收**。集合相等這種
 判準最容易在探針壞掉時恆真——兩邊都抽不到東西，`set() == set()` 就是綠的，而它與
 「兩份清單確實一致」的輸出**完全相同**。所以下面每一條注入測試都在問：**改壞它，
 會不會紅、紅得對不對、有沒有點名是哪一個**。
 
-注入的素材是**真實的 CLAUDE.md 與 guard doc**（複製到 tmp 目錄後再改），不是手寫
+注入的素材是**真實的 CLAUDE.md、guard doc 與 kubectl-ns-guard hook**（複製到 tmp
+目錄後再改），不是手寫
 的假 fixture：假 fixture 只證明 parser 在自己捏的形狀上能動。定位一律用被測模組
 自己的 regex，**不寫死 `fleet-local` 這種當下值**——寫死會讓白名單下次增刪的那天
 測試變成假紅（或更糟：突變錨點消失而測試靜默失去鑑別力）。
@@ -42,6 +43,8 @@ _spec.loader.exec_module(repo_lint)
 
 CLAUDE_REL = repo_lint.KUBECTL_NS_CLAUDE_MD
 GUARD_REL = repo_lint.KUBECTL_NS_GUARD_DOC
+HOOK_REL = repo_lint.KUBECTL_NS_HOOK_FILE
+ALL_RELS = (CLAUDE_REL, GUARD_REL, HOOK_REL)
 
 
 def _read(rel):
@@ -50,14 +53,16 @@ def _read(rel):
 
 
 class _Fixture:
-    """把兩份真實檔案複製到 tmp root，可選擇性突變其中一份或整個拿掉。"""
+    """把三份真實檔案複製到 tmp root，可選擇性突變其中一份或整個拿掉。"""
 
     def __init__(self, mutations=None, drop=None):
         self.root = tempfile.mkdtemp(prefix="ns-whitelist-gate-")
-        os.makedirs(os.path.join(self.root, os.path.dirname(GUARD_REL)), exist_ok=True)
-        for rel in (CLAUDE_REL, GUARD_REL):
+        for rel in ALL_RELS:
             if rel == drop:
                 continue
+            dirname = os.path.dirname(rel)
+            if dirname:
+                os.makedirs(os.path.join(self.root, dirname), exist_ok=True)
             text = (mutations or {}).get(rel, _read(rel))
             with open(os.path.join(self.root, rel), "w", encoding="utf-8") as f:
                 f.write(text)
@@ -83,6 +88,25 @@ def _drop_last_guard_item(text):
     assert victim, "最後一個項目抽不到 namespace ⇒ 突變沒發生"
     mutated = "｜".join(segments[:-1]) + "。"
     return text[:match.start()] + mutated + text[match.end():], victim.group(1)
+
+
+def _drop_last_hook_item(text):
+    """從 hook 的 ALLOWED_NAMESPACES tuple 砍掉最後一個項目，回傳 (新文字, 被砍的
+    namespace)。定位用被測模組自己的 regex，不寫死當下值（同上兩個突變器）。"""
+    match = repo_lint.KUBECTL_NS_HOOK_TUPLE_RE.search(text)
+    assert match, "hook 的 ALLOWED_NAMESPACES 錨點不存在 ⇒ 突變沒發生，測試會假綠"
+    body = match.group(1)
+    items = list(repo_lint.KUBECTL_NS_HOOK_ITEM_RE.finditer(body))
+    assert len(items) >= 2, "hook tuple 只有一個項目，這個突變沒有意義"
+    last = items[-1]
+    victim = last.group(1) or last.group(2)
+    line_start = body.rfind("\n", 0, last.start()) + 1
+    line_end = body.find("\n", last.end())
+    if line_end == -1:
+        line_end = len(body)
+    new_body = body[:line_start] + body[line_end + 1:]
+    abs_start = match.start(1)
+    return text[:abs_start] + new_body + text[match.end(1):], victim
 
 
 def _drop_last_claude_row(text):
@@ -114,15 +138,19 @@ class TestBaselineIsGreen(unittest.TestCase):
         self.assertEqual(
             repo_lint.check_kubectl_ns_whitelist_sync(str(_REPO_ROOT)), [])
 
-    def test_both_sides_extract_a_nonempty_set(self):
-        # 集合相等在「兩邊都空」時恆真 ⇒ 先證明兩邊都真的抽得到東西。
+    def test_all_sides_extract_a_nonempty_set(self):
+        # 集合相等在「各邊都空」時恆真 ⇒ 先證明三邊都真的抽得到東西。
         claude, err_a = repo_lint._kubectl_ns_from_claude_md(_read(CLAUDE_REL))
         guard, err_b = repo_lint._kubectl_ns_from_guard_doc(_read(GUARD_REL))
+        hook, err_c = repo_lint._kubectl_ns_from_hook(_read(HOOK_REL))
         self.assertIsNone(err_a)
         self.assertIsNone(err_b)
+        self.assertIsNone(err_c)
         self.assertTrue(claude, "CLAUDE.md 側抽到空集合")
         self.assertTrue(guard, "guard doc 側抽到空集合")
+        self.assertTrue(hook, "hook 側抽到空集合")
         self.assertEqual(claude, guard)
+        self.assertEqual(claude, hook)
 
 
 class TestDivergenceGoesRed(unittest.TestCase):
@@ -143,6 +171,15 @@ class TestDivergenceGoesRed(unittest.TestCase):
         self.assertEqual(len(violations), 1, violations)
         self.assertIn(victim, violations[0])
         self.assertIn(GUARD_REL, violations[0])
+
+    def test_hook_missing_one_namespace(self):
+        # 第三份副本（hook 常數）漏一項也要紅——這是把 hook 納入對帳的驗收本體。
+        text, victim = _drop_last_hook_item(_read(HOOK_REL))
+        with _Fixture(mutations={HOOK_REL: text}) as fx:
+            violations = fx.run()
+        self.assertEqual(len(violations), 1, violations)
+        self.assertIn(victim, violations[0])
+        self.assertIn(HOOK_REL, violations[0])
 
     def test_renamed_namespace_is_caught_on_both_sides(self):
         # 只改一邊的拼字＝兩個方向各多一項，訊息必須兩邊都點名。
@@ -198,8 +235,23 @@ class TestBrokenProbeIsNotGreen(unittest.TestCase):
         self.assertTrue(violations)
         self.assertIn("恆真", violations[0])
 
+    def test_hook_tuple_anchor_renamed(self):
+        # 用被測模組自己的 regex 定位賦值行再改名——naive replace 第一次出現會打中
+        # docstring 裡的字樣、突變沒發生，測試假紅（初版就是這樣被自己抓到的）。
+        text = _read(HOOK_REL)
+        match = repo_lint.KUBECTL_NS_HOOK_TUPLE_RE.search(text)
+        assert match, "hook tuple 錨點不存在 ⇒ 突變沒發生"
+        mutated = (text[:match.start()]
+                   + match.group(0).replace("ALLOWED_NAMESPACES",
+                                            "RENAMED_TUPLE", 1)
+                   + text[match.end():])
+        with _Fixture(mutations={HOOK_REL: mutated}) as fx:
+            violations = fx.run()
+        self.assertTrue(violations)
+        self.assertIn(HOOK_REL, violations[0])
+
     def test_missing_file_is_not_fail_open(self):
-        for dropped in (CLAUDE_REL, GUARD_REL):
+        for dropped in ALL_RELS:
             with self.subTest(dropped=dropped):
                 with _Fixture(drop=dropped) as fx:
                     violations = fx.run()
