@@ -72,6 +72,8 @@ context 只作用在該次執行（**不再改動 `~/.kube/config`**），且值
 
 其餘 namespace 屬叢集上其他部署（客戶實例、gitea、longhorn-system 等），**絕對不碰**。跨 ns 唯讀盤點（get/list）僅供歸屬分流——非上述 namespace 的資源只列不動，嚴禁任何寫入/刪除；叢集級設定（default StorageClass、Longhorn settings 等）影響全叢集，動之前須與叢集運維協調。（實例教訓：2026-07-08 盤點 48 顆 Released PV，其中 ~39 顆屬其他部署，差點被當平台殘留清理——見 issue #319。）
 
+本鐵律另有 Bash 層機器守線：PreToolUse hook [`.claude/hooks/kubectl-ns-guard.py`](.claude/hooks/kubectl-ns-guard.py) 擋 `--context woow-k3s` 下寫入／exec 類指令的越界 namespace（唯讀盤點不擋；寫入類未帶 `--context` 也擋）。一次性繞過：指令前綴 `KUBECTL_NS_GUARD=off `。白名單三份副本（本表／guard doc／hook 常數）由 repo-lint `kubectl-ns-whitelist-sync` 對帳，改一份必須同步三份。
+
 ## git
 
 PR / Issue / Comment 描述一律使用 zh-tw 繁體中文。
