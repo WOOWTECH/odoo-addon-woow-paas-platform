@@ -99,6 +99,7 @@ CloudAppTemplate.has_admin_gui          ← ① 能力的唯一事實源（model
 | `check_slug_capability_gate` | 禁**已知的壞形態** | `src/static/src/**/*.{js,xml}` 出現以 slug 做集合成員判斷 |
 | `check_admin_gui_gate_anchor` | 鎖**唯一的對形態** | Reset 按鈕的 `t-if` 鏈（含祖先、含 getter body）追不到 `has_admin_gui` |
 | `check_gateway_copy_gate_anchor` | 同上，錨在**文案**而非按鈕 | 提到 "Gateway API Key" 的文字節點，其 `t-if` 鏈追不到 `has_gateway` |
+| `check_access_tab_gate_anchor` | 同上，錨在**頁籤**（#746） | Cloud Service 的 Access 頁籤（`setTab('access')`）其 `t-if` 鏈追不到 `ac_max_access_seats` |
 
 第二條是重點：它不管你把判準寫成什麼樣子、getter 改叫什麼名字——**只要追不到那個欄位就 fail**。
 所以「第三個判準」不論長相（category、`mcp_enabled`、新名單）都會在 review 之前被擋下。
@@ -112,6 +113,13 @@ CloudAppTemplate.has_admin_gui          ← ① 能力的唯一事實源（model
 
 > 複合 gate（`hasAdminGui and hasGateway`）是合法的：兩個都是後端鏡射欄位，各自代表一段語意
 > （按鈕在不在 ／ 會不會真的交付）。本 pattern 禁的是**自己算一份**，不是「只准引用一個欄位」。
+
+第四條（#746）把同一個 pattern 推到**方案（plan）屬性**上：Access 頁籤的顯示判準是
+`subscription.ac_max_access_seats > 0`（設計拍板 6），而 `ac_` 家族是 capability-orthogonal 的
+方案上限（OQ-C 拍板），**不是模板屬性**。誘惑在於「有 Access 的就那幾個模板」今天剛好成立
+——下一個賣 AC 席位的方案上架就漏，漏的方向仍是 #460 那個：後端有設定、租戶看不到頁籤。
+它也示範能力欄位可以住在 `template` 子物件以外的地方（這裡是 `subscription`），錨點規則不變：
+**t-if 鏈追得到那個欄位**。
 
 形態規則的 scope（抓什麼／不抓什麼，實測矩陣見 #463 的 PR 說明）：
 

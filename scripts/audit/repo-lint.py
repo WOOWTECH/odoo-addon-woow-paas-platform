@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """repo-lint：把「假綠家族」pitfall 轉成機械 gate 的靜態檢查工具。
 
-三十個 check 函式，歸為下列二十七條規則（其中兩條各由多個函式實作：第 7 條
-capability-gate 由三個函式——slug 集合成員／admin-gui 錨點／gateway 文案錨點；第 22 條
+三十一個 check 函式，歸為下列二十七條規則（其中兩條各由多個函式實作：第 7 條
+capability-gate 由四個函式——slug 集合成員／admin-gui 錨點／gateway 文案錨點／
+Access 頁籤錨點；第 22 條
 security-rule-lifecycle 由兩個函式——ir.rule 的出生地／退役名字。這個一對多關係的顯式
 映射表是 `REPO_LINT_RULES`，由第 17 條機械對帳，所以上面這兩個數字不會再靜默漂掉）。
 每條都對應一個已翻車的 pitfall，訊息內附文件指針：
@@ -36,6 +37,9 @@ security-rule-lifecycle 由兩個函式——ir.rule 的出生地／退役名字
                      (c) 宣告 gateway 憑證的文案（"Gateway API Key"）其 t-if 鏈必須追得到
                          has_gateway——改判 has_admin_gui 會讓 8 個模板裡沒有 gateway 的
                          那 7 個對租戶宣告一件永遠不會發生的事（#530）。
+                     (d) Cloud Service 的 Access 頁籤（setTab('access')）其 t-if 鏈必須
+                         追得到 ac_max_access_seats——席位是**方案**屬性不是模板屬性，
+                         改判 slug／category 今天剛好對、下一個 AC 方案就漏（#746 拍板 6）。
                      依據 docs/decisions/patterns/capability-gate-single-source-field.md
 8. conceal-instances src/**/*.py（除 src/tests/）不得用 `template_id.is_hidden` 判**既有
                      service** 的可見性——實例層判準是 template_id.conceal_instances；
@@ -347,6 +351,13 @@ GATEWAY_FIELD = "has_gateway"
 # 「哪段文案」的 XML 端錨點：向租戶宣告會發／已發 gateway 憑證的字面文案。錨在文案
 # 本身而非某個元素 id——這條規則要守的就是「這句話會不會對不該看到的人出現」。
 GATEWAY_COPY_RE = re.compile(r"gateway\s+api\s+key", re.IGNORECASE)
+# #746 CS Access Control：Access 頁籤的能力欄位（payload 鏡射方案的席位上限，
+# `_get_subscription_info()` 直接搬 sh_subscription_plan_id.ac_max_access_seats）。
+ACCESS_SEATS_FIELD = "ac_max_access_seats"
+# 「哪顆頁籤」的 XML 端錨點：同 ADMIN_GUI_BUTTON_HANDLER 的理由，錨在 handler
+# 呼叫（`setTab('access')`）而非 getter 名或按鈕文字——前兩者可以更名，改掉這個
+# 字面就是改掉「這顆頁籤切到哪裡」本身。
+ACCESS_TAB_HANDLER_RE = re.compile(r"setTab\(\s*['\"]access['\"]\s*\)")
 # t-if 表達式裡不算 component member 的字（OWL 運算子 / literal / 內建 namespace）。
 OWL_EXPR_NON_MEMBERS = {
     "and", "or", "not", "in", "true", "false", "null", "undefined",
@@ -1269,6 +1280,55 @@ def check_admin_gui_gate_anchor(root):
                 "按不到，修復不可達（見 %s）。"
                 % (rel, line_no, ADMIN_GUI_BUTTON_HANDLER, ADMIN_GUI_FIELD,
                    "／".join(exprs) or "(無 t-if)", ADMIN_GUI_FIELD, CAPABILITY_GATE_DOC))
+    return violations
+
+
+def check_access_tab_gate_anchor(root):
+    """Access 頁籤的顯示 gate 必須（直接或經 getter）追得到 ac_max_access_seats。
+
+    與 check_admin_gui_gate_anchor 同型（鎖「唯一的對形態」），錨點換成頁籤的
+    `setTab('access')`。#746 CS Access Control 拍板 6：**只有 `ac_max_access_seats
+    > 0` 的服務看得到 Access 頁籤**，無席位不顯示、不做 upsell。
+
+    席位是**方案**屬性（`ac_` 家族＝capability-orthogonal 的上限值，OQ-C 拍板），
+    不是模板屬性——所以第二判準的形狀在這裡特別誘人也特別錯：`template.slug` 或
+    `category` 今天剛好對，明天多一個 AC 席位方案就漏，而漏的方向一如 #460 是
+    「後端有設定、租戶看不到頁籤」＝修復不可達。
+
+    Fail-open：找不到頁籤（功能下架 / handler 更名）不擋——形態守線由
+    check_slug_capability_gate 負責。
+
+    依據 docs/decisions/patterns/capability-gate-single-source-field.md
+    """
+    violations = []
+    for fp in sorted(glob.glob(os.path.join(root, "src/static/src/**/*.xml"),
+                               recursive=True)):
+        rel = os.path.relpath(fp, root).replace(os.sep, "/")
+        try:
+            tree = ET.parse(fp)
+        except ET.ParseError:
+            continue  # XML 壞掉由 check_owl_template 報，這裡不重複
+        tabs = [elem for elem in tree.iter()
+                if any(ACCESS_TAB_HANDLER_RE.search(v or "")
+                       for v in elem.attrib.values())]
+        if not tabs:
+            continue
+        line_no = _first_line_matching(fp, ACCESS_TAB_HANDLER_RE)
+        parents = {child: parent for parent in tree.iter() for child in parent}
+        js_sources = _gate_js_sources(fp)
+        for elem in tabs:
+            exprs = _gate_exprs_with_ancestors(elem, parents)
+            if _gate_reaches_field(exprs, js_sources, ACCESS_SEATS_FIELD):
+                continue
+            violations.append(
+                "%s:%d：Access 頁籤（setTab('access')）的顯示 gate 追不到 %s"
+                "（t-if 鏈：%s）。頁籤的 t-if（含祖先）必須直接引用該欄位，或引用一個 "
+                "body 讀該欄位的 getter——那是設計拍板 6 的判準本體（方案的 AC 席位"
+                "上限，由 _get_subscription_info() 直接鏡射）。改判 template slug／"
+                "category 會回到 #460：席位是方案屬性不是模板屬性，下一個 AC 方案就"
+                "漏，而且漏的方向是租戶看不到頁籤＝修復不可達（見 %s）。"
+                % (rel, line_no, ACCESS_SEATS_FIELD,
+                   "／".join(exprs) or "(無 t-if)", CAPABILITY_GATE_DOC))
     return violations
 
 
@@ -3757,7 +3817,8 @@ REPO_LINT_RULES = {
     "test-env-restore": ("check_test_env_restore",),
     "capability-gate": ("check_slug_capability_gate",
                         "check_admin_gui_gate_anchor",
-                        "check_gateway_copy_gate_anchor"),
+                        "check_gateway_copy_gate_anchor",
+                        "check_access_tab_gate_anchor"),
     "conceal-instances": ("check_conceal_instances_gate",),
     "reset-budget-ladder": ("check_reset_budget_ladder",),
     "transition-anchor-utc": ("check_transition_anchor_utc",),
@@ -4184,6 +4245,7 @@ def run_all(root):
                   + check_slug_capability_gate(root)
                   + check_admin_gui_gate_anchor(root)
                   + check_gateway_copy_gate_anchor(root)
+                  + check_access_tab_gate_anchor(root)
                   + check_conceal_instances_gate(root)
                   + check_reset_budget_ladder(root)
                   + check_transition_anchor_utc(root)
@@ -4348,11 +4410,13 @@ def run_hook():
             violations += check_slug_capability_gate(root, only_file=abs_path)
             violations += check_admin_gui_gate_anchor(root)
             violations += check_gateway_copy_gate_anchor(root)
+            violations += check_access_tab_gate_anchor(root)
         elif re.match(r"^src/static/src/.*\.js$", rel):
             # anchor 走全域：改 JS（getter 被刪／改名／改判準）壞掉的是 XML 那顆按鈕。
             violations = check_slug_capability_gate(root, only_file=abs_path)
             violations += check_admin_gui_gate_anchor(root)
             violations += check_gateway_copy_gate_anchor(root)
+            violations += check_access_tab_gate_anchor(root)
         elif re.match(r"^src/data/.*\.xml$", rel):
             violations = check_data_noupdate(root, only_file=abs_path)
             if re.match(r"^src/data/subscription_(products|template_links).*\.xml$", rel):
