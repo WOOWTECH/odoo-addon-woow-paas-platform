@@ -8,6 +8,7 @@ import { OverviewTab } from "./tabs/OverviewTab";
 import { ConfigurationTab } from "./tabs/ConfigurationTab";
 import { AddonsTab } from "./tabs/AddonsTab";
 import { McpServersTab } from "./tabs/McpServersTab";
+import { AccessTab } from "./tabs/AccessTab";
 import { DeleteServiceModal } from "../../components/modal/DeleteServiceModal";
 import { RollbackModal } from "../../components/modal/RollbackModal";
 import { SkipTrialModal } from "../../components/modal/SkipTrialModal";
@@ -47,6 +48,7 @@ export class ServiceDetailPage extends Component {
         ConfigurationTab,
         AddonsTab,
         McpServersTab,
+        AccessTab,
         DeleteServiceModal,
         RollbackModal,
         SkipTrialModal,
@@ -206,6 +208,25 @@ export class ServiceDetailPage extends Component {
 
     get isResetAdminPasswordLoading() {
         return !!cloudService.operationLoading.resetAdminPassword;
+    }
+
+    /**
+     * Access 頁籤的顯示判準（#746，設計拍板 6）。
+     *
+     * 讀後端 payload 的 `subscription.ac_max_access_seats`——那是**方案上限**，
+     * 由 `_get_subscription_info()`（subscription_lifecycle_mixin）直接鏡射
+     * `sh_subscription_plan_id.ac_max_access_seats`，不做任何推導。無方案時後端
+     * 回 0，所以「沒方案」與「方案沒買席位」在這個判準下同義（見該處註解）。
+     *
+     * 不得改判 template slug／category：那是 capability-gate-single-source-field
+     * 明文禁止的第二判準，方向永遠是「後端放行、租戶看不到頁籤」＝修復不可達。
+     * 席位是**方案**屬性不是模板屬性，任何 AC 席位方案的服務都該看得到這個頁籤。
+     *
+     * fail-closed（`?? 0`）：欄位缺席（舊快取、漏帶 subscription 的 payload）一律
+     * 視同 0，寧可不顯示，也不要長出一個後端沒有對應設定的頁籤。
+     */
+    get hasAccessSeats() {
+        return (this.service?.subscription?.ac_max_access_seats ?? 0) > 0;
     }
 
     // Support Project

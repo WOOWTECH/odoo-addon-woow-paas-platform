@@ -3,33 +3,38 @@
 import { Component, useState } from "@odoo/owl";
 import { WoowButton } from "../button/WoowButton";
 import { WoowIcon } from "../icon/WoowIcon";
-import { securityAccessService } from "../../services/security_access";
 
 /**
  * AddPolicyModal Component
  *
- * A modal dialog for creating or editing a Security Access access policy.
+ * A modal dialog for creating or editing an access policy.
  * P-rule: a policy is a CONTAINER of selector rules split into include (OR) /
  * require (AND) / exclude (NOT) groups, plus a decision (allow / deny / bypass).
  * Mirrors Cloudflare's native policy builder.
  *
  * When a `policy` prop is passed the modal is in edit mode (PUT), otherwise
- * create mode (POST). On success the parent reloads the SA detail via onSaved.
+ * create mode (POST). On success the parent reloads its detail via onSaved.
+ *
+ * #746：原本直接 import `securityAccessService`，等於把「policy 長什麼樣子」
+ * （這個元件的職責）和「policy 存去哪裡」（呼叫端的職責）綁死在一起——Cloud
+ * Service 的 policy 走的是 service-pinned 端點，同一支 hard import 服務不了它。
+ * 改成注入單一 `savePolicy` callback：**這個元件不再認識任何 endpoint**，兩個
+ * surface 各自把自己的 service wrapper 包成同一個簽章傳進來。
  *
  * Props:
- *   - workspaceId (number) / saId (number) / route (Object)
  *   - policy (Object | null): existing policy when editing (include/require/
  *       exclude groups from to_dict)
+ *   - savePolicy (Function): (vals, policyId | null) => Promise<{success, ...}>
+ *       policyId 由本元件從 `policy` prop 推出來明給，不讓呼叫端從自己的 state
+ *       再推一次（兩份「現在是不是編輯模式」的判準必然漂移）
  *   - onClose (Function) / onSaved (Function)
  */
 export class AddPolicyModal extends Component {
   static template = "woow_paas_platform.AddPolicyModal";
   static components = { WoowButton, WoowIcon };
   static props = {
-    workspaceId: { type: Number },
-    saId: { type: Number },
-    route: { type: Object },
     policy: { type: [Object, { value: null }], optional: true },
+    savePolicy: { type: Function },
     onClose: { type: Function },
     onSaved: { type: Function },
   };
@@ -235,11 +240,8 @@ export class AddPolicyModal extends Component {
       require,
       exclude,
     };
-    const res = this.isEdit
-      ? await securityAccessService.updatePolicy(
-          this.props.workspaceId, this.props.saId, this.props.policy.id, vals)
-      : await securityAccessService.createPolicy(
-          this.props.workspaceId, this.props.saId, this.props.route.id, vals);
+    const res = await this.props.savePolicy(
+      vals, this.isEdit ? this.props.policy.id : null);
     this.state.saving = false;
     if (res.success) {
       this.props.onSaved();

@@ -235,141 +235,23 @@
               No application routes yet. Add a route in the Application tab,
               then protect it here.
             </div>
+            <!-- 卡片本體＝共用元件（#746 抽出，Cloud Service 的 Access 頁籤用
+                 同一張）。這裡只餵它「這條 route 的設定現值」與 callback，SA 自
+                 己仍持有展開／排序中等 per-route 的 UI 狀態。 -->
             <t t-foreach="state.sa.routes or []" t-as="route" t-key="route.id">
-              <div class="o_woow_sa_app">
-                <div class="o_woow_sa_app__head">
-                  <div t-att-class="'o_woow_sa_app__shield ' + (route.is_protected ? 'o_woow_sa_app__shield--on' : 'o_woow_sa_app__shield--off')">
-                    <WoowIcon name="route.is_protected ? 'verified_user' : 'gpp_bad'" size="20"/>
-                  </div>
-                  <div class="o_woow_sa_app__ident">
-                    <span class="o_woow_sa_detail__mono o_woow_sa_app__host" t-esc="route.hostname"/>
-                    <div t-if="route.is_protected"
-                         class="o_woow_sa_app__status o_woow_sa_app__status--on">
-                      <span class="o_woow_sa_app__dot"/>
-                      <span>Protected · <t t-esc="route.access_policies.length"/>
-                        <t t-esc="route.access_policies.length === 1 ? 'policy' : 'policies'"/></span>
-                    </div>
-                    <div t-else="" class="o_woow_sa_app__status o_woow_sa_app__status--off">
-                      <span class="o_woow_sa_app__dot"/>
-                      <span>Public · anyone can reach it</span>
-                    </div>
-                  </div>
-                  <div class="o_woow_sa_app__controls">
-                    <label class="o_woow_sa_switch">
-                      <input type="checkbox" t-att-checked="route.is_protected"
-                             t-on-change="(ev) => this.onRouteProtectedToggle(route, ev)"/>
-                      <span class="o_woow_sa_switch__slider"/>
-                    </label>
-                    <button t-if="route.is_protected" class="o_woow_sa_app__expand"
-                            t-on-click="() => this.toggleRouteExpand(route)">
-                      <WoowIcon name="isRouteExpanded(route) ? 'expand_less' : 'expand_more'" size="20"/>
-                    </button>
-                  </div>
-                </div>
-                <div t-if="route.is_protected and isRouteExpanded(route)"
-                     class="o_woow_sa_app__body">
-                  <div class="o_woow_sa_access__section">
-                    <div class="o_woow_sa_access__label">
-                      <WoowIcon name="'fingerprint'" size="16"/>
-                      <span>Login Methods</span>
-                    </div>
-                    <div class="o_woow_sa_login_pills">
-                      <button t-att-class="'o_woow_sa_login_pill' + (route.login_email_otp ? ' o_woow_sa_login_pill--active' : '')"
-                              t-on-click="() => this.toggleRouteLogin(route, 'login_email_otp')">
-                        <WoowIcon name="'mail'" size="16"/>
-                        <span>Email OTP</span>
-                        <WoowIcon t-if="route.login_email_otp" name="'check'" size="14"/>
-                      </button>
-                      <button t-att-class="'o_woow_sa_login_pill' + (route.login_google ? ' o_woow_sa_login_pill--active' : '')"
-                              t-on-click="() => this.toggleRouteLogin(route, 'login_google')">
-                        <WoowIcon name="'account_circle'" size="16"/>
-                        <span>Google</span>
-                        <WoowIcon t-if="route.login_google" name="'check'" size="14"/>
-                      </button>
-                    </div>
-                    <div t-if="route.access_unresolved_idp_types"
-                         class="o_woow_sa_access__idp_warning" role="alert">
-                      <WoowIcon name="'warning'" size="16"/>
-                      <span>
-                        These login methods have no matching Cloudflare identity
-                        provider and were ignored:
-                        <strong t-esc="unresolvedIdpLabels(route)"/>.
-                        Access may have fallen back to allowing all available login
-                        methods. Add the matching identity provider in your
-                        Cloudflare Zero Trust account, then re-save to re-apply
-                        the restriction.
-                      </span>
-                    </div>
-                  </div>
-                  <div class="o_woow_sa_access__section">
-                    <div class="o_woow_sa_access__policy_header">
-                      <div class="o_woow_sa_access__label">
-                        <WoowIcon name="'group'" size="16"/>
-                        <span>Access Policies</span>
-                      </div>
-                      <WoowButton variant="'secondary'" size="'sm'"
-                                  onClick="() => this.openAddPolicy(route)">
-                        <WoowIcon name="'add'" size="14"/>
-                        <span>Add Policy</span>
-                      </WoowButton>
-                    </div>
-                    <div t-if="route.access_policies.length"
-                         t-att-class="'o_woow_sa_policy_list' + (state.reorderingRouteId === route.id ? ' o_woow_sa_policy_list--saving' : '')">
-                      <div t-if="state.reorderingRouteId === route.id" class="o_woow_sa_policy_saving">
-                        <span class="o_woow_sa_spinner o_woow_spin"/>
-                        <span>Saving order…</span>
-                      </div>
-                      <t t-foreach="route.access_policies" t-as="pol" t-key="pol.id">
-                        <div t-att-class="'o_woow_sa_policy' + (state.draggingPolId === pol.id ? ' o_woow_sa_policy--dragging' : '')"
-                             draggable="true"
-                             t-on-dragstart="(ev) => this.onPolicyDragStart(route, pol, ev)"
-                             t-on-dragover="(ev) => this.onPolicyDragOver(route, pol, ev)"
-                             t-on-drop="(ev) => this.onPolicyDrop(route, ev)"
-                             t-on-dragend="() => this.onPolicyDragEnd()">
-                          <span class="o_woow_sa_policy__handle" title="Drag to reorder">
-                            <WoowIcon name="'drag_indicator'" size="16"/>
-                          </span>
-                          <div t-att-class="policyMarkClass(pol)">
-                            <WoowIcon name="policyMarkIcon(pol)" size="16"/>
-                          </div>
-                          <div class="o_woow_sa_policy__main">
-                            <span class="o_woow_sa_policy__name" t-esc="pol.name"/>
-                            <span class="o_woow_sa_policy__summary" t-esc="policySummary(pol)"/>
-                          </div>
-                          <span t-att-class="policyBadgeClass(pol)" t-esc="policyBadgeLabel(pol)"/>
-                          <div class="o_woow_sa_policy__actions">
-                            <button class="o_woow_sa_icon_btn" title="Edit policy"
-                                    t-on-click="() => this.openEditPolicy(route, pol)">
-                              <WoowIcon name="'edit'" size="16"/>
-                            </button>
-                            <button class="o_woow_sa_icon_btn" title="Delete policy"
-                                    t-on-click="() => this.deletePolicy(route, pol)">
-                              <WoowIcon name="'delete'" size="16"/>
-                            </button>
-                          </div>
-                        </div>
-                      </t>
-                    </div>
-                    <p t-else="" class="o_woow_sa_detail__hint">
-                      No policies yet — without any allow rule, no visitor passes.
-                    </p>
-                  </div>
-                  <div class="o_woow_sa_access__section o_woow_sa_access__session">
-                    <div class="o_woow_sa_access__label">
-                      <WoowIcon name="'schedule'" size="16"/>
-                      <span>Session Duration</span>
-                    </div>
-                    <select class="o_woow_input o_woow_sa_access__session_select"
-                            t-on-change="(ev) => this.onRouteSessionChange(route, ev)">
-                      <option value="30m" t-att-selected="route.session_duration === '30m'">30 minutes</option>
-                      <option value="1h" t-att-selected="route.session_duration === '1h'">1 hour</option>
-                      <option value="8h" t-att-selected="route.session_duration === '8h'">8 hours</option>
-                      <option value="24h" t-att-selected="route.session_duration === '24h'">24 hours</option>
-                      <option value="168h" t-att-selected="route.session_duration === '168h'">7 days</option>
-                    </select>
-                  </div>
-                </div>
-              </div>
+              <AccessAppCard
+                  hostname="route.hostname"
+                  config="route"
+                  expanded="isRouteExpanded(route)"
+                  reordering="state.reorderingRouteId === route.id"
+                  onToggleExpand="() => this.toggleRouteExpand(route)"
+                  onProtectedChange="(checked) => this.onRouteProtectedToggle(route, checked)"
+                  onLoginToggle="(method) => this.toggleRouteLogin(route, method)"
+                  onSessionChange="(value) => this.onRouteSessionChange(route, value)"
+                  onAddPolicy="() => this.openAddPolicy(route)"
+                  onEditPolicy="(pol) => this.openEditPolicy(route, pol)"
+                  onDeletePolicy="(pol) => this.deletePolicy(route, pol)"
+                  onReorderPolicies="(ids) => this.commitPolicyOrder(route, ids)"/>
             </t>
           </WoowCard>
           <WoowCard shadow="true" t-if="state.sa.routes and state.sa.routes.length">
@@ -416,9 +298,8 @@
             onChanged="onPlanChanged"/>
 
         <AddPolicyModal t-if="state.showPolicyModal and state.policyModalRoute"
-            workspaceId="props.workspaceId" saId="props.saId"
-            route="state.policyModalRoute"
             policy="state.editingPolicy"
+            savePolicy="savePolicy"
             onClose="() => state.showPolicyModal = false"
             onSaved.bind="onPolicySaved"/>
 
