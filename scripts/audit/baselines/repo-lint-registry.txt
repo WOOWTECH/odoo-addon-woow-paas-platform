@@ -2,6 +2,7 @@
 # 這份清單**只准長不准縮**：少了任何一個名字，run_all() 會點名是哪一個不見了。
 # 整條守線被刪掉時「四處」仍然一致 ⇒ 第 17 條檔頭對帳全綠，只有這份 floor 會紅（#613）。
 # 左欄的 1 沒有意義（沿用 read_baseline_pairs 的 value<TAB>key 格式），判準是右欄名字的集合。
+1	fn:check_access_tab_gate_anchor
 1	fn:check_admin_gui_gate_anchor
 1	fn:check_assertlogs_numeric_level
 1	fn:check_availability_reason_labels
