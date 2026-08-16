@@ -1014,8 +1014,21 @@
                  hermes-agent slug 輸出 root URL（不再是 `https://.../dashboard`）。
                  chart 版本 bump 與本欄位必須同一次變更一起動，否則平台指向不存在
                  的 chart 版本；平台端沒有 chart values 的任何副本，**這條沒有測試
-                 守得住**，是已知的人工紀律缺口。 -->
-            <field name="helm_chart_version">0.1.3</field>
+                 守得住**，是已知的人工紀律缺口。
+                 0.1.3 → 0.2.0（#717：租戶自裝 CLI 的落點收斂）。chart 新增十個安裝器
+                 落點覆寫 env ＋ cli-landing-init initContainer。**helm_default_values
+                 不需要新增任何鍵**——chart 的 cliLanding.* 全部自帶預設值，平台端零
+                 覆寫。對外 contract 不變（埠、路由、URL 形狀都沒動）。
+                 ⚠ 既有租戶升級一律 `helm get values <rel> -o yaml > vals.yaml` 再
+                 `-f vals.yaml`，⛔ 不可用 helm 的 reuse-values 旗標（XML 註解不能寫
+                 那兩個連字號）：它會丟掉 0.2.0 的新預設值，
+                 helm exit 0 但 env 與 initContainer 一個都不會出現（症狀與「沒升」
+                 不可區分）。判別是否真的升成功見
+                 docs/decisions/hermes-agent-installer-landing-env.md 的判別法 A/B。
+                 migration：本 xmlid 首建於 ea5433ab（2026-07-28），晚於 noupdate=0
+                 收斂 d1cb2e32（2026-04-06），故既有 DB 的 ir.model.data.noupdate=False、
+                 `-u` 直接重套本欄位，無需 migration。 -->
+            <field name="helm_chart_version">0.2.0</field>
             <field name="helm_default_values">{"image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/hermes-agent", "tag": "20260727.1502@sha256:ce3c49a7f332a6bad607d81cbd7fefe76062263469595c1a19ba80f27629f00f"}, "agent": {"resources": {"requests": {"cpu": "200m", "memory": "1Gi"}, "limits": {"cpu": "2", "memory": "6Gi"}}}, "dashboard": {"bindHost": "0.0.0.0", "username": "admin"}, "gateway": {"externalPath": "/gateway"}, "service": {"port": 8080, "name": ""}, "authProxy": {"enabled": true, "basicAuth": true, "basicAuthUsername": "admin", "workerProcesses": 2, "image": {"repository": "nginxinc/nginx-unprivileged", "tag": "1.27-alpine"}}, "console": {"enabled": true, "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/open-design-console", "tag": "20260720.0332@sha256:2b91c4ad4a6a94d1735c8aa7a6c18ec05491d9db31fa455f5e5da1cbb52b0f92"}, "externalPath": "/console", "resources": {"requests": {"cpu": "50m", "memory": "64Mi"}, "limits": {"cpu": "200m", "memory": "512Mi"}}}, "persistence": {"data": {"size": "5Gi"}}, "postgresql": {"enabled": false}, "redis": {"enabled": false}}</field>
             <field name="helm_value_specs">{"required": [], "optional": [
                 {"key": "auth.minimaxApiKey", "label": "MiniMax API Key", "type": "password",

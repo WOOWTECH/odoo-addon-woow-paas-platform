@@ -340,22 +340,28 @@ class TestHermesAgentTemplateSeed(TransactionCase):
 
     # ── chart / image pin ───────────────────────────────────────────────────
     def test_chart_oci_pin(self):
-        """chart＝woow-paas-charts 發佈的獨立 hermes-agent OCI chart 0.1.3。
+        """chart＝woow-paas-charts 發佈的獨立 hermes-agent OCI chart 0.2.0。
 
         版本演進：0.1.0 → 0.1.1（#530，charts PR #69 新增 gateway 反向代理子路徑）→
         0.1.3（移除 webui container，nginx `/` 直連 dashboard；webui 移除細節見
-        test_webui_block_removed）。
+        test_webui_block_removed）→ 0.2.0（#717，租戶自裝 CLI 的落點收斂：十個安裝器
+        落點覆寫 env ＋ cli-landing-init initContainer）。
         這條斷言是刻意鎖精確值的少數例外：跨 repo chart 版本是**平台指向哪一顆已發佈
         artifact** 的宣告，不是會自然演進的 living schema——寫成 `>=` 只會讓「chart 沒
         跟著發版」這個真正的失效模式假綠。平台端沒有 chart values 的任何副本，鍵名
         一致性只能靠兩邊各自的契約測試加 review。
+
+        ⚠ 0.2.0 這一版**沒有**連帶的 helm_default_values 改動要斷言——chart 的
+        cliLanding.* 全部自帶預設值，平台端零覆寫。所以「平台有沒有跟上這次 chart
+        變更」在本檔的唯一可觀察面就是這個版號；不要因為 diff 只有一行就把它當成
+        無關緊要的 bump。
         """
         tpl = self._tpl()
         self.assertEqual(tpl.helm_repo_url or '', '')
         self.assertEqual(
             tpl.helm_chart_name,
             'oci://jcr-prod.woowtech.io/woow-paas-docker-local/hermes-agent')
-        self.assertEqual(tpl.helm_chart_version, '0.1.3')
+        self.assertEqual(tpl.helm_chart_version, '0.2.0')
 
     def test_agent_image_pinned_digest(self):
         """agent image＝#424② 交付的衍生 image（含 MCP OAuth build-time patch），雙釘。
