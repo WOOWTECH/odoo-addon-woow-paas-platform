@@ -187,6 +187,21 @@
                         <WoowIcon name="'extension'" size="18"/>
                         MCP Servers
                     </button>
+                    <!--
+                        #746：Access 頁籤只給買了 AC 席位的方案（設計拍板 6：
+                        `ac_max_access_seats > 0` 才出現，無席位不顯示、不做
+                        upsell）。gate 走 hasAccessSeats getter，它讀的是後端
+                        payload 的 subscription.ac_max_access_seats——能力判準
+                        收斂到後端單一欄位（capability-gate-single-source-field），
+                        前端不得自己算一份（slug／category／模板名單）。
+                    -->
+                    <button
+                        t-if="hasAccessSeats"
+                        t-att-class="{'o_woow_tab': true, 'active': currentTab === 'access'}"
+                        t-on-click="() => this.setTab('access')">
+                        <WoowIcon name="'shield'" size="18"/>
+                        Access
+                    </button>
                 </div>
 
                 <!-- Tab Content -->
@@ -206,6 +221,13 @@
                         onSave.bind="handleConfigSave"/>
                     <McpServersTab
                         t-if="currentTab === 'mcp-servers'"
+                        service="service"
+                        workspaceId="props.workspaceId"/>
+                    <!-- 內容側同樣掛 hasAccessSeats：直接把 URL 打成
+                         .../access 的人不該因此拿到一個方案沒買的頁面
+                         （頁籤不見了、內容還在＝gate 只做了一半）。 -->
+                    <AccessTab
+                        t-if="currentTab === 'access' and hasAccessSeats"
                         service="service"
                         workspaceId="props.workspaceId"/>
                 </div>
