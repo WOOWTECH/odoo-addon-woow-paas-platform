@@ -8,6 +8,7 @@ import { StatusBadge } from "../../components/common/StatusBadge";
 import { SkipTrialModal } from "../../components/modal/SkipTrialModal";
 import { ChangePlanModal } from "../../components/modal/ChangePlanModal";
 import { AddPolicyModal } from "../../components/modal/AddPolicyModal";
+import { AccessAppCard } from "../../components/access/AccessAppCard";
 import { securityAccessService } from "../../services/security_access";
 import { router } from "../../core/router";
 
@@ -19,17 +20,6 @@ const TABS = [
   { key: "email", label: "Email", icon: "mail", comingSoon: true },
   { key: "domains", label: "Domains", icon: "language", comingSoon: true },
 ];
-
-// Cloudflare-internal IdP type strings (as persisted in
-// access_unresolved_idp_types by the operator / _build_access_payload) →
-// the SAME user-facing labels the login-method toggles use (XML li_google /
-// li_otp). The fail-open widening warning must name the methods the user
-// actually selected by those labels; surfacing the raw 'onetimepin' (a string
-// the user never picked by that name) weakens the warning's actionability.
-const IDP_TYPE_LABELS = {
-  onetimepin: "Email OTP",
-  google: "Google",
-};
 
 // Subdomain prefix = ONE DNS label. MUST mirror the backend _PREFIX_RE
 // (models/security_access.py) + _subdomain_prefix_error exactly: 3-63 chars of
@@ -57,7 +47,7 @@ export class SecurityAccessDetailPage extends Component {
   static template = "woow_paas_platform.SecurityAccessDetailPage";
   static components = {
     WoowCard, WoowButton, WoowIcon, StatusBadge, SkipTrialModal,
-    ChangePlanModal, AddPolicyModal,
+    ChangePlanModal, AddPolicyModal, AccessAppCard,
   };
   static props = {
     workspaceId: { type: Number },
@@ -89,10 +79,9 @@ export class SecurityAccessDetailPage extends Component {
       editingPolicy: null,
       policyModalRoute: null,
       expandedRoutes: {},
-      // P-rule drag-to-reorder UX: the policy currently being dragged (ghost
-      // style) and the route whose order is being persisted (saving spinner —
-      // the reorder API re-syncs Cloudflare so it is not instant).
-      draggingPolId: null,
+      // P-rule drag-to-reorder UX: the route whose order is being persisted
+      // (saving spinner — the reorder API re-syncs Cloudflare so it is not
+      // instant). 拖曳中的那一列由 AccessAppCard 自己記（純 UI 狀態）。
       reorderingRouteId: null,
     });
     this.pollingInterval = null;
@@ -276,27 +265,14 @@ export class SecurityAccessDetailPage extends Component {
   // login methods, session and policies are configured per route. A protected
   // route's card expands to its own settings.
   //
-  // Map a route's persisted comma-joined CF type string to user-facing labels
-  // so the fail-open widening warning names the SAME methods the toggles do
-  // (e.g. 'onetimepin' → 'Email OTP'). Unknown types pass through verbatim
-  // rather than being dropped, so a future CF type still surfaces (unmapped).
+  // #746：卡片本體（版面＋互動）抽成 components/access/AccessAppCard，與 Cloud
+  // Service 的 Access 頁籤共用。留在這裡的是**SA 專屬的部分**：per-route 的展開
+  // 狀態、route-pinned 的 API 呼叫，以及卡頭那句 "N of M routes protected"。
+  //
   // 卡頭副標 "N of M routes protected" 的 N。
   get protectedRouteCount() {
     const routes = (this.state.sa && this.state.sa.routes) || [];
     return routes.filter((r) => r.is_protected).length;
-  }
-
-  unresolvedIdpLabels(route) {
-    const raw = route && route.access_unresolved_idp_types;
-    if (!raw) {
-      return "";
-    }
-    return raw
-      .split(",")
-      .map((t) => t.trim())
-      .filter((t) => t)
-      .map((t) => IDP_TYPE_LABELS[t] || t)
-      .join(", ");
   }
 
   // Per-route Access config write → route-pinned BFF endpoint. Reloads the SA
@@ -323,13 +299,13 @@ export class SecurityAccessDetailPage extends Component {
     this.state.expandedRoutes[route.id] = !this.isRouteExpanded(route);
   }
 
-  onRouteProtectedToggle(route, ev) {
+  onRouteProtectedToggle(route, checked) {
     // Expand the card when a route is freshly protected so its settings are
     // immediately visible.
-    if (ev.target.checked) {
+    if (checked) {
       this.state.expandedRoutes[route.id] = true;
     }
-    this.saveRouteAccess(route, { is_protected: ev.target.checked });
+    this.saveRouteAccess(route, { is_protected: checked });
   }
 
   // Login methods 以 toggle pill 呈現；pill 點擊讀目前 route[method] 取反。
@@ -337,8 +313,8 @@ export class SecurityAccessDetailPage extends Component {
     this.saveRouteAccess(route, { [method]: !route[method] });
   }
 
-  onRouteSessionChange(route, ev) {
-    this.saveRouteAccess(route, { session_duration: ev.target.value });
+  onRouteSessionChange(route, value) {
+    this.saveRouteAccess(route, { session_duration: value });
   }
 
   openAddPolicy(route) {
@@ -372,118 +348,34 @@ export class SecurityAccessDetailPage extends Component {
     }
   }
 
-  // ---- P-rule: decision badge/mark, rule summary, drag-to-reorder ---- //
-  // Cloudflare evaluates Bypass/Service-Auth ahead of Allow/Block regardless of
-  // list position; the flat draggable list mirrors CF's own policy UI (the
-  // tiering is CF's, not re-implemented here).
-
-  policyBadgeClass(pol) {
-    if (pol.decision === "deny") return "o_woow_badge o_woow_badge_gray";
-    if (pol.decision === "bypass") return "o_woow_badge o_woow_badge_warning";
-    return "o_woow_badge o_woow_badge_green";
-  }
-
-  policyBadgeLabel(pol) {
-    if (pol.decision === "deny") return "Block";
-    if (pol.decision === "bypass") return "Bypass";
-    return "Allow";
-  }
-
-  policyMarkClass(pol) {
-    const base = "o_woow_sa_policy__mark ";
-    if (pol.decision === "deny") return base + "o_woow_sa_policy__mark--deny";
-    if (pol.decision === "bypass") return base + "o_woow_sa_policy__mark--bypass";
-    return base + "o_woow_sa_policy__mark--allow";
-  }
-
-  policyMarkIcon(pol) {
-    if (pol.decision === "deny") return "block";
-    if (pol.decision === "bypass") return "bolt";
-    return "check";
-  }
-
-  policySummary(pol) {
-    const fmt = (r) => (r.rule_type === "everyone" ? "everyone" : r.rule_value);
-    const inc = (pol.include || []).map(fmt).join(", ");
-    const extra = [];
-    if ((pol.require || []).length) extra.push(`+${pol.require.length} require`);
-    if ((pol.exclude || []).length) extra.push(`-${pol.exclude.length} exclude`);
-    return extra.length ? `${inc} · ${extra.join(" · ")}` : inc;
-  }
-
-  onPolicyDragStart(route, pol, ev) {
-    this._dragRouteId = route.id;
-    this._dragPolId = pol.id;
-    this._dropHandled = false;
-    // Snapshot the server order so commit can no-op when nothing actually moved.
-    this._dragOrigOrder = route.access_policies.map((p) => p.id);
-    this.state.draggingPolId = pol.id;
-    if (ev.dataTransfer) {
-      ev.dataTransfer.effectAllowed = "move";
-      // Firefox only starts a drag when some data is set.
-      ev.dataTransfer.setData("text/plain", String(pol.id));
+  // ---- AddPolicyModal 接線（#746：modal 不再自己 import service） ----
+  // 建立 vs 編輯由 modal 依 `policy` prop 判定並把 policyId 明給回來——這裡不
+  // 從 state.editingPolicy 再推一次（同一件事判兩次，遲早漂移）。
+  savePolicy = (vals, policyId) => {
+    if (policyId) {
+      return securityAccessService.updatePolicy(
+        this.props.workspaceId, this.props.saId, policyId, vals);
     }
-  }
+    return securityAccessService.createPolicy(
+      this.props.workspaceId, this.props.saId,
+      this.state.policyModalRoute.id, vals);
+  };
 
-  onPolicyDragOver(route, targetPol, ev) {
-    ev.preventDefault(); // required to allow a drop
-    if (ev.dataTransfer) {
-      ev.dataTransfer.dropEffect = "move";
-    }
-    // Live preview: reflow the list so the dragged row sits at the hovered
-    // row's slot. What the user sees during the drag IS what will be saved, so
-    // the drop feels instant — the (slow) API call only persists it afterward.
-    const dragId = this._dragPolId;
-    if (!dragId || this._dragRouteId !== route.id || dragId === targetPol.id) {
-      return;
-    }
-    const pols = route.access_policies;
-    const from = pols.findIndex((p) => p.id === dragId);
-    const to = pols.findIndex((p) => p.id === targetPol.id);
-    if (from < 0 || to < 0 || from === to) {
-      return;
-    }
-    pols.splice(to, 0, pols.splice(from, 1)[0]); // reactive → list reflows
-  }
-
-  onPolicyDrop(route, ev) {
-    ev.preventDefault();
-    // The dragover handler already reflowed the list into the desired order;
-    // persist whatever the user is now seeing.
-    this._commitPolicyOrder(route);
-  }
-
-  onPolicyDragEnd() {
-    this.state.draggingPolId = null;
-    // Drag released outside any row (cancelled) — discard the live preview by
-    // restoring the server order. A real drop set _dropHandled first.
-    if (!this._dropHandled) {
-      this._dragPolId = null;
-      this.loadDetail();
-    }
-  }
-
-  async _commitPolicyOrder(route) {
-    this._dropHandled = true;
-    this._dragPolId = null;
-    this.state.draggingPolId = null;
-    const ids = route.access_policies.map((p) => p.id);
-    // Dropped back where it started → nothing to persist (skip the CF re-sync).
-    if (this._dragOrigOrder && ids.join() === this._dragOrigOrder.join()) {
-      return;
-    }
+  // ---- P-rule：precedence 寫入 ---- //
+  // 拖曳的互動（即時預覽、原地放下不寫、取消還原）在 AccessAppCard 裡；這裡只
+  // 負責把卡片算好的最終順序寫回 route-pinned 端點，並持有 saving 狀態。
+  async commitPolicyOrder(route, ids) {
     // Saving feedback: the reorder endpoint re-syncs Cloudflare Access, so it
     // takes a moment — keep the (already reflowed) list visible but mark it busy.
     this.state.reorderingRouteId = route.id;
     const res = await securityAccessService.reorderPolicies(
       this.props.workspaceId, this.props.saId, ids);
     this.state.reorderingRouteId = null;
-    if (res.success) {
-      await this.loadDetail(); // confirm server order + refreshed CF ids
-    } else {
+    if (!res.success) {
       this.state.error = res.error;
-      await this.loadDetail(); // revert the optimistic order on failure
     }
+    // 成功：確認伺服器順序＋更新後的 CF id；失敗：把樂觀順序還原。兩條都重載。
+    await this.loadDetail();
   }
 
   // ---- SkipTrialModal 接線（鏡像 SmartHomeDetailPage） ----
