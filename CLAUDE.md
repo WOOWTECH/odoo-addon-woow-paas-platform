@@ -131,7 +131,7 @@ in-repo `.claude/skills/k8s-dev-sandbox/` 僅剩未進通用 plugin 的 woow 專
 
 ### Release & Build paas-odoo Image
 
-發版用 `/woow:deploy`：讀 `src/__manifest__.py` 版號 → pre-flight → 打 `v{version}` tag → push 觸發 cross-repo CI（`trigger-odoo-build.yml` → `paas-odoo-ci` build & push image，image tag 為時間戳、不綁單一 addon 版本）。tag 規則、pre-flight 檢查與前置條件（`CI_GITEA_TOKEN` 雙 org Write）見 [`.claude/commands/woow/deploy.md`](.claude/commands/woow/deploy.md)。
+發版用 `/woow:deploy`：讀 `src/__manifest__.py` 版號 → pre-flight → 打 `v{version}` tag → push 觸發 cross-repo CI（`trigger-odoo-build.yml` → `paas-odoo-ci` build & push image，image tag 為時間戳、不綁單一 addon 版本）。⚠ **prod build 卡人工核可 gate**：push tag 只跑到「開 approval issue」就停，要授權者留言 `/approve` 才真的 build ⇒ **agent 不代簽、且 phase 1 綠燈 ≠ 發版完成**。tag 規則、pre-flight 檢查、核可 gate 與前置條件（`CI_GITEA_TOKEN` 雙 org Write）見 [`.claude/commands/woow/deploy.md`](.claude/commands/woow/deploy.md)。
 
 ### Deploy Staging (deploy-stg)
 
