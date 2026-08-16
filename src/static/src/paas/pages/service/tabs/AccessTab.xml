@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+  <t t-name="woow_paas_platform.ServiceAccessTab">
+    <div class="o_woow_service_access_tab">
+      <div t-if="state.error" class="o_woow_service_error_banner">
+        <WoowIcon name="'error'" size="20"/>
+        <span t-esc="state.error"/>
+      </div>
+      <WoowCard shadow="true">
+        <div class="o_woow_sa_card_head">
+          <div class="o_woow_sa_card_head__icon">
+            <WoowIcon name="'shield'" size="20"/>
+          </div>
+          <div class="o_woow_sa_card_head__text">
+            <h3>Protected Application</h3>
+            <p t-if="state.access.is_protected">
+              Protected · <t t-esc="policyCount"/> <t t-esc="policyCount === 1 ? 'policy' : 'policies'"/> ·
+              every visitor must pass Access before reaching this service
+            </p>
+            <p t-else="">
+              This service's public address is its own Cloudflare Access
+              application. Turn protection on to require every visitor to
+              authenticate first.
+            </p>
+          </div>
+        </div>
+        <div t-if="!hasHostname" class="o_woow_sa_detail__hint o_woow_sa_detail__hint--error">
+          This service has no public address yet, so there is nothing to anchor
+          an Access application to. Set a subdomain in the Domain dialog first.
+        </div>
+        <AccessAppCard
+            hostname="state.access.hostname or props.service.name"
+            config="state.access"
+            expanded="state.expanded"
+            reordering="state.reordering"
+            protectDisabled="!hasHostname"
+            protectConfirm="protectConfirm"
+            onToggleExpand.bind="toggleExpand"
+            onProtectedChange.bind="onProtectedChange"
+            onLoginToggle.bind="onLoginToggle"
+            onSessionChange.bind="onSessionChange"
+            onAddPolicy.bind="openAddPolicy"
+            onEditPolicy.bind="openEditPolicy"
+            onDeletePolicy.bind="deletePolicy"
+            onReorderPolicies.bind="commitPolicyOrder"/>
+      </WoowCard>
+      <WoowCard shadow="true">
+        <div class="o_woow_sa_info_note">
+          <div class="o_woow_sa_info_note__icon">
+            <WoowIcon name="'info'" size="18"/>
+          </div>
+          <p>Protection covers the <strong>whole subdomain</strong> — every path
+             of this service, for every visitor. Without any Allow policy no one
+             gets in, so add the policies that describe who should. Access runs
+             at Cloudflare's edge, in front of the service, so nothing inside the
+             cluster changes.</p>
+        </div>
+      </WoowCard>
+
+      <AddPolicyModal t-if="state.showPolicyModal"
+          policy="state.editingPolicy"
+          savePolicy="savePolicy"
+          onClose.bind="closePolicyModal"
+          onSaved="onPolicySaved"/>
+    </div>
+  </t>
+</templates>
