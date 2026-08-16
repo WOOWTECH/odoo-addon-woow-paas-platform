@@ -37,6 +37,17 @@
             "statusMessage": "pattern-guard：檢查守護路徑"
           }
         ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/kubectl-ns-guard.py\"",
+            "timeout": 10,
+            "statusMessage": "kubectl-ns-guard：woow-k3s namespace 白名單"
+          }
+        ]
       }
     ],
     "PostToolUse": [
