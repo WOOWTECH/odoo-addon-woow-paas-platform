@@ -99,7 +99,7 @@ CloudAppTemplate.has_admin_gui          ← ① 能力的唯一事實源（model
 | `check_slug_capability_gate` | 禁**已知的壞形態** | `src/static/src/**/*.{js,xml}` 出現以 slug 做集合成員判斷 |
 | `check_admin_gui_gate_anchor` | 鎖**唯一的對形態** | Reset 按鈕的 `t-if` 鏈（含祖先、含 getter body）追不到 `has_admin_gui` |
 | `check_gateway_copy_gate_anchor` | 同上，錨在**文案**而非按鈕 | 提到 "Gateway API Key" 的文字節點，其 `t-if` 鏈追不到 `has_gateway` |
-| `check_access_tab_gate_anchor` | 同上，錨在**頁籤**（#746） | Cloud Service 的 Access 頁籤（`setTab('access')`）其 `t-if` 鏈追不到 `ac_max_access_seats` |
+| `check_access_tab_gate_anchor` | 同上，錨在**頁籤**（#746） | **任何** surface 的 Access 頁籤（`setTab('access')`）其 `t-if` 鏈追不到 `ac_max_access_seats`（掃 `src/static/src/**/*.xml` 全域，不限單一頁面） |
 
 第二條是重點：它不管你把判準寫成什麼樣子、getter 改叫什麼名字——**只要追不到那個欄位就 fail**。
 所以「第三個判準」不論長相（category、`mcp_enabled`、新名單）都會在 review 之前被擋下。
@@ -120,6 +120,16 @@ CloudAppTemplate.has_admin_gui          ← ① 能力的唯一事實源（model
 ——下一個賣 AC 席位的方案上架就漏，漏的方向仍是 #460 那個：後端有設定、租戶看不到頁籤。
 它也示範能力欄位可以住在 `template` 子物件以外的地方（這裡是 `subscription`），錨點規則不變：
 **t-if 鏈追得到那個欄位**。
+
+> **#768 補一條「這條 gate 的盲區在哪」**：它是 **fail-open** 的——找不到頁籤就不擋（功能下架／
+> handler 更名時不誤報）。代價是**錨點形態必須對得上**：判準是字面 regex `setTab('access')`，
+> 所以 SA 詳情頁那種資料驅動的 `switchTab(tab.key)` 迴圈寫法，這條 lint 對它**從來沒有 fire 過**。
+> Smart Home 的 Access 頁籤（#768）因此刻意採 Cloud Service 的字面 `setTab('access')` 而不是
+> 抄 SA 的迴圈——後者會讓能力 gate 漏掉時零訊號。
+>
+> 連帶的驗收紀律：**新 surface 接上這條 gate 之後，不可以只憑「lint 沒噴」就宣告守住了**（綠燈
+> 與「探針根本沒看到這顆頁籤」輸出一模一樣）。要用注入法自驗至少兩格——拿掉 `t-if` 的 gate、
+> 以及把 getter 改判別的欄位——兩者都必須變紅，還原後回綠。
 
 形態規則的 scope（抓什麼／不抓什麼，實測矩陣見 #463 的 PR 說明）：
 
