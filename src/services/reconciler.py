@@ -97,6 +97,13 @@ def collect_left_set(env) -> LeftSet:
     sm = env['woow_paas_platform.smart_home'].sudo().search([])
     ls.tunnel_ids |= _clean(sm.mapped('tunnel_id'))
     ls.subdomains |= _clean(sm.mapped('subdomain'))
+    # #768：SH 的 Access app／reusable policy 走 policy 錨點 arc 的**第三條腿**
+    # （`smart_home_route_id`），上面兩行的 tunnel/subdomain walk 在結構上到不了
+    # 它們。漏掉不是少算：右集是 CF 帳號級 list-all，看得到這些**活著的**物件，
+    # 不在左集就是孤兒候選 ⇒ 每一個正常運作的 SH Access app 都會上孤兒報表。
+    ls.access_app_ids |= _clean(sm.mapped('route_ids.access_app_id'))
+    ls.access_policy_ids |= _clean(
+        sm.mapped('route_ids.access_policy_ids.cf_policy_id'))
 
     # ── ns（#277）：cluster paas-ws-* 的 live 白名單 = CS 共用 ns ∪ agent per-project ns ──
     # 漏 agent ns 會把所有活躍 agent ns 誤判孤兒（災難）；CS state='deleting' 排除（過渡態，

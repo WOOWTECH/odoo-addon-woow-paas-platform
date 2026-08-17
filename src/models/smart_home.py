@@ -4,13 +4,20 @@ import uuid
 from odoo import _, api, fields, models
 from odoo.exceptions import AccessError, UserError
 
-from ..services.naming import make_smarthome_subdomain
+from ..services.naming import (
+    make_sm_access_canonical_name,
+    make_smarthome_subdomain,
+)
 
 from ..services.paas_operator import (
     get_paas_operator_client,
     PaaSOperatorError,
     PaaSOperatorConnectionError,
 )
+
+# 單向相依：`smart_home_route` 只用 model 名指回本檔，不 import 它，所以這裡
+# 直接 import 不會成環（`models/__init__.py` 也是先 smart_home 後 route）。
+from .smart_home_route import _internal_sm_route_identity
 
 _logger = logging.getLogger(__name__)
 
@@ -334,6 +341,14 @@ class SmartHome(models.Model):
         help='Assigned subdomain for this smart home tunnel',
     )
 
+    # Application routes（#768）——每一列＝一個可掛 Cloudflare Access 的對外
+    # hostname。今天恰好一列（`is_primary`，provision 當下建立）。
+    route_ids = fields.One2many(
+        comodel_name='woow_paas_platform.smart_home_route',
+        inverse_name='smart_home_id',
+        string='Application Routes',
+    )
+
     # Timestamps
     deployed_at = fields.Datetime(string='Deployed At')
 
@@ -422,6 +437,60 @@ class SmartHome(models.Model):
         return self.env['ir.config_parameter'].sudo().get_param(
             'woow_paas_platform.paas_domain', 'woowtech.io'
         )
+
+    def _access_canonical_name(self):
+        """本 SH 在 Cloudflare Access 上的命名根（帶 env token，#768）。
+
+        單一裁決處：route 的 sync 與 teardown 兩條 payload 都讀它，兩邊各算一次
+        就是漂移的起點。公式與「為什麼不能反推自 stored `subdomain`」寫在
+        `services/naming.py::make_sm_access_canonical_name`。
+        """
+        self.ensure_one()
+        deploy_env = self.env['ir.config_parameter'].sudo().get_param(
+            'woow_paas_platform.deploy_env', 'prod')
+        return make_sm_access_canonical_name(
+            self._naming_ws_hash(), self.reference_id, self.name,
+            env=deploy_env)
+
+    def _ensure_primary_route(self):
+        """確保這台 SH 有它的 primary route（冪等）。
+
+        provision 成功後呼叫。route 是 Access 的錨點載體，沒有它租戶買了席位也
+        沒有地方可以掛 policy。用 `search` 而非 `route_ids` 判存在：ir.rule 過濾
+        後的 `route_ids` 對某些身分可能是空的，而「看不到」不等於「不存在」，
+        誤判會撞上 primary 的唯一性守衛。
+        """
+        self.ensure_one()
+        Route = self.env['woow_paas_platform.smart_home_route'].sudo()
+        existing = Route.search([
+            ('smart_home_id', '=', self.id), ('is_primary', '=', True),
+        ], limit=1)
+        if existing:
+            return existing
+        return Route.create({'smart_home_id': self.id, 'is_primary': True})
+
+    def _teardown_routes_access(self):
+        """拆掉本 SH 所有 route 的 Cloudflare Access。回傳失敗的 route 標籤清單。
+
+        刪除與 cron 清理兩條路徑共用。**不 raise**——兩個呼叫端對失敗的處置不同
+        （`unlink` 要 fail-loud 讓交易回滾保住重試錨點；`_do_cleanup` 要落
+        `error` 等下一次 cron）。
+        """
+        self.ensure_one()
+        Route = self.env['woow_paas_platform.smart_home_route'].sudo()
+        failed = []
+        for route in self.sudo().route_ids:
+            info = route._capture_access_teardown()
+            if not info:
+                continue
+            if Route._push_access_teardown(info):
+                _internal_sm_route_identity(route).access_app_id = False
+                for pol in route.access_policy_ids:
+                    if pol.cf_policy_id:
+                        pol.cf_policy_id = False
+            else:
+                failed.append(info['label'])
+        return failed
 
     def action_provision(self):
         """Provision the smart home by creating a dedicated Cloudflare Tunnel.
@@ -524,6 +593,10 @@ class SmartHome(models.Model):
                     "— record kept in 'error' with the tunnel anchored",
                     self.id, result.get('tunnel_id'), hostname,
                 )
+                # #768：這條路徑也要建 route。tunnel 活著、subdomain 已落地、
+                # 訂閱仍有效，租戶照樣能編輯 Access 設定（route 的 liveness gate
+                # 刻意包含 `error`）；不建的話 Access 分頁會長出來卻沒有錨點。
+                self._ensure_primary_route()
                 return
 
             anchored.write(dict(
@@ -531,6 +604,9 @@ class SmartHome(models.Model):
                 state='active',
                 deployed_at=fields.Datetime.now(),
             ))
+            # #768：Access 錨點載體。subdomain 必須先落地（route 的 hostname 由
+            # 它 compute），所以放在 write 之後。冪等，重跑不會長出第二條。
+            self._ensure_primary_route()
 
             _logger.info(
                 "Smart Home '%s' provisioned successfully. Tunnel ID: %s",
@@ -619,6 +695,42 @@ class SmartHome(models.Model):
             lambda s: s.state == 'in_progress'
         )
         for record in self:
+            # #768：Cloudflare Access app 與 reusable policy 必須在 route 列消失
+            # 之前拆掉——`ondelete='cascade'` 是 **DB 層**的，child 的 Python
+            # `unlink()` 根本不會被呼叫（SA 也是為此在 `SecurityAccess.unlink`
+            # 顯式呼叫 `self.route_ids.unlink()`）。漏掉的話每刪一台 SH 就永久
+            # 孤兒一組 CF 物件，而且刪掉的列連重試錨點都不剩。
+            failed = record._teardown_routes_access()
+            if failed:
+                raise UserError(
+                    "Cloudflare Access teardown failed for route(s): %s. The "
+                    "Smart Home was kept so the deletion can be retried; its "
+                    "Access app is still live in Cloudflare."
+                    % ', '.join(str(f) for f in failed)
+                )
+            # 🔴 route（連帶它底下的 policy）必須在 `super().unlink()` **之前**
+            # 顯式刪掉，不能交給 DB 的 `ON DELETE CASCADE`。實測（本機 paas-odoo
+            # image，`test_D2`）：
+            #
+            #     DELETE FROM woow_paas_platform_smart_home WHERE id IN (297)
+            #     → ForeignKeyViolation: insert or update on table
+            #       "…_security_access_access_policy" violates foreign key
+            #       constraint "…_smart_home_route_id_fkey"
+            #       DETAIL: Key (smart_home_route_id)=(322) is not present…
+            #
+            # 成因是同一次 cascade 裡有**兩條方向不同的邊**：policy 的
+            # `smart_home_id` 是 stored related M2O，Odoo 給它的是預設的
+            # `ondelete='set null'` ⇒ 刪 SH 時 PG 要對 policy 列發一次 UPDATE，
+            # 而那一刻 route 列已經被另一條 cascade 帶走了。SA 在
+            # `SecurityAccess.unlink` 顯式 `self.route_ids.unlink()` 就是為了同
+            # 一件事（那邊還多一個理由：child 的 Python unlink 在 DB cascade 下
+            # 根本不會被呼叫）。
+            #
+            # 這一步不會重複打 operator：上面的 `_teardown_routes_access()` 成功
+            # 後已經把 `access_app_id` 與每條 policy 的 `cf_policy_id` 清空，
+            # route 的 `_capture_access_teardown()` 因此回 None。
+            record.route_ids.with_context(
+                sm_route_cascade_unlink=True).unlink()
             if record.tunnel_id:
                 record._cleanup_tunnel()
             if record.tunnel_id:
@@ -681,10 +793,18 @@ class SmartHome(models.Model):
         plan = sub.sh_subscription_plan_id if sub else False
         return (plan.mcp_integration or '') if plan else ''
 
-    def to_dict(self):
-        """Serialize smart home data for API responses."""
+    def to_dict(self, include_details=False):
+        """Serialize smart home data for API responses.
+
+        ``include_details``（#768）：只有 **detail** 端點帶 `routes`。list 端點會
+        為 workspace 的每一台 SH 各 walk 一次 `access_policy_ids`，而 Access 分頁
+        只存在於詳情頁——CS 早就為同一個理由把 `access` 限定在
+        `include_details=True` 那一側（`controllers/paas.py::_format_service`）。
+        顯示條件本身（`subscription.ac_max_access_seats`）走 subscription，兩側都
+        有，所以清單頁不會因此少東西。
+        """
         self.ensure_one()
-        return {
+        data = {
             'id': self.id,
             'name': self.name,
             'workspace_id': self.workspace_id.id,
@@ -704,6 +824,9 @@ class SmartHome(models.Model):
             'subscription': self._get_subscription_info(),
             'mcp': self._get_mcp_integration(),
         }
+        if include_details:
+            data['routes'] = [r.to_dict() for r in self.route_ids]
+        return data
 
     # ------------------------------------------------------------------ #
     #  Subscription lifecycle: suspend / resume / cleanup                #
@@ -785,6 +908,13 @@ class SmartHome(models.Model):
             'state': restore_state,
             'pre_suspend_state': False,
         })
+        # #768：停權期間 route 的 Access 設定可能被改過（BFF 沒有 state 閘），
+        # 而 route 的 liveness gate 刻意排除 `suspended`（那時 ingress 已是 503，
+        # Access app 留著無害）。resume 是刻意的收斂點，補一次 forced sync；沒有
+        # 它的話「停權期間被關掉保護的 route」永遠不會被推回 Cloudflare，而症狀
+        # 與「保護正常運作」完全一樣。
+        for route in self.route_ids:
+            route.with_context(sm_force_access_sync=True)._sync_access_to_operator()
         _logger.info(
             "[SH] _do_resume done sh=%s new_state=%s",
             self.id, restore_state,
@@ -806,6 +936,23 @@ class SmartHome(models.Model):
             "[SH] _do_cleanup sh=%s name=%s tunnel=%s",
             self.id, self.name, self.tunnel_id,
         )
+        # #768：cron 清理路徑不走 `unlink()`，所以也不會經過那裡的 Access
+        # teardown。漏掉的話「訂閱取消 → cron 拆 tunnel」會留下一組活著的 CF
+        # Access app／reusable policy，而 cron 之後永遠不會再回來看這筆。
+        failed_access = self._teardown_routes_access()
+        if failed_access:
+            self.write({
+                'state': 'error',
+                'error_message': (
+                    "Cloudflare Access teardown failed for route(s): %s. Will "
+                    "retry on the next cron pass." % ', '.join(
+                        str(f) for f in failed_access)
+                ),
+            })
+            _logger.warning(
+                "[SH] _do_cleanup access teardown incomplete sh=%s routes=%s "
+                "(state=error)", self.id, failed_access)
+            return
         self._cleanup_tunnel()
         if self.tunnel_id:
             self.write({

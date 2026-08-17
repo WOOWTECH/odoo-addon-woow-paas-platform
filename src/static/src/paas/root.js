@@ -108,6 +108,12 @@ export class Root extends Component {
         return this.router.params.homeId ? parseInt(this.router.params.homeId, 10) : null;
     }
 
+    // #768：Smart Home 的分頁（Overview / Access）。與 serviceTab 同型——
+    // `workspace/:id/smarthome/:homeId` 那條路由沒有 params.tab，退守 overview。
+    get smartHomeTab() {
+        return this.router.params.tab || 'overview';
+    }
+
     get securityAccessId() {
         return this.router.params.saId ? parseInt(this.router.params.saId, 10) : null;
     }

@@ -183,6 +183,44 @@
             <field name="perm_unlink" eval="True"/>
         </record>
 
+        <!-- SmartHomeRoute (#768)：SH 的 Cloudflare Access 錨點載體。與父
+             model 同一組讀/寫切分（member 讀、owner/admin 寫），walk 走
+             `smart_home_id.workspace_id.access_ids`。
+
+             ⚠ **刻意沒有第三條 `*_rule_admin_full`**（`group_system` 永真腿）。
+             判準與父 model 同一條（見上方 SmartHome 那段）：`src/views/` 下沒有
+             任何綁本 model 的 view／action，cron 走 `user_id=1` 本來就繞過
+             ir.rule，其餘讀取點全部 `.sudo()` ⇒ 沒有真的呼叫者。SA route 有那
+             條是因為 SA 有 backend form；**不要因為「SA 有」就順手補上**——
+             多一條永真 rule 就多一個之後沒人敢動的授權面。
+
+             ⚠ 與 ACL 的分工：`ir.model.access` 對本 model 給 group_user 的是
+             `read=1,write=1,create=0,unlink=0`——租戶改得動自己那條 route 的
+             Access 設定，但建不出、也刪不掉 route（本階段沒有 route CRUD）。
+             `perm_create` / `perm_unlink` 在下面這條 rule 裡是 True 只是形態
+             一致，真正擋住的是 ACL 那層。 -->
+        <record id="smart_home_route_rule_member_read" model="ir.rule">
+            <field name="name">SmartHomeRoute: workspace member read</field>
+            <field name="model_id" ref="model_woow_paas_platform_smart_home_route"/>
+            <field name="domain_force">[('smart_home_id.workspace_id.access_ids', 'any', [('user_id', '=', user.id)])]</field>
+            <field name="groups" eval="[(4, ref('base.group_user'))]"/>
+            <field name="perm_read" eval="True"/>
+            <field name="perm_write" eval="False"/>
+            <field name="perm_create" eval="False"/>
+            <field name="perm_unlink" eval="False"/>
+        </record>
+
+        <record id="smart_home_route_rule_owner_admin_manage" model="ir.rule">
+            <field name="name">SmartHomeRoute: workspace owner/admin manage</field>
+            <field name="model_id" ref="model_woow_paas_platform_smart_home_route"/>
+            <field name="domain_force">[('smart_home_id.workspace_id.access_ids', 'any', [('user_id', '=', user.id), ('role', 'in', ['owner', 'admin'])])]</field>
+            <field name="groups" eval="[(4, ref('base.group_user'))]"/>
+            <field name="perm_read" eval="True"/>
+            <field name="perm_write" eval="True"/>
+            <field name="perm_create" eval="True"/>
+            <field name="perm_unlink" eval="True"/>
+        </record>
+
         <!-- SecurityAccess: read/write split so the ir.rule layer is in
              lock-step with the BFF (controllers/security_access.py), which
              gates every mutation behind role owner/admin + the subscription
@@ -337,7 +375,7 @@
         <record id="security_access_access_policy_rule_workspace_member" model="ir.rule">
             <field name="name">SecurityAccessAccessPolicy: workspace member read</field>
             <field name="model_id" ref="model_woow_paas_platform_security_access_access_policy"/>
-            <field name="domain_force">['|', ('security_access_id.workspace_id.access_ids.user_id', '=', user.id), ('cloud_service_id.workspace_id.access_ids.user_id', '=', user.id)]</field>
+            <field name="domain_force">['|', '|', ('security_access_id.workspace_id.access_ids.user_id', '=', user.id), ('cloud_service_id.workspace_id.access_ids.user_id', '=', user.id), ('smart_home_id.workspace_id.access_ids.user_id', '=', user.id)]</field>
             <field name="groups" eval="[(4, ref('base.group_user'))]"/>
             <field name="perm_read" eval="True"/>
             <field name="perm_write" eval="False"/>
@@ -348,7 +386,7 @@
         <record id="security_access_access_policy_rule_owner_admin_manage" model="ir.rule">
             <field name="name">SecurityAccessAccessPolicy: workspace owner/admin manage</field>
             <field name="model_id" ref="model_woow_paas_platform_security_access_access_policy"/>
-            <field name="domain_force">['|', ('security_access_id.workspace_id.access_ids', 'any', [('user_id', '=', user.id), ('role', 'in', ['owner', 'admin'])]), ('cloud_service_id.workspace_id.access_ids', 'any', [('user_id', '=', user.id), ('role', 'in', ['owner', 'admin'])])]</field>
+            <field name="domain_force">['|', '|', ('security_access_id.workspace_id.access_ids', 'any', [('user_id', '=', user.id), ('role', 'in', ['owner', 'admin'])]), ('cloud_service_id.workspace_id.access_ids', 'any', [('user_id', '=', user.id), ('role', 'in', ['owner', 'admin'])]), ('smart_home_id.workspace_id.access_ids', 'any', [('user_id', '=', user.id), ('role', 'in', ['owner', 'admin'])])]</field>
             <field name="groups" eval="[(4, ref('base.group_user'))]"/>
             <field name="perm_read" eval="True"/>
             <field name="perm_write" eval="True"/>
@@ -388,7 +426,7 @@
         <record id="security_access_access_policy_rule_rule_workspace_member" model="ir.rule">
             <field name="name">SecurityAccessAccessPolicyRule: workspace member read</field>
             <field name="model_id" ref="model_woow_paas_platform_security_access_access_policy_rule"/>
-            <field name="domain_force">['|', ('security_access_id.workspace_id.access_ids.user_id', '=', user.id), ('cloud_service_id.workspace_id.access_ids.user_id', '=', user.id)]</field>
+            <field name="domain_force">['|', '|', ('security_access_id.workspace_id.access_ids.user_id', '=', user.id), ('cloud_service_id.workspace_id.access_ids.user_id', '=', user.id), ('smart_home_id.workspace_id.access_ids.user_id', '=', user.id)]</field>
             <field name="groups" eval="[(4, ref('base.group_user'))]"/>
             <field name="perm_read" eval="True"/>
             <field name="perm_write" eval="False"/>
@@ -399,7 +437,7 @@
         <record id="security_access_access_policy_rule_rule_owner_admin_manage" model="ir.rule">
             <field name="name">SecurityAccessAccessPolicyRule: workspace owner/admin manage</field>
             <field name="model_id" ref="model_woow_paas_platform_security_access_access_policy_rule"/>
-            <field name="domain_force">['|', ('security_access_id.workspace_id.access_ids', 'any', [('user_id', '=', user.id), ('role', 'in', ['owner', 'admin'])]), ('cloud_service_id.workspace_id.access_ids', 'any', [('user_id', '=', user.id), ('role', 'in', ['owner', 'admin'])])]</field>
+            <field name="domain_force">['|', '|', ('security_access_id.workspace_id.access_ids', 'any', [('user_id', '=', user.id), ('role', 'in', ['owner', 'admin'])]), ('cloud_service_id.workspace_id.access_ids', 'any', [('user_id', '=', user.id), ('role', 'in', ['owner', 'admin'])]), ('smart_home_id.workspace_id.access_ids', 'any', [('user_id', '=', user.id), ('role', 'in', ['owner', 'admin'])])]</field>
             <field name="groups" eval="[(4, ref('base.group_user'))]"/>
             <field name="perm_read" eval="True"/>
             <field name="perm_write" eval="True"/>
