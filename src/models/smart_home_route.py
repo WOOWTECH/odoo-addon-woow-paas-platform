@@ -1,0 +1,587 @@
+"""Smart Home Application Route（#768）—— SH 的 Cloudflare Access 錨點載體。
+
+## 這張表存在的理由
+
+裁決 2（#768）把 SH 的 Access 錨點粒度定成「per-route 多錨點（比照 SA）」，
+**預留**一台 SH 底下多個對外服務各自 gate。SH 在此之前沒有 route 概念，只有單一
+系統生成的 `smart_home.subdomain`（`models/smart_home.py`，DB `UNIQUE`）。
+
+本表就是那個 N 錨點的載體：每一列＝一個「可以掛 Cloudflare Access application
+的對外 hostname」。今天每台 SH 恰好一列（`is_primary=True`），對應它 provision
+當下烙進 tunnel 的那個 hostname。
+
+## 為什麼本單不順便做「第二條 route」
+
+CF Access app 是**帳號級、以 hostname 為錨**的物件（operator 的 `/api/access/sync`
+payload 完全沒有 tunnel 欄位），所以「把既有 hostname 掛上 Access」與「這條 tunnel
+有幾條 ingress」是正交的。加第二條 route 需要的是另一組東西：把 provision 從
+`create_tunnel(hostname=…)` 改成 bare tunnel ＋ `sync_tunnel_routes`、重新設計
+#484 的 `dns_failed` 失敗模型、補 `dns_record_id` 持久化、並動到 HA component 讀
+`subdomain` 的跨 repo 契約。那些與 Access 無關，另票處理。
+
+⇒ **本單交付後的誠實邊界**：多 route 在資料模型與 UI 上成立，在實際流量上還不
+成立（第二條 route 沒有 ingress／DNS）。
+
+## 🔴 `is_primary` 是與 SA 的**刻意分歧**，不要順手對齊
+
+SA 在「軸2」把 primary route 的概念**移除**了——那邊任何 route 都可刪，刪到剩零
+條就把 SA 落回 `active_no_route`（見 `models/security_access.py` 的
+`SecurityAccessRoute.unlink` 與 `_recompute_route_state`）。
+
+SH 不能照抄，理由是載體不同：SA 的 tunnel 是 bare tunnel、hostname 全部由
+`sync_tunnel_routes` 宣告式推上去，所以「零條 route」是一個合法狀態；SH 的主
+hostname 是 `action_provision` 呼叫 `create_tunnel(hostname=…)` 當下**烙進 tunnel
+ingress** 的，刪掉那一列不會讓 Cloudflare 少一條 ingress，只會讓平台失去唯一能
+描述它的那筆記錄（＝ Access app 從此無錨點可掛、也無從 teardown）。
+
+所以這裡 primary route 是**不可刪、不可改綁**的。看到「SA 沒有 primary 為什麼 SH
+有」時，答案在上一段，不是漏改。
+"""
+import logging
+
+from odoo import _, api, fields, models
+from odoo.exceptions import UserError, ValidationError
+
+_logger = logging.getLogger(__name__)
+
+
+# ------------------------------------------------------------------------- #
+#  身分錨點（形態抄 security_access 的 `_ROUTE_IDENTITY_ANCHOR_FIELDS`）      #
+# ------------------------------------------------------------------------- #
+#
+# 錨點＝**決定這一列驅動的是「哪一個」Cloudflare 物件**的欄位。移動它不是「改一個
+# 設定」，是把整列重新瞄準別人的資源，而該列仍保有自己 workspace 的 ir.rule 祝福。
+#
+# 🔴 **為什麼不共用 `smart_home.py` 那一把 sentinel**（這是本檔最容易被「順手
+# 統一」掉、而且統一之後所有守衛靜默失效的一處）：
+# `src/tests/smart_home_fixture.py::sh_model()` 回的 handle **同時**開了 SH 的
+# 建立閘與 SH 的身分錨點閘。SH 的既有 fixture 幾乎全部走它——若本表沿用同一把
+# sentinel，那些 fixture 會連帶把**本表的**守衛一起關掉，而症狀是「守衛看起來
+# 有測試、實際上從未被執行」。分開之後，要開本表的閘只能顯式呼叫
+# `_internal_sm_route_identity(...)`。
+#
+# ⚠ 命名刻意不與 `cloud_service` / `smart_home` 兩組同名、也不互為子字串：
+# `scripts/audit/repo-lint.py` 的 `check_provision_sentinel_allowlist` 判準是
+# 字面比對，同名會讓 gate 對本檔吐出一句為假的話，之後真的在本檔開 cloud_service
+# 的閘也不會再紅（見 `models/smart_home.py` 頂端同一段論證）。
+_SM_ROUTE_IDENTITY_ANCHOR_FIELDS = (
+    'access_app_id',    # WHICH CF Access application this route configures
+)
+
+
+class _SmRouteIdentityWrite:
+    """Marker type for the identity-anchor escape hatch — see below."""
+
+    __slots__ = ()
+
+    def __repr__(self):
+        return '<sm route identity write>'
+
+
+#: 唯一的逃生口。值必須是**這個物件**而不是 `True`／字串——`/web/dataset/call_kw`
+#: 把呼叫端 context 整包換進 env，任何 JSON 表達得出的判準，呼叫端在 payload 裡
+#: 多加一個 key 就打開了（#522 在 18.0 實測過）。同樣刻意**不是** `env.su` 豁免：
+#: su 會在每個 `TransactionCase` 與每條 `sudo()` 路徑上靜默停用守衛，正是測試本該
+#: 證明它有效的地方（`docs/decisions/patterns/su-env-exempt-guard-false-green.md`）。
+_INTERNAL_SM_ROUTE_IDENTITY_WRITE = _SmRouteIdentityWrite()
+
+_SM_ROUTE_IDENTITY_CTX_KEY = 'woow_sm_route_access_identity_write'
+
+
+def _internal_sm_route_identity(records):
+    """回傳「唯一被允許寫入本表身分錨點」的那個 context 底下的 ``records``。"""
+    return records.with_context(
+        **{_SM_ROUTE_IDENTITY_CTX_KEY: _INTERNAL_SM_ROUTE_IDENTITY_WRITE})
+
+
+def _is_internal_sm_route_identity_write(env):
+    return (env.context.get(_SM_ROUTE_IDENTITY_CTX_KEY)
+            is _INTERNAL_SM_ROUTE_IDENTITY_WRITE)
+
+
+def _server_owned_anchor_value(model, field_name):
+    """一個身分錨點在 create 當下該落地的**伺服器端值**（#753 的形狀）。
+
+    有欄位級 ``default`` 的走它，其餘壓 ``False``。刻意讀 ``field.default`` 而不
+    是在守衛旁邊自己複製一份預設值：那是 ``default_get`` 的**第 3 順位**，也是
+    三個載體裡唯一呼叫端碰不到的那個（第 1 是 context 的 ``default_<field>``、
+    第 2 是 ``ir.default`` 的列）。從欄位定義推導也讓「將來新增一個帶 default 的
+    錨點」自動正確，不必在守衛旁邊維護第二張對照表。
+    """
+    field = model._fields[field_name]
+    return field.default(model) if field.default else False
+
+
+def _strip_sm_route_identity_anchors(model, vals_list):
+    """create() 側：把身分錨點**壓成伺服器端值**，不是 pop（#753）。
+
+    ``super().create()`` 不會繞經 ``write()``，只靠 write 守衛會留下一個
+    create-time squat：一列全新的 route 在還沒 sync 之前就綁上受害者的 Access
+    app id，之後的 teardown 會拿平台級 API key 去刪別人的 app。
+
+    🔴 **為什麼是壓值而不是 ``vals.pop(field, None)``**：``super().create()`` 內部
+    會呼叫 ``_add_missing_default_values(vals)``，把「vals 裡**缺席**」的欄位從三
+    個載體補回來，其中兩個（``default_<field>`` context 與 ``ir.default`` 的列）
+    都由租戶決定。``pop`` 恰恰把 anchor 變成缺席 ⇒ 那兩個載體在剝除**之後**才落
+    地。把 key 留在 vals 裡並給定伺服器端值才一次涵蓋所有載體
+    （``_add_missing_default_values`` 只補不在 vals 裡的欄位）。
+
+    ⚠ 「先解析再 pop」同樣是錯的：pop 之後 key 又缺席，``super().create()`` 內部
+    會再解析、再補一次。解析後的 vals 適合**判斷**，不適合**剝除**。
+    """
+    if _is_internal_sm_route_identity_write(model.env):
+        return
+    for vals in vals_list:
+        for field in _SM_ROUTE_IDENTITY_ANCHOR_FIELDS:
+            vals[field] = _server_owned_anchor_value(model, field)
+
+
+def _reject_sm_route_identity_writes(env, vals):
+    """write() 側：拒絕移動錨點，而且要大聲。對所有人生效（含 superuser）。"""
+    if _is_internal_sm_route_identity_write(env):
+        return
+    for field in _SM_ROUTE_IDENTITY_ANCHOR_FIELDS:
+        if field in vals:
+            raise UserError(
+                "Field '%s' is immutable after creation." % field)
+
+
+class SmartHomeRoute(models.Model):
+    _name = 'woow_paas_platform.smart_home_route'
+    _description = 'Smart Home Application Route'
+    _order = 'is_primary desc, id'
+
+    smart_home_id = fields.Many2one(
+        comodel_name='woow_paas_platform.smart_home',
+        string='Smart Home',
+        required=True,
+        ondelete='cascade',
+        index=True,
+    )
+    is_primary = fields.Boolean(
+        string='Primary Route',
+        default=False,
+        help='True = 這條 route 的 hostname 就是 Smart Home 自己的 subdomain，'
+             '由平台在 provision 當下建立，不可刪除也不可改綁（見檔頭）。',
+    )
+    subdomain_prefix = fields.Char(
+        string='Subdomain Prefix',
+        help='非 primary route 的使用者自選前綴；hostname = '
+             '{prefix}.{paas_domain}。本階段恆空——第二條 route 需要 tunnel '
+             'ingress 遷移，另票處理（見檔頭）。',
+    )
+    hostname = fields.Char(
+        string='Hostname',
+        compute='_compute_hostname',
+        help='對外 FQDN。primary route **衍生自** smart_home.subdomain 而不是複製'
+             '一份：複製就是第二個真相來源，而兩者不一致時沒有任何訊號。',
+    )
+    is_protected = fields.Boolean(
+        string='Protected',
+        default=False,
+        help='Per-route Access 保護開關。True = 這條 route 自己是一個 '
+             'Cloudflare Access application；False = 經 tunnel 公開可達、無 '
+             'Access 閘。',
+    )
+    session_duration = fields.Selection(
+        selection=[
+            ('30m', '30 minutes'), ('1h', '1 hour'), ('8h', '8 hours'),
+            ('24h', '24 hours'), ('168h', '7 days'),
+        ],
+        string='Session Duration',
+        default='24h',
+        help='使用者通過驗證後多久需要重新登入（本 route）。',
+    )
+    login_google = fields.Boolean(string='Login: Google', default=False)
+    login_email_otp = fields.Boolean(string='Login: Email OTP', default=False)
+    access_app_id = fields.Char(
+        string='CF Access App ID', copy=False,
+        help='本 route 的 Cloudflare Access Application id（sync 後回寫）。'
+             '身分錨點：租戶不可寫。',
+    )
+    access_policy_ids = fields.One2many(
+        comodel_name='woow_paas_platform.security_access_access_policy',
+        inverse_name='smart_home_route_id',
+        string='Access Policies',
+    )
+    access_unresolved_idp_types = fields.Char(
+        string='Unresolved Login Methods', copy=False,
+        help='上次 sync 時，被要求但在 Cloudflare 帳號上找不到對應 IdP 的登入'
+             '方式。非空代表登入限制被**靜默放寬**了（若解析後集合為空，Access '
+             'app 會 fallback 到所有可用 IdP）。曝光出來，不要讓 fail-open 的'
+             '放寬無聲無息。',
+    )
+
+    # ------------------------------------------------------------------ #
+    #  compute / constraints                                             #
+    # ------------------------------------------------------------------ #
+
+    @api.depends('is_primary', 'subdomain_prefix', 'smart_home_id.subdomain')
+    def _compute_hostname(self):
+        domain = self.env['ir.config_parameter'].sudo().get_param(
+            'woow_paas_platform.paas_domain', 'woowtech.io')
+        for route in self:
+            if route.is_primary:
+                base = route.smart_home_id.subdomain
+            else:
+                base = route.subdomain_prefix
+            route.hostname = f"{base}.{domain}" if base else False
+
+    #: partial unique index 的名字。model 的 `init()` 與
+    #: `migrations/18.0.1.0.150/post-migrate.py` 共用同一個常數值（後者是為了
+    #: 讓升級路徑上「有沒有建起來」可被驗證）。
+    _PRIMARY_INDEX = 'woow_paas_platform_smart_home_route_one_primary'
+
+    def init(self):
+        """一台 SH 至多一條 primary route —— **DB 層**的唯一性守線。
+
+        🔴 為什麼不放在 migration 裡就好：migration 只在**升級**時跑。只放那邊
+        的話 fresh install（`-i`）永遠不會有這個 index，症狀是「舊環境有守線、
+        新環境沒有」——而兩邊的行為測試都會綠（Python constraint 在兩邊都在）。
+        `init()` 由 Odoo 在每次 install/update 的 `_auto_init` 之後呼叫，兩條路徑
+        都涵蓋得到。
+
+        partial unique index 表達不進 `_sql_constraints`（那裡只吃 constraint 語
+        法，沒有 `WHERE`），所以走 `init()` ＋ 裸 SQL，這是 Odoo core 自己對同類
+        需求的做法。`IF NOT EXISTS` ⇒ 冪等，與 migration 的補建互不衝突。
+        """
+        self.env.cr.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS %s
+                ON %s (smart_home_id) WHERE is_primary
+            """ % (self._PRIMARY_INDEX, self._table))
+
+    @api.model
+    def _primary_conflict_message(self, smart_home):
+        """單一文案來源：create 前置檢查與 `@api.constrains` 兩個呼叫點共用。"""
+        return _(
+            'Smart Home %(name)s already has a primary route. Its primary '
+            'hostname is baked into the Cloudflare tunnel at provision time, '
+            'so there can only be one.',
+            name=smart_home.name or smart_home.id)
+
+    @api.model
+    def _assert_single_primary_vals(self, vals):
+        """create 側的唯一性檢查——必須在 ``super().create()`` 的 INSERT 之前。
+
+        為什麼不能只靠底下的 ``@api.constrains``：Odoo 的 ``_create()`` **先送
+        INSERT、之後**才跑 Python constraint，所以 create 方向永遠是 PostgreSQL
+        的 partial unique index 先炸——拿到的是 `UniqueViolation`（訊息只有索引
+        名，說不出錯在哪），而且交易當場 abort。write 方向相反
+        （``write()`` 把值排進 ``towrite`` 延後 flush，``_validate_fields``
+        先跑），那一側交給 constrains 就夠。這是 policy 的 `anchor_arc` 已經記
+        錄過的同一個不對稱。
+
+        ⚠ 傳進來的 vals 必須是**框架解析後**的（``_add_missing_default_values``）：
+        ``default_is_primary`` 之類是在 ``super().create()`` 內部才展開的，只看
+        raw vals 會讓「用 context default 塞 is_primary」整道跳過（#705 F1 同
+        形狀）。
+        """
+        if not vals.get('is_primary') or not vals.get('smart_home_id'):
+            return
+        if self.search_count([
+            ('smart_home_id', '=', vals['smart_home_id']),
+            ('is_primary', '=', True),
+        ]):
+            raise ValidationError(self._primary_conflict_message(
+                self.env['woow_paas_platform.smart_home'].browse(
+                    vals['smart_home_id'])))
+
+    @api.constrains('is_primary', 'smart_home_id')
+    def _check_single_primary(self):
+        """一台 SH 至多一條 primary route（write 側）。
+
+        與 `init()` 建的 partial unique index 是**同一條不變式的兩層**，不是二
+        選一：index 是唯一擋得住併發與裸 SQL 的那層，本方法負責在 write 方向給
+        出講得出「錯在哪」的訊息（PG 的 unique 違反只回索引名）。
+        """
+        for route in self.filtered('is_primary'):
+            other = self.search_count([
+                ('smart_home_id', '=', route.smart_home_id.id),
+                ('is_primary', '=', True),
+                ('id', '!=', route.id),
+            ])
+            if other:
+                raise ValidationError(
+                    self._primary_conflict_message(route.smart_home_id))
+
+    # ------------------------------------------------------------------ #
+    #  ORM overrides                                                      #
+    # ------------------------------------------------------------------ #
+
+    @api.model_create_multi
+    def create(self, vals_list):
+        _strip_sm_route_identity_anchors(self, vals_list)
+        for vals in vals_list:
+            # 必須在 `super().create()` 之前——INSERT 一旦送出去，擋下來的就是
+            # PG 的 partial unique index（訊息不可讀且交易 abort）。
+            self._assert_single_primary_vals(
+                self._add_missing_default_values(vals))
+        # Atomicity scope：savepoint 只保證 **Odoo 側**——sync 失敗時 DB 這一列
+        # 回滾，不會留下一個 DB 有、Cloudflare 沒有的「幽靈 route」讓之後某次
+        # sync 靜默把它推公開。它**不**保證 operator 側原子性：`sync_access_app`
+        # 是宣告式 full-state push 且沒有補償動作，中途失敗仍可能讓 CF 半改；
+        # 那份殘留由下一次冪等的 full-state re-sync 收斂，不是由這個 savepoint。
+        with self.env.cr.savepoint():
+            routes = super().create(vals_list)
+            if not self.env.context.get('sm_skip_access_sync'):
+                for route in routes:
+                    route._sync_access_to_operator()
+        return routes
+
+    def write(self, vals):
+        _reject_sm_route_identity_writes(self.env, vals)
+        # primary route 的綁定與 primary 旗標本身都是不可變的：hostname 衍生自
+        # 它、Access app 掛在 hostname 上，改綁等於把整列重新瞄準另一台 SH 的
+        # Cloudflare 物件（而該列仍保有原 workspace 的 ir.rule 祝福）。
+        for field in ('smart_home_id', 'is_primary'):
+            if field not in vals:
+                continue
+            for route in self:
+                if not route.is_primary:
+                    continue
+                # ⚠ M2O 要比 id 不能比 recordset：`route['smart_home_id']` 是
+                # recordset 而 vals 送進來的是 int，直接 `!=` 在 Odoo 18 只會發
+                # 一個 UserWarning 然後回 True ⇒ 守衛看起來有效、其實是對每一次
+                # write 都成立（連「寫入同一個值」都會被擋）。
+                current = (route.smart_home_id.id if field == 'smart_home_id'
+                           else bool(route.is_primary))
+                incoming = (vals[field] if field == 'smart_home_id'
+                            else bool(vals[field]))
+                if current != incoming:
+                    raise UserError(
+                        "Field '%s' is immutable on a primary Smart Home "
+                        "route." % field)
+        with self.env.cr.savepoint():
+            result = super().write(vals)
+            if (not self.env.context.get('sm_skip_access_sync')
+                    and any(k in vals for k in (
+                        'is_protected', 'login_google', 'login_email_otp',
+                        'session_duration'))):
+                for route in self:
+                    route._sync_access_to_operator()
+        return result
+
+    def unlink(self):
+        """primary route 不可刪；非 primary 刪除時要拆掉它的 Access app。
+
+        🔴 拆除的 id 必須在 ``super().unlink()`` **之前**捕獲：那一步會把
+        ``access_app_id`` 與每一條 policy 的 ``cf_policy_id`` 一起帶走，之後
+        operator 沒有 id 可刪，app／policy 就變成永久 CF 孤兒，而且**沒有任何
+        DB 列可以當重試錨點**。
+        """
+        primary = self.filtered('is_primary')
+        if primary and not self.env.context.get('sm_route_cascade_unlink'):
+            raise UserError(_(
+                'The primary route of a Smart Home cannot be deleted — its '
+                'hostname is served by the Cloudflare tunnel itself. Delete '
+                'the Smart Home instead.'))
+        teardown = [r._capture_access_teardown() for r in self]
+        with self.env.cr.savepoint():
+            result = super().unlink()
+            failed = [info['label'] for info in teardown
+                      if info and not self._push_access_teardown(info)]
+            if failed:
+                # fail-loud：列已經沒了，吞掉這個失敗會留下一組 CF Access app ＋
+                # reusable policy 永久孤兒，而且沒有重試錨點也沒有錯誤訊號。
+                # raise 讓 savepoint 把 unlink 回滾，列（與它的 access_app_id）
+                # 留下來當重試錨點。
+                raise UserError(_(
+                    'Cloudflare Access teardown failed for route(s): %(names)s. '
+                    'The route was kept so the deletion can be retried; its '
+                    'Access app is still live in Cloudflare.',
+                    names=', '.join(str(f) for f in failed)))
+        return result
+
+    # ------------------------------------------------------------------ #
+    #  Cloudflare Access sync（宣告式；一條 route 一個 CF Access app）     #
+    # ------------------------------------------------------------------ #
+
+    def _access_is_live(self, forced=False):
+        """本 route 現在推得動 Cloudflare 嗎。
+
+        判準取 **SA 那條（`tunnel_id`）而不是 CS 那條（`subdomain`）**：SH 與 SA
+        一樣是 dedicated tunnel，hostname 要等 tunnel ＋ DNS 都建起來才解析得到。
+
+        `error` 必須包含在內：`action_provision` 的 `dns_failed` 分支會留在
+        `error` 而 tunnel 活著、訂閱仍有效、租戶仍能編輯設定——把 `error` 排除
+        會讓 DB 與 Cloudflare 靜默分歧，而端點照樣回報成功。
+
+        `suspended` 刻意**排除**：停權時 ingress 已被打成 `http_status:503`，
+        Access app 留著無害；resume 時 `smart_home._do_resume` 會帶 forced 旗標
+        補一次收斂（否則「停權期間被關掉保護的 route」永遠不會被推回去）。
+        """
+        self.ensure_one()
+        sh = self.smart_home_id
+        if not sh or not sh.tunnel_id or not self.hostname:
+            return False
+        if not forced and sh.state not in ('active', 'error'):
+            return False
+        return True
+
+    def _build_existing_policy_ids(self):
+        """operator 必須 delete-then-recreate 的 CF reusable policy id。
+
+        正常是存活列的 ``cf_policy_id``；但 policy 的 ``unlink()`` 會先跑
+        ``super().unlink()`` 再 re-sync，那些剛被刪掉的列的 cf id 已經不在 DB
+        裡、永遠進不了這份清單，而 operator 唯一的刪除通道就是它 ⇒ 每刪一條漏一
+        顆永久孤兒。policy 的 unlink 因此把 doomed id 經 context 傳進來。
+        """
+        self.ensure_one()
+        ids = [p.cf_policy_id for p in self.access_policy_ids if p.cf_policy_id]
+        for cf_id in self.env.context.get('sa_unlinked_cf_policy_ids') or []:
+            if cf_id and cf_id not in ids:
+                ids.append(cf_id)
+        return ids
+
+    def _build_access_payload(self):
+        """operator `/api/access/sync` 的 desired-state payload（限本 route）。
+
+        ⚠ **逐欄位鏡射 SA route / CS 的同名方法不是重複**：operator 只有一個
+        `AccessSyncRequest` schema，三份 payload 的形狀分家只會在 422 才發現，
+        而 422 說不出是哪一邊錯。
+        """
+        self.ensure_one()
+        sh = self.smart_home_id
+        login_idp_types = []
+        if self.login_google:
+            login_idp_types.append('google')
+        if self.login_email_otp:
+            login_idp_types.append('onetimepin')
+        hostname = self.hostname or ''
+        protected = [hostname] if (self.is_protected and hostname) else []
+        return {
+            'enabled': bool(self.is_protected),
+            'canonical_name': sh._access_canonical_name(),
+            'app_name': self._access_app_name(),
+            'primary_hostname': hostname,
+            'protected_hostnames': protected,
+            'session_duration': self.session_duration or '24h',
+            'login_idp_types': login_idp_types,
+            'policies': [{
+                'name': p.name, 'decision': p.decision,
+                'precedence': p.sequence,
+                'include': p._rules_by_group('include'),
+                'require': p._rules_by_group('require'),
+                'exclude': p._rules_by_group('exclude'),
+            } for p in self.access_policy_ids.sorted(
+                key=lambda x: (x.sequence, x.id))],
+            'existing_app_id': self.access_app_id or None,
+            'existing_policy_ids': self._build_existing_policy_ids(),
+        }
+
+    def _access_app_name(self):
+        """CF Access app 的顯示名：一台 SH 底下多條 route 不得撞名。"""
+        self.ensure_one()
+        if self.is_primary:
+            return self.smart_home_id.subdomain or (
+                self.smart_home_id.name or 'smart-home')
+        return self.subdomain_prefix or ('route-%s' % self.id)
+
+    def _sync_access_to_operator(self):
+        """把本 route 的完整 Access desired-state 推給 operator（冪等）。
+
+        `is_protected=False` 送 `enabled=False` 的 payload（帶 `existing_app_id`
+        做 teardown），推完清掉存下來的 app id；沒有 app id 時整支是無害的 no-op。
+        """
+        self.ensure_one()
+        forced = bool(self.env.context.get('sm_force_access_sync'))
+        if not self._access_is_live(forced=forced):
+            return
+        # 從沒建過 app 的未保護 route 沒有任何事要做
+        if not self.is_protected and not self.access_app_id:
+            return
+        client = self.smart_home_id._get_operator_client()
+        result = client.sync_access_app(self._build_access_payload())
+        orphaned = result.get('orphaned_policy_ids') or []
+        if orphaned:
+            # operator 重指 app 之後刪不掉的舊 reusable policy＝永久 CF 孤兒
+            # （成本／雜訊），沒有任何後續 re-sync 會收斂它們 ⇒ 至少讓它可見。
+            _logger.warning(
+                "[SH] route %s (sh=%s): operator left %d orphan CF Access "
+                "policy(ies) after sync: %s", self.id, self.smart_home_id.id,
+                len(orphaned), ', '.join(orphaned))
+        _internal_sm_route_identity(self).access_app_id = (
+            result.get('app_id') or False)
+        unresolved = result.get('unresolved_idp_types') or []
+        new_unresolved = ', '.join(unresolved) if unresolved else False
+        if self.access_unresolved_idp_types != new_unresolved:
+            self.access_unresolved_idp_types = new_unresolved
+        returned = result.get('policy_ids') or []
+        policies = self.access_policy_ids.sorted(
+            key=lambda x: (x.sequence, x.id))
+        for pol, cf_id in zip(policies, returned):
+            if pol.cf_policy_id != cf_id:
+                pol.cf_policy_id = cf_id
+        if not result.get('app_id'):
+            for pol in self.access_policy_ids:
+                if pol.cf_policy_id:
+                    pol.cf_policy_id = False
+
+    # ------------------------------------------------------------------ #
+    #  teardown（刪除路徑；id 必須在列消失之前捕獲）                        #
+    # ------------------------------------------------------------------ #
+
+    def _capture_access_teardown(self):
+        """回傳拆除這條 route 的 Access 所需的一切，或 ``None``（沒東西要拆）。"""
+        self.ensure_one()
+        if not self.access_app_id and not any(
+                p.cf_policy_id for p in self.access_policy_ids):
+            return None
+        if not self._access_is_live(forced=True):
+            return None
+        return {
+            'smart_home': self.smart_home_id,
+            'app_id': self.access_app_id or None,
+            'policy_ids': [p.cf_policy_id for p in self.access_policy_ids
+                           if p.cf_policy_id],
+            'app_name': self._access_app_name(),
+            'hostname': self.hostname or '',
+            'label': self._access_app_name(),
+        }
+
+    @api.model
+    def _push_access_teardown(self, info):
+        """把一份捕獲好的 teardown 推給 operator。成功回 ``True``。
+
+        best-effort ＋ 回 bool（不 raise）：呼叫端自己決定要 fail-loud 還是留給
+        下一輪 cron 重試——兩條路徑對「失敗」的處置不同（unlink 要回滾保住重試
+        錨點；cron 的 `_do_cleanup` 要落 `error` 等下一次）。
+        """
+        sh = info['smart_home']
+        try:
+            client = sh._get_operator_client()
+            client.sync_access_app({
+                'enabled': False,
+                'canonical_name': sh._access_canonical_name(),
+                'app_name': info['app_name'],
+                'primary_hostname': info['hostname'],
+                'protected_hostnames': [],
+                'session_duration': '24h',
+                'login_idp_types': [],
+                'policies': [],
+                'existing_app_id': info['app_id'],
+                'existing_policy_ids': info['policy_ids'],
+            })
+            return True
+        except Exception as e:  # noqa: BLE001 — 呼叫端決定嚴重性
+            _logger.warning(
+                "[SH] Access teardown failed sh=%s app=%s: %s — kept for retry",
+                sh.id, info['app_id'], e)
+            return False
+
+    def to_dict(self):
+        self.ensure_one()
+        return {
+            'id': self.id,
+            'is_primary': self.is_primary,
+            'hostname': self.hostname or '',
+            'is_protected': self.is_protected,
+            'session_duration': self.session_duration,
+            'login_google': self.login_google,
+            'login_email_otp': self.login_email_otp,
+            # fail-open 放寬訊號，必須吐；`access_app_id` 刻意**不吐**（伺服器
+            # 擁有的 CF 物件 id，形狀對齊 CS `_access_to_dict()`）。
+            'access_unresolved_idp_types': self.access_unresolved_idp_types or '',
+            'access_policies': [p.to_dict() for p in self.access_policy_ids],
+        }

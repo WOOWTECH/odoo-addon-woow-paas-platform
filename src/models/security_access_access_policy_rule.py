@@ -28,6 +28,11 @@ class SecurityAccessAccessPolicyRule(models.Model):
     ir.rule domain 兩腿皆假 ⇒ 租戶連自己那條 selector rule 都建不出來、讀不到。
     這是 [[unbound-project-acl-dual-leg]] 明列的「sub-model 必須對等改」那一條
     （那邊的教訓是漏改 = leak；本案方向相反是 fail-closed，但同樣是壞的）。
+
+    #768：同一條規矩再套一次——第三個錨點（`smart_home_id`）也必須對等鏡射，
+    否則 SH 錨定的 policy 底下這張表的 ir.rule domain 三腿皆假，租戶連自己那條
+    selector rule 都建不出來，而錯誤訊息指向的是**子表**，沒人會聯想到 parent
+    換了錨點。
     """
 
     _name = 'woow_paas_platform.security_access_access_policy_rule'
@@ -54,6 +59,12 @@ class SecurityAccessAccessPolicyRule(models.Model):
         string='Cloud Service',
         related='policy_id.cloud_service_id', store=True, index=True,
         help='#744：父 policy 的另一半錨點，同樣 store=True 讓 ir.rule 走得到。',
+    )
+    smart_home_id = fields.Many2one(
+        comodel_name='woow_paas_platform.smart_home',
+        string='Smart Home',
+        related='policy_id.smart_home_id', store=True, index=True,
+        help='#768：父 policy 的第三個錨點，同樣 store=True 讓 ir.rule 走得到。',
     )
     group = fields.Selection(
         selection=[

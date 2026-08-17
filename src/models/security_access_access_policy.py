@@ -2,23 +2,46 @@ from odoo import api, fields, models
 from odoo.exceptions import ValidationError
 
 
-def _arc_violation(label, has_route, has_cs):
-    """回傳 exclusive arc 的違規訊息，或 ``None``（合法）。
+#: 錨點欄位的**唯一清單**（順序即訊息與 sparse-precedence 的探測順序）。
+#:
+#: #768：從二元擴成三元。刻意提到模組層而不是散在各處的字面 tuple——原本
+#: `create()` 的 precedence 探測、`write()` 的 re-sync trigger、`unlink()` 的
+#: 錨點抓取、`_access_sync_targets()` 各自維護一份，而漏改其中任一處的症狀都
+#: **沒有輸出**（precedence 全撞在 10／Cloudflare 完全沒被推／CF 孤兒）。
+_ANCHOR_FIELDS = ('route_id', 'cloud_service_id', 'smart_home_route_id')
 
-    單一文案來源：create 前置檢查與 `@api.constrains` 兩個呼叫點共用，否則
-    同一個違規在兩條路徑上會給出兩種說法。
+#: 錯誤訊息用的人話標籤。與 `_ANCHOR_FIELDS` 同一份 key。
+_ANCHOR_LABELS = {
+    'route_id': 'an Application Route',
+    'cloud_service_id': 'a Cloud Service',
+    'smart_home_route_id': 'a Smart Home Route',
+}
+
+
+def _arc_violation(label, present):
+    """回傳「恰好一個錨點」的違規訊息，或 ``None``（合法）。
+
+    ``present``：``{錨點欄位: bool}``。單一文案來源：create 前置檢查與
+    `@api.constrains` 兩個呼叫點共用，否則同一個違規在兩條路徑上會給出兩種說法。
+
+    #768：訊息改成**動態列舉**而不是寫死「二選一」。寫死的話，第三個錨點上線
+    後訊息會對使用者說謊（叫他在兩個裡面選一個，而他選的是第三個）。
     """
-    if has_route and has_cs:
+    filled = [f for f in _ANCHOR_FIELDS if present.get(f)]
+    if len(filled) == 1:
+        return None
+    choices = ' / '.join(_ANCHOR_LABELS[f] for f in _ANCHOR_FIELDS)
+    if filled:
         return (
-            "Access policy %r is anchored on BOTH an Application Route and a "
-            "Cloud Service. A policy belongs to exactly one Cloudflare Access "
-            "application, so it must carry exactly one anchor." % label)
-    if not has_route and not has_cs:
-        return (
-            "Access policy %r has no anchor. Set either an Application Route "
-            "or a Cloud Service — an unanchored policy can never be pushed to "
-            "Cloudflare and is invisible to its own workspace." % label)
-    return None
+            "Access policy %r is anchored on more than one of %s (got: %s). "
+            "A policy belongs to exactly one Cloudflare Access application, "
+            "so it must carry exactly one anchor."
+            % (label, choices,
+               ', '.join(_ANCHOR_LABELS[f] for f in filled)))
+    return (
+        "Access policy %r has no anchor. Set exactly one of %s — an "
+        "unanchored policy can never be pushed to Cloudflare and is "
+        "invisible to its own workspace." % (label, choices))
 
 
 class SecurityAccessAccessPolicy(models.Model):
@@ -76,12 +99,22 @@ class SecurityAccessAccessPolicy(models.Model):
     #: 的 table 名 48 字元，超過 63 就會被 `sql.make_identifier` 換成雜湊名
     #: （`_add_sql_constraints`），migration 的存在性驗證要跟著改查雜湊名。
     #: `anchor_arc` ⇒ 59 字元，維持可讀且可直接查。
+    #: 🔴 #768：三腿一定要用 `num_nonnulls(...) = 1`，**不可以**把 `<>` 串成三元。
+    #: `<>` 是奇偶性不是「恰好一個」：恰好一個非空 ⇒ `(F<>T)<>T` = FALSE（合法列
+    #: 被拒）；三個都空 ⇒ `(T<>T)<>T` = TRUE（無錨點孤兒被放行）——正好接受這道
+    #: CHECK 存在的理由所要拒絕的那一格。
+    #:
+    #: ⚠ 改這個定義要同步 `migrations/18.0.1.0.150/post-migrate.py` 的
+    #: `_CHECK_DEF`（那支的補建路徑會逐字用它），且該支的存在性驗證查的是
+    #: `pg_get_constraintdef` 而**不是**只查 `conname`——同名但舊定義的
+    #: constraint 會通過只查名字的驗證。
     _sql_constraints = [
         (
             'anchor_arc',
-            'CHECK((route_id IS NULL) <> (cloud_service_id IS NULL))',
+            'CHECK(num_nonnulls(route_id, cloud_service_id, '
+            'smart_home_route_id) = 1)',
             'An Access policy must be anchored on exactly one of '
-            'Application Route / Cloud Service.',
+            'Application Route / Cloud Service / Smart Home Route.',
         ),
     ]
 
@@ -100,6 +133,23 @@ class SecurityAccessAccessPolicy(models.Model):
         help='The cloud service this policy protects (#744). Its public '
              'subdomain is its own Cloudflare Access application. '
              'Exactly one of route_id / cloud_service_id is set.',
+    )
+    smart_home_route_id = fields.Many2one(
+        comodel_name='woow_paas_platform.smart_home_route',
+        string='Smart Home Route', ondelete='cascade',
+        index=True,
+        help='The Smart Home route this policy protects (#768). Each route is '
+             'its own Cloudflare Access application. Exactly one of '
+             'route_id / cloud_service_id / smart_home_route_id is set.',
+    )
+    smart_home_id = fields.Many2one(
+        comodel_name='woow_paas_platform.smart_home',
+        string='Smart Home',
+        related='smart_home_route_id.smart_home_id', store=True, index=True,
+        help='Derived from smart_home_route_id; kept stored so the ir.rule '
+             'workspace walk and the per-Smart-Home policy quota can traverse '
+             'it (ir.rule domains only walk REAL columns). The real binding is '
+             'smart_home_route_id. Empty on the other two anchors (#768).',
     )
     security_access_id = fields.Many2one(
         comodel_name='woow_paas_platform.security_access',
@@ -157,13 +207,13 @@ class SecurityAccessAccessPolicy(models.Model):
         """
         message = _arc_violation(
             vals.get('name') or '<new>',
-            bool(vals.get('route_id')), bool(vals.get('cloud_service_id')))
+            {f: bool(vals.get(f)) for f in _ANCHOR_FIELDS})
         if message:
             raise ValidationError(message)
 
-    @api.constrains('route_id', 'cloud_service_id')
+    @api.constrains(*_ANCHOR_FIELDS)
     def _check_anchor_exclusive_arc(self):
-        """route_id XOR cloud_service_id —— 兩者皆空與兩者皆填都拒（write 側）。
+        """恰好一個錨點 —— 全空與多於一個都拒（write 側）。
 
         與 ``_sql_constraints`` 的 ``anchor_arc`` 是**同一條不變式的兩層**，
         不是二選一：SQL CHECK 是唯一擋得住裸 SQL／批次 migration／
@@ -172,20 +222,36 @@ class SecurityAccessAccessPolicy(models.Model):
         """
         for pol in self:
             message = _arc_violation(
-                pol.name or pol.id, bool(pol.route_id),
-                bool(pol.cloud_service_id))
+                pol.name or pol.id,
+                {f: bool(pol[f]) for f in _ANCHOR_FIELDS})
             if message:
                 raise ValidationError(message)
 
+    #: 錨點**記錄的 model 名** → 這一列在 policy 表上對應的「配額池」欄位。
+    #:
+    #: 🔴 #768：刻意做成查表而不是三元式。原本是
+    #: ``'cloud_service_id' if pol.cloud_service_id else 'security_access_id'``
+    #: ——SH 錨定會落 ``else`` 分支，於是拿 SH 的 id 去比 ``security_access_id``，
+    #: 那是**跨 model 的 id 碰撞**（兩張表的 id 各自從 1 開始），結果不是「不
+    #: 擋」而是一個錯誤的計數（可多算也可少算）。三元式的錯是結構性的：第四個
+    #: 錨點還會再錯一次。查表則讓「哪個 model 用哪個池欄位」變成可被測試逐項
+    #: 斷言的宣告（見 `test_sh_access_model_768.py` D3）。
+    _ANCHOR_POOL_FIELD = {
+        'woow_paas_platform.cloud_service': 'cloud_service_id',
+        'woow_paas_platform.security_access': 'security_access_id',
+        'woow_paas_platform.smart_home': 'smart_home_id',
+    }
+
     def _anchor(self):
-        """這一列的錨點記錄：cloud_service（#744）或 route 的 SA。
+        """這一列的錨點記錄：cloud_service（#744）／route 的 SA／SH（#768）。
 
         **唯一**的「這條 policy 歸誰管」裁決處。quota 與 email 上限都讀它，
-        免得兩處各自 walk 一次錨點、日後長出第三個錨點時漏改其中一處。
-        arc 保證至多一邊有值，所以 ``or`` 不會遮蔽另一邊。
+        免得兩處各自 walk 一次錨點、日後長出第四個錨點時漏改其中一處。
+        arc 保證至多一邊有值，所以 ``or`` 鏈不會遮蔽任何一邊。
         """
         self.ensure_one()
-        return self.cloud_service_id or self.security_access_id
+        return (self.cloud_service_id or self.security_access_id
+                or self.smart_home_id)
 
     def _anchor_plan(self):
         """錨點訂閱的方案；沒有訂閱／沒有方案 ⇒ 空 recordset（grandfathered）。
@@ -377,7 +443,7 @@ class SecurityAccessAccessPolicy(models.Model):
                     "Email quota exceeded: plan '%s' allows %d email(s) per "
                     "policy." % (plan.name, quota))
 
-    @api.constrains('security_access_id', 'route_id', 'cloud_service_id')
+    @api.constrains('security_access_id', 'smart_home_id', *_ANCHOR_FIELDS)
     def _check_policy_quota(self):
         # P2.5: the quota is an SA-LEVEL total (plan.sa_max_access_policies is
         # a per-SA allowance, not per-route), so count every policy across all
@@ -429,8 +495,16 @@ class SecurityAccessAccessPolicy(models.Model):
             if not quota:  # 0 = unlimited, same as _check_emails_per_policy
                 continue
             anchor = pol._anchor()
-            anchor_field = ('cloud_service_id'
-                            if pol.cloud_service_id else 'security_access_id')
+            # #768：查表而非三元式，理由見 `_ANCHOR_POOL_FIELD`。查不到就 raise
+            # ——新增第四個錨點卻忘了登記時，靜默 continue 的症狀是「配額對該錨
+            # 點完全失效」，而那與「方案不限」輸出完全相同。
+            anchor_field = self._ANCHOR_POOL_FIELD.get(anchor._name)
+            if not anchor_field:
+                raise ValidationError(
+                    "Access policy %r is anchored on %s, which has no entry in "
+                    "_ANCHOR_POOL_FIELD — the plan quota cannot be scoped. "
+                    "Register the anchor model before shipping it."
+                    % (pol.name or pol.id, anchor._name))
             count = self.search_count([(anchor_field, '=', anchor.id)])
             if count > quota:
                 raise ValidationError(
@@ -467,13 +541,18 @@ class SecurityAccessAccessPolicy(models.Model):
         不會發生**：沒有例外、沒有 log，DB 有一條 policy 而 Cloudflare 上沒有
         對應的規則——與「推了而且成功」在輸出上不可區分。
 
-        回 list 而非 recordset：兩個錨點是不同 model，union 不起來。兩邊都有
+        回 list 而非 recordset：三個錨點是不同 model，union 不起來。三邊都有
         `_sync_access_to_operator()`（各自帶自己的 liveness gate），呼叫端不必
-        知道拿到的是哪一種。exclusive arc 保證每一列恰好落在其中一邊，所以不會
-        有同一次變更被兩個錨點各推一次的情形。
+        知道拿到的是哪一種。arc 保證每一列恰好落在其中一邊，所以不會有同一次
+        變更被兩個錨點各推一次的情形。
+
+        #768：迴圈跑 `_ANCHOR_FIELDS` 而不是手寫三個 `mapped()`——手寫的版本每
+        新增一個錨點就多一個「漏加就完全靜默」的位置。
         """
-        return list(self.mapped('route_id')) + list(
-            self.mapped('cloud_service_id'))
+        targets = []
+        for field in _ANCHOR_FIELDS:
+            targets += list(self.mapped(field))
+        return targets
 
     @api.model_create_multi
     def create(self, vals_list):
@@ -507,8 +586,7 @@ class SecurityAccessAccessPolicy(models.Model):
             # 10），錨點是安全（不能自帶別人的錨點）。用 default context 塞
             # route_id 的呼叫端會在下一行的 arc 檢查被判定，這裡不必重算一次。
             anchor_field = next(
-                (f for f in ('route_id', 'cloud_service_id') if vals.get(f)),
-                None)
+                (f for f in _ANCHOR_FIELDS if vals.get(f)), None)
             if not vals.get('sequence') and anchor_field:
                 last = self.search(
                     [(anchor_field, '=', vals[anchor_field])],
@@ -536,8 +614,8 @@ class SecurityAccessAccessPolicy(models.Model):
             result = super().write(vals)
             if (not self.env.context.get('sa_skip_route_sync')
                     and any(k in vals for k in (
-                        'name', 'decision', 'sequence', 'route_id',
-                        'cloud_service_id', 'rule_ids'))):
+                        'name', 'decision', 'sequence', 'rule_ids',
+                    ) + _ANCHOR_FIELDS)):
                 for anchor in self._access_sync_targets():
                     anchor._sync_access_to_operator()
         return result
@@ -556,7 +634,9 @@ class SecurityAccessAccessPolicy(models.Model):
         # 只用 id 當 key 會把 route#3 的孤兒 id 餵給 cloud_service#3。
         doomed_by_anchor = {}
         for pol in self:
-            anchor = pol.route_id or pol.cloud_service_id
+            anchor = next(
+                (pol[f] for f in _ANCHOR_FIELDS if pol[f]),
+                self.env['woow_paas_platform.security_access_route'].browse())
             if pol.cf_policy_id and anchor:
                 doomed_by_anchor.setdefault(
                     (anchor._name, anchor.id), []).append(pol.cf_policy_id)
@@ -589,10 +669,11 @@ class SecurityAccessAccessPolicy(models.Model):
         return {
             'id': self.id, 'name': self.name, 'decision': self.decision,
             'sequence': self.sequence, 'route_id': self.route_id.id,
-            # #744：兩個錨點都送。前端（T4）判「這條 policy 掛在哪」不必回頭
-            # 猜——`route_id` 在 CS 錨定時是 False，只讀它會把 CS 的 policy 讀成
-            # 「掛在 route 0」。
+            # #744／#768：三個錨點都送。前端判「這條 policy 掛在哪」不必回頭
+            # 猜——`route_id` 在 CS／SH 錨定時是 False，只讀它會把那些 policy
+            # 讀成「掛在 route 0」。
             'cloud_service_id': self.cloud_service_id.id,
+            'smart_home_route_id': self.smart_home_route_id.id,
             'include': self._rules_by_group('include'),
             'require': self._rules_by_group('require'),
             'exclude': self._rules_by_group('exclude'),

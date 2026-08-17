@@ -126,6 +126,27 @@ def make_cs_access_canonical_name(ws_hash: str, reference_id: str, name: str, en
     return make_service_subdomain(ws_hash, reference_id, name, env=env)
 
 
+def make_sm_access_canonical_name(ws_hash: str, reference_id: str, name: str, env: str = '') -> str:
+    """SmartHome 的 Cloudflare Access 命名根（#768）。
+
+    與 ``make_cs_access_canonical_name`` 逐字同構：operator 拿它當 reusable
+    policy 名的前綴（``f"{canonical}: {policy}"``），而那是整組 Access 物件裡
+    **唯一穩定帶得動 env token 的欄位**。
+
+    🔴 **不可以改成讀 stored ``smart_home.subdomain``**：那個欄位是 provision 當下
+    用 ``env=''`` 算出來存的（``models/smart_home.py::_generate_subdomain`` 明文
+    env-token-FREE，因為對外 URL 不該因環境而異），所以「拿 stored subdomain 當
+    前綴」在 prod 與本函式**逐位元組相同**、到 stg 才變成一個無法自證環境歸屬的
+    CF 物件——一個在 prod 完全看不出差別的錯誤（CS 踩過同一顆雷，見
+    ``make_cs_access_canonical_name``）。env 一律由呼叫端顯式傳入（來源＝
+    ``woow_paas_platform.deploy_env`` config_parameter），不從別的字串反推。
+
+    非 lookup key：Access 的反查全走 stored id（``existing_app_id`` /
+    ``existing_policy_ids``），所以本函式輸出改變不會讓任何刪除路徑找不到東西。
+    """
+    return make_smarthome_subdomain(ws_hash, reference_id, name, env=env)
+
+
 def make_smarthome_subdomain(ws_hash: str, reference_id: str, name: str, env: str = '') -> str:
     """Generate smart home subdomain: paas-{env}-sm-{ws_hash}-{sm_hash}."""
     return f"paas-{_env_token(env)}sm-{_require_ws_hash(ws_hash)}-{generate_resource_hash(reference_id, name)}"
@@ -179,8 +200,11 @@ def parse_paas_name(name):
       成 env='foo'，整體不 match → unknown）
     - 非 paas 名（官網 / apex / 行銷子網域）→ ``(None, None)``
 
-    ``cs`` 分支對現行三類 inventory（tunnel/access_app/access_policy）是 **DNS 類（TS-3b+）預留**
-    dead-branch —— CS 無 dedicated tunnel、access app/policy 為 SA 專屬；待 DNS 進 inventory 才命中。
+    ⚠ **本段先前寫的「``cs`` 是 DNS 類預留 dead-branch、access app/policy 為 SA 專屬」
+    已經不成立**（#745 起 CS 也會產生 Access app／reusable policy，#768 起 SM 也會）。
+    現況：三個 kind 前綴（``sa`` / ``sm`` / ``cs``）都可能對應到 inventory 裡活著的
+    access_app / access_policy；``cs`` 只在 **tunnel** 那一類仍是 dead-branch（CS 走
+    平台共用 tunnel、沒有自己的）。
     """
     m = _PAAS_NAME_RE.match(name or '')
     if not m:

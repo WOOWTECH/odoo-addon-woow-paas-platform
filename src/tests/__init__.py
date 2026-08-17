@@ -402,3 +402,13 @@ from . import test_cs_access_endpoints_745
 # 把 anchor 變成「缺席」）。RED 是 A/C 系列；D 系列是 reference_id 陷阱的陰性
 # 對照（`required=True` + uuid4 default，無腦壓 False 會炸掉所有合法 create）。
 from . import test_sa_anchor_default_carriers_753
+
+# feat: #768 SH AC —— SH route 子模型 ＋ policy 錨點從 exclusive arc（XOR-of-2）
+# 擴成「恰好一個」（三腿）。RED 的三個群集：A 系列（第三腿與 SQL CHECK 根本
+# 不存在；A6 直接查 `pg_get_constraintdef` 斷言是 `num_nonnulls(...)=1`，因為
+# `<>` 串三元是奇偶性——會接受三個都空、拒絕恰好一個）、B 系列（`_check_policy_
+# quota` 的二元三元式讓 SH 落 else 分支 ⇒ 拿 SH 的 id 比 SA 的欄位，跨 model id
+# 碰撞後的錯誤計數；B2「三個池互不相通」是唯一分得出「數對」與「數全表」的一
+# 格）、D 系列（`_anchor()` / `_access_sync_targets()` 漏第三腿的症狀分別是配額
+# 靜默失效與「Cloudflare 完全沒被推」，後者與推成功在輸出上不可區分）。
+from . import test_sh_access_model_768
