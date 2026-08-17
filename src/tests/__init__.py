@@ -395,3 +395,10 @@ from . import test_cs_access_arc_migration_744
 # 斷言 operator 真的被呼叫且 `access_app_id` 真的落地（#739 同構）。
 from . import test_cs_access_sync_745
 from . import test_cs_access_endpoints_745
+
+# fix: #753 SA／route 的 create 側錨點守衛用 `vals.pop()`，擋不掉
+# `default_<field>` context 與 `ir.default` 兩個**預設值載體**（值是在
+# `super().create()` 內的 `_add_missing_default_values` 才補回來的，pop 剛好
+# 把 anchor 變成「缺席」）。RED 是 A/C 系列；D 系列是 reference_id 陷阱的陰性
+# 對照（`required=True` + uuid4 default，無腦壓 False 會炸掉所有合法 create）。
+from . import test_sa_anchor_default_carriers_753
