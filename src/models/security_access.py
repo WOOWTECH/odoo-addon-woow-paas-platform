@@ -102,23 +102,75 @@ def _is_internal_identity_write(env):
             is _INTERNAL_IDENTITY_WRITE)
 
 
-def _strip_identity_anchors(env, vals_list, anchors):
-    """create()-side half of the guard: drop caller-supplied identity anchors.
+def _server_owned_anchor_value(model, field_name):
+    """一個身分錨點在 create 當下該落地的**伺服器端值**。
+
+    有欄位級 ``default`` 的走它（``reference_id`` 的 uuid4），其餘壓 ``False``。
+
+    刻意讀 ``field.default`` 而不是在守衛旁邊自己複製一份 uuid4：那正是
+    ``odoo/models.py::default_get`` 的**第 3 順位**，也是三個載體裡唯一呼叫端
+    碰不到的那個（第 1 是 context 的 ``default_<field>``、第 2 是 ``ir.default``
+    的列，兩者都由租戶決定——見 ``_strip_identity_anchors``）。從欄位定義推導也
+    讓「將來新增一個帶 default 的錨點」自動正確，不必在守衛旁邊維護第二張對照
+    表——#522 的成因正是逐欄位手列而漏掉 ``tunnel_id``。
+
+    ⚠ 目前所有錨點都是純量欄位（Char）。若哪天出現 x2many 錨點，這裡要補
+    ``default_get`` 尾段那套 ``Command`` 轉換。
+    """
+    field = model._fields[field_name]
+    return field.default(model) if field.default else False
+
+
+def _strip_identity_anchors(model, vals_list, anchors):
+    """create()-side half of the guard: 把身分錨點**壓成伺服器端值**，不是 pop。
 
     ``super().create()`` does not route through ``write()``, so the write guard
     alone would leave a create-time squat open — a brand-new row bound to a
     victim's tunnel / DNS record / Access app before anything is provisioned
     (action_provision's ``if self.tunnel_id:`` branch would then skip tunnel
     creation and push this tenant's routes onto it). Applies to EVERYONE
-    including superuser; the sentinel context is the only exemption. Stripping
-    rather than raising keeps ``copy()`` and ordinary data loads working — a
-    duplicate that drops the anchors is exactly what a duplicate should be.
+    including superuser; the sentinel context is the only exemption. 壓值而不是
+    raise：``copy()`` 與一般資料載入照樣要能跑，而一份不帶錨點的複本正是複本
+    該有的樣子。
+
+    🔴 **為什麼是壓值而不是 ``vals.pop(field, None)``**（#753，實測紅過）：
+
+    ``super().create()`` 內部會呼叫 ``_add_missing_default_values(vals)``，把
+    「vals 裡**缺席**」的欄位從三個載體補回來（``default_get`` 的順位）：
+
+        1. ``default_<field>`` context —— ``/web/dataset/call_kw`` 把呼叫端
+           context 整包換進 env（``odoo/api.py::call_kw``），這正是本檔
+           ``_INTERNAL_IDENTITY_WRITE`` 自述的威脅模型；
+        2. ``ir.default`` 的列 —— 租戶對它有完整 CRUD（base 的
+           ``access_ir_default_group_user`` = 1,1,1,1），``_get_model_defaults``
+           收 ``user_id = 自己`` 那些列。**這條與呼叫端 payload 無關**，走
+           ``type="json"`` 的 BFF 端點（context 來自 session）一樣生效；
+        3. 欄位自身的 ``default=`` —— 伺服器端程式碼，呼叫端碰不到。
+
+    ``pop`` 恰恰把 anchor 變成**缺席** ⇒ 前兩個（租戶可控的）載體在剝除**之後**
+    才落地。把 key 留在 vals 裡並給定伺服器端值，才是一次涵蓋所有載體的做法：
+    ``_add_missing_default_values`` 只補「不在 vals 裡」的欄位，而且結尾是
+    ``defaults.update(values)``（vals 的明確值永遠壓過 default）。
+
+    ⚠ 「先 ``_add_missing_default_values(vals)`` 解析、再從解析結果 pop」**同樣
+    是錯的**：pop 之後 key 又缺席，``super().create()`` 內部會再解析一次、再補
+    一次。解析後的 vals 適合用來**判斷**，不適合用來**剝除**。
+
+    ⚠ 壓的值取自 ``_server_owned_anchor_value`` 而不是一律 ``False``：SA 的
+    ``reference_id`` 是 ``required=True`` ＋ ``default=uuid4``，壓 False 會讓
+    required 檢查在 ``super().create()`` 內炸掉，**破壞所有合法 create**——而
+    「攻擊者的值沒落地」那幾條斷言對「create 直接失敗」同樣是綠的，所以這個炸點
+    只有陰性對照抓得到（見 ``test_sa_anchor_default_carriers_753.py`` 的 D 系列）。
+
+    同型缺陷本 repo 已修過兩次：``smart_home._strip_identity_anchors``（PR #738
+    覆核 round1）與 ``cloud_service._strip_cs_access_identity_anchors``（#705 F1
+    ／PR #752）。兩者的錨點都沒有欄位級 default，所以那邊壓 ``False`` 就夠。
     """
-    if _is_internal_identity_write(env):
+    if _is_internal_identity_write(model.env):
         return
     for vals in vals_list:
         for field in anchors:
-            vals.pop(field, None)
+            vals[field] = _server_owned_anchor_value(model, field)
 
 
 def _reject_identity_anchor_writes(env, vals, anchors):
@@ -344,7 +396,11 @@ class SecurityAccess(models.Model):
         # future anchor is covered by both the moment it is listed.
         # canonical_name is computed once below; reference_id falls back to its
         # uuid4 default. Closes the create+write immutable chain.
-        _strip_identity_anchors(self.env, vals_list, _IDENTITY_ANCHOR_FIELDS)
+        #
+        # #753：傳的是 `self` 而不是 `self.env`——守衛要讀 `_fields` 才知道哪個
+        # 錨點有伺服器端 default（`reference_id` 的 uuid4）該壓進去，而不是一律
+        # 壓 False 把 required 炸掉。
+        _strip_identity_anchors(self, vals_list, _IDENTITY_ANCHOR_FIELDS)
         records = super().create(vals_list)
         for record in records:
             if not record.canonical_name:
@@ -1120,8 +1176,10 @@ class SecurityAccessRoute(models.Model):
         # victim's Cloudflare objects. subdomain_prefix is deliberately NOT in
         # this list — it is the one identity field the user legitimately
         # chooses here (write() below makes it immutable afterwards).
+        # #753：route 的兩個錨點都沒有欄位級 default，所以這裡壓出來的一律是
+        # False——但仍走同一支守衛（同一份宣告式清單），不另開一條路。
         _strip_identity_anchors(
-            self.env, vals_list, _ROUTE_IDENTITY_ANCHOR_FIELDS)
+            self, vals_list, _ROUTE_IDENTITY_ANCHOR_FIELDS)
         # Atomicity scope: the savepoint makes the Odoo side atomic — a
         # create+sync where sync raises rolls the DB row back so there is no
         # "ghost route" committed in the DB but absent in CF that a later sync
