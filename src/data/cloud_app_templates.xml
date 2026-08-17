@@ -752,7 +752,7 @@
                  kubernetes.io/arch=amd64；image 僅 amd64，排到 arm64 會 exec format
                  error CrashLoop，且 helm deep-merge 用 {} 蓋不掉、清除得寫 null）、
                  persistence.storageClass（平台 _inject_storage_class 注入）。 -->
-            <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/woowtech-ha","tag":"20260722.2329@sha256:73a9faf98d3037bf48560e670f811141bdc1125cb2ea63aa05e4efe21e7cb9c4"},"persistence":{"mountPath":"/config","size":"5Gi"},"service":{"port":8123,"targetPort":8123},"ingress":{"enabled":false,"host":"","className":""},"haProxy":{"seedConfiguration":true,"useXForwardedFor":true,"trustedProxies":["10.42.0.0/16"]},"resources":{"requests":{"cpu":"250m","memory":"512Mi"},"limits":{"cpu":"1","memory":"1Gi"}}}</field>
+            <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/woowtech-ha","tag":"20260817.0537@sha256:163cd60c25119d8aa9d945784a59d161f1ebb5f3c5fd8f36bb6816994bc9b55f"},"persistence":{"mountPath":"/config","size":"5Gi"},"service":{"port":8123,"targetPort":8123},"ingress":{"enabled":false,"host":"","className":""},"haProxy":{"seedConfiguration":true,"useXForwardedFor":true,"trustedProxies":["10.42.0.0/16"]},"resources":{"requests":{"cpu":"250m","memory":"512Mi"},"limits":{"cpu":"1","memory":"1Gi"}}}</field>
             <field name="default_port">8123</field>
             <field name="ingress_enabled" eval="True"/>
             <field name="min_vcpu">1</field>
