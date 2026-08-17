@@ -433,3 +433,16 @@ from . import test_sh_access_sync_768
 # 差異：驗的是 `pg_get_constraintdef` 的**定義**而不是 conname，因為本次換的正是
 # **同名不同定義**的 constraint，只查名字會讓舊的二元定義原封不動通過。
 from . import test_sh_access_arc_migration_768
+# fix: #768 驗收缺口（PR #771 退回）—— `smart_home_route` 身分錨點對「預設值載體」
+# 的攻防，等價於 `test_sa_anchor_default_carriers_753.py` 之於 SA route。守衛在
+# #771 就寫對了（壓伺服器端值而非 `vals.pop()`），但**沒有任何測試證明它擋得住**
+# ——那是 #753 那條教訓的更根本版（那次是「守衛看起來有測試、實際上從未被執行」，
+# 這次是測試根本沒被寫）。錨點清單從 model 的宣告式常數導出（新錨點自動涵蓋），
+# 配 `_ANCHOR_FLOOR` anti-vacuity 下界：清單被清空或打錯字時，本檔每個迴圈都會變
+# 成 no-op 而全綠。
+#
+# ⚠ 可達性與 SA 那邊不同，不要照抄結論：租戶對本 model 的 ACL 是 `create=0`，
+# 所以「租戶自己 RPC create 一條 route 並夾帶錨點」打不進來（F1 釘住這件事）；
+# **真正可達的是租戶 context 流進平台碼**（`_ensure_primary_route()` 走 `.sudo()`，
+# 而 sudo 不洗 context），B1 打的就是那條生產路徑。
+from . import test_sh_access_identity_768
