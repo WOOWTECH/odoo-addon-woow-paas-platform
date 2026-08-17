@@ -148,7 +148,8 @@ class TestHermesAgentTemplateSeed(TransactionCase):
                 self.env.ref('woow_paas_platform.%s' % xmlid), plans, xmlid)
         base = plans.filtered(lambda p: p.ac_max_access_seats == 0)
         self.assertEqual(
-            len(base), 2, '恰兩筆 base plan（月／年）；v1 不做席數加購變體')
+            len(base), 2,
+            '恰兩筆 base plan（月／年）；席數變體另計，見 test_access_variants_attached')
 
     def test_max_per_partner_unlimited(self):
         """每帳號不限台數：0＝不限，平台層不設本 template 的每帳號實例上限。
@@ -847,18 +848,46 @@ class TestHermesAgentPlansSeed(TransactionCase):
             self.assertEqual(plan.cs_ram_gb, 0.0, xmlid)
             self.assertEqual(plan.cs_storage_gb, 0, xmlid)
 
-    def test_no_access_variants_in_v1(self):
-        """v1 不做席數加購變體——template 上不得掛任何變體 plan。
+    def test_access_variants_attached(self):
+        """#765：固定 1 席的加購變體掛上本 template 且 hidden。
 
-        要加變體請回 generator（scripts/seed/generate_plan_variants.py）＋變體
-        manifest 走一輪，不要手寫 (4,) append 進 links_variants.xml。
+        取代原本的 test_no_access_variants_in_v1——#494 期記的「v1 不做加購變體」
+        已被 Eugene 2026-08-17 拍板取代（比照同為完整應用的 Open Design，固定 1 席）。
+        全量斷言在 test_plan_variants_generated；此處抽驗本家族的席數與價格。
+
+        要改席數／價格請回 generator（scripts/seed/generate_plan_variants.py）＋
+        變體 manifest 走一輪，不要手寫 (4,) append 進 links_variants.xml。
+        """
+        tpl = self.env.ref('woow_paas_platform.cloud_app_hermes_agent')
+        plans = tpl.sudo().subscription_plan_ids
+        variants = plans.filtered(lambda p: p.ac_max_access_seats > 0)
+        self.assertEqual(
+            len(variants), 2,
+            '固定 1 席 × 月／年兩週期＝恰兩筆，實際：%s' % variants.mapped('name'))
+        for xmlid, price in (('plan_hermes_agent_ac1_monthly', 5100),
+                             ('plan_hermes_agent_ac1_yearly', 40800)):
+            v = self.env.ref('woow_paas_platform.%s' % xmlid)
+            self.assertIn(v, plans, xmlid)
+            self.assertEqual(v.sh_plan_price, price, xmlid)
+            self.assertEqual(v.ac_max_access_seats, 1, xmlid)
+            self.assertTrue(v.storefront_hidden, xmlid)
+
+    def test_variant_plans_do_not_override_cs_spec(self):
+        """🔴 #456 守線延伸到變體：加購變體的 cs_* 同樣必須全為 0。
+
+        base 那條（test_plans_do_not_override_cs_spec）只掃兩筆 base plan，
+        #765 之後同一個 template 上多了席數變體——變體若被填 cs_*，
+        `_allocated_vals_from` 一樣會蓋掉 template 的 min_*（quota 峰值模型），
+        而選了加購席的租戶才會踩到，base 側恆綠。
         """
         tpl = self.env.ref('woow_paas_platform.cloud_app_hermes_agent')
         variants = tpl.sudo().subscription_plan_ids.filtered(
             lambda p: p.ac_max_access_seats > 0)
-        self.assertFalse(
-            variants,
-            'v1 不做加購變體，實際掛上：%s' % variants.mapped('name'))
+        self.assertTrue(variants, '前置：本 template 應有席數變體')
+        for plan in variants:
+            self.assertFalse(plan.cs_vcpu, plan.name)
+            self.assertFalse(plan.cs_ram_gb, plan.name)
+            self.assertFalse(plan.cs_storage_gb, plan.name)
 
     def test_distinct_from_mcp_hermes_plans(self):
         """與既有 Hermes MCP Server 三級距 plan 是不同商品，勿互掛。
@@ -910,18 +939,30 @@ class TestHermesAgentStorefrontReachable(HttpCase):
         self.assertTrue(r.get('success'), '規格頁必須讀得到（回 %r）' % r)
 
     def test_plans_endpoint_returns_both_cycles(self):
-        """月／年兩張卡，價格與 trial 是拍板值（前台真正拿到的數字）。"""
+        """月／年兩張卡，價格與 trial 是拍板值（前台真正拿到的數字）。
+
+        #765 起每張卡另帶固定 1 席的加購變體——這是 marketplace 部署頁的席數區塊
+        （`PlanSelector.xml` 的 `t-if="seatBase"`）唯一的資料來源，**變體只在這個
+        wire payload 出現、不會自成頂層 plan**，所以這裡是它唯一的 wire 級守線。
+        原本此處斷言 variants 為空（#494 期的「v1 不做加購變體」）——刻意不把那行
+        原樣抄進註解：可照抄的錯誤範本比散文警告更容易被人撿去用。
+        """
         r = self._result('/api/cloud-services/templates/%s/plans' % self.tpl.id)
         self.assertTrue(r.get('success'), r)
         by_unit = {p['unit']: p for p in r['data']}
         self.assertEqual(set(by_unit), {'month', 'year'}, r['data'])
         self.assertEqual(by_unit['month']['price'], 4500)
         self.assertEqual(by_unit['year']['price'], 36000)
+        expected_variant_price = {'month': 5100, 'year': 40800}
         for unit, plan in by_unit.items():
             self.assertTrue(plan['has_trial'], unit)
             self.assertEqual(
                 (plan['trial_duration'], plan['trial_unit']), (7, 'day'), unit)
-            self.assertFalse(plan['variants'], 'v1 不做席數加購變體')
+            self.assertEqual(
+                [v['seats'] for v in plan['variants']], [1],
+                '#765：固定 1 席，%s 卡實得 %s' % (unit, plan['variants']))
+            self.assertEqual(
+                plan['variants'][0]['price'], expected_variant_price[unit], unit)
 
     def test_displayed_specs_fall_back_to_template_minimums(self):
         """前台卡片的規格 label ＝ template min_*（plan cs_* 全 0 的可見結果）。

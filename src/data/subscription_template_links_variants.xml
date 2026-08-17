@@ -139,6 +139,64 @@
                           (4, ref('plan_opendesign_ac1_yearly'))]"/>
         </record>
 
+        <record id="cloud_app_hermes_agent" model="woow_paas_platform.cloud_app_template">
+            <field name="subscription_plan_ids"
+                   eval="[(4, ref('plan_hermes_agent_ac1_monthly')),
+                          (4, ref('plan_hermes_agent_ac1_yearly'))]"/>
+        </record>
+
+        <record id="cloud_app_ha_full" model="woow_paas_platform.cloud_app_template">
+            <field name="subscription_plan_ids"
+                   eval="[(4, ref('plan_ha_full_ac1_monthly')),
+                          (4, ref('plan_ha_full_ac1_yearly')),
+                          (4, ref('plan_ha_full_ac2_monthly')),
+                          (4, ref('plan_ha_full_ac2_yearly')),
+                          (4, ref('plan_ha_full_ac3_monthly')),
+                          (4, ref('plan_ha_full_ac3_yearly'))]"/>
+        </record>
+
+        <record id="cloud_app_mcp_hermes" model="woow_paas_platform.cloud_app_template">
+            <field name="subscription_plan_ids"
+                   eval="[(4, ref('plan_mcp_hermes_ac1_monthly')),
+                          (4, ref('plan_mcp_hermes_ac1_yearly')),
+                          (4, ref('plan_mcp_hermes_ac2_monthly')),
+                          (4, ref('plan_mcp_hermes_ac2_yearly')),
+                          (4, ref('plan_mcp_hermes_ac3_monthly')),
+                          (4, ref('plan_mcp_hermes_ac3_yearly')),
+                          (4, ref('plan_mcp_hermes_t2_ac1_monthly')),
+                          (4, ref('plan_mcp_hermes_t2_ac1_yearly')),
+                          (4, ref('plan_mcp_hermes_t2_ac2_monthly')),
+                          (4, ref('plan_mcp_hermes_t2_ac2_yearly')),
+                          (4, ref('plan_mcp_hermes_t2_ac3_monthly')),
+                          (4, ref('plan_mcp_hermes_t2_ac3_yearly')),
+                          (4, ref('plan_mcp_hermes_t2_ac4_monthly')),
+                          (4, ref('plan_mcp_hermes_t2_ac4_yearly')),
+                          (4, ref('plan_mcp_hermes_t2_ac5_monthly')),
+                          (4, ref('plan_mcp_hermes_t2_ac5_yearly')),
+                          (4, ref('plan_mcp_hermes_t2_ac6_monthly')),
+                          (4, ref('plan_mcp_hermes_t2_ac6_yearly')),
+                          (4, ref('plan_mcp_hermes_t3_ac1_monthly')),
+                          (4, ref('plan_mcp_hermes_t3_ac1_yearly')),
+                          (4, ref('plan_mcp_hermes_t3_ac2_monthly')),
+                          (4, ref('plan_mcp_hermes_t3_ac2_yearly')),
+                          (4, ref('plan_mcp_hermes_t3_ac3_monthly')),
+                          (4, ref('plan_mcp_hermes_t3_ac3_yearly')),
+                          (4, ref('plan_mcp_hermes_t3_ac4_monthly')),
+                          (4, ref('plan_mcp_hermes_t3_ac4_yearly')),
+                          (4, ref('plan_mcp_hermes_t3_ac5_monthly')),
+                          (4, ref('plan_mcp_hermes_t3_ac5_yearly')),
+                          (4, ref('plan_mcp_hermes_t3_ac6_monthly')),
+                          (4, ref('plan_mcp_hermes_t3_ac6_yearly')),
+                          (4, ref('plan_mcp_hermes_t3_ac7_monthly')),
+                          (4, ref('plan_mcp_hermes_t3_ac7_yearly')),
+                          (4, ref('plan_mcp_hermes_t3_ac8_monthly')),
+                          (4, ref('plan_mcp_hermes_t3_ac8_yearly')),
+                          (4, ref('plan_mcp_hermes_t3_ac9_monthly')),
+                          (4, ref('plan_mcp_hermes_t3_ac9_yearly')),
+                          (4, ref('plan_mcp_hermes_t3_ac10_monthly')),
+                          (4, ref('plan_mcp_hermes_t3_ac10_yearly'))]"/>
+        </record>
+
         <record id="smart_home_home_assistant" model="woow_paas_platform.smart_home_template">
             <field name="subscription_plan_ids"
                    eval="[(4, ref('plan_smarthome_ac1_monthly')),

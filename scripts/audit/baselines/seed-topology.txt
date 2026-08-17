@@ -3,7 +3,7 @@
 # 這裡的數字變動時，check_seed_topology 會列出所有該一起檢視的位置。調整前必讀 docs/decisions/patterns/seed-topology-invariants.md
 57	base_plans
 54	linked_bases
-273	subscription_products
+319	subscription_products
 27	tiers
-216	variant_plans
+262	variant_plans
 54	visible_linked_bases

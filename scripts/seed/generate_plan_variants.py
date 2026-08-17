@@ -1,5 +1,8 @@
 # -*- coding: utf-8 -*-
-"""222 manifest → 平台 seed 生成器（Wave B；#375 三型 MCP；#380 Open Design 完整應用）。
+"""雲端連線服務 manifest → 平台 seed 生成器（Wave B；#375 三型 MCP；#380 Open Design
+完整應用；#765 Hermes Agent／HA 完整版／Hermes MCP Server 席數變體）。
+
+（原本這行寫「222 manifest」——manifest 列數會長，不寫進 docstring。）
 
 單一事實源＝docs/plans/2026-Q3/2026-07-19-cloud-services-220-manifest.md。
 改價＝改 manifest 後重跑本腳本；輸出冪等（同輸入 byte-identical）。
@@ -20,8 +23,10 @@ class Item:
 
 @dataclass(frozen=True)
 class Variant:
-    family: str      # odoo | n8n | sa | sh | mcp
+    family: str      # odoo | n8n | sa | sh | mcp | opendesign
+                     # | hermes_agent | ha_full | mcp_hermes
     tier_key: str    # odoo: t1/t2/t3；n8n: t1..t4；sa: r1/r3/r6/r10；sh: p1/p2；mcp: odoo/manage/n8n
+                     # mcp_hermes: t1/t2/t3；hermes_agent／ha_full: app（單級距）
     n: int           # AC 席數（base 列＝0）
     cycle: str       # month | year
     price: int
@@ -45,6 +50,24 @@ _FAMILY_RULES = [
     # #380 Open Design 完整應用（daemon+console）：獨立 family，prefix 與「Open Design
     # MCP」不互為前綴（第 12 字元起「雲端」vs「MCP」）→ startswith 不誤配。
     ('Open Design 雲端訂閱服務', 'opendesign', {'': 'app'}),
+    # #765 三個新開加購的家族。各自獨立 family（不併進 'mcp'）的理由：
+    #   - hermes_agent／ha_full 是完整應用、單級距，與 MCP 家族無共用屬性。
+    #   - mcp_hermes 的年繳基底是月×10（家族異例，其餘家族月×8）——併進 'mcp'
+    #     會讓「年繳倍率」這條機械公式在同一 family 內出現兩個值，守線只能改寫成
+    #     per-tier 例外表；獨立 family 讓例外留在 family 這一格、可被一眼看見。
+    # ⚠ 'Hermes Agent 雲端訂閱服務' 與 'Hermes MCP Server' 不互為前綴（第 8 字元
+    #   起「Agent」vs「MCP」）→ startswith 不誤配；兩者是不同商品，勿互掛
+    #   （守線＝src/tests/test_hermes_agent_seed_424.py 的
+    #   test_distinct_from_mcp_hermes_plans）。
+    ('Hermes Agent 雲端訂閱服務', 'hermes_agent', {'': 'app'}),
+    ('Home Assistant 完整版 雲端訂閱服務', 'ha_full', {'': 'app'}),
+    # ⚠ prefix 的**結尾空格是刻意的**：classify 用 name[len(prefix):] 切 rest，
+    #   而本家族的商品名在「Server」與「T1」之間有空格（既有 base plan 名稱如此），
+    #   prefix 少了它 rest 就變成 ' T1（…）…'、marker startswith 全部落空。
+    #   刪掉它不會靜默錯——classify 會在產出前 raise「無法判 tier」。
+    ('Hermes MCP Server ', 'mcp_hermes', {'T1（1–3 人）': 't1',
+                                          'T2（3–6 人）': 't2',
+                                          'T3（6–10 人）': 't3'}),
 ]
 
 _VAR = re.compile(r"\+(\d+)access(月|年)繳$")
@@ -114,10 +137,25 @@ TIER_BASE_XMLID = {
     ('mcp', 'opendesign'): 'plan_mcp_opendesign',
     # #380 Open Design 完整應用（≠ mcp opendesign；base xmlid plan_opendesign）
     ('opendesign', 'app'): 'plan_opendesign',
+    # #765：Hermes Agent 完整應用 ≠ Hermes MCP Server（plan_hermes_agent_* vs
+    # plan_mcp_hermes_*），兩組 xmlid 前綴不互為前綴，變體不會跨掛。
+    ('hermes_agent', 'app'): 'plan_hermes_agent',
+    ('ha_full', 'app'): 'plan_ha_full',
+    ('mcp_hermes', 't1'): 'plan_mcp_hermes',
+    ('mcp_hermes', 't2'): 'plan_mcp_hermes_t2',
+    ('mcp_hermes', 't3'): 'plan_mcp_hermes_t3',
 }
 
-# (family, tier_key) → CS 規格（odoo/n8n）；＝同 tier base plan 的 cs_* 值
+# (family, tier_key) → CS 規格（odoo/n8n/mcp_hermes）；＝同 tier base plan 的 cs_* 值
 # （與 PR-B2 後 seed 同值——n8n t4 為 t3 外推一級）
+#
+# ⚠ 沒列進本表的 family 產出的變體就**不帶 cs_***，這是刻意的：hermes_agent／
+# ha_full／opendesign 的 base plan 也刻意不設 cs_*（那三欄非空會讓
+# `_allocated_vals_from` 改吃 plan 值、蓋掉 template 的 min_*＝quota 峰值模型，
+# 症狀是 pod 卡 exceeded quota 而 UI 照顯 Running，見 #456）。變體必須與同 tier
+# base 一致，故「base 沒設 → 變體也不能設」。反之 mcp_hermes 的 base 有 cs_*
+# （#431 三階規格），變體漏設會讓三階全部 fallback 到同一組 template.min_*
+# ——那正是 #431 要解的病灶原地復發。
 CS_SPECS = {
     ('odoo', 't1'): dict(cs_vcpu=2, cs_ram_gb=2.0, cs_storage_gb=20, cs_odoo_workers=2),
     ('odoo', 't2'): dict(cs_vcpu=2, cs_ram_gb=4.0, cs_storage_gb=30, cs_odoo_workers=3),
@@ -126,6 +164,11 @@ CS_SPECS = {
     ('n8n', 't2'): dict(cs_vcpu=1, cs_ram_gb=2.0, cs_storage_gb=20, cs_odoo_workers=0),
     ('n8n', 't3'): dict(cs_vcpu=2, cs_ram_gb=2.0, cs_storage_gb=30, cs_odoo_workers=0),
     ('n8n', 't4'): dict(cs_vcpu=2, cs_ram_gb=4.0, cs_storage_gb=40, cs_odoo_workers=0),
+    # #765：mcp_hermes 三階＝ #431 拍板的 base cs_*（同價位對齊 n8n；
+    # cs_odoo_workers 一律 0，非 Odoo 服務）
+    ('mcp_hermes', 't1'): dict(cs_vcpu=1, cs_ram_gb=2.0, cs_storage_gb=20, cs_odoo_workers=0),
+    ('mcp_hermes', 't2'): dict(cs_vcpu=2, cs_ram_gb=2.0, cs_storage_gb=30, cs_odoo_workers=0),
+    ('mcp_hermes', 't3'): dict(cs_vcpu=2, cs_ram_gb=4.0, cs_storage_gb=40, cs_odoo_workers=0),
 }
 
 # (family, tier_key) → SA quota；＝同級 SA base 的 sa_* 值
@@ -148,15 +191,23 @@ SA_QUOTA = {
 FAMILY_SERVICE_TYPE = {
     'odoo': 'cloud_service', 'n8n': 'cloud_service', 'mcp': 'cloud_service',
     'opendesign': 'cloud_service',
+    'hermes_agent': 'cloud_service', 'ha_full': 'cloud_service',
+    'mcp_hermes': 'cloud_service',
     'sa': 'security_access', 'sh': 'smart_home',
 }
 
 # M2M template 落地順序（links 檔內 record 順序；template 內變體照 manifest 序）
+# ⚠ 新增家族時**必須**同步在此登記：emit_links_xml 只走本清單，漏登記的 template
+# 會讓該家族的變體 plan 建出來卻沒有任何 (4,) append——seed 載入不報錯、
+# repo-lint 的 variant_plans 計數照樣長，只有前台的席數區塊靜默不出現。
+# `_assert_templates_registered` 把這個靜默丟棄轉成 ValueError（產出前就炸）。
 _TEMPLATE_ORDER = [
     'cloud_app_odoo', 'cloud_app_n8n', 'cloud_app_mcp_odoo',
     'cloud_app_mcp_odoo_manage', 'cloud_app_mcp_n8n',
     'cloud_app_mcp_k8s', 'cloud_app_mcp_vk', 'cloud_app_mcp_opendesign',
     'cloud_app_opendesign',
+    # #765
+    'cloud_app_hermes_agent', 'cloud_app_ha_full', 'cloud_app_mcp_hermes',
     'smart_home_home_assistant', 'security_access_default',
 ]
 
@@ -189,7 +240,11 @@ def _template_xmlid(v):
     return {'odoo': 'cloud_app_odoo', 'n8n': 'cloud_app_n8n',
             'sa': 'security_access_default',
             'sh': 'smart_home_home_assistant',
-            'opendesign': 'cloud_app_opendesign'}[v.family]
+            'opendesign': 'cloud_app_opendesign',
+            # #765：mcp_hermes 三階同掛一筆 template（tier 差異在 plan 層）
+            'hermes_agent': 'cloud_app_hermes_agent',
+            'ha_full': 'cloud_app_ha_full',
+            'mcp_hermes': 'cloud_app_mcp_hermes'}[v.family]
 
 
 def _template_model(v):
@@ -270,7 +325,10 @@ def emit_variants_xml(variants):
         '<?xml version="1.0" encoding="UTF-8"?>',
         _GEN_HEADER_XML,
         '<odoo>',
-        '    <!-- 216 個 AC 席數變體 plan/product。noupdate=1：record 欄位不被',
+        # 計數綁 len(variants)（原為寫死的「216 個」——那正是 #433 那類會腐化的
+        # 字面量，且它住在 generator 裡，撞到時重跑 generator 是 no-op）。
+        '    <!-- %d 個 AC 席數變體 plan/product。noupdate=1：record 欄位不被'
+        % len(variants),
         '         升級覆寫（改值＝改 manifest／對映表後重跑 generator）。全數',
         '         storefront_hidden=True——Wave C picker 落地前不上前台。 -->',
         '    <data noupdate="1">',
@@ -287,11 +345,26 @@ def emit_variants_xml(variants):
     return '\n'.join(parts) + '\n'
 
 
+def _assert_templates_registered(groups):
+    """有變體卻沒登記在 _TEMPLATE_ORDER 的 template → 硬失敗（禁靜默丟棄）。
+
+    emit_links_xml 以 _TEMPLATE_ORDER 決定輸出順序並跳過不在清單內的 key，
+    所以漏登記的結果不是「順序怪」而是「整個家族的 (4,) append 消失」，而
+    plan/product 側照樣產出＝seed 載入全綠、拓撲計數照長、只有前台不顯示。
+    """
+    missing = [tpl for tpl in groups if tpl not in _TEMPLATE_ORDER]
+    if missing:
+        raise ValueError(
+            '這些 template 有變體但沒登記在 _TEMPLATE_ORDER，links 會靜默漏掉：%s'
+            % sorted(missing))
+
+
 def emit_links_xml(variants):
     groups = {}
     for v in variants:
         tpl = _template_xmlid(v)
         groups.setdefault(tpl, (_template_model(v), []))[1].append(_plan_xmlid(v))
+    _assert_templates_registered(groups)
     parts = [
         '<?xml version="1.0" encoding="UTF-8"?>',
         _GEN_HEADER_XML,
