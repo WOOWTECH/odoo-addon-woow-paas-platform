@@ -708,6 +708,29 @@ class SmartHome(models.Model):
                     "Access app is still live in Cloudflare."
                     % ', '.join(str(f) for f in failed)
                 )
+            # 🔴 route（連帶它底下的 policy）必須在 `super().unlink()` **之前**
+            # 顯式刪掉，不能交給 DB 的 `ON DELETE CASCADE`。實測（本機 paas-odoo
+            # image，`test_D2`）：
+            #
+            #     DELETE FROM woow_paas_platform_smart_home WHERE id IN (297)
+            #     → ForeignKeyViolation: insert or update on table
+            #       "…_security_access_access_policy" violates foreign key
+            #       constraint "…_smart_home_route_id_fkey"
+            #       DETAIL: Key (smart_home_route_id)=(322) is not present…
+            #
+            # 成因是同一次 cascade 裡有**兩條方向不同的邊**：policy 的
+            # `smart_home_id` 是 stored related M2O，Odoo 給它的是預設的
+            # `ondelete='set null'` ⇒ 刪 SH 時 PG 要對 policy 列發一次 UPDATE，
+            # 而那一刻 route 列已經被另一條 cascade 帶走了。SA 在
+            # `SecurityAccess.unlink` 顯式 `self.route_ids.unlink()` 就是為了同
+            # 一件事（那邊還多一個理由：child 的 Python unlink 在 DB cascade 下
+            # 根本不會被呼叫）。
+            #
+            # 這一步不會重複打 operator：上面的 `_teardown_routes_access()` 成功
+            # 後已經把 `access_app_id` 與每條 policy 的 `cf_policy_id` 清空，
+            # route 的 `_capture_access_teardown()` 因此回 None。
+            record.route_ids.with_context(
+                sm_route_cascade_unlink=True).unlink()
             if record.tunnel_id:
                 record._cleanup_tunnel()
             if record.tunnel_id:

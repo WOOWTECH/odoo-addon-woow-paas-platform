@@ -856,7 +856,11 @@ class SmartHomeController(Controller):
         """Provision a smart home tunnel."""
         try:
             smarthome.action_provision()
-            return {"success": True, "data": smarthome.to_dict()}
+            # #768：與 detail 端點同一個形狀。provision 成功當下才剛建出 primary
+            # route，前端要拿它把 Access 分頁畫出來；回 detail 以外的形狀會讓
+            # 呼叫端在「沒有 routes」與「routes 是空的」之間分不出來。
+            return {"success": True,
+                    "data": smarthome.to_dict(include_details=True)}
         except Exception as e:
             _logger.error("Failed to provision smart home: %s", e)
             return {"success": False, "error": str(e)}
@@ -865,7 +869,10 @@ class SmartHomeController(Controller):
         """Refresh tunnel status."""
         try:
             smarthome.action_refresh_status()
-            return {"success": True, "data": smarthome.to_dict()}
+            # #768：同 provision——refresh 是詳情頁按下去的，回的必須是 detail 形狀，
+            # 否則按一次 Refresh 就會把前端手上的 routes 洗掉。
+            return {"success": True,
+                    "data": smarthome.to_dict(include_details=True)}
         except Exception as e:
             _logger.error("Failed to refresh smart home status: %s", e)
             return {"success": False, "error": str(e)}

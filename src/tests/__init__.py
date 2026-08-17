@@ -412,3 +412,24 @@ from . import test_sa_anchor_default_carriers_753
 # 格）、D 系列（`_anchor()` / `_access_sync_targets()` 漏第三腿的症狀分別是配額
 # 靜默失效與「Cloudflare 完全沒被推」，後者與推成功在輸出上不可區分）。
 from . import test_sh_access_model_768
+
+# feat: #768 SH AC —— ir.rule 第三腿的授權矩陣（HttpCase，只掛 base.group_user 的
+# 帳號、全走 call_kw）。漏改 4 個 domain 任一條的方向是 **fail-closed**：租戶連自己
+# 那條 selector rule 都建不出來，而錯誤訊息指向**子表**，沒人會聯想到 parent 換了
+# 錨點。F 系列（SA route 錨定與 CS 錨定的回歸對照）不可刪——沒有它，第三腿寫壞了
+# 也可能全綠。
+from . import test_sh_access_acl_768
+# feat: #768 SH AC —— 兩支新端點的授權與白名單（HttpCase，真 HTTP）。J 系列是
+# G12 形狀：**arc 是 arity 檢查不是 ownership 檢查**，一條只帶別人 route_id 的
+# policy 完全通得過 arc，controller 白名單是唯一擋住它的地方。K1（quota 0 =
+# unlimited）沒有 K2 當陽性對照的話，整段 quota 刪掉照樣綠。
+from . import test_sh_access_endpoints_768
+# feat: #768 SH AC —— operator sync payload／liveness gate／teardown／reconciler
+# 左集。B4 的 state 迴圈留了「這個結果不該出現」那一格；D2 用 mock_calls 的索引比
+# 大小驗「Access 先於 tunnel」而不是只驗兩者都被呼叫；F 系列漏掉的話每一個**活著
+# 的** SH Access app 都會被判成孤兒候選。
+from . import test_sh_access_sync_768
+# feat: #768 SH AC —— migration 18.0.1.0.150。M2 是本檔與 #744 那支唯一的實質
+# 差異：驗的是 `pg_get_constraintdef` 的**定義**而不是 conname，因為本次換的正是
+# **同名不同定義**的 constraint，只查名字會讓舊的二元定義原封不動通過。
+from . import test_sh_access_arc_migration_768

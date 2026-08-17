@@ -226,6 +226,13 @@ def migrate(cr, version):
     if not version:
         return
 
+    # pre-migrate 在 cursor 上設了這支旗標，讓新增的 stored related 對全表重算時
+    # 不去重跑既有列的配額檢查（理由見 pre-migrate.py）。載入已經結束，這裡清掉
+    # ——不清的話同一個 transaction 之後的任何寫入都會少一層守衛。
+    if getattr(cr, 'sa_skip_policy_quota', False):
+        cr.sa_skip_policy_quota = False
+        _logger.info("[768] 已清除 sa_skip_policy_quota")
+
     problems = []
     _migrate_arc(cr, problems)
     if not problems:
