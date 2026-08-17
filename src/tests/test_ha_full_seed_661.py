@@ -364,16 +364,49 @@ class TestHaFullPlansSeed(TransactionCase):
             self.assertFalse(product.taxes_id, '訂閱 product 應免稅（#366）')
 
     def test_template_plan_links(self):
-        """template ↔ 兩 base plan 的 M2M 掛上了（links.xml noupdate=0 全量 reset）。"""
+        """template ↔ 兩 base plan 的 M2M 掛上了（links.xml noupdate=0 全量 reset）。
+
+        ⚠ 比對的是**過濾掉席數變體後**的集合：#765 起 generator 會另外 (4,) append
+        1–3 席的加購變體到同一個 M2M（那條由 test_access_variants_attached 與
+        test_plan_variants_generated 守）。直接對整個 subscription_plan_ids 做
+        assertEqual 會把「加購變體上架」誤判成 base 掛錯。
+        """
         tpl = self._tpl()
         expected = (
             self.env.ref('woow_paas_platform.plan_ha_full_monthly')
             | self.env.ref('woow_paas_platform.plan_ha_full_yearly')
         )
+        base = tpl.subscription_plan_ids.filtered(
+            lambda p: p.ac_max_access_seats == 0)
         self.assertEqual(
-            tpl.subscription_plan_ids, expected,
+            base, expected,
             'ha-full 應恰掛兩個 base plan（月／年），實得 %s'
-            % tpl.subscription_plan_ids.mapped('name'))
+            % base.mapped('name'))
+
+    def test_access_variants_attached(self):
+        """#765：1–3 席的加購變體掛上本 template 且 hidden。
+
+        原本此處記「v1 不做加購變體」，已被 Eugene 2026-08-17 拍板取代。
+        全量斷言在 test_plan_variants_generated；此處抽驗本家族的席數與價格。
+        """
+        tpl = self._tpl()
+        plans = tpl.sudo().subscription_plan_ids
+        variants = plans.filtered(lambda p: p.ac_max_access_seats > 0)
+        self.assertEqual(
+            sorted(variants.mapped('ac_max_access_seats')), [1, 1, 2, 2, 3, 3],
+            '1–3 席 × 月／年兩週期，實際：%s' % variants.mapped('name'))
+        expected = {
+            'plan_ha_full_ac1_monthly': (3600, 1),
+            'plan_ha_full_ac1_yearly': (28800, 1),
+            'plan_ha_full_ac3_monthly': (4800, 3),
+            'plan_ha_full_ac3_yearly': (38400, 3),
+        }
+        for xmlid, (price, seats) in expected.items():
+            v = self.env.ref('woow_paas_platform.%s' % xmlid)
+            self.assertIn(v, plans, xmlid)
+            self.assertEqual(v.sh_plan_price, price, xmlid)
+            self.assertEqual(v.ac_max_access_seats, seats, xmlid)
+            self.assertTrue(v.storefront_hidden, xmlid)
 
     def test_plans_do_not_override_cs_spec(self):
         """plan 刻意**不設** cs_vcpu／cs_ram_gb／cs_storage_gb。
@@ -381,12 +414,16 @@ class TestHaFullPlansSeed(TransactionCase):
         設了會讓 ``_allocated_vals_from`` 改吃 plan 值、蓋掉 template 的 min_*，
         而那三個是經 chart「PLATFORM QUOTA LOCKSTEP」推導的 ns quota 用量——蓋掉會讓
         pod 撞 ``exceeded quota``，唯一可見症狀是「服務永遠 CF 502」。
+
+        ⚠ 涵蓋 base **與** #765 的席數變體：變體被填 cs_* 時 base 側恆綠，
+        只有選了加購席的租戶才踩得到。
         """
-        for ref in ('plan_ha_full_monthly', 'plan_ha_full_yearly'):
-            plan = self.env.ref('woow_paas_platform.%s' % ref)
-            self.assertFalse(plan.cs_vcpu, ref)
-            self.assertFalse(plan.cs_ram_gb, ref)
-            self.assertFalse(plan.cs_storage_gb, ref)
+        plans = self._tpl().sudo().subscription_plan_ids
+        self.assertTrue(plans, '前置：template 應掛到 plan')
+        for plan in plans:
+            self.assertFalse(plan.cs_vcpu, plan.name)
+            self.assertFalse(plan.cs_ram_gb, plan.name)
+            self.assertFalse(plan.cs_storage_gb, plan.name)
 
     def test_plans_distinct_from_haos_and_ha_paas(self):
         """不與 HAOS／HA PaaS 的 plan 互掛（三者是不同商品）。

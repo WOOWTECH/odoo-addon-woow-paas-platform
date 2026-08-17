@@ -306,6 +306,61 @@ class TestHermesRelisted(TransactionCase):
 
 
 @tagged('post_install', '-at_install')
+class TestHermesSeatVariants765(TransactionCase):
+    """#765：Hermes MCP Server 的席數變體隨 tier 放大，且**繼承同 tier 的 cs_***。
+
+    為什麼守在本檔而不是只靠 test_plan_variants_generated：那份 GENERATED 檔驗的是
+    「變體 cs_* == 同 tier base cs_*」——變體與 base **一起**掉成 0 時它照樣綠
+    （#431 的病灶正是三階全部 fallback 到同一組 template.min_*）。本 class 沿用
+    TestHermesRelisted 的判準，對變體再問一次「三階彼此不同」。
+    """
+
+    # tier 後綴 → (席數上限, base 月價, base 年價)。年繳基底是月×10（家族異例），
+    # 加購側統一 +600/月、+4800/年 每席。
+    LADDERS = {'': (3, 1500, 15000), '_t2': (6, 4500, 45000),
+               '_t3': (10, 6000, 60000)}
+
+    def test_seat_ladder_and_price_per_tier(self):
+        for sfx, (max_seats, base_m, base_y) in self.LADDERS.items():
+            for n in range(1, max_seats + 1):
+                for cyc, base, delta in (('monthly', base_m, 600),
+                                         ('yearly', base_y, 4800)):
+                    xmlid = f'plan_mcp_hermes{sfx}_ac{n}_{cyc}'
+                    plan = self.env.ref(f'woow_paas_platform.{xmlid}')
+                    self.assertEqual(plan.sh_plan_price, base + n * delta, xmlid)
+                    self.assertEqual(plan.ac_max_access_seats, n, xmlid)
+                    self.assertTrue(plan.storefront_hidden, xmlid)
+
+    def test_variant_tiers_stay_distinct(self):
+        """三階的變體規格必須彼此不同（否則付不同價拿一樣的算力，#431 復發）。"""
+        specs = set()
+        for sfx, (_max_seats, _bm, _by) in self.LADDERS.items():
+            base = self.env.ref(f'woow_paas_platform.plan_mcp_hermes{sfx}_monthly')
+            variant = self.env.ref(
+                f'woow_paas_platform.plan_mcp_hermes{sfx}_ac1_monthly')
+            spec = (variant.cs_vcpu, variant.cs_ram_gb, variant.cs_storage_gb)
+            self.assertEqual(
+                spec, (base.cs_vcpu, base.cs_ram_gb, base.cs_storage_gb),
+                f'plan_mcp_hermes{sfx}_ac1_monthly 的 cs_* 應等同同 tier base')
+            self.assertTrue(all(spec), f'plan_mcp_hermes{sfx} 變體 cs_* 不得為 0'
+                                       '（0＝fallback template.min_*，三階會塌成同規格）')
+            specs.add(spec)
+        self.assertEqual(len(specs), 3, '三階變體規格必須彼此不同')
+
+    def test_variants_mounted_on_own_template_only(self):
+        """變體只掛 cloud_app_mcp_hermes——勿與 Hermes Agent 完整應用互掛。"""
+        Template = self.env['woow_paas_platform.cloud_app_template']
+        own = self.env.ref('woow_paas_platform.cloud_app_mcp_hermes')
+        for sfx in self.LADDERS:
+            plan = self.env.ref(
+                f'woow_paas_platform.plan_mcp_hermes{sfx}_ac1_monthly')
+            others = Template.search([('subscription_plan_ids', 'in', plan.ids),
+                                      ('id', '!=', own.id)])
+            self.assertFalse(others, f'{plan.name} 跨掛到 {others.mapped("name")}')
+            self.assertIn(plan, own.sudo().subscription_plan_ids, plan.name)
+
+
+@tagged('post_install', '-at_install')
 class TestHermesHideMigration336Regression(TransactionCase):
     """歷史迴歸：.54 的 hide 軌不得因 #431 解封而被移除。
 

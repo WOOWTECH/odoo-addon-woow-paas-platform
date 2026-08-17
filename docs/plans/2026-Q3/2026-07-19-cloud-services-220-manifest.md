@@ -1,6 +1,8 @@
-# 雲端連線服務擴充清單（222項，已全數建置完成）
+# 雲端連線服務擴充清單（268項，已全數建置完成）
 
-狀態：✅ 214 項已於 2026-07-11 全數建立於 Odoo 產品目錄，分類「雲端連線服務」（ID 111）；2026-07-19（#375）新增三型 MCP admin（k8s / vk / opendesign）+1access 變體 6 列（215-220）；2026-07-19（#380）新增 Open Design 完整應用（daemon+console）+1access 變體 2 列（221-222），總計 222 項。
+狀態：✅ 214 項已於 2026-07-11 全數建立於 Odoo 產品目錄，分類「雲端連線服務」（ID 111）；2026-07-19（#375）新增三型 MCP admin（k8s / vk / opendesign）+1access 變體 6 列（215-220）；2026-07-19（#380）新增 Open Design 完整應用（daemon+console）+1access 變體 2 列（221-222）；2026-08-17（#765）新增 Hermes Agent（固定 1 席，223-224）／Home Assistant 完整版（1–3 席，225-230）／Hermes MCP Server T1–T3（隨 tier 放大 1–3／1–6／1–10 席，231-268）的 AC 席數變體 46 列，總計 268 項。
+
+AC 席數加價全平台統一：**月繳 +600 pts／席、年繳 +4800 pts／席**（600×8）。年繳基底一律月×8，唯 Hermes MCP Server 家族為月×10（既有異例，本次不動）——加價側仍是 +4800/席。
 
 ⚠️ 目前為商品殼（名稱/價格/分類/敘述），與 sh_subscription 訂閱方案（Plan）的實際綁定待模組部署後補設定。
 
@@ -228,3 +230,49 @@
 | 220 | Open Design MCP+1access年繳 | 28,800 | +access變體 |
 | 221 | Open Design 雲端訂閱服務+1access月繳 | 5,100 | +access變體 |
 | 222 | Open Design 雲端訂閱服務+1access年繳 | 40,800 | +access變體 |
+| 223 | Hermes Agent 雲端訂閱服務+1access月繳 | 5,100 | +access變體 |
+| 224 | Hermes Agent 雲端訂閱服務+1access年繳 | 40,800 | +access變體 |
+| 225 | Home Assistant 完整版 雲端訂閱服務+1access月繳 | 3,600 | +access變體 |
+| 226 | Home Assistant 完整版 雲端訂閱服務+1access年繳 | 28,800 | +access變體 |
+| 227 | Home Assistant 完整版 雲端訂閱服務+2access月繳 | 4,200 | +access變體 |
+| 228 | Home Assistant 完整版 雲端訂閱服務+2access年繳 | 33,600 | +access變體 |
+| 229 | Home Assistant 完整版 雲端訂閱服務+3access月繳 | 4,800 | +access變體 |
+| 230 | Home Assistant 完整版 雲端訂閱服務+3access年繳 | 38,400 | +access變體 |
+| 231 | Hermes MCP Server T1（1–3 人）+1access月繳 | 2,100 | +access變體 |
+| 232 | Hermes MCP Server T1（1–3 人）+1access年繳 | 19,800 | +access變體 |
+| 233 | Hermes MCP Server T1（1–3 人）+2access月繳 | 2,700 | +access變體 |
+| 234 | Hermes MCP Server T1（1–3 人）+2access年繳 | 24,600 | +access變體 |
+| 235 | Hermes MCP Server T1（1–3 人）+3access月繳 | 3,300 | +access變體 |
+| 236 | Hermes MCP Server T1（1–3 人）+3access年繳 | 29,400 | +access變體 |
+| 237 | Hermes MCP Server T2（3–6 人）+1access月繳 | 5,100 | +access變體 |
+| 238 | Hermes MCP Server T2（3–6 人）+1access年繳 | 49,800 | +access變體 |
+| 239 | Hermes MCP Server T2（3–6 人）+2access月繳 | 5,700 | +access變體 |
+| 240 | Hermes MCP Server T2（3–6 人）+2access年繳 | 54,600 | +access變體 |
+| 241 | Hermes MCP Server T2（3–6 人）+3access月繳 | 6,300 | +access變體 |
+| 242 | Hermes MCP Server T2（3–6 人）+3access年繳 | 59,400 | +access變體 |
+| 243 | Hermes MCP Server T2（3–6 人）+4access月繳 | 6,900 | +access變體 |
+| 244 | Hermes MCP Server T2（3–6 人）+4access年繳 | 64,200 | +access變體 |
+| 245 | Hermes MCP Server T2（3–6 人）+5access月繳 | 7,500 | +access變體 |
+| 246 | Hermes MCP Server T2（3–6 人）+5access年繳 | 69,000 | +access變體 |
+| 247 | Hermes MCP Server T2（3–6 人）+6access月繳 | 8,100 | +access變體 |
+| 248 | Hermes MCP Server T2（3–6 人）+6access年繳 | 73,800 | +access變體 |
+| 249 | Hermes MCP Server T3（6–10 人）+1access月繳 | 6,600 | +access變體 |
+| 250 | Hermes MCP Server T3（6–10 人）+1access年繳 | 64,800 | +access變體 |
+| 251 | Hermes MCP Server T3（6–10 人）+2access月繳 | 7,200 | +access變體 |
+| 252 | Hermes MCP Server T3（6–10 人）+2access年繳 | 69,600 | +access變體 |
+| 253 | Hermes MCP Server T3（6–10 人）+3access月繳 | 7,800 | +access變體 |
+| 254 | Hermes MCP Server T3（6–10 人）+3access年繳 | 74,400 | +access變體 |
+| 255 | Hermes MCP Server T3（6–10 人）+4access月繳 | 8,400 | +access變體 |
+| 256 | Hermes MCP Server T3（6–10 人）+4access年繳 | 79,200 | +access變體 |
+| 257 | Hermes MCP Server T3（6–10 人）+5access月繳 | 9,000 | +access變體 |
+| 258 | Hermes MCP Server T3（6–10 人）+5access年繳 | 84,000 | +access變體 |
+| 259 | Hermes MCP Server T3（6–10 人）+6access月繳 | 9,600 | +access變體 |
+| 260 | Hermes MCP Server T3（6–10 人）+6access年繳 | 88,800 | +access變體 |
+| 261 | Hermes MCP Server T3（6–10 人）+7access月繳 | 10,200 | +access變體 |
+| 262 | Hermes MCP Server T3（6–10 人）+7access年繳 | 93,600 | +access變體 |
+| 263 | Hermes MCP Server T3（6–10 人）+8access月繳 | 10,800 | +access變體 |
+| 264 | Hermes MCP Server T3（6–10 人）+8access年繳 | 98,400 | +access變體 |
+| 265 | Hermes MCP Server T3（6–10 人）+9access月繳 | 11,400 | +access變體 |
+| 266 | Hermes MCP Server T3（6–10 人）+9access年繳 | 103,200 | +access變體 |
+| 267 | Hermes MCP Server T3（6–10 人）+10access月繳 | 12,000 | +access變體 |
+| 268 | Hermes MCP Server T3（6–10 人）+10access年繳 | 108,000 | +access變體 |
