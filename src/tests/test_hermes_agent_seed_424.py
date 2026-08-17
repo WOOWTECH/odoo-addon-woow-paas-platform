@@ -939,18 +939,30 @@ class TestHermesAgentStorefrontReachable(HttpCase):
         self.assertTrue(r.get('success'), '規格頁必須讀得到（回 %r）' % r)
 
     def test_plans_endpoint_returns_both_cycles(self):
-        """月／年兩張卡，價格與 trial 是拍板值（前台真正拿到的數字）。"""
+        """月／年兩張卡，價格與 trial 是拍板值（前台真正拿到的數字）。
+
+        #765 起每張卡另帶固定 1 席的加購變體——這是 marketplace 部署頁的席數區塊
+        （`PlanSelector.xml` 的 `t-if="seatBase"`）唯一的資料來源，**變體只在這個
+        wire payload 出現、不會自成頂層 plan**，所以這裡是它唯一的 wire 級守線。
+        原本此處斷言 variants 為空（#494 期的「v1 不做加購變體」）——刻意不把那行
+        原樣抄進註解：可照抄的錯誤範本比散文警告更容易被人撿去用。
+        """
         r = self._result('/api/cloud-services/templates/%s/plans' % self.tpl.id)
         self.assertTrue(r.get('success'), r)
         by_unit = {p['unit']: p for p in r['data']}
         self.assertEqual(set(by_unit), {'month', 'year'}, r['data'])
         self.assertEqual(by_unit['month']['price'], 4500)
         self.assertEqual(by_unit['year']['price'], 36000)
+        expected_variant_price = {'month': 5100, 'year': 40800}
         for unit, plan in by_unit.items():
             self.assertTrue(plan['has_trial'], unit)
             self.assertEqual(
                 (plan['trial_duration'], plan['trial_unit']), (7, 'day'), unit)
-            self.assertFalse(plan['variants'], 'v1 不做席數加購變體')
+            self.assertEqual(
+                [v['seats'] for v in plan['variants']], [1],
+                '#765：固定 1 席，%s 卡實得 %s' % (unit, plan['variants']))
+            self.assertEqual(
+                plan['variants'][0]['price'], expected_variant_price[unit], unit)
 
     def test_displayed_specs_fall_back_to_template_minimums(self):
         """前台卡片的規格 label ＝ template min_*（plan cs_* 全 0 的可見結果）。
