@@ -402,3 +402,47 @@ from . import test_cs_access_endpoints_745
 # 把 anchor 變成「缺席」）。RED 是 A/C 系列；D 系列是 reference_id 陷阱的陰性
 # 對照（`required=True` + uuid4 default，無腦壓 False 會炸掉所有合法 create）。
 from . import test_sa_anchor_default_carriers_753
+
+# feat: #768 SH AC —— SH route 子模型 ＋ policy 錨點從 exclusive arc（XOR-of-2）
+# 擴成「恰好一個」（三腿）。RED 的三個群集：A 系列（第三腿與 SQL CHECK 根本
+# 不存在；A6 直接查 `pg_get_constraintdef` 斷言是 `num_nonnulls(...)=1`，因為
+# `<>` 串三元是奇偶性——會接受三個都空、拒絕恰好一個）、B 系列（`_check_policy_
+# quota` 的二元三元式讓 SH 落 else 分支 ⇒ 拿 SH 的 id 比 SA 的欄位，跨 model id
+# 碰撞後的錯誤計數；B2「三個池互不相通」是唯一分得出「數對」與「數全表」的一
+# 格）、D 系列（`_anchor()` / `_access_sync_targets()` 漏第三腿的症狀分別是配額
+# 靜默失效與「Cloudflare 完全沒被推」，後者與推成功在輸出上不可區分）。
+from . import test_sh_access_model_768
+
+# feat: #768 SH AC —— ir.rule 第三腿的授權矩陣（HttpCase，只掛 base.group_user 的
+# 帳號、全走 call_kw）。漏改 4 個 domain 任一條的方向是 **fail-closed**：租戶連自己
+# 那條 selector rule 都建不出來，而錯誤訊息指向**子表**，沒人會聯想到 parent 換了
+# 錨點。F 系列（SA route 錨定與 CS 錨定的回歸對照）不可刪——沒有它，第三腿寫壞了
+# 也可能全綠。
+from . import test_sh_access_acl_768
+# feat: #768 SH AC —— 兩支新端點的授權與白名單（HttpCase，真 HTTP）。J 系列是
+# G12 形狀：**arc 是 arity 檢查不是 ownership 檢查**，一條只帶別人 route_id 的
+# policy 完全通得過 arc，controller 白名單是唯一擋住它的地方。K1（quota 0 =
+# unlimited）沒有 K2 當陽性對照的話，整段 quota 刪掉照樣綠。
+from . import test_sh_access_endpoints_768
+# feat: #768 SH AC —— operator sync payload／liveness gate／teardown／reconciler
+# 左集。B4 的 state 迴圈留了「這個結果不該出現」那一格；D2 用 mock_calls 的索引比
+# 大小驗「Access 先於 tunnel」而不是只驗兩者都被呼叫；F 系列漏掉的話每一個**活著
+# 的** SH Access app 都會被判成孤兒候選。
+from . import test_sh_access_sync_768
+# feat: #768 SH AC —— migration 18.0.1.0.150。M2 是本檔與 #744 那支唯一的實質
+# 差異：驗的是 `pg_get_constraintdef` 的**定義**而不是 conname，因為本次換的正是
+# **同名不同定義**的 constraint，只查名字會讓舊的二元定義原封不動通過。
+from . import test_sh_access_arc_migration_768
+# fix: #768 驗收缺口（PR #771 退回）—— `smart_home_route` 身分錨點對「預設值載體」
+# 的攻防，等價於 `test_sa_anchor_default_carriers_753.py` 之於 SA route。守衛在
+# #771 就寫對了（壓伺服器端值而非 `vals.pop()`），但**沒有任何測試證明它擋得住**
+# ——那是 #753 那條教訓的更根本版（那次是「守衛看起來有測試、實際上從未被執行」，
+# 這次是測試根本沒被寫）。錨點清單從 model 的宣告式常數導出（新錨點自動涵蓋），
+# 配 `_ANCHOR_FLOOR` anti-vacuity 下界：清單被清空或打錯字時，本檔每個迴圈都會變
+# 成 no-op 而全綠。
+#
+# ⚠ 可達性與 SA 那邊不同，不要照抄結論：租戶對本 model 的 ACL 是 `create=0`，
+# 所以「租戶自己 RPC create 一條 route 並夾帶錨點」打不進來（F1 釘住這件事）；
+# **真正可達的是租戶 context 流進平台碼**（`_ensure_primary_route()` 走 `.sudo()`，
+# 而 sudo 不洗 context），B1 打的就是那條生產路徑。
+from . import test_sh_access_identity_768

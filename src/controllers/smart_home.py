@@ -15,6 +15,10 @@ from ..models.workspace_access import ROLE_OWNER, ROLE_ADMIN
 
 _logger = logging.getLogger(__name__)
 
+_POLICY_MODEL = "woow_paas_platform.security_access_access_policy"
+_ROUTE_MODEL = "woow_paas_platform.smart_home_route"
+_ACCESS_RULE_GROUPS = ("include", "require", "exclude")
+
 
 class SmartHomeController(Controller):
 
@@ -89,7 +93,12 @@ class SmartHomeController(Controller):
             return {"success": False, "error": "Smart home not found"}
 
         if action == "get":
-            return {"success": True, "data": smarthome.to_dict()}
+            # #768：`include_details=True` 才帶 `routes`。清單端點刻意不帶——它
+            # 會為 workspace 的每一台 SH 各 walk 一次 `access_policy_ids`，而
+            # Access 分頁只存在於詳情頁（CS 為同一個理由把 `access` 限定在
+            # `include_details` 那一側）。
+            return {"success": True,
+                    "data": smarthome.to_dict(include_details=True)}
 
         if action not in ("delete", "provision", "refresh_status"):
             return {"success": False, "error": f"Unknown action: {action}"}
@@ -153,6 +162,28 @@ class SmartHomeController(Controller):
         plan = Plan.browse(plan_id)
         if not plan.exists():
             return {"success": False, "error": "Plan not found"}
+
+        # #768：plan 必須屬於某個上架中的 Smart Home template——與 **create 路徑
+        # 同一把尺**（`_create_smarthome` 的 `plan not in
+        # template.subscription_plan_ids`），CS 也有對應的一條
+        # （`paas.py::api_service_change_plan`，註解自陳與 SA 端 lock-step）。
+        #
+        # 為什麼是本單一起補：`ac_max_access_seats` 在本單之前只是計費欄位，換到
+        # 別家的方案是「計費不一致」；本單把它變成**能力 gate**（Access 分頁的
+        # 顯示判準）之後，同一條路徑就升級成**能力越權**——租戶可以把自己的 SH
+        # 換到任何帶席位的變體，包含 CS／SA 家族那 222 筆。
+        #
+        # ⚠ 判準不能照抄 CS 的 `service.template_id`：`smart_home` **沒有
+        # template FK**（grep 零命中），所以走「屬於任一 active SH template」。
+        SmartHomeTemplate = request.env[
+            "woow_paas_platform.smart_home_template"
+        ].sudo()
+        if not SmartHomeTemplate.search_count([
+            ("is_active", "=", True),
+            ("subscription_plan_ids", "in", plan.ids),
+        ]):
+            return {"success": False,
+                    "error": "Selected plan is not available for Smart Home"}
 
         # sudo: portal/workspace-owner users typically lack ACL on
         # sh.subscription.subscription (it gates on group_sh_subscription_manager,
@@ -403,6 +434,300 @@ class SmartHomeController(Controller):
             },
         }
 
+    # ==================== Access Control API（#768）====================
+    #
+    # 形狀比照 **SA** 的 access-config／access-policies 組
+    # （`controllers/security_access.py`）而不是 CS：CS 一服務一錨點，所以它把
+    # 兩支 config 收斂成一支；SH 走 per-route 多錨點（裁決 2），config 因此是
+    # **route-pinned**（URL 帶 route_id），policy 那支則是父層 pinned ＋ action
+    # 分派，只有 `create` 帶錨點 id——與 SA 逐字相同。
+    #
+    # 四步骨架與 SA／CS 逐字相同、順序也刻意一致：workspace 可見性 → SH 釘住 →
+    # role gate（owner/admin 才寫）→ 訂閱閘。`list` 是唯一跳過後兩步的分支。
+
+    @route(
+        "/api/workspaces/<int:workspace_id>/smarthomes/<int:smarthome_id>"
+        "/routes/<int:route_id>/access-config",
+        auth="user", methods=["POST"], type="json",
+    )
+    def api_smarthome_route_access_config(
+        self, workspace_id: int, smarthome_id: int, route_id: int,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        """單一 route 的 Cloudflare Access 開關、登入方式與 session 長度。"""
+        smarthome, error = self._get_workspace_smarthome_or_error(
+            workspace_id, smarthome_id)
+        if error:
+            return error
+        sh_route = self._sh_route(smarthome, route_id)
+        if not sh_route:
+            return {"success": False, "error": "Route not found"}
+        return self._update_sh_route_access_config(sh_route, kwargs)
+
+    @route(
+        "/api/workspaces/<int:workspace_id>/smarthomes/<int:smarthome_id>"
+        "/access-policies",
+        auth="user", methods=["POST"], type="json",
+    )
+    def api_smarthome_access_policies(
+        self, workspace_id: int, smarthome_id: int, action: str = "list",
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        """本 Smart Home 的 Access policy CRUD ＋ reorder。"""
+        if action == "list":
+            # 讀：workspace 成員即可，且**不 sudo**——ir.rule 才是守線
+            # （orm-vs-endpoint-acl-test-coverage）。非成員在上一步已被擋掉。
+            smarthome, error = self._get_workspace_smarthome_or_error(
+                workspace_id, smarthome_id, require_manage=False)
+            if error:
+                return error
+            policies = request.env[_POLICY_MODEL].search(
+                [("smart_home_id", "=", smarthome.id)])
+            return {"success": True, "data": [p.to_dict() for p in policies]}
+
+        smarthome, error = self._get_workspace_smarthome_or_error(
+            workspace_id, smarthome_id)
+        if error:
+            return error
+        if action == "create":
+            return self._create_sh_access_policy(smarthome, kwargs)
+        if action == "update":
+            return self._update_sh_access_policy(
+                smarthome, kwargs.get("policy_id"), kwargs)
+        if action == "delete":
+            return self._delete_sh_access_policy(
+                smarthome, kwargs.get("policy_id"))
+        if action == "reorder":
+            return self._reorder_sh_access_policies(smarthome, kwargs)
+        return {"success": False, "error": f"Unknown action: {action}"}
+
+    # ---- Access Control helpers ----
+
+    def _get_workspace_smarthome_or_error(
+        self, workspace_id: int, smarthome_id: int,
+        require_manage: bool = True,
+    ):
+        """解析 (workspace, smarthome) 並跑完授權四步；失敗回 (None, error)。
+
+        單一裁決處：兩支 access 端點共用，免得其中一支日後少掉一步而另一支還在
+        （SA 那邊 `refresh_status` 就曾因為被分在 read 那側而漏掉 role gate）。
+
+        SH 釘在 `workspace_id` 上，所以 URL 換一個別人的 smarthome id 得到的是
+        「Smart home not found」而不是別人的資料。
+        """
+        workspace = self._get_workspace_or_error(workspace_id)
+        if not workspace:
+            return None, {"success": False,
+                          "error": "Workspace not found or access denied"}
+        smarthome = self._get_smarthome_or_error(smarthome_id, workspace)
+        if not smarthome:
+            return None, {"success": False, "error": "Smart home not found"}
+        if not require_manage:
+            return smarthome, None
+        access = workspace.check_user_access(request.env.user)
+        if not access or access.role not in [ROLE_OWNER, ROLE_ADMIN]:
+            return None, {"success": False,
+                          "error": "Insufficient permissions"}
+        try:
+            smarthome._check_operation_allowed(operation="write")
+        except Exception as e:
+            return None, {"success": False, "error": str(e)}
+        return smarthome, None
+
+    def _sh_route(self, smarthome, route_id):
+        """釘在這台 SH 上的 route——跨 SH／未知 id 一律回空集。
+
+        用 `search` 帶 `smart_home_id` 條件而不是 filter `smarthome.route_ids`：
+        兩者等價，但 search 走 ir.rule 過濾後的可見集合，語意上「找不到」與
+        「看不到」收斂成同一個回應。
+        """
+        return request.env[_ROUTE_MODEL].search(
+            [("id", "=", route_id),
+             ("smart_home_id", "=", smarthome.id)], limit=1)
+
+    def _update_sh_route_access_config(self, sh_route, kwargs):
+        """白名單寫入。
+
+        🔴 只有這四個欄位是 client 設定得了的。`access_app_id` 另有 model 層的
+        身分錨點守衛（對所有人生效），但**白名單仍然是必要的第一層**：守衛丟的
+        是 `UserError`，那會讓一個順手多帶欄位的合法請求整個失敗，而不是靜靜忽
+        略它；`access_unresolved_idp_types` 則完全沒有 model 層守衛，白名單是它
+        唯一的防線。
+
+        `is_protected` 用 `in kwargs` 判而不是 `kwargs.get()`：關閉保護送的是
+        `False`，truthy 判斷會讓「關閉」這個動作整個消失（而回應仍是 success）。
+        """
+        vals = {}
+        if "is_protected" in kwargs:
+            vals["is_protected"] = bool(kwargs["is_protected"])
+            # 沒有對外 hostname ⇒ 沒有可以掛 Access app 的錨點。不擋的話這個寫入
+            # 會**成功**、UI 顯示「已保護」，而 `_sync_access_to_operator` 的第一
+            # 道 gate 就 return，Cloudflare 上一個物件都不會有——一個對租戶而言
+            # 完全無聲的謊。關閉方向（False）不擋：任何情況下都必須關得掉。
+            if vals["is_protected"] and not sh_route.hostname:
+                return {"success": False,
+                        "error": "This smart home has no public address to "
+                                 "protect yet."}
+        for f in ("login_google", "login_email_otp"):
+            if f in kwargs:
+                vals[f] = bool(kwargs[f])
+        if kwargs.get("session_duration"):
+            vals["session_duration"] = kwargs["session_duration"]
+        try:
+            if vals:
+                sh_route.write(vals)
+            return {"success": True, "data": sh_route.to_dict()}
+        except Exception as e:
+            _logger.exception(
+                "[SH] Failed to update access config route=%s: %s",
+                sh_route.id, e)
+            return {"success": False, "error": str(e)}
+
+    def _sh_policy(self, smarthome, policy_id):
+        """釘在這台 SH 上的 policy——跨 SH／未知 id 一律回空集。"""
+        return request.env[_POLICY_MODEL].search(
+            [("id", "=", policy_id),
+             ("smart_home_id", "=", smarthome.id)], limit=1)
+
+    def _create_sh_access_policy(self, smarthome, kwargs):
+        if not kwargs.get("name"):
+            return {"success": False, "error": "name is required"}
+        sh_route = self._sh_route(smarthome, kwargs.get("route_id"))
+        if not sh_route:
+            return {"success": False, "error": "Route not found"}
+        # 兩層 quota：model 的 `_check_policy_quota` 是權威，這裡是為了回一句人
+        # 看得懂的話。**0 = unlimited**（#743）——沒有這個豁免，model 那邊的豁免
+        # 從 UI 不可達（`existing >= quota` 在 0 >= 0 時第一條就擋掉），而 SH 的
+        # 40 筆 AC 變體 `sa_max_access_policies` 全部走 default 0。
+        # `sudo()` 只用在讀訂閱：租戶對 `sh.subscription.subscription` 沒有讀權。
+        Policy = request.env[_POLICY_MODEL]
+        sub = smarthome.sudo().subscription_id
+        if sub and sub.sh_subscription_plan_id:
+            quota = sub.sh_subscription_plan_id.sa_max_access_policies
+            existing = Policy.search_count(
+                [("smart_home_id", "=", smarthome.id)])
+            if quota and existing >= quota:
+                return {"success": False,
+                        "error": "Access policy quota exceeded: plan allows "
+                                 "%d polic(ies)" % quota}
+        # 白名單：錨點由**已 gate 過的 route** 決定，不讀 kwargs 的其他欄位——
+        # client 送什麼 `cf_policy_id` / 別的錨點都無效。arc 是 arity 檢查不是
+        # ownership 檢查，一條只帶別人 route_id 的 policy 完全通得過 arc，所以
+        # 這道白名單是唯一擋住它的地方。
+        create_vals = {
+            "smart_home_route_id": sh_route.id,
+            "name": kwargs["name"],
+            "decision": kwargs.get("decision", "allow"),
+        }
+        if "sequence" in kwargs:
+            create_vals["sequence"] = kwargs["sequence"]
+        rule_commands = self._build_sh_access_rule_commands(kwargs)
+        if rule_commands is not None:
+            create_vals["rule_ids"] = rule_commands
+        try:
+            pol = Policy.create(create_vals)
+            return {"success": True, "data": pol.to_dict()}
+        except Exception as e:
+            _logger.exception(
+                "[SH] Failed to create access policy sh=%s: %s",
+                smarthome.id, e)
+            return {"success": False, "error": str(e)}
+
+    def _build_sh_access_rule_commands(self, kwargs):
+        """include/require/exclude → One2many create commands。
+
+        逐條白名單到 group/rule_type/rule_value：client 不得在子規則上夾帶
+        `cf_policy_id` / `policy_id` / 任何其他欄位。三個 group key 一個都沒有
+        ⇒ 回 None（不帶 `rule_ids`，交給 model 的 `_check_at_least_one_include`
+        fail-loud）。刻意**不**接 SA 那條 legacy flat `rule_type`/`rule_value`
+        相容層——那是 P-rule 過渡期的遺物，新路徑沒有 in-flight client 需要它。
+        """
+        if not any(g in kwargs for g in _ACCESS_RULE_GROUPS):
+            return None
+        commands = []
+        for grp in _ACCESS_RULE_GROUPS:
+            for r in kwargs.get(grp) or []:
+                if not isinstance(r, dict):
+                    continue
+                commands.append((0, 0, {
+                    "group": grp,
+                    "rule_type": r.get("rule_type"),
+                    "rule_value": r.get("rule_value"),
+                }))
+        return commands
+
+    def _update_sh_access_policy(self, smarthome, policy_id, kwargs):
+        pol = self._sh_policy(smarthome, policy_id)
+        if not pol:
+            return {"success": False, "error": "Policy not found"}
+        vals = {}
+        for f in ("name", "decision", "sequence"):
+            if f in kwargs:
+                vals[f] = kwargs[f]
+        write_pol = pol
+        rule_commands = self._build_sh_access_rule_commands(kwargs)
+        if rule_commands is not None:
+            # 整組取代。`(5,0,0)` + creates 讓 email 上限只看新規則；中間那個空集
+            # 會踩到「≥1 include」檢查，所以用 `sa_rule_replace` 抑制逐條檢查——
+            # policy 層的 @api.constrains 驗最終狀態。
+            vals["rule_ids"] = [(5, 0, 0)] + rule_commands
+            write_pol = pol.with_context(sa_rule_replace=True)
+        try:
+            if vals:
+                write_pol.write(vals)
+            return {"success": True, "data": pol.to_dict()}
+        except Exception as e:
+            _logger.exception(
+                "[SH] Failed to update access policy %s: %s", policy_id, e)
+            return {"success": False, "error": str(e)}
+
+    def _delete_sh_access_policy(self, smarthome, policy_id):
+        pol = self._sh_policy(smarthome, policy_id)
+        if not pol:
+            return {"success": False, "error": "Policy not found"}
+        try:
+            pol.unlink()
+            return {"success": True, "data": {"message": "Policy deleted"}}
+        except Exception as e:
+            _logger.exception(
+                "[SH] Failed to delete access policy %s: %s", policy_id, e)
+            return {"success": False, "error": str(e)}
+
+    def _reorder_sh_access_policies(self, smarthome, kwargs):
+        """重寫 precedence。逐筆寫入抑制 sync，結束後只推一次完整狀態。
+
+        不抑制的話 N 條 policy 會打 N 次 operator，而且中間每一次送出去的都是
+        **半排好**的順序。跨 SH／未知的 policy_id 靜默略過（絕不寫到別人的列），
+        計數器走「被釘住的那些」而非原索引，略過一筆不會在號碼上留洞。
+
+        推送的對象是**每一條被動到的 route**：SH 是 per-route 多錨點，重排可能
+        跨多條 route（雖然今天恰好只有一條），對整台 SH 推一次會漏掉其他 route。
+        """
+        policy_ids = kwargs.get("policy_ids") or []
+        if not isinstance(policy_ids, list):
+            return {"success": False, "error": "policy_ids must be a list"}
+        reordered = []
+        touched_routes = request.env[_ROUTE_MODEL]
+        try:
+            seq = 0
+            for pid in policy_ids:
+                pol = self._sh_policy(smarthome, pid)
+                if not pol:
+                    continue
+                seq += 10
+                pol.with_context(sa_skip_route_sync=True).write(
+                    {"sequence": seq})
+                reordered.append(pol.id)
+                touched_routes |= pol.smart_home_route_id
+            for sh_route in touched_routes:
+                sh_route._sync_access_to_operator()
+            return {"success": True, "data": {"reordered": reordered}}
+        except Exception as e:
+            _logger.exception(
+                "[SH] Failed to reorder access policies sh=%s: %s",
+                smarthome.id, e)
+            return {"success": False, "error": str(e)}
+
     # ==================== Private Helpers ====================
 
     def _get_workspace_or_error(self, workspace_id: int):
@@ -531,7 +856,11 @@ class SmartHomeController(Controller):
         """Provision a smart home tunnel."""
         try:
             smarthome.action_provision()
-            return {"success": True, "data": smarthome.to_dict()}
+            # #768：與 detail 端點同一個形狀。provision 成功當下才剛建出 primary
+            # route，前端要拿它把 Access 分頁畫出來；回 detail 以外的形狀會讓
+            # 呼叫端在「沒有 routes」與「routes 是空的」之間分不出來。
+            return {"success": True,
+                    "data": smarthome.to_dict(include_details=True)}
         except Exception as e:
             _logger.error("Failed to provision smart home: %s", e)
             return {"success": False, "error": str(e)}
@@ -540,7 +869,10 @@ class SmartHomeController(Controller):
         """Refresh tunnel status."""
         try:
             smarthome.action_refresh_status()
-            return {"success": True, "data": smarthome.to_dict()}
+            # #768：同 provision——refresh 是詳情頁按下去的，回的必須是 detail 形狀，
+            # 否則按一次 Refresh 就會把前端手上的 routes 洗掉。
+            return {"success": True,
+                    "data": smarthome.to_dict(include_details=True)}
         except Exception as e:
             _logger.error("Failed to refresh smart home status: %s", e)
             return {"success": False, "error": str(e)}
