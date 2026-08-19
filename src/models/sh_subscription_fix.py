@@ -21,6 +21,15 @@ _logger = logging.getLogger(__name__)
 #: 自己的安全閥，不該跟著營運參數一起被關掉。
 _LOW_BALANCE_RETRY_WINDOW_DAYS = 7
 
+#: #778：上游 sh_subscription_wallet SSOT（upstream PR #14）對撞防護的兩個錨點。
+#: 上游會在 wallet 自己的 post_init_hook／migration 停用 base auto-invoice cron
+#: ——那兩個時點都在 module graph 的 wallet 節點執行，平台 class 尚未載入、
+#: method override 不在 MRO，攔不到；防線只能是 data 層 re-assert（平台在
+#: 拓撲序上永遠晚於 wallet）。param 名／xmlid 是跨 repo contract，上游改名
+#: 時只改這裡（tests/test_billing_ssot_guard.py 刻意雙寫字面值當同步哨兵）。
+_BASE_AUTO_INVOICE_CRON_XMLID = 'sh_subscription.sh_ir_cron_subscription_auto_invoice'
+_BILLING_SSOT_PARAM = 'sh_subscription_wallet.billing_ssot'
+
 
 class ShSubscriptionFix(models.Model):
     """Fix upstream sh_subscription bug in _sh_create_auto_invoice.
@@ -201,6 +210,51 @@ class ShSubscriptionFix(models.Model):
             "bounded retry handled by _sh_create_auto_invoice dunning"
         )
         return
+
+    @api.model
+    def _ensure_base_auto_invoice_cron_active(self):
+        """[#778] 把 base auto-invoice cron re-assert 回 active（idempotent）。
+
+        這顆 cron 是平台唯一計費路徑的觸發點；上游 wallet（合併 upstream
+        PR #14 後）會在自己的 install/migration 時點把它關掉，而 cron seed
+        XML 是 noupdate=1——被關掉後沒有任何 XML reload 會救回。接線：
+        data/billing_ssot_guard.xml（每次 -u）＋ hooks.post_init_hook
+        （fresh install），兩路都晚於 wallet 的關閉動作。
+        """
+        cron = self.env.ref(_BASE_AUTO_INVOICE_CRON_XMLID, raise_if_not_found=False)
+        if not cron:
+            # sh_subscription 是硬依賴，正常環境不該發生；warning 而非硬炸，
+            # 避免一顆 cron record 缺失讓整次升級中斷。
+            _logger.warning(
+                "[SUB_FIX] base auto-invoice cron %s not found; platform "
+                "billing has NO trigger (#778)", _BASE_AUTO_INVOICE_CRON_XMLID,
+            )
+            return False
+        if not cron.active:
+            cron.sudo().write({'active': True})
+            _logger.info(
+                "[SUB_FIX] re-asserted %s active=True (#778 SSOT collision "
+                "guard)", _BASE_AUTO_INVOICE_CRON_XMLID,
+            )
+        return True
+
+    @api.model
+    def _ensure_billing_ssot_optout(self):
+        """[#778] 把上游 billing_ssot param 固定為 '0'（platform opt-out）。
+
+        上游語意「未設定視同啟用 SSOT」，平台裝著的 DB 必須顯式 opt-out。
+        無條件 re-assert：這是平台存亡 invariant（wallet cron 已被 no-op，
+        SSOT 一開就是兩路同死），不是可手動翻掉的偏好——要吃回 wallet
+        SSOT 是「移除本錨點＋移除 no-op override」的重構，不是改 param。
+        """
+        ICP = self.env['ir.config_parameter'].sudo()
+        if ICP.get_param(_BILLING_SSOT_PARAM) != '0':
+            ICP.set_param(_BILLING_SSOT_PARAM, '0')
+            _logger.info(
+                "[SUB_FIX] pinned %s='0' (#778 platform billing opt-out)",
+                _BILLING_SSOT_PARAM,
+            )
+        return True
 
     @api.model
     def _sh_create_auto_invoice(self):
