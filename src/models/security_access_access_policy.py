@@ -630,6 +630,9 @@ class SecurityAccessAccessPolicy(models.Model):
         # leaked per unlink. Inject the captured ids per-ANCHOR on the resync so
         # the operator reaps them.
         #
+        # #528：光靠 context 不夠——那一次 resync 被 gate 擋掉的話 id 就永久消失。
+        # 同一批 id 另外落進 `cf_access_policy_reap` 帳本（見下方 savepoint 內）。
+        #
         # #745：key 帶上 model 名——route 與 cloud_service 的 id 各自從 1 開始，
         # 只用 id 當 key 會把 route#3 的孤兒 id 餵給 cloud_service#3。
         doomed_by_anchor = {}
@@ -642,6 +645,24 @@ class SecurityAccessAccessPolicy(models.Model):
                     (anchor._name, anchor.id), []).append(pol.cf_policy_id)
         with self.env.cr.savepoint():
             result = super().unlink()
+            # #528：落帳在**推之前**，而且刻意不看 `anchor.exists()`。
+            #
+            # context 那條通道只活一次呼叫，而那一次 `_sync_access_to_operator()`
+            # 可能被錨點的 liveness gate 整個擋掉（SA／SH 的停權狀態就是）——擋掉
+            # 之後 DB 列已刪、context 已丟，那顆 CF policy 從此沒有任何記錄指向
+            # 它，operator 唯一的刪除通道（`existing_policy_ids`）再也帶不到它。
+            # 帳落進 DB，壽命就不再綁在「這一次 sync 有沒有跑」上。
+            #
+            # ⚠ 餵進去的一律是**列上讀到的** `cf_policy_id`，不是 context 的值：
+            # `sa_unlinked_cf_policy_ids` 是一把裸 context key（call_kw 把呼叫端
+            # 的 context 原封不動交給 ORM），把它的值寫進 DB 等於把一次性的偽造
+            # 升級成持久的偽造，而它決定的是**帳號級** CF 物件要不要被刪。
+            #
+            # sync 拋例外時這段連同 `super().unlink()` 一起被 savepoint 回捲——
+            # 那是對的：列活著，cf id 就還在列上，不需要帳。
+            Reap = self.env['woow_paas_platform.cf_access_policy_reap']
+            for (anchor_model, anchor_id), doomed in doomed_by_anchor.items():
+                Reap._record_ids(anchor_model, anchor_id, doomed)
             for anchor in affected:
                 if anchor.exists():
                     doomed = doomed_by_anchor.get(

@@ -23,6 +23,9 @@ from . import project_access
 from . import cloud_service_binding_guard
 from . import cloud_app_template
 from . import cloud_service_secret
+# fix: #528 待回收 CF Access policy 帳本 —— 三腿（SA route／cloud_service／
+# smart_home_route）共用，無相依，位置只要在使用它的 model 之前都可以。
+from . import cf_access_policy_reap
 from . import smart_home_template
 from . import security_access_template
 from . import security_access

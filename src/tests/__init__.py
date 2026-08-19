@@ -455,3 +455,9 @@ from . import test_sh_access_arc_migration_768
 # **真正可達的是租戶 context 流進平台碼**（`_ensure_primary_route()` 走 `.sudo()`，
 # 而 sudo 不洗 context），B1 打的就是那條生產路徑。
 from . import test_sh_access_identity_768
+
+# fix: #528 停權中刪 access policy ⇒ CF 同步被 state gate 靜默略過 ⇒ CF
+# reusable policy 永久孤兒。RED 群集：B1／D1（gate 擋掉時 doomed id 沒有任何
+# durable 記錄）、B2／B3／C1／D2（之後的 sync 不會把它併進 existing_policy_ids）、
+# B5／C2／D3（被 gate 略過是完全靜默的，呼叫端與「同步成功」不可區分）。
+from . import test_cf_policy_reap_ledger_528
