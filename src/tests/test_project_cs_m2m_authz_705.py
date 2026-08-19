@@ -11,7 +11,7 @@
 | F1 | 第三條路徑的實測結果（`ir.default`、`copy()`） | `TestCreateOtherValueSourcesF1` |
 | F2 | compute 導出的綁定**不是**呼叫者新增的 ⇒ 不得因此拒絕合法操作 | `TestCreateComputeFalsePositiveF2` |
 | F3 | 反向端候選集必須真的是超集（含移除方向的舊值） | `TestReverseCandidateSetF3` |
-| F6 | cross-project move 不觸發守衛的**真正理由**（key gate），不是「綁定沒變」 | `TestCrossProjectMoveReasonF6` |
+| F6 | cross-project move **會**改動綁定集合（行為端已由 #715 反轉，見該 class） | `TestCrossProjectMoveReasonF6` |
 
 ## 為什麼 F1 需要「值不在 raw vals 裡」這一整族
 
@@ -485,27 +485,36 @@ class TestReverseCandidateSetF3(_Binding698Fixture):
 
 @tagged('post_install', '-at_install')
 class TestCrossProjectMoveReasonF6(_Binding698Fixture):
-    """🟢 F6：cross-project move 不觸發守衛的**真正理由**。
+    """🟢 F6：cross-project move **會**改動綁定集合。
 
-    follow-ups 的 F3 曾把理由寫成「它比對的是綁定集合，而綁定沒變」——那是假的：
-    `primary_cloud_service_id` 是 `@api.depends('project_id.cloud_service_ids')`
-    的 stored compute，move **會**改綁定集合。真正的理由是守衛的 key gate：
-    `project_id` 不在受保護欄位裡 ⇒ 連 snapshot 都不做。
+    follow-ups 的 F3 曾把「move 不觸發守衛」的理由寫成「它比對的是綁定集合，
+    而綁定沒變」——那是假的：`primary_cloud_service_id` 是
+    `@api.depends('project_id.cloud_service_ids')` 的 stored compute，move
+    **會**改綁定集合。
 
-    這一格同時是 F1 修法的交互作用鎖：**修 F1 的人第一個會動的就是那個 key
-    gate**，一旦改成無條件，這條合法操作就會開始 raise。
+    🔴 **本 class 的結論在 #715 被推翻了一半（2026-08-19）。**
+    當時寫的第二句「真正的理由是守衛的 key gate：`project_id` 不在受保護欄位
+    裡 ⇒ 連 snapshot 都不做」在機制上正確，但那正是 #715 的旁路——guest 靠搬
+    task 就能讓 primary 靜默換綁，繞掉「只有 owner／admin 才能變更綁定」。
+    `project_id` 現在是 task 的 **write 側觸發器**（`_cs_binding_write_triggers`），
+    move 會走守衛、由角色決定放不放行。
+
+    ⇒ 本 class 保留仍然成立的那一半（**綁定確實會變**，所以這條路徑有東西可
+    比、綠燈不是「沒 diff」換來的），並把行為端改成 owner 的陽性對照；
+    「guest 被擋」那一格在 `test_project_cs_m2m_authz_715_716.py` 的 `M1`，
+    「不是任何 move 都擋」在 `M4`。
     """
 
     def _wa_service(self, name):
         return self._service(self.template, self.wa, name)
 
-    def test_X3b_move_changes_binding_and_is_not_blocked(self):
-        """guest 把自己看得到的 task 從 P1 移到 P2（兩個 project 都綁著 wa 的
-        service ⇒ 他經 bound 分支對兩邊都有 write）。
+    def test_X3b_move_changes_binding_and_is_authorized_for_owner(self):
+        """owner 把 task 從 P1 移到 P2（兩個 project 各綁一顆 wa 的 service）。
 
         斷言兩件事，缺一不可：
-        1. move **成功**（守衛不參與）；
-        2. `primary_cloud_service_id` **變了**（證明「綁定沒變」是假的）。
+        1. move **成功**（守衛參與，但 owner 通過 ⇒ 合法操作沒被誤擋）；
+        2. `primary_cloud_service_id` **變了**（證明「綁定沒變」是假的，同時
+           證明這條路徑真的有 diff 可比）。
         """
         svc_a2 = self._wa_service('SVC attacker 698 #2')
         p1 = self._new_project_as(self.aowner_login, 'F6 P1')
@@ -519,10 +528,10 @@ class TestCrossProjectMoveReasonF6(_Binding698Fixture):
                 [p2], {'cloud_service_ids': [(4, svc_a2.id)]}]),
             '前提：P2 綁 svc_a2')
 
-        self.authenticate(self.gary_login, self.gary_login)
+        self.authenticate(self.aowner_login, self.aowner_login)
         created = self._call_kw(_TASK, 'create', [
             {'name': 'F6 task', 'project_id': p1}])
-        self._assert_ok(created, '前提：guest 建得起 P1 的 task')
+        self._assert_ok(created, '前提：owner 建得起 P1 的 task')
         tid = created['result']
         self.assertEqual(
             self.Task.sudo().browse(tid).primary_cloud_service_id, self.svc_a,
@@ -531,7 +540,7 @@ class TestCrossProjectMoveReasonF6(_Binding698Fixture):
         moved = self._call_kw(_TASK, 'write', [[tid], {'project_id': p2}])
         self._assert_ok(
             moved,
-            'F6：cross-project move 是合法操作，守衛不得參與（回 %r）' % moved)
+            'F6：owner 的 cross-project move 是合法操作，不得被誤擋（回 %r）' % moved)
         self.assertEqual(
             self.Task.sudo().browse(tid).primary_cloud_service_id, svc_a2,
             'F6：綁定集合**確實會變**——「綁定沒變」那句宣稱是假的')

@@ -38,6 +38,23 @@ project 既有合法綁定算出來的值」當成呼叫者新增的綁定（#70
 看的是**框架解析後**的 vals（``_add_missing_default_values``），否則
 ``default_<field>`` context ／ ``ir.default`` 整族來源都繞得過去（#705 F1）。
 
+⚠ create 側的「指名」是**逐筆**的（#716 ①）。``@api.model_create_multi``
+收的是 ``vals_list``，舊實作對整個 list 取 key 的**聯集**再套回**整批**
+records ⇒ 同一次 RPC 裡「別筆指名了載體欄位」會讓「這筆沒指名」的 compute
+導出值也被送去授權，F2 的 false positive 原樣復發在批次路徑上。授權範圍
+必須跟著 vals 走，不跟著 batch 走。
+
+## create 與 write 的判準刻意不同（#715）
+
+- **create**：呼叫者只為**自己指名的**載體值負責。沒有「之前的綁定」可被
+  破壞，系統從 project 既有合法綁定導出的值不算他綁的（F2）。
+- **write**：改的是**既有**綁定，所以**實際發生的變化**都要授權——包括經由
+  非載體欄位間接觸發重算的那些（``_cs_binding_write_triggers``）。
+
+這個不對稱是本檔最容易被「統一一下」改壞的地方，兩個方向各有一次實測：
+把 write 的觸發器搬到 create ⇒ F2 復發（每一次 task create 都指名
+``project_id``）；把 write 收成只看指名欄位 ⇒ #715 的 move 旁路。
+
 代價是「先執行再檢查」，靠 ``AccessError`` 讓整個交易回滾——與
 ``_reconcile_agent_runtime_reach`` 的 GRANT fail-loud 同一個模式。守衛跑在
 ``super().write()`` 之內，所以 ``ProjectProject.write`` 那層的 operator 推送
@@ -56,6 +73,17 @@ owner／admin（與 #676 一致，Eugene 拍板）。**guest／user 連自己 wo
 的 service 也不能綁**。判準走 `workspace.check_user_access(user,
 required_role=ROLE_ADMIN)`（`ROLE_HIERARCHY` ⇒ admin 與 owner 通過），不自己
 寫第二套 role 比較——兩套判準遲早會漂。
+
+⚠ 上面那句界線的**精確範圍**（#715 覆核指出舊版檔頭在 move 這條路上為假，
+這裡逐字寫清楚，不要再壓縮回一句話）：
+
+- 守的是**呼叫者造成的綁定變化**——不論他是直接指名載體欄位，還是換掉
+  `task.project_id` 讓 stored compute 改綁（#715）。
+- **不**守「create 時由系統從 project 既有合法綁定導出的值」。同一個 guest
+  在一個已合法綁定的 project 裡建 task，primary 仍會被算成該 project 的
+  第一顆 service，而且**不需要**授權（#705 F2 的修法，刻意）。
+  ⇒ 界線不是「guest 名下不會出現任何 service 關聯」，是「guest 動不了
+  既有綁定，也塞不進自己挑的 service」。
 
 ``self.env.su`` 豁免：seed / migration / cron / controller 的 sudo 產品路徑
 （例如 `ai_assistant._create_project`）照常。本守衛堵的是 ORM 直呼那條旁路
@@ -87,11 +115,25 @@ class CloudServiceBindingGuard(models.AbstractModel):
     # 讓 primary 位移，看起來像「移除了原本那個 primary」，但 relation 裡
     # 它其實還在。
     _cs_binding_triggers = ()
+    # 只在 **write** 側觸發全比對的欄位（create 側刻意不吃，見下）。
+    #
+    # `task.project_id` 屬於這一類：它自己不是載體，但
+    # `primary_cloud_service_id` 是 `@api.depends('project_id.
+    # cloud_service_ids')` 的 stored compute ⇒ 換 project 會讓綁定**實際**
+    # 改變。#715 實測：guest 把 task 從 P1 搬到 P2，primary 靜默從 svc_a
+    # 換成 svc_a2，而守衛連 snapshot 都沒做（呼叫者一個載體欄位都沒指名）。
+    #
+    # 🔴 **不可以搬進 `_cs_binding_triggers`**：那個 tuple 兩側都吃，而
+    # **每一次 task create 都會指名 `project_id`** ⇒ create 側退回全比對
+    # ⇒ #705 F2 原樣復活（在已合法綁定的 project 裡建 task 會被要求
+    # owner／admin）。兩側判準為什麼本來就不同，見檔頭「create 與 write 的
+    # 判準刻意不同」。
+    _cs_binding_write_triggers = ()
 
     # ------------------------------------------------------------------ #
     #  snapshot / diff                                                     #
     # ------------------------------------------------------------------ #
-    def _cs_binding_diff_fields(self, keys):
+    def _cs_binding_diff_fields(self, keys, triggers=None):
         """這次寫入要比對**哪幾個載體欄位**（回傳 tuple，空 ⇒ 守衛不啟動）。
 
         只比對「呼叫者這次**指名要改**的」載體欄位。這一格同時撐起兩件事：
@@ -108,9 +150,16 @@ class CloudServiceBindingGuard(models.AbstractModel):
 
         ⚠ 這**不是**在解析 x2many 指令語意（#657 的陷阱）——它只問「vals 裡有
         沒有這個 key」，授權判斷仍然一律看 ``super()`` 之後的實際 diff。
+
+        ``triggers`` 由呼叫端指定，因為 create 與 write 吃的不是同一組
+        （#715）：create 只吃 ``_cs_binding_triggers``，write 另外吃
+        ``_cs_binding_write_triggers``。預設值＝create 側那組，所以任何忘了
+        傳的呼叫端拿到的是**較窄**的那一組，不會意外放大 create 的比對面。
         """
         keys = set(keys)
-        if keys & set(self._cs_binding_triggers):
+        if triggers is None:
+            triggers = self._cs_binding_triggers
+        if keys & set(triggers):
             return tuple(self._cs_binding_fields)
         return tuple(f for f in self._cs_binding_fields if f in keys)
 
@@ -180,20 +229,44 @@ class CloudServiceBindingGuard(models.AbstractModel):
         這一輪 ``default_get`` 會被算兩次（我們一次、``super().create()`` 內
         一次）；我們不把解析結果餵回 ``super()``，因為那會改動 create 真正收到
         的 vals，副作用面比多算一次 ``default_get`` 大得多。
+
+        🔴 **比對範圍逐筆決定，不對整個 ``vals_list`` 取聯集**（#716 ①）。
+        舊實作把聯集套回**整批** records，於是同一次 RPC 裡只要有**任何一筆**
+        指名了載體欄位，**其他每一筆**的 compute 導出值也會被送去授權——
+        #705 F2 的 false positive 原樣復發在批次路徑上。實測 payload：
+        ``[{'name': 't1', 'project_id': p, 'primary_cloud_service_id': False},
+        {'name': 't2', 'project_id': p}]`` ⇒ guest 建不了 ``t2``。
+
+        ``super().create(vals_list)`` 回傳的順序與 ``vals_list`` 一致
+        （``BaseModel.create`` 依序組 ``data_list`` → ``BaseModel._create``
+        依 INSERT 順序累加 ``ids`` → ``browse(ids)`` 保序），所以下面的
+        ``zip`` 對得起來；同一組 fnames 的 records 併成一批送檢，省掉逐筆的
+        flush／invalidate。
         """
-        fnames = set()
-        for vals in vals_list:
-            fnames.update(
-                self._cs_binding_diff_fields(self._add_missing_default_values(vals)))
+        per_record_fnames = [
+            self._cs_binding_diff_fields(self._add_missing_default_values(vals))
+            for vals in vals_list
+        ]
         records = super().create(vals_list)
-        if fnames:
-            records._cs_binding_assert(
-                {}, [f for f in self._cs_binding_fields if f in fnames])
+        batches = {}
+        for record, fnames in zip(records, per_record_fnames):
+            if fnames:
+                batches.setdefault(fnames, []).append(record.id)
+        for fnames, ids in batches.items():
+            records.browse(ids)._cs_binding_assert({}, fnames)
         return records
 
     def write(self, vals):
-        """write 側不受 ``default_`` 影響（default 只在 create 套用）。"""
-        fnames = self._cs_binding_diff_fields(vals)
+        """write 側不受 ``default_`` 影響（default 只在 create 套用）。
+
+        觸發器多吃一組 ``_cs_binding_write_triggers``（#715）：改的是**既有**
+        綁定，所以連「非載體欄位間接觸發 stored compute 重算」也算一次綁定
+        變更。create 側不吃那一組，理由見檔頭。
+        """
+        fnames = self._cs_binding_diff_fields(
+            vals,
+            tuple(self._cs_binding_triggers) + tuple(self._cs_binding_write_triggers),
+        )
         before = self._cs_binding_snapshot(fnames) if fnames else None
         res = super().write(vals)
         if fnames:

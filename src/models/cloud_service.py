@@ -3843,12 +3843,51 @@ class CloudService(models.Model):
         現在的保證，逐方向寫清楚：
 
         - **新增方向**：新綁上的 project id 必然出現在指令 tuple 裡
-          ⇒ 落在候選集內。唯一例外是 `(0, 0, vals)`（就地新建 project）——它的
-          id 當下還不存在，無從檢查；但那個 project 是呼叫者自己建的、且它的
-          `create` 會走 `project.project` 側的 mixin，所以不是提權面。
+          ⇒ 落在候選集內。唯一例外是 `(0, 0, vals)`（就地新建 project）——見
+          下一節，那一格**兩端都沒有檢查**。
         - **移除方向**：被解掉的 project 必然在**寫入前**的 `self.project_ids`
-          裡 ⇒ 由下面那行 `self.sudo().project_ids.ids` 覆蓋，與指令形態無關。
-        - ⇒ 候選集 ⊇（新增 ∪ 移除），指令形態不影響這個包含關係。
+          裡 ⇒ 由下面那行覆蓋，與指令形態無關。⚠ 那次讀取帶
+          `active_test=False`（#716 ②）：`project.project` 有 `active`，預設
+          會在 `Many2many.convert_to_record_multi` 那一步把已封存的 project
+          從 recordset 濾掉，relation 那一列卻還在。
+        - ⇒ 候選集 ⊇（新增 ∪ 移除）\\ {`(0, 0, vals)` 新建的那些}。
+
+        🔑 `active_test=False` 那一格**不是**在補一個可被利用的漏洞——實測見
+        `test_project_cs_m2m_authz_715_716.py` ::
+        `TestReverseCandidateArchivedProject716` 的 `B5`：
+        `Many2many.write_real` 算 `old_relation` 用的是同一個 `record[fname]`，
+        `active_test` 對它一樣生效 ⇒ `(3)` / `(5)` / `(6)` 全都**動不到**已封存
+        的那一列。舊寫法沒出事，是因為**框架兩邊一起瞎**，不是因為候選集真的
+        是超集。加上 `active_test=False` 之後，「候選集 ⊇ 實際變動」這句話自己
+        成立，不再掛在框架某個沒寫下來的行為上；方向只會過寬，符合上一節那條
+        「只有仍然只會過寬的寫法才可以取代它」。
+
+        ## `(0, 0, vals)`：兩端都沒有檢查（#705 F6 → #716 ③ 更正）
+
+        🔴 **舊版這一格的理由是假的，而且是「更正動作本身鑄出新假宣稱」的
+        第二輪。** 舊版寫「那個 project 是呼叫者自己建的、且它的 `create` 會走
+        `project.project` 側的 mixin」——第二句在授權上不是 load-bearing，實測
+        那個 mixin 一次都沒被呼叫（`test_project_cs_m2m_authz_715_716.py` ::
+        `TestNestedCreateCommand0Claim716` 的 `B6`，`examined=[]`）。
+
+        機制：`Many2many.write_real` 對 `(0, 0, vals)` 先 `comodel.create(vals)`，
+        relation 那一列是**之後**用直接 SQL insert 完成的——不是「建出來的
+        project 收到一份帶 `cloud_service_ids` 的 vals」。所以巢狀 vals 本身
+        不含載體 key 時，project 側的 mixin 看不到任何要比對的欄位。這是
+        `(4)`／`(6)` 那個原始缺陷的**同一個形狀**，只是換成 `(0)`。
+
+        指得出證據的部分只有這些，就只寫這些：
+
+        - 巢狀 vals **自己**帶載體 key（含經 `default_` context 補進來的）時，
+          project 側 mixin 看得見 ⇒ 擋得住（`B7` / `B8`）。
+        - 剩下的窄縫＝「純 `(0, 0, {'name': ...})`」。那個 project 是這次呼叫
+          當場建出來的，**沒有第三方受害者**（本方法的判準是「呼叫者對那個
+          project 有沒有 write」，而新建的 project 不屬於任何別人）；能走到
+          這一行的呼叫者本來就對這顆 service 有 write（#676 的 rule ⇒
+          owner／admin）。⇒ 今天不構成越權。
+        - ⚠ 「今天不構成越權」不等於「有守線」。若日後 `project.project` 的
+          建立側出現「呼叫者建得出別人名下的 project」這種形態，這一格就要
+          重新評估——不要因為這裡寫著「不是提權面」就跳過。
 
         ## 與 project 側的不對稱（刻意，且只有這裡記著）
 
@@ -3870,7 +3909,14 @@ class CloudService(models.Model):
             return
         # 移除方向的舊值：與指令形態無關，`(5)`／`(6, 0, [])` 也涵蓋得到。
         # sudo ⇒ 看真實歸屬，不被呼叫者自己的讀取權限縮窄（縮窄＝漏檢）。
-        candidates = set(self.sudo().project_ids.ids)
+        # `active_test=False` 同理（#716 ②）：`project.project` 有 `active`，
+        # 而 `Many2many.convert_to_record_multi` 會依 env context 的
+        # `active_test` 把已封存的 comodel record 濾掉（`Many2many.read` 自己
+        # 撈 SQL 時帶的 `active_test=False` 救不到這一步）⇒ relation 那一列
+        # 還在、候選集卻沒有它。⚠ 這一格今天不可利用（框架的 `write_real`
+        # 同樣看不到那一列 ⇒ 根本解不掉），加它是為了讓「候選集 ⊇ 實際變動」
+        # 自己成立——完整論證見上面 docstring 的 🔑 段。
+        candidates = set(self.sudo().with_context(active_test=False).project_ids.ids)
         for command in commands:
             if not isinstance(command, (list, tuple)) or len(command) < 2:
                 continue

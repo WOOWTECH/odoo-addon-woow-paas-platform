@@ -368,8 +368,17 @@ from . import test_project_cs_m2m_authz_698
 # `copy()` 這族「值不在呼叫者 raw vals 裡」的來源不得繞過 create 守衛；
 # F2＝compute 導出的綁定不是呼叫者新增的（空 key 不得炸掉 task create）；
 # F3＝反向端候選集必須含移除方向的舊值（判準＝強制否決，不是「有沒有被擋」）；
-# F6＝cross-project move 不觸發守衛的真正理由是 key gate（HttpCase，全走 call_kw）
+# F6＝cross-project move 確實會改動綁定集合（行為端已由 #715 反轉：move 現在走守衛，
+# 見 test_project_cs_m2m_authz_715_716）（HttpCase，全走 call_kw）
 from . import test_project_cs_m2m_authz_705
+# fix: #715 ＋ #716 —— #705 post-merge 獨立複驗留下的旁路與三個殘留缺口。
+# #715＝task 換 project 讓 `primary_cloud_service_id`（stored compute）靜默換綁，
+# 呼叫者不指名任何載體欄位 ⇒ 守衛整道跳過；修法是 write **側專用**觸發器
+# （掛成兩側通吃會讓每一次 task create 都退回全比對 ⇒ #705 F2 復發）。
+# #716 ①＝批次 create 對 vals_list 取 key 聯集再套回整批 ⇒ F2 換到批次路徑復發；
+# ②＝反向端候選集漏掉 archived project（active_test 預設過濾，判準＝強制否決）；
+# ③＝`(0,0,vals)` 例外的 docstring 理由為假，B6 把真機制釘住（HttpCase，全走 call_kw）
+from . import test_project_cs_m2m_authz_715_716
 from . import test_cloud_service_provision_gate_519
 from . import test_cloud_service_subscription_binding_519
 
