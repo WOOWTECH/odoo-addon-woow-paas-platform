@@ -50,6 +50,9 @@ from odoo.exceptions import UserError
 from odoo.tests import TransactionCase, tagged
 
 from ..models.smart_home_route import _internal_sm_route_identity
+# #536：`sa_skip_route_sync` 只認模組私有 sentinel，不能傳 `True`
+# （呼叫端 context 會被 `call_kw` 整包換進 env ⇒ truthy 值是租戶可偽造的）。
+from ..models.security_access import _skip_route_sync
 from ..services.naming import make_sm_access_canonical_name
 from ..services.reconciler import collect_left_set
 from .smart_home_fixture import sh_model
@@ -166,8 +169,7 @@ class _ShAccessSyncFixture(TransactionCase):
         }
         if sequence is not None:
             vals['sequence'] = sequence
-        pol = self.Policy.sudo().with_context(
-            sa_skip_route_sync=True).create(vals)
+        pol = _skip_route_sync(self.Policy.sudo()).create(vals)
         if cf_policy_id:
             pol.cf_policy_id = cf_policy_id
         # 同 `_route()`：回傳前把 fixture 用的 skip 開關關掉。

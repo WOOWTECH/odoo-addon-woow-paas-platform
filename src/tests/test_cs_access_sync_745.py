@@ -33,6 +33,9 @@ from odoo.tests import TransactionCase, tagged
 from ..models.cloud_service import (
     _internal_cs_access_identity, _internal_provision,
 )
+# #536：`sa_skip_route_sync` 只認模組私有 sentinel，不能傳 `True`
+# （呼叫端 context 會被 `call_kw` 整包換進 env ⇒ truthy 值是租戶可偽造的）。
+from ..models.security_access import _skip_route_sync
 from ..services.naming import make_service_subdomain
 from ..services.reconciler import collect_left_set
 
@@ -111,8 +114,7 @@ class _CsAccessSyncFixture(TransactionCase):
         }
         if sequence is not None:
             vals['sequence'] = sequence
-        pol = self.Policy.sudo().with_context(
-            sa_skip_route_sync=True).create(vals)
+        pol = _skip_route_sync(self.Policy.sudo()).create(vals)
         if cf_policy_id:
             pol.cf_policy_id = cf_policy_id
         # 🔴 `create()` 回的 recordset **帶著呼叫時的 context**——直接回它，
@@ -124,8 +126,9 @@ class _CsAccessSyncFixture(TransactionCase):
     def _route(self):
         sa = self.env['woow_paas_platform.security_access'].sudo().create(
             {'name': 'SA 745', 'workspace_id': self.workspace.id})
-        return self.env['woow_paas_platform.security_access_route'].sudo(
-        ).with_context(sa_skip_route_sync=True).create({
+        return _skip_route_sync(
+            self.env['woow_paas_platform.security_access_route'].sudo()
+        ).create({
             'security_access_id': sa.id,
             'subdomain_prefix': 'r745-%s' % uuid.uuid4().hex[:6]})
 

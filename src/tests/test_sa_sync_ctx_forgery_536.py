@@ -60,7 +60,10 @@ from unittest.mock import MagicMock, patch
 from odoo.tests import HttpCase, tagged
 
 from odoo.addons.woow_paas_platform.models.security_access import (
+    _force_access_sync,
     _internal_identity,
+    _rule_replace,
+    _skip_route_sync,
 )
 
 _SA = 'woow_paas_platform.security_access'
@@ -475,3 +478,94 @@ class TestForceAccessSyncForgery536(_Sync536Fixture):
             mc.sync_access_app.called,
             '#536：偽造的 `sa_force_access_sync` 不得繞過 state gate '
             '（停權中仍把自己 route 的 Access 設定推去 Cloudflare）')
+
+
+class TestInternalSentinelStillWorks536(_Sync536Fixture):
+    """G：三個逃生門對**伺服器端程式碼**必須照舊開得了。
+
+    這一組是修法的陰性對照。少了它，「偽造打不開」與「這個功能被整個刪掉了」
+    在上面每一格的輸出上完全一樣——而後者會讓 migration 在升級途中對 live SA
+    觸發真的 Cloudflare 呼叫（`sa_skip_route_sync` 存在的原因），也會讓
+    controller 的整組 rule 替換在瞬時空集上被 operator 以 422 打回
+    （`sa_rule_replace` 存在的原因）。
+
+    ⚠ 這一組刻意**不**走 RPC：sentinel 的全部意義就是「呼叫端構造不出來」，
+    所以它只可能在 in-process 呼叫端出現。
+    """
+
+    def test_G1_sentinel_skip_route_sync_still_suppresses(self):
+        """`_skip_route_sync()` 開閘 ⇒ 只搬 DB 狀態、不打 operator。"""
+        mc = self._mock()
+        with patch(MOCK_GET_CLIENT, return_value=mc):
+            route = _skip_route_sync(self.Route.sudo()).create({
+                'security_access_id': self.sa.id,
+                'subdomain_prefix': 'sa536-g1',
+                'is_protected': True,
+            })
+        mc.sync_tunnel_routes.assert_not_called()
+        mc.sync_access_app.assert_not_called()
+        self.assertTrue(
+            route.exists(),
+            '陰性對照：DB 那一半必須照樣落地（只是不打 operator）')
+
+    def test_G2_sentinel_rule_replace_still_allows_whole_ruleset_replace(self):
+        """`_rule_replace()` 開閘 ⇒ controller 的 (5,0,0)＋creates 整組替換可行。
+
+        同時釘住它存在的理由：整個替換過程中，**沒有任何一次**推送帶著空的
+        include（真 operator 對空 include 直接 422，整個編輯 abort）。
+        """
+        pol = self._make_policy('g2', [
+            {'group': 'include', 'rule_type': 'email_list',
+             'rule_value': 'before@acme.com'}])
+        mc = self._mock()
+        with patch(MOCK_GET_CLIENT, return_value=mc):
+            _rule_replace(pol).write({
+                'name': 'g2-edited',
+                'rule_ids': [(5, 0, 0),
+                             (0, 0, {'group': 'include',
+                                     'rule_type': 'email_list',
+                                     'rule_value': 'after@acme.com'})],
+            })
+        self.assertEqual(
+            pol._rules_by_group('include'),
+            [{'rule_type': 'email_list', 'rule_value': 'after@acme.com'}],
+            '陰性對照：整組替換的最終狀態必須是新的那一條')
+        self.assertTrue(
+            mc.sync_access_app.called,
+            '陰性對照：替換結束後 policy.write() 仍要做一次全量推送')
+        for call in mc.sync_access_app.call_args_list:
+            for p in call.args[0].get('policies', []):
+                self.assertTrue(
+                    p.get('include'),
+                    'operator 收到空 include policy %r（替換瞬時狀態被外推）'
+                    % p.get('name'))
+
+    def test_G3_sentinel_force_access_sync_still_bypasses_state_gate(self):
+        """`_force_access_sync()` 開閘 ⇒ 停權中仍可收斂（resume 靠這條）。"""
+        self.sa.sudo().write({'state': 'suspended'})
+        self.env.flush_all()
+        mc = self._mock()
+        with patch(MOCK_GET_CLIENT, return_value=mc):
+            self.sa._sync_all_routes_access()
+        self.assertTrue(
+            mc.sync_access_app.called,
+            '陰性對照：provision／resume 的收斂點必須繞得過 state gate，'
+            '否則停權期間被關掉的 route 永遠拆不掉它的 CF Access app')
+
+    def test_G4_plain_true_does_not_open_the_hatch_even_in_process(self):
+        """守衛比對的是**值的同一性**，不是「呼叫端是誰」。
+
+        這一格釘住修法的形狀：如果哪天有人把判定改回 `ctx.get(key)`，本檔
+        A2/B2/C2 會紅——但如果改成「in-process 就放行」之類的替代設計，那些格
+        仍會綠，只有這一格會紅。
+        """
+        mc = self._mock()
+        with patch(MOCK_GET_CLIENT, return_value=mc):
+            self.Route.sudo().with_context(sa_skip_route_sync=True).create({
+                'security_access_id': self.sa.id,
+                'subdomain_prefix': 'sa536-g4',
+                'is_protected': True,
+            })
+        self.assertTrue(
+            mc.sync_access_app.called,
+            '#536：`True` 不是 sentinel——即使是 in-process 呼叫端也不得開閘')
