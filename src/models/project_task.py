@@ -18,6 +18,13 @@ class ProjectTask(models.Model):
     # 兩個都是載體：`primary_cloud_service_id` 不是 M:N 的投影，而是獨立的
     # stored compute + `readonly=False` ⇒ 可以被直接寫成任意 service。
     _cs_binding_fields = ('extra_cloud_service_ids', 'primary_cloud_service_id')
+    # #715：`project_id` 自己不是載體，但 `primary_cloud_service_id` 是
+    # `@api.depends('project_id.cloud_service_ids')` 的 stored compute
+    # ⇒ 搬 task 就會換綁，而呼叫者一個載體欄位都沒指名 ⇒ 舊實作連 snapshot
+    # 都不做。掛在 **write 側專用**的那一組：每一次 task create 都會指名
+    # `project_id`，掛成兩側通吃會讓 create 退回全比對、#705 F2 原樣復發
+    # （完整論證見 mixin 檔頭「create 與 write 的判準刻意不同」）。
+    _cs_binding_write_triggers = ('project_id',)
 
     chat_enabled = fields.Boolean(
         string='Chat Enabled',
