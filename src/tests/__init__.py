@@ -455,3 +455,4 @@ from . import test_sh_access_arc_migration_768
 # **真正可達的是租戶 context 流進平台碼**（`_ensure_primary_route()` 走 `.sudo()`，
 # 而 sudo 不洗 context），B1 打的就是那條生產路徑。
 from . import test_sh_access_identity_768
+from . import test_billing_ssot_guard
