@@ -135,6 +135,10 @@ def _is_internal_identity_write(env):
 #                             收斂點跑在 SA 狀態還沒回到 'active' 之前。偽造
 #                             後果：suspended / deleting 狀態仍能把自己 route
 #                             的 Access 設定推去 Cloudflare。
+#                             ⚠ 這個 key 背後還有一個**更大的、本次沒處理的**
+#                             家族問題：「停權未全面阻斷 operator 呼叫」。堵住
+#                             這把鑰匙只是拿掉其中一條路，不等於停權中的租戶
+#                             就碰不到 operator 了 —— 那是另案（#536 明列）。
 #
 # ⚠ 這三個 key 的 KEY 名沒有改，改的是**值**：`with_context(key=False)` 的
 # 「關掉」語意因此原封不動，而 `with_context(key=True)` 從此不再開閘。後者是
