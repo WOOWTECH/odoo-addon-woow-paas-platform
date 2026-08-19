@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <data noupdate="1">
+        <!-- #778 配套 3：計費靜默死亡監控（daily）。
+             判準與告警形態見 sh_subscription_fix._cron_billing_silence_alert
+             docstring；門檻 param woow_paas_platform.billing_silence_alert_days
+             （'0' 停用）。⚠ noupdate=1：日後改 interval 要改 DB 或走
+             migration（同 cloud_service_cron.xml 的注意事項）。 -->
+        <record id="ir_cron_billing_silence_alert" model="ir.cron">
+            <field name="name">Subscription: Billing Silence Alert</field>
+            <field name="model_id" ref="sh_subscription.model_sh_subscription_subscription"/>
+            <field name="state">code</field>
+            <field name="code">model._cron_billing_silence_alert()</field>
+            <field name="interval_number">1</field>
+            <field name="interval_type">days</field>
+            <field name="active" eval="True"/>
+        </record>
+    </data>
+</odoo>

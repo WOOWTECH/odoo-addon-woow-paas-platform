@@ -1,6 +1,6 @@
 {
     "name": "Woow PaaS Platform",
-    "version": "18.0.1.0.152",
+    "version": "18.0.1.0.154",
     "category": "WOOW",
     "summary": "Woow PaaS Platform - Base Module",
     "description": """
@@ -34,6 +34,8 @@
         "data/ai_assistant_data.xml",
         "data/mcp_server_cron.xml",
         "data/cloud_service_cron.xml",
+        # #778 配套 3：計費靜默死亡監控 cron
+        "data/billing_silence_cron.xml",
         "views/project_task_views.xml",
         "views/project_views.xml",
         "views/ai_config_views.xml",
