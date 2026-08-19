@@ -83,13 +83,15 @@ class CfAccessPolicyReap(models.Model):
         help='Cloudflare reusable policy id（待回收）。',
     )
 
-    _sql_constraints = [
-        (
-            'cf_access_policy_reap_uniq',
-            'UNIQUE(anchor_model, anchor_id, cf_policy_id)',
-            'The same Cloudflare policy id can only be pending once per anchor.',
-        ),
-    ]
+    # 🔴 **刻意沒有 UNIQUE(anchor_model, anchor_id, cf_policy_id)**，去重靠
+    # `_record_ids()` 的先查後寫。理由是失敗形狀而不是效能：`_settle()` 跑在
+    # **operator 已經回 2xx 之後**——CF 那邊的刪除已經發生、回捲不掉——此時一個
+    # unique violation 會把整個交易 abort 掉，把「記帳失敗」升級成「操作失敗」，
+    # 換來的是 DB 與 CF 不一致 ＋ 呼叫端收到假的錯誤
+    # （`docs/decisions/patterns/post-commit-bookkeeping-rollback-unit.md`）。
+    # 而重複列在這裡是**無害的**：`_build_existing_policy_ids()` 逐顆去重才 append，
+    # `_settle()` 是 `('cf_policy_id', 'in', ...)` 整批刪。拿「不可能發生的重複」
+    # 去換「已經發生的外部變更被回捲」不划算。
 
     # ------------------------------------------------------------------ #
     #  記帳 / 讀帳 / 消帳（三腿共用的單一裁決處）                          #
@@ -136,7 +138,10 @@ class CfAccessPolicyReap(models.Model):
             ('anchor_model', '=', anchor_model),
             ('anchor_id', '=', anchor_id),
         ])
-        return [r.cf_policy_id for r in rows if r.cf_policy_id]
+        # `dict.fromkeys`：保序去重。表上沒有 UNIQUE（見上方註解），競態下可能
+        # 有重複列，而呼叫端拿到的應該是「還欠哪幾顆」而不是「帳上有幾列」。
+        return list(dict.fromkeys(
+            r.cf_policy_id for r in rows if r.cf_policy_id))
 
     @api.model
     def _pending_for(self, anchor):
