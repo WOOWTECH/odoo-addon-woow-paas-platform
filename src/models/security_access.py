@@ -1715,17 +1715,25 @@ class SecurityAccessRoute(models.Model):
 
     def _build_existing_policy_ids(self):
         """CF reusable-policy ids the operator must delete-then-recreate for
-        THIS route. Normally the surviving rows' cf_policy_id; a policy unlink
-        runs super().unlink() before the resync, so the just-deleted rows' cf
-        ids are already gone from the DB — they would never enter this list and
-        the operator (whose only delete path is this list) would leak them as
-        permanent CF orphans. unlink() captures those doomed ids and passes them
-        via context so they are reaped on the same resync.
+        THIS route. Two sources, both server-side: the surviving rows'
+        cf_policy_id, plus whatever this anchor still owes on the reap ledger
+        (`cf_access_policy_reap._pending_for`).
 
-        #528：來源從「只有本次 context」擴成「**帳本 ∪ 本次 context**」。context
-        用完即丟，而那一次 resync 可能被下面的 liveness gate 整個擋掉——被擋掉的
-        那些 id 就此沒有任何記錄指向它們（永久 CF 孤兒）。帳本讓它們活到下一次
-        推得動為止。"""
+        A policy unlink runs super().unlink() before the resync, so the
+        just-deleted rows' cf ids are already gone from the DB — they would
+        never enter this list and the operator (whose only delete path is this
+        list) would leak them as permanent CF orphans. They reach this list via
+        the LEDGER: unlink() calls `Reap._record_ids()` inside the same
+        savepoint, before it triggers the resync.
+
+        #528：帳要離開一次性的通道、落到 DB。那一次 resync 可能被下面的 liveness
+        gate 整個擋掉——只活一次呼叫的東西被擋掉之後就沒有任何記錄指向那些 id
+        了（永久 CF 孤兒）。帳本讓它們活到下一次推得動為止。
+
+        🔴 #783：`_pending_for()` **不讀任何 context**。這個回傳值會變成 operator
+        的帳號級刪除清單，而 `call_kw` 把呼叫端 context 整包換進 env ⇒ 舊的
+        `sa_unlinked_cf_policy_ids` 通道已整條移除（repo-lint 第 28 條
+        `status='removed'` 擋它回來）。"""
         self.ensure_one()
         ids = [p.cf_policy_id for p in self.access_policy_ids if p.cf_policy_id]
         for cf_id in self.env[_CF_REAP_MODEL]._pending_for(self):
