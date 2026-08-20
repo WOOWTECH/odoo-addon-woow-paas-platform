@@ -1,4 +1,4 @@
-"""待回收的 Cloudflare Access reusable policy 帳本（#528）。
+"""待回收的 Cloudflare Access 物件帳本（#528 建立、#784 擴充到 app）。
 
 ## 這張表存在的理由
 
@@ -19,9 +19,23 @@ sync 把帳上的 id 併進 ``existing_policy_ids`` 一起送去刪，operator �
 了才消帳。sync 失敗或被 gate 擋掉時帳原封不動 —— 帳的壽命不再綁在「當次 sync
 有沒有跑」上，這就是本表的全部價值。
 
+## #784：兩件事變了
+
+1. **帳也收 Access application id**（``kind='app'``）。刪整條 route 時丟掉的不
+   只是 policy：``access_app_id`` 一起消失，而它跟 policy 一樣只能經 operator
+   的 ``existing_app_id`` 被刪。欄位因此從 ``cf_policy_id`` 改名為
+   ``cf_object_id`` —— 讓一個叫 policy 的欄位裝 app id 正是「同名不同物」那類
+   陷阱：任何漏了 ``kind`` 條件的查詢都會把 app id 餵進 ``existing_policy_ids``，
+   operator 拿它去 DELETE 一顆不存在的 policy、CF 回 404（視為成功）⇒ 帳被消掉
+   而 app 永遠留在 CF，**靜默**。所有讀寫入口一律帶 ``kind``，預設 ``'policy'``
+   讓 #528 的既有呼叫端語意不變。
+2. **dead anchor 有人收了**（``_cron_reap_dead_anchors``）。#528 的消費路徑是
+   「錨點的下一次成功 sync」——錨點列被刪掉之後**沒有任何 sync 會再為它跑**，
+   那筆帳原本永遠沒人處理。這條 cron 就是那一格的回收者，見它自己的 docstring。
+
 ## 兩個刻意的設計決定
 
-1. **只記從列上讀到的 ``cf_policy_id``，永遠不記 context 傳進來的值。**
+1. **只記從列上讀到的 ``cf_object_id``，永遠不記 context 傳進來的值。**
    ``sa_unlinked_cf_policy_ids`` 是一把裸 context key，而 ``/web/dataset/call_kw``
    把呼叫端的 context 原封不動交給 ORM（#522／#536 已就同族 key 實測過）
    ⇒ 租戶在 RPC payload 多塞一個 key 就能決定 operator 要刪哪些 CF policy，
@@ -41,12 +55,17 @@ sync 把帳上的 id 併進 ``existing_policy_ids`` 一起送去刪，operator �
 三個錨點是三個不同 model（``security_access_route`` / ``cloud_service`` /
 ``smart_home_route``），Many2one 版本要把 policy 那套 exclusive-arc 機制再抄一遍。
 更關鍵的是**壽命**：Many2one 帶 ``ondelete='cascade'`` 會讓帳隨錨點一起消失，
-而「錨點被刪掉、帳還沒回收」正是最不能靜默丟掉的那一格。純量 pair 讓那筆帳留下來
-（reconcile 報表也會從 CF 那側把同一顆 id 列成孤兒候選，兩個信源對得起來）。
+而「錨點被刪掉、帳還沒回收」正是最不能靜默丟掉的那一格（#784 整張 issue 就是
+這一格）。純量 pair 讓那筆帳留下來（reconcile 報表也會從 CF 那側把同一顆 id 列成
+孤兒候選，兩個信源對得起來）。
 """
 import logging
 
+from psycopg2 import OperationalError
+
 from odoo import api, fields, models
+
+from ..services.paas_operator import get_paas_operator_client
 
 _logger = logging.getLogger(__name__)
 
@@ -55,12 +74,18 @@ _logger = logging.getLogger(__name__)
 #: 三腿各自再 `context.get()` 一次就會漂。
 DOOMED_CTX_KEY = 'sa_unlinked_cf_policy_ids'
 
+#: 一列記的是哪一種 CF Access 物件。**兩者的刪除通道不同**（`existing_policy_ids`
+#: vs `existing_app_id`），混在一起送出去不會報錯只會靜默失敗，所以每一個讀寫
+#: 入口都要顯式指定。
+KIND_POLICY = 'policy'
+KIND_APP = 'app'
+
 
 class CfAccessPolicyReap(models.Model):
-    """一列 ＝ 一顆「DB 已刪、CF 尚未確認回收」的 reusable policy。"""
+    """一列 ＝ 一顆「DB 已刪、CF 尚未確認回收」的 Access 物件（policy 或 app）。"""
 
     _name = 'woow_paas_platform.cf_access_policy_reap'
-    _description = 'Pending Cloudflare Access Policy Reap'
+    _description = 'Pending Cloudflare Access Object Reap'
     #: FIFO：先欠的先送。`_pending_ids` 依賴這個順序，改成 desc 會讓
     #: `existing_policy_ids` 的順序在不同呼叫間漂動（不影響正確性，但會讓
     #: payload 側錄型測試莫名其妙地不穩）。
@@ -78,19 +103,28 @@ class CfAccessPolicyReap(models.Model):
         help='錨點列的 id。錨點列可能已經被刪掉——那正是本表要留住的情形，'
              '所以刻意用純量而不是 Many2one。',
     )
-    cf_policy_id = fields.Char(
-        string='CF Policy ID', required=True, index=True,
-        help='Cloudflare reusable policy id（待回收）。',
+    kind = fields.Selection(
+        [(KIND_POLICY, 'Reusable Policy'), (KIND_APP, 'Access Application')],
+        string='Object Kind', required=True, default=KIND_POLICY, index=True,
+        help='這顆 id 是 reusable policy 還是 Access application。operator 的'
+             '刪除通道不同（existing_policy_ids vs existing_app_id），送錯欄位'
+             '會被 CF 當成「刪一顆不存在的東西」回 404＝成功，帳被消掉而物件'
+             '留著（#784）。',
+    )
+    cf_object_id = fields.Char(
+        string='CF Object ID', required=True, index=True,
+        help='Cloudflare 上待回收的物件 id（reusable policy 或 Access '
+             'application，由 kind 決定）。',
     )
 
-    # 🔴 **刻意沒有 UNIQUE(anchor_model, anchor_id, cf_policy_id)**，去重靠
+    # 🔴 **刻意沒有 UNIQUE(anchor_model, anchor_id, kind, cf_object_id)**，去重靠
     # `_record_ids()` 的先查後寫。理由是失敗形狀而不是效能：`_settle()` 跑在
     # **operator 已經回 2xx 之後**——CF 那邊的刪除已經發生、回捲不掉——此時一個
     # unique violation 會把整個交易 abort 掉，把「記帳失敗」升級成「操作失敗」，
     # 換來的是 DB 與 CF 不一致 ＋ 呼叫端收到假的錯誤
     # （`docs/decisions/patterns/post-commit-bookkeeping-rollback-unit.md`）。
     # 而重複列在這裡是**無害的**：`_build_existing_policy_ids()` 逐顆去重才 append，
-    # `_settle()` 是 `('cf_policy_id', 'in', ...)` 整批刪。拿「不可能發生的重複」
+    # `_settle()` 是 `('cf_object_id', 'in', ...)` 整批刪。拿「不可能發生的重複」
     # 去換「已經發生的外部變更被回捲」不划算。
 
     # ------------------------------------------------------------------ #
@@ -99,7 +133,7 @@ class CfAccessPolicyReap(models.Model):
 
     @api.model
     def _record(self, anchor, cf_policy_ids):
-        """把 doomed id 記進帳（同一錨點同一 id 只記一次）。
+        """把 doomed policy id 記進帳（同一錨點同一 id 只記一次）。
 
         ⚠ ``cf_policy_ids`` 必須來自**被刪列上讀到的** ``cf_policy_id``。
         不要餵 context 進來，理由見模組 docstring 的設計決定 1。
@@ -109,26 +143,27 @@ class CfAccessPolicyReap(models.Model):
         return self._record_ids(anchor._name, anchor.id, cf_policy_ids)
 
     @api.model
-    def _record_ids(self, anchor_model, anchor_id, cf_policy_ids):
+    def _record_ids(self, anchor_model, anchor_id, cf_ids, kind=KIND_POLICY):
         """``_record`` 的純值版：錨點列可能已經不在了（teardown 路徑）。"""
         if not anchor_model or not anchor_id:
             return self.browse()
-        wanted = [i for i in (cf_policy_ids or []) if i]
+        wanted = [i for i in (cf_ids or []) if i]
         if not wanted:
             return self.browse()
-        known = set(self._pending_ids(anchor_model, anchor_id))
+        known = set(self._pending_ids(anchor_model, anchor_id, kind=kind))
         vals_list = [{
             'anchor_model': anchor_model,
             'anchor_id': anchor_id,
-            'cf_policy_id': cf_id,
+            'kind': kind,
+            'cf_object_id': cf_id,
         } for cf_id in dict.fromkeys(wanted) if cf_id not in known]
         if not vals_list:
             return self.browse()
         return self.sudo().create(vals_list)
 
     @api.model
-    def _pending_ids(self, anchor_model, anchor_id):
-        """該錨點帳上還沒確認回收的 cf policy id（FIFO）。
+    def _pending_ids(self, anchor_model, anchor_id, kind=KIND_POLICY):
+        """該錨點帳上還沒確認回收的 cf id（FIFO），只回 ``kind`` 那一種。
 
         取 ``(model, id)`` 而不是 record：錨點列被刪掉之後仍要查得到帳。
         """
@@ -137,19 +172,22 @@ class CfAccessPolicyReap(models.Model):
         rows = self.sudo().search([
             ('anchor_model', '=', anchor_model),
             ('anchor_id', '=', anchor_id),
+            ('kind', '=', kind),
         ])
         # `dict.fromkeys`：保序去重。表上沒有 UNIQUE（見上方註解），競態下可能
         # 有重複列，而呼叫端拿到的應該是「還欠哪幾顆」而不是「帳上有幾列」。
         return list(dict.fromkeys(
-            r.cf_policy_id for r in rows if r.cf_policy_id))
+            r.cf_object_id for r in rows if r.cf_object_id))
 
     @api.model
     def _pending_for(self, anchor):
-        """帳上的 ∪ 本次 context 注入的 doomed id。
+        """帳上的 ∪ 本次 context 注入的 doomed **policy** id。
 
         兩者聯集而不是二選一：unlink 當下兩邊都有（帳是剛寫的、context 是既有
         通道），但「手動帶 context 強制收斂」這條路徑（#528 留言記錄的那次存量
         清理就是這樣收的）帳上是空的，只有 context 有值。
+
+        ⚠ 只回 policy：這個回傳值的唯一去處是 ``existing_policy_ids``。
         """
         if not anchor:
             return []
@@ -186,7 +224,8 @@ class CfAccessPolicyReap(models.Model):
             rows = self.sudo().search([
                 ('anchor_model', '=', anchor_model),
                 ('anchor_id', '=', anchor_id),
-                ('cf_policy_id', 'in', reaped),
+                ('kind', '=', KIND_POLICY),
+                ('cf_object_id', 'in', reaped),
             ])
             if rows:
                 rows.unlink()
@@ -217,3 +256,174 @@ class CfAccessPolicyReap(models.Model):
             "the next successful sync (#528).",
             label, reason, len(pending), ', '.join(pending))
         return True
+
+    # ------------------------------------------------------------------ #
+    #  #784：刪除路徑的記帳／消帳（app ＋ policy 一起）                    #
+    # ------------------------------------------------------------------ #
+
+    @api.model
+    def _record_teardown(self, anchor_model, anchor_id, app_id, policy_ids):
+        """刪除路徑上拆不掉的東西一次記完（app id ＋ 剩下的 policy id）。
+
+        呼叫端一律是「錨點列即將／已經消失，而這些 id 沒有被 CF 確認回收」那一
+        格。**不判斷錨點還在不在**：判斷錯的方向是靜默丟失，而多記一筆的代價
+        只是 cron 多跑一次冪等的刪除（CF 的 DELETE 把 404 當成功）。
+        """
+        recorded = self._record_ids(anchor_model, anchor_id, [app_id],
+                                    kind=KIND_APP)
+        recorded |= self._record_ids(anchor_model, anchor_id, policy_ids)
+        return recorded
+
+    @api.model
+    def _settle_teardown(self, anchor_model, anchor_id, app_id,
+                         submitted_policy_ids, orphaned_policy_ids):
+        """一次成功的 teardown 之後結帳（app 那半 ＋ policy 那半）。
+
+        app 這半沒有「orphaned」對應物：operator 的 teardown 分支對 app 只有
+        「刪掉了（含 404 已不在）」與「丟例外」兩種結果，回得到 2xx 就代表這顆
+        app id 在 CF 上已經沒有了 ⇒ 直接消帳。
+        """
+        if app_id:
+            rows = self.sudo().search([
+                ('anchor_model', '=', anchor_model),
+                ('anchor_id', '=', anchor_id),
+                ('kind', '=', KIND_APP),
+                ('cf_object_id', '=', app_id),
+            ])
+            if rows:
+                rows.unlink()
+        self._settle(anchor_model, anchor_id,
+                     submitted_policy_ids, orphaned_policy_ids)
+
+    # ------------------------------------------------------------------ #
+    #  #784：dead anchor 的回收者（這條帳唯一會被走到的出口）              #
+    # ------------------------------------------------------------------ #
+
+    @api.model
+    def _cron_reap_dead_anchors(self, limit=500):
+        """把「錨點列已經不存在」的帳送去 operator 刪掉。
+
+        ## 為什麼非有這條不可
+
+        #528 的消費路徑是**錨點自己的下一次成功 sync**（`_build_existing_policy_
+        ids()` 把帳併進 `existing_policy_ids`）。那條路徑有一個沒寫出來的前提：
+        **錨點還活著**。錨點被刪掉之後沒有任何 sync 會再為它跑，那筆帳就永遠沒
+        有人處理——而「刪整條 route」正是丟最多 id 的那條路徑（#784）。所以刪除
+        路徑落的帳必須有一個**不依賴錨點**的回收者，否則落帳只是把「靜默丟失」
+        換成「靜默堆積」，一樣是一次性機制（#528 的根因）。
+
+        ## 誰、何時、憑什麼
+
+        * **誰**：本方法，由 `data/cf_access_reap_cron.xml` 的 ir.cron 驅動。
+        * **何時**：每小時一次。頻率的判準是「孤兒在 CF 上多留一小時的成本」而
+          不是延遲——待回收物件不影響任何線上流量，只是帳號級的殘留與計數。
+        * **憑什麼**：operator 的 teardown 分支（`enabled=False`）**只吃 id**，
+          不碰 tunnel、不需要 hostname，而且 CF 的 DELETE 把 404 當成功
+          （`extra/paas-operator/src/services/cloudflare.py`）⇒ 用一份純 id 的
+          payload 就刪得掉，重送也永遠安全。
+
+        ## 只收 dead anchor，是刻意的
+
+        錨點還活著的帳**不歸這裡管**：它有自己的消費路徑（下一次 sync），而且
+        它的 app 可能還在線上服務——這條 cron 若對活錨點送 `existing_app_id`
+        就會把一顆**正在保護租戶服務的** Access app 拆掉。「錨點不存在」是這個
+        危險動作唯一安全的前提，所以它是硬條件而不是最佳化。
+        （活錨點帳卡住不動的那一格另有訊號：`_warn_if_deferred`。）
+        """
+        rows = self.sudo().search([], limit=limit)
+        if not rows:
+            return 0
+        by_anchor = {}
+        for row in rows:
+            by_anchor.setdefault((row.anchor_model, row.anchor_id), []).append(row)
+
+        reaped_anchors = 0
+        client = None
+        for (anchor_model, anchor_id), group in by_anchor.items():
+            if anchor_model not in self.env:
+                # model 被拿掉了（重構／解除安裝）。帳留著並出聲：這種列沒有
+                # 任何自動處置是對的——連該打哪個 endpoint 都推導不出來。
+                _logger.warning(
+                    "[CF_REAP] ledger rows anchored on unknown model %r "
+                    "(anchor_id=%s, %d row(s)) — left on the ledger",
+                    anchor_model, anchor_id, len(group))
+                continue
+            if self.env[anchor_model].sudo().browse(anchor_id).exists():
+                continue  # 活錨點：它自己的下一次 sync 會收，見 docstring
+            if client is None:
+                client = get_paas_operator_client(self.env)
+                if not client:
+                    _logger.warning(
+                        "[CF_REAP] PaaS Operator is not configured — %d dead-"
+                        "anchor CF Access object(s) stay on the ledger",
+                        len(rows))
+                    return 0
+            if self._reap_dead_anchor(client, anchor_model, anchor_id, group):
+                reaped_anchors += 1
+        return reaped_anchors
+
+    @api.model
+    def _reap_dead_anchor(self, client, anchor_model, anchor_id, rows):
+        """送出一個 dead anchor 的 teardown。回傳「這一輪有沒有全部收乾淨」。
+
+        一顆 app 一次呼叫（正常只有一顆；兩顆以上只會出現在「拆失敗之後又換過
+        一次 app id」那種殘留）。policy 掛在第一次呼叫上一起送，沒有 app 時就
+        單獨送一次純 policy 的 teardown。
+        """
+        app_ids = [r.cf_object_id for r in rows if r.kind == KIND_APP]
+        policy_ids = list(dict.fromkeys(
+            r.cf_object_id for r in rows if r.kind == KIND_POLICY))
+        clean = True
+        for idx, app_id in enumerate(app_ids or [None]):
+            batch = policy_ids if idx == 0 else []
+            try:
+                result = client.sync_access_app({
+                    'enabled': False,
+                    # teardown 分支不讀這三個欄位（operator 只用 id 呼叫 CF 的
+                    # DELETE），但 schema 是必填。填成看得懂的來源標記，讓
+                    # operator 側的 log 也指得回這筆帳。
+                    'canonical_name': 'reap:%s:%s' % (anchor_model, anchor_id),
+                    'app_name': 'reap:%s:%s' % (anchor_model, anchor_id),
+                    'primary_hostname': '',
+                    'protected_hostnames': [],
+                    'session_duration': '24h',
+                    'login_idp_types': [],
+                    'policies': [],
+                    'existing_app_id': app_id,
+                    'existing_policy_ids': batch,
+                })
+            except Exception as e:  # noqa: BLE001 — 帳留著，下一輪再試
+                _logger.warning(
+                    "[CF_REAP] dead-anchor teardown failed for %s#%s "
+                    "(app=%s, %d policy): %s — kept on the ledger",
+                    anchor_model, anchor_id, app_id, len(batch), e)
+                return False
+            orphaned = result.get('orphaned_policy_ids') or []
+            if orphaned:
+                _logger.warning(
+                    "[CF_REAP] dead-anchor teardown for %s#%s left %d orphan "
+                    "policy(ies): %s — kept on the ledger",
+                    anchor_model, anchor_id, len(orphaned), ', '.join(orphaned))
+                clean = False
+            # 提交點之後：CF 上已經沒有這些物件了。記帳失敗只影響「下一輪會不會
+            # 重送」（重送是冪等的，CF 的 DELETE 把 404 當成功），不該讓整條 cron
+            # 交易連同前面已結帳的錨點一起回滾
+            # （[[post-commit-bookkeeping-rollback-unit]]）。
+            try:
+                with self.env.cr.savepoint():
+                    self._settle_teardown(anchor_model, anchor_id, app_id,
+                                          batch, orphaned)
+            except OperationalError:
+                raise
+            except Exception:
+                _logger.exception(
+                    "[CF_REAP] %s#%s: CF teardown SUCCEEDED but settling the "
+                    "ledger failed — rows stay pending and will be re-sent",
+                    anchor_model, anchor_id)
+                clean = False
+        if clean:
+            _logger.info(
+                "[CF_REAP] reaped dead anchor %s#%s (app=%s, %d policy)",
+                anchor_model, anchor_id, ', '.join(app_ids) or None,
+                len(policy_ids))
+        return clean

@@ -472,3 +472,10 @@ from . import test_billing_silence_alert
 # durable 記錄）、B2／B3／C1／D2（之後的 sync 不會把它併進 existing_policy_ids）、
 # B5／C2／D3（被 gate 略過是完全靜默的，呼叫端與「同步成功」不可區分）。
 from . import test_cf_policy_reap_ledger_528
+
+# fix: #784 刪整條 SA route 時 Access teardown 被無 forced 旁路的 gate 靜默
+# 略過，且 policy 的 ondelete='cascade' 是 DB 層 FK CASCADE ⇒ #781 加在
+# policy.unlink() 的落帳整支不執行。RED 群集：A1／A2（兩道 continue 各自的
+# 可達路徑，operator 根本沒被呼叫）、A4／A5（拆不掉的 id 沒有任何 durable
+# 記錄）、B1／B2（兩個相鄰出口）、C1–C5（dead anchor 帳沒有任何回收者）。
+from . import test_sa_route_teardown_dead_anchor_784

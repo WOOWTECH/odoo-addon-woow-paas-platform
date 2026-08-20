@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <data noupdate="1">
+        <!-- #784：待回收 CF Access 物件帳本的 **dead anchor 回收者**。
+
+             #528 的帳只有一條消費路徑——「錨點自己的下一次成功 sync」——而那條
+             路徑有一個沒寫出來的前提：錨點還活著。刪整條 route／刪 SA 之後沒有
+             任何 sync 會再為它跑，那筆帳原本永遠沒有人處理（落帳只是把「靜默
+             丟失」換成「靜默堆積」）。這條 cron 就是那一格的出口。
+
+             只處理「錨點列已經不存在」的帳：對活錨點送 existing_app_id 會把一顆
+             **正在保護租戶服務的** Access app 拆掉，所以那是硬條件不是最佳化。
+             判準與理由見 cf_access_policy_reap._cron_reap_dead_anchors docstring。
+
+             ⚠ noupdate=1：日後改 interval 要改 DB 或走 migration
+             （同 cloud_service_cron.xml 的注意事項）。 -->
+        <record id="ir_cron_cf_access_reap_dead_anchors" model="ir.cron">
+            <field name="name">PaaS: Reap dead-anchor Cloudflare Access objects</field>
+            <field name="model_id" ref="model_woow_paas_platform_cf_access_policy_reap"/>
+            <field name="state">code</field>
+            <field name="code">model._cron_reap_dead_anchors()</field>
+            <field name="interval_number">1</field>
+            <field name="interval_type">hours</field>
+            <field name="active" eval="True"/>
+        </record>
+    </data>
+</odoo>
