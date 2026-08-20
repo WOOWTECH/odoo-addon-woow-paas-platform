@@ -61,6 +61,8 @@ sync 把帳上的 id 併進 ``existing_policy_ids`` 一起送去刪，operator �
 """
 import logging
 
+from psycopg2 import OperationalError
+
 from odoo import api, fields, models
 
 from ..services.paas_operator import get_paas_operator_client
@@ -403,8 +405,22 @@ class CfAccessPolicyReap(models.Model):
                     "policy(ies): %s — kept on the ledger",
                     anchor_model, anchor_id, len(orphaned), ', '.join(orphaned))
                 clean = False
-            self._settle_teardown(anchor_model, anchor_id, app_id,
-                                  batch, orphaned)
+            # 提交點之後：CF 上已經沒有這些物件了。記帳失敗只影響「下一輪會不會
+            # 重送」（重送是冪等的，CF 的 DELETE 把 404 當成功），不該讓整條 cron
+            # 交易連同前面已結帳的錨點一起回滾
+            # （[[post-commit-bookkeeping-rollback-unit]]）。
+            try:
+                with self.env.cr.savepoint():
+                    self._settle_teardown(anchor_model, anchor_id, app_id,
+                                          batch, orphaned)
+            except OperationalError:
+                raise
+            except Exception:
+                _logger.exception(
+                    "[CF_REAP] %s#%s: CF teardown SUCCEEDED but settling the "
+                    "ledger failed — rows stay pending and will be re-sent",
+                    anchor_model, anchor_id)
+                clean = False
         if clean:
             _logger.info(
                 "[CF_REAP] reaped dead anchor %s#%s (app=%s, %d policy)",
