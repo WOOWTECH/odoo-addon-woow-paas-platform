@@ -138,9 +138,12 @@ class TestReapLedgerModel(TransactionCase, _ReapMixin):
     def test_A3_settle_clears_only_what_the_operator_confirmed(self):
         """送出去了 ≠ 刪掉了。判準是 operator 的 `orphaned_policy_ids`。"""
         self.Reap._record(self.anchor, ['cf-gone', 'cf-stuck'])
+        # #791 覆核 F9：`trusted_ids` 是必填的「這一輪送出去的 id 裡來自 DB 列
+        # 的那個子集」。這裡兩顆都是列值。
         self.Reap._settle(self.anchor._name, self.anchor.id,
                           submitted_ids=['cf-gone', 'cf-stuck'],
-                          orphaned_ids=['cf-stuck'])
+                          orphaned_ids=['cf-stuck'],
+                          trusted_ids=['cf-gone', 'cf-stuck'])
         self.assertEqual(
             self._pending(self.anchor), ['cf-stuck'],
             'operator 回報刪不掉的必須留在帳上等下一輪，不能一併消掉')
@@ -148,7 +151,8 @@ class TestReapLedgerModel(TransactionCase, _ReapMixin):
     def test_A4_settle_books_newly_orphaned_ids(self):
         """存活列的舊 id 刪不掉時也要進帳——今天那格是 log 一行然後永遠忘記。"""
         self.Reap._settle(self.anchor._name, self.anchor.id,
-                          submitted_ids=['cf-old'], orphaned_ids=['cf-old'])
+                          submitted_ids=['cf-old'], orphaned_ids=['cf-old'],
+                          trusted_ids=['cf-old'])
         self.assertEqual(self._pending(self.anchor), ['cf-old'])
 
     def test_A5_pending_for_unions_ledger_and_context(self):

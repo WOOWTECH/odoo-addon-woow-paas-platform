@@ -3354,9 +3354,15 @@ class CloudService(models.Model):
         # #528：operator 回 2xx ⇒ 這一輪送出去的 existing_policy_ids 已經有答案。
         # 沒被列進 orphaned 的確認刪掉 ⇒ 消帳；被列進去的現在就是 CF 孤兒 ⇒ 記進
         # 帳等下一輪（上面那行 warning 照發，但不再是「說完就忘」）。
-        self.env[_CF_REAP_MODEL]._settle(
+        # #791 覆核 F7：包 post-commit savepoint（記帳失敗不得拖垮下面的 id 回存）。
+        # F9：`trusted_ids` 只給列上真實存在的 cf id——`existing_policy_ids` 裡
+        # 混進來的 context 值不得經 orphaned 回流落帳（#783）。
+        Reap = self.env[_CF_REAP_MODEL]
+        Reap._settle_after_commit(
             self._name, self.id,
-            payload.get('existing_policy_ids') or [], orphaned)
+            payload.get('existing_policy_ids') or [], orphaned,
+            Reap._trusted_ids_for(self), _logger,
+            '[CLOUD_SVC] service %s (%s)' % (self.id, self.subdomain))
         # 身分錨點：只有 sentinel 路徑寫得動（對所有人生效，含 superuser）。
         _internal_cs_access_identity(self).access_app_id = (
             result.get('app_id') or False)
@@ -3452,6 +3458,13 @@ class CloudService(models.Model):
 
         沒有 app id 也沒有 policy id ⇒ 這台服務從來沒有 Access app，直接回
         True（不是「假裝成功」，是真的沒有東西要拆）。
+
+        ⚠ **「只回 bool、不丟例外」有一個明載的例外**（#791 覆核 F4）：提交點之後
+        的記帳段若拋 ``OperationalError``（serialization failure / 連線類）會
+        **往外拋**。吞掉它 Odoo 的 ``retrying()`` 就永遠看不到，而此刻 PG 交易已
+        aborted，硬回一個 bool 只會讓後續 flush 再炸一次（#518）。呼叫端不必自己
+        接：request 級 retry 會用新 snapshot 重播整支流程，而重播是安全的
+        （CF 的 DELETE 把 404 當成功）。
         """
         self.ensure_one()
         if not app_id and not policy_ids:
@@ -3472,17 +3485,10 @@ class CloudService(models.Model):
         # `cf_access_policy_reap._cron_reap_dead_anchors`（錨點死掉之後）或這台
         # 服務自己的下一次成功 sync（錨點還活著時）。
         # 記帳失敗不翻轉回傳值（[[post-commit-bookkeeping-rollback-unit]]）。
-        try:
-            with self.env.cr.savepoint():
-                self.env[_CF_REAP_MODEL]._settle_teardown(
-                    self._name, self.id, app_id or None, policy_ids or [],
-                    (result or {}).get('orphaned_policy_ids') or [])
-        except OperationalError:
-            raise
-        except Exception:
-            _logger.exception(
-                "[CLOUD_SVC] access teardown service=%s app=%s: CF teardown "
-                "SUCCEEDED but booking the reap ledger failed", self.id, app_id)
+        self.env[_CF_REAP_MODEL]._settle_teardown_after_commit(
+            self._name, self.id, app_id or None, policy_ids or [],
+            (result or {}).get('orphaned_policy_ids') or [], _logger,
+            '[CLOUD_SVC] access teardown service=%s app=%s' % (self.id, app_id))
         return True
 
     def _teardown_access_if_any(self):

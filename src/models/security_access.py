@@ -2,8 +2,6 @@ import logging
 import re
 import uuid
 
-from psycopg2 import OperationalError
-
 from odoo import api, fields, models
 from odoo.exceptions import AccessError, UserError, ValidationError
 
@@ -895,6 +893,13 @@ class SecurityAccess(models.Model):
         ``True``，而呼叫端拿到 ``True`` 就會把列上的 cf id 清掉／讓列被刪掉，那
         幾顆 id 從此沒有任何記錄指向它們（與 #528 完全同型，只是發生在 teardown
         這一側）。帳的回收者見 ``cf_access_policy_reap._cron_reap_dead_anchors``。
+
+        ⚠ **「best-effort、只回 bool」有一個明載的例外**（#791 覆核 F4）：記帳段
+        的 ``OperationalError``（serialization failure / 連線類）會**往外拋**，
+        不會被收成 ``False``。那是刻意的——吞掉它 Odoo 的 ``retrying()`` 就永遠
+        看不到，而此刻 PG 交易已經 aborted，硬回一個 bool 只會讓後續 flush 再炸
+        一次（#518）。呼叫端不必自己接：request 級的 retry 會用新的 snapshot 重播
+        整支 unlink／cleanup，而重播是安全的（CF 的 DELETE 把 404 當成功）。
         """
         self.ensure_one()
         if not app_id and not policy_ids:
@@ -930,20 +935,10 @@ class SecurityAccess(models.Model):
                 "policy(ies): %s", self.id, app_id, len(orphaned),
                 ', '.join(orphaned))
         if anchor_model and anchor_id:
-            try:
-                with self.env.cr.savepoint():
-                    self.env[_CF_REAP_MODEL]._settle_teardown(
-                        anchor_model, anchor_id, app_id or None,
-                        policy_ids or [], orphaned)
-            except OperationalError:
-                # 並發／連線類 DB 例外必須外拋，否則 Odoo 的 retrying() 看不到，
-                # 而此刻交易已 aborted，硬回一個值只會讓後續 flush 再炸（#518）。
-                raise
-            except Exception:
-                _logger.exception(
-                    "[SA] route access teardown sa=%s app=%s: CF teardown "
-                    "SUCCEEDED but booking the reap ledger failed — %d cf id(s) "
-                    "may be untracked", self.id, app_id, len(orphaned))
+            self.env[_CF_REAP_MODEL]._settle_teardown_after_commit(
+                anchor_model, anchor_id, app_id or None, policy_ids or [],
+                orphaned, _logger,
+                '[SA] route access teardown sa=%s app=%s' % (self.id, app_id))
         return True
 
     # ------------------------------------------------------------------ #
@@ -1545,24 +1540,44 @@ class SecurityAccessRoute(models.Model):
             # 落帳寫在 savepoint 裡是對的：走到 raise 的話這幾筆會跟著回滾，而
             # 那時列還活著、cf id 還在列上，本來就不需要帳（同
             # `security_access_access_policy.unlink()` 的同一段推理）。
+            #
+            # 🔴 **兩個 pass 的順序是安全屬性，不是整潔**（#791 覆核 F3）。
+            #
+            # 這一段的 raise 會讓 savepoint 把 `super().unlink()` 整個回捲，
+            # 但**回捲不掉已經對 CF 發出的刪除**。所以一批多條 route 時，先被拆
+            # 掉的那幾條會以「列復活、但列上的 cf id 指向 CF 已不存在的物件」
+            # 收場。逐路徑追下去（operator 的 teardown 分支只吃 id、CF 的 DELETE
+            # 把 404 當成功，見 `extra/paas-operator/src/services/cloudflare.py`
+            # 的 `_delete_access_app` / `delete_reusable_policy`）：
+            #
+            #   * 使用者重試刪除 ⇒ 送同一批 id ⇒ 404＝成功 ⇒ 收斂；
+            #   * 任何一次 SA 層 cleanup（`_do_cleanup` / `action_delete` /
+            #     SA unlink）⇒ 同上 ⇒ 收斂；
+            #   * 復活的列**未保護**時，下一次 sync 送 `enabled=False`
+            #     ⇒ 走 teardown 分支 ⇒ 404＝成功 ⇒ id 被清掉 ⇒ 收斂；
+            #   * 復活的列**仍保護**時，下一次 sync 送 `enabled=True` ＋ 死掉的
+            #     `existing_app_id` ⇒ operator PUT `/apps/<dead>` 拿到 404 ⇒
+            #     `raise CloudflareException` ⇒ **這條每次都失敗**（會出聲，不是
+            #     靜默；解法是把那條 route 刪掉，那條路徑會收斂）。
+            #
+            # 最後那一格是 develop 上**本來就有**的形狀（舊碼的捕獲條件正好就是
+            # 「protected ＋ SA live」，跟這一格的前提一模一樣），本 PR 沒有加大
+            # 它。但本 PR **新捕獲**的那些 route（未保護仍持有 id／停權中）如果
+            # 也被拆了再回捲，就是本 PR 自己加的新殘留。所以把它們排到 pass 2：
+            # pass 1（拆失敗要回滾的那一組）一旦有失敗就直接 raise，pass 2 一根
+            # 手指都還沒動過 CF。這樣本 PR 的爆炸半徑是零，而且刪除語意仍然是
+            # 全有全無（不是 partial success，沒有產品可見變更）。
             Reap = self.env[_CF_REAP_MODEL]
-            failed = []
-            for route_id, info in teardown_by_route.items():
-                sa = info['sa']
-                if not sa.exists():
-                    # SA 也不在了（上游 cascade 的中途）：沒有 record 可以組
-                    # teardown payload，但 id 一顆都不能丟。舊寫法在這裡是裸
-                    # `continue`。列與 SA 都沒了 ⇒ 重試錨點只可能是帳本。
-                    _logger.warning(
-                        "[SA] route %s deleted while its Security Access is "
-                        "already gone — booking app=%s + %d policy id(s) for "
-                        "the dead-anchor reaper (#784)",
-                        route_id, info['app_id'], len(info['policy_ids']))
-                    Reap._record_teardown(
-                        self._name, route_id,
-                        info['app_id'], info['policy_ids'])
-                    continue
-                ok = sa._teardown_route_access(
+
+            def _push(route_id, info):
+                # `info['sa']` 一定還在：`security_access_id` 是 required ＋
+                # ondelete='cascade'，而唯一會刪 SA 的 Python 路徑
+                # （`SecurityAccess.unlink`）是先呼叫 `route_ids.unlink()` 才
+                # `super().unlink()`；PG 層的 cascade 則整支 Python 都不會跑到
+                # 這裡。（舊版在這裡有一道 `if not sa.exists(): continue` 的防禦
+                # 碼，覆核判定為死碼——會誤導讀者的防禦碼本身就是陷阱，故移除，
+                # 理由留在這裡。）
+                return info['sa']._teardown_route_access(
                     app_id=info['app_id'],
                     policy_ids=info['policy_ids'],
                     app_name=info['app_name'],
@@ -1570,14 +1585,11 @@ class SecurityAccessRoute(models.Model):
                     anchor_model=self._name,
                     anchor_id=route_id,
                 )
-                if ok:
-                    continue
-                if info['retry_anchor_is_row']:
-                    failed.append(info['app_name'] or info['app_id'])
-                else:
-                    Reap._record_teardown(
-                        self._name, route_id,
-                        info['app_id'], info['policy_ids'])
+
+            # pass 1：拆失敗 ⇒ 回滾保住列（列是真的重試錨點）
+            failed = [info['app_name'] or info['app_id']
+                      for route_id, info in teardown_by_route.items()
+                      if info['retry_anchor_is_row'] and not _push(route_id, info)]
             if failed:
                 raise UserError(
                     "Cloudflare Access teardown failed for route(s): %s. The "
@@ -1585,6 +1597,12 @@ class SecurityAccessRoute(models.Model):
                     "app is still live in Cloudflare." % ', '.join(
                         str(f) for f in failed)
                 )
+            # pass 2：拆失敗 ⇒ 落帳照常刪除（保住列救不了它，沒有 sync 會再跑）
+            for route_id, info in teardown_by_route.items():
+                if info['retry_anchor_is_row'] or _push(route_id, info):
+                    continue
+                Reap._record_teardown(
+                    self._name, route_id, info['app_id'], info['policy_ids'])
         # D1: deleting the last route drops the SA back to 'active_no_route'.
         affected.exists()._recompute_route_state()
         return result
@@ -1606,11 +1624,26 @@ class SecurityAccessRoute(models.Model):
         「未保護但仍持有 stored app_id / cf_policy_id」是這支程式自己承認的合法
         持久狀態（`_sync_access_to_operator` 的 docstring 與 `_do_resume` 的註解
         都逐字寫著），拿保護旗標當判準會把那一格讀成「沒東西要拆」。
+
+        #791 覆核 F6：policy 那半**聯集帳本上這個錨點還欠的 id**，比照
+        `_build_existing_policy_ids()`。理由是時機——列一消失，帳就變成 dead
+        anchor，得等 cron 下一輪才收；既然這一趟本來就要對 operator 送一份
+        teardown，順手把舊帳一起帶出去比留到下一小時好。
+
+        🔴 但這裡讀的是 `_pending_ids()`（**只有帳本**）而不是 `_pending_for()`
+        （帳本 ∪ context）。`sa_unlinked_cf_policy_ids` 是一把可偽造的裸 context
+        key（#783），而這條路徑是**刪除**——把它接進來等於讓呼叫端在刪一條自己
+        的 route 時順便指定要刪哪些帳號級 CF policy。同步路徑吃 context 是既有
+        行為（另案），刪除路徑不要再開一個入口。
         """
         self.ensure_one()
-        return (self.access_app_id or None,
-                [p.cf_policy_id for p in self.access_policy_ids
-                 if p.cf_policy_id])
+        ids = [p.cf_policy_id for p in self.access_policy_ids
+               if p.cf_policy_id]
+        for cf_id in self.env[_CF_REAP_MODEL]._pending_ids(
+                self._name, self.id):
+            if cf_id and cf_id not in ids:
+                ids.append(cf_id)
+        return (self.access_app_id or None, ids)
 
     def _has_access_teardown(self):
         """這條 route 手上還有沒有 CF Access 物件要拆（`_access_teardown_ids` 的
@@ -1725,9 +1758,18 @@ class SecurityAccessRoute(models.Model):
         # #528：operator 回 2xx ＝ 這一輪送出去的 existing_policy_ids 已經有答案
         # 了。沒被列進 orphaned 的確認刪掉 ⇒ 消帳；被列進去的現在就是 CF 孤兒 ⇒
         # 記進帳等下一輪（上面那行 warning 照發，但不再是「說完就忘」）。
-        self.env[_CF_REAP_MODEL]._settle(
+        #
+        # #791 覆核 F7：包 post-commit savepoint——這一行跑在 operator 已回 2xx
+        # 之後，記帳失敗不該把下面那幾行「把 CF 剛回的 id 寫回列上」一起拖垮。
+        # F9：`trusted_ids` 只給**列上真實存在的** cf id，`existing_policy_ids`
+        # 裡混進來的 context 值不得經 orphaned 回流落帳（#783）。
+        Reap = self.env[_CF_REAP_MODEL]
+        Reap._settle_after_commit(
             self._name, self.id,
-            payload.get('existing_policy_ids') or [], orphaned)
+            payload.get('existing_policy_ids') or [], orphaned,
+            Reap._trusted_ids_for(self), _logger,
+            'Security Access route %s (%s, sa=%s)' % (
+                self.id, self.subdomain_prefix, sa.id))
         # write back CF ids onto this route (server-owned identity anchor)
         _internal_identity(self).access_app_id = result.get('app_id') or False
         # Persist the operator's fail-open login-widening signal (requested

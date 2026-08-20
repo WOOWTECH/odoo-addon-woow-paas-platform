@@ -39,8 +39,6 @@ ingress** 的，刪掉那一列不會讓 Cloudflare 少一條 ingress，只會�
 """
 import logging
 
-from psycopg2 import OperationalError
-
 from odoo import _, api, fields, models
 from odoo.exceptions import UserError, ValidationError
 
@@ -521,9 +519,15 @@ class SmartHomeRoute(models.Model):
         # #528：operator 回 2xx ⇒ 這一輪送出去的 existing_policy_ids 已經有答案。
         # 沒被列進 orphaned 的確認刪掉 ⇒ 消帳；被列進去的現在就是 CF 孤兒 ⇒ 記進
         # 帳等下一輪（上面那行 warning 照發，但不再是「說完就忘」）。
-        self.env[_CF_REAP_MODEL]._settle(
+        # #791 覆核 F7：包 post-commit savepoint（記帳失敗不得拖垮下面的 id 回存）。
+        # F9：`trusted_ids` 只給列上真實存在的 cf id——`existing_policy_ids` 裡
+        # 混進來的 context 值不得經 orphaned 回流落帳（#783）。
+        Reap = self.env[_CF_REAP_MODEL]
+        Reap._settle_after_commit(
             self._name, self.id,
-            payload.get('existing_policy_ids') or [], orphaned)
+            payload.get('existing_policy_ids') or [], orphaned,
+            Reap._trusted_ids_for(self), _logger,
+            '[SH] route %s (sh=%s)' % (self.id, self.smart_home_id.id))
         _internal_sm_route_identity(self).access_app_id = (
             result.get('app_id') or False)
         unresolved = result.get('unresolved_idp_types') or []
@@ -600,6 +604,12 @@ class SmartHomeRoute(models.Model):
         best-effort ＋ 回 bool（不 raise）：呼叫端自己決定要 fail-loud 還是留給
         下一輪 cron 重試——兩條路徑對「失敗」的處置不同（unlink 要回滾保住重試
         錨點；cron 的 `_do_cleanup` 要落 `error` 等下一次）。
+
+        ⚠ **這個「不 raise」有一個明載的例外**（#791 覆核 F4）：提交點之後的記帳段
+        若拋 ``OperationalError``（serialization failure / 連線類）會**往外拋**。
+        吞掉它 Odoo 的 ``retrying()`` 就永遠看不到，而此刻 PG 交易已 aborted，硬回
+        一個 bool 只會讓後續 flush 再炸一次（#518）。呼叫端不必自己接：request 級
+        retry 會用新 snapshot 重播，而重播是安全的（CF 的 DELETE 把 404 當成功）。
         """
         sh = info['smart_home']
         try:
@@ -633,17 +643,10 @@ class SmartHomeRoute(models.Model):
                 "policy(ies): %s", sh.id, info['app_id'], len(orphaned),
                 ', '.join(orphaned))
         if info.get('anchor_model') and info.get('anchor_id'):
-            try:
-                with self.env.cr.savepoint():
-                    self.env[_CF_REAP_MODEL]._settle_teardown(
-                        info['anchor_model'], info['anchor_id'],
-                        info['app_id'], info['policy_ids'] or [], orphaned)
-            except OperationalError:
-                raise
-            except Exception:
-                _logger.exception(
-                    "[SH] Access teardown sh=%s app=%s: CF teardown SUCCEEDED "
-                    "but booking the reap ledger failed", sh.id, info['app_id'])
+            self.env[_CF_REAP_MODEL]._settle_teardown_after_commit(
+                info['anchor_model'], info['anchor_id'], info['app_id'],
+                info['policy_ids'] or [], orphaned, _logger,
+                '[SH] Access teardown sh=%s app=%s' % (sh.id, info['app_id']))
         return True
 
     def to_dict(self):

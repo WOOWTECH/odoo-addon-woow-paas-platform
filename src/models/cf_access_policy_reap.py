@@ -60,6 +60,7 @@ sync 把帳上的 id 併進 ``existing_policy_ids`` 一起送去刪，operator �
 孤兒候選，兩個信源對得起來）。
 """
 import logging
+from datetime import timedelta
 
 from psycopg2 import OperationalError
 
@@ -68,6 +69,16 @@ from odoo import api, fields, models
 from ..services.paas_operator import get_paas_operator_client
 
 _logger = logging.getLogger(__name__)
+
+#: 帳卡在**活錨點**上多久算不正常（#791 覆核 F2）。
+#:
+#: 這個值是推導出來的不是拍板的：帳的正常消費路徑是「錨點的下一次成功 sync」，
+#: 而最慢的**合法**路徑是停權 → 續訂 → resume，resume 由
+#: `subscription_lifecycle_cron`（每日一次）驅動 ⇒ 一兩天內還在帳上完全正常。
+#: 取一週：足夠蓋掉「續訂拖幾天才 resume」這種正常情形，又遠短於真正危險的那
+#: 一類——錨點進了永久終態（如 `deleting`）之後 sync 再也不會跑，那種帳**永遠**
+#: 不會消。門檻的作用是把後者從前者裡分出來，不是精準預測。
+_STUCK_PENDING_DAYS = 7
 
 #: policy unlink 注入 doomed id 的 context key —— 三腿共用的既有通道。
 #: 這裡集中一份是為了讓「帳上的」與「本次注入的」在同一個地方聯集，
@@ -198,7 +209,8 @@ class CfAccessPolicyReap(models.Model):
         return ids
 
     @api.model
-    def _settle(self, anchor_model, anchor_id, submitted_ids, orphaned_ids):
+    def _settle(self, anchor_model, anchor_id, submitted_ids, orphaned_ids,
+                trusted_ids):
         """一次成功的 sync 之後結帳。**呼叫時機＝operator 回 2xx 之後**。
 
         兩個方向一起做，因為它們讀的是同一份事實（operator 的回應）：
@@ -215,6 +227,20 @@ class CfAccessPolicyReap(models.Model):
 
         取 ``(model, id)`` 而不是 record：teardown 路徑呼叫到這裡時錨點列可能
         已經不在了。
+
+        🔴 ``trusted_ids``（#791 覆核 F9，**必填、刻意沒有預設值**）＝這一輪送出去
+        的 id 裡「來自 DB 列上真實存在過的值」那個子集。記帳只認
+        ``trusted_ids ∪ 帳上已知``，其餘一律拒收並出聲。
+
+        理由是模組 docstring 設計決定 1 的守線：``existing_policy_ids`` 是
+        ``列值 ∪ 帳本 ∪ context``，而 ``sa_unlinked_cf_policy_ids`` 是一把**可偽造
+        的裸 context key**（#783）。少了這道過濾，租戶塞進 context 的假 id 只要
+        被 operator 回報進 ``orphaned_policy_ids`` 就會**經由結帳落進 DB**——一次性
+        的偽造升級成持久的偽造，而且從此每小時被重送到刪掉為止（本表把 #783 的
+        爆炸半徑放大，所以這道過濾是本表該收的尾）。
+
+        沒有預設值是刻意的：預設「就信 submitted」會讓忘記傳的呼叫端**靜默**回到
+        有洞的行為，而那正是最容易被寫成例外的那一格。
         """
         still_orphaned = [i for i in (orphaned_ids or []) if i]
         submitted = [i for i in (submitted_ids or []) if i]
@@ -229,8 +255,35 @@ class CfAccessPolicyReap(models.Model):
             ])
             if rows:
                 rows.unlink()
+        if not still_orphaned:
+            return
+        allowed = set(trusted_ids or []) | set(
+            self._pending_ids(anchor_model, anchor_id))
+        refused = [i for i in still_orphaned if i not in allowed]
+        still_orphaned = [i for i in still_orphaned if i in allowed]
+        if refused:
+            _logger.warning(
+                "[CF_REAP] refused to book %d operator-reported orphan id(s) "
+                "for %s#%s that came from neither a DB row nor the ledger: %s "
+                "— a forged `%s` context value must not become a durable "
+                "delete order (#783/#791)",
+                len(refused), anchor_model, anchor_id, ', '.join(refused),
+                DOOMED_CTX_KEY)
         if still_orphaned:
             self._record_ids(anchor_model, anchor_id, still_orphaned)
+
+    @api.model
+    def _trusted_ids_for(self, anchor):
+        """``_settle`` 的 ``trusted_ids``：錨點列上**真實存在**的 cf policy id。
+
+        三腿的 policy 子表是同一個 model，欄位名一致（``access_policy_ids`` /
+        ``cf_policy_id``），所以這個推導只寫一次。刻意**不**經 ``_pending_for``
+        ——那條路會把 context 的值一起帶進來，而這裡要的正好是「排除 context」。
+        """
+        if not anchor:
+            return []
+        return [p.cf_policy_id for p in anchor.access_policy_ids
+                if p.cf_policy_id]
 
     @api.model
     def _warn_if_deferred(self, anchor, logger, label, reason):
@@ -277,6 +330,8 @@ class CfAccessPolicyReap(models.Model):
     @api.model
     def _settle_teardown(self, anchor_model, anchor_id, app_id,
                          submitted_policy_ids, orphaned_policy_ids):
+        # teardown 路徑送出去的 id 全部來自「捕獲當下列上讀到的值」或帳本
+        # （沒有任何一條 teardown 讀 context），所以 submitted 本身就是可信集合。
         """一次成功的 teardown 之後結帳（app 那半 ＋ policy 那半）。
 
         app 這半沒有「orphaned」對應物：operator 的 teardown 分支對 app 只有
@@ -293,14 +348,69 @@ class CfAccessPolicyReap(models.Model):
             if rows:
                 rows.unlink()
         self._settle(anchor_model, anchor_id,
-                     submitted_policy_ids, orphaned_policy_ids)
+                     submitted_policy_ids, orphaned_policy_ids,
+                     trusted_ids=submitted_policy_ids)
+
+    # ------------------------------------------------------------------ #
+    #  提交點之後的結帳包裝（#791 覆核 F4／F7 的單一裁決處）               #
+    # ------------------------------------------------------------------ #
+    #
+    # operator 回 2xx 之後 CF 那側的刪除已經發生、回捲不掉 ⇒ 之後每一步都只是
+    # **記帳**。記帳失敗不得翻轉呼叫端的語意，也不得把整個交易拖下水
+    # （[[post-commit-bookkeeping-rollback-unit]]）。
+    #
+    # ⚠ `OperationalError` **必須外拋**（#518）：serialization / 連線類例外被吞掉
+    # 的話 Odoo 的 `retrying()` 永遠看不到，而此刻 PG 交易已 aborted，硬回一個值
+    # 只會讓後續 flush 再炸一次。這條對呼叫端是「回 bool 的函式仍可能拋
+    # OperationalError」——三腿的 teardown docstring 都寫明了這個例外。
+    #
+    # 包成兩個 helper 而不是在七個呼叫點各寫一次 try/savepoint：判準（哪些例外
+    # 吞、哪些外拋、回捲單位多大）只該有一處，否則第八個呼叫點就會漏。
+
+    @api.model
+    def _settle_after_commit(self, anchor_model, anchor_id, submitted_ids,
+                             orphaned_ids, trusted_ids, logger, label):
+        """`_settle` 的 post-commit 包裝。回傳有沒有結成功（供測試判別）。"""
+        try:
+            with self.env.cr.savepoint():
+                self._settle(anchor_model, anchor_id, submitted_ids,
+                             orphaned_ids, trusted_ids)
+            return True
+        except OperationalError:
+            raise
+        except Exception:
+            logger.exception(
+                "%s: Cloudflare Access sync SUCCEEDED but settling the reap "
+                "ledger failed — the ledger may be out of date; the next "
+                "successful sync re-sends whatever is still on it", label)
+            return False
+
+    @api.model
+    def _settle_teardown_after_commit(self, anchor_model, anchor_id, app_id,
+                                      submitted_policy_ids,
+                                      orphaned_policy_ids, logger, label):
+        """`_settle_teardown` 的 post-commit 包裝。回傳有沒有結成功。"""
+        try:
+            with self.env.cr.savepoint():
+                self._settle_teardown(anchor_model, anchor_id, app_id,
+                                      submitted_policy_ids,
+                                      orphaned_policy_ids)
+            return True
+        except OperationalError:
+            raise
+        except Exception:
+            logger.exception(
+                "%s: CF teardown SUCCEEDED but booking the reap ledger failed "
+                "— some cf id(s) may be untracked", label)
+            return False
 
     # ------------------------------------------------------------------ #
     #  #784：dead anchor 的回收者（這條帳唯一會被走到的出口）              #
     # ------------------------------------------------------------------ #
 
     @api.model
-    def _cron_reap_dead_anchors(self, limit=500):
+    def _cron_reap_dead_anchors(self, limit=200, scan_batch=1000,
+                                max_scan=20000):
         """把「錨點列已經不存在」的帳送去 operator 刪掉。
 
         ## 為什麼非有這條不可
@@ -328,39 +438,107 @@ class CfAccessPolicyReap(models.Model):
         它的 app 可能還在線上服務——這條 cron 若對活錨點送 `existing_app_id`
         就會把一顆**正在保護租戶服務的** Access app 拆掉。「錨點不存在」是這個
         危險動作唯一安全的前提，所以它是硬條件而不是最佳化。
-        （活錨點帳卡住不動的那一格另有訊號：`_warn_if_deferred`。）
-        """
-        rows = self.sudo().search([], limit=limit)
-        if not rows:
-            return 0
-        by_anchor = {}
-        for row in rows:
-            by_anchor.setdefault((row.anchor_model, row.anchor_id), []).append(row)
 
-        reaped_anchors = 0
+        ## 🔴 為什麼是 cursor 掃描而不是 `search([], limit=N)`（#791 覆核 F1）
+
+        第一版是「撈前 N 筆再判斷錨點死了沒」。那個形狀會**自己把自己堵死**：
+        兩類列永遠消不掉（錨點活著但已進永久終態、`anchor_model` 已不存在），
+        而 `_order = 'id'` 讓它們永遠佔住最小的 id ⇒ 累積到 N 筆之後，每一輪
+        撈到的都是同一批不可回收列，真正該收的帳一次都輪不到。更糟的是那個
+        狀態與「今天沒事做」在輸出上完全一樣（回 0、零 log）——回收機制癱瘓而
+        沒有任何訊號。
+
+        所以窗口不能套在判定**之前**：這裡改成沿著 id 游標一批批掃過去，
+        `limit` 限的是「這一輪實際處理幾個 dead anchor」（工作量），不是「看幾
+        筆列」。`max_scan` 只是防跑不完的上界，而且**踩到它一定出聲**——被截斷
+        卻安靜等於謊報「都收完了」。
+        """
+        Reap = self.sudo()
+        stale_before = fields.Datetime.now() - timedelta(
+            days=_STUCK_PENDING_DAYS)
+        last_id = 0
+        scanned = reaped = failed_anchors = 0
+        live_anchors = set()
+        unknown_models = {}
+        stuck = []
+        truncated = False
         client = None
-        for (anchor_model, anchor_id), group in by_anchor.items():
-            if anchor_model not in self.env:
-                # model 被拿掉了（重構／解除安裝）。帳留著並出聲：這種列沒有
-                # 任何自動處置是對的——連該打哪個 endpoint 都推導不出來。
-                _logger.warning(
-                    "[CF_REAP] ledger rows anchored on unknown model %r "
-                    "(anchor_id=%s, %d row(s)) — left on the ledger",
-                    anchor_model, anchor_id, len(group))
-                continue
-            if self.env[anchor_model].sudo().browse(anchor_id).exists():
-                continue  # 活錨點：它自己的下一次 sync 會收，見 docstring
-            if client is None:
-                client = get_paas_operator_client(self.env)
-                if not client:
-                    _logger.warning(
-                        "[CF_REAP] PaaS Operator is not configured — %d dead-"
-                        "anchor CF Access object(s) stay on the ledger",
-                        len(rows))
-                    return 0
-            if self._reap_dead_anchor(client, anchor_model, anchor_id, group):
-                reaped_anchors += 1
-        return reaped_anchors
+        while reaped < limit:
+            if scanned >= max_scan:
+                truncated = True
+                break
+            rows = Reap.search([('id', '>', last_id)], limit=scan_batch)
+            if not rows:
+                break
+            last_id = rows[-1].id
+            scanned += len(rows)
+            by_anchor = {}
+            for row in rows:
+                by_anchor.setdefault(
+                    (row.anchor_model, row.anchor_id), []).append(row)
+            for (anchor_model, anchor_id), group in by_anchor.items():
+                if anchor_model not in self.env:
+                    # model 被拿掉了（重構／解除安裝）。帳留著——這種列沒有任何
+                    # 自動處置是對的：連該打哪個 endpoint 都推導不出來。統計起來
+                    # 在最後一次出聲，不要每個 anchor 洗一行。
+                    unknown_models[anchor_model] = (
+                        unknown_models.get(anchor_model, 0) + len(group))
+                    continue
+                if self.env[anchor_model].sudo().browse(anchor_id).exists():
+                    # 活錨點：它自己的下一次 sync 會收，見 docstring。
+                    # #791 覆核 F2：但「進了永久終態的活錨點」那一格 sync 永遠
+                    # 不會再跑，帳會卡到天荒地老。這裡只**出聲**不動手——判準寫
+                    # 錯的代價是拆掉一顆正在保護租戶服務的 Access app，而讓維運
+                    # 看見之後把錨點列刪掉，帳自然變成 dead anchor 由本 cron 收。
+                    live_anchors.add((anchor_model, anchor_id))
+                    stuck.extend(
+                        r for r in group
+                        if r.create_date and r.create_date < stale_before)
+                    continue
+                if client is None:
+                    client = get_paas_operator_client(self.env)
+                    if not client:
+                        _logger.warning(
+                            "[CF_REAP] PaaS Operator is not configured — "
+                            "dead-anchor CF Access objects stay on the ledger "
+                            "(%d row(s) scanned so far)", scanned)
+                        return 0
+                if self._reap_dead_anchor(client, anchor_model, anchor_id,
+                                          group):
+                    reaped += 1
+                else:
+                    failed_anchors += 1
+                if reaped >= limit:
+                    break
+
+        if unknown_models:
+            _logger.warning(
+                "[CF_REAP] %d ledger row(s) are anchored on model(s) that no "
+                "longer exist and can never be reaped automatically: %s",
+                sum(unknown_models.values()),
+                ', '.join('%s (%d)' % kv for kv in sorted(
+                    unknown_models.items())))
+        if stuck:
+            _logger.warning(
+                "[CF_REAP] %d ledger row(s) have been pending for more than "
+                "%d day(s) on anchors that still exist — their only consumer "
+                "is the anchor's next successful sync, so an anchor stuck in "
+                "a terminal state never settles them. Delete the anchor row "
+                "(or force a sync) and this cron will reap them: %s",
+                len(stuck), _STUCK_PENDING_DAYS,
+                ', '.join('%s#%s:%s' % (r.anchor_model, r.anchor_id,
+                                        r.cf_object_id) for r in stuck[:20]))
+        if truncated:
+            _logger.warning(
+                "[CF_REAP] scan cap reached (%d rows) before the ledger was "
+                "exhausted — %d dead anchor(s) reaped this round, the rest "
+                "wait for the next run", scanned, reaped)
+        if reaped or failed_anchors:
+            _logger.info(
+                "[CF_REAP] reaped %d dead anchor(s), %d still failing, %d live "
+                "anchor(s) skipped, %d row(s) scanned",
+                reaped, failed_anchors, len(live_anchors), scanned)
+        return reaped
 
     @api.model
     def _reap_dead_anchor(self, client, anchor_model, anchor_id, rows):
@@ -370,7 +548,11 @@ class CfAccessPolicyReap(models.Model):
         一次 app id」那種殘留）。policy 掛在第一次呼叫上一起送，沒有 app 時就
         單獨送一次純 policy 的 teardown。
         """
-        app_ids = [r.cf_object_id for r in rows if r.kind == KIND_APP]
+        # 去重（#791 覆核 F8）：表上刻意沒有 UNIQUE（見上方註解），競態下同一顆
+        # id 可能有兩列 ⇒ 不去重就會對同一顆 app 多送一趟（無害但白費），而
+        # policy 那半本來就有去重、兩半不一致只會讓人以為其中一邊寫錯了。
+        app_ids = list(dict.fromkeys(
+            r.cf_object_id for r in rows if r.kind == KIND_APP))
         policy_ids = list(dict.fromkeys(
             r.cf_object_id for r in rows if r.kind == KIND_POLICY))
         clean = True
@@ -405,21 +587,9 @@ class CfAccessPolicyReap(models.Model):
                     "policy(ies): %s — kept on the ledger",
                     anchor_model, anchor_id, len(orphaned), ', '.join(orphaned))
                 clean = False
-            # 提交點之後：CF 上已經沒有這些物件了。記帳失敗只影響「下一輪會不會
-            # 重送」（重送是冪等的，CF 的 DELETE 把 404 當成功），不該讓整條 cron
-            # 交易連同前面已結帳的錨點一起回滾
-            # （[[post-commit-bookkeeping-rollback-unit]]）。
-            try:
-                with self.env.cr.savepoint():
-                    self._settle_teardown(anchor_model, anchor_id, app_id,
-                                          batch, orphaned)
-            except OperationalError:
-                raise
-            except Exception:
-                _logger.exception(
-                    "[CF_REAP] %s#%s: CF teardown SUCCEEDED but settling the "
-                    "ledger failed — rows stay pending and will be re-sent",
-                    anchor_model, anchor_id)
+            if not self._settle_teardown_after_commit(
+                    anchor_model, anchor_id, app_id, batch, orphaned,
+                    _logger, '[CF_REAP] %s#%s' % (anchor_model, anchor_id)):
                 clean = False
         if clean:
             _logger.info(
