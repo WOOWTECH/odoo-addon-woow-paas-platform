@@ -894,10 +894,27 @@ class SmartHomeController(Controller):
         兩半要分開看：**write 面確實被放寬了**（緩解是「值不由租戶選」，見上
         一段與 B7）；**read 面**它自己列的三層防線（欄位上的 `groups=`、
         `to_dict()` 的省略、專屬 sudo 讀端點）沒有一層在 `action_provision`
-        裡面，su 環境隨那次呼叫結束，B5／B6 釘住。殘留的一格：su 呼叫**內**
-        `self.tunnel_token` 讀得到，而 Odoo 欄位快取在同一筆交易內跨 env 共用、
-        cache 命中不重查 groups ⇒ 「讀側完全沒動」不精確，精確的說法是
-        「同一個請求裡沒有任何程式碼去讀它」。
+        裡面，su 環境隨那次呼叫結束，B5／B6 釘住。
+
+        ⚠ 殘留的那一格，機制要講精確（這裡是實測過的版本，兩個聽起來合理的
+        錯誤版本都不要再寫回來）：
+          * su 呼叫**內** `self.tunnel_token` 讀得到，是因為 **`su` 把欄位級
+            遮罩整條短路掉**（`odoo/models.py:3783-3784`、`odoo/fields.py:956`
+            ＋ `odoo/api.py:672`）——**不是**因為快取。
+          * 但快取**另外**構成一格真的殘留：su 那次呼叫會把該值餵進同一筆交易
+            內跨 env 共用的欄位快取，之後**非 sudo** recordset 用**屬性直讀**
+            碰它時，`Field.__get__` 的 cache-hit 分支（`odoo/fields.py:1239`）
+            不會再查遮罩；cache **miss** 才會（`:1266` → `_fetch_field`，其第一
+            行是 `check_field_access_rights('read', ...)`，`models.py:4099`）。
+            ⚠ 只掃 `fields.py` 的 `__get__` 函式體會找不到 `is_accessible`／
+            `groups`（檢查在下一層、另一個檔），因而得到「屬性直讀從不查
+            groups」這個**相反且錯誤**的結論。
+          * `odoo shell` 實測（同一交易、同一筆記錄、租戶只掛 `base.group_user`）：
+            cold ⇒ `AccessError`；先用 su 讀一次餵熱快取後同樣的屬性直讀
+            ⇒ **不 raise**、拿得到值；快取仍熱但走 `read([...])` ⇒ `AccessError`。
+          * ⇒ 「讀側完全沒動」**不成立**；成立的是「**同一個請求裡沒有任何
+            程式碼去讀那個屬性**」（`to_dict()` 不含它，經 RPC 的 `read()` 一定
+            重查——B5 釘的就是這條）。
 
         改用平台身分之後，Odoo 那三層在**這個 method 內**確實全部停用
         （`env.su` ⇒ `check_access` 與 `check_field_access_rights` 都提早
