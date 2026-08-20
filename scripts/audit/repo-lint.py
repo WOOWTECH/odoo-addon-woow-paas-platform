@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """repo-lint：把「假綠家族」pitfall 轉成機械 gate 的靜態檢查工具。
 
-三十二個 check 函式，歸為下列二十八條規則（其中兩條各由多個函式實作：第 7 條
+三十三個 check 函式，歸為下列二十九條規則（其中兩條各由多個函式實作：第 7 條
 capability-gate 由四個函式——slug 集合成員／admin-gui 錨點／gateway 文案錨點／
 Access 頁籤錨點；第 22 條
 security-rule-lifecycle 由兩個函式——ir.rule 的出生地／退役名字。這個一對多關係的顯式
@@ -323,6 +323,21 @@ security-rule-lifecycle 由兩個函式——ir.rule 的出生地／退役名字
                      不同，不在本條範圍，把本條的綠讀成「所有 context 偽造面都守住了」
                      是錯的。
                      依據 docs/decisions/519-cloud-service-provision-gate.md
+
+29. access-gate-no-ledger-read  `filtered()` 的判準（以及它一層內呼叫到的
+                     同檔方法）不得讀待回收帳本 `cf_access_policy_reap`
+                     （`_pending_ids` / `_pending_for` /
+                     `_access_teardown_payload_ids`）。#784 F6：為了「刪除時順手
+                     清舊帳」而讓 gate 聯集帳本 ⇒ 只要 operator 回報過某顆 policy
+                     刪不掉，那筆帳掛在帳本上（錨點還活著、dead-anchor cron 依設計
+                     不收）⇒ 閘永遠回 True ⇒ SA 永久卡 `state='error'`，每輪
+                     lifecycle cron 白打一次 operator。修法把「這列乾淨了沒」與
+                     「這趟送哪些 id」拆成兩個方法，但那只是**命名**紀律：兩個名字
+                     相近、語意相反、無型別區隔，而最危險的那格誤用是**靜默**的
+                     （把 filter 換成 payload 版會選中每一條 route，然後因為
+                     `_teardown_route_access()` 的「沒 id 就回 True」早退而完全沒有
+                     輸出——不打 operator、不寫欄位、不留 log）。判準刻意不硬編方法
+                     名；已知限制（只追一層、只追同檔）寫在函式 docstring。
 
 用法：
 
@@ -4612,6 +4627,7 @@ REPO_LINT_RULES = {
     "provision-sentinel-allowlist": ("check_provision_sentinel_allowlist",),
     "sh-subscription-group-isolation": ("check_sh_subscription_group_isolation",),
     "internal-ctx-key-registry": ("check_internal_ctx_key_registry",),
+    "access-gate-no-ledger-read": ("check_access_gate_no_ledger_read",),
 }
 
 # 刻意不掛 hook 分派的 check：{函式名: 理由}。現況是空的（每一條都掛得到 hook）。
@@ -5039,7 +5055,8 @@ def run_all(root):
                   + check_workspace_rule_directions(root)
                   + check_provision_sentinel_allowlist(root)
                   + check_sh_subscription_group_isolation(root)
-                  + check_internal_ctx_key_registry(root))
+                  + check_internal_ctx_key_registry(root)
+                  + check_access_gate_no_ledger_read(root))
     if violations:
         print("repo-lint：%d 個違規" % len(violations))
         for v in violations:
@@ -5176,6 +5193,10 @@ def run_hook():
             violations += check_duplicate_class_methods(root, only_file=abs_path)
         elif re.match(r"^src/.*\.py$", rel):
             violations = check_reuse_values(root, only_file=abs_path)
+            # #784 F6：判準完全落在單一檔案內（filtered 的 lambda ↔ 同檔方法
+            # 定義）⇒ 可以只切這一檔重算，不必全樹掃。
+            violations += check_access_gate_no_ledger_read(
+                root, only_file=abs_path)
             violations += check_conceal_instances_gate(root, only_file=abs_path)
             violations += check_transition_anchor_utc(root, only_file=abs_path)
             violations += check_mixin_subscription_sudo(root, only_file=abs_path)
@@ -5252,6 +5273,150 @@ def run_hook():
     except Exception:
         return 0  # fail-open：hook 模式絕不擋開發
 
+
+
+# --------------------------------------------------------------------------- #
+#  29. access-gate-no-ledger-read                                              #
+# --------------------------------------------------------------------------- #
+
+#: 待回收帳本（`cf_access_policy_reap`）的查詢入口。判準寫「性質」不寫「哪個
+#: 方法叫這個名字」：這三個是**唯一**能讓一段程式碼看到帳本內容的符號，所以
+#: 「有沒有讀帳本」等價於「有沒有出現這三個之一」。
+_LEDGER_QUERY_SYMBOLS = (
+    "_pending_ids",
+    "_pending_for",
+    "_access_teardown_payload_ids",
+)
+
+
+def _ledger_symbols_in(node):
+    """`node` 子樹裡出現的帳本查詢符號（去重、保序無所謂）。"""
+    found = set()
+    for sub in ast.walk(node):
+        if isinstance(sub, ast.Attribute) and sub.attr in _LEDGER_QUERY_SYMBOLS:
+            found.add(sub.attr)
+        elif isinstance(sub, ast.Name) and sub.id in _LEDGER_QUERY_SYMBOLS:
+            found.add(sub.id)
+    return found
+
+
+def check_access_gate_no_ledger_read(root, only_file=None):
+    """`filtered()` 的判準（以及它一層內呼叫到的方法）不得讀待回收帳本。
+
+    #784 F6 的形狀：`_access_teardown_ids()` 為了「刪除時順手清舊帳」聯集了
+    `_pending_ids()`，而它同時被兩個 **gate** 用著——`_cleanup_cloudflare` 挑
+    route 的 filter、`_do_cleanup` 的「清乾淨了沒」閘。後果是只要 operator 回報
+    過某顆 policy 刪不掉，那筆帳就掛在帳本上（錨點還活著 ⇒ dead-anchor cron 依
+    設計不收）⇒ 閘對該 route 永遠回 True ⇒ **SA 永久卡在 `state='error'`**，每輪
+    lifecycle cron 白打一次 operator，七天後只多一行 stuck warning，無解。
+
+    修法是把「這列乾淨了沒」與「這趟送哪些 id」拆成兩個方法。但那只是**命名**
+    紀律：兩個名字相近、語意相反、沒有型別區隔，下一個新增呼叫端的人一樣會選
+    錯，而最危險的那格誤用是**靜默**的——把 filter 換成 payload 版會選中每一條
+    route，然後因為 `_teardown_route_access()` 自己的「沒 id 就回 True」早退而
+    完全沒有輸出：不打 operator、不寫欄位、不留 log。所以要一條機械 gate。
+
+    判準（刻意不硬編任何方法名）：
+
+    1. 任何 `X.filtered(lambda ...)` 的 lambda **本體**不得出現帳本查詢符號；
+    2. 那個 lambda 在**同一個檔案內**呼叫到的方法，其定義也不得出現。
+
+    ⚠ **已知限制 1**：第 2 點只追一層，而且只追同檔定義的方法。一個「gate →
+    helper → helper 讀帳本」的三層寫法抓不到；跨檔（把 gate 抽到別的 model）也
+    抓不到。這是刻意的成本取捨——再深就要做跨檔呼叫圖，而目前這兩個 gate 都是
+    「lambda 直接呼叫同檔方法」的形狀。真要繞過它得刻意寫成三層，那已經不是
+    「順手選錯名字」而是另一種行為了。這條限制寫在這裡，不要靠讀者自己發現。
+
+    ⚠ **已知限制 2 —— 同名碰撞（本規則最容易靜默失效的一格）**：`filtered()`
+    的 lambda 參數是**另一個 model** 的記錄（`self.route_ids.filtered(lambda r:
+    r.foo())` 裡的 `r` 是 route，不是外層那個 class），所以「`r.foo` 指的是哪個
+    class 的 `foo`」靜態上**無法可靠決定**——外層 class 不是正確的 scope。
+
+    第一版把同檔所有定義攤平成 `{名字: 節點}`，同名的後者覆蓋前者。那有**兩個
+    方向**的失效，而且行為取決於 `ast.walk()` 的走訪順序這個實作細節：
+
+    * **假陰性**（更嚴重）：同檔兩個 `_has_access_teardown()`、只有其中一個讀
+      帳本 ⇒ 解析到乾淨那版 ⇒ **F6 的實際形狀漏網**，正是本規則存在的理由；
+    * **假陽性**：兩個不相關 class 各有一個 `to_dict()`、其中一個讀帳本 ⇒ 完全
+      不相干的 `filtered(lambda r: r.to_dict())` 被冤枉。
+
+    ⚠ 這不是假想：`src/models/security_access.py` 現在就有 5 個同檔重名
+    （`__repr__` / `create` / `write` / `unlink` / `to_dict`），只是目前沒有一個
+    被用在 filter 判準裡。任何一次讓同名方法出現在同一檔案的重構——哪怕與
+    Access／帳本完全無關——都會踩到。
+
+    所以本規則**不猜**：名字在同檔解出**唯一**定義時才追進去；解出兩個以上時
+    直接報「無法判定」讓人來拆（訊息與「確定讀了帳本」那條刻意不同字樣，看得出
+    是哪一種）。代價是「同一檔案裡有兩個同名方法、而且其中一個被當 filter 判準」
+    會被硬擋下來——那個組合很罕見，而且擋下來要求的正是「把名字弄清楚」。
+    """
+    violations = []
+    for path in sorted(glob.glob(os.path.join(root, "src", "**", "*.py"),
+                                 recursive=True)):
+        if only_file and os.path.abspath(path) != os.path.abspath(only_file):
+            continue
+        rel = os.path.relpath(path, root)
+        with open(path, encoding="utf-8", errors="replace") as f:
+            source = f.read()
+        try:
+            tree = ast.parse(source)
+        except SyntaxError:
+            continue
+        # 🔴 收成 name -> [節點]，**不是** name -> 節點：同名時後者覆蓋前者會讓
+        # 解析結果取決於 ast.walk() 的走訪順序（見 docstring 已知限制 2）。
+        defs = {}
+        for n in ast.walk(tree):
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                defs.setdefault(n.name, []).append(n)
+        for call in ast.walk(tree):
+            if not (isinstance(call, ast.Call)
+                    and isinstance(call.func, ast.Attribute)
+                    and call.func.attr == "filtered"):
+                continue
+            for arg in call.args:
+                if not isinstance(arg, ast.Lambda):
+                    continue
+                line = getattr(arg, "lineno", getattr(call, "lineno", 0))
+                direct = _ledger_symbols_in(arg.body)
+                if direct:
+                    violations.append(
+                        "%s:%d：`filtered()` 的判準直接讀待回收帳本（%s）。"
+                        "filter 是 **gate**，gate 讀帳本會讓一筆永遠收不掉的帳把"
+                        "判準釘死成永遠為真（#784 F6：SA 永久卡 state='error'）。"
+                        "要送出去的 id 用 payload 版、判準只看列狀態。"
+                        % (rel, line, ", ".join(sorted(direct))))
+                for sub in ast.walk(arg.body):
+                    if not (isinstance(sub, ast.Call)
+                            and isinstance(sub.func, ast.Attribute)):
+                        continue
+                    targets = defs.get(sub.func.attr)
+                    if not targets:
+                        continue
+                    if len(targets) > 1:
+                        # 同名碰撞 ⇒ 不猜。挑一個會在兩個方向上都靜默出錯，而
+                        # 挑哪一個取決於走訪順序（docstring 已知限制 2）。
+                        violations.append(
+                            "%s:%d：`filtered()` 的判準呼叫 `%s()`，但同一個檔案裡"
+                            "有 %d 個同名定義（%s），無法判定它解到哪一個 ⇒ **無法"
+                            "判定這個判準有沒有讀待回收帳本**。請把名字弄清楚（改名"
+                            "或把判準換成不會撞名的方法）——本規則刻意不猜：猜錯的"
+                            "兩個方向分別是「F6 形狀漏網」與「無辜的 filter 被冤枉」，"
+                            "而且都是靜默的。"
+                            % (rel, line, sub.func.attr, len(targets),
+                               ", ".join("%s:%d" % (rel, t.lineno)
+                                         for t in targets)))
+                        continue
+                    target = targets[0]
+                    hits = _ledger_symbols_in(target)
+                    if not hits:
+                        continue
+                    violations.append(
+                        "%s:%d：`filtered()` 的判準呼叫 `%s()`，而它讀待回收帳本"
+                        "（%s，定義在 %s:%d）。gate 讀帳本會讓一筆永遠收不掉的帳"
+                        "把判準釘死成永遠為真（#784 F6：SA 永久卡 state='error'）。"
+                        % (rel, line, sub.func.attr, ", ".join(sorted(hits)),
+                           rel, target.lineno))
+    return violations
 
 def main(argv):
     if "--hook" in argv:

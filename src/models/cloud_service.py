@@ -3425,9 +3425,15 @@ class CloudService(models.Model):
         # #528：operator 回 2xx ⇒ 這一輪送出去的 existing_policy_ids 已經有答案。
         # 沒被列進 orphaned 的確認刪掉 ⇒ 消帳；被列進去的現在就是 CF 孤兒 ⇒ 記進
         # 帳等下一輪（上面那行 warning 照發，但不再是「說完就忘」）。
-        self.env[_CF_REAP_MODEL]._settle(
+        # #791 覆核 F7：包 post-commit savepoint（記帳失敗不得拖垮下面的 id 回存）。
+        # F9：`trusted_ids` 只給列上真實存在的 cf id——`existing_policy_ids` 裡
+        # 混進來的 context 值不得經 orphaned 回流落帳（#783）。
+        Reap = self.env[_CF_REAP_MODEL]
+        Reap._settle_after_commit(
             self._name, self.id,
-            payload.get('existing_policy_ids') or [], orphaned)
+            payload.get('existing_policy_ids') or [], orphaned,
+            Reap._trusted_ids_for(self), _logger,
+            '[CLOUD_SVC] service %s (%s)' % (self.id, self.subdomain))
         # 身分錨點：只有 sentinel 路徑寫得動（對所有人生效，含 superuser）。
         _internal_cs_access_identity(self).access_app_id = (
             result.get('app_id') or False)
@@ -3523,6 +3529,13 @@ class CloudService(models.Model):
 
         沒有 app id 也沒有 policy id ⇒ 這台服務從來沒有 Access app，直接回
         True（不是「假裝成功」，是真的沒有東西要拆）。
+
+        ⚠ **「只回 bool、不丟例外」有一個明載的例外**（#791 覆核 F4）：提交點之後
+        的記帳段若拋 ``OperationalError``（serialization failure / 連線類）會
+        **往外拋**。吞掉它 Odoo 的 ``retrying()`` 就永遠看不到，而此刻 PG 交易已
+        aborted，硬回一個 bool 只會讓後續 flush 再炸一次（#518）。呼叫端不必自己
+        接：request 級 retry 會用新 snapshot 重播整支流程，而重播是安全的
+        （CF 的 DELETE 把 404 當成功）。
         """
         self.ensure_one()
         if not app_id and not policy_ids:
@@ -3543,17 +3556,10 @@ class CloudService(models.Model):
         # `cf_access_policy_reap._cron_reap_dead_anchors`（錨點死掉之後）或這台
         # 服務自己的下一次成功 sync（錨點還活著時）。
         # 記帳失敗不翻轉回傳值（[[post-commit-bookkeeping-rollback-unit]]）。
-        try:
-            with self.env.cr.savepoint():
-                self.env[_CF_REAP_MODEL]._settle_teardown(
-                    self._name, self.id, app_id or None, policy_ids or [],
-                    (result or {}).get('orphaned_policy_ids') or [])
-        except OperationalError:
-            raise
-        except Exception:
-            _logger.exception(
-                "[CLOUD_SVC] access teardown service=%s app=%s: CF teardown "
-                "SUCCEEDED but booking the reap ledger failed", self.id, app_id)
+        self.env[_CF_REAP_MODEL]._settle_teardown_after_commit(
+            self._name, self.id, app_id or None, policy_ids or [],
+            (result or {}).get('orphaned_policy_ids') or [], _logger,
+            '[CLOUD_SVC] access teardown service=%s app=%s' % (self.id, app_id))
         return True
 
     def _teardown_access_if_any(self):
@@ -3561,6 +3567,25 @@ class CloudService(models.Model):
 
         單一裁決處：unlink（fail-loud）與 `_do_cleanup`（落 error 狀態）兩條
         路徑共用，免得兩邊各自組一次 policy id 清單而漏掉其中一種。
+
+        🔴 **不要把待回收帳本（`cf_access_policy_reap`）的查詢加進這裡**（#784
+        F6 的教訓，寫在這是因為這裡最像「順手移植」的落點）。
+
+        本方法把三件事合在一起：「有沒有東西要拆」（閘）、「要送哪些 id」
+        （payload）、「清乾淨了沒」（回傳值餵給呼叫端的 fail-loud／落 error）。
+        今天沒事，是因為三者讀的都是**列上的狀態**。SA 那一腿曾經在同型的方法裡
+        補上 `_pending_ids()` 聯集——想讓刪除時順手把帳本舊帳一起送出去——結果
+        連帶把「清乾淨了沒」也變成「列 ∪ 帳本」：只要 operator 回報過某顆 policy
+        刪不掉，那筆帳就掛在帳本上（錨點還活著 ⇒ dead-anchor cron 依設計不收）
+        ⇒ 閘永遠回 True ⇒ **SA 永久卡在 `state='error'`**，每輪 lifecycle cron
+        白打一次 operator，七天後只多一行 stuck warning。
+
+        SA 那邊的解法是把兩個問題拆開各自命名（`_has_access_teardown()` 只答
+        「這列乾淨了沒」、`_access_teardown_payload_ids()` 才答「這趟送哪些
+        id」），見 `security_access.py`。這裡真要做同樣的事，就照那個形狀拆，
+        **不要**在本方法裡直接查帳本。repo-lint 的 `access-gate-no-ledger-read`
+        會擋住「filter 的 lambda 讀帳本」那一格，但**擋不到**本方法這種
+        「gate 與 payload 合體」的形狀——那正是需要這段註解的原因。
         """
         self.ensure_one()
         pol_ids = [p.cf_policy_id for p in self.access_policy_ids
