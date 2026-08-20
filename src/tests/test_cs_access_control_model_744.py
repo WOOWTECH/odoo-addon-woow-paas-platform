@@ -36,8 +36,11 @@ from odoo.tools import mute_logger
 # （呼叫端 context 會被 `call_kw` 整包換進 env ⇒ truthy 值是租戶可偽造的）。
 from ..models.security_access import _skip_route_sync
 
+# #787：`cs_skip_access_sync` 只認模組私有 sentinel，不能傳 `True`
+# （呼叫端 context 會被 `call_kw` 整包換進 env ⇒ truthy 值是租戶可偽造的）。
 from ..models.cloud_service import (
     _CS_ACCESS_IDENTITY_ANCHOR_FIELDS,
+    _cs_skip_access_sync,
     _CS_ACCESS_IDENTITY_CTX_KEY,
     _INTERNAL_CS_ACCESS_IDENTITY_WRITE,
     _internal_cs_access_identity,
@@ -462,8 +465,8 @@ class TestCsAccessTeardown(_CsAccessFixture):
         會死在「PaaS Operator is not configured」上——而那個 error 跟本組要測
         的 teardown 行為完全無關。與 SA fixture 用 `sa_skip_route_sync` 同款。
         """
-        _internal_cs_access_identity(service).with_context(
-            cs_skip_access_sync=True).write({
+        _cs_skip_access_sync(
+            _internal_cs_access_identity(service)).write({
                 'is_protected': True, 'access_app_id': app_id})
         return service
 
