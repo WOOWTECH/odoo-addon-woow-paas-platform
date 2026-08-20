@@ -15,6 +15,10 @@ from ..services.paas_operator import (
 
 _logger = logging.getLogger(__name__)
 
+#: #528 的待回收帳本。用字串而不是 import 具體 class：三腿都要用它，而
+#: `env[...]` 這條路不受 model 檔的 import 順序影響。
+_CF_REAP_MODEL = 'woow_paas_platform.cf_access_policy_reap'
+
 # A subdomain prefix is a SINGLE DNS label: 3-63 chars of lowercase letters,
 # digits and hyphens only — NO dots (a dot would split it into multiple labels)
 # and no other symbols/uppercase/spaces; must not start or end with a hyphen.
@@ -1488,10 +1492,15 @@ class SecurityAccessRoute(models.Model):
         ids are already gone from the DB — they would never enter this list and
         the operator (whose only delete path is this list) would leak them as
         permanent CF orphans. unlink() captures those doomed ids and passes them
-        via context so they are reaped on the same resync."""
+        via context so they are reaped on the same resync.
+
+        #528：來源從「只有本次 context」擴成「**帳本 ∪ 本次 context**」。context
+        用完即丟，而那一次 resync 可能被下面的 liveness gate 整個擋掉——被擋掉的
+        那些 id 就此沒有任何記錄指向它們（永久 CF 孤兒）。帳本讓它們活到下一次
+        推得動為止。"""
         self.ensure_one()
         ids = [p.cf_policy_id for p in self.access_policy_ids if p.cf_policy_id]
-        for cf_id in self.env.context.get('sa_unlinked_cf_policy_ids') or []:
+        for cf_id in self.env[_CF_REAP_MODEL]._pending_for(self):
             if cf_id and cf_id not in ids:
                 ids.append(cf_id)
         return ids
@@ -1549,19 +1558,26 @@ class SecurityAccessRoute(models.Model):
         'active' (resume) or while it is being restored, so the create/write
         liveness gate would otherwise skip the very push they exist to do —
         e.g. converging a route disabled while suspended (its stored app_id must
-        be torn down at resume even though state is still 'suspended' here)."""
+        be torn down at resume even though state is still 'suspended' here).
+
+        #528：三道 gate 收斂成 `_access_sync_skip_reason()` 一個裁決處，並在
+        略過時回 ``False``（推出去了回 ``True``）。理由不是整潔——原本三道各自
+        裸 `return`，「被擋掉」與「推了而且成功」在呼叫端輸出上完全不可區分，
+        而第四道 gate 只要有人再加一次就會再漏一次（同 [[reaped-since-single-
+        path-stamp-gc-immunity]]：判準集中一處，不要逐路徑補）。"""
         self.ensure_one()
         sa = self.security_access_id
-        forced = _is_sync_control(self.env, _CTX_FORCE_ACCESS_SYNC)
-        if not sa or not sa.tunnel_id:
-            return
-        if not forced and sa.state not in ('active', 'active_no_route', 'error'):
-            return
-        # Nothing to do for an unprotected route that was never an app.
-        if not self.is_protected and not self.access_app_id:
-            return
+        skip = self._access_sync_skip_reason()
+        if skip:
+            self.env[_CF_REAP_MODEL]._warn_if_deferred(
+                self, _logger,
+                'Security Access route %s (%s, sa=%s)' % (
+                    self.id, self.subdomain_prefix, sa.id if sa else None),
+                skip)
+            return False
         client = sa._get_operator_client()
-        result = client.sync_access_app(self._build_access_payload())
+        payload = self._build_access_payload()
+        result = client.sync_access_app(payload)
         # Surface old reusable policies the operator could not delete after
         # repointing the app — permanent Cloudflare orphans (cost/clutter) that
         # no later re-sync reconciles, so make them observable in the log.
@@ -1572,6 +1588,12 @@ class SecurityAccessRoute(models.Model):
                 "CF Access policy(ies) after sync: %s", self.id,
                 self.subdomain_prefix, sa.id, len(orphaned),
                 ', '.join(orphaned))
+        # #528：operator 回 2xx ＝ 這一輪送出去的 existing_policy_ids 已經有答案
+        # 了。沒被列進 orphaned 的確認刪掉 ⇒ 消帳；被列進去的現在就是 CF 孤兒 ⇒
+        # 記進帳等下一輪（上面那行 warning 照發，但不再是「說完就忘」）。
+        self.env[_CF_REAP_MODEL]._settle(
+            self._name, self.id,
+            payload.get('existing_policy_ids') or [], orphaned)
         # write back CF ids onto this route (server-owned identity anchor)
         _internal_identity(self).access_app_id = result.get('app_id') or False
         # Persist the operator's fail-open login-widening signal (requested
@@ -1592,6 +1614,32 @@ class SecurityAccessRoute(models.Model):
             for pol in self.access_policy_ids:
                 if pol.cf_policy_id:
                     pol.cf_policy_id = False
+        return True
+
+    def _access_sync_skip_reason(self):
+        """``None`` ＝ 這一輪推得動；否則回一句人話說明為什麼不推（#528）。
+
+        本方法是這條腿**所有** liveness gate 的唯一裁決處。分出來不是為了整潔：
+        呼叫端要能在略過時說出「略過的是哪一格」，而把判斷留在 sync 裡面就只能
+        回一個裸 `return`——那正是 #528 讓人把「CF 一次都沒被碰過」讀成「同步
+        成功」的原因。新增 gate 一律加在這裡，訊號自動跟上。
+
+        `_force_access_sync` 只繞過 **state 那半邊**（`tunnel_id` 仍是硬前提），
+        這個不對稱是既有語意，不要在這裡「順手補齊」。#536：只有模組自己的
+        sentinel 開得了這道閘——呼叫端塞 `sa_force_access_sync: true` 進 context
+        打不開，見 `_is_sync_control`。
+        """
+        self.ensure_one()
+        sa = self.security_access_id
+        forced = _is_sync_control(self.env, _CTX_FORCE_ACCESS_SYNC)
+        if not sa or not sa.tunnel_id:
+            return 'the Security Access has no live tunnel'
+        if not forced and sa.state not in ('active', 'active_no_route',
+                                           'error'):
+            return "Security Access state is %r" % sa.state
+        # Nothing to do for an unprotected route that was never an app.
+        return (None if (self.is_protected or self.access_app_id)
+                else 'the route is unprotected and never had an Access app')
 
     def to_dict(self):
         self.ensure_one()

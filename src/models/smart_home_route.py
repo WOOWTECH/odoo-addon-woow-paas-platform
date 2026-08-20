@@ -44,6 +44,9 @@ from odoo.exceptions import UserError, ValidationError
 
 _logger = logging.getLogger(__name__)
 
+#: #528 的待回收 CF Access policy 帳本（三腿共用）。
+_CF_REAP_MODEL = 'woow_paas_platform.cf_access_policy_reap'
+
 
 # ------------------------------------------------------------------------- #
 #  身分錨點（形態抄 security_access 的 `_ROUTE_IDENTITY_ANCHOR_FIELDS`）      #
@@ -426,10 +429,15 @@ class SmartHomeRoute(models.Model):
         ``super().unlink()`` 再 re-sync，那些剛被刪掉的列的 cf id 已經不在 DB
         裡、永遠進不了這份清單，而 operator 唯一的刪除通道就是它 ⇒ 每刪一條漏一
         顆永久孤兒。policy 的 unlink 因此把 doomed id 經 context 傳進來。
+
+        #528：來源從「只有本次 context」擴成「**帳本 ∪ 本次 context**」。context
+        用完即丟，而那一次 re-sync 會被 `_access_is_live` 的 state 閘擋掉（SH 的
+        `suspended` 刻意排除在外）——被擋掉的那些 id 就此沒有任何記錄指向它們。
+        帳本讓它們活到下一次推得動為止。
         """
         self.ensure_one()
         ids = [p.cf_policy_id for p in self.access_policy_ids if p.cf_policy_id]
-        for cf_id in self.env.context.get('sa_unlinked_cf_policy_ids') or []:
+        for cf_id in self.env[_CF_REAP_MODEL]._pending_for(self):
             if cf_id and cf_id not in ids:
                 ids.append(cf_id)
         return ids
@@ -483,16 +491,23 @@ class SmartHomeRoute(models.Model):
 
         `is_protected=False` 送 `enabled=False` 的 payload（帶 `existing_app_id`
         做 teardown），推完清掉存下來的 app id；沒有 app id 時整支是無害的 no-op。
+
+        #528：兩道 gate 收斂成 `_access_sync_skip_reason()` 一個裁決處，略過時回
+        ``False``、推出去了回 ``True``。原本兩道各自裸 `return`，「被擋掉」與
+        「推了而且成功」在呼叫端輸出上完全不可區分——而 SH 的 state 閘正是
+        #528 在這條腿上的實際觸發點（停權期間刪 policy）。
         """
         self.ensure_one()
-        forced = bool(self.env.context.get('sm_force_access_sync'))
-        if not self._access_is_live(forced=forced):
-            return
-        # 從沒建過 app 的未保護 route 沒有任何事要做
-        if not self.is_protected and not self.access_app_id:
-            return
+        skip = self._access_sync_skip_reason()
+        if skip:
+            self.env[_CF_REAP_MODEL]._warn_if_deferred(
+                self, _logger,
+                '[SH] route %s (sh=%s)' % (self.id, self.smart_home_id.id),
+                skip)
+            return False
         client = self.smart_home_id._get_operator_client()
-        result = client.sync_access_app(self._build_access_payload())
+        payload = self._build_access_payload()
+        result = client.sync_access_app(payload)
         orphaned = result.get('orphaned_policy_ids') or []
         if orphaned:
             # operator 重指 app 之後刪不掉的舊 reusable policy＝永久 CF 孤兒
@@ -501,6 +516,12 @@ class SmartHomeRoute(models.Model):
                 "[SH] route %s (sh=%s): operator left %d orphan CF Access "
                 "policy(ies) after sync: %s", self.id, self.smart_home_id.id,
                 len(orphaned), ', '.join(orphaned))
+        # #528：operator 回 2xx ⇒ 這一輪送出去的 existing_policy_ids 已經有答案。
+        # 沒被列進 orphaned 的確認刪掉 ⇒ 消帳；被列進去的現在就是 CF 孤兒 ⇒ 記進
+        # 帳等下一輪（上面那行 warning 照發，但不再是「說完就忘」）。
+        self.env[_CF_REAP_MODEL]._settle(
+            self._name, self.id,
+            payload.get('existing_policy_ids') or [], orphaned)
         _internal_sm_route_identity(self).access_app_id = (
             result.get('app_id') or False)
         unresolved = result.get('unresolved_idp_types') or []
@@ -517,6 +538,32 @@ class SmartHomeRoute(models.Model):
             for pol in self.access_policy_ids:
                 if pol.cf_policy_id:
                     pol.cf_policy_id = False
+        return True
+
+    def _access_sync_skip_reason(self):
+        """``None`` ＝ 這一輪推得動；否則回一句人話說明為什麼不推（#528）。
+
+        本腿**所有** liveness gate 的唯一裁決處（`_access_is_live` 仍是判準本身，
+        teardown 路徑也用它；本方法只負責把「不推」翻成呼叫端說得出口的理由）。
+        新增 gate 一律加在這裡，訊號自動跟上。
+
+        兩格的可達性：`_access_is_live` 的 **state 閘**帶得著待回收 id
+        （`_do_suspend` 完全不碰 Access app，停權期間 `cf_policy_id` 全都還在，
+        而刪 policy 的端點只看訂閱狀態、不看 SH state）；`tunnel_id` / `hostname`
+        兩格與「未保護且沒有 app id」那格帶不著。
+        """
+        self.ensure_one()
+        forced = bool(self.env.context.get('sm_force_access_sync'))
+        if not self._access_is_live(forced=forced):
+            sh = self.smart_home_id
+            return (
+                "the route is not live (smart home state=%r, tunnel=%s, "
+                "hostname=%s, forced=%s)" % (
+                    sh.state if sh else None, bool(sh and sh.tunnel_id),
+                    bool(self.hostname), forced))
+        # 從沒建過 app 的未保護 route 沒有任何事要做
+        return (None if (self.is_protected or self.access_app_id)
+                else 'the route is unprotected and never had an Access app')
 
     # ------------------------------------------------------------------ #
     #  teardown（刪除路徑；id 必須在列消失之前捕獲）                        #
