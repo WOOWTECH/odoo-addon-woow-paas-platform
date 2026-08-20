@@ -173,6 +173,44 @@ class Caller(object):
         return self.anchor.with_context(**{_CTX_DEAD: ['x']}).sync()
 '''
 
+# (iv) 覆核 M2：**動態組 dict** 的注入端寫法。`ctx[KEY] = ids` 是 `Subscript` 賦值，
+# 既不是 keyword 也不是 `ast.Dict` 字面節點 ⇒ 原本兩個採集分支都看不到它。
+MODEL_REMOVED_CHANNEL_SUBSCRIPT_BACK = MODEL_OK + '''
+
+class Caller(object):
+    def unlink(self):
+        ctx = {}
+        ctx['ut_dead_channel_ids'] = [p.cf_id for p in self]
+        return self.anchor.with_context(**ctx).sync()
+'''
+
+MODEL_REMOVED_CHANNEL_SUBSCRIPT_CONST_BACK = MODEL_OK + '''
+
+_CTX_DEAD = 'ut_dead_channel_ids'
+
+
+class Caller(object):
+    def unlink(self):
+        ctx = {}
+        ctx[_CTX_DEAD] = ['x']
+        return self.anchor.with_context(**ctx).sync()
+'''
+
+# 🔴 **已知盲點**（不是要修的，是要鎖住的）：key 本身在執行期才決定 ⇒ AST 解不出
+# 字面值，任何純形態比對都看不到。下面那條測試斷言它**目前是綠的**，用途是「gate
+# 哪天變強了會有人被提醒」，不是宣稱這樣寫沒問題。
+MODEL_REMOVED_CHANNEL_RUNTIME_KEY = MODEL_OK + '''
+
+class Caller(object):
+    def _dead_key(self):
+        return 'ut_dead' + '_channel_ids'
+
+    def unlink(self):
+        ctx = {}
+        ctx[self._dead_key()] = ['x']
+        return self.anchor.with_context(**ctx).sync()
+'''
+
 # 只在註解／docstring 裡提到那個名字——**不得**被判違規（拿掉通道之後寫下「為什麼
 # 拿掉」正是該做的事；把它算成違規會逼人刪掉守線的說明文字）。
 MODEL_REMOVED_CHANNEL_ONLY_MENTIONED = MODEL_OK + '''
@@ -620,6 +658,38 @@ class TestRemovedChannelIsBlocked(unittest.TestCase):
         violations = self._tree(MODEL_REMOVED_CHANNEL_DICT_BACK)
         self.assertTrue(violations, "dict 形態的注入被漏掉")
         self.assertIn("ut_dead_channel_ids", _joined(violations))
+
+    def test_subscript_assignment_added_back_is_blocked(self):
+        """覆核 M2：`ctx[KEY] = ids` ＋ `with_context(**ctx)`。
+
+        這是「恢復手動帶 context 強制收斂」的人最自然會寫出來的形狀，而它既不是
+        keyword 也不是 `ast.Dict` 字面節點 ⇒ 原本兩個採集分支都看不到。
+        """
+        violations = self._tree(MODEL_REMOVED_CHANNEL_SUBSCRIPT_BACK)
+        self.assertTrue(violations, "動態組 dict 的注入端寫法被漏掉")
+        self.assertIn("ut_dead_channel_ids", _joined(violations))
+
+    def test_subscript_assignment_with_a_module_const_key_is_blocked(self):
+        """key 走 module 層常數也要抓得到（跨檔常數解析已存在，別只認字面字串）。"""
+        violations = self._tree(MODEL_REMOVED_CHANNEL_SUBSCRIPT_CONST_BACK)
+        self.assertTrue(violations, "常數 key 的 subscript 注入被漏掉")
+        self.assertIn("ut_dead_channel_ids", _joined(violations))
+
+    def test_known_blind_spot_runtime_computed_key_is_NOT_caught(self):
+        """🔴 **已知盲點，刻意鎖住現況**：key 在執行期才算出來 ⇒ 本條抓不到。
+
+        這條**不是**在說那樣寫沒問題——它是在說「本 gate 對這個形狀沒有鑑別力」，
+        而那件事必須是**可見的**，不能默默留著（被寫成例外的那格就是日後會出事的
+        那格）。純 AST 形態比對對「key 是執行期值」本來就不可判定，硬幹只會換來
+        誤報。哪天 gate 加了資料流分析、這條會變紅 ⇒ 那時請把它改成
+        `assertTrue` 並把 docstring 的盲點清單那一項刪掉。
+
+        ⚠ 陽性對照就在同一個 class：同樣的 `ctx[…] = …` ＋ `with_context(**ctx)`，
+        只要 key 解得出字面值就會紅（上面兩條）⇒ 這裡的綠不是「採集器沒在跑」。
+        """
+        self.assertEqual(
+            self._tree(MODEL_REMOVED_CHANNEL_RUNTIME_KEY), [],
+            "這條盲點如果變紅了是好事，但要有人來更新 docstring 的盲點清單")
 
     def test_mentioning_the_name_in_a_comment_is_not_a_violation(self):
         """判準是 AST 載體不是字面比對——註解提到名字不得誤報。

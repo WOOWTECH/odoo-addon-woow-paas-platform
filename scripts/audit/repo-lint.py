@@ -318,15 +318,19 @@ security-rule-lifecycle 由兩個函式——ir.rule 的出生地／退役名字
                      status）。沒有 (c)，掃描器回空集合時 (iii) 永遠是綠的。
                      第四條判準 (iv)：`status=removed` 的 key —— 這條 context 通道
                      **已經被拿掉**，判準與上面三條相反：生產碼裡不得再出現它的任何
-                     載體（`context.get` 讀取點／`with_context(k=…)`／`{'k': …}`）。
+                     載體（`context.get` 讀取點，以及 `with_context(k=…)`／`{'k': …}`／
+                     `ctx[k] = …` 三種注入形態）。
                      🔴 為什麼需要它：拿掉一條可偽造的通道之後，唯一會讓它回來的是
                      「下一個人不知道它為什麼被拿掉」，而測試只守得住已知的呼叫形態、
                      守不住一個新寫的讀取點。陽性對照兩層：gate 內盯**注入載體採集器**
                      本身（真 repo 上一定抽得到別的 registry key 的注入點，一個都沒有
-                     ＝採集器壞了），外加 meta-test 的三次注入紅燈（讀取點／keyword
-                     注入／dict 注入各一）——見
-                     `scripts/audit/test_repo_lint_internal_ctx_key_registry.py`
+                     ＝採集器壞了），外加 meta-test 的五次注入紅燈（讀取點／keyword
+                     注入／dict 注入／subscript 賦值字面 key／subscript 賦值常數 key）
+                     ——見 `scripts/audit/test_repo_lint_internal_ctx_key_registry.py`
                      的 `TestRemovedChannelIsBlocked`。
+                     🔴 同一個 class 另鎖了一條**已知盲點**（key 是執行期值，AST 不可
+                     判定），它斷言現況是綠的——盲點必須是可見的，不能默默留著：被寫成
+                     例外的那格就是日後會出事的那格。
                      ⚠ (iv) 只認 AST 載體 ⇒ **註解與 docstring 提到那個名字不算違規**：
                      拿掉通道之後說明「為什麼拿掉、不要加回來」正是該寫的東西，把它算
                      成違規會逼人刪掉守線的說明文字（第 27 條踩過同一個形狀）。
@@ -3755,7 +3759,8 @@ INTERNAL_CTX_KEY_SKIP_PREFIXES = ("src/tests/",)
 #               'removed'      —— 這條 context 通道**已經被拿掉**，不准回來（必附
 #                                 issue）。判準與上面三個相反：生產碼裡不得再出現
 #                                 它的任何載體（`context.get` 讀取點／
-#                                 `with_context(k=…)`／`{'k': …}` 注入點）。
+#                                 `with_context(k=…)`／`{'k': …}`／`ctx[k] = …`
+#                                 四種注入形態）。
 #                                 ⚠ 只認 AST 載體 ⇒ **註解與 docstring 提到這個
 #                                 名字不算違規**（拿掉一條通道之後，說明「為什麼
 #                                 拿掉、不要加回來」正是該寫的東西；把它算成違規
@@ -4219,6 +4224,27 @@ def _internal_ctx_key_scan(root):
                         if key is not None:
                             facts["reader_calls"].append(
                                 (fname, key, rel, node.lineno))
+            elif isinstance(node, (ast.Assign, ast.AugAssign)):
+                # (iv) 的第三種載體：`ctx[KEY] = ids` ＋ 之後 `with_context(**ctx)`。
+                #
+                # 🔴 這是覆核 M2 抓到的繞過寫法，而且它正是「想恢復手動帶 context
+                #    強制收斂」的人最自然會寫出來的形狀：既不是 keyword 也不是
+                #    `ast.Dict` 字面節點 ⇒ 上面兩個分支都看不到。
+                #
+                # ⚠ 這**不是** dataflow 分析（本條看不到 `ctx` 後來有沒有真的被展開
+                #    進 `with_context`），是**形態**判定：對一把已經被拿掉的 key 而
+                #    言，「它的名字出現在 subscript 賦值的左邊」本身就該有人看一眼。
+                #    只餵給 (iv)（`injections`），不進 (ii) 的 `truthy` —— (ii) 的
+                #    語意是「這個字面值不會開閘」，那需要看得到值的載體。
+                targets = (list(node.targets) if isinstance(node, ast.Assign)
+                           else [node.target])
+                for tgt in targets:
+                    if not isinstance(tgt, ast.Subscript):
+                        continue
+                    key = _ctx_resolve_key(tgt.slice, local_consts, global_consts)
+                    if key in INTERNAL_CTX_KEY_REGISTRY:
+                        facts["injections"].append(
+                            (key, rel, node.lineno, "...[%r] = ..." % key))
             elif isinstance(node, ast.Dict):
                 # (ii) 的另一半：`{'key': True}` 與 `**{KEY_CONST: True}`。
                 for k_node, v_node in zip(node.keys, node.values):
@@ -4316,6 +4342,15 @@ def check_internal_ctx_key_registry(root):
         改由 (iv) `status=removed` 守「不准回來」。
       * (iv) 只認 AST 載體，**註解／docstring 提到那個名字不算違規**（拿掉通道之後
         寫下「為什麼拿掉」是該做的事，把它算成違規會逼人刪掉守線的說明文字）。
+      * (iv) 的**注入端**認三種形態：keyword（`with_context(k=…)`）、`ast.Dict` 字面
+        （`{'k': …}` / `**{K: …}`）、subscript 賦值（`ctx[K] = …`，覆核 M2 補的——
+        那是「想恢復手動帶 context 強制收斂」的人最自然會寫的形狀）。
+        🔴 **仍抓不到：key 本身是執行期值**（`ctx[self._key()] = …`、
+        `ctx[keys[i]] = …`）。純 AST 形態比對對這件事不可判定，硬幹只會換來誤報，
+        所以本條**明講擋不到**而不是假裝守住了。這個盲點被
+        `TestRemovedChannelIsBlocked.test_known_blind_spot_runtime_computed_key_is_NOT_caught`
+        鎖著（它斷言目前是綠的）⇒ 哪天加了資料流分析、那條會變紅，那時請一併刪掉
+        本項。
       * (ii) 只認**字面值**：`key=True` 與 `{'key': True}` 兩種載體。動態組出來的
         dict 再展開（`ctx = {...}; rec.with_context(**ctx)`）看不到——那需要 dataflow
         分析，而本條刻意停在 AST 形態比對。這不是漏洞的入口（sentinel 判定照樣不認
