@@ -4209,6 +4209,11 @@ def check_internal_ctx_key_registry(root):
       * 只管 **truthy 布林閘**。#787 B 段的「值注入」型偽造面（`sa_unlinked_cf_policy_ids`
         / `mcp_admin_password` / `bootstrap_owner_partner_id`）形態不同、修法不同，
         不在本條範圍——把本條的綠讀成「所有 context 偽造面都守住了」是錯的。
+      * (ii) 只認**字面值**：`key=True` 與 `{'key': True}` 兩種載體。動態組出來的
+        dict 再展開（`ctx = {...}; rec.with_context(**ctx)`）看不到——那需要 dataflow
+        分析，而本條刻意停在 AST 形態比對。這不是漏洞的入口（sentinel 判定照樣不認
+        那個值，閘不會開），是「本條抓不到那個寫法」的誠實邊界：真正的後果是有人那樣
+        寫時本條不會提醒他「這一行不會開閘」。
       * 只看**平台自己的** src/。第三方 addon 的 context key 不在管轄內。
     依據 docs/decisions/519-cloud-service-provision-gate.md
     """
