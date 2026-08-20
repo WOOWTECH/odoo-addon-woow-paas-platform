@@ -3827,29 +3827,51 @@ INTERNAL_CTX_KEY_REGISTRY = {
         "issue": "#744",
         "why": "SH route 的 Access 身分錨點寫入豁免（形狀同 #522／#744）。",
     },
-    # --- #787 A 段：同形態但**尚未**修的 5 把（另案逐把驗可達性後再修） ----- #
+    # --- #787 A 段：同形態的一批（逐把驗可達性後再修） ------------------- #
+    #
+    # ⚠ 刻意不寫「還剩幾把」：那個數字每修好一把就腐爛一次，而它腐爛時沒有任何
+    #   訊號。要現況就數下面 `issue == "#787"` 且 `status == "pending"` 的條目。
     #
     # 🔴 掛在這裡的目的不是放行，是**攤開**：它們原本只活在一張 issue 表裡，沒有
     #    任何機制會讓讀 code 的人知道。status 從 pending 翻成 enforced 那一刻，
     #    (i)(ii) 自動對它生效——修好一把的驗收條件因此是機械的，不靠人記得。
     "sm_route_cascade_unlink": {
-        "status": "pending",
+        "status": "enforced",
+        "sentinel": "_INTERNAL_SM_SYNC_CONTROL",
+        "reader": "_is_sm_sync_hatch_open",
+        "defined_in": "src/models/smart_home_route.py",
         "issue": "#787",
-        "why": "#787 A 段：SH cascade 刪除用的旁路，繞過 primary route 不可刪的 "
-               "UserError。ACL 上 smart_home_route 對 base.group_user 是 unlink=0，"
-               "可達性未實測 ⇒ 先追蹤不動（#787 明列先驗再修）。",
+        "why": "SH cascade 刪除用的旁路，繞過 primary route 不可刪的 UserError。"
+               "#787 實測：守衛**確實被偽造的 context 關掉**（真 call_kw unlink 的"
+               "例外型別從 UserError 翻成 AccessError ＝ 守衛沒擋、流程往下撞 ACL），"
+               "但刪除本身被 base.group_user 的 unlink=0 擋死 ⇒ 這把是 "
+               "defense-in-depth：ACL 哪天鬆一格它就是最後一道。已改私有 sentinel。",
     },
     "sm_skip_access_sync": {
-        "status": "pending",
+        "status": "enforced",
+        "sentinel": "_INTERNAL_SM_SYNC_CONTROL",
+        "reader": "_is_sm_sync_hatch_open",
+        "defined_in": "src/models/smart_home_route.py",
         "issue": "#787",
-        "why": "#787 A 段：抑制 route create／write 後的 Access 宣告式推送（fail-open）。"
-               "生產側**只讀不設**（無 production setter），可達性未實測。",
+        "why": "抑制 route create／write 後的 Access 宣告式推送（fail-open 且無聲）。"
+               "#787 實測：`write` 那個讀取點**租戶可達**——自建 workspace 即 owner，"
+               "smart_home_route_rule_owner_admin_manage 給完整寫入 ⇒ 真 call_kw 偽造"
+               "後 is_protected 落地而 Cloudflare 完全不知情。`create` 那個讀取點被 "
+               "ACL create=0 擋住（租戶到不了），但判準 (i) 對 enforced key 的**所有**"
+               "生產讀取點生效，一併改。生產側只讀不設，helper 仍留著當可偽造寫法的"
+               "唯一替代品。已改私有 sentinel（形狀同 #536）。",
     },
     "sm_force_access_sync": {
-        "status": "pending",
+        "status": "enforced",
+        "sentinel": "_INTERNAL_SM_SYNC_CONTROL",
+        "reader": "_is_sm_sync_hatch_open",
+        "defined_in": "src/models/smart_home_route.py",
         "issue": "#787",
-        "why": "#787 A 段：SA `sa_force_access_sync` 的 SH 同構版，繞過 route "
-               "liveness gate 的狀態那一半。可達性未實測。",
+        "why": "SA `sa_force_access_sync` 的 SH 同構版，繞過 route liveness gate 的"
+               "狀態那一半。#787 實測**可達**：SH 停權中，租戶真 call_kw 改自己 route "
+               "的 Access 設定並偽造這把，設定照樣推去 Cloudflare 並把 app_id 回寫進 "
+               "DB（ir.rule 的 owner/admin domain 不濾 SH 的 state）。正當 setter 是 "
+               "smart_home._do_resume 的收斂。已改私有 sentinel。",
     },
     "cs_skip_access_sync": {
         "status": "enforced",

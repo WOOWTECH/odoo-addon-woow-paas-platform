@@ -51,7 +51,10 @@ from unittest.mock import MagicMock, patch
 from odoo.tests import HttpCase, tagged
 
 from ..models.cloud_service import _internal_provision
-from ..models.smart_home_route import _internal_sm_route_identity
+from ..models.smart_home_route import (
+    _internal_sm_route_identity,
+    _sm_skip_access_sync,
+)
 # #536：`sa_skip_route_sync` 只認模組私有 sentinel，不能傳 `True`
 # （呼叫端 context 會被 `call_kw` 整包換進 env ⇒ truthy 值是租戶可偽造的）。
 from ..models.security_access import _skip_route_sync
@@ -192,7 +195,7 @@ class _ShAccessEndpointFixture(HttpCase):
         `route.write(...)` 都被抑制，而那個症狀與「sync 沒接上」不可區分
         （`test_cs_access_endpoints_745.py::_policy` 的同一段教訓）。
         """
-        route = self.Route.sudo().with_context(sm_skip_access_sync=True).create(
+        route = _sm_skip_access_sync(self.Route.sudo()).create(
             {'smart_home_id': sh.id, 'is_primary': True})
         return route.with_context(sm_skip_access_sync=False)
 
@@ -358,8 +361,7 @@ class TestShAccessConfigRoleGate(_ShAccessEndpointFixture):
         """
         for label, login, allowed in self._role_matrix():
             with self.subTest(role=label):
-                self.route.sudo().with_context(
-                    sm_skip_access_sync=True).write(
+                _sm_skip_access_sync(self.route.sudo()).write(
                         {'is_protected': False, 'session_duration': '24h'})
                 self.authenticate(login, login)
                 res = self._access_config(
@@ -754,7 +756,7 @@ class TestShAccessPayloadWhitelist(_ShAccessEndpointFixture):
         """
         _internal_sm_route_identity(self.route.sudo()).write(
             {'access_app_id': 'cf-app-real'})
-        self.route.sudo().with_context(sm_skip_access_sync=True).write(
+        _sm_skip_access_sync(self.route.sudo()).write(
             {'access_unresolved_idp_types': 'okta'})
         self.authenticate(self.alice_login, self.alice_login)
         res = self._access_config({
@@ -865,7 +867,7 @@ class TestShAccessProtectionToggle(_ShAccessEndpointFixture):
         ⇒ `vals` 空 ⇒ 端點**不寫任何東西卻回 success**。租戶按了「關閉保護」、
         畫面回成功、Cloudflare 上那個 Access app 還在，而且沒有任何錯誤訊號。
         """
-        self.route.sudo().with_context(sm_skip_access_sync=True).write(
+        _sm_skip_access_sync(self.route.sudo()).write(
             {'is_protected': True})
         self.authenticate(self.alice_login, self.alice_login)
         res = self._access_config({'is_protected': False})
@@ -916,7 +918,7 @@ class TestShAccessProtectionToggle(_ShAccessEndpointFixture):
         """
         sh = self._smart_home(self.w1, 'SH L3 768', subdomain=None)
         route = self._route(sh)
-        route.sudo().with_context(sm_skip_access_sync=True).write(
+        _sm_skip_access_sync(route.sudo()).write(
             {'is_protected': True})
         self.authenticate(self.alice_login, self.alice_login)
         res = self._access_config({'is_protected': False},
@@ -1049,7 +1051,7 @@ class TestShAccessTenantOperatorChain(_ShAccessEndpointFixture):
             '算出來存的，拿它當前綴在 prod 逐位元組相同、到 stg 才錯')
 
     def test_N3_tenant_policy_create_reaches_the_operator(self):
-        self.route_live.sudo().with_context(sm_skip_access_sync=True).write(
+        _sm_skip_access_sync(self.route_live.sudo()).write(
             {'is_protected': True})
         self.authenticate(self.alice_login, self.alice_login)
         client = self._mock(_sync_result(app_id='app-n3',

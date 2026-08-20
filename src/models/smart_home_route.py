@@ -149,6 +149,114 @@ def _reject_sm_route_identity_writes(env, vals):
                 "Field '%s' is immutable after creation." % field)
 
 
+# ------------------------------------------------------------------------- #
+#  sync-control 逃生門（#787；形制抄 security_access 的 `_INTERNAL_SYNC_CONTROL`）#
+# ------------------------------------------------------------------------- #
+#
+# 本檔有三把 context key 是「這一次操作要不要／能不能對 Cloudflare 動手」的**內部
+# 憑證**，判定原本只看 truthy。`/web/dataset/call_kw` 把呼叫端 context 整包換進
+# env（`odoo/api.py::call_kw` 的 `recs = recs.with_context(context)`）⇒ 租戶送一行
+# JSON 就開得了閘。#522 在 18.0 上實測成功過；#536（SA）與 #787 第 1 把（CS）各
+# 修過一批，本段是 SH 這一腿。
+#
+# 三把偽造後各自的後果（可達性由 #787 的 `sh-787-reach` 探針**實測**，非推論）：
+#
+#   * `sm_skip_access_sync`     write 後的 Access 推送整段被跳過 ⇒ DB 記著「已保護」
+#                               而 Cloudflare 上什麼都沒有。**fail-open 且無聲**：
+#                               write 回 True、端點回 success、UI 開關是開的。
+#   * `sm_route_cascade_unlink` primary route 不可刪的守衛被關掉。刪除本身另有
+#                               ACL（`base.group_user` 的 `unlink=0`）擋死，所以
+#                               這把是 **defense-in-depth**——ACL 哪天鬆一格，它
+#                               就是最後一道。實測簽名是**例外型別翻轉**：守衛擋
+#                               的是 `UserError`，被繞過後往下撞 ACL 變 `AccessError`。
+#   * `sm_force_access_sync`    liveness gate 的**狀態**那一半被繞過 ⇒ 停權中的 SH
+#                               仍把 Access 設定推去 Cloudflare 並把 `app_id` 回寫。
+#
+# 🔴 **為什麼另立一把，不共用本檔既有的 `_INTERNAL_SM_ROUTE_IDENTITY_WRITE`**：
+# 那把守的是「這一列驅動**哪一個** CF 物件」（身分錨點），這三把守的是「這一次要
+# 不要對 CF 動手」（同步控制）——兩個不同的信任域，只是剛好住在同一個檔。共用一
+# 個 marker 之後，registry 的 `sentinel` 欄位與 runtime WARNING 都會指向錯的那一
+# 把，而「本檔到底開了哪一種閘」在 code 上就不再讀得出來。
+#
+# ⚠ 命名刻意**不與任何既有 marker 同名、也不互為子字串**（雙向都機械查過：
+# security_access / cloud_service / smart_home 三個檔的 sentinel 與它們的 helper，
+# 外加 #519 那組開閘符號）。理由是
+# `scripts/audit/repo-lint.py::check_provision_sentinel_allowlist` 的判準是**整檔
+# 字面比對**：互為子字串會讓 gate 對本檔吐出一句為假的話，而且之後真的在本檔開
+# 別人的閘也不會再紅（見本檔頂端身分錨點那段的同一條論證）。
+# 🔴 連**註解裡照抄那幾個符號名**都會撞這條 gate——本次落地時實際撞到一次，
+#    所以上面用描述而不是逐字列名。
+#
+# key 名一律**不變**，改的只是判定方式 ⇒ `with_context(key=False)` 的「不要抑制」
+# 語意原封不動。
+class _SmSyncControl:
+    """SH route sync-control 逃生門的 marker type —— 見上方註解。"""
+
+    __slots__ = ()
+
+    def __repr__(self):
+        return '<sm route sync control>'
+
+
+_INTERNAL_SM_SYNC_CONTROL = _SmSyncControl()
+
+#: key 本身不是判準（呼叫端當然抄得到這些字串），判準是它們的**值身分**。
+_CTX_SM_SKIP_ACCESS_SYNC = 'sm_skip_access_sync'
+_CTX_SM_ROUTE_CASCADE_UNLINK = 'sm_route_cascade_unlink'
+_CTX_SM_FORCE_ACCESS_SYNC = 'sm_force_access_sync'
+
+
+def _sm_sync_hatch(records, *keys):
+    """回傳「唯一被允許操縱 Access 同步」的那個 context 底下的 ``records``。"""
+    return records.with_context(
+        **{key: _INTERNAL_SM_SYNC_CONTROL for key in keys})
+
+
+def _sm_skip_access_sync(records):
+    """開閘：這一次 create／write 只搬 DB 狀態，不對 operator 做 Access 推送。
+
+    生產碼裡今天一個呼叫端都沒有（這把只有測試佈景在用），helper 仍然要存在：
+    它是 ``with_context(sm_skip_access_sync=True)`` 這種**可偽造寫法**的唯一替代
+    品。少了它，下一個真的需要抑制推送的人只會照舊寫 ``=True``，然後在一個只會
+    印 WARNING 的無聲失效裡 debug。
+    """
+    return _sm_sync_hatch(records, _CTX_SM_SKIP_ACCESS_SYNC)
+
+
+def _sm_route_cascade_unlink(records):
+    """開閘：SH 自己的 cascade 刪除途中，primary route 可以跟著走。"""
+    return _sm_sync_hatch(records, _CTX_SM_ROUTE_CASCADE_UNLINK)
+
+
+def _sm_forced_access_sync(records):
+    """開閘：繞過 Access 推送 liveness gate 的狀態那一半（仍需 tunnel_id）。"""
+    return _sm_sync_hatch(records, _CTX_SM_FORCE_ACCESS_SYNC)
+
+
+def _is_sm_sync_hatch_open(env, key):
+    """這個 sync-control 開關是不是**伺服器端程式碼**設的（而非呼叫端偽造的）。
+
+    只有 sentinel 物件算數。JSON 表達不出物件同一性，所以租戶送
+    ``context={"sm_skip_access_sync": true}`` 進 ``call_kw`` 時走的是下面那條
+    WARNING —— 守衛不開閘，這一次操作照常推送／照常擋下來。
+
+    「truthy 但不是 sentinel」之所以要 WARNING 而不是靜靜回 False：那既是**偽造
+    的訊號**，也是「還有 in-process 的碼照舊傳 ``True``」的訊號。少了它，本修法
+    唯一的無聲失效面（傳 True 從此不開閘）永遠不會有人知道。
+    """
+    value = env.context.get(key)
+    if value is _INTERNAL_SM_SYNC_CONTROL:
+        return True
+    if value:
+        _logger.warning(
+            "Ignoring non-sentinel %r in context (value=%r, uid=%s): this "
+            "hatch only opens for in-process callers using the module's "
+            "helper — see _INTERNAL_SM_SYNC_CONTROL (#787). Either a forged "
+            "RPC context, or in-process code still passing True.",
+            key, value, env.uid)
+    return False
+
+
 class SmartHomeRoute(models.Model):
     _name = 'woow_paas_platform.smart_home_route'
     _description = 'Smart Home Application Route'
@@ -327,7 +435,8 @@ class SmartHomeRoute(models.Model):
         # 那份殘留由下一次冪等的 full-state re-sync 收斂，不是由這個 savepoint。
         with self.env.cr.savepoint():
             routes = super().create(vals_list)
-            if not self.env.context.get('sm_skip_access_sync'):
+            if not _is_sm_sync_hatch_open(
+                    self.env, _CTX_SM_SKIP_ACCESS_SYNC):
                 for route in routes:
                     route._sync_access_to_operator()
         return routes
@@ -357,7 +466,8 @@ class SmartHomeRoute(models.Model):
                         "route." % field)
         with self.env.cr.savepoint():
             result = super().write(vals)
-            if (not self.env.context.get('sm_skip_access_sync')
+            if (not _is_sm_sync_hatch_open(
+                        self.env, _CTX_SM_SKIP_ACCESS_SYNC)
                     and any(k in vals for k in (
                         'is_protected', 'login_google', 'login_email_otp',
                         'session_duration'))):
@@ -374,7 +484,8 @@ class SmartHomeRoute(models.Model):
         DB 列可以當重試錨點**。
         """
         primary = self.filtered('is_primary')
-        if primary and not self.env.context.get('sm_route_cascade_unlink'):
+        if primary and not _is_sm_sync_hatch_open(
+                self.env, _CTX_SM_ROUTE_CASCADE_UNLINK):
             raise UserError(_(
                 'The primary route of a Smart Home cannot be deleted — its '
                 'hostname is served by the Cloudflare tunnel itself. Delete '
@@ -559,7 +670,8 @@ class SmartHomeRoute(models.Model):
         兩格與「未保護且沒有 app id」那格帶不著。
         """
         self.ensure_one()
-        forced = bool(self.env.context.get('sm_force_access_sync'))
+        forced = _is_sm_sync_hatch_open(
+            self.env, _CTX_SM_FORCE_ACCESS_SYNC)
         if not self._access_is_live(forced=forced):
             sh = self.smart_home_id
             return (

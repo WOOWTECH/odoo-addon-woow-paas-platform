@@ -486,3 +486,11 @@ from . import test_sa_route_teardown_dead_anchor_784
 # RED 群集：A2／B2（兩條可達路徑上偽造的 key 仍抑制了推送）、A3（偽造完全
 # 沒有訊號）、G2（in-process 傳 `True` 照樣開閘 ⇒ 判準不是值的同一性）。
 from . import test_cs_sync_ctx_forgery_787
+
+# fix: #787 A 段 SH 三把：`sm_skip_access_sync` / `sm_route_cascade_unlink` /
+# `sm_force_access_sync` 都是裸 truthy 閘 ⇒ 租戶用 call_kw 的 context 就能
+# 打開。可達性已實測（sh-787-reach）：write 與 forced 兩把真的推得動 Cloudflare，
+# cascade 那把守衛確實被關掉、只是刪除另有 ACL 擋死（defense-in-depth）。
+# RED 群集：A2／B2（偽造仍抑制推送）、C2（例外型別從 UserError 翻成 AccessError
+# ＝守衛被繞過）、D2（停權中的 SH 仍推去 CF）、A3／C3／D3（偽造完全沒有訊號）。
+from . import test_sh_sync_ctx_forgery_787

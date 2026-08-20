@@ -17,7 +17,11 @@ from ..services.paas_operator import (
 
 # 單向相依：`smart_home_route` 只用 model 名指回本檔，不 import 它，所以這裡
 # 直接 import 不會成環（`models/__init__.py` 也是先 smart_home 後 route）。
-from .smart_home_route import _internal_sm_route_identity
+from .smart_home_route import (
+    _internal_sm_route_identity,
+    _sm_forced_access_sync,
+    _sm_route_cascade_unlink,
+)
 
 _logger = logging.getLogger(__name__)
 
@@ -729,8 +733,7 @@ class SmartHome(models.Model):
             # 這一步不會重複打 operator：上面的 `_teardown_routes_access()` 成功
             # 後已經把 `access_app_id` 與每條 policy 的 `cf_policy_id` 清空，
             # route 的 `_capture_access_teardown()` 因此回 None。
-            record.route_ids.with_context(
-                sm_route_cascade_unlink=True).unlink()
+            _sm_route_cascade_unlink(record.route_ids).unlink()
             if record.tunnel_id:
                 record._cleanup_tunnel()
             if record.tunnel_id:
@@ -914,7 +917,7 @@ class SmartHome(models.Model):
         # 它的話「停權期間被關掉保護的 route」永遠不會被推回 Cloudflare，而症狀
         # 與「保護正常運作」完全一樣。
         for route in self.route_ids:
-            route.with_context(sm_force_access_sync=True)._sync_access_to_operator()
+            _sm_forced_access_sync(route)._sync_access_to_operator()
         _logger.info(
             "[SH] _do_resume done sh=%s new_state=%s",
             self.id, restore_state,

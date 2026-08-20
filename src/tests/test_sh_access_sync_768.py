@@ -49,7 +49,11 @@ from unittest.mock import MagicMock, patch
 from odoo.exceptions import UserError
 from odoo.tests import TransactionCase, tagged
 
-from ..models.smart_home_route import _internal_sm_route_identity
+from ..models.smart_home_route import (
+    _internal_sm_route_identity,
+    _sm_forced_access_sync,
+    _sm_skip_access_sync,
+)
 # #536：`sa_skip_route_sync` 只認模組私有 sentinel，不能傳 `True`
 # （呼叫端 context 會被 `call_kw` 整包換進 env ⇒ truthy 值是租戶可偽造的）。
 from ..models.security_access import _skip_route_sync
@@ -142,14 +146,13 @@ class _ShAccessSyncFixture(TransactionCase):
         sh = self.sh if sh is None else sh
         vals = {'smart_home_id': sh.id, 'is_primary': True}
         vals.update(extra)
-        route = self.ShRoute.with_context(
-            sm_skip_access_sync=True).create(vals)
+        route = _sm_skip_access_sync(self.ShRoute).create(vals)
         return route.with_context(sm_skip_access_sync=False)
 
     def _configure(self, route=None, **vals):
         """改 route 的 Access 設定但**不**觸發 sync（擺前提用，不是受測動作）。"""
         route = self.route if route is None else route
-        route.with_context(sm_skip_access_sync=True).write(vals)
+        _sm_skip_access_sync(route).write(vals)
         return route
 
     def _app_id(self, route, app_id):
@@ -435,8 +438,7 @@ class TestShAccessLivenessGate(_ShAccessSyncFixture):
                          '前提：停權中的一般寫入不推（state 閘）')
 
         with patch(MOCK_GET_CLIENT, return_value=client):
-            self.route.with_context(
-                sm_force_access_sync=True)._sync_access_to_operator()
+            _sm_forced_access_sync(self.route)._sync_access_to_operator()
         self.assertTrue(
             client.sync_access_app.called,
             'forced 沒生效 ⇒ 停權期間被改過的 Access 設定永遠不會收斂，而症狀'
@@ -461,7 +463,7 @@ class TestShAccessLivenessGate(_ShAccessSyncFixture):
     def test_B7_skip_context_suppresses_the_push_but_not_the_db_write(self):
         client = self._mock()
         with patch(MOCK_GET_CLIENT, return_value=client):
-            self.route.with_context(sm_skip_access_sync=True).write(
+            _sm_skip_access_sync(self.route).write(
                 {'is_protected': True})
         self.assertFalse(client.sync_access_app.called)
         self.assertTrue(self.route.is_protected, 'DB 那一側仍然要寫進去')
