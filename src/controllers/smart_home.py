@@ -873,15 +873,33 @@ class SmartHomeController(Controller):
         算出的 subdomain/hostname。憑證是平台鑄造的，本來就該由平台身分寫下去；
         租戶不需要、也不該擁有寫那個欄位的權限。
 
-        🔴 **`.sudo()` 只掛在這一次呼叫上，回應的序列化刻意留在租戶身分**
-        （下面的 `smarthome.to_dict(...)` 沒有 `.sudo()`）。這不是排版：欄位級
-        `groups=` 的**讀**側是這個憑證真正的防線，把它一起放寬等於把 token 的
-        讀取面擴大到每一個 workspace owner。`models/security_access.py` 的
-        `action_provision` docstring 對 sibling model 寫下的警告
-        （「do NOT ... wrap the whole method in .sudo()」）針對的正是這件事，
-        而它擔心的是**讀**——本修法沒有動讀側，B5／B6 兩條測試把它釘住。
+        ⚠ **這一行的作用範圍要講精確，不要縮小它**：`smarthome.sudo()
+        .action_provision()` 之後，`action_provision` body 內**每一次 ORM 操作
+        都在 `env.su` 底下**。對 model 而言這就是「整個 method 走 sudo」。
+        （不要拿「下面的 `to_dict()` 沒有 `.sudo()`」當作範圍很窄的說明——
+        `to_dict()` 本來就不在那個 method 裡面，那是錯的對照。）
 
-        改用平台身分之後，Odoo 那三層在**這一次呼叫內**確實全部停用
+        🔴 **`models/security_access.py::action_provision` 的 docstring 對
+        sibling model 明文寫過「do NOT ... wrap the whole method in .sudo()」，
+        並稱非 system caller 撞 AccessError 是 "the intended fail-closed
+        behaviour"；`tests/test_security_access.py` 的
+        `test_provision_token_write_fails_closed_for_non_system_owner` 鎖住它。**
+        本修法在 SH 這一側往相反方向走 ⇒ 兩個 sibling model 的身分語意已經
+        分歧。那條測試驅動的是 SA model 的 `with_user` recordset，不經過本
+        controller，所以它**不會**因為這個改動變紅——CI 全綠不代表沒有衝突。
+        完整攤開（含對方原文逐字、SH 側查無等價鎖的性質查、以及「`/woow` 的
+        租戶 provision 端點該不該存在」這個要產品裁決的問題）寫在 PR #797。
+
+        那段 docstring 點名的傷害是「widen the token write/**read** surface」，
+        兩半要分開看：**write 面確實被放寬了**（緩解是「值不由租戶選」，見上
+        一段與 B7）；**read 面**它自己列的三層防線（欄位上的 `groups=`、
+        `to_dict()` 的省略、專屬 sudo 讀端點）沒有一層在 `action_provision`
+        裡面，su 環境隨那次呼叫結束，B5／B6 釘住。殘留的一格：su 呼叫**內**
+        `self.tunnel_token` 讀得到，而 Odoo 欄位快取在同一筆交易內跨 env 共用、
+        cache 命中不重查 groups ⇒ 「讀側完全沒動」不精確，精確的說法是
+        「同一個請求裡沒有任何程式碼去讀它」。
+
+        改用平台身分之後，Odoo 那三層在**這個 method 內**確實全部停用
         （`env.su` ⇒ `check_access` 與 `check_field_access_rights` 都提早
         return）。逐條交代誰接手，每一條都有對應的回歸測試
         （`tests/test_sh_provision_tenant_rpc_739.py` 的 B 系列）：
