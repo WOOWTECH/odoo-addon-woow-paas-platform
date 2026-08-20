@@ -30,8 +30,10 @@ from unittest.mock import MagicMock, patch
 
 from odoo.tests import TransactionCase, tagged
 
+# #787：`cs_skip_access_sync` 只認模組私有 sentinel，不能傳 `True`
+# （呼叫端 context 會被 `call_kw` 整包換進 env ⇒ truthy 值是租戶可偽造的）。
 from ..models.cloud_service import (
-    _internal_cs_access_identity, _internal_provision,
+    _cs_skip_access_sync, _internal_cs_access_identity, _internal_provision,
 )
 # #536：`sa_skip_route_sync` 只認模組私有 sentinel，不能傳 `True`
 # （呼叫端 context 會被 `call_kw` 整包換進 env ⇒ truthy 值是租戶可偽造的）。
@@ -142,7 +144,7 @@ class TestCsAccessPayload(_CsAccessSyncFixture):
     """A 系列：payload 形狀與 CF 命名前綴。"""
 
     def test_A1_payload_mirrors_the_sa_route_shape(self):
-        self.svc.with_context(cs_skip_access_sync=True).write({
+        _cs_skip_access_sync(self.svc).write({
             'is_protected': True, 'login_google': True,
             'login_email_otp': True, 'session_duration': '8h'})
         pol = self._policy(self.svc, name='p1', sequence=10)
@@ -294,7 +296,7 @@ class TestCsAccessSyncTrigger(_CsAccessSyncFixture):
     def test_B7_skip_context_suppresses_the_push(self):
         client = self._mock()
         with patch(MOCK_GET_CLIENT, return_value=client):
-            self.svc.with_context(cs_skip_access_sync=True).write(
+            _cs_skip_access_sync(self.svc).write(
                 {'is_protected': True})
         self.assertFalse(client.sync_access_app.called)
         self.assertTrue(self.svc.is_protected, 'DB 那一側仍然要寫進去')
@@ -302,7 +304,7 @@ class TestCsAccessSyncTrigger(_CsAccessSyncFixture):
     def test_B8_deleting_service_is_not_re_pushed(self):
         """`deleting` ＝ teardown 已經跑過；再推一次等於把剛拆掉的 app 建回來。"""
         _internal_cs_access_identity(self.svc).access_app_id = 'app-live'
-        self.svc.with_context(cs_skip_access_sync=True).write(
+        _cs_skip_access_sync(self.svc).write(
             {'state': 'deleting'})
         client = self._mock()
         with patch(MOCK_GET_CLIENT, return_value=client):
@@ -331,7 +333,7 @@ class TestPolicyAnchorDispatch(_CsAccessSyncFixture):
 
     def _protected(self):
         svc = self.svc
-        svc.with_context(cs_skip_access_sync=True).write(
+        _cs_skip_access_sync(svc).write(
             {'is_protected': True})
         _internal_cs_access_identity(svc).access_app_id = 'app-live'
         return svc

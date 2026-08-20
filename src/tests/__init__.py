@@ -479,3 +479,10 @@ from . import test_cf_policy_reap_ledger_528
 # 可達路徑，operator 根本沒被呼叫）、A4／A5（拆不掉的 id 沒有任何 durable
 # 記錄）、B1／B2（兩個相鄰出口）、C1–C5（dead anchor 帳沒有任何回收者）。
 from . import test_sa_route_teardown_dead_anchor_784
+
+# fix: #787 A 段第 1 把：`cs_skip_access_sync` 是裸 truthy 閘 ⇒ 租戶用 call_kw
+# 的 context 就能讓 `is_protected` 落地而 Cloudflare 完全不知情（fail-open 且
+# 無聲）。可達性已實測——租戶自建 workspace 即 owner，ir.rule 給完整寫入。
+# RED 群集：A2／B2（兩條可達路徑上偽造的 key 仍抑制了推送）、A3（偽造完全
+# 沒有訊號）、G2（in-process 傳 `True` 照樣開閘 ⇒ 判準不是值的同一性）。
+from . import test_cs_sync_ctx_forgery_787
