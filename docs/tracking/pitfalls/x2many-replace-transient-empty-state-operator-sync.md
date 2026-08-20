@@ -45,11 +45,20 @@ def _suppress_route_sync(self):
     # sa_rule_replace：policy-driven 整組替換，(5,0,0) unlink 的 per-rule sync
     #   會在瞬時空 include 態外推 → operator 422 → 整個 edit abort。policy 的
     #   write() 在替換 settle 後做最終 full-state sync，故 per-rule sync 既錯又冗。
-    ctx = self.env.context
-    return bool(ctx.get('sa_skip_route_sync') or ctx.get('sa_rule_replace'))
+    return (_is_sync_control(self.env, _CTX_SKIP_ROUTE_SYNC)
+            or _is_sync_control(self.env, _CTX_RULE_REPLACE))
 ```
 create / write / unlink 三處 sync 條件改 `if not self._suppress_route_sync():`。
 修後 replace 從 **3 次 route sync 降為 1 次**（只剩 policy 最終 sync），且無瞬時空態。
+
+> 🔴 **2026-08-19（#536）：上面那段是現況；原始版本寫的是
+> `bool(ctx.get('sa_skip_route_sync') or ctx.get('sa_rule_replace'))`，而那是
+> 租戶可偽造的** —— `/web/dataset/call_kw` 把呼叫端 context 原封不動換進 env，
+> 所以只判 truthy 的 key，租戶在 JSON-RPC payload 多塞一行就打得開。兩個 key
+> 現在都只認模組私有 sentinel（`models/security_access.py` 的
+> `_INTERNAL_SYNC_CONTROL`），開閘一律走 `_skip_route_sync()` / `_rule_replace()`
+> helper，**不要傳 `True`**（傳了不會報錯，只會無聲失去抑制）。
+> 機制與判準見 [[su-env-exempt-guard-false-green]] 的「#536」段。
 
 ## 守線（下次遇到同形狀如何避免）
 

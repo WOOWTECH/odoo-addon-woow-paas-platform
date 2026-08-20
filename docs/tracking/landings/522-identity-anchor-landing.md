@@ -22,6 +22,21 @@
 - `sa_force_access_sync` — suspended/deleting 狀態仍能推自己的 Access 設定（停權未全面阻斷 operator 呼叫）。
 - `sa_force_delete_primary` — **死鍵**，src/models 與 src/controllers 全域無人讀取，只剩 `test_security_access.py:739` 還在傳。
 - `sa_rule_replace` — 低，最終態仍由 policy write() 全量收斂。
+
+> **後續（2026-08-19，#536 已修）**：上面四條裡的三個活鍵
+> （`sa_skip_route_sync` / `sa_force_access_sync` / `sa_rule_replace`）已全部改成
+> 模組私有 sentinel（key 名不變、值改成 `_INTERNAL_SYNC_CONTROL`），死鍵
+> `sa_force_delete_primary` 連測試殘留一起清掉。
+> 實測（真 `/web/dataset/call_kw`、只有 `base.group_user` 的租戶）：修前
+> 6 failed / 0 error of 13，修後 0 failed / 0 error of 17。
+> 守線測試 `src/tests/test_sa_sync_ctx_forgery_536.py`。
+>
+> 盤點時**低估了 `sa_rule_replace`**：它不只抑制過渡同步，還跳過
+> `rule.unlink()` 裡的 `_check_at_least_one_include()`，而那條
+> `@api.constrains('rule_ids')` 對「直接 unlink 一條 rule」根本不會觸發 ⇒ 那行
+> 顯式呼叫是唯一防線，偽造後租戶留得下 0 條 include 的 policy（RPC 實測回
+> `result: True`）。**「這個 key 只是效能／體驗開關」這種歸類要逐個讀取點看，
+> 不能看 key 的名字。**
 - `smart_home` 有同型無守衛欄位，依分工未擴張（#524）。
 
 **狀態**：2026-08-02 已由 Eugene merge 進 develop（develop manifest = `18.0.1.0.94`，含 commit `a0123f4b`，issue #522 由 `Closes` 自動關閉），驗證容器 `wpp522-*`／network `net522`／worktree `/private/tmp/wt-522`／本地分支**皆已清除，不要以為還在**；remote 分支依本 repo 慣例保留（merged 分支不刪 remote）。

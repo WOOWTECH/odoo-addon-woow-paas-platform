@@ -13,6 +13,9 @@ from typing import Any
 from odoo.http import request, route, Controller
 
 from ..models.workspace_access import ROLE_OWNER, ROLE_ADMIN
+# #536：sync-control 的兩個逃生門只認模組私有 sentinel（`call_kw` 把呼叫端
+# context 整包換進 env，只判 truthy 的 key 租戶自己就打得開）。
+from ..models.security_access import _rule_replace, _skip_route_sync
 
 _logger = logging.getLogger(__name__)
 
@@ -907,8 +910,7 @@ class SecurityAccessController(Controller):
                 # Counter over the PINNED policies (not raw index) so a skipped
                 # foreign id leaves no gap; sparse 10s keep room to insert.
                 seq += 10
-                pol.with_context(sa_skip_route_sync=True).write(
-                    {"sequence": seq})
+                _skip_route_sync(pol).write({"sequence": seq})
                 reordered.append(pol.id)
                 routes |= pol.route_id
             for route in routes:
@@ -945,7 +947,7 @@ class SecurityAccessController(Controller):
             # so sa_rule_replace suppresses it — the policy-level @api.constrains
             # validates the final state (include present, email cap).
             vals["rule_ids"] = [(5, 0, 0)] + rule_commands
-            write_pol = pol.with_context(sa_rule_replace=True)
+            write_pol = _rule_replace(pol)
         elif "rule_type" in kwargs or "rule_value" in kwargs:
             # Legacy flat single-rule update (transitional): the policy no longer
             # has flat rule fields, so replace its rules with one include rule.
@@ -954,7 +956,7 @@ class SecurityAccessController(Controller):
                 "rule_type": kwargs.get("rule_type", "email_domain"),
                 "rule_value": kwargs.get("rule_value", ""),
             })]
-            write_pol = pol.with_context(sa_rule_replace=True)
+            write_pol = _rule_replace(pol)
         try:
             if vals:
                 write_pol.write(vals)
