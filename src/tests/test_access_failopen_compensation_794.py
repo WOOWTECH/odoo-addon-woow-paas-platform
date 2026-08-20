@@ -2,12 +2,20 @@
 
 ## 守什麼
 
-四處 unlink（SA route / SH route / CloudService / SmartHome）的形狀相同：對
-Cloudflare 送出**不可回捲**的 Access teardown，之後任一步 raise ⇒ 整筆交易被
-丟棄（`odoo/service/model.py::retrying` 只有正常返回才 commit，而 `UserError`
-不在 retry 的例外集合裡）⇒ 已經拆成功的那幾列帶著 `is_protected=True` 與指向
-死 app 的 `access_app_id` 復活。租戶介面讀的是 `is_protected` 這個**意圖**欄位
-⇒ 顯示「已保護」，而該 hostname 實際上任何人不需登入即可存取。
+**五處**的形狀相同：對 Cloudflare 送出**不可回捲**的 Access teardown，之後任一步
+raise ⇒ 整筆交易被丟棄（`odoo/service/model.py::retrying` 只有正常返回才 commit，
+而 `UserError` 不在 retry 的例外集合裡）⇒ 已經拆成功的那幾列帶著
+`is_protected=True` 與指向死 app 的 `access_app_id` 復活。租戶介面讀的是
+`is_protected` 這個**意圖**欄位 ⇒ 顯示「已保護」，而該 hostname 實際上任何人不需
+登入即可存取。
+
+五處是：`SecurityAccessRoute.unlink()`（A 系列）、`SmartHomeRoute.unlink()`（B）、
+`CloudService.unlink()`（C）、`SmartHome.unlink()`（B3）、以及
+**`SecurityAccess.unlink()` / `action_delete()`**（F 系列，PR #802 覆核 [HIGH]
+補上）。🔴 第五腿一度被排除，理由是「`_cleanup_cloudflare` 自己不 raise」——那句
+話為真，但**驗錯了對象**：造成回捲的 `raise` 在**呼叫端**，且發生在它 partial
+success 之後。它也比 A 腿**更直接可達**（單筆刪整個 SA 即可，不需要 multi-id
+RPC；租戶從 `/woow` 按刪除走的 `action_delete()` 就是這條）。
 
 本檔守四件事：
 
@@ -428,6 +436,146 @@ class TestSaRouteFailOpenCompensation(TransactionCase):
             route.access_protection_lost,
             '旗標由 sync 結果驅動：推成功了就代表 CF 上的狀態與列一致')
         self.assertEqual(route.access_app_id, 'app-new')
+
+
+# ====================================================================== #
+#  F 系列：SecurityAccess.unlink() / action_delete()（第五腿）            #
+#  —— PR #802 覆核 [HIGH]：`_cleanup_cloudflare()` 自己不 raise，但它的    #
+#     呼叫端在它 partial success **之後**才 raise。                        #
+# ====================================================================== #
+
+@tagged('post_install', '-at_install')
+class TestSecurityAccessUnlinkFailOpen(TransactionCase):
+    """第五腿：刪整個 SA 時 tunnel 刪不掉 ⇒ 已拆的 route 帶死 id 復活。
+
+    🔴 **比 route 那一腿更直接可達**：不需要 multi-id RPC，租戶從 `/woow` 按刪除
+    （controller 走 `action_delete()`）就是這條路徑；tunnel 刪除偶發失敗
+    （operator 暫時掛掉／逾時）即觸發。
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.workspace = self.env['woow_paas_platform.workspace'].sudo(
+        ).create({'name': 'WS 794F %s' % uuid.uuid4().hex[:6]})
+
+    def _sa_with_routes(self, *app_ids):
+        sa = self.env['woow_paas_platform.security_access'].sudo().create(
+            {'name': 'SA 794F %s' % uuid.uuid4().hex[:6],
+             'workspace_id': self.workspace.id})
+        _internal_sa(sa).write({'state': 'active', 'tunnel_id': 'tun-794f'})
+        routes = self.env[_ROUTE].sudo()
+        for app_id in app_ids:
+            route = _skip_route_sync(self.env[_ROUTE].sudo()).create({
+                'security_access_id': sa.id,
+                'subdomain_prefix': 'f%s' % uuid.uuid4().hex[:8],
+                'is_protected': True})
+            route = route.with_context(sa_skip_route_sync=False)
+            _internal_sa(route).access_app_id = app_id
+            routes |= route
+        return sa, routes
+
+    def _row(self, route_id):
+        """raw SQL 問交易——列是被 savepoint 救回來的，`exists()` 讀不準。"""
+        self.env.flush_all()
+        self.env.cr.execute(
+            'SELECT access_app_id, is_protected, access_protection_lost '
+            'FROM woow_paas_platform_security_access_route WHERE id = %s',
+            (route_id,))
+        return self.env.cr.fetchone()
+
+    def _client(self, tunnel_ok):
+        client = MagicMock()
+        client.sync_access_app.return_value = _teardown_result()
+        client.sync_tunnel_routes.return_value = {'routes': []}
+        if tunnel_ok:
+            client.delete_tunnel.return_value = {'success': True}
+        else:
+            client.delete_tunnel.side_effect = Exception('cf tunnel down')
+        return client
+
+    @mute_logger(LOG_SA, LOG_REAP)
+    def test_F1_unlink_tunnel_failure_compensates_the_torn_down_routes(self):
+        """單筆刪 SA、tunnel 刪除失敗 ⇒ 已拆的 route 必須交給補償。
+
+        前提斷言：兩條 route 的 Access teardown 都**真的送出去過**，且
+        `delete_tunnel` **真的被試過**——少了它，本測試在「根本沒拆」或「沒走到
+        tunnel 那步」的世界也會綠。
+        """
+        sa, routes = self._sa_with_routes('app-f1a', 'app-f1b')
+        client = self._client(tunnel_ok=False)
+        with patch(MOCK_SA_CLIENT, return_value=client):
+            with patch(COMPENSATE, autospec=True) as comp:
+                with self.assertRaises(UserError):
+                    sa.unlink()
+
+        sent = [c.args[0] for c in client.sync_access_app.call_args_list]
+        for app_id in ('app-f1a', 'app-f1b'):
+            self.assertTrue(
+                any(c.get('enabled') is False
+                    and c.get('existing_app_id') == app_id for c in sent),
+                '前提檢查：%s 的 teardown 必須真的被送出去過' % app_id)
+        self.assertTrue(client.delete_tunnel.called,
+                        '前提檢查：tunnel 刪除必須真的被嘗試過')
+
+        comp.assert_called_once()
+        self.assertEqual(
+            sorted(comp.call_args.args[1]),
+            sorted((_ROUTE, r.id) for r in routes),
+            '兩條都真的在 CF 上被拆掉了 ⇒ 兩條都要進補償清單')
+        for route in routes:
+            self.assertTrue(self._row(route.id)[1],
+                            '不得自動降 is_protected')
+
+    def test_F2_positive_control_clean_teardown_never_compensates(self):
+        """陽性對照：tunnel 也刪得掉 ⇒ SA 與 route 都消失，補償一次都沒被呼叫。"""
+        sa, routes = self._sa_with_routes('app-f2a')
+        route_id = routes.id
+        client = self._client(tunnel_ok=True)
+        with patch(MOCK_SA_CLIENT, return_value=client):
+            with patch(COMPENSATE, autospec=True) as comp:
+                sa.unlink()
+        self.assertEqual(
+            comp.call_count, 0,
+            '沒有 fail-open 時補償不得被呼叫——補償恆執行會讓 F1／F3 假綠')
+        self.assertIsNone(self._row(route_id), 'route 列必須真的消失')
+
+    @mute_logger(LOG_SA, LOG_REAP)
+    def test_F3_action_delete_compensates_its_own_pre_call_teardown(self):
+        """🔴 `action_delete()` 那一層**不能只靠 `unlink()`**。
+
+        tunnel 刪不掉那一格的順序是：`action_delete` 的 pre-call 把 Access 全部
+        拆掉並清掉 `access_app_id` → `unlink()` 內的第二次 `_cleanup_cloudflare()`
+        **已經沒有東西可拆** ⇒ `unlink()` 自己的累加器是**空的**。所以真正的
+        受害者只有 `action_delete` 這一層看得到。
+
+        本條的鑑別式就是這個：斷言補償**確實拿到了那條 route**。若 `action_delete`
+        沒有自己那一層，補償會被呼叫（來自 `unlink()`）但清單是空的。
+        """
+        sa, routes = self._sa_with_routes('app-f3a')
+        route_id = routes.id
+        client = self._client(tunnel_ok=False)
+        with patch(MOCK_SA_CLIENT, return_value=client):
+            with patch(COMPENSATE, autospec=True) as comp:
+                with self.assertRaises(UserError):
+                    sa.action_delete()
+
+        sent = [c.args[0] for c in client.sync_access_app.call_args_list]
+        self.assertTrue(
+            any(c.get('enabled') is False
+                and c.get('existing_app_id') == 'app-f3a' for c in sent),
+            '前提檢查：pre-call 的 teardown 必須真的被送出去過')
+        # 前提斷言②：unlink 那一層的第二次 cleanup 確實沒東西可拆
+        # （否則本條測到的不是它要測的那一格）。
+        teardowns = [c for c in sent if c.get('enabled') is False]
+        self.assertEqual(
+            len(teardowns), 1,
+            'pre-call 拆完就清掉了 id ⇒ unlink 內的第二次 cleanup 不該再拆一次'
+            '；若這裡是 2，代表本條測到的是另一格')
+        self.assertTrue(
+            any((_ROUTE, route_id) in call.args[1]
+                for call in comp.call_args_list),
+            'action_delete 必須有自己那一層補償——只靠 unlink 的話清單是空的')
+        self.assertTrue(self._row(route_id)[1], '不得自動降 is_protected')
 
 
 # ====================================================================== #

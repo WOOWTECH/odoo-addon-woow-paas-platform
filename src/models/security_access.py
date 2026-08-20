@@ -764,11 +764,36 @@ class SecurityAccess(models.Model):
             )
 
     def action_delete(self):
-        """User-initiated delete: full Cloudflare teardown then unlink."""
+        """User-initiated delete: full Cloudflare teardown then unlink.
+
+        🔴 #794 覆核 HIGH：這裡**自己也要一層** savepoint ＋ 補償，不能只靠
+        `unlink()` 那一層。理由是**受害者落在哪一次呼叫**：
+
+        tunnel 刪不掉那一格（正是本腿的觸發條件）的順序是——本方法的 pre-call
+        把 Access app 全部拆掉、清掉 `access_app_id`、tunnel 刪除失敗；接著
+        `unlink()` 內的第二次 `_cleanup_cloudflare()` **已經沒有東西可拆**
+        （id 都被 pre-call 清掉了）⇒ `unlink()` 自己的累加器是**空的**，它的
+        補償什麼都不會做，而真正的受害者是 pre-call 拆掉的那幾條。
+
+        兩層 savepoint 各自帶自己的累加器是對的（`Savepoint.__exit__` 例外時先
+        `ROLLBACK TO SAVEPOINT` 才讓例外外拋）：內層先回捲、內層補償拿空清單
+        no-op、例外外拋到這裡 ⇒ 外層回捲（把 pre-call 的寫入也撤掉）⇒ 外層補償
+        這時才寫得進去。**刻意不把累加器經 context 傳下去**——那是可偽造的裸
+        context key 那條路（#536／#783），而這裡不需要它。
+        """
         self.ensure_one()
-        self.write({'state': 'deleting'})
-        self._cleanup_cloudflare()
-        self.unlink()
+        torn_down = []
+        Reap = self.env[_CF_REAP_MODEL]
+        try:
+            with self.env.cr.savepoint():
+                self.write({'state': 'deleting'})
+                self._cleanup_cloudflare(torn_down=torn_down)
+                self.unlink()
+        except Exception:
+            Reap._compensate_fail_open_after_rollback(
+                torn_down, _logger,
+                '[SA] security access action_delete (sa=%s)' % (self.ids,))
+            raise
 
     def unlink(self):
         """Direct-unlink guard: Cloudflare resources must never outlive the
@@ -796,20 +821,45 @@ class SecurityAccess(models.Model):
         subs_to_settle = self.sudo().mapped('subscription_id').filtered(
             lambda s: s.state == 'in_progress'
         )
-        for record in self:
-            record._cleanup_cloudflare()
-            if record.tunnel_id:
-                raise UserError(
-                    "Cloudflare cleanup failed; the tunnel is still live and "
-                    "billed. The record was kept so the deletion can be "
-                    "retried. Please try again shortly."
-                )
-        # 軸2: routes are freely deletable (no primary guard), so cascade-delete
-        # them directly as part of tearing down the whole SA.
-        self.route_ids.unlink()
-        res = super().unlink()
-        for sub in subs_to_settle:
-            sub._settle_on_entity_delete(reason='Security Access deleted')
+        # 🔴 #794 覆核 HIGH：**第五腿**，而且比 route 那腿更直接可達（單筆刪整個
+        # SA 即可，不需要 multi-id RPC）。`_cleanup_cloudflare()` 內部先把每條
+        # protected route 的 CF Access app **真的拆掉**並清掉 `access_app_id`，
+        # 再試著刪 tunnel；tunnel 刪不掉時它**自己不 raise**、正常返回，而下面
+        # `if record.tunnel_id: raise` 才把整筆交易丟掉 ⇒ 已經在 CF 上被拆掉的
+        # 那幾條 route 復活，帶著 `is_protected=True` 與死的 `access_app_id`。
+        #
+        # ⚠ 「`_cleanup_cloudflare` 不 raise」為真，但它**不是**這條腿安全的理由
+        # ——造成回捲的 raise 在**這裡**，而且發生在它 partial success 之後。
+        #
+        # savepoint 是本次新增的，理由與 CS／SmartHome 兩腿相同且同樣是功能性的：
+        # 補償跑在獨立連線上，外層對那幾列的 UPDATE 若沒回捲就會撞 PG 寫寫衝突
+        # 等到 lock_timeout。先回捲、再補償。
+        torn_down = []
+        Reap = self.env[_CF_REAP_MODEL]
+        try:
+            with self.env.cr.savepoint():
+                for record in self:
+                    record._cleanup_cloudflare(torn_down=torn_down)
+                    if record.tunnel_id:
+                        raise UserError(
+                            "Cloudflare cleanup failed; the tunnel is still "
+                            "live and billed. The record was kept so the "
+                            "deletion can be retried. Please try again "
+                            "shortly."
+                        )
+                # 軸2: routes are freely deletable (no primary guard), so
+                # cascade-delete them directly as part of tearing down the
+                # whole SA.
+                self.route_ids.unlink()
+                res = super().unlink()
+                for sub in subs_to_settle:
+                    sub._settle_on_entity_delete(
+                        reason='Security Access deleted')
+        except Exception:
+            Reap._compensate_fail_open_after_rollback(
+                torn_down, _logger,
+                '[SA] security access unlink (sa=%s)' % (self.ids,))
+            raise
         return res
 
     # ------------------------------------------------------------------ #
@@ -1077,10 +1127,24 @@ class SecurityAccess(models.Model):
             return
         self.write({'state': 'deleting'})
 
-    def _cleanup_cloudflare(self):
+    def _cleanup_cloudflare(self, torn_down=None):
         """Idempotent CF teardown. delete_tunnel cascades: operator removes
         every DNS record pointing at the tunnel, then deletes the tunnel
-        (token invalidated)."""
+        (token invalidated).
+
+        #794 覆核 HIGH：``torn_down`` 是**累加器**（``[(model, id), …]``），本方法
+        真的對 CF 拆成功、並因此清掉 ``access_app_id`` 的 route 錨點會 append
+        進去。形狀與 ``SmartHome._teardown_routes_access`` 逐字相同（out-parameter
+        而不是改回傳型別：本方法有三個呼叫端，改契約會連帶動到兩個與本修法無關的）。
+
+        ⚠ **為什麼呼叫端需要它**：本方法自己**不 raise**（tunnel 刪不掉時只留
+        ``tunnel_id`` 並 log），但它的兩個呼叫端 ``unlink()`` / ``action_delete()``
+        會在它**partial success 之後**才 raise（``if record.tunnel_id: raise``）
+        ⇒ 整筆交易回捲 ⇒ 這裡已經真的在 CF 上被拆掉的那幾條 route 復活，帶著
+        ``is_protected=True`` 與死掉的 ``access_app_id``。**「本方法不 raise」
+        不等於「這條腿不會 fail-open」**——真正造成回捲的 raise 在呼叫鏈上一層。
+        （`_do_cleanup` 那個呼叫端不 raise，寫入照常 commit，所以它不傳累加器。）
+        """
         self.ensure_one()
         # #784 相鄰出口 A：舊判準是 `filtered('access_app_id')` ⇒ 「app_id 已空
         # 但 policy 仍帶著 cf id」的 route 從頭到尾不會被看見（那是**合法的持久
@@ -1120,6 +1184,10 @@ class SecurityAccess(models.Model):
                 for pol in route.access_policy_ids:
                     if pol.cf_policy_id:
                         pol.cf_policy_id = False
+                if torn_down is not None:
+                    # 真的對 CF 送出過並拆成功 ⇒ 交易若回捲，這一條就是「宣稱
+                    # 受保護、CF 上沒有 app」那一格（#794）。
+                    torn_down.append((route._name, route.id))
         if not self.tunnel_id:
             return
         try:

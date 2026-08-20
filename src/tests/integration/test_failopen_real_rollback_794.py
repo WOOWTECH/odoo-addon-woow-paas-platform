@@ -252,3 +252,140 @@ class TestFailOpenCompensationSurvivesRealRollback(BaseCase):
             self.assertTrue(is_protected)
             self.assertFalse(
                 lost, '沒有 fail-open ⇒ 不得打開 access_protection_lost')
+
+
+@tagged('-standard', '-at_install', 'post_install', 'failopen_794')
+class TestSecurityAccessUnlinkSurvivesRealRollback(BaseCase):
+    """第五腿的真交易邊界探針（PR #802 覆核 [HIGH]）。
+
+    `SecurityAccess.unlink()` → `_cleanup_cloudflare()` 把每條 protected route
+    的 CF Access app **真的拆掉**、清掉 `access_app_id`，tunnel 刪除失敗時它
+    **自己不 raise**；回到呼叫端 `if record.tunnel_id: raise UserError` 才把整筆
+    交易丟掉 ⇒ 已被拆掉的 route 復活帶著 `is_protected=True` 與死的 app id。
+
+    這條比 route 那一腿更直接可達：**單筆刪整個 SA 就會走到**，不需要 multi-id
+    RPC。租戶從 `/woow` 按刪除走的 `action_delete()` 也是同一條。
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.registry = Registry(get_db_name())
+        self.marker = 'q794%s' % uuid.uuid4().hex[:8]
+        self.app1 = 'app-%s-1' % self.marker
+        self.addCleanup(self._purge)
+        with self.registry.cursor() as cr:
+            env = api.Environment(cr, odoo.SUPERUSER_ID, {})
+            ws = env['woow_paas_platform.workspace'].create(
+                {'name': 'WS %s' % self.marker})
+            sa = env['woow_paas_platform.security_access'].create(
+                {'name': 'SA %s' % self.marker, 'workspace_id': ws.id})
+            _internal_sa(sa).write(
+                {'state': 'active', 'tunnel_id': 'tun-%s' % self.marker})
+            route = _skip_route_sync(env[_ROUTE]).create({
+                'security_access_id': sa.id,
+                'subdomain_prefix': '%sa' % self.marker,
+                'is_protected': True,
+                'session_duration': '24h'})
+            _internal_sa(route).access_app_id = self.app1
+            self.sa_id, self.route_id = sa.id, route.id
+
+    def _purge(self):
+        try:
+            with self.registry.cursor() as cr:
+                like = '%%%s%%' % self.marker
+                cr.execute(
+                    'DELETE FROM woow_paas_platform_security_access '
+                    'WHERE name LIKE %s', (like,))
+                cr.execute(
+                    'DELETE FROM woow_paas_platform_workspace '
+                    'WHERE name LIKE %s', (like,))
+        except Exception:
+            _logger.exception(
+                '#794 第五腿探針的 fixture 清理失敗（marker=%s）', self.marker)
+
+    def _read(self, route_id):
+        with self.registry.cursor() as cr:
+            cr.execute(
+                'SELECT access_app_id, is_protected, access_protection_lost, '
+                'session_duration FROM %s WHERE id = %%s' % _ROUTE_TABLE,
+                (route_id,))
+            return cr.fetchone()
+
+    def _client(self, tunnel_ok):
+        client = MagicMock()
+        client.sync_access_app.side_effect = (
+            lambda payload: (_teardown_result() if not payload.get('enabled')
+                             # 補償的立即重推：operator 的 Access 面還活著
+                             else {'app_id': '%s-rebuilt' % self.app1,
+                                   'policy_ids': [], 'allowed_idps': [],
+                                   'unresolved_idp_types': [],
+                                   'orphaned_policy_ids': []}))
+        client.sync_tunnel_routes.return_value = {'routes': []}
+        if tunnel_ok:
+            client.delete_tunnel.return_value = {'success': True}
+        else:
+            client.delete_tunnel.side_effect = Exception('cf tunnel down')
+        return client
+
+    def test_sa_unlink_compensation_survives_a_real_rollback(self):
+        """tunnel 刪不掉 ⇒ 交易整筆丟棄，而補償的寫入必須還在。"""
+        client = self._client(tunnel_ok=False)
+        cr = self.registry.cursor()
+        try:
+            env = api.Environment(cr, odoo.SUPERUSER_ID, {})
+            # 對照值：同一筆交易裡的普通寫入，必須被下面的 rollback 抹掉。
+            _skip_route_sync(env[_ROUTE].browse(self.route_id)).write(
+                {'session_duration': '1h'})
+            with patch(MOCK_SA_CLIENT, return_value=client):
+                try:
+                    env['woow_paas_platform.security_access'].browse(
+                        self.sa_id).unlink()
+                except UserError:
+                    pass
+                else:
+                    self.fail('unlink 必須以 UserError 收場')
+            sent = [c.args[0] for c in client.sync_access_app.call_args_list]
+            cr.rollback()
+        finally:
+            cr.close()
+
+        self.assertTrue(
+            any(c.get('enabled') is False
+                and c.get('existing_app_id') == self.app1 for c in sent),
+            '前提檢查：route 的 Access teardown 必須真的被送出去過')
+        self.assertTrue(client.delete_tunnel.called,
+                        '前提檢查：tunnel 刪除必須真的被嘗試過')
+
+        app_id, is_protected, lost, sd = self._read(self.route_id)
+        # 🔴 對照值：證明那次 rollback 真的抹掉了同一筆交易裡的普通寫入。
+        # ⚠ 這裡的對照值寫在**同一條 route** 上，而補償也寫這條 —— 兩者不衝突：
+        # 對照寫入在 savepoint 之外（unlink 之前），rollback 後回到 '24h'；
+        # 補償是另一條連線、另一筆交易，它寫的是 app_id 與旗標。
+        self.assertEqual(
+            sd, '24h',
+            '對照值必須回到 commit 當時的樣子——沒有它，下面幾條可能只是因為'
+            '這次 rollback 根本沒東西可回捲')
+        self.assertNotEqual(
+            app_id, self.app1,
+            '死掉的 access_app_id 必須已經不在了（補償清掉、或當場重建成新的）')
+        self.assertTrue(
+            is_protected, '不得自動降 is_protected（租戶設定的意圖）')
+        # operator 的 Access 面在本情境還活著（掛掉的是 delete_tunnel）
+        # ⇒ 補償的立即重推會成功、當場把 app 建回來、旗標由 sync 自己清掉。
+        self.assertEqual(app_id, '%s-rebuilt' % self.app1,
+                         'operator 的 Access 面還活著 ⇒ 當場重建')
+        self.assertFalse(lost, '重建成功 ⇒ 旗標由 sync 結果清掉')
+
+    def test_positive_control_clean_sa_teardown_leaves_no_compensation(self):
+        """陽性對照：tunnel 也刪得掉 ⇒ 整個 SA 真的消失、沒有補償可言。"""
+        client = self._client(tunnel_ok=True)
+        with self.registry.cursor() as cr:
+            env = api.Environment(cr, odoo.SUPERUSER_ID, {})
+            with patch(MOCK_SA_CLIENT, return_value=client):
+                env['woow_paas_platform.security_access'].browse(
+                    self.sa_id).unlink()
+        self.assertIsNone(
+            self._read(self.route_id),
+            'tunnel 刪得掉 ⇒ 整個 SA 與它的 route 都該真的消失（這一筆是真的'
+            'commit 的，證明前一條的「列還在」不是因為刪除從來沒成功過）')
+

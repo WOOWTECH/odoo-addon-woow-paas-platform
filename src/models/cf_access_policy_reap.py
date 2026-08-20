@@ -478,13 +478,19 @@ class CfAccessPolicyReap(models.Model):
           `XidCacheRemoveRunningXids` 把該 subxid 從 proc array 的 subxid cache
           移掉 ⇒ 本交易判定它「不在進行中」且「沒有 commit」⇒ 直接把
           `HEAP_XMAX_INVALID` 記上去，**不等鎖**，補償寫得進去。
+          **這一格有實測**：`src/tests/integration/test_failopen_real_rollback_794.py`
+          在真交易邊界上跑，補償沒有逾時、沒有 hang，寫得進去。
         * 但 T 的 subxid cache **溢位**時（PG 每個 backend 只快取 64 個已配發
           XID 的子交易，而本 repo 每一次 route `write()` 都開一個 savepoint，
-          單一 request 內的數量不是理論值），判定會退化成走 `pg_subtrans` 找到
-          最上層的 T ⇒ 「還在進行中」⇒ 補償交易改去等 **T 的 xact lock**。
-          而 T 正在同一個 Python thread 上同步等補償交易回來 ⇒ **互鎖成 hang，
-          且 PG 的 deadlock detector 看不到這個環**（一邊是 PG 的鎖等待，另一邊
+          單一 request 內的數量不是理論值），判定**預期**會退化成走 `pg_subtrans`
+          找到最上層的 T ⇒ 「還在進行中」⇒ 補償交易改去等 **T 的 xact lock**。
+          而 T 正在同一個 Python thread 上同步等補償交易回來 ⇒ 互鎖成 hang，
+          且 PG 的 deadlock detector 看不到這個環（一邊是 PG 的鎖等待，另一邊
           是 Python 的函式呼叫）。
+          ⚠ **這一格是讀 PG 原始碼推導的，沒有實際起一個 >64 子交易的情境重現
+          過 hang**（PR #802 覆核標為 plausible-未驗證）。`lock_timeout` 是依這個
+          推導設的防護，不是對著一個看過的紅燈設的。推導若有誤，最壞情況是這道
+          防護對某個真實情境沒必要——而不是它會造成傷害。
 
         `SET LOCAL lock_timeout` 把那個 hang 換成一個會被下面 `except` 接住的
         錯誤：補償失敗、原本的錯誤照常往外拋、log 出聲。**這條路徑的 backstop

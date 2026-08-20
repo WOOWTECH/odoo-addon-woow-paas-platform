@@ -496,10 +496,11 @@ from . import test_cs_sync_ctx_forgery_787
 from . import test_sh_sync_ctx_forgery_787
 
 # #794：Access teardown 後 DB 回捲 ⇒ 列帶 is_protected=True 復活但 CF 已無 app
-# ⇒ UI 顯示已保護、實際免登入即可存取。四處 unlink（SA route / SH route /
-# CloudService / SmartHome）同型。RED 群集：A1／B1／C1（拆成功那幾條沒被交還給
-# 補償）、A5（pass 1 不 short-circuit ⇒ 整批被拆）、A6（補償誤傷重試錨點）、
-# E3（partial 時反方向誤報活著的 app 已死）。
+# ⇒ UI 顯示已保護、實際免登入即可存取。**五處**同型（SA route / SH route /
+# CloudService / SmartHome / SecurityAccess 本身）。RED 群集：A1／B1／C1／F1
+# （拆成功那幾條沒被交還給補償）、A5（pass 1 不 short-circuit ⇒ 整批被拆）、
+# A6（補償誤傷重試錨點）、E3（partial 時反方向誤報活著的 app 已死）、
+# F3（action_delete 少了自己那一層 ⇒ 補償拿到空清單）。
 from . import test_access_failopen_compensation_794
 # 真交易邊界探針（`-standard`，要 `--test-tags failopen_794` 才會跑）：
 # TransactionCase 的 cursor 不可 commit/rollback ⇒ 結構上造不出「整筆交易被
