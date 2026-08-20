@@ -316,12 +316,26 @@ security-rule-lifecycle 由兩個函式——ir.rule 的出生地／退役名字
                      (c) 豁免條目的定義性質就是「現在是裸 truthy 閘」⇒ 掃描器必須找得
                      到它的布林 guard 讀取點，找不到＝掃描器壞了或這把已被修好（請改
                      status）。沒有 (c)，掃描器回空集合時 (iii) 永遠是綠的。
+                     第四條判準 (iv)：`status=removed` 的 key —— 這條 context 通道
+                     **已經被拿掉**，判準與上面三條相反：生產碼裡不得再出現它的任何
+                     載體（`context.get` 讀取點／`with_context(k=…)`／`{'k': …}`）。
+                     🔴 為什麼需要它：拿掉一條可偽造的通道之後，唯一會讓它回來的是
+                     「下一個人不知道它為什麼被拿掉」，而測試只守得住已知的呼叫形態、
+                     守不住一個新寫的讀取點。陽性對照兩層：gate 內盯**注入載體採集器**
+                     本身（真 repo 上一定抽得到別的 registry key 的注入點，一個都沒有
+                     ＝採集器壞了），外加 `scripts/audit/
+                     test_repo_lint_internal_ctx_key_registry.py::TestRemovedChannelIsBlocked`
+                     的兩次注入紅燈（讀取點／注入點各一）。
+                     ⚠ (iv) 只認 AST 載體 ⇒ **註解與 docstring 提到那個名字不算違規**：
+                     拿掉通道之後說明「為什麼拿掉、不要加回來」正是該寫的東西，把它算
+                     成違規會逼人刪掉守線的說明文字（第 27 條踩過同一個形狀）。
                      ⚠ 覆蓋邊界：只認 `<x>.context.get(K)` / `._context.get(K)` /
-                     `.context[K]` 三種載體且 K 解得出字面值；只管 **truthy 布林閘**
-                     ——#787 B 段的「值注入」型偽造面（`sa_unlinked_cf_policy_ids` /
-                     `mcp_admin_password` / `bootstrap_owner_partner_id`）形態與修法都
-                     不同，不在本條範圍，把本條的綠讀成「所有 context 偽造面都守住了」
-                     是錯的。
+                     `.context[K]` 三種載體且 K 解得出字面值；(i)(ii)(iii) 只管
+                     **truthy 布林閘** ——#787 B 段的「值注入」型偽造面
+                     （`mcp_admin_password` / `bootstrap_owner_partner_id`）形態與修法
+                     都不同，不在那三條範圍，把本條的綠讀成「所有 context 偽造面都守住
+                     了」是錯的。（同段的 `sa_unlinked_cf_policy_ids` 已於 #783 整條移除
+                     並改由 (iv) 管。）
                      依據 docs/decisions/519-cloud-service-provision-gate.md
 
 29. access-gate-no-ledger-read  `filtered()` 的判準（以及它一層內呼叫到的
@@ -3737,6 +3751,15 @@ INTERNAL_CTX_KEY_SKIP_PREFIXES = ("src/tests/",)
 #                                 豁免 (i)(ii)，但仍受 (iii) 管：它在清單上、攤在
 #                                 diff 裡，修好一把就把 status 翻成 enforced。
 #               'not-security' —— 讀了、也是 truthy 閘，但不是安全決策（必附理由）。
+#               'removed'      —— 這條 context 通道**已經被拿掉**，不准回來（必附
+#                                 issue）。判準與上面三個相反：生產碼裡不得再出現
+#                                 它的任何載體（`context.get` 讀取點／
+#                                 `with_context(k=…)`／`{'k': …}` 注入點）。
+#                                 ⚠ 只認 AST 載體 ⇒ **註解與 docstring 提到這個
+#                                 名字不算違規**（拿掉一條通道之後，說明「為什麼
+#                                 拿掉、不要加回來」正是該寫的東西；把它算成違規
+#                                 會逼人刪掉守線的說明文字——第 27 條踩過同一個
+#                                 形狀）。
 #   sentinel    enforced 專用：模組私有 sentinel 的符號名。
 #   defined_in  enforced 專用：sentinel（與 reader）的定義檔，陽性對照的錨點。
 #   reader      enforced 選用：把 sentinel 判定收斂成一支私有函式時填它。有些 key
@@ -3892,6 +3915,20 @@ INTERNAL_CTX_KEY_REGISTRY = {
                "（正當 setter 是 ecpay_invoice_cron）。account.move 是 ERP 模型，"
                "租戶能否經 RPC 觸達未驗證 ⇒ 🔴 不得當已坐實的後門轉述。",
     },
+    # --- 已移除的通道（status=removed：判準是「不准回來」）----------------- #
+    "sa_unlinked_cf_policy_ids": {
+        "status": "removed",
+        "issue": "#783",
+        "why": "policy unlink 注入 doomed cf id 的舊通道。值會原封不動進 "
+               "`existing_policy_ids`，而那是 operator 唯一的刪除通道、打的是"
+               "**帳號級** `/accounts/{id}/access/policies/{pid}`（沒有 app 也沒有"
+               "租戶邊界）⇒ 任何能觸發一次 access sync 的租戶（改自己 route／CS／"
+               "SH route 的一個 Access 欄位就夠）都能指定平台去刪它知道 id 的任何"
+               "一顆 CF reusable policy。#783 整條拿掉而不是 sentinel 化：它在生產"
+               "路徑上本來就冗餘（`unlink()` 在同一個 savepoint 內對每個錨點無條件"
+               "先 `_record_ids()` 落帳才推 sync，而 context 只注入給 `exists()` 的"
+               "子集 ⇒ 帳本是它的嚴格超集）。存量收斂改走 `_record_ids()`。",
+    },
     # --- 非安全決策 -------------------------------------------------------- #
     "skip_ai_reply": {
         "status": "not-security",
@@ -3906,7 +3943,7 @@ INTERNAL_CTX_KEY_REGISTRY = {
     },
 }
 
-_INTERNAL_CTX_KEY_STATUSES = ("enforced", "pending", "not-security")
+_INTERNAL_CTX_KEY_STATUSES = ("enforced", "pending", "not-security", "removed")
 # 豁免（非 enforced）的兩種 status。它們的共同定義性質就是「這把鑰匙**現在**是裸
 # truthy 閘」⇒ 掃描器必須在生產碼裡找得到它的布林 guard 讀取點。找不到有兩個可能：
 # 掃描器壞了（假綠），或這把已經被修好／刪掉（清單腐爛）。兩者都要有人來看。
@@ -4100,6 +4137,10 @@ def _internal_ctx_key_scan(root):
         "parse_errors": [],     # [(rel, exc)]
         "reads": [],            # [(key, rel, lineno, node, parent, owner, tree)]
         "truthy": [],           # [(key, rel, lineno, shape)]
+        # registry 上任一把 key 的**注入載體**（`with_context(k=…)` /
+        # `{'k': …}`），**不論值是什麼**。`truthy` 只收 truthy 字面值（判準 ii），
+        # 而 `removed` 要問的是「這個載體存不存在」——值是什麼無所謂。
+        "injections": [],       # [(key, rel, lineno, shape)]
         "reader_calls": [],     # [(reader_name, key, rel, lineno)]
         "files": 0,
         "read_sites": 0,        # 解不出 key 的也算（存在性對照用）
@@ -4157,9 +4198,13 @@ def _internal_ctx_key_scan(root):
                 continue
             if isinstance(node, ast.Call):
                 # (ii) 的一半：`with_context(key=True)` 這類 keyword truthy 字面值。
+                # 同一個迴圈順手收 `injections`（不論值）給 `removed` 用。
                 for kw in node.keywords:
-                    if (kw.arg in INTERNAL_CTX_KEY_REGISTRY
-                            and _ctx_truthy_const(kw.value)):
+                    if kw.arg not in INTERNAL_CTX_KEY_REGISTRY:
+                        continue
+                    facts["injections"].append(
+                        (kw.arg, rel, node.lineno, "%s=..." % kw.arg))
+                    if _ctx_truthy_const(kw.value):
                         facts["truthy"].append(
                             (kw.arg, rel, node.lineno,
                              "%s=%r" % (kw.arg, kw.value.value)))
@@ -4176,10 +4221,14 @@ def _internal_ctx_key_scan(root):
             elif isinstance(node, ast.Dict):
                 # (ii) 的另一半：`{'key': True}` 與 `**{KEY_CONST: True}`。
                 for k_node, v_node in zip(node.keys, node.values):
-                    if k_node is None or not _ctx_truthy_const(v_node):
+                    if k_node is None:
                         continue
                     key = _ctx_resolve_key(k_node, local_consts, global_consts)
-                    if key in INTERNAL_CTX_KEY_REGISTRY:
+                    if key not in INTERNAL_CTX_KEY_REGISTRY:
+                        continue
+                    facts["injections"].append(
+                        (key, rel, node.lineno, "{%r: ...}" % key))
+                    if _ctx_truthy_const(v_node):
                         facts["truthy"].append(
                             (key, rel, node.lineno,
                              "{%r: %r}" % (key, v_node.value)))
@@ -4214,6 +4263,11 @@ def _internal_ctx_key_registry_shape():
             problems.append(
                 "%s status=pending 卻沒有 `issue`。pending＝已知未修，沒有單號就沒有"
                 "任何東西會讓它被修——那是永久豁免換一個名字" % where)
+        elif status == "removed" and not (entry.get("issue") or "").strip():
+            problems.append(
+                "%s status=removed 卻沒有 `issue`。removed 的整個作用是「有人想把這"
+                "條通道加回來時，讓他先讀到當初為什麼拿掉」——沒有單號的話這條 gate "
+                "只會擋住他，不會告訴他任何事，而擋不出理由的 gate 遲早被繞過" % where)
     return problems
 
 
@@ -4225,7 +4279,7 @@ def check_internal_ctx_key_registry(root):
     成功）。#522／#524／#519／#744／#536 各修過一批，第 6 次不會有任何訊號——
     runtime WARNING 只在既有 key 被偽造時印，**新寫的一把根本不經過它**。
 
-    三條判準（(iii) 是核心：少了它，新 key 不登記就等於不受管）：
+    四條判準（(iii) 是核心：少了它，新 key 不登記就等於不受管）：
 
     (i)   enforced key 的所有生產讀取點都走 sentinel 身分判定（`is` / `is not`），
           不得有裸 truthy 布林 guard。
@@ -4233,12 +4287,18 @@ def check_internal_ctx_key_registry(root):
           ——那是把閘退回可偽造形狀的另一半。`src/tests/` 豁免。
     (iii) 任何被生產碼讀取、且當 truthy 布林 guard 的 context key 都必須在 registry
           上；可標 pending／not-security 豁免，但要寫理由。
+    (iv)  `status=removed` 的 key，生產碼裡不得再出現它的任何載體（讀取點或注入點）
+          ——判準方向與上面三條相反：那條通道已經被拿掉，這條守的是「不准回來」。
 
     陽性對照（否定性結論必配，見 memory: feedback_negative_verification_needs_positive_control）：
       (a) 掃描本身：一個 context 讀取點都沒掃到 ＝ 掃描器／範圍壞了，不是乾淨。
       (b) enforced：sentinel 符號必須真的在 `defined_in` 定義、reader（若宣告）必須
           存在且真的拿 sentinel 做 `is` 比對、而且該 key 至少要有一個判定點。三者
           任一不成立，「找不到裸 truthy 讀取點」這個綠燈就是假的。
+      (d) `removed`：整棵生產碼要抽得到**至少一個**已登記 key 的注入載體
+          （`with_context(k=…)` / `{'k': …}`）。一個都沒有 ＝ 採集器壞了，而那個
+          狀態下 (iv) 的「找不到被加回來的通道」恆綠。另一半陽性對照在 meta-test
+          （`TestRemovedChannelIsBlocked` 注入讀取點／注入點各一次紅燈）。
       (c) 豁免條目：它們的定義性質就是「現在是裸 truthy 閘」⇒ 掃描器必須找得到它的
           布林 guard 讀取點。找不到 ⇒ 掃描器壞了，或這把已被修好／刪掉（清單腐爛）。
           這一格讓 (iii) 不可能做成恆綠：判準若只有「有沒有多出來的 key」，掃描器
@@ -4248,9 +4308,13 @@ def check_internal_ctx_key_registry(root):
       * 只認 `<x>.context.get(K)` / `<x>._context.get(K)` / `<x>.context[K]` 三種載體，
         且 K 要解得出字面值（module 層常數會跨檔解析）。先把 context 存成區域變數
         再讀的寫法掃不到。
-      * 只管 **truthy 布林閘**。#787 B 段的「值注入」型偽造面（`sa_unlinked_cf_policy_ids`
-        / `mcp_admin_password` / `bootstrap_owner_partner_id`）形態不同、修法不同，
-        不在本條範圍——把本條的綠讀成「所有 context 偽造面都守住了」是錯的。
+      * (i)(ii)(iii) 只管 **truthy 布林閘**。#787 B 段的「值注入」型偽造面
+        （`mcp_admin_password` / `bootstrap_owner_partner_id`）形態不同、修法不同，
+        不在那三條範圍——把它們的綠讀成「所有 context 偽造面都守住了」是錯的。
+        同段的 `sa_unlinked_cf_policy_ids` 走的是另一條路：#783 把通道整條拿掉，
+        改由 (iv) `status=removed` 守「不准回來」。
+      * (iv) 只認 AST 載體，**註解／docstring 提到那個名字不算違規**（拿掉通道之後
+        寫下「為什麼拿掉」是該做的事，把它算成違規會逼人刪掉守線的說明文字）。
       * (ii) 只認**字面值**：`key=True` 與 `{'key': True}` 兩種載體。動態組出來的
         dict 再展開（`ctx = {...}; rec.with_context(**ctx)`）看不到——那需要 dataflow
         分析，而本條刻意停在 AST 形態比對。這不是漏洞的入口（sentinel 判定照樣不認
@@ -4394,6 +4458,39 @@ def check_internal_ctx_key_registry(root):
             "登記 status=enforced；或登記 status=not-security／pending **並寫下理由**"
             "（豁免要出現在 diff 裡被覆核，這正是本條存在的意義）（%s）"
             % (bool_sites[key][0][0], key, where, ref))
+
+    # (iv) `removed`：這把 key 在生產碼裡**一個載體都不該有**。
+    #
+    # 🔴 這條與 (i)(ii)(iii) 相反：那三條問「這把閘的形狀對不對」，這條問「這條
+    #    通道是不是真的不在了」。拿掉一條可偽造的通道之後，唯一會讓它回來的是
+    #    「下一個人不知道它為什麼被拿掉」——而在本條之前沒有任何機制會在那時變紅
+    #    （測試只守得住已知的呼叫形態，守不住一個新寫的讀取點）。
+    removed_keys = [k for k, e in sorted(INTERNAL_CTX_KEY_REGISTRY.items())
+                    if e.get("status") == "removed"]
+    if removed_keys and not facts["injections"]:
+        # 陽性對照：`removed` 是純否定性判準，掃描器一壞它就恆綠。這裡盯的是
+        # **注入載體採集器**本身——真 repo 上一定有別的 registry key 被
+        # `with_context(k=…)` / `{'k': …}` 注入（#519／#522／#524／#744 那批 helper
+        # 就是），一個都抽不到就是採集器壞了，不是「乾淨」。
+        violations.append(
+            "%s：registry 上有 status=removed 的 key，但整棵生產碼掃不到**任何**"
+            "已登記 key 的注入載體（`with_context(k=…)` / `{'k': …}`）。那是採集器"
+            "或解析壞了——在這個狀態下 (iv) 的「找不到被加回來的通道」是假綠（%s）"
+            % (self_rel, ref))
+    for key in removed_keys:
+        sites = sorted(set(
+            [(rel, lineno) for k, rel, lineno, _n, _p, _o in facts["reads"]
+             if k == key]
+            + [(rel, lineno) for k, rel, lineno, _shape in facts["injections"]
+               if k == key]))
+        for rel, lineno in sites[:5]:
+            violations.append(
+                "%s:%d：`%s` 在 registry 上是 status=removed（＝這條 context 通道已"
+                "經被拿掉），生產碼卻又出現了它的載體。這種通道的值會被下游當成資料"
+                "消費，而 `call_kw` 把呼叫端 context 整包換進 env ⇒ 加回來等於把一"
+                "個租戶可偽造的值接回一條特權路徑。真的需要這條通道請先改掉 "
+                "registry 條目，並在 diff 裡說明為什麼當初的理由不再成立（%s）"
+                % (rel, lineno, key, ref))
 
     # (c) 豁免條目的陽性對照 ＋ 殭屍條目。
     for key, entry in sorted(INTERNAL_CTX_KEY_REGISTRY.items()):
