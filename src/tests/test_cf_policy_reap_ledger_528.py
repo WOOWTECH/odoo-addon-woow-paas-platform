@@ -47,7 +47,10 @@ from odoo.tests import TransactionCase, tagged
 from ..models.cloud_service import (
     _internal_cs_access_identity, _internal_provision,
 )
-from ..models.security_access import _internal_identity as _internal_sa
+from ..models.security_access import (
+    _force_access_sync, _internal_identity as _internal_sa,
+    _skip_route_sync,
+)
 from ..models.smart_home_route import _internal_sm_route_identity
 from ..services.naming import make_service_subdomain
 from .smart_home_fixture import sh_model
@@ -183,7 +186,7 @@ class TestSaRouteReap(TransactionCase, _ReapMixin):
         self.client.sync_access_app.reset_mock()
 
     def _policy(self, cf_policy_id):
-        pol = self.Policy.sudo().with_context(sa_skip_route_sync=True).create({
+        pol = _skip_route_sync(self.Policy.sudo()).create({
             'route_id': self.route.id,
             'name': 'pol-%s' % uuid.uuid4().hex[:6], 'decision': 'allow',
             'rule_ids': [(0, 0, {'group': 'include',
@@ -251,8 +254,7 @@ class TestSaRouteReap(TransactionCase, _ReapMixin):
         self.sa.write({'state': 'suspended'})
 
         with patch(MOCK_SA_CLIENT, return_value=self.client):
-            self.route.with_context(
-                sa_force_access_sync=True)._sync_access_to_operator()
+            _force_access_sync(self.route)._sync_access_to_operator()
 
         payload = self.client.sync_access_app.call_args.args[0]
         self.assertIn('cf-doomed-b3', payload['existing_policy_ids'])
@@ -360,7 +362,7 @@ class TestCsReap(TransactionCase, _ReapMixin):
         self.client = self._mock(_sync_result(app_id='app-live'))
 
     def _policy(self, cf_policy_id):
-        pol = self.Policy.sudo().with_context(sa_skip_route_sync=True).create({
+        pol = _skip_route_sync(self.Policy.sudo()).create({
             'cloud_service_id': self.svc.id,
             'name': 'pol-%s' % uuid.uuid4().hex[:6], 'decision': 'allow',
             'rule_ids': [(0, 0, {'group': 'include',
@@ -438,7 +440,7 @@ class TestShRouteReap(TransactionCase, _ReapMixin):
         self.client = self._mock(_sync_result(app_id='app-live'))
 
     def _policy(self, cf_policy_id):
-        pol = self.Policy.sudo().with_context(sa_skip_route_sync=True).create({
+        pol = _skip_route_sync(self.Policy.sudo()).create({
             'smart_home_route_id': self.route.id,
             'name': 'pol-%s' % uuid.uuid4().hex[:6], 'decision': 'allow',
             'rule_ids': [(0, 0, {'group': 'include',
