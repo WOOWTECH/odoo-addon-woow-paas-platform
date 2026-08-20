@@ -323,9 +323,10 @@ security-rule-lifecycle 由兩個函式——ir.rule 的出生地／退役名字
                      「下一個人不知道它為什麼被拿掉」，而測試只守得住已知的呼叫形態、
                      守不住一個新寫的讀取點。陽性對照兩層：gate 內盯**注入載體採集器**
                      本身（真 repo 上一定抽得到別的 registry key 的注入點，一個都沒有
-                     ＝採集器壞了），外加 `scripts/audit/
-                     test_repo_lint_internal_ctx_key_registry.py::TestRemovedChannelIsBlocked`
-                     的兩次注入紅燈（讀取點／注入點各一）。
+                     ＝採集器壞了），外加 meta-test 的三次注入紅燈（讀取點／keyword
+                     注入／dict 注入各一）——見
+                     `scripts/audit/test_repo_lint_internal_ctx_key_registry.py`
+                     的 `TestRemovedChannelIsBlocked`。
                      ⚠ (iv) 只認 AST 載體 ⇒ **註解與 docstring 提到那個名字不算違規**：
                      拿掉通道之後說明「為什麼拿掉、不要加回來」正是該寫的東西，把它算
                      成違規會逼人刪掉守線的說明文字（第 27 條踩過同一個形狀）。
