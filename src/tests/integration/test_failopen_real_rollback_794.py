@@ -65,6 +65,10 @@ _logger = logging.getLogger(__name__)
 
 MOCK_SA_CLIENT = ('odoo.addons.woow_paas_platform.models.security_access.'
                   'get_paas_operator_client')
+#: 補償失敗時 `logger.exception` 落在**呼叫端那一腿自己的 logger** 上（helper 的
+#: `logger` 參數由呼叫端傳），不是帳本 model 的 logger。寫錯這個常數會讓下面那條
+#: 鑑別式的 `assertLogs` 無聲失去指向性。
+LOG_SA = 'odoo.addons.woow_paas_platform.models.security_access'
 _ROUTE = 'woow_paas_platform.security_access_route'
 _ROUTE_TABLE = 'woow_paas_platform_security_access_route'
 
@@ -418,6 +422,15 @@ class TestSecurityAccessUnlinkSurvivesRealRollback(BaseCase):
         失效的路徑，而它與「補償根本沒被接上」在列狀態上**完全不可區分**。有了
         這條，未來有人把 lock_timeout 拉長成 60s（看起來像「更可靠」）會立刻
         看到本條從「快速失敗」變成「掛住」。
+
+        🔴 **鑑別式在 `assertLogs`，不在列狀態**（第一版漏了這件事，覆核問出來）：
+        「補償跑了但被鎖擋住」與「補償根本沒被接上」兩個世界的**列狀態一模一樣**
+        （`access_app_id` 沒被清、旗標沒被打開），所以只斷言列狀態的話，把第五腿
+        的補償呼叫整個刪掉本條照樣綠——那就不是守線是裝飾。分開兩者的只有那條
+        ERROR log：
+          ① `the compensating write failed` ⇒ 補償**真的被叫起來了**；
+          ② `lock timeout` ⇒ 失敗的原因**正是鎖**，不是別的例外恰好也讓它失敗。
+        `assertLogs` 在沒有任何符合 log 時會自己失敗，所以「沒接上」那個世界會紅。
         """
         client = self._client(tunnel_ok=False)
         cr = self.registry.cursor()
@@ -427,18 +440,35 @@ class TestSecurityAccessUnlinkSurvivesRealRollback(BaseCase):
             _skip_route_sync(env[_ROUTE].browse(self.route_id)).write(
                 {'session_duration': '1h'})
             env.flush_all()
-            with patch(MOCK_SA_CLIENT, return_value=client):
-                try:
-                    env['woow_paas_platform.security_access'].browse(
-                        self.sa_id).unlink()
-                except UserError:
-                    pass
-                else:
-                    self.fail('unlink 必須以 UserError 收場')
+            # 🔴 **這個 assertLogs 就是本條的鑑別式**（見 docstring）：列狀態在
+            # 「補償跑了但被鎖擋住」與「補償根本沒被接上」兩個世界裡**完全相同**，
+            # 只有這條 ERROR log 分得開——`assertLogs` 在**沒有任何符合的 log**
+            # 時會自己失敗。
+            with self.assertLogs(LOG_SA, level='ERROR') as logs:
+                with patch(MOCK_SA_CLIENT, return_value=client):
+                    try:
+                        env['woow_paas_platform.security_access'].browse(
+                            self.sa_id).unlink()
+                    except UserError:
+                        pass
+                    else:
+                        self.fail('unlink 必須以 UserError 收場')
             sent = [c.args[0] for c in client.sync_access_app.call_args_list]
             cr.rollback()
         finally:
             cr.close()
+
+        blob = '\n'.join(logs.output)
+        # ① 補償**真的被叫起來了**（不是「沒接上」）。
+        self.assertIn(
+            'the compensating write failed', blob,
+            '補償必須真的跑過並失敗——沒有這條 ERROR 的話，本測試底下那些「列'
+            '沒被改」的斷言在「補償根本沒被接上」的世界裡一模一樣地綠')
+        # ② 失敗的原因**正是鎖**（不是別的例外恰好也讓它失敗）。
+        self.assertIn(
+            'lock timeout', blob,
+            '失敗原因必須是 lock timeout——若換成別的例外（例如欄位不存在），'
+            '本條就不再是在測「pre-write 擋住補償」這一格了')
 
         self.assertTrue(
             any(c.get('enabled') is False

@@ -498,14 +498,14 @@ class SmartHome(models.Model):
             info = route._capture_access_teardown()
             if not info:
                 continue
-            if Route._push_access_teardown(info):
+            # `torn_down` 交給 `_push_access_teardown` 在 operator 回 2xx 當下
+            # 就記（見該方法的 [HIGH] 註解）——**不能**放在 `if ...:` 裡：落帳撞到
+            # `OperationalError` 時它拿不到 True。
+            if Route._push_access_teardown(info, torn_down=torn_down):
                 _internal_sm_route_identity(route).access_app_id = False
                 for pol in route.access_policy_ids:
                     if pol.cf_policy_id:
                         pol.cf_policy_id = False
-                if torn_down is not None:
-                    torn_down.append(
-                        (info['anchor_model'], info['anchor_id']))
             else:
                 failed.append(info['label'])
         return failed

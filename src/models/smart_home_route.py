@@ -518,9 +518,9 @@ class SmartHomeRoute(models.Model):
                 for info in teardown:
                     if not info:
                         continue
-                    if self._push_access_teardown(info):
-                        torn_down.append(
-                            (info['anchor_model'], info['anchor_id']))
+                    # `torn_down` 由 `_push_access_teardown` 在 operator 回
+                    # 2xx 當下就 append（見該方法的 [HIGH] 註解）。
+                    if self._push_access_teardown(info, torn_down=torn_down):
                         continue
                     failed = info['label']
                     break
@@ -749,7 +749,7 @@ class SmartHomeRoute(models.Model):
         }
 
     @api.model
-    def _push_access_teardown(self, info):
+    def _push_access_teardown(self, info, torn_down=None):
         """把一份捕獲好的 teardown 推給 operator。成功回 ``True``。
 
         best-effort ＋ 回 bool（不 raise）：呼叫端自己決定要 fail-loud 還是留給
@@ -787,6 +787,14 @@ class SmartHomeRoute(models.Model):
         # 之後列就會被刪掉 ⇒ 舊寫法（連 log 都沒有）之後再也沒有任何記錄指向
         # 它們。落帳，由 dead-anchor cron 回收。記帳失敗不翻轉回傳值
         # （[[post-commit-bookkeeping-rollback-unit]]）。
+        # 🔴 #794 二輪覆核 [HIGH]：「CF 已經拆成功」要在**這裡**就記，不能等到
+        # `return True`——下面的 `_settle_teardown_after_commit` 明文 re-raise
+        # `OperationalError`，落帳一撞到並發例外本方法就不會 `return True`，
+        # 呼叫端的 `if ...:` 不執行 ⇒ 補償清單空 ⇒ 補償空轉，而 CF 上的 app 已經
+        # 真的沒了。回傳值語意不動（它仍表示「這一趟整體成不成功」）。
+        if (torn_down is not None
+                and info.get('anchor_model') and info.get('anchor_id')):
+            torn_down.append((info['anchor_model'], info['anchor_id']))
         orphaned = (result or {}).get('orphaned_policy_ids') or []
         if orphaned:
             _logger.warning(

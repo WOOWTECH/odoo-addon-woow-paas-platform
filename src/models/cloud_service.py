@@ -3534,7 +3534,8 @@ class CloudService(models.Model):
                 ', '.join(orphaned))
         return result
 
-    def _teardown_cs_access(self, app_id, policy_ids, app_name, hostname):
+    def _teardown_cs_access(self, app_id, policy_ids, app_name, hostname,
+                            torn_down=None):
         """拆掉本服務的 Cloudflare Access app（＋ reusable policies）。
 
         契約逐字對齊 `SecurityAccess._teardown_route_access`：乾淨拆完回
@@ -3573,6 +3574,14 @@ class CloudService(models.Model):
         # `cf_access_policy_reap._cron_reap_dead_anchors`（錨點死掉之後）或這台
         # 服務自己的下一次成功 sync（錨點還活著時）。
         # 記帳失敗不翻轉回傳值（[[post-commit-bookkeeping-rollback-unit]]）。
+        #
+        # 🔴 #794 二輪覆核 [HIGH]：「CF 已經拆成功」要在**落帳之前**就記——
+        # `_settle_teardown_after_commit` 明文 re-raise `OperationalError`，
+        # 落帳一撞到並發例外本方法就不會 `return True` ⇒ 呼叫端的 `if ...:`
+        # 不執行 ⇒ 補償清單空 ⇒ 補償空轉，而 CF 上的 app 已經真的沒了。
+        # 回傳值語意不動（仍表示「這一趟整體成不成功」）。
+        if torn_down is not None:
+            torn_down.append((self._name, self.id))
         self.env[_CF_REAP_MODEL]._settle_teardown_after_commit(
             self._name, self.id, app_id or None, policy_ids or [],
             (result or {}).get('orphaned_policy_ids') or [], _logger,
@@ -3614,7 +3623,7 @@ class CloudService(models.Model):
         return bool(self.access_app_id or any(
             p.cf_policy_id for p in self.access_policy_ids))
 
-    def _teardown_access_if_any(self):
+    def _teardown_access_if_any(self, torn_down=None):
         """本服務目前的 Access 狀態 → 拆除，成功才清 id。回傳是否乾淨。
 
         單一裁決處：unlink（fail-loud）與 `_do_cleanup`（落 error 狀態）兩條
@@ -3649,6 +3658,7 @@ class CloudService(models.Model):
             policy_ids=pol_ids,
             app_name=self.subdomain or self.helm_release_name,
             hostname=self._access_hostname(),
+            torn_down=torn_down,
         )
         if ok:
             # 身分錨點：清除也只有 sentinel 路徑寫得動。
@@ -4712,8 +4722,12 @@ class CloudService(models.Model):
                     # 的那幾台，CF 上的 app 已經沒了、`access_app_id = False` 卻
                     # 隨交易被丟棄 ⇒ 與 SA/SH 兩腿完全同型的無聲 fail-open。
                     # savepoint 現在加上去了，理由見本 method 開頭那段。
-                    had_access = service._has_access_teardown()
-                    if not service._teardown_access_if_any():
+                    # `torn_down` 由 `_teardown_cs_access` 在 operator 回 2xx
+                    # 當下就 append（見該方法的 [HIGH] 註解）——**不能**靠回傳值
+                    # 判斷：落帳撞到 `OperationalError` 時它拿不到 True。沒東西
+                    # 要拆時那一路在更前面就 `return True`，不會誤記。
+                    if not service._teardown_access_if_any(
+                            torn_down=torn_down):
                         raise UserError(
                             "Cloudflare Access teardown failed; the Access "
                             "application for '%s' is still live. The service record "
@@ -4721,10 +4735,6 @@ class CloudService(models.Model):
                                 service.name or service.id,
                             )
                         )
-                    if had_access:
-                        # 真的對 CF 送出過並拆成功 ⇒ 交易若回捲，這一台就是
-                        # 「宣稱受保護、CF 上沒有 app」那一格。
-                        torn_down.append((self._name, service.id))
                     user_mcps = service._collect_sidecar_user_mcps(
                         service._sidecar_url_prefix()
                     )

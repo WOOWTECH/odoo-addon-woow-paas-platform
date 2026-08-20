@@ -61,6 +61,8 @@ import logging
 import uuid
 from unittest.mock import MagicMock, patch
 
+from psycopg2 import OperationalError
+
 from odoo.exceptions import UserError
 from odoo.tests import TransactionCase, tagged
 from odoo.tools import mute_logger
@@ -831,6 +833,125 @@ class TestCsFailOpenCompensation(TransactionCase):
         self.assertEqual(
             comp.call_args.args[1], [(_CS, s1.id)],
             '只有真的對 CF 拆過的那一台才進補償清單')
+
+
+# ====================================================================== #
+#  G 系列：落帳失敗時「CF 已拆成功」的事實不得跟著丟掉（二輪覆核 [HIGH]）   #
+# ====================================================================== #
+
+SETTLE_TEARDOWN = (
+    'odoo.addons.woow_paas_platform.models.cf_access_policy_reap.'
+    'CfAccessPolicyReap._settle_teardown_after_commit')
+
+
+@tagged('post_install', '-at_install')
+class TestTornDownSurvivesLedgerFailure(TransactionCase):
+    """🔴 `_settle_teardown_after_commit` **明文 re-raise `OperationalError`**。
+
+    三腿的 `_teardown_*` 都是「CF 拆成功 → 落帳 → `return True`」。落帳撞到並發
+    例外（40001／40P01／55P03——正是 `retrying()` 存在的理由）時它**不會**
+    `return True` ⇒ 舊寫法把 `torn_down.append()` 掛在呼叫端的 `if ok:` 裡
+    ⇒ **補償拿到空清單、`if not torn_down: return False` 當場空轉**。
+
+    淨效果：CF 上的 app 已經真的被刪、列回捲復活帶著 `is_protected=True`、
+    而補償一次都沒做事——與「補償根本沒被接上」在列狀態上**完全不可區分**。
+
+    ⚠ 可達性不低：它需要的只是**落帳那一步**撞到並發例外，而落帳寫的
+    `cf_access_policy_reap` 表同時被每小時的 dead-anchor cron 掃描與更新。
+
+    修法的不變式：**「CF 已經拆成功」這個事實的記錄，不能依賴其後任何一步是否
+    成功**——所以 append 移到 operator 回 2xx 的當下、落帳之前。回傳值語意不動。
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.workspace = self.env['woow_paas_platform.workspace'].sudo(
+        ).create({'name': 'WS 794G %s' % uuid.uuid4().hex[:6]})
+        self.sa = self.env['woow_paas_platform.security_access'].sudo().create(
+            {'name': 'SA 794G %s' % uuid.uuid4().hex[:6],
+             'workspace_id': self.workspace.id})
+        _internal_sa(self.sa).write(
+            {'state': 'active', 'tunnel_id': 'tun-794g'})
+
+    def _route(self, app_id):
+        route = _skip_route_sync(self.env[_ROUTE].sudo()).create({
+            'security_access_id': self.sa.id,
+            'subdomain_prefix': 'g%s' % uuid.uuid4().hex[:8],
+            'is_protected': True})
+        route = route.with_context(sa_skip_route_sync=False)
+        _internal_sa(route).access_app_id = app_id
+        return route
+
+    def _client(self):
+        client = MagicMock()
+        client.sync_access_app.return_value = _teardown_result()
+        client.sync_tunnel_routes.return_value = {'routes': []}
+        return client
+
+    @mute_logger(LOG_SA, LOG_REAP)
+    def test_G1_ledger_operational_error_still_records_the_torn_down_anchor(self):
+        """落帳拋 `OperationalError` ⇒ 補償仍必須拿到**非空**清單。
+
+        前提斷言：teardown 真的送出去過、而且落帳真的被呼叫過（否則本條測到的
+        是另一格）。
+        """
+        p1 = self._route('app-g1')
+        p1_id = p1.id
+        client = self._client()
+        with patch(MOCK_SA_CLIENT, return_value=client):
+            with patch(SETTLE_TEARDOWN, autospec=True,
+                       side_effect=OperationalError('40001 serialization')
+                       ) as settle:
+                with patch(COMPENSATE, autospec=True) as comp:
+                    with self.assertRaises(OperationalError):
+                        p1.unlink()
+
+        sent = [c.args[0] for c in client.sync_access_app.call_args_list]
+        self.assertTrue(
+            any(c.get('enabled') is False
+                and c.get('existing_app_id') == 'app-g1' for c in sent),
+            '前提檢查：CF teardown 必須真的送出去過（＝那顆 app 真的沒了）')
+        self.assertTrue(settle.called, '前提檢查：落帳必須真的被呼叫過')
+
+        comp.assert_called_once()
+        self.assertEqual(
+            comp.call_args.args[1], [(_ROUTE, p1_id)],
+            '🔴 落帳失敗**不得**讓「CF 已拆成功」這個事實跟著丟掉——清單為空時'
+            '補償當場空轉，而那個結局與「補償根本沒被接上」不可區分')
+
+    def test_G2_positive_control_normal_ledger_path_unchanged(self):
+        """陽性對照：落帳正常時行為一個字都沒變（列消失、補償不被呼叫）。"""
+        p1 = self._route('app-g2')
+        p1_id = p1.id
+        client = self._client()
+        with patch(MOCK_SA_CLIENT, return_value=client):
+            with patch(COMPENSATE, autospec=True) as comp:
+                p1.unlink()
+        self.assertEqual(comp.call_count, 0)
+        self.env.flush_all()
+        self.env.cr.execute(
+            'SELECT id FROM woow_paas_platform_security_access_route '
+            'WHERE id = %s', (p1_id,))
+        self.assertIsNone(self.env.cr.fetchone(), 'route 列必須真的消失')
+
+    @mute_logger(LOG_SA, LOG_REAP)
+    def test_G3_return_value_semantics_unchanged_on_ledger_failure(self):
+        """回傳值語意**不得**為了補這格而提前 `return True`。
+
+        落帳失敗時 `_teardown_route_access` 應該讓 `OperationalError` 外拋
+        （#518：吞掉它 Odoo 的 `retrying()` 永遠看不到），而不是回 True 假裝
+        整趟成功。少了這條，「把 append 移前面」很容易被順手寫成「把 return
+        也移前面」。
+        """
+        sa = self.sa
+        with patch(MOCK_SA_CLIENT, return_value=self._client()):
+            with patch(SETTLE_TEARDOWN, autospec=True,
+                       side_effect=OperationalError('40001 serialization')):
+                with self.assertRaises(OperationalError):
+                    sa._teardown_route_access(
+                        app_id='app-g3', policy_ids=[], app_name='g3',
+                        hostname='g3.example', anchor_model=_ROUTE,
+                        anchor_id=999999, torn_down=[])
 
 
 # ====================================================================== #

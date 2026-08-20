@@ -927,7 +927,8 @@ class SecurityAccess(models.Model):
             _force_access_sync(route)._sync_access_to_operator()
 
     def _teardown_route_access(self, app_id, policy_ids, app_name, hostname,
-                               anchor_model=None, anchor_id=None):
+                               anchor_model=None, anchor_id=None,
+                               torn_down=None):
         """Tear down ONE route's Cloudflare Access app (+ reusable policies)
         when the route row no longer exists (deleted) or during SA cleanup. The
         route may be gone, so the caller passes the captured ids; we build a
@@ -978,6 +979,20 @@ class SecurityAccess(models.Model):
         # （[[post-commit-bookkeeping-rollback-unit]]）：記帳失敗**不得**翻轉
         # 回傳值——回 False 會讓呼叫端保住 `access_app_id`，而那個 id 指向一顆
         # CF 上已經不存在的 app，下一次 sync 拿它去 PUT 會 404。
+        # 🔴 #794 二輪覆核 [HIGH]：**「CF 已經拆成功」這個事實要在這裡就記下來，
+        # 不能等到 `return True`**。下面的落帳（`_settle_teardown_after_commit`）
+        # 明文 **re-raise `OperationalError`**（那是 #791 的刻意設計：讓例外一路
+        # 傳到 Odoo 的 `retrying()` 觸發整支 request 重播，**不要為了本格把它拿
+        # 掉**）⇒ 落帳一撞到並發例外，本方法就**不會** `return True` ⇒ 呼叫端的
+        # `if ok:` 不執行 ⇒ 補償清單是空的 ⇒ 補償當場空轉，而 CF 上的 app 已經
+        # 真的沒了、列正要回捲復活。那個結局與「補償根本沒被接上」在列狀態上
+        # **完全不可區分**。
+        #
+        # ⚠ 要改的是「**記錄副作用已發生**」的時機，不是例外傳播行為。回傳值
+        # 語意**不動**：它仍然表示「這一趟整體成不成功」（落帳失敗仍然回不了
+        # True，見 `test_G3_return_value_semantics_unchanged_on_ledger_failure`）。
+        if torn_down is not None and anchor_model and anchor_id:
+            torn_down.append((anchor_model, anchor_id))
         orphaned = result.get('orphaned_policy_ids') or []
         if orphaned:
             _logger.warning(
@@ -1171,6 +1186,10 @@ class SecurityAccess(models.Model):
         for route in access_routes:
             # 動作端：送出去的集合可以多帶帳本舊帳（挑 route 的 filter 仍是列狀態）
             app_id, pol_ids = route._access_teardown_payload_ids()
+            # 🔴 第五腿複用 SA route 的 `_teardown_route_access`，所以同型：
+            # `torn_down` 交給它在 operator 回 2xx 的當下就記（見那支方法內的
+            # [HIGH] 註解）——**不能**放在下面的 `if ok:` 裡，落帳撞到
+            # `OperationalError` 時 `ok` 拿不到 True。
             ok = self._teardown_route_access(
                 app_id=app_id,
                 policy_ids=pol_ids,
@@ -1178,16 +1197,13 @@ class SecurityAccess(models.Model):
                 hostname=route.hostname,
                 anchor_model=route._name,
                 anchor_id=route.id,
+                torn_down=torn_down,
             )
             if ok:
                 _internal_identity(route).access_app_id = False
                 for pol in route.access_policy_ids:
                     if pol.cf_policy_id:
                         pol.cf_policy_id = False
-                if torn_down is not None:
-                    # 真的對 CF 送出過並拆成功 ⇒ 交易若回捲，這一條就是「宣稱
-                    # 受保護、CF 上沒有 app」那一格（#794）。
-                    torn_down.append((route._name, route.id))
         if not self.tunnel_id:
             return
         try:
@@ -1708,6 +1724,9 @@ class SecurityAccessRoute(models.Model):
                     # 這裡。（舊版在這裡有一道 `if not sa.exists(): continue` 的防禦
                     # 碼，覆核判定為死碼——會誤導讀者的防禦碼本身就是陷阱，故移除，
                     # 理由留在這裡。）
+                    # `torn_down` 由 `_teardown_route_access` 在 operator 回
+                    # 2xx 當下就 append（見該方法的 [HIGH] 註解）；呼叫端
+                    # **不再**依賴回傳值來記這件事。
                     return info['sa']._teardown_route_access(
                         app_id=info['app_id'],
                         policy_ids=info['policy_ids'],
@@ -1715,6 +1734,7 @@ class SecurityAccessRoute(models.Model):
                         hostname=info['hostname'],
                         anchor_model=self._name,
                         anchor_id=route_id,
+                        torn_down=torn_down,
                     )
 
                 # pass 1：拆失敗 ⇒ 回滾保住列（列是真的重試錨點）。**第一條失敗
@@ -1724,7 +1744,6 @@ class SecurityAccessRoute(models.Model):
                     if not info['retry_anchor_is_row']:
                         continue
                     if _push(route_id, info):
-                        torn_down.append((self._name, route_id))
                         continue
                     failed = info['app_name'] or info['app_id']
                     break
@@ -1739,18 +1758,24 @@ class SecurityAccessRoute(models.Model):
                     if info['retry_anchor_is_row']:
                         continue
                     if _push(route_id, info):
-                        torn_down.append((self._name, route_id))
                         continue
                     Reap._record_teardown(
                         self._name, route_id, info['app_id'], info['policy_ids'])
+            # D1: deleting the last route drops the SA back to
+            # 'active_no_route'。
+            #
+            # ⚠ #794 二輪覆核 [LOW]：這一行**收進 `try` 裡**（位置仍在 savepoint
+            # 之外，與 develop 相同，所以既有語意不變）。理由是它落在 savepoint
+            # 已釋放、而 CF 那半早已變更之後——留在 `try` 外面的話，它自己拋例外
+            # 時整筆交易照樣被框架丟棄，而本腿的補償**收不到**，就成了同一個缺口
+            # 的第二個入口。
+            affected.exists()._recompute_route_state()
         except Exception:
             # 補償永遠不 raise、也不吞掉原本的錯誤（見 helper 的契約）。
             Reap._compensate_fail_open_after_rollback(
                 torn_down, _logger,
                 '[SA] route unlink (sa=%s)' % (affected.ids,))
             raise
-        # D1: deleting the last route drops the SA back to 'active_no_route'.
-        affected.exists()._recompute_route_state()
         return result
 
     # ------------------------------------------------------------------ #
