@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """repo-lint：把「假綠家族」pitfall 轉成機械 gate 的靜態檢查工具。
 
-三十一個 check 函式，歸為下列二十七條規則（其中兩條各由多個函式實作：第 7 條
+三十二個 check 函式，歸為下列二十八條規則（其中兩條各由多個函式實作：第 7 條
 capability-gate 由四個函式——slug 集合成員／admin-gui 錨點／gateway 文案錨點／
 Access 頁籤錨點；第 22 條
 security-rule-lifecycle 由兩個函式——ir.rule 的出生地／退役名字。這個一對多關係的顯式
@@ -289,7 +289,43 @@ security-rule-lifecycle 由兩個函式——ir.rule 的出生地／退役名字
                      （`base.group_user`）當存在性對照。
                      依據 docs/decisions/519-cloud-service-provision-gate.md
 
+28. internal-ctx-key-registry  「context key 當內部呼叫憑證」的註冊表 gate
+                     （#788，承 #536 岔路① 與普查 #787）。`/web/dataset/call_kw` 把
+                     呼叫端送來的 context **整包**換進 env ⇒ 任何拿 context key 當
+                     「這是內部呼叫」逃生門、而判定只看 truthy 的守衛，租戶一行 JSON
+                     就能開閘（#522 在 18.0 上實測成功）。這個 bug class 已反覆出現
+                     ≥5 次（#519／#522／#524／#536／#744 各修一批），而在本條之前
+                     **沒有任何機制**會在第 6 次出現時變紅——runtime 的 WARNING 只在
+                     既有 key 被偽造時才印，新寫的一把根本不經過它。
+                     三條判準：(i) registry 上 status=enforced 的 key，所有生產讀取點
+                     都要走 sentinel 身分判定（`is` / `is not`），不得有裸 truthy 布林
+                     guard；(ii) 這些 key 在 `src/`（`src/tests/` 除外）不得出現
+                     `key=True` / `{'key': True}` 之類 truthy 字面值——那是把閘退回可
+                     偽造形狀的另一半，而且**無聲**（sentinel 判定不認 True，只會在
+                     runtime 印一行 WARNING）；(iii) **涵蓋率**——任何被生產碼讀取且
+                     當 truthy 布林 guard 用的 context key 都必須在 registry 上，可標
+                     `pending`（已知未修，必附單號）／`not-security`（非安全決策）豁免，
+                     但要寫理由。🔴 (iii) 才是本條的核心：少了它，新增的 key 不登記就
+                     等於不受管，而「不登記」正是這個 bug class 每一次復發的形狀。
+                     🔴 三條都是否定性判準（「找不到違規」），所以各配陽性對照：
+                     (a) 一個 `context.get` 都沒掃到 ＝ 掃描器／範圍壞了，不是乾淨；
+                     (b) enforced 條目的 sentinel 符號必須真的在 `defined_in` 定義、
+                     登記的 reader 必須存在且真的做 `is` 比對、而且該 key 至少要有一個
+                     判定點（#536 三把**沒有任何直接讀取點**，只經
+                     `_is_sync_control(env, KEY)`——少了這格它們會恆綠）；
+                     (c) 豁免條目的定義性質就是「現在是裸 truthy 閘」⇒ 掃描器必須找得
+                     到它的布林 guard 讀取點，找不到＝掃描器壞了或這把已被修好（請改
+                     status）。沒有 (c)，掃描器回空集合時 (iii) 永遠是綠的。
+                     ⚠ 覆蓋邊界：只認 `<x>.context.get(K)` / `._context.get(K)` /
+                     `.context[K]` 三種載體且 K 解得出字面值；只管 **truthy 布林閘**
+                     ——#787 B 段的「值注入」型偽造面（`sa_unlinked_cf_policy_ids` /
+                     `mcp_admin_password` / `bootstrap_owner_partner_id`）形態與修法都
+                     不同，不在本條範圍，把本條的綠讀成「所有 context 偽造面都守住了」
+                     是錯的。
+                     依據 docs/decisions/519-cloud-service-provision-gate.md
+
 用法：
+
   scripts/audit/repo-lint.py --all                # 全 repo 掃描（CI / merge 前手動）
   scripts/audit/repo-lint.py --update-baseline    # 接受現況為新 baseline
   scripts/audit/repo-lint.py --hook               # PostToolUse hook 模式（stdin 吃 hook JSON，只掃該檔）
@@ -3637,6 +3673,703 @@ REPO_LINT_REGISTRY_FILES = (REPO_LINT_SELF_REL, REPO_LINT_REGISTRY_BASELINE_REL)
 #    刪掉任何一個都會紅，兩個一起刪才會綠——而那是一個大到瞞不住的 diff。
 REPO_LINT_FLOOR_FN = "repo_lint_registry_floor"
 
+# --------------------------------------------------------------------------- #
+#  第 28 條：內部憑證 context key 註冊表（#788；承 #536 岔路①、普查 #787）        #
+# --------------------------------------------------------------------------- #
+#
+# 反模式：拿一個 context key 當「這是內部呼叫」的憑證，而判定只看 truthy。
+# `/web/dataset/call_kw` 把呼叫端送來的 context **整包**換進 env
+# （`odoo/api.py::call_kw`，位置參數＝取代不是 merge）⇒ 任何 `base.group_user`
+# 租戶都能用一行 JSON `context={"<key>": true}` 把那個閘打開。#522 在 18.0 上實測
+# 成功過，#536 在 SA 家族又修了一批——這個 bug class 至今已反覆出現 ≥5 次，而在
+# 本條之前**沒有任何機制**會在第 6 次出現時變紅：runtime 的 WARNING 只在既有的
+# key 被偽造時才印，新寫的一把根本不經過它。
+#
+# 正解是「值的物件身分」而不是「值的真假」：模組私有 sentinel 實例，JSON／XML-RPC
+# 的型別集合表達不出它（見 INTERNAL_CTX_KEY_DOC「為什麼值必須是 sentinel、不能是
+# True」）。本條把那個紀律變成機械判準，三件事一起守：
+#
+#   (i)   registry 上 status=enforced 的 key，其**所有生產讀取點**都要走 sentinel
+#         身分判定（`is` / `is not`），不得出現裸 truthy 布林 guard。
+#   (ii)  同上這些 key 在 `src/`（生產碼）不得出現 `key=True` ／ `{'key': True}`
+#         之類的 truthy 字面值——那是「值不是 sentinel」的另一半，寫了就等於自己
+#         把閘退回可偽造的形狀（`src/tests/` 豁免：測試就是要偽造 payload）。
+#   (iii) **涵蓋率**：任何被生產碼讀取、且拿來當 truthy 布林 guard 的 context key
+#         都必須在 registry 上。可標 `pending`／`not-security` 豁免，但要寫理由，
+#         而寫理由這個動作會出現在 diff 裡被覆核。**沒有 (iii) 這條 gate 就等於
+#         沒做**：新增一把 key 只要不登記就完全不受管，而那正是本條要防的形態。
+#
+# 🔴 每一條都配陽性對照（見 check 內的 (a)/(b)/(c)），理由是這條 gate 的所有判準
+#    都是**否定性**的（「找不到違規」）：掃描器壞掉、符號改名、範圍掃錯，輸出都與
+#    「真的乾淨」一模一樣。對照的形狀抄第 27 條的 `_SH_SUB_SCAN_CONTROL`。
+INTERNAL_CTX_KEY_DOC = "docs/decisions/519-cloud-service-provision-gate.md"
+
+# 生產碼的範圍。`src/tests/` 排除：測試偽造 payload 正是它的工作（#788 明列）。
+# `src/migrations/` **刻意包含**——migration 在升級時真的會跑，它是生產碼。
+INTERNAL_CTX_KEY_SCAN_ROOT = "src"
+INTERNAL_CTX_KEY_SKIP_PREFIXES = ("src/tests/",)
+
+# 註冊表。
+#
+# 🔴 刻意是 in-code 常數而不是 `baselines/*.txt`：`--update-baseline` 會一次重產
+#    **全部** baseline 檔（第 17 條檔頭已載明同樣的理由），把 registry 放進去等於
+#    讓「新增一把未登記的鑰匙」可以被一句 `--update-baseline` 靜默收編——那正好把
+#    (iii) 的價值歸零。形狀抄第 26 條的 `PROVISION_SENTINEL_ALLOWLIST`。
+#
+# 欄位語意：
+#   status      'enforced'     —— 已 sentinel 化，(i)(ii) 全套生效。
+#               'pending'      —— 已知的同形態裸 truthy 閘，**尚未**修（必附 issue）。
+#                                 豁免 (i)(ii)，但仍受 (iii) 管：它在清單上、攤在
+#                                 diff 裡，修好一把就把 status 翻成 enforced。
+#               'not-security' —— 讀了、也是 truthy 閘，但不是安全決策（必附理由）。
+#   sentinel    enforced 專用：模組私有 sentinel 的符號名。
+#   defined_in  enforced 專用：sentinel（與 reader）的定義檔，陽性對照的錨點。
+#   reader      enforced 選用：把 sentinel 判定收斂成一支私有函式時填它。有些 key
+#               **沒有任何直接的 `context.get`** 讀取點（#536 三把走
+#               `_is_sync_control(env, KEY)`），此時它是唯一的判定點來源——沒有這
+#               個欄位，那三把會因為「掃不到讀取點」而恆綠。
+#   issue       單號（pending 必填）。
+#   why         為什麼是這個 status。豁免必填，enforced 也寫（給讀 diff 的人）。
+INTERNAL_CTX_KEY_REGISTRY = {
+    # --- #536：SA 的三把 sync-control 開關（PR #779 已 sentinel 化） -------- #
+    "sa_skip_route_sync": {
+        "status": "enforced",
+        "sentinel": "_INTERNAL_SYNC_CONTROL",
+        "defined_in": "src/models/security_access.py",
+        "reader": "_is_sync_control",
+        "issue": "#536",
+        "why": "抑制對 operator 的宣告式路由推送；偽造 ⇒ DB 標 is_protected 而 CF "
+               "從未建 Access app（fail-open）。",
+    },
+    "sa_rule_replace": {
+        "status": "enforced",
+        "sentinel": "_INTERNAL_SYNC_CONTROL",
+        "defined_in": "src/models/security_access.py",
+        "reader": "_is_sync_control",
+        "issue": "#536",
+        "why": "整組 rule 替換途中跳過「≥1 include」檢查；偽造 ⇒ 租戶可留下 0 條 "
+               "include 的 policy。",
+    },
+    "sa_force_access_sync": {
+        "status": "enforced",
+        "sentinel": "_INTERNAL_SYNC_CONTROL",
+        "defined_in": "src/models/security_access.py",
+        "reader": "_is_sync_control",
+        "issue": "#536",
+        "why": "繞過 Access 推送 liveness gate 的狀態那一半；偽造 ⇒ suspended／"
+               "deleting 的 SA 仍能把自己 route 的 Access 設定推去 Cloudflare。",
+    },
+    # --- #522 / #524 / #744：身分錨點寫入權 -------------------------------- #
+    "sa_internal_identity_write": {
+        "status": "enforced",
+        "sentinel": "_INTERNAL_IDENTITY_WRITE",
+        "defined_in": "src/models/security_access.py",
+        "issue": "#522",
+        "why": "SA 身分錨點（tunnel_id／canonical_name…）的唯一寫入豁免；#522 在 "
+               "18.0 上實測「裸 truthy 版」可由租戶 RPC 偽造成功。",
+    },
+    "sa_internal_prefix_write": {
+        "status": "enforced",
+        "sentinel": "_INTERNAL_IDENTITY_WRITE",
+        "defined_in": "src/models/security_access.py",
+        "issue": "#522",
+        "why": "subdomain_prefix 的 data-repair 豁免。刻意與身分錨點分成兩把鑰匙："
+               "改名的 migration 不該因此也能搬 tunnel id。",
+    },
+    "woow_internal_provision": {
+        "status": "enforced",
+        "sentinel": "_INTERNAL_PROVISION",
+        "defined_in": "src/models/cloud_service.py",
+        "issue": "#519",
+        "why": "cloud_service 建立閘。開閘路徑另受第 26 條 allowlist 管制。",
+    },
+    "woow_cs_access_identity_write": {
+        "status": "enforced",
+        "sentinel": "_INTERNAL_CS_ACCESS_IDENTITY_WRITE",
+        "defined_in": "src/models/cloud_service.py",
+        "issue": "#744",
+        "why": "CS Access 身分錨點（access_app_id）的唯一寫入豁免；偽造 ⇒ 之後的 "
+               "sync／teardown 會去動別人帳號裡的 Access application。",
+    },
+    "woow_smart_home_platform_order": {
+        "status": "enforced",
+        "sentinel": "_PLATFORM_ORDER",
+        "defined_in": "src/models/smart_home.py",
+        "issue": "#524",
+        "why": "smart_home 只能從平台開通流程建立的閘。",
+    },
+    "woow_smart_home_internal_identity_write": {
+        "status": "enforced",
+        "sentinel": "_INTERNAL_IDENTITY_WRITE",
+        "defined_in": "src/models/smart_home.py",
+        "issue": "#524",
+        "why": "SH 身分錨點的唯一寫入豁免（形狀同 #522）。",
+    },
+    "woow_sm_route_access_identity_write": {
+        "status": "enforced",
+        "sentinel": "_INTERNAL_SM_ROUTE_IDENTITY_WRITE",
+        "defined_in": "src/models/smart_home_route.py",
+        "issue": "#744",
+        "why": "SH route 的 Access 身分錨點寫入豁免（形狀同 #522／#744）。",
+    },
+    # --- #787 A 段：同形態但**尚未**修的 5 把（另案逐把驗可達性後再修） ----- #
+    #
+    # 🔴 掛在這裡的目的不是放行，是**攤開**：它們原本只活在一張 issue 表裡，沒有
+    #    任何機制會讓讀 code 的人知道。status 從 pending 翻成 enforced 那一刻，
+    #    (i)(ii) 自動對它生效——修好一把的驗收條件因此是機械的，不靠人記得。
+    "sm_route_cascade_unlink": {
+        "status": "pending",
+        "issue": "#787",
+        "why": "#787 A 段：SH cascade 刪除用的旁路，繞過 primary route 不可刪的 "
+               "UserError。ACL 上 smart_home_route 對 base.group_user 是 unlink=0，"
+               "可達性未實測 ⇒ 先追蹤不動（#787 明列先驗再修）。",
+    },
+    "sm_skip_access_sync": {
+        "status": "pending",
+        "issue": "#787",
+        "why": "#787 A 段：抑制 route create／write 後的 Access 宣告式推送（fail-open）。"
+               "生產側**只讀不設**（無 production setter），可達性未實測。",
+    },
+    "sm_force_access_sync": {
+        "status": "pending",
+        "issue": "#787",
+        "why": "#787 A 段：SA `sa_force_access_sync` 的 SH 同構版，繞過 route "
+               "liveness gate 的狀態那一半。可達性未實測。",
+    },
+    "cs_skip_access_sync": {
+        "status": "pending",
+        "issue": "#787",
+        "why": "#787 A 段：抑制 cloud_service.write() 的 access sync（#745）。ACL 上"
+               "租戶對 cloud_service 有全 CRUD ⇒ **最可能可達**的一把，但仍未實測。"
+               "生產側只讀不設。",
+    },
+    "woow_force_issue": {
+        "status": "pending",
+        "issue": "#787",
+        "why": "#787 A 段：讓帶 woow_skip_upstream_hook 的發票仍真的向 ECPay 開立"
+               "（正當 setter 是 ecpay_invoice_cron）。account.move 是 ERP 模型，"
+               "租戶能否經 RPC 觸達未驗證 ⇒ 🔴 不得當已坐實的後門轉述。",
+    },
+    # --- 非安全決策 -------------------------------------------------------- #
+    "skip_ai_reply": {
+        "status": "not-security",
+        "why": "discuss_channel.message_post 的重複 AI 回覆抑制（SSE handler 已處理）。"
+               "偽造的後果是呼叫者自己那則訊息不觸發 AI 回覆——不繞過任何授權、狀態或"
+               "配額判定，也不影響別的租戶。",
+    },
+    "from_paas_chat": {
+        "status": "not-security",
+        "why": "同上：PaaS chat API 走 SSE 串流自行產生回覆，這裡先跳過以免阻塞 HTTP "
+               "response。偽造只影響呼叫者自己那一則訊息的回覆路徑。",
+    },
+}
+
+_INTERNAL_CTX_KEY_STATUSES = ("enforced", "pending", "not-security")
+# 豁免（非 enforced）的兩種 status。它們的共同定義性質就是「這把鑰匙**現在**是裸
+# truthy 閘」⇒ 掃描器必須在生產碼裡找得到它的布林 guard 讀取點。找不到有兩個可能：
+# 掃描器壞了（假綠），或這把已經被修好／刪掉（清單腐爛）。兩者都要有人來看。
+_INTERNAL_CTX_KEY_EXEMPT_STATUSES = ("pending", "not-security")
+
+
+def _internal_ctx_key_watches(rel):
+    """hook 分派判準：與 check 的掃描範圍共用同一個定義，兩者不可能分岔。
+
+    registry 住在 repo-lint.py 自己，所以動它也要重跑（改 registry ↔ 改 src 是同一
+    條不變式的兩端，而壞掉的常常是另一端）。
+    """
+    if rel == REPO_LINT_SELF_REL:
+        return True
+    return (rel.startswith(INTERNAL_CTX_KEY_SCAN_ROOT + "/")
+            and rel.endswith(".py")
+            and not rel.startswith(INTERNAL_CTX_KEY_SKIP_PREFIXES))
+
+
+def _internal_ctx_key_prod_files(root):
+    """生產碼（src/ 扣掉 src/tests/）的 .py 清單，rel path 排序。"""
+    files = []
+    base = os.path.join(root, INTERNAL_CTX_KEY_SCAN_ROOT)
+    for dirpath, dirnames, filenames in os.walk(base):
+        dirnames[:] = [d for d in dirnames if d not in ("__pycache__", ".git")]
+        for fn in filenames:
+            if not fn.endswith(".py"):
+                continue
+            fp = os.path.join(dirpath, fn)
+            rel = os.path.relpath(fp, root).replace(os.sep, "/")
+            if rel.startswith(INTERNAL_CTX_KEY_SKIP_PREFIXES):
+                continue
+            files.append((rel, fp))
+    return sorted(files)
+
+
+def _ctx_parent_map(tree):
+    parent = {}
+    for node in ast.walk(tree):
+        for child in ast.iter_child_nodes(node):
+            parent[child] = node
+    return parent
+
+
+def _ctx_func_owner_map(tree):
+    """node → 包住它的最內層 FunctionDef（沒有就不在表裡）。"""
+    owner = {}
+    for fn in ast.walk(tree):
+        if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        for node in ast.walk(fn):
+            owner[node] = fn          # 由外而內走，最內層最後寫入 ⇒ 勝出
+    return owner
+
+
+def _ctx_module_str_consts(tree):
+    """module 層 `NAME = '字面字串'` 的對照表。"""
+    consts = {}
+    for node in tree.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        if not (isinstance(node.value, ast.Constant)
+                and isinstance(node.value.value, str)):
+            continue
+        for target in node.targets:
+            if isinstance(target, ast.Name):
+                consts[target.id] = node.value.value
+    return consts
+
+
+def _ctx_context_read(node):
+    """這個節點是不是「從 context 讀一個 key」？是就回傳 key 的 AST 節點。
+
+    認兩種載體：`<x>.context.get(K)` / `<x>._context.get(K)` 與 `<x>.context[K]`。
+    ⚠ 已知邊界：把 `self.env.context` 先存成區域變數再 `.get()` 掃不到。今天全 repo
+    沒有這種寫法；真的出現時本條會對那一處沉默（不是誤報），而 (iii) 的涵蓋率也就
+    看不到它——這是本條**唯一**已知的假陰性形狀，刻意寫在這裡而不是假裝沒有。
+    """
+    if isinstance(node, ast.Call):
+        func = node.func
+        if (isinstance(func, ast.Attribute) and func.attr == "get"
+                and isinstance(func.value, ast.Attribute)
+                and func.value.attr in ("context", "_context")
+                and node.args):
+            return node.args[0]
+        return None
+    if isinstance(node, ast.Subscript):
+        if (isinstance(node.value, ast.Attribute)
+                and node.value.attr in ("context", "_context")):
+            return node.slice
+        return None
+    return None
+
+
+def _ctx_resolve_key(key_node, local_consts, global_consts):
+    """key 的 AST 節點 → 字串。解不出來回 None（那不是違規，是「本條看不到」）。"""
+    if isinstance(key_node, ast.Constant) and isinstance(key_node.value, str):
+        return key_node.value
+    if isinstance(key_node, ast.Name):
+        if key_node.id in local_consts:
+            return local_consts[key_node.id]
+        # 跨檔：`from .security_access import _CTX_SKIP_ROUTE_SYNC` 這種 import 進來
+        # 的 key 常數。名字撞號（同名不同值）時放棄解析，寧可看不到也不要指錯人。
+        return global_consts.get(key_node.id)
+    return None
+
+
+def _ctx_bool_only(node, parent):
+    """這個節點的**值**是不是只被當真假值消費？
+
+    認：`if/while/三元/assert` 的 test、`not X`、`bool(X)`、comprehension 的 if，
+    以及**本身處在上述位置的** BoolOp 的成員。
+
+    🔴 BoolOp 要遞迴看外層而不是直接算數，關鍵在區分這兩者：
+        `if not ctx.get(K) and ...:`     → BoolOp 在 If.test ⇒ 布林 guard（要管）
+        `for x in ctx.get(K) or []:`     → BoolOp 在 For.iter ⇒ 值的使用（不管）
+    後者是 #787 B 段的「值注入」型偽造面，形態不同、修法不同，刻意不在本條範圍。
+    """
+    p = parent.get(node)
+    if p is None:
+        return False
+    if isinstance(p, ast.UnaryOp) and isinstance(p.op, ast.Not):
+        return True
+    if (isinstance(p, ast.Call) and isinstance(p.func, ast.Name)
+            and p.func.id == "bool" and p.args and p.args[0] is node):
+        return True
+    if isinstance(p, (ast.If, ast.While, ast.IfExp)) and p.test is node:
+        return True
+    if isinstance(p, ast.Assert) and p.test is node:
+        return True
+    if isinstance(p, ast.comprehension) and any(i is node for i in p.ifs):
+        return True
+    if isinstance(p, ast.BoolOp):
+        return _ctx_bool_only(p, parent)
+    return False
+
+
+def _ctx_is_compare(node, parent, sentinel):
+    """節點是不是 `X is <sentinel>` / `X is not <sentinel>` 的一邊？"""
+    p = parent.get(node)
+    if not (isinstance(p, ast.Compare) and len(p.ops) == 1
+            and isinstance(p.ops[0], (ast.Is, ast.IsNot))):
+        return False
+    for other in [p.left] + list(p.comparators):
+        if other is node:
+            continue
+        if isinstance(other, ast.Name) and other.id == sentinel:
+            return True
+    return False
+
+
+def _ctx_assigned_then_compared(node, parent, owner, sentinel):
+    """`value = ctx.get(K)` ＋同一支函式裡 `value is <sentinel>` 也算判定。
+
+    #536 的 `_is_sync_control` 就是這個形狀（那支的 key 是參數、解不出字面值，所以
+    今天走不到這裡）。收它是因為它是安全且常見的寫法；不收會逼人為了過 gate 把
+    可讀的兩行改寫成一行。
+    """
+    p = parent.get(node)
+    if not (isinstance(p, ast.Assign) and len(p.targets) == 1
+            and isinstance(p.targets[0], ast.Name)):
+        return False
+    var = p.targets[0].id
+    scope = owner.get(node)
+    if scope is None:
+        return False
+    for sub in ast.walk(scope):
+        if not (isinstance(sub, ast.Compare) and len(sub.ops) == 1
+                and isinstance(sub.ops[0], (ast.Is, ast.IsNot))):
+            continue
+        names = {n.id for n in [sub.left] + list(sub.comparators)
+                 if isinstance(n, ast.Name)}
+        if var in names and sentinel in names:
+            return True
+    return False
+
+
+def _ctx_truthy_const(node):
+    """truthy 字面值？（True／1／非空字串…；False／0／None 不算）"""
+    return isinstance(node, ast.Constant) and bool(node.value)
+
+
+def _internal_ctx_key_scan(root):
+    """掃一次生產碼，回傳本條三個判準共用的**唯一**事實來源。
+
+    三條判準共用同一個掃描入口是刻意的：分成兩支各自走訪的話，「(iii) 掃得到、
+    (i) 掃不到」這種分岔會讓其中一條靜默恆綠（第 1／3 條 baseline 的同款教訓——
+    check 與 --update-baseline 必須共用唯一入口）。
+    """
+    facts = {
+        "parse_errors": [],     # [(rel, exc)]
+        "reads": [],            # [(key, rel, lineno, node, parent, owner, tree)]
+        "truthy": [],           # [(key, rel, lineno, shape)]
+        "reader_calls": [],     # [(reader_name, key, rel, lineno)]
+        "files": 0,
+        "read_sites": 0,        # 解不出 key 的也算（存在性對照用）
+        "sentinel_defs": {},    # rel → {module 層被賦值的名字}
+        "func_defs": {},        # rel → {函式名: FunctionDef}
+        "text": {},             # rel → 原始碼
+    }
+    files = _internal_ctx_key_prod_files(root)
+    parsed = []
+    for rel, fp in files:
+        try:
+            with open(fp, encoding="utf-8") as f:
+                src = f.read()
+            tree = ast.parse(src)
+        except (OSError, SyntaxError, ValueError) as exc:
+            facts["parse_errors"].append((rel, exc))
+            continue
+        facts["files"] += 1
+        facts["text"][rel] = src
+        parsed.append((rel, tree))
+
+    # 第一輪：全域的 key 常數對照表（跨檔 import 的 `_CTX_*` 要解得出來）。同名不同
+    # 值時整個名字作廢——指錯人比看不到更糟。
+    global_consts, clashed = {}, set()
+    for rel, tree in parsed:
+        for name, value in _ctx_module_str_consts(tree).items():
+            if name in global_consts and global_consts[name] != value:
+                clashed.add(name)
+            global_consts[name] = value
+    for name in clashed:
+        global_consts.pop(name, None)
+
+    readers = {e.get("reader") for e in INTERNAL_CTX_KEY_REGISTRY.values()
+               if e.get("reader")}
+
+    # 第二輪：實際採集。
+    for rel, tree in parsed:
+        parent = _ctx_parent_map(tree)
+        owner = _ctx_func_owner_map(tree)
+        local_consts = _ctx_module_str_consts(tree)
+        facts["sentinel_defs"][rel] = {
+            t.id for n in tree.body if isinstance(n, ast.Assign)
+            for t in n.targets if isinstance(t, ast.Name)}
+        facts["func_defs"][rel] = {
+            n.name: n for n in ast.walk(tree)
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
+        for node in ast.walk(tree):
+            key_node = _ctx_context_read(node)
+            if key_node is not None:
+                facts["read_sites"] += 1
+                key = _ctx_resolve_key(key_node, local_consts, global_consts)
+                if key is not None:
+                    facts["reads"].append(
+                        (key, rel, node.lineno, node, parent, owner))
+                continue
+            if isinstance(node, ast.Call):
+                # (ii) 的一半：`with_context(key=True)` 這類 keyword truthy 字面值。
+                for kw in node.keywords:
+                    if (kw.arg in INTERNAL_CTX_KEY_REGISTRY
+                            and _ctx_truthy_const(kw.value)):
+                        facts["truthy"].append(
+                            (kw.arg, rel, node.lineno,
+                             "%s=%r" % (kw.arg, kw.value.value)))
+                # reader 判定點：`_is_sync_control(env, _CTX_SKIP_ROUTE_SYNC)`
+                fname = (node.func.id if isinstance(node.func, ast.Name)
+                         else node.func.attr if isinstance(node.func, ast.Attribute)
+                         else None)
+                if fname in readers:
+                    for arg in list(node.args) + [k.value for k in node.keywords]:
+                        key = _ctx_resolve_key(arg, local_consts, global_consts)
+                        if key is not None:
+                            facts["reader_calls"].append(
+                                (fname, key, rel, node.lineno))
+            elif isinstance(node, ast.Dict):
+                # (ii) 的另一半：`{'key': True}` 與 `**{KEY_CONST: True}`。
+                for k_node, v_node in zip(node.keys, node.values):
+                    if k_node is None or not _ctx_truthy_const(v_node):
+                        continue
+                    key = _ctx_resolve_key(k_node, local_consts, global_consts)
+                    if key in INTERNAL_CTX_KEY_REGISTRY:
+                        facts["truthy"].append(
+                            (key, rel, node.lineno,
+                             "{%r: %r}" % (key, v_node.value)))
+    return facts
+
+
+def _internal_ctx_key_registry_shape():
+    """registry 自己的結構自檢。壞掉的 registry 會讓下面三條判準無聲失去鑑別力。"""
+    problems = []
+    for key, entry in sorted(INTERNAL_CTX_KEY_REGISTRY.items()):
+        where = "`INTERNAL_CTX_KEY_REGISTRY['%s']`" % key
+        if not isinstance(entry, dict):
+            problems.append("%s 必須是 dict（現在是 %r）" % (where, entry))
+            continue
+        status = entry.get("status")
+        if status not in _INTERNAL_CTX_KEY_STATUSES:
+            problems.append(
+                "%s 的 status=%r 不在 %s ——status 決定 (i)(ii) 對它生不生效，打錯字"
+                "會靜默變成豁免" % (where, status, "／".join(_INTERNAL_CTX_KEY_STATUSES)))
+            continue
+        if not (entry.get("why") or "").strip():
+            problems.append(
+                "%s 沒有寫 `why`。豁免與強制都要寫理由——#788 要的就是「豁免這個動作"
+                "會出現在 diff 裡被覆核」，沒有理由的條目讓那件事失效" % where)
+        if status == "enforced":
+            for field in ("sentinel", "defined_in"):
+                if not (entry.get(field) or "").strip():
+                    problems.append(
+                        "%s status=enforced 卻沒有 `%s`——那是本條陽性對照的錨點，"
+                        "少了它「掃不到違規」與「掃描器壞掉」無法區分" % (where, field))
+        elif status == "pending" and not (entry.get("issue") or "").strip():
+            problems.append(
+                "%s status=pending 卻沒有 `issue`。pending＝已知未修，沒有單號就沒有"
+                "任何東西會讓它被修——那是永久豁免換一個名字" % where)
+    return problems
+
+
+def check_internal_ctx_key_registry(root):
+    """#788：內部憑證 context key 必須走私有 sentinel，且全部登記在案。
+
+    守的 bug class：拿 context key 當「這是內部呼叫」的憑證、判定只看 truthy。
+    `call_kw` 把呼叫端 context 整包換進 env ⇒ 租戶一行 JSON 就能開閘（#522 實測
+    成功）。#522／#524／#519／#744／#536 各修過一批，第 6 次不會有任何訊號——
+    runtime WARNING 只在既有 key 被偽造時印，**新寫的一把根本不經過它**。
+
+    三條判準（(iii) 是核心：少了它，新 key 不登記就等於不受管）：
+
+    (i)   enforced key 的所有生產讀取點都走 sentinel 身分判定（`is` / `is not`），
+          不得有裸 truthy 布林 guard。
+    (ii)  enforced key 在生產碼不得出現 truthy 字面值（`key=True`／`{'key': True}`）
+          ——那是把閘退回可偽造形狀的另一半。`src/tests/` 豁免。
+    (iii) 任何被生產碼讀取、且當 truthy 布林 guard 的 context key 都必須在 registry
+          上；可標 pending／not-security 豁免，但要寫理由。
+
+    陽性對照（否定性結論必配，見 memory: feedback_negative_verification_needs_positive_control）：
+      (a) 掃描本身：一個 context 讀取點都沒掃到 ＝ 掃描器／範圍壞了，不是乾淨。
+      (b) enforced：sentinel 符號必須真的在 `defined_in` 定義、reader（若宣告）必須
+          存在且真的拿 sentinel 做 `is` 比對、而且該 key 至少要有一個判定點。三者
+          任一不成立，「找不到裸 truthy 讀取點」這個綠燈就是假的。
+      (c) 豁免條目：它們的定義性質就是「現在是裸 truthy 閘」⇒ 掃描器必須找得到它的
+          布林 guard 讀取點。找不到 ⇒ 掃描器壞了，或這把已被修好／刪掉（清單腐爛）。
+          這一格讓 (iii) 不可能做成恆綠：判準若只有「有沒有多出來的 key」，掃描器
+          回空集合時它永遠是綠的。
+
+    ⚠ 覆蓋邊界（刻意寫下來，不假裝沒有）：
+      * 只認 `<x>.context.get(K)` / `<x>._context.get(K)` / `<x>.context[K]` 三種載體，
+        且 K 要解得出字面值（module 層常數會跨檔解析）。先把 context 存成區域變數
+        再讀的寫法掃不到。
+      * 只管 **truthy 布林閘**。#787 B 段的「值注入」型偽造面（`sa_unlinked_cf_policy_ids`
+        / `mcp_admin_password` / `bootstrap_owner_partner_id`）形態不同、修法不同，
+        不在本條範圍——把本條的綠讀成「所有 context 偽造面都守住了」是錯的。
+      * (ii) 只認**字面值**：`key=True` 與 `{'key': True}` 兩種載體。動態組出來的
+        dict 再展開（`ctx = {...}; rec.with_context(**ctx)`）看不到——那需要 dataflow
+        分析，而本條刻意停在 AST 形態比對。這不是漏洞的入口（sentinel 判定照樣不認
+        那個值，閘不會開），是「本條抓不到那個寫法」的誠實邊界：真正的後果是有人那樣
+        寫時本條不會提醒他「這一行不會開閘」。
+      * 只看**平台自己的** src/。第三方 addon 的 context key 不在管轄內。
+    依據 docs/decisions/519-cloud-service-provision-gate.md
+    """
+    violations = []
+    if not _addon_source_tree_present(root):
+        return violations          # 不是本 addon 的 root，本條沒有輸入（見上方註解）
+
+    ref = "見 %s 與 #536／#787／#788" % INTERNAL_CTX_KEY_DOC
+    self_rel = REPO_LINT_SELF_REL
+
+    for problem in _internal_ctx_key_registry_shape():
+        violations.append("%s：%s（%s）" % (self_rel, problem, ref))
+
+    facts = _internal_ctx_key_scan(root)
+
+    # 🔴 parse 失敗當違規，不當無事：本條的所有判準都是否定性的，讀不到的檔案
+    #    「沒有違規」與「有違規但看不到」輸出完全相同。
+    for rel, exc in facts["parse_errors"]:
+        violations.append(
+            "%s：讀不到或 parse 失敗（%s）——本條對這個檔失去鑑別力，而輸出與「掃過"
+            "而且乾淨」完全相同（%s）" % (rel, exc, ref))
+
+    # (a) 掃描存在性對照。
+    if facts["read_sites"] == 0:
+        violations.append(
+            "%s：`check_internal_ctx_key_registry` 掃了 %d 個生產檔卻連一個 "
+            "`context.get(...)` 都沒看到——掃描範圍或 AST 判準壞了，這條的「零違規」"
+            "是假的（%s）" % (self_rel, facts["files"], ref))
+
+    bool_sites = {}        # key → [(rel, lineno)]  只收「當真假值消費」的讀取點
+    for key, rel, lineno, node, parent, owner in facts["reads"]:
+        if _ctx_bool_only(node, parent):
+            bool_sites.setdefault(key, []).append((rel, lineno))
+
+    reads_by_key = {}
+    for key, rel, lineno, node, parent, owner in facts["reads"]:
+        reads_by_key.setdefault(key, []).append((rel, lineno, node, parent, owner))
+
+    judged = {}            # key → 判定點數（sentinel 比對 or reader 呼叫）
+    for key, entry in sorted(INTERNAL_CTX_KEY_REGISTRY.items()):
+        if entry.get("status") != "enforced":
+            continue
+        sentinel = entry.get("sentinel") or ""
+        defined_in = entry.get("defined_in") or ""
+        count = 0
+        # (i) 逐個讀取點判形狀。
+        for rel, lineno, node, parent, owner in reads_by_key.get(key, []):
+            if _ctx_is_compare(node, parent, sentinel):
+                count += 1
+                continue
+            if _ctx_assigned_then_compared(node, parent, owner, sentinel):
+                count += 1
+                continue
+            if _ctx_bool_only(node, parent):
+                violations.append(
+                    "%s:%d：`%s` 是 registry 上 status=enforced 的內部憑證 key，卻被"
+                    "當**裸 truthy** 布林 guard 讀取。`call_kw` 把呼叫端 context 整包"
+                    "換進 env ⇒ 任何租戶用 `context={\"%s\": true}` 就能開這個閘"
+                    "（#522 實測成功過）。判準必須是值的**物件身分**："
+                    "`... is %s`（%s）"
+                    % (rel, lineno, key, key, sentinel or "<sentinel>", ref))
+            else:
+                violations.append(
+                    "%s:%d：`%s` 是 status=enforced 的內部憑證 key，但這個讀取點既沒有"
+                    "拿 `%s` 做 `is` 比對，也不是「先賦值再於同函式內比對」的形狀——"
+                    "本條判定不出它是不是 sentinel 判定，因此不放行。改成顯式 `is` "
+                    "比對，或把判定收斂進一支私有 reader 並登記在 registry 的 "
+                    "`reader` 欄位（%s）"
+                    % (rel, lineno, key, sentinel or "<sentinel>", ref))
+        count += sum(1 for _f, k, _r, _l in facts["reader_calls"] if k == key)
+        judged[key] = count
+
+        # (b) 陽性對照：sentinel 符號、reader、判定點三者都要真的在。
+        if defined_in not in facts["sentinel_defs"]:
+            violations.append(
+                "%s：registry 說 `%s` 的 sentinel 定義在 `%s`，但掃描範圍裡沒有這個"
+                "生產檔（改名／搬家／打錯字都會讓本條對這把鑰匙恆綠）（%s）"
+                % (self_rel, key, defined_in, ref))
+        elif sentinel not in facts["sentinel_defs"][defined_in]:
+            violations.append(
+                "%s：`%s` 在 `%s` 裡找不到 module 層的 `%s`。這個符號名就是本條的"
+                "判準——它一消失，所有 `is` 比對都比不中，gate 會掃不到任何東西而"
+                "**恆綠**。改名請同步改 registry，刪除請連同這個條目一起刪並說明"
+                "（%s）" % (self_rel, key, defined_in, sentinel, ref))
+        reader = entry.get("reader")
+        if reader:
+            fn = facts["func_defs"].get(defined_in, {}).get(reader)
+            if fn is None:
+                violations.append(
+                    "%s：registry 說 `%s` 的判定收斂在 `%s` 的 `%s()`，但那支函式不"
+                    "存在。有些 key **只**經由 reader 判定、沒有任何直接讀取點，"
+                    "reader 一消失本條就對它完全沉默（%s）"
+                    % (self_rel, key, defined_in, reader, ref))
+            else:
+                ok = any(isinstance(n, ast.Compare) and len(n.ops) == 1
+                         and isinstance(n.ops[0], (ast.Is, ast.IsNot))
+                         and any(isinstance(o, ast.Name) and o.id == sentinel
+                                 for o in [n.left] + list(n.comparators))
+                         for n in ast.walk(fn))
+                if not ok:
+                    violations.append(
+                        "%s：`%s()`（%s）是 registry 登記的 sentinel reader，但它的"
+                        "函式體裡沒有任何 `is %s` 比對——reader 自己被改成裸 truthy "
+                        "判定的話，所有走它的 key 會一起靜默失守，而本條原本一個都"
+                        "抓不到（%s）"
+                        % (self_rel, reader, defined_in, sentinel, ref))
+        if judged[key] == 0:
+            violations.append(
+                "%s：`%s` 標成 enforced，但生產碼裡找不到**任何**判定點（既沒有 "
+                "`is %s` 比對，也沒有帶這個 key 的 `%s()` 呼叫）。「找不到裸 truthy "
+                "讀取點」在這種狀態下是假綠：這把鑰匙可能已經沒人用了（請刪條目）、"
+                "或判定被改寫成本條認不得的形狀（%s）"
+                % (self_rel, key, sentinel or "<sentinel>",
+                   entry.get("reader") or "reader", ref))
+
+        # (ii) 生產碼不得有 truthy 字面值。
+        for tkey, rel, lineno, shape in facts["truthy"]:
+            if tkey != key:
+                continue
+            violations.append(
+                "%s:%d：`%s` 是 status=enforced 的內部憑證 key，生產碼卻寫了 truthy "
+                "字面值 `%s`。sentinel 判定只認模組私有實例 ⇒ 這一行**不會開閘**"
+                "（無聲失效，只會在 runtime 印一行 WARNING），而且它會讓下一個人以為"
+                "「傳 True 就行」而把守衛改回可偽造的形狀。請改用該模組的開閘 helper"
+                "（%s）" % (rel, lineno, key, shape, ref))
+
+    # (iii) 涵蓋率：生產碼裡當 truthy 布林 guard 用的 key 一律要在 registry 上。
+    for key in sorted(bool_sites):
+        if key in INTERNAL_CTX_KEY_REGISTRY:
+            continue
+        where = "、".join("%s:%d" % s for s in bool_sites[key][:5])
+        violations.append(
+            "%s：context key `%s` 被生產碼當 **truthy 布林 guard** 使用（%s），但它"
+            "不在 `INTERNAL_CTX_KEY_REGISTRY` 上。`call_kw` 把呼叫端 context 整包換進"
+            " env ⇒ 這種閘預設是租戶可偽造的。請二擇一：改成模組私有 sentinel 判定並"
+            "登記 status=enforced；或登記 status=not-security／pending **並寫下理由**"
+            "（豁免要出現在 diff 裡被覆核，這正是本條存在的意義）（%s）"
+            % (bool_sites[key][0][0], key, where, ref))
+
+    # (c) 豁免條目的陽性對照 ＋ 殭屍條目。
+    for key, entry in sorted(INTERNAL_CTX_KEY_REGISTRY.items()):
+        status = entry.get("status")
+        if status in _INTERNAL_CTX_KEY_EXEMPT_STATUSES and key not in bool_sites:
+            violations.append(
+                "%s：`%s` 登記為 status=%s（＝「這把現在就是裸 truthy 閘」），掃描器"
+                "卻在生產碼裡找不到它的布林 guard 讀取點。兩種可能，兩種都要有人看："
+                "①掃描器／解析壞了（那麼 (iii) 的「沒有多餘的 key」是假綠）；②這把已經"
+                "改成 sentinel 或被刪掉了（請把 status 改成 enforced，或移除條目）"
+                "（%s）" % (self_rel, key, status, ref))
+    # 刻意**沒有**第 26 條那種獨立的「殭屍條目」檢查：這裡的殭屍已經被上面兩格
+    # 涵蓋——enforced 的殭屍撞 `judged == 0`，豁免的殭屍撞 `not in bool_sites`。
+    # 再加一條只會讓同一件事報兩次，而重複的訊息會稀釋掉真正該看的那一條。
+    return violations
+
+
+
 # 檔頭的編號條目（＝規則）→ 實作它的 check 函式名。
 #
 # 🔴 這張表是「一條規則可以由多個函式實作」這個一對多關係的**唯一顯式表達**，也是
@@ -3873,6 +4606,7 @@ REPO_LINT_RULES = {
     "workspace-rule-directions": ("check_workspace_rule_directions",),
     "provision-sentinel-allowlist": ("check_provision_sentinel_allowlist",),
     "sh-subscription-group-isolation": ("check_sh_subscription_group_isolation",),
+    "internal-ctx-key-registry": ("check_internal_ctx_key_registry",),
 }
 
 # 刻意不掛 hook 分派的 check：{函式名: 理由}。現況是空的（每一條都掛得到 hook）。
@@ -4299,7 +5033,8 @@ def run_all(root):
                   + check_one_time_credential_render(root)
                   + check_workspace_rule_directions(root)
                   + check_provision_sentinel_allowlist(root)
-                  + check_sh_subscription_group_isolation(root))
+                  + check_sh_subscription_group_isolation(root)
+                  + check_internal_ctx_key_registry(root))
     if violations:
         print("repo-lint：%d 個違規" % len(violations))
         for v in violations:
@@ -4422,6 +5157,12 @@ def run_hook():
         sh_sub_groups = (check_sh_subscription_group_isolation(root)
                          if rel.startswith("src/")
                          and rel.endswith((".xml", ".csv", ".py")) else [])
+        # #788：不變式跨「registry（住在本檔）↔ 全部生產碼」兩端，而且壞掉的常常是
+        # 另一端——新寫一把未登記的 truthy 閘紅在 src/，把 sentinel 改名紅在 registry
+        # 的陽性對照。涵蓋率判準本身也只有全樹掃得出來 ⇒ 不做 only_file 切片，動到
+        # 任一端就整條重算（同 provision／sh_sub_groups）。
+        internal_ctx = (check_internal_ctx_key_registry(root)
+                        if _internal_ctx_key_watches(rel) else [])
         if re.match(r"^src/controllers/.*\.py$", rel):
             violations = check_controller_sudo(root, only_file=abs_path)
             violations += check_reuse_values(root, only_file=abs_path)
@@ -4476,7 +5217,8 @@ def run_hook():
             # 跨檔不變式本身 ⇒ 不做 only_file 切片，動到任一份就整條重算。
             violations = check_kubectl_ns_whitelist_sync(root)
         elif (ladder or availability or poll_facts or anchors or floor
-                or security_rules or one_time_cred or provision or sh_sub_groups):
+                or security_rules or one_time_cred or provision or sh_sub_groups
+                or internal_ctx):
             # extra/paas-operator/** 與 docs/tracking/pitfalls/** 不在上面任何分支，
             # 但前者持有階梯的內層常數、後者是 doc-symbol-anchor 的一半輸入；
             # baselines/repo-lint-registry.txt（floor 的另一份輸入）與
@@ -4494,6 +5236,7 @@ def run_hook():
         violations += one_time_cred
         violations += provision
         violations += sh_sub_groups
+        violations += internal_ctx
         if violations:
             print(json.dumps({
                 "decision": "block",
