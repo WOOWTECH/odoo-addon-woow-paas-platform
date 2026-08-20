@@ -494,3 +494,12 @@ from . import test_cs_sync_ctx_forgery_787
 # RED 群集：A2／B2（偽造仍抑制推送）、C2（例外型別從 UserError 翻成 AccessError
 # ＝守衛被繞過）、D2（停權中的 SH 仍推去 CF）、A3／C3／D3（偽造完全沒有訊號）。
 from . import test_sh_sync_ctx_forgery_787
+
+# fix: #739 只掛 base.group_user 的租戶經 `/woow` 打 provision 從來沒有成功過
+# ——`tunnel_token` 帶 `groups='base.group_system'`，而 `_provision_smarthome`
+# 用的是非 sudo 的租戶 recordset ⇒ 那次 write 必 AccessError、記錄卡在
+# `state='provisioning'`。既有測試全在 TransactionCase（su env，欄位級
+# `groups=` 不生效）⇒ 天生盲目。RED 群集：A1／A2／A3／A4（真租戶 HTTP 打
+# provision，紅在 tunnel_token 的 write 上）。B 系列釘「改用平台身分之後原本
+# 由租戶身分擋著的檢查一條都沒少」，C1 釘票面第 2 個附帶事實的現況形狀。
+from . import test_sh_provision_tenant_rpc_739

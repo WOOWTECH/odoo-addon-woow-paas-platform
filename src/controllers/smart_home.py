@@ -855,9 +855,60 @@ class SmartHomeController(Controller):
             return {"success": False, "error": str(e)}
 
     def _provision_smarthome(self, smarthome) -> dict[str, Any]:
-        """Provision a smart home tunnel."""
+        """Provision a smart home tunnel.
+
+        #739：驅動 `action_provision()` 的是**平台身分**，不是租戶身分。
+
+        修前這裡拿的是 `browse(id)` 來的非 sudo 租戶 recordset，而
+        `action_provision` 內部那次 `anchored.write(tunnel_vals)` 含
+        `tunnel_token`——一個 `groups='base.group_system'` 的欄位
+        （`models/smart_home.py` 的 `tunnel_token` 定義；行號會漂，grep 符號名）。
+        Odoo 的 `write()` 會 `check_field_access_rights('write', vals.keys())`，
+        所以**只掛 `base.group_user` 的租戶打這個端點必定 AccessError**，且
+        `state='provisioning'` 已經落地 ⇒ 租戶經 `/woow` 的 provision 從來沒有
+        成功過（#739 實測，真 HTTP、mock operator）。
+
+        改用平台身分是對的層次，因為那次寫入的**值不是租戶給的**：
+        `tunnel_vals` 整包來自 operator 對 `create_tunnel` 的回應加上伺服器端
+        算出的 subdomain/hostname。憑證是平台鑄造的，本來就該由平台身分寫下去；
+        租戶不需要、也不該擁有寫那個欄位的權限。
+
+        🔴 **`.sudo()` 只掛在這一次呼叫上，回應的序列化刻意留在租戶身分**
+        （下面的 `smarthome.to_dict(...)` 沒有 `.sudo()`）。這不是排版：欄位級
+        `groups=` 的**讀**側是這個憑證真正的防線，把它一起放寬等於把 token 的
+        讀取面擴大到每一個 workspace owner。`models/security_access.py` 的
+        `action_provision` docstring 對 sibling model 寫下的警告
+        （「do NOT ... wrap the whole method in .sudo()」）針對的正是這件事，
+        而它擔心的是**讀**——本修法沒有動讀側，B5／B6 兩條測試把它釘住。
+
+        改用平台身分之後，Odoo 那三層在**這一次呼叫內**確實全部停用
+        （`env.su` ⇒ `check_access` 與 `check_field_access_rights` 都提早
+        return）。逐條交代誰接手，每一條都有對應的回歸測試
+        （`tests/test_sh_provision_tenant_rpc_739.py` 的 B 系列）：
+
+        * `ir.model.access` write —— `base.group_user` 本來就是 `1,1,1,0`，
+          停用它不改變任何結果。
+        * `ir.rule smart_home_rule_owner_admin_manage`（write）—— 由上面
+          `api_smarthome_detail` 的 owner/admin 閘接手，而且**更嚴**：那道閘
+          另外要求 workspace `state='active'`（`_get_workspace_or_error`），
+          rule 不管這件事。B1 釘住。
+        * 「這筆是不是你的」—— 兩道都在 `.sudo()` **之外**：
+          `_get_workspace_or_error`（B2）與 `_get_smarthome_or_error`（B3；
+          實測是 ir.rule `member_read` 在 `workspace_id` 那次讀上先擋）。
+        * 訂閱生效閘 —— `_check_operation_allowed` 也在 `.sudo()` 之外，且
+          Odoo 的 `sudo()` **不改變 `env.user`**，所以它開頭那個
+          `has_group('base.group_system')` 提早 return 不會因此變 True。B4 釘住。
+        * 身分錨點不可變守衛 —— 明示無 su 豁免（`_INTERNAL_IDENTITY_WRITE`
+          比對物件身分），sudo 打不開。B7 釘住。
+        * 重複 provision 的 stored-id guard —— 純業務邏輯，與身分無關。B8 釘住。
+
+        ⚠ 未隨本修法消失的既有形狀：下面的 `except Exception` 仍會把任何
+        非 operator 類例外收成 `{"success": False}` 回 HTTP 200，而
+        `state='provisioning'` 已落地 ⇒ 記錄仍可能停在中途狀態。本票只拿掉了
+        那個形狀在 #739 上的**觸發源**，沒有動形狀本身（C1 釘住現況）。
+        """
         try:
-            smarthome.action_provision()
+            smarthome.sudo().action_provision()
             # #768：與 detail 端點同一個形狀。provision 成功當下才剛建出 primary
             # route，前端要拿它把 Access 分頁畫出來；回 detail 以外的形狀會讓
             # 呼叫端在「沒有 routes」與「routes 是空的」之間分不出來。
