@@ -5321,11 +5321,34 @@ def check_access_gate_no_ledger_read(root, only_file=None):
     1. 任何 `X.filtered(lambda ...)` 的 lambda **本體**不得出現帳本查詢符號；
     2. 那個 lambda 在**同一個檔案內**呼叫到的方法，其定義也不得出現。
 
-    ⚠ **已知限制**：第 2 點只追一層，而且只追同檔定義的方法。一個「gate →
+    ⚠ **已知限制 1**：第 2 點只追一層，而且只追同檔定義的方法。一個「gate →
     helper → helper 讀帳本」的三層寫法抓不到；跨檔（把 gate 抽到別的 model）也
     抓不到。這是刻意的成本取捨——再深就要做跨檔呼叫圖，而目前這兩個 gate 都是
     「lambda 直接呼叫同檔方法」的形狀。真要繞過它得刻意寫成三層，那已經不是
     「順手選錯名字」而是另一種行為了。這條限制寫在這裡，不要靠讀者自己發現。
+
+    ⚠ **已知限制 2 —— 同名碰撞（本規則最容易靜默失效的一格）**：`filtered()`
+    的 lambda 參數是**另一個 model** 的記錄（`self.route_ids.filtered(lambda r:
+    r.foo())` 裡的 `r` 是 route，不是外層那個 class），所以「`r.foo` 指的是哪個
+    class 的 `foo`」靜態上**無法可靠決定**——外層 class 不是正確的 scope。
+
+    第一版把同檔所有定義攤平成 `{名字: 節點}`，同名的後者覆蓋前者。那有**兩個
+    方向**的失效，而且行為取決於 `ast.walk()` 的走訪順序這個實作細節：
+
+    * **假陰性**（更嚴重）：同檔兩個 `_has_access_teardown()`、只有其中一個讀
+      帳本 ⇒ 解析到乾淨那版 ⇒ **F6 的實際形狀漏網**，正是本規則存在的理由；
+    * **假陽性**：兩個不相關 class 各有一個 `to_dict()`、其中一個讀帳本 ⇒ 完全
+      不相干的 `filtered(lambda r: r.to_dict())` 被冤枉。
+
+    ⚠ 這不是假想：`src/models/security_access.py` 現在就有 5 個同檔重名
+    （`__repr__` / `create` / `write` / `unlink` / `to_dict`），只是目前沒有一個
+    被用在 filter 判準裡。任何一次讓同名方法出現在同一檔案的重構——哪怕與
+    Access／帳本完全無關——都會踩到。
+
+    所以本規則**不猜**：名字在同檔解出**唯一**定義時才追進去；解出兩個以上時
+    直接報「無法判定」讓人來拆（訊息與「確定讀了帳本」那條刻意不同字樣，看得出
+    是哪一種）。代價是「同一檔案裡有兩個同名方法、而且其中一個被當 filter 判準」
+    會被硬擋下來——那個組合很罕見，而且擋下來要求的正是「把名字弄清楚」。
     """
     violations = []
     for path in sorted(glob.glob(os.path.join(root, "src", "**", "*.py"),
@@ -5339,8 +5362,12 @@ def check_access_gate_no_ledger_read(root, only_file=None):
             tree = ast.parse(source)
         except SyntaxError:
             continue
-        defs = {n.name: n for n in ast.walk(tree)
-                if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
+        # 🔴 收成 name -> [節點]，**不是** name -> 節點：同名時後者覆蓋前者會讓
+        # 解析結果取決於 ast.walk() 的走訪順序（見 docstring 已知限制 2）。
+        defs = {}
+        for n in ast.walk(tree):
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                defs.setdefault(n.name, []).append(n)
         for call in ast.walk(tree):
             if not (isinstance(call, ast.Call)
                     and isinstance(call.func, ast.Attribute)
@@ -5362,9 +5389,24 @@ def check_access_gate_no_ledger_read(root, only_file=None):
                     if not (isinstance(sub, ast.Call)
                             and isinstance(sub.func, ast.Attribute)):
                         continue
-                    target = defs.get(sub.func.attr)
-                    if target is None:
+                    targets = defs.get(sub.func.attr)
+                    if not targets:
                         continue
+                    if len(targets) > 1:
+                        # 同名碰撞 ⇒ 不猜。挑一個會在兩個方向上都靜默出錯，而
+                        # 挑哪一個取決於走訪順序（docstring 已知限制 2）。
+                        violations.append(
+                            "%s:%d：`filtered()` 的判準呼叫 `%s()`，但同一個檔案裡"
+                            "有 %d 個同名定義（%s），無法判定它解到哪一個 ⇒ **無法"
+                            "判定這個判準有沒有讀待回收帳本**。請把名字弄清楚（改名"
+                            "或把判準換成不會撞名的方法）——本規則刻意不猜：猜錯的"
+                            "兩個方向分別是「F6 形狀漏網」與「無辜的 filter 被冤枉」，"
+                            "而且都是靜默的。"
+                            % (rel, line, sub.func.attr, len(targets),
+                               ", ".join("%s:%d" % (rel, t.lineno)
+                                         for t in targets)))
+                        continue
+                    target = targets[0]
                     hits = _ledger_symbols_in(target)
                     if not hits:
                         continue
