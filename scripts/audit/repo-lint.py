@@ -324,14 +324,6 @@ security-rule-lifecycle 由兩個函式——ir.rule 的出生地／退役名字
                      是錯的。
                      依據 docs/decisions/519-cloud-service-provision-gate.md
 
-用法：
-
-  scripts/audit/repo-lint.py --all                # 全 repo 掃描（CI / merge 前手動）
-  scripts/audit/repo-lint.py --update-baseline    # 接受現況為新 baseline
-  scripts/audit/repo-lint.py --hook               # PostToolUse hook 模式（stdin 吃 hook JSON，只掃該檔）
-
-hook 模式輸出 {"decision":"block","reason":...} 讓 model 立即自我修正；CLI 模式違規 exit 1。
-Fail-open：hook 模式下任何內部錯誤 → exit 0，絕不擋開發。
 29. access-gate-no-ledger-read  `filtered()` 的判準（以及它一層內呼叫到的
                      同檔方法）不得讀待回收帳本 `cf_access_policy_reap`
                      （`_pending_ids` / `_pending_for` /
@@ -346,6 +338,15 @@ Fail-open：hook 模式下任何內部錯誤 → exit 0，絕不擋開發。
                      `_teardown_route_access()` 的「沒 id 就回 True」早退而完全沒有
                      輸出——不打 operator、不寫欄位、不留 log）。判準刻意不硬編方法
                      名；已知限制（只追一層、只追同檔）寫在函式 docstring。
+
+用法：
+
+  scripts/audit/repo-lint.py --all                # 全 repo 掃描（CI / merge 前手動）
+  scripts/audit/repo-lint.py --update-baseline    # 接受現況為新 baseline
+  scripts/audit/repo-lint.py --hook               # PostToolUse hook 模式（stdin 吃 hook JSON，只掃該檔）
+
+hook 模式輸出 {"decision":"block","reason":...} 讓 model 立即自我修正；CLI 模式違規 exit 1。
+Fail-open：hook 模式下任何內部錯誤 → exit 0，絕不擋開發。
 """
 import ast
 import csv
