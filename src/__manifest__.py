@@ -1,6 +1,6 @@
 {
     "name": "Woow PaaS Platform",
-    "version": "18.0.1.0.153",
+    "version": "18.0.1.0.156",
     "category": "WOOW",
     "summary": "Woow PaaS Platform - Base Module",
     "description": """
@@ -30,10 +30,15 @@
         "data/subscription_products_variants.xml",
         "data/subscription_template_links_variants.xml",
         "data/subscription_journal_config.xml",
+        # #778：SSOT 對撞防護的 -u 路徑（<function> 每次升級重跑；
+        # fresh-install 路徑在 hooks.post_init_hook）
+        "data/billing_ssot_guard.xml",
         "views/menu.xml",
         "data/ai_assistant_data.xml",
         "data/mcp_server_cron.xml",
         "data/cloud_service_cron.xml",
+        # #778 配套 3：計費靜默死亡監控 cron
+        "data/billing_silence_cron.xml",
         "views/project_task_views.xml",
         "views/project_views.xml",
         "views/ai_config_views.xml",
