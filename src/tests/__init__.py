@@ -455,6 +455,7 @@ from . import test_sh_access_arc_migration_768
 # **真正可達的是租戶 context 流進平台碼**（`_ensure_primary_route()` 走 `.sudo()`，
 # 而 sudo 不洗 context），B1 打的就是那條生產路徑。
 from . import test_sh_access_identity_768
+from . import test_billing_ssot_guard
 # fix: #536 SA 的 sync-control context key 家族可被租戶偽造（#522 的另外三支）。
 # `call_kw` 把 client 的 context 原封不動換進 env，所以只判 truthy 的
 # `sa_skip_route_sync` / `sa_rule_replace` / `sa_force_access_sync` 都是租戶

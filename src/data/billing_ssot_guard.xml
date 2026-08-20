@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- #778：上游 sh_subscription_wallet SSOT（upstream PR #14）對撞防護。
+         noupdate="0"（預設）：下面兩個 <function> 每次 module upgrade (-u)
+         都重跑。上游會在 wallet 的 post_init_hook／migration 停用 base 的
+         sh_ir_cron_subscription_auto_invoice（平台唯一計費路徑的觸發點；
+         其 seed XML 是 noupdate=1，被關掉後沒有 XML reload 會救回），而那
+         兩個時點平台 override 不在 MRO——平台在 module graph 拓撲序上永遠
+         晚於 wallet，故本檔的 data 層 re-assert 在同一次 -u run 內恆為
+         last word。fresh-install 路徑由 hooks.post_init_hook 覆蓋（雙路徑
+         pattern 同 oauth_scope_updates.xml）。 -->
+    <function
+        model="sh.subscription.subscription"
+        name="_ensure_billing_ssot_optout"/>
+    <function
+        model="sh.subscription.subscription"
+        name="_ensure_base_auto_invoice_cron_active"/>
+</odoo>
