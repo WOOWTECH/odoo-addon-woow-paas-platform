@@ -346,7 +346,7 @@ class CfAccessPolicyReap(models.Model):
                     "(anchor_id=%s, %d row(s)) — left on the ledger",
                     anchor_model, anchor_id, len(group))
                 continue
-            if self.env[anchor_model].browse(anchor_id).exists():
+            if self.env[anchor_model].sudo().browse(anchor_id).exists():
                 continue  # 活錨點：它自己的下一次 sync 會收，見 docstring
             if client is None:
                 client = get_paas_operator_client(self.env)

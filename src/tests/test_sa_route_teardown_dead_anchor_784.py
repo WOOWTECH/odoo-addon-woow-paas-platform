@@ -126,7 +126,10 @@ class _Fixture:
                 'rule_ids': [(0, 0, {'group': 'include',
                                      'rule_type': 'email_list',
                                      'rule_value': 'a@example.com'})]})
-            pol.with_context(sa_skip_route_sync=False).cf_policy_id = cf_id
+            # cf id 的回填留在 skip context 裡：這是 fixture 在擺狀態，不是被測
+            # 的動作——讓它打 operator 會把「機制有沒有接好」與「fixture 自己多
+            # 打了一趟」混在一起。
+            pol.cf_policy_id = cf_id
         return route
 
 
@@ -375,8 +378,13 @@ class TestDeadAnchorReaper(TransactionCase, _Fixture):
         ).create({'name': 'WS 784C %s' % uuid.uuid4().hex[:6]})
 
     def _dead_route_id(self):
-        """一個保證不存在的 route id（真的刪過一條，不是憑空編號）。"""
-        sa = self._make_sa(state='active')
+        """一個保證不存在的 route id（真的刪過一條，不是憑空編號）。
+
+        SA 刻意不給 tunnel：route 的 unlink 對「active＋live tunnel」的 SA 會做
+        一次全量 route re-sync（那一條**不看** `sa_skip_route_sync`），fixture
+        不該在這裡產生 operator 呼叫。
+        """
+        sa = self._make_sa(state='pending', tunnel_id=False)
         route = self._make_route(sa, protected=False)
         route_id = route.id
         route.unlink()

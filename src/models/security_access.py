@@ -2,6 +2,8 @@ import logging
 import re
 import uuid
 
+from psycopg2 import OperationalError
+
 from odoo import api, fields, models
 from odoo.exceptions import AccessError, UserError, ValidationError
 
@@ -911,22 +913,38 @@ class SecurityAccess(models.Model):
                 'existing_app_id': app_id or None,
                 'existing_policy_ids': policy_ids or [],
             })
-            orphaned = result.get('orphaned_policy_ids') or []
-            if orphaned:
-                _logger.warning(
-                    "[SA] route access teardown sa=%s app=%s left %d orphan "
-                    "policy(ies): %s", self.id, app_id, len(orphaned),
-                    ', '.join(orphaned))
-            if anchor_model and anchor_id:
-                self.env[_CF_REAP_MODEL]._settle_teardown(
-                    anchor_model, anchor_id, app_id or None,
-                    policy_ids or [], orphaned)
-            return True
         except Exception as e:
             _logger.warning(
                 "[SA] route access teardown failed sa=%s app=%s: %s",
                 self.id, app_id, e)
             return False
+        # ── 提交點之後 ─────────────────────────────────────────────────
+        # operator 回 2xx ＝ CF 上這些物件已經沒了，回捲不掉。以下純記帳
+        # （[[post-commit-bookkeeping-rollback-unit]]）：記帳失敗**不得**翻轉
+        # 回傳值——回 False 會讓呼叫端保住 `access_app_id`，而那個 id 指向一顆
+        # CF 上已經不存在的 app，下一次 sync 拿它去 PUT 會 404。
+        orphaned = result.get('orphaned_policy_ids') or []
+        if orphaned:
+            _logger.warning(
+                "[SA] route access teardown sa=%s app=%s left %d orphan "
+                "policy(ies): %s", self.id, app_id, len(orphaned),
+                ', '.join(orphaned))
+        if anchor_model and anchor_id:
+            try:
+                with self.env.cr.savepoint():
+                    self.env[_CF_REAP_MODEL]._settle_teardown(
+                        anchor_model, anchor_id, app_id or None,
+                        policy_ids or [], orphaned)
+            except OperationalError:
+                # 並發／連線類 DB 例外必須外拋，否則 Odoo 的 retrying() 看不到，
+                # 而此刻交易已 aborted，硬回一個值只會讓後續 flush 再炸（#518）。
+                raise
+            except Exception:
+                _logger.exception(
+                    "[SA] route access teardown sa=%s app=%s: CF teardown "
+                    "SUCCEEDED but booking the reap ledger failed — %d cf id(s) "
+                    "may be untracked", self.id, app_id, len(orphaned))
+        return True
 
     # ------------------------------------------------------------------ #
     #  Subscription lifecycle: suspend / resume / cleanup                #

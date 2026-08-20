@@ -3460,20 +3460,30 @@ class CloudService(models.Model):
             result = self._push_access_teardown(
                 app_id=app_id, policy_ids=policy_ids,
                 app_name=app_name, hostname=hostname)
-            # #784：operator 回報「送去刪但刪不掉」的那幾顆現在就是 CF 孤兒，而
-            # 呼叫端拿到 True 之後會清掉列上的 cf id／把列刪掉 ⇒ 舊寫法（只 log
-            # 一行）之後就再也沒有任何記錄指向它們。落帳，回收者是
-            # `cf_access_policy_reap._cron_reap_dead_anchors`（錨點死掉之後）或
-            # 這台服務自己的下一次成功 sync（錨點還活著時）。
-            self.env[_CF_REAP_MODEL]._settle_teardown(
-                self._name, self.id, app_id or None, policy_ids or [],
-                (result or {}).get('orphaned_policy_ids') or [])
-            return True
         except Exception as e:
             _logger.warning(
                 "[CLOUD_SVC] access teardown failed service=%s app=%s: %s",
                 self.id, app_id, e)
             return False
+        # ── 提交點之後 ─────────────────────────────────────────────────
+        # #784：operator 回報「送去刪但刪不掉」的那幾顆現在就是 CF 孤兒，而呼叫端
+        # 拿到 True 之後會清掉列上的 cf id／把列刪掉 ⇒ 舊寫法（只 log 一行）之後
+        # 就再也沒有任何記錄指向它們。落帳，回收者是
+        # `cf_access_policy_reap._cron_reap_dead_anchors`（錨點死掉之後）或這台
+        # 服務自己的下一次成功 sync（錨點還活著時）。
+        # 記帳失敗不翻轉回傳值（[[post-commit-bookkeeping-rollback-unit]]）。
+        try:
+            with self.env.cr.savepoint():
+                self.env[_CF_REAP_MODEL]._settle_teardown(
+                    self._name, self.id, app_id or None, policy_ids or [],
+                    (result or {}).get('orphaned_policy_ids') or [])
+        except OperationalError:
+            raise
+        except Exception:
+            _logger.exception(
+                "[CLOUD_SVC] access teardown service=%s app=%s: CF teardown "
+                "SUCCEEDED but booking the reap ledger failed", self.id, app_id)
+        return True
 
     def _teardown_access_if_any(self):
         """本服務目前的 Access 狀態 → 拆除，成功才清 id。回傳是否乾淨。
