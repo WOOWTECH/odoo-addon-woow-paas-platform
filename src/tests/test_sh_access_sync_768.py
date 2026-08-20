@@ -332,16 +332,26 @@ class TestShAccessPayload(_ShAccessSyncFixture):
         self.assertEqual(canonical, self.sh.subdomain)
 
     def test_A6_existing_policy_ids_include_the_doomed_ones(self):
-        """被 unlink 掉那一列的 cf id 必須經 context 一起送去刪。
+        """被 unlink 掉那一列的 cf id 必須一起送去刪——來源是**帳本**不是 context。
 
         operator 唯一的刪除通道就是這份清單（delete-old-then-create）。不送＝
         每刪一條 policy 就漏一顆永久 CF 孤兒。
+
+        #783：供給這顆 id 的通道從「呼叫端 context」換成 `cf_access_policy_reap`
+        帳本（`unlink()` 在同一個 savepoint 內先落帳才推 sync ⇒ 同一批 id）。
+        第三格斷言把被拿掉的那條腿釘死。
         """
         self._policy(cf_policy_id='cf-live')
+        self.env['woow_paas_platform.cf_access_policy_reap']._record(
+            self.route, ['cf-doomed'])
         payload = self.route.with_context(
-            sa_unlinked_cf_policy_ids=['cf-doomed'])._build_access_payload()
+            sa_unlinked_cf_policy_ids=['cf-forged'])._build_access_payload()
         self.assertEqual(sorted(payload['existing_policy_ids']),
-                         ['cf-doomed', 'cf-live'])
+                         ['cf-doomed', 'cf-live'],
+                         '列值 ∪ 帳本，兩個來源都要在')
+        self.assertNotIn(
+            'cf-forged', payload['existing_policy_ids'],
+            '呼叫端 context 塞的 id 不得進 operator 的帳號級刪除清單（#783）')
 
 
 class TestShAccessLivenessGate(_ShAccessSyncFixture):
@@ -708,12 +718,16 @@ class TestShAccessTeardown(_ShAccessSyncFixture):
 class TestShPolicyUnlinkReapsTheOrphan(_ShAccessSyncFixture):
     """E 系列：SH 錨定 policy 被刪時，它的 CF reusable policy 要一起送去刪。"""
 
-    def test_E1_unlinking_a_policy_injects_its_doomed_cf_id(self):
-        """`sa_unlinked_cf_policy_ids` 這條通道對第三個錨點也要接上。
+    def test_E1_unlinking_a_policy_reaps_its_doomed_cf_id(self):
+        """被刪那一列的 cf id 對第三個錨點也要送得出去（端對端，走真 unlink）。
 
         `_build_existing_policy_ids` 只看得到**存活**的列，被刪那一列的 cf id
         永遠進不了清單；而那是 operator 唯一的刪除通道 ⇒ 每刪一條 policy 就漏
         一顆永久 CF 孤兒（成本 + 一個沒人知道還在生效的規則）。
+
+        🔴 #783 把 `sa_unlinked_cf_policy_ids` 那條 context 腿整個拿掉之後，這條
+        測試**一格都沒有變**——它就是「拿掉通道不減功能」的直接證據：doomed id
+        改由 `unlink()` 同一個 savepoint 內先落的帳供給。
         """
         self._configure(is_protected=True)
         self._app_id(self.route, 'app-live')

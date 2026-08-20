@@ -222,16 +222,27 @@ class TestCsAccessPayload(_CsAccessSyncFixture):
         self.assertEqual(payload['existing_app_id'], 'app-old')
 
     def test_A5_existing_policy_ids_include_the_doomed_ones(self):
-        """unlink 掉的 policy 的 cf id 必須經 context 一起送去刪。
+        """unlink 掉的 policy 的 cf id 必須一起送去刪——但來源是**帳本**不是 context。
 
         不送＝operator 永遠不會刪它（它唯一的刪除來源就是這個清單）⇒ 每刪一條
         policy 就漏一顆永久 CF 孤兒。
+
+        #783：供給這顆 id 的通道從「呼叫端 context」換成 `cf_access_policy_reap`
+        帳本。`unlink()` 在同一個 savepoint 內先落帳才推 sync ⇒ 對生產路徑而言是
+        同一批 id，行為不變；差別是帳本只收**列上讀到的**值，而 context 是
+        `call_kw` 直達的裸值。第三格斷言把那條腿釘死。
         """
         self._policy(self.svc, cf_policy_id='cf-live')
+        self.env['woow_paas_platform.cf_access_policy_reap']._record(
+            self.svc, ['cf-doomed'])
         payload = self.svc.with_context(
-            sa_unlinked_cf_policy_ids=['cf-doomed'])._build_access_payload()
+            sa_unlinked_cf_policy_ids=['cf-forged'])._build_access_payload()
         self.assertEqual(sorted(payload['existing_policy_ids']),
-                         ['cf-doomed', 'cf-live'])
+                         ['cf-doomed', 'cf-live'],
+                         '列值 ∪ 帳本，兩個來源都要在')
+        self.assertNotIn(
+            'cf-forged', payload['existing_policy_ids'],
+            '呼叫端 context 塞的 id 不得進 operator 的帳號級刪除清單（#783）')
 
 
 class TestCsAccessSyncTrigger(_CsAccessSyncFixture):
