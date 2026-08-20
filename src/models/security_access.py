@@ -782,15 +782,22 @@ class SecurityAccess(models.Model):
         controller surfaces a truthful failure and both the DB row and the CF
         tunnel survive for the user / cron _do_cleanup to retry. This aligns
         the direct-delete path with the fail-loud contract _do_cleanup already
-        establishes for the cron path."""
+        establishes for the cron path.
+
+        #784：cleanup 不再以 ``tunnel_id`` 為前提。Access app 與 tunnel 是兩種
+        不同的 CF 物件，operator 拆 Access 的 payload 從頭到尾不碰 tunnel
+        （``enabled=False`` 只吃 ``existing_app_id`` / ``existing_policy_ids``）
+        ⇒ 「tunnel 已經刪掉、Access 拆到一半失敗」這個**再正常不過的中間態**，
+        舊寫法會整段跳過 cleanup，把該 route 的 app ＋ 全部 policy cf id 靜默
+        丟掉。``_cleanup_cloudflare`` 自己已經是冪等的（沒東西要拆就直接
+        return），所以無條件呼叫是純加法。"""
         # #322: 比照 CloudService（#318）— super().unlink() 前捕獲 in_progress
         # 訂閱，刪除成功後結算（取消＋按比例退點）。共用 _settle_on_entity_delete。
         subs_to_settle = self.sudo().mapped('subscription_id').filtered(
             lambda s: s.state == 'in_progress'
         )
         for record in self:
-            if record.tunnel_id:
-                record._cleanup_cloudflare()
+            record._cleanup_cloudflare()
             if record.tunnel_id:
                 raise UserError(
                     "Cloudflare cleanup failed; the tunnel is still live and "
@@ -869,7 +876,8 @@ class SecurityAccess(models.Model):
         for route in self.route_ids:
             _force_access_sync(route)._sync_access_to_operator()
 
-    def _teardown_route_access(self, app_id, policy_ids, app_name, hostname):
+    def _teardown_route_access(self, app_id, policy_ids, app_name, hostname,
+                               anchor_model=None, anchor_id=None):
         """Tear down ONE route's Cloudflare Access app (+ reusable policies)
         when the route row no longer exists (deleted) or during SA cleanup. The
         route may be gone, so the caller passes the captured ids; we build a
@@ -877,7 +885,15 @@ class SecurityAccess(models.Model):
         logged, not raised, so it does not abort the surrounding unlink/cleanup.
         Returns True on a clean teardown (so the caller may clear the stored
         app_id), False on failure (so a surviving route keeps its id and the SA
-        lands re-entrant in 'error' instead of reporting a false clean)."""
+        lands re-entrant in 'error' instead of reporting a false clean).
+
+        #784：``anchor_model`` / ``anchor_id`` 是這條 route 的身分（列可能正在
+        消失，所以傳純量）。有給的時候 operator 回報「送去刪但刪不掉」的
+        ``orphaned_policy_ids`` 會**落進待回收帳本**——舊寫法只 log 一行然後回
+        ``True``，而呼叫端拿到 ``True`` 就會把列上的 cf id 清掉／讓列被刪掉，那
+        幾顆 id 從此沒有任何記錄指向它們（與 #528 完全同型，只是發生在 teardown
+        這一側）。帳的回收者見 ``cf_access_policy_reap._cron_reap_dead_anchors``。
+        """
         self.ensure_one()
         if not app_id and not policy_ids:
             return True
@@ -901,6 +917,10 @@ class SecurityAccess(models.Model):
                     "[SA] route access teardown sa=%s app=%s left %d orphan "
                     "policy(ies): %s", self.id, app_id, len(orphaned),
                     ', '.join(orphaned))
+            if anchor_model and anchor_id:
+                self.env[_CF_REAP_MODEL]._settle_teardown(
+                    anchor_model, anchor_id, app_id or None,
+                    policy_ids or [], orphaned)
             return True
         except Exception as e:
             _logger.warning(
@@ -1014,7 +1034,10 @@ class SecurityAccess(models.Model):
                      self.id, self.tunnel_id)
         self._cleanup_cloudflare()
         # P2.5: a lingering per-route Access app is a stale route.access_app_id.
-        lingering_access = self.route_ids.filtered('access_app_id')
+        # #784：判準改用 `_has_access_teardown()`（單一裁決處）——「app_id 空但
+        # policy 還帶著 cf id」也是沒清乾淨，舊寫法把它讀成 clean。
+        lingering_access = self.route_ids.filtered(
+            lambda r: r._has_access_teardown())
         if self.tunnel_id or lingering_access:
             # cleanup did not finish — either the tunnel is still live in
             # Cloudflare, OR one of the per-route Access teardowns failed while
@@ -1046,7 +1069,13 @@ class SecurityAccess(models.Model):
         every DNS record pointing at the tunnel, then deletes the tunnel
         (token invalidated)."""
         self.ensure_one()
-        access_routes = self.route_ids.filtered('access_app_id')
+        # #784 相鄰出口 A：舊判準是 `filtered('access_app_id')` ⇒ 「app_id 已空
+        # 但 policy 仍帶著 cf id」的 route 從頭到尾不會被看見（那是**合法的持久
+        # 狀態**：teardown 只在成功時才一併清 policy 的 cf id，而 P2.5 migration
+        # 也造得出這個形狀）。判準改成「手上還有沒有 id 要拆」，與 unlink 的捕獲
+        # 迴圈、`_do_cleanup` 的殘留判定共用同一個 `_has_access_teardown()`。
+        access_routes = self.route_ids.filtered(
+            lambda r: r._has_access_teardown())
         if not self.tunnel_id and not access_routes:
             return
         # P2.5: tear down each route's own Cloudflare Access app (+ reusable
@@ -1063,13 +1092,14 @@ class SecurityAccess(models.Model):
         # successful teardown, so a failure keeps it set and _do_cleanup lands
         # the SA in 'error' (re-entrant) instead of reporting a false clean.
         for route in access_routes:
-            pol_ids = [p.cf_policy_id for p in route.access_policy_ids
-                       if p.cf_policy_id]
+            app_id, pol_ids = route._access_teardown_ids()
             ok = self._teardown_route_access(
-                app_id=route.access_app_id,
+                app_id=app_id,
                 policy_ids=pol_ids,
                 app_name=route.subdomain_prefix,
                 hostname=route.hostname,
+                anchor_model=route._name,
+                anchor_id=route.id,
             )
             if ok:
                 _internal_identity(route).access_app_id = False
@@ -1407,21 +1437,42 @@ class SecurityAccessRoute(models.Model):
         # delete and the app/policies leak as permanent CF orphans. Capture each
         # doomed route's teardown ids BEFORE the unlink, then push an
         # enabled=False teardown sync carrying them.
+        #
+        # #784：捕獲的判準是「**手上還有沒有 id 要拆**」，不是「這條 route 現在
+        # 推得動嗎」。舊寫法有兩道 continue（`is_protected` ＋ SA liveness），
+        # 被擋掉的 route 一路刪到底而 operator 一次都沒被呼叫——全程無 log、無
+        # 例外、無狀態欄位，與乾淨刪除在輸出上完全不可區分。兩道都可達：
+        #
+        #   * `is_protected`：程式自己承認「未保護但仍持有 stored app_id」是
+        #     **合法的持久狀態**（見 `_sync_access_to_operator` docstring 與
+        #     `_do_resume` 的註解），而這一道恰好把它判成「沒東西要拆」。
+        #   * SA liveness：停權中刪 route（刪除端點看的是**訂閱**狀態不是 SA
+        #     state），`_do_suspend` 完全不碰 Access ⇒ app_id 與全部 cf id 都
+        #     還活著。
+        #
+        # 拿掉閘是安全的：operator 的 teardown 分支（`enabled=False`）**只吃
+        # id**，不碰 tunnel、不需要 hostname，CF 的 DELETE 又把 404 當成功
+        # （`extra/paas-operator/src/services/cloudflare.py`）⇒ 「tunnel 已經不
+        # 在但 app 還在」照樣拆得掉。而真的沒東西要拆時 `_teardown_route_access`
+        # 本來就直接回 True，沒有多餘的 operator 呼叫。
+        #
+        # 那道 liveness 閘沒有消失，只是換了工作：它現在決定**拆失敗時誰是重試
+        # 錨點**（`retry_anchor_is_row`），見下方 teardown 迴圈。
         teardown_by_route = {}
         for route in self:
-            if not route.is_protected:
+            app_id, pol_ids = route._access_teardown_ids()
+            if not app_id and not pol_ids:
                 continue
-            sa = route.security_access_id
-            if not (sa and sa.state in ('active', 'active_no_route', 'error') and sa.tunnel_id):
-                continue
-            pol_ids = [p.cf_policy_id for p in route.access_policy_ids
-                       if p.cf_policy_id]
             teardown_by_route[route.id] = {
-                'sa': sa,
-                'app_id': route.access_app_id or None,
+                'sa': route.security_access_id,
+                'app_id': app_id,
                 'policy_ids': pol_ids,
                 'app_name': route.subdomain_prefix,
                 'hostname': route.hostname,
+                # None ＝ 這條 route 現在推得動 ⇒ 回滾保住的列是一個**真的會被
+                # 再次推送**的重試錨點。非 None ＝ 推不動：保住列救不了任何人，
+                # 因為沒有任何 sync 會再為它跑（那正是本 issue 本身）。
+                'retry_anchor_is_row': route._access_sync_skip_reason() is None,
             }
         # Atomicity scope — the most dangerous direction: super().unlink()
         # drops the DB row, then the sync removes it from CF. The savepoint
@@ -1457,19 +1508,58 @@ class SecurityAccessRoute(models.Model):
             # of the same True/False teardown contract ([[two-stage-remote-
             # provision-idempotency]]: every failure path keeps the stored id so
             # retry is safe).
+            #
+            # #784：失敗的處置**分兩格**，判準是「保住這一列到底救不救得了它」。
+            #
+            #   * `retry_anchor_is_row=True`（捕獲當下這條 route 推得動）——
+            #     回滾把列救回來，而列活著就會被下一次 sync 再推一次 ⇒ 列是一個
+            #     真的會被走到的重試錨點。維持既有的 fail-loud（行為不變，
+            #     `test_protected_route_unlink_teardown_failure_rolls_back_keeps_
+            #     row` 鎖著）。
+            #   * `False`（停權／沒有 live tunnel／未保護但仍持有 stored id）——
+            #     保住列**救不了任何人**：沒有任何 sync 會再為這條 route 跑，
+            #     這正是本 issue 的形狀。此時 raise 只是把「靜默孤兒」換成「刪
+            #     不掉」，兩邊都沒有人去刪 CF 上那些物件。改成落帳＋照常刪除，
+            #     重試錨點換成帳本，回收者是
+            #     `cf_access_policy_reap._cron_reap_dead_anchors`（dead anchor
+            #     專收，見該方法 docstring 的「誰、何時、憑什麼」）。
+            #
+            # 落帳寫在 savepoint 裡是對的：走到 raise 的話這幾筆會跟著回滾，而
+            # 那時列還活著、cf id 還在列上，本來就不需要帳（同
+            # `security_access_access_policy.unlink()` 的同一段推理）。
+            Reap = self.env[_CF_REAP_MODEL]
             failed = []
-            for info in teardown_by_route.values():
+            for route_id, info in teardown_by_route.items():
                 sa = info['sa']
                 if not sa.exists():
+                    # SA 也不在了（上游 cascade 的中途）：沒有 record 可以組
+                    # teardown payload，但 id 一顆都不能丟。舊寫法在這裡是裸
+                    # `continue`。列與 SA 都沒了 ⇒ 重試錨點只可能是帳本。
+                    _logger.warning(
+                        "[SA] route %s deleted while its Security Access is "
+                        "already gone — booking app=%s + %d policy id(s) for "
+                        "the dead-anchor reaper (#784)",
+                        route_id, info['app_id'], len(info['policy_ids']))
+                    Reap._record_teardown(
+                        self._name, route_id,
+                        info['app_id'], info['policy_ids'])
                     continue
                 ok = sa._teardown_route_access(
                     app_id=info['app_id'],
                     policy_ids=info['policy_ids'],
                     app_name=info['app_name'],
                     hostname=info['hostname'],
+                    anchor_model=self._name,
+                    anchor_id=route_id,
                 )
-                if not ok:
+                if ok:
+                    continue
+                if info['retry_anchor_is_row']:
                     failed.append(info['app_name'] or info['app_id'])
+                else:
+                    Reap._record_teardown(
+                        self._name, route_id,
+                        info['app_id'], info['policy_ids'])
             if failed:
                 raise UserError(
                     "Cloudflare Access teardown failed for route(s): %s. The "
@@ -1484,6 +1574,32 @@ class SecurityAccessRoute(models.Model):
     # ------------------------------------------------------------------ #
     #  P2.5 per-route Access sync (declarative; one CF Access app/route)  #
     # ------------------------------------------------------------------ #
+
+    def _access_teardown_ids(self):
+        """這條 route 現在有哪些 CF Access 物件 id 需要拆：``(app_id, [policy])``。
+
+        #784：**刪除路徑上「要不要拆」的唯一裁決處**，三個呼叫端共用
+        （`unlink()` 的捕獲迴圈、`SecurityAccess._cleanup_cloudflare` 挑 route、
+        `_do_cleanup` 判殘留）。之前三處各自寫判準，於是各自漏掉不同的一格
+        ——`unlink` 漏 `is_protected=False`＋停權，另兩處漏「app_id 空但 policy
+        還帶 cf id」。
+
+        🔴 判準是「**手上有沒有 id**」，永遠不是 `is_protected`：
+        「未保護但仍持有 stored app_id / cf_policy_id」是這支程式自己承認的合法
+        持久狀態（`_sync_access_to_operator` 的 docstring 與 `_do_resume` 的註解
+        都逐字寫著），拿保護旗標當判準會把那一格讀成「沒東西要拆」。
+        """
+        self.ensure_one()
+        return (self.access_app_id or None,
+                [p.cf_policy_id for p in self.access_policy_ids
+                 if p.cf_policy_id])
+
+    def _has_access_teardown(self):
+        """這條 route 手上還有沒有 CF Access 物件要拆（`_access_teardown_ids` 的
+        bool 版，給 `filtered()` 用）。"""
+        self.ensure_one()
+        app_id, pol_ids = self._access_teardown_ids()
+        return bool(app_id or pol_ids)
 
     def _build_existing_policy_ids(self):
         """CF reusable-policy ids the operator must delete-then-recreate for

@@ -3457,9 +3457,17 @@ class CloudService(models.Model):
         if not app_id and not policy_ids:
             return True
         try:
-            self._push_access_teardown(
+            result = self._push_access_teardown(
                 app_id=app_id, policy_ids=policy_ids,
                 app_name=app_name, hostname=hostname)
+            # #784：operator 回報「送去刪但刪不掉」的那幾顆現在就是 CF 孤兒，而
+            # 呼叫端拿到 True 之後會清掉列上的 cf id／把列刪掉 ⇒ 舊寫法（只 log
+            # 一行）之後就再也沒有任何記錄指向它們。落帳，回收者是
+            # `cf_access_policy_reap._cron_reap_dead_anchors`（錨點死掉之後）或
+            # 這台服務自己的下一次成功 sync（錨點還活著時）。
+            self.env[_CF_REAP_MODEL]._settle_teardown(
+                self._name, self.id, app_id or None, policy_ids or [],
+                (result or {}).get('orphaned_policy_ids') or [])
             return True
         except Exception as e:
             _logger.warning(

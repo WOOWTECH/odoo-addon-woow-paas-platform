@@ -1,6 +1,6 @@
 {
     "name": "Woow PaaS Platform",
-    "version": "18.0.1.0.157",
+    "version": "18.0.1.0.158",
     "category": "WOOW",
     "summary": "Woow PaaS Platform - Base Module",
     "description": """
@@ -63,6 +63,8 @@
         "data/agent_session_cron.xml",
         "data/reach_reconciler_cron.xml",
         "data/reconcile_report_cron.xml",
+        # #784：待回收 CF Access 物件帳本的 dead-anchor 回收 cron
+        "data/cf_access_reap_cron.xml",
         "data/agent_template_demo.xml",
         "data/agent_template_default.xml",
         "data/demo_system_skill.xml",
