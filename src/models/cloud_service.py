@@ -3567,6 +3567,25 @@ class CloudService(models.Model):
 
         單一裁決處：unlink（fail-loud）與 `_do_cleanup`（落 error 狀態）兩條
         路徑共用，免得兩邊各自組一次 policy id 清單而漏掉其中一種。
+
+        🔴 **不要把待回收帳本（`cf_access_policy_reap`）的查詢加進這裡**（#784
+        F6 的教訓，寫在這是因為這裡最像「順手移植」的落點）。
+
+        本方法把三件事合在一起：「有沒有東西要拆」（閘）、「要送哪些 id」
+        （payload）、「清乾淨了沒」（回傳值餵給呼叫端的 fail-loud／落 error）。
+        今天沒事，是因為三者讀的都是**列上的狀態**。SA 那一腿曾經在同型的方法裡
+        補上 `_pending_ids()` 聯集——想讓刪除時順手把帳本舊帳一起送出去——結果
+        連帶把「清乾淨了沒」也變成「列 ∪ 帳本」：只要 operator 回報過某顆 policy
+        刪不掉，那筆帳就掛在帳本上（錨點還活著 ⇒ dead-anchor cron 依設計不收）
+        ⇒ 閘永遠回 True ⇒ **SA 永久卡在 `state='error'`**，每輪 lifecycle cron
+        白打一次 operator，七天後只多一行 stuck warning。
+
+        SA 那邊的解法是把兩個問題拆開各自命名（`_has_access_teardown()` 只答
+        「這列乾淨了沒」、`_access_teardown_payload_ids()` 才答「這趟送哪些
+        id」），見 `security_access.py`。這裡真要做同樣的事，就照那個形狀拆，
+        **不要**在本方法裡直接查帳本。repo-lint 的 `access-gate-no-ledger-read`
+        會擋住「filter 的 lambda 讀帳本」那一格，但**擋不到**本方法這種
+        「gate 與 payload 合體」的形狀——那正是需要這段註解的原因。
         """
         self.ensure_one()
         pol_ids = [p.cf_policy_id for p in self.access_policy_ids

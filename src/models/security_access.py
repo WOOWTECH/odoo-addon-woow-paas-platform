@@ -1474,9 +1474,30 @@ class SecurityAccessRoute(models.Model):
         # 錨點**（`retry_anchor_is_row`），見下方 teardown 迴圈。
         teardown_by_route = {}
         for route in self:
-            app_id, pol_ids = route._access_teardown_payload_ids()
-            if not app_id and not pol_ids:
+            # 🔴 **閘用列狀態版、內容用 payload 版**（#792 三輪覆核項 2）。
+            #
+            # 舊寫法拿 payload 版（列 ∪ 帳本）當「拆不拆」的閘，正好違反
+            # `_access_teardown_ids()` docstring 自己立的禁令——同一份 diff 裡規則
+            # 與唯一的範例互相打臉。而且那不只是措辭問題，它有一條**可達**的危險
+            # 路徑：一條「列已乾淨、但帳本還有欠款」的 route 會因此被捕獲，而它若
+            # 是 `is_protected=True` ＋ SA 有 live tunnel ＋ state 在
+            # ('active','active_no_route','error') 內，`_access_sync_skip_reason()`
+            # 就回 None ⇒ 落進 **pass 1** ⇒ 它的 teardown 一失敗就 raise，把同批
+            # 其他 route **已經對 CF 發出、回捲不掉**的刪除一起捲回去（#794 那條
+            # 無聲 fail-open 的燃料）。
+            #
+            # 那個狀態怎麼來的（可達性，非推測）：`_do_cleanup` → `_cleanup_
+            # cloudflare` 的 Access teardown 成功但 operator 回報 orphaned ⇒
+            # `if ok:` 清掉列上的 app_id 與 policy cf id、orphaned 落帳；同一輪
+            # tunnel 刪除失敗 ⇒ `tunnel_id` 保留 ⇒ `_do_cleanup` 寫
+            # `state='error'`。'error' 正在允許清單內、tunnel_id 也還在
+            # ⇒ 三個條件同時成立。
+            #
+            # 捕獲判準因此只看**列**；帳本上的舊帳仍然會跟著送出去（下一行），
+            # 只是不再有資格把一條列已乾淨的 route 拉進批次。
+            if not route._has_access_teardown():
                 continue
+            app_id, pol_ids = route._access_teardown_payload_ids()
             teardown_by_route[route.id] = {
                 'sa': route.security_access_id,
                 'app_id': app_id,
@@ -1650,6 +1671,10 @@ class SecurityAccessRoute(models.Model):
         白打一次 operator，七天後只多一行 stuck warning，無解。
 
         要送出去的 id 集合請用 `_access_teardown_payload_ids()`。
+
+        ⚠ 精確一點：禁的是「拿 payload 版當**判準**」（要不要拆／清乾淨了沒），
+        不是「不准一起用」。`unlink()` 的捕獲迴圈就是兩個都用——先用本方法的
+        bool 版當閘決定捕不捕獲，捕獲之後才用 payload 版決定送哪些 id。
         """
         self.ensure_one()
         return (self.access_app_id or None,

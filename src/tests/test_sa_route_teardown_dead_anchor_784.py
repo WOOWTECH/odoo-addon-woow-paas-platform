@@ -796,13 +796,22 @@ class TestBatchUnlinkTearing791(TransactionCase, _Fixture):
         self.assertFalse(self.env[_ROUTE].browse(u_id).exists())
 
     def test_E2_ledger_debt_rides_along_on_the_delete_teardown(self):
-        """F6：列上已經沒有 cf id、但帳上還欠的，刪除時順手一起送出去。
+        """F6：**被捕獲的** route，帳本上還欠的 id 要跟著這一趟 teardown 一起送。
 
-        列一消失帳就變成 dead anchor，得等下一輪 cron；既然這一趟本來就要送一份
-        teardown，沒有理由把舊帳留到下一小時。
+        ⚠ 本測試在 #792 三輪覆核時改過標的（原版已被推翻，保留紀錄以免下次有人
+        照原樣改回去）。原版用的是「列已乾淨、只有帳本有欠款」的 route，斷言它
+        會被刪除路徑捕獲並把帳送出去。項 2 之後那個斷言不再成立、而且**不該**成
+        立：捕獲的閘只看列狀態，因為「列已乾淨＋帳本有欠款」的 route 若被捕獲，
+        且剛好 `is_protected=True` ＋ SA live ＋ state 在允許清單內，就會落進
+        pass 1 ⇒ 它一失敗就把同批其他 route 已經對 CF 發出、回捲不掉的刪除一起
+        捲回去（#794 那條無聲 fail-open 的燃料；可達性見 `unlink()` 的註解與
+        `test_H3`）。那種 route 的帳改由 dead-anchor cron 回收。
+
+        F6 原本要的保證在**列上有 id**的 route 上仍然成立，這裡守的就是那一格。
         """
         sa = self._make_sa(state='active')
-        route = self._make_route(sa, protected=False, app_id=None)
+        route = self._make_route(sa, protected=True, app_id='app-e2',
+                                 policy_cf_ids=('cf-e2-row',))
         self.Reap._record_ids(_ROUTE, route.id, ['cf-e2-debt'])
         route_id = route.id
         client = self._mock(_teardown_result())
@@ -812,9 +821,11 @@ class TestBatchUnlinkTearing791(TransactionCase, _Fixture):
 
         teardowns = [c.args[0] for c in client.sync_access_app.call_args_list
                      if not c.args[0]['enabled']]
-        self.assertEqual(len(teardowns), 1,
-                         '只有帳上欠著的那條 route 該產生 teardown')
-        self.assertEqual(teardowns[0]['existing_policy_ids'], ['cf-e2-debt'])
+        self.assertEqual(len(teardowns), 1)
+        self.assertEqual(teardowns[0]['existing_app_id'], 'app-e2')
+        self.assertEqual(sorted(teardowns[0]['existing_policy_ids']),
+                         ['cf-e2-debt', 'cf-e2-row'],
+                         '列上的與帳本上的都要跟著這一趟送出去（F6 的原意）')
         self.assertEqual(self._pending_policies(route_id), [],
                          'operator 回 2xx ⇒ 舊帳當場結清，不必等 cron')
 
@@ -878,6 +889,12 @@ class TestSecondRoundReview792(TransactionCase, _Fixture):
         self.assertEqual(r2.access_app_id, 'app-g1b')
         self.assertEqual(sa2.state, 'error',
                          '列上還有 id ⇒ 這才是該落 error 的那一格')
+        # #792 三輪覆核 1(b)：陽性對照原本只斷言 state=='error'，而那個值在
+        # 「tunnel 也沒刪掉」時同樣會出現 ⇒ 鑑別力靠 mock 恰好讓 delete_tunnel
+        # 成功，不是靠斷言鎖住。把「error 是**因為 Access 沒清掉**而不是因為
+        # tunnel 還在」釘死。
+        self.assertFalse(sa2.tunnel_id,
+                         'tunnel 這半是成功的 ⇒ error 只可能來自 Access 那半')
 
     def test_G2_payload_still_carries_the_ledger_debt_on_delete(self):
         """F6 的另一半：閘不看帳本，但**送出去的集合**仍要帶帳本舊帳。
@@ -979,3 +996,107 @@ class TestSecondRoundReview792(TransactionCase, _Fixture):
                       'operator 沒設定不代表卡帳這件事就不用講')
         self.assertIn('not configured', joined,
                       '同時也要講 operator 沒設定（兩段訊號都要在）')
+
+
+# ====================================================================== #
+#  H 系列：#792 三輪覆核 —— 「靜默誤用」那一格                            #
+# ====================================================================== #
+
+@tagged('post_install', '-at_install')
+class TestSilentGateMisuse792(TransactionCase, _Fixture):
+    """gate 選錯版本時**完全沒有輸出**，所以要直接斷言選中的是誰。"""
+
+    def setUp(self):
+        super().setUp()
+        self.Reap = self.env[_REAP]
+        self.workspace = self.env['woow_paas_platform.workspace'].sudo(
+        ).create({'name': 'WS 784H %s' % uuid.uuid4().hex[:6]})
+
+    def test_H1_cleanup_filter_must_not_select_rows_that_are_already_clean(self):
+        """🔴 覆核 ④：現有測試只驗「該選中的有選中」，沒驗「不該選中的沒選中」。
+
+        `_cleanup_cloudflare` 的 filter 若被誤用成 payload 版（列 ∪ 帳本），會把
+        **每一條** route 都選中；而選中之後 `_teardown_route_access()` 自己的
+        「沒 id 就回 True」早退讓它**完全靜默**——不打 operator、不寫欄位、不留
+        log。也就是說那個誤用在整套測試裡不會紅。
+
+        所以判準不能建立在 operator 呼叫上（那正是誤用不會改變的東西），要**直接
+        斷言選中的集合**。
+        """
+        sa = self._make_sa(state='active')
+        dirty = self._make_route(sa, protected=True, app_id='app-h1')
+        ledger_only = self._make_route(sa, protected=True, app_id=None)
+        self.Reap._record_ids(_ROUTE, ledger_only.id, ['cf-h1-debt'])
+        spotless = self._make_route(sa, protected=False, app_id=None)
+
+        selected = sa.route_ids.filtered(lambda r: r._has_access_teardown())
+        self.assertEqual(
+            selected, dirty,
+            '只有「列上真的還有 id」的那條該被選中——帳本欠款不算，完全乾淨的更不算')
+        self.assertNotIn(ledger_only, selected,
+                         '帳本有欠款但列已乾淨 ⇒ 不得進 cleanup 批次（F6 回歸的形狀）')
+        self.assertNotIn(spotless, selected)
+
+    def test_H2_cleanup_payload_still_carries_ledger_debt(self):
+        """1(a)：`_cleanup_cloudflare` 的 payload 呼叫點被靜默還原成 row-only 時，
+        三條既有測試都量不到——因為它們送的 route 帳本上本來就沒有欠款。
+
+        這裡讓同一條 route **列上有 id、帳本也有欠款**，斷言送出去的清單兩邊都
+        帶到。還原成 row-only 就會少掉帳本那顆 ⇒ 紅。
+        """
+        sa = self._make_sa(state='active')
+        route = self._make_route(sa, protected=True, app_id='app-h2',
+                                 policy_cf_ids=('cf-h2-row',))
+        self.Reap._record_ids(_ROUTE, route.id, ['cf-h2-ledger'])
+        client = self._mock(_teardown_result())
+
+        with patch(MOCK_SA_CLIENT, return_value=client):
+            sa._cleanup_cloudflare()
+
+        teardowns = [c.args[0] for c in client.sync_access_app.call_args_list
+                     if not c.args[0]['enabled']]
+        self.assertEqual(len(teardowns), 1)
+        self.assertEqual(teardowns[0]['existing_app_id'], 'app-h2')
+        self.assertEqual(sorted(teardowns[0]['existing_policy_ids']),
+                         ['cf-h2-ledger', 'cf-h2-row'],
+                         'cleanup 送出去的清單要同時帶列上的與帳本上的')
+
+    def test_H3_unlink_capture_gate_is_row_state_not_payload(self):
+        """項 2：捕獲迴圈的閘用**列狀態版**——「列已乾淨、帳本有欠款」的 route
+        不得被拉進批次。
+
+        它若被拉進來，且剛好是 `is_protected=True` ＋ SA live ＋ state 在允許清單
+        內，就會落進 pass 1 ⇒ 它的 teardown 一失敗就把同批其他 route **已經對 CF
+        發出、回捲不掉**的刪除一起捲回去（#794 那條無聲 fail-open 的燃料）。
+
+        那個狀態是可達的：`_do_cleanup` 的 Access teardown 成功但 operator 回報
+        orphaned（清掉列上的 id、orphaned 落帳）＋ 同一輪 tunnel 刪除失敗
+        （保留 tunnel_id、寫 state='error'）⇒ 三個條件同時成立。
+        """
+        sa = self._make_sa(state='error')          # 'error' 在允許清單內
+        route = self._make_route(sa, protected=True, app_id=None)
+        self.Reap._record_ids(_ROUTE, route.id, ['cf-h3-debt'])
+        route_id = route.id
+        # 前提檢查：這條 route 確實會落進 pass 1（若被捕獲的話）
+        self.assertIsNone(route._access_sync_skip_reason(),
+                          '前提：這條 route 推得動 ⇒ 被捕獲的話就是 pass 1 成員')
+        client = self._mock(_teardown_result())
+
+        with patch(MOCK_SA_CLIENT, return_value=client):
+            route.unlink()
+
+        self.assertFalse(client.sync_access_app.called,
+                         '列已乾淨 ⇒ 不該被捕獲，也就不該產生 teardown 呼叫')
+        self.assertFalse(self.env[_ROUTE].browse(route_id).exists())
+        self.assertEqual(self._pending_policies(route_id), ['cf-h3-debt'],
+                         '帳留著等 dead-anchor cron——那才是它的回收路徑')
+
+        # 陽性對照（同一支 mock）：列上有 id 的照樣要被捕獲並送出去。
+        dirty = self._make_route(sa, protected=True, app_id='app-h3')
+        client.sync_access_app.reset_mock()
+        with patch(MOCK_SA_CLIENT, return_value=client):
+            dirty.unlink()
+        self.assertTrue(client.sync_access_app.called)
+        self.assertEqual(
+            client.sync_access_app.call_args.args[0]['existing_app_id'],
+            'app-h3')
