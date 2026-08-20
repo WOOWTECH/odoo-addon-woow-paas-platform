@@ -39,6 +39,8 @@ ingress** 的，刪掉那一列不會讓 Cloudflare 少一條 ingress，只會�
 """
 import logging
 
+from psycopg2 import OperationalError
+
 from odoo import _, api, fields, models
 from odoo.exceptions import UserError, ValidationError
 
@@ -614,25 +616,35 @@ class SmartHomeRoute(models.Model):
                 'existing_app_id': info['app_id'],
                 'existing_policy_ids': info['policy_ids'],
             })
-            # #784：operator 回報刪不掉的那幾顆現在就是 CF 孤兒，而呼叫端拿到
-            # True 之後列就會被刪掉 ⇒ 舊寫法（連 log 都沒有）之後再也沒有任何
-            # 記錄指向它們。落帳，由 dead-anchor cron 回收。
-            orphaned = (result or {}).get('orphaned_policy_ids') or []
-            if orphaned:
-                _logger.warning(
-                    "[SH] Access teardown sh=%s app=%s left %d orphan "
-                    "policy(ies): %s", sh.id, info['app_id'], len(orphaned),
-                    ', '.join(orphaned))
-            if info.get('anchor_model') and info.get('anchor_id'):
-                self.env[_CF_REAP_MODEL]._settle_teardown(
-                    info['anchor_model'], info['anchor_id'],
-                    info['app_id'], info['policy_ids'] or [], orphaned)
-            return True
         except Exception as e:  # noqa: BLE001 — 呼叫端決定嚴重性
             _logger.warning(
                 "[SH] Access teardown failed sh=%s app=%s: %s — kept for retry",
                 sh.id, info['app_id'], e)
             return False
+        # ── 提交點之後 ─────────────────────────────────────────────────
+        # #784：operator 回報刪不掉的那幾顆現在就是 CF 孤兒，而呼叫端拿到 True
+        # 之後列就會被刪掉 ⇒ 舊寫法（連 log 都沒有）之後再也沒有任何記錄指向
+        # 它們。落帳，由 dead-anchor cron 回收。記帳失敗不翻轉回傳值
+        # （[[post-commit-bookkeeping-rollback-unit]]）。
+        orphaned = (result or {}).get('orphaned_policy_ids') or []
+        if orphaned:
+            _logger.warning(
+                "[SH] Access teardown sh=%s app=%s left %d orphan "
+                "policy(ies): %s", sh.id, info['app_id'], len(orphaned),
+                ', '.join(orphaned))
+        if info.get('anchor_model') and info.get('anchor_id'):
+            try:
+                with self.env.cr.savepoint():
+                    self.env[_CF_REAP_MODEL]._settle_teardown(
+                        info['anchor_model'], info['anchor_id'],
+                        info['app_id'], info['policy_ids'] or [], orphaned)
+            except OperationalError:
+                raise
+            except Exception:
+                _logger.exception(
+                    "[SH] Access teardown sh=%s app=%s: CF teardown SUCCEEDED "
+                    "but booking the reap ledger failed", sh.id, info['app_id'])
+        return True
 
     def to_dict(self):
         self.ensure_one()
