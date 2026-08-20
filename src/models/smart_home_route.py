@@ -322,6 +322,15 @@ class SmartHomeRoute(models.Model):
              'app 會 fallback 到所有可用 IdP）。曝光出來，不要讓 fail-open 的'
              '放寬無聲無息。',
     )
+    access_protection_lost = fields.Boolean(
+        string='Protection Not In Effect', copy=False, default=False,
+        help='True ＝ 這條 route 的 Cloudflare Access application 已經被拆掉、'
+             '而列本身還在（刪除交易回捲了，Cloudflare 那半回捲不掉）。此時 '
+             'is_protected 只是**意圖**：CF 上沒有任何東西在強制登入，hostname '
+             '照常由 tunnel 服務。由下一次成功的 Access sync 清掉。刻意與 '
+             'is_protected 分開——降 is_protected 等於平台改掉租戶看得到的設定'
+             '（產品可見變更），未拍板（#794）。',
+    )
 
     # ------------------------------------------------------------------ #
     #  compute / constraints                                             #
@@ -491,20 +500,45 @@ class SmartHomeRoute(models.Model):
                 'hostname is served by the Cloudflare tunnel itself. Delete '
                 'the Smart Home instead.'))
         teardown = [r._capture_access_teardown() for r in self]
-        with self.env.cr.savepoint():
-            result = super().unlink()
-            failed = [info['label'] for info in teardown
-                      if info and not self._push_access_teardown(info)]
-            if failed:
-                # fail-loud：列已經沒了，吞掉這個失敗會留下一組 CF Access app ＋
-                # reusable policy 永久孤兒，而且沒有重試錨點也沒有錯誤訊號。
-                # raise 讓 savepoint 把 unlink 回滾，列（與它的 access_app_id）
-                # 留下來當重試錨點。
-                raise UserError(_(
-                    'Cloudflare Access teardown failed for route(s): %(names)s. '
-                    'The route was kept so the deletion can be retried; its '
-                    'Access app is still live in Cloudflare.',
-                    names=', '.join(str(f) for f in failed)))
+        # 🔴 #794：savepoint 回捲得掉 DB 那半，回捲不掉「已經對 Cloudflare 發出
+        # 的 Access 刪除」⇒ 先被拆掉的那幾條會以「列復活、`is_protected=True`、
+        # `access_app_id` 指向一顆 CF 上已不存在的 app」收場，UI 讀 is_protected
+        # 顯示已保護、實際免登入即可存取。`torn_down` 記下真的拆成功的錨點，
+        # `except` 那一格（savepoint 已回捲、例外尚未外拋）交給獨立交易補償。
+        torn_down = []
+        Reap = self.env[_CF_REAP_MODEL]
+        try:
+            with self.env.cr.savepoint():
+                result = super().unlink()
+                # #794：**第一條失敗就停**。舊寫法是 eager 的 list comprehension，
+                # 同批第一條失敗之後後面每一條仍會被真的送去 CF 拆掉才一起回捲
+                # ——而 SH 這一腿連 SA 的 pass1/pass2 分組都沒有，整批都會被拆，
+                # 窗口比 SA 更寬。代價：錯誤訊息只列得出第一條。
+                failed = None
+                for info in teardown:
+                    if not info:
+                        continue
+                    if self._push_access_teardown(info):
+                        torn_down.append(
+                            (info['anchor_model'], info['anchor_id']))
+                        continue
+                    failed = info['label']
+                    break
+                if failed:
+                    # fail-loud：列已經沒了，吞掉這個失敗會留下一組 CF Access app
+                    # ＋ reusable policy 永久孤兒，而且沒有重試錨點也沒有錯誤訊號。
+                    # raise 讓 savepoint 把 unlink 回滾，列（與它的 access_app_id）
+                    # 留下來當重試錨點。
+                    raise UserError(_(
+                        'Cloudflare Access teardown failed for route(s): '
+                        '%(names)s. The route was kept so the deletion can be '
+                        'retried; its Access app is still live in Cloudflare.',
+                        names=failed))
+        except Exception:
+            Reap._compensate_fail_open_after_rollback(
+                torn_down, _logger,
+                '[SH] route unlink (routes=%s)' % (self.ids,))
+            raise
         return result
 
     # ------------------------------------------------------------------ #
@@ -645,6 +679,11 @@ class SmartHomeRoute(models.Model):
         new_unresolved = ', '.join(unresolved) if unresolved else False
         if self.access_unresolved_idp_types != new_unresolved:
             self.access_unresolved_idp_types = new_unresolved
+        # #794：推成功了 ⇒ CF 上的狀態就是這一列宣稱的狀態，fail-open 旗標的
+        # 前提（app 被拆掉但列還在）已經不成立。旗標由 sync 結果驅動，與
+        # `access_unresolved_idp_types` 同一個形狀。
+        if self.access_protection_lost:
+            self.access_protection_lost = False
         returned = result.get('policy_ids') or []
         policies = self.access_policy_ids.sorted(
             key=lambda x: (x.sequence, x.id))
@@ -761,6 +800,24 @@ class SmartHomeRoute(models.Model):
                 '[SH] Access teardown sh=%s app=%s' % (sh.id, info['app_id']))
         return True
 
+    def _access_mark_protection_lost(self):
+        """#794：把「這一列的 CF Access app 已經被拆掉、而列本身還在」寫成列上
+        的事實。三腿同名，唯一呼叫端是
+        `cf_access_policy_reap._compensate_fail_open_after_rollback`（獨立交易）。
+
+        完整理由（為什麼清 id 不違反 two-stage-remote-provision-idempotency、
+        為什麼只清 id 不夠、為什麼不動 `is_protected`）寫在 SA 那一份，見
+        `security_access.py` 的同名方法——**不在這裡重述**：三份平行的散文一定
+        會漂，而漂掉的那一份讀起來和權威版本一模一樣。
+        """
+        self.ensure_one()
+        _internal_sm_route_identity(self).access_app_id = False
+        for pol in self.access_policy_ids:
+            if pol.cf_policy_id:
+                pol.cf_policy_id = False
+        if not self.access_protection_lost:
+            self.access_protection_lost = True
+
     def to_dict(self):
         self.ensure_one()
         return {
@@ -774,5 +831,8 @@ class SmartHomeRoute(models.Model):
             # fail-open 放寬訊號，必須吐；`access_app_id` 刻意**不吐**（伺服器
             # 擁有的 CF 物件 id，形狀對齊 CS `_access_to_dict()`）。
             'access_unresolved_idp_types': self.access_unresolved_idp_types or '',
+            # #794 fail-open 訊號：宣稱受保護、但 CF 上的 app 已經被拆掉。不吐
+            # 的話 UI 只讀得到 is_protected 這個**意圖**欄位。
+            'access_protection_lost': self.access_protection_lost,
             'access_policies': [p.to_dict() for p in self.access_policy_ids],
         }

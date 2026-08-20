@@ -25,6 +25,9 @@ from .smart_home_route import (
 
 _logger = logging.getLogger(__name__)
 
+#: #528 的待回收 CF Access 物件帳本（三腿共用；本檔只用它的 #794 補償入口）。
+_CF_REAP_MODEL = 'woow_paas_platform.cf_access_policy_reap'
+
 
 # ------------------------------------------------------------------------- #
 #  #524 第 1 節：smart_home 的建立閘（private sentinel）                      #
@@ -473,12 +476,20 @@ class SmartHome(models.Model):
             return existing
         return Route.create({'smart_home_id': self.id, 'is_primary': True})
 
-    def _teardown_routes_access(self):
+    def _teardown_routes_access(self, torn_down=None):
         """拆掉本 SH 所有 route 的 Cloudflare Access。回傳失敗的 route 標籤清單。
 
         刪除與 cron 清理兩條路徑共用。**不 raise**——兩個呼叫端對失敗的處置不同
         （`unlink` 要 fail-loud 讓交易回滾保住重試錨點；`_do_cleanup` 要落
         `error` 等下一次 cron）。
+
+        #794：`torn_down` 是給 `unlink()` 用的**累加器**（``[(model, id), …]``），
+        真的對 CF 拆成功的 route 錨點會 append 進去。刻意做成 out-parameter 而
+        不是改回傳型別：回傳「失敗標籤清單」是兩個呼叫端共用的既有契約，改它會
+        連帶動到 `_do_cleanup` 與四條既有測試，而那些跟本修法無關。
+        ⚠ 為什麼 `unlink()` 需要它：拆成功之後這裡清掉的 `access_app_id` 只是
+        DB 那半，CF 那半回捲不掉 ⇒ 同批後面任何一步 raise 都會讓這幾條 route
+        帶著 `is_protected=True` 與死 app id 復活（#794 的形狀）。
         """
         self.ensure_one()
         Route = self.env['woow_paas_platform.smart_home_route'].sudo()
@@ -492,6 +503,9 @@ class SmartHome(models.Model):
                 for pol in route.access_policy_ids:
                     if pol.cf_policy_id:
                         pol.cf_policy_id = False
+                if torn_down is not None:
+                    torn_down.append(
+                        (info['anchor_model'], info['anchor_id']))
             else:
                 failed.append(info['label'])
         return failed
@@ -698,53 +712,73 @@ class SmartHome(models.Model):
         subs_to_settle = self.sudo().mapped('subscription_id').filtered(
             lambda s: s.state == 'in_progress'
         )
-        for record in self:
-            # #768：Cloudflare Access app 與 reusable policy 必須在 route 列消失
-            # 之前拆掉——`ondelete='cascade'` 是 **DB 層**的，child 的 Python
-            # `unlink()` 根本不會被呼叫（SA 也是為此在 `SecurityAccess.unlink`
-            # 顯式呼叫 `self.route_ids.unlink()`）。漏掉的話每刪一台 SH 就永久
-            # 孤兒一組 CF 物件，而且刪掉的列連重試錨點都不剩。
-            failed = record._teardown_routes_access()
-            if failed:
-                raise UserError(
-                    "Cloudflare Access teardown failed for route(s): %s. The "
-                    "Smart Home was kept so the deletion can be retried; its "
-                    "Access app is still live in Cloudflare."
-                    % ', '.join(str(f) for f in failed)
-                )
-            # 🔴 route（連帶它底下的 policy）必須在 `super().unlink()` **之前**
-            # 顯式刪掉，不能交給 DB 的 `ON DELETE CASCADE`。實測（本機 paas-odoo
-            # image，`test_D2`）：
-            #
-            #     DELETE FROM woow_paas_platform_smart_home WHERE id IN (297)
-            #     → ForeignKeyViolation: insert or update on table
-            #       "…_security_access_access_policy" violates foreign key
-            #       constraint "…_smart_home_route_id_fkey"
-            #       DETAIL: Key (smart_home_route_id)=(322) is not present…
-            #
-            # 成因是同一次 cascade 裡有**兩條方向不同的邊**：policy 的
-            # `smart_home_id` 是 stored related M2O，Odoo 給它的是預設的
-            # `ondelete='set null'` ⇒ 刪 SH 時 PG 要對 policy 列發一次 UPDATE，
-            # 而那一刻 route 列已經被另一條 cascade 帶走了。SA 在
-            # `SecurityAccess.unlink` 顯式 `self.route_ids.unlink()` 就是為了同
-            # 一件事（那邊還多一個理由：child 的 Python unlink 在 DB cascade 下
-            # 根本不會被呼叫）。
-            #
-            # 這一步不會重複打 operator：上面的 `_teardown_routes_access()` 成功
-            # 後已經把 `access_app_id` 與每條 policy 的 `cf_policy_id` 清空，
-            # route 的 `_capture_access_teardown()` 因此回 None。
-            _sm_route_cascade_unlink(record.route_ids).unlink()
-            if record.tunnel_id:
-                record._cleanup_tunnel()
-            if record.tunnel_id:
-                raise UserError(
-                    "Cloudflare cleanup failed; the tunnel is still live and "
-                    "billed. The record was kept so the deletion can be "
-                    "retried. Please try again shortly."
-                )
-        res = super().unlink()
-        for sub in subs_to_settle:
-            sub._settle_on_entity_delete(reason='Smart Home deleted')
+        # 🔴 #794：本段**新增一層 savepoint**（本 method 原本沒有）。與 CS 那腿
+        # 同一個理由，而且這裡的後果更重：`_teardown_routes_access()` 成功之後
+        # 只清得掉 DB 那半，CF 上的 Access app 已經沒了、回捲不掉；接著任何一步
+        # raise（tunnel 刪不掉那格尤其可達）都會讓整筆交易被丟棄 ⇒ route 帶著
+        # `is_protected=True` 與死 app id 復活，**而 tunnel 正是因為刪不掉才活著**
+        # ⇒ hostname 照常服務、CF 上沒有任何登入強制、UI 顯示已保護。
+        #
+        # savepoint 在這裡是**功能性**的：補償寫跑在獨立連線上，只要外層交易對
+        # 那幾列的 UPDATE 還活著，獨立交易就會撞 PG 寫寫衝突等到 lock_timeout。
+        # 先回捲、再補償，是補償寫得進去的前提。
+        torn_down = []
+        Reap = self.env[_CF_REAP_MODEL]
+        try:
+            with self.env.cr.savepoint():
+                for record in self:
+                    # #768：Cloudflare Access app 與 reusable policy 必須在 route 列消失
+                    # 之前拆掉——`ondelete='cascade'` 是 **DB 層**的，child 的 Python
+                    # `unlink()` 根本不會被呼叫（SA 也是為此在 `SecurityAccess.unlink`
+                    # 顯式呼叫 `self.route_ids.unlink()`）。漏掉的話每刪一台 SH 就永久
+                    # 孤兒一組 CF 物件，而且刪掉的列連重試錨點都不剩。
+                    failed = record._teardown_routes_access(
+                        torn_down=torn_down)
+                    if failed:
+                        raise UserError(
+                            "Cloudflare Access teardown failed for route(s): %s. The "
+                            "Smart Home was kept so the deletion can be retried; its "
+                            "Access app is still live in Cloudflare."
+                            % ', '.join(str(f) for f in failed)
+                        )
+                    # 🔴 route（連帶它底下的 policy）必須在 `super().unlink()` **之前**
+                    # 顯式刪掉，不能交給 DB 的 `ON DELETE CASCADE`。實測（本機 paas-odoo
+                    # image，`test_D2`）：
+                    #
+                    #     DELETE FROM woow_paas_platform_smart_home WHERE id IN (297)
+                    #     → ForeignKeyViolation: insert or update on table
+                    #       "…_security_access_access_policy" violates foreign key
+                    #       constraint "…_smart_home_route_id_fkey"
+                    #       DETAIL: Key (smart_home_route_id)=(322) is not present…
+                    #
+                    # 成因是同一次 cascade 裡有**兩條方向不同的邊**：policy 的
+                    # `smart_home_id` 是 stored related M2O，Odoo 給它的是預設的
+                    # `ondelete='set null'` ⇒ 刪 SH 時 PG 要對 policy 列發一次 UPDATE，
+                    # 而那一刻 route 列已經被另一條 cascade 帶走了。SA 在
+                    # `SecurityAccess.unlink` 顯式 `self.route_ids.unlink()` 就是為了同
+                    # 一件事（那邊還多一個理由：child 的 Python unlink 在 DB cascade 下
+                    # 根本不會被呼叫）。
+                    #
+                    # 這一步不會重複打 operator：上面的 `_teardown_routes_access()` 成功
+                    # 後已經把 `access_app_id` 與每條 policy 的 `cf_policy_id` 清空，
+                    # route 的 `_capture_access_teardown()` 因此回 None。
+                    _sm_route_cascade_unlink(record.route_ids).unlink()
+                    if record.tunnel_id:
+                        record._cleanup_tunnel()
+                    if record.tunnel_id:
+                        raise UserError(
+                            "Cloudflare cleanup failed; the tunnel is still live and "
+                            "billed. The record was kept so the deletion can be "
+                            "retried. Please try again shortly."
+                        )
+                res = super().unlink()
+                for sub in subs_to_settle:
+                    sub._settle_on_entity_delete(reason='Smart Home deleted')
+        except Exception:
+            Reap._compensate_fail_open_after_rollback(
+                torn_down, _logger,
+                '[SH] smart home unlink (sh=%s)' % (self.ids,))
+            raise
         return res
 
     def action_refresh_status(self):
