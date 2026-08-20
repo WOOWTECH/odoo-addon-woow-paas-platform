@@ -3837,11 +3837,16 @@ INTERNAL_CTX_KEY_REGISTRY = {
                "liveness gate 的狀態那一半。可達性未實測。",
     },
     "cs_skip_access_sync": {
-        "status": "pending",
+        "status": "enforced",
+        "sentinel": "_INTERNAL_CS_SYNC_CONTROL",
+        "reader": "_is_cs_sync_control",
+        "defined_in": "src/models/cloud_service.py",
         "issue": "#787",
-        "why": "#787 A 段：抑制 cloud_service.write() 的 access sync（#745）。ACL 上"
-               "租戶對 cloud_service 有全 CRUD ⇒ **最可能可達**的一把，但仍未實測。"
-               "生產側只讀不設。",
+        "why": "抑制 cloud_service.write() 的 access sync（#745）。#787 A 段五把裡"
+               "第一把**實測可達**的：租戶自建 workspace 即 owner，"
+               "`cloud_service_rule_owner_admin_manage` 給完整寫入 ⇒ 真 call_kw 打得"
+               "進 write()，偽造後 `is_protected` 落地而 Cloudflare 不知情"
+               "（fail-open 且無聲）。已改私有 sentinel（形狀同 #536）。",
     },
     "woow_force_issue": {
         "status": "pending",

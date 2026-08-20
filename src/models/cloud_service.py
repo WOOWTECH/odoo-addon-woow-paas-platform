@@ -191,6 +191,77 @@ def _reject_cs_access_identity_anchor_writes(env, vals):
             )
 
 
+# ------------------------------------------------------------------------- #
+#  #787：CS Access sync 的抑制鑰匙（private sentinel，形狀抄 #536）           #
+# ------------------------------------------------------------------------- #
+#
+# `cs_skip_access_sync` 抑制 `write()` 之後對 operator 的 Access 宣告式推送
+# （#745 接上的那一段）。原本的判定只看 truthy ⇒ `/web/dataset/call_kw` 把呼叫端
+# context 整包換進 env，租戶送 `context={"cs_skip_access_sync": true}` 就能讓
+# `is_protected` 這類欄位**落地進 Postgres 而 Cloudflare 完全不知情**。方向是
+# fail-open：租戶（與平台自己）看到一個開著的保護開關，服務其實完全公開。
+#
+# 這條路徑的可達性在 #787 是**實測過**的，不是推論：租戶自建 workspace 當下就是
+# owner，而 `cloud_service_rule_owner_admin_manage` 給 owner／admin 完整寫入 ⇒
+# 真 RPC 打得進 `CloudService.write()`。ACL 那一半沒有任何東西擋得到它——這把閘
+# 的判準從頭到尾都不是「你是誰」，而是「context 裡那個值是什麼」。
+#
+# 形狀刻意逐字沿用 `models/security_access.py` 的 `_INTERNAL_SYNC_CONTROL`
+# （`:160`）＋`_is_sync_control`（`:188`）——那是本 repo 已被 #522／#536 實測過
+# 的同一套機制，這裡不另發明。
+#
+# ⚠ **key 名沒有改，改的是值**：`with_context(cs_skip_access_sync=False)` 的
+# 「不抑制」語意原封不動，而 `=True` 從此不再開閘。後者是 fail-safe 的方向（多推
+# 一次冪等的全量狀態，而不是漏掉一次），但它是**無聲**的，所以下面的判定函式在
+# 看到「truthy 但不是 sentinel」時會 WARNING —— 那既是偽造的訊號，也是「還有
+# in-process 的碼照舊寫法傳 True」的訊號。
+class _InternalCsSyncControl:
+    """CS Access sync-control 逃生門的 marker type —— 見上方註解。"""
+
+    __slots__ = ()
+
+    def __repr__(self):
+        return '<internal cs sync control>'
+
+
+_INTERNAL_CS_SYNC_CONTROL = _InternalCsSyncControl()
+
+#: key 本身不是判準（呼叫端當然抄得到這個字串），判準是它的**值身分**。
+_CTX_CS_SKIP_ACCESS_SYNC = 'cs_skip_access_sync'
+
+
+def _cs_skip_access_sync(records):
+    """開閘：這一次 write 只搬 DB 狀態，不對 operator 做 Access 推送。
+
+    今天生產碼裡一個呼叫端都沒有（這把鑰匙只有測試佈景在用），helper 仍然要
+    存在：它是 `with_context(cs_skip_access_sync=True)` 這種**可偽造寫法**的唯一
+    替代品。少了它，下一個真的需要抑制推送的人只會照舊寫 `=True`，然後在一個
+    只會印 WARNING 的無聲失效裡 debug。
+    """
+    return records.with_context(
+        **{_CTX_CS_SKIP_ACCESS_SYNC: _INTERNAL_CS_SYNC_CONTROL})
+
+
+def _is_cs_sync_control(env, key):
+    """這個 sync-control 開關是不是**伺服器端程式碼**設的（而非呼叫端偽造的）。
+
+    只有 sentinel 物件算數。JSON 表達不出物件同一性，所以租戶送
+    ``context={"cs_skip_access_sync": true}`` 進 ``call_kw`` 時走的是下面那條
+    WARNING —— 守衛不開閘，這一次寫入照常把 Access 狀態推給 operator。
+    """
+    value = env.context.get(key)
+    if value is _INTERNAL_CS_SYNC_CONTROL:
+        return True
+    if value:
+        _logger.warning(
+            "Ignoring non-sentinel %r in context (value=%r, uid=%s): this "
+            "hatch only opens for in-process callers using the module's "
+            "helper — see _INTERNAL_CS_SYNC_CONTROL (#787). Either a forged "
+            "RPC context, or in-process code still passing True.",
+            key, value, env.uid)
+    return False
+
+
 class SubscriptionBindingError(AccessError):
     """#519 提案 B：這一次 `subscription_id` 的綁定不合法。
 
@@ -4095,7 +4166,7 @@ class CloudService(models.Model):
         # 只在真的碰到 access 欄位時才開 savepoint：其餘寫入路徑（每分鐘的 poll、
         # helm 狀態回寫…）一行都不變，不替它們付 savepoint 的成本。
         access_sync = (
-            not self.env.context.get('cs_skip_access_sync')
+            not _is_cs_sync_control(self.env, _CTX_CS_SKIP_ACCESS_SYNC)
             and any(k in vals for k in _CS_ACCESS_SYNC_FIELDS))
         with contextlib.ExitStack() as stack:
             if access_sync:

@@ -44,8 +44,10 @@ from unittest.mock import MagicMock, patch
 
 from odoo.tests import TransactionCase, tagged
 
+# #787：`cs_skip_access_sync` 只認模組私有 sentinel，不能傳 `True`
+# （呼叫端 context 會被 `call_kw` 整包換進 env ⇒ truthy 值是租戶可偽造的）。
 from ..models.cloud_service import (
-    _internal_cs_access_identity, _internal_provision,
+    _cs_skip_access_sync, _internal_cs_access_identity, _internal_provision,
 )
 from ..models.security_access import (
     _force_access_sync, _internal_identity as _internal_sa,
@@ -360,7 +362,7 @@ class TestCsReap(TransactionCase, _ReapMixin):
                 'template_id': template.id, 'state': 'running'})
         self.svc.subdomain = make_service_subdomain(
             self.workspace.ws_hash, self.svc.reference_id, self.svc.name)
-        self.svc.with_context(cs_skip_access_sync=True).write(
+        _cs_skip_access_sync(self.svc).write(
             {'is_protected': True})
         _internal_cs_access_identity(self.svc).access_app_id = 'app-live'
         self.client = self._mock(_sync_result(app_id='app-live'))

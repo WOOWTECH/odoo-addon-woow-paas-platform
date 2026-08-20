@@ -24,7 +24,11 @@ from unittest.mock import MagicMock, patch
 
 from odoo.tests import HttpCase, tagged
 
-from ..models.cloud_service import _internal_provision
+# #787：`cs_skip_access_sync` 只認模組私有 sentinel，不能傳 `True`
+# （呼叫端 context 會被 `call_kw` 整包換進 env ⇒ truthy 值是租戶可偽造的）。
+from ..models.cloud_service import (
+    _cs_skip_access_sync, _internal_provision,
+)
 from ..models.workspace_access import (
     ROLE_ADMIN, ROLE_GUEST, ROLE_USER,
 )
@@ -370,7 +374,7 @@ class TestCsAccessPolicyEndpoint(_CsAccessEndpointFixture):
     def test_G15_reorder_rewrites_precedence_and_syncs_once(self):
         p1 = self._policy(self.svc, name='g15-a', sequence=10)
         p2 = self._policy(self.svc, name='g15-b', sequence=20)
-        self.svc.with_context(cs_skip_access_sync=True).write(
+        _cs_skip_access_sync(self.svc).write(
             {'is_protected': True})
         self.authenticate(self.alice_login, self.alice_login)
         client = self._mock()
@@ -414,7 +418,7 @@ class TestCsAccessTenantRpcChain(_CsAccessEndpointFixture):
             '（sentinel 寫不進去，而 endpoint 仍回 success）')
 
     def test_H2_tenant_policy_create_reaches_the_operator(self):
-        self.svc.with_context(cs_skip_access_sync=True).write(
+        _cs_skip_access_sync(self.svc).write(
             {'is_protected': True})
         self.authenticate(self.alice_login, self.alice_login)
         client = self._mock(_sync_result(policy_ids=['cf-h2']))
@@ -493,7 +497,7 @@ class TestCsAccessApiPayload(_CsAccessEndpointFixture):
     def test_F2_service_detail_payload_carries_the_access_block(self):
         self._bind_subscription(1)
         self._policy(self.svc, name='f2')
-        self.svc.with_context(cs_skip_access_sync=True).write(
+        _cs_skip_access_sync(self.svc).write(
             {'is_protected': True, 'session_duration': '8h',
              'login_email_otp': True})
         self.authenticate(self.alice_login, self.alice_login)
