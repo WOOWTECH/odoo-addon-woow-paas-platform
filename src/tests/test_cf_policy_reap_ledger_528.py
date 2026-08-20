@@ -9,7 +9,12 @@
 指向它**，之後任何 re-sync 都不會回收（2026-08-02 在 stg 實際漏了兩顆，其中一條
 是 allow everyone）。
 
-本檔守四件事：
+🔴 **那條 context 通道本身已於 #783 整條移除**（它是 `call_kw` 直達的裸值，而它
+餵的是 operator 的**帳號級**刪除清單）。帳本因此不只是「更耐久的第二條腿」，而是
+**唯一**的一條——所以本檔的 B/C/D 系列同時是 #528 的守線與 #783 的回歸證據：它們
+走真實 unlink，拿掉 context 之後一格都沒有變。
+
+本檔守五件事：
 
 1. **帳要 durable**：unlink 當下把 doomed id 寫進 DB（`cf_access_policy_reap`），
    不再依賴「當次 sync 一定會跑」。
@@ -19,6 +24,10 @@
    或被 gate 擋掉時帳原封不動。
 4. **被 gate 擋掉且手上有待回收 id ⇒ 大聲**（方向 3）。反過來，帳上是空的時候
    必須**安靜**——停權下 sync 被擋是常態，無條件 warning 等於 log 洪水。
+5. **呼叫端塞進 context 的 id 不得進 `existing_policy_ids`**（#783，B8/C3/D4）。
+   ⚠ 那三條的觸發器刻意用**普通的 write** 而不是 unlink：偽造面不在 unlink 那一
+   行，而在「任何一次會觸發 `_sync_access_to_operator()` 的操作都沿用呼叫端的
+   context」。
 
 ## 判別式紀律（這檔最容易寫成假綠的兩格）
 

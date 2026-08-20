@@ -6,13 +6,15 @@ CF 的 reusable policy **只能經 operator 的 ``existing_policy_ids`` 被刪�
 （delete-then-recreate 是唯一的刪除通道）。而那份清單是從**尚存的** policy 列
 推導出來的 ⇒ 一列被 unlink 之後，它的 ``cf_policy_id`` 就再也進不了那份清單。
 `SecurityAccessAccessPolicy.unlink()` 因此在 ``super().unlink()`` 之前把 cf id
-撈出來、經 ``sa_unlinked_cf_policy_ids`` context 注入**那一次** re-sync。
+撈出來，落進本表，讓之後任何一次成功的 sync 帶出去刪。
 
-#528 打穿的正是「那一次」：三腿的 ``_sync_access_to_operator()`` 各自有一組
-liveness gate（SA／SH 是停權狀態、CS 是 ``deleting`` / 沒有 subdomain），gate
-一擋，operator 一次都不會被呼叫，而 context 用完即丟、DB 列已經不在
+（歷史：#528 之前那批 id 是經 ``sa_unlinked_cf_policy_ids`` context 注入**那一次**
+re-sync 的。#528 打穿的正是「那一次」：三腿的 ``_sync_access_to_operator()`` 各自
+有一組 liveness gate（SA／SH 是停權狀態、CS 是 ``deleting`` / 沒有 subdomain），
+gate 一擋，operator 一次都不會被呼叫，而 context 用完即丟、DB 列已經不在
 ⇒ **那顆 CF policy 從此沒有任何記錄指向它，之後任何一次 re-sync 都不會回收**
-（2026-08-02 在 stg 實際漏了兩顆，其中一條是 allow everyone）。
+（2026-08-02 在 stg 實際漏了兩顆，其中一條是 allow everyone）。那把 context key
+已於 #783 整條移除，理由見下方設計決定 1。）
 
 所以帳要**離開 context、落到 DB**：unlink 當下記帳，之後**任何一次成功的**
 sync 把帳上的 id 併進 ``existing_policy_ids`` 一起送去刪，operator 回報確實刪掉
@@ -35,20 +37,32 @@ sync 把帳上的 id 併進 ``existing_policy_ids`` 一起送去刪，operator �
 
 ## 兩個刻意的設計決定
 
-1. **只記從列上讀到的 ``cf_object_id``，永遠不記 context 傳進來的值。**
-   ``sa_unlinked_cf_policy_ids`` 是一把裸 context key，而 ``/web/dataset/call_kw``
-   把呼叫端的 context 原封不動交給 ORM（#522／#536 已就同族 key 實測過）
-   ⇒ 租戶在 RPC payload 多塞一個 key 就能決定 operator 要刪哪些 CF policy，
-   而 CF reusable policy 是**帳號級**物件。把那個值寫進 DB 等於把一次性的偽造
-   升級成持久的偽造，所以 ``_record()`` 的呼叫端只有 policy 的 ``unlink()``，
-   餵進來的一律是列上真實存在過的值。
-   （既有那把 context key 本身的偽造面不在 #528 範圍內，見 PR 說明。）
+1. **doomed id 的唯一來源是「列上讀到的 ``cf_object_id``」，沒有 context 通道。**
+   ``sa_unlinked_cf_policy_ids`` 曾經是一把裸 context key，而
+   ``/web/dataset/call_kw`` 把呼叫端的 context 原封不動交給 ORM（#522／#536 已就
+   同族 key 實測過）⇒ 租戶在 RPC payload 多塞一個 key 就能決定 operator 要刪哪些
+   CF policy，而 CF reusable policy 是**帳號級**物件
+   （``delete_reusable_policy`` 打的是 ``/accounts/{id}/access/policies/{pid}``，
+   沒有 app 也沒有租戶邊界）。
+
+   🔴 **#783 把那條腿整個拿掉**，而不是給它加一把 sentinel。理由是它在生產路徑上
+   本來就**冗餘**：``unlink()`` 在同一個 savepoint 內對每一個錨點**無條件**先
+   ``_record_ids()`` 落帳，之後才推 sync，而 context 只注入給 ``exists()`` 的那個
+   子集 ⇒ 帳本是 context 的**嚴格超集**，``_pending_for()`` 的 context 迴圈一顆也
+   加不到。留著它只是留一條沒人需要的偽造通道。
+
+   ⚠ 偽造面不在 ``unlink()`` 那一行：``_pending_for()`` 讀的是「錨點當下的
+   ``env.context``」，而**任何**會觸發 ``_sync_access_to_operator()`` 的操作都沿用
+   呼叫端的 context（``_access_sync_targets()`` 用 ``.mapped()``，不重置 env）
+   ⇒ 修的必須是**讀取端**。只在注入端包一層 marker 會讓那些路徑原封不動可攻擊，
+   而且測試不會紅。
 
 2. **租戶對本表零 ACL row（只給 ``base.group_system``），平台碼一律 ``sudo()``。**
    與 ``cloud_service_secret`` / ``reconcile_report`` 同型。這比在欄位上加一把
    sentinel guard 更強：租戶連 model 都碰不到，不必再維護第四把 sentinel，也就
    沒有「sentinel 命名互為子字串害 repo-lint 說謊」那類問題
-   （見 ``src/models/smart_home_route.py`` 的命名禁令）。
+   （見 ``src/models/smart_home_route.py`` 的命名禁令）。#783 選「拿掉通道」而不是
+   「sentinel 化通道」用的是同一條論證。
 
 ## 錨點為什麼是 ``(model, id)`` 而不是三支 Many2one
 
@@ -80,10 +94,19 @@ _logger = logging.getLogger(__name__)
 #: 不會消。門檻的作用是把後者從前者裡分出來，不是精準預測。
 _STUCK_PENDING_DAYS = 7
 
-#: policy unlink 注入 doomed id 的 context key —— 三腿共用的既有通道。
-#: 這裡集中一份是為了讓「帳上的」與「本次注入的」在同一個地方聯集，
-#: 三腿各自再 `context.get()` 一次就會漂。
-DOOMED_CTX_KEY = 'sa_unlinked_cf_policy_ids'
+# 🔴 **`sa_unlinked_cf_policy_ids` 這把 context key 已於 #783 移除，不要加回來。**
+#
+# 它曾經是 policy unlink 注入 doomed id 的通道，值會原封不動進
+# `existing_policy_ids`，而那是 operator 唯一的刪除通道、打的是**帳號級**端點
+# ⇒ 任何能觸發一次 access sync 的租戶（改自己 route／CS／SH route 的一個 Access
+# 欄位就夠）都能指定平台去刪它知道 id 的任何一顆 CF reusable policy。
+#
+# 拿掉不減功能：`unlink()` 在同一個 savepoint 內**無條件**先落帳才推 sync，帳本是
+# 那條 context 的嚴格超集（見上方設計決定 1）。
+#
+# 機器守線：`scripts/audit/repo-lint.py` 的 `INTERNAL_CTX_KEY_REGISTRY` 把這把 key
+# 登記為 `status='removed'` ⇒ 只要有人在 `src/`（`src/tests/` 除外）重新寫出它的
+# `context.get(...)` 讀取點或 `with_context(...)` 注入點，第 28 條就會紅。
 
 #: 一列記的是哪一種 CF Access 物件。**兩者的刪除通道不同**（`existing_policy_ids`
 #: vs `existing_app_id`），混在一起送出去不會報錯只會靜默失敗，所以每一個讀寫
@@ -192,30 +215,22 @@ class CfAccessPolicyReap(models.Model):
 
     @api.model
     def _pending_for(self, anchor):
-        """帳上的 ∪ 本次 context 注入的 doomed **policy** id。
-
-        兩者聯集而不是二選一：unlink 當下兩邊都有（帳是剛寫的、context 是既有
-        通道）。
+        """這個錨點帳上還欠的 doomed **policy** id（record 版的 ``_pending_ids``）。
 
         ⚠ 只回 policy：這個回傳值的唯一去處是 ``existing_policy_ids``。
 
-        🔴 **「手動帶 context 強制收斂存量」這個運維手法已經被 #791 的
-        ``trusted_ids`` 過濾擋掉了**（#792 二輪覆核）。context 帶進來的 id 仍然
-        會進這一輪的 ``existing_policy_ids``（所以 operator 還是會去刪），但
-        ``_settle()`` 不再接受「既不在列上、也不在帳上」的 id 回流落帳 ⇒ 若
-        operator 回報它刪不掉，那顆 id **不會**留在帳上等下一輪。也就是說那條手法
-        現在只剩「一次性嘗試」，不再是「持續收斂到成功」。這是刻意的取捨（見
-        ``_settle`` 的 docstring：把可偽造的值寫進 DB 等於把一次性偽造升級成持久
-        偽造），但**兩份文件之前互相矛盾**，這裡以本段為準。存量收斂請改走
-        ``_record_ids()`` 直接落帳（那條只吃呼叫端明確給的值、不吃 context）。
+        🔴 **這裡刻意不讀任何 context**（#783）。這條路徑的輸出會變成 operator 的
+        帳號級刪除清單，而 ``/web/dataset/call_kw`` 把呼叫端的 context 整包換進
+        env ⇒ 讀 context 等於讓呼叫端指定要刪哪些**別人帳號上的** CF policy。
+        舊的 ``sa_unlinked_cf_policy_ids`` 通道已整條移除，理由與「為什麼不是改成
+        sentinel」見模組 docstring 的設計決定 1。
+
+        存量收斂請走 ``_record_ids()`` 直接落帳（那條只吃呼叫端**明確傳進來的參數**
+        ——那是伺服器端程式碼的呼叫，不是 RPC 可觸達的 context）。
         """
         if not anchor:
             return []
-        ids = self._pending_ids(anchor._name, anchor.id)
-        for cf_id in anchor.env.context.get(DOOMED_CTX_KEY) or []:
-            if cf_id and cf_id not in ids:
-                ids.append(cf_id)
-        return ids
+        return self._pending_ids(anchor._name, anchor.id)
 
     @api.model
     def _settle(self, anchor_model, anchor_id, submitted_ids, orphaned_ids,
@@ -241,12 +256,12 @@ class CfAccessPolicyReap(models.Model):
         的 id 裡「來自 DB 列上真實存在過的值」那個子集。記帳只認
         ``trusted_ids ∪ 帳上已知``，其餘一律拒收並出聲。
 
-        理由是模組 docstring 設計決定 1 的守線：``existing_policy_ids`` 是
-        ``列值 ∪ 帳本 ∪ context``，而 ``sa_unlinked_cf_policy_ids`` 是一把**可偽造
-        的裸 context key**（#783）。少了這道過濾，租戶塞進 context 的假 id 只要
-        被 operator 回報進 ``orphaned_policy_ids`` 就會**經由結帳落進 DB**——一次性
-        的偽造升級成持久的偽造，而且從此每小時被重送到刪掉為止（本表把 #783 的
-        爆炸半徑放大，所以這道過濾是本表該收的尾）。
+        🔴 **這是第二道，不是唯一一道**。#783 已經把可偽造的 context 通道整條拿掉
+        ⇒ ``existing_policy_ids`` 現在是 ``列值 ∪ 帳本``，兩邊都只裝伺服器端讀到的
+        值。但 ``orphaned_policy_ids`` 是**外部輸入**（operator 的回應），它裡面冒
+        出一顆我們根本沒送過的 id 這件事不會因為 #783 而消失 ⇒ 結帳仍然要自己判，
+        否則一次性的異常會**經由結帳落進 DB**升級成持久的刪除指令，而且從此每小時
+        被重送到刪掉為止（本表會把爆炸半徑放大，所以這道過濾是本表該收的尾）。
 
         沒有預設值是刻意的：預設「就信 submitted」會讓忘記傳的呼叫端**靜默**回到
         有洞的行為，而那正是最容易被寫成例外的那一格。
@@ -274,10 +289,10 @@ class CfAccessPolicyReap(models.Model):
             _logger.warning(
                 "[CF_REAP] refused to book %d operator-reported orphan id(s) "
                 "for %s#%s that came from neither a DB row nor the ledger: %s "
-                "— a forged `%s` context value must not become a durable "
-                "delete order (#783/#791)",
-                len(refused), anchor_model, anchor_id, ', '.join(refused),
-                DOOMED_CTX_KEY)
+                "— an id we never submitted must not become a durable delete "
+                "order against an account-level Cloudflare object (#791 F9; "
+                "the forgeable context channel itself was removed in #783)",
+                len(refused), anchor_model, anchor_id, ', '.join(refused))
         if still_orphaned:
             self._record_ids(anchor_model, anchor_id, still_orphaned)
 

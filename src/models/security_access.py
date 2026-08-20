@@ -1700,11 +1700,10 @@ class SecurityAccessRoute(models.Model):
         留到下一小時好。**但這只是「多送幾顆 id」，不可以反過來變成「要不要拆」
         或「清乾淨了沒」的判準**（#792 二輪覆核 F6：那會讓 SA 永久卡 error）。
 
-        🔴 這裡讀的是 `_pending_ids()`（**只有帳本**）而不是 `_pending_for()`
-        （帳本 ∪ context）。`sa_unlinked_cf_policy_ids` 是一把可偽造的裸 context
-        key（#783），而這條路徑是**刪除**——把它接進來等於讓呼叫端在刪一條自己
-        的 route 時順便指定要刪哪些帳號級 CF policy。同步路徑吃 context 是既有
-        行為（另案），刪除路徑不要再開一個入口。
+        🔴 這裡讀 `_pending_ids()` 而不是 `_pending_for()`：兩者現在等價
+        （#783 已把 `_pending_for()` 的 context 那條腿整個拿掉，帳本是唯一來源），
+        留著這個選擇是因為本方法拿的是 `(model, id)` 語意的舊帳，而 `_pending_for`
+        要一個活著的 record——teardown 路徑上錨點列不保證還在。
         """
         self.ensure_one()
         app_id, ids = self._access_teardown_ids()
