@@ -759,6 +759,14 @@ class TestBatchUnlinkTearing791(TransactionCase, _Fixture):
         self.assertTrue(
             any(c.get('existing_app_id') == 'app-e1-p' for c in sent),
             '前提檢查：pass 1 那條確實被試過（否則整條測試沒有鑑別力）')
+        # 🔴 鑑別力補強（#792 二輪覆核）：上面那條若只靠「p 比 u 早建立」，一個
+        # 「單迴圈＋第一條失敗就 raise」的錯誤實作也會通過。所以再斷言**順序**
+        # ——pass 1 那條必須排在所有呼叫的最前面，而且整輪只有它一個 teardown。
+        teardown_calls = [c for c in sent if not c.get('enabled')]
+        self.assertEqual(
+            len(teardown_calls), 1,
+            'pass 1 失敗那一輪只該有它自己那一個 teardown 被送出去')
+        self.assertEqual(teardown_calls[0].get('existing_app_id'), 'app-e1-p')
         self.assertFalse(
             any('cf-e1-u' in (c.get('existing_policy_ids') or [])
                 for c in sent),
@@ -809,3 +817,165 @@ class TestBatchUnlinkTearing791(TransactionCase, _Fixture):
         self.assertEqual(teardowns[0]['existing_policy_ids'], ['cf-e2-debt'])
         self.assertEqual(self._pending_policies(route_id), [],
                          'operator 回 2xx ⇒ 舊帳當場結清，不必等 cron')
+
+
+# ====================================================================== #
+#  G 系列：#792 二輪覆核（F6 回歸、F1(a) 預算、cron 小項）                 #
+# ====================================================================== #
+
+@tagged('post_install', '-at_install')
+class TestSecondRoundReview792(TransactionCase, _Fixture):
+
+    def setUp(self):
+        super().setUp()
+        self.Reap = self.env[_REAP]
+        self.workspace = self.env['woow_paas_platform.workspace'].sudo(
+        ).create({'name': 'WS 784G %s' % uuid.uuid4().hex[:6]})
+
+    def _dead_route_id(self):
+        sa = self._make_sa(state='pending', tunnel_id=False)
+        route = self._make_route(sa, protected=False)
+        route_id = route.id
+        route.unlink()
+        return route_id
+
+    # ---------------- F6（真回歸，擋 merge） ---------------- #
+
+    def test_G1_orphaned_policy_must_not_pin_the_sa_in_error_forever(self):
+        """🔴 F6：operator 說某顆 policy 刪不掉 ⇒ 帳留著，但 SA **不可以**永久卡
+        在 `state='error'`。
+
+        `_do_cleanup` 的「清乾淨了沒」閘一旦把帳本聯集進來，就會被一筆永遠收不掉
+        的帳（錨點還活著 ⇒ dead-anchor cron 依設計不收）釘死：閘對該 route 永遠
+        回 True ⇒ 每輪 lifecycle cron 白打一次 operator、SA 永遠回不到 `deleting`。
+        判準是**列乾淨了沒**（`_has_access_teardown()`），不是「帳上還有沒有」；
+        要送出去的集合才用 `_access_teardown_payload_ids()`。
+        """
+        sa = self._make_sa(state='active')
+        route = self._make_route(sa, protected=True, app_id='app-g1',
+                                 policy_cf_ids=('cf-g1-stuck',))
+        # operator 回報「送去刪但刪不掉」⇒ 落帳、列上的 id 照樣被清掉
+        client = self._mock(_teardown_result(orphaned=['cf-g1-stuck']))
+
+        with patch(MOCK_SA_CLIENT, return_value=client):
+            sa._do_cleanup()
+
+        self.assertEqual(self._pending_policies(route.id), ['cf-g1-stuck'],
+                         '前提檢查：那顆確實留在帳上（否則本測試沒有鑑別力）')
+        self.assertFalse(route.access_app_id,
+                         '前提檢查：teardown 回 True ⇒ 列上的 id 已被清掉')
+        self.assertEqual(
+            sa.state, 'deleting',
+            '列已經乾淨 ⇒ SA 必須收斂到 deleting；卡在 error 代表閘把帳本讀進去了')
+
+        # 陽性對照（同一支 mock）：列上真的還有 id 時，閘必須照舊擋住。
+        sa2 = self._make_sa(state='active')
+        r2 = self._make_route(sa2, protected=True, app_id='app-g1b')
+        failing = self._mock()
+        failing.sync_access_app.side_effect = Exception('cf down')
+        with patch(MOCK_SA_CLIENT, return_value=failing):
+            sa2._do_cleanup()
+        self.assertEqual(r2.access_app_id, 'app-g1b')
+        self.assertEqual(sa2.state, 'error',
+                         '列上還有 id ⇒ 這才是該落 error 的那一格')
+
+    def test_G2_payload_still_carries_the_ledger_debt_on_delete(self):
+        """F6 的另一半：閘不看帳本，但**送出去的集合**仍要帶帳本舊帳。
+
+        兩件事拆開之後最容易的退化就是「順手把帳本那半也拿掉」，那會把 F6 原本
+        要的好處退回去。
+        """
+        sa = self._make_sa(state='active')
+        route = self._make_route(sa, protected=False, app_id=None)
+        self.Reap._record_ids(_ROUTE, route.id, ['cf-g2-debt'])
+
+        self.assertFalse(route._has_access_teardown(),
+                         '閘只看列狀態：列上沒有 id ⇒ 這一列是乾淨的')
+        self.assertEqual(route._access_teardown_payload_ids(),
+                         (None, ['cf-g2-debt']),
+                         '要送出去的集合仍須包含帳本上還欠的')
+
+    # ---------------- F1(a) ---------------- #
+
+    def test_G3_failed_anchors_count_against_the_limit_budget(self):
+        """F1(a)：`limit` 管的是**外呼次數**（成敗都算），不是成功次數。
+
+        只算成功的話，operator 持續失敗時一輪會一路打到 `max_scan`——失敗時打得
+        比成功時還多，而且與 docstring 自己的宣稱矛盾。
+        """
+        dead_ids = [self._dead_route_id() for _ in range(5)]
+        for i, rid in enumerate(dead_ids):
+            self.Reap._record_teardown(_ROUTE, rid, 'app-g3-%d' % i, [])
+        client = self._mock()
+        client.sync_access_app.side_effect = Exception('operator down')
+
+        with patch(MOCK_REAP_CLIENT, return_value=client):
+            reaped = self.Reap._cron_reap_dead_anchors(limit=2)
+
+        self.assertEqual(reaped, 0, '全都失敗 ⇒ 收成 0')
+        self.assertEqual(
+            client.sync_access_app.call_count, 2,
+            'limit=2 ⇒ 這一輪最多只能對 operator 發 2 次，失敗也要算進預算')
+
+        # 陽性對照：成功時同樣受 limit 管。
+        ok = self._mock(_teardown_result())
+        with patch(MOCK_REAP_CLIENT, return_value=ok):
+            n = self.Reap._cron_reap_dead_anchors(limit=2)
+        self.assertEqual(n, 2)
+        self.assertEqual(ok.sync_access_app.call_count, 2)
+
+    # ---------------- (c) 截斷警報 ＋ (e) 假警報 ---------------- #
+
+    def test_G4_scan_cap_is_loud_but_does_not_cry_wolf(self):
+        """(c) 掃描上界踩到一定出聲；(e) 帳本剛好整除 `scan_batch` 時不得假警報。
+
+        被截斷卻安靜＝謊報「都收完了」；沒被截斷卻報＝訊號通膨。兩半放同一個
+        方法，因為它們是同一個判斷的兩面。
+        """
+        live = self._make_route(self._make_sa(state='active'), protected=True,
+                                app_id='app-g4')
+        self.Reap.sudo().create([{
+            'anchor_model': _ROUTE, 'anchor_id': live.id, 'kind': 'policy',
+            'cf_object_id': 'cf-g4-%03d' % i} for i in range(10)])
+        client = self._mock(_teardown_result())
+
+        # (e) 10 筆、scan_batch=5、max_scan=10 ⇒ 剛好掃完，不該報截斷
+        with patch(MOCK_REAP_CLIENT, return_value=client):
+            with self.assertNoLogs(LOG_REAP, level=logging.WARNING):
+                self.Reap._cron_reap_dead_anchors(scan_batch=5, max_scan=10)
+
+        # (c) max_scan=5 ⇒ 真的被截斷，必須出聲
+        with patch(MOCK_REAP_CLIENT, return_value=client):
+            with self.assertLogs(LOG_REAP, level=logging.WARNING) as captured:
+                self.Reap._cron_reap_dead_anchors(scan_batch=5, max_scan=5)
+        self.assertTrue(
+            any('scan cap reached' in line for line in captured.output),
+            '被截斷卻安靜等於謊報「都收完了」')
+
+    # ---------------- (d) 早退吞訊號 ---------------- #
+
+    def test_G5_unconfigured_operator_does_not_swallow_the_other_signals(self):
+        """(d)：operator 未設定的早退不得吞掉同一輪已經算出來的 stuck 警告。
+
+        那正好是「有東西要講、卻剛好講不出來」的那一格。
+        """
+        live = self._make_route(self._make_sa(state='active'), protected=True,
+                                app_id='app-g5')
+        rows = self.Reap._record_ids(_ROUTE, live.id, ['cf-g5-stuck'])
+        self.env.cr.execute(
+            "UPDATE woow_paas_platform_cf_access_policy_reap "
+            "SET create_date = %s WHERE id IN %s",
+            (fields.Datetime.now() - timedelta(days=30), tuple(rows.ids)))
+        rows.invalidate_recordset(['create_date'])
+        dead_id = self._dead_route_id()
+        self.Reap._record_teardown(_ROUTE, dead_id, 'app-g5-dead', [])
+
+        with patch(MOCK_REAP_CLIENT, return_value=None):
+            with self.assertLogs(LOG_REAP, level=logging.WARNING) as captured:
+                self.Reap._cron_reap_dead_anchors()
+
+        joined = '\n'.join(captured.output)
+        self.assertIn('cf-g5-stuck', joined,
+                      'operator 沒設定不代表卡帳這件事就不用講')
+        self.assertIn('not configured', joined,
+                      '同時也要講 operator 沒設定（兩段訊號都要在）')

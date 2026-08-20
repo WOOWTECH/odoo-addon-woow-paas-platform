@@ -195,10 +195,19 @@ class CfAccessPolicyReap(models.Model):
         """帳上的 ∪ 本次 context 注入的 doomed **policy** id。
 
         兩者聯集而不是二選一：unlink 當下兩邊都有（帳是剛寫的、context 是既有
-        通道），但「手動帶 context 強制收斂」這條路徑（#528 留言記錄的那次存量
-        清理就是這樣收的）帳上是空的，只有 context 有值。
+        通道）。
 
         ⚠ 只回 policy：這個回傳值的唯一去處是 ``existing_policy_ids``。
+
+        🔴 **「手動帶 context 強制收斂存量」這個運維手法已經被 #791 的
+        ``trusted_ids`` 過濾擋掉了**（#792 二輪覆核）。context 帶進來的 id 仍然
+        會進這一輪的 ``existing_policy_ids``（所以 operator 還是會去刪），但
+        ``_settle()`` 不再接受「既不在列上、也不在帳上」的 id 回流落帳 ⇒ 若
+        operator 回報它刪不掉，那顆 id **不會**留在帳上等下一輪。也就是說那條手法
+        現在只剩「一次性嘗試」，不再是「持續收斂到成功」。這是刻意的取捨（見
+        ``_settle`` 的 docstring：把可偽造的值寫進 DB 等於把一次性偽造升級成持久
+        偽造），但**兩份文件之前互相矛盾**，這裡以本段為準。存量收斂請改走
+        ``_record_ids()`` 直接落帳（那條只吃呼叫端明確給的值、不吃 context）。
         """
         if not anchor:
             return []
@@ -371,8 +380,13 @@ class CfAccessPolicyReap(models.Model):
     def _settle_after_commit(self, anchor_model, anchor_id, submitted_ids,
                              orphaned_ids, trusted_ids, logger, label):
         """`_settle` 的 post-commit 包裝。回傳有沒有結成功（供測試判別）。"""
+        # 🔴 進場 flush 明確做在 try **之外**（#792 二輪覆核 item9(a)）：
+        # `cr.savepoint()` 預設會先 flush，而那個 flush 失敗代表**交易已經壞掉**，
+        # 不是「記帳失敗」。包在 try 裡會把它吞成記帳失敗，呼叫端於是以為只是帳
+        # 沒記到、繼續往下寫欄位——寫進一個已經 abort 的交易。
+        self.env.flush_all()
         try:
-            with self.env.cr.savepoint():
+            with self.env.cr.savepoint(flush=False):
                 self._settle(anchor_model, anchor_id, submitted_ids,
                              orphaned_ids, trusted_ids)
             return True
@@ -390,8 +404,10 @@ class CfAccessPolicyReap(models.Model):
                                       submitted_policy_ids,
                                       orphaned_policy_ids, logger, label):
         """`_settle_teardown` 的 post-commit 包裝。回傳有沒有結成功。"""
+        # 進場 flush 移出 try，理由見 `_settle_after_commit`（item9(a)）。
+        self.env.flush_all()
         try:
-            with self.env.cr.savepoint():
+            with self.env.cr.savepoint(flush=False):
                 self._settle_teardown(anchor_model, anchor_id, app_id,
                                       submitted_policy_ids,
                                       orphaned_policy_ids)
@@ -449,27 +465,33 @@ class CfAccessPolicyReap(models.Model):
         沒有任何訊號。
 
         所以窗口不能套在判定**之前**：這裡改成沿著 id 游標一批批掃過去，
-        `limit` 限的是「這一輪實際處理幾個 dead anchor」（工作量），不是「看幾
-        筆列」。`max_scan` 只是防跑不完的上界，而且**踩到它一定出聲**——被截斷
+        `limit` 限的是「這一輪**對 operator 發出幾次** dead-anchor teardown」
+        （工作量），**成功與失敗都算**——只算成功的話，operator 持續失敗時這一輪
+        會一路打到 `max_scan` 為止，變成失敗時打得比成功時還多（#792 二輪覆核
+        F1(a)）。`max_scan` 只是防跑不完的上界，而且**踩到它一定出聲**——被截斷
         卻安靜等於謊報「都收完了」。
         """
         Reap = self.sudo()
         stale_before = fields.Datetime.now() - timedelta(
             days=_STUCK_PENDING_DAYS)
         last_id = 0
-        scanned = reaped = failed_anchors = 0
+        # `attempted` ＝ 這一輪對 operator 發出的 dead-anchor teardown 次數（成敗
+        # 都算），也就是 `limit` 真正管的那個量；`reaped` 只是其中成功的部分。
+        scanned = attempted = reaped = failed_anchors = 0
         live_anchors = set()
         unknown_models = {}
         stuck = []
         truncated = False
+        no_client = False
         client = None
-        while reaped < limit:
-            if scanned >= max_scan:
-                truncated = True
-                break
-            rows = Reap.search([('id', '>', last_id)], limit=scan_batch)
+        while attempted < limit:
+            # (b) `order='id'` 顯式帶上，不靠 `_order` 的預設。游標式掃描的正確性
+            # 完全建立在「這一批的最大 id 之後還有沒有列」上——日後有人改 `_order`
+            # 就會讓游標原地空轉，而症狀是「每輪都回 0」，與帳本真的空掉不可區分。
+            rows = Reap.search([('id', '>', last_id)], limit=scan_batch,
+                               order='id')
             if not rows:
-                break
+                break  # (e) 空批先 break：帳本剛好整除 scan_batch 時不該報截斷
             last_id = rows[-1].id
             scanned += len(rows)
             by_anchor = {}
@@ -498,19 +520,35 @@ class CfAccessPolicyReap(models.Model):
                 if client is None:
                     client = get_paas_operator_client(self.env)
                     if not client:
-                        _logger.warning(
-                            "[CF_REAP] PaaS Operator is not configured — "
-                            "dead-anchor CF Access objects stay on the ledger "
-                            "(%d row(s) scanned so far)", scanned)
-                        return 0
+                        no_client = True
+                        break
+                # 🔴 預算算的是**外呼次數**不是成功次數（#792 二輪覆核 F1(a)）。
+                # 舊寫法只把成功的計進 limit，於是 operator 持續失敗時這一輪會
+                # 一路打到 max_scan 為止——與 docstring 自己宣稱的「limit 限的是
+                # 這一輪處理幾個 dead anchor」直接矛盾，而且失敗時打得比成功時多。
+                attempted += 1
                 if self._reap_dead_anchor(client, anchor_model, anchor_id,
                                           group):
                     reaped += 1
                 else:
                     failed_anchors += 1
-                if reaped >= limit:
+                if attempted >= limit:
                     break
+            if no_client:
+                break
+            # (e) cap 檢查移到批次處理**之後**：先確定這一批真的處理完了。
+            # 🔴 而「是不是真的被截斷」用**實查**不用猜：早一版拿「這一批是滿的」
+            # 當代理判準，帳本筆數剛好整除 `scan_batch` 時（最後一批是滿的、但
+            # 後面其實沒有了）就會發假截斷警報。訊號通膨與訊號缺席一樣糟，而這
+            # 一查只在踩到上界時發生、走的是 id 索引。
+            if scanned >= max_scan:
+                truncated = bool(
+                    Reap.search([('id', '>', last_id)], limit=1, order='id'))
+                break
 
+        # (d) 訊號一律在早退之後、回傳之前統一發：舊寫法在「operator 未設定」那
+        # 條 `return 0` 早退，把同一輪已經算出來的 unknown_models／stuck 兩段
+        # warning 一起吞掉——那正好是「有東西要講卻剛好講不出來」的那一格。
         if unknown_models:
             _logger.warning(
                 "[CF_REAP] %d ledger row(s) are anchored on model(s) that no "
@@ -528,6 +566,11 @@ class CfAccessPolicyReap(models.Model):
                 len(stuck), _STUCK_PENDING_DAYS,
                 ', '.join('%s#%s:%s' % (r.anchor_model, r.anchor_id,
                                         r.cf_object_id) for r in stuck[:20]))
+        if no_client:
+            _logger.warning(
+                "[CF_REAP] PaaS Operator is not configured — dead-anchor CF "
+                "Access objects stay on the ledger (%d row(s) scanned)",
+                scanned)
         if truncated:
             _logger.warning(
                 "[CF_REAP] scan cap reached (%d rows) before the ledger was "
@@ -539,6 +582,7 @@ class CfAccessPolicyReap(models.Model):
                 "anchor(s) skipped, %d row(s) scanned",
                 reaped, failed_anchors, len(live_anchors), scanned)
         return reaped
+
 
     @api.model
     def _reap_dead_anchor(self, client, anchor_model, anchor_id, rows):
