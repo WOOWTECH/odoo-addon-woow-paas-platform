@@ -30,6 +30,14 @@ _LOW_BALANCE_RETRY_WINDOW_DAYS = 7
 _BASE_AUTO_INVOICE_CRON_XMLID = 'sh_subscription.sh_ir_cron_subscription_auto_invoice'
 _BILLING_SSOT_PARAM = 'sh_subscription_wallet.billing_ssot'
 
+#: #778 配套 3：計費靜默告警。門檻天數 param（'0'＝停用，沿
+#: max_consecutive_payment_failures 慣例）；summary 同時是 dedup 鍵——
+#: 同 summary 的 activity 未被處理前不重複告警。summary 字面在
+#: tests/test_billing_silence_alert.py 刻意雙寫（同步哨兵）。
+_BILLING_SILENCE_PARAM = 'woow_paas_platform.billing_silence_alert_days'
+_BILLING_SILENCE_SUMMARY = '計費路徑靜默：到期訂閱連續多日未被處理'
+_BILLING_SILENCE_DEFAULT_DAYS = 3
+
 
 class ShSubscriptionFix(models.Model):
     """Fix upstream sh_subscription bug in _sh_create_auto_invoice.
@@ -255,6 +263,95 @@ class ShSubscriptionFix(models.Model):
                 _BILLING_SSOT_PARAM,
             )
         return True
+
+    @api.model
+    def _cron_billing_silence_alert(self):
+        """[#778 配套 3] 偵測計費路徑靜默死亡，告警帳務管理群組。
+
+        凍結判準：``in_progress`` 且 ``next_payment`` overdue 超過 N 天、
+        且 ``woow_last_payment_failure_at`` 也超過 N 天未被 stamp（或從未）。
+        dunning 活著時 due 訂閱每天要嘛成功（next_payment 推進、不再 due）
+        要嘛失敗（failure_at 被 stamp 成當下）——兩欄位同時凍結＝沒有任何
+        計費路徑碰過它（#778 對撞、或 per-sub exception 長期被吞）。
+
+        刻意不用「N 天零新 cycle invoice」當主判準：長期扣款失敗的訂閱
+        首日建發票、之後每日 reuse 同一張（``_get_or_create_cycle_
+        invoice``），零新發票會對正常 dunning 誤報；新發票數只進 note
+        當佐證。告警沿 ``ecpay_invoice_cron._notify_admin_on_error`` 慣例
+        （mail.activity → account.group_account_manager），activity 未被
+        處理前不重建（處理完消失，再犯再告警）。
+        """
+        ICP = self.env['ir.config_parameter'].sudo()
+        raw = ICP.get_param(
+            _BILLING_SILENCE_PARAM, str(_BILLING_SILENCE_DEFAULT_DAYS))
+        try:
+            days = int(raw)
+        except (TypeError, ValueError):
+            _logger.warning(
+                "[SUB_FIX] invalid %s=%r; falling back to %s",
+                _BILLING_SILENCE_PARAM, raw, _BILLING_SILENCE_DEFAULT_DAYS)
+            days = _BILLING_SILENCE_DEFAULT_DAYS
+        if days <= 0:
+            return
+        today = fields.Date.today()
+        stale_dt = fields.Datetime.now() - relativedelta(days=days)
+        frozen = self.sudo().search([
+            ('state', '=', 'in_progress'),
+            ('sh_date_of_next_payment', '<=',
+             today - relativedelta(days=days)),
+            '|',
+            ('woow_last_payment_failure_at', '=', False),
+            ('woow_last_payment_failure_at', '<', stale_dt),
+        ], order='sh_date_of_next_payment asc, id asc')
+        if not frozen:
+            return
+        Activity = self.env['mail.activity'].sudo()
+        if Activity.search_count(
+                [('summary', '=', _BILLING_SILENCE_SUMMARY)]):
+            return  # 上一波告警尚未被處理，不重複轟炸
+        todo = self.env.ref(
+            'mail.mail_activity_data_todo', raise_if_not_found=False)
+        manager_group = self.env.ref(
+            'account.group_account_manager', raise_if_not_found=False)
+        model = self.env['ir.model']._get(self._name)
+        if not (todo and manager_group and model):
+            _logger.warning(
+                "[SUB_FIX] cannot create billing-silence activity "
+                "(missing refs: todo=%s group=%s model=%s)",
+                bool(todo), bool(manager_group), bool(model))
+            return
+        recent_invoices = self.env['account.move'].sudo().search_count([
+            ('move_type', '=', 'out_invoice'),
+            ('sh_subscription_id', '!=', False),
+            ('create_date', '>=', stale_dt),
+        ])
+        anchor = frozen[0]
+        note = (
+            "有 %(n)s 張 in_progress 訂閱到期超過 %(days)s 天，且期間未被"
+            "任何計費路徑處理（woow_last_payment_failure_at 未更新）。\n"
+            "最久的一張：%(name)s（next_payment=%(np)s）。\n"
+            "佐證：近 %(days)s 天新建的 cycle invoice 共 %(inv)s 張。\n"
+            "可能原因：base auto-invoice cron 被停用（#778 對撞）、或該批"
+            "訂閱的處理持續拋例外被吞。"
+        ) % {
+            'n': len(frozen), 'days': days,
+            'name': anchor.name or anchor.id,
+            'np': anchor.sh_date_of_next_payment, 'inv': recent_invoices,
+        }
+        for user in manager_group.users:
+            Activity.create({
+                'res_model': self._name,
+                'res_model_id': model.id,
+                'res_id': anchor.id,
+                'activity_type_id': todo.id,
+                'summary': _BILLING_SILENCE_SUMMARY,
+                'note': note,
+                'user_id': user.id,
+            })
+        _logger.error(
+            "[SUB_FIX] billing silence alert: %s frozen sub(s) overdue>%sd, "
+            "%s recent cycle invoice(s); activities created",
+            len(frozen), days, recent_invoices)
 
     @api.model
     def _sh_create_auto_invoice(self):

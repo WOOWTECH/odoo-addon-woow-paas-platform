@@ -139,6 +139,8 @@ _CONFIG_PARAMETERS = [
     'woow_paas_platform.portal_project_settings_editable',
     'woow_paas_platform.show_projects',
     'woow_paas_platform.max_consecutive_payment_failures',
+    # #778 配套 3：計費靜默告警的門檻天數（'0' 停用；缺值走模組內建預設）
+    'woow_paas_platform.billing_silence_alert_days',
     'woow_paas_platform.sa_default_service_url',
     'woow_paas_platform.agent_idle_reap_seconds',
     'woow_paas_platform.agent_gc_seconds',

@@ -465,3 +465,4 @@ from . import test_billing_ssot_guard
 # 「這個 key 有作用」，證明不了租戶構造得出它——而修法（sentinel）之後那種寫法
 # 會因為換了值而恆綠，測試退化成沒有鑑別力的形狀。
 from . import test_sa_sync_ctx_forgery_536
+from . import test_billing_silence_alert
