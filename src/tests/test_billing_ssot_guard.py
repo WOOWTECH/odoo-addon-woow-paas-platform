@@ -14,11 +14,13 @@ cron 開回、把 ``sh_subscription_wallet.billing_ssot`` 固定為 opt-out。
 不接受「跑一遍看乾不乾淨」式的恆綠。
 """
 from odoo.tests.common import TransactionCase
+from odoo.tools import convert
 
 # 與實作端常數刻意雙寫：上游 param 名／cron xmlid 是跨 repo contract，
 # 上游改名時實作端只改常數會讓這裡先紅，逼出同步檢查。
 BILLING_SSOT_PARAM = 'sh_subscription_wallet.billing_ssot'
 BASE_CRON_XMLID = 'sh_subscription.sh_ir_cron_subscription_auto_invoice'
+GUARD_DATA_FILE = 'data/billing_ssot_guard.xml'
 
 
 class _GuardFixture(TransactionCase):
@@ -101,4 +103,57 @@ class TestBaseCronCanary(_GuardFixture):
             self.cron.active,
             "平台裝完後 base auto-invoice cron 必須 active，"
             "否則平台唯一計費路徑無人觸發（#778 對撞的直接症狀）",
+        )
+
+
+class TestGuardDataFileCascade(_GuardFixture):
+    """演練步驟 4 驗過的機制：``data/billing_ssot_guard.xml`` 被（重新）處理時，
+    兩個錨點是否真的透過 XML ``<function>`` 接線把被破壞的不變量救回來。
+
+    真實升級路徑是：上游 ``-u sh_subscription_wallet`` 觸發 Odoo 核心的
+    reverse-dependency 級聯（``ir_module.py`` 的 ``button_upgrade()`` 用
+    ``Dependency.search`` 把依賴它的已安裝模組——含 ``woow_paas_platform``
+    ——也標成 'to upgrade'），使本檔在同一次 upgrade run 內被重新處理。
+    這段框架行為已在本機演練（``REPORT.md`` 步驟 4）用真實 ``-u`` 指令跑過，
+    並用原始碼交叉確認（``ir_module.py:719-724`` 的級聯搜尋 ＋
+    ``loading.py:243-244`` 的 post_init_hook 只在 new_install 執行）。
+
+    這裡**無法**在 TransactionCase 內重放同一條路徑：Odoo 核心的
+    ``_button_immediate_function``（``button_immediate_upgrade()`` 底層）在
+    ``threading.current_thread().testing`` 為真時直接
+    ``raise RuntimeError("Module operations inside tests are ... forbidden")``
+    ——這是框架明文禁止，不是測試環境限制導致的猜測。
+
+    因此本測試改呼叫 ``odoo.tools.convert.convert_file``——這正是
+    ``odoo/modules/loading.py`` 處理每個模組資料檔時實際呼叫的底層函式，
+    不涉及 registry reload——直接重播 ``billing_ssot_guard.xml``。
+
+    ⚠ 範圍聲明：本測試蓋的是「資料檔被處理時，接線是否正確把兩個不變量
+    re-assert 回來」這一層；**不蓋**「Odoo 核心是否決定在某次 ``-u`` 把這份
+    檔案排進待處理清單」那一層（那是框架行為，已在演練報告用真實升級指令
+    驗證，此處不重複驗證框架本身）。
+    """
+
+    def test_data_file_reload_reasserts_both_invariants(self):
+        # 陽性對照：把兩個不變量都推到錯的一側（同演練步驟 4 的破壞手法）。
+        self.ICP.set_param(BILLING_SSOT_PARAM, '1')
+        self.cron.sudo().write({'active': False})
+        self.assertFalse(self.cron.active)
+        self.assertEqual(self.ICP.get_param(BILLING_SSOT_PARAM), '1')
+
+        idref = {}
+        convert.convert_file(
+            self.env, 'woow_paas_platform', GUARD_DATA_FILE,
+            idref, mode='update', noupdate=False,
+        )
+
+        self.cron.invalidate_recordset()
+        self.assertTrue(
+            self.cron.active,
+            "重播 data/billing_ssot_guard.xml（模擬 -u 升級級聯重跑此檔）後，"
+            "base cron 必須被 re-assert 回 active",
+        )
+        self.assertEqual(
+            self.ICP.get_param(BILLING_SSOT_PARAM), '0',
+            "同一次資料檔重播必須連帶把 billing_ssot opt-out pin 回 '0'",
         )
