@@ -527,26 +527,26 @@ class CfAccessPolicyReap(models.Model):
 
         ## 🔴 涵蓋範圍的邊界（不要讀成「涵蓋所有回捲來源」）
 
-        本機制只在**例外經過某一腿自己的 `except`** 時才會跑。以下兩類回捲會造成
-        **完全相同的 DB 狀態**（CF 已變、列帶死 id 復活）卻**繞過**它：
+        本機制只在**例外經過某一腿自己的 `except`** 時才會跑。
 
-        1. **`retrying()` 的 request replay**：`odoo/service/model.py` 的
-           `retrying()` 在 `func()` **返回之後**才 `env.cr.flush()`，捕到
-           `IntegrityError` / `OperationalError` 就 rollback ＋ 整個 request 重跑。
-           若那個例外發生在本腿**已經正常返回之後**（同 request 較晚的
-           `SerializationFailure` 40001 之類），本腿的 `except` **一次都不會被
-           進入** ⇒ 補償不跑。而且它**無聲**：replay 通常會成功、呼叫端拿到
-           success，沒有人會知道發生過（比「teardown 失敗 raise」那條更難發現，
-           那條至少會拋錯給呼叫端）。
-        2. **flush-time constraint**：`cr.savepoint()` 預設 `flush=True`，一部分
-           constraint 在 savepoint 離開時就炸、一部分要等 request 層 flush。落在
-           後者時同上——例外不經過本腿的 `except`。
+        **繞過它的那一格**：`odoo/service/model.py` 的 `retrying()` 在 `func()`
+        **返回之後**才 `env.cr.flush()`，所以**要等 request 層 flush 才觸發的
+        constraint**，它的回捲**不會進入本腿的 `except`**（`cr.savepoint()` 預設
+        `flush=True`，一部分 constraint 在 savepoint 離開時就炸得到、一部分不會）
+        ⇒ 已成功拆掉 CF 的那幾條列被還原、死 id 沒被清、旗標沒被打開、補償沒跑。
+        這一格**是真的 fail-open**，而且**會拋錯給呼叫端**——但那個錯誤訊息與本
+        機制無關，看的人不會知道 CF 側已經被拆掉了。收斂者是 #803（週期性重推）。
 
-        ⇒ 這兩格的收斂者是**週期性重推**（#803），不是本機制。刻意不在這裡追：
-        它們沒有 hook 可掛，硬做只會做出一個蓋不住的半套。
+        ⚠ **不要把它寫成「無聲的 fail-open」**：`retrying()` replay 的是**整個
+        使用者動作**，replay 成功時 DB 與 CF 最終**一致、不分歧**，殘留的是第一次
+        嘗試在 CF 上建出來的東西＝**孤兒**（那才是無聲的那一格，而孤兒**不歸本
+        機制管**——它不是「保護沒生效」是「CF 上多了東西」，偵測面屬 reconciler
+        的**右 − 左**方向，與本 PR 新增的左 − 右方向是不同的格）。兩者共用同一個
+        機制但不是同一條路徑。
 
-        ⚠ 未驗註記：上面兩格是**讀 `retrying()` 原始碼推導**的，沒有實際製造一次
-        `SerializationFailure` 或某條 flush-time constraint 去觀測 CF 側殘留。
+        ⚠ 未驗註記：上面的路徑區分是**讀 `retrying()` 原始碼推導**的，沒有實際
+        製造一次 `SerializationFailure` 觀測「replay 成功後兩側是否真的一致」，
+        也沒有實測哪一條 constraint 真的落在 request 層 flush。
         另一格**有實測**的同型邊界見
         `test_pre_write_on_the_same_row_defeats_the_compensation`：外層交易在
         savepoint **之外**先寫過同一列時，補償撞 PG 寫寫衝突等到 `lock_timeout`
