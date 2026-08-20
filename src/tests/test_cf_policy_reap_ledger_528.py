@@ -53,7 +53,11 @@ from ..models.security_access import (
     _force_access_sync, _internal_identity as _internal_sa,
     _skip_route_sync,
 )
-from ..models.smart_home_route import _internal_sm_route_identity
+from ..models.smart_home_route import (
+    _internal_sm_route_identity,
+    _sm_forced_access_sync,
+    _sm_skip_access_sync,
+)
 from ..services.naming import make_service_subdomain
 from .smart_home_fixture import sh_model
 
@@ -435,12 +439,11 @@ class TestShRouteReap(TransactionCase, _ReapMixin):
         sh.write({'subdomain': sh._generate_subdomain()})
         # 閘洗掉，免得 fixture 把受測守衛一起關掉。
         self.sh = sh.with_env(self.env)
-        self.route = self.env[
-            'woow_paas_platform.smart_home_route'].with_context(
-                sm_skip_access_sync=True).create(
-                    {'smart_home_id': self.sh.id, 'is_primary': True})
+        self.route = _sm_skip_access_sync(self.env[
+            'woow_paas_platform.smart_home_route']).create(
+                {'smart_home_id': self.sh.id, 'is_primary': True})
         self.route = self.route.with_context(sm_skip_access_sync=False)
-        self.route.with_context(sm_skip_access_sync=True).write(
+        _sm_skip_access_sync(self.route).write(
             {'is_protected': True})
         _internal_sm_route_identity(self.route).access_app_id = 'app-live'
         self.client = self._mock(_sync_result(app_id='app-live'))
@@ -478,8 +481,7 @@ class TestShRouteReap(TransactionCase, _ReapMixin):
         self.sh.write({'state': 'suspended'})
 
         with patch(MOCK_SH_CLIENT, return_value=self.client):
-            self.route.with_context(
-                sm_force_access_sync=True)._sync_access_to_operator()
+            _sm_forced_access_sync(self.route)._sync_access_to_operator()
 
         payload = self.client.sync_access_app.call_args.args[0]
         self.assertIn('cf-doomed-d2', payload['existing_policy_ids'])
