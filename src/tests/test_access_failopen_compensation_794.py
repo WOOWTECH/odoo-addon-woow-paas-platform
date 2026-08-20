@@ -301,10 +301,15 @@ class TestSaRouteFailOpenCompensation(TransactionCase):
     # ------------------------------------------------------------------ #
     @mute_logger(LOG_SA, LOG_REAP)
     def test_A4_compensation_failure_never_replaces_the_original_error(self):
-        """補償拋例外 ⇒ 外層仍必須拋原本那個 UserError。
+        """補償整段失敗 ⇒ 外層仍必須拋原本那個 UserError。
 
         補償的例外若外拋，租戶看到的會是一句與他的動作無關的話，而真正的原因
         （Cloudflare Access teardown failed…）就此消失。
+
+        🔴 注入點選在 `Registry.cursor`（補償**真的會走到**的第一步），不是
+        `_access_mark_protection_lost`——後者在本層根本到不了（補償看不到本測試
+        尚未 commit 的列，見檔頭），拿它注入的話這條測試會為了錯的理由變綠。
+        注入式 RED 驗過：把 helper 的 `except` 改成 `raise` 之後本條確實變紅。
         """
         p1 = self._route('app-p1')
         p2 = self._route('app-p2')
@@ -318,7 +323,7 @@ class TestSaRouteFailOpenCompensation(TransactionCase):
 
         client = self._client(_side_effect)
         with patch(MOCK_SA_CLIENT, return_value=client):
-            with patch(SA_MARK, autospec=True,
+            with patch('odoo.modules.registry.Registry.cursor',
                        side_effect=RuntimeError('compensation blew up')):
                 with self.assertRaises(UserError) as cm:
                     (p1 | p2).unlink()
@@ -364,6 +369,7 @@ class TestSaRouteFailOpenCompensation(TransactionCase):
             any(c.get('existing_app_id') == 'app-s3' for c in sent),
             'app-s3 不得出現在任何一次 payload 裡')
         # 停在 p2 ⇒ 只有 p1 需要補償；p3 一根手指都沒被碰過。
+        comp.assert_called_once()
         self.assertEqual(
             comp.call_args.args[1], [(_ROUTE, p1.id)],
             'short-circuit 的直接後果：受害者只有 p1，不是整批')
