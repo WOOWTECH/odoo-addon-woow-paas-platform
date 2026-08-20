@@ -220,6 +220,28 @@ class TunnelCreateRequest(BaseModel):
     )
 
 
+class TunnelConfigUpdateRequest(BaseModel):
+    """Request to update a dedicated tunnel's single-hostname ingress config.
+
+    #769: these two fields used to be bare ``str`` parameters on the endpoint,
+    which FastAPI binds as **required query params** — while the only caller
+    (the Odoo platform client) sends them as a JSON body, so every call was a
+    422. Both sides' tests stayed green throughout (the operator suite never hit
+    this endpoint; the platform test mocks the client). Declaring them here puts
+    the endpoint back on the same shape as its neighbours
+    (``TunnelCreateRequest`` / ``TunnelRoutesSyncRequest``).
+    """
+
+    hostname: str = Field(
+        ...,
+        description="Public hostname (e.g., 'ha-xxx.woowtech.io')",
+    )
+    service_url: str = Field(
+        ...,
+        description="Target service URL or 'http_status:NNN' (503 = suspended)",
+    )
+
+
 # Response Models
 
 

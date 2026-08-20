@@ -494,3 +494,12 @@ from . import test_cs_sync_ctx_forgery_787
 # RED 群集：A2／B2（偽造仍抑制推送）、C2（例外型別從 UserError 翻成 AccessError
 # ＝守衛被繞過）、D2（停權中的 SH 仍推去 CF）、A3／C3／D3（偽造完全沒有訊號）。
 from . import test_sh_sync_ctx_forgery_787
+
+# fix: #769 `PUT /api/tunnels/{id}/config` 的 wire 契約破裂（operator 端裸 str ⇒
+# FastAPI 綁 query param，client 送 JSON body ⇒ 每次呼叫必 422，被 SH 的
+# `except Exception` 吞成 state='error'）。本檔是三腿守線的**腿 2**：攔在 requests
+# 真正送出之前，斷言 client 組出來的 PreparedRequest 把欄位放在 body、query 為空。
+# 腿 1（真 app 送 body ⇒ 2xx）在 extra/paas-operator/tests/；腿 3（跨層 AST 比對）
+# 在 scripts/audit/repo-lint.py 的 tunnel-config-wire-shape——operator 不進 Odoo
+# image，跨層那腿在 src/tests/ 裡跑不到。
+from . import test_tunnel_config_wire_769
