@@ -15,6 +15,9 @@ from .workspace_access import ROLE_ADMIN
 
 _logger = logging.getLogger(__name__)
 
+#: #528 的待回收 CF Access policy 帳本（三腿共用）。
+_CF_REAP_MODEL = 'woow_paas_platform.cf_access_policy_reap'
+
 
 # ------------------------------------------------------------------------- #
 #  #519：cloud_service 的建立閘（private sentinel）                           #
@@ -3251,10 +3254,14 @@ class CloudService(models.Model):
         `super().unlink()` 才 re-sync，所以剛被刪那幾列的 cf id 已經不在 DB 裡
         ——不由 context 補進來的話，operator（唯一的刪除來源就是這個清單）永遠
         不會刪它們，每刪一條 policy 就漏一顆永久 CF 孤兒。
+
+        #528：來源從「只有本次 context」擴成「**帳本 ∪ 本次 context**」。context
+        用完即丟，而那一次 re-sync 可能被下面的 liveness gate 整個擋掉——被擋掉
+        的那些 id 就此沒有任何記錄指向它們。帳本讓它們活到下一次推得動為止。
         """
         self.ensure_one()
         ids = [p.cf_policy_id for p in self.access_policy_ids if p.cf_policy_id]
-        for cf_id in self.env.context.get('sa_unlinked_cf_policy_ids') or []:
+        for cf_id in self.env[_CF_REAP_MODEL]._pending_for(self):
             if cf_id and cf_id not in ids:
                 ids.append(cf_id)
         return ids
@@ -3318,16 +3325,24 @@ class CloudService(models.Model):
         provision/resume 會在 state 尚未回到 'active' 時做收斂；CS 的
         suspend/resume 依設計完全不碰 Access app（design checklist 7），沒有這種
         收斂點，多開一個旁路只會多一條沒人走、也沒人測的分支。
+
+        #528：三道 gate 收斂成 `_access_sync_skip_reason()` 一個裁決處，略過時回
+        ``False``、推出去了回 ``True``。CS 這三格在現行碼下**帶不著待回收 id**
+        （見該方法的 docstring 逐格說明），機制照樣套上去的理由是形狀一致：
+        `state == 'deleting'` 那格的不變式住在 gate 外面、沒有任何守線，而三腿
+        寫法分家的話下一個人只會照著最近的那一腿抄。
         """
         self.ensure_one()
-        if not self.subdomain:
-            return
-        if self.state == 'deleting':
-            return
-        if not self.is_protected and not self.access_app_id:
-            return
+        skip = self._access_sync_skip_reason()
+        if skip:
+            self.env[_CF_REAP_MODEL]._warn_if_deferred(
+                self, _logger,
+                '[CLOUD_SVC] service %s (%s)' % (self.id, self.subdomain),
+                skip)
+            return False
         client = self._get_operator_client()
-        result = client.sync_access_app(self._build_access_payload())
+        payload = self._build_access_payload()
+        result = client.sync_access_app(payload)
         # operator 重指 app 之後刪不掉的舊 reusable policy＝**永久** CF 孤兒
         # （沒有任何後續 re-sync 會再碰到它們），所以要讓它在 log 裡看得見。
         orphaned = result.get('orphaned_policy_ids') or []
@@ -3336,6 +3351,12 @@ class CloudService(models.Model):
                 "[CLOUD_SVC] access sync service=%s (%s) left %d orphan CF "
                 "policy(ies): %s", self.id, self.subdomain, len(orphaned),
                 ', '.join(orphaned))
+        # #528：operator 回 2xx ⇒ 這一輪送出去的 existing_policy_ids 已經有答案。
+        # 沒被列進 orphaned 的確認刪掉 ⇒ 消帳；被列進去的現在就是 CF 孤兒 ⇒ 記進
+        # 帳等下一輪（上面那行 warning 照發，但不再是「說完就忘」）。
+        self.env[_CF_REAP_MODEL]._settle(
+            self._name, self.id,
+            payload.get('existing_policy_ids') or [], orphaned)
         # 身分錨點：只有 sentinel 路徑寫得動（對所有人生效，含 superuser）。
         _internal_cs_access_identity(self).access_app_id = (
             result.get('app_id') or False)
@@ -3358,6 +3379,32 @@ class CloudService(models.Model):
             for pol in self.access_policy_ids:
                 if pol.cf_policy_id:
                     pol.cf_policy_id = False
+        return True
+
+    def _access_sync_skip_reason(self):
+        """``None`` ＝ 這一輪推得動；否則回一句人話說明為什麼不推（#528）。
+
+        本腿**所有** liveness gate 的唯一裁決處，新增 gate 一律加在這裡，訊號
+        自動跟上。三格各自的可達性（動 gate 前先讀）：
+
+        * **沒有 `subdomain`**：`cf_policy_id` 的唯一寫入處在本 gate 的下游，
+          所以某列有 cf id ⇒ 它被寫入的那一刻 subdomain 非空。結構上帶不著
+          待回收 id。
+        * **`state == 'deleting'`**：`_do_cleanup` 是先 teardown 成功、清掉每列
+          的 cf id，才寫 `deleting`；controller 的 `_delete_service` 順序相反，
+          目前靠「unlink 拋的 UserError 沒有人接住 ⇒ 整個 request 回捲」撐著。
+          **這條不變式住在 gate 外面、沒有任何守線**——這一格是本腿唯一會因為
+          別處改動而變成活漏洞的，所以訊號要在。
+        * **未保護且沒有 app id**：清空 `access_app_id` 的兩處都在同一個原子區塊
+          裡把每列的 cf id 一起清掉，所以這三個條件湊不齊。
+        """
+        self.ensure_one()
+        if not self.subdomain:
+            return 'the service has no public subdomain'
+        if self.state == 'deleting':
+            return "the service state is 'deleting'"
+        return (None if (self.is_protected or self.access_app_id)
+                else 'the service is unprotected and never had an Access app')
 
     def _push_access_teardown(self, app_id, policy_ids, app_name, hostname):
         """拆除用的最小 `enabled=False` payload（#745 接上 T2 留的 seam）。

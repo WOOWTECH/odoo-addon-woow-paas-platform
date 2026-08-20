@@ -466,3 +466,9 @@ from . import test_billing_ssot_guard
 # 會因為換了值而恆綠，測試退化成沒有鑑別力的形狀。
 from . import test_sa_sync_ctx_forgery_536
 from . import test_billing_silence_alert
+
+# fix: #528 停權中刪 access policy ⇒ CF 同步被 state gate 靜默略過 ⇒ CF
+# reusable policy 永久孤兒。RED 群集：B1／D1（gate 擋掉時 doomed id 沒有任何
+# durable 記錄）、B2／B3／C1／D2（之後的 sync 不會把它併進 existing_policy_ids）、
+# B5／C2／D3（被 gate 略過是完全靜默的，呼叫端與「同步成功」不可區分）。
+from . import test_cf_policy_reap_ledger_528
