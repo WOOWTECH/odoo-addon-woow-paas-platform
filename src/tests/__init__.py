@@ -455,4 +455,14 @@ from . import test_sh_access_arc_migration_768
 # **真正可達的是租戶 context 流進平台碼**（`_ensure_primary_route()` 走 `.sudo()`，
 # 而 sudo 不洗 context），B1 打的就是那條生產路徑。
 from . import test_sh_access_identity_768
+from . import test_billing_ssot_guard
+# fix: #536 SA 的 sync-control context key 家族可被租戶偽造（#522 的另外三支）。
+# `call_kw` 把 client 的 context 原封不動換進 env，所以只判 truthy 的
+# `sa_skip_route_sync` / `sa_rule_replace` / `sa_force_access_sync` 都是租戶
+# 從 RPC payload 就打得開的逃生門。RED 是每組的第 2 格（A2/B2/C2/D2/E2/F2）。
+# 本檔刻意是 HttpCase 而不是 TransactionCase：這條攻擊的前提就是「call_kw 會
+# 把 client 的 context 換進 env」，TransactionCase 直接 with_context 只證明
+# 「這個 key 有作用」，證明不了租戶構造得出它——而修法（sentinel）之後那種寫法
+# 會因為換了值而恆綠，測試退化成沒有鑑別力的形狀。
+from . import test_sa_sync_ctx_forgery_536
 from . import test_billing_silence_alert

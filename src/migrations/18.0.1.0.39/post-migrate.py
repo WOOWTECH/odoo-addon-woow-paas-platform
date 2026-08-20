@@ -53,6 +53,13 @@ import logging
 from odoo import api, SUPERUSER_ID
 from odoo.exceptions import ValidationError
 
+# #536：`sa_skip_route_sync` 只認模組私有 sentinel（呼叫端 context 會被
+# `call_kw` 整包換進 env，只判 truthy 的 key 是租戶可偽造的）。migration
+# 是伺服器端程式碼，走 helper 開閘。
+from odoo.addons.woow_paas_platform.models.security_access import (
+    _skip_route_sync,
+)
+
 _logger = logging.getLogger(__name__)
 
 _POLICY_TABLE = 'woow_paas_platform_security_access_access_policy'
@@ -170,7 +177,7 @@ def migrate(cr, version):
                 continue
             rule_type = rec.get('rule_type') or 'email_domain'
             rule_value = rec.get('rule_value') or ''
-            Rule.with_context(sa_skip_route_sync=True).create({
+            _skip_route_sync(Rule).create({
                 'policy_id': pol.id,
                 'group': 'include',
                 'rule_type': rule_type,

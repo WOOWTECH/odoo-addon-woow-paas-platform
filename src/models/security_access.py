@@ -102,6 +102,105 @@ def _is_internal_identity_write(env):
             is _INTERNAL_IDENTITY_WRITE)
 
 
+# ---------------------------------------------------------------------- #
+#  Sync-control escape hatches (#536)                                    #
+# ---------------------------------------------------------------------- #
+#
+# 三個「這一次 ORM 操作要怎麼跟 operator 互動」的內部開關。與上面的身分錨點
+# 逃生門**同一個威脅模型、同一個修法**（#522 修的是那一支，#536 是剩下的三支）：
+# `/web/dataset/call_kw` 把呼叫端的 context 整包換進 env，所以任何只判「truthy」
+# 的 context key，租戶在 JSON-RPC payload 加一行就打得開。
+#
+# 三個 key 各自的能力刻意分開（不合併成一把萬能鑰匙）——理由與
+# `sa_internal_prefix_write` 相同：需要抑制同步的 migration，不該因此也能繞過
+# 「≥1 include」驗證。**共用同一個 sentinel 值**則是安全上等價的：真正把租戶
+# 擋在外面的是「JSON 表達不出物件同一性」，而**哪一種能力**由 key 決定。
+#
+#   * sa_skip_route_sync   —— 這一次 create/write/unlink 只搬 DB 狀態，不對
+#                             operator 做宣告式推送（migration / provision 的
+#                             大量 row 搬移，CF 由那些流程自己的顯式 re-sync
+#                             收斂）。偽造後果：租戶標為 is_protected 的 route
+#                             的 Access app 建立正好是被抑制的那一步，而路由
+#                             推送是全量的 ⇒ 之後任一次合法異動會把這條 route
+#                             以「沒有 Access gate」的狀態送上線。
+#   * sa_rule_replace      —— 正在做整組 rule 替換（controller 的 (5,0,0) +
+#                             creates）：抑制 rule 層的過渡同步，**並且**跳過
+#                             rule.unlink() 裡的「≥1 include」檢查（替換途中
+#                             必然經過空集）。偽造後果不只是不同步——那條
+#                             `@api.constrains('rule_ids')` 對「直接 unlink 一
+#                             條 rule」根本不會觸發，unlink 裡的顯式呼叫是唯一
+#                             防線 ⇒ 租戶可留下 0 條 include 的 policy。
+#   * sa_force_access_sync —— 繞過 Access 推送 liveness gate 的**狀態那一半**
+#                             （tunnel_id 仍然必要）：provision / resume 這些
+#                             收斂點跑在 SA 狀態還沒回到 'active' 之前。偽造
+#                             後果：suspended / deleting 狀態仍能把自己 route
+#                             的 Access 設定推去 Cloudflare。
+#                             ⚠ 這個 key 背後還有一個**更大的、本次沒處理的**
+#                             家族問題：「停權未全面阻斷 operator 呼叫」。堵住
+#                             這把鑰匙只是拿掉其中一條路，不等於停權中的租戶
+#                             就碰不到 operator 了 —— 那是另案（#536 明列）。
+#
+# ⚠ 這三個 key 的 KEY 名沒有改，改的是**值**：`with_context(key=False)` 的
+# 「關掉」語意因此原封不動，而 `with_context(key=True)` 從此不再開閘。後者是
+# fail-safe 的方向（多打一次冪等的全量推送，而不是漏掉一次），但它是**無聲**
+# 的，所以下面的判定函式在看到「truthy 但不是 sentinel」時會 WARNING —— 那既是
+# 偽造的訊號，也是「未來有人照舊寫法傳 True」的訊號。
+class _InternalSyncControl:
+    """Marker type for the sync-control escape hatches — see above."""
+    __slots__ = ()
+
+    def __repr__(self):
+        return '<internal sync control>'
+
+
+_INTERNAL_SYNC_CONTROL = _InternalSyncControl()
+
+_CTX_SKIP_ROUTE_SYNC = 'sa_skip_route_sync'
+_CTX_RULE_REPLACE = 'sa_rule_replace'
+_CTX_FORCE_ACCESS_SYNC = 'sa_force_access_sync'
+
+
+def _sync_control(records, *keys):
+    """Return ``records`` in the one context allowed to steer operator sync."""
+    return records.with_context(
+        **{key: _INTERNAL_SYNC_CONTROL for key in keys})
+
+
+def _skip_route_sync(records):
+    """開閘：這一次操作只搬 DB 狀態，不對 operator 做宣告式推送。"""
+    return _sync_control(records, _CTX_SKIP_ROUTE_SYNC)
+
+
+def _rule_replace(records):
+    """開閘：整組 rule 替換途中，抑制逐條同步與「≥1 include」過渡檢查。"""
+    return _sync_control(records, _CTX_RULE_REPLACE)
+
+
+def _force_access_sync(records):
+    """開閘：繞過 Access 推送 liveness gate 的狀態那一半（仍需 tunnel_id）。"""
+    return _sync_control(records, _CTX_FORCE_ACCESS_SYNC)
+
+
+def _is_sync_control(env, key):
+    """這個 sync-control 開關是不是**伺服器端程式碼**設的（而非呼叫端偽造的）。
+
+    只有 sentinel 物件算數。JSON 表達不出物件同一性，所以租戶送
+    ``context={"sa_skip_route_sync": true}`` 進 ``call_kw`` 時走的是下面那條
+    WARNING —— 守衛不開閘，操作照常推送／照常驗證。
+    """
+    value = env.context.get(key)
+    if value is _INTERNAL_SYNC_CONTROL:
+        return True
+    if value:
+        _logger.warning(
+            "Ignoring non-sentinel %r in context (value=%r, uid=%s): this "
+            "hatch only opens for in-process callers using the module's "
+            "helper — see _INTERNAL_SYNC_CONTROL (#536). Either a forged RPC "
+            "context, or in-process code still passing True.",
+            key, value, env.uid)
+    return False
+
+
 def _server_owned_anchor_value(model, field_name):
     """一個身分錨點在 create 當下該落地的**伺服器端值**。
 
@@ -758,13 +857,13 @@ class SecurityAccess(models.Model):
         that was configured on a 'pending' SA — when no route sync could reach
         the operator — gets pushed, AND so a route disabled while suspended is
         torn down at resume. The route sync still requires a live tunnel; the
-        sa_force_access_sync context bypasses only the state half of the gate
+        `_force_access_sync` hatch bypasses only the state half of the gate
         because these convergence points run before the SA state is settled to
         'active'/'error'. Each route builds its own single-route payload, so an
         unprotected route with no stored app id is a cheap no-op."""
         self.ensure_one()
         for route in self.route_ids:
-            route.with_context(sa_force_access_sync=True)._sync_access_to_operator()
+            _force_access_sync(route)._sync_access_to_operator()
 
     def _teardown_route_access(self, app_id, policy_ids, app_name, hostname):
         """Tear down ONE route's Cloudflare Access app (+ reusable policies)
@@ -1193,8 +1292,9 @@ class SecurityAccessRoute(models.Model):
         with self.env.cr.savepoint():
             routes = super().create(vals_list)
             # one sync per affected SA (declarative full-state push).
-            # action_provision sets sa_skip_route_sync because it issues its
-            # own explicit, http_host_header-carrying re-sync right after — so
+            # action_provision opens sa_skip_route_sync (via the sentinel
+            # helper `_skip_route_sync`) because it issues its own explicit,
+            # http_host_header-carrying re-sync right after — so
             # this override's sync would be a redundant extra operator call.
             #
             # Sync whenever a tunnel exists, including state=='error': a
@@ -1204,7 +1304,7 @@ class SecurityAccessRoute(models.Model):
             # an idempotent full-state push) would silently diverge the DB
             # from Cloudflare until someone re-provisions, while the endpoint
             # reports success — so include 'error' here (and in write/unlink).
-            if not self.env.context.get('sa_skip_route_sync'):
+            if not _is_sync_control(self.env, _CTX_SKIP_ROUTE_SYNC):
                 for sa in routes.mapped('security_access_id'):
                     if sa.state in ('active', 'active_no_route', 'error') and sa.tunnel_id:
                         sa._sync_routes_to_operator()
@@ -1213,7 +1313,7 @@ class SecurityAccessRoute(models.Model):
             # carries its own liveness gate (no-op without a live tunnel / when
             # not protected), so just call it on every fresh route; an
             # unprotected route's sync is a cheap no-op.
-            if not self.env.context.get('sa_skip_route_sync'):
+            if not _is_sync_control(self.env, _CTX_SKIP_ROUTE_SYNC):
                 for route in routes:
                     route._sync_access_to_operator()
         # D1: first route on a bare tunnel flips it active_no_route -> active.
@@ -1283,7 +1383,7 @@ class SecurityAccessRoute(models.Model):
             # active+live-tunnel SAs, defeating the deferral to Phase 5 — and an
             # unreachable operator during the upgrade window would re-raise the
             # savepoint and abort the whole migration.
-            if (not self.env.context.get('sa_skip_route_sync')
+            if (not _is_sync_control(self.env, _CTX_SKIP_ROUTE_SYNC)
                     and any(k in vals for k in (
                         'is_protected', 'login_google',
                         'login_email_otp', 'session_duration'))):
@@ -1441,8 +1541,10 @@ class SecurityAccessRoute(models.Model):
         enabled=False payload (teardown via existing_app_id), then clears the
         stored app id; with no app id it is a harmless no-op.
 
-        The `sa_force_access_sync` context bypasses the STATE half of the gate
-        (tunnel_id is still required): provision/resume are deliberate
+        The `_force_access_sync` hatch bypasses the STATE half of the gate
+        (tunnel_id is still required, and #536: only the module's own sentinel
+        opens it — a caller-supplied `sa_force_access_sync: true` does not):
+        provision/resume are deliberate
         convergence points that run BEFORE the SA state is flipped back to
         'active' (resume) or while it is being restored, so the create/write
         liveness gate would otherwise skip the very push they exist to do —
@@ -1450,7 +1552,7 @@ class SecurityAccessRoute(models.Model):
         be torn down at resume even though state is still 'suspended' here)."""
         self.ensure_one()
         sa = self.security_access_id
-        forced = self.env.context.get('sa_force_access_sync')
+        forced = _is_sync_control(self.env, _CTX_FORCE_ACCESS_SYNC)
         if not sa or not sa.tunnel_id:
             return
         if not forced and sa.state not in ('active', 'active_no_route', 'error'):

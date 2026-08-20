@@ -736,7 +736,11 @@ class TestSecurityAccessLifecycleHooks(TransactionCase):
         mock_client = self._sync_mock()
         sa = self._make_active_sa_with_routes(mock_client)
         with patch(MOCK_GET_CLIENT, return_value=mock_client):
-            sa.with_context(sa_force_delete_primary=True).unlink()
+            # #536：原本這裡帶 `sa_force_delete_primary` context。軸2 拿掉
+            # primary route 的 unlink guard 之後就**沒有任何程式碼讀它**了
+            # （`src/models` ＋ `src/controllers` 全域零讀取），留著只會讓
+            # 「這個 key 還有作用」的搜尋結果變成假陽性。
+            sa.unlink()
         mock_client.delete_tunnel.assert_called_once_with('tun-lc')
 
 

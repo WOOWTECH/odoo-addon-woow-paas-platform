@@ -63,6 +63,13 @@ import logging
 
 from odoo import api, SUPERUSER_ID
 
+# #536：`sa_skip_route_sync` 只認模組私有 sentinel（呼叫端 context 會被
+# `call_kw` 整包換進 env，只判 truthy 的 key 是租戶可偽造的）。migration
+# 是伺服器端程式碼，走 helper 開閘。
+from odoo.addons.woow_paas_platform.models.security_access import (
+    _skip_route_sync,
+)
+
 _logger = logging.getLogger(__name__)
 
 _SA_TABLE = 'woow_paas_platform_security_access'
@@ -142,8 +149,8 @@ def migrate(cr, version):
                 # sa_skip_route_sync: DB-only re-home; Phase 5 does the live CF
                 # convergence (these routes will build NO app since they are now
                 # is_protected=False, matching the P2 'no app existed' state).
-                still_protected.with_context(
-                    sa_skip_route_sync=True).write({'is_protected': False})
+                _skip_route_sync(still_protected).write(
+                    {'is_protected': False})
                 depublicised_routes += len(still_protected)
                 _logger.warning(
                     "18.0.1.0.37 P2.5 migration: SA id=%s had legacy "
@@ -177,7 +184,7 @@ def migrate(cr, version):
             if vals:
                 # sa_skip_route_sync: migration must not call the operator; it
                 # only re-homes DB state. Phase 5 does the live CF re-sync.
-                route.with_context(sa_skip_route_sync=True).write(vals)
+                _skip_route_sync(route).write(vals)
                 touched_routes += 1
 
         # ---- 2. re-home legacy policies (route_id still NULL) ----
@@ -208,13 +215,12 @@ def migrate(cr, version):
             try:
                 for pol in legacy_pols:
                     first = targets[:1]
-                    pol.with_context(sa_skip_route_sync=True).write(
-                        {'route_id': first.id})
+                    _skip_route_sync(pol).write({'route_id': first.id})
                     moved_policies += 1
                     # multiple protected routes → copy the same policy to each
                     # additional one (behaviour-equivalent fan-out).
                     for extra in targets[1:]:
-                        pol.with_context(sa_skip_route_sync=True).copy(default={
+                        _skip_route_sync(pol).copy(default={
                             'route_id': extra.id,
                             'cf_policy_id': False,
                         })

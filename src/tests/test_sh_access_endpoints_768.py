@@ -52,6 +52,9 @@ from odoo.tests import HttpCase, tagged
 
 from ..models.cloud_service import _internal_provision
 from ..models.smart_home_route import _internal_sm_route_identity
+# #536：`sa_skip_route_sync` 只認模組私有 sentinel，不能傳 `True`
+# （呼叫端 context 會被 `call_kw` 整包換進 env ⇒ truthy 值是租戶可偽造的）。
+from ..models.security_access import _skip_route_sync
 from ..models.workspace_access import ROLE_ADMIN, ROLE_GUEST, ROLE_USER
 from .smart_home_fixture import sh_model
 
@@ -211,8 +214,7 @@ class _ShAccessEndpointFixture(HttpCase):
                                  'rule_type': 'email_list',
                                  'rule_value': 'a@example.com'})],
         }
-        pol = self.Policy.sudo().with_context(
-            sa_skip_route_sync=True).create(vals)
+        pol = _skip_route_sync(self.Policy.sudo()).create(vals)
         # context 會跟著 recordset 走——不關掉的話之後每一次 write 都被抑制，
         # 而那個症狀與「sync 沒接上」不可區分。
         return pol.with_context(sa_skip_route_sync=False)

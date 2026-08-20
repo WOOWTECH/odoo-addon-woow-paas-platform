@@ -12,6 +12,9 @@ from odoo.http import request, route, Controller
 
 from ..models.smart_home import _platform_order
 from ..models.workspace_access import ROLE_OWNER, ROLE_ADMIN
+# #536：sync-control 的兩個逃生門只認模組私有 sentinel（`call_kw` 把呼叫端
+# context 整包換進 env，只判 truthy 的 key 租戶自己就打得開）。
+from ..models.security_access import _rule_replace, _skip_route_sync
 
 _logger = logging.getLogger(__name__)
 
@@ -671,7 +674,7 @@ class SmartHomeController(Controller):
             # 會踩到「≥1 include」檢查，所以用 `sa_rule_replace` 抑制逐條檢查——
             # policy 層的 @api.constrains 驗最終狀態。
             vals["rule_ids"] = [(5, 0, 0)] + rule_commands
-            write_pol = pol.with_context(sa_rule_replace=True)
+            write_pol = _rule_replace(pol)
         try:
             if vals:
                 write_pol.write(vals)
@@ -715,8 +718,7 @@ class SmartHomeController(Controller):
                 if not pol:
                     continue
                 seq += 10
-                pol.with_context(sa_skip_route_sync=True).write(
-                    {"sequence": seq})
+                _skip_route_sync(pol).write({"sequence": seq})
                 reordered.append(pol.id)
                 touched_routes |= pol.smart_home_route_id
             for sh_route in touched_routes:

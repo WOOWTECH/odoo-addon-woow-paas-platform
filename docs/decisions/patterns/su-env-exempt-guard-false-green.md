@@ -10,6 +10,11 @@
 2. **你想在 model `create()` / `write()` 用 guard 擋變更 / 注入**。
 3. **guard 的測試跑在 `TransactionCase`（= su env）**，或 model 有 `sudo()`'d 內部寫入路徑。
 
+> 🔴 **#536 之後範圍要讀寬一點**：條件 1 的「identity anchor」是本檔最初的成因，
+> **不是適用邊界**。真正的判準是「這把 context key 打開的是不是一條**安全決策**」
+> —— sync-control 開關（要不要推 Cloudflare、要不要跑驗證）同樣適用，見下方
+> 「第四撞」。
+
 → 三者成立 → **不可**用 `not self.env.su` / `not has_group(...)` 當 guard 條件。那會讓 su-env 測試假綠 + sudo 路徑靜默繞過。改用 private sentinel escape hatch（context key 的值是模組層級私有物件、以 `is` 比對，**不是** `True`）。
 
 **不適用**：
@@ -73,6 +78,46 @@ if 'subdomain_prefix' in vals and not self.env.su:
    ```
 
    `is`（不是 `==`）：`==` 會被自訂 `__eq__` 或同值物件騙。sentinel 私有（`_` 開頭、不 export 給 controller）：能 import 到它的就是 server 端自己的程式碼。
+
+### 第四撞 —— 同一個形狀的另外三支：sync-control 開關（#536）
+
+第三撞只修了**身分錨點**那一支。同一份程式碼裡還有三把只判「truthy」的 context
+key，它們守的不是「欄位不可變」而是「這一次操作要不要對外部系統動作」：
+
+| key | 開的是什麼 | 偽造後果 |
+| --- | --- | --- |
+| `sa_skip_route_sync` | 抑制 route／policy／rule 對 operator 的宣告式推送 | route 推送是**全量**的，所以之後任一次合法異動會把這條沒同步過的 route 一起送上線 —— 而 `is_protected` 的 Access app 建立正是被抑制的那一步 ⇒ **使用者標為 protected 的 route 以「沒有 Access gate」的狀態上線** |
+| `sa_rule_replace` | 整組 rule 替換途中抑制逐條同步，**並且**跳過 `rule.unlink()` 的「≥1 include」檢查 | 那條 `@api.constrains('rule_ids')` 對「直接 unlink 一條 rule」不會觸發（policy 的 `rule_ids` 沒被寫）⇒ unlink 裡的顯式呼叫是唯一防線，偽造後留得下 0 條 include 的 policy。**這是 validation bypass，不只是不同步** |
+| `sa_force_access_sync` | 繞過 Access 推送 liveness gate 的**狀態那一半**（`tunnel_id` 仍必要） | suspended／deleting 狀態仍能把自己 route 的 Access 設定推去 Cloudflare |
+
+⇒ **本 pattern 的適用範圍不是「不可變欄位」，是「這把 context key 打開的是不是
+一條安全決策」。** 上面「When to use」的條件 1 寫的是 identity anchor，那是本檔
+最初的成因；#536 之後判準要讀成更寬的那句（已在「偵測 / 測試建議」的第二個
+grep 自查裡寫對了）：**判準不是「有沒有用 context」，是「租戶能不能在 payload
+表達出那個值」，以及「表達出來之後會發生什麼」。**
+
+修法與第三撞同形（`src/models/security_access.py` 的 `_INTERNAL_SYNC_CONTROL`
+＋ `_skip_route_sync()` / `_rule_replace()` / `_force_access_sync()` 三個開閘
+helper ＋ `_is_sync_control(env, key)` 判定），兩個實作決定值得記下來：
+
+1. **key 名刻意不改，只改值。** 好處是 `with_context(key=False)` 的「關掉」語意
+   原封不動，也不會漏改 rename site。代價是 `with_context(key=True)` 從此**無聲**
+   失去抑制 —— 方向上 fail-safe（多打一次冪等的全量推送，而不是漏掉一次），但
+   無聲。所以 `_is_sync_control()` 在看到「truthy 但不是 sentinel」時發 WARNING：
+   那既是偽造訊號，也是「未來有人照舊寫法傳 True」的訊號。
+   ⚠ 這條也是**驗收判準**：綠燈要能分辨「守住了」與「偽造的 key 根本沒走到守衛」
+   —— #536 的驗收就是靠 log 裡 16 次 `Ignoring non-sentinel ... uid=35` 坐實
+   拒絕分支真的被執行。少了這一格，「守住了」與「偽造的 key 根本沒送到守衛」
+   （mock 沒掛上、RPC 沒到、欄位打錯）在輸出上完全一樣。
+2. **三個 key 共用同一顆 sentinel，能力仍由 key 分離。** 真正把租戶擋在外面的是
+   「JSON 表達不出物件同一性」；**哪一種能力**由 key 決定。這與守則 2 對
+   `sa_internal_prefix_write` / `sa_internal_identity_write` 的分工同一個道理。
+
+守線測試：`src/tests/test_sa_sync_ctx_forgery_536.py`（**`HttpCase` 不是
+`TransactionCase`** —— 這條攻擊的前提就是「`call_kw` 會把 client 的 context 換進
+env」，在 `TransactionCase` 裡直接 `with_context` 只證明「這個 key 有作用」，
+證明不了租戶構造得出它；而換成 sentinel 之後那種寫法會恆綠，測試退化成沒有
+鑑別力的形狀）。修前 6 failed / 0 error of 13，修後 0 failed / 0 error of 17。
 
 ## 守則（怎麼做）
 

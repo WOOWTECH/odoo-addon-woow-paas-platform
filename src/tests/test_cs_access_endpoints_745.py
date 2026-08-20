@@ -28,6 +28,9 @@ from ..models.cloud_service import _internal_provision
 from ..models.workspace_access import (
     ROLE_ADMIN, ROLE_GUEST, ROLE_USER,
 )
+# #536：`sa_skip_route_sync` 只認模組私有 sentinel，不能傳 `True`
+# （呼叫端 context 會被 `call_kw` 整包換進 env ⇒ truthy 值是租戶可偽造的）。
+from ..models.security_access import _skip_route_sync
 from ..services.naming import make_service_subdomain
 
 MOCK_GET_CLIENT = (
@@ -129,8 +132,7 @@ class _CsAccessEndpointFixture(HttpCase):
         }
         if sequence is not None:
             vals['sequence'] = sequence
-        pol = self.Policy.sudo().with_context(
-            sa_skip_route_sync=True).create(vals)
+        pol = _skip_route_sync(self.Policy.sudo()).create(vals)
         # context 會跟著 recordset 走——不清掉的話之後的 write 都被抑制，
         # 症狀與「分派沒接好」不可區分（見 test_cs_access_sync_745 的同段註解）。
         return pol.with_context(sa_skip_route_sync=False)
