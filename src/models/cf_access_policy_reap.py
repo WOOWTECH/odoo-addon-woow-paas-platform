@@ -524,6 +524,33 @@ class CfAccessPolicyReap(models.Model):
         `except` 裡、正準備把原本那個錯誤重新拋出。補償的例外若外拋，會把「
         Cloudflare Access teardown failed …」換成一句與租戶動作無關的話——原本
         的錯誤才是這次操作的真相。回傳 bool 供測試判別。
+
+        ## 🔴 涵蓋範圍的邊界（不要讀成「涵蓋所有回捲來源」）
+
+        本機制只在**例外經過某一腿自己的 `except`** 時才會跑。以下兩類回捲會造成
+        **完全相同的 DB 狀態**（CF 已變、列帶死 id 復活）卻**繞過**它：
+
+        1. **`retrying()` 的 request replay**：`odoo/service/model.py` 的
+           `retrying()` 在 `func()` **返回之後**才 `env.cr.flush()`，捕到
+           `IntegrityError` / `OperationalError` 就 rollback ＋ 整個 request 重跑。
+           若那個例外發生在本腿**已經正常返回之後**（同 request 較晚的
+           `SerializationFailure` 40001 之類），本腿的 `except` **一次都不會被
+           進入** ⇒ 補償不跑。而且它**無聲**：replay 通常會成功、呼叫端拿到
+           success，沒有人會知道發生過（比「teardown 失敗 raise」那條更難發現，
+           那條至少會拋錯給呼叫端）。
+        2. **flush-time constraint**：`cr.savepoint()` 預設 `flush=True`，一部分
+           constraint 在 savepoint 離開時就炸、一部分要等 request 層 flush。落在
+           後者時同上——例外不經過本腿的 `except`。
+
+        ⇒ 這兩格的收斂者是**週期性重推**（#803），不是本機制。刻意不在這裡追：
+        它們沒有 hook 可掛，硬做只會做出一個蓋不住的半套。
+
+        ⚠ 未驗註記：上面兩格是**讀 `retrying()` 原始碼推導**的，沒有實際製造一次
+        `SerializationFailure` 或某條 flush-time constraint 去觀測 CF 側殘留。
+        另一格**有實測**的同型邊界見
+        `test_pre_write_on_the_same_row_defeats_the_compensation`：外層交易在
+        savepoint **之外**先寫過同一列時，補償撞 PG 寫寫衝突等到 `lock_timeout`
+        為止、失敗、出聲，死 id 留在列上（那一格靠 reconciler 的左 − 右方向偵測）。
         """
         if not torn_down:
             return False

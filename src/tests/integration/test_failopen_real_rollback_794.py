@@ -287,6 +287,7 @@ class TestSecurityAccessUnlinkSurvivesRealRollback(BaseCase):
                 'is_protected': True,
                 'session_duration': '24h'})
             _internal_sa(route).access_app_id = self.app1
+            sa.write({'error_message': 'CONTROL-BEFORE'})
             self.sa_id, self.route_id = sa.id, route.id
 
     def _purge(self):
@@ -311,6 +312,14 @@ class TestSecurityAccessUnlinkSurvivesRealRollback(BaseCase):
                 (route_id,))
             return cr.fetchone()
 
+    def _sa_error_message(self):
+        with self.registry.cursor() as cr:
+            cr.execute(
+                'SELECT error_message FROM woow_paas_platform_security_access '
+                'WHERE id = %s', (self.sa_id,))
+            row = cr.fetchone()
+            return row and row[0]
+
     def _client(self, tunnel_ok):
         client = MagicMock()
         client.sync_access_app.side_effect = (
@@ -328,14 +337,24 @@ class TestSecurityAccessUnlinkSurvivesRealRollback(BaseCase):
         return client
 
     def test_sa_unlink_compensation_survives_a_real_rollback(self):
-        """tunnel 刪不掉 ⇒ 交易整筆丟棄，而補償的寫入必須還在。"""
+        """tunnel 刪不掉 ⇒ 交易整筆丟棄，而補償的寫入必須還在。
+
+        🔴 **對照值刻意寫在 SA 列上，不是 route 列上**（第一版寫在 route 上，
+        實跑紅了，而那個紅是**探針自己造成的**不是實作壞掉）：補償要 UPDATE 的
+        正是 route 那幾列，外層交易若在 savepoint **之外**先寫過同一列，那筆
+        UPDATE 還活著 ⇒ 補償的獨立交易撞 PG 寫寫衝突、等到 `lock_timeout` 為止。
+        那條邊界本身由 `test_pre_write_on_the_same_row_defeats_the_compensation`
+        另外釘住；本條要測的是「補償活得過 rollback」，所以對照值要放在補償
+        **不碰**的列上。
+        """
         client = self._client(tunnel_ok=False)
         cr = self.registry.cursor()
         try:
             env = api.Environment(cr, odoo.SUPERUSER_ID, {})
             # 對照值：同一筆交易裡的普通寫入，必須被下面的 rollback 抹掉。
-            _skip_route_sync(env[_ROUTE].browse(self.route_id)).write(
-                {'session_duration': '1h'})
+            # 寫在 **SA** 列上——補償只寫 route 列，兩者不會互相擋。
+            env['woow_paas_platform.security_access'].browse(
+                self.sa_id).write({'error_message': 'CONTROL-AFTER'})
             with patch(MOCK_SA_CLIENT, return_value=client):
                 try:
                     env['woow_paas_platform.security_access'].browse(
@@ -356,13 +375,10 @@ class TestSecurityAccessUnlinkSurvivesRealRollback(BaseCase):
         self.assertTrue(client.delete_tunnel.called,
                         '前提檢查：tunnel 刪除必須真的被嘗試過')
 
-        app_id, is_protected, lost, sd = self._read(self.route_id)
+        app_id, is_protected, lost, _sd = self._read(self.route_id)
         # 🔴 對照值：證明那次 rollback 真的抹掉了同一筆交易裡的普通寫入。
-        # ⚠ 這裡的對照值寫在**同一條 route** 上，而補償也寫這條 —— 兩者不衝突：
-        # 對照寫入在 savepoint 之外（unlink 之前），rollback 後回到 '24h'；
-        # 補償是另一條連線、另一筆交易，它寫的是 app_id 與旗標。
         self.assertEqual(
-            sd, '24h',
+            self._sa_error_message(), 'CONTROL-BEFORE',
             '對照值必須回到 commit 當時的樣子——沒有它，下面幾條可能只是因為'
             '這次 rollback 根本沒東西可回捲')
         self.assertNotEqual(
@@ -388,4 +404,55 @@ class TestSecurityAccessUnlinkSurvivesRealRollback(BaseCase):
             self._read(self.route_id),
             'tunnel 刪得掉 ⇒ 整個 SA 與它的 route 都該真的消失（這一筆是真的'
             'commit 的，證明前一條的「列還在」不是因為刪除從來沒成功過）')
+
+    def test_pre_write_on_the_same_row_defeats_the_compensation(self):
+        """🔴 已知邊界，實測釘住：外層交易在 savepoint **之外**先寫過同一列時，
+        補償寫不進去。
+
+        補償跑在獨立連線上，而那筆 pre-write 的 UPDATE 在外層交易裡還活著
+        ⇒ PG 寫寫衝突 ⇒ 補償等到 `SET LOCAL lock_timeout` 為止、失敗、出聲，
+        **原本的錯誤照常外拋**。這一格的偵測管道是 reconciler 的「左 − 右」
+        方向（DB 有 app_id、CF 沒有），不是補償。
+
+        把它寫成測試而不是只寫在 docstring 裡的理由：這是本修法**唯一**會安靜
+        失效的路徑，而它與「補償根本沒被接上」在列狀態上**完全不可區分**。有了
+        這條，未來有人把 lock_timeout 拉長成 60s（看起來像「更可靠」）會立刻
+        看到本條從「快速失敗」變成「掛住」。
+        """
+        client = self._client(tunnel_ok=False)
+        cr = self.registry.cursor()
+        try:
+            env = api.Environment(cr, odoo.SUPERUSER_ID, {})
+            # 🔴 關鍵差異：pre-write 落在**補償要改的那一列**上。
+            _skip_route_sync(env[_ROUTE].browse(self.route_id)).write(
+                {'session_duration': '1h'})
+            env.flush_all()
+            with patch(MOCK_SA_CLIENT, return_value=client):
+                try:
+                    env['woow_paas_platform.security_access'].browse(
+                        self.sa_id).unlink()
+                except UserError:
+                    pass
+                else:
+                    self.fail('unlink 必須以 UserError 收場')
+            sent = [c.args[0] for c in client.sync_access_app.call_args_list]
+            cr.rollback()
+        finally:
+            cr.close()
+
+        self.assertTrue(
+            any(c.get('enabled') is False
+                and c.get('existing_app_id') == self.app1 for c in sent),
+            '前提檢查：teardown 必須真的送出去過（否則本條測到的是另一格）')
+        app_id, is_protected, lost, sd = self._read(self.route_id)
+        self.assertEqual(sd, '24h', 'pre-write 本身仍然被 rollback 抹掉')
+        self.assertEqual(
+            app_id, self.app1,
+            '已知邊界：pre-write 擋住補償 ⇒ 死 id 留在列上。**這一格靠 '
+            'reconciler 的左−右方向偵測，不是靠補償**')
+        self.assertTrue(is_protected)
+        self.assertFalse(
+            lost,
+            '補償整段沒跑成 ⇒ 旗標也不會被打開（所以旗標蓋不到這一格，'
+            '#803 的 cron 同樣蓋不到）')
 
