@@ -32,6 +32,10 @@ from odoo.exceptions import UserError, ValidationError
 from odoo.tests.common import TransactionCase
 from odoo.tools import mute_logger
 
+# #536：`sa_skip_route_sync` 只認模組私有 sentinel，不能傳 `True`
+# （呼叫端 context 會被 `call_kw` 整包換進 env ⇒ truthy 值是租戶可偽造的）。
+from ..models.security_access import _skip_route_sync
+
 from ..models.cloud_service import (
     _CS_ACCESS_IDENTITY_ANCHOR_FIELDS,
     _CS_ACCESS_IDENTITY_CTX_KEY,
@@ -480,7 +484,7 @@ class TestCsAccessTeardown(_CsAccessFixture):
             name='td2', subdomain='td744-2'))
         # `sa_skip_route_sync`（#745）：這台服務現在是 is_protected + 有 app id
         # 的狀態，所以建 policy 會觸發真的 operator push。這裡是佈景不是受測動作。
-        pol = self.Policy.with_context(sa_skip_route_sync=True).create(
+        pol = _skip_route_sync(self.Policy).create(
             self._policy_vals(cloud_service_id=svc.id))
         pol.cf_policy_id = 'cf-pol-1'
         with patch(self._SEAM, autospec=True, return_value=None) as seam:
@@ -538,7 +542,7 @@ class TestCsAccessTeardown(_CsAccessFixture):
         svc = self._with_access_app(self._service(
             name='td5', subdomain='td744-5'), app_id='app-td-5')
         # 同 D2：佈景設定，抑制 T3 之後才存在的 per-row operator push。
-        pol = self.Policy.with_context(sa_skip_route_sync=True).create(
+        pol = _skip_route_sync(self.Policy).create(
             self._policy_vals(cloud_service_id=svc.id))
         pol.cf_policy_id = 'cf-pol-5'
         with patch(self._SEAM, autospec=True, return_value=None):

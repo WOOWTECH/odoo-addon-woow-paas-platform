@@ -1,6 +1,11 @@
 from odoo import api, fields, models
 from odoo.exceptions import ValidationError
 
+# #536：sync-control 的逃生門必須是模組私有 sentinel，不是任何 JSON 表達得出
+# 的值——`call_kw` 把呼叫端 context 整包換進 env，只判 truthy 的 key 租戶自己
+# 就打得開。判定與開閘 helper 都住在 SA 那支（本子模型沒有自己的 sentinel）。
+from .security_access import _CTX_SKIP_ROUTE_SYNC, _is_sync_control
+
 
 #: 錨點欄位的**唯一清單**（順序即訊息與 sparse-precedence 的探測順序）。
 #:
@@ -604,7 +609,7 @@ class SecurityAccessAccessPolicy(models.Model):
             # sa_skip_route_sync: migration / provision-time bulk row moves set
             # this so the row re-home does NOT call the operator (CF converges
             # via the explicit re-sync those flows issue, not per-row here).
-            if not self.env.context.get('sa_skip_route_sync'):
+            if not _is_sync_control(self.env, _CTX_SKIP_ROUTE_SYNC):
                 for anchor in policies._access_sync_targets():
                     anchor._sync_access_to_operator()
         return policies
@@ -612,7 +617,7 @@ class SecurityAccessAccessPolicy(models.Model):
     def write(self, vals):
         with self.env.cr.savepoint():
             result = super().write(vals)
-            if (not self.env.context.get('sa_skip_route_sync')
+            if (not _is_sync_control(self.env, _CTX_SKIP_ROUTE_SYNC)
                     and any(k in vals for k in (
                         'name', 'decision', 'sequence', 'rule_ids',
                     ) + _ANCHOR_FIELDS)):

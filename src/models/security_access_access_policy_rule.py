@@ -4,6 +4,14 @@ import re
 from odoo import api, fields, models
 from odoo.exceptions import ValidationError
 
+# #536：見 policy 子模型同一段註解——sync-control 的兩個 key 只認模組私有
+# sentinel，租戶從 RPC payload 塞 `true` 打不開。
+from .security_access import (
+    _CTX_RULE_REPLACE,
+    _CTX_SKIP_ROUTE_SYNC,
+    _is_sync_control,
+)
+
 # Shared with the policy格式驗證：bare domain（不可帶 @），如 acme.com。
 _DOMAIN_RE = re.compile(r'^[a-z0-9.-]+\.[a-z]{2,}$', re.IGNORECASE)
 # ISO 3166-1 Alpha-2 國碼，如 TW / US（大小寫不拘，存前 upper）。
@@ -133,6 +141,12 @@ class SecurityAccessAccessPolicyRule(models.Model):
     def _suppress_route_sync(self):
         """Whether a per-rule operator sync should be skipped for this op.
 
+        Both hatches open ONLY for the module's own sentinel (#536) — open them
+        with `_skip_route_sync()` / `_rule_replace()` from models/security_access,
+        never by putting `True` in the context: `call_kw` hands the caller's
+        context straight to the ORM, so a truthy-valued key is forgeable from
+        any tenant's RPC payload.
+
         sa_skip_route_sync: migration / provision bulk row moves converge CF via
         their own explicit re-sync, not per-row here.
 
@@ -144,8 +158,8 @@ class SecurityAccessAccessPolicyRule(models.Model):
         the whole edit. The policy's own write() issues the final full-state sync
         after the replace settles, so per-rule syncs here are wrong AND redundant.
         """
-        ctx = self.env.context
-        return bool(ctx.get('sa_skip_route_sync') or ctx.get('sa_rule_replace'))
+        return (_is_sync_control(self.env, _CTX_SKIP_ROUTE_SYNC)
+                or _is_sync_control(self.env, _CTX_RULE_REPLACE))
 
     # Atomicity + sync: mirror the policy sub-model. A rule create/write/unlink
     # re-syncs its policy's ANCHOR — the route, or (#745) the cloud_service —
@@ -220,7 +234,7 @@ class SecurityAccessAccessPolicyRule(models.Model):
             # does (5,0,0)+creates) transiently empties the policy before the new
             # rules land; suppress the per-rule check during that window — the
             # policy-level @api.constrains validates the final state.
-            if not self.env.context.get('sa_rule_replace'):
+            if not _is_sync_control(self.env, _CTX_RULE_REPLACE):
                 policies.exists()._check_at_least_one_include()
             if not self._suppress_route_sync():
                 for anchor in anchors:

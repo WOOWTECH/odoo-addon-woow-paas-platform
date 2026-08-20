@@ -10,6 +10,12 @@ from odoo.tests.common import TransactionCase
 from odoo.addons.woow_paas_platform.models.security_access import (
     _internal_identity as _internal,
 )
+# #536：sync-control 的兩個逃生門同樣只認模組私有 sentinel——不能傳 `True`，
+# 那是租戶從 `call_kw` 的 context 就送得出來的值。
+from odoo.addons.woow_paas_platform.models.security_access import (
+    _rule_replace,
+    _skip_route_sync,
+)
 
 MOCK_GET_CLIENT = (
     'odoo.addons.woow_paas_platform.models.security_access.'
@@ -447,7 +453,7 @@ class TestRouteAccessSync(TransactionCase):
             mc.sync_access_app.reset_mock()
             # controller _update_policy 的整組替換路徑：sa_rule_replace 且
             # NOT sa_skip_route_sync（讓 route sync 真的會跑）。
-            pol.with_context(sa_rule_replace=True).write({
+            _rule_replace(pol).write({
                 'name': 'edited', 'decision': 'bypass',
                 'rule_ids': [(5, 0, 0),
                              (0, 0, {'group': 'include', 'rule_type': 'ip_range',
@@ -571,7 +577,7 @@ class TestRouteAccessSync(TransactionCase):
         mc.sync_access_app.assert_not_called()
 
     def test_write_honors_sa_skip_route_sync_on_live_protected_route(self):
-        """sa_skip_route_sync route.write() 不可呼 operator，即使 SA 有 live
+        """`_skip_route_sync()` 的 route.write() 不可呼 operator，即使 SA 有 live
         tunnel + protected route。
 
         鏡像 create()/policy 的對稱性：migration 的 login/session re-home
@@ -585,7 +591,7 @@ class TestRouteAccessSync(TransactionCase):
         sa, route = self._active_sa(mc, protected=True)
         with patch(MOCK_GET_CLIENT, return_value=mc):
             mc.sync_access_app.reset_mock()
-            route.with_context(sa_skip_route_sync=True).write({
+            _skip_route_sync(route).write({
                 'login_google': True,
                 'login_email_otp': True,
                 'session_duration': '8h',

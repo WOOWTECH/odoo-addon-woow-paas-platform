@@ -28,6 +28,9 @@ from ..services.paas_operator import (
     PaaSOperatorConnectionError,
 )
 from ..models.cloud_service import _internal_provision
+# #536：sync-control 的兩個逃生門只認模組私有 sentinel（`call_kw` 把呼叫端
+# context 整包換進 env，只判 truthy 的 key 租戶自己就打得開）。
+from ..models.security_access import _rule_replace, _skip_route_sync
 
 _logger = logging.getLogger(__name__)
 
@@ -1932,7 +1935,7 @@ class PaasController(HiddenChainMixin, Controller):
             # `sa_rule_replace` 抑制逐條檢查——policy 層的 @api.constrains 驗最終
             # 狀態。
             vals['rule_ids'] = [(5, 0, 0)] + rule_commands
-            write_pol = pol.with_context(sa_rule_replace=True)
+            write_pol = _rule_replace(pol)
         try:
             if vals:
                 write_pol.write(vals)
@@ -1977,8 +1980,7 @@ class PaasController(HiddenChainMixin, Controller):
                 if not pol:
                     continue
                 seq += 10
-                pol.with_context(sa_skip_route_sync=True).write(
-                    {'sequence': seq})
+                _skip_route_sync(pol).write({'sequence': seq})
                 reordered.append(pol.id)
             if reordered:
                 service._sync_access_to_operator()

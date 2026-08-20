@@ -139,6 +139,8 @@ _CONFIG_PARAMETERS = [
     'woow_paas_platform.portal_project_settings_editable',
     'woow_paas_platform.show_projects',
     'woow_paas_platform.max_consecutive_payment_failures',
+    # #778 配套 3：計費靜默告警的門檻天數（'0' 停用；缺值走模組內建預設）
+    'woow_paas_platform.billing_silence_alert_days',
     'woow_paas_platform.sa_default_service_url',
     'woow_paas_platform.agent_idle_reap_seconds',
     'woow_paas_platform.agent_gc_seconds',
@@ -152,6 +154,10 @@ _CONFIG_PARAMETERS = [
     'woow_paas_platform.sales_paused.haos',
     # NB: the agent namespace secret moved to the AGENT_RUNTIME_NAMESPACE_SECRET
     # env (F-PC-3 fail-closed) and is no longer an ir.config_parameter.
+    # #778：上游 sh_subscription_wallet 的 SSOT 開關——平台 pin '0'（opt-out）。
+    # key 屬上游 namespace 但由平台設值；平台卸載時清掉＝上游回復自身預設
+    # （未設視同啟用 SSOT）。
+    'sh_subscription_wallet.billing_ssot',
 ]
 
 
@@ -217,6 +223,14 @@ def post_init_hook(env):
     env['woow_paas_platform.oauth_client']._ensure_ha_smart_home_device_grant()
     env['woow_paas_platform.oauth_client']._ensure_ha_app_provision_scope()
     env['res.company']._ensure_subscription_journal()
+    # #778：SSOT 對撞防護（fresh-install 路徑；-u 路徑由
+    # data/billing_ssot_guard.xml 的 <function> 覆蓋）。平台在 module graph
+    # 拓撲序上晚於 sh_subscription_wallet，此處恆能把 wallet 的
+    # post_init_hook 關掉的 base auto-invoice cron 開回、並 pin 上游
+    # billing_ssot param 為 opt-out。
+    Subscription = env['sh.subscription.subscription']
+    Subscription._ensure_billing_ssot_optout()
+    Subscription._ensure_base_auto_invoice_cron_active()
 
 
 def uninstall_hook(env):
