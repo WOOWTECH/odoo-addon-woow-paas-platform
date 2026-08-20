@@ -500,7 +500,9 @@ from . import test_sh_sync_ctx_forgery_787
 # CloudService / SmartHome / SecurityAccess 本身）。RED 群集：A1／B1／C1／F1
 # （拆成功那幾條沒被交還給補償）、A5（pass 1 不 short-circuit ⇒ 整批被拆）、
 # A6（補償誤傷重試錨點）、E3（partial 時反方向誤報活著的 app 已死）、
-# F3（action_delete 少了自己那一層 ⇒ 補償拿到空清單）。
+# F3（action_delete 少了自己那一層 ⇒ 補償拿到空清單）、
+# G1／G4／G6（落帳撞 OperationalError 時「CF 已拆成功」的事實被丟掉——四腿逐字
+# 同型，只鎖 SA 那腿等於把其餘三腿留給下一次重構）。
 from . import test_access_failopen_compensation_794
 # 真交易邊界探針（`-standard`，要 `--test-tags failopen_794` 才會跑）：
 # TransactionCase 的 cursor 不可 commit/rollback ⇒ 結構上造不出「整筆交易被

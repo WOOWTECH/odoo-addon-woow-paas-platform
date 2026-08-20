@@ -954,6 +954,169 @@ class TestTornDownSurvivesLedgerFailure(TransactionCase):
                         anchor_id=999999, torn_down=[])
 
 
+# ---------------------------------------------------------------------- #
+#  G4-G7：CS 與 SH route 兩腿的**同型回歸鎖**                             #
+# ---------------------------------------------------------------------- #
+#
+# 🔴 為什麼要逐腿鎖，而不是「SA route 那腿綠了就好」：
+#
+# 四腿的 `_teardown_*` 是**逐字同型**的三段（CF 拆成功 → 記錄副作用 → 落帳 →
+# `return True`），而這個缺陷的形狀正是「其中一腿的 append 被挪回 `if ok:` 裡」。
+# 本 repo 自己在 `_ANCHOR_FIELDS` 的註解裡逐字記過同一個模式：**第 N 個腿上線時
+# 會漏改其中一處，而症狀是沒有輸出**。#794 花了兩輪覆核才找到它，只鎖四分之一
+# 等於把剩下四分之三留給下一次重構。
+#
+# G4/G5＝CS 腿的 G1/G3；G6/G7＝SH route 腿的 G1/G3。陽性對照沿用 G2 與各腿既有
+# 的 `test_*_positive_control_*`，不逐腿重複。
+
+
+@tagged('post_install', '-at_install')
+class TestTornDownSurvivesLedgerFailureCs(TransactionCase):
+    """CS 腿（`_teardown_cs_access`）的落帳失敗回歸鎖。"""
+
+    def setUp(self):
+        super().setUp()
+        self.workspace = self.env['woow_paas_platform.workspace'].create(
+            {'name': 'WS 794Gcs %s' % uuid.uuid4().hex[:6]})
+        self.template = self.env[
+            'woow_paas_platform.cloud_app_template'].create({
+                'name': 'CS 794G tmpl',
+                'slug': 'cs-794g-%s' % uuid.uuid4().hex[:6],
+                'helm_repo_url': '',
+                'helm_chart_name': 'oci://example.com/cs-794g',
+                # ⚠ 必須釘版：未釘版的 template 會被 create() 的供給閘擋下。
+                'helm_chart_version': '1.0.0',
+                'workload_type': 'container',
+                'post_deploy_init_type': 'none',
+                'mcp_enabled': False,
+            })
+
+    def _service(self, app_id):
+        svc = _internal_provision(self.env[_CS]).create({
+            'name': 'g794cs', 'workspace_id': self.workspace.id,
+            'template_id': self.template.id, 'state': 'running',
+            'subdomain': 'g794cs-%s' % uuid.uuid4().hex[:6]})
+        _cs_skip_access_sync(_internal_cs_access_identity(svc)).write(
+            {'is_protected': True, 'access_app_id': app_id})
+        return svc
+
+    @mute_logger(LOG_CS, LOG_REAP)
+    def test_G4_cs_ledger_operational_error_still_records_the_anchor(self):
+        """CS：落帳拋 `OperationalError` ⇒ 補償仍必須拿到**非空**清單。"""
+        svc = self._service('app-g4')
+        svc_id = svc.id
+        with patch(MOCK_CS_SEAM, autospec=True,
+                   return_value=_teardown_result()) as seam:
+            with patch(SETTLE_TEARDOWN, autospec=True,
+                       side_effect=OperationalError('40001 serialization')
+                       ) as settle:
+                with patch(COMPENSATE, autospec=True) as comp:
+                    with self.assertRaises(OperationalError):
+                        svc.unlink()
+        self.assertTrue(
+            any(c.kwargs.get('app_id') == 'app-g4'
+                for c in seam.call_args_list),
+            '前提檢查：CF teardown 必須真的送出去過（＝那顆 app 真的沒了）')
+        self.assertTrue(settle.called, '前提檢查：落帳必須真的被呼叫過')
+        comp.assert_called_once()
+        self.assertEqual(
+            comp.call_args.args[1], [(_CS, svc_id)],
+            '🔴 落帳失敗不得讓「CF 已拆成功」跟著丟掉——清單為空時補償空轉，'
+            '而那個結局與「補償根本沒被接上」不可區分')
+
+    @mute_logger(LOG_CS, LOG_REAP)
+    def test_G5_cs_return_value_semantics_unchanged_on_ledger_failure(self):
+        """CS：落帳失敗時 `OperationalError` 必須外拋，不得偽裝成 `True`。
+
+        釘住「把 append 移前面」不會被順手寫成「把 return 也移前面」。
+        """
+        svc = self._service('app-g5')
+        with patch(MOCK_CS_SEAM, autospec=True,
+                   return_value=_teardown_result()):
+            with patch(SETTLE_TEARDOWN, autospec=True,
+                       side_effect=OperationalError('40001 serialization')):
+                with self.assertRaises(OperationalError):
+                    svc._teardown_cs_access(
+                        app_id='app-g5', policy_ids=[], app_name='g5',
+                        hostname='g5.example', torn_down=[])
+
+
+@tagged('post_install', '-at_install')
+class TestTornDownSurvivesLedgerFailureShRoute(TransactionCase):
+    """SH route 腿（`_push_access_teardown`）的落帳失敗回歸鎖。"""
+
+    def setUp(self):
+        super().setUp()
+        self.ICP = self.env['ir.config_parameter'].sudo()
+        self.ICP.set_param('woow_paas_platform.paas_domain', 'woowtech.io')
+        self.ICP.set_param('woow_paas_platform.deploy_env', 'prod')
+        self.workspace = self.env[
+            'woow_paas_platform.workspace'].sudo().create(
+                {'name': 'WS 794Gsh %s' % uuid.uuid4().hex[:6]})
+        SmartHome = sh_model(self.env)
+        sh = SmartHome.create({
+            'name': 'sh-794g-%s' % uuid.uuid4().hex[:6],
+            'workspace_id': self.workspace.id,
+            'state': 'active',
+            'tunnel_id': 'tun-794g-%s' % uuid.uuid4().hex[:8]})
+        sh.write({'subdomain': sh._generate_subdomain()})
+        self.sh = sh.with_env(self.env)
+        _sm_skip_access_sync(self.env[_SH_ROUTE]).create(
+            {'smart_home_id': self.sh.id, 'is_primary': True})
+
+    def _route(self, app_id):
+        route = _sm_skip_access_sync(self.env[_SH_ROUTE]).create({
+            'smart_home_id': self.sh.id, 'is_primary': False,
+            'subdomain_prefix': 'y%s' % uuid.uuid4().hex[:8],
+            'is_protected': True})
+        route = route.with_context(sm_skip_access_sync=False)
+        _internal_sm_route_identity(route).access_app_id = app_id
+        return route
+
+    def _client(self):
+        client = MagicMock()
+        client.sync_access_app.return_value = _teardown_result()
+        return client
+
+    @mute_logger(LOG_SH, LOG_SH_ROUTE, LOG_REAP)
+    def test_G6_sh_ledger_operational_error_still_records_the_anchor(self):
+        """SH route：落帳拋 `OperationalError` ⇒ 補償仍必須拿到**非空**清單。"""
+        route = self._route('app-g6')
+        route_id = route.id
+        client = self._client()
+        with patch(MOCK_SH_CLIENT, return_value=client):
+            with patch(SETTLE_TEARDOWN, autospec=True,
+                       side_effect=OperationalError('40001 serialization')
+                       ) as settle:
+                with patch(COMPENSATE, autospec=True) as comp:
+                    with self.assertRaises(OperationalError):
+                        route.unlink()
+        sent = [c.args[0] for c in client.sync_access_app.call_args_list]
+        self.assertTrue(
+            any(c.get('enabled') is False
+                and c.get('existing_app_id') == 'app-g6' for c in sent),
+            '前提檢查：CF teardown 必須真的送出去過')
+        self.assertTrue(settle.called, '前提檢查：落帳必須真的被呼叫過')
+        comp.assert_called_once()
+        self.assertEqual(
+            comp.call_args.args[1], [(_SH_ROUTE, route_id)],
+            '🔴 落帳失敗不得讓「CF 已拆成功」跟著丟掉')
+
+    @mute_logger(LOG_SH, LOG_SH_ROUTE, LOG_REAP)
+    def test_G7_sh_return_value_semantics_unchanged_on_ledger_failure(self):
+        """SH route：落帳失敗時 `OperationalError` 必須外拋，不得偽裝成 `True`。"""
+        route = self._route('app-g7')
+        info = route._capture_access_teardown()
+        self.assertIsNotNone(
+            info, '前提檢查：捕獲必須成功，否則本條測到的是另一格')
+        with patch(MOCK_SH_CLIENT, return_value=self._client()):
+            with patch(SETTLE_TEARDOWN, autospec=True,
+                       side_effect=OperationalError('40001 serialization')):
+                with self.assertRaises(OperationalError):
+                    self.env[_SH_ROUTE]._push_access_teardown(
+                        info, torn_down=[])
+
+
 # ====================================================================== #
 #  D 系列：補償 helper 自己的契約（它是本 repo model 層唯一自開 cursor 的地方） #
 # ====================================================================== #
