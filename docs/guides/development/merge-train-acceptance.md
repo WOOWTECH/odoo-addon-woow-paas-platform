@@ -37,8 +37,13 @@ related: [docs/decisions/patterns/README.md, docs/tracking/followups/follow-ups.
 | 這張 PR 是 | manifest 版號要求 | 額外要驗 |
 | --- | --- | --- |
 | 一般 PR（絕大多數） | **等於**當下 `origin/develop`——別碰那一行 | 併完 develop 後 `git diff origin/develop -- src/__manifest__.py` 是空的 |
-| 帶 migration | **元組比較**嚴格大於 develop | 本 PR 新增／變更的 `src/migrations/<X>/` 至少一個 X **等於**新版號（F4 鐵律，見 [`plan-catalog-update.md`](../maintenance/plan-catalog-update.md)） |
-| 發版（分支 `release/*`） | **元組比較**嚴格大於 develop | 走 [`.claude/commands/woow/deploy.md`](../../../.claude/commands/woow/deploy.md) 的發版 PR 步驟 |
+| 只改**既有** migration 檔（修舊 migration 的 bug） | 同一般 PR：**等於** develop | 無。既有目錄改不了名，本來就不該 bump |
+| 帶 migration（**新增**目錄） | **元組比較**嚴格大於 develop（相等 ⇒ 紅 `migration-needs-bump`） | 本 PR **新增**的 `src/migrations/<X>/` 至少一個 X **等於**新版號（F4 鐵律，見 [`plan-catalog-update.md`](../maintenance/plan-catalog-update.md)） |
+| 發版（分支 `release/*`） | **元組比較**嚴格大於 develop（相等 ⇒ 紅 `release-needs-bump`） | 走 [`.claude/commands/woow/deploy.md`](../../../.claude/commands/woow/deploy.md) 的發版 PR 步驟 |
+
+- 🔴 **「帶 migration」的判準是「本 PR **新增**了目錄」**（目錄在 base 側 tree 不存在），不是「動到目錄」。用後者的話「修既有 migration 的 bug」整類 PR 會被逼著 bump，而其中一種**無解**：`src/migrations/18.0.1.0.37/` 沒有辦法改名成新版號（實例 `1ec8144c`）。
+- 🔴 **新增 migration 卻沒 bump ⇒ 紅**，這是 #691 的原始失效：版號相等 ⇒ 已升級到該版的環境（prod 一旦發過這個號就是）永遠不會跑到那支 migration，靜默 no-op。
+- 🔴 **發版 PR 忘記 bump ⇒ 紅**（含「沒動 `src/` 任何檔案」的情形——release 分支不吃 out-of-scope 豁免）。放行的話剩下的網只有 `/woow:deploy` pre-flight 那個**人跑的** script，不是 required check。
 
 - **不比字串**：位數進位時字串會說謊（`'18.0.1.0.100' > '18.0.1.0.99'` 是 `False`）。gate 一律數值 tuple。
 - 🔴 **會 bump 的那兩類仍要求「嚴格大於**當下的** develop」**，理由沒變：兩邊 bump 到**同一個值**時 git 認定無衝突——那行 diff 是空白的，衝突不會出現，review 看 diff 也是空白，後 merge 的那個**靜默地沒有 bump**（同日曾發生三次：#352／PR#517／#522）。

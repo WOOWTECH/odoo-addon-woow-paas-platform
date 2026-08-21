@@ -242,6 +242,55 @@ class TestReleaseSignal(unittest.TestCase):
 
 
 # --------------------------------------------------------------------------
+# 3b. 🔴 「本 PR **新增**的」migration 目錄＝動到的 − base 側已存在的
+#
+# 規則 A／B 判「這是不是 migration PR」用的是這個集合。用「動到的」會把「修既有
+# migration 的 bug」整類判紅，而其中一種（`18.0.1.0.37/`，本 repo 實際發生過）**無解**：
+# 沒有辦法把既有目錄改名成新版號。
+# --------------------------------------------------------------------------
+class TestNewMigrationDirs(unittest.TestCase):
+    def test_base_side_dirs_are_subtracted(self):
+        self.assertEqual(
+            gate.select_new_migration_dirs(
+                ["18.0.1.0.37", "18.0.1.0.176"], ["18.0.1.0.37", "18.0.1.0.39"]
+            ),
+            ["18.0.1.0.176"],
+        )
+
+    def test_everything_existing_leaves_nothing_new(self):
+        self.assertEqual(
+            gate.select_new_migration_dirs(["18.0.1.0.37"], ["18.0.1.0.37"]), []
+        )
+
+    def test_missing_base_list_degrades_to_treating_all_as_new(self):
+        """降級方向必須是 fail-closed：多紅不會多綠。"""
+        self.assertEqual(
+            gate.select_new_migration_dirs(["18.0.1.0.37"], None), ["18.0.1.0.37"]
+        )
+
+    def test_dirs_odoo_never_runs_are_not_a_migration(self):
+        """`tests/` 與不符 VERSION_RE 的目錄 Odoo 根本不看 ⇒ 新增它們不產生 bump 義務。"""
+        self.assertEqual(
+            gate.select_new_migration_dirs(["tests", "README", "18.0.1.0.176"], []),
+            ["18.0.1.0.176"],
+        )
+
+    def test_zero_version_counts_as_a_migration(self):
+        """`0.0.0` 是「任何版本變更都會跑」——沒有版本變更就永遠不跑，所以它算。"""
+        self.assertEqual(gate.select_new_migration_dirs(["0.0.0"], []), ["0.0.0"])
+
+    def test_is_odoo_migration_dir_matches_evaluate_migrations_ignores(self):
+        """口徑只有一份：這裡認得的，evaluate_migrations 就不會列進 ignored。"""
+        names = ["18.0.1.0.176", "1.0.176", "0.0.0", "tests", "README", "18.0.1.0.176x"]
+        v = gate.evaluate_migrations("18.0.1.0.200", names)
+        for n in names:
+            with self.subTest(n=n):
+                self.assertEqual(
+                    gate.is_odoo_migration_dir(n), n not in v.ignored_dirs
+                )
+
+
+# --------------------------------------------------------------------------
 # 5. 🔴 #691 三條規則的裁決（本檔核心）
 # --------------------------------------------------------------------------
 _SRC_CHANGE = ["src/models/cloud_service.py"]
@@ -253,12 +302,13 @@ def _release_sig(branch="release/18.0.1.0.176"):
 
 
 class TestEvaluateBump(unittest.TestCase):
-    def _verdict(self, base, head, changed=_SRC_CHANGE, release=None):
+    def _verdict(self, base, head, changed=_SRC_CHANGE, release=None, base_dirs=()):
         return gate.evaluate_bump(
             base_version=base,
             head_version=head,
             changed_paths=changed,
             release=release,
+            base_migration_dirs=list(base_dirs),
         )
 
     # -- 格 1：一般 PR bump 且無 migration ⇒ 紅 ------------------------------
@@ -337,11 +387,140 @@ class TestEvaluateBump(unittest.TestCase):
         self.assertTrue(v.ok, msg=f"release PR 的 bump 被誤擋：{v.detail}")
         self.assertEqual(v.reason, "release-bump")
 
-    def test_case4b_release_signal_does_not_excuse_a_missing_bump(self):
-        # release PR 的義務是「嚴格大於」；沒動版號就不是發版，走一般 PR 的常態格。
+    def test_case4b_release_branch_without_a_bump_is_red(self):
+        """🔴 翻轉：舊版本這格是綠（`unchanged`）。
+
+        #691 規則 C 的字面是「release PR 只要求嚴格大於」——「只要求嚴格大於」就是
+        「**必須**嚴格大於」，相等不算。這格放行的話，「發版 PR 忘記 bump」剩下的網
+        只有 `/woow:deploy` pre-flight 的 script，那是**人跑的**、不是 required check。
+        """
         v = self._verdict("18.0.1.0.175", "18.0.1.0.175", release=_release_sig())
+        self.assertFalse(v.ok, msg=f"release PR 忘記 bump 被放行：{v.detail}")
+        self.assertEqual(v.reason, "release-needs-bump")
+        # 建議值是「往上加一號」，不是「改回 base」——release PR 的義務是升上去。
+        self.assertEqual(v.suggested_version, "18.0.1.0.176")
+
+    def test_case4c_release_branch_without_a_bump_is_red_even_out_of_scope(self):
+        """release 分支不吃 out-of-scope 豁免。
+
+        🔴 「沒動 src/」正是發版 PR 忘了 bump 的樣子（release PR 的唯一產物就是 manifest
+        那一行）。豁免留給它 ⇒ 這道紅燈被最可能的失效形狀繞過，等於沒補。
+        """
+        v = self._verdict(
+            "18.0.1.0.175", "18.0.1.0.175", changed=["docs/release-notes.md"],
+            release=_release_sig(),
+        )
+        self.assertFalse(v.ok, msg=f"沒動 src/ 的 release PR 走了 out-of-scope：{v.detail}")
+        self.assertEqual(v.reason, "release-needs-bump")
+
+    def test_case4d_ordinary_branch_out_of_scope_is_still_exempt(self):
+        """陽性對照：豁免只對 release 分支關閉，一般 PR 的 out-of-scope 短路原樣還在。"""
+        v = self._verdict(
+            "18.0.1.0.175", "18.0.1.0.175", changed=["docs/release-notes.md"]
+        )
         self.assertTrue(v.ok)
+        self.assertEqual(v.reason, "out-of-scope")
+
+    # -- 格 6：新增 migration 卻沒 bump ⇒ 紅（#691 原始失效的重演） -----------
+    def test_case6_new_migration_without_a_bump_is_red(self):
+        """🔴 翻轉：舊版本這格是綠（`unchanged`）——`cmp == 0` 無條件短路。
+
+        版號相等 ⇒ 已升級到該版的環境（prod 一旦發過這個號就是）**永遠不會跑**這個
+        migration。Odoo 的執行視窗是 `installed < 目錄 <= manifest`，靜默 no-op。
+        """
+        v = self._verdict(
+            "18.0.1.0.175",
+            "18.0.1.0.175",
+            changed=_SRC_CHANGE + ["src/migrations/18.0.1.0.175/post-migrate.py"],
+        )
+        self.assertFalse(v.ok, msg=f"新增 migration 卻沒 bump 被放行：{v.detail}")
+        self.assertEqual(v.reason, "migration-needs-bump")
+        self.assertEqual(v.suggested_version, "18.0.1.0.176")
+
+    def test_case6b_editing_an_existing_migration_without_a_bump_is_green(self):
+        """🔴 乙：判準是「目錄在 base 側不存在」，不是「本 PR 動到」。
+
+        本 repo 有 13 個只改既有 migration、完全沒動 manifest 的 commit（`1ec8144c`
+        改的是 `18.0.1.0.37/`）。用「動到的目錄」實作規則 A ⇒ 這一整類 PR 全部變紅，
+        而 `.37` 那一種**無解**：沒有辦法把它改名成新版號。
+        """
+        v = self._verdict(
+            "18.0.1.0.175",
+            "18.0.1.0.175",
+            changed=_SRC_CHANGE + ["src/migrations/18.0.1.0.37/post-migrate.py"],
+            base_dirs=["18.0.1.0.37"],
+        )
+        self.assertTrue(v.ok, msg=f"修既有 migration 的 PR 被判紅：{v.detail}")
         self.assertEqual(v.reason, "unchanged")
+        # 動到的目錄仍要出現在報告裡，不能靜默吞掉。
+        self.assertIn("18.0.1.0.37", v.detail)
+
+    def test_case6c_editing_an_existing_migration_with_a_bump_is_not_a_mismatch(self):
+        """🔴 乙的另一半：這個假紅在 `>develop` 路徑上**改之前就已經存在**。
+
+        既有目錄改不了名（`18.0.1.0.37/` 變不成新版號），所以 migration-mismatch 給的
+        正解對這種 PR 根本做不到。正確裁決是規則 A 的 `unexpected-bump`：把版號改回去。
+        """
+        v = self._verdict(
+            "18.0.1.0.175",
+            "18.0.1.0.176",
+            changed=_SRC_CHANGE + ["src/migrations/18.0.1.0.37/post-migrate.py"],
+            base_dirs=["18.0.1.0.37"],
+        )
+        self.assertNotEqual(
+            v.reason, "migration-mismatch",
+            msg=f"編輯既有 migration 被當成「帶 migration 的 PR」：{v.detail}",
+        )
+        self.assertFalse(v.ok)
+        self.assertEqual(v.reason, "unexpected-bump")
+        self.assertEqual(v.suggested_version, "18.0.1.0.175")
+        self.assertIn("既有目錄改不了名", v.detail)
+
+    def test_case6d_new_migration_beats_release_when_both_demand_a_bump(self):
+        """兩條規則同時要求 bump 時，訊息不能只講一條。
+
+        只講 release ⇒ 讀者以為改掉分支名就沒事；只講 migration ⇒ 反之。
+        """
+        v = self._verdict(
+            "18.0.1.0.175",
+            "18.0.1.0.175",
+            changed=_SRC_CHANGE + ["src/migrations/18.0.1.0.175/post-migrate.py"],
+            release=_release_sig(),
+        )
+        self.assertFalse(v.ok)
+        self.assertEqual(v.reason, "migration-needs-bump")
+        self.assertIn("規則 C", v.detail)
+
+    def test_case6e_new_and_edited_dirs_are_both_reported(self):
+        """新增與「動到既有」同時存在時，兩邊都要在報告裡。"""
+        v = self._verdict(
+            "18.0.1.0.175",
+            "18.0.1.0.175",
+            changed=[
+                "src/migrations/18.0.1.0.175/post-migrate.py",
+                "src/migrations/18.0.1.0.37/post-migrate.py",
+            ],
+            base_dirs=["18.0.1.0.37"],
+        )
+        self.assertEqual(v.reason, "migration-needs-bump")
+        self.assertEqual(v.new_migration_dirs, ["18.0.1.0.175"])
+        self.assertIn("18.0.1.0.37", v.detail)
+
+    def test_case6f_editing_an_existing_migration_while_behind_takes_the_ordinary_fix(self):
+        """落後 develop 時，只改既有 migration 的 PR 是**一般 PR**。
+
+        正解是照抄 develop 的版號，不是「重新取號」——把它算成會 bump 的那一類，
+        建議值會叫人往上加一號，等於教人違反規則 A。
+        """
+        v = self._verdict(
+            "18.0.1.0.176",
+            "18.0.1.0.175",
+            changed=_SRC_CHANGE + ["src/migrations/18.0.1.0.37/post-migrate.py"],
+            base_dirs=["18.0.1.0.37"],
+        )
+        self.assertFalse(v.ok)
+        self.assertEqual(v.reason, "behind")
+        self.assertEqual(v.suggested_version, "18.0.1.0.176")
 
     # -- 格 5：版號倒退 ⇒ 紅（release 訊號也不赦免） -------------------------
     def test_case5_behind_is_red(self):
@@ -430,6 +609,29 @@ class TestFailureMessages(unittest.TestCase):
         # 兩個修法（改目錄名 / 改版號）都要指出來。
         self.assertIn("目錄", v.detail)
         self.assertIn("18.0.1.0.176", v.detail)
+
+    def test_migration_needs_bump_message_names_the_silent_no_op(self):
+        v = gate.evaluate_bump(
+            "18.0.1.0.175",
+            "18.0.1.0.175",
+            ["src/migrations/18.0.1.0.175/post-migrate.py"],
+            base_migration_dirs=[],
+        )
+        # 裁決原話：訊息必須說出「為什麼相等就等於沒做」，不是只說「必須 bump」。
+        self.assertIn("版號相等代表已升級環境永遠不會跑這個 migration", v.detail)
+        self.assertIn("installed < 目錄 <= manifest", v.detail)
+        self.assertIn("18.0.1.0.176", v.detail)  # 正解版號
+        # 並且要講明「修既有 migration 不走這一格」，免得有人拿它去 bump 舊目錄。
+        self.assertIn("只編輯既有 migration 目錄不會走到這一格", v.detail)
+
+    def test_release_needs_bump_message_names_both_exits(self):
+        v = gate.evaluate_bump(
+            "18.0.1.0.175", "18.0.1.0.175", _SRC_CHANGE, release=_release_sig()
+        )
+        self.assertIn("18.0.1.0.176", v.detail)          # 出口一：把版號升上去
+        self.assertIn("release/", v.detail)              # 出口二：分支改名
+        # required status check 與「人跑的 script」的差別是這格存在的理由，要寫出來。
+        self.assertIn("required status check", v.detail)
 
     def test_behind_message_rejects_both_wrong_resolutions(self):
         v = gate.evaluate_bump(
@@ -664,7 +866,103 @@ class TestEndToEnd(unittest.TestCase):
         self.assertEqual(r.returncode, 1, msg=r.stdout + r.stderr)
         self.assertIn("unexpected-bump", r.stdout)
 
+    # -- 格 6（端到端）：新增 migration 卻沒 bump ⇒ 紅 -----------------------
+    def test_new_migration_without_bump_is_red(self):
+        """🔴 這一格同時釘住「base 側目錄清單讀的是 base commit，不是工作目錄」。
+
+        目錄名刻意取 == manifest，讓第二道檢查（目錄 > manifest）不會叫——紅燈只能
+        來自規則 A。若差集的右項誤讀工作目錄，本 PR 新加的目錄會把自己抵消掉 ⇒ 綠。
+        """
+        _git(self.repo, "checkout", "-b", "pr")
+        self._write("src/migrations/18.0.1.0.10/post-migrate.py", "pass\n")
+        _git(self.repo, "add", "-A")
+        _git(self.repo, "commit", "-m", "migration without a bump")
+
+        r = self._run()
+        self.assertEqual(r.returncode, 1, msg=r.stdout + r.stderr)
+        self.assertIn("migration-needs-bump", r.stdout)
+        self.assertIn("永遠不會跑", r.stdout)
+
+    def test_editing_an_existing_migration_without_bump_is_green(self):
+        """🔴 乙：base 已存在的目錄不算「本 PR 新增」⇒ 不產生 bump 義務。"""
+        _git(self.repo, "checkout", "develop")
+        self._write("src/migrations/18.0.1.0.5/post-migrate.py", "pass\n")
+        _git(self.repo, "add", "-A")
+        _git(self.repo, "commit", "-m", "existing migration on base")
+
+        _git(self.repo, "checkout", "-b", "pr")
+        self._write("src/migrations/18.0.1.0.5/post-migrate.py", "pass  # bugfix\n")
+        _git(self.repo, "add", "-A")
+        _git(self.repo, "commit", "-m", "fix a bug in an old migration")
+
+        r = self._run()
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        self.assertIn("unchanged", r.stdout)
+
+    def test_editing_an_existing_migration_with_bump_is_not_a_mismatch(self):
+        """既有目錄改不了名 ⇒ migration-mismatch 給的正解做不到，裁決必須是規則 A。"""
+        _git(self.repo, "checkout", "develop")
+        self._write("src/migrations/18.0.1.0.5/post-migrate.py", "pass\n")
+        _git(self.repo, "add", "-A")
+        _git(self.repo, "commit", "-m", "existing migration on base")
+
+        _git(self.repo, "checkout", "-b", "pr")
+        self._write("src/migrations/18.0.1.0.5/post-migrate.py", "pass  # bugfix\n")
+        self._write("src/__manifest__.py", _manifest("18.0.1.0.11"))
+        _git(self.repo, "add", "-A")
+        _git(self.repo, "commit", "-m", "fix an old migration and bump")
+
+        r = self._run()
+        self.assertEqual(r.returncode, 1, msg=r.stdout + r.stderr)
+        self.assertNotIn("migration-mismatch", r.stdout)
+        self.assertIn("unexpected-bump", r.stdout)
+
+    def test_same_migration_dir_reused_after_base_merged_it_stays_green(self):
+        """⚠ 已知殘留（leader1 覆核殘留 #2，本 PR **未**收掉）：兩張 migration PR 撞同一個
+        目錄名時，後合的那張把新檔案加進 base 已存在的目錄 ⇒ 目錄不算新增 ⇒ 綠。
+
+        釘成測試是為了讓這條界線可見：哪天有人把判準從「目錄」換成 `git diff` 的 `A`，
+        這一格會翻成紅——那時要一併重估「往既有目錄加檔案」的假紅風險，別無聲改掉。
+        """
+        _git(self.repo, "checkout", "-b", "pr")
+        self._write("src/__manifest__.py", _manifest("18.0.1.0.11"))
+        self._write("src/migrations/18.0.1.0.11/pr2.py", "pass\n")
+        _git(self.repo, "add", "-A")
+        _git(self.repo, "commit", "-m", "pr2 picks .11")
+
+        _git(self.repo, "checkout", "develop")
+        self._write("src/__manifest__.py", _manifest("18.0.1.0.11"))
+        self._write("src/migrations/18.0.1.0.11/pr1.py", "pass\n")
+        _git(self.repo, "add", "-A")
+        _git(self.repo, "commit", "-m", "pr1 merged first with the same number")
+        _git(self.repo, "checkout", "pr")
+
+        r = self._run()
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        self.assertIn("unchanged", r.stdout)
+
     # -- 格 4（端到端）：release 分支訊號 ⇒ 綠 -------------------------------
+    def test_release_branch_without_bump_is_red(self):
+        _git(self.repo, "checkout", "-b", "release/18.0.1.0.11")
+        self._write("src/models/foo.py", "x = 2\n")
+        _git(self.repo, "add", "-A")
+        _git(self.repo, "commit", "-m", "release pr forgot to bump")
+
+        r = self._run(head_ref="release/18.0.1.0.11")
+        self.assertEqual(r.returncode, 1, msg=r.stdout + r.stderr)
+        self.assertIn("release-needs-bump", r.stdout)
+
+    def test_release_branch_without_bump_is_red_even_without_src_changes(self):
+        """release PR 忘記 bump 最可能的樣子就是「src/ 一個檔都沒動」。"""
+        _git(self.repo, "checkout", "-b", "release/18.0.1.0.11")
+        self._write("docs/a.md", "release notes\n")
+        _git(self.repo, "add", "-A")
+        _git(self.repo, "commit", "-m", "release pr touched docs only")
+
+        r = self._run(head_ref="release/18.0.1.0.11")
+        self.assertEqual(r.returncode, 1, msg=r.stdout + r.stderr)
+        self.assertIn("release-needs-bump", r.stdout)
+
     def test_release_branch_bump_is_green(self):
         _git(self.repo, "checkout", "-b", "release/18.0.1.0.11")
         self._write("src/__manifest__.py", _manifest("18.0.1.0.11"))

@@ -10,12 +10,32 @@
 --------------------------
 - **A. 一般 PR 不動版號**：`src/__manifest__.py` 的版號必須**等於**當下 origin/develop。
   版號 > develop 而既沒帶 migration、也不是 release PR ⇒ 紅。
-- **B. 帶 migration 的 PR 才 bump**：版號嚴格大於 develop，且**本 PR 新增／變更的**
+- **B. 帶 migration 的 PR 才 bump**：版號嚴格大於 develop，且**本 PR 新增的**
   `src/migrations/<X>/` 至少有一個 X 等於新的 manifest 版號（轉換規則沿用 Odoo 的
   `convert_version`）。目錄名與版號對不上 ⇒ 紅（Odoo 的執行視窗是
   `installed < 目錄 <= manifest`，名字取錯的那一側**靜默 no-op**）。
+  **反向同樣是紅**：新增了 migration 目錄卻沒 bump（版號 == develop）⇒ 紅。版號相等
+  代表已升級到該版的環境**永遠不會跑這個 migration**——那正是 #691 的原始失效
+  （兩張 migration PR 撞同一個號，後合的那張靜默不生效）。
 - **C. 發版才 bump**：`/woow:deploy` 以一張 `release/*` 分支的 PR 把版號嚴格升一號，
-  merge 後打 tag。release PR 只要求嚴格大於。
+  merge 後打 tag。「只要求嚴格大於」是**雙向**的——release 分支的版號**必須**嚴格大於
+  develop，相等 ⇒ 紅。放行忘記 bump 的發版 PR 之後，剩下的網只有 `/woow:deploy`
+  pre-flight 的「tag 已存在請先 bump」，那是**人跑的 script**，不是 required status check。
+  同理，release 分支**不吃 out-of-scope 豁免**：release PR 的唯一產物就是 manifest 那
+  一行，「沒動 src/」正是它忘了 bump 的樣子，豁免留給它等於讓最可能的失效形狀繞過閘門。
+
+🔴 規則 A／B 判「這是不是 migration PR」看的是**本 PR 新增的目錄**，不是「動到的目錄」
+------------------------------------------------------------------------------------
+判準是**目錄在 base 側不存在**（`git ls-tree <base_sha> src/migrations/` 沒有它）。
+
+- 用「動到的目錄」會把「修既有 migration 的 bug」整類判紅。本 repo 這類 commit 有 13 個
+  （定義：`git log --diff-filter=M -- src/migrations/` 中，該 commit 在 `src/migrations/`
+  下的 name-status 只有 `M`、且 `src/__manifest__.py` 的 numstat 為 0 行），其中
+  `1ec8144c` 改的是 `18.0.1.0.37/`——**那一種無解**：沒有任何辦法把 `.37` 改名成新版號。
+- 也不能用 `git diff --name-status` 的 `A`：往既有舊目錄裡加一個新檔案也是 `A`。
+  （實測：本 repo 唯一一筆這種 commit 是 `3d3c4c32`，但它與建立該目錄的 `a56cd576`
+  同屬一張 PR ⇒ 以 PR 為單位看，那個目錄仍是「新增」，`A` 判準在歷史上沒有假紅樣本。
+  即使如此仍取目錄判準：它不依賴 PR 的 commit 切法。）
 
 不管哪一類，**版號低於 develop 一律紅**——包含「本 PR 沒動版號但 base 前進了」。
 develop 的分支保護開著 `block_on_outdated_branch`，落後 base 本來就不准 merge，
@@ -194,8 +214,20 @@ def classify_scope(changed_paths: list[str]) -> ScopeVerdict:
     return ScopeVerdict(True, "in-scope", src_paths)
 
 
+def is_odoo_migration_dir(name: str) -> bool:
+    """Odoo 會不會把這個目錄名當成一個 migration 版本。
+
+    口徑只定義在這裡一處，`evaluate_migrations`（目錄 > manifest）與規則 A／B 的
+    「這是不是 migration PR」共用——兩邊各寫一份就會漂。
+    """
+    if name == "0.0.0":
+        # Odoo 的特例：任何版本變更都會跑。不參與大小比較，但**算**一個 migration。
+        return True
+    return name != "tests" and bool(VERSION_RE.match(name))
+
+
 def collect_pr_migration_dirs(changed_paths: list[str]) -> list[str]:
-    """**本 PR 新增／變更**的 `src/migrations/<X>/` 目錄名（規則 B 的輸入）。
+    """**本 PR 動到**的 `src/migrations/<X>/` 目錄名（新增與編輯都算）。
 
     🔴 這裡吃的必須是 merge-base 三點 diff 的 changed，**不是工作目錄整份 listing**。
        整份 listing 含所有既有目錄（本 repo 現有 41 個）⇒ 任何 PR 都會被判成「帶
@@ -215,6 +247,23 @@ def collect_pr_migration_dirs(changed_paths: list[str]) -> list[str]:
         if name:
             dirs.add(name)
     return sorted(dirs)
+
+
+def select_new_migration_dirs(
+    touched_dirs: list[str], base_dirs: list[str] | None
+) -> list[str]:
+    """**本 PR 新增**的 migration 目錄＝動到的 − base 側已存在的（規則 A／B 的輸入）。
+
+    🔴 差集的右項必須是 base 側 tree 的實際內容（`git ls-tree <base_sha>`），不是工作
+       目錄。少了這一扣，「修既有 migration 的 bug」那一整類 PR 會被判成「帶 migration」：
+       不 bump ⇒ 被規則 A 判紅；bump ⇒ 目錄名對不上新版號 ⇒ 被規則 B 判 migration-mismatch，
+       而它給的正解（把目錄改名成新版號）對既有目錄根本做不到。
+
+    ⚠ `base_dirs` 為 None（呼叫端沒給）時視為空集合——所有動到的目錄都算新增。方向是
+       fail-closed（多紅不會多綠），但那是降級行為，正常路徑一定要餵值。
+    """
+    existing = set(base_dirs or ())
+    return [d for d in touched_dirs if d not in existing and is_odoo_migration_dir(d)]
 
 
 # --------------------------------------------------------------------------
@@ -295,12 +344,16 @@ class Verdict:
     ok: bool
     # out-of-scope | unchanged | migration-bump | release-bump
     # | unexpected-bump | migration-mismatch | behind
+    # | migration-needs-bump | release-needs-bump
     reason: str
     detail: str
     suggested_version: str | None = None
     scope: ScopeVerdict | None = None
     release: ReleaseSignal | None = None
+    # 本 PR **動到**的 migration 目錄（新增＋編輯既有）。只用來報告，不用來裁決。
     pr_migration_dirs: list[str] = dataclasses.field(default_factory=list)
+    # 本 PR **新增**的（動到的 − base 側已存在的）。規則 A／B 的實際輸入。
+    new_migration_dirs: list[str] = dataclasses.field(default_factory=list)
 
 
 _SILENT_SAME_VALUE = """🔴 為什麼「照抄 develop 的版號」對會 bump 的 PR 特別危險（#538 的原始成因）：
@@ -311,7 +364,8 @@ _SILENT_SAME_VALUE = """🔴 為什麼「照抄 develop 的版號」對會 bump 
    **嚴格大於當下 develop**，不是「大於等於」、也不是「照抄」。"""
 
 _UNEXPECTED_BUMP_DETAIL = """PR 的 manifest 版號 {head} **高於** origin/{base} 的 {version}，
-但本 PR 既**沒有新增／變更任何 `src/migrations/<新版號>/`**，分支名也不是 `release/*`。
+但本 PR 既**沒有新增 `src/migrations/<新版號>/`**，分支名也不是 `release/*`。
+（判準是「目錄在 base 側不存在」——只**編輯**既有 migration 不算「帶 migration 的 PR」。）
 
 🔴 **一般 PR 不得動版號**（#691 規則 A）。版號只由兩類 PR 帶：
    1. **帶 migration 的 PR** —— 新增 `src/migrations/{head}/`（目錄名必須等於新版號）；
@@ -327,7 +381,7 @@ merge train 每合一張、剩下每一張都在同一位置重新產生同一�
 _MIGRATION_MISMATCH_DETAIL = """PR 把 manifest 版號 bump 到 {head}（origin/{base} 是 {version}），
 本 PR 也動到了 migration 目錄，但**沒有任何一個目錄名等於新版號**。
 
-本 PR 新增／變更的 migration 目錄：
+本 PR 新增的 migration 目錄：
 {dirs}
 
 🔴 Odoo 的執行視窗是 `installed < 目錄 <= manifest`
@@ -369,24 +423,67 @@ _BEHIND_BUMPING_RESOLUTION = """本 PR 屬於**會 bump 的那一類**（帶 mig
 """ + _SILENT_SAME_VALUE
 
 
+_MIGRATION_NEEDS_BUMP_DETAIL = """PR 的 manifest 版號與 origin/{base} 相同（都是 {version}），
+但本 PR **新增了 migration 目錄**：
+{dirs}
+
+🔴 **migration PR 必須 bump：版號相等代表已升級環境永遠不會跑這個 migration。**
+   Odoo 的執行視窗是 `installed < 目錄 <= manifest`
+   （odoo/modules/migration.py :: MigrationManager.migrate_module 的 compare()）。
+   manifest 沒有往前 ⇒ 任何 `installed >= {version}` 的環境（prod 一旦發過這個號就是）
+   完全不會執行它：不會報錯、不會有訊息，純粹靜默 no-op。
+   這正是 #691 的原始失效——兩張 migration PR 撞同一個號，後合的那張靜默不生效。
+
+正解：把版號 bump 到 **{suggested}**（嚴格大於當下 develop），
+   並把 migration 目錄一起改名成 `{migrations}/{suggested}`（規則 B 要求目錄名 == 新版號）。
+
+⚠ **只編輯既有 migration 目錄不會走到這一格**——判準是「目錄在 base 側不存在」，
+   修舊 migration 的 bug 不需要、也沒辦法 bump（`{migrations}/18.0.1.0.37/` 改不成新版號）。
+
+""" + _SILENT_SAME_VALUE
+
+
+_RELEASE_NEEDS_BUMP_DETAIL = """本 PR 的分支是 `{branch}`（release PR），
+但 manifest 版號與 origin/{base} 相同（都是 {version}）——**沒有 bump**。
+
+🔴 **release 分支只有一個目的：把版號升上去。** #691 規則 C 的字面是「release PR 只要求
+   嚴格大於」，而「只要求嚴格大於」就是「**必須**嚴格大於」——相等不算。
+   這一格若放行，「發版 PR 忘記 bump」剩下的網只有 `/woow:deploy` pre-flight 的
+   「tag 已存在請先 bump」，那是**人跑的 script**，不是 required status check。
+
+正解二選一：
+- 這確實是發版 PR ⇒ 版號改成 **{suggested}**（嚴格大於當下 develop）；
+- 這不是發版 PR ⇒ 分支改名成不以 `{prefix}` 開頭的名字。
+
+{release_detail}"""
+
+
 def evaluate_bump(
     base_version: str,
     head_version: str,
     changed_paths: list[str],
     release: ReleaseSignal | None = None,
+    base_migration_dirs: list[str] | None = None,
 ) -> Verdict:
     scope = classify_scope(changed_paths)
     release = release or detect_release_signal()
     pr_migration_dirs = collect_pr_migration_dirs(changed_paths)
+    new_migration_dirs = select_new_migration_dirs(pr_migration_dirs, base_migration_dirs)
 
-    if not scope.in_scope:
+    # ⚠ release 分支**不吃** out-of-scope 豁免（規則 C）。release PR 的唯一產物就是
+    #   manifest 那一行；「沒動 src/」不是「與版號無關」，而正是它忘了 bump 的樣子。
+    #   把豁免留給它 ⇒ 規則 C 的紅燈被最可能的失效形狀繞過。
+    if not scope.in_scope and not release.is_release:
         detail = (
             "本 PR 沒有動到 src/ 底下任何檔案，不在本 gate 範圍內"
             "（extra/paas-operator/ 是另一條獨立發版線；docs/、.gitea/、scripts/ 無關）。\n"
             f"沒動 src/ 就碰不到 {MANIFEST_PATH}（它就在 src/ 底下）⇒ 版號關係只可能來自 "
             "base 前進，那是分支保護 block_on_outdated_branch 的事，不是本 gate 的事。"
         )
-        return Verdict(True, "out-of-scope", detail, None, scope, release, pr_migration_dirs)
+        return Verdict(
+            True, "out-of-scope", detail, None, scope, release,
+            pr_migration_dirs, new_migration_dirs,
+        )
 
     cmp = compare_versions(head_version, base_version)
     fmt = dict(
@@ -395,28 +492,72 @@ def evaluate_bump(
         head=head_version,
         suggested=next_version(base_version),
         major=ODOO_MAJOR_VERSION,
+        migrations=MIGRATIONS_DIR,
+        prefix=RELEASE_BRANCH_PREFIX,
+        branch=release.branch or "",
     )
 
     # --- 版號低於 develop：不分類別一律紅 ---------------------------------
     if cmp < 0:
-        bumping = bool(pr_migration_dirs) or release.is_release
+        # 「會 bump 的那一類」看的是**新增的** migration 目錄——只改既有 migration 的 PR
+        # 是一般 PR，正解是照抄 develop 的版號，不是重新取號。
+        bumping = bool(new_migration_dirs) or release.is_release
         resolution = (
             _BEHIND_BUMPING_RESOLUTION if bumping else _BEHIND_ORDINARY_RESOLUTION
         ).format(**fmt)
         detail = _BEHIND_DETAIL.format(resolution=resolution, **fmt)
         suggested = next_version(base_version) if bumping else base_version
         return Verdict(
-            False, "behind", detail, suggested, scope, release, pr_migration_dirs
+            False, "behind", detail, suggested, scope, release,
+            pr_migration_dirs, new_migration_dirs,
         )
 
     # --- 版號等於 develop：規則 A 的常態 ----------------------------------
     if cmp == 0:
+        # 格 A：新增了 migration 卻沒 bump ⇒ 已升級環境永遠不會跑到它（#691 原始失效）。
+        if new_migration_dirs:
+            detail = _MIGRATION_NEEDS_BUMP_DETAIL.format(
+                dirs="\n".join(f"  - {MIGRATIONS_DIR}/{d}" for d in new_migration_dirs),
+                **fmt,
+            )
+            edited = [d for d in pr_migration_dirs if d not in new_migration_dirs]
+            if edited:
+                detail += (
+                    "\n\n本 PR 另外**編輯**到的既有 migration 目錄（不影響本判定，"
+                    "列出以免靜默截斷）：" + "、".join(edited)
+                )
+            if release.is_release:
+                # 兩條規則同時要求 bump；只講一條會讓人以為改掉分支名就沒事。
+                detail += (
+                    f"\n\n⚠ 本 PR 的分支 `{release.branch}` 同時是 release 分支 ⇒ "
+                    "規則 C 也要求版號嚴格大於 develop。兩條規則指向同一個動作：bump。"
+                )
+            return Verdict(
+                False, "migration-needs-bump", detail, next_version(base_version),
+                scope, release, pr_migration_dirs, new_migration_dirs,
+            )
+        # 格 B：release 分支沒 bump ⇒ 規則 C 的「只要求嚴格大於」就是「必須嚴格大於」。
+        if release.is_release:
+            detail = _RELEASE_NEEDS_BUMP_DETAIL.format(
+                release_detail=release.detail, **fmt
+            )
+            return Verdict(
+                False, "release-needs-bump", detail, next_version(base_version),
+                scope, release, pr_migration_dirs, new_migration_dirs,
+            )
         detail = (
             f"版號與 origin/develop 相同（都是 {base_version}）——**這是一般 PR 的常態**"
             "（#691 規則 A：版號由帶 migration 的 PR 或發版 PR 帶，一般 PR 不動那一行）。"
         )
+        if pr_migration_dirs:
+            detail += (
+                "\n\n本 PR 動到的 migration 目錄全部是 base 側**已存在**的（＝在修既有"
+                " migration，不是新增）⇒ 不觸發規則 A 的 bump 義務："
+                + "、".join(pr_migration_dirs)
+            )
         return Verdict(
-            True, "unchanged", detail, None, scope, release, pr_migration_dirs
+            True, "unchanged", detail, None, scope, release,
+            pr_migration_dirs, new_migration_dirs,
         )
 
     # --- 版號高於 develop：只有兩類 PR 可以 -------------------------------
@@ -426,13 +567,14 @@ def evaluate_bump(
             f"且本 PR 是 release PR（#691 規則 C）。\n{release.detail}"
         )
         return Verdict(
-            True, "release-bump", detail, head_version, scope, release, pr_migration_dirs
+            True, "release-bump", detail, head_version, scope, release,
+            pr_migration_dirs, new_migration_dirs,
         )
 
-    if pr_migration_dirs:
+    if new_migration_dirs:
         matched = [
             d
-            for d in pr_migration_dirs
+            for d in new_migration_dirs
             if compare_versions(convert_migration_version(d), head_version) == 0
         ]
         if matched:
@@ -441,8 +583,8 @@ def evaluate_bump(
                 f"且本 PR 帶了對應版號的 migration（#691 規則 B）：\n"
                 + "\n".join(f"  - {MIGRATIONS_DIR}/{d}" for d in matched)
             )
-            if len(matched) != len(pr_migration_dirs):
-                others = [d for d in pr_migration_dirs if d not in matched]
+            others = [d for d in pr_migration_dirs if d not in matched]
+            if others:
                 detail += (
                     "\n\n本 PR 另外動到的 migration 目錄（不影響判定，列出以免靜默截斷）："
                     + "、".join(others)
@@ -455,9 +597,10 @@ def evaluate_bump(
                 scope,
                 release,
                 pr_migration_dirs,
+                new_migration_dirs,
             )
         detail = _MIGRATION_MISMATCH_DETAIL.format(
-            dirs="\n".join(f"  - {MIGRATIONS_DIR}/{d}" for d in pr_migration_dirs),
+            dirs="\n".join(f"  - {MIGRATIONS_DIR}/{d}" for d in new_migration_dirs),
             **fmt,
         )
         return Verdict(
@@ -468,15 +611,27 @@ def evaluate_bump(
             scope,
             release,
             pr_migration_dirs,
+            new_migration_dirs,
         )
 
     detail = _UNEXPECTED_BUMP_DETAIL.format(**fmt)
+    if pr_migration_dirs:
+        # 🔴 只編輯既有 migration **不是**「帶 migration 的 PR」。少了這段，讀者會拿
+        #    migration-mismatch 的正解（把目錄改名成新版號）套到既有目錄上——做不到。
+        detail += (
+            "\n\n⚠ 本 PR 動到了 migration 目錄，但全部是 base 側**已存在**的"
+            "（＝在修既有 migration，不是新增）⇒ 不算規則 B 的「帶 migration」："
+            + "、".join(pr_migration_dirs)
+            + "\n   既有目錄改不了名（`18.0.1.0.37/` 沒有辦法變成新版號），所以正解是"
+            "**把版號改回 develop 的值**，不是改目錄名。"
+        )
     detail += "\n\n" + release.detail
     detail += "\n\n觸發本檢查的 src/ 改動：\n" + "\n".join(
         f"  - {p}" for p in scope.src_paths
     )
     return Verdict(
-        False, "unexpected-bump", detail, base_version, scope, release, pr_migration_dirs
+        False, "unexpected-bump", detail, base_version, scope, release,
+        pr_migration_dirs, new_migration_dirs,
     )
 
 
@@ -510,14 +665,13 @@ def evaluate_migrations(manifest_version: str, dirnames: list[str]) -> Migration
     ignored: list[str] = []
 
     for name in sorted(dirnames):
-        # `0.0.0` 在 Odoo 是「任何版本變更都會跑」的特例，不參與大小比較。
-        if name == "0.0.0":
-            compared.append(name)
-            continue
-        if name == "tests" or not VERSION_RE.match(name):
+        if not is_odoo_migration_dir(name):
             ignored.append(name)
             continue
         compared.append(name)
+        # `0.0.0` 在 Odoo 是「任何版本變更都會跑」的特例，不參與大小比較。
+        if name == "0.0.0":
+            continue
         if compare_versions(convert_migration_version(name), manifest_version) > 0:
             offenders.append(name)
 
@@ -609,6 +763,18 @@ def collect_facts(repo: pathlib.Path, base_ref: str) -> dict:
         else []
     )
 
+    # 🔴 base 側**已存在**的 migration 目錄，用來把「修既有 migration」與「新增 migration」
+    #    分開（規則 A／B 的判準）。讀的是 base commit 的 tree，不是工作目錄——工作目錄
+    #    含本 PR 自己新加的目錄，扣起來就會把新增的也抵消掉（假綠）。
+    #    `-d` 只列 tree entry；base 沒有 src/migrations/ 時輸出為空、exit 0。
+    base_migration_dirs = sorted(
+        line[len(MIGRATIONS_PREFIX):]
+        for line in _git(
+            repo, "ls-tree", "-d", "--name-only", base_sha, f"{MIGRATIONS_DIR}/"
+        ).splitlines()
+        if line.startswith(MIGRATIONS_PREFIX)
+    )
+
     return {
         "base_ref": base_ref,
         "base_sha": base_sha,
@@ -621,8 +787,14 @@ def collect_facts(repo: pathlib.Path, base_ref: str) -> dict:
         ),
         # 整份 listing：只給 evaluate_migrations 用（目錄 > manifest ⇒ 紅）。
         "migration_dirs": migration_dirs,
-        # 本 PR 自己動到的：規則 B 的輸入。兩者刻意分開，見 collect_pr_migration_dirs。
+        # 本 PR 自己動到的（新增＋編輯既有）。只用來報告。
         "pr_migration_dirs": collect_pr_migration_dirs(changed),
+        # base 側已存在的：用來算差集。
+        "base_migration_dirs": base_migration_dirs,
+        # 本 PR **新增**的＝動到的 − base 側已存在的。規則 A／B 的實際輸入。
+        "new_migration_dirs": select_new_migration_dirs(
+            collect_pr_migration_dirs(changed), base_migration_dirs
+        ),
     }
 
 
@@ -644,11 +816,22 @@ def render_report(facts: dict, bump: Verdict, migrations: MigrationVerdict) -> s
         f"- merge-base：`{facts['merge_base'][:12]}`",
         f"- 本 PR 動到 {len(facts['changed'])} 個檔案，其中 src/ 底下 "
         f"{len(bump.scope.src_paths) if bump.scope else 0} 個",
-        f"- 本 PR 動到的 migration 目錄："
+        f"- 本 PR **新增**的 migration 目錄（規則 A／B 的輸入）："
         + (
-            "、".join(f"`{d}`" for d in facts.get("pr_migration_dirs") or [])
+            "、".join(f"`{d}`" for d in facts.get("new_migration_dirs") or [])
             or "（無）"
         ),
+        f"- 本 PR 動到、但 base 側**已存在**的 migration 目錄（＝在修既有 migration，"
+        f"不觸發 bump 義務）："
+        + (
+            "、".join(
+                f"`{d}`"
+                for d in (facts.get("pr_migration_dirs") or [])
+                if d in set(facts.get("base_migration_dirs") or ())
+            )
+            or "（無）"
+        ),
+        f"- base 側現有 migration 目錄數：{len(facts.get('base_migration_dirs') or [])}",
         f"- release 訊號輸入（原樣回印）：{echoed}",
         "",
         release.detail,
@@ -695,6 +878,7 @@ def main(argv: list[str] | None = None) -> int:
             facts["head_version"],
             facts["changed"],
             release=release,
+            base_migration_dirs=facts["base_migration_dirs"],
         )
         migrations = evaluate_migrations(facts["head_version"], facts["migration_dirs"])
     except (GateError, ValueError) as exc:

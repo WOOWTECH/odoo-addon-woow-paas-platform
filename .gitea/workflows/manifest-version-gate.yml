@@ -4,10 +4,18 @@ name: manifest-version-gate
 #
 # 三條規則（權威敘述在 scripts/ci/manifest-version-gate.py 的 docstring，此處只給索引）：
 #   A. 一般 PR：版號必須**等於**當下 origin/develop（別動那一行）。
-#   B. 帶 migration 的 PR：版號嚴格大於 develop，且本 PR 新增／變更的
+#   B. 帶 migration 的 PR：版號嚴格大於 develop，且本 PR **新增**的
 #      src/migrations/<X>/ 至少有一個 X == 新版號。
-#   C. 發版 PR：分支名 release/* ⇒ 只要求嚴格大於。
+#      反向也是紅：新增了 migration 卻沒 bump（版號 == develop）⇒ migration-needs-bump。
+#      版號相等代表已升級環境永遠不會跑到它（執行視窗 installed < 目錄 <= manifest）。
+#   C. 發版 PR：分支名 release/* ⇒ 版號**必須**嚴格大於 develop，相等 ⇒
+#      release-needs-bump。release 分支不吃 out-of-scope 豁免（沒動 src/ 正是忘了 bump
+#      的樣子）。
 # 三類皆同：版號**低於** develop 一律紅（先 `git merge origin/develop` 再說）。
+#
+# 🔴 「這是不是 migration PR」看的是**本 PR 新增的目錄**（目錄在 base 側 tree 不存在），
+#    不是「動到的目錄」。只改既有 migration 的 PR（本 repo 有 13 個這種 commit）算一般
+#    PR，不必也**沒辦法** bump——`src/migrations/18.0.1.0.37/` 改不成新版號。
 #
 # 為什麼是 CI 而不是 repo-lint.py：repo-lint 是純靜態檢查，這條要比對**遠端當下的值**。
 # 而且判準由**排隊順序**決定——rebase 完到真正 merge 之間 develop 可能又被別的

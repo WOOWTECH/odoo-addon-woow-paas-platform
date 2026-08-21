@@ -41,6 +41,11 @@ tea pr create --title "release: ${NEW}" --base develop   # description 用 zh-tw
 是假陰性；放寬成「標題含 `release:`」又讓任何人打幾個字就能豁免規則 A。分支名不被裝飾，
 是唯一結構性的訊號。判準與訊息見 [`scripts/ci/manifest-version-gate.py`](../../../scripts/ci/manifest-version-gate.py)。
 
+🔴 **忘記 bump 的發版 PR 會被 gate 判紅**（`release-needs-bump`）：`release/*` 分支的版號
+**必須**嚴格大於 develop，相等不算；連「這張 PR 沒動 `src/` 任何檔案」也一樣紅
+（out-of-scope 豁免對 release 分支關閉——沒動 src/ 正是忘了 bump 的樣子）。
+所以 Step 2 的 pre-flight「Tag 已存在請先 bump」不是唯一的網，required check 先叫。
+
 ⛔ **發版 PR 一樣不代 merge**（同下方 Step 6 的原則）。merge 進 develop、且本地
 `git pull` 拿到那個版號之後，才進 Step 1。
 

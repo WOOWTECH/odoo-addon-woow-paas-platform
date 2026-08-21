@@ -273,6 +273,8 @@ grep -rnE 'version:|tag:|digest:|image:' /tmp/paas-app-bundle-cd/*/fleet.yaml /t
    ⚠ #691 起這一步走**一張 release/<新版號> 分支的發版 PR**
      （一般 PR 不動版號；develop 有分支保護不能直接 push，
       manifest-version-gate 靠 release/ 前綴認出發版 PR）
+     ⚠ 忘記 bump 的發版 PR 會被 gate 判紅（release-needs-bump）：
+       release/* 分支的版號必須嚴格大於 develop，相等不算
      步驟見 .claude/commands/woow/deploy.md 的 Step 0
 2. 發版 PR merge 進 develop（⛔ 不代 merge）→ 本地 pull    git show origin/develop:src/__manifest__.py
 3. git tag v18.0.1.0.XX && git push origin v18.0.1.0.XX  （= /woow:deploy 自動化此段）
