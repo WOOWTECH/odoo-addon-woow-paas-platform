@@ -545,6 +545,15 @@ class TestSmartHomeTunnelAnchor524(_SmartHome524Fixture):
     #    `action_provision()`。
     #
     #    ⇒ 那是**與 #524 無關的既有缺陷**，依工單紀律不在本 PR 順手修（已回報）。
+    #
+    #    📌 **後續更正（#739）**：上面那句「租戶經 `/woow` 的 provision 從來沒有
+    #    通過」描述的是 **#739 修復前**的狀態，現在已不成立——`_provision_smarthome`
+    #    改以平台身分驅動 `action_provision()`，租戶端點那條路已經通了
+    #    （回歸測試 `test_sh_provision_tenant_rpc_739.py`）。C6／C7 走 `.sudo()`
+    #    的理由**不受影響**：它們要對準的本來就是「伺服器端合法寫入點穿得過
+    #    錨點閘」，那與租戶端點通不通是兩件事。`action='delete'` 撞 ACL
+    #    `unlink=0` 那半句 **#739 沒有動**，仍然成立。
+    #
     #    但錨點閘要證明的是「**伺服器端合法寫入點穿得過去**」，那條路徑正是
     #    `action_provision` / `_cleanup_tunnel` 內部的 write，所以在這裡以
     #    `.sudo()` 驅動它是**對準受測對象**，不是繞過守線：錨點守衛對 su／sudo
