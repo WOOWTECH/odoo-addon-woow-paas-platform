@@ -555,8 +555,9 @@ class SecurityAccess(models.Model):
 
         tunnel_token ACL note: the write below sets tunnel_token, which is a
         ``groups='base.group_system'`` field. This method runs in the CALLER's
-        context (the controller invokes it WITHOUT .sudo()), mirroring
-        smart_home.action_provision exactly. Consequences:
+        context (the controller invokes it WITHOUT .sudo() — see the
+        ``action == "provision"`` branch in controllers/security_access.py,
+        which calls ``sa.action_provision()`` bare). Consequences:
         - the field-group write only succeeds for a system/admin caller; a
           plain base.group_user owner triggering provision would hit
           AccessError on the tunnel_token write. That is the intended
@@ -568,6 +569,23 @@ class SecurityAccess(models.Model):
           deliberately layered: groups= on the field + to_dict() omits the
           token + a dedicated sudo'd tunnel-token endpoint is the only read
           path. The with_user provision test locks this semantic.
+
+        ⚠ Identity semantics are NO LONGER symmetric with smart_home. An
+        earlier revision of this note asserted the two sides were identical;
+        #739 / PR #797 falsified that. smart_home's controller now drives
+        provision under the PLATFORM identity
+        (``smarthome.sudo().action_provision()`` in
+        controllers/smart_home.py::_provision_smarthome), because the tenant
+        endpoint could otherwise never succeed. security_access still runs
+        under the CALLER's identity (above), so the two sibling models now
+        DIVERGE on provision identity. Verify each side at its own call site;
+        do not carry a conclusion across.
+
+        Whether security_access should follow smart_home, or whether the
+        fail-closed shape described above is deliberate and must stay, is
+        deliberately NOT answered here — that is #805 (b), pending an
+        explicit ruling. The paragraphs above state the mechanism as it stands
+        today, not a verdict on it.
         """
         self.ensure_one()
         client = self._get_operator_client()
