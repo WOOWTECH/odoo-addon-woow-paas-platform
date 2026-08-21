@@ -86,6 +86,7 @@ merge commit 可以在**非衝突檔**上把另一側的內容悄悄還原；rep
 - 🔴 **不要採信 `git branch -d` 的拒絕或放行**：它比的是**本地** `develop`——本地落後會給「not fully merged」假拒絕（實踩：本地停在落後 8 commit 的 develop），本地夠新的放行也沒證明遠端已併。一律對 `origin/develop`（先 fetch 或對 `ls-remote` 的值）算 `--is-ancestor`。
 - 🔴 **共用 `.git` 下，「branch -d 回 not found」與「這條分支從來不存在」輸出完全一樣**（30+ worktree 共用 ref store，別人刪了你看不到）。要驗自己刪了什麼，先存一份刪前的 sha 快照；刪前記下 sha，`git branch <name> <sha>` 可完整還原（遠端同理：`git push origin <sha>:refs/heads/<name>`）。
 - 遠端刪除走 `tea api -X DELETE /repos/<owner>/<repo>/branches/<name>`（不吃 git 憑證）；刪前逐條驗 ancestor，刪後 `GET /branches/<name>` 回 `not found` 才算數（不靠本地 ref）。
+- 報 ahead／behind 一律**連數法一起報**：同一段 `00be40da..0eb11503`，全部 commit 47、`--first-parent` 8、merge commit 13——merge train 這種全 merge 的歷史上兩種數法差近 6 倍，光看數字會誤判成兩人看到不同的 repo（兩個計數對不上，第一假設是口徑不同、不是狀態變了）。共用 ref 空間的盤點有 TOCTOU：別人刪掉後「已被刪」與「從來沒有」在事後輸出一樣，盤點結果要附時間點。
 - 本地分支是各自的，但 ref 空間是共用的——看得到、刪得掉別人的，正因如此更不該憑推論去刪別人的；回報給 owner 自行處理。
 
 ## 本次 merge train 的落地紀錄（出處）
