@@ -12,6 +12,11 @@
   (i)   故意留一把裸 truthy 閘              → ``TestBareTruthyGateIsBlocked``
   (ii)  故意加一個 ``key=True`` 字面值      → ``TestTruthyLiteralIsBlocked``
   (iii) 故意新增一把未登記的 truthy 閘      → ``TestCoverageIsBlocked``
+  (iv)  故意把一條 ``removed`` 通道加回來    → ``TestRemovedChannelIsBlocked``（#783）
+
+(iv) 的方向與前三條相反：那條通道**已經被拿掉**，判準是「生產碼裡不得再出現它的
+任何載體」。它是一條純否定性判準，掃描器一壞就恆綠 ⇒ 這裡的兩次注入（讀取點／注入
+點各一）就是它唯一能證明自己會紅的地方。
 
 外加四格陽性對照（本 gate 的所有判準都是否定性的，「找不到違規」與「掃描器壞掉」
 輸出完全相同）：sentinel 改名／reader 消失／enforced 沒有任何判定點／豁免條目掃不到
@@ -136,6 +141,111 @@ class Legacy(object):
             self._sync()
         return super().write(vals)
 '''
+
+
+# (iv)：一條「已經被拿掉」的通道被加回來的兩種形狀。分兩個是因為兩者走的是掃描器
+# **不同的採集分支**（`reads` vs `injections`），一個壞掉另一個仍會綠。
+MODEL_REMOVED_CHANNEL_READ_BACK = MODEL_OK + '''
+
+class Reaper(object):
+    def pending(self, anchor):
+        ids = list(self._booked(anchor))
+        for cf_id in self.env.context.get('ut_dead_channel_ids') or []:
+            ids.append(cf_id)
+        return ids
+'''
+
+MODEL_REMOVED_CHANNEL_INJECTED_BACK = MODEL_OK + '''
+
+class Caller(object):
+    def unlink(self):
+        doomed = [p.cf_id for p in self]
+        return self.anchor.with_context(ut_dead_channel_ids=doomed).sync()
+'''
+
+MODEL_REMOVED_CHANNEL_DICT_BACK = MODEL_OK + '''
+
+_CTX_DEAD = 'ut_dead_channel_ids'
+
+
+class Caller(object):
+    def unlink(self):
+        return self.anchor.with_context(**{_CTX_DEAD: ['x']}).sync()
+'''
+
+# (iv) 覆核 M2：**動態組 dict** 的注入端寫法。`ctx[KEY] = ids` 是 `Subscript` 賦值，
+# 既不是 keyword 也不是 `ast.Dict` 字面節點 ⇒ 原本兩個採集分支都看不到它。
+MODEL_REMOVED_CHANNEL_SUBSCRIPT_BACK = MODEL_OK + '''
+
+class Caller(object):
+    def unlink(self):
+        ctx = {}
+        ctx['ut_dead_channel_ids'] = [p.cf_id for p in self]
+        return self.anchor.with_context(**ctx).sync()
+'''
+
+MODEL_REMOVED_CHANNEL_SUBSCRIPT_CONST_BACK = MODEL_OK + '''
+
+_CTX_DEAD = 'ut_dead_channel_ids'
+
+
+class Caller(object):
+    def unlink(self):
+        ctx = {}
+        ctx[_CTX_DEAD] = ['x']
+        return self.anchor.with_context(**ctx).sync()
+'''
+
+# 🔴 **已知盲點**（不是要修的，是要鎖住的）：key 本身在執行期才決定 ⇒ AST 解不出
+# 字面值，任何純形態比對都看不到。下面那條測試斷言它**目前是綠的**，用途是「gate
+# 哪天變強了會有人被提醒」，不是宣稱這樣寫沒問題。
+MODEL_REMOVED_CHANNEL_RUNTIME_KEY = MODEL_OK + '''
+
+class Caller(object):
+    def _dead_key(self):
+        return 'ut_dead' + '_channel_ids'
+
+    def unlink(self):
+        ctx = {}
+        ctx[self._dead_key()] = ['x']
+        return self.anchor.with_context(**ctx).sync()
+'''
+
+# 只在註解／docstring 裡提到那個名字——**不得**被判違規（拿掉通道之後寫下「為什麼
+# 拿掉」正是該做的事；把它算成違規會逼人刪掉守線的說明文字）。
+MODEL_REMOVED_CHANNEL_ONLY_MENTIONED = MODEL_OK + '''
+
+# 🔴 `ut_dead_channel_ids` 這條 context 通道已經被拿掉，不要加回來。
+class Reaper(object):
+    """帳本是唯一來源（舊的 ut_dead_channel_ids 通道已移除）。"""
+
+    def pending(self, anchor):
+        return list(self._booked(anchor))
+'''
+
+_REGISTRY_REMOVED = {
+    "ut_dead_channel_ids": {
+        "status": "removed",
+        "issue": "#783",
+        "why": "unit-test fixture：已拿掉的值注入通道",
+    },
+    # 保留一把正常的 enforced，讓 (d) 的採集器存在性對照有東西可抽。
+    "ut_widget_internal_write": {
+        "status": "enforced",
+        "sentinel": "_INTERNAL_WIDGET_WRITE",
+        "defined_in": "src/models/widget.py",
+        "reader": "_is_widget_write",
+        "issue": "#788",
+        "why": "unit-test fixture",
+    },
+    # `_tree()` 一律寫出 legacy.py（裸 truthy 閘）⇒ 不登記的話 (iii) 會先紅，
+    # 那條噪音會蓋掉「這次注入該紅的那一條」。
+    "ut_legacy_skip_sync": {
+        "status": "pending",
+        "issue": "#787",
+        "why": "unit-test fixture：已知未修的裸 truthy 閘",
+    },
+}
 
 
 _REGISTRY_OK = {
@@ -511,6 +621,125 @@ class TestProbeFailuresAreBlocked(unittest.TestCase):
                 self.assertEqual(rl.check_internal_ctx_key_registry(tmp), [])
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
+
+
+# ------------------------------------- (iv) 注入紅燈：removed 的通道被加回來
+
+class TestRemovedChannelIsBlocked(unittest.TestCase):
+    """`status=removed` 的 key 一旦在生產碼重新長出載體 ⇒ 必紅（#783）。
+
+    🔴 這個 class 存在的理由就是「先注入紅燈，再相信綠燈」：(iv) 是純否定性判準，
+    採集器壞掉時它的輸出與「真的沒人把通道加回來」**完全相同**。
+    """
+
+    def _tree(self, model, legacy=MODEL_PENDING_GATE):
+        return _tree(model=model, legacy=legacy, registry=_REGISTRY_REMOVED)
+
+    def test_baseline_without_the_channel_is_green(self):
+        """陽性對照的另一半：沒有載體時必須綠，否則下面的紅燈證明不了任何事。"""
+        self.assertEqual(self._tree(MODEL_OK), [])
+
+    def test_read_site_added_back_is_blocked(self):
+        violations = self._tree(MODEL_REMOVED_CHANNEL_READ_BACK)
+        self.assertTrue(violations, "removed 的通道被讀回來卻放行了")
+        text = _joined(violations)
+        self.assertIn("ut_dead_channel_ids", text)
+        self.assertIn("status=removed", text)
+        self.assertIn("src/models/widget.py", text)
+
+    def test_keyword_injection_added_back_is_blocked(self):
+        """`with_context(k=…)` 走的是 `injections` 分支，與讀取點不同條路。"""
+        violations = self._tree(MODEL_REMOVED_CHANNEL_INJECTED_BACK)
+        self.assertTrue(violations, "removed 的通道被注入回來卻放行了")
+        self.assertIn("ut_dead_channel_ids", _joined(violations))
+
+    def test_dict_injection_added_back_is_blocked(self):
+        """`**{KEY_CONST: …}` 是同一件事的另一種寫法，判準不得只認 keyword。"""
+        violations = self._tree(MODEL_REMOVED_CHANNEL_DICT_BACK)
+        self.assertTrue(violations, "dict 形態的注入被漏掉")
+        self.assertIn("ut_dead_channel_ids", _joined(violations))
+
+    def test_subscript_assignment_added_back_is_blocked(self):
+        """覆核 M2：`ctx[KEY] = ids` ＋ `with_context(**ctx)`。
+
+        這是「恢復手動帶 context 強制收斂」的人最自然會寫出來的形狀，而它既不是
+        keyword 也不是 `ast.Dict` 字面節點 ⇒ 原本兩個採集分支都看不到。
+        """
+        violations = self._tree(MODEL_REMOVED_CHANNEL_SUBSCRIPT_BACK)
+        self.assertTrue(violations, "動態組 dict 的注入端寫法被漏掉")
+        self.assertIn("ut_dead_channel_ids", _joined(violations))
+
+    def test_subscript_assignment_with_a_module_const_key_is_blocked(self):
+        """key 走 module 層常數也要抓得到（跨檔常數解析已存在，別只認字面字串）。"""
+        violations = self._tree(MODEL_REMOVED_CHANNEL_SUBSCRIPT_CONST_BACK)
+        self.assertTrue(violations, "常數 key 的 subscript 注入被漏掉")
+        self.assertIn("ut_dead_channel_ids", _joined(violations))
+
+    def test_known_blind_spot_runtime_computed_key_is_NOT_caught(self):
+        """🔴 **已知盲點，刻意鎖住現況**：key 在執行期才算出來 ⇒ 本條抓不到。
+
+        這條**不是**在說那樣寫沒問題——它是在說「本 gate 對這個形狀沒有鑑別力」，
+        而那件事必須是**可見的**，不能默默留著（被寫成例外的那格就是日後會出事的
+        那格）。純 AST 形態比對對「key 是執行期值」本來就不可判定，硬幹只會換來
+        誤報。哪天 gate 加了資料流分析、這條會變紅 ⇒ 那時請把它改成
+        `assertTrue` 並把 docstring 的盲點清單那一項刪掉。
+
+        ⚠ 陽性對照就在同一個 class：同樣的 `ctx[…] = …` ＋ `with_context(**ctx)`，
+        只要 key 解得出字面值就會紅（上面兩條）⇒ 這裡的綠不是「採集器沒在跑」。
+        """
+        self.assertEqual(
+            self._tree(MODEL_REMOVED_CHANNEL_RUNTIME_KEY), [],
+            "這條盲點如果變紅了是好事，但要有人來更新 docstring 的盲點清單")
+
+    def test_mentioning_the_name_in_a_comment_is_not_a_violation(self):
+        """判準是 AST 載體不是字面比對——註解提到名字不得誤報。
+
+        ⚠ 這格不是寬鬆，是**必要**：拿掉一條通道之後，說明「為什麼拿掉、不要加
+        回來」正是該寫的東西。把它判成違規會逼人刪掉守線的說明文字，而那是本 repo
+        第 27 條踩過的同一個形狀（gate 對本檔吐出一句為假的話）。
+        """
+        self.assertEqual(self._tree(MODEL_REMOVED_CHANNEL_ONLY_MENTIONED), [])
+
+    def test_removed_entry_without_issue_is_blocked(self):
+        """removed 的整個作用是讓下一個人讀到當初為什麼拿掉 ⇒ 沒單號就沒有作用。"""
+        registry = {
+            "ut_dead_channel_ids": {"status": "removed", "why": "no issue"},
+        }
+        violations = _tree(model=MODEL_OK, registry=registry)
+        self.assertTrue(violations, "removed 沒有 issue 卻放行了")
+        self.assertIn("status=removed 卻沒有 `issue`", _joined(violations))
+
+    def test_collector_existence_control_fires_when_nothing_is_injectable(self):
+        """(d) 陽性對照：一個注入載體都抽不到 ⇒ 採集器壞了，不是乾淨。
+
+        用一棵**真的沒有任何注入載體**的樹模擬採集器失效後的世界，確認 gate 會
+        出聲而不是靜靜地綠。
+        """
+        registry = {
+            "ut_dead_channel_ids": {
+                "status": "removed", "issue": "#783", "why": "ut"},
+        }
+        bare = '''
+class Widget(object):
+    def write(self, vals):
+        return super().write(vals)
+'''
+        with _FixtureRoot(registry=registry) as fx:
+            fx.write("src/models/widget.py", bare)
+            violations = fx.run()
+        self.assertTrue(violations, "採集器抽不到任何注入載體卻是綠的")
+        self.assertIn("採集器", _joined(violations))
+
+    def test_the_real_key_is_registered_as_removed(self):
+        """#783 的那把 key 必須真的在 registry 上標成 removed。
+
+        少了這條，本 class 只證明了「機制會動」，沒有證明「它正在守 #783」。
+        """
+        entry = rl.INTERNAL_CTX_KEY_REGISTRY.get("sa_unlinked_cf_policy_ids")
+        self.assertIsNotNone(
+            entry, "#783 拿掉的那把 key 不在 registry 上 ⇒ 沒有任何東西擋它回來")
+        self.assertEqual(entry.get("status"), "removed")
+        self.assertIn("#783", entry.get("issue", ""))
 
 
 # --------------------------------------------- 四處登記（新增 check 的義務）

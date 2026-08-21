@@ -570,15 +570,20 @@ class SmartHomeRoute(models.Model):
     def _build_existing_policy_ids(self):
         """operator 必須 delete-then-recreate 的 CF reusable policy id。
 
-        正常是存活列的 ``cf_policy_id``；但 policy 的 ``unlink()`` 會先跑
-        ``super().unlink()`` 再 re-sync，那些剛被刪掉的列的 cf id 已經不在 DB
-        裡、永遠進不了這份清單，而 operator 唯一的刪除通道就是它 ⇒ 每刪一條漏一
-        顆永久孤兒。policy 的 unlink 因此把 doomed id 經 context 傳進來。
+        兩個來源，兩個都是伺服器端讀到的：存活列的 ``cf_policy_id``，加上這個錨點
+        在待回收帳本上還欠的（``cf_access_policy_reap._pending_for``）。
 
-        #528：來源從「只有本次 context」擴成「**帳本 ∪ 本次 context**」。context
-        用完即丟，而那一次 re-sync 會被 `_access_is_live` 的 state 閘擋掉（SH 的
-        `suspended` 刻意排除在外）——被擋掉的那些 id 就此沒有任何記錄指向它們。
-        帳本讓它們活到下一次推得動為止。
+        policy 的 ``unlink()`` 會先跑 ``super().unlink()`` 再 re-sync，那些剛被刪
+        掉的列的 cf id 已經不在 DB 裡、永遠進不了這份清單，而 operator 唯一的刪除
+        通道就是它 ⇒ 每刪一條漏一顆永久孤兒。它們是**經帳本**進來的：``unlink()``
+        在同一個 savepoint 內先 ``Reap._record_ids()`` 落帳，才觸發 re-sync。
+
+        #528：帳要離開一次性的通道、落到 DB——那一次 re-sync 會被 `_access_is_live`
+        的 state 閘擋掉（SH 的 `suspended` 刻意排除在外），只活一次呼叫的東西被擋
+        掉之後就沒有任何記錄指向那些 id 了。帳本讓它們活到下一次推得動為止。
+
+        🔴 #783：`_pending_for()` **不讀任何 context**（舊的
+        `sa_unlinked_cf_policy_ids` 通道已整條移除，理由見該函式的 docstring）。
         """
         self.ensure_one()
         ids = [p.cf_policy_id for p in self.access_policy_ids if p.cf_policy_id]

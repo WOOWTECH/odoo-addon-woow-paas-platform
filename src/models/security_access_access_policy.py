@@ -23,6 +23,27 @@ _ANCHOR_LABELS = {
 }
 
 
+def _dedupe_anchors(anchors):
+    """保序去重一串**混 model** 的錨點記錄。
+
+    `_access_sync_targets()` 回的是 list 不是 recordset（三個錨點是三個不同
+    model，`|` 用不了），所以聯集只能自己拿 ``(model, id)`` 當 key ——只用
+    ``id`` 的話 `route#3` 會把 `cloud_service#3` 吃掉，而症狀是「其中一邊完全
+    沒被推」，沒有例外也沒有 log（#745 在帳本那邊踩過同一顆）。
+
+    **保留第一次出現**是刻意的：`write()` 把「失去了 policy 的錨點」排在前面
+    餵進來，一個同時是舊錨點又是新錨點的錨點必須落在它作為**舊**錨點的位置。
+    """
+    seen = set()
+    ordered = []
+    for anchor in anchors:
+        key = (anchor._name, anchor.id)
+        if key not in seen:
+            seen.add(key)
+            ordered.append(anchor)
+    return ordered
+
+
 def _arc_violation(label, present):
     """回傳「恰好一個錨點」的違規訊息，或 ``None``（合法）。
 
@@ -559,6 +580,119 @@ class SecurityAccessAccessPolicy(models.Model):
             targets += list(self.mapped(field))
         return targets
 
+    def _access_anchor(self):
+        """這一列的那個錨點記錄（arc 保證恰好一個），沒有錨點時回空 recordset。
+
+        單一裁決處：`unlink()` 的捕獲迴圈與 `write()` 的搬家偵測問的是同一件事
+        （「這一列現在掛在誰身上」）。各寫一份的話，第四個錨點上線時會漏改其中
+        一處，而漏改的症狀是**什麼都不會發生**——與 `_access_sync_targets()` 的
+        docstring 講的是同一格。
+        """
+        self.ensure_one()
+        return next(
+            (self[f] for f in _ANCHOR_FIELDS if self[f]),
+            self.env['woow_paas_platform.security_access_route'].browse())
+
+    def _anchor_move_plan(self, pre_anchor_state):
+        """算出「這一批 policy 換錨點」的後果，**不做任何寫入**。
+
+        回傳 ``(失去了 policy 的舊錨點 list, {舊錨點 key: [要回收的 cf id]},
+        要清掉 cf id 的 policy recordset)``。
+
+        ``pre_anchor_state``：``{policy.id: ((舊錨點 model, id) 或 None,
+        舊 cf_policy_id)}``，由 `write()` 在 ``super().write()`` **之前**擷取。
+
+        **刻意純計算**：`write()` 要先拿它排出推送順序、把**所有**錨點授權過一
+        遍，才准產生第一個 side effect（落帳、清列、推 operator 都算）。計算與
+        寫入混在一起的話，授權失敗前就已經有東西寫出去了。實際寫入在
+        `_apply_anchor_move()`。
+
+        「失去了 policy 的舊錨點」刻意**不從 `_access_sync_targets()` 推導**：
+        那個方法回的是 `mapped()` 的結果，而 Odoo 明文寫著 `mapped()` 的
+        recordset 順序 arbitrary（`odoo/models.py` 的 docstring），實際順序由
+        policy 的 `_order` 決定，跟「誰失去了 policy」無關。想表達的是語意
+        （失去者要先被告知），就得直接算語意，不能借用集合順序。
+
+        ## 為什麼搬家要落帳＋清列（兩件事共用同一個判斷）
+
+        ### 為什麼落帳（只重推舊錨點不夠）
+
+        那顆 cf id 已經跟著列搬到新錨點去了，而舊錨點的
+        `_build_existing_policy_ids()` 是從它底下**尚存**的列推導出來的
+        ⇒ 舊錨點那一輪送出去的 `existing_policy_ids` 裡沒有它。那份清單是
+        operator 唯一的刪除通道，所以少了這一步，重推只是推了一份「沒有它」的
+        期望狀態：舊 app 不再引用它（好事），但那顆帳號級的 reusable policy
+        從此沒有人刪得掉。
+
+        ### 為什麼順手把列上的 id 清掉
+
+        `cf_policy_id` 的語意是「這一列的錨點上一次成功 sync 時為它建出來的那顆
+        CF policy」。列搬走之後這句話是假的——那顆 policy 還掛在**舊** app 上。
+        留著的話新錨點的 `_build_existing_policy_ids()` 會把它當成自己的東西送
+        去刪，而此時舊 app 可能還引用著它。那次刪除會發生什麼，**repo 內沒有
+        證據**：operator 的 detach-before-delete 註解講的是「本 app 自己那顆」，
+        `delete_reusable_policy` 只有 (200,202,404) vs 其他的二分，沒有任何
+        in-use／409 分支。兩種可能都不好——被拒絕就變成記在**新**錨點帳上的
+        假孤兒（每輪重送、每輪再記）；真的被刪掉就是把**舊 app 正在用的** policy
+        無聲拆掉。清掉之後這一整格不存在，也就不必賭 CF 的實際行為。
+
+        清的範圍嚴格等於落帳的範圍（同一個判斷、同一個迴圈），所以不存在
+        「清掉了卻沒記到」的中間狀態。
+
+        ### 為什麼不走 context
+
+        一次性的 context 通道用完即丟，而舊錨點這一次重推可能被它自己的
+        liveness gate 整個擋掉（停權中的 SA 就是）——擋掉之後那顆 id 就沒有任何
+        記錄指向它。這正是 #528 的根因，帳本就是為了那一格存在的。
+        （本節原本指名的 `sa_unlinked_cf_policy_ids` 已於 #783 整條移除，理由見
+        `cf_access_policy_reap` 模組 docstring 的設計決定 1。）
+
+        ### 為什麼**不看** `_CTX_SKIP_ROUTE_SYNC`
+
+        sentinel 抑制的是「這一次要不要對 operator 說話」，不是「這件事有沒有
+        發生」。批次搬列（migration）之後那顆 CF policy 一樣掛在舊 app 上，帳落
+        下去才等得到那些流程自己發的 re-sync；跟著跳過就又退回一次性機制。
+        `unlink()` 的落帳同樣不看 sentinel。
+
+        ⚠ 記進去的一律是 **pre-write 從列上讀到的** `cf_policy_id`，不是 vals
+        也不是 context 的值（帳本模組 docstring 的設計決定 1）。
+        """
+        lost = []
+        seen_lost = set()
+        moved_by_anchor = {}
+        booked = self.browse()
+        for pol in self:
+            old_key, old_cf_id = pre_anchor_state.get(pol.id) or (None, None)
+            if not old_key:
+                continue
+            anchor = pol._access_anchor()
+            new_key = (anchor._name, anchor.id) if anchor else None
+            if new_key == old_key:
+                continue
+            if old_key not in seen_lost:
+                seen_lost.add(old_key)
+                lost.append(self.env[old_key[0]].browse(old_key[1]))
+            # 沒有 cf id 的列一樣算「舊錨點失去了一條 policy」（它的期望狀態變
+            # 了，必須重推），只是沒有東西要回收。
+            if old_cf_id:
+                moved_by_anchor.setdefault(old_key, []).append(old_cf_id)
+                booked |= pol
+        return lost, moved_by_anchor, booked
+
+    def _apply_anchor_move(self, moved_by_anchor, booked):
+        """執行 `_anchor_move_plan()` 算出來的落帳與清列。
+
+        呼叫時機：**所有錨點都授權過之後、推 operator 之前**。落帳要在推之前，
+        推出去的那一輪才帶得到這顆 id（與 `unlink()` 同一個位置、同一個理由）；
+        而推失敗時整段連同 `super().write()` 一起被 savepoint 回捲——那是對的，
+        列沒搬走就不欠這筆帳。
+        """
+        Reap = self.env['woow_paas_platform.cf_access_policy_reap']
+        for (anchor_model, anchor_id), cf_ids in moved_by_anchor.items():
+            Reap._record_ids(anchor_model, anchor_id, cf_ids)
+        if booked:
+            booked.write({'cf_policy_id': False})
+
     @api.model_create_multi
     def create(self, vals_list):
         for vals in vals_list:
@@ -615,14 +749,78 @@ class SecurityAccessAccessPolicy(models.Model):
         return policies
 
     def write(self, vals):
+        # #786：錨點欄位出現在 vals 裡時，「該重推誰」**必須在**
+        # `super().write()` **之前也算一份**。之後才算的那一份只看得到新錨點，
+        # 於是舊錨點一次都不會被重推——而它的 Cloudflare Access application 仍然
+        # 引用著剛搬走的那顆 reusable policy（**授權發散**，不只是成本），那顆
+        # cf id 也再進不了舊錨點的 `existing_policy_ids`（operator 唯一的刪除
+        # 通道，它是從舊錨點底下**尚存**的列推導出來的）。
+        #
+        # ⚠ 錨點欄位**本來就在**下面的觸發條件裡，所以這不是「忘了觸發」而是
+        # 「觸發了但對象取錯」——症狀因此更難發現：換錨點的 write 看起來確實打了
+        # operator，只是打的是新錨點。
+        #
+        # sibling `..._rule.write()`（`security_access_access_policy_rule.py`）的
+        # pre/post 聯集是同一個形狀；差別有二：那邊同 model 可以用 `|`（這邊三個
+        # 錨點是不同 model，得自己用 (model, id) 去重），而且那邊沒有「誰失去了
+        # 子列」這層語意（這邊有，見下面的排序）。
+        anchor_write = any(k in vals for k in _ANCHOR_FIELDS)
+        pre_anchor_state = {}
+        if anchor_write:
+            for pol in self:
+                anchor = pol._access_anchor()
+                pre_anchor_state[pol.id] = (
+                    (anchor._name, anchor.id) if anchor else None,
+                    pol.cf_policy_id)
         with self.env.cr.savepoint():
             result = super().write(vals)
-            if (not _is_sync_control(self.env, _CTX_SKIP_ROUTE_SYNC)
-                    and any(k in vals for k in (
-                        'name', 'decision', 'sequence', 'rule_ids',
-                    ) + _ANCHOR_FIELDS)):
-                for anchor in self._access_sync_targets():
-                    anchor._sync_access_to_operator()
+            lost_anchors, moved_by_anchor, to_clear = (
+                self._anchor_move_plan(pre_anchor_state)
+                if anchor_write else ([], {}, self.browse()))
+            resync = (not _is_sync_control(self.env, _CTX_SKIP_ROUTE_SYNC)
+                      and any(k in vals for k in (
+                          'name', 'decision', 'sequence', 'rule_ids',
+                      ) + _ANCHOR_FIELDS))
+            targets = []
+            if resync:
+                # 失去 policy 的錨點排在前面。這個順序**直接由語意算出來**
+                # （`_anchor_move_plan()` 回的就是「誰失去了」），刻意不從
+                # `_access_sync_targets()` 的順序推導：那是 `mapped()` 的結果，
+                # Odoo 明文寫它的順序 arbitrary，實際由 policy 的 `_order` 決定
+                # ——與「誰失去了 policy」無關。單筆 vals 只可能有一個新錨點，
+                # 但**舊**錨點可以有很多個（一批分屬 N 條 route 的 policy 一次
+                # 收攏到同一條），而且新錨點自己也可能同時是某一列的舊錨點。
+                targets = _dedupe_anchors(
+                    lost_anchors + self._access_sync_targets())
+                # 🔴 **所有錨點都授權過，才准產生第一個 side effect。**
+                #
+                # 錨點欄位在 ORM 層沒有歸屬檢查（arc 是 arity 不是 ownership，
+                # `controllers/smart_home.py` 的白名單註解逐字寫過這件事），而
+                # Odoo 只在 `write()` 開頭對 **self** 做一次
+                # `check_access('write')`，對 Many2one 的**目標**不做任何檢查
+                # ⇒ 裸 ORM／RPC 寫得進別人 workspace 的錨點 id。
+                #
+                # 修這張單之前那條路徑是 fail-closed 的：唯一那一次推送就是新
+                # 錨點，讀不到它就 AccessError、savepoint 整段回捲、CF 一次都
+                # 沒被碰。改成推兩個之後，若不先授權就開推，第一個（自己的舊
+                # 錨點）會先把一輪 delete-then-recreate 打上 CF，然後才因為第
+                # 二個錨點 AccessError 而整段回捲——**外部變更回捲不掉**，於是
+                # 租戶手上多了一根可以穩定製造 CF 孤兒的槓桿。
+                #
+                # ⚠ 別把「今天好像也擋得住」當成不必要：那是**隱性**的
+                # （帶著 cf id 搬家時，下面 `_apply_anchor_move()` 的清列 write
+                # 會先撞到 ir.rule），而沒有 cf id 的列連那個保護都沒有。本迴圈
+                # 是唯一一處明文寫著「授權先於不可回捲的外部變更」的地方。
+                #
+                # 用 `read` 是刻意的：那就是推送路徑本來就要做的事
+                # （`_sync_access_to_operator()` 一開頭就讀錨點欄位），不是新加
+                # 一道更嚴的門。
+                for anchor in targets:
+                    anchor.check_access('read')
+            if anchor_write:
+                self._apply_anchor_move(moved_by_anchor, to_clear)
+            for anchor in targets:
+                anchor._sync_access_to_operator()
         return result
 
     def unlink(self):
@@ -632,19 +830,27 @@ class SecurityAccessAccessPolicy(models.Model):
         # (delete-old-then-create), which _build_access_payload derives from the
         # SURVIVING rows. Once the row is gone its cf id never enters that list,
         # so the operator never deletes the policy → permanent CF orphan, one
-        # leaked per unlink. Inject the captured ids per-ANCHOR on the resync so
-        # the operator reaps them.
+        # leaked per unlink. The captured ids are booked per-ANCHOR on
+        # `cf_access_policy_reap` so the operator reaps them.
         #
-        # #528：光靠 context 不夠——那一次 resync 被 gate 擋掉的話 id 就永久消失。
-        # 同一批 id 另外落進 `cf_access_policy_reap` 帳本（見下方 savepoint 內）。
+        # #528：一次性的通道不夠——那一次 resync 被 gate 擋掉的話 id 就永久消失，
+        # 所以帳要落進 DB（見下方 savepoint 內）。
+        #
+        # #783：帳本是**唯一**的通道了。原本這裡另外用
+        # `with_context(sa_unlinked_cf_policy_ids=...)` 把同一批 id 帶給那一次
+        # re-sync，但 `_pending_for()` 讀的是「錨點當下的 env.context」，而
+        # `/web/dataset/call_kw` 把呼叫端 context 整包換進 env ⇒ 那條腿等於讓租戶
+        # 指定 operator 去刪任何一顆它知道 id 的**帳號級** CF reusable policy。
+        # 拿掉它不減功能：下面的 `_record_ids()` 對每一個錨點**無條件**執行、而
+        # context 只注入給 `exists()` 的子集 ⇒ 帳本本來就是它的嚴格超集。
         #
         # #745：key 帶上 model 名——route 與 cloud_service 的 id 各自從 1 開始，
         # 只用 id 當 key 會把 route#3 的孤兒 id 餵給 cloud_service#3。
         doomed_by_anchor = {}
         for pol in self:
-            anchor = next(
-                (pol[f] for f in _ANCHOR_FIELDS if pol[f]),
-                self.env['woow_paas_platform.security_access_route'].browse())
+            # #786：「這一列掛在誰身上」改讀 `_access_anchor()` 的單一裁決處，
+            # 與 `write()` 的搬家偵測共用同一份判斷。
+            anchor = pol._access_anchor()
             if pol.cf_policy_id and anchor:
                 doomed_by_anchor.setdefault(
                     (anchor._name, anchor.id), []).append(pol.cf_policy_id)
@@ -652,16 +858,16 @@ class SecurityAccessAccessPolicy(models.Model):
             result = super().unlink()
             # #528：落帳在**推之前**，而且刻意不看 `anchor.exists()`。
             #
-            # context 那條通道只活一次呼叫，而那一次 `_sync_access_to_operator()`
-            # 可能被錨點的 liveness gate 整個擋掉（SA／SH 的停權狀態就是）——擋掉
-            # 之後 DB 列已刪、context 已丟，那顆 CF policy 從此沒有任何記錄指向
-            # 它，operator 唯一的刪除通道（`existing_policy_ids`）再也帶不到它。
-            # 帳落進 DB，壽命就不再綁在「這一次 sync 有沒有跑」上。
+            # 這一次 `_sync_access_to_operator()` 可能被錨點的 liveness gate 整個
+            # 擋掉（SA／SH 的停權狀態就是）——擋掉之後 DB 列已刪，那顆 CF policy
+            # 若沒有任何記錄指向它，operator 唯一的刪除通道
+            # （`existing_policy_ids`）就再也帶不到它。帳落進 DB，壽命才不綁在
+            # 「這一次 sync 有沒有跑」上。（#528 之前那條 context 通道只活一次
+            # 呼叫，正是這一格被打穿的原因；它已於 #783 移除。）
             #
-            # ⚠ 餵進去的一律是**列上讀到的** `cf_policy_id`，不是 context 的值：
-            # `sa_unlinked_cf_policy_ids` 是一把裸 context key（call_kw 把呼叫端
-            # 的 context 原封不動交給 ORM），把它的值寫進 DB 等於把一次性的偽造
-            # 升級成持久的偽造，而它決定的是**帳號級** CF 物件要不要被刪。
+            # ⚠ 餵進去的一律是**列上讀到的** `cf_policy_id`。這張表決定的是
+            # **帳號級** CF 物件要不要被刪，所以它的輸入只能是伺服器端從 DB 列讀
+            # 到的值——#783 之所以把 context 那條腿整個拿掉，是同一條理由。
             #
             # sync 拋例外時這段連同 `super().unlink()` 一起被 savepoint 回捲——
             # 那是對的：列活著，cf id 就還在列上，不需要帳。
@@ -670,11 +876,10 @@ class SecurityAccessAccessPolicy(models.Model):
                 Reap._record_ids(anchor_model, anchor_id, doomed)
             for anchor in affected:
                 if anchor.exists():
-                    doomed = doomed_by_anchor.get(
-                        (anchor._name, anchor.id)) or []
-                    anchor.with_context(
-                        sa_unlinked_cf_policy_ids=doomed
-                    )._sync_access_to_operator()
+                    # doomed id 由上面剛落的帳供給（`_build_existing_policy_ids`
+                    # → `_pending_for` → `_pending_ids`）。這裡刻意**不帶任何
+                    # context**：#783。
+                    anchor._sync_access_to_operator()
         return result
 
     def _rules_by_group(self, group):

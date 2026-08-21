@@ -9,7 +9,12 @@
 指向它**，之後任何 re-sync 都不會回收（2026-08-02 在 stg 實際漏了兩顆，其中一條
 是 allow everyone）。
 
-本檔守四件事：
+🔴 **那條 context 通道本身已於 #783 整條移除**（它是 `call_kw` 直達的裸值，而它
+餵的是 operator 的**帳號級**刪除清單）。帳本因此不只是「更耐久的第二條腿」，而是
+**唯一**的一條——所以本檔的 B/C/D 系列同時是 #528 的守線與 #783 的回歸證據：它們
+走真實 unlink，拿掉 context 之後一格都沒有變。
+
+本檔守五件事：
 
 1. **帳要 durable**：unlink 當下把 doomed id 寫進 DB（`cf_access_policy_reap`），
    不再依賴「當次 sync 一定會跑」。
@@ -19,6 +24,10 @@
    或被 gate 擋掉時帳原封不動。
 4. **被 gate 擋掉且手上有待回收 id ⇒ 大聲**（方向 3）。反過來，帳上是空的時候
    必須**安靜**——停權下 sync 被擋是常態，無條件 warning 等於 log 洪水。
+5. **呼叫端塞進 context 的 id 不得進 `existing_policy_ids`**（#783，B8/C3/D4）。
+   ⚠ 那三條的觸發器刻意用**普通的 write** 而不是 unlink：偽造面不在 unlink 那一
+   行，而在「任何一次會觸發 `_sync_access_to_operator()` 的操作都沿用呼叫端的
+   context」。
 
 ## 判別式紀律（這檔最容易寫成假綠的兩格）
 
@@ -161,12 +170,28 @@ class TestReapLedgerModel(TransactionCase, _ReapMixin):
                           trusted_ids=['cf-old'])
         self.assertEqual(self._pending(self.anchor), ['cf-old'])
 
-    def test_A5_pending_for_unions_ledger_and_context(self):
+    def test_A5_pending_for_reads_only_the_ledger_783(self):
+        """`_pending_for` 只認帳本，呼叫端 context 一律不採信（#783）。
+
+        這裡原本驗的是「帳本 ∪ 本次 context」。`sa_unlinked_cf_policy_ids` 是一把
+        `/web/dataset/call_kw` 直達的裸 context key，而它餵的是 operator 的
+        **帳號級**刪除清單（`delete_reusable_policy` 打
+        `/accounts/{id}/access/policies/{pid}`，沒有 app 也沒有租戶邊界）⇒ #783
+        把那條腿整個拿掉。
+
+        拿掉不減功能：生產路徑上 context 本來就是冗餘的——`unlink()` 在同一個
+        savepoint 內**先**把同一批 id 落帳（`_record_ids`）才推 sync，而且落帳對
+        每一個錨點無條件執行、context 只注入給 `exists()` 的那個子集 ⇒ 帳本是
+        context 的**嚴格超集**。
+
+        陽性對照與否定性斷言放同一個方法：帳上那顆必須照回，否則「context 被忽略」
+        與「整個回空集」不可區分。
+        """
         self.Reap._record(self.anchor, ['cf-booked'])
         ids = self.Reap._pending_for(self.anchor.with_context(
             sa_unlinked_cf_policy_ids=['cf-ctx', 'cf-booked']))
-        self.assertEqual(sorted(ids), ['cf-booked', 'cf-ctx'],
-                         '帳上的 ∪ 本次 context 注入的，且不重複')
+        self.assertEqual(ids, ['cf-booked'],
+                         '帳上的照回（陽性對照）、context 塞的一律不回（#783）')
 
 
 # ====================================================================== #
@@ -332,9 +357,46 @@ class TestSaRouteReap(TransactionCase, _ReapMixin):
             pol.unlink()
         payload = self.client.sync_access_app.call_args.args[0]
         self.assertIn('cf-live-b7', payload['existing_policy_ids'],
-                      'context 注入這條既有通道不可以被改掉')
+                      '被刪那一列的 cf id 必須照樣送去刪——#783 拿掉 context '
+                      '通道之後這顆改由帳本供給，行為一格都不能變')
         self.assertEqual(self._pending(self.route), [],
                          '成功回收 ⇒ 不留殘帳')
+
+
+    def test_B8_forged_context_never_reaches_the_payload_783(self):
+        """#783：呼叫端塞進 context 的 cf id 不得進 `existing_policy_ids`。
+
+        `/web/dataset/call_kw` 把呼叫端的 context **整包**換進 env，而
+        `existing_policy_ids` 是 operator 唯一的刪除通道、`delete_reusable_policy`
+        打的是**帳號級** `/accounts/{id}/access/policies/{pid}`（沒有 app 也沒有
+        租戶邊界）⇒ 這條腿等於讓租戶指定平台去刪任何一顆它知道 id 的 CF policy。
+
+        🔴 觸發器刻意用一次**普通的 write**，不是 unlink。偽造面不在 unlink 那一
+        行——`_pending_for()` 讀的是「錨點當下的 env.context」，而**任何**會觸發
+        `_sync_access_to_operator()` 的操作都沿用呼叫端的 context
+        （`_access_sync_targets()` 用 `.mapped()`，不重置 env）。用 unlink 當觸發器
+        會讓這條測試看起來只守住一條路徑，而那正是本題最容易寫錯的地方。
+
+        四格判定，缺一不可（只留否定性那格的話，payload 整個壞掉也會通過）：
+        """
+        self._policy('cf-real-b8')
+        self.Reap._record(self.route, ['cf-booked-b8'])
+
+        with patch(MOCK_SA_CLIENT, return_value=self.client):
+            self.route.with_context(
+                sa_unlinked_cf_policy_ids=['cf-forged-b8']
+            ).write({'session_duration': '8h'})
+
+        self.assertTrue(self.client.sync_access_app.called,
+                        '陽性對照：這一輪確實打到了 operator')
+        payload = self.client.sync_access_app.call_args.args[0]
+        self.assertIn('cf-real-b8', payload['existing_policy_ids'],
+                      '陽性對照：列上真實存在的 cf id 照樣要送出去')
+        self.assertIn('cf-booked-b8', payload['existing_policy_ids'],
+                      '陽性對照：帳本上的舊帳照樣要送出去')
+        self.assertNotIn(
+            'cf-forged-b8', payload['existing_policy_ids'],
+            '呼叫端 context 塞的 id 不得進 operator 的帳號級刪除清單（#783）')
 
 
 # ====================================================================== #
@@ -416,6 +478,42 @@ class TestCsReap(TransactionCase, _ReapMixin):
             any('cf-doomed-c2' in line for line in captured.output))
 
 
+    def test_C3_forged_context_never_reaches_the_payload_783(self):
+        """#783：呼叫端塞進 context 的 cf id 不得進 `existing_policy_ids`。
+
+        `/web/dataset/call_kw` 把呼叫端的 context **整包**換進 env，而
+        `existing_policy_ids` 是 operator 唯一的刪除通道、`delete_reusable_policy`
+        打的是**帳號級** `/accounts/{id}/access/policies/{pid}`（沒有 app 也沒有
+        租戶邊界）⇒ 這條腿等於讓租戶指定平台去刪任何一顆它知道 id 的 CF policy。
+
+        🔴 觸發器刻意用一次**普通的 write**，不是 unlink。偽造面不在 unlink 那一
+        行——`_pending_for()` 讀的是「錨點當下的 env.context」，而**任何**會觸發
+        `_sync_access_to_operator()` 的操作都沿用呼叫端的 context
+        （`_access_sync_targets()` 用 `.mapped()`，不重置 env）。用 unlink 當觸發器
+        會讓這條測試看起來只守住一條路徑，而那正是本題最容易寫錯的地方。
+
+        四格判定，缺一不可（只留否定性那格的話，payload 整個壞掉也會通過）：
+        """
+        self._policy('cf-real-c3')
+        self.Reap._record(self.svc, ['cf-booked-c3'])
+
+        with patch(MOCK_CS_CLIENT, return_value=self.client):
+            self.svc.with_context(
+                sa_unlinked_cf_policy_ids=['cf-forged-c3']
+            ).write({'session_duration': '8h'})
+
+        self.assertTrue(self.client.sync_access_app.called,
+                        '陽性對照：這一輪確實打到了 operator')
+        payload = self.client.sync_access_app.call_args.args[0]
+        self.assertIn('cf-real-c3', payload['existing_policy_ids'],
+                      '陽性對照：列上真實存在的 cf id 照樣要送出去')
+        self.assertIn('cf-booked-c3', payload['existing_policy_ids'],
+                      '陽性對照：帳本上的舊帳照樣要送出去')
+        self.assertNotIn(
+            'cf-forged-c3', payload['existing_policy_ids'],
+            '呼叫端 context 塞的 id 不得進 operator 的帳號級刪除清單（#783）')
+
+
 # ====================================================================== #
 #  D 系列：SmartHomeRoute                                                 #
 # ====================================================================== #
@@ -495,3 +593,38 @@ class TestShRouteReap(TransactionCase, _ReapMixin):
                 self.route.write({'session_duration': '8h'})
         self.assertTrue(
             any('cf-doomed-d3' in line for line in captured.output))
+
+    def test_D4_forged_context_never_reaches_the_payload_783(self):
+        """#783：呼叫端塞進 context 的 cf id 不得進 `existing_policy_ids`。
+
+        `/web/dataset/call_kw` 把呼叫端的 context **整包**換進 env，而
+        `existing_policy_ids` 是 operator 唯一的刪除通道、`delete_reusable_policy`
+        打的是**帳號級** `/accounts/{id}/access/policies/{pid}`（沒有 app 也沒有
+        租戶邊界）⇒ 這條腿等於讓租戶指定平台去刪任何一顆它知道 id 的 CF policy。
+
+        🔴 觸發器刻意用一次**普通的 write**，不是 unlink。偽造面不在 unlink 那一
+        行——`_pending_for()` 讀的是「錨點當下的 env.context」，而**任何**會觸發
+        `_sync_access_to_operator()` 的操作都沿用呼叫端的 context
+        （`_access_sync_targets()` 用 `.mapped()`，不重置 env）。用 unlink 當觸發器
+        會讓這條測試看起來只守住一條路徑，而那正是本題最容易寫錯的地方。
+
+        四格判定，缺一不可（只留否定性那格的話，payload 整個壞掉也會通過）：
+        """
+        self._policy('cf-real-d4')
+        self.Reap._record(self.route, ['cf-booked-d4'])
+
+        with patch(MOCK_SH_CLIENT, return_value=self.client):
+            self.route.with_context(
+                sa_unlinked_cf_policy_ids=['cf-forged-d4']
+            ).write({'session_duration': '8h'})
+
+        self.assertTrue(self.client.sync_access_app.called,
+                        '陽性對照：這一輪確實打到了 operator')
+        payload = self.client.sync_access_app.call_args.args[0]
+        self.assertIn('cf-real-d4', payload['existing_policy_ids'],
+                      '陽性對照：列上真實存在的 cf id 照樣要送出去')
+        self.assertIn('cf-booked-d4', payload['existing_policy_ids'],
+                      '陽性對照：帳本上的舊帳照樣要送出去')
+        self.assertNotIn(
+            'cf-forged-d4', payload['existing_policy_ids'],
+            '呼叫端 context 塞的 id 不得進 operator 的帳號級刪除清單（#783）')

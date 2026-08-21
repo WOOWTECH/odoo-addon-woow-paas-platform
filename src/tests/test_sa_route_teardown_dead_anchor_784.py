@@ -674,16 +674,24 @@ class TestReaperReviewFindings791(TransactionCase, _Fixture):
 
     # ---------------- F9 [LOW] ---------------- #
 
-    def test_D4_forged_context_ids_never_become_durable_delete_orders(self):
+    def test_D4_unknown_ids_never_become_durable_delete_orders(self):
         """🔴 F9：operator 回報的 orphaned id 只認「列值 ∪ 帳上已知」。
 
-        `existing_policy_ids` 是「列值 ∪ 帳本 ∪ context」，而
-        `sa_unlinked_cf_policy_ids` 是一把可偽造的裸 context key（#783）。沒有這
-        道過濾，租戶塞進 context 的假 id 只要被 operator 回報成 orphaned 就會
-        **經結帳落進 DB**——一次性偽造升級成持久偽造，之後每小時重送到刪掉為止。
+        **兩道分層，這一條同時驗兩道**：
 
-        陽性對照同一個方法：真正來自列上的那顆照樣要落帳，否則「過濾生效」與
-        「整段落帳壞掉」不可區分。
+        1. **#783 擋送出**：`existing_policy_ids` 曾經是「列值 ∪ 帳本 ∪ context」，
+           而 `sa_unlinked_cf_policy_ids` 是一把 `call_kw` 直達的裸 context key ⇒
+           #783 把 context 那條腿拿掉，偽造值**連這一輪的 payload 都進不去**。
+        2. **#791 F9 擋落帳**：即使某顆 id 從別的地方冒出來（這裡模擬 operator 回報
+           了一顆我們**根本沒送過**的 id），`_settle()` 的 `trusted_ids` 過濾也不讓
+           它落進 DB——一次性的異常不得升級成持久的刪除指令，之後每小時重送到刪掉
+           為止。
+
+        ⚠ 第 2 道刻意保留：operator 的回應與「這一輪送了什麼」是兩件事，
+        `orphaned_policy_ids` 裡冒出未知 id 是**外部輸入**，不會因為 #783 而消失。
+
+        兩格陽性對照（缺任一格，「過濾生效」與「整段壞掉」不可區分）：payload 裡
+        列上那顆必須在、帳上列值那顆必須落帳。
         """
         sa = self._make_sa(state='active')
         route = self._make_route(sa, protected=True, app_id='app-d4',
@@ -700,14 +708,20 @@ class TestReaperReviewFindings791(TransactionCase, _Fixture):
                 )._sync_access_to_operator()
 
         payload = client.sync_access_app.call_args.args[0]
-        self.assertIn('cf-d4-forged', payload['existing_policy_ids'],
-                      '前提檢查：偽造值確實經 context 進得了這一輪的 payload')
+        self.assertIn(
+            'cf-d4-real', payload['existing_policy_ids'],
+            '陽性對照：列上真實存在的 cf id 必須在這一輪的 payload 裡——少了這格，'
+            'payload 整個壞掉也會讓下面那條 assertNotIn 通過')
+        self.assertNotIn(
+            'cf-d4-forged', payload['existing_policy_ids'],
+            '第一道（#783）：呼叫端 context 塞的 id 連送出端都進不去')
         pending = self._pending_policies(route.id)
         self.assertIn('cf-d4-real', pending,
                       '陽性對照：列上真實存在過的孤兒必須落帳')
         self.assertNotIn(
             'cf-d4-forged', pending,
-            '偽造值不得經 orphaned 回流變成持久的刪除指令（#783/#791 F9）')
+            '第二道（#791 F9）：operator 回報的未知 id 不得經結帳變成持久的刪除'
+            '指令')
         self.assertTrue(any('cf-d4-forged' in line for line in captured.output),
                         '拒收要出聲，否則與「根本沒發生」不可區分')
 
