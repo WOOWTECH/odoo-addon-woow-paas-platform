@@ -495,6 +495,15 @@ from . import test_cs_sync_ctx_forgery_787
 # ＝守衛被繞過）、D2（停權中的 SH 仍推去 CF）、A3／C3／D3（偽造完全沒有訊號）。
 from . import test_sh_sync_ctx_forgery_787
 
+# #787 A 段最後一把 `woow_force_issue`：**force 型**（前四把都是 skip 型，安全側
+# 相反）。讀取點在 `account_move.py::create_ecpay_invoice`，偽造成功的後果是把一
+# 件本來不會發生、而且**不可逆**的對外動作做出來——真的向 ECPay 開一張電子發票。
+# 本檔是可達性探針：R 組打一般租戶身分（`base.group_user`），P 組是陽性對照
+# （只差 context 裡那一個 key，`upstream.called` 就從 False 翻成 True，證明
+# call_kw 真的把呼叫端 context 換進讀取點的 env、也證明觀測點沒壞）。
+# 🔴 判定一律走離線替身（patch 上游那支方法本身）⇒ 全程不對 ECPay 送出任何請求。
+from . import test_ecpay_force_issue_ctx_forgery_787
+
 # fix: #739 只掛 base.group_user 的租戶經 `/woow` 打 provision 從來沒有成功過
 # ——`tunnel_token` 帶 `groups='base.group_system'`，而 `_provision_smarthome`
 # 用的是非 sudo 的租戶 recordset ⇒ 那次 write 必 AccessError、記錄卡在
