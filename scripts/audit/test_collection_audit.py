@@ -57,9 +57,17 @@ C2 的「預期」不是本檔自己算的：它呼叫 `repo-lint.py` 的 `_test
 `_test_effective_tags()` ／`_test_has_inherited_flag()`，也就是上面那張表裡的同一份
 判準。本檔只負責把它落成一份**可被 diff 覆核的清單**，並拿去跟真實 log 對帳。
 
-`--self-test` 不是裝飾：實作過程中它抓到本檔自己的缺陷（只 glob `*.py` 會漏掉
-`src/tests/integration/` 這個子套件目錄）——**188 個名字裡只錯 1 個，少到看起來
-像資料異常而不是工具異常**。任何改動本檔 matcher 的人請先跑它。
+`--self-test` 不是裝飾。它抓過兩次本檔自己的缺陷，兩次都是「錯得少到看起來像資料
+異常而不是工具異常」的形態：
+
+- 舊版只 glob `*.py`，漏掉 `src/tests/integration/` 這個**子套件目錄** ——
+  188 個名字裡只錯 1 個。（那段程式已隨 C1 一起刪除，判準交還 repo-lint。）
+- `extract_executed()` 用**點數**判粒度，對子套件底下的測試（識別字多一段套件名）
+  會把 class 行判成 method、method 行整個丟掉 ⇒ C3 永久假紅，而輸出與「那些 class
+  真的沒跑」一模一樣。本樹目前不會引爆（`integration/` 三個 class 全帶 `-standard`）
+  ⇒ **這是一個沒有任何現場症狀的缺陷，只有 self-test 的邊界樣本抓得到。**
+
+任何改動本檔 matcher 的人請先跑它，並**先確認它對你要改的那一格是紅的**。
 
 ⚠ **不帶參數＝跑 `--self-test`**（不是印 help 然後 exit 2）。理由不是美觀：
 `repo-lint.yml` 的「scripts/ 自我測試」步驟會 glob `scripts/audit/test_*.py` 並逐一
