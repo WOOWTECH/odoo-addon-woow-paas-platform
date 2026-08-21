@@ -124,6 +124,41 @@ jobs:
           grep -E "failed, .* error\(s\) of .* tests" /tmp/test.log \
             || { echo "::error::找不到 summary 行 ⇒ log 截斷，本次數據不可信"; exit 1; }
 
+      # 🔴 原始觀測必須在**任何判準跑之前**就落進 job log，而且 `if: always()`。
+      #
+      # 為什麼：run 4629 實例。C5 回 FATAL（哨兵測試跑了但沒紅），要在
+      #   (a) 缺陷真的修好了 (b) fixture 被改綠 (c) 這次沒撞到觸發條件 (d) 它其實被 skip 了
+      # 之間分辨，需要的觀測全在 `/tmp/test.log` 裡：skip 行、FAIL/ERROR 行、
+      # 哨兵自己的 detail 行、被測程式碼的 WARNING 指紋。
+      # 而那個檔**只活在容器裡**：workflow 從頭到尾只 grep 過 summary 一行，job 結束就沒了
+      # （artifacts 也是空的）。⇒ 判準紅了，人卻拿不到判斷憑據，只能重跑一趟 6～11 分鐘的全套。
+      #
+      # 這一步不是判準、不會失敗（`|| true`），純粹是把憑據留下來。刻意**不**用
+      # `actions/upload-artifact`：本 repo 至今只用過 `actions/checkout@v4`，
+      # 在跑全套的這支上押一個沒驗過的 action，失敗形態是整個 job 紅——代價不對稱。
+      # job log 本身就是可經 API 取回的耐久載體（`/actions/jobs/<id>/logs`）。
+      - name: 原始觀測落地（留憑據，不是判準）
+        if: always()
+        run: |
+          set +e
+          echo "── summary ──"
+          grep -E "failed, .* error\(s\) of .* tests" /tmp/test.log
+          echo "── skip 行（C4 的輸入；skip 算進 of N tests 卻什麼都沒驗）──"
+          grep -c ": skipped " /tmp/test.log
+          grep ": skipped " /tmp/test.log | head -60
+          echo "── FAIL/ERROR 行（C5 的輸入；也是 FAILURE_LINE 正規式唯一的陽性對照）──"
+          grep -cE ": (FAIL|ERROR): " /tmp/test.log
+          grep -E ": (FAIL|ERROR): " /tmp/test.log | head -60
+          echo "── 哨兵自己的 detail 行（證明它被收集且真的跑了）──"
+          while read -r s; do
+            case "$s" in ''|\#*) continue;; esac
+            grep -F "$s" /tmp/test.log | head -3
+          done < scripts/audit/baselines/test-collection-sentinels.txt
+          echo "── 被測程式碼的 WARNING（『那條分支有沒有被走到』常常只有這裡看得到）──"
+          grep -c "WARNING" /tmp/test.log
+          grep "WARNING" /tmp/test.log | grep -v "odoo.tests" | head -40
+          exit 0
+
       # ── 以下是完備性判準。**順序有意義**：哨兵先過，否則後面的差集全都不成立。 ──
       - name: C0 完整性哨兵（沒過就不要看後面的差集）
         run: python3 scripts/audit/test_collection_audit.py --check-sentinels /tmp/test.log
