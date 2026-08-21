@@ -645,6 +645,15 @@ class CloudService(models.Model):
              '的集合變空，Access app 會 fallback 成全部可用 IdP。刻意曝光而'
              '不是丟掉。',
     )
+    access_protection_lost = fields.Boolean(
+        string='Protection Not In Effect', copy=False, default=False,
+        help='True ＝ 本服務的 Cloudflare Access application 已經被拆掉、而記錄'
+             '本身還在（刪除交易回捲了，Cloudflare 那半回捲不掉）。此時 '
+             'is_protected 只是**意圖**：CF 上沒有任何東西在強制登入，subdomain '
+             '照常可達。由下一次成功的 Access sync 清掉。刻意與 is_protected '
+             '分開——降 is_protected 等於平台改掉租戶看得到的設定（產品可見'
+             '變更），未拍板（#794）。',
+    )
 
     # Helm Release Info
     helm_release_name = fields.Char(
@@ -3285,6 +3294,9 @@ class CloudService(models.Model):
             'login_email_otp': self.login_email_otp,
             'access_unresolved_idp_types':
                 self.access_unresolved_idp_types or '',
+            # #794 fail-open 訊號：宣稱受保護、但 CF 上的 app 已經被拆掉。不吐
+            # 的話 UI 只讀得到 is_protected 這個**意圖**欄位。
+            'access_protection_lost': self.access_protection_lost,
             'hostname': self._access_hostname(),
             'access_policies': [p.to_dict() for p in self.access_policy_ids],
         }
@@ -3450,6 +3462,11 @@ class CloudService(models.Model):
         new_unresolved = ', '.join(unresolved) if unresolved else False
         if self.access_unresolved_idp_types != new_unresolved:
             self.access_unresolved_idp_types = new_unresolved
+        # #794：推成功了 ⇒ CF 上的狀態就是這筆記錄宣稱的狀態，fail-open 旗標的
+        # 前提（app 被拆掉但記錄還在）已經不成立。旗標由 sync 結果驅動，與
+        # `access_unresolved_idp_types` 同一個形狀。
+        if self.access_protection_lost:
+            self.access_protection_lost = False
         # 回傳的 policy id 依 (sequence, id) 順序對映回列——與 payload 送出去的
         # 排序是同一條 key，錯開就會把 A 的 cf id 記到 B 頭上。
         returned = result.get('policy_ids') or []
@@ -3524,7 +3541,8 @@ class CloudService(models.Model):
                 ', '.join(orphaned))
         return result
 
-    def _teardown_cs_access(self, app_id, policy_ids, app_name, hostname):
+    def _teardown_cs_access(self, app_id, policy_ids, app_name, hostname,
+                            torn_down=None):
         """拆掉本服務的 Cloudflare Access app（＋ reusable policies）。
 
         契約逐字對齊 `SecurityAccess._teardown_route_access`：乾淨拆完回
@@ -3563,13 +3581,56 @@ class CloudService(models.Model):
         # `cf_access_policy_reap._cron_reap_dead_anchors`（錨點死掉之後）或這台
         # 服務自己的下一次成功 sync（錨點還活著時）。
         # 記帳失敗不翻轉回傳值（[[post-commit-bookkeeping-rollback-unit]]）。
+        #
+        # 🔴 #794 二輪覆核 [HIGH]：「CF 已經拆成功」要在**落帳之前**就記——
+        # `_settle_teardown_after_commit` 明文 re-raise `OperationalError`，
+        # 落帳一撞到並發例外本方法就不會 `return True` ⇒ 呼叫端的 `if ...:`
+        # 不執行 ⇒ 補償清單空 ⇒ 補償空轉，而 CF 上的 app 已經真的沒了。
+        # 回傳值語意不動（仍表示「這一趟整體成不成功」）。
+        if torn_down is not None:
+            torn_down.append((self._name, self.id))
         self.env[_CF_REAP_MODEL]._settle_teardown_after_commit(
             self._name, self.id, app_id or None, policy_ids or [],
             (result or {}).get('orphaned_policy_ids') or [], _logger,
             '[CLOUD_SVC] access teardown service=%s app=%s' % (self.id, app_id))
         return True
 
-    def _teardown_access_if_any(self):
+    def _access_mark_protection_lost(self):
+        """#794：把「本服務的 CF Access app 已經被拆掉、而記錄還在」寫成列上的
+        事實。三腿同名，唯一呼叫端是
+        `cf_access_policy_reap._compensate_fail_open_after_rollback`（獨立交易）。
+
+        完整理由（為什麼清 id 不違反 two-stage-remote-provision-idempotency、
+        為什麼只清 id 不夠、為什麼不動 `is_protected`）寫在 SA 那一份，見
+        `security_access.py` 的同名方法——**不在這裡重述**：三份平行的散文一定
+        會漂，而漂掉的那一份讀起來和權威版本一模一樣。
+        """
+        self.ensure_one()
+        _internal_cs_access_identity(self).access_app_id = False
+        for pol in self.access_policy_ids:
+            if pol.cf_policy_id:
+                pol.cf_policy_id = False
+        if not self.access_protection_lost:
+            self.access_protection_lost = True
+
+    def _has_access_teardown(self):
+        """本服務的**列上**還有沒有 CF Access 物件要拆（app id 或 policy cf id）。
+
+        #794 拆出來的：`unlink()` 需要知道「這一趟到底有沒有真的對 CF 拆掉東西」
+        才能決定要不要補償，而 `_teardown_access_if_any()` 的 ``True`` 同時代表
+        「拆乾淨了」與「本來就沒東西要拆」，兩者在回傳值上不可區分。呼叫端自己
+        再寫一次同樣的判準是漂移的起點（SA 那一腿的 `_has_access_teardown()`
+        正是同一個名字、同一個理由）。
+
+        🔴 **只讀列上的狀態，不查待回收帳本**——把帳本聯集進來會讓
+        `_teardown_access_if_any()` 的閘永遠回 True、服務永久卡在 `error`，
+        完整推導見該方法的 docstring。
+        """
+        self.ensure_one()
+        return bool(self.access_app_id or any(
+            p.cf_policy_id for p in self.access_policy_ids))
+
+    def _teardown_access_if_any(self, torn_down=None):
         """本服務目前的 Access 狀態 → 拆除，成功才清 id。回傳是否乾淨。
 
         單一裁決處：unlink（fail-loud）與 `_do_cleanup`（落 error 狀態）兩條
@@ -3597,13 +3658,14 @@ class CloudService(models.Model):
         self.ensure_one()
         pol_ids = [p.cf_policy_id for p in self.access_policy_ids
                    if p.cf_policy_id]
-        if not self.access_app_id and not pol_ids:
+        if not self._has_access_teardown():
             return True
         ok = self._teardown_cs_access(
             app_id=self.access_app_id or None,
             policy_ids=pol_ids,
             app_name=self.subdomain or self.helm_release_name,
             hostname=self._access_hostname(),
+            torn_down=torn_down,
         )
         if ok:
             # 身分錨點：清除也只有 sentinel 路徑寫得動。
@@ -4617,60 +4679,94 @@ class CloudService(models.Model):
             (s.workspace_id, s.helm_namespace)
             for s in self if s.helm_namespace
         ]
-        for service in self:
-            # F-ENV-5 helm fail-loud guard: the helm release / namespace must
-            # never outlive the record. The workspace-cascade routing path
-            # (Workspace.unlink → service_ids.unlink) relies on THIS to tear
-            # down helm, since the DB FK cascade bypasses Python unlink. The
-            # controller delete path that already uninstalled helm hits an
-            # idempotent 404 here (treated as success). On a real failure the
-            # row + release are kept and the deletion is aborted for retry.
-            if service.helm_release_name and service.helm_namespace:
-                if not service._cleanup_helm():
-                    raise UserError(
-                        "Helm uninstall failed; release '%s' is still live in "
-                        "namespace '%s' (billed compute / leaked namespace). "
-                        "The service record was kept so the deletion can be "
-                        "retried. Please try again shortly." % (
-                            service.helm_release_name, service.helm_namespace,
+        # 🔴 #794：本段**新增一層 savepoint**，這是 #744 那段註解（「不需要
+        # savepoint 這層機關」）之後的刻意改變，理由與原註解說的不衝突：
+        #
+        #   原註解對的是「拆在 super().unlink() 之前 ⇒ 失敗時什麼都還沒刪 ⇒
+        #   記錄與 id 原樣留著當重試錨點」。**那句話只涵蓋失敗的那一台。**
+        #   批次刪除時，失敗那台之前**已經拆成功**的那幾台，CF 上的 app 已經
+        #   沒了、而 `access_app_id = False` 那筆 DB 寫入會隨整筆交易被丟棄
+        #   ⇒ 記錄帶著 `is_protected=True` 與指向死 app 的 id 復活 ⇒ UI 顯示
+        #   已保護、subdomain 實際免登入即可存取（#794 的形狀，SA/SH 兩腿同型）。
+        #
+        # savepoint 在這裡有一個**功能性**的作用，不只是整潔：補償寫必須跑在
+        # 一條獨立連線上（見 `_compensate_fail_open_after_rollback`），而只要
+        # 外層交易對那幾列的 UPDATE 還活著，獨立交易的 UPDATE 就會撞上 PG 的
+        # 寫寫衝突、等到 `lock_timeout` 為止。**先讓 savepoint 回捲、再補償**
+        # 是補償寫得進去的前提，不是順手加的保險。
+        torn_down = []
+        Reap = self.env[_CF_REAP_MODEL]
+        try:
+            with self.env.cr.savepoint():
+                for service in self:
+                    # F-ENV-5 helm fail-loud guard: the helm release / namespace must
+                    # never outlive the record. The workspace-cascade routing path
+                    # (Workspace.unlink → service_ids.unlink) relies on THIS to tear
+                    # down helm, since the DB FK cascade bypasses Python unlink. The
+                    # controller delete path that already uninstalled helm hits an
+                    # idempotent 404 here (treated as success). On a real failure the
+                    # row + release are kept and the deletion is aborted for retry.
+                    if service.helm_release_name and service.helm_namespace:
+                        if not service._cleanup_helm():
+                            raise UserError(
+                                "Helm uninstall failed; release '%s' is still live in "
+                                "namespace '%s' (billed compute / leaked namespace). "
+                                "The service record was kept so the deletion can be "
+                                "retried. Please try again shortly." % (
+                                    service.helm_release_name, service.helm_namespace,
+                                )
+                            )
+                    # #744 Access fail-loud guard：Cloudflare Access app 不得比記錄長
+                    # 壽。拆在 `super().unlink()` **之前**——這是與 SA route 那條的刻意
+                    # 差異：route 的 cf policy id 住在會被 DB cascade 帶走的子列上，所以
+                    # 那邊被迫「先抓 id、刪完再拆、失敗用 savepoint 回捲」；CS 這裡在
+                    # 刪除前 `access_app_id` 與 `access_policy_ids.cf_policy_id` 都還
+                    # 在手上，直接先拆再刪，失敗就 raise（什麼都還沒刪 ⇒ 記錄與 id 原
+                    # 樣留著當重試錨點）。
+                    #
+                    # ⚠ #794 修正這段原本的結語（「不需要 savepoint 這層機關」）：
+                    # 它只涵蓋**失敗的那一台**。批次刪除時失敗那台之前已經拆成功
+                    # 的那幾台，CF 上的 app 已經沒了、`access_app_id = False` 卻
+                    # 隨交易被丟棄 ⇒ 與 SA/SH 兩腿完全同型的無聲 fail-open。
+                    # savepoint 現在加上去了，理由見本 method 開頭那段。
+                    # `torn_down` 由 `_teardown_cs_access` 在 operator 回 2xx
+                    # 當下就 append（見該方法的 [HIGH] 註解）——**不能**靠回傳值
+                    # 判斷：落帳撞到 `OperationalError` 時它拿不到 True。沒東西
+                    # 要拆時那一路在更前面就 `return True`，不會誤記。
+                    if not service._teardown_access_if_any(
+                            torn_down=torn_down):
+                        raise UserError(
+                            "Cloudflare Access teardown failed; the Access "
+                            "application for '%s' is still live. The service record "
+                            "was kept so the deletion can be retried." % (
+                                service.name or service.id,
+                            )
                         )
+                    user_mcps = service._collect_sidecar_user_mcps(
+                        service._sidecar_url_prefix()
                     )
-            # #744 Access fail-loud guard：Cloudflare Access app 不得比記錄長
-            # 壽。拆在 `super().unlink()` **之前**——這是與 SA route 那條的刻意
-            # 差異：route 的 cf policy id 住在會被 DB cascade 帶走的子列上，所以
-            # 那邊被迫「先抓 id、刪完再拆、失敗用 savepoint 回捲」；CS 這裡在
-            # 刪除前 `access_app_id` 與 `access_policy_ids.cf_policy_id` 都還
-            # 在手上，直接先拆再刪，失敗就 raise（什麼都還沒刪 ⇒ 記錄與 id 原
-            # 樣留著當重試錨點），不需要 savepoint 這層機關。少一個機制少一份
-            # 誤解，不變式（清不掉 ⇒ fail-loud ⇒ 保留 id 供重試）完全相同。
-            if not service._teardown_access_if_any():
-                raise UserError(
-                    "Cloudflare Access teardown failed; the Access "
-                    "application for '%s' is still live. The service record "
-                    "was kept so the deletion can be retried." % (
-                        service.name or service.id,
-                    )
-                )
-            user_mcps = service._collect_sidecar_user_mcps(
-                service._sidecar_url_prefix()
-            )
-            if user_mcps:
-                user_mcps.sudo().unlink()
-                _logger.info(
-                    "[CLOUD_SVC] unlink() unlinked %s user-scope MCP server(s) "
-                    "for service id=%s", len(user_mcps), service.id,
-                )
-        res = super().unlink()
-        # #318: teardown 成功後才結算訂閱（取消＋按比例退點）。放在
-        # super().unlink() 之後，故 helm fail-loud raise 時不會執行（全交易
-        # rollback、record 保留、訂閱不動）。訂閱是獨立 record，不隨 service
-        # 刪除而消失。
-        for sub in subs_to_settle:
-            sub._settle_on_entity_delete(reason='Service deleted')
-        for workspace, helm_namespace in quota_targets:
-            self._push_ns_quota(workspace, helm_namespace)
-        for project in affected.exists():
-            project._reconcile_agent_runtime_reach(old.get(project.id, set()))
+                    if user_mcps:
+                        user_mcps.sudo().unlink()
+                        _logger.info(
+                            "[CLOUD_SVC] unlink() unlinked %s user-scope MCP server(s) "
+                            "for service id=%s", len(user_mcps), service.id,
+                        )
+                res = super().unlink()
+                # #318: teardown 成功後才結算訂閱（取消＋按比例退點）。放在
+                # super().unlink() 之後，故 helm fail-loud raise 時不會執行（全交易
+                # rollback、record 保留、訂閱不動）。訂閱是獨立 record，不隨 service
+                # 刪除而消失。
+                for sub in subs_to_settle:
+                    sub._settle_on_entity_delete(reason='Service deleted')
+                for workspace, helm_namespace in quota_targets:
+                    self._push_ns_quota(workspace, helm_namespace)
+                for project in affected.exists():
+                    project._reconcile_agent_runtime_reach(old.get(project.id, set()))
+        except Exception:
+            Reap._compensate_fail_open_after_rollback(
+                torn_down, _logger,
+                '[CLOUD_SVC] unlink (services=%s)' % (self.ids,))
+            raise
         return res
 
     def _collect_sidecar_user_mcps(self, url_prefix):

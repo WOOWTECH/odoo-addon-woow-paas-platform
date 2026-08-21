@@ -78,7 +78,7 @@ from datetime import timedelta
 
 from psycopg2 import OperationalError
 
-from odoo import api, fields, models
+from odoo import SUPERUSER_ID, api, fields, models
 
 from ..services.paas_operator import get_paas_operator_client
 
@@ -434,6 +434,211 @@ class CfAccessPolicyReap(models.Model):
                 "%s: CF teardown SUCCEEDED but booking the reap ledger failed "
                 "— some cf id(s) may be untracked", label)
             return False
+
+    # ------------------------------------------------------------------ #
+    #  #794：回捲之後的 fail-open 補償（三腿共用，唯一的獨立交易入口）      #
+    # ------------------------------------------------------------------ #
+    #
+    # 這一段是本 repo `src/models/` 底下**唯一**自開 cursor 的地方。集中在這裡
+    # （而不是三腿各寫一份）是刻意的：它是一個**新形狀**，形狀本身的風險（鎖、
+    # 身分、失敗時不得蓋掉原本的錯誤）比它做的事還大，散成三份就會有三份各自
+    # 漂移的風險評估。
+
+    #: 補償交易等鎖的上限。**不是效能參數，是防單執行緒互鎖的安全參數**，見
+    #: `_compensate_fail_open_after_rollback` docstring 的「鎖」那一段。
+    _COMPENSATE_LOCK_TIMEOUT = '3s'
+
+    @api.model
+    def _compensate_fail_open_after_rollback(self, torn_down, logger, label):
+        """CF 上的 Access app 已經拆掉、而 DB 那一列即將**回捲復活**時的補償。
+
+        ## 這個方法為什麼非存在不可
+
+        三腿的 unlink 都是「先（或後）對 Cloudflare 送出不可回捲的 teardown，
+        整段包在一個 savepoint 裡，任一條失敗就 raise」。raise 之後：
+
+        * CF 那半**回捲不掉**——app 已經沒了，那個 hostname 不再有任何登入強制；
+        * DB 那半**整筆被丟棄**（`odoo/service/model.py::retrying` 只有正常返回
+          才 `env.cr.commit()`，`UserError` 也不在 retry 的例外集合裡）⇒ 已經
+          拆成功的那幾列**帶著 `is_protected=True` 與指向死 app 的
+          `access_app_id` 復活**；
+        * 租戶介面讀的是 `is_protected` 這個**意圖**欄位 ⇒ 顯示「已保護」。
+
+        ⇒ 「以為受保護、實際完全開放」，而且平台四條偵測管道（待回收帳本、
+        dead-anchor cron、卡帳 warning、reconcile 報表）逐一實測都照不到（#794
+        的 PROBE-1～7）。這是未授權存取，不是可用性問題。
+
+        ## 為什麼載體必須是自開 cursor 的獨立交易
+
+        能想到的其他載體都活不過那個 rollback，逐一排除（都實際查過原始碼）：
+
+        * `cr.postrollback`：`Cursor.rollback()` 確實在 `_cnx.rollback()`
+          **之後**才跑 hook，但 request 收尾的 `Cursor._close()` 會**再**
+          `rollback()` 一次（`odoo/sql_db.py`），hook 裡寫的東西一起沖掉。
+        * `_settle_after_commit` / `_settle_teardown_after_commit`：名字裡的
+          "after_commit" 指的是**外部系統的提交點**，不是 DB 的。它們的實作是
+          同一筆交易內的 `cr.savepoint(flush=False)` ⇒ 掛在上面的補償寫會跟著
+          蒸發。
+        * 把 raise 拿掉（改成 partial success）：那是**產品可見的刪除語意變更**
+          （全有全無 → 部分成功），未拍板，不在本修法範圍。
+
+        所以只剩「另一條連線、另一筆交易、自己 commit」。
+
+        ## 🔴 鎖：為什麼一定要 `SET LOCAL lock_timeout`，以及它什麼時候救不了
+
+        外層交易 T 在 savepoint 裡對那幾列發過 DELETE／UPDATE。savepoint 回捲
+        之後，那些 tuple 的 `xmax` 指向一個**已中止的 subxid**：
+
+        * 正常情況：`RecordTransactionAbort(isSubXact=True)` 會呼叫
+          `XidCacheRemoveRunningXids` 把該 subxid 從 proc array 的 subxid cache
+          移掉 ⇒ 本交易判定它「不在進行中」且「沒有 commit」⇒ 直接把
+          `HEAP_XMAX_INVALID` 記上去，**不等鎖**，補償寫得進去。
+          **這一格有實測**：`src/tests/integration/test_failopen_real_rollback_794.py`
+          在真交易邊界上跑，補償沒有逾時、沒有 hang，寫得進去。
+        * 但 T 的 subxid cache **溢位**時（PG 每個 backend 只快取 64 個已配發
+          XID 的子交易，而本 repo 每一次 route `write()` 都開一個 savepoint，
+          單一 request 內的數量不是理論值），判定**預期**會退化成走 `pg_subtrans`
+          找到最上層的 T ⇒ 「還在進行中」⇒ 補償交易改去等 **T 的 xact lock**。
+          而 T 正在同一個 Python thread 上同步等補償交易回來 ⇒ 互鎖成 hang，
+          且 PG 的 deadlock detector 看不到這個環（一邊是 PG 的鎖等待，另一邊
+          是 Python 的函式呼叫）。
+          ⚠ **這一格是讀 PG 原始碼推導的，沒有實際起一個 >64 子交易的情境重現
+          過 hang**（PR #802 覆核標為 plausible-未驗證）。`lock_timeout` 是依這個
+          推導設的防護，不是對著一個看過的紅燈設的。推導若有誤，最壞情況是這道
+          防護對某個真實情境沒必要——而不是它會造成傷害。
+
+        `SET LOCAL lock_timeout` 把那個 hang 換成一個會被下面 `except` 接住的
+        錯誤：補償失敗、原本的錯誤照常往外拋、log 出聲。**這條路徑的 backstop
+        是 reconciler 的「左 − 右」方向**（DB 有 app_id、CF 沒有），不是這裡。
+
+        同一段推理也解釋為什麼三腿都必須**先讓 savepoint 回捲、再呼叫本方法**：
+        沒回捲的話 T 的寫入還活著（`xmax` 是進行中的 xid），補償一定等鎖到逾時。
+
+        ## 兩筆交易，不是一筆
+
+        1. **記事實**：清掉 `access_app_id` 與該列 policy 的 `cf_policy_id`、
+           把 `access_protection_lost` 打開。這一筆先 commit，之後就算第 2 筆
+           整個爆掉，「這一列宣稱的保護沒有生效」也已經是持久事實。
+        2. **best-effort 立刻收斂**：對每一列重推一次 Access sync。operator 若
+           已恢復就當場建一顆新 app（payload 的 `existing_app_id` 已經是 None
+           ⇒ operator 走建立分支），窗口當場關掉、旗標由 sync 自己清掉。
+
+        兩筆分開是 [[post-commit-bookkeeping-rollback-unit]] 的規則二：回捲單位
+        對齊事實邊界。第 2 筆是網路呼叫、失敗是常態（會走到這裡通常正是因為
+        operator 剛剛才失敗過），不可以把第 1 筆一起拖下水。
+
+        ## 契約
+
+        `torn_down`：``[(model_name, res_id), …]``——**這一趟真的對 CF 送出並
+        成功拆掉**的那幾個錨點。呼叫端只能放進「已經拆成功」那幾條，不能放
+        「拆失敗」那條：拆失敗的列與它的 `access_app_id` 是重試錨點，動它會踩掉
+        `test_protected_route_unlink_teardown_failure_rolls_back_keeps_row`
+        鎖的既有契約。
+
+        **永遠不 raise**（連 `OperationalError` 也吞）：本方法的呼叫端一律在
+        `except` 裡、正準備把原本那個錯誤重新拋出。補償的例外若外拋，會把「
+        Cloudflare Access teardown failed …」換成一句與租戶動作無關的話——原本
+        的錯誤才是這次操作的真相。回傳 bool 供測試判別。
+
+        ## 🔴 涵蓋範圍的邊界（不要讀成「涵蓋所有回捲來源」）
+
+        本機制只在**例外經過某一腿自己的 `except`** 時才會跑。
+
+        **繞過它的那一格**：`odoo/service/model.py` 的 `retrying()` 在 `func()`
+        **返回之後**才 `env.cr.flush()`，所以**要等 request 層 flush 才觸發的
+        constraint**，它的回捲**不會進入本腿的 `except`**（`cr.savepoint()` 預設
+        `flush=True`，一部分 constraint 在 savepoint 離開時就炸得到、一部分不會）
+        ⇒ 已成功拆掉 CF 的那幾條列被還原、死 id 沒被清、旗標沒被打開、補償沒跑。
+        這一格**是真的 fail-open**，而且**會拋錯給呼叫端**——但那個錯誤訊息與本
+        機制無關，看的人不會知道 CF 側已經被拆掉了。收斂者是 #803（週期性重推）。
+
+        ⚠ **不要把它寫成「無聲的 fail-open」**：`retrying()` replay 的是**整個
+        使用者動作**，replay 成功時 DB 與 CF 最終**一致、不分歧**，殘留的是第一次
+        嘗試在 CF 上建出來的東西＝**孤兒**（那才是無聲的那一格，而孤兒**不歸本
+        機制管**——它不是「保護沒生效」是「CF 上多了東西」，偵測面屬 reconciler
+        的**右 − 左**方向，與本 PR 新增的左 − 右方向是不同的格）。兩者共用同一個
+        機制但不是同一條路徑。
+
+        ⚠ 未驗註記：上面的路徑區分是**讀 `retrying()` 原始碼推導**的，沒有實際
+        製造一次 `SerializationFailure` 觀測「replay 成功後兩側是否真的一致」，
+        也沒有實測哪一條 constraint 真的落在 request 層 flush。
+        另一格**有實測**的同型邊界見
+        `test_pre_write_on_the_same_row_defeats_the_compensation`：外層交易在
+        savepoint **之外**先寫過同一列時，補償撞 PG 寫寫衝突等到 `lock_timeout`
+        為止、失敗、出聲，死 id 留在列上（那一格靠 reconciler 的左 − 右方向偵測）。
+        """
+        if not torn_down:
+            return False
+        ok = False
+        try:
+            with self.env.registry.cursor() as cr:
+                # 逾時是安全參數不是效能參數（見 docstring 的「鎖」那段）。
+                cr.execute("SET LOCAL lock_timeout = %s",
+                           (self._COMPENSATE_LOCK_TIMEOUT,))
+                env = api.Environment(cr, SUPERUSER_ID, {})
+                for model_name, res_id in torn_down:
+                    record = env[model_name].browse(res_id).exists()
+                    if record:
+                        record._access_mark_protection_lost()
+            ok = True
+            logger.error(
+                "%s: Cloudflare Access app(s) were torn down but the "
+                "transaction rolled back — %d row(s) revived claiming "
+                "protection with no live Access app. Compensated in a "
+                "separate transaction: stored app id cleared and "
+                "access_protection_lost raised on %s (#794).",
+                label, len(torn_down), torn_down)
+        except Exception:
+            logger.exception(
+                "%s: Cloudflare Access app(s) were torn down but the "
+                "transaction rolled back AND the compensating write failed "
+                "for %s — those rows now claim is_protected with a dead "
+                "access_app_id and NOTHING enforces login on their hostname. "
+                "The reconcile report's dangling-app direction is the backstop "
+                "(#794).", label, torn_down)
+        # 第 2 筆交易：立刻重推，operator 若已恢復就當場關掉窗口。失敗不影響
+        # 第 1 筆已經 commit 的事實，也不影響回傳值。
+        if ok:
+            self._resync_after_fail_open(torn_down, logger, label)
+        return ok
+
+    @api.model
+    def _resync_after_fail_open(self, torn_down, logger, label):
+        """補償的第 2 筆交易：best-effort 重推 Access sync（見上面 docstring）。
+
+        逐列各自一個 savepoint：一列推不動（liveness gate 擋掉、operator 還沒
+        恢復）不該讓同批其他列連帶失去這次機會。
+
+        刻意直接呼叫三腿都有的 `_sync_access_to_operator()`，**不**開
+        `_force_access_sync` 之類的旁路：被 liveness gate 擋掉（SH 停權中、CS
+        已進 `deleting`）時「保護沒生效」本來就是實話，旗標留著讓 UI 說出來，
+        由那條腿自己的收斂點（resume / 下一次成功 sync）清掉才是對的。
+        """
+        try:
+            with self.env.registry.cursor() as cr:
+                cr.execute("SET LOCAL lock_timeout = %s",
+                           (self._COMPENSATE_LOCK_TIMEOUT,))
+                env = api.Environment(cr, SUPERUSER_ID, {})
+                for model_name, res_id in torn_down:
+                    record = env[model_name].browse(res_id).exists()
+                    if not record:
+                        continue
+                    try:
+                        with cr.savepoint():
+                            record._sync_access_to_operator()
+                    except Exception:
+                        logger.warning(
+                            "%s: immediate Access re-sync after the fail-open "
+                            "compensation did not go through for %s:%s — the "
+                            "row keeps access_protection_lost=True until a "
+                            "later successful sync (#794).",
+                            label, model_name, res_id, exc_info=True)
+        except Exception:
+            logger.warning(
+                "%s: could not open a cursor for the post-compensation "
+                "Access re-sync (%s) — rows keep access_protection_lost=True "
+                "until a later successful sync (#794).",
+                label, torn_down, exc_info=True)
 
     # ------------------------------------------------------------------ #
     #  #784：dead anchor 的回收者（這條帳唯一會被走到的出口）              #

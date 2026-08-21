@@ -41,6 +41,14 @@ class LeftSet:
     dns_record_ids: set = field(default_factory=set)
     subdomains: set = field(default_factory=set)
     namespace_names: set = field(default_factory=set)  # #277：CS ∪ agent 的 live ns 名（差集鍵=ns 名本身）
+    #: #794 方向 B 專用：**宣稱受保護、且手上握著一顆 CF app id** 的列。
+    #: key = app id、value = 人看得懂的標籤（哪一腿、哪一列、哪個 hostname）。
+    #: 刻意與 ``access_app_ids`` 分開：那個集合是方向 A（右 − 左）的白名單，
+    #: 收的是**全部** app id；本欄位是方向 B（左 − 右）的來源，只收「保護意圖
+    #: 為真」那一子集——未保護卻仍持有殘 id 的列下一次 sync 會送 enabled=False
+    #: 自癒（#784 的 `_access_sync_skip_reason` 逐格寫過），不是安全問題，
+    #: 收進來只會製造雜訊。
+    protected_access_apps: dict = field(default_factory=dict)
 
 
 _EMPTY = (False, None, "")
@@ -49,6 +57,21 @@ _EMPTY = (False, None, "")
 def _clean(values):
     """丟掉 False / None / 空字串（空 stored-id 不入左集，design B.3：in-flight 半完成不誤當持有）。"""
     return {v for v in values if v not in _EMPTY}
+
+
+def _collect_protected_apps(ls, records, leg, label_of):
+    """把「宣稱受保護、且握著一顆 CF app id」的列收進方向 B 的來源（#794）。
+
+    三腿的欄位名一致（``is_protected`` / ``access_app_id``），所以推導只寫一次。
+    同一顆 app id 理論上只會被一列持有；真撞上重複時保留先看到的那個標籤——
+    標籤只是給人看的，差集用的是 key。
+    """
+    for record in records:
+        if not record.is_protected or not record.access_app_id:
+            continue
+        ls.protected_access_apps.setdefault(
+            record.access_app_id,
+            '%s %s (%s)' % (leg, record.id, label_of(record) or '?'))
 
 
 def collect_left_set(env) -> LeftSet:
@@ -76,6 +99,8 @@ def collect_left_set(env) -> LeftSet:
     ls.dns_record_ids |= _clean(routes.mapped('dns_record_id'))
     ls.access_app_ids |= _clean(routes.mapped('access_app_id'))
     ls.subdomains |= _clean(routes.mapped('subdomain_prefix'))
+    _collect_protected_apps(
+        ls, routes, 'SA route', lambda r: r.hostname or r.subdomain_prefix)
     # 第 2 層：route_ids → access_policy_ids → cf_policy_id（dotted mapped 走完整 binding 鏈）
     ls.access_policy_ids |= _clean(sa.mapped('route_ids.access_policy_ids.cf_policy_id'))
 
@@ -87,6 +112,8 @@ def collect_left_set(env) -> LeftSet:
     # `cloud_service_id`），與 :75 的 SA 腿對稱、互不重疊。
     ls.access_app_ids |= _clean(cs.mapped('access_app_id'))
     ls.access_policy_ids |= _clean(cs.mapped('access_policy_ids.cf_policy_id'))
+    _collect_protected_apps(
+        ls, cs, 'cloud service', lambda r: r.subdomain or r.name or '')
     for service in cs:
         if service.helm_release_name and service.helm_namespace:
             ls.subdomains.add(
@@ -104,6 +131,8 @@ def collect_left_set(env) -> LeftSet:
     ls.access_app_ids |= _clean(sm.mapped('route_ids.access_app_id'))
     ls.access_policy_ids |= _clean(
         sm.mapped('route_ids.access_policy_ids.cf_policy_id'))
+    _collect_protected_apps(
+        ls, sm.mapped('route_ids'), 'SH route', lambda r: r.hostname or '')
 
     # ── ns（#277）：cluster paas-ws-* 的 live 白名單 = CS 共用 ns ∪ agent per-project ns ──
     # 漏 agent ns 會把所有活躍 agent ns 誤判孤兒（災難）；CS state='deleting' 排除（過渡態，
@@ -193,6 +222,80 @@ def compute_orphans(resources, left_set, *, partial=False) -> ReconcileResult:
                 ),
             ))
     return ReconcileResult(dry_run=True, partial=degraded, orphan_candidates=candidates)
+
+
+#: 方向 B 產出的候選 kind。**刻意不叫 ``access_app``**：那是右集 inventory 的
+#: kind，兩個方向的語意剛好相反（`access_app` ＝ CF 有、Odoo 沒有；本 kind ＝
+#: Odoo 有、CF 沒有），共用同一個字串會讓報表上兩種列長得一模一樣，而人要做的
+#: 處置也相反。
+KIND_DANGLING_ACCESS_APP = 'access_app_missing'
+
+
+def compute_dangling_protected_apps(resources, left_set, *, partial=False):
+    """方向 B（**左 − 右**）：Odoo 宣稱受保護、CF 上卻找不到那顆 app（#794）。
+
+    ## 為什麼要有反方向
+
+    `compute_orphans` 的方向是右 − 左（CF 有、Odoo 沒有），照不到 #794 那一格：
+    Access app 被拆掉之後 DB 交易回捲，列帶著 ``is_protected=True`` 與一顆指向
+    已刪 app 的 ``access_app_id`` 復活 ⇒ UI 顯示已保護、hostname 實際免登入即可
+    存取。平台沒有週期性 Access re-sync，所以在有人剛好去改該 route 的 Access
+    設定之前，沒有任何管道會發現。
+
+    正常情況下 `models/cf_access_policy_reap` 的補償寫會當場把死 id 清掉並打開
+    ``access_protection_lost``；**本函式是那條補償失敗時的 backstop**（補償跑在
+    獨立連線上，撞到鎖逾時就寫不進去）。
+
+    ## 🔴 方向一反，安全性質也跟著反（動這裡之前先讀完）
+
+    `compute_orphans` 的方向是刻意選的：右集退化／空 ⇒ **少報**（safe miss），
+    絕不會把左集全判成孤兒。本方向沒有那個保護——右集少一顆，就等於多報一條
+    「活著的 app 已經死了」。所以：
+
+    * ``partial`` 為真（某類 list-all 失敗、分頁不全、operator 自報不完整）
+      ⇒ **整個方向跳過**，不是「儘量報」。這一格寧可漏報。
+    * 產出的候選一律 ``reconcilable=False``：本報表本來就零刪除，而這個方向的
+      誤報方向（把活著的 app 說成死的）比方向 A 更需要人工確認。
+
+    ## 已知的誤報窗（不修，只寫清楚）
+
+    `reconcile_orphans` **先讀右集再蒐左集**（那個順序是為方向 A 選的：縮短
+    「CF 已建、Odoo id 未回填」的誤判窗）。對本方向那個順序恰好是最差的：兩次
+    讀取之間剛建好的 app 會出現在左集、不在右集 ⇒ 誤報。窗口＝一次對帳的時間，
+    而本報表是低頻 cron ＋ 零刪除 ＋ 有單筆重查端點，所以接受；reason 裡寫明讓
+    看報表的人知道要重查。
+    """
+    if partial:
+        _logger.warning(
+            "reconcile 方向 B（Odoo 宣稱受保護、CF 找不到 app）本輪跳過："
+            "掃描標記為 partial，右集不完整 ⇒ 反方向會把活著的 app 誤報成已死。"
+            "寧可漏報（#794）。")
+        return []
+    live_app_ids = {
+        r.get('id') for r in resources
+        if r.get('kind') == 'access_app' and r.get('id')
+    }
+    candidates = []
+    for app_id, label in sorted(left_set.protected_access_apps.items()):
+        if app_id in live_app_ids:
+            continue
+        candidates.append(OrphanCandidate(
+            id=app_id,
+            name=label,
+            kind=KIND_DANGLING_ACCESS_APP,
+            env_hint='unknown',
+            reconcilable=False,
+            reason=(
+                'Odoo 這一列宣稱 is_protected=True 並持有 CF Access app id '
+                '%s，但該 id 不在 CF 帳號級 inventory 裡 ⇒ 沒有任何東西在強制'
+                '登入這個 hostname（#794 的無聲 fail-open 形狀）。處置：對該列'
+                '做一次 Access sync（payload 的 existing_app_id 為死 id 時 '
+                'operator 會 404；先清掉列上的 app id 再推就會重建）。'
+                '⚠ 先單筆重查：本方向在「app 剛建好、對帳的兩次讀取之間」會'
+                '誤報。' % (app_id,)
+            ),
+        ))
+    return candidates
 
 
 # ── 分類層（TS-4 S3+S4）：env attribution + 結構 allowlist + protected + tripwire ──────
@@ -424,4 +527,13 @@ def reconcile_orphans(env, client=None) -> ReconcileResult:
     # 分類層：env attribution + 結構 allowlist + protected（shared tunnel 本體）+ tripwire。
     # in-flight 一級誤刪向量（先建 CF→再寫 Odoo id）首版靠「reconcilable 結構恆 False」擋住刪除；
     # env attribution 會給 in-flight 活躍資源 confident env_hint，但結構 predicate 不據此升 True。
-    return classify_candidates(result, pinned_env=deploy_env, shared_tunnel_id=shared_tunnel_id)
+    result = classify_candidates(result, pinned_env=deploy_env, shared_tunnel_id=shared_tunnel_id)
+    # 方向 B（左 − 右，#794）**接在分類層之後**，刻意不經過 classify_candidates：
+    # 那一層的 env attribution 讀的是右集資源名，本方向的 name 是 Odoo 這側的
+    # 標籤，餵進去只會得到一句與本格無關的 unknown 註記蓋掉自己的 reason。
+    # 這些候選在建構時就寫死 reconcilable=False，因此不需要再跑一次 tripwire
+    # （tripwire 只對 reconcilable=True 出手）。
+    result.orphan_candidates.extend(
+        compute_dangling_protected_apps(
+            resources, left_set, partial=result.partial))
+    return result
