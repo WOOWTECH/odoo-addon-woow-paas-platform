@@ -1,7 +1,15 @@
-"""Verify woow_skip_upstream_hook + woow_force_issue context behave correctly."""
+"""Verify woow_skip_upstream_hook + woow_force_issue context behave correctly.
+
+⚠ #787：開閘的判準已從「truthy」改成**模組私有 sentinel 的物件身分**，所以本檔
+的「cron 路徑」那一格必須走 `_forced_ecpay_issue()` helper。裸
+`with_context(woow_force_issue=True)` 從此不開閘、而且會拋 `UserError`——那條路
+由 `test_ecpay_force_issue_ctx_forgery_787.py` 的 G 組守。
+"""
 from unittest.mock import patch
 
 from odoo.tests.common import TransactionCase
+
+from ..models.account_move import _forced_ecpay_issue
 
 
 class TestCreateEcpayInvoiceShortCircuit(TransactionCase):
@@ -51,14 +59,14 @@ class TestCreateEcpayInvoiceShortCircuit(TransactionCase):
             upstream.assert_called()
 
     def test_force_issue_context_bypasses_skip(self):
-        """flag=True + woow_force_issue=True → upstream called (cron's path)."""
+        """flag=True + sentinel 開閘 → upstream called (cron's path)."""
         inv = self._make_invoice(skip_flag=True)
         with patch(
             'odoo.addons.ecpay_invoice_tw.models.account_invoice.AccountMove'
             '.create_ecpay_invoice',
             autospec=True,
         ) as upstream:
-            inv.with_context(woow_force_issue=True).create_ecpay_invoice()
+            _forced_ecpay_issue(inv).create_ecpay_invoice()
             upstream.assert_called()
 
     def test_action_post_with_skip_flag_does_not_invoke_upstream(self):

@@ -495,6 +495,15 @@ from . import test_cs_sync_ctx_forgery_787
 # ＝守衛被繞過）、D2（停權中的 SH 仍推去 CF）、A3／C3／D3（偽造完全沒有訊號）。
 from . import test_sh_sync_ctx_forgery_787
 
+# #787 A 段最後一把 `woow_force_issue`：**force 型**（前四把都是 skip 型，安全側
+# 相反）。讀取點在 `account_move.py::create_ecpay_invoice`，偽造成功的後果是把一
+# 件本來不會發生、而且**不可逆**的對外動作做出來——真的向 ECPay 開一張電子發票。
+# 本檔是可達性探針：R 組打一般租戶身分（`base.group_user`），P 組是陽性對照
+# （只差 context 裡那一個 key，`upstream.called` 就從 False 翻成 True，證明
+# call_kw 真的把呼叫端 context 換進讀取點的 env、也證明觀測點沒壞）。
+# 🔴 判定一律走離線替身（patch 上游那支方法本身）⇒ 全程不對 ECPay 送出任何請求。
+from . import test_ecpay_force_issue_ctx_forgery_787
+
 # fix: #739 只掛 base.group_user 的租戶經 `/woow` 打 provision 從來沒有成功過
 # ——`tunnel_token` 帶 `groups='base.group_system'`，而 `_provision_smarthome`
 # 用的是非 sudo 的租戶 recordset ⇒ 那次 write 必 AccessError、記錄卡在
@@ -536,3 +545,16 @@ from . import test_access_failopen_compensation_794
 # TransactionCase 的 cursor 不可 commit/rollback ⇒ 結構上造不出「整筆交易被
 # 丟棄」這個事件，而那正是 #794 的成因本身。
 from .integration import test_failopen_real_rollback_794  # noqa: F401
+
+# fix: #785 SH route 的 `_capture_access_teardown()` 用同一個 `None` 表達兩種
+# 語意（「沒東西要拆」vs「有東西但預測推不動」），消費端一律 `continue`、不計入
+# `failed` ⇒ 呼叫端的 fail-loud（unlink 回滾保錨點）與落 error（_do_cleanup）
+# 雙雙判成「這一輪乾淨」，繼續往下刪列 ⇒ CF 上的 app ＋ reusable policy 留著、
+# DB 列沒了、無重試錨點也無訊號。修法把那道**預測性** liveness 閘拆掉、判準對齊
+# SA／CS 的「手上有沒有 id 要拆」，「推不動」改由真的推一次的成敗決定。
+# RED 群集：A2（有 id 但推不動時回 None）、B1（operator 一次都沒被打）、
+# B2（沒有 raise、列消失、零訊號）、B3（_do_cleanup 直接寫 deleting ＝假成功）。
+# 對照組：A1／A3（訊號的三格判定）、B4（推不動本身不得阻擋刪除）。
+# C 系列鎖留言 7951 點名的「清 tunnel_id 前先清 cf_policy_id」跨方法不變式
+# （零 gate／零 assert／零測試），守的是 DB 狀態版而非 mock 呼叫順序。
+from . import test_sh_teardown_capture_semantics_785

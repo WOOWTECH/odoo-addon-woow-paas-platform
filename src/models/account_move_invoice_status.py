@@ -27,8 +27,10 @@ class AccountMoveInvoiceStatus(models.Model):
         help='When True, this account.move\'s create_ecpay_invoice() '
              'short-circuits when called from upstream ecpay_invoice_tw\'s '
              'inline action_post hook. PaaS-created invoices set this so only '
-             'our async ecpay_invoice_cron (which uses '
-             'with_context(woow_force_issue=True)) issues the e-invoice. Has no '
+             'our async ecpay_invoice_cron (which opens the hatch through the '
+             'module-private helper in models/account_move.py — a plain truthy '
+             'context value is forgeable over call_kw and no longer works, '
+             'see #787) issues the e-invoice. Has no '
              'effect when company.auto_invoice is "manual" (the upstream inline '
              'hook is a no-op in that case anyway).',
     )

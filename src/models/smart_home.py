@@ -496,6 +496,11 @@ class SmartHome(models.Model):
         failed = []
         for route in self.sudo().route_ids:
             info = route._capture_access_teardown()
+            # #785：這個 `continue` 只吃得到「列上沒有任何 id 要拆」。「有東西
+            # 但推不動」曾經也回 `None` 而從這裡被靜默吃掉、不計入 `failed`
+            # ⇒ 兩個呼叫端（`unlink` 的 fail-loud、`_do_cleanup` 的落 error）
+            # 都判成「這一輪乾淨」。那道預測性 liveness 閘已經拆掉，見
+            # `smart_home_route._capture_access_teardown()` 的 docstring。
             if not info:
                 continue
             # `torn_down` 交給 `_push_access_teardown` 在 operator 回 2xx 當下

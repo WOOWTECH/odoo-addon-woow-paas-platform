@@ -567,11 +567,20 @@ class TestShAccessTeardown(_ShAccessSyncFixture):
         """順序：先拆 Access、後拆 tunnel；且 id 在列消失**之前**捕獲。
 
         兩件事各自的失敗形狀：
-        * 順序反了 ⇒ tunnel 先沒，`_capture_access_teardown` 的 liveness gate
-          （讀 `sh.tunnel_id`）從此回 False，Access app 一輩子拆不掉。
+        * 順序反了 ⇒ 一顆**還在計費**的 tunnel 會在「Access 拆得掉嗎」有答案之
+          前就被刪掉；之後 Access teardown 一失敗就 raise，savepoint 把
+          `tunnel_id` 回捲回來 ⇒ DB 宣稱有一顆 CF 上已經不存在的 tunnel，重試
+          只會對空氣發 delete。
         * 捕獲晚了 ⇒ `super().unlink()` 已經把 `access_app_id` 與每條 policy 的
           `cf_policy_id` 帶走，operator 沒有 id 可刪，而且**連一列可以驅動重試
           的 DB 記錄都不剩**。
+
+        ⚠ #785 之前這條的第一個理由寫的是「tunnel 一沒，`_capture_access_
+        teardown` 的 liveness gate 就回 False，Access app 一輩子拆不掉」。那道
+        預測性 liveness 閘已經拆掉（operator 的 teardown 分支不碰 tunnel、不讀
+        hostname），所以順序反了**不再**靜默漏拆——理由換成上面那條，斷言本身
+        不變。「cf id 一定在 `tunnel_id` 之前被清掉」這條不變式的 DB 狀態版斷言
+        在 `test_sh_teardown_capture_semantics_785.py` 的 B 系列。
         """
         self._configure(is_protected=True)
         self._policy(cf_policy_id='cf-1')
@@ -587,8 +596,8 @@ class TestShAccessTeardown(_ShAccessSyncFixture):
         self.assertIn('delete_tunnel', names, 'tunnel 仍然要被拆')
         self.assertLess(
             names.index('sync_access_app'), names.index('delete_tunnel'),
-            'Access 必須在 tunnel 之前拆：tunnel 一沒，route 的 liveness gate '
-            '就回 False，CF 上的 Access app 再也沒有路徑拆得掉')
+            'Access 必須在 tunnel 之前拆：反過來會先刪掉一顆還在計費的 tunnel，'
+            '而 Access 拆不拆得掉此時還沒有答案（見本方法 docstring）')
 
         payload = client.sync_access_app.call_args.args[0]
         self.assertFalse(payload['enabled'])
