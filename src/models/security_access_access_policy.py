@@ -641,9 +641,11 @@ class SecurityAccessAccessPolicy(models.Model):
 
         ### 為什麼不走 context
 
-        `sa_unlinked_cf_policy_ids` 用完即丟，而舊錨點這一次重推可能被它自己的
+        一次性的 context 通道用完即丟，而舊錨點這一次重推可能被它自己的
         liveness gate 整個擋掉（停權中的 SA 就是）——擋掉之後那顆 id 就沒有任何
         記錄指向它。這正是 #528 的根因，帳本就是為了那一格存在的。
+        （本節原本指名的 `sa_unlinked_cf_policy_ids` 已於 #783 整條移除，理由見
+        `cf_access_policy_reap` 模組 docstring 的設計決定 1。）
 
         ### 為什麼**不看** `_CTX_SKIP_ROUTE_SYNC`
 
@@ -828,11 +830,19 @@ class SecurityAccessAccessPolicy(models.Model):
         # (delete-old-then-create), which _build_access_payload derives from the
         # SURVIVING rows. Once the row is gone its cf id never enters that list,
         # so the operator never deletes the policy → permanent CF orphan, one
-        # leaked per unlink. Inject the captured ids per-ANCHOR on the resync so
-        # the operator reaps them.
+        # leaked per unlink. The captured ids are booked per-ANCHOR on
+        # `cf_access_policy_reap` so the operator reaps them.
         #
-        # #528：光靠 context 不夠——那一次 resync 被 gate 擋掉的話 id 就永久消失。
-        # 同一批 id 另外落進 `cf_access_policy_reap` 帳本（見下方 savepoint 內）。
+        # #528：一次性的通道不夠——那一次 resync 被 gate 擋掉的話 id 就永久消失，
+        # 所以帳要落進 DB（見下方 savepoint 內）。
+        #
+        # #783：帳本是**唯一**的通道了。原本這裡另外用
+        # `with_context(sa_unlinked_cf_policy_ids=...)` 把同一批 id 帶給那一次
+        # re-sync，但 `_pending_for()` 讀的是「錨點當下的 env.context」，而
+        # `/web/dataset/call_kw` 把呼叫端 context 整包換進 env ⇒ 那條腿等於讓租戶
+        # 指定 operator 去刪任何一顆它知道 id 的**帳號級** CF reusable policy。
+        # 拿掉它不減功能：下面的 `_record_ids()` 對每一個錨點**無條件**執行、而
+        # context 只注入給 `exists()` 的子集 ⇒ 帳本本來就是它的嚴格超集。
         #
         # #745：key 帶上 model 名——route 與 cloud_service 的 id 各自從 1 開始，
         # 只用 id 當 key 會把 route#3 的孤兒 id 餵給 cloud_service#3。
@@ -848,16 +858,16 @@ class SecurityAccessAccessPolicy(models.Model):
             result = super().unlink()
             # #528：落帳在**推之前**，而且刻意不看 `anchor.exists()`。
             #
-            # context 那條通道只活一次呼叫，而那一次 `_sync_access_to_operator()`
-            # 可能被錨點的 liveness gate 整個擋掉（SA／SH 的停權狀態就是）——擋掉
-            # 之後 DB 列已刪、context 已丟，那顆 CF policy 從此沒有任何記錄指向
-            # 它，operator 唯一的刪除通道（`existing_policy_ids`）再也帶不到它。
-            # 帳落進 DB，壽命就不再綁在「這一次 sync 有沒有跑」上。
+            # 這一次 `_sync_access_to_operator()` 可能被錨點的 liveness gate 整個
+            # 擋掉（SA／SH 的停權狀態就是）——擋掉之後 DB 列已刪，那顆 CF policy
+            # 若沒有任何記錄指向它，operator 唯一的刪除通道
+            # （`existing_policy_ids`）就再也帶不到它。帳落進 DB，壽命才不綁在
+            # 「這一次 sync 有沒有跑」上。（#528 之前那條 context 通道只活一次
+            # 呼叫，正是這一格被打穿的原因；它已於 #783 移除。）
             #
-            # ⚠ 餵進去的一律是**列上讀到的** `cf_policy_id`，不是 context 的值：
-            # `sa_unlinked_cf_policy_ids` 是一把裸 context key（call_kw 把呼叫端
-            # 的 context 原封不動交給 ORM），把它的值寫進 DB 等於把一次性的偽造
-            # 升級成持久的偽造，而它決定的是**帳號級** CF 物件要不要被刪。
+            # ⚠ 餵進去的一律是**列上讀到的** `cf_policy_id`。這張表決定的是
+            # **帳號級** CF 物件要不要被刪，所以它的輸入只能是伺服器端從 DB 列讀
+            # 到的值——#783 之所以把 context 那條腿整個拿掉，是同一條理由。
             #
             # sync 拋例外時這段連同 `super().unlink()` 一起被 savepoint 回捲——
             # 那是對的：列活著，cf id 就還在列上，不需要帳。
@@ -866,11 +876,10 @@ class SecurityAccessAccessPolicy(models.Model):
                 Reap._record_ids(anchor_model, anchor_id, doomed)
             for anchor in affected:
                 if anchor.exists():
-                    doomed = doomed_by_anchor.get(
-                        (anchor._name, anchor.id)) or []
-                    anchor.with_context(
-                        sa_unlinked_cf_policy_ids=doomed
-                    )._sync_access_to_operator()
+                    # doomed id 由上面剛落的帳供給（`_build_existing_policy_ids`
+                    # → `_pending_for` → `_pending_ids`）。這裡刻意**不帶任何
+                    # context**：#783。
+                    anchor._sync_access_to_operator()
         return result
 
     def _rules_by_group(self, group):

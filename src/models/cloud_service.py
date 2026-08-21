@@ -3321,14 +3321,21 @@ class CloudService(models.Model):
     def _build_existing_policy_ids(self):
         """operator 這一輪必須刪掉的舊 reusable policy id（形態同 SA route）。
 
-        平常是尚存列的 `cf_policy_id`；policy 的 unlink 會先跑
-        `super().unlink()` 才 re-sync，所以剛被刪那幾列的 cf id 已經不在 DB 裡
-        ——不由 context 補進來的話，operator（唯一的刪除來源就是這個清單）永遠
-        不會刪它們，每刪一條 policy 就漏一顆永久 CF 孤兒。
+        兩個來源，兩個都是伺服器端讀到的：尚存列的 `cf_policy_id`，加上這個錨點
+        在待回收帳本上還欠的（`cf_access_policy_reap._pending_for`）。
 
-        #528：來源從「只有本次 context」擴成「**帳本 ∪ 本次 context**」。context
-        用完即丟，而那一次 re-sync 可能被下面的 liveness gate 整個擋掉——被擋掉
-        的那些 id 就此沒有任何記錄指向它們。帳本讓它們活到下一次推得動為止。
+        policy 的 unlink 會先跑 `super().unlink()` 才 re-sync，所以剛被刪那幾列
+        的 cf id 已經不在 DB 裡、永遠進不了這份清單，而 operator 唯一的刪除來源
+        就是它 ⇒ 每刪一條 policy 就漏一顆永久 CF 孤兒。它們是**經帳本**進來的：
+        `unlink()` 在同一個 savepoint 內先 `Reap._record_ids()` 落帳，才觸發
+        re-sync。
+
+        #528：帳要離開一次性的通道、落到 DB——那一次 re-sync 可能被下面的
+        liveness gate 整個擋掉，只活一次呼叫的東西被擋掉之後就沒有任何記錄指向
+        那些 id 了。帳本讓它們活到下一次推得動為止。
+
+        🔴 #783：`_pending_for()` **不讀任何 context**（舊的
+        `sa_unlinked_cf_policy_ids` 通道已整條移除，理由見該函式的 docstring）。
         """
         self.ensure_one()
         ids = [p.cf_policy_id for p in self.access_policy_ids if p.cf_policy_id]
