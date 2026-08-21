@@ -31,7 +31,9 @@
 1	fn:check_seed_topology
 1	fn:check_sh_subscription_group_isolation
 1	fn:check_slug_capability_gate
+1	fn:check_test_class_execution
 1	fn:check_test_env_restore
+1	fn:check_test_module_collection
 1	fn:check_transition_anchor_utc
 1	fn:check_tunnel_config_wire_shape
 1	fn:check_workspace_access_rule_directions
@@ -61,6 +63,7 @@
 1	rule:security-rule-lifecycle
 1	rule:seed-topology
 1	rule:sh-subscription-group-isolation
+1	rule:test-collectability
 1	rule:test-env-restore
 1	rule:transition-anchor-utc
 1	rule:tunnel-config-wire-shape
