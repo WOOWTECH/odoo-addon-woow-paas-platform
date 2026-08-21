@@ -641,9 +641,11 @@ class SecurityAccessAccessPolicy(models.Model):
 
         ### 為什麼不走 context
 
-        `sa_unlinked_cf_policy_ids` 用完即丟，而舊錨點這一次重推可能被它自己的
+        一次性的 context 通道用完即丟，而舊錨點這一次重推可能被它自己的
         liveness gate 整個擋掉（停權中的 SA 就是）——擋掉之後那顆 id 就沒有任何
         記錄指向它。這正是 #528 的根因，帳本就是為了那一格存在的。
+        （本節原本指名的 `sa_unlinked_cf_policy_ids` 已於 #783 整條移除，理由見
+        `cf_access_policy_reap` 模組 docstring 的設計決定 1。）
 
         ### 為什麼**不看** `_CTX_SKIP_ROUTE_SYNC`
 
