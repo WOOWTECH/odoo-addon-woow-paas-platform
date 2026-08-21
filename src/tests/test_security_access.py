@@ -929,7 +929,17 @@ class TestSecurityAccessAcl(TransactionCase):
     def test_provision_token_write_fails_closed_for_non_system_owner(self):
         """field-group 語意鎖：非 system 的 workspace owner 觸發 provision，
         tunnel_token（groups='base.group_system'）寫入應 fail-closed（AccessError），
-        而非被某人改 sudo 後悄悄放行。鏡像 smart_home 的非 sudo provision 行為。"""
+        而非被某人改 sudo 後悄悄放行。
+
+        ⚠ 這條**不再**與 smart_home 對稱：#739／PR #797 之後 smart_home 的
+        provision 改由平台身分驅動（controllers/smart_home.py 的
+        `smarthome.sudo().action_provision()`），而 security_access 這一側今天
+        仍在呼叫者身分下執行（controllers/security_access.py 的
+        `sa.action_provision()`，無 `.sudo()`）⇒ 兩者的 provision 身分語意已分歧，
+        別把任一側的結論搬到另一側。
+
+        本測試鎖的是 security_access **當下**的行為；它該不該跟進
+        smart_home 改成 sudo，是 #805 (b) 待裁，這裡不預設答案。"""
         from odoo.exceptions import AccessError
         mock_client = MagicMock()
         mock_client.create_tunnel.return_value = {
