@@ -19,6 +19,15 @@
 若寫成 skip，就落進 #544／#684 那個家族——**skipped 算進 testsRun 卻不出現在 summary**，
 「沒跑」與「通過」的輸出完全相同。repo-lint 跑在 repo 上，`extra/` 一定在。
 
+🔴 **本檔的 class 為什麼必須繼承 Odoo 的 TestCase**：`TagsSelector.check()` 在
+`hasattr(test, 'test_tags')` 為 False 時直接 `return False`，而那個屬性是 `odoo.tests.common`
+的 `MetaCase` 掛上去的——純 `unittest.TestCase` 沒有 ⇒ **整個 class 被靜默排除**，訊息只記在
+DEBUG level，`0 failed, 0 error(s) of N tests` 看起來完全正常。這不是假設：本檔 merge 進
+develop 之後，腿 2 從落地那天起一條都沒有執行過（#806）。基底取 `BaseCase` 而不是
+`TransactionCase`——本檔不碰 ORM、不需要 cursor / env，要的只是 `MetaCase` 掛的那組 tag 屬性
+（`test_tags` / `test_module` / `test_class`），那是「能被收集」的最弱條件。
+⚠ 換基底會連帶把 `BaseCase` 的對外請求守衛帶進來，見下方 `_request_handler` 的說明。
+
 ## 本檔守的是哪一半
 
 `_do_suspend` / `_do_resume` 唯一的出海口是
@@ -35,10 +44,11 @@
 HTTP 序列化整層被 mock 掉 ⇒ 那支測試對這件事永遠是綠的，本檔才是這一側唯一的守線。
 """
 import json
-import unittest
 from urllib.parse import parse_qs, urlparse
 
 import requests
+
+from odoo.tests.common import BaseCase
 
 TUNNEL_ID = "tun-769"
 HOSTNAME = "ha-769.woowtech.io"
@@ -73,8 +83,28 @@ class _CapturingAdapter(requests.adapters.HTTPAdapter):
         return response
 
 
-class TestConfigureTunnelWireShape(unittest.TestCase):
+class TestConfigureTunnelWireShape(BaseCase):
     """`PaaSOperatorClient.configure_tunnel()` 送出的 wire 形狀。"""
+
+    @classmethod
+    def _request_handler(cls, s, r, /, **kw):
+        """把分派交還給 session 自己 mount 的 adapter（探針就掛在那裡）。
+
+        🔴 這不是「放寬」測試：`BaseCase.setUpClass` 會 patch
+        `requests.Session.send`，讓所有請求繞過 adapter 直接進這支 handler
+        （非 localhost 一律 `BlockedRequest`）。也就是說**光換基底，本檔的
+        `_CapturingAdapter` 會整層失效**——4 條全部 error 在
+        `PaaSOperatorConnectionError`，而那個訊息看起來像 client 壞了。
+
+        這裡只把「本檔自己掛上去的那個 adapter」還原成分派目標；不是它的
+        （例如某條測試日後另外開了 session）仍交回 `BaseCase` 擋下，Odoo 的
+        對外請求守衛在本 class 不被整個關掉。`_CapturingAdapter` 從不開
+        socket，所以還原之後也不會有任何封包離開行程。
+        """
+        adapter = s.get_adapter(r.url)
+        if isinstance(adapter, _CapturingAdapter):
+            return adapter.send(r, **kw)
+        return super()._request_handler(s, r, **kw)
 
     def setUp(self):
         super().setUp()
