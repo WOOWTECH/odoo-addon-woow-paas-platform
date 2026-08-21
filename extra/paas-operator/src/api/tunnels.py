@@ -5,6 +5,7 @@ from fastapi import APIRouter, HTTPException, status
 
 from src.config import settings
 from src.models.schemas import (
+    TunnelConfigUpdateRequest,
     TunnelCreateRequest,
     TunnelCreateResponse,
     TunnelRoutesSyncRequest,
@@ -217,16 +218,25 @@ async def get_tunnel_token(tunnel_id: str):
     "/{tunnel_id}/config",
     summary="Update tunnel ingress configuration",
 )
-async def update_tunnel_config(tunnel_id: str, hostname: str, service_url: str):
+async def update_tunnel_config(
+    tunnel_id: str, request: TunnelConfigUpdateRequest
+):
     """Update a tunnel's ingress rules.
 
     Used for subscription suspend (service_url="http_status:503")
     and resume (service_url="http://localhost:PORT").
 
+    #769: ``hostname`` / ``service_url`` arrive in the **request body**. They
+    used to be bare ``str`` parameters, which FastAPI binds as required query
+    params — and the only caller (Odoo ``PaaSOperatorClient.configure_tunnel``)
+    sends a JSON body, so every call was a 422 that the caller swallowed into
+    ``state='error'``. Deliberately **not** dual-accepting query params: stg
+    access logs over 14 days show no third party using that form, and a second
+    accepted shape doubles the contract surface for nothing.
+
     Args:
         tunnel_id: The Cloudflare Tunnel ID.
-        hostname: Public hostname (e.g., ha-xxx.woowtech.io).
-        service_url: Target service URL or "http_status:503".
+        request: Desired ingress config (hostname + target service URL).
 
     Returns:
         Configuration confirmation message.
@@ -243,16 +253,17 @@ async def update_tunnel_config(tunnel_id: str, hostname: str, service_url: str):
     try:
         await cloudflare_service.configure_tunnel(
             tunnel_id=tunnel_id,
-            hostname=hostname,
-            service_url=service_url,
+            hostname=request.hostname,
+            service_url=request.service_url,
         )
         logger.info(
-            f"Updated tunnel {tunnel_id} config: {hostname} -> {service_url}"
+            f"Updated tunnel {tunnel_id} config: "
+            f"{request.hostname} -> {request.service_url}"
         )
         return {
             "message": f"Tunnel {tunnel_id} configuration updated",
-            "hostname": hostname,
-            "service_url": service_url,
+            "hostname": request.hostname,
+            "service_url": request.service_url,
         }
 
     except CloudflareException as e:

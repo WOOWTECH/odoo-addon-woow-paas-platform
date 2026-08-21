@@ -513,3 +513,12 @@ from . import test_sh_provision_tenant_rpc_739
 # 當成自己的送去刪）、B1（推不動時那顆 id 沒有任何 durable 記錄）、D1（跨錨點
 # 回存錯位而完全無聲）、F1（授權檢查晚於不可回捲的 CF 變更）。
 from . import test_access_policy_reanchor_786
+
+# fix: #769 `PUT /api/tunnels/{id}/config` 的 wire 契約破裂（operator 端裸 str ⇒
+# FastAPI 綁 query param，client 送 JSON body ⇒ 每次呼叫必 422，被 SH 的
+# `except Exception` 吞成 state='error'）。本檔是三腿守線的**腿 2**：攔在 requests
+# 真正送出之前，斷言 client 組出來的 PreparedRequest 把欄位放在 body、query 為空。
+# 腿 1（真 app 送 body ⇒ 2xx）在 extra/paas-operator/tests/；腿 3（跨層 AST 比對）
+# 在 scripts/audit/repo-lint.py 的 tunnel-config-wire-shape——operator 不進 Odoo
+# image，跨層那腿在 src/tests/ 裡跑不到。
+from . import test_tunnel_config_wire_769
