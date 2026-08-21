@@ -11,6 +11,7 @@ import uuid
 from unittest.mock import patch, MagicMock, AsyncMock
 
 from odoo.tests.common import TransactionCase, tagged
+from ..models.cloud_service import _internal_provision
 
 
 @tagged('post_install', '-at_install')
@@ -270,7 +271,7 @@ class TestAutoCreateMCPServer(TransactionCase):
             'mcp_auth_token': str(uuid.uuid4()),
         }
         vals.update(overrides)
-        service = self.Service.create(vals)
+        service = _internal_provision(self.Service).create(vals)
         self.env['project.project'].sudo().create({
             'name': f'{service.name} Project',
             'cloud_service_id': service.id,
@@ -453,7 +454,7 @@ class TestMCPServerCronRetry(TransactionCase):
         NULL). Seed a bound project per call so each test gets a fresh
         service + project + MCP triplet.
         """
-        service = self.Service.create({
+        service = _internal_provision(self.Service).create({
             'name': 'Cron Service',
             'workspace_id': self.workspace.id,
             'template_id': self.mcp_template.id,
@@ -506,7 +507,7 @@ class TestMCPServerCronRetry(TransactionCase):
     @patch('odoo.addons.woow_paas_platform.models.mcp_server.McpServer.action_sync_tools_safe')
     def test_cron_does_not_touch_manual_servers(self, mock_sync):
         """Manual (non-auto_created) MCP Servers are NOT affected by cron."""
-        service = self.Service.create({
+        service = _internal_provision(self.Service).create({
             'name': 'Manual Service',
             'workspace_id': self.workspace.id,
             'template_id': self.mcp_template.id,
@@ -591,7 +592,7 @@ class TestMCPServerSyncSafe(TransactionCase):
             'helm_chart_version': '1.0.0',
             'min_vcpu': 1, 'min_ram_gb': 1.0, 'min_storage_gb': 1,
         })
-        cls.service = Service.create({
+        cls.service = _internal_provision(Service).create({
             'name': 'Sync Safe Service',
             'workspace_id': cls.workspace.id,
             'template_id': cls.template.id,
@@ -599,6 +600,25 @@ class TestMCPServerSyncSafe(TransactionCase):
         cls.project = Project.sudo().create({
             'name': 'Sync Safe Project',
             'cloud_service_id': cls.service.id,
+        })
+        # #554：把 McpServer 的 `_constraint_methods` cache 先烘熱。
+        #
+        # 它是 memoized property（`models.py`）——第一次被讀時用 `getmembers`
+        # 掃整個 class 找帶 `_constrains` 屬性的 method，算完寫回 cls。若那一刻
+        # 正好落在 `@patch(..._async_sync_tools)` 生效期間，掃描會碰到 AsyncMock，
+        # 而 MagicMock 對任何屬性名都會自動生出一個 mock ⇒ `_constrains` 存在
+        # ⇒ 被誤判成 constraint method ⇒ `api.constrains(*func._constrains(self))`
+        # 拿到 coroutine ⇒ `TypeError: argument after * must be an iterable`。
+        #
+        # 本 class 的三條測試原本都在 patch 內才第一次 create McpServer，所以
+        # 三條全部 ERROR ——「#554 要改的那個契約，它的既有守線從來沒執行過」。
+        # 在 patch 之外先建一筆把 cache 烘熱，每條測試才量得到自己要守的行為。
+        cls.McpServer.sudo().create({
+            'name': 'Sync Safe Cache Warmer',
+            'url': 'http://localhost:3000/mcp',
+            'transport': 'streamable_http',
+            'scope': 'user',
+            'project_id': cls.project.id,
         })
 
     @patch('odoo.addons.woow_paas_platform.models.mcp_server.McpServer._async_sync_tools')
@@ -710,7 +730,7 @@ class TestMCPServerCascadeDelete(TransactionCase):
         override — see BLOCKER 2 regression test below for the
         explicit override-vs-cascade lock.
         """
-        service = self.Service.create({
+        service = _internal_provision(self.Service).create({
             'name': 'To Delete Service',
             'workspace_id': self.workspace.id,
             'template_id': self.mcp_template.id,
@@ -752,7 +772,7 @@ class TestMCPServerCascadeDelete(TransactionCase):
         - ``mcp_tool.server_id`` is ondelete='cascade' on ``mcp_server``,
           so tools follow automatically.
         """
-        service = self.Service.create({
+        service = _internal_provision(self.Service).create({
             'name': 'Tool Cascade Service',
             'workspace_id': self.workspace.id,
             'template_id': self.mcp_template.id,
@@ -818,7 +838,7 @@ class TestMCPServerCascadeDelete(TransactionCase):
         applies because that direct FK was removed.
         """
         workspace = self.Workspace.create({'name': 'Workspace Survive WS'})
-        service = self.Service.create({
+        service = _internal_provision(self.Service).create({
             'name': 'Survive Service',
             'workspace_id': workspace.id,
             'template_id': self.mcp_template.id,
@@ -903,7 +923,7 @@ class TestMCPServerCascadeDelete(TransactionCase):
         violates D5 / Invariant #5 and produces silent AI-chat tool
         failures.
         """
-        service = self.Service.create({
+        service = _internal_provision(self.Service).create({
             'name': 'Direct Unlink Service',
             'workspace_id': self.workspace.id,
             'template_id': self.mcp_template.id,
@@ -954,7 +974,7 @@ class TestMCPServerCascadeDelete(TransactionCase):
         a service could blow away platform-wide system MCP and break
         every other workspace's AI assistant.
         """
-        service = self.Service.create({
+        service = _internal_provision(self.Service).create({
             'name': 'System Safe Service',
             'workspace_id': self.workspace.id,
             'template_id': self.mcp_template.id,
@@ -1002,7 +1022,7 @@ class TestMCPServerCascadeDelete(TransactionCase):
         to 'deleting'. Also confirms user-scope MCP was already
         unlinked before the helm attempt (D1 ordering).
         """
-        service = self.Service.create({
+        service = _internal_provision(self.Service).create({
             'name': 'Helm Fail Service',
             'workspace_id': self.workspace.id,
             'template_id': self.mcp_template.id,
@@ -1212,7 +1232,7 @@ class TestMcpProjectScopeConstraints(TransactionCase):
             'helm_chart_version': '1.0.0',
             'min_vcpu': 1, 'min_ram_gb': 1.0, 'min_storage_gb': 1,
         })
-        self.bound_service = self.Service.sudo().create({
+        self.bound_service = _internal_provision(self.Service.sudo()).create({
             'name': 'Constraint Bound Svc',
             'workspace_id': self.workspace.id,
             'template_id': self.template.id,
@@ -1389,7 +1409,7 @@ class TestAutoCreateTeardown(TransactionCase):
         })
 
     def _make_service_with_project(self, template, name_prefix, release_name):
-        service = self.Service.sudo().create({
+        service = _internal_provision(self.Service.sudo()).create({
             'name': f'{name_prefix} Service',
             'workspace_id': self.workspace.id,
             'template_id': template.id,

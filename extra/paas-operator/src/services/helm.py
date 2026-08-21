@@ -994,6 +994,11 @@ class HelmService:
             revision=info.get("revision", 0),
             status=ReleaseStatus(info.get("status", "unknown").lower()),
             chart=chart_metadata.get("name", ""),
+            # #552: the resolved chart version sits right next to the name in the
+            # same metadata block and was simply never read. Without it the
+            # platform ledger can never learn which version an empty `--version`
+            # (⇒ registry latest) actually produced.
+            chart_version=chart_metadata.get("version") or None,
             app_version=chart_metadata.get("appVersion", ""),
             updated=info.get("last_deployed", ""),
             description=info.get("description"),
@@ -1010,9 +1015,18 @@ class HelmService:
             ReleaseInfo object
         """
         # helm list output: name, namespace, revision, updated, status, chart, app_version
-        # Extract chart name without version (e.g., "postgresql-18.2.3" -> "postgresql")
+        # `chart` is "<name>-<version>" (e.g. "postgresql-18.2.3").
+        #
+        # #552: the version half used to be thrown away here — the old comment
+        # literally read "Extract chart name without version". Deriving BOTH
+        # halves from the same single rsplit is deliberate: two separate splits
+        # could disagree about where the boundary is, and this is the value the
+        # platform ledger records as "what is actually deployed".
         chart_with_version = data.get("chart", "")
-        chart_name = chart_with_version.rsplit("-", 1)[0] if "-" in chart_with_version else chart_with_version
+        if "-" in chart_with_version:
+            chart_name, chart_version = chart_with_version.rsplit("-", 1)
+        else:
+            chart_name, chart_version = chart_with_version, None
 
         return ReleaseInfo(
             name=data.get("name", ""),
@@ -1020,6 +1034,7 @@ class HelmService:
             revision=int(data.get("revision", 0)),
             status=ReleaseStatus(data.get("status", "unknown").lower()),
             chart=chart_name,
+            chart_version=chart_version or None,
             app_version=data.get("app_version", ""),
             updated=data.get("updated", ""),
             description=None,

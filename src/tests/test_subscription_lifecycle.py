@@ -6,6 +6,8 @@ from dateutil.relativedelta import relativedelta
 
 from odoo.tests.common import TransactionCase
 from odoo.exceptions import UserError
+from ..models.cloud_service import _internal_provision
+from .smart_home_fixture import sh_model  # #524：建立閘 fixture helper
 
 
 class TestSubscriptionLifecycleMixin(TransactionCase):
@@ -15,7 +17,7 @@ class TestSubscriptionLifecycleMixin(TransactionCase):
         super().setUp()
         self.Workspace = self.env['woow_paas_platform.workspace']
         self.CloudService = self.env['woow_paas_platform.cloud_service']
-        self.SmartHome = self.env['woow_paas_platform.smart_home']
+        self.SmartHome = sh_model(self.env)
         self.Template = self.env['woow_paas_platform.cloud_app_template']
 
         self.workspace = self.Workspace.create({'name': 'Test WS'})
@@ -44,7 +46,7 @@ class TestSubscriptionLifecycleMixin(TransactionCase):
             'template_id': self.template.id,
             **kwargs,
         }
-        return self.CloudService.create(vals)
+        return _internal_provision(self.CloudService).create(vals)
 
     def _create_smarthome(self, **kwargs):
         vals = {
@@ -363,11 +365,10 @@ class TestSubscriptionLifecycleMixin(TransactionCase):
             'sh_subscription_plan_id': plan.id,
         })
 
-        sub = Subscription.create(sub_vals)
-
-        # Force state (bypass normal workflow for testing)
-        if state != 'draft':
-            sub.write({'state': state})
+        # #519 提案 B：綁定守衛是 **transition guard**——綁上去的那一刻訂閱必須是
+        # in_progress。production 也是這個順序（先綁一筆生效中的訂閱，之後它才過期／
+        # 取消），所以這裡先以 in_progress 建立並綁定，最後才寫成受測的目標狀態。
+        sub = Subscription.create(dict(sub_vals, state='in_progress'))
 
         # Set additional fields. 打錯的欄位名必須大聲炸掉：靜默丟棄會讓呼叫端在
         # 「我設過 sh_end_date」的假前提下跑斷言（例如 grace period 測試實際上
@@ -381,6 +382,9 @@ class TestSubscriptionLifecycleMixin(TransactionCase):
             sub.write({key: val})
 
         entity.write({'subscription_id': sub.id})
+        # 綁好之後才落到受測狀態（含 draft——語意上等同「這筆訂閱後來變成 draft」）。
+        if state != 'in_progress':
+            sub.write({'state': state})
         return sub
 
 
@@ -409,7 +413,7 @@ class TestSubscriptionLifecycleCron(TransactionCase):
         mock_client = MagicMock()
         mock_get_client.return_value = mock_client
 
-        service = self.CloudService.create({
+        service = _internal_provision(self.CloudService).create({
             'name': 'Expired Service',
             'workspace_id': self.workspace.id,
             'template_id': self.template.id,
@@ -439,7 +443,7 @@ class TestSubscriptionLifecycleCron(TransactionCase):
         mock_client = MagicMock()
         mock_get_client.return_value = mock_client
 
-        service = self.CloudService.create({
+        service = _internal_provision(self.CloudService).create({
             'name': 'Grace Period Service',
             'workspace_id': self.workspace.id,
             'template_id': self.template.id,
@@ -467,7 +471,7 @@ class TestSubscriptionLifecycleCron(TransactionCase):
         mock_client = MagicMock()
         mock_get_client.return_value = mock_client
 
-        service = self.CloudService.create({
+        service = _internal_provision(self.CloudService).create({
             'name': 'Renewed Service',
             'workspace_id': self.workspace.id,
             'template_id': self.template.id,
@@ -512,7 +516,7 @@ class TestForceTrialDatesFromPlan(TransactionCase):
 
     def setUp(self):
         super().setUp()
-        self.SmartHome = self.env['woow_paas_platform.smart_home']
+        self.SmartHome = sh_model(self.env)
         self.Workspace = self.env['woow_paas_platform.workspace']
         self.Plan = self.env['sh.subscription.plan']
 
@@ -694,7 +698,7 @@ class TestForceActiveDatesFromPlan(TransactionCase):
 
     def setUp(self):
         super().setUp()
-        self.SmartHome = self.env['woow_paas_platform.smart_home']
+        self.SmartHome = sh_model(self.env)
         self.Workspace = self.env['woow_paas_platform.workspace']
         self.Plan = self.env['sh.subscription.plan']
 

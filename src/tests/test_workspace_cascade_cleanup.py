@@ -22,6 +22,8 @@ from odoo.exceptions import UserError
 from odoo.addons.woow_paas_platform.models.security_access import (
     _internal_identity as _internal,
 )
+from ..models.cloud_service import _internal_provision
+from .smart_home_fixture import sh_model  # #524：建立閘 fixture helper
 
 
 def _mock_sh():
@@ -39,7 +41,7 @@ class TestWorkspaceCascadeCleanup(TransactionCase):
     def setUp(self):
         super().setUp()
         self.Workspace = self.env['woow_paas_platform.workspace']
-        self.SmartHome = self.env['woow_paas_platform.smart_home']
+        self.SmartHome = sh_model(self.env)
         self.SA = self.env['woow_paas_platform.security_access']
 
     def test_workspace_unlink_tears_down_tunneled_smarthome(self):
@@ -171,7 +173,7 @@ class TestWorkspaceCascadeCleanup(TransactionCase):
             'helm_repo_url': 'https://charts.example.com',
             'helm_chart_name': 'app', 'helm_chart_version': '1.0.0',
         })
-        return self.env['woow_paas_platform.cloud_service'].create({
+        return _internal_provision(self.env['woow_paas_platform.cloud_service']).create({
             'name': 'CS Svc', 'workspace_id': ws.id,
             'template_id': template.id,
             'helm_release_name': 'rel-cs', 'helm_namespace': 'ns-cs',

@@ -56,6 +56,8 @@ from datetime import date, timedelta
 from unittest.mock import MagicMock, patch
 
 from odoo.tests.common import TransactionCase
+from ..models.cloud_service import _internal_provision
+from .smart_home_fixture import sh_model  # #524：建立閘 fixture helper
 
 
 # 殘留記號的固定前綴。scale 失敗但 state 已收斂時寫進 ``error_message``，讓 prod
@@ -89,7 +91,7 @@ class _Base(TransactionCase):
     def setUp(self):
         super().setUp()
         self.Service = self.env['woow_paas_platform.cloud_service']
-        self.SmartHome = self.env['woow_paas_platform.smart_home']
+        self.SmartHome = sh_model(self.env)
         self.workspace = self.env['woow_paas_platform.workspace'].create({
             'name': '497 Workspace',
         })
@@ -119,7 +121,7 @@ class _Base(TransactionCase):
             'helm_release_name': f'svc-497-{state}',
         }
         vals.update(kwargs)
-        return self.Service.create(vals)
+        return _internal_provision(self.Service).create(vals)
 
     def _converge(self, client=None):
         """跑 migration 的 model 方法（operator client 被 patch 掉）。"""
@@ -474,12 +476,15 @@ class TestLifecycleCronResumesHaltedRows497(_Base):
             'sh_partner_id': self.env.user.partner_id.id,
             'product_id': product_tmpl.product_variant_id.id,
             'sh_subscription_plan_id': plan.id,
-            'state': state,
+            # #519 提案 B：綁定當下必須是 in_progress（transition guard）；
+            # production 也是先綁生效中的訂閱、之後它才過期。
+            'state': 'in_progress',
             'sh_start_date': date.today() - timedelta(days=30),
             'sh_end_date': date.today() + timedelta(days=30),
         })
-        sub.write({'state': state})
         entity.write({'subscription_id': sub.id})
+        if state != 'in_progress':
+            sub.write({'state': state})
         return sub
 
     def test_cron_resumes_a_row_whose_state_was_polluted(self):

@@ -72,6 +72,7 @@ Boundary（刻意不測）:
 import uuid
 
 from odoo.tests.common import TransactionCase, tagged
+from ..models.cloud_service import _internal_provision
 
 
 def _new_internal_user(env, login, name=None):
@@ -133,14 +134,14 @@ class TestPhaseAProjectTaskAclMnWalk(TransactionCase):
             'helm_chart_version': '1.0.0',
             'min_vcpu': 1, 'min_ram_gb': 1.0, 'min_storage_gb': 1,
         })
-        self.svc_w1 = self.Service.sudo().create({
+        self.svc_w1 = _internal_provision(self.Service.sudo()).create({
             'name': f'OQ Svc W1 {self.suffix}',
             'workspace_id': self.ws1.id,
             'template_id': self.tmpl.id,
             'helm_release_name': f'oq-svc-w1-{self.suffix}',
             'helm_namespace': f'paas-ws-oq-w1-{self.suffix}',
         })
-        self.svc_w2 = self.Service.sudo().create({
+        self.svc_w2 = _internal_provision(self.Service.sudo()).create({
             'name': f'OQ Svc W2 {self.suffix}',
             'workspace_id': self.ws2.id,
             'template_id': self.tmpl.id,

@@ -20,7 +20,7 @@
 #
 # Options:
 #   --context <name>    kubectl context (optional). If omitted, use the active context
-#                       (same behaviour as test.sh). Provide it for standalone runs.
+#                       (same behaviour as woow-test.sh). Provide it for standalone runs.
 #   --name <skill>      Skill name to seed (default: browser-e2e-skill — MUST match spec).
 #   --version <v>       Skill version (default: 1.0.0).
 #   --project <name>    Holder project name (default: e2e-skill-fixture).
@@ -135,17 +135,18 @@ if ! command -v kubectl >/dev/null 2>&1; then
     exit 2
 fi
 
-# --- 切換 context（提供才切；否則沿用 active context，與 test.sh 一致）---
+# --- 切換 context（提供才切；否則沿用 active context，與 woow-test.sh 一致）---
+# #32：切換走 KUBECONFIG overlay，只作用在本次執行 —— 原本的 `kubectl config
+# use-context` 會把操作者 shell 的 default context 留在這裡設的值。
+# 本檔不在 #32 本文列的清單裡（它只點名 deploy-stg.sh:161），是照「誰會寫到
+# ~/.kube/config」反查資源側枚舉出來的；同一個缺陷、同一個修法。
+# shellcheck source=../../lib/kube-context.sh
+source "${PROJECT_ROOT}/.claude/skills/lib/kube-context.sh"
 if [ -n "$KUBE_CONTEXT" ]; then
-    if ! kubectl config get-contexts -o name 2>/dev/null | grep -qx "$KUBE_CONTEXT"; then
-        echo -e "${RED}ERROR: kubectl context '${KUBE_CONTEXT}' not found in kubeconfig.${NC}" >&2
-        exit 2
-    fi
-    echo -e "${BLUE}Using kubectl context:${NC} ${GREEN}${KUBE_CONTEXT}${NC}"
-    kubectl config use-context "$KUBE_CONTEXT" >/dev/null
+    wk_require_context "$KUBE_CONTEXT" e2e-seed "$PROJECT_ROOT" || exit 2
 fi
 
-# --- 如果未提供名稱，從 branch 自動偵測（同 test.sh:92-101）---
+# --- 如果未提供名稱，從 branch 自動偵測（邏輯同 woow-test.sh 的「從 branch 自動偵測 SLUG」區塊）---
 if [ -z "$SLUG" ]; then
     BRANCH=$(git -C "$PROJECT_ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
     SLUG=$(echo "$BRANCH" \
@@ -187,7 +188,9 @@ if [ "$POD_READY" != "True" ]; then
     exit 2
 fi
 
-# --- 取得 DB 名稱：優先讀 secret（同 test.sh:135），fallback 用 slug 推導（同 create.sh:196）---
+# --- 取得 DB 名稱：優先讀 secret（邏輯同 woow-test.sh 讀取 "${FULLNAME}-secret" 的
+#     postgres-database 區塊），fallback 用 slug 推導（語意同 woow-dev plugin create.sh 的
+#     compute_db_name()；該檔在外部 plugin repo，行號對不上，故不標行號）---
 DB_NAME=$(kubectl get secret -n "$NAMESPACE" "${FULLNAME}-secret" \
     -o jsonpath='{.data.postgres-database}' 2>/dev/null | base64 -d 2>/dev/null || echo "")
 if [ -z "$DB_NAME" ]; then

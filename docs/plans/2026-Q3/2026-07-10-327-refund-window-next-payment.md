@@ -16,7 +16,7 @@ promoted-at: 2026-07-19
 
 **Architecture:** 單點修正 SSOT 純公式 `sh.subscription.subscription._prorata_unused_refund`（`src/models/sh_subscription_fix.py`）：把「當期視窗」從建立時一次寫定、之後永不推進的 `[sh_start_date, sh_end_date]` 改為由 `sh_date_of_next_payment` 反推的 `[next_payment − cycle_delta, next_payment)`。所有退點呼叫者（3 實體刪除 `_settle_on_entity_delete`、4 換 plan 入口 `_compute_unused_refund`）經同一 SSOT 自動受惠。**刻意不碰 `sh_end_date`**，故對上游 `_sh_auto_expired_subscription` 零交互影響。
 
-**Tech Stack:** Odoo 18 addon（Python 4-space）、`dateutil.relativedelta`、`odoo.tests.common.TransactionCase`；本地測試走 docker-desktop paas-odoo image bind-mount recipe（見 memory `reference_odoo_test_docker_desktop_paas_image`）。
+**Tech Stack:** Odoo 18 addon（Python 4-space）、`dateutil.relativedelta`、`odoo.tests.common.TransactionCase`；本地測試走 docker-desktop paas-odoo image bind-mount recipe（見 memory `docs/guides/testing/odoo-test-docker-desktop-paas-image.md`）。
 
 ## Global Constraints
 
@@ -105,7 +105,7 @@ confirm / skip-trial / 每次續期成功後，`next_payment` 被推進為 `<週
 
 > **測試斷言穩定性**：新公式以 `relativedelta` 反推 `cycle_start`，month cycle 的天數隨月份浮動（28–31）。故所有**精確**斷言測試用 **day-based cycle**（`sh_unit='day'`, `sh_recurrency=<固定天數>`）使 `cycle_days` 固定；另用一個 month-based 測試以**範圍斷言**（`0 < refund <= price`）覆蓋 relativedelta 月路徑不炸。
 
-> **本地測試 recipe**（memory `reference_odoo_test_docker_desktop_paas_image`）：paas-odoo image bind-mount worktree `src`；單 class 循環 `docker exec odoo /opt/bitnami/odoo/bin/odoo -d test -u woow_paas_platform --test-enable --test-tags /woow_paas_platform:<Class> --stop-after-init --no-http --addons-path=/opt/bitnami/odoo/lib/odoo/addons,/opt/bitnami/odoo/custom-addons --data-dir=/tmp/odoo-data --db_host pg --db_user odoo --db_password odoo --log-handler=odoo.tests.result:INFO`；抓 `"N failed, M error(s) of K tests"`。full suite 已知 2 個 `TestNamespaceLeftSetUnion` error＝缺 `AGENT_RUNTIME_NAMESPACE_SECRET`（環境非回歸；`docker exec -e AGENT_RUNTIME_NAMESPACE_SECRET=x` 可歸零）。
+> **本地測試 recipe**（memory `docs/guides/testing/odoo-test-docker-desktop-paas-image.md`）：paas-odoo image bind-mount worktree `src`；單 class 循環 `docker exec odoo /opt/bitnami/odoo/bin/odoo -d test -u woow_paas_platform --test-enable --test-tags /woow_paas_platform:<Class> --stop-after-init --no-http --addons-path=/opt/bitnami/odoo/lib/odoo/addons,/opt/bitnami/odoo/custom-addons --data-dir=/tmp/odoo-data --db_host pg --db_user odoo --db_password odoo --log-handler=odoo.tests.result:INFO`；抓 `"N failed, M error(s) of K tests"`。full suite 已知 2 個 `TestNamespaceLeftSetUnion` error＝缺 `AGENT_RUNTIME_NAMESPACE_SECRET`（環境非回歸；`docker exec -e AGENT_RUNTIME_NAMESPACE_SECRET=x` 可歸零）。
 
 ---
 

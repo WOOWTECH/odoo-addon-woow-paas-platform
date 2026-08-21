@@ -25,8 +25,8 @@ metadata:
 
 兩層疊加：
 
-1. **建立路徑漏寫**：`ha_paas.py:_create_ha_paas_service` 是 marketplace
-   `paas.py:_create_service` 的手工精簡複本，漏掉
+1. **建立路徑漏寫**：`src/controllers/ha_paas.py:_create_ha_paas_service` 是 marketplace
+   `src/controllers/paas.py:_create_service` 的手工精簡複本，漏掉
    `'helm_values': json.dumps(merged_values)` 這行（docstring 還自述「無 user helm
    values」，把 template 值一併略過）。`_execute_deploy` 從 `{}` 起手。
 2. **chart 預設自足遮蔽**：0.1.0 時代 chart 預設恰好完整可部署，seed values 幾乎是

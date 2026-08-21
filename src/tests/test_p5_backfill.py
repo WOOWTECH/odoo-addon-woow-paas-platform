@@ -11,6 +11,7 @@ import uuid
 from unittest.mock import MagicMock, patch
 
 from odoo.tests.common import TransactionCase, tagged
+from ..models.cloud_service import _internal_provision
 
 _ENV_NAMESPACE_SECRET = 'AGENT_RUNTIME_NAMESPACE_SECRET'
 _NS_CLIENT = ("odoo.addons.woow_paas_platform.services."
@@ -35,7 +36,7 @@ class TestP5Backfill(TransactionCase):
             'name': f'T {sfx}', 'slug': f't-{sfx}', 'helm_repo_url': 'https://x',
             'helm_chart_name': f't-{sfx}', 'helm_chart_version': '1.0.0',
             'min_vcpu': 1, 'min_ram_gb': 1.0, 'min_storage_gb': 1})
-        self.svc = self.env['woow_paas_platform.cloud_service'].sudo().create({
+        self.svc = _internal_provision(self.env['woow_paas_platform.cloud_service'].sudo()).create({
             'name': f'S {sfx}', 'workspace_id': self.ws.id,
             'template_id': self.tmpl.id, 'helm_release_name': f's-{sfx}',
             'helm_namespace': f'paas-ws-{sfx}'})

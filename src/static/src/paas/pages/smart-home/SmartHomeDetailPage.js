@@ -6,6 +6,7 @@ import { WoowButton } from "../../components/button/WoowButton";
 import { StatusBadge } from "../../components/common/StatusBadge";
 import { SkipTrialModal } from "../../components/modal/SkipTrialModal";
 import { ChangePlanModal } from "../../components/modal/ChangePlanModal";
+import { SmartHomeAccessTab } from "./tabs/SmartHomeAccessTab";
 import { workspaceService } from "../../services/workspace_service";
 import { getDomain } from "../../services/cloud_service";
 import { breadcrumbService } from "../../services/breadcrumb_service";
@@ -23,19 +24,26 @@ import { formatPoints } from "../../utils/billing_helpers";
  * - Delete button with confirmation
  * - Connection guide section
  *
+ * #768：長出頁籤（Overview / Access）。骨架逐字抄 ServiceDetailPage——header 與
+ * modal 留在頁籤外（切到 Access 時仍看得到自己在哪一台、仍按得到 Skip Trial／
+ * 變更方案／Delete），頁籤只切分頁內容。原本的 Overview 內容（Subscription／
+ * Tunnel Information／Connection Guide）整段搬進 overview 分頁，一項都沒少。
+ *
  * Props:
  *   - workspaceId (number): Parent workspace ID
  *   - homeId (number): Smart home ID to display
+ *   - initialTab (string, optional): Initial tab to show ('overview' | 'access')
  */
 export class SmartHomeDetailPage extends Component {
     static template = "woow_paas_platform.SmartHomeDetailPage";
     static components = {
         WoowCard, WoowIcon, WoowButton, StatusBadge, SkipTrialModal,
-        ChangePlanModal,
+        ChangePlanModal, SmartHomeAccessTab,
     };
     static props = {
         workspaceId: { type: Number },
         homeId: { type: Number },
+        initialTab: { type: String, optional: true },
     };
 
     setup() {
@@ -48,9 +56,15 @@ export class SmartHomeDetailPage extends Component {
             deleting: false,
             deleteError: null,
             refreshing: false,
+            // #524：refresh 失敗的**專用**通道。刻意不共用 `state.error`——
+            // 那一格在 template 是整頁的 "Unable to load smart home" 錯誤狀態
+            // （`t-elif="state.error"` 會把整個內容區換掉），拿它報一次 refresh
+            // 失敗等於把使用者踢出頁面，比原本的靜默還糟。
+            refreshError: null,
             showSkipTrialModal: false,
             showChangePlanModal: false,
             domain: "woowtech.io",
+            currentTab: this.props.initialTab || "overview",
         });
         this.router = useState(router);
         this.pollingInterval = null;
@@ -119,6 +133,30 @@ export class SmartHomeDetailPage extends Component {
         return this.state.home;
     }
 
+    get currentTab() {
+        return this.state.currentTab;
+    }
+
+    /**
+     * Access 頁籤的顯示判準（#768）。
+     *
+     * 逐字移植自 `pages/service/ServiceDetailPage.js` 的同名 getter（#746 設計
+     * 拍板 6）：讀後端 payload 的 `subscription.ac_max_access_seats`——那是
+     * **方案上限**，由 `_get_subscription_info()`（subscription_lifecycle_mixin）
+     * 直接鏡射 `sh_subscription_plan_id.ac_max_access_seats`，不做任何推導。
+     * 無方案時後端回 0，所以「沒方案」與「方案沒買席位」在這個判準下同義。
+     *
+     * 不得改判 template／state／有沒有 route：那是
+     * capability-gate-single-source-field 明文禁止的第二判準，方向永遠是
+     * 「後端放行、租戶看不到頁籤」＝修復不可達。席位是**方案**屬性。
+     *
+     * fail-closed（`?? 0`）：欄位缺席（舊快取、漏帶 subscription 的 payload）
+     * 一律視同 0，寧可不顯示，也不要長出一個後端沒有對應設定的頁籤。
+     */
+    get hasAccessSeats() {
+        return (this.home?.subscription?.ac_max_access_seats ?? 0) > 0;
+    }
+
     get routeUrl() {
         if (!this.home?.subdomain) return null;
         return `https://${this.home.subdomain}.${this.state.domain}`;
@@ -150,15 +188,52 @@ export class SmartHomeDetailPage extends Component {
         this.router.navigate(`workspace/${this.props.workspaceId}`);
     }
 
+    // 直接改 hash（不走 router.navigate）＝抄 ServiceDetailPage：切分頁不算一次
+    // 導航，但網址仍要跟著變，重新整理／分享連結才回得到同一顆頁籤。對應的
+    // 白名單在 core/router.js 的 smarthome-detail 帶 tab 那條。
+    setTab(tab) {
+        this.state.currentTab = tab;
+        const basePath = `workspace/${this.props.workspaceId}/smarthome/${this.props.homeId}`;
+        window.location.hash = `#/${basePath}/${tab}`;
+    }
+
     // Refresh status
     async refreshStatus() {
         this.state.refreshing = true;
+        this.state.refreshError = null;
         const result = await workspaceService.refreshSmartHomeStatus(
             this.props.workspaceId,
             this.props.homeId
         );
         if (result.success) {
-            this.state.home = result.data;
+            // #768：refresh 端點回的是 `to_dict()`（**沒有** include_details），
+            // 也就是說它的 payload 裡根本沒有 `routes` 這個 key。直接整包覆蓋的
+            // 話，Access 分頁的資料會被一次 Refresh 悄悄清空，畫面落到「這台
+            // Smart Home 還沒有對外網址」——與真的沒有 route 完全不可區分。
+            //
+            // 判準是 key **在不在**，不是它的值真不真：
+            //   - 沒這個 key ⇒ 這支端點不談 routes，沿用上一次 detail 的值；
+            //   - 有這個 key（即使是 []）⇒ 伺服器明講了，照收。
+            // 用 `data.routes || []` 之類的寫法會把兩者壓成同一格，那正是這裡
+            // 要避免的事。
+            this.state.home = Object.hasOwn(result.data, "routes")
+                ? result.data
+                : { ...result.data, routes: this.state.home?.routes || [] };
+        } else {
+            // #524：refresh_status 的後端 gate 從「全體成員」收窄到 owner/admin
+            //（`action_refresh_status()` 內部是 self.write，而 smart_home 的 write
+            // ir.rule 現在只發給 owner/admin）⇒ role=user / guest 會拿到
+            // "Insufficient permissions"。
+            //
+            // 原本這裡**沒有 else**：失敗被整個吞掉，按鈕看起來只是沒反應。
+            // 那正是本 repo 反覆記錄的那種失敗——「擋住了」與「壞掉了」對使用者
+            // 輸出完全相同。至少要說出來。
+            //
+            // ⚠ 更完整的作法是依 role 直接把按鈕藏起來，但這個頁面今天完全沒有
+            // role 的資料流（grep 不到任何 role/isOwner/canEdit），要接是另一個
+            // 範圍的改動 —— 已回報，不在本 PR。
+            this.state.refreshError =
+                result.error || "Failed to refresh smart home status";
         }
         this.state.refreshing = false;
     }

@@ -886,7 +886,7 @@ grep '"version"' src/__manifest__.py    # → 18.0.1.0.82（W5b 後）
   - **驗 fail-closed**：在 DataVolume 還在 import 時，state **必須**維持 `deploying`（這是對 design fail-open 的端到端驗證）
 - [ ] **W6.2 曝露**：CF tunnel hostname 可達 8123，HAOS onboarding 畫面正常
   - ⚠ 用 `playwright-cli --headed`（UX 流程類）；截圖驗證用 `agent-browser --headed`
-  - ⚠ `/woow` 是 OWL SPA：hash 深路由直接開會 404，要走 in-app 點擊（`reference_woow_playwright_e2e_gotchas`）
+  - ⚠ `/woow` 是 OWL SPA：hash 深路由直接開會 404，要走 in-app 點擊（`docs/guides/testing/woow-playwright-e2e-gotchas.md`）
 - [ ] **W6.3 suspend/resume**：手動觸發訂閱停權 → VM `runStrategy` 變 `Halted`、VMI 消失、**PVC 存活**；resume → 回 `Always` 且資料還在
 - [ ] **W6.4 upgrade 不喚醒**（W5a.4 的端到端驗證）：在 suspended 狀態下跑一次 `helm upgrade`（改個無關 value）→ VM **必須維持 Halted**
 - [ ] **W6.5 delete 三路徑資料保全**：走平台 delete → 驗 DataVolume ＋ PVC 存活且帶 orphan label

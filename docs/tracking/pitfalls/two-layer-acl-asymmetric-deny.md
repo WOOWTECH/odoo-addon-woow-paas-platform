@@ -43,7 +43,7 @@ Reproducible attack chain:
 
 ### Plan AC scope blindness
 
-Plan §Acceptance criteria AC #42 only 列 `ai_assistant.py:_check_project_access` 擴入 follower check：
+Plan §Acceptance criteria AC #42 only 列 `src/controllers/ai_assistant.py:_check_project_access` 擴入 follower check：
 
 > 42. `src/controllers/ai_assistant.py:_check_project_access`（line 43-61）unbound carve-out 從 `return True` 改：
 >     ```python
@@ -52,7 +52,7 @@ Plan §Acceptance criteria AC #42 only 列 `ai_assistant.py:_check_project_acces
 >         return user_partner in project.message_partner_ids
 >     ```
 
-但**沒列 `paas.py:_resolve_project_access` 對等改寫**。Plan 寫的 reasoning：「ACL **兩個 enforcement layer 不一致** → IDOR 仍 leak」— 但只把「兩個 layer」理解為「ir.rule + ai_assistant.py」，**沒列舉 paas.py 也是第三 layer**。
+但**沒列 `src/controllers/paas.py:_resolve_project_access` 對等改寫**。Plan 寫的 reasoning：「ACL **兩個 enforcement layer 不一致** → IDOR 仍 leak」— 但只把「兩個 layer」理解為「ir.rule + ai_assistant.py」，**沒列舉 paas.py 也是第三 layer**。
 
 ### CAQA verdict 對 plan AC 對齊 = 對「sub-surface 完整性」漏 verify
 
@@ -198,8 +198,8 @@ def test_endpoint_paas_resolve_project_access_unbound_non_follower_update_denied
 - [[mcp-project-decouple]] §Round 2 改動敘事 — multi-agent review 補 CAQA 視角的 meta-takeaway（PR #47 + cycle 4 = 兩次驗證）
 - [[cross-workspace-task-data-leak]] §Why it happens — 「assertion + audit 走獨立 cross-check 才補上」的同質 lesson
 - Code 引用：
-  - `src/controllers/paas.py:_resolve_project_access:1495-1519` — HC-2 hotfix 落地 follower check + docstring lock-step 承諾
-  - `src/controllers/ai_assistant.py:_check_project_access:44-58` — AC #42 收緊 follower check
+  - `src/controllers/paas.py:_resolve_project_access` — HC-2 hotfix 落地 follower check + docstring lock-step 承諾
+  - `src/controllers/ai_assistant.py:_check_project_access` — AC #42 收緊 follower check
   - `src/security/ir_rules.xml` `mcp_server_rule_workspace_user` + `mcp_tool_rule_workspace_user` — dual-leg domain leg 2
   - `src/tests/test_mcp_acl_unbound_isolation.py:849-1060` `TestPaasEndpointUnboundNonFollower` — Layer 2b explicit endpoint regression lock（3 case）
 - Reports：

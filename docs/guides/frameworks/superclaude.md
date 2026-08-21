@@ -10,7 +10,7 @@ updated: 2026-05-19
 
 GitHub: <https://github.com/SuperClaude-Org/SuperClaude_Framework>
 
-User-scope slash commands 集合（30+），覆蓋 plan / design / build / test / PM / research / document 等領域，安裝在 `~/.claude/commands/sc/`（**跨專案共享**）。本 repo **選擇性啟用**：只用 `/sc:brainstorm`（透過 `/brainstorm-sc-to-ccpm` 包裝），其他 ad hoc。
+User-scope slash commands 集合（30+），覆蓋 plan / design / build / test / PM / research / document 等領域，安裝在 `~/.claude/commands/sc/`（**跨專案共享**）。本 repo **選擇性啟用**：`/sc:brainstorm` ＋ 其他 ad hoc；產出一律落在 `claudedocs/`（git-ignored），要保留需手動 promote。
 
 ## 安裝
 
@@ -53,7 +53,7 @@ User-scope slash commands 集合（30+），覆蓋 plan / design / build / test 
 
 | Command | 啟用？ | 說明 |
 |---------|--------|------|
-| `/sc:brainstorm` | ✅ 經 `/brainstorm-sc-to-ccpm` 包裝 | 唯一進入 ccpm tree 的入口；多 persona 對話探索 |
+| `/sc:brainstorm` | ✅ 直接呼叫 | 多 persona 對話探索；寫 `claudedocs/`（git-ignored），要保留需手動 `/docs:new` |
 | `/sc:workflow`、`/sc:research` | ⚠️ ad hoc | 寫 `claudedocs/`（**git-ignored**），不污染版控 |
 | `/sc:analyze`、`/sc:explain`、`/sc:document`、`/sc:design`、`/sc:troubleshoot` | ⚠️ ad hoc | 純對話 / 偶爾用，不固定流程 |
 | `/sc:test`、`/sc:build`、`/sc:cleanup`、`/sc:improve` | ⚠️ ad hoc | 看需求 |
@@ -81,9 +81,9 @@ docs/checklists/...
 1. 會建 5 個一級目錄（`temp/`、`patterns/`、`mistakes/`、`pdca/`、`checklists/`）— 直接破壞我們 6 類結構上限
 2. `docs/patterns/` 跟我們 `docs/decisions/patterns/` 撞名（認知混淆）
 3. `docs/mistakes/` 邏輯該歸 `docs/tracking/pitfalls/`，SC pm 另開一份
-4. 跟 ccpm 的 epic-based PM 流程重複
+4. 跟既有的 issue-driven PM 流程（Gitea issues）重複
 
-PM 工作流由 **ccpm + `/docs:promote`** 承擔，不重複建立 SC pm namespace。
+PM 工作流走 **Gitea issues**（`tea` CLI），不重複建立 SC pm namespace。
 
 ## 產出位置
 
@@ -99,38 +99,27 @@ PM 工作流由 **ccpm + `/docs:promote`** 承擔，不重複建立 SC pm namesp
 
 ## 與本 repo `docs/` 結構的整合
 
-唯一整合點：`/sc:brainstorm` → `.claude/prds/` → ccpm → `docs/`
+**沒有自動流向。** 所有 `/sc:*`（含 `/sc:brainstorm`）都寫到 `claudedocs/`——該目錄 git-ignored，
+不入版控。要保留任何產出，必須**人工挑選後手動**搬進主結構：
 
 ```
-/brainstorm-sc-to-ccpm <feature-slug>
+/sc:brainstorm <topic>
 
-  ↓ Step 1: /sc:brainstorm 多 persona 對話
+  ↓ 多 persona 對話
 
-.claude/prds/_drafts/<name>-brainstorm.md
+claudedocs/<...>.md              (git-ignored — 不做任何事的話就停在這，不入版控)
 
-  ↓ Step 2: 塑形成 ccpm schema
+  ↓ 人工挑出長期有價值的內容，手動執行
 
-.claude/prds/<name>.md                       (PRD)
-
-  ↓ ccpm parse-prd
-
-.claude/epics/<name>/epic.md                 (Epic)
-
-  ↓ ccpm decompose + sync + execute
-
-.claude/epics/<name>/<N>.md + GitHub issues
-
-  ↓ epic 完成 + ccpm archive
-
-.claude/epics/archived/<name>/
-
-  ↓ /docs:promote ccpm:<name>
-
-docs/decisions/   docs/reference/features/
-docs/tracking/    docs/plans/<quarter>/
+/docs:new <category> <name>      → docs/{decisions,reference,plans,tracking}/
 ```
 
-其他 `/sc:*` 寫到 `claudedocs/`（git-ignored），要保留就走 `/docs:new` 或 `/docs:promote`。
+要**開工**的項目走 Gitea issue（`tea` CLI），不經 `claudedocs/`。
+
+> **2026-08-07 變更（#631）**：此處原本有 `/sc:brainstorm` → `.claude/prds/` → ccpm → `docs/`
+> 的自動路徑，入口是 `/brainstorm-sc-to-ccpm`。ccpm 已退役，該指令與整棵 ccpm tree 一併移除，
+> 因此 SuperClaude 的產出現在**只有手動路徑**。歷史產出見
+> [`docs/archived/ccpm-v2/`](../../archived/ccpm-v2/README.md)。
 
 ## CLAUDE.md 引用順序
 
@@ -140,7 +129,10 @@ docs/tracking/    docs/plans/<quarter>/
 
 依官方 clone 位置 `git pull`，或重新 sync user-scope `~/.claude/commands/sc/`。
 
-## 與 ccpm / superpowers 的關係
+## 與 superpowers 的關係
 
-- **ccpm**：產出在 `.claude/`，整套 PM 流程。SuperClaude 只在「探索期入口」交集（`/sc:brainstorm` → `/brainstorm-sc-to-ccpm` → ccpm PRD）
-- **superpowers**：plugin 形式、SessionStart hook 自動。SuperClaude vs superpowers 的 `brainstorming` skill **功能重疊**，本 repo 統一走 `/brainstorm-sc-to-ccpm`（用 `/sc:brainstorm` 而非 `superpowers:brainstorming`）— 因為 SuperClaude 的 brainstorm 與 ccpm schema 對齊較好
+- **superpowers**：plugin 形式、SessionStart hook 自動注入。SuperClaude vs superpowers 的
+  `brainstorming` skill **功能重疊**，兩者擇一即可。
+- 選擇依據是**產出落點**：`/sc:brainstorm` 寫 `claudedocs/`（git-ignored，探索痕跡不留）；
+  superpowers `brainstorming` 寫 `docs/superpowers/`（入版控，可事後 `/docs:promote`）。
+  想留下 rejected options / persona 觀點就用 superpowers。

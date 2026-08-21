@@ -17,6 +17,7 @@ from odoo.tests.common import TransactionCase, tagged
 from odoo.addons.woow_paas_platform.services.agent_runtime_client import (
     AgentRuntimeOperatorError,
 )
+from ..models.cloud_service import _internal_provision
 
 _ENV_NAMESPACE_SECRET = 'AGENT_RUNTIME_NAMESPACE_SECRET'
 _CLIENT_PATH = (
@@ -46,11 +47,11 @@ class TestReachSyncTriggers(TransactionCase):
             'min_vcpu': 1, 'min_ram_gb': 1.0, 'min_storage_gb': 1,
         })
         # CS without helm_release_name/helm_namespace → unlink skips _cleanup_helm.
-        self.svc_a = self.env['woow_paas_platform.cloud_service'].sudo().create({
+        self.svc_a = _internal_provision(self.env['woow_paas_platform.cloud_service'].sudo()).create({
             'name': f'A {sfx}', 'workspace_id': self.ws_a.id,
             'template_id': self.tmpl.id,
         })
-        self.svc_b = self.env['woow_paas_platform.cloud_service'].sudo().create({
+        self.svc_b = _internal_provision(self.env['woow_paas_platform.cloud_service'].sudo()).create({
             'name': f'B {sfx}', 'workspace_id': self.ws_b.id,
             'template_id': self.tmpl.id,
         })
@@ -133,7 +134,7 @@ class TestReachSyncTriggers(TransactionCase):
     def test_cs_workspace_reassign_on_live_ns_rejected(self):
         """Retargeting a deployed CS's workspace is rejected (ns identity fixed)."""
         from odoo.exceptions import UserError
-        live = self.env['woow_paas_platform.cloud_service'].sudo().create({
+        live = _internal_provision(self.env['woow_paas_platform.cloud_service'].sudo()).create({
             'name': 'live', 'workspace_id': self.ws_a.id, 'template_id': self.tmpl.id,
             'helm_release_name': 'live-rel', 'helm_namespace': 'paas-ws-live',
         })

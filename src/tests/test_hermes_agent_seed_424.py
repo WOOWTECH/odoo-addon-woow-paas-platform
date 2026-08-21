@@ -4,15 +4,15 @@
 鏡射 test_opendesign_seed_380.py（金樣板 SOP）＋ test_ha_paas_seed_woowtech_image.py
 （hidden template ＋ 原子綁定）兩者的結構。本檔守的是「錯了就靜默壞掉」的點：
 
-- **image 雙釘**：webui 已由 Phase A（woow-paas-charts）鏡像進 jcr-prod 並補釘
-  tag@digest，``_PENDING_IMAGE_KEYS`` 因此為空；``test_webui_image_pinned_digest``
-  自「交付前刻意恆紅」轉為**回歸守線**（防 tag 被改回 PENDING 佔位或掉 @sha256）
-  ——佔位被部署出去就是 Init:ErrImagePull（HA PaaS 2026-07-23 stg 實證的同一 bug class）。
+- **image 雙釘**：chart 0.1.3 起 hermes-agent 移除 webui container（nginx `/`
+  直連 dashboard），seed 的 `webui` block 連同 `HERMES_WEBUI_IMAGE` /
+  `WEBUI_PENDING_TAG` 常數與 `test_webui_image_pinned_digest` 一併刪除；agent
+  與 console 兩顆仍走 `#424①` 既有雙釘流程。
 - **quota 蓋不住全容器 limits**：#380 血訓，min_ram_gb×3 不足 → pod FailedCreate
   → 對外永遠 CF 502。這裡用**結構關係**斷言（由 seed values 現算），不硬編數字：
-  一條擋太小、一條擋太大（＝把契約 v1.1 §8.8 的「÷3 上取」規則機械化）。無 DB
-  拓撲下 limits 合計 8.625Gi（agent 6 + webui 2 + console 0.5 + authProxy 0.125）
-  → min_ram_gb=3.0，headroom 只剩 0.375Gi，**加任何容器都會撞紅**（刻意）。
+  一條擋太小、一條擋太大（＝把契約 v1.1 §8.8 的「÷3 上取」規則機械化）。0.1.3
+  起無 DB 拓撲下 limits 合計 6.625Gi（agent 6 + console 0.5 + authProxy 0.125）
+  → min_ram_gb=3.0（仍採舊值，刻意保守：升版時 quota 必須蓋得住回退相容）。
 - **DB 開關 lock-step**：Step 0 若翻案要開內建 pg/redis，storageClass path_map ／
   min_ram_gb ／ min_storage_gb 三處必須同 PR 一起動，否則 PVC 拿不到 StorageClass
   或 quota 不足。三條 lock-step 測試把它們綁死。
@@ -40,13 +40,18 @@
 （MCP OAuth 回呼前提）與 ``_assemble_deploy_values`` 對 hermes-agent 的全量輸出。
 """
 import json
+import xml.etree.ElementTree as ET
 
 from odoo.tests.common import HttpCase, TransactionCase, tagged
+from odoo.tools import file_open
+from ..models.cloud_service import _internal_provision
 
 PLATFORM_REGISTRY = 'jcr-prod.woowtech.io/'
 HERMES_AGENT_IMAGE = 'jcr-prod.woowtech.io/woow-paas-docker-local/hermes-agent'
-HERMES_WEBUI_IMAGE = 'jcr-prod.woowtech.io/woow-paas-docker-local/hermes-webui'
-WEBUI_PENDING_TAG = 'PENDING_PHASE_A_WEBUI_DIGEST'
+# chart 0.1.3 起 hermes-agent 移除 webui container（nginx `/` 直連 dashboard），
+# seed 的 `webui` block 不再存在；HERMES_WEBUI_IMAGE／WEBUI_PENDING_TAG 與
+# `test_webui_image_pinned_digest` 連同 ``_PENDING_IMAGE_KEYS`` 一併撤掉。
+# 若日後 chart 把 webui 加回，連同下列全套恢復並重新走 digest 雙釘流程。
 
 # 尚未釘 digest 的 image 座標白名單（顯式、可 review）。每一筆都必須另有一條專屬的
 # fail-loud 測試扛紅；補釘後從這裡移除。**只允許暫時性項目**，不是長期豁免清單。
@@ -67,8 +72,8 @@ AUTH_PROXY_LIMIT_GI = 128 / 1024.0
 
 # 同上，CPU 側：chart values 的 `authProxy.resources.limits.cpu`（200m）。2026-07-31
 # 以 `helm show values oci://…/hermes-agent --version 0.1.0` 向 registry 直驗，非轉抄。
-# #456 的 stg 事件訊息（exceeded quota: limits.cpu=3200m）正是主 pod 的
-# agent 2000m ＋ webui 1000m ＋ 本 sidecar 200m，可交叉印證。
+# #456 的 stg 事件訊息（exceeded quota: limits.cpu=3200m）0.1.3 起改為：
+# agent 2000m ＋ console 200m ＋ 本 sidecar 200m ＝ 2.4 vCPU（邊際貢獻 2 蓋得住）。
 AUTH_PROXY_LIMIT_CPU = 0.2
 
 
@@ -143,11 +148,30 @@ class TestHermesAgentTemplateSeed(TransactionCase):
                 self.env.ref('woow_paas_platform.%s' % xmlid), plans, xmlid)
         base = plans.filtered(lambda p: p.ac_max_access_seats == 0)
         self.assertEqual(
-            len(base), 2, '恰兩筆 base plan（月／年）；v1 不做席數加購變體')
+            len(base), 2,
+            '恰兩筆 base plan（月／年）；席數變體另計，見 test_access_variants_attached')
 
-    def test_max_per_partner_one(self):
-        """每帳號限一（agent limits 6Gi 是平台最重單容器，防同帳號吃乾 ws quota）。"""
-        self.assertEqual(self._tpl().max_per_partner, 1)
+    def test_max_per_partner_unlimited(self):
+        """每帳號不限台數：0＝不限，平台層不設本 template 的每帳號實例上限。
+
+        ⚠ 只驗 DB 值是不夠的：0 同時是 `max_per_partner` 的**欄位 default**，所以
+        「seed 顯式寫 0」與「seed 那一行整個被刪掉」讀起來一模一樣、都會綠。故本條
+        一併驗 seed XML 本體，要求該 record 顯式帶著這個欄位——兩層合起來才分得出
+        「刻意放寬」與「不小心漏寫」。
+        """
+        self.assertEqual(self._tpl().max_per_partner, 0)
+        with file_open('woow_paas_platform/data/cloud_app_templates.xml') as f:
+            rec = ET.parse(f).getroot().find(
+                ".//record[@id='cloud_app_hermes_agent']")
+        self.assertIsNotNone(rec, 'seed 內找不到 cloud_app_hermes_agent record')
+        field = rec.find("field[@name='max_per_partner']")
+        self.assertIsNotNone(
+            field,
+            'seed 必須「顯式」宣告 max_per_partner=0：刪掉那一行 DB 讀起來仍是 0'
+            '（欄位 default），上面那條 assertEqual 察覺不到')
+        self.assertEqual(
+            field.get('eval'), '0',
+            'seed 的 max_per_partner 必須是 0（不限）；改動此值請同步本條守線')
 
     def test_distinct_from_mcp_hermes(self):
         """與既有 cloud_app_mcp_hermes 是不同產品：slug／chart／image 全不同。
@@ -200,35 +224,49 @@ class TestHermesAgentTemplateSeed(TransactionCase):
         self.assertEqual(self._values()['authProxy']['workerProcesses'], 2)
 
     def test_dashboard_gates_explicit(self):
-        """dashboard 的兩個「設錯就靜默失去防護／靜默不對外」鍵明寫。
+        """dashboard 的「設錯就靜默失去防護」鍵明寫（chart 0.1.3 起無 externalPath）。
 
         - bindHost 非 loopback ⇒ 上游 fail-closed auth gate **保持啟用**（改成
           127.0.0.1 就只剩 nginx 一層）。
-        - externalPath 空字串 ⇒ dashboard 根本不對外路由，但平台照樣把
-          dashboardPublicUrl 當 OAuth redirect_uri 發出去 → 靜默死鏈。
+        - chart 0.1.3 起 dashboard 不走 subpath：nginx `/` 直連，OAuth
+          ``redirect_uri`` ＝root URL（由平台 ``_inject_dashboard_public_url`` 每
+          次注入；見 test_dashboard_injector_outputs_root_url）。故 seed 不得帶
+          ``dashboard.externalPath``——留著就等於告訴 chart 走舊 subpath，與平台
+          注入的 root URL 對不起來。
         """
         dashboard = self._values()['dashboard']
         self.assertEqual(
             dashboard['bindHost'], '0.0.0.0',
             'loopback 綁定會關掉 dashboard 自身的 fail-closed 登入閘')
-        self.assertTrue(dashboard['externalPath'], 'externalPath 為空＝dashboard 不對外')
+        self.assertNotIn(
+            'externalPath', dashboard,
+            'chart 0.1.3 起 dashboard 不走 subpath——seed 不該帶 externalPath')
         self.assertEqual(dashboard['username'], 'admin')
 
     def test_dashboard_external_path_matches_injector(self):
-        """跨層 lock-step：seed 的 dashboard.externalPath ＝平台注入 URL 的尾綴。
+        """跨層 lock-step：seed 無 externalPath，平台注入的 URL 也無 suffix。
 
-        chart 用 externalPath 決定 auth-proxy 把 /dashboard/ 轉去哪、以及 ttyd 式的
-        資產前綴；平台則把 `{public}/dashboard` 當 OAuth redirect_uri 的權威值送進
-        `config.dashboardPublicUrl`。兩者任一單獨改動 → 授權回呼打到不存在的路徑，
-        而且**兩邊各自看起來都正常**。這條把它們綁死。
+        chart 0.1.3 起 dashboard 走 root URL（nginx `/`），平台
+        ``_inject_dashboard_public_url`` 對 hermes-agent slug 直接輸出 root URL，
+        兩側都不得殘留 ``/dashboard`` suffix（任一側單獨漏改都會把 OAuth 回呼打到
+        404 subpath）。與 0.1.x 時代的 `dashboard.externalPath` 鎖步合約已被新形態
+        取代——本條把「兩側都不得有 suffix」機械化為字串層斷言。
         """
-        external_path = self._values()['dashboard']['externalPath']
+        dashboard = self._values()['dashboard']
+        self.assertNotIn(
+            'externalPath', dashboard,
+            'seed 仍帶 dashboard.externalPath：會被 chart 當成 subpath 轉發 → OAuth'
+            ' redirect_uri 打到 /dashboard 而非 root')
         injected = self.env['woow_paas_platform.cloud_service']._inject_dashboard_public_url(
             {}, 'hermes-agent', 'https://svc-abc.woowtech.io',
         )['config']['dashboardPublicUrl']
         self.assertEqual(
-            injected, 'https://svc-abc.woowtech.io' + external_path,
-            '平台注入的 dashboardPublicUrl 尾綴與 seed 的 dashboard.externalPath 不一致')
+            injected, 'https://svc-abc.woowtech.io',
+            '平台注入的 dashboardPublicUrl 必須是 root URL（chart 0.1.3）')
+        self.assertNotIn(
+            '/dashboard', injected,
+            '平台注入的 URL 不該帶 /dashboard suffix（chart 0.1.3 移除 webui，'
+            'OAuth redirect_uri 走 root）')
 
     def test_gateway_external_path_explicit(self):
         """#530：gateway 的對外子路徑明寫（缺鍵／空字串＝gateway 永遠不對外）。
@@ -303,20 +341,28 @@ class TestHermesAgentTemplateSeed(TransactionCase):
 
     # ── chart / image pin ───────────────────────────────────────────────────
     def test_chart_oci_pin(self):
-        """chart＝woow-paas-charts 發佈的獨立 hermes-agent OCI chart 0.1.1。
+        """chart＝woow-paas-charts 發佈的獨立 hermes-agent OCI chart 0.2.0。
 
-        #530 把版本從 0.1.0 推到 0.1.1（charts PR #69 新增 gateway 反向代理子路徑）。
+        版本演進：0.1.0 → 0.1.1（#530，charts PR #69 新增 gateway 反向代理子路徑）→
+        0.1.3（移除 webui container，nginx `/` 直連 dashboard；webui 移除細節見
+        test_webui_block_removed）→ 0.2.0（#717，租戶自裝 CLI 的落點收斂：十個安裝器
+        落點覆寫 env ＋ cli-landing-init initContainer）。
         這條斷言是刻意鎖精確值的少數例外：跨 repo chart 版本是**平台指向哪一顆已發佈
         artifact** 的宣告，不是會自然演進的 living schema——寫成 `>=` 只會讓「chart 沒
         跟著發版」這個真正的失效模式假綠。平台端沒有 chart values 的任何副本，鍵名
         一致性只能靠兩邊各自的契約測試加 review。
+
+        ⚠ 0.2.0 這一版**沒有**連帶的 helm_default_values 改動要斷言——chart 的
+        cliLanding.* 全部自帶預設值，平台端零覆寫。所以「平台有沒有跟上這次 chart
+        變更」在本檔的唯一可觀察面就是這個版號；不要因為 diff 只有一行就把它當成
+        無關緊要的 bump。
         """
         tpl = self._tpl()
         self.assertEqual(tpl.helm_repo_url or '', '')
         self.assertEqual(
             tpl.helm_chart_name,
             'oci://jcr-prod.woowtech.io/woow-paas-docker-local/hermes-agent')
-        self.assertEqual(tpl.helm_chart_version, '0.1.1')
+        self.assertEqual(tpl.helm_chart_version, '0.2.0')
 
     def test_agent_image_pinned_digest(self):
         """agent image＝#424② 交付的衍生 image（含 MCP OAuth build-time patch），雙釘。
@@ -333,25 +379,17 @@ class TestHermesAgentTemplateSeed(TransactionCase):
             build_tag, r'^\d{8}\.\d{4}$', 'build tag 應為 UTC 時間戳 YYYYMMDD.HHMM')
         self.assertEqual(len(digest), len('sha256:') + 64, digest)
 
-    def test_webui_image_pinned_digest(self):
-        """webui image 必須雙釘 tag@sha256（鏡像進 jcr-prod 後已補釘）。
+    def test_webui_block_removed(self):
+        """chart 0.1.3 起 webui container 移除；seed 不得帶 `webui` block。
 
-        歷史：本條在鏡像交付前**刻意恆紅、不 skip** —— 留 PENDING 佔位部署出去就是
-        Init:ErrImagePull（HA PaaS 2026-07-23 stg 實證的同一 bug class）。
-        WEBUI_PENDING_TAG 斷言留著，防止有人回退成佔位。
-
-        釘的是 multi-arch OCI index 底下的 **amd64 子 manifest** digest，與
-        open-design-console 現行 seed 同款（agent image 本身即單一 amd64 manifest，
-        整個 pod 本來就 amd64-only）。
+        nginx `/` 直連 dashboard（取代舊 `/`＝webui＋`/dashboard/` 雙入口）；
+        ``webui`` block 若存留，chart 仍會 render 那顆 container，pod 起來多一條
+        dead path（basic-auth 與 dashboard form-auth 形狀疊加，登入閘互踢）。
+        守線＝斷言 block 本身不存在。
         """
-        image = self._values()['webui']['image']
-        self.assertEqual(image['repository'], HERMES_WEBUI_IMAGE)
-        tag = image['tag']
-        self.assertNotEqual(
-            tag, WEBUI_PENDING_TAG,
-            'Phase A 的 webui 鏡像 tag@digest 尚未補釘（PR 合併前必補真值）')
-        self.assertNotEqual(tag, 'latest', '不得留 latest 可變 tag')
-        self.assertIn('@sha256:', tag, 'webui image 必須雙釘 tag@sha256')
+        self.assertNotIn(
+            'webui', self._values(),
+            'chart 0.1.3 起 webui container 已移除，seed 不該帶 webui block')
 
     def test_console_image_shared_with_opendesign(self):
         """console 直接重用 open-design 的 baked image，且與該 seed **同一 tag@digest**。
@@ -475,13 +513,14 @@ class TestHermesAgentTemplateSeed(TransactionCase):
     def _seed_container_limits_gi(self):
         """由 seed values 現算「本服務全容器 limits.memory」總和（GiB）。
 
-        涵蓋 agent／webui（daemon pod）＋ console（獨立 Deployment，同 ns 同 quota）
+        涵蓋 agent（daemon pod，chart 0.1.3 起獨自存在，webui 已合進 nginx `/`）
+        ＋ console（獨立 Deployment，同 ns 同 quota）
         ＋ auth-proxy sidecar（chart 契約值，見 AUTH_PROXY_LIMIT_GI）；DB 開啟時
         另計 pg／redis。刻意用「現算」而非硬編：resources 一改，斷言自動跟上。
         """
         values = self._values()
         total = AUTH_PROXY_LIMIT_GI
-        for path in (('agent',), ('webui',), ('console',),
+        for path in (('agent',), ('console',),
                      ('postgresql',), ('redis',)):
             node = values.get(path[0]) or {}
             if not node or node.get('enabled') is False:
@@ -494,13 +533,14 @@ class TestHermesAgentTemplateSeed(TransactionCase):
     def _seed_container_limits_cpu(self):
         """CPU 側的對稱版本：由 seed values 現算「本服務全容器 limits.cpu」總和。
 
-        #456 的根因就在這條線上：邊際需求 3.4（agent 2 ＋ webui 1 ＋ console 0.2
-        ＋ auth-proxy 0.2）> 邊際貢獻 min_vcpu×3。RAM 早有守線、CPU 沒有，所以
-        「共用 workspace 才露餡」的缺口一路活到 stg。
+        #456 的根因就在這條線上：0.1.x 邊際需求 3.4（agent 2 ＋ webui 1 ＋
+        console 0.2 ＋ auth-proxy 0.2）> 邊際貢獻 min_vcpu×3。RAM 早有守線、CPU
+        沒有，所以「共用 workspace 才露餡」的缺口一路活到 stg。0.1.3 起合計降到
+        2.4（webui 移除），min_vcpu=2 的邊際貢獻 6 蓋得住。
         """
         values = self._values()
         total = AUTH_PROXY_LIMIT_CPU
-        for key in ('agent', 'webui', 'console', 'postgresql', 'redis'):
+        for key in ('agent', 'console', 'postgresql', 'redis'):
             node = values.get(key) or {}
             if not node or node.get('enabled') is False:
                 continue
@@ -657,9 +697,13 @@ class TestHermesAgentTemplateSeed(TransactionCase):
                 vals['allocated_storage_gb'], tpl.min_storage_gb, xmlid)
 
     def test_resources_present_on_every_seeded_container(self):
-        """每個 seed 覆寫的容器都要 requests+limits 齊備（paas-ws quota 缺一即 FailedCreate）。"""
+        """每個 seed 覆寫的容器都要 requests+limits 齊備（paas-ws quota 缺一即 FailedCreate）。
+
+        chart 0.1.3 起只剩 agent（daemon pod）與 console（獨立 Deployment）兩顆
+        走 seed 覆寫的容器——webui 已合併進 nginx `/`，auth-proxy sidecar 走 chart
+        契約值（不在 seed）。"""
         values = self._values()
-        for key in ('agent', 'webui', 'console'):
+        for key in ('agent', 'console'):
             resources = values[key].get('resources')
             self.assertTrue(resources, '%s 缺 resources' % key)
             for side in ('requests', 'limits'):
@@ -670,7 +714,7 @@ class TestHermesAgentTemplateSeed(TransactionCase):
                         '%s.resources.%s 缺 %s' % (key, side, dim))
 
     def test_single_data_pvc(self):
-        """單顆 5Gi data PVC（agent /opt/data ＋ webui ~/.hermes 共用同一顆 RWO）。"""
+        """單顆 5Gi data PVC（agent /opt/data；0.1.3 起 webui ~/.hermes 不再寫入）。"""
         data = self._values()['persistence']['data']
         self.assertEqual(data['size'], '5Gi')
         self.assertEqual(
@@ -715,13 +759,22 @@ class TestHermesAgentTemplateSeed(TransactionCase):
             'min_storage_gb 應等於 seed 所有 PVC 容量總和')
 
     def test_description_mentions_gate_and_dashboard(self):
-        """description／full_description 說明 basic-auth 單一閘與 /dashboard 對外形態。"""
+        """description／full_description 說明 basic-auth 單一閘與 root URL 對外形態。
+
+        chart 0.1.3 起 dashboard 走 root URL（nginx `/`），不再有 `/dashboard` 字串
+        ——若 seed description 又把舊 subpath 寫進去，租戶會照舊字串連線拿到 404，
+        而 seed 與 chart 兩側各自看起來都正常。守住的是「對外形態描述＝現行合約」。
+        """
         tpl = self._tpl()
         text = (tpl.description or '') + (tpl.full_description or '')
         self.assertIn('basic-auth', text)
         self.assertIn('admin', text)
-        self.assertIn('/dashboard', text)
         self.assertIn('console', text)
+        # chart 0.1.3 起 dashboard 不走 /dashboard subpath
+        self.assertNotIn(
+            '/dashboard', text,
+            'description 仍寫 /dashboard subpath：與 0.1.3 root URL 合約不一致，'
+            '租戶照舊字串會拿到 404')
 
 
 @tagged('post_install', '-at_install')
@@ -786,7 +839,8 @@ class TestHermesAgentPlansSeed(TransactionCase):
         `min_vcpu=2` 的修法會被整個繞過，#456 原地復發。
 
         另外 `_apply_plan_spec_overlay` 會把 cs_* 疊成 resources.requests/limits，
-        與本 seed 已寫死的 agent／webui／console resources 打架。
+        與本 seed 已寫死的 agent／console resources 打架（chart 0.1.3 起 webui 已
+        從 seed 移除）。
         """
         for xmlid in self.EXPECTED:
             plan = self._plan(xmlid)
@@ -794,18 +848,46 @@ class TestHermesAgentPlansSeed(TransactionCase):
             self.assertEqual(plan.cs_ram_gb, 0.0, xmlid)
             self.assertEqual(plan.cs_storage_gb, 0, xmlid)
 
-    def test_no_access_variants_in_v1(self):
-        """v1 不做席數加購變體——template 上不得掛任何變體 plan。
+    def test_access_variants_attached(self):
+        """#765：固定 1 席的加購變體掛上本 template 且 hidden。
 
-        要加變體請回 generator（scripts/seed/generate_plan_variants.py）＋變體
-        manifest 走一輪，不要手寫 (4,) append 進 links_variants.xml。
+        取代原本的 test_no_access_variants_in_v1——#494 期記的「v1 不做加購變體」
+        已被 Eugene 2026-08-17 拍板取代（比照同為完整應用的 Open Design，固定 1 席）。
+        全量斷言在 test_plan_variants_generated；此處抽驗本家族的席數與價格。
+
+        要改席數／價格請回 generator（scripts/seed/generate_plan_variants.py）＋
+        變體 manifest 走一輪，不要手寫 (4,) append 進 links_variants.xml。
+        """
+        tpl = self.env.ref('woow_paas_platform.cloud_app_hermes_agent')
+        plans = tpl.sudo().subscription_plan_ids
+        variants = plans.filtered(lambda p: p.ac_max_access_seats > 0)
+        self.assertEqual(
+            len(variants), 2,
+            '固定 1 席 × 月／年兩週期＝恰兩筆，實際：%s' % variants.mapped('name'))
+        for xmlid, price in (('plan_hermes_agent_ac1_monthly', 5100),
+                             ('plan_hermes_agent_ac1_yearly', 40800)):
+            v = self.env.ref('woow_paas_platform.%s' % xmlid)
+            self.assertIn(v, plans, xmlid)
+            self.assertEqual(v.sh_plan_price, price, xmlid)
+            self.assertEqual(v.ac_max_access_seats, 1, xmlid)
+            self.assertTrue(v.storefront_hidden, xmlid)
+
+    def test_variant_plans_do_not_override_cs_spec(self):
+        """🔴 #456 守線延伸到變體：加購變體的 cs_* 同樣必須全為 0。
+
+        base 那條（test_plans_do_not_override_cs_spec）只掃兩筆 base plan，
+        #765 之後同一個 template 上多了席數變體——變體若被填 cs_*，
+        `_allocated_vals_from` 一樣會蓋掉 template 的 min_*（quota 峰值模型），
+        而選了加購席的租戶才會踩到，base 側恆綠。
         """
         tpl = self.env.ref('woow_paas_platform.cloud_app_hermes_agent')
         variants = tpl.sudo().subscription_plan_ids.filtered(
             lambda p: p.ac_max_access_seats > 0)
-        self.assertFalse(
-            variants,
-            'v1 不做加購變體，實際掛上：%s' % variants.mapped('name'))
+        self.assertTrue(variants, '前置：本 template 應有席數變體')
+        for plan in variants:
+            self.assertFalse(plan.cs_vcpu, plan.name)
+            self.assertFalse(plan.cs_ram_gb, plan.name)
+            self.assertFalse(plan.cs_storage_gb, plan.name)
 
     def test_distinct_from_mcp_hermes_plans(self):
         """與既有 Hermes MCP Server 三級距 plan 是不同商品，勿互掛。
@@ -857,18 +939,30 @@ class TestHermesAgentStorefrontReachable(HttpCase):
         self.assertTrue(r.get('success'), '規格頁必須讀得到（回 %r）' % r)
 
     def test_plans_endpoint_returns_both_cycles(self):
-        """月／年兩張卡，價格與 trial 是拍板值（前台真正拿到的數字）。"""
+        """月／年兩張卡，價格與 trial 是拍板值（前台真正拿到的數字）。
+
+        #765 起每張卡另帶固定 1 席的加購變體——這是 marketplace 部署頁的席數區塊
+        （`PlanSelector.xml` 的 `t-if="seatBase"`）唯一的資料來源，**變體只在這個
+        wire payload 出現、不會自成頂層 plan**，所以這裡是它唯一的 wire 級守線。
+        原本此處斷言 variants 為空（#494 期的「v1 不做加購變體」）——刻意不把那行
+        原樣抄進註解：可照抄的錯誤範本比散文警告更容易被人撿去用。
+        """
         r = self._result('/api/cloud-services/templates/%s/plans' % self.tpl.id)
         self.assertTrue(r.get('success'), r)
         by_unit = {p['unit']: p for p in r['data']}
         self.assertEqual(set(by_unit), {'month', 'year'}, r['data'])
         self.assertEqual(by_unit['month']['price'], 4500)
         self.assertEqual(by_unit['year']['price'], 36000)
+        expected_variant_price = {'month': 5100, 'year': 40800}
         for unit, plan in by_unit.items():
             self.assertTrue(plan['has_trial'], unit)
             self.assertEqual(
                 (plan['trial_duration'], plan['trial_unit']), (7, 'day'), unit)
-            self.assertFalse(plan['variants'], 'v1 不做席數加購變體')
+            self.assertEqual(
+                [v['seats'] for v in plan['variants']], [1],
+                '#765：固定 1 席，%s 卡實得 %s' % (unit, plan['variants']))
+            self.assertEqual(
+                plan['variants'][0]['price'], expected_variant_price[unit], unit)
 
     def test_displayed_specs_fall_back_to_template_minimums(self):
         """前台卡片的規格 label ＝ template min_*（plan cs_* 全 0 的可見結果）。
@@ -895,20 +989,25 @@ class TestHermesAgentValueInjection(TransactionCase):
 
     # ── injector 單元 ───────────────────────────────────────────────────────
     def test_inject_dashboard_public_url(self):
-        """hermes-agent：注入 config.dashboardPublicUrl＝公開根位址 + /dashboard。"""
+        """hermes-agent：注入 config.dashboardPublicUrl＝公開根位址（chart 0.1.3 root URL）。
+
+        0.1.x 時代 suffix 為 ``/dashboard``（chart 走 subpath，OAuth redirect_uri 帶尾綴）。
+        0.1.3 移除 webui、nginx ``/`` 直連 dashboard：上游把 root URL 當 OAuth
+        ``redirect_uri`` 的權威來源，suffix 變多餘且會把回呼打到 404 subpath。
+        """
         values = self.CloudService._inject_dashboard_public_url(
             {}, 'hermes-agent', 'https://svc-abc.woowtech.io')
         self.assertEqual(
             values['config']['dashboardPublicUrl'],
-            'https://svc-abc.woowtech.io/dashboard')
+            'https://svc-abc.woowtech.io')
 
     def test_inject_dashboard_public_url_strips_trailing_slash(self):
-        """根位址帶尾斜線也不能產出 //dashboard（OAuth redirect_uri 逐字比對會 mismatch）。"""
+        """根位址帶尾斜線也要正規化掉（OAuth redirect_uri 逐字比對會 mismatch）。"""
         values = self.CloudService._inject_dashboard_public_url(
             {}, 'hermes-agent', 'https://svc-abc.woowtech.io/')
         self.assertEqual(
             values['config']['dashboardPublicUrl'],
-            'https://svc-abc.woowtech.io/dashboard')
+            'https://svc-abc.woowtech.io')
 
     def test_inject_dashboard_public_url_noop_for_other_templates(self):
         """其他 template 一律 no-op（不得把不認識的鍵塞進別人的 values）。"""
@@ -964,7 +1063,10 @@ class TestHermesAgentValueInjection(TransactionCase):
         ``auth.apiServerKey``——這條讓那個決定變成**要動測試才過得去**的顯式動作，
         而不是順手改 seed 的副作用。
         """
-        for xmlid in ('cloud_app_mcp_odoo', 'cloud_app_mcp_odoo_manage',
+        # #686：mcp-hermes（pilot）原本不在這張清單裡——與 has_admin_gui 漏的是
+        # 同一格（「複製 hermes 生出來的衍生品」都列了，被複製的那個沒列）。
+        for xmlid in ('cloud_app_mcp_hermes',
+                      'cloud_app_mcp_odoo', 'cloud_app_mcp_odoo_manage',
                       'cloud_app_mcp_n8n', 'cloud_app_mcp_k8s', 'cloud_app_mcp_vk',
                       'cloud_app_mcp_opendesign', 'cloud_app_opendesign',
                       'cloud_app_haos', 'cloud_app_ha_paas'):
@@ -995,7 +1097,7 @@ class TestHermesAgentValueInjection(TransactionCase):
             'name': 'Hermes WS 424',
             'owner_id': self.env.ref('base.user_admin').id,
         })
-        return self.CloudService.create({
+        return _internal_provision(self.CloudService).create({
             'workspace_id': ws.id,
             'template_id': self.tpl.id,
             'name': 'hermes-agent',
@@ -1029,9 +1131,10 @@ class TestHermesAgentValueInjection(TransactionCase):
         self.assertTrue(values['networkPolicy']['apiServerCidrs'])
         paas_domain = self.env['ir.config_parameter'].sudo().get_param(
             'woow_paas_platform.paas_domain', 'woowtech.io')
+        # chart 0.1.3：dashboard 走 root URL（nginx `/` 直連），不再有 /dashboard suffix
         self.assertEqual(
             values['config']['dashboardPublicUrl'],
-            'https://hermes-test-424.%s/dashboard' % paas_domain)
+            'https://hermes-test-424.%s' % paas_domain)
         # 3) ingress expose（template.ingress_enabled ＋ subdomain）
         self.assertEqual(
             assembled['expose_config'],

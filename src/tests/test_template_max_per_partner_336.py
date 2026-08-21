@@ -2,6 +2,7 @@
 """#336：每帳號（partner）限一 enforcement。"""
 from odoo.tests.common import TransactionCase, tagged
 from odoo.exceptions import ValidationError
+from ..models.cloud_service import _internal_provision
 
 
 @tagged('post_install', '-at_install')
@@ -18,12 +19,12 @@ class TestMaxPerPartnerField(TransactionCase):
         Template = self.env['woow_paas_platform.cloud_app_template']
         self.assertIn('max_per_partner', Template._fields)
         # 不設 max_per_partner 的 fixture → 驗 default==0（驗「欄位 default 語意」，
-        # 而非舊法「存在某 0 值 seed」；helm 值鏡射 setUp / seed 慣例）。
+        # 而非舊法「存在某 0 值 seed」；helm 值鏡射 setUp / seed 慣例；#552 層 4 後 seed 慣例＝釘版）。
         tpl = Template.create({
             'name': 'default-probe', 'slug': 'default-probe',
             'helm_repo_url': '',
             'helm_chart_name': 'oci://example.com/default-probe',
-            'helm_chart_version': '',
+            'helm_chart_version': '1.0.0',
         })
         self.assertEqual(tpl.max_per_partner, 0)
 
@@ -49,13 +50,14 @@ class TestMaxPerPartnerEnforcement(TransactionCase):
             'name': 'ws-b', 'owner_id': self.user_b.id,
         })
         # cloud_app_template：name/helm_repo_url/helm_chart_name/helm_chart_version
-        # 為 required（Task 0 校驗）；helm 值鏡射 seed 慣例（repo/version 空字串）。
+        # 為 required（Task 0 校驗）；helm 值鏡射 seed 慣例（repo 空字串）。
+        # ⚠ version 不可留空：#552 層 4 起空版號＝不可購買，create 會被擋。
         self.tpl = self.env['woow_paas_platform.cloud_app_template'].create({
             'name': 'limit-tpl', 'slug': 'limit-tpl',
             'max_per_partner': 1,
             'helm_repo_url': '',
             'helm_chart_name': 'oci://example.com/limit-tpl',
-            'helm_chart_version': '',
+            'helm_chart_version': '1.0.0',
         })
 
     def _svc_vals(self, ws):
@@ -66,25 +68,25 @@ class TestMaxPerPartnerEnforcement(TransactionCase):
 
     def test_second_create_blocked(self):
         Svc = self.env['woow_paas_platform.cloud_service']
-        Svc.create(self._svc_vals(self.ws_a))
+        _internal_provision(Svc).create(self._svc_vals(self.ws_a))
         with self.assertRaises(ValidationError):
-            Svc.create(self._svc_vals(self.ws_a))
+            _internal_provision(Svc).create(self._svc_vals(self.ws_a))
 
     def test_different_partner_not_blocked(self):
         Svc = self.env['woow_paas_platform.cloud_service']
-        Svc.create(self._svc_vals(self.ws_a))
-        svc_b = Svc.create(self._svc_vals(self.ws_b))
+        _internal_provision(Svc).create(self._svc_vals(self.ws_a))
+        svc_b = _internal_provision(Svc).create(self._svc_vals(self.ws_b))
         self.assertTrue(svc_b)
 
     def test_zero_means_unlimited(self):
         self.tpl.max_per_partner = 0
         Svc = self.env['woow_paas_platform.cloud_service']
-        Svc.create(self._svc_vals(self.ws_a))
-        self.assertTrue(Svc.create(self._svc_vals(self.ws_a)))
+        _internal_provision(Svc).create(self._svc_vals(self.ws_a))
+        self.assertTrue(_internal_provision(Svc).create(self._svc_vals(self.ws_a)))
 
     def test_find_active_for_partner(self):
         Svc = self.env['woow_paas_platform.cloud_service']
-        svc = Svc.create(self._svc_vals(self.ws_a))
+        svc = _internal_provision(Svc).create(self._svc_vals(self.ws_a))
         found = Svc._find_active_for_partner(self.tpl, self.partner_a)
         self.assertEqual(found, svc)
         self.assertFalse(Svc._find_active_for_partner(self.tpl, self.partner_b))
@@ -105,7 +107,7 @@ class TestMaxPerPartnerEnforcement(TransactionCase):
         真並發，此測只證「鎖被取且用對鍵」——競態正確性靠與 provision advisory lock
         先例一致 + code review，非本測所能覆蓋。"""
         Svc = self.env['woow_paas_platform.cloud_service']
-        Svc.create(self._svc_vals(self.ws_a))
+        _internal_provision(Svc).create(self._svc_vals(self.ws_a))
         self.assertTrue(
             self._advisory_lock_held(self.tpl.id, self.partner_a.id),
             'enforced create 應取 (template, partner) advisory lock')
@@ -114,7 +116,7 @@ class TestMaxPerPartnerEnforcement(TransactionCase):
         """max_per_partner=0（不限制）不進 enforcement 迴圈 → 不取鎖（零開銷驗證）。"""
         self.tpl.max_per_partner = 0
         Svc = self.env['woow_paas_platform.cloud_service']
-        Svc.create(self._svc_vals(self.ws_a))
+        _internal_provision(Svc).create(self._svc_vals(self.ws_a))
         self.assertFalse(
             self._advisory_lock_held(self.tpl.id, self.partner_a.id),
             'max_per_partner=0 不應取鎖')

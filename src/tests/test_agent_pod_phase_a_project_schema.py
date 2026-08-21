@@ -69,6 +69,7 @@ Fixture / env assumptions:
 import uuid
 
 from odoo.tests.common import TransactionCase, tagged
+from ..models.cloud_service import _internal_provision
 
 
 _RELATION_TABLE = 'project_cloud_service_rel'
@@ -108,14 +109,14 @@ class TestPhaseAProjectM2MSchema(TransactionCase):
             'helm_chart_version': '1.0.0',
             'min_vcpu': 1, 'min_ram_gb': 1.0, 'min_storage_gb': 1,
         })
-        self.svc_a = self.Service.sudo().create({
+        self.svc_a = _internal_provision(self.Service.sudo()).create({
             'name': f'Svc A {suffix}',
             'workspace_id': self.ws_a.id,
             'template_id': self.tmpl.id,
             'helm_release_name': f'svc-a-{suffix}',
             'helm_namespace': f'paas-ws-a-{suffix}',
         })
-        self.svc_b = self.Service.sudo().create({
+        self.svc_b = _internal_provision(self.Service.sudo()).create({
             'name': f'Svc B {suffix}',
             'workspace_id': self.ws_b.id,
             'template_id': self.tmpl.id,
@@ -306,14 +307,14 @@ class TestPhaseAProjectDeprecatedFieldDualWrite(TransactionCase):
             'helm_chart_version': '1.0.0',
             'min_vcpu': 1, 'min_ram_gb': 1.0, 'min_storage_gb': 1,
         })
-        self.svc_x = self.Service.sudo().create({
+        self.svc_x = _internal_provision(self.Service.sudo()).create({
             'name': f'Svc X {suffix}',
             'workspace_id': self.ws.id,
             'template_id': self.tmpl.id,
             'helm_release_name': f'svc-x-{suffix}',
             'helm_namespace': f'paas-ws-x-{suffix}',
         })
-        self.svc_y = self.Service.sudo().create({
+        self.svc_y = _internal_provision(self.Service.sudo()).create({
             'name': f'Svc Y {suffix}',
             'workspace_id': self.ws.id,
             'template_id': self.tmpl.id,

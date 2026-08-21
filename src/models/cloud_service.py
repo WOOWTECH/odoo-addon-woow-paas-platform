@@ -1,14 +1,284 @@
+import contextlib
 import json
 import logging
 import secrets
 import uuid
 
-from odoo import _, api, fields, models
-from odoo.exceptions import UserError, ValidationError
+from psycopg2 import OperationalError
 
+from odoo import _, api, fields, models
+from odoo.exceptions import AccessError, UserError, ValidationError
+
+from ..services.naming import make_cs_access_canonical_name
 from .cloud_app_template import SupplyGateError
+from .workspace_access import ROLE_ADMIN
 
 _logger = logging.getLogger(__name__)
+
+#: #528 的待回收 CF Access policy 帳本（三腿共用）。
+_CF_REAP_MODEL = 'woow_paas_platform.cf_access_policy_reap'
+
+
+# ------------------------------------------------------------------------- #
+#  #519：cloud_service 的建立閘（private sentinel）                           #
+# ------------------------------------------------------------------------- #
+#
+# 不變式：**沒有任何 RPC 呼叫端**（裸 ORM／XML-RPC／JSON-RPC／`call_kw`，不論
+# 身分、不論送什麼 vals 或 context）能讓一筆 cloud_service 落地。只有明示開閘
+# 的平台伺服器端 in-process 碼建得出來。閘門在 `create()` 的第一行。
+#
+# 為什麼守線只能長在這裡（#519 的裁決，見
+# `docs/decisions/519-cloud-service-provision-gate.md`）：ACL／`ir.rule` 那層
+# 對本案結構性無效——owner 資格是**可自我滿足**的（任何 `base.group_user` 帳號
+# 免費自建 workspace → `workspace.py` 用 `.sudo()` 自動補一列 role=owner 的
+# access → 滿足 #676 的 `cloud_service_rule_owner_admin_manage`）。而「自建
+# workspace 即為 owner」是**產品設計**、不是缺陷，所以不動那一層。
+#
+# 判準**只讀** context 裡那個值的**物件身分**（`is` 比對），刻意不讀：
+#   * `vals`（raw 或 `_add_missing_default_values` 解析後都不讀）——租戶對
+#     `ir.default` 有完整 CRUD（Odoo 18 base `ir.model.access.csv` 的
+#     `access_ir_default_group_user` 是 1,1,1,1，且 `ir.default.set()` 是
+#     `@api.model`、不查權限）⇒ `default_<欄位>` 有**持久化**載體，任何讀 vals
+#     的守衛都會被繞過。不讀 vals ⇒ 那條陷阱在本形狀下結構上不存在。
+#   * `env.su`——`TransactionCase` 預設就是 su env，讀它會在每個測試裡靜默停用
+#     守衛，正是測試本該證明它有效的地方
+#     （`docs/decisions/patterns/su-env-exempt-guard-false-green.md`）。
+#   * `env.user` / `env.uid`——`controllers/ha_paas.py` 的 `auth='none'` 路徑下
+#     `env.user` 是空 recordset，讀它會誤判。
+#   * workspace role / `has_group()`——讀了就把上面那條產品設計變成守衛的旁路。
+#
+# 為什麼把手的值必須是這個**私有物件**、不能是 `True`／字串／任何 JSON 值：
+# `/web/dataset/call_kw` 把呼叫端送來的 context **整包**換進 env
+# （`odoo/api.py::call_kw`：`context = kwargs.pop('context', None) or {}` →
+# `recs.with_context(context)`，位置參數＝取代不是 merge），所以任何 JSON
+# 表達得出的判準，RPC 呼叫端在 payload 裡多加一個 key 就打開了。這不是推論：
+# #522 在 18.0 上實測過同一件事——一個只有 `base.group_user` 的租戶送
+# `context={'sa_internal_identity_write': true}` 就改寫了 `canonical_name`，
+# 而且新值真的 commit 進 Postgres。JSON 載不了物件身分，`is` 比對才擋得住。
+#
+# 本把手與 `models/security_access.py` 的 `_INTERNAL_IDENTITY_WRITE`
+# （`:64-102`）同構——那是本 repo 已被 #522 實測過的同一套機制，這裡刻意逐字
+# 沿用它的形狀，不另發明。
+class _InternalProvision:
+    """平台伺服器端開通碼的 marker type —— 見上方註解。"""
+
+    __slots__ = ()
+
+    def __repr__(self):
+        return '<internal provision>'
+
+
+_INTERNAL_PROVISION = _InternalProvision()
+
+#: 唯一的逃生口 context key。key 本身不是判準（呼叫端當然抄得到這個字串），
+#: 判準是它的**值身分**，見 `_is_internal_provision`。
+_INTERNAL_PROVISION_CTX_KEY = 'woow_internal_provision'
+
+
+def _internal_provision(records):
+    """回傳「唯一被允許建立 cloud_service」的那個 context 底下的 ``records``。
+
+    比照 `security_access.py` 的 `_internal_identity(records)`：開閘掛在**會讓
+    記錄落地的那一次呼叫**上，不掛在 model handle 的綁定處——唯讀 handle 一律
+    不帶這個 context，逃生口的表面積就只有真正的建立點。
+
+    ``with_context(**kwargs)`` 是 merge，所以 `.sudo()` / `.with_user()` /
+    後續 `with_context(foo=...)` 都保留這個把手。
+    """
+    return records.with_context(
+        **{_INTERNAL_PROVISION_CTX_KEY: _INTERNAL_PROVISION})
+
+
+def _is_internal_provision(env):
+    """判準：**只**比對 context 裡那個值的物件身分（`is`），不讀 vals／su／user。"""
+    return (env.context.get(_INTERNAL_PROVISION_CTX_KEY)
+            is _INTERNAL_PROVISION)
+
+
+# ------------------------------------------------------------------------- #
+#  #744：CS Access 的身分錨點（private sentinel，形狀抄 #522/#524）           #
+# ------------------------------------------------------------------------- #
+#
+# 身分錨點＝「這一列綁的是**哪一個** Cloudflare 物件」的欄位。`access_app_id`
+# 決定了之後的 sync／teardown 會去動帳號裡的哪一個 Access application——租戶
+# 把它改成別人的 app id，平台就會拿受害者的 Access 設定去覆寫或刪除，而這一列
+# 仍然帶著**自己** workspace 的 ir.rule 祝福（rule 擋的是「動哪一筆」，擋不到
+# 「在自己那一筆裡填別人的 id」）。
+#
+# 為什麼另立一套而不共用上面的 `_INTERNAL_PROVISION`：兩者的語意不同——那個是
+# 「這一次建立來自平台開通流程」，本組是「這一次寫入是伺服器在回存 Cloudflare
+# 剛發回來的 id」。共用一把手，等於讓開通路徑順便獲得改寫 Access 錨點的能力
+# （`security_access.py` 把 `sa_internal_prefix_write` 與
+# `sa_internal_identity_write` 分開，理由同）。
+#
+# 值必須是**私有物件**、判準必須是 `is`：`/web/dataset/call_kw` 把呼叫端的
+# context 整包換進 env，任何 JSON 表達得出的判準（True／1／"true"）在 RPC
+# payload 多一個 key 就打開了——#522 在 18.0 上實測過並且值真的 commit 進
+# Postgres。見 docs/decisions/patterns/su-env-exempt-guard-false-green.md。
+_CS_ACCESS_IDENTITY_ANCHOR_FIELDS = (
+    'access_app_id',    # WHICH CF Access application this service configures
+)
+
+# #745：改到這幾個欄位就要把整份 desired state 重推給 operator。
+#
+# 只列**租戶設定得了**的那幾個：`access_app_id` / `access_unresolved_idp_types`
+# 是 sync 自己的回存值，列進來會讓每一次回存再觸發一次 sync（無窮遞迴）。
+_CS_ACCESS_SYNC_FIELDS = (
+    'is_protected', 'login_google', 'login_email_otp', 'session_duration',
+)
+
+
+class _InternalCsAccessIdentityWrite:
+    """CS Access 身分錨點回存的 marker type —— 見上方註解。"""
+
+    __slots__ = ()
+
+    def __repr__(self):
+        return '<internal cs access identity write>'
+
+
+_INTERNAL_CS_ACCESS_IDENTITY_WRITE = _InternalCsAccessIdentityWrite()
+
+#: key 本身不是判準（呼叫端當然抄得到這個字串），判準是它的**值身分**。
+_CS_ACCESS_IDENTITY_CTX_KEY = 'woow_cs_access_identity_write'
+
+
+def _internal_cs_access_identity(records):
+    """回傳「唯一被允許寫 CS Access 身分錨點」的那個 context 底下的 ``records``。"""
+    return records.with_context(
+        **{_CS_ACCESS_IDENTITY_CTX_KEY: _INTERNAL_CS_ACCESS_IDENTITY_WRITE})
+
+
+def _is_internal_cs_access_identity_write(env):
+    return (env.context.get(_CS_ACCESS_IDENTITY_CTX_KEY)
+            is _INTERNAL_CS_ACCESS_IDENTITY_WRITE)
+
+
+def _strip_cs_access_identity_anchors(env, vals_list):
+    """create() 側：把身分錨點**壓成 False**，不是 pop。
+
+    `super().create()` 不經過 `write()`，只守 write 會留下 create-time squat：
+    一列剛落地就綁在受害者的 Access app 上，之後任何 sync／teardown 都會動到
+    對方的資源。對**所有人**生效（含 superuser），sentinel 是唯一豁免。
+    選擇「壓值」而不是「raise」：`copy()` 與一般資料載入照樣要能跑，而一份
+    不帶錨點的複本正是複本該有的樣子。
+
+    🔴 為什麼是**壓成 False** 而不是 `vals.pop(...)`：`pop` 只清得掉呼叫端
+    寫在 vals 裡的那一份，而 `default_<欄位>` 是在 `super().create()` 內部的
+    `_add_missing_default_values` 才展開的——租戶對 `ir.default` 有完整 CRUD
+    （Odoo 18 base ACL 的 `access_ir_default_group_user` 是 1,1,1,1），`call_kw`
+    也直接把呼叫端 context 換進 env ⇒ 送 `context={'default_access_app_id':
+    '<victim>'}` 就能繞過整道 pop，而且守衛不會有任何訊號（#519／#705 是本
+    repo 已經踩過的同一個形狀）。vals 裡的明確值優先於 default，所以壓成
+    False 是「連 default 那條路一起關掉」的最小寫法；`access_app_id` 本來就
+    沒有 default 且 `copy=False`，壓 False 與剝掉在語意上等價。
+    """
+    if _is_internal_cs_access_identity_write(env):
+        return
+    for vals in vals_list:
+        for field in _CS_ACCESS_IDENTITY_ANCHOR_FIELDS:
+            vals[field] = False
+
+
+def _reject_cs_access_identity_anchor_writes(env, vals):
+    """write() 側：拒絕搬動錨點，且要吵。對所有人生效（含 superuser）。"""
+    if _is_internal_cs_access_identity_write(env):
+        return
+    for field in _CS_ACCESS_IDENTITY_ANCHOR_FIELDS:
+        if field in vals:
+            raise UserError(
+                "Field '%s' is immutable after creation." % field
+            )
+
+
+# ------------------------------------------------------------------------- #
+#  #787：CS Access sync 的抑制鑰匙（private sentinel，形狀抄 #536）           #
+# ------------------------------------------------------------------------- #
+#
+# `cs_skip_access_sync` 抑制 `write()` 之後對 operator 的 Access 宣告式推送
+# （#745 接上的那一段）。原本的判定只看 truthy ⇒ `/web/dataset/call_kw` 把呼叫端
+# context 整包換進 env，租戶送 `context={"cs_skip_access_sync": true}` 就能讓
+# `is_protected` 這類欄位**落地進 Postgres 而 Cloudflare 完全不知情**。方向是
+# fail-open：租戶（與平台自己）看到一個開著的保護開關，服務其實完全公開。
+#
+# 這條路徑的可達性在 #787 是**實測過**的，不是推論：租戶自建 workspace 當下就是
+# owner，而 `cloud_service_rule_owner_admin_manage` 給 owner／admin 完整寫入 ⇒
+# 真 RPC 打得進 `CloudService.write()`。ACL 那一半沒有任何東西擋得到它——這把閘
+# 的判準從頭到尾都不是「你是誰」，而是「context 裡那個值是什麼」。
+#
+# 形狀刻意逐字沿用 `models/security_access.py` 的 `_INTERNAL_SYNC_CONTROL`
+# （`:160`）＋`_is_sync_control`（`:188`）——那是本 repo 已被 #522／#536 實測過
+# 的同一套機制，這裡不另發明。
+#
+# ⚠ **key 名沒有改，改的是值**：`with_context(cs_skip_access_sync=False)` 的
+# 「不抑制」語意原封不動，而 `=True` 從此不再開閘。後者是 fail-safe 的方向（多推
+# 一次冪等的全量狀態，而不是漏掉一次），但它是**無聲**的，所以下面的判定函式在
+# 看到「truthy 但不是 sentinel」時會 WARNING —— 那既是偽造的訊號，也是「還有
+# in-process 的碼照舊寫法傳 True」的訊號。
+class _InternalCsSyncControl:
+    """CS Access sync-control 逃生門的 marker type —— 見上方註解。"""
+
+    __slots__ = ()
+
+    def __repr__(self):
+        return '<internal cs sync control>'
+
+
+_INTERNAL_CS_SYNC_CONTROL = _InternalCsSyncControl()
+
+#: key 本身不是判準（呼叫端當然抄得到這個字串），判準是它的**值身分**。
+_CTX_CS_SKIP_ACCESS_SYNC = 'cs_skip_access_sync'
+
+
+def _cs_skip_access_sync(records):
+    """開閘：這一次 write 只搬 DB 狀態，不對 operator 做 Access 推送。
+
+    今天生產碼裡一個呼叫端都沒有（這把鑰匙只有測試佈景在用），helper 仍然要
+    存在：它是 `with_context(cs_skip_access_sync=True)` 這種**可偽造寫法**的唯一
+    替代品。少了它，下一個真的需要抑制推送的人只會照舊寫 `=True`，然後在一個
+    只會印 WARNING 的無聲失效裡 debug。
+    """
+    return records.with_context(
+        **{_CTX_CS_SKIP_ACCESS_SYNC: _INTERNAL_CS_SYNC_CONTROL})
+
+
+def _is_cs_sync_control(env, key):
+    """這個 sync-control 開關是不是**伺服器端程式碼**設的（而非呼叫端偽造的）。
+
+    只有 sentinel 物件算數。JSON 表達不出物件同一性，所以租戶送
+    ``context={"cs_skip_access_sync": true}`` 進 ``call_kw`` 時走的是下面那條
+    WARNING —— 守衛不開閘，這一次寫入照常把 Access 狀態推給 operator。
+    """
+    value = env.context.get(key)
+    if value is _INTERNAL_CS_SYNC_CONTROL:
+        return True
+    if value:
+        _logger.warning(
+            "Ignoring non-sentinel %r in context (value=%r, uid=%s): this "
+            "hatch only opens for in-process callers using the module's "
+            "helper — see _INTERNAL_CS_SYNC_CONTROL (#787). Either a forged "
+            "RPC context, or in-process code still passing True.",
+            key, value, env.uid)
+    return False
+
+
+class SubscriptionBindingError(AccessError):
+    """#519 提案 B：這一次 `subscription_id` 的綁定不合法。
+
+    獨立型別的用途同 `ProvisionGateError`／`SupplyGateError`——讓測試斷言例外
+    **型別**而非文案片段，而且要能和「被 ACL 擋下」（同樣是 `AccessError`）分開。
+    """
+
+
+class ProvisionGateError(AccessError):
+    """#519：這一筆 cloud_service 不是從平台的開通流程來的。
+
+    獨立型別的用途與 `SupplyGateError` 相同——**讓測試斷言例外型別而非文案
+    片段**。這裡尤其必要：基底 `AccessError` 同時也是 ACL／`ir.rule` 拒絕會丟
+    的型別，只斷言 `AccessError` 分不出「被本閘擋下」與「被 ACL 擋下」，那正是
+    這道守線最容易假綠的地方（現有的 ACL 測試本來就在斷言 `AccessError`）。
+    """
+
 
 # #336（Wave A）：計數「活躍實例」時排除的刪除終態。CloudService 刪除走真 unlink
 # （record 離場），故 state 值集內唯一「即將釋放、不應佔用配額」的過渡態
@@ -135,6 +405,32 @@ _STUCK_SUSPENDED_STATES_497 = ('deploying', 'upgrading', 'initializing', 'error'
 # search 盤出來，而不是散在 log 裡靠人翻。文字改動會讓 #497 的測試紅——它是對維運的
 # 契約，不該靜默漂移。
 _UNCONFIRMED_WORKLOAD_MARKER_497 = '#497 已收斂但無法確認 workload 已停機'
+
+# #424①／#672：把服務自身的對外根位址交給「需要知道自己公開位址」的 chart 的
+# value path 對照表。**這張表是「這個 chart 有沒有對外 dashboard」的唯一事實源**，
+# 被兩件事讀：
+#
+#   (a) 部署時注入 —— `_inject_dashboard_public_url`（→ `HERMES_DASHBOARD_PUBLIC_URL`）
+#   (b) 一次性憑證交付 —— `_dashboard_public_url` → controller `_gateway_credentials`
+#
+# 兩邊讀同一張表，「交給租戶的 URL」與「注入給 agent 的 URL」才**必然**是同一個。
+# 各自維護一份的話，漂移那天兩邊都不會報錯：agent 的 OAuth 回呼照舊正確，只有租戶
+# 手上那條 MCP 連線是死的（#672 的形狀——而它一路無聲，直到租戶回報整個管理面壞掉）。
+#
+# 為什麼判準是 value path，而不是像 gateway 那樣讀 seed（`gateway.externalPath`）：
+# dashboard 的對外形態是 **root URL、沒有子路徑**（chart 0.1.3 移除 webui container、
+# nginx `/` 直連 dashboard，`/dashboard/` 是硬 404），所以 seed 裡**沒有**可推導的
+# 路徑值可讀——0.1.3 正是把 `dashboard.externalPath` 整個拿掉的那一版。能表達「這個
+# chart 有對外 dashboard」的事實只剩「平台會不會告訴它自己的公開位址」，也就是這張表。
+#
+# ⚠ 這**不是**新增 slug allowlist（#530 review 否決過的那個做法）：allowlist 是為了
+# 某個判斷另立第二份名單、與 chart 的事實各自演化；這裡的表是 chart schema 知識
+# （值要寫進哪個鍵）本來就只有這一份、且早於本次改動就存在，判斷是從它**推導**出來
+# 的。本次改動沒有新增任何名單，也沒有借用 `template.has_admin_gui`（那是
+# admin_password 的閘門，has_admin_gui 模板裡只有 hermes-agent 有 dashboard 對外形態）。
+_DASHBOARD_PUBLIC_URL_VALUE_PATHS = {
+    'hermes-agent': [('config', 'dashboardPublicUrl')],
+}
 
 
 def _unflatten_dotpath_keys(flat_dict):
@@ -292,6 +588,73 @@ class CloudService(models.Model):
         help='Internal port where the service is listening',
     )
 
+    # ------------------------------------------------------------------ #
+    #  #744 CS Access Control：整組鏡射 SA route 的 access 欄位            #
+    #  （設計拍板 10，見 docs/plans/2026-Q3/                              #
+    #   2026-08-15-cs-access-control-design.md）                          #
+    # ------------------------------------------------------------------ #
+    #
+    # 語意逐欄對齊 `security_access.py` 的 `SecurityAccessRoute`——**刻意鏡射
+    # 而不是共用**：兩者的載體不同（route 掛 SA 專屬 tunnel，CS 走平台共用
+    # tunnel），但送到 operator 的 Access payload 是同一份 hostname 級的宣告，
+    # 所以欄位集必須一致，否則 T3 的 payload builder 會被迫在兩邊各寫一套。
+    #
+    # ⚠ 這些欄位刻意**沒有** `groups=`。本 model 已經有一批
+    # `groups='base.group_system'` 的欄位（helm_values / deploy_params /
+    # mcp_auth_token…），照抄看起來很自然，但 #739 的教訓正是反過來的：欄位級
+    # `groups=` 會讓**平台自己**走租戶身分的寫入路徑吃 AccessError，而
+    # superuser TransactionCase 看不見（欄位級 groups 在 su env 不生效）⇒
+    # 「從來沒成功過」可以整整潛伏到 stg 實測才浮出來。`access_app_id` 要的是
+    # 「不可被租戶搬動」，那是身分錨點守衛（見模組頂端
+    # `_CS_ACCESS_IDENTITY_ANCHOR_FIELDS`）的職責，它對所有人生效且在 su env
+    # 下照樣 fire——用對工具，不要用會假綠的那個。
+    is_protected = fields.Boolean(
+        string='Access Protected',
+        default=False,
+        help='開啟後本服務的公開 subdomain 由 Cloudflare Access 保護：所有'
+             '訪客都必須先通過 Access 驗證。粒度是整個 subdomain（拍板 5）。',
+    )
+    session_duration = fields.Selection(
+        selection=[
+            ('30m', '30 minutes'), ('1h', '1 hour'), ('8h', '8 hours'),
+            ('24h', '24 hours'), ('168h', '7 days'),
+        ],
+        string='Access Session Duration',
+        default='24h',
+        help='通過驗證後多久需要重新登入（本服務）。',
+    )
+    login_google = fields.Boolean(string='Access Login: Google', default=False)
+    login_email_otp = fields.Boolean(
+        string='Access Login: Email OTP', default=False)
+    access_app_id = fields.Char(
+        string='CF Access App ID', copy=False,
+        help='本服務的 Cloudflare Access Application id（sync 後回存）。'
+             '身分錨點：只有伺服器端 sentinel 路徑寫得動。',
+    )
+    access_policy_ids = fields.One2many(
+        comodel_name='woow_paas_platform.security_access_access_policy',
+        inverse_name='cloud_service_id',
+        string='Access Policies',
+        help='本服務的 Access 政策（與 SA route 共用 policy model，'
+             '錨點是 exclusive arc，見 #744）。',
+    )
+    access_unresolved_idp_types = fields.Char(
+        string='Unresolved Login Methods', copy=False,
+        help='上次 sync 時「有要求、但 Cloudflare 帳號上找不到對應 IdP」的登入'
+             '方式（如 google）。非空代表登入限制**被靜默放寬**了——若解析後'
+             '的集合變空，Access app 會 fallback 成全部可用 IdP。刻意曝光而'
+             '不是丟掉。',
+    )
+    access_protection_lost = fields.Boolean(
+        string='Protection Not In Effect', copy=False, default=False,
+        help='True ＝ 本服務的 Cloudflare Access application 已經被拆掉、而記錄'
+             '本身還在（刪除交易回捲了，Cloudflare 那半回捲不掉）。此時 '
+             'is_protected 只是**意圖**：CF 上沒有任何東西在強制登入，subdomain '
+             '照常可達。由下一次成功的 Access sync 清掉。刻意與 is_protected '
+             '分開——降 is_protected 等於平台改掉租戶看得到的設定（產品可見'
+             '變更），未拍板（#794）。',
+    )
+
     # Helm Release Info
     helm_release_name = fields.Char(
         string='Helm Release Name',
@@ -303,6 +666,7 @@ class CloudService(models.Model):
     )
     helm_values = fields.Text(
         string='Helm Values',
+        groups='base.group_system',
         help='JSON object with Helm values used for deployment',
     )
     helm_revision = fields.Integer(
@@ -313,6 +677,21 @@ class CloudService(models.Model):
     helm_chart_version = fields.Char(
         string='Chart Version',
         help='Version of the Helm chart currently deployed',
+    )
+    last_release_sync_at = fields.Datetime(
+        string='Last Release Sync At',
+        help=(
+            "最後一次從 operator 取得 release 事實（chart 版本／revision）的時間。"
+            "注意語意：是「最後一次**問過**」，不是「最後一次**值有變**」——"
+            "租戶要知道的是眼前這個版本號多新，而不是它上次改是什麼時候。\n\n"
+            "⚠ 這個欄位由 #627 (i) 的每日 reconciliation cron 每天 stamp 一次，"
+            "**代價是 `write_date` 從此每天變動**：在此之前，`write_date` 停留在"
+            "「最後一次平台自己動這筆服務」的時間，可以拿來判斷「這筆帳本多久沒被"
+            "碰過」。#552／#627 的調查就用過那個訊號兩次（判定某次 helm upgrade "
+            "不是 Odoo 發起的、以及證明升版沒有順手回寫帳本）。**那個診斷能力從本"
+            "版起消失** —— 要判斷「平台最後一次主動操作這筆服務」請改看 "
+            "`last_upgraded_at` / `deployed_at`，不要再用 `write_date`。"
+        ),
     )
 
     # Resources
@@ -401,6 +780,25 @@ class CloudService(models.Model):
             ON woow_paas_platform_cloud_service (provision_partner_id)
             WHERE provision_partner_id IS NOT NULL
         """)
+        # #519 提案 B：一筆訂閱至多對應一筆 cloud_service。
+        #
+        # 為什麼是 DB 索引而不是 Python COUNT：本檔 `create()` 的 docstring 已經
+        # 記過——Odoo 的 cursor 是 **REPEATABLE READ**，取 advisory lock **不會**
+        # 刷新 snapshot ⇒ check-after-act 在並發下無效（那正是 `max_per_partner`
+        # 至今仍可被繞過的原因，#518）。而「一筆訂閱至多對應一筆 service」正好就是
+        # partial unique index 表達得出的「至多一列」，比照上面 provision_partner_id
+        # 的既有先例。
+        #
+        # ⚠ 既有重複列會讓這一句直接失敗（psycopg2 UniqueViolation）。那個失敗訊息
+        # 讀不出「是哪幾筆」，所以偵測與可讀的錯誤由
+        # `migrations/18.0.1.0.139/pre-migrate.py` 先做掉；這裡只負責建索引，並且
+        # 對 fresh install 與 `-u` 兩條路徑都冪等（`IF NOT EXISTS`）。
+        self.env.cr.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS
+                woow_paas_cloud_service_subscription_uniq
+            ON woow_paas_platform_cloud_service (subscription_id)
+            WHERE subscription_id IS NOT NULL
+        """)
 
     # ------------------------------------------------------------------ #
     #  Actions                                                            #
@@ -443,6 +841,25 @@ class CloudService(models.Model):
             # chart 升版新增的預設能自然補位。見 docs/decisions/patterns/
             # helm-reset-values-unified-pipeline.md。
             template = self.template_id
+            # #552 層 4：redeploy 帶 `template.helm_chart_version` 做 helm upgrade，
+            # 空值 ⇒ 不帶 `--version` ⇒ **升到 registry 當下的 latest**，而
+            # `reset_values=True` 又讓 values 以新版 chart 的預設重新渲染。這條路
+            # 沒有 role gate（後台 button ＋ `call_kw`），一次誤按就是不可逆的跳版。
+            #
+            # ⚠ 這裡用 `UserError` 而不是靜默略過或背景失敗：本方法是**同步**的，
+            # 例外會直接回到呼叫端（後台 UI／RPC）。實查全 repo，`action_redeploy`
+            # 沒有任何 cron／自動化呼叫端（只有 `cloud_service_views.xml` 的兩顆
+            # button），所以擋下來一定有人看得到，不會變成靜默失敗。
+            #
+            # 刻意**不**退回 `self.helm_chart_version`：redeploy 的語意就是「重新
+            # 套用商品當前釘的版本」（允許夾帶升版），改讀服務自己的版本會把它
+            # 悄悄變成另一個功能。要放行就去把 template 的版本填上。
+            if not template.helm_chart_version:
+                raise UserError(
+                    f"無法重新部署：商品「{template.name}」尚未指定 chart 版本。"
+                    f"直接部署會抓 registry 當下的最新版（不可逆的跳版）。"
+                    f"請先在商品設定填入版本再重試。"
+                )
             values = self._assemble_deploy_values()['values']
             sensitive_values = self._build_mcp_sensitive_values()
             try:
@@ -479,6 +896,16 @@ class CloudService(models.Model):
                 'init_error': False,
                 'init_retries': 0,
                 'helm_revision': release_info.get('revision', self.helm_revision),
+                # #552: redeploy runs a real helm upgrade carrying
+                # `template.helm_chart_version` (possibly empty ⇒ registry latest),
+                # so it can move the deployed chart version. Record what the
+                # operator resolved; `or self.helm_chart_version` keeps the old
+                # value when talking to an operator that does not report it yet.
+                # Per-service field only — see `_execute_deploy` for why the
+                # template record must never be written back to.
+                'helm_chart_version': (
+                    release_info.get('chart_version') or self.helm_chart_version
+                ),
                 'last_upgraded_at': fields.Datetime.now(),
             })
             # #482: upgrade 用 chart 預設把 replicas 渲染回去了，收回停機。
@@ -640,7 +1067,10 @@ class CloudService(models.Model):
             raise UserError("PaaS Operator not configured. Contact administrator.")
 
         try:
-            client.reset_release_config(
+            # #552: the response is no longer discarded — it carries the chart
+            # version helm resolved for this upgrade (both operator branches,
+            # config_json and helm_secret, report it).
+            reset_result = client.reset_release_config(
                 namespace=self.helm_namespace,
                 release_name=self.helm_release_name,
                 chart=self.template_id.helm_chart_name,
@@ -706,11 +1136,52 @@ class CloudService(models.Model):
             )
             raise UserError("Reset failed. Check service status and retry.") from e
 
-        # #530：兩把憑證一起落庫。提交點語意不變（C11′ commit-on-secret）——2xx
-        # 代表兩者都已是叢集權威值，2xx 之前的任何失敗都保證叢集仍是舊憑證。
-        self._set_admin_password_secret(
-            new_password, gateway_api_key=new_gateway_api_key,
-        )
+        # ================= 提交點（C11′ commit-on-secret）之後 =================
+        #
+        # #525 B3：從這裡開始，「新密碼已生效」已經是**既成事實**——operator 回了
+        # 2xx，新憑證就是叢集的權威值，而且不會再被回退（helm --atomic 自己回捲、
+        # config.json patch 失敗會還原備份，能失敗的全在 2xx 之前）。
+        #
+        # 因此提交點之後的每一步都只是**記帳**（落庫、stamp state、停權回收），
+        # 不是「reset 有沒有成功」的判準。讓記帳的例外往外拋 ⇒ controller 回
+        # `success: False` ⇒ 告訴租戶「沒換」。那句話是假的，代價也不對稱：
+        # 明文只顯示這一次、平台刻意沒有回讀端點（憑證一律一次性），租戶因此
+        # **永久拿不到**唯一能登入 admin GUI 的那把密碼，還會拿已失效的舊密碼
+        # 反覆重試。所以這兩段的例外一律不外拋（`OperationalError` 除外，見下）。
+        #
+        # 🔴 這裡**刻意不補** `cr.rollback()`。#525 把本處列為 B 級（外觀與 #520
+        # 同構、因果相反）正是這個理由：回捲會把已落庫的新密碼退回舊值，而叢集
+        # 已經是新值 ⇒ 從「一致但租戶不知情」變成「DB 與叢集不一致」，管理員連
+        # admin GUI 都登不進去，之後的 redeploy 還會拿 DB 的舊值去覆寫叢集。
+        #
+        # 用 `cr.savepoint()` 而非裸 try：Python 層例外會在 ORM cache 留下待
+        # flush 的髒值，不清掉的話它會在本 request 稍後（甚至 controller 之外的
+        # commit）再炸一次 → 變成 500 並回捲整筆交易，正好是我們要避免的形態。
+        # `_FlushingSavepoint.rollback` 會先 `cr.clear()` 再 ROLLBACK TO SAVEPOINT。
+        #
+        # 兩段分開包，是因為**回捲單位不同**：憑證落庫必須在記帳失敗時存活下來
+        # （它是與叢集一致的那個事實）；記帳則整組成立或整組不成立。
+        try:
+            with self.env.cr.savepoint():
+                # #530：兩把憑證一起落庫。2xx 代表兩者都已是叢集權威值。
+                self._set_admin_password_secret(
+                    new_password, gateway_api_key=new_gateway_api_key,
+                )
+        except OperationalError:
+            # #518：並發／連線類 DB 例外（SerializationFailure 40001 等）必須傳
+            # 出去讓 Odoo 的 `retrying()` 看見；此刻交易已 aborted，吞掉只會讓
+            # 後續 flush 再炸。重播整個 handler 會重跑一次 reset（另鑄一把新密碼
+            # 重新下發），結果仍然是一致的。
+            raise
+        except Exception:
+            _logger.exception(
+                "[#525 B3] reset-admin-password could NOT store the new "
+                "credentials for service %s (id=%s) although the operator "
+                "already applied them — cluster and DB now disagree; the live "
+                "password is being returned to the tenant so they can still "
+                "sign in, but a later redeploy would re-supply the old value",
+                self.name, self.id,
+            )
 
         # `last_upgraded_at` 同 action_redeploy：reset 走的是同一條 helm
         # upgrade 管線，不記錨就會讓 #489 的 age timeout 拿首裝時間當起點。
@@ -720,15 +1191,43 @@ class CloudService(models.Model):
         # 情境是服務先被 reconfigure 汙染（suspended → upgrading → poll →
         # running）而 pre_suspend_state 仍在：此時 _is_halted() 仍為真＝它其實
         # 還在停權中，reset 完必須把它收回停機，而不是留下一台跑著的欠費服務。
-        halted = self._is_halted()
+        try:
+            with self.env.cr.savepoint():
+                halted = self._is_halted()
+                self.write({
+                    'state': 'suspended' if halted else 'upgrading',
+                    'error_message': False,
+                    # #552: reset carries `template.helm_chart_version` into helm
+                    # upgrade (see the F-461-2 drift log above — this path really
+                    # does change the chart), so it is one of the four places the
+                    # ledger must be refreshed. `or self.helm_chart_version` =
+                    # backward compatibility with an operator whose reset response
+                    # has no `chart_version` yet.
+                    # Per-service field only — never `template.helm_chart_version`.
+                    #
+                    # #525 B3：帳本更新與 state stamp 同屬「記帳」，一起進 savepoint。
+                    # 它失敗時整組回捲（帳本維持舊值＝與失敗前一致），但**不會**
+                    # 波及上一段已落庫的憑證，也不會翻轉「密碼已生效」的回應。
+                    'helm_chart_version': (
+                        (reset_result or {}).get('chart_version')
+                        or self.helm_chart_version
+                    ),
+                    'last_upgraded_at': fields.Datetime.now(),
+                })
+                self._rescale_halted_after_upgrade(client)
+        except OperationalError:
+            raise
+        except Exception:
+            # 記帳整組回捲 ⇒ state 留在 'running'。代價是前端少一輪 upgrading
+            # 輪詢（服務仍會自己收斂），遠小於讓租戶永久拿不到已生效的密碼。
+            _logger.exception(
+                "[#525 B3] reset-admin-password bookkeeping failed for service "
+                "%s (id=%s) AFTER the new credentials took effect — the reset "
+                "itself stands and the password is being returned; platform-side "
+                "state/last_upgraded_at/helm_chart_version may be stale",
+                self.name, self.id,
+            )
 
-
-        self.write({
-            'state': 'suspended' if halted else 'upgrading',
-            'error_message': False,
-            'last_upgraded_at': fields.Datetime.now(),
-        })
-        self._rescale_halted_after_upgrade(client)
         return new_password
 
     # ------------------------------------------------------------------ #
@@ -801,6 +1300,44 @@ class CloudService(models.Model):
         mcp_api_key = params.get('mcp_api_key')
 
         try:
+            # #552 層 4 —— **backstop，不是主閘門**。主閘門在可購買性裁決點
+            # （`cloud_app_template._reject_reason_for_new_instance`），擋在收錢之前。
+            #
+            # 🔴 **這不是過渡期保險，是永久涵蓋——不要當成清得掉的舊碼。**
+            # 主閘門掛在 `CloudService.create()` 上，所以它只看得到**新建**的列。
+            # 有一條當前就存在、可重複觸發的路徑會讓一台服務走進 `_execute_deploy`
+            # 而**完全不經過 create**：
+            #
+            #     controllers/ha_paas.py 的 provision 重試 —— 既有服務處於 `error`
+            #     時，它 `existing.sudo().write({'state': 'pending'})` 再觸發 deploy
+            #     cron。**是 write 不是 create** ⇒ `_enforce_supply_gate` 不會跑，
+            #     cron 隨後直接呼叫本方法。這條路上**只有這道 backstop 接得住**。
+            #
+            # （另一種同樣接不到主閘門的列：閘門上線前就已經躺在 `pending` 的服務。
+            # 那個確實是過渡期的，但它**不是**本 backstop 存在的唯一理由。）
+            #
+            # 而 install 不帶 `--version` 就是 registry latest。
+            #
+            # 🔴 **位置在 `try` 之內是必要條件，不是風格**。放在 try 外面時，例外
+            # 會直接穿過本方法，落進 `_cron_process_pending_deploys` 的泛用
+            # `except Exception` —— 訊息被換成「Unexpected error during
+            # deployment. Check server logs.」，租戶與第一線都無從排錯（#520 症狀
+            # 4 同型）。實測踩過一次：`state` 確實變成 error，但 `error_message`
+            # 完全不提版本，看起來就像基礎設施故障。
+            #
+            # ⚠ 例外型別同理**必須**是 `PaaSOperatorError`：底下那個 handler 才會
+            # 把 detail 寫進 `error_message`。兩個條件（位置＋型別）少一個都會讓
+            # 這道 backstop 退化成「擋下來了，但沒人知道為什麼」。
+            if not template.helm_chart_version:
+                raise PaaSOperatorError(
+                    'chart version not pinned',
+                    detail=(
+                        f'商品「{template.name}」尚未指定部署版本，為避免部署到'
+                        f'未知的 chart 版本已中止開通。請在 seed 釘版後重新發版'
+                        f'（#552）。'
+                    ),
+                )
+
             # Create namespace (409 = already exists, OK)
             cpu_limit, memory_limit, storage_limit = self._compute_ns_quota(
                 self.workspace_id,
@@ -859,6 +1396,24 @@ class CloudService(models.Model):
             # Helm install done — update release info and clean up deploy params
             self.write({
                 'helm_revision': release_info.get('revision', 1),
+                # #552: record the chart version helm ACTUALLY resolved. With an
+                # empty `template.helm_chart_version` no `--version` is sent and
+                # helm picks the registry's latest — the ledger used to keep the
+                # (empty) template value forever, so the tenant's service-detail
+                # page showed a version nobody had verified.
+                #
+                # ⚠ Written to **cloud_service** (per-service), never to
+                # `template.helm_chart_version`: the seed is `noupdate=0` and the
+                # healer at the tail of `data/cloud_app_templates.xml` clears
+                # `ir.model.data.noupdate` on every `-u`, so a hand-written
+                # template value is silently reverted by the next release (same
+                # discipline as `cloud_app_template.py` `_DEFAULT_GLOBAL_INSTANCE_CAPS`).
+                #
+                # `or self.helm_chart_version` keeps backward compatibility with
+                # an operator that predates the field: unknown ⇒ keep, never blank.
+                'helm_chart_version': (
+                    release_info.get('chart_version') or self.helm_chart_version
+                ),
                 'deployed_at': fields.Datetime.now(),
                 'deploy_params': False,
             })
@@ -919,9 +1474,8 @@ class CloudService(models.Model):
         """
         self.ensure_one()
         template = self.template_id
-        values = self._strip_mcp_sensitive_values(
-            json.loads(self.helm_values) if self.helm_values else {}
-        ) or {}
+        # #559：helm_values 有 groups=，屬性直讀會 AccessError。走唯一入口。
+        values = self._strip_mcp_sensitive_values(self._helm_values_dict()) or {}
 
         # Inject StorageClass for PVC lifecycle management
         storage_class = self.env['ir.config_parameter'].sudo().get_param(
@@ -1255,16 +1809,23 @@ class CloudService(models.Model):
         這個值（平台以 Cloudflare tunnel 對外，不走 chart 的 ingress），與
         ``_inject_allowed_origins``（#380）同一 family，由唯一知道 host 的平台補上。
 
-        對外形態＝subpath（Eugene 2026-07-27 拍板 Q1；上游原生支援已實測確認——
-        ``X-Forwarded-Prefix`` 會一併重建 302 Location／OAuth ``redirect_uri``／
-        cookie Path／SPA 資產路徑）：``https://{subdomain}.{paas_domain}/dashboard``，
-        由 chart 的 auth-proxy sidecar 轉給 127.0.0.1:9119。
+        對外形態＝**root URL**（chart 0.1.3 移除 webui container，nginx ``/``
+        直連 dashboard，故 OAuth ``redirect_uri``／SPA 資產路徑／cookie Path 一律
+        以 root 為基準）：
+        ``https://{subdomain}.{paas_domain}``，
+        由 chart 的 auth-proxy 轉給 127.0.0.1:9119。
 
-        ⚠ 注入值**必須已含 ``/dashboard`` 前綴**：上游直接拿這個值當 OAuth
-        ``redirect_uri`` 的權威來源，只給根位址的話回呼會打到 webui（``/``）而不是
-        dashboard，授權流程靜默失敗。
+        ⚠ 注入值**必須是 root URL**：上游直接拿這個值當 OAuth ``redirect_uri``
+        的權威來源；先前 0.1.x（含 0.1.1）注入 ``/dashboard`` suffix，OAuth
+        回呼路徑與 SPA fetch 才能落到 dashboard，0.1.3 移除 webui 後 suffix
+        變成多餘且會把回呼打到 404 subpath。
 
         無此 value path 的 chart 一律 no-op。
+
+        #672：對照表已上移為 module 層的 ``_DASHBOARD_PUBLIC_URL_VALUE_PATHS``
+        ——同一張表現在也是「要不要把這個 URL 交給租戶」的判準
+        （``_dashboard_public_url``）。放在方法內部的話，交付端只能自己另寫一份
+        判斷，而那份會與這裡各自演化。
 
         Args:
             values: Helm values dict（就地修改並回傳）
@@ -1274,15 +1835,10 @@ class CloudService(models.Model):
         Returns:
             Modified values dict
         """
-        # slug → (value paths, 該 chart 的對外子路徑)
-        path_map = {
-            'hermes-agent': ([('config', 'dashboardPublicUrl')], '/dashboard'),
-        }
-        entry = path_map.get(template_slug)
-        if not entry or not base_url:
+        paths = _DASHBOARD_PUBLIC_URL_VALUE_PATHS.get(template_slug)
+        if not paths or not base_url:
             return values
-        paths, subpath = entry
-        public_url = '%s%s' % (base_url.rstrip('/'), subpath)
+        public_url = base_url.rstrip('/')
         for path in paths:
             d = values
             for key in path[:-1]:
@@ -1434,7 +1990,7 @@ class CloudService(models.Model):
         仍在跑），只是平台沒有網址可以交給租戶。
 
         為什麼鑄造也要判、而不是「先鑄好、之後 chart 支援了就能用」：`has_admin_gui`
-        的 8 個模板裡只有 hermes-agent 有 gateway，其餘 7 個 chart 會收到一個平台
+        的模板裡只有 hermes-agent 有 gateway，其餘 chart 會收到一個平台
         並不打算給它的 `auth.apiServerKey`。今天無害純粹是因為 mcp-server／
         open-design chart 沒有宣告 `auth` 區塊、也沒有 values.schema.json——是**隱性
         契約**：哪天 mcp-server 補了 `auth:`（很合理的演進），這幾顆就會無聲吃下一
@@ -1459,6 +2015,30 @@ class CloudService(models.Model):
             # 服務都去查一次 paas_domain（_public_base_url 走 ir.config_parameter）。
             return ''
         return self._build_gateway_public_url(external_path, self._public_base_url())
+
+    def _dashboard_public_url(self):
+        """本服務 dashboard REST API 的對外網址（chart 不吃／服務無 subdomain 回 ''）。
+
+        #672 的交付判準本體：controller 的 `_gateway_credentials` 用它決定要不要把
+        這條網址交給租戶。判準兩層，與 gateway 同一種分層——
+        「chart 有沒有對外 dashboard」是 template 的屬性
+        （`_DASHBOARD_PUBLIC_URL_VALUE_PATHS`，同時也是注入端的事實源），
+        「這台服務有沒有對外根位址」是 service 的屬性（subdomain）。兩個都成立才交得
+        出東西：半條網址不是憑證，交出去只會讓租戶去 debug 一個不存在的端點。
+
+        回傳值形態是 **root URL、不帶任何子路徑**（chart 0.1.3 移除 webui container、
+        nginx `/` 直連 dashboard，`/dashboard/` 是硬 404）。這正是 #530 那個坑的鏡像：
+        那次是漏了 gateway 的子路徑，這次是**多**了 dashboard 的——兩種都是一條看起來
+        正常的死鏈，且都不會有任何一端報錯。正規化（`rstrip('/')`）與注入端同一行邏輯，
+        所以「交付值 ≡ 注入值」是可斷言的（見
+        test_dashboard_url_equals_the_url_injected_into_the_chart）。
+        """
+        self.ensure_one()
+        if not _DASHBOARD_PUBLIC_URL_VALUE_PATHS.get(self.template_id.slug):
+            # 短路：絕大多數 template 不吃這個值，先擋掉才不會為了清單裡的每一列服務
+            # 都去查一次 paas_domain（_public_base_url 走 ir.config_parameter）。
+            return ''
+        return self._public_base_url().rstrip('/')
 
     def _get_secret_record(self):
         self.ensure_one()
@@ -1498,8 +2078,8 @@ class CloudService(models.Model):
         #530：gateway API key 走 ``auth.apiServerKey``——chart 憑證解析優先序的第一段
         就是「顯式 values 值」，所以平台供給的 per-service key 會勝過 chart 自產。
         它有**自己的**閘門 ``_chart_has_gateway``（seed 的 gateway.externalPath），
-        不與 admin_password 的 ``has_admin_gui`` 共用：has_admin_gui=True 的 8 個模板
-        裡只有 hermes-agent 有 gateway，共用閘門會把這個鍵送給另外 7 個並不吃它的
+        不與 admin_password 的 ``has_admin_gui`` 共用：has_admin_gui=True 的模板
+        裡只有 hermes-agent 有 gateway，共用閘門會把這個鍵送給其餘並不吃它的
         chart（今天無害只因那些 chart 沒宣告 auth 區塊——隱性契約，見
         ``_chart_has_gateway`` 的 docstring）。兩個閘門都不是 slug allowlist。
         """
@@ -1554,6 +2134,54 @@ class CloudService(models.Model):
         if isinstance(auth, dict):
             auth.pop('apiServerKey', None)
         return result
+
+    # ------------------------------------------------------------------
+    # #559：helm_values 的欄位級授權（groups='base.group_system'）之後，
+    # 平台程式碼存取它的**唯二**入口。
+    #
+    # 為什麼欄位要有 groups=：`helm_values` 裝的是租戶親手填的憑證
+    # （odooPassword／smtpPassword／auth.*ApiKey）。#535 把服務詳情 API 的遮罩
+    # 改成 spec-driven，但那道遮罩在 **controller 層**；欄位本身沒有 groups= 時，
+    # 租戶可以直接打 `POST /web/dataset/call_kw` 送 `read(['helm_values'])`
+    # **繞過整個 controller 遮罩層**拿到明文。實測坐實（#559）：最低權限
+    # （workspace role=guest）的 `base.group_user` 租戶讀得到完整明文，而同一條
+    # 路徑上讀 `n8n_owner_password`（有 groups=）會被 AccessError 擋下
+    # ——鑑別項證明了「有 groups= 就會被擋」在這條路徑上確實生效。
+    #
+    # 為什麼要這兩個 helper：groups= 擋的不只是 RPC，**連平台自己的 ORM 屬性存取
+    # 也一併擋掉**（實測：`_format_service` 的 `service.helm_values` 直接拋
+    # AccessError，租戶的服務詳情頁與 reconfigure 全掛）。租戶**應該**看得到自己
+    # 的設定——只是要走 BFF、經 `_sanitize_helm_values` 遮罩後才出去。所以合法路徑
+    # 需要提權，而提權集中在這裡、不散落成一堆 `.sudo()`。
+    #
+    # ⚠ 呼叫端的義務：這兩個 helper **只提升欄位級權限，不做記錄級授權**。
+    # 呼叫前必須已經確認呼叫者有權碰這筆 service（controller 端是
+    # `workspace.check_user_access()` ＋ ir.rule 在 browse 後的第一次讀）。
+    # 不要在「還沒授權的 recordset」上呼叫它們——那才是
+    # docs/decisions/patterns/orm-vs-endpoint-acl-test-coverage.md 講的那種洞。
+    # ------------------------------------------------------------------
+
+    def _helm_values_dict(self):
+        """讀出 helm_values 並解析成 dict（空值／未設定回 ``{}``）。
+
+        解析失敗時**照原樣拋出**，與改動前各呼叫點的行為一致（那些點原本就是
+        裸 ``json.loads``）——不在這裡吞掉，免得壞掉的 JSON 變成靜默的空設定。
+        """
+        self.ensure_one()
+        raw = self.sudo().helm_values
+        return json.loads(raw) if raw else {}
+
+    def _apply_helm_values(self, values, extra_vals=None):
+        """寫回 helm_values（會套用與 ``create()`` 相同的敏感值剝除）。
+
+        ``extra_vals`` 裡的其他欄位**刻意不提權**、走呼叫者自己的身分寫入，
+        這樣 ir.rule 對它們照常生效——提權只落在 helm_values 這一格。
+        """
+        self.ensure_one()
+        if extra_vals:
+            self.write(extra_vals)
+        stripped = self._strip_mcp_sensitive_values(values)
+        self.sudo().write({'helm_values': json.dumps(stripped)})
 
     def _has_mcp_admin_secret(self):
         self.ensure_one()
@@ -1656,6 +2284,120 @@ class CloudService(models.Model):
                     "Error checking status for service %s (id=%s)",
                     service.name, service.id,
                 )
+
+    def _cron_reconcile_release_facts(self):
+        """#627 (i)：抓「非由 Odoo 發起」的 chart 變動——**唯一會看 running 的路徑**。
+
+        ## 為什麼需要獨立一條
+
+        #552 層① 的第五條回寫路徑是 poll，設計目的就是抓「有人直接對叢集下
+        `helm upgrade`、Odoo 完全不知道」。但 poll 的兩個入口與
+        ``_cron_check_deploying_services`` 的 domain **都只收轉移狀態**
+        （deploying／upgrading／initializing／deleting）——而那種變動發生時服務正是
+        ``running`` ⇒ **要抓的場景與能執行的場景不相交**（#627 缺陷 (i)，stg
+        `svc-bd9d6ed3` 漂移 3 天無人發現）。
+
+        ## 與 ``_poll_and_update_status`` 的根本差異：**絕不碰 state**
+
+        那個函式會依 release status 推狀態機（deployed→running、failed→error…）。
+        對 ``running`` 服務跑它，等於讓一條對帳工作去改生命週期狀態——叢集暫時不健康
+        就會把租戶的服務打成 ``error``，而 error 沒有任何路徑會自己 poll 回來。
+        ⇒ **本 cron 只做「讀 → 比對 → 回寫 release 事實」**，一行 state 都不寫。
+        repo-lint 的 ``poll-release-facts-single-source`` 判準 5 機械強制這件事。
+
+        ## 頻率：每日一次，先不要調快
+
+        漂移的後果是**帳面錯誤不是服務中斷** ⇒ 不需要分鐘級偵測。要不要縮短請看下面
+        那條 log 累積出來的資料，**不要用直覺**——目前對「漂移多常發生」的全部認識
+        只有 stg 一筆軼事。
+
+        ## Log：**改 0 筆也要印**，而且要印出掃描範圍與是哪幾筆
+
+        只在有改動時才記，會讓「一直沒漂移」與「cron 根本沒跑」的日誌畫面完全相同；
+        只印筆數不印範圍，則會讓「suspended 沒漂移」與「suspended 根本沒被看」相同。
+        兩者是同一個家族，差別只在它升到了範圍那一層。
+
+        ## ⚠ 代價：`write_date` 從此每天變動
+
+        本 cron 每天都會 stamp ``last_release_sync_at``（即使沒有漂移），而那是一次
+        真正的 ORM write ⇒ ``write_date`` 每天都會動。**在此之前 `write_date` 可以
+        用來判斷「這筆帳本多久沒被平台碰過」，#552／#627 的調查用過它兩次**（判定
+        某次 helm upgrade 不是 Odoo 發起的、以及證明升版沒有順手回寫）。那個診斷
+        能力從本版起消失——要判斷「平台最後一次主動操作」請改看 ``last_upgraded_at``
+        ／``deployed_at``。這個取捨是刻意接受的（#627 留言有記）。
+        """
+        from ..services.paas_operator import get_paas_operator_client
+
+        services = self.search([('state', '=', 'running')])
+
+        # 掃描範圍要能被讀出來：只印「掃描 N 筆」會讓「範圍外的沒漂移」與「範圍外的
+        # 根本沒被看」畫面相同。逐狀態點名，不是只給總數。
+        out_of_scope = {}
+        for svc in self.search([('state', '!=', 'running')]):
+            out_of_scope[svc.state] = out_of_scope.get(svc.state, 0) + 1
+        scope_note = (
+            '另有 %s 不在本 cron 範圍' % ' / '.join(
+                '%s %d' % (state, count)
+                for state, count in sorted(out_of_scope.items()))
+            if out_of_scope else '無其他狀態的服務')
+
+        client = get_paas_operator_client(self.env)
+        if not client:
+            # 沒有 client 時**大聲說**：靜默 return 會讓「operator 沒設定」與
+            # 「掃過了都沒漂移」的日誌畫面相同，正是本 cron 要避免的形態。
+            _logger.warning(
+                "reconcile-release-facts: operator client 未設定，本輪未執行"
+                "（掃描範圍本應為 %d 筆 running，%s）", len(services), scope_note)
+            return
+
+        changed, failed = [], []
+        for service in services:
+            try:
+                # 逐筆 savepoint：一筆失敗不得中斷整批。用 savepoint 而非裸 try 是
+                # 因為 OperationalError 之後 cursor 已不可用，後續會連帶全部失敗。
+                with self.env.cr.savepoint():
+                    status = client.get_status(
+                        namespace=service.helm_namespace,
+                        release_name=service.helm_release_name,
+                        include_vm=service._needs_vm_status(),
+                    )
+                    facts = service._release_facts(status.get('release', {}))
+                    # 舊值必須**在寫入之前**收起來：寫完之後 `service[field]` already
+                    # 是新值，log 就只印得出「現在是什麼」而不是「從什麼變成什麼」，
+                    # 而後者才是判斷漂移頻率與幅度的那份母體資料。
+                    drift = {
+                        field: (service[field], value)
+                        for field, value in facts.items()
+                        if field != 'last_release_sync_at'
+                        and service[field] != value
+                    }
+                    # 有沒有漂移都寫同一個 dict：`drift` 只用於 log。
+                    #
+                    # 為什麼不在無漂移時只寫 `last_release_sync_at` 那一格：那會在這裡
+                    # 出現一個 release 事實欄位的**字面鍵**，也就是 #627 的成因形態
+                    # （逐路徑列欄位），repo-lint 判準 2 會擋。而且沒有好處——版本欄位
+                    # 寫進相同的值本來就沒有語意變化，`write_date` 反正每天都會動
+                    # （見本方法 docstring 的代價段）。
+                    service.write(facts)
+                    if drift:
+                        changed.append((service, drift))
+            except Exception as exc:
+                failed.append((service, exc))
+
+        _logger.info(
+            "reconcile-release-facts: 掃描 %d 筆 running（%s），%d 筆漂移已修正"
+            "%s", len(services), scope_note, len(changed),
+            ("，%d 筆讀取失敗" % len(failed)) if failed else "")
+        for service, drift in changed:
+            _logger.info(
+                "  id=%s %s  %s", service.id, service.name,
+                '  '.join(
+                    '%s %s→%s' % (field, old or '(空)', new or '(空)')
+                    for field, (old, new) in sorted(drift.items())))
+        for service, exc in failed:
+            _logger.warning(
+                "  id=%s %s 讀取失敗：%s（本筆略過，不影響其餘）",
+                service.id, service.name, exc)
 
     # ------------------------------------------------------------------ #
     #  就緒判定：兩層共用的單一事實源（#423 W5a）                          #
@@ -2240,6 +2982,45 @@ class CloudService(models.Model):
         if (self.import_progress or None) != progress:
             self.sudo().write({'import_progress': progress or False})
 
+    def _release_facts(self, release):
+        """operator 回報的 release 事實 → 帳本回寫欄位。**兩份 poll 的單一來源。**
+
+        #627：poll 有**兩份實作** —— `PaasController._update_service_status`
+        （租戶打 list／detail 端點時走）與本模組的 `_poll_and_update_status`
+        （**cron** 走）。原本兩份各自組自己的 write vals，結果 controller 那份
+        寫了 `helm_chart_version`、cron 這份只寫 `helm_revision`，而唯一斷言
+        「`release_facts` 必須到得了每個 write 分支」的測試**整份只驅動
+        controller** ⇒ cron 那份整份沒有回寫也全綠（#552 層① 的第五條回寫路徑
+        因此在無人值守時失效）。
+
+        ⇒ **欄位集合收斂在這裡**：兩份實作都必須經由本方法取得 write vals。日後
+        新增第三個 release 事實欄位時，兩份會同時跟上，不會再各漏各的。
+
+        ⚠ 這裡刻意**只收斂「寫什麼」，不收斂「什麼時候寫」** —— 兩份的控制流
+        （post-deploy init 的兩套實作、404／`deleting` 分支的 savepoint 差異，見
+        `tests/test_poll_teardown_rollback_525.py`）差異是另一件事，收斂它的爆炸
+        半徑遠大於本修法，見 #627 的討論。
+
+        `or self.helm_chart_version`＝舊 operator 不回這個欄位（或回空字串）時
+        **保留帳本原值**：未知不得覆蓋成空。
+        """
+        self.ensure_one()
+        return {
+            'helm_revision': release.get('revision', self.helm_revision),
+            'helm_chart_version': (
+                release.get('chart_version') or self.helm_chart_version
+            ),
+            # #627 (i)：`last_release_sync_at` 也走這個咽喉 ⇒ **三個寫入者**
+            # （兩份 poll ＋ reconciliation cron）自動全部 stamp，不必逐路徑補。
+            # 這正是本方法存在的理由，也避免這個新欄位重演 #627。
+            #
+            # ⚠ 語意是「最後一次**問過** operator」，不是「最後一次值有變」——
+            # 所以無漂移時 reconciliation cron 仍會寫它（見該 cron 的 docstring）。
+            # ⚠ 必須 `fields.Datetime.now()`（UTC naive）不能 `datetime.now()`
+            # （本機時區）；repo-lint 的 transition-anchor-utc 已把本欄位納入覆蓋。
+            'last_release_sync_at': fields.Datetime.now(),
+        }
+
     def _poll_and_update_status(self, client):
         """Poll operator and transition state for a single service.
 
@@ -2261,7 +3042,23 @@ class CloudService(models.Model):
             )
         except PaaSOperatorError as e:
             if e.status_code == 404 and self.state == 'deleting':
-                self.unlink()
+                # #525 B5：與 controller 的 `_update_service_status` 同形，缺陷
+                # 也同形——`unlink()` 中途拋錯 → 例外逸出這個 except handler
+                # （同層 sibling 的 `except Exception` 接不到）→ 被唯一呼叫端
+                # `_cron_check_deploying_services` 迴圈的 catch-all 吞掉 → cron
+                # 照常 commit 刪一半的狀態。
+                #
+                # ⚠ **今天這條分支不可達**：唯一的生產呼叫端 cron 的 domain 是
+                # `state in ('deploying','upgrading','initializing')`（本檔
+                # `_cron_check_deploying_services`），不含 `deleting`，所以
+                # `self.state == 'deleting'` 在被呼叫到時恆為 False。這裡的
+                # savepoint 是**結構防護**：domain 一旦補上 `deleting`（controller
+                # 側的 `_list_services` 就是這樣列的），殘留立刻可達，而那時不會
+                # 有人記得回來補這一行。形態同
+                # `subscription_lifecycle_cron._cron_enforce_subscription_lifecycle`
+                # 的 per-item savepoint。
+                with self.env.cr.savepoint():
+                    self.unlink()
             else:
                 _logger.warning("Error polling status for %s: %s", self.name, e)
             return
@@ -2271,12 +3068,15 @@ class CloudService(models.Model):
 
         release = status.get('release', {})
         release_status = release.get('status', '')
-        helm_revision = release.get('revision', self.helm_revision)
-
         # Re-fetch for optimistic locking
         service = self.browse(self.id)
         if not service.exists() or service.state != original_state:
             return
+
+        # #627：欄位集合來自 `_release_facts`（與 controller 那份同一個來源），
+        # **不要**在下面的 write 分支裡各自列欄位——那正是 cron 這份漏掉
+        # `helm_chart_version` 的方式。
+        release_facts = service._release_facts(release)
 
         # 進度先落地（與就緒判定無關，且未就緒時才是最有用的時候）。
         service._store_import_progress(status)
@@ -2301,7 +3101,7 @@ class CloudService(models.Model):
                 if needs_init and original_state == 'deploying':
                     service.write({
                         'state': 'initializing',
-                        'helm_revision': helm_revision,
+                        **release_facts,
                         'error_message': False,
                     })
                     service._model_run_post_deploy_init(client)
@@ -2312,7 +3112,7 @@ class CloudService(models.Model):
                 elif needs_init and original_state == 'upgrading' and service.addon_update_pending:
                     service.write({
                         'state': 'initializing',
-                        'helm_revision': helm_revision,
+                        **release_facts,
                         'error_message': False,
                         'init_retries': 0,
                         'init_error': False,
@@ -2322,14 +3122,14 @@ class CloudService(models.Model):
                 else:
                     service.write({
                         'state': 'running',
-                        'helm_revision': helm_revision,
+                        **release_facts,
                         'error_message': False,
                     })
 
         elif release_status == 'failed':
             service.write({
                 'state': 'error',
-                'helm_revision': helm_revision,
+                **release_facts,
                 'error_message': release.get('description', 'Deployment failed'),
             })
 
@@ -2338,7 +3138,7 @@ class CloudService(models.Model):
             # `unknown`。既有碼對這些一律靜置等下一輪——**但它們同樣會永久卡**：
             # helm 的 subprocess 被 SIGKILL 在 rollback 途中就會把 release 留在
             # `pending-rollback`，沒有任何東西會再推它（同
-            # `reference_helm_atomic_failure_double_timeout` 的實錄）。故一併
+            # `docs/reference/gotchas/helm-atomic-failure-double-timeout.md` 的實錄）。故一併
             # 納入封頂：狀態不動，只是讓 age timeout 有話可說。
             # （限縮在受管狀態，避免給 `deleting` / `initializing` 添 log 噪音。）
             #
@@ -2395,17 +3195,21 @@ class CloudService(models.Model):
                     'init_retries': 0,
                     'init_error': False,
                 }
-                if template.mcp_api_key_helm_path and self.helm_values:
+                merged_helm_values = None
+                if template.mcp_api_key_helm_path:
                     try:
-                        current_values = json.loads(self.helm_values)
+                        # #559：走唯一入口（欄位有 groups=，屬性直讀會 AccessError）
+                        current_values = self._helm_values_dict()
                         api_key_nested = _unflatten_dotpath_keys(
                             {template.mcp_api_key_helm_path: real_api_key}
                         )
-                        updated_values = _deep_merge(current_values, api_key_nested)
-                        update_vals['helm_values'] = json.dumps(updated_values)
+                        merged_helm_values = _deep_merge(current_values, api_key_nested)
                     except (json.JSONDecodeError, TypeError):
                         _logger.warning("Failed to update helm_values with real API key for service %s", self.name)
-                self.write(update_vals)
+                if merged_helm_values is not None:
+                    self._apply_helm_values(merged_helm_values, extra_vals=update_vals)
+                else:
+                    self.write(update_vals)
                 _logger.info("n8n init succeeded for service %s (via cron)", self.name)
             else:
                 self._record_init_failure(result.get('error', 'Unknown error'))
@@ -2456,8 +3260,429 @@ class CloudService(models.Model):
     #  Subscription lifecycle: suspend / resume / cleanup                #
     # ------------------------------------------------------------------ #
 
+    # ------------------------------------------------------------------ #
+    #  #744：CS Access teardown（形態比照 SA `_teardown_route_access`）     #
+    # ------------------------------------------------------------------ #
+
+    def _access_hostname(self):
+        """本服務受 Access 保護的主機名（無 subdomain 回 ''）。
+
+        與 `_public_base_url()` 同源但只回 host——Cloudflare Access app 的錨
+        是 hostname 不是 URL（payload 無 scheme），兩處各自組一次 domain 是
+        漂移的起點。
+        """
+        self.ensure_one()
+        base = self._public_base_url()
+        return base.split('://', 1)[-1] if base else ''
+
+    def _access_to_dict(self):
+        """本服務 Access 設定的對外形狀（#745）。
+
+        單一裁決處：`_format_service` 的 detail payload 與兩支 access endpoint
+        的回應都讀它，三處各拼一次就會漂移（前端只會發現其中一處對）。
+
+        **刻意不吐** `access_app_id`：那是伺服器擁有的 Cloudflare 物件 id，前端
+        一格都用不到，吐出去只是把身分錨點的值送給每一個看得到這個頁面的成員。
+        `access_unresolved_idp_types` 相反——它是「登入限制被靜默放寬了」的訊號，
+        不讓租戶看到才是問題。
+        """
+        self.ensure_one()
+        return {
+            'is_protected': self.is_protected,
+            'session_duration': self.session_duration,
+            'login_google': self.login_google,
+            'login_email_otp': self.login_email_otp,
+            'access_unresolved_idp_types':
+                self.access_unresolved_idp_types or '',
+            # #794 fail-open 訊號：宣稱受保護、但 CF 上的 app 已經被拆掉。不吐
+            # 的話 UI 只讀得到 is_protected 這個**意圖**欄位。
+            'access_protection_lost': self.access_protection_lost,
+            'hostname': self._access_hostname(),
+            'access_policies': [p.to_dict() for p in self.access_policy_ids],
+        }
+
+    def _access_canonical_name(self):
+        """本服務在 Cloudflare Access 上的命名根（帶 env token，#745）。
+
+        單一裁決處：sync 與 teardown 兩條 payload 都讀它，兩邊各算一次就是漂移
+        的起點。實際公式與「為什麼不能反推自 `subdomain`」寫在
+        `services/naming.py::make_cs_access_canonical_name`。
+        """
+        self.ensure_one()
+        deploy_env = self.env['ir.config_parameter'].sudo().get_param(
+            'woow_paas_platform.deploy_env', 'prod')
+        return make_cs_access_canonical_name(
+            self.workspace_id.ws_hash, self.reference_id, self.name,
+            env=deploy_env)
+
+    def _get_operator_client(self):
+        """operator client；未設定就 fail-loud。
+
+        刻意**不**回 None 讓呼叫端靜默跳過：Access 是安全功能，「設定寫進 DB 但
+        沒人告訴 Cloudflare」＝租戶以為已保護、實際完全開放（fail-open）。
+        """
+        from ..services.paas_operator import get_paas_operator_client
+        client = get_paas_operator_client(self.env)
+        if not client:
+            raise UserError(_(
+                "PaaS Operator is not configured. "
+                "Please set Operator URL and API Key in Settings → Woow PaaS."
+            ))
+        return client
+
+    def _build_existing_policy_ids(self):
+        """operator 這一輪必須刪掉的舊 reusable policy id（形態同 SA route）。
+
+        兩個來源，兩個都是伺服器端讀到的：尚存列的 `cf_policy_id`，加上這個錨點
+        在待回收帳本上還欠的（`cf_access_policy_reap._pending_for`）。
+
+        policy 的 unlink 會先跑 `super().unlink()` 才 re-sync，所以剛被刪那幾列
+        的 cf id 已經不在 DB 裡、永遠進不了這份清單，而 operator 唯一的刪除來源
+        就是它 ⇒ 每刪一條 policy 就漏一顆永久 CF 孤兒。它們是**經帳本**進來的：
+        `unlink()` 在同一個 savepoint 內先 `Reap._record_ids()` 落帳，才觸發
+        re-sync。
+
+        #528：帳要離開一次性的通道、落到 DB——那一次 re-sync 可能被下面的
+        liveness gate 整個擋掉，只活一次呼叫的東西被擋掉之後就沒有任何記錄指向
+        那些 id 了。帳本讓它們活到下一次推得動為止。
+
+        🔴 #783：`_pending_for()` **不讀任何 context**（舊的
+        `sa_unlinked_cf_policy_ids` 通道已整條移除，理由見該函式的 docstring）。
+        """
+        self.ensure_one()
+        ids = [p.cf_policy_id for p in self.access_policy_ids if p.cf_policy_id]
+        for cf_id in self.env[_CF_REAP_MODEL]._pending_for(self):
+            if cf_id and cf_id not in ids:
+                ids.append(cf_id)
+        return ids
+
+    def _build_access_payload(self):
+        """本服務的 desired-state payload（operator `PUT /api/access/sync`）。
+
+        逐欄位鏡射 `SecurityAccessRoute._build_access_payload`——operator 那端只
+        有一個 `AccessSyncRequest` schema，兩邊形狀分家只會在 422 才發現，而 422
+        說不出是哪一邊寫錯。保護粒度是整個 subdomain（拍板 5），所以
+        `protected_hostnames` 恆為 `[primary_hostname]` 或空。
+        """
+        self.ensure_one()
+        login_idp_types = []
+        if self.login_google:
+            login_idp_types.append('google')
+        if self.login_email_otp:
+            login_idp_types.append('onetimepin')
+        hostname = self._access_hostname()
+        protected = [hostname] if (self.is_protected and hostname) else []
+        canonical = self._access_canonical_name()
+        return {
+            'enabled': bool(self.is_protected),
+            'canonical_name': canonical,
+            # app display name：與 SA route 同慣例（走對外可見的那個名字，
+            # env 區隔靠 per-env `paas_domain`）。env token 掛在 canonical，
+            # 那才是 reusable policy 前綴的來源。
+            'app_name': self.subdomain or canonical,
+            'primary_hostname': hostname,
+            'protected_hostnames': protected,
+            'session_duration': self.session_duration or '24h',
+            'login_idp_types': login_idp_types,
+            'policies': [{
+                'name': p.name, 'decision': p.decision,
+                'precedence': p.sequence,
+                'include': p._rules_by_group('include'),
+                'require': p._rules_by_group('require'),
+                'exclude': p._rules_by_group('exclude'),
+            } for p in self.access_policy_ids.sorted(
+                key=lambda x: (x.sequence, x.id))],
+            'existing_app_id': self.access_app_id or None,
+            'existing_policy_ids': self._build_existing_policy_ids(),
+        }
+
+    def _sync_access_to_operator(self):
+        """把本服務完整的 Access 狀態推給 operator（冪等宣告式）。
+
+        liveness gate 三道，各擋一種「推出去只會製造垃圾」的情形：
+
+        * **沒有 `subdomain`** ⇒ 沒有可保護的 hostname，Access app 的錨點本身
+          不存在。
+        * **`state == 'deleting'`** ⇒ teardown 已經跑過（`_do_cleanup`），再推
+          一次等於把剛拆掉的 app 建回來，而且沒有任何後續路徑會再拆它。
+        * **未保護且沒有存過 app id** ⇒ 這台服務從來沒有 Access app，是真正的
+          no-op（不是「假裝成功」）。
+
+        `is_protected=False` 但存過 app id ⇒ 送 `enabled=False` 的 payload
+        （operator 據此拆 app＋policies），成功後才清掉存著的 id。
+
+        與 SA route 的刻意差異：**沒有 `force` 旁路**。SA 需要它是因為
+        provision/resume 會在 state 尚未回到 'active' 時做收斂；CS 的
+        suspend/resume 依設計完全不碰 Access app（design checklist 7），沒有這種
+        收斂點，多開一個旁路只會多一條沒人走、也沒人測的分支。
+
+        #528：三道 gate 收斂成 `_access_sync_skip_reason()` 一個裁決處，略過時回
+        ``False``、推出去了回 ``True``。CS 這三格在現行碼下**帶不著待回收 id**
+        （見該方法的 docstring 逐格說明），機制照樣套上去的理由是形狀一致：
+        `state == 'deleting'` 那格的不變式住在 gate 外面、沒有任何守線，而三腿
+        寫法分家的話下一個人只會照著最近的那一腿抄。
+        """
+        self.ensure_one()
+        skip = self._access_sync_skip_reason()
+        if skip:
+            self.env[_CF_REAP_MODEL]._warn_if_deferred(
+                self, _logger,
+                '[CLOUD_SVC] service %s (%s)' % (self.id, self.subdomain),
+                skip)
+            return False
+        client = self._get_operator_client()
+        payload = self._build_access_payload()
+        result = client.sync_access_app(payload)
+        # operator 重指 app 之後刪不掉的舊 reusable policy＝**永久** CF 孤兒
+        # （沒有任何後續 re-sync 會再碰到它們），所以要讓它在 log 裡看得見。
+        orphaned = result.get('orphaned_policy_ids') or []
+        if orphaned:
+            _logger.warning(
+                "[CLOUD_SVC] access sync service=%s (%s) left %d orphan CF "
+                "policy(ies): %s", self.id, self.subdomain, len(orphaned),
+                ', '.join(orphaned))
+        # #528：operator 回 2xx ⇒ 這一輪送出去的 existing_policy_ids 已經有答案。
+        # 沒被列進 orphaned 的確認刪掉 ⇒ 消帳；被列進去的現在就是 CF 孤兒 ⇒ 記進
+        # 帳等下一輪（上面那行 warning 照發，但不再是「說完就忘」）。
+        # #791 覆核 F7：包 post-commit savepoint（記帳失敗不得拖垮下面的 id 回存）。
+        # F9：`trusted_ids` 只給列上真實存在的 cf id——`existing_policy_ids` 裡
+        # 混進來的 context 值不得經 orphaned 回流落帳（#783）。
+        Reap = self.env[_CF_REAP_MODEL]
+        Reap._settle_after_commit(
+            self._name, self.id,
+            payload.get('existing_policy_ids') or [], orphaned,
+            Reap._trusted_ids_for(self), _logger,
+            '[CLOUD_SVC] service %s (%s)' % (self.id, self.subdomain))
+        # 身分錨點：只有 sentinel 路徑寫得動（對所有人生效，含 superuser）。
+        _internal_cs_access_identity(self).access_app_id = (
+            result.get('app_id') or False)
+        # operator 的 fail-open 訊號：要求了但 CF 帳號上沒有對應 IdP 的登入方式
+        # ——登入限制被靜默放寬了，刻意曝光而不是丟掉。
+        unresolved = result.get('unresolved_idp_types') or []
+        new_unresolved = ', '.join(unresolved) if unresolved else False
+        if self.access_unresolved_idp_types != new_unresolved:
+            self.access_unresolved_idp_types = new_unresolved
+        # #794：推成功了 ⇒ CF 上的狀態就是這筆記錄宣稱的狀態，fail-open 旗標的
+        # 前提（app 被拆掉但記錄還在）已經不成立。旗標由 sync 結果驅動，與
+        # `access_unresolved_idp_types` 同一個形狀。
+        if self.access_protection_lost:
+            self.access_protection_lost = False
+        # 回傳的 policy id 依 (sequence, id) 順序對映回列——與 payload 送出去的
+        # 排序是同一條 key，錯開就會把 A 的 cf id 記到 B 頭上。
+        returned = result.get('policy_ids') or []
+        policies = self.access_policy_ids.sorted(
+            key=lambda x: (x.sequence, x.id))
+        for pol, cf_id in zip(policies, returned):
+            if pol.cf_policy_id != cf_id:
+                pol.cf_policy_id = cf_id
+        if not result.get('app_id'):
+            # 已拆除 ⇒ 清掉這台服務底下 policy 的過期 cf id
+            for pol in self.access_policy_ids:
+                if pol.cf_policy_id:
+                    pol.cf_policy_id = False
+        return True
+
+    def _access_sync_skip_reason(self):
+        """``None`` ＝ 這一輪推得動；否則回一句人話說明為什麼不推（#528）。
+
+        本腿**所有** liveness gate 的唯一裁決處，新增 gate 一律加在這裡，訊號
+        自動跟上。三格各自的可達性（動 gate 前先讀）：
+
+        * **沒有 `subdomain`**：`cf_policy_id` 的唯一寫入處在本 gate 的下游，
+          所以某列有 cf id ⇒ 它被寫入的那一刻 subdomain 非空。結構上帶不著
+          待回收 id。
+        * **`state == 'deleting'`**：`_do_cleanup` 是先 teardown 成功、清掉每列
+          的 cf id，才寫 `deleting`；controller 的 `_delete_service` 順序相反，
+          目前靠「unlink 拋的 UserError 沒有人接住 ⇒ 整個 request 回捲」撐著。
+          **這條不變式住在 gate 外面、沒有任何守線**——這一格是本腿唯一會因為
+          別處改動而變成活漏洞的，所以訊號要在。
+        * **未保護且沒有 app id**：清空 `access_app_id` 的兩處都在同一個原子區塊
+          裡把每列的 cf id 一起清掉，所以這三個條件湊不齊。
+        """
+        self.ensure_one()
+        if not self.subdomain:
+            return 'the service has no public subdomain'
+        if self.state == 'deleting':
+            return "the service state is 'deleting'"
+        return (None if (self.is_protected or self.access_app_id)
+                else 'the service is unprotected and never had an Access app')
+
+    def _push_access_teardown(self, app_id, policy_ids, app_name, hostname):
+        """拆除用的最小 `enabled=False` payload（#745 接上 T2 留的 seam）。
+
+        與 `_sync_access_to_operator` 分開的理由和 SA 的 `_teardown_route_access`
+        一樣：呼叫端（unlink / `_do_cleanup`）手上只剩**捕捉下來的 id**，記錄
+        可能正在消失中，不能再去 walk `access_policy_ids`。
+
+        本方法不吞例外——`_teardown_cs_access` 負責把它收成 False（fail-loud 那
+        一側）。安靜的 no-op 會讓呼叫端把「根本沒清」當成「清乾淨了」並清掉
+        `access_app_id`，孤兒就此永久失去重試錨點且零訊號。
+        """
+        self.ensure_one()
+        client = self._get_operator_client()
+        canonical = self._access_canonical_name()
+        result = client.sync_access_app({
+            'enabled': False,
+            'canonical_name': canonical,
+            'app_name': app_name or canonical,
+            'primary_hostname': hostname or '',
+            'protected_hostnames': [],
+            'session_duration': '24h',
+            'login_idp_types': [],
+            'policies': [],
+            'existing_app_id': app_id or None,
+            'existing_policy_ids': policy_ids or [],
+        })
+        orphaned = result.get('orphaned_policy_ids') or []
+        if orphaned:
+            _logger.warning(
+                "[CLOUD_SVC] access teardown service=%s app=%s left %d orphan "
+                "policy(ies): %s", self.id, app_id, len(orphaned),
+                ', '.join(orphaned))
+        return result
+
+    def _teardown_cs_access(self, app_id, policy_ids, app_name, hostname,
+                            torn_down=None):
+        """拆掉本服務的 Cloudflare Access app（＋ reusable policies）。
+
+        契約逐字對齊 `SecurityAccess._teardown_route_access`：乾淨拆完回
+        ``True``（呼叫端才可以清掉存著的 app id），失敗回 ``False`` 且**不**
+        丟例外——由呼叫端決定要 fail-loud（unlink）還是落 error 狀態
+        （`_do_cleanup`）。`access_app_id` 只在 True 時清除，失敗一律保留：
+        那個 id 是唯一的重試錨點，清掉就變成永久 CF 孤兒且沒有任何路徑找得回
+        來（[[two-stage-remote-provision-idempotency]]）。
+
+        沒有 app id 也沒有 policy id ⇒ 這台服務從來沒有 Access app，直接回
+        True（不是「假裝成功」，是真的沒有東西要拆）。
+
+        ⚠ **「只回 bool、不丟例外」有一個明載的例外**（#791 覆核 F4）：提交點之後
+        的記帳段若拋 ``OperationalError``（serialization failure / 連線類）會
+        **往外拋**。吞掉它 Odoo 的 ``retrying()`` 就永遠看不到，而此刻 PG 交易已
+        aborted，硬回一個 bool 只會讓後續 flush 再炸一次（#518）。呼叫端不必自己
+        接：request 級 retry 會用新 snapshot 重播整支流程，而重播是安全的
+        （CF 的 DELETE 把 404 當成功）。
+        """
+        self.ensure_one()
+        if not app_id and not policy_ids:
+            return True
+        try:
+            result = self._push_access_teardown(
+                app_id=app_id, policy_ids=policy_ids,
+                app_name=app_name, hostname=hostname)
+        except Exception as e:
+            _logger.warning(
+                "[CLOUD_SVC] access teardown failed service=%s app=%s: %s",
+                self.id, app_id, e)
+            return False
+        # ── 提交點之後 ─────────────────────────────────────────────────
+        # #784：operator 回報「送去刪但刪不掉」的那幾顆現在就是 CF 孤兒，而呼叫端
+        # 拿到 True 之後會清掉列上的 cf id／把列刪掉 ⇒ 舊寫法（只 log 一行）之後
+        # 就再也沒有任何記錄指向它們。落帳，回收者是
+        # `cf_access_policy_reap._cron_reap_dead_anchors`（錨點死掉之後）或這台
+        # 服務自己的下一次成功 sync（錨點還活著時）。
+        # 記帳失敗不翻轉回傳值（[[post-commit-bookkeeping-rollback-unit]]）。
+        #
+        # 🔴 #794 二輪覆核 [HIGH]：「CF 已經拆成功」要在**落帳之前**就記——
+        # `_settle_teardown_after_commit` 明文 re-raise `OperationalError`，
+        # 落帳一撞到並發例外本方法就不會 `return True` ⇒ 呼叫端的 `if ...:`
+        # 不執行 ⇒ 補償清單空 ⇒ 補償空轉，而 CF 上的 app 已經真的沒了。
+        # 回傳值語意不動（仍表示「這一趟整體成不成功」）。
+        if torn_down is not None:
+            torn_down.append((self._name, self.id))
+        self.env[_CF_REAP_MODEL]._settle_teardown_after_commit(
+            self._name, self.id, app_id or None, policy_ids or [],
+            (result or {}).get('orphaned_policy_ids') or [], _logger,
+            '[CLOUD_SVC] access teardown service=%s app=%s' % (self.id, app_id))
+        return True
+
+    def _access_mark_protection_lost(self):
+        """#794：把「本服務的 CF Access app 已經被拆掉、而記錄還在」寫成列上的
+        事實。三腿同名，唯一呼叫端是
+        `cf_access_policy_reap._compensate_fail_open_after_rollback`（獨立交易）。
+
+        完整理由（為什麼清 id 不違反 two-stage-remote-provision-idempotency、
+        為什麼只清 id 不夠、為什麼不動 `is_protected`）寫在 SA 那一份，見
+        `security_access.py` 的同名方法——**不在這裡重述**：三份平行的散文一定
+        會漂，而漂掉的那一份讀起來和權威版本一模一樣。
+        """
+        self.ensure_one()
+        _internal_cs_access_identity(self).access_app_id = False
+        for pol in self.access_policy_ids:
+            if pol.cf_policy_id:
+                pol.cf_policy_id = False
+        if not self.access_protection_lost:
+            self.access_protection_lost = True
+
+    def _has_access_teardown(self):
+        """本服務的**列上**還有沒有 CF Access 物件要拆（app id 或 policy cf id）。
+
+        #794 拆出來的：`unlink()` 需要知道「這一趟到底有沒有真的對 CF 拆掉東西」
+        才能決定要不要補償，而 `_teardown_access_if_any()` 的 ``True`` 同時代表
+        「拆乾淨了」與「本來就沒東西要拆」，兩者在回傳值上不可區分。呼叫端自己
+        再寫一次同樣的判準是漂移的起點（SA 那一腿的 `_has_access_teardown()`
+        正是同一個名字、同一個理由）。
+
+        🔴 **只讀列上的狀態，不查待回收帳本**——把帳本聯集進來會讓
+        `_teardown_access_if_any()` 的閘永遠回 True、服務永久卡在 `error`，
+        完整推導見該方法的 docstring。
+        """
+        self.ensure_one()
+        return bool(self.access_app_id or any(
+            p.cf_policy_id for p in self.access_policy_ids))
+
+    def _teardown_access_if_any(self, torn_down=None):
+        """本服務目前的 Access 狀態 → 拆除，成功才清 id。回傳是否乾淨。
+
+        單一裁決處：unlink（fail-loud）與 `_do_cleanup`（落 error 狀態）兩條
+        路徑共用，免得兩邊各自組一次 policy id 清單而漏掉其中一種。
+
+        🔴 **不要把待回收帳本（`cf_access_policy_reap`）的查詢加進這裡**（#784
+        F6 的教訓，寫在這是因為這裡最像「順手移植」的落點）。
+
+        本方法把三件事合在一起：「有沒有東西要拆」（閘）、「要送哪些 id」
+        （payload）、「清乾淨了沒」（回傳值餵給呼叫端的 fail-loud／落 error）。
+        今天沒事，是因為三者讀的都是**列上的狀態**。SA 那一腿曾經在同型的方法裡
+        補上 `_pending_ids()` 聯集——想讓刪除時順手把帳本舊帳一起送出去——結果
+        連帶把「清乾淨了沒」也變成「列 ∪ 帳本」：只要 operator 回報過某顆 policy
+        刪不掉，那筆帳就掛在帳本上（錨點還活著 ⇒ dead-anchor cron 依設計不收）
+        ⇒ 閘永遠回 True ⇒ **SA 永久卡在 `state='error'`**，每輪 lifecycle cron
+        白打一次 operator，七天後只多一行 stuck warning。
+
+        SA 那邊的解法是把兩個問題拆開各自命名（`_has_access_teardown()` 只答
+        「這列乾淨了沒」、`_access_teardown_payload_ids()` 才答「這趟送哪些
+        id」），見 `security_access.py`。這裡真要做同樣的事，就照那個形狀拆，
+        **不要**在本方法裡直接查帳本。repo-lint 的 `access-gate-no-ledger-read`
+        會擋住「filter 的 lambda 讀帳本」那一格，但**擋不到**本方法這種
+        「gate 與 payload 合體」的形狀——那正是需要這段註解的原因。
+        """
+        self.ensure_one()
+        pol_ids = [p.cf_policy_id for p in self.access_policy_ids
+                   if p.cf_policy_id]
+        if not self._has_access_teardown():
+            return True
+        ok = self._teardown_cs_access(
+            app_id=self.access_app_id or None,
+            policy_ids=pol_ids,
+            app_name=self.subdomain or self.helm_release_name,
+            hostname=self._access_hostname(),
+            torn_down=torn_down,
+        )
+        if ok:
+            # 身分錨點：清除也只有 sentinel 路徑寫得動。
+            _internal_cs_access_identity(self).access_app_id = False
+            for pol in self.access_policy_ids:
+                if pol.cf_policy_id:
+                    pol.cf_policy_id = False
+        return ok
+
     def _do_suspend(self):
-        """Scale down Helm release to 0 replicas."""
+        """Scale down Helm release to 0 replicas.
+
+        #744：**刻意不動 Access app**。停權是「機器停下來」，由 helm 層縮到 0
+        replica 處理；Access 設定是租戶的組態，停權期間拆掉它，復權時就得重建
+        並重新拿一個 app id——中間任何一步失敗都會讓一台復權的服務變成無保護
+        對外曝光（fail-open 的方向）。設計拍板明列此項（design checklist 7）。
+        """
         self.ensure_one()
         _logger.info(
             "[CLOUD_SVC] _do_suspend service=%s name=%s state=%s sub=%s",
@@ -2651,6 +3876,24 @@ class CloudService(models.Model):
                 })
                 return
 
+        # Step 2.5 — #744：拆掉本服務的 Cloudflare Access app（＋ reusable
+        # policies）。放在 helm 之後、狀態改寫之前，理由與 SA 的 `_do_cleanup`
+        # 同一條：寫 'deleting' 是一個**成功訊號**，在 CF 還留著一個 Access
+        # app 的情況下寫下去，維運看到的「已清乾淨」與「清失敗」長得一模一樣。
+        # 失敗改落 'error' + error_message，且 `access_app_id` 保留 ⇒ 下一輪
+        # cron 重入時 `_teardown_access_if_any` 會再試一次。
+        if not self._teardown_access_if_any():
+            self.write({
+                'state': 'error',
+                'error_message': 'Cloudflare Access teardown failed; the '
+                                 'Access application is still live. Will '
+                                 'retry on the next cron pass.',
+            })
+            _logger.warning(
+                "[CLOUD_SVC] _do_cleanup incomplete service=%s access_app=%s "
+                "(state=error)", self.id, self.access_app_id)
+            return
+
         # Step 3 — mark state so cron/UI know teardown is in progress.
         self.write({'state': 'deleting'})
 
@@ -2705,6 +3948,216 @@ class CloudService(models.Model):
             )
             return False
 
+    @api.model
+    def _assert_binding_authorized(self, service_ids):
+        """#698：變更 project／task 與 cloud_service 的關聯需要 owner／admin。
+
+        呼叫者是 ``cloud_service_binding_guard`` mixin（唯一入口；四個受保護
+        欄位共用這一個判準）。``service_ids`` 已經是「這次寫入實際**新增 ∪
+        移除**」的集合，兩個方向套同一條線。
+
+        為什麼 ir.rule 不夠：Many2many 的 ``(3)``/``(4)``/``(6)`` 只改 relation
+        表，Odoo 不會對 comodel 做任何權限檢查（#698；完整說明見
+        ``cloud_service_binding_guard.py`` 檔頭）。
+
+        判準走 ``workspace.check_user_access(user, required_role=ROLE_ADMIN)``
+        （``ROLE_HIERARCHY`` ⇒ admin 與 owner 通過），刻意不自己再寫一套 role
+        比較——#556 的根因就是同一個判準有兩種寫法。
+
+        ⚠ 一律以 ``sudo()`` 解析 service 與 workspace：判準要看**真實歸屬**，
+        不能被呼叫者自己的讀取權限左右。讀不到的 service 若因此被跳過檢查，
+        守衛就會在「攻擊者對受害者 service 沒有 read」——也就是最該擋的那格
+        ——失效。``check_user_access`` 收的 ``user`` 仍是原始呼叫者
+        （``sudo()`` 不改 uid）。
+        """
+        if not service_ids or self.env.su:
+            return
+        user = self.env.user
+        services = self.sudo().browse(sorted(service_ids)).exists()
+        denied = services.filtered(
+            lambda svc: not svc.workspace_id.check_user_access(
+                user, required_role=ROLE_ADMIN)
+        )
+        if denied:
+            raise AccessError(
+                "只有 workspace 的 owner／admin 才能變更 cloud_service 綁定"
+                "（新增或移除皆同）。被拒絕的 cloud_service："
+                "woow_paas_platform.cloud_service %s"
+                % ', '.join('#%s' % svc_id for svc_id in denied.ids)
+            )
+
+    def _assert_subscription_binding(self, check_state=True):
+        """#519 提案 B：`subscription_id` 的**綁定當下**判準。
+
+        不變式（守衛成立後）：任一 cloud_service 的 `subscription_id` 在**綁上去
+        的那一刻**必然是一筆 `sh_partner_id == workspace_id.owner_id.partner_id`
+        且 `state == 'in_progress'` 的訂閱；再配合 DB 的 partial unique index，
+        一筆 in_progress 訂閱最多被一筆 cloud_service 指向。
+
+        ## 🔴 這是 transition guard，不是常駐不變式
+
+        訂閱到期／關閉之後**仍然合法地**綁在 service 上——`_cron_enforce_
+        subscription_lifecycle` 正是靠「找得到指向已過期訂閱的服務」才做得到停權。
+        所以 `state` 這一格只在**綁定真的改變的那一次**檢查（`check_state=True`），
+        事後不回頭驗。寫成常駐不變式的話，任何一次無關的 write 都會把「訂閱已到期
+        但服務還在停權流程裡」這個**正常狀態**判成違規。
+
+        ## 兩側為什麼都不可由呼叫端控制
+
+        * 訂閱側：租戶對 `sh.subscription.subscription` 零 ACL row；他唯一造得出
+          訂閱的路是第三方 addon 的 `/renew-subscription`（sudo controller，另見
+          #725），而那條鑄出來的停在 `state='draft'` ⇒ 過不了 `in_progress` 這格。
+          **只驗歸屬不驗狀態會被無限鑄幣打穿**，這一格不可省。
+        * workspace 側：`owner_id` 只能指向呼叫者自己（`workspace.py` 的 create 端
+          守衛），且事後不可改（#658 的 identity anchor）⇒ 可控方向與判準要求的
+          方向一致。
+
+        兩側都用 `.sudo()` 讀：這是**授權判斷**，不可以被呼叫者自己的讀取權限縮窄
+        （縮窄＝漏檢）。租戶對訂閱本來就沒有讀權限，不 sudo 這裡會變成 AccessError
+        而不是判斷。
+        """
+        for record in self.sudo():
+            sub = record.subscription_id
+            if not sub:
+                continue
+            owner_partner = record.workspace_id.owner_id.partner_id
+            if not owner_partner or sub.sh_partner_id != owner_partner:
+                raise SubscriptionBindingError(_(
+                    '這筆訂閱不屬於本服務的 workspace 擁有者，不可綁定。'))
+            if check_state and sub.state != 'in_progress':
+                raise SubscriptionBindingError(_(
+                    '只能綁定生效中（in_progress）的訂閱，目前狀態為 %(state)s。',
+                    state=sub.state or 'unset'))
+
+    def _assert_reverse_binding_authorized(self, vals):
+        """#698 反向端：從 **service 側**寫 `project_ids`（同一張 relation 表
+        的另一頭）。
+
+        ⚠ **這一端不能用 `cloud_service_binding_guard` 的 after-diff**，原因是
+        結構性的，不是實作偷懶：那個 mixin 在 ``super().write()`` **之後**比對
+        差異再判斷授權，而這一端的判準是「呼叫者對那個 project 有沒有 write」
+        ——綁定一旦寫進去，那個 project 就落進呼叫者的 bound 分支
+        （`cloud_service_ids.workspace_id.access_ids.user_id`），事後檢查反而
+        **通過**。實測過：接上 mixin 之後攻擊照樣成功（RPC 回 True）。
+        自我實現的判準必須前置評估。
+
+        判準用 Odoo 自己的 ``check_access('write')``，不複製一套 project 授權
+        邏輯——`project_rule_workspace_member` 有 bound／unbound 兩條分支，
+        抄過來必然漂。
+
+        ## 候選 id 收集為什麼是**刻意的**超集（不要「修」成精確判斷）
+
+        下面只從指令 tuple 的 id 位置撈整數，**不判斷 add／remove、不套用指令
+        語意**，再併上**寫入前**的 `self.project_ids`。這不是還沒做完——它是
+        本修法的核心取捨：
+
+        - 精確判斷 add／remove 就必須重演 x2many 的指令語意，而那正是同一個
+          issue 在 project／task 側**刻意避開**的陷阱（見
+          `cloud_service_binding_guard` 檔頭與 #657：逐一重演框架的解析規則，
+          就是會漏掉下一個形態）。這一端不能用 after-diff（理由見上），所以
+          「不重演」的代價只能由「收保守超集」來付。
+        - 反過來若改成精確集合，漏判一個形態的後果是**靜默放行**——與本 issue
+          的原始缺陷同一種失敗模式。
+
+        ⇒ 收窄這裡之前先問：新寫法在**未知的**指令形態下會漏還是會過寬？只有
+        「仍然只會過寬」的寫法才可以取代它。
+
+        ## 這個候選集實際保證什麼（#705 F3：舊版的宣稱是假的）
+
+        ⚠ 舊版只撈指令裡的 id，於是 `(5, 0, 0)`（`command[1]` 是 falsy、
+        `command[2]` 非 list）與 `(6, 0, [])` 的候選集是**空的**，而
+        `(6, 0, [保留的])` 永遠不含被移除的那些 ⇒ **移除方向整條沒有被檢查**，
+        卻在同一份 docstring 裡寫著「撈到的是超集、只會過寬不會過窄」。
+        那句話對移除方向為假，而它是寫給未來維護者的判準。
+
+        現在的保證，逐方向寫清楚：
+
+        - **新增方向**：新綁上的 project id 必然出現在指令 tuple 裡
+          ⇒ 落在候選集內。唯一例外是 `(0, 0, vals)`（就地新建 project）——見
+          下一節，那一格**兩端都沒有檢查**。
+        - **移除方向**：被解掉的 project 必然在**寫入前**的 `self.project_ids`
+          裡 ⇒ 由下面那行覆蓋，與指令形態無關。⚠ 那次讀取帶
+          `active_test=False`（#716 ②）：`project.project` 有 `active`，預設
+          會在 `Many2many.convert_to_record_multi` 那一步把已封存的 project
+          從 recordset 濾掉，relation 那一列卻還在。
+        - ⇒ 候選集 ⊇（新增 ∪ 移除）\\ {`(0, 0, vals)` 新建的那些}。
+
+        🔑 `active_test=False` 那一格**不是**在補一個可被利用的漏洞——實測見
+        `test_project_cs_m2m_authz_715_716.py` ::
+        `TestReverseCandidateArchivedProject716` 的 `B5`：
+        `Many2many.write_real` 算 `old_relation` 用的是同一個 `record[fname]`，
+        `active_test` 對它一樣生效 ⇒ `(3)` / `(5)` / `(6)` 全都**動不到**已封存
+        的那一列。舊寫法沒出事，是因為**框架兩邊一起瞎**，不是因為候選集真的
+        是超集。加上 `active_test=False` 之後，「候選集 ⊇ 實際變動」這句話自己
+        成立，不再掛在框架某個沒寫下來的行為上；方向只會過寬，符合上一節那條
+        「只有仍然只會過寬的寫法才可以取代它」。
+
+        ## `(0, 0, vals)`：兩端都沒有檢查（#705 F6 → #716 ③ 更正）
+
+        🔴 **舊版這一格的理由是假的，而且是「更正動作本身鑄出新假宣稱」的
+        第二輪。** 舊版寫「那個 project 是呼叫者自己建的、且它的 `create` 會走
+        `project.project` 側的 mixin」——第二句在授權上不是 load-bearing，實測
+        那個 mixin 一次都沒被呼叫（`test_project_cs_m2m_authz_715_716.py` ::
+        `TestNestedCreateCommand0Claim716` 的 `B6`，`examined=[]`）。
+
+        機制：`Many2many.write_real` 對 `(0, 0, vals)` 先 `comodel.create(vals)`，
+        relation 那一列是**之後**用直接 SQL insert 完成的——不是「建出來的
+        project 收到一份帶 `cloud_service_ids` 的 vals」。所以巢狀 vals 本身
+        不含載體 key 時，project 側的 mixin 看不到任何要比對的欄位。這是
+        `(4)`／`(6)` 那個原始缺陷的**同一個形狀**，只是換成 `(0)`。
+
+        指得出證據的部分只有這些，就只寫這些：
+
+        - 巢狀 vals **自己**帶載體 key（含經 `default_` context 補進來的）時，
+          project 側 mixin 看得見 ⇒ 擋得住（`B7` / `B8`）。
+        - 剩下的窄縫＝「純 `(0, 0, {'name': ...})`」。那個 project 是這次呼叫
+          當場建出來的，**沒有第三方受害者**（本方法的判準是「呼叫者對那個
+          project 有沒有 write」，而新建的 project 不屬於任何別人）；能走到
+          這一行的呼叫者本來就對這顆 service 有 write（#676 的 rule ⇒
+          owner／admin）。⇒ 今天不構成越權。
+        - ⚠ 「今天不構成越權」不等於「有守線」。若日後 `project.project` 的
+          建立側出現「呼叫者建得出別人名下的 project」這種形態，這一格就要
+          重新評估——不要因為這裡寫著「不是提權面」就跳過。
+
+        ## 與 project 側的不對稱（刻意，且只有這裡記著）
+
+        同一個 `(6, 0, [])`：**project 側擋得住**（mixin 的 after-diff 看得見
+        「綁定少了一顆」，判準是 service 的 workspace 角色，寫入前後都一樣
+        ⇒ after-diff 安全）；**反向端擋不住**，因為這一端的判準
+        （`project.check_access('write')`）會被寫入本身改掉，只能前置評估、
+        只能靠候選集是超集。兩端用不同機制不是實作不一致，是判準性質不同。
+
+        ⚠ 併入舊值不會誤傷合法呼叫者：能走到這裡的人必然是該 service 所屬
+        workspace 的 owner／admin（#676 的 rule），而
+        `project_rule_workspace_member` 的 bound 分支
+        （`cloud_service_ids.workspace_id.access_ids.user_id`，**無 role 條件**）
+        讓該 workspace 的任何成員對「綁著這顆 service 的每一個 project」都有
+        write ⇒ 多檢查到的那些必然通過。行為面由 `Z4` 鎖住。
+        """
+        commands = vals.get('project_ids')
+        if not commands or self.env.su:
+            return
+        # 移除方向的舊值：與指令形態無關，`(5)`／`(6, 0, [])` 也涵蓋得到。
+        # sudo ⇒ 看真實歸屬，不被呼叫者自己的讀取權限縮窄（縮窄＝漏檢）。
+        # `active_test=False` 同理（#716 ②）：`project.project` 有 `active`，
+        # 而 `Many2many.convert_to_record_multi` 會依 env context 的
+        # `active_test` 把已封存的 comodel record 濾掉（`Many2many.read` 自己
+        # 撈 SQL 時帶的 `active_test=False` 救不到這一步）⇒ relation 那一列
+        # 還在、候選集卻沒有它。⚠ 這一格今天不可利用（框架的 `write_real`
+        # 同樣看不到那一列 ⇒ 根本解不掉），加它是為了讓「候選集 ⊇ 實際變動」
+        # 自己成立——完整論證見上面 docstring 的 🔑 段。
+        candidates = set(self.sudo().with_context(active_test=False).project_ids.ids)
+        for command in commands:
+            if not isinstance(command, (list, tuple)) or len(command) < 2:
+                continue
+            if isinstance(command[1], int) and command[1]:
+                candidates.add(command[1])
+            if len(command) > 2 and isinstance(command[2], (list, tuple)):
+                candidates |= {i for i in command[2] if isinstance(i, int)}
+        if candidates:
+            self.env['project.project'].browse(sorted(candidates)) \
+                .exists().check_access('write')
+
     def write(self, vals):
         """#279 Path B: a CloudService's ``workspace_id`` / ``project_ids`` binding
         change shifts which workspaces its bound projects can reach, so re-render the
@@ -2713,6 +4166,13 @@ class CloudService(models.Model):
         side, which fire no project hook even though ``project.workspace_ids``
         recomputes.
         """
+        # #744：Access 身分錨點是硬不變式，對**所有人**（含 superuser、含
+        # sudo'd controller）擋，唯一豁免是模組私有 sentinel。放在方法第一行
+        # ——後面每一段都有副作用或成本，被拒絕的呼叫不該碰到其中任何一段。
+        _reject_cs_access_identity_anchor_writes(self.env, vals)
+        # #698 反向端：前置檢查（見 `_assert_reverse_binding_authorized` 的
+        # docstring——這一端的判準會被寫入本身改掉，事後檢查無效）。
+        self._assert_reverse_binding_authorized(vals)
         # [F: revoke-txn low] A deployed CS's namespace identity (paas-ws-{hash}) is
         # fixed at create; retargeting workspace_id would leave the pod in the OLD ns
         # while agent egress is re-pointed at the new workspace → silent reach break to
@@ -2738,19 +4198,84 @@ class CloudService(models.Model):
         #    `state` 是 nullable Selection（無 `required=True`），插一個
         #    `write({'state': False})` 當跳板即可整段跳過。
         #
-        # 根因是租戶對本 model 有直接 write 權（`ir.model.access.csv`，#519）。用
-        # write() 守衛打地鼠會引入誤傷卻仍留下繞道；正解是收緊 ACL，一旦租戶沒有
-        # 直接 write 權，所有繞過路徑一次關閉。**create() 的閘門是防意外、不是安全
-        # 邊界**——不要在這裡補守衛來製造「已經守住」的錯覺。
+        # ⚠ 這段原本寫著「正解是收緊 ACL……create() 的閘門是防意外、不是安全
+        # 邊界——不要在這裡補守衛來製造已經守住的錯覺」。**那個前提在 #519 已被
+        # 推翻**，整段改寫如下，否則 repo 裡會留下一句權威語氣的話，教未來維護者
+        # 不要信現在真的存在的那道守線。
+        #
+        # 為什麼「收緊 ACL」不是正解：owner 資格**可自我滿足**——任何
+        # `base.group_user` 帳號免費自建 workspace 就自動成為該 workspace 的
+        # owner，滿足 #676 的 `cloud_service_rule_owner_admin_manage`。而「自建
+        # workspace 即為 owner」是**產品設計**（2026-08-14 裁決），所以 ACL／
+        # ir.rule 那層對本案結構性無效，不動它。
+        #
+        # 現在的分工：**`create()` 的閘門就是安全邊界**（模組頂端
+        # `_INTERNAL_PROVISION`，對所有入口含 superuser 一律生效），它保證沒有
+        # 任何 RPC 呼叫端建得出 cloud_service。上面那兩條「為什麼這裡不放全域上限
+        # 守衛」的理由**仍然成立且仍然適用**（誤傷刪除失敗的善後路徑、擋不完），
+        # 不因為 create 有閘了就該把它加回來——那是配額語意，不是身分語意。
+        #
+        # 真正還開著、且**要在 write() 這一端處理**的，是 `subscription_id` 的
+        # 歸屬／狀態／唯一性（租戶可把自己 service 的 subscription_id 指向別人的
+        # 活訂閱以逃避停權）。那是 #519 提案 B，見
+        # `docs/decisions/519-cloud-service-provision-gate.md`。
+        # #519 提案 B：`subscription_id` 的綁定守衛（write 端）。
+        #
+        # `write()` **不**套 `default_get`（`_add_missing_default_values` 在
+        # `odoo/models.py` 全檔唯一呼叫點在 `_prepare_create_values` 裡，只有 create
+        # 會經過），所以這一端直接讀 vals 是安全的——create 端才需要讀落地值。
+        #
+        # 只在綁定**真的改變**時檢查：整批送出未修改欄位（前端常態）不得誤擋，而且
+        # 事後回頭驗會把「訂閱已到期、服務還在停權流程裡」這個正常狀態判成違規。
+        rebinding = self.browse()
+        if 'subscription_id' in vals:
+            new_sub_id = vals['subscription_id'] or False
+            rebinding = self.filtered(
+                lambda r: (r.subscription_id.id or False) != new_sub_id)
+            if not new_sub_id and rebinding:
+                # 解除綁定對誰都不開放：`_cron_enforce_subscription_lifecycle` 的
+                # domain 是 `subscription_id != False` ⇒ 清空指標＝讓這筆服務**永久**
+                # 脫離生命週期管理（停權／結算都再也摸不到它）。平台自己也沒有任何
+                # 一條路徑會這樣寫（全 repo 只有兩處寫這個欄位，都是指向新訂閱）。
+                raise SubscriptionBindingError(_(
+                    '不可解除服務與訂閱的綁定。'))
         tracked = 'workspace_id' in vals or 'project_ids' in vals
         projects = self.mapped('project_ids') if tracked else self.browse()
         old = {p.id: set(p.workspace_ids.ids) for p in projects}
-        res = super().write(vals)
-        if tracked:
-            # Union of projects bound before AND after (a project_ids write can add or
-            # drop bindings); each reconciles against its own pre-write reach set.
-            for project in (projects | self.mapped('project_ids')):
-                project._reconcile_agent_runtime_reach(old.get(project.id, set()))
+        # #745：Access 設定的寫入與 operator sync 必須是同一個原子單位。
+        #
+        # 沒有 savepoint 時的失效形狀：BFF 端點把 sync 的例外收成
+        # `{'success': False, ...}` 這個**正常回應**回去，交易照樣 commit ⇒ DB
+        # 宣稱「已保護」而 Cloudflare 上什麼都沒有。方向是 fail-open——租戶看到
+        # 一個開著的開關，服務其實完全公開。SA route 的 write() 為同一個理由包
+        # savepoint（那邊的註解也寫明：這只保證 Odoo 這一側原子，operator 那側
+        # 是宣告式全狀態推送、沒有補償動作，殘留分歧靠下一次冪等 re-sync 收斂）。
+        #
+        # 只在真的碰到 access 欄位時才開 savepoint：其餘寫入路徑（每分鐘的 poll、
+        # helm 狀態回寫…）一行都不變，不替它們付 savepoint 的成本。
+        access_sync = (
+            not _is_cs_sync_control(self.env, _CTX_CS_SKIP_ACCESS_SYNC)
+            and any(k in vals for k in _CS_ACCESS_SYNC_FIELDS))
+        with contextlib.ExitStack() as stack:
+            if access_sync:
+                stack.enter_context(self.env.cr.savepoint())
+            res = super().write(vals)
+            if rebinding:
+                rebinding._assert_subscription_binding()
+            elif 'workspace_id' in vals:
+                # 換 workspace 會換掉判準的另一半（owner 的 partner）。只驗歸屬、不驗
+                # 狀態——這一次沒有動到綁定，訂閱早就到期也仍然合法。
+                self._assert_subscription_binding(check_state=False)
+            if tracked:
+                # Union of projects bound before AND after (a project_ids write can add or
+                # drop bindings); each reconciles against its own pre-write reach set.
+                for project in (projects | self.mapped('project_ids')):
+                    project._reconcile_agent_runtime_reach(old.get(project.id, set()))
+            if access_sync:
+                # liveness gate 在 `_sync_access_to_operator` 裡（沒有 subdomain
+                # ／deleting／從未保護過都是 no-op），這裡只負責轉發。
+                for service in self:
+                    service._sync_access_to_operator()
         return res
 
     @api.model
@@ -2953,6 +4478,20 @@ class CloudService(models.Model):
             if reason == 'paused':
                 raise SupplyGateError(_(
                     '「%(tpl)s」目前暫停販售。', tpl=template.name))
+            if reason == 'unpinned_chart':
+                # #552 層 4：這是**平台端設定缺陷**不是營運狀態，所以 log 成 error
+                # ——租戶看到的是下面那句，但營運要在 log 裡看得到是哪個 template。
+                # 只在真的有人嘗試開通時才 log（判準本身每次 marketplace 渲染都會
+                # 跑一次，寫在裁決點會洗版）。
+                _logger.error(
+                    "供給閘門擋下開通：template %s (id=%s, slug=%s) 沒有 "
+                    "helm_chart_version ⇒ helm 會解析成 registry 當下的 latest。"
+                    "請在 seed 釘版後重新發版（#552）。",
+                    template.name, template.id, template.slug,
+                )
+                raise SupplyGateError(_(
+                    '「%(tpl)s」目前無法開通：平台尚未指定此商品的部署版本。'
+                    '請聯繫客服。', tpl=template.name))
             if reason == 'sold_out':
                 raise SupplyGateError(_(
                     '「%(tpl)s」目前已售罄，暫時無法開通新的實例。',
@@ -3010,7 +4549,34 @@ class CloudService(models.Model):
 
         ⚠ 本方法對所有入口一律生效、無 su/group 豁免（否則 TransactionCase 假綠，
         見 docs/decisions/patterns/su-env-exempt-guard-false-green.md）。
+
+        #519 建立閘：整個方法的第一件事就是拒絕非平台開通脈絡的建立。放在最前面
+        是刻意的——後面每一段（`_assert_reverse_binding_authorized`、
+        `super().create()` 的 INSERT、`_claim_global_cap_slots` 的衝突列 UPDATE）
+        都有副作用或成本，被拒絕的呼叫不該碰到其中任何一段。完整論證見模組頂端
+        `_INTERNAL_PROVISION` 的註解。
         """
+        # #519：唯一對所有入口（含 sudo、含 superuser、含 TransactionCase 的 su
+        # env）都生效的那一層。判準只有一個：context 裡那個值是不是**那一個**
+        # 模組層級私有物件。不讀 vals、不讀 env.su、不讀 env.user、不讀 role。
+        if not _is_internal_provision(self.env):
+            raise ProvisionGateError(_(
+                '雲端服務只能由平台的開通流程建立（%(model)s）。'
+                '請改從服務市集下單，不要直接寫入這個 model。',
+                model=self._name))
+        # #744：Access 身分錨點的 create 側。**不是**被上面那道閘覆蓋掉的冗餘
+        # ——開通閘擋的是「誰能建」，本組擋的是「建的時候能不能自帶別人的 CF
+        # Access app id」，而開通流程本身（走 `_internal_provision`）是被上面
+        # 放行的那一類呼叫者。兩個把手刻意分開，開通不順便獲得搬錨點的能力。
+        _strip_cs_access_identity_anchors(self.env, vals_list)
+        # #698 反向端：create 也能帶 `project_ids`（同一張 relation 表的另一頭），
+        # 且同樣必須前置檢查——建完之後那個 project 就落進呼叫者的 bound 分支。
+        # 🔴 #705 F1：必須看**框架解析後**的 vals。`default_project_ids` 是在
+        # `BaseModel.create` 內部才展開的（見 `cloud_service_binding_guard.create`
+        # 的說明），只看 raw vals 會讓整道前置檢查跳過。
+        for vals in vals_list:
+            self._assert_reverse_binding_authorized(
+                self._add_missing_default_values(vals))
         normalized_vals_list = []
         for vals in vals_list:
             normalized = dict(vals)
@@ -3025,6 +4591,14 @@ class CloudService(models.Model):
             normalized_vals_list.append(normalized)
 
         records = super().create(normalized_vals_list)
+        # #519 提案 B：讀**落地值**，不讀 vals。`default_subscription_id`（context）
+        # 與 `ir.default`（租戶自己寫得了的持久化載體）都是在 `BaseModel.create`
+        # 內部才展開的，只看 raw vals 會讓整道檢查跳過——這正是 C4 那條陷阱。判準
+        # 本身沒有「自我實現」問題（訂閱的 sh_partner_id / state 不會因為這次
+        # create 而改變），所以事後檢查是安全的，與同方法內 `_enforce_supply_gate`
+        # / `max_per_partner` 的既有形狀一致。post-super raise 的 rollback 義務已由
+        # #520 在 `controllers/paas.py` 處理過。
+        records._assert_subscription_binding()
         self._claim_global_cap_slots(records)
         # 收集需 enforcement 的 (template_id, partner_id)，排序去重後依序取鎖：
         # 排序消除多筆跨組的 lock-ordering 死鎖；max_per_partner=0 常態集合為空、零開銷。
@@ -3081,6 +4655,13 @@ class CloudService(models.Model):
         (and its M:N rows) are gone their ``workspace_ids`` recompute — dropping
         workspaces only reachable via this service — so each is reconciled as a pure
         revoke (best-effort; the enforcing cron is authoritative).
+
+        #744：同一個 fail-loud 家族再加一員——Cloudflare Access app 與 helm
+        release 一樣，不得比記錄長壽。`access_policy_ids` 是 ``ondelete=
+        'cascade'``，DB 的 FK cascade 會**繞過** Python `unlink()` 把子列直接
+        帶走 ⇒ 刪完之後那些 `cf_policy_id` 就再也拿不到，operator 唯一的刪除
+        入口（existing_policy_ids）永遠收不到它們。所以拆除必須在
+        `super().unlink()` 之前完成。
         """
         # #318: 在 super().unlink() 前捕獲仍 in_progress 的關聯訂閱。
         # subscription_id 是 ondelete='set null'（只保護反向），刪 service
@@ -3098,44 +4679,94 @@ class CloudService(models.Model):
             (s.workspace_id, s.helm_namespace)
             for s in self if s.helm_namespace
         ]
-        for service in self:
-            # F-ENV-5 helm fail-loud guard: the helm release / namespace must
-            # never outlive the record. The workspace-cascade routing path
-            # (Workspace.unlink → service_ids.unlink) relies on THIS to tear
-            # down helm, since the DB FK cascade bypasses Python unlink. The
-            # controller delete path that already uninstalled helm hits an
-            # idempotent 404 here (treated as success). On a real failure the
-            # row + release are kept and the deletion is aborted for retry.
-            if service.helm_release_name and service.helm_namespace:
-                if not service._cleanup_helm():
-                    raise UserError(
-                        "Helm uninstall failed; release '%s' is still live in "
-                        "namespace '%s' (billed compute / leaked namespace). "
-                        "The service record was kept so the deletion can be "
-                        "retried. Please try again shortly." % (
-                            service.helm_release_name, service.helm_namespace,
+        # 🔴 #794：本段**新增一層 savepoint**，這是 #744 那段註解（「不需要
+        # savepoint 這層機關」）之後的刻意改變，理由與原註解說的不衝突：
+        #
+        #   原註解對的是「拆在 super().unlink() 之前 ⇒ 失敗時什麼都還沒刪 ⇒
+        #   記錄與 id 原樣留著當重試錨點」。**那句話只涵蓋失敗的那一台。**
+        #   批次刪除時，失敗那台之前**已經拆成功**的那幾台，CF 上的 app 已經
+        #   沒了、而 `access_app_id = False` 那筆 DB 寫入會隨整筆交易被丟棄
+        #   ⇒ 記錄帶著 `is_protected=True` 與指向死 app 的 id 復活 ⇒ UI 顯示
+        #   已保護、subdomain 實際免登入即可存取（#794 的形狀，SA/SH 兩腿同型）。
+        #
+        # savepoint 在這裡有一個**功能性**的作用，不只是整潔：補償寫必須跑在
+        # 一條獨立連線上（見 `_compensate_fail_open_after_rollback`），而只要
+        # 外層交易對那幾列的 UPDATE 還活著，獨立交易的 UPDATE 就會撞上 PG 的
+        # 寫寫衝突、等到 `lock_timeout` 為止。**先讓 savepoint 回捲、再補償**
+        # 是補償寫得進去的前提，不是順手加的保險。
+        torn_down = []
+        Reap = self.env[_CF_REAP_MODEL]
+        try:
+            with self.env.cr.savepoint():
+                for service in self:
+                    # F-ENV-5 helm fail-loud guard: the helm release / namespace must
+                    # never outlive the record. The workspace-cascade routing path
+                    # (Workspace.unlink → service_ids.unlink) relies on THIS to tear
+                    # down helm, since the DB FK cascade bypasses Python unlink. The
+                    # controller delete path that already uninstalled helm hits an
+                    # idempotent 404 here (treated as success). On a real failure the
+                    # row + release are kept and the deletion is aborted for retry.
+                    if service.helm_release_name and service.helm_namespace:
+                        if not service._cleanup_helm():
+                            raise UserError(
+                                "Helm uninstall failed; release '%s' is still live in "
+                                "namespace '%s' (billed compute / leaked namespace). "
+                                "The service record was kept so the deletion can be "
+                                "retried. Please try again shortly." % (
+                                    service.helm_release_name, service.helm_namespace,
+                                )
+                            )
+                    # #744 Access fail-loud guard：Cloudflare Access app 不得比記錄長
+                    # 壽。拆在 `super().unlink()` **之前**——這是與 SA route 那條的刻意
+                    # 差異：route 的 cf policy id 住在會被 DB cascade 帶走的子列上，所以
+                    # 那邊被迫「先抓 id、刪完再拆、失敗用 savepoint 回捲」；CS 這裡在
+                    # 刪除前 `access_app_id` 與 `access_policy_ids.cf_policy_id` 都還
+                    # 在手上，直接先拆再刪，失敗就 raise（什麼都還沒刪 ⇒ 記錄與 id 原
+                    # 樣留著當重試錨點）。
+                    #
+                    # ⚠ #794 修正這段原本的結語（「不需要 savepoint 這層機關」）：
+                    # 它只涵蓋**失敗的那一台**。批次刪除時失敗那台之前已經拆成功
+                    # 的那幾台，CF 上的 app 已經沒了、`access_app_id = False` 卻
+                    # 隨交易被丟棄 ⇒ 與 SA/SH 兩腿完全同型的無聲 fail-open。
+                    # savepoint 現在加上去了，理由見本 method 開頭那段。
+                    # `torn_down` 由 `_teardown_cs_access` 在 operator 回 2xx
+                    # 當下就 append（見該方法的 [HIGH] 註解）——**不能**靠回傳值
+                    # 判斷：落帳撞到 `OperationalError` 時它拿不到 True。沒東西
+                    # 要拆時那一路在更前面就 `return True`，不會誤記。
+                    if not service._teardown_access_if_any(
+                            torn_down=torn_down):
+                        raise UserError(
+                            "Cloudflare Access teardown failed; the Access "
+                            "application for '%s' is still live. The service record "
+                            "was kept so the deletion can be retried." % (
+                                service.name or service.id,
+                            )
                         )
+                    user_mcps = service._collect_sidecar_user_mcps(
+                        service._sidecar_url_prefix()
                     )
-            user_mcps = service._collect_sidecar_user_mcps(
-                service._sidecar_url_prefix()
-            )
-            if user_mcps:
-                user_mcps.sudo().unlink()
-                _logger.info(
-                    "[CLOUD_SVC] unlink() unlinked %s user-scope MCP server(s) "
-                    "for service id=%s", len(user_mcps), service.id,
-                )
-        res = super().unlink()
-        # #318: teardown 成功後才結算訂閱（取消＋按比例退點）。放在
-        # super().unlink() 之後，故 helm fail-loud raise 時不會執行（全交易
-        # rollback、record 保留、訂閱不動）。訂閱是獨立 record，不隨 service
-        # 刪除而消失。
-        for sub in subs_to_settle:
-            sub._settle_on_entity_delete(reason='Service deleted')
-        for workspace, helm_namespace in quota_targets:
-            self._push_ns_quota(workspace, helm_namespace)
-        for project in affected.exists():
-            project._reconcile_agent_runtime_reach(old.get(project.id, set()))
+                    if user_mcps:
+                        user_mcps.sudo().unlink()
+                        _logger.info(
+                            "[CLOUD_SVC] unlink() unlinked %s user-scope MCP server(s) "
+                            "for service id=%s", len(user_mcps), service.id,
+                        )
+                res = super().unlink()
+                # #318: teardown 成功後才結算訂閱（取消＋按比例退點）。放在
+                # super().unlink() 之後，故 helm fail-loud raise 時不會執行（全交易
+                # rollback、record 保留、訂閱不動）。訂閱是獨立 record，不隨 service
+                # 刪除而消失。
+                for sub in subs_to_settle:
+                    sub._settle_on_entity_delete(reason='Service deleted')
+                for workspace, helm_namespace in quota_targets:
+                    self._push_ns_quota(workspace, helm_namespace)
+                for project in affected.exists():
+                    project._reconcile_agent_runtime_reach(old.get(project.id, set()))
+        except Exception:
+            Reap._compensate_fail_open_after_rollback(
+                torn_down, _logger,
+                '[CLOUD_SVC] unlink (services=%s)' % (self.ids,))
+            raise
         return res
 
     def _collect_sidecar_user_mcps(self, url_prefix):

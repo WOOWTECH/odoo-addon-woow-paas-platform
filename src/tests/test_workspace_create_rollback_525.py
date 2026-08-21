@@ -14,9 +14,11 @@ controller 只呼叫一次 `Workspace.create()`，但 model 覆寫（`workspace.
 孤兒的兩個後果都不會讓使用者察覺，只會累積：
 
 1. **完全不可見**——`_list_workspaces` 是**從 workspace_access 反查** workspace
-   的，而 `ir.rule` `workspace_rule_member_access` 的 domain 是
-   `[('access_ids.user_id', '=', user.id)]`。沒有 access 列的 workspace 對每一個
-   非 superuser 都不存在：看不到、進不去、刪不掉。
+   的，而 `ir.rule` `workspace_rule_member_read` 的 domain 是
+   `[('access_ids', 'any', [('user_id', '=', user.id)])]`。沒有 access 列的
+   workspace 對每一個非 superuser 都不存在：看不到、進不去、刪不掉。
+   （#658 之前這條叫 `workspace_rule_member_access`、讀寫合一；本段依賴的是
+   **讀**方向的判準，而讀方向沒有被 #658 動到。）
 2. **永久佔住 slug**——`unique_slug` 是 DB 層 constraint，**不看 ir.rule**；而
    `_generate_slug` 用的是**使用者身分**的 `search_count`，看不到孤兒。於是
    「DB 說這個 slug 有人用了」與「產生器說沒人用」同時成立，使用者拿不回自己
@@ -162,7 +164,16 @@ class TestCreateWorkspaceLeavesNoOrphan(HttpCase):
 
         orphan = self.Workspace.sudo().create({
             'name': 'WS 525 A2 orphan', 'owner_id': self.admin_user.id})
-        orphan.access_ids.sudo().unlink()          # ← 拆成孤兒
+        # #556 B2：workspace_access.unlink() 現在守「不得移除最後一個
+        # owner」，連 .sudo() 呼叫都擋（照抄 project_access.unlink() 的
+        # 不變式，無 sudo 豁免）——ORM unlink() 造不出孤兒了。production
+        # 的孤兒本來就不是「先建好再刪掉」，是 owner-access create 那段
+        # 從未插入過（見本檔檔頭）；改走 DB 層直接 DELETE，繞過 Python
+        # unlink() override，忠實重現「這一列從未存在」的真實孤兒形狀。
+        self.env.cr.execute(
+            "DELETE FROM woow_paas_platform_workspace_access "
+            "WHERE workspace_id = %s", (orphan.id,))
+        self.env.invalidate_all()
         self.assertFalse(orphan.access_ids, 'fixture 前提：孤兒沒有任何授權列')
 
         names = self._listed_names()
@@ -176,7 +187,12 @@ class TestCreateWorkspaceLeavesNoOrphan(HttpCase):
     def test_orphan_workspace_holds_the_slug_it_is_invisible_in(self):
         orphan = self.Workspace.sudo().create({
             'name': _WS_NAME, 'owner_id': self.admin_user.id})
-        orphan.access_ids.sudo().unlink()
+        # #556 B2：見上一條測試的註解——ORM unlink() 現在擋最後一個
+        # owner，連 sudo 都擋，改走 DB 層直接 DELETE 繞過它。
+        self.env.cr.execute(
+            "DELETE FROM woow_paas_platform_workspace_access "
+            "WHERE workspace_id = %s", (orphan.id,))
+        self.env.invalidate_all()
         self.assertEqual(orphan.slug, _WS_SLUG, 'fixture 前提：孤兒佔住該 slug')
 
         # DB 層看得到（unique_slug 是 SQL constraint，不看 ir.rule）

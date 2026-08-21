@@ -12,6 +12,7 @@ import logging
 from odoo.http import Controller, Response, request, route
 
 from .oauth2 import verify_oauth_token
+from ..models.cloud_service import _internal_provision
 
 _logger = logging.getLogger(__name__)
 _HA_PAAS_APP_TEMPLATE = 'woow_paas_platform.cloud_app_ha_paas'
@@ -268,18 +269,21 @@ class HAPaaSController(Controller):
         reference_id = str(uuid.uuid4())
         ns_prefix = env['ir.config_parameter'].sudo().get_param(
             'woow_paas_platform.namespace_prefix', 'paas-ws-')
-        subdomain = make_service_subdomain(ws.slug, reference_id, 'ha')
+        # #677：吃 stored `ws_hash`（伺服器產生、DB UNIQUE），不是租戶決定的 slug。
+        subdomain = make_service_subdomain(ws.ws_hash, reference_id, 'ha')
         # ingress expose_config（比照 _create_service paas.py:2218-2233），否則
         # 部署後無 ingress、ha_url 指向不存在的網域。
         deploy_params = {}
         if tpl.ingress_enabled:
             deploy_params['expose_config'] = {'enabled': True, 'subdomain': subdomain}
-        svc = env['woow_paas_platform.cloud_service'].sudo().with_company(company).create({
+        svc = _internal_provision(
+            env['woow_paas_platform.cloud_service'].sudo().with_company(company)
+        ).create({
             'workspace_id': ws.id, 'template_id': tpl.id, 'name': 'HA PaaS',
             'reference_id': reference_id, 'state': 'pending', 'subdomain': subdomain,
             'internal_port': tpl.default_port,
             'helm_release_name': 'svc-%s' % reference_id[:8],
-            'helm_namespace': make_namespace(ws.slug, prefix=ns_prefix),
+            'helm_namespace': make_namespace(ws.ws_hash, prefix=ns_prefix),
             'helm_chart_version': tpl.helm_chart_version,
             # ⚠ helm_values 必須寫入 template 的 helm_default_values（比照 marketplace
             # _create_service 的 merged_values；HA 無 user values → template 值即全部）。

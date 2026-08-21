@@ -3,6 +3,8 @@ subscription. Part A — the subscription-level settlement method."""
 from unittest.mock import patch
 
 from odoo.tests.common import TransactionCase
+from ..models.cloud_service import _internal_provision
+from .smart_home_fixture import sh_model  # #524：建立閘 fixture helper
 
 
 class _DeleteFixture(TransactionCase):
@@ -54,7 +56,7 @@ class _DeleteFixture(TransactionCase):
     def _new_service(self, name='CS Del Svc'):
         # 不設 helm_release_name/helm_namespace → unlink() 跳過 helm 清理，
         # 無需 mock operator。
-        return self.CloudService.create({
+        return _internal_provision(self.CloudService).create({
             'name': name, 'workspace_id': self.workspace.id,
             'template_id': self.template.id,
         })
@@ -181,7 +183,7 @@ class TestCloudServiceUnlinkSettlesSubscription(_DeleteFixture):
         """原子性：helm fail-loud（_cleanup_helm→False）時 unlink raise，
         訂閱維持 in_progress、無退點、record 保留。"""
         from odoo.exceptions import UserError
-        svc = self.CloudService.create({
+        svc = _internal_provision(self.CloudService).create({
             'name': 'CS Del Helm', 'workspace_id': self.workspace.id,
             'template_id': self.template.id,
             'helm_release_name': 'svc-deadbeef',
@@ -204,7 +206,7 @@ class TestSmartHomeUnlinkSettlesSubscription(TransactionCase):
 
     def setUp(self):
         super().setUp()
-        self.SmartHome = self.env['woow_paas_platform.smart_home']
+        self.SmartHome = sh_model(self.env)
         self.Plan = self.env['sh.subscription.plan']
         self.WalletTx = self.env['wallet.transaction']
         self.plan = self.Plan.create({

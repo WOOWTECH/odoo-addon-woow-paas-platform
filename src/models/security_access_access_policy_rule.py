@@ -4,6 +4,14 @@ import re
 from odoo import api, fields, models
 from odoo.exceptions import ValidationError
 
+# #536：見 policy 子模型同一段註解——sync-control 的兩個 key 只認模組私有
+# sentinel，租戶從 RPC payload 塞 `true` 打不開。
+from .security_access import (
+    _CTX_RULE_REPLACE,
+    _CTX_SKIP_ROUTE_SYNC,
+    _is_sync_control,
+)
+
 # Shared with the policy格式驗證：bare domain（不可帶 @），如 acme.com。
 _DOMAIN_RE = re.compile(r'^[a-z0-9.-]+\.[a-z]{2,}$', re.IGNORECASE)
 # ISO 3166-1 Alpha-2 國碼，如 TW / US（大小寫不拘，存前 upper）。
@@ -22,6 +30,17 @@ class SecurityAccessAccessPolicyRule(models.Model):
     （鏡像 policy 子模型）。route_id 經 policy_id 兩跳 stored related 物化
     （policy_id.security_access_id），讓 ir.rule workspace walk 與 SA-level
     email 配額 count 可 traverse。
+
+    #744：父 policy 的錨點變成 exclusive arc 之後，本子模型**必須對等鏡射**
+    第二個錨點（`cloud_service_id`），否則 CS 錨定的 policy 底下這張表的
+    ir.rule domain 兩腿皆假 ⇒ 租戶連自己那條 selector rule 都建不出來、讀不到。
+    這是 [[unbound-project-acl-dual-leg]] 明列的「sub-model 必須對等改」那一條
+    （那邊的教訓是漏改 = leak；本案方向相反是 fail-closed，但同樣是壞的）。
+
+    #768：同一條規矩再套一次——第三個錨點（`smart_home_id`）也必須對等鏡射，
+    否則 SH 錨定的 policy 底下這張表的 ir.rule domain 三腿皆假，租戶連自己那條
+    selector rule 都建不出來，而錯誤訊息指向的是**子表**，沒人會聯想到 parent
+    換了錨點。
     """
 
     _name = 'woow_paas_platform.security_access_access_policy_rule'
@@ -40,7 +59,20 @@ class SecurityAccessAccessPolicyRule(models.Model):
         string='Security Access',
         related='policy_id.security_access_id', store=True, index=True,
         help='Derived from policy_id (two hops); kept stored so the ir.rule '
-             'workspace walk and the SA-level email quota can traverse it.',
+             'workspace walk and the SA-level email quota can traverse it. '
+             'Empty when the parent policy is anchored on a cloud service.',
+    )
+    cloud_service_id = fields.Many2one(
+        comodel_name='woow_paas_platform.cloud_service',
+        string='Cloud Service',
+        related='policy_id.cloud_service_id', store=True, index=True,
+        help='#744：父 policy 的另一半錨點，同樣 store=True 讓 ir.rule 走得到。',
+    )
+    smart_home_id = fields.Many2one(
+        comodel_name='woow_paas_platform.smart_home',
+        string='Smart Home',
+        related='policy_id.smart_home_id', store=True, index=True,
+        help='#768：父 policy 的第三個錨點，同樣 store=True 讓 ir.rule 走得到。',
     )
     group = fields.Selection(
         selection=[
@@ -109,6 +141,12 @@ class SecurityAccessAccessPolicyRule(models.Model):
     def _suppress_route_sync(self):
         """Whether a per-rule operator sync should be skipped for this op.
 
+        Both hatches open ONLY for the module's own sentinel (#536) — open them
+        with `_skip_route_sync()` / `_rule_replace()` from models/security_access,
+        never by putting `True` in the context: `call_kw` hands the caller's
+        context straight to the ORM, so a truthy-valued key is forgeable from
+        any tenant's RPC payload.
+
         sa_skip_route_sync: migration / provision bulk row moves converge CF via
         their own explicit re-sync, not per-row here.
 
@@ -120,15 +158,17 @@ class SecurityAccessAccessPolicyRule(models.Model):
         the whole edit. The policy's own write() issues the final full-state sync
         after the replace settles, so per-rule syncs here are wrong AND redundant.
         """
-        ctx = self.env.context
-        return bool(ctx.get('sa_skip_route_sync') or ctx.get('sa_rule_replace'))
+        return (_is_sync_control(self.env, _CTX_SKIP_ROUTE_SYNC)
+                or _is_sync_control(self.env, _CTX_RULE_REPLACE))
 
     # Atomicity + sync: mirror the policy sub-model. A rule create/write/unlink
-    # re-syncs its policy's ROUTE (the route owns the declarative full-state
-    # push to the operator). Wrapped in a savepoint so a sync raise rolls the
-    # rule row back. The liveness gate lives inside route._sync_access_to_operator
-    # (no-ops without a live tunnel / unprotected route), so we always call it
-    # and let the route decide. _suppress_route_sync() skips the per-rule call
+    # re-syncs its policy's ANCHOR — the route, or (#745) the cloud_service —
+    # which owns the declarative full-state push to the operator; the dispatch
+    # itself lives in policy._access_sync_targets(). Wrapped in a savepoint so a
+    # sync raise rolls the rule row back. The liveness gate lives inside the
+    # anchor's own _sync_access_to_operator (no-ops without a live tunnel /
+    # unprotected route / a CS with no subdomain), so we always call it and let
+    # the anchor decide. _suppress_route_sync() skips the per-rule call
     # for migration/provision bulk moves (sa_skip_route_sync) and for a
     # policy-driven rule-set replace (sa_rule_replace), where the policy's own
     # write() owns the final full-state sync.
@@ -157,8 +197,11 @@ class SecurityAccessAccessPolicyRule(models.Model):
             # 的寫法，直接對 rule 表寫入的路徑（含 API）整條漏掉。
             policies._check_allow_policy_no_bulk_grant()
             if not self._suppress_route_sync():
-                for route in rules.mapped('policy_id.route_id'):
-                    route._sync_access_to_operator()
+                # #745：走 policy 的錨點分派（route 或 cloud_service），不是
+                # `mapped('policy_id.route_id')`——CS 錨定時那個 mapped 是空集，
+                # 症狀是「規則改了但 Cloudflare 不知道」且完全無聲。
+                for anchor in policies._access_sync_targets():
+                    anchor._sync_access_to_operator()
         return rules
 
     def write(self, vals):
@@ -176,13 +219,13 @@ class SecurityAccessAccessPolicyRule(models.Model):
                     and any(k in vals for k in (
                         'group', 'rule_type', 'rule_value', 'sequence',
                         'policy_id'))):
-                for route in policies.mapped('route_id'):
-                    route._sync_access_to_operator()
+                for anchor in policies._access_sync_targets():
+                    anchor._sync_access_to_operator()
         return result
 
     def unlink(self):
         policies = self.mapped('policy_id')
-        routes = policies.mapped('route_id')
+        anchors = policies._access_sync_targets()
         with self.env.cr.savepoint():
             result = super().unlink()
             # Removing a rule can drop the last Include — re-validate surviving
@@ -191,11 +234,12 @@ class SecurityAccessAccessPolicyRule(models.Model):
             # does (5,0,0)+creates) transiently empties the policy before the new
             # rules land; suppress the per-rule check during that window — the
             # policy-level @api.constrains validates the final state.
-            if not self.env.context.get('sa_rule_replace'):
+            if not _is_sync_control(self.env, _CTX_RULE_REPLACE):
                 policies.exists()._check_at_least_one_include()
             if not self._suppress_route_sync():
-                for route in routes.exists():
-                    route._sync_access_to_operator()
+                for anchor in anchors:
+                    if anchor.exists():
+                        anchor._sync_access_to_operator()
         return result
 
     def to_dict(self):

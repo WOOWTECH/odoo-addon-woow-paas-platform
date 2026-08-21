@@ -15,7 +15,8 @@
 
 | 路徑 | 內容 |
 |------|------|
-| [`ccpm-v1/`](ccpm-v1/) | 舊 ccpm v1 的 project context 文件（v2 不再維護） |
+| [`ccpm-v2/`](ccpm-v2/README.md) | 退役的 ccpm v2 歷史產出：23 份 PRD ＋ 23 個 epic（2026-08-07 停用，見 #631） |
+| [`ccpm-v1/`](ccpm-v1/) | 更早一代 ccpm v1 的 project context 文件 |
 | [`superpowers/`](superpowers/README.md) | 退役的 superpowers 探索文件（被推翻 / 被取代 / 知識已轉入主 docs），逐檔原因見其 README |
 | [`plans/`](plans/README.md) | 已收官 epic 的 plan（按 `<year>/` 切分），逐檔去向見其 README |
 | [`tracking/`](tracking/README.md) | 已收官的一次性報告（CAQA / reviewer / test coverage / deliverables），逐檔原因見其 README |

@@ -35,6 +35,7 @@ import json
 from unittest.mock import MagicMock, patch
 
 from odoo.tests.common import HttpCase, tagged
+from ..models.cloud_service import _internal_provision
 
 # 端點取 client 的名字是在 controller 模組的 namespace 上解析的（``paas.py`` 頂部
 # ``from ..services.paas_operator import get_paas_operator_client``），patch services
@@ -81,7 +82,7 @@ class _AddonRemovalCase(HttpCase):
             'name': 'WS 477', 'owner_id': self.admin_user.id})
         self.addon = self.env['woow_paas_platform.cloud_odoo_addon'].create({
             'name': 'Sales 477', 'technical_name': _TECH_NAME})
-        self.svc = self.env['woow_paas_platform.cloud_service'].create({
+        self.svc = _internal_provision(self.env['woow_paas_platform.cloud_service']).create({
             'workspace_id': self.ws.id, 'template_id': self.tpl.id,
             'name': 'svc-477', 'reference_id': 'test-477',
             'state': self.service_state, 'subdomain': 'svc-477',
@@ -226,7 +227,7 @@ class _NonRunningRemovalCase(_AddonRemovalCase):
     ⚠ 每個具體 class **必須自己定義 test method**（哪怕只是一行轉呼）。實測 Odoo 18
     的 test 收集不會把只從 base/mixin 繼承來的 test method 算進去：原本寫成 mixin
     帶 ``test_*``＋4 個空 body 的 class，7 個 class 只跑到 6 個 test（4 個非 running
-    class 各 0 個），**靜默不跑、不報錯**——正是 test.sh 那種假綠。
+    class 各 0 個），**靜默不跑、不報錯**——正是 woow-test.sh 那種假綠。
     """
 
     def _assert_non_running_rejected(self):

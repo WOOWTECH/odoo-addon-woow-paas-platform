@@ -37,6 +37,17 @@
             "statusMessage": "pattern-guard：檢查守護路徑"
           }
         ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/kubectl-ns-guard.py\"",
+            "timeout": 10,
+            "statusMessage": "kubectl-ns-guard：woow-k3s namespace 白名單"
+          }
+        ]
       }
     ],
     "PostToolUse": [
@@ -48,6 +59,12 @@
             "command": "python3 \"$CLAUDE_PROJECT_DIR/scripts/audit/repo-lint.py\" --hook",
             "timeout": 15,
             "statusMessage": "repo-lint：假綠 gate 檢查"
+          },
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/memory-links-guard.py\"",
+            "timeout": 10,
+            "statusMessage": "memory-links-guard：memory 索引對帳（僅 memory 目錄寫入時）"
           }
         ]
       }

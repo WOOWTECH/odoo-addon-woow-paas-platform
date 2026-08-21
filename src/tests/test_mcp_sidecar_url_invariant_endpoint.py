@@ -18,6 +18,7 @@ import json as json_lib
 import uuid
 
 from odoo.tests.common import HttpCase, tagged
+from ..models.cloud_service import _internal_provision
 
 
 def _new_user(env, login, name=None):
@@ -66,7 +67,7 @@ class TestMcpSidecarUrlInvariantEndpoint(HttpCase):
             'mcp_transport': 'streamable_http',
             'mcp_endpoint_path': '/mcp',
         })
-        self.service = self.Service.sudo().create({
+        self.service = _internal_provision(self.Service.sudo()).create({
             'name': 'InvEp Svc',
             'workspace_id': self.ws.id,
             'template_id': self.template.id,

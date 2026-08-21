@@ -4,16 +4,16 @@ category: reference
 status: active
 created: 2026-05-19T05:54:44Z
 updated: 2026-05-19T05:54:44Z
-source: .claude/prds/odoo-service-config-enhancement.md
+source: docs/archived/ccpm-v2/prds/odoo-service-config-enhancement.md
 promoted-at: 2026-05-19T05:54:44Z
 related:
   - docs/decisions/refactor/odoo-service-config-enhancement.md
-  - .claude/epics/archived/odoo-service-config-enhancement/epic.md
+  - docs/archived/ccpm-v2/epics/odoo-service-config-enhancement/epic.md
 ---
 
 # Odoo Service Configuration
 
-> 此檔由 `/docs:promote ccpm:odoo-service-config-enhancement` 從 ccpm PRD 升級而來。**本 feature 已實作落地**（epic 已 archived、對應 issues #5–#10 closed）；實作落點見 `src/data/cloud_app_templates.xml` 的 `helm_value_specs` 與 `customPostInitScripts`、`src/controllers/paas.py`。下方 Acceptance Criteria 為原始目標規格，保留作脈絡。
+> 此檔於 2026-05-19 由 ccpm PRD 升級而來（ccpm 已於 2026-08-07 退役，原始 PRD 見 [`docs/archived/ccpm-v2/prds/odoo-service-config-enhancement.md`](../../archived/ccpm-v2/prds/odoo-service-config-enhancement.md)）。**本 feature 已實作落地**（epic 已 archived、對應 issues #5–#10 closed）；實作落點見 `src/data/cloud_app_templates.xml` 的 `helm_value_specs` 與 `customPostInitScripts`、`src/controllers/paas.py`。下方 Acceptance Criteria 為原始目標規格，保留作脈絡。
 
 PaaS 內 Odoo Cloud Service 的可配置設定。涵蓋租戶層（admin credentials、SMTP）與系統層（`proxy_mode`、`list_db`）兩種類別。架構決策見 [`../../decisions/refactor/odoo-service-config-enhancement.md`](../../decisions/refactor/odoo-service-config-enhancement.md)。
 

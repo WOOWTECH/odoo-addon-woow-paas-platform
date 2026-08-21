@@ -71,6 +71,13 @@
                             </t>
                             Refresh
                         </WoowButton>
+                        <!-- #524：refresh 被 owner/admin gate 擋下時要說出來。
+                             原本這裡什麼都沒有，失敗被前端整個吞掉 ⇒ 按鈕看起來
+                             只是沒反應，「被擋住」與「壞掉了」對使用者輸出相同。 -->
+                        <div t-if="state.refreshError" class="o_woow_error_message">
+                            <WoowIcon name="'error'" size="16"/>
+                            <span t-esc="state.refreshError"/>
+                        </div>
                         <WoowButton
                             variant="'secondary'"
                             size="'md'"
@@ -88,6 +95,41 @@
                     </div>
                 </div>
 
+                <!-- Tab Navigation（#768）
+                     骨架抄 ServiceDetailPage：header／modal 留在頁籤外（切到
+                     Access 仍看得到自己在哪一台、仍按得到那幾顆動作），只有分頁
+                     內容跟著切。 -->
+                <div class="o_woow_tabs">
+                    <button
+                        t-att-class="{'o_woow_tab': true, 'active': currentTab === 'overview'}"
+                        t-on-click="() => this.setTab('overview')">
+                        <WoowIcon name="'info'" size="18"/>
+                        Overview
+                    </button>
+                    <!--
+                        #768：Access 頁籤只給買了 AC 席位的方案（沿用 #746 設計
+                        拍板 6：`ac_max_access_seats > 0` 才出現，無席位不顯示、
+                        不做 upsell）。gate 走 hasAccessSeats getter，它讀的是後端
+                        payload 的 subscription.ac_max_access_seats——能力判準收斂
+                        到後端單一欄位（capability-gate-single-source-field），前端
+                        不得自己算一份（模板／state／有沒有 route）。
+                        守線：repo-lint check_access_tab_gate_anchor，它的錨點是
+                        **字面** `setTab('access')`，所以這裡不可改寫成迴圈式的
+                        switchTab(tab.key)——那樣寫 lint 會找不到頁籤而 fail-open，
+                        能力 gate 漏掉時零訊號。
+                    -->
+                    <button
+                        t-if="hasAccessSeats"
+                        t-att-class="{'o_woow_tab': true, 'active': currentTab === 'access'}"
+                        t-on-click="() => this.setTab('access')">
+                        <WoowIcon name="'shield'" size="18"/>
+                        Access
+                    </button>
+                </div>
+
+                <div class="o_woow_tab_content">
+                <!-- ==================== Overview 分頁 ==================== -->
+                <t t-if="currentTab === 'overview'">
                 <!-- Subscription Info Panel -->
                 <WoowCard t-if="subscription" shadow="true" class="'o_woow_subscription_info_card'">
                     <div class="o_woow_tunnel_info_header">
@@ -185,6 +227,17 @@
                         </div>
                     </div>
                 </WoowCard>
+                </t>
+
+                <!-- ==================== Access 分頁（#768）====================
+                     內容側同樣掛 hasAccessSeats：直接把 URL 打成 .../access 的人
+                     不該因此拿到一個方案沒買的頁面（頁籤不見了、內容還在＝gate
+                     只做了一半）。 -->
+                <SmartHomeAccessTab
+                    t-if="currentTab === 'access' and hasAccessSeats"
+                    home="home"
+                    workspaceId="props.workspaceId"/>
+                </div>
             </t>
 
             <!-- Skip Trial Modal -->

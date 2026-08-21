@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+  <t t-name="woow_paas_platform.SmartHomeAccessTab">
+    <div class="o_woow_smart_home_access_tab">
+      <!-- 操作失敗（我剛剛按的那一下沒成功） -->
+      <div t-if="state.error" class="o_woow_error_message">
+        <WoowIcon name="'error'" size="20"/>
+        <span t-esc="state.error"/>
+      </div>
+      <!-- 資料完整性警告（操作成功了，但伺服器回來的東西對不上）。與 error 分
+           成兩條通道，見 SmartHomeAccessTab.setup 的註解。 -->
+      <div t-if="state.orphanWarning" class="o_woow_error_message">
+        <WoowIcon name="'warning'" size="20"/>
+        <span t-esc="state.orphanWarning"/>
+      </div>
+
+      <WoowCard shadow="true">
+        <div class="o_woow_sa_card_head">
+          <div class="o_woow_sa_card_head__icon">
+            <WoowIcon name="'shield'" size="20"/>
+          </div>
+          <div class="o_woow_sa_card_head__text">
+            <h3>Protected Applications</h3>
+            <p t-if="routes.length">
+              <t t-esc="protectedRouteCount"/> of <t t-esc="routes.length"/>
+              網址已保護 · 每一條網址各自帶自己的 policy 與登入方式
+            </p>
+            <p t-else="">
+              這台 Smart Home 的對外網址就是一個 Cloudflare Access application。
+              開啟保護後，每一位訪客都必須先通過驗證才能連進 Home Assistant。
+            </p>
+          </div>
+        </div>
+        <!-- 還沒 provision 就沒有可以掛 Access app 的錨點（primary route 由
+             provision 當下的 _ensure_primary_route() 建立）。這裡要說清楚是
+             「還沒有」而不是「壞了」——兩者的畫面本來長得一樣。 -->
+        <div t-if="!routes.length" class="o_woow_error_message">
+          <WoowIcon name="'info'" size="16"/>
+          <span>這台 Smart Home 還沒有對外網址，因此沒有可以掛 Access
+                的錨點。請先完成 provision（Overview 分頁），再回來這裡開啟保護。</span>
+        </div>
+        <!-- 卡片本體＝共用元件（#746 從 SA 抽出，CS 的 Access 頁籤也用同一張）。
+             這裡只餵它「這條 route 的設定現值」與 callback，SH 自己持有展開／
+             排序中等 per-route 的 UI 狀態。**不要改 AccessAppCard**：它不認識
+             任何 API，全部往上拋。 -->
+        <t t-foreach="routes" t-as="route" t-key="route.id">
+          <AccessAppCard
+              hostname="route.hostname or props.home.name"
+              config="route"
+              expanded="isRouteExpanded(route)"
+              reordering="state.reorderingRouteId === route.id"
+              protectDisabled="!route.hostname"
+              protectConfirm="protectConfirm"
+              onToggleExpand="() => this.toggleRouteExpand(route)"
+              onProtectedChange="(checked) => this.onRouteProtectedToggle(route, checked)"
+              onLoginToggle="(method) => this.toggleRouteLogin(route, method)"
+              onSessionChange="(value) => this.onRouteSessionChange(route, value)"
+              onAddPolicy="() => this.openAddPolicy(route)"
+              onEditPolicy="(pol) => this.openEditPolicy(route, pol)"
+              onDeletePolicy="(pol) => this.deletePolicy(route, pol)"
+              onReorderPolicies="(ids) => this.commitPolicyOrder(route, ids)"/>
+        </t>
+      </WoowCard>
+
+      <WoowCard shadow="true" t-if="routes.length">
+        <div class="o_woow_sa_info_note">
+          <div class="o_woow_sa_info_note__icon">
+            <WoowIcon name="'info'" size="18"/>
+          </div>
+          <p>保護的粒度是<strong>整條網址</strong>——這條網址底下的每一個路徑、
+             對每一位訪客都一樣。沒有任何 Allow policy 就等於誰都進不來，所以請
+             把「誰該進得來」寫成 policy。Access 跑在 Cloudflare 邊緣、在 tunnel
+             前面，叢集內與 Home Assistant 本身都不會被改到。</p>
+        </div>
+      </WoowCard>
+
+      <AddPolicyModal t-if="state.showPolicyModal and state.policyModalRoute"
+          policy="state.editingPolicy"
+          savePolicy="savePolicy"
+          onClose.bind="closePolicyModal"
+          onSaved="onPolicySaved"/>
+    </div>
+  </t>
+</templates>

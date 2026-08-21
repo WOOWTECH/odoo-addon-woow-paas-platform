@@ -55,7 +55,7 @@ allowed-tools: AskUserQuestion, Read, Write, Bash, LS
 用 `AskUserQuestion` 問：
 
 - `title`：human readable 標題（pre-fill 從 name 衍生）
-- `related`：是否要連結到其他 doc / .claude/epics/ 的檔？（可多選 / 略過）
+- `related`：是否要連結到其他 doc？（可多選 / 略過）
 
 ### Step 3 — 產出檔案
 
@@ -128,4 +128,4 @@ related: [<list from step 2>]
 
 - **不更新 INDEX**：本 repo 暫不維護 `docs/INDEX.md`（Phase 2 才加 CI 自動產生）
 - **frontmatter `updated` 維護**：由作者後續編輯時手動更新，本指令不重複觸發
-- **與 ccpm / superpowers 的關係**：本指令只建「使用者主動寫」的文件。ccpm 產出由 ccpm skill 管理；superpowers 產出由 plugin 自動寫到 `docs/superpowers/`。要把這兩者升級到主結構走 `/docs:promote`。
+- **與 superpowers 的關係**：本指令只建「使用者主動寫」的文件。superpowers 產出由 plugin 自動寫到 `docs/superpowers/`，要升級到主結構走 `/docs:promote`。

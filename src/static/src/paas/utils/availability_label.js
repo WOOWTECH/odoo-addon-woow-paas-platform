@@ -30,13 +30,30 @@ export function isPurchasable(availability) {
 }
 
 /**
+ * reason → 標籤。停售（營運明示）、未釘版（平台端設定缺陷，#552 層 4）與售罄
+ * （達上限後推導）是三件不同的事，前台分別顯示：使用者看到「暫停販售」知道之後
+ * 可能會回來，看到「已售罄」知道是名額用完了。
+ *
+ * ⚠ 這裡刻意寫成**對照表 + 中性 fallback**，而不是原本的
+ * `reason === "paused" ? "暫停販售" : "已售罄"`。那個三元式把**任何**新 reason
+ * 都渲染成「已售罄」——新增後端判準時前端會靜默對租戶說謊（名額根本沒滿），
+ * 而且不會有任何錯誤。新 reason 只該讓標籤變成不精確（中性），不該變成假的。
+ */
+const REASON_LABELS = {
+  paused: "暫停販售",
+  sold_out: "已售罄",
+  unpinned_chart: "暫不開放",
+};
+
+/**
  * @returns {string} 狀態標籤；**空字串代表可購買、不該渲染任何標籤**。
  */
 export function availabilityLabel(availability) {
   if (isPurchasable(availability)) {
     return "";
   }
-  // 停售（營運明示）與售罄（達上限後推導）是兩件事，前台分別顯示：使用者看到
-  // 「暫停販售」知道之後可能會回來，看到「已售罄」知道是名額用完了。
-  return availability?.reason === "paused" ? "暫停販售" : "已售罄";
+  // fallback「暫不開放」＝「不可購買，但我們不確定是哪一種」。缺 reason 的
+  // payload（舊快取／漏帶欄位）走到這裡也一樣——中性描述才與 isPurchasable 的
+  // fail-closed 語意一致。
+  return REASON_LABELS[availability?.reason] ?? "暫不開放";
 }

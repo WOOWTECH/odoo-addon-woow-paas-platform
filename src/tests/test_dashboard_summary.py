@@ -16,6 +16,7 @@ or auth misconfiguration.
 from datetime import date, timedelta
 
 from odoo.tests.common import HttpCase, tagged
+from ..models.cloud_service import _internal_provision
 
 
 @tagged('post_install', '-at_install')
@@ -183,7 +184,7 @@ class TestDashboardSummary(HttpCase):
         })
         # `state == 'running'` is the field name verified against
         # cloud_service.py — the plan flagged this as something to verify.
-        self.CloudService.sudo().create({
+        _internal_provision(self.CloudService.sudo()).create({
             'name': 'Dashboard Test Svc',
             'workspace_id': workspace.id,
             'template_id': template.id,

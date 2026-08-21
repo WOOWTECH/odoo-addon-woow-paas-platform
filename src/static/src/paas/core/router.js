@@ -8,11 +8,22 @@ const routes = [
     { path: "workspaces", name: "Workspaces", routeName: "workspaces" },
     { path: "workspace/:id", name: "Workspace Detail", routeName: "workspace-detail", pattern: /^workspace\/(\d+)$/ },
     { path: "workspace/:id/team", name: "Workspace Team", routeName: "workspace-team", pattern: /^workspace\/(\d+)\/team$/ },
+    // #768：Smart Home 也長出頁籤（Overview / Access）。與 CS 逐字同型的**雙路由**：
+    // 帶 tab 的在前（比對更長的 path，否則不帶 tab 那條會先吃掉
+    // `.../smarthome/12/access`），不帶 tab 的留著——既有的深連結／麵包屑／
+    // `workspace/:id` 卡片點擊全部都是 `.../smarthome/:homeId`，只加帶 tab 那條
+    // 會讓它們**整批 404**。兩條共用同一個 routeName，由 params.tab 決定分頁。
+    // 白名單 `(overview|access)`：頁籤自己 setTab 改的 hash 也走這裡，不在白名單
+    // 的話換頁後重新整理就掉到 NotFoundPage。
+    { path: "workspace/:id/smarthome/:homeId/:tab", name: "Smart Home Detail Tab", routeName: "smarthome-detail", pattern: /^workspace\/(\d+)\/smarthome\/(\d+)\/(overview|access)$/ },
     { path: "workspace/:id/smarthome/:homeId", name: "Smart Home Detail", routeName: "smarthome-detail", pattern: /^workspace\/(\d+)\/smarthome\/(\d+)$/ },
     { path: "workspace/:id/security-access/:saId/:tab", name: "Security Access Detail", routeName: "security-access-detail", pattern: /^workspace\/(\d+)\/security-access\/(\d+)\/(overview|configuration|application|access|email|domains)$/ },
     { path: "workspace/:id/services/marketplace", name: "App Marketplace", routeName: "marketplace", pattern: /^workspace\/(\d+)\/services\/marketplace$/ },
     { path: "workspace/:id/services/configure/:templateId", name: "Configure Service", routeName: "configure", pattern: /^workspace\/(\d+)\/services\/configure\/(\d+)$/ },
-    { path: "workspace/:id/services/:serviceId/:tab", name: "Service Detail Tab", routeName: "service-detail", pattern: /^workspace\/(\d+)\/services\/(\d+)\/(overview|configuration|addons|mcp-servers)$/ },
+    // `access`（#746）：CS Access Control 頁籤。白名單沒有它的話，深連結
+    // .../services/:id/access 會掉到 NotFoundPage——頁籤自己 setTab 改的 hash
+    // 也一樣，換頁後重新整理就進不去。
+    { path: "workspace/:id/services/:serviceId/:tab", name: "Service Detail Tab", routeName: "service-detail", pattern: /^workspace\/(\d+)\/services\/(\d+)\/(overview|configuration|addons|mcp-servers|access)$/ },
     { path: "workspace/:id/services/:serviceId", name: "Service Detail", routeName: "service-detail", pattern: /^workspace\/(\d+)\/services\/(\d+)$/ },
     // D4=C: `/woow#/projects` is the new entry for the Projects list page; the
     //        legacy `/woow#/ai-assistant/projects` route below stays active and
@@ -97,6 +108,11 @@ export const router = reactive({
                             }
                         } else if (route.routeName === 'smarthome-detail') {
                             this.params.homeId = match[2];
+                            // 不帶 tab 那條沒有 match[3]，params.tab 因此不存在
+                            // ——由頁面自己退守 'overview'（同 service-detail）。
+                            if (match[3]) {
+                                this.params.tab = match[3];
+                            }
                         } else if (route.routeName === 'security-access-detail') {
                             this.params.saId = match[2];
                             if (match[3]) {

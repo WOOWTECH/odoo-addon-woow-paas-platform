@@ -19,6 +19,7 @@ from unittest.mock import MagicMock, patch
 from odoo.tests.common import TransactionCase
 
 from odoo.addons.woow_paas_platform.controllers.paas import PaasController
+from ..models.cloud_service import _internal_provision
 
 
 class TestTrialResetGuard367(TransactionCase):
@@ -77,7 +78,7 @@ class TestTrialResetGuard367(TransactionCase):
         })
         ws = self.Workspace.create(
             {'name': '367 WS %s' % tag, 'owner_id': owner.id})
-        svc = self.Service.create({
+        svc = _internal_provision(self.Service).create({
             'name': '367 Svc %s' % tag, 'workspace_id': ws.id,
             'template_id': self.template.id,
         })
@@ -171,7 +172,7 @@ class TestTrialResetGuard367(TransactionCase):
             svc1.sudo().subscription_id.sh_trial, '首個 service 首購有 trial')
 
         # 同 partner 第二個 service = 全新 entity（自己沒訂閱過）→ 有自己的 trial。
-        svc2 = self.Service.create({
+        svc2 = _internal_provision(self.Service).create({
             'name': '367 Svc multi-2', 'workspace_id': svc1.workspace_id.id,
             'template_id': self.template.id,
         })

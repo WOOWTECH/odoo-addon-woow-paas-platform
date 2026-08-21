@@ -25,6 +25,7 @@ import uuid
 from odoo.exceptions import AccessError
 from odoo.tests import tagged
 from odoo.tests.common import HttpCase, TransactionCase
+from ..models.cloud_service import _internal_provision
 
 
 @tagged('post_install', '-at_install')
@@ -66,7 +67,7 @@ class TestMcpServerScopeFlipGuard(TransactionCase):
             'helm_chart_version': '1.0.0',
             'min_vcpu': 1, 'min_ram_gb': 1.0, 'min_storage_gb': 1,
         })
-        self.svc_bob = Service.sudo().create({
+        self.svc_bob = _internal_provision(Service.sudo()).create({
             'name': 'Svc Bob (MCP-flip)',
             'workspace_id': self.ws_bob.id,
             'template_id': self.template.id,
@@ -270,7 +271,7 @@ class TestMcpEndpointScopeFlipDefense(HttpCase):
             'helm_chart_version': '1.0.0',
             'min_vcpu': 1, 'min_ram_gb': 1.0, 'min_storage_gb': 1,
         })
-        self.service = self.Service.sudo().create({
+        self.service = _internal_provision(self.Service.sudo()).create({
             'name': 'flip-ep Svc',
             'workspace_id': self.ws.id,
             'template_id': self.template.id,

@@ -4,7 +4,8 @@
 1	src/data/agent_template_default.xml
 1	src/data/agent_template_demo.xml
 1	src/data/ai_assistant_data.xml
-1	src/data/cloud_app_templates.xml
+1	src/data/billing_silence_cron.xml
+1	src/data/cf_access_reap_cron.xml
 1	src/data/cloud_service_cron.xml
 1	src/data/cron_topup.xml
 1	src/data/demo_system_skill.xml

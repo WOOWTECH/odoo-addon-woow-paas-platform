@@ -16,6 +16,7 @@ compute, since the controller path requires an HTTP request fixture.
 from datetime import date, timedelta
 
 from odoo.tests.common import TransactionCase
+from ..models.cloud_service import _internal_provision
 
 
 class TestChangePlanRefund(TransactionCase):
@@ -127,15 +128,24 @@ class TestChangePlanRefund(TransactionCase):
         """
         # Use real cloud_service + sub so the wizard's onchange chain works.
         Workspace = self.env['woow_paas_platform.workspace'].sudo()
+        # ⚠ `owner_id` 是 `res.users` 的 m2o，原本塞的是 **partner id**（既有的
+        # fixture bug，只是一直沒有東西去讀它）。#519 提案 B 會讀
+        # `workspace_id.owner_id.partner_id` 來比對訂閱歸屬，於是它現在會出事。
+        # 本 class 的 `cls.partner` 就是 `base.partner_admin`，對應的使用者是
+        # `base.user_admin` ⇒ 兩邊對得上，訂閱歸屬成立。
+        owner = self.env.ref('base.user_admin')
+        self.assertEqual(owner.partner_id, self.partner,
+                         'fixture 前提：workspace owner 的 partner 必須就是訂閱的 '
+                         'sh_partner_id，否則測的不是本來要測的東西')
         ws = Workspace.create({
             'name': 'BUG5 ws', 'slug': 'bug5ws',
-            'owner_id': self.partner.id,
+            'owner_id': owner.id,
         })
         Service = self.env['woow_paas_platform.cloud_service'].sudo()
         template = self.env['woow_paas_platform.cloud_app_template'].sudo().search([], limit=1)
         if not template:
             self.skipTest("No cloud_app_template available in test DB")
-        svc = Service.create({
+        svc = _internal_provision(Service).create({
             'name': 'BUG5 svc',
             'workspace_id': ws.id,
             'template_id': template.id,
@@ -203,7 +213,7 @@ class TestChangePlanRefundIsRefundTyped(TransactionCase):
         ws = self.env['woow_paas_platform.workspace'].create({
             'name': 'CP Refund WS', 'owner_id': self.owner.id,
         })
-        self.service = self.env['woow_paas_platform.cloud_service'].create({
+        self.service = _internal_provision(self.env['woow_paas_platform.cloud_service']).create({
             'name': 'CP Refund Svc', 'workspace_id': ws.id,
             'template_id': template.id,
         })

@@ -47,6 +47,7 @@ import uuid
 from unittest.mock import patch
 
 from odoo.tests.common import HttpCase, tagged
+from ..models.cloud_service import _internal_provision
 
 
 def _new_user(env, login, name=None):
@@ -137,14 +138,14 @@ class TestProjectMcpFixture(HttpCase):
         })
 
         # ---- Cloud services ----------------------------------------- #
-        self.service_w1_a = self.Service.sudo().create({
+        self.service_w1_a = _internal_provision(self.Service.sudo()).create({
             'name': 'PMC W1 Svc A',
             'workspace_id': self.ws_w1.id,
             'template_id': self.template.id,
             'helm_release_name': 'pmc-w1-a',
             'helm_namespace': 'paas-ws-pmc-w1-a',
         })
-        self.service_w1_b = self.Service.sudo().create({
+        self.service_w1_b = _internal_provision(self.Service.sudo()).create({
             'name': 'PMC W1 Svc B',
             'workspace_id': self.ws_w1.id,
             'template_id': self.template.id,
@@ -597,7 +598,11 @@ class TestProjectMcpSyncAndTest(TestProjectMcpFixture):
             'odoo.addons.woow_paas_platform.models.mcp_server.'
             'McpServer.action_test_connection'
         )
-        with patch(patch_target, return_value=None) as mock_test:
+        # #554：`action_test_connection` 現在回 bool（True＝可連線），controller
+        # 判讀它來決定 success。mock 必須忠實反映新契約——留著舊的
+        # `return_value=None` 會讓 endpoint 正確地把 None 判成失敗，測試紅在
+        # mock 說謊而不是實作有問題。
+        with patch(patch_target, return_value=True) as mock_test:
             result = self._post(
                 self._url_mcp(self.project_w1_with_mcp.id),
                 {'action': 'test', 'server_id': self.user_mcp_w1.id},

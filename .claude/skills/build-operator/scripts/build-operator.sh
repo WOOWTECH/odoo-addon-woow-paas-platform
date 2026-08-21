@@ -126,12 +126,24 @@ else
     git push origin "$BRANCH"
   fi
   git push origin "$TAG"
-  echo -e "${GREEN}Tag ${TAG} pushed. CI build triggered.${NC}"
+  # push 回 0 只代表遠端收到 tag——run 是否建立必須另外查，不可在此宣告「CI 已觸發」。
+  echo -e "${GREEN}Tag ${TAG} pushed.${NC}"
   echo ""
-  echo "Monitor CI: https://git-prod.woowtech.io/odoo-addons/woow_paas_platform/actions"
+  echo -e "${YELLOW}尚未驗證 CI run 是否建立。${NC}"
+  echo "驗證方式（唯一有鑑別力的是 API 的 path 欄位，須含 refs/tags/${TAG}）："
+  echo "  照 .claude/skills/build-operator/SKILL.md 的 Step 6 跑那段 curl + python 過濾"
+  cat <<'VERIFY'
+
+  ⚠ 不要用 `tea actions runs list` 或 `runs?limit=N` 的第一筆判斷有沒有觸發：
+    - 列表按 run id 遞減排序，不是時間序；N 是全 repo 所有 workflow 共用的視窗
+    - WORKFLOW 欄印的是 commit 訊息不是 workflow 檔名，BRANCH 欄對 tag run 是空的
+    兩者都會給假陰性，歷史上已因此做過兩次多餘的 build。
+VERIFY
+  echo ""
+  echo "Actions 頁面: https://git-prod.woowtech.io/odoo-addons/woow_paas_platform/actions"
 fi
 
 echo ""
 echo -e "${GREEN}Done!${NC}"
 echo "  Tag:   ${TAG}"
-echo "  Image: paas-operator:${VERSION}"
+echo "  Image: paas-operator:${VERSION}（驗到 run success + log 的 digest 才算數）"

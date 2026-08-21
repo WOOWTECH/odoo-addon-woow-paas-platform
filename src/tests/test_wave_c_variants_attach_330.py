@@ -96,10 +96,16 @@ class TestAttachVariantsShape(TransactionCase):
         self.assertEqual(seats, list(range(1, 11)), 'n8n t4 = 1-10 席')
 
     def test_base_without_variants_absent(self):
-        """無變體的 base（Hermes：hidden base 且無變體）→ helper 不含其 key。"""
-        template = self.env.ref('%s.cloud_app_mcp_hermes' % MOD)
+        """無變體的 base（HAOS：#423 Q5 拍板不做加購）→ helper 不含其 key。
+
+        原本取 Hermes MCP Server 當樣本（當時是「hidden base 且無變體」），
+        #765 給它補了隨 tier 放大的席數變體後這個樣本失效——改用仍然明確
+        「不做加購變體」的 HAOS（守線＝test_haos_seed_423 的
+        test_no_access_variants_in_v1）。
+        """
+        template = self.env.ref('%s.cloud_app_haos' % MOD)
         result = template.sudo().subscription_plan_ids._attach_variants()
-        for xmlid in ('plan_mcp_hermes_monthly', 'plan_mcp_hermes_yearly'):
+        for xmlid in ('plan_haos_monthly', 'plan_haos_yearly'):
             base = self.env.ref('%s.%s' % (MOD, xmlid))
             self.assertNotIn(base.id, result)
 

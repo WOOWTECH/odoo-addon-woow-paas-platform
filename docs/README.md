@@ -1,5 +1,9 @@
 # docs/ — 文件導引
 
+> **只是想找一份既有文件？** 走 [`index.md`](index.md)——它依「我現在想做什麼」routing，
+> 篇數由 `scripts/audit/gen-docs-index.py` 即時算出。
+> **本檔負責的是另一件事：寫新檔時該放哪一類。**
+
 本 repo 的文件採 **6 類混合分類**，每類負責一種「文件使用情境」。寫新檔之前先看：**你想讓讀者「做什麼」？**
 
 ## 6 類速覽
@@ -7,11 +11,11 @@
 | 目錄 | 用途 | 你會在這找到… |
 |------|------|--------------|
 | [`guides/`](guides/README.md) | **任務導向** — 操作手冊（如何做 X） | k8s setup、testing guide、新人 onboarding、tutorial |
-| [`reference/`](reference/README.md) | **查找導向** — 規格、API、藍圖 | feature spec、API contract、架構生命週期圖、design 檔（.pen） |
+| [`reference/`](reference/README.md) | **查找導向** — 規格、API、藍圖 | feature spec、API contract、架構生命週期圖、design 檔（.pen）、[`gotchas/`](reference/gotchas/) 框架與基礎設施的行為陷阱 |
 | [`decisions/`](decisions/README.md) | **解釋導向** — 為什麼這樣設計 | philosophy、refactor 決策、可複用 pattern、PR review verdict |
 | [`plans/`](plans/README.md) | **過程紀錄** — 工作計畫雙檔 | YYYY-MM-DD-<slug>-design.md + -implementation.md、季度歸檔、journal |
-| [`tracking/`](tracking/README.md) | **問題與追蹤** — issue / pitfall / follow-up | sandbox 故障、incident timeline、技術債清單、test report |
-| [`archived/`](archived/README.md) | **歷史檔案** — 不再使用但保留考古 | ccpm-v1 context、退役 plan |
+| [`tracking/`](tracking/README.md) | **問題與追蹤** — issue / pitfall / follow-up / 收官紀錄 | sandbox 故障、incident timeline、技術債清單、test report、[`landings/`](tracking/landings/) 已收官 issue 的落地紀錄 |
+| [`archived/`](archived/README.md) | **歷史檔案** — 不再使用但保留考古 | [`ccpm-v2/`](archived/ccpm-v2/README.md) 退役的 ccpm PRD / epic、ccpm-v1 context、退役 plan、[`memory/`](archived/memory/) 已被其他載體取代的 memory |
 
 加上三個不算主題類的輔助區：
 
@@ -42,7 +46,7 @@
 | 動作 | 指令 |
 |------|------|
 | 建新 doc（含 frontmatter 模板） | `/docs:new <category> <name>` |
-| 把 ccpm epic / superpowers 探索 promote 到主結構 | `/docs:promote ccpm:<feature-name>` 或 `/docs:promote superpowers:<file>` |
+| 把 superpowers 探索 promote 到主結構 | `/docs:promote superpowers:<file>` |
 
 ## 命名規則
 
@@ -62,7 +66,7 @@ category: guides | reference | decisions | plans | tracking | archived
 status: draft | active | superseded | archived
 created: YYYY-MM-DD
 updated: YYYY-MM-DD
-related: [docs/decisions/xxx.md, .claude/epics/yyy/epic.md]
+related: [docs/decisions/xxx.md, docs/reference/features/yyy.md]
 ---
 ```
 
@@ -70,8 +74,6 @@ related: [docs/decisions/xxx.md, .claude/epics/yyy/epic.md]
 
 | 方向 | 規則 |
 |------|------|
-| docs/ → ccpm | frontmatter `source: .claude/epics/<name>/epic.md` 或 `related: [.claude/...]` |
-| ccpm → docs/ | epic.md / task.md 行內 `> Promoted to: docs/decisions/<file>.md`（不動 ccpm schema 欄位） |
 | docs/ → superpowers | frontmatter `source: docs/superpowers/specs/YYYY-MM-DD-<topic>-design.md` |
 | superpowers → docs/ | promote＝git mv 搬入主結構（原檔不留副本，2026-07-19 起），新檔 frontmatter `source:` 記原路徑；inbound 引用同步改寫 |
 | docs/ → docs/ | 相對路徑（範例：從 `plans/<quarter>/` 引用 decisions 寫 `../../decisions/<file>.md`）— CI link check 友善 |
@@ -87,7 +89,6 @@ related: [docs/decisions/xxx.md, .claude/epics/yyy/epic.md]
 
 ## 工具介接
 
-- **ccpm v2**：產出在 `.claude/prds/` 與 `.claude/epics/`，不直接碰 docs/。完成後透過 `/docs:promote` 把決策 / pitfall / follow-up 落到主結構
 - **obra/superpowers**：brainstorming / writing-plans skill 自動寫到 `docs/superpowers/`（工具自管理區），透過 `/docs:promote` 升級到主結構
 - **SuperClaude_Framework**：`claudedocs/` 是 SC 自用 namespace（已 git-ignored），不入版控；`/sc:pm` 不啟用
 

@@ -114,7 +114,6 @@ obra/superpowers 的 skill 預設輸出路徑寫死在 `docs/superpowers/`，不
 
 或讓 Claude Code 自動拉新版（多版本並存於 cache，新 session 用最新）。
 
-## 與 ccpm / SuperClaude_Framework 的關係
+## 與 SuperClaude_Framework 的關係
 
-- **ccpm**：產出在 `.claude/`，superpowers 不碰。promote 路徑共用 `/docs:promote`
-- **SuperClaude `/sc:brainstorm`**：跟 superpowers `brainstorming` skill 功能重疊，我們透過 `/brainstorm-sc-to-ccpm` 走 SuperClaude 路徑（產 ccpm-compliant PRD）；superpowers brainstorming 適合純探索（非 ccpm 場景）
+- **SuperClaude `/sc:brainstorm`**：跟 superpowers `brainstorming` skill 功能重疊，兩者擇一即可。差別在產出落點——`/sc:brainstorm` 寫 `claudedocs/`（git-ignored），superpowers 寫 `docs/superpowers/`（入版控）；想留下探索痕跡就用 superpowers

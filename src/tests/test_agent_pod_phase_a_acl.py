@@ -74,6 +74,7 @@ Boundary:
 import uuid
 
 from odoo.tests.common import TransactionCase, tagged
+from ..models.cloud_service import _internal_provision
 
 
 def _new_internal_user(env, login, name=None, password=None):
@@ -147,14 +148,14 @@ class TestPhaseAAclDualLegM2MWalk(TransactionCase):
             'helm_chart_version': '1.0.0',
             'min_vcpu': 1, 'min_ram_gb': 1.0, 'min_storage_gb': 1,
         })
-        self.svc_a = self.Service.sudo().create({
+        self.svc_a = _internal_provision(self.Service.sudo()).create({
             'name': f'R Svc A {suffix}',
             'workspace_id': self.ws_a.id,
             'template_id': self.tmpl.id,
             'helm_release_name': f'r-svc-a-{suffix}',
             'helm_namespace': f'paas-ws-r-a-{suffix}',
         })
-        self.svc_b = self.Service.sudo().create({
+        self.svc_b = _internal_provision(self.Service.sudo()).create({
             'name': f'R Svc B {suffix}',
             'workspace_id': self.ws_b.id,
             'template_id': self.tmpl.id,

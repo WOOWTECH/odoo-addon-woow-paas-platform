@@ -25,8 +25,29 @@ Odoo 共用 client 有為其他 feature 而存在的合法 delete_*（不可整�
 import io
 import re
 import tokenize
-import unittest
 from pathlib import Path
+
+from odoo.tests.common import BaseCase
+
+# #544：基底是 `BaseCase` 而**不是** `unittest.TestCase`——後者拿不到 `MetaCase` 給的
+# `test_tags`，會通過 `odoo/tests/loader.py` 的篩子②③被 yield 成 test 實例，然後倒在
+# `odoo/tests/tag_selector.py:69` 的 `if not hasattr(test, 'test_tags')`（該行原始註解自己
+# 寫著 does not inherit from BaseCase）⇒ 本檔的測試**一條都不會執行**，而 `of N tests`
+# 不會顯示少了它們。
+#
+# 為什麼是 `BaseCase` 而不是本 repo 佔多數的 `TransactionCase`：本檔全部是純函式測試，
+# 不碰 `self.env` / `self.cr` / `self.registry`。`BaseCase` 只提供這裡唯一缺的東西
+# （`MetaCase` ⇒ `test_tags`），不建 class 級 cursor、不掛 `_gc_filestore` cleanup、
+# 每個 method 也不開 SAVEPOINT ⇒ 不替純函式測試綁上「DB 必須可用」這個它不需要的前提。
+# 這與 Odoo core 自己的做法一致（`odoo/addons/base/tests/` 的 `TestSafeEval` /
+# `TestDateUtils` / `TestFrozendict` 等純邏輯測試一律直接繼承 `BaseCase`）。
+# ⚠ `BaseCase` docstring 那句 "This class is abstract and expects self.registry,
+# self.cr and self.uid to be initialized by subclasses" 是對**選用**輔助方法
+# （`self.cursor()` / `self.ref()` / `self.browse_ref()` / `self.uid` / `assertQueryCount`…）
+# 的免責聲明，不是 class 機制本身的前置條件——佐證：`BaseCase._assertRaises`
+# （odoo/tests/common.py:472-474）自己就寫 `if hasattr(self, 'env')` 來守這件事。
+# ⇒ 若日後在本檔新增需要 `self.env` 的測試，請把**那一個 class** 改成 `TransactionCase`，
+# 不要在這裡自建 registry。
 
 ADDON_SRC = Path(__file__).resolve().parent.parent  # .../src
 
@@ -93,7 +114,7 @@ def _scan_forbidden(source, patterns=FORBIDDEN_PATTERNS):
     return hits
 
 
-class TestReconcileDeleteGate(unittest.TestCase):
+class TestReconcileDeleteGate(BaseCase):
     """Odoo reconcile 路徑零刪除/破壞 token（首版零自動刪除）。"""
 
     def test_forbidden_detector_catches_all_deletion_vectors(self):
@@ -147,7 +168,7 @@ class TestReconcileDeleteGate(unittest.TestCase):
         self.assertFalse(offenders, f"reconcile 路徑出現刪除/破壞 token：{offenders}")
 
 
-class TestReconcileReportPathDeleteGate(unittest.TestCase):
+class TestReconcileReportPathDeleteGate(BaseCase):
     """report 路徑（``models/reconcile_report.py``：model + cron + snapshot 持久化）的 delete-gate。
 
     與 reconciler.py（純讀、連自家 unlink 都禁）不同：報表 model 做 snapshot-replace 需 ``unlink``

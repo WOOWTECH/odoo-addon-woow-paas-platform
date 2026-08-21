@@ -19,7 +19,7 @@
     若有人把 slug 對照表搬回來，這支會回 False。
   * B：slug 是 ``hermes-agent``、``has_admin_gui=True``，但 seed **沒有** gateway
     → 必須 False。若有人拿 ``has_admin_gui`` 當交付判準（＝ #530 review 抓到的
-    原缺陷：8 個 has_admin_gui=True 的模板裡只有 1 個真有 gateway，其餘 7 個的
+    原缺陷：has_admin_gui=True 的模板裡只有 hermes-agent 真有 gateway，其餘的
     租戶會被告知一件永遠不會發生的事），這支會回 True。
   * C：seed 有 gateway 但服務沒有 subdomain → False（判準是**完整網址**組不組得
     出來，不是「chart 有沒有這個鍵」）。
@@ -33,6 +33,7 @@ import json
 from odoo.tests.common import TransactionCase
 
 from odoo.addons.woow_paas_platform.controllers.paas import PaasController
+from ..models.cloud_service import _internal_provision
 
 
 class TestGatewayCapabilityPayload530(TransactionCase):
@@ -78,7 +79,7 @@ class TestGatewayCapabilityPayload530(TransactionCase):
     def _make_service(self, template, subdomain=None):
         if subdomain is None:
             subdomain = self._next_subdomain()
-        return self.env['woow_paas_platform.cloud_service'].create({
+        return _internal_provision(self.env['woow_paas_platform.cloud_service']).create({
             'name': f'svc-{template.slug}',
             'workspace_id': self.workspace.id,
             'template_id': template.id,
@@ -153,7 +154,7 @@ class TestGatewayCapabilityPayload530(TransactionCase):
         這支是原缺陷的雙生：前端文案原本判 ``hasAdminGui``，而 has_admin_gui=True
         的 8 個模板（mcp-odoo／mcp-odoo-manage／mcp-n8n／mcp-k8s／mcp-vk／
         mcp-opendesign／open-design／hermes-agent）中只有 hermes-agent 真的有
-        gateway ⇒ 其餘 7 個的租戶被告知「Reset 會一併換發 Gateway API Key」，
+        gateway ⇒ 其餘的租戶被告知「Reset 會一併換發 Gateway API Key」，
         而那件事永遠不會發生。
         """
         template = self._make_template('hermes-agent', has_admin_gui=True,
@@ -212,6 +213,13 @@ class TestGatewayCapabilityPayload530(TransactionCase):
         secret 有 gateway key）：少了這行，「不交付」在完全沒實作鑄造的世界也是綠的
         ——四個 case 會全部因為「沒有 key」而回 {}，兩邊恰好都是 False 而假綠。
         case A／D 因此同時是本檔對 finding 3 鑄造閘門的陽性對照。
+
+        ⚠ #672 起判準**逐 key 讀**，不是 `bool(_gateway_credentials(...))`：那個
+        payload 現在也可能只帶 `dashboard_url`（dashboard 有自己的閘門），dict 非空
+        於是不再等價於「gateway 有交付」。case B 的 slug 正好是 hermes-agent（有
+        dashboard、無 gateway），用非空當代理會讓它讀成「gateway 交付了」——一個
+        指錯東西的綠／紅。逐 key 讀同時比原版**更嚴**：兩把憑證各自被斷言，而不是
+        「至少有一個東西在」。
         """
         cases = [
             ('A 非 hermes slug 有 gateway', 'mcp-odoo', True, '/gateway', None, True),
@@ -235,9 +243,13 @@ class TestGatewayCapabilityPayload530(TransactionCase):
                     '（沒有這行，「不交付」在完全沒實作鑄造的世界也是綠的）')
 
                 payload_flag = self.controller._format_service(service)['has_gateway']
-                delivered = bool(PaasController._gateway_credentials(service))
+                creds = PaasController._gateway_credentials(service)
 
                 self.assertEqual(payload_flag, expected, f'{label}: payload 判準')
                 self.assertEqual(
-                    delivered, expected,
-                    f'{label}: 實際交付判準（_gateway_credentials）')
+                    bool(creds.get('gateway_url')), expected,
+                    f'{label}: 實際交付判準（_gateway_credentials 的 gateway_url）')
+                self.assertEqual(
+                    'gateway_api_key' in creds, expected,
+                    f'{label}: 兩把 gateway 憑證必須同進退——只交網址不交 key（或反過來）'
+                    '會讓租戶填得出一個永遠通不過認證的連線')

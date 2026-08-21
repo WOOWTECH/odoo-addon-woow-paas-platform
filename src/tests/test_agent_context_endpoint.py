@@ -13,6 +13,7 @@ import uuid
 from unittest.mock import MagicMock, patch
 
 from odoo.tests.common import HttpCase, TransactionCase, tagged
+from ..models.cloud_service import _internal_provision
 
 
 @tagged('post_install', '-at_install')
@@ -52,7 +53,7 @@ class TestLegacySseContextWiring(HttpCase):
             'helm_chart_name': 'tmpl', 'helm_chart_version': '1.0.0',
             'min_vcpu': 1, 'min_ram_gb': 1.0, 'min_storage_gb': 1,
         })
-        self.service = env['woow_paas_platform.cloud_service'].sudo().create({
+        self.service = _internal_provision(env['woow_paas_platform.cloud_service'].sudo()).create({
             'name': f'Svc {suffix}',
             'workspace_id': workspace.id,
             'template_id': template.id,

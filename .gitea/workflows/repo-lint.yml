@@ -1,14 +1,219 @@
 name: repo-lint
 on:
   pull_request:
+    # 🔴 這份白名單的維護義務：**新 check 讀哪些檔，這裡就要有哪些檔**。
+    # 少一條不會有任何訊號——job 不是紅也不是綠，它根本不出現。
+    #
     # #461：extra/paas-operator/** 持有 reset 預算階梯的**內層**常數
     # （RESET_HARD_CAP_SECONDS 等）。沒有這一行，「只改 operator 常數」的 PR
     # 不會觸發 repo-lint ⇒ check_reset_budget_ladder 對它完全休眠（#463 同型的
     # CI paths 盲點：gate 寫好了卻不會被跑到）。
-    paths: ["src/**", "scripts/audit/**", "extra/paas-operator/**"]
+    #
+    # #547：pattern-doc-registry 的輸入是「pattern doc 目錄 ／ pattern-guard-map
+    # ／ 索引 README ／ map 指到的每一個檔」。這四者原本**整批落在白名單外**
+    # ⇒ 只改 doc、或只改 map 的 PR 不觸發 repo-lint，新 check 對「doc 被改壞」
+    # 這一半完全休眠（S1 沒有 S2 等於沒做）。
+    #   - docs/decisions/patterns/**：pattern doc 本體與索引 README
+    #   - docs/tracking/pitfalls/**：map 有條目指到這裡（同上，不寫個數——這行原本
+    #     寫死一個個數，#598 實測時它已經與 map 實際不符：靜默漂掉，而且沒有任何
+    #     東西會發現。個數要即時的請直接數 pattern-guard-map.json）
+    #   - .claude/hooks/**        ：pattern-guard-map.json 與 hook 本體
+    #   - CLAUDE.md               ：map 的 seed-default-template class 指到它
+    #
+    # ⚠ 適用範圍：以上「維護白名單」的義務只適用於**非 required status check** 的 job。
+    # 一旦某個 check 進了 required 清單，paths 白名單的性質就從「省時間」翻轉成「卡死」——
+    # 沒命中時該 context **不存在**（不是紅也不是綠），而 required 的判準是「context
+    # 存在且成功」⇒ 被過濾掉的 PR 永遠湊不齊 check、永遠不能 merge。
+    #
+    # 🔴 判準（刻意只寫規則、不寫當下狀態——狀態會過期，規則不會）：
+    #   **任何 workflow 要進 required 清單之前，必須先確認它沒有 paths／branches 過濾；
+    #     有就得先拿掉。** 對 repo-lint 而言＝要設成 required 就必須先刪掉下面這份 paths，
+    #     否則只動 docs/guides/**、.gitea/**、scripts/ci/** … 的 PR 會立刻永遠卡死。
+    #   已按此判準改成無條件執行的範例：.gitea/workflows/manifest-version-gate.yml（#538）。
+    #
+    # repo-lint 現在是不是 required，**看 develop 分支保護的 status_check_contexts**
+    # ——那是權威來源，刻意不在此複述。（本行原本複述過一個布林值，設定一改就成了活的假話；
+    # 那正是本檔上下文所要防的形態，見 #538 的三張後續工單。）
+    paths:
+      - "src/**"
+      - "scripts/audit/**"
+      # 本檔自己：改動 gate 就要重新證明 gate 還會動。少了這條，「只改 repo-lint.yml」
+      # 的 PR 不會觸發 repo-lint ⇒ 改動無法自我驗證，而且輸出與「改壞了但沒跑到」
+      # 完全相同。實證：PR#605 只動 .gitea/，該 commit 的 statuses 只有
+      # manifest-version-gate，repo-lint 完全沒有留下 context。
+      # （manifest-version-gate.yml 舊版的 paths 也是這樣把自己列進去的。）
+      - ".gitea/workflows/repo-lint.yml"
+      # #538 工單 7：seed generator 的測試也由本 workflow 跑（見下方自我測試步驟）。
+      # 只把它加進那一步的清單、不加這條 paths，就是半套——改壞 generator 的 PR
+      # 仍然不觸發 repo-lint，那支測試對它最該守的改動照樣休眠（#461 同型）。
+      # ⚠ 實查過才加：現有 check 沒有任何一條讀 scripts/seed/ 底下的檔（當時實測：
+      #   audit hook 攔截 684 次 repo 內存取，scripts/seed 命中 0），所以
+      #   seed-only PR 只是多跑一次既有的全樹掃描，不會誤報。
+      #   刻意不寫「N 條 check」——狀態會過期，規則不會（同本檔上面 required 那段的
+      #   判準）。#598 實測過：把這裡的數字改成 999，`--all` 照樣 exit=0、零訊號，
+      #   而 repo-lint 的檔頭對帳 gate 管不到 .gitea/ 底下的散文。
+      - "scripts/seed/**"
+      - "extra/paas-operator/**"
+      - "docs/decisions/patterns/**"
+      - "docs/tracking/pitfalls/**"
+      - ".claude/hooks/**"
+      - "CLAUDE.md"
+      # kubectl-ns-whitelist-sync 的**第二份**輸入。CLAUDE.md 已在上一行，但這條
+      # check 比的是兩份副本是否相等 ⇒ 只列一份的話，「只改 guard doc」的 PR 不觸發
+      # repo-lint，gate 對它最該守的那一半（有人在敘事版增減 namespace）完全休眠，
+      # 而輸出與「跑了而且沒事」完全相同（#461／#547 同型）。
+      - "docs/guides/deployment/shared-cluster-paas-scope-guard.md"
+      # #626 doc-symbol-anchor 的**第二類**輸入：錨點指到的 code 檔。docs 側兩個目錄
+      # 已在上面（patterns / pitfalls），code 側今天全落在 src/** 與
+      # extra/paas-operator/**（也已在上面）——這兩條補的是**候選索引**那一半：
+      # 本 check 用「路徑後綴唯一解析」決定 `paas.py:foo` 指的是哪個檔，所以在 repo
+      # 任何地方新增一個同 basename 的 .py/.js 都可能把原本唯一的錨點變成歧義 ⇒ 紅。
+      # 實查 git ls-files（不是猜）：src / extra/paas-operator / scripts/{audit,seed}
+      # / .claude/hooks 之外，今天實際住著 .py/.js 的只剩 scripts/{ci,maintenance}
+      # 與 tests/ 這兩處。scripts/** 是既有兩條 scripts/{audit,seed}/** 的超集，刻意
+      # 不刪那兩條——它們各自帶著自己的理由（#538 工單 7 / 自我測試步驟），刪掉會把
+      # 那段理由一起弄丟。
+      # ⚠ 已知邊界：**全新的頂層目錄**放 .py/.js 仍不會觸發本 workflow，那種 PR 造成
+      #   的歧義要等下一個命中白名單的 PR 或手動 --all 才會紅。
+      - "scripts/**"
+      - "tests/**"
+      # #665 deploy-stg 的 addon 版號 post-check gate 與它的判定層自測。這道 gate
+      # 平常只在**跑 deploy-stg 時**才會被行使，所以「改壞了」與「還沒人部署」在
+      # 沒有 CI 的情況下輸出完全相同——要等到下一次真的部署 stg 才會發現，而那正是
+      # 最不想遇到意外的時刻。列進來讓它每個 PR 都被證明還會動。
+      - ".claude/skills/deploy-stg/**"
 jobs:
   repo-lint:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - run: python3 scripts/audit/repo-lint.py --all
+
+      # #524 ③：workspace-scoped model 必須有「對 Internal User 生效」的 record
+      # rule。刻意是**獨立檔案、不併進 repo-lint.py**（PR #517 動過那支，兩張單
+      # 同時改同一個檔案會撞）。
+      #
+      # 為什麼要有這一步，而不是只靠下一步的 test_*.py glob：那些測試跑的是
+      # **複製到 tmp 的副本**，證明的是「判準本身有鑑別力」；這一步跑的是
+      # **這個 PR 的實際樹**，證明的是「這棵樹現在是乾淨的」。兩者不可互相取代
+      # ——判準對、但這次 PR 剛好新增了一個沒 rule 的 model，只有這一步會紅。
+      - name: workspace-scoped record rule gate (#524)
+        run: python3 scripts/audit/workspace_scoped_rule_gate.py
+
+      # scripts/ 底下的自我測試。這些原本一支都沒有被任何 CI 跑到——
+      # test_audit_411_classifier.py 從加進來就沒跑過，test_memory_integrity.py
+      # 是 #606 新增的守衛，做出來的當下就處在「驗過一次、但不會被持續驗證」狀態，
+      # test_generate_plan_variants.py 則守著 seed generator（改價／增減變體都要重跑
+      # 它）卻同樣沒人跑（memory: feedback_verified_once_is_not_continuously_verified）。
+      #
+      # 🔴 放進下列目錄的 test_*.py 契約：**不得有外部依賴**。
+      #   不可依賴 ~/.claude/、kubeconfig、helm、網路、Odoo、特定 cwd——CI 容器一樣
+      #   都沒有。用 glob 收（而不是逐一列名）是為了讓未來新增的自動被納入，不重演
+      #   「新增了但沒人跑」；代價就是任何人放一支需要特殊環境的進來會直接弄紅 CI。
+      #   需要環境的測試請放別處，不要放這些目錄。
+      #   （納入時實測：三支在 env -i、空 HOME、cwd=/ 下皆綠且不寫 HOME。）
+      #
+      # 🔴 落空守衛的語意是「**宣告清單裡的每個目錄各自**至少要跑到一支」，不是
+      #   「合計至少一支」。差別在於後者自帶假綠洞：scripts/seed/ 的測試整批被刪或
+      #   改名時，迴圈只是少跑幾輪，合計仍 > 0 ⇒ 照樣綠，而那批測試已經沒人守了。
+      #   守衛的鑑別力來自「跑了幾輪」，輪數若由被測物自己決定，被測物就能自己關掉
+      #   對自己的檢查——所以把 floor（目錄清單）折進迴圈，而不是只拿來比對總數
+      #   （memory: feedback_declarative_list_gate_needs_floor_folded_in，#522 同型）。
+      #   代價：某個目錄哪天合理地不再有測試，這步會紅到有人把它從清單刪掉為止。
+      #   那是刻意的摩擦——刪清單這個動作會出現在 diff 裡可被覆核，靜默少跑不會。
+      - name: scripts/ 自我測試
+        run: |
+          set -u
+          rc=0
+          total=0
+          # 宣告式清單（寫死在 for 裡，不經變數展開——zsh 不做 word splitting，
+          # 用變數會在本機 zsh 下靜默變成單一 token 而空跑）
+          for d in scripts/audit scripts/seed; do
+            if [ ! -d "$d" ]; then
+              echo "✗ 宣告的目錄不存在：$d/（清單與實體不同步，不是靜默略過）"
+              rc=1
+              continue
+            fi
+            found=0
+            for t in "$d"/test_*.py; do
+              [ -e "$t" ] || continue
+              found=$((found + 1))
+              echo "──────── $t"
+              python3 "$t" || rc=1
+            done
+            if [ "$found" -eq 0 ]; then
+              echo "✗ $d/ 底下一支 test_*.py 都沒命中——該目錄的測試整批休眠，與「全部通過」輸出相同，故當失敗"
+              rc=1
+              continue
+            fi
+            echo "──────── $d/ 跑了 $found 支"
+            total=$((total + found))
+          done
+          # 完備性：scripts/ 底下不該有「沒人跑」的 test_*.py。這條是為了不必再開
+          # 第三張工單——#607 收 scripts/audit、本次收 scripts/seed，都是事後才發現
+          # 的；有了這條，下一個新目錄會在加進來的當下就紅。
+          unrun=$(find scripts -name 'test_*.py' -not -path '*/__pycache__/*' \
+                    ! -path 'scripts/audit/*' \
+                    ! -path 'scripts/seed/*' \
+                    ! -path 'scripts/ci/test_manifest_version_gate.py' | sort)
+          if [ -n "$unrun" ]; then
+            echo "✗ 以下 test_*.py 沒有任何 CI 會跑到——新增測試時要一併決定誰跑它："
+            echo "$unrun" | sed 's/^/      /'
+            echo "  （scripts/ci/test_manifest_version_gate.py 由 manifest-version-gate.yml 跑，故豁免）"
+            rc=1
+          fi
+          echo "──────── 合計 $total 支"
+          exit $rc
+
+      # .claude/skills/ 底下的 bash 自我測試。第一支是 #665 的 deploy-stg addon 版號
+      # post-check（`tests/test-verify-addon-version.sh`）。
+      #
+      # 為什麼要有這一步：那道 gate 只在**跑 deploy-stg 時**才被行使，而 deploy-stg
+      # 不常跑。gate 的比較器改壞了跟「這陣子沒人部署」在沒有 CI 的情況下輸出一模一樣
+      # ⇒ 會等到下一次真的要部署 stg 才炸（memory:
+      # feedback_verified_once_is_not_continuously_verified）。verify-addon-version.sh
+      # 執行時本來就會先跑一次同一支自測，這一步是把那個保證**提前到 PR**。
+      #
+      # 🔴 契約與上一步相同：放進 `.claude/skills/*/tests/` 的測試**不得有外部依賴**
+      #   （kubeconfig / 叢集 / 網路 / Odoo / 特定 cwd 都沒有）。需要環境的測試放別處。
+      # 🔴 floor 同樣折進迴圈：目錄宣告了卻不存在、或存在卻一支都沒命中，都判失敗——
+      #   否則測試整批被刪或改名時，這步只是少跑幾輪，輸出仍與「全部通過」相同。
+      - name: .claude/skills/ 自我測試（bash）
+        run: |
+          set -u
+          rc=0
+          total=0
+          # 宣告式清單（寫死在 for 裡，不經變數展開）
+          for d in .claude/skills/deploy-stg/tests; do
+            if [ ! -d "$d" ]; then
+              echo "✗ 宣告的目錄不存在：$d/（清單與實體不同步，不是靜默略過）"
+              rc=1
+              continue
+            fi
+            found=0
+            for t in "$d"/test-*.sh; do
+              [ -e "$t" ] || continue
+              found=$((found + 1))
+              echo "──────── $t"
+              bash "$t" || rc=1
+            done
+            if [ "$found" -eq 0 ]; then
+              echo "✗ $d/ 底下一支 test-*.sh 都沒命中——該目錄的測試整批休眠，與「全部通過」輸出相同，故當失敗"
+              rc=1
+              continue
+            fi
+            echo "──────── $d/ 跑了 $found 支"
+            total=$((total + found))
+          done
+          # 完備性：`.claude/skills/*/tests/` 底下不該有「沒人跑」的測試。
+          # 只掃 tests/ 目錄（不是全 skills/），所以 k8s-dev-sandbox 那種需要真叢集的
+          # scripts/woow-test.sh 不會被誤收——它本來就不是無外部相依的單元測試。
+          unrun=$(find .claude/skills -path '*/tests/*' -name '*.sh' \
+                    ! -path '.claude/skills/deploy-stg/tests/*' | sort)
+          if [ -n "$unrun" ]; then
+            echo "✗ 以下 .claude/skills/*/tests/ 的測試沒有任何 CI 會跑到——新增時要一併決定誰跑它："
+            echo "$unrun" | sed 's/^/      /'
+            rc=1
+          fi
+          echo "──────── 合計 $total 支"
+          exit $rc

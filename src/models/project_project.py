@@ -15,7 +15,19 @@ _REACH_LOCK_NS = 0x52454143
 
 
 class ProjectProject(models.Model):
-    _inherit = 'project.project'
+    # #698：掛上綁定守衛 mixin（唯一實作，四個入口共用）。它自己 override
+    # write/create，所以本 class **不需要**、也不應該再手動呼叫守衛。
+    # `_inherit` 一旦是 list，Odoo 就**不再**自動從它推出 `_name`
+    # （`_build_model` 只在 `_inherit` 是字串時代入）⇒ 少了 `_name` 會被當成
+    # 一個全新 model，直接撞 'use the same table and columns'。
+    _name = 'project.project'
+    _inherit = ['project.project',
+                'woow_paas_platform.cloud_service_binding_guard']
+
+    # 載體＝M:N；`cloud_service_id` 只作為觸發器（它是 cloud_service_ids[:1]
+    # 的 stored compute，寫它會經 inverse 轉成內層 M:N write）。
+    _cs_binding_fields = ('cloud_service_ids',)
+    _cs_binding_triggers = ('cloud_service_id',)
 
     # ------------------------------------------------------------------ #
     # M:N cloud_service binding (Phase A — agent-runtime-pod epic).      #
@@ -280,13 +292,29 @@ class ProjectProject(models.Model):
         # Resolve the owner-partner to bootstrap (HC-2
         # [[constraint-input-trust-expansion]]): authority comes from a trusted
         # source, never inferred from an attacker-controllable context value.
-        # - SUPERUSER path (sudo: paas-operator provisioning / cron / install /
-        #   migration): only an EXPLICIT ``bootstrap_owner_partner_id`` hint —
-        #   set by a trusted caller naming the real human owner — bootstraps;
-        #   a bare SUPERUSER create with NO hint does NOT auto-own.
-        # - Normal self-service create: the authenticated user owns the project.
-        #   The hint is NOT honoured here — a non-trusted caller must not be able
-        #   to assign ownership to an arbitrary partner via the context.
+        # ⚠ The branch below selects on ``env.uid``, NOT on ``env.is_superuser()``
+        #   — and ``sudo()`` does NOT reach the SUPERUSER branch. Odoo 18
+        #   ``odoo/models.py``'s ``BaseModel.sudo()`` docstring, verbatim
+        #   (symbol, not line number — this box carries two distinct odoo trees
+        #   whose copies of this file differ by 16 lines, so a line number is
+        #   only ever right for one of them and the doc never says which):
+        #     "The superuser mode does not change the current user, and simply
+        #      bypasses access rights checks."
+        #   So ``sudo()`` sets ``env.su`` and leaves ``uid`` alone; only a real
+        #   root env (uid == 1) takes the SUPERUSER branch. An earlier version of
+        #   this comment listed "sudo" as an entry point of that branch — it was
+        #   wrong, and it is the kind of wrong that gets "fixed" by making the
+        #   code match the comment (see the ⚠ note below the else-branch).
+        # - SUPERUSER path — a genuine root env (uid == 1): cron / install /
+        #   migration, i.e. ``api.Environment(cr, SUPERUSER_ID, {})``. Only an
+        #   EXPLICIT ``bootstrap_owner_partner_id`` hint — set by a trusted
+        #   caller naming the real human owner — bootstraps; a bare SUPERUSER
+        #   create with NO hint does NOT auto-own.
+        # - Everything else, INCLUDING every ``.sudo()`` call from a tenant
+        #   request (``ai_assistant.py`` self-service project create): the
+        #   authenticated user owns the project. The hint is NOT honoured here —
+        #   a non-trusted caller must not be able to assign ownership to an
+        #   arbitrary partner via the context.
         #
         # ⚠ SET-SITE INVARIANT (for whoever adds the FIRST writer of this hint):
         #   There is NO production set-site today (only tests set it). When a
@@ -304,6 +332,14 @@ class ProjectProject(models.Model):
                 return projects
             partner = self.env['res.partner'].browse(hint_partner_id).exists()
         else:
+            # ⚠ LOAD-BEARING: switching the branch selector above to
+            #   ``env.is_superuser()`` would route every tenant ``.sudo()``
+            #   create into the SUPERUSER branch, which returns early without a
+            #   hint — the tenant's own project would get ZERO project_access
+            #   rows (invisible / unreachable / undeletable; see
+            #   src/controllers/paas.py:353). This line is the only place in the
+            #   repo that grants a tenant the 'owner' row.
+            #   Locked by test_FPA14_non_root_sudo_create_self_owns.
             partner = self.env.user.partner_id
         if not partner:
             return projects

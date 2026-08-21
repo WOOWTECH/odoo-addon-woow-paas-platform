@@ -220,6 +220,28 @@ class TunnelCreateRequest(BaseModel):
     )
 
 
+class TunnelConfigUpdateRequest(BaseModel):
+    """Request to update a dedicated tunnel's single-hostname ingress config.
+
+    #769: these two fields used to be bare ``str`` parameters on the endpoint,
+    which FastAPI binds as **required query params** — while the only caller
+    (the Odoo platform client) sends them as a JSON body, so every call was a
+    422. Both sides' tests stayed green throughout (the operator suite never hit
+    this endpoint; the platform test mocks the client). Declaring them here puts
+    the endpoint back on the same shape as its neighbours
+    (``TunnelCreateRequest`` / ``TunnelRoutesSyncRequest``).
+    """
+
+    hostname: str = Field(
+        ...,
+        description="Public hostname (e.g., 'ha-xxx.woowtech.io')",
+    )
+    service_url: str = Field(
+        ...,
+        description="Target service URL or 'http_status:NNN' (503 = suspended)",
+    )
+
+
 # Response Models
 
 
@@ -294,6 +316,17 @@ class ReleaseInfo(BaseModel):
     revision: int
     status: ReleaseStatus
     chart: str
+    # #552: the chart **version** actually resolved by Helm. Both parsers used to
+    # throw it away (`_parse_release_info` read only `metadata.name`;
+    # `_parse_list_release_info` split it off and dropped the tail), so the
+    # platform could never record what it really installed — and with an empty
+    # `--version` Helm resolves to the registry's *latest*, which nobody logged.
+    #
+    # ⚠ MUST stay `Optional[str] = None`: making it required would break every
+    # direct `ReleaseInfo(...)` construction in the test-suite AND the
+    # backward-compatibility contract with an older operator deployment (Odoo
+    # reads `None` ⇒ keeps its current value rather than blanking the ledger).
+    chart_version: Optional[str] = None
     app_version: str
     updated: str
     description: Optional[str] = None

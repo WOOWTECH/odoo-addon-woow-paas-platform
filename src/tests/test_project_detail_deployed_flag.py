@@ -11,6 +11,7 @@ import json as json_lib
 import uuid
 
 from odoo.tests.common import HttpCase, tagged
+from ..models.cloud_service import _internal_provision
 
 
 def _new_user(env, login, name=None):
@@ -51,7 +52,7 @@ class TestProjectDetailDeployedFlag(HttpCase):
             'mcp_enabled': True,
         })
         # deployed = helm metadata present.
-        self.svc_deployed = self.Service.sudo().create({
+        self.svc_deployed = _internal_provision(self.Service.sudo()).create({
             'name': 'Dep Svc',
             'workspace_id': self.ws.id,
             'template_id': self.mcp_template.id,
@@ -63,7 +64,7 @@ class TestProjectDetailDeployedFlag(HttpCase):
             'cloud_service_id': self.svc_deployed.id,
         })
         # undeployed = no helm metadata.
-        self.svc_undeployed = self.Service.sudo().create({
+        self.svc_undeployed = _internal_provision(self.Service.sudo()).create({
             'name': 'Undep Svc',
             'workspace_id': self.ws.id,
             'template_id': self.mcp_template.id,

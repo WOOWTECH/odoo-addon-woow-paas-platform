@@ -1,9 +1,42 @@
 import hashlib
 import re
 
+# 一個 workspace 的 namespace 身分碼字面形狀：8 個小寫 hex。
+#
+# 這個形狀是**契約**，不是實作細節：operator 的
+# ``cloudflare.py:generate_subdomain`` 用 ``namespace.replace('paas-ws-', '')``
+# 取後綴、``reconstruct_mcp_subdomain`` 也依賴它，而 K8s namespace 必須是
+# DNS-1123 label。維持與舊 ``md5(slug)[:8]`` 同字集同長度 ⇒ 換掉推導方式**不會**
+# 動到任何跨 repo 的命名契約。
+# 🔴 錨點是 `\A` / `\Z`，**不是** `^` / `$`：Python 的 `$` 會 match「字串結尾」**或**
+# 「結尾換行之前」⇒ `'deadbeef\n'` 會通過 `^[0-9a-f]{8}$` 這道守門，而
+# ``make_namespace`` 據此產出 ``'paas-ws-deadbeef\n'`` ——一個帶換行的**非法
+# DNS-1123 label**，爆點會落在很遠的 K8s 那端（#675 覆核 F3 實測）。錨點寫在
+# pattern 自己身上而不是靠呼叫端改用 ``fullmatch()``：這個常數是共用的，下一個
+# 呼叫端用 ``match()`` 或 ``search()`` 都必須是安全的。
+# 行為（尾隨空白一律拒絕）由 ``src/tests/test_workspace_ns_hash_677.py`` 的 N11 釘住。
+WS_HASH_RE = re.compile(r'\A[0-9a-f]{8}\Z')
+
 
 def generate_ws_hash(slug: str) -> str:
-    """Generate 8-char hex hash from workspace slug."""
+    """⚠ **legacy 推導**：``md5(slug)[:8]``。新的推導路徑不得再呼叫它（#677）。
+
+    保留的兩個理由，都不是「拿它算新名字」：
+
+    1. ``src/migrations/18.0.1.0.131/post-migrate.py`` 用它回填既有 workspace 的
+       ``ws_hash`` —— 回填值必須逐字等於**舊公式的結果**，那個 workspace **之後**
+       新建的服務才會落回既有服務所在的 namespace。（既有列存下來的名字本來就不會
+       被重推，所以回填守的不是它們；呼叫點實查見該 migration 的檔頭。）
+    2. 測試拿它當「修復前的期望值」現算（寫死字面常數會假綠）。
+
+    🔴 為什麼不能再拿它推導新名字：``slug`` 由租戶提供的 ``name`` 逐字決定
+    （``Workspace._generate_slug()`` 對 ``[a-z0-9_-]`` 是恆等函式），而 ``[:8]``
+    是 **32 bit 截斷** ⇒ 租戶離線搜一個 name 就能讓自己的 workspace 映到別人的
+    K8s namespace（目標值逐字印在受害者每個公開子網域上，不必猜）。即使沒有攻擊
+    者，N 個 workspace 的生日碰撞機率約 N²/2^33（N=10,000 時約 1.2%）。
+    ⇒ namespace 身分改成 ``workspace.ws_hash``（伺服器產生、DB UNIQUE），見
+    ``models/workspace.py::_generate_ws_hash``。
+    """
     return hashlib.md5(slug.encode()).hexdigest()[:8]
 
 
@@ -12,9 +45,28 @@ def generate_resource_hash(reference_id: str, name: str) -> str:
     return hashlib.md5((reference_id + name).encode()).hexdigest()[:8]
 
 
-def make_namespace(slug: str, prefix: str = 'paas-ws-') -> str:
+def _require_ws_hash(ws_hash) -> str:
+    """守門：下面的 maker 收的是 ``workspace.ws_hash``，**不是** ``workspace.slug``。
+
+    🔴 這是「漏改一個呼叫點」的絆線。沒有它，漏改的呼叫點會安靜地產出
+    ``paas-ws-ws-137425`` / ``paas-cs-my-workspace-…`` 這種**看起來很像對的**名字：
+    仍然是合法的 DNS label、仍然以正確前綴開頭、仍然部署得起來，只是指向一個不存在
+    於任何 workspace 記錄上的 namespace。空值／``False``（欄位沒回填）同樣落在
+    raise 這一側 ＝ fail-closed，不會產出 ``paas-ws-False``。
+    """
+    if not isinstance(ws_hash, str) or not WS_HASH_RE.match(ws_hash):
+        raise ValueError(
+            "ws_hash must be 8 lowercase hex chars, got %r. These helpers take "
+            "workspace.ws_hash (the stored, server-generated namespace identity), "
+            "NOT workspace.slug — the slug is tenant-controlled and its md5[:8] is "
+            "a 32-bit truncation (#677)." % (ws_hash,)
+        )
+    return ws_hash
+
+
+def make_namespace(ws_hash: str, prefix: str = 'paas-ws-') -> str:
     """Generate K8s namespace name: {prefix}{ws_hash}."""
-    return f"{prefix}{generate_ws_hash(slug)}"
+    return f"{prefix}{_require_ws_hash(ws_hash)}"
 
 
 def _env_token(env: str = '') -> str:
@@ -43,19 +95,66 @@ def _env_token(env: str = '') -> str:
     return f"{slug}-" if slug else ''
 
 
-def make_service_subdomain(slug: str, reference_id: str, name: str, env: str = '') -> str:
+def make_service_subdomain(ws_hash: str, reference_id: str, name: str, env: str = '') -> str:
     """Generate cloud service subdomain: paas-{env}-cs-{ws_hash}-{svc_hash}."""
-    return f"paas-{_env_token(env)}cs-{generate_ws_hash(slug)}-{generate_resource_hash(reference_id, name)}"
+    return f"paas-{_env_token(env)}cs-{_require_ws_hash(ws_hash)}-{generate_resource_hash(reference_id, name)}"
 
 
-def make_smarthome_subdomain(slug: str, reference_id: str, name: str, env: str = '') -> str:
+def make_cs_access_canonical_name(ws_hash: str, reference_id: str, name: str, env: str = '') -> str:
+    """CloudService 的 Cloudflare Access 命名根（#745）。
+
+    operator 把它當成 reusable policy 名的前綴（``f"{canonical}: {policy}"``，
+    ``extra/paas-operator/src/services/cloudflare.py``），而那是整組 Access 物件
+    裡**唯一穩定帶得動 env token 的欄位**（app display name 走使用者可見的名字，
+    見 ``docs/decisions/patterns/external-resource-env-token-naming.md`` 的可行性表）。
+
+    公式刻意與 ``make_service_subdomain`` 同一條：那就是這台服務在 Cloudflare 上
+    的身分，policy 名帶上它，維運在 CF 後台一眼看得出屬於哪台服務。
+
+    🔴 **不可以改成讀 ``cloud_service.subdomain``**：那個欄位是 create 當下用
+    ``env=''`` 算出來存下的（``controllers/paas.py`` 的 ``make_service_subdomain``
+    呼叫沒有傳 ``env=``），所以「拿 stored subdomain 當前綴」在 prod 與本函式
+    **逐字節相同**、到 stg 才變成一個無法自證環境歸屬的 CF 物件——一個在 prod
+    完全看不出差別的錯誤。env 一律由呼叫端顯式傳入（來源＝
+    ``woow_paas_platform.deploy_env`` config_parameter），不從別的字串反推
+    （pattern 守則 2）。
+
+    非 lookup key：Access 的反查全走 stored id（``existing_app_id`` /
+    ``existing_policy_ids``），所以本函式的輸出改變不會讓任何刪除路徑找不到東西
+    （pattern 守則 3/4）——這也是它可以現算、不必存成 immutable 欄位的理由。
+    """
+    return make_service_subdomain(ws_hash, reference_id, name, env=env)
+
+
+def make_sm_access_canonical_name(ws_hash: str, reference_id: str, name: str, env: str = '') -> str:
+    """SmartHome 的 Cloudflare Access 命名根（#768）。
+
+    與 ``make_cs_access_canonical_name`` 逐字同構：operator 拿它當 reusable
+    policy 名的前綴（``f"{canonical}: {policy}"``），而那是整組 Access 物件裡
+    **唯一穩定帶得動 env token 的欄位**。
+
+    🔴 **不可以改成讀 stored ``smart_home.subdomain``**：那個欄位是 provision 當下
+    用 ``env=''`` 算出來存的（``models/smart_home.py::_generate_subdomain`` 明文
+    env-token-FREE，因為對外 URL 不該因環境而異），所以「拿 stored subdomain 當
+    前綴」在 prod 與本函式**逐位元組相同**、到 stg 才變成一個無法自證環境歸屬的
+    CF 物件——一個在 prod 完全看不出差別的錯誤（CS 踩過同一顆雷，見
+    ``make_cs_access_canonical_name``）。env 一律由呼叫端顯式傳入（來源＝
+    ``woow_paas_platform.deploy_env`` config_parameter），不從別的字串反推。
+
+    非 lookup key：Access 的反查全走 stored id（``existing_app_id`` /
+    ``existing_policy_ids``），所以本函式輸出改變不會讓任何刪除路徑找不到東西。
+    """
+    return make_smarthome_subdomain(ws_hash, reference_id, name, env=env)
+
+
+def make_smarthome_subdomain(ws_hash: str, reference_id: str, name: str, env: str = '') -> str:
     """Generate smart home subdomain: paas-{env}-sm-{ws_hash}-{sm_hash}."""
-    return f"paas-{_env_token(env)}sm-{generate_ws_hash(slug)}-{generate_resource_hash(reference_id, name)}"
+    return f"paas-{_env_token(env)}sm-{_require_ws_hash(ws_hash)}-{generate_resource_hash(reference_id, name)}"
 
 
-def make_security_access_subdomain(slug: str, reference_id: str, name: str, env: str = '') -> str:
+def make_security_access_subdomain(ws_hash: str, reference_id: str, name: str, env: str = '') -> str:
     """Generate security access subdomain: paas-{env}-sa-{ws_hash}-{sa_hash}."""
-    return f"paas-{_env_token(env)}sa-{generate_ws_hash(slug)}-{generate_resource_hash(reference_id, name)}"
+    return f"paas-{_env_token(env)}sa-{_require_ws_hash(ws_hash)}-{generate_resource_hash(reference_id, name)}"
 
 
 def reconstruct_mcp_subdomain(namespace: str, release_name: str) -> str:
@@ -101,8 +200,11 @@ def parse_paas_name(name):
       成 env='foo'，整體不 match → unknown）
     - 非 paas 名（官網 / apex / 行銷子網域）→ ``(None, None)``
 
-    ``cs`` 分支對現行三類 inventory（tunnel/access_app/access_policy）是 **DNS 類（TS-3b+）預留**
-    dead-branch —— CS 無 dedicated tunnel、access app/policy 為 SA 專屬；待 DNS 進 inventory 才命中。
+    ⚠ **本段先前寫的「``cs`` 是 DNS 類預留 dead-branch、access app/policy 為 SA 專屬」
+    已經不成立**（#745 起 CS 也會產生 Access app／reusable policy，#768 起 SM 也會）。
+    現況：三個 kind 前綴（``sa`` / ``sm`` / ``cs``）都可能對應到 inventory 裡活著的
+    access_app / access_policy；``cs`` 只在 **tunnel** 那一類仍是 dead-branch（CS 走
+    平台共用 tunnel、沒有自己的）。
     """
     m = _PAAS_NAME_RE.match(name or '')
     if not m:

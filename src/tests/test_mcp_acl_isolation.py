@@ -38,6 +38,7 @@ Red expectations for each case (clean ``AssertionError``):
 """
 from odoo.tests.common import TransactionCase, tagged
 from odoo.exceptions import AccessError
+from ..models.cloud_service import _internal_provision
 
 
 @tagged('post_install', '-at_install')
@@ -96,7 +97,7 @@ class TestMcpAclCrossWorkspaceIsolation(TransactionCase):
         })
 
         # Bob's W2: bound service + project + user-scope MCP + one tool.
-        self.svc_bob = Service.sudo().create({
+        self.svc_bob = _internal_provision(Service.sudo()).create({
             'name': 'Svc Bob (MCP-ACL)',
             'workspace_id': self.ws_bob.id,
             'template_id': self.template.id,
@@ -122,7 +123,7 @@ class TestMcpAclCrossWorkspaceIsolation(TransactionCase):
         })
 
         # Alice's W1: own service + project + user MCP (sanity / positive test).
-        self.svc_alice = Service.sudo().create({
+        self.svc_alice = _internal_provision(Service.sudo()).create({
             'name': 'Svc Alice (MCP-ACL)',
             'workspace_id': self.ws_alice.id,
             'template_id': self.template.id,

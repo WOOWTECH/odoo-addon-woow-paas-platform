@@ -43,7 +43,7 @@
     },
     {
       "class": "model-write-guard",
-      "pattern": "^src/models/(agent_session|agent_template|security_access|smart_home|cloud_service|mcp_server|skill)[a-z_]*\\.py$",
+      "pattern": "^src/models/(agent_session|agent_template|security_access|smart_home|cloud_service|mcp_server|skill|workspace_access|workspace)[a-z_]*\\.py$",
       "why": "這些 model 有 write()/create() invariant guard（identity anchor / scope flip / state stamp），改壞會假綠或孤兒資源",
       "docs": [
         "docs/decisions/patterns/su-env-exempt-guard-false-green.md — invariant guard 不可用 env.su / has_group 豁免（TransactionCase 是 su env → 假綠）",
@@ -59,7 +59,8 @@
         "docs/decisions/patterns/external-resource-env-token-naming.md — 動 canonical_name / generate_subdomain 命名根時的 env token 注入與 create↔delete 對稱",
         "docs/decisions/patterns/helm-reset-values-unified-pipeline.md — 動 cloud_service 部署路徑（_assemble_deploy_values／action_redeploy／_reset_admin_password）時：既存 release 升級走全量 values 統一管線＋reset_values 語意，禁 reuse_values=True（repo-lint 攔）",
         "docs/decisions/patterns/hidden-template-presentation-chain.md — 動 /woow 曝光點或**既有服務的操作端點**時：先分層（曝光層 is_hidden vs 實例層 conceal_instances，#471），實例層判準用 template_id.conceal_instances（repo-lint check_conceal_instances_gate 機械攔），gate 要放在能力/狀態判準之前",
-        "docs/decisions/patterns/reset-async-budget-ladder.md — 動 _reset_admin_password 的落庫／狀態語意時：提交點＝operator 回 2xx（commit-on-secret，C11′），2xx 前失敗保證叢集仍是舊密碼所以刻意不落庫、成功必 stamp upgrading 交給 cron／前端輪詢收斂；改提交點要連同不變式一起重寫，勿照舊 C11「已生效」語意把它「修正」回去"
+        "docs/decisions/patterns/reset-async-budget-ladder.md — 動 _reset_admin_password 的落庫／狀態語意時：提交點＝operator 回 2xx（commit-on-secret，C11′），2xx 前失敗保證叢集仍是舊密碼所以刻意不落庫、成功必 stamp upgrading 交給 cron／前端輪詢收斂；改提交點要連同不變式一起重寫，勿照舊 C11「已生效」語意把它「修正」回去",
+        "docs/decisions/patterns/post-commit-bookkeeping-rollback-unit.md — 動「先對外部系統下達不可回捲的變更、再寫 DB」的 method（_reset_admin_password／_execute_deploy／action_redeploy／遠端 provision）時：先定位提交點，再問這個 except 落在哪一側——之後的例外只是**記帳**失敗，不得翻轉回應語意、不得補 cr.rollback()（會把「一致但租戶不知情」換成 DB↔叢集不一致）；回捲單位要對齊事實邊界（憑證落庫與衍生記帳分開包 cr.savepoint()），OperationalError 一律外拋（#518）"
       ]
     },
     {
@@ -70,7 +71,8 @@
         "docs/tracking/pitfalls/seed-noupdate-sticky-template-links.md — noupdate=1 sticky → 其他 data 檔對同 record 的更新被靜默 skip",
         "docs/decisions/patterns/invariant-recompute-on-orm-write-hook.md — data XML 是 ORM 寫入的第二入口，會 drift cross-record invariant",
         "docs/decisions/patterns/template-vs-plan-property-boundary.md — 新商品變體猶豫開新 CloudAppTemplate 還是同 template 加 plan 時",
-        "docs/decisions/patterns/seed-topology-invariants.md — seed 拓撲計數非 monotonic：test 別硬編 base/tier/product 數，`>=` 守衛會裝反、`> 0` 等於刪 test；改集合等值/零丟棄/結構關係。改 subscription_*.xml 會被 repo-lint check_seed_topology 攔（附待檢清單）"
+        "docs/decisions/patterns/seed-topology-invariants.md — seed 拓撲計數非 monotonic：test 別硬編 base/tier/product 數，`>=` 守衛會裝反、`> 0` 等於刪 test；改集合等值/零丟棄/結構關係。改 subscription_*.xml 會被 repo-lint check_seed_topology 攔（附待檢清單）",
+        "docs/decisions/patterns/default-credential-functional-test-blindspot.md — 新增/改動一筆 cloud_app_template，而該 image/chart 有帶身分的入口（admin GUI／管理 API／DB 帳號／webhook secret）時：必須明答「憑證由平台鑄造（has_admin_gui 等閘門欄位寫 True ＋ 納入家族級覆蓋率守線）還是租戶自設（寫 False ＋ 留 WHY 註解）」。兩者都沒做時值會靜默落到上游預設（image 的 _DEFAULT_CONFIG／chart values），而那在 diff 上與「租戶自設」長得一模一樣——#686 的 mcp-hermes 就是這樣以字面密碼 admin 掛在公開根 URL 上。功能測試對這一格恆綠，判準要換成「這個值是不是全世界都知道」"
       ]
     },
     {
@@ -80,7 +82,7 @@
       "docs": [
         "docs/decisions/patterns/seed-agent-template-design.md — seeded default 的設計依據與 invariant",
         "docs/tracking/pitfalls/default-agent-template-project-bind-silent-autoenable.md — default 被綁 project → auto-enable 靜默全失效；demo 與 default 分工勿互換",
-        "CLAUDE.md「Seeded 平台預設 agent_template 的 tenant-neutral invariant」條 — post_init 未設才指、不覆寫 admin 已選"
+        "CLAUDE.md — 「Seeded 平台預設 agent_template 的 tenant-neutral invariant」條：post_init 未設才指、不覆寫 admin 已選"
       ]
     },
     {
@@ -107,8 +109,8 @@
     },
     {
       "class": "subscription-billing",
-      "pattern": "^src/models/sh_subscription[a-z_]*\\.py$",
-      "why": "subscription 日期/計費邏輯與第三方 sh_subscription addon 深耦合，date helper 與 plan 強制覆寫有既往翻車史（#324/#327/#366）",
+      "pattern": "^src/models/(sh_subscription[a-z_]*|subscription_lifecycle_mixin)\\.py$",
+      "why": "subscription 日期/計費邏輯與第三方 sh_subscription addon 深耦合，date helper 與 plan 強制覆寫有既往翻車史（#324/#327/#366）。⚠ 必須含 subscription_lifecycle_mixin.py：plan-driven-date-helper 講的 _force_trial_dates_from_plan / _force_active_dates_from_plan 就住在那個檔，只綁 sh_subscription* 會讓改那兩個 helper 的人永遠收不到這份 doc",
       "docs": [
         "docs/decisions/patterns/plan-driven-date-helper.md — subscription 日期由 plan 強制覆寫（trial/non-trial）且與第三方 onchange 有 post-confirm coupling 時",
         "docs/decisions/patterns/template-vs-plan-property-boundary.md — plan 級 vs template 級屬性邊界（有人提議 plan 加 image 欄位時必讀）"
@@ -132,6 +134,17 @@
         "docs/decisions/patterns/credential-claim-test-fixture-coupling.md — 硬化共用 credential 路徑時所有自建 fixture forward-coupled 須 lock-step 補",
         "docs/decisions/patterns/unittest-mock-dual-namespace-patch.md — patch 被多 module 以不同 import 形式共用的 helper 時，N 個 namespace 要 N 個 target",
         "docs/decisions/patterns/seed-topology-invariants.md — 被守的量會下降時（seed 拓撲計數、集合大小）不可用 monotonic `>=`：守衛會對「集合被靜默縮小」裝反；改集合等值/零丟棄/結構關係（#433）"
+      ]
+    },
+    {
+      "class": "deploy-stg-addon-upgrade",
+      "pattern": "^(\\.claude/skills/deploy-stg/|docs/guides/deployment/stg-(upgrade-recipe-dev-sandbox|db-manual-upgrade-recipe)\\.md$)",
+      "why": "⛔ 動筆前先看這一段（結論刻意寫在這裡、不只寫在下面的 doc 裡——下面那些 doc 自己就錯過兩次）：**`/woow:deploy-stg` 換 image ✅ 會升 `woow_paas_platform`，不需要 `stg-upgrade-N` Job**。｜錯法長這樣：看到 `create.sh` 只下 `--set odoo.updateModules=web`（deployment args 恆為 `-u web`、不含本模組）——**這個觀察是對的**——然後推出「所以不會升」。漏掉的是 Odoo 的 **reverse-dependency 傳播**：CLI `-u` 走 `button_upgrade()`（`odoo/modules/loading.py:458-462`）→ 它把「依賴被升模組的模組」一併標 `to upgrade`（`odoo/addons/base/models/ir_module.py:706-714`）→ 且 `:699-712` 的 `while` 迴圈使其**遞移**；`woow_paas_platform` 的 `depends` 直接含 `web`，並另經 `project` / `bus` 兩條間接鏈到 `web`（單鏈斷了結論照樣成立）。｜**為什麼這條不會像其他 hook doc 那樣漂掉**：上列錨點全是 Odoo 18 **框架語意**（原始碼 file:line，本機樹 `AREA-odoo/odoo-18.0/`）＋一個 repo 內事實（`src/__manifest__.py` 的 `depends`），不是「目前叢集 args 是 X」「registry 最新 tag 是 Y」這種會過期的環境狀態斷言，可以在 30 秒內原地重驗。｜這個說法已被寫反三次（2026-06-02 F-DT-4 原報／2026-08-03／2026-08-11 issue #665），要再寫「不會升」之前請先重驗上面四個錨點",
+      "docs": [
+        "docs/guides/deployment/stg-upgrade-recipe-dev-sandbox.md — §「換 image 會不會升 addon」有 2026-08-11 的對照實驗（起點 `installed | .123`、無殘留 `to upgrade`、零人為介入 → `.124`）；被推翻的 2026-08-03 原文以 `<details>` 保留，**別刪**：它是這個坑長什麼樣的證物",
+        "docs/guides/deployment/stg-db-manual-upgrade-recipe.md — 手動 upgrade Job 的操作細節（ResourceQuota、filestore RWO nodeSelector、log 位置）全部仍然正確；但它**不是 deploy-stg 的必要步驟**，別把它寫回必經流程——只在「傳播沒發生」「單獨升某模組」「要先升 DB 再換 image」時用",
+        "docs/tracking/followups/follow-ups.md — F-DT-4 那列：同一結論 2026-06-02 就定案過，卻因為整列掛 ❌ RETRACTED 被跳過 70 天。**RETRACTED 條目記的往往正是「這件事查過了，結論跟你以為的相反」**，查重時最該讀、也最容易漏",
+        ".claude/skills/deploy-stg/SKILL.md — Step 8：#665 post-check gate 驗的是**終態收斂**（版號 + `state=installed`），不是「有沒有被升」；紅燈時的處置順序是「先等並重跑 → 查 pod log 的 post-migrate → 確認 depends 傳播鏈 → 最後才跑手動 Job」"
       ]
     }
   ]

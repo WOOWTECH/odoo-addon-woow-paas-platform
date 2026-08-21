@@ -1,5 +1,25 @@
 """Tests for naming utility module."""
-import unittest
+from odoo.tests.common import BaseCase
+
+# #544：基底是 `BaseCase` 而**不是** `unittest.TestCase`——後者拿不到 `MetaCase` 給的
+# `test_tags`，會通過 `odoo/tests/loader.py` 的篩子②③被 yield 成 test 實例，然後倒在
+# `odoo/tests/tag_selector.py:69` 的 `if not hasattr(test, 'test_tags')`（該行原始註解自己
+# 寫著 does not inherit from BaseCase）⇒ 本檔的測試**一條都不會執行**，而 `of N tests`
+# 不會顯示少了它們。
+#
+# 為什麼是 `BaseCase` 而不是本 repo 佔多數的 `TransactionCase`：本檔全部是純函式測試，
+# 不碰 `self.env` / `self.cr` / `self.registry`。`BaseCase` 只提供這裡唯一缺的東西
+# （`MetaCase` ⇒ `test_tags`），不建 class 級 cursor、不掛 `_gc_filestore` cleanup、
+# 每個 method 也不開 SAVEPOINT ⇒ 不替純函式測試綁上「DB 必須可用」這個它不需要的前提。
+# 這與 Odoo core 自己的做法一致（`odoo/addons/base/tests/` 的 `TestSafeEval` /
+# `TestDateUtils` / `TestFrozendict` 等純邏輯測試一律直接繼承 `BaseCase`）。
+# ⚠ `BaseCase` docstring 那句 "This class is abstract and expects self.registry,
+# self.cr and self.uid to be initialized by subclasses" 是對**選用**輔助方法
+# （`self.cursor()` / `self.ref()` / `self.browse_ref()` / `self.uid` / `assertQueryCount`…）
+# 的免責聲明，不是 class 機制本身的前置條件——佐證：`BaseCase._assertRaises`
+# （odoo/tests/common.py:472-474）自己就寫 `if hasattr(self, 'env')` 來守這件事。
+# ⇒ 若日後在本檔新增需要 `self.env` 的測試，請把**那一個 class** 改成 `TransactionCase`，
+# 不要在這裡自建 registry。
 
 from ..services.naming import (
     generate_ws_hash,
@@ -13,8 +33,14 @@ from ..services.naming import (
     classify_env_hint,
 )
 
+# #677：`make_*` 系列吃的是 `workspace.ws_hash`（伺服器產生的 8 hex），**不是**
+# `slug`。本檔原本傳的是 slug 字面值（`'my-ws'` 之類），那在修法後會被
+# `naming.py::_require_ws_hash` 直接 raise —— 那正是它的用意（漏改的呼叫點會炸，
+# 不會安靜產出 `paas-ws-my-ws`）。
+WS_HASH = 'a1b2c3d4'
 
-class TestNaming(unittest.TestCase):
+
+class TestNaming(BaseCase):
     """Test cases for naming utility functions."""
 
     def test_generate_ws_hash_deterministic(self):
@@ -56,22 +82,39 @@ class TestNaming(unittest.TestCase):
 
     def test_make_namespace_format(self):
         """Test namespace follows paas-ws-{hash} format."""
-        ns = make_namespace('my-workspace')
+        ns = make_namespace(WS_HASH)
         self.assertTrue(ns.startswith('paas-ws-'))
         self.assertEqual(len(ns), 16)  # 'paas-ws-' (8) + hash (8)
 
     def test_make_namespace_k8s_valid(self):
-        """Test namespace meets K8s naming constraints (max 63 chars, lowercase)."""
-        ns = make_namespace('a-very-long-workspace-slug-that-is-quite-long')
-        self.assertLessEqual(len(ns), 63)
-        self.assertEqual(ns, ns.lower())
-        # K8s names must be DNS-compatible
+        """Test namespace meets K8s naming constraints (max 63 chars, lowercase).
+
+        #677 之後長度是**結構性**有界的（前綴 ＋ 固定 8 hex），不再取決於輸入長度
+        ——原本這條餵一個超長 slug 來證明「長輸入也不會超標」，那個風險已經不存在。
+        改為連同前綴一起驗：`namespace_prefix` 是 config_parameter（stg 用
+        `paas-ws-stg-`），前綴才是今天唯一還能把名字撐長的東西。
+        """
         import re
-        self.assertTrue(re.match(r'^[a-z0-9][a-z0-9-]*[a-z0-9]$', ns))
+        for prefix in ('paas-ws-', 'paas-ws-stg-'):
+            ns = make_namespace(WS_HASH, prefix=prefix)
+            self.assertLessEqual(len(ns), 63, prefix)
+            self.assertEqual(ns, ns.lower(), prefix)
+            # K8s names must be DNS-compatible
+            self.assertTrue(re.match(r'^[a-z0-9][a-z0-9-]*[a-z0-9]$', ns), prefix)
+
+    def test_make_namespace_rejects_a_slug(self):
+        """#677 絆線：maker 收到非 8-hex（例如有人又傳 slug 進來）必須 raise。
+
+        沒有它，漏改的呼叫點會產出 `paas-ws-my-workspace` —— 合法 DNS label、
+        正確前綴、部署得起來，只是指向一個不屬於任何 workspace 的 namespace。
+        """
+        for bad in ('my-workspace', 'ws-137425', '', None, 'A1B2C3D4', 'a1b2c3d'):
+            with self.assertRaises(ValueError):
+                make_namespace(bad)
 
     def test_make_service_subdomain_format(self):
         """Test service subdomain follows paas-cs-{ws_hash}-{svc_hash} format."""
-        sd = make_service_subdomain('my-ws', 'ref-123', 'my-svc')
+        sd = make_service_subdomain(WS_HASH, 'ref-123', 'my-svc')
         self.assertTrue(sd.startswith('paas-cs-'))
         parts = sd.split('-')
         # paas-cs-{8char}-{8char}
@@ -83,7 +126,7 @@ class TestNaming(unittest.TestCase):
 
     def test_make_smarthome_subdomain_format(self):
         """Test smarthome subdomain follows paas-sm-{ws_hash}-{sm_hash} format."""
-        sd = make_smarthome_subdomain('my-ws', 'ref-456', 'my-home')
+        sd = make_smarthome_subdomain(WS_HASH, 'ref-456', 'my-home')
         self.assertTrue(sd.startswith('paas-sm-'))
         parts = sd.split('-')
         self.assertEqual(len(parts), 4)
@@ -94,28 +137,28 @@ class TestNaming(unittest.TestCase):
 
     def test_make_smarthome_subdomain_k8s_valid(self):
         """Test smarthome subdomain meets K8s naming constraints."""
-        sd = make_smarthome_subdomain('ws-slug', 'ref-id', 'home-name')
+        sd = make_smarthome_subdomain(WS_HASH, 'ref-id', 'home-name')
         self.assertLessEqual(len(sd), 63)
         self.assertEqual(sd, sd.lower())
 
     def test_different_resource_types_different_prefixes(self):
         """Test that service and smarthome subdomains have different prefixes."""
-        svc = make_service_subdomain('ws', 'ref', 'name')
-        sm = make_smarthome_subdomain('ws', 'ref', 'name')
+        svc = make_service_subdomain(WS_HASH, 'ref', 'name')
+        sm = make_smarthome_subdomain(WS_HASH, 'ref', 'name')
         self.assertTrue(svc.startswith('paas-cs-'))
         self.assertTrue(sm.startswith('paas-sm-'))
         self.assertNotEqual(svc, sm)
 
 
-class TestSecurityAccessNaming(unittest.TestCase):
+class TestSecurityAccessNaming(BaseCase):
     """make_security_access_subdomain: paas-sa-{ws_hash}-{res_hash}."""
 
     def test_sa_subdomain_format(self):
         """Test SA subdomain follows paas-sa-{ws_hash}-{res_hash} format."""
-        result = make_security_access_subdomain('my-ws', 'ref-123', 'My SA')
+        result = make_security_access_subdomain(WS_HASH, 'ref-123', 'My SA')
         self.assertEqual(
             result,
-            f"paas-sa-{generate_ws_hash('my-ws')}-{generate_resource_hash('ref-123', 'My SA')}",
+            f"paas-sa-{WS_HASH}-{generate_resource_hash('ref-123', 'My SA')}",
         )
         self.assertTrue(result.startswith('paas-sa-'))
         # prefix + 8 hex + hyphen + 8 hex
@@ -123,29 +166,29 @@ class TestSecurityAccessNaming(unittest.TestCase):
 
     def test_sa_subdomain_deterministic(self):
         """Test that same inputs always produce the same subdomain."""
-        a = make_security_access_subdomain('ws', 'r1', 'n1')
-        b = make_security_access_subdomain('ws', 'r1', 'n1')
+        a = make_security_access_subdomain(WS_HASH, 'r1', 'n1')
+        b = make_security_access_subdomain(WS_HASH, 'r1', 'n1')
         self.assertEqual(a, b)
 
     def test_sa_prefix_distinct_from_sm_cs(self):
         """Test SA prefix differs from smarthome and cloud service (namespace isolation)."""
-        sa = make_security_access_subdomain('ws', 'r', 'n')
-        sm = make_smarthome_subdomain('ws', 'r', 'n')
-        cs = make_service_subdomain('ws', 'r', 'n')
+        sa = make_security_access_subdomain(WS_HASH, 'r', 'n')
+        sm = make_smarthome_subdomain(WS_HASH, 'r', 'n')
+        cs = make_service_subdomain(WS_HASH, 'r', 'n')
         # Same hash, different prefix -> three resource types stay isolated.
         self.assertNotEqual(sa, sm)
         self.assertNotEqual(sa, cs)
 
     def test_sa_subdomain_k8s_valid(self):
         """Test SA subdomain meets K8s/DNS naming constraints."""
-        sd = make_security_access_subdomain('ws-slug', 'ref-id', 'sa-name')
+        sd = make_security_access_subdomain(WS_HASH, 'ref-id', 'sa-name')
         self.assertLessEqual(len(sd), 63)
         self.assertEqual(sd, sd.lower())
         import re
         self.assertTrue(re.match(r'^[a-z0-9][a-z0-9-]*[a-z0-9]$', sd))
 
 
-class TestNamingEnvToken(unittest.TestCase):
+class TestNamingEnvToken(BaseCase):
     """L3: env token 注入 make_*_subdomain。
 
     決策 DP1：格式 ``paas-{env}-{type}-``（stg=paas-stg-sa-、prod=paas-sa- 空 token）。
@@ -156,15 +199,15 @@ class TestNamingEnvToken(unittest.TestCase):
 
     def test_sa_subdomain_prod_equals_no_env(self):
         """env='prod' 與不傳 env byte-identical（prod 維持現狀、零漂移）。"""
-        no_env = make_security_access_subdomain('my-ws', 'ref-123', 'My SA')
-        prod = make_security_access_subdomain('my-ws', 'ref-123', 'My SA', env='prod')
+        no_env = make_security_access_subdomain(WS_HASH, 'ref-123', 'My SA')
+        prod = make_security_access_subdomain(WS_HASH, 'ref-123', 'My SA', env='prod')
         self.assertEqual(prod, no_env)
         self.assertTrue(prod.startswith('paas-sa-'))
         self.assertNotIn('stg', prod)
 
     def test_sa_subdomain_default_has_no_env_token(self):
         """預設（不傳 env）不含環境 token。"""
-        r = make_security_access_subdomain('my-ws', 'ref-123', 'My SA')
+        r = make_security_access_subdomain(WS_HASH, 'ref-123', 'My SA')
         self.assertTrue(r.startswith('paas-sa-'))
         self.assertNotIn('stg', r)
 
@@ -174,8 +217,8 @@ class TestNamingEnvToken(unittest.TestCase):
         placement（env 在 type 前）由 test_env_token_format_is_paas_env_type 專守，
         此處只守「有 token 且與 prod 不同」，避免兩條鎖同一 intent。
         """
-        prod = make_security_access_subdomain('my-ws', 'ref-123', 'My SA', env='prod')
-        stg = make_security_access_subdomain('my-ws', 'ref-123', 'My SA', env='stg')
+        prod = make_security_access_subdomain(WS_HASH, 'ref-123', 'My SA', env='prod')
+        stg = make_security_access_subdomain(WS_HASH, 'ref-123', 'My SA', env='stg')
         self.assertIn('stg', stg)
         self.assertTrue(stg.startswith('paas-'))
         self.assertNotEqual(stg, prod)
@@ -186,7 +229,7 @@ class TestNamingEnvToken(unittest.TestCase):
         用 index 比較而非硬編 'paas-stg-sa-'：未來若合法改分隔符仍守住「env 在
         type 前」的 intent，不會因快照漂移誤紅（phase-versioned-test-assertion）。
         """
-        stg = make_security_access_subdomain('my-ws', 'ref-123', 'My SA', env='stg')
+        stg = make_security_access_subdomain(WS_HASH, 'ref-123', 'My SA', env='stg')
         self.assertTrue(stg.startswith('paas-'))
         self.assertLess(stg.index('stg-'), stg.index('sa-'))
 
@@ -199,20 +242,20 @@ class TestNamingEnvToken(unittest.TestCase):
         """
         import re
         for bad in ('My Env_2!', 'staging zone', 'prod_v2', 'XX__yy', '!!!'):
-            r = make_security_access_subdomain('ws', 'ref', 'name', env=bad)
+            r = make_security_access_subdomain(WS_HASH, 'ref', 'name', env=bad)
             self.assertEqual(r, r.lower(), bad)
             self.assertLessEqual(len(r), 63, bad)
             self.assertRegex(r, r'^[a-z0-9]([a-z0-9-]*[a-z0-9])?$', bad)
 
     def test_cs_subdomain_stg_carries_env_token(self):
         """make_service_subdomain 支援 env 且 stg 帶 token。"""
-        cs = make_service_subdomain('my-ws', 'ref-123', 'my-svc', env='stg')
+        cs = make_service_subdomain(WS_HASH, 'ref-123', 'my-svc', env='stg')
         self.assertIn('stg', cs)
         self.assertTrue(cs.startswith('paas-stg-cs-'))
 
     def test_sm_subdomain_stg_carries_env_token(self):
         """make_smarthome_subdomain 支援 env 且 stg 帶 token。"""
-        sm = make_smarthome_subdomain('my-ws', 'ref-456', 'my-home', env='stg')
+        sm = make_smarthome_subdomain(WS_HASH, 'ref-456', 'my-home', env='stg')
         self.assertIn('stg', sm)
         self.assertTrue(sm.startswith('paas-stg-sm-'))
 
@@ -226,21 +269,21 @@ class TestNamingEnvToken(unittest.TestCase):
         )
         for env in ('', 'prod', 'stg'):
             for maker in makers:
-                r = maker('a-fairly-long-workspace-slug', 'reference-id-long', 'resource', env=env)
+                r = maker(WS_HASH, 'reference-id-long', 'resource', env=env)
                 self.assertEqual(r, r.lower(), (maker.__name__, env))
                 self.assertLessEqual(len(r), 63, (maker.__name__, env))
                 self.assertRegex(r, r'^[a-z0-9]([a-z0-9-]*[a-z0-9])?$')
 
     def test_env_token_normalised_case_and_whitespace(self):
         """admin 誤填 'STG' / ' stg ' 須正規化，不產非法 name。"""
-        canonical = make_security_access_subdomain('ws', 'ref', 'name', env='stg')
+        canonical = make_security_access_subdomain(WS_HASH, 'ref', 'name', env='stg')
         self.assertEqual(
-            make_security_access_subdomain('ws', 'ref', 'name', env='STG'), canonical)
+            make_security_access_subdomain(WS_HASH, 'ref', 'name', env='STG'), canonical)
         self.assertEqual(
-            make_security_access_subdomain('ws', 'ref', 'name', env=' stg '), canonical)
+            make_security_access_subdomain(WS_HASH, 'ref', 'name', env=' stg '), canonical)
 
 
-class TestReconstructMcpSubdomain(unittest.TestCase):
+class TestReconstructMcpSubdomain(BaseCase):
     """L4 reconciler：reconstruct_mcp_subdomain 必須與 operator deploy/teardown
     的 MCP subdomain byte-identical（漂移 → 活躍 MCP route 被誤判成孤兒）。
 
@@ -279,7 +322,7 @@ class TestReconstructMcpSubdomain(unittest.TestCase):
         self.assertEqual(reconstruct_mcp_subdomain(None, 'app'), 'app--mcp')
 
 
-class TestParsePaasName(unittest.TestCase):
+class TestParsePaasName(BaseCase):
     """L4 reconciler S3：parse_paas_name 解析 (env_token, kind)，literal (stg) 白名單。
 
     鏡像 _env_token 對 {prod,stg} 白名單輸出：prod/legacy 無 token byte-identical → (None,kind)；
@@ -308,7 +351,7 @@ class TestParsePaasName(unittest.TestCase):
             self.assertEqual(parse_paas_name(name), (None, None), name)
 
 
-class TestClassifyEnvHint(unittest.TestCase):
+class TestClassifyEnvHint(BaseCase):
     """L4 reconciler S3：classify_env_hint(name, pinned_env) -> (env_hint, is_cross_env)。"""
 
     def test_same_env_not_cross(self):

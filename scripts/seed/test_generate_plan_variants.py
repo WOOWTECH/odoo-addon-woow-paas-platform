@@ -1,12 +1,37 @@
 # -*- coding: utf-8 -*-
 """generator 自測：parse／classify／公式／計數／產出冪等。"""
 import unittest
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import generate_plan_variants as g
 
 MANIFEST = Path(__file__).resolve().parents[2] / (
     'docs/plans/2026-Q3/2026-07-19-cloud-services-220-manifest.md')
+
+# 年繳倍率：預設 ×8，sa ×9，mcp_hermes ×10（#765 拍板時明列的家族異例——
+# 其 base 年繳本來就是月×10，加購側仍統一 +4800/席）。
+YEAR_RATIO = {'sa': 9, 'mcp_hermes': 10}
+
+# 哪些 template 會收到席數變體（集合等值＝同時是正向與負向對照）。
+# 不在此集合內＝刻意不做加購：cloud_app_haos（#423 Q5）、cloud_app_ha_paas（免費）、
+# cloud_app_postgresql／cloud_app_redis（未指定）。少一個或多一個都要紅。
+EXPECTED_VARIANT_TEMPLATES = {
+    'cloud_app_odoo', 'cloud_app_n8n', 'cloud_app_mcp_odoo',
+    'cloud_app_mcp_odoo_manage', 'cloud_app_mcp_n8n', 'cloud_app_mcp_k8s',
+    'cloud_app_mcp_vk', 'cloud_app_mcp_opendesign', 'cloud_app_opendesign',
+    'cloud_app_hermes_agent', 'cloud_app_ha_full', 'cloud_app_mcp_hermes',
+    'smart_home_home_assistant', 'security_access_default',
+}
+
+# #765 拍板的席數結構（每 tier 開到第幾席）。月／年兩軌各自要湊滿同一組。
+EXPECTED_SEAT_LADDERS_765 = {
+    ('hermes_agent', 'app'): [1],
+    ('ha_full', 'app'): [1, 2, 3],
+    ('mcp_hermes', 't1'): [1, 2, 3],
+    ('mcp_hermes', 't2'): list(range(1, 7)),
+    ('mcp_hermes', 't3'): list(range(1, 11)),
+}
 
 
 class TestParse(unittest.TestCase):
@@ -54,6 +79,20 @@ class TestClassify(unittest.TestCase):
         self.assertEqual((v.family, v.tier_key, v.n, v.cycle),
                          ('sa', 'r1', 1, 'year'))
 
+    def test_mcp_hermes_variant(self):
+        """#765：家族 prefix 帶結尾空格，marker 是「T1（1–3 人）」這種 tier 標。"""
+        v = g.classify(g.Item(no=234, name='Hermes MCP Server T2（3–6 人）+4access年繳',
+                              price=64200, kind='+access變體'))
+        self.assertEqual((v.family, v.tier_key, v.n, v.cycle, v.price),
+                         ('mcp_hermes', 't2', 4, 'year', 64200))
+
+    def test_hermes_agent_is_not_mcp_hermes(self):
+        """兩個 Hermes 商品的 prefix 不互相吃掉（#424 撞名風險的 generator 側）。"""
+        agent = g.classify(g.Item(no=223, name='Hermes Agent 雲端訂閱服務+1access月繳',
+                                  price=5100, kind='+access變體'))
+        self.assertEqual((agent.family, agent.tier_key), ('hermes_agent', 'app'))
+        self.assertEqual(g._template_xmlid(agent), 'cloud_app_hermes_agent')
+
     def test_counts_per_family(self):
         items = g.parse_manifest(MANIFEST)
         variants = [g.classify(i) for i in items if i.kind == '+access變體']
@@ -61,7 +100,10 @@ class TestClassify(unittest.TestCase):
         for v in variants:
             counts[v.family] = counts.get(v.family, 0) + 1
         self.assertEqual(counts, {'odoo': 42, 'n8n': 40, 'sa': 80,
-                                  'sh': 40, 'mcp': 12, 'opendesign': 2})
+                                  'sh': 40, 'mcp': 12, 'opendesign': 2,
+                                  # #765：1 席 ×2 週期／3 席 ×2／(3+6+10) 席 ×2
+                                  'hermes_agent': 2, 'ha_full': 6,
+                                  'mcp_hermes': 38})
 
 
 class TestEmit(unittest.TestCase):
@@ -118,7 +160,12 @@ class TestEmit(unittest.TestCase):
                          g.emit_variants_xml(self.variants))
 
     def test_year_ratio_formula(self):
-        """機械公式：AC 單價 月 600／年 4800；年繳 base ×8（SA ×9）。"""
+        """機械公式：AC 單價 月 600／年 4800；年繳 base ×8（SA ×9、mcp_hermes ×10）。
+
+        倍率例外收在 YEAR_RATIO 一張表，而不是散在條件式裡：家族異例只有寫成
+        「這一格跟別人不同」才看得見；#765 加 mcp_hermes 時就是照這張表比對，
+        沒有第二處要同步。
+        """
         by_key = {(v.family, v.tier_key, v.n, v.cycle): v.price
                   for v in self.variants}
         for (fam, tier, n, cyc), price in by_key.items():
@@ -127,8 +174,72 @@ class TestEmit(unittest.TestCase):
                 self.assertIsNotNone(y, (fam, tier, n))
                 base_m = price - n * 600
                 base_y = y - n * 4800
-                ratio = 9 if fam == 'sa' else 8
+                ratio = YEAR_RATIO.get(fam, 8)
                 self.assertEqual(base_y, base_m * ratio, (fam, tier, n))
+
+    def test_seat_ladders_765(self):
+        """#765 拍板席數：Hermes Agent 固定 1／HA 完整版 1-3／MCP 隨 tier 放大。"""
+        seats = {}
+        for v in self.variants:
+            key = (v.family, v.tier_key)
+            if key in EXPECTED_SEAT_LADDERS_765:
+                seats.setdefault((key, v.cycle), []).append(v.n)
+        actual = {key + (cyc,): sorted(ns) for (key, cyc), ns in seats.items()}
+        expected = {key + (cyc,): ladder
+                    for key, ladder in EXPECTED_SEAT_LADDERS_765.items()
+                    for cyc in ('month', 'year')}
+        self.assertEqual(actual, expected)
+
+    def test_variant_templates_exact_set(self):
+        """哪些 template 收到變體＝集合等值（正向＋負向對照一次到位）。
+
+        負向那半才是本條的重點：HAOS／HA PaaS／PostgreSQL／Redis 是**刻意**不做
+        加購的，只斷言「三個新的有」會讓「順手把別人也掛上去」全綠。
+        """
+        actual = {g._template_xmlid(v) for v in self.variants}
+        self.assertEqual(actual, EXPECTED_VARIANT_TEMPLATES)
+
+    def test_hermes_families_never_cross_mount(self):
+        """檔案層面：兩個 Hermes 商品的變體 xmlid 不得掛到對方的 template。
+
+        對應 src/tests/test_hermes_agent_seed_424.py 的
+        test_distinct_from_mcp_hermes_plans（DB 層），此處在 seed 產出檔上直接驗，
+        不需要 Odoo 環境。
+        """
+        root = ET.fromstring(g.emit_links_xml(self.variants))
+        mounted = {}
+        for rec in root.findall('.//record'):
+            field = rec.find("field[@name='subscription_plan_ids']")
+            mounted[rec.get('id')] = [
+                ref.split("'")[1]
+                for ref in (field.get('eval') or '').split('ref(')[1:]]
+
+        agent = mounted.get('cloud_app_hermes_agent') or []
+        mcp = mounted.get('cloud_app_mcp_hermes') or []
+        self.assertTrue(agent and mcp, '前置：兩個 Hermes template 都應掛到變體')
+        self.assertTrue(
+            all(x.startswith('plan_hermes_agent_') for x in agent),
+            'cloud_app_hermes_agent 掛到非 Hermes Agent 的 plan：%s' % agent)
+        self.assertTrue(
+            all(x.startswith('plan_mcp_hermes_') for x in mcp),
+            'cloud_app_mcp_hermes 掛到非 Hermes MCP 的 plan：%s' % mcp)
+        # 反向：任一 Hermes 家族的 plan 都不得出現在其他 template 上。
+        for tpl, plan_ids in mounted.items():
+            for plan_id in plan_ids:
+                if plan_id.startswith('plan_hermes_agent_'):
+                    self.assertEqual(tpl, 'cloud_app_hermes_agent', plan_id)
+                elif plan_id.startswith('plan_mcp_hermes_'):
+                    self.assertEqual(tpl, 'cloud_app_mcp_hermes', plan_id)
+
+    def test_unregistered_template_is_fail_loud(self):
+        """漏登記 _TEMPLATE_ORDER 會 raise，不是靜默漏掉那一族的 (4,) append。"""
+        model = 'woow_paas_platform.cloud_app_template'
+        with self.assertRaises(ValueError):
+            g._assert_templates_registered(
+                {'cloud_app_not_in_order': (model, ['plan_x_ac1_monthly'])})
+        # 陽性對照：已登記的 template 不得誤爆（否則上面那條 raise 沒有鑑別力）。
+        g._assert_templates_registered(
+            {'cloud_app_odoo': (model, ['plan_odoo_ac1_monthly'])})
 
 
 class TestEmitTestsPy(unittest.TestCase):

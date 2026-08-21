@@ -1,6 +1,7 @@
 id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
 access_workspace_user,woow_paas_platform.workspace.user,model_woow_paas_platform_workspace,base.group_user,1,1,1,0
-access_workspace_access_user,woow_paas_platform.workspace_access.user,model_woow_paas_platform_workspace_access,base.group_user,1,1,1,0
+access_workspace_access_user,woow_paas_platform.workspace_access.user,model_woow_paas_platform_workspace_access,base.group_user,1,1,1,1
+access_workspace_access_admin,woow_paas_platform.workspace_access.admin,model_woow_paas_platform_workspace_access,base.group_system,1,1,1,1
 access_cloud_app_template_user,woow_paas_platform.cloud_app_template.user,model_woow_paas_platform_cloud_app_template,base.group_user,1,0,0,0
 access_smart_home_template_user,woow_paas_platform.smart_home_template.user,model_woow_paas_platform_smart_home_template,base.group_user,1,0,0,0
 access_smart_home_template_admin,woow_paas_platform.smart_home_template.admin,model_woow_paas_platform_smart_home_template,base.group_system,1,1,1,1
@@ -23,6 +24,8 @@ access_oauth_code_admin,woow_paas_platform.oauth_code.admin,model_woow_paas_plat
 access_oauth_device_code_admin,woow_paas_platform.oauth_device_code.admin,model_woow_paas_platform_oauth_device_code,base.group_system,1,1,1,1
 access_smart_home_user,woow_paas_platform.smart_home.user,model_woow_paas_platform_smart_home,base.group_user,1,1,1,0
 access_smart_home_admin,woow_paas_platform.smart_home.admin,model_woow_paas_platform_smart_home,base.group_system,1,1,1,1
+access_smart_home_route_user,woow_paas_platform.smart_home_route.user,model_woow_paas_platform_smart_home_route,base.group_user,1,1,0,0
+access_smart_home_route_admin,woow_paas_platform.smart_home_route.admin,model_woow_paas_platform_smart_home_route,base.group_system,1,1,1,1
 access_mcp_server_user,woow_paas_platform.mcp_server.user,model_woow_paas_platform_mcp_server,base.group_user,1,1,1,1
 access_mcp_server_admin,woow_paas_platform.mcp_server.admin,model_woow_paas_platform_mcp_server,base.group_system,1,1,1,1
 access_mcp_tool_user,woow_paas_platform.mcp_tool.user,model_woow_paas_platform_mcp_tool,base.group_user,1,1,1,1
@@ -48,3 +51,4 @@ access_skill_admin,woow_paas_platform.skill.admin,model_woow_paas_platform_skill
 access_project_access_user,woow_paas_platform.project_access.user,model_woow_paas_platform_project_access,base.group_user,1,1,1,1
 access_project_access_admin,woow_paas_platform.project_access.admin,model_woow_paas_platform_project_access,base.group_system,1,1,1,1
 access_reconcile_report_admin,woow_paas_platform.reconcile_report.admin,model_woow_paas_platform_reconcile_report,base.group_system,1,1,1,1
+access_cf_access_policy_reap_admin,woow_paas_platform.cf_access_policy_reap.admin,model_woow_paas_platform_cf_access_policy_reap,base.group_system,1,1,1,1

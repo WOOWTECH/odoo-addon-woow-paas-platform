@@ -10,6 +10,12 @@ from odoo.tests.common import TransactionCase
 from odoo.addons.woow_paas_platform.models.security_access import (
     _internal_identity as _internal,
 )
+# #536：sync-control 的兩個逃生門同樣只認模組私有 sentinel——不能傳 `True`，
+# 那是租戶從 `call_kw` 的 context 就送得出來的值。
+from odoo.addons.woow_paas_platform.models.security_access import (
+    _rule_replace,
+    _skip_route_sync,
+)
 
 MOCK_GET_CLIENT = (
     'odoo.addons.woow_paas_platform.models.security_access.'
@@ -107,6 +113,78 @@ class TestAccessPolicyModel(TransactionCase):
             self.Policy.create({
                 'route_id': r2.id, 'name': 'p2', 'decision': 'allow',
                 'rule_type': 'email_list', 'rule_value': 'user@b.com'})
+
+    # --- #743 quota 0 語意：0 = unlimited（與 _check_emails_per_policy 對齊） --- #
+    #
+    # 這一組兩條是配對的陽性對照，缺一不可：A 證明 0 被放行，B 證明「只有 0 被
+    # 放行」。單獨看 A 綠燈，跟「整條 quota 檢查被拿掉」是同一個輸出。
+
+    def test_policy_quota_zero_means_unlimited(self):
+        """陽性對照 A：plan.sa_max_access_policies = 0 ⇒ 不限（不是一條都不准）。
+
+        修前：quota=0，第一筆 policy 的 count(1) > 0 就 raise（紅）。
+        修後：0 命中豁免，三筆都建得起來（綠）。
+
+        本測試特意跨兩條 route 建三筆，因為 quota 是 SA 級 pooled total——
+        若只建一筆，「豁免生效」與「計數剛好沒超」兩種情況輸出相同。"""
+        sa = self._make_sa()
+        r1 = self._make_route(sa, prefix='ap-z1')
+        r2 = self._make_route(sa, prefix='ap-z2')
+        plan = self.env['sh.subscription.plan'].create({
+            'name': 'AP Zero Plan', 'sh_duration': 1, 'sh_unit': 'month',
+            'sh_plan_price': 100, 'sh_no_of_billing_cycle': -1,
+            'sa_max_access_policies': 0})
+        sub = self.env['sh.subscription.subscription'].create({
+            'sh_partner_id': self.env.user.partner_id.id,
+            'state': 'in_progress'})
+        sub.sh_subscription_plan_id = plan.id
+        sa.subscription_id = sub.id
+        # 前置斷言：證明 constraint 這次真的有機會跑到 quota 那一行。
+        # _check_policy_quota 有兩條會讓本測試「假綠」的早退分支——cursor 級
+        # bypass 與 no-subscription grandfather。兩者都會讓 create 成功，
+        # 輸出與「豁免生效」不可區分，所以先把它們釘死。
+        self.assertFalse(getattr(self.env.cr, 'sa_skip_policy_quota', False),
+                         'cursor bypass 被設起來了，本測試測不到 quota 檢查')
+        self.assertTrue(sa.subscription_id.sh_subscription_plan_id,
+                        'SA 沒掛到 plan，會走 grandfather 分支而非豁免分支')
+        self.assertEqual(plan.sa_max_access_policies, 0)
+        for idx, route in enumerate((r1, r2, r1), start=1):
+            self.Policy.create({
+                'route_id': route.id, 'name': 'z%d' % idx, 'decision': 'allow',
+                'rule_type': 'email_list', 'rule_value': 'u%d@z.com' % idx})
+        self.assertEqual(
+            self.Policy.search_count([('security_access_id', '=', sa.id)]), 3)
+
+    def test_policy_quota_positive_still_enforced_after_zero_exemption(self):
+        """陽性對照 B：正值 quota 仍要擋——豁免只放行 0，沒把整條檢查廢掉。
+
+        與上面的 test_policy_quota_enforced_sa_level_total 不同軸：那條驗
+        「跨 route pooled」，這條驗「邊界剛好在 quota 上」（quota=2 時第 2 筆
+        仍可、第 3 筆必擋），且全在同一條 route 上，把 pooling 這個變因拿掉。"""
+        sa = self._make_sa()
+        route = self._make_route(sa, prefix='ap-pos')
+        plan = self.env['sh.subscription.plan'].create({
+            'name': 'AP Positive Plan', 'sh_duration': 1, 'sh_unit': 'month',
+            'sh_plan_price': 100, 'sh_no_of_billing_cycle': -1,
+            'sa_max_access_policies': 2})
+        sub = self.env['sh.subscription.subscription'].create({
+            'sh_partner_id': self.env.user.partner_id.id,
+            'state': 'in_progress'})
+        sub.sh_subscription_plan_id = plan.id
+        sa.subscription_id = sub.id
+        for idx in (1, 2):
+            self.Policy.create({
+                'route_id': route.id, 'name': 'q%d' % idx, 'decision': 'allow',
+                'rule_type': 'email_list', 'rule_value': 'u%d@q.com' % idx})
+        self.assertEqual(
+            self.Policy.search_count([('security_access_id', '=', sa.id)]), 2)
+        with self.assertRaises(ValidationError):
+            self.Policy.create({
+                'route_id': route.id, 'name': 'q3', 'decision': 'allow',
+                'rule_type': 'email_list', 'rule_value': 'u3@q.com'})
+        # 超額那筆不可落地
+        self.assertEqual(
+            self.Policy.search_count([('security_access_id', '=', sa.id)]), 2)
 
     # --- P-rule: include/require/exclude 三組 + bypass + email 上限 --- #
     def test_policy_requires_at_least_one_include(self):
@@ -375,7 +453,7 @@ class TestRouteAccessSync(TransactionCase):
             mc.sync_access_app.reset_mock()
             # controller _update_policy 的整組替換路徑：sa_rule_replace 且
             # NOT sa_skip_route_sync（讓 route sync 真的會跑）。
-            pol.with_context(sa_rule_replace=True).write({
+            _rule_replace(pol).write({
                 'name': 'edited', 'decision': 'bypass',
                 'rule_ids': [(5, 0, 0),
                              (0, 0, {'group': 'include', 'rule_type': 'ip_range',
@@ -499,7 +577,7 @@ class TestRouteAccessSync(TransactionCase):
         mc.sync_access_app.assert_not_called()
 
     def test_write_honors_sa_skip_route_sync_on_live_protected_route(self):
-        """sa_skip_route_sync route.write() 不可呼 operator，即使 SA 有 live
+        """`_skip_route_sync()` 的 route.write() 不可呼 operator，即使 SA 有 live
         tunnel + protected route。
 
         鏡像 create()/policy 的對稱性：migration 的 login/session re-home
@@ -513,7 +591,7 @@ class TestRouteAccessSync(TransactionCase):
         sa, route = self._active_sa(mc, protected=True)
         with patch(MOCK_GET_CLIENT, return_value=mc):
             mc.sync_access_app.reset_mock()
-            route.with_context(sa_skip_route_sync=True).write({
+            _skip_route_sync(route).write({
                 'login_google': True,
                 'login_email_otp': True,
                 'session_duration': '8h',

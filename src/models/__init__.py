@@ -17,8 +17,15 @@ from . import res_config_settings
 from . import workspace
 from . import workspace_access
 from . import project_access
+# #698 綁定守衛 mixin — 必須排在**所有繼承者之前**（cloud_service、
+# project_project、project_task），否則 registry 建立時會撞
+# "inherits from non-existing model"。
+from . import cloud_service_binding_guard
 from . import cloud_app_template
 from . import cloud_service_secret
+# fix: #528 待回收 CF Access policy 帳本 —— 三腿（SA route／cloud_service／
+# smart_home_route）共用，無相依，位置只要在使用它的 model 之前都可以。
+from . import cf_access_policy_reap
 from . import smart_home_template
 from . import security_access_template
 from . import security_access
@@ -35,6 +42,7 @@ from . import oauth_token
 from . import oauth_code
 from . import oauth_device_code
 from . import smart_home
+from . import smart_home_route
 from . import ai_assistant
 from . import mcp_server
 from . import mcp_tool

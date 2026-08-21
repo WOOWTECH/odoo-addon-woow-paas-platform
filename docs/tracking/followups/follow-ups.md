@@ -29,7 +29,7 @@
 | agent-runtime 測試環境耦合（#123/#111，2026-06-02）| ~~F-ARC-1~~ ✅ | **✅ RESOLVED（2026-06-02，commit 702b746〔9 個〕+ 7dbac81〔ecpay×5〕，全部 test-side 修復、零 production 變動 → 全模組 `0 failed, 0 error(s) of 843 tests`）**。ecpay 最終真因是 `_ensure_active_payment_method` 用預設 `active_test=True` 搜不到 inactive 的 ecpay payment.method（非 COA/journal 缺漏——sandbox 本就有 generic_coa + sale journal + USD），改 `active_test=False` 找到並激活即解。以下為原始診斷紀錄。medium/test-infra — sandbox 全模組測試 14 個 pre-existing 失敗。**2026-06-02 全模組實測釘死**（docker-desktop `dev-sandbox-fix-pre-existing`，`4 failed, 10 error(s) of 843 tests`，14 個與清單完全一致；環境忠實：operator/ai_assistant/agent_template 已 seed、ECPay provider=test、TWD inactive、`--without-demo` 無 base.user_demo）。**4 FAIL**：auto_enable c3（`True is not false` test:171）/ b2（`1 != 0` test:221）+ sse_gateway SSE5（`'no_message' != 'no_agent'` test:270）+ router ac20（regex 不匹配 test:59）；**10 ERROR**：ecpay×5（setUp:38 `NotNullViolation: payment_method_id`，5 個共用 setUp）+ oauth2×3（http.py:1395 `TypeError: returns an invalid value: MagicMock`）+ smart_home×2（`KeyError 'base.user_demo'`）。**⚠️ 分類修正**：原列「長期環境缺漏」的 **oauth2×3 與 router×1 其實不是環境耦合**（單獨跑也紅）——oauth2 是 test helper（`test_oauth2.py:584-628`）直接呼叫 `@route` method 並 mock `render/redirect` 回傳 MagicMock，被 `route_wrapper`→`Response.load` 拒收（test/Odoo 版本不相容；修：fake_render/redirect 回傳合法 Response 或改 HttpCase）；router 是 stale TDD 斷言 vs 產品演進（bare `ai-assistant` route 已被 `1d90953` 刪，phase-versioned-test-assertion family；修：更新斷言對齊 sub-path 新合約）。**真環境耦合僅 10 個**（auto_enable×2 / sse_gateway×1 / ecpay×5 / smart_home×2），修法：setUp fail-isolation（c3/b2 清 `_TOGGLE/_URL/_KEY/_DEFTMPL`、SSE5 設 `ai_auto_reply=False`、smart_home 自建 user 取代 base.user_demo）或 sandbox seed 補強（ecpay 補激活 `payment.method` + TWD currency）。教訓：workflow 靜態分析（含對抗覆核）曾 high-confidence 誤判 oauth2 會綠 → 測試生死須實跑 sandbox。gitea **#131**（已回填實測 comment） |
 | agent-runtime #129 deploy chain（detail-only） | F-129-1, F-129-2, F-129-3 | **F-129-1**（medium/deploy-infra，owner woow-paas-charts）`bump-agent-runtime` repository_dispatch 無 handler——paas-agent-runtime `build-and-trigger.yml` 推 v* tag 時 build image + curl dispatch 給 woow-paas-charts，但該 repo 只有 `publish-charts.yaml`（push main + `charts/**` 觸發），沒接 dispatch → 事件 no-op。**根因更深（owner 查證）**：Gitea 1.25.4 根本無 `repository_dispatch` 端點 → 那個 dispatch 本就永遠 404。**chart-half RESOLVED（2026-06-02，paas-agent-runtime owner）**：auto-bump 改成 agent-runtime CI 直推 charts repo（charts PR #11）+ 移除永不觸發的 handler。**但 operator-pin 半邊仍手動**：CI 直推只同步 chart（charts repo），不碰 operator 的 Fleet pin（paas-app-bundle-cd `values-stg.yaml` 的 imageTag + chartVersion）→ 每次 release 仍須手動 bump 那兩值（見 F-129-3）。未驗前提：`CI_GITEA_TOKEN` 對 charts 寫權 + charts main 不擋 CI 直推（下次推 tag 時 CI log 會曝成敗）。**F-129-2**（low/hygiene，owner woow-paas-charts）chart default appVersion/imageTag pin `1.0.0` 與 stg live `1.1.2`（Fleet 覆寫）drift，純 cosmetic 對齊（新環境/無 Fleet 覆寫 install 才吃 default）；做的話需確切 tag 字串（不帶 `v`，如 `1.1.3`）+ 確認 image 已 build push。**F-129-3**（deploy-tracking）#129 上 stg 鏈（2026-06-02 進度）：① ✅ paas-agent-runtime 推 `v1.1.3` tag → CI build `agent-runtime:1.1.3` image；② ✅ charts bump `0.1.6`（charts PR #10）；③ ✅ **stg runtime DONE（2026-06-02，paas-app-bundle-cd PR #2 merged）**：`values-stg.yaml` `operator.agentRuntime` imageTag→`1.1.3` + chartVersion→`0.1.6`，Fleet reconcile 綠、operator pod rolling 重啟、新 spawn 吃 1.1.3（上游已驗 chart 0.1.6 在 helm registry、image 1.1.3 在 JCR）；既有 per-project pod **不會** reap→respawn 自然汰換到新 image（2026-06-02 查 `extra/paas-operator/src/api/agent_runtimes.py` 更正先前假設）——`spawn_or_attach` 只看 release 是否存在（`:302`）、**不比 image tag**；image.tag 僅在 cold-start install 注入（`:112-115`）；reap（`:431` 只 scale 0）→ resume（`:342-350` scale 回 1）仍掛**舊** image。要換 image 須逐顆 `DELETE /api/agent-runtimes/{hash}`（`:507` helm uninstall → 下次 chat cold-start 注入新 tag），或未來 auto-roll 走 in-place `helm upgrade --set image.tag`（保 PVC，見 F-AR-1）。stg 已實證（2026-06-02 teardown test4=j2et → cold-start=1.1.3）。**prod（paas-operator）未動，另議**；④ ✅ platform PR **#133** 已 merged 進 develop（`52e0304`，2026-06-02 11:33）→ ⏳ 待 paas-odoo-ci 打包 paas-odoo image → deploy-stg。**注意：#129 的 retryable/`llm_empty_response` 契約是雙邊的——runtime 半邊（1.1.3）已上 stg 會 emit，但 Odoo SSE gateway 轉發（#133）上 stg 前，stg 上 retryable/friendly 訊息 UX 仍不完整（核心 doubled-name tool-calling bug 已由 runtime 1.1.3 修，可先驗）**。owner 跨 agent-runtime / **paas-app-bundle-cd** / platform |
 | agent-runtime auto-roll（版本 bump 不自動 roll，2026-06-02 canvas 協作） | F-AR-1 | **F-AR-1**（medium/structural，**operator-half owner = 本 repo `extra/paas-operator/`**）per-ws pod image tag 在 operator/chart bump 後不會自動 roll（見上 F-129-3 更正），每次發版須手動逐顆 DELETE-release——結構性缺口，下次發版會再撞。**四半 lock-step 設計（2026-06-02 與 Anvil/Helmsmith/Fleet 在 maestri canvas 談定，SSOT = canvas note `agent-runtime-auto-ro`）**：① chart 半（Helmsmith）pod annotation `agent.woow.tw/expected-app-version = {{ .Chart.AppVersion }}`（+ 之後 `expected-{skills,template,mcp}-hash` 獨立 key）+ `strategy: Recreate` + `terminationGracePeriodSeconds: 120`；② **operator-reconcile 半（本 repo，待實作）** reconcile 判定 = operator env `AGENT_RUNTIME_IMAGE_TAG`(desired) vs pod annotation(actual) diff；app-version mismatch → in-place `helm upgrade --set image.tag --wait`（timeout **240s** ≥ grace + cold-start，保 PVC，非 DELETE 大法）；hash mismatch → 只 re-patch ConfigMap 輕量 reload 不 roll；觸發點預設 lazy-at-next-`spawn_or_attach`（不另建 poller），緊急安全修才 active sweep；③ runtime 半（Anvil）SIGTERM graceful drain handler（draining flag → /readyz 503 → 等 in-flight turn 收完 → 退，wait-cap ~110s）+ uvicorn `timeout_graceful_shutdown`，與 1.2.0 `/livez`+`/readyz` 同一 PR；④ deploy 半（Fleet）Fleet roll operator 本體。**grace 120s 三方 lock-step（chart / runtime drain-cap / operator --wait）任一改要同步**；`_MAX_TOOL_ROUNDS`(8) / per-call timeout 改會動 ceiling，Anvil 承諾知會重算。契約 grounded：root-level 同設計。**等 Eugene 綠燈 Anvil 開工 + 三 PR sync merge**。**[2026-06-04 進度]** readyz 三態鏈（見 State 段同日 bullet）把 **③ runtime-drain 半落地**：image 1.2.1 SIGTERM/preStop graceful drain（uvicorn drain 75）+ chart 0.3.0/0.3.1 preStop，stg T7 in-flight 砍線 + T8 preStop 端到端驗過；原設計 grace 120s/drain ~110s 與實落 drain 75 的數值以已上 stg 的 0.3.x/1.2.1 為準。剩 **② operator-reconcile 半（本 repo，仍待實作）**；① chart annotation（`expected-app-version`）半是否已隨 0.3.x 帶上待 Helmsmith 確認。**[2026-06-05 進度]** ② 落地前的**手動升版路徑（DELETE reap → cold-start）已持久化為雙 repo 正式 runbook**：platform 視角 [`docs/guides/deployment/agent-runtime-image-upgrade-sop.md`](../../guides/deployment/agent-runtime-image-upgrade-sop.md)（PR #151；§2 記載本條現狀、§3 為 stg 5/5 實跑驗證的 reap SOP）↔ runtime 視角 paas-agent-runtime `docs/runbooks/image-upgrade-sop.md`（PR #21，#22 互鏈），F-AR-1 落地前以該 SOP 為唯一換 image 程序；F-AR-1 結案時兩份 SOP 須同步改寫（手動 reap 降級為 fallback）。owner 跨 operator(本 repo) / agent-runtime / woow-paas-charts / paas-app-bundle-cd |
-| ~~deploy-stg tooling（既有 sandbox 不 fire addon migration）~~ ❌ RETRACTED | ~~F-DT-4~~ | **F-DT-4 撤回（2026-06-02，非 gap）**：原報「標準 deploy-stg 在既有 sandbox 不 fire `woow_paas_platform` migration」**錯誤**。實測：#135 deploy 後 stg `installed_version=18.0.1.0.31` + demo skill `bundle_sha256=6a8e7f87`（18.0.1.0.31 migration 已 fire、noupdate seed 已更新），且**未跑任何手動 `-u woow_paas_platform`**。真因 = Odoo `-u <module>` **cascade 到 dependents**：`create.sh:402` 的 `-u web` 連帶升所有 `depends on web` 的模組（含 `woow_paas_platform`）→ version-bump migration 在標準 deploy 就 fire。`:537` install-guard 跳過的只是 `-i` install 區塊，不影響 helm `odoo.updateModules=web` 觸發的 `-u web` cascade。**create.sh 無須改**。教訓：`-u <module>` 升「該模組 + 其 dependents」，不是只該模組（原分析把 cascade 方向搞反）。 |
+| ✅ **deploy-stg 換 image 會升 addon**（`-u web` 傳播到 dependents）— 原報的反面才是對的 | ~~F-DT-4~~ ❌ RETRACTED | 🔴 **本列的 RETRACTED 標的是「原報的 gap 主張」，不是這一格的知識——這一格寫的是正確結論，請讀完。** 這個結論在 2026-06-02 就定案，卻在 2026-08-03 與 2026-08-11 又被各自重新推導成**相反**的說法（見下方「講反三次」）。**F-DT-4 撤回（2026-06-02，非 gap）**：原報「標準 deploy-stg 在既有 sandbox 不 fire `woow_paas_platform` migration」**錯誤**。實測：#135 deploy 後 stg `installed_version=18.0.1.0.31` + demo skill `bundle_sha256=6a8e7f87`（18.0.1.0.31 migration 已 fire、noupdate seed 已更新），且**未跑任何手動 `-u woow_paas_platform`**。真因 = Odoo `-u <module>` **cascade 到 dependents**：`create.sh:402` 的 `-u web` 連帶升所有 `depends on web` 的模組（含 `woow_paas_platform`）→ version-bump migration 在標準 deploy 就 fire。`:537` install-guard 跳過的只是 `-i` install 區塊，不影響 helm `odoo.updateModules=web` 觸發的 `-u web` cascade。**create.sh 無須改**。教訓：`-u <module>` 升「該模組 + 其 dependents」，不是只該模組（原分析把 cascade 方向搞反）。<br><br>**📜 這筆的完整履歷（2026-08-11 補，因為同一件事已被講反三次）**：<br>① `496fbf14`（eugenechen，2026-06-02 **23:40:40** +0800，`docs: record F-DT-4/F-DT-5 deploy-stg upgrade-path tooling gaps`）建立 F-DT-4，主張「`:402-405` stg 模式只 `--set odoo.updateModules=web` → 只跑 `-u web`，**不連帶升** `woow_paas_platform`」。**這個主張是錯的。**<br>② `f55d757b`（同一人，同日 **23:49:30**，僅 **8 分 50 秒**後，`docs: retract F-DT-4 (not a gap; -u web cascades to dependents)`）撤回它，依據＝#135 deploy 後未跑任何手動 `-u` 卻已 fire migration 的實測。**撤回是對的，RETRACTED 標籤也是對的**——被撤回的是①的 gap 主張，不是這格現在寫的結論。<br>③ 但這格的正確結論之後被跳過兩次：**2026-08-03** 寫進 `docs/guides/deployment/stg-upgrade-recipe-dev-sandbox.md` 與 deploy-stg SKILL.md 的是相反說法；**2026-08-11 早上**又據相反前提開了 issue #665 與一道 478 行的 gate。三次都是同一個推導錯誤：從「`create.sh` 沒顯式對該模組下 `-u`」（觀察正確）推出「不會升」（因果錯誤），漏掉 reverse-dependency 傳播。<br>④ **為什麼正確結論在這裡躺了 70 天沒被讀到**：整列掛著 ❌ RETRACTED、標題原文又正是那個錯誤主張（「既有 sandbox 不 fire addon migration」）。`git grep` 撈到這行的人，看到的字面是錯的說法配一個「已作廢」標記 ⇒ 合理地跳過。**RETRACTED 條目記的往往正是「這件事查過了，結論跟你以為的相反」，是最該讀的，卻最容易被略過。**故 2026-08-11 把本列標題改寫成承載**正確結論**，RETRACTED 標記移到 ID 欄位上（它標的是原報，不是這格）。<br>⑤ 框架語意的可重驗錨點（Odoo 18 原始碼，本機樹 `AREA-odoo/odoo-18.0/`）：CLI `-u` → `button_upgrade()` 在 `odoo/modules/loading.py:458-462`；傳播到 dependents 在 `odoo/addons/base/models/ir_module.py:706-714`；`:699-712` 的 `while` 迴圈使其**遞移**（`woow_paas_platform` 除了直接 `depends` 含 `web`，還經 `project` / `bus` 兩條間接鏈到 `web`）。 |
 | deploy-stg tooling（upgrade 丟 agent-runtime env secret，2026-06-02） | F-DT-5 | **F-DT-5**（medium/deploy-infra，owner deploy-stg tooling = 本 repo `create.sh` + `charts/odoo-dev-sandbox`)既有 sandbox `helm upgrade` **無 `--reuse-values`**（`create.sh:379-462`）→ 任何「該次 deploy 沒重新帶」的 agent-runtime secret 會被 chart 重 render 丟掉。具體:`AGENT_RUNTIME_NAMESPACE_SECRET` 在 chart 走 `secretKeyRef … optional:true`（`odoo-deployment.yaml:108`）+ secret key 只在 `agentRuntime.namespaceSecret` 非空才建（`secrets.yaml:30`，預設 `""`）;deploy 環境沒 `export AGENT_RUNTIME_NAMESPACE_SECRET` → `create.sh:272-321` 注入 block 跳過 → upgrade 後 key 消失、env UNSET → odoo `agent_session.py:138 _get_namespace_secret()` **fail-closed raise UserError** → 既有 sandbox 重部署後 **chat 全炸「namespace secret missing」**（症狀像 feature 壞掉,實為 secret 掉）。**2026-06-02 #135 e2e 實咬**：deploy-stg 第一輪 upgrade 丟了 secret,靠 Eugene 給原值 + hmac 三 hash（pid 8/2/5 → j2et/c2pt/xpg）驗證還原。部分已知 = gap-chain pitfall gap #4「deploy-stg 須帶 `AGENT_RUNTIME_*` env」,但**新 insight = `--reuse-values` 能讓忘記帶 env 時不丟既有 secret**。durable 修法（擇一/並用）:create.sh upgrade 加 `--reuse-values`;或 upgrade 前先讀既有 K8s secret 把 agent-runtime 各 key 自動回灌（免人工記得 export env）。同 webhook secret 系列（`agent-runtime-webhook-secret*`）同模式風險。（注：原列為 F-DT-4 的姊妹,但 F-DT-4 已撤回為非 gap；本條是 create.sh-upgrade 路徑唯一**真**缺口。）owner deploy-stg tooling |
 | agent-context-enrichment（2026-06-05，detail-only，不在 Index 表）| F-CTX-1, F-CTX-2, F-CTX-3 | **F-CTX-1**（open）prompt-injection content filtering — project/task description 為 user-controlled，現以「NOT instructions」untrusted 標註緩解（spec Known limitations）；根治需 content filtering / 結構化隔離。**F-CTX-2**（done 2026-06-05）pod 端消費 `payload.system_context` — paas-agent-runtime#20 merged（`8a9b387`，空字串視同缺席語意已對齊 protocol doc）。**F-CTX-3**（done 2026-06-05，issue #147 closed）stg 端到端驗證全過 — agent-runtime 1.3.0 + operator bump（paas-app-bundle-cd#8）+ platform `20260605.0102`；5 項驗證綠（fail-closed / 正負向 / cold-start+attach 一致 / 缺席語意），舊 image pod 已逐顆 DELETE（stg 全面 1.3.0）。衍生發現 portal persist bug → PR #150 修復 + stg 復驗 3 項綠。詳見下方 `## F-CTX` 段 |
 | skill-binding-ux（2026-06-05，detail-only，不在 Index 表）| F-SBX-1, F-SBX-2, F-SBX-3, F-SBX-4, F-SBX-5 | **F-SBX-1**（low/feature）portal settings flag（`portal_project_settings_editable`，預設 off）— 未來開放翻 Settings 參數即可，開放前須確認會議決議。**F-SBX-2**（low/limitation）MCP inline form 無 sync/test 鈕 — admin 在 project form 建 MCP 後須跳獨立 view sync 才達 `connected`（legacy chat 才吃得到）。**F-SBX-3**（medium/security-decision）project owner 經 RPC 仍可寫 dedicated template（`agent_template_rule_project_admin` 既有授權）— 是否收緊待決策，對應 Gitea issue [odoo-addons/woow_paas_platform#152](https://git-prod.woowtech.io/odoo-addons/woow_paas_platform/issues/152)。**F-SBX-4**（low/decision-pending）legacy service-centric `/api/workspaces/<wid>/services/<sid>/mcp-servers`（`paas.py:1295`）write actions 已補同一 portal flag gate（`paas.py:1329`，final review 第四支）— 整支是否 deprecate 待另案決策。**F-SBX-5**（medium/UX+runtime，gitea **#156**，**已修 2026-06-07** feat/skill-binding-ambiguity）skill 綁定下拉無法區分同名 system / user skill + 同名雙綁 snapshot 撞名；修以四層 lock-step（display_name 後綴 / no-dup constraint / snapshot dedup / 保守 migration `.34`），pitfall doc `skill-same-name-dual-bind-snapshot-collision`。詳見上方 State 段 2026-06-07 bullet |
@@ -51,7 +51,7 @@
 |---|----------|--------|-------|------|--------|
 | F1 | medium | refactor | 1 | ACL 對等性 checklist 持久化 | doc-only ✅（本 doc 已寫進 [[odoo-addon-std-rule-symmetric-deactivation]]） |
 | F2 | medium | refactor | 1 | `_sanitize_helm_values` 同名異實重命名 | 待新 PR |
-| F3 | medium | refactor | 1 | Cross-workspace incompatible extras 注 AI prompt | 待設計 |
+| F3 | low（#698 前為 medium） | refactor | 1 | **cross-project move 保留的 extras 仍注 AI prompt**（#698 已堵掉「直接寫 task 服務欄位」那條更短的路） | 待設計 |
 | F4 | medium | pre-existing | 1 | `_check_project_access` / `_check_task_access` 對 unbound IDOR | 待新 PR |
 | F5 | medium | refactor (deferred) | 1 | Migration xmlid drift 防呆 assertion | 使用者 accept 不加本 PR；待新 PR |
 | F6 | medium | refactor | 1 | D9 階段 2 — sanitizer 升級 whitelist 模式 | 等 telemetry，待新 PR |
@@ -149,20 +149,52 @@
 
 ---
 
-## F3 — Cross-workspace incompatible extras 仍注入 AI prompt
+## F3 — cross-project move 保留的 extras 仍注入 AI prompt（#698 已堵掉更短的那條路）
 
-- **Severity**: medium（非 secret leak，但違反多租戶資訊隔離精神）
-- **Origin**: 本次 refactor 對 task cross-project move 設計成「extras 保留」（AC #13），但 `_get_cloud_service_context` 走 `sudo()` 取 extras（`src/models/discuss_channel.py:267-280`），sanitizer 只去 secret 不去 cross-workspace
-- **觸發路徑**：
+> **2026-08-13 更新（#698）**。本條原本記的觸發路徑是「task 被 cross-project
+> move」，而且那個前提被當成**唯一**入口在評估嚴重度。#698 實測證偽：還有一條
+> 短得多的路——攻擊者對**自己的** task 直接寫 `primary_cloud_service_id` /
+> `extra_cloud_service_ids`，就能把任意租戶的 service 塞進自己的 agent prompt，
+> 完全不需要任何 move、也不需要對那筆 service 有 read。那條路已由 #698 的
+> `cloud_service_binding_guard` 堵住（owner／admin 才能改綁定，兩個方向都守）。
+> **本條剩下的是原本那條**：合法的 cross-project move。
+
+- **Severity**: low（#698 之前記為 medium——那個評級建立在「唯一入口是 move」
+  的前提上；真正撐起 medium 的是 #698 那條短路徑，它已修）
+- **當前剩餘觸發路徑**（合法操作，非攻擊）：
   1. 使用者 A 在 W1 為 task 加 W1 服務 X 為 extras
-  2. Task 被 cross-project move 到 W2（B 的 project）
+  2. **有權限的人**把 task cross-project move 到 W2 的 project（AC #13 設計成
+     「extras 保留」）。#698 的綁定守衛不觸發，理由是**它的 key gate**：
+     move 寫的是 `project_id`，而 `project_id` 既不在 `_cs_binding_fields`
+     也不在 `_cs_binding_triggers` 裡 ⇒ 守衛連 snapshot 都不做
+     （`src/models/cloud_service_binding_guard.py` 的 `_cs_binding_diff_fields`）
+     - ⚠ **不是**因為「綁定沒變」（本條 2026-08-13 首版曾這樣寫，是假的）。
+       `primary_cloud_service_id` 是 `@api.depends('project_id.cloud_service_ids')`
+       的 stored compute，move **會**改綁定集合。實測證據：
+       `src/tests/test_project_cs_m2m_authz_705.py` 的
+       `TestCrossProjectMoveReasonF6.test_X3b_move_changes_binding_and_is_not_blocked`
+       斷言 move 之後 `primary_cloud_service_id` 從 svc_a 變成 svc_a2
+     - 這個區別要緊：用「沒東西可看」當理由，會讓讀者以為 after-diff 的形狀
+       已經涵蓋 move 這一格。實際上守衛只是沒被叫起來——**動 key gate 的人
+       會讓這條合法操作開始 raise**（該測試就是這個交互作用的回歸鎖）
   3. W2 member 在該 task chatter 觸發 AI 自動回覆
-  4. AI prompt 內包含 X 的 service.name / subdomain（公開域名）/ template name / sanitized helm_values
-- **洩漏內容**：service.name（可能含租戶業務語意）、subdomain、template name、helm_values（secret 已 redact 但保留 chart 配置）
+  4. AI prompt 內含 X 的 service.name / subdomain（公開域名）/ template name /
+     sanitized helm_values
+- **洩漏內容**：service.name（可能含租戶業務語意）、subdomain、template name、
+  helm_values（secret 已 redact 但保留 chart 配置）
+- **實作指標（原記載已過期）**：`_get_cloud_service_context`
+  （`src/models/discuss_channel.py`）自 2026-06-05 起只是**委派**給
+  `agent_session._build_system_context`；真正組裝服務區塊、也真正走 `sudo()`
+  的是 `agent_session._ctx_services_sections` / `_ctx_service_block`
+  （`_build_system_context_unsafe` 以 `project.task.sudo().search` 取 task）。
+  要落地過濾請改那裡，改 `discuss_channel` 只會漏掉另外兩條 chat path。
 - **建議落點**：
-  - `_get_cloud_service_context` 過濾 `incompatible_extra_cloud_service_ids`，cross-workspace extras 即使存在也不注入
-  - 或對 cross-workspace extras 注入時降級為「placeholder 提示 + service name only」（無 helm_values / subdomain）
-- **設計待議**：兩個方向各有 UX tradeoff（過濾 = AI 不知道有 extras / placeholder = 部分資訊但複雜），由使用者決定
+  - `_ctx_services_sections` 過濾 `incompatible_extra_cloud_service_ids`，
+    cross-workspace extras 即使存在也不注入
+  - 或對 cross-workspace extras 注入時降級為「placeholder 提示 + service name
+    only」（無 helm_values / subdomain）
+- **設計待議**：兩個方向各有 UX tradeoff（過濾 = AI 不知道有 extras /
+  placeholder = 部分資訊但複雜），由使用者決定
 
 ---
 
@@ -302,8 +334,15 @@
   - 路徑 2：若評估 AI chat 已上 stg / 即將 prod，獨立 hotfix PR 立刻修（機械式 1-line fix：`service.helm_values` → `_sanitize_helm_values(service.helm_values)` 並 import）
 - **何時**：next AI chat 相關 PR 一併處理
 
-## F-N8N-1 — `_sanitize_helm_values` 不遮 top-level password 型 helm value（pre-existing，與 F2/F12 同家族）
+## ~~F-N8N-1~~ ✅ RESOLVED — `_sanitize_helm_values` 不遮 top-level password 型 helm value（pre-existing，與 F2/F12 同家族）
 
+- **✅ RESOLVED（2026-08-03，gitea issue #535）**：遮罩改 **spec-driven**（`helm_value_specs`
+  的 `type: password` 一律全遮，既有三條 hardcoded path 保留為增加的一層）＋ `ConfigurationTab`
+  password 欄位改「空白起始、僅使用者實際輸入才送出」＋ 後端兜底 `_drop_masked_echo_values`。
+  本條當初預測的「只在 read 端遮罩會回歸 odoo reconfigure，ConfigurationTab 會把遮罩後的
+  `***` 預填並於存檔覆寫真密碼」**已於真瀏覽器實測坐實**（issue #535 的 D1：`odooPassword`
+  從 `PLAIN_PW_D1_PROBE` 被寫成 `***`；同一套操作在沒有遮罩的世界則保住明文）。
+  本條與 issue #535 是同一件事，不再留兩個載體——後續討論一律看 #535。
 - **Severity**: medium
 - **Origin**: `fix/n8n-creation-issue` 第二輪對抗式審查 CONFIRMED（2026-07-01）
 - **Location**: `src/controllers/paas.py` `_sanitize_helm_values`（僅在 `key == 'secret' and isinstance(val, dict)` 時遮罩）
@@ -1567,6 +1606,17 @@ reviewer Phase D §6 新發現，無一 high-severity / 無一 code 缺陷。**R
   route。**修法**：operator line 1322 前綴改用 payload 的 `app_name`（this route 的 subdomain）取代
   `canonical_name`。需 operator image 重建 → **建議併入下次 operator bump**（如 F-SA-4 ② 的 prod bump 一起帶）。
   owner=platform。
+  🔴 **2026-08-15（#745）新增的約束——動這個修法前務必先讀**：CS Access Control 上線後，
+  `canonical_name` 不只是 SA 的欄位了。CS 送的 `canonical_name` 是
+  `make_cs_access_canonical_name()`（**帶 env token**），而它送的 `app_name` 是
+  `cloud_service.subdomain`（**沒有** env token —— `controllers/paas.py` 建 subdomain 時沒傳
+  `env=`）。所以「把 operator 的前綴從 `canonical_name` 改成 `app_name`」會**順手把 CS 那一半的
+  env token 拿掉**，而 `docs/decisions/patterns/external-resource-env-token-naming.md` 的可行性表
+  明寫「Access 物件裡穩定帶 env 的只有 reusable policy name，不是 app name」。改動本身在 prod
+  完全看不出差別（prod 的 env token 是空字串），只有 stg 的 CF 物件會失去歸屬標記。
+  ⇒ 真要修 F-SA-7，正解是**在 Odoo 這一側送對前綴**（SA 的 `_build_access_payload` 改送 route
+  自己的名字當 `canonical_name`），不是改 operator 那一行——這樣兩個錨點各自決定自己的前綴，
+  CS 的 env token 不受影響。
 
 ## 2026-06-13 — SA Policy rule 子模型過渡 compat shim 待移除
 

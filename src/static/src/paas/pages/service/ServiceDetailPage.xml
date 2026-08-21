@@ -141,7 +141,7 @@
                       - hasAdminGui → 這顆 Reset 按鈕在不在（憑證鑄造閘門）
                       - hasGateway  → Reset 會不會真的交付 gateway 憑證
                                       （交付閘門＝後端 _gateway_public_url() 非空）
-                    只判前者的話，has_admin_gui=True 的 8 個模板有 7 個沒有 gateway，
+                    只判前者的話，has_admin_gui=True 的模板裡除 hermes-agent 外都沒有 gateway，
                     它們的租戶會讀到一句永遠不會發生的承諾。守線：repo-lint
                     check_gateway_copy_gate_anchor ＋ test_gateway_capability_payload_530。
                 -->
@@ -187,6 +187,21 @@
                         <WoowIcon name="'extension'" size="18"/>
                         MCP Servers
                     </button>
+                    <!--
+                        #746：Access 頁籤只給買了 AC 席位的方案（設計拍板 6：
+                        `ac_max_access_seats > 0` 才出現，無席位不顯示、不做
+                        upsell）。gate 走 hasAccessSeats getter，它讀的是後端
+                        payload 的 subscription.ac_max_access_seats——能力判準
+                        收斂到後端單一欄位（capability-gate-single-source-field），
+                        前端不得自己算一份（slug／category／模板名單）。
+                    -->
+                    <button
+                        t-if="hasAccessSeats"
+                        t-att-class="{'o_woow_tab': true, 'active': currentTab === 'access'}"
+                        t-on-click="() => this.setTab('access')">
+                        <WoowIcon name="'shield'" size="18"/>
+                        Access
+                    </button>
                 </div>
 
                 <!-- Tab Content -->
@@ -206,6 +221,13 @@
                         onSave.bind="handleConfigSave"/>
                     <McpServersTab
                         t-if="currentTab === 'mcp-servers'"
+                        service="service"
+                        workspaceId="props.workspaceId"/>
+                    <!-- 內容側同樣掛 hasAccessSeats：直接把 URL 打成
+                         .../access 的人不該因此拿到一個方案沒買的頁面
+                         （頁籤不見了、內容還在＝gate 只做了一半）。 -->
+                    <AccessTab
+                        t-if="currentTab === 'access' and hasAccessSeats"
                         service="service"
                         workspaceId="props.workspaceId"/>
                 </div>

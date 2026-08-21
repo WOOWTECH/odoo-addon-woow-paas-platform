@@ -16,9 +16,27 @@
             <field name="documentation_url">https://www.postgresql.org/docs/</field>
 
             <!-- Helm Configuration -->
+            <!-- #552：本欄位原為空字串 ⇒ 整條 helm 管線不帶 helm 的 version 旗標（閘門在
+                 src/services/paas_operator.py:419-420、extra/paas-operator/src/services/helm.py:681
+                 與 :838），helm 解析成 registry 當下的 latest ⇒ 版本決定權交給上游、
+                 帳本記空、漂移偵測（cloud_service.py:630 的比較要求兩邊都有值）看不到。
+                 釘值＝2026-08-03 實測的 latest：
+                   helm show chart oci://registry-1.docker.io/bitnamicharts/postgresql
+                   → version 18.8.5 / appVersion 18.4.0
+                 （helm 3.13.3〔operator Dockerfile 釘的同一顆〕與系統 helm 4.2.3 量到同值。）
+                 本 template is_active=False，且 prod 0 顆 cloud service、stg 四個 paas-ws-*
+                 namespace 無任何 postgresql release ⇒ 沒有既存服務可被降版，「釘當下 latest」
+                 對現行行為零改變、只是把浮動變成固定。
+                 ⚠ 不得引用 docs/reference/features/cloud-services.md:894 的 15.5.0——那是
+                 spec 期示意值且配 classic repo（charts.bitnami.com），與現用 OCI 不同源。
+                 ⚠ 重新上架前必須先處理 image：18.8.5 的預設 image 是
+                 registry-1.docker.io/bitnami/postgresql:latest（Bitnami 2025-08 搬遷後公開
+                 tag 只剩 latest），而本 seed 的 helm_default_values 既無 image override 也無
+                 global.security.allowInsecureImages——對照 cloud_app_odoo 已改用 bitnamilegacy/。
+                 修 image 屬 helm_default_values 變更，不在本 PR 範圍。 -->
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://registry-1.docker.io/bitnamicharts/postgresql</field>
-            <field name="helm_chart_version"></field>
+            <field name="helm_chart_version">18.8.5</field>
             <field name="helm_default_values">{"auth": {"username": "woow", "database": "woowdb"},
                 "primary": {"resources": {"requests": {"cpu": "100m", "memory": "256Mi"}, "limits":
                 {"cpu": "2000m", "memory": "2Gi"}}}}</field>
@@ -53,9 +71,26 @@
             <field name="documentation_url">https://docs.n8n.io/</field>
 
             <!-- Helm Configuration (OCI registry format) -->
+            <!-- #552：本欄位原為空字串 ⇒ 不帶 helm 的 version 旗標、抓 registry 當下 latest
+                 （機制與爆炸半徑見 cloud_app_postgresql 上方註解）。本 template
+                 is_active=True，是四個空值中風險最高的兩個之一。
+                 釘 2.0.1——兩個判準指向同一個值：
+                 (a) 既存服務優先：svc-16e7ac1a（paas-ws-stg-5a105e8b）實跑 n8n-2.0.1
+                     （helm history：rev 1 install 2026-07-06、rev 2 upgrade 2026-07-09，
+                     status deployed）。釘成「它正在跑的版本」⇒ 租戶按 Reset Admin Password
+                     不會把它推上別的版本；釘更高就等於下次 Reset 即升版。
+                 (b) 2026-08-03 實測 latest：
+                       helm show chart oci://8gears.container-registry.com/library/n8n
+                       → version 2.0.1 / appVersion 1.122.4
+                     （helm 3.13.3 與 4.2.3 同值。）
+                 ⚠ (a)(b) 今天恰好相同，是巧合不是恆等式：8gears 一發新版 (b) 就會前進，
+                 屆時本欄位不再等於 latest——那正是釘版的目的，不要「順手同步成新 latest」；
+                 升版要當成一次獨立變更、對照既存服務評估。
+                 ⚠ 不得引用 docs/reference/features/cloud-services.md:942 的 0.23.0——那是
+                 spec 期示意值且配 classic repo（8gears.github.io），與現用 OCI 不同源。 -->
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://8gears.container-registry.com/library/n8n</field>
-            <field name="helm_chart_version"></field>
+            <field name="helm_chart_version">2.0.1</field>
             <field name="helm_default_values">{"config": {"database": {"type": "sqlite"}}, "main":
                 {"config": {"GENERIC_TIMEZONE": "Asia/Taipei", "N8N_LOG_LEVEL": "info",
                 "N8N_PUBLIC_API_ENABLED": "true"},
@@ -122,9 +157,26 @@
             <field name="documentation_url">https://redis.io/docs/</field>
 
             <!-- Helm Configuration -->
+            <!-- #552：本欄位原為空字串 ⇒ 不帶 helm 的 version 旗標、抓 registry 當下 latest
+                 （機制見 cloud_app_postgresql 上方註解）。
+                 釘值＝2026-08-03 實測的 latest：
+                   helm show chart oci://registry-1.docker.io/bitnamicharts/redis
+                   → version 27.0.18 / appVersion 8.8.1
+                 （helm 3.13.3 與 4.2.3 同值。）
+                 本 template is_active=False，且 prod 0 顆 cloud service、stg 四個 paas-ws-*
+                 namespace 無任何 redis release ⇒ 無既存服務可被降版，釘當下 latest 對現行
+                 行為零改變。
+                 ⚠ 不得引用 docs/reference/features/cloud-services.md:984 的 19.0.0——那是
+                 spec 期示意值且配 classic repo（charts.bitnami.com），與現用 OCI 不同源。
+                 ⚠ 重新上架前必須先處理 image：27.0.18 的預設 image 是
+                 registry-1.docker.io/bitnami/redis:latest（Bitnami 2025-08 搬遷後公開 tag
+                 只剩 latest），本 seed 的 helm_default_values 無 image override 亦無
+                 global.security.allowInsecureImages。修 image 不在本 PR 範圍。
+                 ⚠ 27.0.18 的 chart 預設 architecture 是 replication，本 seed 覆寫為
+                 standalone（既有值，本 PR 未動）。 -->
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://registry-1.docker.io/bitnamicharts/redis</field>
-            <field name="helm_chart_version"></field>
+            <field name="helm_chart_version">27.0.18</field>
             <field name="helm_default_values">{"architecture": "standalone", "master": {"resources":
                 {"requests": {"cpu": "100m", "memory": "128Mi"}, "limits": {"cpu": "500m", "memory":
                 "512Mi"}}}}</field>
@@ -159,15 +211,35 @@
             <field name="documentation_url">https://www.odoo.com/documentation/</field>
 
             <!-- Helm Configuration (OCI registry format) -->
+            <!-- #552：本欄位原為空字串 ⇒ 不帶 helm 的 version 旗標、抓 registry 當下 latest
+                 （機制見 cloud_app_postgresql 上方註解）。本 template is_active=True，是四個
+                 空值中風險最高的兩個之一。
+                 釘值＝2026-08-03 實測的 latest：
+                   helm show chart oci://registry-1.docker.io/bitnamicharts/odoo
+                   → version 28.2.10 / appVersion 18.0.20250805
+                 （helm 3.13.3 與 4.2.3 同值。）
+                 租戶側無既存服務（prod 0 顆 cloud service、stg 四個 paas-ws-* namespace 無
+                 odoo release）⇒ 無降版標的，釘當下 latest 對現行行為零改變。
+                 交叉佐證（為何 28.2.10 吃得下下面的 helm_default_values）：
+                 - 平台自身的 paas-odoo（paas-system，helm rev 78）跑的正是 odoo-28.2.10，
+                   且同樣以 global.security.allowInsecureImages ＋ customPostInitScripts ＋
+                   自家 image 覆寫的形制在線上運作；
+                 - 逐鍵實查 28.2.10 的 helm show values：odooEmail / odooPassword /
+                   odooSkipInstall / loadDemoData / customPostInitScripts / smtpHost /
+                   updateStrategy / persistence / postgresql 全部存在。
+                 ⚠ 下方 helm_default_values 的 image.* 與 postgresql.image.* 是既有的平台
+                 覆寫（cloud-odoo 自家 image ＋ bitnamilegacy/postgresql，因應 Bitnami
+                 2025-08 公開 image 搬遷），本 PR 未動；日後升 chart 版本時要一併複驗
+                 這兩組覆寫是否仍與新版 chart 相容。 -->
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://registry-1.docker.io/bitnamicharts/odoo</field>
-            <field name="helm_chart_version"></field>
+            <field name="helm_chart_version">28.2.10</field>
             <!-- helm_default_values: customPostInitScripts for:
                  1) fix-admin-credentials.sh - hash password with pbkdf2_sha512
                     (Bitnami writes plaintext; login stays as email per user choice)
                  2) odoo-conf-system.sh - inject system odoo.conf settings:
                     proxy_mode, list_db, workers, limit_memory_*, limit_time_* -->
-            <field name="helm_default_values">{"global": {"security": {"allowInsecureImages": true}}, "image": {"registry": "jcr-prod.woowtech.io", "repository": "woow-paas-docker-local/cloud-odoo", "tag": "20260407.1522"}, "odooEmail": "user@example.com", "odooSkipInstall": false, "loadDemoData": false, "service": {"type": "ClusterIP"}, "resources": {"requests": {"cpu": "200m", "memory": "512Mi"}, "limits": {"cpu": "2000m", "memory": "2Gi"}}, "postgresql": {"enabled": true, "architecture": "standalone", "auth": {"username": "bn_odoo", "database": "bitnami_odoo"}, "image": {"registry": "docker.io", "repository": "bitnamilegacy/postgresql", "tag": "17.6.0-debian-12-r4"}}, "persistence": {"enabled": true, "size": "10Gi"}, "updateStrategy": {"type": "Recreate"}, "customPostInitScripts": {"fix-admin-credentials.sh": "#!/bin/bash\nset -eo pipefail\necho '[fix-admin-credentials] Hashing Odoo admin password with pbkdf2_sha512'\n[ -z \"${ODOO_PASSWORD:-}\" ] \u0026\u0026 echo 'WARN: ODOO_PASSWORD not set, skipping' \u0026\u0026 exit 0\n/opt/bitnami/odoo/venv/bin/python3 -c \"\nimport os, sys\ntry:\n from passlib.context import CryptContext\n import psycopg2\n ctx = CryptContext(schemes=['pbkdf2_sha512'])\n hashed = ctx.hash(os.environ['ODOO_PASSWORD'])\n conn = psycopg2.connect(\n  host=os.environ['ODOO_DATABASE_HOST'],\n  port=int(os.environ.get('ODOO_DATABASE_PORT_NUMBER', '5432')),\n  user=os.environ['ODOO_DATABASE_USER'],\n  password=os.environ['ODOO_DATABASE_PASSWORD'],\n  dbname=os.environ['ODOO_DATABASE_NAME'])\n cur = conn.cursor()\n cur.execute('UPDATE res_users SET password=%s WHERE id=2', (hashed,))\n conn.commit()\n cur.close()\n conn.close()\n print('[fix-admin-credentials] Password hashed successfully')\nexcept Exception as e:\n print(f'[fix-admin-credentials] ERROR: {e}', file=sys.stderr)\n sys.exit(1)\n\"\n", "odoo-conf-system.sh": "#!/bin/bash\nset -eo pipefail\nCONF=/opt/bitnami/odoo/conf/odoo.conf\necho '[odoo-conf-system] Injecting system-level odoo.conf settings'\n[ ! -f \"$CONF\" ] \u0026\u0026 echo \"WARN: $CONF not found, skipping\" \u0026\u0026 exit 0\ngrep -q '^proxy_mode' \"$CONF\" || echo 'proxy_mode = True' >> \"$CONF\"\ngrep -q '^list_db' \"$CONF\" || echo 'list_db = False' >> \"$CONF\"\nsed -i '/^workers/d' \"$CONF\"\nsed -i '/limit_memory_hard/d' \"$CONF\"\nsed -i '/limit_memory_soft/d' \"$CONF\"\nsed -i '/limit_time_cpu/d' \"$CONF\"\nsed -i '/limit_time_real/d' \"$CONF\"\necho 'workers = 0' >> \"$CONF\"\necho 'limit_memory_hard = 0' >> \"$CONF\"\necho 'limit_memory_soft = 0' >> \"$CONF\"\necho 'limit_time_cpu = 60' >> \"$CONF\"\necho 'limit_time_real = 120' >> \"$CONF\"\necho '[odoo-conf-system] Settings injected'\n"}}</field>
+            <field name="helm_default_values">{"global": {"security": {"allowInsecureImages": true}}, "image": {"registry": "jcr-prod.woowtech.io", "repository": "woow-paas-docker-local/cloud-odoo", "tag": "20260814.0737"}, "odooEmail": "user@example.com", "odooSkipInstall": false, "loadDemoData": false, "service": {"type": "ClusterIP"}, "resources": {"requests": {"cpu": "200m", "memory": "512Mi"}, "limits": {"cpu": "2000m", "memory": "2Gi"}}, "postgresql": {"enabled": true, "architecture": "standalone", "auth": {"username": "bn_odoo", "database": "bitnami_odoo"}, "image": {"registry": "docker.io", "repository": "bitnamilegacy/postgresql", "tag": "17.6.0-debian-12-r4"}}, "persistence": {"enabled": true, "size": "10Gi"}, "updateStrategy": {"type": "Recreate"}, "customPostInitScripts": {"fix-admin-credentials.sh": "#!/bin/bash\nset -eo pipefail\necho '[fix-admin-credentials] Hashing Odoo admin password with pbkdf2_sha512'\n[ -z \"${ODOO_PASSWORD:-}\" ] \u0026\u0026 echo 'WARN: ODOO_PASSWORD not set, skipping' \u0026\u0026 exit 0\n/opt/bitnami/odoo/venv/bin/python3 -c \"\nimport os, sys\ntry:\n from passlib.context import CryptContext\n import psycopg2\n ctx = CryptContext(schemes=['pbkdf2_sha512'])\n hashed = ctx.hash(os.environ['ODOO_PASSWORD'])\n conn = psycopg2.connect(\n  host=os.environ['ODOO_DATABASE_HOST'],\n  port=int(os.environ.get('ODOO_DATABASE_PORT_NUMBER', '5432')),\n  user=os.environ['ODOO_DATABASE_USER'],\n  password=os.environ['ODOO_DATABASE_PASSWORD'],\n  dbname=os.environ['ODOO_DATABASE_NAME'])\n cur = conn.cursor()\n cur.execute('UPDATE res_users SET password=%s WHERE id=2', (hashed,))\n conn.commit()\n cur.close()\n conn.close()\n print('[fix-admin-credentials] Password hashed successfully')\nexcept Exception as e:\n print(f'[fix-admin-credentials] ERROR: {e}', file=sys.stderr)\n sys.exit(1)\n\"\n", "odoo-conf-system.sh": "#!/bin/bash\nset -eo pipefail\nCONF=/opt/bitnami/odoo/conf/odoo.conf\necho '[odoo-conf-system] Injecting system-level odoo.conf settings'\n[ ! -f \"$CONF\" ] \u0026\u0026 echo \"WARN: $CONF not found, skipping\" \u0026\u0026 exit 0\ngrep -q '^proxy_mode' \"$CONF\" || echo 'proxy_mode = True' >> \"$CONF\"\ngrep -q '^list_db' \"$CONF\" || echo 'list_db = False' >> \"$CONF\"\nsed -i '/^workers/d' \"$CONF\"\nsed -i '/limit_memory_hard/d' \"$CONF\"\nsed -i '/limit_memory_soft/d' \"$CONF\"\nsed -i '/limit_time_cpu/d' \"$CONF\"\nsed -i '/limit_time_real/d' \"$CONF\"\necho 'workers = 0' >> \"$CONF\"\necho 'limit_memory_hard = 0' >> \"$CONF\"\necho 'limit_memory_soft = 0' >> \"$CONF\"\necho 'limit_time_cpu = 60' >> \"$CONF\"\necho 'limit_time_real = 120' >> \"$CONF\"\necho '[odoo-conf-system] Settings injected'\n"}}</field>
             <field name="helm_value_specs">{"required": [
                 {"key": "odooEmail", "label": "Administrator Email", "type": "text",
                 "default": "user@example.com",
@@ -217,14 +289,37 @@
             <field name="tags">["mcp", "hermes", "mcp-server", "ai"]</field>
 
             <!-- Helm Configuration (OCI; chart from woow-paas-docker-local).
-                 helm_chart_version 0.1.1 + image tag pinned to git-sha post-merge
-                 (PR #5 → CI run 717; was latest at pilot; see design spec 契約補遺/階段3).
+                 image 雙釘 git-sha@sha256（hermes-mcp-admin；woow-mcp-server #18 合進 main
+                 的 merge commit 614ae663，帶 MCP 連線守衛／`PUT /api/config/connection`
+                 partial patch／連線 URL 不再預填錯誤 default 三項修復，#679）。該 digest 是
+                 單一 manifest.v2（linux/amd64），非 multi-arch index，故直接釘它即可。
+                 ⛔ 換 tag 一律逐筆改：同一個 monorepo commit 會產出多個 app image
+                 （如 cloud_app_mcp_n8n 的 n8n-mcp-admin），git-sha 相同但 digest 不同——
+                 全域替換 git-sha 會造出 tag 新／digest 舊、helm 靜默沿用舊 image 的組合。
                  OCI repo: B 解（pilot 重用 image repo woow-paas-docker-local；
-                 GA 遷專用 woow-paas-charts-local，見 spec 階段3 follow-up）. -->
+                 GA 遷專用 woow-paas-charts-local，見 spec 階段3 follow-up）.
+
+                 #686 config 區塊：只補 requireFields／requiredFields／sensitive，
+                 **刻意不寫 config.nonSensitive**——hermes 是 pilot，chart 的
+                 config.nonSensitive 預設本來就是 hermes 形的
+                 （mcp_server.command=hermes-mcp-server ＋ args ＋ 內部 port 8000），
+                 其餘家族成員才必須覆寫（GAP-O1）。
+                 ⚠ 這裡不是推論：已用 helm 3.13.3 對 chart mcp-server 0.1.5 跑
+                 `helm template` 實測，補上 config 區塊前後 render 出來的
+                 ConfigMap config.base.json **逐位元組相同**（helm 對 map 是深合併、
+                 不是整個 config 物件取代），且以「顯式覆寫 nonSensitive」的陽性對照
+                 確認過探針看得見差異。若哪天有人在這裡補 config.nonSensitive，
+                 test_mcp_server_template_seed 的
+                 test_template_launch_command_matches_declared_contract 會紅。
+                 ⛔ requiredFields 是 REPLACE 不是 merge（chart deployment.yaml 用
+                 join "," 餵 initContainer 的 SEED_REQUIRED_PATHS，chart 預設 8 條）：
+                 只能列平台真正供給的 admin_password。connection.* 是租戶自己在 admin
+                 GUI 填的、mcp_auth_token 也不由平台供給，任何一條列進去都會讓
+                 **每個新租戶的 pod 永遠卡 Init**。 -->
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/mcp-server</field>
             <field name="helm_chart_version">0.1.5</field>
-            <field name="helm_default_values">{"app": "hermes", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/hermes-mcp-admin", "tag": "ed098b6070cde0c74ed0bccb47a33d6fdf40d9c6@sha256:0f1a34cd33864529c56c5aefdd0e47de6751787069bf85fde1ece01b1ae18d95"}, "service": {"port": 8080}, "envPrefix": "HERMES_", "persistence": {"enabled": true, "size": "5Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "128Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}}</field>
+            <field name="helm_default_values">{"app": "hermes", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/hermes-mcp-admin", "tag": "614ae663fadd91c76972f60017a76d2627bea87e@sha256:49bde49c367ff237fd92ab31907dff7c75e8db558af4d886233ef7e1da599883"}, "service": {"port": 8080}, "envPrefix": "HERMES_", "persistence": {"enabled": true, "size": "5Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "128Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}}}</field>
             <field name="helm_value_specs">{"required": [], "optional": []}</field>
 
             <!-- Service Configuration -->
@@ -238,6 +333,23 @@
 
             <!-- MCP capability is built into the service body; NO sidecar -->
             <field name="mcp_enabled" eval="False" />
+            <!-- #686 / #357 C01：image（hermes-mcp-admin）內建 mcp-admin-core 的 admin
+                 GUI，且它掛在服務**公開根 URL** 上（MCP pod 單一容器、無 authproxy
+                 sidecar）。has_admin_gui 是平台鑄造 admin_password 的**唯一**判準，
+                 與 mcp_enabled 正交——後者是「外掛 MCP sidecar」語意，對 body-內建的
+                 家族成員恆 False，拿它當閘門 create() 會過濾成空集合。
+                 #357 接線時只補了 odoo／n8n／odoo-manage 三筆，漏了 pilot 這一筆
+                 ⇒ 平台從不鑄密碼 ⇒ 落到 mcp-admin-core 內建 fallback
+                 admin_password="admin"（stg svc-b2e8a605 實測：
+                 POST /api/auth/login {"password":"admin"} → 200，
+                 {"password":"wrong-xyz"} → 401 為陽性對照，證明 200 不是 fail-open）。
+                 migration：本 xmlid 首建於 de5c07d9（2026-06-29），晚於 noupdate=0
+                 收斂 d1cb2e32（2026-04-06），既有 DB 的 ir.model.data.noupdate=False
+                 ⇒ -u 直接重套，無需 migration。
+                 ⚠ 翻旗標**不會**追溯改掉既有實例的密碼：chart 的 seed-config.py 是
+                 seed-if-absent（/data/config.json 已存在就早退），既有實例要脫離字面
+                 admin 必須有人主動按一次 Reset——那是營運決策，不在本 PR 範圍。 -->
+            <field name="has_admin_gui" eval="True" />
             <field name="post_deploy_init_type">none</field>
 
             <field name="is_active" eval="True" />
@@ -245,10 +357,11 @@
 
         <!-- MCP Server: Odoo — MCP built into the body, NOT a sidecar. Copies the
              hermes pilot contract; differs only in container internals (image,
-             app selector, internal SSE port 8000 handled by the image proxy).
-             Image pinned to git-sha 9d10944 (CI run 717), which already includes
-             the shared proxy Host+Origin fix (commit 4be649c, verified ancestor)
-             — so the design 階段4「複製前必補 proxy Origin」item is satisfied. -->
+             app selector, internal port 8000 handled by the image proxy).
+             Image 現行釘在 git-sha 7b5944c4（2026-07-14 commit 6fb93163 重釘，
+             取代首建的 9d10944）。proxy Host+Origin 這一關對這顆 image 由 stg 實測
+             直接證成（#708：走 admin proxy 的 /mcp 全綠，見下方 GAP-O1 段），
+             不再依賴「commit 4be649c 是 9d10944 祖先」那條對舊 image 的推論。 -->
         <record id="cloud_app_mcp_odoo" model="woow_paas_platform.cloud_app_template">
             <field name="name">Odoo MCP Server</field>
             <field name="slug">mcp-odoo</field>
@@ -264,15 +377,25 @@
                  config.nonSensitive.mcp_server OVERRIDES the chart's hermes-shaped
                  default config (chart default command='hermes-mcp-server'); without it
                  odoo's child process never spawns → MCP endpoint silent 502 (GAP-O1).
-                 GAP-O1: odoo-mcp-server 0.1.3 is stdio-only (no `odoo-mcp-server`
-                 console script, no transport flag); the correct launch wraps the stdio
-                 server via mcp-admin-core's mcp_sse_wrapper. Verified by woow-mcp-server
-                 (SSE handshake 200 + MCP initialize + list_tools 7 tools). odoo's MCP
-                 subprocess needs NO sensitive config to start. -->
+                 GAP-O1（#708 依現行釘的 image 7b5944c4 重寫）：這顆 image 裝的是
+                 tuanle96 odoo-mcp（dist woow_odoo_mcp_server 1.0.0 / odoo_mcp 1.1.0），
+                 沒有 mcp_server_odoo 模組，且自帶 console script odoo-mcp、原生支援
+                 transport=streamable-http，故直跑 console script、不經 mcp-admin-core
+                 的 mcp_sse_wrapper（形狀與 cloud_app_mcp_odoo_manage 一致）。
+                 舊註記的「odoo-mcp-server 0.1.3 stdio-only、須經 wrapper 包」是首建
+                 image 9d10944 的事實，2026-07-14 重釘（commit 6fb93163）後就不成立，
+                 但同一個 JSON 裡的 command/args 漏改，之後每一台新實例的 /mcp 一律
+                 502（wrapper 內 ModuleNotFoundError: mcp_server_odoo，且該 traceback
+                 被 logging 設定吞掉、pod log 看起來健康）。
+                 ⚠ 重釘 image 時必須同步實查新 image 的 MCP 入口並覆核本區 command/args；
+                 seed 是 seed-if-absent（/data/config.json 存在就跳過），改這裡只止血
+                 未來的新部署，救不了既有實例。
+                 stg 實測（#708，svc-fbc97612）：initialize 200、tools/list 41 tools、
+                 tools/call 真的打到 Odoo XML-RPC。odoo 子行程啟動仍不需 sensitive。 -->
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/mcp-server</field>
             <field name="helm_chart_version">0.1.5</field>
-            <field name="helm_default_values">{"app": "odoo", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/odoo-mcp-admin", "tag": "7b5944c483779b35f74903b9a875440a06577888@sha256:f76fc569565aadeff34d5a7a6515b89959d9136f0c349f4f0f0d0a4073d67876"}, "service": {"port": 8080}, "envPrefix": "", "persistence": {"enabled": true, "size": "5Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "128Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}, "nonSensitive": {"mcp_server": {"command": "python", "args": ["-m", "mcp_admin_core.mcp_sse_wrapper", "mcp_server_odoo.server:server", "--port", "8000"], "port": 8000, "env_prefix": ""}}}}</field>
+            <field name="helm_default_values">{"app": "odoo", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/odoo-mcp-admin", "tag": "7b5944c483779b35f74903b9a875440a06577888@sha256:f76fc569565aadeff34d5a7a6515b89959d9136f0c349f4f0f0d0a4073d67876"}, "service": {"port": 8080}, "envPrefix": "", "persistence": {"enabled": true, "size": "5Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "128Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}, "nonSensitive": {"mcp_server": {"command": "odoo-mcp", "args": ["--transport", "streamable-http", "--host", "127.0.0.1", "--port", "8000"], "port": 8000, "env_prefix": ""}}}}</field>
             <field name="helm_value_specs">{"required": [], "optional": []}</field>
 
             <!-- Service Configuration -->
@@ -317,17 +440,24 @@
             <field name="name">Odoo Manage MCP</field>
             <field name="slug">mcp-odoo-manage</field>
             <field name="description">Odoo Manage MCP — 以 API Key 連接目標 Odoo，全模組 CRUD 操作</field>
-            <field name="full_description">Odoo Manage MCP server：透過 API Key 連接目標 Odoo
-                實例，提供跨全模組的 CRUD 操作能力（無個人權限範圍限制），適合小團隊統一管理。
-                租戶前置需求：目標 Odoo 需 (1) 建立 API Key（設定 → 開發人員 → API 金鑰），
-                (2) 安裝提供 /mcp 認證端點的 MCP addon 以啟用權限模型。</field>
+            <field name="full_description">Odoo Manage MCP server：以 Odoo API Key 經原生
+                XML-RPC 連接目標 Odoo 實例，提供跨全模組的 CRUD（建立／讀取／更新／刪除）
+                操作能力，適合小團隊統一管理。
+                ⚠ 權限範圍：本服務「不」在 MCP 這一層限縮可存取的模組與動作——所有操作
+                都以該 API Key 所屬的 Odoo 使用者身分執行，該使用者能做的讀取、寫入與
+                刪除，接上的 AI 用戶端全都做得到，且無法只開放其中一部分。請依最小權限
+                原則，另建一個權限範圍相稱的 Odoo 使用者來產生金鑰，不要拿管理員帳號的
+                金鑰接上。
+                租戶前置需求：於目標 Odoo 建立 API Key（設定 → 開發人員 → API 金鑰），
+                並於本服務 admin 介面的 Connection 頁填入 Odoo 網址、資料庫名稱、
+                使用者與該金鑰。</field>
             <field name="category">mcp</field>
             <field name="tags">["mcp", "odoo", "mcp-server", "manage", "ai"]</field>
 
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/mcp-server</field>
             <field name="helm_chart_version">0.1.5</field>
-            <field name="helm_default_values">{"app": "odoo-manage", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/odoo-manage-mcp-admin", "tag": "5d321063fcefdbda729232a407b0dda51c328118@sha256:32cb6c7ddf2269daef6ce0f30e87449355a8e39048b97dd70b14ced6ddc762cb"}, "service": {"port": 8080}, "envPrefix": "", "persistence": {"enabled": true, "size": "5Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "128Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}, "nonSensitive": {"mcp_server": {"command": "mcp-server-odoo", "args": ["--transport", "streamable-http", "--host", "127.0.0.1", "--port", "8000"], "port": 8000, "env_prefix": ""}}}}</field>
+            <field name="helm_default_values">{"app": "odoo-manage", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/odoo-manage-mcp-admin", "tag": "614ae663fadd91c76972f60017a76d2627bea87e@sha256:1122f1022942c65bb72a033f62d417311173dfe5f864358c8d4393bd623f4f8f"}, "service": {"port": 8080}, "envPrefix": "", "persistence": {"enabled": true, "size": "5Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "128Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}, "nonSensitive": {"mcp_server": {"command": "mcp-server-odoo", "args": ["--transport", "streamable-http", "--host", "127.0.0.1", "--port", "8000"], "port": 8000, "env_prefix": ""}}}}</field>
             <field name="helm_value_specs">{"required": [], "optional": []}</field>
 
             <field name="default_port">8080</field>
@@ -622,7 +752,7 @@
                  kubernetes.io/arch=amd64；image 僅 amd64，排到 arm64 會 exec format
                  error CrashLoop，且 helm deep-merge 用 {} 蓋不掉、清除得寫 null）、
                  persistence.storageClass（平台 _inject_storage_class 注入）。 -->
-            <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/woowtech-ha","tag":"20260722.2329@sha256:73a9faf98d3037bf48560e670f811141bdc1125cb2ea63aa05e4efe21e7cb9c4"},"persistence":{"mountPath":"/config","size":"5Gi"},"service":{"port":8123,"targetPort":8123},"ingress":{"enabled":false,"host":"","className":""},"haProxy":{"seedConfiguration":true,"useXForwardedFor":true,"trustedProxies":["10.42.0.0/16"]},"resources":{"requests":{"cpu":"250m","memory":"512Mi"},"limits":{"cpu":"1","memory":"1Gi"}}}</field>
+            <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/woowtech-ha","tag":"20260817.0537@sha256:163cd60c25119d8aa9d945784a59d161f1ebb5f3c5fd8f36bb6816994bc9b55f"},"persistence":{"mountPath":"/config","size":"5Gi"},"service":{"port":8123,"targetPort":8123},"ingress":{"enabled":false,"host":"","className":""},"haProxy":{"seedConfiguration":true,"useXForwardedFor":true,"trustedProxies":["10.42.0.0/16"]},"resources":{"requests":{"cpu":"250m","memory":"512Mi"},"limits":{"cpu":"1","memory":"1Gi"}}}</field>
             <field name="default_port">8123</field>
             <field name="ingress_enabled" eval="True"/>
             <field name="min_vcpu">1</field>
@@ -746,8 +876,8 @@
 
              ⚠ 與既有 cloud_app_mcp_hermes（slug mcp-hermes、chart mcp-server、image
              hermes-mcp-admin）是**不同產品**：那是 Hermes 的 MCP server，本筆是 Hermes
-             Agent 完整應用（gateway + webui + dashboard）。xmlid／slug／顯示名刻意區隔，
-             勿 reuse、勿互抄 helm values。
+             Agent 完整應用（gateway + dashboard；chart 0.1.3 起 webui 合併進 nginx `/`）。
+             xmlid／slug／顯示名刻意區隔，勿 reuse、勿互抄 helm values。
 
              **已定價開賣**（#494，Eugene 2026-07-31 拍板月 4500／年 36000＋7 天 trial）：
              is_hidden=False ＋ 掛 plan_hermes_agent_{monthly,yearly}（links.xml）。
@@ -773,6 +903,10 @@
              - webui＝上游 ghcr.io/nesquena/hermes-webui 鏡像進 jcr-prod（平台鐵律零
                :latest／全雙釘），鏡像走 CI mirror workflow（run #1203）。已補釘
                20260727.2228@sha256:98d48222…（digest 向 registry 直驗，非轉抄）。
+               ⚠ **chart 0.1.3 起 webui container 已移除**（nginx `/` 直連 dashboard），
+               seed 的 `webui` block 不再寫入；本 image 段保留為「曾用過」的歷史註解
+               （mirror 流程仍在跑，新 chart 版號若回退到 0.1.x 可直接取回），不再被
+               seed 引用。
                ⚠ 該 tag 是 **multi-arch OCI index**（amd64／arm64／2 個 attestation），
                此處釘的是 **amd64 子 manifest** 的 digest、不是 index digest
                （index＝sha256:b42e3ea3…）——與 open-design-console 現行 seed 同款
@@ -792,12 +926,13 @@
                雙釘 tag@sha256，非 jcr-prod 的基礎設施 image 只要求非空且非 latest。
                （要不要把它也升級成 digest 雙釘＝跨 repo 政策題，待裁決，不在本 PR 自作主張。）
 
-             auth（單一閘，Eugene 2026-07-27 拍板 Q3；形狀依契約 v1.1 修訂）：平台生成
-             **一組** admin_password 餵四個入口，故 has_admin_gui=True 複用 #357 供給鏈
-             （config.sensitive.admin_password；不入 git values）。Elmo 原本三組獨立密碼
-             不沿用。⚠ 四個入口的**認證形狀不同**（v1.1 §8.3 實測）：
-               - `/`（webui）／`/console/`（ttyd）→ nginx basic-auth
-               - `/dashboard/` → 上游**表單登入**，nginx 對此 location **關 basic-auth**
+             auth（單一閘，Eugene 2026-07-27 拍板 Q3；chart 0.1.3 起改為三個入口）：
+             平台生成 **一組** admin_password 餵三個入口，故 has_admin_gui=True 複用
+             #357 供給鏈（config.sensitive.admin_password；不入 git values）。Elmo
+             原本三組獨立密碼不沿用。⚠ 三個入口的**認證形狀不同**（v1.1 §8.3 實測，
+             0.1.3 移除 webui container 後）：
+               - `/console/`（ttyd）→ nginx basic-auth（仍由 authProxy 外閘承擔）
+               - `/`（dashboard）→ 上游**表單登入**，nginx 對此 location **關 basic-auth**
                  （否則雙重登入形狀疊加）；dashboard 非 loopback 綁定時 fail-closed（無
                  auth provider 直接拒啟動），且上游已移除 HERMES_DASHBOARD_INSECURE。
                  chart 另須自產**穩定 session secret**（lookup 持久化），否則 pod 一重啟
@@ -805,7 +940,8 @@
              seed 明寫的 auth 相關鍵（皆為「設錯就靜默失去防護」型，故重申防 chart
              預設漂移；鍵名與形狀已對 charts/hermes-agent/values.yaml 逐一核對）：
                - `authProxy.enabled` / `basicAuth`（**扁平布林**，不是巢狀物件）/
-                 `basicAuthUsername`：webui 路由的外閘
+                 `basicAuthUsername`：console 路由的外閘（0.1.3 起 webui 已合進 `/`，
+                 不再由 nginx basic-auth 蓋）
                - `authProxy.workerProcesses: 2`：nginx 基底 image 預設
                  `worker_processes auto`＝每個 **host** CPU 一個 worker 且不看 cgroup，
                  排到 256 vCPU node 會 fork 256 個 worker 撐爆 128Mi limit →
@@ -813,24 +949,23 @@
                - `dashboard.bindHost: "0.0.0.0"`：**非 loopback 才會讓上游的 fail-closed
                  auth gate 保持啟用**（改 127.0.0.1 等於把 dashboard 自身登入關掉、只剩
                  nginx 一層）。pod IP 在租戶 NetworkPolicy 下本來就出不了 namespace。
-               - `dashboard.externalPath: "/dashboard"`：**必須與平台注入的
-                 `config.dashboardPublicUrl` 尾綴一字不差**（空字串＝dashboard 根本不對外
-                 路由，但平台照樣把 URL 當 OAuth redirect_uri 發出去 → 靜默死鏈）。
-                 跨層 lock-step 由 test_dashboard_external_path_matches_injector 守。
                - `dashboard.username`：與 `authProxy.basicAuthUsername` 同為 admin
                  （單一憑證的帳號面）
+             （0.1.x 的 `dashboard.externalPath: "/dashboard"` 在 0.1.3 起移除——
+             dashboard 不再走 subpath，nginx `/` 直連；OAuth redirect_uri 由平台
+             `_inject_dashboard_public_url` 直接打 root URL）
 
              LLM key（拍板 Q2）：租戶自帶，走 helm_value_specs optional password 欄位
              （auth.minimaxApiKey／auth.openrouterApiKey → chart Secret → env）。Elmo 把
              key echo 進共享 PVC 的 .env(644) 讓 terminal exec 可讀，**不沿用**。
 
-             dashboard 對外形態（拍板 Q1，v1.1 §8.2 實測確認上游原生支援 subpath：
-             X-Forwarded-Prefix 會重建 302 Location／OAuth redirect_uri／cookie Path／
-             SPA 資產）：走 https://{subdomain}.{paas_domain}/dashboard。該 URL 是
-             per-service 值、放不進 template seed，由平台
-             `CloudService._inject_dashboard_public_url` 每次部署注入；⚠ 注入值**必須已含
-             /dashboard 前綴**——上游拿它當 OAuth redirect_uri 的權威來源，少了前綴回呼
-             就打到 webui（v1.1 §8.8）。
+             dashboard 對外形態（chart 0.1.3）：root URL = `https://{subdomain}.{paas_domain}`。
+             0.1.3 移除 webui container，nginx `/` 直連 dashboard，故 OAuth
+             ``redirect_uri``／SPA 資產路徑／cookie Path 一律以 root 為基準（v1.1 §8.2
+             0.1.3 實測）。該 URL 是 per-service 值、放不進 template seed，由平台
+             `CloudService._inject_dashboard_public_url` 每次部署注入；⚠ 注入值**必須是
+             root URL**——上游拿它當 OAuth ``redirect_uri`` 的權威來源；先前 0.1.x
+             注入 ``/dashboard`` suffix，0.1.3 移除 webui 後變成多餘且回呼打到 404 subpath。
 
              刻意不寫進本 seed 的鍵（寫了會蓋掉平台注入或 chart 契約）：
              - persistence.*.storageClass／imagePullSecrets：平台 injector 注入
@@ -855,12 +990,13 @@
         <record id="cloud_app_hermes_agent" model="woow_paas_platform.cloud_app_template">
             <field name="name">Hermes Agent</field>
             <field name="slug">hermes-agent</field>
-            <field name="description">Hermes AI Agent 完整應用（gateway + Web UI + dashboard），單一憑證登入</field>
-            <field name="full_description">Hermes Agent 雲端完整應用：agent gateway、Web UI
-                與 dashboard 同一實例，並附 console（ttyd 網頁終端）可直接進入 agent 容器操作。
-                Web UI 與 console 以 HTTP basic-auth 憑證登入，dashboard 走它自己的表單登入，
-                三者共用同一組憑證（帳號 admin、密碼由平台建立服務時產生並一次性顯示、可重置）。
-                dashboard 以 /dashboard 子路徑對外，供 MCP OAuth 授權流程回呼使用。
+            <field name="description">Hermes AI Agent 完整應用（gateway + dashboard），單一憑證登入</field>
+            <field name="full_description">Hermes Agent 雲端完整應用：agent gateway 與
+                dashboard 同一實例（chart 0.1.3 起合併到 nginx `/`），並附 console（ttyd 網頁終端）
+                可直接進入 agent 容器操作。console 以 HTTP basic-auth 憑證登入，dashboard 走它
+                自己的表單登入，兩者共用同一組憑證（帳號 admin、密碼由平台建立服務時產生並一次
+                性顯示、可重置）。dashboard 以 root URL（chart 0.1.3 起，nginx `/` 直連）對外，
+                供 MCP OAuth 授權流程回呼使用。
                 agent 的 gateway API 以 /gateway 子路徑對外（Bearer 驗證，不套 basic-auth），
                 對應的 Gateway API Key 於建立服務與重置密碼時一次性顯示，供 MCP 等外部客戶端連線。LLM 供應商金鑰
                 （MiniMax／OpenRouter）由租戶自行填入，存於 Kubernetes Secret、不落磁碟。
@@ -873,12 +1009,27 @@
                  契約 v1；只放平台 pin/覆寫值。 -->
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/hermes-agent</field>
-            <!-- #530：0.1.0 → 0.1.1（charts PR woow-paas-charts#69 加 gateway 反向代理
-                 子路徑）。chart 版本 bump 與本欄位必須同一次變更一起動，否則平台指向
-                 不存在的 chart 版本；平台端沒有 chart values 的任何副本，**這條沒有
-                 測試守得住**，是已知的人工紀律缺口。 -->
-            <field name="helm_chart_version">0.1.1</field>
-            <field name="helm_default_values">{"image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/hermes-agent", "tag": "20260727.1502@sha256:ce3c49a7f332a6bad607d81cbd7fefe76062263469595c1a19ba80f27629f00f"}, "agent": {"resources": {"requests": {"cpu": "200m", "memory": "1Gi"}, "limits": {"cpu": "2", "memory": "6Gi"}}}, "dashboard": {"bindHost": "0.0.0.0", "externalPath": "/dashboard", "username": "admin"}, "gateway": {"externalPath": "/gateway"}, "webui": {"image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/hermes-webui", "tag": "20260727.2228@sha256:98d48222bab03b385e6417875c0605d32c88a98b62e68e80c87fdc156b4c3f5f"}, "resources": {"requests": {"cpu": "250m", "memory": "512Mi"}, "limits": {"cpu": "1", "memory": "2Gi"}}}, "service": {"port": 8080, "name": ""}, "authProxy": {"enabled": true, "basicAuth": true, "basicAuthUsername": "admin", "workerProcesses": 2, "image": {"repository": "nginxinc/nginx-unprivileged", "tag": "1.27-alpine"}}, "console": {"enabled": true, "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/open-design-console", "tag": "20260720.0332@sha256:2b91c4ad4a6a94d1735c8aa7a6c18ec05491d9db31fa455f5e5da1cbb52b0f92"}, "externalPath": "/console", "resources": {"requests": {"cpu": "50m", "memory": "64Mi"}, "limits": {"cpu": "200m", "memory": "512Mi"}}}, "persistence": {"data": {"size": "5Gi"}}, "postgresql": {"enabled": false}, "redis": {"enabled": false}}</field>
+            <!-- 0.1.1 → 0.1.3（charts PR woow-paas-charts 移除 webui container、dashboard
+                 移到 nginx `/`）。對外 contract：`_inject_dashboard_public_url` 對
+                 hermes-agent slug 輸出 root URL（不再是 `https://.../dashboard`）。
+                 chart 版本 bump 與本欄位必須同一次變更一起動，否則平台指向不存在
+                 的 chart 版本；平台端沒有 chart values 的任何副本，**這條沒有測試
+                 守得住**，是已知的人工紀律缺口。
+                 0.1.3 → 0.2.0（#717：租戶自裝 CLI 的落點收斂）。chart 新增十個安裝器
+                 落點覆寫 env ＋ cli-landing-init initContainer。**helm_default_values
+                 不需要新增任何鍵**——chart 的 cliLanding.* 全部自帶預設值，平台端零
+                 覆寫。對外 contract 不變（埠、路由、URL 形狀都沒動）。
+                 ⚠ 既有租戶升級一律 `helm get values <rel> -o yaml > vals.yaml` 再
+                 `-f vals.yaml`，⛔ 不可用 helm 的 reuse-values 旗標（XML 註解不能寫
+                 那兩個連字號）：它會丟掉 0.2.0 的新預設值，
+                 helm exit 0 但 env 與 initContainer 一個都不會出現（症狀與「沒升」
+                 不可區分）。判別是否真的升成功見
+                 docs/decisions/hermes-agent-installer-landing-env.md 的判別法 A/B。
+                 migration：本 xmlid 首建於 ea5433ab（2026-07-28），晚於 noupdate=0
+                 收斂 d1cb2e32（2026-04-06），故既有 DB 的 ir.model.data.noupdate=False、
+                 `-u` 直接重套本欄位，無需 migration。 -->
+            <field name="helm_chart_version">0.2.0</field>
+            <field name="helm_default_values">{"image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/hermes-agent", "tag": "20260727.1502@sha256:ce3c49a7f332a6bad607d81cbd7fefe76062263469595c1a19ba80f27629f00f"}, "agent": {"resources": {"requests": {"cpu": "200m", "memory": "1Gi"}, "limits": {"cpu": "2", "memory": "6Gi"}}}, "dashboard": {"bindHost": "0.0.0.0", "username": "admin"}, "gateway": {"externalPath": "/gateway"}, "service": {"port": 8080, "name": ""}, "authProxy": {"enabled": true, "basicAuth": true, "basicAuthUsername": "admin", "workerProcesses": 2, "image": {"repository": "nginxinc/nginx-unprivileged", "tag": "1.27-alpine"}}, "console": {"enabled": true, "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/open-design-console", "tag": "20260720.0332@sha256:2b91c4ad4a6a94d1735c8aa7a6c18ec05491d9db31fa455f5e5da1cbb52b0f92"}, "externalPath": "/console", "resources": {"requests": {"cpu": "50m", "memory": "64Mi"}, "limits": {"cpu": "200m", "memory": "512Mi"}}}, "persistence": {"data": {"size": "5Gi"}}, "postgresql": {"enabled": false}, "redis": {"enabled": false}}</field>
             <field name="helm_value_specs">{"required": [], "optional": [
                 {"key": "auth.minimaxApiKey", "label": "MiniMax API Key", "type": "password",
                 "description": "自帶 MiniMax API Key（選填）；存入 Kubernetes Secret 並以環境變數注入 agent，不寫入磁碟"},
@@ -887,45 +1038,50 @@
                 ]}</field>
 
             <!-- Service Configuration。default_port 8080＝auth-proxy sidecar 唯一對外埠
-                 （agent gateway 8642／dashboard 9119／webui 8787 全綁 pod 內，由 proxy 分流）。
+                 （chart 0.1.3：agent gateway 8642／dashboard 9119／console ttyd 全綁
+                 pod 內，由 auth-proxy 分流；webui 8787 已隨 chart 0.1.3 一併移除）。
                  operator 的 Cloudflare expose 取「名稱排序第一個非 headless Service」＋
                  http-like port 猜測清單，故主 Service 必須是裸 release fullname ＋ 8080
                  （service.name 明寫空字串＝chart fullname；契約 invariant 1）。 -->
             <field name="default_port">8080</field>
             <field name="ingress_enabled" eval="True"/>
 
-            <!-- Resource Requirements（v1.1 §8.8 定值）。min_vcpu／min_ram_gb 驅動
-                 workspace ns quota（cloud_service._compute_ns_quota：
+            <!-- Resource Requirements（v1.1 §8.8 定值；chart 0.1.3 已移除 webui
+                 container，本段合計即 0.1.3 現況）。min_vcpu／min_ram_gb 驅動 workspace ns
+                 quota（cloud_service._compute_ns_quota：
                  max(sum(存活 service allocated_*)×3, floor)）。本 template 的 plan
                  刻意不設 cs_* → allocated_* 走 min_* fallback（見 subscription_products.xml
                  的 plan_hermes_agent_* 註解）。3× headroom 必須蓋得住**全容器** limits：
-                 - memory：agent 6Gi + webui 2Gi + console 512Mi + authProxy sidecar
-                   128Mi ＝ 8.625Gi → min_ram_gb = 3.0（÷3 上取；無 DB 拓撲）
-                 - cpu：agent 2 + webui 1 + console 0.2 + authProxy sidecar 0.2 ＝ 3.4
-                   → min_vcpu = 2（÷3 上取，同一條規則）
-                 ⚠ **min_vcpu 1→2 是 #456 的修法**（2026-07-28 stg 實證）：舊值的邊際
-                 貢獻只有 +3 < 3.4，但空 workspace 有 8 vCPU floor 蓋著，所以 #424① 的
-                 E2E 全綠、**一放進既有服務的共用 workspace 才露餡**——主 pod 永久卡
-                 FailedCreate(exceeded quota: limits.cpu=3200m)，而 DB／UI 照樣顯示
-                 Running（調度失敗不反映在服務狀態）。守線因此斷言**邊際貢獻**而非含
-                 floor 的 quota 值，否則缺陷值 1 會假綠。
-                 ⚠ RAM headroom 只剩 0.375Gi（9Gi − 8.625Gi）、CPU 剩 2.6：**任何一邊
-                 加容器或調高 limits 都必須同時重算本欄**——守線＝
+                 - memory：agent 6Gi + console 512Mi + authProxy sidecar 128Mi
+                   ＝ 6.625Gi → min_ram_gb = 2.5（÷3 上取的最小夠用值；無 DB 拓撲）
+                 - cpu：agent 2 + console 0.2 + authProxy sidecar 0.2 ＝ 2.4
+                   → min_vcpu = 1（÷3 上取的最小夠用值）
+                 ⚠ **兩欄皆為 minimal sufficient step**——quota 是 workspace 級天花板，
+                 灌水等於把同 workspace 其他服務的保護一起放鬆；
+                 test_min_ram_is_the_minimal_sufficient_step／
+                 test_min_vcpu_is_the_minimal_sufficient_step 兩條「擋太大」守線鎖死。
+                 #456（2026-07-28 stg 實證）曾因 min_vcpu=1 的邊際貢獻只有 +3、蓋不住
+                 0.1.2 時代（含 webui）合計 3.4 vCPU 而在共用 workspace 炸開
+                 （FailedCreate exceeded quota，DB／UI 照樣顯示 Running，調度失敗不反映在
+                 服務狀態）；0.1.3 移除 webui 後合計降到 2.4 < 3，min_vcpu=1 的根因已消失，
+                 故調降回 1。
+                 ⚠ RAM headroom 只剩 0.875Gi（7.5Gi − 6.625Gi）、CPU 剩 0.6（3 − 2.4）：
+                 **任何一邊加容器或調高 limits 都必須同時重算本欄**——守線＝
                  test_min_ram_covers_all_container_limits ／
                  test_min_vcpu_covers_all_container_limits（皆由 seed values 現算、不硬編，
                  加了就紅；另各有一條擋灌水的 minimal-step）。#380 血訓＝quota 不足 →
                  pod FailedCreate(exceeded quota) → 服務對外永遠 CF 502。
-                 min_storage_gb 5＝單顆 data PVC（agent /opt/data ＋ webui ~/.hermes 共用
-                 同一顆 RWO，沿用 Elmo 原架構）。
+                 min_storage_gb 5＝單顆 data PVC（agent /opt/data，沿用 Elmo 原架構；
+                 webui ~/.hermes 已併入同 PVC 但 0.1.3 該目錄不再寫入）。
                  ⚠ **未來若替本 template 寫專用 provision 端點**（如 HA PaaS 的
                  /api/ha-paas/provision），建 cloud_service 時務必比照 marketplace
                  路徑（controllers/paas.py `_create_service`）帶上 allocated_vcpu／
                  allocated_ram_gb／allocated_storage_gb（`_allocated_vals_from`）——
-                 這三欄無預設值，漏帶則 quota 落到 floor 8Gi < 本服務 8.63Gi 全容器
-                 limits → pod FailedCreate。ha_paas.py 的 provision 沒帶是因為 HA 只
-                 吃 1Gi、floor 蓋得住，勿照抄。 -->
-            <field name="min_vcpu">2</field>
-            <field name="min_ram_gb">3.0</field>
+                 這三欄無預設值，漏帶則 quota 落到 floor 8Gi ≥ 本服務 6.625Gi 全容器
+                 limits，目前仍蓋得住；一旦本服務合計超過 8Gi floor 才會 pod FailedCreate。
+                 ha_paas.py 的 provision 沒帶是因為 HA 只吃 1Gi、floor 蓋得住，勿照抄。 -->
+            <field name="min_vcpu">1</field>
+            <field name="min_ram_gb">2.5</field>
             <field name="min_storage_gb">5</field>
 
             <!-- MCP 能力不在本 template：本體是完整應用，其 MCP 是「agent 去接外部 MCP
@@ -934,11 +1090,12 @@
             <field name="mcp_enabled" eval="False"/>
             <field name="has_admin_gui" eval="True"/>
             <!-- #449 密碼載體＝helm_secret：本 chart 的 PVC 掛 /opt/data，**沒有**
-                 /data/config.json；admin_password 的權威來源是 chart Secret，四個入口
-                 都在 pod 啟動時讀它（nginx htpasswd 由 initContainer 從 Secret 算出、
-                 webui／dashboard 走 env）。#424① E2E 實錄：沿用預設 config_json 時
+                 /data/config.json；admin_password 的權威來源是 chart Secret，三個入口
+                 （chart 0.1.3 起 webui 已合進 `/`）都在 pod 啟動時讀它（nginx htpasswd
+                 由 initContainer 從 Secret 算出、dashboard 走 env、console 由 nginx
+                 basic-auth 蓋）。#424① E2E 實錄：沿用預設 config_json 時
                  operator 對不存在的檔 exec patch → 備份未建成 → rollback 也失敗 → 500，
-                 密碼永遠輪替不了（fail-safe 有效、不鎖死，但四入口唯一憑證換不掉）。
+                 密碼永遠輪替不了（fail-safe 有效、不鎖死，但唯一憑證換不掉）。
                  ⚠ chart 的 Deployment **沒有** checksum/secret annotation（只有
                  checksum/config 與 checksum/authproxy-config），所以 helm upgrade 改了
                  Secret 不會自動滾 pod —— operator 的 helm_secret 路必須顯式 rollout
@@ -946,11 +1103,17 @@
             <field name="admin_password_carrier">helm_secret</field>
             <field name="post_deploy_init_type">none</field>
 
-            <!-- 每帳號限一：agent limits 6Gi 是平台最重的單一容器（全容器合計 8.625Gi
-                 ／3.4 CPU），避免同帳號開多台把 workspace quota 吃乾。#494 定價上架後
-                 仍維持 1——這條的理由是資源面而非「內部試用」，要放寬得先重算 quota
-                 模型。守線＝test_max_per_partner_one。 -->
-            <field name="max_per_partner" eval="1"/>
+            <!-- 每帳號**不限台數**：0＝不限（欄位語意見 cloud_app_template.py 的 help），
+                 `CloudService.create()` 的計數守衛對本 template 整條不進迴圈、不取
+                 advisory lock。資源面事實（與上方 min_* 同一份 0.1.3 現況）仍在：agent
+                 limits 6Gi、全容器合計 6.625Gi／2.4 CPU，是平台上最重的服務之一（單一
+                 容器僅次於 cloud_app_opendesign 的 8Gi）——但這只決定每台佔多少
+                 workspace ns quota（`_compute_ns_quota` 以 workspace 內存活 service 的
+                 allocated_* ×3 動態重算，多一台 quota 就跟著長），不再換算成每帳號的
+                 台數上限。⚠ 這一行不可省略：0 與欄位 default 同值，刪掉之後 DB 讀起來
+                 一樣是 0，只有 seed XML 本體看得出差別——守線＝
+                 test_max_per_partner_unlimited（該條同時驗 DB 值與本行的存在）。 -->
+            <field name="max_per_partner" eval="0"/>
 
             <field name="is_active" eval="True"/>
             <!-- #494 定價拍板解封（曝光層）；conceal_instances 刻意不設，見上方註解。 -->
@@ -1198,6 +1361,185 @@
             <field name="workload_type">vm</field>
         </record>
 
+        <!-- Home Assistant 完整版（ha-full，#661）：Home Assistant **Container**
+             安裝方式（官方兩種安裝方式之一）的完整整合集版本。走 #380 金樣板上架 SOP；
+             chart＝woow-paas-charts 的 charts/home-assistant-full 0.1.1（本 seed 的鍵名
+             已對 registry 上的 0.1.1 逐鍵核對——`helm show chart` 實拉成功，chart digest
+             sha256:557567721d303c8ffba2535d9dbc0ef7d23a2cb2a80096d89150a6a52f600aed；
+             非轉抄交接 note）。
+
+             ⚠ **三條並行產品線，不是升級關係**（chart Chart.yaml「THREE-WAY PRODUCT
+             SPLIT」）：
+               - 本筆 ha-full：容器，image woowtech-ha-full，整合集完整（911 個
+                 config-flow handler）、28 個 custom component 全部 dormant、無
+                 woow_provision。
+               - cloud_app_ha_paas（slug ha-paas）：容器，image woowtech-ha（整合精簡至
+                 ~125）、9 個 component、woow_provision 首開自動啟用。0 元自動開通、
+                 is_hidden=True、conceal_instances=True、max_per_partner=1。
+               - cloud_app_haos（slug haos）：KubeVirt VM 跑真正的 HAOS 作業系統
+                 （Supervisor／Add-on／HAOS 更新／備份）。
+             xmlid／slug／chart／image 刻意全部區隔，勿 reuse、勿互抄 helm values。
+
+             ⚠ **不要把既有 ha-paas 租戶「升級」到本 template**（chart Chart.yaml 明令）。
+             既有租戶 PVC 上是 v1 的 seed 形狀（.storage 有參照 woow_provision 的 config
+             entry、configuration.yaml 被 append 過 http: 區塊），而 seed 用 `cp -rn`
+             永不覆寫 → 舊檔原封不動 → chart 會走進「租戶自有 http 區塊」分支只印
+             WARNING。換 chart ＋ 換 image **不是升級，是資料形狀遷移**，要做須另寫 runbook。
+
+             ⚠ **刻意不設 max_per_partner**（與 ha-paas 的 1 相反，這是刻意的）：本線與
+             精簡版無關聯、可並存，租戶想開幾台都可以。也不進
+             `models/cloud_app_template.py` 的 `_DEFAULT_GLOBAL_INSTANCE_CAPS`
+             （非限量商品）。
+
+             ⚠ 原子變更鐵律（chart Chart.yaml「OPERATOR COUPLING」）：
+             helm_chart_version 與 helm_default_values.image.* **必須同一次變更一起動**。
+             chart templates 刻意移除 `default .Chart.AppVersion` fallback（appVersion
+             2026.7.2 追的是 HA core，woowtech registry 永遠不會有該 tag），image.tag
+             留空會 render 失敗而非靜默產生拉不到的 image。守線測試＝
+             src/tests/test_ha_full_seed_661.py（chart name 含 `-full` ⟺ image repo 含
+             `-full`，雙向）。
+
+             ⚠ **chart 必須 0.1.1，不可回退 0.1.0**：0.1.0 的
+             `seed.requiredComponents` 預設值是 `woow_panel_frontend`——那個目錄是**前端
+             建置專案**（package.json／rollup.config.js／src/），沒有 manifest.json 也沒有
+             `__init__.py`，不是 HA integration。sentinel 3 檢查的是 */manifest.json，
+             所以該錨點永遠過不了，首次真叢集安裝每個租戶都卡 Init:CrashLoopBackOff
+             重啟 10 次。0.1.1 已改為 woow_cover_entity（第一方、v2-only、且**已確認帶
+             manifest.json**——第三個條件正是 0.1.0 挑錨點時漏掉的）。
+
+             ✅ image.tag 已釘首建真值（paas-odoo-ci run #1864、2026-08-07 01:04 UTC；
+             digest 經 skopeo 從 registry 反讀 manifest bytes 自算 sha256 硬驗，非
+             best-effort）。**本線刻意不推 `:latest`**，tag 是唯一可變座標，故一律雙釘
+             tag@sha256。 -->
+        <record id="cloud_app_ha_full" model="woow_paas_platform.cloud_app_template">
+            <field name="name">Home Assistant 完整版</field>
+            <field name="slug">ha-full</field>
+            <field name="description">容器版 Home Assistant，整合集完整（911 個設定入口）、28 個內建整合任你挑，1 vCPU／1 GB RAM／10 GB 磁碟</field>
+            <field name="full_description">Home Assistant 完整版雲端服務：採 Home Assistant 官方
+                兩種安裝方式中的 **Container** 方式，跑的是完整的 Home Assistant Core，
+                **整合集完全不做精簡**——911 個具設定入口的官方整合全部保留，可直接在
+                「設定 → 裝置與服務 → 新增整合」搜尋加入。另內建 28 個 woow 精選整合，
+                其中 26 個可直接從上述畫面加入。
+                首次開通後你拿到的是一套**乾淨的 Home Assistant**：所有內建整合都預先放好
+                但一律不自動啟用，由你自己挑要用哪些、什麼時候用——不會有任何你沒同意過的
+                裝置或自動化被預先建立。開通後於瀏覽器完成初始設定（建立你自己的管理者帳號）
+                即可使用；平台不持有你的 Home Assistant 帳密。
+                **本版沒有下列三項功能，購買前請務必確認**（這是 Home Assistant 官方對
+                Container 安裝方式的既有限制，非平台刪減）：**① 沒有 Add-on 商店**
+                （官方新稱「Apps」）；**② 沒有內建備份**；**③ 沒有一鍵更新**。
+                因此倚賴 Add-on 的整合（如 Thread、Z-Wave）在本版沒有現成支援。
+                若你需要 Add-on 商店、備份快照與系統一鍵更新，請改選「Home Assistant OS」
+                方案——那是跑完整 HAOS 作業系統的專屬虛擬機。
+                對外僅曝露 Home Assistant 網頁介面（8123 埠）。欠費停權時服務會停止
+                （資料磁碟保留），恢復繳費後啟動、資料原樣還在。
+                刪除服務即為全新開通——重新建立將使用全新的磁碟，不會沿用先前的資料；
+                原服務的資料磁碟依平台保留政策保留 7 天後回收，逾期無法復原。</field>
+            <field name="category">container</field>
+            <!-- 與 cloud_app_haos／cloud_app_ha_paas 同為 container 分類，讓 Home Assistant
+                 系列產品在前台同一格；租戶靠上面 full_description 的「沒有這三項」與
+                 HAOS 文案的「三項原生可用」一眼分辨。 -->
+            <field name="tags">["home-assistant", "smart-home", "container", "ha-full"]</field>
+
+            <field name="documentation_url">https://www.home-assistant.io/installation/</field>
+
+            <!-- Helm Configuration（OCI；chart 由 woow-paas-charts 發佈）。 -->
+            <field name="helm_repo_url"></field>
+            <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/home-assistant-full</field>
+            <field name="helm_chart_version">0.1.1</field>
+            <!-- 只放「平台 pin／覆寫」與「設錯就靜默失去性質」的鍵。逐鍵理由：
+
+                 - image.repository/tag：平台 pin 慣例（雙釘 tag@sha256）。見上方原子變更鐵律。
+                 - persistence.mountPath /config：HA config 目錄固定值，chart 明令不可改。
+                 - persistence.size 10Gi：與 min_storage_gb 齊（quota lockstep，見下）。
+                   ⚠ PVC 只能長大不能縮——縮小會讓整個 `helm upgrade` 被 API server 拒絕。
+                 - service.port/targetPort 8123：HA 前端埠，＝default_port。
+                 - ingress.*：對外走平台 subdomain + Cloudflare tunnel，故明寫關閉
+                   （沿用 ha-paas 形制；本 chart 有 ingress 區塊，與 haos 不同）。
+                 - haProxy 四鍵：見下方獨立說明。
+                 - resources：與 min_* 對齊（quota lockstep）。
+
+                 🔴 **haProxy 四個鍵全部顯式寫，不吃 chart 預設**。Cloudflare tunnel
+                 一定帶 `X-Forwarded-For`，而 aiohttp 在 `use_x_forwarded_for` 未開時對
+                 這種請求**一律回 400**。症狀極具欺騙性——pod `Running`、probe 全綠，但
+                 外部 100% 請求 400。四鍵現值與 chart 0.1.1 預設相同，明寫是防 chart 端
+                 預設漂移把反代閘關掉（Helm 對未知鍵靜默忽略，改名不會報錯、只會安靜地
+                 退回預設）。image 端已用真 busybox awk + 真 image 做過 A/B 對照實測：
+                 trusted_proxies 不含來源網段 → 帶 XFF 的請求 **400**；含 → **302 →
+                 /onboarding.html**（先重現 400 才證明得了機制生效）。
+                 trustedProxies＝woow-k3s 實際 Pod CIDR（4 node podCIDR 實查皆
+                 10.42.X.0/24 → cluster 10.42.0.0/16）。
+                 ⚠ 與 ha-paas 不同：本 chart 的 http 設定走 chart 管理的 `!include`
+                 fragment 且 fragmentManaged 預設每次啟動覆寫，所以 trustedProxies 設錯
+                 **可以用 helm upgrade 救回來**（v1 的 append-if-absent 是首次 provision
+                 限定，設錯一次就永久 400）。
+
+                 刻意**不**寫進本 seed 的鍵：
+                 - 🔴 **seed.requiredComponents**：chart 0.1.1 的預設值已經是正確的
+                   `["woow_cover_entity"]`（已對 registry 上的 0.1.1 `helm show values`
+                   核對，非轉抄）。覆寫它只會多一份會漂的複本，而這個鍵一旦寫錯是
+                   **fail-closed**（sentinel 3 把 pod 擋在 Init，看得見），不屬於上面
+                   「設錯就靜默失去性質」那一類，沒有明寫的理由。
+                   ⚠ 交接 note「ha-handoff」第 86 行的 helm_default_values 範本寫的是
+                   `{"requiredComponents":["woow_panel_frontend"]}`——**那正是 0.1.0 的
+                   錯錨點**，照抄等於把已修好的 bug 用 values 覆寫回去。該 note 第 128 行
+                   已自行標記此處待修。
+                 - imagePullSecrets：chart 預設已是 paas-registry（image 在私有 JCR），
+                   operator `_ensure_image_pull_secrets` 另有一層。
+                 - nodeSelector：chart 預設已釘 kubernetes.io/arch=amd64（image 僅
+                   amd64，排到 arm64 會 exec format error CrashLoop）。且 helm deep-merge
+                   下 `{}` 蓋不掉，要清得寫 null——所以連鍵都不該出現。
+                 - persistence.storageClass：平台 `_inject_storage_class` 每次部署注入。
+                 - networkPolicy.allowAllEgress：chart 預設 true 且**必須維持**（HACS
+                   要從 github.com 下載；DNS-only egress 會讓它變成裝不了東西的整合，
+                   且沒有清楚錯誤）。平台沒有理由覆寫。 -->
+            <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/woowtech-ha-full","tag":"20260807.0054@sha256:90ffa1089be1f60585f6e26ef318d93a79a940075da9e3ec0ae513e54b3d0a6a"},"persistence":{"mountPath":"/config","size":"10Gi"},"service":{"port":8123,"targetPort":8123},"ingress":{"enabled":false,"host":"","className":""},"haProxy":{"seedConfiguration":true,"useXForwardedFor":true,"trustedProxies":["10.42.0.0/16"],"fragmentManaged":true},"resources":{"requests":{"cpu":"500m","memory":"1Gi"},"limits":{"cpu":"2","memory":"2Gi"}}}</field>
+            <!-- 租戶無需（也不該）填任何部署參數：HA 的所有設定都在開通後於它自己的
+                 網頁介面完成。空 specs ＝ 前台不渲染任何自訂欄位。 -->
+            <field name="helm_value_specs">{"required": [], "optional": []}</field>
+
+            <!-- Service Configuration。8123＝HA 前端埠；對外＝平台 subdomain +
+                 Cloudflare tunnel。 -->
+            <field name="default_port">8123</field>
+            <field name="ingress_enabled" eval="True"/>
+
+            <!-- Resource Requirements —— quota lockstep（chart values.yaml「PLATFORM
+                 QUOTA LOCKSTEP」）。workspace ns quota ＝ 存活 service 的 allocated_*
+                 加總 × 3（`cloud_service._compute_ns_quota`），本 template 的 plan cs_*
+                 皆為 0 → allocated_* 走 fallback 取這三個 min_*（`_allocated_vals_from`）：
+                   Σlimits.cpu    = 2    → min_vcpu       = 1  貢獻 3 vCPU
+                   Σlimits.memory = 2Gi  → min_ram_gb     = 1.0 貢獻 3Gi
+                   PVC            = 10Gi → min_storage_gb = 10  貢獻 30Gi
+                 🔴 **min_ram_gb 不可低於 1.0**：填 0.5 只貢獻 1Gi，同 workspace 併存
+                 其他服務時 pod 會 `exceeded quota`，而唯一可見症狀是「服務永遠 CF 502」。
+                 ⚠ 日後把 limits.memory 調到 3Gi 以上，min_ram_gb 必須同一次調高。
+                 守線＝test_ha_full_seed_661.TestHaFullQuotaLockstep（由 seed values 現算、
+                 不硬編：改 resources／persistence.size 而不同步這裡就會紅）。 -->
+            <field name="min_vcpu">1</field>
+            <field name="min_ram_gb">1.0</field>
+            <field name="min_storage_gb">10</field>
+
+            <!-- MCP 能力不在本 template（HA 的 MCP 生態由 smart_home／mcp-* 系列承擔）。 -->
+            <field name="mcp_enabled" eval="False"/>
+            <!-- has_admin_gui=False：HA 的管理者帳號由**租戶自己**在首次開機的 onboarding
+                 畫面建立，平台不生成、不持有、也無從重置（同 cloud_app_haos）。開了這個
+                 旗標會讓平台憑空生一組 admin_password 塞進 config.sensitive（chart 沒有
+                 對應鍵＝白生），並在前台長出一顆按了必失敗的「重置密碼」按鈕（#460 能力
+                 gate 直接鏡射本欄位）。admin_password_carrier 因此維持預設、不具意義。 -->
+            <field name="has_admin_gui" eval="False"/>
+            <field name="post_deploy_init_type">none</field>
+
+            <!-- max_per_partner 刻意不設（＝不限）。見上方註解。 -->
+
+            <field name="is_active" eval="True"/>
+            <!-- is_hidden 維持預設 False（上架前台販售）。刻意不寫 `<field name="is_hidden">`：
+                 `-u` 對既有 record 只 write XML 列出的欄位，沒列出的欄位手改 DB 之後會存活
+                 ——那是營運的逃生門（沿用 cloud_app_haos 的立場）。
+                 售罄／停售請走 #501 的供給閘門（ir.config_parameter，營運在 Odoo 設定畫面
+                 調整、不必發版），不要翻 is_hidden——那是**下架**不是售罄。誤翻
+                 conceal_instances 更糟：已付費租戶手上 state=running 的服務會整條被鎖住。
+                 完整分工見 docs/decisions/patterns/hidden-template-presentation-chain.md。 -->
+        </record>
+
         <!-- Healer: DBs first installed under the historical <data noupdate="1"> block
              carry a sticky ir.model.data.noupdate flag on these seeds, so the corrected
              helm_value_specs above is silently skipped on -u. <function> runs on every
@@ -1206,5 +1548,22 @@
              and docs/tracking/pitfalls/seed-noupdate-sticky-template-links.md. -->
         <function model="woow_paas_platform.cloud_app_template"
                   name="_heal_sticky_helm_value_specs"/>
+
+        <!-- #552 層 4：升級期的活體檢查。層 4 起，helm_chart_version 留空的商品會被
+             供給閘門擋在購買前 —— 而那個失效形態**完全靜默**：商品從貨架上消失、
+             marketplace 少一張卡、沒有任何錯誤。
+
+             真正的風險窗口是「seed 值沒寫進去、但模組版號照樣推進」：ir_model_data
+             的 noupdate 若為 true，-u 會靜默 skip 掉 record 更新（見上方 healer 與
+             seed-noupdate-sticky pitfall），而 prod 的 module-version-gate
+             （initContainer）只驗版號有沒有推進、**不驗 seed 欄位值**。兩者一分離，
+             就是「guard 生效 ＋ 四個在售商品版號仍空 ＝ 全掛且零紅燈」。
+
+             刻意只 log ERROR 而**不** raise：raise 會讓 initContainer exit 1、pod 卡在
+             Init ＝ 把資料狀態問題升級成停機。要改成硬擋是營運決策，不在本 PR。
+             位置必須在上面那個 healer **之後** —— 它才是把 noupdate 清掉、讓 seed 值
+             真的落地的那一步；排在它之前會讀到升級前的舊值而誤報。 -->
+        <function model="woow_paas_platform.cloud_app_template"
+                  name="_warn_unpinned_active_templates"/>
     </data>
 </odoo>

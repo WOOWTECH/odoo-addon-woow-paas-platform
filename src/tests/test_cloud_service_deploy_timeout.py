@@ -31,6 +31,7 @@ from unittest.mock import MagicMock, patch
 
 from odoo import fields
 from odoo.tests.common import TransactionCase
+from ..models.cloud_service import _internal_provision
 
 
 # 容器型的預設門檻（分鐘）。實作端以模組常數提供，測試這裡獨立寫一份——
@@ -128,7 +129,7 @@ class _Base(TransactionCase):
             vals[anchor_field] = (
                 fields.Datetime.now() - timedelta(minutes=anchor_minutes_ago)
             )
-        return self.Service.create(vals)
+        return _internal_provision(self.Service).create(vals)
 
     def _poll(self, svc, status_body):
         """跑 model 層 poll（mock 掉 operator client）。"""
@@ -330,7 +331,7 @@ class TestModelPollTimeout(_Base):
         兩層 poll 原本對 ``pending-install`` / ``pending-upgrade`` /
         ``pending-rollback`` 一律靜置等下一輪。但被 SIGKILL 腰斬的 rollback 會
         把 release 永久留在 ``pending-rollback``，沒有任何東西會再推它
-        （``reference_helm_atomic_failure_double_timeout`` 的實錄）——就緒判定
+        （``docs/reference/gotchas/helm-atomic-failure-double-timeout.md`` 的實錄）——就緒判定
         根本不會被呼叫，所以這條路必須自己有話可說。
         """
         svc = self._make_service('container',

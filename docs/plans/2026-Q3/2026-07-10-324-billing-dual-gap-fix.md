@@ -26,7 +26,7 @@ promoted-at: 2026-07-19
 - **MRO 前提**：`woow_paas_platform` 的 `__manifest__.py` `depends` 已含 `sh_subscription_wallet`（在 `sh_subscription` 之後），故本 repo fix 層對 `sh.subscription.subscription` 的 method override 在 MRO 中晚於上游、會勝出。所有 override 落在既有 class `ShSubscriptionFix`（`src/models/sh_subscription_fix.py`，`_inherit = 'sh.subscription.subscription'`）。
 - **Python 4-space 縮排、PEP 8；程式碼註解用繁體中文**（對齊本 repo 慣例）。
 - **commit message**：zh-tw、prefix 英文小寫（`fix:`/`test:`/`refactor:`/`docs:`/`chore:`）、不得含任何 AI 產生字樣。
-- **測試**：走本地 docker-desktop paas-odoo image（recipe 見 `docs`／leader memory `reference_odoo_test_docker_desktop_paas_image`）；full suite 須綠（唯 2 個 `TestNamespaceLeftSetUnion` error＝缺 `AGENT_RUNTIME_NAMESPACE_SECRET` 的既有環境 flake，可忽略）。
+- **測試**：走本地 docker-desktop paas-odoo image（recipe 見 `docs`／leader memory `docs/guides/testing/odoo-test-docker-desktop-paas-image.md`）；full suite 須綠（唯 2 個 `TestNamespaceLeftSetUnion` error＝缺 `AGENT_RUNTIME_NAMESPACE_SECRET` 的既有環境 flake，可忽略）。
 
 ---
 
@@ -717,7 +717,7 @@ git commit -m "chore: #324 stg 清理腳本與 SOP（failed 垃圾交易 + next_
 
 - [ ] **Step 2: 跑 full module suite**
 
-Run: full install + `--test-tags /woow_paas_platform`（recipe 見 leader memory `reference_odoo_test_docker_desktop_paas_image`；含 `-e AGENT_RUNTIME_NAMESPACE_SECRET=x` 消除 2 個 ns-left-set error）。
+Run: full install + `--test-tags /woow_paas_platform`（recipe 見 leader memory `docs/guides/testing/odoo-test-docker-desktop-paas-image.md`；含 `-e AGENT_RUNTIME_NAMESPACE_SECRET=x` 消除 2 個 ns-left-set error）。
 Expected: `0 failed, 0 error(s)`（或唯 2 個 `TestNamespaceLeftSetUnion` error＝未設 secret 時的環境 flake，可忽略）。
 
 - [ ] **Step 3: Commit**

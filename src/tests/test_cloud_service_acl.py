@@ -15,6 +15,7 @@ from unittest.mock import MagicMock, patch
 
 from odoo.tests.common import TransactionCase
 from odoo.exceptions import AccessError
+from ..models.cloud_service import _internal_provision
 
 
 class TestCloudServiceWorkspaceRule(TransactionCase):
@@ -60,12 +61,12 @@ class TestCloudServiceWorkspaceRule(TransactionCase):
             'min_vcpu': 1, 'min_ram_gb': 1.0, 'min_storage_gb': 1,
         })
 
-        self.svc_w1 = self.Service.sudo().create({
+        self.svc_w1 = _internal_provision(self.Service.sudo()).create({
             'name': 'Svc in W1',
             'workspace_id': self.w1.id,
             'template_id': self.template.id,
         })
-        self.svc_w2 = self.Service.sudo().create({
+        self.svc_w2 = _internal_provision(self.Service.sudo()).create({
             'name': 'Svc in W2',
             'workspace_id': self.w2.id,
             'template_id': self.template.id,
@@ -163,7 +164,7 @@ class TestCloudServiceControllerRegression(TransactionCase):
             'helm_chart_version': '1.0.0',
             'min_vcpu': 1, 'min_ram_gb': 1.0, 'min_storage_gb': 1,
         })
-        self.svc = self.Service.sudo().create({
+        self.svc = _internal_provision(self.Service.sudo()).create({
             'name': 'Svc CS-Ctrl',
             'workspace_id': self.ws.id,
             'template_id': self.template.id,
