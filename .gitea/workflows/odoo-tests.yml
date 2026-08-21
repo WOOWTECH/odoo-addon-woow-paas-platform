@@ -131,13 +131,24 @@ jobs:
       - name: C5 失敗集合差（驗收標準：集合相同、不得新增）
         run: python3 scripts/audit/test_collection_audit.py --check-failures /tmp/test.log
 
+      # C2 是 C3 的**左半邊**。baseline 過期時 C3 會把「baseline 沒跟上原始碼」報成
+      # 「有 class 沒跑」——兩者的輸出長得一樣，但修法完全相反（一個是跑
+      # `--update-baseline`，一個是去查測試為什麼沒被收集）。先驗左半邊再做差集。
+      # PR 上由 test-collection-audit.yml 跑同一件事，這裡是 develop 側的保險。
+      - name: C2 baseline vs 原始碼（先確認差集的左半邊是新的）
+        run: python3 scripts/audit/test_collection_audit.py --check-baseline
+
       - name: C3 實際執行清單雙向差集
         run: python3 scripts/audit/test_collection_audit.py --check-executed /tmp/test.log
 
       - name: C4 skip 盤點
         run: python3 scripts/audit/test_collection_audit.py --check-skips /tmp/test.log
 
-      - name: 升級條件自檢
+      # 升級條件＝兩個**狀態**（不是時間）：repo-lint 的 test-collectability 豁免清單
+      # 清空 ＋ develop push 全套連續 3 次全綠。滿足時腳本以 exit 3 提醒「可以回
+      # issue #546 重新裁決觸發策略」。這裡 `|| true` 是刻意的：那是提醒，不是本次
+      # 跑全套的驗收結果，不該把一次綠燈的 run 變成紅的。
+      - name: 升級條件自檢（提醒用，不影響本次驗收）
         if: always()
         run: python3 scripts/audit/test_collection_audit.py --upgrade-check || true
 

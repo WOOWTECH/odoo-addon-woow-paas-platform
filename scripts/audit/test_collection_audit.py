@@ -1,8 +1,25 @@
 #!/usr/bin/env python3
-"""測試收集完備性稽核（Refs issue #546）。
+"""測試收集完備性稽核（Refs issue #546 #684 #544）。
 
-**刻意獨立於 `repo-lint.py`**：那支檔案改動頻繁（`045c15aa`、`ab692d6c`、`b491682d`
-都動過它），多條線同時加 gate 會互相踩。本檔自成一支，只共用 `baselines/` 目錄慣例。
+## 🔴 靜態判準的單一事實來源是 `repo-lint.py`，不是本檔
+
+本檔曾自帶兩條**靜態**判準（C1 匯入完備性／C1b 純 unittest 模組）。#684 的
+PR #811 之後，同一組性質已經落在 `repo-lint.py` 的 `test-collectability`
+（`check_test_module_collection` ＋ `check_test_class_execution`），而且**更強**：
+
+| 性質 | 本檔舊版 | repo-lint（現行） |
+|---|---|---|
+| 「檔沒被 `__init__.py` import」 | 有 | 有 |
+| 「import 了不存在的檔」 | 有 | 有 |
+| 「子套件檔沒被**頂層** re-export」 | ❌ 看不到 | ✅ 有（`_get_tests_modules()` 只讀 `<addon>.tests` 自己的屬性）|
+| 「基底不對 ⇒ 拿不到 `test_tags`」 | module 級（**整檔**皆純 unittest 才算）| **逐 class** |
+| 混合檔（同檔既有會跑的、也有不會跑的）| ❌ 整檔放行 | ✅ 點名到 class |
+
+⇒ 兩份判準**已刪掉本檔這一份**，只留 repo-lint 那一份。留兩份的代價不是多跑一次，
+是「哪一份才算數」沒有答案——而較弱的那份會先報綠。
+
+本檔現在只做 **repo-lint 做不到的事**：它是純靜態的，看不到「這次跑到底執行了什麼」。
+以下每一項的輸入都是**測試 log**，或需要一份可被 diff 覆核的 baseline 檔。
 
 ## 為什麼這支 gate 存在
 
@@ -10,12 +27,14 @@ Odoo 全套跑完印的是
 `odoo/tests/result.py:198` → ``f'{failures_count} failed, {errors_count} error(s) of {testsRun} tests'``
 —— **這一行對「測試根本沒被收集」與「測試被 skip」都是綠的**：
 
-| 失效形態 | 在執行清單裡？ | 算進 `of N tests`？ | summary 看得出來？ |
-|---|---|---|---|
-| 檔案沒被 `tests/__init__.py` 匯入（機制 A，#467） | ❌ | ❌ | ❌ 完全看不出來 |
-| **整檔只有純 `unittest.TestCase`（機制 B，#544）** | ❌ | ❌ | ❌ **C1 的匯入比對看不到它——import 都在** |
-| 整批 deselect（tag 沒匹配／module 沒裝） | ❌ | ❌ | ❌ |
-| **skip** | ✅ | ✅ | ❌（`skipped` 不出現在 summary） |
+| 失效形態 | 在執行清單裡？ | 算進 `of N tests`？ | summary 看得出來？ | 誰在守 |
+|---|---|---|---|---|
+| 檔案沒被 `tests/__init__.py` 匯入（機制 A，#467） | ❌ | ❌ | ❌ 完全看不出來 | repo-lint |
+| 基底拿不到 `test_tags`（機制 B，#544／#684） | ❌ | ❌ | ❌ | repo-lint |
+| 整批 deselect（tag 沒匹配／module 沒裝） | ❌ | ❌ | ❌ | **C0／C3** |
+| 測試 class／方法被靜默刪掉 | ❌ | ❌ | ❌ | **C2** |
+| **skip** | ✅ | ✅ | ❌（`skipped` 不出現在 summary） | **C4** |
+| 新增紅燈 | ✅ | ✅ | ✅（但只有數字）| **C5** |
 
 ## 設計原則：輸出「是哪一個」，不是「差幾個」
 
@@ -24,43 +43,87 @@ Odoo 全套跑完印的是
 
 ## 檢查
 
-    C1  --check-imports  `src/tests/` 可匯入名字 vs `__init__.py` 實際匯入（含子套件遞迴，雙向）
-    C1b --check-imports  整檔只有純 unittest.TestCase 的模組（會被 --test-tags 整批過濾）
-    C2 --check-baseline  靜態推導的預期 class 清單 vs baseline 檔（雙向差集）
+    C0 --check-sentinels 完整性哨兵：必然存在的那幾條沒出現 ⇒ 本次差集結論一律不成立
+    C2 --check-baseline  靜態預測的預期 class 清單 vs baseline 檔（雙向差集）
     C3 --check-executed  baseline vs 測試 log 的實際執行清單（雙向差集）
     C4 --check-skips     測試 log 的 skip 盤點（列名＋理由，配白名單）
+    C5 --check-failures  失敗／錯誤**集合**差（驗收標準：集合相同、不得新增）
 
+    --upgrade-check      本 gate 何時該升級（狀態條件，由 gate 自己判定並提醒）
     --update-baseline    重新產生 baselines/test-collection.txt
-    --self-test          把已知邊界樣本餵給本檔自己的 matcher
+    --self-test          把已知邊界樣本餵給本檔自己的 matcher（**預設動作**）
+
+C2 的「預期」不是本檔自己算的：它呼叫 `repo-lint.py` 的 `_test_class_kind()` ／
+`_test_effective_tags()` ／`_test_has_inherited_flag()`，也就是上面那張表裡的同一份
+判準。本檔只負責把它落成一份**可被 diff 覆核的清單**，並拿去跟真實 log 對帳。
 
 `--self-test` 不是裝飾：實作過程中它抓到本檔自己的缺陷（只 glob `*.py` 會漏掉
 `src/tests/integration/` 這個子套件目錄）——**188 個名字裡只錯 1 個，少到看起來
 像資料異常而不是工具異常**。任何改動本檔 matcher 的人請先跑它。
+
+⚠ **不帶參數＝跑 `--self-test`**（不是印 help 然後 exit 2）。理由不是美觀：
+`repo-lint.yml` 的「scripts/ 自我測試」步驟會 glob `scripts/audit/test_*.py` 並逐一
+`python3 <檔>` 執行，本檔的檔名命中那個 glob。回非零就是把 repo-lint 整條弄紅，
+而且症狀（「repo-lint 紅了」）跟真正的違規不可區分。
 """
 from __future__ import annotations
 
 import argparse
-import ast
+import importlib.util
 import pathlib
 import re
 import sys
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
-TESTS_DIR = REPO_ROOT / "src" / "tests"
-BASELINE = pathlib.Path(__file__).resolve().parent / "baselines" / "test-collection.txt"
-KNOWN_ORPHANS = pathlib.Path(__file__).resolve().parent / "baselines" / "test-collection-known-unexecuted.txt"
-GREEN_STREAK = pathlib.Path(__file__).resolve().parent / "baselines" / "test-collection-green-streak.txt"
-SENTINELS = pathlib.Path(__file__).resolve().parent / "baselines" / "test-collection-sentinels.txt"
-KNOWN_FAILURES = pathlib.Path(__file__).resolve().parent / "baselines" / "test-collection-known-failures.txt"
+_HERE = pathlib.Path(__file__).resolve().parent
+REPO_LINT = _HERE / "repo-lint.py"
+BASELINE = _HERE / "baselines" / "test-collection.txt"
+GREEN_STREAK = _HERE / "baselines" / "test-collection-green-streak.txt"
+SENTINELS = _HERE / "baselines" / "test-collection-sentinels.txt"
+KNOWN_FAILURES = _HERE / "baselines" / "test-collection-known-failures.txt"
 
-# 升級為 blocking 需要「連續 N 次 develop push 全綠」。N 取 3。
+# 升級條件之一：「連續 N 次 develop push 全套全綠」。N 取 3。
 GREEN_STREAK_REQUIRED = 3
+
+
+# ── 靜態判準：一律向 repo-lint 借，不在本檔重寫 ────────────────────────────
+_repo_lint_cache: list = []   # repo-lint.py 有 6900+ 行，同一次執行不重複 exec
+
+
+def repo_lint():
+    """載入 `repo-lint.py`（檔名有連字號，不能直接 import）。
+
+    🔴 這個函式存在的唯一理由是**不要有第二份判準**。本檔需要的「這個 class 跑不跑
+    得到／跑幾條」全部出自 `repo-lint.py` 的 `test-collectability`；在這裡自己重寫一份
+    ——哪怕只是「看起來一樣」——就會出現「哪一份才算數」沒有答案的狀態，而較弱的那一份
+    會先報綠（#546 段 B 的實證：module 級判準對混合檔整檔放行，逐 class 版點名到 class）。
+    """
+    if _repo_lint_cache:
+        return _repo_lint_cache[0]
+    if not REPO_LINT.is_file():
+        raise SystemExit("FATAL: 找不到 %s —— 靜態判準的單一事實來源不在，"
+                         "不可用本檔自己的推測補上" % REPO_LINT)
+    spec = importlib.util.spec_from_file_location("_repo_lint", REPO_LINT)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["_repo_lint"] = mod
+    spec.loader.exec_module(mod)
+    _repo_lint_cache.append(mod)
+    return mod
 
 # ── log matcher ───────────────────────────────────────────────────────────
 # Odoo 18 `odoo/tests/result.py:263` log_stats() 在 stats logger 開到 DEBUG 時輸出
 # "Detailed Tests Report"，每行形如：
-#     \t<addon>.<測試檔>.<Class>.<method>: 0.12s 34 queries
-# 粒度由點數決定（1=addon / 3=addon.檔.類 / 4=addon.檔.類.方法）。
+#     \t<addon>.<模組路徑>.<Class>[.<method>]: 0.12s 34 queries
+# 三種粒度是同一棵 `stats_tree` 的三層（`result.py:256-260`）：addon / addon+class /
+# addon+class+method，全部混在同一批行裡。
+#
+# 🔴 **粒度不能用點數判**。`_TEST_ID`（`result.py:45`）的 `class` 群組是
+# `(?P<class>.+)`——貪婪吃到最後一個點之前，所以子套件底下的測試那一段是
+# `integration.test_x.TestY`（多一段套件名）。用「3 個點＝class 粒度」會把
+# 子套件的 class 行判成 method 粒度、method 行整個丟掉 ⇒ C3 的 baseline 側有、
+# 執行側沒有 ⇒ 永久假紅，而輸出與「那些 class 真的沒跑」一模一樣。
+# 改用**樹的形狀**判：method 行是葉節點（不是任何其他 id 的前綴），class 行是
+# 內部節點，addon 行是唯一沒有點的那個根。
 DETAIL_LINE = re.compile(
     r"^\s*(?P<id>[A-Za-z_][\w.]*)\s*:\s*[\d.]+s\s+\d+\s+queries\s*$"
 )
@@ -85,158 +148,145 @@ FAILURE_LINE = re.compile(
     r"(?P<mod>odoo\.addons\.[\w.]+):\s+(?P<flavour>FAIL|ERROR):\s+(?P<test>[\w.]+)"
 )
 
-# `@tagged` 內出現這些負向 tag 的 class 不會進標準跑，屬預期排除。
-DESELECT_TAGS = ("-standard",)
+# logger 名（`test.__module__`）→ 與 detail report 同一個識別字空間的模組路徑。
+# `odoo.addons.woow_paas_platform.tests.integration.test_x` → `integration.test_x`。
+# ⚠ 不可用 `rsplit('.', 1)[-1]`：那對頂層檔剛好對，對子套件會把套件名吃掉，
+#   於是 C0／C5 的識別字（`test_x.…`）與 C3 的（`integration.test_x.…`）指的是
+#   同一條測試卻長得不一樣，差集永遠對不上。
+_TESTS_PKG_SEP = ".tests."
 
 
-# ── 靜態掃描 ──────────────────────────────────────────────────────────────
-def imported_submodules(init_path: pathlib.Path) -> set[str]:
-    """`__init__.py` 匯入的同層 submodule 名。
+def _module_ident(dotted: str) -> str:
+    return dotted.split(_TESTS_PKG_SEP, 1)[-1]
 
-    刻意用 AST 不用 regex：`from . import a`、`from . import a, b`、
-    `from .a import X`、括號跨行、`if` 內巢狀 —— 字面 regex 任一形態都會漏。
-    （實測：換成 `^from \\. import (\\w+)$` 會漏抓 7 種形態、對真實 repo 多報 14 個假陽性。）
+
+# ── 靜態預測：這棵樹「應該」跑到哪些 class、各幾條 ─────────────────────────
+class CollectionNotClean(Exception):
+    """收集面有違規 ⇒ 「哪些 class 會跑」的預測不成立，不可先算一份再拿去對帳。"""
+
+
+def _tests_module_path(rel: str, suite_dir: str) -> str:
+    """`'src/tests/integration/test_x.py'` → `'integration.test_x'`。
+
+    這是 **Odoo 側**的識別字空間：`odoo/tests/result.py:45` 的 `_TEST_ID` 把
+    `odoo.addons.<addon>.tests.(?P<class>.+)\\.(?P<method>[^.]+)` 切開，中間那段就是
+    「`src/tests/` 底下的模組路徑 ＋ class 名」。子套件底下的檔**帶著套件名**
+    （`integration.test_x.TestY`），不是只有 stem —— 只取 stem 會讓子套件的 class
+    在 C3 的差集裡永遠對不上，而那個輸出跟「那些 class 真的沒跑」一模一樣。
     """
-    tree = ast.parse(init_path.read_text(encoding="utf-8"))
-    found: set[str] = set()
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.ImportFrom) or node.level != 1:
-            continue
-        if node.module is None:            # from . import a, b
-            found.update(a.name for a in node.names)
-        else:                              # from .a import X / from .a.b import X
-            found.add(node.module.split(".")[0])
-    return found
+    return rel[len(suite_dir) + 1:-len(".py")].replace("/", ".")
 
 
-def on_disk_submodules(pkg_dir: pathlib.Path) -> set[str]:
-    """可被 `from . import X` 匯入的名字集合。
+def _expected_methods(lint, facts, rel: str, name: str, node) -> set[str]:
+    """靜態重演 `odoo/tests/loader.py` 篩子④／④' —— 這個 class 會產生哪些 test 實例。
 
-    ⚠ 只 glob `*.py` 會漏掉**子套件目錄**（本 repo 的 `src/tests/integration/`）。
+    ④  `test_cases = test_case_class.__dict__.items()` —— **只收自己身上的**，
+        繼承來的測試方法不會重跑（父類自己會跑那幾條）。
+    ④' `if getattr(test_case_class, 'allow_inherited_tests_method', False):`
+        才改走 `inspect.getmembers()`（整條 MRO）。
+        🔴 走的是 `getattr` ⇒ **旗標可繼承**（本樹有 class 把它寫在 mixin 上），
+        所以判「有沒有旗標」要沿繼承鏈找，不是只看 class 自己那一行。
+
+    ⚠ MRO 只走**本樹解得出來的**基底：Odoo 自己的 `BaseCase` / `TransactionCase` /
+      `HttpCase` 家族身上沒有任何 `def test*`（實查 odoo-18.0 的 `common.py`／
+      `case.py`：只有 `test_xsd` 這個 module 級函式與 `testPartExecutor` 這個
+      非 `test` 前綴的方法），所以樹外那段不會貢獻條數。
     """
-    names = {p.stem for p in pkg_dir.glob("*.py") if p.stem != "__init__"}
-    names |= {
-        d.name for d in pkg_dir.iterdir()
-        if d.is_dir() and (d / "__init__.py").is_file()
-    }
+    names = set(lint._test_own_test_methods(node))
+    if lint._test_has_inherited_flag(facts, rel, name):
+        for base_rel, base_name in lint._test_tree_bases(facts, rel, name):
+            base_node = facts["classes"].get(base_rel, {}).get(base_name)
+            if base_node is not None:
+                names |= set(lint._test_own_test_methods(base_node))
     return names
 
 
-def _decorator_tags(node: ast.ClassDef) -> list[str]:
-    tags: list[str] = []
-    for dec in node.decorator_list:
-        call = dec if isinstance(dec, ast.Call) else None
-        if call is None or not isinstance(call.func, ast.Name) or call.func.id != "tagged":
-            continue
-        for arg in call.args:
-            if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
-                tags.append(arg.value)
-    return tags
+def scan_expected(root: pathlib.Path) -> tuple[dict[str, int], list[tuple[str, str]]]:
+    """靜態預測「標準跑會執行哪些 class、各幾條」。
 
+    判準**全部借自** `repo-lint.py`（理由見 `repo_lint()`），逐 class：
 
-def _pure_unittest_module(tree: ast.Module) -> bool:
-    """整個 module 是否「只有純 unittest.TestCase」⇒ 會被 --test-tags 整批過濾掉。
+    1. `_test_class_kind() == tagged` —— 傳遞繼承到 `odoo.tests.common.BaseCase`，
+       也就是 `tag_selector.py:69` 的 `hasattr(test, 'test_tags')` 為真。
+    2. `'standard' in _test_effective_tags()` —— `--test-tags /woow_paas_platform`
+       的空 tag 被 `tag_selector.py:41-44` 補成 `standard`；沒有它的 class 連**精確
+       指名**都選不到（實測 `EXIT=0` ＋ `of 0 tests`，與「跑過而且全過」不可區分）。
+    3. 條數＝`_expected_methods()`（loader 篩子④／④'）。
 
-    這是「從未執行」的**機制 B**（#544 實證，62 條中的 47 條）：檔案有被
-    `tests/__init__.py` 匯入、import 也都在，所以 C1 的匯入比對**結構上看不到它**。
-    Odoo 的 `--test-tags /module` 過濾依賴 Odoo tags 機制，純 `unittest.TestCase`
-    沒有該屬性 —— 但只要**同檔有任一個 Odoo TestCase**，整個 module 就會被載入
-    （對照組：`test_reconciler_diff.py` 同樣含 unittest.TestCase 卻有被執行）。
+    🔴 **前提：收集面必須乾淨。** 沒被 `__init__.py` import 的檔對 loader 而言不存在，
+    「它裡面的 class 會跑」這個預測就是假的。所以收集面有違規時**拒絕產生預測**
+    （丟 `CollectionNotClean`），而不是先算一份不成立的清單再拿去跟 log 對帳——
+    後者會把「收集壞了」偽裝成「有幾個 class 沒跑」，指錯修法。
 
-    ⇒ 判準是 module 級的「有沒有至少一個非 unittest 基底」，不是 class 級的
-      「有沒有用 unittest.TestCase」。後者會把 test_reconciler_diff 誤殺。
+    回 (`{<模組路徑>.<Class>: 條數}`, `[(被排除者, 原因)]`)；排除一律**列名**，不靜默丟棄。
     """
-    unittest_aliases = {"unittest.TestCase"}
-    for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom) and node.module == "unittest":
-            unittest_aliases |= {a.asname or a.name for a in node.names if a.name == "TestCase"}
+    lint = repo_lint()
+    root_s = str(root)
+    blockers = lint.check_test_module_collection(root_s)
+    if blockers:
+        raise CollectionNotClean(blockers)
 
-    saw_class = False
-    for node in tree.body:
-        if not isinstance(node, ast.ClassDef):
-            continue
-        saw_class = True
-        for b in node.bases:
-            if isinstance(b, ast.Name):
-                name = b.id
-            elif isinstance(b, ast.Attribute):
-                name = f"{getattr(b.value, 'id', '')}.{b.attr}"
-            else:
-                return False          # 無法靜態判定 → 保守視為可收集
-            if name not in unittest_aliases:
-                return False          # 有非 unittest 基底 ⇒ 整個 module 會被載入
-    return saw_class
-
-
-def scan_expected(tests_dir: pathlib.Path) -> tuple[dict[str, int], list[tuple[str, str]]]:
-    """回傳 (預期會被收集的 {`<檔>.<Class>`: test 方法數}, [(被排除者, 原因)])。
-
-    判準＝**class body 內直接定義** `def test_*`。Odoo 18 的收集不吃「只從 base／mixin
-    繼承來的 test_*」（#477 實證：4 個只繼承的 class 各跑 0 test、靜默不報錯），
-    所以「直接定義」才是對的判準，不是「繼承鏈上有 test_*」。
-
-    排除一律**列名回傳**，不靜默丟棄。
-    """
+    facts = lint._test_tree_facts(root_s)
+    suite = lint.TEST_SUITE_DIR_REL
     expected: dict[str, int] = {}
     excluded: list[tuple[str, str]] = []
 
-    init = tests_dir / "__init__.py"
-    imported = imported_submodules(init) if init.is_file() else set()
+    why = {
+        lint._TEST_KIND_UNTAGGED:
+            "基底拿不到 `test_tags`（傳遞繼承不到 odoo.tests.common.BaseCase）"
+            " ⇒ 不會執行。這是 repo-lint 的 test-collectability 在守的那一格",
+        lint._TEST_KIND_UNKNOWN:
+            "基底解析不到任何已知家族 ⇒ 無法判定跑不跑得到（repo-lint 會點名要求"
+            "補進名單，這裡不猜、也不放進 baseline）",
+        lint._TEST_KIND_OTHER:
+            "不是 TestCase 子類（mixin／fixture）⇒ 它的 `def test*` 由子類經 "
+            "`allow_inherited_tests_method` 展開後**計進子類**，不自成一項",
+    }
 
-    for path in sorted(tests_dir.rglob("*.py")):
-        if path.name == "__init__.py":
+    for rel in sorted(facts["classes"]):
+        if not rel.startswith(suite + "/") or rel.endswith("/__init__.py"):
             continue
-        rel = path.relative_to(tests_dir)
-        top = rel.parts[0][: -len(".py")] if len(rel.parts) == 1 else rel.parts[0]
-        stem = path.stem
-
-        try:
-            tree = ast.parse(path.read_text(encoding="utf-8"))
-        except SyntaxError as exc:
-            excluded.append((str(rel), f"語法錯誤無法解析：{exc}"))
-            continue
-
-        pure_unittest = _pure_unittest_module(tree)
-        for node in tree.body:
-            if not isinstance(node, ast.ClassDef):
+        mod = _tests_module_path(rel, suite)
+        for name, node in sorted(facts["classes"][rel].items()):
+            ident = "%s.%s" % (mod, name)
+            kind = lint._test_class_kind(facts, rel, name)
+            if kind != lint._TEST_KIND_TAGGED:
+                if lint._test_own_test_methods(node):
+                    excluded.append((ident, why[kind]))
                 continue
-            n = sum(
-                1 for b in node.body
-                if isinstance(b, (ast.FunctionDef, ast.AsyncFunctionDef))
-                and b.name.startswith("test_")
-            )
-            if not n:
+            tags = lint._test_effective_tags(facts, rel, name)
+            if "standard" not in tags:
+                excluded.append((ident, "有效 tag ＝ %s，不含 `standard` ⇒ 標準跑選不到"
+                                        "（合法 opt-out，見 repo-lint 的 (b) 那一格）"
+                                        % ("／".join(sorted(tags)) or "（空）")))
                 continue
-            ident = f"{stem}.{node.name}"
-
-            if top not in imported:
-                excluded.append((ident, f"所在檔 `{top}` 沒被 tests/__init__.py 匯入 → C1 會擋"))
-                continue
-            deselect = [t for t in _decorator_tags(node) if t in DESELECT_TAGS]
-            if deselect:
-                excluded.append((ident, f"@tagged{tuple(deselect)} 不進標準跑"))
-                continue
-            if pure_unittest:
-                excluded.append((ident, f"所在檔 `{stem}` 整檔只有純 unittest.TestCase"
-                                        " → 被 --test-tags 整批過濾（機制 B，#544）"))
-                continue
-            expected[ident] = n
+            n = len(_expected_methods(lint, facts, rel, name, node))
+            if n:
+                expected[ident] = n
 
     return expected, excluded
 
 
 # ── baseline I/O ──────────────────────────────────────────────────────────
 BASELINE_HEADER = """\
-# 預期會被 Odoo 收集的測試 class 清單（scripts/audit/test_collection_audit.py --update-baseline 產生）
-# ⚠ 產生指令**不是** repo-lint.py --update-baseline —— 本 gate 是獨立腳本。
+# 預期會被 Odoo 收集並執行的測試 class 清單
+# 產生指令：scripts/audit/test_collection_audit.py --update-baseline
+# ⚠ **不是** repo-lint.py --update-baseline —— 本檔不歸 repo-lint 的 baseline 機制管。
 # 調整前必讀 issue #546（設計與判準）：
 #   https://git-prod.woowtech.io/odoo-addons/woow_paas_platform/issues/546
 #
-# 格式：<class 內直接定義的 test 方法數>\\t<測試檔>.<Class>
-# 判準：class body 內**直接定義** def test_*（Odoo 18 不收只從 base/mixin 繼承來的）。
-# 排除：檔案沒被 tests/__init__.py 匯入者（C1 會擋）、@tagged('-standard') 者。
+# 格式：<預期執行的 test 方法數>\\t<src/tests 底下的模組路徑>.<Class>
+#   子套件底下的檔帶著套件名（integration.test_x.TestY）——那是 Odoo 側
+#   `odoo/tests/result.py:45` `_TEST_ID` 的識別字空間，不是檔名 stem。
 #
-# 這份清單目前是**靜態推導**，尚未與真實 CI 執行清單對帳過
+# 判準**不在本檔**：class 選不選得到、條數怎麼算，全部呼叫 repo-lint.py 的
+# test-collectability 實作（_test_class_kind / _test_effective_tags /
+# _test_has_inherited_flag）。這裡只是把那份判準的結果落成可被 diff 覆核的清單。
+#   選中：傳遞繼承到 odoo.tests.common.BaseCase，且有效 tag 含 standard
+#   條數：loader 篩子④ cls.__dict__ 的 def test*；帶 allow_inherited_tests_method
+#         （可繼承！）者改走整條 MRO 去重
+#
+# 這份清單目前是**靜態預測**，尚未與真實 CI 執行清單對帳過
 # （對帳排程：B+C 觸發策略落地後第一趟 develop push 全套，見 issue #546）。
 """
 
@@ -263,37 +313,51 @@ def write_baseline(path: pathlib.Path, expected: dict[str, int]) -> None:
 
 # ── log 解析 ──────────────────────────────────────────────────────────────
 def extract_executed(log_path: pathlib.Path, granularity: str = "class") -> set[str]:
-    """從 Detailed Tests Report 抽實際執行清單，回傳 `<檔>.<Class>` 集合。"""
-    want = {"module": 1, "class": 3, "method": 4}[granularity]
-    out: set[str] = set()
+    """從 Detailed Tests Report 抽實際執行清單。
+
+    回傳的識別字**已剝掉 addon 名**：`<模組路徑>.<Class>`（class 粒度）或
+    `<模組路徑>.<Class>.<method>`（method 粒度），與 `scan_expected()` 同一個空間。
+
+    粒度用**樹的形狀**判，不是點數（理由見 `DETAIL_LINE` 的註解）：
+      root   ＝ 沒有點的那個 id（addon 名）
+      class  ＝ 有別的 id 以「自己＋`.`」開頭（＝內部節點）
+      method ＝ 葉節點
+    `stats_tree` 一定同時放了 class 與 method 兩層（`result.py:259-260`），所以每個
+    class 至少有一個 method 子節點，這個判準沒有邊界洞。
+    """
+    ids = set()
     for line in log_path.read_text(encoding="utf-8", errors="replace").splitlines():
         m = DETAIL_LINE.match(line)
-        if not m:
-            continue
-        parts = m.group("id").split(".")
-        if len(parts) == want:
-            out.add(".".join(parts[1:]) if want >= 3 else parts[0])
-    return out
+        if m:
+            ids.add(m.group("id"))
+    roots = {i for i in ids if "." not in i}
+    internal = {i for i in ids if any(o.startswith(i + ".") for o in ids)}
+    want = {"module": roots,
+            "class": internal - roots,
+            "method": ids - internal - roots}[granularity]
+    if granularity == "module":
+        return set(want)
+    return {i.split(".", 1)[1] for i in want}
 
 
 def parse_skips(log_path: pathlib.Path) -> list[tuple[str, str, str]]:
-    """回傳 [(測試檔, `Class.method`, 理由)]。"""
+    """回傳 [(模組路徑, `Class.method`, 理由)]。"""
     out = []
     for line in log_path.read_text(encoding="utf-8", errors="replace").splitlines():
         m = SKIP_LINE.search(line)
         if m:
-            out.append((m.group("mod").rsplit(".", 1)[-1],
+            out.append((_module_ident(m.group("mod")),
                         m.group("test"), m.group("reason")))
     return out
 
 
 def parse_failures(log_path: pathlib.Path) -> set[str]:
-    """回傳 {`<檔>.<Class>.<method>`} 的失敗／錯誤集合。"""
+    """回傳 {`<模組路徑>.<Class>.<method>`} 的失敗／錯誤集合。"""
     out: set[str] = set()
     for line in log_path.read_text(encoding="utf-8", errors="replace").splitlines():
         m = FAILURE_LINE.search(line)
         if m:
-            out.add(f"{m.group('mod').rsplit('.', 1)[-1]}.{m.group('test')}")
+            out.add(f"{_module_ident(m.group('mod'))}.{m.group('test')}")
     return out
 
 
@@ -365,99 +429,32 @@ def check_failure_set(log_path: pathlib.Path) -> int:
 
 
 # ── 檢查 ──────────────────────────────────────────────────────────────────
-def check_imports(tests_dir: pathlib.Path, _prefix: str = "") -> int:
-    init = tests_dir / "__init__.py"
-    if not init.is_file():
-        print(f"C1 FATAL: {init} 不存在", file=sys.stderr)
-        return 2
-    if _prefix:
-        label = _prefix
-    else:
-        # self-test 會餵 REPO_ROOT 之外的 temp dir，relative_to 會 raise
-        try:
-            label = tests_dir.relative_to(REPO_ROOT).as_posix()
-        except ValueError:
-            label = tests_dir.as_posix()
-    on_disk, imported = on_disk_submodules(tests_dir), imported_submodules(init)
-    orphan, phantom = sorted(on_disk - imported), sorted(imported - on_disk)
-
-    known = _load_known_unexecuted()["A"]
-    fresh = [o for o in orphan if f"{label}/{o}" not in known]
-    stale = [k for k in sorted(known) if k.startswith(f"{label}/")
-             and k.rsplit("/", 1)[-1] not in orphan]
-
-    rc = 0
-    if fresh:
-        rc = 1
-        print(f"\nC1 FAIL [{label}] — 以下 {len(fresh)} 個測試檔存在但沒被 __init__.py 匯入，")
-        print("        它們的測試從未被收集（`of N tests` 看起來正常，少的是這幾個）：")
-        for name in fresh:
-            f = tests_dir / f"{name}.py"
-            n = count_test_defs(f) if f.is_file() else -1
-            print(f"  - {label}/{name}   " + (f"（{n} 條 def test_*）" if n >= 0 else "（子套件目錄）"))
-    known_hit = [o for o in orphan if f"{label}/{o}" in known]
-    if known_hit:
-        print(f"\nC1 註記 [{label}]：{len(known_hit)} 個已在待修清單（issue #467），不重複擋：")
-        for name in known_hit:
-            f = tests_dir / f"{name}.py"
-            n = count_test_defs(f) if f.is_file() else -1
-            print(f"  ~ {label}/{name}   " + (f"（{n} 條 def test_*，仍未執行）" if n >= 0 else ""))
-    if stale:
-        # 待修清單不是允許清單：修好了就該刪行，否則它會慢慢腐爛成一張沒人看的白名單
-        rc = 1
-        print(f"\nC1 FAIL [{label}] — 以下 {len(stale)} 項已不再是 orphan，"
-              "請從 test-collection-known-unexecuted.txt 刪掉（清單腐爛防線）：")
-        for name in stale:
-            print(f"  ✓ {name}")
-    if phantom:
-        rc = 1
-        print(f"\nC1 FAIL [{label}] — 以下 {len(phantom)} 個名字被匯入但東西不存在（會 ImportError）：")
-        for name in phantom:
-            print(f"  - {label}/{name}")
-
-    for d in sorted(tests_dir.iterdir()):
-        if d.is_dir() and (d / "__init__.py").is_file():
-            rc |= check_imports(d, _prefix=f"{label}/{d.name}")
-
-    if rc == 0 and not _prefix:
-        print("C1 PASS：每一個測試檔（含子套件）都被匯入，沒有多餘匯入")
-    return rc
-
-
-def _load_known_unexecuted() -> dict[str, set[str]]:
-    """回傳 {"A": {路徑…}, "B": {模組名…}}。"""
-    out: dict[str, set[str]] = {"A": set(), "B": set()}
-    if not KNOWN_ORPHANS.is_file():
-        return out
-    for ln in KNOWN_ORPHANS.read_text(encoding="utf-8").splitlines():
-        ln = ln.strip()
-        if not ln or ln.startswith("#"):
-            continue
-        mech, _, name = ln.partition("\t")
-        if mech in out and name:
-            out[mech].add(name.strip())
-    return out
-
-
 def check_upgrade_readiness() -> int:
-    """本 gate 何時該從 warning-only 升級成 blocking —— **由 gate 自己判定並提醒**。
+    """本 gate 何時該升級成「真的擋得住」—— **由 gate 自己判定並提醒**。
 
-    刻意**不用時間條件**（「跑一週再改」）：時間到了不保證問題解決，
-    而且沒有任何機制會在一週後提醒任何人回來改 ⇒ 它會永遠停在 warning-only。
-    **常態 warning 的 gate 等於沒有 gate**，與 known-unexecuted 檔頭那句
-    「常態帶紅的 gate 等於沒有 gate」是同一個孿生形態。
+    刻意**不用時間條件**（「跑一週再回來改」）：時間到了不保證問題解決，而且沒有任何
+    機制會在一週後提醒任何人回來改 ⇒ 它會永遠停在現狀。改用兩個**可判定的狀態**，
+    兩者都要滿足：
 
-    改用兩個**可判定的狀態**，兩者都要滿足：
-      1. `test-collection-known-unexecuted.txt` 清空（機制 A／B 都不剩）
-      2. 連續 GREEN_STREAK_REQUIRED 次 develop push 全套全綠
+      1. `repo-lint.py` 的 `TEST_EXECUTION_BASELINE` 清空（樹上沒有任何「已知拿不到
+         `test_tags`」的豁免條目）——這是 #684／#544 那條線的完成狀態。
+         🔴 刻意讀 repo-lint 的那份、不在本檔另存一份：本檔已經把靜態判準整個交給
+         repo-lint，升級條件當然也要看它，否則又是兩份會分岔的狀態。
+      2. 連續 `GREEN_STREAK_REQUIRED` 次 develop push 全套全綠。
 
-    條件 2 的資料來源是 `baselines/test-collection-green-streak.txt`，
-    由跑全套的那支 workflow 每次成功後 append 一行 `<run_id>\t<UTC>`；
-    失敗時清空。⚠ 該 workflow 尚未落地（觸發策略待拍板）⇒ 檔案不存在時
-    **明確報「無法累計」而不是報 0**——那兩者意思完全不同。
+    滿足時以退出碼 3 ＋橫幅提醒：可以回 issue #546 重新裁決觸發策略（2026-08-03 拍板的
+    B+C 終點是「全套綠」、**不 block merge**；要不要往前走一步是 Eugene 的裁量，不是
+    本腳本的）。**那是唯一會讓這一步變紅的情況**——不是缺陷，是該做的事自己找上門。
+
+    條件 2 的資料來源是 `baselines/test-collection-green-streak.txt`，由 `odoo-tests`
+    workflow 每次全綠後 append 一行 `<run_id>\\t<UTC>`；失敗時清空。
+    ⚠ **那個 append 目前是人工的**（CI 自動 commit 回 develop 會與本 workflow 的
+    `push: develop` 觸發形成迴圈，需要 loop guard；那是會動到 develop 的自動寫入，
+    未經 review 不自行加）。所以檔案不存在時**明確報「無法累計」而不是報 0**
+    ——那兩者意思完全不同，報 0 會讀成「跑過但沒綠過」。
     """
-    known = _load_known_unexecuted()
-    remaining = sum(len(v) for v in known.values())
+    lint = repo_lint()
+    exemptions = sorted(lint.TEST_EXECUTION_BASELINE)
 
     if GREEN_STREAK.is_file():
         streak = len([ln for ln in GREEN_STREAK.read_text(encoding="utf-8").splitlines()
@@ -465,83 +462,25 @@ def check_upgrade_readiness() -> int:
         streak_note = f"{streak}/{GREEN_STREAK_REQUIRED}"
     else:
         streak = -1
-        streak_note = f"無法累計（跑全套的 workflow 尚未落地，非 0）"
+        streak_note = "無法累計（streak 檔尚未建立，非 0）"
 
-    print(f"\n升級條件：待修清單剩 {remaining} 項；develop push 連續全綠 {streak_note}")
-    if remaining or streak < GREEN_STREAK_REQUIRED:
+    print(f"\n升級條件：repo-lint 的 test-collectability 豁免條目剩 {len(exemptions)} 項；"
+          f"develop push 連續全綠 {streak_note}")
+    for key in exemptions:
+        print(f"  ~ {key}")
+    if exemptions or streak < GREEN_STREAK_REQUIRED:
         return 0
 
     print("=" * 72)
-    print("★ 本 gate 已滿足升級條件，請把 .gitea/workflows/test-collection-audit.yml")
-    print("  的 `continue-on-error: true` 移除，讓它真正擋 merge。")
-    print(f"  依據：待修清單已清空、develop push 連續 {streak} 次全綠。")
-    print("  （本步驟以非零退出碼提醒你——這是唯一會讓它變紅的情況，")
-    print("    不是缺陷，是「該做的事」自己找上門。）")
+    print("★ 兩個升級條件都已滿足：")
+    print("    1. repo-lint 的 TEST_EXECUTION_BASELINE 已清空（沒有任何 class 拿不到 test_tags）")
+    print(f"    2. develop push 全套連續 {streak} 次全綠")
+    print("  ⇒ 可以回 issue #546 重新裁決觸發策略：2026-08-03 拍板的 B+C 終點停在")
+    print("    「全套綠」、刻意不 block merge；上面兩件事是當時列出的前置條件。")
+    print("  （本步驟以非零退出碼提醒——這是唯一會讓它變紅的情況，")
+    print("    不是缺陷，是「該做的事」自己找上門。要不要往前走是 Eugene 的裁量。）")
     print("=" * 72)
     return 3
-
-
-def check_pure_unittest_modules(tests_dir: pathlib.Path) -> int:
-    """C1b：抓「機制 B」——整檔只有純 unittest.TestCase ⇒ 被 --test-tags 整批過濾。
-
-    C1 的匯入比對**結構上看不到這種**（import 都在），所以必須是獨立一道。
-    #544 實證：全 repo 62 條從未執行的測試裡，47 條是機制 B。
-    """
-    known = _load_known_unexecuted()["B"]
-    found: dict[str, int] = {}
-    for path in sorted(tests_dir.rglob("*.py")):
-        if path.name == "__init__.py":
-            continue
-        try:
-            tree = ast.parse(path.read_text(encoding="utf-8"))
-        except SyntaxError:
-            continue
-        if not _pure_unittest_module(tree):
-            continue
-        n = sum(1 for node in tree.body if isinstance(node, ast.ClassDef)
-                for b in node.body
-                if isinstance(b, (ast.FunctionDef, ast.AsyncFunctionDef))
-                and b.name.startswith("test_"))
-        if n:
-            found[path.stem] = n
-
-    fresh = {k: v for k, v in found.items() if k not in known}
-    stale = sorted(known - set(found))
-
-    rc = 0
-    if fresh:
-        rc = 1
-        print(f"\nC1b FAIL — 以下 {len(fresh)} 個測試檔整檔只有純 unittest.TestCase，")
-        print("        會被 --test-tags 整批過濾 ⇒ 從未執行（`of N tests` 看起來正常）：")
-        for name, n in sorted(fresh.items()):
-            print(f"  - src/tests/{name}.py   （{n} 條 def test_*）"
-                  f"\n      修法：把基底改成 Odoo TestCase（TransactionCase / HttpCase 等）")
-    known_hit = sorted(set(found) & known)
-    if known_hit:
-        print(f"\nC1b 註記：{len(known_hit)} 個已在待修清單（issue #544），不重複擋：")
-        for name in known_hit:
-            print(f"  ~ src/tests/{name}.py   （{found[name]} 條 def test_*，仍未執行）")
-    if stale:
-        rc = 1
-        print(f"\nC1b FAIL — 以下 {len(stale)} 項已不再是純 unittest 模組，"
-              "請從 test-collection-known-unexecuted.txt 刪掉（清單腐爛防線）：")
-        for name in stale:
-            print(f"  ✓ B\t{name}")
-    if rc == 0 and not known_hit:
-        print("C1b PASS：沒有整檔純 unittest.TestCase 的測試模組")
-    elif rc == 0:
-        print("C1b PASS：除待修清單外，沒有新的純 unittest.TestCase 模組")
-    return rc
-
-
-def count_test_defs(path: pathlib.Path) -> int:
-    try:
-        tree = ast.parse(path.read_text(encoding="utf-8"))
-    except (OSError, SyntaxError):
-        return -1
-    return sum(1 for n in ast.walk(tree)
-               if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
-               and n.name.startswith("test_"))
 
 
 def _diff_report(title: str, left_name: str, right_name: str,
@@ -579,8 +518,22 @@ def _diff_report(title: str, left_name: str, right_name: str,
     return 1
 
 
-def check_baseline(tests_dir: pathlib.Path, baseline: pathlib.Path) -> int:
-    expected, excluded = scan_expected(tests_dir)
+def _report_collection_not_clean(exc: CollectionNotClean, title: str) -> int:
+    print(f"\n{title} FATAL — 收集面有違規，「哪些 class 會跑」的預測不成立："
+          "\n        先修好收集面再回來（repo-lint 的 test-collectability 是同一組判準，"
+          "\n        它會給出逐項修法）。這裡刻意不先算一份不成立的清單再拿去對帳——"
+          "\n        那會把「收集壞了」偽裝成「有幾個 class 沒跑」，指錯修法。",
+          file=sys.stderr)
+    for v in exc.args[0]:
+        print(f"  ✗ {v.split('（Refs')[0].split('（#')[0].strip()}", file=sys.stderr)
+    return 2
+
+
+def check_baseline(root: pathlib.Path, baseline: pathlib.Path) -> int:
+    try:
+        expected, excluded = scan_expected(root)
+    except CollectionNotClean as exc:
+        return _report_collection_not_clean(exc, "C2")
     if not baseline.is_file():
         print(f"C2 FATAL: baseline 不存在，先跑 --update-baseline（{baseline}）", file=sys.stderr)
         return 2
@@ -633,21 +586,6 @@ def check_skips(log_path: pathlib.Path, allow_path: pathlib.Path | None) -> int:
 
 
 # ── self-test：把邊界樣本餵給自己的 matcher ────────────────────────────────
-SELF_TEST_INIT = '''
-from . import test_plain
-from . import test_two_a, test_two_b
-from .test_submodule_form import SomeClass
-from . import (
-    test_paren_multiline,
-    test_paren_second,
-)
-from .test_deep.nested import Thing
-import os
-from odoo.tests import TransactionCase
-if True:
-    from . import test_conditional
-'''
-
 SELF_TEST_SKIP_LINES = [
     ("2026-08-03 00:01:10,040 265 INFO test "
      "odoo.addons.woow_paas_platform.tests.test_probe_sentinel: "
@@ -660,15 +598,80 @@ SELF_TEST_SKIP_LINES = [
     ("... INFO test odoo.addons.woow_paas_platform.tests.test_removal_477: "
      "skipped _AddonRemovalCase.test_z : no template",
      ("test_removal_477", "_AddonRemovalCase.test_z", "no template")),
+    # 子套件：logger 名多一段套件名，識別字必須跟著帶（不可 rsplit 成 stem）
+    ("... INFO test odoo.addons.woow_paas_platform.tests.integration.test_i: "
+     "skipped TestI.test_w : needs real cluster",
+     ("integration.test_i", "TestI.test_w", "needs real cluster")),
 ]
 
 SELF_TEST_DETAIL_LINES = [
-    ("\twoow_paas_platform: 259.47s 282962 queries", 1),
-    ("\twoow_paas_platform.test_acl_p9.TestAclP9: 1.20s 34 queries", 3),
-    ("\twoow_paas_platform.test_removal_477._AddonRemovalCase.test_x: 0.10s 2 queries", 4),
-    ("2026-08-02 22:15:42,894 260 INFO test odoo.tests.result: 0 failed, 0 error(s) of 2237 tests", 0),
-    ("\tDetailed Tests Report:", 0),
+    "\twoow_paas_platform: 259.47s 282962 queries",
+    "\twoow_paas_platform.test_acl_p9.TestAclP9: 1.20s 34 queries",
+    "\twoow_paas_platform.test_acl_p9.TestAclP9.test_one: 1.20s 34 queries",
+    "\twoow_paas_platform.test_removal_477._AddonRemovalCase: 0.10s 2 queries",
+    "\twoow_paas_platform.test_removal_477._AddonRemovalCase.test_x: 0.10s 2 queries",
+    # 🔴 子套件：class 行 4 段、method 行 5 段。舊版用點數判粒度會把這兩行分別
+    #    誤判成 method／丟棄 ⇒ 這一格就是那個假紅的陽性對照。
+    "\twoow_paas_platform.integration.test_i.TestI: 0.30s 5 queries",
+    "\twoow_paas_platform.integration.test_i.TestI.test_w: 0.30s 5 queries",
+    "2026-08-02 22:15:42,894 260 INFO test odoo.tests.result: 0 failed, 0 error(s) of 2237 tests",
+    "\tDetailed Tests Report:",
 ]
+
+#: `scan_expected()` 的樣本樹。**混合檔是本組樣本的核心**：#684 留言 8233 §5.1 的
+#: `test_reconciler_diff.py` 就是這個形狀，而 module 級判準對它整檔放行。
+SELF_TEST_TREE = {
+    "src/__manifest__.py": "{'name': 'probe'}\n",
+    "src/tests/__init__.py": (
+        "from . import test_mix\n"
+        "from . import test_inherit\n"
+        "from . import test_deselected\n"
+        "from .sub import test_in_sub\n"
+    ),
+    # 混合檔：同檔一個會跑、一個不會跑
+    "src/tests/test_mix.py": (
+        "from odoo.tests.common import TransactionCase\n"
+        "import unittest\n"
+        "class TestOdooSide(TransactionCase):\n"
+        "    def test_a(self): pass\n"
+        "    def test_b(self): pass\n"
+        "class TestPureUnittest(unittest.TestCase):\n"
+        "    def test_c(self): pass\n"
+    ),
+    # 旗標寫在 mixin 上、由子類繼承（loader 篩子④'，走 getattr ⇒ 可繼承）
+    "src/tests/test_inherit.py": (
+        "from odoo.tests.common import TransactionCase\n"
+        "class _Fixture:\n"
+        "    allow_inherited_tests_method = True\n"
+        "    def test_from_mixin(self): pass\n"
+        "class TestWithFlag(_Fixture, TransactionCase):\n"
+        "    def test_own(self): pass\n"
+        "class _PlainFixture:\n"
+        "    def test_not_collected(self): pass\n"
+        "class TestNoFlag(_PlainFixture, TransactionCase):\n"
+        "    def test_own(self): pass\n"
+    ),
+    "src/tests/test_deselected.py": (
+        "from odoo.tests.common import TransactionCase\n"
+        "from odoo.tests import tagged\n"
+        "@tagged('-standard', 'post_install', 'probe_only')\n"
+        "class TestDeselected(TransactionCase):\n"
+        "    def test_d(self): pass\n"
+    ),
+    "src/tests/sub/__init__.py": "from . import test_in_sub\n",
+    "src/tests/sub/test_in_sub.py": (
+        "from odoo.tests.common import TransactionCase\n"
+        "class TestInSub(TransactionCase):\n"
+        "    def test_e(self): pass\n"
+    ),
+}
+
+
+def _write_tree(root: pathlib.Path, files: dict[str, str]) -> None:
+    for rel, body in files.items():
+        p = root / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(body, encoding="utf-8")
 
 
 def self_test() -> int:
@@ -678,39 +681,7 @@ def self_test() -> int:
 
     failures: list[str] = []
 
-    # (1) import matcher：五種匯入形態全要抓到，絕對匯入不得誤抓
-    with tempfile.TemporaryDirectory() as td:
-        f = pathlib.Path(td) / "__init__.py"
-        f.write_text(SELF_TEST_INIT, encoding="utf-8")
-        got = imported_submodules(f)
-        want = {"test_plain", "test_two_a", "test_two_b", "test_submodule_form",
-                "test_paren_multiline", "test_paren_second", "test_deep", "test_conditional"}
-        if got != want:
-            failures.append(f"import matcher：漏抓={sorted(want - got)} 誤抓={sorted(got - want)}")
-        if "os" in got:
-            failures.append("import matcher 把絕對匯入 `import os` 誤算成同層 submodule")
-
-    # (2) on_disk：子套件目錄要算、無 __init__.py 的純目錄不算；遞迴要抓到子套件內漏匯入
-    with tempfile.TemporaryDirectory() as td:
-        root = pathlib.Path(td)
-        (root / "__init__.py").write_text("from . import test_a\nfrom . import subpkg\n")
-        (root / "test_a.py").write_text("def test_x(): pass\n")
-        (root / "subpkg").mkdir()
-        (root / "subpkg" / "__init__.py").write_text("")           # 子套件自己漏匯入
-        (root / "subpkg" / "test_inner.py").write_text("def test_y(): pass\n")
-        (root / "not_a_pkg").mkdir()
-        (root / "not_a_pkg" / "test_z.py").write_text("")
-        if on_disk_submodules(root) != {"test_a", "subpkg"}:
-            failures.append(f"on_disk matcher 錯：{sorted(on_disk_submodules(root))}")
-        buf = io.StringIO()
-        with contextlib.redirect_stdout(buf):
-            rc = check_imports(root)
-        if rc == 0:
-            failures.append("遞迴檢查沒抓到子套件內漏匯入的檔案（假綠）")
-        if "test_inner" not in buf.getvalue():
-            failures.append("遞迴檢查沒把漏掉的名字印出來（只給數字＝不可證偽）")
-
-    # (3) SKIP_LINE：理由含冒號 / 底線開頭 class / 行尾空白；非 skip 行不得誤抓
+    # (1) SKIP_LINE：理由含冒號 / 底線開頭 class / 行尾空白 / 子套件；非 skip 行不得誤抓
     with tempfile.TemporaryDirectory() as td:
         p = pathlib.Path(td) / "log.txt"
         p.write_text("\n".join(s for s, _ in SELF_TEST_SKIP_LINES), encoding="utf-8")
@@ -727,77 +698,75 @@ def self_test() -> int:
         if parse_skips(neg):
             failures.append(f"SKIP_LINE 誤抓非 skip 行：{parse_skips(neg)}")
 
-    # (4) DETAIL_LINE 粒度切分
+    # (2) DETAIL_LINE 粒度切分 —— **子套件是陽性對照**（點數判法在這裡會錯）
     with tempfile.TemporaryDirectory() as td:
         p = pathlib.Path(td) / "log.txt"
-        p.write_text("\n".join(s for s, _ in SELF_TEST_DETAIL_LINES), encoding="utf-8")
-        if extract_executed(p, "class") != {"test_acl_p9.TestAclP9"}:
-            failures.append(f"class 粒度切分錯：{extract_executed(p, 'class')}")
-        if extract_executed(p, "method") != {"test_removal_477._AddonRemovalCase.test_x"}:
-            failures.append(f"method 粒度切分錯：{extract_executed(p, 'method')}")
+        p.write_text("\n".join(SELF_TEST_DETAIL_LINES), encoding="utf-8")
+        want_cls = {"test_acl_p9.TestAclP9", "test_removal_477._AddonRemovalCase",
+                    "integration.test_i.TestI"}
+        want_mth = {"test_acl_p9.TestAclP9.test_one",
+                    "test_removal_477._AddonRemovalCase.test_x",
+                    "integration.test_i.TestI.test_w"}
+        got_cls, got_mth = extract_executed(p, "class"), extract_executed(p, "method")
+        if got_cls != want_cls:
+            failures.append(f"class 粒度切分錯：漏={sorted(want_cls-got_cls)} "
+                            f"誤={sorted(got_cls-want_cls)}")
+        if got_mth != want_mth:
+            failures.append(f"method 粒度切分錯：漏={sorted(want_mth-got_mth)} "
+                            f"誤={sorted(got_mth-want_mth)}")
+        if extract_executed(p, "module") != {"woow_paas_platform"}:
+            failures.append(f"module 粒度切分錯：{extract_executed(p, 'module')}")
 
-    # (5) scan_expected：只繼承不算、@tagged('-standard') 排除且**列名**
+    # (3) scan_expected：判準借自 repo-lint，這裡驗的是「借對了」
     with tempfile.TemporaryDirectory() as td:
         root = pathlib.Path(td)
-        (root / "__init__.py").write_text("from . import test_s\n")
-        (root / "test_s.py").write_text(
-            "from odoo.tests import tagged\n"
-            "class _Mixin:\n"
-            "    def test_from_mixin(self): pass\n"
-            "class TestConsumer(_Mixin, object):\n"
-            "    pass\n"                                    # 只繼承 → Odoo 18 不收
-            "class TestReal(object):\n"
+        _write_tree(root, SELF_TEST_TREE)
+        exp, exc = scan_expected(root)
+        exc_map = dict(exc)
+
+        # 🔴 混合檔：同檔的兩個 class 結論必須**不同**。這正是被刪掉的 module 級判準
+        #    看不到的那一格（#684 8233 §5.1 的 test_reconciler_diff.py）。
+        if exp.get("test_mix.TestOdooSide") != 2:
+            failures.append(f"混合檔裡會跑的 class 沒被算進預期：{exp}")
+        if "test_mix.TestPureUnittest" in exp:
+            failures.append("🔴 混合檔裡拿不到 test_tags 的 class 被算進預期了"
+                            "——這就是 module 級判準的那個假綠")
+        if "test_mix.TestPureUnittest" not in exc_map:
+            failures.append("混合檔那一格被靜默丟棄而非列名")
+
+        # 篩子④'：旗標可繼承 ⇒ mixin 的方法算進子類；沒旗標的不算
+        if exp.get("test_inherit.TestWithFlag") != 2:
+            failures.append(f"allow_inherited_tests_method（寫在 mixin 上）沒被展開："
+                            f"{exp.get('test_inherit.TestWithFlag')} != 2")
+        if exp.get("test_inherit.TestNoFlag") != 1:
+            failures.append(f"沒有旗標的 class 把繼承來的方法也算進去了："
+                            f"{exp.get('test_inherit.TestNoFlag')} != 1")
+
+        # -standard：合法 opt-out，排除且列名
+        if "test_deselected.TestDeselected" in exp:
+            failures.append("`-standard` 的 class 沒被排除")
+        if "test_deselected.TestDeselected" not in exc_map:
+            failures.append("`-standard` 被靜默排除而非列名")
+
+        # 子套件：識別字要帶套件名（與 detail report 的 `_TEST_ID` 同一個空間）
+        if "sub.test_in_sub.TestInSub" not in exp:
+            failures.append(f"子套件的識別字沒帶套件名：{sorted(exp)}")
+
+    # (3b) 收集面不乾淨 ⇒ 拒絕產生預測，不是先算一份不成立的
+    with tempfile.TemporaryDirectory() as td:
+        root = pathlib.Path(td)
+        tree = dict(SELF_TEST_TREE)
+        tree["src/tests/test_zz_orphan.py"] = (
+            "from odoo.tests.common import TransactionCase\n"
+            "class TestOrphan(TransactionCase):\n"
             "    def test_a(self): pass\n"
-            "    def test_b(self): pass\n"
-            "@tagged('-standard', 'post_install')\n"
-            "class TestDeselected(object):\n"
-            "    def test_c(self): pass\n",
-            encoding="utf-8")
-        exp, exc = scan_expected(root)
-        if "test_s.TestConsumer" in exp:
-            failures.append("scan_expected 把「只繼承 test_*」的 class 算進預期（Odoo 18 不收）")
-        if exp.get("test_s.TestReal") != 2:
-            failures.append(f"scan_expected 對直接定義的 class 計數錯：{exp}")
-        if "test_s.TestDeselected" in exp:
-            failures.append("scan_expected 沒排除 @tagged('-standard')")
-        if not any(i == "test_s.TestDeselected" for i, _ in exc):
-            failures.append("@tagged('-standard') 被靜默排除而非列名")
-
-    # (5b) 機制 B：整檔純 unittest.TestCase ⇒ 排除；但**混用**時不得誤殺
-    #      對照組來自 #544：test_reconciler_diff.py 同樣含 unittest.TestCase，
-    #      卻因同檔有 TransactionCase 而確實被執行。判準必須是 module 級不是 class 級。
-    for label, src, want_pure in [
-        ("全純 unittest",
-         "import unittest\nclass TestA(unittest.TestCase):\n    def test_x(self): pass\n", True),
-        ("from unittest import TestCase 別名形",
-         "from unittest import TestCase\nclass TestA(TestCase):\n    def test_x(self): pass\n", True),
-        ("混用（對照組，不得誤殺）",
-         "import unittest\nclass TestA(unittest.TestCase):\n    def test_x(self): pass\n"
-         "class TestB(TransactionCase):\n    def test_y(self): pass\n", False),
-        ("基底是複雜運算式 → 保守視為可收集",
-         "class TestA(mod.get_base()):\n    def test_x(self): pass\n", False),
-        ("沒有任何 class",
-         "def helper(): pass\n", False),
-    ]:
-        if _pure_unittest_module(ast.parse(src)) is not want_pure:
-            failures.append(f"_pure_unittest_module 對「{label}」判錯（期望 pure={want_pure}）")
-
-    # 端到端：混用檔的純 unittest class 也必須留在 expected（module 會整個載入）
-    with tempfile.TemporaryDirectory() as td:
-        root = pathlib.Path(td)
-        (root / "__init__.py").write_text("from . import test_mix\nfrom . import test_pure\n")
-        (root / "test_mix.py").write_text(
-            "import unittest\nclass TestPureOne(unittest.TestCase):\n    def test_x(self): pass\n"
-            "class TestOdoo(TransactionCase):\n    def test_y(self): pass\n")
-        (root / "test_pure.py").write_text(
-            "import unittest\nclass TestOnlyPure(unittest.TestCase):\n    def test_z(self): pass\n")
-        exp, exc = scan_expected(root)
-        if "test_mix.TestPureOne" not in exp:
-            failures.append("混用檔的純 unittest class 被誤殺（#544 的對照組會被誤判）")
-        if "test_pure.TestOnlyPure" in exp:
-            failures.append("全純 unittest 模組沒被排除（機制 B 漏抓）")
-        if not any(i == "test_pure.TestOnlyPure" for i, _ in exc):
-            failures.append("機制 B 的排除被靜默丟棄而非列名")
+        )
+        _write_tree(root, tree)
+        try:
+            scan_expected(root)
+            failures.append("收集面有違規（有檔沒被 import）卻照樣產出預測清單")
+        except CollectionNotClean:
+            pass
 
     # (5c) FAILURE_LINE：FAIL/ERROR 兩種 flavour；skip／summary／detail 行不得誤抓
     with tempfile.TemporaryDirectory() as td:
@@ -892,15 +861,15 @@ def self_test() -> int:
         for f in failures:
             print(f"  ✗ {f}")
         return 1
-    print("SELF-TEST PASS：import 五形態／子套件遞迴／SKIP_LINE 三形態＋陰性對照／"
-          "粒度切分／繼承與 -standard 排除／機制 B（含混用對照組）／"
-          "FAILURE_LINE／完整性哨兵／C5 失敗集合差／雙向差集 —— 全部命中")
+    print("SELF-TEST PASS：SKIP_LINE 四形態＋陰性對照／粒度切分（含子套件，"
+          "點數判法在那裡會錯）／scan_expected（混合檔逐 class、篩子④' 旗標可繼承、"
+          "-standard 列名排除、子套件識別字）／收集面不乾淨時拒絕預測／FAILURE_LINE／"
+          "完整性哨兵／C5 失敗集合差／雙向差集 —— 全部命中")
     return 0
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--check-imports", action="store_true")
     ap.add_argument("--check-baseline", action="store_true")
     ap.add_argument("--check-executed", metavar="ODOO_TEST_LOG")
     ap.add_argument("--check-skips", metavar="ODOO_TEST_LOG")
@@ -910,15 +879,27 @@ def main() -> int:
     ap.add_argument("--check-failures", metavar="ODOO_TEST_LOG")
     ap.add_argument("--upgrade-check", action="store_true")
     ap.add_argument("--self-test", action="store_true")
-    ap.add_argument("--all", action="store_true", help="跑所有不需要 log 的檢查（C1+C2）")
+    ap.add_argument("--all", action="store_true",
+                    help="跑所有不需要 log 的檢查（C2 ＋ 升級條件自檢）")
     args = ap.parse_args()
+    actions = (args.check_baseline, args.check_executed, args.check_skips,
+               args.update_baseline, args.check_sentinels, args.check_failures,
+               args.upgrade_check, args.all)
 
-    if args.self_test:
+    # 不帶任何動作＝ `--self-test`。理由見檔頭：repo-lint.yml 的「scripts/ 自我測試」
+    # 會 glob `scripts/audit/test_*.py` 逐一裸執行，印 help 然後 exit 2 會把 repo-lint
+    # 整條弄紅，而症狀跟真正的違規不可區分。
+    if args.self_test or not any(actions):
         return self_test()
     if args.update_baseline:
-        expected, excluded = scan_expected(TESTS_DIR)
+        try:
+            expected, excluded = scan_expected(REPO_ROOT)
+        except CollectionNotClean as exc:
+            return _report_collection_not_clean(exc, "--update-baseline")
         write_baseline(BASELINE, expected)
-        print(f"已寫入 {BASELINE.relative_to(REPO_ROOT)}：{len(expected)} 個 class")
+        total = sum(expected.values())
+        print(f"已寫入 {BASELINE.relative_to(REPO_ROOT)}："
+              f"{len(expected)} 個 class／{total} 條 test 方法")
         if excluded:
             print(f"排除 {len(excluded)} 個（列名）：")
             for ident, why in sorted(excluded):
@@ -926,30 +907,19 @@ def main() -> int:
         return 0
 
     rc = 0
-    ran = False
-    if args.all or args.check_imports:
-        rc |= check_imports(TESTS_DIR); ran = True
-    if args.all or args.check_imports:
-        rc |= check_pure_unittest_modules(TESTS_DIR)
-    if args.all:
-        rc |= check_upgrade_readiness()
     if args.all or args.check_baseline:
-        rc |= check_baseline(TESTS_DIR, BASELINE); ran = True
-    if args.upgrade_check:
-        rc |= check_upgrade_readiness(); ran = True
+        rc |= check_baseline(REPO_ROOT, BASELINE)
+    if args.all or args.upgrade_check:
+        rc |= check_upgrade_readiness()
     if args.check_sentinels:
-        rc |= check_sentinels(pathlib.Path(args.check_sentinels)); ran = True
+        rc |= check_sentinels(pathlib.Path(args.check_sentinels))
     if args.check_failures:
-        rc |= check_failure_set(pathlib.Path(args.check_failures)); ran = True
+        rc |= check_failure_set(pathlib.Path(args.check_failures))
     if args.check_executed:
-        rc |= check_executed(BASELINE, pathlib.Path(args.check_executed)); ran = True
+        rc |= check_executed(BASELINE, pathlib.Path(args.check_executed))
     if args.check_skips:
         rc |= check_skips(pathlib.Path(args.check_skips),
                           pathlib.Path(args.allow_skips) if args.allow_skips else None)
-        ran = True
-    if not ran:
-        ap.print_help()
-        return 2
     return rc
 
 
