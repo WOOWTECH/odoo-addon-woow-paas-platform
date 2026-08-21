@@ -3,6 +3,8 @@ from datetime import timedelta
 
 from odoo import _, api, fields, models
 
+from .account_move import _forced_ecpay_issue
+
 _logger = logging.getLogger(__name__)
 
 
@@ -75,9 +77,11 @@ class EcpayInvoiceCron(models.AbstractModel):
 
         move.write({'woow_invoice_issue_state': 'issuing'})
         try:
-            # 透過 woow_force_issue context bypass Task 2.1 的 short-circuit
-            # (PaaS-flagged invoice 只允許這支 cron 開立，杜絕上游 inline hook)
-            move.with_context(woow_force_issue=True).create_ecpay_invoice()
+            # 開閘 bypass Task 2.1 的 short-circuit（PaaS-flagged invoice 只允許
+            # 這支 cron 開立，杜絕上游 inline hook）。
+            # 🔴 #787：一定要走 helper，不可寫成 `with_context(woow_force_issue=True)`
+            #    —— 判定是**值的物件身分**，裸 `True` 從此不開閘（而且會拋例外）。
+            _forced_ecpay_issue(move).create_ecpay_invoice()
         except Exception as exc:
             self._record_failure(move, str(exc))
             return

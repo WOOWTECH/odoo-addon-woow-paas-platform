@@ -3937,11 +3937,22 @@ INTERNAL_CTX_KEY_REGISTRY = {
                "（fail-open 且無聲）。已改私有 sentinel（形狀同 #536）。",
     },
     "woow_force_issue": {
-        "status": "pending",
+        "status": "enforced",
+        "sentinel": "_INTERNAL_INVOICE_ISSUE_CONTROL",
+        "reader": "_is_invoice_issue_control",
+        "defined_in": "src/models/account_move.py",
         "issue": "#787",
-        "why": "#787 A 段：讓帶 woow_skip_upstream_hook 的發票仍真的向 ECPay 開立"
-               "（正當 setter 是 ecpay_invoice_cron）。account.move 是 ERP 模型，"
-               "租戶能否經 RPC 觸達未驗證 ⇒ 🔴 不得當已坐實的後門轉述。",
+        "why": "讓帶 woow_skip_upstream_hook 的發票仍真的向 ECPay 開立（正當開閘"
+               "點是 ecpay_invoice_cron）。#787 實測**可達**，但兩個租戶身分結論"
+               "相反：只有 base.group_user 的身分被 account.move 的 ACL 擋死"
+               "（連 read 都不行），而 **base.group_portal 打得進去**——upstream "
+               "給 portal 一列 account.move read=1，真 call_kw 偽造 context 後流程"
+               "確實走進 super()。對外送出目前另被 uniform.invoice 的 ACL 擋住 "
+               "⇒ defense-in-depth（形狀同 sm_route_cascade_unlink）。已改私有 "
+               "sentinel。⚠ 這是 A 段唯一的 **force 型**：其餘四把「不開閘」＝多"
+               "做一次冪等動作，這一把「不開閘」＝該開的發票沒開、而唯一的生產呼"
+               "叫端會把靜默早退記成 issued ⇒ 判定函式在「truthy 但非 sentinel」"
+               "時 fail-loud（WARNING ＋ UserError），不沿用 skip 型的靜默路徑。",
     },
     # --- 已移除的通道（status=removed：判準是「不准回來」）----------------- #
     "sa_unlinked_cf_policy_ids": {
