@@ -146,7 +146,8 @@ jobs:
           echo "── skip 行（C4 的輸入；skip 算進 of N tests 卻什麼都沒驗）──"
           grep -c ": skipped " /tmp/test.log
           grep ": skipped " /tmp/test.log | head -60
-          echo "── FAIL/ERROR 行（C5 的輸入；也是 FAILURE_LINE 正規式唯一的陽性對照）──"
+          echo "── FAIL/ERROR 行（C5 的輸入。⚠ 正規式的陽性對照**不在這裡**："
+          echo "──   known-failures 清空後這裡零筆是常態；對照在 self-test 的注入樣本集）──"
           grep -cE ": (FAIL|ERROR): " /tmp/test.log
           grep -E ": (FAIL|ERROR): " /tmp/test.log | head -60
           echo "── 哨兵自己的 detail 行（證明它被收集且真的跑了）──"

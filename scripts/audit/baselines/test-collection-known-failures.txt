@@ -9,7 +9,19 @@
 #
 # 格式：<測試檔>.<Class>.<method>
 #
-# #543：migration 撞上 _check_allow_policy_no_bulk_grant，post-migrate 的
-#       Rule.create 沒繞過該守衛 ⇒ 舊備份還原的 DB 升版會中斷。
-#       把 fixture 改成 deny 一行就能轉綠，但那是用假綠掩蓋真缺陷，刻意不做。
-test_security_access_p_rule_migration.TestPRuleMigration.test_cursor_bypass_flag_cleared_after_migrate
+# ── 目前是空的（2026-08-22，Refs #543 #546）─────────────────────────────
+# 原本唯一那條是 #543 的注入式驗證
+# （test_security_access_p_rule_migration.TestPRuleMigration
+#   .test_cursor_bypass_flag_cleared_after_migrate）。
+# 缺陷已於 2026-08-03 由 `0fd3ba67` 真的修好（post-migrate 補上第二個 cursor flag
+# `sa_skip_bulk_grant_check`），run 4629 實測它跑了而且沒紅 ⇒ 依本檔規則刪行。
+#
+# 🔴 刪掉它的代價要講清楚：C5 的 FATAL 分支是 `if expected and not actual`，
+#   本檔空掉之後那個分支**永遠不會觸發**，於是「FAILURE_LINE 解析器壞了」與
+#   「這次真的沒有紅燈」的輸出完全一樣。補償措施是
+#   `test_collection_audit.py` 的 `SELF_TEST_FAILURE_LINES`
+#   ——注入式的陽性／陰性樣本集，外加一圈變異體反驗，每次跑 repo-lint 都會行使
+#   那條正規式。**先有那組 self-test，才刪這一行**（Eugene 2026-08-22 裁決）。
+#
+# ⚠ 同一條測試仍留在 `test-collection-sentinels.txt`，那**不是漏刪**：
+#   哨兵只要求它**出現**（紅綠皆可），這個要求在它轉綠之後仍然成立。
