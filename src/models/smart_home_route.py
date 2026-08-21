@@ -800,7 +800,8 @@ class SmartHomeRoute(models.Model):
         liveness 沒有消失，它換了工作：推不動的那一格現在**出聲**（下面的
         warning）。它同時是「清 `tunnel_id` 之前一定先清掉 `cf_policy_id`」這條
         跨方法順序不變式被破壞時的現場訊號——那條不變式本身由
-        `src/tests/test_sh_teardown_capture_semantics_785.py` 的 B 系列鎖住。
+        `src/tests/test_sh_teardown_capture_semantics_785.py` 的 **C 系列**鎖住
+        （B 系列鎖的是兩個呼叫端不再把「推不動」判成「這一輪乾淨」）。
         """
         self.ensure_one()
         if not self._has_access_teardown():
