@@ -540,3 +540,63 @@ except Exception as e:
 
 ⚠ 這個 label key 是新增的第 6 個平台 label。**必須加模組級常數**，不要重蹈 `"paas.woowtech.io/env"` 被裸字串重複 4 次的覆轍（F-11）。
 
+---
+
+## 10. 跨 repo 提問（woow-paas-charts）
+
+> 以下五道提問全部指向 `woow-paas-charts`（本檔撰寫全程**未 clone、未讀**該 repo，見文首宣告）。**提問一～三是 rollout blocker**——答案回來前，無法判定 §5 的 baseline egress 規則落地後對這幾個 template 是「安全性零進步」還是「服務當場斷線」，兩個結論的行動相反（§6 F-4，本檔 §0 引用點：line 29、line 85、line 297）。**提問四～五是 nice-to-have**，不影響 rollout 判斷，只影響個別 template 的行為精確度。
+
+### 10.1 提問一（blocker）—— `mcp-server` chart 有沒有自己的 NetworkPolicy？
+
+- **標的**：`mcp-server` chart（供 #5-11 七個 template 共用：`mcp-hermes` / `mcp-odoo` / `mcp-odoo-manage` / `mcp-n8n` / `mcp-k8s` / `mcp-vk` / `mcp-opendesign`，見本 repo `src/data/cloud_app_templates.xml:570-648`）。
+- **要看的鍵**：chart templates 目錄下是否有 `NetworkPolicy` 資源（常見檔名 `network-policy.yaml` / `networkpolicy.yaml`）；若有，`spec.policyTypes` 是否含 `Egress`；`spec.egress` 的規則內容（尤其是否有 `allowAllEgress` 或等效的 `0.0.0.0/0` 開放）。
+- **答案 A：無 NP，或有 NP 但不含 Egress policyType** → 這 7 個 template 的 egress 完全交給本案 baseline 覆蓋。行動：rollout 前需確認 §5 的 E-2（same-ns，涵蓋 mcp-opendesign→daemon）／E-5（外網，涵蓋 mcp-k8s 連外部叢集 apiserver、mcp-vk 連外部後端等租戶自填 connection）確實涵蓋這 7 個 template 的全部合法出向（§2 表 #5-11 那一列）。
+- **答案 B：已有 `allowAllEgress: true` 或等效全開規則** → union 後 baseline 的 deny 對這 7 個 template 完全無效（§6 F-4：安全性零進步，但外觀正常）。行動：這 7 個 template 需要另外處理（改 chart 收斂，或在 issue 上明寫「baseline 對它們無安全效果」，不能默默算作已收斂）。
+
+### 10.2 提問二（blocker）—— `open-design` / `hermes-agent` chart 的 egress NP 除了 apiServerCidrs 還涵蓋什麼？
+
+- **標的**：`open-design`（0.1.4）與 `hermes-agent`（0.2.0）兩支 chart。本 repo 已知它們的 chart 吃 `networkPolicy.apiServerCidrs` 這個鍵（`src/models/cloud_service.py:1885-1922` 的 `_inject_apiserver_cidrs`），但除此之外的 egress 規則內容本 repo 查不到。
+- **要看的鍵**：同一個（或另一個）NetworkPolicy 資源裡，除了 apiServerCidrs 產生的規則外，是否已涵蓋：Anthropic API（open-design 的 `claude login`／hermes-agent 的 LLM API）、任意套件 registry（`uv tool install` / `npm i -g` / `go install` / `cargo install`）、任意外部 MCP server 及其 OAuth authorization server？還是這些出向完全沒有 chart 側規則，全部要靠 ns 級 baseline 補？
+- **答案 A：chart 已涵蓋上述部分或全部出向**（例如另有 `allowAllEgress` 或明確 ipBlock）→ union 後 baseline 對它們的覆蓋範圍比表面看起來小。行動：在 issue 上明確標注這兩個 template 實際被 baseline 收斂到的範圍是哪一段，不能假設整條 §5 都對它們生效。
+- **答案 B：chart 完全沒有這些出向的規則**（只有 apiServerCidrs 那一段）→ 本案 §5 的 E-4（apiserver）＋ E-5（外網）必須完整涵蓋 §2 表 #13/#14 列出的全部出向標的，缺一個就是 F-4／F-6 失效模式的重演。行動：rollout 前逐條核對 §2 表 #13/#14 每一項出向都被 E-4 或 E-5 涵蓋到。
+
+### 10.3 提問三（blocker）—— `home-assistant`（`ha-paas`）chart 到底有沒有 egress 出向？
+
+- **標的**：`home-assistant` chart（0.2.1，對應 #12 `ha-paas` template）。本 repo seed（`src/data/cloud_app_templates.xml:721-790`）完全沒有 `networkPolicy` 鍵，也沒有任何出向線索——這是 §2 盤點表裡「最大空白」的一列（表格備註「?（最大空白）」）。
+- **要看的鍵**：chart 有沒有自己的 NetworkPolicy 樣板？若有，`policyTypes` 是否含 Egress、egress 規則內容為何？若沒有 NP 樣板，chart 的 pod 是否有任何已知需要外網的行為（姊妹 template `ha-full` 與 `haos` 都明確需要外網，`ha-paas` 本身的需求本 repo 查不到）？
+- **答案 A：chart 需要外網**（且沒有自己的 NP，或有但非 allowAllEgress）→ 比照 #13/#14 的處理方式。行動：確認 E-5 涵蓋 `ha-paas`，並在 §8.3 的負向驗收清單加一條 `ha-paas` 專屬的外網連通測試（目前 N-5 只用泛用 established pod，未指名哪個 template）。
+- **答案 B：chart 完全不需要外網**（只需要同 ns 或 DNS）→ `ha-paas` 其實可以比 baseline 更嚴格，不必吃到 E-5 的 `0.0.0.0/0 except`。行動：評估是否值得為它單獨收緊，與 §9.3 D-3（per-chart vs baseline）決策連動。
+
+### 10.4 提問四（nice-to-have，對應 §6 F-8 / §3 W-5）—— CDI importer pod 需不需要 DNS？
+
+- **標的**：`haos` chart（0.1.2）的 CDI DataVolume 設定（本 repo `src/data/cloud_app_templates.xml:1204-1211` 釘死 `dataVolume.registry.pullMethod=node`）。
+- **要看的鍵**：`pullMethod=node` 這個路徑下，CDI controller 生成的 `importer-*` pod 除了讀 node 本地 containerd 之外，有沒有任何 DNS 查詢或其他出向（例如校驗 checksum、回報匯入進度）？
+- **答案 A：完全不需要**（純本機操作）→ §5 現有規則不需要特別涵蓋 importer pod。行動：無，維持現狀判斷。
+- **答案 B：需要 DNS 或其他出向** → E-0 落地後 importer pod 會卡在 `ImportInProgress`（§6 F-8 已知症狀，且 log 不指向根因）。行動：importer pod 至少要被 E-1（DNS）涵蓋，可能需要額外規則。
+
+### 10.5 提問五（nice-to-have）—— `haos` / `home-assistant-full` 的 `allowAllEgress: true` 能不能由 values 收緊？
+
+- **標的**：`haos`（0.1.2）與 `home-assistant-full`（0.1.1）兩支 chart。本 repo 已知兩者都有 `networkPolicy.allowAllEgress: true`（`src/data/cloud_app_templates.xml:1255-1260`、`:1492-1494`），但除了這個布林值之外，chart 側的完整 egress 規則（例如 haos 的 xff-proxy→VM 那條、ha-full 的 HACS 出向）本 repo 未見。
+- **要看的鍵**：chart 的 NetworkPolicy 樣板除了 `allowAllEgress` 之外，有沒有更細粒度的規則選項（例如可設定 allowlist domain/CIDR）？未來若要把這兩個 template 從「全開」收緊到「限定 github.com / HA Cloud」，chart 端需要改哪裡？
+- **答案 A：chart 只有一個布林開關，沒有更細粒度** → 收緊只能在 chart 端加新功能，本案短期內維持全開。行動：baseline 不試圖收緊這兩個 template，§9.3 D-3 決策維持現狀。
+- **答案 B：chart 已有更細粒度但目前沒開** → 未來可以評估開啟。行動：列為本案 rollout 後的 follow-up，不影響本次判斷。
+
+---
+
+## 11. 未查證清單
+
+> 全文所有標記「未查證」「未實測」「推定」「推測」或等義措辭（如「本 repo 內未記載」）的項目收攏如下。已在 §10 開提問的項目在「誰能查」欄註明對應提問編號；純叢集操作類的項目本檔範圍內不執行（見文首「本檔不含任何叢集寫入」宣告），留給 §待辦 3（stg 演練）階段。
+
+| # | 項目 | 為什麼沒查 | 誰能查 | 不查的風險 |
+| --- | --- | --- | --- | --- |
+| 1 | 10 個 template 的 chart-level egress NP 段（§2 表「chart NP?」欄標 `?` 的 9 列：#1/2/3/4/5-11/12、#13/14 其餘段）| chart 原始碼在 `woow-paas-charts`，本檔撰寫範圍明確排除跨 repo 存取（line 85） | woow-paas-charts 維護者，見 §10 提問一～三 | 覆蓋度不可判定 ⇒ 無法區分「baseline 安全性零進步」與「baseline 讓服務斷線」，兩者行動相反（§6 F-4，本檔 TL;DR 首要阻塞） |
+| 2 | `ha-paas`（#12）合法出向標的完全空白，連是否需要外網都無證據 | seed（`src/data/cloud_app_templates.xml:721-790`）無任何 networkPolicy 或出向線索記載 | woow-paas-charts 維護者，見 §10 提問三 | 若實際需要外網卻被 baseline 擋住，是「開箱即壞」且無錯誤訊息指向根因；若不需要則錯失收緊機會 |
+| 3 | `open-design`（#13）Anthropic API 的連線 port 為推定值（TCP/443），非證實 | 本 repo 只記載該功能存在（`src/data/cloud_app_templates.xml:797-800,833`），未見連線埠明文規格 | 實際跑一次 `claude login` 用 established pod 探針觀測；或 woow-paas-charts / Anthropic 文件 | 風險偏低——§5.2 E-5 本身不限 port，即使猜錯埠規則仍涵蓋得到；主要影響 §8 驗證計畫若誤把它當固定埠設計探針會失準 |
+| 4 | CDI importer pod（W-5）是否連 DNS 都不需要 | `pullMethod=node` 下只能從既有文件推定「無 pod 出向」，本 repo 沒有該 pod 實際行為的觀測記錄（line 327） | woow-paas-charts 維護者，見 §10 提問四；或部署一台新 HAOS 用 established pod 觀測 importer pod 實際流量 | 若需要 DNS 而 baseline 規則沒涵蓋它，新開通 HAOS 會卡在 `ImportInProgress`（§6 F-8），log 不指向根因 |
+| 5 | W-9 `pvc-cleanup` Job 跑在哪個 ns | #427 交接文件只留下「判斷無害但未實測」，未記載該 Job 實際 namespace（`docs/decisions/427-operator-ingress-baseline.md:21`，本檔 line 130） | operator 維護者；或叢集內 `kubectl get job -A` 類查詢（本檔範圍排除，留待 stg 演練階段） | 若跑在租戶 ns，它是 E-4（apiserver）的第二個消費者；E-0 落地後若 E-4 沒涵蓋它，PVC 清理會靜默失敗 |
+| 6 | k3s CoreDNS pod 的實際 label 值 | 本 repo 內未記載 CoreDNS pod 的 label（只知道 namespace 是 `kube-system`，line 189） | `kubectl -n kube-system get pod -l k8s-app=kube-dns` 量到非空即可確認（叢集操作，本檔範圍排除） | 低——§5.2 E-1 已刻意維持 namespaceSelector-only、不收緊，此項本身不阻塞 rollout；僅在「收緊到 podSelector」的 rollout 後 follow-up 才需要 |
+| 7 | 叢集第 4 顆 node 是否為 worker、是否跑 apiserver | 本 repo 只記載 3 個 control-plane node IP（`docs/reference/features/opendesign-console.md:145,159`；`docs/tracking/landings/404-apiserver-cidrs-landing.md:10`），叢集實際有 4 個 node（§4，本檔 line 142/512） | 叢集操作者 `kubectl get nodes -o wide --context woow-k3s`（本檔範圍排除） | 若 §9.1 D-1 選人工維護 node IP 清單（選項 B）且漏列第 4 顆，會是 F-6 間歇性失效，且症狀「看落在哪顆 node」難定位；本檔建議選項 C（自動發現）天然免疫此風險，正是理由之一 |
+| 8 | docker-desktop 的網段與 NP enforcement 行為 | 本 repo 完全未記載（只知道其 k8s node 已改成 kind 風格容器，line 152） | 在 docker-desktop context 起一組 established pod 做 §8.2 探針腳本觀測（叢集操作，本檔範圍排除） | 在 docker-desktop 上得到的任何綠燈/紅燈都不可外推到 woow-k3s（§4、§8.4 已提醒）；誤用會產生假訊號 |
+| 9 | k8s-dev-sandbox 驗證用的 `create.sh` 是不是自己改過的那份（hostPath 凍結副本問題） | `create.sh` 已移到 woow-dev plugin，本 worktree 查不到相關 gate 或凍結副本記錄；`docs/guides/getting-started.md:221` 反而寫「hostPath 即時反映」，與已知的凍結副本 pitfall 矛盾（line 490） | woow-dev plugin 維護者；或實際比對 host 與 node 上同一檔案內容（叢集操作，本檔範圍排除） | 若沙盒實際跑的是舊版 addon/chart，§8.3 dev sandbox e2e 驗證會「看似通過」但驗到的是舊碼，是假綠訊號 |
+| 10 | `create_namespace` 是否有非 Odoo 的呼叫者（§9.1 D-1 選項 A 代價評估，line 502） | 原文標記未查證；本次順手做了一輪程式碼盤點（唯讀，非叢集操作）但未完全解答 | **已部分厘清**：`extra/paas-operator/src/api/releases.py:181` 的 `create_namespace` 參數只是傳給 `HelmService.install()`（`helm.py:632`），落地成 `helm install --create-namespace` CLI flag（`helm.py:678-679`）——這與 `helm.py:1169` 那個會呼叫 `_apply_baseline_netpol` 的 `HelmService.create_namespace()` 方法**是兩條不同路徑**。目前唯一已知會呼叫後者的入口是 `POST /namespaces`（`extra/paas-operator/src/api/namespaces.py:26,41`）。**仍未查證**的是：Odoo 是否曾以 `request.create_namespace=True` 呼叫 `POST /releases`（若有，該路徑建出的 ns 會完全繞過 baseline netpol）——這需要查 Odoo 側呼叫碼，不在本檔範圍 | 若 §9.1 D-1 選項 A（Odoo 經 API 傳 apiserver CIDR）且假設 `POST /namespaces` 是唯一入口，但實際上 `POST /releases` 的 `create_namespace=True` 路徑也在用，那條路徑建出的 ns 會**完全沒有任何 baseline egress 規則**（不只是缺 apiserver CIDR），且無錯誤訊息 |
+
