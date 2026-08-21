@@ -448,7 +448,11 @@ def check_upgrade_readiness() -> int:
          `test_tags`」的豁免條目）——這是 #684／#544 那條線的完成狀態。
          🔴 刻意讀 repo-lint 的那份、不在本檔另存一份：本檔已經把靜態判準整個交給
          repo-lint，升級條件當然也要看它，否則又是兩份會分岔的狀態。
+         ⚠ **它今天已經是真的**（#816 之後 develop 上就是 `{}`）⇒ 這一條是**穩態真
+         值**，不是一道還在擋的門。它的作用是**反向的**：有人把新違規塞進豁免名單時
+         把提醒關掉。把它讀成「兩個條件都還在把關」會高估這道 gate。
       2. 連續 `GREEN_STREAK_REQUIRED` 次 develop push 全套全綠。
+         ⇒ **實際擋著這個提醒的只有這一條**，而它的資料來源目前是人工維護的（見下）。
 
     滿足時以退出碼 3 ＋橫幅提醒：可以回 issue #546 重新裁決觸發策略（2026-08-03 拍板的
     B+C 終點是「全套綠」、**不 block merge**；要不要往前走一步是 Eugene 的裁量，不是
@@ -476,6 +480,13 @@ def check_upgrade_readiness() -> int:
           f"develop push 連續全綠 {streak_note}")
     for key in exemptions:
         print(f"  ~ {key}")
+    if not exemptions:
+        # 🔴 別把這一格讀成「達成了什麼」。乾淨的樹上 `TEST_EXECUTION_BASELINE` 本來
+        #    就是 `{}`（#816 之後 develop 就是這個狀態），所以條件 1 在**穩態下恆真**，
+        #    它只會在有人把新違規塞進豁免名單時翻回 false。⇒ 實際擋著這個提醒的是
+        #    條件 2。寫出來是為了不讓「兩個條件」讀起來像兩道獨立的門。
+        print("  （條件 1 在乾淨的樹上是穩態真值——它只會在有人把新違規塞進 "
+              "`TEST_EXECUTION_BASELINE` 時翻回 false。實際擋著本提醒的是條件 2。）")
     if exemptions or streak < GREEN_STREAK_REQUIRED:
         return 0
 
