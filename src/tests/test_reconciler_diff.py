@@ -6,10 +6,9 @@
 
 設計 doc Phase B.1 / B.2、§機械守線（ReconcileResponse golden）。
 """
-import unittest
 from unittest.mock import MagicMock
 
-from odoo.tests import TransactionCase, tagged
+from odoo.tests import BaseCase, TransactionCase, tagged
 
 from ..services.paas_operator import PaaSOperatorClient
 from ..services.reconciler import (
@@ -230,7 +229,18 @@ class TestReconcileOrphansEndToEnd(TransactionCase):
             reconcile_orphans(self.env, client=None)
 
 
-class TestGetReconcileInventoryClient(unittest.TestCase):
+# #544：本 class 的基底是 `BaseCase`，同檔另兩個是 `TransactionCase`——**這個不一致是刻意的**。
+# 它原本停在 `unittest.TestCase`，拿不到 `MetaCase` 給的 `test_tags`，會倒在
+# `odoo/tests/tag_selector.py:69` 的 `if not hasattr(test, 'test_tags')` ⇒ 這 3 條從未執行過。
+# 而同檔另兩個 class 是 `TransactionCase`、一直有在跑 —— 這正是「混合檔」：module 粒度的
+# 判準會問「這個檔有測試跑到嗎」得到「有」而整檔放行，那 3 條照樣不見（repo-lint 第 31 條
+# `test-collectability` 因此做成 class 粒度）。
+# 補回 `test_tags` 只需要 `BaseCase`：本 class 如 docstring 自陳「純，無 DB」，不碰
+# `self.env` / `self.cr` / `self.registry`（另兩個 class 真的碰，故維持 `TransactionCase`）。
+# `BaseCase` 不建 class 級 cursor、不開 SAVEPOINT ⇒ 不替純函式測試綁上「DB 必須可用」的前提。
+# tag 跟隨同檔鄰居的 `post_install`，讓這個檔三個 class 在同一個測試階段一起跑。
+@tagged('post_install', '-at_install')
+class TestGetReconcileInventoryClient(BaseCase):
     """client.get_reconcile_inventory：GET /api/reconcile/inventory + fail-loud（純，無 DB）。"""
 
     def _client_with_response(self, status_code, payload):

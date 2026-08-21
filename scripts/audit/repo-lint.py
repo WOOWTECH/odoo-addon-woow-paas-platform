@@ -6238,45 +6238,7 @@ _KNOWN_NON_TESTCASE_BASES = frozenset({
 #    「反正都在名單上」而失去審查意義（第 26 條 allowlist 的同型紀律）。附帶效果是
 #    **merge 順序自動對帳**：#806／PR #808 把 `TestConfigureTunnelWireShape` 換成
 #    Odoo 基底之後，那筆條目立刻變殭屍而紅，不必有人記得回來清。
-TEST_EXECUTION_BASELINE = {
-    "src/tests/test_naming.py::TestNaming": {
-        "issue": "#544／#684",
-        "why": "純函式命名測試，基底停在 unittest.TestCase；換基底屬 #544 三檔基底修復那張 PR",
-    },
-    "src/tests/test_naming.py::TestNamingEnvToken": {
-        "issue": "#544／#684",
-        "why": "同檔同因（unittest.TestCase 基底），與 TestNaming 一起在 #544 那張換掉",
-    },
-    "src/tests/test_naming.py::TestParsePaasName": {
-        "issue": "#544／#684",
-        "why": "同檔同因（unittest.TestCase 基底），與 TestNaming 一起在 #544 那張換掉",
-    },
-    "src/tests/test_naming.py::TestClassifyEnvHint": {
-        "issue": "#544／#684",
-        "why": "同檔同因（unittest.TestCase 基底），與 TestNaming 一起在 #544 那張換掉",
-    },
-    "src/tests/test_naming.py::TestReconstructMcpSubdomain": {
-        "issue": "#544／#684",
-        "why": "同檔同因（unittest.TestCase 基底），與 TestNaming 一起在 #544 那張換掉",
-    },
-    "src/tests/test_naming.py::TestSecurityAccessNaming": {
-        "issue": "#544／#684",
-        "why": "同檔同因（unittest.TestCase 基底），與 TestNaming 一起在 #544 那張換掉",
-    },
-    "src/tests/test_reconcile_delete_gate.py::TestReconcileDeleteGate": {
-        "issue": "#544／#684",
-        "why": "本身就是一道 gate 卻從未被 collect（8233 §6 的活教材）；換基底屬 #544 那張",
-    },
-    "src/tests/test_reconcile_delete_gate.py::TestReconcileReportPathDeleteGate": {
-        "issue": "#544／#684",
-        "why": "同檔同因（unittest.TestCase 基底），與上一筆一起在 #544 那張換掉",
-    },
-    "src/tests/test_reconciler_diff.py::TestGetReconcileInventoryClient": {
-        "issue": "#684",
-        "why": "混合檔——同檔另兩個 class 是 TransactionCase 會跑，只有這個 class 不會；"
-               "這正是 module 粒度判準會整檔放行的那一格",
-    },
-}
+TEST_EXECUTION_BASELINE = {}
 
 
 def _ast_dotted_name(node):

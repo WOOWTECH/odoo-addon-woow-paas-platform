@@ -1,5 +1,25 @@
 """Tests for naming utility module."""
-import unittest
+from odoo.tests.common import BaseCase
+
+# #544：基底是 `BaseCase` 而**不是** `unittest.TestCase`——後者拿不到 `MetaCase` 給的
+# `test_tags`，會通過 `odoo/tests/loader.py` 的篩子②③被 yield 成 test 實例，然後倒在
+# `odoo/tests/tag_selector.py:69` 的 `if not hasattr(test, 'test_tags')`（該行原始註解自己
+# 寫著 does not inherit from BaseCase）⇒ 本檔的測試**一條都不會執行**，而 `of N tests`
+# 不會顯示少了它們。
+#
+# 為什麼是 `BaseCase` 而不是本 repo 佔多數的 `TransactionCase`：本檔全部是純函式測試，
+# 不碰 `self.env` / `self.cr` / `self.registry`。`BaseCase` 只提供這裡唯一缺的東西
+# （`MetaCase` ⇒ `test_tags`），不建 class 級 cursor、不掛 `_gc_filestore` cleanup、
+# 每個 method 也不開 SAVEPOINT ⇒ 不替純函式測試綁上「DB 必須可用」這個它不需要的前提。
+# 這與 Odoo core 自己的做法一致（`odoo/addons/base/tests/` 的 `TestSafeEval` /
+# `TestDateUtils` / `TestFrozendict` 等純邏輯測試一律直接繼承 `BaseCase`）。
+# ⚠ `BaseCase` docstring 那句 "This class is abstract and expects self.registry,
+# self.cr and self.uid to be initialized by subclasses" 是對**選用**輔助方法
+# （`self.cursor()` / `self.ref()` / `self.browse_ref()` / `self.uid` / `assertQueryCount`…）
+# 的免責聲明，不是 class 機制本身的前置條件——佐證：`BaseCase._assertRaises`
+# （odoo/tests/common.py:472-474）自己就寫 `if hasattr(self, 'env')` 來守這件事。
+# ⇒ 若日後在本檔新增需要 `self.env` 的測試，請把**那一個 class** 改成 `TransactionCase`，
+# 不要在這裡自建 registry。
 
 from ..services.naming import (
     generate_ws_hash,
@@ -20,7 +40,7 @@ from ..services.naming import (
 WS_HASH = 'a1b2c3d4'
 
 
-class TestNaming(unittest.TestCase):
+class TestNaming(BaseCase):
     """Test cases for naming utility functions."""
 
     def test_generate_ws_hash_deterministic(self):
@@ -130,7 +150,7 @@ class TestNaming(unittest.TestCase):
         self.assertNotEqual(svc, sm)
 
 
-class TestSecurityAccessNaming(unittest.TestCase):
+class TestSecurityAccessNaming(BaseCase):
     """make_security_access_subdomain: paas-sa-{ws_hash}-{res_hash}."""
 
     def test_sa_subdomain_format(self):
@@ -168,7 +188,7 @@ class TestSecurityAccessNaming(unittest.TestCase):
         self.assertTrue(re.match(r'^[a-z0-9][a-z0-9-]*[a-z0-9]$', sd))
 
 
-class TestNamingEnvToken(unittest.TestCase):
+class TestNamingEnvToken(BaseCase):
     """L3: env token 注入 make_*_subdomain。
 
     決策 DP1：格式 ``paas-{env}-{type}-``（stg=paas-stg-sa-、prod=paas-sa- 空 token）。
@@ -263,7 +283,7 @@ class TestNamingEnvToken(unittest.TestCase):
             make_security_access_subdomain(WS_HASH, 'ref', 'name', env=' stg '), canonical)
 
 
-class TestReconstructMcpSubdomain(unittest.TestCase):
+class TestReconstructMcpSubdomain(BaseCase):
     """L4 reconciler：reconstruct_mcp_subdomain 必須與 operator deploy/teardown
     的 MCP subdomain byte-identical（漂移 → 活躍 MCP route 被誤判成孤兒）。
 
@@ -302,7 +322,7 @@ class TestReconstructMcpSubdomain(unittest.TestCase):
         self.assertEqual(reconstruct_mcp_subdomain(None, 'app'), 'app--mcp')
 
 
-class TestParsePaasName(unittest.TestCase):
+class TestParsePaasName(BaseCase):
     """L4 reconciler S3：parse_paas_name 解析 (env_token, kind)，literal (stg) 白名單。
 
     鏡像 _env_token 對 {prod,stg} 白名單輸出：prod/legacy 無 token byte-identical → (None,kind)；
@@ -331,7 +351,7 @@ class TestParsePaasName(unittest.TestCase):
             self.assertEqual(parse_paas_name(name), (None, None), name)
 
 
-class TestClassifyEnvHint(unittest.TestCase):
+class TestClassifyEnvHint(BaseCase):
     """L4 reconciler S3：classify_env_hint(name, pinned_env) -> (env_hint, is_cross_env)。"""
 
     def test_same_env_not_cross(self):
