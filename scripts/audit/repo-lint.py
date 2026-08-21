@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """repo-lint：把「假綠家族」pitfall 轉成機械 gate 的靜態檢查工具。
 
-三十四個 check 函式，歸為下列三十條規則（其中兩條各由多個函式實作：第 7 條
+三十六個 check 函式，歸為下列三十一條規則（其中三條各由多個函式實作：第 7 條
 capability-gate 由四個函式——slug 集合成員／admin-gui 錨點／gateway 文案錨點／
 Access 頁籤錨點；第 22 條
-security-rule-lifecycle 由兩個函式——ir.rule 的出生地／退役名字。這個一對多關係的顯式
+security-rule-lifecycle 由兩個函式——ir.rule 的出生地／退役名字；第 31 條
+test-collectability 由兩個函式——收集面／執行面。這個一對多關係的顯式
 映射表是 `REPO_LINT_RULES`，由第 17 條機械對帳，所以上面這兩個數字不會再靜默漂掉）。
 每條都對應一個已翻車的 pitfall，訊息內附文件指針：
 
@@ -379,6 +380,71 @@ security-rule-lifecycle 由兩個函式——ir.rule 的出生地／退役名字
                      與 src/tests/test_tunnel_config_wire_769.py。其餘已知限制
                      （只認 `@router.<m>("<path>")` 註冊形態、client 只認字面值
                      dict）寫在函式 docstring。
+
+31. test-collectability  `src/tests/**` 的測試必須真的被**收集**且真的被**執行**
+                     （#684＋#544 合單，收集面規格出自 #467 第 2 項）。兩個性質，
+                     兩個函式：
+                     (1) **收集面**：Odoo 18 不用 `unittest.TestLoader`——
+                         `odoo/tests/loader.py` 的 `_get_tests_modules()` 只 import
+                         `<addon>.tests` 再挑名字以 `test_` 開頭的 module 屬性。
+                         沒被 `__init__.py` import 的 `test_*.py` 對 loader 而言不存在
+                         （零 collection error、零 warning）。判準是逐層 `__init__.py`
+                         的 level-1 `ImportFrom`（判準 B：`{(node.module, alias.name)}`，
+                         **不加** `module is None` 那格，否則漏掉
+                         `from .integration import …`），外加幽靈條目（import 了不存在
+                         的檔 ＝ 執行期 ImportError ⇒ 整套一條都收不到）與頂層
+                         re-export（子套件的 `__init__.py` 不在 loader 視野裡）。
+                     (2) **執行面**：`src/tests/` 下每一個 `unittest.TestCase` 的傳遞
+                         子類，必須同時傳遞繼承到 `odoo.tests.common.BaseCase`。
+                         🔴 **逐 class 不是逐檔**：`test_reconciler_diff.py` 同檔三個
+                         class，兩個 `TransactionCase` 會跑、一個 `unittest.TestCase`
+                         不會跑 ⇒ 問「這個檔有測試跑到嗎」＝有，module 粒度整檔放行，
+                         那 3 條照樣不見。
+                         🔴 **錨點是 BaseCase 不是 `odoo.tests.case.TestCase`**（後者是
+                         較寬的判準、有盲區）：`loader.py:8` 是
+                         `from unittest import case`，所以篩子②
+                         （`loader.py:24 issubclass(obj, case.TestCase)`）比的其實是
+                         **unittest**，純 unittest 子類會通過②③被 yield；真正丟掉它們
+                         的是 `tag_selector.py:69` 的
+                         `if not hasattr(test, 'test_tags')`（該行註解自己寫著 does not
+                         inherit from BaseCase）。`test_tags` 由 `common.py` 的
+                         `MetaCase` 賦予，而 `common.py:290` 是
+                         `class BaseCase(case.TestCase, metaclass=MetaCase)` ——
+                         `common.py:71` 的 `from . import case` 與 `loader.py:8` 的
+                         `case` **同名不同源**，那正是判準被寫寬的來源。直接繼承
+                         `odoo.tests.case.TestCase`、沒經過 `BaseCase` 的 class 沒有
+                         `MetaCase` ⇒ 照樣不會跑，卻會通過那個較寬的判準。
+                         錯誤訊息一律指 `TagsSelector` 那一層；寫成「倒在 loader 篩子②」
+                         會把人送去查錯的地方。
+                         🔴 判準寫**性質**不寫名字：「檔案裡不得出現 unittest.TestCase」
+                         被 `from unittest import TestCase` 一行繞過，而且會誤傷只是
+                         提到它的 helper 與註解。
+                         🔴 **三分法，不是二分法**：「不是 TestCase 的 mixin／fixture」
+                         與「是 TestCase 但基底錯」都到不了 `BaseCase`，**只有後者違規**
+                         ——mixin 的 `def test*` 由子類經 `allow_inherited_tests_method`
+                         展開後每次都真的在跑。把 mixin 判違規再用 baseline 蓋掉，等於在
+                         repo 裡種一筆永久的假宣稱，而且殭屍檢查永遠叫不出來（它「確實」
+                         符合那個寫錯的判準）。
+                         附帶兩格（同一組收集規則的其他失效面）：(a) 帶 `def test*` 的
+                         mixin，其每個 `BaseCase` 血統子類都要能繼承到
+                         `allow_inherited_tests_method`（旗標走 `getattr` ⇒ **可繼承**，
+                         只查 class 自己那一行會漏掉寫在 mixin 上的情形）；(b) 帶
+                         `-standard` 者必須另帶至少一個非保留字 tag——`tag_selector.py`
+                         把空 tag 補成 `standard`，沒有別的 tag 時連精確指名都選不到，
+                         而輸出是 `EXIT=0` ＋ `of 0 tests`（與「跑過而且全過」不可區分）。
+                     既有違規走 `TEST_EXECUTION_BASELINE`（class 粒度、每筆附單號與
+                     理由）＋殭屍檢查：修好了卻留在名單上會紅。附帶效果是與 #806 的
+                     merge 順序自動對帳，不必有人記得回來清。
+                     🔴 兩條都是否定性判準，掃描器壞掉時輸出與「全部都對」一模一樣
+                     ⇒ 各配存在性對照：掃不到任何 `test_*.py`／抽不到任何 level-1
+                     `ImportFrom`／找不到**任何**被 collect 的 TestCase class，一律
+                     當違規而不是判乾淨。
+                     ⚠ 只驗**可達性**（收得到、跑得到），**不驗測試本身有沒有斷言到
+                     東西**——把本條的綠讀成「這些測試守得住」是錯的。背景 #546：本
+                     repo 沒有任何 CI job 跑 Odoo test-tags，所以這支靜態 gate 是
+                     「測試沒被收集／沒被執行」目前唯一的訊號；它**不是** required
+                     status check（develop 只 required `manifest-version-gate`），
+                     是看得見的紅燈、不是閘門。
 
 用法：
 
@@ -4806,6 +4872,8 @@ REPO_LINT_RULES = {
     "internal-ctx-key-registry": ("check_internal_ctx_key_registry",),
     "access-gate-no-ledger-read": ("check_access_gate_no_ledger_read",),
     "tunnel-config-wire-shape": ("check_tunnel_config_wire_shape",),
+    "test-collectability": ("check_test_module_collection",
+                            "check_test_class_execution"),
 }
 
 # 刻意不掛 hook 分派的 check：{函式名: 理由}。現況是空的（每一條都掛得到 hook）。
@@ -5235,7 +5303,9 @@ def run_all(root):
                   + check_sh_subscription_group_isolation(root)
                   + check_internal_ctx_key_registry(root)
                   + check_access_gate_no_ledger_read(root)
-                  + check_tunnel_config_wire_shape(root))
+                  + check_tunnel_config_wire_shape(root)
+                  + check_test_module_collection(root)
+                  + check_test_class_execution(root))
     if violations:
         print("repo-lint：%d 個違規" % len(violations))
         for v in violations:
@@ -5389,6 +5459,12 @@ def run_hook():
             if rel.startswith("src/tests/"):
                 violations += check_test_env_restore(root, only_file=abs_path)
                 violations += check_assertlogs_numeric_level(root, only_file=abs_path)
+                # #684／#544：兩條判準都是**跨檔**不變式——收集面比對「該層 __init__
+                # 的 import 集合 ↔ 該層的檔案」，執行面要追整棵樹的繼承鏈（基底常在
+                # 另一個檔），而 baseline 的殭屍檢查只有全樹掃得出來 ⇒ 不做 only_file
+                # 切片，動到 src/tests/ 底下任何一個 .py 就整條重算。
+                violations += check_test_module_collection(root)
+                violations += check_test_class_execution(root)
         elif re.match(r"^src/static/src/.*\.xml$", rel):
             violations = check_owl_template(root, only_file=abs_path)
             violations += check_slug_capability_gate(root, only_file=abs_path)
@@ -6058,6 +6134,695 @@ def check_tunnel_config_wire_shape(root):
                 "**body**（request model）。同 router 的 `POST /api/tunnels`、"
                 "`PUT /{tunnel_id}/routes` 都吃 request model，這條是唯一例外（%s）"
                 % (self_rel, TUNNEL_CONFIG_ROUTE_PATH, field, operator_side, ref))
+    return violations
+
+
+# --------------------------------------------------------------------------- #
+#  31. test-collectability                                                     #
+# --------------------------------------------------------------------------- #
+
+TEST_COLLECTABILITY_REF = (
+    "#684／#544（收集面的規格出自 #467 第 2 項）。背景 #546：本 repo 沒有任何 CI job "
+    "跑 Odoo test-tags ⇒ 這支靜態 gate 是「測試沒被收集／沒被執行」唯一的訊號")
+TEST_SUITE_DIR_REL = "src/tests"
+TEST_SUITE_PKG_REL = "src/tests/__init__.py"
+
+#: 自家 addon 的絕對 import 前綴。`from odoo.addons.woow_paas_platform.tests.X import Y`
+#: 指的是**本樹自己的檔**，不是 Odoo 核心的測試基底——不還原它，那條 import 的模組路徑
+#: 裡有 `tests` 一段，會被 `_is_basecase_test_module()` 判成 Odoo 基底，整條繼承鏈跟著假綠。
+#: 本樹現在就有一處這種寫法（`test_hidden_template_chain.py`）。
+_ADDON_TESTS_PKG_PREFIX = "odoo.addons.woow_paas_platform.tests."
+
+#: `unittest` 這邊的 TestCase 家族。判準是**符號的來源**（`from unittest import
+#: TestCase` 與 `unittest.TestCase` 是同一件事），不是「檔案裡有沒有出現
+#: unittest.TestCase 這個字串」——後者一個 import 改寫就繞過，而且會誤傷只是提到它的
+#: helper 與註解。
+_UNITTEST_CASE_NAMES = frozenset({"TestCase", "IsolatedAsyncioTestCase",
+                                  "FunctionTestCase"})
+#: 🔴 `odoo.tests.case` 是 Odoo 自己那份 patch 過的 unittest TestCase
+#: （`odoo/tests/case.py:9` `from unittest import TestCase as _TestCase`、
+#: `:95` `class TestCase(_TestCase)`），**沒有** `MetaCase` ⇒ 拿不到 `test_tags`
+#: ⇒ 照樣被 `TagsSelector` 丟掉。它跟 `odoo/tests/loader.py:8` 的 `case`
+#: （那個是 `from unittest import case`）同名不同源，是最容易把判準寫寬的一格。
+_ODOO_UNTAGGED_CASE_MODULE = "odoo.tests.case"
+#: `@tagged` 的結構性保留字。`TagsSelector` 用它們決定「標準選法選不選得到」，所以
+#: 它們**不能**當成「這個 class 還有別的路可以被選到」的證據（見 (b)）。
+_TAGGED_RESERVED_TAGS = frozenset({"standard", "at_install", "post_install"})
+#: `odoo/tests/loader.py` 篩子④' 的旗標。走 `getattr` ⇒ **可繼承**（可以寫在 mixin
+#: 身上、由子類繼承——本樹 7 個 class 就是這樣）。
+_INHERITED_TESTS_FLAG = "allow_inherited_tests_method"
+#: `MetaCase` 給 `odoo.addons.*` 底下每個 `BaseCase` 子類的預設 tag
+#: （odoo/tests/common.py，`if cls.__module__.startswith('odoo.addons.')`）。
+_TAGGED_DEFAULT_TAGS = frozenset({"standard", "at_install"})
+
+# 三分法。🔴 **UNTAGGED 與 OTHER 都到不了 Odoo 基底，但只有 UNTAGGED 是違規**：
+# OTHER 是「根本不是 TestCase」的 mixin／fixture，它的 `def test*` 由子類經
+# `allow_inherited_tests_method` 展開後**每次都真的在跑**。把 OTHER 判成違規、再拿
+# baseline 蓋掉，等於在 repo 裡種一筆永久的假宣稱（名單說「這些不會被跑」，而它們在
+# 跑），而且殭屍檢查永遠叫不出來——因為它「確實」符合那個寫錯的判準。
+_TEST_KIND_TAGGED = "tagged"      # 傳遞繼承到 odoo.tests.common.BaseCase ⇒ 有 test_tags ⇒ 選得到
+_TEST_KIND_UNTAGGED = "untagged"  # 是 unittest.TestCase 子類但拿不到 test_tags ⇒ 被 TagsSelector 丟掉
+_TEST_KIND_OTHER = "other"        # 根本不是 TestCase（mixin／fixture／helper／例外類別…）
+
+# 既有違規的顯式 baseline。**class 粒度**——同一個檔可以既有會跑的 class 也有不會跑
+# 的 class（`test_reconciler_diff.py` 就是），module 粒度會整檔放行。
+#
+# 🔴 條目要有殭屍檢查：class 已經不違規了就必須把條目移除，否則名單會慢慢長成
+#    「反正都在名單上」而失去審查意義（第 26 條 allowlist 的同型紀律）。附帶效果是
+#    **merge 順序自動對帳**：#806／PR #808 把 `TestConfigureTunnelWireShape` 換成
+#    Odoo 基底之後，那筆條目立刻變殭屍而紅，不必有人記得回來清。
+TEST_EXECUTION_BASELINE = {
+    "src/tests/test_naming.py::TestNaming": {
+        "issue": "#544",
+        "why": "純函式命名測試，基底停在 unittest.TestCase；換基底屬 #544 三檔基底修復那張 PR",
+    },
+    "src/tests/test_naming.py::TestNamingEnvToken": {
+        "issue": "#544",
+        "why": "同檔同因（unittest.TestCase 基底），與 TestNaming 一起在 #544 那張換掉",
+    },
+    "src/tests/test_naming.py::TestParsePaasName": {
+        "issue": "#544",
+        "why": "同檔同因（unittest.TestCase 基底），與 TestNaming 一起在 #544 那張換掉",
+    },
+    "src/tests/test_naming.py::TestClassifyEnvHint": {
+        "issue": "#544",
+        "why": "同檔同因（unittest.TestCase 基底），與 TestNaming 一起在 #544 那張換掉",
+    },
+    "src/tests/test_naming.py::TestReconstructMcpSubdomain": {
+        "issue": "#544",
+        "why": "同檔同因（unittest.TestCase 基底），與 TestNaming 一起在 #544 那張換掉",
+    },
+    "src/tests/test_naming.py::TestSecurityAccessNaming": {
+        "issue": "#544",
+        "why": "同檔同因（unittest.TestCase 基底），與 TestNaming 一起在 #544 那張換掉",
+    },
+    "src/tests/test_reconcile_delete_gate.py::TestReconcileDeleteGate": {
+        "issue": "#544",
+        "why": "本身就是一道 gate 卻從未被 collect（8233 §6 的活教材）；換基底屬 #544 那張",
+    },
+    "src/tests/test_reconcile_delete_gate.py::TestReconcileReportPathDeleteGate": {
+        "issue": "#544",
+        "why": "同檔同因（unittest.TestCase 基底），與上一筆一起在 #544 那張換掉",
+    },
+    "src/tests/test_reconciler_diff.py::TestGetReconcileInventoryClient": {
+        "issue": "#684",
+        "why": "混合檔——同檔另兩個 class 是 TransactionCase 會跑，只有這個 class 不會；"
+               "這正是 module 粒度判準會整檔放行的那一格",
+    },
+    "src/tests/test_tunnel_config_wire_769.py::TestConfigureTunnelWireShape": {
+        "issue": "#806",
+        "why": "由 #806／PR #808 修（另一位 leader 正在動這個檔）；本 PR 不碰檔案本體，"
+               "只登記。那張 merge 後這筆會變殭屍而紅，等於自動提醒清掉",
+    },
+}
+
+
+def _ast_dotted_name(node):
+    """`ast.Name` / `ast.Attribute` → `'a.b.c'`；其他節點形態回 None。"""
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        head = _ast_dotted_name(node.value)
+        return head + "." + node.attr if head else None
+    return None
+
+
+def _is_basecase_test_module(module):
+    """`module` 是不是提供 **`BaseCase` 血統**測試基底的模組。
+
+    判準是**來源模組**不是名字：`TransactionCase` / `SingleTransactionCase` /
+    `HttpCase` / `BaseCase` / 第三方 addon 的 `MailCommon` 全部命中，而下一個 Odoo
+    版本新增的基底名不必回來改。
+
+    🔴 `odoo.tests.case` 被**排除**：那是 patch 過的 unittest TestCase，沒有
+    `MetaCase` ⇒ 沒有 `test_tags` ⇒ 直接繼承它的 class 會通過 loader 的
+    `issubclass()`、被 yield 成 test 實例，然後倒在 `TagsSelector.check()` 的
+    `hasattr(test, 'test_tags')`。把它算進來就是把判準寫寬、留一個剛好會被踩的盲區。
+
+    ⚠ 已知代價：從 `odoo.tests` import 進來、**卻不是** TestCase 子類的東西（`Form`
+    之類）若被當基底用，本函式會誤判成有血統。那個寫法沒有任何合理用途，換取的是
+    「不用維護一份會過期的基底名清單」。
+    """
+    parts = module.split(".") if module else []
+    if module == _ODOO_UNTAGGED_CASE_MODULE:
+        return False
+    if parts[:2] == ["odoo", "tests"]:
+        return True
+    return parts[:2] == ["odoo", "addons"] and "tests" in parts[3:]
+
+
+def _test_pkg_dir(rel):
+    """`'src/tests/integration/test_x.py'` → `'src/tests/integration'`。"""
+    return "/".join(rel.split("/")[:-1])
+
+
+def _test_resolve_relative(rel, level, module):
+    """相對 import 解析成 repo 相對的模組路徑（不含副檔名）。"""
+    parts = _test_pkg_dir(rel).split("/")
+    if level > 1:
+        parts = parts[:max(0, len(parts) - (level - 1))]
+    if module:
+        parts = parts + module.split(".")
+    return "/".join(parts)
+
+
+def _test_import_bindings(rel, tree):
+    """module 內「名字 → 來源」的綁定表。
+
+    三種來源：`("rel", 目標套件路徑, 原名)`／`("abs", 模組字串, 原名)`／
+    `("mod", 模組字串)`。用 `ast.walk` 而不是 `tree.body`：函式內的 import 也會綁定
+    到那個名字，漏掉它會讓基底解析不出來而靜默退化成「認不得」。
+    """
+    bindings = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            for alias in node.names:
+                bound = alias.asname or alias.name
+                if node.level:
+                    bindings[bound] = (
+                        "rel", _test_resolve_relative(rel, node.level, node.module),
+                        alias.name)
+                else:
+                    bindings[bound] = ("abs", node.module or "", alias.name)
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.asname:
+                    bindings[alias.asname] = ("mod", alias.name)
+                else:
+                    head = alias.name.split(".")[0]
+                    bindings[head] = ("mod", head)
+    return bindings
+
+
+def _test_tree_facts(root):
+    """`src/tests/**/*.py` 的 AST 事實表（兩條判準共用，只解析一次）。"""
+    facts = {
+        "modules": {},        # rel -> ast.Module
+        "classes": {},        # rel -> {class 名: ClassDef}（只收 module 頂層）
+        "imports": {},        # rel -> _test_import_bindings()
+        "parse_errors": [],   # [(rel, exc)]
+        "test_files": [],     # test_*.py 的 rel（排序）
+        "init_files": [],     # __init__.py 的 rel（排序）
+        "kind_memo": {},
+    }
+    base = os.path.join(root, TEST_SUITE_DIR_REL)
+    if not os.path.isdir(base):
+        return facts
+    for dirpath, dirnames, filenames in os.walk(base):
+        dirnames[:] = [d for d in dirnames if d not in ("__pycache__",)]
+        for fn in sorted(filenames):
+            if not fn.endswith(".py"):
+                continue
+            fp = os.path.join(dirpath, fn)
+            rel = os.path.relpath(fp, root).replace(os.sep, "/")
+            try:
+                with open(fp, encoding="utf-8") as f:
+                    tree = ast.parse(f.read())
+            except (OSError, SyntaxError, ValueError) as exc:
+                facts["parse_errors"].append((rel, exc))
+                continue
+            facts["modules"][rel] = tree
+            facts["classes"][rel] = {n.name: n for n in tree.body
+                                     if isinstance(n, ast.ClassDef)}
+            facts["imports"][rel] = _test_import_bindings(rel, tree)
+            if fn == "__init__.py":
+                facts["init_files"].append(rel)
+            elif fn.startswith("test_"):
+                facts["test_files"].append(rel)
+    facts["test_files"].sort()
+    facts["init_files"].sort()
+    return facts
+
+
+def _test_module_rel(facts, path):
+    """模組路徑（不含副檔名）→ 它在 facts 裡的 rel（檔或套件）；不在本樹回 None。"""
+    for cand in (path + ".py", path + "/__init__.py"):
+        if cand in facts["modules"]:
+            return cand
+    return None
+
+
+def _test_base_location(facts, rel, dotted):
+    """基底名解析成**本樹裡**的 `(rel, class 名)`；樹外（Odoo／unittest／第三方）回 None。"""
+    if not dotted:
+        return None
+    head, _, tail = dotted.partition(".")
+    if not tail and head in facts["classes"].get(rel, {}):
+        return (rel, head)
+    binding = facts["imports"].get(rel, {}).get(head)
+    if binding is None:
+        return None
+    if binding[0] == "rel":
+        target = _test_module_rel(facts, binding[1])
+        if target is not None and binding[2] in facts["classes"].get(target, {}):
+            return (target, binding[2])
+        return None
+    if binding[0] == "abs" and binding[1].startswith(_ADDON_TESTS_PKG_PREFIX):
+        sub = binding[1][len(_ADDON_TESTS_PKG_PREFIX):].replace(".", "/")
+        target = _test_module_rel(facts, TEST_SUITE_DIR_REL + "/" + sub)
+        if target is not None and binding[2] in facts["classes"].get(target, {}):
+            return (target, binding[2])
+    return None
+
+
+def _test_base_kind(facts, rel, dotted, stack):
+    """基底屬於 TAGGED／UNTAGGED／OTHER 哪一族。"""
+    loc = _test_base_location(facts, rel, dotted)
+    if loc is not None:
+        return _test_class_kind(facts, loc[0], loc[1], stack)
+    if not dotted:
+        return _TEST_KIND_OTHER
+    head, _, tail = dotted.partition(".")
+    binding = facts["imports"].get(rel, {}).get(head)
+    if binding is None:
+        return _TEST_KIND_OTHER
+    # 一律還原成**完整的符號路徑**再判。`from odoo.tests import case` ＋
+    # `class X(case.TestCase)` 的 tail（`TestCase`）若被丟掉，模組會停在
+    # `odoo.tests` 而判成有血統——那正是本條要抓的那一格，不能自己先漏掉。
+    if binding[0] == "mod":
+        full = binding[1] + ("." + tail if tail else "")
+    else:
+        full = binding[1] + "." + binding[2] + ("." + tail if tail else "")
+    module, _, name = full.rpartition(".")
+    if module == "unittest" and name in _UNITTEST_CASE_NAMES:
+        return _TEST_KIND_UNTAGGED
+    if module == _ODOO_UNTAGGED_CASE_MODULE:
+        return _TEST_KIND_UNTAGGED   # odoo.tests.case.TestCase：有 unittest 血統、無 MetaCase
+    if module.startswith(_ADDON_TESTS_PKG_PREFIX):
+        return _TEST_KIND_OTHER      # 自家 tests 但解不出來（改名／刪檔）——不冒充血統
+    if _is_basecase_test_module(module):
+        return _TEST_KIND_TAGGED
+    return _TEST_KIND_OTHER
+
+
+def _test_class_kind(facts, rel, name, stack=()):
+    """「這個 class 到底跑不跑得到」的靜態鏡像：基底傳遞地到得了誰。
+
+    TAGGED 勝過 UNTAGGED：`test_tags` 是類別屬性，只要有**任何一條**基底鏈到得了
+    `odoo.tests.common.BaseCase`（＝ `MetaCase` 那一支），`hasattr(test,
+    'test_tags')` 就為真，`TagsSelector` 選得到它。
+    """
+    key = (rel, name)
+    memo = facts["kind_memo"]
+    if key in memo:
+        return memo[key]
+    if key in stack:
+        return _TEST_KIND_OTHER      # 繼承成環（Python 自己也會炸）——不當判準
+    node = facts["classes"].get(rel, {}).get(name)
+    if node is None:
+        return _TEST_KIND_OTHER
+    kind = _TEST_KIND_OTHER
+    for base in node.bases:
+        got = _test_base_kind(facts, rel, _ast_dotted_name(base), stack + (key,))
+        if got == _TEST_KIND_TAGGED:
+            kind = _TEST_KIND_TAGGED
+            break
+        if got == _TEST_KIND_UNTAGGED:
+            kind = _TEST_KIND_UNTAGGED
+    memo[key] = kind
+    return kind
+
+
+def _test_tree_bases(facts, rel, name, seen=None):
+    """`(rel, name)` 在**本樹裡**解得出來的所有傳遞基底（由近而遠，去重）。"""
+    if seen is None:
+        seen = {(rel, name)}
+    node = facts["classes"].get(rel, {}).get(name)
+    if node is None:
+        return
+    for base in node.bases:
+        loc = _test_base_location(facts, rel, _ast_dotted_name(base))
+        if loc is None or loc in seen:
+            continue
+        seen.add(loc)
+        yield loc
+        for deeper in _test_tree_bases(facts, loc[0], loc[1], seen):
+            yield deeper
+
+
+def _test_own_test_methods(node):
+    """class body 裡自己的 `def test*`（＝ loader 篩子④看的那一組）。"""
+    return [n.name for n in node.body
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and n.name.startswith("test")]
+
+
+def _test_has_inherited_flag(facts, rel, name):
+    """`getattr(cls, 'allow_inherited_tests_method', False)` 的靜態鏡像。
+
+    🔴 走 `getattr` ⇒ **可繼承**：旗標可以寫在 mixin 上、由子類繼承（本樹 7 個 class
+    就是這樣）。只查 class 自己身上那一行會漏掉那一整類。
+    ⚠ 只走**本樹解得出來的**基底：Odoo 自己的基底一律沒有這個旗標（預設 False），
+    所以樹外那段不必追。旗標寫在 mixin（＝ OTHER 那一族）身上也算數，`_test_tree_bases`
+    不看 kind，所以那一格自然涵蓋。
+    """
+    for holder_rel, holder in [(rel, name)] + list(_test_tree_bases(facts, rel, name)):
+        node = facts["classes"].get(holder_rel, {}).get(holder)
+        if node is None:
+            continue
+        for stmt in node.body:
+            if isinstance(stmt, ast.Assign):
+                targets, value = stmt.targets, stmt.value
+            elif isinstance(stmt, ast.AnnAssign):
+                targets, value = [stmt.target], stmt.value
+            else:
+                continue
+            for tgt in targets:
+                if (isinstance(tgt, ast.Name) and tgt.id == _INHERITED_TESTS_FLAG
+                        and isinstance(value, ast.Constant) and value.value):
+                    return True
+    return False
+
+
+def _test_tag_args(node):
+    """class 自己的 `@tagged(...)` 字面字串引數（保序）。"""
+    args = []
+    for dec in node.decorator_list:
+        if not isinstance(dec, ast.Call):
+            continue
+        fname = _ast_dotted_name(dec.func)
+        if not fname or fname.rsplit(".", 1)[-1] != "tagged":
+            continue
+        for arg in dec.args:
+            if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+                args.append(arg.value)
+    return args
+
+
+def _test_effective_tags(facts, rel, name):
+    """靜態重演 `tagged` 的疊加：預設 tag → 由遠而近套用每一層的 `@tagged(...)`。
+
+    ⚠ 已知邊界：多重繼承時「由遠而近」不等於真正的 MRO 順序，同一個 tag 被一邊加、
+    另一邊減時結果可能與執行期不同；本樹所有帶 `-standard` 的 class 都是單一繼承。
+    """
+    chain = list(_test_tree_bases(facts, rel, name))[::-1] + [(rel, name)]
+    tags = set(_TAGGED_DEFAULT_TAGS)
+    for holder_rel, holder in chain:
+        node = facts["classes"].get(holder_rel, {}).get(holder)
+        if node is None:
+            continue
+        for tag in _test_tag_args(node):
+            if tag.startswith("-"):
+                tags.discard(tag[1:])
+            else:
+                tags.add(tag)
+    return tags
+
+
+def _test_init_import_targets(facts):
+    """每個 `src/tests/**/__init__.py` 的 level-1 `ImportFrom` 解析結果。
+
+    判準 B：集合 ＝ `{(node.module, alias.name) | ImportFrom 且 node.level == 1}`，
+    **不加** `node.module is None` 那格——加了就漏掉 `from .integration import test_x`
+    這種「父層直接 re-export 子套件成員」的寫法（本樹兩個 integration 檔全靠它）。
+    這裡把那個 pair 解析成 repo 相對的模組路徑，等價而且可以直接對檔案系統比對。
+    回 `[(init 的 rel, lineno, 目標模組路徑, 綁定名)]`。
+    """
+    targets = []
+    for rel in facts["init_files"]:
+        for node in ast.walk(facts["modules"][rel]):
+            if not isinstance(node, ast.ImportFrom) or node.level != 1:
+                continue
+            pkg = _test_resolve_relative(rel, 1, node.module)
+            for alias in node.names:
+                targets.append((rel, node.lineno, pkg + "/" + alias.name,
+                                alias.asname or alias.name))
+    return targets
+
+
+def check_test_module_collection(root):
+    """性質 1（收集面）：`src/tests/**` 的每個 `test_*.py` 都必須真的被 collect。
+
+    Odoo 18 **不使用** `unittest.TestLoader`。`odoo/tests/loader.py` 的
+    `_get_tests_modules()` 只做一件事：`import odoo.addons.<addon>.tests`，然後
+    `inspect.getmembers(tests_mod, inspect.ismodule)` 挑出**名字以 `test_` 開頭**的
+    屬性。沒有被 `__init__.py` import 的檔案，對 loader 而言不存在——不會有 collection
+    error、不會有 warning，`of N tests` 的 N 少了幾條也沒人看得出來。
+
+    兩格判準（外加一格 Odoo 的實況修正）：
+
+    (1) **涵蓋**：每個 `test_*.py` 都要出現在某個 `__init__.py` 的 level-1
+        `ImportFrom` 裡（判準 B，見 `_test_init_import_targets`）。
+    (2) **幽靈**：反過來，`__init__.py` import 了不存在的檔一律 fail——那條 import 在
+        執行期是 `ImportError`，整個 tests 套件會**一個測試都收不到**。
+    (3) **頂層 re-export**：`_get_tests_modules()` 只讀 `src.tests` **自己**的屬性，
+        子套件的 `__init__.py` 不在它的視野裡。`src/tests/integration/__init__.py`
+        寫了 `from . import test_x` 而 `src/tests/__init__.py` 沒有 re-export 它時，
+        (1) 是綠的、Odoo 卻收不到——所以這一格要獨立判。
+
+    非 `test_` 前綴的模組（`smart_home_fixture.py`）天然不在範圍：loader 那個
+    `name.startswith('test_')` 本來就不會挑它。
+
+    🔴 三格都是否定性判準（「找不到違規」），掃描器一壞就恆綠 ⇒ 配存在性對照：
+    掃不到任何 `test_*.py`／讀不到 `src/tests/__init__.py`／抽不到任何 level-1
+    `ImportFrom`，一律當違規，不是判乾淨。
+    """
+    ref = TEST_COLLECTABILITY_REF
+    violations = []
+    if not _addon_source_tree_present(root):
+        return violations            # 不是本 addon 的 root，本條沒有輸入（同第 26 條）
+    facts = _test_tree_facts(root)
+    for rel, exc in facts["parse_errors"]:
+        violations.append(
+            "%s：parse 失敗（%s）——解析不了的檔在本條裡等於「不存在」，而那與「沒有"
+            "違規」的輸出一模一樣。解析失敗當違規、不當無事（%s）" % (rel, exc, ref))
+    if not facts["test_files"]:
+        violations.append(
+            "%s：掃不到任何 `test_*.py`。本條的三格判準都是否定性的，掃描範圍壞掉時"
+            "「找不到沒被 import 的檔」是假綠而不是乾淨（%s）"
+            % (TEST_SUITE_DIR_REL, ref))
+        return violations
+    if TEST_SUITE_PKG_REL not in facts["modules"]:
+        violations.append(
+            "%s：讀不到測試套件的 `__init__.py`。Odoo 的 `_get_tests_modules()` 就是"
+            "`import <addon>.tests` 再讀它的屬性——這個檔不在，**整套測試一條都不會被"
+            "收集**（%s）" % (TEST_SUITE_PKG_REL, ref))
+        return violations
+    targets = _test_init_import_targets(facts)
+    if not targets:
+        violations.append(
+            "%s：抽不到任何 level-1 `ImportFrom`（`from . import test_x` 形態）。"
+            "涵蓋判準是「test_*.py 的集合 − 這個集合」，探針回空集合時它會**全部**"
+            "報成違規或全部放行，兩種都不是真話（%s）" % (TEST_SUITE_PKG_REL, ref))
+        return violations
+
+    covered = {path for _rel, _ln, path, _bound in targets}
+    for rel in facts["test_files"]:
+        if rel[:-3] in covered:
+            continue
+        init_rel = _test_pkg_dir(rel) + "/__init__.py"
+        violations.append(
+            "%s：沒有被 `%s` import ⇒ Odoo 的 loader 根本看不到這個模組，裡面的測試"
+            "**一條都不會執行**，而且不會有任何 collection error 或 warning——`of N "
+            "tests` 少了幾條沒有人看得出來。請補一行 `from . import %s`（%s）"
+            % (rel, init_rel, os.path.basename(rel)[:-3], ref))
+
+    for init_rel, lineno, path, _bound in targets:
+        if _test_module_rel(facts, path) is None:
+            violations.append(
+                "%s:%d：import 了不存在的模組 `%s`（幽靈條目）。執行期這是 "
+                "`ImportError` ⇒ **整個 tests 套件收不到任何測試**，不是少收一個檔"
+                "（%s）" % (init_rel, lineno, path.replace("/", "."), ref))
+
+    # (3) 頂層 re-export：Odoo 只讀 `src.tests` 自己的 `test_*` 屬性。
+    top_exports = set()
+    for node in ast.walk(facts["modules"][TEST_SUITE_PKG_REL]):
+        if not isinstance(node, ast.ImportFrom) or node.level != 1:
+            continue
+        pkg = _test_resolve_relative(TEST_SUITE_PKG_REL, 1, node.module)
+        for alias in node.names:
+            if (alias.asname or alias.name).startswith("test_"):
+                top_exports.add(pkg + "/" + alias.name)
+    for rel in facts["test_files"]:
+        if rel[:-3] in top_exports or rel[:-3] not in covered:
+            continue                 # 後者已經在 (1) 被點名了，不重複報
+        violations.append(
+            "%s：只被子套件自己的 `__init__.py` import，`%s` 沒有 re-export 它。"
+            "`_get_tests_modules()` 只讀 `<addon>.tests` **自己**的屬性"
+            "（`inspect.getmembers(..., ismodule)` ＋ 名字以 `test_` 開頭），子套件的"
+            "`__init__.py` 不在它的視野裡 ⇒ 這個檔照樣一條都不會跑。請在 `%s` 加一行"
+            "`from .%s import %s`（%s）"
+            % (rel, TEST_SUITE_PKG_REL, TEST_SUITE_PKG_REL,
+               _test_pkg_dir(rel)[len(TEST_SUITE_DIR_REL) + 1:].replace("/", "."),
+               os.path.basename(rel)[:-3], ref))
+    return violations
+
+
+def check_test_class_execution(root):
+    """性質 2（執行面）：`src/tests/**` 的每個 TestCase 子類都必須真的被執行。
+
+    🔴 **機制（實查原始碼，不是轉述）**：`odoo/tests/loader.py:8` 是
+    `from unittest import case`，所以篩子②的 `issubclass(obj, case.TestCase)`
+    （`loader.py:24`）比的是 **`unittest.TestCase`** —— 純 unittest 子類**通過**
+    篩子②③，會被 yield 成 test 實例。真正丟掉它們的是下一層：
+    `odoo/tests/tag_selector.py:69` 的 `if not hasattr(test, 'test_tags')`，該行
+    原始註解自己寫著「does not inherit from BaseCase and has no test_tags」。
+
+    `test_tags` 由 `odoo/tests/common.py` 的 `MetaCase` metaclass 賦予，而
+    `common.py:290` 是 `class BaseCase(case.TestCase, metaclass=MetaCase)` ——
+    注意 `common.py:71` 的 `from . import case` 與 `loader.py:8` 的 `case`
+    **同名不同源**（前者 `odoo.tests.case`、後者 `unittest.case`）。這正是把判準
+    寫成「必須是 `odoo.tests.case.TestCase` 的傳遞子類」的來源，而那是**較寬**的
+    判準、有盲區：直接繼承 `odoo.tests.case.TestCase` 而沒經過 `BaseCase` 的 class
+    沒有 `MetaCase` ⇒ 拿不到 `test_tags` ⇒ 照樣不會跑，卻會通過那個判準。
+    ⇒ 正確錨點是**傳遞繼承到 `odoo.tests.common.BaseCase`**（＝ `TransactionCase`
+    ／`SingleTransactionCase`／`HttpCase` 的共同祖先，也就是「拿得到 test_tags」）。
+
+    🔴 **逐 class，不是逐檔**：`test_reconciler_diff.py` 同檔三個 class，兩個
+    `TransactionCase`（19 條會跑）＋ 一個 `unittest.TestCase`（3 條不會跑）。問
+    「這個檔有測試跑到嗎」＝有 ⇒ module 粒度整檔放行，那 3 條照樣不見。
+
+    🔴 判準寫**性質**不寫名字：「檔案裡不得出現 `unittest.TestCase`」被
+    `from unittest import TestCase` 一行繞過，而且會誤傷只是提到它的 helper 與註解。
+    這裡解析 import 綁定與繼承鏈，問的是「基底傳遞地到得了誰」。
+
+    另外三格（同一組收集規則的其他失效面）：
+
+    (a) **帶 `def test*` 的 mixin**（自己不是 TestCase）：篩子④只收
+        `cls.__dict__`，繼承來的測試方法**不會**被收——除非
+        `allow_inherited_tests_method` 為真。而那個旗標走 `getattr` ⇒ **可繼承**，
+        只查 class 自己身上那一行會漏掉「旗標寫在 mixin、子類繼承」的情形。
+        🔴 **mixin 本身不是違規**：它與「是 TestCase 但基底錯」的 class 一樣都到不了
+        `BaseCase`，但 mixin 的 `def test*` 由子類展開後**每次都真的在跑**。把它判成
+        違規、再拿 baseline 蓋掉，等於在 repo 裡種一筆永久的假宣稱（名單說「這些不會
+        被跑」，而它們在跑），殭屍檢查也永遠叫不出來——因為它「確實」符合那個寫錯的
+        判準。所以這裡查的是**它的子類拿不拿得到旗標**，不是它自己。
+        只有「連一個 `BaseCase` 子類都沒有」的 mixin 才算違規：那些 `def test*`
+        確實一條都不會跑。
+    (b) **`-standard` 而沒有其他可選 tag**：`tag_selector.py` 把空 tag 補成
+        `standard`，所以連「精確指名這個 class」都選不到它，而輸出是 `EXIT=0` ＋
+        WARNING 級的 `of 0 tests` ⇒ 靜默假綠。`-standard` 是合法 opt-out，但必須
+        另外帶一個非保留字 tag 當入口。
+    (c) 每個 `test_*.py` 都要被 `__init__.py` import ＝ 性質 1，見
+        `check_test_module_collection()`。
+
+    既有違規走 `TEST_EXECUTION_BASELINE`（class 粒度、每筆附單號與理由），並附殭屍
+    檢查：修好了卻留在名單上會紅，要求把條目刪掉。
+
+    🔴 這是一條純否定性判準（「找不到拿不到 test_tags 的 class」），掃描器壞掉時輸出
+    與「全部都對」一模一樣 ⇒ 配存在性對照：掃不到**任何** `BaseCase` 血統的 class
+    就是掃描器／範圍壞了，判違規而不是判乾淨。
+    """
+    ref = TEST_COLLECTABILITY_REF
+    self_rel = REPO_LINT_SELF_REL
+    violations = []
+    if not _addon_source_tree_present(root):
+        return violations
+    facts = _test_tree_facts(root)
+    for rel, exc in facts["parse_errors"]:
+        violations.append(
+            "%s：parse 失敗（%s）——解析不了的檔在本條裡等於「沒有任何 class」，"
+            "與「全部都對」的輸出一模一樣（%s）" % (rel, exc, ref))
+
+    # baseline 自身的結構自檢：壞掉的條目會讓下面的豁免與殭屍檢查一起失去意義。
+    for key, entry in sorted(TEST_EXECUTION_BASELINE.items()):
+        where = "`TEST_EXECUTION_BASELINE['%s']`" % key
+        if not isinstance(entry, dict):
+            violations.append("%s：必須是 dict（現在是 %r）（%s）" % (where, entry, ref))
+            continue
+        if "::" not in key:
+            violations.append(
+                "%s：鍵必須是 `<檔案 rel>::<class 名>`——本條是 **class 粒度**，寫成"
+                "檔案等於整檔豁免，而那正是這條 gate 要修的形態（%s）" % (where, ref))
+        for field in ("issue", "why"):
+            if not (entry.get(field) or "").strip():
+                violations.append(
+                    "%s：沒有寫 `%s`。豁免要出現在 diff 裡被覆核，沒有單號與理由的"
+                    "條目讓那件事失效（%s）" % (where, field, ref))
+
+    seen_odoo = 0
+    offenders = set()
+    for rel in sorted(facts["classes"]):
+        for name, node in sorted(facts["classes"][rel].items()):
+            kind = _test_class_kind(facts, rel, name)
+            if kind == _TEST_KIND_TAGGED:
+                seen_odoo += 1
+                continue
+            if kind != _TEST_KIND_UNTAGGED:
+                continue
+            key = "%s::%s" % (rel, name)
+            offenders.add(key)
+            if key in TEST_EXECUTION_BASELINE:
+                continue
+            violations.append(
+                "%s:%d：`%s` 是 `unittest.TestCase` 的傳遞子類，卻**沒有**傳遞繼承到"
+                "`odoo.tests.common.BaseCase` ⇒ 它拿不到 `MetaCase` 給的 `test_tags`，"
+                "會通過 `odoo/tests/loader.py` 的篩子②③、被 yield 成 test 實例，然後"
+                "倒在 `odoo/tests/tag_selector.py:69` 的 "
+                "`if not hasattr(test, 'test_tags')`（該行註解自己寫著 does not "
+                "inherit from BaseCase）。這個 class 的 %d 條測試從來沒有執行過，而 "
+                "`of N tests` 不會顯示少了它們。改成 `odoo.tests.common."
+                "TransactionCase`（或 `HttpCase` / `BaseCase`）即可；真的要留純 "
+                "unittest 就把它移出 `src/tests/`（%s）"
+                % (rel, node.lineno, name, len(_test_own_test_methods(node)), ref))
+
+    # 陽性對照（(a) 位）：掃不到任何被 collect 的 TestCase class ＝ 掃描器／範圍壞了。
+    if not facts["parse_errors"] and seen_odoo == 0:
+        violations.append(
+            "%s：`check_test_class_execution` 掃了 %d 個模組卻找不到**任何**"
+            "`odoo.tests.common.BaseCase` 血統的 class。本條是否定性判準，這種狀態下"
+            "的「沒有違規」是探針壞掉（import 解析／繼承鏈追蹤失效），不是乾淨（%s）"
+            % (self_rel, len(facts["modules"]), ref))
+
+    # 殭屍條目：修好了就要把 baseline 拿掉，否則名單會長成「反正都在名單上」。
+    for key in sorted(set(TEST_EXECUTION_BASELINE) - offenders):
+        violations.append(
+            "%s：`TEST_EXECUTION_BASELINE` 列了 `%s`（%s），但它現在已經不違規了"
+            "（或那個 class／檔案已經不存在）。請把條目刪掉——名單只反映**現在真的"
+            "沒在跑**的 class 才有審查價值（%s）"
+            % (self_rel, key, (TEST_EXECUTION_BASELINE[key] or {}).get("issue", "?"),
+               ref))
+
+    # (a) 帶 test 方法的 mixin。
+    for rel in sorted(facts["classes"]):
+        for name, node in sorted(facts["classes"][rel].items()):
+            if _test_class_kind(facts, rel, name) != _TEST_KIND_OTHER:
+                continue
+            methods = _test_own_test_methods(node)
+            if not methods:
+                continue
+            subclasses = [(r2, n2) for r2 in sorted(facts["classes"])
+                          for n2 in sorted(facts["classes"][r2])
+                          if (rel, name) in set(_test_tree_bases(facts, r2, n2))
+                          and _test_class_kind(facts, r2, n2) == _TEST_KIND_TAGGED]
+            if not subclasses:
+                violations.append(
+                    "%s:%d：`%s` 有 %d 個 `def test*`，但它自己不是 TestCase，也沒有"
+                    "任何 `BaseCase` 血統的子類 ⇒ 這些方法一條都不會被執行。要嘛讓它"
+                    "繼承 `TransactionCase`，要嘛確認它真的有被某個測試 class 用到"
+                    "（有子類時本條查的是子類拿不拿得到旗標，不是把 mixin 判違規）（%s）"
+                    % (rel, node.lineno, name, len(methods), ref))
+                continue
+            for sub_rel, sub_name in subclasses:
+                if _test_has_inherited_flag(facts, sub_rel, sub_name):
+                    continue
+                violations.append(
+                    "%s:%d：`%s` 繼承了帶 `def test*` 的 mixin `%s`（%s，%d 條），"
+                    "但整條繼承鏈上沒有任何一層設 `%s = True`。`loader.py` 篩子④只收"
+                    "`cls.__dict__`，繼承來的測試方法**一條都不會跑**——旗標走 "
+                    "`getattr` 所以寫在 mixin 上也算數（本條就是這樣查的），但總得有"
+                    "人寫（%s）"
+                    % (sub_rel, facts["classes"][sub_rel][sub_name].lineno, sub_name,
+                       name, rel, len(methods), _INHERITED_TESTS_FLAG, ref))
+
+    # (b) `-standard` 必須另外帶一個非保留字 tag。
+    for rel in sorted(facts["classes"]):
+        for name, node in sorted(facts["classes"][rel].items()):
+            if _test_class_kind(facts, rel, name) != _TEST_KIND_TAGGED:
+                continue
+            tags = _test_effective_tags(facts, rel, name)
+            if "standard" in tags:
+                continue
+            if tags - _TAGGED_RESERVED_TAGS:
+                continue
+            violations.append(
+                "%s:%d：`%s` 帶 `-standard` 卻沒有任何非保留字 tag（現在是 %s）。"
+                "`tag_selector.py` 把空 tag 補成 `standard`，所以連**精確指名這個 "
+                "class** 都選不到它——實測輸出是 `EXIT=0` ＋ WARNING 級的 "
+                "`0 failed, 0 error(s) of 0 tests`，與「跑過而且全過」不可區分。"
+                "請加一個可選 tag 當入口（%s）"
+                % (rel, node.lineno, name,
+                   "／".join(sorted(tags)) or "（空）", ref))
     return violations
 
 
