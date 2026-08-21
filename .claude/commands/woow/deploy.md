@@ -14,6 +14,36 @@ This command reads the version from `src/__manifest__.py`, creates a git tag, an
 
 ## Steps
 
+### 0. ⛳ 先把版號 bump 上 develop —— 一張 `release/*` 分支的發版 PR（#691）
+
+🔴 **#691 起一般 PR 不動 manifest 版號**，版號只由兩類 PR 帶：帶 migration 的 PR，以及
+**發版 PR**。所以打 tag 之前，`origin/develop` 的版號必須先由一張發版 PR 升上去；
+`develop` 有分支保護，不能直接 push。
+
+```bash
+# 1) 取號：嚴格大於當下 develop（元組比較，不是字串）
+git fetch --no-tags origin develop
+CURRENT=$(git show origin/develop:src/__manifest__.py | grep -oE '"version": *"[^"]+"' | grep -oE '[0-9][0-9.]*')
+echo "develop 現值 = ${CURRENT}"
+# NEW = CURRENT 末段 +1；⚠ 若此刻有帶 migration 的 PR 在飛且已取號，要避開它
+#      （撞號時後 merge 的那張會被 manifest-version-gate 判紅，可見不靜默）
+
+# 2) 分支名**必須** release/<新版號> —— gate 就是靠這個前綴認出發版 PR
+git switch -c "release/${NEW}" origin/develop
+#    改 src/__manifest__.py 的 version 成 ${NEW}
+git commit -am "release: ${NEW}"
+git push -u origin "release/${NEW}"
+tea pr create --title "release: ${NEW}" --base develop   # description 用 zh-tw
+```
+
+**為什麼是分支名而不是標題前綴**：本 repo 的 PR 標題一律被冠上
+「⛔ 勿代 merge｜待 Eugene 覆核 — 」前綴，`title.startswith("release:")` 對真正的發版 PR
+是假陰性；放寬成「標題含 `release:`」又讓任何人打幾個字就能豁免規則 A。分支名不被裝飾，
+是唯一結構性的訊號。判準與訊息見 [`scripts/ci/manifest-version-gate.py`](../../../scripts/ci/manifest-version-gate.py)。
+
+⛔ **發版 PR 一樣不代 merge**（同下方 Step 6 的原則）。merge 進 develop、且本地
+`git pull` 拿到那個版號之後，才進 Step 1。
+
 ### 1. Extract Version
 
 - Read `src/__manifest__.py` and extract the `version` value (e.g., `18.0.1.0.5`)
@@ -36,7 +66,10 @@ git ls-remote --tags origin "refs/tags/v{version}"
 If tag already exists (either local or remote), abort:
 
 ```
-❌ Tag v{version} already exists. Bump the version in src/__manifest__.py first.
+❌ Tag v{version} already exists.
+   → develop 的版號還停在已發過的值。回 Step 0 開一張 release/<新版號> 的發版 PR
+     把版號升上去、merge 之後再回來（#691：不要在這裡直接改 manifest 就打 tag，
+     那個值不在 develop 上，image 會烤到與 develop 不一致的碼）。
 ```
 
 **Check working tree is clean:**

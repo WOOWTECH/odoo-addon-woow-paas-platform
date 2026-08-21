@@ -1,16 +1,23 @@
 name: manifest-version-gate
 
-# #538：PR 的 manifest 版號必須嚴格大於**當下的** origin/develop。
+# #538 建立、#691 改制：manifest 版號改成「發佈時才 bump」，一般 PR 不動版號。
+#
+# 三條規則（權威敘述在 scripts/ci/manifest-version-gate.py 的 docstring，此處只給索引）：
+#   A. 一般 PR：版號必須**等於**當下 origin/develop（別動那一行）。
+#   B. 帶 migration 的 PR：版號嚴格大於 develop，且本 PR 新增／變更的
+#      src/migrations/<X>/ 至少有一個 X == 新版號。
+#   C. 發版 PR：分支名 release/* ⇒ 只要求嚴格大於。
+# 三類皆同：版號**低於** develop 一律紅（先 `git merge origin/develop` 再說）。
 #
 # 為什麼是 CI 而不是 repo-lint.py：repo-lint 是純靜態檢查，這條要比對**遠端當下的值**。
-# 而且判準由**排隊順序**決定——rebase 完到真正 merge 之間 develop 可能又被別人 bump 過
-# ⇒ 檢查時機必須是「每次 push 都重跑」，不是「rebase 後檢查一次」。
+# 而且判準由**排隊順序**決定——rebase 完到真正 merge 之間 develop 可能又被別的
+# migration／release PR 動過 ⇒ 檢查時機必須是「每次 push 都重跑」，不是「rebase 後檢查一次」。
 #
 # 綠燈過期的缺口，現況（2026-08-06）：**已由 repo 設定收掉，不是由本 workflow 收掉**。
 # pull_request 事件只在**本 PR 被 push** 時觸發，別人 merge 進 develop 不會讓本 PR 的
 # gate 自動重跑——這一點沒有變，workflow 層也關不掉。真正關掉它的是 develop 分支保護的
 # `block_on_outdated_branch`（**開關現值一律看分支保護設定，權威在那邊、此處刻意不複述**）：
-# 開著時 PR 落後 base 就不准 merge ⇒ 必須先 rebase ⇒ rebase 的 push 會重跑本 gate
+# 開著時 PR 落後 base 就不准 merge ⇒ 必須先合併 ⇒ 那次 push 會重跑本 gate
 # ⇒ merge 當下的綠燈必然是對「當下 develop」驗出來的。
 # ⚠ 這個閉合**依賴那個設定持續開著**。若哪天 block_on_outdated_branch 被關掉，缺口原樣
 # 回來（綠燈可能在 merge 前過期），而且不會有任何訊號。
@@ -33,7 +40,7 @@ on:
     # lychee 這兩個 workflow 當時都存在於 repo，卻因 paths 沒命中而完全沒有留下 context。
     #
     # 代價：每個 PR 多跑約 7 秒。行為不變——沒動 src/ 的 PR 本來就會判 out-of-scope
-    # pass（見 scripts/ci/manifest-version-gate.py :: classify_bump_requirement），
+    # pass（見 scripts/ci/manifest-version-gate.py :: classify_scope），
     # 差別只在「有沒有留下一個 context 讓 required check 看得到」。
     #
     # 什麼時候可以改回白名單：**只有在本 gate 不再是 required status check 時。**
@@ -51,7 +58,7 @@ jobs:
           # gate 偵測到 shallow 會直接 fail-loud（刻意不退回「猜一個檔案清單」）。
           fetch-depth: 0
           # 刻意檢查 PR 自己的 head 而不是預設的 merge 結果：gate 的判準是
-          # 「**作者寫下的版號**是否嚴格大於 develop」。檢查 merge 結果的話，
+          # 「**作者寫下的版號**」與 develop 的關係。檢查 merge 結果的話，
           # 「PR 低於 develop」那種情形會先在 merge ref 生成階段變成衝突或被 base 覆蓋，
           # gate 看到的就不是作者實際寫的值了。
           ref: ${{ github.event.pull_request.head.sha }}
@@ -59,13 +66,28 @@ jobs:
       - name: 取回 base 分支
         run: git fetch --no-tags origin "${{ github.event.pull_request.base.ref }}"
 
+      # 🔴 release 訊號輸入的實測回印（#691）。
+      #
+      # 這一步存在的理由不是 debug 方便，是**可區分性**：`head.ref` 在不同 forge／不同
+      # 事件上可能是分支名（`release/18.0.1.0.176`）、也可能是 `refs/pull/<n>/head`
+      # （本 repo 的 tea api pulls listing 回的就是後者）。傳參壞掉時 gate 只會說
+      # 「不是 release PR」——與「這本來就不是 release PR」的輸出一模一樣。
+      # 把原始值印出來，壞掉的那次才看得出來是壞掉。
+      # gate 自己的報告也會回印同樣兩個值，這一步是它的獨立對照。
+      - name: release 訊號輸入實測回印
+        run: |
+          echo "github.event.pull_request.head.ref = '${{ github.event.pull_request.head.ref }}'"
+          echo "github.head_ref                    = '${{ github.head_ref }}'"
+          echo "GITHUB_HEAD_REF (env)              = '${GITHUB_HEAD_REF}'"
+
       # 🔴 先自測再判 PR。理由（#538 驗收段）：一道從沒被看過會失敗的檢查，
       # 與一道什麼都沒檢查的檢查，輸出長得一模一樣。這一步把「上線時驗過一次」
-      # 升級成「每次跑都重新證明比較器還活著」——特別是跨百位那兩個方向。
-      - name: 自測（比較器 + 三點 diff + 豁免判準）
+      # 升級成「每次跑都重新證明比較器與三條規則的裁決還活著」。
+      - name: 自測（比較器 + 三條規則 + 三點 diff + release 訊號降級）
         run: python3 scripts/ci/test_manifest_version_gate.py
 
-      - name: 檢查 manifest 版號嚴格遞增
+      - name: 檢查 manifest 版號規則（#691 A／B／C）
         run: |
           python3 scripts/ci/manifest-version-gate.py \
-            --base-ref "origin/${{ github.event.pull_request.base.ref }}"
+            --base-ref "origin/${{ github.event.pull_request.base.ref }}" \
+            --head-ref "${{ github.event.pull_request.head.ref }}"
