@@ -18,8 +18,9 @@ related: [docs/decisions/patterns/README.md, docs/tracking/followups/follow-ups.
 ## 適用情境
 
 - develop 在你 PR 開著期間前進了（別人 merge 了），你的 PR `mergeable=false`。
-- 多張 PR 同時在飛、都動 `src/__manifest__.py` 與 `src/tests/__init__.py`（在本 repo 幾乎是必然：每張 bump 版號、每張加測試檔）。
-- 🔴 **每 merge 一張，剩下每一張都會在同一位置重新產生同一個衝突** ⇒ 解衝突要「輪到你前一刻」才做，提早解會白做；協調者按順序叫號。
+- 多張 PR 同時在飛、都動 `src/tests/__init__.py`（在本 repo 幾乎是必然：每張加測試檔）。
+- ⚠ **`src/__manifest__.py` 自 #691 起不再是必然衝突點**——一般 PR 不動版號，只有帶 migration 的 PR 與發版 PR 會動它。本頁 2026-08-21 之前的紀錄（下方 §落地紀錄那六張）全部產生在舊制底下，版號欄的「每張一個號」是**當時的**規則，不是現在的。
+- 🔴 **每 merge 一張，剩下每一張都會在同一位置重新產生同一個衝突** ⇒ 解衝突要「輪到你前一刻」才做，提早解會白做；協調者按順序叫號。（#691 之後這句主要適用 `src/tests/__init__.py`；版號那一行只在 migration／發版 PR 之間才會撞。）
 
 ## 0. 方法
 
@@ -30,13 +31,27 @@ related: [docs/decisions/patterns/README.md, docs/tracking/followups/follow-ups.
 
 ## 1. `src/__manifest__.py`
 
-- 版號**元組比較**嚴格大於 develop（不比字串；位數進位時字串會說謊），且 **≠ 任何 open PR head 的版號**。
-  查法：`pulls?state=open` → 各 head **全長** sha → `contents/src/__manifest__.py?ref=<sha>`（短 sha 會回 `object does not exist`）。
-- 🔴 **另驗「develop→merge 的 manifest diff 只有版號那一行」**。整份取分支側會吃掉 develop 側版號以外的改動（多一個 data 檔、多一條 depends），而所有人只會看版號那一行。
+🔴 **#691 起版號規則改了**：一般 PR **不動版號**，版號只由帶 migration 的 PR 與發版 PR 帶。
+逐類驗（機器守線＝`manifest-version-gate`，develop 唯一 required check）：
+
+| 這張 PR 是 | manifest 版號要求 | 額外要驗 |
+| --- | --- | --- |
+| 一般 PR（絕大多數） | **等於**當下 `origin/develop`——別碰那一行 | 併完 develop 後 `git diff origin/develop -- src/__manifest__.py` 是空的 |
+| 只改**既有** migration 檔（修舊 migration 的 bug） | 同一般 PR：**等於** develop | 無。既有目錄改不了名，本來就不該 bump |
+| 帶 migration（**新增**目錄） | **元組比較**嚴格大於 develop（相等 ⇒ 紅 `migration-needs-bump`） | 本 PR **新增**的 `src/migrations/<X>/` 至少一個 X **等於**新版號（F4 鐵律，見 [`plan-catalog-update.md`](../maintenance/plan-catalog-update.md)） |
+| 發版（分支 `release/*`） | **元組比較**嚴格大於 develop（相等 ⇒ 紅 `release-needs-bump`） | 走 [`.claude/commands/woow/deploy.md`](../../../.claude/commands/woow/deploy.md) 的發版 PR 步驟 |
+
+- 🔴 **「帶 migration」的判準是「本 PR **新增**了目錄」**（目錄在 base 側 tree 不存在），不是「動到目錄」。用後者的話「修既有 migration 的 bug」整類 PR 會被逼著 bump，而其中一種**無解**：`src/migrations/18.0.1.0.37/` 沒有辦法改名成新版號（實例 `1ec8144c`）。
+- 🔴 **新增 migration 卻沒 bump ⇒ 紅**，這是 #691 的原始失效：版號相等 ⇒ 已升級到該版的環境（prod 一旦發過這個號就是）永遠不會跑到那支 migration，靜默 no-op。
+- 🔴 **發版 PR 忘記 bump ⇒ 紅**（含「沒動 `src/` 任何檔案」的情形——release 分支不吃 out-of-scope 豁免）。放行的話剩下的網只有 `/woow:deploy` pre-flight 那個**人跑的** script，不是 required check。
+
+- **不比字串**：位數進位時字串會說謊（`'18.0.1.0.100' > '18.0.1.0.99'` 是 `False`）。gate 一律數值 tuple。
+- 🔴 **會 bump 的那兩類仍要求「嚴格大於**當下的** develop」**，理由沒變：兩邊 bump 到**同一個值**時 git 認定無衝突——那行 diff 是空白的，衝突不會出現，review 看 diff 也是空白，後 merge 的那個**靜默地沒有 bump**（同日曾發生三次：#352／PR#517／#522）。
+- **會 bump 的兩類取號**：`max(develop, 其他在飛且會 bump 的 PR 的 manifest) + 1`。撞號只能**一邊**動（兩邊同時讓號會在對方那裡重生），後開的讓。查法：`pulls?state=open` → 各 head **全長** sha → `contents/src/__manifest__.py?ref=<sha>`（短 sha 會回 `object does not exist`）。
+- **migration PR 被發版 PR 追過**時版號不再大於 develop ⇒ gate 判紅，正解是重 bump ＋ 目錄一起改名。這是 #691 預期的、**看得見**的競爭，不是回歸；舊制底下這件事是靜默的。
+- 🔴 **另驗「develop→merge 的 manifest diff 只有版號那一行」**（只對會 bump 的那兩類）。整份取分支側會吃掉 develop 側版號以外的改動（多一個 data 檔、多一條 depends），而所有人只會看版號那一行。
   （#797 這次安全是因為 #796 剛好只 bump 版號——是運氣不是解法安全。）
-- **開 PR 時的取號規則**：`max(develop, 所有 open PR head 的 manifest) + 1`，**不是** `develop + 1`——後者在多張 PR 平行開時必撞（#796 與 #797 皆取 `.162`、manifest blob sha 完全相同；#800 晚 36 分鐘開仍取 `.162`）。
-  ⚠ 它只在 push 當下成立，合併前仍要重驗；merge train 每前進一格，所有人的期望值就過期一次。詳見 #691。
-- 撞號只能**一邊**動（兩邊同時讓號會在對方那裡重生）；後開的讓。
+- 逐格判準與失敗訊息的權威來源是 `scripts/ci/manifest-version-gate.py` 的 docstring；自測 `python3 scripts/ci/test_manifest_version_gate.py`（CI 每次判 PR 前都先跑它）。
 
 ## 2. `src/tests/__init__.py`（含 `src/tests/integration/__init__.py` 等子目錄的）
 
