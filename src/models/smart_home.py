@@ -982,19 +982,70 @@ class SmartHome(models.Model):
         # teardown。漏掉的話「訂閱取消 → cron 拆 tunnel」會留下一組活著的 CF
         # Access app／reusable policy，而 cron 之後永遠不會再回來看這筆。
         failed_access = self._teardown_routes_access()
-        if failed_access:
-            self.write({
-                'state': 'error',
-                'error_message': (
+        # #815：**事後複查**——不信 `_teardown_routes_access()` 的回傳值，teardown
+        # 之後回頭看列上還有沒有 Access 物件 id（SA 那腿的 `_do_cleanup` 早就有
+        # 這道，見 `security_access.py` 的 `lingering_access`）。
+        #
+        # ⚠ 這**不是**在修一個今天會出事的 bug：那支 helper 裡「push 回 True」與
+        # 「清 id」綁在同一個 `if` 的同一段、失敗才 `failed.append(...)` ⇒ 今天
+        # 「`failed` 是否為空」與「事後查 `_has_access_teardown()`」是等價的兩把
+        # 尺，量同一件事。補的是**冗餘**：下一個改 `_teardown_routes_access()`
+        # 的人只要讓「清 id」與「計 failed」分家，兩把尺才會分歧，而分歧的方向
+        # 是這裡無聲放過殘留（#785 原症狀同型）。
+        #
+        # 用 `self.sudo().route_ids` 而不是裸 `route_ids`（SA 那腿是後者）：對照
+        # 的必須是 helper 真的走過的那一批——它迴圈的是 `self.sudo().route_ids`
+        # （:497）。ir.rule 過濾後的 `route_ids` 對某些身分可能少幾條，「看不到」
+        # 不等於「不存在」，而漏看的方向是 fail-open：teardown 迴圈處理過的 route
+        # 事後複查看不見。`_has_access_teardown()` 還要讀 `access_policy_ids`，
+        # 同一層問題再一次。
+        #
+        # ⚠ **今天這一個 `.sudo()` 是 no-op，不是在補一個現行洞**：本 method 的
+        # 唯一呼叫端是 `subscription_lifecycle_cron.py` 的
+        # `_cron_enforce_subscription_lifecycle()`，而那筆 `ir.cron`
+        # （`data/subscription_lifecycle_cron.xml`）沒有指定 `user_id` ⇒ 取安裝
+        # 當下的 env user，也就是 `__system__`（uid 1）。Odoo 用
+        # `api.Environment(cr, job['user_id'], {})` 起 cron 的 env，而
+        # `Environment.__new__` 對 `uid == SUPERUSER_ID` 直接 `su = True`
+        # ⇒ ir.rule 整段不套用。寫 `.sudo()` 買的是「兩把尺的存取姿態一致」這條
+        # 不變式：`user_id` 是可改欄位（ir.cron 的 Scheduler User），改成非
+        # superuser 的那天，沒有 `.sudo()` 的那一把才會開始漏看。
+        #
+        # 🔴 這個差別**測不出來**：`TransactionCase` 的 env 本身就是 su ⇒ sudo 與
+        # 非 sudo 輸出相同（`docs/decisions/patterns/su-env-exempt-guard-false-green.md`
+        # 的形狀）。所以它靠這段註解與 review 守，不靠測試。
+        lingering_access = self.sudo().route_ids.filtered(
+            lambda r: r._has_access_teardown())
+        if failed_access or lingering_access:
+            # 兩格共用同一個 `state='error'`，所以訊息必須分得開——否則新防線真
+            # 的響時輸出與舊分支一模一樣，等於加了一道永遠不知道有沒有響過的守
+            # 衛。`failed_access` 那條的措辭**逐字不動**（#785／PR #813 的成敗語
+            # 意表在斷言它）；lingering-only 才走新措辭。
+            if failed_access:
+                error_message = (
                     "Cloudflare Access teardown failed for route(s): %s. Will "
                     "retry on the next cron pass." % ', '.join(
                         str(f) for f in failed_access)
-                ),
-            })
+                )
+            else:
+                error_message = (
+                    "Cloudflare Access teardown reported success but route(s) "
+                    "%s still hold Access object id(s); the CF Access app and "
+                    "its reusable policies are still live. Will retry on the "
+                    "next cron pass." % ', '.join(
+                        str(rid) for rid in lingering_access.ids)
+                )
+            self.write({'state': 'error', 'error_message': error_message})
             _logger.warning(
                 "[SH] _do_cleanup access teardown incomplete sh=%s routes=%s "
-                "(state=error)", self.id, failed_access)
+                "lingering_access=%s (state=error)",
+                self.id, failed_access, lingering_access.ids)
             return
+        # ⚠ 位置：上面那道閘必須留在這一行**之前**。SA 把複查放在
+        # `_cleanup_cloudflare()` 之後是因為它把「拆 access」與「刪 tunnel」包在
+        # 同一個 call 裡；SH 是兩段，照抄位置語意會變成「先把 tunnel 刪掉、再抱
+        # 怨 access 沒清乾淨」，與 #785 C2 鎖住的「access 拆不掉絕不到達
+        # delete_tunnel」相反（那顆 tunnel 還在計費，是重試唯一的錨點）。
         self._cleanup_tunnel()
         if self.tunnel_id:
             self.write({
