@@ -503,3 +503,13 @@ from . import test_sh_sync_ctx_forgery_787
 # provision，紅在 tunnel_token 的 write 上）。B 系列釘「改用平台身分之後原本
 # 由租戶身分擋著的檢查一條都沒少」，C1 釘票面第 2 個附帶事實的現況形狀。
 from . import test_sh_provision_tenant_rpc_739
+
+# fix: #786 AccessPolicy.write() 在 `super().write()` **之後**才求值
+# `_access_sync_targets()` ⇒ 換錨點時只推得到新錨點，舊錨點的 CF Access
+# application 繼續引用已經搬走的那顆 reusable policy（授權發散），而那顆 cf id
+# 也再進不了舊錨點的 `existing_policy_ids`（operator 唯一的刪除通道）。
+# RED 群集：A1／A3／A4／E1（舊錨點根本沒被推）、A1／B2／E1（那顆 id 進不了刪除
+# 通道）、A4（推送順序借用 mapped() 就會排錯）、A5（新錨點把舊 app 的 policy
+# 當成自己的送去刪）、B1（推不動時那顆 id 沒有任何 durable 記錄）、D1（跨錨點
+# 回存錯位而完全無聲）、F1（授權檢查晚於不可回捲的 CF 變更）。
+from . import test_access_policy_reanchor_786
