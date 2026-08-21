@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """repo-lint：把「假綠家族」pitfall 轉成機械 gate 的靜態檢查工具。
 
-三十三個 check 函式，歸為下列二十九條規則（其中兩條各由多個函式實作：第 7 條
+三十四個 check 函式，歸為下列三十條規則（其中兩條各由多個函式實作：第 7 條
 capability-gate 由四個函式——slug 集合成員／admin-gui 錨點／gateway 文案錨點／
 Access 頁籤錨點；第 22 條
 security-rule-lifecycle 由兩個函式——ir.rule 的出生地／退役名字。這個一對多關係的顯式
@@ -357,6 +357,28 @@ security-rule-lifecycle 由兩個函式——ir.rule 的出生地／退役名字
                      `_teardown_route_access()` 的「沒 id 就回 True」早退而完全沒有
                      輸出——不打 operator、不寫欄位、不留 log）。判準刻意不硬編方法
                      名；已知限制（只追一層、只追同檔）寫在函式 docstring。
+30. tunnel-config-wire-shape  `PUT /api/tunnels/{tunnel_id}/config` 的兩端參數綁定
+                     形狀必須一致，且必須是 body。#769：operator 端把 `hostname` /
+                     `service_url` 宣告成裸 `str` ⇒ FastAPI 綁成 query param，而平台
+                     client 把同兩個欄位組成 dict 走 JSON body 送 ⇒ **每一次呼叫必回
+                     422**（實跑取證：`loc` 是 `["query","hostname"]`）。破裂期間兩端
+                     的測試**全部是綠的**：operator 的 `tests/` 從來沒有一支打過這個
+                     端點，平台的 `test_subscription_lifecycle.py` 用 `MagicMock()`
+                     當 client、HTTP 序列化整層被 mock 掉。唯一受害者是 SmartHome 的
+                     停權／復權，而它的例外被 `except Exception` 吞成 `state='error'`
+                     ⇒ 自上線起零訊號。
+                     🔴 這條**只能**住在 repo-lint：兩端住在不同的部署單元，
+                     `extra/paas-operator/` 不進 paas-odoo image（`Dockerfile.dev`
+                     只 `COPY src/`），fastapi 也不在 Odoo 的 venv 裡 ⇒ 沒有任何一個
+                     測試執行環境同時看得到兩端。放進 `src/tests/` 再對缺檔 skip 就
+                     落進 #544／#684 家族（skipped 算進 testsRun 卻不出現在 summary，
+                     「沒跑」與「通過」輸出完全相同）。
+                     ⚠ 只比對**綁定的邊**（body／query），不驗型別、不驗 required、
+                     不驗語意——把本條的綠讀成「這條 wire 一定會通」是錯的。行為那
+                     兩腿在 extra/paas-operator/tests/test_tunnel_config_wire_769.py
+                     與 src/tests/test_tunnel_config_wire_769.py。其餘已知限制
+                     （只認 `@router.<m>("<path>")` 註冊形態、client 只認字面值
+                     dict）寫在函式 docstring。
 
 用法：
 
@@ -4783,6 +4805,7 @@ REPO_LINT_RULES = {
     "sh-subscription-group-isolation": ("check_sh_subscription_group_isolation",),
     "internal-ctx-key-registry": ("check_internal_ctx_key_registry",),
     "access-gate-no-ledger-read": ("check_access_gate_no_ledger_read",),
+    "tunnel-config-wire-shape": ("check_tunnel_config_wire_shape",),
 }
 
 # 刻意不掛 hook 分派的 check：{函式名: 理由}。現況是空的（每一條都掛得到 hook）。
@@ -5211,7 +5234,8 @@ def run_all(root):
                   + check_provision_sentinel_allowlist(root)
                   + check_sh_subscription_group_isolation(root)
                   + check_internal_ctx_key_registry(root)
-                  + check_access_gate_no_ledger_read(root))
+                  + check_access_gate_no_ledger_read(root)
+                  + check_tunnel_config_wire_shape(root))
     if violations:
         print("repo-lint：%d 個違規" % len(violations))
         for v in violations:
@@ -5340,6 +5364,11 @@ def run_hook():
         # 任一端就整條重算（同 provision／sh_sub_groups）。
         internal_ctx = (check_internal_ctx_key_registry(root)
                         if _internal_ctx_key_watches(rel) else [])
+        # #769：不變式跨「operator endpoint ↔ 平台 client」兩端，而且壞掉的常常是
+        # 另一端（改 client 的送法紅在 operator 的宣告，反之亦然）；判準本身也只有
+        # 同時讀兩端才成立 ⇒ 不做 only_file 切片，動到任一端就整條重算。
+        tunnel_wire = (check_tunnel_config_wire_shape(root)
+                       if _tunnel_config_wire_watches(rel) else [])
         if re.match(r"^src/controllers/.*\.py$", rel):
             violations = check_controller_sudo(root, only_file=abs_path)
             violations += check_reuse_values(root, only_file=abs_path)
@@ -5399,7 +5428,7 @@ def run_hook():
             violations = check_kubectl_ns_whitelist_sync(root)
         elif (ladder or availability or poll_facts or anchors or floor
                 or security_rules or one_time_cred or provision or sh_sub_groups
-                or internal_ctx):
+                or internal_ctx or tunnel_wire):
             # extra/paas-operator/** 與 docs/tracking/pitfalls/** 不在上面任何分支，
             # 但前者持有階梯的內層常數、後者是 doc-symbol-anchor 的一半輸入；
             # baselines/repo-lint-registry.txt（floor 的另一份輸入）與
@@ -5418,6 +5447,7 @@ def run_hook():
         violations += provision
         violations += sh_sub_groups
         violations += internal_ctx
+        violations += tunnel_wire
         if violations:
             print(json.dumps({
                 "decision": "block",
@@ -5572,6 +5602,464 @@ def check_access_gate_no_ledger_read(root, only_file=None):
                         % (rel, line, sub.func.attr, ", ".join(sorted(hits)),
                            rel, target.lineno))
     return violations
+
+# --------------------------------------------------------------------------- #
+#  30. tunnel-config-wire-shape                                                #
+# --------------------------------------------------------------------------- #
+
+#: 這條 wire 的三份輸入。兩端住在**不同的部署單元**：operator 是獨立服務（自己的
+#: `extra/paas-operator/Dockerfile`、自己的 CI），平台 addon 打包的只有 `src/`
+#: （`Dockerfile.dev` 是 `COPY src/ /mnt/extra-addons/woow_paas_platform/`）。
+#: ⇒ **沒有任何一個執行環境同時看得到兩端**：operator 的 pytest 看不到 client，
+#: Odoo 的測試看不到 operator。repo-lint 跑在 repo 上，是唯一兩端都在的地方。
+TUNNEL_CONFIG_OPERATOR_REL = "extra/paas-operator/src/api/tunnels.py"
+TUNNEL_CONFIG_SCHEMAS_REL = "extra/paas-operator/src/models/schemas.py"
+TUNNEL_CONFIG_CLIENT_REL = "src/services/paas_operator.py"
+#: 判準寫「資源」不寫「函式名」：`update_tunnel_config` 在 operator 內有**兩個同名
+#: 定義**——API handler（api/tunnels.py）與 CloudflareService 的方法
+#: （services/cloudflare.py）。照名字找會挑到錯的那一個，所以入口是 route 裝飾器。
+TUNNEL_CONFIG_ROUTE_METHOD = "put"
+TUNNEL_CONFIG_ROUTE_PATH = "/{tunnel_id}/config"
+TUNNEL_CONFIG_CLIENT_METHOD = "configure_tunnel"
+TUNNEL_CONFIG_FIELDS = ("hostname", "service_url")
+TUNNEL_CONFIG_REF = "見 #769（實跑取證：JSON body ⇒ 422，loc=['query',...]）"
+
+#: FastAPI 的預設綁定規則：非 path 的**裸純量**參數 ⇒ query param。
+_TUNNEL_WIRE_SCALARS = {"str", "int", "float", "bool"}
+_TUNNEL_WIRE_MARKERS = {"Body", "Query", "Path", "Header", "Cookie", "Form", "File"}
+
+
+def _tunnel_config_wire_watches(rel):
+    """hook 分派判準：與 check 的輸入清單共用同一組常數，兩者不可能分岔。"""
+    return rel in (TUNNEL_CONFIG_OPERATOR_REL, TUNNEL_CONFIG_SCHEMAS_REL,
+                   TUNNEL_CONFIG_CLIENT_REL, REPO_LINT_SELF_REL)
+
+
+def _tunnel_wire_name(node):
+    """`Name` / `Attribute` 的尾端名字；其他回 None。"""
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        return node.attr
+    return None
+
+
+def _tunnel_wire_marker(node):
+    """`Body(...)` / `Query(...)` 這類 FastAPI 明示 marker 的名字。"""
+    if isinstance(node, ast.Call):
+        name = _tunnel_wire_name(node.func)
+        if name in _TUNNEL_WIRE_MARKERS:
+            return name
+    return None
+
+
+def _tunnel_wire_subscript_elts(node):
+    sl = node.slice
+    return list(sl.elts) if isinstance(sl, ast.Tuple) else [sl]
+
+
+def _tunnel_wire_ann_marker(ann):
+    """`Annotated[X, Body()]` 裡的 marker（沒有回 None）。"""
+    if isinstance(ann, ast.Subscript) and _tunnel_wire_name(ann.value) == "Annotated":
+        for extra in _tunnel_wire_subscript_elts(ann)[1:]:
+            marker = _tunnel_wire_marker(extra)
+            if marker:
+                return marker
+    return None
+
+
+def _tunnel_wire_ann_base(ann):
+    """剝掉 `Annotated` / `Optional` / `Union` 後最內層的型別名。"""
+    if ann is None:
+        return None
+    if isinstance(ann, ast.Subscript):
+        outer = _tunnel_wire_name(ann.value)
+        elts = _tunnel_wire_subscript_elts(ann)
+        if outer == "Annotated":
+            return _tunnel_wire_ann_base(elts[0])
+        if outer in ("Optional", "Union"):
+            for elt in elts:
+                base = _tunnel_wire_ann_base(elt)
+                if base not in (None, "None"):
+                    return base
+            return None
+        return outer
+    return _tunnel_wire_name(ann)
+
+
+def _tunnel_wire_defaults(func):
+    """{參數名: default 節點}。posonly+args 的 default 靠尾端對齊，kwonly 各自對位。"""
+    positional = list(func.args.posonlyargs) + list(func.args.args)
+    out = {}
+    defaults = list(func.args.defaults)
+    if defaults:
+        for arg, default in zip(positional[-len(defaults):], defaults):
+            out[arg.arg] = default
+    for arg, default in zip(func.args.kwonlyargs, func.args.kw_defaults):
+        if default is not None:
+            out[arg.arg] = default
+    return out
+
+
+def _tunnel_wire_schema_models(source):
+    """schemas.py 的 `BaseModel` 子類 → 它宣告的欄位名集合。"""
+    models = {}
+    for node in ast.parse(source).body:
+        if not isinstance(node, ast.ClassDef):
+            continue
+        if not any(_tunnel_wire_name(base) == "BaseModel" for base in node.bases):
+            continue
+        models[node.name] = {
+            stmt.target.id
+            for stmt in node.body
+            if isinstance(stmt, ast.AnnAssign) and isinstance(stmt.target, ast.Name)
+        }
+    return models
+
+
+def _tunnel_wire_endpoint_binding(operator_source, schema_models):
+    """operator 端：{欄位名: 'path'|'query'|'body'|'unknown'} ＋ problems。
+
+    problems 非空一律當違規——本條的判準是否定性的（「hostname 不在 query」），
+    解析不出來時「沒有違規」與「有違規但看不到」的輸出完全相同。
+    """
+    problems = []
+    tree = ast.parse(operator_source)
+
+    func = None
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        for dec in node.decorator_list:
+            if not isinstance(dec, ast.Call):
+                continue
+            target = dec.func
+            if not (isinstance(target, ast.Attribute)
+                    and isinstance(target.value, ast.Name)
+                    and target.value.id == "router"
+                    and target.attr == TUNNEL_CONFIG_ROUTE_METHOD):
+                continue
+            if (dec.args and isinstance(dec.args[0], ast.Constant)
+                    and dec.args[0].value == TUNNEL_CONFIG_ROUTE_PATH):
+                func = node
+    if func is None:
+        problems.append(
+            "找不到被 `@router.%s(%r)` 裝飾的 handler"
+            % (TUNNEL_CONFIG_ROUTE_METHOD, TUNNEL_CONFIG_ROUTE_PATH))
+        return {}, problems
+
+    path_params = set(re.findall(r"\{([A-Za-z_][A-Za-z0-9_]*)\}",
+                                 TUNNEL_CONFIG_ROUTE_PATH))
+    defaults = _tunnel_wire_defaults(func)
+    binding = {}
+    for arg in (list(func.args.posonlyargs) + list(func.args.args)
+                + list(func.args.kwonlyargs)):
+        name = arg.arg
+        if name in path_params:
+            binding[name] = "path"
+            continue
+        marker = (_tunnel_wire_marker(defaults.get(name))
+                  or _tunnel_wire_ann_marker(arg.annotation))
+        if marker == "Body":
+            binding[name] = "body"
+            continue
+        if marker == "Query":
+            binding[name] = "query"
+            continue
+        base = _tunnel_wire_ann_base(arg.annotation)
+        if base in schema_models:
+            # request model ⇒ 它宣告的每個欄位都住在 body
+            for field in schema_models[base]:
+                binding[field] = "body"
+            continue
+        if base in _TUNNEL_WIRE_SCALARS:
+            binding[name] = "query"      # FastAPI 對裸純量的預設綁定
+            continue
+        binding[name] = "unknown"
+    return binding, problems
+
+
+def _tunnel_wire_client_binding(client_source):
+    """平台 client 端：{欄位名: 'body'|'query'} ＋ problems。
+
+    `_request(..., data=X)` → JSON body（client 內 `json=data`）；
+    `_request(..., params=X)` → query string。
+    """
+    problems = []
+    tree = ast.parse(client_source)
+
+    funcs = [node for node in ast.walk(tree)
+             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+             and node.name == TUNNEL_CONFIG_CLIENT_METHOD]
+    if len(funcs) != 1:
+        problems.append(
+            "client 方法 `%s` 找到 %d 個定義（預期剛好 1 個）——同名碰撞時挑哪一個"
+            "取決於走訪順序，兩個方向都是靜默出錯"
+            % (TUNNEL_CONFIG_CLIENT_METHOD, len(funcs)))
+        return {}, problems
+    func = funcs[0]
+
+    local_dicts = {}
+    for stmt in ast.walk(func):
+        if isinstance(stmt, (ast.Assign, ast.AnnAssign)):
+            targets = (stmt.targets if isinstance(stmt, ast.Assign)
+                       else [stmt.target])
+            if isinstance(stmt.value, ast.Dict):
+                keys = {k.value for k in stmt.value.keys
+                        if isinstance(k, ast.Constant) and isinstance(k.value, str)}
+                for target in targets:
+                    if isinstance(target, ast.Name):
+                        local_dicts[target.id] = set(keys)
+            for target in targets:
+                # `data['x'] = ...` 這種事後追加也算進去
+                if (isinstance(target, ast.Subscript)
+                        and isinstance(target.value, ast.Name)
+                        and isinstance(target.slice, ast.Constant)
+                        and isinstance(target.slice.value, str)):
+                    local_dicts.setdefault(target.value.id, set()).add(
+                        target.slice.value)
+
+    binding = {}
+    calls = 0
+    for node in ast.walk(func):
+        if not (isinstance(node, ast.Call)
+                and _tunnel_wire_name(node.func) == "_request"):
+            continue
+        calls += 1
+        for kw in node.keywords:
+            where = {"data": "body", "params": "query"}.get(kw.arg)
+            if where is None:
+                continue
+            if isinstance(kw.value, ast.Dict):
+                keys = {k.value for k in kw.value.keys
+                        if isinstance(k, ast.Constant) and isinstance(k.value, str)}
+            elif isinstance(kw.value, ast.Name):
+                keys = local_dicts.get(kw.value.id)
+            else:
+                keys = None
+            if keys is None:
+                problems.append(
+                    "`%s` 的 `%s=` 解不出欄位名（%s）——本條對這個方向失去鑑別力"
+                    % (TUNNEL_CONFIG_CLIENT_METHOD, kw.arg,
+                       ast.dump(kw.value)[:80]))
+                continue
+            for key in keys:
+                binding[key] = where
+    if calls == 0:
+        problems.append(
+            "`%s` 裡找不到 `self._request(...)` 呼叫——client 已經不從這裡出海，"
+            "本條掃的是一個空殼" % TUNNEL_CONFIG_CLIENT_METHOD)
+    return binding, problems
+
+
+#: (b) 分類器自檢的兩份合成輸入。兩者只差「裸 str」與「request model」。
+_TUNNEL_WIRE_SELFTEST_SCHEMAS = {"_SelfTestRequest": {"hostname", "service_url"}}
+_TUNNEL_WIRE_SELFTEST_QUERY_SRC = (
+    "router = APIRouter(prefix='/api/tunnels')\n"
+    "@router.put('/{tunnel_id}/config')\n"
+    "async def h(tunnel_id: str, hostname: str, service_url: str):\n"
+    "    pass\n"
+)
+_TUNNEL_WIRE_SELFTEST_BODY_SRC = (
+    "router = APIRouter(prefix='/api/tunnels')\n"
+    "@router.put('/{tunnel_id}/config')\n"
+    "async def h(tunnel_id: str, request: _SelfTestRequest):\n"
+    "    pass\n"
+)
+#: (c) client 解析自檢：同一個 dict，一個走 data= 一個走 params=。
+_TUNNEL_WIRE_SELFTEST_CLIENT_BODY_SRC = (
+    "def configure_tunnel(self, tunnel_id, hostname, service_url):\n"
+    "    data = {'hostname': hostname, 'service_url': service_url}\n"
+    "    return self._request('PUT', f'/x/{tunnel_id}/config', data=data)\n"
+)
+_TUNNEL_WIRE_SELFTEST_CLIENT_QUERY_SRC = (
+    "def configure_tunnel(self, tunnel_id, hostname, service_url):\n"
+    "    data = {'hostname': hostname, 'service_url': service_url}\n"
+    "    return self._request('PUT', f'/x/{tunnel_id}/config', params=data)\n"
+)
+
+
+def _tunnel_wire_selftest():
+    """分類器自檢。壞掉的分類器會讓下面的跨層比對無聲失去鑑別力。"""
+    problems = []
+
+    query_binding, query_problems = _tunnel_wire_endpoint_binding(
+        _TUNNEL_WIRE_SELFTEST_QUERY_SRC, _TUNNEL_WIRE_SELFTEST_SCHEMAS)
+    body_binding, body_problems = _tunnel_wire_endpoint_binding(
+        _TUNNEL_WIRE_SELFTEST_BODY_SRC, _TUNNEL_WIRE_SELFTEST_SCHEMAS)
+    for label, errs in (("裸 str", query_problems), ("request model", body_problems)):
+        for err in errs:
+            problems.append("endpoint 分類器對合成輸入（%s）解析失敗：%s" % (label, err))
+    for field in TUNNEL_CONFIG_FIELDS:
+        if query_binding.get(field) != "query":
+            problems.append(
+                "endpoint 分類器把合成的**裸 str** `%s` 判成 %r（應為 'query'）"
+                "——它分不出破裂形態，本條的綠燈是假的"
+                % (field, query_binding.get(field)))
+        if body_binding.get(field) != "body":
+            problems.append(
+                "endpoint 分類器把合成的 **request model** 欄位 `%s` 判成 %r"
+                "（應為 'body'）——它分不出修好的形態，本條會恆紅或恆綠"
+                % (field, body_binding.get(field)))
+
+    client_body, client_body_problems = _tunnel_wire_client_binding(
+        _TUNNEL_WIRE_SELFTEST_CLIENT_BODY_SRC)
+    client_query, client_query_problems = _tunnel_wire_client_binding(
+        _TUNNEL_WIRE_SELFTEST_CLIENT_QUERY_SRC)
+    for label, errs in (("data=", client_body_problems),
+                        ("params=", client_query_problems)):
+        for err in errs:
+            problems.append("client 解析器對合成輸入（%s）解析失敗：%s" % (label, err))
+    for field in TUNNEL_CONFIG_FIELDS:
+        if client_body.get(field) != "body":
+            problems.append(
+                "client 解析器把合成的 `data=` 欄位 `%s` 判成 %r（應為 'body'）"
+                % (field, client_body.get(field)))
+        if client_query.get(field) != "query":
+            problems.append(
+                "client 解析器把合成的 `params=` 欄位 `%s` 判成 %r（應為 'query'）"
+                % (field, client_query.get(field)))
+    return problems
+
+
+def check_tunnel_config_wire_shape(root):
+    """#769：`PUT /api/tunnels/{tunnel_id}/config` 兩端的參數綁定形狀必須一致。
+
+    守的 bug class：**跨部署單元的 wire 契約，兩端各自的測試都蓋不到**。
+    operator 端把 `hostname` / `service_url` 宣告成裸 `str` ⇒ FastAPI 綁成 query
+    param；平台 client 把同兩個欄位組成 dict 走 JSON body 送 ⇒ **每一次呼叫必回
+    422**（實跑取證：`loc` 是 `["query","hostname"]` / `["query","service_url"]`）。
+    而兩端的測試在破裂期間**全部是綠的**：operator 的 `tests/` 從來沒有一支打過
+    這個端點；平台的 `test_subscription_lifecycle.py` 用 `MagicMock()` 當 client，
+    HTTP 序列化整層被 mock 掉。唯一的受害者是 SmartHome 的停權／復權，而它的例外
+    被 `except Exception` 吞成 `state='error'` ⇒ 從 2026-04-11 上線起零訊號。
+
+    為什麼這條只能住在 repo-lint（**不是**偷懶，是沒有別的地方可放）：兩端住在不同
+    的部署單元，`extra/paas-operator/` 不進 paas-odoo image（`Dockerfile.dev` 只
+    `COPY src/`），而 fastapi 不在 Odoo 的 venv 裡。⇒ 沒有任何一個測試執行環境同時
+    看得到兩端。放進 `src/tests/` 再對缺檔 skip，就會落進 #544／#684 那個家族——
+    skipped 算進 testsRun 卻不出現在 summary，「沒跑」與「通過」輸出完全相同。
+
+    判準（跨層比對，兩端都必須解得出來）：
+
+    (i)   operator endpoint 對 `hostname` / `service_url` 的綁定必須是 `body`。
+    (ii)  平台 client 送這兩個欄位的方式必須是 `body`（`_request(data=...)`）。
+    (iii) 兩端相等——(i)(ii) 各自寫死一個期望值還不夠：真正的不變式是「兩端一致」，
+          寫成兩個獨立常數會在有人**同時**改兩邊時仍然綠，而那正是要守的東西。
+
+    陽性對照（否定性結論必配）：
+      (a) 三份輸入檔必須存在且 parse 得動；endpoint handler 與 client 方法必須各自
+          **剛好找到一個**。找不到 ＝ 掃描器／範圍壞了，不是乾淨。⚠ `update_tunnel_config`
+          在 operator 內有兩個同名定義（API handler 與 `CloudflareService` 方法），
+          所以入口刻意走 route 裝飾器而不是函式名。
+      (b) 分類器自檢：對合成的「裸 str」必須判 query、對合成的「request model」必須
+          判 body。少了這格，一個把什麼都判成 body 的壞分類器會讓 (i) 恆綠。
+      (c) client 解析器自檢：對合成的 `data=` 判 body、`params=` 判 query。理由同 (b)。
+
+    ⚠ 覆蓋邊界（刻意寫下來）：
+      * 只認 `@router.<method>("<path>")` 這一種註冊形態。改用 `add_api_route()` 或
+        把 path 拆成變數拼接就掃不到——那時 (a) 會紅（找不到 handler），不會靜默放行。
+      * client 端只認 `_request(data=...)` / `_request(params=...)` 兩種載體，且欄位名
+        要能從**字面值 dict** 解出來。動態組 key（`data[k] = v` 的 k 是變數）看不到。
+      * 只比對**綁定的邊**（body / query），不驗型別、不驗欄位是否 required、也不驗
+        欄位語意。把本條的綠讀成「這條 wire 一定會通」是錯的——行為那兩腿在
+        `extra/paas-operator/tests/test_tunnel_config_wire_769.py`（真 app 送 body ⇒ 2xx）
+        與 `src/tests/test_tunnel_config_wire_769.py`（client 真實序列化）。
+      * 只守這**一條** wire。同 router 其他端點的形狀不在管轄內。
+    """
+    violations = []
+    if not _addon_source_tree_present(root):
+        return violations          # 不是本 addon 的 root，本條沒有輸入
+
+    ref = TUNNEL_CONFIG_REF
+    self_rel = REPO_LINT_SELF_REL
+
+    for problem in _tunnel_wire_selftest():
+        violations.append("%s：%s（%s）" % (self_rel, problem, ref))
+
+    sources = {}
+    for rel in (TUNNEL_CONFIG_OPERATOR_REL, TUNNEL_CONFIG_SCHEMAS_REL,
+                TUNNEL_CONFIG_CLIENT_REL):
+        path = os.path.join(root, rel)
+        try:
+            with io.open(path, encoding="utf-8") as handle:
+                sources[rel] = handle.read()
+        except (IOError, OSError, UnicodeDecodeError) as exc:
+            violations.append(
+                "%s：讀不到（%s）——本條的判準是否定性的，讀不到的檔「沒有違規」"
+                "與「有違規但看不到」輸出完全相同（%s）" % (rel, exc, ref))
+    if len(sources) != 3:
+        return violations          # (a) 已經紅了，繼續往下只會產生誤導訊息
+
+    try:
+        schema_models = _tunnel_wire_schema_models(sources[TUNNEL_CONFIG_SCHEMAS_REL])
+    except SyntaxError as exc:
+        violations.append("%s：parse 失敗（%s）（%s）"
+                          % (TUNNEL_CONFIG_SCHEMAS_REL, exc, ref))
+        return violations
+
+    try:
+        endpoint_binding, endpoint_problems = _tunnel_wire_endpoint_binding(
+            sources[TUNNEL_CONFIG_OPERATOR_REL], schema_models)
+    except SyntaxError as exc:
+        violations.append("%s：parse 失敗（%s）（%s）"
+                          % (TUNNEL_CONFIG_OPERATOR_REL, exc, ref))
+        return violations
+    for problem in endpoint_problems:
+        violations.append("%s：%s（%s）" % (TUNNEL_CONFIG_OPERATOR_REL, problem, ref))
+
+    try:
+        client_binding, client_problems = _tunnel_wire_client_binding(
+            sources[TUNNEL_CONFIG_CLIENT_REL])
+    except SyntaxError as exc:
+        violations.append("%s：parse 失敗（%s）（%s）"
+                          % (TUNNEL_CONFIG_CLIENT_REL, exc, ref))
+        return violations
+    for problem in client_problems:
+        violations.append("%s：%s（%s）" % (TUNNEL_CONFIG_CLIENT_REL, problem, ref))
+
+    if endpoint_problems or client_problems:
+        return violations          # 解析已經壞了，比對結果沒有意義
+
+    for field in TUNNEL_CONFIG_FIELDS:
+        operator_side = endpoint_binding.get(field)
+        client_side = client_binding.get(field)
+
+        if operator_side is None:
+            violations.append(
+                "%s：`%s` 端點完全沒有 `%s` 這個參數——欄位被改名或刪掉了，而呼叫端"
+                "還在送它（%s）"
+                % (TUNNEL_CONFIG_OPERATOR_REL, TUNNEL_CONFIG_ROUTE_PATH, field, ref))
+            continue
+        if client_side is None:
+            violations.append(
+                "%s：`%s()` 沒有送 `%s`，但端點要它——兩端對這個欄位的存在性就不一致"
+                "（%s）"
+                % (TUNNEL_CONFIG_CLIENT_REL, TUNNEL_CONFIG_CLIENT_METHOD, field, ref))
+            continue
+
+        # (iii) 核心：兩端相等。
+        if operator_side != client_side:
+            violations.append(
+                "%s：`%s` 的 wire 兩端對不上——operator 把 `%s` 綁在 **%s**"
+                "（%s），平台 client 送在 **%s**（%s 的 `%s()`）。這個組合每一次呼叫"
+                "都是 422，而兩端的測試都不會紅（%s）"
+                % (self_rel, TUNNEL_CONFIG_ROUTE_PATH, field, operator_side,
+                   TUNNEL_CONFIG_OPERATOR_REL, client_side,
+                   TUNNEL_CONFIG_CLIENT_REL, TUNNEL_CONFIG_CLIENT_METHOD, ref))
+            continue
+
+        # (i)(ii)：一致還不夠——一致地都用 query 也會通過上面那格，但那是
+        # #769 明確否決的修法方向（唯一呼叫者送 body、同 router 其他變更型端點
+        # 全部吃 body model、stg 14 天 access log 顯示沒有第三方在用 query 形態）。
+        if operator_side != "body":
+            violations.append(
+                "%s：`%s` 的 `%s` 兩端一致地綁在 **%s**，但 #769 的裁決是收斂到"
+                "**body**（request model）。同 router 的 `POST /api/tunnels`、"
+                "`PUT /{tunnel_id}/routes` 都吃 request model，這條是唯一例外（%s）"
+                % (self_rel, TUNNEL_CONFIG_ROUTE_PATH, field, operator_side, ref))
+    return violations
+
 
 def main(argv):
     if "--hook" in argv:
