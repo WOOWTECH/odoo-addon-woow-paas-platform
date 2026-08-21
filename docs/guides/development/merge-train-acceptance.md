@@ -80,6 +80,14 @@ merge commit 可以在**非衝突檔**上把另一側的內容悄悄還原；rep
 
 新 head sha、`mergeable`、逐檔取哪側；每格 Claim ｜ Command run ｜ Key output line ｜ Confidence（verified／inferred／unverified）；「What I did NOT verify」（Odoo 測試沒 CI 跑，沒跑就明寫；`extra/paas-operator/` 若動到要跑本機 integration tests）；PR 留言逐檔說明（merge 之前貼，merge 後補記也比沒有好）。
 
+## 7. 收尾：已併入分支的清理
+
+- 🔴 **刪分支的清單不要用「人記得的名字」列舉**——同一 issue 號可能有多條腿（#787 有 `fix/787-cs-sentinel` 與 `fix/787-sh-sentinel`，名字只差三個字元），憑記憶列會漏。可機械化的判準是列性質：`git ls-remote --heads origin` 逐條 `git merge-base --is-ancestor <sha> <develop-tip>`，YES 的才是候選，並配陽性對照（一條明知未併入的分支必須回 NO，證明探針有鑑別力）。
+- 🔴 **不要採信 `git branch -d` 的拒絕或放行**：它比的是**本地** `develop`——本地落後會給「not fully merged」假拒絕（實踩：本地停在落後 8 commit 的 develop），本地夠新的放行也沒證明遠端已併。一律對 `origin/develop`（先 fetch 或對 `ls-remote` 的值）算 `--is-ancestor`。
+- 🔴 **共用 `.git` 下，「branch -d 回 not found」與「這條分支從來不存在」輸出完全一樣**（30+ worktree 共用 ref store，別人刪了你看不到）。要驗自己刪了什麼，先存一份刪前的 sha 快照；刪前記下 sha，`git branch <name> <sha>` 可完整還原（遠端同理：`git push origin <sha>:refs/heads/<name>`）。
+- 遠端刪除走 `tea api -X DELETE /repos/<owner>/<repo>/branches/<name>`（不吃 git 憑證）；刪前逐條驗 ancestor，刪後 `GET /branches/<name>` 回 `not found` 才算數（不靠本地 ref）。
+- 本地分支是各自的，但 ref 空間是共用的——看得到、刪得掉別人的，正因如此更不該憑推論去刪別人的；回報給 owner 自行處理。
+
 ## 本次 merge train 的落地紀錄（出處）
 
 | 順序 | PR | issue | 版號 | 備註 |
