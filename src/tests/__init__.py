@@ -571,3 +571,21 @@ from . import test_sh_teardown_capture_semantics_785
 # 對照組：A2（列乾淨仍須收斂，擋住「補了就一律擋刪」）、A3／A4（#813 成敗語意表
 # 不得被改）。主測試必須 patch helper：真實路徑造不出「回報乾淨但列還髒」。
 from . import test_sh_do_cleanup_lingering_access_815
+
+# fix: #648 (b) CloudService 翻 `running` 早於 Public URL 的 DNS 落地——租戶看到綠燈
+# 卻拿 `ERR_NAME_NOT_RESOLVED`。`_is_release_ready` 全文無 DNS 判定，helm deployed ＋
+# pods ready 一滿足就寫 running。閘加在 `_is_release_ready`（#423 W5a 的單一事實源），
+# 不加在寫 running 的 6 個分支上——那會再造一次 #627 的形狀，且會讓 needs_init 的服務
+# 停在 `initializing` 反覆重跑 init 去撞 `init_retries` 上界。
+# 🔴 窗口綁 `_transition_anchor()`：#489 的 age timeout 從 `deployed_at`（helm install
+# 一回來就寫）起算，閘若自己另計時，「慢部署 ＋ DNS 未落地」會把 age 推過門檻寫成
+# error，而 error 沒有任何 poll 分支救得回來。
+# RED：判定層（窗口內 missing 不得就緒、FQDN 結尾點）、兩層 poll 各一（只改一層會被
+# 前台每 5 秒那條覆寫回去）、窗口過期放行並留旗標、旗標清得掉。
+# 🔴 不變式：`test_gate_can_never_cause_age_timeout` ＋ clamp 兩條合起來證明閘擋住時
+# age 必定小於 timeout。對照組：DNS 解析得到／無 subdomain／resolver unknown／kill
+# switch 四條釘住「不得修過頭」。
+# 另有一條補 repo-lint 盲區：`check_config_parameter_uninstall` 只掃 `config_parameter=`
+# 字面 kwarg，本題兩個 key 走模組常數 ＋ get_param（同 #489 先例）⇒ 忘了登記進
+# hooks.py 不會紅，用測試補上。
+from . import test_public_url_dns_gate_648

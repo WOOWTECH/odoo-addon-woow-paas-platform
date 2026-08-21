@@ -343,6 +343,33 @@ VM_DEPLOY_TIMEOUT_MINUTES_DEFAULT = 120
 _DEPLOY_TIMEOUT_PARAM = 'woow_paas_platform.deploy_timeout_minutes'
 _VM_DEPLOY_TIMEOUT_PARAM = 'woow_paas_platform.vm_deploy_timeout_minutes'
 
+# ------------------------------------------------------------------------- #
+#  #648 (b)：Public URL 的 DNS 落地閘                                         #
+# ------------------------------------------------------------------------- #
+#
+# CS 翻 `running` 早於 Cloudflare DNS record 真的可解析，租戶看到綠燈、點進去拿
+# `ERR_NAME_NOT_RESOLVED`。閘加在 `_is_release_ready`（#423 W5a 的單一事實源）。
+#
+# 🔴 **窗口綁 `_transition_anchor()`，不自己另計時**：#489 的 age timeout 從
+# `max(deployed_at, last_upgraded_at)` 起算，而 `deployed_at` 在 helm install 一
+# 回來就寫（`_execute_deploy`）。閘若從「第一次探測失敗」起算，「pods 很慢才
+# ready ＋ DNS 未落地」會把 age 推過 `deploy_timeout_minutes` ⇒ 服務被寫成
+# `error`，而 `error` 不在 `_TIMEOUT_GOVERNED_STATES` 裡、**沒有任何 poll 分支
+# 救得回來**。窗口綁同一個錨之後可證明：閘擋住時 age 必定小於寬限期，而寬限期
+# 被 clamp 在 timeout 以下 ⇒ 閘永遠不可能造成 `error`。
+#
+# 語意也對：29 分鐘後才 ready 的服務，問題本來就不是 DNS 傳播。
+DNS_GRACE_SECONDS_DEFAULT = 90
+# 夾住上界時留給 age timeout 的餘裕（秒）——不能剛好等於 timeout，那樣兩邊會在
+# 同一輪 poll 撞在一起。
+_DNS_GRACE_SAFETY_MARGIN_SECONDS = 60
+
+_DNS_GRACE_PARAM = 'woow_paas_platform.dns_grace_seconds'
+# prod kill switch：新守線誤判時要有一個開關能立刻停損（沙盒方便性是附帶的）。
+# 預設開；只有明確設成假值才關。
+_DNS_GATE_ENABLED_PARAM = 'woow_paas_platform.dns_gate_enabled'
+_FALSEY_PARAM_VALUES = ('0', 'false', 'no', 'off')
+
 # age timeout 管轄的狀態。**`initializing` 刻意不在內**：post-deploy init 有
 # 自己的上界（`init_retries`，5 次後翻 error），兩套機制夾擊同一個狀態只會讓
 # 失敗歸因更難（#489 明列）。
@@ -582,6 +609,23 @@ class CloudService(models.Model):
     custom_domain = fields.Char(
         string='Custom Domain',
         help='Custom domain configured by user',
+    )
+    public_url_dns_unverified = fields.Boolean(
+        string='Public URL Not Verified',
+        default=False,
+        copy=False,
+        help=(
+            "服務已就緒、但寬限期內都沒能解析到 Public URL 的 DNS record，因此是"
+            "**帶著保留**放行的（#648 (b)）。給前端掛一句軟提示用。\n\n"
+            "⚠ 刻意不寫進 `error_message`：`ServiceDetailPage.xml` 的 "
+            "`t-if=\"service.error_message\"` **不判 state**，寫進去會讓一台健康的"
+            "服務冒出紅色故障 banner，而 `ServiceCard.xml` 又多判了 "
+            "`state === 'error'` ⇒ 兩處行為還不一致。\n\n"
+            "⚠ `running` 不在任何 poll 的 domain 裡（cron 撈 deploying/upgrading/"
+            "initializing，前端 pendingStates 也不含 running），所以這個旗標**沒有"
+            "任何東西會回來自動清掉**——清除靠租戶查看服務時的重探（見 "
+            "`_refresh_public_url_dns_flag`）。"
+        ),
     )
     internal_port = fields.Integer(
         string='Internal Port',
@@ -2728,6 +2772,29 @@ class CloudService(models.Model):
                 )
             return default
         return minutes
+
+    def _dns_grace_seconds(self):
+        """Public URL DNS 閘的**有效**寬限期（秒）。
+
+        缺值／空白／非正整數一律退回內建預設（同 `_transition_timeout_minutes`
+        的 fail-safe 方向：漏設一個參數不該讓保護靜默失效）。
+        """
+        self.ensure_one()
+        raw = self.env['ir.config_parameter'].sudo().get_param(_DNS_GRACE_PARAM)
+        unset = raw in (None, False, '') or not str(raw).strip()
+        try:
+            seconds = int(str(raw).strip())
+        except (TypeError, ValueError):
+            seconds = 0
+        if seconds <= 0:
+            if not unset:
+                _logger.warning(
+                    "%s is %r (not a positive integer of seconds) — falling "
+                    "back to the built-in default of %s seconds",
+                    _DNS_GRACE_PARAM, raw, DNS_GRACE_SECONDS_DEFAULT,
+                )
+            seconds = DNS_GRACE_SECONDS_DEFAULT
+        return seconds
 
     def _timeout_diagnosis(self, detail):
         """把就緒判定的 ``detail`` 翻成「維運該往哪查」的一句話。
