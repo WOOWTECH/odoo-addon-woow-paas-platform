@@ -558,3 +558,16 @@ from .integration import test_failopen_real_rollback_794  # noqa: F401
 # C 系列鎖留言 7951 點名的「清 tunnel_id 前先清 cf_policy_id」跨方法不變式
 # （零 gate／零 assert／零測試），守的是 DB 狀態版而非 mock 呼叫順序。
 from . import test_sh_teardown_capture_semantics_785
+
+# refactor: #815 SH `_do_cleanup` 缺 SA 那道「事後複查 route 殘留 Access id」的
+# 冗餘防線。**非現行 bug**——`_teardown_routes_access()` 裡「push 回 True」與
+# 「清 id」綁在同一格、失敗才計入 `failed` ⇒ 「failed 是否為空」與「事後查
+# `_has_access_teardown()`」今天等價。補的是 SA 那腿有的冗餘（呼叫端不信 helper
+# 的回傳值，回頭看列上的狀態），防的是下一個改該 helper 的人讓「清 id」與「計
+# failed」分家（#785 原症狀同型）。
+# RED：A1（helper 回 [] 但列還髒 ⇒ 現況寫 deleting ＝假成功）、A5（閘放到
+# `_cleanup_tunnel()` 之後就會紅——「閘放錯位置」的唯一機械判別式）、
+# A6（兩格的 error_message／log 必須可區分）。
+# 對照組：A2（列乾淨仍須收斂，擋住「補了就一律擋刪」）、A3／A4（#813 成敗語意表
+# 不得被改）。主測試必須 patch helper：真實路徑造不出「回報乾淨但列還髒」。
+from . import test_sh_do_cleanup_lingering_access_815
