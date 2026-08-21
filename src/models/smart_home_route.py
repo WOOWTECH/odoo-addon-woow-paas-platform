@@ -516,6 +516,11 @@ class SmartHomeRoute(models.Model):
                 # 窗口比 SA 更寬。代價：錯誤訊息只列得出第一條。
                 failed = None
                 for info in teardown:
+                    # #785：這個 `continue` 只吃得到「列上沒有任何 id 要拆」。
+                    # 「有東西但推不動」曾經也回 `None` 而從這裡被靜默吃掉、
+                    # 不計入 `failed` ⇒ 下面的 fail-loud 判成「這一輪乾淨」。
+                    # 那道預測性 liveness 閘已經拆掉，見
+                    # `_capture_access_teardown()` 的 docstring。
                     if not info:
                         continue
                     # `torn_down` 由 `_push_access_teardown` 在 operator 回
@@ -731,23 +736,93 @@ class SmartHomeRoute(models.Model):
     #  teardown（刪除路徑；id 必須在列消失之前捕獲）                        #
     # ------------------------------------------------------------------ #
 
-    def _capture_access_teardown(self):
-        """回傳拆除這條 route 的 Access 所需的一切，或 ``None``（沒東西要拆）。"""
+    def _access_teardown_ids(self):
+        """這條 route 現在有哪些 CF Access 物件 id 需要拆：``(app_id, [policy])``。
+
+        #785：**刪除路徑上「要不要拆」的唯一裁決處**，形狀取 SA 那一腿的同名
+        方法（`security_access.py`）。判準是「**手上有沒有 id**」，永遠不是
+        liveness、也不是 `is_protected`——「未保護但仍持有 stored app_id /
+        cf_policy_id」是這支程式自己承認的合法持久狀態（見
+        `_sync_access_to_operator` 的 docstring）。
+
+        🔴 **本方法只讀這一列的狀態，不查待回收帳本**。SA 那一腿把「這一趟該送
+        哪些 id」另外命名成 `_access_teardown_payload_ids()`（列 ∪ 帳本），因為
+        把帳本聯集進**判準**會讓「清乾淨了沒」永遠回 True ⇒ 錨點還活著、
+        dead-anchor cron 依設計不收 ⇒ 永久卡在 `error`（#792 二輪覆核 F6）。
+        SH 這一腿目前**沒有** payload 版（`_capture_access_teardown()` 送出去的
+        就是列上的 id），要移植就照 SA 的形狀新開一個方法，**不要**把帳本查詢
+        加進本方法。
+        """
         self.ensure_one()
-        if not self.access_app_id and not any(
-                p.cf_policy_id for p in self.access_policy_ids):
+        return (self.access_app_id or None,
+                [p.cf_policy_id for p in self.access_policy_ids
+                 if p.cf_policy_id])
+
+    def _has_access_teardown(self):
+        """這條 route 的**列上**還有沒有 CF Access 物件要拆。
+
+        三腿同名同義（SA `security_access.py`、CS `cloud_service.py`）：判準是
+        列上還有沒有 id。刻意不含帳本，理由見 `_access_teardown_ids()`。
+        """
+        self.ensure_one()
+        app_id, pol_ids = self._access_teardown_ids()
+        return bool(app_id or pol_ids)
+
+    def _capture_access_teardown(self):
+        """回傳拆除這條 route 的 Access 所需的一切，或 ``None``。
+
+        🔴 **``None`` 只有一個語意：這一列沒有任何 id 要拆**（#785）。
+
+        這裡原本有第二個 `return None`——`if not self._access_is_live(forced=
+        True)`，語意是「有東西要拆，但我判斷現在推不動」。兩種語意共用同一個回
+        傳值，而兩個消費端（本 model 的 `unlink()` 與
+        `smart_home._teardown_routes_access()`）都是 `if not info: continue`、
+        **不計入 `failed`** ⇒ 呼叫端的 fail-loud（`unlink` 回滾保住重試錨點）與
+        落 `error`（`_do_cleanup`）雙雙判定「這一輪乾淨」，繼續往下刪列。結果是
+        CF 上的 Access app ＋ reusable policy 留著、DB 列沒了、**沒有重試錨點也
+        沒有任何訊號**——與乾淨刪除在輸出上完全不可區分（#528 那一族的形狀）。
+
+        **為什麼是刪掉那道閘，而不是把它改成 fail-loud**：它預測的「推不動」對
+        teardown 方向根本不成立。operator 的 teardown 分支（`enabled=False`）只
+        吃 `existing_app_id` / `existing_policy_ids`，**不碰 tunnel、不讀
+        hostname**——見 `extra/paas-operator/src/services/cloudflare.py` 的
+        `sync_access_app()`：`if not enabled or not protected_hostnames:` 那一段
+        只呼叫 `_delete_access_app()` 與 `delete_reusable_policy()`，
+        `primary_hostname` 在該分支完全沒被讀到；而 `_delete_access_app()` 把
+        404 當成功（`status_code not in (200, 202, 404)` 才 raise）。所以「tunnel
+        已經不在但 app 還在」照樣拆得掉。把一個前提為假的預測改成 fail-loud，只
+        是把無聲漏拆換成無謂擋刪；正解是**真的推一次**，讓
+        `_push_access_teardown()` 的成敗去決定要不要 fail-loud——失敗那格本來就
+        已經 `_logger.warning` ＋ 回 ``False`` ＋ 進 `failed`。SA 那一腿在 #784／
+        PR #791 已經這樣做（`_access_teardown_ids()` / `_has_access_teardown()`），
+        本方法對齊它；CS 從來沒有這道閘。三腿判準因此一致。
+
+        liveness 沒有消失，它換了工作：推不動的那一格現在**出聲**（下面的
+        warning）。它同時是「清 `tunnel_id` 之前一定先清掉 `cf_policy_id`」這條
+        跨方法順序不變式被破壞時的現場訊號——那條不變式本身由
+        `src/tests/test_sh_teardown_capture_semantics_785.py` 的 B 系列鎖住。
+        """
+        self.ensure_one()
+        if not self._has_access_teardown():
             return None
+        app_id, policy_ids = self._access_teardown_ids()
         if not self._access_is_live(forced=True):
-            return None
+            sh = self.smart_home_id
+            _logger.warning(
+                "[SH] Access teardown captured on a route that is NOT live "
+                "route=%s sh=%s app=%s policies=%s (tunnel=%s hostname=%s) — "
+                "pushing anyway; these ids are the only handle left on the "
+                "Cloudflare objects",
+                self.id, sh.id if sh else None, app_id, policy_ids,
+                bool(sh and sh.tunnel_id), bool(self.hostname))
         return {
             'smart_home': self.smart_home_id,
             # #784：錨點用純量帶著走——推的時候這一列可能已經不在了，而
             # `_settle_teardown` 要記／消的帳就掛在這個 (model, id) 上。
             'anchor_model': self._name,
             'anchor_id': self.id,
-            'app_id': self.access_app_id or None,
-            'policy_ids': [p.cf_policy_id for p in self.access_policy_ids
-                           if p.cf_policy_id],
+            'app_id': app_id,
+            'policy_ids': policy_ids,
             'app_name': self._access_app_name(),
             'hostname': self.hostname or '',
             'label': self._access_app_name(),
