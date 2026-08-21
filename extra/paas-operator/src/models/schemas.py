@@ -1,7 +1,7 @@
 """Pydantic schemas for API requests and responses."""
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional, Union
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -239,6 +239,17 @@ class TunnelConfigUpdateRequest(BaseModel):
     service_url: str = Field(
         ...,
         description="Target service URL or 'http_status:NNN' (503 = suspended)",
+    )
+    #: #531 ownership claim —— 與 ``TunnelRoutesSyncRequest.tunnel_name`` 同名同義。
+    #: ⚠ 這條 wire 由 repo-lint 的 ``tunnel-config-wire-shape``（#769）跨層對帳，
+    #: 加/改欄位要同步動 ``TUNNEL_CONFIG_FIELDS`` **以及該 gate 的自檢合成輸入**
+    #: （自檢會逐欄位跑，漏改會讓 gate 自陳「分類器壞掉」而不是漏判）。
+    tunnel_name: Optional[str] = Field(
+        None,
+        description=(
+            "Ownership claim: the caller's own record of this tunnel's Cloudflare "
+            "name. Verified against the live tunnel — see _assert_tunnel_ownership."
+        ),
     )
 
 
@@ -594,9 +605,20 @@ class OdooModuleStatesResponse(BaseModel):
 
 
 class ErrorResponse(BaseModel):
-    """Error response."""
+    """Error response.
 
-    detail: str
+    ``detail`` 放寬成 ``str | dict``（#531）。**每一個** ``HTTPException`` 都經
+    ``src.main.http_exception_handler`` 灌進這個 model，而原本的 ``detail: str``
+    會讓任何結構化 detail 在**回應序列化階段**炸成 500 —— 症狀是端點看起來壞掉，
+    實際上是這裡的型別把它擋下來的。FastAPI 自己的 ``HTTPException.detail`` 型別
+    本來就是 ``Any``，這裡只是不再比它窄。
+    ``str`` 排在前面：既有的字串 detail 維持原樣序列化，不會被 coerce 成別的形狀。
+
+    呼叫端相容性：平台 client 的 ``_parse_error``（``src/services/paas_operator.py``）
+    是 ``error_data.get('detail', ...)`` 後直接丟進 f-string，拿到 dict 不會炸。
+    """
+
+    detail: Union[str, Dict[str, Any]]
     error_type: Optional[str] = None
 
 
@@ -690,6 +712,16 @@ class TunnelRoutesSyncRequest(BaseModel):
     routes: List[TunnelRouteSpec] = Field(..., min_length=0)
     comment: Optional[str] = Field(
         None, description="Canonical name stamped on DNS records for traceability"
+    )
+    #: #531 ownership claim. 刻意**不重用** ``comment``：後者是 DNS record 上的
+    #: traceability stamp（在本 repo 是只寫不讀的自由文字），把它變成授權判準等於
+    #: 讓「改 stamp 格式」順帶改掉安全姿態。兩個用途分兩個欄位。
+    tunnel_name: Optional[str] = Field(
+        None,
+        description=(
+            "Ownership claim: the caller's own record of this tunnel's Cloudflare "
+            "name. Verified against the live tunnel — see _assert_tunnel_ownership."
+        ),
     )
 
 
