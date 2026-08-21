@@ -150,10 +150,32 @@ SKIP_LINE = re.compile(
 # Odoo 18 `odoo/tests/result.py:300` logError() →
 #     self.log(logging.ERROR, "%s: %s\n%s", flavour, self.getDescription(test), err, ...)
 # flavour ∈ {FAIL, ERROR}，logger 名 = test.__module__。
-# ⚠ 此樣式由源碼推導，尚未對真實紅燈觀察過——develop 目前有一條必然的 ERROR
-#   （TestPRuleMigration，#543 的注入式驗證），第一次跑全套就會成為它的陽性對照。
+#
+# 🔴 `getDescription()`（`result.py:275`）有**三個**分支，吐出三種不同形狀，而這條
+#    正規式只認得其中兩種。三種都在 `--self-test` 的樣本集裡各佔一格：
+#
+#    (a) `TestCase`      → `<Class>.<method>`（`result.py:281`）——一般紅燈
+#    (b) `_SubTest`      → `Subtest <Class>.<method> <subdesc>`（`result.py:277`）
+#    (c) 其它（`_ErrorHolder`）→ `str(test)`（`result.py:282`）
+#
+#    (b) 的 `Subtest ` 前綴**必須吃掉**。`log()`（`result.py:229-231`）會沿
+#    `test.test_case` 上溯再取 logger，所以整行的 logger 名仍是測試模組、與一般紅燈
+#    長得**一模一樣**；少了這個 optional group，`(?P<test>[\w.]+)` 只吃到 `Subtest`
+#    ⇒ 識別字變成 `<模組>.Subtest`，而且同模組多筆 subtest 失敗會**併成同一筆**。
+#    那打掉的正是 C5 從「0F/0E」改成集合差所換來的唯一性質——「**是哪一條**」——
+#    而且是靜默退化。本樹至少 20 個測試檔在用 `subTest`。
+#    實測（本機跑 unittest 重現，非讀碼推論）：
+#      `FAIL: Subtest TestShAccessEndpoints.test_role_matrix (role='member')`
+#      配舊式子解析出 `test_sh_access_endpoints_768.Subtest`，兩筆併成一筆。
+#    吃掉前綴後對應到的是**父測試**的識別字，那才是 baseline／哨兵共用的那個空間。
+#
+# ⚠ (c) 是**已知盲區，不是規格**：`setUpClass` / `tearDownClass` 的錯誤走 unittest 的
+#    `_ErrorHolder`，實測它的 `__module__` 是 `unittest.suite`（不是 `odoo.addons.*`）
+#    ⇒ 本式子的 mod 錨點看不到那一行 ⇒ 那類錯誤對 C5 是**綠的**。self-test 用一格陰性
+#    樣本把現況釘住（只記錄現況，不是主張它應該如此）。
 FAILURE_LINE = re.compile(
-    r"(?P<mod>odoo\.addons\.[\w.]+):\s+(?P<flavour>FAIL|ERROR):\s+(?P<test>[\w.]+)"
+    r"(?P<mod>odoo\.addons\.[\w.]+):\s+(?P<flavour>FAIL|ERROR):\s+"
+    r"(?:Subtest\s+)?(?P<test>[\w.]+)"
 )
 
 # logger 名（`test.__module__`）→ 與 detail report 同一個識別字空間的模組路徑。
@@ -637,6 +659,105 @@ SELF_TEST_DETAIL_LINES = [
     "\tDetailed Tests Report:",
 ]
 
+#: FAILURE_LINE 的**注入式樣本集**：`(log 行, 期望解析出的識別字或 None)`。
+#:
+#: 為什麼一定要有這一組（issue #546 留言 8494 §4(1)、Eugene 2026-08-22 裁決）：
+#: C5 的 FATAL 分支是 `if expected and not actual` —— known-failures 清空之後
+#: `expected` 恆為空 ⇒ **那個分支再也不會觸發**，於是「解析器壞了」與「這次沒有任何
+#: 紅燈」的輸出完全一樣。develop 上唯一那條真實紅燈（#543）已於 `0fd3ba67` 修好，
+#: 正規式從此沒有任何真實世界的陽性對照 ⇒ 改用注入的。
+#:
+#: 🔴 只有陽性樣本是不夠的：一條**過寬**的正規式照樣讓所有陽性通過。所以陰性樣本要挑
+#: 真的有鑑別力的形狀，而且下面 `SELF_TEST_FAILURE_LINE_MUTANTS` 會反過來驗
+#: 「這組樣本真的擋得住寫壞的式子」——否定性驗證配陽性對照。
+SELF_TEST_FAILURE_LINES = [
+    # ── 陽性：三種 getDescription 分支中本式子該認得的兩種 ──────────────────
+    # (a) TestCase 分支（`result.py:281`）＋ ERROR flavour。這條就是 #543 那條紅燈
+    #     在 log 裡的形狀——它 2026-08-21 的 run 4629 已轉綠，所以只能用注入的。
+    ("2026-08-21 10:00:00,123 456 ERROR test odoo.addons.woow_paas_platform.tests."
+     "test_security_access_p_rule_migration: ERROR: TestPRuleMigration."
+     "test_cursor_bypass_flag_cleared_after_migrate",
+     "test_security_access_p_rule_migration.TestPRuleMigration."
+     "test_cursor_bypass_flag_cleared_after_migrate"),
+    # FAIL flavour。⚠ 這條測試**名字裡就含 `failure`**：識別字含 fail 字樣是完全正常
+    #   的，判別式在 flavour 的**槽位**，不在「哪裡出現 fail 這個字」。
+    ("2026-08-21 10:00:01,000 456 ERROR test odoo.addons.woow_paas_platform.tests."
+     "test_wallet_topup: FAIL: TestWalletTopup.test_charge_via_token_returns_failure",
+     "test_wallet_topup.TestWalletTopup.test_charge_via_token_returns_failure"),
+    # 子套件：logger 名多一段套件名，識別字必須跟著帶（與 C0／C3 同一個空間）。
+    ("2026-08-21 10:00:01,500 456 ERROR test odoo.addons.woow_paas_platform.tests."
+     "integration.test_operator_contract: ERROR: TestOperatorContract.test_deploy",
+     "integration.test_operator_contract.TestOperatorContract.test_deploy"),
+    # (b) _SubTest 分支（`result.py:277`）。形狀取自本機跑 unittest 的實測輸出，
+    #     不是編出來的。舊式子在這裡解析出 `test_sh_access_endpoints_768.Subtest`。
+    ("2026-08-21 10:00:01,900 456 ERROR test odoo.addons.woow_paas_platform.tests."
+     "test_sh_access_endpoints_768: FAIL: Subtest TestShAccessEndpoints."
+     "test_role_matrix (role='member')",
+     "test_sh_access_endpoints_768.TestShAccessEndpoints.test_role_matrix"),
+
+    # ── 陰性：長得像但不得匹配 ────────────────────────────────────────────
+    # 成功測試的 detail report 行，而且**名字裡含 fail**。只認「fail 這個字」的式子
+    # 會在這裡把一條綠燈報成紅燈。
+    ("\twoow_paas_platform.test_repo_lint_gate.TestRepoLintGate."
+     "test_fail_loud_when_baseline_missing: 0.42s 12 queries", None),
+    # skip 行：**帶 `odoo.addons.…:` 前綴**（mod 錨點會命中），測試名字含 error，
+    # 理由本身還帶冒號。擋得住它的只有 flavour 的槽位。
+    ("2026-08-21 10:00:02,000 456 INFO test odoo.addons.woow_paas_platform.tests."
+     "test_wallet_topup: skipped TestWalletTopup."
+     "test_access_error_message_stays_generic : A.2 prerequisite: "
+     "cloud_service_ids missing", None),
+    # 被測程式碼自己的 ERROR log：logger 是 `models.*` 不是 `tests.*`，訊息含 failed。
+    ("2026-08-21 10:00:03,000 456 ERROR test odoo.addons.woow_paas_platform.models."
+     "cloud_service: Helm upgrade failed for release ws-42: context deadline "
+     "exceeded", None),
+    # summary 行（C5 的另一條通道，不是它的輸入）。
+    ("2026-08-21 10:05:00,000 456 INFO test odoo.tests.result: "
+     "0 failed, 0 error(s) of 3277 tests", None),
+    # logError 在紅燈行**前面**先印的那條分隔線（`result.py:299`）——同一個 logger、
+    # 同一個冒號前綴，只差冒號後面不是 flavour。
+    ("2026-08-21 10:00:00,120 456 INFO test odoo.addons.woow_paas_platform.tests."
+     "test_security_access_p_rule_migration: " + "=" * 70, None),
+    # traceback 行：與紅燈行同屬一筆 log record，但沒有 logger 前綴（`"%s: %s\n%s"`
+    # 的第三個 %s 換行後直接輸出）。
+    ('  File "/opt/bitnami/odoo/custom-addons/woow_paas_platform/tests/'
+     'test_wallet_topup.py", line 142, in test_charge_via_token_returns_failure',
+     None),
+    # 斷言訊息把一條紅燈行**當字串引用**。本樹到處是自我測試的 gate，這形狀會出現；
+    # 擋得住它的只有 mod 錨點。
+    ('AssertionError: "FAIL: TestGate.test_red_first" not found in captured log',
+     None),
+    # 🔴 已知盲區，**不是規格**：`setUpClass` / `tearDownClass` 的錯誤走 unittest 的
+    #    `_ErrorHolder`，實測 `__module__` 是 `unittest.suite` ⇒ mod 錨點看不到它
+    #    ⇒ **那類錯誤對 C5 是綠的**。這一格只把現況釘住，讓它日後改動時會被看見；
+    #    要不要把錨點放寬到涵蓋它是另一個題目（風險不對稱：放寬 mod 會同時把上面那條
+    #    `models.*` 的 ERROR log 之類的東西吃進來）。
+    ("2026-08-21 10:00:04,000 456 ERROR test unittest.suite: ERROR: setUpClass "
+     "(odoo.addons.woow_paas_platform.tests.test_a.TestA)", None),
+]
+
+#: 蓄意寫壞的 FAILURE_LINE 變異體 —— 上面那組樣本**必須全部拒絕它們**。
+#:
+#: 這是陰性樣本自己的陽性對照。沒有這一步的話，「陰性樣本沒被匹配」與「陰性樣本挑得
+#: 太弱、任何式子都會放過它們」輸出一模一樣；而挑得太弱正是最容易發生的事。
+#: 每一條都對應一個**真的會有人寫出來的**錯誤，不是亂改字元。
+SELF_TEST_FAILURE_LINE_MUTANTS = {
+    "太窄：以為 logger 名只到 addon 名（實際是完整模組路徑）":
+        r"(?P<mod>odoo\.addons\.\w+):\s+(?P<flavour>FAIL|ERROR):\s+"
+        r"(?:Subtest\s+)?(?P<test>[\w.]+)",
+    "太窄：以為描述是 unittest 預設的 `method (Class)` 形狀":
+        r"(?P<mod>odoo\.addons\.[\w.]+):\s+(?P<flavour>FAIL|ERROR):\s+"
+        r"(?P<test>\w+)\s+\(",
+    "太寬：沒有 mod 錨點，只找 `FAIL:` / `ERROR:`":
+        r"(?P<mod>)(?P<flavour>FAIL|ERROR):\s+(?:Subtest\s+)?(?P<test>[\w.]+)",
+    "太寬：mod 放寬成任意 dotted logger（不要求 odoo.addons. 前綴）":
+        r"(?P<mod>[\w.]+):\s+(?P<flavour>FAIL|ERROR):\s+"
+        r"(?:Subtest\s+)?(?P<test>[\w.]+)",
+    "太寬：test 群組貪婪吃到行尾":
+        r"(?P<mod>odoo\.addons\.[\w.]+):\s+(?P<flavour>FAIL|ERROR):\s+"
+        r"(?:Subtest\s+)?(?P<test>.+)",
+}
+
+
 #: `scan_expected()` 的樣本樹。**混合檔是本組樣本的核心**：#684 留言 8233 §5.1 的
 #: `test_reconciler_diff.py` 就是這個形狀，而 module 級判準對它整檔放行。
 SELF_TEST_TREE = {
@@ -787,27 +908,30 @@ def self_test() -> int:
         except CollectionNotClean:
             pass
 
-    # (5c) FAILURE_LINE：FAIL/ERROR 兩種 flavour；skip／summary／detail 行不得誤抓
+    # (5c) FAILURE_LINE 注入式 self-test（issue #546，Eugene 2026-08-22 裁決）。
+    #      known-failures 清空後 C5 的 `if expected and not actual` 永遠不會觸發
+    #      ⇒ 這條正規式**唯一**的對照就是這裡的注入樣本。樣本集的設計理由見
+    #      `SELF_TEST_FAILURE_LINES` 的說明。
     with tempfile.TemporaryDirectory() as td:
         p_ = pathlib.Path(td) / "log.txt"
-        p_.write_text(
-            "2026-08-03 10:00:00,000 1 ERROR test odoo.addons.woow_paas_platform.tests."
-            "test_security_access_p_rule_migration: ERROR: TestPRuleMigration."
-            "test_cursor_bypass_flag_cleared_after_migrate\n"
-            "2026-08-03 10:00:01,000 1 ERROR test odoo.addons.woow_paas_platform.tests."
-            "test_a: FAIL: TestA.test_b\n"
-            # 陰性對照：以下三種都不得被當成失敗
-            "... INFO test odoo.addons.woow_paas_platform.tests.test_c: "
-            "skipped TestC.test_d : some reason\n"
-            "... INFO test odoo.tests.result: 0 failed, 0 error(s) of 2237 tests\n"
-            "\twoow_paas_platform.test_e.TestE.test_f: 0.01s 3 queries\n",
-            encoding="utf-8")
+        p_.write_text("\n".join(ln for ln, _ in SELF_TEST_FAILURE_LINES) + "\n",
+                      encoding="utf-8")
+        want_f = {ident for _, ident in SELF_TEST_FAILURE_LINES if ident}
         got_f = parse_failures(p_)
-        want_f = {"test_security_access_p_rule_migration.TestPRuleMigration."
-                  "test_cursor_bypass_flag_cleared_after_migrate",
-                  "test_a.TestA.test_b"}
         if got_f != want_f:
-            failures.append(f"FAILURE_LINE：漏={sorted(want_f-got_f)} 誤抓={sorted(got_f-want_f)}")
+            failures.append(f"FAILURE_LINE：漏={sorted(want_f-got_f)} "
+                            f"誤抓={sorted(got_f-want_f)}")
+        # 🔴 陰性樣本自己的陽性對照。少了這一圈，「陰性沒被匹配」與「陰性挑得太弱、
+        #    什麼式子都放得過」輸出一模一樣，而後者才是常態。
+        real_rx = globals()["FAILURE_LINE"]
+        try:
+            for why, pattern in sorted(SELF_TEST_FAILURE_LINE_MUTANTS.items()):
+                globals()["FAILURE_LINE"] = re.compile(pattern)
+                if parse_failures(p_) == want_f:
+                    failures.append("FAILURE_LINE 樣本集對這個變異體沒有鑑別力"
+                                    "（寫壞了照樣全對）：" + why)
+        finally:
+            globals()["FAILURE_LINE"] = real_rx
 
     # (5d) 哨兵：出現→PASS；不出現→FATAL(2)。這是「本次收集是否完整」的判準。
     with tempfile.TemporaryDirectory() as td:
@@ -882,8 +1006,12 @@ def self_test() -> int:
         return 1
     print("SELF-TEST PASS：SKIP_LINE 四形態＋陰性對照／粒度切分（含子套件，"
           "點數判法在那裡會錯）／scan_expected（混合檔逐 class、篩子④' 旗標可繼承、"
-          "-standard 列名排除、子套件識別字）／收集面不乾淨時拒絕預測／FAILURE_LINE／"
-          "完整性哨兵／C5 失敗集合差／雙向差集 —— 全部命中")
+          "-standard 列名排除、子套件識別字）／收集面不乾淨時拒絕預測／"
+          "FAILURE_LINE 注入式樣本集（%d 陽性＋%d 陰性，並用 %d 個蓄意寫壞的變異體"
+          "反驗樣本集的鑑別力）／完整性哨兵／C5 失敗集合差／雙向差集 —— 全部命中"
+          % (sum(1 for _, i in SELF_TEST_FAILURE_LINES if i),
+             sum(1 for _, i in SELF_TEST_FAILURE_LINES if not i),
+             len(SELF_TEST_FAILURE_LINE_MUTANTS)))
     return 0
 
 
