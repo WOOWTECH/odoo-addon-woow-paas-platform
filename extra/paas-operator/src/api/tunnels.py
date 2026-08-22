@@ -62,7 +62,20 @@ def _ownership_error(code: str, tunnel_id: str, operation: str, **extra) -> dict
     ⚠ **刻意不回吐 CF 上的真實 name**：攻擊者手上本來就有 tunnel_id，缺的正是
     name。把實際 name 放進錯誤訊息等於把缺的那一半直接送給他，這道檢查會退化成
     一支「猜 id → 換得 name」的 oracle。
+
+    ⚠ **不變式：三個鍵必須都有非空值，這個 body 永遠不得是空 dict。**
+    理由在**呼叫端的呼叫端**，不在這裡：平台 client 的 ``_parse_error`` 會把
+    ``detail`` 原樣（dict）帶進 ``PaaSOperatorAPIError.detail``，而消費端存在
+    ``e.detail or e.message`` 這種寫法 —— **空 dict 是 falsy**，會靜默改用
+    ``message``，結構化資訊就這樣無聲消失。
+    這裡用 assert 讓不變式活在**程式面**而不是只活在測試描述裡：之後有人加第四種
+    拒絕理由、忘了帶 operation，會當場炸而不是安靜地少一個鍵。
     """
+    assert code and tunnel_id and operation, (
+        "ownership error body 的三個鍵必須都有值（空 dict / 缺鍵會在呼叫端的 "
+        "`e.detail or e.message` 靜默退化成非結構化訊息）；"
+        f"得到 code={code!r} tunnel_id={tunnel_id!r} operation={operation!r}"
+    )
     return {"error": code, "tunnel_id": tunnel_id, "operation": operation, **extra}
 
 

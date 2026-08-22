@@ -195,6 +195,111 @@ _NO_CLAIM_CALLS = [
 ]
 
 
+class TestClaimCarrierBinding:
+    """claim 綁在 body 還是 query，是契約的一部分 —— 用 app 產生的 OpenAPI 釘住。
+
+    為什麼要釘：#769 的事故形狀就是「兩端對同一個欄位的綁定位置不一致」，而
+    **兩邊的測試都不會紅**（operator 的測試沒打那條端點、平台的測試 mock 掉
+    client）。這裡釘的是 operator 這一端；平台那一端由
+    ``src/tests/test_paas_operator.py`` 的 ``TestTunnelOwnershipClaimWire``
+    分別釘 ``data=`` 對 ``params=``。**兩端都要，缺一邊就沒有鑑別力**：只釘
+    operator，client 改錯載體照樣綠；只釘 client，operator 改了綁定照樣綠。
+
+    ⚠ 為什麼 ``/routes`` 與 ``/config`` 走 body、``DELETE`` 走 query，見
+    ``src/api/tunnels.py`` 的 ``delete_tunnel`` docstring —— 不一致是刻意的，
+    所以這裡是三支各自斷言，不是一條通則。
+    """
+
+    CLAIM_FIELD = "tunnel_name"
+
+    @staticmethod
+    def _spec():
+        return app.openapi()
+
+    @classmethod
+    def _body_properties(cls, spec, path, method):
+        """把該端點 request body 的 schema 解到 properties（跟著 $ref 走一層）。"""
+        op = spec["paths"][path][method]
+        schema = op["requestBody"]["content"]["application/json"]["schema"]
+        ref = schema.get("$ref")
+        if ref:
+            schema = spec["components"]["schemas"][ref.rsplit("/", 1)[-1]]
+        return schema.get("properties", {})
+
+    @staticmethod
+    def _query_param_names(spec, path, method):
+        op = spec["paths"][path][method]
+        return {
+            p["name"] for p in op.get("parameters", []) if p.get("in") == "query"
+        }
+
+    @pytest.mark.parametrize(
+        "path,method",
+        [
+            ("/api/tunnels/{tunnel_id}/routes", "put"),
+            ("/api/tunnels/{tunnel_id}/config", "put"),
+        ],
+    )
+    def test_body_endpoints_bind_the_claim_in_the_request_body(self, path, method):
+        spec = self._spec()
+        props = self._body_properties(spec, path, method)
+
+        assert self.CLAIM_FIELD in props, (
+            f"{method.upper()} {path} 的 request body schema 沒有 "
+            f"{self.CLAIM_FIELD} —— claim 沒有載體，operator 永遠收不到"
+        )
+        # 負向那一半：不得同時漂到 query（兩處都接受＝契約表面加倍，#769 明確否決）
+        assert self.CLAIM_FIELD not in self._query_param_names(spec, path, method), (
+            f"{method.upper()} {path} 的 {self.CLAIM_FIELD} 不得綁在 query"
+        )
+
+    def test_delete_binds_the_claim_as_a_query_parameter(self):
+        spec = self._spec()
+        path, method = "/api/tunnels/{tunnel_id}", "delete"
+
+        assert self.CLAIM_FIELD in self._query_param_names(spec, path, method), (
+            f"DELETE {path} 的 {self.CLAIM_FIELD} 必須是 query parameter —— "
+            "帶 body 的 DELETE 會被中間層丟掉，靜默退化成 claim-missing"
+        )
+        assert "requestBody" not in spec["paths"][path][method], (
+            "DELETE 不得長出 request body（載體選型見 delete_tunnel 的 docstring）"
+        )
+
+    def test_the_claim_is_optional_on_every_endpoint(self):
+        """三個端點的 claim 都必須是 optional —— 否則舊平台會 422。
+
+        stage 1 的整個前提是「舊呼叫端不送 claim 也打得通，只是留 warning」。
+        若哪個端點把它宣告成 required，operator 一上線就會把尚未升版的平台打爆
+        （route sync 斷、suspend/resume 斷、teardown 斷 ⇒ tunnel 拆不掉還在計費），
+        而且那是 **422** 不是 403 —— 連 rollout 旗標都關不掉它。
+        """
+        spec = self._spec()
+
+        for path, method in (
+            ("/api/tunnels/{tunnel_id}/routes", "put"),
+            ("/api/tunnels/{tunnel_id}/config", "put"),
+        ):
+            op = spec["paths"][path][method]
+            schema = op["requestBody"]["content"]["application/json"]["schema"]
+            ref = schema.get("$ref")
+            if ref:
+                schema = spec["components"]["schemas"][ref.rsplit("/", 1)[-1]]
+            assert self.CLAIM_FIELD not in schema.get("required", []), (
+                f"{method.upper()} {path}：claim 不得是 required"
+            )
+
+        delete_params = spec["paths"]["/api/tunnels/{tunnel_id}"]["delete"].get(
+            "parameters", [])
+        # 先斷言「找得到」再斷言「不是 required」——直接 next() 會在欄位不存在時
+        # 丟 StopIteration，那個紅看不出是哪個欄位出問題（實測過）。
+        claims = [p for p in delete_params if p["name"] == self.CLAIM_FIELD]
+        assert claims, (
+            f"DELETE 的 parameters 裡找不到 {self.CLAIM_FIELD}，實得："
+            f"{[p['name'] for p in delete_params]}"
+        )
+        assert not claims[0].get("required", False), "DELETE：claim 不得是 required"
+
+
 class TestRolloutDefaultIsWarnNotEnforce:
     """預設值本身要有測試釘住，不是只測「旗標開起來會拒」。
 
