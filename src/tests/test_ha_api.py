@@ -252,5 +252,6 @@ class TestHAApiIntegration(TestHAApiBase):
 
         # Delete
         home.action_delete()
-        mock_client.delete_tunnel.assert_called_once_with('tun-lifecycle')
+        mock_client.delete_tunnel.assert_called_once_with(
+            'tun-lifecycle', tunnel_name='smarthome-lifecycle')
         self.assertFalse(self.SmartHome.browse(home_id).exists())

@@ -553,39 +553,57 @@ class SecurityAccess(models.Model):
         (live token, billed, no DB reference). When tunnel_id is already set we
         only re-run the declarative route sync and restore the active state.
 
-        tunnel_token ACL note: the write below sets tunnel_token, which is a
-        ``groups='base.group_system'`` field. This method runs in the CALLER's
-        context (the controller invokes it WITHOUT .sudo() — see the
-        ``action == "provision"`` branch in controllers/security_access.py,
-        which calls ``sa.action_provision()`` bare). Consequences:
-        - the field-group write only succeeds for a system/admin caller; a
-          plain base.group_user owner triggering provision would hit
-          AccessError on the tunnel_token write. That is the intended
-          fail-closed behaviour — the token must never be written (or read)
-          by a non-system principal.
-        - do NOT "fix" a portal AccessError here by wrapping the whole method
-          in .sudo(): that would widen the token write/read surface to any
-          workspace owner and defeat the groups= field mask. The defence is
-          deliberately layered: groups= on the field + to_dict() omits the
-          token + a dedicated sudo'd tunnel-token endpoint is the only read
-          path. The with_user provision test locks this semantic.
+        tunnel_token ACL note: the first-provision write below sets
+        tunnel_token, which is a ``groups='base.group_system'`` field. This
+        METHOD does not sudo itself — it runs in whatever context its caller
+        hands it, so the CALLER decides whether that field-group write
+        succeeds. Odoo's ``write()`` calls
+        ``check_field_access_rights('write', vals.keys())``, whose only
+        early-return is ``if self.env.su:``; a plain base.group_user principal
+        therefore raises AccessError on that write.
 
-        ⚠ Identity semantics are NO LONGER symmetric with smart_home. An
-        earlier revision of this note asserted the two sides were identical;
-        #739 / PR #797 falsified that. smart_home's controller now drives
-        provision under the PLATFORM identity
-        (``smarthome.sudo().action_provision()`` in
-        controllers/smart_home.py::_provision_smarthome), because the tenant
-        endpoint could otherwise never succeed. security_access still runs
-        under the CALLER's identity (above), so the two sibling models now
-        DIVERGE on provision identity. Verify each side at its own call site;
-        do not carry a conclusion across.
+        #805 (b): the tenant endpoint drives this method under the PLATFORM
+        identity (``sa.sudo().action_provision()`` — the
+        ``action == "provision"`` branch in controllers/security_access.py),
+        because the tenant could otherwise never succeed. The values written
+        there are not tenant-supplied: the whole dict comes from the operator's
+        create_tunnel response plus a server-side timestamp. Same ruling and
+        same shape as #739 / PR #797 on smart_home
+        (controllers/smart_home.py::_provision_smarthome), so the two sibling
+        models are once again aligned ON THAT ONE POINT — still verify each
+        side at its own call site rather than carrying a conclusion across.
 
-        Whether security_access should follow smart_home, or whether the
-        fail-closed shape described above is deliberate and must stay, is
-        deliberately NOT answered here — that is #805 (b), pending an
-        explicit ruling. The paragraphs above state the mechanism as it stands
-        today, not a verdict on it.
+        ⚠ Scope of that sudo, stated precisely (it is narrower than "the token
+        is now writable by tenants"). Each bullet names the test that locks it,
+        in tests/test_sa_provision_tenant_rpc_805.py:
+        - It is on ONE call site. ``action_provision`` is a public method (no
+          leading underscore, no ``@api.private``), so Odoo's own
+          ``/web/dataset/call_kw`` reaches it too; that path does not go
+          through the controller, so the field mask still fails closed there
+          (C1).
+        - Read side: do NOT write "the read surface is untouched" — this repo
+          has already falsified that phrasing by experiment. The precise
+          version, with the odoo-shell measurement, lives in
+          controllers/smart_home.py::_provision_smarthome (#739 / PR #797);
+          deliberately not restated here so the two cannot drift. One-line
+          version: the su call primes the transaction-wide field cache, and a
+          later ATTRIBUTE read on a non-sudo recordset hits that cache without
+          re-checking the mask. What holds is "nothing in the same request
+          reads that attribute" — ``to_dict()`` omits the token (B6) and a
+          ``read()`` over RPC always re-checks the mask (B5). The dedicated
+          sudo'd endpoint (controllers/ha_api.py::sa_get_tunnel_token) is
+          still the only read path.
+        - The gates that decide WHO may drive provision all sit OUTSIDE the
+          sudo — workspace membership (B2), the owner/admin role check (B1),
+          and ``_check_operation_allowed`` (B4). ``sudo()`` does not change
+          ``env.user``, so the ``has_group('base.group_system')`` early-return
+          inside ``_check_operation_allowed`` does not become True.
+        - The identity-anchor guard (``_reject_identity_anchor_writes``, called
+          from this model's ``write()``) has no su exemption, so sudo does not
+          open it (B7).
+        - The re-sync branch below (``if self.tunnel_id:``) never writes
+          tunnel_token at all, so the field mask only ever gated the FIRST
+          provision (D1).
         """
         self.ensure_one()
         client = self._get_operator_client()
@@ -629,13 +647,14 @@ class SecurityAccess(models.Model):
                     self.id, e.message,
                 )
             except AccessError:
-                # A field-group (tunnel_token) AccessError is the deliberate
-                # fail-closed signal for a non-system caller — it must propagate
-                # to the caller, NOT be downgraded to a silent state='error'
-                # (which would mask the security denial and report a benign
-                # provisioning failure instead). Re-raise; see the tunnel_token
-                # ACL note in the method docstring. Symmetric with the
-                # first-provision branch below.
+                # ⚠ This branch writes no tunnel_token at all (the token write
+                # lives in the first-provision branch below), so an AccessError
+                # here is a record-level denial, not the field mask. Whatever
+                # its source, an access denial must propagate to the caller and
+                # NOT be downgraded to a silent state='error' — that would mask
+                # a security denial as a benign provisioning failure
+                # (two-stage-remote-provision-idempotency §守則 2). Re-raise;
+                # symmetric with the first-provision branch below.
                 raise
             except Exception as e:
                 # Any non-operator failure (route rebuild ValidationError,
@@ -668,10 +687,14 @@ class SecurityAccess(models.Model):
 
             # The one legitimate anchor write: storing the ids Cloudflare just
             # handed back. Opted in via the sentinel — see
-            # _INTERNAL_IDENTITY_WRITE. Note this does NOT widen the
-            # tunnel_token field-group ACL: super().write() still enforces
-            # groups='base.group_system', which is why a non-system caller
-            # reaching here still fails closed with AccessError (below).
+            # _INTERNAL_IDENTITY_WRITE. Note the sentinel does NOT widen the
+            # tunnel_token field-group ACL (it is a with_context, not a sudo):
+            # super().write() still enforces groups='base.group_system'. So
+            # whether this line succeeds is decided entirely by the CALLER's
+            # identity — the tenant BFF endpoint drives this method under the
+            # platform identity since #805 (b), while a caller that reaches the
+            # method under a non-system identity (e.g. /web/dataset/call_kw)
+            # still fails closed here, via the AccessError branch below.
             _internal_identity(self).write({
                 'tunnel_id': result.get('tunnel_id'),
                 'tunnel_token': result.get('tunnel_token'),
@@ -718,17 +741,26 @@ class SecurityAccess(models.Model):
             })
             _logger.error("[SA] provision error: %s", e.message)
         except AccessError:
-            # The stage-2 tunnel_token write is a groups='base.group_system'
-            # field write; for a non-system caller it raises AccessError. That
-            # is the deliberate fail-closed defense (see the tunnel_token ACL
-            # note in the docstring) — a non-system principal must never write
-            # the token. Re-raise so the denial surfaces to the caller; do NOT
-            # downgrade it to a silent state='error' (which would mask the
-            # security boundary as an ordinary provisioning failure and let the
-            # endpoint claim a benign error). The with_user provision test locks
-            # this. (create_tunnel already ran here, but the controller never
-            # drives provision as a bare portal user — system/admin context or a
-            # narrowly-sudo'd path is the only legitimate caller.)
+            # The tunnel_token write above is a groups='base.group_system'
+            # field write; for a non-system caller it raises AccessError.
+            # Re-raise so the denial surfaces to the caller; do NOT downgrade it
+            # to a silent state='error' (which would mask the security boundary
+            # as an ordinary provisioning failure and let the endpoint claim a
+            # benign error) — two-stage-remote-provision-idempotency §守則 2.
+            #
+            # Who still reaches this branch, after #805 (b): NOT the tenant BFF
+            # endpoint — that one now drives this method under the platform
+            # identity (see the tunnel_token ACL note in the docstring). It
+            # stays live for callers that reach the method under a non-system
+            # identity, and there is at least one such path today: Odoo's own
+            # /web/dataset/call_kw, since action_provision is a public method
+            # (tests/test_sa_provision_tenant_rpc_805.py C1 drives exactly it).
+            #
+            # ⚠ create_tunnel has already run when this fires, so a live CF
+            # tunnel exists with no DB reference. Compensating for that is
+            # deliberately NOT done here (issue-leader 2026-08-22 ruled it a
+            # separate ticket); in particular do not "fix" it by swallowing the
+            # AccessError — that trades an orphan for a masked security denial.
             raise
         except Exception as e:
             # Stage-2 (write / primary-route create / re-sync) can raise
@@ -913,6 +945,12 @@ class SecurityAccess(models.Model):
             self.tunnel_id,
             routes=self._build_route_payload(override_service_url),
             comment=self.canonical_name,
+            # #531 歸屬主張：送**鏡回來的 CF name**（`tunnel_name`），不是
+            # `canonical_name`。兩者在 SA 上通常相等，但權威的那一份是 CF 自己回的
+            # 那個值（operator 的 create_tunnel 取 `result.get("name", name)`），而
+            # operator 也是拿 CF 現在的 name 來比 —— 兩側都用 CF 那一份，命名規則
+            # 怎麼改（env token 注入、hash 換種子）都不會讓這道檢查誤判舊列。
+            tunnel_name=self.tunnel_name,
         )
         # store DNS record ids back on routes
         dns_by_sub = {
@@ -1226,7 +1264,9 @@ class SecurityAccess(models.Model):
             return
         try:
             client = self._get_operator_client()
-            client.delete_tunnel(self.tunnel_id)
+            # #531：`tunnel_name` 在這裡一定還在 —— 本方法成功後只清 `tunnel_id`
+            # （下一行的 `_internal_identity` write），`tunnel_name` 是刻意留著的。
+            client.delete_tunnel(self.tunnel_id, tunnel_name=self.tunnel_name)
             _logger.info("[SA] tunnel deleted sa=%s tunnel=%s",
                          self.id, self.tunnel_id)
             _internal_identity(self).write({'tunnel_id': False})

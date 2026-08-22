@@ -674,7 +674,9 @@ class SmartHome(models.Model):
             return
         try:
             client = self._get_operator_client()
-            client.delete_tunnel(self.tunnel_id)
+            # #531：claim 取自本列鏡回來的 CF name。⚠ 三個錨點是在 delete **成功
+            # 之後**才一起清（見下方註解），所以呼叫當下 `tunnel_name` 一定還在。
+            client.delete_tunnel(self.tunnel_id, tunnel_name=self.tunnel_name)
             _logger.info(
                 "[SH] tunnel deleted sh=%s tunnel=%s", self.id, self.tunnel_id,
             )
@@ -893,6 +895,7 @@ class SmartHome(models.Model):
                     self.tunnel_id,
                     hostname=hostname,
                     service_url="http_status:503",
+                    tunnel_name=self.tunnel_name,  # #531 歸屬主張
                 )
                 _logger.info(
                     "[SH] _do_suspend tunnel 503 sh=%s tunnel=%s",
@@ -932,6 +935,7 @@ class SmartHome(models.Model):
                     self.tunnel_id,
                     hostname=hostname,
                     service_url=service_url,
+                    tunnel_name=self.tunnel_name,  # #531 歸屬主張
                 )
                 _logger.info(
                     "[SH] _do_resume tunnel restored sh=%s tunnel=%s",

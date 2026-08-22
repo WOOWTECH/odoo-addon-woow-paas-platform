@@ -572,6 +572,27 @@ from . import test_sh_teardown_capture_semantics_785
 # 不得被改）。主測試必須 patch helper：真實路徑造不出「回報乾淨但列還髒」。
 from . import test_sh_do_cleanup_lingering_access_815
 
+# fix: #805 (b) 只掛 base.group_user 的租戶經 `/woow` 打 SA provision 從來沒有
+# 成功過——`tunnel_token` 帶 `groups='base.group_system'`，而 controller 的
+# `action == "provision"` 分支用的是非 sudo 的租戶 recordset ⇒ 那次 write 必
+# AccessError、記錄卡在 `state='provisioning'`（重試鈕只認 pending/error ⇒ 鈕
+# 消失、無 cron 收斂）。與 #739／PR #797 在 smart_home 上裁定的同一個形狀。
+# 既有 SA 測試除一條外全在 TransactionCase（su env，欄位級 `groups=` 不生效），
+# 唯一有鑑別力的那條走 `with_user` 直呼 model、不經 controller ⇒ 端點那一格天生
+# 沒有覆蓋。RED 群集：A1／A2／A3／A4（真租戶 HTTP 打 provision，紅在 tunnel_token
+# 的 write 上）。B 系列釘「改用平台身分之後原本由租戶身分擋著的檢查一條都沒少」
+# （三道 gate 全在 sudo 之外——[[two-layer-acl-lockstep]] 要求的 manual access
+# check 位置）；C1 釘修法的範圍限定（call_kw 繞過 BFF 仍 fail-closed），D1 釘
+# 「遮罩只擋得住第一次 provision」（re-sync 分支不寫 token）。
+from . import test_sa_provision_tenant_rpc_805
+
+# #546 A 段：測試收集完備性 gate，以 Odoo 測試本身為載體（runtime introspection）。
+# 與 repo-lint 的 `test-collectability`（純 AST、PR-time）是同一條性質的**兩條觀測通道**：
+# 這一支是 ground truth，那一支是早期預警鏡像；分歧時去查、不選一邊。
+# ⛔ 刻意不共用 repo-lint 的實作——它把版面寫死成「root 底下才有 src/」，容器裡沒有那一層
+# ⇒ 搬過去會是一個永遠綠的 gate（實證與 issue #828 見該檔 docstring）。
+from . import test_suite_collectability
+
 # fix: #648 (b) CloudService 翻 `running` 早於 Public URL 的 DNS 落地——租戶看到綠燈
 # 卻拿 `ERR_NAME_NOT_RESOLVED`。`_is_release_ready` 全文無 DNS 判定，helm deployed ＋
 # pods ready 一滿足就寫 running。閘加在 `_is_release_ready`（#423 W5a 的單一事實源），
