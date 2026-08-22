@@ -19,6 +19,12 @@ from odoo.addons.woow_paas_platform.models.security_access import (
 from ..models.cloud_service import _internal_provision
 from .smart_home_fixture import sh_model  # #524：建立閘 fixture helper
 
+# #798：`cf_policy_id` 有欄位級寫入守衛（create 壓值／write 拒絕，對 su 也生效）。
+# fixture 擺狀態必須經開閘 helper，否則會撞到自己要測的守衛。
+from ..models.security_access import (
+    _internal_policy_cf_write as _internal_policy_cf,
+)
+
 
 @tagged('post_install', '-at_install')
 class TestCollectLeftSet(TransactionCase):
@@ -68,7 +74,7 @@ class TestCollectLeftSet(TransactionCase):
             })],
         })
         if cf_policy_id:
-            policy.cf_policy_id = cf_policy_id
+            _internal_policy_cf(policy).cf_policy_id = cf_policy_id
         return sa, route, policy
 
     def test_sa_two_layer_walk_collects_all_stored_ids(self):

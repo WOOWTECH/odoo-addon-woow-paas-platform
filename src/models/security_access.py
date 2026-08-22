@@ -131,6 +131,32 @@ def _is_internal_identity_write(env):
             is _INTERNAL_IDENTITY_WRITE)
 
 
+# #798：policy 列上的 `cf_policy_id` 是伺服器擁有的 CF 物件 id（Cloudflare reusable
+# policy），守衛與上面那組同形——但**刻意用另一把 context key**，理由是實證的：
+#
+#   * 現樹有大量既有測試／fixture 已經開著 `sa_internal_identity_write`（例如
+#     `tests/test_security_access_access_policy.py` 全檔 `import _internal_identity
+#     as _internal`）。共用那一把等於讓本守衛在那些檔裡靜默失效，症狀是「守衛看起來
+#     有測試、實際上從未被執行」——同型翻車逐字記在 `models/smart_home_route.py` 的
+#     `_SM_ROUTE_IDENTITY_ANCHOR_FIELDS` 上方註解裡。
+#   * sentinel **物件**沿用 `_INTERNAL_IDENTITY_WRITE`：真正把租戶擋在外面的是「JSON
+#     表達不出物件同一性」，而**哪一種能力**由 key 決定。同一個分法已有先例——
+#     `sa_internal_prefix_write` 與身分錨點共用同一顆 sentinel（見 route `write()`）。
+#
+# ⚠ key 寫成**字面字串**、判定用 `is`，兩者都是 repo-lint 第 28 條
+# (`check_internal_ctx_key_registry`) 的判定點來源：它只解得出字面值與 module 層常數，
+# key 一旦變成執行期值，這把鑰匙的「判定點計數」會歸零而被判違規。
+def _internal_policy_cf_write(records):
+    """Return ``records`` in the one context allowed to write ``cf_policy_id``."""
+    return records.with_context(
+        sa_internal_policy_cf_write=_INTERNAL_IDENTITY_WRITE)
+
+
+def _is_internal_policy_cf_write(env):
+    return (env.context.get('sa_internal_policy_cf_write')
+            is _INTERNAL_IDENTITY_WRITE)
+
+
 # ---------------------------------------------------------------------- #
 #  Sync-control escape hatches (#536)                                    #
 # ---------------------------------------------------------------------- #
@@ -249,7 +275,8 @@ def _server_owned_anchor_value(model, field_name):
     return field.default(model) if field.default else False
 
 
-def _strip_identity_anchors(model, vals_list, anchors):
+def _strip_identity_anchors(model, vals_list, anchors,
+                            is_open=_is_internal_identity_write):
     """create()-side half of the guard: 把身分錨點**壓成伺服器端值**，不是 pop。
 
     ``super().create()`` does not route through ``write()``, so the write guard
@@ -293,22 +320,31 @@ def _strip_identity_anchors(model, vals_list, anchors):
     同型缺陷本 repo 已修過兩次：``smart_home._strip_identity_anchors``（PR #738
     覆核 round1）與 ``cloud_service._strip_cs_access_identity_anchors``（#705 F1
     ／PR #752）。兩者的錨點都沒有欄位級 default，所以那邊壓 ``False`` 就夠。
+
+    ⚠ ``is_open``（#798）：**傳的是那把鑰匙的 reader 函式**，不是 key 字串。守衛邏輯
+    因此只有一份，而每一把 key 各自保有一個**字面** ``context.get('…') is SENTINEL``
+    判定點——repo-lint 第 28 條只解得出字面值／module 常數的 key，改成傳字串會讓
+    **連既有那把 `sa_internal_identity_write` 一起**失去判定點而被判成假綠。
+    預設值就是既有那支 reader ⇒ 既有四個呼叫端行為零改變。
     """
-    if _is_internal_identity_write(model.env):
+    if is_open(model.env):
         return
     for vals in vals_list:
         for field in anchors:
             vals[field] = _server_owned_anchor_value(model, field)
 
 
-def _reject_identity_anchor_writes(env, vals, anchors):
+def _reject_identity_anchor_writes(env, vals, anchors,
+                                   is_open=_is_internal_identity_write):
     """write()-side half of the guard: refuse to move an anchor, loudly.
 
     Hard invariant for EVERYONE including superuser — see
     ``_INTERNAL_IDENTITY_WRITE`` for why neither ``env.su`` nor a plain truthy
     context value may open it.
+
+    ``is_open``：見 ``_strip_identity_anchors`` 同名參數（#798）。
     """
-    if _is_internal_identity_write(env):
+    if is_open(env):
         return
     for field in anchors:
         if field in vals:
@@ -1450,7 +1486,9 @@ class SecurityAccess(models.Model):
             )
             if ok:
                 _internal_identity(route).access_app_id = False
-                for pol in route.access_policy_ids:
+                # #798：包 recordset 不是包 record——迭代帶 context 的
+                # recordset 得到的 singleton 沿用同一個 env，包一次就夠。
+                for pol in _internal_policy_cf_write(route.access_policy_ids):
                     if pol.cf_policy_id:
                         pol.cf_policy_id = False
         if not self.tunnel_id:
@@ -2242,14 +2280,17 @@ class SecurityAccessRoute(models.Model):
             self.access_protection_lost = False
         # map returned policy ids back onto policy rows in (sequence,id) order
         returned = result.get('policy_ids') or []
-        policies = self.access_policy_ids.sorted(
+        # #798：包 recordset 不是包 record（同一個 env 沿用給每個 singleton）。
+        # ⚠ 下面是**兩個不同的迴圈**（對映回存／torn-down 清值），各自要包一次——
+        # 「一個方法包一次就好」是最自然的誤讀，漏掉第二個的症狀是 teardown 清不掉。
+        policies = _internal_policy_cf_write(self.access_policy_ids).sorted(
             key=lambda x: (x.sequence, x.id))
         for pol, cf_id in zip(policies, returned):
             if pol.cf_policy_id != cf_id:
                 pol.cf_policy_id = cf_id
         if not result.get('app_id'):
             # torn down → clear stale cf ids on this route's policies
-            for pol in self.access_policy_ids:
+            for pol in _internal_policy_cf_write(self.access_policy_ids):
                 if pol.cf_policy_id:
                     pol.cf_policy_id = False
         return True
@@ -2305,7 +2346,8 @@ class SecurityAccessRoute(models.Model):
         """
         self.ensure_one()
         _internal_identity(self).access_app_id = False
-        for pol in self.access_policy_ids:
+        # #798：包 recordset（同上）。
+        for pol in _internal_policy_cf_write(self.access_policy_ids):
             if pol.cf_policy_id:
                 pol.cf_policy_id = False
         if not self.access_protection_lost:

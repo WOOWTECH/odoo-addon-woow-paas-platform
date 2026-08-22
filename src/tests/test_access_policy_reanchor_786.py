@@ -65,6 +65,12 @@ from ..models.security_access import (
 )
 from ..services.naming import make_service_subdomain
 
+# #798：`cf_policy_id` 有欄位級寫入守衛（create 壓值／write 拒絕，對 su 也生效）。
+# fixture 擺狀態必須經開閘 helper，否則會撞到自己要測的守衛。
+from ..models.security_access import (
+    _internal_policy_cf_write as _internal_policy_cf,
+)
+
 #: 🔴 兩腿兩個 patch 點，判準是「該 model 怎麼取得 client」不是「client 定義在
 #: 哪」。SA route 走自己 module 裡的 import，CS 走 services 那支——互抄會讓
 #: 否定性斷言無聲通過。
@@ -171,7 +177,7 @@ class _Fixture:
             vals['sequence'] = sequence
         pol = _skip_route_sync(self.env[_POLICY].sudo()).create(vals)
         if cf_policy_id:
-            pol.cf_policy_id = cf_policy_id
+            _internal_policy_cf(pol).cf_policy_id = cf_policy_id
         # 🔴 `create()` 回的 recordset 帶著呼叫當下的 context；不關掉的話之後
         # 每一次 write 都還套著 skip，「機制沒接好」與「fixture 把 sync 關掉了」
         # 會長得一模一樣。
