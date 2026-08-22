@@ -29,6 +29,83 @@ class CloudflareException(Exception):
         super().__init__(self.message)
 
 
+class DnsRecordOwnershipError(CloudflareException):
+    """我方（operator）拒絕動一筆不屬於本次操作的 DNS 記錄（#824）。
+
+    與父類的差別是**誰說不行**：``CloudflareException`` 代表 Cloudflare 回錯，本類
+    代表 operator 在送出任何寫入之前**自己**擋下來，呼叫端因此分得出兩者。
+    ``status_code`` 固定 409 Conflict —— 目標記錄存在、但它歸屬於別人；不是 400
+    （請求格式錯）也不是 403（權杖權限不足）。
+
+    刻意繼承 ``CloudflareException``：既有呼叫端的 ``except CloudflareException`` 會
+    直接接住它（``api/tunnels.py`` provision → ``dns_failed=True``、
+    ``sync_tunnel_routes`` → HTTPException 帶 ``e.status_code``、``create_route`` →
+    ``RouteOutcome.dns_failed``），所以本類不會變成未處理例外。
+    """
+
+    def __init__(self, message: str):
+        super().__init__(message, status_code=409)
+
+
+#: 專用 tunnel 的 CNAME 目標後綴。抽成常數是為了讓「精確後綴比對」只有一份定義。
+CFARGOTUNNEL_SUFFIX = ".cfargotunnel.com"
+
+
+def _normalize_dns_content(content: Optional[str]) -> str:
+    """把 CNAME content 正規化成可比較的形式。
+
+    依 DNS 語意做**等價**正規化（大小寫不敏感、尾點不影響 FQDN 身分），不是放寬比對：
+    ``ABC.cfargotunnel.com``、``abc.cfargotunnel.com.`` 與 ``abc.cfargotunnel.com``
+    指的是同一個名字，也就是同一條 tunnel。少了這一步，CF 哪天回一個大小寫不同的
+    content 就會讓合法操作被判成搶佔。
+    """
+    return (content or "").strip().rstrip(".").lower()
+
+
+def dns_record_points_at(record: Optional[dict], cname_target: str) -> bool:
+    """本地歸屬述詞：``record`` 的 content 是不是就是 ``cname_target``（#824）。
+
+    DNS 記錄的 ``content`` 字面寫著 ``{tunnel_id}.cfargotunnel.com`` —— 歸屬證據就在
+    記錄本身，所以這個述詞是**純本地、零額外 API 呼叫、不依賴任何外部契約**的。
+
+    刻意**不**用 comment stamp 當判準，兩個獨立理由：
+    1. ``models/schemas.py`` 已把 comment 定義成「在本 repo 是只寫不讀的自由文字」，
+       把它變成授權判準等於讓改 stamp 格式順帶改掉安全姿態（#531 已裁過同一題，
+       才另開 ``tunnel_name`` 欄位）。
+    2. 就算不管 1，它在缺口發生的那條路徑上 fail-open：``api/tunnels.py`` 的 provision
+       呼叫 ``create_dns_record_for_tunnel`` 時**沒有傳 comment**，只有 reconcile 那條
+       會傳，而 create 時的搶佔正好發生在沒有 stamp 的那一條。
+
+    空 record / 空 content / 空 target 一律回 ``False``（fail-closed：無法證明歸屬，
+    就當作不歸屬）。
+    """
+    if not record:
+        return False
+    target = _normalize_dns_content(cname_target)
+    if not target:
+        return False
+    return _normalize_dns_content(record.get("content")) == target
+
+
+def tunnel_id_from_cname_target(content: Optional[str]) -> Optional[str]:
+    """從 CNAME content 抽出 tunnel id；不是 ``*.cfargotunnel.com`` 就回 ``None``。
+
+    **必須是精確後綴比對，不可以用 substring / ``in``**：``abc.cfargotunnel.com.evil.com``
+    含有那串字面卻不是 tunnel 目標；用 ``in`` 判會把它當成一條 tunnel，接著去查「這條
+    tunnel 還在不在」、查不到就當孤兒接收 —— 正好是本單要擋的搶佔。
+
+    多一層 label（``a.b.cfargotunnel.com``）同樣回 ``None``：那不是任何一條 tunnel 的
+    目標，**沒有 tunnel 可查** ⇒ 由呼叫端 fail-closed 處理（拒絕），不得當成「查不到＝
+    不存在＝可以接收」。
+    """
+    normalized = _normalize_dns_content(content)
+    if not normalized.endswith(CFARGOTUNNEL_SUFFIX):
+        return None
+    tunnel_id = normalized[: -len(CFARGOTUNNEL_SUFFIX)]
+    if not tunnel_id or "." in tunnel_id:
+        return None
+    return tunnel_id
+
 
 class RouteOutcome(NamedTuple):
     """``create_route`` 的結果——比原本的 ``bool`` 多一格（#648 (a)）。
@@ -185,6 +262,77 @@ class CloudflareService:
 
             return None
 
+    async def _assert_dns_repoint_allowed(
+        self, hostname: str, existing: dict, cname_target: str
+    ) -> None:
+        """既有記錄 content 與本次 target 不符時，決定「拒絕」還是「允許自癒接收」（#824）。
+
+        只有一種情況准接收：那筆記錄指向的 tunnel **證實已不存在**（孤兒殘留）。
+        ``delete_tunnel`` 的 DNS 清理是把失敗吞成 warning 繼續走的，所以殘留是真的會
+        發生的良性情境；沒有這條自癒，那個 hostname 會永遠卡住無法重建。
+
+        ⚠ **存活判定只能走 ``list_all_tunnels``，不可用 ``get_tunnel_status``**：
+        Cloudflare 刪 tunnel 是**軟刪除**，DELETE 之後 ``GET /cfd_tunnel/{id}`` 仍回
+        **200**、只是 payload 多一個 ``deleted_at``，而 ``get_tunnel_status`` 整支函式
+        內 ``deleted_at`` 出現 0 次（#833）⇒ 會把軟刪的 tunnel 判成活的，自癒分支永遠
+        走不到，而且輸出跟「真的還活著」一模一樣。``list_all_tunnels`` 有濾掉軟刪，
+        且本身 fail-closed（錯誤 raise、絕不回空清單 —— 回空清單會讓這裡把**每一筆**
+        都判成孤兒，等於把守衛整個關掉）。
+
+        ⚠ 涵蓋範圍的誠實邊界：``list_all_tunnels`` 只看得到**本 account** 的 tunnel，
+        所以指向他人 account 的 ``*.cfargotunnel.com`` 會被判成孤兒。本平台的 zone 與
+        operator token 綁在同一個 account，這種目標不會出現 —— 但這點未實測。
+
+        ⛔ 刻意**不做**「呼叫端顯式宣告我要搶」的 opt-in 參數：一個沒有任何呼叫端的
+        allow-takeover 參數會留在簽名裡等著某次「先能動再說」把它打開，而被寫成例外
+        的那一格就是會出事的那一格。本檢查不接受呼叫端的宣告，只接受可查證的事實。
+
+        Raises:
+            DnsRecordOwnershipError: 記錄屬於一條還活著的 tunnel，或無從證明它是孤兒。
+            CloudflareException: tunnel 清單查詢失敗（fail-closed，不得當成孤兒接收）。
+        """
+        content = existing.get("content")
+        record_id = existing.get("id")
+        other_tunnel_id = tunnel_id_from_cname_target(content)
+
+        if other_tunnel_id is None:
+            # content 根本不是 *.cfargotunnel.com（有人把這個 hostname 指到別的地方）
+            # ⇒ 沒有 tunnel 可查 ⇒ 一律拒。⛔ 這一格不准當成「查不到＝不存在＝可接收」。
+            raise DnsRecordOwnershipError(
+                f"Refusing to repoint DNS record {hostname} (id={record_id}): its "
+                f"content {content!r} is not a Cloudflare Tunnel target, so there is "
+                f"no tunnel to check and no way to prove the record is an orphan. "
+                f"Not taking it over (#824)."
+            )
+
+        try:
+            tunnels = await self.list_all_tunnels()
+        except CloudflareException:
+            logger.error(
+                f"Refusing to repoint DNS record {hostname} (id={record_id}, "
+                f"content={content!r}): could not list tunnels to check whether "
+                f"{other_tunnel_id} still exists. Failing closed (#824)."
+            )
+            raise
+
+        live_tunnel_ids = {
+            _normalize_dns_content(t.get("id")) for t in tunnels if t.get("id")
+        }
+        if other_tunnel_id in live_tunnel_ids:
+            raise DnsRecordOwnershipError(
+                f"Refusing to repoint DNS record {hostname} (id={record_id}) from "
+                f"{content!r} to {cname_target!r}: it points at tunnel "
+                f"{other_tunnel_id}, which still exists. Repointing would silently "
+                f"redirect that hostname's traffic away from its owner (#824)."
+            )
+
+        logger.warning(
+            f"Adopting DNS record {hostname} (id={record_id}): it points at tunnel "
+            f"{other_tunnel_id}, which no longer exists in this account — treating "
+            f"it as residue left behind by a deleted tunnel and repointing it at "
+            f"{cname_target}."
+        )
+
     async def create_dns_record(self, subdomain: str) -> bool:
         """Create a CNAME DNS record pointing to the tunnel.
 
@@ -203,11 +351,16 @@ class CloudflareService:
         # Check if record already exists
         existing = await self.get_dns_record(hostname)
         if existing:
-            logger.info(f"DNS record for {hostname} already exists")
-            # Update if target is different
-            if existing.get("content") != self._tunnel_cname_target:
-                return await self._update_dns_record(existing["id"], hostname)
-            return True
+            if dns_record_points_at(existing, self._tunnel_cname_target):
+                logger.info(f"DNS record for {hostname} already exists")
+                return True
+            # #824 site 3：content 指向別的地方。這是 create_dns_record_for_tunnel 那條
+            # repoint 分支在 legacy 共用 tunnel 路徑上的雙胞胎 —— 在此之前同樣是「不同
+            # 就直接改」。只有證實是孤兒才准接收，其餘 raise。
+            await self._assert_dns_repoint_allowed(
+                hostname, existing, self._tunnel_cname_target
+            )
+            return await self._update_dns_record(existing["id"], hostname)
 
         logger.info(f"Creating DNS record: {hostname} -> {self._tunnel_cname_target}")
 
@@ -273,22 +426,28 @@ class CloudflareService:
         # Check if record already exists
         existing = await self.get_dns_record(hostname)
         if existing:
-            logger.info(f"DNS record for {hostname} already exists")
-            if existing.get("content") != cname_target:
-                # The record points at a DIFFERENT tunnel; repoint it at THIS
-                # tunnel's target. Must pass cname_target explicitly — letting
-                # _update_dns_record fall back to the shared default target
-                # would "fix" the record into pointing at the shared tunnel
-                # instead of this per-tunnel one, producing a routing black
-                # hole that no error surfaces (the record_id is still returned
-                # and stored as if correct).
-                logger.info(
-                    f"Repointing DNS record {hostname} from "
-                    f"{existing.get('content')} -> {cname_target}"
-                )
-                await self._update_dns_record(
-                    existing["id"], hostname, content=cname_target
-                )
+            if dns_record_points_at(existing, cname_target):
+                logger.info(f"DNS record for {hostname} already exists")
+                return existing["id"]
+
+            # #824 site 1：content 指向**別條** tunnel。在此之前這裡直接
+            # _update_dns_record 把記錄搶過來，再把 record id 當成「自己的」回傳給
+            # 呼叫端 —— 全程 HTTP 200，受害的那一側完全沒有訊號（它的 DB 裡仍存著
+            # 那個 record id，而該記錄已經不指向它了）。
+            #
+            # 只有「那條 tunnel 證實已不存在」才准接收（見 _assert_dns_repoint_allowed）。
+            await self._assert_dns_repoint_allowed(hostname, existing, cname_target)
+
+            # 自癒接收。**必須明確帶 cname_target**：讓 _update_dns_record 掉回共用
+            # 預設 target 會把記錄「修」成指向共用 tunnel，那是沒有任何錯誤會浮現的
+            # routing 黑洞（record_id 照樣回傳、照樣被當成正確的存起來）。
+            logger.info(
+                f"Repointing orphaned DNS record {hostname} from "
+                f"{existing.get('content')} -> {cname_target}"
+            )
+            await self._update_dns_record(
+                existing["id"], hostname, content=cname_target
+            )
             return existing["id"]
 
         logger.info(f"Creating DNS record: {hostname} -> {cname_target}")
@@ -396,6 +555,21 @@ class CloudflareService:
             return True
 
         record_id = existing["id"]
+
+        # #824 site 4：這一處只用 hostname 找、找到就刪 —— content 一次都沒看，連
+        # reconcile 那邊「CF 的 content= 收窄」這個外包擔保都沒有。回 False 而不是
+        # raise：呼叫端 delete_route 的前一步（移除 ingress）本來就該完成，把整條刪除
+        # 流程炸掉沒有好處；留下的孤兒記錄可以從這行 ERROR 找回來，而刪掉別人的記錄
+        # 是不可逆的。
+        if not dns_record_points_at(existing, self._tunnel_cname_target):
+            logger.error(
+                f"Refusing to delete DNS record {hostname} (id={record_id}): its "
+                f"content {existing.get('content')!r} does not point at this "
+                f"deployment's tunnel target {self._tunnel_cname_target!r} — the "
+                f"record belongs to something else. Skipping (#824)."
+            )
+            return False
+
         logger.info(f"Deleting DNS record: {hostname} (ID: {record_id})")
 
         async with httpx.AsyncClient() as client:
@@ -573,6 +747,26 @@ class CloudflareService:
         existing = await self._list_dns_records_by_content(cname_target)
         existing_by_sub = {}
         for rec in existing:
+            # #824 site 2：本地複驗歸屬。撈取靠 CF 的 params={"content": ...} 收窄，
+            # 但「不會撈到別人的」這件事在此之前**完全外包給那個外部契約**（content=
+            # 是等值還是前綴／包含比對，repo 內所有程式碼都假設等值但未對真 CF 實測），
+            # 而且撈回來到刪掉之間還有 TOCTOU 窗口。
+            #
+            # 守線刻意放在**進入 existing_by_sub 之前**，一道涵蓋兩個後果：範圍外的
+            # 記錄既不會被當成自己的回報給呼叫端（那個 id 會被 Odoo 存進 dns_record_id、
+            # 成為對別人記錄的錯誤歸屬），也不會走到下面的刪除迴圈。
+            #
+            # delete 側刻意**不 raise**：我們跟 CF 要的是「指向本 tunnel 的記錄」，CF 回
+            # 了別的，刪掉才是 bug；跳過是安全動作，大聲 log 是訊號。raise 會讓整個 sync
+            # 中止，而下一次 re-sync 會撞到同一筆 ⇒ 收斂不了的迴圈。
+            if not dns_record_points_at(rec, cname_target):
+                logger.error(
+                    f"Reconcile: refusing to touch DNS record {rec.get('name')} "
+                    f"(id={rec.get('id')}): its content {rec.get('content')!r} does "
+                    f"not point at tunnel {tunnel_id}. Cloudflare returned a record "
+                    f"outside the requested content= scope — skipping it (#824)."
+                )
+                continue
             # rec["name"] is the FQDN; strip the zone domain suffix
             name = rec.get("name", "")
             if name.endswith(f".{self.domain}"):
@@ -1209,29 +1403,36 @@ class CloudflareService:
     async def _cleanup_dns_for_tunnel(self, cname_target: str) -> None:
         """Remove DNS records that point to a specific tunnel CNAME target.
 
+        撈取改走 ``_list_dns_records_by_content``（分頁到底、fail-closed），不再自己送
+        一次寫死單頁的 GET —— 原本那個查詢帶著 ``*-mcp 漏 15 筆`` 那個**已經在
+        ``_list_dns_records_by_content`` 修掉**的分頁 bug：超過一頁的記錄會被當成不存在
+        而永遠殘留。撈取失敗現在會 raise（而不是靜默 return），由唯一呼叫端
+        ``delete_tunnel`` 的 ``except Exception`` 收成 warning 後照樣繼續刪 tunnel ——
+        對外行為不變，但「沒清到」不再是靜默的。
+
+        每一筆刪除前本地複驗歸屬（#824 site 5）：不符就跳過 ＋ ERROR log ＋繼續，不
+        raise（理由同 ``reconcile_tunnel_dns``：raise 會讓清理中止且無法收斂）。
+
         Args:
             cname_target: The CNAME target to search for (e.g., '<tunnel_id>.cfargotunnel.com').
         """
+        records = await self._list_dns_records_by_content(cname_target)
+
         async with httpx.AsyncClient() as client:
-            response = await client.get(
-                self._dns_records_url,
-                headers=self._headers,
-                params={"type": "CNAME", "content": cname_target},
-                timeout=30.0,
-            )
-
-            if response.status_code != 200:
-                logger.warning(
-                    f"Failed to list DNS records for cleanup: {response.status_code}"
-                )
-                return
-
-            data = response.json()
-            records = data.get("result", [])
-
             for record in records:
                 record_id = record.get("id")
                 record_name = record.get("name", "unknown")
+
+                if not dns_record_points_at(record, cname_target):
+                    logger.error(
+                        f"Refusing to delete DNS record {record_name} "
+                        f"(id={record_id}) during tunnel cleanup: its content "
+                        f"{record.get('content')!r} does not point at "
+                        f"{cname_target!r}. Cloudflare returned a record outside "
+                        f"the requested content= scope — skipping it (#824)."
+                    )
+                    continue
+
                 logger.info(f"Cleaning up DNS record: {record_name} (ID: {record_id})")
 
                 delete_response = await client.delete(
