@@ -458,15 +458,6 @@ test-collectability 由兩個函式——收集面／執行面。這個一對多
                      status check（develop 只 required `manifest-version-gate`），
                      是看得見的紅燈、不是閘門。
 
-用法：
-
-  scripts/audit/repo-lint.py --all                # 全 repo 掃描（CI / merge 前手動）
-  scripts/audit/repo-lint.py --update-baseline    # 接受現況為新 baseline
-  scripts/audit/repo-lint.py --hook               # PostToolUse hook 模式（stdin 吃 hook JSON，只掃該檔）
-
-hook 模式輸出 {"decision":"block","reason":...} 讓 model 立即自我修正；CLI 模式違規 exit 1。
-Fail-open：hook 模式下任何內部錯誤 → exit 0，絕不擋開發。
-
 32. route-contract-golden  `RouteInfo` / `RouteStatus` 的 wire 形狀一改，
                      `src/tests/fixtures/route_contract_golden.json` 就必須跟著重產
                      （#648）。golden 是 operator↔Odoo 唯一的契約載體：Odoo 端**不吃
@@ -499,6 +490,15 @@ Fail-open：hook 模式下任何內部錯誤 → exit 0，絕不擋開發。
                      ⚠ repo-lint **不是 required check**，這條紅了擋不住 merge；它的
                      價值是「動手的人當場看到」，不是機器擋住。
                      依據 docs/tracking/pitfalls/operator-route-none-conflates-disabled-and-failed.md
+
+用法：
+
+  scripts/audit/repo-lint.py --all                # 全 repo 掃描（CI / merge 前手動）
+  scripts/audit/repo-lint.py --update-baseline    # 接受現況為新 baseline
+  scripts/audit/repo-lint.py --hook               # PostToolUse hook 模式（stdin 吃 hook JSON，只掃該檔）
+
+hook 模式輸出 {"decision":"block","reason":...} 讓 model 立即自我修正；CLI 模式違規 exit 1。
+Fail-open：hook 模式下任何內部錯誤 → exit 0，絕不擋開發。
 """
 import ast
 import csv
