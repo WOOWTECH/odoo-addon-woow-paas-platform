@@ -483,6 +483,19 @@ Fail-open：hook 模式下任何內部錯誤 → exit 0，絕不擋開發。
                      而且會為這支純靜態工具引入 git 依賴與「base 解析不到」的失效模式。
                      指紋式另外抓得到 git diff 抓不到的一格：**golden 在 base 上就已經
                      stale**。
+                     🔴 但**兩者不是包含關係，是盲區互補**——不要寫成「指紋是 diff 的
+                     超集」：只改 `description=` 文案時 diff 版會紅（schemas.py 動了、
+                     golden 沒動）、指紋版綠；反過來下面那個行為盲區 diff 版抓得到、
+                     指紋版抓不到。選指紋是因為它瞄得準（兩種偽陽偽陰都少），不是因為
+                     它涵蓋另一個。
+                     🔴 **已命名的盲區**：指紋只涵蓋 schema 形狀，**不涵蓋**
+                     `_create_cloudflare_route` 的**行為**。有人改那支讓某條路由回
+                     `status="ok"`（schema 沒動）⇒ 指紋不變 ⇒ 本 gate 綠，而 golden 已
+                     stale、Odoo 端從此釘住錯的行為。那一格只有 operator 端的
+                     `tests/test_route_contract_golden_648.py` 抓得到，而它**沒有 CI
+                     runner**——靠 CLAUDE.md 明文「改 extra/paas-operator/ 合併前必須
+                     本機跑」。刻意不把函式體 AST 也雜湊：任何無關重構都會誤紅，噪音大
+                     的 gate 會被關掉，關掉的 gate 等於沒有。
                      ⚠ repo-lint **不是 required check**，這條紅了擋不住 merge；它的
                      價值是「動手的人當場看到」，不是機器擋住。
                      依據 docs/tracking/pitfalls/operator-route-none-conflates-disabled-and-failed.md
@@ -5405,6 +5418,25 @@ def check_route_contract_golden(root):
     - 它抓不到「golden 在 base 上就已經 stale」那一格；指紋式抓得到。
     - 它會為這支**純靜態**工具（今天 subprocess 呼叫數為 0）引入 git 依賴，以及
       「base 解析不到時該紅還是該綠」這個新的失效模式。
+
+    🔴 **但兩者不是包含關係，是盲區互補。** 不要說「指紋是 diff 的超集」——只改
+    `description=` 文案時 diff 版會紅、指紋版綠（那是指紋版刻意的：噪音大的 gate 會
+    被關掉）。選指紋是因為它瞄得準，不是因為它涵蓋另一個。
+
+    ## 🔴 已命名的盲區：這條**不**守行為，只守 schema 形狀
+
+    指紋只雜湊 `RouteInfo`／`RouteStatus` 的欄位形狀。**`_create_cloudflare_route`
+    的行為不在範圍內**——有人改那支、讓「找不到 service」那條路改成回 `status="ok"`：
+    schema 沒動 ⇒ 指紋不變 ⇒ **本 gate 綠**，而 golden 的內容已經 stale，Odoo 端從此
+    釘住錯的行為。
+
+    那一格只有 operator 端 `tests/test_route_contract_golden_648.py` 與
+    `test_route_three_states_648.py` 抓得到，而 `extra/paas-operator/` **沒有 CI
+    runner**（CLAUDE.md 明文）⇒ 只能靠「改 operator 合併前必須本機跑」這條人的紀律。
+
+    刻意**不**把函式體 AST 也雜湊進來：那會讓任何無關重構都誤紅，而噪音大的 gate 會
+    被關掉——關掉的 gate 等於沒有。⇒ 這個洞是**選擇留下的**，不是沒看到；把它寫在這裡
+    是因為守線裡沒被命名的洞，就是下一個人被騙的地方。
 
     ## ⚠ 這條擋不住 merge
 

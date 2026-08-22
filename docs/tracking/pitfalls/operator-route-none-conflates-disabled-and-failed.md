@@ -53,11 +53,25 @@ operator 的 `_create_cloudflare_route()`（`extra/paas-operator/src/api/release
 
 ## 守線
 
-**機械化狀態：pattern-guard（`paas-operator` class ＋ `model-write-guard` class）。**
+**機械化狀態：pattern-guard（`paas-operator` ＋ `model-write-guard` class）＋ repo-lint `route-contract-golden`。兩者守的是不同性質，都不完整，下面逐一講清楚守到哪、沒守到哪。**
 
-評估過但**否決** repo-lint gate，理由寫在這裡以免日後有人以為是漏做：這個坑的形狀是「呼叫端把缺席當失敗」，而缺席判斷可以寫成 `if not route:`、`if route is None:`、`if not release.get('route'):`、或先取值再判空——AST/grep 都認得出其中幾種、認不出其餘幾種。一個必然大量漏抓的 gate，會讓後來的人以為這條已經被守住，**假安全感比沒有 gate 更糟**（同 `odoo-object-button-return-value-is-an-action` 的判斷）。
+### (1) 「呼叫端把缺席當失敗」——**沒有** gate，刻意的
+
+評估過但**否決** repo-lint gate，理由寫在這裡以免日後有人以為是漏做：缺席判斷可以寫成 `if not route:`、`if route is None:`、`if not release.get('route'):`、或先取值再判空——AST/grep 都認得出其中幾種、認不出其餘幾種。一個必然大量漏抓的 gate，會讓後來的人以為這條已經被守住，**假安全感比沒有 gate 更糟**（同 `odoo-object-button-return-value-is-an-action` 的判斷）。
 
 改用 pattern-guard：編輯 operator 的 route 建立路徑、或平台端讀 release 回應的 model 時，hook 會把本文列進必讀。守的是「動到這裡的人一定看過這個坑」，而不是「所有寫法都被偵測到」——後者做不到，宣稱做得到才是問題。
+
+行為層另有測試釘住（平台 repo `src/tests/test_route_dns_failed_648.py`）：`route` 缺席時**不得** fail-closed、舊 operator 不回 `dns_failed` 鍵時**不得**被當成失敗。這兩條是對照組，紅了就代表守線被改成用缺席當判準。
+
+### (2) 「wire 形狀改了、golden 沒重產」——repo-lint `route-contract-golden`
+
+⚠ 這是**另一個性質**，不要跟 (1) 混為一談（並排讀很容易以為前面說否決、後面又加了一條，自相矛盾）。(1) 守的是**呼叫端怎麼判**，(2) 守的是**兩端的契約載體有沒有脫節**。
+
+`route` 的形狀是 operator↔Odoo 唯一的契約載體：Odoo 端不吃 operator 的碼，它讀 `src/tests/fixtures/route_contract_golden.json` 當 fixture。operator 端有測試斷言「現在的序列化 == golden」，但那道斷言長在 `extra/paas-operator/`——**沒有 CI runner**，而 Odoo 端讀舊 golden 照樣全綠 ⇒ 「改了序列化又忘了重產 golden」完全無聲。gate 把 `RouteInfo`／`RouteStatus` 的欄位形狀雜湊成指紋嵌進 golden，重算比對。
+
+🔴 **這條的盲區（選擇留下的，不是沒看到）**：指紋只涵蓋 **schema 形狀**，**不涵蓋 `_create_cloudflare_route` 的行為**。有人改那支讓某條路改回 `status="ok"`，schema 沒動 ⇒ 指紋不變 ⇒ gate 綠，而 golden 已 stale。那一格只有 operator 端的單元測試抓得到，而那些測試同樣沒有 runner。刻意不把函式體 AST 也雜湊：任何無關重構都會誤紅，噪音大的 gate 會被關掉。
+
+🔴 **兩條 gate 都擋不住 merge**：repo-lint 不是 develop 的 required check（唯一 required 的是 `manifest-version-gate`）。它們的價值是「動手的人當場會看到」，不是機器擋住。
 
 行為層另有測試釘住（平台 repo `src/tests/`）：`route` 缺席時**不得** fail-closed、舊 operator 不回 `dns_failed` 鍵時**不得**被當成失敗。這兩條是對照組，紅了就代表守線被改成用缺席當判準。
 
