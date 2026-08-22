@@ -22,7 +22,8 @@ related:
 >
 > **修訂史**：
 > - **2026-08-22（第 1 段）**：§1–§11 初稿。撰寫時**未讀** `woow-paas-charts`，§2 表的 `chart NP?` 欄多數標 `?`，§10 開出五道跨 repo 提問。
-> - **2026-08-22（第 2 段，本次）**：經 issue-leader 授權，以**本機唯讀 clone** 查證 `woow-paas-charts`（HEAD `4fc45ab7`，**未 fetch**，staleness caveat 見 §10 開頭）。**五道提問查掉四道**（提問二僅 open-design 部分成立），§2 表補實，並**推翻本檔兩處原判斷**（§3 W-5 的 CDI importer、§9.3 D-3 的「E-5 不限 port」），新增 §6 **F-14**。
+> - **2026-08-22（第 2 段）**：經 issue-leader 授權，以**本機唯讀 clone** 查證 `woow-paas-charts`（HEAD `4fc45ab7`，**未 fetch**，staleness caveat 見 §10 開頭）。**五道提問查掉四道**（提問二僅 open-design 部分成立），§2 表補實，並**推翻本檔兩處原判斷**（§3 W-5 的 CDI importer、§9.3 D-3 的「E-5 不限 port」），新增 §6 **F-14**。
+> - **2026-08-22（第 3 段，本次）**：查證 `pvc-cleanup` Job 的 namespace 歸屬 —— **在平台 ns，不在租戶 ns**（§3 W-9） ⇒ **§9.1 D-1 收掉、§5.2 E-4 建議整條不做**、§11 第 5 項結案。
 
 ---
 
@@ -47,17 +48,17 @@ issue #514 寫「**租戶 namespace 目前完全沒有 egress 限制**」。實�
 1. ~~覆蓋度不可判定~~ **已解**（§10）：4 支自家 chart（`mcp-server`、`home-assistant`、`haos`、`home-assistant-full`）的 egress 是 `- {}` **全開** ⇒ baseline 對它們**完全無效**（安全性零進步，§6 F-4 答案 B），但也不會讓它們斷線。**剩餘未知**：4 支第三方 chart ＋ `hermes-agent` **0.2.0**（seed 釘的版本在 clone 全歷史中不存在，最高 0.1.3）。
 2. 🔴 **新發現：E-5 對每一支自家 chart 不是冗餘就是有害**。`open-design` 0.1.4 已自己做了同樣的 `0.0.0.0/0 except 六段`，**但限 ports [443, 80]**；本檔原設計的 E-5 刻意不限 port ⇒ **會把它放寬成任意 port**（新增的 §6 **F-14**，安全回歸）。→ §9.3 D-3 的建議已修正為 **C′：限 `[443, 80, 587]`**，且那個取捨（n8n workflow 連非這三個 port 會斷）**必須由 Eugene 拍板**。
 3. 🔴 **CDI importer 從「推定無風險」翻成 blocker**：haos chart 註解逐字「**the importer needs egress to the registry while it runs**, and **the ns-level baseline (ingress-only) leaves it alone**」——**chart 作者把「baseline 是 ingress-only」寫成 importer 能運作的前提，而本案正是要打破它**（§10.4、§6 F-8）。
-4. **apiserver 供給鏈（D-1）可能不需要解**：chart 端已自帶 `apiServerCidrs` ＋ `apiServerPorts`，E-4 對 console 是冗餘的。真正需要 E-4 的只剩 W-9 `pvc-cleanup` Job（**跑在哪個 ns 仍未查證**，§11 第 5 項）。若它不在租戶 ns，**E-4 整條可以不做**。
+4. ✅ **apiserver 供給鏈（D-1）已收掉**（第 3 段）：`pvc-cleanup` 是 `paas-operator` chart 的 CronJob、跑在 **`paas-system` / `paas-stg-system`**，不在租戶 ns（§3 W-9 六條證據＋陽性對照）；而 console 的 apiserver 出向 chart 端已自帶 `apiServerCidrs` ＋ `apiServerPorts`。⇒ **E-4 整條不做**，供給鏈問題隨之消失。**附條件**：`hermes-agent` 0.2.0 未取得，若它沒有那個鍵則 E-4 要做回來。
 
 另有三條**已實證、會讓「小心翼翼寫對的規則」照樣炸掉**的地雷（§6）：K3s enforcer 的 **reply-path quirk**（加 egress 會打斷已經寫對的 ingress，stg 全站曾因此對外 502）、**`allow-same-ns` 是 ingress-only**（加 Egress 後 Odoo→自己的 DB 沒有任何 allow 覆蓋）、**回滾刪掉的 NP 會被下一次部署靜默復原**。
 
-**建議**：本 PR 只落 design。動工前還缺三件：① `pvc-cleanup` 的 ns（決定 D-1 要不要做）；② `hermes-agent` 0.2.0 的 chart NP；③ Eugene 對 D-3 修正案（限 port 的取捨）的拍板。
+**建議**：本 PR 只落 design。動工前還缺**兩件**（原三件中的 ① `pvc-cleanup` 的 ns 已於第 3 段解掉）：① **`hermes-agent` 0.2.0 的 chart NP**（同時是 D-1 收掉的殘留條件、與 §2 表 #14 的空格）；② **Eugene 對 D-3 修正案（限 port 的取捨）的拍板**。
 
 ### 待拍板決策速覽（詳見 §9）
 
 | # | 決策 | 建議 |
 | --- | --- | --- |
-| D-1 | apiserver CIDR 供給鏈怎麼接到 operator | 🔄 **已修正**：先查 `pvc-cleanup` 的 ns —— 不在租戶 ns ⇒ **選 D（E-4 整條不做）**；在 ⇒ **C＋B**（自動發現＋setting override）。§9.1 |
+| D-1 | apiserver CIDR 供給鏈怎麼接到 operator | ✅ **已收掉（附條件）**：`pvc-cleanup` 查證在平台 ns ⇒ **選 D，E-4 整條不做**，供給鏈問題消失。條件＝`hermes-agent` 0.2.0 仍有 `apiServerCidrs`。§9.1 |
 | D-2 | agent ns（`paas-ws-pa-*`）納不納入本案 | **納入但獨立開關**，且排在 CS ns 之後當獨立波次。§9.2 |
 | D-3 | 「外網維持通」是 baseline 給，還是留給 per-chart | 🔄 **已修正為 C′**：baseline 給、拆成獨立可關的一條、**且限 ports `[443, 80, 587]`**（原「不限 port」被 §10 推翻）。**取捨需 Eugene 拍板**。§9.3 |
 | D-4 | 逐 ns 開關住哪裡（operator setting / ns label / Odoo 參數） | **ns label**（唯一能做到「單 ns 開／關」且不必重啟 operator），理由見 §9.4 |
@@ -148,7 +149,25 @@ ns 級規則的 `podSelector: {}` 選中 ns 內**每一顆 pod**，包含 chart 
 | **W-8** | initContainers：`addon-selector`（Odoo，平台注入）／`seed-config`（HA、mcp-server 系列）／`seed-home`（open-design）／`authproxy-init`＋`cli-landing-init`（hermes-agent）／`guest-console-log`（KubeVirt 生成） | initContainer | CS 租戶 ns | **全部無 egress 需求**（純本機 `cp` / `sed` / `mkdir` / symlink / htpasswd 計算） | — | `cloud_service.py:1595-1616`（addon-selector）、`cloud_app_templates.xml:715-722`、`:817-827`、`docs/decisions/hermes-agent-installer-landing-env.md:470-477` |
 | **W-9** | Job / CronJob / helm hook pod | — | — | **本 repo 內不存在**：`src/` 與 `extra/paas-operator/src/` 全樹 grep `Job` / `batch` / `cronjob` / `initContainers` 四種 pattern 對 operator 零命中 | — | `extra/paas-operator/src/`（目錄層級零結果；同目錄 `namespace` 有大量命中作陽性對照） |
 
-> ⚠ **W-9 的一個未結項**：#427 交接留下「`podSelector: {}` 會連帶選中 **pvc-cleanup Job pod**（判斷無害但未實測）」（`docs/decisions/427-operator-ingress-baseline.md:21`）。該 Job 由 operator 的 PVC lifecycle 產生，但它跑在**哪個 ns** 本次未查證 —— 若在租戶 ns，它跑 `kubectl delete pvc` ⇒ **需要 apiserver egress**，會是本案的第二個 apiserver 消費者。**列入 §11 未查證清單**。
+> ### ✅ W-9 的未結項已查證（2026-08-22 第 3 段）——`pvc-cleanup` **不在租戶 ns**
+>
+> 原未結項：#427 交接留下「`podSelector: {}` 會連帶選中 **pvc-cleanup Job pod**（判斷無害但未實測）」（`docs/decisions/427-operator-ingress-baseline.md:21`），但沒說它跑在哪個 ns。
+>
+> **結論：它是 `paas-operator` chart 的 CronJob，跑在該 chart 的 release namespace ＝ `paas-system`（prod）／`paas-stg-system`（stg），不在任何租戶 ns。** 五條獨立證據：
+>
+> 1. **它不是 operator Python 建的 Job，是 chart template**：`woow-paas-charts@4fc45ab7 charts/paas-operator/templates/pvc-cleanup-cronjob.yaml`（`apiVersion: batch/v1` / `kind: CronJob`，:2-4）。
+> 2. **operator Python 樹確實不建任何 Job**：`grep -rn "batch/v1\|kind.*Job\|CronJob\|helm.sh/hook" --include="*.py" extra/paas-operator/src/` → **零命中**。🔴 **陽性對照**：同一組 pattern 對 `woow-paas-charts/charts/` 跑 `grep -rln "batch/v1"` → **1 命中**（正是上面那個檔）⇒ 那個零是真的零，不是探針壞掉。
+> 3. **它不是 helm hook**：全檔無 `helm.sh/hook` annotation（上述 pattern 已涵蓋），是排程 CronJob（`schedule: "0 2 * * *"`，`values.yaml:210`）。⇒ 沒有「hook 天然跑在 release ns ＝ 租戶 ns」這個翻盤路徑。
+> 4. **全檔零個 `namespace:` 欄位**（`grep -n "namespace:" …` 零命中）⇒ CronJob 與其 Job／Pod 一律落在 helm release 的 ns，chart 不曾把它塞進別的 ns。
+> 5. **release ns ＝ 平台 ns**：`docs/plans/2026-Q2/2026-06-26-prod-agent-runtime-enablement.md:18` 逐字「在 prod（**`paas-system`**，Bitnami odoo chart ＋ **獨立 paas-operator chart**）」。
+>
+> 🔴 **第六條、也是最有力的一條：提出這個未知的那句話本身就是答案。** #427 的 NP 佈在 **operator 所在的 ns**（該 issue 的 scope 逐字是「只保護 operator（odoo 屬 fast-follow）」，`427-operator-ingress-baseline.md:11`），而一個 `podSelector: {}` 的 NP **只可能選中同 ns 的 pod** ⇒ 「它連帶選中了 pvc-cleanup Job pod」直接蘊含「pvc-cleanup pod 在 `paas-system`」。第 1 段讀這句時把它讀成「有個叫 pvc-cleanup 的 Job，ns 不明」，漏掉了語境已經帶著答案。
+>
+> **它確實需要 apiserver，但方向不對本案**：腳本跑 `kubectl get datavolumes --all-namespaces`（:56）、`kubectl delete datavolume -n "$NS"`（:79）、`kubectl get pvc --all-namespaces`（:92）、`kubectl delete pvc "$PVC_NAME" -n "$NS"`（:127）、`kubectl get/patch/delete pv`（:139-151）。它**跨 ns 操作租戶的 PVC，但 pod 本身在平台 ns** ⇒ 它的 apiserver egress 受 `paas-system` 的規則管，**不受租戶 ns 的 baseline egress 管**。
+>
+> ⚠ 這條與 `_pvc_keep_post_renderer_args`（`extra/paas-operator/src/services/helm.py:48-52`，#317）**是兩件不同的事**：後者是 helm `--post-renderer`，在 operator 行程內純改 rendered manifest、**完全不碰網路**，不是 apiserver 消費者。
+>
+> ⚠ **staleness**：以上 chart 事實來自未 fetch 的 clone（HEAD `4fc45ab7`，2026-08-07；`pvc-cleanup-cronjob.yaml` 檔案 mtime 2026-07-31）。ns 歸屬是結構性的（取決於「有沒有 `namespace:` 欄位」），漂移風險低，但若之後有人替它加上 `namespace:` 欄位，結論就要重驗。
 
 ---
 
@@ -228,7 +247,7 @@ spec:
 ```
 > 🔴 **這條是 §6 F-1 的解藥**，直接鏡射既有 `allow-cloudflared` ingress 條的 namespaceSelector。`cf_ns` 為空時（dev/local）整條不渲染，與 ingress 側行為一致。
 
-**E-4　`paas-baseline-egress-allow-apiserver`** — 對應：#13 open-design console、#14 hermes-agent console（＋可能的 pvc-cleanup Job，未查證）
+**E-4　`paas-baseline-egress-allow-apiserver`** — 對應：#13 open-design console、#14 hermes-agent console。⚠ **2026-08-22 起建議整條不做**，見下方修正
 ```yaml
   egress:
     - to:
@@ -240,7 +259,9 @@ spec:
         - {protocol: TCP, port: 443}
         - {protocol: TCP, port: 6443}
 ```
-> 🔴 **值不可寫死進 code**（cluster-specific，#404 已立此規矩：「cluster-specific node /32 不進 code/git seed，由 ops 設參數」）。**供給鏈是 D-1 待拍板**。
+> 🔄 **2026-08-22 第 3 段：本條規則建議整條不做。** 兩個消費者都不需要它 —— open-design／hermes-agent 的 console 已由 chart 端 `apiServerCidrs` ＋ `apiServerPorts` 放行（§10.2 已驗），`pvc-cleanup` CronJob 跑在平台 ns、不吃租戶 ns 的規則（§3 W-9 已驗）。⇒ §2／§3 目前列不出任何「沒有 chart NP、卻需要 apiserver」的租戶 ns workload。**保留條件**：若 §11 第 1 項的 `hermes-agent` 0.2.0 查出來**沒有** `apiServerCidrs`（0.1.1 有，但那是取不回的版本），這條就要做回來。
+>
+> 🔴 **值不可寫死進 code**（cluster-specific，#404 已立此規矩：「cluster-specific node /32 不進 code/git seed，由 ops 設參數」）。**若真要做，供給鏈是 D-1 待拍板**。
 > 📌 node IP 落在 `192.168.0.0/16`，會被 E-5 的 `except` 擋掉 ⇒ E-4 必須是**獨立的一條**（NP 是 allow-union，E-4 的 allow 不受 E-5 的 except 影響）。
 
 **E-5　`paas-baseline-egress-allow-external`** — 對應：#2 n8n、#5-11 租戶自填 connection、#13 Anthropic、#14 LLM＋registry＋MCP OAuth、#15 HAOS、#16 ha-full HACS
@@ -271,7 +292,7 @@ spec:
 | E-1 DNS | 全部 | 整個 ns 所有 pod 名稱解析全掛 |
 | E-2 same-ns | #4、#5-11(opendesign)、W-3、W-6 | 租戶 Odoo 開通即失敗（psycopg2 在啟動期 exit 1）；HAOS 網頁入口斷（xff-proxy 打不到 VM） |
 | E-3 cloudflared | reply-path（非業務） | **租戶服務的公開網址全部 502**（見 F-1） |
-| E-4 apiserver | #13、#14、（W-9?） | open-design／hermes-agent 的 console 開箱即壞（#404 的原始症狀） |
+| ~~E-4 apiserver~~ **建議不做** | #13、#14（兩者已由 chart 端放行）；~~W-9~~（已查證在平台 ns） | 若 chart 端也沒放行才會壞 —— open-design 0.1.4 已驗有；hermes-agent 0.2.0 未取得，是唯一殘留依賴 |
 | E-5 外網 | #2、#5-11、#13、#14、#15、#16 | n8n 全部 workflow 紅、HACS 裝不了、LLM 全斷、`npm i -g` 全掛 |
 | （無規則） | #1、#3（is_active=False，seed 無出向） | — |
 
@@ -560,6 +581,16 @@ except Exception as e:
 > - `pvc-cleanup` **不在**租戶 ns ⇒ **選 D（不做 E-4）**，並在 issue 註記「apiserver egress 由 chart 端 `apiServerCidrs` 負責，baseline 不重複」。
 > - `pvc-cleanup` **在**租戶 ns ⇒ 維持原建議 **C＋B**（自動發現 ＋ setting override）。
 >
+> #### ✅ 第 3 段結論（2026-08-22）—— **D-1 收掉，選 D（E-4 整條不做）**
+>
+> `pvc-cleanup` **不在租戶 ns**（`paas-operator` chart 的 CronJob，落在 release ns ＝ `paas-system` / `paas-stg-system`；六條證據 ＋ 陽性對照見 §3 W-9）。⇒ 上面的分支走「不在」那一支。
+>
+> **D-1 這個問題本身消失了**：不做 E-4 就不需要任何 apiserver CIDR 供給鏈，選項 A／B／C 全部不必評估。
+>
+> **改為要在 issue 註記的**：「租戶 ns 的 apiserver egress 由 **chart 端** `networkPolicy.apiServerCidrs`（平台 `_inject_apiserver_cidrs` 餵值）負責，baseline **不重複**。」
+>
+> 🔴 **唯一殘留依賴**：這個結論建立在「需要 apiserver 的租戶 workload 都有 chart NP 幫它放行」上。open-design 0.1.4 已驗有（§10.2）；**`hermes-agent` 0.2.0 未取得**（§11 第 1 項）。若 0.2.0 拿掉了那個鍵，E-4 要做回來、D-1 也要重開。⇒ **在 hermes-agent 0.2.0 查清楚之前，D-1 標「已收掉（附條件）」而非「已關閉」。**
+>
 > ⚠ 另一個查證副產品：`hermes-agent` 0.1.1 的 `apiServerPorts` 只有 `[443]`（缺 6443），而 `_inject_apiserver_cidrs` **只注入 cidrs、不注入 ports**（`cloud_service.py:1907-1916` 的 `path_map` 只寫 `('networkPolicy', 'apiServerCidrs')`）⇒ 在 post-DNAT 叢集上該 console 的 kubectl 可能本來就不通。**但這是 0.1.1 的觀察，seed 釘的 0.2.0 未取得**，不可當結論；列入 §11 一併追。
 
 ### 9.2 D-2：agent ns（`paas-ws-pa-*`）納不納入本案
@@ -795,7 +826,7 @@ except Exception as e:
 | 2 | ~~`ha-paas`（#12）合法出向標的完全空白~~ **✅ 2026-08-22 已解**（§10.3）：`home-assistant` 0.2.1 chart 註解逐字「HA needs outbound to the internet (integrations, update checks)」，且 chart 已自帶 `- {}` 全開 egress、`allowAllEgress: true` 預設 | — | — | 已無風險：baseline 對它既不生效也不會讓它斷線 |
 | 3 | `open-design`（#13）Anthropic API 的連線 port 為推定值（TCP/443），非證實 | 本 repo 只記載該功能存在（`src/data/cloud_app_templates.xml:797-800,833`），未見連線埠明文規格 | 實際跑一次 `claude login` 用 established pod 探針觀測；或 woow-paas-charts / Anthropic 文件 | 風險偏低——§5.2 E-5 本身不限 port，即使猜錯埠規則仍涵蓋得到；主要影響 §8 驗證計畫若誤把它當固定埠設計探針會失準 |
 | 4 | 🔴 **原判斷已被推翻，範圍縮小但升級為 blocker**（2026-08-22，§10.4）：haos chart 明文「the importer needs egress to the registry while it runs」⇒ importer **確實需要出向**。**仍未查證的是**：在 seed 釘死的 `pullMethod=node` 下，importer 具體需要哪些目標與 port（registry manifest？checksum？只需 DNS？），以及 chart 那句話是否分 `pullMethod` | chart 註解沒有分 `pullMethod` 討論；本 repo 與 charts repo 都沒有 importer pod 的實際流量觀測 | 部署一台新 HAOS，在 importer pod 存活期間用 established probe 或 `kubectl logs` / conntrack 觀測其實際連線（叢集操作，本檔範圍排除）；或問 CDI 上游 `pullMethod=node` 的實作 | 🔴 **chart 作者把「ns-level baseline 是 ingress-only」寫成 importer 能運作的前提，而本案正是要打破它** ⇒ E-0 落地後每一台新 HAOS 都可能卡在 `ImportInProgress`，症狀不指向根因。importer 不帶 chart selectorLabels ⇒ **唯一「chart union 救不了」的 workload** |
-| 5 | W-9 `pvc-cleanup` Job 跑在哪個 ns | #427 交接文件只留下「判斷無害但未實測」，未記載該 Job 實際 namespace（`docs/decisions/427-operator-ingress-baseline.md:21`，本檔 line 130） | operator 維護者；或叢集內 `kubectl get job -A` 類查詢（本檔範圍排除，留待 stg 演練階段） | 若跑在租戶 ns，它是 E-4（apiserver）的第二個消費者；E-0 落地後若 E-4 沒涵蓋它，PVC 清理會靜默失敗 |
+| 5 | ~~W-9 `pvc-cleanup` Job 跑在哪個 ns~~ **✅ 2026-08-22 已查證：在平台 ns（`paas-system` / `paas-stg-system`），不在租戶 ns** | — | — | 已無風險，且**收掉了 D-1**（見 §9.1）。證據鏈見 §3 W-9 的更新註記 |
 | 6 | k3s CoreDNS pod 的實際 label 值 | 本 repo 內未記載（只知道 namespace 是 `kube-system`） | `kubectl -n kube-system get pod -l k8s-app=kube-dns` 量到非空即可確認（叢集操作，本檔範圍排除） | 低，且 **2026-08-22 取得強旁證**：`open-design` 0.1.4 與 `hermes-agent` 的 chart 都以 **`dnsKubeDnsOnly: true` 為預設**（`open-design/values.yaml:400`、`hermes-agent/values.yaml:482`），該值會把 DNS egress 收緊到 `podSelector k8s-app: kube-dns`——而 open-design 在 prod 正常運作 ⇒ **woow-k3s 的 CoreDNS 幾乎確定帶該 label**（否則它早該 DNS 全掛）。⚠ 這是**推論**（前提是「open-design 在 prod 正常」），不是直接觀測。§5.2 E-1 仍維持 namespaceSelector-only 的保守選擇，收緊列為 rollout 後 follow-up |
 | 7 | 叢集第 4 顆 node 是否為 worker、是否跑 apiserver | 本 repo 只記載 3 個 control-plane node IP（`docs/reference/features/opendesign-console.md:145,159`；`docs/tracking/landings/404-apiserver-cidrs-landing.md:10`），叢集實際有 4 個 node（§4，本檔 line 142/512） | 叢集操作者 `kubectl get nodes -o wide --context woow-k3s`（本檔範圍排除） | 若 §9.1 D-1 選人工維護 node IP 清單（選項 B）且漏列第 4 顆，會是 F-6 間歇性失效，且症狀「看落在哪顆 node」難定位；本檔建議選項 C（自動發現）天然免疫此風險，正是理由之一 |
 | 8 | docker-desktop 的網段與 NP enforcement 行為 | 本 repo 完全未記載（只知道其 k8s node 已改成 kind 風格容器，line 152） | 在 docker-desktop context 起一組 established pod 做 §8.2 探針腳本觀測（叢集操作，本檔範圍排除） | 在 docker-desktop 上得到的任何綠燈/紅燈都不可外推到 woow-k3s（§4、§8.4 已提醒）；誤用會產生假訊號 |
