@@ -689,7 +689,8 @@ class TestSecurityAccessLifecycleHooks(TransactionCase):
         sa = self._make_active_sa_with_routes(mock_client)
         with patch(MOCK_GET_CLIENT, return_value=mock_client):
             sa._do_cleanup()
-        mock_client.delete_tunnel.assert_called_once_with('tun-lc')
+        mock_client.delete_tunnel.assert_called_once_with(
+            'tun-lc', tunnel_name=False)
         self.assertEqual(sa.state, 'deleting')
         self.assertFalse(sa.tunnel_id)
 
@@ -741,7 +742,8 @@ class TestSecurityAccessLifecycleHooks(TransactionCase):
             # （`src/models` ＋ `src/controllers` 全域零讀取），留著只會讓
             # 「這個 key 還有作用」的搜尋結果變成假陽性。
             sa.unlink()
-        mock_client.delete_tunnel.assert_called_once_with('tun-lc')
+        mock_client.delete_tunnel.assert_called_once_with(
+            'tun-lc', tunnel_name=False)
 
 
 class TestSecurityAccessAcl(TransactionCase):

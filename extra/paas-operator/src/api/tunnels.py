@@ -1,7 +1,8 @@
 """API endpoints for dedicated Cloudflare Tunnel lifecycle management."""
 import logging
+from typing import Optional
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Query, status
 
 from src.config import settings
 from src.models.schemas import (
@@ -20,6 +21,166 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/tunnels", tags=["tunnels"])
 
 cloudflare_service = CloudflareService()
+
+
+# --------------------------------------------------------------------------- #
+#  #531 tunnel 歸屬驗證（三個寫入端點共用）                                     #
+# --------------------------------------------------------------------------- #
+#
+# 為什麼需要：這個 router 的認證只有**一把平台級 X-API-Key**（src/main.py），而那
+# 把 key 是 Odoo 代所有租戶呼叫時共用的 ⇒ 「這條 tunnel 屬於誰」在此之前完全由
+# 呼叫端自律，operator 端零把關。呼叫端只要帶對 key，就能對任意 tunnel_id 動手。
+#
+# ⚠ **這道檢查的誠實強度（不要把它寫成完整授權）**：
+# 權威來源是 Cloudflare 上那筆 tunnel 的 name，而 tunnel name **不是機密** ——
+# CF dashboard 看得到，也 stamp 在 DNS record 的 comment 上。它擋的是
+# 「呼叫端拿著**自己那一列**的 name、卻塞了**別人的** tunnel_id」這個形狀
+# （＝ #522 的攻擊形狀）；它**擋不住**同時掌握兩個值的攻擊者。這是縱深防禦，
+# 不是授權模型 —— 真正的授權要 per-tenant 認證，本單明令不新增認證模型。
+# 平台自己的 L4 reconciler 也已經在 src/services/reconciler.py 明寫「name 相符
+# 不可作為 ownership 證據（手動建資源可照抄命名）」，兩處說法一致。
+#
+# 為什麼不是別的權威來源（三條都被否掉）：
+#   * **ns prefix**：/routes 這個端點結構上沒有 namespace 輸入，CF 側也沒有
+#     tunnel ↔ namespace 的連結；而且 docs/decisions/patterns/
+#     external-resource-env-token-naming.md 守則 2 明文禁止在 operator 端從
+#     namespace_prefix 隱式推導 env。
+#   * **operator 自持對照表**：要引入狀態，而 operator 是無狀態服務。
+#   * **per-tenant 認證**：工單明令不新增認證模型。
+#
+# 為什麼比對「等值」而不是「認前綴 / 解析格式」：CF tunnel 的命名在本 repo 有過
+# 三代（`smarthome-` → `paas-sm-…` → `paas-{env}-sm-…`，SA 的 canonical_name 也
+# 在後期才注 env token），舊列身上是舊格式。**只做等值比對**時格式漂移完全透明
+# ——兩側比的都是「CF 自己那一份」；一旦改成認前綴，舊列會被判成「不是平台的」。
+
+_OWNERSHIP_DENIED = status.HTTP_403_FORBIDDEN
+
+
+def _ownership_error(code: str, tunnel_id: str, operation: str, **extra) -> dict:
+    """結構化錯誤 body。
+
+    ⚠ **刻意不回吐 CF 上的真實 name**：攻擊者手上本來就有 tunnel_id，缺的正是
+    name。把實際 name 放進錯誤訊息等於把缺的那一半直接送給他，這道檢查會退化成
+    一支「猜 id → 換得 name」的 oracle。
+
+    ⚠ **不變式：三個鍵必須都有非空值，這個 body 永遠不得是空 dict。**
+    理由在**呼叫端的呼叫端**，不在這裡：平台 client 的 ``_parse_error`` 會把
+    ``detail`` 原樣（dict）帶進 ``PaaSOperatorAPIError.detail``，而消費端存在
+    ``e.detail or e.message`` 這種寫法 —— **空 dict 是 falsy**，會靜默改用
+    ``message``，結構化資訊就這樣無聲消失。
+    這裡用 assert 讓不變式活在**程式面**而不是只活在測試描述裡：之後有人加第四種
+    拒絕理由、忘了帶 operation，會當場炸而不是安靜地少一個鍵。
+    """
+    assert code and tunnel_id and operation, (
+        "ownership error body 的三個鍵必須都有值（空 dict / 缺鍵會在呼叫端的 "
+        "`e.detail or e.message` 靜默退化成非結構化訊息）；"
+        f"得到 code={code!r} tunnel_id={tunnel_id!r} operation={operation!r}"
+    )
+    return {"error": code, "tunnel_id": tunnel_id, "operation": operation, **extra}
+
+
+async def _assert_tunnel_ownership(
+    tunnel_id: str, claimed_name: Optional[str], *, operation: str,
+) -> None:
+    """驗證呼叫端提出的 ``claimed_name`` 真的是這條 tunnel 在 CF 上的 name。
+
+    Args:
+        tunnel_id: path 上的目標 tunnel。
+        claimed_name: 呼叫端提出的歸屬主張；``None`` / 空字串 = 沒帶。
+        operation: 進錯誤 body 與 log 的動作名，讓兩者能對得起來。
+
+    Raises:
+        HTTPException: 403 拒絕（三種 error code，見下）或 502（查不動 CF）。
+
+    四種結局，其中三種是「不得放行」：
+
+    ``tunnel_ownership_mismatch``
+        claim 有帶但對不上 ⇒ **一律拒，三個端點都立刻生效**、不受 rollout 旗標
+        影響。這是本修法真正在擋的那一格。
+    ``tunnel_ownership_claim_required``
+        claim 沒帶。**兩段 rollout**：預設（stage 1）放行並留一行
+        ``tunnel_claim_absent`` warning；``TUNNEL_OWNERSHIP_REQUIRE_CLAIM=true``
+        （stage 2）才拒。理由見 src/config.py 該欄位的註解。
+    ``tunnel_ownership_unverifiable``
+        CF 回了空 name。**必須特判**：``get_tunnel_status`` 對缺欄位是
+        ``result.get("name", "")``，若不特判，claim 也是空字串時 ``"" == ""``
+        會**通過** —— 兩側一起壞成同一個垃圾值，比不相等**更容易**成立。
+    ``tunnel_ownership_check_failed``
+        CF 查詢本身失敗（非 404）⇒ 502。**「沒驗到」不等於「驗過了」**，不放行。
+
+    唯一的放行例外是 **CF 回 404（tunnel 不存在）**：沒有別人的資源可傷，而且
+    ``CloudflareService.delete_tunnel`` 對 404 是**當成功處理**的（teardown 重試
+    靠這個冪等性）。若把 404 當拒絕，等於把「重試把殘留收乾淨」這條路封死 ——
+    tunnel 已經不在了，呼叫端那一列卻永遠拆不掉。
+    """
+    claim = (claimed_name or "").strip()
+
+    if not claim:
+        if settings.tunnel_ownership_require_claim:
+            logger.warning(
+                "tunnel_ownership_claim_required: op=%s tunnel=%s — rejected "
+                "(TUNNEL_OWNERSHIP_REQUIRE_CLAIM is on)", operation, tunnel_id,
+            )
+            raise HTTPException(
+                status_code=_OWNERSHIP_DENIED,
+                detail=_ownership_error(
+                    "tunnel_ownership_claim_required", tunnel_id, operation),
+            )
+        # Stage 1：放行，但**不得無聲**——這行 warning 是判斷「可以翻旗了沒」的
+        # 唯一訊號（marker 刻意不與任何 error code 共前綴，grep 分得開）。
+        logger.warning(
+            "tunnel_claim_absent: op=%s tunnel=%s — allowed under the stage-1 "
+            "rollout default; set TUNNEL_OWNERSHIP_REQUIRE_CLAIM=true once every "
+            "caller in this environment sends the claim", operation, tunnel_id,
+        )
+        return
+
+    try:
+        tunnel_status = await cloudflare_service.get_tunnel_status(tunnel_id)
+    except CloudflareException as e:
+        if e.status_code == 404:
+            logger.info(
+                "tunnel_absent_on_cloudflare: op=%s tunnel=%s — ownership check "
+                "skipped (nothing to protect); letting the operation proceed so "
+                "idempotent teardown still converges", operation, tunnel_id,
+            )
+            return
+        logger.error(
+            "tunnel_ownership_check_failed: op=%s tunnel=%s — %s",
+            operation, tunnel_id, e.message,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=_ownership_error(
+                "tunnel_ownership_check_failed", tunnel_id, operation),
+        )
+
+    actual_name = (tunnel_status.get("name") or "").strip()
+    if not actual_name:
+        logger.error(
+            "tunnel_ownership_unverifiable: op=%s tunnel=%s — Cloudflare returned "
+            "no tunnel name; refusing rather than comparing against an empty value",
+            operation, tunnel_id,
+        )
+        raise HTTPException(
+            status_code=_OWNERSHIP_DENIED,
+            detail=_ownership_error(
+                "tunnel_ownership_unverifiable", tunnel_id, operation),
+        )
+
+    if actual_name != claim:
+        # log 記得下 claim（呼叫端自己送的，記錄它不外洩任何東西），但**不記**
+        # actual_name 以外的比對細節到回應裡。
+        logger.warning(
+            "tunnel_ownership_mismatch: op=%s tunnel=%s claimed=%r — the caller "
+            "does not own this tunnel; refusing", operation, tunnel_id, claim,
+        )
+        raise HTTPException(
+            status_code=_OWNERSHIP_DENIED,
+            detail=_ownership_error(
+                "tunnel_ownership_mismatch", tunnel_id, operation,
+                claimed_name=claim),
+        )
 
 
 @router.post(
@@ -250,6 +411,9 @@ async def update_tunnel_config(
             detail="Cloudflare API token and account ID are required",
         )
 
+    await _assert_tunnel_ownership(
+        tunnel_id, request.tunnel_name, operation="update_config")
+
     try:
         await cloudflare_service.configure_tunnel(
             tunnel_id=tunnel_id,
@@ -278,15 +442,38 @@ async def update_tunnel_config(
     "/{tunnel_id}",
     summary="Delete a tunnel",
 )
-async def delete_tunnel(tunnel_id: str):
+async def delete_tunnel(
+    tunnel_id: str,
+    tunnel_name: Optional[str] = Query(
+        default=None,
+        description=(
+            "Ownership claim (#531): the caller's own record of this tunnel's "
+            "Cloudflare name. Verified against the live tunnel before deleting."
+        ),
+    ),
+):
     """Delete a Cloudflare Tunnel and clean up associated resources.
 
     This will:
     1. Clean up DNS records pointing to the tunnel
     2. Delete the tunnel with cascade (removes connections)
 
+    #531 的 ownership claim 在這條端點走 **query param** 而不是 request body，
+    這條與姊妹端點（``/routes`` / ``/config`` 走 body）刻意不一致，理由是相容性：
+
+    * DELETE **今天沒有 body**，而帶 body 的 DELETE 雖然合法，卻是最容易被中間層
+      （proxy / ingress / WAF）默默丟掉的形狀。被丟掉的後果不是報錯，是
+      **claim 靜默退化成「沒帶」** —— 一旦翻到 stage 2 就變成「teardown 全數被拒、
+      tunnel 拆不掉還在計費」，而現場看到的訊息會指向錯的地方。query param 不會
+      被丟。
+    * 唯一的代價是 claim 會進 access log，而 **tunnel name 本來就不是機密**
+      （CF dashboard 可見、也 stamp 在 DNS record comment 上），所以這個代價可接受。
+    * 舊版平台不帶這個 param 也無痛：FastAPI 對**未宣告**的 query param 是忽略，
+      而這裡宣告成 ``Optional`` ⇒ 新舊 client 都不會 422。
+
     Args:
         tunnel_id: The Cloudflare Tunnel ID.
+        tunnel_name: Ownership claim; see ``_assert_tunnel_ownership``.
 
     Returns:
         Deletion confirmation message.
@@ -299,6 +486,9 @@ async def delete_tunnel(tunnel_id: str):
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Cloudflare API token and account ID are required for tunnel management",
         )
+
+    await _assert_tunnel_ownership(
+        tunnel_id, tunnel_name, operation="delete_tunnel")
 
     try:
         await cloudflare_service.delete_tunnel(tunnel_id)
@@ -344,6 +534,13 @@ async def sync_tunnel_routes(tunnel_id: str, request: TunnelRoutesSyncRequest):
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Cloudflare API token and account ID are required for tunnel management",
         )
+
+    # #531：擋在 configure_tunnel_ingress 之前。這條端點是**整份 ingress 覆寫 ＋
+    # DNS 對帳**，一次呼叫就能把某條 tunnel 的整份路由表換掉，所以歸屬檢查必須在
+    # 任何 CF 寫入之前完成 —— 這兩個動作之間本來就沒有交易可以回捲（見下方
+    # docstring 的 NOT atomic 段）。
+    await _assert_tunnel_ownership(
+        tunnel_id, request.tunnel_name, operation="sync_routes")
 
     domain = cloudflare_service.domain
     rules = [

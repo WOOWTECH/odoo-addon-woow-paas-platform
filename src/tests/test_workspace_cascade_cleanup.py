@@ -60,7 +60,12 @@ class TestWorkspaceCascadeCleanup(TransactionCase):
             })
             sh_id = sh.id
             ws.unlink()
-            mock_client.delete_tunnel.assert_called_once_with('tun-live-1')
+            # #531：teardown 現在會把 ownership claim 一起送出去。本檔的 fixture
+            # 都沒有設 `tunnel_name`（Char 欄位未設 ⇒ False），所以斷言裡是 False。
+            # 它鎖的是**claim 有沒有被轉下去**（kwarg 整個不見就會紅）；claim 的
+            # **值**由 test_paas_operator.py 的 TestTunnelOwnershipClaimWire 鎖。
+            mock_client.delete_tunnel.assert_called_once_with(
+                'tun-live-1', tunnel_name=False)
         self.assertFalse(self.SmartHome.browse(sh_id).exists(),
                          'cleanup 成功後 SmartHome 應隨 workspace 一併刪除')
         self.assertFalse(self.Workspace.browse(ws.id).exists())
@@ -75,7 +80,8 @@ class TestWorkspaceCascadeCleanup(TransactionCase):
             _internal(sa).write({'tunnel_id': 'tun-live-2'})
             sa_id = sa.id
             ws.unlink()
-            mock_client.delete_tunnel.assert_called_once_with('tun-live-2')
+            mock_client.delete_tunnel.assert_called_once_with(
+                'tun-live-2', tunnel_name=False)
         self.assertFalse(self.SA.browse(sa_id).exists(),
                          'cleanup 成功後 SecurityAccess 應隨 workspace 一併刪除')
 
@@ -131,8 +137,10 @@ class TestWorkspaceCascadeCleanup(TransactionCase):
             _internal(sa).write({'tunnel_id': 'tun-sa'})
             sh_id, sa_id = sh.id, sa.id
             ws.unlink()
-            sh_client.delete_tunnel.assert_called_once_with('tun-sh')
-            sa_client.delete_tunnel.assert_called_once_with('tun-sa')
+            sh_client.delete_tunnel.assert_called_once_with(
+                'tun-sh', tunnel_name=False)
+            sa_client.delete_tunnel.assert_called_once_with(
+                'tun-sa', tunnel_name=False)
         self.assertFalse(self.SmartHome.browse(sh_id).exists())
         self.assertFalse(self.SA.browse(sa_id).exists())
         self.assertFalse(self.Workspace.browse(ws.id).exists())
@@ -156,8 +164,8 @@ class TestWorkspaceCascadeCleanup(TransactionCase):
             sh1_id, sh2_id = sh1.id, sh2.id
             (ws1 | ws2).unlink()
             self.assertEqual(client.delete_tunnel.call_count, 2)
-            client.delete_tunnel.assert_any_call('tun-b1')
-            client.delete_tunnel.assert_any_call('tun-b2')
+            client.delete_tunnel.assert_any_call('tun-b1', tunnel_name=False)
+            client.delete_tunnel.assert_any_call('tun-b2', tunnel_name=False)
         self.assertFalse(self.SmartHome.browse(sh1_id).exists())
         self.assertFalse(self.SmartHome.browse(sh2_id).exists())
         self.assertFalse(self.Workspace.browse(ws1.id).exists())
@@ -284,8 +292,10 @@ class TestWorkspaceCascadeCleanup(TransactionCase):
             ws.unlink()
             cs_client.uninstall_release.assert_called_once_with(
                 'ns-cs', 'rel-cs', subdomain=subdomain)
-            sh_client.delete_tunnel.assert_called_once_with('tun-mix-sh')
-            sa_client.delete_tunnel.assert_called_once_with('tun-mix-sa')
+            sh_client.delete_tunnel.assert_called_once_with(
+                'tun-mix-sh', tunnel_name=False)
+            sa_client.delete_tunnel.assert_called_once_with(
+                'tun-mix-sa', tunnel_name=False)
         self.assertFalse(
             self.env['woow_paas_platform.cloud_service'].browse(cs_id).exists())
         self.assertFalse(self.SmartHome.browse(sh_id).exists())

@@ -5720,7 +5720,7 @@ TUNNEL_CONFIG_CLIENT_REL = "src/services/paas_operator.py"
 TUNNEL_CONFIG_ROUTE_METHOD = "put"
 TUNNEL_CONFIG_ROUTE_PATH = "/{tunnel_id}/config"
 TUNNEL_CONFIG_CLIENT_METHOD = "configure_tunnel"
-TUNNEL_CONFIG_FIELDS = ("hostname", "service_url")
+TUNNEL_CONFIG_FIELDS = ("hostname", "service_url", "tunnel_name")
 TUNNEL_CONFIG_REF = "見 #769（實跑取證：JSON body ⇒ 422，loc=['query',...]）"
 
 #: FastAPI 的預設綁定規則：非 path 的**裸純量**參數 ⇒ query param。
@@ -5952,11 +5952,13 @@ def _tunnel_wire_client_binding(client_source):
 
 
 #: (b) 分類器自檢的兩份合成輸入。兩者只差「裸 str」與「request model」。
-_TUNNEL_WIRE_SELFTEST_SCHEMAS = {"_SelfTestRequest": {"hostname", "service_url"}}
+_TUNNEL_WIRE_SELFTEST_SCHEMAS = {
+    "_SelfTestRequest": {"hostname", "service_url", "tunnel_name"}}
 _TUNNEL_WIRE_SELFTEST_QUERY_SRC = (
     "router = APIRouter(prefix='/api/tunnels')\n"
     "@router.put('/{tunnel_id}/config')\n"
-    "async def h(tunnel_id: str, hostname: str, service_url: str):\n"
+    "async def h(tunnel_id: str, hostname: str, service_url: str, "
+    "tunnel_name: str):\n"
     "    pass\n"
 )
 _TUNNEL_WIRE_SELFTEST_BODY_SRC = (
@@ -5967,13 +5969,15 @@ _TUNNEL_WIRE_SELFTEST_BODY_SRC = (
 )
 #: (c) client 解析自檢：同一個 dict，一個走 data= 一個走 params=。
 _TUNNEL_WIRE_SELFTEST_CLIENT_BODY_SRC = (
-    "def configure_tunnel(self, tunnel_id, hostname, service_url):\n"
-    "    data = {'hostname': hostname, 'service_url': service_url}\n"
+    "def configure_tunnel(self, tunnel_id, hostname, service_url, tunnel_name):\n"
+    "    data = {'hostname': hostname, 'service_url': service_url,\n"
+    "            'tunnel_name': tunnel_name}\n"
     "    return self._request('PUT', f'/x/{tunnel_id}/config', data=data)\n"
 )
 _TUNNEL_WIRE_SELFTEST_CLIENT_QUERY_SRC = (
-    "def configure_tunnel(self, tunnel_id, hostname, service_url):\n"
-    "    data = {'hostname': hostname, 'service_url': service_url}\n"
+    "def configure_tunnel(self, tunnel_id, hostname, service_url, tunnel_name):\n"
+    "    data = {'hostname': hostname, 'service_url': service_url,\n"
+    "            'tunnel_name': tunnel_name}\n"
     "    return self._request('PUT', f'/x/{tunnel_id}/config', params=data)\n"
 )
 
