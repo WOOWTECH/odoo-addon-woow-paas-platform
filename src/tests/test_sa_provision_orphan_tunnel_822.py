@@ -124,7 +124,7 @@ MOCK_GET_CLIENT = (
 )
 
 #: 「這次失敗可能在 CF 留下一顆沒有 DB 參照的 tunnel」的訊息標記（契約字串，
-#: model 側同名常數 `_ORPHAN_MARK`）。刻意在測試裡寫死字面量而不是 import：
+#: model 側常數 `_UNREFERENCED_TUNNEL_MARK`）。刻意在測試裡寫死字面量而不是 import：
 #: import 不存在的常數會讓整個模組 ImportError，連 C 組的陽性對照都一起變成
 #: error ⇒ RED 那一輪就分不出「守線沒做」與「測試檔本身壞了」。
 #: ⚠ 這個字串不得成為任何既有標記的超字串（`grep -rn unreferenced src/` 零命中）。
