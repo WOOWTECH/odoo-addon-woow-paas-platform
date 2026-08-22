@@ -238,11 +238,14 @@ class TestLastOwnerDemoteGuard(_LastOwner732Fixture):
         豁免 su，整條無人攔。
 
         ⚠ 刻意用裸 try/except 不用 `assertRaises`（#822 抓到的框架級
-        假綠）：`BaseCase.assertRaises` 把區塊包進 `cr.savepoint(flush=
-        False)`，例外穿出時區塊內未 flush 寫入整包回捲 ⇒ 事後驗 DB 的
-        斷言恆拿到回捲後舊值、零鑑別力（守衛壞掉時 write 成功、savepoint
-        也會把 role 還原成 owner）。裸 try/except 下兩條斷言各自保有
-        鑑別力：守衛壞掉 ⇒ raised=False **且** role=admin，雙紅。"""
+        假綠）：`BaseCase._assertRaises` 把區塊包進 `cr.savepoint()`——
+        **預設 flush=True**，`__enter__` 先把區塊**之前**的寫入 flush 掉
+        ⇒ 回捲邊界恰好是區塊內的一切；例外穿出時 `cr.clear()`＋
+        `ROLLBACK TO SAVEPOINT` 把區塊內寫入（已 flush 與 cache 中的）
+        一併回捲 ⇒ 事後驗 DB 的斷言恆拿到回捲後舊值、零鑑別力（守衛壞掉
+        時 write 成功、savepoint 也會把 role 還原成 owner）。裸
+        try/except 下兩條斷言各自保有鑑別力：守衛壞掉 ⇒ raised=False
+        **且** role=admin，雙紅。"""
         raised = False
         try:
             self.alice_access.with_user(self.alice).sudo().write(
