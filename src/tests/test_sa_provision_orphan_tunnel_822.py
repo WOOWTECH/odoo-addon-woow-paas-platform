@@ -80,19 +80,34 @@ commit 的 fixture 而整段安靜地什麼都不做——`models/security_acces
 本檔的鏈不含 controller，所以這一格不成立。
 
 🔴 **本檔不使用 `self.assertRaises` 驅動受測路徑**（`_provision_expect_access_error`
-用裸 try/except 取代）。Odoo 的 `BaseCase.assertRaises` 把整個 with 區塊包進
-`self.cr.savepoint(flush=False)`：例外一穿出來，區塊內做過的事**連同尚未 flush 的
-cache／towrite 一起被丟掉**。#822 RED 第一輪實測到這一格：
-
-    at_create:         ORM='provisioning' / raw SQL=('pending',)  ← 尚未 flush，值在 towrite
-    after AccessError: ORM='pending'      / raw SQL=('pending',)（再 flush 一次仍是）
-    對照：先 flush_all() 再讓 AccessError 丟出 ⇒ 'provisioning' 存活
+用裸 try/except 取代）。機制（`odoo/tests/common.py::BaseCase._assertRaises`）：進入
+with 區塊前先 `init.enter_context(self.env.cr.savepoint())`——**用預設的
+`flush=True`**——例外一穿出來就 `ROLLBACK TO SAVEPOINT`。⇒ **回捲的邊界恰好是 with
+區塊本身**：進場那次 flush 把區塊**之前**的寫入推進 DB（那些活下來），區塊**之內**
+做過的一切則連同 cache 一起被丟掉。針對 AccessError 還多一步：同一段碼在 savepoint
+之後立刻 `self.env.cr.clear()`，原碼註解寫著 "The savepoint() above calls flush(),
+which leaves the record cache with lots of data. This can prevent access errors to be
+detected."
 
 ⇒ 用 `assertRaises` 的話，「例外之後這一列 DB 應該長怎樣」的斷言全部是對一個**被
 回捲的世界**做的：補償寫進去的 `state` / `error_message` 會一起被抹掉，那些測試
 **永遠不可能綠**。而且第一輪它會以最難察覺的方式出錯——A4 假**綠**（回捲後的值
 剛好等於期望的 'pending'），我因此差點把「守線已成立」寫進報告。AccessError 在
-任何 SQL 之前就丟出來，cursor 不會進 aborted 狀態，所以不需要那個 savepoint 保護。
+任何 SQL 之前就丟出來，cursor 不會進 aborted 狀態，本檔不需要那層保護。
+
+#822 RED 第一輪的實測（區塊內／區塊外的落差，就是上面那條邊界）：
+
+    at_create（create_tunnel 當下，**區塊內**）: ORM='provisioning' / raw SQL=('pending',)
+    after AccessError（**區塊外**）:            ORM='pending'      / raw SQL=('pending',)
+    對照：同一次 write 改在 with 區塊**之前**做（並另外手動 flush 一次）⇒ 'provisioning' 存活
+
+⚠ 本檔初版把機制寫成「savepoint 帶 `flush=False`，所以尚未 flush 的 towrite 被丟掉」
+——**那是錯的**（issue-leader 2026-08-22 更正，dev-798 抓到、leader3 複驗）。結論
+（假綠 ＋ 永紅）不變，但那條推導路線不成立，別讓它傳下去。同一個 `common.py` 裡
+**確實有**一顆 `self.cr.savepoint(flush=False)`，它在 `warmup` 裝飾器裡、
+**不在 `assertRaises` 的呼叫鏈上** —— grep 命中一顆長得對的東西就拿它當機制解釋，
+這是那類誘餌的典型形狀。⚠ 上面第三行那個對照**本身分不出** flush=True／False
+（我那次額外手動 flush 過），有鑑別力的是原始碼那一行。
 
 ⚠ 本檔在 A 組**不**先以 su 身分讀 `tunnel_token`：su 讀會把該欄位灌進
 transaction-wide 的 field cache，之後非 sudo recordset 的屬性讀取會直接命中快取而
@@ -187,9 +202,10 @@ class _Sa822Fixture(TransactionCase):
     def _provision_expect_access_error(self):
         """以租戶身分呼叫 `action_provision`，要求它丟 AccessError，回傳該例外。
 
-        🔴 刻意**不**用 `self.assertRaises`——理由見模組 docstring 那段實測：它的
-        `cr.savepoint(flush=False)` 會把例外之前尚未 flush 的寫入一起丟掉，讓所有
-        「例外之後 DB 長怎樣」的斷言變成對回捲後的世界做的。
+        🔴 刻意**不**用 `self.assertRaises`——理由見模組 docstring：它在區塊外圍開
+        savepoint（預設 `flush=True`）並在例外時 `ROLLBACK TO SAVEPOINT`，回捲邊界
+        恰好是整個 with 區塊 ⇒ 所有「例外之後 DB 長怎樣」的斷言都變成對回捲後的
+        世界做的。
         """
         try:
             self._as_tenant().action_provision()
