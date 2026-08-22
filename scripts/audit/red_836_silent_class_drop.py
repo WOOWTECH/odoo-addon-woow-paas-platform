@@ -41,6 +41,9 @@ AST 那邊看到的是一個 `ast.If`／`ast.Try` 節點（不是 FunctionDef）
     (C) 陽性對照     同一支 check_baseline，餵它三種**該抓到**的差異，確認它會紅
     (D) 旁證（不計分）其餘判準對這個情境的反應
 
+量測與原始輸出（含 10 個跑前釘死的預測、三支可重跑探針）：
+`scripts/audit/evidence/836-c2-silent-class-drop/`
+
 Refs #836 #546
 """
 from __future__ import annotations

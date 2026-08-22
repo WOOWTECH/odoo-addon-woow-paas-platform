@@ -1,0 +1,15 @@
+C2 PASS：baseline 與 目前原始碼 完全一致（653 項）
+
+C2 註記：以下 6 個 class 被排除在 baseline 之外（列名，不靜默丟棄）：
+  ~ integration.test_ecpay_invoice_real.TestEcpayInvoiceReal
+      因為：有效 tag ＝ ecpay_real／post_install，不含 `standard` ⇒ 標準跑選不到（合法 opt-out，見 repo-lint 的 (b) 那一格）
+  ~ integration.test_failopen_real_rollback_794.TestFailOpenCompensationSurvivesRealRollback
+      因為：有效 tag ＝ failopen_794／post_install，不含 `standard` ⇒ 標準跑選不到（合法 opt-out，見 repo-lint 的 (b) 那一格）
+  ~ integration.test_failopen_real_rollback_794.TestSecurityAccessUnlinkSurvivesRealRollback
+      因為：有效 tag ＝ failopen_794／post_install，不含 `standard` ⇒ 標準跑選不到（合法 opt-out，見 repo-lint 的 (b) 那一格）
+  ~ test_mcp_server_template_seed._McpServerFamilyAssertions
+      因為：不是 TestCase 子類（mixin／fixture）⇒ 它的 `def test*` 由子類經 `allow_inherited_tests_method` 展開後**計進子類**，不自成一項
+  ~ test_mcp_server_template_seed._McpServerSeedAssertions
+      因為：不是 TestCase 子類（mixin／fixture）⇒ 它的 `def test*` 由子類經 `allow_inherited_tests_method` 展開後**計進子類**，不自成一項
+  ~ test_subscription_mixin_cascade_sudo_29._SubscriptionMixinSudoFixture
+      因為：不是 TestCase 子類（mixin／fixture）⇒ 它的 `def test*` 由子類經 `allow_inherited_tests_method` 展開後**計進子類**，不自成一項
