@@ -2,7 +2,7 @@
 import base64
 import logging
 import secrets
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, NamedTuple, Optional
 
 import httpx
 from pydantic import BaseModel
@@ -28,6 +28,23 @@ class CloudflareException(Exception):
         self.status_code = status_code
         super().__init__(self.message)
 
+
+
+class RouteOutcome(NamedTuple):
+    """``create_route`` 的結果——比原本的 ``bool`` 多一格（#648 (a)）。
+
+    ``configured`` 是「tunnel ingress rule 有沒有設好」，``dns_failed`` 是「DNS
+    record 有沒有嘗試過而且失敗」。兩者**必須分開**：DNS 那半失敗時 ingress 仍然
+    會建起來（見 ``create_route`` Step 1 的註解），舊的單一 bool 沒有地方講這件事，
+    於是「hostname 永遠不會解析」這個事實在呼叫端一次都沒被看見。
+
+    ``dns_failed=False`` 同時涵蓋「DNS 建成了」與「這個 deployment 根本沒開 DNS
+    管理」兩種情形——兩者對呼叫端的處置相同（不必 fail closed），要區分「有沒有
+    對外網址」請看 ``configured``。
+    """
+
+    configured: bool
+    dns_failed: bool
 
 class CloudflareService:
     """Service for managing Cloudflare Tunnel routes and DNS records via API."""
@@ -673,7 +690,7 @@ class CloudflareService:
         subdomain: str,
         service_url: str,
         path: Optional[str] = None,
-    ) -> bool:
+    ) -> RouteOutcome:
         """Create a new tunnel route for a service.
 
         This method creates both the tunnel ingress route and the DNS CNAME record.
@@ -684,24 +701,42 @@ class CloudflareService:
             path: Optional path prefix to match.
 
         Returns:
-            True if route was created successfully.
+            A :class:`RouteOutcome`. **The return type changed from ``bool`` in #648
+            (a)**: the DNS half of this method can fail on its own while the tunnel
+            ingress half succeeds, and the old ``bool`` had nowhere to say so — the
+            failure was logged and then vanished (see the Step 1 comment below).
+            Both existing callers ignored the return value entirely, so widening it
+            breaks nothing.
 
         Raises:
             CloudflareException: If route creation fails.
         """
         if not self.enabled:
             logger.info(f"Cloudflare disabled, skipping route creation for {subdomain}")
-            return True
+            return RouteOutcome(configured=False, dns_failed=False)
 
         hostname = f"{subdomain}.{self.domain}"
         logger.info(f"Creating route: {hostname} -> {service_url}")
 
         # Step 1: Create DNS record (so the hostname resolves)
+        #
+        # Swallowing the exception is deliberate (DNS may be managed by hand), but as
+        # of #648 (a) it is no longer *silent*: the failure is reported to the caller
+        # via ``dns_failed`` so it can decide whether to fail closed, exactly like
+        # ``TunnelCreateResponse.dns_failed`` already does on the tunnel-create path
+        # (#484). Before this change the platform marked the service as running with a
+        # hostname that would never resolve.
+        #
+        # ⚠ Invariant: ``dns_failed`` can only become True when DNS management is
+        # actually enabled. ``create_dns_record`` returns early (True) when
+        # ``self.dns_enabled`` is false, so it cannot raise in that case — "DNS is
+        # intentionally off" therefore never masquerades as "DNS failed".
+        dns_failed = False
         try:
             await self.create_dns_record(subdomain)
         except CloudflareException as e:
             logger.error(f"Failed to create DNS record for {subdomain}: {e.message}")
-            # Continue with route creation - DNS might be managed manually
+            dns_failed = True
 
         # Step 2: Create tunnel ingress route
         # Get current config
@@ -734,7 +769,8 @@ class CloudflareService:
         if catch_all:
             ingress_rules.append(catch_all)
 
-        return await self.update_tunnel_config(ingress_rules)
+        configured = await self.update_tunnel_config(ingress_rules)
+        return RouteOutcome(configured=configured, dns_failed=dns_failed)
 
     async def delete_route(self, subdomain: str) -> bool:
         """Delete a tunnel route and its DNS record.
