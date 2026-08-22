@@ -28,16 +28,23 @@ kubectl config use-context docker-desktop   # or your woow-k3s context
 # First time only: install Python deps
 pip install -r requirements.txt
 
-# 取得 operator Dockerfile 釘住的那顆 helm。⛔ 不要用 $(which helm)——理由見下方
-# 「helm v4 陷阱」。版本從 Dockerfile 讀（不寫死在本文件裡），平台依 uname 決定，
-# 已經抓過就跳過。
+# 取得 operator Dockerfile 釘住的那顆 helm。⛔ 不要用 $(which helm)——理由見「helm v4
+# 陷阱」那節。版本從 Dockerfile 讀（不寫死在本文件裡），平台依 uname 決定，已抓過就跳過。
+# ⚠ 本段在本檔的兩個可執行區塊裡**逐字重複**，讓兩個區塊都能各自單獨整段複製；改一處
+#   必須同步另一處（兩份必須 byte-for-byte 相同）。
+cd "$(git rev-parse --show-toplevel)/extra/paas-operator" || echo "⛔ 這裡不是本 repo 的工作區" >&2
 HELM_VERSION=$(sed -n 's/^ARG HELM_VERSION=//p' Dockerfile)
-HELM_PLATFORM="$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m | sed 's/x86_64/amd64/; s/aarch64/arm64/')"
-HELM_BINARY="/tmp/helm-${HELM_VERSION}/${HELM_PLATFORM}/helm"
-[ -x "$HELM_BINARY" ] || { mkdir -p "/tmp/helm-${HELM_VERSION}" && curl -fsSL \
-    "https://get.helm.sh/helm-v${HELM_VERSION}-${HELM_PLATFORM}.tar.gz" \
-    | tar xz -C "/tmp/helm-${HELM_VERSION}"; }
-"$HELM_BINARY" version --short   # 應與 Dockerfile 的 ARG HELM_VERSION 一致
+if [ -z "$HELM_VERSION" ]; then
+    echo "⛔ 讀不到 Dockerfile 的 ARG HELM_VERSION（cwd=${PWD}）——這不是 helm 的問題，是路徑不對" >&2
+    false   # 讓 $? 非 0。刻意不用 exit：這段是設計成貼進互動 shell 的，exit 會把視窗關掉
+else
+    HELM_PLATFORM="$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m | sed 's/x86_64/amd64/; s/aarch64/arm64/')"
+    HELM_BINARY="/tmp/helm-${HELM_VERSION}/${HELM_PLATFORM}/helm"
+    [ -x "$HELM_BINARY" ] || { mkdir -p "/tmp/helm-${HELM_VERSION}" && curl -fsSL \
+        "https://get.helm.sh/helm-v${HELM_VERSION}-${HELM_PLATFORM}.tar.gz" \
+        | tar xz -C "/tmp/helm-${HELM_VERSION}"; }
+    "$HELM_BINARY" version --short   # 應與 Dockerfile 的 ARG HELM_VERSION 一致
+fi
 
 # Run
 HELM_BINARY="$HELM_BINARY" pytest -m integration tests/integration/ -v
@@ -88,15 +95,23 @@ Cluster choice:
 ### Generic invocation
 
 ```bash
-# 以下都在 extra/paas-operator 底下執行。
-# ⚠ 這 6 行與上面 quickstart 區塊的完全相同（取得釘住的 helm）。刻意逐字重複，讓這個
-#   區塊也能單獨整段複製；要改就兩處一起改。
+# 取得 operator Dockerfile 釘住的那顆 helm。⛔ 不要用 $(which helm)——理由見「helm v4
+# 陷阱」那節。版本從 Dockerfile 讀（不寫死在本文件裡），平台依 uname 決定，已抓過就跳過。
+# ⚠ 本段在本檔的兩個可執行區塊裡**逐字重複**，讓兩個區塊都能各自單獨整段複製；改一處
+#   必須同步另一處（兩份必須 byte-for-byte 相同）。
+cd "$(git rev-parse --show-toplevel)/extra/paas-operator" || echo "⛔ 這裡不是本 repo 的工作區" >&2
 HELM_VERSION=$(sed -n 's/^ARG HELM_VERSION=//p' Dockerfile)
-HELM_PLATFORM="$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m | sed 's/x86_64/amd64/; s/aarch64/arm64/')"
-HELM_BINARY="/tmp/helm-${HELM_VERSION}/${HELM_PLATFORM}/helm"
-[ -x "$HELM_BINARY" ] || { mkdir -p "/tmp/helm-${HELM_VERSION}" && curl -fsSL \
-    "https://get.helm.sh/helm-v${HELM_VERSION}-${HELM_PLATFORM}.tar.gz" \
-    | tar xz -C "/tmp/helm-${HELM_VERSION}"; }
+if [ -z "$HELM_VERSION" ]; then
+    echo "⛔ 讀不到 Dockerfile 的 ARG HELM_VERSION（cwd=${PWD}）——這不是 helm 的問題，是路徑不對" >&2
+    false   # 讓 $? 非 0。刻意不用 exit：這段是設計成貼進互動 shell 的，exit 會把視窗關掉
+else
+    HELM_PLATFORM="$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m | sed 's/x86_64/amd64/; s/aarch64/arm64/')"
+    HELM_BINARY="/tmp/helm-${HELM_VERSION}/${HELM_PLATFORM}/helm"
+    [ -x "$HELM_BINARY" ] || { mkdir -p "/tmp/helm-${HELM_VERSION}" && curl -fsSL \
+        "https://get.helm.sh/helm-v${HELM_VERSION}-${HELM_PLATFORM}.tar.gz" \
+        | tar xz -C "/tmp/helm-${HELM_VERSION}"; }
+    "$HELM_BINARY" version --short   # 應與 Dockerfile 的 ARG HELM_VERSION 一致
+fi
 
 # Any reachable cluster
 HELM_BINARY="$HELM_BINARY" KUBECONFIG=~/.kube/config \
