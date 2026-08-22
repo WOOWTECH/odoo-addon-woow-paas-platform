@@ -623,3 +623,22 @@ from . import test_public_url_dns_gate_648
 # 守門對照組：A5（缺席不得 fail-closed）、A4（舊 operator 缺鍵不得算失敗）、
 # 健康 route 不觸發閘——這三條紅了代表守線被改成用缺席當判準。
 from . import test_route_dns_failed_648
+
+# fix: #798 `security_access_access_policy.cf_policy_id` 沒有**任何**欄位級寫入
+# 守衛（欄位無 `groups=`、model 無 create strip／write reject、ACL 對
+# base.group_user 是 1,1,1,1、ir.rule 只過濾列不過濾欄位）⇒ 租戶對自己
+# workspace 內的 policy 列寫得進任意字串。而這個欄位餵的是 operator **唯一的
+# 刪除通道** `existing_policy_ids`，也是 `cf_access_policy_reap._trusted_ids_for()`
+# 判「可信」的那一半——那道判準假設「列上的值是伺服器擁有的」，本 issue 正是
+# 那個假設不成立。
+# 🔴 A 系列補的是 #798 自陳缺的那一格：該 issue 明寫「沒有跑過真的租戶 RPC ……
+# 端到端未驗」。用 `with_user` + `assertRaises` 代替不行——`TransactionCase` 是
+# su env、也模擬不到 `call_kw` 把呼叫端 context 整包換進 env 的那條載體。
+# RED：A1（覆寫既有 cf id）、A2（從空種進去＝跨租戶刪除的形狀）、B1/B2/B3
+# （create 側三個載體：vals／`default_<field>` context／`ir.default`）、E1/E2
+# （sudo 不是開閘）。
+# 陽性對照：每一格攻擊前先跑一次同一條 RPC 的合法欄位寫入／注入同機制的
+# `decision`——少了它，「守住了」與「這個通道在本環境根本不作用」不可區分。
+# 陰性對照：B1 另外斷言 create **本身**成功且其他欄位正常（「create 直接炸掉」
+# 對「攻擊者的值沒落地」同樣是綠的，同型翻車見 `test_sa_anchor_default_carriers_753`）。
+from . import test_policy_cf_id_write_guard_798
