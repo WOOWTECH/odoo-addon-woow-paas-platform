@@ -3954,6 +3954,19 @@ INTERNAL_CTX_KEY_REGISTRY = {
         "why": "subdomain_prefix 的 data-repair 豁免。刻意與身分錨點分成兩把鑰匙："
                "改名的 migration 不該因此也能搬 tunnel id。",
     },
+    "sa_internal_policy_cf_write": {
+        "status": "enforced",
+        "sentinel": "_INTERNAL_IDENTITY_WRITE",
+        "defined_in": "src/models/security_access.py",
+        "reader": "_is_internal_policy_cf_write",
+        "issue": "#798",
+        "why": "access_policy 列上 `cf_policy_id` 的唯一寫入豁免。那個欄位決定 "
+               "operator **唯一的刪除通道** `existing_policy_ids` 裡有哪些帳號級 CF "
+               "Access policy，也是 `_trusted_ids_for()` 判「可信」的那一半——#798 已"
+               "實測 base.group_user 走 /web/dataset/call_kw 寫得進去且值落地。刻意與 "
+               "`sa_internal_identity_write` 分成兩把：既有測試大量開著那一把，共用會"
+               "讓本守衛在那些檔裡靜默失效（同型翻車見 smart_home_route 的註解）。",
+    },
     "woow_internal_provision": {
         "status": "enforced",
         "sentinel": "_INTERNAL_PROVISION",

@@ -82,6 +82,12 @@ from ..services.reconciler import (
 )
 from .smart_home_fixture import sh_model
 
+# #798：`cf_policy_id` 有欄位級寫入守衛（create 壓值／write 拒絕，對 su 也生效）。
+# fixture 擺狀態必須經開閘 helper，否則會撞到自己要測的守衛。
+from ..models.security_access import (
+    _internal_policy_cf_write as _internal_policy_cf,
+)
+
 #: patch 點的判準是「**那個 model** 怎麼取得 client」，不是「client 定義在哪」。
 #: 三腿各自 `from ..services.paas_operator import get_paas_operator_client`，
 #: 名字在 import 當下就綁進各自的 namespace 了 ⇒ patch 來源模組動不到它們。
@@ -170,7 +176,7 @@ class TestSaRouteFailOpenCompensation(TransactionCase):
                 'rule_ids': [(0, 0, {'group': 'include',
                                      'rule_type': 'email_list',
                                      'rule_value': 'a@example.com'})]})
-            pol.cf_policy_id = policy_cf_id
+            _internal_policy_cf(pol).cf_policy_id = policy_cf_id
         return route
 
     def _row(self, route_id):

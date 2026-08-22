@@ -112,14 +112,46 @@ class TestCreateDnsRecordForTunnel:
         assert captured["payload"]["content"] == "tun-1.cfargotunnel.com"
         assert captured["payload"]["name"] == "a"
 
+    @staticmethod
+    def _fake_tunnel_list(tunnels):
+        """帳號級 tunnel 清單的假回應（``list_all_tunnels`` → ``_get_paginated`` 用）。"""
+        class FakeResponse:
+            status_code = 200
+            text = ""
+
+            @staticmethod
+            def json():
+                return {
+                    "success": True,
+                    "result": list(tunnels),
+                    "result_info": {"total_count": len(tunnels)},
+                }
+
+        async def fake_get(url, headers=None, params=None, timeout=None):
+            assert "/cfd_tunnel" in url, f"未預期的 GET：{url}"
+            return FakeResponse()
+
+        return fake_get
+
     @pytest.mark.asyncio
-    async def test_repoint_existing_uses_per_tunnel_target_not_shared(
+    async def test_orphan_repoint_uses_per_tunnel_target_not_shared(
         self, cf_service
     ):
-        """Existing CNAME pointing at the WRONG tunnel must be repointed at
-        THIS tunnel's target — not silently "fixed" onto the shared default
-        (which would be a routing black hole). Regression guard for the
-        _update_dns_record content-parameter fix.
+        """既有 CNAME 指向的 tunnel **已不存在**（孤兒殘留）⇒ 允許自癒接收，而接收後
+        必須落在 **本 tunnel** 的 target，不是共用 default（後者是 routing 黑洞）。
+
+        ⚠ **本支測試在 #824 被改過，這裡明寫改了什麼。** 原名
+        ``test_repoint_existing_uses_per_tunnel_target_not_shared``，原本餵一筆 content
+        指向 ``other-tunnel`` 的既有記錄、然後斷言它**必須被 repoint 到 tun-1** —— 那正是
+        #824 描述的**搶佔**，等於把搶佔行為當成正確行為鎖住了。#824 之後，「別人的 tunnel
+        還活著」那個情境改成 raise。
+
+        原作者要擋的東西完整保留：原 docstring 寫的是「must be repointed at THIS tunnel's
+        target — not silently "fixed" onto the shared default (which would be a routing
+        black hole). Regression guard for the _update_dns_record content-parameter fix.」
+        —— 他擋的是 ``_update_dns_record`` 掉回共用 target 的**黑洞**，**不是**歸屬。那個
+        regression guard 原封不動搬到唯一仍然允許 repoint 的分支（孤兒自癒）上。歸屬本身
+        由下一支 ＋ ``test_dns_record_ownership_824.py`` 守。
         """
         cf_service.tunnel_id = "shared-tunnel"  # the shared/default target
         existing = {"id": "rec-1", "content": "other-tunnel.cfargotunnel.com"}
@@ -136,8 +168,11 @@ class TestCreateDnsRecordForTunnel:
             captured["payload"] = json
             return FakeResponse()
 
+        # ``other-tunnel`` 不在帳號的 tunnel 清單裡 ⇒ 證實已不存在 ⇒ 准接收。
         with patch.object(cf_service, "get_dns_record",
                           new=AsyncMock(return_value=existing)), \
+             patch("httpx.AsyncClient.get",
+                   new=AsyncMock(side_effect=self._fake_tunnel_list([]))), \
              patch("httpx.AsyncClient.put",
                    new=AsyncMock(side_effect=fake_put)):
             rec_id = await cf_service.create_dns_record_for_tunnel(
@@ -148,6 +183,35 @@ class TestCreateDnsRecordForTunnel:
         # MUST land on the dedicated tunnel, NOT the shared default.
         assert captured["payload"]["content"] == "tun-1.cfargotunnel.com"
         assert captured["payload"]["content"] != "shared-tunnel.cfargotunnel.com"
+
+    @pytest.mark.asyncio
+    async def test_repoint_onto_a_live_tunnel_is_refused(self, cf_service):
+        """反方向（#824 本體）：既有記錄指向一條**還活著**的別人 tunnel ⇒ 必須 raise，
+        且**沒有發出任何 PUT**。與上一支只差「那條 tunnel 還在不在」這一個變數。
+        """
+        from src.services.cloudflare import DnsRecordOwnershipError
+
+        cf_service.tunnel_id = "shared-tunnel"
+        existing = {"id": "rec-1", "content": "other-tunnel.cfargotunnel.com"}
+        puts = []
+
+        async def fake_put(url, headers=None, json=None, timeout=None):
+            puts.append(json)
+            raise AssertionError("不該送出任何 PUT —— 搶佔已經發生")
+
+        with patch.object(cf_service, "get_dns_record",
+                          new=AsyncMock(return_value=existing)), \
+             patch("httpx.AsyncClient.get", new=AsyncMock(
+                 side_effect=self._fake_tunnel_list(
+                     [{"id": "other-tunnel", "name": "paas-sa-victim"}]))), \
+             patch("httpx.AsyncClient.put",
+                   new=AsyncMock(side_effect=fake_put)):
+            with pytest.raises(DnsRecordOwnershipError):
+                await cf_service.create_dns_record_for_tunnel(
+                    subdomain="a", tunnel_id="tun-1",
+                )
+
+        assert puts == []
 
 
 class TestReconcileTunnelDns:

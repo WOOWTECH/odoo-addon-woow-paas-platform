@@ -85,6 +85,12 @@ from ..models.smart_home_route import (
 )
 from .smart_home_fixture import sh_model
 
+# #798：`cf_policy_id` 有欄位級寫入守衛（create 壓值／write 拒絕，對 su 也生效）。
+# fixture 擺狀態必須經開閘 helper，否則會撞到自己要測的守衛。
+from ..models.security_access import (
+    _internal_policy_cf_write as _internal_policy_cf,
+)
+
 #: 🔴 見檔頭「patch 點」。寫錯這裡不會讓否定性斷言變紅。
 MOCK_GET_CLIENT = (
     'odoo.addons.woow_paas_platform.models.smart_home.'
@@ -199,7 +205,7 @@ class _ShTeardownFixture(TransactionCase):
                                  'rule_value': 'a@example.com'})],
         })
         if cf_policy_id:
-            pol.cf_policy_id = cf_policy_id
+            _internal_policy_cf(pol).cf_policy_id = cf_policy_id
         return pol.with_context(sa_skip_route_sync=False)
 
     def _client(self, result=None, sync_side_effect=None):
@@ -361,7 +367,7 @@ class TestShCaptureNoneSemantics(_ShTeardownFixture):
             'app_id 空、但 policy 還帶著 cf id ⇒ 仍然有東西要拆'
             '（SA 三處各自寫判準時漏掉的正是這一格）')
 
-        pol.cf_policy_id = False
+        _internal_policy_cf(pol).cf_policy_id = False
         self.assertFalse(
             route._has_access_teardown(),
             'id 都清光了才算乾淨；否則 `_do_cleanup` 的殘留判定會永遠回 True')
