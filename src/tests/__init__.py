@@ -585,3 +585,10 @@ from . import test_sh_do_cleanup_lingering_access_815
 # check 位置）；C1 釘修法的範圍限定（call_kw 繞過 BFF 仍 fail-closed），D1 釘
 # 「遮罩只擋得住第一次 provision」（re-sync 分支不寫 token）。
 from . import test_sa_provision_tenant_rpc_805
+
+# #546 A 段：測試收集完備性 gate，以 Odoo 測試本身為載體（runtime introspection）。
+# 與 repo-lint 的 `test-collectability`（純 AST、PR-time）是同一條性質的**兩條觀測通道**：
+# 這一支是 ground truth，那一支是早期預警鏡像；分歧時去查、不選一邊。
+# ⛔ 刻意不共用 repo-lint 的實作——它把版面寫死成「root 底下才有 src/」，容器裡沒有那一層
+# ⇒ 搬過去會是一個永遠綠的 gate（實證與 issue #828 見該檔 docstring）。
+from . import test_suite_collectability
