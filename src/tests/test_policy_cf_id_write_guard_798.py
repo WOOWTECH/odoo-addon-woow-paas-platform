@@ -50,6 +50,14 @@ reusable policy），但這一格今天沒有任何欄位級守衛：
 * **E** — 無 su 豁免：`sudo()` 直接 write（不帶任何逃生門）必須也被拒。理由逐字
   寫在 `models/security_access.py` 的 `_INTERNAL_IDENTITY_WRITE` 註解裡。
 
+🔴 **本檔任何「預期例外 ＋ 之後驗 DB 狀態」的格子一律用裸 `try/except` ＋
+`else: self.fail(...)`，不用 `assertRaises`**。Odoo 的 `BaseCase._assertRaises`
+把 with 區塊包進 `env.cr.savepoint()`（`_FlushingSavepoint`：`cr.clear()` ＋
+`ROLLBACK TO SAVEPOINT`）⇒ 區塊內的寫入不論有沒有 flush 都被回捲，於是「守衛擋在
+寫入之前」與「寫入發生過又被回捲」在斷言輸出上不可區分。詳見 E1 的 docstring。
+之後新增的格子（E3 的偽造 context 值、任何錯誤路徑對照）**直接照這個形狀寫**，
+不要先寫 `assertRaises` 版再改。
+
 ⚠ 本檔**刻意不 import 任何尚未存在的 sentinel**：RED 這一輪要看到的紅必須落在
 「值落地了」那條斷言上，import error 是另一種紅。逃生門的正向對照（開閘仍寫得
 進、偽造的 context 值打不開閘）與三腿回存的陽性對照在修法落地後才加得進來。
@@ -397,18 +405,45 @@ class TestPolicyCfIdNoSuExemption798(_PolicyCfId798Fixture):
     """
 
     def test_E1_sudo_write_without_the_hatch_is_rejected(self):
-        """`sudo()` **不帶**逃生門直接改值：必須被拒，而且值不得落地。"""
+        """`sudo()` **不帶**逃生門直接改值：必須被拒，而且值不得落地。
+
+        🔴 **刻意用裸 `try/except` 而不是 `assertRaises`**，這不是風格：
+
+        Odoo 的 `BaseCase._assertRaises`（`odoo/tests/common.py:472-492`）在
+        with 區塊外面包了 `self.env.cr.savepoint()`，而那是 `_FlushingSavepoint`
+        （`odoo/sql_db.py:123-141`，`savepoint()` 的 `flush` 預設為 True）——它的
+        `rollback()` 是 `cr.clear()`（丟掉尚未 flush 的 towrite）＋
+        `ROLLBACK TO SAVEPOINT`。例外穿出時，**區塊內的寫入不論有沒有 flush 都被
+        回捲**。
+
+        後果正好打掉本格的判別式：「守衛在 `super().write()` **之前** raise」與
+        「守衛在 `super().write()` **之後**才 raise、寫入被 savepoint 回捲」，對
+        下面那句 `assertEqual` 的輸出**完全一樣**。而兩者不是同一種守衛——後者
+        代表偽造值真的進過 DB。
+
+        裸 `try/except` 沒有那層 savepoint：寫入若真的發生過，同一條 transaction
+        的 `self.env.cr` 讀得到（未 commit 也看得見）⇒ 下面那句會紅。所以這個寫法
+        不只是避開假綠，它是把判別式**裝回去**。
+
+        `else: self.fail(...)` 不可省：少了它，「根本沒 raise」也會靜靜通過。
+        """
         forged = 'sudo-forged-798-%s' % uuid.uuid4().hex[:8]
-        # 型別刻意收緊成 `UserError`：route／CS／SH 三支同型守衛逐字都是
-        # `UserError`。用裸 `Exception` 的話，一個 fixture 自己爆掉的紅同樣會綠。
-        with self.assertRaises(
-                UserError,
-                msg='#798：sudo 不是開閘，`cf_policy_id` 的寫入必須被拒'):
+        try:
+            # 型別刻意收緊成 `UserError`：route／CS／SH 三支同型守衛逐字都是
+            # `UserError`。用裸 `except Exception` 的話，fixture 自己爆掉的紅
+            # 同樣會被吞成綠。
             self.Policy.sudo().browse(self.pol.id).write(
                 {'cf_policy_id': forged})
+        except UserError:
+            pass
+        else:
+            self.fail(
+                '#798：sudo 不是開閘，`cf_policy_id` 的寫入必須被拒，'
+                '但 write() 沒有拋出 UserError')
         self.assertEqual(
             self._db(_POLICY, self.pol.id, 'cf_policy_id'), self.server_cf_id,
-            '#798：被拒之後伺服器端原值必須原封不動')
+            '#798：被拒之後伺服器端原值必須原封不動——這一句是「守衛擋在寫入'
+            '之前」的判別式，所以上面刻意不用 assertRaises（見 docstring）')
 
     def test_E2_sudo_create_without_the_hatch_cannot_squat(self):
         """create 側同理：`sudo()` 帶著 vals 也不得種進伺服器擁有的 id。
