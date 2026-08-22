@@ -67,6 +67,7 @@ from odoo.addons.woow_paas_platform.models.workspace_access import (
     ROLE_GUEST,
     ROLE_OWNER,
     ROLE_USER,
+    _internal_last_owner_demote,
 )
 
 
@@ -346,6 +347,23 @@ class TestLastOwnerDemotePositiveControls(_LastOwner732Fixture):
         self.carol_access.invalidate_recordset()
         self.assertEqual(self.carol_access.role, ROLE_OWNER,
                          '轉移完成後 owner 是 Carol')
+
+    def test_internal_sentinel_opens_platform_demote_path(self):
+        """sentinel 正向對照（配缺陷向的 forged-context 反測——沒有這條，
+        「什麼都擋」的壞守衛會讓所有負向斷言為錯的理由變綠）：server 端
+        in-process 碼帶**真 sentinel** 開閘，demote 最後一個 owner 必須
+        成功——未來喚醒 `transfer_ownership()` 的指定走法。"""
+        _internal_last_owner_demote(
+            self.alice_access.with_user(self.alice).sudo()
+        ).write({'role': ROLE_ADMIN})
+        self.env.flush_all()
+        self.alice_access.invalidate_recordset()
+        self.assertEqual(self.alice_access.sudo().role, ROLE_ADMIN,
+                         '真 sentinel 開閘的 demote 必須落地')
+        self.assertEqual(self._owner_count(self.ws1), 0)
+        # 收尾：promote 修復回 1 owner（0 其他 owner ⇒ owner_count 放行）。
+        self.alice_access.sudo().write({'role': ROLE_OWNER})
+        self.assertEqual(self._owner_count(self.ws1), 1)
 
     def test_zero_owner_promote_repair_path_works(self):
         """修復路徑陽性對照：workspace 真的落在 0-owner 態（legacy 資料，
