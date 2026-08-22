@@ -1464,6 +1464,12 @@ class CloudService(models.Model):
             })
             _logger.info("Service %s (id=%s) helm install complete", self.name, self.id)
 
+            # #648 (a)：operator 對 expose 的回報要讀齊。帳本先落地（上面那個
+            # write）再判，因為 helm release 已經真的存在——不論下面判成功或失敗，
+            # revision / chart_version / deployed_at 都是事實。
+            if self._expose_failed(release_info):
+                return
+
         except PaaSOperatorConnectionError as e:
             _logger.error("Operator connection error: %s", e)
             self.write({
@@ -2790,6 +2796,74 @@ class CloudService(models.Model):
                 )
             return default
         return minutes
+
+    def _expose_failed(self, release_info):
+        """讀 operator 對 expose 的回報；判定失敗就寫 `error` 並回 True（#648 (a)）。
+
+        修前平台**一次都沒讀過** install 回應裡的 ``route``（`rg route_info src/` 與
+        `rg` 找「`.get` 帶 route」兩種寫法都 0 命中）——`create_dns_record` 失敗被
+        operator 就地吞掉、端點照樣回 HTTP 201，於是租戶拿到一個永遠不會解析的
+        hostname 而服務標成 running。這是 #484 為 Smart Home 補過、CS 這半漏接的
+        同一條縫。
+
+        🔴 **判準是「明說的失敗」，不是「東西不在」**：
+
+        - ``route`` 缺席 ⇒ **不是**失敗，不得 fail-closed。它同時涵蓋兩種正常情形：
+          (1) 這個部署根本沒開 Cloudflare（operator 的 ``cloudflare_enabled``
+          **預設 false**，且缺 account_id／tunnel_id／api_token／domain 任一個會被
+          強制關回 False）；(2) operator 舊到還沒有這個欄位。把缺席當失敗，會讓沒開
+          CF 的環境**每一次部署都翻 error**——比原 bug 嚴重得多。
+          載體：``docs/tracking/pitfalls/operator-route-none-conflates-disabled-and-failed.md``
+        - ``status == 'failed'`` ⇒ 要求了 expose 但整條 route 沒建成。
+        - ``dns_failed`` 為真 ⇒ tunnel ingress 在、但 DNS record 沒建成 ⇒ hostname
+          不會解析。鏡射 ``TunnelCreateResponse.dns_failed`` 的契約（#484）。
+
+        **與 #484 的 SmartHome 不同構的地方（所以不需要 stored-id guard）**：SH 的
+        ``tunnel_id`` 只存在於 provision 回應裡，丟了就是永久孤兒，所以那邊必須把
+        欄位落地並加 guard。CS 的錨點（``subdomain`` / ``helm_release_name`` /
+        ``helm_namespace``）在**建立當下**就寫好了，刪除路徑直接拿 ``subdomain``
+        去拆 route；而 operator 走的是 ``helm install``（不是 ``upgrade --install``）
+        ⇒ 對既存 release 重跑會 fail-loud，不會像 SH 的 ``create_tunnel`` 那樣默默
+        建出第二份。兩個理由都不成立於 SH，也都成立於 CS。
+
+        Returns:
+            ``True`` 代表已經寫成 ``error``，呼叫端應直接返回。
+        """
+        self.ensure_one()
+        route = release_info.get('route')
+        if not route:
+            # 沒有 route 可報 —— 見 docstring，這條**不**是失敗。
+            return False
+
+        hostname = route.get('hostname') or self._public_url_hostname() or self.subdomain
+        if route.get('status') == 'failed':
+            reason = (
+                "The service was deployed but its public route could not be "
+                "created, so %s will not be reachable." % (hostname or 'it')
+            )
+        elif route.get('dns_failed'):
+            reason = (
+                "The service was deployed and its tunnel route exists, but the "
+                "DNS record could not be created, so %s will not resolve."
+                % (hostname or 'the public hostname')
+            )
+        else:
+            return False
+
+        self.write({
+            'state': 'error',
+            'error_message': (
+                "%s The Helm release is kept so it is not orphaned — an "
+                "administrator can create the missing record, or delete and "
+                "re-create this service." % reason
+            ),
+        })
+        _logger.error(
+            "[CS] expose failed for service %s (id=%s) hostname=%s route=%s "
+            "— kept in 'error' with the release anchored",
+            self.name, self.id, hostname, route,
+        )
+        return True
 
     def _dns_grace_seconds(self):
         """Public URL DNS 閘的**有效**寬限期（秒）。
