@@ -207,6 +207,26 @@ class TestLastOwnerDemoteGuard(_LastOwner732Fixture):
         self.assertEqual(self.alice_access.role, ROLE_OWNER,
                          '拒絕後 Alice 必須仍是 owner（o2m 路徑不得留下 0-owner）')
 
+    def test_forged_context_does_not_open_the_hatch(self):
+        """forged-context 反測（su-env-exempt-guard-false-green.md 列為必備）：
+        sentinel escape hatch 的 key 是公開字串，`call_kw` 又把呼叫端 context
+        **整包**換進 env——租戶在 RPC payload 塞任何 JSON 表達得出的 truthy
+        值都不得開門（#522 在 18.0 實測過裸真值版真的會被打開並 commit）。
+        真 sentinel 的正向對照在 PositiveControls（物件身分 JSON 帶不動，
+        只有 server 端 in-process 碼設得進去）。"""
+        self.authenticate(self.alice_login, self.alice_login)
+        for forged in (True, 1, 'true', [1], {'x': 1}):
+            result = self._call_kw(
+                'woow_paas_platform.workspace_access', 'write',
+                [[self.alice_access.id], {'role': ROLE_ADMIN}],
+                kwargs={'context': {'woow_ws_last_owner_demote': forged}})
+            self._assert_validation_error(
+                result,
+                '偽造 context（%r）不得打開 last-owner demote 逃生口' % (forged,))
+            self.alice_access.invalidate_recordset()
+            self.assertEqual(self.alice_access.role, ROLE_OWNER,
+                             '偽造 context（%r）被拒後 role 不得變動' % (forged,))
+
     def test_bare_sudo_wrap_demote_denied(self):
         """#711 那格的反向測試：伺服器端碼把租戶操作包進 `sudo()`（未帶
         sentinel opt-in）demote 最後一個 owner，必須 fail-loud。
