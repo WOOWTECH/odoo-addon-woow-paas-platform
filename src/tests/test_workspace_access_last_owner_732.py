@@ -251,9 +251,13 @@ class TestLastOwnerDemoteGuard(_LastOwner732Fixture):
             raised = True
         self.assertTrue(
             raised, '裸 sudo 包裝 demote 最後一個 owner 必須拋 ValidationError')
+        # flush 後再驗 DB：「沒有例外」與「沒有寫入」是兩個獨立主張——守衛若
+        # 在 super().write() **之後**才 raise，寫入還躺在 towrite cache，
+        # 不 flush 這條斷言就分不出「沒寫」與「寫了沒 flush」。
+        self.env.flush_all()
         self.alice_access.invalidate_recordset()
         self.assertEqual(self.alice_access.sudo().role, ROLE_OWNER,
-                         '拒絕後 Alice 必須仍是 owner')
+                         '拒絕後 Alice 必須仍是 owner（且不得有已寫入未 flush 的降級）')
 
 
 @tagged('post_install', '-at_install')
