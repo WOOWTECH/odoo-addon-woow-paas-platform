@@ -571,3 +571,17 @@ from . import test_sh_teardown_capture_semantics_785
 # 對照組：A2（列乾淨仍須收斂，擋住「補了就一律擋刪」）、A3／A4（#813 成敗語意表
 # 不得被改）。主測試必須 patch helper：真實路徑造不出「回報乾淨但列還髒」。
 from . import test_sh_do_cleanup_lingering_access_815
+
+# fix: #805 (b) 只掛 base.group_user 的租戶經 `/woow` 打 SA provision 從來沒有
+# 成功過——`tunnel_token` 帶 `groups='base.group_system'`，而 controller 的
+# `action == "provision"` 分支用的是非 sudo 的租戶 recordset ⇒ 那次 write 必
+# AccessError、記錄卡在 `state='provisioning'`（重試鈕只認 pending/error ⇒ 鈕
+# 消失、無 cron 收斂）。與 #739／PR #797 在 smart_home 上裁定的同一個形狀。
+# 既有 SA 測試除一條外全在 TransactionCase（su env，欄位級 `groups=` 不生效），
+# 唯一有鑑別力的那條走 `with_user` 直呼 model、不經 controller ⇒ 端點那一格天生
+# 沒有覆蓋。RED 群集：A1／A2／A3／A4（真租戶 HTTP 打 provision，紅在 tunnel_token
+# 的 write 上）。B 系列釘「改用平台身分之後原本由租戶身分擋著的檢查一條都沒少」
+# （三道 gate 全在 sudo 之外——[[two-layer-acl-lockstep]] 要求的 manual access
+# check 位置）；C1 釘修法的範圍限定（call_kw 繞過 BFF 仍 fail-closed），D1 釘
+# 「遮罩只擋得住第一次 provision」（re-sync 分支不寫 token）。
+from . import test_sa_provision_tenant_rpc_805

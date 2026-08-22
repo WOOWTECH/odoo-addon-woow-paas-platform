@@ -54,6 +54,7 @@ policy：SecurityAccessAccessPolicy（exclusive arc：route_id XOR cloud_service
 6. **CF reusable policy 命名**：前綴現況寫死 SA `canonical_name`（operator `cloudflare.py:1419`，F-SA-7）；CS 要有自己的前綴且帶 env token（遵守 `docs/decisions/patterns/external-resource-env-token-naming.md`；注意 CS subdomain 本身無 env token 的既況——命名不可反推自 subdomain）。
 7. **lifecycle**：CS 刪除路徑補 Access teardown（比照 `_teardown_route_access`，`src/models/security_access.py:713-750`；清不掉要 fail-loud 保留 id 供重試）；suspend 不動 Access app（CS 停機由 helm 層處理）。
 8. **#739 同構驗證**：SA/SH 的 `action_provision` 非 sudo 寫 `groups=` 欄位在租戶路徑上從未成功過（#739，SH 實測）；CS 新增的 sync 路徑必須以**租戶身分真 RPC** 驗證，不可只跑 superuser `TransactionCase`（欄位級 `groups=` 在 superuser env 不生效）。
+   > 📌 **2026-08-22 補註（不改上面那句的內文，它記錄的是當時的實測）**：那個「從未成功過」描述的是**修法前**的狀態，兩側都已修——SH 於 #739／PR #797、SA 於 #805 (b)，controller 端皆改為平台身分驅動 provision。**本條的指示不受影響、理由更強**：正是因為 superuser `TransactionCase` 對欄位級 `groups=` 天生盲目，這兩個缺陷才各自存活到用真 RPC 驗才現形。CS 這一側照樣要用租戶身分真 RPC 驗。
 9. **API payload**：`_format_service`（`src/controllers/paas.py:3985-4031`）與 `_get_subscription_info`（`src/models/subscription_lifecycle_mixin.py:578-599`）補 entitlement 欄位（`ac_max_access_seats`）與 access 設定。
 10. **前端**：`ServiceDetailPage` 加 Access tab（顯示條件見拍板 6）；`core/router.js:16` 的 tab regex 加 `access`；`AddPolicyModal` 把 `securityAccessService` hard import 改注入；SA detail 的 per-route 卡片區塊（`SecurityAccessDetailPage.xml:215-374`）抽成共用元件。
 11. **#271 邊界驗證**：開啟保護後，任何殘留走公開 hostname 的叢集內路徑會 302 到 Access 登入頁；驗證 CS 相關內部呼叫（agent dataplane、health check）皆走 in-cluster DNS。
