@@ -235,10 +235,23 @@ class TestLastOwnerDemoteGuard(_LastOwner732Fixture):
         某個 controller 順手 `sudo().write`」的伺服器端形狀；`with_user
         (alice).sudo()` 正是那個形狀（su=True、user 非 group_system）。
         pre-fix RED：write 直接成功、0-owner 落地——本檔既有兩道守衛都
-        豁免 su，整條無人攔。"""
-        with self.assertRaises(ValidationError):
+        豁免 su，整條無人攔。
+
+        ⚠ 刻意用裸 try/except 不用 `assertRaises`（#822 抓到的框架級
+        假綠）：`BaseCase.assertRaises` 把區塊包進 `cr.savepoint(flush=
+        False)`，例外穿出時區塊內未 flush 寫入整包回捲 ⇒ 事後驗 DB 的
+        斷言恆拿到回捲後舊值、零鑑別力（守衛壞掉時 write 成功、savepoint
+        也會把 role 還原成 owner）。裸 try/except 下兩條斷言各自保有
+        鑑別力：守衛壞掉 ⇒ raised=False **且** role=admin，雙紅。"""
+        raised = False
+        try:
             self.alice_access.with_user(self.alice).sudo().write(
                 {'role': ROLE_ADMIN})
+        except ValidationError:
+            raised = True
+        self.assertTrue(
+            raised, '裸 sudo 包裝 demote 最後一個 owner 必須拋 ValidationError')
+        self.alice_access.invalidate_recordset()
         self.assertEqual(self.alice_access.sudo().role, ROLE_OWNER,
                          '拒絕後 Alice 必須仍是 owner')
 
