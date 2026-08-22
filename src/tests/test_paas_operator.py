@@ -406,6 +406,223 @@ class TestSecurityAccessClientMethods(TransactionCase):
         self.assertTrue(result['available'])
 
 
+class TestTunnelOwnershipClaimWire(TransactionCase):
+    """#531：三個 tunnel 寫入端點的 client 都必須把 ownership claim 送出去。
+
+    為什麼三支一起釘（不是只釘 issue 標題那一支）：這是 missed-forward class ——
+    「上游手上有值、組裝點沒轉下去」。三個 method 共用同一把平台級 API key、打同
+    一個 sink，只轉一個等於沒轉。而漏轉的症狀是 operator 端**靜默**當成
+    claim-missing（stage 1 放行），輸出與「有送且驗過」**完全一樣** ⇒ 沒有任何
+    執行期訊號，只有這種 contract test 擋得住。
+
+    ⚠ 載體本身也是契約的一部分，不只是「有沒有送」：``/routes`` 與 ``/config``
+    走 ``data=``（JSON body），``DELETE`` 走 ``params=``（query string）。下面逐支
+    斷言的是**綁定位置**，不是「參數有出現」—— #769 的事故形狀正是兩端對同一個
+    欄位的綁定位置不一致，而兩邊的測試都不會紅。
+    """
+
+    CLAIM = 'paas-sa-ws1-abc123'
+
+    def _make_client(self):
+        from ..services.paas_operator import PaaSOperatorClient
+        return PaaSOperatorClient(base_url='http://op:8000', api_key='k')
+
+    def test_sync_tunnel_routes_sends_claim_in_body(self):
+        client = self._make_client()
+        with patch.object(client, '_request') as mock_req:
+            mock_req.return_value = {'tunnel_id': 'tun-1', 'routes': []}
+            client.sync_tunnel_routes(
+                'tun-1',
+                routes=[{'subdomain': 'a', 'service_url': 'http://localhost:80',
+                         'http_host_header': True}],
+                comment='paas-sa-ws1-comment',
+                tunnel_name=self.CLAIM,
+            )
+        kwargs = mock_req.call_args.kwargs
+        # 先斷言「鍵在」再斷言「值對」：直接 kwargs['data']['tunnel_name'] 在漏轉時
+        # 是 KeyError（error 不是 failure），紅得比較難讀。實測過這個差別。
+        self.assertIn(
+            'tunnel_name', kwargs['data'],
+            f"/routes 沒有把 claim 轉下去，實得 body 鍵：{sorted(kwargs['data'])}")
+        self.assertEqual(kwargs['data']['tunnel_name'], self.CLAIM)
+        self.assertIsNone(
+            kwargs.get('params'),
+            '/routes 的 claim 必須在 body，不得漂到 query string')
+        # claim 與 comment 是**兩個獨立欄位**，不是同一個值換名字：comment 是 DNS
+        # record 的 traceability stamp（operator 只寫不讀）、claim 是授權判準。
+        # 合併會讓「改 stamp 格式」等於「改安全姿態」。
+        self.assertEqual(kwargs['data']['comment'], 'paas-sa-ws1-comment')
+        self.assertNotEqual(kwargs['data']['tunnel_name'],
+                            kwargs['data']['comment'])
+
+    def test_configure_tunnel_sends_claim_in_body(self):
+        client = self._make_client()
+        with patch.object(client, '_request') as mock_req:
+            mock_req.return_value = {}
+            client.configure_tunnel(
+                'tun-1',
+                hostname='a.woowtech.io',
+                service_url='http_status:503',
+                tunnel_name=self.CLAIM,
+            )
+        mock_req.assert_called_once_with(
+            'PUT', '/api/tunnels/tun-1/config',
+            data={
+                'hostname': 'a.woowtech.io',
+                'service_url': 'http_status:503',
+                'tunnel_name': self.CLAIM,
+            },
+            timeout=120,
+        )
+
+    def test_delete_tunnel_sends_claim_as_query_param(self):
+        """DELETE 走 query param，不是 body —— 刻意與姊妹端點不一致。
+
+        理由見 client 的 docstring：帶 body 的 DELETE 會被中間層丟掉，而丟掉的
+        後果是**靜默退化成沒帶 claim**（翻到 stage 2 就變成 teardown 全被拒、
+        tunnel 拆不掉還在計費）。這條斷言把載體本身釘住 —— 若有人「為了一致」
+        把它改成 body，這裡就紅。
+        """
+        client = self._make_client()
+        with patch.object(client, '_request') as mock_req:
+            mock_req.return_value = {}
+            client.delete_tunnel('tun-1', tunnel_name=self.CLAIM)
+        mock_req.assert_called_once_with(
+            'DELETE', '/api/tunnels/tun-1',
+            params={'tunnel_name': self.CLAIM},
+            timeout=120,
+        )
+
+    def test_all_three_omit_the_claim_when_the_caller_has_none(self):
+        """負分支：claim 為空時三支都**不得**送出空值。
+
+        送 ``tunnel_name=''`` 與不送，在 operator 端都算 claim-missing —— 但空字串
+        會讓「這個呼叫端升版了沒」在 body／access log 上分不出來，而那正是判斷
+        「可以翻預設值了沒」唯一的訊號。
+
+        （這條是 mutation-resistant 的負分支鎖：把 client 裡的 ``if tunnel_name:``
+        guard 拿掉，這支就紅。只鎖正分支的話，guard 被改壞不會有任何測試變色。）
+        """
+        client = self._make_client()
+        cases = (
+            ('sync_tunnel_routes', dict(routes=[])),
+            ('configure_tunnel', dict(hostname='a.woowtech.io',
+                                      service_url='http://localhost:80')),
+            ('delete_tunnel', {}),
+        )
+        for method, kwargs in cases:
+            with self.subTest(method=method):
+                with patch.object(client, '_request') as mock_req:
+                    mock_req.return_value = {}
+                    getattr(client, method)('tun-1', tunnel_name=False, **kwargs)
+                sent = mock_req.call_args.kwargs
+                self.assertNotIn(
+                    'tunnel_name', sent.get('data') or {},
+                    '空 claim 不得進 body')
+                self.assertIsNone(
+                    sent.get('params'), '空 claim 不得進 query param')
+
+
+class TestStructuredErrorDetailCrossesTheLayer(TransactionCase):
+    """#531：operator 的結構化 detail（dict）必須完整抵達 Odoo 這一側。
+
+    為什麼需要這條：operator 端把 ``ErrorResponse.detail`` 放寬成 ``str | dict``
+    之後，``_parse_error`` 的**型別標注仍寫 ``-> str``**，但實作是
+    ``error_data.get('detail', str(error_data))`` —— detail 是 dict 時它回的就是
+    dict，一路帶進 ``PaaSOperatorAPIError.detail``。標注與事實不符的地方沒有任何
+    一側的測試會經過：operator 的 pytest 看不到這個 client，平台的測試又都把
+    client mock 掉。這正是 #769 的形狀（契約跨在兩個部署單元之間）。
+    """
+
+    def _client(self):
+        from ..services.paas_operator import PaaSOperatorClient
+        return PaaSOperatorClient(base_url='http://op:8000', api_key='k')
+
+    @staticmethod
+    def _response(status_code, payload):
+        resp = MagicMock()
+        resp.status_code = status_code
+        resp.content = json.dumps(payload).encode()
+        resp.json.return_value = payload
+        return resp
+
+    def test_dict_detail_arrives_as_a_dict_not_its_repr(self):
+        """斷言**型別**與**鍵值**，不是「字串裡看得到那些字」。
+
+        ``str(dict)`` 會滿足一大票天真的斷言（``assertIn('tunnel_id', detail)``
+        對 ``"{'tunnel_id': ...}"`` 也成立），那種測試在 ``_parse_error`` 真的
+        退化成回字串時**照樣綠**。所以先鎖 ``isinstance(..., dict)``，再取鍵值。
+        """
+        from ..services.paas_operator import PaaSOperatorAPIError
+
+        detail = {
+            'error': 'tunnel_ownership_mismatch',
+            'tunnel_id': 'tun-victim-0001',
+            'operation': 'sync_routes',
+            'claimed_name': 'paas-sa-attacker-def456',
+        }
+        client = self._client()
+        with patch.object(
+            client._session, 'request',
+            return_value=self._response(403, {'detail': detail,
+                                              'error_type': 'HTTPException'}),
+        ):
+            with self.assertRaises(PaaSOperatorAPIError) as ctx:
+                client.sync_tunnel_routes(
+                    'tun-victim-0001', routes=[], tunnel_name='whatever')
+
+        exc = ctx.exception
+        self.assertEqual(exc.status_code, 403)
+        self.assertIsInstance(
+            exc.detail, dict,
+            '結構化 detail 必須以 dict 抵達；退化成 str 會讓下游只能做字串比對')
+        self.assertEqual(exc.detail['error'], 'tunnel_ownership_mismatch')
+        self.assertEqual(exc.detail['tunnel_id'], 'tun-victim-0001')
+        self.assertEqual(exc.detail['operation'], 'sync_routes')
+        # 渲染進 message 之後人還要看得懂是哪一種拒絕（維運只看得到這一行）。
+        self.assertIn('tunnel_ownership_mismatch', exc.message)
+
+    def test_structured_detail_is_never_an_empty_dict(self):
+        """空 dict 是 falsy —— 消費端的 ``e.detail or e.message`` 會靜默改用 message。
+
+        這條把那個形狀直接演一遍：**空 dict 會讓結構化資訊無聲消失**，所以
+        operator 端組 detail 的地方有 assert 保證三個鍵必有值（見
+        ``_ownership_error``）。這裡守的是「一旦哪天真的漏了，這個退化長什麼樣」，
+        讓不變式在兩側都留下痕跡。
+        """
+        from ..services.paas_operator import PaaSOperatorAPIError
+
+        client = self._client()
+        with patch.object(
+            client._session, 'request',
+            return_value=self._response(403, {'detail': {}}),
+        ):
+            with self.assertRaises(PaaSOperatorAPIError) as ctx:
+                client.delete_tunnel('tun-1', tunnel_name='x')
+
+        exc = ctx.exception
+        self.assertEqual(
+            exc.detail or exc.message, exc.message,
+            '空 dict 是 falsy：`e.detail or e.message` 會退回 message —— '
+            '這就是結構化 detail 不得為空 dict 的理由')
+
+    def test_string_detail_still_works(self):
+        """陽性對照：既有的字串 detail 不得因為型別放寬而改變行為。"""
+        from ..services.paas_operator import PaaSOperatorAPIError
+
+        client = self._client()
+        with patch.object(
+            client._session, 'request',
+            return_value=self._response(
+                500, {'detail': 'Failed to sync tunnel routes: boom'}),
+        ):
+            with self.assertRaises(PaaSOperatorAPIError) as ctx:
+                client.delete_tunnel('tun-1', tunnel_name='x')
+
+        self.assertIsInstance(ctx.exception.detail, str)
+        self.assertIn('boom', ctx.exception.detail)
+
+
 class TestGetPaaSOperatorClient(TransactionCase):
     """Test get_paas_operator_client helper function."""
 

@@ -945,6 +945,12 @@ class SecurityAccess(models.Model):
             self.tunnel_id,
             routes=self._build_route_payload(override_service_url),
             comment=self.canonical_name,
+            # #531 歸屬主張：送**鏡回來的 CF name**（`tunnel_name`），不是
+            # `canonical_name`。兩者在 SA 上通常相等，但權威的那一份是 CF 自己回的
+            # 那個值（operator 的 create_tunnel 取 `result.get("name", name)`），而
+            # operator 也是拿 CF 現在的 name 來比 —— 兩側都用 CF 那一份，命名規則
+            # 怎麼改（env token 注入、hash 換種子）都不會讓這道檢查誤判舊列。
+            tunnel_name=self.tunnel_name,
         )
         # store DNS record ids back on routes
         dns_by_sub = {
@@ -1258,7 +1264,9 @@ class SecurityAccess(models.Model):
             return
         try:
             client = self._get_operator_client()
-            client.delete_tunnel(self.tunnel_id)
+            # #531：`tunnel_name` 在這裡一定還在 —— 本方法成功後只清 `tunnel_id`
+            # （下一行的 `_internal_identity` write），`tunnel_name` 是刻意留著的。
+            client.delete_tunnel(self.tunnel_id, tunnel_name=self.tunnel_name)
             _logger.info("[SA] tunnel deleted sa=%s tunnel=%s",
                          self.id, self.tunnel_id)
             _internal_identity(self).write({'tunnel_id': False})

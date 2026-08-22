@@ -839,11 +839,21 @@ class PaaSOperatorClient:
         """
         return self._request('GET', f'/api/tunnels/{tunnel_id}/token')
 
-    def delete_tunnel(self, tunnel_id: str) -> Dict[str, Any]:
+    def delete_tunnel(
+        self,
+        tunnel_id: str,
+        tunnel_name: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """Delete a dedicated Cloudflare Tunnel.
 
         Args:
             tunnel_id: Cloudflare Tunnel ID
+            tunnel_name: #531 歸屬主張 —— 呼叫端自己那一列存的 CF tunnel 名。
+                operator 會拿它跟該 tunnel 在 Cloudflare 上的實際 name 比對，
+                對不上就拒。**走 query param 不走 body**：這條端點今天沒有 body，
+                而帶 body 的 DELETE 最容易被中間層默默丟掉，丟掉後會靜默退化成
+                「沒帶 claim」；query param 不會。tunnel name 非機密，進 access
+                log 可接受。
 
         Returns:
             Deletion confirmation
@@ -851,9 +861,11 @@ class PaaSOperatorClient:
         Raises:
             PaaSOperatorError: If deletion fails
         """
+        params = {'tunnel_name': tunnel_name} if tunnel_name else None
         return self._request(
             'DELETE',
             f'/api/tunnels/{tunnel_id}',
+            params=params,
             timeout=HELM_OPERATION_TIMEOUT,
         )
 
@@ -862,6 +874,7 @@ class PaaSOperatorClient:
         tunnel_id: str,
         hostname: str,
         service_url: str,
+        tunnel_name: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Update a tunnel's ingress configuration.
 
@@ -872,6 +885,7 @@ class PaaSOperatorClient:
             tunnel_id: Cloudflare Tunnel ID
             hostname: Public hostname (e.g., ha-xxx.woowtech.io)
             service_url: Target service URL or http_status:503
+            tunnel_name: #531 歸屬主張（見 ``delete_tunnel``）。這條端點走 body。
 
         Returns:
             Configuration confirmation
@@ -883,6 +897,8 @@ class PaaSOperatorClient:
             'hostname': hostname,
             'service_url': service_url,
         }
+        if tunnel_name:
+            data['tunnel_name'] = tunnel_name
         return self._request(
             'PUT',
             f'/api/tunnels/{tunnel_id}/config',
@@ -895,6 +911,7 @@ class PaaSOperatorClient:
         tunnel_id: str,
         routes: List[Dict[str, Any]],
         comment: Optional[str] = None,
+        tunnel_name: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Declaratively sync a dedicated tunnel's full route list.
 
@@ -906,6 +923,11 @@ class PaaSOperatorClient:
             tunnel_id: Cloudflare Tunnel ID
             routes: list of dicts {subdomain, service_url, http_host_header}
             comment: canonical name stamped on DNS records (traceability)
+            tunnel_name: #531 歸屬主張（見 ``delete_tunnel``）。這條端點走 body。
+                ⚠ **與 ``comment`` 是兩件事，不要合併**：``comment`` 是 DNS record
+                上的自由文字 stamp（operator 端只寫不讀），``tunnel_name`` 是授權
+                判準。兩者在 SA 上剛好都衍生自同一個 canonical_name，但把 stamp
+                當判準會讓「改 stamp 格式」等於「改安全姿態」。
 
         Returns:
             Dict with tunnel_id and routes (each with dns_record_id)
@@ -916,6 +938,8 @@ class PaaSOperatorClient:
         data: Dict[str, Any] = {'routes': routes}
         if comment:
             data['comment'] = comment
+        if tunnel_name:
+            data['tunnel_name'] = tunnel_name
         return self._request(
             'PUT',
             f'/api/tunnels/{tunnel_id}/routes',

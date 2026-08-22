@@ -276,7 +276,8 @@ class TestSmartHome(TransactionCase):
         home_id = home.id
         home.action_delete()
 
-        mock_client.delete_tunnel.assert_called_once_with('tun-delete-me')
+        mock_client.delete_tunnel.assert_called_once_with(
+            'tun-delete-me', tunnel_name=False)
         self.assertFalse(self.SmartHome.browse(home_id).exists())
 
     @patch('odoo.addons.woow_paas_platform.models.smart_home.get_paas_operator_client')
@@ -323,7 +324,8 @@ class TestSmartHome(TransactionCase):
         kept = self.SmartHome.browse(home_id)
         self.assertTrue(kept.exists(), '刪 tunnel 失敗時 record 必須保留供 retry')
         self.assertEqual(kept.tunnel_id, 'tun-still-live', 'tunnel_id 必須保留供 retry')
-        mock_client.delete_tunnel.assert_called_once_with('tun-still-live')
+        mock_client.delete_tunnel.assert_called_once_with(
+            'tun-still-live', tunnel_name=False)
 
     @patch('odoo.addons.woow_paas_platform.models.smart_home.get_paas_operator_client')
     def test_unlink_keeps_record_and_raises_when_tunnel_still_live(self, mock_get_client):
@@ -351,7 +353,8 @@ class TestSmartHome(TransactionCase):
         kept = self.SmartHome.browse(home_id)
         self.assertTrue(kept.exists(), 'tunnel 還活著時 record 必須保留供 retry')
         self.assertEqual(kept.tunnel_id, 'tun-still-live-2', 'tunnel_id 必須保留供 retry')
-        mock_client.delete_tunnel.assert_called_once_with('tun-still-live-2')
+        mock_client.delete_tunnel.assert_called_once_with(
+            'tun-still-live-2', tunnel_name=False)
 
     @patch('odoo.addons.woow_paas_platform.models.smart_home.get_paas_operator_client')
     def test_unlink_success_clears_tunnel_and_removes_record(self, mock_get_client):
@@ -372,7 +375,8 @@ class TestSmartHome(TransactionCase):
 
         home.unlink()
 
-        mock_client.delete_tunnel.assert_called_once_with('tun-clean')
+        mock_client.delete_tunnel.assert_called_once_with(
+            'tun-clean', tunnel_name=False)
         self.assertFalse(
             self.SmartHome.browse(home_id).exists(),
             'tunnel 清乾淨後 record 應正常刪除',
