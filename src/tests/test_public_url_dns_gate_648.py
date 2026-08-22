@@ -59,6 +59,7 @@ _age_timeout`` 與 ``test_effective_grace_is_clamped_below_deploy_timeout`` 各�
 
 Refs #484 #423 #489 #627
 """
+import time
 from datetime import timedelta
 from unittest.mock import MagicMock, patch
 
@@ -564,3 +565,80 @@ class TestFlagReachesTheListPayload(_DnsGateCase):
 
         self.assertFalse(self._format(include_details=False)
                          ['public_url_dns_unverified'])
+
+
+@tagged('post_install', '-at_install')
+class TestDnsProbeResolverBackoff(TransactionCase):
+    """resolver 整個不可用時要退避，但**不得**被單一壞主機名癱瘓。
+
+    ``'unknown'`` 的處置是「放行、連旗標都不動」⇒ resolver 掛掉時每次探測都是「付滿
+    timeout、拿零資訊」。而平台 Odoo 是 ``workers = 0`` ＋ ``max_cron_threads = 1``、
+    ``_cron_check_deploying_services`` 逐台序列跑、``limit_time_real = 120`` ⇒ 轉移中
+    的服務一多，那條 cron 會被純粹的等待吃光。
+
+    ⚠ 這道閂與 ``_is_public_url_ready`` 開頭那個「窗口外提前 return」**不是同一件事**
+    ——後者在 production 熱路徑上省不到探測（兩份 poll 在更早就探完了）。熱路徑上有效
+    的是這一條。
+    """
+
+    def setUp(self):
+        super().setUp()
+        from ..services import dns_probe
+        self.dns_probe = dns_probe
+        dns_probe._reset_after_fork()
+        self.addCleanup(dns_probe._reset_after_fork)
+
+    def test_resolver_timeout_latches_and_skips_further_probes(self):
+        """🔴 resolver 級失效 ⇒ 上閂，窗口內不再送出查詢。
+
+        ⚠ 這裡用**真的會阻塞**的 `_lookup` 去逼出 `future.result(timeout=...)` 的
+        逾時，不是讓 `_lookup` 直接 raise `TimeoutError`。後者能通過只是因為
+        Python 3.11 起 `concurrent.futures.TimeoutError` 是內建 `TimeoutError` 的
+        別名——那是版本相依的巧合，換個版本就會掉進 `except Exception`（那條刻意
+        **不**上閂），測試會綠得莫名其妙或紅得莫名其妙。
+        """
+        d = self.dns_probe
+        calls = []
+
+        def _blocking(hostname):
+            calls.append(hostname)
+            time.sleep(1.0)
+
+        with patch.object(d, '_lookup', side_effect=_blocking):
+            self.assertEqual(d.resolve_state('a.example.', timeout=0.05), 'unknown')
+            calls_after_first = len(calls)
+
+            self.assertEqual(d.resolve_state('b.example.'), 'unknown')
+
+            self.assertEqual(
+                len(calls), calls_after_first,
+                '已經上閂還繼續送查詢 ⇒ resolver 掛掉時 cron 仍會被逐台的滿額 '
+                'timeout 吃光，這道閂等於沒有')
+        self.assertTrue(d._resolver_is_latched_down())
+
+    def test_a_bad_hostname_must_not_latch(self):
+        """🔴 負向對照：逐主機名的例外**不得**上閂。
+
+        ``except Exception`` 那條也回 ``unknown``，但它可能是這個名字自己的問題
+        （實測過：全是點的主機名讓 IDNA 編碼拋 ``UnicodeEncodeError``）。拿一個壞輸入
+        斷定「resolver 掛了」，會讓其他健康的主機名跟著整段窗口不被探測——那是用一個
+        壞輸入癱瘓整個守線。
+        """
+        d = self.dns_probe
+        with patch.object(d, '_lookup', side_effect=UnicodeEncodeError(
+                'idna', '', 0, 1, 'bad')):
+            self.assertEqual(d.resolve_state('bad.example.'), 'unknown')
+
+        self.assertFalse(
+            d._resolver_is_latched_down(),
+            '被單一壞主機名上了閂 ⇒ 其他健康主機名跟著停止探測')
+
+    def test_latch_expires_and_probing_resumes(self):
+        """閂是退避不是停用：窗口過了要恢復探測。"""
+        d = self.dns_probe
+        d._resolver_down_until = 0.0
+
+        with patch.object(d, '_lookup', return_value=None) as lookup:
+            self.assertEqual(d.resolve_state('ok.example.'), 'ok')
+
+        self.assertTrue(lookup.called, '窗口外沒有恢復送查詢')

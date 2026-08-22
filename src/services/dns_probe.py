@@ -30,6 +30,13 @@ domain 才問絕對名**。實測（prod ``paas-system/paas-odoo``）：查不�
 **50 秒** vs FQDN 的 10 秒。本模組會自己補上結尾點當防呆，但呼叫端仍應送 FQDN——
 那個性質有測試釘住（``test_probe_is_given_an_fqdn_with_trailing_dot``）。
 
+## resolver 整個掛掉時的退避
+
+``'unknown'`` 的處置是「放行、而且連旗標都不動」⇒ resolver 不可用時，每一次探測都是
+「付滿 timeout、拿零資訊」。所以本模組對**resolver 級**的失效（逾時 / ``EAI_AGAIN``）
+上一個 ``_RESOLVER_BACKOFF_SECONDS`` 的閂，窗口內直接回 ``'unknown'`` 不再送查詢。
+**不對逐主機名的例外上閂**——理由見該常數的註解。
+
 ## 三態的語意（呼叫端的處置刻意不同）
 
 - ``'ok'``      —— 解析得到位址。
@@ -42,12 +49,46 @@ domain 才問絕對名**。實測（prod ``paas-system/paas-odoo``）：查不�
 import logging
 import os
 import socket
+import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as _FutureTimeout
 
 _logger = logging.getLogger(__name__)
 
 #: 單次探測的上界（秒）。比 glibc 的預設 5s×2 短，因為呼叫端在窗口內每輪都會再問。
 _DEFAULT_TIMEOUT = 2.0
+
+#: resolver 整個不可用時的退避窗口（秒）。窗口內直接回 ``'unknown'``，**不再送出
+#: 任何查詢**。
+#:
+#: 為什麼需要：``'unknown'`` 這一態的處置是「放行、而且**連旗標都不動**」——也就是
+#: 說，resolver 掛掉時每一次探測都是「付滿 ``_DEFAULT_TIMEOUT``、拿回零資訊」。而
+#: 平台 Odoo 是 ``workers = 0`` ＋ ``max_cron_threads = 1``、
+#: ``_cron_check_deploying_services`` 逐台序列跑，``limit_time_real = 120``
+#: ⇒ 轉移中的服務一多，那條 cron 會被純粹的等待吃光。上閂之後，每個行程每
+#: ``_RESOLVER_BACKOFF_SECONDS`` 最多付一次滿額 timeout。
+#:
+#: 🔴 **只對 resolver 級的失效上閂**（逾時、``EAI_AGAIN``），**不對逐主機名的例外
+#: 上閂**。理由：``except Exception`` 那條也回 ``'unknown'``，但它可能是這個名字自己
+#: 的問題（實測過一個：全是點的主機名讓 IDNA 編碼拋 ``UnicodeEncodeError``）。拿一
+#: 個壞名字去斷定「resolver 掛了」，會讓其他健康的主機名跟著 30 秒不被探測——那是
+#: 用一個壞輸入癱瘓整個守線。
+_RESOLVER_BACKOFF_SECONDS = 30.0
+
+#: ``time.monotonic()`` 的時間點；小於它就當 resolver 仍不可用。
+#: 純量、無鎖：競態最壞是多寫一次同性質的值，代價遠小於一把可能跨 fork 的鎖。
+_resolver_down_until = 0.0
+
+
+def _latch_resolver_down(reason):
+    global _resolver_down_until
+    _resolver_down_until = time.monotonic() + _RESOLVER_BACKOFF_SECONDS
+    _logger.warning(
+        "DNS resolver looks unavailable (%s) — skipping probes for %.0fs",
+        reason, _RESOLVER_BACKOFF_SECONDS)
+
+
+def _resolver_is_latched_down():
+    return time.monotonic() < _resolver_down_until
 
 #: 逾時的查詢不會被中斷（``getaddrinfo`` 不可取消），只是沒人再等它。pool 大小就是
 #: 「同時可以有幾條查詢掛在那裡」的封頂——滿了之後新的呼叫會排隊，因此
@@ -65,9 +106,11 @@ def _reset_after_fork():
     ``shutdown(wait=True)`` 會當場卡死；``wait=False`` 也只是把一個永遠不會被消化
     的 queue 留著。直接放生，讓 GC 處理。
     """
-    global _EXECUTOR, _EXECUTOR_PID
+    global _EXECUTOR, _EXECUTOR_PID, _resolver_down_until
     _EXECUTOR = None
     _EXECUTOR_PID = None
+    # 閂也一起重置：子行程繼承來的 monotonic 時間點沒有意義。
+    _resolver_down_until = 0.0
 
 
 if hasattr(os, 'register_at_fork'):
@@ -142,6 +185,10 @@ def resolve_state(hostname, timeout=_DEFAULT_TIMEOUT):
     if not hostname:
         return 'unknown'
 
+    if _resolver_is_latched_down():
+        # 退避窗口內：不送查詢，直接回報未知（呼叫端的處置與真的探到 unknown 相同）。
+        return 'unknown'
+
     fqdn = _as_fqdn(hostname)
     try:
         future = _executor().submit(_lookup, fqdn)
@@ -154,17 +201,17 @@ def resolve_state(hostname, timeout=_DEFAULT_TIMEOUT):
         return 'ok'
     except _FutureTimeout:
         # 查詢還掛在 pool 裡；不取消（取消不了），只是不再等它。
-        _logger.warning(
-            "DNS probe for %s exceeded %.1fs — treating as unknown", fqdn, timeout)
+        _latch_resolver_down('probe for %s exceeded %.1fs' % (fqdn, timeout))
         return 'unknown'
     except socket.gaierror as exc:
         if exc.errno in _NEGATIVE_ERRNOS:
             return 'missing'
-        # EAI_AGAIN 之類：resolver 自己不可用，不是這個名字的問題。
-        _logger.warning("DNS probe for %s failed (errno=%s): %s",
-                        fqdn, exc.errno, exc)
+        # EAI_AGAIN 之類：resolver 自己不可用，不是這個名字的問題 ⇒ 上閂。
+        _latch_resolver_down('errno=%s on %s (%s)' % (exc.errno, fqdn, exc))
         return 'unknown'
     except Exception as exc:             # noqa: BLE001 —— 探針不得炸掉呼叫端
+        # 刻意**不**上閂：這一類可能是這個名字自己的問題（例如 IDNA 編碼失敗），
+        # 拿它斷定 resolver 掛了會讓其他健康的主機名一起被停掉探測。
         _logger.warning("DNS probe for %s raised %s: %s",
                         fqdn, type(exc).__name__, exc)
         return 'unknown'

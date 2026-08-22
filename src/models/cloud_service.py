@@ -2876,11 +2876,18 @@ class CloudService(models.Model):
         """
         self.ensure_one()
 
-        # 便宜的判斷先做，**探測擺在它後面**：窗口外恆放行，那時連問都不必問。
-        # 這不只是省一次查詢——resolver 不可用時每次探測都是一段阻塞，而平台
-        # Odoo 是 `workers = 0` ＋ `max_cron_threads = 1`、cron 逐台序列跑。
-        # （兩份 poll 仍會**各自探一次**餵給 `_release_facts` 落旗標，那條路與
-        # 本方法正交：窗口外的服務照樣需要「已放行但未驗證」這個訊號。）
+        # 便宜的判斷先做，探測擺在它後面：窗口外恆放行，那時不必再問。
+        #
+        # ⚠ **這在 production 熱路徑上省不到任何一次探測**，不要以為它是保護。
+        # 兩份 poll 都在呼叫本方法**之前**就無條件探好了（`release_status ==
+        # 'deployed'` 時各探一次，結果同時餵給本方法與 `_release_facts` 落旗標），
+        # 所以走到這裡時 `dns_state` 已經有值、提前 return 只是少走幾行。
+        # 真正受惠的是 `dns_state=None` 的**直接呼叫者**（測試，或日後某個沒先
+        # 算的呼叫端）——順序這樣排是因為「便宜的條件先判」本來就對，不是因為
+        # 它擋掉了什麼成本。
+        #
+        # resolver 不可用時的阻塞由**另一個機制**擋：`dns_probe` 的 backoff 閂
+        # （見該模組的 `_RESOLVER_BACKOFF_SECONDS`）。那條才是熱路徑上有效的。
         anchor = self._transition_anchor()
         if not anchor:
             # 兩個時間錨都空 ⇒ 無從判斷 age。與 `_check_transition_timeout` 的
