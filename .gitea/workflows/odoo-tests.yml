@@ -155,9 +155,38 @@ jobs:
             case "$s" in ''|\#*) continue;; esac
             grep -F "$s" /tmp/test.log | head -3
           done < scripts/audit/baselines/test-collection-sentinels.txt
+          # 🔴 已知指紋：各自獨立 grep。兩件事都是刻意的：
+          #   (a) **不吃**下面通用摘要的額度；
+          #   (b) **不先過 `WARNING` 篩子** —— `created N include rule(s)` 是 INFO 級，
+          #       套上 WARNING 會再漏一次（run 4679 就是兩半都取不到）。
+          # 為什麼需要這一段：run 4679 的通用摘要是 `... | head -40`，而那趟有 **761** 筆
+          # WARNING，被 dump 出來的前 40 筆時間戳只到 00:19:57（install／模組載入階段），
+          # 測試階段一筆都沒進來 ⇒ 一個**專門為了留憑據而做的步驟，在最需要的那一格留了空白**，
+          # 而輸出與「CI 真的沒發這行」不可區分（差點被讀成環境差異）。
+          # ⇒ 通則：**低頻訊號不能跟高頻噪音共用同一個額度**。這裡的 761 筆裡絕大多數是
+          #   重複的 `ecpay.subscription.state: unknown parameter 'tracking'`。
+          # 新增指紋就往下面這個清單 append；`p_rule_post_migrate` 是 logger 名（最耐用的錨點，
+          # 訊息改寫也抓得到），另外兩條是給人讀的訊息片段。
+          echo "── 已知指紋（各自獨立 grep，不吃額度、不過 WARNING 篩子）──"
+          for FP in "p_rule_post_migrate" \
+                    "legacy policy(ies) carry an allow" \
+                    "include rule(s) from flat policies"; do
+            echo "  [指紋] ${FP}"
+            grep -cF "${FP}" /tmp/test.log
+            grep -F "${FP}" /tmp/test.log | head -10
+          done
           echo "── 被測程式碼的 WARNING（『那條分支有沒有被走到』常常只有這裡看得到）──"
           grep -c "WARNING" /tmp/test.log
-          grep "WARNING" /tmp/test.log | grep -v "odoo.tests" | head -40
+          # 依訊息去重的頻次表：這是對「低頻被高頻擠掉」的**結構性**修法，
+          # head/tail 只是保險。去重後每一種訊息各佔一列，低頻的自然浮上來。
+          echo "  -- 依訊息去重（次數 訊息），前 60 種 --"
+          grep "WARNING" /tmp/test.log | grep -v "odoo.tests" \
+            | sed -E 's/^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9:,]+ [0-9]+ //' \
+            | sort | uniq -c | sort -rn | head -60
+          echo "  -- 原始前 30 --"
+          grep "WARNING" /tmp/test.log | grep -v "odoo.tests" | head -30
+          echo "  -- 原始後 30 --"
+          grep "WARNING" /tmp/test.log | grep -v "odoo.tests" | tail -30
           exit 0
 
       # ── 以下是完備性判準。**順序有意義**：哨兵先過，否則後面的差集全都不成立。 ──
@@ -197,17 +226,44 @@ jobs:
             grep -E "failed, .* error\(s\) of .* tests" /tmp/test.log 2>/dev/null || echo "(no summary)"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+          # 🔴 升級條件 2 的定義是「連續 N 次 **develop push** 全套全綠」。
+          # 這個 if 原本只判 `job.status`，於是 feature branch 上的 `workflow_dispatch`
+          # 全綠時也會印出「請 append 到 streak 檔」——而 streak 檔是**人工**維護的
+          # （CI 自動 commit 回 develop 會與本 workflow 的 push 觸發形成迴圈）。
+          # ⇒ 照著那一格做，就會把一趟**不符定義**的 run 灌進 streak，湊到 N 之後
+          #   觸發的「可以回 #546 重裁觸發策略」提醒**前提是假的**（run 4679 實例）。
+          # 這是「可照抄的範本勝過正文警告」的形狀：docstring 把條件寫得很清楚，
+          # 但真正被照抄的那一格不帶限制，動手的人跟範本、不跟正文。
+          # ⚠ 不合格時**照樣印一行、但講明不算** —— 完全不印會讓人以為忘了印。
+          # ⚠ 嚴格只認 `push` × `refs/heads/develop`：`schedule` 也跑在 develop 上，
+          #   但它不是 push，不符合條件 2 的字面定義。
           if [ "${{ job.status }}" = "success" ]; then
-            {
-              echo ""
-              echo "### ✅ 本次全綠 —— 請把下面這行 append 到"
-              echo "\`scripts/audit/baselines/test-collection-green-streak.txt\`（升級 blocking 的條件 2）"
-              echo '```'
-              echo "${{ github.run_id }}	$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-              echo '```'
-              echo "> ⚠ 目前這一步是人工的 —— CI 自動 commit 回 develop 會與本 workflow 的"
-              echo "> push 觸發形成迴圈，需要 loop guard，未經 review 不自行加。見 issue #546。"
-            } >> "$GITHUB_STEP_SUMMARY"
+            if [ "${{ github.event_name }}" = "push" ] \
+               && [ "${{ github.ref }}" = "refs/heads/develop" ]; then
+              {
+                echo ""
+                echo "### ✅ 本次全綠 —— 請把下面這行 append 到"
+                echo "\`scripts/audit/baselines/test-collection-green-streak.txt\`（升級 blocking 的條件 2）"
+                echo '```'
+                echo "${{ github.run_id }}	$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+                echo '```'
+                echo "> ⚠ 目前這一步是人工的 —— CI 自動 commit 回 develop 會與本 workflow 的"
+                echo "> push 觸發形成迴圈，需要 loop guard，未經 review 不自行加。見 issue #546。"
+              } >> "$GITHUB_STEP_SUMMARY"
+            else
+              {
+                echo ""
+                echo "### ✅ 本次全綠 —— 但**不計入 streak**"
+                echo ""
+                echo "本趟是 \`${{ github.event_name }}\` on \`${{ github.ref }}\`。"
+                echo "升級條件 2 的定義是「連續 N 次 **develop push** 全套全綠」"
+                echo "（\`test_collection_audit.py\` 的 \`GREEN_STREAK_REQUIRED\`），"
+                echo "所以 **請不要** 把這一趟 append 進 "
+                echo "\`scripts/audit/baselines/test-collection-green-streak.txt\`。"
+                echo ""
+                echo "> 這一行是刻意印出來的：完全不印會讓人以為步驟壞了或忘了印。"
+              } >> "$GITHUB_STEP_SUMMARY"
+            fi
           fi
 
       - name: 收尾
