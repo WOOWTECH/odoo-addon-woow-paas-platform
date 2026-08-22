@@ -22,18 +22,65 @@ mock layer hides exactly the boundary that drifts.
 ```bash
 cd extra/paas-operator
 
-# Pick a cluster context (once per shell)
-kubectl config use-context docker-desktop   # or your woow-k3s context
+# 選叢集：把「只含這個 context」的 kubeconfig 匯出成一個暫存檔，這一輪測試就用它。
+# 要換叢集就改下面那個 docker-desktop（例如換成 woow-k3s），只有這一個旋鈕。
+# ⛔ 不用 kubectl config use-context——那會改掉你的**全域** context 並且留在那裡；
+#   跑完忘了切回去，下一個指令就打到別的叢集了（見「helm v4 陷阱」那節末尾）。
+KUBECONFIG_FOR_TESTS=/tmp/kubeconfig-integration.yaml
+kubectl config view --raw --minify --flatten --context=docker-desktop > "$KUBECONFIG_FOR_TESTS"
+chmod 600 "$KUBECONFIG_FOR_TESTS"   # 裡面有叢集憑證
 
 # First time only: install Python deps
 pip install -r requirements.txt
 
-# Run (⚠ see "helm v4 陷阱" below — `$(which helm)` is probably wrong now)
-HELM_BINARY=$(which helm) pytest -m integration tests/integration/ -v
+# 取得 operator Dockerfile 釘住的那顆 helm。⛔ 不要用 $(which helm)——理由見「helm v4
+# 陷阱」那節。版本從 Dockerfile 讀（不寫死在本文件裡），平台依 uname 決定，已抓過就跳過。
+# ⚠ 本段在本檔的兩個可執行區塊裡**逐字重複**，讓兩個區塊都能各自單獨整段複製；改一處
+#   必須同步另一處（兩份必須 byte-for-byte 相同）。
+cd "$(git rev-parse --show-toplevel)/extra/paas-operator" || echo "⛔ 這裡不是本 repo 的工作區" >&2
+HELM_VERSION=$(sed -n 's/^ARG HELM_VERSION=//p' Dockerfile)
+if [ -z "$HELM_VERSION" ]; then
+    echo "⛔ 讀不到 Dockerfile 的 ARG HELM_VERSION（cwd=${PWD}）——這不是 helm 的問題，是路徑不對" >&2
+    false   # 讓 $? 非 0。刻意不用 exit：這段是設計成貼進互動 shell 的，exit 會把視窗關掉
+else
+    HELM_PLATFORM="$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m | sed 's/x86_64/amd64/; s/aarch64/arm64/')"
+    HELM_BINARY="/tmp/helm-${HELM_VERSION}/${HELM_PLATFORM}/helm"
+    [ -x "$HELM_BINARY" ] || { mkdir -p "/tmp/helm-${HELM_VERSION}" && curl -fsSL \
+        "https://get.helm.sh/helm-v${HELM_VERSION}-${HELM_PLATFORM}.tar.gz" \
+        | tar xz -C "/tmp/helm-${HELM_VERSION}"; }
+    "$HELM_BINARY" version --short   # 應與 Dockerfile 的 ARG HELM_VERSION 一致
+fi
+
+# Run
+KUBECONFIG="$KUBECONFIG_FOR_TESTS" HELM_BINARY="$HELM_BINARY" \
+    pytest -m integration tests/integration/ -v
 ```
 
-41 tests（其中 2 個 KubeVirt CRD 契約測試在沒有 CDI 的叢集會自我 skip，例如
-docker-desktop）。#461 新增兩支：`test_helm_secret_reset_returns_before_pods_are_ready`
+**45 支收集、其中 4 支**在沒有 KubeVirt/CDI CRD 的叢集（例如 docker-desktop）會自我
+skip。數字會漂，要重新確認就跑 `pytest -m integration tests/integration/ --collect-only -q`
+（純收集，不碰叢集）。今天在 docker-desktop 上實測 skip 的逐支是：
+
+- `test_kubevirt_crd_contract.py::TestVirtualMachineLifecycle::test_patch_run_strategy_round_trip`（KubeVirt CRD）
+- `test_kubevirt_crd_contract.py::TestDataVolumeOrphanLabeling::test_list_and_label_datavolumes`（CDI CRD）
+- `test_scale.py::TestScaleMixedTopology::test_vm_only_release_halts_via_endpoint`（KubeVirt CRD）
+- `test_scale.py::TestScaleMixedTopology::test_mixed_deployment_and_vm_scales_both`（KubeVirt CRD）
+
+⚠ **本段原本寫「41 tests，其中 2 支 skip」——兩個數字都不對。** 漏數的是 `test_scale.py`
+那兩支：它們從 `test_kubevirt_crd_contract` **import** `_skip_or_fail` 來用
+（`test_scale.py:169` 的 import、`:263` 與 `:290` 的呼叫），所以不住在
+`test_kubevirt_crd_contract.py` 這個檔名底下，用「掃檔案」的方式數就會漏掉。
+
+⚠⚠ **比數字錯更危險的是那個 41 的口徑**：它是**總數**，而 docker-desktop 上的實際
+結果是 `41 passed, 4 skipped`——**passed 數剛好等於舊敘述的總數**。照舊敘述讀的人看到
+`41 passed` 會直接結論「全部跑完、沒有東西被 skip」，實際上有 4 支從未執行。兩個 41 是
+不同口徑的巧合，不是對帳成功。⇒ **不要用總數相減、也不要拿 passed 數去對這行敘述來判斷
+有沒有 skip**；要知道 skip 了哪幾支就看 `-v` 的逐支輸出（`SKIPPED`），要知道原因就加
+`-rs`。skip 被誤讀成通過是這裡的主要風險。
+
+要真正驗到 VM 路徑，用有 CRD 的叢集並帶 `REQUIRE_KUBEVIRT=1`（見下方表格）：那會把 skip
+升級成 fail，正是為了不讓「驗收 VM 路徑」被一個安靜的 skip 冒充通過。
+
+#461 新增兩支：`test_helm_secret_reset_returns_before_pods_are_ready`
 量「reset 不等 rollout」的牆鐘；`test_atomic_failure_rolls_secret_back_within_hard_cap`
 強制一次 `--atomic` 失敗，驗 rollback 真的跑完而非被 subprocess 上限腰斬——這兩件事
 只能在真叢集量到，mock 掉 kubectl 之後「有沒有等」只剩「有沒有呼叫某方法」。
@@ -54,13 +101,32 @@ Cluster choice:
 ### Generic invocation
 
 ```bash
-# Any reachable cluster
-HELM_BINARY=$(which helm) KUBECONFIG=~/.kube/config \
+# 取得 operator Dockerfile 釘住的那顆 helm。⛔ 不要用 $(which helm)——理由見「helm v4
+# 陷阱」那節。版本從 Dockerfile 讀（不寫死在本文件裡），平台依 uname 決定，已抓過就跳過。
+# ⚠ 本段在本檔的兩個可執行區塊裡**逐字重複**，讓兩個區塊都能各自單獨整段複製；改一處
+#   必須同步另一處（兩份必須 byte-for-byte 相同）。
+cd "$(git rev-parse --show-toplevel)/extra/paas-operator" || echo "⛔ 這裡不是本 repo 的工作區" >&2
+HELM_VERSION=$(sed -n 's/^ARG HELM_VERSION=//p' Dockerfile)
+if [ -z "$HELM_VERSION" ]; then
+    echo "⛔ 讀不到 Dockerfile 的 ARG HELM_VERSION（cwd=${PWD}）——這不是 helm 的問題，是路徑不對" >&2
+    false   # 讓 $? 非 0。刻意不用 exit：這段是設計成貼進互動 shell 的，exit 會把視窗關掉
+else
+    HELM_PLATFORM="$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m | sed 's/x86_64/amd64/; s/aarch64/arm64/')"
+    HELM_BINARY="/tmp/helm-${HELM_VERSION}/${HELM_PLATFORM}/helm"
+    [ -x "$HELM_BINARY" ] || { mkdir -p "/tmp/helm-${HELM_VERSION}" && curl -fsSL \
+        "https://get.helm.sh/helm-v${HELM_VERSION}-${HELM_PLATFORM}.tar.gz" \
+        | tar xz -C "/tmp/helm-${HELM_VERSION}"; }
+    "$HELM_BINARY" version --short   # 應與 Dockerfile 的 ARG HELM_VERSION 一致
+fi
+
+# 用你**當前**的 context（只讀，不改動它）。這跟 quickstart 是兩種模式，不是兩套寫法：
+# quickstart 固定打某一個 context（匯出成暫存 kubeconfig），這裡是「打我現在指著的那個」。
+HELM_BINARY="$HELM_BINARY" KUBECONFIG=~/.kube/config \
     pytest -m integration tests/integration/
 
 # Against a kind cluster you've already created
 kind create cluster --name op-int
-HELM_BINARY=$(which helm) pytest -m integration tests/integration/
+HELM_BINARY="$HELM_BINARY" pytest -m integration tests/integration/
 ```
 
 If `kubectl cluster-info` fails the suite skips itself (no setup penalty
@@ -70,6 +136,8 @@ via `pytest.ini`).
 `HELM_BINARY` is required because the operator's FastAPI lifespan refuses
 to start when helm is missing. macOS Homebrew puts helm at
 `/opt/homebrew/bin/`, so the default `/usr/local/bin/helm` is wrong there.
+⚠ 但**不要因此把它指向 Homebrew 那顆**——那顆已經是 v4（見下一節），指過去會壞得
+很難認。要指的是上面區塊抓下來的那顆 3.13.3。
 
 ### ⚠ helm v4 陷阱：`$(which helm)` 現在多半是錯的
 
@@ -90,27 +158,16 @@ plugin: {Name:…/.venv/bin/python Type:postrenderer/v1} not found
 **做法：用 operator `Dockerfile` 釘的同一個 helm 3.13.3 跑**（`ARG
 HELM_VERSION=3.13.3`）。不要為了跑測試把系統 helm 降版：
 
-```bash
-# 抓一份 helm 3.13.3 放到暫存目錄（不動系統 helm）
-mkdir -p /tmp/helm3 && curl -fsSL \
-  https://get.helm.sh/helm-v3.13.3-darwin-arm64.tar.gz | tar xz -C /tmp/helm3
-/tmp/helm3/darwin-arm64/helm version --short   # 應為 v3.13.3+gc8b9489
+上面「macOS quickstart」與「Generic invocation」兩個區塊**已經內建這個做法**（從
+`Dockerfile` 的 `ARG HELM_VERSION` 讀版本、依 `uname` 決定平台、抓到暫存目錄後把
+`HELM_BINARY` 指過去），照抄那兩個區塊即可。這裡刻意**不再重複第三份指令**——同一份
+文件裡有兩套寫法，正是本節在講的那類問題。
 
-# 跑測試時指過去（Linux 換成 helm-v3.13.3-linux-amd64.tar.gz）
-HELM_BINARY=/tmp/helm3/darwin-arm64/helm \
-    pytest -m integration tests/integration/ -v
-```
-
-同場加映：想跑 docker-desktop 又不想動使用者當前的 kubectl context（例如
-context 停在 `woow-k3s`），可以匯出一份只含該 context 的 kubeconfig 再指過去，
-比 `kubectl config use-context` 少一個「忘了切回去」的風險：
-
-```bash
-kubectl config view --raw --minify --flatten --context=docker-desktop \
-    > /tmp/kubeconfig-dd.yaml
-KUBECONFIG=/tmp/kubeconfig-dd.yaml HELM_BINARY=/tmp/helm3/darwin-arm64/helm \
-    pytest -m integration tests/integration/ -v
-```
+同場加映（**quickstart 區塊已經內建這個做法**，這裡只留理由）：想跑 docker-desktop 又不想
+動使用者當前的 kubectl context（例如 context 停在 `woow-k3s`），匯出一份只含該 context 的
+kubeconfig 再指過去，比 `kubectl config use-context` 少一個「忘了切回去」的風險——後者改的是
+**全域**設定，跑完會留在那裡，下一個 `kubectl` 指令就打到別的叢集。這裡刻意**不再重複一份
+指令**，理由同上一節：一份文件裡有兩套寫法，正是本節在講的問題。
 
 > 長期解（未做）：讓 `_pvc_keep_post_renderer_args()` 依 helm major 版本切換
 > 語法，或在 lifespan 啟動時斷言 helm major == 3 並 fail-loud，把「helm 4 下
