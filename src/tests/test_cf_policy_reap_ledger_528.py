@@ -70,6 +70,12 @@ from ..models.smart_home_route import (
 from ..services.naming import make_service_subdomain
 from .smart_home_fixture import sh_model
 
+# #798：`cf_policy_id` 有欄位級寫入守衛（create 壓值／write 拒絕，對 su 也生效）。
+# fixture 擺狀態必須經開閘 helper，否則會撞到自己要測的守衛。
+from ..models.security_access import (
+    _internal_policy_cf_write as _internal_policy_cf,
+)
+
 #: 🔴 三腿三個 patch 點，判準是「該 model 怎麼取得 client」不是「client 定義在哪」。
 MOCK_SA_CLIENT = ('odoo.addons.woow_paas_platform.models.security_access.'
                   'get_paas_operator_client')
@@ -227,7 +233,7 @@ class TestSaRouteReap(TransactionCase, _ReapMixin):
             'rule_ids': [(0, 0, {'group': 'include',
                                  'rule_type': 'email_list',
                                  'rule_value': 'a@example.com'})]})
-        pol.cf_policy_id = cf_policy_id
+        _internal_policy_cf(pol).cf_policy_id = cf_policy_id
         # 🔴 create() 回的 recordset 帶著呼叫時的 context；不關掉的話之後每一次
         # 動作都還套著 skip，「機制沒接好」與「fixture 把 sync 關掉了」會長得
         # 一模一樣。
@@ -440,7 +446,7 @@ class TestCsReap(TransactionCase, _ReapMixin):
             'rule_ids': [(0, 0, {'group': 'include',
                                  'rule_type': 'email_list',
                                  'rule_value': 'a@example.com'})]})
-        pol.cf_policy_id = cf_policy_id
+        _internal_policy_cf(pol).cf_policy_id = cf_policy_id
         return pol.with_context(sa_skip_route_sync=False)
 
     def test_C1_gated_unlink_books_and_later_sync_reaps(self):
@@ -553,7 +559,7 @@ class TestShRouteReap(TransactionCase, _ReapMixin):
             'rule_ids': [(0, 0, {'group': 'include',
                                  'rule_type': 'email_list',
                                  'rule_value': 'a@example.com'})]})
-        pol.cf_policy_id = cf_policy_id
+        _internal_policy_cf(pol).cf_policy_id = cf_policy_id
         return pol.with_context(sa_skip_route_sync=False)
 
     def test_D1_suspended_unlink_books_the_doomed_id(self):

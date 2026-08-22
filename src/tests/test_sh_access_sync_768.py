@@ -61,6 +61,12 @@ from ..services.naming import make_sm_access_canonical_name
 from ..services.reconciler import collect_left_set
 from .smart_home_fixture import sh_model
 
+# #798：`cf_policy_id` 有欄位級寫入守衛（create 壓值／write 拒絕，對 su 也生效）。
+# fixture 擺狀態必須經開閘 helper，否則會撞到自己要測的守衛。
+from ..models.security_access import (
+    _internal_policy_cf_write as _internal_policy_cf,
+)
+
 #: 🔴 見檔頭「patch 點」。這裡寫錯不會讓否定性斷言變紅。
 MOCK_GET_CLIENT = (
     'odoo.addons.woow_paas_platform.models.smart_home.'
@@ -174,7 +180,7 @@ class _ShAccessSyncFixture(TransactionCase):
             vals['sequence'] = sequence
         pol = _skip_route_sync(self.Policy.sudo()).create(vals)
         if cf_policy_id:
-            pol.cf_policy_id = cf_policy_id
+            _internal_policy_cf(pol).cf_policy_id = cf_policy_id
         # 同 `_route()`：回傳前把 fixture 用的 skip 開關關掉。
         return pol.with_context(sa_skip_route_sync=False)
 
