@@ -79,6 +79,21 @@ commit 的 fixture 而整段安靜地什麼都不做——`models/security_acces
 `src/services/` 對 `registry` / `.cursor(` / `cr.commit` / `new_cr` 全零命中，
 本檔的鏈不含 controller，所以這一格不成立。
 
+🔴 **本檔不使用 `self.assertRaises` 驅動受測路徑**（`_provision_expect_access_error`
+用裸 try/except 取代）。Odoo 的 `BaseCase.assertRaises` 把整個 with 區塊包進
+`self.cr.savepoint(flush=False)`：例外一穿出來，區塊內做過的事**連同尚未 flush 的
+cache／towrite 一起被丟掉**。#822 RED 第一輪實測到這一格：
+
+    at_create:         ORM='provisioning' / raw SQL=('pending',)  ← 尚未 flush，值在 towrite
+    after AccessError: ORM='pending'      / raw SQL=('pending',)（再 flush 一次仍是）
+    對照：先 flush_all() 再讓 AccessError 丟出 ⇒ 'provisioning' 存活
+
+⇒ 用 `assertRaises` 的話，「例外之後這一列 DB 應該長怎樣」的斷言全部是對一個**被
+回捲的世界**做的：補償寫進去的 `state` / `error_message` 會一起被抹掉，那些測試
+**永遠不可能綠**。而且第一輪它會以最難察覺的方式出錯——A4 假**綠**（回捲後的值
+剛好等於期望的 'pending'），我因此差點把「守線已成立」寫進報告。AccessError 在
+任何 SQL 之前就丟出來，cursor 不會進 aborted 狀態，所以不需要那個 savepoint 保護。
+
 ⚠ 本檔在 A 組**不**先以 su 身分讀 `tunnel_token`：su 讀會把該欄位灌進
 transaction-wide 的 field cache，之後非 sudo recordset 的屬性讀取會直接命中快取而
 不再重查遮罩（`controllers/smart_home.py::_provision_smarthome` 有那次 odoo-shell
@@ -169,6 +184,21 @@ class _Sa822Fixture(TransactionCase):
     def _as_tenant(self):
         return self.SA.with_user(self.tenant).browse(self.sa.id)
 
+    def _provision_expect_access_error(self):
+        """以租戶身分呼叫 `action_provision`，要求它丟 AccessError，回傳該例外。
+
+        🔴 刻意**不**用 `self.assertRaises`——理由見模組 docstring 那段實測：它的
+        `cr.savepoint(flush=False)` 會把例外之前尚未 flush 的寫入一起丟掉，讓所有
+        「例外之後 DB 長怎樣」的斷言變成對回捲後的世界做的。
+        """
+        try:
+            self._as_tenant().action_provision()
+        except AccessError as exc:
+            return exc
+        self.fail('前提不成立：預期 tunnel_token 欄位遮罩丟 AccessError，'
+                  '但 action_provision 正常返回了 ⇒ 先查身分／ACL，'
+                  '本條的結論在這個前提下沒有意義。')
+
     def _fresh(self):
         """以 su env 重讀本列（不讀 `tunnel_token`，見模組 docstring 的快取註記）。"""
         return self.SA.browse(self.sa.id)
@@ -219,8 +249,7 @@ class TestSa822AccessErrorShape(_Sa822Fixture):
         """
         client = self._new_client()
         with patch(MOCK_GET_CLIENT, return_value=client):
-            with self.assertRaises(AccessError) as ctx:
-                self._as_tenant().action_provision()
+            exc = self._provision_expect_access_error()
         self.assertEqual(
             client.create_tunnel.call_count, 1,
             '擋點若在 create_tunnel 之前，本檔談的孤兒窗口根本沒被走到。',
@@ -228,10 +257,10 @@ class TestSa822AccessErrorShape(_Sa822Fixture):
         # 只斷言欄位名：訊息其餘部分（"Operation: write"、group 名）會隨 Odoo
         # 版本與語系漂，欄位名是這個遮罩唯一穩定的指紋。
         self.assertIn(
-            'tunnel_token', str(ctx.exception),
+            'tunnel_token', str(exc),
             '紅的落點不對：AccessError 沒有點名 tunnel_token ⇒ 它可能來自 record '
             'rule 或別的欄位，而不是第 3 步的 groups=base.group_system 遮罩。'
-            '實際訊息=%s' % ctx.exception,
+            '實際訊息=%s' % exc,
         )
         self.assertFalse(
             self._fresh().tunnel_id,
@@ -242,8 +271,7 @@ class TestSa822AccessErrorShape(_Sa822Fixture):
         """🔴 RED：AccessError 形狀不得留下孤兒 tunnel。"""
         client = self._new_client()
         with patch(MOCK_GET_CLIENT, return_value=client):
-            with self.assertRaises(AccessError):
-                self._as_tenant().action_provision()
+            self._provision_expect_access_error()
         self._assert_no_orphan_tunnel(client, note='(A2 AccessError 單次)')
 
     def test_A3_retry_must_not_accumulate_orphans(self):
@@ -255,8 +283,7 @@ class TestSa822AccessErrorShape(_Sa822Fixture):
         client = self._new_client()
         with patch(MOCK_GET_CLIENT, return_value=client):
             for _ in range(2):
-                with self.assertRaises(AccessError):
-                    self._as_tenant().action_provision()
+                self._provision_expect_access_error()
         self.assertEqual(
             client.create_tunnel.call_count, 2,
             '前提：守衛 `if self.tunnel_id:` 在 tunnel_id 沒落地時不成立 ⇒ 第二次'
@@ -283,8 +310,7 @@ class TestSa822AccessErrorShape(_Sa822Fixture):
         """
         client = self._new_client()
         with patch(MOCK_GET_CLIENT, return_value=client):
-            with self.assertRaises(AccessError):
-                self._as_tenant().action_provision()
+            self._provision_expect_access_error()
         self.assertEqual(
             self._fresh().state, 'pending',
             '補償成功（CF 上已無此 tunnel）之後記錄仍停在 %r ⇒ Provision 鈕不會'
@@ -477,8 +503,7 @@ class TestSa822CompensationItselfFails(_Sa822Fixture):
         client = self._new_client()
         client.delete_tunnel.side_effect = PaaSOperatorError('delete refused')
         with patch(MOCK_GET_CLIENT, return_value=client):
-            with self.assertRaises(AccessError):
-                self._as_tenant().action_provision()
+            self._provision_expect_access_error()
         fresh = self._fresh()
         self.assertEqual(
             client.delete_tunnel.call_count, 1,
