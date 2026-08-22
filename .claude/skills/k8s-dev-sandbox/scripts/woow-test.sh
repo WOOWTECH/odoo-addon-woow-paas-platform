@@ -107,7 +107,6 @@ if [ -z "$SLUG" ]; then
 fi
 
 NAMESPACE="dev-sandbox-${SLUG}"
-FULLNAME="${SLUG}-odoo-dev-sandbox"
 
 # --- 先決條件檢查 ---
 if ! command -v kubectl >/dev/null 2>&1; then
@@ -119,6 +118,20 @@ fi
 if ! kubectl get namespace "$NAMESPACE" >/dev/null 2>&1; then
     echo -e "${RED}Namespace '$NAMESPACE' does not exist. Is the sandbox running?${NC}" >&2
     echo -e "${YELLOW}Create one with: /woow-dev:k8s-dev-sandbox create --context <ctx>${NC}" >&2
+    exit 2
+fi
+
+# --- 解析 odoo deploy 實名（用 label selector，非字面串接）---
+# chart 的 fullname 是 printf "%s-%s" <release-name> "odoo-dev-sandbox" | trunc 43
+# （見 charts/odoo-dev-sandbox/templates/_helpers.tpl），release name 就是 slug，
+# 所以 slug 一長就被截斷成 -odoo-dev-san / -odoo-dev / -od 等不同形狀，
+# 字面串接只有在 slug 長度 <= 26 那一格對得上。同 e2e-seed.sh 的作法。
+ODOO_DEPLOY=$(kubectl get deploy -n "$NAMESPACE" \
+    -l "app.kubernetes.io/instance=$SLUG,app.kubernetes.io/component=odoo" \
+    -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
+if [ -z "$ODOO_DEPLOY" ]; then
+    echo -e "${RED}Could not find the odoo deployment in namespace '${NAMESPACE}'.${NC}" >&2
+    echo -e "${YELLOW}Looked for: deploy -l app.kubernetes.io/instance=${SLUG},app.kubernetes.io/component=odoo${NC}" >&2
     exit 2
 fi
 
@@ -138,11 +151,30 @@ fi
 echo -e "${GREEN}Odoo pod is ready.${NC}"
 
 # --- 取得資料庫名稱 ---
-DB_NAME=$(kubectl get secret -n "$NAMESPACE" "${FULLNAME}-secret" \
-    -o jsonpath='{.data.postgres-database}' 2>/dev/null | base64 -d 2>/dev/null || echo "")
+# secret 的名字同樣受上面那個 trunc 影響，所以也不能字面串接。但 secret 沒有 component
+# label（_helpers.tpl 的 labels helper 不含 component，component 是各 workload 自己額外
+# 加的），無法用 (instance, component) 兩段直接定位 —— 改成用 instance label 列出候選、
+# 再挑真的帶 postgres-database 的那顆。不要直接取 items[0]：stg 模式下同 namespace 還有
+# 一顆 image-registry-creds 帶著相同的 instance label，依名字排序它還排在前面。
+#
+# 取不到就 exit 2，刻意不做「用 db_prefix 推導 DB 名」的 fallback：woow-test.sh 是驗證
+# 載體，推錯 DB 名的失敗形狀是「測試跑起來了但跑在別的 DB」（假綠），比直接失敗難發現。
+DB_NAME=""
+SECRET_REFS=$(kubectl get secret -n "$NAMESPACE" \
+    -l "app.kubernetes.io/instance=$SLUG" -o name 2>/dev/null || echo "")
+for _secret_ref in $SECRET_REFS; do
+    _db_b64=$(kubectl get -n "$NAMESPACE" "$_secret_ref" \
+        -o jsonpath='{.data.postgres-database}' 2>/dev/null || echo "")
+    if [ -n "$_db_b64" ]; then
+        DB_NAME=$(printf '%s' "$_db_b64" | base64 -d 2>/dev/null || echo "")
+        [ -n "$DB_NAME" ] && break
+    fi
+done
 
 if [ -z "$DB_NAME" ]; then
-    echo -e "${RED}Could not retrieve database name from secret '${FULLNAME}-secret'.${NC}" >&2
+    echo -e "${RED}Could not retrieve the database name from any sandbox secret.${NC}" >&2
+    echo -e "${YELLOW}Looked in namespace '${NAMESPACE}' for a secret matching app.kubernetes.io/instance=${SLUG} that carries a 'postgres-database' key.${NC}" >&2
+    echo -e "${YELLOW}Secrets matching that label: ${SECRET_REFS:-<none>}${NC}" >&2
     exit 2
 fi
 
@@ -167,7 +199,7 @@ echo ""
 # the live log; PIPESTATUS[0] is kubectl's real exit code, not tee's).
 TEST_LOG="$(mktemp)"
 set +e
-kubectl exec -n "$NAMESPACE" "deploy/${FULLNAME}-odoo" -- \
+kubectl exec -n "$NAMESPACE" "deploy/${ODOO_DEPLOY}" -- \
     odoo -u "$MODULE" --test-enable --test-tags "/$MODULE" --stop-after-init \
     --http-port=18069 --gevent-port=18072 --log-level=test \
     -d "$DB_NAME" -c /etc/odoo/odoo.conf 2>&1 | tee "$TEST_LOG"
@@ -193,8 +225,8 @@ if [ $TEST_EXIT_CODE -eq 0 ]; then
     # Restart odoo after test (--stop-after-init stops the process)
     echo ""
     echo -e "${BLUE}Restarting Odoo...${NC}"
-    kubectl rollout restart -n "$NAMESPACE" "deploy/${FULLNAME}-odoo"
-    kubectl rollout status -n "$NAMESPACE" "deploy/${FULLNAME}-odoo" --timeout=120s 2>/dev/null || true
+    kubectl rollout restart -n "$NAMESPACE" "deploy/${ODOO_DEPLOY}"
+    kubectl rollout status -n "$NAMESPACE" "deploy/${ODOO_DEPLOY}" --timeout=120s 2>/dev/null || true
 
     # Seed the e2e fixture last — after the rollout above the pod is serving again
     # (module tests ran with --stop-after-init). --reset because the e2e run advances
@@ -225,8 +257,8 @@ else
     # Restart odoo after test (--stop-after-init stops the process)
     echo ""
     echo -e "${BLUE}Restarting Odoo...${NC}"
-    kubectl rollout restart -n "$NAMESPACE" "deploy/${FULLNAME}-odoo"
-    kubectl rollout status -n "$NAMESPACE" "deploy/${FULLNAME}-odoo" --timeout=120s 2>/dev/null || true
+    kubectl rollout restart -n "$NAMESPACE" "deploy/${ODOO_DEPLOY}"
+    kubectl rollout status -n "$NAMESPACE" "deploy/${ODOO_DEPLOY}" --timeout=120s 2>/dev/null || true
 
     exit 1
 fi
