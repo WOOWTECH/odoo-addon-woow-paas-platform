@@ -624,6 +624,48 @@ from . import test_public_url_dns_gate_648
 # 健康 route 不觸發閘——這三條紅了代表守線被改成用缺席當判準。
 from . import test_route_dns_failed_648
 
+# fix: #822 `action_provision` 第一次 provision 的「孤兒窗口」——`create_tunnel` 已
+# 在 CF 建出 tunnel、而它的 id 還沒落進 DB 的那一段——四支 except 一律零補償
+# ⇒ 守衛 `if self.tunnel_id:` 不成立、DB 沒有任何東西指向剛建的那顆。
+# 🔴 本檔的判準是「參照 or 回收」的孤兒不變式，刻意不預選修法（#822 §8 三條方向
+# 在這個判準下都算通過），比對的是**每一次 create_tunnel 的回傳 id**——固定
+# return_value 的 mock 在這裡會假綠（重試那顆與第一顆同 id）。
+# RED：A2/A3（AccessError 形狀，真機制）、B2/B3（identity write 炸非 AccessError，
+# 注入）、D1/D2（create_tunnel 自己炸＝不可判定格，留可對帳記錄）、E1（補償自己
+# 失敗）、A4（補償成功後要回得去可重試狀態，⚠ 設計取捨）。
+# 陽性對照（修復前後都必須綠）：C1 守衛生效 0 次、C2 happy path 不得誤刪、
+# C3/C5 窗口**外**失敗不得補償刪除、C4 窗口外不得掛孤兒標記（標記不得變雜訊）。
+from . import test_sa_provision_orphan_tunnel_822
+
+# fix: #798 `security_access_access_policy.cf_policy_id` 沒有**任何**欄位級寫入
+# 守衛（欄位無 `groups=`、model 無 create strip／write reject、ACL 對
+# base.group_user 是 1,1,1,1、ir.rule 只過濾列不過濾欄位）⇒ 租戶對自己
+# workspace 內的 policy 列寫得進任意字串。而這個欄位餵的是 operator **唯一的
+# 刪除通道** `existing_policy_ids`，也是 `cf_access_policy_reap._trusted_ids_for()`
+# 判「可信」的那一半——那道判準假設「列上的值是伺服器擁有的」，本 issue 正是
+# 那個假設不成立。
+# 🔴 A 系列補的是 #798 自陳缺的那一格：該 issue 明寫「沒有跑過真的租戶 RPC ……
+# 端到端未驗」。用 `with_user` + `assertRaises` 代替不行——`TransactionCase` 是
+# su env、也模擬不到 `call_kw` 把呼叫端 context 整包換進 env 的那條載體。
+# RED：A1（覆寫既有 cf id）、A2（從空種進去＝跨租戶刪除的形狀）、B1/B2/B3
+# （create 側三個載體：vals／`default_<field>` context／`ir.default`）、E1/E2
+# （sudo 不是開閘）。
+# 陽性對照：每一格攻擊前先跑一次同一條 RPC 的合法欄位寫入／注入同機制的
+# `decision`——少了它，「守住了」與「這個通道在本環境根本不作用」不可區分。
+# 陰性對照：B1 另外斷言 create **本身**成功且其他欄位正常（「create 直接炸掉」
+# 對「攻擊者的值沒落地」同樣是綠的，同型翻車見 `test_sa_anchor_default_carriers_753`）。
+from . import test_policy_cf_id_write_guard_798
+
+# fix: #732 owner 對自己那列 write({'role':'admin'}) ⇒ workspace 永久 0 owner。
+# 三道既有守衛全漏（owner-row 守衛只擋非 owner 呼叫者、last-owner 不變式只掛
+# unlink、owner_count constraint 只在新值是 owner 時觸發）。新守衛＝write 路徑的
+# last-owner 保護：demote 會讓該 workspace 剩 0 owner 時 ValidationError。
+# 🔴 判準比對記錄不比對呼叫者（數 demote 之外剩幾個 owner，不是 blanket-deny
+# owner 列）——雙 owner SQL 直造的陽性對照釘住這個形狀；su/group_system 豁免
+# 由「promote-first 已被 owner_count constraint 擋死」逼出（詳見該檔檔頭），
+# 平台側 demote-then-promote 整段轉移有專屬陽性對照。
+from . import test_workspace_access_last_owner_732
+
 # fix: #740 unlink() 的外部副作用送在授權檢查之前 —— 授權前置檢查（authorization
 # preflight）。租戶刪除必失敗（ACL unlink=0），但 Cloudflare 那半在被拒之前就已經
 # 送出去且回捲不掉。

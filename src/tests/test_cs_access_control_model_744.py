@@ -47,6 +47,12 @@ from ..models.cloud_service import (
     _internal_provision,
 )
 
+# #798：`cf_policy_id` 有欄位級寫入守衛（create 壓值／write 拒絕，對 su 也生效）。
+# fixture 擺狀態必須經開閘 helper，否則會撞到自己要測的守衛。
+from ..models.security_access import (
+    _internal_policy_cf_write as _internal_policy_cf,
+)
+
 _CS_MODEL = 'woow_paas_platform.cloud_service'
 _POLICY_TABLE = 'woow_paas_platform_security_access_access_policy'
 _ARC_CONSTRAINT = '%s_anchor_arc' % _POLICY_TABLE
@@ -489,7 +495,7 @@ class TestCsAccessTeardown(_CsAccessFixture):
         # 的狀態，所以建 policy 會觸發真的 operator push。這裡是佈景不是受測動作。
         pol = _skip_route_sync(self.Policy).create(
             self._policy_vals(cloud_service_id=svc.id))
-        pol.cf_policy_id = 'cf-pol-1'
+        _internal_policy_cf(pol).cf_policy_id = 'cf-pol-1'
         with patch(self._SEAM, autospec=True, return_value=None) as seam:
             svc.unlink()
         seam.assert_called_once()
@@ -547,7 +553,7 @@ class TestCsAccessTeardown(_CsAccessFixture):
         # 同 D2：佈景設定，抑制 T3 之後才存在的 per-row operator push。
         pol = _skip_route_sync(self.Policy).create(
             self._policy_vals(cloud_service_id=svc.id))
-        pol.cf_policy_id = 'cf-pol-5'
+        _internal_policy_cf(pol).cf_policy_id = 'cf-pol-5'
         with patch(self._SEAM, autospec=True, return_value=None):
             svc._do_cleanup()
         self.assertEqual(svc.state, 'deleting')

@@ -3954,6 +3954,19 @@ INTERNAL_CTX_KEY_REGISTRY = {
         "why": "subdomain_prefix 的 data-repair 豁免。刻意與身分錨點分成兩把鑰匙："
                "改名的 migration 不該因此也能搬 tunnel id。",
     },
+    "sa_internal_policy_cf_write": {
+        "status": "enforced",
+        "sentinel": "_INTERNAL_IDENTITY_WRITE",
+        "defined_in": "src/models/security_access.py",
+        "reader": "_is_internal_policy_cf_write",
+        "issue": "#798",
+        "why": "access_policy 列上 `cf_policy_id` 的唯一寫入豁免。那個欄位決定 "
+               "operator **唯一的刪除通道** `existing_policy_ids` 裡有哪些帳號級 CF "
+               "Access policy，也是 `_trusted_ids_for()` 判「可信」的那一半——#798 已"
+               "實測 base.group_user 走 /web/dataset/call_kw 寫得進去且值落地。刻意與 "
+               "`sa_internal_identity_write` 分成兩把：既有測試大量開著那一把，共用會"
+               "讓本守衛在那些檔裡靜默失效（同型翻車見 smart_home_route 的註解）。",
+    },
     "woow_internal_provision": {
         "status": "enforced",
         "sentinel": "_INTERNAL_PROVISION",
@@ -3989,6 +4002,16 @@ INTERNAL_CTX_KEY_REGISTRY = {
         "defined_in": "src/models/smart_home_route.py",
         "issue": "#744",
         "why": "SH route 的 Access 身分錨點寫入豁免（形狀同 #522／#744）。",
+    },
+    "woow_ws_last_owner_demote": {
+        "status": "enforced",
+        "sentinel": "_INTERNAL_LAST_OWNER_DEMOTE",
+        "defined_in": "src/models/workspace_access.py",
+        "reader": "_is_internal_last_owner_demote",
+        "issue": "#732",
+        "why": "workspace「最後一個 owner 降級」的唯一程式碼開閘（人類修復通道"
+               "另走 group_system；裸 sudo 刻意不豁免＝#711 兩層界線不一致的"
+               "反面）；偽造 ⇒ 租戶可自我降級製造永久 0-owner、只剩平台救得回。",
     },
     # --- #787 A 段：同形態的一批（逐把驗可達性後再修） ------------------- #
     #

@@ -41,6 +41,12 @@ from ..models.security_access import _skip_route_sync
 from ..services.naming import make_service_subdomain
 from ..services.reconciler import collect_left_set
 
+# #798：`cf_policy_id` 有欄位級寫入守衛（create 壓值／write 拒絕，對 su 也生效）。
+# fixture 擺狀態必須經開閘 helper，否則會撞到自己要測的守衛。
+from ..models.security_access import (
+    _internal_policy_cf_write as _internal_policy_cf,
+)
+
 MOCK_GET_CLIENT = (
     'odoo.addons.woow_paas_platform.services.paas_operator.'
     'get_paas_operator_client'
@@ -118,7 +124,7 @@ class _CsAccessSyncFixture(TransactionCase):
             vals['sequence'] = sequence
         pol = _skip_route_sync(self.Policy.sudo()).create(vals)
         if cf_policy_id:
-            pol.cf_policy_id = cf_policy_id
+            _internal_policy_cf(pol).cf_policy_id = cf_policy_id
         # 🔴 `create()` 回的 recordset **帶著呼叫時的 context**——直接回它，
         # 之後對這筆 policy 的每一次 write 都還套著 `sa_skip_route_sync=True`，
         # 於是「錨點分派沒接好」與「fixture 把 sync 關掉了」在測試輸出上長得

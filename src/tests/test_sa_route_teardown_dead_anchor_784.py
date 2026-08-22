@@ -51,6 +51,12 @@ from ..models.security_access import (
     _internal_identity as _internal_sa, _skip_route_sync,
 )
 
+# #798：`cf_policy_id` 有欄位級寫入守衛（create 壓值／write 拒絕，對 su 也生效）。
+# fixture 擺狀態必須經開閘 helper，否則會撞到自己要測的守衛。
+from ..models.security_access import (
+    _internal_policy_cf_write as _internal_policy_cf,
+)
+
 #: SA 腿的 client 取得點（判準是「該 model 怎麼取得 client」不是「client 定義在
 #: 哪」）。cron 住在帳本 model 裡、自己 import 一份，所以 patch 點不同——這兩個
 #: 常數互抄就會得到「否定性斷言無聲通過」。
@@ -133,7 +139,7 @@ class _Fixture:
             # cf id 的回填留在 skip context 裡：這是 fixture 在擺狀態，不是被測
             # 的動作——讓它打 operator 會把「機制有沒有接好」與「fixture 自己多
             # 打了一趟」混在一起。
-            pol.cf_policy_id = cf_id
+            _internal_policy_cf(pol).cf_policy_id = cf_id
         return route
 
 

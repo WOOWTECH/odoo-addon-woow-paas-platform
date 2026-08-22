@@ -17,6 +17,12 @@ from odoo.addons.woow_paas_platform.models.security_access import (
     _skip_route_sync,
 )
 
+# #798：`cf_policy_id` 有欄位級寫入守衛（create 壓值／write 拒絕，對 su 也生效）。
+# fixture 擺狀態必須經開閘 helper，否則會撞到自己要測的守衛。
+from ..models.security_access import (
+    _internal_policy_cf_write as _internal_policy_cf,
+)
+
 MOCK_GET_CLIENT = (
     'odoo.addons.woow_paas_platform.models.security_access.'
     'get_paas_operator_client'
@@ -614,8 +620,8 @@ class TestRouteAccessSync(TransactionCase):
             p2 = self.Policy.create({
                 'route_id': route.id, 'name': 'p2', 'decision': 'allow',
                 'rule_type': 'email_list', 'rule_value': 'user@b.com'})
-            p1.cf_policy_id = 'cf-a'
-            p2.cf_policy_id = 'cf-b'
+            _internal_policy_cf(p1).cf_policy_id = 'cf-a'
+            _internal_policy_cf(p2).cf_policy_id = 'cf-b'
             mc.sync_access_app.reset_mock()
             p2.unlink()
         self.assertTrue(mc.sync_access_app.called)
@@ -634,8 +640,8 @@ class TestRouteAccessSync(TransactionCase):
             p2 = self.Policy.create({
                 'route_id': route.id, 'name': 'p2', 'decision': 'allow',
                 'rule_type': 'email_list', 'rule_value': 'user@b.com'})
-            p1.cf_policy_id = 'cf-a'
-            p2.cf_policy_id = 'cf-b'
+            _internal_policy_cf(p1).cf_policy_id = 'cf-a'
+            _internal_policy_cf(p2).cf_policy_id = 'cf-b'
             mc.sync_access_app.reset_mock()
             (p1 + p2).unlink()
         self.assertTrue(mc.sync_access_app.called)
