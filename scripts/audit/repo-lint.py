@@ -4003,6 +4003,16 @@ INTERNAL_CTX_KEY_REGISTRY = {
         "issue": "#744",
         "why": "SH route 的 Access 身分錨點寫入豁免（形狀同 #522／#744）。",
     },
+    "woow_ws_last_owner_demote": {
+        "status": "enforced",
+        "sentinel": "_INTERNAL_LAST_OWNER_DEMOTE",
+        "defined_in": "src/models/workspace_access.py",
+        "reader": "_is_internal_last_owner_demote",
+        "issue": "#732",
+        "why": "workspace「最後一個 owner 降級」的唯一程式碼開閘（人類修復通道"
+               "另走 group_system；裸 sudo 刻意不豁免＝#711 兩層界線不一致的"
+               "反面）；偽造 ⇒ 租戶可自我降級製造永久 0-owner、只剩平台救得回。",
+    },
     # --- #787 A 段：同形態的一批（逐把驗可達性後再修） ------------------- #
     #
     # ⚠ 刻意不寫「還剩幾把」：那個數字每修好一把就腐爛一次，而它腐爛時沒有任何
