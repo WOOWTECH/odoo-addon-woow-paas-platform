@@ -653,6 +653,10 @@ except Exception as e:
 >
 > 🔴 **`hermes-agent` 0.2.0 在該 clone 的全部歷史中不存在**：`git log --all --oneline -- charts/hermes-agent/Chart.yaml` 只回 5 筆，最高版本是 **0.1.3**（在 branch `feat/hermes-agent-013-root-dashboard`），`main` 上是 0.1.1；`git log --all -S'version: 0.2.0' -- charts/hermes-agent/Chart.yaml` **零命中**。⇒ **seed 釘的 0.2.0 內容本次未取得**，下方 §10.2 對 hermes-agent 的觀察一律標為「0.1.1 觀察、不可代表 0.2.0」。
 >
+> > **leader4 追加查證（2026-08-22，獨立複驗）**：這不是「0.2.0 不存在」，是**本 clone 太舊**。本 repo 把 `hermes-agent` 釘到 0.2.0 的 commit 是 `c6468f38`（**2026-08-16**，`feat: hermes-agent chart 版本釘 0.2.0（租戶自裝 CLI 的落點收斂，Closes #717）`；查法 `git log -S'<field name="helm_chart_version">0.2.0</field>' -- src/data/cloud_app_templates.xml`），而該 clone 全部 ref 中 `charts/hermes-agent/Chart.yaml` 的最新異動是 **2026-08-10**（`git log --all --format=%ad --date=short -- charts/hermes-agent/Chart.yaml`）。⇒ 0.2.0 是在 clone 凍結**之後**才發佈的。
+> >
+> > **這改變了要提的請求**：提問二的 hermes-agent 半邊**不是需要 charts 側「回答」的設計問題**，它只需要一個**讀得到 0.2.0 的人**（fetch 授權，或請 `woow-paas-charts` agent 讀一次該版的 `charts/hermes-agent/templates/network-policy.yaml`）。在拿到之前，本檔對 hermes-agent 的一切結論都**只是 0.1.1 的觀察**。
+>
 > #### 不在 woow-paas-charts 的 4 支第三方 chart（本次查證涵蓋不到）
 >
 > `postgresql`（bitnami 18.8.5）／`redis`（bitnami 27.0.18）／`odoo`（bitnami 28.2.10）／`n8n`（8gears 2.0.1）四支都是外部 OCI chart，**不在該 repo**（`ls charts/` 只有 agent-runtime / haos / hermes-agent / home-assistant / home-assistant-full / mcp-server / open-design / paas-operator / vibe-kanban 九支）。它們的查證路徑見 §11 第 1 項。
