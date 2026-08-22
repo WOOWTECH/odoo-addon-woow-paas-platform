@@ -158,7 +158,8 @@ class TestSecurityAccessCron(TransactionCase):
             self.CronModel._cron_enforce_subscription_lifecycle()
         sa.invalidate_recordset()
         # cleanup ran: tunnel deleted, state → deleting.
-        mock_client.delete_tunnel.assert_called_once_with('tun-cron')
+        mock_client.delete_tunnel.assert_called_once_with(
+            'tun-cron', tunnel_name=False)
         self.assertEqual(sa.state, 'deleting')
         self.assertFalse(sa.tunnel_id)
 
