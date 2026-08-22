@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """repo-lint：把「假綠家族」pitfall 轉成機械 gate 的靜態檢查工具。
 
-三十六個 check 函式，歸為下列三十一條規則（其中三條各由多個函式實作：第 7 條
+三十七個 check 函式，歸為下列三十二條規則（其中三條各由多個函式實作：第 7 條
 capability-gate 由四個函式——slug 集合成員／admin-gui 錨點／gateway 文案錨點／
 Access 頁籤錨點；第 22 條
 security-rule-lifecycle 由兩個函式——ir.rule 的出生地／退役名字；第 31 條
@@ -458,6 +458,39 @@ test-collectability 由兩個函式——收集面／執行面。這個一對多
                      status check（develop 只 required `manifest-version-gate`），
                      是看得見的紅燈、不是閘門。
 
+32. route-contract-golden  `RouteInfo` / `RouteStatus` 的 wire 形狀一改，
+                     `src/tests/fixtures/route_contract_golden.json` 就必須跟著重產
+                     （#648）。golden 是 operator↔Odoo 唯一的契約載體：Odoo 端**不吃
+                     operator 的碼**，它讀 golden 當 fixture；operator 端另有測試斷言
+                     「現在的序列化 == golden」。
+                     🔴 但那道斷言長在**沒有 CI runner 的那一側**（`extra/paas-operator/`
+                     明文無 runner），而 Odoo 端讀舊 golden 照樣全綠 ⇒ 「改了序列化又
+                     忘了重產 golden」**完全無聲**，而那正是這道守線唯一存在的理由。
+                     判準是把 `RouteInfo`／`RouteStatus` 的**欄位名／型別／預設值**
+                     （AST 正規化，刻意不含 `description=` 文案）雜湊後與 golden 內嵌的
+                     `_contract_fingerprint` 比對。
+                     刻意**不用** git diff「兩邊都有改就放行」：那個判準可以被「先重產、
+                     之後再手改 golden」兩步繞過（diff 顯示兩邊都動了、內容卻已不一致），
+                     而且會為這支純靜態工具引入 git 依賴與「base 解析不到」的失效模式。
+                     指紋式另外抓得到 git diff 抓不到的一格：**golden 在 base 上就已經
+                     stale**。
+                     🔴 但**兩者不是包含關係，是盲區互補**——不要寫成「指紋是 diff 的
+                     超集」：只改 `description=` 文案時 diff 版會紅（schemas.py 動了、
+                     golden 沒動）、指紋版綠；反過來下面那個行為盲區 diff 版抓得到、
+                     指紋版抓不到。選指紋是因為它瞄得準（兩種偽陽偽陰都少），不是因為
+                     它涵蓋另一個。
+                     🔴 **已命名的盲區**：指紋只涵蓋 schema 形狀，**不涵蓋**
+                     `_create_cloudflare_route` 的**行為**。有人改那支讓某條路由回
+                     `status="ok"`（schema 沒動）⇒ 指紋不變 ⇒ 本 gate 綠，而 golden 已
+                     stale、Odoo 端從此釘住錯的行為。那一格只有 operator 端的
+                     `tests/test_route_contract_golden_648.py` 抓得到，而它**沒有 CI
+                     runner**——靠 CLAUDE.md 明文「改 extra/paas-operator/ 合併前必須
+                     本機跑」。刻意不把函式體 AST 也雜湊：任何無關重構都會誤紅，噪音大
+                     的 gate 會被關掉，關掉的 gate 等於沒有。
+                     ⚠ repo-lint **不是 required check**，這條紅了擋不住 merge；它的
+                     價值是「動手的人當場看到」，不是機器擋住。
+                     依據 docs/tracking/pitfalls/operator-route-none-conflates-disabled-and-failed.md
+
 用法：
 
   scripts/audit/repo-lint.py --all                # 全 repo 掃描（CI / merge 前手動）
@@ -471,6 +504,7 @@ import ast
 import csv
 import glob
 import io
+import hashlib
 import json
 import os
 import re
@@ -4897,6 +4931,7 @@ REPO_LINT_RULES = {
     "tunnel-config-wire-shape": ("check_tunnel_config_wire_shape",),
     "test-collectability": ("check_test_module_collection",
                             "check_test_class_execution"),
+    "route-contract-golden": ("check_route_contract_golden",),
 }
 
 # 刻意不掛 hook 分派的 check：{函式名: 理由}。現況是空的（每一條都掛得到 hook）。
@@ -5285,6 +5320,166 @@ def check_repo_lint_docstring_registry(root):
     return violations
 
 
+
+# --------------------------------------------------------------------------- #
+#  32. route-contract-golden（#648）                                            #
+# --------------------------------------------------------------------------- #
+
+_ROUTE_CONTRACT_SCHEMA = "extra/paas-operator/src/models/schemas.py"
+_ROUTE_CONTRACT_GOLDEN = "src/tests/fixtures/route_contract_golden.json"
+_ROUTE_CONTRACT_FINGERPRINT_KEY = "_contract_fingerprint"
+#: 順序有意義：wire 上的欄位順序也是契約的一部分。
+_ROUTE_CONTRACT_CLASSES = ("RouteStatus", "RouteInfo")
+#: 兩端互為對方的判準：改 schema 或改 golden，壞掉的都是「兩者一致」這個跨檔
+#: 不變式本身 ⇒ 不做 only_file 切片（同 kubectl-ns-whitelist-sync 的形狀）。
+ROUTE_CONTRACT_FILES = (_ROUTE_CONTRACT_SCHEMA, _ROUTE_CONTRACT_GOLDEN)
+
+
+def _field_default_repr(value):
+    """從 `x: T = Field(...)` 抽出**預設值**，刻意丟掉 `description=` 等文案。
+
+    只留會改變 wire 行為的部分：有沒有預設、預設是什麼。這樣改一行說明文字不會
+    誤紅——噪音大的 gate 會被關掉，關掉的 gate 等於沒有。
+    """
+    if value is None:
+        return None
+    if isinstance(value, ast.Call) and getattr(value.func, "id", None) == "Field":
+        if value.args:
+            return ast.unparse(value.args[0])
+        for kw in value.keywords:
+            if kw.arg == "default":
+                return ast.unparse(kw.value)
+        return "<no-default>"
+    return ast.unparse(value)
+
+
+def route_contract_fingerprint(root):
+    """`RouteInfo` / `RouteStatus` 的 wire 形狀指紋。回 ``(fingerprint, error)``。
+
+    **這支是 gate 與產生腳本的共同權威**——`extra/paas-operator/tests/
+    generate_route_contract_golden.py` 直接 import 它把結果嵌進 golden，所以兩邊
+    不可能各算各的（那正是這類守線最常見的失效方式）。
+    """
+    path = os.path.join(root, _ROUTE_CONTRACT_SCHEMA)
+    try:
+        with open(path, encoding="utf-8") as f:
+            tree = ast.parse(f.read())
+    except (OSError, SyntaxError, ValueError) as exc:
+        return None, "%s：讀不到或 parse 失敗（%s）" % (_ROUTE_CONTRACT_SCHEMA, exc)
+
+    found = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ClassDef) and node.name in _ROUTE_CONTRACT_CLASSES:
+            shape = []
+            for item in node.body:
+                if isinstance(item, ast.AnnAssign) and isinstance(item.target, ast.Name):
+                    shape.append([item.target.id,
+                                  ast.unparse(item.annotation),
+                                  _field_default_repr(item.value)])
+                elif isinstance(item, ast.Assign) and len(item.targets) == 1 \
+                        and isinstance(item.targets[0], ast.Name):
+                    shape.append([item.targets[0].id, None,
+                                  _field_default_repr(item.value)])
+            found[node.name] = shape
+
+    missing = [c for c in _ROUTE_CONTRACT_CLASSES if c not in found]
+    if missing:
+        return None, ("%s：找不到 %s —— 契約類別被改名或刪掉了，指紋無從計算"
+                      % (_ROUTE_CONTRACT_SCHEMA, "／".join(missing)))
+
+    canonical = json.dumps([[c, found[c]] for c in _ROUTE_CONTRACT_CLASSES],
+                           ensure_ascii=False, sort_keys=False)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest(), None
+
+
+def check_route_contract_golden(root):
+    """`RouteInfo`／`RouteStatus` 一改，golden 就必須重產（#648）。
+
+    ## 為什麼需要這條
+
+    `route` 的形狀是 operator↔Odoo 唯一的契約載體。Odoo 端**不吃 operator 的碼**，
+    它讀 `route_contract_golden.json` 當 fixture；operator 端另有測試斷言「現在的
+    序列化 == golden」。
+
+    🔴 但那道斷言長在**沒有 CI runner 的那一側**（`extra/paas-operator/` 明文無
+    runner，只能靠人本機跑），而 Odoo 端讀舊 golden **照樣全綠**（golden 沒變、Odoo
+    碼沒動）⇒ 「改了 operator 的序列化又忘了重產 golden」**完全無聲**——而那正是這道
+    守線唯一存在的理由。本 check 把那一格補上。
+
+    ## 判準：指紋，不是 git diff
+
+    比對 `RouteInfo`／`RouteStatus` 的**欄位名／型別／預設值**（AST 正規化，刻意不含
+    `description=` 文案）雜湊後的值，與 golden 內嵌的 `_contract_fingerprint`。
+
+    刻意**不用**「本分支相對 base 兩邊都有改就放行」：
+
+    - 那個判準可以被**兩步繞過**——先重產 golden、之後再手改 golden，diff 顯示兩邊
+      都動了、內容卻已經不一致。
+    - 它抓不到「golden 在 base 上就已經 stale」那一格；指紋式抓得到。
+    - 它會為這支**純靜態**工具（今天 subprocess 呼叫數為 0）引入 git 依賴，以及
+      「base 解析不到時該紅還是該綠」這個新的失效模式。
+
+    🔴 **但兩者不是包含關係，是盲區互補。** 不要說「指紋是 diff 的超集」——只改
+    `description=` 文案時 diff 版會紅、指紋版綠（那是指紋版刻意的：噪音大的 gate 會
+    被關掉）。選指紋是因為它瞄得準，不是因為它涵蓋另一個。
+
+    ## 🔴 已命名的盲區：這條**不**守行為，只守 schema 形狀
+
+    指紋只雜湊 `RouteInfo`／`RouteStatus` 的欄位形狀。**`_create_cloudflare_route`
+    的行為不在範圍內**——有人改那支、讓「找不到 service」那條路改成回 `status="ok"`：
+    schema 沒動 ⇒ 指紋不變 ⇒ **本 gate 綠**，而 golden 的內容已經 stale，Odoo 端從此
+    釘住錯的行為。
+
+    那一格只有 operator 端 `tests/test_route_contract_golden_648.py` 與
+    `test_route_three_states_648.py` 抓得到，而 `extra/paas-operator/` **沒有 CI
+    runner**（CLAUDE.md 明文）⇒ 只能靠「改 operator 合併前必須本機跑」這條人的紀律。
+
+    刻意**不**把函式體 AST 也雜湊進來：那會讓任何無關重構都誤紅，而噪音大的 gate 會
+    被關掉——關掉的 gate 等於沒有。⇒ 這個洞是**選擇留下的**，不是沒看到；把它寫在這裡
+    是因為守線裡沒被命名的洞，就是下一個人被騙的地方。
+
+    ## ⚠ 這條擋不住 merge
+
+    repo-lint 不是 develop 的 required check（唯一 required 的是
+    `manifest-version-gate`）。本 check 的價值是**動手的人當場會看到**，不是機器擋住。
+    不要在 PR 或文件裡把它寫成「已由 gate 守住」。
+
+    🔴 fail-loud：schema 讀不到／類別不見／golden 讀不到／缺指紋鍵，一律當違規。
+    靜默略過會讓這條 gate 在檔案改名的當下永久沉默且看起來永遠是綠的。
+    """
+    violations = []
+    fingerprint, err = route_contract_fingerprint(root)
+    if err:
+        return [err + "——route 契約指紋無從計算，本 gate 失去鑑別力（#648）"]
+
+    golden_path = os.path.join(root, _ROUTE_CONTRACT_GOLDEN)
+    try:
+        with open(golden_path, encoding="utf-8") as f:
+            golden = json.load(f)
+    except (OSError, ValueError) as exc:
+        return ["%s：讀不到或不是合法 JSON（%s）——Odoo 端的 fixture 就是這個檔，"
+                "它壞掉時 Odoo 測試會紅在 import 而不是行為上（#648）"
+                % (_ROUTE_CONTRACT_GOLDEN, exc)]
+
+    recorded = golden.get(_ROUTE_CONTRACT_FINGERPRINT_KEY)
+    if not recorded:
+        violations.append(
+            "%s 缺少 `%s`——golden 必須由 "
+            "`extra/paas-operator/tests/generate_route_contract_golden.py` 產生，"
+            "手寫的 golden 沒有指紋、這道 gate 對它零鑑別力（#648）"
+            % (_ROUTE_CONTRACT_GOLDEN, _ROUTE_CONTRACT_FINGERPRINT_KEY))
+    elif recorded != fingerprint:
+        violations.append(
+            "%s 的 `%s` 是 %s，但 %s 現在的 RouteInfo／RouteStatus 算出來是 %s"
+            "——operator 的 wire 形狀改了、golden 沒重產。Odoo 端讀的是舊形狀，"
+            "而它**照樣會全綠**（那正是這道 gate 存在的理由）。"
+            "重產：cd extra/paas-operator && python3.11 "
+            "tests/generate_route_contract_golden.py（#648）"
+            % (_ROUTE_CONTRACT_GOLDEN, _ROUTE_CONTRACT_FINGERPRINT_KEY,
+               recorded[:12], _ROUTE_CONTRACT_SCHEMA, fingerprint[:12]))
+    return violations
+
+
 def run_all(root):
     # 🔴 floor 排在最前面，而且**直接寫在這裡**、不做成第 21 條 check（#613）。
     #    理由是驗收條件本身：「把 check_repo_lint_docstring_registry 自己的四處一起
@@ -5328,7 +5523,8 @@ def run_all(root):
                   + check_access_gate_no_ledger_read(root)
                   + check_tunnel_config_wire_shape(root)
                   + check_test_module_collection(root)
-                  + check_test_class_execution(root))
+                  + check_test_class_execution(root)
+                  + check_route_contract_golden(root))
     if violations:
         print("repo-lint：%d 個違規" % len(violations))
         for v in violations:
@@ -5462,6 +5658,13 @@ def run_hook():
         # 同時讀兩端才成立 ⇒ 不做 only_file 切片，動到任一端就整條重算。
         tunnel_wire = (check_tunnel_config_wire_shape(root)
                        if _tunnel_config_wire_watches(rel) else [])
+        # #648：schema 與 golden 互為對方的判準，壞掉的是「兩者一致」這個跨檔不變式
+        # 本身 ⇒ 不做 only_file 切片，動到任一份就整條重算。**這一支特別需要 hook**：
+        # 它守的正是「改了 operator 的序列化又忘了重產 golden」，而 operator 那側
+        # 沒有 CI runner、Odoo 那側讀舊 golden 照樣全綠 —— 動手的當下看不到，之後
+        # 就沒有人會看到了。
+        route_golden = (check_route_contract_golden(root)
+                        if rel in ROUTE_CONTRACT_FILES else [])
         if re.match(r"^src/controllers/.*\.py$", rel):
             violations = check_controller_sudo(root, only_file=abs_path)
             violations += check_reuse_values(root, only_file=abs_path)
@@ -5527,7 +5730,7 @@ def run_hook():
             violations = check_kubectl_ns_whitelist_sync(root)
         elif (ladder or availability or poll_facts or anchors or floor
                 or security_rules or one_time_cred or provision or sh_sub_groups
-                or internal_ctx or tunnel_wire):
+                or internal_ctx or tunnel_wire or route_golden):
             # extra/paas-operator/** 與 docs/tracking/pitfalls/** 不在上面任何分支，
             # 但前者持有階梯的內層常數、後者是 doc-symbol-anchor 的一半輸入；
             # baselines/repo-lint-registry.txt（floor 的另一份輸入）與
@@ -5547,6 +5750,7 @@ def run_hook():
         violations += sh_sub_groups
         violations += internal_ctx
         violations += tunnel_wire
+        violations += route_golden
         if violations:
             print(json.dumps({
                 "decision": "block",

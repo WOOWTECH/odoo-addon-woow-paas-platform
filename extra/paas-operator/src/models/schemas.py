@@ -311,12 +311,70 @@ class ReleaseRevision(BaseModel):
     description: str
 
 
-class RouteInfo(BaseModel):
-    """Information about a Cloudflare Tunnel route."""
+class RouteStatus(str, Enum):
+    """How the expose request for a release turned out (#648 (a))."""
 
-    hostname: str = Field(..., description="Public hostname (e.g., myapp.example.com)")
-    service_url: str = Field(..., description="Internal service URL")
+    OK = "ok"
+    FAILED = "failed"
+
+
+class RouteInfo(BaseModel):
+    """Information about a Cloudflare Tunnel route.
+
+    ⚠ **``ReleaseInfo.route`` being ``None`` is NOT a failure signal.** It means the
+    release did not ask to be exposed, OR the Cloudflare integration is switched off
+    in this deployment (``CLOUDFLARE_ENABLED`` defaults to **false**, and it is also
+    forced off when any of account id / tunnel id / api token / domain is missing).
+    A caller that treats a missing ``route`` as "expose failed" turns **every**
+    deployment on a Cloudflare-less operator into an error — see
+    ``docs/tracking/pitfalls/operator-route-none-conflates-disabled-and-failed.md``
+    in the platform repo.
+
+    When expose *was* attempted, this object is always returned — with ``status``
+    saying whether it worked. That is the signal callers must branch on.
+    """
+
+    hostname: Optional[str] = Field(
+        None,
+        description=(
+            "Public hostname (e.g., myapp.example.com). Always set when status is "
+            "'ok'. May be None on a 'failed' route when the failure happened before "
+            "the subdomain was resolved — None means **not determined**, which is "
+            "deliberately distinct from an empty string (a value someone chose)."
+        ),
+    )
+    service_url: Optional[str] = Field(
+        None,
+        description=(
+            "Internal service URL. Always set when status is 'ok'. May be None on a "
+            "'failed' route: the two failure paths that fire before service "
+            "discovery completes (no services found / no usable port) genuinely do "
+            "not have one. Same rule as hostname — None is 'not determined', not ''."
+        ),
+    )
     enabled: bool = Field(default=True, description="Whether the route is active")
+    status: RouteStatus = Field(
+        default=RouteStatus.OK,
+        description=(
+            "'ok' when the tunnel ingress route was configured; 'failed' when expose "
+            "was requested but no route could be created (Cloudflare API error, no "
+            "service found to expose, or no usable port). Absent/'ok' from an older "
+            "operator that predates this field means 'ok' — callers MUST NOT read a "
+            "missing field as a failure."
+        ),
+    )
+    dns_failed: bool = Field(
+        default=False,
+        description=(
+            "True when DNS record creation was attempted and failed, so the hostname "
+            "will not resolve even though the tunnel ingress rule exists. Mirrors "
+            "TunnelCreateResponse.dns_failed: the caller MUST NOT treat the route as "
+            "reachable while this is set. Always False when DNS management is "
+            "intentionally disabled (CLOUDFLARE_ZONE_ID unset) — 'disabled' is not "
+            "'failed', and conflating them makes every deployment on such a "
+            "deployment look broken."
+        ),
+    )
 
 
 class ReleaseInfo(BaseModel):

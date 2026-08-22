@@ -19,6 +19,7 @@ from src.models.schemas import (
     ReleaseStatusResponse,
     ReleaseUpgradeRequest,
     RouteInfo,
+    RouteStatus,
     SidecarPatchRequest,
     SidecarPatchResponse,
 )
@@ -1534,11 +1535,50 @@ async def _create_cloudflare_route(
         expose_config: ExposeConfig from request
 
     Returns:
-        RouteInfo if route was created, None otherwise
+        ``None`` **only** when there is nothing to report: the Cloudflare integration
+        is switched off for this deployment. Every other outcome returns a
+        :class:`RouteInfo` whose ``status`` says whether it worked.
+
+        🔴 Before #648 (a) this function returned a bare ``None`` for *five* different
+        situations — integration off, no service found, no usable port, Cloudflare
+        error, unexpected error — so the caller could not tell "this deployment has no
+        public URL by design" apart from "expose was requested and failed". Since
+        ``cloudflare_enabled`` defaults to **false**, any caller that read a missing
+        route as a failure would turn **every** deployment on a Cloudflare-less
+        operator into an error. See
+        ``docs/tracking/pitfalls/operator-route-none-conflates-disabled-and-failed.md``
+        in the platform repo.
     """
     if not cloudflare_service.enabled:
+        # Not a failure: this deployment simply has no public URL. Keep returning
+        # None so "no route to report" stays one single, unambiguous shape.
         logger.info("Cloudflare integration disabled, skipping route creation")
         return None
+
+    subdomain = None
+    service_url = None
+
+    def _failed(reason: str) -> RouteInfo:
+        """Expose was requested and did not work — say so explicitly."""
+        logger.warning(
+            "Cloudflare route not created for %s/%s: %s",
+            namespace, release_name, reason,
+        )
+        return RouteInfo(
+            # 🔴 不知道就回 None，**不要**填空字串。兩條失敗路徑（找不到 service／
+            # 推不出 port）發生在 service_url 被算出來之前，硬填 "" 會讓呼叫端分不出
+            # 「沒算出來」與「算出來是空的」——那正是本修法要消滅的那個病
+            # （bare None 承載兩種語意）換個位置重演一次。
+            hostname=(
+                f"{subdomain}.{settings.cloudflare_domain}" if subdomain else None
+            ),
+            service_url=service_url,
+            enabled=False,
+            status=RouteStatus.FAILED,
+            # 這裡失敗的是整條 route；DNS 那一步有沒有問題我們不知道，
+            # 不知道就不要宣稱（`dns_failed` 只在確實嘗試過而失敗時才為真）。
+            dns_failed=False,
+        )
 
     try:
         # Determine subdomain
@@ -1561,8 +1601,7 @@ async def _create_cloudflare_route(
             )
 
             if not services:
-                logger.warning(f"No services found for release {release_name}")
-                return None
+                return _failed("no services found for this release")
 
             # Find first non-headless service with HTTP-like port
             for svc in services:
@@ -1590,10 +1629,7 @@ async def _create_cloudflare_route(
                     break
 
         if not service_name or not service_port:
-            logger.warning(
-                f"Could not determine service to expose for release {release_name}"
-            )
-            return None
+            return _failed("could not determine which service/port to expose")
 
         # Generate internal service URL
         service_url = cloudflare_service.generate_service_url(
@@ -1603,24 +1639,33 @@ async def _create_cloudflare_route(
         )
 
         # Create the route
-        await cloudflare_service.create_route(
+        outcome = await cloudflare_service.create_route(
             subdomain=subdomain,
             service_url=service_url,
         )
 
         hostname = f"{subdomain}.{settings.cloudflare_domain}"
         logger.info(f"Created Cloudflare route: {hostname} -> {service_url}")
+        if outcome.dns_failed:
+            # Tunnel ingress exists but the hostname will not resolve. HTTP 201 is
+            # still correct (the helm release installed fine) — the caller is told
+            # via this flag, exactly like TunnelCreateResponse.dns_failed (#484).
+            logger.error(
+                "Route %s created without its DNS record — the hostname will not "
+                "resolve until someone creates it", hostname,
+            )
 
         return RouteInfo(
             hostname=hostname,
             service_url=service_url,
             enabled=True,
+            status=RouteStatus.OK,
+            dns_failed=outcome.dns_failed,
         )
 
     except CloudflareException as e:
-        logger.error(f"Failed to create Cloudflare route: {e.message}")
-        # Don't fail the release creation, just log the error
-        return None
-    except Exception as e:
-        logger.error(f"Unexpected error creating Cloudflare route: {e}")
-        return None
+        # Still don't fail the release creation (the helm install succeeded) — but
+        # the caller now learns that expose was asked for and did not happen.
+        return _failed(f"Cloudflare API error: {e.message}")
+    except Exception as e:  # noqa: BLE001 — route failure must not sink the release
+        return _failed(f"unexpected error: {e}")
