@@ -164,9 +164,11 @@ SKIP_LINE = re.compile(
 #    ⇒ 識別字變成 `<模組>.Subtest`，而且同模組多筆 subtest 失敗會**併成同一筆**。
 #    那打掉的正是 C5 從「0F/0E」改成集合差所換來的唯一性質——「**是哪一條**」——
 #    而且是靜默退化。本樹至少 20 個測試檔在用 `subTest`。
-#    實測（本機跑 unittest 重現，非讀碼推論）：
-#      `FAIL: Subtest TestShAccessEndpoints.test_role_matrix (role='member')`
-#      配舊式子解析出 `test_sh_access_endpoints_768.Subtest`，兩筆併成一筆。
+#    實測逐字（2026-08-22 本機跑真實 Odoo 抄回來的，不是讀碼推論）：
+#      `…tests.test_security_access_p_rule_migration: FAIL: Subtest`
+#      `  TestPRuleMigration.test_zz_subtest_probe (role='member')`
+#      配舊式子解析出 `test_security_access_p_rule_migration.Subtest`，
+#      而同模組多筆 subtest 失敗會併成那同一筆。
 #    吃掉前綴後對應到的是**父測試**的識別字，那才是 baseline／哨兵共用的那個空間。
 #
 # ⚠ (c) 是**已知盲區，不是規格**：`setUpClass` / `tearDownClass` 的錯誤走 unittest 的
@@ -677,29 +679,41 @@ SELF_TEST_DETAIL_LINES = [
 #: 真的有鑑別力的形狀，而且下面 `SELF_TEST_FAILURE_LINE_MUTANTS` 會反過來驗
 #: 「這組樣本真的擋得住寫壞的式子」——否定性驗證配陽性對照。
 SELF_TEST_FAILURE_LINES = [
-    # ── 陽性：三種 getDescription 分支中本式子該認得的兩種 ──────────────────
-    # (a) TestCase 分支（`result.py:281`）＋ ERROR flavour。這條就是 #543 那條紅燈
-    #     在 log 裡的形狀——它 2026-08-21 的 run 4629 已轉綠，所以只能用注入的。
-    ("2026-08-21 10:00:00,123 456 ERROR test odoo.addons.woow_paas_platform.tests."
-     "test_security_access_p_rule_migration: ERROR: TestPRuleMigration."
+    # ── 陽性：getDescription 三個分支中本式子該認得的兩個 ────────────────────
+    # 🔬 前兩條是**實測逐字值**，不是照著源碼構造的：2026-08-22 在本機以 CI 同一套
+    #    兩步法（paas-odoo image ＋ `-i` 後 `-u --test-enable`）跑
+    #    `--test-tags /woow_paas_platform:TestPRuleMigration`，刻意讓它紅一次抄回來的。
+    #    這也是 FAILURE_LINE **第一次**有真實世界的陽性對照（留言 4772／8494 §4(1)
+    #    記載它「至今從未對真實紅燈匹配成功過一次」）。
+    #
+    # (a) TestCase 分支（`result.py:281`）。⚠ 注意 log level 欄是 `ERROR`、flavour 是
+    #     `FAIL` —— 兩者不同源（level 恆為 ERROR，見 `result.py:300`），別綁在一起。
+    ("2026-08-21 23:56:47,017 91 ERROR test odoo.addons.woow_paas_platform.tests."
+     "test_security_access_p_rule_migration: FAIL: TestPRuleMigration."
      "test_cursor_bypass_flag_cleared_after_migrate",
      "test_security_access_p_rule_migration.TestPRuleMigration."
      "test_cursor_bypass_flag_cleared_after_migrate"),
-    # FAIL flavour。⚠ 這條測試**名字裡就含 `failure`**：識別字含 fail 字樣是完全正常
-    #   的，判別式在 flavour 的**槽位**，不在「哪裡出現 fail 這個字」。
+    # (b) _SubTest 分支（`result.py:277`）。同一趟實測：在容器內臨時加一條會在
+    #     `subTest` 裡失敗的探針測試抄回來的（探針沒有進樹）。舊式子在這一行解析出
+    #     `test_security_access_p_rule_migration.Subtest`。
+    ("2026-08-21 23:58:28,539 115 ERROR test odoo.addons.woow_paas_platform.tests."
+     "test_security_access_p_rule_migration: FAIL: Subtest TestPRuleMigration."
+     "test_zz_subtest_probe (role='member')",
+     "test_security_access_p_rule_migration.TestPRuleMigration."
+     "test_zz_subtest_probe"),
+    # 以下兩條是**構造**的，因為本樹目前觀察不到：
+    # ERROR flavour —— `addError`（`result.py:123-133`）與 `addFailure`
+    # （`result.py:134-141`）走同一個 `logError()`，差別只有那個 flavour 字串。
+    # ⚠ 這條測試**名字裡就含 `failure`**：識別字含 fail 字樣完全正常，判別式在
+    #   flavour 的**槽位**，不在「哪裡出現 fail 這個字」。
     ("2026-08-21 10:00:01,000 456 ERROR test odoo.addons.woow_paas_platform.tests."
-     "test_wallet_topup: FAIL: TestWalletTopup.test_charge_via_token_returns_failure",
+     "test_wallet_topup: ERROR: TestWalletTopup.test_charge_via_token_returns_failure",
      "test_wallet_topup.TestWalletTopup.test_charge_via_token_returns_failure"),
     # 子套件：logger 名多一段套件名，識別字必須跟著帶（與 C0／C3 同一個空間）。
+    # 觀察不到的原因：`src/tests/integration/` 三個 class 全帶 `-standard`，標準跑選不到。
     ("2026-08-21 10:00:01,500 456 ERROR test odoo.addons.woow_paas_platform.tests."
      "integration.test_operator_contract: ERROR: TestOperatorContract.test_deploy",
      "integration.test_operator_contract.TestOperatorContract.test_deploy"),
-    # (b) _SubTest 分支（`result.py:277`）。形狀取自本機跑 unittest 的實測輸出，
-    #     不是編出來的。舊式子在這裡解析出 `test_sh_access_endpoints_768.Subtest`。
-    ("2026-08-21 10:00:01,900 456 ERROR test odoo.addons.woow_paas_platform.tests."
-     "test_sh_access_endpoints_768: FAIL: Subtest TestShAccessEndpoints."
-     "test_role_matrix (role='member')",
-     "test_sh_access_endpoints_768.TestShAccessEndpoints.test_role_matrix"),
 
     # ── 陰性：長得像但不得匹配 ────────────────────────────────────────────
     # 成功測試的 detail report 行，而且**名字裡含 fail**。只認「fail 這個字」的式子
