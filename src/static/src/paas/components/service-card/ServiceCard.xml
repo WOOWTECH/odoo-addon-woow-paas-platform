@@ -27,6 +27,17 @@
                         <span t-esc="displayUrl"/>
                     </a>
                 </t>
+                <!-- #648 (b)：卡片上的網址在 state==='running' 時就是可點的，所以
+                     這裡也要有預警，否則使用者從列表點進去一樣拿 NXDOMAIN 而畫面
+                     零說明。判準用新欄位本身、**不**複用 error_message：後者在本
+                     元件多判了 state==='error'，掛上去對 running 的服務不會顯示。
+                     詳細文案在服務詳情頁，這裡只給一行。 -->
+                <t t-if="props.service.public_url_dns_unverified">
+                    <div class="o_woow_cloud_service_dns_hint">
+                        <WoowIcon name="'schedule'" size="14"/>
+                        <span>公開網址尚未驗證可解析，可能仍在生效中</span>
+                    </div>
+                </t>
                 <t t-if="props.service.state === 'error' and props.service.error_message">
                     <div class="o_woow_cloud_service_error">
                         <WoowIcon name="'error'" size="14"/>

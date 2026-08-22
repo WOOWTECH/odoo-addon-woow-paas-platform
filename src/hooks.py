@@ -147,6 +147,15 @@ _CONFIG_PARAMETERS = [
     # #489：轉移狀態的 age timeout 門檻（缺值時走 cloud_service.py 的內建預設）
     'woow_paas_platform.deploy_timeout_minutes',
     'woow_paas_platform.vm_deploy_timeout_minutes',
+    # #648 (b)：Public URL 的 DNS 落地閘（缺值時走 cloud_service.py 的內建預設）。
+    # `dns_gate_enabled` 是 prod kill switch——新守線誤判時要有開關能立刻停損。
+    # ⚠ 這兩個 key 走「模組常數 ＋ get_param」而不是 res.config.settings 的
+    # `config_parameter=` 欄位（同上面 #489 兩條的寫法），而 repo-lint 的
+    # `check_config_parameter_uninstall` **只掃 `config_parameter=` 字面 kwarg**
+    # ⇒ 漏登記時那條 gate 不會紅。補在
+    # `test_public_url_dns_gate_648.py::TestNewConfigParametersAreRegisteredForUninstall`。
+    'woow_paas_platform.dns_grace_seconds',
+    'woow_paas_platform.dns_gate_enabled',
     # #501：限量商品的供給閘門（缺值時走 cloud_app_template.py 的內建預設）。
     # key 由 slug 推導，新增限量商品時這裡要跟著補兩個
     # （守線＝repo-lint 的 config-parameter-uninstall）。

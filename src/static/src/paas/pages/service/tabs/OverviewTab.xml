@@ -30,6 +30,23 @@
                             <button class="o_woow_copy_btn" t-on-click="() => this.copyToClipboard(publicUrl)" title="Copy URL">
                                 <WoowIcon name="'content_copy'" size="16"/>
                             </button>
+                            <!-- #648 (b)：服務已就緒、但寬限期內都沒能解析到這個
+                                 網址的 DNS record ⇒ 帶著保留放行。用與上面
+                                 last_release_sync_at 同一個灰字 hint 形狀，**不**走
+                                 error_message（那是紅色故障通道，且 detail 頁的
+                                 t-if 不判 state ⇒ 健康服務會冒紅底）。
+                                 文案必須提到清本機 DNS 快取：伺服器端探測回「可
+                                 解析」時租戶仍可能看到 NXDOMAIN（2026-08-12 現場
+                                 已證：三條 resolver 都查得到、以指定 IP 直連 curl
+                                 拿到 302，卡的是本機負面快取，純等待不會好）。 -->
+                            <t t-if="props.service.public_url_dns_unverified">
+                                <small class="o_woow_dns_hint text-muted d-block">
+                                    公開網址尚未驗證可解析。DNS 記錄通常在數十秒內生效；
+                                    若稍後仍打不開，請清除本機 DNS 快取或重新連線網路
+                                    （例如關閉再開啟 VPN）——「查不到」的快取不會因為
+                                    記錄後來建好而自動失效。
+                                </small>
+                            </t>
                         </span>
                     </div>
 

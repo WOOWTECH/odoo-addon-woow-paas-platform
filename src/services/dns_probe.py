@@ -40,6 +40,7 @@ domain 才問絕對名**。實測（prod ``paas-system/paas-odoo``）：查不�
   它要偵測的那個 bug 嚴重得多。
 """
 import logging
+import os
 import socket
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as _FutureTimeout
 
@@ -51,7 +52,68 @@ _DEFAULT_TIMEOUT = 2.0
 #: 逾時的查詢不會被中斷（``getaddrinfo`` 不可取消），只是沒人再等它。pool 大小就是
 #: 「同時可以有幾條查詢掛在那裡」的封頂——滿了之後新的呼叫會排隊，因此
 #: ``result(timeout=...)`` 仍然是有效的總上界。
-_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix='woow-dnsprobe')
+_MAX_WORKERS = 4
+
+_EXECUTOR = None
+_EXECUTOR_PID = None
+
+
+def _reset_after_fork():
+    """fork 之後子行程手上那個 executor 是廢的——丟掉，讓下次呼叫重建。
+
+    **不要對舊的呼叫 ``shutdown()``**：它的 worker thread 在子行程裡根本不存在，
+    ``shutdown(wait=True)`` 會當場卡死；``wait=False`` 也只是把一個永遠不會被消化
+    的 queue 留著。直接放生，讓 GC 處理。
+    """
+    global _EXECUTOR, _EXECUTOR_PID
+    _EXECUTOR = None
+    _EXECUTOR_PID = None
+
+
+if hasattr(os, 'register_at_fork'):
+    os.register_at_fork(after_in_child=_reset_after_fork)
+
+
+def _executor():
+    """取得**本行程自己的** executor。
+
+    🔴 為什麼不能直接用一個 module-level 的常數（實測，不是推測）：
+    ``ThreadPoolExecutor`` 在 module import 時就建好，若行程之後 ``fork()``
+    （Odoo 的 ``workers > 0`` prefork 模式），子行程繼承到的是一個**廢掉但看起來
+    正常**的 executor：
+
+    - ``_threads`` 集合裡有 2 個 thread 物件，但 ``is_alive()`` 全是 ``False``
+      （thread 不跨 fork）。
+    - 更關鍵的是 ``_idle_semaphore`` **也被繼承**，計數來自 fork 前那些已經
+      idle 的 worker ⇒ 子行程呼叫 ``submit()`` 時，``_adjust_thread_count()``
+      的第一件事 ``self._idle_semaphore.acquire(timeout=0)`` 會回 ``True``、
+      直接 ``return``，**一條新 worker 都不會開**。
+    - 於是工作被放進 ``_work_queue``（qsize 1）卻沒有任何人消化，future 永遠
+      不完成。
+
+    （實測輸出：``child _threads=2 alive=0``、``idle_semaphore.acquire(timeout=0)
+    -> True``、``qsize after submit = 1``、``future -> HANG``。）
+
+    🔴 **為什麼這件事值得多寫這幾行**：壞掉的表現是 ``result(timeout=...)`` 逾時
+    ⇒ 本模組回 ``'unknown'`` ⇒ 呼叫端**放行** ⇒ DNS 閘永遠不擋。而「閘永遠不擋」
+    與「DNS 一直都很正常」在所有可觀測訊號上完全一樣：沒有 error、測試全綠、服務
+    照樣翻 running。那正好讓這個 feature 存在的唯一理由靜靜地失效。今天 prod 是
+    ``workers = 0``（不 fork）所以碰不到——但那是**設定值不是不變式**，改設定的人
+    不會知道要來看這裡。
+
+    以 pid 為準重建，而**刻意不加 module-level lock**：fork 時若剛好有別的 thread
+    持著那把鎖，子行程會繼承一把永遠不會被釋放的鎖——那正是我們要移除的那類靜默
+    卡死。這裡的競態最壞是同時建出兩個 executor、其中一個被丟掉（幾條 idle
+    thread），代價遠小於一把死鎖。``register_at_fork`` 是主要機制，pid 檢查是它
+    不存在時（或 spawn／forkserver 之外的邊角）的後備。
+    """
+    global _EXECUTOR, _EXECUTOR_PID
+    pid = os.getpid()
+    if _EXECUTOR is None or _EXECUTOR_PID != pid:
+        _EXECUTOR = ThreadPoolExecutor(
+            max_workers=_MAX_WORKERS, thread_name_prefix='woow-dnsprobe')
+        _EXECUTOR_PID = pid
+    return _EXECUTOR
 
 #: ``socket.gaierror.errno`` 的「權威否定」集合。``EAI_NODATA`` 在部分平台不存在
 #: （macOS 有、某些 musl 沒有），所以用 getattr 取。
@@ -82,7 +144,7 @@ def resolve_state(hostname, timeout=_DEFAULT_TIMEOUT):
 
     fqdn = _as_fqdn(hostname)
     try:
-        future = _EXECUTOR.submit(_lookup, fqdn)
+        future = _executor().submit(_lookup, fqdn)
     except RuntimeError as exc:          # interpreter 收攤中
         _logger.warning("DNS probe could not be scheduled for %s: %s", fqdn, exc)
         return 'unknown'

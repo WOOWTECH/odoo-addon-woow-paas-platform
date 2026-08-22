@@ -9,6 +9,7 @@ from psycopg2 import OperationalError
 from odoo import _, api, fields, models
 from odoo.exceptions import AccessError, UserError, ValidationError
 
+from ..services import dns_probe
 from ..services.naming import make_cs_access_canonical_name
 from .cloud_app_template import SupplyGateError
 from .workspace_access import ROLE_ADMIN
@@ -2536,7 +2537,7 @@ class CloudService(models.Model):
             })
             return False
 
-    def _is_release_ready(self, status):
+    def _is_release_ready(self, status, dns_state=None):
         """判定「這個 release 就緒了嗎」——**model 與 controller 兩層共用**。
 
         這段邏輯原本在 model（``_poll_and_update_status``）與 controller
@@ -2550,6 +2551,10 @@ class CloudService(models.Model):
 
         Args:
             status: operator ``get_status`` 的回應 dict
+            dns_state: 已經探過的 DNS 現況（`_public_url_dns_state()` 的回傳）。
+                兩份 poll 會先探一次再把結果同時餵給本方法與 `_release_facts`，
+                避免同一輪 poll 對同一個 hostname 探兩次（resolver 不可用時那是
+                兩倍的阻塞）。``None`` ＝ 本方法自己探，讓單獨呼叫仍然自足。
 
         Returns:
             ``(ready: bool, detail: str)`` —— detail 供 log 判讀為何未就緒
@@ -2572,8 +2577,21 @@ class CloudService(models.Model):
             # `virt-launcher-svc-…-haos` 回報 `2/2`）。所以純 VM 的 `pods` 從來
             # 不是空的，容器閘是**憑自身條件**通過的，不靠任何 fail-open。
             # 這個事實在 Step 1 之後從「碰巧成立」變成「必要條件」。
-            return self._is_container_ready(status)
-        return self._is_container_ready(status)
+            ready, detail = self._is_container_ready(status)
+        else:
+            ready, detail = self._is_container_ready(status)
+
+        if not ready:
+            return ready, detail
+
+        # #648 (b)：pod／VM 都健康之後，最後一格是「租戶現在真的打得開嗎」。
+        # 放在合取末端（而不是寫 `running` 的那 6 個分支上）是刻意的：那 6 個
+        # 分支散在兩個檔案，等於再造一次 #627 的形狀；而且
+        # `elif needs_init and original_state == 'initializing'` 每輪都會重跑
+        # `_model_run_post_deploy_init`，閘放 write 上會讓服務停在 `initializing`
+        # 反覆進 init 去撞 `init_retries` 上界（5 次翻 error）——繞回同一個
+        # 「健康服務被標 error」的結果。
+        return self._is_public_url_ready(dns_state=dns_state)
 
     @staticmethod
     def _is_container_ready(status):
@@ -2794,7 +2812,131 @@ class CloudService(models.Model):
                     _DNS_GRACE_PARAM, raw, DNS_GRACE_SECONDS_DEFAULT,
                 )
             seconds = DNS_GRACE_SECONDS_DEFAULT
-        return seconds
+
+        # 🔴 clamp —— 沒有這一步，上面那個「閘永遠不可能造成 error」的不變式
+        # 就只在「沒人亂設參數」時成立。把有效值夾在 age timeout 之下（留一格
+        # 餘裕，不能剛好相等，否則兩邊會在同一輪 poll 撞在一起）。
+        ceiling = (self._transition_timeout_minutes() * 60
+                   - _DNS_GRACE_SAFETY_MARGIN_SECONDS)
+        return max(0, min(seconds, ceiling))
+
+    def _dns_gate_enabled(self):
+        """DNS 閘的總開關（prod kill switch）。未設＝開。"""
+        raw = self.env['ir.config_parameter'].sudo().get_param(
+            _DNS_GATE_ENABLED_PARAM)
+        if raw in (None, False, ''):
+            return True
+        return str(raw).strip().lower() not in _FALSEY_PARAM_VALUES
+
+    def _public_url_hostname(self):
+        """對外主機名（不含 scheme）；沒有對外網址回 ``''``。
+
+        刻意從 `_public_base_url()` 導出而不是自己組——domain 的組法收斂在那裡
+        （`paas_domain` 讀 config_parameter），兩處各組一次就是下一個漂移點。
+        """
+        self.ensure_one()
+        base = self._public_base_url()
+        if not base:
+            return ''
+        return base.split('://', 1)[-1].rstrip('/')
+
+    def _public_url_dns_state(self):
+        """Public URL 的 DNS 現況：``ok`` / ``missing`` / ``unknown`` / ``skip``。
+
+        ``skip`` ＝ 這台服務不適用（沒有對外網址，或閘被關掉），與「探了但不知道」
+        （``unknown``）語意不同：前者不該留任何旗標，後者是平台自己的 resolver 出
+        問題。呼叫端對兩者都放行，但只有前者連旗標都不寫。
+        """
+        self.ensure_one()
+        if not self._dns_gate_enabled():
+            return 'skip'
+        hostname = self._public_url_hostname()
+        if not hostname:
+            return 'skip'
+        # 結尾點＝FQDN，讓 resolver 跳過 search list。這不只是省時間：平台 pod 是
+        # `ndots:5` ＋ 4 個 search domain，resolver 不可用時相對名最壞是 5 次查詢
+        # ×（5s × 2 attempts）＝ 50 秒，FQDN 是 10 秒。而 Odoo 跑 `workers = 0`
+        # ＋ `max_cron_threads = 1`、cron 逐台序列跑。有測試釘住這個性質。
+        return dns_probe.resolve_state(hostname + '.')
+
+    def _is_public_url_ready(self, dns_state=None):
+        """就緒判定的最後一格：租戶的 Public URL 現在解析得到嗎（#648 (b)）。
+
+        Returns:
+            ``(ready: bool, detail: str)``——與 `_is_release_ready` 同形。
+
+        🔴 **只在 `age(_transition_anchor()) < _dns_grace_seconds()` 這個窗口內
+        可能回 False，窗口外恆放行。** 理由與不變式見模組頂部 #648 那段常數註解：
+        #489 的 age timeout 與本閘共用同一把尺（`deployed_at` 在 helm install 一
+        回來就寫），閘若自己另計時，「pods 很慢才 ready ＋ DNS 未落地」會把服務
+        寫成不可自癒的 `error`。
+
+        錨點未知（兩個時間戳都空）時**放行**——與 `_check_transition_timeout`
+        的「沒有依據就不裁決」同方向；反過來擋會變成永遠卡。
+        """
+        self.ensure_one()
+
+        # 便宜的判斷先做，**探測擺在它後面**：窗口外恆放行，那時連問都不必問。
+        # 這不只是省一次查詢——resolver 不可用時每次探測都是一段阻塞，而平台
+        # Odoo 是 `workers = 0` ＋ `max_cron_threads = 1`、cron 逐台序列跑。
+        # （兩份 poll 仍會**各自探一次**餵給 `_release_facts` 落旗標，那條路與
+        # 本方法正交：窗口外的服務照樣需要「已放行但未驗證」這個訊號。）
+        anchor = self._transition_anchor()
+        if not anchor:
+            # 兩個時間錨都空 ⇒ 無從判斷 age。與 `_check_transition_timeout` 的
+            # 「沒有依據就不裁決」同方向；反過來擋會變成永遠卡。
+            return True, 'pods ready'
+
+        age = fields.Datetime.now() - anchor
+        if age.total_seconds() >= self._dns_grace_seconds():
+            if dns_state == 'missing':
+                # 這一輪 poll 已經探過而且是「查不到」——帶著保留放行（旗標由
+                # `_release_facts` 落地），不永遠卡。
+                _logger.warning(
+                    "Service %s (id=%s) went ready with an unresolvable public "
+                    "hostname %s — releasing after the DNS grace window",
+                    self.name, self.id, self._public_url_hostname(),
+                )
+            return True, 'pods ready'
+
+        state = self._public_url_dns_state() if dns_state is None else dns_state
+        if state != 'missing':
+            # ok / skip / unknown 一律放行。unknown＝resolver 自己不可用，那是
+            # 平台自身故障；為了一個壞掉的探針把每一台租戶服務都扣住，比它要
+            # 偵測的那個 bug 嚴重得多。
+            return True, 'pods ready'
+
+        return False, (
+            'public URL %s does not resolve yet'
+            % self._public_url_hostname()
+        )
+
+    def _refresh_public_url_dns_flag(self):
+        """已標記「未驗證」的 running 服務被查看時，重探一次並清旗標（#648 (b)）。
+
+        為什麼需要這條：`running` **不在任何 poll 的 domain 裡**（cron 撈
+        deploying/upgrading/initializing，前端兩個 poller 的 pendingStates 也不含
+        running）⇒ 放行時寫下的旗標沒有任何東西會回來清掉，會變成永久噪音——那比
+        不警告更糟。
+
+        自我了結：只對「旗標已經是 True 的 running 服務」動作，清掉之後就不會再
+        探。所以成本被綁在**出問題的那幾台**上，不是每台每次。
+
+        **fail-soft**：清旗標失敗只 log，絕不讓列表／詳情頁掛掉——為了清一個警告
+        而讓整頁 500 是本末倒置。
+        """
+        self.ensure_one()
+        if not self.public_url_dns_unverified or self.state != 'running':
+            return
+        try:
+            if self._public_url_dns_state() == 'ok':
+                # 系統身分：這發生在**租戶的讀取路徑**上，用租戶身分寫技術欄位
+                # 會撞 ACL（同 #676 controller 那條 `sys_service` 的理由）。
+                self.sudo().write({'public_url_dns_unverified': False})
+        except Exception as exc:          # noqa: BLE001 —— 見 docstring
+            _logger.warning(
+                "Could not refresh the public-URL DNS flag for service %s "
+                "(id=%s): %s", self.name, self.id, exc)
 
     def _timeout_diagnosis(self, detail):
         """把就緒判定的 ``detail`` 翻成「維運該往哪查」的一句話。
@@ -3049,7 +3191,7 @@ class CloudService(models.Model):
         if (self.import_progress or None) != progress:
             self.sudo().write({'import_progress': progress or False})
 
-    def _release_facts(self, release):
+    def _release_facts(self, release, dns_state=None):
         """operator 回報的 release 事實 → 帳本回寫欄位。**兩份 poll 的單一來源。**
 
         #627：poll 有**兩份實作** —— `PaasController._update_service_status`
@@ -3072,7 +3214,7 @@ class CloudService(models.Model):
         **保留帳本原值**：未知不得覆蓋成空。
         """
         self.ensure_one()
-        return {
+        vals = {
             'helm_revision': release.get('revision', self.helm_revision),
             'helm_chart_version': (
                 release.get('chart_version') or self.helm_chart_version
@@ -3087,6 +3229,16 @@ class CloudService(models.Model):
             # （本機時區）；repo-lint 的 transition-anchor-utc 已把本欄位納入覆蓋。
             'last_release_sync_at': fields.Datetime.now(),
         }
+        # #648 (b)：DNS 觀測結果也走這個咽喉，理由與上面那三個一樣——不然它會
+        # 變成「逐 write 分支各列一次」，正是 #627 的成因。
+        #
+        # 只有**探過而且有結論**（ok／missing）才寫。`unknown`（resolver 自己
+        # 不可用）刻意不動旗標：那是平台故障，把它顯示成「你的網址還沒生效、請
+        # 清本機 DNS 快取」是給租戶錯的指示；`skip`（沒有對外網址／閘關掉）更
+        # 不該留下任何痕跡。
+        if dns_state in ('ok', 'missing'):
+            vals['public_url_dns_unverified'] = dns_state == 'missing'
+        return vals
 
     def _poll_and_update_status(self, client):
         """Poll operator and transition state for a single service.
@@ -3143,7 +3295,16 @@ class CloudService(models.Model):
         # #627：欄位集合來自 `_release_facts`（與 controller 那份同一個來源），
         # **不要**在下面的 write 分支裡各自列欄位——那正是 cron 這份漏掉
         # `helm_chart_version` 的方式。
-        release_facts = service._release_facts(release)
+        # #648 (b)：DNS 現況**一輪只探一次**，同時餵給就緒判定與 `_release_facts`
+        # （旗標也走那個咽喉，理由與其他 release 欄位一樣——逐 write 分支各列一次
+        # 正是 #627 的成因）。只在 release 已 `deployed` 時才探：還沒 deploy 的服務
+        # 探了也不會影響任何判定，而每次探測在 resolver 不可用時都是一段阻塞，
+        # 而平台 Odoo 是 `workers = 0` ＋ `max_cron_threads = 1`、cron 逐台序列跑。
+        dns_state = (
+            service._public_url_dns_state() if release_status == 'deployed' else None
+        )
+
+        release_facts = service._release_facts(release, dns_state=dns_state)
 
         # 進度先落地（與就緒判定無關，且未就緒時才是最有用的時候）。
         service._store_import_progress(status)
@@ -3153,7 +3314,7 @@ class CloudService(models.Model):
         stuck_detail = None
 
         if release_status == 'deployed':
-            all_ready, detail = service._is_release_ready(status)
+            all_ready, detail = service._is_release_ready(status, dns_state=dns_state)
             if not all_ready:
                 service._log_not_ready(detail)
                 stuck_detail = detail

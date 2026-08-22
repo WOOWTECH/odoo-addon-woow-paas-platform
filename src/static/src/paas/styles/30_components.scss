@@ -545,6 +545,28 @@
     }
 }
 
+// #648 (b)：「公開網址還沒驗證可解析」的軟提示。版型與上面的
+// `.o_woow_cloud_service_error` 相同、**顏色刻意不同**——它不是故障，服務本身是
+// 健康的，用紅色會讓租戶以為部署失敗，取次要文字色。
+//
+// 刻意**不用 `@extend`**：那會讓本 class 先繼承到 `#ef4444`，再靠「我的規則排在
+// 後面」把它蓋掉——同 specificity 下靠順序取勝的寫法，日後有人重排規則就會翻臉，
+// 而症狀是「健康的服務顯示紅字」。多寫幾行換掉一個順序相依。
+.o_woow_cloud_service_dns_hint {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.25rem;
+    font-size: 0.75rem;
+    color: $woow-text-secondary;
+    margin-top: 0.25rem;
+    line-height: 1.3;
+
+    .material-symbols-rounded {
+        flex-shrink: 0;
+        margin-top: 0.0625rem;
+    }
+}
+
 .o_woow_cloud_service_card_actions {
     display: flex;
     gap: 0.25rem;

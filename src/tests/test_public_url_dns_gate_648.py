@@ -115,10 +115,23 @@ class _DnsGateCase(TransactionCase):
             'workload_type': 'container',
             'post_deploy_init_type': 'none',
         })
-        self.svc = self._make_service()
+        self.svc = self._make_service(subdomain=_SUBDOMAIN)
 
-    def _make_service(self, anchor_seconds_ago=5, subdomain=_SUBDOMAIN, **vals):
-        """建一台 ``deploying`` 中的服務，錨點預設在 5 秒前（＝窗口內）。"""
+    #: `_make_service` 的流水號。``subdomain`` 有 UNIQUE constraint，而 `setUp` 已經
+    #: 用掉 `_SUBDOMAIN` ⇒ 任何再建一台的測試若沿用同一個值，會在 flush 時撞
+    #: ``UniqueViolation`` **而且死在建立階段、根本走不到斷言**。第一次跑 RED 時
+    #: 實際發生過：6 條測試全部紅在這裡，紅得像實作有問題，其實零資訊。
+    _subdomain_seq = 0
+
+    def _make_service(self, anchor_seconds_ago=5, subdomain=None, **vals):
+        """建一台 ``deploying`` 中的服務，錨點預設在 5 秒前（＝窗口內）。
+
+        ``subdomain=None`` ⇒ 自動配一個唯一值（見 `_subdomain_seq`）。要斷言
+        hostname 的測試請用 `setUp` 建的 ``self.svc``（它固定是 `_SUBDOMAIN`）。
+        """
+        if subdomain is None:
+            type(self)._subdomain_seq += 1
+            subdomain = '%s-%d' % (_SUBDOMAIN, type(self)._subdomain_seq)
         base = {
             'name': 'svc-648',
             'workspace_id': self.workspace.id,
@@ -449,3 +462,105 @@ class TestNewConfigParametersAreRegisteredForUninstall(TransactionCase):
                 key, _CONFIG_PARAMETERS,
                 '%s 沒進 hooks.py 的 _CONFIG_PARAMETERS ⇒ 卸載後留孤兒紀錄，'
                 '而 repo-lint 那條 gate 對這種寫法是盲區、不會替你抓' % key)
+
+
+# ====================================================================== #
+#  探針本身的行程安全（壞掉時與「DNS 一直正常」不可區分）                   #
+# ====================================================================== #
+
+@tagged('post_install', '-at_install')
+class TestDnsProbeExecutorIsForkSafe(TransactionCase):
+    """``dns_probe`` 的 executor 必須跟著行程走，不能是 import 時就定死的那一個。
+
+    🔴 這條守的不是效能，是**靜默失效**。實測（Python 3.14 / darwin，機制與版本
+    無關）：``ThreadPoolExecutor`` 在 fork 之後於子行程裡是廢的——``_threads``
+    集合有 2 個物件但 ``is_alive()`` 全 False，而**繼承來的 ``_idle_semaphore``**
+    讓 ``_adjust_thread_count()`` 的 ``acquire(timeout=0)`` 回 True 而提前 return
+    ⇒ 一條 worker 都不會開 ⇒ 工作進 ``_work_queue`` 沒人消化 ⇒ future 永不完成。
+
+    後果的形狀才是重點：future 逾時 ⇒ ``resolve_state`` 回 ``'unknown'`` ⇒ 呼叫端
+    **放行** ⇒ DNS 閘永遠不擋。而「閘永遠不擋」與「DNS 一直都很正常」在所有可觀測
+    訊號上完全一樣（沒有 error、測試全綠、服務照樣翻 running）——這個 feature 存在
+    的唯一理由會靜靜地失效。
+
+    今天 prod 是 ``workers = 0``（不 fork）所以碰不到，但那是**設定值不是不變式**，
+    改設定的人不會知道要來看這裡。所以用測試釘住。
+    """
+
+    def test_executor_is_rebuilt_when_the_process_changes(self):
+        from ..services import dns_probe
+
+        dns_probe._reset_after_fork()
+        first = dns_probe._executor()
+
+        # 對照組先做：同一個行程內不得重建（否則下面那條「有重建」是恆真的，
+        # 等於沒有鑑別力）。
+        self.assertIs(
+            first, dns_probe._executor(),
+            '同一個行程內每次呼叫都重建 executor ⇒ 下面那條斷言變恆真')
+
+        # 假裝我們現在在 fork 出來的子行程裡（pid 不同）。
+        dns_probe._EXECUTOR_PID = -1
+        self.assertIsNot(
+            first, dns_probe._executor(),
+            'pid 變了卻沿用 fork 前的 executor ⇒ future 永不完成 ⇒ 探測恆回 '
+            "'unknown' ⇒ 閘永遠不擋，而且與「DNS 一直正常」不可區分")
+
+    def test_reset_after_fork_drops_the_stale_executor(self):
+        """``os.register_at_fork`` 掛的那個 hook 必須真的把舊的丟掉。"""
+        from ..services import dns_probe
+
+        dns_probe._executor()
+        dns_probe._reset_after_fork()
+
+        self.assertIsNone(dns_probe._EXECUTOR)
+        self.assertIsNone(dns_probe._EXECUTOR_PID)
+
+    def test_probe_never_raises(self):
+        """探針不得炸掉呼叫端——就緒判定為了一個探針而爆掉是本末倒置。"""
+        from ..services import dns_probe
+
+        for bad in ('', None, 'not a hostname at all', '.' * 300):
+            self.assertIn(
+                dns_probe.resolve_state(bad, timeout=0.5),
+                ('ok', 'missing', 'unknown'),
+                '對 %r 回了預期外的值' % (bad,))
+
+
+# ====================================================================== #
+#  序列化：旗標必須到得了**列表頁**，不只詳情頁                             #
+# ====================================================================== #
+
+@tagged('post_install', '-at_install')
+class TestFlagReachesTheListPayload(_DnsGateCase):
+    """``_format_service`` 的 base dict 要帶這個旗標，不能只放 ``include_details``。
+
+    列表頁走的是不帶 ``include_details`` 的那條路（``_list_services``），而
+    ServiceCard 上的網址在 ``state === 'running'`` 時就是可點的 ⇒ 旗標若只到詳情
+    頁，使用者最常出發的那個入口完全沒有預警，點下去一樣拿 NXDOMAIN。
+    """
+
+    def _format(self, include_details):
+        from odoo.addons.woow_paas_platform.controllers.paas import PaasController
+        fake_request = MagicMock()
+        fake_request.env = self.env
+        with patch('%s.request' % _CTRL_MODULE, new=fake_request):
+            return PaasController()._format_service(
+                self.svc, include_details=include_details)
+
+    def test_flag_is_in_the_base_payload(self):
+        self.svc.write({'state': 'running', 'public_url_dns_unverified': True})
+
+        payload = self._format(include_details=False)
+
+        self.assertIn(
+            'public_url_dns_unverified', payload,
+            '旗標沒進 base dict ⇒ 列表卡片永遠拿不到，UI 對這台服務完全沉默')
+        self.assertTrue(payload['public_url_dns_unverified'])
+
+    def test_flag_is_false_by_default(self):
+        """對照組：沒問題的服務不得帶著旗標（否則每台都掛警告）。"""
+        self.svc.write({'state': 'running'})
+
+        self.assertFalse(self._format(include_details=False)
+                         ['public_url_dns_unverified'])
