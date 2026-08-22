@@ -23,7 +23,8 @@ related:
 > **修訂史**：
 > - **2026-08-22（第 1 段）**：§1–§11 初稿。撰寫時**未讀** `woow-paas-charts`，§2 表的 `chart NP?` 欄多數標 `?`，§10 開出五道跨 repo 提問。
 > - **2026-08-22（第 2 段）**：經 issue-leader 授權，以**本機唯讀 clone** 查證 `woow-paas-charts`（HEAD `4fc45ab7`，**未 fetch**，staleness caveat 見 §10 開頭）。**五道提問查掉四道**（提問二僅 open-design 部分成立），§2 表補實，並**推翻本檔兩處原判斷**（§3 W-5 的 CDI importer、§9.3 D-3 的「E-5 不限 port」），新增 §6 **F-14**。
-> - **2026-08-22（第 3 段，本次）**：查證 `pvc-cleanup` Job 的 namespace 歸屬 —— **在平台 ns，不在租戶 ns**（§3 W-9） ⇒ **§9.1 D-1 收掉、§5.2 E-4 建議整條不做**、§11 第 5 項結案。
+> - **2026-08-22（第 3 段）**：查證 `pvc-cleanup` Job 的 namespace 歸屬 —— **在平台 ns，不在租戶 ns**（§3 W-9） ⇒ **§9.1 D-1 收掉、§5.2 E-4 建議整條不做**、§11 第 5 項結案。
+> - **2026-08-22（第 4 段，本次）**：leader4 取得授權對 charts clone 做**一次 fetch**，`hermes-agent` **0.2.0** 取件（`origin/main` `f98c91c`）⇒ **§10 提問二 blocker 解除、D-1 從附條件升為關閉**；補入六支 chart 的 `- {}` 對照表與**現算**的 10/2/2 量化結論；新增 **§5 末的「查證後的檢討」**（本案值不值得做，三條路線）。
 
 ---
 
@@ -35,7 +36,7 @@ related:
 
 ### 🔴 最重要的發現：issue 的前提對多數 template 不成立
 
-issue #514 寫「**租戶 namespace 目前完全沒有 egress 限制**」。實查 `woow-paas-charts@4fc45ab7`：**6 支自家 chart 全部已有 `default-deny (Ingress+Egress)` ＋ explicit allow**，且 `networkPolicy.enabled: true` 是預設、seed 完全不覆寫（§10）。⇒ 那句話**只對三類 workload 成立**：
+issue #514 寫「**租戶 namespace 目前完全沒有 egress 限制**」。實查 `woow-paas-charts`（五支用 `4fc45ab7`，`hermes-agent` 0.2.0 用第 4 段 fetch 後的 `origin/main` `f98c91c`）：**6 支自家 chart 全部已有 `default-deny (Ingress+Egress)` ＋ explicit allow**，且 `networkPolicy.enabled: true` 是預設、seed 完全不覆寫（§10）。⇒ 那句話**只對三類 workload 成立**：
 
 1. **第三方 chart 的 pod**：`n8n`（8gears，正是 issue 實測那顆）、bitnami `odoo` / `postgresql` / `redis`；
 2. **operator patch 進 n8n pod 的 MCP sidecar**（跟著 n8n 一起沒有 NP）；
@@ -45,20 +46,32 @@ issue #514 寫「**租戶 namespace 目前完全沒有 egress 限制**」。實�
 
 ### 現存的四個判斷點
 
-1. ~~覆蓋度不可判定~~ **已解**（§10）：4 支自家 chart（`mcp-server`、`home-assistant`、`haos`、`home-assistant-full`）的 egress 是 `- {}` **全開** ⇒ baseline 對它們**完全無效**（安全性零進步，§6 F-4 答案 B），但也不會讓它們斷線。**剩餘未知**：4 支第三方 chart ＋ `hermes-agent` **0.2.0**（⚠ 措辭精確化：**不是該版本不存在，是本次用的 clone 凍結在它發佈之前** —— 0.2.0 於 2026-08-16 釘入本 repo，clone 的 hermes-agent 檔案最新異動停在 2026-08-10；leader4 獨立複驗，見 §10 開頭）。
+1. ~~覆蓋度不可判定~~ **已解**（§10，六支自家 chart 全數查證完畢；`hermes-agent` 0.2.0 於第 4 段 fetch 取件）。**剩餘未知只剩 4 支第三方 chart**（bitnami `postgresql`／`redis`／`odoo`、8gears `n8n`，不在 `woow-paas-charts`）。
+
+   🔴 **量化結論（現算，非目測——分群腳本以 `len()` 計數並 assert 加總 ＝ 在售總數）**：在售 **14** 個 template 中 ——
+
+   | 群 | 數量 | 成員 | baseline egress 的效果 |
+   | --- | --- | --- | --- |
+   | **A** chart 已 `- {}` 全開 | **10** | `mcp-server` 系列 ×7（`mcp-hermes`／`mcp-k8s`／`mcp-n8n`／`mcp-odoo`／`mcp-odoo-manage`／`mcp-opendesign`／`mcp-vk`）＋ `ha-paas` ＋ `haos` ＋ `ha-full` | **安全價值為零**（union 後 deny 被蓋掉，§6 F-4 答案 B），但也不會斷線 |
+   | **B** chart 已用安全 ipBlock 且限 ports[443,80] | **2** | `open-design`、`hermes-agent` | 🔴 **有害** —— E-5 若不限 port 會把它們放寬（§6 **F-14**） |
+   | **C** 無自家 chart NP | **2** | `n8n`（8gears）、`odoo`（bitnami） | **真正有效的只有這一群**（⚠ 其 chart NP 未查證，見 §11 第 1 項；嚴格說是「無**自家** chart NP」） |
+
+   加總 10＋2＋2 ＝ 14 ✅。**加上 template 層以外的兩類**（n8n pod 內的 MCP sidecar、CDI `importer-*`），就是 baseline egress 的**全部**作用對象。
 2. 🔴 **新發現：E-5 對每一支自家 chart 不是冗餘就是有害**。`open-design` 0.1.4 已自己做了同樣的 `0.0.0.0/0 except 六段`，**但限 ports [443, 80]**；本檔原設計的 E-5 刻意不限 port ⇒ **會把它放寬成任意 port**（新增的 §6 **F-14**，安全回歸）。→ §9.3 D-3 的建議已修正為 **C′：限 `[443, 80, 587]`**，且那個取捨（n8n workflow 連非這三個 port 會斷）**必須由 Eugene 拍板**。
 3. 🔴 **CDI importer 從「推定無風險」翻成 blocker**：haos chart 註解逐字「**the importer needs egress to the registry while it runs**, and **the ns-level baseline (ingress-only) leaves it alone**」——**chart 作者把「baseline 是 ingress-only」寫成 importer 能運作的前提，而本案正是要打破它**（§10.4、§6 F-8）。
 4. ✅ **apiserver 供給鏈（D-1）已收掉**（第 3 段）：`pvc-cleanup` 是 `paas-operator` chart 的 CronJob、跑在 **`paas-system` / `paas-stg-system`**，不在租戶 ns（§3 W-9 六條證據＋陽性對照）；而 console 的 apiserver 出向 chart 端已自帶 `apiServerCidrs` ＋ `apiServerPorts`。⇒ **E-4 整條不做**，供給鏈問題隨之消失。**附條件**：`hermes-agent` 0.2.0 未取得，若它沒有那個鍵則 E-4 要做回來。
 
 另有三條**已實證、會讓「小心翼翼寫對的規則」照樣炸掉**的地雷（§6）：K3s enforcer 的 **reply-path quirk**（加 egress 會打斷已經寫對的 ingress，stg 全站曾因此對外 502）、**`allow-same-ns` 是 ingress-only**（加 Egress 後 Odoo→自己的 DB 沒有任何 allow 覆蓋）、**回滾刪掉的 NP 會被下一次部署靜默復原**。
 
-**建議**：本 PR 只落 design。動工前還缺**兩件**（原三件中的 ① `pvc-cleanup` 的 ns 已於第 3 段解掉）：① **`hermes-agent` 0.2.0 的 chart NP**（同時是 D-1 收掉的殘留條件、與 §2 表 #14 的空格）；② **Eugene 對 D-3 修正案（限 port 的取捨）的拍板**。
+**建議**：本 PR 只落 design。動工前原列三件缺件，① `pvc-cleanup` 的 ns 已於第 3 段解掉、② `hermes-agent` 0.2.0 的 chart NP 已於第 4 段取件解掉 ⇒ **只剩一件：Eugene 對 D-3 修正案（E-5 限 port 的取捨）的拍板**。
+
+> 🔴 **但第 4 段的量化結論帶出一個更上位的問題**：既然 baseline egress 對 10/14 在售 template 無效、對 2/14 有害、只對 2/14 有效，**「這個方案值不值得做」本身就該重新裁決**（不是只裁 D-3）。§5 末的「查證後的檢討」把三條路線攤開。
 
 ### 待拍板決策速覽（詳見 §9）
 
 | # | 決策 | 建議 |
 | --- | --- | --- |
-| D-1 | apiserver CIDR 供給鏈怎麼接到 operator | ✅ **已收掉（附條件）**：`pvc-cleanup` 查證在平台 ns ⇒ **選 D，E-4 整條不做**，供給鏈問題消失。條件＝`hermes-agent` 0.2.0 仍有 `apiServerCidrs`。§9.1 |
+| D-1 | apiserver CIDR 供給鏈怎麼接到 operator | ✅ **已關閉**（第 4 段）：`pvc-cleanup` 在平台 ns ＋ `hermes-agent` 0.2.0 確有 `apiServerCidrs`／`apiServerPorts[443,6443]` ⇒ **選 D，E-4 整條不做**，供給鏈問題消失。§9.1 |
 | D-2 | agent ns（`paas-ws-pa-*`）納不納入本案 | **納入但獨立開關**，且排在 CS ns 之後當獨立波次。§9.2 |
 | D-3 | 「外網維持通」是 baseline 給，還是留給 per-chart | 🔄 **已修正為 C′**：baseline 給、拆成獨立可關的一條、**且限 ports `[443, 80, 587]`**（原「不限 port」被 §10 推翻）。**取捨需 Eugene 拍板**。§9.3 |
 | D-4 | 逐 ns 開關住哪裡（operator setting / ns label / Odoo 參數） | **ns label**（唯一能做到「單 ns 開／關」且不必重啟 operator），理由見 §9.4 |
@@ -116,7 +129,7 @@ issue #514 寫「**租戶 namespace 目前完全沒有 egress 限制**」。實�
 | | | | 🔴 **平台完全不供給也不持有這些值** ⇒ Odoo 側**無法枚舉**，任何「由平台產生 allowlist」的做法對它們天生失效 | | | `:315-318`（connection.* 是 GUI-owned） | |
 | 12 | `ha-paas`（home-assistant 0.2.1） | ✅ | **本 repo 內完全空白** —— seed 無任何 `networkPolicy` 鍵、無出向線索 | 未查證 | HA 產品性質推測需要外網＋DNS，但**無證據** | seed 全欄位掃過無 networkPolicy（`:721-790`） | ✅ **有，且 egress 全開** — `home-assistant` 0.2.1 兩條 NP，egress ＝ DNS ＋ **`- {}`**，`allowAllEgress: true` 預設；chart 註解逐字「HA needs outbound to the internet」⇒ **空白已填：確實需要外網**（§10.3） |
 | 13 | `open-design`（open-design 0.1.4） | ✅ | **① kube-apiserver**（console 跑 `kubectl exec` 進 daemon pod）<br>② Anthropic API（內建 Claude Code／OpenCode，console 可跑 `claude login`）<br>③ 同 ns daemon（console→daemon） | ①TCP/443（ClusterIP）＋**post-DNAT 後 TCP/6443 到 node IP**<br>②TCP/443（推定）<br>③TCP/7457 | ① console 是獨立 Deployment，靠 kubectl 定位 daemon pod<br>② 產品內建 AI coding agent | ①`src/models/cloud_service.py:1885-1922`（`_inject_apiserver_cidrs` path_map 含 `open-design`）<br>②`cloud_app_templates.xml:797-800, 833` | ✅ **有，且比 baseline 嚴格** — `open-design` 0.1.4 三條 NP（default-deny 涵蓋 daemon＋console）；daemon egress ＝ DNS(收緊到 `k8s-app=kube-dns`) ＋ console ttyd ＋ **安全 ipBlock ports[443,80]**；console egress ＝ DNS ＋ `apiServerCidrs` ports[443,6443]（§10.2） |
-| 14 | `hermes-agent`（hermes-agent 0.2.0） | ✅ | **① kube-apiserver**（同 ② console，與 open-design 共用同一顆 console image）<br>② MiniMax / OpenRouter LLM API<br>③ **任意套件 registry**（租戶在容器內跑 `uv tool install` / `npm i -g` / `go install` / `cargo install`）<br>④ 任意外部 MCP server ＋ 其 OAuth authorization server | ①同上<br>②③④ TCP/443 | ① console 同構<br>② 租戶自帶 LLM key<br>③ **已交付的租戶功能**（第四執行面）<br>④ `_inject_dashboard_public_url` 注入的 `redirect_uri` 用途就是對外 OAuth | ①`cloud_service.py:1907-1912`（path_map 含 `hermes-agent`）<br>②`cloud_app_templates.xml:959, 1034-1037`<br>③`docs/decisions/hermes-agent-installer-landing-env.md:41-46`<br>④`cloud_service.py:1803-1812` | 🔴 **?（seed 釘 0.2.0，clone 全歷史最高只到 0.1.3 ⇒ 該版本未取得）**；0.1.1 觀察僅供參考（§10.2） |
+| 14 | `hermes-agent`（hermes-agent 0.2.0） | ✅ | **① kube-apiserver**（同 ② console，與 open-design 共用同一顆 console image）<br>② MiniMax / OpenRouter LLM API<br>③ **任意套件 registry**（租戶在容器內跑 `uv tool install` / `npm i -g` / `go install` / `cargo install`）<br>④ 任意外部 MCP server ＋ 其 OAuth authorization server | ①同上<br>②③④ TCP/443 | ① console 同構<br>② 租戶自帶 LLM key<br>③ **已交付的租戶功能**（第四執行面）<br>④ `_inject_dashboard_public_url` 注入的 `redirect_uri` 用途就是對外 OAuth | ①`cloud_service.py:1907-1912`（path_map 含 `hermes-agent`）<br>②`cloud_app_templates.xml:959, 1034-1037`<br>③`docs/decisions/hermes-agent-installer-landing-env.md:41-46`<br>④`cloud_service.py:1803-1812` | ✅ **有，且比 baseline 嚴格**（第 4 段取件 0.2.0）—— 樣板 5 條 NP，本平台 render 3 條（seed 關掉 pg/redis）；agent egress ＝ DNS(`k8s-app=kube-dns`) ＋ console ttyd ＋ **安全 ipBlock ports[443,80]**；console egress ＝ DNS ＋ `apiServerCidrs` **ports[443,6443]**。檔頭逐字 `NEVER emits a bare "- {}"`（§10.2 第 4 段） |
 | 15 | `haos`（haos 0.1.2，KubeVirt VM） | ✅ | **① 外網**（HA 整合 API、更新檢查、HA Cloud）<br>② kube-dns<br>③ 同 ns：`xff-proxy` Deployment → `{release}-haos-vm` Service | ①TCP/443<br>②UDP+TCP/53<br>③TCP/8123 | ① chart `networkPolicy.allowAllEgress` 預設 true，**2026-07-28 W1 PoC 已做決定性 A/B：移除它 → TCP/443 被擋；還原 → 連通** | ①②`docs/plans/2026-Q3/2026-07-27-haos-kubevirt-v1-design.md:329,333,337`<br>③`cloud_app_templates.xml:1255-1260` | ✅ **有，且 egress 全開** — `haos` 0.1.2 兩條 NP，podSelector 同時涵蓋 **virt-launcher ＋ xff-proxy**；egress ＝ DNS ＋ proxy→VM(8123) ＋ **`- {}`**。⚠ **CDI importer pod 不在 chart NP 涵蓋範圍**（§10.4／§10.5） |
 | 16 | `ha-full`（home-assistant-full 0.1.1） | ✅ | **外網 github.com**（HACS 下載）＋ HA 整合各自的外部 API | TCP/443 | seed 逐字：「`networkPolicy.allowAllEgress`：chart 預設 true 且**必須維持**（HACS 要從 github.com 下載；**DNS-only egress 會讓它變成裝不了東西的整合，且沒有清楚錯誤**）」 | `cloud_app_templates.xml:1492-1494` | ✅ **有，且 egress 全開** — `home-assistant-full` 0.1.1 兩條 NP，egress ＝ DNS ＋ **`- {}`**；values 註解逐字「⚠ MUST stay true on this line」（§10.5） |
 
@@ -295,6 +308,37 @@ spec:
 | ~~E-4 apiserver~~ **建議不做** | #13、#14（兩者已由 chart 端放行）；~~W-9~~（已查證在平台 ns） | 若 chart 端也沒放行才會壞 —— open-design 0.1.4 已驗有；hermes-agent 0.2.0 未取得，是唯一殘留依賴 |
 | E-5 外網 | #2、#5-11、#13、#14、#15、#16 | n8n 全部 workflow 紅、HACS 裝不了、LLM 全斷、`npm i -g` 全掛 |
 | （無規則） | #1、#3（is_active=False，seed 無出向） | — |
+
+
+### 5.4 查證後的檢討（2026-08-22 第 4 段追加）
+
+> ⚠ **§5.1–§5.3 的原設計刻意不改**，留著讓人看到我們是怎麼走到這裡的。本節只做檢討。
+
+#### 原設計的隱含前提被推翻了
+
+§5.1 原則 1 寫「沿用 ns 級 `podSelector: {}`，不退化成 per-chart，理由與 #427 相同」。那條推理的**隱含前提是「租戶 ns 內的 pod 大多沒有 chart NP」** —— 第 4 段查證證明**反過來**：在售 14 個 template 裡 **12 個**（A 群 10 ＋ B 群 2）的 pod 都已被自家 chart 的 NP 涵蓋。ns 級 `podSelector: {}` 因此**打到的絕大多數是「已經有人管」的 pod**，而它對它們只有兩種效果：被 union 蓋掉（A 群，無效）或把既有收斂放寬（B 群，有害）。
+
+換句話說：**`podSelector: {}` 這個形狀在 ingress 方向是對的（#279/#280 已證），在 egress 方向不是。** 兩個方向的 chart 覆蓋率完全不同 —— ingress 側 chart 普遍留空給 baseline 管，egress 側 chart 全部自己管了。**ingress 側現算：6/6 支的 `ingressNamespaces` 預設都是 `[]` 且 values 內都帶「governed by the operator baseline」註解**（`mcp-server:138`／`home-assistant:196`／`haos:250`／`home-assistant-full:306`／`open-design:367`／`hermes-agent:478`）。這個不對稱是本案原設計沒有預期到的。
+
+#### 三條路線
+
+| 路線 | 做法 | 有效範圍 | 代價 |
+| --- | --- | --- | --- |
+| **R1 照原設計** | ns 級 `podSelector: {}`，E-0＋E-1＋E-2＋E-3＋E-5（E-4 已砍） | C 群 2 個 template ＋ MCP sidecar ＋ CDI importer | 對 A 群 10 個無效（但無害）；對 B 群 2 個**有害**（F-14），除非 E-5 限 port 到 `[443, 80, 587]`；且 F-8（importer）要另解 |
+| **R2 per-release NP** | 不做 ns 級，改由 operator 在部署第三方 chart 的 release **之後**，額外 apply 一組 `podSelector: {app.kubernetes.io/instance: <release>}` 的 egress NP | 精準命中 C 群，**完全不碰 A/B 群** ⇒ F-14 消失、F-7 消失 | ⚠ **這不是 per-chart**（沒有要求第三方 chart 做任何事，是 operator 在 ns 內加物件），所以 #514／#427 那條「per-chart 契約對第三方不成立」的論證**不反對它**。但需要查證：4 支第三方 chart 是否都在 pod 上打 `app.kubernetes.io/instance`（helm 慣例，**本檔未查證**）；且 CDI importer 不帶 release label ⇒ 仍要另解 |
+| **R3 治本：收 chart 端** | 把 A 群 4 支自家 chart 的 `allowAllEgress` 由 `true` 改 `false`（chart 端已有這個開關，改 values 即可），讓它們比照 open-design／hermes-agent 走安全 ipBlock | A 群 10 個 template 從「零收斂」變成「有收斂」 | 跨 repo（`woow-paas-charts`）＋ 逐支評估斷線風險（`ha-full` 的 seed 明文寫 `MUST stay true`；`haos` 的 A/B 實測證明移除就擋 443）。**與本案正交，可獨立進行** |
+
+#### 建議
+
+**R1 ＋ R3 並行，R2 列為 R1 的替代方案候選。**
+
+- **R1 仍值得做**，但它的價值主張要在 issue 上改寫成誠實版本：「**兜住沒有 chart NP 的 pod**（第三方 chart、MCP sidecar、CDI importer）」，而不是原 issue 寫的「租戶 ns 目前完全沒有 egress 限制」。E-5 必須限 port（§9.3 C′），否則 B 群那 2 個是淨損失。
+- **R3 才是對 A 群那 10 個 template 唯一有效的路徑**，而且它不需要本案的任何東西 —— 開一張獨立 issue 給 charts repo 即可。**不做 R3 的話，那 10 個 template 的 egress 永遠是全開的，本案做完也一樣。** 這件事應該在 #514 上明說，否則 #514 closed 會被讀成「租戶 egress 已收斂」。
+- **R2 的吸引力在於它消掉 F-14 與 F-7 兩個安全回歸**，代價是多一個 operator 側的 reconcile 路徑。若 Eugene 對「E-5 限 port 會斷掉 n8n 部分 workflow」這個取捨不接受，R2 是不必做那個取捨的出路（per-release NP 可以只對 n8n 開寬 port、對別人不開）。
+
+#### 對 §8 驗證計畫的連帶影響
+
+§8.2 挑 n8n 當核心驗收標的**仍然正確**，而且理由比原本更強：它是 C 群成員之一 —— **唯一一群 baseline 真正有效的對象**。反過來說，**用 A 群任何一個 template 驗都會得到「規則沒生效」的結果，而那不是 bug**。§8.3 的 N-8（open-design port 未被放寬）在 R1 下是必驗項；在 R2 下自動成立、不必驗。
 
 ---
 
@@ -589,7 +633,20 @@ except Exception as e:
 >
 > **改為要在 issue 註記的**：「租戶 ns 的 apiserver egress 由 **chart 端** `networkPolicy.apiServerCidrs`（平台 `_inject_apiserver_cidrs` 餵值）負責，baseline **不重複**。」
 >
-> 🔴 **唯一殘留依賴**：這個結論建立在「需要 apiserver 的租戶 workload 都有 chart NP 幫它放行」上。open-design 0.1.4 已驗有（§10.2）；**`hermes-agent` 0.2.0 未取得**（§11 第 1 項）。若 0.2.0 拿掉了那個鍵，E-4 要做回來、D-1 也要重開。⇒ **在 hermes-agent 0.2.0 查清楚之前，D-1 標「已收掉（附條件）」而非「已關閉」。**
+> 🔴 ~~**唯一殘留依賴**：這個結論建立在「需要 apiserver 的租戶 workload 都有 chart NP 幫它放行」上。open-design 0.1.4 已驗有（§10.2）；**`hermes-agent` 0.2.0 未取得**。~~
+>
+> #### ✅ 第 4 段結論（2026-08-22）—— **殘留依賴已消除，D-1 從「附條件」升為「關閉」**
+>
+> `hermes-agent` **0.2.0** 取件後複驗（`git show origin/main:charts/hermes-agent/values.yaml`）：
+> - **`apiServerCidrs: [10.43.0.1/32]`（:502-503）** 存在，且註解逐字帶 **`⚠ PLATFORM: inject the real target(s) per cluster (#404)`（:501）**；
+> - **`apiServerPorts: [443, 6443]`（:504-506）** —— 兩個 port 都在，與 open-design 0.1.4 同值。
+> - 樣板 `{console.fullname}-allow` 的 egress (2) 用 `{{- with .Values.networkPolicy.apiServerCidrs }}` 渲染 ipBlock ＋ ports（:185-195）。
+>
+> ⇒ **兩支需要 apiserver 的 chart 都已把形狀做好，平台只需要餵值（`_inject_apiserver_cidrs` 正在做）**。那句 `⚠ PLATFORM: inject …(#404)` 是 chart 作者與平台 #404 的**明示分工**，不是我們的推測。
+>
+> **D-1 關閉：選 D，E-4 整條不做。** 在 issue 註記「租戶 ns 的 apiserver egress 由 chart 端 `networkPolicy.apiServerCidrs` ＋ `apiServerPorts` 負責，平台只餵值，baseline 不重複」。
+>
+> ⚠ 順帶**訂正本檔第 2 段的一個推論**：當時依 0.1.1 觀察寫過「若 0.2.0 沿用 `apiServerPorts: [443]`（缺 6443），該 console 的 apiserver egress 在 post-DNAT 叢集上本來就是壞的」——**0.2.0 是 `[443, 6443]`，該推論不成立**。當時已標「推論、且建立在未取得的版本上，不可當結論」，這個標記救了它。
 >
 > ⚠ 另一個查證副產品：`hermes-agent` 0.1.1 的 `apiServerPorts` 只有 `[443]`（缺 6443），而 `_inject_apiserver_cidrs` **只注入 cidrs、不注入 ports**（`cloud_service.py:1907-1916` 的 `path_map` 只寫 `('networkPolicy', 'apiServerCidrs')`）⇒ 在 post-DNAT 叢集上該 console 的 kubectl 可能本來就不通。**但這是 0.1.1 的觀察，seed 釘的 0.2.0 未取得**，不可當結論；列入 §11 一併追。
 
@@ -640,6 +697,17 @@ except Exception as e:
 > 2. 涵蓋唯一有實據的非 443/80 需求；
 > 3. 已知取捨要**明寫進 issue**：`n8n` workflow 若連非 443/80/587 的 endpoint 會斷，症狀是「workflow 執行紅、服務本身 Running」。這條取捨**必須由 Eugene 拍板接受**，不能由本檔預設 —— 若不接受，退回不限 port，同時接受 F-14（並在 issue 註記「baseline 放寬了 open-design 的 egress port 範圍」）。
 > 4. 租戶若改 SMTP 埠為 465／25，該租戶要走例外路徑（或把 587 那格改成從 seed 的 `smtpPort` 值域推導）。
+>
+> #### 第 4 段補強（2026-08-22）：`[443, 80]` 有**兩支獨立 chart** 的先例
+>
+> | chart | `externalPorts` | 出處 |
+> | --- | --- | --- |
+> | `open-design` 0.1.4 | `[443, 80]` | `values.yaml:373-375` |
+> | `hermes-agent` **0.2.0** | `[443, 80]` | `values.yaml:486-488`（`git show origin/main:`） |
+>
+> 兩支由不同時間、不同 issue 交付的 chart **各自獨立選了同一組 port** ⇒ 「443/80 是這個平台上 AI-agent 類 workload 的合理外網 port 集合」有兩個獨立資料點支撐，不是單一來源。這對 C′ 的前兩個 port 是有力旁證。
+>
+> 🔴 **但 587 沒有任何 chart 先例**：它是本檔為 **bitnami odoo 的 SMTP** 加的（seed `cloud_app_templates.xml:252-262` 的 `smtpPort` 預設 587），而 bitnami odoo 正屬於「無自家 chart NP」那一群 —— 也就是說，**587 這一格的正當性完全來自 §2 盤點表，沒有 chart 端背書**。拍板時要知道這個不對稱：443/80 是抄現成的，587 是我們新增的。
 
 ### 9.4 D-4：逐 ns 開關住哪裡
 
@@ -659,7 +727,7 @@ except Exception as e:
 > | 提問 | 原分級 | 查證後 |
 > | --- | --- | --- |
 > | 一 `mcp-server` | blocker | ✅ 已答（B）—— **解除 blocker** |
-> | 二 `open-design` / `hermes-agent` | blocker | ⚠ **部分**：open-design 已答（A）；**hermes-agent 0.2.0 未取得 ⇒ 仍是 blocker** |
+> | 二 `open-design` / `hermes-agent` | blocker | ✅ **已答（A，兩支皆是）** —— open-design 第 2 段查證、hermes-agent 0.2.0 第 4 段取件後查證 ⇒ **blocker 解除** |
 > | 三 `home-assistant` | blocker | ✅ 已答（A）—— **解除 blocker** |
 > | 四 CDI importer | nice-to-have | 🔴 已答（B）—— **升級為 blocker**（chart 明說 importer 需要 egress，且把「baseline 是 ingress-only」當成前提） |
 > | 五 `haos` / `ha-full` 收緊粒度 | nice-to-have | ✅ 已答（A），維持 nice-to-have |
@@ -680,17 +748,43 @@ except Exception as e:
 > | `home-assistant` | 0.2.1 | 0.2.1 | ✅ 相等 |
 > | `haos` | 0.1.2 | 0.1.2 | ✅ 相等 |
 > | `home-assistant-full` | 0.1.1 | 0.1.1 | ✅ 相等 |
-> | `hermes-agent` | **0.2.0** | **0.1.1** | 🔴 **不等，且 clone 較舊** |
+> | `hermes-agent` | **0.2.0** | 工作目錄 0.1.1 → **`origin/main` fetch 後為 0.2.0** | ✅ **已對齊**（第 4 段取件，見下方追加） |
 >
 > 🔴 **`hermes-agent` 0.2.0 在該 clone 的全部歷史中不存在**：`git log --all --oneline -- charts/hermes-agent/Chart.yaml` 只回 5 筆，最高版本是 **0.1.3**（在 branch `feat/hermes-agent-013-root-dashboard`），`main` 上是 0.1.1；`git log --all -S'version: 0.2.0' -- charts/hermes-agent/Chart.yaml` **零命中**。⇒ **seed 釘的 0.2.0 內容本次未取得**，下方 §10.2 對 hermes-agent 的觀察一律標為「0.1.1 觀察、不可代表 0.2.0」。
 >
 > > **leader4 追加查證（2026-08-22，獨立複驗）**：這不是「0.2.0 不存在」，是**本 clone 太舊**。本 repo 把 `hermes-agent` 釘到 0.2.0 的 commit 是 `c6468f38`（**2026-08-16**，`feat: hermes-agent chart 版本釘 0.2.0（租戶自裝 CLI 的落點收斂，Closes #717）`；查法 `git log -S'<field name="helm_chart_version">0.2.0</field>' -- src/data/cloud_app_templates.xml`），而該 clone 全部 ref 中 `charts/hermes-agent/Chart.yaml` 的最新異動是 **2026-08-10**（`git log --all --format=%ad --date=short -- charts/hermes-agent/Chart.yaml`）。⇒ 0.2.0 是在 clone 凍結**之後**才發佈的。
 > >
 > > **這改變了要提的請求**：提問二的 hermes-agent 半邊**不是需要 charts 側「回答」的設計問題**，它只需要一個**讀得到 0.2.0 的人**（fetch 授權，或請 `woow-paas-charts` agent 讀一次該版的 `charts/hermes-agent/templates/network-policy.yaml`）。在拿到之前，本檔對 hermes-agent 的一切結論都**只是 0.1.1 的觀察**。
+> >
+> > **✅ 已取件（2026-08-22 第 4 段）**：issue-leader 授權後由 leader4 對該 clone 做了**一次 `git fetch origin --tags`**（無 pull／checkout／prune，未碰任何 worktree），`origin/main` 前進到 **`f98c91cadc26732443e2ac786a59ceaa090ef776`**（**2026-08-16 08:51:19 +0000**，`Merge pull request '⛔ 勿代 merge｜待 Eugene 覆核 — feat: hermes-agent 0.2.0 — 安裝器落點覆寫 env ＋ cli-landing initContainer' (#77)`）。本檔作者已用 `git show origin/main:charts/hermes-agent/Chart.yaml` 複驗：**`version: 0.2.0` / `appVersion: "0.19.0"`**。⇒ 上一段「本次未取得」自 2026-08-22 起**不再適用**，內容見 §10.2 的「第 4 段」小節。
+> >
+> > ⚠ **取件方式**：一律 `git show origin/main:<path>`，**clone 的工作目錄仍停在 `4fc45ab7`、未 checkout**（`git rev-parse HEAD` 複驗）。本節其餘五支 chart 的觀察若引用「工作目錄」，其版本已用 `git show origin/main:` 重新確認**與 `4fc45ab7` 相同**（0.1.5 / 0.2.1 / 0.1.2 / 0.1.1 / 0.1.4），故結論不受 fetch 影響。
 >
 > #### 不在 woow-paas-charts 的 4 支第三方 chart（本次查證涵蓋不到）
 >
 > `postgresql`（bitnami 18.8.5）／`redis`（bitnami 27.0.18）／`odoo`（bitnami 28.2.10）／`n8n`（8gears 2.0.1）四支都是外部 OCI chart，**不在該 repo**（`ls charts/` 只有 agent-runtime / haos / hermes-agent / home-assistant / home-assistant-full / mcp-server / open-design / paas-operator / vibe-kanban 九支）。它們的查證路徑見 §11 第 1 項。
+>
+
+> #### 六支自家 chart 的 bare `- {}`（allow-all egress）對照（行號皆以 `git show origin/main:` 重量）
+>
+> | chart | 版本 | bare `- {}` | `allowAllEgress` 預設 | 本平台實際 egress |
+> | --- | --- | --- | --- | --- |
+> | `mcp-server` | 0.1.5 | **有**（`templates/network-policy.yaml:66`） | **true**（`values.yaml:141`） | DNS ＋ **全開** |
+> | `home-assistant` | 0.2.1 | **有**（`:64`） | **true**（`:199`） | DNS ＋ **全開** |
+> | `haos` | 0.1.2 | **有**（`:115`） | **true**（`:253`） | DNS ＋ proxy→VM ＋ **全開** |
+> | `home-assistant-full` | 0.1.1 | **有**（`:64`） | **true**（`:310`） | DNS ＋ **全開** |
+> | `open-design` | 0.1.4 | **無**（註解 `Egress is NEVER an open "- {}"`） | true（但走**安全 ipBlock**） | DNS ＋ console ttyd ＋ ipBlock ports[443,80]；console 另有 apiserver |
+> | `hermes-agent` | **0.2.0** | **無**（註解 `NEVER emits a bare "- {}"`） | **false**（`internetEgress: true` 才是契約鍵，`:481`/`:484`） | 同上形狀，ports[443,80]；console apiserver ports[443,6443] |
+>
+> **平台不覆寫這個鍵**：全 repo `.py` 內 `networkPolicy` 只出現三處（`src/models/cloud_service.py:1891` docstring、`:1908` `open-design`、`:1912` `hermes-agent`），且都只寫 `apiServerCidrs`；seed 的 16 個 `helm_default_values` 只有 `haos` 帶 `{"networkPolicy": {"enabled": true}}`（與 chart 預設同值），`allowAllEgress` 在 seed 內只出現在 ha-full 的**註解**（`cloud_app_templates.xml:1492`）。⇒ **上表的預設值就是實際 render 值。**
+>
+> #### chart 歸屬的機械依據（現算，非目測）
+>
+> `re.findall(r'<field name="helm_chart_name">([^<]*)</field>')` 對 `src/data/cloud_app_templates.xml`：命中 **16** 次、**distinct chart 名 10 個** —— 自家 **6** 支（`mcp-server` ×7、`haos`／`hermes-agent`／`home-assistant`／`home-assistant-full`／`open-design` 各 1）＋ 第三方 **4** 支（`n8n`／`odoo`／`postgresql`／`redis` 各 1）。本檔所有「6 支自家 chart / 4 支第三方」的說法以此為據。
+>
+> ⚠ **charts repo 有 9 個目錄（`ls -1 charts | wc -l` 現算），比自家 6 支多 3 個**：`agent-runtime`（agent ns 用，非 marketplace 商品）、`paas-operator`（平台自身）、以及 **`vibe-kanban`**。
+>
+> 🔴 **`vibe-kanban` chart 沒有任何 seeded template 使用它**：`helm_chart_name` 的 16 個值內對 `vibe-kanban` **零命中**（陽性對照：同一組值對 `mcp-server` 命中 **7** 次，證明探針有效）；`mcp-vk` 那張商品走的是 **`mcp-server`** chart，seed 裡的 `vibe-kanban` 字樣全部出現在描述／tags／`supergateway --stdio vibe-kanban-mcp` 的 args（`cloud_app_templates.xml:600, 611, 615, 620`），與 chart 名無關。⇒ 它要嘛未上架、要嘛是遺留。**不影響本案結論，但若它日後被上架，§2 盤點表要重跑。** 列入 §11 第 11 項。
 >
 > #### 🔴 一個推翻本檔前提的總結論
 >
@@ -733,7 +827,7 @@ except Exception as e:
 - **答案 B：chart 完全沒有這些出向的規則**（只有 apiServerCidrs 那一段）→ 本案 §5 的 E-4（apiserver）＋ E-5（外網）必須完整涵蓋 §2 表 #13/#14 列出的全部出向標的，缺一個就是 F-4／F-6 失效模式的重演。行動：rollout 前逐條核對 §2 表 #13/#14 每一項出向都被 E-4 或 E-5 涵蓋到。
 
 
-> **✅ 部分查證（2026-08-22）—— `open-design` 得到答案 A（chart 已自帶完整 egress，且比 baseline 嚴格）；`hermes-agent` **版本取不回**，仍是 blocker。**
+> **✅ 已查證（2026-08-22）—— 兩支都是答案 A（chart 已自帶完整 egress，且比 baseline 嚴格）。blocker 解除。** open-design 於第 2 段查證，hermes-agent 0.2.0 於第 4 段取件後查證（見本節末的「第 4 段」小節）。
 >
 > **`open-design` 0.1.4（與 seed 相等）** — `charts/open-design/templates/network-policy.yaml` 渲染**三條** NP：
 > - `{fullname}-default-deny`：podSelector `app.kubernetes.io/instance: {{ .Release.Name }}` ⇒ **同時涵蓋 daemon 與 console 兩顆 pod**；`policyTypes: [Ingress, Egress]`、兩者皆空（:16-23）。
@@ -754,6 +848,34 @@ except Exception as e:
 >
 > **仍需的行動**：取得 `hermes-agent` 0.2.0 的 `templates/network-policy.yaml` 與 `values.yaml`（fetch 後重查，或請 charts 維護者貼出）。在此之前 §2 表 #14 的 `chart NP?` 維持未確定。
 
+>
+> ---
+>
+> #### 第 4 段（2026-08-22）：`hermes-agent` **0.2.0** 已取件，答案是 **A**
+>
+> 取件方式 `git show origin/main:charts/hermes-agent/...`（clone 工作目錄仍停在 `4fc45ab7`，未 checkout）。
+>
+> **本平台實際會 render 幾條 NP**：樣板共 **5 個** NetworkPolicy，其中三個是條件式 ——
+> `{fullname}-default-deny`（:17-30，無條件）／`{fullname}-allow`（:33-125，無條件）／`{console.fullname}-allow`（:129-196，`{{- if .Values.console.enabled }}`）／`{postgresql.fullname}-allow`（:201-，`{{- if .Values.postgresql.enabled }}`）／`{redis.fullname}-allow`（:242-，`{{- if .Values.redis.enabled }}`）。
+> seed 的 `helm_default_values` 設 **`postgresql.enabled: false`、`redis.enabled: false`、`console.enabled: true`** ⇒ **本平台實際 render 3 條**（default-deny ＋ agent-allow ＋ console-allow），後兩個 NP 不存在。
+>
+> **檔頭契約（逐字，:2-4）**：`internetEgress is the contract key; allowAllEgress is the open-design spelling kept as a back-compat alias. EITHER being true opens the SAME safe ipBlock rule — **this chart NEVER emits a bare "- {}" allow-all egress**.` 陰性驗證：`grep -n '^\s*- {}'` 對該檔**零命中**。
+>
+> **agent pod 的 egress（`-allow`，:60-125）** 五條，依序：
+> (1) DNS（:61-76）—— `{{- if .Values.networkPolicy.dnsKubeDnsOnly }}` 時**收斂到 `podSelector k8s-app: kube-dns`**（:66-69）；
+> (2) auth-proxy → console ttyd（:77-87）；
+> (3) → postgresql（:88-97，本平台不 render）；
+> (4) → redis（:98-107，本平台不 render）；
+> (5) internet（`{{- if $internetEgress }}`，:108-125）—— `ipBlock 0.0.0.0/0` ＋ `except: {{ range .egressExcludeCidrs }}`，**且 `ports:` 逐條吃 `externalPorts`**（:121）。
+>
+> **console pod 的 egress（:165-196）**：(1) DNS（同樣吃 `dnsKubeDnsOnly`，:171-174）；(2) `{{- with .Values.networkPolicy.apiServerCidrs }}` → ipBlock 逐個 CIDR ＋ ports 逐個 `apiServerPorts`（:185-195）。`with` 空值時整段省略 ＝ **fail-closed**（與 open-design 同形）。
+>
+> **`values.yaml` 預設**（平台**不覆寫**任何 `networkPolicy` 鍵，只由 `_inject_apiserver_cidrs` 餵 `apiServerCidrs`）：
+> `internetEgress: true`（:481）／`allowAllEgress: false`（:484）／`externalPorts: [443, 80]`（:486-488）／`egressExcludeCidrs: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16, 100.64.0.0/10, 127.0.0.0/8]`（:492-498）／`apiServerCidrs: [10.43.0.1/32]`（:502-503）／**`apiServerPorts: [443, 6443]`（:504-506）**／`dnsKubeDnsOnly: true`（:509）。
+>
+> 🔴 **兩個對本檔有直接影響的訂正**：
+> 1. **推翻本檔第 2 段的推論**。第 2 段依 0.1.1 觀察寫過「若 0.2.0 沿用 `apiServerPorts: [443]`，該 console 的 apiserver egress 在 post-DNAT 叢集上本來就是壞的」——**0.2.0 已是 `[443, 6443]`**，該推論不成立，當時標記的「不可當結論」是對的。
+> 2. **`apiServerCidrs` 的註解逐字帶 `⚠ PLATFORM: inject the real target(s) per cluster (#404)`（:501）**，`dnsKubeDnsOnly` 註解標 `np-audit F-7`（:508）。⇒ **chart 端已經把形狀做好、平台只需要餵值** —— 這是 §9.1 D-1「E-4 整條不做」的直接證據，且是 chart 作者與平台 #404 的明示分工，不是我們的推測。
 ### 10.3 提問三（blocker）—— `home-assistant`（`ha-paas`）chart 到底有沒有 egress 出向？
 
 - **標的**：`home-assistant` chart（0.2.1，對應 #12 `ha-paas` template）。本 repo seed（`src/data/cloud_app_templates.xml:721-790`）完全沒有 `networkPolicy` 鍵，也沒有任何出向線索——這是 §2 盤點表裡「最大空白」的一列（表格備註「?（最大空白）」）。
@@ -822,7 +944,7 @@ except Exception as e:
 
 | # | 項目 | 為什麼沒查 | 誰能查 | 不查的風險 |
 | --- | --- | --- | --- | --- |
-| 1 | **已大幅縮小**（2026-08-22）：6 支自家 chart 全部查證完畢（§10）。**剩下兩類**：<br>(a) **4 支第三方 chart**（bitnami `postgresql` 18.8.5 / `redis` 27.0.18 / `odoo` 28.2.10、8gears `n8n` 2.0.1）—— 不在 `woow-paas-charts`（`ls charts/` 只有 9 支自家 chart）；<br>(b) **`hermes-agent` 0.2.0** —— seed 釘的版本在該 clone 全歷史中不存在（最高 0.1.3） | (a) 是外部 OCI chart，本機無 clone；(b) clone 停在 2026-08-07 且**不可 fetch**（其他 agent 在用） | (a) `helm show values oci://registry-1.docker.io/bitnamicharts/<c> --version <v>` 讀 upstream 的 `networkPolicy.*`（bitnami 的語意是 `allowExternal` / `extraEgress`，見 #425 的 `postgresql.primary.networkPolicy` 教訓）；n8n 同法讀 8gears OCI。**或**對已部署 release 實查 rendered NP（`kubectl get netpol -n <ns> -o yaml`，屬叢集操作）。<br>(b) fetch 後重查，或請 charts 維護者貼出 0.2.0 的 `network-policy.yaml` ＋ `values.yaml` | (a) 這 4 支正是 baseline **真正的標的**（它們才是「零 egress NP」那群）—— 若其中某支其實已有 NP，blast radius 評估會偏大；若某支有未知出向，會是 rollout 當下的斷線。<br>(b) `hermes-agent` 是最重的商品之一，其 chart 若已收斂則 baseline 對它冗餘或有害（F-14），若沒有則 E-4/E-5 必須完整涵蓋 §2 表 #14 |
+| 1 | **再縮小**（2026-08-22 第 4 段）：六支自家 chart 全部查證完畢（`hermes-agent` 0.2.0 已由 leader4 fetch 後取件）。**只剩 4 支第三方 chart**：bitnami `postgresql` 18.8.5 / `redis` 27.0.18 / `odoo` 28.2.10、8gears `n8n` 2.0.1 | 它們是外部 OCI chart，**不在 `woow-paas-charts`**（`ls -1 charts` 現算 9 個目錄，全部是自家 6 支 ＋ `agent-runtime` ＋ `paas-operator` ＋ `vibe-kanban`），本機無 clone | `helm show values oci://registry-1.docker.io/bitnamicharts/<c> --version <v>` 讀 upstream 的 `networkPolicy.*`（bitnami 的語意是 `allowExternal` / `extraEgress`，見 #425 的 `postgresql.primary.networkPolicy` 教訓）；n8n 同法讀 8gears OCI。**或**對已部署 release 實查 rendered NP（`kubectl get netpol -n <ns> -o yaml`，屬叢集操作） | 🔴 **這 4 支正是 baseline 唯一真正有效的標的**（§0 的 C 群：在售的 `n8n` ＋ `odoo`）。若其中某支其實已有 egress NP，本案的有效範圍會**再縮小到接近零**；若某支有未知出向，會是 rollout 當下的斷線 |
 | 2 | ~~`ha-paas`（#12）合法出向標的完全空白~~ **✅ 2026-08-22 已解**（§10.3）：`home-assistant` 0.2.1 chart 註解逐字「HA needs outbound to the internet (integrations, update checks)」，且 chart 已自帶 `- {}` 全開 egress、`allowAllEgress: true` 預設 | — | — | 已無風險：baseline 對它既不生效也不會讓它斷線 |
 | 3 | `open-design`（#13）Anthropic API 的連線 port 為推定值（TCP/443），非證實 | 本 repo 只記載該功能存在（`src/data/cloud_app_templates.xml:797-800,833`），未見連線埠明文規格 | 實際跑一次 `claude login` 用 established pod 探針觀測；或 woow-paas-charts / Anthropic 文件 | 風險偏低——§5.2 E-5 本身不限 port，即使猜錯埠規則仍涵蓋得到；主要影響 §8 驗證計畫若誤把它當固定埠設計探針會失準 |
 | 4 | 🔴 **原判斷已被推翻，範圍縮小但升級為 blocker**（2026-08-22，§10.4）：haos chart 明文「the importer needs egress to the registry while it runs」⇒ importer **確實需要出向**。**仍未查證的是**：在 seed 釘死的 `pullMethod=node` 下，importer 具體需要哪些目標與 port（registry manifest？checksum？只需 DNS？），以及 chart 那句話是否分 `pullMethod` | chart 註解沒有分 `pullMethod` 討論；本 repo 與 charts repo 都沒有 importer pod 的實際流量觀測 | 部署一台新 HAOS，在 importer pod 存活期間用 established probe 或 `kubectl logs` / conntrack 觀測其實際連線（叢集操作，本檔範圍排除）；或問 CDI 上游 `pullMethod=node` 的實作 | 🔴 **chart 作者把「ns-level baseline 是 ingress-only」寫成 importer 能運作的前提，而本案正是要打破它** ⇒ E-0 落地後每一台新 HAOS 都可能卡在 `ImportInProgress`，症狀不指向根因。importer 不帶 chart selectorLabels ⇒ **唯一「chart union 救不了」的 workload** |
@@ -832,4 +954,5 @@ except Exception as e:
 | 8 | docker-desktop 的網段與 NP enforcement 行為 | 本 repo 完全未記載（只知道其 k8s node 已改成 kind 風格容器，line 152） | 在 docker-desktop context 起一組 established pod 做 §8.2 探針腳本觀測（叢集操作，本檔範圍排除） | 在 docker-desktop 上得到的任何綠燈/紅燈都不可外推到 woow-k3s（§4、§8.4 已提醒）；誤用會產生假訊號 |
 | 9 | k8s-dev-sandbox 驗證用的 `create.sh` 是不是自己改過的那份（hostPath 凍結副本問題） | `create.sh` 已移到 woow-dev plugin，本 worktree 查不到相關 gate 或凍結副本記錄；`docs/guides/getting-started.md:221` 反而寫「hostPath 即時反映」，與已知的凍結副本 pitfall 矛盾（line 490） | woow-dev plugin 維護者；或實際比對 host 與 node 上同一檔案內容（叢集操作，本檔範圍排除） | 若沙盒實際跑的是舊版 addon/chart，§8.3 dev sandbox e2e 驗證會「看似通過」但驗到的是舊碼，是假綠訊號 |
 | 10 | ~~`create_namespace` 是否有非 Odoo 的呼叫者~~ **✅ 2026-08-22 由 issue-leader 查掉（本檔作者已逐一重量行號複驗，全部相符）**：Odoo 的 `_execute_deploy`（`src/models/cloud_service.py:1265`）在呼叫 `install_release(..., create_namespace=True)`（`:1366` / `:1374`）**之前**，會先呼叫 `client.create_namespace(...)`（`:1346`）；而 operator 端 `helm.py` 的 `create_namespace()` 全程走 `kubectl apply`（冪等）、`api/namespaces.py` 只回 400/500 **不回 409** ⇒ **Odoo 這條路徑不是 live bypass**，baseline netpol 每次 deploy 都會被重新 apply（這也正是 §6 F-10 的成因）。⚠ 附帶觀察：`cloud_service.py:1352-1358` 那段 `if e.status_code != 409` 的防呆分支因此**實際走不到** | — | — | **殘留風險已縮小**為：任何直接打 `POST /api/releases` 且帶 `create_namespace=True`、又跳過 `POST /api/namespaces` 的呼叫者（operator API surface 問題，非 Odoo 路徑）。該路徑建出的 ns 會**完全沒有任何 baseline NP**（不只缺 egress），且無錯誤訊息 |
+| 11 | `charts/vibe-kanban` 這支 chart 為何存在、是否計畫上架 | 本案只盤點**已 seeded** 的 template；該 chart 在 `helm_chart_name` 內零命中（陽性對照 `mcp-server` 命中 7 次），無對應商品 | charts repo 維護者 / 商品負責人 | 低（不影響本案任何結論）。但**若它日後被上架，§2 盤點表與 §0 的 10/2/2 分群都要重跑** —— 屆時它是自家 chart 還是第三方、有沒有 `- {}`，會直接改變 A/B/C 三群的數字 |
 
