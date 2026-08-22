@@ -19,6 +19,31 @@ _logger = logging.getLogger(__name__)
 #: `env[...]` 這條路不受 model 檔的 import 順序影響。
 _CF_REAP_MODEL = 'woow_paas_platform.cf_access_policy_reap'
 
+#: #822：「這次 provision 失敗**可能**在 Cloudflare 留下一顆沒有 DB 參照的 tunnel」
+#: 的訊息標記。消費者是既有的 L4 反向對帳（`services/reconciler.py`：左集就是
+#: `sa.mapped('tunnel_id')`、`kind='tunnel'` ⇒ id 沒落地的 tunnel 本來就會被列成孤兒
+#: 候選）與人工；標記本身**不觸發任何自動刪除**。
+#: 🔴 只在真的可能有殘留時才掛（`_RECLAIM_INDETERMINATE` / `_RECLAIM_FAILED` 兩格）。
+#: 每一次 sync 失敗都掛上它，人工就再也不會去看它了——`test_..._822.py` 的 C4 是這條
+#: 紀律的反向對照。
+#: ⚠ 選字前 `grep -rn unreferenced src/ scripts/` 零命中：新標記不得是既有標記的
+#: 子字串／超字串，否則 grep 型判準分不開兩者。
+_UNREFERENCED_TUNNEL_MARK = 'unreferenced-tunnel'
+
+#: `_reclaim_unreferenced_tunnel` 的五種結果。分這麼細的理由都是**留什麼記錄**不同：
+_RECLAIM_NOT_ATTEMPTED = 'not-attempted'   # 還沒呼叫 create_tunnel ⇒ CF 上必然沒有東西
+_RECLAIM_INDETERMINATE = 'indeterminate'   # create_tunnel 自己炸 ⇒ 有沒有建成不可知
+_RECLAIM_REFERENCED = 'referenced'         # 窗口外：id 已落地，這顆有 DB 參照
+_RECLAIM_DONE = 'reclaimed'                # 已 delete_tunnel 收回
+_RECLAIM_FAILED = 'unreclaimed'            # 補償自己也失敗 ⇒ 真的留了一顆
+
+#: AccessError 分支寫進 `error_message` 的說明。**不是**把 denial 降級——例外照樣
+#: re-raise，這裡只是讓那一列自己說得出剛才發生過什麼。
+_PROVISION_DENIED_NOTE = (
+    "Provisioning denied: this caller may not write the tunnel credential "
+    "(tunnel_token is a base.group_system field)."
+)
+
 # A subdomain prefix is a SINGLE DNS label: 3-63 chars of lowercase letters,
 # digits and hyphens only — NO dots (a dot would split it into multiple labels)
 # and no other symbols/uppercase/spaces; must not start or end with a hyphen.
@@ -578,6 +603,82 @@ class SecurityAccess(models.Model):
     #  Provision / status / delete                                       #
     # ------------------------------------------------------------------ #
 
+    def _reclaim_unreferenced_tunnel(self, client, created, identity_stored,
+                                     create_attempted):
+        """#822：把「已在 CF 建好、id 卻還沒落進 DB」的那顆 tunnel 收回來。
+
+        **孤兒窗口** ＝ ``create_tunnel`` 回傳之後、``_internal_identity(...).write()``
+        落地之前。窗口內任何失敗都會讓冪等守衛 ``if self.tunnel_id:`` 不成立 ⇒ DB 從此
+        沒有任何東西指向那顆 tunnel（活著、計費、帶著可用的 token）。
+
+        🔴 **本方法只做 HTTP，一行 DB 都不碰**，而且呼叫端必須在**任何** DB write
+        之前呼叫它。窗口內的失敗有一種是 flush 階段的 ``IntegrityError``——那會把
+        cursor 打進 aborted 狀態，之後任何 DB 操作都會再炸一次；HTTP 不經 cursor，
+        不受影響。先把 CF 側的孤兒斷掉，狀態欄位寫不寫得進去是次要傷害。
+
+        ``identity_stored`` / ``create_attempted`` 是呼叫端的 local flag，刻意**不**
+        回頭讀 ``self.tunnel_id`` 來判斷：cursor 已 aborted 時那個讀不可信，而 flag
+        是確定的。
+
+        五種結果的差別全在「該留什麼記錄」，見各分支註解與 ``_UNREFERENCED_TUNNEL_MARK``。
+        """
+        self.ensure_one()
+        if not create_attempted:
+            # 連 create_tunnel 都還沒送出去（例如 _get_default_service_url 炸掉）
+            # ⇒ CF 上必然沒有東西。這一格**不得**掛孤兒標記，否則標記會退化成雜訊。
+            return _RECLAIM_NOT_ATTEMPTED
+        created_id = (created or {}).get('tunnel_id')
+        if not created_id:
+            # create_tunnel 自己炸掉（或回了空 id）⇒ CF 上到底有沒有東西**不可知**：
+            # HTTP 可能是在 CF 已經建好之後才斷的。這一格補償不了——沒有 id 可刪，而
+            # 「找一顆同名的刪掉」是比原缺陷更危險的操作（同名可能是別人的；
+            # delete_tunnel 的 #531 歸屬主張要的正是 id 與 name 兩者相符）。
+            # 唯一能做的是留下可對帳的記錄，交 L4 反向對帳／#385。
+            return _RECLAIM_INDETERMINATE
+        if identity_stored:
+            # 窗口**外**：id 已落地，這顆 tunnel 有 DB 參照，retry-from-error 會走
+            # re-sync 分支把它收斂完。在這裡刪掉它才是缺陷（stage-2 的原始設計就是
+            # 靠那顆留著的 tunnel_id 收斂）。
+            return _RECLAIM_REFERENCED
+        try:
+            # #531 歸屬主張：送 CF 自己回的那個 name（create_tunnel 的回傳值），不是
+            # canonical_name——權威的那一份是 CF 的（同 _sync_routes_to_operator）。
+            client.delete_tunnel(
+                created_id, tunnel_name=created.get('tunnel_name'))
+        except Exception:
+            # 補償自己也會失敗。這裡**不再往上拋**：呼叫端正在處理的是原本那個失敗，
+            # 用補償的失敗蓋掉它只會讓根因消失。改成大聲記錄 ＋ 回 _RECLAIM_FAILED，
+            # 由呼叫端把那顆收不回來的 id 寫進 error_message。
+            _logger.exception(
+                "[SA] #822 provision 補償失敗 sa=%s tunnel=%s name=%s"
+                " —— CF 上留下一顆沒有 DB 參照的 tunnel，交 L4 反向對帳"
+                " (kind='tunnel') / #385",
+                self.id, created_id, created.get('tunnel_name'),
+            )
+            return _RECLAIM_FAILED
+        _logger.info(
+            "[SA] #822 provision 失敗，已回收剛建的 tunnel sa=%s tunnel=%s",
+            self.id, created_id,
+        )
+        return _RECLAIM_DONE
+
+    def _provision_failure_message(self, base, outcome, created):
+        """把補償結果附註到失敗訊息上——**只有兩種結果需要留記錄**。
+
+        ``_RECLAIM_DONE`` / ``_RECLAIM_REFERENCED`` / ``_RECLAIM_NOT_ATTEMPTED``
+        三格 CF 上都沒有無主的東西，掛標記只會稀釋它的價值。
+        """
+        self.ensure_one()
+        if outcome == _RECLAIM_INDETERMINATE:
+            # 沒有 id，只有名字——而名字就是對帳的鍵（create_tunnel(name=canonical_name)）。
+            return '%s [%s: name=%s]' % (
+                base, _UNREFERENCED_TUNNEL_MARK, self.canonical_name)
+        if outcome == _RECLAIM_FAILED:
+            return '%s [%s: %s name=%s]' % (
+                base, _UNREFERENCED_TUNNEL_MARK,
+                (created or {}).get('tunnel_id'), self.canonical_name)
+        return base
+
     def action_provision(self):
         """Provision: create dedicated tunnel + primary route.
 
@@ -640,6 +741,33 @@ class SecurityAccess(models.Model):
         - The re-sync branch below (``if self.tunnel_id:``) never writes
           tunnel_token at all, so the field mask only ever gated the FIRST
           provision (D1).
+
+        #822 孤兒窗口與補償（first-provision 分支）。``create_tunnel`` 回傳之後、
+        ``_internal_identity(...).write()`` 落地之前是一段**窗口**：CF 上的 tunnel
+        已經存在（活著、計費、帶著可用 token），DB 還沒有任何東西指向它。窗口內
+        任何失敗都會讓上面那道冪等守衛不成立 ⇒ 重試會再開一顆，前一顆沒有任何
+        記錄指向它。四支 ``except`` 因此一律先呼叫
+        ``_reclaim_unreferenced_tunnel``，而且**排在所有 DB write 之前**（它只做
+        HTTP；窗口內的失敗有一種會把 cursor 打進 aborted 狀態，那之後 DB 寫不進去
+        但 HTTP 照樣送得出去）。
+
+        三格不是同一回事，記錄也不同：
+        - 窗口**內**且拿得到 id ⇒ ``delete_tunnel`` 收回；收得回來就把狀態寫回
+          ``'pending'``（CF 上已無此物，這才是真實狀態，Provision 鈕也才會重新
+          露出）。收不回來 ⇒ 維持 ``'provisioning'`` 並把那顆 id 寫進
+          ``error_message``——**不**寫回 ``'pending'``，那等於邀請下一次重試再開
+          一顆而前一顆還在。
+        - ``create_tunnel`` **自己**炸掉 ⇒ CF 上有沒有東西**不可知**（可能是建好
+          之後回應才斷）。這一格補償不了，也不得依名字盲刪；改為在
+          ``error_message`` 留 ``_UNREFERENCED_TUNNEL_MARK`` ＋ ``canonical_name``，
+          交既有的 L4 反向對帳（``services/reconciler.py``，``kind='tunnel'``，
+          左集就是 ``sa.mapped('tunnel_id')``）與 #385。
+        - 窗口**外**（``identity_stored``）⇒ 一行都不刪：那顆 tunnel 有 DB 參照，
+          retry-from-error 走 re-sync 分支收斂，原本的兩階段設計就是這樣運作的。
+
+        ⚠ AccessError 的語意一字未動：補償之後照樣 ``raise``，也沒有改寫成
+        ``state='error'``。補償記錄的寫入額外包了一層 try——記帳失敗不得蓋掉
+        denial（那個分支的契約是「拒絕必須傳到呼叫端」）。
         """
         self.ensure_one()
         client = self._get_operator_client()
@@ -708,6 +836,14 @@ class SecurityAccess(models.Model):
 
         self.write({'state': 'provisioning', 'error_message': False})
 
+        # #822 孤兒窗口的三個 local flag。刻意用 local 而不是回頭讀 self.tunnel_id：
+        # 窗口內的失敗有一種是 flush 階段的 IntegrityError，那之後 cursor 已 aborted、
+        # 任何 DB 讀都不可信；flag 是確定的。三個旗標把「CF 上可能有什麼」切成互斥的
+        # 五格，判讀在 _reclaim_unreferenced_tunnel。
+        created = None
+        create_attempted = False
+        identity_stored = False
+
         try:
             default_url = self._get_default_service_url()
 
@@ -716,10 +852,17 @@ class SecurityAccess(models.Model):
             # name); application routes (and their DNS) are added on demand by
             # the user afterwards. create_tunnel with no hostname configures
             # the tunnel with a catch-all 404 ingress only.
+            # ⚠ 這一行**之前**設 create_attempted：create_tunnel 自己炸掉時 CF 上有沒有
+            # 東西不可知，那一格與「根本還沒送出請求」必須分得開（前者要留對帳記錄，
+            # 後者掛標記就是雜訊）。
+            create_attempted = True
             result = client.create_tunnel(
                 name=self.canonical_name,
                 service_url=default_url,
             )
+            # 🔴 從這一行到 identity_stored = True 之間就是 #822 的孤兒窗口：CF 上的
+            # tunnel 已經存在（活著、計費、帶著可用 token），DB 還沒有任何東西指向它。
+            created = result
 
             # The one legitimate anchor write: storing the ids Cloudflare just
             # handed back. Opted in via the sentinel — see
@@ -737,6 +880,10 @@ class SecurityAccess(models.Model):
                 'tunnel_name': result.get('tunnel_name'),
                 'deployed_at': fields.Datetime.now(),
             })
+            # 🔴 這一行必須緊貼上面那次 write：窗口的右界由它定義。中間插任何東西都會
+            # 讓「已落地」與「還沒落地」的判讀對不上實情（多插一行＝那一行的失敗會被
+            # 當成窗口外、不補償）。
+            identity_stored = True
 
             # Push whatever routes already exist — a user may have added routes
             # on the still-pending SA via the configure-then-provision flow.
@@ -765,15 +912,22 @@ class SecurityAccess(models.Model):
             )
 
         except PaaSOperatorConnectionError as e:
+            outcome = self._reclaim_unreferenced_tunnel(
+                client, created, identity_stored, create_attempted)
             self.write({
                 'state': 'error',
-                'error_message': f"Cannot connect to PaaS Operator: {e.message}",
+                'error_message': self._provision_failure_message(
+                    f"Cannot connect to PaaS Operator: {e.message}",
+                    outcome, created),
             })
             _logger.error("[SA] provision connection error: %s", e.message)
         except PaaSOperatorError as e:
+            outcome = self._reclaim_unreferenced_tunnel(
+                client, created, identity_stored, create_attempted)
             self.write({
                 'state': 'error',
-                'error_message': f"Tunnel creation failed: {e.message}",
+                'error_message': self._provision_failure_message(
+                    f"Tunnel creation failed: {e.message}", outcome, created),
             })
             _logger.error("[SA] provision error: %s", e.message)
         except AccessError:
@@ -792,11 +946,41 @@ class SecurityAccess(models.Model):
             # /web/dataset/call_kw, since action_provision is a public method
             # (tests/test_sa_provision_tenant_rpc_805.py C1 drives exactly it).
             #
-            # ⚠ create_tunnel has already run when this fires, so a live CF
-            # tunnel exists with no DB reference. Compensating for that is
-            # deliberately NOT done here (issue-leader 2026-08-22 ruled it a
-            # separate ticket); in particular do not "fix" it by swallowing the
-            # AccessError — that trades an orphan for a masked security denial.
+            # #822: create_tunnel has already run when this fires, so a live CF
+            # tunnel exists with no DB reference. It is now compensated here —
+            # HTTP first, DB after (see _reclaim_unreferenced_tunnel). The
+            # denial itself is untouched: still re-raised below, still not
+            # rewritten into 'error'. Swallowing it would trade an orphan for a
+            # masked security denial and remains forbidden.
+            outcome = self._reclaim_unreferenced_tunnel(
+                client, created, identity_stored, create_attempted)
+            try:
+                if outcome in (_RECLAIM_DONE, _RECLAIM_NOT_ATTEMPTED):
+                    # CF 上已經什麼都沒有 ⇒ 'pending' 才是這一列的真實狀態，而且
+                    # detail page 的 Provision 鈕只認 'pending' / 'error'，寫回去
+                    # 才有出口（#822 §2 (A) 的死路）。⚠ 這不是把 denial 降級：
+                    # 例外照樣 re-raise，也沒有寫成 'error' 假裝成一般失敗。
+                    self.write({
+                        'state': 'pending',
+                        'error_message': _PROVISION_DENIED_NOTE,
+                    })
+                elif outcome in (_RECLAIM_FAILED, _RECLAIM_INDETERMINATE):
+                    # 收不回來／不確定 ⇒ **不**寫回 'pending'：那等於邀請下一次重試
+                    # 再開一顆，而前一顆還在 CF 上。只留記錄，狀態維持 'provisioning'。
+                    self.write({
+                        'error_message': self._provision_failure_message(
+                            _PROVISION_DENIED_NOTE, outcome, created),
+                    })
+                # _RECLAIM_REFERENCED（identity write 之後才丟的 AccessError，例如
+                # _sync_all_routes_access）：tunnel 有參照、state 交給重試路徑，
+                # 這裡什麼都不動。
+            except Exception:
+                # 記帳失敗不得蓋掉 denial：這個分支的契約就是「拒絕必須傳到呼叫端」。
+                # 大聲記錄而不是靜默吞掉，然後照樣把原例外丟出去。
+                _logger.exception(
+                    "[SA] #822 provision denial 的補償記錄寫入失敗 sa=%s"
+                    " (outcome=%s) —— 原 AccessError 照常上拋", self.id, outcome,
+                )
             raise
         except Exception as e:
             # Stage-2 (write / primary-route create / re-sync) can raise
@@ -805,12 +989,21 @@ class SecurityAccess(models.Model):
             # the primary route. The narrow operator-only excepts above would
             # let those propagate while state was already flipped to 'active'
             # and tunnel_id stored — silent CF↔DB drift. Catch everything and
-            # fail loud into 'error' (tunnel_id is retained, so the idempotent
-            # retry-from-error path can finish without orphaning the tunnel),
-            # mirroring _do_suspend / _do_resume / _do_cleanup's bare except.
+            # fail loud into 'error', mirroring _do_suspend / _do_resume /
+            # _do_cleanup's bare except.
+            #
+            # #822 修正了這段註解原本的說法。舊版寫「tunnel_id is retained, so the
+            # idempotent retry-from-error path can finish without orphaning the
+            # tunnel」——那句話**只對窗口外的失敗成立**。identity write 自己炸掉時
+            # （IntegrityError / ValidationError / 並發）tunnel_id 根本沒 retained，
+            # 那正是 #822 的孤兒形狀。現在兩種形狀分開處理：窗口內補償刪除，窗口外
+            # 維持原本「留著 tunnel_id 讓重試收斂」的設計。
+            outcome = self._reclaim_unreferenced_tunnel(
+                client, created, identity_stored, create_attempted)
             self.write({
                 'state': 'error',
-                'error_message': f"Provisioning failed: {e}",
+                'error_message': self._provision_failure_message(
+                    f"Provisioning failed: {e}", outcome, created),
             })
             _logger.exception("[SA] provision unexpected error sa=%s", self.id)
 
