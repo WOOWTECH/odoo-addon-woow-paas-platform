@@ -623,3 +623,13 @@ from . import test_public_url_dns_gate_648
 # 守門對照組：A5（缺席不得 fail-closed）、A4（舊 operator 缺鍵不得算失敗）、
 # 健康 route 不觸發閘——這三條紅了代表守線被改成用缺席當判準。
 from . import test_route_dns_failed_648
+
+# fix: #732 owner 對自己那列 write({'role':'admin'}) ⇒ workspace 永久 0 owner。
+# 三道既有守衛全漏（owner-row 守衛只擋非 owner 呼叫者、last-owner 不變式只掛
+# unlink、owner_count constraint 只在新值是 owner 時觸發）。新守衛＝write 路徑的
+# last-owner 保護：demote 會讓該 workspace 剩 0 owner 時 ValidationError。
+# 🔴 判準比對記錄不比對呼叫者（數 demote 之外剩幾個 owner，不是 blanket-deny
+# owner 列）——雙 owner SQL 直造的陽性對照釘住這個形狀；su/group_system 豁免
+# 由「promote-first 已被 owner_count constraint 擋死」逼出（詳見該檔檔頭），
+# 平台側 demote-then-promote 整段轉移有專屬陽性對照。
+from . import test_workspace_access_last_owner_732
