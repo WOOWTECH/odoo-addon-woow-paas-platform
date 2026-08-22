@@ -32,8 +32,31 @@ pip install -r requirements.txt
 HELM_BINARY=$(which helm) pytest -m integration tests/integration/ -v
 ```
 
-41 tests（其中 2 個 KubeVirt CRD 契約測試在沒有 CDI 的叢集會自我 skip，例如
-docker-desktop）。#461 新增兩支：`test_helm_secret_reset_returns_before_pods_are_ready`
+**45 支收集、其中 4 支**在沒有 KubeVirt/CDI CRD 的叢集（例如 docker-desktop）會自我
+skip。數字會漂，要重新確認就跑 `pytest -m integration tests/integration/ --collect-only -q`
+（純收集，不碰叢集）。今天在 docker-desktop 上實測 skip 的逐支是：
+
+- `test_kubevirt_crd_contract.py::TestVirtualMachineLifecycle::test_patch_run_strategy_round_trip`（KubeVirt CRD）
+- `test_kubevirt_crd_contract.py::TestDataVolumeOrphanLabeling::test_list_and_label_datavolumes`（CDI CRD）
+- `test_scale.py::TestScaleMixedTopology::test_vm_only_release_halts_via_endpoint`（KubeVirt CRD）
+- `test_scale.py::TestScaleMixedTopology::test_mixed_deployment_and_vm_scales_both`（KubeVirt CRD）
+
+⚠ **本段原本寫「41 tests，其中 2 支 skip」——兩個數字都不對。** 漏數的是 `test_scale.py`
+那兩支：它們從 `test_kubevirt_crd_contract` **import** `_skip_or_fail` 來用
+（`test_scale.py:169` 的 import、`:263` 與 `:290` 的呼叫），所以不住在
+`test_kubevirt_crd_contract.py` 這個檔名底下，用「掃檔案」的方式數就會漏掉。
+
+⚠⚠ **比數字錯更危險的是那個 41 的口徑**：它是**總數**，而 docker-desktop 上的實際
+結果是 `41 passed, 4 skipped`——**passed 數剛好等於舊敘述的總數**。照舊敘述讀的人看到
+`41 passed` 會直接結論「全部跑完、沒有東西被 skip」，實際上有 4 支從未執行。兩個 41 是
+不同口徑的巧合，不是對帳成功。⇒ **不要用總數相減、也不要拿 passed 數去對這行敘述來判斷
+有沒有 skip**；要知道 skip 了哪幾支就看 `-v` 的逐支輸出（`SKIPPED`），要知道原因就加
+`-rs`。skip 被誤讀成通過是這裡的主要風險。
+
+要真正驗到 VM 路徑，用有 CRD 的叢集並帶 `REQUIRE_KUBEVIRT=1`（見下方表格）：那會把 skip
+升級成 fail，正是為了不讓「驗收 VM 路徑」被一個安靜的 skip 冒充通過。
+
+#461 新增兩支：`test_helm_secret_reset_returns_before_pods_are_ready`
 量「reset 不等 rollout」的牆鐘；`test_atomic_failure_rolls_secret_back_within_hard_cap`
 強制一次 `--atomic` 失敗，驗 rollback 真的跑完而非被 subprocess 上限腰斬——這兩件事
 只能在真叢集量到，mock 掉 kubectl 之後「有沒有等」只剩「有沒有呼叫某方法」。
