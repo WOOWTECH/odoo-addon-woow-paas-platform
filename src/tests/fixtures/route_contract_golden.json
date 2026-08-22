@@ -1,0 +1,91 @@
+{
+  "cloudflare_disabled": {
+    "app_version": "1.0.0",
+    "chart": "chart",
+    "chart_version": "1.0.0",
+    "description": null,
+    "name": "svc-648",
+    "namespace": "paas-ws-test-648",
+    "revision": 1,
+    "route": null,
+    "status": "deployed",
+    "updated": "2026-08-22T00:00:00Z",
+    "values": null
+  },
+  "failed_cf_error": {
+    "app_version": "1.0.0",
+    "chart": "chart",
+    "chart_version": "1.0.0",
+    "description": null,
+    "name": "svc-648",
+    "namespace": "paas-ws-test-648",
+    "revision": 1,
+    "route": {
+      "dns_failed": false,
+      "enabled": false,
+      "hostname": "paas-cs-648a-abcd1234.woowtech.io",
+      "service_url": "http://svc.paas-ws-test-648.svc.cluster.local:8080",
+      "status": "failed"
+    },
+    "status": "deployed",
+    "updated": "2026-08-22T00:00:00Z",
+    "values": null
+  },
+  "failed_no_services": {
+    "app_version": "1.0.0",
+    "chart": "chart",
+    "chart_version": "1.0.0",
+    "description": null,
+    "name": "svc-648",
+    "namespace": "paas-ws-test-648",
+    "revision": 1,
+    "route": {
+      "dns_failed": false,
+      "enabled": false,
+      "hostname": "paas-cs-648a-abcd1234.woowtech.io",
+      "service_url": null,
+      "status": "failed"
+    },
+    "status": "deployed",
+    "updated": "2026-08-22T00:00:00Z",
+    "values": null
+  },
+  "ok_dns_failed": {
+    "app_version": "1.0.0",
+    "chart": "chart",
+    "chart_version": "1.0.0",
+    "description": null,
+    "name": "svc-648",
+    "namespace": "paas-ws-test-648",
+    "revision": 1,
+    "route": {
+      "dns_failed": true,
+      "enabled": true,
+      "hostname": "paas-cs-648a-abcd1234.woowtech.io",
+      "service_url": "http://svc.paas-ws-test-648.svc.cluster.local:8080",
+      "status": "ok"
+    },
+    "status": "deployed",
+    "updated": "2026-08-22T00:00:00Z",
+    "values": null
+  },
+  "ok_dns_healthy": {
+    "app_version": "1.0.0",
+    "chart": "chart",
+    "chart_version": "1.0.0",
+    "description": null,
+    "name": "svc-648",
+    "namespace": "paas-ws-test-648",
+    "revision": 1,
+    "route": {
+      "dns_failed": false,
+      "enabled": true,
+      "hostname": "paas-cs-648a-abcd1234.woowtech.io",
+      "service_url": "http://svc.paas-ws-test-648.svc.cluster.local:8080",
+      "status": "ok"
+    },
+    "status": "deployed",
+    "updated": "2026-08-22T00:00:00Z",
+    "values": null
+  }
+}

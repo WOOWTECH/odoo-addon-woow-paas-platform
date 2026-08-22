@@ -25,6 +25,9 @@ A5（缺席不得 fail-closed）與 A4（舊 operator 不回鍵不得算失敗�
 
 Refs #484 #648
 """
+import copy
+import json
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from odoo.tests.common import TransactionCase, tagged
@@ -37,35 +40,35 @@ from ..models.cloud_service import _internal_provision
 _CLIENT_PATH = ('odoo.addons.woow_paas_platform.services.paas_operator'
                 '.get_paas_operator_client')
 
-_PAAS_DOMAIN = 'woowtech.io'
-_SUBDOMAIN = 'paas-cs-648a-abcd1234'
-_HOSTNAME = '%s.%s' % (_SUBDOMAIN, _PAAS_DOMAIN)
+#: 🔴 **fixture 不是手寫的，是 operator 實際序列化出來的**。
+#:
+#: 這一段是本檔存在的關鍵。Odoo 端不吃 operator 的碼，所以若測試自己組回應 dict，
+#: 它釘住的只是作者**相信** operator 會回什麼——欄位名、`str, Enum` 的序列化形式、
+#: `None` 欄位有沒有被丟掉，任何一項不同都會讓這裡全綠而 production 直接斷。那是
+#: 這條修法兩半之間唯一沒有守線的接縫（CLAUDE.md 說的「unit-test mocks 蓋不住
+#: contract drift」）。
+#:
+#: golden 由 operator 端 `tests/generate_route_contract_golden.py` **打真的端點**
+#: 產生（FastAPI `TestClient` → `response.json()`），operator 端另有
+#: `tests/test_route_contract_golden_648.py` 斷言「現在的序列化 == golden」⇒ 任一端
+#: 改欄位，一端必紅。
+#:
+#: 重現：
+#:     cd extra/paas-operator
+#:     /opt/homebrew/bin/python3.11 tests/generate_route_contract_golden.py
+_GOLDEN = json.loads(
+    (Path(__file__).resolve().parent / 'fixtures'
+     / 'route_contract_golden.json').read_text(encoding='utf-8'))
+
+#: 連 hostname 都從 golden 取——手寫一份再拿去比對，等於自己跟自己比。
+_HOSTNAME = _GOLDEN['ok_dns_healthy']['route']['hostname']
+_PAAS_DOMAIN = _HOSTNAME.split('.', 1)[1]
+_SUBDOMAIN = _HOSTNAME.split('.', 1)[0]
 
 
-def _route(**overrides):
-    """operator ``RouteInfo`` 形狀（預設一切正常）。"""
-    body = {
-        'hostname': _HOSTNAME,
-        'service_url': 'http://svc.ns.svc.cluster.local:8080',
-        'enabled': True,
-        'status': 'ok',
-        'dns_failed': False,
-    }
-    body.update(overrides)
-    return body
-
-
-def _install_result(route='__default__'):
-    """operator ``POST /api/releases`` 的回應形狀。
-
-    ``route=None`` ⇒ 回應**沒有** route（CF 沒開，或舊 operator）。
-    """
-    body = {'revision': 1, 'chart_version': '1.0.0'}
-    if route == '__default__':
-        route = _route()
-    if route is not None:
-        body['route'] = route
-    return body
+def _install_result(case):
+    """取 golden 裡某一格的**完整** operator 回應（深拷貝，避免測試互相污染）。"""
+    return copy.deepcopy(_GOLDEN[case])
 
 
 class _DeployCase(TransactionCase):
@@ -112,7 +115,7 @@ class TestExposeFailureIsFailClosed(_DeployCase):
 
         修前 ``route`` 整個物件沒被讀過，服務照樣往 running 走。
         """
-        self._deploy(_install_result(_route(dns_failed=True)))
+        self._deploy(_install_result('ok_dns_failed'))
 
         self.assertEqual(
             self.svc.state, 'error',
@@ -120,7 +123,7 @@ class TestExposeFailureIsFailClosed(_DeployCase):
 
     def test_a2_error_message_names_the_hostname(self):
         """A2：訊息要指名是哪個 hostname，並給出可行動的出路。"""
-        self._deploy(_install_result(_route(dns_failed=True)))
+        self._deploy(_install_result('ok_dns_failed'))
 
         msg = self.svc.error_message or ''
         self.assertIn(_HOSTNAME, msg, '訊息沒指名 hostname（回 %r）' % msg)
@@ -131,10 +134,11 @@ class TestExposeFailureIsFailClosed(_DeployCase):
     def test_a3_route_status_failed_is_fail_closed(self):
         """A3：整條 route 沒建成（找不到 service／CF API 掛了）也要 fail-closed。
 
-        這比 DNS 失敗更嚴重：連 tunnel ingress 都沒有。
+        這比 DNS 失敗更嚴重：連 tunnel ingress 都沒有。用 golden 的
+        ``failed_no_services`` 那格——它同時是唯一 ``service_url`` 真的是 ``null``
+        的形狀（那條失敗發生在 service 解析完成之前）。
         """
-        self._deploy(_install_result(
-            _route(status='failed', enabled=False, service_url=None)))
+        self._deploy(_install_result('failed_no_services'))
 
         self.assertEqual(self.svc.state, 'error', self.svc.state)
 
@@ -146,7 +150,7 @@ class TestExposeFailureIsFailClosed(_DeployCase):
         **建立當下**就寫好了，所以孤兒風險不同構；但 revision／chart_version／
         deployed_at 仍然是**已經發生的事實**，不因判定失敗而消失。
         """
-        self._deploy(_install_result(_route(dns_failed=True)))
+        self._deploy(_install_result('ok_dns_failed'))
 
         self.assertEqual(self.svc.state, 'error')
         self.assertEqual(self.svc.helm_revision, 1)
@@ -166,7 +170,7 @@ class TestExposeAbsenceIsNotFailure(_DeployCase):
         把缺席當失敗，會讓那種環境**每一次部署都翻 error**——比原 bug 嚴重得多，
         而且 prod 的 CF 是開的、只會在別人的沙盒或 e2e 上先炸。
         """
-        self._deploy(_install_result(route=None))
+        self._deploy(_install_result('cloudflare_disabled'))
 
         self.assertNotEqual(
             self.svc.state, 'error',
@@ -178,17 +182,17 @@ class TestExposeAbsenceIsNotFailure(_DeployCase):
         鏡射 ``test_named_failure_fields_484.py`` 的同名對照組。相容性在本 repo 靠
         「Optional ＋ 預設值 ＋ 呼叫端 `.get`」，不是靠 schema 版本協商。
         """
-        route = _route()
-        del route['dns_failed']
-        del route['status']
+        payload = _install_result('ok_dns_healthy')
+        del payload['route']['dns_failed']
+        del payload['route']['status']
 
-        self._deploy(_install_result(route))
+        self._deploy(payload)
 
         self.assertNotEqual(self.svc.state, 'error', self.svc.state)
 
     def test_healthy_route_does_not_trip_the_gate(self):
         """對照組：一切正常時行為與修前相同（不寫 error、留給 poll 決定）。"""
-        self._deploy(_install_result())
+        self._deploy(_install_result('ok_dns_healthy'))
 
         self.assertNotEqual(self.svc.state, 'error', self.svc.state)
         self.assertFalse(self.svc.error_message)
