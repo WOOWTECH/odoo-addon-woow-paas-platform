@@ -1,0 +1,271 @@
+# 全套 Odoo 測試（Refs issue #546）
+#
+# 觸發策略 B + C（2026-08-03 Eugene 拍板）：
+#   B = merge 進 develop 後跑     → 事後發現，不擋 PR 迭代
+#   C = 每日 02:00 台北排程        → 保底安全網（離峰）
+# 刻意**不掛 pull_request**：全套 6 分鐘 × 單一 act-runner × 7 人並行
+# 會把 PR 回饋迴圈從 5 秒變成小時級排隊。終點暫停在「全套綠」，不 block merge。
+#
+# ⚠ 用 paths-ignore 而不是 paths —— 這是刻意的，兩者的**失效方向相反**：
+#   paths（允許清單）漏一項 ⇒ 該類改動**靜默不跑**，gate 寫好了卻不會被跑到
+#     （repo-lint.yml 的 #463 就是這個坑，註解還留在那支裡）。
+#   paths-ignore（排除清單）漏一項 ⇒ 最多多跑一次，浪費 6 分鐘，不會漏測。
+#   ⇒ 只排除**可證明不影響測試結果**的路徑，其餘一律跑。
+name: odoo-tests
+
+on:
+  push:
+    branches:
+      - develop
+    paths-ignore:
+      - "docs/**"
+      - "**.md"
+      - ".claude/**"
+      - "resource/**"
+  schedule:
+    # 02:00 台北（UTC+8）＝ 18:00 UTC 前一日。排程只在**預設分支**上跑（本 repo ＝ develop）。
+    - cron: "0 18 * * *"
+  workflow_dispatch:
+
+env:
+  JCR: artifactory-jcr-artifactory-nginx.jfrog.svc.cluster.local
+  ODOO_BIN: /opt/bitnami/odoo/bin/odoo
+  ADDONS_PATH: /opt/bitnami/odoo/lib/odoo/addons,/opt/bitnami/odoo/custom-addons
+  MODULE_DIR: /opt/bitnami/odoo/custom-addons/woow_paas_platform
+  # 沒注入這個變數，TestNamespaceLeftSetUnion 會 fail-closed raise ⇒ 基準憑空多 2E。
+  AGENT_RUNTIME_NAMESPACE_SECRET: ci-full-suite
+
+jobs:
+  full-suite:
+    runs-on: ubuntu-latest
+    # 單一 job 硬上限是 3 小時（job container entrypoint = sleep 10800）；
+    # 實測全套約 6 分鐘，留大餘裕但不放到無限。
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 環境事實（出事時第一手證據）
+        run: |
+          echo "nproc=$(nproc)"; free -m || true; df -h
+          docker system df || true
+
+      - name: JCR login
+        run: |
+          echo "${{ secrets.JCR_PASSWORD }}" | \
+            docker login "${JCR}" -u "${{ secrets.JCR_USERNAME }}" --password-stdin
+
+      - name: Pull paas-odoo image
+        run: |
+          IMG=""
+          for CAND in "${JCR}/woow-paas-docker-local/paas-odoo:latest" \
+                      "${JCR}/woow-paas-docker-local/paas-odoo-stg:latest"; do
+            if docker pull "$CAND"; then IMG="$CAND"; break; fi
+          done
+          [ -n "$IMG" ] || { echo "::error::拉不到 paas-odoo image"; exit 1; }
+          echo "IMG=$IMG" >> "$GITHUB_ENV"
+
+      - name: 起 postgres + odoo（預設 bridge）
+        run: |
+          # 刻意不建自訂 docker network：自訂 network MTU 1500 > pod eth0 1450，
+          # 外網 TLS 會被靜默丟包（既有已知坑）。預設 bridge 是 1400。
+          # 代價是沒有 embedded DNS，所以用 IP 連 postgres。
+          docker run -d --name pg -e POSTGRES_USER=odoo -e POSTGRES_PASSWORD=odoo \
+            -e POSTGRES_DB=postgres postgres:15
+          docker run -d --name odoo \
+            -e AGENT_RUNTIME_NAMESPACE_SECRET="${AGENT_RUNTIME_NAMESPACE_SECRET}" \
+            --entrypoint bash "$IMG" -c 'sleep infinity'
+          for i in $(seq 1 60); do
+            docker exec pg pg_isready -U odoo >/dev/null 2>&1 && break
+            sleep 2
+          done
+          docker exec pg pg_isready -U odoo
+          PG_IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' pg)
+          [ -n "$PG_IP" ] || { echo "::error::拿不到 pg IP"; exit 1; }
+          echo "PG_IP=$PG_IP" >> "$GITHUB_ENV"
+
+      - name: 用本 checkout 覆蓋 image 內 baked addon
+        run: |
+          # 整棵換掉、不要只 cp diff：舊 image 的 tests/__init__.py 會 import
+          # 後來才新增的測試檔 → ImportError → 整條 -u 掛掉。
+          docker exec odoo rm -rf "${MODULE_DIR}"
+          docker exec odoo mkdir -p "${MODULE_DIR}"
+          docker cp src/. "odoo:${MODULE_DIR}/"
+          docker exec odoo sh -c "find ${MODULE_DIR} -name __pycache__ -type d -exec rm -rf {} + || true"
+          echo "--- 覆蓋驗證：容器內版號應等於本 checkout ---"
+          docker exec odoo sh -c "grep -m1 version ${MODULE_DIR}/__manifest__.py"
+          grep -m1 version src/__manifest__.py
+
+      - name: Install（不跑測試）
+        run: |
+          # ⚠ 這一步不可與下一步合併。`-i` + `--test-enable` 一步到位實測 29F/89E，
+          # 兩步法同一個 DB 是 0F/0E —— 合併＝大規模假紅。
+          # --limit-memory-hard=0 是必要的：ThreadedServer.start() 無條件把 RLIMIT_AS
+          # 壓到預設 2.5 GB，在這台 256 核機器上會噴 MemoryError（本機不會重現）。
+          docker exec odoo "${ODOO_BIN}" -d test -i woow_paas_platform \
+            --stop-after-init --without-demo=all --no-http \
+            --limit-memory-hard=0 --max-cron-threads=0 \
+            --addons-path="${ADDONS_PATH}" --data-dir=/tmp/odoo-data \
+            --db_host "${PG_IP}" --db_user odoo --db_password odoo > /tmp/install.log 2>&1 \
+            || { tail -40 /tmp/install.log; echo "::error::install 失敗"; exit 1; }
+
+      - name: 跑全套測試
+        run: |
+          set +e
+          docker exec odoo "${ODOO_BIN}" -d test -u woow_paas_platform \
+            --test-enable --test-tags /woow_paas_platform \
+            --stop-after-init --limit-memory-hard=0 --max-cron-threads=0 \
+            --http-port=18069 --gevent-port=18072 \
+            --addons-path="${ADDONS_PATH}" --data-dir=/tmp/odoo-data \
+            --db_host "${PG_IP}" --db_user odoo --db_password odoo \
+            --log-handler=odoo.tests.stats:DEBUG > /tmp/test.log 2>&1
+          echo "odoo_exit=$? (非零僅代表有紅燈，判準以 C5 集合差為準)"
+          set -e
+          echo "--- summary ---"
+          grep -E "failed, .* error\(s\) of .* tests" /tmp/test.log \
+            || { echo "::error::找不到 summary 行 ⇒ log 截斷，本次數據不可信"; exit 1; }
+
+      # 🔴 原始觀測必須在**任何判準跑之前**就落進 job log，而且 `if: always()`。
+      #
+      # 為什麼：run 4629 實例。C5 回 FATAL（哨兵測試跑了但沒紅），要在
+      #   (a) 缺陷真的修好了 (b) fixture 被改綠 (c) 這次沒撞到觸發條件 (d) 它其實被 skip 了
+      # 之間分辨，需要的觀測全在 `/tmp/test.log` 裡：skip 行、FAIL/ERROR 行、
+      # 哨兵自己的 detail 行、被測程式碼的 WARNING 指紋。
+      # 而那個檔**只活在容器裡**：workflow 從頭到尾只 grep 過 summary 一行，job 結束就沒了
+      # （artifacts 也是空的）。⇒ 判準紅了，人卻拿不到判斷憑據，只能重跑一趟 6～11 分鐘的全套。
+      #
+      # 這一步不是判準、不會失敗（`|| true`），純粹是把憑據留下來。刻意**不**用
+      # `actions/upload-artifact`：本 repo 至今只用過 `actions/checkout@v4`，
+      # 在跑全套的這支上押一個沒驗過的 action，失敗形態是整個 job 紅——代價不對稱。
+      # job log 本身就是可經 API 取回的耐久載體（`/actions/jobs/<id>/logs`）。
+      - name: 原始觀測落地（留憑據，不是判準）
+        if: always()
+        run: |
+          set +e
+          echo "── summary ──"
+          grep -E "failed, .* error\(s\) of .* tests" /tmp/test.log
+          echo "── skip 行（C4 的輸入；skip 算進 of N tests 卻什麼都沒驗）──"
+          grep -c ": skipped " /tmp/test.log
+          grep ": skipped " /tmp/test.log | head -60
+          echo "── FAIL/ERROR 行（C5 的輸入。⚠ 正規式的陽性對照**不在這裡**："
+          echo "──   known-failures 清空後這裡零筆是常態；對照在 self-test 的注入樣本集）──"
+          grep -cE ": (FAIL|ERROR): " /tmp/test.log
+          grep -E ": (FAIL|ERROR): " /tmp/test.log | head -60
+          echo "── 哨兵自己的 detail 行（證明它被收集且真的跑了）──"
+          while read -r s; do
+            case "$s" in ''|\#*) continue;; esac
+            grep -F "$s" /tmp/test.log | head -3
+          done < scripts/audit/baselines/test-collection-sentinels.txt
+          # 🔴 已知指紋：各自獨立 grep。兩件事都是刻意的：
+          #   (a) **不吃**下面通用摘要的額度；
+          #   (b) **不先過 `WARNING` 篩子** —— `created N include rule(s)` 是 INFO 級，
+          #       套上 WARNING 會再漏一次（run 4679 就是兩半都取不到）。
+          # 為什麼需要這一段：run 4679 的通用摘要是 `... | head -40`，而那趟有 **761** 筆
+          # WARNING，被 dump 出來的前 40 筆時間戳只到 00:19:57（install／模組載入階段），
+          # 測試階段一筆都沒進來 ⇒ 一個**專門為了留憑據而做的步驟，在最需要的那一格留了空白**，
+          # 而輸出與「CI 真的沒發這行」不可區分（差點被讀成環境差異）。
+          # ⇒ 通則：**低頻訊號不能跟高頻噪音共用同一個額度**。這裡的 761 筆裡絕大多數是
+          #   重複的 `ecpay.subscription.state: unknown parameter 'tracking'`。
+          # 新增指紋就往下面這個清單 append；`p_rule_post_migrate` 是 logger 名（最耐用的錨點，
+          # 訊息改寫也抓得到），另外兩條是給人讀的訊息片段。
+          echo "── 已知指紋（各自獨立 grep，不吃額度、不過 WARNING 篩子）──"
+          for FP in "p_rule_post_migrate" \
+                    "legacy policy(ies) carry an allow" \
+                    "include rule(s) from flat policies"; do
+            echo "  [指紋] ${FP}"
+            grep -cF "${FP}" /tmp/test.log
+            grep -F "${FP}" /tmp/test.log | head -10
+          done
+          echo "── 被測程式碼的 WARNING（『那條分支有沒有被走到』常常只有這裡看得到）──"
+          grep -c "WARNING" /tmp/test.log
+          # 依訊息去重的頻次表：這是對「低頻被高頻擠掉」的**結構性**修法，
+          # head/tail 只是保險。去重後每一種訊息各佔一列，低頻的自然浮上來。
+          echo "  -- 依訊息去重（次數 訊息），前 60 種 --"
+          grep "WARNING" /tmp/test.log | grep -v "odoo.tests" \
+            | sed -E 's/^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9:,]+ [0-9]+ //' \
+            | sort | uniq -c | sort -rn | head -60
+          echo "  -- 原始前 30 --"
+          grep "WARNING" /tmp/test.log | grep -v "odoo.tests" | head -30
+          echo "  -- 原始後 30 --"
+          grep "WARNING" /tmp/test.log | grep -v "odoo.tests" | tail -30
+          exit 0
+
+      # ── 以下是完備性判準。**順序有意義**：哨兵先過，否則後面的差集全都不成立。 ──
+      - name: C0 完整性哨兵（沒過就不要看後面的差集）
+        run: python3 scripts/audit/test_collection_audit.py --check-sentinels /tmp/test.log
+
+      - name: C5 失敗集合差（驗收標準：集合相同、不得新增）
+        run: python3 scripts/audit/test_collection_audit.py --check-failures /tmp/test.log
+
+      # C2 是 C3 的**左半邊**。baseline 過期時 C3 會把「baseline 沒跟上原始碼」報成
+      # 「有 class 沒跑」——兩者的輸出長得一樣，但修法完全相反（一個是跑
+      # `--update-baseline`，一個是去查測試為什麼沒被收集）。先驗左半邊再做差集。
+      # PR 上由 test-collection-audit.yml 跑同一件事，這裡是 develop 側的保險。
+      - name: C2 baseline vs 原始碼（先確認差集的左半邊是新的）
+        run: python3 scripts/audit/test_collection_audit.py --check-baseline
+
+      - name: C3 實際執行清單雙向差集
+        run: python3 scripts/audit/test_collection_audit.py --check-executed /tmp/test.log
+
+      - name: C4 skip 盤點
+        run: python3 scripts/audit/test_collection_audit.py --check-skips /tmp/test.log
+
+      # 升級條件＝兩個**狀態**（不是時間）：repo-lint 的 test-collectability 豁免清單
+      # 清空 ＋ develop push 全套連續 3 次全綠。滿足時腳本以 exit 3 提醒「可以回
+      # issue #546 重新裁決觸發策略」。這裡 `|| true` 是刻意的：那是提醒，不是本次
+      # 跑全套的驗收結果，不該把一次綠燈的 run 變成紅的。
+      - name: 升級條件自檢（提醒用，不影響本次驗收）
+        if: always()
+        run: python3 scripts/audit/test_collection_audit.py --upgrade-check || true
+
+      - name: 摘要 + streak 待辦
+        if: always()
+        run: |
+          {
+            echo "## 全套 Odoo 測試"
+            echo '```'
+            grep -E "failed, .* error\(s\) of .* tests" /tmp/test.log 2>/dev/null || echo "(no summary)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          # 🔴 升級條件 2 的定義是「連續 N 次 **develop push** 全套全綠」。
+          # 這個 if 原本只判 `job.status`，於是 feature branch 上的 `workflow_dispatch`
+          # 全綠時也會印出「請 append 到 streak 檔」——而 streak 檔是**人工**維護的
+          # （CI 自動 commit 回 develop 會與本 workflow 的 push 觸發形成迴圈）。
+          # ⇒ 照著那一格做，就會把一趟**不符定義**的 run 灌進 streak，湊到 N 之後
+          #   觸發的「可以回 #546 重裁觸發策略」提醒**前提是假的**（run 4679 實例）。
+          # 這是「可照抄的範本勝過正文警告」的形狀：docstring 把條件寫得很清楚，
+          # 但真正被照抄的那一格不帶限制，動手的人跟範本、不跟正文。
+          # ⚠ 不合格時**照樣印一行、但講明不算** —— 完全不印會讓人以為忘了印。
+          # ⚠ 嚴格只認 `push` × `refs/heads/develop`：`schedule` 也跑在 develop 上，
+          #   但它不是 push，不符合條件 2 的字面定義。
+          if [ "${{ job.status }}" = "success" ]; then
+            if [ "${{ github.event_name }}" = "push" ] \
+               && [ "${{ github.ref }}" = "refs/heads/develop" ]; then
+              {
+                echo ""
+                echo "### ✅ 本次全綠 —— 請把下面這行 append 到"
+                echo "\`scripts/audit/baselines/test-collection-green-streak.txt\`（升級 blocking 的條件 2）"
+                echo '```'
+                echo "${{ github.run_id }}	$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+                echo '```'
+                echo "> ⚠ 目前這一步是人工的 —— CI 自動 commit 回 develop 會與本 workflow 的"
+                echo "> push 觸發形成迴圈，需要 loop guard，未經 review 不自行加。見 issue #546。"
+              } >> "$GITHUB_STEP_SUMMARY"
+            else
+              {
+                echo ""
+                echo "### ✅ 本次全綠 —— 但**不計入 streak**"
+                echo ""
+                echo "本趟是 \`${{ github.event_name }}\` on \`${{ github.ref }}\`。"
+                echo "升級條件 2 的定義是「連續 N 次 **develop push** 全套全綠」"
+                echo "（\`test_collection_audit.py\` 的 \`GREEN_STREAK_REQUIRED\`），"
+                echo "所以 **請不要** 把這一趟 append 進 "
+                echo "\`scripts/audit/baselines/test-collection-green-streak.txt\`。"
+                echo ""
+                echo "> 這一行是刻意印出來的：完全不印會讓人以為步驟壞了或忘了印。"
+              } >> "$GITHUB_STEP_SUMMARY"
+            fi
+          fi
+
+      - name: 收尾
+        if: always()
+        run: docker rm -f odoo pg 2>/dev/null || true

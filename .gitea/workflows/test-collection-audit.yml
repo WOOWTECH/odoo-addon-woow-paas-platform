@@ -1,0 +1,75 @@
+# 測試收集完備性稽核 —— **只剩 baseline 對帳（C2）與 matcher self-test**
+# Refs issue #546 #684
+#
+# ── 這支曾經跑三項靜態檢查，現在只剩一項 ──────────────────────────────────
+# 原本的 C1（`__init__.py` 匯入完備性）與 C1b（整檔純 unittest.TestCase）已經**刪掉**：
+# 同一組性質在 #684／PR #811 之後落在 `repo-lint.py` 的 `test-collectability`
+# （`check_test_module_collection` ＋ `check_test_class_execution`），而且是**逐 class**
+# 而不是 module 級 —— 混合檔（同檔既有會跑的、也有不會跑的）本檔舊版整檔放行。
+# 兩份判準留著的代價不是多跑一次，是「哪一份才算數」沒有答案，而較弱的那份會先報綠。
+#
+# 剩下的 C2 不是空殼，它守的是 repo-lint 守不到的一格：
+#   **測試 class／方法被靜默刪掉**。repo-lint 問的是「這棵樹現在的形狀對不對」，
+#   對「昨天有 14 條、今天剩 11 條」沒有意見（三條都合法地存在過又消失）。
+#   C2 拿 baseline 檔當那個記憶體，雙向差集 ⇒ 少一條會列名，而且**baseline 的
+#   增減本身出現在 diff 裡可被覆核**。
+#   它同時是 odoo-tests.yml 那支 C3（baseline vs 真實執行清單）的左半邊：
+#   baseline 腐爛時 C3 的差集會把「baseline 過期」報成「有 class 沒跑」，指錯修法。
+#
+# ⚠ C2 的判準本身仍然是 repo-lint 的 —— `test_collection_audit.py` 呼叫
+#   `_test_class_kind()` / `_test_effective_tags()` / `_test_has_inherited_flag()`，
+#   沒有自己那一份。本 workflow 只是把結果落成一份可被 diff 覆核的清單。
+#
+# ── 為什麼**沒有** paths 白名單 ────────────────────────────────────────────
+# 舊版有 `paths: [src/tests/**, ...]`。`paths` 是允許清單，漏一項的失效方向是
+# **靜默不跑**（job 不是紅也不是綠，它根本不出現）——repo-lint 的 #463 就是這個坑。
+# 這支跑完約 1 秒，省不到什麼，卻換來兩件事：
+#   1. 任何 PR 都會產生這個 context ⇒ 將來要把它列進 required status check 時
+#      不必先處理「被 paths 過濾掉的 PR 永遠湊不齊 check」那個死結（#538 的判準）。
+#   2. 判準的輸入其實比舊白名單廣（repo-lint.py 自己、src/ 下任何影響繼承鏈的檔），
+#      白名單要維護到正確本身就是一個會腐爛的義務。
+#
+# ── 為什麼**沒有** continue-on-error ──────────────────────────────────────
+# 舊版是 warning-only，理由是「第一次接上去通常不乾淨」（當時有「預期執行 412 vs
+# 實測 415」的 3 個不明項）。那個不明項是舊版較弱的預測式造成的，#684 留言 8233 §3
+# 用 loader 四道篩子重算後逐 class 零例外 ⇒ 理由不成立了。
+# 常態 warning 的 gate 等於沒有 gate，所以拿掉。
+# ⚠ 拿掉不等於擋得住 merge：develop 的 required status check 目前只有
+#   `manifest-version-gate`（權威來源是分支保護設定，這裡刻意不複述狀態）。
+name: test-collection-audit
+
+on:
+  pull_request:
+
+jobs:
+  test-collection-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # 先打自己：matcher 壞掉時要以「self-test 紅」的形式現形，
+      # 而不是以「檢查通過」的形式靜默放行（探針自毀是本 gate 最怕的失效）。
+      - name: Self-test（matcher 的邊界樣本）
+        run: python3 scripts/audit/test_collection_audit.py --self-test
+
+      - name: C2 baseline 雙向差集 ＋ 升級條件自檢
+        run: |
+          set +e
+          python3 scripts/audit/test_collection_audit.py --all 2>&1 | tee /tmp/audit.log
+          RC=${PIPESTATUS[0]}
+          set -e
+          exit "$RC"
+
+      - name: 摘要
+        if: always()
+        run: |
+          {
+            echo "## 測試收集完備性稽核（C2 baseline 對帳）"
+            echo '```'
+            cat /tmp/audit.log 2>/dev/null || echo "(no log)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          if grep -q "升級條件都已滿足" /tmp/audit.log 2>/dev/null; then
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "### ★ 兩個升級條件都已滿足 —— 請回 issue #546 重新裁決觸發策略" >> "$GITHUB_STEP_SUMMARY"
+          fi
