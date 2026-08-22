@@ -655,3 +655,20 @@ from . import test_sa_provision_orphan_tunnel_822
 # 陰性對照：B1 另外斷言 create **本身**成功且其他欄位正常（「create 直接炸掉」
 # 對「攻擊者的值沒落地」同樣是綠的，同型翻車見 `test_sa_anchor_default_carriers_753`）。
 from . import test_policy_cf_id_write_guard_798
+
+# fix: #533 controller 用裸 `except Exception` 收掉並發類 DB 例外
+# （`SerializationFailure` 40001 是 `Exception` 子類）並正常 return ⇒ 例外從未
+# 逸出到 `retrying()` 的攔截點（它在 controller 的 except 鏈**外層**）⇒ 本來
+# 會被自動重試而成功的操作變成使用者看到的失敗。
+# 三站各自有自己的注入斷言、不共用一格綠燈：`api_service_skip_trial`（issue
+# 本體）、`api_service_reset_admin_password`（枚舉補到——它的 model 層有兩處
+# `except OperationalError: raise` 被 controller 吞回去，那兩處今天等於沒作用）、
+# `api_service_skip_trial_estimate`（枚舉補到，side-effect-free 但缺口相同）。
+# 🔴 一律走真 HTTP：每條斷言的結論都取決於「例外**逸出被測碼之後**會發生什麼」，
+# 而 #572 已實測記載直呼與真 HTTP 在這種形狀下語意分歧、直呼會失去鑑別力。
+# 🔴 注入的 40001 必須用 `__setstate__` 補上真 pgcode（Odoo 自己在
+# `test_http/controllers.py::upload_file_retry` 的手法）——直接建構的 pgcode 是
+# None，`retrying()` 的 `errorcodes.lookup()` 會先 KeyError，重試路徑根本走不到。
+# `test_the_injected_exception_carries_a_real_pgcode` 把這個前提釘成斷言。
+# 陽性對照：三站各有一條「不注入時端點成功」＋一條「注入真的被呼叫到」。
+from . import test_concurrency_retry_533
