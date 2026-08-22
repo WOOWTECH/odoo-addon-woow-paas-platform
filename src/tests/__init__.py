@@ -655,3 +655,13 @@ from . import test_sa_provision_orphan_tunnel_822
 # 陰性對照：B1 另外斷言 create **本身**成功且其他欄位正常（「create 直接炸掉」
 # 對「攻擊者的值沒落地」同樣是綠的，同型翻車見 `test_sa_anchor_default_carriers_753`）。
 from . import test_policy_cf_id_write_guard_798
+
+# fix: #732 owner 對自己那列 write({'role':'admin'}) ⇒ workspace 永久 0 owner。
+# 三道既有守衛全漏（owner-row 守衛只擋非 owner 呼叫者、last-owner 不變式只掛
+# unlink、owner_count constraint 只在新值是 owner 時觸發）。新守衛＝write 路徑的
+# last-owner 保護：demote 會讓該 workspace 剩 0 owner 時 ValidationError。
+# 🔴 判準比對記錄不比對呼叫者（數 demote 之外剩幾個 owner，不是 blanket-deny
+# owner 列）——雙 owner SQL 直造的陽性對照釘住這個形狀；su/group_system 豁免
+# 由「promote-first 已被 owner_count constraint 擋死」逼出（詳見該檔檔頭），
+# 平台側 demote-then-promote 整段轉移有專屬陽性對照。
+from . import test_workspace_access_last_owner_732

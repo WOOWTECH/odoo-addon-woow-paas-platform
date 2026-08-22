@@ -46,6 +46,54 @@ ASSIGNABLE_ROLES_BY_ROLE = {
 }
 
 
+# ------------------------------------------------------------------------- #
+#  #732：last-owner demote 的 sentinel 逃生口（形狀抄 #519/#522/#536/#744）    #
+# ------------------------------------------------------------------------- #
+#
+# write() 的 last-owner 守衛（見下方 write()）需要一條「平台碼把最後一個
+# owner 降級」的合法通道——ownership 轉移的 demote-then-promote 順序繞不開它
+# （promote-first 被 `_check_owner_count` 擋死，constrains 對 su 也生效）。
+# 這條通道**不可以是裸 `env.is_superuser()` 豁免**：#711 記錄的正是「ORM 守衛
+# 豁免 su ＋ sudo 產品端點 ⇒ 同一操作兩條界線」，未來任何 controller 順手
+# `sudo().write` 就會靜默繞過（本檔既有兩道 AccessError 家族守衛已豁免 su，
+# 這道不能再加入同一格）。也不可以是裸 truthy context key：`call_kw` 把呼叫端
+# context 整包換進 env，JSON 表達得出的值＝租戶 RPC 偽造得出（#522 實測）。
+# 正解＝模組私有 sentinel 物件、判準 `is`；登記於 repo-lint 的
+# `INTERNAL_CTX_KEY_REGISTRY`（status=enforced）。人類修復通道（group_system）
+# 另在守衛內豁免——經 UI／RPC 表達不出物件身分，不構成程式碼繞道。
+class _InternalLastOwnerDemote:
+    """平台伺服器端「最後一個 owner 降級」開閘的 marker type。"""
+
+    __slots__ = ()
+
+    def __repr__(self):
+        return '<internal last-owner demote>'
+
+
+_INTERNAL_LAST_OWNER_DEMOTE = _InternalLastOwnerDemote()
+
+#: 唯一的逃生口 context key。key 本身不是判準（呼叫端抄得到這個字串），
+#: 判準是它的**值身分**，見 `_is_internal_last_owner_demote`。
+_LAST_OWNER_DEMOTE_CTX_KEY = 'woow_ws_last_owner_demote'
+
+
+def _internal_last_owner_demote(records):
+    """回傳唯一被允許把最後一個 owner 降級的 context 底下的 ``records``。
+
+    開閘掛在會讓記錄落地的那一次呼叫上；``with_context(**kwargs)`` 是
+    merge，`.sudo()` / `.with_user()` 都保留這個把手。未來喚醒
+    `transfer_ownership()` 時，demote 那一步走這裡開閘。
+    """
+    return records.with_context(
+        **{_LAST_OWNER_DEMOTE_CTX_KEY: _INTERNAL_LAST_OWNER_DEMOTE})
+
+
+def _is_internal_last_owner_demote(env):
+    """判準：**只**比對 context 裡那個值的物件身分（`is`），不讀 su／user。"""
+    return (env.context.get(_LAST_OWNER_DEMOTE_CTX_KEY)
+            is _INTERNAL_LAST_OWNER_DEMOTE)
+
+
 class WorkspaceAccess(models.Model):
     _name = 'woow_paas_platform.workspace_access'
     _description = 'Workspace User Access'
@@ -208,6 +256,41 @@ class WorkspaceAccess(models.Model):
         if 'role' in vals:
             for rec in self:
                 self._check_assignable_role(vals['role'], rec.workspace_id.id)
+        # (#732) last-owner 保護：把「最後一個 owner」降級的寫入 fail-loud。
+        # 三道既有守衛都涵蓋不到這條路徑（owner 呼叫者過 owner-row 守衛、
+        # owner 可指派 admin 過 assignable 檢查、`_check_owner_count` 只在
+        # 新值是 owner 時觸發、last-owner 不變式只掛 unlink）⇒ owner 對自己
+        # 那列 write({'role': 'admin'}) 落地成永久 0-owner，租戶側不可回復
+        # （`ASSIGNABLE_ROLES_BY_ROLE['admin']` 不含 owner）。
+        #
+        # 判準比對**記錄**不比對呼叫者：數「這次呼叫之外」該 workspace 還剩
+        # 幾個 owner 列——雙 owner 態（legacy／手修資料）下降級一個仍放行，
+        # 不是 blanket-deny owner 列。排除整個 demoting 集合而非單筆
+        # `rec.id`：同一次 write 降級多列 owner 時，彼此不得互相作保。
+        #
+        # 例外兩通道（為什麼不是裸 su 豁免、為什麼是 ValidationError：見
+        # 模組層 sentinel 段註解與 unlink() (b) 段——invariant 家族、放在
+        # AccessError 家族檢查之後，兩類拒絕保持可區分）：
+        #   1. `base.group_system`：人類平台修復通道（demote-then-promote
+        #      是唯一可運作的轉移路徑）。
+        #   2. sentinel 開閘：平台碼的顯式 per-call opt-in。
+        if 'role' in vals and vals['role'] != ROLE_OWNER:
+            if (not self.env.user.has_group('base.group_system')
+                    and not _is_internal_last_owner_demote(self.env)):
+                demoting = self.filtered(lambda r: r.role == ROLE_OWNER)
+                for rec in demoting:
+                    other_owners = self.sudo().search_count([
+                        ('workspace_id', '=', rec.workspace_id.id),
+                        ('role', '=', ROLE_OWNER),
+                        ('id', 'not in', demoting.ids),
+                    ])
+                    if not other_owners:
+                        raise ValidationError(
+                            "Cannot demote the last owner of workspace '%s'. "
+                            "Transfer ownership first." % (
+                                rec.workspace_id.display_name
+                                or rec.workspace_id.id)
+                        )
         return super().write(vals)
 
     def unlink(self):
@@ -422,6 +505,8 @@ class WorkspaceAccess(models.Model):
         `Workspace.write()` 的 owner_id identity anchor。**這不是本方法今天壞掉的
         原因**（它在 #658 之前就已經走不到那一行了），但要復活這條方法時兩道都要處理：
         整段改走 `sudo()`，或重新設計成單一 atomic 呼叫。不要只修其中一道。
+        （#732 之後第三道：裸 `sudo()` 已不再豁免 write() 的 last-owner
+        守衛——demote 那一步要走 `_internal_last_owner_demote()` 開閘。）
 
         ⚠ #583 只修**授權閘**（`_check_caller_owns_transfer`），刻意**不**順手修上面
         那兩道功能性缺陷——「復活它還是刪掉它」是產品決策。因此本方法今天對合法
