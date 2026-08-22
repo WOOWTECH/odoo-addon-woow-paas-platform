@@ -13,5 +13,5 @@
 3	src/controllers/portal.py
 1	src/controllers/profile.py
 0	src/controllers/reconcile_report.py
-12	src/controllers/security_access.py
+13	src/controllers/security_access.py
 12	src/controllers/smart_home.py
