@@ -163,7 +163,10 @@ SKIP_LINE = re.compile(
 #    長得**一模一樣**；少了這個 optional group，`(?P<test>[\w.]+)` 只吃到 `Subtest`
 #    ⇒ 識別字變成 `<模組>.Subtest`，而且同模組多筆 subtest 失敗會**併成同一筆**。
 #    那打掉的正是 C5 從「0F/0E」改成集合差所換來的唯一性質——「**是哪一條**」——
-#    而且是靜默退化。本樹至少 20 個測試檔在用 `subTest`。
+#    而且是靜默退化。本樹用 `subTest` 的量請現場算，別記數字：
+#      `grep -rl 'self\.subTest' src/tests/ | wc -l`（檔數）
+#      `grep -rc 'self\.subTest' src/tests/ | awk -F: '{s+=$2} END{print s}'`（呼叫點）
+#    2026-08-22 量到 14 檔／36 個呼叫點。
 #    實測逐字（2026-08-22 本機跑真實 Odoo 抄回來的，不是讀碼推論）：
 #      `…tests.test_security_access_p_rule_migration: FAIL: Subtest`
 #      `  TestPRuleMigration.test_zz_subtest_probe (role='member')`
