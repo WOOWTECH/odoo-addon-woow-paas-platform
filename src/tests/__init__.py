@@ -623,3 +623,11 @@ from . import test_public_url_dns_gate_648
 # 守門對照組：A5（缺席不得 fail-closed）、A4（舊 operator 缺鍵不得算失敗）、
 # 健康 route 不觸發閘——這三條紅了代表守線被改成用缺席當判準。
 from . import test_route_dns_failed_648
+
+# fix: #740 unlink() 的外部副作用送在授權檢查之前 —— 授權前置檢查（authorization
+# preflight）。租戶刪除必失敗（ACL unlink=0），但 Cloudflare 那半在被拒之前就已經
+# 送出去且回捲不掉。
+# 🔴 本檔的強斷言是「授權被拒時外部呼叫數為零」＋逐一列名「哪些 method 沒被呼叫」；
+# `test_smart_home_authz_524.py` 的 C5 守的是 #524（不得送出**別的租戶**的 id），
+# 對空清單恆真 ⇒ 修好之後它照樣綠但綠的理由變了，**不是**本題的守線，維持原樣。
+from . import test_sh_unlink_authz_preflight_740
