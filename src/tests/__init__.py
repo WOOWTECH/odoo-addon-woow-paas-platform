@@ -623,3 +623,16 @@ from . import test_public_url_dns_gate_648
 # 守門對照組：A5（缺席不得 fail-closed）、A4（舊 operator 缺鍵不得算失敗）、
 # 健康 route 不觸發閘——這三條紅了代表守線被改成用缺席當判準。
 from . import test_route_dns_failed_648
+
+# fix: #822 `action_provision` 第一次 provision 的「孤兒窗口」——`create_tunnel` 已
+# 在 CF 建出 tunnel、而它的 id 還沒落進 DB 的那一段——四支 except 一律零補償
+# ⇒ 守衛 `if self.tunnel_id:` 不成立、DB 沒有任何東西指向剛建的那顆。
+# 🔴 本檔的判準是「參照 or 回收」的孤兒不變式，刻意不預選修法（#822 §8 三條方向
+# 在這個判準下都算通過），比對的是**每一次 create_tunnel 的回傳 id**——固定
+# return_value 的 mock 在這裡會假綠（重試那顆與第一顆同 id）。
+# RED：A2/A3（AccessError 形狀，真機制）、B2/B3（identity write 炸非 AccessError，
+# 注入）、D1/D2（create_tunnel 自己炸＝不可判定格，留可對帳記錄）、E1（補償自己
+# 失敗）、A4（補償成功後要回得去可重試狀態，⚠ 設計取捨）。
+# 陽性對照（修復前後都必須綠）：C1 守衛生效 0 次、C2 happy path 不得誤刪、
+# C3/C5 窗口**外**失敗不得補償刪除、C4 窗口外不得掛孤兒標記（標記不得變雜訊）。
+from . import test_sa_provision_orphan_tunnel_822
