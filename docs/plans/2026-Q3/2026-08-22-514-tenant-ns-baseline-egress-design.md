@@ -45,7 +45,7 @@ issue #514 寫「**租戶 namespace 目前完全沒有 egress 限制**」。實�
 
 ### 現存的四個判斷點
 
-1. ~~覆蓋度不可判定~~ **已解**（§10）：4 支自家 chart（`mcp-server`、`home-assistant`、`haos`、`home-assistant-full`）的 egress 是 `- {}` **全開** ⇒ baseline 對它們**完全無效**（安全性零進步，§6 F-4 答案 B），但也不會讓它們斷線。**剩餘未知**：4 支第三方 chart ＋ `hermes-agent` **0.2.0**（seed 釘的版本在 clone 全歷史中不存在，最高 0.1.3）。
+1. ~~覆蓋度不可判定~~ **已解**（§10）：4 支自家 chart（`mcp-server`、`home-assistant`、`haos`、`home-assistant-full`）的 egress 是 `- {}` **全開** ⇒ baseline 對它們**完全無效**（安全性零進步，§6 F-4 答案 B），但也不會讓它們斷線。**剩餘未知**：4 支第三方 chart ＋ `hermes-agent` **0.2.0**（⚠ 措辭精確化：**不是該版本不存在，是本次用的 clone 凍結在它發佈之前** —— 0.2.0 於 2026-08-16 釘入本 repo，clone 的 hermes-agent 檔案最新異動停在 2026-08-10；leader4 獨立複驗，見 §10 開頭）。
 2. 🔴 **新發現：E-5 對每一支自家 chart 不是冗餘就是有害**。`open-design` 0.1.4 已自己做了同樣的 `0.0.0.0/0 except 六段`，**但限 ports [443, 80]**；本檔原設計的 E-5 刻意不限 port ⇒ **會把它放寬成任意 port**（新增的 §6 **F-14**，安全回歸）。→ §9.3 D-3 的建議已修正為 **C′：限 `[443, 80, 587]`**，且那個取捨（n8n workflow 連非這三個 port 會斷）**必須由 Eugene 拍板**。
 3. 🔴 **CDI importer 從「推定無風險」翻成 blocker**：haos chart 註解逐字「**the importer needs egress to the registry while it runs**, and **the ns-level baseline (ingress-only) leaves it alone**」——**chart 作者把「baseline 是 ingress-only」寫成 importer 能運作的前提，而本案正是要打破它**（§10.4、§6 F-8）。
 4. ✅ **apiserver 供給鏈（D-1）已收掉**（第 3 段）：`pvc-cleanup` 是 `paas-operator` chart 的 CronJob、跑在 **`paas-system` / `paas-stg-system`**，不在租戶 ns（§3 W-9 六條證據＋陽性對照）；而 console 的 apiserver 出向 chart 端已自帶 `apiServerCidrs` ＋ `apiServerPorts`。⇒ **E-4 整條不做**，供給鏈問題隨之消失。**附條件**：`hermes-agent` 0.2.0 未取得，若它沒有那個鍵則 E-4 要做回來。
