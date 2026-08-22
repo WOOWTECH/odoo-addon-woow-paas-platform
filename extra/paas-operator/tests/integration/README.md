@@ -28,8 +28,19 @@ kubectl config use-context docker-desktop   # or your woow-k3s context
 # First time only: install Python deps
 pip install -r requirements.txt
 
-# Run (⚠ see "helm v4 陷阱" below — `$(which helm)` is probably wrong now)
-HELM_BINARY=$(which helm) pytest -m integration tests/integration/ -v
+# 取得 operator Dockerfile 釘住的那顆 helm。⛔ 不要用 $(which helm)——理由見下方
+# 「helm v4 陷阱」。版本從 Dockerfile 讀（不寫死在本文件裡），平台依 uname 決定，
+# 已經抓過就跳過。
+HELM_VERSION=$(sed -n 's/^ARG HELM_VERSION=//p' Dockerfile)
+HELM_PLATFORM="$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m | sed 's/x86_64/amd64/; s/aarch64/arm64/')"
+HELM_BINARY="/tmp/helm-${HELM_VERSION}/${HELM_PLATFORM}/helm"
+[ -x "$HELM_BINARY" ] || { mkdir -p "/tmp/helm-${HELM_VERSION}" && curl -fsSL \
+    "https://get.helm.sh/helm-v${HELM_VERSION}-${HELM_PLATFORM}.tar.gz" \
+    | tar xz -C "/tmp/helm-${HELM_VERSION}"; }
+"$HELM_BINARY" version --short   # 應與 Dockerfile 的 ARG HELM_VERSION 一致
+
+# Run
+HELM_BINARY="$HELM_BINARY" pytest -m integration tests/integration/ -v
 ```
 
 **45 支收集、其中 4 支**在沒有 KubeVirt/CDI CRD 的叢集（例如 docker-desktop）會自我
@@ -77,13 +88,23 @@ Cluster choice:
 ### Generic invocation
 
 ```bash
+# 以下都在 extra/paas-operator 底下執行。
+# ⚠ 這 6 行與上面 quickstart 區塊的完全相同（取得釘住的 helm）。刻意逐字重複，讓這個
+#   區塊也能單獨整段複製；要改就兩處一起改。
+HELM_VERSION=$(sed -n 's/^ARG HELM_VERSION=//p' Dockerfile)
+HELM_PLATFORM="$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m | sed 's/x86_64/amd64/; s/aarch64/arm64/')"
+HELM_BINARY="/tmp/helm-${HELM_VERSION}/${HELM_PLATFORM}/helm"
+[ -x "$HELM_BINARY" ] || { mkdir -p "/tmp/helm-${HELM_VERSION}" && curl -fsSL \
+    "https://get.helm.sh/helm-v${HELM_VERSION}-${HELM_PLATFORM}.tar.gz" \
+    | tar xz -C "/tmp/helm-${HELM_VERSION}"; }
+
 # Any reachable cluster
-HELM_BINARY=$(which helm) KUBECONFIG=~/.kube/config \
+HELM_BINARY="$HELM_BINARY" KUBECONFIG=~/.kube/config \
     pytest -m integration tests/integration/
 
 # Against a kind cluster you've already created
 kind create cluster --name op-int
-HELM_BINARY=$(which helm) pytest -m integration tests/integration/
+HELM_BINARY="$HELM_BINARY" pytest -m integration tests/integration/
 ```
 
 If `kubectl cluster-info` fails the suite skips itself (no setup penalty
@@ -93,6 +114,8 @@ via `pytest.ini`).
 `HELM_BINARY` is required because the operator's FastAPI lifespan refuses
 to start when helm is missing. macOS Homebrew puts helm at
 `/opt/homebrew/bin/`, so the default `/usr/local/bin/helm` is wrong there.
+⚠ 但**不要因此把它指向 Homebrew 那顆**——那顆已經是 v4（見下一節），指過去會壞得
+很難認。要指的是上面區塊抓下來的那顆 3.13.3。
 
 ### ⚠ helm v4 陷阱：`$(which helm)` 現在多半是錯的
 
@@ -113,16 +136,10 @@ plugin: {Name:…/.venv/bin/python Type:postrenderer/v1} not found
 **做法：用 operator `Dockerfile` 釘的同一個 helm 3.13.3 跑**（`ARG
 HELM_VERSION=3.13.3`）。不要為了跑測試把系統 helm 降版：
 
-```bash
-# 抓一份 helm 3.13.3 放到暫存目錄（不動系統 helm）
-mkdir -p /tmp/helm3 && curl -fsSL \
-  https://get.helm.sh/helm-v3.13.3-darwin-arm64.tar.gz | tar xz -C /tmp/helm3
-/tmp/helm3/darwin-arm64/helm version --short   # 應為 v3.13.3+gc8b9489
-
-# 跑測試時指過去（Linux 換成 helm-v3.13.3-linux-amd64.tar.gz）
-HELM_BINARY=/tmp/helm3/darwin-arm64/helm \
-    pytest -m integration tests/integration/ -v
-```
+上面「macOS quickstart」與「Generic invocation」兩個區塊**已經內建這個做法**（從
+`Dockerfile` 的 `ARG HELM_VERSION` 讀版本、依 `uname` 決定平台、抓到暫存目錄後把
+`HELM_BINARY` 指過去），照抄那兩個區塊即可。這裡刻意**不再重複第三份指令**——同一份
+文件裡有兩套寫法，正是本節在講的那類問題。
 
 同場加映：想跑 docker-desktop 又不想動使用者當前的 kubectl context（例如
 context 停在 `woow-k3s`），可以匯出一份只含該 context 的 kubeconfig 再指過去，
@@ -131,7 +148,8 @@ context 停在 `woow-k3s`），可以匯出一份只含該 context 的 kubeconfi
 ```bash
 kubectl config view --raw --minify --flatten --context=docker-desktop \
     > /tmp/kubeconfig-dd.yaml
-KUBECONFIG=/tmp/kubeconfig-dd.yaml HELM_BINARY=/tmp/helm3/darwin-arm64/helm \
+# $HELM_BINARY 由上面 quickstart／Generic invocation 區塊設好
+KUBECONFIG=/tmp/kubeconfig-dd.yaml HELM_BINARY="$HELM_BINARY" \
     pytest -m integration tests/integration/ -v
 ```
 
