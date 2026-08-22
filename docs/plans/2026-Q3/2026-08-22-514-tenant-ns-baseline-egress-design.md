@@ -328,6 +328,19 @@ spec:
 | **R2 per-release NP** | 不做 ns 級，改由 operator 在部署第三方 chart 的 release **之後**，額外 apply 一組 `podSelector: {app.kubernetes.io/instance: <release>}` 的 egress NP | 精準命中 C 群，**完全不碰 A/B 群** ⇒ F-14 消失、F-7 消失 | ⚠ **這不是 per-chart**（沒有要求第三方 chart 做任何事，是 operator 在 ns 內加物件），所以 #514／#427 那條「per-chart 契約對第三方不成立」的論證**不反對它**。但需要查證：4 支第三方 chart 是否都在 pod 上打 `app.kubernetes.io/instance`（helm 慣例，**本檔未查證**）；且 CDI importer 不帶 release label ⇒ 仍要另解 |
 | **R3 治本：收 chart 端** | 把 A 群 4 支自家 chart 的 `allowAllEgress` 由 `true` 改 `false`（chart 端已有這個開關，改 values 即可），讓它們比照 open-design／hermes-agent 走安全 ipBlock | A 群 10 個 template 從「零收斂」變成「有收斂」 | 跨 repo（`woow-paas-charts`）＋ 逐支評估斷線風險（`ha-full` 的 seed 明文寫 `MUST stay true`；`haos` 的 A/B 實測證明移除就擋 443）。**與本案正交，可獨立進行** |
 
+> **leader4 追加（2026-08-22）：R2 的「第三方 chart 有沒有打 `app.kubernetes.io/instance`」已部分查證。**
+>
+> **bitnami 系（`odoo` / `postgresql`）確定有。** 證據不必另跑叢集——#425 issue body 貼的 prod 實查 `paas-system/paas-odoo-postgresql` NetworkPolicy 逐字是：
+>
+> ```yaml
+> podSelector:
+>   matchLabels: {app.kubernetes.io/instance: paas-odoo, app.kubernetes.io/name: postgresql, ...}
+> ```
+>
+> 那是 **chart 自己產的 NP 用這組 label 選自己的 pod** ⇒ pod 必然帶 `app.kubernetes.io/instance`（否則該 NP 選不到任何東西，而 #425 實測它確實在 enforce 5432）。同一支 bitnami 家族的 `redis` 依慣例同構，但**未直接觀測**。
+>
+> **仍未查證：8gears `n8n`**（C 群的主角，也是本案最重要的標的）。這一格是 R2 能不能成立的關鍵——查法：對已部署的 n8n release 讀一次 pod label（`kubectl get pod -n <租戶 ns> --show-labels`），或讀 8gears chart 的 `templates/_helpers.tpl`。**在拿到之前，R2 不能當成「已經可行」。**
+
 #### 建議
 
 **R1 ＋ R3 並行，R2 列為 R1 的替代方案候選。**
