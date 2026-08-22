@@ -4,7 +4,13 @@ from odoo.exceptions import ValidationError
 # #536：sync-control 的逃生門必須是模組私有 sentinel，不是任何 JSON 表達得出
 # 的值——`call_kw` 把呼叫端 context 整包換進 env，只判 truthy 的 key 租戶自己
 # 就打得開。判定與開閘 helper 都住在 SA 那支（本子模型沒有自己的 sentinel）。
-from .security_access import _CTX_SKIP_ROUTE_SYNC, _is_sync_control
+from .security_access import (
+    _CTX_SKIP_ROUTE_SYNC,
+    _is_internal_policy_cf_write,
+    _is_sync_control,
+    _reject_identity_anchor_writes,
+    _strip_identity_anchors,
+)
 
 
 #: 錨點欄位的**唯一清單**（順序即訊息與 sparse-precedence 的探測順序）。
@@ -21,6 +27,17 @@ _ANCHOR_LABELS = {
     'cloud_service_id': 'a Cloud Service',
     'smart_home_route_id': 'a Smart Home Route',
 }
+
+#: #798：**伺服器擁有的**外部物件 id，租戶一律不得寫（create 壓值、write 拒絕）。
+#:
+#: `cf_policy_id` 不是普通欄位：三腿的 `_build_existing_policy_ids()` 與帳本的
+#: `cf_access_policy_reap._trusted_ids_for()` 都逐字從列上讀它，而那份清單是 operator
+#: **唯一的刪除通道**（`existing_policy_ids`，delete-then-recreate）。#781／#792 為 #783
+#: 立的判準明文把「安全」建立在「列上讀到的值是伺服器擁有的」——租戶寫得進來，那道判準
+#: 就不成立（#798 已實測：`base.group_user` 走 `/web/dataset/call_kw` 寫得進去，值落地）。
+#:
+#: 清單化而不是在守衛旁邊寫字面值：#522 的成因正是逐欄位手列而漏掉 `tunnel_id`。
+_POLICY_IDENTITY_ANCHOR_FIELDS = ('cf_policy_id',)
 
 
 def _dedupe_anchors(anchors):
@@ -695,6 +712,16 @@ class SecurityAccessAccessPolicy(models.Model):
 
     @api.model_create_multi
     def create(self, vals_list):
+        # #798：create 側的一半。`super().create()` 不繞經 `write()`，只守 write 會
+        # 留下 create-time squat——一列全新的 policy 出生時就帶著別人的 CF policy id，
+        # 之後這個錨點的每一次 sync 都會把那顆 id 送進 operator 的刪除清單。
+        # **壓成伺服器端值而不是 pop**：`super().create()` 內部的
+        # `_add_missing_default_values()` 會從三個載體補回「vals 裡缺席」的欄位，其中
+        # `default_<field>` context 與 `ir.default` 的列**都由租戶決定**（兩者 #798 都
+        # 有測試）。完整論證見 `security_access.py::_strip_identity_anchors`。
+        _strip_identity_anchors(
+            self, vals_list, _POLICY_IDENTITY_ANCHOR_FIELDS,
+            is_open=_is_internal_policy_cf_write)
         for vals in vals_list:
             # TRANSITIONAL back-compat shim (P-rule rollout): accept the legacy
             # flat rule_type/rule_value and expand them into a single include
@@ -749,6 +776,13 @@ class SecurityAccessAccessPolicy(models.Model):
         return policies
 
     def write(self, vals):
+        # #798：write 側的一半，**必須是本方法的第一件事**——拒絕要發生在任何 side
+        # effect（含下面的 pre-write 擷取與 `super().write()`）之前。對**所有人**生效，
+        # 含 superuser：`env.su` 豁免會在每個 TransactionCase 與每條 sudo() 路徑上
+        # 靜默停用守衛（見 `_INTERNAL_IDENTITY_WRITE` 的註解）。
+        _reject_identity_anchor_writes(
+            self.env, vals, _POLICY_IDENTITY_ANCHOR_FIELDS,
+            is_open=_is_internal_policy_cf_write)
         # #786：錨點欄位出現在 vals 裡時，「該重推誰」**必須在**
         # `super().write()` **之前也算一份**。之後才算的那一份只看得到新錨點，
         # 於是舊錨點一次都不會被重推——而它的 Cloudflare Access application 仍然
