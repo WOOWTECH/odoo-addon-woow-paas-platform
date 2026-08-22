@@ -879,15 +879,21 @@ class SmartHomeController(Controller):
         （不要拿「下面的 `to_dict()` 沒有 `.sudo()`」當作範圍很窄的說明——
         `to_dict()` 本來就不在那個 method 裡面，那是錯的對照。）
 
-        🔴 **`models/security_access.py::action_provision` 的 docstring 對
-        sibling model 明文寫過「do NOT ... wrap the whole method in .sudo()」，
-        並稱非 system caller 撞 AccessError 是 "the intended fail-closed
-        behaviour"；`tests/test_security_access.py` 的
-        `test_provision_token_write_fails_closed_for_non_system_owner` 鎖住它。**
-        本修法在 SH 這一側往相反方向走 ⇒ 兩個 sibling model 的身分語意已經
-        分歧。那條測試驅動的是 SA model 的 `with_user` recordset，不經過本
-        controller，所以它**不會**因為這個改動變紅——CI 全綠不代表沒有衝突。
-        完整攤開（含對方原文逐字、SH 側查無等價鎖的性質查、以及「`/woow` 的
+        📌 **這裡曾經記著一個「兩個 sibling model 已分歧」的警告——#805 (b) 之後
+        不再成立，但過程值得留著。** 本修法落地當下，
+        `models/security_access.py::action_provision` 的 docstring 明文寫著
+        「do NOT ... wrap the whole method in .sudo()」、並稱非 system caller
+        撞 AccessError 是 "the intended fail-closed behaviour"；那段文字**沒有
+        因為這個改動變紅**（`tests/test_security_access.py` 的
+        `test_provision_token_write_fails_closed_for_non_system_owner` 驅動的是
+        SA model 的 `with_user` recordset，不經過任何 controller）
+        ⇒ **CI 全綠不代表沒有衝突**。#805 (b) 的入口盤點證實 SA 那一側同構
+        （租戶經 `/woow` 的 provision 端點四環全通、且建立 SA 的 modal 自動串接
+        它），裁定同款修法，`controllers/security_access.py` 的
+        `action == "provision"` 分支現在也是 `sa.sudo().action_provision()`
+        ⇒ 兩側在「誰驅動 provision」這一點上重新對齊。
+        兩側各自的範圍限定仍不同，改任一側前讀該側自己的 docstring。
+        完整攤開（含當時對方原文逐字、SH 側查無等價鎖的性質查、以及「`/woow` 的
         租戶 provision 端點該不該存在」這個要產品裁決的問題）寫在 PR #797。
 
         那段 docstring 點名的傷害是「widen the token write/**read** surface」，

@@ -105,9 +105,66 @@ class SecurityAccessController(Controller):
                 sa.write(vals)
             return {"success": True, "data": sa.to_dict()}
         elif action == "provision":
+            # #805 (b)：驅動 `action_provision()` 的是**平台身分**，不是租戶身分。
+            #
+            # 修前這裡拿的是 `_get_sa_or_error` 回來的非 sudo 租戶 recordset，而
+            # `action_provision` 內部那次 `_internal_identity(self).write(...)`
+            # 含 `tunnel_token`——一個 `groups='base.group_system'` 的欄位
+            # （`models/security_access.py` 的 `tunnel_token` 定義；行號會漂，
+            # grep 符號名）。Odoo 的 `write()` 會
+            # `check_field_access_rights('write', vals.keys())`，其唯一的
+            # early-return 是 `if self.env.su:` ⇒ **只掛 `base.group_user` 的
+            # 租戶打這個端點必定 AccessError**，而 `create_tunnel` 已經先跑過
+            # ⇒ 租戶經 `/woow` 的 provision 從來沒有成功過。與 #739／PR #797 在
+            # sibling model smart_home 上裁定的同一個形狀（那一側已於
+            # `controllers/smart_home.py::_provision_smarthome` 改成平台身分）。
+            #
+            # 改用平台身分是對的層次，因為那次寫入的**值不是租戶給的**：整包來自
+            # operator 對 `create_tunnel` 的回應加上伺服器端的時間戳。憑證是平台
+            # 鑄造的，本來就該由平台身分寫下去；租戶不需要、也不該擁有寫那個欄位
+            # 的權限。
+            #
+            # ⚠ **作用範圍要講精確**：`sa.sudo().action_provision()` 之後，
+            # `action_provision` body 內每一次 ORM 操作都在 `env.su` 底下——對
+            # model 而言這就是「整個 method 走 sudo」。但 sudo 只加在**這一個
+            # 呼叫點**：`action_provision` 是 public method（無底線前綴、無
+            # `@api.private`），Odoo 原生的 `/web/dataset/call_kw` 也到得了它，
+            # 那條路不經過本 controller ⇒ 欄位遮罩在那裡照樣 fail-closed
+            # （`tests/test_sa_provision_tenant_rpc_805.py` 的 C1 釘住）。
+            #
+            # 三道閘都**留在 sudo 之外**，一條都沒有被順帶關掉（
+            # `orm-vs-endpoint-acl-test-coverage` 要求的對等 endpoint test 見
+            # 同檔 B 系列，逐條點名）：
+            #   * workspace 歸屬 —— 上面的 `_get_workspace_or_error`（B2）。
+            #     它的 domain 另外帶 `workspace_id.state = 'active'`，而 ir.rule
+            #     `security_access_rule_owner_admin_manage` 不管 workspace 狀態
+            #     ⇒ **這一格比 ir.rule 嚴的是它，不是下面那道角色閘**
+            #   * owner/admin 角色 —— 上面的 `check_user_access` 閘（B1）。它只
+            #     比對 workspace_access 的 role，與上述 ir.rule 的 domain 條件
+            #     等價（`models/workspace.py` 的 `check_user_access` 整支不讀
+            #     workspace.state）
+            #   * 訂閱生效 —— 下一行的 `_check_operation_allowed`（B4）。Odoo 的
+            #     `sudo()` **不改變 `env.user`**，所以它開頭那個
+            #     `has_group('base.group_system')` 提早 return 不會因此變 True
+            # 身分錨點不可變守衛明示無 su 豁免，sudo 打不開（B7）。
+            #
+            # 🔴 讀側：**不要寫成「完全沒動」**——那句話在本 repo 已被實測推翻，
+            # 精確版與 odoo shell 實測記在 `controllers/smart_home.py` 的
+            # `_provision_smarthome` docstring（#739／PR #797 留下的，刻意不在
+            # 這裡複述以免兩份漂移）。一句話版：su 那次呼叫會把 token 餵進同一筆
+            # 交易內跨 env 共用的欄位快取，之後**非 sudo** recordset 的**屬性
+            # 直讀**會命中快取而不再查遮罩 ⇒ 成立的是「**同一個請求裡沒有任何
+            # 程式碼去讀那個屬性**」，不是「讀側沒動」。這裡靠的是：`to_dict()`
+            # 不含 token（B6），而經 RPC 的 `read()` 一定重查遮罩（B5）。
+            #
+            # ⚠ 未隨本修法消失的既有形狀：下面的 `except Exception` 仍會把任何
+            # 例外收成 `{"success": False}` 回 HTTP 200，而 `action_provision`
+            # 開頭那次 `state='provisioning'` 已落地 ⇒ 記錄仍可能停在中途狀態。
+            # 本票只拿掉了那個形狀在 #805 (b) 上的**觸發源**，沒有動形狀本身
+            # （補償邏輯由 issue-leader 2026-08-22 裁定另案）。
             try:
                 sa._check_operation_allowed(operation='write')
-                sa.action_provision()
+                sa.sudo().action_provision()
             except Exception as e:
                 return {"success": False, "error": str(e)}
             return {"success": True, "data": sa.to_dict()}
