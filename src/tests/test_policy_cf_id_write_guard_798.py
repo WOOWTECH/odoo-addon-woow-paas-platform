@@ -69,11 +69,40 @@ reusable policy），但這一格今天沒有任何欄位級守衛：
 份 fixture 都成立。
 """
 
+import ast
+import inspect
 import json
 import uuid
+from unittest.mock import MagicMock, patch
 
 from odoo.exceptions import UserError
-from odoo.tests import HttpCase, tagged
+from odoo.tests import HttpCase, TransactionCase, tagged
+
+# C／F／E3 用：三腿各自的開閘 helper（fixture 要擺的是**伺服器端**前提，
+# 不是受測動作），以及本單新增的那把。
+from ..models.cloud_service import (
+    _internal_cs_access_identity,
+    _internal_provision,
+)
+from ..models.security_access import (
+    _INTERNAL_IDENTITY_WRITE,
+    _internal_identity,
+    _internal_policy_cf_write,
+    _is_internal_identity_write,
+    _is_internal_policy_cf_write,
+    _reject_identity_anchor_writes,
+    _skip_route_sync,
+    _strip_identity_anchors,
+)
+from ..models.smart_home_route import (
+    _internal_sm_route_identity,
+    _sm_skip_access_sync,
+)
+from .smart_home_fixture import sh_model
+
+#: SA 腿的 operator client seam（patch 這裡才攔得到 route sync 那一次呼叫）。
+_MOCK_SA_CLIENT = ('odoo.addons.woow_paas_platform.models.security_access.'
+                   'get_paas_operator_client')
 
 _SA = 'woow_paas_platform.security_access'
 _ROUTE = 'woow_paas_platform.security_access_route'
@@ -459,3 +488,452 @@ class TestPolicyCfIdNoSuExemption798(_PolicyCfId798Fixture):
             landed,
             '#798：sudo 不是開閘，vals 的 cf_policy_id 必須被壓成伺服器端值'
             '（實際落地 %r）' % (landed,))
+
+
+# ---------------------------------------------------------------------- #
+#  C：伺服器端合法回存路徑必須仍寫得動（守衛不得把 sync 管線一起擋死）      #
+# ---------------------------------------------------------------------- #
+#
+# 🔴 只寫 4 格是刻意的。三腿 13 個伺服器端寫入站點裡，**9 個已經有既存測試鎖著**
+# ——那些測試本身就是漏改偵測器（漏包 sentinel ⇒ 它們會紅）。再寫一份等於同一件事
+# 測兩遍。這裡只補**今天真的沒有偵測器**的那 4 條盲區：
+#
+#   C2  security_access.py    SecurityAccessRoute._sync_access_to_operator（第二個迴圈）
+#   C4  security_access.py    SecurityAccessRoute._access_mark_protection_lost
+#   C7  cloud_service.py      CloudService._access_mark_protection_lost
+#   C11 smart_home_route.py   SmartHomeRoute._access_mark_protection_lost
+#
+# 那 4 條為什麼沒有鎖：`test_access_failopen_compensation_794.py` 確實呼叫
+# `_access_mark_protection_lost()`，但**只斷言 route 那三個欄位**；該檔的
+# `_policy_cf()` helper 全檔零呼叫（dead helper）⇒「看起來有守、其實沒有」。
+#
+# 其餘 9 條各自由誰鎖住，逐條列在 PR body（不在這裡重述，兩份散文一定會漂）。
+
+
+def _db_cf_ids(env, policy_ids):
+    """直接讀 Postgres 的 cf_policy_id（繞開 ORM cache）。"""
+    env.flush_all()
+    env.cr.execute(
+        'SELECT id, cf_policy_id FROM %s WHERE id IN %%s ORDER BY id'
+        % env[_POLICY]._table, (tuple(policy_ids),))
+    return dict(env.cr.fetchall())
+
+
+@tagged('post_install', '-at_install')
+class TestPolicyCfIdServerWritebackStillWorks798(TransactionCase):
+    """C：三腿的伺服器端清值／回存在守衛上線後仍然寫得動。"""
+
+    def setUp(self):
+        super().setUp()
+        self.ICP = self.env['ir.config_parameter'].sudo()
+        self.ICP.set_param('woow_paas_platform.paas_domain', 'woowtech.io')
+        self.ICP.set_param('woow_paas_platform.deploy_env', 'prod')
+        self.Policy = self.env[_POLICY]
+        self.workspace = self.env['woow_paas_platform.workspace'].sudo().create(
+            {'name': 'WS 798C %s' % uuid.uuid4().hex[:6]})
+
+    # ------------------------------------------------------------------ #
+    #  共用：擺一顆「列上真的有 cf id」的前提，並回傳它                    #
+    # ------------------------------------------------------------------ #
+    def _policy_on(self, anchor_field, anchor, cf_id):
+        pol = _skip_route_sync(self.Policy.sudo()).create({
+            anchor_field: anchor.id,
+            'name': 'pol-798c-%s' % uuid.uuid4().hex[:6],
+            'decision': 'allow',
+            'rule_ids': [(0, 0, {'group': 'include',
+                                 'rule_type': 'email_list',
+                                 'rule_value': 'a@example.com'})],
+        })
+        _internal_policy_cf_write(pol).cf_policy_id = cf_id
+        # 陽性對照：**動作之前**先證明值真的在列上。少了它，「清掉了」與
+        # 「這條路徑沒跑到／fixture 根本沒種進去」不可區分——而守衛上線後
+        # fixture 種不進去正是最可能的失效模式。
+        self.assertEqual(
+            _db_cf_ids(self.env, [pol.id])[pol.id], cf_id,
+            '前提：動作之前這一列必須真的有 cf id（fixture 種不進去就沒得測）')
+        return pol.with_context(sa_skip_route_sync=False)
+
+    def _sa_route(self, protected=True, app_id='app-798c'):
+        SA = self.env['woow_paas_platform.security_access']
+        sa = SA.sudo().create(
+            {'name': 'SA 798C', 'workspace_id': self.workspace.id})
+        _internal_identity(sa).write(
+            {'state': 'active', 'tunnel_id': 'tun-798c-%s' % uuid.uuid4().hex[:8]})
+        Route = self.env['woow_paas_platform.security_access_route']
+        route = _skip_route_sync(Route.sudo()).create({
+            'security_access_id': sa.id,
+            'subdomain_prefix': 'r798c-%s' % uuid.uuid4().hex[:6],
+            'is_protected': protected,
+        })
+        if app_id:
+            _internal_identity(route).access_app_id = app_id
+        return sa, route.with_context(sa_skip_route_sync=False)
+
+    # ------------------------------------------------------------------ #
+    def test_C2_sa_route_sync_torn_down_branch_still_clears_cf_ids(self):
+        """SA route sync 回 ``app_id=None`` ⇒ 這條 route 底下 policy 的 cf id 清空。
+
+        這是 `_sync_access_to_operator` 裡的**第二個**迴圈——與對映回存那個是
+        不同的迴圈，漏包 sentinel 只會在這一格出事（對映回存那格照樣綠）。
+        """
+        sa, route = self._sa_route()
+        pol = self._policy_on('route_id', route, 'cf-798c-torn')
+
+        client = MagicMock()
+        client.sync_access_app.return_value = {
+            'app_id': None, 'policy_ids': [], 'allowed_idps': [],
+            'unresolved_idp_types': [], 'orphaned_policy_ids': []}
+        with patch(_MOCK_SA_CLIENT, return_value=client):
+            pushed = route._sync_access_to_operator()
+
+        self.assertTrue(pushed, '前提：這一輪必須真的推出去（不是被 gate 擋掉）')
+        self.assertFalse(
+            _db_cf_ids(self.env, [pol.id])[pol.id],
+            '#798：守衛不得擋死 torn-down 的清值（漏包 sentinel 會在這裡 UserError）')
+
+    def test_C4_sa_route_mark_protection_lost_still_clears_cf_ids(self):
+        """`_access_mark_protection_lost()`：清 policy cf ＋ 打開 fail-open 旗標。
+
+        **兩件一起斷言**是刻意的：只驗旗標的話，漏包 sentinel 造成的
+        `UserError` 會讓整個方法炸掉——但那條斷言根本不會執行到。
+        """
+        sa, route = self._sa_route()
+        pol = self._policy_on('route_id', route, 'cf-798c-lost')
+
+        route._access_mark_protection_lost()
+
+        self.assertFalse(
+            _db_cf_ids(self.env, [pol.id])[pol.id],
+            '#798：補償路徑的清值不得被守衛擋死')
+        self.assertTrue(route.access_protection_lost,
+                        'fail-open 旗標必須打開（#794 的語意，不得被本單改掉）')
+        self.assertFalse(route.access_app_id, 'app id 同一趟要清掉')
+
+    def test_C7_cloud_service_mark_protection_lost_still_clears_cf_ids(self):
+        """CS 腿同型。"""
+        Service = self.env['woow_paas_platform.cloud_service']
+        template = self.env['woow_paas_platform.cloud_app_template'].sudo().create({
+            'name': 'C798 tmpl',
+            'slug': 'c798-%s' % uuid.uuid4().hex[:6],
+            'helm_repo_url': '',
+            'helm_chart_name': 'oci://example.com/c798',
+            'helm_chart_version': '1.0.0',
+            'workload_type': 'container',
+            'post_deploy_init_type': 'none',
+            'mcp_enabled': False,
+        })
+        svc = _internal_provision(Service.sudo()).create({
+            'name': 'svc-798c',
+            'workspace_id': self.workspace.id,
+            'template_id': template.id,
+            'state': 'running',
+        })
+        _internal_cs_access_identity(svc).access_app_id = 'app-798c-cs'
+        pol = self._policy_on('cloud_service_id', svc, 'cf-798c-cs')
+
+        svc._access_mark_protection_lost()
+
+        self.assertFalse(
+            _db_cf_ids(self.env, [pol.id])[pol.id],
+            '#798：CS 腿的補償清值不得被守衛擋死')
+        self.assertTrue(svc.access_protection_lost)
+
+    def test_C11_sh_route_mark_protection_lost_still_clears_cf_ids(self):
+        """SH route 腿同型。"""
+        sh = sh_model(self.env).create({
+            'name': 'sh-798c-%s' % uuid.uuid4().hex[:6],
+            'workspace_id': self.workspace.id,
+            'state': 'active',
+            'tunnel_id': 'tun-798c-sh-%s' % uuid.uuid4().hex[:8],
+        }).with_env(self.env)
+        ShRoute = self.env['woow_paas_platform.smart_home_route']
+        route = _sm_skip_access_sync(ShRoute.sudo()).create(
+            {'smart_home_id': sh.id, 'is_primary': True})
+        _internal_sm_route_identity(route).access_app_id = 'app-798c-sh'
+        pol = self._policy_on('smart_home_route_id', route, 'cf-798c-sh')
+
+        route._access_mark_protection_lost()
+
+        self.assertFalse(
+            _db_cf_ids(self.env, [pol.id])[pol.id],
+            '#798：SH route 腿的補償清值不得被守衛擋死')
+        self.assertTrue(route.access_protection_lost)
+
+
+# ---------------------------------------------------------------------- #
+#  F：共用 helper 加了 `is_open=` 之後，既有兩支 model 的行為零改變          #
+# ---------------------------------------------------------------------- #
+#
+# 本單把 `_strip_identity_anchors` / `_reject_identity_anchor_writes` 加了一個具名
+# 參數 `is_open`（預設＝既有那支 reader）。「既有呼叫端零改變」如果只寫在 PR body
+# 裡就沒有守線——這一組把它釘住。
+#
+# 🔴 為什麼傳的是 **reader 函式**而不是 key 字串：repo-lint 第 28 條
+# （`check_internal_ctx_key_registry`）算「判定點」時只解得出**字面值／module 常數**
+# 的 context key。把 key 變成參數 ⇒ `env.context.get(ctx_key)` 解不出來 ⇒ 連既有那把
+# `sa_internal_identity_write` 都會掉到 0 個判定點而被判成假綠。實測過：把 reader
+# 內的字面 key 換成區域變數，repo-lint 立刻紅並指名該 key。
+
+
+@tagged('post_install', '-at_install')
+class TestSharedAnchorHelperContract798(TransactionCase):
+    """F：共用守衛 helper 的契約（結構 ＋ 行為 ＋ 兩把鑰匙互不通用）。"""
+
+    def setUp(self):
+        super().setUp()
+        self.workspace = self.env['woow_paas_platform.workspace'].sudo().create(
+            {'name': 'WS 798F %s' % uuid.uuid4().hex[:6]})
+        self.SA = self.env['woow_paas_platform.security_access']
+        self.Route = self.env['woow_paas_platform.security_access_route']
+        self.Policy = self.env[_POLICY]
+        self.sa = self.SA.sudo().create(
+            {'name': 'SA 798F', 'workspace_id': self.workspace.id})
+        self.route = _skip_route_sync(self.Route.sudo()).create({
+            'security_access_id': self.sa.id,
+            'subdomain_prefix': 'r798f-%s' % uuid.uuid4().hex[:6],
+        })
+        self.pol = _skip_route_sync(self.Policy.sudo()).create({
+            'route_id': self.route.id,
+            'name': 'pol-798f',
+            'decision': 'allow',
+            'rule_ids': [(0, 0, {'group': 'include',
+                                 'rule_type': 'email_list',
+                                 'rule_value': 'a@example.com'})],
+        })
+
+    # ------------------------------------------------------------------ #
+    def test_F1_is_open_default_is_the_existing_reader_object(self):
+        """預設引數必須**就是**既有那支 reader（同一性，不是同名）。
+
+        🔴 用 `is` 而不是 `__name__` / 字串比對：名字相等而物件不同正是這一族的
+        翻車形狀——換成一支長得一樣、判定卻鬆掉的函式，名字比對照樣是綠的。
+        """
+        for fn in (_strip_identity_anchors, _reject_identity_anchor_writes):
+            params = inspect.signature(fn).parameters
+            self.assertIn(
+                'is_open', params,
+                '%s 必須有 `is_open` 具名參數（#798 形狀 1）' % fn.__name__)
+            self.assertIs(
+                params['is_open'].default, _is_internal_identity_write,
+                '%s 的 `is_open` 預設值必須**就是** `_is_internal_identity_write` '
+                '這個物件；預設值被換掉 ⇒ 另外兩支 model 的守衛靜默失效'
+                % fn.__name__)
+
+    def test_F2_existing_call_sites_do_not_pass_is_open(self):
+        """既有 4 個呼叫端**一個都不傳** `is_open` ⇒ 行為走預設值。
+
+        陽性對照的必要性：光有 F1 不夠——default 沒被改，但某個呼叫端顯式傳了
+        別的值，行為一樣會變。
+
+        判準用**所屬方法名**不用行號（行號會漂）。也刻意不數「命中幾個」：
+        `smart_home.py` 有**同名的第二組** helper（簽章 arity 2，不是 3），
+        `git grep` 名字會把兩組混成一堆。
+        """
+        from ..models import security_access as sa_mod
+        src = inspect.getsource(sa_mod)
+        tree = ast.parse(src)
+
+        owners = {}
+        def walk(node, prefix):
+            for ch in ast.iter_child_nodes(node):
+                if isinstance(ch, ast.FunctionDef):
+                    nm = prefix + ch.name
+                    owners[(ch.lineno, ch.end_lineno)] = nm
+                    walk(ch, nm + '.')
+                elif isinstance(ch, ast.ClassDef):
+                    walk(ch, prefix + ch.name + '.')
+                else:
+                    walk(ch, prefix)
+        walk(tree, '')
+
+        found = {}
+        for n in ast.walk(tree):
+            if not isinstance(n, ast.Call):
+                continue
+            fname = (n.func.id if isinstance(n.func, ast.Name)
+                     else getattr(n.func, 'attr', None))
+            if fname not in ('_strip_identity_anchors',
+                             '_reject_identity_anchor_writes'):
+                continue
+            owner = None
+            for (a, b), nm in owners.items():
+                if a <= n.lineno <= b and (owner is None
+                                           or a > owner[0]):
+                    owner = (a, nm)
+            found.setdefault(owner[1] if owner else '<module>', []).append(
+                (fname, [kw.arg for kw in n.keywords]))
+
+        expected = {
+            'SecurityAccess.create', 'SecurityAccess.write',
+            'SecurityAccessRoute.create', 'SecurityAccessRoute.write',
+        }
+        self.assertEqual(
+            set(found), expected,
+            '共用 helper 的呼叫端應恰好是這四支方法（實得 %s）' % sorted(found))
+        for owner, calls in found.items():
+            for fname, kwargs in calls:
+                self.assertNotIn(
+                    'is_open', kwargs,
+                    '%s 呼叫 %s 時顯式傳了 is_open ⇒ 既有行為已被改變（#798 '
+                    '的前提是這四處一行都不改）' % (owner, fname))
+
+    def test_F3_existing_guards_still_behave_identically(self):
+        """行為面：既有兩組錨點**不帶 hatch 擋得住、帶既有 sentinel 寫得進**。
+
+        只有 F1／F2 的話，helper 內部邏輯被改壞仍然是綠的。
+        """
+        # (a) 不帶 hatch：write 側擋得住（對 sudo 也生效）
+        for rec, field, value in ((self.sa, 'tunnel_id', 'f3-forged-tun'),
+                                  (self.route, 'access_app_id', 'f3-forged-app')):
+            try:
+                rec.sudo().write({field: value})
+            except UserError:
+                pass
+            else:
+                self.fail('%s 的既有守衛必須仍然擋住裸 write（實際沒 raise）'
+                          % field)
+
+        # (b) 帶既有 sentinel：仍然寫得進
+        _internal_identity(self.sa).write({'tunnel_id': 'f3-server-tun'})
+        self.assertEqual(self.sa.tunnel_id, 'f3-server-tun',
+                         '既有 sentinel 必須仍然開得了門（否則 provisioning 全斷）')
+        _internal_identity(self.route).access_app_id = 'f3-server-app'
+        self.assertEqual(self.route.access_app_id, 'f3-server-app')
+
+        # (c) create 側壓值仍然生效
+        squat = _skip_route_sync(self.Route.sudo()).create({
+            'security_access_id': self.sa.id,
+            'subdomain_prefix': 'f3c-%s' % uuid.uuid4().hex[:6],
+            'access_app_id': 'f3-create-squat',
+        })
+        self.assertFalse(squat.access_app_id,
+                         'create 側的壓值必須仍然生效')
+
+    def test_F4_the_two_keys_are_not_interchangeable(self):
+        """🔴 兩把鑰匙互不通用——少了這一條，「分成兩把」只是命名不是隔離。"""
+        # 新 key 打不開既有錨點
+        try:
+            _internal_policy_cf_write(self.sa).write({'tunnel_id': 'f4-x'})
+        except UserError:
+            pass
+        else:
+            self.fail('`sa_internal_policy_cf_write` 不得打開 SA 身分錨點的閘')
+
+        # 既有 key 打不開 policy 的 cf_policy_id
+        try:
+            _internal_identity(self.pol).write({'cf_policy_id': 'f4-y'})
+        except UserError:
+            pass
+        else:
+            self.fail('`sa_internal_identity_write` 不得打開 cf_policy_id 的閘')
+
+        # 正向：各自那把都開得了自己的門
+        _internal_identity(self.sa).write({'tunnel_id': 'f4-ok-tun'})
+        self.assertEqual(self.sa.tunnel_id, 'f4-ok-tun')
+        _internal_policy_cf_write(self.pol).cf_policy_id = 'f4-ok-cf'
+        self.assertEqual(self.pol.cf_policy_id, 'f4-ok-cf')
+
+
+# ---------------------------------------------------------------------- #
+#  E3：JSON 表達不出物件同一性——偽造的 context 值打不開閘                   #
+# ---------------------------------------------------------------------- #
+
+
+@tagged('post_install', '-at_install')
+class TestPolicyCfIdHatchIdentity798(TransactionCase):
+    """E3：閘只認模組私有 sentinel 物件本身。"""
+
+    _CTX_KEY = 'sa_internal_policy_cf_write'
+
+    def setUp(self):
+        super().setUp()
+        self.workspace = self.env['woow_paas_platform.workspace'].sudo().create(
+            {'name': 'WS 798E3 %s' % uuid.uuid4().hex[:6]})
+        self.Policy = self.env[_POLICY]
+        sa = self.env['woow_paas_platform.security_access'].sudo().create(
+            {'name': 'SA 798E3', 'workspace_id': self.workspace.id})
+        self.route = _skip_route_sync(
+            self.env['woow_paas_platform.security_access_route'].sudo()).create({
+                'security_access_id': sa.id,
+                'subdomain_prefix': 'r798e3-%s' % uuid.uuid4().hex[:6],
+            })
+
+    def _make_policy(self, **extra):
+        vals = {
+            'route_id': self.route.id,
+            'name': 'pol-798e3-%s' % uuid.uuid4().hex[:6],
+            'decision': 'allow',
+            'rule_ids': [(0, 0, {'group': 'include',
+                                 'rule_type': 'email_list',
+                                 'rule_value': 'a@example.com'})],
+        }
+        vals.update(extra)
+        return vals
+
+    def test_E3a_forged_context_values_do_not_open_the_hatch_at_write(self):
+        """`True` / `1` / `'true'` / list / dict——JSON 送得出來的都不得開閘。
+
+        用裸 `try/except` ＋ `else: self.fail(...)`（不是 `assertRaises`）：
+        本格在例外之後要讀 DB，而 `assertRaises` 的 savepoint 會把區塊內的寫入
+        回捲，讓「擋在寫入之前」與「寫了又被回捲」不可區分（見 E1 的 docstring）。
+        """
+        pol = _skip_route_sync(self.Policy.sudo()).create(self._make_policy())
+        for forged in (True, 1, 'true', [1], {'x': 1}):
+            with self.subTest(forged=forged):
+                try:
+                    pol.sudo().with_context(
+                        **{self._CTX_KEY: forged}).write(
+                            {'cf_policy_id': 'e3-forged'})
+                except UserError:
+                    pass
+                else:
+                    self.fail('context 值 %r 不得打開 cf_policy_id 的閘'
+                              % (forged,))
+                self.env.flush_all()
+                self.env.cr.execute(
+                    'SELECT cf_policy_id FROM %s WHERE id = %%s'
+                    % self.env[_POLICY]._table, (pol.id,))
+                self.assertFalse(
+                    self.env.cr.fetchone()[0],
+                    '被拒之後 DB 那一格必須仍是空的（值 %r）' % (forged,))
+
+    def test_E3b_forged_context_values_do_not_open_the_hatch_at_create(self):
+        """create 側同理：偽造值不得讓 vals 的 cf_policy_id 落地。"""
+        for forged in (True, 1, 'true'):
+            with self.subTest(forged=forged):
+                pol = _skip_route_sync(self.Policy.sudo()).with_context(
+                    **{self._CTX_KEY: forged}).create(
+                        self._make_policy(cf_policy_id='e3-create-forged'))
+                self.assertFalse(
+                    pol.cf_policy_id,
+                    'context 值 %r 不得讓 create 的 cf_policy_id 落地'
+                    % (forged,))
+
+    def test_E3c_the_real_sentinel_still_opens_it(self):
+        """正向對照：閘必須是「關得好」，不是「永遠打不開」。
+
+        少了這一條，E3a／E3b 的綠與「守衛把伺服器端路徑一起鎖死」不可區分——
+        那會把三腿的 sync 回存全部擋掉（本 issue 危害的另一半）。
+        """
+        pol = _skip_route_sync(self.Policy.sudo()).create(self._make_policy())
+        _internal_policy_cf_write(pol).cf_policy_id = 'e3-server-owned'
+        self.assertEqual(pol.cf_policy_id, 'e3-server-owned')
+        # create 側：帶真 sentinel 時 vals 的值必須落地（不被壓掉）
+        created = _skip_route_sync(_internal_policy_cf_write(
+            self.Policy.sudo())).create(
+                self._make_policy(cf_policy_id='e3-server-create'))
+        self.assertEqual(created.cf_policy_id, 'e3-server-create')
+
+    def test_E3d_the_sentinel_object_is_the_module_private_one(self):
+        """鑑別項：閘認的就是 `_INTERNAL_IDENTITY_WRITE` 這個物件。
+
+        沒有這一條，「reader 被改成永遠回 True」也會讓 E3c 綠。
+        """
+        env = self.env(context=dict(
+            self.env.context, **{self._CTX_KEY: _INTERNAL_IDENTITY_WRITE}))
+        self.assertTrue(_is_internal_policy_cf_write(env))
+        env2 = self.env(context=dict(self.env.context,
+                                     **{self._CTX_KEY: object()}))
+        self.assertFalse(
+            _is_internal_policy_cf_write(env2),
+            '另一個 object() 不得被判成開閘（判準必須是同一性，不是 truthy）')
