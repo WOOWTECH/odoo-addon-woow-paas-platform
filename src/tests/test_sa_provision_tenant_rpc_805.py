@@ -35,13 +35,14 @@
   provision**（`static/src/paas/components/modal/CreateSecurityAccessModal.js`），
   detail page 另有重試鈕。
 
-⚠ 失敗還會把記錄鎖死：`state='provisioning'` 在 `try` 之外先落地，
-`except AccessError` 刻意 re-raise 而不寫 `'error'`，controller 的
-`except Exception` 又把它吞成 HTTP 200 的 `{"success": false}` ⇒ 交易 commit、
-SA 永久停在 `provisioning`，而 detail page 的重試鈕只認 `pending`／`error`
-⇒ 鈕消失、`action_refresh_status` 在無 `tunnel_id` 時 early-return、無任何 cron
-收斂。**孤兒 tunnel 與這個卡死狀態的補償邏輯不在本票範圍**（issue-leader
-2026-08-22 裁定另案），本檔只鎖 provision 的身分語意。
+⚠ 以下這段是**讀碼推導、本檔沒有任何測試鎖它**（那部分是另案範圍，見下），
+寫在這裡是為了讓下一個人知道失敗的形狀，不要當成已驗事實：`state='provisioning'`
+在 `try` 之外先落地，`except AccessError` 刻意 re-raise 而不寫 `'error'`，
+controller 的 `except Exception` 又把它吞成 HTTP 200 的 `{"success": false}`
+⇒ 交易照常收尾、SA 停在 `provisioning`；而 detail page 的重試鈕只認
+`pending`／`error`、`action_refresh_status` 在無 `tunnel_id` 時 early-return、
+也沒有 cron 會收斂它。**孤兒 tunnel 與這個卡死狀態的補償邏輯不在本票範圍**
+（issue-leader 2026-08-22 裁定另案），本檔只鎖 provision 的身分語意。
 
 ## 為什麼既有測試抓不到（本檔存在的理由）
 
@@ -62,8 +63,16 @@ SA 永久停在 `provisioning`，而 detail page 的重試鈕只認 `pending`／
   **確實落地**（用 raw SQL 讀，不用 ORM——`tunnel_token` 對租戶是遮蔽的）。
   修復前 A1–A4 紅在第 3 階（見下方 anti-probe 階梯）。
 - **B 系列**：🔴 本檔的重點。改用平台身分驅動之後，那條路徑上**原本由租戶
-  身分擋著的檢查**逐條點名重測，證明它們一條都沒有被順帶關掉。
-  B 系列在修復前後都必須綠——它們釘的是「修法沒有擴大授權」。
+  身分擋著的檢查**逐條點名重測，證明它們一條都沒有被順帶關掉——釘的是
+  「修法沒有擴大授權」。
+  ⚠ **B 系列內部分兩層，驗收預期不同，不要當成同一組**：
+  * **B1–B4** 擋點都在 `action_provision` **之前**（workspace 歸屬／角色／
+    訂閱），完全在修法的作用範圍之外 ⇒ **修復前後都必須綠**。
+  * **B5–B8** 各自以「這一筆已經 provision 成功」為硬前提（讀側遮罩要有東西
+    可讀、回應要有東西可洩、錨點要有值可改、重試要有第一次可比）⇒ 修復前
+    那個前提本身就不成立，**它們在第一輪必然紅在 `前提：` 那一行**，那是
+    預期紅不是回歸。判準是**紅落在哪一行**：落在 `前提：` 那句＝預期；
+    落在該條自己的斷言＝真回歸。
 - **C 系列**：修法的**範圍限定**。sudo 只加在 BFF 那一條 route 上；Odoo 原生的
   `/web/dataset/call_kw` 是另一條到得了 `action_provision` 的路（方法名無底線、
   無 `@api.private`），它**不經過本 controller**，所以欄位遮罩在那裡照樣 fail-closed。
@@ -97,6 +106,7 @@ from odoo.addons.woow_paas_platform.models.workspace_access import (
 )
 
 _MODEL = 'woow_paas_platform.security_access'
+_ROUTE_MODEL = 'woow_paas_platform.security_access_route'
 
 # 兩條呼叫路徑、兩個 patch target（namespace 不同，缺一不可）——理由與
 # test_security_access_subscription_flow.py 檔頭那段相同，pattern 見
@@ -161,7 +171,14 @@ class _Sa805Fixture(HttpCase):
         # 下單流程要開得出訂閱，否則 `_check_operation_allowed` 會因為
         # 「沒有訂閱＝不受限」而讓 B4 失去鑑別力（形狀沿用
         # test_sh_provision_tenant_rpc_739 / test_create_service_validation_rollback_520）。
+        # ⚠ 這支是 best-effort：找不到 sale journal 就靜默不設、也不 raise，
+        # 而下單失敗會被 controller 收成一句通用字串 ⇒ 「fixture 建不起來」與
+        # 「本票的 bug」在輸出上長得一樣。把它變成明講的前提斷言。
         self.env['res.company'].sudo()._ensure_subscription_journal()
+        self.assertTrue(
+            self.env.company.sudo().sh_journal_id,
+            'fixture 前提：公司要有 sh_journal_id，否則下單流程開不出訂閱，'
+            '整檔會紅在下單那一步而不是受測行為')
 
         self.alice, self.alice_login = _new_group_user(self.env, 'alice805')
         self.dave, self.dave_login = _new_group_user(self.env, 'dave805')
@@ -234,16 +251,23 @@ class _Sa805Fixture(HttpCase):
         return '%s %s' % (data.get('name', ''), data.get('message', ''))
 
     def _assert_no_rpc_error(self, res, msg):
-        """階梯第 1 階：排除 404／401／route 不存在／JSON-RPC 例外。"""
+        """階梯第 1 階：排除 404／401／route 不存在／JSON-RPC 例外。
+
+        兩格都要驗：沒有 `error` **且** `result` 真的在。少了後者，`result`
+        缺席時會回 None，後續斷言以 `AttributeError` 收場——那個紅看起來像
+        測試寫壞了，而不是端點沒回東西。
+        """
         self.assertNotIn('error', res,
                          msg + '（探針故障，不是受測行為：%s）'
                          % self._error_text(res))
-        return res.get('result')
+        self.assertIn('result', res,
+                      msg + '：JSON-RPC 回應沒有 result 欄位（實回 %r）' % res)
+        return res['result']
 
     # ------------------------------------------------------------------ #
     #  raw DB 讀（ORM 讀不到 `tunnel_token` —— 那正是本票的欄位）          #
     # ------------------------------------------------------------------ #
-    def _db(self, record_id, field_name):
+    def _db(self, record_id, field_name, model=_MODEL):
         """直接讀 Postgres 的那一格。
 
         刻意不用 ORM：`tunnel_token` 帶 `groups='base.group_system'`，而
@@ -251,13 +275,13 @@ class _Sa805Fixture(HttpCase):
         `flush_all()` 先把尚未 flush 的寫入推下去。
         """
         self.env.flush_all()
-        self.assertIn(field_name, self.env[_MODEL]._fields)
-        table = self.env[_MODEL]._table
+        self.assertIn(field_name, self.env[model]._fields)
+        table = self.env[model]._table
         self.env.cr.execute(
             'SELECT "%s" FROM "%s" WHERE id = %%s' % (field_name, table),
             (record_id,))
         row = self.env.cr.fetchone()
-        self.assertTrue(row, '%s#%s 不在 DB 裡' % (_MODEL, record_id))
+        self.assertTrue(row, '%s#%s 不在 DB 裡' % (model, record_id))
         return row[0]
 
     # ------------------------------------------------------------------ #
@@ -343,6 +367,20 @@ class TestSa805TenantProvisionSucceeds(_Sa805Fixture):
             payload.get('success'),
             '#805 (b)：%s 經真 HTTP provision 必須成功（實回 %r）'
             % (label, payload))
+        # 階梯 4：`success: True` **不等於** provision 成功。`action_provision`
+        # 的 broad except 會把非 AccessError 的例外寫成 state='error' 然後正常
+        # return，controller 照樣回 True ⇒ 只看 success 的話，「開通成功」與
+        # 「中途失敗躺在 error」分不出來。本票的故障（AccessError）確實會 raise
+        # 出來被階梯 3 抓到，但這一格成本近零、且擋掉整類旁生的假綠。
+        self.assertFalse(
+            self._db(sa.id, 'error_message'),
+            '%s：success=True 但 error_message 有值 ⇒ provision 其實在中途失敗'
+            '（error_message=%r）' % (label, self._db(sa.id, 'error_message')))
+        self.assertIn(
+            self._db(sa.id, 'state'), ('active', 'active_no_route'),
+            '%s：success=True 但終態不是 active/active_no_route（實為 %r，'
+            'error_message=%r）' % (label, self._db(sa.id, 'state'),
+                                    self._db(sa.id, 'error_message')))
         return sa, client, payload
 
     def test_A1_owner_can_provision_over_real_http(self):
@@ -357,7 +395,8 @@ class TestSa805TenantProvisionSucceeds(_Sa805Fixture):
         self.assertEqual(
             self._db(sa.id, 'state'), 'active_no_route',
             '#805 (b)：成功的 provision 必須把零 route 的 SA 推到 '
-            'active_no_route（停在 provisioning ＝ 例外在中途被吞掉）')
+            'active_no_route（實為 %r，error_message=%r）'
+            % (self._db(sa.id, 'state'), self._db(sa.id, 'error_message')))
         self.assertEqual(
             self._db(sa.id, 'tunnel_id'), self.expected_tunnel_id,
             '#805 (b)：operator 回的 tunnel_id 必須落地')
@@ -432,6 +471,15 @@ class TestSa805TenantProvisionSucceeds(_Sa805Fixture):
             self._db(sa.id, 'state'), 'active',
             '有 route 的 SA provision 完必須是 active（不是 active_no_route）')
 
+        # 🔴 本條真正的鑑別項：`dns_record_id` 是**平台身分**（sudo 之後的
+        # `_internal_identity`）寫回 route 的，raw DB 讀那一格才證得到那次
+        # 回寫真的發生過（route.to_dict() 不吐這個欄位，只驗 route 出現在
+        # 清單裡是驗不到的）。
+        self.assertEqual(
+            self._db(route_id, 'dns_record_id', model=_ROUTE_MODEL),
+            'rec-805-x',
+            '#805 (b)：operator 回的 dns_record_id 必須由平台身分回寫到 route')
+
         payload = self._assert_no_rpc_error(
             self._post_json(
                 '/api/workspaces/%d/security-accesses/%d' % (self.w1.id, sa.id),
@@ -467,7 +515,13 @@ class TestSa805ChecksThatMustSurvive(_Sa805Fixture):
 
     B4 的一則機制註記（不要憑直覺）：Odoo 的 `sudo()` **不會**改變 `env.user`，
     所以 `_check_operation_allowed` 開頭那個 `has_group('base.group_system')`
-    提早 return **不會**因為修法而變成 True。B4 是這句話的實測面。
+    提早 return **不會**因為修法而變成 True。B4 是這句話的實測面——那句話哪天
+    在框架層變了，閘會**靜默失效**（不是報錯），B4 是它的活體警報器。
+
+    ⚠ **本組內部分兩層，驗收預期不同**（詳見檔頭）：B1–B4 的擋點都在
+    `action_provision` **之前**，修復前後都必須綠；B5–B8 各自以「這一筆已經
+    provision 成功」為硬前提，**修復前必然紅在 `前提：` 那一行**——那是預期紅
+    不是回歸，判準是紅落在哪一行。
     """
 
     def _assert_blocked(self, res, expected_fragment, client, label):
@@ -571,7 +625,8 @@ class TestSa805ChecksThatMustSurvive(_Sa805Fixture):
         res = self._provision(self.alice_login, self.w1.id, sa.id, client)
         payload = self._assert_no_rpc_error(res, 'provision 端點')
         self.assertTrue(payload.get('success'),
-                        '前提：這一條要先 provision 成功（實回 %r）' % payload)
+                        '前提：這一條要先 provision 成功——本條只在修法後有意義，'
+                        '修法前紅在這一行是預期紅（實回 %r）' % payload)
 
         ok = self._call_kw(_MODEL, 'read', [[sa.id], ['tunnel_id']])
         self.assertNotIn('error', ok,
@@ -599,7 +654,8 @@ class TestSa805ChecksThatMustSurvive(_Sa805Fixture):
         res = self._provision(self.alice_login, self.w1.id, sa.id, client)
         payload = self._assert_no_rpc_error(res, 'provision 端點')
         self.assertTrue(payload.get('success'),
-                        '前提：這一條要先 provision 成功（實回 %r）' % payload)
+                        '前提：這一條要先 provision 成功——本條只在修法後有意義，'
+                        '修法前紅在這一行是預期紅（實回 %r）' % payload)
         self.assertEqual(
             self._db(sa.id, 'tunnel_token'), self.expected_token,
             '陽性對照：那個值真的在 DB 裡（不在的話下面那條零鑑別力）')
@@ -622,7 +678,8 @@ class TestSa805ChecksThatMustSurvive(_Sa805Fixture):
         res = self._provision(self.alice_login, self.w1.id, sa.id, client)
         payload = self._assert_no_rpc_error(res, 'provision 端點')
         self.assertTrue(payload.get('success'),
-                        '前提：這一條要先 provision 成功（實回 %r）' % payload)
+                        '前提：這一條要先 provision 成功——本條只在修法後有意義，'
+                        '修法前紅在這一行是預期紅（實回 %r）' % payload)
         provisioned = self._db(sa.id, 'tunnel_id')
 
         stolen = 'stolen-tunnel-%s' % uuid.uuid4()
@@ -652,7 +709,8 @@ class TestSa805ChecksThatMustSurvive(_Sa805Fixture):
             self._provision(self.alice_login, self.w1.id, sa.id, client),
             '第一次 provision')
         self.assertTrue(first.get('success'),
-                        '前提：第一次必須成功（實回 %r）' % first)
+                        '前提：第一次必須成功——本條只在修法後有意義，'
+                        '修法前紅在這一行是預期紅（實回 %r）' % first)
         self.assertEqual(client.create_tunnel.call_count, 1,
                          '前提：第一次恰好開一條')
 
@@ -669,6 +727,13 @@ class TestSa805ChecksThatMustSurvive(_Sa805Fixture):
         self.assertEqual(
             self._db(sa.id, 'tunnel_id'), self.expected_tunnel_id,
             '重試不得換掉已存的 tunnel_id')
+        # re-sync 分支的 broad except 會把失敗寫成 state='error' 然後正常
+        # return ⇒ controller 照樣回 success=True。少了這一格，「重試乾淨收斂」
+        # 與「重試炸了但沒再開 tunnel」分不出來，而本條要證的是前者。
+        self.assertEqual(
+            self._db(sa.id, 'state'), 'active_no_route',
+            '重試必須乾淨收斂回 active_no_route（實為 %r，error_message=%r）'
+            % (self._db(sa.id, 'state'), self._db(sa.id, 'error_message')))
 
 
 @tagged('post_install', '-at_install')
@@ -696,9 +761,14 @@ class TestSa805FixScope(_Sa805Fixture):
     def test_C1_direct_call_kw_still_fails_closed_for_the_tenant(self):
         """繞過 BFF 直接 call_kw ⇒ 仍撞 tunnel_token 的欄位級 AccessError。
 
-        陽性對照有兩層：`create_tunnel` **被呼叫過**（證明擋點在那次 write，
-        不是更前面的某道閘），以及 `tunnel_token` 那一格仍是空的（證明是「被
-        擋下」不是「寫進去了但回了錯誤」）。
+        真正的陽性對照只有一層：`create_tunnel` **被呼叫過**——它證明擋點就在
+        那次 write，不是更前面的某道閘（少了它，本條與「route 打不到」「session
+        沒登入」紅得一模一樣）。
+
+        ⚠ 下面那條「`tunnel_token` 仍是空的」**不是**陽性對照，鑑別力接近 0：
+        這條路徑丟例外出 handler ⇒ Odoo 會 rollback 到該次 request 自己的
+        savepoint，那一格本來就會回到寫入前的值。留著只是把「沒有憑證外洩到
+        DB」寫成可執行的事實，不要拿它當「守衛有效」的證據。
         """
         sa = self._order_security_access(self.alice_login, self.w1,
                                          'direct call_kw')

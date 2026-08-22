@@ -135,17 +135,27 @@ class SecurityAccessController(Controller):
             # 三道閘都**留在 sudo 之外**，一條都沒有被順帶關掉（
             # `orm-vs-endpoint-acl-test-coverage` 要求的對等 endpoint test 見
             # 同檔 B 系列，逐條點名）：
-            #   * workspace 歸屬 —— 上面的 `_get_workspace_or_error`（B2）
-            #   * owner/admin 角色 —— 上面的 `check_user_access` 閘（B1）；它比
-            #     ir.rule `security_access_rule_owner_admin_manage` **更嚴**，
-            #     因為它另外要求 workspace `state='active'`
+            #   * workspace 歸屬 —— 上面的 `_get_workspace_or_error`（B2）。
+            #     它的 domain 另外帶 `workspace_id.state = 'active'`，而 ir.rule
+            #     `security_access_rule_owner_admin_manage` 不管 workspace 狀態
+            #     ⇒ **這一格比 ir.rule 嚴的是它，不是下面那道角色閘**
+            #   * owner/admin 角色 —— 上面的 `check_user_access` 閘（B1）。它只
+            #     比對 workspace_access 的 role，與上述 ir.rule 的 domain 條件
+            #     等價（`models/workspace.py` 的 `check_user_access` 整支不讀
+            #     workspace.state）
             #   * 訂閱生效 —— 下一行的 `_check_operation_allowed`（B4）。Odoo 的
             #     `sudo()` **不改變 `env.user`**，所以它開頭那個
             #     `has_group('base.group_system')` 提早 return 不會因此變 True
-            # 讀側完全沒動：欄位上的 `groups=`（B5）、`to_dict()` 不含 token
-            # （B6）、專屬 sudo 讀端點（`controllers/ha_api.py` 的
-            # `sa_get_tunnel_token`）仍是唯一讀路徑。身分錨點不可變守衛明示無
-            # su 豁免，sudo 打不開（B7）。
+            # 身分錨點不可變守衛明示無 su 豁免，sudo 打不開（B7）。
+            #
+            # 🔴 讀側：**不要寫成「完全沒動」**——那句話在本 repo 已被實測推翻，
+            # 精確版與 odoo shell 實測記在 `controllers/smart_home.py` 的
+            # `_provision_smarthome` docstring（#739／PR #797 留下的，刻意不在
+            # 這裡複述以免兩份漂移）。一句話版：su 那次呼叫會把 token 餵進同一筆
+            # 交易內跨 env 共用的欄位快取，之後**非 sudo** recordset 的**屬性
+            # 直讀**會命中快取而不再查遮罩 ⇒ 成立的是「**同一個請求裡沒有任何
+            # 程式碼去讀那個屬性**」，不是「讀側沒動」。這裡靠的是：`to_dict()`
+            # 不含 token（B6），而經 RPC 的 `read()` 一定重查遮罩（B5）。
             #
             # ⚠ 未隨本修法消失的既有形狀：下面的 `except Exception` 仍會把任何
             # 例外收成 `{"success": False}` 回 HTTP 200，而 `action_provision`

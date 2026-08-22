@@ -581,19 +581,29 @@ class SecurityAccess(models.Model):
           ``/web/dataset/call_kw`` reaches it too; that path does not go
           through the controller, so the field mask still fails closed there
           (C1).
-        - The read surface is untouched: ``groups=`` still masks reads (B5),
-          ``to_dict()`` still omits the token (B6), and the dedicated sudo'd
-          endpoint (controllers/ha_api.py::sa_get_tunnel_token) is still the
-          only read path.
+        - Read side: do NOT write "the read surface is untouched" — this repo
+          has already falsified that phrasing by experiment. The precise
+          version, with the odoo-shell measurement, lives in
+          controllers/smart_home.py::_provision_smarthome (#739 / PR #797);
+          deliberately not restated here so the two cannot drift. One-line
+          version: the su call primes the transaction-wide field cache, and a
+          later ATTRIBUTE read on a non-sudo recordset hits that cache without
+          re-checking the mask. What holds is "nothing in the same request
+          reads that attribute" — ``to_dict()`` omits the token (B6) and a
+          ``read()`` over RPC always re-checks the mask (B5). The dedicated
+          sudo'd endpoint (controllers/ha_api.py::sa_get_tunnel_token) is
+          still the only read path.
         - The gates that decide WHO may drive provision all sit OUTSIDE the
           sudo — workspace membership (B2), the owner/admin role check (B1),
           and ``_check_operation_allowed`` (B4). ``sudo()`` does not change
           ``env.user``, so the ``has_group('base.group_system')`` early-return
           inside ``_check_operation_allowed`` does not become True.
-        - The identity-anchor guard below has no su exemption, so sudo does not
+        - The identity-anchor guard (``_reject_identity_anchor_writes``, called
+          from this model's ``write()``) has no su exemption, so sudo does not
           open it (B7).
-        - The re-sync branch above never writes tunnel_token at all, so the
-          field mask only ever gated the FIRST provision (D1).
+        - The re-sync branch below (``if self.tunnel_id:``) never writes
+          tunnel_token at all, so the field mask only ever gated the FIRST
+          provision (D1).
         """
         self.ensure_one()
         client = self._get_operator_client()
@@ -677,10 +687,14 @@ class SecurityAccess(models.Model):
 
             # The one legitimate anchor write: storing the ids Cloudflare just
             # handed back. Opted in via the sentinel — see
-            # _INTERNAL_IDENTITY_WRITE. Note this does NOT widen the
-            # tunnel_token field-group ACL: super().write() still enforces
-            # groups='base.group_system', which is why a non-system caller
-            # reaching here still fails closed with AccessError (below).
+            # _INTERNAL_IDENTITY_WRITE. Note the sentinel does NOT widen the
+            # tunnel_token field-group ACL (it is a with_context, not a sudo):
+            # super().write() still enforces groups='base.group_system'. So
+            # whether this line succeeds is decided entirely by the CALLER's
+            # identity — the tenant BFF endpoint drives this method under the
+            # platform identity since #805 (b), while a caller that reaches the
+            # method under a non-system identity (e.g. /web/dataset/call_kw)
+            # still fails closed here, via the AccessError branch below.
             _internal_identity(self).write({
                 'tunnel_id': result.get('tunnel_id'),
                 'tunnel_token': result.get('tunnel_token'),
