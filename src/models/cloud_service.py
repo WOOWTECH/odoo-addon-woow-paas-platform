@@ -12,6 +12,10 @@ from odoo.exceptions import AccessError, UserError, ValidationError
 from ..services import dns_probe
 from ..services.naming import make_cs_access_canonical_name
 from .cloud_app_template import SupplyGateError
+# #798：policy 列上 `cf_policy_id` 的唯一寫入豁免。sentinel／opener 住在 SA 那支，
+# 因為 `security_access` 在 `models/__init__.py` 早於本檔載入、且它不 import 任何
+# sibling model ⇒ 這個方向沒有循環；反方向（把 opener 放 policy 那支）才會有。
+from .security_access import _internal_policy_cf_write
 from .workspace_access import ROLE_ADMIN
 
 _logger = logging.getLogger(__name__)
@@ -3779,14 +3783,15 @@ class CloudService(models.Model):
         # 回傳的 policy id 依 (sequence, id) 順序對映回列——與 payload 送出去的
         # 排序是同一條 key，錯開就會把 A 的 cf id 記到 B 頭上。
         returned = result.get('policy_ids') or []
-        policies = self.access_policy_ids.sorted(
+        # #798：包 recordset 不是包 record。⚠ 下面是**兩個不同的迴圈**，各包一次。
+        policies = _internal_policy_cf_write(self.access_policy_ids).sorted(
             key=lambda x: (x.sequence, x.id))
         for pol, cf_id in zip(policies, returned):
             if pol.cf_policy_id != cf_id:
                 pol.cf_policy_id = cf_id
         if not result.get('app_id'):
             # 已拆除 ⇒ 清掉這台服務底下 policy 的過期 cf id
-            for pol in self.access_policy_ids:
+            for pol in _internal_policy_cf_write(self.access_policy_ids):
                 if pol.cf_policy_id:
                     pol.cf_policy_id = False
         return True
@@ -3916,7 +3921,8 @@ class CloudService(models.Model):
         """
         self.ensure_one()
         _internal_cs_access_identity(self).access_app_id = False
-        for pol in self.access_policy_ids:
+        # #798：包 recordset（同上）。
+        for pol in _internal_policy_cf_write(self.access_policy_ids):
             if pol.cf_policy_id:
                 pol.cf_policy_id = False
         if not self.access_protection_lost:
@@ -3979,7 +3985,8 @@ class CloudService(models.Model):
         if ok:
             # 身分錨點：清除也只有 sentinel 路徑寫得動。
             _internal_cs_access_identity(self).access_app_id = False
-            for pol in self.access_policy_ids:
+            # #798：包 recordset（同上）。
+            for pol in _internal_policy_cf_write(self.access_policy_ids):
                 if pol.cf_policy_id:
                     pol.cf_policy_id = False
         return ok

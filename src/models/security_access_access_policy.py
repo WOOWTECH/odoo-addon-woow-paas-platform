@@ -6,6 +6,7 @@ from odoo.exceptions import ValidationError
 # 就打得開。判定與開閘 helper 都住在 SA 那支（本子模型沒有自己的 sentinel）。
 from .security_access import (
     _CTX_SKIP_ROUTE_SYNC,
+    _internal_policy_cf_write,
     _is_internal_policy_cf_write,
     _is_sync_control,
     _reject_identity_anchor_writes,
@@ -708,7 +709,10 @@ class SecurityAccessAccessPolicy(models.Model):
         for (anchor_model, anchor_id), cf_ids in moved_by_anchor.items():
             Reap._record_ids(anchor_model, anchor_id, cf_ids)
         if booked:
-            booked.write({'cf_policy_id': False})
+            # #798：這一行走的是 policy 自己的 `write()`，守衛上線後會撞到本 model
+            # 那道 reject ⇒ 必須開閘。它是**伺服器端**的清值（搬家語意，見上方
+            # docstring），不是呼叫端塞進來的值。
+            _internal_policy_cf_write(booked).write({'cf_policy_id': False})
 
     @api.model_create_multi
     def create(self, vals_list):

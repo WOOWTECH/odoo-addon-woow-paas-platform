@@ -1293,7 +1293,9 @@ class SecurityAccess(models.Model):
             )
             if ok:
                 _internal_identity(route).access_app_id = False
-                for pol in route.access_policy_ids:
+                # #798：包 recordset 不是包 record——迭代帶 context 的
+                # recordset 得到的 singleton 沿用同一個 env，包一次就夠。
+                for pol in _internal_policy_cf_write(route.access_policy_ids):
                     if pol.cf_policy_id:
                         pol.cf_policy_id = False
         if not self.tunnel_id:
@@ -2085,14 +2087,17 @@ class SecurityAccessRoute(models.Model):
             self.access_protection_lost = False
         # map returned policy ids back onto policy rows in (sequence,id) order
         returned = result.get('policy_ids') or []
-        policies = self.access_policy_ids.sorted(
+        # #798：包 recordset 不是包 record（同一個 env 沿用給每個 singleton）。
+        # ⚠ 下面是**兩個不同的迴圈**（對映回存／torn-down 清值），各自要包一次——
+        # 「一個方法包一次就好」是最自然的誤讀，漏掉第二個的症狀是 teardown 清不掉。
+        policies = _internal_policy_cf_write(self.access_policy_ids).sorted(
             key=lambda x: (x.sequence, x.id))
         for pol, cf_id in zip(policies, returned):
             if pol.cf_policy_id != cf_id:
                 pol.cf_policy_id = cf_id
         if not result.get('app_id'):
             # torn down → clear stale cf ids on this route's policies
-            for pol in self.access_policy_ids:
+            for pol in _internal_policy_cf_write(self.access_policy_ids):
                 if pol.cf_policy_id:
                     pol.cf_policy_id = False
         return True
@@ -2148,7 +2153,8 @@ class SecurityAccessRoute(models.Model):
         """
         self.ensure_one()
         _internal_identity(self).access_app_id = False
-        for pol in self.access_policy_ids:
+        # #798：包 recordset（同上）。
+        for pol in _internal_policy_cf_write(self.access_policy_ids):
             if pol.cf_policy_id:
                 pol.cf_policy_id = False
         if not self.access_protection_lost:

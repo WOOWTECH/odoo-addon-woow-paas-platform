@@ -17,6 +17,8 @@ from ..services.paas_operator import (
 
 # 單向相依：`smart_home_route` 只用 model 名指回本檔，不 import 它，所以這裡
 # 直接 import 不會成環（`models/__init__.py` 也是先 smart_home 後 route）。
+# #798：policy 列上 `cf_policy_id` 的唯一寫入豁免（sentinel／opener 住在 SA 那支）。
+from .security_access import _internal_policy_cf_write
 from .smart_home_route import (
     _internal_sm_route_identity,
     _sm_forced_access_sync,
@@ -508,7 +510,8 @@ class SmartHome(models.Model):
             # `OperationalError` 時它拿不到 True。
             if Route._push_access_teardown(info, torn_down=torn_down):
                 _internal_sm_route_identity(route).access_app_id = False
-                for pol in route.access_policy_ids:
+                # #798：包 recordset 不是包 record。
+                for pol in _internal_policy_cf_write(route.access_policy_ids):
                     if pol.cf_policy_id:
                         pol.cf_policy_id = False
             else:
