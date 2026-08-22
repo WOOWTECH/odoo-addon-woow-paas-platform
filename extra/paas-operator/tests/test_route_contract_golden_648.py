@@ -31,8 +31,27 @@ GOLDEN = (Path(__file__).resolve().parents[3]
           / "src" / "tests" / "fixtures" / "route_contract_golden.json")
 
 
+#: golden 裡除了情形之外還有一個 `_contract_fingerprint`（給 repo-lint 的
+#: `route-contract-golden` 用，見 `scripts/audit/repo-lint.py`）。它不是情形，
+#: 讀情形時要排除。
+_META_KEYS = {"_contract_fingerprint"}
+
+
 def _cases():
-    return json.loads(GOLDEN.read_text(encoding="utf-8"))
+    raw = json.loads(GOLDEN.read_text(encoding="utf-8"))
+    return {k: v for k, v in raw.items() if k not in _META_KEYS}
+
+
+def test_golden_carries_a_contract_fingerprint():
+    """golden 必須帶指紋——那是 repo-lint 抓「改了序列化卻沒重產 golden」的唯一依據。
+
+    手寫的 golden 沒有指紋，那道 gate 對它零鑑別力；本條把「golden 必須是產生出來
+    的」釘成契約。
+    """
+    raw = json.loads(GOLDEN.read_text(encoding="utf-8"))
+    assert raw.get("_contract_fingerprint"), (
+        "golden 缺指紋 —— 它是手寫的還是用舊版腳本產的？"
+        "重產：python3.11 tests/generate_route_contract_golden.py")
 
 
 def test_golden_exists_and_covers_every_state():

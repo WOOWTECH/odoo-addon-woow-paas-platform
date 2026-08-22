@@ -43,6 +43,25 @@ from src.services.cloudflare import CloudflareException, RouteOutcome  # noqa: E
 REPO_ROOT = Path(__file__).resolve().parents[3]
 OUT = REPO_ROOT / "src" / "tests" / "fixtures" / "route_contract_golden.json"
 
+
+def _fingerprint():
+    """從 **repo-lint 那一支**取契約指紋，不自己再算一份。
+
+    gate（`scripts/audit/repo-lint.py` 的 `check_route_contract_golden`）與本腳本
+    若各自實作指紋，兩份實作漂開的那一刻 gate 就永遠紅或永遠綠——而那正是這類守線
+    最常見的失效方式。所以這裡直接 import 它，單一權威。
+    （檔名有連字號不能直接 import，用 importlib 從路徑載。）
+    """
+    import importlib.util
+    lint_path = REPO_ROOT / "scripts" / "audit" / "repo-lint.py"
+    spec = importlib.util.spec_from_file_location("_repo_lint", lint_path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    fp, err = mod.route_contract_fingerprint(str(REPO_ROOT))
+    if err:
+        raise SystemExit("無法計算契約指紋：%s" % err)
+    return fp
+
 _RELEASE = dict(
     name="svc-648",
     namespace="paas-ws-test-648",
@@ -151,11 +170,17 @@ def main():
             % (bad, json.dumps({k: cases[k].get("route") for k in bad},
                                indent=2, ensure_ascii=False)))
 
+    # 指紋讓 repo-lint 抓得到「改了序列化卻沒重產 golden」——那條路在 operator 側
+    # 沒有 CI runner、在 Odoo 側讀舊 golden 照樣全綠，完全無聲。
+    cases["_contract_fingerprint"] = _fingerprint()
+
     OUT.parent.mkdir(parents=True, exist_ok=True)
     OUT.write_text(json.dumps(cases, indent=2, ensure_ascii=False,
                               sort_keys=True) + "\n", encoding="utf-8")
     print("\n== 寫出 golden:", OUT)
     for k, v in sorted(cases.items()):
+        if not isinstance(v, dict):
+            continue
         print("\n---- %s ----" % k)
         print(json.dumps(v.get("route", "<no route key>"),
                          indent=2, ensure_ascii=False, sort_keys=True))

@@ -1,4 +1,5 @@
 {
+  "_contract_fingerprint": "628d2d8e13363dd3ca8fb6e3152a38489f1b3f511ec23dcf33ff563fa2b8ff7c",
   "cloudflare_disabled": {
     "app_version": "1.0.0",
     "chart": "chart",
