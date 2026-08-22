@@ -22,8 +22,13 @@ mock layer hides exactly the boundary that drifts.
 ```bash
 cd extra/paas-operator
 
-# Pick a cluster context (once per shell)
-kubectl config use-context docker-desktop   # or your woow-k3s context
+# 選叢集：把「只含這個 context」的 kubeconfig 匯出成一個暫存檔，這一輪測試就用它。
+# 要換叢集就改下面那個 docker-desktop（例如換成 woow-k3s），只有這一個旋鈕。
+# ⛔ 不用 kubectl config use-context——那會改掉你的**全域** context 並且留在那裡；
+#   跑完忘了切回去，下一個指令就打到別的叢集了（見「helm v4 陷阱」那節末尾）。
+KUBECONFIG_FOR_TESTS=/tmp/kubeconfig-integration.yaml
+kubectl config view --raw --minify --flatten --context=docker-desktop > "$KUBECONFIG_FOR_TESTS"
+chmod 600 "$KUBECONFIG_FOR_TESTS"   # 裡面有叢集憑證
 
 # First time only: install Python deps
 pip install -r requirements.txt
@@ -47,7 +52,8 @@ else
 fi
 
 # Run
-HELM_BINARY="$HELM_BINARY" pytest -m integration tests/integration/ -v
+KUBECONFIG="$KUBECONFIG_FOR_TESTS" HELM_BINARY="$HELM_BINARY" \
+    pytest -m integration tests/integration/ -v
 ```
 
 **45 支收集、其中 4 支**在沒有 KubeVirt/CDI CRD 的叢集（例如 docker-desktop）會自我
@@ -113,7 +119,8 @@ else
     "$HELM_BINARY" version --short   # 應與 Dockerfile 的 ARG HELM_VERSION 一致
 fi
 
-# Any reachable cluster
+# 用你**當前**的 context（只讀，不改動它）。這跟 quickstart 是兩種模式，不是兩套寫法：
+# quickstart 固定打某一個 context（匯出成暫存 kubeconfig），這裡是「打我現在指著的那個」。
 HELM_BINARY="$HELM_BINARY" KUBECONFIG=~/.kube/config \
     pytest -m integration tests/integration/
 
@@ -156,17 +163,11 @@ HELM_VERSION=3.13.3`）。不要為了跑測試把系統 helm 降版：
 `HELM_BINARY` 指過去），照抄那兩個區塊即可。這裡刻意**不再重複第三份指令**——同一份
 文件裡有兩套寫法，正是本節在講的那類問題。
 
-同場加映：想跑 docker-desktop 又不想動使用者當前的 kubectl context（例如
-context 停在 `woow-k3s`），可以匯出一份只含該 context 的 kubeconfig 再指過去，
-比 `kubectl config use-context` 少一個「忘了切回去」的風險：
-
-```bash
-kubectl config view --raw --minify --flatten --context=docker-desktop \
-    > /tmp/kubeconfig-dd.yaml
-# $HELM_BINARY 由上面 quickstart／Generic invocation 區塊設好
-KUBECONFIG=/tmp/kubeconfig-dd.yaml HELM_BINARY="$HELM_BINARY" \
-    pytest -m integration tests/integration/ -v
-```
+同場加映（**quickstart 區塊已經內建這個做法**，這裡只留理由）：想跑 docker-desktop 又不想
+動使用者當前的 kubectl context（例如 context 停在 `woow-k3s`），匯出一份只含該 context 的
+kubeconfig 再指過去，比 `kubectl config use-context` 少一個「忘了切回去」的風險——後者改的是
+**全域**設定，跑完會留在那裡，下一個 `kubectl` 指令就打到別的叢集。這裡刻意**不再重複一份
+指令**，理由同上一節：一份文件裡有兩套寫法，正是本節在講的問題。
 
 > 長期解（未做）：讓 `_pvc_keep_post_renderer_args()` 依 helm major 版本切換
 > 語法，或在 lifespan 啟動時斷言 helm major == 3 並 fail-loud，把「helm 4 下
