@@ -102,6 +102,23 @@ _OPERATOR_CLIENT = (
     'odoo.addons.woow_paas_platform.services.paas_operator.'
     'get_paas_operator_client'
 )
+# 🔴 `HttpCase.url_open` 的預設 `timeout=12` **對本檔不夠**，而且只在**修好之後**
+# 才不夠——這一格是實測撞出來的，不是預先想到的：
+#
+# 修好之前，例外被 controller 吞掉、端點立刻回應，12 秒綽綽有餘（RED 那輪 18 條
+# 零 error）。修好之後，「永遠衝突」那幾條會讓框架真的跑滿
+# `MAX_TRIES_ON_CONCURRENCY_FAILURE = 5` 次，而每次重試前
+# `time.sleep(random.uniform(0.0, 2 ** tryno))` ⇒ 四次等待的期望值是
+# 1 + 2 + 4 + 8 = 15 秒、最壞 2 + 4 + 8 + 16 = 30 秒，**必然**超過 12 秒。
+#
+# 症狀是 `requests.exceptions.ReadTimeout` ⇒ 測試報 **error 而不是 fail**，
+# 而「error」看起來像測試寫壞了、不像「被測行為正確但比較慢」。GREEN 第一輪
+# 5 條 error 全是這個。
+#
+# ⚠ 不要改成「縮短重試次數」或 patch 掉 `time.sleep` 來讓它變快——那會把
+# 「框架真的重試了 5 次」這個被測行為本身改掉。等它跑完才是對的。
+_RETRY_SAFE_TIMEOUT = 90
+
 _SKIP_TRIAL_GENERIC = 'An error occurred while skipping the trial period.'
 _ESTIMATE_GENERIC = 'An error occurred while estimating the skip-trial charge.'
 _OLD_PASSWORD = 'old-password-533'
@@ -122,10 +139,12 @@ def _serialization_failure():
 class _ConcurrencyRetryProbeMixin:
     """三站共用的注入 helper 與 JSON-RPC 呼叫（**斷言不共用**）。"""
 
-    def _post(self, url, params=None):
+    def _post(self, url, params=None, timeout=_RETRY_SAFE_TIMEOUT):
         """打 JSON-RPC 端點，回傳**整包** parsed body。
 
         刻意不在這裡斷言 `result` 存在——「有沒有 result 鍵」正是本檔的判別式。
+
+        ⚠ `timeout` 一定要蓋過框架重試的總時間，見 `_RETRY_SAFE_TIMEOUT` 的說明。
         """
         resp = self.url_open(
             url,
@@ -133,7 +152,8 @@ class _ConcurrencyRetryProbeMixin:
                 'jsonrpc': '2.0', 'method': 'call', 'id': 533,
                 'params': params or {},
             }),
-            headers={'Content-Type': 'application/json'})
+            headers={'Content-Type': 'application/json'},
+            timeout=timeout)
         self.env.invalidate_all()
         return resp.json()
 
