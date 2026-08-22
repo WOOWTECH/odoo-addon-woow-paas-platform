@@ -969,3 +969,104 @@ except Exception as e:
 | 10 | ~~`create_namespace` 是否有非 Odoo 的呼叫者~~ **✅ 2026-08-22 由 issue-leader 查掉（本檔作者已逐一重量行號複驗，全部相符）**：Odoo 的 `_execute_deploy`（`src/models/cloud_service.py:1265`）在呼叫 `install_release(..., create_namespace=True)`（`:1366` / `:1374`）**之前**，會先呼叫 `client.create_namespace(...)`（`:1346`）；而 operator 端 `helm.py` 的 `create_namespace()` 全程走 `kubectl apply`（冪等）、`api/namespaces.py` 只回 400/500 **不回 409** ⇒ **Odoo 這條路徑不是 live bypass**，baseline netpol 每次 deploy 都會被重新 apply（這也正是 §6 F-10 的成因）。⚠ 附帶觀察：`cloud_service.py:1352-1358` 那段 `if e.status_code != 409` 的防呆分支因此**實際走不到** | — | — | **殘留風險已縮小**為：任何直接打 `POST /api/releases` 且帶 `create_namespace=True`、又跳過 `POST /api/namespaces` 的呼叫者（operator API surface 問題，非 Odoo 路徑）。該路徑建出的 ns 會**完全沒有任何 baseline NP**（不只缺 egress），且無錯誤訊息 |
 | 11 | `charts/vibe-kanban` 這支 chart 為何存在、是否計畫上架 | 本案只盤點**已 seeded** 的 template；該 chart 在 `helm_chart_name` 內零命中（陽性對照 `mcp-server` 命中 7 次），無對應商品 | charts repo 維護者 / 商品負責人 | 低（不影響本案任何結論）。但**若它日後被上架，§2 盤點表與 §0 的 10/2/2 分群都要重跑** —— 屆時它是自家 chart 還是第三方、有沒有 `- {}`，會直接改變 A/B/C 三群的數字 |
 
+
+---
+
+## 12. R3 的 charts repo issue 草稿（**備稿，尚未開**）
+
+> issue-leader 2026-08-22 授權先備稿。**開不開、何時開，等 Eugene 對 R1/R2/R3 的裁示。**
+> 標的 repo：`woow-paas/woow-paas-charts`（本 repo 無權開工，僅提供草稿）。
+
+### 🔴 開稿前必須先修正的一個前提（leader4 2026-08-22 實查）
+
+§5.4 的 R3 欄位原本寫「chart 端已有這個開關，**改 values 即可**」。**這是錯的**，實查四支 A 群 chart：
+
+| chart | `templates/network-policy.yaml` 裡 `ipBlock` 命中 | `values.yaml` 有 `egressExcludeCidrs` | 有 `externalPorts` | 有 `internetEgress` |
+| --- | --- | --- | --- | --- |
+| `mcp-server` 0.1.5 | **0** | 否 | 否 | 否 |
+| `home-assistant` 0.2.1 | **0** | 否 | 否 | 否 |
+| `haos` 0.1.2 | **0** | 否 | 否 | 否 |
+| `home-assistant-full` 0.1.1 | **0** | 否 | 否 | 否 |
+
+這四支只有一個**二元**開關，chart 自己的註解逐字說明了另一邊是什麼：
+
+```
+{{- if .Values.networkPolicy.allowAllEgress }}
+# (2) HA → external integrations / update checks. Tighten by setting
+# networkPolicy.allowAllEgress=false (DNS-only).
+- {}
+{{- end }}
+```
+
+⇒ **`allowAllEgress=false` 的另一邊是 DNS-only，不是安全 ipBlock。** 直接翻預設會讓這四支 chart 的 app 只剩 DNS 出得去：HA 整合與更新檢查、`ha-full` 的 HACS→github.com、`mcp-server` 那 7 張的租戶自填 `connection.*` endpoint **全部斷線**。
+
+**⇒ R3 的正確描述是「移植機制」，不是「翻預設」**：新增 values 鍵、新增樣板碼、四支各 bump 版號。成本量級與原述完全不同。
+
+---
+
+### 草稿本文（可直接複製開 issue）
+
+**標題**：`[security] 四支自家 chart 的 egress 只有 allow-all/DNS-only 二元開關，移植 open-design/hermes-agent 的安全 ipBlock 形狀`
+
+**Body**：
+
+> ## 背景
+>
+> `woow_paas_platform` #514 在盤點租戶 ns egress 收斂時發現：本 repo 六支供 marketplace 使用的 chart，**egress 的成熟度分成兩級**。
+>
+> | chart | 版本 | egress 形狀 | `allowAllEgress` 預設 |
+> | --- | --- | --- | --- |
+> | `open-design` | 0.1.4 | ✅ `ipBlock 0.0.0.0/0` ＋ `except` 六段 ＋ **限 port** ＋ 獨立 apiserver allowlist | true（但走安全 ipBlock，不 emit `- {}`） |
+> | `hermes-agent` | 0.2.0 | ✅ 同上，另有 `internetEgress` 契約鍵、`dnsKubeDnsOnly` | **false** |
+> | `mcp-server` | 0.1.5 | ❌ 只有 `- {}` / DNS-only 二元開關（`templates/network-policy.yaml:63-67`） | **true**（`values.yaml:141`） |
+> | `home-assistant` | 0.2.1 | ❌ 同上（`:61-65`） | **true**（`:199`） |
+> | `haos` | 0.1.2 | ❌ 同上 | **true**（`:253`） |
+> | `home-assistant-full` | 0.1.1 | ❌ 同上（`:61-65`） | **true**（`:310`） |
+>
+> 後四支涵蓋 **10 個在售 marketplace template**（`mcp-server` ×7 ＋ `ha-paas` ＋ `haos` ＋ `ha-full`）。因為 NetworkPolicy 是 **allow-union**，這 10 個 template 的 pod **無法被任何 namespace 級的 egress 規則收斂** —— 平台端做什麼都會被 `- {}` 蓋掉，且**外觀完全正常**（不斷線、無錯誤訊號）。
+>
+> ## 要做什麼
+>
+> 把 `open-design` 0.1.4 / `hermes-agent` 0.2.0 已經寫好的形狀移植進那四支：
+>
+> - `internetEgress`（契約鍵）＋ `allowAllEgress`（向後相容別名）
+> - `egressExcludeCidrs`：cluster Pod/Service CIDR、RFC1918、cloud metadata（169.254）、CGNAT（100.64）、loopback
+> - `externalPorts`：預設 `[443, 80]`（**兩支參考實作獨立地選了同一組**）
+> - `dnsKubeDnsOnly`
+> - 保留各 chart 既有的同 ns explicit allow（見下方逐支風險）
+>
+> 移植後把 `allowAllEgress` 預設翻成 `false`、`internetEgress` 預設 `true` —— **等效於現況的外網可用性，但不再是 allow-all**。四支各 bump minor 版。
+>
+> ## ⚠ 不要只翻預設
+>
+> 這四支目前 `allowAllEgress=false` 的另一邊是 **DNS-only**（chart 註解自陳）。**先移植機制、再翻預設**，順序反了就是全線斷線。
+>
+> ## 逐支風險
+>
+> | chart | 已知風險 | 依據 |
+> | --- | --- | --- |
+> | `home-assistant-full` | **最高**。HACS 要從 github.com 下載；平台 seed 明文寫該鍵「**必須維持 true**」，且註明「DNS-only egress 會讓它變成裝不了東西的整合，**且沒有清楚錯誤**」 | 平台 `src/data/cloud_app_templates.xml` seed 註解 |
+> | `haos` | **最低**。它已經把 `xff-proxy → VM:8123` 那條**明文寫成獨立規則**而不是靠 allow-all 兜，chart 註解逐字預言了這次改動：「the moment somebody tightens egress it becomes the only thing keeping the tenant reachable — and *tighten egress* is exactly the change nobody re-tests the UI after」 | `charts/haos/templates/network-policy.yaml:97-110` |
+> | `mcp-server` | **需逐 template 評估**：7 張 template 的出向是**租戶在 pod admin GUI 自填**的 `connection.*`（mcp-k8s 連外部叢集 apiserver、mcp-vk 連外部後端、mcp-opendesign 連同 ns daemon）。平台不持有這些值 ⇒ port 白名單能不能只給 `[443, 80]` 需要確認 | 平台 seed；#514 §2 盤點表 |
+> | `home-assistant` | 平台端對它的出向需求**完全空白**（seed 無任何 networkPolicy 線索），改動前需自行確認 | #514 §2「最大空白」那一列 |
+>
+> ## 驗收
+>
+> - render 後四支都**不再 emit 裸 `- {}`**（grep 判準：`- {}` 命中數為 0）
+> - 既有 e2e／smoke 仍綠；`haos` 的 W1 A/B 對照（移除 → TCP/443 被擋；還原 → 連通）重跑一次
+> - **陽性對照**：把 `internetEgress` 設 false，確認外網確實被擋（只驗「還能通」與探針壞掉的輸出一樣）
+>
+> ## 不在本 issue 範圍
+>
+> - 平台側的 ns 級 baseline egress（`woow_paas_platform` #514 的 R1）——**與本 issue 正交，可並行**
+> - 四支第三方 chart（bitnami `postgresql`/`redis`/`odoo`、8gears `n8n`）——不在本 repo
+>
+> Refs `odoo-addons/woow_paas_platform#514`
+
+---
+
+### 開稿前還缺的東西
+
+1. **Eugene 對 R1/R2/R3 的裁示**（本草稿假設 R3 要做）。
+2. `mcp-server` 那 7 張 template 的 port 需求 —— 若租戶自填的 endpoint 會用非 `[443, 80]` 的 port，白名單要放寬或改成 per-release 覆寫。**本檔未查證**。
+3. 上表所有行號取自 charts clone 的**工作目錄**（`4fc45ab7`，2026-08-07 快照），僅 `hermes-agent` 0.2.0 取自 `origin/main`。**開 issue 前應以當時的 `origin/main` 重量一次**。
