@@ -226,10 +226,15 @@ class TestSaRouteAccessResync(TransactionCase, _ResyncMixin):
         ⇒ 它們永遠佔住最小的 id。`search(domain, limit=3)` 這種形狀在這裡只會
         一直撈到同一批 blocker。
         """
+        # 🔴 建立順序就是本測試的全部：blocker 必須佔住**較小**的 id，待推那筆
+        # 排在它們後面。setUp 建的那筆 id 最小，留著旗標會讓它先被推掉、
+        # 於是「有沒有被堵死」根本沒被問到 ⇒ 先把它移出 domain。
+        self.route.access_protection_lost = False
         dead_sa = self._sa('suspended')
         blockers = [self._route(dead_sa, lost=True) for _ in range(5)]
+        target = self._route(self.sa, lost=True)
         self.assertTrue(
-            all(b.id < self.route.id for b in blockers),
+            all(b.id < target.id for b in blockers),
             '前提：blocker 必須排在待推那筆的前面，否則證不到堵死')
 
         self._run_cron(scan_batch=3)
@@ -237,7 +242,7 @@ class TestSaRouteAccessResync(TransactionCase, _ResyncMixin):
         self.assertTrue(
             self.client.sync_access_app.called,
             '前面卡著 5 筆推不動的列，可推的那筆仍必須在同一輪被送出')
-        self.assertFalse(self._lost(self.route))
+        self.assertFalse(self._lost(target))
         for b in blockers:
             self.assertTrue(
                 self._lost(b),
@@ -313,14 +318,19 @@ class TestShRouteAccessResync(TransactionCase, _ResyncMixin):
             '陽性對照：旗標打開時必須真的打到 operator')
 
     def test_B5_blocked_rows_cannot_starve_the_queue(self):
+        # 建立順序見 A5 的註解：blocker 要佔住較小的 id。
+        self.route.access_protection_lost = False
         blockers = [self._sh_with_route('suspended', lost=True)[1]
                     for _ in range(5)]
-        self.assertTrue(all(b.id < self.route.id for b in blockers))
+        target = self._sh_with_route('active', lost=True)[1]
+        self.assertTrue(
+            all(b.id < target.id for b in blockers),
+            '前提：blocker 必須排在待推那筆的前面，否則證不到堵死')
 
         self._run_cron(scan_batch=3)
 
         self.assertTrue(self.client.sync_access_app.called)
-        self.assertFalse(self._lost(self.route))
+        self.assertFalse(self._lost(target))
         for b in blockers:
             self.assertTrue(self._lost(b))
 
@@ -401,14 +411,19 @@ class TestCsAccessResync(TransactionCase, _ResyncMixin):
 
     def test_C5_blocked_rows_cannot_starve_the_queue(self):
         """CS 的 blocker ＝ 沒有 subdomain 的旗標列（gate 永久擋住）。"""
+        # 建立順序見 A5 的註解：blocker 要佔住較小的 id。
+        self.svc.access_protection_lost = False
         blockers = [self._service(with_subdomain=False, lost=True)
                     for _ in range(5)]
-        self.assertTrue(all(b.id < self.svc.id for b in blockers))
+        target = self._service(with_subdomain=True, lost=True)
+        self.assertTrue(
+            all(b.id < target.id for b in blockers),
+            '前提：blocker 必須排在待推那筆的前面，否則證不到堵死')
 
         self._run_cron(scan_batch=3)
 
         self.assertTrue(self.client.sync_access_app.called)
-        self.assertFalse(self._lost(self.svc))
+        self.assertFalse(self._lost(target))
         for b in blockers:
             self.assertTrue(self._lost(b))
 
