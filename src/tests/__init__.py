@@ -571,3 +571,55 @@ from . import test_sh_teardown_capture_semantics_785
 # 對照組：A2（列乾淨仍須收斂，擋住「補了就一律擋刪」）、A3／A4（#813 成敗語意表
 # 不得被改）。主測試必須 patch helper：真實路徑造不出「回報乾淨但列還髒」。
 from . import test_sh_do_cleanup_lingering_access_815
+
+# fix: #805 (b) 只掛 base.group_user 的租戶經 `/woow` 打 SA provision 從來沒有
+# 成功過——`tunnel_token` 帶 `groups='base.group_system'`，而 controller 的
+# `action == "provision"` 分支用的是非 sudo 的租戶 recordset ⇒ 那次 write 必
+# AccessError、記錄卡在 `state='provisioning'`（重試鈕只認 pending/error ⇒ 鈕
+# 消失、無 cron 收斂）。與 #739／PR #797 在 smart_home 上裁定的同一個形狀。
+# 既有 SA 測試除一條外全在 TransactionCase（su env，欄位級 `groups=` 不生效），
+# 唯一有鑑別力的那條走 `with_user` 直呼 model、不經 controller ⇒ 端點那一格天生
+# 沒有覆蓋。RED 群集：A1／A2／A3／A4（真租戶 HTTP 打 provision，紅在 tunnel_token
+# 的 write 上）。B 系列釘「改用平台身分之後原本由租戶身分擋著的檢查一條都沒少」
+# （三道 gate 全在 sudo 之外——[[two-layer-acl-lockstep]] 要求的 manual access
+# check 位置）；C1 釘修法的範圍限定（call_kw 繞過 BFF 仍 fail-closed），D1 釘
+# 「遮罩只擋得住第一次 provision」（re-sync 分支不寫 token）。
+from . import test_sa_provision_tenant_rpc_805
+
+# #546 A 段：測試收集完備性 gate，以 Odoo 測試本身為載體（runtime introspection）。
+# 與 repo-lint 的 `test-collectability`（純 AST、PR-time）是同一條性質的**兩條觀測通道**：
+# 這一支是 ground truth，那一支是早期預警鏡像；分歧時去查、不選一邊。
+# ⛔ 刻意不共用 repo-lint 的實作——它把版面寫死成「root 底下才有 src/」，容器裡沒有那一層
+# ⇒ 搬過去會是一個永遠綠的 gate（實證與 issue #828 見該檔 docstring）。
+from . import test_suite_collectability
+
+# fix: #648 (b) CloudService 翻 `running` 早於 Public URL 的 DNS 落地——租戶看到綠燈
+# 卻拿 `ERR_NAME_NOT_RESOLVED`。`_is_release_ready` 全文無 DNS 判定，helm deployed ＋
+# pods ready 一滿足就寫 running。閘加在 `_is_release_ready`（#423 W5a 的單一事實源），
+# 不加在寫 running 的 6 個分支上——那會再造一次 #627 的形狀，且會讓 needs_init 的服務
+# 停在 `initializing` 反覆重跑 init 去撞 `init_retries` 上界。
+# 🔴 窗口綁 `_transition_anchor()`：#489 的 age timeout 從 `deployed_at`（helm install
+# 一回來就寫）起算，閘若自己另計時，「慢部署 ＋ DNS 未落地」會把 age 推過門檻寫成
+# error，而 error 沒有任何 poll 分支救得回來。
+# RED：判定層（窗口內 missing 不得就緒、FQDN 結尾點）、兩層 poll 各一（只改一層會被
+# 前台每 5 秒那條覆寫回去）、窗口過期放行並留旗標、旗標清得掉。
+# 🔴 不變式：`test_gate_can_never_cause_age_timeout` ＋ clamp 兩條合起來證明閘擋住時
+# age 必定小於 timeout。對照組：DNS 解析得到／無 subdomain／resolver unknown／kill
+# switch 四條釘住「不得修過頭」。
+# 另有一條補 repo-lint 盲區：`check_config_parameter_uninstall` 只掃 `config_parameter=`
+# 字面 kwarg，本題兩個 key 走模組常數 ＋ get_param（同 #489 先例）⇒ 忘了登記進
+# hooks.py 不會紅，用測試補上。
+from . import test_public_url_dns_gate_648
+
+# fix: #648 (a) operator 用**具名欄位**回報 expose 失敗（`route.status` /
+# `route.dns_failed`），平台 `_execute_deploy` 一次都沒讀過 ⇒ DNS record 建不成時
+# 租戶拿到永遠不會解析的 hostname 而服務照樣往 running 走。#484 為 SmartHome 補過
+# 同一條縫，CS 這半漏接。
+# 🔴 本檔最重要的是 A5 不是 A1：判準必須是「明說的失敗」而不是「東西不在」。
+# operator 的 `cloudflare_enabled` **預設 false**，且舊 operator 沒有這兩個欄位 ⇒
+# 「沒回 route 就當失敗」會讓沒開 CF 的環境**每次部署都翻 error**，比原 bug 嚴重。
+# RED：A1（dns_failed 不得留在 deploying）、A2（訊息指名 hostname ＋ 給出路）、
+# A3（status=failed 亦然）、A6（判 error 也不得丟掉帳本）。
+# 守門對照組：A5（缺席不得 fail-closed）、A4（舊 operator 缺鍵不得算失敗）、
+# 健康 route 不觸發閘——這三條紅了代表守線被改成用缺席當判準。
+from . import test_route_dns_failed_648

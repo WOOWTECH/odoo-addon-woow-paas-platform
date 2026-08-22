@@ -3086,6 +3086,12 @@ class PaasController(HiddenChainMixin, Controller):
                     self._update_service_status(svc)
                 except Exception as e:
                     _logger.warning("Failed to update status for service %s: %s", svc.name, e)
+            else:
+                # #648 (b)：見 `_get_service` 的同一段註解。走 `else` 是因為
+                # 轉移中的服務這一輪已經由 `_update_service_status` 探過 DNS 了，
+                # 再探一次是白花的阻塞。helper 自己會擋掉沒帶旗標的服務，所以
+                # 這個迴圈的成本仍然綁在「出問題的那幾台」上。
+                svc._refresh_public_url_dns_flag()
 
         # Re-read after status updates
         services = CloudService.search([
@@ -3467,6 +3473,13 @@ class PaasController(HiddenChainMixin, Controller):
         # Check if we need to poll operator for status
         if service.state in ['deploying', 'upgrading', 'initializing']:
             self._update_service_status(service)
+
+        # #648 (b)：`running` **不在任何 poll 的 domain 裡**（上面那個條件、cron 的
+        # domain、前端兩個 poller 的 pendingStates 都不含它）⇒ 放行時寫下的
+        # 「Public URL 未驗證」旗標沒有任何東西會回來清掉，會變成永久噪音。
+        # 清除掛在租戶自己查看服務的這條路上；helper 只對「旗標已經是 True 的
+        # running 服務」動作，清掉之後就不再探（自我了結），而且 fail-soft。
+        service._refresh_public_url_dns_flag()
 
         return {
             'success': True,
@@ -3923,7 +3936,16 @@ class PaasController(HiddenChainMixin, Controller):
             # `CloudService._poll_and_update_status` 是另一份 —— 那一份只寫了
             # `helm_revision`，於是「四個分支不會各漏」這件事在**本函式內**成立，
             # 跨到另一份實作就整份漏掉。**不要把欄位寫回這裡。**
-            release_facts = service._release_facts(release)
+            # #648 (b)：DNS 現況**一輪只探一次**，同時餵給就緒判定與 `_release_facts`
+            # （旗標也走那個咽喉，理由與其他 release 欄位一樣——逐 write 分支各列一次
+            # 正是 #627 的成因）。只在 release 已 `deployed` 時才探：還沒 deploy 的服務
+            # 探了也不會影響任何判定，而每次探測在 resolver 不可用時都是一段阻塞，
+            # 而平台 Odoo 是 `workers = 0` ＋ `max_cron_threads = 1`、cron 逐台序列跑。
+            dns_state = (
+                service._public_url_dns_state() if release_status == 'deployed' else None
+            )
+
+            release_facts = service._release_facts(release, dns_state=dns_state)
 
             # Determine new state based on release status.
             #
@@ -3944,7 +3966,7 @@ class PaasController(HiddenChainMixin, Controller):
             stuck_detail = None
 
             if release_status == 'deployed':
-                all_ready, detail = service._is_release_ready(status)
+                all_ready, detail = service._is_release_ready(status, dns_state=dns_state)
                 if not all_ready:
                     service._log_not_ready(detail)
                     stuck_detail = detail
@@ -4291,6 +4313,17 @@ class PaasController(HiddenChainMixin, Controller):
             # #423 W5a：VM 首次開通的磁碟 import 進度（容器型恆為空）。
             # 純顯示用，不參與狀態機。
             'import_progress': service.import_progress or '',
+            # #648 (b)：服務已就緒、但寬限期內都沒能解析到 Public URL 的 DNS
+            # record，是**帶著保留**放行的。前端據此在 Public URL 旁掛一句軟提示。
+            #
+            # ⚠ 放在 base dict 而**不是** `include_details` 區塊：列表頁走的是不帶
+            # details 的那條路（`_list_services`），放錯地方的話 ServiceCard 永遠拿
+            # 不到這個值——而使用者最先看到服務狀態的地方就是列表卡片。
+            #
+            # ⚠ 刻意**不**併進 `error_message`：那個通道在前端是紅色故障 banner，
+            # 而且 ServiceDetailPage 的 `t-if="service.error_message"` 不判 state
+            # ⇒ 一台健康的服務會冒出紅底錯誤。
+            'public_url_dns_unverified': service.public_url_dns_unverified,
             'has_project': bool(service.project_ids),
             # #530：前端「Reset 會一併換發 Gateway API Key」那句文案的唯一資料入口
             # （ServiceDetailPage 的 hasGateway getter）。值＝**交付判準本體**

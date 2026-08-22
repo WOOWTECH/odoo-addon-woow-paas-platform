@@ -130,6 +130,28 @@ class Settings(BaseSettings):
     # the hole.
     allow_unset_paas_env: bool = Field(default=False)  # env ALLOW_UNSET_PAAS_ENV (dev only)
 
+    # Tunnel ownership claim (#531) — rollout stage switch for the MISSING-claim
+    # case only. A claim that is present but does NOT match the tunnel's real
+    # Cloudflare name is ALWAYS rejected, on every endpoint, regardless of this
+    # flag; there is no stage in which a mismatch is tolerated.
+    #
+    # False (stage 1, current default) = a request with no claim is allowed
+    # through with a WARNING. True (stage 2) = it is rejected.
+    #
+    # 為什麼預設是 False：operator 與平台 addon 是**兩條獨立發版線**，而送 claim 的
+    # 那一半住在平台側。operator 先上時，尚未升版的平台一個 claim 都不會送 ——
+    # 預設 True 等於在 operator rollout 的當下一次打爆三個端點（route sync 斷、
+    # suspend/resume 斷、teardown 斷 ⇒ tunnel 拆不掉還在計費）。
+    #
+    # 翻旗的前提（缺一不可，見 PR #531 的 rollout 段）：
+    #   1. 送 claim 的平台版本已部署到該環境，且
+    #   2. 該環境的 operator log 已不再出現 tunnel_ownership_claim_missing。
+    # 條件 2 正是 stage 1 那句 warning 存在的唯一理由 —— 無聲放行就沒有任何訊號
+    # 判斷「可以翻了沒」。
+    tunnel_ownership_require_claim: bool = Field(
+        default=False
+    )  # env TUNNEL_OWNERSHIP_REQUIRE_CLAIM
+
     @field_validator("paas_env")
     @classmethod
     def _validate_paas_env(cls, v: str) -> str:

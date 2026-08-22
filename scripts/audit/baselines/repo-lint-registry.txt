@@ -27,6 +27,7 @@
 1	fn:check_reset_budget_ladder
 1	fn:check_retired_rule_xmlid
 1	fn:check_reuse_values
+1	fn:check_route_contract_golden
 1	fn:check_security_rule_noupdate
 1	fn:check_seed_topology
 1	fn:check_sh_subscription_group_isolation
@@ -60,6 +61,7 @@
 1	rule:repo-lint-docstring-registry
 1	rule:reset-budget-ladder
 1	rule:reuse-values
+1	rule:route-contract-golden
 1	rule:security-rule-lifecycle
 1	rule:seed-topology
 1	rule:sh-subscription-group-isolation

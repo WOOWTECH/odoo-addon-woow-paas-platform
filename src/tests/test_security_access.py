@@ -689,7 +689,8 @@ class TestSecurityAccessLifecycleHooks(TransactionCase):
         sa = self._make_active_sa_with_routes(mock_client)
         with patch(MOCK_GET_CLIENT, return_value=mock_client):
             sa._do_cleanup()
-        mock_client.delete_tunnel.assert_called_once_with('tun-lc')
+        mock_client.delete_tunnel.assert_called_once_with(
+            'tun-lc', tunnel_name=False)
         self.assertEqual(sa.state, 'deleting')
         self.assertFalse(sa.tunnel_id)
 
@@ -741,7 +742,8 @@ class TestSecurityAccessLifecycleHooks(TransactionCase):
             # （`src/models` ＋ `src/controllers` 全域零讀取），留著只會讓
             # 「這個 key 還有作用」的搜尋結果變成假陽性。
             sa.unlink()
-        mock_client.delete_tunnel.assert_called_once_with('tun-lc')
+        mock_client.delete_tunnel.assert_called_once_with(
+            'tun-lc', tunnel_name=False)
 
 
 class TestSecurityAccessAcl(TransactionCase):
@@ -927,19 +929,27 @@ class TestSecurityAccessAcl(TransactionCase):
         self.assertEqual(self.sa.sudo().tunnel_token, 'tok-acl-secret')
 
     def test_provision_token_write_fails_closed_for_non_system_owner(self):
-        """field-group 語意鎖：非 system 的 workspace owner 觸發 provision，
-        tunnel_token（groups='base.group_system'）寫入應 fail-closed（AccessError），
-        而非被某人改 sudo 後悄悄放行。
+        """field-group 語意鎖（**model 層**）：以非 system 身分驅動
+        `action_provision`，tunnel_token（groups='base.group_system'）的寫入應
+        fail-closed（AccessError）。
 
-        ⚠ 這條**不再**與 smart_home 對稱：#739／PR #797 之後 smart_home 的
-        provision 改由平台身分驅動（controllers/smart_home.py 的
-        `smarthome.sudo().action_provision()`），而 security_access 這一側今天
-        仍在呼叫者身分下執行（controllers/security_access.py 的
-        `sa.action_provision()`，無 `.sudo()`）⇒ 兩者的 provision 身分語意已分歧，
-        別把任一側的結論搬到另一側。
+        🔴 **這條鎖的範圍在 #805 (b) 之後要講精確**：斷言與方法名都沒有變，
+        因為 model 層的行為沒有變——`action_provision` **本身不 sudo**，身分由
+        呼叫者決定。變的是「誰在呼叫」：#805 (b) 之後租戶的 BFF 端點改由平台
+        身分驅動（controllers/security_access.py 的 `action == "provision"`
+        分支現在是 `sa.sudo().action_provision()`），所以**這條測試描述的不再是
+        那個端點的行為**。
 
-        本測試鎖的是 security_access **當下**的行為；它該不該跟進
-        smart_home 改成 sudo，是 #805 (b) 待裁，這裡不預設答案。"""
+        那它鎖的是誰？`action_provision` 是 public method（無底線前綴、無
+        `@api.private`），Odoo 原生的 `/web/dataset/call_kw` 到得了它，而那條路
+        不經過 controller ⇒ 本條的 `with_user` 形狀在真實世界有對得上的路徑，
+        `tests/test_sa_provision_tenant_rpc_805.py` 的 C1 用真 HTTP 驅動它。
+        端點層（租戶經 `/woow` 打 provision 必須成功、且三道閘一條都沒少）的
+        覆蓋整組在那一檔，不在這裡。
+
+        smart_home 那一側也在 controller 層以平台身分驅動（#739／PR #797），
+        兩側在「誰驅動 provision」這一點上對齊；但各自的範圍限定不同，
+        別把任一側的結論整包搬到另一側。"""
         from odoo.exceptions import AccessError
         mock_client = MagicMock()
         mock_client.create_tunnel.return_value = {

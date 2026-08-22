@@ -588,10 +588,12 @@ class TestSmartHomeTunnelAnchor524(_SmartHome524Fixture):
             home.sudo().action_provision()
             home.invalidate_recordset()
             provisioned_uuid = home.tunnel_id
+            provisioned_name = home.tunnel_name
             self.assertTrue(provisioned_uuid, '前提：provision 有把 tunnel 存下來')
 
             home.sudo().action_delete()
-        client.delete_tunnel.assert_called_once_with(provisioned_uuid)
+        client.delete_tunnel.assert_called_once_with(
+            provisioned_uuid, tunnel_name=provisioned_name)
         self.assertFalse(self.SmartHome.sudo().browse(home.id).exists(),
                          '記錄必須真的被刪掉'
                          '（還在＝`_cleanup_tunnel` 沒能清掉錨點、unlink fail-loud）')

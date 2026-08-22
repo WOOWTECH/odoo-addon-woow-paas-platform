@@ -1,7 +1,7 @@
 """Pydantic schemas for API requests and responses."""
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional, Union
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -240,6 +240,17 @@ class TunnelConfigUpdateRequest(BaseModel):
         ...,
         description="Target service URL or 'http_status:NNN' (503 = suspended)",
     )
+    #: #531 ownership claim —— 與 ``TunnelRoutesSyncRequest.tunnel_name`` 同名同義。
+    #: ⚠ 這條 wire 由 repo-lint 的 ``tunnel-config-wire-shape``（#769）跨層對帳，
+    #: 加/改欄位要同步動 ``TUNNEL_CONFIG_FIELDS`` **以及該 gate 的自檢合成輸入**
+    #: （自檢會逐欄位跑，漏改會讓 gate 自陳「分類器壞掉」而不是漏判）。
+    tunnel_name: Optional[str] = Field(
+        None,
+        description=(
+            "Ownership claim: the caller's own record of this tunnel's Cloudflare "
+            "name. Verified against the live tunnel — see _assert_tunnel_ownership."
+        ),
+    )
 
 
 # Response Models
@@ -300,12 +311,70 @@ class ReleaseRevision(BaseModel):
     description: str
 
 
-class RouteInfo(BaseModel):
-    """Information about a Cloudflare Tunnel route."""
+class RouteStatus(str, Enum):
+    """How the expose request for a release turned out (#648 (a))."""
 
-    hostname: str = Field(..., description="Public hostname (e.g., myapp.example.com)")
-    service_url: str = Field(..., description="Internal service URL")
+    OK = "ok"
+    FAILED = "failed"
+
+
+class RouteInfo(BaseModel):
+    """Information about a Cloudflare Tunnel route.
+
+    ⚠ **``ReleaseInfo.route`` being ``None`` is NOT a failure signal.** It means the
+    release did not ask to be exposed, OR the Cloudflare integration is switched off
+    in this deployment (``CLOUDFLARE_ENABLED`` defaults to **false**, and it is also
+    forced off when any of account id / tunnel id / api token / domain is missing).
+    A caller that treats a missing ``route`` as "expose failed" turns **every**
+    deployment on a Cloudflare-less operator into an error — see
+    ``docs/tracking/pitfalls/operator-route-none-conflates-disabled-and-failed.md``
+    in the platform repo.
+
+    When expose *was* attempted, this object is always returned — with ``status``
+    saying whether it worked. That is the signal callers must branch on.
+    """
+
+    hostname: Optional[str] = Field(
+        None,
+        description=(
+            "Public hostname (e.g., myapp.example.com). Always set when status is "
+            "'ok'. May be None on a 'failed' route when the failure happened before "
+            "the subdomain was resolved — None means **not determined**, which is "
+            "deliberately distinct from an empty string (a value someone chose)."
+        ),
+    )
+    service_url: Optional[str] = Field(
+        None,
+        description=(
+            "Internal service URL. Always set when status is 'ok'. May be None on a "
+            "'failed' route: the two failure paths that fire before service "
+            "discovery completes (no services found / no usable port) genuinely do "
+            "not have one. Same rule as hostname — None is 'not determined', not ''."
+        ),
+    )
     enabled: bool = Field(default=True, description="Whether the route is active")
+    status: RouteStatus = Field(
+        default=RouteStatus.OK,
+        description=(
+            "'ok' when the tunnel ingress route was configured; 'failed' when expose "
+            "was requested but no route could be created (Cloudflare API error, no "
+            "service found to expose, or no usable port). Absent/'ok' from an older "
+            "operator that predates this field means 'ok' — callers MUST NOT read a "
+            "missing field as a failure."
+        ),
+    )
+    dns_failed: bool = Field(
+        default=False,
+        description=(
+            "True when DNS record creation was attempted and failed, so the hostname "
+            "will not resolve even though the tunnel ingress rule exists. Mirrors "
+            "TunnelCreateResponse.dns_failed: the caller MUST NOT treat the route as "
+            "reachable while this is set. Always False when DNS management is "
+            "intentionally disabled (CLOUDFLARE_ZONE_ID unset) — 'disabled' is not "
+            "'failed', and conflating them makes every deployment on such a "
+            "deployment look broken."
+        ),
+    )
 
 
 class ReleaseInfo(BaseModel):
@@ -594,9 +663,20 @@ class OdooModuleStatesResponse(BaseModel):
 
 
 class ErrorResponse(BaseModel):
-    """Error response."""
+    """Error response.
 
-    detail: str
+    ``detail`` 放寬成 ``str | dict``（#531）。**每一個** ``HTTPException`` 都經
+    ``src.main.http_exception_handler`` 灌進這個 model，而原本的 ``detail: str``
+    會讓任何結構化 detail 在**回應序列化階段**炸成 500 —— 症狀是端點看起來壞掉，
+    實際上是這裡的型別把它擋下來的。FastAPI 自己的 ``HTTPException.detail`` 型別
+    本來就是 ``Any``，這裡只是不再比它窄。
+    ``str`` 排在前面：既有的字串 detail 維持原樣序列化，不會被 coerce 成別的形狀。
+
+    呼叫端相容性：平台 client 的 ``_parse_error``（``src/services/paas_operator.py``）
+    是 ``error_data.get('detail', ...)`` 後直接丟進 f-string，拿到 dict 不會炸。
+    """
+
+    detail: Union[str, Dict[str, Any]]
     error_type: Optional[str] = None
 
 
@@ -690,6 +770,16 @@ class TunnelRoutesSyncRequest(BaseModel):
     routes: List[TunnelRouteSpec] = Field(..., min_length=0)
     comment: Optional[str] = Field(
         None, description="Canonical name stamped on DNS records for traceability"
+    )
+    #: #531 ownership claim. 刻意**不重用** ``comment``：後者是 DNS record 上的
+    #: traceability stamp（在本 repo 是只寫不讀的自由文字），把它變成授權判準等於
+    #: 讓「改 stamp 格式」順帶改掉安全姿態。兩個用途分兩個欄位。
+    tunnel_name: Optional[str] = Field(
+        None,
+        description=(
+            "Ownership claim: the caller's own record of this tunnel's Cloudflare "
+            "name. Verified against the live tunnel — see _assert_tunnel_ownership."
+        ),
     )
 
 
