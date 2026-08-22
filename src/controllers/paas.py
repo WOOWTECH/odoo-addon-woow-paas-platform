@@ -1255,6 +1255,17 @@ class PaasController(HiddenChainMixin, Controller):
         try:
             estimate = service._skip_trial_estimate()
 
+        except OperationalError:
+            # #533：本站也是**枚舉補到的**（issue 未點名）。這支 side-effect-free
+            # （`_skip_trial_estimate` 只讀不寫，所以上面刻意沒有 savepoint），
+            # **沒有殘留面**——但「並發類例外被裸 `except Exception` 吞掉 ⇒
+            # `retrying()` 看不到」這個結構缺口與另外兩站完全相同。
+            #
+            # 只讀不寫一樣撞得到 40001：Odoo 的 cursor 是 REPEATABLE READ，讀取在
+            # 同一交易裡與別人的寫入衝突時照樣會拿到序列化失敗，而那正是重試一次
+            # 就會成功的情況。吞掉它 ⇒ 租戶在下單前看到「估算失敗」，然後手動重按。
+            raise
+
         except (AccessDenied, AccessError, MissingError) as e:
             # `UserError` 在 Odoo 18 有**四個**子類（`odoo/exceptions.py`）：
             # `AccessDenied`(:45)、`AccessError`(:64)、`MissingError`(:85)、
@@ -1340,6 +1351,43 @@ class PaasController(HiddenChainMixin, Controller):
         try:
             with request.env.cr.savepoint():
                 invoice_info = service._skip_trial()
+
+        except OperationalError:
+            # #533：並發類 DB 例外（`SerializationFailure` 40001 等）**必須**傳出去。
+            # 它是 `Exception` 子類，被下面任何一個 except 收掉的話 Odoo 的
+            # `retrying()`（`odoo/service/model.py`）永遠看不到——那一層在本 except
+            # 鏈的**外層**，收到 `OperationalError` 才會做 `env.cr.rollback()`
+            # （connection-level 的整條 ROLLBACK，不是 ROLLBACK TO SAVEPOINT）
+            # → `env.reset()` → 重播整個 handler，下一輪才依 REPEATABLE READ 拿到
+            # **新 snapshot**。吞掉它 ⇒ 一個本來重試就會成功的操作變成使用者看到
+            # 的失敗，而 skip-trial 路徑上的衝突點（`loyalty.card` 點數扣除的並發
+            # UPDATE、`account.move` 取號）正是最典型的寫寫衝突形態。
+            #
+            # 必須排在 #520／#525 那三段之前：`SerializationFailure` 不是
+            # `UserError` 子類，但會被最後的 `except Exception` 吃掉。
+            #
+            # 上面那層 `cr.savepoint()`（#525 A1）**刻意保留、也不衝突**：它管的是
+            # 「失敗時不留金流殘留」，本分支管的是「例外要讓框架看見」。新 snapshot
+            # 由 `retrying()` 的整交易 rollback 提供，不是由 savepoint 提供
+            # ——`ROLLBACK TO SAVEPOINT` 不換 transaction、不換 snapshot。
+            #
+            # 取捨（沿用 `_create_service` 同款分支的第 1 點，刻意接受）：攔截面比
+            # 「會被重試的那三種」寬。`retrying()` 只重試
+            # `PG_CONCURRENCY_EXCEPTIONS_TO_RETRY`（LockNotAvailable /
+            # SerializationFailure / DeadlockDetected），其餘 `OperationalError`
+            # 原樣拋出 ⇒ 前端拿到框架的錯誤而不是 `{'success': False}`。這是刻意
+            # 的：連線斷、磁碟滿、statement timeout 本來就不該被包裝成「業務失敗」
+            # 回 HTTP 200——那正是 #516／#520／#525 整個家族的根因形態。收窄成只認
+            # 那三個 pgcode 等於把框架的白名單複製一份到這裡，框架改了我們不會知道。
+            #
+            # 與 `_create_service` **不同**的一點：那裡的第 2 點取捨是「重播會重送
+            # `send_mail(force_send=True)`」。本路徑沒有這個問題——`_skip_trial` 鏈
+            # （`subscription_lifecycle_mixin` → `account_move._pay_from_wallet`）
+            # 全部是 DB 操作，本 repo 對 `account.move` 沒有 `action_post`／`_post`
+            # override，鏈上兩處 `send_mail` 都在別的函式且 `force_send=False`
+            # （進 mail queue，隨交易回捲）。⚠ 相依 addon（ecpay 系列）是否掛在
+            # `action_post` 上送外部電子發票 API，本 PR 未查證。
+            raise
 
         except AccessError as e:
             # AccessError 繼承 UserError，但訊息帶 Odoo 內部 model／欄位技術名，
@@ -1591,6 +1639,24 @@ class PaasController(HiddenChainMixin, Controller):
             # （sudo 會連這層一起關掉，等於把 workspace 邊界交給本 handler 獨力承擔）。
             new_password = service._reset_admin_password()
 
+        except OperationalError:
+            # #533：本站是**枚舉補到的**（issue 未點名），而且它比 issue 本體更
+            # 值得記——**model 層已經做對了，被這裡抵消。**
+            #
+            # `CloudService._reset_admin_password` 內有**兩處**
+            # `except OperationalError: raise`（憑證落庫那段、記帳那段），註解逐字
+            # 寫著「#518：並發／連線類 DB 例外（SerializationFailure 40001 等）必須
+            # 傳出去讓 Odoo 的 `retrying()` 看見；此刻交易已 aborted，吞掉只會讓
+            # 後續 flush 再炸」。那兩處刻意的 raise 一路傳到這裡，卻被下面的裸
+            # `except Exception` 收掉 ⇒ **它們今天等於沒有作用**，傳播鏈斷在
+            # controller 這一層。補上本分支，那兩處才真的通到框架。
+            #
+            # 重播的語意：`retrying()` 會重跑整個 handler ⇒ 再 reset 一次（另鑄一把
+            # 新密碼重新下發）。model 端 :1222-1223 的註解已經替這個行為背書過
+            # （「重播整個 handler 會重跑一次 reset……結果仍然是一致的」）——叢集與
+            # DB 最後都是最後那一輪的密碼，租戶拿到的也是那一把。
+            raise
+
         except (AccessDenied, AccessError, MissingError) as e:
             # #553 的同一個外洩面：`UserError` 的四個子類裡，只有 `ValidationError`
             # 是「講給租戶聽」的業務規則，其餘三個帶的是 ORM 內部識別字（model
@@ -1636,6 +1702,19 @@ class PaasController(HiddenChainMixin, Controller):
         try:
             gateway = self._gateway_credentials(service)
         except Exception:
+            # 🔴 #533 **刻意不在這一段補 `except OperationalError: raise`**（上面那個
+            # try 補了，這裡沒有——這個不一致是有意的，不是漏的）。
+            #
+            # 判準是「走到這裡時，密碼已經生效」這個前提，它比「讓 `retrying()`
+            # 看到並發例外」優先：本段任何例外若逸出，框架會**回捲整筆交易** ⇒ DB
+            # 退回舊密碼、叢集卻已是新的 ⇒ 憑證權威來源分岔，管理員登不進 admin
+            # GUI，之後任何一次 redeploy 還會拿 DB 舊值去覆寫叢集。`retrying()` 會
+            # 先重播 5 次，但第 5 次仍失敗時它照樣把原例外拋出去，那個結局就成立。
+            # 拿「少交付一把 gateway key（可再 Reset 取得）」去換「不可回復的憑證
+            # 分岔」，方向是反的。
+            #
+            # 而且本段是純讀取的附加品（`_gateway_credentials` 只讀 secret 與
+            # template），它撞上 40001 的機率與代價都遠低於上面的主鏈。
             _logger.exception(
                 "[#530] gateway credential lookup failed for service %s after a "
                 "successful password reset — delivering the admin password only",
