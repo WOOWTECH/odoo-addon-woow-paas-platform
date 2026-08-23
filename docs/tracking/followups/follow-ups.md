@@ -44,6 +44,7 @@
 | #461 reset 非同步 | F-461-3 | **非 reset 路徑**的 `--atomic` 仍有 `2n > subprocess` 缺陷（medium；#461 只修 reset 路徑，其餘帶 atomic 的呼叫點沿用 helm 5m 預設 vs subprocess 300s）|
 | #449 密碼載體分流 | F-449-4 | 🔴 **前台 Reset 按鈕的 slug 白名單未同步 `has_admin_gui`**（high；`has_admin_gui=True` 的 8 個 template 有 5 個按不到按鈕，含 #449 剛修好的兩個＝修復對租戶不可達）|
 | #423 HAOS×KubeVirt | F-423-1 | 就緒判定 container 分支的 fail-open 待評估（medium；v1 刻意不修，已用 characterization test 釘住現行行為）|
+| #36 change-plan UI | F-36-1 | `ca80f6f0` 做掉 #36 的 (a)(b) 卻只寫 `Refs #330`、issue 零留言 ⇒ #36 至今讀起來像三層全開（low/tracking；「做掉別張 issue 的範圍卻未回連」＝庫存虛胖成因之一）|
 
 ## Index
 
@@ -1720,3 +1721,13 @@ addons_path 缺第三方相依（ai_base_gt 等在 `paas-odoo-ci/addons`）而�
 - **動手建議**：先量測「release deployed 但 pods 為空」在 prod 的實際發生頻率與持續時間，再決定是改 fail-closed、還是加一個寬限期（例如連續 N 輪為空才算就緒）。
 - **守線已存在**：`src/tests/test_cloud_service_poll_vm_branch.py` 的 characterization 案例釘住現行行為，任何改動會直接讓測試紅——這是刻意的，改的人必須顯式面對這個決定。
 - **對誰**：platform backend。Refs #423
+
+## F-36-1 — `ca80f6f0` 做掉 #36 的 (a)(b) 卻未回連，#36 至今讀起來像三層全開
+
+- **Severity**: low（tracking-honesty；不影響任何執行行為，影響的是 backlog 的讀數）
+- **Origin**: #36 Q9 確認步驟開工前的現況盤點（2026-08-23，`feat/36-change-plan-trial-confirm`）
+- **Location**: commit `ca80f6f0`（`feat: Wave C PR-C3 改席數／改方案 ChangePlanModal（.67，Refs #330）`，2026-07-16）＋ Gitea issue #36
+- **形態**：commit message 只寫 `Refs #330`（`git log -1 --format=%B ca80f6f0 | grep -oE '#[0-9]+'` → 唯一命中 `#330`），issue #36 側**零留言**（`tea comment ls 36` → `No comments found`）⇒ **兩端都沒有任何一筆記錄說「#36 的 (a)(b) 已經做完了」**。而 `ca80f6f0` 改動的 11 個檔正好就是 #36 scope 的 (a)＋(b)：`services/workspace_service.js`（+32，(a) SH 側 `changeSmartHomePlan` wrapper）與 `components/modal/ChangePlanModal.{js,xml,scss}` ＋ CS／SA／SH 三個 detail page 的「變更方案」按鈕（(b)）。只有 (c) Q9 確認步驟未做。
+- **為什麼值得記冊**：這是「**做掉別張 issue 的範圍卻未回連**」的一個具體實例。後果不是漏關 issue —— #36 確實還不該關（(c) 未做）—— 而是它在 backlog 上仍以**三層份量**的體積存在，估算、排序、以及「這張還要多少工」的判斷全部偏高。**這正是庫存虛胖的成因之一**：虛胖來自「完成的**部分範圍**沒有落點可記」，於是整張 issue 只能原樣留著，看起來一動未動。
+- **建議落點**：這個形態不該靠人記得。值得評估的是機械化落點 —— 例如 PR/commit 動到某張 open issue 明列的標的檔案、body 卻沒 `Refs` 該 issue 時出聲提醒。在有 gate 之前的人工替代：跨 issue 借做時，在**被借的那一張**留一句「(x) 已由 `<sha>` 落地」，成本一句話，省掉的是下一個人重新盤點整張 scope。
+- **對誰**：platform / issue 分派者。Refs #36 #330
