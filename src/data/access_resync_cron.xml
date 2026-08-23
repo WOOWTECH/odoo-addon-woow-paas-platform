@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <data noupdate="1">
+        <!-- #803：`access_protection_lost` 的週期性收斂者。
+
+             旗標記的是「CF Access application 已經被拆掉、而列本身還在」——此時
+             is_protected 只剩**意圖**，Cloudflare 上沒有任何東西在強制登入，而
+             hostname 照常由 tunnel 服務。也就是：對外可達、且未受保護。
+             機制與掃描形狀見 models/access_resync_cron.py 的 docstring。
+
+             ═══════════════════════════════════════════════════════════════
+             頻率＝15 分鐘的推導（本檔是這份推導的**唯一**落點）
+             ═══════════════════════════════════════════════════════════════
+
+             這個值是推導出來的不是拍板的。形狀取
+             cf_access_policy_reap.py 的 _STUCK_PENDING_DAYS 那一段。
+
+             1. **窗口什麼時候打開**：刪除交易回捲、而 Cloudflare 那半回捲不掉的
+                時候（cf_access_policy_reap._compensate_fail_open_after_rollback
+                在獨立交易裡打開旗標）。那一刻列還在、還宣稱 protected，但 CF 上
+                已經沒有 Access app ⇒ 要求登入的 hostname 變成任何人都到得了。
+
+             2. **自然關閉路徑**：那條腿自己的下一次成功 sync ——
+                resume 的 _sync_all_routes_access()、重新佈署、或租戶自己動
+                is_protected／login_*／session_duration。三條**都需要有人動手**，
+                而旗標打開的時機正是「使用者剛做的那個刪除動作失敗了」，
+                也就是最不會有人接著再動一次設定的時候。沒人動就不會關。
+                ⇒ 這條 cron 是那一格唯一的出口，不是最佳化。
+
+             3. **每輪代價**：對 operator 的外呼次數 ≤ 該輪掃到的旗標列數，且受
+                limit 管；被 liveness gate 擋掉的列連一次外呼都不會發（gate 過濾
+                與批次上限就是壓住加壓面的兩個東西，不是靠頻率）。健康系統上旗標
+                列是個位數——它只由 fail-open 補償寫得出來——所以絕大多數輪次是
+                「一次 search ＋ 一行 log」。
+
+             4. **不對稱**：太密的代價是 operator 多吃幾次**冪等**的 full-state
+                push，可回復，而且被 limit 與 gate 過濾壓住。太疏的代價是一個對外
+                可達、本來要求登入的服務多裸露那麼久 —— **不可回復**，被存取就是
+                被存取了。兩側不同量級，所以偏密的那一側才是安全的方向。
+
+             5. **結論：15 分鐘**，取平台內既有「安全相關收斂」的節奏
+                （data/reach_reconciler_cron.xml 同為 15 / minutes）。
+                ⛔ **不取 cf_access_reap_cron.xml 的每小時**：那條的推導理由逐字是
+                「孤兒在 CF 上多留一小時的成本…待回收物件**不影響任何線上流量**」
+                ——本單延遲的東西正好**在**線上流量的路徑上，那個前提不成立。
+
+             🔴 **此值 noupdate=1 改不動、要改走 migration。** 這筆 ir.cron 記錄
+             寫在 <data noupdate="1"> 裡，所以模組升級**不會**更新已存在的
+             interval_number／interval_type —— 日後想調頻率，只能改 DB 或另外寫一
+             支 migration。沒有「先保守、之後再調」這條路，這次選定就是實質定案。
+             （同 cloud_service_cron.xml / cf_access_reap_cron.xml 的注意事項。） -->
+        <record id="ir_cron_access_protection_resync" model="ir.cron">
+            <field name="name">PaaS: Re-sync Access protection (access_protection_lost)</field>
+            <field name="model_id" ref="model_woow_paas_platform_access_resync_cron"/>
+            <field name="state">code</field>
+            <field name="code">model._cron_resync_access_protection()</field>
+            <field name="interval_number">15</field>
+            <field name="interval_type">minutes</field>
+            <field name="active" eval="True"/>
+        </record>
+    </data>
+</odoo>

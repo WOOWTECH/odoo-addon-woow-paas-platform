@@ -691,6 +691,25 @@ from . import test_concurrency_retry_533
 # 對空清單恆真 ⇒ 修好之後它照樣綠但綠的理由變了，**不是**本題的守線，維持原樣。
 from . import test_sh_unlink_authz_preflight_740
 
+# fix: #848 access policy 的三個錨點 Many2one 在 model 層沒有歸屬守線。缺口是
+# **write 側專屬**的——框架 `_create` 尾端會對新建出來的列再跑一次
+# `check_access('create')`，`write()` 只在開頭對寫入前狀態檢查一次、寫入後零複驗。
+# 可利用性落在「兩個 workspace 的共同成員」而非陌生人：三條 member-read rule 的
+# domain 都沒有 role 條件 ⇒ 讀得到目標錨點就搬得過去，兩道既有檢查全過。
+# ⛔ 本檔的守衛擋不到 #849（stored related 的 inverse 委派寫的是來源列）。
+from . import test_policy_anchor_ownership_guard_848
+
+# feat: #803 `access_protection_lost` 打開之後沒有任何週期性收斂會把它推回去。
+# `_access_mark_protection_lost` 的 docstring 逐字寫著「平台**沒有**週期性 Access
+# re-sync，只有 provision / resume / 直接寫 is_protected／login_*／session_duration
+# 三種事件會推」——三種都要租戶或維運自己動手 ⇒ 沒人動，對外 hostname 就一直
+# 可達且未受保護。本檔守那條缺席的收斂路徑（三張表：SA route／SH route／CS）。
+# 🔴 形狀守線在 A5/B5/C5/D1：`search(domain, limit=N)` 會被永久推不動的旗標列
+# 自己堵死，而那個狀態與「今天沒事做」在輸出上完全一樣（#791 F1 同型）。
+# D4 釘住「零命中那輪也要出聲、且那一行自帶三個計數」——空手與全被擋是兩件事。
+# D5 釘住 cron 的回存過得了 #854 的 `access_app_id` 欄位級守衛。
+from . import test_access_resync_cron_803
+
 # feat: #36 試用中變更方案**一定**結束試用並開首期帳單——SA / SH 兩 surface。
 # `ChangePlanModal` 的警告文案逐字保證三件事（結束試用／開始計費／首期帳單），
 # 但那個「一定」是**後端**保證的：change-plan 的 endpoint gate 與
