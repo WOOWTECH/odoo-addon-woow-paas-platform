@@ -749,3 +749,13 @@ from . import test_lang_zh_tw_activation_107
 # #107 第四層（locale formatter）：日期／時間／數字格式必須跟隨 Odoo 使用者語系
 # 的靜態守線。⚠ 少了這一行，整檔會**從未執行**而測試套件照樣全綠。
 from . import test_locale_formatting_guard_107
+
+# 量測: #849 RED-A —— 寫 policy 的兩個 stored related 投影欄位
+# （`security_access_id` / `smart_home_id`）會怎樣。⛔ 本檔是**量測**不是守線。
+# #849 原文說它們帶 inverse 委派、寫它們會寫到來源列；實測要驗的是那個機制
+# （related 的 readonly 預設是 True ⇒ `setup_related` 不裝 inverse），以及
+# 真正的形狀：`store=True` 讓值直接落在投影欄位那根 column 上，而那根正是
+# policy 的 ir.rule 三條腿裡兩條的歸屬判準來源 ⇒ **歸屬分裂**。
+# 🔴 判準刻意不是「通過／不通過」兩格——靜默丟棄／落地／落地後被 recompute 蓋回
+# 三種輸出不同但都不報錯。DB 值量兩次、ir.rule 歸屬量 2 身分 × 2 時點。
+from . import test_policy_related_anchor_projection_849
