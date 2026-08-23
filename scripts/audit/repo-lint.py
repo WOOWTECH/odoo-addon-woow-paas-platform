@@ -6705,11 +6705,58 @@ def _test_tree_bases(facts, rel, name, seen=None):
             yield deeper
 
 
+def _test_class_body_defs(node):
+    """`node` 底下、執行後會落進**同一個** namespace 的所有 `def` / `async def`。
+
+    `if` / `try` / `for` / `while` / `with` / `match` 這些語句**不另開 namespace**
+    ——包在它們裡面的 `def` 執行完照樣是外層那個 namespace 的成員，所以要往下走。
+    走進去就換了 namespace 的三種，**不走**：
+
+    * `def` / `async def` 的 body ——那是函式自己的 local scope，裡面的 `def`
+      不會出現在 class 的 `__dict__` 裡。找到 `def` 就 yield 並**停在它身上**。
+    * `class` 的 body ——巢狀 class 的成員落在**那個** class 的 `__dict__`。
+    * 運算式（含 `lambda`）——`def` 只可能是 statement；`lambda` 底下也放不了
+      statement。⇒ 用「不是 ast.expr 就往下走」收尾，`ExceptHandler`／`match_case`
+      這類容器節點自然涵蓋，未來新增的語句型別也不必逐個補。
+    """
+    for child in ast.iter_child_nodes(node):
+        if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            yield child
+        elif isinstance(child, ast.ClassDef):
+            continue
+        elif not isinstance(child, ast.expr):
+            yield from _test_class_body_defs(child)
+
+
 def _test_own_test_methods(node):
-    """class body 裡自己的 `def test*`（＝ loader 篩子④看的那一組）。"""
-    return [n.name for n in node.body
-            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
-            and n.name.startswith("test")]
+    """class body 裡自己的 `def test*`（＝ loader 篩子④看的那一組）。
+
+    篩子④看的是**執行後**的 class 物件（`odoo/tests/loader.py` ::
+    `get_module_test_cases` 的 `test_case_class.__dict__.items()` ＋
+    `method_name.startswith('test')`），所以只認 class body **最頂層**的
+    `FunctionDef` 對不齊：`def test*` 包在 `if` / `try` / `for` / `while` /
+    `with` / `match` 裡時，執行後照樣在 `__dict__` 裡、照樣被收，靜態卻算成
+    **0 條**——而 0 條會讓這個 class 從 C2 的 baseline 靜默消失（#850／#836）。
+    ⇒ 遞迴走同一個 namespace 的所有語句，邊界見 `_test_class_body_defs()`。
+
+    **同名只算一條**：`if` / `else` 兩支各定義一次同名方法是合法形態
+    （`check_duplicate_class_methods` 刻意不管巢狀 `def`，見該函式的覆蓋邊界），
+    但執行後 `__dict__` 只會有一個。
+
+    ⚠ **靜態永遠對不齊 loader 的那一格**（是邊界，不是缺陷）：定義與否要到
+    **執行期**才決定的形態（`if FLAG:` 走哪一支、`for` 迴圈跑不跑得到），靜態一律
+    取**聯集** ⇒ 可能比實際**多算**，但不會算成 0。方向是刻意的：多算會讓 class
+    留在 baseline 裡被看見，算成 0 會讓它整個消失，而後者正是本條要修的失效。
+
+    ⚠ **不涵蓋**（照抄 #850 的範圍限制，不要讀成「沒有影響」）：decorator 動態
+    產生、metaclass 注入、`setattr`、`exec`、`test_x = lambda ...` 之類**非 `def`
+    形態**的成員——它們同樣是執行期才出現在 `__dict__` 裡，靜態鏡像看不到。
+    """
+    names = []
+    for fn in _test_class_body_defs(node):
+        if fn.name.startswith("test") and fn.name not in names:
+            names.append(fn.name)
+    return names
 
 
 def _test_has_inherited_flag(facts, rel, name):
