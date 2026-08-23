@@ -374,6 +374,12 @@ class TestReachesTheBaselinePredictor(unittest.TestCase):
 
     ⛔ 本格**不碰** #836 在裁的「條數 0 的 class 怎麼列」：修好之後這個 class 的
        條數不是 0，它走的是一般的 `expected` 路徑。
+
+    ⚠ #836 落地後 `scan_expected()` 改回 3-tuple（多了「條數 0」那個容器）。
+      本格因此多一條斷言：這個 class 也**不得**落進那個新容器。原本只斷言
+      「不在 `excluded`」的話，#850 的判準若哪天退化成算 0 條，這個 class 會
+      安靜地換到新容器裡，而 `assertNotIn(..., excluded)` 照樣通過。
+      ⇒ 解包從 2 改 3 是機械性的，斷言是**變強**，不是被改弱。
     """
 
     TREE = {
@@ -401,7 +407,7 @@ class TestReachesTheBaselinePredictor(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             root = pathlib.Path(td)
             audit._write_tree(root, self.TREE)
-            expected, excluded = audit.scan_expected(root)
+            expected, excluded, zero_count = audit.scan_expected(root)
         self.assertEqual(expected.get("test_nested.TestPlain"), 1,
                          "對照組不見了 ⇒ 這棵樹本身有問題，不是本條的結論")
         self.assertEqual(
@@ -410,6 +416,10 @@ class TestReachesTheBaselinePredictor(unittest.TestCase):
             "拿到 None ＝ 它被算成 0 條、從清單裡整個消失（#850 → #836 的靜默出口）")
         self.assertNotIn("test_nested.TestOnlyNested", dict(excluded),
                          "條數不是 0 的 class 不該落到 excluded")
+        self.assertNotIn(
+            "test_nested.TestOnlyNested", dict(zero_count),
+            "條數不是 0 的 class 不該落到 #836 的『條數 0』容器——落進去代表 "
+            "#850 的判準退化回只認頂層 `def`，而那個退化在 `excluded` 那條斷言下是無聲的")
 
 
 if __name__ == "__main__":

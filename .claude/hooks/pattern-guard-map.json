@@ -135,7 +135,8 @@
         "docs/decisions/patterns/phase-versioned-test-assertion.md — phase test 硬編 schema 快照值（== version/欄位 count）會撞後續 phase 演進，改 monotonic >= /存在性斷言（**前提：被守的量 monotonic**；會下降的量見本 class 的 seed-topology-invariants）",
         "docs/decisions/patterns/credential-claim-test-fixture-coupling.md — 硬化共用 credential 路徑時所有自建 fixture forward-coupled 須 lock-step 補",
         "docs/decisions/patterns/unittest-mock-dual-namespace-patch.md — patch 被多 module 以不同 import 形式共用的 helper 時，N 個 namespace 要 N 個 target",
-        "docs/decisions/patterns/seed-topology-invariants.md — 被守的量會下降時（seed 拓撲計數、集合大小）不可用 monotonic `>=`：守衛會對「集合被靜默縮小」裝反；改集合等值/零丟棄/結構關係（#433）"
+        "docs/decisions/patterns/seed-topology-invariants.md — 被守的量會下降時（seed 拓撲計數、集合大小）不可用 monotonic `>=`：守衛會對「集合被靜默縮小」裝反；改集合等值/零丟棄/結構關係（#433）",
+        "docs/tracking/pitfalls/odoo-assertraises-savepoint-rollback.md — 測「例外之後 DB 應該長怎樣」時：`assertRaises` 在區塊外開 flushing savepoint（`flush=True`），例外穿出即 `ROLLBACK TO SAVEPOINT` ＋ `cr.clear()` ⇒ 回捲邊界恰好是整個 with 區塊，區塊內寫的東西全部消失。回捲值剛好等於期望值時**假綠**（#822 A4），修法自己寫的 `state` / `error_message` 也被回捲時**永遠不可能綠**且訊息長得像實作沒寫進去（#822 E1）。正解＝裸 try/except ＋ `self.fail()` 兜底；對 mock 呼叫紀錄與區塊**之前**的狀態做斷言則不受影響"
       ]
     },
     {
