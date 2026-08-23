@@ -1,0 +1,15 @@
+G2  node-map 命中數 : 737  |U|(my walker): 737
+G2  map ident 集 == U: True
+G1  _expected_methods 被呼叫次數: 709  全部 id 都在我的 map 裡: True
+    _test_tree_facts 被呼叫次數: 2
+
+P4  |X| excluded    : 6  (list len: 6 )
+P3  E.keys == expected.keys : True  |expected|: 653
+P3b E 的數值也逐項相同      : True
+P5  E ⊆ U: True  X ⊆ U: True  E ∩ X = ∅: True
+P6  |S| = |U−E−X|   : 78
+P7  tagged+standard (= `if n:` 那格) : 56
+P7  非 tagged        (= own 為空那格) : 22
+P7  既非上述兩者（不該存在）          : 0 []
+
+寫出 S56.txt / S22.txt / X6.txt
