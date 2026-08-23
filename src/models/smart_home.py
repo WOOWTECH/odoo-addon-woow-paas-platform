@@ -30,6 +30,13 @@ _logger = logging.getLogger(__name__)
 #: #528 的待回收 CF Access 物件帳本（三腿共用；本檔只用它的 #794 補償入口）。
 _CF_REAP_MODEL = 'woow_paas_platform.cf_access_policy_reap'
 
+#: #740：`unlink()` 這條路徑真的會消耗到 unlink 權限的**第二張**表。
+#: 推導方式（不要照抄結論，改 `unlink()` 時重推一次）：讀 `unlink()` 本體，找出每一
+#: 個會走到 Odoo `check_access('unlink')` 的位置——只有兩個，route 那次顯式的
+#: `_sm_route_cascade_unlink(record.route_ids).unlink()`，以及本 model 的
+#: `super().unlink()`。
+_SM_ROUTE_MODEL = 'woow_paas_platform.smart_home_route'
+
 
 # ------------------------------------------------------------------------- #
 #  #524 第 1 節：smart_home 的建立閘（private sentinel）                      #
@@ -652,6 +659,83 @@ class SmartHome(models.Model):
             })
             _logger.error("Smart Home provision error: %s", e.message)
 
+    def _assert_unlink_authorized(self):
+        """#740：授權前置檢查 —— 送出第一個外部副作用**之前**，把這次刪除會用到的
+        每一個 unlink 權限先驗完。
+
+        ## 為什麼只能前置，不能換順序
+
+        `unlink()` 裡「Cloudflare teardown 在 DB 列消失之前」是**刻意的**：反過來
+        的話，刪除失敗就留下一顆沒有任何 DB 錨點可以驅動重試的永久孤兒——
+        `docs/tracking/pitfalls/cf-ns-orphan-no-account-gc.md` 記的正是那次事故
+        （本 model 當年無條件 unlink 造出 3 條孤兒 tunnel）。
+        而 Odoo 的 ACL／record rule 檢查在 `super().unlink()` 的第一行才發生
+        （`odoo/models.py::BaseModel.unlink` → `check_access('unlink')`）
+        ⇒ 「外部副作用排在授權檢查前面」是這兩個約束的結構性後果，不是寫錯順序。
+        既然順序不能換，就只能把授權檢查**提前**到副作用之前再做一次。
+
+        ## 枚舉用提權身分，檢查用呼叫者身分（兩件事，刻意分開）
+
+        * **枚舉**（`self.sudo().route_ids`）：teardown 迴圈走的就是提權後的集合
+          （`_teardown_routes_access()` 迴圈的是 `self.sudo().route_ids`）。改用呼叫者
+          看得見的集合，被 record rule 濾掉的那幾條就變成「看不到 ⇒ 不用檢查」，
+          那是 fail-open，方向與本 issue 相同。
+        * **檢查**（`self.env[...]`，非 sudo）：判準必須是**呼叫者**有沒有權限。
+          形狀取自本 repo 既有的前置檢查前例
+          `cloud_service._assert_reverse_binding_authorized()`（#698）：同樣是
+          「sudo 收集要檢查的那一批 → 用呼叫者身分 `check_access`」。
+
+        這兩件事必須分開的**機制理由**（不是風格）：`_check_access()` 的
+        `ir.rule` 那一半只對真實 id 生效（`if any(self._ids):`）⇒ 送進去的 id 集合
+        決定 record rule 會不會被評估。用呼叫者看得見的 `route_ids`，被 rule 濾掉的
+        那幾條就根本不會被檢查，而 teardown 迴圈照樣會走到它們。
+
+        ## 檢查範圍就是 `_SM_ROUTE_MODEL` 上方註解推導出來的那兩張，逐一列名
+
+        **不含** `woow_paas_platform.security_access_access_policy`：policy 列是被
+        route 的 `ondelete='cascade'` 在 **DB 層**帶走的，Python `unlink()` 根本不會
+        被呼叫（`unlink()` 裡那段 ForeignKeyViolation 的註解記著同一件事）⇒ 這條
+        路徑沒有消耗任何 policy 的 unlink 權限。而且它對 `base.group_user` 是
+        `1,1,1,1` ⇒ 加進來是一個**永遠通過**的檢查：零鑑別力，還會讓下一個人以為
+        DB cascade 那條有守。
+        **不含** `woow_paas_platform.cf_access_policy_reap`：那張表**沒有**
+        `base.group_user` 的 ACL 列（只有 `base.group_system` 那列），而本檔用得到
+        的每一個存取點都自己提權 ⇒ 呼叫者身分從來不會被拿去驗它。
+
+        ## 對提權路徑是 no-op
+
+        `check_access()` 的第一行是 `if not self.env.su`（Odoo 18 `odoo/models.py`）
+        ⇒ 平台自己驅動的刪除（`workspace.unlink()` 那條 `sudo().unlink()`）與 cron
+        一律不受影響。下面第一行的 `if self.env.su: return` 因此**不改變語意**——它
+        省掉的只是提權之下沒必要的那次 `route_ids` 讀取，並把豁免寫在看得見的地方。
+        🔴 連帶：本守衛在 `TransactionCase` 的預設 env（su）底下是 no-op ⇒ 用預設
+        env 寫的「守住了」測試**測不到它**
+        （`docs/decisions/patterns/su-env-exempt-guard-false-green.md` 的形狀）。
+        租戶那一側的回歸測試因此一律走真 HTTP，見
+        `tests/test_sh_unlink_authz_preflight_740.py`。
+
+        ⚠ 本方法**不改變授權姿態**：ACL 表、record rule、端點身分一律沒動 ⇒ 租戶的
+        刪除仍然會失敗。它保證的是「失敗得乾淨」（零外部呼叫、零持久欄位變更），
+        不是「會成功」。租戶到底該不該刪得掉是 #739 家族的題目。
+        """
+        if self.env.su:
+            return
+        # 主表先驗：被拒時的訊息才會點名租戶真正在刪的那個東西，而不是它從沒聽過
+        # 的 route 子表（修前 B／C 兩形態回的就是後者）。
+        self.check_access('unlink')
+        # 🔴 **刻意沒有 `if route_ids:` 這個分支**，兩個理由：
+        #  1. `_check_access()` 的模型級 `ir.model.access` 檢查是**無條件**跑的，
+        #     只有 `ir.rule` 那一半被 `if any(self._ids):` 擋掉（Odoo 18
+        #     `odoo/models.py::_check_access`）⇒ 空 recordset 仍然會問「你到底有沒有
+        #     刪 route 的權限」。那正是我們要問的問題，與這一筆有沒有 route 無關。
+        #     **這一行對「沒有 route 的記錄」不是死碼**，不要順手把它包進條件式。
+        #  2. 加上分支就多一個 fail-open 面：`route_ids` 只要因為任何理由靜默變空
+        #     （`active_test` 之類，#716 ② 在 CS 那腿實際發生過），檢查就整段被跳過。
+        #     今天兩種寫法對所有身分的判定結果相同（唯一有 unlink 的群組兩張表都有），
+        #     所以這裡選 fail-closed 的那個。
+        self.env[_SM_ROUTE_MODEL].browse(
+            self.sudo().route_ids.ids).check_access('unlink')
+
     def action_delete(self):
         """Delete the smart home and its Cloudflare Tunnel.
 
@@ -659,8 +743,17 @@ class SmartHome(models.Model):
         tunnel cannot be deleted, the record is kept and a UserError surfaces,
         so a billed tunnel is never left orphaned in Cloudflare with no DB row
         to drive a retry (F-ENV-4).
+
+        #740：授權前置檢查在**第一行**，`state` 那次 write 之前。那次 write 不在
+        `unlink()` 的 savepoint 裡（savepoint 在 `unlink()` 內部才開，而
+        `_FlushingSavepoint.__init__` 是先 `cr.flush()` 再 `SAVEPOINT`
+        ⇒ 這個 UPDATE 落在 savepoint **之外**、回捲不到）⇒ 修前一次被拒的刪除會
+        留下 `state='deleting'` 跟著請求一起 commit。呼叫兩次（這裡 ＋ `unlink()`
+        第一行）是刻意的：本方法要擋在自己那次 write 之前，而 `unlink()` 還有
+        `action_delete` 以外的呼叫端。檢查是純權限判斷、無副作用，重複執行無害。
         """
         self.ensure_one()
+        self._assert_unlink_authorized()
         if self.tunnel_id:
             self.write({'state': 'deleting'})
         self.unlink()
@@ -714,7 +807,12 @@ class SmartHome(models.Model):
         source of 3 such orphan tunnels). Mirrors SecurityAccess.unlink: attempt
         cleanup, then fail-loud if the tunnel is still live so both the DB row
         and the CF tunnel survive for the user / cron to retry.
+
+        #740：第一行是授權前置檢查，而且刻意放在下面那個 `try:`／savepoint
+        **之外**——被拒的呼叫不該進入補償路徑，也不該碰到後面任何一段有副作用或
+        有成本的碼。理由與範圍全寫在 `_assert_unlink_authorized()` 的 docstring。
         """
+        self._assert_unlink_authorized()
         # #322: 比照 CloudService（#318）— super().unlink() 前捕獲 in_progress
         # 訂閱，刪除成功後結算（取消＋按比例退點）。共用 _settle_on_entity_delete。
         # 捕獲在 fail-loud 之前、結算在 super().unlink() 之後：tunnel fail-loud
