@@ -20,49 +20,90 @@
             <span class="o_woow_change_plan__current_value" t-esc="currentPlanName"/>
           </div>
 
-          <!-- 載入方案清單中 -->
-          <t t-if="state.loadingPlans">
-            <div class="o_woow_pay_confirm_text">
-              <WoowIcon name="'sync'" size="20" class="'o_woow_spin'"/>
-              <p>載入方案中…</p>
+          <!-- #36 P2 警告階段：試用中按下確認後的最後一道關卡。三條後果逐字對應
+               Eugene 的裁決（立刻結束試用／現在開始第一個計費週期／產生首期帳單），
+               並與 SkipTrialModal 的三條保持同構——同一件事在兩個入口說法一致。
+               判準見 ChangePlanModal.js 的 `willEndTrial`（含後端結構論證）。 -->
+          <t t-if="state.confirmingTrialEnd">
+            <div class="o_woow_change_plan__trial_warning">
+              <div class="o_woow_change_plan__trial_warning_head">
+                <WoowIcon name="'warning'" size="28"/>
+                <p>這會立刻結束你的試用</p>
+              </div>
+              <p class="o_woow_change_plan__trial_warning_lead">
+                目前的試用尚未結束。確認變更方案後，系統會：
+              </p>
+              <ul class="o_woow_change_plan__trial_warning_list">
+                <li>立刻結束目前的試用</li>
+                <li>現在開始第一個計費週期</li>
+                <li>產生首期帳單</li>
+              </ul>
             </div>
           </t>
 
-          <!-- 方案清單載入失敗 -->
-          <t t-if="!state.loadingPlans and state.plansError">
-            <div class="o_woow_error_message">
-              <WoowIcon name="'error'" size="16"/>
-              <span t-esc="state.plansError"/>
-            </div>
-          </t>
+          <!-- 選擇階段 -->
+          <t t-else="">
+            <!-- 載入方案清單中 -->
+            <t t-if="state.loadingPlans">
+              <div class="o_woow_pay_confirm_text">
+                <WoowIcon name="'sync'" size="20" class="'o_woow_spin'"/>
+                <p>載入方案中…</p>
+              </div>
+            </t>
 
-          <!-- 方案選擇器（內嵌 PlanSelector，變體自動展開席數第二步） -->
-          <t t-if="!state.loadingPlans and !state.plansError">
-            <div class="o_woow_form_group">
-              <label>選擇新方案</label>
-              <PlanSelector
-                plans="state.plans"
-                selectedPlanId="state.selectedPlanId"
-                currentPlanId="props.currentPlanId"
-                onSelect.bind="onSelectPlan"/>
-            </div>
+            <!-- 方案清單載入失敗 -->
+            <t t-if="!state.loadingPlans and state.plansError">
+              <div class="o_woow_error_message">
+                <WoowIcon name="'error'" size="16"/>
+                <span t-esc="state.plansError"/>
+              </div>
+            </t>
 
-            <!-- 退點通用說明（無退點預覽 API，實際金額於確認後呈現） -->
-            <div class="o_woow_change_plan__advisory">
-              <WoowIcon name="'info'" size="16"/>
-              <span>
-                變更方案會關閉目前訂閱並依新方案重新計費；目前週期未使用的部分
-                將按比例退點至錢包（試用中或本期尚未扣款則不退點）。
-              </span>
-            </div>
+            <!-- 方案選擇器（內嵌 PlanSelector，變體自動展開席數第二步） -->
+            <t t-if="!state.loadingPlans and !state.plansError">
+              <div class="o_woow_form_group">
+                <label>選擇新方案</label>
+                <PlanSelector
+                  plans="state.plans"
+                  selectedPlanId="state.selectedPlanId"
+                  currentPlanId="props.currentPlanId"
+                  onSelect.bind="onSelectPlan"/>
+              </div>
 
-            <!-- #342 未落地前的誠實處置：改方案後的規格（vCPU/RAM/席數）於下個
-                 計費週期才 re-apply、非即時。TODO(Refs #342)：#342 生效 re-apply
-                 落地後移除此提示（見 docs/tracking/followups/follow-ups.md）。 -->
-            <div class="o_woow_change_plan__notice">
-              <WoowIcon name="'schedule'" size="14"/>
-              <span>資源將於下個計費週期生效。</span>
-            </div>
+              <!-- 退點通用說明（無退點預覽 API，實際金額於確認後呈現）。
+                   本句只講**退點**；試用會不會結束由下方 trial 專屬那句負責，
+                   兩句刻意不重疊。「本期尚未成功扣款則無可退點數」對非試用使用者
+                   同樣成立——`_compute_unused_refund` 的前提是
+                   `_has_paid_current_cycle()`（#324 (b)），不是只有試用才退 0。 -->
+              <div class="o_woow_change_plan__advisory">
+                <WoowIcon name="'info'" size="16"/>
+                <span>
+                  變更方案會關閉目前訂閱並依新方案重新計費；目前週期未使用的部分
+                  將按比例退點至錢包（本期尚未成功扣款則無可退的點數）。
+                </span>
+              </div>
+
+              <!-- #36：試用中專屬的事前提醒。原本這格只在退點語境提到「試用中」，
+                   試用使用者會讀成「我還沒扣過錢所以沒得退」而**低估後果**——旁邊
+                   PlanSelector 的卡片還標著「N-day free trial」。這句把真正的後果
+                   （試用當場結束、開始計費）講在選擇當下，確認前的警告階段再要一次
+                   明示同意。 -->
+              <div t-if="willEndTrial" class="o_woow_change_plan__advisory o_woow_change_plan__advisory--trial">
+                <WoowIcon name="'warning'" size="16"/>
+                <span>
+                  你目前在試用中：變更方案會當場結束試用並開始計費、產生首期帳單，
+                  且試用期間未曾扣款，沒有可退的點數。
+                </span>
+              </div>
+
+              <!-- #342 未落地前的誠實處置：改方案後的規格（vCPU/RAM/席數）於下個
+                   計費週期才 re-apply、非即時。TODO(Refs #342)：#342 生效 re-apply
+                   落地後移除此提示（見 docs/tracking/followups/follow-ups.md）。 -->
+              <div class="o_woow_change_plan__notice">
+                <WoowIcon name="'schedule'" size="14"/>
+                <span>資源將於下個計費週期生效。</span>
+              </div>
+            </t>
           </t>
 
           <div t-if="state.error" class="o_woow_error_message">
@@ -79,27 +120,56 @@
             plans="state.plans"
             selectedPlanId="state.selectedPlanId"
             mode="'change'"/>
-          <WoowButton
-            variant="'secondary'"
-            size="'md'"
-            onClick="props.onClose"
-            disabled="state.changing">
-            取消
-          </WoowButton>
-          <WoowButton
-            variant="'primary'"
-            size="'md'"
-            onClick.bind="onConfirm"
-            disabled="!canConfirm">
-            <t t-if="state.changing">
-              <WoowIcon name="'sync'" size="18" class="'o_woow_spin'"/>
-              處理中…
-            </t>
-            <t t-else="">
-              <WoowIcon name="'swap_horiz'" size="18"/>
-              確認變更
-            </t>
-          </WoowButton>
+          <!-- #36 P2：警告階段換一組按鈕。次要鍵標「返回」而非「取消」是刻意的——
+               它回到選擇階段（選擇原封不動），不是關掉整個 modal；要整個放棄仍可用
+               右上 X 或點背景。主要鍵改 danger + 明說「開始計費」，讓最後一下點擊
+               本身就帶著後果，而不是再按一次語意中性的「確認變更」。 -->
+          <t t-if="state.confirmingTrialEnd">
+            <WoowButton
+              variant="'secondary'"
+              size="'md'"
+              onClick.bind="onBackFromTrialWarning"
+              disabled="state.changing">
+              返回
+            </WoowButton>
+            <WoowButton
+              variant="'danger'"
+              size="'md'"
+              onClick.bind="onConfirm"
+              disabled="!canConfirm">
+              <t t-if="state.changing">
+                <WoowIcon name="'sync'" size="18" class="'o_woow_spin'"/>
+                處理中…
+              </t>
+              <t t-else="">
+                <WoowIcon name="'receipt_long'" size="18"/>
+                結束試用並開始計費
+              </t>
+            </WoowButton>
+          </t>
+          <t t-else="">
+            <WoowButton
+              variant="'secondary'"
+              size="'md'"
+              onClick="props.onClose"
+              disabled="state.changing">
+              取消
+            </WoowButton>
+            <WoowButton
+              variant="'primary'"
+              size="'md'"
+              onClick.bind="onConfirm"
+              disabled="!canConfirm">
+              <t t-if="state.changing">
+                <WoowIcon name="'sync'" size="18" class="'o_woow_spin'"/>
+                處理中…
+              </t>
+              <t t-else="">
+                <WoowIcon name="'swap_horiz'" size="18"/>
+                確認變更
+              </t>
+            </WoowButton>
+          </t>
         </div>
       </div>
     </div>

@@ -43,6 +43,59 @@
     }
   }
 
+  // #36：試用中專屬的事前提醒。與 &__advisory 同版型、只換色調（琥珀）——刻意不做
+  // 成第三種 note box：它與退點說明是同一層級的「選擇階段提示」，只是語氣重一級。
+  &__advisory--trial {
+    background: rgba(#f59e0b, 0.08);
+    color: var(--woow-text-primary, #111827);
+
+    .material-symbols-outlined {
+      color: #d97706;
+    }
+  }
+
+  // #36 P2 警告階段（state.confirmingTrialEnd）：取代選擇階段的整個 body 內容。
+  &__trial_warning {
+    padding: 20px 16px;
+    text-align: center;
+  }
+
+  &__trial_warning_head {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+
+    .material-symbols-outlined {
+      color: #d97706;
+    }
+
+    p {
+      margin: 0;
+      font-size: 16px;
+      font-weight: 700;
+      color: var(--woow-text-primary, #111827);
+    }
+  }
+
+  &__trial_warning_lead {
+    margin: 12px 0 8px;
+    font-size: 13px;
+    color: var(--woow-text-secondary, #6b7280);
+  }
+
+  // 三條後果（結束試用／開始計費／首期帳單）。置中區塊內靠左讀，循
+  // SkipTrialModal 同一手法（inline-block + text-align:left）。
+  &__trial_warning_list {
+    display: inline-block;
+    margin: 0 auto;
+    padding-left: 20px;
+    text-align: left;
+    font-size: 13px;
+    line-height: 1.8;
+    color: var(--woow-text-primary, #111827);
+  }
+
   // #342 未落地前的「下週期生效」提示（TODO Refs #342：生效 re-apply 落地後移除）。
   // 語氣較 advisory 弱（次要文字色），提醒改方案的規格於下個週期才 re-apply。
   &__notice {
