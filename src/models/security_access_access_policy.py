@@ -88,6 +88,112 @@ def _arc_violation(label, present):
         "invisible to its own workspace." % (label, choices))
 
 
+def _anchor_target_id(value):
+    """把一個 Many2one 的 write 值正規化成 id（或 ``False``）。
+
+    只涵蓋**純量** Many2one 的三種合法寫法（id / ``False`` / recordset），刻意
+    **不**重演 x2many 的指令語意——本 repo 對「逐一重演框架的解析規則」有明確教訓
+    （#657 同一行修了兩次，`cloud_service_binding_guard.py` 檔頭逐字記著）。三個
+    錨點今天全是純量 M2O；哪天出現 x2many 錨點，這裡要換成
+    `_cs_binding_diff_fields` 那種「比對實際綁定、不解析指令」的形狀，而不是在這裡
+    多加幾個 elif。
+    """
+    if not value:
+        return False
+    if isinstance(value, models.BaseModel):
+        return value.id
+    return int(value)
+
+
+def _assert_anchor_move_authorised(records, vals):
+    """契約：**把 policy 搬到一個新錨點上，要求對那個新錨點有 owner／admin。**
+
+    #848。這是一道**獨立的**歸屬守衛，與 `write()` 裡 `if resync:` 區塊內那個
+    `anchor.check_access('read')` 迴圈**不是同一件事**，也刻意不去改它：那個迴圈的
+    契約是**排序**（「所有錨點都授權過，才准產生第一個 side effect」，見它自己的
+    註解），歸屬把關只是它的**副作用**，改動它的人沒有義務保住這個性質。本函式存在
+    的理由正是要終止「歸屬契約寄生在別人的排序契約上」。
+
+    ## 缺口是 write 側專屬的
+
+    框架在 create 與 write 兩側不對稱（`odoo/models.py`，判別事實是「哪個函式裡
+    有、哪個沒有」而不是行號）：`BaseModel._create` 的**尾端**對**新建出來的那些
+    列**再跑一次 `records.check_access('create')`；`BaseModel.write` 只有開頭那一次
+    `self.check_access('write')`，評估的是**寫入前**的狀態，寫入後零複驗。
+    ⇒ 「把既有 policy 搬到別人的錨點上」框架不擋。
+
+    可利用性因此落在**兩個 workspace 的共同成員**、而不是陌生人：三個錨點 model 的
+    member-read rule（`security/ir_rules.xml`）domain 都沒有 role 條件，任何成員都
+    讀得到該 workspace 的錨點 ⇒ 「A 的 owner／admin ＋ B 的普通成員」把 A 的 policy
+    寫到 B 的錨點上，兩道既有檢查全過（已實測：真 RPC 回 200、值落地）。搬完之後那
+    列進了 B 的 domain，`perm_write` 要 owner／admin ⇒ 他自己也收不回來，是**單向
+    注入**。
+
+    ## 為什麼是 `check_access('write')` 而不是自己寫一套 role 比較
+
+    三個錨點 model 對 `base.group_user` 的 ACL `perm_write` 都是 1，而該 group 上
+    唯一 `perm_write=True` 的 ir.rule 都是各自的 `..._owner_admin_manage`（member
+    那條全部 `perm_write=False`）⇒ `check_access('write')` 就**等於**「對該錨點的
+    workspace 是 owner／admin」，而且沒有第二張會漂的表（`cloud_service_binding_
+    guard.py` 檔頭：「不自己寫第二套 role 比較——兩套判準遲早會漂」）。
+
+    收緊的方向不是新政策：**create 側今天就已經是這個語意**。policy model 上對
+    `base.group_user` 唯一 `perm_create=True` 的 rule 也是 `..._owner_admin_manage`
+    ⇒ 一列錨在別人 workspace 的新 policy 過不了 `_create` 尾端那次
+    `check_access('create')`。write 側只要 `read` 才是那個例外，本函式是把 write
+    對齊 create。
+
+    例外**刻意不包裝**：`check_access` 自己拋的 `AccessError` 已經指名是哪個 model
+    的哪個操作被拒，那正是呼叫端需要的資訊；再包一層等於多一個會與 ir.rule 漂開的
+    訊息來源。
+
+    ## su 豁免是刻意的，這裡與 #798 的結論相反
+
+    `check_access()` 在 `env.su` 下自動 no-op，而 migration `18.0.1.0.37` 那條合法
+    的錨點搬移正是以 superuser 跑（`api.Environment(cr, SUPERUSER_ID, {})`，框架對
+    `uid == SUPERUSER_ID` 直接設 `su = True`）。
+
+    這與 `_reject_identity_anchor_writes`／`cf_policy_id`（#798）用 sentinel、對
+    superuser 也擋，**不是**疏漏而是不同的不變量：那一格是「值不可變」（**沒有**
+    合法改值路徑，任何 su 豁免都是洞，見
+    `docs/decisions/patterns/su-env-exempt-guard-false-green.md`），本函式是「值轉移
+    受限」（**有**合法改值路徑，只是要 gated ⇒ 該文件「不適用」節指向的
+    `scope-flip-write-guard-not-ir-rule` 那一側）。錨點本來就是可搬的——`write()`
+    裡整套 `_anchor_move_plan()` / `_apply_anchor_move()` / 帳本 / 舊錨點排序就是
+    #786／#783 為了「讓搬錨點正確」而蓋的。
+
+    代價是本守衛的 deny 分支在 su env 下結構上不可達 ⇒ 守線測試一律走真 RPC 的
+    **非 su** 租戶，並另有一格把 su 豁免本身斷言成契約
+    （`test_policy_anchor_ownership_guard_848.py` 的 C2）。
+
+    ## 比對的是「實際改值」不是「key 在不在 vals」
+
+    UI 整批送欄位時 vals 會帶著與現值相同的錨點，那不是搬移；而且能寫這一列的人，
+    框架開頭那次 `check_access('write')` 已經對它現在掛著的錨點要求過 owner／admin
+    （policy 的 rule 與錨點的 rule 走的是同一條 workspace walk）。判準取自
+    `docs/decisions/patterns/scope-flip-write-guard-not-ir-rule.md`。
+
+    清空（寫 ``False``）不在本函式的守備範圍：沒有「新錨點」要授權，而「最終仍恰好
+    一個錨點」是 arc 那三個觸點的事。
+
+    ## ⛔ 本函式**擋不到 #849**
+
+    #849 的路徑是 stored related 的 inverse 委派：寫 `policy.security_access_id`
+    實際上寫的是 `route.security_access_id`，`policy.route_id` 完全沒動 ⇒ 本函式
+    不 fire。兩張單是不同的機制、不同的修法落點。
+    """
+    for field in _ANCHOR_FIELDS:
+        if field not in vals:
+            continue
+        new_id = _anchor_target_id(vals[field])
+        if not new_id:
+            continue
+        if all(rec[field].id == new_id for rec in records):
+            continue
+        records.env[records._fields[field].comodel_name].browse(
+            new_id).check_access('write')
+
+
 class SecurityAccessAccessPolicy(models.Model):
     """One reusable Cloudflare Access policy on a ROUTE or on a CLOUD SERVICE.
 
@@ -787,6 +893,11 @@ class SecurityAccessAccessPolicy(models.Model):
         _reject_identity_anchor_writes(
             self.env, vals, _POLICY_IDENTITY_ANCHOR_FIELDS,
             is_open=_is_internal_policy_cf_write)
+        # #848：錨點搬移的**歸屬**守衛。位置在任何狀態變更之前——新錨點的授權要在
+        # `super().write()` 之前成立，不要跟著下面那個排序迴圈靠 savepoint 回捲。
+        # 契約、與那個迴圈的分工、以及 su 豁免為何刻意與 #798 相反，全在函式的
+        # docstring 裡。
+        _assert_anchor_move_authorised(self, vals)
         # #786：錨點欄位出現在 vals 裡時，「該重推誰」**必須在**
         # `super().write()` **之前也算一份**。之後才算的那一份只看得到新錨點，
         # 於是舊錨點一次都不會被重推——而它的 Cloudflare Access application 仍然

@@ -691,6 +691,14 @@ from . import test_concurrency_retry_533
 # 對空清單恆真 ⇒ 修好之後它照樣綠但綠的理由變了，**不是**本題的守線，維持原樣。
 from . import test_sh_unlink_authz_preflight_740
 
+# fix: #848 access policy 的三個錨點 Many2one 在 model 層沒有歸屬守線。缺口是
+# **write 側專屬**的——框架 `_create` 尾端會對新建出來的列再跑一次
+# `check_access('create')`，`write()` 只在開頭對寫入前狀態檢查一次、寫入後零複驗。
+# 可利用性落在「兩個 workspace 的共同成員」而非陌生人：三條 member-read rule 的
+# domain 都沒有 role 條件 ⇒ 讀得到目標錨點就搬得過去，兩道既有檢查全過。
+# ⛔ 本檔的守衛擋不到 #849（stored related 的 inverse 委派寫的是來源列）。
+from . import test_policy_anchor_ownership_guard_848
+
 # feat: #803 `access_protection_lost` 打開之後沒有任何週期性收斂會把它推回去。
 # `_access_mark_protection_lost` 的 docstring 逐字寫著「平台**沒有**週期性 Access
 # re-sync，只有 provision / resume / 直接寫 is_protected／login_*／session_duration
