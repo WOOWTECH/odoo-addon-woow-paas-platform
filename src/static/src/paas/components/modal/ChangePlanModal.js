@@ -21,6 +21,11 @@ import { PlanTotalBar } from "../subscription/PlanTotalBar";
  * 供父頁運用，但本 PR 的三個父頁僅以它關 modal 並重載服務——**實際退點金額尚未
  * 對使用者揭露**（UI 揭露列為 follow-up，見 PR 描述）。
  *
+ * 試用中的二階段確認（#36，Q9 改判為 P2）：判準是**目前是否在試用**
+ * （`service.subscription.is_trial`）**單獨**成立，刻意不看目標方案有沒有 trial。
+ * 原 Q9 裁決寫的是「trial→no-trial only」，但那個判準與後端實際行為不符——
+ * 見下方 `willEndTrial` 的完整論證與守線測試連結。
+ *
  * Props:
  *   - service (Object): 顯示用，{ name, subscription: { plan_name, plan_price } }。
  *     modal 不從 service 推導請求對象——callback 已知道要打哪個後端。
@@ -63,6 +68,10 @@ export class ChangePlanModal extends Component {
       plansError: null,
       changing: false,
       error: null,
+      // #36 P2：試用中變更方案的二階段確認。false＝選擇階段，true＝警告階段。
+      // 只是一個 view flag——切換它**不動** selectedPlanId，所以使用者從警告返回
+      // 選擇階段時原本的選擇（含席數變體）原封不動（E2E 情境 2 驗這格）。
+      confirmingTrialEnd: false,
     });
     // onMounted（非 onWillStart）：讓 modal 先掛載再載方案，使用者按下「變更方案」
     // 當下就看得到 modal 與 loading 態。onWillStart 會 block 首次 render，RPC 期間
@@ -94,6 +103,34 @@ export class ChangePlanModal extends Component {
     this.state.error = null;
   }
 
+  /**
+   * 這次變更會不會「當場結束試用並開始計費」。
+   *
+   * 判準只看**目前訂閱是否在試用中**，不看目標方案的 trial 欄位——這是刻意的，
+   * 而且與 issue #34 Q9 的字面裁決（"Trial→no-trial only"）不同。理由是後端行為：
+   *
+   *   change-plan 的三個 endpoint 都先 gate「entity 的 subscription_id 為 truthy
+   *   且 state==='in_progress'」才往下走，而該欄位正是
+   *   `subscription_lifecycle_mixin._create_and_confirm_subscription` 用來決定給不給
+   *   試用的 `entity_has_prior_sub`。gate 與 guard 讀同一個欄位、中間沒有任何一段
+   *   會清它 ⇒ 在 change-plan 路徑上 `entity_has_prior_sub` **結構性恆為 True**
+   *   ⇒ `plan.sh_trial and not entity_has_prior_sub` 恆 False ⇒ 一律走
+   *   `_force_active_dates_from_plan`（寫 `sh_trial=False`、`sh_start_date=today`）。
+   *
+   * 也就是說：**試用中換到「標榜有試用」的方案，一樣會當場結束試用並開首期帳單**。
+   * 照 Q9 字面把 trial→trial 判成靜默，恰好會讓真正扣到錢的那條路徑不出聲。
+   * 這個改判經 Eugene 裁定（#36），紀錄回寫於 #34 / #36。
+   *
+   * ⚠ 本元件的文案對使用者保證「一定會結束試用並產生首期帳單」，而那個「一定」
+   * 是**後端**保證的、不是 UI 保證的。守住這個前提的測試：
+   *   - CS：`src/tests/test_trial_reset_guard_367.py`
+   *   - SA / SH：`src/tests/test_change_plan_ends_trial_36.py`
+   * 若哪天有人改後端讓 trial→trial 保留試用，請一併改這裡的文案——否則它會變成謊言。
+   */
+  get willEndTrial() {
+    return !!this.props.service.subscription?.is_trial;
+  }
+
   get canConfirm() {
     return (
       !this.state.loadingPlans &&
@@ -113,8 +150,21 @@ export class ChangePlanModal extends Component {
     }
   }
 
+  /** 從警告階段返回選擇階段：不送出、選擇保留。 */
+  onBackFromTrialWarning() {
+    this.state.confirmingTrialEnd = false;
+  }
+
   async onConfirm() {
     if (!this.canConfirm) return;
+
+    // #36 P2 第一階段：試用中還沒看過警告 ⇒ 只切到警告階段，**不呼叫
+    // confirmChange**。使用者按「返回」回選擇階段、按「確認」才會再次進到這裡，
+    // 屆時 confirmingTrialEnd 已為 true、直接落到下方送出。
+    if (this.willEndTrial && !this.state.confirmingTrialEnd) {
+      this.state.confirmingTrialEnd = true;
+      return;
+    }
 
     this.state.changing = true;
     this.state.error = null;
