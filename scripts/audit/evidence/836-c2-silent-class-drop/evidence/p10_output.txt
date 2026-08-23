@@ -1,0 +1,59 @@
+C2 PASS：baseline 與 目前原始碼 完全一致（653 項）
+
+C2 註記：以下 28 個 class 被排除在 baseline 之外（列名，不靜默丟棄）：
+  ~ integration.test_ecpay_invoice_real.TestEcpayInvoiceReal
+      因為：有效 tag ＝ ecpay_real／post_install，不含 `standard` ⇒ 標準跑選不到（合法 opt-out，見 repo-lint 的 (b) 那一格）
+  ~ integration.test_failopen_real_rollback_794.TestFailOpenCompensationSurvivesRealRollback
+      因為：有效 tag ＝ failopen_794／post_install，不含 `standard` ⇒ 標準跑選不到（合法 opt-out，見 repo-lint 的 (b) 那一格）
+  ~ integration.test_failopen_real_rollback_794.TestSecurityAccessUnlinkSurvivesRealRollback
+      因為：有效 tag ＝ failopen_794／post_install，不含 `standard` ⇒ 標準跑選不到（合法 opt-out，見 repo-lint 的 (b) 那一格）
+  ~ test_access_policy_reanchor_786._Fixture
+      因為：不是 TestCase 子類（mixin／fixture）⇒ 它的 `def test*` 由子類經 `allow_inherited_tests_method` 展開後**計進子類**，不自成一項
+  ~ test_agent_context_builder._ContextFixture
+      因為：不是 TestCase 子類（mixin／fixture）⇒ 它的 `def test*` 由子類經 `allow_inherited_tests_method` 展開後**計進子類**，不自成一項
+  ~ test_agent_pod_phase_c_sse_gateway.JsLexError
+      因為：不是 TestCase 子類（mixin／fixture）⇒ 它的 `def test*` 由子類經 `allow_inherited_tests_method` 展開後**計進子類**，不自成一項
+  ~ test_agent_pod_phase_d_sse_aclose._FakeWSConn
+      因為：不是 TestCase 子類（mixin／fixture）⇒ 它的 `def test*` 由子類經 `allow_inherited_tests_method` 展開後**計進子類**，不自成一項
+  ~ test_agent_runtime_coldstart_retry._RetryFakeWSConn
+      因為：不是 TestCase 子類（mixin／fixture）⇒ 它的 `def test*` 由子類經 `allow_inherited_tests_method` 展開後**計進子類**，不自成一項
+  ~ test_allow_policy_bulk_grant_352._BulkGrantFixture
+      因為：不是 TestCase 子類（mixin／fixture）⇒ 它的 `def test*` 由子類經 `allow_inherited_tests_method` 展開後**計進子類**，不自成一項
+  ~ test_cf_policy_reap_ledger_528._ReapMixin
+      因為：不是 TestCase 子類（mixin／fixture）⇒ 它的 `def test*` 由子類經 `allow_inherited_tests_method` 展開後**計進子類**，不自成一項
+  ~ test_chart_version_ledger_552._NonClosingCursor
+      因為：不是 TestCase 子類（mixin／fixture）⇒ 它的 `def test*` 由子類經 `allow_inherited_tests_method` 展開後**計進子類**，不自成一項
+  ~ test_chart_version_ledger_552._SyncThread
+      因為：不是 TestCase 子類（mixin／fixture）⇒ 它的 `def test*` 由子類經 `allow_inherited_tests_method` 展開後**計進子類**，不自成一項
+  ~ test_chatter_service_injection._ChatterFixture
+      因為：不是 TestCase 子類（mixin／fixture）⇒ 它的 `def test*` 由子類經 `allow_inherited_tests_method` 展開後**計進子類**，不自成一項
+  ~ test_global_instance_cap_501._CapFixtureMixin
+      因為：不是 TestCase 子類（mixin／fixture）⇒ 它的 `def test*` 由子類經 `allow_inherited_tests_method` 展開後**計進子類**，不自成一項
+  ~ test_haos_seed_423._HaosSeedMixin
+      因為：不是 TestCase 子類（mixin／fixture）⇒ 它的 `def test*` 由子類經 `allow_inherited_tests_method` 展開後**計進子類**，不自成一項
+  ~ test_mcp_server_template_seed._McpServerFamilyAssertions
+      因為：不是 TestCase 子類（mixin／fixture）⇒ 它的 `def test*` 由子類經 `allow_inherited_tests_method` 展開後**計進子類**，不自成一項
+  ~ test_mcp_server_template_seed._McpServerSeedAssertions
+      因為：不是 TestCase 子類（mixin／fixture）⇒ 它的 `def test*` 由子類經 `allow_inherited_tests_method` 展開後**計進子類**，不自成一項
+  ~ test_mcp_sync_failure_visibility_554._FakeMcpClient
+      因為：不是 TestCase 子類（mixin／fixture）⇒ 它的 `def test*` 由子類經 `allow_inherited_tests_method` 展開後**計進子類**，不自成一項
+  ~ test_mcp_sync_failure_visibility_554._FakeTool
+      因為：不是 TestCase 子類（mixin／fixture）⇒ 它的 `def test*` 由子類經 `allow_inherited_tests_method` 展開後**計進子類**，不自成一項
+  ~ test_mcp_sync_failure_visibility_554._PydanticLikeSchema
+      因為：不是 TestCase 子類（mixin／fixture）⇒ 它的 `def test*` 由子類經 `allow_inherited_tests_method` 展開後**計進子類**，不自成一項
+  ~ test_reconciler_diff._FakeClient
+      因為：不是 TestCase 子類（mixin／fixture）⇒ 它的 `def test*` 由子類經 `allow_inherited_tests_method` 展開後**計進子類**，不自成一項
+  ~ test_reconciler_env_pin._FakeClient
+      因為：不是 TestCase 子類（mixin／fixture）⇒ 它的 `def test*` 由子類經 `allow_inherited_tests_method` 展開後**計進子類**，不自成一項
+  ~ test_sa_provision_tenant_rpc_805._TwoNamespacePatch
+      因為：不是 TestCase 子類（mixin／fixture）⇒ 它的 `def test*` 由子類經 `allow_inherited_tests_method` 展開後**計進子類**，不自成一項
+  ~ test_sa_route_teardown_dead_anchor_784._Fixture
+      因為：不是 TestCase 子類（mixin／fixture）⇒ 它的 `def test*` 由子類經 `allow_inherited_tests_method` 展開後**計進子類**，不自成一項
+  ~ test_subscription_mixin_cascade_sudo_29._SubscriptionMixinSudoFixture
+      因為：不是 TestCase 子類（mixin／fixture）⇒ 它的 `def test*` 由子類經 `allow_inherited_tests_method` 展開後**計進子類**，不自成一項
+  ~ test_task_service_extras._ExtrasFixtureMixin
+      因為：不是 TestCase 子類（mixin／fixture）⇒ 它的 `def test*` 由子類經 `allow_inherited_tests_method` 展開後**計進子類**，不自成一項
+  ~ test_tunnel_config_wire_769._CapturingAdapter
+      因為：基底解析不到任何已知家族 ⇒ 無法判定跑不跑得到（repo-lint 會點名要求補進名單，這裡不猜、也不放進 baseline）
+  ~ test_ux_routing_views._AssetReader
+      因為：不是 TestCase 子類（mixin／fixture）⇒ 它的 `def test*` 由子類經 `allow_inherited_tests_method` 展開後**計進子類**，不自成一項

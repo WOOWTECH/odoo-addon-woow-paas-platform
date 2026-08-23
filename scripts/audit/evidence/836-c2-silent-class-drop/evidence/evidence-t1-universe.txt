@@ -1,0 +1,4 @@
+files scanned      : 249
+P1  |U|            : 737
+P2  baseline 資料行 : 653  |E| keys: 653
+     重複 key       : 0

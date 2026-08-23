@@ -41,6 +41,12 @@ Odoo 全套跑完印的是
 「差幾個」沒有可證偽性——拿到一個差額只能猜，任何聽起來合理的解釋都會被接受。
 「是哪一個」拿到具體名字，兩秒就能核對。**所以本檔所有失敗輸出都列名。**
 
+⚠ 這條原則自己也漏過（issue #836）：`scan_expected()` 曾有兩處「數量算成 0 就
+兩個容器都不進」的出口，那批 class 連「差幾個」都沒有——輸出與「這棵樹很乾淨」
+不可區分。現在它們落進第三個容器，由 C2 **獨立一段**列名（Eugene 2026-08-23 裁
+「丙＝分段輸出」）。分段而不是併進排除清單：排除是個位數、每條都要有人看，
+條數 0 那批是三位數級的，併起來等於用「修好靜默丟棄」換掉既有訊號。
+
 ## 檢查
 
     C0 --check-sentinels 完整性哨兵：必然存在的那幾條沒出現 ⇒ 本次差集結論一律不成立
@@ -77,6 +83,7 @@ C2 的「預期」不是本檔自己算的：它呼叫 `repo-lint.py` 的 `_test
 from __future__ import annotations
 
 import argparse
+import ast
 import importlib.util
 import pathlib
 import re
@@ -236,7 +243,17 @@ def _expected_methods(lint, facts, rel: str, name: str, node) -> set[str]:
     return names
 
 
-def scan_expected(root: pathlib.Path) -> tuple[dict[str, int], list[tuple[str, str]]]:
+#: `scan_expected()` 第三個容器的成因標籤。**這兩個字串是 P4 的判別式**：
+#: 「條數 0」那一段混了兩個來源，理由文字分不出來的話，讀的人沒辦法知道某一項
+#: 是「選得中但條數算成 0」（可能是判準盲點，要查）還是「本來就選不中的 mixin」
+#: （多半正常）。分不出來的分段等於沒分段。
+ZERO_GATE_SELECTED = "選得中·條數0"
+ZERO_GATE_UNSELECTED = "選不中·條數0"
+
+
+def scan_expected(
+    root: pathlib.Path,
+) -> tuple[dict[str, int], list[tuple[str, str]], list[tuple[str, str]]]:
     """靜態預測「標準跑會執行哪些 class、各幾條」。
 
     判準**全部借自** `repo-lint.py`（理由見 `repo_lint()`），逐 class：
@@ -253,7 +270,23 @@ def scan_expected(root: pathlib.Path) -> tuple[dict[str, int], list[tuple[str, s
     （丟 `CollectionNotClean`），而不是先算一份不成立的清單再拿去跟 log 對帳——
     後者會把「收集壞了」偽裝成「有幾個 class 沒跑」，指錯修法。
 
-    回 (`{<模組路徑>.<Class>: 條數}`, `[(被排除者, 原因)]`)；排除一律**列名**，不靜默丟棄。
+    🔴 **範圍內的每個 class 一定會落進三個容器中的恰好一個**（issue #836）。
+    這個函式曾經有兩處「數量算成 0 就兩個容器都不進」的靜默出口：
+
+    - `if n:` —— 選得中（有效 tag 含 `standard`）但 `_expected_methods()` 回空
+    - `if lint._test_own_test_methods(node):` —— 選不中（非 tagged）且 own 為空
+
+    兩處都與本 docstring 自宣告的「排除一律列名」相反，而且**輸出與「這棵樹很乾淨」
+    不可區分**：條數為 0 的成因不只「真的沒有測試方法」，也可能是靜態判準的盲點
+    （`test_x = lambda`／`setattr` 注入／decorator 動態產生——`#850` 明文標為範圍外的
+    那批，Odoo loader 照樣收得到）。那時 class 真的有測試在跑，C2 卻一個字都不提。
+
+    ⇒ 第三個容器把這批接住。它**不併進 `excluded`**（Eugene 2026-08-23 裁決「丙＝
+    分段輸出」，#836 comment 8979）：`excluded` 目前只有個位數、每一條都有訊息量，
+    而條數 0 那批是三位數級的，併進去會把既有訊號稀釋掉。
+
+    回 (`{<模組路徑>.<Class>: 條數}`, `[(被排除者, 原因)]`, `[(條數 0 者, 成因)]`)；
+    三者皆**列名**，不靜默丟棄。
     """
     lint = repo_lint()
     root_s = str(root)
@@ -265,6 +298,7 @@ def scan_expected(root: pathlib.Path) -> tuple[dict[str, int], list[tuple[str, s
     suite = lint.TEST_SUITE_DIR_REL
     expected: dict[str, int] = {}
     excluded: list[tuple[str, str]] = []
+    zero_count: list[tuple[str, str]] = []
 
     why = {
         lint._TEST_KIND_UNTAGGED:
@@ -288,6 +322,14 @@ def scan_expected(root: pathlib.Path) -> tuple[dict[str, int], list[tuple[str, s
             if kind != lint._TEST_KIND_TAGGED:
                 if lint._test_own_test_methods(node):
                     excluded.append((ident, why[kind]))
+                else:
+                    # 格二：選不中**且** class body 頂層沒有 `def test*`。
+                    # 「它的測試計進子類」這句話對它不成立（沒有可計的東西），
+                    # 所以它不屬於 `excluded` 那批有訊息量的排除——但也不該消失：
+                    # 靜態看不到 ≠ 真的沒有（non-`def` 形態照樣會被子類收走）。
+                    zero_count.append((ident, "[%s] %s；且 class body 頂層沒有 "
+                                              "`def test*`（靜態看不到 ≠ 真的沒有）"
+                                       % (ZERO_GATE_UNSELECTED, why[kind])))
                 continue
             tags = lint._test_effective_tags(facts, rel, name)
             if "standard" not in tags:
@@ -298,8 +340,19 @@ def scan_expected(root: pathlib.Path) -> tuple[dict[str, int], list[tuple[str, s
             n = len(_expected_methods(lint, facts, rel, name, node))
             if n:
                 expected[ident] = n
+            else:
+                # 格一：**選得中**（有效 tag 含 `standard`）卻算出 0 條。
+                # 這一格比格二危險：這個 class 標準跑真的會被 loader 走到，
+                # 條數 0 只是**靜態這一側**的結論。兩邊不一致時，C2 的雙向差集
+                # 對它完全沉默（baseline 沒有它、預期也沒有它 ⇒ 差集為空）。
+                zero_count.append((ident, "[%s] 有效 tag 含 `standard` ⇒ 標準跑選得中，"
+                                          "但靜態條數＝0 ⇒ 不進 baseline。成因可能是"
+                                          "真的沒有測試方法，也可能是判準盲點"
+                                          "（`test_x = lambda`／`setattr`／decorator "
+                                          "等 non-`def` 形態）——本檔分不出來，故列名"
+                                   % ZERO_GATE_SELECTED))
 
-    return expected, excluded
+    return expected, excluded, zero_count
 
 
 # ── baseline I/O ──────────────────────────────────────────────────────────
@@ -581,19 +634,62 @@ def _report_collection_not_clean(exc: CollectionNotClean, title: str) -> int:
     return 2
 
 
+def _report_excluded(excluded: list[tuple[str, str]], tag: str) -> None:
+    """有訊息量的排除：個位數，逐條連理由一起印。"""
+    if not excluded:
+        return
+    print(f"\n{tag} 註記：以下 {len(excluded)} 個 class 被排除在 baseline 之外"
+          f"（列名，不靜默丟棄）：")
+    for ident, why in sorted(excluded):
+        print(f"  ~ {ident}\n      因為：{why}")
+
+
+def _report_zero_count(zero_count: list[tuple[str, str]], tag: str) -> None:
+    """條數 0 的那批：**獨立一段**（彙總計數＋逐條列名）。
+
+    🔴 這一段與上面的 `excluded` 分開，是 #836 的裁決（Eugene 2026-08-23，
+    comment 8979「丙＝分段輸出」）。理由不是版面：`excluded` 是個位數、每條都要
+    有人去看，條數 0 那批是三位數級的；併成一段的話前者會被後者淹掉，等於用
+    「修好靜默丟棄」換來「既有訊號失效」。
+
+    ⚠ 兩個成因（選得中／選不中）**必須分得出來**——見 `ZERO_GATE_*` 的說明。
+    這裡先照成因彙總計數，再逐條列名並帶著成因標籤。
+
+    ⚠ 這一段**不影響 rc**。它記錄的是「靜態這一側看不到條數」，不是違規：
+    多數項目（mixin／fixture）是正常的。讓它決定 rc 會把 C2 綁成常態紅，
+    而常態紅的 gate 沒有人看——那正是本檔要治的失效形態。
+    """
+    if not zero_count:
+        return
+    buckets: dict[str, list[str]] = {}
+    for ident, why in zero_count:
+        gate = why[1:why.index("]")] if why.startswith("[") and "]" in why else "（未標示）"
+        buckets.setdefault(gate, []).append(ident)
+    print(f"\n{tag} 註記（條數 0，獨立段）：以下 {len(zero_count)} 個 class 的靜態條數"
+          f"算出來是 0 ⇒ 既不進 baseline、也不算「排除」。")
+    print("  ⚠ 條數 0 ≠ 沒有測試在跑：non-`def` 形態（`test_x = lambda`／`setattr`／"
+          "decorator）\n    靜態看不到、Odoo loader 照樣收得到（見 #850 標為範圍外的那批）。")
+    print("  依成因彙總：")
+    for gate in sorted(buckets):
+        print(f"    {len(buckets[gate]):>4} 個  [{gate}]")
+    print("  逐條列名：")
+    for ident, why in sorted(zero_count):
+        gate = why[1:why.index("]")] if why.startswith("[") and "]" in why else "（未標示）"
+        print(f"    · {ident}  [{gate}]")
+    return
+
+
 def check_baseline(root: pathlib.Path, baseline: pathlib.Path) -> int:
     try:
-        expected, excluded = scan_expected(root)
+        expected, excluded, zero_count = scan_expected(root)
     except CollectionNotClean as exc:
         return _report_collection_not_clean(exc, "C2")
     if not baseline.is_file():
         print(f"C2 FATAL: baseline 不存在，先跑 --update-baseline（{baseline}）", file=sys.stderr)
         return 2
     rc = _diff_report("C2", "baseline", "目前原始碼", load_baseline(baseline), expected)
-    if excluded:
-        print(f"\nC2 註記：以下 {len(excluded)} 個 class 被排除在 baseline 之外（列名，不靜默丟棄）：")
-        for ident, why in sorted(excluded):
-            print(f"  ~ {ident}\n      因為：{why}")
+    _report_excluded(excluded, "C2")
+    _report_zero_count(zero_count, "C2")
     return rc
 
 
@@ -789,6 +885,7 @@ SELF_TEST_TREE = {
         "from . import test_mix\n"
         "from . import test_inherit\n"
         "from . import test_deselected\n"
+        "from . import test_zero\n"
         "from .sub import test_in_sub\n"
     ),
     # 混合檔：同檔一個會跑、一個不會跑
@@ -820,6 +917,23 @@ SELF_TEST_TREE = {
         "@tagged('-standard', 'post_install', 'probe_only')\n"
         "class TestDeselected(TransactionCase):\n"
         "    def test_d(self): pass\n"
+    ),
+    # 🔴 條數 0 的兩格（issue #836）。兩格**都要**有樣本：只留一格的話，另一格
+    #    重新退化成靜默出口時 self-test 全綠，而輸出與「那一格沒有東西」相同。
+    #    觸發器用 non-`def` 形態（`#850` 標為範圍外的那批）而不是「真的空 class」：
+    #    空 class 的條數 0 是正確結論，而這裡要守的性質是「**條數 0 也要列名**，
+    #    因為靜態這一側分不出『真的沒有』與『判準看不到』」。
+    "src/tests/test_zero.py": (
+        "from odoo.tests.common import TransactionCase\n"
+        # 格一：選得中（tag 含 standard）但靜態條數＝0
+        "class TestZeroByAssign(TransactionCase):\n"
+        "    test_z = lambda self: None\n"
+        # 格二：非 TestCase 子類（kind=other）且 class body 頂層無 def test*
+        "class _ZeroMixin:\n"
+        "    allow_inherited_tests_method = True\n"
+        "    test_from_mixin = lambda self: None\n"
+        "class TestUsesZeroMixin(_ZeroMixin, TransactionCase):\n"
+        "    def test_own(self): pass\n"
     ),
     "src/tests/sub/__init__.py": "from . import test_in_sub\n",
     "src/tests/sub/test_in_sub.py": (
@@ -884,8 +998,8 @@ def self_test() -> int:
     with tempfile.TemporaryDirectory() as td:
         root = pathlib.Path(td)
         _write_tree(root, SELF_TEST_TREE)
-        exp, exc = scan_expected(root)
-        exc_map = dict(exc)
+        exp, exc, zero = scan_expected(root)
+        exc_map, zero_map = dict(exc), dict(zero)
 
         # 🔴 混合檔：同檔的兩個 class 結論必須**不同**。這正是被刪掉的 module 級判準
         #    看不到的那一格（#684 8233 §5.1 的 test_reconciler_diff.py）。
@@ -914,6 +1028,71 @@ def self_test() -> int:
         # 子套件：識別字要帶套件名（與 detail report 的 `_TEST_ID` 同一個空間）
         if "sub.test_in_sub.TestInSub" not in exp:
             failures.append(f"子套件的識別字沒帶套件名：{sorted(exp)}")
+
+        # ── 條數 0 的兩格（issue #836）──────────────────────────────────
+        # 這四條各自對應一個曾經／可能重新出現的靜默出口。**逐格斷言**而不是只
+        # 比總數：兩格互換或其中一格漏掉時，總數不變、輸出看起來一樣正常。
+        #
+        # 🔴 先驗「兩個標籤真的分得開」，再拿標籤去驗歸屬。順序不可換：下面那段
+        #    用的是 `ZERO_GATE_*` 這兩個常數本身，所以把兩個常數改成同一個字串時，
+        #    每一條 `gate in why` 都會照樣成立 ⇒ **斷言在驗它自己**。這一格實測
+        #    抓到過那個變異體（M4），沒有它時兩支守衛都是綠的。
+        #    子字串關係也要擋：「在舊標籤後加後綴」是最自然的命名衝動，而那正好
+        #    讓 `in` 分不開（memory: 新 marker 不得是舊 marker 的超字串）。
+        if ZERO_GATE_SELECTED == ZERO_GATE_UNSELECTED:
+            failures.append("🔴 ZERO_GATE_* 兩個成因標籤相同 ⇒ 分段輸出分不出來源，"
+                            "而底下每一條 `gate in why` 都會照樣通過（斷言在驗自己）")
+        elif (ZERO_GATE_SELECTED in ZERO_GATE_UNSELECTED
+              or ZERO_GATE_UNSELECTED in ZERO_GATE_SELECTED):
+            failures.append(f"🔴 ZERO_GATE_* 互為子字串（{ZERO_GATE_SELECTED!r} / "
+                            f"{ZERO_GATE_UNSELECTED!r}）⇒ 用 `in` 判歸屬會兩邊都命中")
+        for ident, gate, gate_name in (
+            ("test_zero.TestZeroByAssign", ZERO_GATE_SELECTED, "格一（選得中但條數 0）"),
+            ("test_zero._ZeroMixin", ZERO_GATE_UNSELECTED, "格二（選不中且 own 為空）"),
+        ):
+            if ident in exp:
+                failures.append(f"🔴 {gate_name}：{ident} 被算進預期清單了"
+                                f"——靜態條數是 0，它不該有 baseline 項")
+            if ident in exc_map:
+                failures.append(f"🔴 {gate_name}：{ident} 被併進 `excluded` 了"
+                                f"——#836 裁決是分段輸出，不是併進去稀釋既有訊號")
+            if ident not in zero_map:
+                failures.append(f"🔴 {gate_name}：{ident} 被**靜默丟棄**（三個容器都沒有）"
+                                f"——這正是 #836 那兩個出口；zero={sorted(zero_map)}")
+            elif gate not in zero_map[ident]:
+                failures.append(f"🔴 {gate_name}：{ident} 的成因標籤不是 `{gate}`"
+                                f"，兩格分不出來 ⇒ 分段等於沒分：{zero_map[ident]!r}")
+
+        # P1 守恆：分母**獨立枚舉**（plain ast 自己走一遍，不經 `_test_tree_facts`，
+        # 更不是把三個容器加起來——那樣這條就恆真）。
+        universe: set[str] = set()
+        for p in sorted((root / "src" / "tests").rglob("*.py")):
+            if p.name == "__init__.py":
+                continue
+            mod = str(p.relative_to(root / "src" / "tests"))[:-len(".py")].replace("/", ".")
+            universe |= {f"{mod}.{n.name}" for n in
+                         ast.parse(p.read_text(encoding="utf-8")).body
+                         if isinstance(n, ast.ClassDef)}
+        buckets = [set(exp), set(exc_map), set(zero_map)]
+        union: set[str] = set()
+        overlap: set[str] = set()
+        for b in buckets:
+            overlap |= union & b
+            union |= b
+        if universe - union:
+            failures.append(f"🔴 P1 守恆：{len(universe - union)} 個 class 落在三個容器之外"
+                            f"（＝靜默丟棄，#836）：{sorted(universe - union)}")
+        if union - universe:
+            failures.append(f"🔴 P1 守恆：容器裡有分母沒有的 ident（枚舉口徑不一致，"
+                            f"不是資料有事）：{sorted(union - universe)}")
+        if overlap:
+            failures.append(f"🔴 P1 守恆：同一個 class 出現在多個容器裡："
+                            f"{sorted(overlap)}")
+        # 🔴 守恆檢查的陽性對照：不注入的話，「分母算錯」與「守恆成立」輸出相同。
+        #    拿掉分母裡的一項 ⇒ 上面第二條（union - universe）必須有反應。
+        if not (union - (universe - {"test_mix.TestOdooSide"})):
+            failures.append("🔴 P1 守恆的陽性對照失敗：把 TestOdooSide 從分母拿掉之後，"
+                            "守恆比對沒有任何反應 ⇒ 上面那三條不具鑑別力")
 
     # (3b) 收集面不乾淨 ⇒ 拒絕產生預測，不是先算一份不成立的
     with tempfile.TemporaryDirectory() as td:
@@ -1029,7 +1208,8 @@ def self_test() -> int:
         return 1
     print("SELF-TEST PASS：SKIP_LINE 四形態＋陰性對照／粒度切分（含子套件，"
           "點數判法在那裡會錯）／scan_expected（混合檔逐 class、篩子④' 旗標可繼承、"
-          "-standard 列名排除、子套件識別字）／收集面不乾淨時拒絕預測／"
+          "-standard 列名排除、子套件識別字、條數 0 的兩格各自列名且成因可分辨、"
+          "P1 守恆＋其陽性對照）／收集面不乾淨時拒絕預測／"
           "FAILURE_LINE 注入式樣本集（%d 陽性＋%d 陰性，並用 %d 個蓄意寫壞的變異體"
           "反驗樣本集的鑑別力）／完整性哨兵／C5 失敗集合差／雙向差集 —— 全部命中"
           % (sum(1 for _, i in SELF_TEST_FAILURE_LINES if i),
@@ -1063,17 +1243,15 @@ def main() -> int:
         return self_test()
     if args.update_baseline:
         try:
-            expected, excluded = scan_expected(REPO_ROOT)
+            expected, excluded, zero_count = scan_expected(REPO_ROOT)
         except CollectionNotClean as exc:
             return _report_collection_not_clean(exc, "--update-baseline")
         write_baseline(BASELINE, expected)
         total = sum(expected.values())
         print(f"已寫入 {BASELINE.relative_to(REPO_ROOT)}："
               f"{len(expected)} 個 class／{total} 條 test 方法")
-        if excluded:
-            print(f"排除 {len(excluded)} 個（列名）：")
-            for ident, why in sorted(excluded):
-                print(f"  ~ {ident}  —  {why}")
+        _report_excluded(excluded, "--update-baseline")
+        _report_zero_count(zero_count, "--update-baseline")
         return 0
 
     rc = 0
