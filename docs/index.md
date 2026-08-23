@@ -4,7 +4,7 @@
 > 分類的定義與寫新檔該放哪，見 [`README.md`](README.md)。
 > 本檔由 `scripts/audit/gen-docs-index.py` 產生，數字即時算出——**不要手改**。
 
-目前共 **654** 份文件（含 `archived/` 311 份）。
+目前共 **655** 份文件（含 `archived/` 311 份）。
 
 ## 我要照步驟做一件事
 
@@ -12,7 +12,7 @@
 |---|---|---|
 | [`guides/deployment/`](guides/deployment/) | 上 prod／stg、發版、升版、image 重釘 | 15 |
 | [`guides/testing/`](guides/testing/) | 跑測試、E2E、本機沙盒 | 8 |
-| [`guides/development/`](guides/development/) | 開發期工具與架構 | 4 |
+| [`guides/development/`](guides/development/) | 開發期工具與架構 | 5 |
 | [`guides/frameworks/`](guides/frameworks/) | superpowers / SuperClaude 用法 | 2 |
 
 ## 我要查一個事實或規格
