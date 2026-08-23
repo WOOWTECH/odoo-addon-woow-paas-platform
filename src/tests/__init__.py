@@ -656,6 +656,41 @@ from . import test_sa_provision_orphan_tunnel_822
 # 對「攻擊者的值沒落地」同樣是綠的，同型翻車見 `test_sa_anchor_default_carriers_753`）。
 from . import test_policy_cf_id_write_guard_798
 
+# fix: #732 owner 對自己那列 write({'role':'admin'}) ⇒ workspace 永久 0 owner。
+# 三道既有守衛全漏（owner-row 守衛只擋非 owner 呼叫者、last-owner 不變式只掛
+# unlink、owner_count constraint 只在新值是 owner 時觸發）。新守衛＝write 路徑的
+# last-owner 保護：demote 會讓該 workspace 剩 0 owner 時 ValidationError。
+# 🔴 判準比對記錄不比對呼叫者（數 demote 之外剩幾個 owner，不是 blanket-deny
+# owner 列）——雙 owner SQL 直造的陽性對照釘住這個形狀；su/group_system 豁免
+# 由「promote-first 已被 owner_count constraint 擋死」逼出（詳見該檔檔頭），
+# 平台側 demote-then-promote 整段轉移有專屬陽性對照。
+from . import test_workspace_access_last_owner_732
+
+# fix: #533 controller 用裸 `except Exception` 收掉並發類 DB 例外
+# （`SerializationFailure` 40001 是 `Exception` 子類）並正常 return ⇒ 例外從未
+# 逸出到 `retrying()` 的攔截點（它在 controller 的 except 鏈**外層**）⇒ 本來
+# 會被自動重試而成功的操作變成使用者看到的失敗。
+# 三站各自有自己的注入斷言、不共用一格綠燈：`api_service_skip_trial`（issue
+# 本體）、`api_service_reset_admin_password`（枚舉補到——它的 model 層有兩處
+# `except OperationalError: raise` 被 controller 吞回去，那兩處今天等於沒作用）、
+# `api_service_skip_trial_estimate`（枚舉補到，side-effect-free 但缺口相同）。
+# 🔴 一律走真 HTTP：每條斷言的結論都取決於「例外**逸出被測碼之後**會發生什麼」，
+# 而 #572 已實測記載直呼與真 HTTP 在這種形狀下語意分歧、直呼會失去鑑別力。
+# 🔴 注入的 40001 必須用 `__setstate__` 補上真 pgcode（Odoo 自己在
+# `test_http/controllers.py::upload_file_retry` 的手法）——直接建構的 pgcode 是
+# None，`retrying()` 的 `errorcodes.lookup()` 會先 KeyError，重試路徑根本走不到。
+# `test_the_injected_exception_carries_a_real_pgcode` 把這個前提釘成斷言。
+# 陽性對照：三站各有一條「不注入時端點成功」＋一條「注入真的被呼叫到」。
+from . import test_concurrency_retry_533
+
+# fix: #740 unlink() 的外部副作用送在授權檢查之前 —— 授權前置檢查（authorization
+# preflight）。租戶刪除必失敗（ACL unlink=0），但 Cloudflare 那半在被拒之前就已經
+# 送出去且回捲不掉。
+# 🔴 本檔的強斷言是「授權被拒時外部呼叫數為零」＋逐一列名「哪些 method 沒被呼叫」；
+# `test_smart_home_authz_524.py` 的 C5 守的是 #524（不得送出**別的租戶**的 id），
+# 對空清單恆真 ⇒ 修好之後它照樣綠但綠的理由變了，**不是**本題的守線，維持原樣。
+from . import test_sh_unlink_authz_preflight_740
+
 # feat: #803 `access_protection_lost` 打開之後沒有任何週期性收斂會把它推回去。
 # `_access_mark_protection_lost` 的 docstring 逐字寫著「平台**沒有**週期性 Access
 # re-sync，只有 provision / resume / 直接寫 is_protected／login_*／session_duration
