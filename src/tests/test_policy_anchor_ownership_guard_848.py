@@ -76,6 +76,7 @@ import logging
 import sys
 import traceback
 import uuid
+from unittest.mock import patch
 
 from odoo.exceptions import AccessError
 from odoo.tests import HttpCase, tagged
@@ -92,6 +93,12 @@ _ROUTE = 'woow_paas_platform.security_access_route'
 _POLICY = 'woow_paas_platform.security_access_access_policy'
 _CS = 'woow_paas_platform.cloud_service'
 _SH_ROUTE = 'woow_paas_platform.smart_home_route'
+
+#: C3b／C4 停用守衛用的 patch 標的。守衛是 **module-level function**、
+#: `write()` 以模組全域名稱呼叫它 ⇒ patch 這個名字就等於把守衛 body 拿掉，
+#: 而且**同一個 process 內的 HTTP server thread 也吃得到**（RPC 那格靠這點）。
+_GUARD = ('odoo.addons.woow_paas_platform.models.'
+          'security_access_access_policy._assert_anchor_move_authorised')
 
 
 def _new_group_user(env, name):
@@ -525,6 +532,69 @@ class TestPolicyAnchorMovePositiveControls848(_AnchorOwnership848Fixture):
             '_assert_anchor_move_authorised', names,
             '#848：守衛在的時候，陌生人這一格必須紅在**新守衛**上'
             '——實際 traceback 的 frame 依序為 %r' % (names,))
+
+    def test_C3b_existing_ordering_loop_still_catches_the_stranger(self):
+        """把新守衛停用之後，陌生人**必須仍然紅在既有的那個排序迴圈上**。
+
+        這一格才是真正在證「既有防線沒有被我改壞、也沒有被取代掉」。C3a 證的是
+        「守衛在的時候誰先攔下」——那只說明順序。issue-leader 已裁定用這兩格取代
+        工單原本那條（原條要求陌生人紅在既有迴圈上，但守衛跑在 `super().write()`
+        之前、陌生人對目標錨點的 `check_access('write')` 同樣不過 ⇒ 那個迴圈在該
+        案例裡結構上不可達，原條照字面不可能成立）。
+
+        判準用 frame 的**原始碼內容**（`check_access('read')`）而不是行號：#854 剛把
+        這個檔的行號整段推移過，行號判準會靜默失效。
+        """
+        carol, _ = _new_group_user(self.env, 'carol848b')
+        ws_c = self._workspace('WS-C 848b', carol)
+        _, route_c = self._sa_route(ws_c, 'cb')
+        pol = self._policy(route_c, 'c3b')
+
+        with patch(_GUARD):
+            try:
+                pol.with_user(carol).write({'route_id': self.route_b.id})
+            except AccessError:
+                frames = traceback.extract_tb(sys.exc_info()[2])
+            else:
+                self.fail(
+                    '新守衛停用之後，既有的排序迴圈仍必須擋下陌生人——這一格若通過'
+                    '代表本單把既有防線改壞或取代掉了')
+
+        self.assertEqual(
+            self._db(_POLICY, pol.id, 'route_id'), route_c.id,
+            '被拒之後 DB 那一格必須仍是舊錨點')
+        names = [f.name for f in frames]
+        self.assertNotIn(
+            '_assert_anchor_move_authorised', names,
+            '前提：本格必須是在守衛**停用**的狀態下量到的（實際 frame %r）'
+            % (names,))
+        self.assertTrue(
+            any(f.name == 'write' and "check_access('read')" in (f.line or '')
+                for f in frames),
+            '#848：擋下陌生人的必須是 `write()` 裡那個 `check_access(\'read\')` '
+            '迴圈——實際 frame 為 %r'
+            % ([(f.name, f.line) for f in frames],))
+
+    def test_C4_injection_control_disabling_the_guard_lets_the_attack_land(self):
+        """🔴 注入對照：把守衛停用，A1 的攻擊必須**翻回成功**。
+
+        少了這一格，A1 的綠與「A1 根本沒打到守衛」（fixture 走偏、RPC 沒到、錨點
+        id 打錯）在輸出上不可區分——那正是本 repo 反覆踩到的假綠形狀。
+        """
+        self.authenticate(self.mallory_login, self.mallory_login)
+        self._tenant_write_positive_control(self.pol.id, 'c4')
+
+        with patch(_GUARD):
+            status, result, landed = self._attempt_anchor_move(
+                self.pol.id, {'route_id': self.route_b.id}, 'C4')
+
+        self._assert_ok(
+            status, result,
+            '注入對照：守衛停用後這條 RPC 必須成功（它是 A1 的同一條）')
+        self.assertEqual(
+            landed['route_id'], self.route_b.id,
+            '注入對照：守衛停用後攻擊必須落地——沒落地代表 A1 的綠不是守衛造成的'
+            '（實際落地 %r）' % (landed['route_id'],))
 
 
 class TestPolicyAnchorRuleAsymmetry848(_AnchorOwnership848Fixture):
