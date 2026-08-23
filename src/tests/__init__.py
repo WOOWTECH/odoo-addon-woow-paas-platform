@@ -698,3 +698,14 @@ from . import test_sh_unlink_authz_preflight_740
 # domain 都沒有 role 條件 ⇒ 讀得到目標錨點就搬得過去，兩道既有檢查全過。
 # ⛔ 本檔的守衛擋不到 #849（stored related 的 inverse 委派寫的是來源列）。
 from . import test_policy_anchor_ownership_guard_848
+
+# feat: #803 `access_protection_lost` 打開之後沒有任何週期性收斂會把它推回去。
+# `_access_mark_protection_lost` 的 docstring 逐字寫著「平台**沒有**週期性 Access
+# re-sync，只有 provision / resume / 直接寫 is_protected／login_*／session_duration
+# 三種事件會推」——三種都要租戶或維運自己動手 ⇒ 沒人動，對外 hostname 就一直
+# 可達且未受保護。本檔守那條缺席的收斂路徑（三張表：SA route／SH route／CS）。
+# 🔴 形狀守線在 A5/B5/C5/D1：`search(domain, limit=N)` 會被永久推不動的旗標列
+# 自己堵死，而那個狀態與「今天沒事做」在輸出上完全一樣（#791 F1 同型）。
+# D4 釘住「零命中那輪也要出聲、且那一行自帶三個計數」——空手與全被擋是兩件事。
+# D5 釘住 cron 的回存過得了 #854 的 `access_app_id` 欄位級守衛。
+from . import test_access_resync_cron_803
