@@ -251,7 +251,8 @@ test-collectability 由兩個函式——收集面／執行面。這個一對多
                      掉的當下，租戶對 workspace 本體的寫入就完全不設限，而且無聲。
                      刻意寫成獨立一條而不是併進第 23 條：第 23 條的名字已經進了
                      `baselines/repo-lint-registry.txt` 這個只准長不准縮的 floor，改名
-                     要跑 `--update-baseline`，而那支會一次重產**全部** baseline、
+                     要跑 `--update-baseline`，而那支會一次重產 `controller-sudo.txt`／
+                     `data-noupdate.txt`／`seed-topology.txt`／`repo-lint-registry.txt`，
                      順手吸收掉別處新冒出來的違規（#613 記錄有案）。附加一條不會。
                      🔴 本條與第 23 條共用實作，兩者唯一的差別是 model 錨點那**一個
                      字串** ⇒ 把它複製貼上成第 23 條的值，本條就靜默退化成第 23 條的
@@ -1736,10 +1737,11 @@ MODULE_XMLID_PREFIX = "woow_paas_platform."
 # (1) 已經住在 noupdate="1" 區塊的既有 ir.rule：**只准縮不准長**的 grandfather 清單。
 # 🔴 #658 把原本列在這裡的 workspace_rule_member_access / workspace_rule_create 退役掉
 # 之後，這份清單已經空了——**空是正確的終態，不要為了「留個範例」塞東西回來**。
-# 🔴 刻意寫成 in-code 常數而不是 `baselines/*.txt`：`--update-baseline` 會一次重產**全部**
-# baseline，任何人為了別的理由（改 seed 拓撲、新增一條 check）跑它，就會把新冒出來的
-# 違規一起靜默吸收——那是 baseline 機制的已知代價，而這份清單守的是安全面。寫在 code
-# 裡時「放行一條新的 rule」必然出現在同一處 diff，覆核看得到。
+# 🔴 刻意寫成 in-code 常數而不是 `baselines/*.txt`：`--update-baseline` 會一次重產
+# `controller-sudo.txt`／`data-noupdate.txt`／`seed-topology.txt`／
+# `repo-lint-registry.txt`，任何人為了別的理由（改 seed 拓撲、新增一條 check）跑它，
+# 就會把新冒出來的違規一起靜默吸收——那是 baseline 機制的已知代價，而這份清單守的是
+# 安全面。寫在 code 裡時「放行一條新的 rule」必然出現在同一處 diff，覆核看得到。
 SECURITY_RULE_NOUPDATE_ALLOWED = {}
 
 # (2) 已用 migration DELETE 退役的 xmlid：不得再有 <record> 宣告。
@@ -3880,9 +3882,11 @@ INTERNAL_CTX_KEY_SKIP_PREFIXES = ("src/tests/",)
 # 註冊表。
 #
 # 🔴 刻意是 in-code 常數而不是 `baselines/*.txt`：`--update-baseline` 會一次重產
-#    **全部** baseline 檔（第 17 條檔頭已載明同樣的理由），把 registry 放進去等於
-#    讓「新增一把未登記的鑰匙」可以被一句 `--update-baseline` 靜默收編——那正好把
-#    (iii) 的價值歸零。形狀抄第 26 條的 `PROVISION_SENTINEL_ALLOWLIST`。
+#    `controller-sudo.txt`／`data-noupdate.txt`／`seed-topology.txt`／
+#    `repo-lint-registry.txt`（檔頭的 `workspace-rule-directions` 條已載明同樣的
+#    理由），把 registry 放進去等於讓「新增一把未登記的鑰匙」可以被一句
+#    `--update-baseline` 靜默收編——那正好把 (iii) 的價值歸零。形狀抄
+#    `PROVISION_SENTINEL_ALLOWLIST`（`provision-sentinel-allowlist` 那條）。
 #
 # 欄位語意：
 #   status      'enforced'     —— 已 sentinel 化，(i)(ii) 全套生效。
@@ -5561,6 +5565,24 @@ def run_all(root):
 
 
 def update_baseline(root):
+    """重產 `controller-sudo.txt`／`data-noupdate.txt`／`seed-topology.txt`／
+    `repo-lint-registry.txt`——就這幾個，**不是** `baselines/` 底下的每一個檔。
+
+    同一個目錄底下還住著 `test-collection.txt`／`test-collection-sentinels.txt`／
+    `test-collection-known-failures.txt`：它們歸 `scripts/audit/test_collection_audit.py`
+    （那支有它自己的 `--update-baseline`，只寫 `test-collection.txt` 一檔）與人工維護，
+    本函式一個字都不碰。
+
+    🔴 這裡把檔名列出來，而不是寫「全部」或寫數量：`baselines/` 的成員**還會長**
+    ——`test_collection_audit.py` 已經宣告了 `GREEN_STREAK`
+    （`baselines/test-collection-green-streak.txt`，由 `odoo-tests` workflow 產生），
+    而它的讀取端是 `if GREEN_STREAK.is_file():` ⇒ 那個檔可以在任何一天出現，**出現的
+    當下不會有任何訊號**。寫「全部」或寫數量的話，那句話就在那一天靜默變成假的；
+    沒有任何 gate 在對帳「散文涵蓋的集合」與「本函式實際寫入的集合」——實證是本檔
+    三處註解（`workspace-rule-directions` 條、`SECURITY_RULE_NOUPDATE_ALLOWED` 與
+    `INTERNAL_CTX_KEY_REGISTRY` 上方）在 #838 之前都寫著「全部」，而 `--all` 一路全綠。
+    檔名寫錯不一樣：`git grep` 抓得到。
+    """
     os.makedirs(BASELINE_DIR, exist_ok=True)
     counts = current_sudo_counts(root)
     with open(SUDO_BASELINE, "w", encoding="utf-8") as f:
