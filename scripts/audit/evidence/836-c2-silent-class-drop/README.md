@@ -8,6 +8,26 @@ issue [#836](https://git-prod.woowtech.io/odoo-addons/woow_paas_platform/issues/
 - 被測物：`scripts/audit/test_collection_audit.py` 的 C2（`--check-baseline`）
   ＋ 它借用的 `scripts/audit/repo-lint.py` 判準
 - 對應的 RED：`scripts/audit/red_836_silent_class_drop.py`（**故意是紅的**，exit 1）
+  —— 🔴 **段二已移除該檔**，見下方「段二之後」。
+
+## 段二之後（2026-08-23，基底 `e3ba0d0d`）
+
+段一那支 RED 的觸發器（`def test*` 包在 class body 的 `if` / `try` 裡）已被 **#850**
+（PR #867，merge `91fb7df6`）修掉。它在新基底上**仍然 exit 1**，但**紅在別的分支上**：
+那兩個 class 已經進了 `expected`（條數 1），而 `check_baseline()` PASS 時本來就不列名
+⇒ 它的「輸出沒提到這個名字」照樣成立，失敗訊息（「條數被算成 0 之後…」）卻是假的。
+**顏色對、診斷錯**——比預期中的「變綠」更難察覺（原始輸出見段二報告）。
+
+⇒ 段二用 non-`def` 形態（`test_x = lambda`／`setattr`／decorator，#850 明文標為範圍外
+的那批）重建成 `scripts/audit/test_836_zero_count_class_named.py`，並刪掉舊檔——
+留著會是一支**必定 ValueError** 的死檔（下方 §「`probes/` 的注意事項」同理）。
+
+🔴 **`probes/` 三支與本目錄所有 `evidence/*.txt` 一律不動**，理由同下：它們是
+`16b5fc04` 當時的原始輸出與產出它們的那一版程式。其中 `t1_partition.py` /
+`t1_p9_p10.py` 寫的是 `expected, excluded = audit.scan_expected(ROOT)`——
+#836 段二把回傳改成 **3-tuple**（多了「條數 0」那個容器）之後，**這兩支在現行樹上
+會丟 `ValueError`**。那是刻意的：把它們改成能跑，就把「當時量到什麼」這件事改掉了。
+要重跑請複製一份改，不要就地改原件。
 
 🔴 **段二開 PR 前要決定這批是否保留**——這批證據檔會讓 PR 變大。
 現在照搬進分支是因為**保全優先於整潔**（判別式只活在 scratchpad 等於沒有耐久載體，

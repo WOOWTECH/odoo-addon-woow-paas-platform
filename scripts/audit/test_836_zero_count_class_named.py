@@ -1,5 +1,14 @@
 #!/usr/bin/env python3
-"""🔴 RED（issue #836）：靜態條數算成 0 的 class 從 C2 的輸出裡**整個消失**。
+"""守衛（issue #836）：靜態條數算成 0 的 class 不得從 C2 的輸出裡消失。
+
+## 它出生時是紅的
+
+本檔先以 RED 落地（commit `3d2c76ef`，修法前 exit 1、5 格全紅），修法之後才轉綠並
+改名納入 `repo-lint.yml` 的「scripts/ 自我測試」glob（`scripts/audit/test_*.py`）。
+一支只驗過一次、之後沒人跑的探針，正是那一步的註解自己在治的失效形態。
+
+⚠ 它守的**不是** rc：C2 對「條數 0」那一段刻意不計分（多數是正常的 mixin／fixture，
+   計分會把 C2 綁成常態紅）。它守的是**列名**——那批 class 必須出現在輸出裡。
 
 ## 這支是段一那支 RED 的重建，不是它的複製
 
@@ -46,6 +55,14 @@ statement 型別才看得出這是「只認頂層 `def`」這件事本身。
     (D) 陽性對照     同一支 check_baseline，餵它三種**該抓到**的差異，確認它會紅；
                      再對 P1 守恆檢查注入一次「讓一個 class 憑空消失」，確認它也會紅
     (E) 旁證（不計分）其餘判準對這個情境的反應
+
+## 它與 `test_collection_audit.py --self-test` 分工，兩支都要留
+
+同一組變異體實測（見 PR 說明）：`--self-test` 驗的是**容器歸屬**（那批 class 有沒有
+進第三個容器、成因標籤分不分得開），本檔驗的是**輸出**（名字有沒有真的印出來）。
+把 `_report_zero_count()` 整段短路掉時，容器完全正確 ⇒ `--self-test` 全綠，只有本檔會紅。
+反過來把「條數 0」併進 `excluded`（＝#836 的甲案）時只有 `--self-test` 會紅。
+⇒ 兩支的盲區互補，刪掉任何一支都會留下一整類無聲退化。
 
 Refs #836 #546 #850
 """
@@ -336,7 +353,7 @@ def main() -> int:  # noqa: C901 —— 五格是刻意攤平的，拆函式會�
 
     print("\n" + "=" * 74)
     if failures:
-        print("🔴 RED（%d 格）—— 這是 #836 修法落地前的預期狀態：" % len(failures))
+        print("🔴 FAIL（%d 格）—— #836 的靜默出口回來了（或本檔的前提壞了）：" % len(failures))
         for f in failures:
             print("  ✗ " + f)
         print("=" * 74)
