@@ -61,3 +61,6 @@ from . import reconcile_report
 from . import sh_subscription_plan_reseed_b
 # fix: #366 訂閱 product 一律無稅 delegate（migration force-write + 供單元測試直驅）
 from . import product_template_subscription_tax
+
+# feat: #803 `access_protection_lost` 的週期性收斂者（三腿掃旗標、逐列重推）
+from . import access_resync_cron
