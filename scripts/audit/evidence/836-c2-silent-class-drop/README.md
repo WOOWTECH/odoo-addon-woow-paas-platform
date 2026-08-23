@@ -116,7 +116,7 @@ repo 內 `evidence/` 的 committed 副本沒被動到。）
 | --- | --- | --- |
 | `frozen/t1_universe.py.frozen` | 97 | 撞上 `frozen/ast.py` 守衛，`import ast` 就死。**⚠ 沒有守衛時它是 rc=0**——印出一份看起來完全正常、實際來自 `wt-836` 的數字（這是本目錄最危險的一支，不是最會炸的那支） |
 | `frozen/t1_partition.py.frozen` | 97 | 同上。**沒有守衛時**它是 rc=1，`ValueError: too many values to unpack (expected 2, got 3)`（#836 段二把 `scan_expected()` 改成 3-tuple）——大聲，但那是**運氣**：它的寫入點在 `:109-111`，只是剛好排在 `:62` 那個 `ValueError` 後面 |
-| `frozen/t1_p9_p10.py.frozen` | — | **⛔ 我沒有執行它。** 它 `:63`／`:81` 會寫進上面那個 `OUT`，而那個目錄現在還在（實測 `ls` 得到 12 個檔）⇒ 執行＝二次污染別人的 scratchpad。靜態確認：第一個 import 是 `ast`（AST 取得，非 grep）⇒ 守衛涵蓋得到它，且守衛在 `:2` 就生效，早於 `:63` |
+| `frozen/t1_p9_p10.py.frozen` | 97 | ⛔ 本表作者（dev-836）**沒有執行它**：它 `:63`／`:81` 會寫進上面那個 `OUT`，而那個目錄現在還在（實測 `ls` 得到 12 個檔）⇒ 執行＝二次污染別人的 scratchpad。靜態確認：第一個 import 是 `ast`（AST 取得，非 grep），守衛在 `:2` 就生效，早於 `:63`。**這一列的 rc=97 是 leader1 做的受控實驗**（見下） |
 | `frozen/red_836_silent_class_drop.py.frozen` | 97 | 撞上守衛。**注意它是 transitive 觸發**：它自己不 import `ast`，是 `import unittest` 把 `ast` 拉進來的（實測 `python3 -c "import unittest,sys; print('ast' in sys.modules)"` → `True`）。**沒有守衛時**它是 rc=1，`FATAL: 找不到 …/frozen/test_collection_audit.py`（`_load_audit()` 找同目錄的被測物，而它已經不在同目錄）⇒ 這一支有兩層獨立的大聲失敗 |
 | `frozen/ast.py`（守衛自己） | 97 | 印出守衛訊息後 `SystemExit(97)` |
 
@@ -138,8 +138,29 @@ repo 內 `evidence/` 的 committed 副本沒被動到。）
    ⇒ 從本目錄執行任何腳本時 `import ast` 先撿到守衛，第一行 import 就 `SystemExit(97)`，
    走不到任何寫入點。擋的是「刻意去跑 `.frozen`」與「把它改名回 `.py`」。
 
-🔴 **第 2 層有明確失效模式**：`python3 -P` / `PYTHONSAFEPATH=1` 會關掉 `sys.path[0]` 注入，
-未來的 Python 若預載 `ast` 也一樣 ⇒ 守衛**靜默不觸發**。所以
+### `t1_p9_p10.py.frozen` 那一列的受控實驗（leader1，2026-08-23）
+
+上一版這一列是**推論**（「守衛應該擋得住它」），因為執行它就會二次污染。leader1 把它
+升級成量測，做法是**先備好回滾來源再跑**：
+
+1. 對 `OUT` 底下 `p9_output.txt` / `p10_output.txt` 照 sha256；
+2. 在守衛就位的情況下**真的執行** `frozen/t1_p9_p10.py.frozen`；
+3. 結果 **rc=97**，stderr 首行 `FROZEN-EVIDENCE-GUARD-836`；
+4. 跑完兩個檔的 sha256 與跑前**完全相同**（守衛在寫入前就把它擋掉了）。
+
+回滾來源是本 repo `evidence/` 底下的 committed 副本 ⇒ 這個實驗可回滾。
+
+⚠ 可回滾的**只有內容**。mtime 回不去——上一節那件事就是這樣留下痕跡的。
+所以「先照 sha256 再跑」不是萬用許可證：它讓內容可回滾，不讓**帶外痕跡**可回滾。
+
+同一輪 leader1 還量了兩個對照：
+
+- **陰性對照**：移走守衛後 `t1_universe.py.frozen` 跑得起來，rc=0，印出 764／675
+  ——也就是上表「沒有守衛時」那一欄的獨立複驗。
+- **失效模式是真的**：`PYTHONSAFEPATH=1` 確實繞過守衛，rc=0。
+
+🔴 **第 2 層有明確失效模式**：`python3 -P` / `PYTHONSAFEPATH=1` 會關掉 `sys.path[0]` 注入
+（**已由 leader1 實測，不是推測**），未來的 Python 若預載 `ast` 也一樣 ⇒ 守衛**靜默不觸發**。所以
 `scripts/audit/test_836_frozen_evidence_not_runnable.py` 有一格**活體 canary**：
 真的去執行 `t1_universe.py.frozen`（靜態證明無寫入點），要求它非零**而且**
 輸出含守衛標記 `FROZEN-EVIDENCE-GUARD-836`。只看 rc 會假綠——CI 上 `ROOT` 那個路徑
