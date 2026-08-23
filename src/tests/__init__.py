@@ -682,3 +682,18 @@ from . import test_workspace_access_last_owner_732
 # `test_the_injected_exception_carries_a_real_pgcode` 把這個前提釘成斷言。
 # 陽性對照：三站各有一條「不注入時端點成功」＋一條「注入真的被呼叫到」。
 from . import test_concurrency_retry_533
+
+# feat: #36 試用中變更方案**一定**結束試用並開首期帳單——SA / SH 兩 surface。
+# `ChangePlanModal` 的警告文案逐字保證三件事（結束試用／開始計費／首期帳單），
+# 但那個「一定」是**後端**保證的：change-plan 的 endpoint gate 與
+# `_create_and_confirm_subscription` 的 `entity_has_prior_sub` 讀同一個
+# `subscription_id` 欄位、中間沒人清它 ⇒ 該旗標結構性恆 True ⇒ 目標方案的
+# `sh_trial` 完全不影響結果。⇒ **trial→trial 也會當場扣款**，照 issue #34 Q9
+# 字面判成「靜默」恰好會讓真正扣錢的那條路徑不出聲（Eugene 已改判為 P2）。
+# CS 已有等價守線（test_trial_reset_guard_367），本檔補盤點出缺的兩格：SA 整個
+# 沒有、SH 只有「非 trial」那半而缺「首期帳單」那半（該檔刻意不驅動 invoice）。
+# 🔴 每個 surface 配一條方向相反的陽性對照（全新首購＝有 trial ＋ 零帳單），
+# 否則 `assertTrue(invoices)` 可能只是反映「任何新訂閱都開發票」而恆真。
+# 🔴 不共用 mixin 放 `test_*`（loader 走 `__dict__`，mixin 上的不會被執行）；
+# 共用的只有 module-level helper function。
+from . import test_change_plan_ends_trial_36
