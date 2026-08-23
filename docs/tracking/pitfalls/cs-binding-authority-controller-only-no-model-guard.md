@@ -79,6 +79,7 @@ snapshot before → `super()` → snapshot after → 比對實際差異，實作
 ### 殘留（**不**在本 finding 內解決）
 
 - **守衛豁免 `env.su`**（`src/models/cloud_service_binding_guard.py:_cs_binding_assert` 開頭那個 early return，反向端同形）。檔頭有論證：seed／migration／cron／controller 的 sudo 產品路徑（例如 `ai_assistant._create_project`）照常，守衛堵的是 ORM 直呼那條旁路。但本 finding 原文把 `.sudo()` 明列為風險路徑之一 ⇒ 這一格**併入 #870 討論**（該單留言的「第二個實例」段），不另開單、也不在這裡解決。
+- **create 側還有兩條 leg 沒有測試守著**（#777，open；**test-gap 不是 security bug**）：守衛的 create 閘門看的是 `_add_missing_default_values` 的產物，而 `default_get` 的第三個來源「欄位自身的 `default=`」推導上被涵蓋、卻從未被任何測試證實（唯一一次嘗試證實的探針沒命中 RPC 走的 registry class 實例）；`precompute=True` 的 stored compute 更是**根本不在那份 vals 裡**——`odoo/models.py:_prepare_create_values` 先呼叫 `_add_missing_default_values`、之後才呼叫 `_add_precomputed_values`（Odoo 18 原始碼順序，本次對過）⇒ 閘門整道不觸發，與 #698 原始缺陷、#705 F1 是同一個形狀，只是換了載體。今天不可利用：五個受保護／觸發欄位（`cloud_service_ids`／`cloud_service_id`／`extra_cloud_service_ids`／`primary_cloud_service_id`／`project_ids`）都沒有 `default=`、也沒有 `precompute=True`。⚠ 但 `src/models/project_task.py:primary_cloud_service_id` 已經是 stored compute，離 `precompute=True` 只差一個關鍵字——效能調優時很自然會有人加上去，而加的人不會知道他同時關掉一道授權閘。修法（補測試／改守衛／repo-lint 加一條）未裁決。
 - ⚠ 連帶要小心讀：守衛檔頭那句界線「guest／user 連自己 workspace 的 service 也不能綁」**在產品主路徑上不成立**——`POST /api/support/cloud-services/<id>/project` 走 sudo，它的閘只驗成員資格、不驗 role ⇒ 同一件事兩條路兩個界線。追蹤在 **#711**（待裁，不是本 finding 的功課）。
 
 ### 授權分佈表：翻轉的是哪一列
