@@ -27,7 +27,7 @@
 
                     <div class="o_woow_form_group o_woow_confirm_input">
                         <label for="confirm_name">
-                            Type <strong t-esc="props.service.name"/> to confirm
+                            Enter the name <strong t-esc="props.service.name"/> to confirm
                         </label>
                         <input
                             type="text"
