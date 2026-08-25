@@ -919,6 +919,25 @@ SELF_TEST_FAILURE_LINE_MUTANTS = {
         r"(?:Subtest\s+)?(?P<test>.+)",
 }
 
+#: CLASS_FIXTURE_FAILURE_LINE 的過寬變異體。這一組專守 #821 review 抓到的兩個
+#: 誤抓面：拿掉 `.tests.` 邊界會把產品 package 映成 baseline identifier；拿掉完整
+#: log envelope 會把 traceback／assertion message 內嵌的 event suffix 當成真 event。
+SELF_TEST_CLASS_FIXTURE_FAILURE_LINE_MUTANTS = {
+    "太寬：未要求 `.tests.` package": (
+        r"^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2},\d{3}\s+"
+        r"\d+\s+ERROR\s+\S+\s+unittest\.suite:\s+ERROR:\s+"
+        r"(?P<fixture>setUpClass|tearDownClass)\s+"
+        r"\(odoo\.addons\.[A-Za-z_]\w*\."
+        r"(?P<test>[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+)\)\s*$"
+    ),
+    "太寬：未要求完整 log envelope，允許內嵌 suffix": (
+        r"^.*unittest\.suite:\s+ERROR:\s+"
+        r"(?P<fixture>setUpClass|tearDownClass)\s+"
+        r"\(odoo\.addons\.[A-Za-z_]\w*\.tests\."
+        r"(?P<test>[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+)\)\s*$"
+    ),
+}
+
 
 #: `scan_expected()` 的樣本樹。**混合檔是本組樣本的核心**：#684 留言 8233 §5.1 的
 #: `test_reconciler_diff.py` 就是這個形狀，而 module 級判準對它整檔放行。
@@ -1178,6 +1197,18 @@ def self_test() -> int:
         finally:
             globals()["FAILURE_LINE"] = real_rx
 
+        # #821 的 matcher 是獨立規則，也要獨立證明陰性樣本能殺死合理的過寬變異體。
+        real_fixture_rx = globals()["CLASS_FIXTURE_FAILURE_LINE"]
+        try:
+            for why, pattern in sorted(
+                    SELF_TEST_CLASS_FIXTURE_FAILURE_LINE_MUTANTS.items()):
+                globals()["CLASS_FIXTURE_FAILURE_LINE"] = re.compile(pattern)
+                if parse_failures(p_) == want_f:
+                    failures.append("CLASS_FIXTURE_FAILURE_LINE 樣本集對這個變異體沒有"
+                                    "鑑別力（寫壞了照樣全對）：" + why)
+        finally:
+            globals()["CLASS_FIXTURE_FAILURE_LINE"] = real_fixture_rx
+
     # (5d) 哨兵：出現→PASS；不出現→FATAL(2)。這是「本次收集是否完整」的判準。
     with tempfile.TemporaryDirectory() as td:
         import io, contextlib
@@ -1295,11 +1326,12 @@ def self_test() -> int:
           "點數判法在那裡會錯）／scan_expected（混合檔逐 class、篩子④' 旗標可繼承、"
           "-standard 列名排除、子套件識別字、條數 0 的兩格各自列名且成因可分辨、"
           "P1 守恆＋其陽性對照）／收集面不乾淨時拒絕預測／"
-          "FAILURE_LINE 注入式樣本集（%d 陽性＋%d 陰性，並用 %d 個蓄意寫壞的變異體"
-          "反驗樣本集的鑑別力）／完整性哨兵／C5 失敗集合差／雙向差集 —— 全部命中"
+          "FAILURE_LINE 注入式樣本集（%d 陽性＋%d 陰性，並用兩組共 %d 個蓄意寫壞的"
+          "變異體反驗樣本集的鑑別力）／完整性哨兵／C5 失敗集合差／雙向差集 —— 全部命中"
           % (sum(1 for _, i in SELF_TEST_FAILURE_LINES if i),
              sum(1 for _, i in SELF_TEST_FAILURE_LINES if not i),
-             len(SELF_TEST_FAILURE_LINE_MUTANTS)))
+             len(SELF_TEST_FAILURE_LINE_MUTANTS) +
+             len(SELF_TEST_CLASS_FIXTURE_FAILURE_LINE_MUTANTS)))
     return 0
 
 
