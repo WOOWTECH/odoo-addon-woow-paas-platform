@@ -1,5 +1,6 @@
 /** @odoo-module **/
 import { Component, useState, onMounted } from "@odoo/owl";
+import { _t } from "@web/core/l10n/translation";
 import { WoowButton } from "../button/WoowButton";
 import { WoowIcon } from "../icon/WoowIcon";
 import { billingService } from "../../services/billing_service";
@@ -63,7 +64,7 @@ export class AddFundsModal extends Component {
 
   get cardDisplay() {
     if (!this.hasCard) return "";
-    const bank = this.billing.wallet.cardBank || "Card";
+    const bank = this.billing.wallet.cardBank || _t("Card");
     return `${bank} \u2022\u2022\u2022\u2022 ${this.billing.wallet.cardLast4}`;
   }
 

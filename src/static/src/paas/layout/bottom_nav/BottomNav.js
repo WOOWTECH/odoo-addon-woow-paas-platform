@@ -1,5 +1,6 @@
 /** @odoo-module **/
 import { Component } from "@odoo/owl";
+import { _t } from "@web/core/l10n/translation";
 import { showProjects } from "../../core/platform_config";
 
 export class BottomNav extends Component {
@@ -7,11 +8,11 @@ export class BottomNav extends Component {
     static props = { router: Object };
 
     navItems = [
-        { path: "dashboard", name: "Dashboard", icon: "dashboard" },
-        { path: "workspaces", name: "Workspaces", icon: "workspaces" },
-        { path: "projects", name: "Projects", icon: "folder", requiresProjects: true },
-        { path: "billing", name: "Billing", icon: "payments" },
-        { path: "settings", name: "Settings", icon: "settings" },
+        { path: "dashboard", name: _t("Dashboard"), icon: "dashboard" },
+        { path: "workspaces", name: _t("Workspaces"), icon: "workspaces" },
+        { path: "projects", name: _t("Projects"), icon: "folder", requiresProjects: true },
+        { path: "billing", name: _t("Billing"), icon: "payments" },
+        { path: "settings", name: _t("Settings"), icon: "settings" },
     ];
 
     showItem(item) {

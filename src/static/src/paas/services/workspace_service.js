@@ -1,5 +1,6 @@
 /** @odoo-module **/
 import { reactive } from "@odoo/owl";
+import { _t } from "@web/core/l10n/translation";
 
 /**
  * JSON-RPC helper for Odoo API calls
@@ -25,19 +26,19 @@ async function jsonRpc(url, params) {
             }),
         });
     } catch (networkError) {
-        throw new Error("Network error. Please check your connection and try again.");
+        throw new Error(_t("Network error. Please check your connection and try again."));
     }
 
     // Check HTTP status before parsing
     if (!response.ok) {
         if (response.status === 401) {
-            throw new Error("Session expired. Please refresh the page.");
+            throw new Error(_t("Session expired. Please refresh the page."));
         } else if (response.status === 403) {
-            throw new Error("Access denied.");
+            throw new Error(_t("Access denied."));
         } else if (response.status >= 500) {
-            throw new Error("Server error. Please try again later.");
+            throw new Error(_t("Server error. Please try again later."));
         }
-        throw new Error(`Request failed with status ${response.status}`);
+        throw new Error(_t("Request failed with status %s", response.status));
     }
 
     // Parse JSON response
@@ -45,12 +46,12 @@ async function jsonRpc(url, params) {
     try {
         data = await response.json();
     } catch (parseError) {
-        throw new Error("Invalid response from server.");
+        throw new Error(_t("Invalid response from server."));
     }
 
     // Handle JSON-RPC error
     if (data.error) {
-        const errorMsg = data.error.data?.message || data.error.message || "Unknown error";
+        const errorMsg = data.error.data?.message || data.error.message || _t("Unknown error");
         throw new Error(errorMsg);
     }
 
@@ -115,10 +116,10 @@ export const workspaceService = reactive({
             if (result.success) {
                 this.workspaces = result.data;
             } else {
-                this.error = result.error || "Failed to fetch workspaces";
+                this.error = result.error || _t("Failed to fetch workspaces");
             }
         } catch (err) {
-            this.error = err.message || "Network error";
+            this.error = err.message || _t("Network error");
         } finally {
             this.loading = false;
         }
@@ -145,7 +146,7 @@ export const workspaceService = reactive({
                 this.workspaces = [result.data, ...this.workspaces];
                 return { success: true, data: result.data };
             } else {
-                let errMsg = result.error || "Failed to create workspace";
+                let errMsg = result.error || _t("Failed to create workspace");
                 if (typeof errMsg === "object") {
                     errMsg = errMsg.message || errMsg.name || JSON.stringify(errMsg);
                 }
@@ -153,7 +154,7 @@ export const workspaceService = reactive({
                 return { success: false, error: errMsg };
             }
         } catch (err) {
-            this.error = err.message || "Network error";
+            this.error = err.message || _t("Network error");
             return { success: false, error: this.error };
         } finally {
             this.loading = false;
@@ -370,10 +371,10 @@ export const workspaceService = reactive({
             }
             return {
                 success: false,
-                error: result.error || "Failed to fetch templates",
+                error: result.error || _t("Failed to fetch templates"),
             };
         } catch (err) {
-            return { success: false, error: err.message || "Network error" };
+            return { success: false, error: err.message || _t("Network error") };
         }
     },
 
@@ -389,7 +390,7 @@ export const workspaceService = reactive({
      */
     async fetchSmartHomePlans(templateId) {
         if (!templateId) {
-            return { success: false, error: "templateId is required" };
+            return { success: false, error: _t("templateId is required") };
         }
         try {
             const result = await jsonRpc(
@@ -400,10 +401,10 @@ export const workspaceService = reactive({
             }
             return {
                 success: false,
-                error: result.error || "Failed to fetch plans",
+                error: result.error || _t("Failed to fetch plans"),
             };
         } catch (err) {
-            return { success: false, error: err.message || "Network error" };
+            return { success: false, error: err.message || _t("Network error") };
         }
     },
 

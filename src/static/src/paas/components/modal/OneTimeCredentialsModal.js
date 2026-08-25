@@ -1,6 +1,7 @@
 /** @odoo-module **/
 
 import { Component, useState } from "@odoo/owl";
+import { _t } from "@web/core/l10n/translation";
 import { WoowButton } from "../button/WoowButton";
 import { WoowIcon } from "../icon/WoowIcon";
 
@@ -63,30 +64,36 @@ export function buildOneTimeCredentials(data) {
     const credentials = [];
     if (data && data.admin_password) {
         credentials.push({
-            label: "Admin Password",
+            label: _t("Admin Password"),
             value: data.admin_password,
-            hint: "console 與 dashboard 共用這一組（帳號 admin）。也要填進 MCP 連線設定的 Dashboard REST API 區（搭配下方的 Dashboard API URL）。",
+            hint: _t(
+                "Shared by the console and the dashboard (username: admin). Also enter it in the Dashboard REST API section of the MCP connection settings, together with the Dashboard API URL below."
+            ),
         });
     }
     if (data && data.gateway_api_key) {
         credentials.push({
-            label: "Gateway API Key",
+            label: _t("Gateway API Key"),
             value: data.gateway_api_key,
-            hint: "填進 MCP 連線設定的 Gateway API Server 區。",
+            hint: _t("Enter this in the Gateway API Server section of the MCP connection settings."),
         });
     }
     if (data && data.gateway_url) {
         credentials.push({
-            label: "Gateway API URL",
+            label: _t("Gateway API URL"),
             value: data.gateway_url,
-            hint: "填進 MCP 連線設定的 Gateway API Server 區。這是完整位址（含子路徑）；只填服務根網址會連不上。⚠ 僅限這一格——下面的 Dashboard API URL 相反，要填不帶子路徑的根網址。",
+            hint: _t(
+                "Enter this in the Gateway API Server section of the MCP connection settings. This is the full address including its sub-path; the service root URL on its own will not connect. This applies to this field only — the Dashboard API URL below is the opposite and needs the root URL with no sub-path."
+            ),
         });
     }
     if (data && data.dashboard_url) {
         credentials.push({
-            label: "Dashboard API URL",
+            label: _t("Dashboard API URL"),
             value: data.dashboard_url,
-            hint: "填進 MCP 連線設定的 Dashboard REST API 區（帳號 admin，密碼用上面的 Admin Password）。這是服務根網址，不帶任何子路徑。",
+            hint: _t(
+                "Enter this in the Dashboard REST API section of the MCP connection settings (username: admin, password: the Admin Password above). This is the service root URL, with no sub-path."
+            ),
         });
     }
     return credentials;

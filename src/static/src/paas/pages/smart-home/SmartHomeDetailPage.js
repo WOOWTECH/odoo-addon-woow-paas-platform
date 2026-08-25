@@ -1,5 +1,6 @@
 /** @odoo-module **/
 import { Component, useState, onMounted, onWillUnmount } from "@odoo/owl";
+import { _t } from "@web/core/l10n/translation";
 import { WoowCard } from "../../components/card/WoowCard";
 import { WoowIcon } from "../../components/icon/WoowIcon";
 import { WoowButton } from "../../components/button/WoowButton";
@@ -93,7 +94,7 @@ export class SmartHomeDetailPage extends Component {
             this._publishBreadcrumb();
             this.startPollingIfNeeded();
         } else {
-            this.state.error = result.error || "Failed to load smart home";
+            this.state.error = result.error || _t("Failed to load smart home");
         }
 
         this.state.loading = false;
@@ -106,8 +107,8 @@ export class SmartHomeDetailPage extends Component {
     _publishBreadcrumb() {
         const ws = workspaceService.workspaces.find(w => w.id === this.props.workspaceId);
         breadcrumbService.set("smarthome-detail", [
-            { label: "Workspaces", path: "workspaces" },
-            { label: ws?.name || "Workspace", path: `workspace/${this.props.workspaceId}` },
+            { label: _t("Workspaces"), path: "workspaces" },
+            { label: ws?.name || _t("Workspace"), path: `workspace/${this.props.workspaceId}` },
             { label: this.state.home.name, path: null },
         ]);
     }
@@ -174,12 +175,12 @@ export class SmartHomeDetailPage extends Component {
     get tunnelInfo() {
         if (!this.home) return [];
         return [
-            { label: "Tunnel ID", value: this.home.tunnel_id || "N/A", icon: "vpn_key" },
-            { label: "Connector Type", value: this.home.connector_type || "N/A", icon: "cable" },
-            { label: "Connector ID", value: this.home.connector_id || "N/A", icon: "tag" },
-            { label: "Route URL", value: this.displayUrl || "Not configured", icon: "link", isUrl: !!this.routeUrl },
-            { label: "Status", value: this.home.state || "Unknown", icon: "info" },
-            { label: "Uptime", value: this.home.uptime || "N/A", icon: "schedule" },
+            { label: _t("Tunnel ID"), value: this.home.tunnel_id || _t("N/A"), icon: "vpn_key" },
+            { label: _t("Connector Type"), value: this.home.connector_type || _t("N/A"), icon: "cable" },
+            { label: _t("Connector ID"), value: this.home.connector_id || _t("N/A"), icon: "tag" },
+            { label: _t("Route URL"), value: this.displayUrl || _t("Not configured"), icon: "link", isUrl: !!this.routeUrl },
+            { label: _t("Status"), value: this.home.state || _t("Unknown"), icon: "info" },
+            { label: _t("Uptime"), value: this.home.uptime || _t("N/A"), icon: "schedule" },
         ];
     }
 
@@ -233,7 +234,7 @@ export class SmartHomeDetailPage extends Component {
             // role 的資料流（grep 不到任何 role/isOwner/canEdit），要接是另一個
             // 範圍的改動 —— 已回報，不在本 PR。
             this.state.refreshError =
-                result.error || "Failed to refresh smart home status";
+                result.error || _t("Failed to refresh smart home status");
         }
         this.state.refreshing = false;
     }
@@ -277,7 +278,7 @@ export class SmartHomeDetailPage extends Component {
             this.hideDeleteConfirm();
             this.goBack();
         } else {
-            this.state.deleteError = result.error || "Failed to delete smart home";
+            this.state.deleteError = result.error || _t("Failed to delete smart home");
             this.state.deleting = false;
         }
     }
@@ -349,7 +350,7 @@ export class SmartHomeDetailPage extends Component {
         if (!t.success || !t.data.length) {
             return {
                 success: false,
-                error: t.error || "No Smart Home template available",
+                error: t.error || _t("No Smart Home template available"),
             };
         }
         return workspaceService.fetchSmartHomePlans(t.data[0].id);

@@ -1,5 +1,6 @@
 /** @odoo-module **/
 import { reactive } from "@odoo/owl";
+import { _t } from "@web/core/l10n/translation";
 
 /** Default timeout for API requests (30 seconds). */
 const REQUEST_TIMEOUT_MS = 30000;
@@ -25,20 +26,20 @@ async function jsonRpc(url, params, timeoutMs = REQUEST_TIMEOUT_MS) {
             signal: controller.signal,
         });
     } catch (error) {
-        if (error.name === "AbortError") throw new Error("Request timed out.");
-        throw new Error("Network error.");
+        if (error.name === "AbortError") throw new Error(_t("Request timed out."));
+        throw new Error(_t("Network error."));
     } finally {
         clearTimeout(timeoutId);
     }
     if (!response.ok) {
-        if (response.status === 401) throw new Error("Session expired. Please refresh.");
-        if (response.status === 403) throw new Error("Access denied.");
-        if (response.status >= 500) throw new Error("Server error.");
-        throw new Error(`Request failed (${response.status})`);
+        if (response.status === 401) throw new Error(_t("Session expired. Please refresh."));
+        if (response.status === 403) throw new Error(_t("Access denied."));
+        if (response.status >= 500) throw new Error(_t("Server error."));
+        throw new Error(_t("Request failed (%s)", response.status));
     }
     const json = await response.json();
     if (json.error) {
-        const msg = json.error.data?.message || json.error.message || "Request failed";
+        const msg = json.error.data?.message || json.error.message || _t("Request failed");
         throw new Error(msg);
     }
     return json.result;
@@ -77,7 +78,7 @@ export const dashboardService = reactive({
             try {
                 const result = await jsonRpc("/api/dashboard/summary", {});
                 if (!result.success) {
-                    throw new Error(result.error || "Failed to load dashboard");
+                    throw new Error(result.error || _t("Failed to load dashboard"));
                 }
                 this.data = result.data;
             } catch (err) {

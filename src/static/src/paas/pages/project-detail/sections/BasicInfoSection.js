@@ -1,5 +1,6 @@
 /** @odoo-module **/
 import { Component, useState, useRef, useEffect } from "@odoo/owl";
+import { _t } from "@web/core/l10n/translation";
 import { WoowCard } from "../../../components/card/WoowCard";
 import { WoowIcon } from "../../../components/icon/WoowIcon";
 import { WoowButton } from "../../../components/button/WoowButton";
@@ -65,7 +66,7 @@ export class BasicInfoSection extends Component {
     async saveName() {
         const name = this.state.nameDraft.trim();
         if (!name) {
-            this.state.error = "Name cannot be empty";
+            this.state.error = _t("Name cannot be empty");
             return;
         }
         this.state.saving = true;
@@ -75,7 +76,7 @@ export class BasicInfoSection extends Component {
             this.props.onUpdated(result.data);
             this.state.editingName = false;
         } else {
-            this.state.error = result.error || "Failed to save";
+            this.state.error = result.error || _t("Failed to save");
         }
     }
 
@@ -128,7 +129,7 @@ export class BasicInfoSection extends Component {
             this.props.onUpdated(result.data);
             this.state.editingDescription = false;
         } else {
-            this.state.error = result.error || "Failed to save";
+            this.state.error = result.error || _t("Failed to save");
         }
     }
 }

@@ -1,5 +1,6 @@
 /** @odoo-module **/
 import { Component, useState } from "@odoo/owl";
+import { _t } from "@web/core/l10n/translation";
 import { WoowButton } from "../button/WoowButton";
 import { WoowIcon } from "../icon/WoowIcon";
 import { cloudService } from "../../services/cloud_service";
@@ -63,7 +64,7 @@ export class DeleteServiceModal extends Component {
         if (result.success) {
             this.props.onDeleted();
         } else {
-            this.state.error = result.error || "Failed to delete service";
+            this.state.error = result.error || _t("Failed to delete service");
             this.state.deleting = false;
         }
     }
