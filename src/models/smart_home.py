@@ -387,7 +387,7 @@ class SmartHome(models.Model):
         if not _is_platform_order(self.env):
             raise SmartHomeOrderGateError(_(
                 'Smart Home 只能由平台的開通流程建立（%(model)s）。'
-                  '請改從 Smart Home 下單流程建立，不要直接寫入這個 model。',
+                '請改從 Smart Home 下單流程建立，不要直接寫入這個 model。',
                 model=self._name))
         _strip_identity_anchors(self.env, vals_list)
         return super().create(vals_list)

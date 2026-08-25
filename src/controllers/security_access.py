@@ -51,7 +51,7 @@ class SecurityAccessController(Controller):
                 workspace, name,
                 kwargs.get("plan_id"), kwargs.get("template_id"),
             )
-        return {"success": False, "error": f"Unknown action: {action}"}
+        return {"success": False, "error": _("Unknown action: %(action)s", action=action)}
 
     # ==================== Detail ====================
 
@@ -177,7 +177,7 @@ class SecurityAccessController(Controller):
                 return {"success": False, "error": str(e)}
             return {"success": True,
                     "data": {"message": _("Security access deleted")}}
-        return {"success": False, "error": f"Unknown action: {action}"}
+        return {"success": False, "error": _("Unknown action: %(action)s", action=action)}
 
     # ==================== Routes ====================
 
@@ -223,7 +223,7 @@ class SecurityAccessController(Controller):
             return self._update_route(sa, kwargs.get("route_id"), kwargs)
         elif action == "delete":
             return self._delete_route(sa, kwargs.get("route_id"))
-        return {"success": False, "error": f"Unknown action: {action}"}
+        return {"success": False, "error": _("Unknown action: %(action)s", action=action)}
 
     # ==================== Availability (platform-level) ====================
 
@@ -744,7 +744,7 @@ class SecurityAccessController(Controller):
             return self._delete_policy(sa, kwargs.get("policy_id"))
         elif action == "reorder":
             return self._reorder_policies(sa, kwargs)
-        return {"success": False, "error": f"Unknown action: {action}"}
+        return {"success": False, "error": _("Unknown action: %(action)s", action=action)}
 
     # ==================== Per-route Access config (P2.5 Phase 3) ====
 

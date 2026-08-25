@@ -203,11 +203,11 @@ class AgentTemplate(models.Model):
             if not config or not config.sudo().api_key:
                 raise ValidationError(_(
                     "Agent template '%s' is published and bound to a project "
-                      "but has no usable LLM credential: set 'LLM Provider "
-                      "Config' to an ai.config that carries an API key. Without "
-                      "one the agent pod silently falls back to echo (returns the "
-                      "user's own message) instead of answering, shadowing the "
-                      "platform default for every bound project."
+                    "but has no usable LLM credential: set 'LLM Provider "
+                    "Config' to an ai.config that carries an API key. Without "
+                    "one the agent pod silently falls back to echo (returns the "
+                    "user's own message) instead of answering, shadowing the "
+                    "platform default for every bound project."
                 ) % (tmpl.name or tmpl.id))
 
     @api.constrains('mcp_server_ids', 'project_ids')
@@ -289,9 +289,9 @@ class AgentTemplate(models.Model):
             if duplicates:
                 raise ValidationError(_(
                     "Agent template '%(tmpl)s' binds multiple skills with the "
-                      "same name: %(names)s. An agent pod loads skills by name, "
-                      "so two same-named bindings would collide. Unbind all but "
-                      "one version (keep the one you want the pod to load).",
+                    "same name: %(names)s. An agent pod loads skills by name, "
+                    "so two same-named bindings would collide. Unbind all but "
+                    "one version (keep the one you want the pod to load).",
                     tmpl=t.name or t.id,
                     names=', '.join(duplicates),
                 ))

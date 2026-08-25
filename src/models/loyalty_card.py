@@ -75,7 +75,7 @@ class LoyaltyCard(models.Model):
         except psycopg2.errors.LockNotAvailable:
             raise UserError(_(
                 "This gift card is being redeemed by another request. "
-                  "Please retry."
+                "Please retry."
             ))
         # 鎖只擋並發 writer，不刷新本 env 的 record cache → 重讀再 validate 才原子。
         self.invalidate_recordset(

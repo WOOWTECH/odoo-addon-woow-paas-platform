@@ -151,7 +151,7 @@ class EcpayInvoiceCron(models.AbstractModel):
         summary = _("ECPay 發票開立失敗（已達重試上限）")
         note = _(
             "Invoice %(name)s 開立 ECPay 發票連續失敗 %(n)s 次。\n"
-              "最後錯誤：%(err)s"
+            "最後錯誤：%(err)s"
         ) % {
             'name': move.name or '',
             'n': self._MAX_RETRIES,

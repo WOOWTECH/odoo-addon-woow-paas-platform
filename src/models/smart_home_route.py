@@ -380,8 +380,8 @@ class SmartHomeRoute(models.Model):
         """單一文案來源：create 前置檢查與 `@api.constrains` 兩個呼叫點共用。"""
         return _(
             'Smart Home %(name)s already has a primary route. Its primary '
-              'hostname is baked into the Cloudflare tunnel at provision time, '
-              'so there can only be one.',
+            'hostname is baked into the Cloudflare tunnel at provision time, '
+            'so there can only be one.',
             name=smart_home.name or smart_home.id)
 
     @api.model
@@ -501,8 +501,8 @@ class SmartHomeRoute(models.Model):
                 self.env, _CTX_SM_ROUTE_CASCADE_UNLINK):
             raise UserError(_(
                 'The primary route of a Smart Home cannot be deleted — its '
-                  'hostname is served by the Cloudflare tunnel itself. Delete '
-                  'the Smart Home instead.'))
+                'hostname is served by the Cloudflare tunnel itself. Delete '
+                'the Smart Home instead.'))
         teardown = [r._capture_access_teardown() for r in self]
         # 🔴 #794：savepoint 回捲得掉 DB 那半，回捲不掉「已經對 Cloudflare 發出
         # 的 Access 刪除」⇒ 先被拆掉的那幾條會以「列復活、`is_protected=True`、
@@ -540,8 +540,8 @@ class SmartHomeRoute(models.Model):
                     # 留下來當重試錨點。
                     raise UserError(_(
                         'Cloudflare Access teardown failed for route(s): '
-                          '%(names)s. The route was kept so the deletion can be '
-                          'retried; its Access app is still live in Cloudflare.',
+                        '%(names)s. The route was kept so the deletion can be '
+                        'retried; its Access app is still live in Cloudflare.',
                         names=failed))
         except Exception:
             Reap._compensate_fail_open_after_rollback(

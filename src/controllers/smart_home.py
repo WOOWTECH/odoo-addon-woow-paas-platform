@@ -68,7 +68,7 @@ class SmartHomeController(Controller):
                 workspace, name, ha_port, plan_id, template_id,
             )
         else:
-            return {"success": False, "error": f"Unknown action: {action}"}
+            return {"success": False, "error": _("Unknown action: %(action)s", action=action)}
 
     @route(
         "/api/workspaces/<int:workspace_id>/smarthomes/<int:smarthome_id>",
@@ -105,7 +105,7 @@ class SmartHomeController(Controller):
                     "data": smarthome.to_dict(include_details=True)}
 
         if action not in ("delete", "provision", "refresh_status"):
-            return {"success": False, "error": f"Unknown action: {action}"}
+            return {"success": False, "error": _("Unknown action: %(action)s", action=action)}
 
         # 以下全部是 mutation，一律先過 owner/admin。
         #
@@ -503,7 +503,7 @@ class SmartHomeController(Controller):
                 smarthome, kwargs.get("policy_id"))
         if action == "reorder":
             return self._reorder_sh_access_policies(smarthome, kwargs)
-        return {"success": False, "error": f"Unknown action: {action}"}
+        return {"success": False, "error": _("Unknown action: %(action)s", action=action)}
 
     # ---- Access Control helpers ----
 

@@ -106,7 +106,7 @@ def _is_invoice_issue_control(env, key):
             key, value, env.uid)
         raise UserError(_(
             "This e-invoice can only be issued by the platform's own issuing "
-              "job."
+            "job."
         ))
     return False
 

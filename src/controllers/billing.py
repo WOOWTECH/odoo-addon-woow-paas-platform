@@ -303,7 +303,7 @@ class BillingController(HiddenChainMixin, Controller):
             )
             return {
                 'success': False,
-                'error': result.get('RtnMsg') or 'Unknown ECPay error',
+                'error': result.get('RtnMsg') or _('Unknown ECPay error'),
                 'code': ERR_ECPAY_REJECTED,
             }
 
@@ -457,7 +457,7 @@ class BillingController(HiddenChainMixin, Controller):
             )
             return {
                 'success': False,
-                'error': result.get('RtnMsg') or 'ECPay rejected binding',
+                'error': result.get('RtnMsg') or _('ECPay rejected binding'),
                 'code': ERR_ECPAY_REJECTED,
             }
 
@@ -1172,7 +1172,9 @@ class BillingController(HiddenChainMixin, Controller):
             )
             return {
                 'success': False,
-                'error': f'Insufficient credits. Your balance is {balance:.0f} pts but {amount:.0f} pts is required.',
+                'error': _('Insufficient credits. Your balance is %(balance).0f pts '
+                           'but %(amount).0f pts is required.',
+                           balance=balance, amount=amount),
                 'code': 'insufficient_balance',
                 'data': {
                     'balance': balance,

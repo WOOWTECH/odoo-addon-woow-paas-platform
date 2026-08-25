@@ -77,6 +77,6 @@ class ReconcileReportController(Controller):
             'reconcilable': match.reconcilable if match else False,
             'env_hint': match.env_hint if match else '',
             'reason': (match.reason if match
-                       else '已不在最新對帳的孤兒清單（可能已被新 provision 重用同資源、'
-                            '或已被人工清除）——刪除前請再確認'),
+                       else _('已不在最新對帳的孤兒清單（可能已被新 provision 重用同資源、'
+                              '或已被人工清除）——刪除前請再確認')),
         }}

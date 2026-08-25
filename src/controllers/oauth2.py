@@ -228,7 +228,7 @@ class OAuth2Controller(Controller):
         if invalid_scopes:
             return request.render('woow_paas_platform.oauth2_error', {
                 'error_title': 'Invalid Scope',
-                'error_message': f'Invalid scope(s): {", ".join(invalid_scopes)}',
+                'error_message': _('Invalid scope(s): %(scopes)s', scopes=', '.join(invalid_scopes)),
             })
 
         # Use all allowed scopes if none specified
@@ -357,7 +357,7 @@ class OAuth2Controller(Controller):
             invalid = set(scope.split()) - client.get_allowed_scopes()
             if invalid:
                 return _json_error(
-                    'invalid_scope', f'Invalid scope(s): {", ".join(sorted(invalid))}',
+                    'invalid_scope', _('Invalid scope(s): %(scopes)s', scopes=', '.join(sorted(invalid))),
                 )
         else:
             # No scope requested: resolve to the client's full allowed set NOW
@@ -484,9 +484,10 @@ class OAuth2Controller(Controller):
         else:
             return _json_error(
                 'unsupported_grant_type',
-                f'Grant type "{grant_type}" is not supported. '
-                'Use: authorization_code, refresh_token, client_credentials, '
-                'or urn:ietf:params:oauth:grant-type:device_code.',
+                _('Grant type "%(grant_type)s" is not supported. '
+                  'Use: authorization_code, refresh_token, client_credentials, '
+                  'or urn:ietf:params:oauth:grant-type:device_code.',
+                  grant_type=grant_type),
             )
 
     def _authenticate_client(self, kwargs: dict) -> Any | None:
@@ -732,7 +733,7 @@ class OAuth2Controller(Controller):
             if invalid:
                 return _json_error(
                     'invalid_scope',
-                    f'Invalid scope(s): {", ".join(sorted(invalid))}',
+                    _('Invalid scope(s): %(scopes)s', scopes=', '.join(sorted(invalid))),
                 )
         else:
             scope = client.scopes or ''

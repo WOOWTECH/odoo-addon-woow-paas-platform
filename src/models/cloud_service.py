@@ -905,9 +905,9 @@ class CloudService(models.Model):
             # 悄悄變成另一個功能。要放行就去把 template 的版本填上。
             if not template.helm_chart_version:
                 raise UserError(
-                    f"無法重新部署：商品「{template.name}」尚未指定 chart 版本。"
-                    f"直接部署會抓 registry 當下的最新版（不可逆的跳版）。"
-                    f"請先在商品設定填入版本再重試。"
+                    _("無法重新部署：商品「%(product)s」尚未指定 chart 版本。"
+                      "直接部署會抓 registry 當下的最新版（不可逆的跳版）。"
+                      "請先在商品設定填入版本再重試。", product=template.name)
                 )
             values = self._assemble_deploy_values()['values']
             sensitive_values = self._build_mcp_sensitive_values()
@@ -923,7 +923,7 @@ class CloudService(models.Model):
                 )
             except PaaSOperatorError as e:
                 raise UserError(
-                    f"Upgrade failed: {e.detail or e.message}"
+                    _("Upgrade failed: %(reason)s", reason=e.detail or e.message)
                 ) from e
 
             # #482: 停權中的服務不得被 upgrade 拉出停權。寫成 'deploying' 會讓
@@ -3639,7 +3639,7 @@ class CloudService(models.Model):
         if not client:
             raise UserError(_(
                 "PaaS Operator is not configured. "
-                  "Please set Operator URL and API Key in Settings → Woow PaaS."
+                "Please set Operator URL and API Key in Settings → Woow PaaS."
             ))
         return client
 
@@ -4807,7 +4807,7 @@ class CloudService(models.Model):
                 )
                 raise SupplyGateError(_(
                     '「%(tpl)s」目前無法開通：平台尚未指定此商品的部署版本。'
-                      '請聯繫客服。', tpl=template.name))
+                    '請聯繫客服。', tpl=template.name))
             if reason == 'sold_out':
                 raise SupplyGateError(_(
                     '「%(tpl)s」目前已售罄，暫時無法開通新的實例。',
@@ -4878,7 +4878,7 @@ class CloudService(models.Model):
         if not _is_internal_provision(self.env):
             raise ProvisionGateError(_(
                 '雲端服務只能由平台的開通流程建立（%(model)s）。'
-                  '請改從服務市集下單，不要直接寫入這個 model。',
+                '請改從服務市集下單，不要直接寫入這個 model。',
                 model=self._name))
         # #744：Access 身分錨點的 create 側。**不是**被上面那道閘覆蓋掉的冗餘
         # ——開通閘擋的是「誰能建」，本組擋的是「建的時候能不能自帶別人的 CF
@@ -4935,7 +4935,7 @@ class CloudService(models.Model):
                 if count > limit:
                     raise SupplyGateError(_(
                         '「%(tpl)s」每個帳號最多 %(limit)s 個實例，'
-                          '您已達上限。', tpl=rec.template_id.name, limit=limit))
+                        '您已達上限。', tpl=rec.template_id.name, limit=limit))
         for rec in records.filtered(lambda r: r.template_id.has_admin_gui):
             if not rec._get_secret_record():
                 secret_password = self.env.context.get('mcp_admin_password')

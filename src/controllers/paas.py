@@ -236,7 +236,7 @@ class PaasController(HiddenChainMixin, Controller):
         elif action == 'create':
             return self._create_workspace(name, description)
         else:
-            return {'success': False, 'error': f'Unknown action: {action}'}
+            return {'success': False, 'error': _('Unknown action: %(action)s', action=action)}
 
     @route("/api/workspaces/<int:workspace_id>", auth="user", methods=["POST"], type="json")
     def api_workspace_detail(self, workspace_id: int, action: str = 'get', name: str | None = None, description: str | None = None, **kwargs: Any) -> dict[str, Any]:
@@ -266,7 +266,7 @@ class PaasController(HiddenChainMixin, Controller):
         elif action == 'delete':
             return self._delete_workspace(workspace_id)
         else:
-            return {'success': False, 'error': f'Unknown action: {action}'}
+            return {'success': False, 'error': _('Unknown action: %(action)s', action=action)}
 
     def _list_workspaces(self) -> dict[str, Any]:
         """
@@ -591,7 +591,7 @@ class PaasController(HiddenChainMixin, Controller):
         elif action == 'invite':
             return self._invite_member(workspace_id, email, role)
         else:
-            return {'success': False, 'error': f'Unknown action: {action}'}
+            return {'success': False, 'error': _('Unknown action: %(action)s', action=action)}
 
     @route("/api/workspaces/<int:workspace_id>/members/<int:access_id>", auth="user", methods=["POST"], type="json")
     def api_workspace_member(self, workspace_id: int, access_id: int, action: str = 'update_role', role: str | None = None, **kwargs: Any) -> dict[str, Any]:
@@ -612,7 +612,7 @@ class PaasController(HiddenChainMixin, Controller):
         elif action == 'remove':
             return self._remove_member(workspace_id, access_id)
         else:
-            return {'success': False, 'error': f'Unknown action: {action}'}
+            return {'success': False, 'error': _('Unknown action: %(action)s', action=action)}
 
     def _list_members(self, workspace_id: int) -> dict[str, Any]:
         """
@@ -718,7 +718,7 @@ class PaasController(HiddenChainMixin, Controller):
         target_user = ResUsers.search([('email', '=ilike', email)], limit=1)
 
         if not target_user:
-            return {'success': False, 'error': f'No user found with email: {email}'}
+            return {'success': False, 'error': _('No user found with email: %(email)s', email=email)}
 
         # Check if already a member
         existing = WorkspaceAccess.search([
@@ -1464,7 +1464,7 @@ class PaasController(HiddenChainMixin, Controller):
             plan_id = kw.get('plan_id')
             return self._create_service(workspace, template_id, name, values, odoo_addon_ids, plan_id=plan_id)
         else:
-            return {'success': False, 'error': f'Unknown action: {action}'}
+            return {'success': False, 'error': _('Unknown action: %(action)s', action=action)}
 
     @route("/api/workspaces/<int:workspace_id>/services/<int:service_id>", auth="user", methods=["POST"], type="json")
     def api_workspace_service(self, workspace_id: int, service_id: int, action: str = 'get', values: dict[str, Any] | None = None, version: str | None = None, odoo_addon_ids: list[int] | None = None, **kw: Any) -> dict[str, Any]:
@@ -1521,7 +1521,7 @@ class PaasController(HiddenChainMixin, Controller):
                 return {'success': False, 'error': str(e)}
             return self._delete_service(service)
         else:
-            return {'success': False, 'error': f'Unknown action: {action}'}
+            return {'success': False, 'error': _('Unknown action: %(action)s', action=action)}
 
     @route("/api/workspaces/<int:workspace_id>/services/<int:service_id>/rollback", auth="user", methods=["POST"], type="json")
     def api_service_rollback(self, workspace_id: int, service_id: int, revision: int | None = None, **kw: Any) -> dict[str, Any]:
@@ -1874,7 +1874,7 @@ class PaasController(HiddenChainMixin, Controller):
                 service, kwargs.get('policy_id'))
         elif action == 'reorder':
             return self._reorder_service_access_policies(service, kwargs)
-        return {'success': False, 'error': f'Unknown action: {action}'}
+        return {'success': False, 'error': _('Unknown action: %(action)s', action=action)}
 
     # ---- Access Control helpers ----
 
@@ -2116,13 +2116,13 @@ class PaasController(HiddenChainMixin, Controller):
         # pending / deleting / error，`_check_operation_allowed` 是訂閱閘（判 active /
         # grace / past-grace，且 base.group_system 直接 bypass），與 service state 正交。
         if service.state != 'running':
-            return cannot(
-                f'Service must be running to check module states '
-                f'(current: {service.state})')
+            return cannot(_(
+                'Service must be running to check module states '
+                '(current: %(state)s)', state=service.state))
 
         client = get_paas_operator_client(request.env)
         if not client:
-            return cannot('PaaS Operator not configured')
+            return cannot(_('PaaS Operator not configured'))
 
         CloudOdooAddon = request.env['woow_paas_platform.cloud_odoo_addon']
         addons = CloudOdooAddon.browse(removed_addon_ids).exists()
@@ -2141,17 +2141,17 @@ class PaasController(HiddenChainMixin, Controller):
             _logger.warning(
                 "Cannot verify module states for addon removal on %s: %s",
                 service.helm_release_name, e)
-            return cannot(f'Cannot verify module states: {e}')
+            return cannot(_('Cannot verify module states: %(reason)s', reason=e))
 
         if not result.get('success'):
             # operator 對 OdooModuleError 回 HTTP 200 ＋ success:false（step 為
             # find_pod / query_modules / validate 之一），client 不 raise。**必須與上面
             # 那個 except 同處置** —— #477 縫 (a) 就是這裡當初只有 if 沒有 else。
-            error = result.get('error') or 'Unknown error'
+            error = result.get('error') or _('Unknown error')
             _logger.warning(
                 "Operator could not report module states for %s: %s",
                 service.helm_release_name, error)
-            return cannot(f'Cannot verify module states: {error}')
+            return cannot(_('Cannot verify module states: %(reason)s', reason=error))
 
         modules: dict[str, Any] = {}
         blocking: dict[str, Any] = {}
@@ -2181,9 +2181,10 @@ class PaasController(HiddenChainMixin, Controller):
         parts = ', '.join(
             f"'{name}' ({info.get('state')})"
             for name, info in sorted(blocking.items()))
-        return (
-            f'Cannot remove {parts}: still present in Odoo. '
-            f'Please deactivate the module in Odoo first.'
+        return _(
+            'Cannot remove %(modules)s: still present in Odoo. '
+            'Please deactivate the module in Odoo first.',
+            modules=parts,
         )
 
     @route(
@@ -2300,7 +2301,7 @@ class PaasController(HiddenChainMixin, Controller):
         elif action == 'test':
             return self._test_mcp_server(service, kw)
         else:
-            return {'success': False, 'error': f'Unknown action: {action}'}
+            return {'success': False, 'error': _('Unknown action: %(action)s', action=action)}
 
     def _list_mcp_servers(self, service) -> dict[str, Any]:
         # User-scope MCP now hangs off project, not service (D6 keeps the
@@ -2404,10 +2405,10 @@ class PaasController(HiddenChainMixin, Controller):
                 reason = server.state_message or 'Unknown error'
                 _logger.warning(
                     'MCP sync failed for server %s: %s', server.name, reason)
-                return {'success': False, 'error': f'Sync failed: {reason}'}
+                return {'success': False, 'error': _('Sync failed: %(reason)s', reason=reason)}
         except Exception as e:
             _logger.warning('MCP sync failed for server %s: %s', server.name, e)
-            return {'success': False, 'error': f'Sync failed: {e}'}
+            return {'success': False, 'error': _('Sync failed: %(reason)s', reason=e)}
 
         return {'success': True, 'data': self._format_mcp_server(server)}
 
@@ -2427,10 +2428,10 @@ class PaasController(HiddenChainMixin, Controller):
                 reason = server.state_message or 'Unknown error'
                 return {
                     'success': False,
-                    'error': f'Connection test failed: {reason}',
+                    'error': _('Connection test failed: %(reason)s', reason=reason),
                 }
         except Exception as e:
-            return {'success': False, 'error': f'Connection test failed: {e}'}
+            return {'success': False, 'error': _('Connection test failed: %(reason)s', reason=e)}
 
         return {
             'success': True,
@@ -2535,7 +2536,7 @@ class PaasController(HiddenChainMixin, Controller):
             if access.role not in (ROLE_OWNER, ROLE_ADMIN):
                 return {'success': False, 'error': _('Permission denied')}
             return self._update_support_project(project, kw)
-        return {'success': False, 'error': f'Unknown action: {action}'}
+        return {'success': False, 'error': _('Unknown action: %(action)s', action=action)}
 
     def _format_project_detail(self, project) -> dict[str, Any]:
         servers = project.mcp_server_ids.filtered(
@@ -2645,7 +2646,7 @@ class PaasController(HiddenChainMixin, Controller):
             return self._sync_project_mcp_server(project, kw)
         if action == 'test':
             return self._test_project_mcp_server(project, kw)
-        return {'success': False, 'error': f'Unknown action: {action}'}
+        return {'success': False, 'error': _('Unknown action: %(action)s', action=action)}
 
     def _compute_project_sidecar_hint(self, project) -> dict[str, Any]:
         """Return prefill payload for the Add Sidecar MCP UI shortcut, or
@@ -2763,10 +2764,10 @@ class PaasController(HiddenChainMixin, Controller):
                 reason = server.state_message or 'Unknown error'
                 _logger.warning(
                     'MCP sync failed for server %s: %s', server.name, reason)
-                return {'success': False, 'error': f'Sync failed: {reason}'}
+                return {'success': False, 'error': _('Sync failed: %(reason)s', reason=reason)}
         except Exception as e:
             _logger.warning('MCP sync failed for server %s: %s', server.name, e)
-            return {'success': False, 'error': f'Sync failed: {e}'}
+            return {'success': False, 'error': _('Sync failed: %(reason)s', reason=e)}
         return {'success': True, 'data': self._format_mcp_server(server)}
 
     def _test_project_mcp_server(self, project, params: dict) -> dict[str, Any]:
@@ -2779,10 +2780,10 @@ class PaasController(HiddenChainMixin, Controller):
                 reason = server.state_message or 'Unknown error'
                 return {
                     'success': False,
-                    'error': f'Connection test failed: {reason}',
+                    'error': _('Connection test failed: %(reason)s', reason=reason),
                 }
         except Exception as e:
-            return {'success': False, 'error': f'Connection test failed: {e}'}
+            return {'success': False, 'error': _('Connection test failed: %(reason)s', reason=e)}
         return {
             'success': True,
             'data': {
@@ -3568,7 +3569,7 @@ class PaasController(HiddenChainMixin, Controller):
     def _update_service(self, service: Any, values: dict[str, Any] | None, version: str | None, odoo_addon_ids: list[int] | None = None) -> dict[str, Any]:
         """Update/upgrade a service."""
         if service.state in ['pending', 'deleting', 'error']:
-            return {'success': False, 'error': f'Cannot update service in {service.state} state'}
+            return {'success': False, 'error': _('Cannot update service in %(state)s state', state=service.state)}
 
         client = get_paas_operator_client(request.env)
         if not client:
@@ -3620,7 +3621,7 @@ class PaasController(HiddenChainMixin, Controller):
             existing_values = service._helm_values_dict()  # #559：唯一入口
             filtered_user_values, rejected_keys = self._filter_allowed_helm_values(values, service.template_id)
             if rejected_keys:
-                return {'success': False, 'error': f'Unauthorized configuration keys: {", ".join(rejected_keys)}'}
+                return {'success': False, 'error': _('Unauthorized configuration keys: %(keys)s', keys=', '.join(rejected_keys))}
             # _init.* are one-time provisioning params consumed at creation (stored on
             # the service record, e.g. n8n_owner_password). They are NOT Helm values and
             # must never be merged into helm_values on reconfigure — doing so would
@@ -3783,7 +3784,7 @@ class PaasController(HiddenChainMixin, Controller):
                             svc = env['woow_paas_platform.cloud_service'].browse(service_id)
                             if svc.exists() and svc.state in ('upgrading', 'suspended'):
                                 detail = getattr(exc, 'detail', None) or str(exc)
-                                vals = {'error_message': f'Upgrade failed: {detail}'}
+                                vals = {'error_message': _('Upgrade failed: %(reason)s', reason=detail)}
                                 # #482: 停權服務升級失敗仍該停著 —— 翻成 'error'
                                 # 會讓它離開停權語意（且 lifecycle cron 會把
                                 # error 當成可再 suspend 的狀態來回搬）。錯誤本身
@@ -3853,9 +3854,9 @@ class PaasController(HiddenChainMixin, Controller):
             _logger.error("Operator error during uninstall: %s", str(e))
             service.write({
                 'state': 'error',
-                'error_message': f'Deletion failed: {e.detail or e.message}',
+                'error_message': _('Deletion failed: %(reason)s', reason=e.detail or e.message),
             })
-            return {'success': False, 'error': f'Deletion failed: {e.detail or e.message}'}
+            return {'success': False, 'error': _('Deletion failed: %(reason)s', reason=e.detail or e.message)}
 
     def _rollback_service(self, service: Any, revision: int | None) -> dict[str, Any]:
         """Rollback service to a previous revision."""
@@ -3870,7 +3871,7 @@ class PaasController(HiddenChainMixin, Controller):
         # reference_helm_resource_policy_stored_manifest 的既有教訓）。
         # 結果就是欠費停權的 VM 被喚醒並繼續計費。
         if service.state in ['pending', 'deleting', 'suspended']:
-            return {'success': False, 'error': f'Cannot rollback service in {service.state} state'}
+            return {'success': False, 'error': _('Cannot rollback service in %(state)s state', state=service.state)}
 
         client = get_paas_operator_client(request.env)
         if not client:
@@ -3892,14 +3893,14 @@ class PaasController(HiddenChainMixin, Controller):
                 'last_upgraded_at': fields.Datetime.now(),
             })
 
-            return {'success': True, 'message': f'Rollback to revision {revision} initiated'}
+            return {'success': True, 'message': _('Rollback to revision %(revision)s initiated', revision=revision)}
 
         except PaaSOperatorConnectionError:
             return {'success': False, 'error': _('Unable to connect to deployment service')}
 
         except PaaSOperatorError as e:
             _logger.error("Operator error during rollback: %s", str(e))
-            return {'success': False, 'error': f'Rollback failed: {e.detail or e.message}'}
+            return {'success': False, 'error': _('Rollback failed: %(reason)s', reason=e.detail or e.message)}
 
     def _get_service_revisions(self, service: Any) -> dict[str, Any]:
         """Get revision history for a service."""
@@ -3924,7 +3925,7 @@ class PaasController(HiddenChainMixin, Controller):
         except PaaSOperatorError as e:
             if e.status_code == 404:
                 return {'success': True, 'data': []}
-            return {'success': False, 'error': f'Failed to get revisions: {e.detail or e.message}'}
+            return {'success': False, 'error': _('Failed to get revisions: %(reason)s', reason=e.detail or e.message)}
 
     def _update_service_status(self, service: Any) -> None:
         """Poll operator for service status and update record.
@@ -4094,7 +4095,8 @@ class PaasController(HiddenChainMixin, Controller):
                 sys_service.write({
                     'state': 'error',
                     **release_facts,
-                    'error_message': release.get('description', 'Deployment failed'),
+                    'error_message': release.get(
+                        'description', _('Deployment failed')),
                 })
 
             elif service._is_timeout_governed():
@@ -4250,7 +4252,9 @@ class PaasController(HiddenChainMixin, Controller):
                     if retries >= 5:
                         vals.update({
                             'state': 'error',
-                            'error_message': f'n8n initialization failed after {retries} retries: {error_msg}',
+                            'error_message': _('n8n initialization failed after '
+                                               '%(retries)s retries: %(reason)s',
+                                               retries=retries, reason=error_msg),
                         })
                     sys_service.write(vals)
                     _logger.warning(
@@ -4267,7 +4271,7 @@ class PaasController(HiddenChainMixin, Controller):
                 if retries >= 5:
                     vals.update({
                         'state': 'error',
-                        'error_message': f'n8n initialization failed: {str(e)}',
+                        'error_message': _('n8n initialization failed: %(reason)s', reason=str(e)),
                     })
                 sys_service.write(vals)
                 _logger.warning(
@@ -4310,7 +4314,9 @@ class PaasController(HiddenChainMixin, Controller):
                     if retries >= 5:
                         vals.update({
                             'state': 'error',
-                            'error_message': f'Odoo initialization failed after {retries} retries: {error_msg}',
+                            'error_message': _('Odoo initialization failed after '
+                                               '%(retries)s retries: %(reason)s',
+                                               retries=retries, reason=error_msg),
                         })
                     sys_service.write(vals)
                     _logger.warning(
@@ -4327,7 +4333,7 @@ class PaasController(HiddenChainMixin, Controller):
                 if retries >= 5:
                     vals.update({
                         'state': 'error',
-                        'error_message': f'Odoo initialization failed: {str(e)}',
+                        'error_message': _('Odoo initialization failed: %(reason)s', reason=str(e)),
                     })
                 sys_service.write(vals)
                 _logger.warning(

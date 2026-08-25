@@ -204,7 +204,7 @@ class AiAssistantController(Controller):
         if not isinstance(payload, dict):
             payload = {}
         data = {
-            'error': payload.get('error') or 'Agent runtime error',
+            'error': payload.get('error') or _('Agent runtime error'),
             'done': True,
         }
         code = payload.get('code')
@@ -774,7 +774,7 @@ class AiAssistantController(Controller):
                 'spawn-or-attach failed for channel %s: %s', channel_id, exc,
             )
             return self._sse_error_response(
-                f'Pod spawn failed: {exc}', 'spawn_failed',
+                _('Pod spawn failed: %(reason)s', reason=exc), 'spawn_failed',
             )
 
         # heartbeat：cursor 此處仍有效（generator 內無效，故在此 stamp）
@@ -1348,7 +1348,7 @@ class AiAssistantController(Controller):
         elif action == 'delete':
             return self._delete_project(kwargs)
         else:
-            return {'success': False, 'error': f'Unknown action: {action}'}
+            return {'success': False, 'error': _('Unknown action: %(action)s', action=action)}
 
     @route('/api/support/projects/<int:project_id>/stages', auth='user', methods=['POST'], type='json')
     def api_support_project_stages(
@@ -1411,7 +1411,7 @@ class AiAssistantController(Controller):
         elif action == 'create':
             return self._create_task(workspace, kwargs)
         else:
-            return {'success': False, 'error': f'Unknown action: {action}'}
+            return {'success': False, 'error': _('Unknown action: %(action)s', action=action)}
 
     @route('/api/support/tasks/detail/<int:task_id>', auth='user', methods=['POST'], type='json')
     def api_support_task_detail(
@@ -1442,7 +1442,7 @@ class AiAssistantController(Controller):
         elif action == 'delete':
             return self._delete_task(task)
         else:
-            return {'success': False, 'error': f'Unknown action: {action}'}
+            return {'success': False, 'error': _('Unknown action: %(action)s', action=action)}
 
     # ==================== Private: Project Helpers ====================
 
