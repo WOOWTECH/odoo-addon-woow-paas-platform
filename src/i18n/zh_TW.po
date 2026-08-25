@@ -3,47 +3,57 @@
 # 	* woow_paas_platform
 #
 # #107：/woow 前端的正體中文翻譯。
-# msgid 是英文 source，msgstr 是中文。本檔是**全量**檔：條目涵蓋整個 module 的
-# `.pot`，其中只有一小部分填了譯文，其餘 msgstr 為空 —— 空的那些在 runtime 會被
-# `CodeTranslations._load_web_translations` 的「value 非空」條件濾掉，等同沒翻。
+# msgid 是英文 source，msgstr 是中文。本檔是**全量**檔：條目涵蓋整個 module 的 `.pot`，
+# 其中只有一部分填了譯文，其餘 msgstr 為空——空的那些在 runtime 會被
+# `CodeTranslations._load_web_translations()` 的「value 非空」條件濾掉，等同沒翻。
 #
-# 兩批來源：
+# 三批來源：
 #   * XML 層（#893，54 條）：改動**之前**畫面上原本就顯示的中文，逐字保留（多行文字
-#     節點接成單行：中英交界補一個空格、中文之間不補——原本那個空格是 XML 排版換行
-#     的副產物，不是設計）。
-#   * 啟用批（本批，12 條）：批 A（#902）改名產生的新 msgid ＋ 與它們同屬一個控制項
-#     的兄弟字串（否則同一個下拉／同一顆按鈕會一半中文一半英文）。
+#     節點接成單行：中英交界補一個空格、中文之間不補——原本那個空格是 XML 排版換行的
+#     副產物，不是設計）。
+#   * JS 層（#903，376 條）：`_t()` 包起來的字串，譯文取自該批的交接清單。
+#   * 啟用批（#902 的字面值改名 ＋ 同一控制項的兄弟字串，12 條）。
 #
-# ⚠ 跨檔／跨 type 共用的 msgid —— 翻譯它們會同時作用在所有出處，那是預期的。
-#   日後只改其中一處的字面值會**靜默拆成兩條 msgid**，其中一條掉回英文。
+# 🔴 跨模組覆蓋不可靠，所以「撞名時填什麼」不是偏好問題：
+#   Odoo 前端的 translatedTerms 是跨 module **攤平**的 flat map，合併順序來自
+#   `list(Registry._init_modules)`（那是 **set**，hash 順序、每個進程不同）⇒ 同一條
+#   msgid 被兩個模組填了**不同**的中文時，畫面上顯示哪一個是隨機的，而且會隨 pod
+#   重啟跳動。兩邊都「看起來正常」，沒有任何東西會叫。
 #
-#   已填中文（12 條）：
-#     Cancel / Back / Total / Retry / Refresh / Loading... / Loading plans... /
-#     Processing... / Last synced: / Protection covers the        ← XML 層帶進來的 10 條
-#     Enter the name / to confirm                                  ← 本批新增；各 2 個 occurrence
-#         （DeleteServiceModal.xml ＋ SmartHomeDetailPage.xml，兩個 modal 的同一句話）
+#   ⇒ 規則：**msgid 已被其他已安裝模組佔用時，只能填與它相同的中文**；想要別的字，
+#     唯一可靠的解是**改字面值**，不是在這裡覆蓋。
 #
-#   ⚠ 未填中文、但**已經**跨出處，日後要譯時同樣受此限制（2 條）：
-#     Custom Domain  3 occurrence —— code: ServiceDetailPage.xml ＋ OverviewTab.xml，
+#   本檔實測（沙盒 82 個已安裝模組的 runtime flat map）撞名 23 條，其中 9 條的交接
+#   建議值與佔用模組不同，已一律改成**跟隨佔用模組**：
+#     All              想填「全部」→ 實填「所有」（佔用：html_editor／mail／spreadsheet／web／web_editor）
+#     Configuration    想填「設定」→ 實填「配置」（佔用：spreadsheet）
+#     Country          想填「國家／地區」→ 實填「國家」（佔用：spreadsheet_dashboard_account／spreadsheet_dashboard_sale）
+#     Due in %s days   想填「%s 天後到期」→ 實填「%s 天內到期」（佔用：mail／portal）
+#     Email            想填「電子郵件」→ 實填「電郵」（佔用：web）
+#     Overdue          想填「已逾期」→ 實填「逾期」（佔用：mail）
+#     Running          想填「運行中」→ 實填「執行中」（佔用：utm）
+#     Unassigned       想填「未指派專案」→ 實填「未分派」（佔用：project）
+#     Waiting          想填「待付款」→ 實填「正在等待」（佔用：project）
+#
+#   另外 14 條撞名的建議值本來就與佔用模組相同，維持原值：
+#     Cancelled／Copy／Database／Draft／Due today／Error／
+#     Guest／In Progress／Invoices／Members／Settings／Status／User／Web
+#
+# ⚠ 跨檔／跨 type 共用的 msgid——翻譯它們會同時作用在所有出處，那是預期的。日後只改
+#   其中一處的字面值會**靜默拆成兩條 msgid**，其中一條掉回英文。已知的兩條**尚未填
+#   中文**、但已經跨出處者（日後要譯時同樣受此限制）：
+#     Custom Domain  3 occurrence：code: ServiceDetailPage.xml ＋ OverviewTab.xml，
 #                    再加 model:ir.model.fields 的 cloud_service__custom_domain
 #                    ⇒ 填一次中文會同時作用在 /woow 兩處與 Odoo 後端欄位標籤。
-#     Deny           3 occurrence —— code: AddPolicyModal.xml，
+#     Deny           3 occurrence：code: AddPolicyModal.xml，
 #                    再加 model_terms 的 oauth2_authorize / device_consent 兩顆按鈕。
-#     兩條本批刻意不填：它們在批 A 之前畫面上就是英文，填了等於在本批夾帶新翻譯。
-#
-# ⚠ `Copy` 是**跟隨**別人的譯文，不是我們挑的：web / spreadsheet 都把它譯成「複製」
-#   （沙盒實測，82 個已安裝模組的 runtime flat map）。見下方跨模組覆蓋說明。
-#
-# 🔴 跨模組覆蓋不可靠：Odoo 前端的 translatedTerms 是跨 module 攤平的 flat map，
-#   合併順序來自 `list(Registry._init_modules)`（那是 **set**，hash 順序、每個進程不同），
-#   所以「我們的翻譯會不會蓋掉其它模組對同一字面值的翻譯」是隨機的。
-#   實測見 #107 W3 報告。撞字面值時唯一可靠的解是改字面值，不是在這裡覆蓋。
+#   兩條刻意不填：它們在 #902 之前畫面上就是英文，填了等於夾帶新翻譯。
 #
 msgid ""
 msgstr ""
 "Project-Id-Version: Odoo Server 18.0\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-08-25 14:06+0000\n"
+"POT-Creation-Date: 2026-08-25 14:37+0000\n"
 "Last-Translator: \n"
 "Language-Team: \n"
 "Language: zh_TW\n"
@@ -71,10 +81,83 @@ msgid "#768：父 policy 的第三個錨點，同樣 store=True 讓 ir.rule 走�
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/workspace/WorkspaceDetailPage.js:0
+msgid "$0/month"
+msgstr "$0/月"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/billing_helpers.js:0
+msgid "%(amount)s pts"
+msgstr "%(amount)s 點"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/subscription/PlanSelector.js:0
+#: code:addons/woow_paas_platform/static/src/paas/utils/pricing_label.js:0
+msgid "%(amount)s pts/%(unit)s"
+msgstr "%(amount)s pts/%(unit)s"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/smart-home/tabs/SmartHomeAccessTab.js:0
+msgid ""
+"%(count)s Access policies (#%(ids)s) match none of this Smart Home's "
+"addresses, so they are not listed below — they are still in effect on "
+"Cloudflare. Please report this."
+msgstr ""
+"有 %(count)s 筆 Access policy（#%(ids)s）對不到這台 Smart Home 的任何一條網"
+"址，因此沒有顯示在下方——它們仍然在 Cloudflare 上生效。請回報這個狀況。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/billing_helpers.js:0
+msgid "%(description)s + %(bonus)s bonus = %(total)s pts"
+msgstr "%(description)s ＋贈送 %(bonus)s 點 ＝共 %(total)s 點"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/subscription/PlanSelector.js:0
+msgid "%(duration)s-%(unit)s free trial"
+msgstr "%(duration)s %(unit)s 免費試用"
+
+#. module: woow_paas_platform
 #. odoo-python
 #: code:addons/woow_paas_platform/models/skill.py:0
 msgid "%(name)s v%(version)s (%(scope)s)"
 msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/pricing_label.js:0
+msgid "%s and up"
+msgstr "%s 起"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/configure/AppConfigurationPage.js:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/ConfigurationTab.js:0
+msgid "%s is required"
+msgstr "%s 為必填"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/dashboard/DashboardPage.js:0
+msgid "%s running / %s total"
+msgstr "執行中 %s／共 %s"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/subscription/PlanSelector.js:0
+msgid "%s-day free trial"
+msgstr "%s 天免費試用"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/ai-chat/AiChat.js:0
+msgid "(This reply is incomplete because the connection was interrupted.)"
+msgstr "（回覆因連線中斷而不完整）"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -108,9 +191,27 @@ msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/subscription/PlanSelector.js:0
+msgid "+%(amount)s pts/%(unit)s"
+msgstr "+%(amount)s 點/%(unit)s"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/access/AccessAppCard.js:0
+msgid "+%s require"
+msgstr "+%s 條 require"
+
+#. module: woow_paas_platform
+#. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/subscription/PlanSelector.xml:0
 msgid "+1 access seat ("
 msgstr "+1 access seat（"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/access/AccessAppCard.js:0
+msgid "-%s exclude"
+msgstr "-%s 條 exclude"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -340,9 +441,11 @@ msgid "AI"
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/marketplace/CategoryFilter.js:0
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_cloud_app_template__category__ai_llm
 msgid "AI & LLM"
-msgstr ""
+msgstr "AI 與 LLM"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -351,9 +454,11 @@ msgid "AI Agent"
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/ai-chat/AiChat.js:0
 #: model:ir.model,name:woow_paas_platform.model_ai_assistant
 msgid "AI Assistant"
-msgstr ""
+msgstr "AI 助理"
 
 #. module: woow_paas_platform
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.res_config_settings_view_form
@@ -378,9 +483,11 @@ msgid "AI Auto-Reply"
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/core/router.js:0
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_task_form_inherit_chat
 msgid "AI Chat"
-msgstr ""
+msgstr "AI 對話"
 
 #. module: woow_paas_platform
 #: model:ir.model,name:woow_paas_platform.model_ai_config
@@ -399,6 +506,30 @@ msgstr ""
 #: code:addons/woow_paas_platform/static/src/portal/portal_agent_status.xml:0
 msgid "AI Connection："
 msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/ai-chat/AiChat.js:0
+msgid "AI assistant connected"
+msgstr "已連線"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/ai-chat/AiChat.js:0
+msgid "AI assistant idle"
+msgstr "待命中"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/ai-chat/AiChat.js:0
+msgid "AI assistant is replying..."
+msgstr "AI 回覆中..."
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/ai-chat/AiChat.js:0
+msgid "AI connection error"
+msgstr "連線錯誤"
 
 #. module: woow_paas_platform
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.portal_my_task_paas_agent
@@ -458,11 +589,12 @@ msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.js:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.xml:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/service/ServiceDetailPage.xml:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/smart-home/SmartHomeDetailPage.xml:0
 msgid "Access"
-msgstr ""
+msgstr "存取控管"
 
 #. module: woow_paas_platform
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_cf_access_policy_reap__kind__app
@@ -534,6 +666,17 @@ msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/services/billing_service.js:0
+#: code:addons/woow_paas_platform/static/src/paas/services/cloud_service.js:0
+#: code:addons/woow_paas_platform/static/src/paas/services/dashboard_service.js:0
+#: code:addons/woow_paas_platform/static/src/paas/services/profile_service.js:0
+#: code:addons/woow_paas_platform/static/src/paas/services/rpc.js:0
+#: code:addons/woow_paas_platform/static/src/paas/services/workspace_service.js:0
+msgid "Access denied."
+msgstr "存取遭拒。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/billing/BillingOverviewPage.xml:0
 msgid "Account Overview"
 msgstr ""
@@ -568,7 +711,13 @@ msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/common/StatusBadge.js:0
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/SubscribedServicesModal.js:0
+#: code:addons/woow_paas_platform/static/src/paas/components/subscription/SubscriptionBadge.js:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/billing/SubscriptionListPage.js:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/dashboard/DashboardPage.js:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/support-projects/ProjectsOverview.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/support-projects/SupportProjectsPage.js:0
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_app_template__is_active
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_odoo_addon__active
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_mcp_server__active
@@ -582,7 +731,7 @@ msgstr ""
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_smart_home__state__active
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_workspace__state__active
 msgid "Active"
-msgstr ""
+msgstr "啟用中"
 
 #. module: woow_paas_platform
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_security_access__state__active_no_route
@@ -599,6 +748,18 @@ msgstr ""
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_skill__is_effective
 msgid "Active in Pod"
 msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/dashboard/DashboardPage.js:0
+msgid "Active spaces & services"
+msgstr "使用中的工作區與服務"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/common/StatusBadge.js:0
+msgid "Active · No Route"
+msgstr "啟用中 · 尚無路由"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -630,9 +791,10 @@ msgstr ""
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/AddFundsModal.xml:0
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/ManagePaymentMethodsModal.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/core/router.js:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/settings/AddPaymentMethodPage.xml:0
 msgid "Add Payment Method"
-msgstr ""
+msgstr "新增付款方式"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -720,11 +882,12 @@ msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/InviteMemberModal.js:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/workspace/WorkspaceTeamPage.xml:0
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_project_access__role__admin
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_workspace_access__role__admin
 msgid "Admin"
-msgstr ""
+msgstr "管理員"
 
 #. module: woow_paas_platform
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_app_template__has_admin_gui
@@ -735,6 +898,12 @@ msgstr ""
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_cloud_app_template_form
 msgid "Admin GUI（平台供給 admin_password）"
 msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/OneTimeCredentialsModal.js:0
+msgid "Admin Password"
+msgstr "管理員密碼"
 
 #. module: woow_paas_platform
 #: model:ir.model.fields,help:woow_paas_platform.field_project_project__external_mcp_allowed
@@ -797,6 +966,36 @@ msgid "Agent Templates"
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/services/agent_pod_state.js:0
+msgid "Agent idle"
+msgstr "閒置"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/services/agent_pod_state.js:0
+msgid "Agent not started"
+msgstr "未啟動"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/services/agent_pod_state.js:0
+msgid "Agent running"
+msgstr "運行中"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/services/agent_pod_state.js:0
+msgid "Agent starting"
+msgstr "啟動中"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/services/agent_pod_state.js:0
+msgid "Agent state unknown"
+msgstr "未知"
+
+#. module: woow_paas_platform
 #. odoo-python
 #: code:addons/woow_paas_platform/models/agent_template.py:0
 msgid ""
@@ -825,10 +1024,25 @@ msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/workspace/WorkspaceDetailPage.js:0
+msgid "Alerts"
+msgstr "警示"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/marketplace/CategoryFilter.js:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/billing/InvoiceListPage.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/billing/SubscriptionListPage.js:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/support-projects/SupportProjectsPage.js:0
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_topup_plan__category__all
 msgid "All"
-msgstr ""
+msgstr "所有"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/billing/TopupStorePage.js:0
+msgid "All Packs"
+msgstr "全部方案"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -853,12 +1067,13 @@ msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/access/AccessAppCard.js:0
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/AddPolicyModal.xml:0
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_security_access_access_policy__decision__allow
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.device_consent
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.oauth2_authorize
 msgid "Allow"
-msgstr ""
+msgstr "允許"
 
 #. module: woow_paas_platform
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.res_config_settings_view_form
@@ -946,9 +1161,30 @@ msgid ""
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/project-kanban/ProjectKanbanPage.js:0
+msgid "An error occurred while updating the task stage. Please try again."
+msgstr "更新任務階段時發生錯誤，請重試。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/configure/AppConfigurationPage.js:0
+msgid "An unexpected error occurred"
+msgstr "發生非預期的錯誤"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/CreateProjectModal.js:0
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/CreateTaskModal.js:0
+msgid "An unexpected error occurred. Please try again."
+msgstr "發生未預期的錯誤，請再試一次。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/marketplace/CategoryFilter.js:0
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_cloud_app_template__category__analytics
 msgid "Analytics"
-msgstr ""
+msgstr "數據分析"
 
 #. module: woow_paas_platform
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cf_access_policy_reap__anchor_id
@@ -967,6 +1203,12 @@ msgid "Any format accepted. ECPay binding will auto-strip spaces and dashes."
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/AddPolicyModal.js:0
+msgid "Anyone with an email at this domain."
+msgstr "任何使用此網域 Email 的人。"
+
+#. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_anythingllm_monthly_product_template
 msgid "AnythingLLM Monthly Subscription"
 msgstr ""
@@ -978,9 +1220,18 @@ msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/core/router.js:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/configure/AppConfigurationPage.js:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/marketplace/AppMarketplacePage.js:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/marketplace/AppMarketplacePage.xml:0
 msgid "App Marketplace"
-msgstr ""
+msgstr "應用市集"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.js:0
+msgid "Application"
+msgstr "應用程式"
 
 #. module: woow_paas_platform
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_oauth_client__name
@@ -1071,6 +1322,24 @@ msgid "Are you sure you want to delete"
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/workspace/WorkspaceTeamPage.js:0
+msgid "Are you sure you want to remove %s from this workspace?"
+msgstr "確定要將 %s 從這個工作區移除嗎？"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/project-detail/sections/McpServersSection.js:0
+msgid "Are you sure you want to remove MCP server \"%s\"?"
+msgstr "確定要移除 MCP 伺服器「%s」嗎？"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/ManagePaymentMethodsModal.js:0
+msgid "Are you sure you want to remove this payment method?"
+msgstr "確定要移除這個付款方式嗎？"
+
+#. module: woow_paas_platform
 #: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_smart_home__subdomain
 msgid "Assigned subdomain for this smart home tunnel"
 msgstr ""
@@ -1080,6 +1349,12 @@ msgstr ""
 #: code:addons/woow_paas_platform/static/src/paas/pages/task-detail/TaskDetailPage.xml:0
 msgid "Assignee"
 msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/AddPolicyModal.js:0
+msgid "At least one Include rule with a value is required"
+msgstr "至少需要一條有填值的包含規則"
 
 #. module: woow_paas_platform
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_agent_template_form
@@ -1144,9 +1419,11 @@ msgid "Automatically trigger AI reply when messages are posted"
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/marketplace/CategoryFilter.js:0
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_cloud_app_template__category__automation
 msgid "Automation"
-msgstr ""
+msgstr "自動化"
 
 #. module: woow_paas_platform
 #: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_security_access_template__subscription_plan_ids
@@ -1304,13 +1581,17 @@ msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/core/router.js:0
+#: code:addons/woow_paas_platform/static/src/paas/layout/bottom_nav/BottomNav.js:0
+#: code:addons/woow_paas_platform/static/src/paas/layout/sidebar/Sidebar.js:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/billing/InvoiceDetailPage.xml:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/billing/InvoiceListPage.xml:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/billing/SubscriptionListPage.xml:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/billing/TopupStorePage.xml:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/billing/TransactionListPage.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/dashboard/DashboardPage.js:0
 msgid "Billing"
-msgstr ""
+msgstr "帳務"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -1334,6 +1615,18 @@ msgid ""
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/settings/AddPaymentMethodPage.js:0
+msgid "Bind rejected"
+msgstr "綁卡被拒絕"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/project-detail/sections/CloudServiceBindingSection.js:0
+msgid "Bind this project to %s?"
+msgstr "要將這個專案綁定到 %s 嗎？"
+
+#. module: woow_paas_platform
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_agent_template_form
 msgid "Bindings"
 msgstr ""
@@ -1342,6 +1635,12 @@ msgstr ""
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_security_access_access_policy__decision__deny
 msgid "Block"
 msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/access/AccessAppCard.js:0
+msgid "Blocked"
+msgstr "封鎖"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -1430,10 +1729,11 @@ msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/access/AccessAppCard.js:0
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/AddPolicyModal.xml:0
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_security_access_access_policy__decision__bypass
 msgid "Bypass"
-msgstr ""
+msgstr "略過驗證"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -1511,6 +1811,24 @@ msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/InviteMemberModal.js:0
+msgid "Can manage members and workspace settings"
+msgstr "可管理成員與工作區設定"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/InviteMemberModal.js:0
+msgid "Can only view workspace content"
+msgstr "僅能檢視工作區內容"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/InviteMemberModal.js:0
+msgid "Can view and edit workspace content"
+msgstr "可檢視與編輯工作區內容"
+
+#. module: woow_paas_platform
+#. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/access/AccessAppCard.xml:0
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/AddFundsModal.xml:0
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/AddPolicyModal.xml:0
@@ -1558,9 +1876,20 @@ msgid "Cancellation Email Sent"
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/CancelSubscriptionModal.js:0
+#: code:addons/woow_paas_platform/static/src/paas/services/billing_service.js:0
+msgid "Cancellation failed"
+msgstr "取消失敗"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/subscription/SubscriptionBadge.js:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/billing/BillingOverviewPage.js:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/billing/SubscriptionListPage.js:0
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_wallet_topup__state__cancelled
 msgid "Cancelled"
-msgstr ""
+msgstr "已取消"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -1581,6 +1910,14 @@ msgid "Cannot Remove Addon"
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/AddonsTab.js:0
+msgid ""
+"Cannot remove addons while the service is %s. Start the service and try "
+"again."
+msgstr "服務目前為 %s，無法移除 addon。請先啟動服務後再試一次。"
+
+#. module: woow_paas_platform
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_security_access__canonical_name
 msgid "Canonical Name"
 msgstr ""
@@ -1593,9 +1930,21 @@ msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/AddFundsModal.js:0
+msgid "Card"
+msgstr "卡片"
+
+#. module: woow_paas_platform
+#. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/settings/PaymentMethodsListPage.xml:0
 msgid "Card bound successfully."
 msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/settings/AddPaymentMethodPage.js:0
+msgid "Card form failed: %s"
+msgstr "信用卡表單載入失敗：%s"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -1686,6 +2035,12 @@ msgid "Chat"
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/ai-chat/AiChatPage.js:0
+msgid "Chat #%s"
+msgstr "對話 #%s"
+
+#. module: woow_paas_platform
 #: model:ir.model.fields,field_description:woow_paas_platform.field_project_task__channel_id
 msgid "Chat Channel"
 msgstr ""
@@ -1707,6 +2062,13 @@ msgstr ""
 #: code:addons/woow_paas_platform/static/src/paas/pages/task-detail/TaskDetailPage.xml:0
 msgid "Chat is not enabled"
 msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/ai-chat/AiChat.js:0
+msgid ""
+"Chat is not enabled for this task yet. Please tap \"Enable chat\" first."
+msgstr "此任務尚未啟用聊天功能，請先點擊「啟用聊天」。"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -1882,12 +2244,14 @@ msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/workspace/WorkspaceDetailPage.js:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/workspace/WorkspaceDetailPage.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/workspace/WorkspaceListPage.js:0
 #: model:ir.model.fields,field_description:woow_paas_platform.field_project_project__cloud_service_ids
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_workspace__service_ids
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_cloud_service_list
 msgid "Cloud Services"
-msgstr ""
+msgstr "Cloud Services"
 
 #. module: woow_paas_platform
 #: model_terms:ir.actions.act_window,help:woow_paas_platform.action_cloud_service
@@ -1951,6 +2315,18 @@ msgid "Coming Soon"
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/AddPolicyModal.js:0
+msgid "Comma-separated ISO-2 country codes."
+msgstr "以逗號分隔的 ISO-2 國碼。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/AddPolicyModal.js:0
+msgid "Comma-separated email addresses."
+msgstr "以逗號分隔的 Email 位址。"
+
+#. module: woow_paas_platform
 #: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_oauth_client__grant_types
 msgid ""
 "Comma-separated list of allowed grant types: authorization_code, "
@@ -1974,6 +2350,12 @@ msgstr ""
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_cloud_odoo_addon_form
 msgid "Compatible Templates"
 msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/support-projects/SupportProjectsPage.js:0
+msgid "Completed"
+msgstr "已完成"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -2001,19 +2383,32 @@ msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.js:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/service/ServiceDetailPage.xml:0
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_agent_template_form
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_cloud_odoo_addon_form
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_mcp_server_form
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_project_form_inherit_mcp_skill
 msgid "Configuration"
-msgstr ""
+msgstr "配置"
 
 #. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/ConfigurationTab.xml:0
 msgid "Configuration Reference"
 msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/configure/AppConfigurationPage.js:0
+msgid "Configure %s"
+msgstr "設定 %s"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/core/router.js:0
+msgid "Configure Service"
+msgstr "設定服務"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -2080,18 +2475,31 @@ msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/workspace/WorkspaceDetailPage.js:0
+msgid "Connect Home Assistant."
+msgstr "連接 Home Assistant。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/workspace/WorkspaceDetailPage.xml:0
 msgid "Connect Your Home Assistant"
 msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/common/StatusBadge.js:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/project-kanban/ProjectKanbanPage.xml:0
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_mcp_server__state__connected
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_security_access__tunnel_status__connected
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_smart_home__tunnel_status__connected
 msgid "Connected"
-msgstr ""
+msgstr "已連線"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/ai-chat/AiChat.js:0
+msgid "Connecting to AI assistant..."
+msgstr "連線中..."
 
 #. module: woow_paas_platform
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_mcp_server_form
@@ -2120,10 +2528,11 @@ msgstr ""
 #. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/smart-home/SmartHomeDetailPage.js:0
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_security_access__connector_id
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_smart_home__connector_id
 msgid "Connector ID"
-msgstr ""
+msgstr "連接器 ID"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -2139,10 +2548,11 @@ msgstr ""
 #. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/smart-home/SmartHomeDetailPage.js:0
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_security_access__connector_type
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_smart_home__connector_type
 msgid "Connector Type"
-msgstr ""
+msgstr "連接器類型"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -2174,10 +2584,12 @@ msgid "Contact"
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/marketplace/CategoryFilter.js:0
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_cloud_app_template__category__container
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_cloud_app_template__workload_type__container
 msgid "Container"
-msgstr ""
+msgstr "容器"
 
 #. module: woow_paas_platform
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.device_verify
@@ -2216,14 +2628,30 @@ msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/ai-chat/AiChat.js:0
+msgid ""
+"Could not connect to the AI service. Please try again later or refresh the "
+"page."
+msgstr "無法連線至 AI 服務，請稍後再試或重新整理頁面。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/dashboard/DashboardPage.xml:0
 msgid "Could not load dashboard"
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/ai-chat/AiChat.js:0
+msgid "Could not load the AI assistant list. Please refresh the page."
+msgstr "無法載入 AI 助理列表，請重新整理頁面。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/AddPolicyModal.js:0
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_security_access_access_policy_rule__rule_type__country
 msgid "Country"
-msgstr ""
+msgstr "國家"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -2299,6 +2727,12 @@ msgstr ""
 #: code:addons/woow_paas_platform/static/src/paas/pages/workspace/WorkspaceListPage.xml:0
 msgid "Create Your First Workspace"
 msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/services/billing_service.js:0
+msgid "Create bind failed"
+msgstr "建立信用卡綁定失敗"
 
 #. module: woow_paas_platform
 #: model_terms:ir.actions.act_window,help:woow_paas_platform.action_cloud_app_template
@@ -2495,12 +2929,30 @@ msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/services/topup_errors.js:0
+msgid "Credit top-up is not available yet. Please contact support."
+msgstr "點數儲值尚未開放，請聯絡客服。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/AddFundsModal.xml:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/billing/TopupStorePage.xml:0
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_topup_plan__credits
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_wallet_topup__credits
 msgid "Credits"
 msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/dashboard/DashboardPage.js:0
+msgid "Credits & next bill"
+msgstr "點數與下期帳單"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/dashboard/DashboardPage.js:0
+msgid "Credits Left"
+msgstr "剩餘點數"
 
 #. module: woow_paas_platform
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_wallet_topup__currency_id
@@ -2591,6 +3043,12 @@ msgid "Custom domain configured by user"
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/dashboard/DashboardPage.js:0
+msgid "Cycle Usage"
+msgstr "本期用量"
+
+#. module: woow_paas_platform
 #: model:ir.model.fields,help:woow_paas_platform.field_project_project__cloud_service_id
 msgid ""
 "DEPRECATED — read returns cloud_service_ids[:1] (lowest id); write syncs the "
@@ -2616,14 +3074,31 @@ msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/core/router.js:0
+#: code:addons/woow_paas_platform/static/src/paas/layout/bottom_nav/BottomNav.js:0
+#: code:addons/woow_paas_platform/static/src/paas/layout/header/Header.js:0
+#: code:addons/woow_paas_platform/static/src/paas/layout/sidebar/Sidebar.js:0
+msgid "Dashboard"
+msgstr "儀表板"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/OneTimeCredentialsModal.js:0
+msgid "Dashboard API URL"
+msgstr "Dashboard API 網址"
+
+#. module: woow_paas_platform
+#. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/CancelSubscriptionModal.xml:0
 msgid "Data may be deleted after the retention period"
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/marketplace/CategoryFilter.js:0
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_cloud_app_template__category__database
 msgid "Database"
-msgstr ""
+msgstr "資料庫"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -2773,6 +3248,12 @@ msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/settings/PaymentMethodsListPage.js:0
+msgid "Delete failed"
+msgstr "刪除失敗"
+
+#. module: woow_paas_platform
+#. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/access/AccessAppCard.xml:0
 msgid "Delete policy"
 msgstr ""
@@ -2784,17 +3265,21 @@ msgid "Delete route"
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/common/StatusBadge.js:0
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_security_access__tunnel_status__deleted
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_smart_home__tunnel_status__deleted
 msgid "Deleted"
-msgstr ""
+msgstr "已刪除"
 
 #. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/common/StatusBadge.js:0
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_cloud_service__state__deleting
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_security_access__state__deleting
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_smart_home__state__deleting
 msgid "Deleting"
-msgstr ""
+msgstr "刪除中"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -2829,6 +3314,18 @@ msgid "Dependencies"
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/workspace/WorkspaceListPage.js:0
+msgid "Deploy Docker apps like AnythingLLM, n8n, and more with one click."
+msgstr "一鍵部署 AnythingLLM、n8n 等 Docker 應用。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/workspace/WorkspaceDetailPage.js:0
+msgid "Deploy Docker apps with one click."
+msgstr "一鍵部署 Docker 應用。"
+
+#. module: woow_paas_platform
 #: model:ir.model.fields,field_description:woow_paas_platform.field_res_config_settings__woow_deploy_env
 msgid "Deploy Environment"
 msgstr ""
@@ -2856,14 +3353,23 @@ msgid "Deployed At"
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/common/StatusBadge.js:0
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/SubscribedServicesModal.js:0
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_cloud_service__state__deploying
 msgid "Deploying"
-msgstr ""
+msgstr "部署中"
 
 #. module: woow_paas_platform
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_service__deployment_id
 msgid "Deployment ID"
 msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/core/router.js:0
+msgid "Deployments"
+msgstr "部署"
 
 #. module: woow_paas_platform
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_skill_form
@@ -2969,9 +3475,11 @@ msgid "Detailed description with features and use cases"
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/marketplace/CategoryFilter.js:0
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_cloud_app_template__category__devops
 msgid "DevOps"
-msgstr ""
+msgstr "DevOps"
 
 #. module: woow_paas_platform
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_oauth_device_code__device_code
@@ -2984,6 +3492,12 @@ msgid "Device Connected"
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/ConfigurationTab.js:0
+msgid "Disabled"
+msgstr "已停用"
+
+#. module: woow_paas_platform
 #: model:ir.model.fields,field_description:woow_paas_platform.field_ai_assistant__mcp_tool_disabled_ids
 msgid "Disabled MCP Tools"
 msgstr ""
@@ -2994,10 +3508,12 @@ msgid "Disabled Tools"
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/common/StatusBadge.js:0
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_security_access__tunnel_status__disconnected
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_smart_home__tunnel_status__disconnected
 msgid "Disconnected"
-msgstr ""
+msgstr "未連線"
 
 #. module: woow_paas_platform
 #: model:ir.model.fields,help:woow_paas_platform.field_project_task__channel_id
@@ -3097,6 +3613,18 @@ msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/EditDomainModal.js:0
+msgid "Domain cannot contain spaces"
+msgstr "網域不可包含空白"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.js:0
+msgid "Domains"
+msgstr "網域"
+
+#. module: woow_paas_platform
+#. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/settings/ProfilePage.xml:0
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__res_partner__woow_invoice_carrier_type__donation
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_wallet_topup__invoice_carrier_type__donation
@@ -3137,14 +3665,24 @@ msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/subscription/SubscriptionBadge.js:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/billing/BillingOverviewPage.js:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/billing/InvoiceListPage.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/billing/SubscriptionListPage.js:0
+#: code:addons/woow_paas_platform/static/src/paas/utils/billing_helpers.js:0
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_agent_template__state__draft
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_mcp_server__state__draft
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_skill__state__draft
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_wallet_topup__state__draft
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_agent_template_search
 msgid "Draft"
-msgstr ""
+msgstr "草稿"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/project-kanban/ProjectKanbanPage.js:0
+msgid "Drag operation failed. Please refresh the page and try again."
+msgstr "拖曳操作失敗，請重新整理頁面後再試。"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -3166,9 +3704,39 @@ msgid "Due Date"
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/billing/InvoiceDetailPage.js:0
+msgid "Due in %s day"
+msgstr "%s 天後到期"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/billing/InvoiceDetailPage.js:0
+msgid "Due in %s days"
+msgstr "%s 天內到期"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/billing/InvoiceDetailPage.js:0
+msgid "Due today"
+msgstr "今天到期"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/services/topup_errors.js:0
+msgid "Duplicate transaction detected. Please wait a moment and retry."
+msgstr "偵測到重複交易，請稍候再試。"
+
+#. module: woow_paas_platform
 #: model:ir.model,name:woow_paas_platform.model_woow_paas_platform_ecpay_invoice_cron
 msgid "ECPay E-Invoice Issuing Cron"
 msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/settings/AddPaymentMethodPage.js:0
+msgid "ECPay SDK did not expose window.ECPay after load"
+msgstr "ECPay SDK 載入後未提供 window.ECPay"
 
 #. module: woow_paas_platform
 #. odoo-python
@@ -3237,9 +3805,10 @@ msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.js:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/settings/ProfilePage.xml:0
 msgid "Email"
-msgstr ""
+msgstr "電郵"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -3249,9 +3818,10 @@ msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/access/AccessAppCard.js:0
 #: code:addons/woow_paas_platform/static/src/paas/components/access/AccessAppCard.xml:0
 msgid "Email OTP"
-msgstr ""
+msgstr "電子郵件一次性密碼"
 
 #. module: woow_paas_platform
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__res_partner__woow_invoice_carrier_type__email
@@ -3278,9 +3848,27 @@ msgid ""
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/InviteMemberModal.js:0
+msgid "Email is required"
+msgstr "請輸入電子郵件"
+
+#. module: woow_paas_platform
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_security_access_access_policy_rule__rule_type__email_list
 msgid "Email list"
 msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/AddPolicyModal.js:0
+msgid "Emails ending in a domain"
+msgstr "以指定網域結尾的 Email"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/services/mermaid_loader.js:0
+msgid "Empty diagram definition"
+msgstr "空的圖表定義"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -3319,6 +3907,12 @@ msgstr ""
 #: model:ir.model.fields,help:woow_paas_platform.field_project_task__chat_enabled
 msgid "Enable group chat for this task"
 msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/ConfigurationTab.js:0
+msgid "Enabled"
+msgstr "已啟用"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -3362,6 +3956,12 @@ msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/EditDomainModal.js:0
+msgid "Enter domain without http:// or https://"
+msgstr "請輸入不含 http:// 或 https:// 的網域"
+
+#. module: woow_paas_platform
+#. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/configure/AppConfigurationPage.xml:0
 msgid "Enter service name"
 msgstr ""
@@ -3387,6 +3987,37 @@ msgstr "請輸入"
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/OneTimeCredentialsModal.js:0
+msgid ""
+"Enter this in the Dashboard REST API section of the MCP connection settings "
+"(username: admin, password: the Admin Password above). This is the service "
+"root URL, with no sub-path."
+msgstr ""
+"填進 MCP 連線設定的 Dashboard REST API 區（帳號 admin，密碼用上面的 Admin "
+"Password）。這是服務根網址，不帶任何子路徑。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/OneTimeCredentialsModal.js:0
+msgid ""
+"Enter this in the Gateway API Server section of the MCP connection settings."
+msgstr "填進 MCP 連線設定的 Gateway API Server 區。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/OneTimeCredentialsModal.js:0
+msgid ""
+"Enter this in the Gateway API Server section of the MCP connection settings. "
+"This is the full address including its sub-path; the service root URL on its "
+"own will not connect. This applies to this field only — the Dashboard API "
+"URL below is the opposite and needs the root URL with no sub-path."
+msgstr ""
+"填進 MCP 連線設定的 Gateway API Server 區。這是完整位址（含子路徑）；只填服務"
+"根網址會連不上。⚠ 僅限這一格——下面的 Dashboard API URL 相反，要填不帶子路徑的"
+"根網址。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/settings/AddPaymentMethodPage.xml:0
 msgid ""
 "Enter your card details. ECPay will place a temporary NT$5 authorization "
@@ -3408,6 +4039,8 @@ msgstr ""
 #. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/ai-chat/AiChat.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/components/common/StatusBadge.js:0
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/SubscribedServicesModal.js:0
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_cloud_service__state__error
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_mcp_server__state__error
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_security_access__state__error
@@ -3415,7 +4048,7 @@ msgstr ""
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_smart_home__state__error
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_smart_home__tunnel_status__error
 msgid "Error"
-msgstr ""
+msgstr "錯誤"
 
 #. module: woow_paas_platform
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__account_move__woow_invoice_issue_state__error
@@ -3447,6 +4080,12 @@ msgid "Errors"
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/workspace/WorkspaceDetailPage.js:0
+msgid "Estimated Cost"
+msgstr "預估費用"
+
+#. module: woow_paas_platform
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_security_access_access_policy__sequence
 msgid "Evaluation Order"
 msgstr ""
@@ -3460,9 +4099,11 @@ msgid ""
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/AddPolicyModal.js:0
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_security_access_access_policy_rule__rule_type__everyone
 msgid "Everyone"
-msgstr ""
+msgstr "所有人"
 
 #. module: woow_paas_platform
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_oauth_client__redirect_uri_match_mode__exact
@@ -3473,6 +4114,20 @@ msgstr ""
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_security_access_access_policy_rule__group__exclude
 msgid "Exclude"
 msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/AddPolicyModal.js:0
+msgid "Exclude — match none (NOT)"
+msgstr "排除 — 皆不符合（NOT）"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/subscription/SubscriptionBadge.js:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/billing/BillingOverviewPage.js:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/billing/SubscriptionListPage.js:0
+msgid "Expired"
+msgstr "已到期"
 
 #. module: woow_paas_platform
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_oauth_code__expires_at
@@ -3528,15 +4183,350 @@ msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/ChangePlanModal.js:0
+msgid "Failed to change plan"
+msgstr "變更方案失敗"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/AddonsTab.js:0
+msgid "Failed to check addon states"
+msgstr "檢查模組狀態失敗"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/CreateProjectModal.js:0
+msgid "Failed to create project"
+msgstr "建立專案失敗"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/CreateSecurityAccessModal.js:0
+msgid "Failed to create security access"
+msgstr "建立安全存取失敗"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/configure/AppConfigurationPage.js:0
+msgid "Failed to create service"
+msgstr "建立服務失敗"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/smart-home/CreateSmartHomeModal.js:0
+msgid "Failed to create smart home"
+msgstr "建立 Smart Home 失敗"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/CreateTaskModal.js:0
+msgid "Failed to create task"
+msgstr "建立任務失敗"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/CreateWorkspaceModal.js:0
+#: code:addons/woow_paas_platform/static/src/paas/services/workspace_service.js:0
+msgid "Failed to create workspace"
+msgstr "建立工作區失敗"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/services/mermaid_loader.js:0
+msgid "Failed to decode diagram data"
+msgstr "圖表資料解碼失敗"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/services/billing_service.js:0
+msgid "Failed to delete card"
+msgstr "刪除信用卡失敗"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/DeleteServiceModal.js:0
+msgid "Failed to delete service"
+msgstr "刪除服務失敗"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/smart-home/SmartHomeDetailPage.js:0
+msgid "Failed to delete smart home"
+msgstr "無法刪除 Smart Home"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/task-detail/TaskDetailPage.js:0
+msgid "Failed to enable chat"
+msgstr "啟用聊天失敗"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/services/security_access.js:0
+msgid "Failed to fetch"
+msgstr "取得資料失敗"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/services/ai_service.js:0
+msgid "Failed to fetch assistants"
+msgstr "取得 AI 助理清單失敗"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/services/cloud_service.js:0
+#: code:addons/woow_paas_platform/static/src/paas/services/workspace_service.js:0
+msgid "Failed to fetch plans"
+msgstr "取得方案清單失敗"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/services/support_service.js:0
+msgid "Failed to fetch projects"
+msgstr "取得專案清單失敗"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/services/cloud_service.js:0
+msgid "Failed to fetch services"
+msgstr "取得服務清單失敗"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/services/support_service.js:0
+msgid "Failed to fetch stages"
+msgstr "取得階段清單失敗"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/services/support_service.js:0
+msgid "Failed to fetch tasks"
+msgstr "取得任務清單失敗"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/services/cloud_service.js:0
+#: code:addons/woow_paas_platform/static/src/paas/services/workspace_service.js:0
+msgid "Failed to fetch templates"
+msgstr "取得範本清單失敗"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/services/workspace_service.js:0
+msgid "Failed to fetch workspaces"
+msgstr "取得工作區清單失敗"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/InviteMemberModal.js:0
+msgid "Failed to invite member"
+msgstr "邀請成員失敗"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/project-detail/sections/McpServersSection.js:0
+msgid "Failed to load MCP servers"
+msgstr "載入 MCP 伺服器失敗"
+
+#. module: woow_paas_platform
+#. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/ai-chat/AiChatPage.xml:0
 msgid "Failed to load chat"
 msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/ai-chat/AiChat.js:0
+msgid "Failed to load chat history"
+msgstr "無法載入聊天記錄"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/services/dashboard_service.js:0
+msgid "Failed to load dashboard"
+msgstr "載入儀表板失敗"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/SkipTrialModal.js:0
+msgid "Failed to load invoice breakdown"
+msgstr "無法載入帳單明細"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/services/profile_service.js:0
+msgid "Failed to load invoice preference"
+msgstr "載入發票設定失敗"
+
+#. module: woow_paas_platform
+#. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/settings/AddPaymentMethodPage.xml:0
 msgid "Failed to load payment form."
 msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/ChangePlanModal.js:0
+msgid "Failed to load plans"
+msgstr "無法載入方案"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/services/profile_service.js:0
+msgid "Failed to load profile"
+msgstr "載入個人資料失敗"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/project-detail/ProjectDetailPage.js:0
+msgid "Failed to load project"
+msgstr "無法載入專案"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/CreateTaskModal.js:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/support-projects/SupportProjectsPage.js:0
+msgid "Failed to load projects"
+msgstr "載入專案失敗"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/RollbackModal.js:0
+msgid "Failed to load revision history"
+msgstr "載入版本歷史失敗"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/ServiceDetailPage.js:0
+msgid "Failed to load service"
+msgstr "無法載入服務"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/smart-home/SmartHomeDetailPage.js:0
+msgid "Failed to load smart home"
+msgstr "無法載入 Smart Home"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/task-detail/TaskDetailPage.js:0
+msgid "Failed to load task"
+msgstr "載入任務失敗"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/support-tasks/SupportTasksPage.js:0
+msgid "Failed to load tasks"
+msgstr "載入任務失敗"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/configure/AppConfigurationPage.js:0
+msgid "Failed to load template"
+msgstr "載入應用範本失敗"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/services/reconcile_report_service.js:0
+msgid "Failed to load the orphan reconcile report"
+msgstr "載入孤兒報表失敗"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/workspace/WorkspaceDetailPage.js:0
+msgid "Failed to load workspace"
+msgstr "載入工作區失敗"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/CreateProjectModal.js:0
+msgid "Failed to load workspaces"
+msgstr "載入工作區失敗"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/smart-home/SmartHomeDetailPage.js:0
+msgid "Failed to refresh smart home status"
+msgstr "無法重新整理 Smart Home 狀態"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/ManagePaymentMethodsModal.js:0
+msgid "Failed to remove card"
+msgstr "移除卡片失敗"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/ServiceDetailPage.js:0
+msgid "Failed to reset admin password"
+msgstr "無法重設管理員密碼"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/RollbackModal.js:0
+msgid "Failed to rollback service"
+msgstr "服務回復版本失敗"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/project-detail/sections/BasicInfoSection.js:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/project-detail/sections/McpServersSection.js:0
+msgid "Failed to save"
+msgstr "儲存失敗"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/ai-chat/AiChat.js:0
+msgid "Failed to send message"
+msgstr "訊息傳送失敗"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/services/billing_service.js:0
+msgid "Failed to set default"
+msgstr "設為預設付款方式失敗"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/SkipTrialModal.js:0
+msgid "Failed to skip trial"
+msgstr "無法略過試用期"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/task-detail/TaskDetailPage.js:0
+msgid "Failed to toggle auto-reply"
+msgstr "切換自動回覆失敗"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/project-detail/sections/CloudServiceBindingSection.js:0
+msgid "Failed to update"
+msgstr "更新失敗"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/AddonsTab.js:0
+msgid "Failed to update addons"
+msgstr "更新模組失敗"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/ConfigurationTab.js:0
+msgid "Failed to update configuration"
+msgstr "更新設定失敗"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/EditDomainModal.js:0
+msgid "Failed to update domain"
+msgstr "更新網域失敗"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/project-kanban/ProjectKanbanPage.js:0
+msgid "Failed to update the task stage. Please try again."
+msgstr "更新任務階段失敗，請重試。"
 
 #. module: woow_paas_platform
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_wallet_topup__failure_code
@@ -3554,6 +4544,12 @@ msgid "Filename"
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/layout/sidebar/Sidebar.js:0
+msgid "Finance"
+msgstr "財務"
+
+#. module: woow_paas_platform
 #: model:ir.model.fields,help:woow_paas_platform.field_wallet_transaction__base_amount
 msgid ""
 "For top-up rows: the base credits before bonus. Always 0 for non-topup "
@@ -3566,6 +4562,18 @@ msgid ""
 "For top-up rows: the bonus credits added on top of base. Always 0 when no "
 "bonus applies or for non-topup types."
 msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/pricing_label.js:0
+msgid "Free"
+msgstr "Free"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/pricing_label.js:0
+msgid "Free and up"
+msgstr "Free 起"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -3593,9 +4601,17 @@ msgid "GB RAM"
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/OneTimeCredentialsModal.js:0
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_service_secret__gateway_api_key
 msgid "Gateway API Key"
-msgstr ""
+msgstr "Gateway API 金鑰"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/OneTimeCredentialsModal.js:0
+msgid "Gateway API URL"
+msgstr "Gateway API 網址"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -3698,11 +4714,12 @@ msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/InviteMemberModal.js:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/workspace/WorkspaceTeamPage.xml:0
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_project_access__role__guest
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_workspace_access__role__guest
 msgid "Guest"
-msgstr ""
+msgstr "訪客"
 
 #. module: woow_paas_platform
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_oauth_client__redirect_uri_match_mode__ha_callback
@@ -3743,6 +4760,12 @@ msgstr ""
 #: code:addons/woow_paas_platform/static/src/paas/pages/billing/BillingOverviewPage.xml:0
 msgid "Have a gift card code? Redeem it to add points to your wallet balance."
 msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/workspace/WorkspaceDetailPage.js:0
+msgid "Healthy"
+msgstr "健康"
 
 #. module: woow_paas_platform
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_cloud_app_template_form
@@ -4093,13 +5116,14 @@ msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/layout/header/Header.js:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/billing/InvoiceDetailPage.xml:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/billing/InvoiceListPage.xml:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/billing/SubscriptionListPage.xml:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/billing/TopupStorePage.xml:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/billing/TransactionListPage.xml:0
 msgid "Home"
-msgstr ""
+msgstr "首頁"
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_haos_yearly_product_template
@@ -4232,9 +5256,11 @@ msgid "ID"
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/AddPolicyModal.js:0
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_security_access_access_policy_rule__rule_type__ip_range
 msgid "IP range (CIDR)"
-msgstr ""
+msgstr "IP 範圍（CIDR）"
 
 #. module: woow_paas_platform
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_app_template__icon
@@ -4277,6 +5303,13 @@ msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/billing/BillingOverviewPage.js:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/billing/SubscriptionListPage.js:0
+msgid "In Progress"
+msgstr "進行中"
+
+#. module: woow_paas_platform
+#. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.xml:0
 msgid ""
 "In this model, protection is scoped to a single Application\n"
@@ -4299,6 +5332,12 @@ msgid ""
 "Include = OR (match any), Require = AND (match all), Exclude = NOT (match "
 "none). A policy must have at least one Include rule."
 msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/AddPolicyModal.js:0
+msgid "Include — match any (OR)"
+msgstr "包含 — 符合任一（OR）"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -4338,9 +5377,11 @@ msgid "Init Retries"
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/common/StatusBadge.js:0
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_cloud_service__state__initializing
 msgid "Initializing"
-msgstr ""
+msgstr "初始化中"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -4395,6 +5436,44 @@ msgstr ""
 #: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_cloud_service__internal_port
 msgid "Internal port where the service is listening"
 msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/settings/AddPaymentMethodPage.js:0
+msgid "Invalid BindCardPayToken"
+msgstr "BindCardPayToken 無效"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/services/mermaid_loader.js:0
+msgid "Invalid diagram syntax. Please check the Mermaid source."
+msgstr "圖表語法有誤，請檢查 Mermaid 語法"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/EditDomainModal.js:0
+msgid "Invalid domain format. Example: app.yourdomain.com"
+msgstr "網域格式不正確。範例：app.yourdomain.com"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/settings/ProfilePage.js:0
+msgid "Invalid email format"
+msgstr "Email 格式不正確"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/services/rpc.js:0
+msgid "Invalid response from server (%s). The server may be restarting."
+msgstr "伺服器回應無效（%s），伺服器可能正在重新啟動。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/services/billing_service.js:0
+#: code:addons/woow_paas_platform/static/src/paas/services/cloud_service.js:0
+#: code:addons/woow_paas_platform/static/src/paas/services/workspace_service.js:0
+msgid "Invalid response from server."
+msgstr "伺服器回應無效。"
 
 #. module: woow_paas_platform
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_cloud_odoo_addon__category__inventory
@@ -4488,6 +5567,12 @@ msgid "Invoice Date"
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/core/router.js:0
+msgid "Invoice Detail"
+msgstr "發票詳情"
+
+#. module: woow_paas_platform
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_wallet_topup__invoice_issued_at
 msgid "Invoice Issued At"
 msgstr ""
@@ -4545,10 +5630,12 @@ msgstr "Invoice title (抬頭)"
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/core/router.js:0
+#: code:addons/woow_paas_platform/static/src/paas/layout/sidebar/Sidebar.js:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/billing/InvoiceDetailPage.xml:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/billing/InvoiceListPage.xml:0
 msgid "Invoices"
-msgstr ""
+msgstr "發票"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -4704,9 +5791,11 @@ msgid "Languages"
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/billing/TopupStorePage.js:0
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_topup_plan__category__large_volume
 msgid "Large Volume"
-msgstr ""
+msgstr "大額方案"
 
 #. module: woow_paas_platform
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_agent_session__last_active
@@ -4873,6 +5962,12 @@ msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/config/HelmValueForm.js:0
+msgid "Leave blank to keep the current password"
+msgstr "留空表示不變更"
+
+#. module: woow_paas_platform
+#. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/CancelSubscriptionModal.xml:0
 msgid "Let us know why you're cancelling..."
 msgstr ""
@@ -4892,6 +5987,12 @@ msgstr ""
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_task_form_inherit_chat
 msgid "Linked Cloud Services"
 msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/AddPolicyModal.js:0
+msgid "List of emails"
+msgstr "Email 清單"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -4949,6 +6050,13 @@ msgstr ""
 #: code:addons/woow_paas_platform/static/src/paas/pages/dashboard/DashboardPage.xml:0
 msgid "Loading dashboard..."
 msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/ai-chat/AiChat.js:0
+#: code:addons/woow_paas_platform/static/src/paas/services/mermaid_loader.js:0
+msgid "Loading diagram..."
+msgstr "圖表載入中..."
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -5194,12 +6302,14 @@ msgid "MCP Protocol"
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/marketplace/CategoryFilter.js:0
 #: model:ir.model,name:woow_paas_platform.model_woow_paas_platform_mcp_server
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_mcp_tool__server_id
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_cloud_app_template__category__mcp
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_mcp_server_form
 msgid "MCP Server"
-msgstr ""
+msgstr "MCP 伺服器"
 
 #. module: woow_paas_platform
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_ai_assistant_form_inherit_woow
@@ -5367,6 +6477,12 @@ msgid "Manual grant"
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/reconcile-report/ReconcileReportPage.js:0
+msgid "Manual review needed"
+msgstr "人工審"
+
+#. module: woow_paas_platform
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_cloud_odoo_addon__category__manufacturing
 msgid "Manufacturing"
 msgstr ""
@@ -5375,6 +6491,12 @@ msgstr ""
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_cloud_odoo_addon__category__marketing
 msgid "Marketing"
 msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/AddPolicyModal.js:0
+msgid "Matches all visitors."
+msgstr "符合所有訪客。"
 
 #. module: woow_paas_platform
 #: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_cloud_odoo_addon__icon
@@ -5402,9 +6524,21 @@ msgid "Member Count"
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/dashboard/DashboardPage.js:0
+msgid "Members"
+msgstr "成員"
+
+#. module: woow_paas_platform
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_agent_session__quota_override_memory_gi
 msgid "Memory Quota Override (Gi)"
 msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/ai-chat/AiChat.js:0
+msgid "Message not found. Please send it again."
+msgstr "找不到訊息，請重新傳送。"
 
 #. module: woow_paas_platform
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_skill_form
@@ -5474,6 +6608,7 @@ msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/SubscribedServicesModal.js:0
 #: code:addons/woow_paas_platform/static/src/paas/components/subscription/PlanSelector.xml:0
 msgid "Monthly"
 msgstr "月繳"
@@ -5493,6 +6628,12 @@ msgstr ""
 #: code:addons/woow_paas_platform/static/src/paas/pages/support-tasks/SupportTasksPage.xml:0
 msgid "My Tasks"
 msgstr "我的任務"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/smart-home/SmartHomeDetailPage.js:0
+msgid "N/A"
+msgstr "無"
 
 #. module: woow_paas_platform
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_service__n8n_api_key
@@ -5544,6 +6685,24 @@ msgid "Name *"
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/project-detail/sections/McpServersSection.js:0
+msgid "Name and URL are required"
+msgstr "名稱與 URL 為必填"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/project-detail/sections/BasicInfoSection.js:0
+msgid "Name cannot be empty"
+msgstr "名稱不可為空"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/settings/ProfilePage.js:0
+msgid "Name is required"
+msgstr "名稱為必填"
+
+#. module: woow_paas_platform
 #: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_cloud_app_template__helm_chart_name
 msgid "Name of the Helm chart in the repository"
 msgstr ""
@@ -5588,6 +6747,34 @@ msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/services/ai_service.js:0
+#: code:addons/woow_paas_platform/static/src/paas/services/cloud_service.js:0
+#: code:addons/woow_paas_platform/static/src/paas/services/cloud_service_access.js:0
+#: code:addons/woow_paas_platform/static/src/paas/services/security_access.js:0
+#: code:addons/woow_paas_platform/static/src/paas/services/smart_home_access.js:0
+#: code:addons/woow_paas_platform/static/src/paas/services/support_service.js:0
+#: code:addons/woow_paas_platform/static/src/paas/services/workspace_service.js:0
+msgid "Network error"
+msgstr "網路錯誤"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/services/dashboard_service.js:0
+#: code:addons/woow_paas_platform/static/src/paas/services/profile_service.js:0
+msgid "Network error."
+msgstr "網路連線發生錯誤。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/services/billing_service.js:0
+#: code:addons/woow_paas_platform/static/src/paas/services/cloud_service.js:0
+#: code:addons/woow_paas_platform/static/src/paas/services/rpc.js:0
+#: code:addons/woow_paas_platform/static/src/paas/services/workspace_service.js:0
+msgid "Network error. Please check your connection and try again."
+msgstr "網路錯誤，請檢查您的連線後再試一次。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/TopupSuccessModal.xml:0
 msgid "New Balance"
 msgstr ""
@@ -5628,6 +6815,12 @@ msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/dashboard/DashboardPage.js:0
+msgid "Next Bill"
+msgstr "下期帳單"
+
+#. module: woow_paas_platform
+#. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/smart-home/SmartHomeDetailPage.xml:0
 msgid "Next Payment"
 msgstr ""
@@ -5650,6 +6843,13 @@ msgstr ""
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_security_access_form
 msgid "Nickname (e.g. secure-gateway)"
 msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/ai-chat/AiChat.js:0
+msgid ""
+"No AI assistant is available. Please ask your administrator to set one up."
+msgstr "目前沒有可用的 AI 助理，請聯繫管理員設定。"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -5678,6 +6878,19 @@ msgstr ""
 #: model_terms:ir.actions.act_window,help:woow_paas_platform.action_security_access
 msgid "No Security Access instances yet"
 msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/CreateSecurityAccessModal.js:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.js:0
+msgid "No Security Access template available"
+msgstr "目前沒有可用的安全存取範本"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/smart-home/SmartHomeDetailPage.js:0
+msgid "No Smart Home template available"
+msgstr "沒有可用的 Smart Home 範本"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -5756,6 +6969,12 @@ msgstr ""
 #: code:addons/woow_paas_platform/static/src/paas/components/ai-mention/AiMentionDropdown.xml:0
 msgid "No assistants found"
 msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/billing/BillingOverviewPage.js:0
+msgid "No card bound"
+msgstr "尚未綁定信用卡"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -5895,6 +7114,12 @@ msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/availability_label.js:0
+msgid "No slots available"
+msgstr "已售罄"
+
+#. module: woow_paas_platform
+#. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/task-detail/TaskDetailPage.xml:0
 msgid "No sub-tasks for this task."
 msgstr ""
@@ -6001,6 +7226,18 @@ msgstr ""
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/EditDomainModal.xml:0
 msgid "Not assigned"
 msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/availability_label.js:0
+msgid "Not available for purchase"
+msgstr "暫不開放"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/smart-home/SmartHomeDetailPage.js:0
+msgid "Not configured"
+msgstr "尚未設定"
 
 #. module: woow_paas_platform
 #. odoo-python
@@ -6428,6 +7665,31 @@ msgid ""
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/smart-home/tabs/SmartHomeAccessTab.js:0
+msgid ""
+"Once protection is on, every visitor has to pass Access verification before "
+"this address opens, including you and your own family. Only identities "
+"matching an Access policy below get in; clients that never show a browser "
+"login page (a phone app connecting directly, for example) are shut out."
+msgstr ""
+"開啟後所有訪客都需通過 Access 驗證才能開啟這條網址，包含你自己與家人。只有符"
+"合下方 Access policy 的身分才進得來；不會跳出瀏覽器登入頁的用戶端（例如手機 "
+"App 直連）會被擋在外面。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/AccessTab.js:0
+msgid ""
+"Once protection is on, every visitor must pass Access authentication before "
+"this service's URL will open, including the people who can browse it "
+"anonymously today. Only identities matching an Access policy below can get "
+"in."
+msgstr ""
+"開啟後所有訪客都需通過 Access 驗證才能開啟這個服務的網址，包含目前可以匿名瀏"
+"覽的人。只有符合下方 Access policy 的身分才進得來。"
+
+#. module: woow_paas_platform
 #: model:ir.model.constraint,message:woow_paas_platform.constraint_woow_paas_platform_agent_session_unique_project
 msgid "One agent session per project (per-project pod model)."
 msgstr ""
@@ -6540,6 +7802,18 @@ msgid "Original service URL before suspension, used for resume"
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/layout/sidebar/Sidebar.js:0
+msgid "Orphan Reconciliation"
+msgstr "孤兒對帳"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/core/router.js:0
+msgid "Orphan Reconciliation Report"
+msgstr "孤兒對帳報表"
+
+#. module: woow_paas_platform
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_cloud_odoo_addon__category__other
 msgid "Other"
 msgstr ""
@@ -6557,16 +7831,20 @@ msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/billing/BillingOverviewPage.js:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/billing/InvoiceDetailPage.js:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/billing/InvoiceListPage.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/utils/billing_helpers.js:0
 msgid "Overdue"
-msgstr ""
+msgstr "逾期"
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.js:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/service/ServiceDetailPage.xml:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/smart-home/SmartHomeDetailPage.xml:0
 msgid "Overview"
-msgstr ""
+msgstr "總覽"
 
 #. module: woow_paas_platform
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_workspace__owner_id
@@ -6675,15 +7953,24 @@ msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/empty/EmptyState.js:0
+msgid "Page"
+msgstr "頁面"
+
+#. module: woow_paas_platform
+#. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/not-found/NotFoundPage.xml:0
 msgid "Page Not Found"
 msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/billing/BillingOverviewPage.js:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/billing/InvoiceDetailPage.js:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/billing/InvoiceListPage.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/utils/billing_helpers.js:0
 msgid "Paid"
-msgstr ""
+msgstr "已付款"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -6702,6 +7989,12 @@ msgstr ""
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_wallet_topup__partner_id
 msgid "Partner"
 msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/billing/SubscriptionListPage.js:0
+msgid "Past"
+msgstr "已過期"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -6725,17 +8018,24 @@ msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/settings/AddPaymentMethodPage.js:0
+msgid "PayToken failed: %s"
+msgstr "取得 PayToken 失敗：%s"
+
+#. module: woow_paas_platform
+#. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/AddFundsModal.xml:0
 msgid "Payment Method"
 msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/core/router.js:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/settings/AddPaymentMethodPage.xml:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/settings/PaymentMethodsListPage.xml:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/settings/SettingsPage.xml:0
 msgid "Payment Methods"
-msgstr ""
+msgstr "付款方式"
 
 #. module: woow_paas_platform
 #: model:ir.model,name:woow_paas_platform.model_payment_token
@@ -6749,13 +8049,41 @@ msgid "Payment Transaction"
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/PayInvoiceModal.js:0
+#: code:addons/woow_paas_platform/static/src/paas/services/billing_service.js:0
+msgid "Payment failed"
+msgstr "付款失敗"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/services/topup_errors.js:0
+msgid "Payment failed. Please retry or contact support."
+msgstr "付款失敗，請重試或聯絡客服。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/services/topup_errors.js:0
+msgid "Payment service is temporarily unavailable."
+msgstr "付款服務暫時無法使用。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/services/topup_errors.js:0
+msgid "Payment service unavailable. Please try again in a moment."
+msgstr "付款服務無法使用，請稍後再試。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/common/StatusBadge.js:0
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/SubscribedServicesModal.js:0
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_cloud_service__state__pending
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_oauth_device_code__status__pending
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_security_access__state__pending
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_smart_home__state__pending
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_wallet_topup__state__pending
 msgid "Pending"
-msgstr ""
+msgstr "等待中"
 
 #. module: woow_paas_platform
 #: model:ir.model,name:woow_paas_platform.model_woow_paas_platform_cf_access_policy_reap
@@ -6836,8 +8164,21 @@ msgstr ""
 #. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/AddFundsModal.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/services/topup_errors.js:0
 msgid "Please add a payment method before topping up."
-msgstr ""
+msgstr "儲值前請先新增付款方式。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/CreateSecurityAccessModal.js:0
+msgid "Please enter a name"
+msgstr "請輸入名稱"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/InviteMemberModal.js:0
+msgid "Please enter a valid email address"
+msgstr "請輸入有效的電子郵件地址"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -6846,6 +8187,31 @@ msgid ""
 "Please go to Odoo Apps and uninstall these modules first, then come back to "
 "remove them."
 msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/smart-home/CreateSmartHomeModal.js:0
+msgid "Please select a Smart Home template"
+msgstr "請選擇 Smart Home 範本"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/CreateSecurityAccessModal.js:0
+msgid "Please select a plan"
+msgstr "請選擇方案"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/CreateTaskModal.js:0
+msgid "Please select a project"
+msgstr "請選擇專案"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/smart-home/CreateSmartHomeModal.js:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/configure/AppConfigurationPage.js:0
+msgid "Please select a subscription plan"
+msgstr "請選擇訂閱方案"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -6869,6 +8235,12 @@ msgstr ""
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/AddPolicyModal.xml:0
 msgid "Policy name"
 msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/AddPolicyModal.js:0
+msgid "Policy name is required"
+msgstr "請輸入政策名稱"
 
 #. module: woow_paas_platform
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_oauth_device_code__interval
@@ -6939,6 +8311,19 @@ msgid ""
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/settings/AddPaymentMethodPage.js:0
+#: code:addons/woow_paas_platform/static/src/paas/services/billing_service.js:0
+msgid "Prepare bind failed"
+msgstr "準備綁定信用卡失敗"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/billing/TopupStorePage.js:0
+msgid "Previous top-up was cancelled. You can start a new one."
+msgstr "先前的儲值已取消，您可以重新發起一筆。"
+
+#. module: woow_paas_platform
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_topup_plan__amount
 msgid "Price (NT$)"
 msgstr ""
@@ -7006,10 +8391,11 @@ msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/core/router.js:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/settings/ProfilePage.xml:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/settings/SettingsPage.xml:0
 msgid "Profile"
-msgstr ""
+msgstr "個人資料"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -7020,6 +8406,8 @@ msgstr ""
 #. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/CreateTaskModal.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/project-kanban/ProjectKanbanPage.js:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/task-detail/TaskDetailPage.js:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/task-detail/TaskDetailPage.xml:0
 #: model:ir.model,name:woow_paas_platform.model_project_project
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_agent_session__project_id
@@ -7030,7 +8418,19 @@ msgstr ""
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_cloud_odoo_addon__category__project
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_skill_search
 msgid "Project"
-msgstr ""
+msgstr "專案"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/core/router.js:0
+msgid "Project Detail"
+msgstr "專案詳情"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/core/router.js:0
+msgid "Project Kanban"
+msgstr "專案看板"
 
 #. module: woow_paas_platform
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_project_form_inherit_mcp_skill
@@ -7055,6 +8455,12 @@ msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/CreateProjectModal.js:0
+msgid "Project name is required"
+msgstr "請輸入專案名稱"
+
+#. module: woow_paas_platform
+#. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/support-projects/SupportProjectsPage.xml:0
 msgid "Project settings"
 msgstr ""
@@ -7071,9 +8477,16 @@ msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/core/router.js:0
+#: code:addons/woow_paas_platform/static/src/paas/layout/bottom_nav/BottomNav.js:0
+#: code:addons/woow_paas_platform/static/src/paas/layout/header/Header.js:0
+#: code:addons/woow_paas_platform/static/src/paas/layout/sidebar/Sidebar.js:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/project-detail/ProjectDetailPage.js:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/project-kanban/ProjectKanbanPage.js:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/support-projects/SupportProjectsPage.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/task-detail/TaskDetailPage.js:0
 msgid "Projects"
-msgstr ""
+msgstr "專案"
 
 #. module: woow_paas_platform
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_security_access_route__is_protected
@@ -7134,10 +8547,19 @@ msgid "Provision Owner（每帳號限一）"
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/common/StatusBadge.js:0
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_security_access__state__provisioning
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_smart_home__state__provisioning
 msgid "Provisioning"
-msgstr ""
+msgstr "佈建中"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/CreateSecurityAccessModal.js:0
+#: code:addons/woow_paas_platform/static/src/paas/components/smart-home/CreateSmartHomeModal.js:0
+msgid "Provisioning failed"
+msgstr "佈建失敗"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -7260,6 +8682,12 @@ msgstr "重新驗證是否仍為孤兒"
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/reconcile-report/ReconcileReportPage.js:0
+msgid "Re-verify failed"
+msgstr "重查失敗"
+
+#. module: woow_paas_platform
+#. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/reconcile-report/ReconcileReportPage.xml:0
 msgid "Re-verifying..."
 msgstr "重查中…"
@@ -7288,6 +8716,12 @@ msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/project-detail/sections/CloudServiceBindingSection.js:0
+msgid "Rebind this project from %s to %s?"
+msgstr "要將這個專案從 %s 改綁到 %s 嗎？"
+
+#. module: woow_paas_platform
+#. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/dashboard/DashboardPage.xml:0
 msgid "Recent Activity"
 msgstr ""
@@ -7299,9 +8733,23 @@ msgid "Recent Invoices"
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/billing/TopupStorePage.js:0
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_topup_plan__category__recommended
 msgid "Recommended"
-msgstr ""
+msgstr "推薦"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/ai-chat/AiChat.js:0
+msgid "Reconnecting to AI assistant..."
+msgstr "重新連線中..."
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/ai-chat/AiChat.js:0
+msgid "Reconnecting... (attempt %s)"
+msgstr "正在重新連線...（第 %s 次嘗試）"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -7320,6 +8768,18 @@ msgstr ""
 #: code:addons/woow_paas_platform/static/src/paas/pages/billing/BillingOverviewPage.xml:0
 msgid "Redeem a Code"
 msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/services/billing_service.js:0
+msgid "Redeem failed"
+msgstr "兌換失敗"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/billing/BillingOverviewPage.js:0
+msgid "Redeem failed. Please try again."
+msgstr "兌換失敗，請再試一次。"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -7406,6 +8866,12 @@ msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/workspace/WorkspaceListPage.js:0
+msgid "Remote access configuration for Home Assistant & Woow App ecosystem."
+msgstr "Home Assistant 與 Woow App 生態系的遠端存取設定。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/settings/PaymentMethodsListPage.xml:0
 msgid "Remove"
 msgstr ""
@@ -7429,6 +8895,12 @@ msgid "Remove rule"
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/settings/PaymentMethodsListPage.js:0
+msgid "Remove this card?"
+msgstr "要移除這張卡片嗎？"
+
+#. module: woow_paas_platform
 #: model:ir.model.fields,help:woow_paas_platform.field_sh_subscription_subscription__woow_last_low_balance_warned_for
 msgid ""
 "Renewal date (sh_date_of_next_payment) this cycle's low-balance warning "
@@ -7441,6 +8913,12 @@ msgid ""
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/subscription/SubscriptionBadge.js:0
+msgid "Renewed"
+msgstr "已續約"
+
+#. module: woow_paas_platform
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_cloud_app_template_form
 msgid "Repository"
 msgstr ""
@@ -7449,6 +8927,50 @@ msgstr ""
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.device_result
 msgid "Request Denied"
 msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/services/dashboard_service.js:0
+#: code:addons/woow_paas_platform/static/src/paas/services/profile_service.js:0
+msgid "Request failed"
+msgstr "請求失敗"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/services/dashboard_service.js:0
+#: code:addons/woow_paas_platform/static/src/paas/services/profile_service.js:0
+msgid "Request failed (%s)"
+msgstr "請求失敗（%s）"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/services/billing_service.js:0
+#: code:addons/woow_paas_platform/static/src/paas/services/cloud_service.js:0
+#: code:addons/woow_paas_platform/static/src/paas/services/rpc.js:0
+#: code:addons/woow_paas_platform/static/src/paas/services/workspace_service.js:0
+msgid "Request failed with status %s"
+msgstr "請求失敗，狀態碼 %s"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/services/dashboard_service.js:0
+#: code:addons/woow_paas_platform/static/src/paas/services/profile_service.js:0
+msgid "Request timed out."
+msgstr "請求逾時。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/services/billing_service.js:0
+#: code:addons/woow_paas_platform/static/src/paas/services/cloud_service.js:0
+#: code:addons/woow_paas_platform/static/src/paas/services/rpc.js:0
+msgid "Request timed out. Please try again."
+msgstr "請求逾時，請再試一次。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/ai-chat/AiChat.js:0
+msgid "Request validation failed. Please refresh the page."
+msgstr "請求驗證失敗，請重新整理頁面。"
 
 #. module: woow_paas_platform
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.oauth2_authorize
@@ -7476,6 +8998,18 @@ msgid "Require PKCE"
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/AddPolicyModal.js:0
+msgid "Require — match all (AND)"
+msgstr "必要 — 全部符合（AND）"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/odoo-addon-selector/OdooAddonSelector.js:0
+msgid "Required by: %s"
+msgstr "被以下模組依賴：%s"
+
+#. module: woow_paas_platform
 #: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_skill_upload_wizard__project_id
 msgid "Required for user-scope skills; must stay empty for system."
 msgstr ""
@@ -7492,6 +9026,12 @@ msgstr ""
 msgid ""
 "Reset Admin Password also issues a new Gateway API Key. Update it\n"
 "                    wherever you configured it (e.g. your MCP server)."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/services/mermaid_loader.js:0
+msgid "Reset diagram view"
 msgstr ""
 
 #. module: woow_paas_platform
@@ -7590,6 +9130,22 @@ msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/smart-home/tabs/SmartHomeAccessTab.js:0
+msgid ""
+"Route #%s came back from the server but is not on the current screen — what "
+"you are looking at may be out of date. Please refresh and try again."
+msgstr ""
+"伺服器回傳的 route #%s 不在目前畫面上——畫面顯示的可能是過期資料，請重新整理後"
+"再試一次。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/smart-home/SmartHomeDetailPage.js:0
+msgid "Route URL"
+msgstr "路由網址"
+
+#. module: woow_paas_platform
+#. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.xml:0
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_security_access__route_count
 msgid "Routes"
@@ -7611,9 +9167,11 @@ msgid "Rules"
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/common/StatusBadge.js:0
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_cloud_service__state__running
 msgid "Running"
-msgstr ""
+msgstr "執行中"
 
 #. module: woow_paas_platform
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_agent_session__runtime_version
@@ -7651,6 +9209,12 @@ msgid "SA Max Emails per Access Policy"
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/settings/AddPaymentMethodPage.js:0
+msgid "SDK init failed: %s"
+msgstr "SDK 初始化失敗：%s"
+
+#. module: woow_paas_platform
 #: model:ir.model.fields,field_description:woow_paas_platform.field_sh_subscription_plan__mcp_integration
 msgid "SH MCP Integration"
 msgstr ""
@@ -7669,9 +9233,21 @@ msgid "SSE"
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/reconcile-report/ReconcileReportPage.js:0
+msgid "Safe to reclaim"
+msgstr "可回收"
+
+#. module: woow_paas_platform
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_cloud_odoo_addon__category__sales
 msgid "Sales"
 msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/availability_label.js:0
+msgid "Sales paused"
+msgstr "暫停販售"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -7753,7 +9329,9 @@ msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/workspace/WorkspaceDetailPage.js:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/workspace/WorkspaceDetailPage.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/workspace/WorkspaceListPage.js:0
 #: model:ir.actions.act_window,name:woow_paas_platform.action_security_access
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_security_access_access_policy__security_access_id
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_security_access_access_policy_rule__security_access_id
@@ -7764,12 +9342,18 @@ msgstr ""
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_security_access_form
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_security_access_list
 msgid "Security Access"
-msgstr ""
+msgstr "Security Access"
 
 #. module: woow_paas_platform
 #: model:ir.model,name:woow_paas_platform.model_woow_paas_platform_security_access_route
 msgid "Security Access Application Route"
 msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/core/router.js:0
+msgid "Security Access Detail"
+msgstr "安全存取詳情"
 
 #. module: woow_paas_platform
 #: model:ir.model,name:woow_paas_platform.model_woow_paas_platform_security_access
@@ -7943,9 +9527,36 @@ msgid ""
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/smart-home/tabs/SmartHomeAccessTab.js:0
+msgid ""
+"Sent %(sent)s policies to reorder, the server only wrote %(written)s — the "
+"order shown below is the real order on the server. Please refresh and order "
+"them again."
+msgstr ""
+"送出 %(sent)s 筆排序，伺服器只寫入 %(written)s 筆——下方顯示的是伺服器上的實際"
+"順序。請重新整理後再排一次。"
+
+#. module: woow_paas_platform
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_topup_plan__sequence
 msgid "Sequence"
 msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/services/dashboard_service.js:0
+#: code:addons/woow_paas_platform/static/src/paas/services/profile_service.js:0
+msgid "Server error."
+msgstr "伺服器發生錯誤。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/services/billing_service.js:0
+#: code:addons/woow_paas_platform/static/src/paas/services/cloud_service.js:0
+#: code:addons/woow_paas_platform/static/src/paas/services/rpc.js:0
+#: code:addons/woow_paas_platform/static/src/paas/services/workspace_service.js:0
+msgid "Server error. Please try again later."
+msgstr "伺服器發生錯誤，請稍後再試。"
 
 #. module: woow_paas_platform
 #: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_workspace__ws_hash
@@ -7966,6 +9577,18 @@ msgstr ""
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_cloud_app_template_form
 msgid "Service Configuration"
 msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/core/router.js:0
+msgid "Service Detail"
+msgstr "服務詳情"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/core/router.js:0
+msgid "Service Detail Tab"
+msgstr "服務詳情頁籤"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -8001,10 +9624,30 @@ msgid ""
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/configure/AppConfigurationPage.js:0
+msgid "Service name is required"
+msgstr "請輸入服務名稱"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/configure/AppConfigurationPage.js:0
+msgid "Service name must be at least 2 characters"
+msgstr "服務名稱至少需要 2 個字元"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/configure/AppConfigurationPage.js:0
+msgid "Service name must be at most 100 characters"
+msgstr "服務名稱最多 100 個字元"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/dashboard/DashboardPage.js:0
 #: model:ir.actions.act_window,name:woow_paas_platform.action_cloud_service
 #: model:ir.ui.menu,name:woow_paas_platform.menu_cloud_services
 msgid "Services"
-msgstr ""
+msgstr "服務"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -8013,6 +9656,22 @@ msgstr ""
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_smart_home_route__session_duration
 msgid "Session Duration"
 msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/services/billing_service.js:0
+#: code:addons/woow_paas_platform/static/src/paas/services/cloud_service.js:0
+#: code:addons/woow_paas_platform/static/src/paas/services/rpc.js:0
+#: code:addons/woow_paas_platform/static/src/paas/services/workspace_service.js:0
+msgid "Session expired. Please refresh the page."
+msgstr "登入階段已過期，請重新整理頁面。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/services/dashboard_service.js:0
+#: code:addons/woow_paas_platform/static/src/paas/services/profile_service.js:0
+msgid "Session expired. Please refresh."
+msgstr "登入階段已過期，請重新整理頁面。"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -8025,6 +9684,12 @@ msgstr ""
 #: code:addons/woow_paas_platform/static/src/paas/pages/workspace/WorkspaceDetailPage.xml:0
 msgid "Set Up Zero Trust Access"
 msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/settings/PaymentMethodsListPage.js:0
+msgid "Set default failed"
+msgstr "設為預設失敗"
 
 #. module: woow_paas_platform
 #: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_skill__project_id
@@ -8063,6 +9728,10 @@ msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/core/router.js:0
+#: code:addons/woow_paas_platform/static/src/paas/layout/bottom_nav/BottomNav.js:0
+#: code:addons/woow_paas_platform/static/src/paas/layout/sidebar/Sidebar.js:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/project-detail/ProjectDetailPage.js:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/reconcile-report/ReconcileReportPage.xml:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/settings/AddPaymentMethodPage.xml:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/settings/PaymentMethodsListPage.xml:0
@@ -8070,7 +9739,7 @@ msgstr ""
 #: code:addons/woow_paas_platform/static/src/paas/pages/settings/SettingsPage.xml:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/workspace/WorkspaceDetailPage.xml:0
 msgid "Settings"
-msgstr ""
+msgstr "設定"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -8078,6 +9747,19 @@ msgstr ""
 #: code:addons/woow_paas_platform/static/src/paas/components/smart-home/CreateSmartHomeModal.xml:0
 msgid "Setup Complete"
 msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/workspace/WorkspaceListPage.js:0
+msgid ""
+"Setup Zero Trust Tunnels via Podman or HAOS for secure remote connections."
+msgstr "透過 Podman 或 HAOS 建立 Zero Trust Tunnel，安全地遠端連線。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/workspace/WorkspaceDetailPage.js:0
+msgid "Setup Zero Trust Tunnels."
+msgstr "建立 Zero Trust 通道。"
 
 #. module: woow_paas_platform
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__project_project__agent_template_binding_status__shared
@@ -8089,6 +9771,17 @@ msgstr ""
 #: code:addons/woow_paas_platform/static/src/paas/pages/support-tasks/SupportTasksPage.xml:0
 msgid "Shared Tasks"
 msgstr "共用任務"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/OneTimeCredentialsModal.js:0
+msgid ""
+"Shared by the console and the dashboard (username: admin). Also enter it in "
+"the Dashboard REST API section of the MCP connection settings, together with "
+"the Dashboard API URL below."
+msgstr ""
+"console 與 dashboard 共用這一組（帳號 admin）。也要填進 MCP 連線設定的 "
+"Dashboard REST API 區（搭配下方的 Dashboard API URL）。"
 
 #. module: woow_paas_platform
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_cloud_app_template_form
@@ -8125,6 +9818,18 @@ msgstr ""
 #: model:ir.model.fields,field_description:woow_paas_platform.field_res_config_settings__woow_show_projects
 msgid "Show Projects in /woow"
 msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/services/mermaid_loader.js:0
+msgid "Show diagram source"
+msgstr "顯示原始碼"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/services/mermaid_loader.js:0
+msgid "Show rendered diagram"
+msgstr "顯示圖表"
 
 #. module: woow_paas_platform
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.res_config_settings_view_form
@@ -8240,6 +9945,7 @@ msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/workspace/WorkspaceDetailPage.js:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/workspace/WorkspaceDetailPage.xml:0
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_change_plan_wizard__smart_home_id
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_security_access_access_policy__smart_home_id
@@ -8248,7 +9954,7 @@ msgstr ""
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__sh_subscription_plan__service_type__smart_home
 #: model:ir.ui.menu,name:woow_paas_platform.menu_smart_home
 msgid "Smart Home"
-msgstr ""
+msgstr "Smart Home"
 
 #. module: woow_paas_platform
 #. odoo-python
@@ -8274,6 +9980,12 @@ msgid "Smart Home Application Route"
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/workspace/WorkspaceListPage.js:0
+msgid "Smart Home Connect"
+msgstr "Smart Home Connect"
+
+#. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_smarthome_monthly_product_template
 msgid "Smart Home Connect Monthly Subscription"
 msgstr ""
@@ -8282,6 +9994,18 @@ msgstr ""
 #: model:product.template,name:woow_paas_platform.product_smarthome_yearly_product_template
 msgid "Smart Home Connect Yearly Subscription"
 msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/core/router.js:0
+msgid "Smart Home Detail"
+msgstr "智慧家庭詳情"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/core/router.js:0
+msgid "Smart Home Detail Tab"
+msgstr "智慧家庭詳情頁籤"
 
 #. module: woow_paas_platform
 #: model:ir.model,name:woow_paas_platform.model_woow_paas_platform_smart_home
@@ -8335,6 +10059,19 @@ msgid ""
 "Empty = no MCP. Read by the HA woow_paas_smart_home component to decide "
 "whether to expose the MCP sensor entity."
 msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/smart-home/CreateSmartHomeModal.js:0
+msgid "Smart home name is required"
+msgstr "請輸入 Smart Home 名稱"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/ai-chat/AiChat.js:0
+msgid ""
+"Something went wrong while receiving the AI reply. Please refresh the page."
+msgstr "接收 AI 回覆時發生資料錯誤，請重新整理頁面。"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -8419,6 +10156,12 @@ msgstr "現在開始第一個計費週期"
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/ai-chat/AiChat.js:0
+msgid "Starting the AI assistant... (the first start can take up to a minute)"
+msgstr "AI 啟動中…（首次啟動需數十秒）"
+
+#. module: woow_paas_platform
+#. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.xml:0
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_agent_session__state
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_agent_template__state
@@ -8454,10 +10197,11 @@ msgstr ""
 #: code:addons/woow_paas_platform/static/src/paas/pages/project-kanban/ProjectKanbanPage.xml:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.xml:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/OverviewTab.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/smart-home/SmartHomeDetailPage.js:0
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_oauth_device_code__status
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_mcp_server_form
 msgid "Status"
-msgstr ""
+msgstr "狀態"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -8467,9 +10211,21 @@ msgstr "仍為孤兒（刪除前請再確認）"
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/billing/TopupStorePage.js:0
+msgid "Still confirming payment — please refresh in a moment."
+msgstr "付款仍在確認中，請稍後重新整理。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/CancelSubscriptionModal.xml:0
 msgid "Stop future billing charges"
 msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/SubscribedServicesModal.js:0
+msgid "Stopped"
+msgstr "已停止"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -8638,15 +10394,22 @@ msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/core/router.js:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/billing/SubscriptionListPage.xml:0
 msgid "Subscriptions"
-msgstr ""
+msgstr "訂閱"
 
 #. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/SkipTrialModal.xml:0
 msgid "Subtotal"
 msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/billing/BillingOverviewPage.js:0
+msgid "Successfully redeemed %s to your wallet."
+msgstr "已成功兌換 %s 到你的錢包。"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -8666,11 +10429,13 @@ msgid "Suspend all associated services after the grace period"
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/common/StatusBadge.js:0
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_cloud_service__state__suspended
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_security_access__state__suspended
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_smart_home__state__suspended
 msgid "Suspended"
-msgstr ""
+msgstr "已停權"
 
 #. module: woow_paas_platform
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_cloud_odoo_addon_list
@@ -8688,11 +10453,13 @@ msgid "Sync Tools"
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/layout/sidebar/Sidebar.js:0
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_mcp_server__scope__system
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_skill__scope__system
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_skill_upload_wizard__scope__system
 msgid "System"
-msgstr ""
+msgstr "系統"
 
 #. module: woow_paas_platform
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_skill_search
@@ -8704,6 +10471,12 @@ msgstr ""
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_agent_template_form
 msgid "System Prompt"
 msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/AddPolicyModal.js:0
+msgid "TW, US"
+msgstr "TW, US"
 
 #. module: woow_paas_platform
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_app_template__tags
@@ -8723,15 +10496,28 @@ msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/core/router.js:0
+msgid "Task Detail"
+msgstr "任務詳情"
+
+#. module: woow_paas_platform
+#. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/CreateTaskModal.xml:0
 msgid "Task Name"
 msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/CreateTaskModal.js:0
+msgid "Task name is required"
+msgstr "請輸入任務名稱"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/core/router.js:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/support-tasks/SupportTasksPage.xml:0
 msgid "Tasks"
-msgstr ""
+msgstr "任務"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -8760,8 +10546,9 @@ msgstr ""
 #. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/workspace/WorkspaceDetailPage.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/workspace/WorkspaceTeamPage.js:0
 msgid "Team"
-msgstr ""
+msgstr "團隊"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -8838,6 +10625,29 @@ msgid "Test Connection"
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/ai-chat/AiChat.js:0
+msgid ""
+"The AI assistant did not reply this time. Please tap Retry to try again."
+msgstr "AI 暫時沒有回應，請點「重試」再試一次。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/ai-chat/AiChat.js:0
+msgid ""
+"The AI provider has not been configured yet. Please contact your "
+"administrator."
+msgstr "AI 供應商尚未設定，請聯繫管理員。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/ai-chat/AiChat.js:0
+msgid ""
+"The AI reply was cut off by a connection drop. Send your message again to "
+"get the full reply."
+msgstr "AI 回覆因連線中斷而不完整，您可以重新傳送訊息以取得完整回覆。"
+
+#. module: woow_paas_platform
 #: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_security_access_access_policy__smart_home_route_id
 msgid ""
 "The Smart Home route this policy protects (#768). Each route is its own "
@@ -8849,6 +10659,18 @@ msgstr ""
 #: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_cloud_service__template_id
 msgid "The application template used to create this service"
 msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/services/topup_errors.js:0
+msgid "The card was declined. Please verify the card or try another."
+msgstr "卡片遭拒絕，請確認卡片資訊或改用其他卡片。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/services/topup_errors.js:0
+msgid "The card's limit was exceeded."
+msgstr "已超過卡片額度上限。"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -8873,6 +10695,12 @@ msgid ""
 "own Cloudflare Access application. Exactly one of route_id / "
 "cloud_service_id is set."
 msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/ai-chat/AiChat.js:0
+msgid "The diagram will be shown once the reply is complete"
+msgstr "圖表將在回覆完成後顯示"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -9039,6 +10867,12 @@ msgid "This application will be able to:"
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/ai-chat/AiChat.js:0
+msgid "This chat channel no longer exists. Please refresh the page."
+msgstr "聊天頻道不存在，請重新整理頁面。"
+
+#. module: woow_paas_platform
 #. odoo-python
 #: code:addons/woow_paas_platform/models/account_move.py:0
 msgid "This e-invoice can only be issued by the platform's own issuing job."
@@ -9092,6 +10926,18 @@ msgid ""
 "                 and DNS records on Cloudflare. Your connector will be\n"
 "                 disconnected immediately. This cannot be undone."
 msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/services/topup_errors.js:0
+msgid "This plan is no longer available."
+msgstr "此方案已不再提供。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/project-detail/sections/CloudServiceBindingSection.js:0
+msgid "This project has user-scope MCP servers. Remove them first."
+msgstr "這個專案有 user-scope MCP server，請先移除。"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -9201,6 +11047,12 @@ msgid "Tool Count"
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/ai-chat/AiChat.js:0
+msgid "Tool execution failed"
+msgstr "工具執行失敗"
+
+#. module: woow_paas_platform
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_mcp_server__tool_ids
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_mcp_server_form
 msgid "Tools"
@@ -9255,15 +11107,18 @@ msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/core/router.js:0
+#: code:addons/woow_paas_platform/static/src/paas/layout/sidebar/Sidebar.js:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/billing/TopupStorePage.xml:0
 msgid "Top-up Store"
-msgstr ""
+msgstr "儲值商店"
 
 #. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/SkipTrialModal.xml:0
 #: code:addons/woow_paas_platform/static/src/paas/components/subscription/PlanTotalBar.xml:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/billing/InvoiceDetailPage.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/dashboard/DashboardPage.js:0
 msgid "Total"
 msgstr "總計"
 
@@ -9272,6 +11127,12 @@ msgstr "總計"
 #: code:addons/woow_paas_platform/static/src/paas/pages/billing/InvoiceDetailPage.xml:0
 msgid "Total Amount"
 msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/workspace/WorkspaceDetailPage.js:0
+msgid "Total Apps"
+msgstr "應用總數"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -9293,9 +11154,10 @@ msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/core/router.js:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/billing/TransactionListPage.xml:0
 msgid "Transactions"
-msgstr ""
+msgstr "交易紀錄"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -9306,9 +11168,12 @@ msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/subscription/SubscriptionBadge.js:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/billing/BillingOverviewPage.js:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/billing/SubscriptionListPage.js:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/smart-home/SmartHomeDetailPage.xml:0
 msgid "Trial"
-msgstr ""
+msgstr "試用中"
 
 #. module: woow_paas_platform
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_service__subscription_trial_end
@@ -9389,10 +11254,11 @@ msgstr ""
 #. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/smart-home/SmartHomeDetailPage.js:0
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_security_access__tunnel_id
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_smart_home__tunnel_id
 msgid "Tunnel ID"
-msgstr ""
+msgstr "Tunnel ID"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -9425,6 +11291,25 @@ msgstr ""
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_smart_home__tunnel_token
 msgid "Tunnel Token"
 msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/AccessTab.js:0
+msgid "Turn on Access protection"
+msgstr "開啟保護"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/AccessTab.js:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/smart-home/tabs/SmartHomeAccessTab.js:0
+msgid "Turn on Access protection?"
+msgstr "開啟 Access 保護？"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/smart-home/tabs/SmartHomeAccessTab.js:0
+msgid "Turn protection on"
+msgstr "開啟保護"
 
 #. module: woow_paas_platform
 #: model:ir.model.constraint,message:woow_paas_platform.constraint_woow_paas_platform_workspace_unique_ws_hash
@@ -9528,15 +11413,29 @@ msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/services/mermaid_loader.js:0
+msgid "Unable to load the diagram renderer. Please refresh the page."
+msgstr "無法載入圖表渲染引擎，請重新整理頁面"
+
+#. module: woow_paas_platform
+#. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/workspace/WorkspaceDetailPage.xml:0
 msgid "Unable to load workspace"
 msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/support-tasks/SupportTasksPage.js:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/task-detail/TaskDetailPage.xml:0
 msgid "Unassigned"
-msgstr ""
+msgstr "未分派"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/project-detail/sections/CloudServiceBindingSection.js:0
+msgid ""
+"Unbind this project from %s? This will block if user-scope MCP servers exist."
+msgstr "要將這個專案與 %s 解除綁定嗎？若存在 user-scope MCP server 會被阻擋。"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -9573,6 +11472,23 @@ msgid "Unit Price"
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/common/StatusBadge.js:0
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/SubscribedServicesModal.js:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/smart-home/SmartHomeDetailPage.js:0
+msgid "Unknown"
+msgstr "未知"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/services/billing_service.js:0
+#: code:addons/woow_paas_platform/static/src/paas/services/cloud_service.js:0
+#: code:addons/woow_paas_platform/static/src/paas/services/rpc.js:0
+#: code:addons/woow_paas_platform/static/src/paas/services/workspace_service.js:0
+msgid "Unknown error"
+msgstr "未知的錯誤"
+
+#. module: woow_paas_platform
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_service__access_unresolved_idp_types
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_security_access_route__access_unresolved_idp_types
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_smart_home_route__access_unresolved_idp_types
@@ -9592,14 +11508,29 @@ msgid "Update"
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/services/profile_service.js:0
+msgid "Update already in progress"
+msgstr "已有更新正在進行中"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/settings/ProfilePage.js:0
+#: code:addons/woow_paas_platform/static/src/paas/services/profile_service.js:0
+msgid "Update failed"
+msgstr "更新失敗"
+
+#. module: woow_paas_platform
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_service_secret__updated_at
 msgid "Updated At"
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/common/StatusBadge.js:0
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_cloud_service__state__upgrading
 msgid "Upgrading"
-msgstr ""
+msgstr "升級中"
 
 #. module: woow_paas_platform
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_skill_upload_wizard_form
@@ -9632,6 +11563,12 @@ msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/ai-chat/AiChat.js:0
+msgid "Upload failed"
+msgstr "上傳失敗"
+
+#. module: woow_paas_platform
+#. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/ai-chat/AiChat.xml:0
 msgid "Upload file"
 msgstr ""
@@ -9647,9 +11584,17 @@ msgid "Uploaded By Uid"
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/ai-chat/AiChat.js:0
+msgid "Uploaded: %s"
+msgstr "已上傳：%s"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/smart-home/SmartHomeDetailPage.js:0
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_smart_home__tunnel_uptime
 msgid "Uptime"
-msgstr ""
+msgstr "運作時間"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -9661,6 +11606,16 @@ msgstr "緊急"
 #: model:ir.model.fields,field_description:woow_paas_platform.field_project_project__use_agent_runtime
 msgid "Use Agent Runtime Pod"
 msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.js:0
+msgid ""
+"Use lowercase letters, digits and hyphens only (no dots or symbols); 3-63 "
+"chars, no leading/trailing hyphen."
+msgstr ""
+"只能使用小寫英文字母、數字與連字號（不可有句點或符號）；長度 3-63 字元，開頭"
+"與結尾不可為連字號。"
 
 #. module: woow_paas_platform
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_oauth_code__is_used
@@ -9684,6 +11639,7 @@ msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/InviteMemberModal.js:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/workspace/WorkspaceTeamPage.xml:0
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_oauth_code__user_id
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_oauth_token__user_id
@@ -9695,7 +11651,7 @@ msgstr ""
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_skill_upload_wizard__scope__user
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_workspace_access__role__user
 msgid "User"
-msgstr ""
+msgstr "使用者"
 
 #. module: woow_paas_platform
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_oauth_device_code__user_code
@@ -9839,6 +11795,12 @@ msgid "Virtual Machine"
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/billing/BillingOverviewPage.js:0
+msgid "Visa •••• %s"
+msgstr "Visa •••• %s"
+
+#. module: woow_paas_platform
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_agent_template_search
 msgid "Visibility"
 msgstr ""
@@ -9851,9 +11813,40 @@ msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/AddPolicyModal.js:0
+msgid "Visitor is rejected if they match ANY exclude rule."
+msgstr "訪客只要符合任一條排除規則就會被拒絕。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/AddPolicyModal.js:0
+msgid "Visitor must additionally match EVERY require rule."
+msgstr "訪客還必須符合每一條必要規則。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/AddPolicyModal.js:0
+msgid "Visitor passes this policy if they match ANY include rule."
+msgstr "訪客只要符合任一條包含規則，即通過此政策。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/AddPolicyModal.js:0
+msgid "Visitors from this CIDR range."
+msgstr "來自此 CIDR 範圍的訪客。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/billing/BillingOverviewPage.js:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/billing/InvoiceListPage.xml:0
 msgid "Waiting"
-msgstr ""
+msgstr "正在等待"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/billing_helpers.js:0
+msgid "Waiting for Payment"
+msgstr "等待付款"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -9892,9 +11885,11 @@ msgid "We're working hard to bring you the best experience."
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/marketplace/CategoryFilter.js:0
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_cloud_app_template__category__web
 msgid "Web"
-msgstr ""
+msgstr "網頁"
 
 #. module: woow_paas_platform
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_cloud_odoo_addon__category__website
@@ -10134,14 +12129,18 @@ msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/configure/AppConfigurationPage.js:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/marketplace/AppMarketplacePage.js:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/project-detail/sections/BasicInfoSection.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/ServiceDetailPage.js:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/smart-home/SmartHomeDetailPage.js:0
 #: model:ir.model.fields,field_description:woow_paas_platform.field_project_task__workspace_id
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_service__workspace_id
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_security_access__workspace_id
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_smart_home__workspace_id
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_workspace_access__workspace_id
 msgid "Workspace"
-msgstr ""
+msgstr "工作區"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -10155,6 +12154,12 @@ msgid "Workspace (primary)"
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/core/router.js:0
+msgid "Workspace Detail"
+msgstr "工作區詳情"
+
+#. module: woow_paas_platform
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_agent_session__workspace_ids_snapshot
 msgid "Workspace Ids Snapshot"
 msgstr ""
@@ -10166,9 +12171,27 @@ msgid "Workspace Name"
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/core/router.js:0
+msgid "Workspace Team"
+msgstr "工作區成員"
+
+#. module: woow_paas_platform
 #: model:ir.model,name:woow_paas_platform.model_woow_paas_platform_workspace_access
 msgid "Workspace User Access"
 msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/dashboard/DashboardPage.js:0
+msgid "Workspace access"
+msgstr "工作區存取權"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/CreateWorkspaceModal.js:0
+msgid "Workspace name is required"
+msgstr "請輸入工作區名稱"
 
 #. module: woow_paas_platform
 #: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_security_access__workspace_id
@@ -10187,10 +12210,21 @@ msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/core/router.js:0
+#: code:addons/woow_paas_platform/static/src/paas/layout/bottom_nav/BottomNav.js:0
+#: code:addons/woow_paas_platform/static/src/paas/layout/header/Header.js:0
+#: code:addons/woow_paas_platform/static/src/paas/layout/sidebar/Sidebar.js:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/configure/AppConfigurationPage.js:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/dashboard/DashboardPage.js:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/marketplace/AppMarketplacePage.js:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/ServiceDetailPage.js:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/smart-home/SmartHomeDetailPage.js:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/workspace/WorkspaceDetailPage.js:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/workspace/WorkspaceListPage.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/workspace/WorkspaceTeamPage.js:0
 #: model:ir.model.fields,field_description:woow_paas_platform.field_project_project__workspace_ids
 msgid "Workspaces"
-msgstr ""
+msgstr "工作區"
 
 #. module: woow_paas_platform
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.device_verify
@@ -10202,6 +12236,12 @@ msgstr ""
 #: code:addons/woow_paas_platform/static/src/paas/components/subscription/PlanSelector.xml:0
 msgid "Yearly · Save 33%"
 msgstr "年繳 · 省 33%"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/ai-chat/AiChat.js:0
+msgid "You"
+msgstr "您"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -10220,6 +12260,12 @@ msgstr ""
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.device_result
 msgid "You can return to your device. It will finish connecting automatically."
 msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/ai-chat/AiChat.js:0
+msgid "You do not have permission to access this chat channel."
+msgstr "您無權存取此聊天頻道。"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -10257,6 +12303,12 @@ msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/services/topup_errors.js:0
+msgid "Your previous top-up is still processing, please wait."
+msgstr "您先前的儲值仍在處理中，請稍候。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/configure/AppConfigurationPage.xml:0
 msgid "Your service URL (auto-generated)"
 msgstr ""
@@ -10274,6 +12326,18 @@ msgid "Your trial ends on"
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/services/mermaid_loader.js:0
+msgid "Zoom in diagram"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/services/mermaid_loader.js:0
+msgid "Zoom out diagram"
+msgstr ""
+
+#. module: woow_paas_platform
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_cloud_app_template_form
 msgid "[\"replicaCount\", \"image.tag\"]"
 msgstr ""
@@ -10287,6 +12351,18 @@ msgstr ""
 #: model:mail.template,subject:woow_paas_platform.mail_template_subscription_cancelled
 msgid "[Woow PaaS] Your subscription has been cancelled"
 msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/AddPolicyModal.js:0
+msgid "a@x.com, b@x.com"
+msgstr "a@x.com, b@x.com"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/AddPolicyModal.js:0
+msgid "acme.com"
+msgstr "acme.com"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -10457,6 +12533,12 @@ msgid "env 歸屬"
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/access/AccessAppCard.js:0
+msgid "everyone"
+msgstr "所有人"
+
+#. module: woow_paas_platform
 #: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_oauth_client__redirect_uri_match_mode
 msgid ""
 "exact: redirect_uri must appear verbatim in 'Redirect URIs' (RFC 6749 strict "
@@ -10590,6 +12672,13 @@ msgstr ""
 #: code:addons/woow_paas_platform/static/src/paas/pages/workspace/WorkspaceListPage.xml:0
 msgid "members"
 msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/subscription/PlanSelector.js:0
+#: code:addons/woow_paas_platform/static/src/paas/components/subscription/PlanTotalBar.js:0
+msgid "mo"
+msgstr "月"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -11039,6 +13128,30 @@ msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/services/workspace_service.js:0
+msgid "templateId is required"
+msgstr "缺少 templateId 參數"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/project-detail/sections/CloudServiceBindingSection.js:0
+msgid "the selected service"
+msgstr "所選服務"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/dashboard/DashboardPage.js:0
+msgid "there"
+msgstr "你"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/CancelSubscriptionModal.js:0
+msgid "this subscription"
+msgstr "此訂閱"
+
+#. module: woow_paas_platform
+#. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/DeleteServiceModal.xml:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/smart-home/SmartHomeDetailPage.xml:0
 msgid "to confirm"
@@ -11106,6 +13219,13 @@ msgstr ""
 #: code:addons/woow_paas_platform/static/src/paas/lib/purify.min.js:0
 msgid "x3c!----x3e"
 msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/subscription/PlanSelector.js:0
+#: code:addons/woow_paas_platform/static/src/paas/components/subscription/PlanTotalBar.js:0
+msgid "yr"
+msgstr "年"
 
 #. module: woow_paas_platform
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_cloud_app_template_form
