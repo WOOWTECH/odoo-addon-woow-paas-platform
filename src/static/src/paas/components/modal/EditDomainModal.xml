@@ -65,7 +65,7 @@
                             <p>Add a CNAME record to your domain's DNS settings:</p>
                             <div class="o_woow_cname_record">
                                 <div class="o_woow_cname_row">
-                                    <span class="o_woow_cname_label">Type</span>
+                                    <span class="o_woow_cname_label">Record Type</span>
                                     <span class="o_woow_cname_value">CNAME</span>
                                 </div>
                                 <div class="o_woow_cname_row">

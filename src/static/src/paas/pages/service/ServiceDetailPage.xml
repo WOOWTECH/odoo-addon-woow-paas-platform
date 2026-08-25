@@ -111,7 +111,7 @@
                             onClick.bind="showDomainModal"
                             disabled="!canPerformActions">
                             <WoowIcon name="'language'" size="18"/>
-                            Domain
+                            Custom Domain
                         </WoowButton>
                         <WoowButton
                             variant="'secondary'"
