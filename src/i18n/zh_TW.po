@@ -7,7 +7,7 @@
 # 畫面上原本就顯示的中文，逐字保留（多行文字節點接成單行：中英交界補一個空格、
 # 中文之間不補——原本那個空格是 XML 排版換行的副產物，不是設計）。
 #
-# ⚠ 這 53 條裡有 10 條的 msgid 與本 app 其它檔的既有英文共用（Cancel / Back / Total /
+# ⚠ 這 54 條裡有 10 條的 msgid 與本 app 其它檔的既有英文共用（Cancel / Back / Total /
 #   Retry / Refresh / Loading... / Loading plans... / Processing... / Last synced: /
 #   Protection covers the）——翻譯它們會同時作用在那些檔上，那是預期的。
 #
@@ -258,6 +258,12 @@ msgstr "新方案總計"
 #: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/OverviewTab.xml:0
 msgid "Last synced:"
 msgstr "最後同步於"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/reconcile-report/ReconcileReportPage.xml:0
+msgid "(unnamed)"
+msgstr "(無名稱)"
 
 #. module: woow_paas_platform
 #. odoo-javascript

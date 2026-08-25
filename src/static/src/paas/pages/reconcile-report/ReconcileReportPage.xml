@@ -62,7 +62,12 @@
                         <div class="o_woow_recon_card_top">
                             <span class="o_woow_recon_kind"><t t-esc="candidate.kind"/></span>
                             <span class="o_woow_recon_name">
-                                <t t-esc="candidate.name || '(無名稱)'"/>
+                                <!-- fallback 刻意寫成 t-if/t-else 的**文字節點**而不是
+                                     `t-esc="x || '(unnamed)'"`：表達式裡的字串字面值
+                                     QWeb 抽取器抽不到（`compileTEsc` 走 compileExpr、
+                                     不呼叫 translateFn），會永遠停在英文（#107 W3）。 -->
+                                <t t-if="candidate.name" t-esc="candidate.name"/>
+                                <t t-else="">(unnamed)</t>
                             </span>
                             <span t-attf-class="o_woow_recon_env {{ envBadgeClass(candidate.env_hint) }}">
                                 <t t-esc="candidate.env_hint"/>
