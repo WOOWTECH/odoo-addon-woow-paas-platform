@@ -161,10 +161,19 @@ class ShSubscriptionPlanVisibility(models.Model):
                     'label': '%s vCPU · %s GB RAM' % (vcpu, ram),
                 })
         elif self.service_type == 'security_access':
+            # ⚠ 兩個值**分開**格式化，不共用一個特判——兩個欄位對 0 的語意
+            # 相反（#743／sh_subscription_plan_sa_quota.py）：
+            #   sa_max_routes          0 = none allowed
+            #   sa_max_access_policies 0 = unlimited
+            # 擠在同一個字串裡時，一個 `or 'unlimited'` 會同時蓋到兩個。
+            routes_text = '%s routes' % self.sa_max_routes  # 0 維持字面 0
+            # routes 側該顯示成什麼是 #770 的 quota 語意拍板題，#750 不代決。
+            policies_text = (
+                '%s policies' % self.sa_max_access_policies
+                if self.sa_max_access_policies else 'unlimited policies')
             specs.append({
                 'icon': 'route',
-                'label': '%s routes · %s policies' % (
-                    self.sa_max_routes, self.sa_max_access_policies),
+                'label': '%s · %s' % (routes_text, policies_text),
             })
         elif self.service_type == 'smart_home':
             if self.mcp_integration:

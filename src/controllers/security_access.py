@@ -373,24 +373,43 @@ class SecurityAccessController(Controller):
         plan = Plan.browse(plan_id)
         if not plan.exists():
             return {"success": False, "error": "Plan not found"}
-        # Plan must belong to THIS SA's template — symmetric with the _create
-        # path's `plan not in template.subscription_plan_ids` gate. The role
-        # gate above only checks who may change the plan, not whether the plan
-        # belongs here; without this an owner could switch to another SA
-        # template's (or an orphan) plan, producing a subscription/invoice line
-        # inconsistent with the instance's template. Skip only when the SA has
-        # no template (admin/legacy records created outside the BFF).
+        # 這道守衛真正要防的是「開出與這個實例不相符的 subscription／invoice
+        # line」（invoice line 文案由 plan 的 product 決定）。role gate 只擋
+        # 誰能改方案，不擋 plan 歸屬。
         #
-        # sudo on the template read for the SAME reason the `Plan` browse above
-        # is sudo'd and the _create path sudo's its Template: the M2M walk lands
-        # in sh.subscription.plan, which workspace owners (base.group_user) have
-        # no ACL on — reading sa.template_id.subscription_plan_ids un-sudo'd
-        # raises AccessError on that catalog model instead of evaluating the
-        # gate. The workspace+role check above already gates who reaches here.
-        if sa.template_id and plan not in sa.sudo(
-        ).template_id.subscription_plan_ids:
+        # 有 template：template 就是最精準的代理——與 _create 路徑的
+        # `plan not in template.subscription_plan_ids` 對稱，行為不變。
+        #
+        # template-less（admin/legacy 在 BFF 之外建立的 SA）：#750 之前是
+        # `if sa.template_id and ...`，整段被跳過 ⇒ 任何 plan 都換得成。改成
+        # 退一階直接量守衛的目標本身，兩條都要成立：
+        #   1. plan.service_type == 'security_access'（plan 屬於 SA 家族）；
+        #   2. 且該 plan 掛在**某個** SA template 的白名單內。
+        # 第 2 條擋的是「孤兒 SA plan」——service_type 對、卻不掛任何 template。
+        # 那是合法存在的狀態（sh_subscription_plan_service_type 的
+        # _check_service_type_matches_template_family 明文放行），所以第 1 條
+        # 擋不到它。疊上去的依據是族群量測：2026-08-25 stg／prod 兩環境
+        # service_type='security_access' 各 88 筆、孤兒各 0 筆 ⇒ 不會擋掉任何
+        # 現存的合法 plan。
+        #
+        # sudo 必要性（判準換了，重新確認過，不沿用舊註解的說法）：
+        #   - `plan.service_type` **不需要**額外 sudo——plan 是從上面
+        #     `Plan = request.env[...].sudo()` browse 出來的 recordset。
+        #   - `sa.sudo().template_id.subscription_plan_ids` 仍需要：M2M 走訪
+        #     落在 sh.subscription.plan 這個租戶沒有 ACL 的 catalog model 上。
+        #   - 第 2 條的 template 反查同理，其 sudo 收在 model 層的
+        #     `_owning_template_families()`（理由寫在該 method 的 docstring）。
+        # 上面的 workspace＋role 檢查已經管好誰到得了這裡。
+        if sa.template_id:
+            if plan not in sa.sudo().template_id.subscription_plan_ids:
+                return {
+                    "success": False,
+                    "error": "Selected plan is not available for this template",
+                }
+        elif (plan.service_type != "security_access"
+                or "security_access" not in plan._owning_template_families()):
             return {"success": False,
-                    "error": "Selected plan is not available for this template"}
+                    "error": "Selected plan is not a valid Security Access plan"}
 
         # sudo: workspace owners typically lack ACL on
         # sh.subscription.subscription; the workspace+role check above already
