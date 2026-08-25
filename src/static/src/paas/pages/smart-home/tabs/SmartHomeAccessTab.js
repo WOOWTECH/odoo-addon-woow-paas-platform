@@ -1,6 +1,7 @@
 /** @odoo-module **/
 
 import { Component, useState } from "@odoo/owl";
+import { _t } from "@web/core/l10n/translation";
 import { WoowCard } from "../../../components/card/WoowCard";
 import { WoowIcon } from "../../../components/icon/WoowIcon";
 import { AccessAppCard } from "../../../components/access/AccessAppCard";
@@ -15,12 +16,11 @@ import { smartHomeAccessService } from "../../../services/smart_home_access";
 // 文案形狀沿用 CS 的 PROTECT_CONFIRM（`pages/service/tabs/AccessTab.js`），語境
 // 改寫成 Smart Home：那邊講的是「這個服務的網址」，這裡要講清楚被擋的是誰。
 const PROTECT_CONFIRM = {
-  title: "開啟 Access 保護？",
-  message:
-    "開啟後所有訪客都需通過 Access 驗證才能開啟這條網址，包含你自己與家人。" +
-    "只有符合下方 Access policy 的身分才進得來；不會跳出瀏覽器登入頁的用戶端"
-    + "（例如手機 App 直連）會被擋在外面。",
-  confirmLabel: "開啟保護",
+  title: _t("Turn on Access protection?"),
+  message: _t(
+    "Once protection is on, every visitor has to pass Access verification before this address opens, including you and your own family. Only identities matching an Access policy below get in; clients that never show a browser login page (a phone app connecting directly, for example) are shut out."
+  ),
+  confirmLabel: _t("Turn protection on"),
 };
 
 /**
@@ -104,9 +104,10 @@ export class SmartHomeAccessTab extends Component {
   _replaceRoute(routeData) {
     const idx = this.state.routes.findIndex((r) => r.id === routeData.id);
     if (idx < 0) {
-      this.state.error =
-        `伺服器回傳的 route #${routeData.id} 不在目前畫面上——` +
-        `畫面顯示的可能是過期資料，請重新整理後再試一次。`;
+      this.state.error = _t(
+        "Route #%s came back from the server but is not on the current screen — what you are looking at may be out of date. Please refresh and try again.",
+        routeData.id
+      );
       return;
     }
     this.state.routes.splice(idx, 1, routeData);
@@ -189,9 +190,10 @@ export class SmartHomeAccessTab extends Component {
       access_policies: byRoute[r.id] || [],
     }));
     this.state.orphanWarning = orphans.length
-      ? `有 ${orphans.length} 筆 Access policy（#${orphans.join(", #")}）` +
-        `對不到這台 Smart Home 的任何一條網址，因此沒有顯示在下方——` +
-        `它們仍然在 Cloudflare 上生效。請回報這個狀況。`
+      ? _t(
+          "%(count)s Access policies (#%(ids)s) match none of this Smart Home's addresses, so they are not listed below — they are still in effect on Cloudflare. Please report this.",
+          { count: orphans.length, ids: orphans.join(", #") }
+        )
       : null;
   }
 
@@ -266,9 +268,10 @@ export class SmartHomeAccessTab extends Component {
     // 「拖曳沒抓準」不可區分。只在整趟成功時才判，免得蓋掉真正的錯誤。
     const written = (res.success && res.data && res.data.reordered) || [];
     if (res.success && !this.state.error && written.length !== ids.length) {
-      this.state.error =
-        `送出 ${ids.length} 筆排序，伺服器只寫入 ${written.length} 筆——` +
-        `下方顯示的是伺服器上的實際順序。請重新整理後再排一次。`;
+      this.state.error = _t(
+        "Sent %(sent)s policies to reorder, the server only wrote %(written)s — the order shown below is the real order on the server. Please refresh and order them again.",
+        { sent: ids.length, written: written.length }
+      );
     }
   }
 }

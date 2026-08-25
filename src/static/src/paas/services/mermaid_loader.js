@@ -1,4 +1,5 @@
 /** @odoo-module **/
+import { _t } from "@web/core/l10n/translation";
 
 /**
  * Mermaid.js Lazy Loader Service
@@ -115,7 +116,7 @@ export async function renderMermaidBlocks(containerEl) {
     for (const block of blocks) {
         const encodedContent = block.getAttribute("data-mermaid");
         if (!encodedContent) {
-            _showError(block, "空的圖表定義");
+            _showError(block, _t("Empty diagram definition"));
             block.setAttribute("data-processed", "true");
             continue;
         }
@@ -126,13 +127,13 @@ export async function renderMermaidBlocks(containerEl) {
             diagramSource = new TextDecoder().decode(bytes);
         } catch (e) {
             console.error("[mermaid_loader] Failed to decode base64 content:", e);
-            _showError(block, "圖表資料解碼失敗");
+            _showError(block, _t("Failed to decode diagram data"));
             block.setAttribute("data-processed", "true");
             continue;
         }
 
         if (!diagramSource || !diagramSource.trim()) {
-            _showError(block, "空的圖表定義");
+            _showError(block, _t("Empty diagram definition"));
             block.setAttribute("data-processed", "true");
             continue;
         }
@@ -144,7 +145,7 @@ export async function renderMermaidBlocks(containerEl) {
         } catch (loadErr) {
             console.error("[mermaid_loader] Failed to load library:", loadErr);
             _removeLoading(block);
-            _showError(block, "無法載入圖表渲染引擎，請重新整理頁面");
+            _showError(block, _t("Unable to load the diagram renderer. Please refresh the page."));
             block.setAttribute("data-processed", "true");
             continue;
         }
@@ -160,7 +161,7 @@ export async function renderMermaidBlocks(containerEl) {
         } catch (e) {
             console.error("[mermaid_loader] Render error:", e);
             _removeLoading(block);
-            _showError(block, "圖表語法有誤，請檢查 Mermaid 語法");
+            _showError(block, _t("Invalid diagram syntax. Please check the Mermaid source."));
             // Original <pre><code> remains visible below the error
         }
 
@@ -177,17 +178,25 @@ export async function renderMermaidBlocks(containerEl) {
 function _addToolbar(block) {
     const toolbar = document.createElement("div");
     toolbar.className = "o_woow_mermaid__toolbar";
+    // ⚠ 這四個 title 必須先取值再插進 template literal。寫成 `title="${_t("…")}"`
+    // 畫面照常顯示，但 Odoo 的抽取器**看不到 template literal 的 ${} 內容** ⇒ msgid
+    // 根本不會進 .pot、永遠翻不到，而且 diff 上跟正確寫法長得一樣（#107 實撞：
+    // Zoom in / Zoom out / Reset 三條就是這樣靜默消失的）。
+    const zoomInTitle = _t("Zoom in diagram");
+    const zoomOutTitle = _t("Zoom out diagram");
+    const resetTitle = _t("Reset diagram view");
+    const sourceTitle = _t("Show diagram source");
     toolbar.innerHTML = `
-        <button class="o_woow_mermaid__btn" data-action="zoom-in" title="放大">
+        <button class="o_woow_mermaid__btn" data-action="zoom-in" title="${zoomInTitle}">
             <span class="material-symbols-outlined">zoom_in</span>
         </button>
-        <button class="o_woow_mermaid__btn" data-action="zoom-out" title="縮小">
+        <button class="o_woow_mermaid__btn" data-action="zoom-out" title="${zoomOutTitle}">
             <span class="material-symbols-outlined">zoom_out</span>
         </button>
-        <button class="o_woow_mermaid__btn" data-action="reset" title="重置">
+        <button class="o_woow_mermaid__btn" data-action="reset" title="${resetTitle}">
             <span class="material-symbols-outlined">fit_screen</span>
         </button>
-        <button class="o_woow_mermaid__btn" data-action="toggle-source" title="顯示原始碼">
+        <button class="o_woow_mermaid__btn" data-action="toggle-source" title="${sourceTitle}">
             <span class="material-symbols-outlined">code</span>
         </button>
     `;
@@ -333,7 +342,8 @@ function _showLoading(block) {
     const loading = document.createElement("div");
     loading.className = "o_woow_mermaid--loading";
     loading.innerHTML =
-        '<span class="material-symbols-outlined o_woow_mermaid__spinner">progress_activity</span> 圖表載入中...';
+        '<span class="material-symbols-outlined o_woow_mermaid__spinner">progress_activity</span> ' +
+        _t("Loading diagram...");
     block.prepend(loading);
 }
 
@@ -367,7 +377,7 @@ function _toggleSource(container, btn) {
         if (svgWrapper) {
             svgWrapper.style.display = "";
         }
-        btn.title = "顯示原始碼";
+        btn.title = _t("Show diagram source");
         btn.querySelector(".material-symbols-outlined").textContent = "code";
         return;
     }
@@ -397,7 +407,7 @@ function _toggleSource(container, btn) {
     }
     container.appendChild(sourceBlock);
 
-    btn.title = "顯示圖表";
+    btn.title = _t("Show rendered diagram");
     btn.querySelector(".material-symbols-outlined").textContent = "visibility";
 }
 
@@ -409,7 +419,7 @@ function _toggleSource(container, btn) {
  * instead of inline styles.
  *
  * @param {HTMLElement} block - The mermaid container element
- * @param {string} message - Human-readable error description (Chinese)
+ * @param {string} message - Human-readable, translated error description
  * @private
  */
 function _showError(block, message) {

@@ -1,5 +1,6 @@
 /** @odoo-module **/
 import { Component, useState, onWillUpdateProps } from "@odoo/owl";
+import { _t } from "@web/core/l10n/translation";
 import { groupPlansByCycle } from "./plan_selector_utils";
 
 /**
@@ -124,20 +125,33 @@ export class PlanSelector extends Component {
   }
 
   _unitLabel(unit) {
-    return unit === "month" ? "mo" : unit === "year" ? "yr" : unit;
+    return unit === "month" ? _t("mo") : unit === "year" ? _t("yr") : unit;
   }
   formatPrice(plan) {
-    return `${plan.price} pts/${this._unitLabel(plan.unit)}`;
+    return _t("%(amount)s pts/%(unit)s", {
+      amount: plan.price,
+      unit: this._unitLabel(plan.unit),
+    });
   }
   formatTrial(plan) {
     if (!plan.has_trial) return "";
-    const unit = plan.trial_unit === "day" ? "day" : plan.trial_unit;
-    return `${plan.trial_duration}-${unit} free trial`;
+    // 「天」是唯一實際出現的試用單位，整句成為一個 msgid（CJK 語序需要），
+    // 其他單位走泛用句型，輸出與改寫前逐字相同。
+    if (plan.trial_unit === "day") {
+      return _t("%s-day free trial", plan.trial_duration);
+    }
+    return _t("%(duration)s-%(unit)s free trial", {
+      duration: plan.trial_duration,
+      unit: plan.trial_unit,
+    });
   }
   // 增量：一律 base.unit（年繳為年值；寫死 /月＝12 倍 bug）；不加購由 template 標「已含」
   formatSeatDelta(base, variant) {
     const delta = variant.price - base.price;
-    return `+${delta} pts/${this._unitLabel(base.unit)}`;
+    return _t("+%(amount)s pts/%(unit)s", {
+      amount: delta,
+      unit: this._unitLabel(base.unit),
+    });
   }
 
   onPlanClick(base) {

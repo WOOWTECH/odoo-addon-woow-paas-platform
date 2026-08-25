@@ -1,13 +1,14 @@
 /** @odoo-module **/
 import { reactive } from "@odoo/owl";
+import { _t } from "@web/core/l10n/translation";
 import { showProjects } from "./platform_config";
 
 /** @type {Array<{path: string, name: string, routeName?: string, pattern?: RegExp}>} */
 const routes = [
-    { path: "dashboard", name: "Dashboard", routeName: "dashboard" },
-    { path: "workspaces", name: "Workspaces", routeName: "workspaces" },
-    { path: "workspace/:id", name: "Workspace Detail", routeName: "workspace-detail", pattern: /^workspace\/(\d+)$/ },
-    { path: "workspace/:id/team", name: "Workspace Team", routeName: "workspace-team", pattern: /^workspace\/(\d+)\/team$/ },
+    { path: "dashboard", name: _t("Dashboard"), routeName: "dashboard" },
+    { path: "workspaces", name: _t("Workspaces"), routeName: "workspaces" },
+    { path: "workspace/:id", name: _t("Workspace Detail"), routeName: "workspace-detail", pattern: /^workspace\/(\d+)$/ },
+    { path: "workspace/:id/team", name: _t("Workspace Team"), routeName: "workspace-team", pattern: /^workspace\/(\d+)\/team$/ },
     // #768：Smart Home 也長出頁籤（Overview / Access）。與 CS 逐字同型的**雙路由**：
     // 帶 tab 的在前（比對更長的 path，否則不帶 tab 那條會先吃掉
     // `.../smarthome/12/access`），不帶 tab 的留著——既有的深連結／麵包屑／
@@ -15,39 +16,39 @@ const routes = [
     // 會讓它們**整批 404**。兩條共用同一個 routeName，由 params.tab 決定分頁。
     // 白名單 `(overview|access)`：頁籤自己 setTab 改的 hash 也走這裡，不在白名單
     // 的話換頁後重新整理就掉到 NotFoundPage。
-    { path: "workspace/:id/smarthome/:homeId/:tab", name: "Smart Home Detail Tab", routeName: "smarthome-detail", pattern: /^workspace\/(\d+)\/smarthome\/(\d+)\/(overview|access)$/ },
-    { path: "workspace/:id/smarthome/:homeId", name: "Smart Home Detail", routeName: "smarthome-detail", pattern: /^workspace\/(\d+)\/smarthome\/(\d+)$/ },
-    { path: "workspace/:id/security-access/:saId/:tab", name: "Security Access Detail", routeName: "security-access-detail", pattern: /^workspace\/(\d+)\/security-access\/(\d+)\/(overview|configuration|application|access|email|domains)$/ },
-    { path: "workspace/:id/services/marketplace", name: "App Marketplace", routeName: "marketplace", pattern: /^workspace\/(\d+)\/services\/marketplace$/ },
-    { path: "workspace/:id/services/configure/:templateId", name: "Configure Service", routeName: "configure", pattern: /^workspace\/(\d+)\/services\/configure\/(\d+)$/ },
+    { path: "workspace/:id/smarthome/:homeId/:tab", name: _t("Smart Home Detail Tab"), routeName: "smarthome-detail", pattern: /^workspace\/(\d+)\/smarthome\/(\d+)\/(overview|access)$/ },
+    { path: "workspace/:id/smarthome/:homeId", name: _t("Smart Home Detail"), routeName: "smarthome-detail", pattern: /^workspace\/(\d+)\/smarthome\/(\d+)$/ },
+    { path: "workspace/:id/security-access/:saId/:tab", name: _t("Security Access Detail"), routeName: "security-access-detail", pattern: /^workspace\/(\d+)\/security-access\/(\d+)\/(overview|configuration|application|access|email|domains)$/ },
+    { path: "workspace/:id/services/marketplace", name: _t("App Marketplace"), routeName: "marketplace", pattern: /^workspace\/(\d+)\/services\/marketplace$/ },
+    { path: "workspace/:id/services/configure/:templateId", name: _t("Configure Service"), routeName: "configure", pattern: /^workspace\/(\d+)\/services\/configure\/(\d+)$/ },
     // `access`（#746）：CS Access Control 頁籤。白名單沒有它的話，深連結
     // .../services/:id/access 會掉到 NotFoundPage——頁籤自己 setTab 改的 hash
     // 也一樣，換頁後重新整理就進不去。
-    { path: "workspace/:id/services/:serviceId/:tab", name: "Service Detail Tab", routeName: "service-detail", pattern: /^workspace\/(\d+)\/services\/(\d+)\/(overview|configuration|addons|mcp-servers|access)$/ },
-    { path: "workspace/:id/services/:serviceId", name: "Service Detail", routeName: "service-detail", pattern: /^workspace\/(\d+)\/services\/(\d+)$/ },
+    { path: "workspace/:id/services/:serviceId/:tab", name: _t("Service Detail Tab"), routeName: "service-detail", pattern: /^workspace\/(\d+)\/services\/(\d+)\/(overview|configuration|addons|mcp-servers|access)$/ },
+    { path: "workspace/:id/services/:serviceId", name: _t("Service Detail"), routeName: "service-detail", pattern: /^workspace\/(\d+)\/services\/(\d+)$/ },
     // D4=C: `/woow#/projects` is the new entry for the Projects list page; the
     //        legacy `/woow#/ai-assistant/projects` route below stays active and
     //        shares the same `ai-projects` routeName so existing bookmarks
     //        continue to resolve to the same component.
-    { path: "projects", name: "Projects", routeName: "ai-projects" },
-    { path: "projects/:id", name: "Project Detail", routeName: "project-detail", pattern: /^projects\/(\d+)$/ },
-    { path: "ai-assistant/projects/:id", name: "Project Kanban", routeName: "ai-project-kanban", pattern: /^ai-assistant\/projects\/(\d+)$/ },
-    { path: "ai-assistant/projects", name: "Projects", routeName: "ai-projects" },
-    { path: "ai-assistant/tasks/:taskId", name: "Task Detail", routeName: "ai-task-detail", pattern: /^ai-assistant\/tasks\/(\d+)$/ },
-    { path: "ai-assistant/tasks", name: "Tasks", routeName: "ai-tasks" },
-    { path: "ai-assistant/chat/:conversationId", name: "AI Chat", routeName: "ai-chat", pattern: /^ai-assistant\/chat\/(\d+)$/ },
-    { path: "deployments", name: "Deployments", routeName: "deployments" },
-    { path: "billing", name: "Billing", routeName: "billing" },
-    { path: "billing/topup", name: "Top-up Store", routeName: "billing-topup" },
-    { path: "billing/invoices", name: "Invoices", routeName: "billing-invoices" },
-    { path: "billing/invoices/:id", name: "Invoice Detail", routeName: "billing-invoice-detail", pattern: /^billing\/invoices\/(\d+)$/ },
-    { path: "billing/subscriptions", name: "Subscriptions", routeName: "billing-subscriptions" },
-    { path: "billing/transactions", name: "Transactions", routeName: "billing-transactions" },
-    { path: "settings", name: "Settings", routeName: "settings" },
-    { path: "settings/reconcile-report", name: "孤兒對帳報表", routeName: "reconcile-report" },
-    { path: "settings/profile", name: "Profile", routeName: "settings-profile" },
-    { path: "settings/payment-methods", name: "Payment Methods", routeName: "settings-payment-methods" },
-    { path: "settings/payment-methods/add", name: "Add Payment Method", routeName: "settings-payment-methods-add" },
+    { path: "projects", name: _t("Projects"), routeName: "ai-projects" },
+    { path: "projects/:id", name: _t("Project Detail"), routeName: "project-detail", pattern: /^projects\/(\d+)$/ },
+    { path: "ai-assistant/projects/:id", name: _t("Project Kanban"), routeName: "ai-project-kanban", pattern: /^ai-assistant\/projects\/(\d+)$/ },
+    { path: "ai-assistant/projects", name: _t("Projects"), routeName: "ai-projects" },
+    { path: "ai-assistant/tasks/:taskId", name: _t("Task Detail"), routeName: "ai-task-detail", pattern: /^ai-assistant\/tasks\/(\d+)$/ },
+    { path: "ai-assistant/tasks", name: _t("Tasks"), routeName: "ai-tasks" },
+    { path: "ai-assistant/chat/:conversationId", name: _t("AI Chat"), routeName: "ai-chat", pattern: /^ai-assistant\/chat\/(\d+)$/ },
+    { path: "deployments", name: _t("Deployments"), routeName: "deployments" },
+    { path: "billing", name: _t("Billing"), routeName: "billing" },
+    { path: "billing/topup", name: _t("Top-up Store"), routeName: "billing-topup" },
+    { path: "billing/invoices", name: _t("Invoices"), routeName: "billing-invoices" },
+    { path: "billing/invoices/:id", name: _t("Invoice Detail"), routeName: "billing-invoice-detail", pattern: /^billing\/invoices\/(\d+)$/ },
+    { path: "billing/subscriptions", name: _t("Subscriptions"), routeName: "billing-subscriptions" },
+    { path: "billing/transactions", name: _t("Transactions"), routeName: "billing-transactions" },
+    { path: "settings", name: _t("Settings"), routeName: "settings" },
+    { path: "settings/reconcile-report", name: _t("Orphan Reconciliation Report"), routeName: "reconcile-report" },
+    { path: "settings/profile", name: _t("Profile"), routeName: "settings-profile" },
+    { path: "settings/payment-methods", name: _t("Payment Methods"), routeName: "settings-payment-methods" },
+    { path: "settings/payment-methods/add", name: _t("Add Payment Method"), routeName: "settings-payment-methods-add" },
 ];
 
 // #275：flag OFF 時這些 routeName 一律 redirect 到 dashboard（cosmetic gate）。

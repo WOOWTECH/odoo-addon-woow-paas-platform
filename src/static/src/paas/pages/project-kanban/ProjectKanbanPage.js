@@ -1,5 +1,6 @@
 /** @odoo-module **/
 import { Component, useState, onMounted, useExternalListener } from "@odoo/owl";
+import { _t } from "@web/core/l10n/translation";
 import { WoowIcon } from "../../components/icon/WoowIcon";
 import { CreateTaskModal } from "../../components/modal/CreateTaskModal";
 import { router } from "../../core/router";
@@ -124,7 +125,7 @@ export class ProjectKanbanPage extends Component {
         ]);
         // 麵包屑軌跡：Projects → {專案名}（看板是專案的主工作視圖，末段即專案本身）
         breadcrumbService.set("ai-project-kanban", [
-            { label: "Projects", path: "projects" },
+            { label: _t("Projects"), path: "projects" },
             { label: this.projectName, path: null },
         ]);
     }
@@ -141,7 +142,7 @@ export class ProjectKanbanPage extends Component {
         const project = this.supportService.projects.find(
             (p) => p.id === this.props.projectId
         );
-        return project ? project.name : "Project";
+        return project ? project.name : _t("Project");
     }
 
     get taskCount() {
@@ -262,7 +263,7 @@ export class ProjectKanbanPage extends Component {
             data = JSON.parse(ev.dataTransfer.getData("text/plain"));
         } catch (parseErr) {
             console.error("Failed to parse drag data:", parseErr);
-            this.supportService.error = "拖曳操作失敗，請重新整理頁面後再試。";
+            this.supportService.error = _t("Drag operation failed. Please refresh the page and try again.");
             return;
         }
 
@@ -277,11 +278,11 @@ export class ProjectKanbanPage extends Component {
             const result = await supportService.updateTask(data.taskId, { stage_id: targetStageId });
             if (!result.success) {
                 this._moveTaskLocally(data.taskId, data.fromStageId);
-                this.supportService.error = result.error || "更新任務階段失敗，請重試。";
+                this.supportService.error = result.error || _t("Failed to update the task stage. Please try again.");
             }
         } catch (err) {
             this._moveTaskLocally(data.taskId, data.fromStageId);
-            this.supportService.error = "更新任務階段時發生錯誤，請重試。";
+            this.supportService.error = _t("An error occurred while updating the task stage. Please try again.");
         }
     }
 

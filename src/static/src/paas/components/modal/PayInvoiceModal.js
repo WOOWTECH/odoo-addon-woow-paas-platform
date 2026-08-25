@@ -1,5 +1,6 @@
 /** @odoo-module **/
 import { Component, useState, onMounted } from "@odoo/owl";
+import { _t } from "@web/core/l10n/translation";
 import { WoowButton } from "../button/WoowButton";
 import { WoowIcon } from "../icon/WoowIcon";
 import { billingService } from "../../services/billing_service";
@@ -80,7 +81,7 @@ export class PayInvoiceModal extends Component {
       await billingService.fetchWallet();
       this.props.onPaid();
     } else {
-      this.state.error = result.error || "Payment failed";
+      this.state.error = result.error || _t("Payment failed");
       this.state.paying = false;
     }
   }

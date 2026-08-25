@@ -1,5 +1,6 @@
 /** @odoo-module **/
 import { reactive } from "@odoo/owl";
+import { _t } from "@web/core/l10n/translation";
 
 const REQUEST_TIMEOUT_MS = 30000;
 
@@ -20,19 +21,19 @@ async function jsonRpc(url, params, timeoutMs = REQUEST_TIMEOUT_MS) {
             signal: controller.signal,
         });
     } catch (error) {
-        if (error.name === "AbortError") throw new Error("Request timed out.");
-        throw new Error("Network error.");
+        if (error.name === "AbortError") throw new Error(_t("Request timed out."));
+        throw new Error(_t("Network error."));
     } finally {
         clearTimeout(timeoutId);
     }
     if (!response.ok) {
-        if (response.status === 401) throw new Error("Session expired. Please refresh.");
-        if (response.status === 403) throw new Error("Access denied.");
-        if (response.status >= 500) throw new Error("Server error.");
-        throw new Error(`Request failed (${response.status})`);
+        if (response.status === 401) throw new Error(_t("Session expired. Please refresh."));
+        if (response.status === 403) throw new Error(_t("Access denied."));
+        if (response.status >= 500) throw new Error(_t("Server error."));
+        throw new Error(_t("Request failed (%s)", response.status));
     }
     const json = await response.json();
-    if (json.error) throw new Error(json.error.message || "Request failed");
+    if (json.error) throw new Error(json.error.message || _t("Request failed"));
     return json.result;
 }
 
@@ -58,7 +59,7 @@ export const profileService = reactive({
             this.error = null;
             try {
                 const result = await jsonRpc("/api/me", {});
-                if (!result.success) throw new Error(result.error || "Failed to load profile");
+                if (!result.success) throw new Error(result.error || _t("Failed to load profile"));
                 this.partner = result.data;
             } catch (err) {
                 this.error = err.message || String(err);
@@ -72,7 +73,7 @@ export const profileService = reactive({
 
     async update(patch) {
         if (this.saving) {
-            return { success: false, error: "Update already in progress" };
+            return { success: false, error: _t("Update already in progress") };
         }
         this.saving = true;
         this.error = null;
@@ -81,7 +82,7 @@ export const profileService = reactive({
             if (result.success) {
                 this.partner = result.data;
             } else {
-                this.error = result.error || "Update failed";
+                this.error = result.error || _t("Update failed");
             }
             return result;
         } catch (err) {
@@ -99,7 +100,7 @@ export const profileService = reactive({
             this.invoiceLoading = true;
             try {
                 const result = await jsonRpc("/api/me/invoice-preference", {});
-                if (!result.success) throw new Error(result.error || "Failed to load invoice preference");
+                if (!result.success) throw new Error(result.error || _t("Failed to load invoice preference"));
                 this.invoicePreference = result.data;
             } catch (err) {
                 this.error = err.message || String(err);
@@ -113,7 +114,7 @@ export const profileService = reactive({
 
     async updateInvoicePreference(patch) {
         if (this.invoiceSaving) {
-            return { success: false, error: "Update already in progress" };
+            return { success: false, error: _t("Update already in progress") };
         }
         this.invoiceSaving = true;
         try {

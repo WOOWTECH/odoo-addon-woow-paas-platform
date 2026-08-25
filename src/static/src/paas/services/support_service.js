@@ -1,5 +1,6 @@
 /** @odoo-module **/
 import { reactive } from "@odoo/owl";
+import { _t } from "@web/core/l10n/translation";
 import { jsonRpc } from "./rpc";
 
 /**
@@ -80,10 +81,10 @@ export const supportService = reactive({
             if (result.success) {
                 this.stages = result.data;
             } else {
-                this.error = result.error || "Failed to fetch stages";
+                this.error = result.error || _t("Failed to fetch stages");
             }
         } catch (err) {
-            this.error = err.message || "Network error";
+            this.error = err.message || _t("Network error");
         } finally {
             this._loadingCount = Math.max(0, this._loadingCount - 1);
             this.loading = this._loadingCount > 0;
@@ -105,10 +106,10 @@ export const supportService = reactive({
             if (result.success) {
                 this.projects = result.data;
             } else {
-                this.error = result.error || "Failed to fetch projects";
+                this.error = result.error || _t("Failed to fetch projects");
             }
         } catch (err) {
-            this.error = err.message || "Network error";
+            this.error = err.message || _t("Network error");
         } finally {
             this._loadingCount = Math.max(0, this._loadingCount - 1);
             this.loading = this._loadingCount > 0;
@@ -131,10 +132,10 @@ export const supportService = reactive({
             if (result.success) {
                 this.projects = result.data;
             } else {
-                this.error = result.error || "Failed to fetch projects";
+                this.error = result.error || _t("Failed to fetch projects");
             }
         } catch (err) {
-            this.error = err.message || "Network error";
+            this.error = err.message || _t("Network error");
         } finally {
             this._loadingCount = Math.max(0, this._loadingCount - 1);
             this.loading = this._loadingCount > 0;
@@ -167,10 +168,10 @@ export const supportService = reactive({
                     this._computeStats();
                 }
             } else {
-                this.error = result.error || "Failed to fetch tasks";
+                this.error = result.error || _t("Failed to fetch tasks");
             }
         } catch (err) {
-            this.error = err.message || "Network error";
+            this.error = err.message || _t("Network error");
         } finally {
             this._loadingCount = Math.max(0, this._loadingCount - 1);
             this.loading = this._loadingCount > 0;
@@ -205,10 +206,10 @@ export const supportService = reactive({
                     this._computeStats();
                 }
             } else {
-                this.error = result.error || "Failed to fetch tasks";
+                this.error = result.error || _t("Failed to fetch tasks");
             }
         } catch (err) {
-            this.error = err.message || "Network error";
+            this.error = err.message || _t("Network error");
         } finally {
             this._loadingCount = Math.max(0, this._loadingCount - 1);
             this.loading = this._loadingCount > 0;

@@ -1,5 +1,6 @@
 /** @odoo-module **/
 import { reactive } from "@odoo/owl";
+import { _t } from "@web/core/l10n/translation";
 import { jsonRpc } from "./rpc";
 
 /**
@@ -74,10 +75,10 @@ export const aiService = reactive({
             if (result.success) {
                 this.assistants = result.data;
             } else {
-                this.error = result.error || "Failed to fetch assistants";
+                this.error = result.error || _t("Failed to fetch assistants");
             }
         } catch (err) {
-            this.error = err.message || "Network error";
+            this.error = err.message || _t("Network error");
         } finally {
             this.loading = false;
         }

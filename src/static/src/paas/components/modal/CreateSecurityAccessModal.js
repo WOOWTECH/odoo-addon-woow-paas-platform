@@ -1,5 +1,6 @@
 /** @odoo-module **/
 import { Component, useState, onWillStart } from "@odoo/owl";
+import { _t } from "@web/core/l10n/translation";
 import { WoowButton } from "../button/WoowButton";
 import { WoowIcon } from "../icon/WoowIcon";
 import { PlanSelector } from "../subscription/PlanSelector";
@@ -54,7 +55,7 @@ export class CreateSecurityAccessModal extends Component {
         await this.loadPlans();
       } else {
         this.state.error =
-          res.error || "No Security Access template available";
+          res.error || _t("No Security Access template available");
       }
     });
   }
@@ -90,11 +91,11 @@ export class CreateSecurityAccessModal extends Component {
 
   async confirm() {
     if (!this.state.name.trim()) {
-      this.state.error = "Please enter a name";
+      this.state.error = _t("Please enter a name");
       return;
     }
     if (!this.state.selectedPlanId) {
-      this.state.error = "Please select a plan";
+      this.state.error = _t("Please select a plan");
       return;
     }
     this.state.loading = true;
@@ -110,7 +111,7 @@ export class CreateSecurityAccessModal extends Component {
 
     if (!createResult.success) {
       this.state.error =
-        createResult.error || "Failed to create security access";
+        createResult.error || _t("Failed to create security access");
       this.state.loading = false;
       return;
     }
@@ -139,7 +140,7 @@ export class CreateSecurityAccessModal extends Component {
     } else {
       // provision 失敗：仍通知父層導去 detail page，SA 處於 error state，
       // detail page 有 Provision 重試鈕接住。
-      this.state.error = provisionResult.error || "Provisioning failed";
+      this.state.error = provisionResult.error || _t("Provisioning failed");
       this.state.provisioning = false;
       this.props.onCreated(createResult.data);
     }

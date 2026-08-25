@@ -1,5 +1,6 @@
 /** @odoo-module **/
 import { Component, useState, onMounted } from "@odoo/owl";
+import { _t } from "@web/core/l10n/translation";
 import { WoowCard } from "../../components/card/WoowCard";
 import { WoowIcon } from "../../components/icon/WoowIcon";
 import { WoowButton } from "../../components/button/WoowButton";
@@ -10,18 +11,18 @@ import { router } from "../../core/router";
 import { formatDate, formatPoints } from "../../utils/billing_helpers";
 
 const STATUS_MAP = {
-  draft: { label: "Draft", color: "gray" },
-  posted: { label: "Waiting", color: "blue" },
-  paid: { label: "Paid", color: "green" },
-  overdue: { label: "Overdue", color: "red" },
+  draft: { label: _t("Draft"), color: "gray" },
+  posted: { label: _t("Waiting"), color: "blue" },
+  paid: { label: _t("Paid"), color: "green" },
+  overdue: { label: _t("Overdue"), color: "red" },
 };
 
 const SUB_STATE_MAP = {
-  in_progress: { label: "In Progress", color: "green" },
-  draft: { label: "Draft", color: "gray" },
-  expire: { label: "Expired", color: "gray" },
-  close: { label: "Cancelled", color: "gray" },
-  cancel: { label: "Cancelled", color: "gray" },
+  in_progress: { label: _t("In Progress"), color: "green" },
+  draft: { label: _t("Draft"), color: "gray" },
+  expire: { label: _t("Expired"), color: "gray" },
+  close: { label: _t("Cancelled"), color: "gray" },
+  cancel: { label: _t("Cancelled"), color: "gray" },
 };
 
 export class BillingOverviewPage extends Component {
@@ -117,7 +118,7 @@ export class BillingOverviewPage extends Component {
   }
 
   getSubStateLabel(sub) {
-    if (sub.is_trial) return "Trial";
+    if (sub.is_trial) return _t("Trial");
     return this.getSubStateInfo(sub).label;
   }
 
@@ -129,9 +130,9 @@ export class BillingOverviewPage extends Component {
   getPaymentMethodLabel() {
     const w = this.billing.wallet;
     if (w.cardBound && w.cardLast4) {
-      return `Visa •••• ${w.cardLast4}`;
+      return _t("Visa •••• %s", w.cardLast4);
     }
-    return "No card bound";
+    return _t("No card bound");
   }
 
   get hasLowBalanceWarning() {
@@ -186,7 +187,7 @@ export class BillingOverviewPage extends Component {
 
     const result = await billingService.redeemCode(code);
     if (!result.success) {
-      this.state.redeemError = result.error || "Redeem failed. Please try again.";
+      this.state.redeemError = result.error || _t("Redeem failed. Please try again.");
       this.state.redeeming = false;
       return;
     }
@@ -194,7 +195,8 @@ export class BillingOverviewPage extends Component {
     // Refresh the wallet balance so the Credit Balance card reflects the grant.
     await this.loadWallet();
     const granted = result.data ? result.data.points_granted : 0;
-    this.state.redeemSuccess = `Successfully redeemed ${this.formatPoints(granted)} to your wallet.`;
+    this.state.redeemSuccess = _t(
+      "Successfully redeemed %s to your wallet.", this.formatPoints(granted));
     this.state.redeemCode = "";
     this.state.redeeming = false;
   }

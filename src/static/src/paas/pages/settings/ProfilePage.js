@@ -1,5 +1,6 @@
 /** @odoo-module **/
 import { Component, useState, onMounted, onWillUnmount } from "@odoo/owl";
+import { _t } from "@web/core/l10n/translation";
 import { WoowCard } from "../../components/card/WoowCard";
 import { WoowButton } from "../../components/button/WoowButton";
 import { WoowIcon } from "../../components/icon/WoowIcon";
@@ -91,10 +92,10 @@ export class ProfilePage extends Component {
     _validate() {
         const errors = {};
         if (!this.state.form.name.trim()) {
-            errors.name = "Name is required";
+            errors.name = _t("Name is required");
         }
         if (this.state.form.email.trim() && !EMAIL_RE.test(this.state.form.email.trim())) {
-            errors.email = "Invalid email format";
+            errors.email = _t("Invalid email format");
         }
         this.state.fieldErrors = errors;
         return Object.keys(errors).length === 0;
@@ -126,7 +127,7 @@ export class ProfilePage extends Component {
         } else if (result.code === "invalid_email") {
             this.state.fieldErrors = { email: result.error };
         } else {
-            this.state.serverError = result.error || "Update failed";
+            this.state.serverError = result.error || _t("Update failed");
         }
     }
 
@@ -171,7 +172,7 @@ export class ProfilePage extends Component {
                 this._invoiceSaveSuccessTimer = null;
             }, 3000);
         } else {
-            this.state.invoiceServerError = result.error || "Update failed";
+            this.state.invoiceServerError = result.error || _t("Update failed");
         }
     }
 
