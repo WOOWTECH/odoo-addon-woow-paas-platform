@@ -7,7 +7,9 @@
 #
 # ⚠ 這裡的每一條都必須有「刻意保留」的理由，不是「還沒修」的堆放處。
 #
-# 格式：<測試檔>.<Class>.<method>
+# 格式：
+#   一般 FAIL／ERROR：<測試檔>.<Class>.<method>（method-level）
+#   setUpClass／tearDownClass：<測試檔>.<Class>（class-level；Refs #821）
 #
 # ── 目前是空的（2026-08-22，Refs #543 #546）─────────────────────────────
 # 原本唯一那條是 #543 的注入式驗證
