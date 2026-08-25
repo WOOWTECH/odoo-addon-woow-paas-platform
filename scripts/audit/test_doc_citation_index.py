@@ -13,6 +13,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 import uuid
 import tempfile
 import unittest
@@ -156,15 +157,44 @@ class TestHookRouting(unittest.TestCase):
             f.write(content)
         return os.path.join(hooks, "pattern-guard.py"), target
 
-    def _run(self, root, hook, target, session):
+    def _run(self, root, hook, target, session, env_overrides=None):
         payload = {"session_id": session, "cwd": root,
                    "tool_input": {"file_path": target}}
         env = dict(os.environ, CLAUDE_PROJECT_DIR=root)
         env.pop("CLAUDE_PATTERN_GUARD", None)
+        if env_overrides:
+            env.update(env_overrides)
         r = subprocess.run([sys.executable, hook], input=json.dumps(payload),
-                           capture_output=True, text=True, env=env)
+                           capture_output=True, text=True, env=env, timeout=10)
         out = r.stdout.strip()
         return (json.loads(out) if out else None), r.stderr
+
+    def _git(self, cwd, *args):
+        return subprocess.run(
+            ["git", "-C", cwd, *args], check=True, capture_output=True, text=True)
+
+    def _linked_worktree_fixture(self, outer):
+        """Create one repo with main, nested, and external linked worktrees."""
+        root = os.path.join(outer, "main")
+        os.makedirs(root)
+        hook, target = self._fixture(
+            root, "src/models/thing.py",
+            "# 見 docs/decisions/patterns/beta-pattern.md\n")
+        helper = os.path.join(root, "src", "utils", "helper.py")
+        os.makedirs(os.path.dirname(helper), exist_ok=True)
+        with open(helper, "w", encoding="utf-8") as f:
+            f.write("# 不在守護路徑\n")
+        self._git(root, "init")
+        self._git(root, "config", "user.email", "pattern-guard@example.invalid")
+        self._git(root, "config", "user.name", "Pattern Guard Test")
+        self._git(root, "add", ".")
+        self._git(root, "commit", "-m", "fixture")
+
+        nested = os.path.join(root, ".claude", "worktrees", "nested")
+        external = os.path.join(outer, "external")
+        self._git(root, "worktree", "add", "-b", "nested-test", nested)
+        self._git(root, "worktree", "add", "-b", "external-test", external)
+        return root, hook, target, nested, external
 
     def test_cited_file_pushes_only_cited_docs(self):
         """有逐字引用 → 只推那幾份，不推該 class 的其他 doc。"""
@@ -239,6 +269,95 @@ class TestHookRouting(unittest.TestCase):
             reason = res["hookSpecificOutput"]["permissionDecisionReason"]
             self.assertIn("引用索引", reason, "必須明講引用索引失效了")
             self.assertIn("alpha-pattern", reason, "且要退回完整 class 推播")
+
+    def test_guarded_paths_in_main_nested_and_external_worktrees(self):
+        """所有 linked worktree 都要用各自 repo-relative path 命中守衛。"""
+        with tempfile.TemporaryDirectory() as outer:
+            root, hook, main_target, nested, external = \
+                self._linked_worktree_fixture(outer)
+            targets = (
+                main_target,
+                os.path.join(nested, "src", "models", "thing.py"),
+                os.path.join(external, "src", "models", "thing.py"),
+            )
+            for index, target in enumerate(targets):
+                res, stderr = self._run(
+                    root, hook, target, self._sid("guarded-%d" % index))
+                self.assertEqual(stderr, "")
+                self.assertIsNotNone(res, target)
+                reason = res["hookSpecificOutput"]["permissionDecisionReason"]
+                self.assertIn("src/models/thing.py", reason)
+
+    def test_unguarded_paths_in_main_nested_and_external_worktrees(self):
+        """Worktree identity resolution 不得擴張 guard-map 的匹配面。"""
+        with tempfile.TemporaryDirectory() as outer:
+            root, hook, _, nested, external = self._linked_worktree_fixture(outer)
+            for index, checkout in enumerate((root, nested, external)):
+                target = os.path.join(checkout, "src", "utils", "helper.py")
+                res, stderr = self._run(
+                    root, hook, target, self._sid("unguarded-%d" % index))
+                self.assertEqual(stderr, "")
+                self.assertIsNone(res, target)
+
+    def test_external_worktrees_keep_per_file_citation_markers(self):
+        """同一 rel 的不同 worktree 檔案不得共用 citation marker。"""
+        with tempfile.TemporaryDirectory() as outer:
+            root, hook, _, nested, external = self._linked_worktree_fixture(outer)
+            sid = self._sid("marker")
+            nested_target = os.path.join(nested, "src", "models", "thing.py")
+            external_target = os.path.join(external, "src", "models", "thing.py")
+            first, _ = self._run(root, hook, nested_target, sid)
+            second, _ = self._run(root, hook, external_target, sid)
+            retry, _ = self._run(root, hook, external_target, sid)
+            self.assertIsNotNone(first)
+            self.assertIsNotNone(second, "不同 worktree 的同 rel 檔案仍須首次提醒")
+            self.assertIsNone(retry, "同一 worktree 同一檔案重試才應放行")
+
+    def test_unrelated_git_checkout_is_not_guarded(self):
+        """外部路徑必須共享 common git dir，不能只因 rel 長得一樣就命中。"""
+        with tempfile.TemporaryDirectory() as outer:
+            root, hook, _, _, _ = self._linked_worktree_fixture(outer)
+            unrelated = os.path.join(outer, "unrelated")
+            _, target = self._fixture(
+                unrelated, "src/models/thing.py", "# unrelated repo\n")
+            self._git(unrelated, "init")
+            res, stderr = self._run(root, hook, target, self._sid("unrelated"))
+            self.assertEqual(stderr, "")
+            self.assertIsNone(res)
+
+    def test_git_unavailable_keeps_main_fallback_but_not_external_paths(self):
+        """找不到 Git 時保留主 checkout 守衛，外部路徑則 fail-open。"""
+        with tempfile.TemporaryDirectory() as outer:
+            root, hook, main_target, _, external = self._linked_worktree_fixture(outer)
+            no_git = os.path.join(outer, "no-git")
+            os.makedirs(no_git)
+            env = {"PATH": no_git}
+            main_res, _ = self._run(
+                root, hook, main_target, self._sid("no-git-main"), env)
+            external_res, _ = self._run(
+                root, hook, os.path.join(external, "src", "models", "thing.py"),
+                self._sid("no-git-external"), env)
+            self.assertIsNotNone(main_res)
+            self.assertIsNone(external_res)
+
+    def test_git_timeout_is_bounded_and_does_not_trust_external_path(self):
+        """卡住的 Git 必須在 bounded timeout 後 fail-open，且不可誤攔外部路徑。"""
+        with tempfile.TemporaryDirectory() as outer:
+            root, hook, _, _, external = self._linked_worktree_fixture(outer)
+            fake_bin = os.path.join(outer, "fake-bin")
+            os.makedirs(fake_bin)
+            fake_git = os.path.join(fake_bin, "git")
+            with open(fake_git, "w", encoding="utf-8") as f:
+                f.write("#!/bin/sh\nexec /bin/sleep 5\n")
+            os.chmod(fake_git, 0o755)
+            target = os.path.join(external, "src", "models", "thing.py")
+            started = time.monotonic()
+            res, stderr = self._run(
+                root, hook, target, self._sid("git-timeout"), {"PATH": fake_bin})
+            elapsed = time.monotonic() - started
+            self.assertEqual(stderr, "")
+            self.assertIsNone(res)
+            self.assertLess(elapsed, 3.5, "Git timeout 必須有界，不能卡住 hook")
 
 
 if __name__ == "__main__":

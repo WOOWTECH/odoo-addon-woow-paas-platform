@@ -170,18 +170,39 @@ class TestConfigureTunnelWireShape(BaseCase):
             % query,
         )
 
-    def test_content_type_is_json(self):
-        """body 形態要成立，Content-Type 必須是 application/json。
+    def test_content_type_matches_json_body(self):
+        """本次 request 的 body 與 Content-Type 必須共同構成 JSON。
 
-        FastAPI 的 body model 只認 JSON content type；header 掉了的話 operator 端會
-        變成「body 存在但不被解析」，症狀與參數綁錯邊一模一樣。
+        不能只量 session 的預設 header：若 client 漂成 query 或 form body，header
+        仍可能宣稱 application/json。這一格要在 body 不存在、不可解析、payload
+        錯誤或 media type 不符時各自變紅。
         """
         prepared = self._capture(
             tunnel_id=TUNNEL_ID,
             hostname=HOSTNAME,
             service_url=SUSPEND_SERVICE_URL,
         )
-        self.assertEqual(prepared.headers.get("Content-Type"), "application/json")
+        self.assertIsNotNone(
+            prepared.body,
+            "請求宣稱 JSON 卻沒有 body；client 可能把欄位改送 query param。",
+        )
+        try:
+            payload = json.loads(prepared.body)
+        except (TypeError, json.JSONDecodeError) as exc:
+            self.fail(
+                "請求宣稱 JSON，但 body 無法解析：%r（%s）"
+                % (prepared.body, exc)
+            )
+        self.assertEqual(
+            payload,
+            {"hostname": HOSTNAME, "service_url": SUSPEND_SERVICE_URL},
+            "本次 JSON request 的 payload 與 configure_tunnel 契約不符。",
+        )
+        self.assertEqual(
+            prepared.headers.get("Content-Type"),
+            "application/json",
+            "body 是 JSON，但本次 request 的 Content-Type 不正確。",
+        )
 
     def test_capture_adapter_would_notice_a_query_param_form(self):
         """探針自檢（陽性對照）。
