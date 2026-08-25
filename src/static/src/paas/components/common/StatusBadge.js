@@ -69,6 +69,20 @@ export class StatusBadge extends Component {
                 colorClass: "o_woow_status_pending",
                 showSpinner: false,
             },
+            // #833: the tunnel is gone on Cloudflare, not merely offline.
+            // ⚠ This entry is load-bearing, not decoration. Without it the
+            // value falls through to the fallback below, which paints the raw
+            // string with `o_woow_status_pending` — the SAME amber as
+            // `disconnected`. The whole point of #833 is that "deleted" and
+            // "not connected" must not look identical; a missing entry here
+            // recreates the bug one layer up. Red, because the two states
+            // differ in whether anyone has to act: deleted needs a rebuild,
+            // disconnected just needs the connector to come back.
+            deleted: {
+                label: "Deleted",
+                colorClass: "o_woow_status_error",
+                showSpinner: false,
+            },
             provisioning: {
                 label: "Provisioning",
                 colorClass: "o_woow_status_deploying",
