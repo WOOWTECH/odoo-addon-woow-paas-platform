@@ -83,7 +83,7 @@
                             size="'md'"
                             onClick.bind="showChangePlan">
                             <WoowIcon name="'swap_horiz'" size="18"/>
-                            變更方案
+                            Change Plan
                         </WoowButton>
                         <WoowButton
                             variant="'danger'"
@@ -285,7 +285,7 @@
 
                             <div class="o_woow_form_group o_woow_confirm_input">
                                 <label for="confirm_delete_name">
-                                    Type <strong t-esc="home.name"/> to confirm
+                                    Enter the name <strong t-esc="home.name"/> to confirm
                                 </label>
                                 <input
                                     type="text"

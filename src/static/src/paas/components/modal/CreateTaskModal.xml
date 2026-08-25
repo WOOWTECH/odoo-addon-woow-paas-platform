@@ -73,7 +73,7 @@
                             t-att-disabled="state.loading"
                         >
                             <option value="0" t-att-selected="state.priority === '0'">Low</option>
-                            <option value="1" t-att-selected="state.priority === '1'">Normal</option>
+                            <option value="1" t-att-selected="state.priority === '1'">Normal priority</option>
                             <option value="2" t-att-selected="state.priority === '2'">High</option>
                             <option value="3" t-att-selected="state.priority === '3'">Urgent</option>
                         </select>
