@@ -27,6 +27,12 @@
 語意**（DELETE 之後 ``GET /cfd_tunnel/{id}`` 仍回 200、只是多一個 ``deleted_at``，
 #833）—— 所以「把存活判定改用 ``get_tunnel_status``」這個具體退化會被
 ``test_soft_deleted_tunnel_counts_as_gone`` 抓到，而不是矇混過關。
+
+⚠ **#833 修完後，那支的鑑別力性質變了，讀它之前先看這段。** ``get_tunnel_status``
+現在會如實轉發 ``deleted_at`` ⇒ 「改用它做存活判定」**在行為上已經是對的**。那支
+仍然會紅，但紅的是**呼叫形狀那一格**（``tunnel_get_calls == []``），不是行為。它
+從行為守線變成實作形狀守線 —— 而形狀仍然值得鎖，理由（fail-closed 方向不同 ＋
+N+1）寫在 ``cloudflare.py`` 的 ``_assert_dns_repoint_allowed`` docstring 裡。
 """
 import logging
 from unittest.mock import AsyncMock, patch
@@ -344,8 +350,15 @@ class TestSite1CreateForTunnelRepoint:
         """軟刪除的 tunnel **不算還在**（#833）。
 
         這支是「存活判定只能走 ``list_all_tunnels``、不准用 ``get_tunnel_status``」的
-        判別式：假 CF 忠實重現 CF 的軟刪除（單筆 GET 仍回 200 ＋ ``deleted_at``），
-        所以改用 ``get_tunnel_status`` 的實作會把它判成活的 ⇒ raise ⇒ 本支紅。
+        判別式：假 CF 忠實重現 CF 的軟刪除（單筆 GET 仍回 200 ＋ ``deleted_at``）。
+
+        ⚠ **鎖的是呼叫形狀，不是行為**（#833 修完後的誠實說法）。原本的說法是
+        「改用 ``get_tunnel_status`` 會把它判成活的 ⇒ raise ⇒ 本支紅」——那在
+        ``get_tunnel_status`` 不讀 ``deleted_at`` 的年代成立，現在不成立了：那支
+        已經會轉發 ``deleted_at``，改用它在**行為上是對的**。本支仍會紅，紅在最後
+        一格 ``tunnel_get_calls == []``。形狀仍然值得鎖，理由（``list_all_tunnels``
+        的 fail-closed 方向不同 ＋ 迴圈裡單筆查詢是 N+1）在
+        ``cloudflare.py::_assert_dns_repoint_allowed`` 的 docstring。
         """
         fake = _FakeCloudflare(
             records=[_rec("rec-orphan", "app", OTHER_SOFT)],

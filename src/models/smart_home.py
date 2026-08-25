@@ -339,6 +339,11 @@ class SmartHome(models.Model):
         selection=[
             ('connected', 'Connected'),
             ('disconnected', 'Disconnected'),
+            # #833：Cloudflare 上這條 tunnel 已被刪除（軟刪除）。
+            # ⚠ 與 'disconnected' 的差別是**要不要動手**：deleted 需要重建，
+            # disconnected 只要等連線恢復。少了這一格，兩者在 UI 與 DB 欄位上
+            # 是同一個值，沒有人會去查。
+            ('deleted', 'Deleted'),
             ('error', 'Error'),
         ],
         string='Tunnel Status',
@@ -788,8 +793,17 @@ class SmartHome(models.Model):
             # ⚠ 順序不變：**清空只在 `delete_tunnel` 成功之後**。失敗時三個都保留，
             # `unlink()` 的 fail-loud guard 與 `_do_cleanup` 的重試分支都判
             # `if self.tunnel_id:`，語意不受本次擴充影響。
-            _internal_identity(self).write({
-                field: False for field in _IDENTITY_ANCHOR_FIELDS})
+            # #833：tunnel_status 一起收掉。這是平台**唯一百分之百確定「這條
+            # tunnel 已經不存在」的時刻**（是我們自己刪的），而且是最後一個機會——
+            # `action_refresh_status()` 的第一行是 `if not self.tunnel_id: return`，
+            # 下一行清掉錨點之後，那個欄位就再也沒有任何路徑能更新它，會被凍結在
+            # 刪除前的最後一個值（通常是 connected 的綠燈）。
+            # ⚠ 只在 delete 成功之後寫：失敗時 tunnel 還活在 CF 上，標成 deleted
+            # 會把「待重試」謊報成「已刪除」，比原本的 bug 更糟。
+            _internal_identity(self).write(dict(
+                {field: False for field in _IDENTITY_ANCHOR_FIELDS},
+                tunnel_status='deleted',
+            ))
         except Exception as e:
             _logger.warning(
                 "[SH] tunnel cleanup failed sh=%s: %s — kept for retry",
@@ -890,7 +904,19 @@ class SmartHome(models.Model):
         return res
 
     def action_refresh_status(self):
-        """Refresh tunnel status from the PaaS Operator."""
+        """Refresh tunnel status from the PaaS Operator.
+
+        ⚠ **`deleted_at` falsy 一律落回既有判斷**（#833）。falsy 有兩種來源，
+        **兩種都不是訊號**：key 缺席 ＝ 舊版 operator 還沒有這個欄位；值為 `null`
+        ＝ Cloudflare 對**未刪除**的 tunnel 就是這樣回的。把缺席當成「不確定 ⇒
+        標成 deleted／error」會在 operator 升版當下讓每一列一起翻。通則見
+        `docs/tracking/pitfalls/operator-route-none-conflates-disabled-and-failed.md`。
+
+        ⛔ 這裡刻意**不**把「operator 回 404」也映射成 `deleted`：平台看得到的只有
+        「HTTP 失敗」，看不到那個失敗是誰發的（`operator_url` 設錯時 FastAPI 自己
+        會對未知路徑回 404）。那會讓設定錯誤從吵鬧且正確的 `error` 變成安靜且錯誤
+        的「已刪除」—— #833 的鏡像。404 維持走下面的 except。
+        """
         self.ensure_one()
         if not self.tunnel_id:
             return
@@ -902,6 +928,17 @@ class SmartHome(models.Model):
 
             # Parse connections
             connections = result.get('connections', [])
+            if result.get('deleted_at'):
+                # Cloudflare 上已經沒有這條 tunnel 了 ⇒ 「等連線恢復」不會有結果，
+                # 要重建。連 connector 記帳一起清掉：留著上一輪的數字會變成
+                # 「Deleted ＋ Edge Connections: 4」這種看起來很正常的混合世代。
+                self.write({
+                    'tunnel_status': 'deleted',
+                    'connector_id': '',
+                    'connector_type': '',
+                })
+                return
+
             update_vals = {
                 'tunnel_status': 'connected' if connections else 'disconnected',
             }

@@ -526,6 +526,18 @@ class TunnelStatusResponse(BaseModel):
     created_at: Optional[str] = Field(
         None, description="Tunnel creation timestamp"
     )
+    deleted_at: Optional[str] = Field(
+        None,
+        description=(
+            "Cloudflare soft-delete timestamp (#833). NOT None = the tunnel has "
+            "been deleted on Cloudflare; None = not deleted, OR this operator "
+            "version does not report it. Callers MUST treat a falsy value as "
+            "'not deleted' and fall back to their previous behaviour — an absent "
+            "field is a version signal, never a failure signal. Cloudflare soft "
+            "deletes tunnels: GET /cfd_tunnel/{id} still returns 200 after DELETE, "
+            "so 'the GET succeeded' is not proof the tunnel is alive."
+        ),
+    )
 
 
 class TunnelTokenResponse(BaseModel):

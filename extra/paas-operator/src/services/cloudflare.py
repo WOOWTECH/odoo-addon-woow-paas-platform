@@ -271,13 +271,23 @@ class CloudflareService:
         ``delete_tunnel`` 的 DNS 清理是把失敗吞成 warning 繼續走的，所以殘留是真的會
         發生的良性情境；沒有這條自癒，那個 hostname 會永遠卡住無法重建。
 
-        ⚠ **存活判定只能走 ``list_all_tunnels``，不可用 ``get_tunnel_status``**：
-        Cloudflare 刪 tunnel 是**軟刪除**，DELETE 之後 ``GET /cfd_tunnel/{id}`` 仍回
-        **200**、只是 payload 多一個 ``deleted_at``，而 ``get_tunnel_status`` 整支函式
-        內 ``deleted_at`` 出現 0 次（#833）⇒ 會把軟刪的 tunnel 判成活的，自癒分支永遠
-        走不到，而且輸出跟「真的還活著」一模一樣。``list_all_tunnels`` 有濾掉軟刪，
-        且本身 fail-closed（錯誤 raise、絕不回空清單 —— 回空清單會讓這裡把**每一筆**
-        都判成孤兒，等於把守衛整個關掉）。
+        ⚠ **存活判定只能走 ``list_all_tunnels``，不可用 ``get_tunnel_status``。**
+        理由在 #833 修完之後**變了，但結論沒變**，兩段都要讀：
+
+        * 修法前的理由（已失效）：``get_tunnel_status`` 整支函式內 ``deleted_at``
+          出現 0 次 ⇒ 會把軟刪的 tunnel 判成活的。**這一點 #833 已經修掉**，那支
+          現在會如實轉發 ``deleted_at``。
+        * 現在仍然成立的理由（這才是禁令的依據）：
+          1. **fail-closed 的方向不同。** ``list_all_tunnels`` 走 ``_get_paginated``，
+             錯誤一律 raise、**絕不回空清單**——回空清單會讓這裡把**每一筆**都判成
+             孤兒，等於把守衛整個關掉。單筆 GET 的失敗模式則是「404 ⇒ 不存在」，
+             而「查不到」與「不存在」在這個守衛裡不可以劃等號。
+          2. **這裡要的是集合成員判定，不是單筆查詢。** 迴圈裡逐筆打單筆 GET 是
+             N+1，且每一筆都各自帶上面那個失敗模式。
+
+        ⇒ 別因為「``get_tunnel_status`` 現在看得到軟刪了」就把這裡改掉。守線＝
+        ``tests/test_dns_record_ownership_824.py`` 的
+        ``test_soft_deleted_tunnel_counts_as_gone``（它鎖的是**呼叫形狀**）。
 
         ⚠ 涵蓋範圍的誠實邊界：``list_all_tunnels`` 只看得到**本 account** 的 tunnel，
         所以指向他人 account 的 ``*.cfargotunnel.com`` 會被判成孤兒。本平台的 zone 與
@@ -1284,10 +1294,23 @@ class CloudflareService:
             tunnel_id: The tunnel ID.
 
         Returns:
-            Dict with tunnel status, name, connections, and created_at.
+            Dict with tunnel status, name, connections, created_at and
+            ``deleted_at``.
+
+            ⚠ **``deleted_at`` 轉發的是 CF 的事實，不是我們算出來的判斷**（#833）：
+            非 None ＝ CF 上已**軟刪除**；None ＝ 未刪除。CF 對未刪除的 tunnel 回的
+            是 ``deleted_at: null``（欄位存在），但 openapi 的 ``tunnel_cfd_tunnel``
+            沒有 ``required`` 陣列 ⇒ 兩種形狀都可能出現，**判準一律是 truthy，不是
+            ``"deleted_at" in payload``**。
 
         Raises:
             CloudflareException: If status retrieval fails.
+
+        ⚠ **這支不是「這條 tunnel 還在不在」的權威來源**（#824／#833）：CF 刪
+        tunnel 是軟刪除，DELETE 之後這裡仍回 **200**。本 method 現在會**如實轉發**
+        ``deleted_at`` 讓呼叫端自己判，但它仍然只看得到**一條**指定的 tunnel；
+        需要「這條 tunnel 在不在帳號的存活集合裡」的判定請走 ``list_all_tunnels``
+        （有濾軟刪，且 fail-closed —— 錯誤 raise、絕不回空清單）。
         """
         url = self._tunnels_url(tunnel_id)
 
@@ -1341,6 +1364,10 @@ class CloudflareService:
                 "status": result.get("status", "unknown"),
                 "connections": connections,
                 "created_at": result.get("created_at"),
+                # #833：CF 的軟刪除訊號，原值轉發。⛔ 不要在這裡把它塌成布林或
+                # 併進 ``status``——CF 的 ``status`` 列舉只有 inactive / degraded /
+                # healthy / down，**沒有一個代表已刪除**，塞進去會毀掉既有語意。
+                "deleted_at": result.get("deleted_at"),
             }
 
     async def delete_tunnel(self, tunnel_id: str) -> None:
