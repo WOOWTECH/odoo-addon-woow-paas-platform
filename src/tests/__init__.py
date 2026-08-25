@@ -728,3 +728,8 @@ from . import test_change_plan_ends_trial_36
 # #833：軟刪除的 tunnel 必須與「還在、只是沒連上」可區分（判別式 ＋ 陽性對照 ＋
 # 舊 operator 缺鍵對照）。⚠ 少了這一行，整檔會**從未執行**而測試套件照樣全綠。
 from . import test_tunnel_soft_delete_833
+
+# #833 順帶：teardown 成功後 `tunnel_status` 被凍結在 connected（平台自己刪的
+# tunnel，畫面卻還是綠燈；`action_refresh_status` 開頭的 tunnel_id 早退讓它再也
+# 更新不到）。
+from . import test_tunnel_status_after_teardown_833

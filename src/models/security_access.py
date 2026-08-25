@@ -1528,7 +1528,17 @@ class SecurityAccess(models.Model):
             client.delete_tunnel(self.tunnel_id, tunnel_name=self.tunnel_name)
             _logger.info("[SA] tunnel deleted sa=%s tunnel=%s",
                          self.id, self.tunnel_id)
-            _internal_identity(self).write({'tunnel_id': False})
+            # #833：tunnel_status 一起收掉。這是平台**唯一百分之百確定「這條
+            # tunnel 已經不存在」的時刻**（是我們自己刪的），而且是最後一個機會——
+            # `action_refresh_status()` 的第一行是 `if not self.tunnel_id: return`，
+            # 下一行清掉錨點之後，那個欄位就再也沒有任何路徑能更新它，會被凍結在
+            # 刪除前的最後一個值（通常是 connected 的綠燈）。
+            # ⚠ 只在 delete 成功之後寫：失敗時 tunnel 還活在 CF 上，標成 deleted
+            # 會把「待重試」謊報成「已刪除」，比原本的 bug 更糟。
+            _internal_identity(self).write({
+                'tunnel_id': False,
+                'tunnel_status': 'deleted',
+            })
         except Exception as e:
             # cleanup is re-entrant: log and keep tunnel_id so a later
             # retry (cron or manual) can finish the job.
