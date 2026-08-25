@@ -247,8 +247,10 @@ class TestAcSeatQuotaModel(_SeatFixture, TransactionCase):
         Eugene 拍板範圍，本 PR **不自己加**，只把口徑斷言成可見的。
 
         鑑別力已用 mutation 驗過（不是宣稱）：把 ``_listed_seat_addresses``
-        改成只算 ``group == 'include'``，本測試兩段都轉紅、其餘 14 條全綠
-        ⇒ 它釘住的確實是「不分 group」這一格，而不是別的東西。
+        的 filter 改成多一個 ``and r.group == 'include'``（只動這一處，不碰
+        ``_check_emails_per_policy`` 同形狀的那一行），實測 **1 failed of 15，
+        紅的正是本條、其餘 14 條全綠** ⇒ 它釘住的確實是「不分 group」這一格，
+        而不是別的東西。
         """
         self._subscribe(seats=2)
         pol = self._policy(self.r1, 'p1', 'a@x.com, b@x.com')
