@@ -928,7 +928,7 @@ SELF_TEST_CLASS_FIXTURE_FAILURE_LINE_MUTANTS = {
         r"\d+\s+ERROR\s+\S+\s+unittest\.suite:\s+ERROR:\s+"
         r"(?P<fixture>setUpClass|tearDownClass)\s+"
         r"\(odoo\.addons\.[A-Za-z_]\w*\."
-        r"(?P<test>[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+)\)\s*$"
+        r"(?:tests\.)?(?P<test>[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+)\)\s*$"
     ),
     "太寬：未要求完整 log envelope，允許內嵌 suffix": (
         r"^.*unittest\.suite:\s+ERROR:\s+"
