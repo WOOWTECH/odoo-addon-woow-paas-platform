@@ -639,10 +639,10 @@ def print_wiki_links(wiki):
 
 
 def read_links(path):
-    """讀一個檔裡的 markdown `](x.md)` 連結。讀不到就當沒有連結（不是致命錯）。"""
+    """讀 markdown `](x.md)` 連結；程式碼內的示例不算連結。讀不到就回空清單。"""
     try:
         with open(path, encoding="utf-8", errors="replace") as fh:
-            return LINK.findall(fh.read())
+            return LINK.findall(code_stripped(fh.read()))
     except OSError:
         return []
 

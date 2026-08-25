@@ -326,6 +326,28 @@ class TestIndexReachesThroughTopicFiles(FixtureCase):
         visited = [name for name, _ in result.sources]
         self.assertEqual(visited.count("topic_a.md"), 1, "同一個索引檔只該走訪一次")
 
+    def test_markdown_links_inside_code_are_not_reported_as_dead(self):
+        """格式示例不是索引連結；inline 與 fenced code 都不得製造假斷鏈。"""
+        self.memory_file(
+            "topic_x.md",
+            "inline: `- [示例](inline_missing.md)`\n\n"
+            "```markdown\n- [示例](fenced_missing.md)\n```",
+        )
+        self.index("- [t](topic_x.md)")
+        self.assertEqual(self.audit().dead, [])
+
+    def test_dead_link_outside_code_is_still_reported(self):
+        """🔴 陽性對照：剝除 code 後，正文的真斷鏈仍必須被攔下。"""
+        self.memory_file(
+            "topic_x.md",
+            "`- [示例](inline_missing.md)`\n\n"
+            "- [真的斷了](reference_gone.md)",
+        )
+        self.index("- [t](topic_x.md)")
+        result = self.audit()
+        self.assertEqual(result.dead, ["reference_gone.md"])
+        self.assertEqual(result.dead_sources["reference_gone.md"], ["topic_x.md"])
+
     def test_dead_link_inside_a_topic_file_is_reported(self):
         """🔴 斷鏈判定必須跟著入口一起搬進 topic 檔，否則等於一起弄丟。"""
         self.memory_file("topic_x.md", "- [沒了](reference_gone.md)")
