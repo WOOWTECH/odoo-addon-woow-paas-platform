@@ -1,5 +1,6 @@
 /** @odoo-module **/
 import { Component, useState } from "@odoo/owl";
+import { _t } from "@web/core/l10n/translation";
 import { WoowButton } from "../button/WoowButton";
 import { WoowIcon } from "../icon/WoowIcon";
 import { workspaceService } from "../../services/workspace_service";
@@ -40,14 +41,14 @@ export class InviteMemberModal extends Component {
     async onSubmit() {
         const email = this.state.email.trim();
         if (!email) {
-            this.state.error = "Email is required";
+            this.state.error = _t("Email is required");
             return;
         }
 
         // Basic email validation
         const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
         if (!emailRegex.test(email)) {
-            this.state.error = "Please enter a valid email address";
+            this.state.error = _t("Please enter a valid email address");
             return;
         }
 
@@ -64,13 +65,17 @@ export class InviteMemberModal extends Component {
         if (result.success) {
             this.props.onInvited(result.data);
         } else {
-            this.state.error = result.error || "Failed to invite member";
+            this.state.error = result.error || _t("Failed to invite member");
         }
     }
 
     roles = [
-        { value: "admin", label: "Admin", description: "Can manage members and workspace settings" },
-        { value: "user", label: "User", description: "Can view and edit workspace content" },
-        { value: "guest", label: "Guest", description: "Can only view workspace content" },
+        {
+            value: "admin",
+            label: _t("Admin"),
+            description: _t("Can manage members and workspace settings"),
+        },
+        { value: "user", label: _t("User"), description: _t("Can view and edit workspace content") },
+        { value: "guest", label: _t("Guest"), description: _t("Can only view workspace content") },
     ];
 }

@@ -1,5 +1,6 @@
 /** @odoo-module **/
 import { Component, useState } from "@odoo/owl";
+import { _t } from "@web/core/l10n/translation";
 import { WoowButton } from "../button/WoowButton";
 import { WoowIcon } from "../icon/WoowIcon";
 import { workspaceService } from "../../services/workspace_service";
@@ -39,7 +40,7 @@ export class CreateWorkspaceModal extends Component {
     async onSubmit() {
         const name = this.state.name.trim();
         if (!name) {
-            this.state.error = "Workspace name is required";
+            this.state.error = _t("Workspace name is required");
             return;
         }
 
@@ -56,7 +57,7 @@ export class CreateWorkspaceModal extends Component {
         if (result.success) {
             this.props.onCreated(result.data);
         } else {
-            this.state.error = result.error || "Failed to create workspace";
+            this.state.error = result.error || _t("Failed to create workspace");
         }
     }
 }

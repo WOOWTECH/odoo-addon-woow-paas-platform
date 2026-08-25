@@ -34,7 +34,7 @@
                       t-on-click="() => this.setDecision('deny')">
                 <div class="o_woow_sa_action_card__title">
                   <WoowIcon name="'block'" size="18"/>
-                  <strong>Block</strong>
+                  <strong>Deny</strong>
                 </div>
                 <span class="o_woow_sa_action_card__sub">Deny access to matches</span>
               </button>

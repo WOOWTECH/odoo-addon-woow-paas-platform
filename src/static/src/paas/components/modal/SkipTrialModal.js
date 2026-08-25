@@ -1,5 +1,6 @@
 /** @odoo-module **/
 import { Component, onMounted, useState } from "@odoo/owl";
+import { _t } from "@web/core/l10n/translation";
 import { WoowButton } from "../button/WoowButton";
 import { WoowIcon } from "../icon/WoowIcon";
 import { formatPoints } from "../../utils/billing_helpers";
@@ -54,7 +55,7 @@ export class SkipTrialModal extends Component {
         if (result.success) {
             this.state.estimate = result.data;
         } else {
-            this.state.estimateError = result.error || "Failed to load invoice breakdown";
+            this.state.estimateError = result.error || _t("Failed to load invoice breakdown");
         }
         this.state.loadingEstimate = false;
     }
@@ -98,7 +99,7 @@ export class SkipTrialModal extends Component {
         if (result.success) {
             this.props.onSkipped();
         } else {
-            this.state.error = result.error || "Failed to skip trial";
+            this.state.error = result.error || _t("Failed to skip trial");
             this.state.skipping = false;
         }
     }

@@ -1,5 +1,6 @@
 /** @odoo-module **/
 import { Component, useState, onMounted } from "@odoo/owl";
+import { _t } from "@web/core/l10n/translation";
 import { WoowCard } from "../../components/card/WoowCard";
 import { WoowIcon } from "../../components/icon/WoowIcon";
 import { WoowButton } from "../../components/button/WoowButton";
@@ -42,7 +43,7 @@ export class ProjectDetailPage extends Component {
             this.state.project = result.data;
             this._publishBreadcrumb();
         } else {
-            this.state.error = result.error || "Failed to load project";
+            this.state.error = result.error || _t("Failed to load project");
         }
         this.state.loading = false;
     }
@@ -56,9 +57,9 @@ export class ProjectDetailPage extends Component {
         const project = this.state.project;
         if (!project) return;
         breadcrumbService.set("project-detail", [
-            { label: "Projects", path: "projects" },
+            { label: _t("Projects"), path: "projects" },
             { label: project.name, path: `ai-assistant/projects/${this.props.projectId}` },
-            { label: "Settings", path: null },
+            { label: _t("Settings"), path: null },
         ]);
     }
 

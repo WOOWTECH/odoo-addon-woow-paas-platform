@@ -6,10 +6,10 @@
       <div t-if="showCycleToggle" class="o_woow_plan_cycle_toggle">
         <button type="button"
                 t-attf-class="o_woow_plan_cycle_toggle__opt {{ state.cycle === 'month' ? 'o_woow_plan_cycle_toggle__opt--active' : '' }}"
-                t-on-click="() => this.onCycleToggle('month')">月繳</button>
+                t-on-click="() => this.onCycleToggle('month')">Monthly</button>
         <button type="button"
                 t-attf-class="o_woow_plan_cycle_toggle__opt {{ state.cycle === 'year' ? 'o_woow_plan_cycle_toggle__opt--active' : '' }}"
-                t-on-click="() => this.onCycleToggle('year')">年繳 · 省 33%</button>
+                t-on-click="() => this.onCycleToggle('year')">Yearly · Save 33%</button>
       </div>
 
       <!-- 方案卡片：當前 cycle 每 tier 一張（R2：單 tier 自然一張，無需特判） -->
@@ -39,21 +39,21 @@
             <input type="checkbox"
                    t-att-checked="isSeatSelected(seatBase, seatBase.variants[0])"
                    t-on-change="() => this.onSeatCheckbox(seatBase)"/>
-            <span>+1 access seat（<t t-esc="formatSeatDelta(seatBase, seatBase.variants[0])"/>）</span>
+            <span>+1 access seat (<t t-esc="formatSeatDelta(seatBase, seatBase.variants[0])"/>)</span>
           </label>
         </t>
         <t t-else="">
-          <div class="o_woow_plan_selector__label">AC 席數：</div>
+          <div class="o_woow_plan_selector__label">AC Seats:</div>
           <div class="o_woow_plan_selector__seat_options">
             <div t-attf-class="o_woow_plan_seat {{ isSeatSelected(seatBase, null) ? 'o_woow_plan_seat--selected' : '' }}"
                  t-on-click="() => this.onSeatSelect(seatBase, null)">
-              <div class="o_woow_plan_seat__label">不加購</div>
-              <div class="o_woow_plan_seat__delta">已含</div>
+              <div class="o_woow_plan_seat__label">No extra seats</div>
+              <div class="o_woow_plan_seat__delta">Included</div>
             </div>
             <t t-foreach="seatBase.variants" t-as="variant" t-key="variant.plan_id">
               <div t-attf-class="o_woow_plan_seat {{ isSeatSelected(seatBase, variant) ? 'o_woow_plan_seat--selected' : '' }}"
                    t-on-click="() => this.onSeatSelect(seatBase, variant)">
-                <div class="o_woow_plan_seat__label"><t t-esc="variant.seats"/> 席</div>
+                <div class="o_woow_plan_seat__label"><t t-esc="variant.seats"/> seat(s)</div>
                 <div class="o_woow_plan_seat__delta" t-esc="formatSeatDelta(seatBase, variant)"/>
               </div>
             </t>

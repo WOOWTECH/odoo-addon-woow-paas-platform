@@ -1,5 +1,6 @@
 /** @odoo-module **/
 import { Component, useState, onMounted } from "@odoo/owl";
+import { _t } from "@web/core/l10n/translation";
 import { WoowCard } from "../../../components/card/WoowCard";
 import { WoowIcon } from "../../../components/icon/WoowIcon";
 import { WoowButton } from "../../../components/button/WoowButton";
@@ -73,16 +74,19 @@ export class CloudServiceBindingSection extends Component {
         }
 
         const targetService = this.state.availableServices.find((s) => s.id === selectedId);
+        const targetName = targetService?.name || _t("the selected service");
         let message;
         if (!selectedId) {
             // Unbind
-            message = `Unbind this project from ${this.currentServiceName}? This will block if user-scope MCP servers exist.`;
+            message = _t(
+                "Unbind this project from %s? This will block if user-scope MCP servers exist.",
+                this.currentServiceName);
         } else if (this.isBound) {
             // Rebind
-            message = `Rebind this project from ${this.currentServiceName} to ${targetService?.name || "the selected service"}?`;
+            message = _t("Rebind this project from %s to %s?", this.currentServiceName, targetName);
         } else {
             // Bind from unbound
-            message = `Bind this project to ${targetService?.name || "the selected service"}?`;
+            message = _t("Bind this project to %s?", targetName);
         }
 
         this.state.pendingSelection = selectedId;
@@ -106,9 +110,10 @@ export class CloudServiceBindingSection extends Component {
             this.props.onUpdated(result.data);
             await this.loadAvailableServices();
         } else {
-            const msg = result.error || "Failed to update";
+            const msg = result.error || _t("Failed to update");
             if (/cloud service/i.test(msg)) {
-                this.state.toast = "This project has user-scope MCP servers. Remove them first.";
+                this.state.toast = _t(
+                    "This project has user-scope MCP servers. Remove them first.");
             } else {
                 this.state.error = msg;
             }

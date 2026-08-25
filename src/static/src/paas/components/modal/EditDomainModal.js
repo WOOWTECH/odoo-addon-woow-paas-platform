@@ -1,5 +1,6 @@
 /** @odoo-module **/
 import { Component, useState } from "@odoo/owl";
+import { _t } from "@web/core/l10n/translation";
 import { WoowButton } from "../button/WoowButton";
 import { WoowIcon } from "../icon/WoowIcon";
 import { cloudService } from "../../services/cloud_service";
@@ -59,16 +60,16 @@ export class EditDomainModal extends Component {
         // Domain validation pattern
         const pattern = /^([a-z0-9]+(-[a-z0-9]+)*\.)+[a-z]{2,}$/i;
         if (!pattern.test(domain)) {
-            return "Invalid domain format. Example: app.yourdomain.com";
+            return _t("Invalid domain format. Example: app.yourdomain.com");
         }
 
         // Check for common mistakes
         if (domain.startsWith("http://") || domain.startsWith("https://")) {
-            return "Enter domain without http:// or https://";
+            return _t("Enter domain without http:// or https://");
         }
 
         if (domain.includes(" ")) {
-            return "Domain cannot contain spaces";
+            return _t("Domain cannot contain spaces");
         }
 
         return null;
@@ -114,7 +115,7 @@ export class EditDomainModal extends Component {
             if (result.success) {
                 this.props.onSaved();
             } else {
-                this.state.error = result.error || "Failed to update domain";
+                this.state.error = result.error || _t("Failed to update domain");
             }
         } finally {
             this.state.saving = false;

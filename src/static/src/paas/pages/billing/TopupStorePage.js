@@ -1,5 +1,6 @@
 /** @odoo-module **/
 import { Component, useState, onMounted } from "@odoo/owl";
+import { _t } from "@web/core/l10n/translation";
 import { WoowCard } from "../../components/card/WoowCard";
 import { WoowIcon } from "../../components/icon/WoowIcon";
 import { WoowButton } from "../../components/button/WoowButton";
@@ -11,9 +12,9 @@ import { router } from "../../core/router";
 import { formatAmount, formatPoints } from "../../utils/billing_helpers";
 
 const CATEGORY_TABS = [
-  { key: null, label: "All Packs" },
-  { key: "recommended", label: "Recommended" },
-  { key: "large_volume", label: "Large Volume" },
+  { key: null, label: _t("All Packs") },
+  { key: "recommended", label: _t("Recommended") },
+  { key: "large_volume", label: _t("Large Volume") },
 ];
 
 export class TopupStorePage extends Component {
@@ -58,10 +59,10 @@ export class TopupStorePage extends Component {
           );
         } else if (data.state === 'pending') {
           this.state.globalError =
-            'Still confirming payment — please refresh in a moment.';
+            _t('Still confirming payment — please refresh in a moment.');
         } else if (data.state === 'cancelled') {
           this.state.globalError =
-            'Previous top-up was cancelled. You can start a new one.';
+            _t('Previous top-up was cancelled. You can start a new one.');
         }
       }
       const cleanHash = window.location.hash.split('?')[0];

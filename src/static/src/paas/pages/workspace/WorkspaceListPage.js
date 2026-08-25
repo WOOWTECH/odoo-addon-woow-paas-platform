@@ -1,5 +1,6 @@
 /** @odoo-module **/
 import { Component, useState, onMounted } from "@odoo/owl";
+import { _t } from "@web/core/l10n/translation";
 import { WoowCard } from "../../components/card/WoowCard";
 import { WoowIcon } from "../../components/icon/WoowIcon";
 import { WoowButton } from "../../components/button/WoowButton";
@@ -68,20 +69,20 @@ export class WorkspaceListPage extends Component {
 
     serviceTypes = [
         {
-            name: "Cloud Services",
-            description: "Deploy Docker apps like AnythingLLM, n8n, and more with one click.",
+            name: _t("Cloud Services"),
+            description: _t("Deploy Docker apps like AnythingLLM, n8n, and more with one click."),
             icon: "cloud",
             color: "blue",
         },
         {
-            name: "Security Access",
-            description: "Setup Zero Trust Tunnels via Podman or HAOS for secure remote connections.",
+            name: _t("Security Access"),
+            description: _t("Setup Zero Trust Tunnels via Podman or HAOS for secure remote connections."),
             icon: "security",
             color: "emerald",
         },
         {
-            name: "Smart Home Connect",
-            description: "Remote access configuration for Home Assistant & Woow App ecosystem.",
+            name: _t("Smart Home Connect"),
+            description: _t("Remote access configuration for Home Assistant & Woow App ecosystem."),
             icon: "home_iot_device",
             color: "orange",
         },

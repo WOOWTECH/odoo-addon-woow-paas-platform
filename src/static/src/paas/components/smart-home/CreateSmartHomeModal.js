@@ -1,5 +1,6 @@
 /** @odoo-module **/
 import { Component, useState } from "@odoo/owl";
+import { _t } from "@web/core/l10n/translation";
 import { WoowButton } from "../button/WoowButton";
 import { WoowIcon } from "../icon/WoowIcon";
 import { PlanSelector } from "../subscription/PlanSelector";
@@ -111,17 +112,17 @@ export class CreateSmartHomeModal extends Component {
     async onSubmit() {
         const name = this.state.name.trim();
         if (!name) {
-            this.state.error = "Smart home name is required";
+            this.state.error = _t("Smart home name is required");
             return;
         }
 
         if (!this.state.selectedTemplateId) {
-            this.state.error = "Please select a Smart Home template";
+            this.state.error = _t("Please select a Smart Home template");
             return;
         }
 
         if (!this.state.selectedPlanId) {
-            this.state.error = "Please select a subscription plan";
+            this.state.error = _t("Please select a subscription plan");
             return;
         }
 
@@ -137,7 +138,7 @@ export class CreateSmartHomeModal extends Component {
         });
 
         if (!createResult.success) {
-            this.state.error = createResult.error || "Failed to create smart home";
+            this.state.error = createResult.error || _t("Failed to create smart home");
             this.state.loading = false;
             return;
         }
@@ -164,7 +165,7 @@ export class CreateSmartHomeModal extends Component {
                 this.props.onCreated(provisionResult.data || createResult.data);
             }, 800);
         } else {
-            this.state.error = provisionResult.error || "Provisioning failed";
+            this.state.error = provisionResult.error || _t("Provisioning failed");
             this.state.provisioning = false;
             // Still notify parent with the created data, even though provisioning failed
             this.props.onCreated(createResult.data);

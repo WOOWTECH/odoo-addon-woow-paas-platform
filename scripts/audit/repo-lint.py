@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """repo-lint：把「假綠家族」pitfall 轉成機械 gate 的靜態檢查工具。
 
-三十七個 check 函式，歸為下列三十二條規則（其中三條各由多個函式實作：第 7 條
+三十八個 check 函式，歸為下列三十二條規則（其中四條各由多個函式實作：第 2 條
+owl-template 由兩個函式——語法陷阱／i18n 屬性；第 7 條
 capability-gate 由四個函式——slug 集合成員／admin-gui 錨點／gateway 文案錨點／
 Access 頁籤錨點；第 22 條
 security-rule-lifecycle 由兩個函式——ir.rule 的出生地／退役名字；第 31 條
@@ -12,10 +13,18 @@ test-collectability 由兩個函式——收集面／執行面。這個一對多
 1. controller-sudo   src/controllers/*.py 的 .sudo( 呼叫點數量對 baseline 白名單；
                      新增 sudo() 必須有意識地更新 baseline（附 justification）。
                      依據 docs/decisions/patterns/orm-vs-endpoint-acl-test-coverage.md
-2. owl-template      src/static/src/**/*.xml 的 OWL template 語法陷阱：
-                     component（大寫開頭 tag）上用 t-att / t-att-* / t-attf-*、
-                     t-on-* 帶不存在的按鍵 modifier（只支援 .stop/.prevent/.self/.capture）。
-                     依據 docs/tracking/pitfalls/owl-template-crash-class-syntax.md
+2. owl-template      src/static/src/**/*.xml 的 OWL template 兩類陷阱：
+                     (a) 語法：component（大寫開頭 tag）上用 t-att / t-att-* / t-attf-*、
+                         t-on-* 帶不存在的按鍵 modifier（只支援 .stop/.prevent/.self/.capture）。
+                         依據 docs/tracking/pitfalls/owl-template-crash-class-syntax.md
+                     (b) i18n：component tag（大寫開頭 **或** 帶 t-component / t-set-slot）
+                         上把那 9 個可翻譯屬性寫成字面字串（alt / aria-label /
+                         aria-placeholder / aria-roledescription / aria-valuetext /
+                         data-tooltip / label / placeholder / title）——Odoo 抽取器對
+                         component 只認 `.translate` 後綴，9/9 全部抽不到；畫面照常顯示、
+                         `.pot` 裡沒有那句話 ⇒ 永遠不會被翻譯，而成功與失敗在 diff 上
+                         長得一模一樣（#107 W2 沙盒探針實測，含陽性對照）。
+                         依據 docs/tracking/pitfalls/owl-component-tag-translatable-attrs-dropped.md
 3. data-noupdate     src/data/*.xml 新增 noupdate="1" 的檔案要對 baseline；
                      noupdate 是 sticky 的，fresh install 綠 ≠ 升級路徑綠。
                      依據 docs/tracking/pitfalls/seed-noupdate-sticky-template-links.md
@@ -521,6 +530,8 @@ SEED_TOPOLOGY_BASELINE = os.path.join(BASELINE_DIR, "seed-topology.txt")
 
 SUDO_DOC = "docs/decisions/patterns/orm-vs-endpoint-acl-test-coverage.md"
 OWL_DOC = "docs/tracking/pitfalls/owl-template-crash-class-syntax.md"
+OWL_I18N_ATTR_DOC = (
+    "docs/tracking/pitfalls/owl-component-tag-translatable-attrs-dropped.md")
 NOUPDATE_DOC = "docs/tracking/pitfalls/seed-noupdate-sticky-template-links.md"
 REUSE_VALUES_DOC = "docs/decisions/patterns/helm-reset-values-unified-pipeline.md"
 SEED_TOPOLOGY_DOC = "docs/decisions/patterns/seed-topology-invariants.md"
@@ -548,6 +559,20 @@ CONCEAL_WRONG_FIELD = "is_hidden"
 MIXIN_SUDO_FILE = "src/models/subscription_lifecycle_mixin.py"
 
 OWL_ALLOWED_MODIFIERS = {"stop", "prevent", "self", "capture", "synthetic"}
+
+# Odoo 抽取器認得的可翻譯屬性（`odoo/tools/translate.py :: OWL_TRANSLATED_ATTRS`，
+# 逐字對照 18.0）。這份副本存在的理由與 kubectl-ns 白名單同型：判準必須寫在 gate 裡，
+# 不能在執行期去讀 Odoo 原始碼（repo-lint 跑在沒有 Odoo 的環境）。上游改了這個集合
+# 本 gate 不會知道——那是留給人的邊界，寫在 OWL_I18N_ATTR_DOC。
+OWL_TRANSLATED_ATTRS = {
+    "alt", "aria-label", "aria-placeholder", "aria-roledescription",
+    "aria-valuetext", "data-tooltip", "label", "placeholder", "title",
+}
+
+# OWL component 的 prop 值是 expression；「字面字串」＝值本身被一對引號完整包住。
+# 只有這種形態是**靜默**失敗（runtime 正常顯示、抽取器抽不到）。無引號的
+# `label="Confirm change"` 會在 runtime 拋 SyntaxError ⇒ 當場看得到，不是本 gate 的對象。
+_OWL_LITERAL_STR_RE = re.compile(r"""\A\s*(['"])(.*)\1\s*\Z""", re.S)
 
 # 前端能力 gate 的唯一判準欄位（後端 payload 直接鏡射 template 欄位，#460 S1）。
 ADMIN_GUI_FIELD = "has_admin_gui"
@@ -762,6 +787,76 @@ def check_owl_template(root, only_file=None):
                             "%s：<%s> 的 %s 用了 OWL 不支援的 modifier %s（OWL≠Vue，只支援 "
                             ".stop/.prevent/.self/.capture；按鍵判斷一律在 handler 內讀 ev.key，見 %s）。"
                             % (rel, tag, attr, "/".join(bad), OWL_DOC))
+    return violations
+
+
+def check_owl_component_translatable_attr(root, only_file=None):
+    """component tag 上的可翻譯屬性寫成字面字串 ⇒ Odoo 抽取器 9 個全部抽不到（#107）。
+
+    `odoo/tools/translate.py :: _extract_translatable_qweb_terms` 的兩條分支互斥::
+
+        is_component = el.tag[0].isupper() or "t-component" in el.attrib or "t-set-slot" in el.attrib
+        if (not is_component and attr in OWL_TRANSLATED_ATTRS) or (is_component and attr.endswith(".translate")):
+
+    普通小寫 tag 走前半（那 9 個屬性抽得到），component 走後半（**只認 `.translate`
+    後綴**）。所以 `<WoowButton label="'Confirm change'"/>` 顯示完全正常、`.pot` 裡卻
+    沒有那句話——翻譯者看不到它，租戶畫面上它永遠是原文。W2 在沙盒 node 放探針檔實測
+    9/9 皆抽不到，並有同檔純文字節點當陽性對照（排除「這個檔沒被掃到」）。
+
+    🔴 為什麼這條非機械化不可：**成功與失敗在 diff 上長得一模一樣**。加對了什麼都不會
+    發生，加錯了也什麼都不會發生。走 #107 Q2＝(a) 路線（寫死中文改英文 source ＋ 中文
+    搬進 .po）時更糟——這一句會從中文倒退成英文，而 `.pot` 的中文 msgid 照樣歸零
+    （它從頭到尾就沒進去過）、對帳全綠、UI 不報錯。
+
+    判準刻意只鎖**字面字串**（值被一對引號完整包住），不是「所有值」：
+    `title="record.name"` 這種真 expression 是正常用法，抓它會製造大量假陽性，
+    人就會學會忽略這條 gate。無引號的 `label="Confirm change"` 也不在範圍內——那會在
+    runtime 拋 SyntaxError，當場看得到，不是靜默失敗。
+
+    ⚠ 覆蓋邊界（寫明，避免把這條綠讀成「文案屬性都抽得到」）：
+
+    - 只認那 9 個屬性名。有人在 component 上用別的屬性名傳文案（`text="'Confirm'"`），
+      本 gate 一條都抓不到——那類在 OWL 裡本來就不在可翻譯白名單內，正解是改用 slot
+      或改屬性名，不是加 `.translate`。
+    - 只認字面字串。文案由 expression 拼出來（`label="prefix + '中'"`）一樣抽不到，
+      gate 看不見。
+    - 不驗證 `.translate` 那一側寫對沒有（值誤加內層引號會讓引號進 msgid）。
+    - `OWL_TRANSLATED_ATTRS` 是 Odoo 18 的副本；上游改了集合本 gate 不會知道。
+    """
+    violations = []
+    files = [only_file] if only_file else sorted(
+        glob.glob(os.path.join(root, "src/static/src/**/*.xml"), recursive=True))
+    for fp in files:
+        if not os.path.exists(fp):
+            continue
+        rel = os.path.relpath(fp, root).replace(os.sep, "/")
+        try:
+            tree = ET.parse(fp)
+        except ET.ParseError:
+            continue  # XML 壞掉由 check_owl_template 報，這裡不重複
+        for elem in tree.iter():
+            tag = elem.tag
+            if not isinstance(tag, str) or "}" in tag:
+                continue
+            # 判準逐字對齊 Odoo 的 is_component——只用「首字大寫」會漏掉 t-component
+            # 與 t-set-slot 這兩種小寫 tag 卻算 component 的形態。
+            if not (tag[:1].isupper()
+                    or "t-component" in elem.attrib
+                    or "t-set-slot" in elem.attrib):
+                continue
+            for attr in sorted(elem.attrib):
+                if attr not in OWL_TRANSLATED_ATTRS:
+                    continue  # `label.translate` 不在集合裡 ⇒ 正解寫法自動放行
+                m = _OWL_LITERAL_STR_RE.match(elem.attrib[attr])
+                if not m or not m.group(2).strip():
+                    continue  # expression 或空字串：不是文案
+                violations.append(
+                    "%s：component <%s> 上的 %s=%r 是字面文案，Odoo 抽取器**抽不到**"
+                    "（component 只認 `.translate` 後綴，那 9 個屬性 9/9 全部落空）。"
+                    "畫面照常顯示、`.pot` 裡沒有這句話 ⇒ 永遠不會被翻譯。"
+                    "正解：`%s.translate=\"%s\"`（裸文案，不要內層引號）（見 %s）"
+                    % (rel, tag, attr, elem.attrib[attr], attr, m.group(2),
+                       OWL_I18N_ATTR_DOC))
     return violations
 
 
@@ -4923,7 +5018,8 @@ def check_sh_subscription_group_isolation(root, only_file=None):
 
 REPO_LINT_RULES = {
     "controller-sudo": ("check_controller_sudo",),
-    "owl-template": ("check_owl_template",),
+    "owl-template": ("check_owl_template",
+                     "check_owl_component_translatable_attr"),
     "data-noupdate": ("check_data_noupdate",),
     "reuse-values": ("check_reuse_values",),
     "seed-topology": ("check_seed_topology",),
@@ -5517,6 +5613,7 @@ def run_all(root):
     violations = (repo_lint_registry_floor(root)
                   + check_controller_sudo(root)
                   + check_owl_template(root)
+                  + check_owl_component_translatable_attr(root)
                   + check_data_noupdate(root)
                   + check_reuse_values(root)
                   + check_seed_topology(root)
@@ -5738,6 +5835,8 @@ def run_hook():
                 violations += check_test_class_execution(root)
         elif re.match(r"^src/static/src/.*\.xml$", rel):
             violations = check_owl_template(root, only_file=abs_path)
+            violations += check_owl_component_translatable_attr(
+                root, only_file=abs_path)
             violations += check_slug_capability_gate(root, only_file=abs_path)
             violations += check_admin_gui_gate_anchor(root)
             violations += check_gateway_copy_gate_anchor(root)

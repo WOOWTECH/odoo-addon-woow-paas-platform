@@ -1,5 +1,6 @@
 /** @odoo-module **/
 import { Component, useState } from "@odoo/owl";
+import { _t } from "@web/core/l10n/translation";
 import { WoowCard } from "../../../components/card/WoowCard";
 import { WoowIcon } from "../../../components/icon/WoowIcon";
 import { WoowButton } from "../../../components/button/WoowButton";
@@ -96,7 +97,10 @@ export class AddonsTab extends Component {
     // round-trip to a guaranteed rejection. `canEdit` stays permissive on
     // purpose: adding addons in a non-running state is still allowed.
     if (!serviceAllowsRemoval(this.props.service.state)) {
-      this.state.error = `Cannot remove addons while the service is ${this.props.service.state}. Start the service and try again.`;
+      this.state.error = _t(
+        "Cannot remove addons while the service is %s. Start the service and try again.",
+        this.props.service.state,
+      );
       return;
     }
 
@@ -110,7 +114,7 @@ export class AddonsTab extends Component {
       );
 
       if (!result.success) {
-        this.state.error = result.error || "Failed to check addon states";
+        this.state.error = result.error || _t("Failed to check addon states");
         return;
       }
 
@@ -126,7 +130,7 @@ export class AddonsTab extends Component {
       this.state.dialogModules = modules;
       this.state.showDialog = true;
     } catch (err) {
-      this.state.error = err.message || "Failed to check addon states";
+      this.state.error = err.message || _t("Failed to check addon states");
     } finally {
       this.state.checking = false;
     }
@@ -155,10 +159,10 @@ export class AddonsTab extends Component {
           this.props.onSave(result.data);
         }
       } else {
-        this.state.error = result.error || "Failed to update addons";
+        this.state.error = result.error || _t("Failed to update addons");
       }
     } catch (err) {
-      this.state.error = err.message || "Failed to update addons";
+      this.state.error = err.message || _t("Failed to update addons");
     } finally {
       this.state.saving = false;
     }

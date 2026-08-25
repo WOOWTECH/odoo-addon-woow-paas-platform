@@ -1,6 +1,7 @@
 /** @odoo-module **/
 
 import { Component, useState } from "@odoo/owl";
+import { _t } from "@web/core/l10n/translation";
 import { WoowCard } from "../../../components/card/WoowCard";
 import { WoowIcon } from "../../../components/icon/WoowIcon";
 import { AccessAppCard } from "../../../components/access/AccessAppCard";
@@ -10,11 +11,9 @@ import { cloudServiceAccessService } from "../../../services/cloud_service_acces
 // 拍板 5 的「明示後果」。開整站保護會把**所有**訪客（含對外站的匿名流量）擋在
 // Cloudflare Access 登入頁外面——這句必須在按下去之前出現，不是事後才發現。
 const PROTECT_CONFIRM = {
-  title: "開啟 Access 保護？",
-  message:
-    "開啟後所有訪客都需通過 Access 驗證才能開啟這個服務的網址，" +
-    "包含目前可以匿名瀏覽的人。只有符合下方 Access policy 的身分才進得來。",
-  confirmLabel: "開啟保護",
+  title: _t("Turn on Access protection?"),
+  message: _t("Once protection is on, every visitor must pass Access authentication before this service's URL will open, including the people who can browse it anonymously today. Only identities matching an Access policy below can get in."),
+  confirmLabel: _t("Turn on Access protection"),
 };
 
 // props.service.access 缺席時的安全預設（舊快取／list payload 沒有 access 區塊）

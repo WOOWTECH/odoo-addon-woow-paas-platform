@@ -1,5 +1,6 @@
 /** @odoo-module **/
 import { Component, useState, onMounted } from "@odoo/owl";
+import { _t } from "@web/core/l10n/translation";
 import { WoowCard } from "../../components/card/WoowCard";
 import { WoowIcon } from "../../components/icon/WoowIcon";
 import { WoowButton } from "../../components/button/WoowButton";
@@ -50,9 +51,9 @@ export class AppMarketplacePage extends Component {
     _publishBreadcrumb() {
         const ws = workspaceService.workspaces.find(w => w.id === this.props.workspaceId);
         breadcrumbService.set("marketplace", [
-            { label: "Workspaces", path: "workspaces" },
-            { label: ws?.name || "Workspace", path: `workspace/${this.props.workspaceId}` },
-            { label: "App Marketplace", path: null },
+            { label: _t("Workspaces"), path: "workspaces" },
+            { label: ws?.name || _t("Workspace"), path: `workspace/${this.props.workspaceId}` },
+            { label: _t("App Marketplace"), path: null },
         ]);
     }
 

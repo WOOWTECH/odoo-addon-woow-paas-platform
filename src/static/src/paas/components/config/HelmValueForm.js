@@ -1,5 +1,6 @@
 /** @odoo-module **/
 import { Component, useState } from "@odoo/owl";
+import { _t } from "@web/core/l10n/translation";
 import { WoowIcon } from "../icon/WoowIcon";
 
 /**
@@ -102,7 +103,7 @@ export class HelmValueForm extends Component {
      */
     getPlaceholder(spec) {
         if (this.props.passwordBlankMeansUnchanged && this.isPasswordField(spec)) {
-            return "留空表示不變更";
+            return _t("Leave blank to keep the current password");
         }
         return spec.placeholder || '';
     }
