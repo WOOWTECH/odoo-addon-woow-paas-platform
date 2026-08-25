@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- #107：啟用 zh_TW 的**唯一**「新安裝也會跑」路徑。
+
+         🔴 這個 <function> 絕不可以包進 <data noupdate="1">。
+         `odoo/tools/convert.py :: xml_import._tag_function` 的第一行是
+             if self.noupdate and self.mode != 'init': return
+         ⇒ 包進 noupdate=1 之後，`-u` 路徑會**靜默不跑**（沒有 log、沒有錯誤，
+         語系就是不會被啟用）。本檔刻意不寫 <data> 包裝層，effective noupdate=0，
+         install（mode='init'）與每次 `-u` 兩條路徑都執行。
+
+         為什麼不能只靠 migration：`odoo/modules/migration.py ::
+         Migration.migrate_module` 對 `state == 'to install'` 直接 return，
+         **新裝的 DB 永遠不會跑 migration** ⇒ 只寫 migration 的話，新租戶叢集
+         裝起來的 Odoo 會停在英文，而且與「功能還沒做」在畫面上不可區分。
+         `src/migrations/18.0.1.0.176/post-migrate.py` 只是給「這次升級」一個
+         可驗錨點，不是保證執行的那一格。
+
+         啟用前的 `.po` 自檢在 `models/res_lang.py`（fail-safe 方向是不啟用）。 -->
+    <function
+        model="res.lang"
+        name="_ensure_zh_tw_lang_active"/>
+</odoo>

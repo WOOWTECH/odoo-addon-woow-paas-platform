@@ -1,6 +1,6 @@
 {
     "name": "Woow PaaS Platform",
-    "version": "18.0.1.0.175",
+    "version": "18.0.1.0.176",
     "category": "WOOW",
     "summary": "Woow PaaS Platform - Base Module",
     "description": """
@@ -81,6 +81,9 @@
         "data/oauth_redirect_mode_update.xml",
         "data/oauth_device_code_cron.xml",
         "data/oauth_device_grant_update.xml",
+        # #107：啟用 zh_TW 的 install / -u 雙路徑（⛔ 該檔不可包 noupdate=1，
+        # 否則 -u 路徑靜默不跑；啟用前的 .po 自檢在 models/res_lang.py）
+        "data/lang_zh_tw_activation.xml",
     ],
     "assets": {
         "web.assets_backend": [
