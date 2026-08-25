@@ -1,0 +1,418 @@
+# Translation of Odoo Server.
+# This file contains the translation of the following modules:
+# 	* woow_paas_platform
+#
+# #107：/woow 前端 XML 層的正體中文翻譯。
+# msgid 是英文 source（`src/static/src/paas/**/*.xml`），msgstr 是這批改動**之前**
+# 畫面上原本就顯示的中文，逐字保留（多行文字節點接成單行：中英交界補一個空格、
+# 中文之間不補——原本那個空格是 XML 排版換行的副產物，不是設計）。
+#
+# ⚠ 這 54 條裡有 10 條的 msgid 與本 app 其它檔的既有英文共用（Cancel / Back / Total /
+#   Retry / Refresh / Loading... / Loading plans... / Processing... / Last synced: /
+#   Protection covers the）——翻譯它們會同時作用在那些檔上，那是預期的。
+#
+# 🔴 跨模組覆蓋不可靠：Odoo 前端的 translatedTerms 是跨 module 攤平的 flat map，
+#   合併順序來自 `list(Registry._init_modules)`（那是 **set**，hash 順序、每個進程不同），
+#   所以「我們的翻譯會不會蓋掉其它模組對同一字面值的翻譯」是隨機的。
+#   實測見 #107 W3 報告。撞字面值時唯一可靠的解是改字面值，不是在這裡覆蓋。
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: Odoo Server 18.0\n"
+"Report-Msgid-Bugs-To: \n"
+"Last-Translator: \n"
+"Language-Team: \n"
+"Language: zh_TW\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: \n"
+"Plural-Forms: nplurals=1; plural=0;\n"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/access/AccessAppCard.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/AddFundsModal.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/AddPolicyModal.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/ChangePlanModal.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/CreateProjectModal.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/CreateSecurityAccessModal.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/CreateTaskModal.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/CreateWorkspaceModal.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/DeleteServiceModal.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/EditDomainModal.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/InviteMemberModal.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/PayInvoiceModal.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/RollbackModal.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/SkipTrialModal.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/components/smart-home/CreateSmartHomeModal.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/configure/AppConfigurationPage.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/project-detail/sections/BasicInfoSection.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/project-detail/sections/CloudServiceBindingSection.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/project-detail/sections/McpServersSection.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/AddonsTab.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/ConfigurationTab.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/settings/AddPaymentMethodPage.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/settings/ProfilePage.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/smart-home/SmartHomeDetailPage.xml:0
+msgid "Cancel"
+msgstr "取消"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/ai-chat/AiChat.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/RollbackModal.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/project-kanban/ProjectKanbanPage.xml:0
+msgid "Retry"
+msgstr "重試"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/AddFundsModal.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/ChangePlanModal.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/PayInvoiceModal.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/SkipTrialModal.xml:0
+msgid "Processing..."
+msgstr "處理中…"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/ChangePlanModal.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/settings/AddPaymentMethodPage.xml:0
+msgid "Back"
+msgstr "返回"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/ChangePlanModal.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/ServiceDetailPage.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/smart-home/SmartHomeDetailPage.xml:0
+msgid "Change Plan"
+msgstr "變更方案"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/ChangePlanModal.xml:0
+msgid ""
+"Changing your plan closes the current subscription and re-bills under the\n"
+"                  new plan; the unused portion of the current cycle is refunded to your\n"
+"                  wallet as credit points on a pro-rata basis (if this cycle has not been\n"
+"                  successfully charged, there are no points to refund)."
+msgstr "變更方案會關閉目前訂閱並依新方案重新計費；目前週期未使用的部分將按比例退點至錢包（本期尚未成功扣款則無可退的點數）。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/ChangePlanModal.xml:0
+msgid "Confirm Change"
+msgstr "確認變更"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/ChangePlanModal.xml:0
+msgid "Current Plan"
+msgstr "目前方案"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/ChangePlanModal.xml:0
+msgid "End Trial & Start Billing"
+msgstr "結束試用並開始計費"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/ChangePlanModal.xml:0
+msgid "End your current trial immediately"
+msgstr "立刻結束目前的試用"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/ChangePlanModal.xml:0
+msgid "Generate your first invoice"
+msgstr "產生首期帳單"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/ChangePlanModal.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/components/smart-home/CreateSmartHomeModal.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/billing/TopupStorePage.xml:0
+msgid "Loading plans..."
+msgstr "載入方案中…"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/ChangePlanModal.xml:0
+msgid "Resource changes take effect in the next billing cycle."
+msgstr "資源將於下個計費週期生效。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/ChangePlanModal.xml:0
+msgid "Select New Plan"
+msgstr "選擇新方案"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/ChangePlanModal.xml:0
+msgid "Start your first billing cycle now"
+msgstr "現在開始第一個計費週期"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/ChangePlanModal.xml:0
+msgid "This will end your trial immediately"
+msgstr "這會立刻結束你的試用"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/ChangePlanModal.xml:0
+msgid ""
+"You are currently on a trial: changing your plan ends the trial\n"
+"                  immediately, starts billing and generates your first invoice. No payment\n"
+"                  was taken during the trial, so there are no points to refund."
+msgstr "你目前在試用中：變更方案會當場結束試用並開始計費、產生首期帳單，且試用期間未曾扣款，沒有可退的點數。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/ChangePlanModal.xml:0
+msgid "Your current trial has not ended yet. Confirming the plan change will:"
+msgstr "目前的試用尚未結束。確認變更方案後，系統會："
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/DeleteServiceModal.xml:0
+msgid "Re-creating the service after deletion starts a fresh release on a fresh disk and does not carry over any data from the original service. The original data disk is kept for 7 days under the platform retention policy and is then reclaimed; after that it cannot be recovered."
+msgstr "刪除後若重新建立，將是全新的 release 與全新磁碟，不會沿用原服務資料；原服務的資料磁碟依平台保留政策保留 7 天後回收，逾期無法復原。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/DeleteServiceModal.xml:0
+msgid "This action cannot be undone. The service and its deployment configuration will be removed."
+msgstr "此動作無法復原，服務與其部署設定將被移除。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/SkipTrialModal.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/components/subscription/PlanTotalBar.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/billing/InvoiceDetailPage.xml:0
+msgid "Total"
+msgstr "總計"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/service-card/ServiceCard.xml:0
+msgid "Public URL is not yet verified as resolvable — it may still be propagating"
+msgstr "公開網址尚未驗證可解析，可能仍在生效中"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/subscription/PlanSelector.xml:0
+msgid "+1 access seat ("
+msgstr "+1 access seat（"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/subscription/PlanSelector.xml:0
+msgid "AC Seats:"
+msgstr "AC 席數："
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/subscription/PlanSelector.xml:0
+msgid "Included"
+msgstr "已含"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/subscription/PlanSelector.xml:0
+msgid "Monthly"
+msgstr "月繳"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/subscription/PlanSelector.xml:0
+msgid "No extra seats"
+msgstr "不加購"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/subscription/PlanSelector.xml:0
+msgid "Yearly · Save 33%"
+msgstr "年繳 · 省 33%"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/subscription/PlanSelector.xml:0
+msgid "seat(s)"
+msgstr "席"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/subscription/PlanTotalBar.xml:0
+msgid "New Plan Total"
+msgstr "新方案總計"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/project-detail/sections/McpServersSection.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/OverviewTab.xml:0
+msgid "Last synced:"
+msgstr "最後同步於"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/reconcile-report/ReconcileReportPage.xml:0
+msgid "(unnamed)"
+msgstr "(無名稱)"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/reconcile-report/ReconcileReportPage.xml:0
+msgid "Dry-run read-only list · deletion stays in human hands"
+msgstr "dry-run 唯讀清單 · 刪除權留人手"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/reconcile-report/ReconcileReportPage.xml:0
+msgid "L4 Reverse Orphan Reconciliation Report"
+msgstr "L4 反向孤兒對帳報表"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/reconcile-report/ReconcileReportPage.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.xml:0
+msgid "Loading..."
+msgstr "載入中…"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/reconcile-report/ReconcileReportPage.xml:0
+msgid "No longer in the orphan list (it may have been reused by a new provision — do not delete)"
+msgstr "已不在孤兒清單（可能已被新 provision 重用，請勿刪）"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/reconcile-report/ReconcileReportPage.xml:0
+msgid "No orphan candidates yet (or the cron has not run its first reconciliation)."
+msgstr "目前無孤兒候選（或 cron 尚未跑過第一次對帳）。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/reconcile-report/ReconcileReportPage.xml:0
+msgid "Re-verify Orphan Status"
+msgstr "重新驗證是否仍為孤兒"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/reconcile-report/ReconcileReportPage.xml:0
+msgid "Re-verifying..."
+msgstr "重查中…"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/reconcile-report/ReconcileReportPage.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/smart-home/SmartHomeDetailPage.xml:0
+msgid "Refresh"
+msgstr "重新整理"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/reconcile-report/ReconcileReportPage.xml:0
+msgid "Still an orphan (confirm again before deleting)"
+msgstr "仍為孤兒（刪除前請再確認）"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/reconcile-report/ReconcileReportPage.xml:0
+msgid "This scan is incomplete (list-all failed for one of the right-hand sets), so orphans may be under-reported — do not delete anything based on this list."
+msgstr "本次掃描不完整（某類右集 list-all 失敗）→ 孤兒可能少報，請勿據此清單刪除。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/reconcile-report/ReconcileReportPage.xml:0
+msgid "Unable to load report"
+msgstr "無法載入報表"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/reconcile-report/ReconcileReportPage.xml:0
+msgid "· Scanned at"
+msgstr "· 掃描時間"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/AccessTab.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/smart-home/tabs/SmartHomeAccessTab.xml:0
+msgid "Protection covers the"
+msgstr "保護的粒度是"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/OverviewTab.xml:0
+msgid ""
+"The public URL is not yet verified as resolvable. DNS records usually\n"
+"                                    take effect within tens of seconds; if the address still does not load\n"
+"                                    after that, clear your local DNS cache or reconnect your network (for\n"
+"                                    example, turn your VPN off and on again) — a cached \"not found\" answer\n"
+"                                    will not expire on its own just because the record has since been\n"
+"                                    created."
+msgstr "公開網址尚未驗證可解析。DNS 記錄通常在數十秒內生效；若稍後仍打不開，請清除本機 DNS 快取或重新連線網路（例如關閉再開啟 VPN）——「查不到」的快取不會因為記錄後來建好而自動失效。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/settings/ProfilePage.xml:0
+msgid "Invoice title"
+msgstr "Invoice title (抬頭)"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/settings/ProfilePage.xml:0
+msgid "Love code"
+msgstr "Love code (愛心碼)"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/settings/ProfilePage.xml:0
+msgid "Tax ID"
+msgstr "Tax ID (統編)"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/smart-home/tabs/SmartHomeAccessTab.xml:0
+msgid ""
+"This Smart Home has no public address yet, so there is nothing to anchor\n"
+"                an Access application to. Complete provisioning first (Overview tab), then\n"
+"                come back here to turn protection on."
+msgstr "這台 Smart Home 還沒有對外網址，因此沒有可以掛 Access 的錨點。請先完成 provision（Overview 分頁），再回來這裡開啟保護。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/smart-home/tabs/SmartHomeAccessTab.xml:0
+msgid ""
+"This Smart Home's public address is its own Cloudflare Access application.\n"
+"              Turn protection on to require every visitor to authenticate before reaching\n"
+"              Home Assistant."
+msgstr "這台 Smart Home 的對外網址就是一個 Cloudflare Access application。開啟保護後，每一位訪客都必須先通過驗證才能連進 Home Assistant。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/smart-home/tabs/SmartHomeAccessTab.xml:0
+msgid "routes protected · each route carries its own policies and login methods"
+msgstr "網址已保護 · 每一條網址各自帶自己的 policy 與登入方式"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/smart-home/tabs/SmartHomeAccessTab.xml:0
+msgid "whole route"
+msgstr "整條網址"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/smart-home/tabs/SmartHomeAccessTab.xml:0
+msgid ""
+"— every path under this\n"
+"             route, for every visitor. Without any Allow policy no one gets in, so add the\n"
+"             policies that describe who should. Access runs at Cloudflare's edge, in front\n"
+"             of the tunnel, so nothing inside the cluster or Home Assistant itself\n"
+"             changes."
+msgstr "——這條網址底下的每一個路徑、對每一位訪客都一樣。沒有任何 Allow policy 就等於誰都進不來，所以請把「誰該進得來」寫成 policy。Access 跑在 Cloudflare 邊緣、在 tunnel 前面，叢集內與 Home Assistant 本身都不會被改到。"

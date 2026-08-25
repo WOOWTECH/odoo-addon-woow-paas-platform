@@ -83,7 +83,7 @@
                             size="'md'"
                             onClick.bind="showChangePlan">
                             <WoowIcon name="'swap_horiz'" size="18"/>
-                            變更方案
+                            Change Plan
                         </WoowButton>
                         <WoowButton
                             variant="'danger'"

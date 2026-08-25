@@ -4,7 +4,7 @@
         <aside class="o_woow_sidebar">
             <div class="o_woow_sidebar_header">
                 <div class="o_woow_logo">
-                    <span class="material-symbols-outlined">deployed_code</span>
+                    <span class="material-symbols-outlined" t-translation="off">deployed_code</span>
                     <span class="o_woow_logo_text">WoowTech</span>
                 </div>
             </div>
@@ -26,11 +26,11 @@
             </nav>
             <div class="o_woow_sidebar_footer">
                 <a class="o_woow_nav_item" t-on-click="openHelp">
-                    <span class="material-symbols-outlined">help</span>
+                    <span class="material-symbols-outlined" t-translation="off">help</span>
                     <span>Help &amp; Support</span>
                 </a>
                 <a class="o_woow_nav_item o_woow_logout" t-on-click="logout">
-                    <span class="material-symbols-outlined">logout</span>
+                    <span class="material-symbols-outlined" t-translation="off">logout</span>
                     <span>Log Out</span>
                 </a>
             </div>

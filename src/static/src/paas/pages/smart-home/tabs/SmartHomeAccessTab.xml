@@ -23,11 +23,12 @@
             <h3>Protected Applications</h3>
             <p t-if="routes.length">
               <t t-esc="protectedRouteCount"/> of <t t-esc="routes.length"/>
-              網址已保護 · 每一條網址各自帶自己的 policy 與登入方式
+              routes protected · each route carries its own policies and login methods
             </p>
             <p t-else="">
-              這台 Smart Home 的對外網址就是一個 Cloudflare Access application。
-              開啟保護後，每一位訪客都必須先通過驗證才能連進 Home Assistant。
+              This Smart Home's public address is its own Cloudflare Access application.
+              Turn protection on to require every visitor to authenticate before reaching
+              Home Assistant.
             </p>
           </div>
         </div>
@@ -36,8 +37,9 @@
              「還沒有」而不是「壞了」——兩者的畫面本來長得一樣。 -->
         <div t-if="!routes.length" class="o_woow_error_message">
           <WoowIcon name="'info'" size="16"/>
-          <span>這台 Smart Home 還沒有對外網址，因此沒有可以掛 Access
-                的錨點。請先完成 provision（Overview 分頁），再回來這裡開啟保護。</span>
+          <span>This Smart Home has no public address yet, so there is nothing to anchor
+                an Access application to. Complete provisioning first (Overview tab), then
+                come back here to turn protection on.</span>
         </div>
         <!-- 卡片本體＝共用元件（#746 從 SA 抽出，CS 的 Access 頁籤也用同一張）。
              這裡只餵它「這條 route 的設定現值」與 callback，SH 自己持有展開／
@@ -67,10 +69,11 @@
           <div class="o_woow_sa_info_note__icon">
             <WoowIcon name="'info'" size="18"/>
           </div>
-          <p>保護的粒度是<strong>整條網址</strong>——這條網址底下的每一個路徑、
-             對每一位訪客都一樣。沒有任何 Allow policy 就等於誰都進不來，所以請
-             把「誰該進得來」寫成 policy。Access 跑在 Cloudflare 邊緣、在 tunnel
-             前面，叢集內與 Home Assistant 本身都不會被改到。</p>
+          <p>Protection covers the <strong>whole route</strong> — every path under this
+             route, for every visitor. Without any Allow policy no one gets in, so add the
+             policies that describe who should. Access runs at Cloudflare's edge, in front
+             of the tunnel, so nothing inside the cluster or Home Assistant itself
+             changes.</p>
         </div>
       </WoowCard>
 

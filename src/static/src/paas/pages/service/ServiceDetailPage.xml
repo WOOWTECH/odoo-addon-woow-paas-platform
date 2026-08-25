@@ -103,7 +103,7 @@
                             onClick.bind="showChangePlan"
                             disabled="!canPerformActions">
                             <WoowIcon name="'swap_horiz'" size="18"/>
-                            變更方案
+                            Change Plan
                         </WoowButton>
                         <WoowButton
                             variant="'secondary'"

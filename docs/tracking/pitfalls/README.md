@@ -8,7 +8,7 @@
 2. **評估機械化**（`/retro` skill 的分流，按強度優先）：可 grep/parse 判定 → `scripts/audit/repo-lint.py` 加 check；綁特定路徑 → `.claude/hooks/pattern-guard-map.json` append；皆不可 → 狀態欄留 `—`。
 3. 教訓已被 code guard / gate 取代時，更新狀態欄並讓 doc 記錄 guard 位置（file:line）。
 
-## 索引（42 條）
+## 索引（43 條）
 
 | pitfall | 一行症狀 | 機械化狀態 |
 | --- | --- | --- |
@@ -41,6 +41,7 @@
 | [operator-cf-access-delete-202-mock-contract](operator-cf-access-delete-202-mock-contract.md) | operator 包 CF Access 的 DELETE 白名單寫死 200，真 CF 回 202 → teardown 中斷孤兒 policy；mock 狀態碼要對齊真實 API | pattern-guard（paas-operator class） |
 | [operator-route-none-conflates-disabled-and-failed](operator-route-none-conflates-disabled-and-failed.md) | 呼叫端把「沒拿到 route」當成失敗 ⇒ 在沒開 Cloudflare 的環境（`cloudflare_enabled` 預設 false）把**每一次部署**翻成 error；缺席同時代表「功能沒開」與「舊 operator 沒這個欄位」，兩者都不是故障 | pattern-guard（paas-operator ＋ model-write-guard class）＋ repo-lint `route-contract-golden`（守**另一個性質**：wire 形狀改了 golden 沒重產）。⚠「呼叫端把缺席當失敗」那一半的 gate 已評估**否決**（等價寫法太多必然漏抓）；指紋 gate 也**不涵蓋** `_create_cloudflare_route` 的行為漂移。兩條都擋不住 merge（repo-lint 非 required）。逐項見 doc 內「守線」段 |
 | [orm-test-green-endpoint-leak-blindness](orm-test-green-endpoint-leak-blindness.md) | backend ORM test 全綠遮蔽 controller layer sudo bypass；ORM 綠 ≠ endpoint secure | repo-lint gate（controller-sudo）+ pattern-guard |
+| [owl-component-tag-translatable-attrs-dropped](owl-component-tag-translatable-attrs-dropped.md) | component tag（大寫開頭／`t-component`／`t-set-slot`）上把那 9 個可翻譯屬性寫成**字面字串** ⇒ Odoo 抽取器 9/9 全部抽不到；`label="'Confirm'"` 畫面照常顯示、`.pot` 裡沒有這句話 ⇒ 永遠不被翻譯，而成功與失敗在 diff 上長得一模一樣（無引號那版是 runtime SyntaxError，反而看得到）；正解 `label.translate="Confirm"`（裸文案） | repo-lint gate（owl-template 第 (b) 半）＋ pattern-guard |
 | [owl-template-crash-class-syntax](owl-template-crash-class-syntax.md) | OWL template 語法錯誤（component `t-att-`、`.enter` modifier）過三層測試、runtime 全站白屏 | repo-lint gate（owl-template） |
 | [plan-vs-odoo-schema-mismatch](plan-vs-odoo-schema-mismatch.md) | plan 引用不存在的 Odoo 欄位——impl 前對 schema | — |
 | [provision-e2e-green-on-chart-defaults](provision-e2e-green-on-chart-defaults.md) | provision e2e 綠但 release user-supplied values 空——驗證跑在 chart 預設上、平台 pin 傳導鏈從未被驗（07-13 假 PASS；0.2.x fail-loud 佔位 tag 逼現形） | 回歸測試（`test_provision_writes_template_helm_values`）；class 級驗法＝e2e 斷言 helm get values 非空且含平台獨有值 |

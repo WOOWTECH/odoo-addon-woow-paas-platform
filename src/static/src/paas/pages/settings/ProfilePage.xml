@@ -133,13 +133,13 @@
 
                         <t t-if="showBusinessFields">
                             <div class="o_woow_field">
-                                <label for="invoice_tax_id">Tax ID (統編)</label>
+                                <label for="invoice_tax_id">Tax ID</label>
                                 <input id="invoice_tax_id" type="text"
                                        t-model="state.invoiceForm.invoice_tax_id"
                                        placeholder="8-digit business tax ID"/>
                             </div>
                             <div class="o_woow_field">
-                                <label for="invoice_title">Invoice title (抬頭)</label>
+                                <label for="invoice_title">Invoice title</label>
                                 <input id="invoice_title" type="text"
                                        t-model="state.invoiceForm.invoice_title"
                                        placeholder="Defaults to your name if left blank"/>
@@ -148,7 +148,7 @@
 
                         <t t-if="showLovecode">
                             <div class="o_woow_field">
-                                <label for="invoice_lovecode">Love code (愛心碼)</label>
+                                <label for="invoice_lovecode">Love code</label>
                                 <input id="invoice_lovecode" type="text"
                                        t-model="state.invoiceForm.invoice_lovecode"
                                        placeholder="3-7 digit organisation code"/>
