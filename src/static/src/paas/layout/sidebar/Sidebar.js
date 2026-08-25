@@ -1,5 +1,6 @@
 /** @odoo-module **/
 import { Component, useState, onMounted } from "@odoo/owl";
+import { _t } from "@web/core/l10n/translation";
 import { profileService } from "../../services/profile_service";
 import { showProjects } from "../../core/platform_config";
 
@@ -17,16 +18,16 @@ export class Sidebar extends Component {
     }
 
     navItems = [
-        { path: "dashboard", name: "Dashboard", icon: "dashboard" },
-        { path: "workspaces", name: "Workspaces", icon: "workspaces" },
-        { path: "projects", name: "Projects", icon: "folder", requiresProjects: true },
-        { section: "Finance" },
-        { path: "billing", name: "Billing", icon: "payments" },
-        { path: "billing/invoices", name: "Invoices", icon: "receipt_long" },
-        { path: "billing/topup", name: "Top-up Store", icon: "storefront" },
-        { section: "System" },
-        { path: "settings", name: "Settings", icon: "settings" },
-        { path: "settings/reconcile-report", name: "孤兒對帳", icon: "cleaning_services", adminOnly: true },
+        { path: "dashboard", name: _t("Dashboard"), icon: "dashboard" },
+        { path: "workspaces", name: _t("Workspaces"), icon: "workspaces" },
+        { path: "projects", name: _t("Projects"), icon: "folder", requiresProjects: true },
+        { section: _t("Finance") },
+        { path: "billing", name: _t("Billing"), icon: "payments" },
+        { path: "billing/invoices", name: _t("Invoices"), icon: "receipt_long" },
+        { path: "billing/topup", name: _t("Top-up Store"), icon: "storefront" },
+        { section: _t("System") },
+        { path: "settings", name: _t("Settings"), icon: "settings" },
+        { path: "settings/reconcile-report", name: _t("Orphan Reconciliation"), icon: "cleaning_services", adminOnly: true },
     ];
 
     get isAdmin() {

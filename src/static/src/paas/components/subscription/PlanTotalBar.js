@@ -1,5 +1,6 @@
 /** @odoo-module **/
 import { Component } from "@odoo/owl";
+import { _t } from "@web/core/l10n/translation";
 import { resolveSelected } from "./plan_selector_utils";
 
 /**
@@ -21,7 +22,7 @@ export class PlanTotalBar extends Component {
   };
 
   _unitLabel(unit) {
-    return unit === "month" ? "mo" : unit === "year" ? "yr" : unit;
+    return unit === "month" ? _t("mo") : unit === "year" ? _t("yr") : unit;
   }
 
   get selected() {

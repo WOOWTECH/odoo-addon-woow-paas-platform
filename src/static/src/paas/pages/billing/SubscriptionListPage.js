@@ -1,5 +1,6 @@
 /** @odoo-module **/
 import { Component, useState, onMounted } from "@odoo/owl";
+import { _t } from "@web/core/l10n/translation";
 import { WoowCard } from "../../components/card/WoowCard";
 import { WoowIcon } from "../../components/icon/WoowIcon";
 import { WoowButton } from "../../components/button/WoowButton";
@@ -12,17 +13,17 @@ import { formatDate, formatPoints, computePageNumbers } from "../../utils/billin
 const ITEMS_PER_PAGE = 10;
 
 const STATE_MAP = {
-  in_progress: { label: "In Progress", color: "green" },
-  draft: { label: "Draft", color: "gray" },
-  expire: { label: "Expired", color: "gray" },
-  close: { label: "Cancelled", color: "gray" },
-  cancel: { label: "Cancelled", color: "gray" },
+  in_progress: { label: _t("In Progress"), color: "green" },
+  draft: { label: _t("Draft"), color: "gray" },
+  expire: { label: _t("Expired"), color: "gray" },
+  close: { label: _t("Cancelled"), color: "gray" },
+  cancel: { label: _t("Cancelled"), color: "gray" },
 };
 
 const FILTER_TABS = [
-  { key: "active", label: "Active" },
-  { key: "past", label: "Past" },
-  { key: "all", label: "All" },
+  { key: "active", label: _t("Active") },
+  { key: "past", label: _t("Past") },
+  { key: "all", label: _t("All") },
 ];
 
 export class SubscriptionListPage extends Component {
@@ -101,7 +102,7 @@ export class SubscriptionListPage extends Component {
   }
 
   getStateLabel(sub) {
-    if (sub.is_trial) return "Trial";
+    if (sub.is_trial) return _t("Trial");
     return this.getStateInfo(sub).label;
   }
 

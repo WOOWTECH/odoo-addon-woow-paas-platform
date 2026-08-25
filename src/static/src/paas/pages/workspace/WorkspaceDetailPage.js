@@ -1,5 +1,6 @@
 /** @odoo-module **/
 import { Component, useState, onMounted, onWillUnmount, onWillStart } from "@odoo/owl";
+import { _t } from "@web/core/l10n/translation";
 import { WoowCard } from "../../components/card/WoowCard";
 import { WoowIcon } from "../../components/icon/WoowIcon";
 import { WoowButton } from "../../components/button/WoowButton";
@@ -81,11 +82,11 @@ export class WorkspaceDetailPage extends Component {
         if (workspaceResult.success) {
             this.state.workspace = workspaceResult.data;
             breadcrumbService.set("workspace-detail", [
-                { label: "Workspaces", path: "workspaces" },
+                { label: _t("Workspaces"), path: "workspaces" },
                 { label: this.state.workspace.name, path: null },
             ]);
         } else {
-            this.state.error = workspaceResult.error || "Failed to load workspace";
+            this.state.error = workspaceResult.error || _t("Failed to load workspace");
         }
 
         this.state.loading = false;
@@ -290,10 +291,10 @@ export class WorkspaceDetailPage extends Component {
         const errorCount = services.filter(s => s.state === "error").length;
 
         return [
-            { label: "Estimated Cost", value: "$0/month", icon: "payments", color: "purple" },
-            { label: "Total Apps", value: String(services.length), icon: "apps", color: "blue" },
-            { label: "Healthy", value: String(runningCount), icon: "check_circle", color: "green" },
-            { label: "Alerts", value: String(errorCount), icon: "warning", color: "orange" },
+            { label: _t("Estimated Cost"), value: _t("$0/month"), icon: "payments", color: "purple" },
+            { label: _t("Total Apps"), value: String(services.length), icon: "apps", color: "blue" },
+            { label: _t("Healthy"), value: String(runningCount), icon: "check_circle", color: "green" },
+            { label: _t("Alerts"), value: String(errorCount), icon: "warning", color: "orange" },
         ];
     }
 
@@ -335,15 +336,15 @@ export class WorkspaceDetailPage extends Component {
 
     serviceTypes = [
         {
-            name: "Cloud Services",
-            description: "Deploy Docker apps with one click.",
+            name: _t("Cloud Services"),
+            description: _t("Deploy Docker apps with one click."),
             icon: "cloud",
             color: "blue",
             action: "marketplace",
         },
         {
-            name: "Security Access",
-            description: "Setup Zero Trust Tunnels.",
+            name: _t("Security Access"),
+            description: _t("Setup Zero Trust Tunnels."),
             icon: "shield",
             // 'emerald' is the existing green-toned card style
             // (o_woow_service_card_emerald); there is no 'green' variant.
@@ -351,8 +352,8 @@ export class WorkspaceDetailPage extends Component {
             action: "security-access",
         },
         {
-            name: "Smart Home",
-            description: "Connect Home Assistant.",
+            name: _t("Smart Home"),
+            description: _t("Connect Home Assistant."),
             icon: "home_iot_device",
             color: "orange",
             action: "smarthome",

@@ -1,4 +1,5 @@
 /** @odoo-module **/
+import { _t } from "@web/core/l10n/translation";
 
 /**
  * 共用的 agent pod state → zh-tw 短標籤映射。
@@ -14,11 +15,11 @@
  * 此模組合併兩者並補齊，避免重複維護。
  */
 export const POD_STATE_LABEL = {
-  absent: "未啟動",
-  spawning: "啟動中",
-  active: "運行中",
-  reaped: "閒置",
-  unknown: "未知",
+  absent: _t("Agent not started"),
+  spawning: _t("Agent starting"),
+  active: _t("Agent running"),
+  reaped: _t("Agent idle"),
+  unknown: _t("Agent state unknown"),
 };
 
 /**

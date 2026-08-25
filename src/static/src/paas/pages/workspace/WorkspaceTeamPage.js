@@ -1,5 +1,6 @@
 /** @odoo-module **/
 import { Component, useState, onMounted } from "@odoo/owl";
+import { _t } from "@web/core/l10n/translation";
 import { WoowCard } from "../../components/card/WoowCard";
 import { WoowIcon } from "../../components/icon/WoowIcon";
 import { WoowButton } from "../../components/button/WoowButton";
@@ -45,9 +46,9 @@ export class WorkspaceTeamPage extends Component {
             this.state.workspace = workspaceResult.data;
             // 麵包屑軌跡：Workspaces → {工作區名}(連回工作區) → Team
             breadcrumbService.set("workspace-team", [
-                { label: "Workspaces", path: "workspaces" },
+                { label: _t("Workspaces"), path: "workspaces" },
                 { label: this.state.workspace.name, path: `workspace/${this.props.workspaceId}` },
-                { label: "Team", path: null },
+                { label: _t("Team"), path: null },
             ]);
         } else {
             this.state.error = workspaceResult.error;
@@ -107,7 +108,9 @@ export class WorkspaceTeamPage extends Component {
     }
 
     async removeMember(member) {
-        if (!confirm(`Are you sure you want to remove ${member.name} from this workspace?`)) {
+        const question = _t(
+            "Are you sure you want to remove %s from this workspace?", member.name);
+        if (!confirm(question)) {
             return;
         }
 

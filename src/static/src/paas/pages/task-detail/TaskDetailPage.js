@@ -1,5 +1,6 @@
 /** @odoo-module **/
 import { Component, useState, onMounted } from "@odoo/owl";
+import { _t } from "@web/core/l10n/translation";
 import { WoowCard } from "../../components/card/WoowCard";
 import { WoowIcon } from "../../components/icon/WoowIcon";
 import { WoowButton } from "../../components/button/WoowButton";
@@ -44,10 +45,10 @@ export class TaskDetailPage extends Component {
                 this.state.task = data;
                 this._publishBreadcrumb(data);
             } else {
-                this.state.error = result.error || "Failed to load task";
+                this.state.error = result.error || _t("Failed to load task");
             }
         } catch (err) {
-            this.state.error = err.message || "Failed to load task";
+            this.state.error = err.message || _t("Failed to load task");
         } finally {
             this.state.loading = false;
         }
@@ -63,10 +64,10 @@ export class TaskDetailPage extends Component {
      * 導去全域任務清單、丟失專案脈絡的行為。任務未綁定專案時略過專案段。
      */
     _publishBreadcrumb(task) {
-        const trail = [{ label: "Projects", path: "projects" }];
+        const trail = [{ label: _t("Projects"), path: "projects" }];
         if (task.project_id) {
             trail.push({
-                label: task.project_name || "Project",
+                label: task.project_name || _t("Project"),
                 path: `ai-assistant/projects/${task.project_id}`,
             });
         }
@@ -86,10 +87,10 @@ export class TaskDetailPage extends Component {
             if (result.success) {
                 await this.loadTask();
             } else {
-                this.state.error = result.error || "Failed to enable chat";
+                this.state.error = result.error || _t("Failed to enable chat");
             }
         } catch (err) {
-            this.state.error = err.message || "Failed to enable chat";
+            this.state.error = err.message || _t("Failed to enable chat");
         }
     }
 
@@ -103,10 +104,10 @@ export class TaskDetailPage extends Component {
             if (result.success) {
                 await this.loadTask();
             } else {
-                this.state.error = result.error || "Failed to toggle auto-reply";
+                this.state.error = result.error || _t("Failed to toggle auto-reply");
             }
         } catch (err) {
-            this.state.error = err.message || "Failed to toggle auto-reply";
+            this.state.error = err.message || _t("Failed to toggle auto-reply");
         }
     }
 

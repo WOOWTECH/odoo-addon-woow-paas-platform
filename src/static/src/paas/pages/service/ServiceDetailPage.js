@@ -1,5 +1,6 @@
 /** @odoo-module **/
 import { Component, useState, onMounted, onWillUnmount } from "@odoo/owl";
+import { _t } from "@web/core/l10n/translation";
 import { WoowCard } from "../../components/card/WoowCard";
 import { WoowIcon } from "../../components/icon/WoowIcon";
 import { WoowButton } from "../../components/button/WoowButton";
@@ -109,7 +110,7 @@ export class ServiceDetailPage extends Component {
             this._publishBreadcrumb();
             this.startPollingIfNeeded();
         } else {
-            this.state.error = result.error || "Failed to load service";
+            this.state.error = result.error || _t("Failed to load service");
         }
 
         this.state.loading = false;
@@ -125,8 +126,8 @@ export class ServiceDetailPage extends Component {
         const service = this.state.service;
         if (!service) return;
         breadcrumbService.set("service-detail", [
-            { label: "Workspaces", path: "workspaces" },
-            { label: service.workspace_name || "Workspace", path: `workspace/${this.props.workspaceId}` },
+            { label: _t("Workspaces"), path: "workspaces" },
+            { label: service.workspace_name || _t("Workspace"), path: `workspace/${this.props.workspaceId}` },
             { label: service.name, path: null },
         ]);
     }
@@ -388,7 +389,7 @@ export class ServiceDetailPage extends Component {
             this.state.oneTimeCredentials = buildOneTimeCredentials(result.data);
             await this.loadService();
         } else {
-            this.state.resetPasswordError = result.error || "Failed to reset admin password";
+            this.state.resetPasswordError = result.error || _t("Failed to reset admin password");
         }
     }
 

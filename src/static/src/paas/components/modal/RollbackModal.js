@@ -1,5 +1,6 @@
 /** @odoo-module **/
 import { Component, useState, onMounted } from "@odoo/owl";
+import { _t } from "@web/core/l10n/translation";
 import { WoowButton } from "../button/WoowButton";
 import { WoowIcon } from "../icon/WoowIcon";
 import { cloudService } from "../../services/cloud_service";
@@ -61,7 +62,7 @@ export class RollbackModal extends Component {
         if (result.success) {
             this.state.revisions = result.data || [];
         } else {
-            this.state.error = result.error || "Failed to load revision history";
+            this.state.error = result.error || _t("Failed to load revision history");
         }
 
         this.state.loading = false;
@@ -126,7 +127,7 @@ export class RollbackModal extends Component {
         if (result.success) {
             this.props.onRollback();
         } else {
-            this.state.error = result.error || "Failed to rollback service";
+            this.state.error = result.error || _t("Failed to rollback service");
             this.state.rolling = false;
         }
     }

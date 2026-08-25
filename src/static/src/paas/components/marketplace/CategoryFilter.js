@@ -1,5 +1,6 @@
 /** @odoo-module **/
 import { Component } from "@odoo/owl";
+import { _t } from "@web/core/l10n/translation";
 
 /**
  * CategoryFilter Component
@@ -16,15 +17,15 @@ export class CategoryFilter extends Component {
      * Category definitions matching CloudAppTemplate model
      */
     categories = [
-        { key: "all", label: "All" },
-        { key: "ai_llm", label: "AI & LLM" },
-        { key: "automation", label: "Automation" },
-        { key: "database", label: "Database" },
-        { key: "analytics", label: "Analytics" },
-        { key: "devops", label: "DevOps" },
-        { key: "web", label: "Web" },
-        { key: "container", label: "Container" },
-        { key: "mcp", label: "MCP Server" },
+        { key: "all", label: _t("All") },
+        { key: "ai_llm", label: _t("AI & LLM") },
+        { key: "automation", label: _t("Automation") },
+        { key: "database", label: _t("Database") },
+        { key: "analytics", label: _t("Analytics") },
+        { key: "devops", label: _t("DevOps") },
+        { key: "web", label: _t("Web") },
+        { key: "container", label: _t("Container") },
+        { key: "mcp", label: _t("MCP Server") },
     ];
 
     /**

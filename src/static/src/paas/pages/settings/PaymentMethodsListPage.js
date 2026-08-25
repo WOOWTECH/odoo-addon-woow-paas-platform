@@ -1,5 +1,6 @@
 /** @odoo-module **/
 import { Component, useState, onMounted } from "@odoo/owl";
+import { _t } from "@web/core/l10n/translation";
 import { WoowCard } from "../../components/card/WoowCard";
 import { WoowButton } from "../../components/button/WoowButton";
 import { WoowIcon } from "../../components/icon/WoowIcon";
@@ -52,12 +53,12 @@ export class PaymentMethodsListPage extends Component {
     }
 
     async onDelete(tokenId) {
-        if (!confirm("Remove this card?")) return;
+        if (!confirm(_t("Remove this card?"))) return;
         this.state.deleting = tokenId;
         this.state.error = null;
         const result = await billingService.deletePaymentMethod(tokenId);
         if (!result.success) {
-            this.state.error = result.error || "Delete failed";
+            this.state.error = result.error || _t("Delete failed");
         }
         this.state.deleting = null;
     }
@@ -67,7 +68,7 @@ export class PaymentMethodsListPage extends Component {
         this.state.error = null;
         const result = await billingService.setDefaultPaymentMethod(tokenId);
         if (!result.success) {
-            this.state.error = result.error || "Set default failed";
+            this.state.error = result.error || _t("Set default failed");
         }
         this.state.settingDefault = null;
     }

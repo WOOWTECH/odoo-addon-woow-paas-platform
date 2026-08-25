@@ -1,5 +1,6 @@
 /** @odoo-module **/
 import { Component, useState, onMounted } from "@odoo/owl";
+import { _t } from "@web/core/l10n/translation";
 import { WoowButton } from "../button/WoowButton";
 import { WoowIcon } from "../icon/WoowIcon";
 import { supportService } from "../../services/support_service";
@@ -36,7 +37,7 @@ export class CreateTaskModal extends Component {
             await supportService.fetchAllProjects();
         } catch (err) {
             console.error("CreateTaskModal: failed to load projects:", err);
-            this.state.error = "Failed to load projects";
+            this.state.error = _t("Failed to load projects");
         } finally {
             this.state.projectsLoading = false;
         }
@@ -73,12 +74,12 @@ export class CreateTaskModal extends Component {
     async onSubmit() {
         const name = this.state.name.trim();
         if (!name) {
-            this.state.error = "Task name is required";
+            this.state.error = _t("Task name is required");
             return;
         }
 
         if (!this.state.projectId) {
-            this.state.error = "Please select a project";
+            this.state.error = _t("Please select a project");
             return;
         }
 
@@ -105,11 +106,11 @@ export class CreateTaskModal extends Component {
             if (result.success) {
                 this.props.onCreated(result.data);
             } else {
-                this.state.error = result.error || "Failed to create task";
+                this.state.error = result.error || _t("Failed to create task");
             }
         } catch (err) {
             console.error("CreateTaskModal: submit failed:", err);
-            this.state.error = "An unexpected error occurred. Please try again.";
+            this.state.error = _t("An unexpected error occurred. Please try again.");
         } finally {
             this.state.loading = false;
         }
