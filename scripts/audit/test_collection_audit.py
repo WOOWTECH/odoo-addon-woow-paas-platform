@@ -181,13 +181,31 @@ SKIP_LINE = re.compile(
 #      而同模組多筆 subtest 失敗會併成那同一筆。
 #    吃掉前綴後對應到的是**父測試**的識別字，那才是 baseline／哨兵共用的那個空間。
 #
-# ⚠ (c) 是**已知盲區，不是規格**：`setUpClass` / `tearDownClass` 的錯誤走 unittest 的
-#    `_ErrorHolder`，實測它的 `__module__` 是 `unittest.suite`（不是 `odoo.addons.*`）
-#    ⇒ 本式子的 mod 錨點看不到那一行 ⇒ 那類錯誤對 C5 是**綠的**。self-test 用一格陰性
-#    樣本把現況釘住（只記錄現況，不是主張它應該如此）。
+# (c) 的 logger 與識別字載體都不同，不能靠放寬本式子的 mod 錨點處理；另由
+# `CLASS_FIXTURE_FAILURE_LINE` 精確辨識（Refs #821）。
 FAILURE_LINE = re.compile(
     r"(?P<mod>odoo\.addons\.[\w.]+):\s+(?P<flavour>FAIL|ERROR):\s+"
     r"(?:Subtest\s+)?(?P<test>[\w.]+)"
+)
+
+# `_ErrorHolder`（unittest/suite.py）承載 setUpClass／tearDownClass 錯誤時，
+# Odoo `getDescription()` 走 `str(test)`，完整 log event 逐字形狀為：
+#   <時間> <pid> ERROR <db> unittest.suite: ERROR: setUpClass
+#       (odoo.addons.<addon>.tests.<module>.<Class>)
+# logger 只說得出 holder 的模組；真正的測試 class 識別字在括號裡。因此這條式子：
+#   1. 從行首釘住 Odoo 的時間／pid／level／db／logger 槽位，不在 traceback 或訊息
+#      內 search 一段長得像 event 的 suffix；
+#   2. 只認 unittest.suite + ERROR + 兩個 class fixture hook；
+#   3. 括號內明確要求 `odoo.addons.<addon>.tests.`，並至少帶 module + Class；
+#   4. 只擷取 tests package 後的 class-level identifier，直接回到 C2/C3/C5 空間。
+# 不能把 `FAILURE_LINE` 的 logger 放寬成任意 dotted path，否則會產生
+# `unittest.suite.setUpClass` 這種 baseline 裡不存在的錯誤識別字。
+CLASS_FIXTURE_FAILURE_LINE = re.compile(
+    r"^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2},\d{3}\s+"
+    r"\d+\s+ERROR\s+\S+\s+unittest\.suite:\s+ERROR:\s+"
+    r"(?P<fixture>setUpClass|tearDownClass)\s+"
+    r"\(odoo\.addons\.[A-Za-z_]\w*\.tests\."
+    r"(?P<test>[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+)\)\s*$"
 )
 
 # logger 名（`test.__module__`）→ 與 detail report 同一個識別字空間的模組路徑。
@@ -440,12 +458,16 @@ def parse_skips(log_path: pathlib.Path) -> list[tuple[str, str, str]]:
 
 
 def parse_failures(log_path: pathlib.Path) -> set[str]:
-    """回傳 {`<模組路徑>.<Class>.<method>`} 的失敗／錯誤集合。"""
+    """回傳失敗／錯誤集合；一般錯誤是 method-level，class fixture 是 class-level。"""
     out: set[str] = set()
     for line in log_path.read_text(encoding="utf-8", errors="replace").splitlines():
         m = FAILURE_LINE.search(line)
         if m:
             out.add(f"{_module_ident(m.group('mod'))}.{m.group('test')}")
+            continue
+        fixture = CLASS_FIXTURE_FAILURE_LINE.match(line)
+        if fixture:
+            out.add(fixture.group("test"))
     return out
 
 
@@ -845,13 +867,34 @@ SELF_TEST_FAILURE_LINES = [
     # 擋得住它的只有 mod 錨點。
     ('AssertionError: "FAIL: TestGate.test_red_first" not found in captured log',
      None),
-    # 🔴 已知盲區，**不是規格**：`setUpClass` / `tearDownClass` 的錯誤走 unittest 的
-    #    `_ErrorHolder`，實測 `__module__` 是 `unittest.suite` ⇒ mod 錨點看不到它
-    #    ⇒ **那類錯誤對 C5 是綠的**。這一格只把現況釘住，讓它日後改動時會被看見；
-    #    要不要把錨點放寬到涵蓋它是另一個題目（風險不對稱：放寬 mod 會同時把上面那條
-    #    `models.*` 的 ERROR log 之類的東西吃進來）。
+    # (c) `_ErrorHolder` 分支：class fixture 的錯誤由 `unittest.suite` 當 logger，
+    #     真正的測試 class 識別字只在括號裡。必須解析回既有 class-level 空間，不能
+    #     放寬一般式子後誤產生 `unittest.suite.setUpClass` 這種不存在的識別字。
     ("2026-08-21 10:00:04,000 456 ERROR test unittest.suite: ERROR: setUpClass "
-     "(odoo.addons.woow_paas_platform.tests.test_a.TestA)", None),
+     "(odoo.addons.woow_paas_platform.tests.test_a.TestA)",
+     "test_a.TestA"),
+    ("2026-08-21 10:00:05,000 456 ERROR test unittest.suite: ERROR: tearDownClass "
+     "(odoo.addons.woow_paas_platform.tests.integration.test_i.TestI)",
+     "integration.test_i.TestI"),
+    # module fixture 不在本單範圍；不能因為「長得像」就誤報成 class identifier。
+    ("2026-08-21 10:00:06,000 456 ERROR test unittest.suite: ERROR: setUpModule "
+     "(odoo.addons.woow_paas_platform.tests.test_a)", None),
+    # 非 Odoo addon test 無法映射到 baseline 空間，必須拒絕而不是猜。
+    ("2026-08-21 10:00:07,000 456 ERROR test unittest.suite: ERROR: setUpClass "
+     "(__main__.TBad)", None),
+    # 括號內必須是 addon 的 tests package，不能把產品 logger 映成測試 class。
+    ("2026-08-21 10:00:08,000 456 ERROR test unittest.suite: ERROR: setUpClass "
+     "(odoo.addons.woow_paas_platform.models.fake.Fake)", None),
+    # `unittest.suite` 必須在 logger 槽位；別的 logger 訊息引用完整 suffix 仍不可收。
+    ("2026-08-21 10:00:09,000 456 ERROR test odoo.tests.result: "
+     "unittest.suite: ERROR: setUpClass "
+     "(odoo.addons.woow_paas_platform.tests.test_wrong_logger.TestWrongLogger)", None),
+    # 沒有 Odoo log envelope 的原始文字不是一筆可採信的 log event。
+    ("unittest.suite: ERROR: tearDownClass "
+     "(odoo.addons.woow_paas_platform.tests.test_no_envelope.TestNoEnvelope)", None),
+    # traceback／assertion message 即使內嵌逐字 event suffix，也不能被 search() 誤收。
+    ('AssertionError: captured log suffix: unittest.suite: ERROR: setUpClass '
+     '(odoo.addons.woow_paas_platform.tests.test_embedded.TestEmbedded)', None),
 ]
 
 #: 蓄意寫壞的 FAILURE_LINE 變異體 —— 上面那組樣本**必須全部拒絕它們**。
@@ -1163,15 +1206,23 @@ def self_test() -> int:
         finally:
             globals()["SENTINELS"] = real_sent
 
-    # (5e) C5 失敗集合：相同→0；新增→1；預期非空但解析到 0→FATAL(2) 不可當通過
+    # (5e) C5 失敗集合：相同→0；新增→1；預期非空但解析到 0→FATAL(2) 不可當通過。
+    #      同一組刻意混入 class fixture identifier，證明 #821 修法不是只在 parser
+    #      單元樣本裡成立，而是真的能進 C5 與 known-failures 做同空間集合差。
     with tempfile.TemporaryDirectory() as td:
         import io, contextlib
         kf = pathlib.Path(td) / "kf.txt"
-        kf.write_text("test_a.TestA.test_b\n", encoding="utf-8")
+        kf.write_text("test_a.TestA.test_b\ntest_fixture.TestFixture\n", encoding="utf-8")
         same = pathlib.Path(td) / "same.log"
-        same.write_text("... ERROR test odoo.addons.x.tests.test_a: FAIL: TestA.test_b\n")
+        same.write_text("... ERROR test odoo.addons.x.tests.test_a: FAIL: TestA.test_b\n"
+                        "2026-08-21 10:00:04,000 456 ERROR test unittest.suite: "
+                        "ERROR: setUpClass "
+                        "(odoo.addons.x.tests.test_fixture.TestFixture)\n")
         more = pathlib.Path(td) / "more.log"
         more.write_text("... ERROR test odoo.addons.x.tests.test_a: FAIL: TestA.test_b\n"
+                        "2026-08-21 10:00:04,000 456 ERROR test unittest.suite: "
+                        "ERROR: setUpClass "
+                        "(odoo.addons.x.tests.test_fixture.TestFixture)\n"
                         "... ERROR test odoo.addons.x.tests.test_c: ERROR: TestC.test_d\n")
         none = pathlib.Path(td) / "none.log"
         none.write_text("... INFO test odoo.tests.result: 0 failed, 0 error(s) of 5 tests\n")
@@ -1189,6 +1240,40 @@ def self_test() -> int:
             if r_none != 2:
                 failures.append("C5 對「預期非空但解析到 0」當成通過了（零結果不可信）")
         finally:
+            globals()["KNOWN_FAILURES"] = real_kf
+
+    # (5f) #821 必須有 class-fixture-only 的 C5 樣本：混入一般 method 會讓 fixture
+    #      parser 被刪掉時 `actual` 仍非空，只走 fixed 註記而 rc=0，遮住假綠。
+    #      這裡先驗正確解析→0，再把 fixture matcher 突變成永不匹配；同一份 baseline／log
+    #      必須命中 `expected and not actual` 的 FATAL(2)，證明 omission 有訊號。
+    with tempfile.TemporaryDirectory() as td:
+        import io, contextlib
+        fixture_kf = pathlib.Path(td) / "fixture-kf.txt"
+        fixture_kf.write_text("test_fixture.TestFixture\n", encoding="utf-8")
+        fixture_log = pathlib.Path(td) / "fixture.log"
+        fixture_log.write_text(
+            "2026-08-21 10:00:04,000 456 ERROR test unittest.suite: "
+            "ERROR: setUpClass "
+            "(odoo.addons.x.tests.test_fixture.TestFixture)\n",
+            encoding="utf-8",
+        )
+        real_kf = globals()["KNOWN_FAILURES"]
+        real_fixture_rx = globals()["CLASS_FIXTURE_FAILURE_LINE"]
+        try:
+            globals()["KNOWN_FAILURES"] = fixture_kf
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
+                fixture_ok = check_failure_set(fixture_log)
+                globals()["CLASS_FIXTURE_FAILURE_LINE"] = re.compile(r"(?!)")
+                fixture_omitted = check_failure_set(fixture_log)
+            if fixture_ok != 0:
+                failures.append("C5 class-fixture-only 集合相同卻沒 PASS")
+            if fixture_omitted != 2:
+                failures.append("C5 刪除 class fixture parser 時沒有 FATAL(2)")
+            if "卻解析到 0 條" not in buf.getvalue():
+                failures.append("C5 class fixture omission 沒走 expected-and-empty 診斷")
+        finally:
+            globals()["CLASS_FIXTURE_FAILURE_LINE"] = real_fixture_rx
             globals()["KNOWN_FAILURES"] = real_kf
 
     # (6) 雙向差集：單向會有「把項目從 baseline 拿掉就通過」的假綠洞
