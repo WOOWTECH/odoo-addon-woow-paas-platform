@@ -26,6 +26,14 @@ plan 上的欄位值就是這筆訂閱的席位總額。
 ``_check_emails_per_policy`` 自己的註解已經寫明這**不是** module 級慣例
 （``sa_max_routes`` 的 0 也是「一條都不准」）⇒ 每個欄位各自認定。
 
+## 🔴 兩個未經拍板的口徑，本檔刻意把它們攤開
+
+judgement 不由本 PR 做，但行為必須在 review 時是可見的，所以各配一條斷言：
+
+1. **base 方案（0 席）＋既有 policy ⇒ 一碰就擋** — ``TestAcSeatBasePlanBlastRadius``
+2. **``exclude`` / ``require`` 群組的位址也計入席位** —
+   ``test_addresses_in_exclude_and_require_groups_are_counted_too``
+
 ## 🔴 爆炸半徑：本檔的 ``TestAcSeatBasePlanBlastRadius`` 是**刻意攤開**的
 
 seed 的 base 方案全部 ``ac_max_access_seats = 0``，所以「base 方案 ＋ 既有
@@ -224,6 +232,38 @@ class TestAcSeatQuotaModel(_SeatFixture, TransactionCase):
             lambda: self._policy(self.r2, 'p2-upper', 'A@X.COM'))
         self._expect_seat_block(
             lambda: self._policy(self.r2, 'p2-new', 'c@x.com'))
+
+    def test_addresses_in_exclude_and_require_groups_are_counted_too(self):
+        """🔴 **此口徑未經拍板，待覆核裁決。**
+
+        1-A 的權威措辭（pricing ``:270``）逐字只有「distinct email 位址數 ≤
+        內含＋已購」，**沒有任何 group 限定**；欄位 help 也只寫「``email_list``
+        去重位址數」；既有陽性範本 ``_check_emails_per_policy`` 同樣只 filter
+        ``rule_type == 'email_list'``、完全不看 ``group``。
+
+        照措辭逐字實作的後果就是本測試斷言的東西：**租戶在 ``exclude`` 群組裡
+        列出來「明確要擋掉的人」，一樣佔他的席位**。``require`` 群組同理。
+        語意上可疑，但措辭沒有排除它 ⇒ 要不要加 group 過濾是產品語意、屬
+        Eugene 拍板範圍，本 PR **不自己加**，只把口徑斷言成可見的。
+
+        鑑別力已用 mutation 驗過（不是宣稱）：把 ``_listed_seat_addresses``
+        改成只算 ``group == 'include'``，本測試兩段都轉紅、其餘 14 條全綠
+        ⇒ 它釘住的確實是「不分 group」這一格，而不是別的東西。
+        """
+        self._subscribe(seats=2)
+        pol = self._policy(self.r1, 'p1', 'a@x.com, b@x.com')
+        # (a) exclude 群組：他明確擋掉的人，照樣佔席
+        msg = self._expect_seat_block(lambda: pol.write({
+            'rule_ids': [(0, 0, {'group': 'exclude',
+                                 'rule_type': 'email_list',
+                                 'rule_value': 'z@x.com'})]}))
+        self.assertIn('3', msg, msg)
+        # (b) require 群組：同一格的另一半（`group` 值域是 include/require/
+        #     exclude，只測 exclude 會在 require 上留一個沒被釘住的洞）
+        self._expect_seat_block(lambda: pol.write({
+            'rule_ids': [(0, 0, {'group': 'require',
+                                 'rule_type': 'email_list',
+                                 'rule_value': 'y@x.com'})]}))
 
     def test_zero_seats_blocks_the_very_first_address(self):
         """0 ＝ 一席都沒有（**不是** unlimited）。

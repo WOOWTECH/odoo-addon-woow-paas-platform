@@ -752,15 +752,22 @@ class SecurityAccessAccessPolicy(models.Model):
     def _listed_seat_addresses(self):
         """這批 policy 的 ``email_list`` 位址集合（正規化後去重）。
 
-        **不分 decision、不分 group**，與 ``_check_emails_per_policy`` 和 #352
-        對「人數」的既有讀法一致（那兩處同樣是「數 email_list 規則裡的位址」，
-        沒有 decision／group 條件）。把這裡改成只算 ``allow × include`` 會讓
-        本檢查與計費文件的措辭分家，要改必須連同 pricing §4.3 一起改。
+        🔴 **不分 decision、不分 group**——這是照 1-A 措辭逐字實作的結果，
+        **但該口徑本身未經拍板**。pricing ``:270`` 逐字只有「distinct email
+        位址數 ≤ 內含＋已購」、欄位 help 只寫「``email_list`` 去重位址數」，
+        兩處都沒有 group 限定；既有陽性範本 ``_check_emails_per_policy`` 與
+        #352 同樣只 filter ``rule_type``、不看 ``group``。
+        ⚠ 可見的後果：租戶在 ``exclude`` 群組列出「他明確要擋掉的人」，一樣
+        佔他的席位。語意可疑，但措辭沒排除它 ⇒ 加不加 group 過濾是產品語意、
+        屬拍板範圍，這裡刻意不自己加。行為釘在
+        ``test_addresses_in_exclude_and_require_groups_are_counted_too``
+        （鑑別力已用 mutation 驗過），要改必須連同 pricing §4.3 一起改。
 
         正規化＝``strip()`` ＋ ``lower()``。大小寫在 Cloudflare 的 email 比對
         上不區分 ⇒ ``A@x.com`` 與 ``a@x.com`` 是同一個人、消耗同一席；不 lower
         的話會把一個人算成兩席（**多收**，方向對租戶不利且與 CF 實況不符）。
-        ⚠ 這一格是本次接線裡唯一沒有逐字載體的判讀，變更前請連同
+        ⚠ 大小寫這一格是本次接線裡**唯一沒有任何逐字載體**的判讀（上面 group
+        那格至少有措辭可循，只是語意可疑）。變更前請連同
         ``test_dedupe_is_case_insensitive_but_a_new_address_still_blocks``
         一起看。
         """
