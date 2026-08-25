@@ -24,11 +24,16 @@ Fail-open 原則：任何解析錯誤 / 缺檔 / 非本 repo 路徑 → exit 0 �
 跳過整個守衛：export CLAUDE_PATTERN_GUARD=off
 新增守護路徑：改 pattern-guard-map.json（不用動本檔）。
 """
+import hashlib
 import json
 import os
 import re
+import subprocess
 import sys
 import tempfile
+
+
+_GIT_TIMEOUT_SECONDS = 1.0
 
 
 def allow():
@@ -44,6 +49,95 @@ def deny(reason):
         }
     }))
     sys.exit(0)
+
+
+def _is_within(path, root):
+    """Return whether canonical *path* belongs below canonical *root*."""
+    try:
+        return os.path.commonpath((path, root)) == root
+    except ValueError:
+        return False
+
+
+def _git_worktree_identity(path):
+    """Return ``(worktree root, common git dir)`` for *path*, or ``None``.
+
+    ``--git-common-dir`` is the stable identity shared by the main checkout and
+    every linked worktree.  ``--show-toplevel`` supplies the only safe root for
+    deriving the path consumed by the anchored guard-map regexes.
+    """
+    target = os.path.realpath(os.path.abspath(path))
+    probe = target if os.path.isdir(target) else os.path.dirname(target)
+    while probe and not os.path.isdir(probe):
+        parent = os.path.dirname(probe)
+        if parent == probe:
+            return None
+        probe = parent
+    if not probe:
+        return None
+
+    env = os.environ.copy()
+    env["GIT_OPTIONAL_LOCKS"] = "0"
+    try:
+        result = subprocess.run(
+            [
+                "git", "-C", probe, "rev-parse", "--path-format=absolute",
+                "--show-toplevel", "--git-common-dir",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=_GIT_TIMEOUT_SECONDS,
+            env=env,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode != 0:
+        return None
+    lines = [line for line in result.stdout.splitlines() if line]
+    if len(lines) != 2:
+        return None
+
+    root = os.path.realpath(lines[0])
+    common_dir = os.path.realpath(lines[1])
+    if not os.path.isabs(lines[0]) or not os.path.isabs(lines[1]):
+        return None
+    if not _is_within(target, root):
+        return None
+    return root, common_dir
+
+
+def guarded_relative_path(project_dir, file_path):
+    """Resolve *file_path* relative to its linked worktree, if it is ours.
+
+    Git failures retain the historical direct-child fallback for the main
+    checkout.  External paths are never trusted without a matching Git common
+    directory, so an unrelated checkout cannot acquire this repo's guards.
+    """
+    project = os.path.realpath(os.path.abspath(project_dir))
+    target = os.path.realpath(os.path.abspath(file_path))
+    project_identity = _git_worktree_identity(project)
+    if project_identity:
+        target_identity = _git_worktree_identity(target)
+        if not target_identity:
+            return None
+        target_root, target_common_dir = target_identity
+        if target_common_dir != project_identity[1]:
+            return None
+        rel = os.path.relpath(target, target_root)
+    else:
+        if not _is_within(target, project):
+            return None
+        rel = os.path.relpath(target, project)
+
+    if rel == os.pardir or rel.startswith(os.pardir + os.sep):
+        return None
+    return rel.replace(os.sep, "/")
+
+
+def _file_marker_key(file_path):
+    """Keep per-file markers distinct when worktrees share a relative path."""
+    canonical = os.path.realpath(os.path.abspath(file_path))
+    return hashlib.sha256(canonical.encode("utf-8", "surrogatepass")).hexdigest()[:24]
 
 
 def cited_docs(project_dir, file_path):
@@ -86,13 +180,9 @@ def main():
     if not project_dir:
         allow()
 
-    try:
-        rel = os.path.relpath(os.path.abspath(file_path), os.path.abspath(project_dir))
-    except ValueError:
-        allow()
-    if rel.startswith(".."):
-        allow()  # 不在本 repo，不歸本守衛管
-    rel = rel.replace(os.sep, "/")
+    rel = guarded_relative_path(project_dir, file_path)
+    if rel is None:
+        allow()  # 不屬於本 repo 的任一 Git worktree，不歸本守衛管
 
     map_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pattern-guard-map.json")
     try:
@@ -121,7 +211,7 @@ def main():
     if cited:
         # marker 掛在檔案上：推的內容是 per-file 的，不是 per-class
         marker = os.path.join(
-            marker_dir, "%s.cite.%s" % (session_id, rel.replace("/", "_")))
+            marker_dir, "%s.cite.%s" % (session_id, _file_marker_key(file_path)))
         if os.path.exists(marker):
             allow()
         try:
