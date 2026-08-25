@@ -217,7 +217,7 @@ class _SmartHome524Fixture(HttpCase):
         text = self._error_text(result)
         self.assertIn('SmartHomeOrderGateError', text,
                       msg + '（歸因：必須是 #524 的建立閘，回 %r）' % text)
-        self.assertIn('開通流程', text,
+        self.assertIn('provisioning flow', text,
                       msg + '（歸因：訊息必須可分辨，回 %r）' % text)
 
     def _assert_anchor_immutable(self, result, field, msg):

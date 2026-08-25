@@ -219,8 +219,8 @@ class _Binding698Fixture(HttpCase):
                       msg + '（期望 AccessError，回 %r）' % text)
         self.assertIn('cloud_service', text,
                       msg + '（歸因：必須是 cloud_service 綁定守衛，回 %r）' % text)
-        self.assertIn('綁定', text,
-                      msg + '（歸因：project 的 ir.rule 是 Odoo 英文訊息，'
+        self.assertIn('cloud service bindings', text,
+                      msg + '（歸因：project 的 ir.rule 是 Odoo 通用訊息，'
                             '本守衛的訊息必須可分辨，回 %r）' % text)
         self.assertIn('#%s' % service.id, text,
                       msg + '（歸因：被拒的必須正是 service #%s，回 %r）'
@@ -637,7 +637,7 @@ class TestCloudServiceRuleStillGuards676(_Binding698Fixture):
         text = self._error_text(res)
         self.assertIn('cloud_service', text,
                       'S1：歸因必須是 cloud_service 那一層（回 %r）' % text)
-        self.assertIn('開通流程', text,
+        self.assertIn('provisioning flow', text,
                       'S1：#519 之後這一格的守門人是建立閘，不是 #676 的 rule；'
                       '歸因換人時這條必須紅，否則它會靜默退化成驗別的東西'
                       '（回 %r）' % text)
@@ -710,7 +710,7 @@ class TestCloudServiceRuleStillGuards676(_Binding698Fixture):
         self.assertIn('error', res0,
                       'S4：#519 之後 owner 也不得經 RPC 建出 cloud_service'
                       '（回 %r）' % res0)
-        self.assertIn('開通流程', self._error_text(res0),
+        self.assertIn('provisioning flow', self._error_text(res0),
                       'S4：歸因必須是 #519 的建立閘（回 %r）'
                       % self._error_text(res0))
         self.assertFalse(
