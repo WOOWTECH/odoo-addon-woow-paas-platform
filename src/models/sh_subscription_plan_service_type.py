@@ -1,6 +1,6 @@
 import logging
 
-from odoo import api, fields, models
+from odoo import _, api, fields, models
 from odoo.exceptions import ValidationError
 
 _logger = logging.getLogger(__name__)
@@ -228,9 +228,9 @@ class ShSubscriptionPlanServiceType(models.Model):
                 continue  # orphan plan → 放行
             if plan.service_type and plan.service_type not in families:
                 raise ValidationError(
-                    "Plan '%s' 的 service_type=%s 與其 owning template "
-                    "family %s 不一致。plan 分類必須跟隨掛載它的 template "
-                    "家族（cloud_app→cloud_service／smart_home→smart_home／"
-                    "security_access→security_access）。"
+                    _("Plan '%s' 的 service_type=%s 與其 owning template "
+                      "family %s 不一致。plan 分類必須跟隨掛載它的 template "
+                      "家族（cloud_app→cloud_service／smart_home→smart_home／"
+                      "security_access→security_access）。")
                     % (plan.name, plan.service_type, sorted(families))
                 )

@@ -14,6 +14,7 @@ import logging
 from odoo.http import Controller, request, route
 
 from ..services.reconciler import reconcile_orphans
+from odoo import _
 
 _logger = logging.getLogger(__name__)
 
@@ -33,7 +34,7 @@ class ReconcileReportController(Controller):
         達成「skip 刪除」而非「從清單消失」（上游保留、下游濾掉＝假性 no-silent-drop）。
         """
         if not self._is_admin():
-            return {'success': False, 'error': 'Admin access required'}
+            return {'success': False, 'error': _('Admin access required')}
         rows = request.env['woow_paas_platform.reconcile_report'].search([])
         candidates = [{
             'id': r.id,
@@ -62,13 +63,13 @@ class ReconcileReportController(Controller):
         無法不重抓 inventory + 左集即判其孤兒狀態），是手動低頻按鈕、可接受。
         """
         if not self._is_admin():
-            return {'success': False, 'error': 'Admin access required'}
+            return {'success': False, 'error': _('Admin access required')}
         if not kind or not resource_uid:
-            return {'success': False, 'error': 'kind 與 resource_uid 必填'}
+            return {'success': False, 'error': _('kind 與 resource_uid 必填')}
         try:
             result = reconcile_orphans(request.env)
         except Exception as exc:
-            return {'success': False, 'error': '重新對帳失敗：%s' % exc}
+            return {'success': False, 'error': _('重新對帳失敗：%s') % exc}
         match = next((c for c in result.orphan_candidates
                       if c.kind == kind and c.id == resource_uid), None)
         return {'success': True, 'data': {

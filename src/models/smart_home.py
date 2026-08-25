@@ -261,7 +261,7 @@ def _reject_identity_anchor_writes(env, vals):
     for field in _IDENTITY_ANCHOR_FIELDS:
         if field in vals:
             raise UserError(
-                "Field '%s' is immutable after creation." % field
+                _("Field '%s' is immutable after creation.") % field
             )
 
 
@@ -387,7 +387,7 @@ class SmartHome(models.Model):
         if not _is_platform_order(self.env):
             raise SmartHomeOrderGateError(_(
                 'Smart Home 只能由平台的開通流程建立（%(model)s）。'
-                '請改從 Smart Home 下單流程建立，不要直接寫入這個 model。',
+                  '請改從 Smart Home 下單流程建立，不要直接寫入這個 model。',
                 model=self._name))
         _strip_identity_anchors(self.env, vals_list)
         return super().create(vals_list)
@@ -402,8 +402,8 @@ class SmartHome(models.Model):
         client = get_paas_operator_client(self.env)
         if not client:
             raise UserError(
-                "PaaS Operator is not configured. "
-                "Please set Operator URL and API Key in Settings → Woow PaaS."
+                _("PaaS Operator is not configured. "
+                  "Please set Operator URL and API Key in Settings → Woow PaaS.")
             )
         return client
 
@@ -561,12 +561,12 @@ class SmartHome(models.Model):
         # 否則失敗的重試會把記錄推離 error 卻什麼也沒做成。
         if self.tunnel_id:
             raise UserError(
-                "This Smart Home already has a Cloudflare tunnel (%s). "
-                "Re-provisioning would create a second, separately billed tunnel "
-                "and leave this one orphaned with no record pointing at it. "
-                "If its DNS record is missing, ask an administrator to create it "
-                "for %s; otherwise delete this Smart Home (which tears the tunnel "
-                "down) and create it again."
+                _("This Smart Home already has a Cloudflare tunnel (%s). "
+                  "Re-provisioning would create a second, separately billed tunnel "
+                  "and leave this one orphaned with no record pointing at it. "
+                  "If its DNS record is missing, ask an administrator to create it "
+                  "for %s; otherwise delete this Smart Home (which tears the tunnel "
+                  "down) and create it again.")
                 % (self.tunnel_id,
                    self.tunnel_route or self.subdomain or 'the configured hostname')
             )
@@ -858,9 +858,9 @@ class SmartHome(models.Model):
                         torn_down=torn_down)
                     if failed:
                         raise UserError(
-                            "Cloudflare Access teardown failed for route(s): %s. The "
-                            "Smart Home was kept so the deletion can be retried; its "
-                            "Access app is still live in Cloudflare."
+                            _("Cloudflare Access teardown failed for route(s): %s. The "
+                              "Smart Home was kept so the deletion can be retried; its "
+                              "Access app is still live in Cloudflare.")
                             % ', '.join(str(f) for f in failed)
                         )
                     # 🔴 route（連帶它底下的 policy）必須在 `super().unlink()` **之前**
@@ -889,9 +889,9 @@ class SmartHome(models.Model):
                         record._cleanup_tunnel()
                     if record.tunnel_id:
                         raise UserError(
-                            "Cloudflare cleanup failed; the tunnel is still live and "
-                            "billed. The record was kept so the deletion can be "
-                            "retried. Please try again shortly."
+                            _("Cloudflare cleanup failed; the tunnel is still live and "
+                              "billed. The record was kept so the deletion can be "
+                              "retried. Please try again shortly.")
                         )
                 res = super().unlink()
                 for sub in subs_to_settle:

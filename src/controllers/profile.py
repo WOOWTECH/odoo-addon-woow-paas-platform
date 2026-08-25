@@ -5,6 +5,7 @@ import re
 from typing import Any
 
 from odoo.http import request, route, Controller
+from odoo import _
 
 _logger = logging.getLogger(__name__)
 
@@ -101,7 +102,7 @@ class ProfileController(Controller):
         if name is None or not name.strip():
             return {
                 'success': False,
-                'error': 'Name is required',
+                'error': _('Name is required'),
                 'code': ERR_NAME_REQUIRED,
             }
 
@@ -109,7 +110,7 @@ class ProfileController(Controller):
         if email_clean and not EMAIL_RE.match(email_clean):
             return {
                 'success': False,
-                'error': 'Invalid email format',
+                'error': _('Invalid email format'),
                 'code': ERR_INVALID_EMAIL,
             }
 
@@ -150,7 +151,7 @@ class ProfileController(Controller):
         if ct not in VALID_CARRIER_TYPES:
             return {
                 'success': False,
-                'error': 'Invalid carrier type',
+                'error': _('Invalid carrier type'),
                 'code': ERR_INVALID_CARRIER_TYPE,
             }
         partner.write({

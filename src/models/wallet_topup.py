@@ -3,7 +3,7 @@ import math
 import uuid
 from datetime import timedelta
 
-from odoo import api, fields, models
+from odoo import _, api, fields, models
 from odoo.exceptions import ValidationError
 
 _logger = logging.getLogger(__name__)
@@ -113,7 +113,7 @@ class WalletTopup(models.Model):
         """
         if amount <= 0:
             raise ValidationError(
-                "Auto-topup amount must be positive (got %s)" % amount
+                _("Auto-topup amount must be positive (got %s)") % amount
             )
 
         # Ceil to integer TWD: ECPay requires positive integer charge amount,

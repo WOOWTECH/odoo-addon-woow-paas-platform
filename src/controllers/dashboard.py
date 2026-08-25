@@ -20,6 +20,7 @@ from odoo.http import request, route, Controller
 
 from ..models.subscription_lifecycle_mixin import _subscription_total_with_tax
 from .ha_paas import HiddenChainMixin
+from odoo import _
 
 _logger = logging.getLogger(__name__)
 
@@ -74,7 +75,7 @@ class DashboardController(HiddenChainMixin, Controller):
             _logger.exception("Dashboard summary failed for user=%s", request.env.user.id)
             return {
                 'success': False,
-                'error': "Failed to load dashboard. Please try again.",
+                'error': _("Failed to load dashboard. Please try again."),
             }
 
     # ------------------------------------------------------------------

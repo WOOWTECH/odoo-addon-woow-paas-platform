@@ -1,7 +1,7 @@
 import json
 import logging
 
-from odoo import api, fields, models
+from odoo import _, api, fields, models
 from odoo.exceptions import ValidationError
 
 _logger = logging.getLogger(__name__)
@@ -400,9 +400,9 @@ class CloudAppTemplate(models.Model):
         for record in self:
             if record.conceal_instances and not record.is_hidden:
                 raise ValidationError(
-                    '「既有實例一併隱藏」必須搭配「Hidden」一起開啟（範本：%s）。'
-                    '既有實例隱藏但仍在 marketplace 上架，會讓租戶買到一個'
-                    '前台看不到、也操作不了的服務。若要上架，請同時關閉這兩個開關。'
+                    _('「既有實例一併隱藏」必須搭配「Hidden」一起開啟（範本：%s）。'
+                      '既有實例隱藏但仍在 marketplace 上架，會讓租戶買到一個'
+                      '前台看不到、也操作不了的服務。若要上架，請同時關閉這兩個開關。')
                     % (record.name or record.slug or record.id)
                 )
 
@@ -578,9 +578,9 @@ class CloudAppTemplate(models.Model):
                     shared = (record.subscription_plan_ids
                               & conflicts.subscription_plan_ids)
                     raise ValidationError(
-                        "Plan(s) %s are already linked to %s(s) %s. "
-                        "A subscription plan must belong to a single service "
-                        "type — its product determines the invoice line text."
+                        _("Plan(s) %s are already linked to %s(s) %s. "
+                          "A subscription plan must belong to a single service "
+                          "type — its product determines the invoice line text.")
                         % (
                             ', '.join(shared.mapped('name')),
                             label,

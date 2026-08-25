@@ -33,7 +33,7 @@ class ShSubscriptionPlanCsSpec(models.Model):
             if plan.cs_odoo_workers > 0 and not plan.cs_ram_gb:
                 raise ValidationError(_(
                     'cs_odoo_workers 大於 0 時必須同時設定 cs_ram_gb，'
-                    '否則無法計算 per-worker 記憶體上限（OOM 風險）。'))
+                      '否則無法計算 per-worker 記憶體上限（OOM 風險）。'))
 
     # 裁定①（2026-07-12 by Eugene）：T1 storage 採 matrix 值（odoo 20/n8n 10）＝
     # 刻意 tier 提升（>現行 min）。cs_vcpu/cs_ram_gb 兩維＝template.min_*。

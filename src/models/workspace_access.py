@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from odoo import models, fields, api
+from odoo import _, api, fields, models
 from odoo.exceptions import AccessError, ValidationError
 
 
@@ -164,8 +164,8 @@ class WorkspaceAccess(models.Model):
                 ])
                 if owner_count > 0:
                     raise ValidationError(
-                        'A workspace can only have one owner. '
-                        'Transfer ownership first before assigning a new owner.'
+                        _('A workspace can only have one owner. '
+                          'Transfer ownership first before assigning a new owner.')
                     )
 
     # ------------------------------------------------------------------ #
@@ -235,13 +235,13 @@ class WorkspaceAccess(models.Model):
             for rec in self:
                 if 'workspace_id' in vals and vals['workspace_id'] != rec.workspace_id.id:
                     raise AccessError(
-                        "Cannot re-point an access row (id=%s) to a "
-                        "different workspace." % rec.id
+                        _("Cannot re-point an access row (id=%s) to a "
+                          "different workspace.") % rec.id
                     )
                 if 'user_id' in vals and vals['user_id'] != rec.user_id.id:
                     raise AccessError(
-                        "Cannot re-point an access row (id=%s) to a "
-                        "different user." % rec.id
+                        _("Cannot re-point an access row (id=%s) to a "
+                          "different user.") % rec.id
                     )
         # Owner-row protection applies to every write on an owner row,
         # regardless of which fields are being changed — ir.rule cannot
@@ -286,8 +286,8 @@ class WorkspaceAccess(models.Model):
                     ])
                     if not other_owners:
                         raise ValidationError(
-                            "Cannot demote the last owner of workspace '%s'. "
-                            "Transfer ownership first." % (
+                            _("Cannot demote the last owner of workspace '%s'. "
+                              "Transfer ownership first.") % (
                                 rec.workspace_id.display_name
                                 or rec.workspace_id.id)
                         )
@@ -318,8 +318,8 @@ class WorkspaceAccess(models.Model):
             ])
             if not other_owners:
                 raise ValidationError(
-                    "Cannot remove the last owner of workspace '%s'. "
-                    "Transfer ownership first." % (
+                    _("Cannot remove the last owner of workspace '%s'. "
+                      "Transfer ownership first.") % (
                         rec.workspace_id.display_name or rec.workspace_id.id)
                 )
         return super().unlink()
@@ -384,8 +384,8 @@ class WorkspaceAccess(models.Model):
         allowed = ASSIGNABLE_ROLES_BY_ROLE.get(grantor_role, [])
         if target_role not in allowed:
             raise AccessError(
-                "User %s (role=%s) cannot assign role '%s' on workspace %s. "
-                "Assignable roles for %s: %s."
+                _("User %s (role=%s) cannot assign role '%s' on workspace %s. "
+                  "Assignable roles for %s: %s.")
                 % (
                     self.env.user.display_name,
                     grantor_role or '<none>',
@@ -422,8 +422,8 @@ class WorkspaceAccess(models.Model):
         if caller_access and caller_access.role == ROLE_OWNER:
             return
         raise AccessError(
-            "Only the workspace owner may modify or remove the owner's own "
-            "access row (workspace %s)." % rec.workspace_id.id
+            _("Only the workspace owner may modify or remove the owner's own "
+              "access row (workspace %s).") % rec.workspace_id.id
         )
 
     @api.model
@@ -487,8 +487,8 @@ class WorkspaceAccess(models.Model):
                 and caller_access.id == rec.id):
             return
         raise AccessError(
-            "Only the workspace owner may transfer ownership, and only from "
-            "their own access row (workspace %s)." % workspace_id
+            _("Only the workspace owner may transfer ownership, and only from "
+              "their own access row (workspace %s).") % workspace_id
         )
 
     def transfer_ownership(self, new_owner_id: int) -> None:
@@ -522,7 +522,7 @@ class WorkspaceAccess(models.Model):
         ], limit=1)
 
         if not new_owner_access:
-            raise ValidationError('The new owner must be an existing member of the workspace.')
+            raise ValidationError(_('The new owner must be an existing member of the workspace.'))
 
         # Demote current owner to admin
         self.write({'role': ROLE_ADMIN})

@@ -3,7 +3,7 @@ from datetime import date, timedelta
 
 from dateutil.relativedelta import relativedelta
 
-from odoo import api, fields, models
+from odoo import _, api, fields, models
 from odoo.exceptions import UserError
 
 _logger = logging.getLogger(__name__)
@@ -181,7 +181,7 @@ class SubscriptionLifecycleMixin(models.AbstractModel):
 
         if not product_tmpl:
             raise UserError(
-                "No subscription product found for plan: %s" % plan.name
+                _("No subscription product found for plan: %s") % plan.name
             )
 
         # Get the first variant of this template
@@ -193,9 +193,9 @@ class SubscriptionLifecycleMixin(models.AbstractModel):
         company = self.env.company.sudo()
         if not company.sh_journal_id:
             raise UserError(
-                "Subscription journal is not configured. "
-                "Please go to Settings → Woow PaaS → Subscription Lifecycle "
-                "and select a journal."
+                _("Subscription journal is not configured. "
+                  "Please go to Settings → Woow PaaS → Subscription Lifecycle "
+                  "and select a journal.")
             )
 
         sub_vals = {
@@ -388,15 +388,15 @@ class SubscriptionLifecycleMixin(models.AbstractModel):
             if operation == 'read':
                 return
             raise UserError(
-                "Your subscription has expired. "
-                "You have a grace period to renew. "
-                "During this time, modifications are not allowed."
+                _("Your subscription has expired. "
+                  "You have a grace period to renew. "
+                  "During this time, modifications are not allowed.")
             )
 
         if self._is_past_grace_period():
             raise UserError(
-                "Your subscription has expired and the service is suspended. "
-                "Please renew your subscription to restore access."
+                _("Your subscription has expired and the service is suspended. "
+                  "Please renew your subscription to restore access.")
             )
 
     # ----------------------------------------------------------------
@@ -425,11 +425,11 @@ class SubscriptionLifecycleMixin(models.AbstractModel):
         self.ensure_one()
         sub = self._sub()
         if not sub:
-            raise UserError("No subscription linked to this service.")
+            raise UserError(_("No subscription linked to this service."))
         if sub.state != 'in_progress':
-            raise UserError("Subscription is not active.")
+            raise UserError(_("Subscription is not active."))
         if not sub.sh_trial:
-            raise UserError("Subscription is not in trial period.")
+            raise UserError(_("Subscription is not in trial period."))
 
         # Tax breakdown is computed by the shared helper so the dashboard's
         # next_bill_estimate uses the same rule as the skip-trial modal.
@@ -475,11 +475,11 @@ class SubscriptionLifecycleMixin(models.AbstractModel):
             self._name, self.id, sub.id if sub else None,
         )
         if not sub:
-            raise UserError("No subscription linked to this service.")
+            raise UserError(_("No subscription linked to this service."))
         if sub.state != 'in_progress':
-            raise UserError("Subscription is not active.")
+            raise UserError(_("Subscription is not active."))
         if not sub.sh_trial:
-            raise UserError("Subscription is not in trial period.")
+            raise UserError(_("Subscription is not in trial period."))
 
         today = fields.Date.today()
 
@@ -492,9 +492,9 @@ class SubscriptionLifecycleMixin(models.AbstractModel):
         )
         if partner.wallet_balance < plan_price:
             raise UserError(
-                "Insufficient wallet balance to skip trial. "
-                "Current balance: %.2f, required: %.2f. "
-                "Please top up your wallet first."
+                _("Insufficient wallet balance to skip trial. "
+                  "Current balance: %.2f, required: %.2f. "
+                  "Please top up your wallet first.")
                 % (partner.wallet_balance, plan_price)
             )
 

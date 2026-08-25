@@ -192,7 +192,7 @@ def _reject_cs_access_identity_anchor_writes(env, vals):
     for field in _CS_ACCESS_IDENTITY_ANCHOR_FIELDS:
         if field in vals:
             raise UserError(
-                "Field '%s' is immutable after creation." % field
+                _("Field '%s' is immutable after creation.") % field
             )
 
 
@@ -868,7 +868,7 @@ class CloudService(models.Model):
 
         client = get_paas_operator_client(self.env)
         if not client:
-            raise UserError("PaaS Operator not configured. Contact administrator.")
+            raise UserError(_("PaaS Operator not configured. Contact administrator."))
 
         # Check whether a Helm release already exists
         release_exists = False
@@ -1058,17 +1058,17 @@ class CloudService(models.Model):
             # _cron_check_deploying_services polls every minute and flips it
             # back to 'running', so say that instead.
             raise UserError(
-                "Service is finishing an update (usually under a minute). "
-                "Please wait and try again."
+                _("Service is finishing an update (usually under a minute). "
+                  "Please wait and try again.")
             )
         if self.state != 'running':
             raise UserError(
-                "Service must be running before resetting its admin password."
+                _("Service must be running before resetting its admin password.")
             )
 
         if not (self.helm_release_name and self.helm_namespace):
             raise UserError(
-                "Service has no helm release yet — deploy first before resetting password."
+                _("Service has no helm release yet — deploy first before resetting password.")
             )
 
         # #357 C03：不檢查既有 secret。reset 是「重新生成並下發」而非「讀舊密碼」，
@@ -1113,7 +1113,7 @@ class CloudService(models.Model):
 
         client = get_paas_operator_client(self.env)
         if not client:
-            raise UserError("PaaS Operator not configured. Contact administrator.")
+            raise UserError(_("PaaS Operator not configured. Contact administrator."))
 
         try:
             # #552: the response is no longer discarded — it carries the chart
@@ -1173,17 +1173,17 @@ class CloudService(models.Model):
                 self.name, self.id, e.detail or e.message,
             )
             raise UserError(
-                "Reset status unknown — the request timed out before the service "
-                "confirmed it. The reset may still have taken effect, so the "
-                "password was not saved. Wait a few minutes, then press Reset "
-                "again to issue a new password."
+                _("Reset status unknown — the request timed out before the service "
+                  "confirmed it. The reset may still have taken effect, so the "
+                  "password was not saved. Wait a few minutes, then press Reset "
+                  "again to issue a new password.")
             ) from e
         except PaaSOperatorError as e:
             _logger.error(
                 "reset-admin-password failed for service %s (id=%s): %s",
                 self.name, self.id, e.detail or e.message,
             )
-            raise UserError("Reset failed. Check service status and retry.") from e
+            raise UserError(_("Reset failed. Check service status and retry.")) from e
 
         # ================= 提交點（C11′ commit-on-secret）之後 =================
         #
@@ -3639,7 +3639,7 @@ class CloudService(models.Model):
         if not client:
             raise UserError(_(
                 "PaaS Operator is not configured. "
-                "Please set Operator URL and API Key in Settings → Woow PaaS."
+                  "Please set Operator URL and API Key in Settings → Woow PaaS."
             ))
         return client
 
@@ -4296,9 +4296,9 @@ class CloudService(models.Model):
         )
         if denied:
             raise AccessError(
-                "只有 workspace 的 owner／admin 才能變更 cloud_service 綁定"
-                "（新增或移除皆同）。被拒絕的 cloud_service："
-                "woow_paas_platform.cloud_service %s"
+                _("只有 workspace 的 owner／admin 才能變更 cloud_service 綁定"
+                  "（新增或移除皆同）。被拒絕的 cloud_service："
+                  "woow_paas_platform.cloud_service %s")
                 % ', '.join('#%s' % svc_id for svc_id in denied.ids)
             )
 
@@ -4498,7 +4498,7 @@ class CloudService(models.Model):
                 if (cs.helm_namespace and cs.workspace_id.id
                         and vals['workspace_id'] != cs.workspace_id.id):
                     raise UserError(
-                        "不可變更已部署 CloudService 的 workspace（命名空間身分固定）。"
+                        _("不可變更已部署 CloudService 的 workspace（命名空間身分固定）。")
                     )
         # ⚠ 這裡**刻意沒有**全域上限守衛。曾經有過（#501 B3，擋「先建成 `deleting`
         # 再 write 回計數態」的繞道），已移除，理由記在 #519 與 PR #517 的第二輪覆核：
@@ -4807,7 +4807,7 @@ class CloudService(models.Model):
                 )
                 raise SupplyGateError(_(
                     '「%(tpl)s」目前無法開通：平台尚未指定此商品的部署版本。'
-                    '請聯繫客服。', tpl=template.name))
+                      '請聯繫客服。', tpl=template.name))
             if reason == 'sold_out':
                 raise SupplyGateError(_(
                     '「%(tpl)s」目前已售罄，暫時無法開通新的實例。',
@@ -4878,7 +4878,7 @@ class CloudService(models.Model):
         if not _is_internal_provision(self.env):
             raise ProvisionGateError(_(
                 '雲端服務只能由平台的開通流程建立（%(model)s）。'
-                '請改從服務市集下單，不要直接寫入這個 model。',
+                  '請改從服務市集下單，不要直接寫入這個 model。',
                 model=self._name))
         # #744：Access 身分錨點的 create 側。**不是**被上面那道閘覆蓋掉的冗餘
         # ——開通閘擋的是「誰能建」，本組擋的是「建的時候能不能自帶別人的 CF
@@ -4935,7 +4935,7 @@ class CloudService(models.Model):
                 if count > limit:
                     raise SupplyGateError(_(
                         '「%(tpl)s」每個帳號最多 %(limit)s 個實例，'
-                        '您已達上限。', tpl=rec.template_id.name, limit=limit))
+                          '您已達上限。', tpl=rec.template_id.name, limit=limit))
         for rec in records.filtered(lambda r: r.template_id.has_admin_gui):
             if not rec._get_secret_record():
                 secret_password = self.env.context.get('mcp_admin_password')
@@ -5025,10 +5025,10 @@ class CloudService(models.Model):
                     if service.helm_release_name and service.helm_namespace:
                         if not service._cleanup_helm():
                             raise UserError(
-                                "Helm uninstall failed; release '%s' is still live in "
-                                "namespace '%s' (billed compute / leaked namespace). "
-                                "The service record was kept so the deletion can be "
-                                "retried. Please try again shortly." % (
+                                _("Helm uninstall failed; release '%s' is still live in "
+                                  "namespace '%s' (billed compute / leaked namespace). "
+                                  "The service record was kept so the deletion can be "
+                                  "retried. Please try again shortly.") % (
                                     service.helm_release_name, service.helm_namespace,
                                 )
                             )
@@ -5052,9 +5052,9 @@ class CloudService(models.Model):
                     if not service._teardown_access_if_any(
                             torn_down=torn_down):
                         raise UserError(
-                            "Cloudflare Access teardown failed; the Access "
-                            "application for '%s' is still live. The service record "
-                            "was kept so the deletion can be retried." % (
+                            _("Cloudflare Access teardown failed; the Access "
+                              "application for '%s' is still live. The service record "
+                              "was kept so the deletion can be retried.") % (
                                 service.name or service.id,
                             )
                         )

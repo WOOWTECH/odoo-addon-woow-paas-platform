@@ -8,7 +8,7 @@ from datetime import timedelta
 from typing import Any
 from urllib.parse import urlencode, urlparse, urlunparse, parse_qs
 
-from odoo import http
+from odoo import _, http
 from odoo.http import request, route, Controller
 
 from ..models.oauth_device_code import DEVICE_CODE_LIFETIME, MAX_VERIFICATION_ATTEMPTS
@@ -174,7 +174,7 @@ class OAuth2Controller(Controller):
         if response_type != 'code':
             return request.render('woow_paas_platform.oauth2_error', {
                 'error_title': 'Invalid Request',
-                'error_message': 'Only response_type=code is supported.',
+                'error_message': _('Only response_type=code is supported.'),
             })
 
         # Validate client_id
@@ -186,14 +186,14 @@ class OAuth2Controller(Controller):
         if not client:
             return request.render('woow_paas_platform.oauth2_error', {
                 'error_title': 'Invalid Client',
-                'error_message': 'The client_id is invalid or the application is inactive.',
+                'error_message': _('The client_id is invalid or the application is inactive.'),
             })
 
         # Validate redirect_uri
         if not redirect_uri or not client.check_redirect_uri(redirect_uri):
             return request.render('woow_paas_platform.oauth2_error', {
                 'error_title': 'Invalid Redirect URI',
-                'error_message': 'The redirect_uri is not registered for this application.',
+                'error_message': _('The redirect_uri is not registered for this application.'),
             })
 
         # Enforce PKCE for public / require_pkce clients
@@ -206,9 +206,9 @@ class OAuth2Controller(Controller):
                 )
                 return request.render('woow_paas_platform.oauth2_error', {
                     'error_title': 'PKCE Required',
-                    'error_message': 'This client requires PKCE. '
-                                     'Include code_challenge and '
-                                     'code_challenge_method=S256.',
+                    'error_message': _('This client requires PKCE. '
+                                       'Include code_challenge and '
+                                       'code_challenge_method=S256.'),
                 })
             if code_challenge_method != 'S256':
                 _logger.warning(
@@ -217,8 +217,8 @@ class OAuth2Controller(Controller):
                 )
                 return request.render('woow_paas_platform.oauth2_error', {
                     'error_title': 'Invalid PKCE Method',
-                    'error_message': 'Only code_challenge_method=S256 is '
-                                     'accepted for this client.',
+                    'error_message': _('Only code_challenge_method=S256 is '
+                                       'accepted for this client.'),
                 })
 
         # Validate scopes
@@ -282,7 +282,7 @@ class OAuth2Controller(Controller):
         if not client or not client.check_redirect_uri(redirect_uri):
             return request.render('woow_paas_platform.oauth2_error', {
                 'error_title': 'Invalid Request',
-                'error_message': 'Invalid client or redirect URI.',
+                'error_message': _('Invalid client or redirect URI.'),
             })
 
         # Re-enforce PKCE on POST (defense against bypassing the GET step).
@@ -296,7 +296,7 @@ class OAuth2Controller(Controller):
                 )
                 params = {
                     'error': 'invalid_request',
-                    'error_description': 'PKCE with S256 is required for this client.',
+                    'error_description': _('PKCE with S256 is required for this client.'),
                 }
                 if state:
                     params['state'] = state
@@ -304,7 +304,7 @@ class OAuth2Controller(Controller):
 
         # User denied
         if 'deny' in kwargs:
-            params = {'error': 'access_denied', 'error_description': 'User denied access'}
+            params = {'error': 'access_denied', 'error_description': _('User denied access')}
             if state:
                 params['state'] = state
             return request.redirect(_build_redirect_uri(redirect_uri, params), local=False)
@@ -345,11 +345,11 @@ class OAuth2Controller(Controller):
         """RFC 8628 §3.1-3.2: issue a device_code + user_code for a client."""
         client = self._authenticate_client(kwargs)
         if not client:
-            return _json_error('invalid_client', 'Client authentication failed.', 401)
+            return _json_error('invalid_client', _('Client authentication failed.'), 401)
         if not client.check_grant_type(DEVICE_GRANT):
             return _json_error(
                 'unauthorized_client',
-                'This client is not authorized for the device_code grant type.',
+                _('This client is not authorized for the device_code grant type.'),
             )
 
         scope = kwargs.get('scope', '')
@@ -376,7 +376,7 @@ class OAuth2Controller(Controller):
                 .get_param('web.base.url') or '').rstrip('/')
         if not base:
             return _json_error(
-                'server_error', 'Server misconfigured: web.base.url is unset.', 500,
+                'server_error', _('Server misconfigured: web.base.url is unset.'), 500,
             )
         verification_uri = f'{base}/device'
 
@@ -415,7 +415,7 @@ class OAuth2Controller(Controller):
         fails = request.session.get('device_verify_fails', 0)
         if fails >= MAX_VERIFICATION_ATTEMPTS:
             return request.render('woow_paas_platform.device_verify', {
-                'user_code': '', 'error': 'Too many attempts. Please wait and try again.',
+                'user_code': '', 'error': _('Too many attempts. Please wait and try again.'),
             })
 
         DeviceCode = request.env['woow_paas_platform.oauth_device_code'].sudo()
@@ -428,7 +428,7 @@ class OAuth2Controller(Controller):
         if not device or device.is_expired():
             request.session['device_verify_fails'] = fails + 1
             return request.render('woow_paas_platform.device_verify', {
-                'user_code': '', 'error': 'Invalid or expired code. Please try again.',
+                'user_code': '', 'error': _('Invalid or expired code. Please try again.'),
             })
 
         # Valid code entered — reset the session failure counter.
@@ -597,12 +597,12 @@ class OAuth2Controller(Controller):
         # Authenticate client
         client = self._authenticate_client(kwargs)
         if not client:
-            return _json_error('invalid_client', 'Client authentication failed.', 401)
+            return _json_error('invalid_client', _('Client authentication failed.'), 401)
 
         if not client.check_grant_type('authorization_code'):
             return _json_error(
                 'unauthorized_client',
-                'This client is not authorized for the authorization_code grant type.',
+                _('This client is not authorized for the authorization_code grant type.'),
             )
 
         # Find and validate authorization code
@@ -612,13 +612,13 @@ class OAuth2Controller(Controller):
         ], limit=1)
 
         if not auth_code:
-            return _json_error('invalid_grant', 'Authorization code not found.')
+            return _json_error('invalid_grant', _('Authorization code not found.'))
 
         if not auth_code.is_valid():
-            return _json_error('invalid_grant', 'Authorization code expired or already used.')
+            return _json_error('invalid_grant', _('Authorization code expired or already used.'))
 
         if auth_code.redirect_uri != redirect_uri:
-            return _json_error('invalid_grant', 'Redirect URI mismatch.')
+            return _json_error('invalid_grant', _('Redirect URI mismatch.'))
 
         # PKCE enforcement: public / require_pkce clients must have issued
         # the code with a challenge, blocking any downgrade attack where a
@@ -631,8 +631,8 @@ class OAuth2Controller(Controller):
             )
             return _json_error(
                 'invalid_grant',
-                'Authorization code was not issued with PKCE; '
-                'this client requires PKCE.',
+                _('Authorization code was not issued with PKCE; '
+                  'this client requires PKCE.'),
             )
 
         # PKCE verification
@@ -642,7 +642,7 @@ class OAuth2Controller(Controller):
                     'OAuth2 PKCE reject: client=%s auth_code id=%s missing code_verifier',
                     client.name, auth_code.id,
                 )
-                return _json_error('invalid_grant', 'PKCE code_verifier is required.')
+                return _json_error('invalid_grant', _('PKCE code_verifier is required.'))
             if pkce_required and auth_code.code_challenge_method != 'S256':
                 _logger.warning(
                     'OAuth2 PKCE downgrade reject: client=%s auth_code id=%s method=%r (S256 required)',
@@ -650,7 +650,7 @@ class OAuth2Controller(Controller):
                 )
                 return _json_error(
                     'invalid_grant',
-                    'This client requires code_challenge_method=S256.',
+                    _('This client requires code_challenge_method=S256.'),
                 )
             if not _verify_pkce(
                 code_verifier, auth_code.code_challenge, auth_code.code_challenge_method or 'plain'
@@ -659,7 +659,7 @@ class OAuth2Controller(Controller):
                     'OAuth2 PKCE verify failed: client=%s auth_code id=%s',
                     client.name, auth_code.id,
                 )
-                return _json_error('invalid_grant', 'PKCE verification failed.')
+                return _json_error('invalid_grant', _('PKCE verification failed.'))
 
         # Mark code as used (single-use)
         auth_code.mark_used()
@@ -678,16 +678,16 @@ class OAuth2Controller(Controller):
         # Authenticate client
         client = self._authenticate_client(kwargs)
         if not client:
-            return _json_error('invalid_client', 'Client authentication failed.', 401)
+            return _json_error('invalid_client', _('Client authentication failed.'), 401)
 
         if not client.check_grant_type('refresh_token'):
             return _json_error(
                 'unauthorized_client',
-                'This client is not authorized for the refresh_token grant type.',
+                _('This client is not authorized for the refresh_token grant type.'),
             )
 
         if not refresh_token_str:
-            return _json_error('invalid_grant', 'Missing refresh_token parameter.')
+            return _json_error('invalid_grant', _('Missing refresh_token parameter.'))
 
         # Find the token record
         token = request.env['woow_paas_platform.oauth_token'].sudo().search([
@@ -696,10 +696,10 @@ class OAuth2Controller(Controller):
         ], limit=1)
 
         if not token:
-            return _json_error('invalid_grant', 'Refresh token not found.')
+            return _json_error('invalid_grant', _('Refresh token not found.'))
 
         if not token.is_refresh_token_valid():
-            return _json_error('invalid_grant', 'Refresh token expired or revoked.')
+            return _json_error('invalid_grant', _('Refresh token expired or revoked.'))
 
         # Revoke the old token
         token.revoke()
@@ -716,12 +716,12 @@ class OAuth2Controller(Controller):
         """Handle grant_type=client_credentials (machine-to-machine)."""
         client = self._authenticate_client(kwargs)
         if not client:
-            return _json_error('invalid_client', 'Client authentication failed.', 401)
+            return _json_error('invalid_client', _('Client authentication failed.'), 401)
 
         if not client.check_grant_type('client_credentials'):
             return _json_error(
                 'unauthorized_client',
-                'This client is not authorized for the client_credentials grant type.',
+                _('This client is not authorized for the client_credentials grant type.'),
             )
 
         scope = kwargs.get('scope', '')
@@ -760,21 +760,21 @@ class OAuth2Controller(Controller):
 
         client = self._authenticate_client(kwargs)
         if not client:
-            return _json_error('invalid_client', 'Client authentication failed.', 401)
+            return _json_error('invalid_client', _('Client authentication failed.'), 401)
         if not client.check_grant_type(DEVICE_GRANT):
             return _json_error(
                 'unauthorized_client',
-                'This client is not authorized for the device_code grant type.',
+                _('This client is not authorized for the device_code grant type.'),
             )
         if not device_code_str:
-            return _json_error('invalid_request', 'Missing device_code parameter.')
+            return _json_error('invalid_request', _('Missing device_code parameter.'))
 
         device = request.env['woow_paas_platform.oauth_device_code'].sudo().search([
             ('device_code', '=', device_code_str),
             ('client_id', '=', client.id),
         ], limit=1)
         if not device:
-            return _json_error('invalid_grant', 'Unknown device_code.')
+            return _json_error('invalid_grant', _('Unknown device_code.'))
 
         # RFC 8628 §3.5: terminal states (expired / denied) must beat the
         # slow_down "pending variant" — a user who DENIED must get access_denied
@@ -783,20 +783,20 @@ class OAuth2Controller(Controller):
         # that should mint the token returns slow_down and delays success one
         # interval), and never preempting a terminal decision.
         if device.is_expired():
-            return _json_error('expired_token', 'The device_code has expired.')
+            return _json_error('expired_token', _('The device_code has expired.'))
         if device.status == 'denied':
-            return _json_error('access_denied', 'The user denied the request.')
+            return _json_error('access_denied', _('The user denied the request.'))
         if device.status == 'consumed':
-            return _json_error('invalid_grant', 'Authorization already used.')
+            return _json_error('invalid_grant', _('Authorization already used.'))
         if device.status == 'pending':
             if device.register_poll():
-                return _json_error('slow_down', 'Polling too frequently.')
-            return _json_error('authorization_pending', 'Authorization pending.')
+                return _json_error('slow_down', _('Polling too frequently.'))
+            return _json_error('authorization_pending', _('Authorization pending.'))
 
         # approved -> atomically consume (compare-and-swap). Only the race
         # winner issues tokens; concurrent polls cannot double-issue.
         if not device.consume():
-            return _json_error('invalid_grant', 'Authorization already used.')
+            return _json_error('invalid_grant', _('Authorization already used.'))
         return self._issue_tokens(
             client=client, user=device.user_id, scope=device.scope or '',
             include_refresh=True,
@@ -817,7 +817,7 @@ class OAuth2Controller(Controller):
         """
         client = self._authenticate_client(kwargs)
         if not client:
-            return _json_error('invalid_client', 'Client authentication failed.', 401)
+            return _json_error('invalid_client', _('Client authentication failed.'), 401)
 
         token_str = kwargs.get('token', '')
         if not token_str:
@@ -863,7 +863,7 @@ class OAuth2Controller(Controller):
         """
         client = self._authenticate_client(kwargs)
         if not client:
-            return _json_error('invalid_client', 'Client authentication failed.', 401)
+            return _json_error('invalid_client', _('Client authentication failed.'), 401)
 
         token_str = kwargs.get('token', '')
         if not token_str:

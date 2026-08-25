@@ -64,9 +64,9 @@ class BillingController(HiddenChainMixin, Controller):
         """Return (token, None) if current user owns a valid ECPG token, or (None, error_dict)."""
         token = request.env['payment.token'].sudo().browse(method_id)
         if not token.exists() or not token.ecpg_bindcard_id:
-            return None, {'success': False, 'error': 'Token not found', 'code': ERR_NOT_FOUND}
+            return None, {'success': False, 'error': _('Token not found'), 'code': ERR_NOT_FOUND}
         if token.partner_id != request.env.user.partner_id:
-            return None, {'success': False, 'error': 'Not owner', 'code': ERR_NOT_OWNER}
+            return None, {'success': False, 'error': _('Not owner'), 'code': ERR_NOT_OWNER}
         return token, None
 
     def _get_partner_ecpg_tokens(self, partner):
@@ -245,7 +245,7 @@ class BillingController(HiddenChainMixin, Controller):
         if not provider:
             return {
                 'success': False,
-                'error': 'No ECPay provider with ECPG enabled',
+                'error': _('No ECPay provider with ECPG enabled'),
                 'code': ERR_PROVIDER_NOT_FOUND,
             }
 
@@ -408,7 +408,7 @@ class BillingController(HiddenChainMixin, Controller):
         if not (member_id and trade_no and bind_card_pay_token):
             return {
                 'success': False,
-                'error': 'Missing member_id, trade_no, or bind_card_pay_token',
+                'error': _('Missing member_id, trade_no, or bind_card_pay_token'),
                 'code': ERR_MISSING_PARAMS,
             }
 
@@ -416,7 +416,7 @@ class BillingController(HiddenChainMixin, Controller):
         if not provider:
             return {
                 'success': False,
-                'error': 'No ECPay provider with ECPG enabled',
+                'error': _('No ECPay provider with ECPG enabled'),
                 'code': ERR_PROVIDER_NOT_FOUND,
             }
 
@@ -429,7 +429,7 @@ class BillingController(HiddenChainMixin, Controller):
             )
             return {
                 'success': False,
-                'error': 'member_id does not match current session',
+                'error': _('member_id does not match current session'),
                 'code': ERR_MEMBER_MISMATCH,
             }
 
@@ -569,18 +569,18 @@ class BillingController(HiddenChainMixin, Controller):
         if not topup_enabled:
             return {
                 'success': False,
-                'error': 'Credit top-up is not yet available.',
+                'error': _('Credit top-up is not yet available.'),
                 'code': 'payment_not_configured',
             }
 
         if not plan_id:
-            return {'success': False, 'error': 'plan_id is required',
+            return {'success': False, 'error': _('plan_id is required'),
                     'code': 'missing_params'}
 
         Plan = request.env['woow_paas_platform.topup_plan'].sudo()
         plan = Plan.browse(int(plan_id))
         if not plan.exists() or not plan.active:
-            return {'success': False, 'error': 'Plan not found or inactive',
+            return {'success': False, 'error': _('Plan not found or inactive'),
                     'code': 'plan_not_found'}
 
         partner = request.env.user.partner_id.sudo()
@@ -590,7 +590,7 @@ class BillingController(HiddenChainMixin, Controller):
         )
         if not self._get_primary_card_info(partner)['bound']:
             _logger.info("[TOPUP] api_topup no_card partner=%s", partner.id)
-            return {'success': False, 'error': 'No payment method configured',
+            return {'success': False, 'error': _('No payment method configured'),
                     'code': 'no_card'}
 
         Topup = request.env['woow.wallet.topup'].sudo()
@@ -615,7 +615,7 @@ class BillingController(HiddenChainMixin, Controller):
             _logger.info(
                 "[TOPUP] api_topup no ECPG token partner=%s", partner.id,
             )
-            return {'success': False, 'error': 'No payment method configured',
+            return {'success': False, 'error': _('No payment method configured'),
                     'code': 'no_card'}
 
         invoice_vals = self._build_invoice_intent_vals(invoice_intent or {})
@@ -658,7 +658,7 @@ class BillingController(HiddenChainMixin, Controller):
             )
             topup.write({'state': 'failed', 'failure_code': 'sdk_error',
                          'failure_message': str(e)[:200]})
-            return {'success': False, 'error': 'Payment service unavailable',
+            return {'success': False, 'error': _('Payment service unavailable'),
                     'code': 'sdk_error'}
 
         tx = result['tx']
@@ -717,7 +717,7 @@ class BillingController(HiddenChainMixin, Controller):
                 "[TOPUP] status not_found topup=%s requester_partner=%s",
                 topup_id, partner.id,
             )
-            return {'success': False, 'error': 'Not found', 'code': 'not_found'}
+            return {'success': False, 'error': _('Not found'), 'code': 'not_found'}
         _logger.info(
             "[TOPUP] status topup=%s partner=%s state=%s tx=%s",
             topup.id, partner.id, topup.state,
@@ -822,7 +822,7 @@ class BillingController(HiddenChainMixin, Controller):
 
         if (not sub.exists() or sub.sh_partner_id != partner
                 or sub.id in self._hidden_subscription_ids(request.env)):
-            return {'success': False, 'error': 'Subscription not found'}
+            return {'success': False, 'error': _('Subscription not found')}
 
         # Associated cloud services
         CloudService = request.env['woow_paas_platform.cloud_service'].sudo()
@@ -872,21 +872,21 @@ class BillingController(HiddenChainMixin, Controller):
                 "[SUB] cancel not_found subscription=%s partner=%s",
                 subscription_id, partner.id,
             )
-            return {'success': False, 'error': 'Subscription not found'}
+            return {'success': False, 'error': _('Subscription not found')}
 
         if sub.state not in ('in_progress',):
             _logger.info(
                 "[SUB] cancel state_reject subscription=%s state=%s",
                 sub.id, sub.state,
             )
-            return {'success': False, 'error': 'Only active subscriptions can be cancelled'}
+            return {'success': False, 'error': _('Only active subscriptions can be cancelled')}
 
         try:
             sub.write({'state': 'close'})
         except Exception as e:
             _logger.error("[SUB] cancel error subscription=%s: %s\n%s",
                           sub.id, str(e), traceback.format_exc())
-            return {'success': False, 'error': 'Cancellation failed. Please try again.'}
+            return {'success': False, 'error': _('Cancellation failed. Please try again.')}
 
         _logger.info(
             "[SUB] cancelled subscription=%s partner=%s reason=%s",
@@ -1061,7 +1061,7 @@ class BillingController(HiddenChainMixin, Controller):
 
         if (not invoice.exists() or invoice.partner_id != partner
                 or invoice.sh_subscription_id.id in self._hidden_subscription_ids(request.env)):
-            return {'success': False, 'error': 'Invoice not found'}
+            return {'success': False, 'error': _('Invoice not found')}
 
         # Line items (skip section/note display lines)
         lines = []
@@ -1145,19 +1145,19 @@ class BillingController(HiddenChainMixin, Controller):
                 "[INV] pay not_found invoice=%s partner=%s",
                 invoice_id, partner.id,
             )
-            return {'success': False, 'error': 'Invoice not found'}
+            return {'success': False, 'error': _('Invoice not found')}
         if invoice.state not in ('draft', 'posted'):
             _logger.info(
                 "[INV] pay state_reject invoice=%s state=%s",
                 invoice.id, invoice.state,
             )
-            return {'success': False, 'error': 'Invoice is not payable'}
+            return {'success': False, 'error': _('Invoice is not payable')}
         if invoice.payment_state == 'paid':
             _logger.info(
                 "[INV] pay already_paid invoice=%s",
                 invoice.id,
             )
-            return {'success': False, 'error': 'Invoice is already paid'}
+            return {'success': False, 'error': _('Invoice is already paid')}
 
         amount = invoice.amount_total if invoice.state == 'draft' else invoice.amount_residual
         balance = partner.wallet_balance
@@ -1191,7 +1191,7 @@ class BillingController(HiddenChainMixin, Controller):
         except Exception as e:
             _logger.error("[INV] pay error invoice=%s: %s\n%s",
                           invoice.id, str(e), traceback.format_exc())
-            return {'success': False, 'error': 'Payment processing failed.'}
+            return {'success': False, 'error': _('Payment processing failed.')}
 
         # _pay_from_wallet → deduct_wallet_points → loyalty.card.points changes,
         # but partner.wallet_balance is a non-stored compute; the recordset

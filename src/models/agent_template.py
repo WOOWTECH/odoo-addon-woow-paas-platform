@@ -87,8 +87,8 @@ class AgentTemplate(models.Model):
         for t in self:
             if not t.is_public and not t.project_ids and t.state != 'draft':
                 raise ValidationError(
-                    "Private template '%s' must bind at least one project "
-                    "before publishing." % (t.name or t.id)
+                    _("Private template '%s' must bind at least one project "
+                      "before publishing.") % (t.name or t.id)
                 )
 
     @api.constrains('project_ids')
@@ -115,9 +115,9 @@ class AgentTemplate(models.Model):
                 )
                 if not authorized:
                     raise ValidationError(
-                        "Cannot bind agent template '%s' to project '%s': "
-                        "current user must have owner/admin role on every "
-                        "bound project."
+                        _("Cannot bind agent template '%s' to project '%s': "
+                          "current user must have owner/admin role on every "
+                          "bound project.")
                         % (tmpl.name or tmpl.id, proj.display_name or proj.id)
                     )
 
@@ -153,13 +153,13 @@ class AgentTemplate(models.Model):
         for tmpl in self:
             if tmpl.id == default_id and tmpl.project_ids:
                 raise ValidationError(
-                    "Agent template '%s' is the platform-wide default "
-                    "(Settings → Default Agent Template) and must stay "
-                    "project-unbound: binding it to a project turns it into a "
-                    "tenant-bound template, which silently disables the "
-                    "agent-runtime default fallback for every project. Bind a "
-                    "different template to this project, or change the platform "
-                    "default first."
+                    _("Agent template '%s' is the platform-wide default "
+                      "(Settings → Default Agent Template) and must stay "
+                      "project-unbound: binding it to a project turns it into a "
+                      "tenant-bound template, which silently disables the "
+                      "agent-runtime default fallback for every project. Bind a "
+                      "different template to this project, or change the platform "
+                      "default first.")
                     % (tmpl.name or tmpl.id)
                 )
 
@@ -203,11 +203,11 @@ class AgentTemplate(models.Model):
             if not config or not config.sudo().api_key:
                 raise ValidationError(_(
                     "Agent template '%s' is published and bound to a project "
-                    "but has no usable LLM credential: set 'LLM Provider "
-                    "Config' to an ai.config that carries an API key. Without "
-                    "one the agent pod silently falls back to echo (returns the "
-                    "user's own message) instead of answering, shadowing the "
-                    "platform default for every bound project."
+                      "but has no usable LLM credential: set 'LLM Provider "
+                      "Config' to an ai.config that carries an API key. Without "
+                      "one the agent pod silently falls back to echo (returns the "
+                      "user's own message) instead of answering, shadowing the "
+                      "platform default for every bound project."
                 ) % (tmpl.name or tmpl.id))
 
     @api.constrains('mcp_server_ids', 'project_ids')
@@ -228,8 +228,8 @@ class AgentTemplate(models.Model):
             for mcp in t.mcp_server_ids:
                 if mcp.id not in allowed:
                     raise ValidationError(
-                        "MCP server '%s' is not bound to any of template "
-                        "'%s' projects and is not system-scope."
+                        _("MCP server '%s' is not bound to any of template "
+                          "'%s' projects and is not system-scope.")
                         % (mcp.name, t.name or t.id)
                     )
 
@@ -251,8 +251,8 @@ class AgentTemplate(models.Model):
             for skill in t.skill_ids:
                 if skill.id not in allowed:
                     raise ValidationError(
-                        "Skill '%s' is not bound to any of template "
-                        "'%s' projects and is not system-scope."
+                        _("Skill '%s' is not bound to any of template "
+                          "'%s' projects and is not system-scope.")
                         % (skill.name, t.name or t.id)
                     )
 
@@ -289,9 +289,9 @@ class AgentTemplate(models.Model):
             if duplicates:
                 raise ValidationError(_(
                     "Agent template '%(tmpl)s' binds multiple skills with the "
-                    "same name: %(names)s. An agent pod loads skills by name, "
-                    "so two same-named bindings would collide. Unbind all but "
-                    "one version (keep the one you want the pod to load).",
+                      "same name: %(names)s. An agent pod loads skills by name, "
+                      "so two same-named bindings would collide. Unbind all but "
+                      "one version (keep the one you want the pod to load).",
                     tmpl=t.name or t.id,
                     names=', '.join(duplicates),
                 ))

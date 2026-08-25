@@ -15,6 +15,7 @@ from ..models.workspace_access import ROLE_OWNER, ROLE_ADMIN
 # #536：sync-control 的兩個逃生門只認模組私有 sentinel（`call_kw` 把呼叫端
 # context 整包換進 env，只判 truthy 的 key 租戶自己就打得開）。
 from ..models.security_access import _rule_replace, _skip_route_sync
+from odoo import _
 
 _logger = logging.getLogger(__name__)
 
@@ -53,14 +54,14 @@ class SmartHomeController(Controller):
         """
         workspace = self._get_workspace_or_error(workspace_id)
         if not workspace:
-            return {"success": False, "error": "Workspace not found or access denied"}
+            return {"success": False, "error": _("Workspace not found or access denied")}
 
         if action == "list":
             return self._list_smarthomes(workspace)
         elif action == "create":
             access = workspace.check_user_access(request.env.user)
             if not access or access.role not in [ROLE_OWNER, ROLE_ADMIN]:
-                return {"success": False, "error": "Insufficient permissions"}
+                return {"success": False, "error": _("Insufficient permissions")}
             plan_id = kwargs.get("plan_id")
             template_id = kwargs.get("template_id")
             return self._create_smarthome(
@@ -89,11 +90,11 @@ class SmartHomeController(Controller):
         """
         workspace = self._get_workspace_or_error(workspace_id)
         if not workspace:
-            return {"success": False, "error": "Workspace not found or access denied"}
+            return {"success": False, "error": _("Workspace not found or access denied")}
 
         smarthome = self._get_smarthome_or_error(smarthome_id, workspace)
         if not smarthome:
-            return {"success": False, "error": "Smart home not found"}
+            return {"success": False, "error": _("Smart home not found")}
 
         if action == "get":
             # #768：`include_details=True` 才帶 `routes`。清單端點刻意不帶——它
@@ -118,7 +119,7 @@ class SmartHomeController(Controller):
         # 這是 two-layer-acl-lockstep 的要求，不是附帶重構。
         access = workspace.check_user_access(request.env.user)
         if not access or access.role not in [ROLE_OWNER, ROLE_ADMIN]:
-            return {"success": False, "error": "Insufficient permissions"}
+            return {"success": False, "error": _("Insufficient permissions")}
 
         if action == "refresh_status":
             return self._refresh_status(smarthome)
@@ -144,19 +145,19 @@ class SmartHomeController(Controller):
     ) -> dict[str, Any]:
         """Change subscription plan for a smart home."""
         if not plan_id:
-            return {"success": False, "error": "plan_id is required"}
+            return {"success": False, "error": _("plan_id is required")}
 
         workspace = self._get_workspace_or_error(workspace_id)
         if not workspace:
-            return {"success": False, "error": "Workspace not found or access denied"}
+            return {"success": False, "error": _("Workspace not found or access denied")}
 
         smarthome = self._get_smarthome_or_error(smarthome_id, workspace)
         if not smarthome:
-            return {"success": False, "error": "Smart home not found"}
+            return {"success": False, "error": _("Smart home not found")}
 
         access = workspace.check_user_access(request.env.user)
         if not access or access.role not in [ROLE_OWNER, ROLE_ADMIN]:
-            return {"success": False, "error": "Insufficient permissions"}
+            return {"success": False, "error": _("Insufficient permissions")}
 
         # sudo: portal users lack ACL on sh.subscription.plan; the records are
         # catalog data and the workspace-access check above already gates who
@@ -164,7 +165,7 @@ class SmartHomeController(Controller):
         Plan = request.env["sh.subscription.plan"].sudo()
         plan = Plan.browse(plan_id)
         if not plan.exists():
-            return {"success": False, "error": "Plan not found"}
+            return {"success": False, "error": _("Plan not found")}
 
         # #768：plan 必須屬於某個上架中的 Smart Home template——與 **create 路徑
         # 同一把尺**（`_create_smarthome` 的 `plan not in
@@ -186,7 +187,7 @@ class SmartHomeController(Controller):
             ("subscription_plan_ids", "in", plan.ids),
         ]):
             return {"success": False,
-                    "error": "Selected plan is not available for Smart Home"}
+                    "error": _("Selected plan is not available for Smart Home")}
 
         # sudo: portal/workspace-owner users typically lack ACL on
         # sh.subscription.subscription (it gates on group_sh_subscription_manager,
@@ -200,7 +201,7 @@ class SmartHomeController(Controller):
             old_sub.id if old_sub else None,
         )
         if not old_sub or old_sub.state != "in_progress":
-            return {"success": False, "error": "No active subscription"}
+            return {"success": False, "error": _("No active subscription")}
 
         # During trial, sh_end_date is legitimately NULL (billing period
         # hasn't started yet — mixin sets sh_start_date = trial_end + 1 but
@@ -212,7 +213,7 @@ class SmartHomeController(Controller):
         # new plan, so the rest of the flow does not need NULL-date guards.
         if not old_sub.sh_trial:
             if not old_sub.sh_end_date or not old_sub.sh_start_date:
-                return {"success": False, "error": "Subscription dates are incomplete"}
+                return {"success": False, "error": _("Subscription dates are incomplete")}
 
         refund = old_sub._compute_unused_refund()
 
@@ -316,12 +317,12 @@ class SmartHomeController(Controller):
         if not template.exists() or not template.is_active:
             return {
                 "success": False,
-                "error": "Smart Home template not found or inactive",
+                "error": _("Smart Home template not found or inactive"),
             }
         if not template.subscription_plan_ids:
             return {
                 "success": False,
-                "error": "Template has no subscription plans configured",
+                "error": _("Template has no subscription plans configured"),
             }
 
         data = []
@@ -372,16 +373,16 @@ class SmartHomeController(Controller):
         if not workspace:
             return {
                 "success": False,
-                "error": "Workspace not found or access denied",
+                "error": _("Workspace not found or access denied"),
             }
 
         access = workspace.check_user_access(request.env.user)
         if not access or access.role not in [ROLE_OWNER, ROLE_ADMIN]:
-            return {"success": False, "error": "Insufficient permissions"}
+            return {"success": False, "error": _("Insufficient permissions")}
 
         smarthome = self._get_smarthome_or_error(smarthome_id, workspace)
         if not smarthome:
-            return {"success": False, "error": "Smart home not found"}
+            return {"success": False, "error": _("Smart home not found")}
 
         try:
             estimate = smarthome._skip_trial_estimate()
@@ -410,16 +411,16 @@ class SmartHomeController(Controller):
         if not workspace:
             return {
                 "success": False,
-                "error": "Workspace not found or access denied",
+                "error": _("Workspace not found or access denied"),
             }
 
         access = workspace.check_user_access(request.env.user)
         if not access or access.role not in [ROLE_OWNER, ROLE_ADMIN]:
-            return {"success": False, "error": "Insufficient permissions"}
+            return {"success": False, "error": _("Insufficient permissions")}
 
         smarthome = self._get_smarthome_or_error(smarthome_id, workspace)
         if not smarthome:
-            return {"success": False, "error": "Smart home not found"}
+            return {"success": False, "error": _("Smart home not found")}
 
         try:
             invoice_info = smarthome._skip_trial()
@@ -464,7 +465,7 @@ class SmartHomeController(Controller):
             return error
         sh_route = self._sh_route(smarthome, route_id)
         if not sh_route:
-            return {"success": False, "error": "Route not found"}
+            return {"success": False, "error": _("Route not found")}
         return self._update_sh_route_access_config(sh_route, kwargs)
 
     @route(
@@ -521,16 +522,16 @@ class SmartHomeController(Controller):
         workspace = self._get_workspace_or_error(workspace_id)
         if not workspace:
             return None, {"success": False,
-                          "error": "Workspace not found or access denied"}
+                          "error": _("Workspace not found or access denied")}
         smarthome = self._get_smarthome_or_error(smarthome_id, workspace)
         if not smarthome:
-            return None, {"success": False, "error": "Smart home not found"}
+            return None, {"success": False, "error": _("Smart home not found")}
         if not require_manage:
             return smarthome, None
         access = workspace.check_user_access(request.env.user)
         if not access or access.role not in [ROLE_OWNER, ROLE_ADMIN]:
             return None, {"success": False,
-                          "error": "Insufficient permissions"}
+                          "error": _("Insufficient permissions")}
         try:
             smarthome._check_operation_allowed(operation="write")
         except Exception as e:
@@ -569,8 +570,8 @@ class SmartHomeController(Controller):
             # 完全無聲的謊。關閉方向（False）不擋：任何情況下都必須關得掉。
             if vals["is_protected"] and not sh_route.hostname:
                 return {"success": False,
-                        "error": "This smart home has no public address to "
-                                 "protect yet."}
+                        "error": _("This smart home has no public address to "
+                                   "protect yet.")}
         for f in ("login_google", "login_email_otp"):
             if f in kwargs:
                 vals[f] = bool(kwargs[f])
@@ -594,10 +595,10 @@ class SmartHomeController(Controller):
 
     def _create_sh_access_policy(self, smarthome, kwargs):
         if not kwargs.get("name"):
-            return {"success": False, "error": "name is required"}
+            return {"success": False, "error": _("name is required")}
         sh_route = self._sh_route(smarthome, kwargs.get("route_id"))
         if not sh_route:
-            return {"success": False, "error": "Route not found"}
+            return {"success": False, "error": _("Route not found")}
         # 兩層 quota：model 的 `_check_policy_quota` 是權威，這裡是為了回一句人
         # 看得懂的話。**0 = unlimited**（#743）——沒有這個豁免，model 那邊的豁免
         # 從 UI 不可達（`existing >= quota` 在 0 >= 0 時第一條就擋掉），而 SH 的
@@ -611,8 +612,8 @@ class SmartHomeController(Controller):
                 [("smart_home_id", "=", smarthome.id)])
             if quota and existing >= quota:
                 return {"success": False,
-                        "error": "Access policy quota exceeded: plan allows "
-                                 "%d polic(ies)" % quota}
+                        "error": _("Access policy quota exceeded: plan allows "
+                                   "%d polic(ies)") % quota}
         # 白名單：錨點由**已 gate 過的 route** 決定，不讀 kwargs 的其他欄位——
         # client 送什麼 `cf_policy_id` / 別的錨點都無效。arc 是 arity 檢查不是
         # ownership 檢查，一條只帶別人 route_id 的 policy 完全通得過 arc，所以
@@ -662,7 +663,7 @@ class SmartHomeController(Controller):
     def _update_sh_access_policy(self, smarthome, policy_id, kwargs):
         pol = self._sh_policy(smarthome, policy_id)
         if not pol:
-            return {"success": False, "error": "Policy not found"}
+            return {"success": False, "error": _("Policy not found")}
         vals = {}
         for f in ("name", "decision", "sequence"):
             if f in kwargs:
@@ -687,10 +688,10 @@ class SmartHomeController(Controller):
     def _delete_sh_access_policy(self, smarthome, policy_id):
         pol = self._sh_policy(smarthome, policy_id)
         if not pol:
-            return {"success": False, "error": "Policy not found"}
+            return {"success": False, "error": _("Policy not found")}
         try:
             pol.unlink()
-            return {"success": True, "data": {"message": "Policy deleted"}}
+            return {"success": True, "data": {"message": _("Policy deleted")}}
         except Exception as e:
             _logger.exception(
                 "[SH] Failed to delete access policy %s: %s", policy_id, e)
@@ -708,7 +709,7 @@ class SmartHomeController(Controller):
         """
         policy_ids = kwargs.get("policy_ids") or []
         if not isinstance(policy_ids, list):
-            return {"success": False, "error": "policy_ids must be a list"}
+            return {"success": False, "error": _("policy_ids must be a list")}
         reordered = []
         touched_routes = request.env[_ROUTE_MODEL]
         try:
@@ -777,11 +778,11 @@ class SmartHomeController(Controller):
         is rejected at the same layer for both service types.
         """
         if not name:
-            return {"success": False, "error": "Name is required"}
+            return {"success": False, "error": _("Name is required")}
         if not template_id:
-            return {"success": False, "error": "Smart Home template is required"}
+            return {"success": False, "error": _("Smart Home template is required")}
         if not plan_id:
-            return {"success": False, "error": "Subscription plan is required"}
+            return {"success": False, "error": _("Subscription plan is required")}
 
         # Validate template
         SmartHomeTemplate = request.env[
@@ -791,7 +792,7 @@ class SmartHomeController(Controller):
         if not template.exists() or not template.is_active:
             return {
                 "success": False,
-                "error": "Smart Home template not found or inactive",
+                "error": _("Smart Home template not found or inactive"),
             }
 
         # Pre-check that the template actually has plans linked. Without
@@ -804,18 +805,18 @@ class SmartHomeController(Controller):
         if not template.subscription_plan_ids:
             return {
                 "success": False,
-                "error": "Template has no subscription plans configured",
+                "error": _("Template has no subscription plans configured"),
             }
 
         # Validate plan and its membership in the template's plan list
         Plan = request.env["sh.subscription.plan"].sudo()
         plan = Plan.browse(plan_id)
         if not plan.exists():
-            return {"success": False, "error": "Subscription plan not found"}
+            return {"success": False, "error": _("Subscription plan not found")}
         if plan not in template.subscription_plan_ids:
             return {
                 "success": False,
-                "error": "Selected plan is not available for this template",
+                "error": _("Selected plan is not available for this template"),
             }
 
         SmartHome = request.env["woow_paas_platform.smart_home"]
@@ -843,13 +844,13 @@ class SmartHomeController(Controller):
             return {"success": True, "data": smarthome.to_dict()}
         except Exception as e:
             _logger.exception("[SH] Failed to create smart home: %s", e)
-            return {"success": False, "error": "Failed to create smart home. Please try again."}
+            return {"success": False, "error": _("Failed to create smart home. Please try again.")}
 
     def _delete_smarthome(self, smarthome) -> dict[str, Any]:
         """Delete a smart home and its tunnel."""
         try:
             smarthome.action_delete()
-            return {"success": True, "data": {"message": "Smart home deleted"}}
+            return {"success": True, "data": {"message": _("Smart home deleted")}}
         except Exception as e:
             _logger.error("Failed to delete smart home: %s", e)
             return {"success": False, "error": str(e)}
