@@ -89,9 +89,10 @@
     {
       "class": "owl-template",
       "pattern": "^src/static/src/.*\\.xml$",
-      "why": "OWL template 語法錯誤會過 XML parse + 全部 Python test，runtime 直接全站白屏；唯一攔截網是 headed 實走 + repo-lint 靜態檢查",
+      "why": "OWL template 語法錯誤會過 XML parse + 全部 Python test，runtime 直接全站白屏；唯一攔截網是 headed 實走 + repo-lint 靜態檢查；另一類是 i18n：component tag 上的可翻譯屬性抽不到——那一類不會白屏，而是「畫面正常但永遠不被翻譯」，成功與失敗在 diff 上長得一模一樣",
       "docs": [
-        "docs/tracking/pitfalls/owl-template-crash-class-syntax.md — component 上不可 t-att-（prop 直接吃 expression）；無 .enter/.esc modifier，按鍵判斷在 handler 內讀 ev.key"
+        "docs/tracking/pitfalls/owl-template-crash-class-syntax.md — component 上不可 t-att-（prop 直接吃 expression）；無 .enter/.esc modifier，按鍵判斷在 handler 內讀 ev.key",
+        "docs/tracking/pitfalls/owl-component-tag-translatable-attrs-dropped.md — component tag 上的 alt/aria-*/data-tooltip/label/placeholder/title 寫成字面字串 ⇒ Odoo 抽取器 9/9 全部抽不到、畫面照常顯示、永遠不會被翻譯；正解 `label.translate=`（裸文案）"
       ]
     },
     {

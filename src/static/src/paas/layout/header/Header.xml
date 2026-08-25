@@ -4,12 +4,12 @@
         <header class="o_woow_header">
             <div class="o_woow_header_left">
                 <div class="o_woow_mobile_logo">
-                    <span class="material-symbols-outlined">deployed_code</span>
+                    <span class="material-symbols-outlined" t-translation="off">deployed_code</span>
                     <span>WoowTech</span>
                 </div>
                 <nav class="o_woow_breadcrumb" aria-label="breadcrumb">
                     <t t-foreach="breadcrumbItems" t-as="item" t-key="item_index">
-                        <span t-if="item_index > 0" class="material-symbols-outlined o_woow_breadcrumb_sep">chevron_right</span>
+                        <span t-if="item_index > 0" class="material-symbols-outlined o_woow_breadcrumb_sep" t-translation="off">chevron_right</span>
                         <span t-if="item.path"
                               class="o_woow_breadcrumb_item o_woow_breadcrumb_link"
                               t-on-click="() => this.onBreadcrumbClick(item.path)"
@@ -23,7 +23,7 @@
             <div class="o_woow_header_actions">
                 <!-- Credits 徽章 -->
                 <div class="o_woow_credits_badge">
-                    <span class="material-symbols-outlined">payments</span>
+                    <span class="material-symbols-outlined" t-translation="off">payments</span>
                     <span class="o_woow_credits_label">CREDITS</span>
                     <span class="o_woow_credits_amount">
                         <t t-if="billingService.walletLoading">...</t>
@@ -31,13 +31,13 @@
                     </span>
                     <button class="o_woow_credits_add"
                             t-on-click="() => this.props.router.navigate('billing/topup')">
-                        <span class="material-symbols-outlined">add</span>
+                        <span class="material-symbols-outlined" t-translation="off">add</span>
                     </button>
                 </div>
 
                 <!-- 通知 -->
                 <button class="o_woow_notification_btn">
-                    <span class="material-symbols-outlined">notifications</span>
+                    <span class="material-symbols-outlined" t-translation="off">notifications</span>
                     <span class="o_woow_notification_badge"/>
                 </button>
 
