@@ -738,3 +738,8 @@ from . import test_tunnel_soft_delete_833
 # tunnel，畫面卻還是綠燈；`action_refresh_status` 開頭的 tunnel_id 早退讓它再也
 # 更新不到）。
 from . import test_tunnel_status_after_teardown_833
+
+# #107：zh_TW 啟用鏈（判別式先造 inactive 世界；`.po` 自檢的三種壞法；`<function>`
+# 沒被包進 noupdate=1 的結構守線）。⚠ 少了這一行，整檔會**從未執行**而測試套件
+# 照樣全綠。
+from . import test_lang_zh_tw_activation_107
