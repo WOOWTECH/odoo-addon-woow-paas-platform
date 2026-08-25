@@ -178,17 +178,25 @@ export async function renderMermaidBlocks(containerEl) {
 function _addToolbar(block) {
     const toolbar = document.createElement("div");
     toolbar.className = "o_woow_mermaid__toolbar";
+    // ⚠ 這四個 title 必須先取值再插進 template literal。寫成 `title="${_t("…")}"`
+    // 畫面照常顯示，但 Odoo 的抽取器**看不到 template literal 的 ${} 內容** ⇒ msgid
+    // 根本不會進 .pot、永遠翻不到，而且 diff 上跟正確寫法長得一樣（#107 實撞：
+    // Zoom in / Zoom out / Reset 三條就是這樣靜默消失的）。
+    const zoomInTitle = _t("Zoom in diagram");
+    const zoomOutTitle = _t("Zoom out diagram");
+    const resetTitle = _t("Reset diagram view");
+    const sourceTitle = _t("Show diagram source");
     toolbar.innerHTML = `
-        <button class="o_woow_mermaid__btn" data-action="zoom-in" title="${_t("Zoom in diagram")}">
+        <button class="o_woow_mermaid__btn" data-action="zoom-in" title="${zoomInTitle}">
             <span class="material-symbols-outlined">zoom_in</span>
         </button>
-        <button class="o_woow_mermaid__btn" data-action="zoom-out" title="${_t("Zoom out diagram")}">
+        <button class="o_woow_mermaid__btn" data-action="zoom-out" title="${zoomOutTitle}">
             <span class="material-symbols-outlined">zoom_out</span>
         </button>
-        <button class="o_woow_mermaid__btn" data-action="reset" title="${_t("Reset diagram view")}">
+        <button class="o_woow_mermaid__btn" data-action="reset" title="${resetTitle}">
             <span class="material-symbols-outlined">fit_screen</span>
         </button>
-        <button class="o_woow_mermaid__btn" data-action="toggle-source" title="${_t("Show diagram source")}">
+        <button class="o_woow_mermaid__btn" data-action="toggle-source" title="${sourceTitle}">
             <span class="material-symbols-outlined">code</span>
         </button>
     `;
