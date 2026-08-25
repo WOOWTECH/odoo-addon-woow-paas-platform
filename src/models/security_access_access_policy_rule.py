@@ -196,6 +196,11 @@ class SecurityAccessAccessPolicyRule(models.Model):
             # 這裡與上面兩條同樣要顯式再跑一次——否則只擋得到走 policy.rule_ids
             # 的寫法，直接對 rule 表寫入的路徑（含 API）整條漏掉。
             policies._check_allow_policy_no_bulk_grant()
+            # #521：新增一條 email_list 規則會把「跨該訂閱去重後的位址數」推高
+            # ⇒ 席位配額與上面三條同樣要在 rule 層顯式再跑一次。少了這一行，
+            # 「先建一個合法 policy、再單獨塞 rule」就整條繞過席位計數（#352
+            # 當年踩的是同一個面）。partial-state 安全：它只在真的超額時 raise。
+            policies._check_access_seat_quota()
             if not self._suppress_route_sync():
                 # #745：走 policy 的錨點分派（route 或 cloud_service），不是
                 # `mapped('policy_id.route_id')`——CS 錨定時那個 mapped 是空集，
@@ -215,6 +220,10 @@ class SecurityAccessAccessPolicyRule(models.Model):
             # #352：把既有規則改成 email_domain / everyone、或把它從 exclude
             # 搬進 include，都是同一個繞過（見 policy 上的 constraint）。
             policies._check_allow_policy_no_bulk_grant()
+            # #521：改 rule_value（加位址）或把 rule 搬到另一個 policy 都會動到
+            # 席位計數。`policies` 上面已經把**舊**與**新** policy 都聯集進來，
+            # 所以搬家的兩側各自重驗自己的池。
+            policies._check_access_seat_quota()
             if (not self._suppress_route_sync()
                     and any(k in vals for k in (
                         'group', 'rule_type', 'rule_value', 'sequence',

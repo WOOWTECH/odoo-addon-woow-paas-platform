@@ -332,12 +332,22 @@ class TestAcSeatQuotaRuleLayer(_SeatFixture, TransactionCase):
 
         **預期 GREEN（實作前後皆綠）**。它守的是「別把 unlink 也接上去」——
         接上去的話，租戶想從超額狀態縮回合規會被自己的超額卡住，變成不可修復。
+
+        ⚠ p2 刻意帶**兩條** include email_list rule、只拆掉其中一條：拆到一條
+        不剩會撞既有的 ``_check_at_least_one_include``（RED 輪實撞，訊息逐字是
+        「must contain at least one Include rule」）——那條紅與席位無關，會讓
+        本測試在「席位 unlink 有沒有被接上去」這個問題上零鑑別力。
         """
-        self._subscribe(seats=2)
+        self._subscribe(seats=4)
         p1 = self._policy(self.r1, 'p1', 'a@x.com, b@x.com')
-        p2 = self._policy(self.r2, 'p2', 'a@x.com')
-        self._assert_not_blocked(lambda: p2.rule_ids.unlink())
+        p2 = self.Policy.create({
+            'route_id': self.r2.id, 'name': 'p2', 'decision': 'allow',
+            'rule_ids': [self._emails_rule('c@x.com'),
+                         self._emails_rule('d@x.com')]})
+        self.assertEqual(len(p2.rule_ids), 2, '前提不成立：p2 沒有兩條 rule')
+        self._assert_not_blocked(lambda: p2.rule_ids[0].unlink())
         self.assertTrue(p1.exists())
+        self.assertEqual(len(p2.rule_ids), 1)
 
 
 class TestAcSeatQuotaBff(_SeatFixture, TransactionCase):
@@ -397,13 +407,28 @@ class TestAcSeatBasePlanBlastRadius(_SeatFixture, TransactionCase):
         return pol
 
     def test_pre_existing_policy_is_blocked_on_edit(self):
-        """**未經拍板**：base 方案（0 席）上的既有 policy，改 email 就被擋。
+        """**未經拍板**：base 方案（0 席）上的既有 policy，一碰就被擋。
 
         **預期 RED（實作前）**：沒有例外。
+
+        兩種編輯都測，而**縮短清單那一種才是重點**：席位 0 之下，把清單從 2 個
+        位址改成 1 個——一個明確**減少**用量的操作——照樣被擋，因為 1 > 0。
+        這就是爆炸半徑的最尖銳形狀：既有租戶不但不能加人，連自己收拾都做不到。
+
+        ⚠ 刻意**不用** ``(5, 0, 0)`` 全換寫法：RED 輪實撞，它會讓 policy 中途
+        沒有任何 include，擋它的是 ``_check_at_least_one_include``（訊息逐字
+        「must contain at least one Include rule」），與席位無關。
         """
         pol = self._pre_existing_policy()
+        rule = pol.rule_ids.filtered(lambda r: r.rule_type == 'email_list')
+        self.assertTrue(rule, '前提不成立：既有 policy 上沒有 email_list rule')
+        # (a) 縮短清單（2 → 1）仍被擋
+        msg = self._expect_seat_block(
+            lambda: rule.write({'rule_value': 'a@x.com'}))
+        self.assertIn('0', msg, msg)
+        # (b) 加一個位址當然也被擋（同一格的顯而易見那一半）
         self._expect_seat_block(lambda: pol.write({
-            'rule_ids': [(5, 0, 0), self._emails_rule('a@x.com')]}))
+            'rule_ids': [self._emails_rule('c@x.com')]}))
 
     def test_pre_existing_policy_survives_untouched(self):
         """沒被編輯的既有 policy 仍在、內容不變（不做追溯刪除或清空）。

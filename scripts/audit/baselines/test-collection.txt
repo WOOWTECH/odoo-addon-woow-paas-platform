@@ -17,6 +17,10 @@
 #
 # 這份清單目前是**靜態預測**，尚未與真實 CI 執行清單對帳過
 # （對帳排程：B+C 觸發策略落地後第一趟 develop push 全套，見 issue #546）。
+2	test_ac_access_seat_enforcement_521.TestAcSeatBasePlanBlastRadius
+1	test_ac_access_seat_enforcement_521.TestAcSeatQuotaBff
+8	test_ac_access_seat_enforcement_521.TestAcSeatQuotaModel
+3	test_ac_access_seat_enforcement_521.TestAcSeatQuotaRuleLayer
 3	test_access_failopen_compensation_794.TestCompensationHelperContract
 3	test_access_failopen_compensation_794.TestCsFailOpenCompensation
 4	test_access_failopen_compensation_794.TestReconcilerDanglingProtectedApps

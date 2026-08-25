@@ -661,6 +661,118 @@ class SecurityAccessAccessPolicy(models.Model):
                     "Access policy quota exceeded: plan '%s' allows %d "
                     "polic(ies)." % (plan.name, quota))
 
+    @api.constrains('rule_ids', 'security_access_id', 'smart_home_id',
+                    *_ANCHOR_FIELDS)
+    def _check_access_seat_quota(self):
+        """#521 第 1 層：``plan.ac_max_access_seats`` 的 enforcement。
+
+        判準＝**1-A 清單基準**（Eugene 2026-08-25 拍板；權威措辭在
+        ``docs/plans/2026-Q3/2026-07-10-plan-taxonomy-pricing.md:270``）：
+        「distinct email 位址數 ≤ 內含＋已購」，計數範圍是**跨該訂閱全部
+        route 去重**（同檔 ``:258``）。超額行為＝擋寫入（2026-08-15 已拍，
+        不做自動計費）。
+
+        ## 「內含＋已購」為什麼就是 plan 上那一個欄位
+
+        內含 M=0；已購走 ``{base}_ac{n}_{cycle}`` 隱藏席數變體 plan
+        （``sh_subscription_plan_visibility.py::_attach_variants``）。一筆訂閱
+        恰好掛一個 plan ⇒ 該 plan 的 ``ac_max_access_seats`` 就是這筆訂閱的
+        席位總額，不需要再去別處加總。
+
+        ## 🔴 0 ＝ 一席都沒有，**不是** unlimited
+
+        這與上面兩條相鄰 quota 相反，而且是刻意的——欄位自己的三個載體一致：
+        ``sh_subscription_plan_ac.py`` 的 help 逐字「上限＝0＋已購 AC 席數」
+        「0＝未加購任何席位」；pricing ``:270`` 的「內含 M=0」；前端能力 gate
+        ``ServiceDetailPage.js:229`` 是 ``> 0`` 才顯示 AC 頁籤（base 方案根本
+        不提供這個功能）。
+        ``_check_emails_per_policy`` 的註解已寫明 0 的語意**不是** module 級
+        慣例（``sa_max_routes`` 的 0 同樣是「一條都不准」）⇒ 逐欄位認定。
+        ⚠ 改這一格之前先看 ``TestAcSeatBasePlanBlastRadius``：seed 的 base 方案
+        全部是 0，所以這個語意直接決定既有租戶的可寫性。
+
+        ## 計數範圍走錨點池，與 ``_check_policy_quota`` 同一把尺
+
+        判準的字面是「跨該訂閱全部 route」，而 policy 綁的是 route、池欄位是
+        stored related ``security_access_id`` ⇒ 用 ``_ANCHOR_POOL_FIELD`` 取池
+        欄位，等價於「該 SA 的全部 route」。CS／SH 錨定同理（各自 pool 在自己
+        的錨點上，而錨點就是帶訂閱的那個實體）。**不自己走一次錨點**：
+        ``_anchor()`` / ``_anchor_plan()`` 是唯一裁決處，計數範圍與配額來源
+        因此不可能漂開。
+
+        ## 為什麼池的 search 要 ``sudo()``（與 ``_check_policy_quota`` 不同）
+
+        席位是**平台成本**，不是這位使用者看得到多少。租戶側若因 ir.rule 只看
+        得到池中一部分 policy，未 sudo 的計數會**少算**，而少算的症狀是「配額
+        安靜地變寬」——與「方案席位很多」在輸出上完全不可區分。
+        ``_check_policy_quota`` 沒有 sudo 是既有形狀，不在本次範圍內改；兩者
+        的差異刻意寫在這裡，免得後人把其中一邊「順手對齊」成另一邊。
+        （池仍以錨點 id 收斂 ⇒ sudo 只放寬可見度，不會把別的租戶算進來。）
+
+        ## migration bypass 沿用 ``cr.sa_skip_policy_quota``
+
+        既有 DB 的 plan 一律 ``ac_max_access_seats = 0``，而
+        ``18.0.1.0.37`` / ``.39`` / ``.150`` 三支 migration 都會在資料搬移過程
+        中建立／重算帶 email_list 的 policy。不沿用同一顆 cursor flag 的話，
+        任何帶 email_list policy 的既有 DB **升版當場中斷**。沿用它零成本地
+        把三支都涵蓋到，且不必回頭改那三個檔。
+        ⚠ 這**不是** grandfather：flag 只活在 migration 那顆 transaction 裡，
+        清掉之後租戶的下一次編輯照擋。「既有超額資料怎麼辦」是 #521 決策點 4，
+        **未拍板**，本方法刻意不做任何豁免。
+        """
+        if getattr(self.env.cr, 'sa_skip_policy_quota', False):
+            return
+        for pol in self:
+            plan = pol._anchor_plan()
+            if not plan:
+                # 無訂閱／無方案 ⇒ grandfathered，與兩條姊妹 quota 同款。
+                continue
+            anchor = pol._anchor()
+            anchor_field = self._ANCHOR_POOL_FIELD.get(anchor._name)
+            if not anchor_field:
+                raise ValidationError(
+                    "Access policy %r is anchored on %s, which has no entry in "
+                    "_ANCHOR_POOL_FIELD — the Access seat quota cannot be "
+                    "scoped. Register the anchor model before shipping it."
+                    % (pol.name or pol.id, anchor._name))
+            seats = plan.ac_max_access_seats
+            pool = self.sudo().search([(anchor_field, '=', anchor.id)])
+            listed = pool._listed_seat_addresses()
+            if len(listed) > seats:
+                raise ValidationError(
+                    "Access seat quota exceeded: plan '%s' allows %d Access "
+                    "seat(s), but this subscription would list %d distinct "
+                    "email address(es) across all of its routes. Seats are "
+                    "counted per subscription with addresses de-duplicated "
+                    "across every policy and route, so listing the same "
+                    "address twice still costs one seat. Remove addresses, or "
+                    "add Access seats to the subscription."
+                    % (plan.name, seats, len(listed)))
+
+    def _listed_seat_addresses(self):
+        """這批 policy 的 ``email_list`` 位址集合（正規化後去重）。
+
+        **不分 decision、不分 group**，與 ``_check_emails_per_policy`` 和 #352
+        對「人數」的既有讀法一致（那兩處同樣是「數 email_list 規則裡的位址」，
+        沒有 decision／group 條件）。把這裡改成只算 ``allow × include`` 會讓
+        本檢查與計費文件的措辭分家，要改必須連同 pricing §4.3 一起改。
+
+        正規化＝``strip()`` ＋ ``lower()``。大小寫在 Cloudflare 的 email 比對
+        上不區分 ⇒ ``A@x.com`` 與 ``a@x.com`` 是同一個人、消耗同一席；不 lower
+        的話會把一個人算成兩席（**多收**，方向對租戶不利且與 CF 實況不符）。
+        ⚠ 這一格是本次接線裡唯一沒有逐字載體的判讀，變更前請連同
+        ``test_dedupe_is_case_insensitive_but_a_new_address_still_blocks``
+        一起看。
+        """
+        addresses = set()
+        for rule in self.mapped('rule_ids').filtered(
+                lambda r: r.rule_type == 'email_list'):
+            for raw in (rule.rule_value or '').split(','):
+                address = raw.strip().lower()
+                if address:
+                    addresses.add(address)
+        return addresses
+
     # Atomicity scope: mirror the route sub-model's savepoint so a
     # create/write/unlink whose Access re-sync raises rolls the DB row back and
     # re-raises, rather than leaving a committed policy row the operator never
