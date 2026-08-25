@@ -724,3 +724,7 @@ from . import test_access_resync_cron_803
 # 🔴 不共用 mixin 放 `test_*`（loader 走 `__dict__`，mixin 上的不會被執行）；
 # 共用的只有 module-level helper function。
 from . import test_change_plan_ends_trial_36
+
+# #833：軟刪除的 tunnel 必須與「還在、只是沒連上」可區分（判別式 ＋ 陽性對照 ＋
+# 舊 operator 缺鍵對照）。⚠ 少了這一行，整檔會**從未執行**而測試套件照樣全綠。
+from . import test_tunnel_soft_delete_833
