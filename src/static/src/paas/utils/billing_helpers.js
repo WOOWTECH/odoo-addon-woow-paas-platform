@@ -1,5 +1,7 @@
 /** @odoo-module **/
 
+import { _t } from "@web/core/l10n/translation";
+
 /**
  * Shared billing helper utilities.
  *
@@ -113,7 +115,7 @@ export function formatPoints(value, { signed = false, precision = 2 } = {}) {
   let prefix = "";
   if (signed && n > 0) prefix = "+";
   else if (n < 0) prefix = "-";
-  return `${prefix}${body} pts`;
+  return _t("%(amount)s pts", { amount: `${prefix}${body}` });
 }
 
 /**
@@ -160,10 +162,10 @@ export function formatAmountDecimal(amount) {
  * Invoice status map: status key -> { label, color }.
  */
 export const INVOICE_STATUS_MAP = {
-  draft: { label: "Draft", color: "gray" },
-  waiting: { label: "Waiting for Payment", color: "blue" },
-  paid: { label: "Paid", color: "green" },
-  overdue: { label: "Overdue", color: "red" },
+  draft: { label: _t("Draft"), color: "gray" },
+  waiting: { label: _t("Waiting for Payment"), color: "blue" },
+  paid: { label: _t("Paid"), color: "green" },
+  overdue: { label: _t("Overdue"), color: "red" },
 };
 
 /**
@@ -203,7 +205,11 @@ export function formatTopupDescription(txn) {
   const total = base + bonus;
   // Defensive against a falsy description: avoid interpolating literal "undefined".
   const desc = txn.description || "";
-  return `${desc} + ${bonus.toLocaleString()} bonus = ${total.toLocaleString()} pts`;
+  return _t("%(description)s + %(bonus)s bonus = %(total)s pts", {
+    description: desc,
+    bonus: bonus.toLocaleString(),
+    total: total.toLocaleString(),
+  });
 }
 
 /**

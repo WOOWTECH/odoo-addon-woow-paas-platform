@@ -1,5 +1,6 @@
 /** @odoo-module **/
 import { Component, useState, onMounted } from "@odoo/owl";
+import { _t } from "@web/core/l10n/translation";
 import { WoowCard } from "../../components/card/WoowCard";
 import { WoowIcon } from "../../components/icon/WoowIcon";
 import { WoowButton } from "../../components/button/WoowButton";
@@ -59,16 +60,16 @@ export class InvoiceDetailPage extends Component {
   get dueLabel() {
     if (!this.invoice) return "";
     const status = this.invoice.status_label || "draft";
-    if (status === "paid") return "Paid";
-    if (status === "overdue") return "Overdue";
+    if (status === "paid") return _t("Paid");
+    if (status === "overdue") return _t("Overdue");
     if (!this.invoice.invoice_date_due) return "";
     try {
       const due = new Date(this.invoice.invoice_date_due);
       const now = new Date();
       const diff = Math.ceil((due - now) / (1000 * 60 * 60 * 24));
-      if (diff < 0) return "Overdue";
-      if (diff === 0) return "Due today";
-      return `Due in ${diff} day${diff > 1 ? "s" : ""}`;
+      if (diff < 0) return _t("Overdue");
+      if (diff === 0) return _t("Due today");
+      return diff > 1 ? _t("Due in %s days", diff) : _t("Due in %s day", diff);
     } catch {
       return "";
     }

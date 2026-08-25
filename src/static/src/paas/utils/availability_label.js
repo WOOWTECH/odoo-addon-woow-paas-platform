@@ -1,5 +1,7 @@
 /** @odoo-module **/
 
+import { _t } from "@web/core/l10n/translation";
+
 /**
  * 商品可購買性的單一判準與文案來源（#501）。
  *
@@ -40,9 +42,9 @@ export function isPurchasable(availability) {
  * 而且不會有任何錯誤。新 reason 只該讓標籤變成不精確（中性），不該變成假的。
  */
 const REASON_LABELS = {
-  paused: "暫停販售",
-  sold_out: "已售罄",
-  unpinned_chart: "暫不開放",
+  paused: _t("Sales paused"),
+  sold_out: _t("No slots available"),
+  unpinned_chart: _t("Not available for purchase"),
 };
 
 /**
@@ -55,5 +57,5 @@ export function availabilityLabel(availability) {
   // fallback「暫不開放」＝「不可購買，但我們不確定是哪一種」。缺 reason 的
   // payload（舊快取／漏帶欄位）走到這裡也一樣——中性描述才與 isPurchasable 的
   // fail-closed 語意一致。
-  return REASON_LABELS[availability?.reason] ?? "暫不開放";
+  return REASON_LABELS[availability?.reason] ?? _t("Not available for purchase");
 }

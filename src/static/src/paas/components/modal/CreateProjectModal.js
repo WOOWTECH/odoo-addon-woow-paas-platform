@@ -1,5 +1,6 @@
 /** @odoo-module **/
 import { Component, useState, onMounted } from "@odoo/owl";
+import { _t } from "@web/core/l10n/translation";
 import { WoowButton } from "../button/WoowButton";
 import { WoowIcon } from "../icon/WoowIcon";
 import { supportService } from "../../services/support_service";
@@ -51,7 +52,7 @@ export class CreateProjectModal extends Component {
             }
         } catch (err) {
             console.error("CreateProjectModal: failed to load workspaces:", err);
-            this.state.error = "Failed to load workspaces";
+            this.state.error = _t("Failed to load workspaces");
         } finally {
             this.state.workspacesLoading = false;
         }
@@ -117,7 +118,7 @@ export class CreateProjectModal extends Component {
     async onSubmit() {
         const name = this.state.name.trim();
         if (!name) {
-            this.state.error = "Project name is required";
+            this.state.error = _t("Project name is required");
             return;
         }
 
@@ -149,11 +150,11 @@ export class CreateProjectModal extends Component {
             if (result.success) {
                 this.props.onCreated(result.data);
             } else {
-                this.state.error = result.error || "Failed to create project";
+                this.state.error = result.error || _t("Failed to create project");
             }
         } catch (err) {
             console.error("CreateProjectModal: submit failed:", err);
-            this.state.error = "An unexpected error occurred. Please try again.";
+            this.state.error = _t("An unexpected error occurred. Please try again.");
         } finally {
             this.state.loading = false;
         }

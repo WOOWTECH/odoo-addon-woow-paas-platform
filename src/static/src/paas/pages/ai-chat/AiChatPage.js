@@ -1,5 +1,6 @@
 /** @odoo-module **/
 import { Component, useState, onMounted } from "@odoo/owl";
+import { _t } from "@web/core/l10n/translation";
 import { AiChat } from "../../components/ai-chat/AiChat";
 import { WoowIcon } from "../../components/icon/WoowIcon";
 import { WoowButton } from "../../components/button/WoowButton";
@@ -32,13 +33,13 @@ export class AiChatPage extends Component {
             // Try to get channel info from chat history
             const result = await aiService.fetchChatHistory(this.props.conversationId);
             if (result.success) {
-                this.state.channelName = result.data?.channel_name || `Chat #${this.props.conversationId}`;
+                this.state.channelName = result.data?.channel_name || _t("Chat #%s", this.props.conversationId);
             } else {
-                this.state.channelName = `Chat #${this.props.conversationId}`;
+                this.state.channelName = _t("Chat #%s", this.props.conversationId);
             }
         } catch (err) {
             console.warn("Failed to load channel info:", err);
-            this.state.channelName = `Chat #${this.props.conversationId}`;
+            this.state.channelName = _t("Chat #%s", this.props.conversationId);
         } finally {
             this.state.loading = false;
         }

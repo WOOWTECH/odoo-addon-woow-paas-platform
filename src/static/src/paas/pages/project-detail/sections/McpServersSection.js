@@ -1,5 +1,6 @@
 /** @odoo-module **/
 import { Component, useState, onMounted } from "@odoo/owl";
+import { _t } from "@web/core/l10n/translation";
 import { WoowCard } from "../../../components/card/WoowCard";
 import { WoowIcon } from "../../../components/icon/WoowIcon";
 import { WoowButton } from "../../../components/button/WoowButton";
@@ -72,7 +73,7 @@ export class McpServersSection extends Component {
             this.state.servers = result.data;
             this.props.onListChanged(result.data);
         } else {
-            this.state.error = result.error || "Failed to load MCP servers";
+            this.state.error = result.error || _t("Failed to load MCP servers");
         }
         this.state.loading = false;
     }
@@ -136,7 +137,7 @@ export class McpServersSection extends Component {
     async saveServer() {
         const { name, url, transport, api_key, description } = this.state.form;
         if (!name.trim() || !url.trim()) {
-            this.state.formError = "Name and URL are required";
+            this.state.formError = _t("Name and URL are required");
             return;
         }
 
@@ -169,13 +170,13 @@ export class McpServersSection extends Component {
             this.hideForm();
             await this.loadServers();
         } else {
-            this.state.formError = result.error || "Failed to save";
+            this.state.formError = result.error || _t("Failed to save");
         }
         this.state.saving = false;
     }
 
     async deleteServer(server) {
-        if (!confirm(`Are you sure you want to remove MCP server "${server.name}"?`)) {
+        if (!confirm(_t('Are you sure you want to remove MCP server "%s"?', server.name))) {
             return;
         }
         const result = await supportService.deleteProjectMcpServer(this.projectId, server.id);

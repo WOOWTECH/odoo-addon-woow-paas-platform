@@ -1,5 +1,6 @@
 /** @odoo-module **/
 import { Component, useState } from "@odoo/owl";
+import { _t } from "@web/core/l10n/translation";
 import { WoowButton } from "../button/WoowButton";
 import { WoowIcon } from "../icon/WoowIcon";
 import { billingService } from "../../services/billing_service";
@@ -32,7 +33,7 @@ export class CancelSubscriptionModal extends Component {
   }
 
   get planName() {
-    return this.props.subscription.plan_name || this.props.subscription.name || "this subscription";
+    return this.props.subscription.plan_name || this.props.subscription.name || _t("this subscription");
   }
 
   onBackdropClick(ev) {
@@ -59,7 +60,7 @@ export class CancelSubscriptionModal extends Component {
     if (result.success) {
       this.props.onCancelled();
     } else {
-      this.state.error = result.error || "Cancellation failed";
+      this.state.error = result.error || _t("Cancellation failed");
       this.state.cancelling = false;
     }
   }

@@ -1,5 +1,6 @@
 /** @odoo-module **/
 import { Component, useState, onMounted } from "@odoo/owl";
+import { _t } from "@web/core/l10n/translation";
 import { cloudService } from "../../services/cloud_service";
 
 export class OdooAddonSelector extends Component {
@@ -128,7 +129,7 @@ export class OdooAddonSelector extends Component {
     getRequiredByTooltip(addonId) {
         const dependents = this._getDependentAddons(addonId);
         if (dependents.length === 0) return "";
-        return `Required by: ${dependents.join(", ")}`;
+        return _t("Required by: %s", dependents.join(", "));
     }
 
     onSearchInput(ev) {

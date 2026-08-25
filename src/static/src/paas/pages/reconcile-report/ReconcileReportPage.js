@@ -1,5 +1,6 @@
 /** @odoo-module **/
 import { Component, useState, onMounted } from "@odoo/owl";
+import { _t } from "@web/core/l10n/translation";
 import { WoowCard } from "../../components/card/WoowCard";
 import { WoowIcon } from "../../components/icon/WoowIcon";
 import { WoowButton } from "../../components/button/WoowButton";
@@ -63,7 +64,7 @@ export class ReconcileReportPage extends Component {
     }
 
     reconcilableLabel(candidate) {
-        return candidate.reconcilable ? "可回收" : "人工審";
+        return candidate.reconcilable ? _t("Safe to reclaim") : _t("Manual review needed");
     }
     reconcilableClass(candidate) {
         return candidate.reconcilable
@@ -92,7 +93,7 @@ export class ReconcileReportPage extends Component {
             );
             this.state.reverifyResult[candidate.id] = res.success
                 ? res.data
-                : { error: res.error || "重查失敗" };
+                : { error: res.error || _t("Re-verify failed") };
         } finally {
             this.state.reverifying[candidate.id] = false;
         }

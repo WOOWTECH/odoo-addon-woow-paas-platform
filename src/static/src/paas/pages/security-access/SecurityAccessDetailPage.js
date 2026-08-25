@@ -1,6 +1,7 @@
 /** @odoo-module **/
 
 import { Component, useState, onWillStart, onWillUnmount } from "@odoo/owl";
+import { _t } from "@web/core/l10n/translation";
 import { WoowCard } from "../../components/card/WoowCard";
 import { WoowButton } from "../../components/button/WoowButton";
 import { WoowIcon } from "../../components/icon/WoowIcon";
@@ -13,12 +14,12 @@ import { securityAccessService } from "../../services/security_access";
 import { router } from "../../core/router";
 
 const TABS = [
-  { key: "overview", label: "Overview", icon: "info" },
-  { key: "configuration", label: "Configuration", icon: "settings" },
-  { key: "application", label: "Application", icon: "route" },
-  { key: "access", label: "Access", icon: "shield" },
-  { key: "email", label: "Email", icon: "mail", comingSoon: true },
-  { key: "domains", label: "Domains", icon: "language", comingSoon: true },
+  { key: "overview", label: _t("Overview"), icon: "info" },
+  { key: "configuration", label: _t("Configuration"), icon: "settings" },
+  { key: "application", label: _t("Application"), icon: "route" },
+  { key: "access", label: _t("Access"), icon: "shield" },
+  { key: "email", label: _t("Email"), icon: "mail", comingSoon: true },
+  { key: "domains", label: _t("Domains"), icon: "language", comingSoon: true },
 ];
 
 // Subdomain prefix = ONE DNS label. MUST mirror the backend _PREFIX_RE
@@ -27,9 +28,7 @@ const TABS = [
 // no leading/trailing hyphen. Front-end check gives immediate feedback; the
 // model constraint + availability endpoint enforce the same rule server-side.
 const SUBDOMAIN_RE = /^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/;
-const SUBDOMAIN_HINT =
-  "Use lowercase letters, digits and hyphens only (no dots or symbols); " +
-  "3-63 chars, no leading/trailing hyphen.";
+const SUBDOMAIN_HINT = _t("Use lowercase letters, digits and hyphens only (no dots or symbols); 3-63 chars, no leading/trailing hyphen.");
 
 /**
  * SecurityAccessDetailPage Component
@@ -402,7 +401,7 @@ export class SecurityAccessDetailPage extends Component {
     if (!t.success || !t.data.length) {
       return {
         success: false,
-        error: t.error || "No Security Access template available",
+        error: t.error || _t("No Security Access template available"),
       };
     }
     return securityAccessService.fetchPlans(t.data[0].id);

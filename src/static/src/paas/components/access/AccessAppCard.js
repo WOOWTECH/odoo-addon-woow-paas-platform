@@ -1,6 +1,7 @@
 /** @odoo-module **/
 
 import { Component, useState, useRef, onWillUpdateProps } from "@odoo/owl";
+import { _t } from "@web/core/l10n/translation";
 import { WoowButton } from "../button/WoowButton";
 import { WoowIcon } from "../icon/WoowIcon";
 
@@ -11,7 +12,7 @@ import { WoowIcon } from "../icon/WoowIcon";
 // actually selected by those labels; surfacing the raw 'onetimepin' (a string
 // the user never picked by that name) weakens the warning's actionability.
 const IDP_TYPE_LABELS = {
-  onetimepin: "Email OTP",
+  onetimepin: _t("Email OTP"),
   google: "Google",
 };
 
@@ -157,9 +158,12 @@ export class AccessAppCard extends Component {
   }
 
   policyBadgeLabel(pol) {
-    if (pol.decision === "deny") return "Block";
-    if (pol.decision === "bypass") return "Bypass";
-    return "Allow";
+    // 字面值刻意用 "Blocked" 而非 "Block"：web_editor 已把 JS msgid "Block" 譯成「區塊」
+    // （內容區塊），而 translatedTerms 是跨模組攤平的 flat map、誰贏隨機 ⇒ 撞名唯一可靠解
+    // 是改字面值。詳見 #107 JS 層報告的撞名盤點。
+    if (pol.decision === "deny") return _t("Blocked");
+    if (pol.decision === "bypass") return _t("Bypass");
+    return _t("Allow");
   }
 
   policyMarkClass(pol) {
@@ -176,11 +180,11 @@ export class AccessAppCard extends Component {
   }
 
   policySummary(pol) {
-    const fmt = (r) => (r.rule_type === "everyone" ? "everyone" : r.rule_value);
+    const fmt = (r) => (r.rule_type === "everyone" ? _t("everyone") : r.rule_value);
     const inc = (pol.include || []).map(fmt).join(", ");
     const extra = [];
-    if ((pol.require || []).length) extra.push(`+${pol.require.length} require`);
-    if ((pol.exclude || []).length) extra.push(`-${pol.exclude.length} exclude`);
+    if ((pol.require || []).length) extra.push(_t("+%s require", pol.require.length));
+    if ((pol.exclude || []).length) extra.push(_t("-%s exclude", pol.exclude.length));
     return extra.length ? `${inc} · ${extra.join(" · ")}` : inc;
   }
 
