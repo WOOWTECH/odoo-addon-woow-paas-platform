@@ -10,7 +10,7 @@
                 <!-- #129: 僅在可重試時顯示「重試」；retryable:false 的終態失敗不顯示 -->
                 <button t-if="state.connectionState === 'error' and state.errorRetryable"
                         class="o_woow_ai_chat__retry_btn"
-                        t-on-click="onRetryClick">重試</button>
+                        t-on-click="onRetryClick">Retry</button>
             </div>
 
             <!-- Error banner -->
