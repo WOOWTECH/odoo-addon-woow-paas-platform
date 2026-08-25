@@ -1,6 +1,8 @@
 import logging
 
-from odoo import models
+from markupsafe import Markup
+
+from odoo import _, models
 from odoo.tools import html2plaintext
 
 _logger = logging.getLogger(__name__)
@@ -66,7 +68,8 @@ class DiscussChannel(models.Model):
             # Notify the user in channel that AI reply failed
             error_author_id = assistant.partner_id.id if assistant else self.env.ref('base.partner_root').id
             self.with_context(skip_ai_reply=True, mail_create_nosubscribe=True).message_post(
-                body='⚠️ AI 助理回覆失敗，請稍後再試或聯繫管理員。',
+                body=_('⚠️ The AI assistant could not reply. Please try '
+                       'again later or contact your administrator.'),
                 message_type='notification',
                 subtype_xmlid='mail.mt_note',
                 author_id=error_author_id,
@@ -171,7 +174,11 @@ class DiscussChannel(models.Model):
                 'AI client error for assistant %s: %s (detail=%s)',
                 assistant.name, exc.message, getattr(exc, 'detail', ''),
             )
-            error_msg = f'⚠️ AI 助理回覆失敗：{exc.message}。請稍後再試。'
+            error_msg = Markup('%s') % _(
+                '⚠️ The AI assistant could not reply: %(reason)s '
+                'Please try again later.',
+                reason=exc.message,
+            )
             self.with_context(skip_ai_reply=True, mail_create_nosubscribe=True).message_post(
                 body=error_msg,
                 message_type='notification',

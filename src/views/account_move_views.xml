@@ -8,12 +8,12 @@
             <xpath expr="//button[@name='create_ecpay_invoice']" position="after">
                 <button name="action_woow_retry_ecpay_invoice" type="object"
                         class="oe_stat_button oe_highlight"
-                        icon="fa-refresh" string="重試開立 ECPay 發票"
+                        icon="fa-refresh" string="Retry ECPay E-Invoice"
                         groups="account.group_account_manager"
                         invisible="woow_invoice_issue_state not in ('failed', 'error')"/>
             </xpath>
             <xpath expr="//page[@id='uniform_invoice']/group" position="inside">
-                <group string="PaaS 開立追蹤">
+                <group string="PaaS Issuance Tracking">
                     <field name="woow_invoice_issue_state" readonly="1"/>
                     <field name="woow_invoice_retry_count" readonly="1"/>
                     <field name="woow_invoice_last_error" readonly="1"

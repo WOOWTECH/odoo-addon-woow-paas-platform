@@ -276,27 +276,31 @@ class SmartHomeRoute(models.Model):
     is_primary = fields.Boolean(
         string='Primary Route',
         default=False,
-        help='True = 這條 route 的 hostname 就是 Smart Home 自己的 subdomain，'
-             '由平台在 provision 當下建立，不可刪除也不可改綁（見檔頭）。',
+        help="True = the hostname of this route IS the Smart Home's own "
+             "subdomain, created by the platform at provision time; it can "
+             "neither be deleted nor re-pointed (see the module header).",
     )
     subdomain_prefix = fields.Char(
         string='Subdomain Prefix',
-        help='非 primary route 的使用者自選前綴；hostname = '
-             '{prefix}.{paas_domain}。本階段恆空——第二條 route 需要 tunnel '
-             'ingress 遷移，另票處理（見檔頭）。',
+        help='User-chosen prefix for non-primary routes; hostname = '
+             '{prefix}.{paas_domain}. Always empty at this stage — a second '
+             'route requires the tunnel ingress migration, tracked separately '
+             '(see the module header).',
     )
     hostname = fields.Char(
         string='Hostname',
         compute='_compute_hostname',
-        help='對外 FQDN。primary route **衍生自** smart_home.subdomain 而不是複製'
-             '一份：複製就是第二個真相來源，而兩者不一致時沒有任何訊號。',
+        help='Public FQDN. For a primary route it is **derived from** '
+             'smart_home.subdomain rather than copied: a copy would be a second '
+             'source of truth, and there is no signal whatsoever when the two '
+             'disagree.',
     )
     is_protected = fields.Boolean(
         string='Protected',
         default=False,
-        help='Per-route Access 保護開關。True = 這條 route 自己是一個 '
-             'Cloudflare Access application；False = 經 tunnel 公開可達、無 '
-             'Access 閘。',
+        help='Per-route Access protection switch. True = this route is a '
+             'Cloudflare Access application in its own right; False = publicly '
+             'reachable through the tunnel with no Access gate.',
     )
     session_duration = fields.Selection(
         selection=[
@@ -305,14 +309,14 @@ class SmartHomeRoute(models.Model):
         ],
         string='Session Duration',
         default='24h',
-        help='使用者通過驗證後多久需要重新登入（本 route）。',
+        help='How long users stay authenticated before re-login (this route).',
     )
     login_google = fields.Boolean(string='Login: Google', default=False)
     login_email_otp = fields.Boolean(string='Login: Email OTP', default=False)
     access_app_id = fields.Char(
         string='CF Access App ID', copy=False,
-        help='本 route 的 Cloudflare Access Application id（sync 後回寫）。'
-             '身分錨點：租戶不可寫。',
+        help='Cloudflare Access Application id for THIS route (written back on '
+             'sync). Identity anchor: tenants cannot write it.',
     )
     access_policy_ids = fields.One2many(
         comodel_name='woow_paas_platform.security_access_access_policy',
@@ -321,19 +325,23 @@ class SmartHomeRoute(models.Model):
     )
     access_unresolved_idp_types = fields.Char(
         string='Unresolved Login Methods', copy=False,
-        help='上次 sync 時，被要求但在 Cloudflare 帳號上找不到對應 IdP 的登入'
-             '方式。非空代表登入限制被**靜默放寬**了（若解析後集合為空，Access '
-             'app 會 fallback 到所有可用 IdP）。曝光出來，不要讓 fail-open 的'
-             '放寬無聲無息。',
+        help='Requested login methods with no matching Cloudflare account IdP '
+             'at the last sync. Non-empty means the login restriction '
+             '**silently widened** (if the resolved set emptied, the Access app '
+             'falls back to ALL available IdPs). Surfaced so the fail-open '
+             'widening is not silent.',
     )
     access_protection_lost = fields.Boolean(
         string='Protection Not In Effect', copy=False, default=False,
-        help='True ＝ 這條 route 的 Cloudflare Access application 已經被拆掉、'
-             '而列本身還在（刪除交易回捲了，Cloudflare 那半回捲不掉）。此時 '
-             'is_protected 只是**意圖**：CF 上沒有任何東西在強制登入，hostname '
-             '照常由 tunnel 服務。由下一次成功的 Access sync 清掉。刻意與 '
-             'is_protected 分開——降 is_protected 等於平台改掉租戶看得到的設定'
-             '（產品可見變更），未拍板（#794）。',
+        help='True = the Cloudflare Access application for this route has been '
+             'torn down while the row itself is still here (the delete '
+             'transaction rolled back; the Cloudflare half cannot be). '
+             'is_protected is then only an **intent**: nothing on CF is forcing '
+             'a login, and the hostname is still served through the tunnel. '
+             'Cleared by the next successful Access sync. Deliberately kept '
+             'apart from is_protected — lowering is_protected would mean the '
+             'platform changing a setting the tenant can see (a product-visible '
+             'change), which is not decided yet (#794).',
     )
 
     # ------------------------------------------------------------------ #

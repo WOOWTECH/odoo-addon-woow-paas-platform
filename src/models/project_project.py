@@ -378,8 +378,10 @@ class ProjectProject(models.Model):
                     session._teardown_runtime()
                 except AgentRuntimeOperatorError as exc:
                     raise UserError(
-                        _("無法刪除專案「%s」：其 AI agent 執行環境拆除失敗（%s）。"
-                          "為避免雲端資源變成孤兒，刪除已中止；請稍後再試或聯絡管理員。")
+                        _('Cannot delete project "%s": tearing down its AI '
+                          'agent runtime failed (%s). Deletion was aborted to '
+                          'avoid leaving orphaned cloud resources. Please try '
+                          'again later or contact your administrator.')
                         % (project.name, exc)
                     )
         return super().unlink()

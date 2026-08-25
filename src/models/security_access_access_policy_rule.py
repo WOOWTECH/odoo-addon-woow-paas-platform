@@ -66,13 +66,15 @@ class SecurityAccessAccessPolicyRule(models.Model):
         comodel_name='woow_paas_platform.cloud_service',
         string='Cloud Service',
         related='policy_id.cloud_service_id', store=True, index=True,
-        help='#744：父 policy 的另一半錨點，同樣 store=True 讓 ir.rule 走得到。',
+        help="#744: the parent policy's other anchor; likewise store=True so "
+             "the ir.rule can traverse it.",
     )
     smart_home_id = fields.Many2one(
         comodel_name='woow_paas_platform.smart_home',
         string='Smart Home',
         related='policy_id.smart_home_id', store=True, index=True,
-        help='#768：父 policy 的第三個錨點，同樣 store=True 讓 ir.rule 走得到。',
+        help="#768: the parent policy's third anchor; likewise store=True so "
+             "the ir.rule can traverse it.",
     )
     group = fields.Selection(
         selection=[

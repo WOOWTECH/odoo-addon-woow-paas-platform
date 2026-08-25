@@ -380,11 +380,13 @@ class BillingController(HiddenChainMixin, Controller):
                 or request.httprequest.url_root).rstrip('/')
         target = f'{base}/woow#/settings/payment-methods?bind_status=ok&trade_no={trade_no}'
         # JS redirect avoids the cross-site POST → 303 → cookie-strip pitfall.
+        title = _('Card binding complete')
+        body_text = _('Card binding complete. Returning…')
         html = (
-            '<!doctype html><html><head><meta charset="utf-8"><title>綁定完成</title>'
+            f'<!doctype html><html><head><meta charset="utf-8"><title>{title}</title>'
             f'<meta http-equiv="refresh" content="0;url={target}">'
             f'<script>window.location.replace({json.dumps(target)});</script>'
-            '</head><body>綁定完成，正在返回…</body></html>'
+            f'</head><body>{body_text}</body></html>'
         )
         return request.make_response(
             html, headers=[('Content-Type', 'text/html; charset=utf-8')],

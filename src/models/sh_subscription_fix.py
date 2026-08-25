@@ -3,7 +3,7 @@ import logging
 
 from dateutil.relativedelta import relativedelta
 
-from odoo import api, fields, models
+from odoo import _, api, fields, models
 from odoo.exceptions import ValidationError
 from odoo.tools.misc import formatLang
 
@@ -326,13 +326,16 @@ class ShSubscriptionFix(models.Model):
             ('create_date', '>=', stale_dt),
         ])
         anchor = frozen[0]
-        note = (
-            "有 %(n)s 張 in_progress 訂閱到期超過 %(days)s 天，且期間未被"
-            "任何計費路徑處理（woow_last_payment_failure_at 未更新）。\n"
-            "最久的一張：%(name)s（next_payment=%(np)s）。\n"
-            "佐證：近 %(days)s 天新建的 cycle invoice 共 %(inv)s 張。\n"
-            "可能原因：base auto-invoice cron 被停用（#778 對撞）、或該批"
-            "訂閱的處理持續拋例外被吞。"
+        note = _(
+            "%(n)s in_progress subscription(s) are more than %(days)s days "
+            "past due and were not touched by any billing path during that "
+            "time (woow_last_payment_failure_at was never updated).\n"
+            "Oldest one: %(name)s (next_payment=%(np)s).\n"
+            "Supporting data: %(inv)s cycle invoice(s) created in the last "
+            "%(days)s days.\n"
+            "Likely causes: the base auto-invoice cron was disabled (#778 "
+            "collision), or handling of those subscriptions keeps raising an "
+            "exception that is being swallowed."
         ) % {
             'n': len(frozen), 'days': days,
             'name': anchor.name or anchor.id,

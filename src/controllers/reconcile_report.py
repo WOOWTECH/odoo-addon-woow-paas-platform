@@ -65,11 +65,13 @@ class ReconcileReportController(Controller):
         if not self._is_admin():
             return {'success': False, 'error': _('Admin access required')}
         if not kind or not resource_uid:
-            return {'success': False, 'error': _('kind 與 resource_uid 必填')}
+            return {'success': False,
+                    'error': _('kind and resource_uid are required')}
         try:
             result = reconcile_orphans(request.env)
         except Exception as exc:
-            return {'success': False, 'error': _('重新對帳失敗：%s') % exc}
+            return {'success': False,
+                    'error': _('Reconciliation failed: %s') % exc}
         match = next((c for c in result.orphan_candidates
                       if c.kind == kind and c.id == resource_uid), None)
         return {'success': True, 'data': {
@@ -77,6 +79,9 @@ class ReconcileReportController(Controller):
             'reconcilable': match.reconcilable if match else False,
             'env_hint': match.env_hint if match else '',
             'reason': (match.reason if match
-                       else _('已不在最新對帳的孤兒清單（可能已被新 provision 重用同資源、'
-                              '或已被人工清除）——刪除前請再確認')),
+                       else _("No longer in the latest reconciliation's "
+                              "orphan list (the resource may have been reused "
+                              "by a new provision, or already cleaned up "
+                              "manually). Please double-check before "
+                              "deleting.")),
         }}

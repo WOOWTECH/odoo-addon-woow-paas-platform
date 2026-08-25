@@ -671,7 +671,9 @@ class AiAssistantController(Controller):
                         'Failed to post AI response to channel %s: %s',
                         channel_id, exc,
                     )
-                    warning = 'AI 回覆已生成但無法儲存，請重新整理頁面確認。'
+                    warning = _(
+                        'The AI reply was generated but could not be saved. '
+                        'Please refresh the page to confirm.')
 
             # Send the done signal (with message_id when available)
             done_payload = {
@@ -824,7 +826,8 @@ class AiAssistantController(Controller):
                         cm = None
                         if loop.time() >= deadline:
                             yield {'type': 'error', 'payload': {
-                                'error': _('agent 啟動逾時，請稍後再試'),
+                                'error': _('The agent took too long to '
+                                           'start. Please try again later.'),
                                 'fatal': True}}
                             return
                         yield {'type': 'status', 'payload': {
@@ -1158,13 +1161,13 @@ class AiAssistantController(Controller):
             )
             ready = enabled and bool(template) and has_key and operator_configured
             if not enabled:
-                reason = '此專案未啟用 Agent runtime'
+                reason = _('Agent runtime is not enabled for this project')
             elif not template:
-                reason = '無 Agent Template'
+                reason = _('No agent template')
             elif not has_key:
-                reason = 'Template 未設 API key'
+                reason = _('The agent template has no API key')
             elif not operator_configured:
-                reason = 'Operator 未設定'
+                reason = _('Operator is not configured')
             else:
                 reason = ''
             scope = 'project'
@@ -1180,13 +1183,13 @@ class AiAssistantController(Controller):
             )
             ready = enabled and bool(template) and has_key and operator_configured
             if not enabled:
-                reason = 'Agent runtime 未啟用'
+                reason = _('Agent runtime is not enabled')
             elif not template:
-                reason = '無預設 Agent Template'
+                reason = _('No default agent template')
             elif not has_key:
-                reason = 'Template 未設 API key'
+                reason = _('The agent template has no API key')
             elif not operator_configured:
-                reason = 'Operator 未設定'
+                reason = _('Operator is not configured')
             else:
                 reason = ''
             scope = 'platform'
@@ -1237,7 +1240,7 @@ class AiAssistantController(Controller):
         client = get_agent_runtime_client(request.env)
         if not client:
             return {'success': True, 'data': {
-                'state': 'unknown', 'reason': _('Operator 未設定'),
+                'state': 'unknown', 'reason': _('Operator is not configured'),
             }}
 
         session = request.env['woow_paas_platform.agent_session'].sudo().search(

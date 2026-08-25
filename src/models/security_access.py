@@ -1665,12 +1665,15 @@ class SecurityAccessRoute(models.Model):
     )
     access_protection_lost = fields.Boolean(
         string='Protection Not In Effect', copy=False, default=False,
-        help='True ＝ 這條 route 的 Cloudflare Access application 已經被拆掉、'
-             '而列本身還在（刪除交易回捲了，但 Cloudflare 那半回捲不掉）。此時 '
-             'is_protected 只是**意圖**：Cloudflare 上沒有任何東西在強制登入，'
-             '而 hostname 照常由 tunnel 服務。由下一次成功的 Access sync 清掉。'
-             '刻意與 is_protected 分開——降 is_protected 等於平台改掉租戶看得到'
-             '的設定（產品可見變更），未拍板（#794）。',
+        help='True = the Cloudflare Access application for this route has been '
+             'torn down while the row itself is still here (the delete '
+             'transaction rolled back, but the Cloudflare half cannot be). '
+             'is_protected is then only an **intent**: nothing on Cloudflare is '
+             'forcing a login, and the hostname is still served through the '
+             'tunnel. Cleared by the next successful Access sync. Deliberately '
+             'kept apart from is_protected — lowering is_protected would mean '
+             'the platform changing a setting the tenant can see (a '
+             'product-visible change), which is not decided yet (#794).',
     )
 
     @api.depends('subdomain_prefix')

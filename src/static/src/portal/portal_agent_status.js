@@ -1,5 +1,6 @@
 /** @odoo-module **/
 import { Component, onMounted, onWillStart, onWillUnmount, useState } from "@odoo/owl";
+import { _t } from "@web/core/l10n/translation";
 import { registry } from "@web/core/registry";
 import { aiService } from "../paas/services/ai_service";
 import { podStateLabel } from "../paas/services/agent_pod_state";
@@ -26,7 +27,7 @@ export class PortalAgentStatus extends Component {
       if (res.success) {
         this.state.agent = res.data;
       } else {
-        this.state.error = res.error || "無法取得 Agent 狀態";
+        this.state.error = res.error || _t("Failed to load agent status");
       }
     });
     onMounted(() => {

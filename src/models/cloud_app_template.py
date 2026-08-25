@@ -183,8 +183,10 @@ class CloudAppTemplate(models.Model):
         string='Workload Type',
         default='container',
         required=True,
-        help='VM 型 workload 的就緒／啟停判定與容器型不同（見 #423 v1 設計）：'
-             '就緒讀 VMI phase 而非 pod，啟停走 runStrategy 而非 replicas。',
+        help='VM workloads decide readiness and start/stop differently from '
+             'containers (see the #423 v1 design): readiness reads the VMI '
+             'phase instead of the pod, and start/stop goes through runStrategy '
+             'instead of replicas.',
     )
 
     # MCP Sidecar Configuration
@@ -236,12 +238,14 @@ class CloudAppTemplate(models.Model):
     # 同時錯放與錯擋（#357 根因 C01）——本欄位是該供給鏈的 single source of truth，
     # model（cloud_service）與 controller（paas）兩端都必須讀它、不得自建 slug allowlist。
     has_admin_gui = fields.Boolean(
-        string='Admin GUI 內建',
+        string='Built-in Admin GUI',
         default=False,
-        help='image 內建 mcp-admin-core 的 admin GUI，需平台供給 admin_password '
-             '（建立服務時生成、存入 cloud_service_secret、經 Helm sensitive values '
-             '注入）。與「Enable MCP Sidecar」正交：MCP 內建於 body 的 template '
-             'mcp_enabled=False 但 has_admin_gui=True。',
+        help='The image ships the mcp-admin-core admin GUI and needs the '
+             'platform to supply admin_password (generated when the service is '
+             'created, stored in cloud_service_secret, injected through Helm '
+             'sensitive values). Orthogonal to "Enable MCP Sidecar": a template '
+             'whose MCP is built into the body has mcp_enabled=False but '
+             'has_admin_gui=True.',
     )
 
     # #449 密碼載體：**只影響 reset 路徑，不影響供給路徑**。
@@ -264,16 +268,20 @@ class CloudAppTemplate(models.Model):
     # 落成 PVC 上的設定檔」判定，不要照 slug 猜。
     admin_password_carrier = fields.Selection(
         selection=[
-            ('config_json', 'config.json（PVC 內設定檔，mcp-server 家族）'),
-            ('helm_secret', 'Helm Secret（chart 管理，hermes-agent／open-design）'),
+            ('config_json',
+             'config.json (config file inside the PVC, mcp-server family)'),
+            ('helm_secret',
+             'Helm Secret (managed by the chart, hermes-agent / open-design)'),
         ],
-        string='密碼載體',
+        string='Password Carrier',
         default='config_json',
         required=True,
-        help='admin_password 在 pod 內的權威來源，決定 reset 走哪條 operator 路徑：'
-             'config.json＝外科式 read-modify-write PVC 上的設定檔（保留租戶自填的 '
-             'connection/tools）；Helm Secret＝純 helm upgrade ＋ rollout restart。'
-             '僅 has_admin_gui=True 的 template 有意義。',
+        help='Where admin_password authoritatively lives inside the pod, which '
+             'decides the operator path a reset takes: config.json = a surgical '
+             'read-modify-write of the config file on the PVC (preserving the '
+             'connection/tools the tenant filled in); Helm Secret = a plain '
+             'helm upgrade plus rollout restart. Only meaningful on templates '
+             'with has_admin_gui=True.',
     )
 
     # Post-Deploy Initialization
@@ -306,10 +314,11 @@ class CloudAppTemplate(models.Model):
     # 端點的 provision_partner_id partial unique index ＋ advisory lock 承擔，此 model
     # 層值為縱深一致守衛（與下方 help「HA PaaS 免費方案設 1」對齊）。
     max_per_partner = fields.Integer(
-        string='每帳號實例上限',
+        string='Max Instances Per Account',
         default=0,
-        help='同一 partner（帳號）最多可持有的本範本活躍實例數；'
-             '0＝不限制。HA PaaS 免費方案設 1。',
+        help='Maximum number of active instances of this template a single '
+             'partner (account) may hold; 0 = unlimited. The HA PaaS free plan '
+             'sets this to 1.',
     )
 
     # #471：原本 is_hidden 一個旗標同時承載「不上架」與「既有實例整條鏈消失」兩種
@@ -329,24 +338,32 @@ class CloudAppTemplate(models.Model):
     is_hidden = fields.Boolean(
         string='Hidden',
         default=False,
-        help='曝光層開關：若為真，此 template 不出現在 marketplace、詳情／plans '
-             '不可讀、不可經 generic create 新建。**既有服務不受影響**（照常可讀、'
-             '可操作、留在 workspace 清單）——要連既有實例一起隱藏請另開 '
-             '「既有實例一併隱藏」（conceal_instances，#471）。'
-             '呈現層過濾、非 ACL（租戶知 id 仍可打 JSON 端點、Odoo 原生 /my '
-             '與 /report 繞過本層）。用於定價未拍板或暫時下架的商品。',
+        help='Exposure-layer switch: when true, this template is not listed in '
+             'the marketplace, its detail/plans are unreadable, and generic '
+             'create refuses it. **Existing services are unaffected** (still '
+             'readable, still operable, still listed in the workspace) — to '
+             'hide existing instances as well, turn on "Conceal Existing '
+             'Instances" (conceal_instances, #471). Presentation-layer '
+             'filtering, not an ACL (a tenant who knows the id can still call '
+             'the JSON endpoints, and Odoo native /my and /report bypass this '
+             'layer). Use it for products whose pricing is not settled or that '
+             'are temporarily delisted.',
     )
 
     conceal_instances = fields.Boolean(
-        string='既有實例一併隱藏',
+        string='Conceal Existing Instances',
         default=False,
-        help='實例層開關：若為真，此 template **既有** services／訂閱／發票／'
-             'workspace 不出現在 /woow 前台任何清單（workspace、dashboard、billing），'
-             '且既有服務的讀取／操作端點（詳情、更新、rollback、revisions、'
-             'change-plan、skip-trial、addon 檢查、MCP 設定、重設 admin 密碼）'
-             '一律回 Service not found。用於 HA PaaS 這類「租戶入口不是 /woow」'
-             '的平台自動開通服務（#336）。必須搭配 is_hidden=True（#471）。'
-             '呈現層過濾、非 ACL——租戶知 id 仍可打 Odoo 原生 /my 與 /report。',
+        help='Instance-layer switch: when true, the **existing** services / '
+             'subscriptions / invoices / workspaces of this template disappear '
+             'from every /woow front-end list (workspace, dashboard, billing), '
+             'and the read and action endpoints of existing services (detail, '
+             'update, rollback, revisions, change-plan, skip-trial, addon '
+             'check, MCP settings, admin password reset) all return Service not '
+             'found. Used for platform auto-provisioned services whose tenant '
+             'entry point is not /woow, such as HA PaaS (#336). Must be paired '
+             'with is_hidden=True (#471). Presentation-layer filtering, not an '
+             'ACL — a tenant who knows the id can still call Odoo native /my '
+             'and /report.',
     )
 
     def _gateway_external_path(self):
@@ -400,9 +417,11 @@ class CloudAppTemplate(models.Model):
         for record in self:
             if record.conceal_instances and not record.is_hidden:
                 raise ValidationError(
-                    _('「既有實例一併隱藏」必須搭配「Hidden」一起開啟（範本：%s）。'
-                      '既有實例隱藏但仍在 marketplace 上架，會讓租戶買到一個'
-                      '前台看不到、也操作不了的服務。若要上架，請同時關閉這兩個開關。')
+                    _('"Conceal Existing Instances" must be enabled together '
+                      'with "Hidden" (template: %s). Hiding existing instances '
+                      'while the template stays listed on the marketplace lets '
+                      'a tenant buy a service they can neither see nor manage. '
+                      'To list it, turn both switches off.')
                     % (record.name or record.slug or record.id)
                 )
 
