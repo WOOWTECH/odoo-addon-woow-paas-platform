@@ -19,7 +19,7 @@
 # （對帳排程：B+C 觸發策略落地後第一趟 develop push 全套，見 issue #546）。
 2	test_ac_access_seat_enforcement_521.TestAcSeatBasePlanBlastRadius
 1	test_ac_access_seat_enforcement_521.TestAcSeatQuotaBff
-9	test_ac_access_seat_enforcement_521.TestAcSeatQuotaModel
+10	test_ac_access_seat_enforcement_521.TestAcSeatQuotaModel
 3	test_ac_access_seat_enforcement_521.TestAcSeatQuotaRuleLayer
 3	test_access_failopen_compensation_794.TestCompensationHelperContract
 3	test_access_failopen_compensation_794.TestCsFailOpenCompensation

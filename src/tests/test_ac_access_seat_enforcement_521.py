@@ -26,13 +26,16 @@ plan 上的欄位值就是這筆訂閱的席位總額。
 ``_check_emails_per_policy`` 自己的註解已經寫明這**不是** module 級慣例
 （``sa_max_routes`` 的 0 也是「一條都不准」）⇒ 每個欄位各自認定。
 
-## 🔴 兩個未經拍板的口徑，本檔刻意把它們攤開
+## 🔴 三個未經拍板的口徑，本檔刻意把它們攤開
 
 judgement 不由本 PR 做，但行為必須在 review 時是可見的，所以各配一條斷言：
 
 1. **base 方案（0 席）＋既有 policy ⇒ 一碰就擋** — ``TestAcSeatBasePlanBlastRadius``
 2. **``exclude`` / ``require`` 群組的位址也計入席位** —
    ``test_addresses_in_exclude_and_require_groups_are_counted_too``
+3. **大小寫折疊：同址不同拼法算一席** —
+   ``test_two_spellings_of_one_address_cost_one_seat``
+   （這一格連措辭都沒有，且在未驗分支上是 **fail-open** 那一側）
 
 ## 🔴 爆炸半徑：本檔的 ``TestAcSeatBasePlanBlastRadius`` 是**刻意攤開**的
 
@@ -232,6 +235,43 @@ class TestAcSeatQuotaModel(_SeatFixture, TransactionCase):
             lambda: self._policy(self.r2, 'p2-upper', 'A@X.COM'))
         self._expect_seat_block(
             lambda: self._policy(self.r2, 'p2-new', 'c@x.com'))
+
+    def test_two_spellings_of_one_address_cost_one_seat(self):
+        """🔴 **此口徑未經拍板，待覆核裁決**（大小寫折疊）。
+
+        ``_listed_seat_addresses`` 對位址做 ``strip()`` ＋ ``lower()``，所以
+        ``a@x.com`` 與 ``A@X.COM`` 算**同一席**。
+
+        **這一格沒有任何逐字載體。** 1-A 只說 distinct，沒說什麼叫 distinct；
+        欄位 help 只說「去重位址數」。⇒ 真正的判別式是 **Cloudflare 自己怎麼
+        折疊 email 大小寫**，那是外部未驗事實（P-K 家族）。
+
+        ⚠ 方向要講清楚，因為兩種選擇的失效方向**相反**、而且都不對稱：
+
+        - CF 折疊大小寫 ⇒ 本實作準確；大小寫敏感版會**多算**（租戶提早被擋，
+          平台不吃虧）。
+        - CF **不**折疊大小寫 ⇒ 本實作**少算**：CF 那邊吃兩席、我們只記一席，
+          差額由**全平台共用池**吸收。大小寫敏感版才是準確的。
+
+        ⇒ 本實作在未驗分支上是 **fail-open** 那一側（少算、守衛變寬），不是保守側。
+        選它的理由是「CF 的 email 比對一般不分大小寫」這個常識性預期，**但那正是
+        還沒驗的那件事**。要翻成大小寫敏感只需拿掉 ``.lower()``，代價是對租戶多收。
+
+        鑑別力（mutation 實測，不是宣稱）：拿掉 ``.lower()`` ⇒ **2 failed of
+        16**，紅的是本條與
+        ``test_dedupe_is_case_insensitive_but_a_new_address_still_blocks``
+        ——兩條都是大小寫斷言，其餘 14 條全綠 ⇒ 突變只打到該打的那一格。
+        seats 刻意設 1，讓「1 vs 2」剛好跨過邊界。
+        """
+        self._subscribe(seats=1)
+        self._policy(self.r1, 'p-lower', 'a@x.com')
+        # 同一位址的另一種拼法：折疊之後仍是 1 席 ⇒ 不該被擋
+        self._assert_not_blocked(
+            lambda: self._policy(self.r2, 'p-upper', 'A@X.COM'))
+        # 前置斷言：證明 constraint 這次真的在跑，不是整條沒接線
+        # ——換成一個**真正不同**的位址就必須被擋（1 → 2 超過 seats=1）。
+        self._expect_seat_block(
+            lambda: self._policy(self.r2, 'p-new', 'b@x.com'))
 
     def test_addresses_in_exclude_and_require_groups_are_counted_too(self):
         """🔴 **此口徑未經拍板，待覆核裁決。**

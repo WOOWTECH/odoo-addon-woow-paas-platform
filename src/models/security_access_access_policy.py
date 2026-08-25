@@ -763,12 +763,27 @@ class SecurityAccessAccessPolicy(models.Model):
         ``test_addresses_in_exclude_and_require_groups_are_counted_too``
         （鑑別力已用 mutation 驗過），要改必須連同 pricing §4.3 一起改。
 
-        正規化＝``strip()`` ＋ ``lower()``。大小寫在 Cloudflare 的 email 比對
-        上不區分 ⇒ ``A@x.com`` 與 ``a@x.com`` 是同一個人、消耗同一席；不 lower
-        的話會把一個人算成兩席（**多收**，方向對租戶不利且與 CF 實況不符）。
-        ⚠ 大小寫這一格是本次接線裡**唯一沒有任何逐字載體**的判讀（上面 group
-        那格至少有措辭可循，只是語意可疑）。變更前請連同
-        ``test_dedupe_is_case_insensitive_but_a_new_address_still_blocks``
+        🔴 正規化＝``strip()`` ＋ ``lower()``——**這一格未經拍板，而且它是本次
+        接線裡唯一連措辭都沒有的判讀**（group 那格至少有 1-A 的字面可循）。
+        1-A 只說 ``distinct``，沒說什麼叫 distinct；欄位 help 只說「去重位址數」。
+        ⇒ 真正的判別式是 **Cloudflare 自己怎麼折疊 email 大小寫**，屬 P-K 家族
+        的外部未驗事實。
+
+        ⚠ 兩種選擇的失效方向**相反**，而且本實作站在 fail-**open** 那一側：
+
+        - CF 折疊大小寫 ⇒ 本實作準確；大小寫敏感版**多算**（租戶提早被擋、
+          平台不吃虧）。
+        - CF **不**折疊大小寫 ⇒ 本實作**少算**：CF 吃兩席、我們只記一席，差額由
+          全平台共用池吸收。這時大小寫敏感版才是準確的。
+
+        選 ``lower()`` 的理由只是「email 比對一般不分大小寫」這個常識性預期，
+        **而那正是還沒驗的那件事**。要翻面只需拿掉 ``.lower()``。
+
+        ⚠ 另外注意相鄰兩個計數器對「一筆」的定義**不同**：本方法去重，
+        ``_check_emails_per_policy`` 的 ``count += len(...)`` 完全不去重、也不
+        處理大小寫。去重本身有載體（1-A 逐字 ``distinct``），大小寫沒有。
+        變更前請連同 ``test_two_spellings_of_one_address_cost_one_seat``
+        與 ``test_dedupe_is_case_insensitive_but_a_new_address_still_blocks``
         一起看。
         """
         addresses = set()
