@@ -127,28 +127,32 @@ class CfAccessPolicyReap(models.Model):
 
     anchor_model = fields.Char(
         string='Anchor Model', required=True, index=True,
-        help="錨點的 model 名（`security_access_route` / `cloud_service` / "
-             "`smart_home_route` 之一）。與 anchor_id 合起來決定「哪一次 sync "
-             "會把這顆 id 送出去」——刻意不做成帳號級全域清單：CF 的刪除是帳號級 "
-             "的，全域清單會讓 A 租戶的 sync 夾帶 B 租戶的 id。",
+        help="Model name of the anchor (one of `security_access_route` / "
+             "`cloud_service` / `smart_home_route`). Together with anchor_id it "
+             "decides which sync run carries this id out — deliberately NOT an "
+             "account-wide global list: deletion on Cloudflare is account-scoped, "
+             "so a global list would let tenant A's sync carry tenant B's ids.",
     )
     anchor_id = fields.Integer(
         string='Anchor ID', required=True, index=True,
-        help='錨點列的 id。錨點列可能已經被刪掉——那正是本表要留住的情形，'
-             '所以刻意用純量而不是 Many2one。',
+        help='Id of the anchor row. That row may already be deleted — which is '
+             'exactly the case this table exists to remember, so this is '
+             'deliberately a scalar rather than a Many2one.',
     )
     kind = fields.Selection(
         [(KIND_POLICY, 'Reusable Policy'), (KIND_APP, 'Access Application')],
         string='Object Kind', required=True, default=KIND_POLICY, index=True,
-        help='這顆 id 是 reusable policy 還是 Access application。operator 的'
-             '刪除通道不同（existing_policy_ids vs existing_app_id），送錯欄位'
-             '會被 CF 當成「刪一顆不存在的東西」回 404＝成功，帳被消掉而物件'
-             '留著（#784）。',
+        help='Whether this id is a reusable policy or an Access application. The '
+             'operator deletes them through different channels '
+             '(existing_policy_ids vs existing_app_id); sending the wrong field '
+             'makes Cloudflare treat it as deleting something that does not '
+             'exist and return 404 = success, so the debt is cleared while the '
+             'object stays behind (#784).',
     )
     cf_object_id = fields.Char(
         string='CF Object ID', required=True, index=True,
-        help='Cloudflare 上待回收的物件 id（reusable policy 或 Access '
-             'application，由 kind 決定）。',
+        help='Id of the object still awaiting reap on Cloudflare (a reusable '
+             'policy or an Access application, depending on kind).',
     )
 
     # 🔴 **刻意沒有 UNIQUE(anchor_model, anchor_id, kind, cf_object_id)**，去重靠

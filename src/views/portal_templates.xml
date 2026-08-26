@@ -13,13 +13,13 @@
     </xpath>
     <xpath expr="//div[@id='task_chat']" position="before">
       <div id="paas_task_chat" class="mt-4" t-if="paas_agent_enabled">
-        <h5 class="mb-2">AI 助理對話</h5>
+        <h5 class="mb-2">AI Assistant Chat</h5>
         <t t-if="paas_channel_id">
           <owl-component name="woow_paas_platform.PortalTaskChat"
                          t-attf-props='{"channelId": #{paas_channel_id}, "projectId": #{paas_project_id}}'/>
         </t>
         <div t-else="" class="alert alert-info mb-0">
-          請先登入以使用 AI 對話。
+          Please log in to use the AI chat.
         </div>
       </div>
     </xpath>

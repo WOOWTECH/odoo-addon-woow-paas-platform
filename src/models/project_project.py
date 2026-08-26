@@ -1,6 +1,6 @@
 import logging
 
-from odoo import SUPERUSER_ID, api, fields, models
+from odoo import _, SUPERUSER_ID, api, fields, models
 from odoo.exceptions import AccessError, UserError
 
 _logger = logging.getLogger(__name__)
@@ -215,8 +215,8 @@ class ProjectProject(models.Model):
         for project in self:
             if project.agent_template_binding_status != 'dedicated':
                 raise UserError(
-                    "Skill bindings can only be edited on a dedicated "
-                    "template — use 'Create Dedicated Template' first.")
+                    _("Skill bindings can only be edited on a dedicated "
+                      "template — use 'Create Dedicated Template' first."))
             project.resolved_agent_template_id.skill_ids = [
                 (6, 0, project.resolved_template_skill_ids.ids)]
 
@@ -231,14 +231,14 @@ class ProjectProject(models.Model):
         self.ensure_one()
         if not self.env.user.has_group('base.group_system'):
             raise AccessError(
-                "Only administrators can create a dedicated agent template.")
+                _("Only administrators can create a dedicated agent template."))
         if self.agent_template_binding_status == 'dedicated':
-            raise UserError("This project already has a dedicated template.")
+            raise UserError(_("This project already has a dedicated template."))
         source = self.resolved_agent_template_id
         if not source:
             raise UserError(
-                "No agent template resolves for this project — configure "
-                "the platform default in Settings → Woow PaaS first.")
+                _("No agent template resolves for this project — configure "
+                  "the platform default in Settings → Woow PaaS first."))
         allowed_skills = source.skill_ids.filtered(
             lambda s: s.scope == 'system'
             or (s.scope == 'user' and s.project_id == self))
@@ -378,8 +378,10 @@ class ProjectProject(models.Model):
                     session._teardown_runtime()
                 except AgentRuntimeOperatorError as exc:
                     raise UserError(
-                        "無法刪除專案「%s」：其 AI agent 執行環境拆除失敗（%s）。"
-                        "為避免雲端資源變成孤兒，刪除已中止；請稍後再試或聯絡管理員。"
+                        _('Cannot delete project "%s": tearing down its AI '
+                          'agent runtime failed (%s). Deletion was aborted to '
+                          'avoid leaving orphaned cloud resources. Please try '
+                          'again later or contact your administrator.')
                         % (project.name, exc)
                     )
         return super().unlink()

@@ -148,10 +148,11 @@ class EcpayInvoiceCron(models.AbstractModel):
                 move.id, bool(todo), bool(manager_group), bool(model),
             )
             return
-        summary = _("ECPay 發票開立失敗（已達重試上限）")
+        summary = _("ECPay e-invoice issuance failed (retry limit reached)")
         note = _(
-            "Invoice %(name)s 開立 ECPay 發票連續失敗 %(n)s 次。\n"
-            "最後錯誤：%(err)s"
+            "Issuing the ECPay e-invoice for invoice %(name)s failed "
+            "%(n)s times in a row.\n"
+            "Last error: %(err)s"
         ) % {
             'name': move.name or '',
             'n': self._MAX_RETRIES,

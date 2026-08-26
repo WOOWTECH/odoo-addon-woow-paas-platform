@@ -13,6 +13,7 @@ from werkzeug.wrappers import Response
 from odoo.http import request, route, Controller
 
 from .paas import _portal_project_settings_editable
+from odoo import _
 
 _logger = logging.getLogger(__name__)
 
@@ -166,7 +167,7 @@ class AiAssistantController(Controller):
         caller must abort, else ``None``.
         """
         if request.env.user.share:
-            return {'success': False, 'error': 'Access denied'}
+            return {'success': False, 'error': _('Access denied')}
         return None
 
     def _sse_error_response(self, error: str, error_code: str) -> Response:
@@ -203,7 +204,7 @@ class AiAssistantController(Controller):
         if not isinstance(payload, dict):
             payload = {}
         data = {
-            'error': payload.get('error') or 'Agent runtime error',
+            'error': payload.get('error') or _('Agent runtime error'),
             'done': True,
         }
         code = payload.get('code')
@@ -281,13 +282,13 @@ class AiAssistantController(Controller):
             dict: Response with message list and attachments.
         """
         if not channel_id:
-            return {'success': False, 'error': 'channel_id is required'}
+            return {'success': False, 'error': _('channel_id is required')}
 
         channel = request.env['discuss.channel'].sudo().browse(channel_id)
         if not channel.exists():
-            return {'success': False, 'error': 'Channel not found'}
+            return {'success': False, 'error': _('Channel not found')}
         if not self._check_channel_access(channel):
-            return {'success': False, 'error': 'Access denied'}
+            return {'success': False, 'error': _('Access denied')}
 
         domain = [
             ('res_id', '=', channel_id),
@@ -361,15 +362,15 @@ class AiAssistantController(Controller):
             dict: Response with posted message data.
         """
         if not channel_id:
-            return {'success': False, 'error': 'channel_id is required'}
+            return {'success': False, 'error': _('channel_id is required')}
         if not body or not body.strip():
-            return {'success': False, 'error': 'body is required'}
+            return {'success': False, 'error': _('body is required')}
 
         channel = request.env['discuss.channel'].sudo().browse(channel_id)
         if not channel.exists():
-            return {'success': False, 'error': 'Channel not found'}
+            return {'success': False, 'error': _('Channel not found')}
         if not self._check_channel_access(channel):
-            return {'success': False, 'error': 'Access denied'}
+            return {'success': False, 'error': _('Access denied')}
 
         message = channel.with_context(from_paas_chat=True).message_post(
             body=body.strip(),
@@ -405,13 +406,13 @@ class AiAssistantController(Controller):
             channel_id = int(kwargs.get('channel_id', 0))
         except (TypeError, ValueError):
             return Response(
-                json.dumps({'success': False, 'error': 'Invalid channel_id'}),
+                json.dumps({'success': False, 'error': _('Invalid channel_id')}),
                 content_type='application/json',
                 status=400,
             )
         if not channel_id:
             return Response(
-                json.dumps({'success': False, 'error': 'channel_id is required'}),
+                json.dumps({'success': False, 'error': _('channel_id is required')}),
                 content_type='application/json',
                 status=400,
             )
@@ -419,13 +420,13 @@ class AiAssistantController(Controller):
         channel = request.env['discuss.channel'].sudo().browse(channel_id)
         if not channel.exists():
             return Response(
-                json.dumps({'success': False, 'error': 'Channel not found'}),
+                json.dumps({'success': False, 'error': _('Channel not found')}),
                 content_type='application/json',
                 status=404,
             )
         if not self._check_channel_access(channel):
             return Response(
-                json.dumps({'success': False, 'error': 'Access denied'}),
+                json.dumps({'success': False, 'error': _('Access denied')}),
                 content_type='application/json',
                 status=403,
             )
@@ -433,7 +434,7 @@ class AiAssistantController(Controller):
         uploaded_file = kwargs.get('file')
         if not uploaded_file:
             return Response(
-                json.dumps({'success': False, 'error': 'No file uploaded'}),
+                json.dumps({'success': False, 'error': _('No file uploaded')}),
                 content_type='application/json',
                 status=400,
             )
@@ -441,7 +442,7 @@ class AiAssistantController(Controller):
         file_data = uploaded_file.read(self.MAX_UPLOAD_SIZE + 1)
         if len(file_data) > self.MAX_UPLOAD_SIZE:
             return Response(
-                json.dumps({'success': False, 'error': 'File too large (max 10 MB)'}),
+                json.dumps({'success': False, 'error': _('File too large (max 10 MB)')}),
                 content_type='application/json',
                 status=413,
             )
@@ -501,13 +502,13 @@ class AiAssistantController(Controller):
         # Validate CSRF token (GET endpoints bypass Odoo's automatic check)
         csrf_token = kwargs.get('csrf_token', '')
         if not csrf_token or not request.validate_csrf(csrf_token):
-            return self._sse_error_response('Invalid request', 'csrf_error')
+            return self._sse_error_response(_('Invalid request'), 'csrf_error')
 
         channel = request.env['discuss.channel'].sudo().browse(channel_id)
         if not channel.exists():
-            return self._sse_error_response('Channel not found', 'channel_not_found')
+            return self._sse_error_response(_('Channel not found'), 'channel_not_found')
         if not self._check_channel_access(channel):
-            return self._sse_error_response('Access denied', 'access_denied')
+            return self._sse_error_response(_('Access denied'), 'access_denied')
 
         # Agent-runtime dual-mode gate (§5.6): when the channel's project opts
         # in, route to the pod-backed runtime branch. The flag defaults False,
@@ -526,7 +527,7 @@ class AiAssistantController(Controller):
         # Find the assistant for this channel
         assistant = self._get_channel_assistant(channel)
         if not assistant:
-            return self._sse_error_response('No AI assistant available', 'no_agent')
+            return self._sse_error_response(_('No AI assistant available'), 'no_agent')
 
         from ..models.ai_client import AIClient, AIClientError
 
@@ -534,7 +535,7 @@ class AiAssistantController(Controller):
             client = AIClient.from_assistant(assistant)
         except AIClientError as exc:
             _logger.error('AI client error for assistant %s in channel %s: %s', assistant.name, channel_id, exc.message)
-            return self._sse_error_response('AI provider not configured', 'provider_not_configured')
+            return self._sse_error_response(_('AI provider not configured'), 'provider_not_configured')
 
         # Get the latest user message (exclude messages from the assistant's partner)
         assistant_partner_id = assistant.partner_id.id
@@ -546,7 +547,7 @@ class AiAssistantController(Controller):
         ], order='id desc', limit=1)
 
         if not last_message:
-            return self._sse_error_response('No user message found', 'no_message')
+            return self._sse_error_response(_('No user message found'), 'no_message')
 
         user_message = last_message.body or ''
 
@@ -670,7 +671,9 @@ class AiAssistantController(Controller):
                         'Failed to post AI response to channel %s: %s',
                         channel_id, exc,
                     )
-                    warning = 'AI 回覆已生成但無法儲存，請重新整理頁面確認。'
+                    warning = _(
+                        'The AI reply was generated but could not be saved. '
+                        'Please refresh the page to confirm.')
 
             # Send the done signal (with message_id when available)
             done_payload = {
@@ -725,14 +728,14 @@ class AiAssistantController(Controller):
         # ③ project_access gate (§4)
         if not self._check_project_access(project):
             return self._sse_error_response(
-                'Project access denied', 'project_access_denied',
+                _('Project access denied'), 'project_access_denied',
             )
 
         # ④ resolve agent_template (per-project default)
         template = self._resolve_agent_template(project)
         if not template:
             return self._sse_error_response(
-                'No agent template configured', 'no_template',
+                _('No agent template configured'), 'no_template',
             )
 
         # ⑤ pre-fetch ORM data before entering the generator (cursor valid here)
@@ -756,7 +759,7 @@ class AiAssistantController(Controller):
         client = get_agent_runtime_client(request.env)
         if not client:
             return self._sse_error_response(
-                'Agent runtime not configured', 'spawn_failed',
+                _('Agent runtime not configured'), 'spawn_failed',
             )
         try:
             runtime_info = client.spawn_or_attach(
@@ -773,7 +776,7 @@ class AiAssistantController(Controller):
                 'spawn-or-attach failed for channel %s: %s', channel_id, exc,
             )
             return self._sse_error_response(
-                f'Pod spawn failed: {exc}', 'spawn_failed',
+                _('Pod spawn failed: %(reason)s', reason=exc), 'spawn_failed',
             )
 
         # heartbeat：cursor 此處仍有效（generator 內無效，故在此 stamp）
@@ -794,7 +797,7 @@ class AiAssistantController(Controller):
             except ImportError as exc:
                 _logger.error('websockets unavailable for WS bridge: %s', exc)
                 yield 'data: ' + json.dumps({
-                    'error': 'WS client unavailable', 'done': True,
+                    'error': _('WS client unavailable'), 'done': True,
                 }) + '\n\n'
                 return
 
@@ -823,7 +826,8 @@ class AiAssistantController(Controller):
                         cm = None
                         if loop.time() >= deadline:
                             yield {'type': 'error', 'payload': {
-                                'error': 'agent 啟動逾時，請稍後再試',
+                                'error': _('The agent took too long to '
+                                           'start. Please try again later.'),
                                 'fatal': True}}
                             return
                         yield {'type': 'status', 'payload': {
@@ -1144,11 +1148,11 @@ class AiAssistantController(Controller):
         if project_id:
             project = request.env['project.project'].sudo().browse(int(project_id))
             if not project.exists():
-                return {'success': False, 'error': 'Project not found'}
+                return {'success': False, 'error': _('Project not found')}
             # ACL: mirror _stream_agent_runtime / ir.rule — deny before reading
             # the resolved template, else a cross-tenant status leak reopens.
             if not self._check_project_access(project):
-                return {'success': False, 'error': 'Access denied'}
+                return {'success': False, 'error': _('Access denied')}
             enabled = bool(project.use_agent_runtime)
             template = self._resolve_agent_template(project)
             has_key = bool(
@@ -1157,13 +1161,13 @@ class AiAssistantController(Controller):
             )
             ready = enabled and bool(template) and has_key and operator_configured
             if not enabled:
-                reason = '此專案未啟用 Agent runtime'
+                reason = _('Agent runtime is not enabled for this project')
             elif not template:
-                reason = '無 Agent Template'
+                reason = _('No agent template')
             elif not has_key:
-                reason = 'Template 未設 API key'
+                reason = _('The agent template has no API key')
             elif not operator_configured:
-                reason = 'Operator 未設定'
+                reason = _('Operator is not configured')
             else:
                 reason = ''
             scope = 'project'
@@ -1179,13 +1183,13 @@ class AiAssistantController(Controller):
             )
             ready = enabled and bool(template) and has_key and operator_configured
             if not enabled:
-                reason = 'Agent runtime 未啟用'
+                reason = _('Agent runtime is not enabled')
             elif not template:
-                reason = '無預設 Agent Template'
+                reason = _('No default agent template')
             elif not has_key:
-                reason = 'Template 未設 API key'
+                reason = _('The agent template has no API key')
             elif not operator_configured:
-                reason = 'Operator 未設定'
+                reason = _('Operator is not configured')
             else:
                 reason = ''
             scope = 'platform'
@@ -1225,18 +1229,18 @@ class AiAssistantController(Controller):
         (HTTP 200) rather than surfacing a 500 to the kanban header.
         """
         if not project_id:
-            return {'success': False, 'error': 'project_id is required'}
+            return {'success': False, 'error': _('project_id is required')}
         project = request.env['project.project'].sudo().browse(int(project_id))
         if not project.exists():
-            return {'success': False, 'error': 'Project not found'}
+            return {'success': False, 'error': _('Project not found')}
         if not self._check_project_access(project):
-            return {'success': False, 'error': 'Access denied'}
+            return {'success': False, 'error': _('Access denied')}
 
         from ..services.agent_runtime_client import get_agent_runtime_client
         client = get_agent_runtime_client(request.env)
         if not client:
             return {'success': True, 'data': {
-                'state': 'unknown', 'reason': 'Operator 未設定',
+                'state': 'unknown', 'reason': _('Operator is not configured'),
             }}
 
         session = request.env['woow_paas_platform.agent_session'].sudo().search(
@@ -1328,15 +1332,15 @@ class AiAssistantController(Controller):
         if cloud_service_id:
             cloud_service = request.env['woow_paas_platform.cloud_service'].sudo().browse(cloud_service_id)
             if not cloud_service.exists():
-                return {'success': False, 'error': 'Cloud Service not found'}
+                return {'success': False, 'error': _('Cloud Service not found')}
             if not self._check_workspace_access(cloud_service.workspace_id):
-                return {'success': False, 'error': 'Access denied'}
+                return {'success': False, 'error': _('Access denied')}
         elif workspace_id:
             workspace = request.env['woow_paas_platform.workspace'].sudo().browse(workspace_id)
             if not workspace.exists():
-                return {'success': False, 'error': 'Workspace not found'}
+                return {'success': False, 'error': _('Workspace not found')}
             if not self._check_workspace_access(workspace):
-                return {'success': False, 'error': 'Access denied'}
+                return {'success': False, 'error': _('Access denied')}
 
         if action == 'list':
             return self._list_projects(workspace, cloud_service)
@@ -1347,7 +1351,7 @@ class AiAssistantController(Controller):
         elif action == 'delete':
             return self._delete_project(kwargs)
         else:
-            return {'success': False, 'error': f'Unknown action: {action}'}
+            return {'success': False, 'error': _('Unknown action: %(action)s', action=action)}
 
     @route('/api/support/projects/<int:project_id>/stages', auth='user', methods=['POST'], type='json')
     def api_support_project_stages(
@@ -1401,16 +1405,16 @@ class AiAssistantController(Controller):
         if workspace_id:
             workspace = request.env['woow_paas_platform.workspace'].sudo().browse(workspace_id)
             if not workspace.exists():
-                return {'success': False, 'error': 'Workspace not found'}
+                return {'success': False, 'error': _('Workspace not found')}
             if not self._check_workspace_access(workspace):
-                return {'success': False, 'error': 'Access denied'}
+                return {'success': False, 'error': _('Access denied')}
 
         if action == 'list':
             return self._list_tasks(workspace, kwargs)
         elif action == 'create':
             return self._create_task(workspace, kwargs)
         else:
-            return {'success': False, 'error': f'Unknown action: {action}'}
+            return {'success': False, 'error': _('Unknown action: %(action)s', action=action)}
 
     @route('/api/support/tasks/detail/<int:task_id>', auth='user', methods=['POST'], type='json')
     def api_support_task_detail(
@@ -1430,9 +1434,9 @@ class AiAssistantController(Controller):
         """
         task = request.env['project.task'].sudo().browse(task_id)
         if not task.exists():
-            return {'success': False, 'error': 'Task not found'}
+            return {'success': False, 'error': _('Task not found')}
         if not self._check_task_access(task):
-            return {'success': False, 'error': 'Access denied'}
+            return {'success': False, 'error': _('Access denied')}
 
         if action == 'get':
             return self._get_task(task)
@@ -1441,7 +1445,7 @@ class AiAssistantController(Controller):
         elif action == 'delete':
             return self._delete_task(task)
         else:
-            return {'success': False, 'error': f'Unknown action: {action}'}
+            return {'success': False, 'error': _('Unknown action: %(action)s', action=action)}
 
     # ==================== Private: Project Helpers ====================
 
@@ -1527,7 +1531,7 @@ class AiAssistantController(Controller):
             return denied
         name = (params.get('name') or '').strip()
         if not name:
-            return {'success': False, 'error': 'Project name is required'}
+            return {'success': False, 'error': _('Project name is required')}
 
         vals = {
             'name': name,
@@ -1537,7 +1541,7 @@ class AiAssistantController(Controller):
         if cloud_service:
             # Check 1:1 constraint before attempting create
             if cloud_service.project_ids:
-                return {'success': False, 'error': 'This Cloud Service already has a Support Project'}
+                return {'success': False, 'error': _('This Cloud Service already has a Support Project')}
             vals['cloud_service_id'] = cloud_service.id
         elif workspace:
             # Legacy: find cloud_service_id from params if provided
@@ -1636,21 +1640,21 @@ class AiAssistantController(Controller):
         # (test_mcp_acl_unbound_isolation:'endpoint denial wording must remain
         # Access denied'); paas.py's gates use its own 'Permission denied'.
         if not _portal_project_settings_editable(request.env):
-            return {'success': False, 'error': 'Access denied'}
+            return {'success': False, 'error': _('Access denied')}
         project_id = params.get('project_id')
         if not project_id:
-            return {'success': False, 'error': 'project_id is required'}
+            return {'success': False, 'error': _('project_id is required')}
 
         try:
             pid = int(project_id)
         except (ValueError, TypeError):
-            return {'success': False, 'error': 'Invalid project_id'}
+            return {'success': False, 'error': _('Invalid project_id')}
 
         project = request.env['project.project'].sudo().browse(pid)
         if not project.exists():
-            return {'success': False, 'error': 'Project not found'}
+            return {'success': False, 'error': _('Project not found')}
         if not self._check_project_access(project):
-            return {'success': False, 'error': 'Access denied'}
+            return {'success': False, 'error': _('Access denied')}
 
         vals = {}
         if 'name' in params:
@@ -1679,18 +1683,18 @@ class AiAssistantController(Controller):
             return denied
         project_id = params.get('project_id')
         if not project_id:
-            return {'success': False, 'error': 'project_id is required'}
+            return {'success': False, 'error': _('project_id is required')}
 
         try:
             pid = int(project_id)
         except (ValueError, TypeError):
-            return {'success': False, 'error': 'Invalid project_id'}
+            return {'success': False, 'error': _('Invalid project_id')}
 
         project = request.env['project.project'].sudo().browse(pid)
         if not project.exists():
-            return {'success': False, 'error': 'Project not found'}
+            return {'success': False, 'error': _('Project not found')}
         if not self._check_project_access(project):
-            return {'success': False, 'error': 'Access denied'}
+            return {'success': False, 'error': _('Access denied')}
 
         project.write({'active': False})
         return {'success': True, 'data': {'id': project.id}}
@@ -1707,7 +1711,7 @@ class AiAssistantController(Controller):
             try:
                 domain.append(('project_id', '=', int(project_id)))
             except (ValueError, TypeError):
-                return {'success': False, 'error': 'Invalid project_id'}
+                return {'success': False, 'error': _('Invalid project_id')}
 
         # Walk ir.rule (no sudo): project_task_rule_workspace_member dual-leg
         # filters bound tasks by their project's workspace membership, unbound
@@ -1730,20 +1734,20 @@ class AiAssistantController(Controller):
         project_id = params.get('project_id')
 
         if not name:
-            return {'success': False, 'error': 'Task name is required'}
+            return {'success': False, 'error': _('Task name is required')}
         if not project_id:
-            return {'success': False, 'error': 'project_id is required'}
+            return {'success': False, 'error': _('project_id is required')}
 
         try:
             pid = int(project_id)
         except (ValueError, TypeError):
-            return {'success': False, 'error': 'Invalid project_id'}
+            return {'success': False, 'error': _('Invalid project_id')}
 
         project = request.env['project.project'].sudo().browse(pid)
         if not project.exists():
-            return {'success': False, 'error': 'Project not found'}
+            return {'success': False, 'error': _('Project not found')}
         if not self._check_project_access(project):
-            return {'success': False, 'error': 'Access denied'}
+            return {'success': False, 'error': _('Access denied')}
 
         vals = {
             'name': name,
@@ -1760,7 +1764,7 @@ class AiAssistantController(Controller):
             try:
                 stage_id_int = int(params['stage_id'])
             except (ValueError, TypeError):
-                return {'success': False, 'error': 'Invalid stage_id'}
+                return {'success': False, 'error': _('Invalid stage_id')}
             stage = request.env['project.task.type'].sudo().browse(stage_id_int)
             if stage.exists():
                 vals['stage_id'] = stage.id
@@ -1798,7 +1802,7 @@ class AiAssistantController(Controller):
             try:
                 vals['stage_id'] = int(params['stage_id'])
             except (ValueError, TypeError):
-                return {'success': False, 'error': 'Invalid stage_id'}
+                return {'success': False, 'error': _('Invalid stage_id')}
         if 'chat_enabled' in params:
             vals['chat_enabled'] = bool(params['chat_enabled'])
         if 'ai_auto_reply' in params:

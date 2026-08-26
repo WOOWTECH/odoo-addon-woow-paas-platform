@@ -1,4 +1,4 @@
-from odoo import api, fields, models
+from odoo import _, api, fields, models
 from odoo.exceptions import ValidationError
 
 
@@ -123,9 +123,9 @@ class SecurityAccessTemplate(models.Model):
                     shared = (record.subscription_plan_ids
                               & conflicts.subscription_plan_ids)
                     raise ValidationError(
-                        "Plan(s) %s are already linked to %s(s) %s. "
-                        "A subscription plan must belong to a single service "
-                        "type — its product determines the invoice line text."
+                        _("Plan(s) %s are already linked to %s(s) %s. "
+                          "A subscription plan must belong to a single service "
+                          "type — its product determines the invoice line text.")
                         % (
                             ', '.join(shared.mapped('name')),
                             label,

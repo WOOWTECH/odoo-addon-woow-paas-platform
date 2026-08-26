@@ -12,6 +12,7 @@ from typing import Any
 from odoo.http import Controller, Response, request, route
 
 from .oauth2 import verify_oauth_token
+from odoo import _
 
 _logger = logging.getLogger(__name__)
 
@@ -169,7 +170,7 @@ class HAIntegrationController(Controller):
 
         workspace = _check_workspace_access(user, workspace_id)
         if not workspace:
-            return _json_error('Forbidden', 'No access to this workspace', 403)
+            return _json_error('Forbidden', _('No access to this workspace'), 403)
 
         homes = request.env['woow_paas_platform.smart_home'].sudo().search([
             ('workspace_id', '=', workspace.id),
@@ -323,7 +324,7 @@ class HAIntegrationController(Controller):
         user, _token = result
         workspace = _check_workspace_access(user, workspace_id)
         if not workspace:
-            return _json_error('Forbidden', 'No access to this workspace', 403)
+            return _json_error('Forbidden', _('No access to this workspace'), 403)
         records = request.env['woow_paas_platform.security_access'].sudo().search([
             ('workspace_id', '=', workspace.id),
         ])
@@ -405,12 +406,12 @@ class HAIntegrationController(Controller):
         sa = request.env['woow_paas_platform.security_access'].sudo().browse(
             sa_id).exists()
         if not sa:
-            return _json_error('Not Found', 'Security access not found', 404)
+            return _json_error('Not Found', _('Security access not found'), 404)
         workspace = _check_workspace_access(user, sa.workspace_id.id)
         if not workspace:
             return _json_error(
                 'Forbidden',
-                'No access to the workspace containing this security access',
+                _('No access to the workspace containing this security access'),
                 403,
             )
         return sa
@@ -433,13 +434,13 @@ class HAIntegrationController(Controller):
             smarthome_id,
         ).exists()
         if not home:
-            return _json_error('Not Found', 'Smart home not found', 404)
+            return _json_error('Not Found', _('Smart home not found'), 404)
 
         workspace = _check_workspace_access(user, home.workspace_id.id)
         if not workspace:
             return _json_error(
                 'Forbidden',
-                'No access to the workspace containing this smart home',
+                _('No access to the workspace containing this smart home'),
                 403,
             )
 

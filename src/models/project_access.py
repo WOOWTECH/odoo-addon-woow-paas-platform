@@ -1,4 +1,4 @@
-from odoo import api, fields, models
+from odoo import _, api, fields, models
 from odoo.exceptions import AccessError, ValidationError
 
 
@@ -110,8 +110,8 @@ class ProjectAccess(models.Model):
             ])
             if not other_owners:
                 raise ValidationError(
-                    "Cannot remove the last owner of project '%s'. "
-                    "Transfer ownership first." % (rec.project_id.display_name or rec.project_id.id)
+                    _("Cannot remove the last owner of project '%s'. "
+                      "Transfer ownership first.") % (rec.project_id.display_name or rec.project_id.id)
                 )
         return super().unlink()
 
@@ -181,18 +181,18 @@ class ProjectAccess(models.Model):
             for rec in self:
                 if 'project_id' in vals and vals['project_id'] != rec.project_id.id:
                     raise AccessError(
-                        "Cannot re-point an access row (id=%s) to a "
-                        "different project." % rec.id
+                        _("Cannot re-point an access row (id=%s) to a "
+                          "different project.") % rec.id
                     )
                 if 'partner_id' in vals and vals['partner_id'] != rec.partner_id.id:
                     raise AccessError(
-                        "Cannot re-point an access row (id=%s) to a "
-                        "different partner." % rec.id
+                        _("Cannot re-point an access row (id=%s) to a "
+                          "different partner.") % rec.id
                     )
                 if 'user_id' in vals and vals['user_id'] != rec.user_id.id:
                     raise AccessError(
-                        "Cannot re-point an access row (id=%s) to a "
-                        "different user." % rec.id
+                        _("Cannot re-point an access row (id=%s) to a "
+                          "different user.") % rec.id
                     )
         # #657 gap 3 — 每一次 write 都檢查目標列是否為 owner 列，不論改哪個
         # 欄位（見 _check_owner_row_protected docstring）。
@@ -231,8 +231,8 @@ class ProjectAccess(models.Model):
         if caller_access and caller_access.role == ROLE_OWNER:
             return
         raise AccessError(
-            "Only the project owner may modify or remove the owner's own "
-            "access row (project %s)." % rec.project_id.id
+            _("Only the project owner may modify or remove the owner's own "
+              "access row (project %s).") % rec.project_id.id
         )
 
     @api.model
@@ -287,8 +287,8 @@ class ProjectAccess(models.Model):
         allowed = ASSIGNABLE_ROLES_BY_ROLE.get(grantor_role, [])
         if target_role not in allowed:
             raise AccessError(
-                "User %s (role=%s) cannot assign role '%s' on project %s. "
-                "Assignable roles for %s: %s."
+                _("User %s (role=%s) cannot assign role '%s' on project %s. "
+                  "Assignable roles for %s: %s.")
                 % (
                     self.env.user.display_name,
                     grantor_role or '<none>',

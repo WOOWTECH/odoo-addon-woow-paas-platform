@@ -2,7 +2,7 @@ import logging
 import re
 import uuid
 
-from odoo import api, fields, models
+from odoo import _, api, fields, models
 from odoo.exceptions import AccessError, UserError, ValidationError
 
 from ..services.naming import make_security_access_subdomain
@@ -349,7 +349,7 @@ def _reject_identity_anchor_writes(env, vals, anchors,
     for field in anchors:
         if field in vals:
             raise UserError(
-                "Field '%s' is immutable after creation." % field
+                _("Field '%s' is immutable after creation.") % field
             )
 
 
@@ -519,8 +519,8 @@ class SecurityAccess(models.Model):
         client = get_paas_operator_client(self.env)
         if not client:
             raise UserError(
-                "PaaS Operator is not configured. "
-                "Please set Operator URL and API Key in Settings → Woow PaaS."
+                _("PaaS Operator is not configured. "
+                  "Please set Operator URL and API Key in Settings → Woow PaaS.")
             )
         return client
 
@@ -1149,10 +1149,10 @@ class SecurityAccess(models.Model):
                     record._cleanup_cloudflare(torn_down=torn_down)
                     if record.tunnel_id:
                         raise UserError(
-                            "Cloudflare cleanup failed; the tunnel is still "
-                            "live and billed. The record was kept so the "
-                            "deletion can be retried. Please try again "
-                            "shortly."
+                            _("Cloudflare cleanup failed; the tunnel is still "
+                              "live and billed. The record was kept so the "
+                              "deletion can be retried. Please try again "
+                              "shortly.")
                         )
                 # 軸2: routes are freely deletable (no primary guard), so
                 # cascade-delete them directly as part of tearing down the
@@ -1665,12 +1665,15 @@ class SecurityAccessRoute(models.Model):
     )
     access_protection_lost = fields.Boolean(
         string='Protection Not In Effect', copy=False, default=False,
-        help='True ＝ 這條 route 的 Cloudflare Access application 已經被拆掉、'
-             '而列本身還在（刪除交易回捲了，但 Cloudflare 那半回捲不掉）。此時 '
-             'is_protected 只是**意圖**：Cloudflare 上沒有任何東西在強制登入，'
-             '而 hostname 照常由 tunnel 服務。由下一次成功的 Access sync 清掉。'
-             '刻意與 is_protected 分開——降 is_protected 等於平台改掉租戶看得到'
-             '的設定（產品可見變更），未拍板（#794）。',
+        help='True = the Cloudflare Access application for this route has been '
+             'torn down while the row itself is still here (the delete '
+             'transaction rolled back, but the Cloudflare half cannot be). '
+             'is_protected is then only an **intent**: nothing on Cloudflare is '
+             'forcing a login, and the hostname is still served through the '
+             'tunnel. Cleared by the next successful Access sync. Deliberately '
+             'kept apart from is_protected — lowering is_protected would mean '
+             'the platform changing a setting the tenant can see (a '
+             'product-visible change), which is not decided yet (#794).',
     )
 
     @api.depends('subdomain_prefix')
@@ -1708,7 +1711,7 @@ class SecurityAccessRoute(models.Model):
         for route in self:
             err = self._subdomain_prefix_error(route.subdomain_prefix)
             if err:
-                raise ValidationError("%s: %r" % (err, route.subdomain_prefix or ''))
+                raise ValidationError(_("%s: %r") % (err, route.subdomain_prefix or ''))
 
     @api.constrains('security_access_id')
     def _check_route_quota(self):
@@ -1731,8 +1734,8 @@ class SecurityAccessRoute(models.Model):
             count = len(sa.route_ids)
             if count > quota:
                 raise ValidationError(
-                    "Route quota exceeded: plan '%s' allows %d "
-                    "route(s)." % (sub.sh_subscription_plan_id.name, quota)
+                    _("Route quota exceeded: plan '%s' allows %d "
+                      "route(s).") % (sub.sh_subscription_plan_id.name, quota)
                 )
 
     @api.model_create_multi
@@ -1813,8 +1816,8 @@ class SecurityAccessRoute(models.Model):
             for route in self:
                 if route.subdomain_prefix != vals['subdomain_prefix']:
                     raise UserError(
-                        "Subdomain prefix is immutable. Delete the route "
-                        "and create a new one to rename."
+                        _("Subdomain prefix is immutable. Delete the route "
+                          "and create a new one to rename.")
                     )
         # Atomicity scope (see create): the savepoint guarantees ONLY the
         # Odoo side — on a sync failure the DB write (service_url/header) rolls
@@ -2076,9 +2079,9 @@ class SecurityAccessRoute(models.Model):
                     break
                 if failed:
                     raise UserError(
-                        "Cloudflare Access teardown failed for route(s): %s. The "
-                        "route was kept so the deletion can be retried; its Access "
-                        "app is still live in Cloudflare." % (failed,)
+                        _("Cloudflare Access teardown failed for route(s): %s. The "
+                          "route was kept so the deletion can be retried; its Access "
+                          "app is still live in Cloudflare.") % (failed,)
                     )
                 # pass 2：拆失敗 ⇒ 落帳照常刪除（保住列救不了它，沒有 sync 會再跑）
                 for route_id, info in teardown_by_route.items():

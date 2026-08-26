@@ -121,13 +121,13 @@
                             <field name="woow_show_projects"/>
                         </setting>
                     </block>
-                    <block title="限量商品供給" name="supply_gate">
-                        <setting string="HAOS 全域實例上限"
-                                 help="整個平台最多同時存在幾台 HAOS（跨所有帳號）。達到上限後商品仍顯示在應用商店並標示「已售罄」，但不能下單。留空＝使用內建預設上限（不是「不限」）；填 0 會被存成未設定，等同留空。（#501）">
+                    <block title="Limited Supply" name="supply_gate">
+                        <setting string="HAOS Global Instance Cap"
+                                 help="Maximum number of HAOS instances that can exist across the whole platform at the same time, counting every account. Once the cap is reached the product stays listed in the marketplace and is marked 'No slots available', but it can no longer be ordered. Leave this empty to use the built-in default cap (which is not 'unlimited'); entering 0 is stored as unset and behaves exactly like leaving it empty. (#501)">
                             <field name="woow_haos_global_instance_cap"/>
                         </setting>
-                        <setting string="HAOS 暫停販售"
-                                 help="營運手動停售：不論還剩幾個名額都不再收單。與自動推導的「已售罄」是兩件事，前台分別顯示。只擋新下單，不影響已開通的服務。（#501）">
+                        <setting string="HAOS Sales Paused"
+                                 help="Manual stop-sell for operations: no new orders are taken, no matter how many slots are still free. This is a separate state from the automatically derived 'No slots available', and the storefront shows the two differently. It only blocks new orders and does not affect services that are already running. (#501)">
                             <field name="woow_haos_sales_paused"/>
                         </setting>
                     </block>

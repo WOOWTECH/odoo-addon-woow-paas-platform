@@ -13,6 +13,7 @@ from odoo.http import Controller, Response, request, route
 
 from .oauth2 import verify_oauth_token
 from ..models.cloud_service import _internal_provision
+from odoo import _
 
 _logger = logging.getLogger(__name__)
 _HA_PAAS_APP_TEMPLATE = 'woow_paas_platform.cloud_app_ha_paas'
@@ -163,7 +164,7 @@ class HAPaaSController(Controller):
         user, _t = res
         partner = self._guard_partner(user)
         if not partner:
-            return _json({'error': 'Forbidden', 'detail': 'No valid partner'}, 403)
+            return _json({'error': 'Forbidden', 'detail': _('No valid partner')}, 403)
         # auth='none' 下 env.user 是空 recordset；.sudo() 只翻 su 不改 uid，故建
         # subscription→invoice→mail 時 self.env.user._is_public() 會崩空 singleton。
         # 綁 token user 讓 env.user 成合法 record（發票/chatter 也正確歸屬）。
@@ -172,7 +173,7 @@ class HAPaaSController(Controller):
         if not self._template_deployable(tpl):
             # 未 deployable：回 503 且**不建任何 service**（契約 v1.1；工作項 5 blocked）
             return _json({'status': 'error',
-                          'error': 'HA PaaS is not available yet.'}, 503)
+                          'error': _('HA PaaS is not available yet.')}, 503)
         # 每帳號限一：advisory lock（partner 為鍵）序列化並發 provision，
         # 搭配 Task 5 的 partial unique index 雙層防護。
         from ..models.cloud_service import _HA_PROVISION_LOCK_NS
@@ -196,13 +197,13 @@ class HAPaaSController(Controller):
                 # cron 不撿它）。回明確 409、status=deleting（契約 v1.1 直映；Q4）。
                 # App 待刪完後重試走「無既有」新建路徑。
                 return _json({'status': 'deleting',
-                              'error': 'A previous instance is being removed. '
-                                       'Retry shortly.'}, 409)
+                              'error': _('A previous instance is being removed. '
+                                         'Retry shortly.')}, 409)
             if state == 'suspended':
                 # 蓄意停用：不靜默 resume。回明確 409、status=suspended
                 # （契約 v1.1 直映；Q4）。App 指引：聯繫支援。
                 return _json({'status': 'suspended',
-                              'error': 'Service is suspended. Contact support.'}, 409)
+                              'error': _('Service is suspended. Contact support.')}, 409)
             # 未知 state 的 fail-closed fallback（不洩漏 ha_url）
             return _json({'status': 'provisioning'}, 202)
         try:
@@ -225,7 +226,7 @@ class HAPaaSController(Controller):
         user, _t = res
         partner = self._guard_partner(user)
         if not partner:
-            return _json({'error': 'Forbidden', 'detail': 'No valid partner'}, 403)
+            return _json({'error': 'Forbidden', 'detail': _('No valid partner')}, 403)
         request.update_env(user=user.id)  # 與 provision 一致（合法 env.user）
         svc = self._find_existing(partner)
         if not svc:

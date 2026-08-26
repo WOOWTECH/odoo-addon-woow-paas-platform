@@ -1,7 +1,7 @@
 import ipaddress
 import re
 
-from odoo import api, fields, models
+from odoo import _, api, fields, models
 from odoo.exceptions import ValidationError
 
 # #536：見 policy 子模型同一段註解——sync-control 的兩個 key 只認模組私有
@@ -66,13 +66,15 @@ class SecurityAccessAccessPolicyRule(models.Model):
         comodel_name='woow_paas_platform.cloud_service',
         string='Cloud Service',
         related='policy_id.cloud_service_id', store=True, index=True,
-        help='#744：父 policy 的另一半錨點，同樣 store=True 讓 ir.rule 走得到。',
+        help="#744: the parent policy's other anchor; likewise store=True so "
+             "the ir.rule can traverse it.",
     )
     smart_home_id = fields.Many2one(
         comodel_name='woow_paas_platform.smart_home',
         string='Smart Home',
         related='policy_id.smart_home_id', store=True, index=True,
-        help='#768：父 policy 的第三個錨點，同樣 store=True 讓 ir.rule 走得到。',
+        help="#768: the parent policy's third anchor; likewise store=True so "
+             "the ir.rule can traverse it.",
     )
     group = fields.Selection(
         selection=[
@@ -111,32 +113,32 @@ class SecurityAccessAccessPolicyRule(models.Model):
                 # everyone 是「所有人」selector，不帶值；有值多半是誤填。
                 if val:
                     raise ValidationError(
-                        "The 'Everyone' rule takes no value — got %r."
+                        _("The 'Everyone' rule takes no value — got %r.")
                         % rule.rule_value)
                 continue
             if rule.rule_type == 'email_domain':
                 if val.startswith('@') or not _DOMAIN_RE.match(val):
                     raise ValidationError(
-                        "Email domain must be a bare domain (no @), e.g. "
-                        "acme.com — got %r" % rule.rule_value)
+                        _("Email domain must be a bare domain (no @), e.g. "
+                          "acme.com — got %r") % rule.rule_value)
             elif rule.rule_type == 'email_list':
                 emails = [e.strip() for e in val.split(',') if e.strip()]
                 if not emails or any('@' not in e for e in emails):
                     raise ValidationError(
-                        "Email list must be comma-separated email addresses.")
+                        _("Email list must be comma-separated email addresses."))
             elif rule.rule_type == 'ip_range':
                 try:
                     ipaddress.ip_network(val, strict=False)
                 except ValueError:
                     raise ValidationError(
-                        "IP range must be a valid CIDR, e.g. 203.0.113.0/24 — "
-                        "got %r" % rule.rule_value)
+                        _("IP range must be a valid CIDR, e.g. 203.0.113.0/24 — "
+                          "got %r") % rule.rule_value)
             elif rule.rule_type == 'country':
                 codes = [c.strip() for c in val.split(',') if c.strip()]
                 if not codes or any(not _COUNTRY_RE.match(c) for c in codes):
                     raise ValidationError(
-                        "Country must be comma-separated ISO 3166-1 alpha-2 "
-                        "codes, e.g. TW,US — got %r" % rule.rule_value)
+                        _("Country must be comma-separated ISO 3166-1 alpha-2 "
+                          "codes, e.g. TW,US — got %r") % rule.rule_value)
 
     def _suppress_route_sync(self):
         """Whether a per-rule operator sync should be skipped for this op.

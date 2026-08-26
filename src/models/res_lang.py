@@ -33,7 +33,7 @@ Odoo 的分歧正是最危險的一格：`PoFileReader.__iter__` 在條目缺 `#
 import logging
 import os
 
-from odoo import api, models
+from odoo import _, api, models
 from odoo.exceptions import ValidationError
 from odoo.tools.translate import PoFileReader
 
@@ -123,10 +123,10 @@ class ResLang(models.Model):
             # res.lang.csv 一定會 seed 它，所以這不是「降級狀態」而是 base 壞掉；
             # 靜默 return 會讓整條啟用鏈在毫無輸出的情況下什麼都沒做。
             raise ValidationError(
-                "[107] res.lang has no row with code=%s — cannot activate the "
-                "Traditional Chinese UI. base/data/res.lang.csv seeds this row "
-                "on every database, so its absence means the base module data "
-                "is incomplete." % _ZH_TW
+                _("[107] res.lang has no row with code=%s — cannot activate the "
+                  "Traditional Chinese UI. base/data/res.lang.csv seeds this row "
+                  "on every database, so its absence means the base module data "
+                  "is incomplete.") % _ZH_TW
             )
 
         _logger.info("[107] zh_TW active (lang id=%s)", lang.id)

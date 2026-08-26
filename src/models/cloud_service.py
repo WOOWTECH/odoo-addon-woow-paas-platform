@@ -192,7 +192,7 @@ def _reject_cs_access_identity_anchor_writes(env, vals):
     for field in _CS_ACCESS_IDENTITY_ANCHOR_FIELDS:
         if field in vals:
             raise UserError(
-                "Field '%s' is immutable after creation." % field
+                _("Field '%s' is immutable after creation.") % field
             )
 
 
@@ -532,10 +532,12 @@ class CloudService(models.Model):
     )
     provision_partner_id = fields.Many2one(
         comodel_name='res.partner',
-        string='Provision Owner（每帳號限一）',
+        string='Provision Owner (One Per Account)',
         index=True,
-        help='僅平台自動開通的「每帳號限一」服務（如 HA PaaS）填值，供 partial '
-             'unique index 保證同一 partner 至多一份。一般服務留空（#336）。',
+        help='Filled in only for platform auto-provisioned "one per account" '
+             'services (such as HA PaaS), so the partial unique index can '
+             'guarantee at most one per partner. Left empty for ordinary '
+             'services (#336).',
     )
 
     # Identity
@@ -587,7 +589,8 @@ class CloudService(models.Model):
     # （DataVolume 查詢失敗只會讓進度消失，不該擋住一台已 Ready 的 VM）。
     import_progress = fields.Char(
         string='Import Progress',
-        help='VM 磁碟映像的 import 進度（例 "42.31%"）；僅供顯示，不參與就緒判定',
+        help='Import progress of the VM disk image (e.g. "42.31%"); display '
+             'only, it takes no part in the readiness decision',
     )
 
     # Post-deploy initialization tracking
@@ -620,16 +623,21 @@ class CloudService(models.Model):
         default=False,
         copy=False,
         help=(
-            "服務已就緒、但寬限期內都沒能解析到 Public URL 的 DNS record，因此是"
-            "**帶著保留**放行的（#648 (b)）。給前端掛一句軟提示用。\n\n"
-            "⚠ 刻意不寫進 `error_message`：`ServiceDetailPage.xml` 的 "
-            "`t-if=\"service.error_message\"` **不判 state**，寫進去會讓一台健康的"
-            "服務冒出紅色故障 banner，而 `ServiceCard.xml` 又多判了 "
-            "`state === 'error'` ⇒ 兩處行為還不一致。\n\n"
-            "⚠ `running` 不在任何 poll 的 domain 裡（cron 撈 deploying/upgrading/"
-            "initializing，前端 pendingStates 也不含 running），所以這個旗標**沒有"
-            "任何東西會回來自動清掉**——清除靠租戶查看服務時的重探（見 "
-            "`_refresh_public_url_dns_flag`）。"
+            "The service is ready, but the DNS record for its Public URL never "
+            "resolved within the grace period, so it was let through **with "
+            "reservations** (#648 (b)). Meant for a soft hint in the front "
+            "end.\n\n"
+            "⚠ Deliberately NOT written into `error_message`: the "
+            "`t-if=\"service.error_message\"` in `ServiceDetailPage.xml` **does "
+            "not check state**, so writing it there would make a healthy "
+            "service raise a red failure banner — while `ServiceCard.xml` "
+            "additionally checks `state === 'error'`, so the two already behave "
+            "differently.\n\n"
+            "⚠ `running` is in no poll domain (the cron picks up deploying/"
+            "upgrading/initializing, and the front-end pendingStates does not "
+            "include running either), so **nothing ever comes back to clear "
+            "this flag** — it is cleared by the re-probe that runs when the "
+            "tenant views the service (see `_refresh_public_url_dns_flag`)."
         ),
     )
     internal_port = fields.Integer(
@@ -660,8 +668,10 @@ class CloudService(models.Model):
     is_protected = fields.Boolean(
         string='Access Protected',
         default=False,
-        help='開啟後本服務的公開 subdomain 由 Cloudflare Access 保護：所有'
-             '訪客都必須先通過 Access 驗證。粒度是整個 subdomain（拍板 5）。',
+        help='When enabled, the public subdomain of this service is protected '
+             'by Cloudflare Access: every visitor must authenticate through '
+             'Access first. The granularity is the whole subdomain '
+             '(decision 5).',
     )
     session_duration = fields.Selection(
         selection=[
@@ -670,38 +680,43 @@ class CloudService(models.Model):
         ],
         string='Access Session Duration',
         default='24h',
-        help='通過驗證後多久需要重新登入（本服務）。',
+        help='How long users stay authenticated before re-login (this service).',
     )
     login_google = fields.Boolean(string='Access Login: Google', default=False)
     login_email_otp = fields.Boolean(
         string='Access Login: Email OTP', default=False)
     access_app_id = fields.Char(
         string='CF Access App ID', copy=False,
-        help='本服務的 Cloudflare Access Application id（sync 後回存）。'
-             '身分錨點：只有伺服器端 sentinel 路徑寫得動。',
+        help='Cloudflare Access Application id for THIS service (written back '
+             'on sync). Identity anchor: only the server-side sentinel path can '
+             'write it.',
     )
     access_policy_ids = fields.One2many(
         comodel_name='woow_paas_platform.security_access_access_policy',
         inverse_name='cloud_service_id',
         string='Access Policies',
-        help='本服務的 Access 政策（與 SA route 共用 policy model，'
-             '錨點是 exclusive arc，見 #744）。',
+        help='Access policies for this service (the policy model is shared with '
+             'SA routes; the anchor is an exclusive arc, see #744).',
     )
     access_unresolved_idp_types = fields.Char(
         string='Unresolved Login Methods', copy=False,
-        help='上次 sync 時「有要求、但 Cloudflare 帳號上找不到對應 IdP」的登入'
-             '方式（如 google）。非空代表登入限制**被靜默放寬**了——若解析後'
-             '的集合變空，Access app 會 fallback 成全部可用 IdP。刻意曝光而'
-             '不是丟掉。',
+        help='Requested login methods (e.g. google) with no matching Cloudflare '
+             'account IdP at the last sync of THIS service. Non-empty means the '
+             'login restriction **silently widened** — if the resolved set '
+             'emptied, the Access app falls back to ALL available IdPs. '
+             'Surfaced deliberately, not dropped.',
     )
     access_protection_lost = fields.Boolean(
         string='Protection Not In Effect', copy=False, default=False,
-        help='True ＝ 本服務的 Cloudflare Access application 已經被拆掉、而記錄'
-             '本身還在（刪除交易回捲了，Cloudflare 那半回捲不掉）。此時 '
-             'is_protected 只是**意圖**：CF 上沒有任何東西在強制登入，subdomain '
-             '照常可達。由下一次成功的 Access sync 清掉。刻意與 is_protected '
-             '分開——降 is_protected 等於平台改掉租戶看得到的設定（產品可見'
-             '變更），未拍板（#794）。',
+        help='True = the Cloudflare Access application for this service has '
+             'been torn down while the record itself is still here (the delete '
+             'transaction rolled back; the Cloudflare half cannot be rolled '
+             'back). is_protected is then only an **intent**: nothing on CF is '
+             'forcing a login and the subdomain is reachable as usual. Cleared '
+             'by the next successful Access sync. Deliberately kept apart from '
+             'is_protected — lowering is_protected would mean the platform '
+             'changing a setting the tenant can see (a product-visible change), '
+             'which is not decided yet (#794).',
     )
 
     # Helm Release Info
@@ -730,16 +745,22 @@ class CloudService(models.Model):
     last_release_sync_at = fields.Datetime(
         string='Last Release Sync At',
         help=(
-            "最後一次從 operator 取得 release 事實（chart 版本／revision）的時間。"
-            "注意語意：是「最後一次**問過**」，不是「最後一次**值有變**」——"
-            "租戶要知道的是眼前這個版本號多新，而不是它上次改是什麼時候。\n\n"
-            "⚠ 這個欄位由 #627 (i) 的每日 reconciliation cron 每天 stamp 一次，"
-            "**代價是 `write_date` 從此每天變動**：在此之前，`write_date` 停留在"
-            "「最後一次平台自己動這筆服務」的時間，可以拿來判斷「這筆帳本多久沒被"
-            "碰過」。#552／#627 的調查就用過那個訊號兩次（判定某次 helm upgrade "
-            "不是 Odoo 發起的、以及證明升版沒有順手回寫帳本）。**那個診斷能力從本"
-            "版起消失** —— 要判斷「平台最後一次主動操作這筆服務」請改看 "
-            "`last_upgraded_at` / `deployed_at`，不要再用 `write_date`。"
+            "When the release facts (chart version / revision) were last "
+            "fetched from the operator. Mind the semantics: this is the last "
+            "time we **asked**, not the last time the **value changed** — what "
+            "a tenant needs to know is how fresh the version number in front of "
+            "them is, not when it last changed.\n\n"
+            "⚠ This field is stamped once a day by the #627 (i) daily "
+            "reconciliation cron, **at the cost of `write_date` now changing "
+            "every day**: before that, `write_date` stayed at the last time the "
+            "platform itself touched this service, which could be read as "
+            "\"how long this record has gone untouched\". The #552 / #627 "
+            "investigations used that signal twice (to establish that a given "
+            "helm upgrade was not initiated by Odoo, and to prove that an "
+            "upgrade never wrote the facts back). **That diagnostic ability is "
+            "gone as of this version** — to tell when the platform last acted "
+            "on a service, read `last_upgraded_at` / `deployed_at`, no longer "
+            "`write_date`."
         ),
     )
 
@@ -868,7 +889,7 @@ class CloudService(models.Model):
 
         client = get_paas_operator_client(self.env)
         if not client:
-            raise UserError("PaaS Operator not configured. Contact administrator.")
+            raise UserError(_("PaaS Operator not configured. Contact administrator."))
 
         # Check whether a Helm release already exists
         release_exists = False
@@ -905,9 +926,11 @@ class CloudService(models.Model):
             # 悄悄變成另一個功能。要放行就去把 template 的版本填上。
             if not template.helm_chart_version:
                 raise UserError(
-                    f"無法重新部署：商品「{template.name}」尚未指定 chart 版本。"
-                    f"直接部署會抓 registry 當下的最新版（不可逆的跳版）。"
-                    f"請先在商品設定填入版本再重試。"
+                    _('Cannot redeploy: the product "%(product)s" has no '
+                      'chart version pinned. Deploying now would pull whatever '
+                      'is latest in the registry, which is an irreversible '
+                      'version jump. Set the version in the product settings '
+                      'and try again.', product=template.name)
                 )
             values = self._assemble_deploy_values()['values']
             sensitive_values = self._build_mcp_sensitive_values()
@@ -923,7 +946,7 @@ class CloudService(models.Model):
                 )
             except PaaSOperatorError as e:
                 raise UserError(
-                    f"Upgrade failed: {e.detail or e.message}"
+                    _("Upgrade failed: %(reason)s", reason=e.detail or e.message)
                 ) from e
 
             # #482: 停權中的服務不得被 upgrade 拉出停權。寫成 'deploying' 會讓
@@ -1058,17 +1081,17 @@ class CloudService(models.Model):
             # _cron_check_deploying_services polls every minute and flips it
             # back to 'running', so say that instead.
             raise UserError(
-                "Service is finishing an update (usually under a minute). "
-                "Please wait and try again."
+                _("Service is finishing an update (usually under a minute). "
+                  "Please wait and try again.")
             )
         if self.state != 'running':
             raise UserError(
-                "Service must be running before resetting its admin password."
+                _("Service must be running before resetting its admin password.")
             )
 
         if not (self.helm_release_name and self.helm_namespace):
             raise UserError(
-                "Service has no helm release yet — deploy first before resetting password."
+                _("Service has no helm release yet — deploy first before resetting password.")
             )
 
         # #357 C03：不檢查既有 secret。reset 是「重新生成並下發」而非「讀舊密碼」，
@@ -1113,7 +1136,7 @@ class CloudService(models.Model):
 
         client = get_paas_operator_client(self.env)
         if not client:
-            raise UserError("PaaS Operator not configured. Contact administrator.")
+            raise UserError(_("PaaS Operator not configured. Contact administrator."))
 
         try:
             # #552: the response is no longer discarded — it carries the chart
@@ -1173,17 +1196,17 @@ class CloudService(models.Model):
                 self.name, self.id, e.detail or e.message,
             )
             raise UserError(
-                "Reset status unknown — the request timed out before the service "
-                "confirmed it. The reset may still have taken effect, so the "
-                "password was not saved. Wait a few minutes, then press Reset "
-                "again to issue a new password."
+                _("Reset status unknown — the request timed out before the service "
+                  "confirmed it. The reset may still have taken effect, so the "
+                  "password was not saved. Wait a few minutes, then press Reset "
+                  "again to issue a new password.")
             ) from e
         except PaaSOperatorError as e:
             _logger.error(
                 "reset-admin-password failed for service %s (id=%s): %s",
                 self.name, self.id, e.detail or e.message,
             )
-            raise UserError("Reset failed. Check service status and retry.") from e
+            raise UserError(_("Reset failed. Check service status and retry.")) from e
 
         # ================= 提交點（C11′ commit-on-secret）之後 =================
         #
@@ -1380,10 +1403,12 @@ class CloudService(models.Model):
             if not template.helm_chart_version:
                 raise PaaSOperatorError(
                     'chart version not pinned',
-                    detail=(
-                        f'商品「{template.name}」尚未指定部署版本，為避免部署到'
-                        f'未知的 chart 版本已中止開通。請在 seed 釘版後重新發版'
-                        f'（#552）。'
+                    detail=_(
+                        'The product "%(product)s" has no deployment version '
+                        'pinned. Provisioning was aborted to avoid deploying '
+                        'an unknown chart version. Pin the version in the seed '
+                        'and cut a new release (#552).',
+                        product=template.name,
                     ),
                 )
 
@@ -4296,9 +4321,9 @@ class CloudService(models.Model):
         )
         if denied:
             raise AccessError(
-                "只有 workspace 的 owner／admin 才能變更 cloud_service 綁定"
-                "（新增或移除皆同）。被拒絕的 cloud_service："
-                "woow_paas_platform.cloud_service %s"
+                _("Only a workspace owner or admin can change cloud service "
+                  "bindings (adding and removing alike). Denied cloud "
+                  "services: woow_paas_platform.cloud_service %s")
                 % ', '.join('#%s' % svc_id for svc_id in denied.ids)
             )
 
@@ -4339,10 +4364,12 @@ class CloudService(models.Model):
             owner_partner = record.workspace_id.owner_id.partner_id
             if not owner_partner or sub.sh_partner_id != owner_partner:
                 raise SubscriptionBindingError(_(
-                    '這筆訂閱不屬於本服務的 workspace 擁有者，不可綁定。'))
+                    "This subscription does not belong to the owner of this "
+                    "service's workspace and cannot be bound."))
             if check_state and sub.state != 'in_progress':
                 raise SubscriptionBindingError(_(
-                    '只能綁定生效中（in_progress）的訂閱，目前狀態為 %(state)s。',
+                    'Only an active (in_progress) subscription can be bound. '
+                    'Current state: %(state)s.',
                     state=sub.state or 'unset'))
 
     def _assert_reverse_binding_authorized(self, vals):
@@ -4498,7 +4525,9 @@ class CloudService(models.Model):
                 if (cs.helm_namespace and cs.workspace_id.id
                         and vals['workspace_id'] != cs.workspace_id.id):
                     raise UserError(
-                        "不可變更已部署 CloudService 的 workspace（命名空間身分固定）。"
+                        _("The workspace of a deployed cloud service cannot "
+                          "be changed; its namespace identity is fixed at "
+                          "creation.")
                     )
         # ⚠ 這裡**刻意沒有**全域上限守衛。曾經有過（#501 B3，擋「先建成 `deleting`
         # 再 write 回計數態」的繞道），已移除，理由記在 #519 與 PR #517 的第二輪覆核：
@@ -4554,7 +4583,7 @@ class CloudService(models.Model):
                 # 脫離生命週期管理（停權／結算都再也摸不到它）。平台自己也沒有任何
                 # 一條路徑會這樣寫（全 repo 只有兩處寫這個欄位，都是指向新訂閱）。
                 raise SubscriptionBindingError(_(
-                    '不可解除服務與訂閱的綁定。'))
+                    'A service cannot be unbound from its subscription.'))
         tracked = 'workspace_id' in vals or 'project_ids' in vals
         projects = self.mapped('project_ids') if tracked else self.browse()
         old = {p.id: set(p.workspace_ids.ids) for p in projects}
@@ -4793,7 +4822,8 @@ class CloudService(models.Model):
                 lambda tpl=template: self._count_active_for_template(tpl))
             if reason == 'paused':
                 raise SupplyGateError(_(
-                    '「%(tpl)s」目前暫停販售。', tpl=template.name))
+                    'Sales of "%(tpl)s" are currently paused.',
+                    tpl=template.name))
             if reason == 'unpinned_chart':
                 # #552 層 4：這是**平台端設定缺陷**不是營運狀態，所以 log 成 error
                 # ——租戶看到的是下面那句，但營運要在 log 裡看得到是哪個 template。
@@ -4806,11 +4836,13 @@ class CloudService(models.Model):
                     template.name, template.id, template.slug,
                 )
                 raise SupplyGateError(_(
-                    '「%(tpl)s」目前無法開通：平台尚未指定此商品的部署版本。'
-                    '請聯繫客服。', tpl=template.name))
+                    '"%(tpl)s" cannot be provisioned right now: the platform '
+                    'has not pinned a deployment version for this product. '
+                    'Please contact support.', tpl=template.name))
             if reason == 'sold_out':
                 raise SupplyGateError(_(
-                    '「%(tpl)s」目前已售罄，暫時無法開通新的實例。',
+                    '"%(tpl)s" is sold out; no new instances can be '
+                    'provisioned at the moment.',
                     tpl=template.name))
 
     @api.model_create_multi
@@ -4877,8 +4909,9 @@ class CloudService(models.Model):
         # 模組層級私有物件。不讀 vals、不讀 env.su、不讀 env.user、不讀 role。
         if not _is_internal_provision(self.env):
             raise ProvisionGateError(_(
-                '雲端服務只能由平台的開通流程建立（%(model)s）。'
-                '請改從服務市集下單，不要直接寫入這個 model。',
+                'Cloud services can only be created by the platform '
+                'provisioning flow (%(model)s). Please order from the '
+                'marketplace instead of writing to this model directly.',
                 model=self._name))
         # #744：Access 身分錨點的 create 側。**不是**被上面那道閘覆蓋掉的冗餘
         # ——開通閘擋的是「誰能建」，本組擋的是「建的時候能不能自帶別人的 CF
@@ -4934,8 +4967,9 @@ class CloudService(models.Model):
                 count = len(self._find_active_for_partner(rec.template_id, partner))
                 if count > limit:
                     raise SupplyGateError(_(
-                        '「%(tpl)s」每個帳號最多 %(limit)s 個實例，'
-                        '您已達上限。', tpl=rec.template_id.name, limit=limit))
+                        '"%(tpl)s" is limited to %(limit)s instance(s) per '
+                        'account, and you have reached that limit.',
+                        tpl=rec.template_id.name, limit=limit))
         for rec in records.filtered(lambda r: r.template_id.has_admin_gui):
             if not rec._get_secret_record():
                 secret_password = self.env.context.get('mcp_admin_password')
@@ -5025,10 +5059,10 @@ class CloudService(models.Model):
                     if service.helm_release_name and service.helm_namespace:
                         if not service._cleanup_helm():
                             raise UserError(
-                                "Helm uninstall failed; release '%s' is still live in "
-                                "namespace '%s' (billed compute / leaked namespace). "
-                                "The service record was kept so the deletion can be "
-                                "retried. Please try again shortly." % (
+                                _("Helm uninstall failed; release '%s' is still live in "
+                                  "namespace '%s' (billed compute / leaked namespace). "
+                                  "The service record was kept so the deletion can be "
+                                  "retried. Please try again shortly.") % (
                                     service.helm_release_name, service.helm_namespace,
                                 )
                             )
@@ -5052,9 +5086,9 @@ class CloudService(models.Model):
                     if not service._teardown_access_if_any(
                             torn_down=torn_down):
                         raise UserError(
-                            "Cloudflare Access teardown failed; the Access "
-                            "application for '%s' is still live. The service record "
-                            "was kept so the deletion can be retried." % (
+                            _("Cloudflare Access teardown failed; the Access "
+                              "application for '%s' is still live. The service record "
+                              "was kept so the deletion can be retried.") % (
                                 service.name or service.id,
                             )
                         )

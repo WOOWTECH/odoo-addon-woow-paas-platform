@@ -1,4 +1,4 @@
-from odoo import fields, models
+from odoo import _, fields, models
 from odoo.exceptions import AccessError
 
 
@@ -50,7 +50,7 @@ class McpTool(models.Model):
             for tool in self:
                 if vals['server_id'] != tool.server_id.id:
                     raise AccessError(
-                        "Only administrators can re-point an MCP tool to a "
-                        "different server."
+                        _("Only administrators can re-point an MCP tool to a "
+                          "different server.")
                     )
         return super().write(vals)

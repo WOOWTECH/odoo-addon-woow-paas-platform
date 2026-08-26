@@ -153,7 +153,7 @@ class TestAgentStatusEndpoint(TransactionCase):
         self.assertFalse(data['ready'])
         self.assertFalse(data['enabled'])
         self.assertEqual(
-            data['reason'], 'Agent runtime 未啟用',
+            data['reason'], 'Agent runtime is not enabled',
             "toggle off wins precedence even when everything else is configured",
         )
 
@@ -171,7 +171,7 @@ class TestAgentStatusEndpoint(TransactionCase):
         self.assertTrue(data['enabled'])
         self.assertEqual(data['template_name'], '')
         self.assertEqual(data['model_name'], '')
-        self.assertEqual(data['reason'], '無預設 Agent Template')
+        self.assertEqual(data['reason'], 'No default agent template')
 
     # -- AS-4: template present but ai.config has no api_key -------------
 
@@ -187,7 +187,7 @@ class TestAgentStatusEndpoint(TransactionCase):
         # template is still a valid platform default → its name/model surface
         self.assertEqual(data['template_name'], 'Platform Default Agent')
         self.assertEqual(data['model_name'], 'gpt-4o-mini')
-        self.assertEqual(data['reason'], 'Template 未設 API key')
+        self.assertEqual(data['reason'], 'The agent template has no API key')
 
     # -- AS-5: operator unconfigured -------------------------------------
 
@@ -201,7 +201,7 @@ class TestAgentStatusEndpoint(TransactionCase):
         self.assertFalse(data['ready'])
         self.assertTrue(data['enabled'])
         self.assertFalse(data['operator_configured'])
-        self.assertEqual(data['reason'], 'Operator 未設定')
+        self.assertEqual(data['reason'], 'Operator is not configured')
 
     # == Per-project scope (kanban pill) =================================
     # project_id selects per-project readiness: use_agent_runtime flag +
@@ -242,7 +242,8 @@ class TestAgentStatusEndpoint(TransactionCase):
         self.assertEqual(data['scope'], 'project')
         self.assertFalse(data['ready'])
         self.assertFalse(data['enabled'])
-        self.assertEqual(data['reason'], '此專案未啟用 Agent runtime')
+        self.assertEqual(
+            data['reason'], 'Agent runtime is not enabled for this project')
 
     def test_pp3_project_no_template(self):
         """Enabled but no binding and no platform default → '無 Agent Template'."""
@@ -256,7 +257,7 @@ class TestAgentStatusEndpoint(TransactionCase):
         self.assertFalse(data['ready'])
         self.assertTrue(data['enabled'])
         self.assertEqual(data['template_name'], '')
-        self.assertEqual(data['reason'], '無 Agent Template')
+        self.assertEqual(data['reason'], 'No agent template')
 
     def test_pp4_cross_user_access_denied(self):
         """A non-member user must be denied — per-project status can't leak

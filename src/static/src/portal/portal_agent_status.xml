@@ -11,16 +11,16 @@
         <div t-if="state.error" class="text-muted small" t-esc="state.error"/>
         <t t-elif="state.agent">
           <div class="small text-muted" t-if="state.agent.template_name">
-            Agent：<span t-esc="state.agent.template_name"/>
+            Agent:<span t-esc="state.agent.template_name"/>
           </div>
           <div class="small text-muted" t-if="state.agent.model_name">
-            AI Connection：<span t-esc="state.agent.model_name"/>
+            AI Connection:<span t-esc="state.agent.model_name"/>
           </div>
           <div class="small text-warning"
                t-if="!state.agent.ready and state.agent.reason"
                t-esc="state.agent.reason"/>
         </t>
-        <div t-else="" class="text-muted small">載入中…</div>
+        <div t-else="" class="text-muted small">Loading...</div>
       </div>
     </div>
   </t>

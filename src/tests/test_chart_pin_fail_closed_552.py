@@ -153,7 +153,8 @@ class TestFirstInstallGate(_Base):
 
         with self.assertRaises(SupplyGateError) as err:
             self._service(template, **{'name': 'svc-second-552c'})
-        self.assertIn('尚未指定此商品的部署版本', str(err.exception))
+        self.assertIn(
+            'has not pinned a deployment version', str(err.exception))
         self.assertTrue(service.exists(), '前提：既有服務不受影響，擋的是新開通')
 
     def test_ha_paas_entry_is_also_rejected(self):
@@ -210,7 +211,8 @@ class TestExecuteDeployBackstop(_Base):
         這條斷言的是**訊息內容**，因為那正是型別選錯時會消失的東西。
         """
         service, _ = self._deploy_with_unpinned_template()
-        self.assertIn('尚未指定部署版本', service.error_message or '')
+        self.assertIn(
+            'has no deployment version pinned', service.error_message or '')
         self.assertNotIn('Unexpected error', service.error_message or '')
 
     def test_pinned_template_still_deploys(self):
@@ -239,7 +241,7 @@ class TestRedeployGate(_Base):
             with self.assertRaises(UserError) as err:
                 service.action_redeploy()
 
-        self.assertIn('尚未指定 chart 版本', str(err.exception))
+        self.assertIn('has no chart version pinned', str(err.exception))
         self.assertFalse(
             client.upgrade_release.called,
             'UserError 必須在打 operator 之前拋出')

@@ -16,6 +16,7 @@ from ..models.workspace_access import ROLE_OWNER, ROLE_ADMIN
 # #536：sync-control 的兩個逃生門只認模組私有 sentinel（`call_kw` 把呼叫端
 # context 整包換進 env，只判 truthy 的 key 租戶自己就打得開）。
 from ..models.security_access import _rule_replace, _skip_route_sync
+from odoo import _
 
 _logger = logging.getLogger(__name__)
 
@@ -38,19 +39,19 @@ class SecurityAccessController(Controller):
         workspace = self._get_workspace_or_error(workspace_id)
         if not workspace:
             return {"success": False,
-                    "error": "Workspace not found or access denied"}
+                    "error": _("Workspace not found or access denied")}
 
         if action == "list":
             return self._list_security_accesses(workspace)
         elif action == "create":
             access = workspace.check_user_access(request.env.user)
             if not access or access.role not in [ROLE_OWNER, ROLE_ADMIN]:
-                return {"success": False, "error": "Insufficient permissions"}
+                return {"success": False, "error": _("Insufficient permissions")}
             return self._create_security_access(
                 workspace, name,
                 kwargs.get("plan_id"), kwargs.get("template_id"),
             )
-        return {"success": False, "error": f"Unknown action: {action}"}
+        return {"success": False, "error": _("Unknown action: %(action)s", action=action)}
 
     # ==================== Detail ====================
 
@@ -68,10 +69,10 @@ class SecurityAccessController(Controller):
         workspace = self._get_workspace_or_error(workspace_id)
         if not workspace:
             return {"success": False,
-                    "error": "Workspace not found or access denied"}
+                    "error": _("Workspace not found or access denied")}
         sa = self._get_sa_or_error(sa_id, workspace)
         if not sa:
-            return {"success": False, "error": "Security access not found"}
+            return {"success": False, "error": _("Security access not found")}
 
         if action == "get":
             return {"success": True, "data": sa.to_dict()}
@@ -86,7 +87,7 @@ class SecurityAccessController(Controller):
         # provisioned). Gate it consistently with the other mutations.
         access = workspace.check_user_access(request.env.user)
         if not access or access.role not in [ROLE_OWNER, ROLE_ADMIN]:
-            return {"success": False, "error": "Insufficient permissions"}
+            return {"success": False, "error": _("Insufficient permissions")}
 
         if action == "refresh_status":
             try:
@@ -95,7 +96,7 @@ class SecurityAccessController(Controller):
                 _logger.exception(
                     "[SA] refresh_status failed sa=%s", sa.id)
                 return {"success": False,
-                        "error": "Failed to refresh status. Please try again."}
+                        "error": _("Failed to refresh status. Please try again.")}
             return {"success": True, "data": sa.to_dict()}
         elif action == "update":
             vals = {}
@@ -175,8 +176,8 @@ class SecurityAccessController(Controller):
             except Exception as e:
                 return {"success": False, "error": str(e)}
             return {"success": True,
-                    "data": {"message": "Security access deleted"}}
-        return {"success": False, "error": f"Unknown action: {action}"}
+                    "data": {"message": _("Security access deleted")}}
+        return {"success": False, "error": _("Unknown action: %(action)s", action=action)}
 
     # ==================== Routes ====================
 
@@ -194,10 +195,10 @@ class SecurityAccessController(Controller):
         workspace = self._get_workspace_or_error(workspace_id)
         if not workspace:
             return {"success": False,
-                    "error": "Workspace not found or access denied"}
+                    "error": _("Workspace not found or access denied")}
         sa = self._get_sa_or_error(sa_id, workspace)
         if not sa:
-            return {"success": False, "error": "Security access not found"}
+            return {"success": False, "error": _("Security access not found")}
 
         if action == "list":
             return {"success": True,
@@ -205,7 +206,7 @@ class SecurityAccessController(Controller):
 
         access = workspace.check_user_access(request.env.user)
         if not access or access.role not in [ROLE_OWNER, ROLE_ADMIN]:
-            return {"success": False, "error": "Insufficient permissions"}
+            return {"success": False, "error": _("Insufficient permissions")}
         try:
             sa._check_operation_allowed(operation='write')
         except Exception as e:
@@ -222,7 +223,7 @@ class SecurityAccessController(Controller):
             return self._update_route(sa, kwargs.get("route_id"), kwargs)
         elif action == "delete":
             return self._delete_route(sa, kwargs.get("route_id"))
-        return {"success": False, "error": f"Unknown action: {action}"}
+        return {"success": False, "error": _("Unknown action: %(action)s", action=action)}
 
     # ==================== Availability (platform-level) ====================
 
@@ -233,7 +234,7 @@ class SecurityAccessController(Controller):
     def api_route_check(self, prefix: str | None = None,
                         **kwargs: Any) -> dict[str, Any]:
         if not prefix:
-            return {"success": False, "error": "prefix is required"}
+            return {"success": False, "error": _("prefix is required")}
         return self._check_route_prefix(prefix)
 
     # ==================== Templates / Plans (platform-level) ============
@@ -265,10 +266,10 @@ class SecurityAccessController(Controller):
         template = Template.browse(template_id)
         if not template.exists() or not template.is_active:
             return {"success": False,
-                    "error": "Security Access template not found or inactive"}
+                    "error": _("Security Access template not found or inactive")}
         if not template.subscription_plan_ids:
             return {"success": False,
-                    "error": "Template has no subscription plans configured"}
+                    "error": _("Template has no subscription plans configured")}
         # #330 Wave C：base plan 附掛隱藏席數變體（xmlid 反查、無變體＝[]）。
         variants_by_base = template.subscription_plan_ids._attach_variants()
         # #368：group_key 配對月/年同 tier、specs 供前台卡片顯示
@@ -306,13 +307,13 @@ class SecurityAccessController(Controller):
         workspace = self._get_workspace_or_error(workspace_id)
         if not workspace:
             return {"success": False,
-                    "error": "Workspace not found or access denied"}
+                    "error": _("Workspace not found or access denied")}
         access = workspace.check_user_access(request.env.user)
         if not access or access.role not in [ROLE_OWNER, ROLE_ADMIN]:
-            return {"success": False, "error": "Insufficient permissions"}
+            return {"success": False, "error": _("Insufficient permissions")}
         sa = self._get_sa_or_error(sa_id, workspace)
         if not sa:
-            return {"success": False, "error": "Security access not found"}
+            return {"success": False, "error": _("Security access not found")}
         try:
             return {"success": True, "data": sa._skip_trial_estimate()}
         except Exception as e:
@@ -327,13 +328,13 @@ class SecurityAccessController(Controller):
         workspace = self._get_workspace_or_error(workspace_id)
         if not workspace:
             return {"success": False,
-                    "error": "Workspace not found or access denied"}
+                    "error": _("Workspace not found or access denied")}
         access = workspace.check_user_access(request.env.user)
         if not access or access.role not in [ROLE_OWNER, ROLE_ADMIN]:
-            return {"success": False, "error": "Insufficient permissions"}
+            return {"success": False, "error": _("Insufficient permissions")}
         sa = self._get_sa_or_error(sa_id, workspace)
         if not sa:
-            return {"success": False, "error": "Security access not found"}
+            return {"success": False, "error": _("Security access not found")}
         try:
             invoice_info = sa._skip_trial()
         except Exception as e:
@@ -353,17 +354,17 @@ class SecurityAccessController(Controller):
         """完全鏡像 smart_home.api_smarthome_change_plan 的流程與 sudo 理由：
         refund 計算 → 退 wallet → close 舊訂閱 → 開新訂閱。"""
         if not plan_id:
-            return {"success": False, "error": "plan_id is required"}
+            return {"success": False, "error": _("plan_id is required")}
         workspace = self._get_workspace_or_error(workspace_id)
         if not workspace:
             return {"success": False,
-                    "error": "Workspace not found or access denied"}
+                    "error": _("Workspace not found or access denied")}
         sa = self._get_sa_or_error(sa_id, workspace)
         if not sa:
-            return {"success": False, "error": "Security access not found"}
+            return {"success": False, "error": _("Security access not found")}
         access = workspace.check_user_access(request.env.user)
         if not access or access.role not in [ROLE_OWNER, ROLE_ADMIN]:
-            return {"success": False, "error": "Insufficient permissions"}
+            return {"success": False, "error": _("Insufficient permissions")}
 
         # sudo: portal users lack ACL on sh.subscription.plan; catalog data,
         # and the workspace+role check above already gates who can change a
@@ -372,7 +373,7 @@ class SecurityAccessController(Controller):
         Plan = request.env["sh.subscription.plan"].sudo()
         plan = Plan.browse(plan_id)
         if not plan.exists():
-            return {"success": False, "error": "Plan not found"}
+            return {"success": False, "error": _("Plan not found")}
         # 這道守衛真正要防的是「開出與這個實例不相符的 subscription／invoice
         # line」（invoice line 文案由 plan 的 product 決定）。role gate 只擋
         # 誰能改方案，不擋 plan 歸屬。
@@ -404,12 +405,12 @@ class SecurityAccessController(Controller):
             if plan not in sa.sudo().template_id.subscription_plan_ids:
                 return {
                     "success": False,
-                    "error": "Selected plan is not available for this template",
+                    "error": _("Selected plan is not available for this template"),
                 }
         elif (plan.service_type != "security_access"
                 or "security_access" not in plan._owning_template_families()):
             return {"success": False,
-                    "error": "Selected plan is not a valid Security Access plan"}
+                    "error": _("Selected plan is not a valid Security Access plan")}
 
         # sudo: workspace owners typically lack ACL on
         # sh.subscription.subscription; the workspace+role check above already
@@ -417,11 +418,11 @@ class SecurityAccessController(Controller):
         # smart_home.api_smarthome_change_plan's cascade.
         old_sub = sa.sudo().subscription_id
         if not old_sub or old_sub.state != "in_progress":
-            return {"success": False, "error": "No active subscription"}
+            return {"success": False, "error": _("No active subscription")}
         if not old_sub.sh_trial:
             if not old_sub.sh_end_date or not old_sub.sh_start_date:
                 return {"success": False,
-                        "error": "Subscription dates are incomplete"}
+                        "error": _("Subscription dates are incomplete")}
 
         refund = old_sub._compute_unused_refund()
         partner = old_sub.sh_partner_id
@@ -486,32 +487,32 @@ class SecurityAccessController(Controller):
     ) -> dict[str, Any]:
         """Mirrors smart_home._create_smarthome validation order."""
         if not name:
-            return {"success": False, "error": "Name is required"}
+            return {"success": False, "error": _("Name is required")}
         if not template_id:
             return {"success": False,
-                    "error": "Security Access template is required"}
+                    "error": _("Security Access template is required")}
         if not plan_id:
             return {"success": False,
-                    "error": "Subscription plan is required"}
+                    "error": _("Subscription plan is required")}
 
         Template = request.env[
             "woow_paas_platform.security_access_template"].sudo()
         template = Template.browse(template_id)
         if not template.exists() or not template.is_active:
             return {"success": False,
-                    "error": "Security Access template not found or inactive"}
+                    "error": _("Security Access template not found or inactive")}
         if not template.subscription_plan_ids:
             return {"success": False,
-                    "error": "Template has no subscription plans configured"}
+                    "error": _("Template has no subscription plans configured")}
 
         # sudo: catalog data, portal users lack plan ACL (mirrors smart_home)
         Plan = request.env["sh.subscription.plan"].sudo()
         plan = Plan.browse(plan_id)
         if not plan.exists():
-            return {"success": False, "error": "Subscription plan not found"}
+            return {"success": False, "error": _("Subscription plan not found")}
         if plan not in template.subscription_plan_ids:
             return {"success": False,
-                    "error": "Selected plan is not available for this template"}
+                    "error": _("Selected plan is not available for this template")}
 
         SecurityAccess = request.env["woow_paas_platform.security_access"]
         try:
@@ -530,7 +531,7 @@ class SecurityAccessController(Controller):
         except Exception as e:
             _logger.exception("[SA] Failed to create security access: %s", e)
             return {"success": False,
-                    "error": "Failed to create security access. Please try again."}
+                    "error": _("Failed to create security access. Please try again.")}
 
     def _check_route_prefix(self, prefix: str) -> dict[str, Any]:
         """Format check first, then two-layer availability: Odoo DB, Cloudflare DNS."""
@@ -552,7 +553,7 @@ class SecurityAccessController(Controller):
         if db_taken:
             return {"success": True,
                     "data": {"prefix": prefix, "available": False,
-                             "reason": "already used by another route"}}
+                             "reason": _("already used by another route")}}
         try:
             from ..services.paas_operator import get_paas_operator_client
             client = get_paas_operator_client(request.env)
@@ -567,22 +568,22 @@ class SecurityAccessController(Controller):
                 # platform never confirmed is free.
                 return {"success": True,
                         "data": {"prefix": prefix, "available": False,
-                                 "reason": "Could not confirm availability "
-                                           "(operator not configured); "
-                                           "try again later."}}
+                                 "reason": _("Could not confirm availability "
+                                             "(operator not configured); "
+                                             "try again later.")}}
             result = client.check_route_availability(prefix)
             # Operator returns status: free / taken / unknown. unknown
             # means the CF API errored (no longer silently "available").
             if result.get("status") == "unknown":
                 return {"success": True,
                         "data": {"prefix": prefix, "available": False,
-                                 "reason": "Could not confirm availability "
-                                           "(Cloudflare check unavailable); "
-                                           "try again."}}
+                                 "reason": _("Could not confirm availability "
+                                             "(Cloudflare check unavailable); "
+                                             "try again.")}}
             if not result.get("available", True):
                 return {"success": True,
                         "data": {"prefix": prefix, "available": False,
-                                 "reason": "DNS record already exists"}}
+                                 "reason": _("DNS record already exists")}}
         except Exception as e:
             _logger.warning("[SA] CF availability check failed: %s", e)
             # fail-CLOSED, symmetric with the status=='unknown' branch above.
@@ -596,15 +597,15 @@ class SecurityAccessController(Controller):
             # not pose as a permissive authority.
             return {"success": True,
                     "data": {"prefix": prefix, "available": False,
-                             "reason": "Could not confirm availability "
-                                       "(operator unavailable); try again."}}
+                             "reason": _("Could not confirm availability "
+                                         "(operator unavailable); try again.")}}
         return {"success": True,
                 "data": {"prefix": prefix, "available": True}}
 
     def _create_route(self, sa, subdomain_prefix, service_url,
                       http_host_header) -> dict[str, Any]:
         if not subdomain_prefix:
-            return {"success": False, "error": "subdomain_prefix is required"}
+            return {"success": False, "error": _("subdomain_prefix is required")}
 
         # two-layer quota: constraint re-checks at ORM layer
         sub = sa.sudo().subscription_id
@@ -613,13 +614,13 @@ class SecurityAccessController(Controller):
             count = len(sa.route_ids)
             if count >= quota:
                 return {"success": False,
-                        "error": "Route quota exceeded: plan allows %d "
-                                 "route(s)" % quota}
+                        "error": _("Route quota exceeded: plan allows %d "
+                                   "route(s)") % quota}
 
         check = self._check_route_prefix(subdomain_prefix)
         if not check["data"]["available"]:
             return {"success": False,
-                    "error": "Subdomain prefix is not available: %s"
+                    "error": _("Subdomain prefix is not available: %s")
                              % check["data"].get("reason", "taken")}
 
         Route = request.env["woow_paas_platform.security_access_route"]
@@ -640,7 +641,7 @@ class SecurityAccessController(Controller):
     def _update_route(self, sa, route_id, kwargs) -> dict[str, Any]:
         route_rec = sa.route_ids.filtered(lambda r: r.id == route_id)
         if not route_rec:
-            return {"success": False, "error": "Route not found"}
+            return {"success": False, "error": _("Route not found")}
         vals = {}
         if "service_url" in kwargs and kwargs["service_url"]:
             vals["service_url"] = kwargs["service_url"]
@@ -658,10 +659,10 @@ class SecurityAccessController(Controller):
     def _delete_route(self, sa, route_id) -> dict[str, Any]:
         route_rec = sa.route_ids.filtered(lambda r: r.id == route_id)
         if not route_rec:
-            return {"success": False, "error": "Route not found"}
+            return {"success": False, "error": _("Route not found")}
         try:
             route_rec.unlink()
-            return {"success": True, "data": {"message": "Route deleted"}}
+            return {"success": True, "data": {"message": _("Route deleted")}}
         except Exception as e:
             return {"success": False, "error": str(e)}
 
@@ -676,13 +677,13 @@ class SecurityAccessController(Controller):
         workspace = self._get_workspace_or_error(workspace_id)
         if not workspace:
             return {"success": False,
-                    "error": "Workspace not found or access denied"}
+                    "error": _("Workspace not found or access denied")}
         sa = self._get_sa_or_error(sa_id, workspace)
         if not sa:
-            return {"success": False, "error": "Security access not found"}
+            return {"success": False, "error": _("Security access not found")}
         access = workspace.check_user_access(request.env.user)
         if not access or access.role not in [ROLE_OWNER, ROLE_ADMIN]:
-            return {"success": False, "error": "Insufficient permissions"}
+            return {"success": False, "error": _("Insufficient permissions")}
         try:
             sa._check_operation_allowed(operation='write')
         except Exception as e:
@@ -699,10 +700,10 @@ class SecurityAccessController(Controller):
         workspace = self._get_workspace_or_error(workspace_id)
         if not workspace:
             return {"success": False,
-                    "error": "Workspace not found or access denied"}
+                    "error": _("Workspace not found or access denied")}
         sa = self._get_sa_or_error(sa_id, workspace)
         if not sa:
-            return {"success": False, "error": "Security access not found"}
+            return {"success": False, "error": _("Security access not found")}
 
         if action == "list":
             # No .sudo(): ir.rule filters policies to workspace members
@@ -729,7 +730,7 @@ class SecurityAccessController(Controller):
 
         access = workspace.check_user_access(request.env.user)
         if not access or access.role not in [ROLE_OWNER, ROLE_ADMIN]:
-            return {"success": False, "error": "Insufficient permissions"}
+            return {"success": False, "error": _("Insufficient permissions")}
         try:
             sa._check_operation_allowed(operation='write')
         except Exception as e:
@@ -743,7 +744,7 @@ class SecurityAccessController(Controller):
             return self._delete_policy(sa, kwargs.get("policy_id"))
         elif action == "reorder":
             return self._reorder_policies(sa, kwargs)
-        return {"success": False, "error": f"Unknown action: {action}"}
+        return {"success": False, "error": _("Unknown action: %(action)s", action=action)}
 
     # ==================== Per-route Access config (P2.5 Phase 3) ====
 
@@ -762,13 +763,13 @@ class SecurityAccessController(Controller):
         workspace = self._get_workspace_or_error(workspace_id)
         if not workspace:
             return {"success": False,
-                    "error": "Workspace not found or access denied"}
+                    "error": _("Workspace not found or access denied")}
         sa = self._get_sa_or_error(sa_id, workspace)
         if not sa:
-            return {"success": False, "error": "Security access not found"}
+            return {"success": False, "error": _("Security access not found")}
         access = workspace.check_user_access(request.env.user)
         if not access or access.role not in [ROLE_OWNER, ROLE_ADMIN]:
-            return {"success": False, "error": "Insufficient permissions"}
+            return {"success": False, "error": _("Insufficient permissions")}
         try:
             sa._check_operation_allowed(operation='write')
         except Exception as e:
@@ -824,7 +825,7 @@ class SecurityAccessController(Controller):
         route = self._sa_access_route(sa)
         if not route:
             return {"success": False,
-                    "error": "No application route to configure yet"}
+                    "error": _("No application route to configure yet")}
         vals = {}
         if "access_enabled" in kwargs:
             vals["is_protected"] = bool(kwargs["access_enabled"])
@@ -851,7 +852,7 @@ class SecurityAccessController(Controller):
         is the sole defense for those Chars (mirrors _update_access_config)."""
         route = self._sa_route(sa, route_id)
         if not route:
-            return {"success": False, "error": "Route not found"}
+            return {"success": False, "error": _("Route not found")}
         vals = {}
         # Accept both 'is_protected' (per-route native) and the legacy
         # 'access_enabled' alias so an in-flight Phase 4 client can use either.
@@ -874,7 +875,7 @@ class SecurityAccessController(Controller):
 
     def _create_policy(self, sa, kwargs) -> dict[str, Any]:
         if not kwargs.get("name"):
-            return {"success": False, "error": "name is required"}
+            return {"success": False, "error": _("name is required")}
         # P2.5 Phase 3: a client may target ANY of the gated SA's routes via
         # route_id (pinned to the SA). A cross-SA / unknown route_id is rejected
         # — never written to another SA's route. Absent route_id, fall back to
@@ -882,12 +883,12 @@ class SecurityAccessController(Controller):
         if kwargs.get("route_id"):
             route = self._sa_route(sa, kwargs["route_id"])
             if not route:
-                return {"success": False, "error": "Route not found"}
+                return {"success": False, "error": _("Route not found")}
         else:
             route = self._sa_access_route(sa)
         if not route:
             return {"success": False,
-                    "error": "No application route to attach a policy to yet"}
+                    "error": _("No application route to attach a policy to yet")}
         # two-layer quota: constraint re-checks at ORM layer (lock-step with
         # the model's _check_policy_quota — an SA-LEVEL total). sudo on
         # subscription_id read only: portal owners lack ACL on the subscription.
@@ -908,8 +909,8 @@ class SecurityAccessController(Controller):
                 [("security_access_id", "=", sa.id)])
             if quota and existing >= quota:
                 return {"success": False,
-                        "error": "Access policy quota exceeded: plan allows "
-                                 "%d polic(ies)" % quota}
+                        "error": _("Access policy quota exceeded: plan allows "
+                                   "%d polic(ies)") % quota}
         # Whitelist only: cf_policy_id / security_access_id / access_app_id are
         # server-owned and never taken from kwargs. route_id is set from the
         # already-resolved, SA-pinned `route` recordset (NOT the raw kwargs id),
@@ -974,7 +975,7 @@ class SecurityAccessController(Controller):
         and a single re-sync issued at the end so CF sees the final order once."""
         policy_ids = kwargs.get("policy_ids") or []
         if not isinstance(policy_ids, list):
-            return {"success": False, "error": "policy_ids must be a list"}
+            return {"success": False, "error": _("policy_ids must be a list")}
         reordered = []
         routes = request.env["woow_paas_platform.security_access_route"]
         try:
@@ -1007,7 +1008,7 @@ class SecurityAccessController(Controller):
     def _update_policy(self, sa, policy_id, kwargs) -> dict[str, Any]:
         pol = self._sa_policy(sa, policy_id)
         if not pol:
-            return {"success": False, "error": "Policy not found"}
+            return {"success": False, "error": _("Policy not found")}
         # Whitelist only: drop cf_policy_id / security_access_id / route_id and
         # any other key the client tries to smuggle through.
         vals = {}
@@ -1044,10 +1045,10 @@ class SecurityAccessController(Controller):
     def _delete_policy(self, sa, policy_id) -> dict[str, Any]:
         pol = self._sa_policy(sa, policy_id)
         if not pol:
-            return {"success": False, "error": "Policy not found"}
+            return {"success": False, "error": _("Policy not found")}
         try:
             pol.unlink()
-            return {"success": True, "data": {"message": "Policy deleted"}}
+            return {"success": True, "data": {"message": _("Policy deleted")}}
         except Exception as e:
             _logger.exception("[SA] Failed to delete access policy: %s", e)
             return {"success": False, "error": str(e)}

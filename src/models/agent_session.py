@@ -7,7 +7,7 @@ import os
 import re
 from datetime import timedelta
 
-from odoo import api, fields, models
+from odoo import _, api, fields, models
 from odoo.exceptions import UserError
 from odoo.tools import html2plaintext
 
@@ -238,9 +238,9 @@ class AgentSession(models.Model):
         raw = os.environ.get(_ENV_NAMESPACE_SECRET, '')
         if not raw:
             raise UserError(
-                "Agent runtime namespace secret is not configured: set the "
-                "%s environment variable (injected from the K8s Secret). The "
-                "namespace hash is not derived without it (fail-closed)."
+                _("Agent runtime namespace secret is not configured: set the "
+                  "%s environment variable (injected from the K8s Secret). The "
+                  "namespace hash is not derived without it (fail-closed).")
                 % _ENV_NAMESPACE_SECRET
             )
         return raw.encode()
