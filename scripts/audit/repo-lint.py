@@ -6950,6 +6950,15 @@ TEST_COLLECTABILITY_REF = (
     "跑 Odoo test-tags ⇒ 這支靜態 gate 是「測試沒被收集／沒被執行」唯一的訊號")
 TEST_SUITE_DIR_REL = "src/tests"
 TEST_SUITE_PKG_REL = "src/tests/__init__.py"
+TEST_COLLECTABILITY_ROOT_VIOLATION = (
+    "`test-collectability`／`%s`：root/layout 前置條件不成立：找不到 "
+    "`src/__manifest__.py`。這兩條判準必須以 repo root 呼叫；缺 addon source tree "
+    "不能解讀為零違規（#828；%s）")
+
+
+def _test_collectability_root_violation(check_name):
+    """回傳可歸因到單一 check 的 wrong-root violation。"""
+    return TEST_COLLECTABILITY_ROOT_VIOLATION % (check_name, TEST_COLLECTABILITY_REF)
 
 #: 自家 addon 的絕對 import 前綴。`from odoo.addons.woow_paas_platform.tests.X import Y`
 #: 指的是**本樹自己的檔**，不是 Odoo 核心的測試基底——不還原它，那條 import 的模組路徑
@@ -7461,7 +7470,9 @@ def check_test_module_collection(root):
     ref = TEST_COLLECTABILITY_REF
     violations = []
     if not _addon_source_tree_present(root):
-        return violations            # 不是本 addon 的 root，本條沒有輸入（同第 26 條）
+        # #828：這兩條判準都是否定性的；wrong root 回空清單會與「零違規」不可區分。
+        return [_test_collectability_root_violation(
+            "check_test_module_collection")]
     facts = _test_tree_facts(root)
     for rel, exc in facts["parse_errors"]:
         violations.append(
@@ -7593,7 +7604,9 @@ def check_test_class_execution(root):
     self_rel = REPO_LINT_SELF_REL
     violations = []
     if not _addon_source_tree_present(root):
-        return violations
+        # #828：這兩條判準都是否定性的；wrong root 回空清單會與「零違規」不可區分。
+        return [_test_collectability_root_violation(
+            "check_test_class_execution")]
     facts = _test_tree_facts(root)
     for rel, exc in facts["parse_errors"]:
         violations.append(

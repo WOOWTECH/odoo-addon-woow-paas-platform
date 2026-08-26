@@ -1,0 +1,46 @@
+# PaaS Operator unit suite（Refs issue #856）
+#
+# 實測 655 passed / 45 deselected，約 25 秒；因此 PR 與 develop push 都執行，
+# 讓 operator regression 在合併前現形。integration 測試需要真 K8s，仍依
+# CLAUDE.md 的本機 integration recipe 執行，不納入這個普通 CI job。
+name: paas-operator-unit-tests
+
+on:
+  pull_request:
+    # 採 paths-ignore：漏列最多多跑一次，不會讓 operator 改動靜默失去測試。
+    paths-ignore:
+      - "docs/**"
+      - "**.md"
+      - ".claude/**"
+  push:
+    branches:
+      - develop
+    paths-ignore:
+      - "docs/**"
+      - "**.md"
+      - ".claude/**"
+  workflow_dispatch:
+
+jobs:
+  unit-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: extra/paas-operator/requirements.txt
+
+      - name: Install dependencies
+        working-directory: extra/paas-operator
+        run: python -m pip install --disable-pip-version-check -r requirements.txt
+
+      # 重複明示 marker（pytest.ini 也有同一條）是刻意的：即使預設 addopts
+      # 日後被改動，普通 CI 仍不會誤跑需要真叢集的 integration tests。
+      - name: Run unit tests (exclude live K8s integration tests)
+        working-directory: extra/paas-operator
+        run: python -m pytest tests/ -m "not integration"

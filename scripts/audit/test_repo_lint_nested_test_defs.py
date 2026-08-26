@@ -384,7 +384,8 @@ class TestReachesTheBaselinePredictor(unittest.TestCase):
 
     TREE = {
         # `_addon_source_tree_present()` 靠這個檔認出「這是本 addon 的 root」；
-        # 少了它收集面檢查會 fail-open，這棵樹就不是有效的對照環境（#828）。
+        # #828 修正前少了它會 fail-open；現在會回明確 wrong-root violation，但仍只測到
+        # layout 前置條件、測不到 nested def 判準，所以這棵樹必須保留 manifest。
         "src/__manifest__.py": "{'name': 'probe-850'}\n",
         "src/tests/__init__.py": "from . import test_nested\n",
         "src/tests/test_nested.py": (
