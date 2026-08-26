@@ -112,6 +112,15 @@ class _ShAccessFixture(TransactionCase):
         vals = {
             'name': name, 'sh_duration': 1, 'sh_unit': 'month',
             'sh_plan_price': 100, 'sh_no_of_billing_cycle': -1,
+            # #521：席位 enforcement 上線後 `ac_max_access_seats` 預設 0 ＝「一席
+            # 都沒有」⇒ 任何帶 email_list 的 fixture 都會被
+            # `_check_access_seat_quota` 擋住。本檔測的是 policy 數／每 policy
+            # email 數那兩條 quota、不是席位，所以這裡給一個明顯夠用的席位額度，
+            # 讓紅燈的原因只可能是被測的那一條。呼叫端仍可用 quota kwargs 覆寫。
+            # ⚠ 這是 fixture 的 forward coupling，**不是**產品側豁免——「既有 0
+            # 席方案上的資料怎麼辦」＝ #521 決策點 4，已拍板「一律擋（含修改舊
+            # 資料）」（留言 9960）；產品側零豁免就是該裁決。
+            'ac_max_access_seats': 99,
         }
         vals.update(quota)
         return self.env['sh.subscription.plan'].create(vals)

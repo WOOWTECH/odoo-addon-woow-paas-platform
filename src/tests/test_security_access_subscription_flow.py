@@ -881,7 +881,15 @@ class TestSecurityAccessAccessControl(TransactionCase):
         plan = self.env['sh.subscription.plan'].create({
             'name': 'AC Policy Quota Plan', 'sh_duration': 1, 'sh_unit': 'month',
             'sh_plan_price': 100, 'sh_no_of_billing_cycle': -1,
-            'sa_max_access_policies': 1})
+            'sa_max_access_policies': 1,
+            'ac_max_access_seats': 99,
+            # ↑ #521：席位 enforcement 上線後此欄預設 0 ＝「一席都沒有」，
+            # 帶 email_list 的 fixture 會被 `_check_access_seat_quota` 擋住。
+            # 本測試測的是 policy 數／email 數 quota、不是席位，給明顯夠用的
+            # 額度讓紅燈原因只可能是被測的那一條。fixture forward coupling，
+            # **不是**產品側豁免（既有 0 席方案的存量資料＝ #521 決策點 4，
+            # 已拍板「一律擋（含修改舊資料）」，留言 9960）。
+            })
         sub = self.env['sh.subscription.subscription'].create({
             'sh_partner_id': self.env.user.partner_id.id,
             'state': 'in_progress'})
@@ -915,7 +923,15 @@ class TestSecurityAccessAccessControl(TransactionCase):
         plan = self.env['sh.subscription.plan'].create({
             'name': 'AC Zero Quota Plan', 'sh_duration': 1, 'sh_unit': 'month',
             'sh_plan_price': 100, 'sh_no_of_billing_cycle': -1,
-            'sa_max_access_policies': 0})
+            'sa_max_access_policies': 0,
+            'ac_max_access_seats': 99,
+            # ↑ #521：席位 enforcement 上線後此欄預設 0 ＝「一席都沒有」，
+            # 帶 email_list 的 fixture 會被 `_check_access_seat_quota` 擋住。
+            # 本測試測的是 policy 數／email 數 quota、不是席位，給明顯夠用的
+            # 額度讓紅燈原因只可能是被測的那一條。fixture forward coupling，
+            # **不是**產品側豁免（既有 0 席方案的存量資料＝ #521 決策點 4，
+            # 已拍板「一律擋（含修改舊資料）」，留言 9960）。
+            })
         sub = self.env['sh.subscription.subscription'].create({
             'sh_partner_id': self.env.user.partner_id.id,
             'state': 'in_progress'})
@@ -946,7 +962,15 @@ class TestSecurityAccessAccessControl(TransactionCase):
         plan = self.env['sh.subscription.plan'].create({
             'name': 'AC Two Quota Plan', 'sh_duration': 1, 'sh_unit': 'month',
             'sh_plan_price': 100, 'sh_no_of_billing_cycle': -1,
-            'sa_max_access_policies': 2})
+            'sa_max_access_policies': 2,
+            'ac_max_access_seats': 99,
+            # ↑ #521：席位 enforcement 上線後此欄預設 0 ＝「一席都沒有」，
+            # 帶 email_list 的 fixture 會被 `_check_access_seat_quota` 擋住。
+            # 本測試測的是 policy 數／email 數 quota、不是席位，給明顯夠用的
+            # 額度讓紅燈原因只可能是被測的那一條。fixture forward coupling，
+            # **不是**產品側豁免（既有 0 席方案的存量資料＝ #521 決策點 4，
+            # 已拍板「一律擋（含修改舊資料）」，留言 9960）。
+            })
         sub = self.env['sh.subscription.subscription'].create({
             'sh_partner_id': self.env.user.partner_id.id,
             'state': 'in_progress'})

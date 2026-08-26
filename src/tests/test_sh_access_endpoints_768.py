@@ -228,6 +228,12 @@ class _ShAccessEndpointFixture(HttpCase):
             'name': 'SH AC Plan 768 %s' % uuid.uuid4().hex[:6],
             'sh_duration': 1, 'sh_unit': 'month', 'sh_plan_price': 100,
             'sh_no_of_billing_cycle': -1,
+            # #521：席位 enforcement 上線後 `ac_max_access_seats` 預設 0 ＝「一席
+            # 都沒有」⇒ 帶 email_list 的 fixture 會被 `_check_access_seat_quota`
+            # 擋住。本檔測的是 policy 數 quota、不是席位，給明顯夠用的額度讓紅燈
+            # 的原因只可能是被測的那一條（呼叫端 quota kwargs 仍可覆寫）。
+            # ⚠ fixture forward coupling，**不是**產品側豁免。
+            'ac_max_access_seats': 99,
         }, **quota))
         sub = self.Subscription.sudo().create({
             'sh_partner_id': self.alice.partner_id.id,

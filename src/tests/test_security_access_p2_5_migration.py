@@ -327,7 +327,10 @@ class TestP2_5Migration(TransactionCase):
             plan = self.env['sh.subscription.plan'].create({
                 'name': 'MIG Plan', 'sh_duration': 1, 'sh_unit': 'month',
                 'sh_plan_price': 100, 'sh_no_of_billing_cycle': -1,
-                'sa_max_routes': 5, 'sa_max_access_policies': 1})
+                'sa_max_routes': 5, 'sa_max_access_policies': 1,
+                # #521 fixture forward coupling：席位預設 0 會擋掉帶 email 的
+                # fixture；本檔測的是 migration 的 quota bypass，不是席位。
+                'ac_max_access_seats': 99})
             sub = self.env['sh.subscription.subscription'].create({
                 'sh_partner_id': self.env.user.partner_id.id,
                 'state': 'in_progress'})
