@@ -43,12 +43,14 @@ class。本 repo 已經實現過一次：``src/tests/test_reconcile_delete_gate.
 """
 import contextlib
 import importlib.util
+import io
 import os
 import pathlib
 import shutil
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 _GATE_PATH = pathlib.Path(__file__).with_name("repo-lint.py")
 _spec = importlib.util.spec_from_file_location("repo_lint_collectability_ut", _GATE_PATH)
@@ -572,7 +574,7 @@ class TestProbeFailuresAreBlocked(unittest.TestCase):
             self.assertIn("parse 失敗", joined(fx.execution()))
 
     def test_wrong_root_fails_loud(self):
-        """缺 `src/__manifest__.py` 不是零違規，兩條判準都必須明確拒絕 wrong root。"""
+        """缺 manifest 時兩條判準各自回一筆可歸因的 violation。"""
         d = tempfile.mkdtemp(prefix="test-collectability-noroot-")
         try:
             collection = rl.check_test_module_collection(d)
@@ -584,8 +586,40 @@ class TestProbeFailuresAreBlocked(unittest.TestCase):
                 self.assertIn("src/__manifest__.py", out)
                 self.assertIn("不能解讀為零違規", out)
                 self.assertNotIn("掃不到任何", out)
+            self.assertIn("check_test_module_collection", collection[0])
+            self.assertIn("check_test_class_execution", execution[0])
+            self.assertNotEqual(collection[0], execution[0])
         finally:
             shutil.rmtree(d, ignore_errors=True)
+
+    def test_run_all_keeps_both_attributed_root_violations(self):
+        """aggregation 不去重：兩條 check 保留各自 wrong-root 訊息並 exit 1。"""
+        target_checks = {
+            "check_test_module_collection",
+            "check_test_class_execution",
+        }
+        check_names = {
+            name
+            for names in rl.REPO_LINT_RULES.values()
+            for name in names
+        }
+        with tempfile.TemporaryDirectory(
+                prefix="test-collectability-run-all-") as d:
+            with contextlib.ExitStack() as stack:
+                stack.enter_context(mock.patch.object(
+                    rl, "repo_lint_registry_floor", return_value=[]))
+                for name in sorted(check_names - target_checks):
+                    stack.enter_context(mock.patch.object(
+                        rl, name, return_value=[]))
+                output = io.StringIO()
+                with contextlib.redirect_stdout(output):
+                    exit_code = rl.run_all(d)
+
+        text = output.getvalue()
+        self.assertEqual(exit_code, 1, text)
+        self.assertIn("repo-lint：2 個違規", text)
+        self.assertEqual(text.count("check_test_module_collection"), 1)
+        self.assertEqual(text.count("check_test_class_execution"), 1)
 
 
 # ------------------------------- 🔴 第 3 態：認不得的基底要點名，不猜
