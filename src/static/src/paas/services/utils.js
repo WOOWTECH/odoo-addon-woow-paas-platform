@@ -1,5 +1,7 @@
 /** @odoo-module **/
 
+import { formatUserDate } from "../utils/datetime_helpers";
+
 /**
  * Workspace role constants
  */
@@ -31,20 +33,23 @@ export function getRoleBadgeClass(role) {
 }
 
 /**
- * Format a date string for display
- * @param {string} dateString - ISO date string
- * @param {Object} options - Formatting options
- * @param {boolean} options.long - Use long month format (default: false)
- * @returns {string} Formatted date string
+ * 依 Odoo 使用者語系格式化日期。
+ *
+ * ⚠ #107 前這裡寫死 `zh-TW`（全 app 唯一一處非 en-US 的硬編值），
+ * 與 `utils/billing_helpers.js` 寫死的 `en-US` 並存 ⇒ 同一畫面上兩種日期格式。
+ *
+ * ⚠ 原本的 `options.long`（長月名 vs 短月名）已移除：Odoo 的 localization
+ * 只提供單一 `res.lang.date_format`，沒有長短兩版的概念。
+ * 全 repo 8 個呼叫端中有 2 個原本傳 `{ long: true }`
+ * （`WorkspaceDetailPage.js` 與 `pages/service/tabs/OverviewTab.js`）
+ * ⇒ 這兩處的月份呈現會改變（原 `2026年8月26日` 長月名 → 現 `2026年08月26日`），
+ * 已同批把多餘的參數移除。
+ *
+ * @param {string|null|undefined} dateString
+ * @returns {string} 空值或無法解析時回空字串（維持原契約）
  */
-export function formatDate(dateString, options = {}) {
-    if (!dateString) return "";
-    const date = new Date(dateString);
-    return date.toLocaleDateString("zh-TW", {
-        year: "numeric",
-        month: options.long ? "long" : "short",
-        day: "numeric",
-    });
+export function formatDate(dateString) {
+    return formatUserDate(dateString, "");
 }
 
 /**

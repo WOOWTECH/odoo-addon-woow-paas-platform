@@ -5,6 +5,7 @@ import { WoowButton } from "../button/WoowButton";
 import { WoowIcon } from "../icon/WoowIcon";
 import { billingService } from "../../services/billing_service";
 import { formatPoints } from "../../utils/billing_helpers";
+import { formatUserDate } from "../../utils/datetime_helpers";
 
 const TEMPLATE_ICONS = {
   n8n: "cloud",
@@ -103,18 +104,9 @@ export class SubscribedServicesModal extends Component {
     return classMap[service.state] || "o_woow_svc_status_gray";
   }
 
+  /** 依 Odoo 使用者語系格式化日期。 */
   formatDate(dateStr) {
-    if (!dateStr) return "-";
-    try {
-      const d = new Date(dateStr);
-      return d.toLocaleDateString("en-US", {
-        year: "numeric",
-        month: "short",
-        day: "numeric",
-      });
-    } catch {
-      return dateStr;
-    }
+    return formatUserDate(dateStr, "-");
   }
 
   onBackdropClick(ev) {

@@ -6,6 +6,7 @@ import { WoowIcon } from "../../components/icon/WoowIcon";
 import { WoowButton } from "../../components/button/WoowButton";
 import { reconcileReportService } from "../../services/reconcile_report_service";
 import { router } from "../../core/router";
+import { formatUserDateTime } from "../../utils/datetime_helpers";
 
 /**
  * ReconcileReportPage — /woow 後台「L4 反向孤兒對帳報表」頁（admin-only）。
@@ -50,11 +51,9 @@ export class ReconcileReportPage extends Component {
         return !this.loading && !this.error && this.candidates.length === 0;
     }
 
+    /** 依 Odoo 使用者語系格式化掃描時間。 */
     formatDateTime(iso) {
-        if (!iso) return "—";
-        const d = new Date(iso);
-        if (isNaN(d.getTime())) return iso;
-        return d.toLocaleString();
+        return formatUserDateTime(iso, { showSeconds: false }, "—");
     }
 
     envBadgeClass(envHint) {

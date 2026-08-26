@@ -15,6 +15,7 @@ import { openAiStream } from "../../services/ai_stream";
 import { safeHtml } from "../../services/html_sanitize";
 import { parseMarkdown } from "../../services/markdown_parser";
 import { renderMermaidBlocks } from "../../services/mermaid_loader";
+import { formatUserTime } from "../../utils/datetime_helpers";
 
 const ERROR_MESSAGES = {
   channel_not_found: _t("This chat channel no longer exists. Please refresh the page."),
@@ -642,14 +643,10 @@ export class AiChat extends Component {
    * @returns {string} Formatted time string
    */
   formatTime(dateStr) {
-    if (!dateStr) {
-      return "";
-    }
-    const date = new Date(dateStr);
-    if (isNaN(date.getTime())) {
-      return "";
-    }
-    return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    // ⚠ 這個函式的輸入有兩種來源：後端歷史訊息的 `.isoformat()`（不帶 offset）
+    // 與前端串流完成時自產的 `toISOString()`（帶 `Z`）。
+    // `formatUserTime` 兩種都吃，且解析失敗回 fallback 而非 `Invalid DateTime`。
+    return formatUserTime(dateStr, "");
   }
 
   /**

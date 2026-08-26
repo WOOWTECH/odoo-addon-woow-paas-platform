@@ -4,6 +4,7 @@ import { WoowButton } from "../button/WoowButton";
 import { WoowIcon } from "../icon/WoowIcon";
 import { billingService } from "../../services/billing_service";
 import { formatPoints } from "../../utils/billing_helpers";
+import { formatFloat } from "@web/core/utils/numbers";
 
 /**
  * TopupSuccessModal Component
@@ -39,11 +40,11 @@ export class TopupSuccessModal extends Component {
   }
 
   get formattedCredits() {
-    return this.creditsAdded.toLocaleString();
+    return formatFloat(this.creditsAdded, { digits: [16, 0] });
   }
 
   get formattedTotal() {
-    return this.totalAdded.toLocaleString();
+    return formatFloat(this.totalAdded, { digits: [16, 0] });
   }
 
   get formattedBalance() {

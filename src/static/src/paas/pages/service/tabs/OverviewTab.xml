@@ -104,7 +104,7 @@
                                  不重排版面。 -->
                             <t t-if="props.service.last_release_sync_at">
                                 <small class="o_woow_sync_hint text-muted d-block">
-                                    Last synced: <t t-esc="props.service.last_release_sync_at"/>
+                                    Last synced: <t t-esc="formatSyncedAt(props.service.last_release_sync_at)"/>
                                 </small>
                             </t>
                         </span>
