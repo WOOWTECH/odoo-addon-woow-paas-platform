@@ -62,6 +62,7 @@ workspace」翻成「建立者一人」。
 - `gary` / `carol` / `lone` 都**不是** wv 的任何角色。
 """
 import json
+import os
 import uuid
 from unittest.mock import MagicMock, patch
 
@@ -551,11 +552,14 @@ class TestBindingGuardDownstream(_Binding698Fixture):
         pid = self._new_project_as(self.gary_login)
         proj = self.Project.sudo().browse(pid)
         proj.write({'use_agent_runtime': True})
-        self.env['woow_paas_platform.agent_session'].sudo().create({
-            'project_id': pid,
-            'state': 'active',
-            'project_namespace_hash': 'deadbeef698',
-        })
+        with patch.dict(os.environ, {
+            'AGENT_RUNTIME_NAMESPACE_SECRET': 'issue-853-test-only',
+        }):
+            self.env['woow_paas_platform.agent_session'].sudo().create({
+                'project_id': pid,
+                'state': 'active',
+                'project_namespace_hash': 'deadbeef698',
+            })
         client = MagicMock()
         target = ('odoo.addons.woow_paas_platform.services'
                   '.agent_runtime_client.get_agent_runtime_client')
