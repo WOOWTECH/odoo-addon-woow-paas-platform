@@ -1,6 +1,6 @@
 /** @odoo-module **/
 
-import { formatUserDate } from "./datetime_helpers";
+import { formatUserDate } from "../utils/datetime_helpers";
 
 /**
  * Workspace role constants

@@ -14,8 +14,8 @@ DateTime）、以及執行期真實渲染結果——那兩者要靠 #107 交付
 LOC.0  探針自檢（陽性對照）——先證明掃描器真的會動，下面的陰性結果才可採信。
 LOC.1  `src/static/src/paas/**/*.js` 內 `toLocale*` 呼叫站點歸零。
        ⚠ 判準是「呼叫站點」不是「字面出現次數」：註解裡提到這個名字不算。
-LOC.2  沒有任何硬編 locale 字面值（"en-US" / "zh-TW" 之類的 BCP-47 標籤）
-       出現在格式化 API 的第一個引數位置。
+LOC.2  沒有任何硬編 BCP-47 語言標籤字面值（`en-US` / `zh_TW` …）。
+       ⚠ 判準是「地區碼大寫」——具名盲區與理由見 `_BCP47_LITERAL_RE` 上方。
 LOC.3  QWeb 樣板不得把後端日期欄位裸 `t-esc` 出來（那是把伺服器序列化格式
        直接印給租戶看，#107 已修 5 處）。
 LOC.4  `datetime_helpers` 的行為開關 `BACKEND_NAIVE_DATETIME_READING`
@@ -52,10 +52,38 @@ _INTL_CONSTRUCTORS = (
     'Intl.NumberFormat',
 )
 
-# BCP-47 語言標籤字面值（"en-US" / "zh_TW" / "ja" …）。
-_BCP47_LITERAL_RE = re.compile(r"""(['"])([a-z]{2,3}(?:[-_][A-Za-z]{2,8})*)\1""")
-# 只有帶地區碼的才視為 locale 字面值——單純 "id" / "name" 這類兩字母字串不算。
-_BCP47_WITH_REGION_RE = re.compile(r"""^[a-z]{2,3}[-_][A-Za-z]{2,8}$""")
+# BCP-47 語言標籤字面值。
+#
+# 🔴 判準是「**地區碼大寫**」（`zh-TW` / `en_US` / `pt-BR`），刻意**不**涵蓋全小寫寫法
+# （`"en-us"`）。理由是實測出來的訊噪比：寬判準（地區碼大小寫皆收）在本 repo 的 JS 裡
+# 命中 37 處，其中 **36 處是誤報**——`in_progress` / `ip_range` / `vpn_key` / `ai-chat` /
+# `not-found` 這類識別字在形狀上與 BCP-47 標籤不可區分。噪音大的 gate 會被關掉，
+# 關掉的 gate 等於沒有。
+#
+# ⚠ 這是**具名的盲區**，不是遺漏，而且它比「不常見的寫法」更嚴重一點：
+# **BCP-47 標籤本身是 case-insensitive**（RFC 5646 §2.1.1——大小寫只是慣例，
+# `zh-tw` 與 `zh-TW` 一樣合法，`Intl` / `toLocaleDateString` 兩者都吃）
+# ⇒ 有人寫小寫，本 check **不會紅**。
+#
+# 這是**刻意用漏報換掉 36:1 的誤報**：形狀上分不開的東西，判準只能選一邊犧牲。
+# 選漏報的理由是它有第二道防線、而誤報沒有——那一格由 LOC.1 覆蓋：本 app 已經
+# 沒有任何 `toLocale*` / `Intl.*` 呼叫站點，locale 字面值**沒有地方可以被當成
+# locale 參數用**。要繞過這兩條就得同時（a）新增一個 `toLocale*` 呼叫站點且
+# （b）用小寫標籤——(a) 會先被 LOC.1 擋下。
+#
+# ⚠ 誠實註記：當初選「地區碼大寫」是照實測的訊噪比選的（36 誤報 : 1 真發現），
+# **不是**先評估過 BCP-47 的大小寫規則才選的。取捨結論經覆核後不變，
+# 但理由補完整——不然下一個人會以為小寫是非法寫法而不是被放掉的一格。
+_BCP47_LITERAL_RE = re.compile(r"""(['"])([a-z]{2,3}[-_][A-Z][A-Za-z]{1,7})\1""")
+
+# LOC.2 的具名豁免。key 是「檔案:標籤值」。
+#
+# ⚠ 裡面的每一格都是**已知的、仍在發生的**缺陷，不是「可以這樣寫」。
+# 🔴 任何**新的**硬編語言標籤都不在這份 dict 裡 ⇒ 直接紅。
+# 修掉一格就把 entry 刪掉——本 check 有反向檢查，留著已修好的 entry 會紅。
+_LOCALE_LITERAL_EXEMPT = {
+    ('paas/pages/settings/AddPaymentMethodPage.js', 'zh-TW'): '#920',
+}
 
 # LOC.3 的具名豁免。key 是「檔案:t-esc 表達式」而不是行號：行號會被格式化重排
 # 改掉（新的假紅），表達式則只有真的改了樣板才會變。
@@ -198,20 +226,26 @@ class TestLocaleFormattingGuard107(TransactionCase):
 
         ⚠ 刻意**不用**「欄位名長得像日期」的 heuristic ——#107 盤點時那個做法
         漏掉了 ``next_payment`` 與 ``last_sync`` 兩格（名字裡沒有 date/_at/time）。
-        改成從後端「誰會寫到那個位置」枚舉：凡是 ``'key': <expr>.isoformat()``
-        的 key 都算。
+        改成從後端「誰會寫到那個位置」枚舉：凡是「字面 key 冒號 某表達式
+        `.isoformat()`」的形態，那個 key 就算。
+
+        🔴 掃描範圍刻意只有 `src/controllers/` 與 `src/models/`——payload 的產地只在
+        這兩處。**不掃 `src/tests/`** 的理由不是效能，是本檔自己踩過：這個 docstring
+        底下原本寫著一行示範用的字面形態，而掃描器把**自己的說明文字**當成了一個
+        真的 payload 欄位（欄位名 `key`），於是 `t-esc="spec.key"` / `t-esc="group.key"`
+        兩處完全無關的樣板被誤報。談論某個形態的檔與實作它的檔，在 regex 眼中一樣。
+        （實測：收窄範圍後 23 → 22 個 key，失去的那一個正是本檔自己的示範。）
         """
         src_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
         keys = set()
         pat = re.compile(r"""['"]([a-z_][a-z0-9_]*)['"]\s*:\s*[^,\n]*\.isoformat\(\)""")
-        for root, _dirs, files in os.walk(src_root):
-            if os.sep + 'static' + os.sep in root + os.sep:
-                continue
-            for fn in files:
-                if not fn.endswith('.py'):
-                    continue
-                with open(os.path.join(root, fn), 'r', encoding='utf-8') as f:
-                    keys.update(pat.findall(f.read()))
+        for sub in ('controllers', 'models'):
+            for root, _dirs, files in os.walk(os.path.join(src_root, sub)):
+                for fn in files:
+                    if not fn.endswith('.py'):
+                        continue
+                    with open(os.path.join(root, fn), 'r', encoding='utf-8') as f:
+                        keys.update(pat.findall(f.read()))
         # 線 B：`src/controllers/paas.py` 漏了 `.isoformat()`，靠 Odoo 的
         # json_default 序列化 ⇒ 上面的 pattern 抓不到，具名補進來（另案 #916）。
         keys.add('last_release_sync_at')
@@ -312,20 +346,29 @@ class TestLocaleFormattingGuard107(TransactionCase):
         #107 之前有 6 處：5 個 ``"en-US"`` ＋ 1 個 ``"zh-TW"``，
         造成同一個畫面上的日期格式取決於走哪條 code path。
         """
-        offenders = []
+        offenders, exempted = [], []
         for rel, src in self._iter_js():
             stripped = _strip_js_comments(src)
             for lineno, line in enumerate(stripped.split('\n'), 1):
                 for m in _BCP47_LITERAL_RE.finditer(line):
                     tag = m.group(2)
-                    if _BCP47_WITH_REGION_RE.match(tag):
-                        offenders.append(
-                            f"  {rel}:{lineno}  {tag!r}  "
-                            f"{src.split(chr(10))[lineno - 1].strip()}")
+                    if (rel, tag) in _LOCALE_LITERAL_EXEMPT:
+                        exempted.append((rel, tag))
+                        continue
+                    offenders.append(
+                        f"  {rel}:{lineno}  {tag!r}  "
+                        f"{src.split(chr(10))[lineno - 1].strip()}")
         self.assertEqual(
             offenders, [],
             "LOC.2：發現硬編的語言標籤字面值。顯示格式一律跟隨 Odoo 使用者語系"
             "（`res.lang.date_format`），⛔ 不要寫死：\n" + "\n".join(offenders))
+
+        stale = sorted(set(_LOCALE_LITERAL_EXEMPT) - set(exempted))
+        self.assertEqual(
+            stale, [],
+            "LOC.2：豁免清單有過期 entry —— 這些位置已經沒有硬編語言標籤了，"
+            "請把對應的 entry 從 `_LOCALE_LITERAL_EXEMPT` 刪掉：\n"
+            + "\n".join(f"  {r}  {t}" for r, t in stale))
 
     # ----- LOC.3 QWeb 不得裸印後端日期欄位 -------------------------------- #
     def test_LOC3_no_bare_backend_date_in_qweb(self):
@@ -336,10 +379,18 @@ class TestLocaleFormattingGuard107(TransactionCase):
         也洩漏了 wire format。#107 已修 5 處。
         """
         keys = self._backend_date_keys()
+        # 陽性對照兩層：條數下限 ＋ 具名的必含項。
+        # 只有條數的話，範圍收窄收過頭（例如少掃一個目錄）仍可能滿足門檻。
         self.assertGreater(
             len(keys), 10,
             "LOC.3 陽性對照：從後端枚舉到的日期欄位名太少，掃描器很可能壞了 —— "
             f"實得 {sorted(keys)!r}")
+        must_have = {'created_date', 'deployed_at', 'invoice_date',
+                     'next_payment', 'last_sync', 'trial_end_date'}
+        self.assertEqual(
+            sorted(must_have - keys), [],
+            "LOC.3 陽性對照：枚舉不到這些一定存在的 payload 日期欄位 —— "
+            f"掃描範圍壞了，本條的零命中不可採信。實得 {sorted(keys)!r}")
 
         pat = re.compile(r"""t-(?:esc|out)="([^"]+)\"""")
         offenders, exempted = [], []

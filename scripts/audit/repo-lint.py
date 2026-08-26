@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """repo-lint：把「假綠家族」pitfall 轉成機械 gate 的靜態檢查工具。
 
-三十八個 check 函式，歸為下列三十二條規則（其中四條各由多個函式實作：第 2 條
+三十九個 check 函式，歸為下列三十三條規則（其中四條各由多個函式實作：第 2 條
 owl-template 由兩個函式——語法陷阱／i18n 屬性；第 7 條
 capability-gate 由四個函式——slug 集合成員／admin-gui 錨點／gateway 文案錨點／
 Access 頁籤錨點；第 22 條
@@ -500,6 +500,26 @@ test-collectability 由兩個函式——收集面／執行面。這個一對多
                      ⚠ repo-lint **不是 required check**，這條紅了擋不住 merge；它的
                      價值是「動手的人當場看到」，不是機器擋住。
                      依據 docs/tracking/pitfalls/operator-route-none-conflates-disabled-and-failed.md
+
+33. owl-relative-import  `src/static/src/**` 底下 JS 的**相對** import 必須指到真的
+                     存在的檔（`./x` / `../y/z`，補 `.js` 後解析）。
+                     🔴 這條的存在理由是**失效範圍與失效訊號完全不成比例**：Odoo 的
+                     module loader 對「被 import 但沒被 define」的模組，會連帶讓所有
+                     （遞移）相依它的模組**全部載入失敗**——一個路徑打錯，`/woow` 整個
+                     app 不啟動。實例（#107，本 check 的來源）：`services/utils.js` 把
+                     `../utils/datetime_helpers` 寫成 `./datetime_helpers`，
+                     ⇒ 12 個模組連鎖載不到、app 白畫面。
+                     🔴 而**現有的每一道 gate 都照不到它**：Python 測試不執行 JS；
+                     本 repo 沒有可執行 JS 的測試基礎設施（無 hoot／QUnit，
+                     `HttpCase.browser_js` 在 paas-odoo image 只會 SkipTest）；
+                     `odoo-tests` 連 `pull_request` 都沒掛。唯一會現形的地方是**真的
+                     開瀏覽器載入 `/woow`**——也就是說，沒有這條 check 的話，這個
+                     等級的缺陷可以一路綠燈進 develop。
+                     判準刻意只涵蓋**相對路徑**：`@web/...`／`@odoo/owl` 這類 bare
+                     specifier 由 Odoo 的 addons 解析，不是檔案系統路徑，靜態解不了
+                     ⇒ 硬解只會製造偽陽。這是**具名的盲區**，不是遺漏。
+                     附掃描器存在性對照（一個一定解析得到的 import），零命中時能分辨
+                     「真的沒問題」與「掃描範圍壞了」。
 
 用法：
 
@@ -5016,6 +5036,127 @@ def check_sh_subscription_group_isolation(root, only_file=None):
     return violations
 
 
+# ⚠ 只認 `from "…"` 與 side-effect `import "…"` 的**引號內容**，不試圖解析
+# import 子句本身：`import {\n a,\n b\n} from "x"` 是合法的多行形態，用
+# `[\s\S]*?` 去跨行接 `from` 會讓它一路吃到**下一個** `from`（實測誤報：
+# `services/markdown_parser.js` 的 JSDoc `@example` 裡那行）。
+_OWL_IMPORT_RE = re.compile(r"""(?:^|[\s;])(?:from|import)\s*['"](\.[^'"]*)['"]""")
+
+
+def _strip_js_comments_keep_strings(src):
+    """把 JS 註解換成等長空白，**保留字串內容**（import 路徑就在字串裡）。
+
+    與 `_strip_js_noise` 的差別正是「保不保留字串」——那支為了跑形態 regex 連
+    字串一起剝掉，這裡不能，否則要找的東西也被剝了。
+    """
+    out = list(src)
+    i, n, state, quote = 0, len(src), None, ""
+    while i < n:
+        ch = src[i]
+        nxt = src[i + 1] if i + 1 < n else ""
+        if state is None:
+            if ch == "/" and nxt == "/":
+                state = "line"
+                out[i] = out[i + 1] = " "
+                i += 2
+                continue
+            if ch == "/" and nxt == "*":
+                state = "block"
+                out[i] = out[i + 1] = " "
+                i += 2
+                continue
+            if ch in "'\"`":
+                state, quote = "str", ch
+            i += 1
+            continue
+        if state == "line":
+            if ch == "\n":
+                state = None
+            else:
+                out[i] = " "
+            i += 1
+            continue
+        if state == "block":
+            if ch == "*" and nxt == "/":
+                out[i] = out[i + 1] = " "
+                state = None
+                i += 2
+                continue
+            if ch != "\n":
+                out[i] = " "
+            i += 1
+            continue
+        # 字串：內容保留，只處理跳脫與結束
+        if ch == "\\":
+            i += 2
+            continue
+        if ch == quote:
+            state, quote = None, ""
+        i += 1
+    return "".join(out)
+# 掃描器存在性對照：這個 import 一定解析得到（本批 #107 建立時實測）。
+# 它不見了代表掃描範圍壞了，不是「剛好沒有相對 import」。
+_OWL_IMPORT_SCAN_CONTROL = (
+    "paas/utils/billing_helpers.js", "./datetime_helpers")
+
+
+def check_owl_relative_import(root, only_file=None):
+    """第 33 條：`src/static/src/**` 的相對 import 必須指到存在的檔。
+
+    見檔頭第 33 條。一個路徑打錯會讓 Odoo module loader 連鎖放棄所有相依模組
+    ⇒ `/woow` 整個 app 不啟動，而 Python 測試／PR 綠燈都照不到。
+    """
+    violations = []
+    base = os.path.join(root, "src", "static", "src")
+    if not os.path.isdir(base):
+        return violations
+
+    if only_file:
+        if not (only_file.endswith(".js") and os.path.abspath(only_file).startswith(
+                os.path.abspath(base) + os.sep)):
+            return violations
+        targets = [os.path.abspath(only_file)]
+    else:
+        targets = []
+        for dirpath, _dirs, files in os.walk(base):
+            for fn in sorted(files):
+                if fn.endswith(".js"):
+                    targets.append(os.path.join(dirpath, fn))
+
+    control_seen = False
+    for path in targets:
+        rel = os.path.relpath(path, base).replace(os.sep, "/")
+        # vendored 第三方打包檔不照本 repo 的模組慣例
+        if "/lib/" in "/" + rel:
+            continue
+        try:
+            with io.open(path, "r", encoding="utf-8") as f:
+                src = f.read()
+        except (IOError, OSError, UnicodeDecodeError):
+            continue
+        for spec in _OWL_IMPORT_RE.findall(_strip_js_comments_keep_strings(src)):
+            if (rel, spec) == _OWL_IMPORT_SCAN_CONTROL:
+                control_seen = True
+            target = os.path.normpath(
+                os.path.join(os.path.dirname(path), spec))
+            if os.path.isfile(target) or os.path.isfile(target + ".js"):
+                continue
+            violations.append(
+                "src/static/src/%s：import \"%s\" 指到不存在的檔 —— Odoo 的 module "
+                "loader 會連帶讓所有（遞移）相依它的模組一起載入失敗，`/woow` 整個 "
+                "app 不啟動。⚠ Python 測試與 PR 綠燈都照不到這一格（見檔頭第 33 條）。"
+                % (rel, spec))
+
+    # 探針壞掉時輸出與「真的沒問題」一模一樣 ⇒ 存在性對照。
+    if not only_file and not control_seen:
+        violations.append(
+            "scripts/audit/repo-lint.py：`check_owl_relative_import` 掃了 %d 個檔卻連 "
+            "`%s` 的 `%s` 都沒看到 —— 掃描範圍壞了，這條的「零命中」是假的。"
+            % (len(targets), _OWL_IMPORT_SCAN_CONTROL[0],
+               _OWL_IMPORT_SCAN_CONTROL[1]))
+    return violations
+
+
 REPO_LINT_RULES = {
     "controller-sudo": ("check_controller_sudo",),
     "owl-template": ("check_owl_template",
@@ -5055,6 +5196,7 @@ REPO_LINT_RULES = {
     "test-collectability": ("check_test_module_collection",
                             "check_test_class_execution"),
     "route-contract-golden": ("check_route_contract_golden",),
+    "owl-relative-import": ("check_owl_relative_import",),
 }
 
 # 刻意不掛 hook 分派的 check：{函式名: 理由}。現況是空的（每一條都掛得到 hook）。
@@ -5648,7 +5790,8 @@ def run_all(root):
                   + check_tunnel_config_wire_shape(root)
                   + check_test_module_collection(root)
                   + check_test_class_execution(root)
-                  + check_route_contract_golden(root))
+                  + check_route_contract_golden(root)
+                  + check_owl_relative_import(root))
     if violations:
         print("repo-lint：%d 個違規" % len(violations))
         for v in violations:
@@ -5842,8 +5985,13 @@ def run_hook():
             violations += check_gateway_copy_gate_anchor(root)
             violations += check_access_tab_gate_anchor(root)
         elif re.match(r"^src/static/src/.*\.js$", rel):
+            # 第 33 條的判準完全落在單一檔案內（這個檔的 import ↔ 檔案系統）
+            # ⇒ 可以只切這一檔重算。⚠ 但它的**存在性對照**只有全樹掃才有意義
+            #    （切片時 targets 只有一個檔），所以 only_file 路徑刻意不驗對照——
+            #    那一格由 CI 的全樹掃守。
+            violations = check_owl_relative_import(root, only_file=abs_path)
             # anchor 走全域：改 JS（getter 被刪／改名／改判準）壞掉的是 XML 那顆按鈕。
-            violations = check_slug_capability_gate(root, only_file=abs_path)
+            violations += check_slug_capability_gate(root, only_file=abs_path)
             violations += check_admin_gui_gate_anchor(root)
             violations += check_gateway_copy_gate_anchor(root)
             violations += check_access_tab_gate_anchor(root)
