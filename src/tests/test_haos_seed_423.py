@@ -375,6 +375,15 @@ class TestHaosQuotaModelling(_HaosSeedMixin, TransactionCase):
         """本服務替 workspace RAM quota 增加的 GiB；鏡射 production 的 int 截斷。"""
         return int(min_ram_gb * 3)
 
+    def test_marginal_quota_does_not_apply_workspace_floors(self):
+        """below-floor 輸入要保留邊際值，不能偷套 workspace floor 而假綠。"""
+        self.assertEqual(
+            self._marginal_ram_gi(1.25), 3,
+            '1.25Gi RAM 的邊際貢獻須保留 int(1.25×3)=3Gi；不得套 8Gi floor')
+        self.assertEqual(
+            self._marginal_storage_gi(20), 60,
+            '20Gi storage 的邊際貢獻須為 60Gi；不得套 100Gi floor')
+
     def test_storage_quota_covers_cdi_import_peak(self):
         """storage quota 的邊際貢獻必須蓋得住 import 峰值。
 
