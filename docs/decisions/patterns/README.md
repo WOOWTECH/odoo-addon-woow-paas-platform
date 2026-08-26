@@ -2,7 +2,7 @@
 
 > `docs/decisions/patterns/` 收錄跨 refactor cycle 抽出的可複用 pattern。**改動相關 model / ACL / lifecycle / 測試前，先在此表定位適用 pattern，再點進細節**——這是避免 B1-class data leak 與同類 bug 重炸的第一道導引。
 >
-> CLAUDE.md「Known patterns」段已指針化（不再雙寫子集）；**本表為完整 34 條**。路徑觸發的自動導引由 pattern-guard hook 供給（對照表 `.claude/hooks/pattern-guard-map.json`）。pattern slug 為 AI 自組 cross-link identifier，請勿更名（會斷交聯）。
+> CLAUDE.md「Known patterns」段已指針化（不再雙寫子集）；**本表為完整 35 條**。路徑觸發的自動導引由 pattern-guard hook 供給（對照表 `.claude/hooks/pattern-guard-map.json`）。pattern slug 為 AI 自組 cross-link identifier，請勿更名（會斷交聯）。
 
 ## 維護慣例（新增**或修改** pattern doc 時）
 
@@ -82,6 +82,12 @@
 | [[plan-gap-stop-and-report]] | agent 執行 leader hand-off / 連修 e2e gap chain 時遇 plan gap（沒設計過的決策點）或 test 假設錯 → 停下回報 escalate，別硬塞假值掩蓋 gap、別 bend impl 湊綠 |
 | [[phase-leader-brief-as-pointer-not-source]] | phase leader 寫給 phase agent 的 brief 是導讀（pointer）非 source-of-truth；agent 撞到 brief 與 plan signed-off / decision invariant / schema 實際 shape 不符時 → trust source、回報 leader 校正 brief |
 
+### i18n / 在地化（決定某個中文字串該不該進翻譯流程前）
+
+| pattern | 何時觸發 / 必看 |
+|---|---|
+| [[i18n-scope-data-values-vs-code-strings]] | i18n 批次要判斷「這個中文字串該不該改英文 source 並進 `.po`」時 → 三層區分：程式碼字串／欄位 metadata **要翻**，record 的**資料值不翻**；⚠「在不在 `.po` 裡」不是判準（商品名在、方案名不在，兩者都不翻） |
+
 ## 完整檔案清單（供瀏覽 / link check）
 
 - [attachment-row-level-acl-and-anchor-stamping](attachment-row-level-acl-and-anchor-stamping.md)
@@ -93,6 +99,7 @@
 - [external-resource-env-token-naming](external-resource-env-token-naming.md)
 - [helm-reset-values-unified-pipeline](helm-reset-values-unified-pipeline.md)
 - [hidden-template-presentation-chain](hidden-template-presentation-chain.md)
+- [i18n-scope-data-values-vs-code-strings](i18n-scope-data-values-vs-code-strings.md)
 - [invariant-recompute-on-orm-write-hook](invariant-recompute-on-orm-write-hook.md)
 - [mcp-acl-6-rule-split](mcp-acl-6-rule-split.md)
 - [ns-quota-hard-limits-limitrange-lockstep](ns-quota-hard-limits-limitrange-lockstep.md)

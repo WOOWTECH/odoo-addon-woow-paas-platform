@@ -73,7 +73,8 @@
         "docs/decisions/patterns/invariant-recompute-on-orm-write-hook.md — data XML 是 ORM 寫入的第二入口，會 drift cross-record invariant",
         "docs/decisions/patterns/template-vs-plan-property-boundary.md — 新商品變體猶豫開新 CloudAppTemplate 還是同 template 加 plan 時",
         "docs/decisions/patterns/seed-topology-invariants.md — seed 拓撲計數非 monotonic：test 別硬編 base/tier/product 數，`>=` 守衛會裝反、`> 0` 等於刪 test；改集合等值/零丟棄/結構關係。改 subscription_*.xml 會被 repo-lint check_seed_topology 攔（附待檢清單）",
-        "docs/decisions/patterns/default-credential-functional-test-blindspot.md — 新增/改動一筆 cloud_app_template，而該 image/chart 有帶身分的入口（admin GUI／管理 API／DB 帳號／webhook secret）時：必須明答「憑證由平台鑄造（has_admin_gui 等閘門欄位寫 True ＋ 納入家族級覆蓋率守線）還是租戶自設（寫 False ＋ 留 WHY 註解）」。兩者都沒做時值會靜默落到上游預設（image 的 _DEFAULT_CONFIG／chart values），而那在 diff 上與「租戶自設」長得一模一樣——#686 的 mcp-hermes 就是這樣以字面密碼 admin 掛在公開根 URL 上。功能測試對這一格恆綠，判準要換成「這個值是不是全世界都知道」"
+        "docs/decisions/patterns/default-credential-functional-test-blindspot.md — 新增/改動一筆 cloud_app_template，而該 image/chart 有帶身分的入口（admin GUI／管理 API／DB 帳號／webhook secret）時：必須明答「憑證由平台鑄造（has_admin_gui 等閘門欄位寫 True ＋ 納入家族級覆蓋率守線）還是租戶自設（寫 False ＋ 留 WHY 註解）」。兩者都沒做時值會靜默落到上游預設（image 的 _DEFAULT_CONFIG／chart values），而那在 diff 上與「租戶自設」長得一模一樣——#686 的 mcp-hermes 就是這樣以字面密碼 admin 掛在公開根 URL 上。功能測試對這一格恆綠，判準要換成「這個值是不是全世界都知道」",
+        "docs/decisions/patterns/i18n-scope-data-values-vs-code-strings.md — record 的資料值（商品名／方案名等）⛔ 不進 .po 翻譯流程；⚠「在不在 .po 裡」不是判準"
       ]
     },
     {
@@ -116,7 +117,8 @@
       "why": "subscription 日期/計費邏輯與第三方 sh_subscription addon 深耦合，date helper 與 plan 強制覆寫有既往翻車史（#324/#327/#366）。⚠ 必須含 subscription_lifecycle_mixin.py：plan-driven-date-helper 講的 _force_trial_dates_from_plan / _force_active_dates_from_plan 就住在那個檔，只綁 sh_subscription* 會讓改那兩個 helper 的人永遠收不到這份 doc",
       "docs": [
         "docs/decisions/patterns/plan-driven-date-helper.md — subscription 日期由 plan 強制覆寫（trial/non-trial）且與第三方 onchange 有 post-confirm coupling 時",
-        "docs/decisions/patterns/template-vs-plan-property-boundary.md — plan 級 vs template 級屬性邊界（有人提議 plan 加 image 欄位時必讀）"
+        "docs/decisions/patterns/template-vs-plan-property-boundary.md — plan 級 vs template 級屬性邊界（有人提議 plan 加 image 欄位時必讀）",
+        "docs/decisions/patterns/i18n-scope-data-values-vs-code-strings.md — record 的資料值（商品名／方案名等）⛔ 不進 .po 翻譯流程；⚠「在不在 .po 裡」不是判準"
       ]
     },
     {
