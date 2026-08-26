@@ -1,4 +1,4 @@
-from odoo import api, fields, models
+from odoo import _, api, fields, models
 from odoo.exceptions import ValidationError
 
 # #536：sync-control 的逃生門必須是模組私有 sentinel，不是任何 JSON 表達得出
@@ -431,7 +431,7 @@ class SecurityAccessAccessPolicy(models.Model):
         for pol in self:
             if not pol.rule_ids.filtered(lambda r: r.group == 'include'):
                 raise ValidationError(
-                    "Access policy %r must contain at least one Include rule."
+                    _("Access policy %r must contain at least one Include rule.")
                     % (pol.name or pol.id))
 
     @api.constrains('decision', 'rule_ids')
@@ -445,9 +445,9 @@ class SecurityAccessAccessPolicy(models.Model):
                 if pol.rule_ids.filtered(
                         lambda r: r.rule_type in ('email_domain', 'email_list')):
                     raise ValidationError(
-                        "Bypass policies cannot use identity-based selectors "
-                        "(email domain / email list). Use IP range, country, "
-                        "or everyone instead.")
+                        _("Bypass policies cannot use identity-based selectors "
+                          "(email domain / email list). Use IP range, country, "
+                          "or everyone instead."))
 
     #: #352：讓「不特定多數人」通過認證的 include 選擇器。
     #:
@@ -534,19 +534,19 @@ class SecurityAccessAccessPolicy(models.Model):
             if not offenders:
                 continue
             raise ValidationError(
-                "Allow policy %r cannot use %s as an Include rule.\n\n"
-                "Why: seat-based Access plans count people by the addresses "
-                "listed in 'Email list' rules, so a whole-domain / everyone "
-                "rule admits an unlimited number of people while counting as "
-                "zero. Every one of them still consumes one of the 50 "
-                "Cloudflare Access seats shared by the whole platform, so the "
-                "51st login is refused — for every tenant, not just this one.\n"
-                "What to use instead: list the individual addresses in an "
-                "'Email list' Include rule. To narrow (not widen) access you "
-                "can still use these selectors in Require / Exclude rules, and "
-                "Block policies are unaffected. Bypass policies are exempt "
-                "because they skip authentication and therefore consume no "
-                "seat."
+                _("Allow policy %r cannot use %s as an Include rule.\n\n"
+                  "Why: seat-based Access plans count people by the addresses "
+                  "listed in 'Email list' rules, so a whole-domain / everyone "
+                  "rule admits an unlimited number of people while counting as "
+                  "zero. Every one of them still consumes one of the 50 "
+                  "Cloudflare Access seats shared by the whole platform, so the "
+                  "51st login is refused — for every tenant, not just this one.\n"
+                  "What to use instead: list the individual addresses in an "
+                  "'Email list' Include rule. To narrow (not widen) access you "
+                  "can still use these selectors in Require / Exclude rules, and "
+                  "Block policies are unaffected. Bypass policies are exempt "
+                  "because they skip authentication and therefore consume no "
+                  "seat.")
                 % (pol.name or pol.id,
                    ' / '.join(sorted(set(offenders.mapped('rule_type'))))))
 
@@ -590,8 +590,8 @@ class SecurityAccessAccessPolicy(models.Model):
                               if e.strip()])
             if count > quota:
                 raise ValidationError(
-                    "Email quota exceeded: plan '%s' allows %d email(s) per "
-                    "policy." % (plan.name, quota))
+                    _("Email quota exceeded: plan '%s' allows %d email(s) per "
+                      "policy.") % (plan.name, quota))
 
     @api.constrains('security_access_id', 'smart_home_id', *_ANCHOR_FIELDS)
     def _check_policy_quota(self):
@@ -651,15 +651,15 @@ class SecurityAccessAccessPolicy(models.Model):
             anchor_field = self._ANCHOR_POOL_FIELD.get(anchor._name)
             if not anchor_field:
                 raise ValidationError(
-                    "Access policy %r is anchored on %s, which has no entry in "
-                    "_ANCHOR_POOL_FIELD — the plan quota cannot be scoped. "
-                    "Register the anchor model before shipping it."
+                    _("Access policy %r is anchored on %s, which has no entry in "
+                      "_ANCHOR_POOL_FIELD — the plan quota cannot be scoped. "
+                      "Register the anchor model before shipping it.")
                     % (pol.name or pol.id, anchor._name))
             count = self.search_count([(anchor_field, '=', anchor.id)])
             if count > quota:
                 raise ValidationError(
-                    "Access policy quota exceeded: plan '%s' allows %d "
-                    "polic(ies)." % (plan.name, quota))
+                    _("Access policy quota exceeded: plan '%s' allows %d "
+                      "polic(ies).") % (plan.name, quota))
 
     @api.constrains('rule_ids', 'security_access_id', 'smart_home_id',
                     *_ANCHOR_FIELDS)

@@ -2,7 +2,7 @@ import logging
 import re
 import uuid
 
-from odoo import api, fields, models
+from odoo import _, api, fields, models
 from odoo.exceptions import AccessError, UserError, ValidationError
 
 from ..services.naming import make_security_access_subdomain
@@ -37,12 +37,11 @@ _RECLAIM_REFERENCED = 'referenced'         # 窗口外：id 已落地，這顆�
 _RECLAIM_DONE = 'reclaimed'                # 已 delete_tunnel 收回
 _RECLAIM_FAILED = 'unreclaimed'            # 補償自己也失敗 ⇒ 真的留了一顆
 
-#: AccessError 分支寫進 `error_message` 的說明。**不是**把 denial 降級——例外照樣
-#: re-raise，這裡只是讓那一列自己說得出剛才發生過什麼。
-_PROVISION_DENIED_NOTE = (
-    "Provisioning denied: this caller may not write the tunnel credential "
-    "(tunnel_token is a base.group_system field)."
-)
+#: AccessError 分支寫進 `error_message` 的說明**逐字展開在兩個使用點**（本檔
+#: `_do_provision` 的 denial 分支），不抽成模組常數：`_()` 必須在**呼叫當下**求值，
+#: 模組載入期沒有 env／lang 可解析，包在常數上會固定拿到 en_US。兩處字面逐字相同
+#: ⇒ babel 合併成同一個 msgid。**不是**把 denial 降級——例外照樣 re-raise，這裡只是
+#: 讓那一列自己說得出剛才發生過什麼。
 
 # A subdomain prefix is a SINGLE DNS label: 3-63 chars of lowercase letters,
 # digits and hyphens only — NO dots (a dot would split it into multiple labels)
@@ -349,7 +348,7 @@ def _reject_identity_anchor_writes(env, vals, anchors,
     for field in anchors:
         if field in vals:
             raise UserError(
-                "Field '%s' is immutable after creation." % field
+                _("Field '%s' is immutable after creation.") % field
             )
 
 
@@ -435,6 +434,11 @@ class SecurityAccess(models.Model):
         selection=[
             ('connected', 'Connected'),
             ('disconnected', 'Disconnected'),
+            # #833：Cloudflare 上這條 tunnel 已被刪除（軟刪除）。
+            # ⚠ 與 'disconnected' 的差別是**要不要動手**：deleted 需要重建，
+            # disconnected 只要等連線恢復。少了這一格，兩者在 UI 與 DB 欄位上
+            # 是同一個值，沒有人會去查。
+            ('deleted', 'Deleted'),
             ('error', 'Error'),
         ],
         string='Tunnel Status',
@@ -514,8 +518,8 @@ class SecurityAccess(models.Model):
         client = get_paas_operator_client(self.env)
         if not client:
             raise UserError(
-                "PaaS Operator is not configured. "
-                "Please set Operator URL and API Key in Settings → Woow PaaS."
+                _("PaaS Operator is not configured. "
+                  "Please set Operator URL and API Key in Settings → Woow PaaS.")
             )
         return client
 
@@ -794,8 +798,9 @@ class SecurityAccess(models.Model):
             except PaaSOperatorConnectionError as e:
                 self.write({
                     'state': 'error',
-                    'error_message':
-                        f"Cannot connect to PaaS Operator: {e.message}",
+                    'error_message': _(
+                        "Cannot connect to PaaS Operator: %(detail)s",
+                        detail=e.message),
                 })
                 _logger.error(
                     "[SA] provision re-sync connection error sa=%s: %s",
@@ -804,7 +809,8 @@ class SecurityAccess(models.Model):
             except PaaSOperatorError as e:
                 self.write({
                     'state': 'error',
-                    'error_message': f"Route sync failed: {e.message}",
+                    'error_message': _(
+                        "Route sync failed: %(detail)s", detail=e.message),
                 })
                 _logger.error(
                     "[SA] provision re-sync error sa=%s: %s",
@@ -827,7 +833,8 @@ class SecurityAccess(models.Model):
                 # broad except in the first-provision branch below).
                 self.write({
                     'state': 'error',
-                    'error_message': f"Provision re-sync failed: {e}",
+                    'error_message': _(
+                        "Provision re-sync failed: %(error)s", error=e),
                 })
                 _logger.exception(
                     "[SA] provision re-sync unexpected error sa=%s", self.id,
@@ -917,7 +924,8 @@ class SecurityAccess(models.Model):
             self.write({
                 'state': 'error',
                 'error_message': self._provision_failure_message(
-                    f"Cannot connect to PaaS Operator: {e.message}",
+                    _("Cannot connect to PaaS Operator: %(detail)s",
+                      detail=e.message),
                     outcome, created),
             })
             _logger.error("[SA] provision connection error: %s", e.message)
@@ -927,7 +935,8 @@ class SecurityAccess(models.Model):
             self.write({
                 'state': 'error',
                 'error_message': self._provision_failure_message(
-                    f"Tunnel creation failed: {e.message}", outcome, created),
+                    _("Tunnel creation failed: %(detail)s", detail=e.message),
+                    outcome, created),
             })
             _logger.error("[SA] provision error: %s", e.message)
         except AccessError:
@@ -962,14 +971,20 @@ class SecurityAccess(models.Model):
                     # 例外照樣 re-raise，也沒有寫成 'error' 假裝成一般失敗。
                     self.write({
                         'state': 'pending',
-                        'error_message': _PROVISION_DENIED_NOTE,
+                        'error_message': _(
+                            "Provisioning denied: this caller may not write "
+                            "the tunnel credential (tunnel_token is a "
+                            "base.group_system field)."),
                     })
                 elif outcome in (_RECLAIM_FAILED, _RECLAIM_INDETERMINATE):
                     # 收不回來／不確定 ⇒ **不**寫回 'pending'：那等於邀請下一次重試
                     # 再開一顆，而前一顆還在 CF 上。只留記錄，狀態維持 'provisioning'。
                     self.write({
                         'error_message': self._provision_failure_message(
-                            _PROVISION_DENIED_NOTE, outcome, created),
+                            _("Provisioning denied: this caller may not write "
+                              "the tunnel credential (tunnel_token is a "
+                              "base.group_system field)."),
+                            outcome, created),
                     })
                 # _RECLAIM_REFERENCED（identity write 之後才丟的 AccessError，例如
                 # _sync_all_routes_access）：tunnel 有參照、state 交給重試路徑，
@@ -1003,12 +1018,25 @@ class SecurityAccess(models.Model):
             self.write({
                 'state': 'error',
                 'error_message': self._provision_failure_message(
-                    f"Provisioning failed: {e}", outcome, created),
+                    _("Provisioning failed: %(error)s", error=e),
+                    outcome, created),
             })
             _logger.exception("[SA] provision unexpected error sa=%s", self.id)
 
     def action_refresh_status(self):
-        """Refresh tunnel connector status from the PaaS Operator."""
+        """Refresh tunnel connector status from the PaaS Operator.
+
+        ⚠ **`deleted_at` falsy 一律落回既有判斷**（#833）。falsy 有兩種來源，
+        **兩種都不是訊號**：key 缺席 ＝ 舊版 operator 還沒有這個欄位；值為 `null`
+        ＝ Cloudflare 對**未刪除**的 tunnel 就是這樣回的。把缺席當成「不確定 ⇒
+        標成 deleted／error」會在 operator 升版當下讓每一列一起翻。通則見
+        `docs/tracking/pitfalls/operator-route-none-conflates-disabled-and-failed.md`。
+
+        ⛔ 這裡刻意**不**把「operator 回 404」也映射成 `deleted`：平台看得到的只有
+        「HTTP 失敗」，看不到那個失敗是誰發的（`operator_url` 設錯時 FastAPI 自己
+        會對未知路徑回 404）。那會讓設定錯誤從吵鬧且正確的 `error` 變成安靜且錯誤
+        的「已刪除」—— #833 的鏡像。404 維持走下面的 except。
+        """
         self.ensure_one()
         if not self.tunnel_id:
             return
@@ -1016,6 +1044,17 @@ class SecurityAccess(models.Model):
         try:
             result = client.get_tunnel_status(self.tunnel_id)
             connections = result.get('connections', [])
+            if result.get('deleted_at'):
+                # 見 docstring。連 connector 記帳一起清：留著上一輪的數字會變成
+                # 「Deleted ＋ Edge Connections: 4」這種看起來很正常的混合世代。
+                self.write({
+                    'tunnel_status': 'deleted',
+                    'edge_connection_count': 0,
+                    'connector_id': '',
+                    'connector_type': '',
+                    'connector_version': '',
+                })
+                return
             update_vals = {
                 'tunnel_status': 'connected' if connections else 'disconnected',
                 'edge_connection_count': len(connections),
@@ -1036,7 +1075,8 @@ class SecurityAccess(models.Model):
         except PaaSOperatorError as e:
             self.write({
                 'tunnel_status': 'error',
-                'error_message': f"Status refresh failed: {e.message}",
+                'error_message': _(
+                    "Status refresh failed: %(detail)s", detail=e.message),
             })
             _logger.warning(
                 "[SA] status refresh failed sa=%s: %s", self.id, e.message,
@@ -1121,10 +1161,10 @@ class SecurityAccess(models.Model):
                     record._cleanup_cloudflare(torn_down=torn_down)
                     if record.tunnel_id:
                         raise UserError(
-                            "Cloudflare cleanup failed; the tunnel is still "
-                            "live and billed. The record was kept so the "
-                            "deletion can be retried. Please try again "
-                            "shortly."
+                            _("Cloudflare cleanup failed; the tunnel is still "
+                              "live and billed. The record was kept so the "
+                              "deletion can be retried. Please try again "
+                              "shortly.")
                         )
                 # 軸2: routes are freely deletable (no primary guard), so
                 # cascade-delete them directly as part of tearing down the
@@ -1414,10 +1454,11 @@ class SecurityAccess(models.Model):
             # still outstanding.
             self.write({
                 'state': 'error',
-                'error_message': "Cloudflare cleanup failed; %s still live. "
-                                 "Will retry on the next cron pass." % (
-                                     'tunnel' if self.tunnel_id
-                                     else 'Access app'),
+                'error_message': _(
+                    "Cloudflare cleanup failed; %(resource)s still live. "
+                    "Will retry on the next cron pass.",
+                    resource=(_('tunnel') if self.tunnel_id
+                              else _('Access app'))),
             })
             _logger.warning(
                 "[SA] _do_cleanup incomplete sa=%s tunnel=%s lingering_access=%s "
@@ -1500,7 +1541,17 @@ class SecurityAccess(models.Model):
             client.delete_tunnel(self.tunnel_id, tunnel_name=self.tunnel_name)
             _logger.info("[SA] tunnel deleted sa=%s tunnel=%s",
                          self.id, self.tunnel_id)
-            _internal_identity(self).write({'tunnel_id': False})
+            # #833：tunnel_status 一起收掉。這是平台**唯一百分之百確定「這條
+            # tunnel 已經不存在」的時刻**（是我們自己刪的），而且是最後一個機會——
+            # `action_refresh_status()` 的第一行是 `if not self.tunnel_id: return`，
+            # 下一行清掉錨點之後，那個欄位就再也沒有任何路徑能更新它，會被凍結在
+            # 刪除前的最後一個值（通常是 connected 的綠燈）。
+            # ⚠ 只在 delete 成功之後寫：失敗時 tunnel 還活在 CF 上，標成 deleted
+            # 會把「待重試」謊報成「已刪除」，比原本的 bug 更糟。
+            _internal_identity(self).write({
+                'tunnel_id': False,
+                'tunnel_status': 'deleted',
+            })
         except Exception as e:
             # cleanup is re-entrant: log and keep tunnel_id so a later
             # retry (cron or manual) can finish the job.
@@ -1627,12 +1678,15 @@ class SecurityAccessRoute(models.Model):
     )
     access_protection_lost = fields.Boolean(
         string='Protection Not In Effect', copy=False, default=False,
-        help='True ＝ 這條 route 的 Cloudflare Access application 已經被拆掉、'
-             '而列本身還在（刪除交易回捲了，但 Cloudflare 那半回捲不掉）。此時 '
-             'is_protected 只是**意圖**：Cloudflare 上沒有任何東西在強制登入，'
-             '而 hostname 照常由 tunnel 服務。由下一次成功的 Access sync 清掉。'
-             '刻意與 is_protected 分開——降 is_protected 等於平台改掉租戶看得到'
-             '的設定（產品可見變更），未拍板（#794）。',
+        help='True = the Cloudflare Access application for this route has been '
+             'torn down while the row itself is still here (the delete '
+             'transaction rolled back, but the Cloudflare half cannot be). '
+             'is_protected is then only an **intent**: nothing on Cloudflare is '
+             'forcing a login, and the hostname is still served through the '
+             'tunnel. Cleared by the next successful Access sync. Deliberately '
+             'kept apart from is_protected — lowering is_protected would mean '
+             'the platform changing a setting the tenant can see (a '
+             'product-visible change), which is not decided yet (#794).',
     )
 
     @api.depends('subdomain_prefix')
@@ -1670,7 +1724,7 @@ class SecurityAccessRoute(models.Model):
         for route in self:
             err = self._subdomain_prefix_error(route.subdomain_prefix)
             if err:
-                raise ValidationError("%s: %r" % (err, route.subdomain_prefix or ''))
+                raise ValidationError(_("%s: %r") % (err, route.subdomain_prefix or ''))
 
     @api.constrains('security_access_id')
     def _check_route_quota(self):
@@ -1693,8 +1747,8 @@ class SecurityAccessRoute(models.Model):
             count = len(sa.route_ids)
             if count > quota:
                 raise ValidationError(
-                    "Route quota exceeded: plan '%s' allows %d "
-                    "route(s)." % (sub.sh_subscription_plan_id.name, quota)
+                    _("Route quota exceeded: plan '%s' allows %d "
+                      "route(s).") % (sub.sh_subscription_plan_id.name, quota)
                 )
 
     @api.model_create_multi
@@ -1775,8 +1829,8 @@ class SecurityAccessRoute(models.Model):
             for route in self:
                 if route.subdomain_prefix != vals['subdomain_prefix']:
                     raise UserError(
-                        "Subdomain prefix is immutable. Delete the route "
-                        "and create a new one to rename."
+                        _("Subdomain prefix is immutable. Delete the route "
+                          "and create a new one to rename.")
                     )
         # Atomicity scope (see create): the savepoint guarantees ONLY the
         # Odoo side — on a sync failure the DB write (service_url/header) rolls
@@ -2038,9 +2092,9 @@ class SecurityAccessRoute(models.Model):
                     break
                 if failed:
                     raise UserError(
-                        "Cloudflare Access teardown failed for route(s): %s. The "
-                        "route was kept so the deletion can be retried; its Access "
-                        "app is still live in Cloudflare." % (failed,)
+                        _("Cloudflare Access teardown failed for route(s): %s. The "
+                          "route was kept so the deletion can be retried; its Access "
+                          "app is still live in Cloudflare.") % (failed,)
                     )
                 # pass 2：拆失敗 ⇒ 落帳照常刪除（保住列救不了它，沒有 sync 會再跑）
                 for route_id, info in teardown_by_route.items():

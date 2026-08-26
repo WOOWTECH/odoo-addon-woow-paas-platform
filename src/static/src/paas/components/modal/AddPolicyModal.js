@@ -1,6 +1,7 @@
 /** @odoo-module **/
 
 import { Component, useState } from "@odoo/owl";
+import { _t } from "@web/core/l10n/translation";
 import { WoowButton } from "../button/WoowButton";
 import { WoowIcon } from "../icon/WoowIcon";
 
@@ -83,18 +84,18 @@ export class AddPolicyModal extends Component {
     return [
       {
         key: "include",
-        label: "Include — match any (OR)",
-        hint: "Visitor passes this policy if they match ANY include rule.",
+        label: _t("Include — match any (OR)"),
+        hint: _t("Visitor passes this policy if they match ANY include rule."),
       },
       {
         key: "require",
-        label: "Require — match all (AND)",
-        hint: "Visitor must additionally match EVERY require rule.",
+        label: _t("Require — match all (AND)"),
+        hint: _t("Visitor must additionally match EVERY require rule."),
       },
       {
         key: "exclude",
-        label: "Exclude — match none (NOT)",
-        hint: "Visitor is rejected if they match ANY exclude rule.",
+        label: _t("Exclude — match none (NOT)"),
+        hint: _t("Visitor is rejected if they match ANY exclude rule."),
       },
     ];
   }
@@ -103,11 +104,11 @@ export class AddPolicyModal extends Component {
   // policies because Cloudflare rejects them.
   get selectorOptions() {
     const all = [
-      { value: "email_domain", label: "Emails ending in a domain", identity: true, bulk: true },
-      { value: "email_list", label: "List of emails", identity: true, bulk: false },
-      { value: "ip_range", label: "IP range (CIDR)", identity: false, bulk: false },
-      { value: "everyone", label: "Everyone", identity: false, bulk: true },
-      { value: "country", label: "Country", identity: false, bulk: false },
+      { value: "email_domain", label: _t("Emails ending in a domain"), identity: true, bulk: true },
+      { value: "email_list", label: _t("List of emails"), identity: true, bulk: false },
+      { value: "ip_range", label: _t("IP range (CIDR)"), identity: false, bulk: false },
+      { value: "everyone", label: _t("Everyone"), identity: false, bulk: true },
+      { value: "country", label: _t("Country"), identity: false, bulk: false },
     ];
     return this.state.decision === "bypass"
       ? all.filter((o) => !o.identity)
@@ -143,20 +144,20 @@ export class AddPolicyModal extends Component {
   valueConfig(ruleType) {
     switch (ruleType) {
       case "email_domain":
-        return { show: true, prefix: "@", placeholder: "acme.com",
-          hint: "Anyone with an email at this domain." };
+        return { show: true, prefix: "@", placeholder: _t("acme.com"),
+          hint: _t("Anyone with an email at this domain.") };
       case "email_list":
-        return { show: true, prefix: "", placeholder: "a@x.com, b@x.com",
-          hint: "Comma-separated email addresses." };
+        return { show: true, prefix: "", placeholder: _t("a@x.com, b@x.com"),
+          hint: _t("Comma-separated email addresses.") };
       case "ip_range":
-        return { show: true, prefix: "", placeholder: "203.0.113.0/24",
-          hint: "Visitors from this CIDR range." };
+        return { show: true, prefix: "", placeholder: "203.0.113.0/24",   // 純數字位址範例：Odoo 的抽取器丟棄不含字母的 msgid，包 _t() 只會是空包彈
+          hint: _t("Visitors from this CIDR range.") };
       case "country":
-        return { show: true, prefix: "", placeholder: "TW, US",
-          hint: "Comma-separated ISO-2 country codes." };
+        return { show: true, prefix: "", placeholder: _t("TW, US"),
+          hint: _t("Comma-separated ISO-2 country codes.") };
       case "everyone":
         return { show: false, prefix: "", placeholder: "",
-          hint: "Matches all visitors." };
+          hint: _t("Matches all visitors.") };
       default:
         return { show: true, prefix: "", placeholder: "", hint: "" };
     }
@@ -221,14 +222,14 @@ export class AddPolicyModal extends Component {
 
   async confirm() {
     if (!this.state.name.trim()) {
-      this.state.error = "Policy name is required";
+      this.state.error = _t("Policy name is required");
       return;
     }
     const include = this._buildGroup(this.state.include);
     const require = this._buildGroup(this.state.require);
     const exclude = this._buildGroup(this.state.exclude);
     if (!include.length) {
-      this.state.error = "At least one Include rule with a value is required";
+      this.state.error = _t("At least one Include rule with a value is required");
       return;
     }
     this.state.saving = true;

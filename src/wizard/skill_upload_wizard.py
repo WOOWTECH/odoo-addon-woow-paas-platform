@@ -1,7 +1,7 @@
 import base64
 import hashlib
 
-from odoo import fields, models
+from odoo import _, fields, models
 from odoo.exceptions import UserError
 
 from .skill_bundle_validation import validate_skill_bundle
@@ -51,23 +51,23 @@ class SkillUploadWizard(models.TransientModel):
         """
         self.ensure_one()
         if self.scope == 'user' and not self.project_id:
-            raise UserError("User-scope skills must be linked to a project.")
+            raise UserError(_("User-scope skills must be linked to a project."))
         if self.scope == 'system' and self.project_id:
             raise UserError(
-                "System-scope skills must not be linked to a project.")
+                _("System-scope skills must not be linked to a project."))
         raw = base64.b64decode(self.bundle_file)
         if len(raw) > self.MAX_BUNDLE_SIZE:
-            raise UserError("Bundle exceeds the 10 MB limit.")
+            raise UserError(_("Bundle exceeds the 10 MB limit."))
 
         # Fail-fast structural validation BEFORE creating any attachment /
         # skill row, so a broken bundle never leaves an orphan attachment.
         # Hard violations are reported all at once (not just the first).
         validation = validate_skill_bundle(raw, wizard_name=self.name)
         if not validation.ok:
-            raise UserError(
-                "This skill bundle was rejected:\n- %s"
-                % "\n- ".join(validation.errors)
-            )
+            raise UserError(_(
+                "This skill bundle was rejected:\n- %(errors)s",
+                errors="\n- ".join(validation.errors),
+            ))
 
         bundle_sha256 = hashlib.sha256(raw).hexdigest()
         bundle_size_kb = -(-len(raw) // 1024)  # ceil division
@@ -83,10 +83,13 @@ class SkillUploadWizard(models.TransientModel):
              self.project_id.id if self.scope == 'user' else False),
         ]
         if Skill.search(dedupe_domain, limit=1):
-            raise UserError(
-                "%s skill '%s' v%s already exists; bump the version."
-                % (self.scope.capitalize(), self.name, self.version)
-            )
+            raise UserError(_(
+                "%(scope)s skill '%(name)s' v%(version)s already exists; "
+                "bump the version.",
+                scope=self.scope.capitalize(),
+                name=self.name,
+                version=self.version,
+            ))
 
         attachment = self.env['ir.attachment'].sudo().create({
             'name': self.bundle_filename or '%s-%s.tar.gz' % (

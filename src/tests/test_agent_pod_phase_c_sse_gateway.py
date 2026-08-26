@@ -135,6 +135,31 @@ _INNERHTML_EXEMPT = {
         'mermaid_loader.js：${svg} 來自 window.mermaid.render()。防線是 mermaid '
         '自身的 securityLevel:"strict"（由 XSS.3 配套釘住），不是 safeHtml。'
     ),
+    '` <button class="o_woow_mermaid__btn" data-action="zoom-in" '
+    'title="${zoomInTitle}"> <span '
+    'class="material-symbols-outlined">zoom_in</span> </button> '
+    '<button class="o_woow_mermaid__btn" data-action="zoom-out" '
+    'title="${zoomOutTitle}"> <span '
+    'class="material-symbols-outlined">zoom_out</span> </button> '
+    '<button class="o_woow_mermaid__btn" data-action="reset" '
+    'title="${resetTitle}"> <span '
+    'class="material-symbols-outlined">fit_screen</span> </button> '
+    '<button class="o_woow_mermaid__btn" '
+    'data-action="toggle-source" title="${sourceTitle}"> <span '
+    'class="material-symbols-outlined">code</span> </button> `': (
+        'mermaid_loader.js 的 _addToolbar()：4 個 ${} 插值都繫結到同檔上方的 '
+        'const，值是 _t("Zoom in diagram") 這類**單引數字面量**呼叫的求值結果，'
+        '沒有第二個引數、沒有使用者可控輸入。⛔ 這不是「_t() 一律安全」的通則：'
+        '_t() 支援插值（_t("%s 天內到期", x)），那個 x 可以是使用者可控的 —— '
+        '帶引數的 _t() 形態不在本豁免涵蓋範圍，必須另行判斷。'
+    ),
+    '\'<span class="material-symbols-outlined '
+    'o_woow_mermaid__spinner">progress_activity</span> \' + '
+    '_t("Loading diagram...")': (
+        'mermaid_loader.js 的 _showLoading()：串接的右項是 '
+        '_t("Loading diagram...") —— 同檔硬編英文的**單引數字面量**呼叫，非使用'
+        '者輸入；左項是純字面量。⛔ 同上，不涵蓋 _t() 帶插值引數的形態。'
+    ),
     '\'<span class="material-symbols-outlined" style="font-size:16px;'
     'vertical-align:middle;margin-right:4px">warning</span>\' + message': (
         'mermaid_loader.js 的 _showError()：message 全部來自同檔硬編的中文字串，'

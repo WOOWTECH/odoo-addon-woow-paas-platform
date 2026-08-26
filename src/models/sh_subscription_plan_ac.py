@@ -20,8 +20,10 @@ class ShSubscriptionPlanAc(models.Model):
     ac_max_access_seats = fields.Integer(
         string='AC Max Access Seats',
         default=0,
-        help='Access Control：跨該訂閱全部 route 的 email_list 去重位址數'
-             '上限＝0＋已購 AC 席數（500/seat/月）。MAX/上限語意、非內含'
-             '席數；0＝未加購任何席位。enforcement 於 OQ-D carrier 落地後'
-             '接線（欄位先行佔位）。',
+        help='Access Control: cap on the number of distinct email_list '
+             'addresses across every route of this subscription = 0 plus the '
+             'AC seats purchased (500/seat/month). MAX/ceiling semantics, NOT '
+             'an included seat count; 0 = no seats purchased. Enforcement is '
+             'wired up once the OQ-D carrier lands (the field is a placeholder '
+             'for now).',
     )

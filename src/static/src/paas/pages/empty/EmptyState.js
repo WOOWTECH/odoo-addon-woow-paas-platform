@@ -1,5 +1,6 @@
 /** @odoo-module **/
 import { Component, useState } from "@odoo/owl";
+import { _t } from "@web/core/l10n/translation";
 import { router } from "../../core/router";
 import { WoowIcon } from "../../components/icon/WoowIcon";
 
@@ -19,6 +20,6 @@ export class EmptyState extends Component {
             return this.props.pageName;
         }
         const route = this.router.routes.find(r => r.path === this.router.current);
-        return route ? route.name : "Page";
+        return route ? route.name : _t("Page");
     }
 }

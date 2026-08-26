@@ -1,5 +1,6 @@
 /** @odoo-module **/
 import { Component, useState, onMounted } from "@odoo/owl";
+import { _t } from "@web/core/l10n/translation";
 import { WoowCard } from "../../components/card/WoowCard";
 import { WoowIcon } from "../../components/icon/WoowIcon";
 import { WoowButton } from "../../components/button/WoowButton";
@@ -36,7 +37,7 @@ export class SupportTasksPage extends Component {
             await supportService.fetchAllTasks(filters);
         } catch (err) {
             console.error("Failed to load tasks:", err);
-            this.supportService.error = err.message || "Failed to load tasks";
+            this.supportService.error = err.message || _t("Failed to load tasks");
         } finally {
             this.state.loading = false;
         }
@@ -59,7 +60,7 @@ export class SupportTasksPage extends Component {
         const groups = {};
         for (const task of this.filteredTasks) {
             const pid = task.project_id || 0;
-            const pname = task.project_name || "Unassigned";
+            const pname = task.project_name || _t("Unassigned");
             if (!groups[pid]) {
                 groups[pid] = { projectId: pid, projectName: pname, tasks: [] };
             }

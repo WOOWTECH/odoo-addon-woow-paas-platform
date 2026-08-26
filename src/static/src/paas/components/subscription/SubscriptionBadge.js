@@ -1,5 +1,6 @@
 /** @odoo-module **/
 import { Component } from "@odoo/owl";
+import { _t } from "@web/core/l10n/translation";
 
 /**
  * SubscriptionBadge Component
@@ -19,12 +20,12 @@ export class SubscriptionBadge extends Component {
   get label() {
     const sub = this.props.subscription;
     if (!sub) return "";
-    if (sub.state === "in_progress" && sub.is_trial) return "Trial";
-    if (sub.state === "in_progress") return "Active";
-    if (sub.state === "expire" || sub.state === "close") return "Expired";
-    if (sub.state === "cancel") return "Cancelled";
-    if (sub.state === "renewed") return "Renewed";
-    if (sub.state === "draft") return "Draft";
+    if (sub.state === "in_progress" && sub.is_trial) return _t("Trial");
+    if (sub.state === "in_progress") return _t("Active");
+    if (sub.state === "expire" || sub.state === "close") return _t("Expired");
+    if (sub.state === "cancel") return _t("Cancelled");
+    if (sub.state === "renewed") return _t("Renewed");
+    if (sub.state === "draft") return _t("Draft");
     return sub.state || "";
   }
 

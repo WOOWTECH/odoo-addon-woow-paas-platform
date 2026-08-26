@@ -1,5 +1,6 @@
 /** @odoo-module **/
 import { Component, onMounted, onWillStart, onWillUnmount, useRef, useState } from "@odoo/owl";
+import { _t } from "@web/core/l10n/translation";
 import { registry } from "@web/core/registry";
 import { aiService } from "../paas/services/ai_service";
 import { openAiStream } from "../paas/services/ai_stream";
@@ -34,12 +35,12 @@ export class PortalTaskChat extends Component {
         this.state.ready = !!status.data.ready;
         this.state.notReadyReason = status.data.reason || "";
       } else {
-        this.state.notReadyReason = status.error || "Agent 狀態取得失敗";
+        this.state.notReadyReason = status.error || _t("Agent status unavailable");
       }
       if (history.success) {
         this.state.messages = history.data.map((m) => this._toMessage(m));
       } else {
-        this.state.error = history.error || "無法載入對話歷史";
+        this.state.error = history.error || _t("Failed to load chat history");
       }
     });
     onMounted(() => this._scrollToBottom());
@@ -72,7 +73,7 @@ export class PortalTaskChat extends Component {
     const res = await aiService.postMessage(this.props.channelId, body);
     this.state.sending = false;
     if (!res.success) {
-      this.state.error = res.error || "訊息傳送失敗";
+      this.state.error = res.error || _t("Failed to send message");
       return;
     }
     this.state.messages.push({
@@ -123,7 +124,7 @@ export class PortalTaskChat extends Component {
         this._scrollToBottom();
       },
       onError: (data) => {
-        this.state.error = data.error || "AI 回覆失敗";
+        this.state.error = data.error || _t("Failed to get the AI reply");
         this._closeStream();
       },
       onConnectionError: () => {
@@ -133,11 +134,14 @@ export class PortalTaskChat extends Component {
             isAi: true,
             authorName: "AI",
             html: parseMarkdown(
-              this.state.streamingText + "\n\n⚠️ (回覆因連線中斷而不完整)"),
+              this.state.streamingText +
+                "\n\n⚠️ " +
+                _t("(This reply is incomplete because the connection was interrupted.)"),
+            ),
             date: new Date().toISOString(),
           });
         } else {
-          this.state.error = "連線中斷，請重新傳送訊息。";
+          this.state.error = _t("Connection lost. Please send your message again.");
         }
         this._closeStream();
       },

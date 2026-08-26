@@ -1,4 +1,5 @@
 /** @odoo-module **/
+import { _t } from "@web/core/l10n/translation";
 
 /**
  * Template 價格標籤的單一格式化來源（#478）。
@@ -28,13 +29,13 @@ export function formatTemplatePrice(pricing) {
     // ⚠ 起價 0 但**還有更貴的階**（freemium：0 元入門＋付費階）時不能只寫
     // "Free" —— 那是 #478「謊報免費」的鏡像：使用者以為整個商品免費，點進去
     // 才看到付費階。這種商品目前 seed 觸及不到，但規則先立好。
-    return isFrom ? "Free 起" : "Free";
+    return isFrom ? _t("Free and up") : _t("Free");
   }
   // 單位縮寫沿用 PlanSelector._unitLabel 的三態慣例（mo／yr／原樣），讓卡片、
   // header 與下一頁的 plan 選卡區、總計列字樣一致；day/week 之類的週期照原字串
   // 顯示，而不是被誤標成 mo。
   const unit =
     pricing.unit === "month" ? "mo" : pricing.unit === "year" ? "yr" : pricing.unit;
-  const price = `${pricing.min_price} pts/${unit}`;
-  return isFrom ? `${price} 起` : price;
+  const price = _t("%(amount)s pts/%(unit)s", { amount: pricing.min_price, unit });
+  return isFrom ? _t("%s and up", price) : price;
 }

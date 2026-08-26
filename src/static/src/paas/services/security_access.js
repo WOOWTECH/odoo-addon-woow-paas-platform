@@ -1,5 +1,6 @@
 /** @odoo-module **/
 
+import { _t } from "@web/core/l10n/translation";
 import { jsonRpc } from "./rpc";
 
 /**
@@ -21,9 +22,9 @@ export const securityAccessService = {
       );
       return result.success
         ? { success: true, data: result.data }
-        : { success: false, error: result.error || "Failed to fetch" };
+        : { success: false, error: result.error || _t("Failed to fetch") };
     } catch (err) {
-      return { success: false, error: err.message || "Network error" };
+      return { success: false, error: err.message || _t("Network error") };
     }
   },
 

@@ -5,15 +5,15 @@
         <field name="name">woow_paas_platform.gift_grant_wizard.form</field>
         <field name="model">woow_paas_platform.gift_grant_wizard</field>
         <field name="arch" type="xml">
-            <form string="贈送錢包點數">
+            <form string="Grant Wallet Credits">
                 <group>
                     <field name="partner_id"/>
                     <field name="points"/>
                     <field name="reason"/>
                 </group>
                 <footer>
-                    <button name="action_grant" string="贈送" type="object" class="btn-primary"/>
-                    <button string="取消" class="btn-secondary" special="cancel"/>
+                    <button name="action_grant" string="Grant" type="object" class="btn-primary"/>
+                    <button string="Cancel" class="btn-secondary" special="cancel"/>
                 </footer>
             </form>
         </field>
@@ -21,7 +21,7 @@
 
     <!-- 綁在 res.partner 的「動作」選單（僅 admin 可見）。 -->
     <record id="action_gift_grant_wizard" model="ir.actions.act_window">
-        <field name="name">贈送錢包點數</field>
+        <field name="name">Grant Wallet Credits</field>
         <field name="res_model">woow_paas_platform.gift_grant_wizard</field>
         <field name="view_mode">form</field>
         <field name="target">new</field>

@@ -21,6 +21,7 @@ service、更說不出該怎麼處理，而升級當下沒有人有機會去查�
 """
 import logging
 
+from odoo import _
 from odoo.exceptions import UserError
 
 _logger = logging.getLogger(__name__)
@@ -59,10 +60,12 @@ def migrate(cr, version):
         for sub_id, ids in duplicates
     )
     _logger.error("[519-B] subscription_id 有重複列，無法建立唯一索引：\n%s", detail)
-    raise UserError(
-        '#519：偵測到多筆 cloud_service 指向同一筆訂閱，無法建立 '
-        '`woow_paas_cloud_service_subscription_uniq` 唯一索引。\n\n%s\n\n'
-        '請先決定每筆訂閱真正對應的那一筆服務，其餘重新開通或刪除。'
-        '不要把 subscription_id 清成 NULL——那會讓服務永久脫離停權／結算 cron。'
-        % detail
-    )
+    raise UserError(_(
+        "#519: several cloud_service rows point at the same subscription, so "
+        "the `woow_paas_cloud_service_subscription_uniq` unique index cannot "
+        "be created.\n\n%(detail)s\n\nDecide which service each "
+        "subscription really belongs to, then re-provision or delete the "
+        "rest. Do NOT clear subscription_id to NULL - that would detach those "
+        "services from the suspension / billing cron for good.",
+        detail=detail,
+    ))

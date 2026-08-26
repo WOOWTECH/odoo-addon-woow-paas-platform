@@ -261,7 +261,7 @@ def _reject_identity_anchor_writes(env, vals):
     for field in _IDENTITY_ANCHOR_FIELDS:
         if field in vals:
             raise UserError(
-                "Field '%s' is immutable after creation." % field
+                _("Field '%s' is immutable after creation.") % field
             )
 
 
@@ -339,6 +339,11 @@ class SmartHome(models.Model):
         selection=[
             ('connected', 'Connected'),
             ('disconnected', 'Disconnected'),
+            # #833：Cloudflare 上這條 tunnel 已被刪除（軟刪除）。
+            # ⚠ 與 'disconnected' 的差別是**要不要動手**：deleted 需要重建，
+            # disconnected 只要等連線恢復。少了這一格，兩者在 UI 與 DB 欄位上
+            # 是同一個值，沒有人會去查。
+            ('deleted', 'Deleted'),
             ('error', 'Error'),
         ],
         string='Tunnel Status',
@@ -381,8 +386,9 @@ class SmartHome(models.Model):
         """
         if not _is_platform_order(self.env):
             raise SmartHomeOrderGateError(_(
-                'Smart Home 只能由平台的開通流程建立（%(model)s）。'
-                '請改從 Smart Home 下單流程建立，不要直接寫入這個 model。',
+                'Smart Home instances can only be created by the platform '
+                'provisioning flow (%(model)s). Please use the Smart Home '
+                'ordering flow instead of writing to this model directly.',
                 model=self._name))
         _strip_identity_anchors(self.env, vals_list)
         return super().create(vals_list)
@@ -397,8 +403,8 @@ class SmartHome(models.Model):
         client = get_paas_operator_client(self.env)
         if not client:
             raise UserError(
-                "PaaS Operator is not configured. "
-                "Please set Operator URL and API Key in Settings → Woow PaaS."
+                _("PaaS Operator is not configured. "
+                  "Please set Operator URL and API Key in Settings → Woow PaaS.")
             )
         return client
 
@@ -556,12 +562,12 @@ class SmartHome(models.Model):
         # 否則失敗的重試會把記錄推離 error 卻什麼也沒做成。
         if self.tunnel_id:
             raise UserError(
-                "This Smart Home already has a Cloudflare tunnel (%s). "
-                "Re-provisioning would create a second, separately billed tunnel "
-                "and leave this one orphaned with no record pointing at it. "
-                "If its DNS record is missing, ask an administrator to create it "
-                "for %s; otherwise delete this Smart Home (which tears the tunnel "
-                "down) and create it again."
+                _("This Smart Home already has a Cloudflare tunnel (%s). "
+                  "Re-provisioning would create a second, separately billed tunnel "
+                  "and leave this one orphaned with no record pointing at it. "
+                  "If its DNS record is missing, ask an administrator to create it "
+                  "for %s; otherwise delete this Smart Home (which tears the tunnel "
+                  "down) and create it again.")
                 % (self.tunnel_id,
                    self.tunnel_route or self.subdomain or 'the configured hostname')
             )
@@ -613,12 +619,14 @@ class SmartHome(models.Model):
                 anchored.write(dict(
                     tunnel_vals,
                     state='error',
-                    error_message=(
-                        "Tunnel created but its DNS record could not be created, "
-                        "so %s will not resolve. The tunnel (%s) is kept so it is "
-                        "not orphaned — an administrator must create the DNS "
-                        "record, or delete and re-create this Smart Home."
-                        % (hostname, result.get('tunnel_id'))
+                    error_message=_(
+                        "Tunnel created but its DNS record could not be "
+                        "created, so %(hostname)s will not resolve. The "
+                        "tunnel (%(tunnel_id)s) is kept so it is not "
+                        "orphaned — an administrator must create the DNS "
+                        "record, or delete and re-create this Smart Home.",
+                        hostname=hostname,
+                        tunnel_id=result.get('tunnel_id'),
                     ),
                 ))
                 _logger.error(
@@ -649,13 +657,16 @@ class SmartHome(models.Model):
         except PaaSOperatorConnectionError as e:
             self.write({
                 'state': 'error',
-                'error_message': f"Cannot connect to PaaS Operator: {e.message}",
+                'error_message': _(
+                    "Cannot connect to PaaS Operator: %(detail)s",
+                    detail=e.message),
             })
             _logger.error("Smart Home provision connection error: %s", e.message)
         except PaaSOperatorError as e:
             self.write({
                 'state': 'error',
-                'error_message': f"Tunnel creation failed: {e.message}",
+                'error_message': _(
+                    "Tunnel creation failed: %(detail)s", detail=e.message),
             })
             _logger.error("Smart Home provision error: %s", e.message)
 
@@ -788,8 +799,17 @@ class SmartHome(models.Model):
             # ⚠ 順序不變：**清空只在 `delete_tunnel` 成功之後**。失敗時三個都保留，
             # `unlink()` 的 fail-loud guard 與 `_do_cleanup` 的重試分支都判
             # `if self.tunnel_id:`，語意不受本次擴充影響。
-            _internal_identity(self).write({
-                field: False for field in _IDENTITY_ANCHOR_FIELDS})
+            # #833：tunnel_status 一起收掉。這是平台**唯一百分之百確定「這條
+            # tunnel 已經不存在」的時刻**（是我們自己刪的），而且是最後一個機會——
+            # `action_refresh_status()` 的第一行是 `if not self.tunnel_id: return`，
+            # 下一行清掉錨點之後，那個欄位就再也沒有任何路徑能更新它，會被凍結在
+            # 刪除前的最後一個值（通常是 connected 的綠燈）。
+            # ⚠ 只在 delete 成功之後寫：失敗時 tunnel 還活在 CF 上，標成 deleted
+            # 會把「待重試」謊報成「已刪除」，比原本的 bug 更糟。
+            _internal_identity(self).write(dict(
+                {field: False for field in _IDENTITY_ANCHOR_FIELDS},
+                tunnel_status='deleted',
+            ))
         except Exception as e:
             _logger.warning(
                 "[SH] tunnel cleanup failed sh=%s: %s — kept for retry",
@@ -844,9 +864,9 @@ class SmartHome(models.Model):
                         torn_down=torn_down)
                     if failed:
                         raise UserError(
-                            "Cloudflare Access teardown failed for route(s): %s. The "
-                            "Smart Home was kept so the deletion can be retried; its "
-                            "Access app is still live in Cloudflare."
+                            _("Cloudflare Access teardown failed for route(s): %s. The "
+                              "Smart Home was kept so the deletion can be retried; its "
+                              "Access app is still live in Cloudflare.")
                             % ', '.join(str(f) for f in failed)
                         )
                     # 🔴 route（連帶它底下的 policy）必須在 `super().unlink()` **之前**
@@ -875,9 +895,9 @@ class SmartHome(models.Model):
                         record._cleanup_tunnel()
                     if record.tunnel_id:
                         raise UserError(
-                            "Cloudflare cleanup failed; the tunnel is still live and "
-                            "billed. The record was kept so the deletion can be "
-                            "retried. Please try again shortly."
+                            _("Cloudflare cleanup failed; the tunnel is still live and "
+                              "billed. The record was kept so the deletion can be "
+                              "retried. Please try again shortly.")
                         )
                 res = super().unlink()
                 for sub in subs_to_settle:
@@ -890,7 +910,19 @@ class SmartHome(models.Model):
         return res
 
     def action_refresh_status(self):
-        """Refresh tunnel status from the PaaS Operator."""
+        """Refresh tunnel status from the PaaS Operator.
+
+        ⚠ **`deleted_at` falsy 一律落回既有判斷**（#833）。falsy 有兩種來源，
+        **兩種都不是訊號**：key 缺席 ＝ 舊版 operator 還沒有這個欄位；值為 `null`
+        ＝ Cloudflare 對**未刪除**的 tunnel 就是這樣回的。把缺席當成「不確定 ⇒
+        標成 deleted／error」會在 operator 升版當下讓每一列一起翻。通則見
+        `docs/tracking/pitfalls/operator-route-none-conflates-disabled-and-failed.md`。
+
+        ⛔ 這裡刻意**不**把「operator 回 404」也映射成 `deleted`：平台看得到的只有
+        「HTTP 失敗」，看不到那個失敗是誰發的（`operator_url` 設錯時 FastAPI 自己
+        會對未知路徑回 404）。那會讓設定錯誤從吵鬧且正確的 `error` 變成安靜且錯誤
+        的「已刪除」—— #833 的鏡像。404 維持走下面的 except。
+        """
         self.ensure_one()
         if not self.tunnel_id:
             return
@@ -902,6 +934,17 @@ class SmartHome(models.Model):
 
             # Parse connections
             connections = result.get('connections', [])
+            if result.get('deleted_at'):
+                # Cloudflare 上已經沒有這條 tunnel 了 ⇒ 「等連線恢復」不會有結果，
+                # 要重建。連 connector 記帳一起清掉：留著上一輪的數字會變成
+                # 「Deleted ＋ Edge Connections: 4」這種看起來很正常的混合世代。
+                self.write({
+                    'tunnel_status': 'deleted',
+                    'connector_id': '',
+                    'connector_type': '',
+                })
+                return
+
             update_vals = {
                 'tunnel_status': 'connected' if connections else 'disconnected',
             }
@@ -918,7 +961,8 @@ class SmartHome(models.Model):
         except PaaSOperatorError as e:
             self.write({
                 'tunnel_status': 'error',
-                'error_message': f"Status refresh failed: {e.message}",
+                'error_message': _(
+                    "Status refresh failed: %(detail)s", detail=e.message),
             })
             _logger.warning(
                 "Failed to refresh tunnel status for Smart Home '%s': %s",
@@ -1127,18 +1171,19 @@ class SmartHome(models.Model):
             # 衛。`failed_access` 那條的措辭**逐字不動**（#785／PR #813 的成敗語
             # 意表在斷言它）；lingering-only 才走新措辭。
             if failed_access:
-                error_message = (
-                    "Cloudflare Access teardown failed for route(s): %s. Will "
-                    "retry on the next cron pass." % ', '.join(
-                        str(f) for f in failed_access)
+                error_message = _(
+                    "Cloudflare Access teardown failed for route(s): "
+                    "%(routes)s. Will retry on the next cron pass.",
+                    routes=', '.join(str(f) for f in failed_access),
                 )
             else:
-                error_message = (
-                    "Cloudflare Access teardown reported success but route(s) "
-                    "%s still hold Access object id(s); the CF Access app and "
-                    "its reusable policies are still live. Will retry on the "
-                    "next cron pass." % ', '.join(
-                        str(rid) for rid in lingering_access.ids)
+                error_message = _(
+                    "Cloudflare Access teardown reported success but "
+                    "route(s) %(routes)s still hold Access object id(s); the "
+                    "CF Access app and its reusable policies are still live. "
+                    "Will retry on the next cron pass.",
+                    routes=', '.join(
+                        str(rid) for rid in lingering_access.ids),
                 )
             self.write({'state': 'error', 'error_message': error_message})
             _logger.warning(
@@ -1155,7 +1200,7 @@ class SmartHome(models.Model):
         if self.tunnel_id:
             self.write({
                 'state': 'error',
-                'error_message': (
+                'error_message': _(
                     "Cloudflare cleanup failed; the tunnel is still live and "
                     "billed. Will retry on the next cron pass."
                 ),

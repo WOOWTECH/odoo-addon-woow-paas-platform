@@ -1,10 +1,12 @@
 /** @odoo-module **/
 import { Component, useState, onMounted } from "@odoo/owl";
+import { _t } from "@web/core/l10n/translation";
 import { WoowCard } from "../../components/card/WoowCard";
 import { WoowIcon } from "../../components/icon/WoowIcon";
 import { WoowButton } from "../../components/button/WoowButton";
 import { reconcileReportService } from "../../services/reconcile_report_service";
 import { router } from "../../core/router";
+import { formatUserDateTime } from "../../utils/datetime_helpers";
 
 /**
  * ReconcileReportPage — /woow 後台「L4 反向孤兒對帳報表」頁（admin-only）。
@@ -49,11 +51,9 @@ export class ReconcileReportPage extends Component {
         return !this.loading && !this.error && this.candidates.length === 0;
     }
 
+    /** 依 Odoo 使用者語系格式化掃描時間。 */
     formatDateTime(iso) {
-        if (!iso) return "—";
-        const d = new Date(iso);
-        if (isNaN(d.getTime())) return iso;
-        return d.toLocaleString();
+        return formatUserDateTime(iso, { showSeconds: false }, "—");
     }
 
     envBadgeClass(envHint) {
@@ -63,7 +63,7 @@ export class ReconcileReportPage extends Component {
     }
 
     reconcilableLabel(candidate) {
-        return candidate.reconcilable ? "可回收" : "人工審";
+        return candidate.reconcilable ? _t("Safe to reclaim") : _t("Manual review needed");
     }
     reconcilableClass(candidate) {
         return candidate.reconcilable
@@ -92,7 +92,7 @@ export class ReconcileReportPage extends Component {
             );
             this.state.reverifyResult[candidate.id] = res.success
                 ? res.data
-                : { error: res.error || "重查失敗" };
+                : { error: res.error || _t("Re-verify failed") };
         } finally {
             this.state.reverifying[candidate.id] = false;
         }

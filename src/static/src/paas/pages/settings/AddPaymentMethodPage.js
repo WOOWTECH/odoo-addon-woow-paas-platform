@@ -1,6 +1,7 @@
 /** @odoo-module **/
 import { Component, useState, onMounted, onWillUnmount } from "@odoo/owl";
 import { loadJS } from "@web/core/assets";
+import { _t } from "@web/core/l10n/translation";
 import { WoowCard } from "../../components/card/WoowCard";
 import { WoowButton } from "../../components/button/WoowButton";
 import { WoowIcon } from "../../components/icon/WoowIcon";
@@ -28,7 +29,7 @@ async function loadEcpaySdk() {
         await loadJS(url);
     }
     if (typeof window.ECPay === "undefined") {
-        throw new Error("ECPay SDK did not expose window.ECPay after load");
+        throw new Error(_t("ECPay SDK did not expose window.ECPay after load"));
     }
 }
 
@@ -52,20 +53,20 @@ export class AddPaymentMethodPage extends Component {
                     billingService.preparePaymentMethodBind(),
                 ]);
                 if (!prep.success) {
-                    throw new Error(prep.error || "Prepare bind failed");
+                    throw new Error(prep.error || _t("Prepare bind failed"));
                 }
                 this.state.bindContext = prep.data;
 
                 const envi = prep.data.sandbox ? "Stage" : "Prod";
                 await new Promise((resolve, reject) => {
                     window.ECPay.initialize(envi, 1, (errMsg) => {
-                        if (errMsg) reject(new Error("SDK init failed: " + errMsg));
+                        if (errMsg) reject(new Error(_t("SDK init failed: %s", errMsg)));
                         else resolve();
                     });
                 });
                 await new Promise((resolve, reject) => {
                     window.ECPay.addBindingCard(prep.data.token, "zh-TW", (errMsg) => {
-                        if (errMsg) reject(new Error("Card form failed: " + errMsg));
+                        if (errMsg) reject(new Error(_t("Card form failed: %s", errMsg)));
                         else resolve();
                     });
                 });
@@ -96,9 +97,9 @@ export class AddPaymentMethodPage extends Component {
         try {
             const payToken = await new Promise((resolve, reject) => {
                 window.ECPay.getBindCardPayToken((result, errMsg) => {
-                    if (errMsg) return reject(new Error("PayToken failed: " + errMsg));
+                    if (errMsg) return reject(new Error(_t("PayToken failed: %s", errMsg)));
                     const t = result && result.BindCardPayToken;
-                    if (!t) return reject(new Error("Invalid BindCardPayToken"));
+                    if (!t) return reject(new Error(_t("Invalid BindCardPayToken")));
                     resolve(t);
                 });
             });
@@ -110,7 +111,7 @@ export class AddPaymentMethodPage extends Component {
                 bind_card_pay_token: payToken,
             });
             if (!result.success) {
-                throw new Error(result.error || "Bind rejected");
+                throw new Error(result.error || _t("Bind rejected"));
             }
 
             if (result.data.three_d_url) {

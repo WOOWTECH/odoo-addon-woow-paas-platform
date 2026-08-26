@@ -1,8 +1,10 @@
 /** @odoo-module **/
 import { Component, useState, onMounted } from "@odoo/owl";
+import { _t } from "@web/core/l10n/translation";
 import { WoowButton } from "../button/WoowButton";
 import { WoowIcon } from "../icon/WoowIcon";
 import { cloudService } from "../../services/cloud_service";
+import { formatUserDateTime } from "../../utils/datetime_helpers";
 
 /**
  * RollbackModal Component
@@ -61,7 +63,7 @@ export class RollbackModal extends Component {
         if (result.success) {
             this.state.revisions = result.data || [];
         } else {
-            this.state.error = result.error || "Failed to load revision history";
+            this.state.error = result.error || _t("Failed to load revision history");
         }
 
         this.state.loading = false;
@@ -87,16 +89,14 @@ export class RollbackModal extends Component {
         }
     }
 
+    /**
+     * 依 Odoo 使用者語系格式化 helm revision 的時間戳。
+     *
+     * 輸入來自 paas-operator 的 `helm history --output json`，
+     * 實測長相為 `2026-08-26T10:44:22.962052+08:00`（帶 offset）。
+     */
     formatDate(dateStr) {
-        if (!dateStr) return "-";
-        const date = new Date(dateStr);
-        return date.toLocaleString("en-US", {
-            year: "numeric",
-            month: "short",
-            day: "numeric",
-            hour: "2-digit",
-            minute: "2-digit",
-        });
+        return formatUserDateTime(dateStr, { showSeconds: false }, "-");
     }
 
     getStatusClass(status) {
@@ -126,7 +126,7 @@ export class RollbackModal extends Component {
         if (result.success) {
             this.props.onRollback();
         } else {
-            this.state.error = result.error || "Failed to rollback service";
+            this.state.error = result.error || _t("Failed to rollback service");
             this.state.rolling = false;
         }
     }

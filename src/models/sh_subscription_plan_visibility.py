@@ -26,10 +26,11 @@ class ShSubscriptionPlanVisibility(models.Model):
     _inherit = 'sh.subscription.plan'
 
     storefront_hidden = fields.Boolean(
-        string='前台隱藏',
+        string='Hidden From Storefront',
         default=False,
-        help='勾選後此方案不出現在 /woow 前台任何購買選項；'
-             '既存訂閱的計費、續期、退點完全不受影響。',
+        help='When ticked, this plan does not appear in any purchase option on '
+             'the /woow front end; billing, renewal and refunds for existing '
+             'subscriptions are completely unaffected.',
     )
 
     def _attach_variants(self):
@@ -161,14 +162,24 @@ class ShSubscriptionPlanVisibility(models.Model):
                     'label': '%s vCPU · %s GB RAM' % (vcpu, ram),
                 })
         elif self.service_type == 'security_access':
+            # ⚠ 兩個值**分開**格式化，不共用一個特判——兩個欄位對 0 的語意
+            # 相反（#743／sh_subscription_plan_sa_quota.py）：
+            #   sa_max_routes          0 = none allowed
+            #   sa_max_access_policies 0 = unlimited
+            # 擠在同一個字串裡時，一個 `or 'unlimited'` 會同時蓋到兩個。
+            routes_text = '%s routes' % self.sa_max_routes  # 0 維持字面 0
+            # routes 側該顯示成什麼是 #770 的 quota 語意拍板題，#750 不代決。
+            policies_text = (
+                '%s policies' % self.sa_max_access_policies
+                if self.sa_max_access_policies else 'unlimited policies')
             specs.append({
                 'icon': 'route',
-                'label': '%s routes · %s policies' % (
-                    self.sa_max_routes, self.sa_max_access_policies),
+                'label': '%s · %s' % (routes_text, policies_text),
             })
         elif self.service_type == 'smart_home':
             if self.mcp_integration:
-                specs.append({'icon': 'lock', 'label': 'MCP 加密連線'})
+                specs.append({'icon': 'lock',
+                              'label': 'Encrypted MCP connection'})
         return specs
 
     # #336 A5（hide，18.0.1.0.54）與 #431（unhide，18.0.1.0.79）共用的定位清單。

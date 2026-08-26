@@ -10,16 +10,16 @@
                 <!-- #129: 僅在可重試時顯示「重試」；retryable:false 的終態失敗不顯示 -->
                 <button t-if="state.connectionState === 'error' and state.errorRetryable"
                         class="o_woow_ai_chat__retry_btn"
-                        t-on-click="onRetryClick">重試</button>
+                        t-on-click="onRetryClick">Retry</button>
             </div>
 
             <!-- Error banner -->
             <div t-if="state.error" class="o_woow_ai_chat__error">
-                <span class="material-symbols-outlined">error</span>
+                <span class="material-symbols-outlined" t-translation="off">error</span>
                 <span t-esc="state.error"/>
                 <button class="o_woow_ai_chat__error_close"
                         t-on-click="() => this.state.error = null">
-                    <span class="material-symbols-outlined">close</span>
+                    <span class="material-symbols-outlined" t-translation="off">close</span>
                 </button>
             </div>
 
@@ -37,7 +37,7 @@
 
                 <!-- Empty state -->
                 <div t-elif="!hasMessages" class="o_woow_ai_chat__empty">
-                    <span class="material-symbols-outlined o_woow_ai_chat__empty_icon">chat</span>
+                    <span class="material-symbols-outlined o_woow_ai_chat__empty_icon" t-translation="off">chat</span>
                     <p>No messages yet. Start the conversation!</p>
                 </div>
 
@@ -65,7 +65,7 @@
                                     <t t-foreach="msg.attachments" t-as="att" t-key="att.id">
                                         <a class="o_woow_ai_chat__attachment"
                                            t-att-href="att.url" target="_blank">
-                                            <span class="material-symbols-outlined">attach_file</span>
+                                            <span class="material-symbols-outlined" t-translation="off">attach_file</span>
                                             <span t-esc="att.name"/>
                                         </a>
                                     </t>
@@ -80,7 +80,7 @@
                         <div t-else=""
                              class="o_woow_ai_chat__message o_woow_ai_chat__message--assistant">
                             <div class="o_woow_ai_chat__avatar o_woow_ai_chat__avatar--ai">
-                                <span class="material-symbols-outlined">smart_toy</span>
+                                <span class="material-symbols-outlined" t-translation="off">smart_toy</span>
                             </div>
                             <div class="o_woow_ai_chat__bubble">
                                 <div class="o_woow_ai_chat__meta">
@@ -92,14 +92,14 @@
                                     <t t-foreach="msg.toolCalls" t-as="tc" t-key="tc.id">
                                         <div t-att-class="{'o_woow_tool_call': true, 'o_woow_tool_call--error': tc.error}">
                                             <div class="o_woow_tool_call__header" t-on-click="() => this.toggleToolCall(tc)">
-                                                <span class="material-symbols-outlined">
+                                                <span class="material-symbols-outlined" t-translation="off">
                                                     <t t-if="tc.error">error</t>
                                                     <t t-else="">build</t>
                                                 </span>
                                                 <span class="o_woow_tool_call__name" t-esc="tc.tool"/>
                                                 <span t-if="tc.error" class="o_woow_tool_call__badge o_woow_tool_call__badge--error">Error</span>
                                                 <span t-else="" class="o_woow_tool_call__badge">Used tool</span>
-                                                <span class="material-symbols-outlined o_woow_tool_call__chevron">
+                                                <span class="material-symbols-outlined o_woow_tool_call__chevron" t-translation="off">
                                                     <t t-if="tc.expanded">expand_less</t>
                                                     <t t-else="">expand_more</t>
                                                 </span>
@@ -128,7 +128,7 @@
                                     <t t-foreach="msg.attachments" t-as="att" t-key="att.id">
                                         <a class="o_woow_ai_chat__attachment"
                                            t-att-href="att.url" target="_blank">
-                                            <span class="material-symbols-outlined">attach_file</span>
+                                            <span class="material-symbols-outlined" t-translation="off">attach_file</span>
                                             <span t-esc="att.name"/>
                                         </a>
                                     </t>
@@ -141,14 +141,14 @@
                     <div t-if="state.streaming"
                          class="o_woow_ai_chat__message o_woow_ai_chat__message--assistant">
                         <div class="o_woow_ai_chat__avatar o_woow_ai_chat__avatar--ai">
-                            <span class="material-symbols-outlined">smart_toy</span>
+                            <span class="material-symbols-outlined" t-translation="off">smart_toy</span>
                         </div>
                         <div class="o_woow_ai_chat__bubble o_woow_ai_chat__bubble--streaming">
                             <!-- Tool calls during streaming -->
                             <t t-foreach="state.streamingToolCalls" t-as="tc" t-key="tc.id">
                                 <div t-att-class="{'o_woow_tool_call': true, 'o_woow_tool_call--loading': !tc.result and !tc.error, 'o_woow_tool_call--error': tc.error}">
                                     <div class="o_woow_tool_call__header" t-on-click="() => this.toggleToolCall(tc)">
-                                        <span class="material-symbols-outlined">
+                                        <span class="material-symbols-outlined" t-translation="off">
                                             <t t-if="tc.error">error</t>
                                             <t t-else="">build</t>
                                         </span>
@@ -158,7 +158,7 @@
                                             <t t-elif="!tc.result">Calling...</t>
                                             <t t-else="">Used tool</t>
                                         </span>
-                                        <span class="material-symbols-outlined o_woow_tool_call__chevron">
+                                        <span class="material-symbols-outlined o_woow_tool_call__chevron" t-translation="off">
                                             <t t-if="tc.expanded">expand_less</t>
                                             <t t-else="">expand_more</t>
                                         </span>
@@ -215,7 +215,7 @@
                             t-on-click="triggerFileUpload"
                             t-att-disabled="state.uploadingFile"
                             title="Upload file">
-                        <span class="material-symbols-outlined">
+                        <span class="material-symbols-outlined" t-translation="off">
                             <t t-if="state.uploadingFile">hourglass_empty</t>
                             <t t-else="">attach_file</t>
                         </span>
@@ -241,7 +241,7 @@
                             t-on-click="sendMessage"
                             t-att-disabled="sendDisabled"
                             title="Send message">
-                        <span class="material-symbols-outlined">
+                        <span class="material-symbols-outlined" t-translation="off">
                             <t t-if="state.sending">hourglass_empty</t>
                             <t t-else="">send</t>
                         </span>

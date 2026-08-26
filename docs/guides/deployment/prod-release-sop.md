@@ -607,6 +607,133 @@ SELECT noupdate, count(*) FROM ir_model_data
 
 > ⚠ **boot log 的 Traceback 不等於發版失敗，但要看時間戳。** 已知的固定噪音：`ir_cron` 的 `Base: Auto-vacuum internal data` 跑 `_file_gc` 會噴 `FileNotFoundError`／`PermissionError`（追蹤 issue #503，根因是 filestore root-owned）。**判定手法＝看 Traceback 的時間戳是否落在 `Registry loaded` 之後**——之後的屬於 cron 噪音，之前的才和 `-u` 有關。這是每天固定出現的噪音，所以「boot log 0 筆 Traceback」這條驗收**每次都要人工重判**，不能寫成機械斷言。
 
+#### 5.1.6 🔴 `zh_TW` 首次上 prod 之後的兩項抽查（#107）
+
+`woow_paas_platform` 18.0.1.0.176 起，模組載入時會啟用 `zh_TW`
+（`data/lang_zh_tw_activation.xml` 的 `<function>` ＋ `migrations/18.0.1.0.176/post-migrate.py`）。
+以下兩項在**該版第一次上 prod 之後**做一次；之後的發版不必重跑。
+
+**(A) 新 image 內真的帶著 `i18n/zh_TW.po`**
+
+啟用邏輯有自檢：`.po` 不存在就**不啟用**（維持英文）並留一行 CRITICAL。所以這一項的
+成功與失敗都不會讓 pod 掛掉——差別只在 log 裡那一行，以及畫面永遠是英文。
+
+```bash
+CTX=woow-k3s
+# ① 直接問 pod：這一行有沒有出現、是哪一種
+kubectl --context $CTX -n paas-system logs deploy/paas-odoo | grep -F '[107]'
+#   期望：[107] zh_TW active (lang id=…)
+#   出現 [107] zh_TW 未啟用：翻譯檔不存在  ⇒ image build 把 i18n/ 排除掉了（見 ②）
+#   ⚠ 兩種都沒出現 ≠ 通過：代表這一輪根本沒有載入模組（log 被輪替掉、或 -u 沒跑）
+
+# ② 檔案真的在 image 裡
+ADDON=$(kubectl --context $CTX -n paas-system exec deploy/paas-odoo -- \
+        python3 -c "import odoo.addons.woow_paas_platform as m, os; print(os.path.dirname(m.__file__))")
+kubectl --context $CTX -n paas-system exec deploy/paas-odoo -- ls -la "$ADDON/i18n/"
+#   期望：看得到 zh_TW.po（本版約 12,300 行 / 480KB 量級）
+#   ⚠ 陽性對照：同一條指令換成 ls "$ADDON/data/" 應列得出東西——兩邊都空 ⇒ 是 ADDON 解錯了，不是檔案不見
+```
+
+（背景：prod image 的 `COPY` 是「整個 `src/` 目錄、無白名單」，image 內含 `tests`／`migrations`
+⇒ **強推論**它也帶 `i18n/`；但無法排除 `paas-odoo-ci` 端有針對 `*.po` 的排除規則，所以這一項要實測。）
+
+**(B) `/odoo` 後台**仍為英文**——確認沒有走到全域翻譯載入**
+
+啟用 `zh_TW` 的宣告寫入面只有 `res_lang` 一列。但只要有任何路徑對**所有**已安裝模組跑
+`_update_translations`（`ODOO_SKIP_MODULES_UPDATE="no"` 的全域 update；或 conf／argv 意外帶了
+`update`），就會把整個後台的翻譯 payload 寫進 DB jsonb（沙盒實測規模：91 個 jsonb 欄位／18,774 列），
+**且永不回收**。
+
+🔴 **主判準是 psql，不是看畫面**——理由寫在下面 (B2)。
+
+**判準是「等於推導值」，不是「個位數」。** 寫成量級門檻會留下灰區：本模組的 `.po` 每加一批
+譯文，寫入列數就會往上跳（實測 66 條譯文時是 2 列、442 條時是 136 列），「個位數 ⇒ ✅／
+上千 ⇒ ⛔」中間那一大段沒有定義。推導值可以從**出貨的那份 `.po`** 算出來，所以直接算。
+
+```bash
+# (B0) 先算這一版**應該**寫幾列（在 repo checkout 上跑，或對 image 內的 .po 跑）
+python3 - <<'PY'
+import polib, collections
+po = polib.pofile('src/i18n/zh_TW.po')
+n = collections.Counter()
+for e in po:
+    if not e.msgstr or e.obsolete:
+        continue                      # 空 msgstr 在 TranslationImporter._load 被濾掉
+    for occ, _ in e.occurrences:
+        if occ.startswith('code:'):
+            continue                  # code 類**永遠不進 DB**（_load 明確 continue）
+        head, rest = occ.split(':', 1)
+        modelfield, xmlid = rest.rsplit(':', 1)
+        n[(modelfield, xmlid)] = 1     # 同一筆記錄被多條 msgid 命中只算一列
+tables = collections.Counter(k[0] for k in n)
+for mf, c in sorted(tables.items(), key=lambda kv: -kv[1]):
+    print('%-46s %d' % (mf, c))
+print('總計相異記錄 =', len(n))
+PY
+```
+
+`18.0.1.0.176` 當下的推導值（**實測與推導逐表相等**，fresh install 與 `-u` 兩條路徑都是）：
+
+| 表 | 欄 | 推導＝實測 |
+| --- | --- | ---: |
+| `ir_model_fields_selection` | `name` | **71** |
+| `ir_model_fields` | `field_description` | **43** |
+| `ir_ui_view` | `arch_db` | **14** |
+| `ir_model` | `name` | **3** |
+| `ir_ui_menu` | `name` | **3** |
+| `ir_act_window` | `name` | **2** |
+| | **總計** | **136** |
+
+```bash
+# (B1) 實測（六張表一起，每張都配 en_US 陽性對照）
+kubectl --context $CTX -n paas-system exec deploy/paas-odoo -- \
+  psql -U <db_user> -d bitnami_odoo -c "
+SELECT 'ir_ui_view.arch_db' t, count(*) FILTER (WHERE arch_db ? 'zh_TW') zh,
+                                count(*) FILTER (WHERE arch_db ? 'en_US') en FROM ir_ui_view
+UNION ALL SELECT 'ir_model_fields.field_description', count(*) FILTER (WHERE field_description ? 'zh_TW'),
+                                count(*) FILTER (WHERE field_description ? 'en_US') FROM ir_model_fields
+UNION ALL SELECT 'ir_model_fields_selection.name', count(*) FILTER (WHERE name ? 'zh_TW'),
+                                count(*) FILTER (WHERE name ? 'en_US') FROM ir_model_fields_selection
+UNION ALL SELECT 'ir_model.name', count(*) FILTER (WHERE name ? 'zh_TW'),
+                                count(*) FILTER (WHERE name ? 'en_US') FROM ir_model
+UNION ALL SELECT 'ir_ui_menu.name', count(*) FILTER (WHERE name ? 'zh_TW'),
+                                count(*) FILTER (WHERE name ? 'en_US') FROM ir_ui_menu
+UNION ALL SELECT 'ir_act_window.name', count(*) FILTER (WHERE name ? 'zh_TW'),
+                                count(*) FILTER (WHERE name ? 'en_US') FROM ir_act_window;"
+```
+
+判讀（**三個方向都要判**，不是只判「有沒有爆量」）：
+
+| 讀到 | 判定 |
+| --- | --- |
+| 每張表都**等於** (B0) 的推導值 | ✅ 只有本模組自己 `.po` 裡帶 `model:`／`model_terms:` occurrence 的條目被寫進去 |
+| **多於**推導值（特別是上千／上萬） | ⛔ 走到了**全域** `_update_translations`——查 `ODOO_SKIP_MODULES_UPDATE` 是否被留在 `"no"`（§5.1.3），以及 pod argv／conf 有沒有 `update` |
+| **少於**推導值 | ⚠ 也要查，不得當成「更乾淨」：可能是 `.po` 沒被讀到（見 (A)）、xmlid 解不到、或 `model_terms` 的來源字串已與 view 的 `en_US` 對不上 |
+| **en_US 對照也是 0** | ⚠ 查法壞了（`?` 運算子沒作用／連錯 DB），不是「乾淨」——重查，不得判通過 |
+
+**機制（為什麼是這些表、為什麼 `code:` 不算）**：`TranslationImporter._load`
+（`odoo/tools/translate.py`）對每一列先擋兩件事——`msgstr` 空的跳過、
+**`type == 'code'` 的直接 `continue`**（Odoo 18 的 code 翻譯只從磁碟 `.po` 讀，不進 DB）。
+剩下的 `model` / `model_terms` 依 `field.translate` 分兩桶，`save()` 再逐 `xmlid` UPDATE
+對應那張表的 jsonb 欄。⇒ **一條 msgid 可以寫多列**（例如 `Active` 是很多 model 的欄位標籤），
+所以「帶 model 面 occurrence 的條目數」（本版 53）與「實際寫入列數」（本版 136）**不是同一個
+數**，判準要用後者。
+
+
+```bash
+# (B2) 畫面抽查（輔助，不是主判準）：以內部帳號登入 /odoo，看三處固定字仍是英文
+#   ① 左上角 app 選單裡的  Settings   （不得變成「設定」）
+#   ② Apps 頁的            Update Apps List
+#   ③ 任一 list view 的欄位標題  Name / Company
+```
+
+> 🔴 **(B2) 在目前的語系分佈下鑑別力接近 0，必須知道這件事再用它。**
+> prod 7 個 user 的 `lang` **全部**是 `en_US`（#107 W1 實測，含 `share=true`／`false` 兩側與
+> template portal user）⇒ 就算 jsonb 真的被寫滿中文，`en_US` 的 session 一樣看到英文，
+> (B2) 照樣全綠。它只在「有帳號的語系指向 `zh_TW`」之後才變成有效的煙霧偵測器。
+> 在那之前，**唯一分得出來的是 (B1)**。把 (B2) 寫成主判準，等於用一個恆綠的檢查換掉一個
+> 會紅的檢查。
+
 ### 5.2 paas-operator 上 prod
 
 **注意**：operator 有**兩個版號軸** — image（來源 `extra/paas-operator/`）與 chart（來源 `woow-paas-charts`）。
@@ -970,6 +1097,18 @@ Fleet GitOps 的 rollback = **把 pin 值改回上一個已知良好版本**：
        ODOO_SKIP_MODULES_UPDATE 收回 "yes"（曝險窗，§5.1.2），再過 §5.1.3 收官三重確認：
        deployment spec / running pod env / Fleet BundleDeployment nonModified=true
        ⚠ 收官那輪 merge 也是一次 Recreate ⇒ 再一次 3–10 分停機，要算進窗口（§9 坑 #14）
+[ ] 8.6（僅 woow_paas_platform 18.0.1.0.176 首次上 prod 那一次）§5.1.6 兩項抽查：
+       (A) `logs deploy/paas-odoo | grep -F '[107]'` 出現 `zh_TW active`；且 image 內
+           `<addon>/i18n/zh_TW.po` 存在（兩種訊息都沒出現 ≠ 通過，代表這輪沒載入模組）
+       (B) 先用 §5.1.6 (B0) 的 snippet 從**出貨的那份 .po** 算出推導值，再 psql 量**六張表**
+           （ir_ui_view / ir_model_fields / ir_model_fields_selection / ir_model /
+             ir_ui_menu / ir_act_window），每張都配 en_US 對照
+           判準是「**等於**推導值」不是「個位數」——.176 當下推導＝實測＝
+           71/43/14/3/3/2（總 136）。多於 ⇒ 走到全域 _update_translations（查
+           ODOO_SKIP_MODULES_UPDATE 是否留在 "no"）；**少於也要查**（.po 沒讀到／
+           xmlid 解不到）；en_US 對照也是 0 ⇒ 查法壞了，重查
+       🔴 「看 /odoo 有沒有變中文」是輔助不是主判準：prod 使用者 lang 全為 en_US，
+          jsonb 就算被寫滿中文那個畫面檢查也一樣是綠的（§5.1.6 B2）
 [ ] 9.（agent-runtime 換版）另走 §5.3 連結的 reap SOP，勿用一般 rollback/restart
 [ ] 10. 任一步失敗 → §8 rollback（改回前一版 digest 對應的 tag + digest + gate image
         【三處同退】；漏 ③ ＝ 舊 code 跑在新 schema 上，且看起來一樣成功 → merge）

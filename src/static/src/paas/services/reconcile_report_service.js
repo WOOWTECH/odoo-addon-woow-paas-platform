@@ -1,5 +1,6 @@
 /** @odoo-module **/
 import { reactive } from "@odoo/owl";
+import { _t } from "@web/core/l10n/translation";
 import { jsonRpc } from "./rpc";
 
 /**
@@ -28,7 +29,7 @@ export const reconcileReportService = reactive({
             try {
                 const result = await jsonRpc("/api/reconcile-report/list", {});
                 if (!result.success) {
-                    throw new Error(result.error || "載入孤兒報表失敗");
+                    throw new Error(result.error || _t("Failed to load the orphan reconcile report"));
                 }
                 const data = result.data || {};
                 this.candidates = data.candidates || [];

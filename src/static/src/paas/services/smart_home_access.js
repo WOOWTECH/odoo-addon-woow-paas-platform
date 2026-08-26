@@ -1,5 +1,6 @@
 /** @odoo-module **/
 
+import { _t } from "@web/core/l10n/translation";
 import { jsonRpc } from "./rpc";
 
 /**
@@ -42,7 +43,7 @@ export const smartHomeAccessService = {
         ? { success: true, data: result.data }
         : { success: false, error: result.error };
     } catch (err) {
-      return { success: false, error: err.message || "Network error" };
+      return { success: false, error: err.message || _t("Network error") };
     }
   },
 
@@ -61,7 +62,7 @@ export const smartHomeAccessService = {
         ? { success: true, data: result.data }
         : { success: false, error: result.error };
     } catch (err) {
-      return { success: false, error: err.message || "Network error" };
+      return { success: false, error: err.message || _t("Network error") };
     }
   },
 
@@ -79,7 +80,7 @@ export const smartHomeAccessService = {
         ? { success: true, data: result.data }
         : { success: false, error: result.error };
     } catch (err) {
-      return { success: false, error: err.message || "Network error" };
+      return { success: false, error: err.message || _t("Network error") };
     }
   },
 
@@ -93,7 +94,7 @@ export const smartHomeAccessService = {
         ? { success: true, data: result.data }
         : { success: false, error: result.error };
     } catch (err) {
-      return { success: false, error: err.message || "Network error" };
+      return { success: false, error: err.message || _t("Network error") };
     }
   },
 
@@ -107,7 +108,7 @@ export const smartHomeAccessService = {
         ? { success: true, data: result.data }
         : { success: false, error: result.error };
     } catch (err) {
-      return { success: false, error: err.message || "Network error" };
+      return { success: false, error: err.message || _t("Network error") };
     }
   },
 
@@ -124,7 +125,7 @@ export const smartHomeAccessService = {
         ? { success: true, data: result.data }
         : { success: false, error: result.error };
     } catch (err) {
-      return { success: false, error: err.message || "Network error" };
+      return { success: false, error: err.message || _t("Network error") };
     }
   },
 };

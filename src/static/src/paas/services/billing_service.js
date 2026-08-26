@@ -1,5 +1,6 @@
 /** @odoo-module **/
 import { reactive } from "@odoo/owl";
+import { _t } from "@web/core/l10n/translation";
 
 /** Default timeout for API requests (30 seconds) */
 const REQUEST_TIMEOUT_MS = 30000;
@@ -32,33 +33,33 @@ async function jsonRpc(url, params, timeoutMs = REQUEST_TIMEOUT_MS) {
         });
     } catch (error) {
         if (error.name === "AbortError") {
-            throw new Error("Request timed out. Please try again.");
+            throw new Error(_t("Request timed out. Please try again."));
         }
-        throw new Error("Network error. Please check your connection and try again.");
+        throw new Error(_t("Network error. Please check your connection and try again."));
     } finally {
         clearTimeout(timeoutId);
     }
 
     if (!response.ok) {
         if (response.status === 401) {
-            throw new Error("Session expired. Please refresh the page.");
+            throw new Error(_t("Session expired. Please refresh the page."));
         } else if (response.status === 403) {
-            throw new Error("Access denied.");
+            throw new Error(_t("Access denied."));
         } else if (response.status >= 500) {
-            throw new Error("Server error. Please try again later.");
+            throw new Error(_t("Server error. Please try again later."));
         }
-        throw new Error(`Request failed with status ${response.status}`);
+        throw new Error(_t("Request failed with status %s", response.status));
     }
 
     let data;
     try {
         data = await response.json();
     } catch (parseError) {
-        throw new Error("Invalid response from server.");
+        throw new Error(_t("Invalid response from server."));
     }
 
     if (data.error) {
-        const errorMsg = data.error.data?.message || data.error.message || "Unknown error";
+        const errorMsg = data.error.data?.message || data.error.message || _t("Unknown error");
         throw new Error(errorMsg);
     }
 
@@ -217,9 +218,9 @@ export const billingService = reactive({
             if (result.success) {
                 return { success: true };
             }
-            return { success: false, error: result.error || "Cancellation failed" };
+            return { success: false, error: result.error || _t("Cancellation failed") };
         } catch (err) {
-            return { success: false, error: err.message || "Cancellation failed" };
+            return { success: false, error: err.message || _t("Cancellation failed") };
         }
     },
 
@@ -263,7 +264,7 @@ export const billingService = reactive({
             }
             return { success: false, error: result.error, code: result.code };
         } catch (err) {
-            return { success: false, error: err.message || "Prepare bind failed" };
+            return { success: false, error: err.message || _t("Prepare bind failed") };
         }
     },
 
@@ -281,7 +282,7 @@ export const billingService = reactive({
             }
             return { success: false, error: result.error, code: result.code };
         } catch (err) {
-            return { success: false, error: err.message || "Create bind failed" };
+            return { success: false, error: err.message || _t("Create bind failed") };
         }
     },
 
@@ -297,9 +298,9 @@ export const billingService = reactive({
                 await this.fetchPaymentMethods();
                 return { success: true };
             }
-            return { success: false, error: result.error || "Failed to delete card" };
+            return { success: false, error: result.error || _t("Failed to delete card") };
         } catch (err) {
-            return { success: false, error: err.message || "Failed to delete card" };
+            return { success: false, error: err.message || _t("Failed to delete card") };
         }
     },
 
@@ -315,9 +316,9 @@ export const billingService = reactive({
                 await this.fetchPaymentMethods();
                 return { success: true };
             }
-            return { success: false, error: result.error || "Failed to set default" };
+            return { success: false, error: result.error || _t("Failed to set default") };
         } catch (err) {
-            return { success: false, error: err.message || "Failed to set default" };
+            return { success: false, error: err.message || _t("Failed to set default") };
         }
     },
 
@@ -431,9 +432,9 @@ export const billingService = reactive({
             if (result.success) {
                 return { success: true, data: result.data };
             }
-            return { success: false, error: result.error || "Payment failed" };
+            return { success: false, error: result.error || _t("Payment failed") };
         } catch (err) {
-            return { success: false, error: err.message || "Payment failed" };
+            return { success: false, error: err.message || _t("Payment failed") };
         }
     },
 
@@ -499,7 +500,7 @@ export const billingService = reactive({
             }
             return { success: false, error: result.error, code: result.code };
         } catch (err) {
-            return { success: false, error: err.message || "Redeem failed" };
+            return { success: false, error: err.message || _t("Redeem failed") };
         }
     },
 });

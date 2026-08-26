@@ -35,7 +35,7 @@
                 <t t-if="props.service.public_url_dns_unverified">
                     <div class="o_woow_cloud_service_dns_hint">
                         <WoowIcon name="'schedule'" size="14"/>
-                        <span>公開網址尚未驗證可解析，可能仍在生效中</span>
+                        <span>Public URL is not yet verified as resolvable — it may still be propagating</span>
                     </div>
                 </t>
                 <t t-if="props.service.state === 'error' and props.service.error_message">

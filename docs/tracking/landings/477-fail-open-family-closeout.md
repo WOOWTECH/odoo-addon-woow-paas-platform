@@ -14,6 +14,6 @@
 
 6. **#489（Step 2）／PR #491**（待 merge）：age timeout——deploying/upgrading/pending-* 超時轉 error＋分型診斷；錨=deployed_at/last_upgraded_at 取較晚者（**三個轉移入口原本漏記錨**：action_redeploy/_reset_admin_password/rollback，同 PR 補）；**UTC 陷阱**（controller 本機時區 datetime.now() 會讓 age 恆負＝保護靜默失效、UTC 容器測不出）→ repo-lint 第 10 gate check_transition_anchor_utc；`18.0.1.0.84` migration 刷轉移中服務錨（Eugene 裁決，消除 -u 一次性誤殺窗）＋manifest 成對 bump；#482 交互=不衝突（已留言含 guard 陷阱提醒：判準用 pre_suspend_state 勿枚舉 state）；順帶發現 #483 的 F-461-2 斷言了 production 未實作的 log 字串（孤兒斷言）。
 
-跨棒教訓：maestri ask 背景通道必被系統砍（訊息送達、砍等待側）＝正常模式，完工偵測靠 Monitor 掃終端 spinner；Eugene 會在 teammate 終端輸入框留未送出指令，leader 以「自我消毒 ask」放行；teammate 交棒間 develop 被他人推進→插播提醒 rebase＋baseline 重取（有效）。
+跨棒教訓：maestri ask 背景通道必被系統砍（訊息送達、砍等待側）＝正常模式，完工偵測靠 Monitor 掃終端 spinner；~~Eugene 會在 teammate 終端輸入框留未送出指令~~（**2026-08-26 更正歸因**：輸入框的未送出文字是 **Claude Code 的輸入建議功能**自動生成，Eugene 確認非本人所留——載體 #908 留言；歸因差別會改變應對：以為是人留的會傾向照做，知道是工具猜的就明白照做＝自己給自己下令。原句「leader 以『自我消毒 ask』放行」的紀律本身仍然正確且保留）；teammate 交棒間 develop 被他人推進→插播提醒 rebase＋baseline 重取（有效）。
 
 關聯 [[project_471_conceal_instances_split]]、[[project_460_reset_button_gate_landing]]。

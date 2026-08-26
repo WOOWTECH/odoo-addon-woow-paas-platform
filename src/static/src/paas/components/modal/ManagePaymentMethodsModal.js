@@ -1,5 +1,6 @@
 /** @odoo-module **/
 import { Component, useState, onMounted } from "@odoo/owl";
+import { _t } from "@web/core/l10n/translation";
 import { WoowButton } from "../button/WoowButton";
 import { WoowIcon } from "../icon/WoowIcon";
 import { billingService } from "../../services/billing_service";
@@ -59,7 +60,7 @@ export class ManagePaymentMethodsModal extends Component {
 
     async onDeleteMethod(methodId) {
         if (this.state.deleting) return;
-        if (!confirm("Are you sure you want to remove this payment method?")) return;
+        if (!confirm(_t("Are you sure you want to remove this payment method?"))) return;
 
         this.state.deleting = true;
         this.state.deleteError = null;
@@ -69,7 +70,7 @@ export class ManagePaymentMethodsModal extends Component {
         if (result.success) {
             this.props.onUpdated();
         } else {
-            this.state.deleteError = result.error || "Failed to remove card";
+            this.state.deleteError = result.error || _t("Failed to remove card");
         }
 
         this.state.deleting = false;

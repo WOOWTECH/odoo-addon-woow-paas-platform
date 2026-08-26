@@ -8,22 +8,30 @@ import {
   onWillUnmount,
   onPatched,
 } from "@odoo/owl";
+import { _t } from "@web/core/l10n/translation";
 import { AiMentionDropdown } from "../ai-mention/AiMentionDropdown";
 import { aiService } from "../../services/ai_service";
 import { openAiStream } from "../../services/ai_stream";
 import { safeHtml } from "../../services/html_sanitize";
 import { parseMarkdown } from "../../services/markdown_parser";
 import { renderMermaidBlocks } from "../../services/mermaid_loader";
+import { formatUserTime } from "../../utils/datetime_helpers";
 
 const ERROR_MESSAGES = {
-  channel_not_found: "聊天頻道不存在，請重新整理頁面。",
-  no_agent: "目前沒有可用的 AI 助理，請聯繫管理員設定。",
-  provider_not_configured: "AI 供應商尚未設定，請聯繫管理員。",
-  no_message: "找不到訊息，請重新傳送。",
-  access_denied: "您無權存取此聊天頻道。",
-  csrf_error: "請求驗證失敗，請重新整理頁面。",
+  channel_not_found: _t("This chat channel no longer exists. Please refresh the page."),
+  no_agent: _t(
+    "No AI assistant is available. Please ask your administrator to set one up.",
+  ),
+  provider_not_configured: _t(
+    "The AI provider has not been configured yet. Please contact your administrator.",
+  ),
+  no_message: _t("Message not found. Please send it again."),
+  access_denied: _t("You do not have permission to access this chat channel."),
+  csrf_error: _t("Request validation failed. Please refresh the page."),
   // #129: agent-runtime 空回應（MiniMax 等串流異常）→ 可安全重試。
-  llm_empty_response: "AI 暫時沒有回應，請點「重試」再試一次。",
+  llm_empty_response: _t(
+    "The AI assistant did not reply this time. Please tap Retry to try again.",
+  ),
 };
 
 /**
@@ -106,7 +114,9 @@ export class AiChat extends Component {
       this.state.assistants = [...aiService.assistants];
     } catch (err) {
       console.error("Failed to load AI assistants:", err);
-      this.state.error = "無法載入 AI 助理列表，請重新整理頁面。";
+      this.state.error = _t(
+        "Could not load the AI assistant list. Please refresh the page.",
+      );
     }
   }
 
@@ -132,10 +142,10 @@ export class AiChat extends Component {
           };
         });
       } else {
-        this.state.error = result.error || "Failed to load chat history";
+        this.state.error = result.error || _t("Failed to load chat history");
       }
     } catch (err) {
-      this.state.error = err.message || "Failed to load chat history";
+      this.state.error = err.message || _t("Failed to load chat history");
     } finally {
       this.state.loading = false;
       this.scrollToBottom();
@@ -176,10 +186,10 @@ export class AiChat extends Component {
           this.startStream();
         }
       } else {
-        this.state.error = result.error || "Failed to send message";
+        this.state.error = result.error || _t("Failed to send message");
       }
     } catch (err) {
-      this.state.error = err.message || "Failed to send message";
+      this.state.error = err.message || _t("Failed to send message");
     } finally {
       this.state.sending = false;
     }
@@ -194,7 +204,9 @@ export class AiChat extends Component {
     // Pre-flight: validate channelId
     const channelId = this.props.channelId;
     if (!channelId || typeof channelId !== "number" || channelId <= 0) {
-      this.state.error = "此任務尚未啟用聊天功能，請先點擊「啟用聊天」。";
+      this.state.error = _t(
+        'Chat is not enabled for this task yet. Please tap "Enable chat" first.',
+      );
       this.state.connectionState = "error";
       return;
     }
@@ -267,7 +279,7 @@ export class AiChat extends Component {
           .find((t) => t.tool === data.tool && t.result === null);
         if (tc) {
           tc.result = null;
-          tc.error = data.error || "Tool execution failed";
+          tc.error = data.error || _t("Tool execution failed");
         }
         this.scrollToBottom();
       },
@@ -313,7 +325,9 @@ export class AiChat extends Component {
         console.error("Failed to parse SSE data:", raw, err);
         this._consecutiveParseErrors++;
         if (this._consecutiveParseErrors >= 3) {
-          this.state.error = "接收 AI 回覆時發生資料錯誤，請重新整理頁面。";
+          this.state.error = _t(
+            "Something went wrong while receiving the AI reply. Please refresh the page.",
+          );
           this.state.connectionState = "error";
           this.closeStream();
         }
@@ -326,11 +340,14 @@ export class AiChat extends Component {
         if (hadContent) {
           this.state.messages.push(
             this._createAiMessage(
-              partialText + "\n\n⚠️ (回覆因連線中斷而不完整)",
+              partialText +
+                "\n\n⚠️ " +
+                _t("(This reply is incomplete because the connection was interrupted.)"),
             ),
           );
-          this.state.error =
-            "AI 回覆因連線中斷而不完整，您可以重新傳送訊息以取得完整回覆。";
+          this.state.error = _t(
+            "The AI reply was cut off by a connection drop. Send your message again to get the full reply.",
+          );
           this.state.connectionState = "error";
         } else {
           this.state.connectionState = "reconnecting";
@@ -356,13 +373,15 @@ export class AiChat extends Component {
 
   _scheduleReconnect() {
     if (this._reconnectAttempts >= this._maxReconnectAttempts) {
-      this.state.error = "無法連線至 AI 服務，請稍後再試或重新整理頁面。";
+      this.state.error = _t(
+        "Could not connect to the AI service. Please try again later or refresh the page.",
+      );
       this.state.connectionState = "error";
       return;
     }
     const delay = Math.pow(2, this._reconnectAttempts) * 1000; // 1s, 2s, 4s
     this._reconnectAttempts++;
-    this.state.error = `正在重新連線...（第 ${this._reconnectAttempts} 次嘗試）`;
+    this.state.error = _t("Reconnecting... (attempt %s)", this._reconnectAttempts);
     this.state.connectionState = "reconnecting";
 
     this._reconnectTimer = setTimeout(() => {
@@ -583,8 +602,8 @@ export class AiChat extends Component {
         // Add the uploaded message to the list
         this.state.messages.push({
           id: result.data.message_id,
-          body: "Uploaded: " + file.name,
-          author_name: "You",
+          body: _t("Uploaded: %s", file.name),
+          author_name: _t("You"),
           author_id: null,
           date: new Date().toISOString(),
           is_ai: false,
@@ -593,10 +612,10 @@ export class AiChat extends Component {
         });
         this.scrollToBottom();
       } else {
-        this.state.error = result.error || "Upload failed";
+        this.state.error = result.error || _t("Upload failed");
       }
     } catch (err) {
-      this.state.error = err.message || "Upload failed";
+      this.state.error = err.message || _t("Upload failed");
     } finally {
       this.state.uploadingFile = false;
       // Reset file input
@@ -624,14 +643,10 @@ export class AiChat extends Component {
    * @returns {string} Formatted time string
    */
   formatTime(dateStr) {
-    if (!dateStr) {
-      return "";
-    }
-    const date = new Date(dateStr);
-    if (isNaN(date.getTime())) {
-      return "";
-    }
-    return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    // ⚠ 這個函式的輸入有兩種來源：後端歷史訊息的 `.isoformat()`（不帶 offset）
+    // 與前端串流完成時自產的 `toISOString()`（帶 `Z`）。
+    // `formatUserTime` 兩種都吃，且解析失敗回 fallback 而非 `Invalid DateTime`。
+    return formatUserTime(dateStr, "");
   }
 
   /**
@@ -666,7 +681,7 @@ export class AiChat extends Component {
     return {
       id: messageId || Date.now(),
       body: body ? parseMarkdown(body) : "", // AI responses are in Markdown
-      author_name: "AI Assistant",
+      author_name: _t("AI Assistant"),
       author_id: null,
       date: new Date().toISOString(),
       is_ai: true,
@@ -722,10 +737,14 @@ export class AiChat extends Component {
         if (closeIdx !== -1) {
           // Complete block - replace with placeholder, keep text after closing fence
           const afterClose = part.substring(closeIdx + 4);
-          result += "\n> 📊 *圖表將在回覆完成後顯示*\n" + afterClose;
+          result +=
+            "\n> 📊 *" +
+            _t("The diagram will be shown once the reply is complete") +
+            "*\n" +
+            afterClose;
         } else {
           // Incomplete block - replace with loading placeholder
-          result += "\n> 📊 *圖表載入中...*\n";
+          result += "\n> 📊 *" + _t("Loading diagram...") + "*\n";
         }
         inMermaidBlock = false;
       } else {
@@ -748,34 +767,36 @@ export class AiChat extends Component {
 
   get connectionIndicator() {
     const map = {
-      idle: { color: "gray", text: "待命中", visible: false },
+      idle: { color: "gray", text: _t("AI assistant idle"), visible: false },
       connecting: {
         color: "yellow",
-        text: "連線中...",
+        text: _t("Connecting to AI assistant..."),
         visible: true,
         animate: "blink",
       },
       spawning: {
         color: "yellow",
-        text: "AI 啟動中…（首次啟動需數十秒）",
+        text: _t(
+          "Starting the AI assistant... (the first start can take up to a minute)",
+        ),
         visible: true,
         animate: "blink",
       },
-      connected: { color: "green", text: "已連線", visible: true },
+      connected: { color: "green", text: _t("AI assistant connected"), visible: true },
       streaming: {
         color: "green",
-        text: "AI 回覆中...",
+        text: _t("AI assistant is replying..."),
         visible: true,
         animate: "pulse",
       },
       error: {
         color: "red",
-        text: this.state.error || "連線錯誤",
+        text: this.state.error || _t("AI connection error"),
         visible: true,
       },
       reconnecting: {
         color: "yellow",
-        text: this.state.error || "重新連線中...",
+        text: this.state.error || _t("Reconnecting to AI assistant..."),
         visible: true,
         animate: "blink",
       },

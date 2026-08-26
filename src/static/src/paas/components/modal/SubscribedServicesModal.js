@@ -1,9 +1,11 @@
 /** @odoo-module **/
 import { Component, useState, onMounted } from "@odoo/owl";
+import { _t } from "@web/core/l10n/translation";
 import { WoowButton } from "../button/WoowButton";
 import { WoowIcon } from "../icon/WoowIcon";
 import { billingService } from "../../services/billing_service";
 import { formatPoints } from "../../utils/billing_helpers";
+import { formatUserDate } from "../../utils/datetime_helpers";
 
 const TEMPLATE_ICONS = {
   n8n: "cloud",
@@ -59,7 +61,7 @@ export class SubscribedServicesModal extends Component {
   }
 
   get recurrencyLabel() {
-    return this.state.detail?.recurrency_label || this.props.subscription.recurrency_label || "Monthly";
+    return this.state.detail?.recurrency_label || this.props.subscription.recurrency_label || _t("Monthly");
   }
 
   get services() {
@@ -82,13 +84,13 @@ export class SubscribedServicesModal extends Component {
 
   getServiceStateLabel(service) {
     const stateMap = {
-      running: "Active",
-      stopped: "Stopped",
-      deploying: "Deploying",
-      error: "Error",
-      pending: "Pending",
+      running: _t("Active"),
+      stopped: _t("Stopped"),
+      deploying: _t("Deploying"),
+      error: _t("Error"),
+      pending: _t("Pending"),
     };
-    return stateMap[service.state] || service.state || "Unknown";
+    return stateMap[service.state] || service.state || _t("Unknown");
   }
 
   getServiceStateClass(service) {
@@ -102,18 +104,9 @@ export class SubscribedServicesModal extends Component {
     return classMap[service.state] || "o_woow_svc_status_gray";
   }
 
+  /** 依 Odoo 使用者語系格式化日期。 */
   formatDate(dateStr) {
-    if (!dateStr) return "-";
-    try {
-      const d = new Date(dateStr);
-      return d.toLocaleDateString("en-US", {
-        year: "numeric",
-        month: "short",
-        day: "numeric",
-      });
-    } catch {
-      return dateStr;
-    }
+    return formatUserDate(dateStr, "-");
   }
 
   onBackdropClick(ev) {

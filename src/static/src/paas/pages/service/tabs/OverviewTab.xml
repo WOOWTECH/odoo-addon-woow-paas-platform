@@ -41,10 +41,12 @@
                                  拿到 302，卡的是本機負面快取，純等待不會好）。 -->
                             <t t-if="props.service.public_url_dns_unverified">
                                 <small class="o_woow_dns_hint text-muted d-block">
-                                    公開網址尚未驗證可解析。DNS 記錄通常在數十秒內生效；
-                                    若稍後仍打不開，請清除本機 DNS 快取或重新連線網路
-                                    （例如關閉再開啟 VPN）——「查不到」的快取不會因為
-                                    記錄後來建好而自動失效。
+                                    The public URL is not yet verified as resolvable. DNS records usually
+                                    take effect within tens of seconds; if the address still does not load
+                                    after that, clear your local DNS cache or reconnect your network (for
+                                    example, turn your VPN off and on again) — a cached "not found" answer
+                                    will not expire on its own just because the record has since been
+                                    created.
                                 </small>
                             </t>
                         </span>
@@ -102,7 +104,7 @@
                                  不重排版面。 -->
                             <t t-if="props.service.last_release_sync_at">
                                 <small class="o_woow_sync_hint text-muted d-block">
-                                    最後同步於 <t t-esc="props.service.last_release_sync_at"/>
+                                    Last synced: <t t-esc="formatSyncedAt(props.service.last_release_sync_at)"/>
                                 </small>
                             </t>
                         </span>

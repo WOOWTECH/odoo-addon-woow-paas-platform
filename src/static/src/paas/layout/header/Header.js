@@ -1,5 +1,6 @@
 /** @odoo-module **/
 import { Component, onMounted, useState } from "@odoo/owl";
+import { _t } from "@web/core/l10n/translation";
 import { billingService } from "../../services/billing_service";
 import { profileService } from "../../services/profile_service";
 import { breadcrumbService } from "../../services/breadcrumb_service";
@@ -63,19 +64,19 @@ export class Header extends Component {
         // 詳情頁若已 publish 帶記錄名的軌跡，優先採用（Home 一律自動補在最前）。
         const trail = this.breadcrumbService.trailFor(route);
         if (trail) {
-            return [{ label: "Home", path: "dashboard" }, ...trail];
+            return [{ label: _t("Home"), path: "dashboard" }, ...trail];
         }
 
         // Fallback：未 publish 軌跡的頁面（list / billing / settings 等）沿用
         // 依 routeName 推算的泛用麵包屑。
-        const items = [{ label: "Home", path: "dashboard" }];
+        const items = [{ label: _t("Home"), path: "dashboard" }];
         if (WORKSPACE_ROUTES.includes(route)) {
-            items.push({ label: "Workspaces", path: "workspaces" });
+            items.push({ label: _t("Workspaces"), path: "workspaces" });
         } else if (SUPPORT_SUB_ROUTES.includes(route)) {
-            items.push({ label: "Projects", path: "projects" });
+            items.push({ label: _t("Projects"), path: "projects" });
         }
         const currentRoute = this.props.router.routes.find(r => r.routeName === route);
-        const currentLabel = currentRoute ? currentRoute.name : "Dashboard";
+        const currentLabel = currentRoute ? currentRoute.name : _t("Dashboard");
         items.push({ label: currentLabel, path: null });
         return items;
     }

@@ -2,7 +2,7 @@ import ipaddress
 import secrets
 from urllib.parse import urlsplit
 
-from odoo import api, fields, models
+from odoo import _, api, fields, models
 from odoo.exceptions import ValidationError
 from werkzeug.security import check_password_hash, generate_password_hash
 
@@ -114,12 +114,12 @@ class OAuthClient(models.Model):
                 continue
             if record.client_secret_hash:
                 raise ValidationError(
-                    "Public clients must not have a client_secret. "
-                    "Public clients rely on PKCE for authorization-code security."
+                    _("Public clients must not have a client_secret. "
+                      "Public clients rely on PKCE for authorization-code security.")
                 )
             if not record.require_pkce:
                 raise ValidationError(
-                    "Public clients must have 'Require PKCE' enabled."
+                    _("Public clients must have 'Require PKCE' enabled.")
                 )
             grant_set = {
                 g.strip()
@@ -128,8 +128,8 @@ class OAuthClient(models.Model):
             }
             if 'client_credentials' in grant_set:
                 raise ValidationError(
-                    "Public clients cannot use the client_credentials grant type. "
-                    "Use a confidential client for server-to-server access."
+                    _("Public clients cannot use the client_credentials grant type. "
+                      "Use a confidential client for server-to-server access.")
                 )
 
     @api.constrains('redirect_uri_match_mode', 'require_pkce')
@@ -141,9 +141,9 @@ class OAuthClient(models.Model):
         for record in self:
             if record.redirect_uri_match_mode == 'ha_callback' and not record.require_pkce:
                 raise ValidationError(
-                    "redirect_uri_match_mode='ha_callback' relaxes the "
-                    "redirect_uri host check and depends on PKCE to bound the "
-                    "open-redirect surface. Enable 'Require PKCE'."
+                    _("redirect_uri_match_mode='ha_callback' relaxes the "
+                      "redirect_uri host check and depends on PKCE to bound the "
+                      "open-redirect surface. Enable 'Require PKCE'.")
                 )
 
     def set_secret(self, plain_secret: str) -> None:
@@ -151,7 +151,7 @@ class OAuthClient(models.Model):
         self.ensure_one()
         if self.client_type == 'public':
             raise ValidationError(
-                "Cannot set a client_secret on a public client."
+                _("Cannot set a client_secret on a public client.")
             )
         self.client_secret_hash = generate_password_hash(plain_secret)
 
@@ -404,7 +404,7 @@ class OAuthClient(models.Model):
         self.ensure_one()
         if self.client_type == 'public':
             raise ValidationError(
-                "Public clients have no secret to regenerate."
+                _("Public clients have no secret to regenerate.")
             )
         new_secret = secrets.token_urlsafe(48)
         self.set_secret(new_secret)

@@ -144,13 +144,13 @@ class Skill(models.Model):
         for record in self:
             if record.scope == 'user' and not record.project_id:
                 raise ValidationError(
-                    "User-scope skill '%s' must be linked to a project "
-                    "(scope='user' requires project_id)." % record.name
+                    _("User-scope skill '%s' must be linked to a project "
+                      "(scope='user' requires project_id).") % record.name
                 )
             if record.scope == 'system' and record.project_id:
                 raise ValidationError(
-                    "System-scope skill '%s' must not be linked to a project "
-                    "(scope='system' requires project_id=NULL)." % record.name
+                    _("System-scope skill '%s' must not be linked to a project "
+                      "(scope='system' requires project_id=NULL).") % record.name
                 )
 
     # ------------------------------------------------------------------ #
@@ -181,12 +181,12 @@ class Skill(models.Model):
             for skill in self:
                 if 'scope' in vals and vals['scope'] != skill.scope:
                     raise AccessError(
-                        "Only administrators can change a skill's scope."
+                        _("Only administrators can change a skill's scope.")
                     )
                 if 'project_id' in vals \
                         and vals.get('project_id') != skill.project_id.id:
                     raise AccessError(
-                        "Only administrators can change a skill's project."
+                        _("Only administrators can change a skill's project.")
                     )
         # Re-point (admin path): capture pre-write group keys — after
         # super().write the record sits in the NEW group and the OLD group
@@ -270,8 +270,8 @@ class Skill(models.Model):
         self.ensure_one()
         if self.state not in ('draft', 'deprecated'):
             raise UserError(
-                "Skill '%s' v%s cannot be published from state '%s' "
-                "(only draft / deprecated)."
+                _("Skill '%s' v%s cannot be published from state '%s' "
+                  "(only draft / deprecated).")
                 % (self.name, self.version, self.state)
             )
         self.write({
@@ -286,8 +286,8 @@ class Skill(models.Model):
         self.ensure_one()
         if self.state != 'published':
             raise UserError(
-                "Skill '%s' v%s cannot be deprecated from state '%s' "
-                "(only published)." % (self.name, self.version, self.state)
+                _("Skill '%s' v%s cannot be deprecated from state '%s' "
+                  "(only published).") % (self.name, self.version, self.state)
             )
         self.write({'state': 'deprecated'})
         self._recompute_is_latest()
@@ -302,7 +302,7 @@ class Skill(models.Model):
         self.ensure_one()
         if self.state == 'archived':
             raise UserError(
-                "Skill '%s' v%s is already archived."
+                _("Skill '%s' v%s is already archived.")
                 % (self.name, self.version)
             )
         self.write({'state': 'archived'})

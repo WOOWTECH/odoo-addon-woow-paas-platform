@@ -1,5 +1,6 @@
 /** @odoo-module **/
 import { Component, useState, onMounted } from "@odoo/owl";
+import { _t } from "@web/core/l10n/translation";
 import { WoowCard } from "../../components/card/WoowCard";
 import { WoowIcon } from "../../components/icon/WoowIcon";
 import { WoowButton } from "../../components/button/WoowButton";
@@ -31,7 +32,7 @@ export class SupportProjectsPage extends Component {
             await supportService.fetchAllProjects();
         } catch (err) {
             console.error("Failed to load support projects:", err);
-            this.supportService.error = err.message || "Failed to load projects";
+            this.supportService.error = err.message || _t("Failed to load projects");
         }
     }
 
@@ -76,9 +77,9 @@ export class SupportProjectsPage extends Component {
 
     get statusFilters() {
         return [
-            { key: "all", label: "All" },
-            { key: "active", label: "Active" },
-            { key: "completed", label: "Completed" },
+            { key: "all", label: _t("All") },
+            { key: "active", label: _t("Active") },
+            { key: "completed", label: _t("Completed") },
         ];
     }
 

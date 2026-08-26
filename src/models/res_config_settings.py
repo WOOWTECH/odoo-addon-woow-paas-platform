@@ -40,10 +40,12 @@ class ResConfigSettings(models.TransientModel):
         string='Deploy Environment',
         config_parameter='woow_paas_platform.deploy_env',
         default='prod',
-        help='部署環境 (prod / stg)。stg 時 SA canonical_name → paas-stg-sa- '
-             '(tunnel name / DNS comment / policy name 隨之帶 env token)；prod '
-             '維持 paas-sa- (空 token)。用 Selection 限白名單，避免誤填非法 DNS '
-             'name；獨立於 namespace_prefix（禁隱式推導）。',
+        help='Deployment environment (prod / stg). On stg the SA canonical_name '
+             'becomes paas-stg-sa- (tunnel name / DNS comment / policy name '
+             'carry the env token accordingly); prod stays paas-sa- (empty '
+             'token). A Selection keeps this to a whitelist so an invalid DNS '
+             'name cannot be typed in; kept independent of namespace_prefix (no '
+             'implicit derivation).',
     )
 
     # Security Access
@@ -142,26 +144,32 @@ class ResConfigSettings(models.TransientModel):
     # 新增限量商品時：這裡補一組欄位、`cloud_app_template._DEFAULT_GLOBAL_INSTANCE_CAPS`
     # 補一筆、`hooks.py` 的 `_CONFIG_PARAMETERS` 補兩個 key。守衛本身不用動。
     woow_haos_global_instance_cap = fields.Integer(
-        string='HAOS 全域實例上限',
+        string='HAOS Global Instance Cap',
         config_parameter='woow_paas_platform.global_instance_cap.haos',
         # 未設定時畫面顯示**內建預設**而不是 0：`get_values` 在 param 缺值時回退到
         # 欄位 default，而守衛缺值時走的正是內建預設 —— 兩邊對齊才不會出現「畫面
         # 說 0（看起來像不限）、實際擋在 8」的矛盾（PR #517 覆核）。
         default=lambda self: _DEFAULT_GLOBAL_INSTANCE_CAPS.get('haos', 0),
-        help='整個平台最多同時存在幾台 HAOS（跨所有帳號）。達到上限後商品仍會'
-             '顯示在應用商店，但標示為「已售罄」且不能下單。'
-             '留空＝使用程式內建的預設上限（不是「不限」）。'
-             '⚠ 填 0 會被 Odoo 存成「未設定」，因此等同留空、回到內建預設；'
-             '要解除限量請填一個大於實際供給天花板的數字。'
-             '停權（suspended）與錯誤（error）的實例照樣佔名額，'
-             '只有刪除中（deleting）不佔。',
+        help='How many HAOS instances may exist across the whole platform at '
+             'once (all accounts combined). Once the cap is reached the product '
+             'is still shown in the app store, but marked "No slots available" '
+             'and cannot be ordered. Leave empty = use the built-in default cap '
+             '(which is NOT "unlimited"). ⚠ Entering 0 is stored by Odoo as '
+             '"not set", so it is the same as leaving it empty and falls back '
+             'to the built-in default; to lift the limit, enter a number above '
+             'the real supply ceiling. Suspended and error instances still take '
+             'up a slot; only instances being deleted (deleting) do not.',
     )
     woow_haos_sales_paused = fields.Boolean(
-        string='HAOS 暫停販售',
+        string='HAOS Sales Paused',
         config_parameter='woow_paas_platform.sales_paused.haos',
-        help='營運手動停售：不論還剩幾個名額都不再收單。與「已售罄」是兩件事'
-             '（售罄是達到上限後自動推導出來的），前台會分別顯示。'
-             '預設關閉——本開關只擋新下單，不影響任何已開通的服務。',
+        help='Manual sales stop by operations: no new orders are taken no '
+             'matter how many slots remain. Not the same thing as '
+             '"No slots available" (which is derived automatically once '
+             'the cap is reached); the '
+             'front end shows the two separately. Off by default — this switch '
+             'only blocks new orders and does not affect any service already '
+             'provisioned.',
     )
 
     # Subscription Lifecycle Settings

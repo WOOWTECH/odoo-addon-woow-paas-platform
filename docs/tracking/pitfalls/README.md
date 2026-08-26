@@ -8,7 +8,7 @@
 2. **評估機械化**（`/retro` skill 的分流，按強度優先）：可 grep/parse 判定 → `scripts/audit/repo-lint.py` 加 check；綁特定路徑 → `.claude/hooks/pattern-guard-map.json` append；皆不可 → 狀態欄留 `—`。
 3. 教訓已被 code guard / gate 取代時，更新狀態欄並讓 doc 記錄 guard 位置（file:line）。
 
-## 索引（42 條）
+## 索引（44 條）
 
 | pitfall | 一行症狀 | 機械化狀態 |
 | --- | --- | --- |
@@ -34,6 +34,7 @@
 | [floor-env-relative-path-empty-ext-addons](floor-env-relative-path-empty-ext-addons.md) | Floor `.env` 相對路徑恰好掛到存在但空的目錄騙過 create.sh → module 靜默裝不起來；Floor 一律絕對路徑 | — |
 | [httpcase-orm-flush-ordering-raw-sql](httpcase-orm-flush-ordering-raw-sql.md) | HttpCase 內 raw SQL 造的 drift sample 被 ORM buffered write flush 覆蓋 | — |
 | [legacy-endpoint-scope-blindness](legacy-endpoint-scope-blindness.md) | plan AC 只 cover 新 endpoint，legacy 同源 code path 漏裝同層 security helper | — |
+| [luxon-fromsql-rejects-t-and-invalid-is-truthy](luxon-fromsql-rejects-t-and-invalid-is-truthy.md) | Odoo 的 `deserializeDate*` 內部走 `DateTime.fromSQL`，那支**只吃 SQL 空格格式**、對 `.isoformat()` 的 `T` 版一律 invalid；而 luxon 的 invalid DateTime 是 **truthy**、`formatDate` 只在 `!value` 早退 ⇒ 畫面印出英文字串 `Invalid DateTime`（不是空白、不是崩潰），在中文介面裡長得像 i18n 漏網 | `src/tests/test_locale_formatting_guard_107.py`（LOC.0–LOC.3；守 call site 回流，**守不住 helper 內部被改壞**——本 repo 無可執行 JS 的測試基礎設施）|
 | [netpol-enforced-except-fresh-pod-startup-window-k3s-kube-router](netpol-enforced-except-fresh-pod-startup-window-k3s-kube-router.md) | NP 對新建 pod 有啟動編程空窗 → 用臨時 pod 測 NP 會系統性誤判「控制器全毀」 | — |
 | [odoo-assertraises-savepoint-rollback](odoo-assertraises-savepoint-rollback.md) | `assertRaises` 在進入 with 區塊前開 flushing savepoint，例外穿出時 `ROLLBACK TO SAVEPOINT` ＋ `cr.clear()`⇒ 區塊**之後**所有「例外之後 DB 長怎樣」的斷言，量到的是區塊**之前**的值。兩種相反症狀：回捲值恰好等於期望值 ⇒ **假綠**（RED 階段就綠、被寫成「守線已成立」）；修法自己寫進 DB 的 `state` / `error_message` 也在區塊內 ⇒ **永遠不可能綠**，訊息長得像「你的修法沒把值寫進去」而那是假的 | pattern-guard（`test-discipline` class）。repo-lint gate 已評估**否決**：判準要知道「這個值是不是在區塊內被寫的」＝動態資訊，靜態 AST 判不出 ⇒ 假陰性（窄判準抓不到 #822 那 5 條——`assertRaises` 巢在 `with patch(...)` 裡、斷言落在外層語句串）與假陽性（寬判準命中 123 個 method，含 A1 這種**正確**用法）兩個方向都必然錯；理由與實測數字見 doc 內「為什麼機械化狀態不是 repo-lint gate」 |
 | [odoo-object-button-return-value-is-an-action](odoo-object-button-return-value-is-an-action.md) | 被 XML `<button type="object">` 綁著的 method 改回傳 dict → web client 當 action 執行、缺 `type` 就 throw（bool/None 才安全）；危險點是 **Python 呼叫端的完整盤點看不到 XML 這一端**；配套：改成 raise 則例外逸出 dispatcher ⇒ 不 commit ⇒ 連 except 裡剛寫的稽核紀錄一起回捲 | —（gate 已評估**否決**：AST 判不出變數 return ⇒ 必然大量漏抓 ⇒ 假安全感比沒 gate 更糟；理由見 doc 內「為什麼機械化狀態是 —」） |
@@ -41,6 +42,7 @@
 | [operator-cf-access-delete-202-mock-contract](operator-cf-access-delete-202-mock-contract.md) | operator 包 CF Access 的 DELETE 白名單寫死 200，真 CF 回 202 → teardown 中斷孤兒 policy；mock 狀態碼要對齊真實 API | pattern-guard（paas-operator class） |
 | [operator-route-none-conflates-disabled-and-failed](operator-route-none-conflates-disabled-and-failed.md) | 呼叫端把「沒拿到 route」當成失敗 ⇒ 在沒開 Cloudflare 的環境（`cloudflare_enabled` 預設 false）把**每一次部署**翻成 error；缺席同時代表「功能沒開」與「舊 operator 沒這個欄位」，兩者都不是故障 | pattern-guard（paas-operator ＋ model-write-guard class）＋ repo-lint `route-contract-golden`（守**另一個性質**：wire 形狀改了 golden 沒重產）。⚠「呼叫端把缺席當失敗」那一半的 gate 已評估**否決**（等價寫法太多必然漏抓）；指紋 gate 也**不涵蓋** `_create_cloudflare_route` 的行為漂移。兩條都擋不住 merge（repo-lint 非 required）。逐項見 doc 內「守線」段 |
 | [orm-test-green-endpoint-leak-blindness](orm-test-green-endpoint-leak-blindness.md) | backend ORM test 全綠遮蔽 controller layer sudo bypass；ORM 綠 ≠ endpoint secure | repo-lint gate（controller-sudo）+ pattern-guard |
+| [owl-component-tag-translatable-attrs-dropped](owl-component-tag-translatable-attrs-dropped.md) | component tag（大寫開頭／`t-component`／`t-set-slot`）上把那 9 個可翻譯屬性寫成**字面字串** ⇒ Odoo 抽取器 9/9 全部抽不到；`label="'Confirm'"` 畫面照常顯示、`.pot` 裡沒有這句話 ⇒ 永遠不被翻譯，而成功與失敗在 diff 上長得一模一樣（無引號那版是 runtime SyntaxError，反而看得到）；正解 `label.translate="Confirm"`（裸文案） | repo-lint gate（owl-template 第 (b) 半）＋ pattern-guard |
 | [owl-template-crash-class-syntax](owl-template-crash-class-syntax.md) | OWL template 語法錯誤（component `t-att-`、`.enter` modifier）過三層測試、runtime 全站白屏 | repo-lint gate（owl-template） |
 | [plan-vs-odoo-schema-mismatch](plan-vs-odoo-schema-mismatch.md) | plan 引用不存在的 Odoo 欄位——impl 前對 schema | — |
 | [provision-e2e-green-on-chart-defaults](provision-e2e-green-on-chart-defaults.md) | provision e2e 綠但 release user-supplied values 空——驗證跑在 chart 預設上、平台 pin 傳導鏈從未被驗（07-13 假 PASS；0.2.x fail-loud 佔位 tag 逼現形） | 回歸測試（`test_provision_writes_template_helm_values`）；class 級驗法＝e2e 斷言 helm get values 非空且含平台獨有值 |

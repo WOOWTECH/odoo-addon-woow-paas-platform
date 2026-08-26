@@ -13,18 +13,21 @@ class ShSubscriptionPlanCsSpec(models.Model):
 
     cs_vcpu = fields.Integer(
         string='CS vCPU', default=0,
-        help='部署主容器 CPU（顆）；0＝沿用 template 預設。')
+        help='CPU cores for the deployment main container; '
+             '0 = fall back to the template default.')
     cs_ram_gb = fields.Float(
         string='CS RAM (GB)', default=0,
-        help='部署主容器記憶體（GB）；0＝沿用 template 預設。')
+        help='Memory (GB) for the deployment main container; '
+             '0 = fall back to the template default.')
     cs_storage_gb = fields.Integer(
         string='CS Storage (GB)', default=0,
-        help='PVC 容量（GB）；0＝沿用 template 預設。')
+        help='PVC size (GB); 0 = fall back to the template default.')
     cs_odoo_workers = fields.Integer(
         string='Odoo workers', default=0,
-        help='Odoo 專屬：worker process 數（tier-aware）；'
-             '0＝沿用 template init script 預設（workers=0 threaded）。'
-             'n8n 等單 process 服務一律留 0。')
+        help='Odoo only: number of worker processes (tier-aware); '
+             '0 = fall back to the template init script default '
+             '(workers=0, threaded). Always leave 0 for single-process '
+             'services such as n8n.')
 
     @api.constrains('cs_odoo_workers', 'cs_ram_gb')
     def _check_workers_require_ram(self):
@@ -32,8 +35,9 @@ class ShSubscriptionPlanCsSpec(models.Model):
         for plan in self:
             if plan.cs_odoo_workers > 0 and not plan.cs_ram_gb:
                 raise ValidationError(_(
-                    'cs_odoo_workers 大於 0 時必須同時設定 cs_ram_gb，'
-                    '否則無法計算 per-worker 記憶體上限（OOM 風險）。'))
+                    'When cs_odoo_workers is greater than 0, cs_ram_gb must '
+                    'be set as well; otherwise the per-worker memory limit '
+                    'cannot be computed (OOM risk).'))
 
     # 裁定①（2026-07-12 by Eugene）：T1 storage 採 matrix 值（odoo 20/n8n 10）＝
     # 刻意 tier 提升（>現行 min）。cs_vcpu/cs_ram_gb 兩維＝template.min_*。

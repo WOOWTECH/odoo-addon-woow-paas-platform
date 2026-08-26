@@ -19,6 +19,8 @@
 1	fn:check_kubectl_ns_whitelist_sync
 1	fn:check_mixin_subscription_sudo
 1	fn:check_one_time_credential_render
+1	fn:check_owl_component_translatable_attr
+1	fn:check_owl_relative_import
 1	fn:check_owl_template
 1	fn:check_pattern_doc_registry
 1	fn:check_poll_release_facts_single_source
@@ -54,6 +56,7 @@
 1	rule:kubectl-ns-whitelist-sync
 1	rule:mixin-subscription-sudo
 1	rule:one-time-credential-render
+1	rule:owl-relative-import
 1	rule:owl-template
 1	rule:pattern-doc-registry
 1	rule:poll-release-facts-single-source

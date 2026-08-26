@@ -3,7 +3,7 @@ import json
 import logging
 from urllib.parse import urlparse
 
-from odoo import api, fields, models
+from odoo import _, api, fields, models
 from odoo.exceptions import AccessError, ValidationError
 
 _logger = logging.getLogger(__name__)
@@ -122,13 +122,13 @@ class McpServer(models.Model):
         for record in self:
             if record.scope == 'user' and not record.project_id:
                 raise ValidationError(
-                    "User-scope MCP server '%s' must be linked to a project "
-                    "(scope='user' requires project_id)." % record.name
+                    _("User-scope MCP server '%s' must be linked to a project "
+                      "(scope='user' requires project_id).") % record.name
                 )
             if record.scope == 'system' and record.project_id:
                 raise ValidationError(
-                    "System-scope MCP server '%s' must not be linked to a "
-                    "project (scope='system' requires project_id=NULL)."
+                    _("System-scope MCP server '%s' must not be linked to a "
+                      "project (scope='system' requires project_id=NULL).")
                     % record.name
                 )
 
@@ -162,9 +162,9 @@ class McpServer(models.Model):
                 continue
             if not self._is_in_cluster_url(record.url):
                 raise ValidationError(
-                    "Sidecar-backed MCP server '%s' must use an in-cluster "
-                    "URL (http scheme + hostname ending in "
-                    "'.svc.cluster.local'); got: %s"
+                    _("Sidecar-backed MCP server '%s' must use an in-cluster "
+                      "URL (http scheme + hostname ending in "
+                      "'.svc.cluster.local'); got: %s")
                     % (record.name, record.url or '')
                 )
 
@@ -216,12 +216,12 @@ class McpServer(models.Model):
             for server in self:
                 if 'scope' in vals and vals['scope'] != server.scope:
                     raise AccessError(
-                        "Only administrators can change an MCP server's scope."
+                        _("Only administrators can change an MCP server's scope.")
                     )
                 if 'project_id' in vals \
                         and vals.get('project_id') != server.project_id.id:
                     raise AccessError(
-                        "Only administrators can change an MCP server's project."
+                        _("Only administrators can change an MCP server's project.")
                     )
         result = super().write(vals)
         # #111 parity: mcp snapshot 只序列化 server 的 name/url/transport

@@ -10,7 +10,7 @@ from datetime import datetime
 from typing import Any
 from urllib.parse import urlparse
 
-from odoo import fields
+from odoo import _, fields
 from odoo.exceptions import (
     AccessDenied, AccessError, MissingError, UserError, ValidationError,
 )
@@ -236,7 +236,7 @@ class PaasController(HiddenChainMixin, Controller):
         elif action == 'create':
             return self._create_workspace(name, description)
         else:
-            return {'success': False, 'error': f'Unknown action: {action}'}
+            return {'success': False, 'error': _('Unknown action: %(action)s', action=action)}
 
     @route("/api/workspaces/<int:workspace_id>", auth="user", methods=["POST"], type="json")
     def api_workspace_detail(self, workspace_id: int, action: str = 'get', name: str | None = None, description: str | None = None, **kwargs: Any) -> dict[str, Any]:
@@ -266,7 +266,7 @@ class PaasController(HiddenChainMixin, Controller):
         elif action == 'delete':
             return self._delete_workspace(workspace_id)
         else:
-            return {'success': False, 'error': f'Unknown action: {action}'}
+            return {'success': False, 'error': _('Unknown action: %(action)s', action=action)}
 
     def _list_workspaces(self) -> dict[str, Any]:
         """
@@ -343,7 +343,7 @@ class PaasController(HiddenChainMixin, Controller):
         description = (description or '').strip()
 
         if not name:
-            return {'success': False, 'error': 'Workspace name is required'}
+            return {'success': False, 'error': _('Workspace name is required')}
 
         Workspace = request.env['woow_paas_platform.workspace']
 
@@ -377,7 +377,7 @@ class PaasController(HiddenChainMixin, Controller):
                 })
         except Exception as e:
             _logger.error("Error creating workspace: %s\n%s", str(e), traceback.format_exc())
-            return {'success': False, 'error': 'An error occurred while creating the workspace. Please try again.'}
+            return {'success': False, 'error': _('An error occurred while creating the workspace. Please try again.')}
 
         # 回應組裝**移出 try**（#525 A2 點名的第二個殘留來源）：這裡全是純讀取，
         # 屬於「已經建立成功之後」的工作。留在 try 內的話，連序列化／讀取錯誤都會
@@ -426,13 +426,13 @@ class PaasController(HiddenChainMixin, Controller):
             - 'Workspace not found or access denied' if ID doesn't exist or no access
         """
         if not workspace_id:
-            return {'success': False, 'error': 'Workspace ID is required'}
+            return {'success': False, 'error': _('Workspace ID is required')}
 
         # Validate workspace_id is an integer
         try:
             workspace_id = int(workspace_id)
         except (TypeError, ValueError):
-            return {'success': False, 'error': 'Workspace not found or access denied'}
+            return {'success': False, 'error': _('Workspace not found or access denied')}
 
         user = request.env.user
         Workspace = request.env['woow_paas_platform.workspace']
@@ -442,7 +442,7 @@ class PaasController(HiddenChainMixin, Controller):
         # Combine existence and access check to prevent information leakage
         access = workspace.check_user_access(user) if workspace.exists() else False
         if not access:
-            return {'success': False, 'error': 'Workspace not found or access denied'}
+            return {'success': False, 'error': _('Workspace not found or access denied')}
 
         return {
             'success': True,
@@ -488,13 +488,13 @@ class PaasController(HiddenChainMixin, Controller):
             - 'Workspace name cannot be empty' if name is empty string
         """
         if not workspace_id:
-            return {'success': False, 'error': 'Workspace ID is required'}
+            return {'success': False, 'error': _('Workspace ID is required')}
 
         # Validate workspace_id is an integer
         try:
             workspace_id = int(workspace_id)
         except (TypeError, ValueError):
-            return {'success': False, 'error': 'Workspace not found or access denied'}
+            return {'success': False, 'error': _('Workspace not found or access denied')}
 
         user = request.env.user
         Workspace = request.env['woow_paas_platform.workspace']
@@ -504,13 +504,13 @@ class PaasController(HiddenChainMixin, Controller):
         # Combine existence and access check to prevent information leakage
         access = workspace.check_user_access(user, required_role=ROLE_ADMIN) if workspace.exists() else False
         if not access:
-            return {'success': False, 'error': 'Workspace not found or access denied'}
+            return {'success': False, 'error': _('Workspace not found or access denied')}
 
         update_vals = {}
         if name is not None:
             name = name.strip()
             if not name:
-                return {'success': False, 'error': 'Workspace name cannot be empty'}
+                return {'success': False, 'error': _('Workspace name cannot be empty')}
             update_vals['name'] = name
         if description is not None:
             update_vals['description'] = description.strip()
@@ -550,13 +550,13 @@ class PaasController(HiddenChainMixin, Controller):
             - 'Workspace not found or access denied' if ID doesn't exist or not owner
         """
         if not workspace_id:
-            return {'success': False, 'error': 'Workspace ID is required'}
+            return {'success': False, 'error': _('Workspace ID is required')}
 
         # Validate workspace_id is an integer
         try:
             workspace_id = int(workspace_id)
         except (TypeError, ValueError):
-            return {'success': False, 'error': 'Workspace not found or access denied'}
+            return {'success': False, 'error': _('Workspace not found or access denied')}
 
         user = request.env.user
         Workspace = request.env['woow_paas_platform.workspace']
@@ -565,10 +565,10 @@ class PaasController(HiddenChainMixin, Controller):
 
         # Combine existence and ownership check to prevent information leakage
         if not workspace.exists() or workspace.owner_id.id != user.id:
-            return {'success': False, 'error': 'Workspace not found or access denied'}
+            return {'success': False, 'error': _('Workspace not found or access denied')}
 
         workspace.action_archive()
-        return {'success': True, 'message': 'Workspace archived'}
+        return {'success': True, 'message': _('Workspace archived')}
 
     # ==================== Workspace Members API ====================
 
@@ -591,7 +591,7 @@ class PaasController(HiddenChainMixin, Controller):
         elif action == 'invite':
             return self._invite_member(workspace_id, email, role)
         else:
-            return {'success': False, 'error': f'Unknown action: {action}'}
+            return {'success': False, 'error': _('Unknown action: %(action)s', action=action)}
 
     @route("/api/workspaces/<int:workspace_id>/members/<int:access_id>", auth="user", methods=["POST"], type="json")
     def api_workspace_member(self, workspace_id: int, access_id: int, action: str = 'update_role', role: str | None = None, **kwargs: Any) -> dict[str, Any]:
@@ -612,7 +612,7 @@ class PaasController(HiddenChainMixin, Controller):
         elif action == 'remove':
             return self._remove_member(workspace_id, access_id)
         else:
-            return {'success': False, 'error': f'Unknown action: {action}'}
+            return {'success': False, 'error': _('Unknown action: %(action)s', action=action)}
 
     def _list_members(self, workspace_id: int) -> dict[str, Any]:
         """
@@ -647,7 +647,7 @@ class PaasController(HiddenChainMixin, Controller):
         # Combine existence and access check to prevent information leakage
         access = workspace.check_user_access(user) if workspace.exists() else False
         if not access:
-            return {'success': False, 'error': 'Workspace not found or access denied'}
+            return {'success': False, 'error': _('Workspace not found or access denied')}
 
         members = []
         for member_access in workspace.access_ids:
@@ -702,23 +702,23 @@ class PaasController(HiddenChainMixin, Controller):
         # Combine existence and access check to prevent information leakage
         access = workspace.check_user_access(user, required_role=ROLE_ADMIN) if workspace.exists() else False
         if not access:
-            return {'success': False, 'error': 'Workspace not found or access denied'}
+            return {'success': False, 'error': _('Workspace not found or access denied')}
 
         email = (email or '').strip().lower()
         role = role or ROLE_USER
 
         if not email:
-            return {'success': False, 'error': 'Email is required'}
+            return {'success': False, 'error': _('Email is required')}
 
         if role not in ASSIGNABLE_ROLES:
-            return {'success': False, 'error': 'Invalid role'}
+            return {'success': False, 'error': _('Invalid role')}
 
         # Find user by email
         ResUsers = request.env['res.users'].sudo()
         target_user = ResUsers.search([('email', '=ilike', email)], limit=1)
 
         if not target_user:
-            return {'success': False, 'error': f'No user found with email: {email}'}
+            return {'success': False, 'error': _('No user found with email: %(email)s', email=email)}
 
         # Check if already a member
         existing = WorkspaceAccess.search([
@@ -727,7 +727,7 @@ class PaasController(HiddenChainMixin, Controller):
         ], limit=1)
 
         if existing:
-            return {'success': False, 'error': 'User is already a member of this workspace'}
+            return {'success': False, 'error': _('User is already a member of this workspace')}
 
         # #525 A3：唯一的寫入是這行 create，但例外被下面的 `except` 吃掉後不會傳播
         # 到框架層 → request 正常結束 → transaction 照常 commit → 那一列授權留下來：
@@ -754,7 +754,7 @@ class PaasController(HiddenChainMixin, Controller):
                 })
         except Exception as e:
             _logger.error("Error inviting member: %s\n%s", str(e), traceback.format_exc())
-            return {'success': False, 'error': 'An error occurred while inviting the member. Please try again.'}
+            return {'success': False, 'error': _('An error occurred while inviting the member. Please try again.')}
 
         # 回應組裝移出 try，與 `_create_workspace` 對齊。**這一半今天沒有對應的
         # 測試，因為它造不出可達的失敗**：組裝只讀 `new_access.id`（純記憶體、
@@ -806,21 +806,21 @@ class PaasController(HiddenChainMixin, Controller):
         # Combine existence and access check to prevent information leakage
         access = workspace.check_user_access(user, required_role=ROLE_ADMIN) if workspace.exists() else False
         if not access:
-            return {'success': False, 'error': 'Workspace not found or access denied'}
+            return {'success': False, 'error': _('Workspace not found or access denied')}
 
         if not access_id:
-            return {'success': False, 'error': 'Access ID is required'}
+            return {'success': False, 'error': _('Access ID is required')}
 
         target_access = WorkspaceAccess.browse(access_id)
         if not target_access.exists() or target_access.workspace_id.id != workspace_id:
-            return {'success': False, 'error': 'Member not found'}
+            return {'success': False, 'error': _('Member not found')}
 
         if role not in ASSIGNABLE_ROLES:
-            return {'success': False, 'error': 'Invalid role'}
+            return {'success': False, 'error': _('Invalid role')}
 
         # Cannot change owner's role directly
         if target_access.role == ROLE_OWNER:
-            return {'success': False, 'error': 'Cannot change owner role. Use transfer ownership instead.'}
+            return {'success': False, 'error': _('Cannot change owner role. Use transfer ownership instead.')}
 
         target_access.write({'role': role})
         return {
@@ -855,7 +855,7 @@ class PaasController(HiddenChainMixin, Controller):
             - 'Cannot remove the workspace owner' if target is owner
         """
         if not access_id:
-            return {'success': False, 'error': 'Access ID is required'}
+            return {'success': False, 'error': _('Access ID is required')}
 
         user = request.env.user
         Workspace = request.env['woow_paas_platform.workspace']
@@ -866,18 +866,18 @@ class PaasController(HiddenChainMixin, Controller):
         # Combine existence and access check to prevent information leakage
         access = workspace.check_user_access(user, required_role=ROLE_ADMIN) if workspace.exists() else False
         if not access:
-            return {'success': False, 'error': 'Workspace not found or access denied'}
+            return {'success': False, 'error': _('Workspace not found or access denied')}
 
         target_access = WorkspaceAccess.browse(access_id)
         if not target_access.exists() or target_access.workspace_id.id != workspace_id:
-            return {'success': False, 'error': 'Member not found'}
+            return {'success': False, 'error': _('Member not found')}
 
         # Cannot remove owner
         if target_access.role == ROLE_OWNER:
-            return {'success': False, 'error': 'Cannot remove the workspace owner'}
+            return {'success': False, 'error': _('Cannot remove the workspace owner')}
 
         target_access.unlink()
-        return {'success': True, 'message': 'Member removed'}
+        return {'success': True, 'message': _('Member removed')}
 
     # ==================== Cloud Templates API ====================
 
@@ -944,7 +944,7 @@ class PaasController(HiddenChainMixin, Controller):
         # #471 B 組：曝光層 by-id 判準留 is_hidden（未上架商品的規格頁不可讀）。
         # 注意這擋的是 **template**，不是既有 service——後者判 conceal_instances。
         if not template.exists() or not template.is_active or template.is_hidden:
-            return {'success': False, 'error': 'Template not found'}
+            return {'success': False, 'error': _('Template not found')}
 
         return {
             'success': True,
@@ -1046,7 +1046,7 @@ class PaasController(HiddenChainMixin, Controller):
     def api_odoo_addons_sync(self, **kw: Any) -> dict[str, Any]:
         """Sync addon records from catalog.json (admin only)."""
         if not request.env.user.has_group('base.group_system'):
-            return {'success': False, 'error': 'Admin access required'}
+            return {'success': False, 'error': _('Admin access required')}
         result = request.env['woow_paas_platform.cloud_odoo_addon'].sync_from_catalog()
         return {'success': True, 'data': result}
 
@@ -1097,7 +1097,7 @@ class PaasController(HiddenChainMixin, Controller):
         # #471 B 組：曝光層 by-id 判準留 is_hidden（未上架商品的規格頁不可讀）。
         # 注意這擋的是 **template**，不是既有 service——後者判 conceal_instances。
         if not template.exists() or not template.is_active or template.is_hidden:
-            return {'success': False, 'error': 'Template not found'}
+            return {'success': False, 'error': _('Template not found')}
 
         plans = []
         # #330 Wave C：base plan 附掛隱藏席數變體（xmlid 反查、無變體＝[]）。
@@ -1130,22 +1130,22 @@ class PaasController(HiddenChainMixin, Controller):
     def api_service_change_plan(self, service_id: int, plan_id: int | None = None, **kw: Any) -> dict[str, Any]:
         """Change subscription plan for a cloud service."""
         if not plan_id:
-            return {'success': False, 'error': 'plan_id is required'}
+            return {'success': False, 'error': _('plan_id is required')}
 
         CloudService = request.env['woow_paas_platform.cloud_service']
         service = CloudService.browse(service_id)
         if not service.exists() or service.template_id.conceal_instances:
-            return {'success': False, 'error': 'Service not found'}
+            return {'success': False, 'error': _('Service not found')}
 
         workspace = service.workspace_id
         access = workspace.check_user_access(request.env.user)
         if not access or access.role not in [ROLE_OWNER, ROLE_ADMIN]:
-            return {'success': False, 'error': 'Admin access required'}
+            return {'success': False, 'error': _('Admin access required')}
 
         Plan = request.env['sh.subscription.plan'].sudo()
         plan = Plan.browse(plan_id)
         if not plan.exists():
-            return {'success': False, 'error': 'Plan not found'}
+            return {'success': False, 'error': _('Plan not found')}
         # Plan must belong to THIS service's template — symmetric with the
         # create path's gate (api_deploy_service: `plan not in
         # template.subscription_plan_ids`). The role check above only gates who
@@ -1156,7 +1156,7 @@ class PaasController(HiddenChainMixin, Controller):
         svc_template = service.template_id.sudo()
         if svc_template.subscription_plan_ids and plan not in svc_template.subscription_plan_ids:
             return {'success': False,
-                    'error': 'Plan not available for this template'}
+                    'error': _('Plan not available for this template')}
 
         old_sub = service.sudo().subscription_id
         _logger.info(
@@ -1164,7 +1164,7 @@ class PaasController(HiddenChainMixin, Controller):
             service_id, plan_id, old_sub.id if old_sub else None,
         )
         if not old_sub or old_sub.state != 'in_progress':
-            return {'success': False, 'error': 'No active subscription'}
+            return {'success': False, 'error': _('No active subscription')}
 
         # During trial, sh_end_date is legitimately NULL (billing period
         # hasn't started yet). Strict date completeness is only meaningful
@@ -1173,7 +1173,7 @@ class PaasController(HiddenChainMixin, Controller):
         # trial-aware (returns 0), so the rest of the flow is safe.
         if not old_sub.sh_trial:
             if not old_sub.sh_end_date or not old_sub.sh_start_date:
-                return {'success': False, 'error': 'Subscription dates are incomplete'}
+                return {'success': False, 'error': _('Subscription dates are incomplete')}
 
         # Refund: defer to the model method instead of recomputing the
         # proration inline. The previous inline form
@@ -1241,12 +1241,12 @@ class PaasController(HiddenChainMixin, Controller):
         CloudService = request.env['woow_paas_platform.cloud_service']
         service = CloudService.browse(service_id)
         if not service.exists() or service.template_id.conceal_instances:
-            return {'success': False, 'error': 'Service not found'}
+            return {'success': False, 'error': _('Service not found')}
 
         workspace = service.workspace_id
         access = workspace.check_user_access(request.env.user)
         if not access or access.role not in [ROLE_OWNER, ROLE_ADMIN]:
-            return {'success': False, 'error': 'Admin access required'}
+            return {'success': False, 'error': _('Admin access required')}
 
         # #553：原本是「一律 `str(e)`」——連 ORM 例外都照吐給租戶。分類比照
         # `_create_service`（#520／PR #523）與上方 `api_service_skip_trial`
@@ -1291,7 +1291,7 @@ class PaasController(HiddenChainMixin, Controller):
                 service_id, e, traceback.format_exc(),
             )
             return {'success': False,
-                    'error': 'An error occurred while estimating the skip-trial charge.'}
+                    'error': _('An error occurred while estimating the skip-trial charge.')}
 
         except (ValidationError, UserError) as e:
             # 業務規則例外（沒有訂閱、訂閱非 in_progress、不在試用期）：訊息本來
@@ -1310,7 +1310,7 @@ class PaasController(HiddenChainMixin, Controller):
                 service_id, e, traceback.format_exc(),
             )
             return {'success': False,
-                    'error': 'An error occurred while estimating the skip-trial charge.'}
+                    'error': _('An error occurred while estimating the skip-trial charge.')}
 
         return {'success': True, 'data': estimate}
 
@@ -1320,12 +1320,12 @@ class PaasController(HiddenChainMixin, Controller):
         CloudService = request.env['woow_paas_platform.cloud_service']
         service = CloudService.browse(service_id)
         if not service.exists() or service.template_id.conceal_instances:
-            return {'success': False, 'error': 'Service not found'}
+            return {'success': False, 'error': _('Service not found')}
 
         workspace = service.workspace_id
         access = workspace.check_user_access(request.env.user)
         if not access or access.role not in [ROLE_OWNER, ROLE_ADMIN]:
-            return {'success': False, 'error': 'Admin access required'}
+            return {'success': False, 'error': _('Admin access required')}
 
         # #525 A1：`_skip_trial()` 的寫入是**分段**的，例外噴在哪一步，殘留就
         # 累積到哪——訂閱先脫離試用（`subscription_lifecycle_mixin._skip_trial`）
@@ -1397,7 +1397,7 @@ class PaasController(HiddenChainMixin, Controller):
                 service_id, e, traceback.format_exc(),
             )
             return {'success': False,
-                    'error': 'An error occurred while skipping the trial period.'}
+                    'error': _('An error occurred while skipping the trial period.')}
 
         except (ValidationError, UserError) as e:
             # 業務規則例外（不在試用期、訂閱非 in_progress、錢包餘額不足、收款
@@ -1415,7 +1415,7 @@ class PaasController(HiddenChainMixin, Controller):
                 service_id, e, traceback.format_exc(),
             )
             return {'success': False,
-                    'error': 'An error occurred while skipping the trial period.'}
+                    'error': _('An error occurred while skipping the trial period.')}
 
         return {
             'success': True,
@@ -1449,22 +1449,22 @@ class PaasController(HiddenChainMixin, Controller):
 
         workspace = Workspace.browse(workspace_id)
         if not workspace.exists():
-            return {'success': False, 'error': 'Workspace not found or access denied'}
+            return {'success': False, 'error': _('Workspace not found or access denied')}
 
         access = workspace.check_user_access(user)
         if not access:
-            return {'success': False, 'error': 'Workspace not found or access denied'}
+            return {'success': False, 'error': _('Workspace not found or access denied')}
 
         if action == 'list':
             return self._list_services(workspace)
         elif action == 'create':
             # Only admin/owner can create services
             if access.role not in [ROLE_OWNER, ROLE_ADMIN]:
-                return {'success': False, 'error': 'Permission denied'}
+                return {'success': False, 'error': _('Permission denied')}
             plan_id = kw.get('plan_id')
             return self._create_service(workspace, template_id, name, values, odoo_addon_ids, plan_id=plan_id)
         else:
-            return {'success': False, 'error': f'Unknown action: {action}'}
+            return {'success': False, 'error': _('Unknown action: %(action)s', action=action)}
 
     @route("/api/workspaces/<int:workspace_id>/services/<int:service_id>", auth="user", methods=["POST"], type="json")
     def api_workspace_service(self, workspace_id: int, service_id: int, action: str = 'get', values: dict[str, Any] | None = None, version: str | None = None, odoo_addon_ids: list[int] | None = None, **kw: Any) -> dict[str, Any]:
@@ -1491,22 +1491,22 @@ class PaasController(HiddenChainMixin, Controller):
 
         workspace = Workspace.browse(workspace_id)
         if not workspace.exists():
-            return {'success': False, 'error': 'Workspace not found or access denied'}
+            return {'success': False, 'error': _('Workspace not found or access denied')}
 
         access = workspace.check_user_access(user)
         if not access:
-            return {'success': False, 'error': 'Workspace not found or access denied'}
+            return {'success': False, 'error': _('Workspace not found or access denied')}
 
         service = CloudService.browse(service_id)
         if (not service.exists() or service.workspace_id.id != workspace_id
                 or service.template_id.conceal_instances):
-            return {'success': False, 'error': 'Service not found'}
+            return {'success': False, 'error': _('Service not found')}
 
         if action == 'get':
             return self._get_service(service)
         elif action == 'update':
             if access.role not in [ROLE_OWNER, ROLE_ADMIN]:
-                return {'success': False, 'error': 'Permission denied'}
+                return {'success': False, 'error': _('Permission denied')}
             try:
                 service._check_operation_allowed(operation='write')
             except Exception as e:
@@ -1514,14 +1514,14 @@ class PaasController(HiddenChainMixin, Controller):
             return self._update_service(service, values, version, odoo_addon_ids)
         elif action == 'delete':
             if access.role not in [ROLE_OWNER, ROLE_ADMIN]:
-                return {'success': False, 'error': 'Permission denied'}
+                return {'success': False, 'error': _('Permission denied')}
             try:
                 service._check_operation_allowed(operation='write')
             except Exception as e:
                 return {'success': False, 'error': str(e)}
             return self._delete_service(service)
         else:
-            return {'success': False, 'error': f'Unknown action: {action}'}
+            return {'success': False, 'error': _('Unknown action: %(action)s', action=action)}
 
     @route("/api/workspaces/<int:workspace_id>/services/<int:service_id>/rollback", auth="user", methods=["POST"], type="json")
     def api_service_rollback(self, workspace_id: int, service_id: int, revision: int | None = None, **kw: Any) -> dict[str, Any]:
@@ -1545,9 +1545,9 @@ class PaasController(HiddenChainMixin, Controller):
             try:
                 revision = int(revision)
                 if revision < 0:
-                    return {'success': False, 'error': 'Revision must be a non-negative integer'}
+                    return {'success': False, 'error': _('Revision must be a non-negative integer')}
             except (TypeError, ValueError):
-                return {'success': False, 'error': 'Invalid revision number'}
+                return {'success': False, 'error': _('Invalid revision number')}
 
         # Validate workspace and service access
         user = request.env.user
@@ -1556,16 +1556,16 @@ class PaasController(HiddenChainMixin, Controller):
 
         workspace = Workspace.browse(workspace_id)
         if not workspace.exists():
-            return {'success': False, 'error': 'Workspace not found or access denied'}
+            return {'success': False, 'error': _('Workspace not found or access denied')}
 
         access = workspace.check_user_access(user, required_role=ROLE_ADMIN)
         if not access:
-            return {'success': False, 'error': 'Workspace not found or access denied'}
+            return {'success': False, 'error': _('Workspace not found or access denied')}
 
         service = CloudService.browse(service_id)
         if (not service.exists() or service.workspace_id.id != workspace_id
                 or service.template_id.conceal_instances):
-            return {'success': False, 'error': 'Service not found'}
+            return {'success': False, 'error': _('Service not found')}
 
         # #423 W5a MAJOR-1：補上訂閱閘。
         #
@@ -1599,13 +1599,13 @@ class PaasController(HiddenChainMixin, Controller):
 
         workspace = Workspace.browse(workspace_id)
         if not workspace.exists():
-            return {'success': False, 'error': 'Workspace not found or access denied'}
+            return {'success': False, 'error': _('Workspace not found or access denied')}
 
         access = workspace.check_user_access(
             request.env.user, required_role=ROLE_ADMIN,
         )
         if not access:
-            return {'success': False, 'error': 'Workspace not found or access denied'}
+            return {'success': False, 'error': _('Workspace not found or access denied')}
 
         service = CloudService.browse(service_id)
         # #471 C 組：補上 conceal_instances gate，與其他既有服務操作端點同判準。
@@ -1615,7 +1615,7 @@ class PaasController(HiddenChainMixin, Controller):
         # （not found），否則 conceal 服務會回「不支援 admin GUI」洩漏它存在。
         if (not service.exists() or service.workspace_id.id != workspace_id
                 or service.template_id.conceal_instances):
-            return {'success': False, 'error': 'Service not found'}
+            return {'success': False, 'error': _('Service not found')}
 
         # #357 C01：判別器讀 template.has_admin_gui，與 model 端（cloud_service
         # create/_build_mcp_sensitive_values）收斂到同一判準。原本這裡是 slug
@@ -1624,8 +1624,8 @@ class PaasController(HiddenChainMixin, Controller):
         if not service.template_id.has_admin_gui:
             return {
                 'success': False,
-                'error': 'Reset admin password is only supported on templates '
-                         'with a built-in admin GUI',
+                'error': _('Reset admin password is only supported on templates '
+                           'with a built-in admin GUI'),
             }
 
         try:
@@ -1672,7 +1672,7 @@ class PaasController(HiddenChainMixin, Controller):
             )
             return {
                 'success': False,
-                'error': 'Reset failed. Check operator logs for details.',
+                'error': _('Reset failed. Check operator logs for details.'),
             }
 
         except (ValidationError, UserError) as e:
@@ -1688,7 +1688,7 @@ class PaasController(HiddenChainMixin, Controller):
             )
             return {
                 'success': False,
-                'error': 'Reset failed. Check operator logs for details.',
+                'error': _('Reset failed. Check operator logs for details.'),
             }
 
         # #530：Reset 同時換發 gateway API key，一併一次性回傳。訊息用複數形是
@@ -1767,16 +1767,16 @@ class PaasController(HiddenChainMixin, Controller):
 
         workspace = Workspace.browse(workspace_id)
         if not workspace.exists():
-            return {'success': False, 'error': 'Workspace not found or access denied'}
+            return {'success': False, 'error': _('Workspace not found or access denied')}
 
         access = workspace.check_user_access(user)
         if not access:
-            return {'success': False, 'error': 'Workspace not found or access denied'}
+            return {'success': False, 'error': _('Workspace not found or access denied')}
 
         service = CloudService.browse(service_id)
         if (not service.exists() or service.workspace_id.id != workspace_id
                 or service.template_id.conceal_instances):
-            return {'success': False, 'error': 'Service not found'}
+            return {'success': False, 'error': _('Service not found')}
 
         return self._get_service_revisions(service)
 
@@ -1810,21 +1810,21 @@ class PaasController(HiddenChainMixin, Controller):
             workspace_id)
         if not workspace.exists():
             return None, {'success': False,
-                          'error': 'Workspace not found or access denied'}
+                          'error': _('Workspace not found or access denied')}
         access = workspace.check_user_access(user)
         if not access:
             return None, {'success': False,
-                          'error': 'Workspace not found or access denied'}
+                          'error': _('Workspace not found or access denied')}
         service = request.env['woow_paas_platform.cloud_service'].browse(
             service_id)
         if (not service.exists() or service.workspace_id.id != workspace_id
                 or service.template_id.conceal_instances):
-            return None, {'success': False, 'error': 'Service not found'}
+            return None, {'success': False, 'error': _('Service not found')}
         if not require_manage:
             return service, None
         if access.role not in [ROLE_OWNER, ROLE_ADMIN]:
             return None, {'success': False,
-                          'error': 'Insufficient permissions'}
+                          'error': _('Insufficient permissions')}
         try:
             service._check_operation_allowed(operation='write')
         except Exception as e:
@@ -1874,7 +1874,7 @@ class PaasController(HiddenChainMixin, Controller):
                 service, kwargs.get('policy_id'))
         elif action == 'reorder':
             return self._reorder_service_access_policies(service, kwargs)
-        return {'success': False, 'error': f'Unknown action: {action}'}
+        return {'success': False, 'error': _('Unknown action: %(action)s', action=action)}
 
     # ---- Access Control helpers ----
 
@@ -1900,8 +1900,8 @@ class PaasController(HiddenChainMixin, Controller):
             # 關得掉。
             if vals['is_protected'] and not service._access_hostname():
                 return {'success': False,
-                        'error': 'This service has no public address to '
-                                 'protect yet.'}
+                        'error': _('This service has no public address to '
+                                   'protect yet.')}
         for f in ('login_google', 'login_email_otp'):
             if f in kwargs:
                 vals[f] = bool(kwargs[f])
@@ -1931,7 +1931,7 @@ class PaasController(HiddenChainMixin, Controller):
 
     def _create_service_access_policy(self, service, kwargs) -> dict[str, Any]:
         if not kwargs.get('name'):
-            return {'success': False, 'error': 'name is required'}
+            return {'success': False, 'error': _('name is required')}
         # 兩層 quota：model 的 `_check_policy_quota` 是權威，這裡是為了回一句
         # 人看得懂的話。**0 = unlimited**（#743）——沒有這個豁免，model 那邊的
         # 豁免從 UI 不可達（`existing >= quota` 在 0 >= 0 時第一條就擋掉），而
@@ -1946,8 +1946,8 @@ class PaasController(HiddenChainMixin, Controller):
                 [('cloud_service_id', '=', service.id)])
             if quota and existing >= quota:
                 return {'success': False,
-                        'error': 'Access policy quota exceeded: plan allows '
-                                 '%d polic(ies)' % quota}
+                        'error': _('Access policy quota exceeded: plan allows '
+                                   '%d polic(ies)') % quota}
         # 白名單：`cloud_service_id` 由**已 gate 過的 service** 決定，不讀
         # kwargs——client 送什麼錨點都無效。`cf_policy_id` / `route_id` 同理。
         create_vals = {
@@ -2001,7 +2001,7 @@ class PaasController(HiddenChainMixin, Controller):
                                       kwargs) -> dict[str, Any]:
         pol = self._service_policy(service, policy_id)
         if not pol:
-            return {'success': False, 'error': 'Policy not found'}
+            return {'success': False, 'error': _('Policy not found')}
         vals = {}
         for f in ('name', 'decision', 'sequence'):
             if f in kwargs:
@@ -2029,10 +2029,10 @@ class PaasController(HiddenChainMixin, Controller):
                                       policy_id) -> dict[str, Any]:
         pol = self._service_policy(service, policy_id)
         if not pol:
-            return {'success': False, 'error': 'Policy not found'}
+            return {'success': False, 'error': _('Policy not found')}
         try:
             pol.unlink()
-            return {'success': True, 'data': {'message': 'Policy deleted'}}
+            return {'success': True, 'data': {'message': _('Policy deleted')}}
         except Exception as e:
             _logger.exception(
                 "[CLOUD_SVC] Failed to delete access policy %s: %s",
@@ -2050,7 +2050,7 @@ class PaasController(HiddenChainMixin, Controller):
         """
         policy_ids = kwargs.get('policy_ids') or []
         if not isinstance(policy_ids, list):
-            return {'success': False, 'error': 'policy_ids must be a list'}
+            return {'success': False, 'error': _('policy_ids must be a list')}
         reordered = []
         try:
             seq = 0
@@ -2116,13 +2116,13 @@ class PaasController(HiddenChainMixin, Controller):
         # pending / deleting / error，`_check_operation_allowed` 是訂閱閘（判 active /
         # grace / past-grace，且 base.group_system 直接 bypass），與 service state 正交。
         if service.state != 'running':
-            return cannot(
-                f'Service must be running to check module states '
-                f'(current: {service.state})')
+            return cannot(_(
+                'Service must be running to check module states '
+                '(current: %(state)s)', state=service.state))
 
         client = get_paas_operator_client(request.env)
         if not client:
-            return cannot('PaaS Operator not configured')
+            return cannot(_('PaaS Operator not configured'))
 
         CloudOdooAddon = request.env['woow_paas_platform.cloud_odoo_addon']
         addons = CloudOdooAddon.browse(removed_addon_ids).exists()
@@ -2141,17 +2141,17 @@ class PaasController(HiddenChainMixin, Controller):
             _logger.warning(
                 "Cannot verify module states for addon removal on %s: %s",
                 service.helm_release_name, e)
-            return cannot(f'Cannot verify module states: {e}')
+            return cannot(_('Cannot verify module states: %(reason)s', reason=e))
 
         if not result.get('success'):
             # operator 對 OdooModuleError 回 HTTP 200 ＋ success:false（step 為
             # find_pod / query_modules / validate 之一），client 不 raise。**必須與上面
             # 那個 except 同處置** —— #477 縫 (a) 就是這裡當初只有 if 沒有 else。
-            error = result.get('error') or 'Unknown error'
+            error = result.get('error') or _('Unknown error')
             _logger.warning(
                 "Operator could not report module states for %s: %s",
                 service.helm_release_name, error)
-            return cannot(f'Cannot verify module states: {error}')
+            return cannot(_('Cannot verify module states: %(reason)s', reason=error))
 
         modules: dict[str, Any] = {}
         blocking: dict[str, Any] = {}
@@ -2181,9 +2181,10 @@ class PaasController(HiddenChainMixin, Controller):
         parts = ', '.join(
             f"'{name}' ({info.get('state')})"
             for name, info in sorted(blocking.items()))
-        return (
-            f'Cannot remove {parts}: still present in Odoo. '
-            f'Please deactivate the module in Odoo first.'
+        return _(
+            'Cannot remove %(modules)s: still present in Odoo. '
+            'Please deactivate the module in Odoo first.',
+            modules=parts,
         )
 
     @route(
@@ -2208,23 +2209,23 @@ class PaasController(HiddenChainMixin, Controller):
         if removed_addon_ids is None:
             removed_addon_ids = []
         if not isinstance(removed_addon_ids, (list, tuple)):
-            return {'success': False, 'error': 'Invalid removed_addon_ids: expected a list of addon IDs'}
+            return {'success': False, 'error': _('Invalid removed_addon_ids: expected a list of addon IDs')}
         try:
             removed_addon_ids = [int(addon_id) for addon_id in removed_addon_ids]
         except (TypeError, ValueError):
-            return {'success': False, 'error': 'Invalid removed_addon_ids: expected a list of addon IDs'}
+            return {'success': False, 'error': _('Invalid removed_addon_ids: expected a list of addon IDs')}
 
         if not removed_addon_ids:
             return {'success': True, 'modules': {}}
 
         service = request.env['woow_paas_platform.cloud_service'].browse(service_id)
         if not service.exists() or service.template_id.conceal_instances:
-            return {'success': False, 'error': 'Service not found'}
+            return {'success': False, 'error': _('Service not found')}
 
         workspace = service.workspace_id
         access = workspace.check_user_access(request.env.user)
         if not access:
-            return {'success': False, 'error': 'Access denied'}
+            return {'success': False, 'error': _('Access denied')}
 
         # 狀態閘 / operator 設定 / 查詢失敗 / safe-states 全部住在
         # `_assess_addon_removal`——與 `_update_service` 的 authoritative 拒絕同源
@@ -2258,16 +2259,16 @@ class PaasController(HiddenChainMixin, Controller):
 
         workspace = Workspace.browse(workspace_id)
         if not workspace.exists():
-            return {'success': False, 'error': 'Workspace not found or access denied'}
+            return {'success': False, 'error': _('Workspace not found or access denied')}
 
         access = workspace.check_user_access(user)
         if not access:
-            return {'success': False, 'error': 'Workspace not found or access denied'}
+            return {'success': False, 'error': _('Workspace not found or access denied')}
 
         service = CloudService.browse(service_id)
         if (not service.exists() or service.workspace_id.id != workspace_id
                 or service.template_id.conceal_instances):
-            return {'success': False, 'error': 'Service not found'}
+            return {'success': False, 'error': _('Service not found')}
 
         if action == 'list':
             return self._list_mcp_servers(service)
@@ -2279,28 +2280,28 @@ class PaasController(HiddenChainMixin, Controller):
         write_actions = ('create', 'update', 'delete', 'sync', 'test')
         if action in write_actions:
             if not _portal_project_settings_editable(request.env):
-                return {'success': False, 'error': 'Permission denied'}
+                return {'success': False, 'error': _('Permission denied')}
 
         if action == 'create':
             if access.role not in [ROLE_OWNER, ROLE_ADMIN]:
-                return {'success': False, 'error': 'Permission denied'}
+                return {'success': False, 'error': _('Permission denied')}
             return self._create_mcp_server(service, kw)
         elif action == 'update':
             if access.role not in [ROLE_OWNER, ROLE_ADMIN]:
-                return {'success': False, 'error': 'Permission denied'}
+                return {'success': False, 'error': _('Permission denied')}
             return self._update_mcp_server(service, kw)
         elif action == 'delete':
             if access.role not in [ROLE_OWNER, ROLE_ADMIN]:
-                return {'success': False, 'error': 'Permission denied'}
+                return {'success': False, 'error': _('Permission denied')}
             return self._delete_mcp_server(service, kw)
         elif action == 'sync':
             if access.role not in [ROLE_OWNER, ROLE_ADMIN]:
-                return {'success': False, 'error': 'Permission denied'}
+                return {'success': False, 'error': _('Permission denied')}
             return self._sync_mcp_server(service, kw)
         elif action == 'test':
             return self._test_mcp_server(service, kw)
         else:
-            return {'success': False, 'error': f'Unknown action: {action}'}
+            return {'success': False, 'error': _('Unknown action: %(action)s', action=action)}
 
     def _list_mcp_servers(self, service) -> dict[str, Any]:
         # User-scope MCP now hangs off project, not service (D6 keeps the
@@ -2320,7 +2321,7 @@ class PaasController(HiddenChainMixin, Controller):
         name = params.get('name', '').strip()
         url = params.get('url', '').strip()
         if not name or not url:
-            return {'success': False, 'error': 'Name and URL are required'}
+            return {'success': False, 'error': _('Name and URL are required')}
         # legacy create never stores sidecar_backed → validate as external.
         url_error = _validate_mcp_url(url, sidecar_backed=False)
         if url_error:
@@ -2330,7 +2331,7 @@ class PaasController(HiddenChainMixin, Controller):
         if not project:
             return {
                 'success': False,
-                'error': 'No support project bound to this service.',
+                'error': _('No support project bound to this service.'),
             }
 
         McpServer = request.env['woow_paas_platform.mcp_server'].sudo()
@@ -2349,12 +2350,12 @@ class PaasController(HiddenChainMixin, Controller):
     def _update_mcp_server(self, service, params: dict) -> dict[str, Any]:
         server_id = params.get('server_id')
         if not server_id:
-            return {'success': False, 'error': 'server_id is required'}
+            return {'success': False, 'error': _('server_id is required')}
 
         McpServer = request.env['woow_paas_platform.mcp_server'].sudo()
         server = McpServer.browse(int(server_id))
         if not server.exists() or server.project_id.cloud_service_id.id != service.id:
-            return {'success': False, 'error': 'MCP Server not found'}
+            return {'success': False, 'error': _('MCP Server not found')}
 
         if 'url' in params:
             url_error = _validate_mcp_url(
@@ -2375,12 +2376,12 @@ class PaasController(HiddenChainMixin, Controller):
     def _delete_mcp_server(self, service, params: dict) -> dict[str, Any]:
         server_id = params.get('server_id')
         if not server_id:
-            return {'success': False, 'error': 'server_id is required'}
+            return {'success': False, 'error': _('server_id is required')}
 
         McpServer = request.env['woow_paas_platform.mcp_server'].sudo()
         server = McpServer.browse(int(server_id))
         if not server.exists() or server.project_id.cloud_service_id.id != service.id:
-            return {'success': False, 'error': 'MCP Server not found'}
+            return {'success': False, 'error': _('MCP Server not found')}
 
         server.unlink()
         return {'success': True}
@@ -2388,12 +2389,12 @@ class PaasController(HiddenChainMixin, Controller):
     def _sync_mcp_server(self, service, params: dict) -> dict[str, Any]:
         server_id = params.get('server_id')
         if not server_id:
-            return {'success': False, 'error': 'server_id is required'}
+            return {'success': False, 'error': _('server_id is required')}
 
         McpServer = request.env['woow_paas_platform.mcp_server'].sudo()
         server = McpServer.browse(int(server_id))
         if not server.exists() or server.project_id.cloud_service_id.id != service.id:
-            return {'success': False, 'error': 'MCP Server not found'}
+            return {'success': False, 'error': _('MCP Server not found')}
 
         # #554：`action_sync_tools` 自帶 catch-all，失敗時**不會**拋到這裡——
         # 只能靠它的 bool 回傳值判讀，否則一律回 success: True（使用者看到
@@ -2404,22 +2405,22 @@ class PaasController(HiddenChainMixin, Controller):
                 reason = server.state_message or 'Unknown error'
                 _logger.warning(
                     'MCP sync failed for server %s: %s', server.name, reason)
-                return {'success': False, 'error': f'Sync failed: {reason}'}
+                return {'success': False, 'error': _('Sync failed: %(reason)s', reason=reason)}
         except Exception as e:
             _logger.warning('MCP sync failed for server %s: %s', server.name, e)
-            return {'success': False, 'error': f'Sync failed: {e}'}
+            return {'success': False, 'error': _('Sync failed: %(reason)s', reason=e)}
 
         return {'success': True, 'data': self._format_mcp_server(server)}
 
     def _test_mcp_server(self, service, params: dict) -> dict[str, Any]:
         server_id = params.get('server_id')
         if not server_id:
-            return {'success': False, 'error': 'server_id is required'}
+            return {'success': False, 'error': _('server_id is required')}
 
         McpServer = request.env['woow_paas_platform.mcp_server'].sudo()
         server = McpServer.browse(int(server_id))
         if not server.exists() or server.project_id.cloud_service_id.id != service.id:
-            return {'success': False, 'error': 'MCP Server not found'}
+            return {'success': False, 'error': _('MCP Server not found')}
 
         # #554：同 `_sync_mcp_server`——callee 自帶 catch-all，只能判讀 bool。
         try:
@@ -2427,10 +2428,10 @@ class PaasController(HiddenChainMixin, Controller):
                 reason = server.state_message or 'Unknown error'
                 return {
                     'success': False,
-                    'error': f'Connection test failed: {reason}',
+                    'error': _('Connection test failed: %(reason)s', reason=reason),
                 }
         except Exception as e:
-            return {'success': False, 'error': f'Connection test failed: {e}'}
+            return {'success': False, 'error': _('Connection test failed: %(reason)s', reason=e)}
 
         return {
             'success': True,
@@ -2531,11 +2532,11 @@ class PaasController(HiddenChainMixin, Controller):
             return {'success': True, 'data': self._format_project_detail(project)}
         if action == 'update':
             if not _portal_project_settings_editable(request.env):
-                return {'success': False, 'error': 'Permission denied'}
+                return {'success': False, 'error': _('Permission denied')}
             if access.role not in (ROLE_OWNER, ROLE_ADMIN):
-                return {'success': False, 'error': 'Permission denied'}
+                return {'success': False, 'error': _('Permission denied')}
             return self._update_support_project(project, kw)
-        return {'success': False, 'error': f'Unknown action: {action}'}
+        return {'success': False, 'error': _('Unknown action: %(action)s', action=action)}
 
     def _format_project_detail(self, project) -> dict[str, Any]:
         servers = project.mcp_server_ids.filtered(
@@ -2573,7 +2574,7 @@ class PaasController(HiddenChainMixin, Controller):
         if 'name' in params:
             name = (params.get('name') or '').strip()
             if not name:
-                return {'success': False, 'error': 'Name cannot be empty'}
+                return {'success': False, 'error': _('Name cannot be empty')}
             vals['name'] = name
         if 'description' in params:
             vals['description'] = params.get('description') or ''
@@ -2584,12 +2585,12 @@ class PaasController(HiddenChainMixin, Controller):
                 CloudService = request.env['woow_paas_platform.cloud_service'].sudo()
                 target = CloudService.browse(int(target_raw))
                 if not target.exists():
-                    return {'success': False, 'error': 'Cloud Service not found'}
+                    return {'success': False, 'error': _('Cloud Service not found')}
                 current_ws = project.workspace_id
                 if not current_ws or target.workspace_id.id != current_ws.id:
                     return {
                         'success': False,
-                        'error': 'Cloud Service must belong to the same workspace.',
+                        'error': _('Cloud Service must belong to the same workspace.'),
                     }
                 vals['cloud_service_id'] = target.id
             else:
@@ -2629,9 +2630,9 @@ class PaasController(HiddenChainMixin, Controller):
         )
         if action in write_actions:
             if not _portal_project_settings_editable(request.env):
-                return {'success': False, 'error': 'Permission denied'}
+                return {'success': False, 'error': _('Permission denied')}
             if access.role not in (ROLE_OWNER, ROLE_ADMIN):
-                return {'success': False, 'error': 'Permission denied'}
+                return {'success': False, 'error': _('Permission denied')}
 
         if action == 'sidecar-hint':
             return self._compute_project_sidecar_hint(project)
@@ -2645,7 +2646,7 @@ class PaasController(HiddenChainMixin, Controller):
             return self._sync_project_mcp_server(project, kw)
         if action == 'test':
             return self._test_project_mcp_server(project, kw)
-        return {'success': False, 'error': f'Unknown action: {action}'}
+        return {'success': False, 'error': _('Unknown action: %(action)s', action=action)}
 
     def _compute_project_sidecar_hint(self, project) -> dict[str, Any]:
         """Return prefill payload for the Add Sidecar MCP UI shortcut, or
@@ -2654,7 +2655,7 @@ class PaasController(HiddenChainMixin, Controller):
         if not service or not service.template_id.mcp_enabled:
             return {
                 'success': False,
-                'error': 'No sidecar available for this project',
+                'error': _('No sidecar available for this project'),
             }
         template = service.template_id
         return {
@@ -2680,7 +2681,7 @@ class PaasController(HiddenChainMixin, Controller):
         name = (params.get('name') or '').strip()
         url = (params.get('url') or '').strip()
         if not name or not url:
-            return {'success': False, 'error': 'Name and URL are required'}
+            return {'success': False, 'error': _('Name and URL are required')}
         url_error = _validate_mcp_url(
             url, sidecar_backed=bool(params.get('sidecar_backed', False)),
         )
@@ -2711,11 +2712,11 @@ class PaasController(HiddenChainMixin, Controller):
     def _resolve_project_mcp(self, project, params: dict):
         server_id = params.get('server_id')
         if not server_id:
-            return None, {'success': False, 'error': 'server_id is required'}
+            return None, {'success': False, 'error': _('server_id is required')}
         McpServer = request.env['woow_paas_platform.mcp_server'].sudo()
         server = McpServer.browse(int(server_id))
         if not server.exists() or server.project_id.id != project.id:
-            return None, {'success': False, 'error': 'MCP Server not found'}
+            return None, {'success': False, 'error': _('MCP Server not found')}
         return server, None
 
     def _update_project_mcp_server(self, project, params: dict) -> dict[str, Any]:
@@ -2763,10 +2764,10 @@ class PaasController(HiddenChainMixin, Controller):
                 reason = server.state_message or 'Unknown error'
                 _logger.warning(
                     'MCP sync failed for server %s: %s', server.name, reason)
-                return {'success': False, 'error': f'Sync failed: {reason}'}
+                return {'success': False, 'error': _('Sync failed: %(reason)s', reason=reason)}
         except Exception as e:
             _logger.warning('MCP sync failed for server %s: %s', server.name, e)
-            return {'success': False, 'error': f'Sync failed: {e}'}
+            return {'success': False, 'error': _('Sync failed: %(reason)s', reason=e)}
         return {'success': True, 'data': self._format_mcp_server(server)}
 
     def _test_project_mcp_server(self, project, params: dict) -> dict[str, Any]:
@@ -2779,10 +2780,10 @@ class PaasController(HiddenChainMixin, Controller):
                 reason = server.state_message or 'Unknown error'
                 return {
                     'success': False,
-                    'error': f'Connection test failed: {reason}',
+                    'error': _('Connection test failed: %(reason)s', reason=reason),
                 }
         except Exception as e:
-            return {'success': False, 'error': f'Connection test failed: {e}'}
+            return {'success': False, 'error': _('Connection test failed: %(reason)s', reason=e)}
         return {
             'success': True,
             'data': {
@@ -3259,15 +3260,15 @@ class PaasController(HiddenChainMixin, Controller):
     def _create_service(self, workspace: Any, template_id: int | None, name: str | None, values: dict[str, Any] | None, odoo_addon_ids: list[int] | None = None, plan_id: int | None = None) -> dict[str, Any]:
         """Create a new cloud service."""
         if not template_id:
-            return {'success': False, 'error': 'Template ID is required'}
+            return {'success': False, 'error': _('Template ID is required')}
         if not name:
-            return {'success': False, 'error': 'Service name is required'}
+            return {'success': False, 'error': _('Service name is required')}
         if not plan_id:
-            return {'success': False, 'error': 'Subscription plan is required'}
+            return {'success': False, 'error': _('Subscription plan is required')}
 
         name = name.strip()
         if not name:
-            return {'success': False, 'error': 'Service name is required'}
+            return {'success': False, 'error': _('Service name is required')}
 
         CloudAppTemplate = request.env['woow_paas_platform.cloud_app_template']
         CloudService = request.env['woow_paas_platform.cloud_service']
@@ -3279,16 +3280,16 @@ class PaasController(HiddenChainMixin, Controller):
         # （原註解舉的 hermes-agent 已於 #494 定價上架；語意本身不變。）
         if not template.exists() or not template.is_active or template.is_hidden:
             return {'success': False,
-                    'error': 'This template cannot be deployed directly.'}
+                    'error': _('This template cannot be deployed directly.')}
 
         # Validate subscription plan
         Plan = request.env['sh.subscription.plan'].sudo()
         plan = Plan.browse(plan_id)
         if not plan.exists():
-            return {'success': False, 'error': 'Subscription plan not found'}
+            return {'success': False, 'error': _('Subscription plan not found')}
         # Verify plan belongs to this template
         if template.sudo().subscription_plan_ids and plan not in template.sudo().subscription_plan_ids:
-            return {'success': False, 'error': 'Plan not available for this template'}
+            return {'success': False, 'error': _('Plan not available for this template')}
 
         # Always generate reference_id server-side (never accept from frontend)
         reference_id = str(uuid.uuid4())
@@ -3312,7 +3313,7 @@ class PaasController(HiddenChainMixin, Controller):
             default_values = json.loads(template.helm_default_values) if template.helm_default_values else {}
         except (json.JSONDecodeError, TypeError):
             _logger.error("Invalid helm_default_values for template %s; blocking create", template.name)
-            return {'success': False, 'error': 'Template misconfigured (invalid default values). Please contact support.'}
+            return {'success': False, 'error': _('Template misconfigured (invalid default values). Please contact support.')}
         filtered_user_values, _rejected = self._filter_allowed_helm_values(values, template)
 
         # Extract _init.* keys (not Helm values, used for post-deploy init)
@@ -3328,19 +3329,19 @@ class PaasController(HiddenChainMixin, Controller):
         if template.post_deploy_init_type == 'n8n':
             pwd = init_params.get('owner_password', '')
             if len(pwd) < 8:
-                return {'success': False, 'error': 'Password must be at least 8 characters'}
+                return {'success': False, 'error': _('Password must be at least 8 characters')}
             if not any(c.isupper() for c in pwd):
-                return {'success': False, 'error': 'Password must contain at least one uppercase letter'}
+                return {'success': False, 'error': _('Password must contain at least one uppercase letter')}
             if not any(c.islower() for c in pwd):
-                return {'success': False, 'error': 'Password must contain at least one lowercase letter'}
+                return {'success': False, 'error': _('Password must contain at least one lowercase letter')}
             if not any(c.isdigit() for c in pwd):
-                return {'success': False, 'error': 'Password must contain at least one number'}
+                return {'success': False, 'error': _('Password must contain at least one number')}
 
         # Validate Odoo administrator password
         if template.slug == 'odoo':
             pwd = helm_only_values.get('odooPassword', '')
             if not pwd or len(pwd) < 8:
-                return {'success': False, 'error': 'Administrator password must be at least 8 characters'}
+                return {'success': False, 'error': _('Administrator password must be at least 8 characters')}
 
         nested_user_values = self._unflatten_dotpath_keys(helm_only_values)
         merged_values = self._deep_merge(default_values, nested_user_values)
@@ -3524,7 +3525,7 @@ class PaasController(HiddenChainMixin, Controller):
             # 不是「講給租戶聽」的業務規則 → 與未預期例外同樣只回泛用訊息。
             request.env.cr.rollback()
             _logger.error("Access error creating service: %s\n%s", str(e), traceback.format_exc())
-            return {'success': False, 'error': 'An error occurred while creating the service.'}
+            return {'success': False, 'error': _('An error occurred while creating the service.')}
 
         except (ValidationError, UserError) as e:
             # 業務規則例外（每帳號實例上限、訂閱前置條件…）：訊息本來就是寫給
@@ -3541,7 +3542,7 @@ class PaasController(HiddenChainMixin, Controller):
         except Exception as e:
             request.env.cr.rollback()
             _logger.error("Error creating service: %s\n%s", str(e), traceback.format_exc())
-            return {'success': False, 'error': 'An error occurred while creating the service.'}
+            return {'success': False, 'error': _('An error occurred while creating the service.')}
 
     # _deploy_service_background removed — deployment is now handled by
     # ir.cron (CloudService._cron_process_pending_deploys) to avoid
@@ -3568,11 +3569,11 @@ class PaasController(HiddenChainMixin, Controller):
     def _update_service(self, service: Any, values: dict[str, Any] | None, version: str | None, odoo_addon_ids: list[int] | None = None) -> dict[str, Any]:
         """Update/upgrade a service."""
         if service.state in ['pending', 'deleting', 'error']:
-            return {'success': False, 'error': f'Cannot update service in {service.state} state'}
+            return {'success': False, 'error': _('Cannot update service in %(state)s state', state=service.state)}
 
         client = get_paas_operator_client(request.env)
         if not client:
-            return {'success': False, 'error': 'PaaS Operator not configured'}
+            return {'success': False, 'error': _('PaaS Operator not configured')}
 
         try:
             # Update Odoo addon selection if provided
@@ -3620,7 +3621,7 @@ class PaasController(HiddenChainMixin, Controller):
             existing_values = service._helm_values_dict()  # #559：唯一入口
             filtered_user_values, rejected_keys = self._filter_allowed_helm_values(values, service.template_id)
             if rejected_keys:
-                return {'success': False, 'error': f'Unauthorized configuration keys: {", ".join(rejected_keys)}'}
+                return {'success': False, 'error': _('Unauthorized configuration keys: %(keys)s', keys=', '.join(rejected_keys))}
             # _init.* are one-time provisioning params consumed at creation (stored on
             # the service record, e.g. n8n_owner_password). They are NOT Helm values and
             # must never be merged into helm_values on reconfigure — doing so would
@@ -3783,7 +3784,7 @@ class PaasController(HiddenChainMixin, Controller):
                             svc = env['woow_paas_platform.cloud_service'].browse(service_id)
                             if svc.exists() and svc.state in ('upgrading', 'suspended'):
                                 detail = getattr(exc, 'detail', None) or str(exc)
-                                vals = {'error_message': f'Upgrade failed: {detail}'}
+                                vals = {'error_message': _('Upgrade failed: %(reason)s', reason=detail)}
                                 # #482: 停權服務升級失敗仍該停著 —— 翻成 'error'
                                 # 會讓它離開停權語意（且 lifecycle cron 會把
                                 # error 當成可再 suspend 的狀態來回搬）。錯誤本身
@@ -3803,12 +3804,12 @@ class PaasController(HiddenChainMixin, Controller):
             }
 
         except PaaSOperatorConnectionError:
-            return {'success': False, 'error': 'Unable to connect to deployment service'}
+            return {'success': False, 'error': _('Unable to connect to deployment service')}
 
     def _delete_service(self, service: Any) -> dict[str, Any]:
         """Delete/uninstall a service."""
         if service.state == 'deleting':
-            return {'success': False, 'error': 'Service is already being deleted'}
+            return {'success': False, 'error': _('Service is already being deleted')}
 
         client = get_paas_operator_client(request.env)
         if not client:
@@ -3820,7 +3821,7 @@ class PaasController(HiddenChainMixin, Controller):
             )
             return {
                 'success': False,
-                'error': 'PaaS Operator not configured. Cannot safely delete service without cleaning up Kubernetes resources. Contact administrator.',
+                'error': _('PaaS Operator not configured. Cannot safely delete service without cleaning up Kubernetes resources. Contact administrator.'),
             }
 
         try:
@@ -3835,27 +3836,27 @@ class PaasController(HiddenChainMixin, Controller):
 
             # Delete the record
             service.unlink()
-            return {'success': True, 'message': 'Service deleted'}
+            return {'success': True, 'message': _('Service deleted')}
 
         except PaaSOperatorConnectionError:
             service.write({
                 'state': 'error',
-                'error_message': 'Unable to connect to deployment service during deletion',
+                'error_message': _('Unable to connect to deployment service during deletion'),
             })
-            return {'success': False, 'error': 'Unable to connect to deployment service'}
+            return {'success': False, 'error': _('Unable to connect to deployment service')}
 
         except PaaSOperatorError as e:
             # If release not found, still delete the record
             if e.status_code == 404:
                 service.unlink()
-                return {'success': True, 'message': 'Service deleted'}
+                return {'success': True, 'message': _('Service deleted')}
 
             _logger.error("Operator error during uninstall: %s", str(e))
             service.write({
                 'state': 'error',
-                'error_message': f'Deletion failed: {e.detail or e.message}',
+                'error_message': _('Deletion failed: %(reason)s', reason=e.detail or e.message),
             })
-            return {'success': False, 'error': f'Deletion failed: {e.detail or e.message}'}
+            return {'success': False, 'error': _('Deletion failed: %(reason)s', reason=e.detail or e.message)}
 
     def _rollback_service(self, service: Any, revision: int | None) -> dict[str, Any]:
         """Rollback service to a previous revision."""
@@ -3870,11 +3871,11 @@ class PaasController(HiddenChainMixin, Controller):
         # reference_helm_resource_policy_stored_manifest 的既有教訓）。
         # 結果就是欠費停權的 VM 被喚醒並繼續計費。
         if service.state in ['pending', 'deleting', 'suspended']:
-            return {'success': False, 'error': f'Cannot rollback service in {service.state} state'}
+            return {'success': False, 'error': _('Cannot rollback service in %(state)s state', state=service.state)}
 
         client = get_paas_operator_client(request.env)
         if not client:
-            return {'success': False, 'error': 'PaaS Operator not configured'}
+            return {'success': False, 'error': _('PaaS Operator not configured')}
 
         try:
             client.rollback_release(
@@ -3892,20 +3893,20 @@ class PaasController(HiddenChainMixin, Controller):
                 'last_upgraded_at': fields.Datetime.now(),
             })
 
-            return {'success': True, 'message': f'Rollback to revision {revision} initiated'}
+            return {'success': True, 'message': _('Rollback to revision %(revision)s initiated', revision=revision)}
 
         except PaaSOperatorConnectionError:
-            return {'success': False, 'error': 'Unable to connect to deployment service'}
+            return {'success': False, 'error': _('Unable to connect to deployment service')}
 
         except PaaSOperatorError as e:
             _logger.error("Operator error during rollback: %s", str(e))
-            return {'success': False, 'error': f'Rollback failed: {e.detail or e.message}'}
+            return {'success': False, 'error': _('Rollback failed: %(reason)s', reason=e.detail or e.message)}
 
     def _get_service_revisions(self, service: Any) -> dict[str, Any]:
         """Get revision history for a service."""
         client = get_paas_operator_client(request.env)
         if not client:
-            return {'success': False, 'error': 'PaaS Operator not configured'}
+            return {'success': False, 'error': _('PaaS Operator not configured')}
 
         try:
             result = client.get_revisions(
@@ -3919,12 +3920,12 @@ class PaasController(HiddenChainMixin, Controller):
             }
 
         except PaaSOperatorConnectionError:
-            return {'success': False, 'error': 'Unable to connect to deployment service'}
+            return {'success': False, 'error': _('Unable to connect to deployment service')}
 
         except PaaSOperatorError as e:
             if e.status_code == 404:
                 return {'success': True, 'data': []}
-            return {'success': False, 'error': f'Failed to get revisions: {e.detail or e.message}'}
+            return {'success': False, 'error': _('Failed to get revisions: %(reason)s', reason=e.detail or e.message)}
 
     def _update_service_status(self, service: Any) -> None:
         """Poll operator for service status and update record.
@@ -4094,7 +4095,8 @@ class PaasController(HiddenChainMixin, Controller):
                 sys_service.write({
                     'state': 'error',
                     **release_facts,
-                    'error_message': release.get('description', 'Deployment failed'),
+                    'error_message': release.get(
+                        'description', _('Deployment failed')),
                 })
 
             elif service._is_timeout_governed():
@@ -4250,7 +4252,9 @@ class PaasController(HiddenChainMixin, Controller):
                     if retries >= 5:
                         vals.update({
                             'state': 'error',
-                            'error_message': f'n8n initialization failed after {retries} retries: {error_msg}',
+                            'error_message': _('n8n initialization failed after '
+                                               '%(retries)s retries: %(reason)s',
+                                               retries=retries, reason=error_msg),
                         })
                     sys_service.write(vals)
                     _logger.warning(
@@ -4267,7 +4271,7 @@ class PaasController(HiddenChainMixin, Controller):
                 if retries >= 5:
                     vals.update({
                         'state': 'error',
-                        'error_message': f'n8n initialization failed: {str(e)}',
+                        'error_message': _('n8n initialization failed: %(reason)s', reason=str(e)),
                     })
                 sys_service.write(vals)
                 _logger.warning(
@@ -4310,7 +4314,9 @@ class PaasController(HiddenChainMixin, Controller):
                     if retries >= 5:
                         vals.update({
                             'state': 'error',
-                            'error_message': f'Odoo initialization failed after {retries} retries: {error_msg}',
+                            'error_message': _('Odoo initialization failed after '
+                                               '%(retries)s retries: %(reason)s',
+                                               retries=retries, reason=error_msg),
                         })
                     sys_service.write(vals)
                     _logger.warning(
@@ -4327,7 +4333,7 @@ class PaasController(HiddenChainMixin, Controller):
                 if retries >= 5:
                     vals.update({
                         'state': 'error',
-                        'error_message': f'Odoo initialization failed: {str(e)}',
+                        'error_message': _('Odoo initialization failed: %(reason)s', reason=str(e)),
                     })
                 sys_service.write(vals)
                 _logger.warning(
@@ -4443,7 +4449,14 @@ class PaasController(HiddenChainMixin, Controller):
                 # #627 (i)/E：讓「這個版本號多新」對租戶可見。B 那條對帳 cron 每日
                 # 一次 ⇒ 最多一個週期的偵測延遲，這個欄位就是那個延遲的誠實揭露，
                 # 不是裝飾——沒有它，平台等於假裝自己一直是準的。
-                'last_release_sync_at': service.last_release_sync_at,
+                # #917：這格原本漏了 `.isoformat()`，裸 datetime 進 JSON ⇒ 落到
+                # Odoo 的 `json_default`，序列化成 SQL 空格格式（`2026-08-26 12:34:56`），
+                # 與同一份 payload 其他 datetime 欄位的 ISO `T` 格式不一致，
+                # 而前端那格又是裸 `t-esc` ⇒ 原始字串直接印給租戶。
+                'last_release_sync_at': (
+                    service.last_release_sync_at.isoformat()
+                    if service.last_release_sync_at else None
+                ),
                 # #559：helm_values 有 groups='base.group_system'，屬性直讀會
                 # AccessError。走 model 的唯一入口——租戶看得到的仍是遮罩後的值
                 # （#535），只是 ORM 直讀那條側門被關上了。

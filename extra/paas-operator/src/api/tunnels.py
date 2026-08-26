@@ -105,13 +105,29 @@ async def _assert_tunnel_ownership(
         CF 回了空 name。**必須特判**：``get_tunnel_status`` 對缺欄位是
         ``result.get("name", "")``，若不特判，claim 也是空字串時 ``"" == ""``
         會**通過** —— 兩側一起壞成同一個垃圾值，比不相等**更容易**成立。
+        ⚠ **例外（#833）**：若 CF 同時回了 ``deleted_at``，那個空 name 是「已經
+        被刪掉的東西沒有 name」而不是「查不出來」⇒ 放行（見下方 ``deleted_at``
+        那段）。這是本函式唯一因軟刪除而放寬的一格。
     ``tunnel_ownership_check_failed``
         CF 查詢本身失敗（非 404）⇒ 502。**「沒驗到」不等於「驗過了」**，不放行。
 
-    唯一的放行例外是 **CF 回 404（tunnel 不存在）**：沒有別人的資源可傷，而且
+    放行例外之一是 **CF 回 404（tunnel 不存在）**：沒有別人的資源可傷，而且
     ``CloudflareService.delete_tunnel`` 對 404 是**當成功處理**的（teardown 重試
     靠這個冪等性）。若把 404 當拒絕，等於把「重試把殘留收乾淨」這條路封死 ——
     tunnel 已經不在了，呼叫端那一列卻永遠拆不掉。
+
+    🔴 **但那條 404 例外，在它被寫來服務的情境裡從來沒有觸發過**（#833）：CF 刪
+    tunnel 是**軟刪除**，DELETE 成功之後 ``GET /cfd_tunnel/{id}`` 仍回 **200**、
+    只是多一個 ``deleted_at``。所以 teardown 重試至今是靠「claim 剛好對得上 name」
+    這個副作用在收斂的，不是靠上面那條例外。``deleted_at``（operator ≥ #833）補上
+    了那條例外原本就該涵蓋、卻因軟刪除而漏掉的路徑 —— **但只補「CF 連 name 都沒
+    回」那一格**，其餘一律維持原本的 fail-closed 比對。⛔ 軟刪除**不是**無條件放行
+    的理由，理由見那一格的 inline 註解。
+
+    ⚠ ``deleted_at`` **缺席不是訊號**：舊版 operator 不回這個欄位，CF 對未刪除的
+    tunnel 也回 ``null``。兩者都必須落回原本的行為，不得當成「不確定 ⇒ 拒」或
+    「不確定 ⇒ 放」（同 docs/tracking/pitfalls/
+    operator-route-none-conflates-disabled-and-failed.md 的通則）。
     """
     claim = (claimed_name or "").strip()
 
@@ -157,6 +173,31 @@ async def _assert_tunnel_ownership(
 
     actual_name = (tunnel_status.get("name") or "").strip()
     if not actual_name:
+        # #833：CF 沒回 name 時，「已軟刪除」與「活著但 CF 沒給值」是兩件事。
+        #
+        # ⛔ **這個放寬只在這一格，不在整支函式。** 軟刪除**不是**無條件放行的
+        # 理由：一條別人的、已軟刪的 tunnel 若 claim 對不上，下面的等值比對仍然
+        # 要拒（403 mismatch）。把軟刪判斷提到比對之前無條件 return，等於對這道
+        # 守衛做 fail-open 翻轉 —— 而且放行後真的有東西可動：``PUT /{id}/routes``
+        # 的 ``reconcile_tunnel_dns`` 會對**共用 zone** 建立／刪除 DNS 記錄，
+        # ``delete_tunnel`` 也會先跑 ``_cleanup_dns_for_tunnel``。
+        # **tunnel 死了，zone 沒死。**（守線＝test_tunnel_soft_delete_833.py 的
+        # ``test_soft_deleted_with_a_mismatched_claim_is_still_refused``。）
+        #
+        # ⚠ CF 對軟刪 tunnel 到底還回不回 name，官方文件未載明、本 repo 也沒有
+        # 授權實測。所以這一格是**防禦性**的：若 CF 照回 name，這條分支永遠走不
+        # 到（無害）；若 CF 不回，它就是唯一擋住「tunnel 已經不在了、DB 那一列
+        # 卻永遠拆不掉」的東西。
+        soft_deleted = tunnel_status.get("deleted_at")
+        if soft_deleted:
+            logger.info(
+                "tunnel_soft_deleted_on_cloudflare: op=%s tunnel=%s deleted_at=%s "
+                "— ownership check skipped (Cloudflare gave no name to compare "
+                "against and the tunnel is provably gone); letting the operation "
+                "proceed so idempotent teardown still converges",
+                operation, tunnel_id, soft_deleted,
+            )
+            return
         logger.error(
             "tunnel_ownership_unverifiable: op=%s tunnel=%s — Cloudflare returned "
             "no tunnel name; refusing rather than comparing against an empty value",
@@ -319,6 +360,10 @@ async def get_tunnel_status(tunnel_id: str):
             status=tunnel_status["status"],
             connections=tunnel_status["connections"],
             created_at=tunnel_status.get("created_at"),
+            # #833。⚠ 用 ``.get()`` 不是下標：上面四欄的下標在 key 缺席時 raise
+            # ``KeyError``，那不是 ``CloudflareException``、會整個繞過下面的錯誤
+            # 映射變成未處理的 500。新欄位不再加一個這種地雷。
+            deleted_at=tunnel_status.get("deleted_at"),
         )
 
     except CloudflareException as e:

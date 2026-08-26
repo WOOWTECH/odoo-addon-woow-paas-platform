@@ -64,3 +64,6 @@ from . import product_template_subscription_tax
 
 # feat: #803 `access_protection_lost` 的週期性收斂者（三腿掃旗標、逐列重推）
 from . import access_resync_cron
+
+# feat: #107 啟用 zh_TW（`.po` 自檢 ＋ `_activate_lang`；三個呼叫點共用這一份）
+from . import res_lang

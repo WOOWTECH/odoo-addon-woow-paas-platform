@@ -1,5 +1,6 @@
 /** @odoo-module **/
 import { Component, useState, onMounted } from "@odoo/owl";
+import { _t } from "@web/core/l10n/translation";
 import { WoowCard } from "../../components/card/WoowCard";
 import { WoowIcon } from "../../components/icon/WoowIcon";
 import { WoowButton } from "../../components/button/WoowButton";
@@ -88,7 +89,7 @@ export class AppConfigurationPage extends Component {
                 this.state.plansError = plansResult.error;
             }
         } else {
-            this.state.error = result.error || "Failed to load template";
+            this.state.error = result.error || _t("Failed to load template");
         }
 
         this.state.loading = false;
@@ -132,10 +133,10 @@ export class AppConfigurationPage extends Component {
     _publishBreadcrumb() {
         const ws = workspaceService.workspaces.find(w => w.id === this.props.workspaceId);
         breadcrumbService.set("configure", [
-            { label: "Workspaces", path: "workspaces" },
-            { label: ws?.name || "Workspace", path: `workspace/${this.props.workspaceId}` },
-            { label: "App Marketplace", path: `workspace/${this.props.workspaceId}/services/marketplace` },
-            { label: `Configure ${this.state.template.name}`, path: null },
+            { label: _t("Workspaces"), path: "workspaces" },
+            { label: ws?.name || _t("Workspace"), path: `workspace/${this.props.workspaceId}` },
+            { label: _t("App Marketplace"), path: `workspace/${this.props.workspaceId}/services/marketplace` },
+            { label: _t("Configure %s", this.state.template.name), path: null },
         ]);
     }
 
@@ -294,11 +295,11 @@ export class AppConfigurationPage extends Component {
         // Validate name
         const name = this.state.name.trim();
         if (!name) {
-            errors.name = 'Service name is required';
+            errors.name = _t('Service name is required');
         } else if (name.length < 2) {
-            errors.name = 'Service name must be at least 2 characters';
+            errors.name = _t('Service name must be at least 2 characters');
         } else if (name.length > 100) {
-            errors.name = 'Service name must be at most 100 characters';
+            errors.name = _t('Service name must be at most 100 characters');
         }
 
         // Subdomain is auto-generated, no validation needed
@@ -309,14 +310,14 @@ export class AppConfigurationPage extends Component {
             const value = this.state.helmValues[spec.key];
             if (spec.required !== false) { // Required by default in required section
                 if (value === undefined || value === null || value === '') {
-                    errors[spec.key] = `${spec.label} is required`;
+                    errors[spec.key] = _t("%s is required", spec.label);
                 }
             }
         }
 
         // Validate plan selection
         if (!this.state.selectedPlanId) {
-            errors.plan = 'Please select a subscription plan';
+            errors.plan = _t('Please select a subscription plan');
         }
 
         this.state.errors = errors;
@@ -367,10 +368,10 @@ export class AppConfigurationPage extends Component {
                     this.router.navigate(`workspace/${this.props.workspaceId}/services/${serviceId}`);
                 }
             } else {
-                this.state.launchError = result.error || 'Failed to create service';
+                this.state.launchError = result.error || _t('Failed to create service');
             }
         } catch (error) {
-            this.state.launchError = error.message || 'An unexpected error occurred';
+            this.state.launchError = error.message || _t('An unexpected error occurred');
         } finally {
             this.state.launching = false;
         }

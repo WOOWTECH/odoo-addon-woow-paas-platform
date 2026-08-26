@@ -348,15 +348,21 @@ class TestSecurityAccessSubscriptionTrioGate(TransactionCase):
         self.workspace = self.env['woow_paas_platform.workspace'].create({
             'name': 'SA Trio WS', 'owner_id': self.owner.id,
         })
+        # #750：兩支 plan 都補 service_type='security_access'。理由不是為了
+        # 讓新 gate 過，是 fixture 本來就漏了——它們掛在下面的 SA template 上，
+        # 依 _check_service_type_matches_template_family 的家族一致性，SA
+        # template 底下的 plan 的 service_type 就該是 'security_access'。
+        # （建立當下還沒掛 template ⇒ families 為空 ⇒ 該 constraint 走 orphan
+        # 放行分支，不會炸。）
         self.plan = self.env['sh.subscription.plan'].create({
             'name': 'SA Trio Plan', 'sh_duration': 1, 'sh_unit': 'month',
             'sh_plan_price': 100, 'sh_no_of_billing_cycle': -1,
-            'sa_max_routes': 3,
+            'sa_max_routes': 3, 'service_type': 'security_access',
         })
         self.plan_b = self.env['sh.subscription.plan'].create({
             'name': 'SA Trio Plan B', 'sh_duration': 1, 'sh_unit': 'month',
             'sh_plan_price': 200, 'sh_no_of_billing_cycle': -1,
-            'sa_max_routes': 5,
+            'sa_max_routes': 5, 'service_type': 'security_access',
         })
         # _create_and_confirm_subscription resolves the subscription product
         # from product.template(sh_product_subscribe, sh_subscription_plan_id);
@@ -381,9 +387,15 @@ class TestSecurityAccessSubscriptionTrioGate(TransactionCase):
                 'subscription_plan_ids': [(6, 0, [self.plan.id,
                                                   self.plan_b.id])],
             })
+        # ⚠ 刻意 **不** 給 template_id：本 class 既有的 change-plan 測試就是靠
+        # 這個 template-less SA 走 #750 第 1 項改到的那條分支。
         self.sa = self.SecurityAccess.create({
             'name': 'Trio Gateway', 'workspace_id': self.workspace.id,
         })
+        self.assertFalse(
+            self.sa.template_id,
+            '前置不成立：self.sa 應為 template-less，否則下面的 #750 '
+            'template-less 分支測試全部測到另一條分支')
         # journal 設定（_create_and_confirm_subscription 前置）
         company = self.env.company.sudo()
         if not company.sh_journal_id:
@@ -558,6 +570,150 @@ class TestSecurityAccessSubscriptionTrioGate(TransactionCase):
         self.assertNotIn('insufficient permissions', error_text, res)
         self.assertNotIn('not allowed to access', error_text, res)
         self.assertNotIn('sh.subscription.subscription', error_text, res)
+
+    # ---- change-plan：template-less 分支的 plan 歸屬守衛（#750 第 1 項）----
+
+    def _plan_with_product(self, name, price, **extra):
+        """建一支帶 subscription product 的 plan。
+
+        ⚠ product 是**鑑別力的前提**，不是排場：`_create_and_confirm_subscription`
+        找不到 product 會直接 raise（"No subscription product found"），舊碼上
+        測試就變成 ERROR 而不是「守衛沒擋住」——那條紅無從分辨是守衛缺席還是
+        fixture 缺件。給了 product，舊碼才會**成功**換方案，紅的意思才唯一。
+        """
+        plan = self.env['sh.subscription.plan'].create(dict({
+            'name': name, 'sh_duration': 1, 'sh_unit': 'month',
+            'sh_plan_price': price, 'sh_no_of_billing_cycle': -1,
+        }, **extra))
+        self.env['product.product'].create({
+            'name': name + ' Product', 'type': 'service',
+            'sh_product_subscribe': True,
+            'sh_subscription_plan_id': plan.id,
+        })
+        return plan
+
+    def _provision_templateless_sa(self):
+        """把 self.sa（template-less）開到 in_progress，回原始 plan。"""
+        partner = self.workspace.owner_id.partner_id
+        self.sa._create_and_confirm_subscription(partner, self.plan)
+        self.assertEqual(self.sa.sudo().subscription_id.state, 'in_progress')
+        self.env.invalidate_all()
+        return self.plan
+
+    def test_change_plan_templateless_rejects_non_sa_family_plan(self):
+        """A（擋）：template-less SA 換到**非 SA 家族**的 plan 須被拒。
+
+        #750：舊碼 `if sa.template_id and ...` 讓 template-less SA 整段跳過
+        白名單 ⇒ 任何 plan 都換得成。新判準退一階量守衛的目標本身
+        （plan 是不是這個 service 的合法 plan）。
+        """
+        self._provision_templateless_sa()
+        foreign = self._plan_with_product(
+            'Trio Foreign CS Plan', 75, service_type='cloud_service')
+        # 前置：這支 plan 不掛任何 SA template（否則測到的是別條分支）。
+        self.assertFalse(self.env[
+            'woow_paas_platform.security_access_template'].sudo().search_count(
+                [('subscription_plan_ids', 'in', foreign.id)]),
+            '前置不成立：foreign plan 竟掛在 SA template 上')
+        with _patch_request(self.env(user=self.owner)):
+            res = self.controller.api_sa_change_plan(
+                workspace_id=self.workspace.id, sa_id=self.sa.id,
+                plan_id=foreign.id)
+        self.assertFalse(res['success'], res)
+        self.assertIn('not a valid security access plan',
+                      (res.get('error') or '').lower(), res)
+        # 訂閱沒有被換掉（守衛在開新訂閱之前就攔下）。
+        self.assertEqual(
+            self.sa.sudo().subscription_id.sh_subscription_plan_id, self.plan)
+
+    def test_change_plan_templateless_accepts_sa_family_plan(self):
+        """B（放行）：template-less SA 換到合法 SA plan 必須通過。
+
+        ⚠ 沒有這條，「把整段改成一律拒絕」也會讓 A 綠。
+        """
+        self._provision_templateless_sa()
+        # 前置：plan_b 是 SA 家族、且掛在 SA template 上。
+        self.assertEqual(self.plan_b.service_type, 'security_access')
+        self.assertTrue(self.env[
+            'woow_paas_platform.security_access_template'].sudo().search_count(
+                [('subscription_plan_ids', 'in', self.plan_b.id)]))
+        with _patch_request(self.env(user=self.owner)):
+            res = self.controller.api_sa_change_plan(
+                workspace_id=self.workspace.id, sa_id=self.sa.id,
+                plan_id=self.plan_b.id)
+        self.assertTrue(res['success'], res.get('error'))
+        self.assertEqual(
+            self.sa.sudo().subscription_id.sh_subscription_plan_id,
+            self.plan_b)
+
+    def test_change_plan_templateless_rejects_orphan_sa_plan(self):
+        """C（疊上去的那層）：service_type 對、但不掛任何 SA template 的
+        **孤兒 SA plan** 也要被拒。
+
+        只有 A/B 兩條的話，「只驗 service_type」的實作也會全綠——這條是那層
+        更嚴判準唯一的鑑別點。疊它的依據＝2026-08-25 stg／prod 兩環境
+        service_type='security_access' 各 88 筆、孤兒各 0 筆（見 PR body），
+        所以疊上去擋不到任何現存的合法 plan。
+        """
+        self._provision_templateless_sa()
+        orphan = self._plan_with_product(
+            'Trio Orphan SA Plan', 120, service_type='security_access',
+            sa_max_routes=7)
+        # 前置一：service_type 對（所以「只驗 service_type」的實作會放行它）。
+        self.assertEqual(orphan.service_type, 'security_access')
+        # 前置二：真的是孤兒。
+        self.assertFalse(self.env[
+            'woow_paas_platform.security_access_template'].sudo().search_count(
+                [('subscription_plan_ids', 'in', orphan.id)]),
+            '前置不成立：orphan plan 竟掛在 SA template 上')
+        with _patch_request(self.env(user=self.owner)):
+            res = self.controller.api_sa_change_plan(
+                workspace_id=self.workspace.id, sa_id=self.sa.id,
+                plan_id=orphan.id)
+        self.assertFalse(res['success'], res)
+        self.assertIn('not a valid security access plan',
+                      (res.get('error') or '').lower(), res)
+        self.assertEqual(
+            self.sa.sudo().subscription_id.sh_subscription_plan_id, self.plan)
+
+    def test_change_plan_templated_still_rejects_other_templates_sa_plan(self):
+        """D（把原分支鎖住）：有 template 的 SA 仍只能在**自己 template**
+        的 plan 集合內換。
+
+        鑑別點：這支 plan 完全滿足 template-less 的新判準
+        （service_type='security_access' ∧ 掛在某個 SA template 上），只是
+        不在**這個** SA 的 template 裡 ⇒ 若哪天有人把 templated 分支也換成
+        那個較寬的新判準，只有這條會紅。既有的
+        test_change_plan_rejects_plan_not_in_template 用的是「什麼都不是」的
+        plan，兩套判準都會擋它，抓不到這種放寬。
+        """
+        sa = self.SecurityAccess.create({
+            'name': 'Locked Trio GW', 'workspace_id': self.workspace.id,
+            'template_id': self.template.id,
+        })
+        partner = self.workspace.owner_id.partner_id
+        sa._create_and_confirm_subscription(partner, self.plan)
+        other_plan = self._plan_with_product(
+            'Trio Other Tmpl SA Plan', 300, service_type='security_access',
+            sa_max_routes=9)
+        other_template = self.env[
+            'woow_paas_platform.security_access_template'].create({
+                'name': 'SA Trio Other Tmpl',
+                'subscription_plan_ids': [(6, 0, [other_plan.id])],
+            })
+        # 前置：other_plan 掛在**另一個** SA template，且不在本 SA 的 template。
+        self.assertIn(other_plan, other_template.subscription_plan_ids)
+        self.assertNotIn(other_plan, self.template.subscription_plan_ids)
+        self.env.invalidate_all()
+        with _patch_request(self.env(user=self.owner)):
+            res = self.controller.api_sa_change_plan(
+                workspace_id=self.workspace.id, sa_id=sa.id,
+                plan_id=other_plan.id)
+        self.assertFalse(res['success'], res)
+        self.assertIn('not available for this template',
+                      (res.get('error') or '').lower(), res)
+        self.assertEqual(
+            sa.sudo().subscription_id.sh_subscription_plan_id, self.plan)
 
     # ---- routes create/delete cross-user negatives ----
 

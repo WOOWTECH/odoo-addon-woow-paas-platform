@@ -1,5 +1,6 @@
 /** @odoo-module **/
 import { Component, onMounted, useState } from "@odoo/owl";
+import { _t } from "@web/core/l10n/translation";
 import { WoowCard } from "../../components/card/WoowCard";
 import { WoowIcon } from "../../components/icon/WoowIcon";
 import { dashboardService } from "../../services/dashboard_service";
@@ -27,7 +28,7 @@ export class DashboardPage extends Component {
 
     get welcomeName() {
         const name = this.profileService.partner?.name?.trim();
-        return name || "there";
+        return name || _t("there");
     }
 
     // ------------------------------------------------------------------
@@ -53,13 +54,13 @@ export class DashboardPage extends Component {
     get membersCard() {
         const m = this.data?.members || { total: 0, active: 0, pending: 0 };
         return {
-            label: "Members",
-            subtitle: "Workspace access",
+            label: _t("Members"),
+            subtitle: _t("Workspace access"),
             icon: "group",
             color: "blue",
             items: [
-                { label: "Total", value: m.total },
-                { label: "Active", value: m.active, highlight: true },
+                { label: _t("Total"), value: m.total },
+                { label: _t("Active"), value: m.active, highlight: true },
             ],
         };
     }
@@ -67,15 +68,15 @@ export class DashboardPage extends Component {
     get billingCard() {
         const b = this.data?.billing || {};
         return {
-            label: "Billing",
-            subtitle: "Credits & next bill",
+            label: _t("Billing"),
+            subtitle: _t("Credits & next bill"),
             icon: "account_balance_wallet",
             color: "green",
             items: [
-                { label: "Credits Left", value: formatPoints(b.credits_left), highlight: true },
-                { label: "Cycle Usage", value: formatPoints(b.current_cycle_usage) },
+                { label: _t("Credits Left"), value: formatPoints(b.credits_left), highlight: true },
+                { label: _t("Cycle Usage"), value: formatPoints(b.current_cycle_usage) },
                 {
-                    label: "Next Bill",
+                    label: _t("Next Bill"),
                     value: b.next_bill_date
                         ? `${formatDate(b.next_bill_date)} · ${formatPoints(b.next_bill_estimate)}`
                         : "—",
@@ -87,15 +88,15 @@ export class DashboardPage extends Component {
     get workspacesCard() {
         const w = this.data?.workspaces || { total: 0, services: { running: 0, total: 0 } };
         return {
-            label: "Workspaces",
-            subtitle: "Active spaces & services",
+            label: _t("Workspaces"),
+            subtitle: _t("Active spaces & services"),
             icon: "dashboard",
             color: "purple",
             items: [
-                { label: "Total", value: w.total, highlight: true },
+                { label: _t("Total"), value: w.total, highlight: true },
                 {
-                    label: "Services",
-                    value: `${w.services.running} running / ${w.services.total} total`,
+                    label: _t("Services"),
+                    value: _t("%s running / %s total", w.services.running, w.services.total),
                 },
             ],
         };

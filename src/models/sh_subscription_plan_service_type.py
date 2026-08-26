@@ -1,6 +1,6 @@
 import logging
 
-from odoo import api, fields, models
+from odoo import _, api, fields, models
 from odoo.exceptions import ValidationError
 
 _logger = logging.getLogger(__name__)
@@ -190,6 +190,28 @@ class ShSubscriptionPlanServiceType(models.Model):
                 'subscription_plan_ids': [(6, 0, [p.id for p in plans])],
             })
 
+    def _owning_template_families(self):
+        """回這支 plan 被掛在哪些 template family（service_type 值的集合）。
+
+        空集合＝**orphan plan**：有 service_type、但不掛任何 template
+        （如 AnythingLLM placeholder）。這個狀態是合法的，所以下面的
+        constraint 放行它——但呼叫端若要求「plan 必須真的在某個 family 的
+        白名單裡」，就得自己再問一次（#750 的 change-plan 守衛即是）。
+
+        sudo：M2M 走訪落在三個 catalog template model 上，租戶身分是 portal
+        （signup template user 只有 base.group_portal，見 tests/test_acl_p9.py），
+        而 ir.model.access.csv 只給 security_access_template 兩列
+        （base.group_user 唯讀、base.group_system 全權）⇒ portal 一列都沒有，
+        未 sudo 的 search 會在 catalog model 上丟 AccessError，而不是求出答案。
+        呼叫端負責先擋好「誰有資格問這個問題」。
+        """
+        self.ensure_one()
+        return {
+            st for model_name, st in self._TEMPLATE_FAMILY.items()
+            if self.env[model_name].sudo().search_count(
+                [('subscription_plan_ids', 'in', self.id)])
+        }
+
     @api.constrains('service_type')
     def _check_service_type_matches_template_family(self):
         """條件式 guard（縱深防禦）：存下的 service_type 必須與 owning
@@ -201,18 +223,14 @@ class ShSubscriptionPlanServiceType(models.Model):
         掛錯 family。
         """
         for plan in self:
-            families = {
-                st for model_name, st in self._TEMPLATE_FAMILY.items()
-                if self.env[model_name].sudo().search_count(
-                    [('subscription_plan_ids', 'in', plan.id)])
-            }
+            families = plan._owning_template_families()
             if not families:
                 continue  # orphan plan → 放行
             if plan.service_type and plan.service_type not in families:
                 raise ValidationError(
-                    "Plan '%s' 的 service_type=%s 與其 owning template "
-                    "family %s 不一致。plan 分類必須跟隨掛載它的 template "
-                    "家族（cloud_app→cloud_service／smart_home→smart_home／"
-                    "security_access→security_access）。"
+                    _("Plan '%s' 的 service_type=%s 與其 owning template "
+                      "family %s 不一致。plan 分類必須跟隨掛載它的 template "
+                      "家族（cloud_app→cloud_service／smart_home→smart_home／"
+                      "security_access→security_access）。")
                     % (plan.name, plan.service_type, sorted(families))
                 )

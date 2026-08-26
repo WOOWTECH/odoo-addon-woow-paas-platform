@@ -37,7 +37,7 @@
             <WoowButton variant="'secondary'"
                         onClick="() => state.showChangePlanModal = true">
               <WoowIcon name="'swap_horiz'" size="16"/>
-              變更方案
+              Change Plan
             </WoowButton>
             <WoowButton variant="'danger'"
                         onClick="() => state.showDeleteConfirm = true">

@@ -1,5 +1,6 @@
 /** @odoo-module **/
 import { Component, useState, onMounted } from "@odoo/owl";
+import { _t } from "@web/core/l10n/translation";
 import { WoowButton } from "../button/WoowButton";
 import { WoowIcon } from "../icon/WoowIcon";
 import { PlanSelector } from "../subscription/PlanSelector";
@@ -87,7 +88,7 @@ export class ChangePlanModal extends Component {
     if (res.success) {
       this.state.plans = res.data;
     } else {
-      this.state.plansError = res.error || "Failed to load plans";
+      this.state.plansError = res.error || _t("Failed to load plans");
     }
     this.state.loadingPlans = false;
   }
@@ -175,7 +176,7 @@ export class ChangePlanModal extends Component {
       // 帶 data（refund_amount / new_plan）供父頁運用；目前父頁只關 modal + reload。
       this.props.onChanged(res.data);
     } else {
-      this.state.error = res.error || "Failed to change plan";
+      this.state.error = res.error || _t("Failed to change plan");
       this.state.changing = false;
     }
   }

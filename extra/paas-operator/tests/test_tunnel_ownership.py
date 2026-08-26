@@ -316,12 +316,20 @@ class TestRolloutDefaultIsWarnNotEnforce:
         )
 
     def test_marker_names_are_not_superstrings_of_each_other(self):
-        """四個 error code ＋ stage-1 marker 兩兩不得互為前綴。
+        """本函式吐的**每一個** marker 兩兩不得互為子字串。
 
         否則 `grep` / `in` 分不開，用它們寫的判準（含上面那條 stage-1 斷言、以及
         現場拿來判斷「可以翻旗了沒」的 log 查詢）會靜默失去鑑別力。
+
+        ⚠ 這支原本漏了兩件事，#833 一起補上：
+        * 清單少了 ``tunnel_absent_on_cloudflare``（404 放行那條）。它一樣會進
+          log、一樣會被拿來 grep，漏列等於這道守線對它沒有鑑別力。
+        * 判準只驗 ``startswith``（前綴），但 ``grep`` / ``in`` 要的是**子字串**。
+          前綴通過不代表子字串通過 —— 判準比它要守的用法弱，就是盲區。
         """
         markers = [
+            "tunnel_absent_on_cloudflare",
+            "tunnel_soft_deleted_on_cloudflare",
             "tunnel_claim_absent",
             "tunnel_ownership_mismatch",
             "tunnel_ownership_claim_required",
@@ -332,7 +340,34 @@ class TestRolloutDefaultIsWarnNotEnforce:
         for a in markers:
             for b in markers:
                 if a is not b:
-                    assert not b.startswith(a), f"{b!r} 是 {a!r} 的超字串"
+                    assert a not in b, f"{b!r} 含有 {a!r} —— grep / in 分不開"
+
+    def test_every_marker_the_module_logs_is_covered_by_the_guard(self):
+        """守線的清單必須涵蓋**原始碼裡真的存在**的每一個 marker。
+
+        ⚠ 沒有這條，上面那支就只是「我列出來的這幾個彼此不衝突」——新增一個
+        marker 而忘了加進清單時，它會**繼續全綠**（無聲失去涵蓋）。判準改成從
+        原始碼撈，讓「漏列」以紅燈現形。
+        """
+        import re
+        from pathlib import Path
+
+        src = Path(tunnels_module.__file__).read_text(encoding="utf-8")
+        # 只認 logger 呼叫第一個字面量開頭的 "tunnel_xxx: " 形狀（本模組的慣例）。
+        found = set(re.findall(r'"(tunnel_[a-z_]+): op=%s', src))
+        declared = {
+            "tunnel_absent_on_cloudflare",
+            "tunnel_soft_deleted_on_cloudflare",
+            "tunnel_claim_absent",
+            "tunnel_ownership_mismatch",
+            "tunnel_ownership_claim_required",
+            "tunnel_ownership_unverifiable",
+            "tunnel_ownership_check_failed",
+        }
+        assert found, "撈不到任何 marker —— 判別式壞了（探針自毀），不是真的沒有"
+        assert found <= declared, (
+            f"原始碼有守線沒涵蓋的 marker：{sorted(found - declared)}"
+        )
 
 
 class TestMissingClaimRolloutStages:

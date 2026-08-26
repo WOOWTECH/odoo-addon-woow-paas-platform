@@ -1,5 +1,6 @@
 /** @odoo-module **/
 import { Component, useState } from "@odoo/owl";
+import { _t } from "@web/core/l10n/translation";
 import { WoowCard } from "../../../components/card/WoowCard";
 import { WoowIcon } from "../../../components/icon/WoowIcon";
 import { WoowButton } from "../../../components/button/WoowButton";
@@ -98,7 +99,7 @@ export class ConfigurationTab extends Component {
     formatSpecValue(spec) {
         const value = this.getSpecValue(spec);
         if (spec.type === "password") return "********";
-        if (spec.type === "boolean") return value ? "Enabled" : "Disabled";
+        if (spec.type === "boolean") return value ? _t("Enabled") : _t("Disabled");
         if (value === null || value === undefined) return "-";
         return String(value);
     }
@@ -163,7 +164,7 @@ export class ConfigurationTab extends Component {
             if (this.isPasswordSpec(spec)) continue;
             const value = this.state.editedValues[spec.key];
             if (value === undefined || value === null || value === "") {
-                errors[spec.key] = `${spec.label || spec.key} is required`;
+                errors[spec.key] = _t("%s is required", spec.label || spec.key);
             }
         }
         this.state.errors = errors;
@@ -210,10 +211,10 @@ export class ConfigurationTab extends Component {
                     this.props.onSave(result.data);
                 }
             } else {
-                this.state.error = result.error || "Failed to update configuration";
+                this.state.error = result.error || _t("Failed to update configuration");
             }
         } catch (err) {
-            this.state.error = err.message || "Failed to update configuration";
+            this.state.error = err.message || _t("Failed to update configuration");
         } finally {
             this.state.saving = false;
         }
