@@ -1326,7 +1326,9 @@ class CloudService(models.Model):
             )
             service.write({
                 'state': 'error',
-                'error_message': 'Unexpected error during deployment. Check server logs.',
+                'error_message': _(
+                    'Unexpected error during deployment. '
+                    'Check server logs.'),
             })
 
         # If more pending services exist, re-trigger for next run
@@ -1350,7 +1352,9 @@ class CloudService(models.Model):
         if not client:
             self.write({
                 'state': 'error',
-                'error_message': 'PaaS Operator not configured. Contact administrator.',
+                'error_message': _(
+                    'PaaS Operator not configured. '
+                    'Contact administrator.'),
             })
             return
 
@@ -1428,7 +1432,9 @@ class CloudService(models.Model):
                 if e.status_code != 409:
                     self.write({
                         'state': 'error',
-                        'error_message': f'Failed to create namespace: {e.detail or e.message}',
+                        'error_message': _(
+                            'Failed to create namespace: %(detail)s',
+                            detail=e.detail or e.message),
                     })
                     return
 
@@ -1503,14 +1509,18 @@ class CloudService(models.Model):
             _logger.error("Operator connection error: %s", e)
             self.write({
                 'state': 'error',
-                'error_message': 'Unable to connect to deployment service. Please try again later.',
+                'error_message': _(
+                    'Unable to connect to deployment service. '
+                    'Please try again later.'),
             })
 
         except PaaSOperatorError as e:
             _logger.error("Operator error: %s", e)
             self.write({
                 'state': 'error',
-                'error_message': f'Deployment failed: {e.detail or e.message}',
+                'error_message': _(
+                    'Deployment failed: %(detail)s',
+                    detail=e.detail or e.message),
             })
 
     # ------------------------------------------------------------------ #
@@ -2565,9 +2575,10 @@ class CloudService(models.Model):
                 self.id, e,
             )
             self.write({
-                'error_message': (
-                    f'Service is suspended but could not be scaled back down '
-                    f'after the upgrade: {e}'
+                'error_message': _(
+                    'Service is suspended but could not be scaled back down '
+                    'after the upgrade: %(error)s',
+                    error=e,
                 ),
             })
             return False
@@ -2866,25 +2877,28 @@ class CloudService(models.Model):
 
         hostname = route.get('hostname') or self._public_url_hostname() or self.subdomain
         if route.get('status') == 'failed':
-            reason = (
+            reason = _(
                 "The service was deployed but its public route could not be "
-                "created, so %s will not be reachable." % (hostname or 'it')
+                "created, so %(hostname)s will not be reachable.",
+                hostname=hostname or _('it'),
             )
         elif route.get('dns_failed'):
-            reason = (
-                "The service was deployed and its tunnel route exists, but the "
-                "DNS record could not be created, so %s will not resolve."
-                % (hostname or 'the public hostname')
+            reason = _(
+                "The service was deployed and its tunnel route exists, but "
+                "the DNS record could not be created, so %(hostname)s will "
+                "not resolve.",
+                hostname=hostname or _('the public hostname'),
             )
         else:
             return False
 
         self.write({
             'state': 'error',
-            'error_message': (
-                "%s The Helm release is kept so it is not orphaned — an "
-                "administrator can create the missing record, or delete and "
-                "re-create this service." % reason
+            'error_message': _(
+                "%(reason)s The Helm release is kept so it is not orphaned — "
+                "an administrator can create the missing record, or delete "
+                "and re-create this service.",
+                reason=reason,
             ),
         })
         _logger.error(
@@ -3090,9 +3104,13 @@ class CloudService(models.Model):
             return False
 
         hint = self._timeout_diagnosis(detail)
-        message = f"Deployment timed out after {minutes} minutes: {detail}"
+        message = _(
+            "Deployment timed out after %(minutes)s minutes: %(detail)s",
+            minutes=minutes, detail=detail,
+        )
         if hint:
-            message = f"{message} — {hint}"
+            # 純格式串（無可翻內容）：兩端都已各自翻譯過。
+            message = '%s — %s' % (message, hint)
 
         # error 分兩種來源，log 要能一眼分辨：這條是「平台判定逾時」，
         # `release_status == 'failed'` 那條是「operator 明確回報失敗」。
@@ -3226,9 +3244,9 @@ class CloudService(models.Model):
                     f'{_UNCONFIRMED_WORKLOAD_MARKER_497}：{service.error_message}'
                 )
             else:
-                vals['error_message'] = (
-                    f'{_UNCONFIRMED_WORKLOAD_MARKER_497}：'
-                    'operator client 或 release 座標不可用'
+                vals['error_message'] = '%s：%s' % (
+                    _UNCONFIRMED_WORKLOAD_MARKER_497,
+                    _('operator client or release coordinates unavailable'),
                 )
             if not confirmed:
                 unconfirmed |= service
@@ -3468,7 +3486,8 @@ class CloudService(models.Model):
             service.write({
                 'state': 'error',
                 **release_facts,
-                'error_message': release.get('description', 'Deployment failed'),
+                'error_message': release.get(
+                    'description', _('Deployment failed')),
             })
 
         elif service._is_timeout_governed():
@@ -3586,7 +3605,10 @@ class CloudService(models.Model):
         if retries >= 5:
             vals.update({
                 'state': 'error',
-                'error_message': f'Initialization failed after {retries} retries: {error_msg}',
+                'error_message': _(
+                    'Initialization failed after %(retries)s retries: '
+                    '%(error)s',
+                    retries=retries, error=error_msg),
             })
         self.write(vals)
         _logger.warning(
@@ -4050,7 +4072,10 @@ class CloudService(models.Model):
                     "[CLOUD_SVC] _do_suspend scale failed service=%s: %s",
                     self.id, e,
                 )
-                self.write({'state': 'error', 'error_message': f'Suspend failed: {e}'})
+                self.write({
+                    'state': 'error',
+                    'error_message': _('Suspend failed: %(error)s', error=e),
+                })
                 return
 
         self.write({
@@ -4101,7 +4126,10 @@ class CloudService(models.Model):
                     "[CLOUD_SVC] _do_resume scale failed service=%s: %s",
                     self.id, e,
                 )
-                self.write({'state': 'error', 'error_message': f'Resume failed: {e}'})
+                self.write({
+                    'state': 'error',
+                    'error_message': _('Resume failed: %(error)s', error=e),
+                })
                 return
 
         # MINOR-4（既存設計，本 PR 未改）：resume 後直接寫回 pre_suspend_state。
@@ -4213,7 +4241,7 @@ class CloudService(models.Model):
                 )
                 self.write({
                     'state': 'error',
-                    'error_message': f'Cleanup failed: {e}',
+                    'error_message': _('Cleanup failed: %(error)s', error=e),
                 })
                 return
 
@@ -4226,9 +4254,10 @@ class CloudService(models.Model):
         if not self._teardown_access_if_any():
             self.write({
                 'state': 'error',
-                'error_message': 'Cloudflare Access teardown failed; the '
-                                 'Access application is still live. Will '
-                                 'retry on the next cron pass.',
+                'error_message': _(
+                    'Cloudflare Access teardown failed; the Access '
+                    'application is still live. Will retry on the next '
+                    'cron pass.'),
             })
             _logger.warning(
                 "[CLOUD_SVC] _do_cleanup incomplete service=%s access_app=%s "

@@ -56,6 +56,7 @@ migration 裡的話 fresh install 永遠不會有它。這裡再建一次是為�
 """
 import logging
 
+from odoo import _
 from odoo.exceptions import UserError
 
 _logger = logging.getLogger(__name__)
@@ -241,11 +242,14 @@ def migrate(cr, version):
     if problems:
         detail = '\n'.join('  - %s' % p for p in problems)
         _logger.error("[768] SH Access 錨點擴充驗證失敗：\n%s", detail)
-        raise UserError(
-            '#768：SH 的 Access 錨點（policy 三腿 arc ＋ smart_home_route）未'
-            '正確落地。\n\n%s\n\n這支 migration 只建 route 列、不搬任何字串——'
-            '失敗代表升級過程中有一段靜默失效了，請先排除再重跑升級。' % detail
-        )
+        raise UserError(_(
+            "#768: the Smart Home Access anchors (the three-legged policy arc "
+            "plus smart_home_route) did not land correctly.\n\n%(detail)s\n"
+            "\nThis migration only creates route rows and moves no strings, "
+            "so a failure here means a step of the upgrade failed silently. "
+            "Resolve it before re-running the upgrade.",
+            detail=detail,
+        ))
 
     _logger.info(
         "[768] 三腿 arc 驗證通過：CHECK `%s` 為 num_nonnulls 形式、既有 policy "

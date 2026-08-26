@@ -37,12 +37,11 @@ _RECLAIM_REFERENCED = 'referenced'         # 窗口外：id 已落地，這顆�
 _RECLAIM_DONE = 'reclaimed'                # 已 delete_tunnel 收回
 _RECLAIM_FAILED = 'unreclaimed'            # 補償自己也失敗 ⇒ 真的留了一顆
 
-#: AccessError 分支寫進 `error_message` 的說明。**不是**把 denial 降級——例外照樣
-#: re-raise，這裡只是讓那一列自己說得出剛才發生過什麼。
-_PROVISION_DENIED_NOTE = (
-    "Provisioning denied: this caller may not write the tunnel credential "
-    "(tunnel_token is a base.group_system field)."
-)
+#: AccessError 分支寫進 `error_message` 的說明**逐字展開在兩個使用點**（本檔
+#: `_do_provision` 的 denial 分支），不抽成模組常數：`_()` 必須在**呼叫當下**求值，
+#: 模組載入期沒有 env／lang 可解析，包在常數上會固定拿到 en_US。兩處字面逐字相同
+#: ⇒ babel 合併成同一個 msgid。**不是**把 denial 降級——例外照樣 re-raise，這裡只是
+#: 讓那一列自己說得出剛才發生過什麼。
 
 # A subdomain prefix is a SINGLE DNS label: 3-63 chars of lowercase letters,
 # digits and hyphens only — NO dots (a dot would split it into multiple labels)
@@ -799,8 +798,9 @@ class SecurityAccess(models.Model):
             except PaaSOperatorConnectionError as e:
                 self.write({
                     'state': 'error',
-                    'error_message':
-                        f"Cannot connect to PaaS Operator: {e.message}",
+                    'error_message': _(
+                        "Cannot connect to PaaS Operator: %(detail)s",
+                        detail=e.message),
                 })
                 _logger.error(
                     "[SA] provision re-sync connection error sa=%s: %s",
@@ -809,7 +809,8 @@ class SecurityAccess(models.Model):
             except PaaSOperatorError as e:
                 self.write({
                     'state': 'error',
-                    'error_message': f"Route sync failed: {e.message}",
+                    'error_message': _(
+                        "Route sync failed: %(detail)s", detail=e.message),
                 })
                 _logger.error(
                     "[SA] provision re-sync error sa=%s: %s",
@@ -832,7 +833,8 @@ class SecurityAccess(models.Model):
                 # broad except in the first-provision branch below).
                 self.write({
                     'state': 'error',
-                    'error_message': f"Provision re-sync failed: {e}",
+                    'error_message': _(
+                        "Provision re-sync failed: %(error)s", error=e),
                 })
                 _logger.exception(
                     "[SA] provision re-sync unexpected error sa=%s", self.id,
@@ -922,7 +924,8 @@ class SecurityAccess(models.Model):
             self.write({
                 'state': 'error',
                 'error_message': self._provision_failure_message(
-                    f"Cannot connect to PaaS Operator: {e.message}",
+                    _("Cannot connect to PaaS Operator: %(detail)s",
+                      detail=e.message),
                     outcome, created),
             })
             _logger.error("[SA] provision connection error: %s", e.message)
@@ -932,7 +935,8 @@ class SecurityAccess(models.Model):
             self.write({
                 'state': 'error',
                 'error_message': self._provision_failure_message(
-                    f"Tunnel creation failed: {e.message}", outcome, created),
+                    _("Tunnel creation failed: %(detail)s", detail=e.message),
+                    outcome, created),
             })
             _logger.error("[SA] provision error: %s", e.message)
         except AccessError:
@@ -967,14 +971,20 @@ class SecurityAccess(models.Model):
                     # 例外照樣 re-raise，也沒有寫成 'error' 假裝成一般失敗。
                     self.write({
                         'state': 'pending',
-                        'error_message': _PROVISION_DENIED_NOTE,
+                        'error_message': _(
+                            "Provisioning denied: this caller may not write "
+                            "the tunnel credential (tunnel_token is a "
+                            "base.group_system field)."),
                     })
                 elif outcome in (_RECLAIM_FAILED, _RECLAIM_INDETERMINATE):
                     # 收不回來／不確定 ⇒ **不**寫回 'pending'：那等於邀請下一次重試
                     # 再開一顆，而前一顆還在 CF 上。只留記錄，狀態維持 'provisioning'。
                     self.write({
                         'error_message': self._provision_failure_message(
-                            _PROVISION_DENIED_NOTE, outcome, created),
+                            _("Provisioning denied: this caller may not write "
+                              "the tunnel credential (tunnel_token is a "
+                              "base.group_system field)."),
+                            outcome, created),
                     })
                 # _RECLAIM_REFERENCED（identity write 之後才丟的 AccessError，例如
                 # _sync_all_routes_access）：tunnel 有參照、state 交給重試路徑，
@@ -1008,7 +1018,8 @@ class SecurityAccess(models.Model):
             self.write({
                 'state': 'error',
                 'error_message': self._provision_failure_message(
-                    f"Provisioning failed: {e}", outcome, created),
+                    _("Provisioning failed: %(error)s", error=e),
+                    outcome, created),
             })
             _logger.exception("[SA] provision unexpected error sa=%s", self.id)
 
@@ -1064,7 +1075,8 @@ class SecurityAccess(models.Model):
         except PaaSOperatorError as e:
             self.write({
                 'tunnel_status': 'error',
-                'error_message': f"Status refresh failed: {e.message}",
+                'error_message': _(
+                    "Status refresh failed: %(detail)s", detail=e.message),
             })
             _logger.warning(
                 "[SA] status refresh failed sa=%s: %s", self.id, e.message,
@@ -1442,10 +1454,11 @@ class SecurityAccess(models.Model):
             # still outstanding.
             self.write({
                 'state': 'error',
-                'error_message': "Cloudflare cleanup failed; %s still live. "
-                                 "Will retry on the next cron pass." % (
-                                     'tunnel' if self.tunnel_id
-                                     else 'Access app'),
+                'error_message': _(
+                    "Cloudflare cleanup failed; %(resource)s still live. "
+                    "Will retry on the next cron pass.",
+                    resource=(_('tunnel') if self.tunnel_id
+                              else _('Access app'))),
             })
             _logger.warning(
                 "[SA] _do_cleanup incomplete sa=%s tunnel=%s lingering_access=%s "

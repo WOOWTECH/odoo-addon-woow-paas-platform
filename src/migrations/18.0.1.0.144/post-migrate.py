@@ -41,6 +41,7 @@
 """
 import logging
 
+from odoo import _
 from odoo.exceptions import UserError
 
 _logger = logging.getLogger(__name__)
@@ -154,11 +155,13 @@ def migrate(cr, version):
     if problems:
         detail = '\n'.join('  - %s' % p for p in problems)
         _logger.error("[744] policy 錨點 exclusive arc 驗證失敗：\n%s", detail)
-        raise UserError(
-            '#744：Access policy 錨點 exclusive arc 未正確落地。\n\n%s\n\n'
-            '這支 migration 不搬資料——失敗代表升級過程中有一段靜默失效了，'
-            '請先排除再重跑升級。' % detail
-        )
+        raise UserError(_(
+            "#744: the Access policy anchors did not land as an exclusive "
+            "arc.\n\n%(detail)s\n\nThis migration moves no data, so a "
+            "failure here means a step of the upgrade failed silently. "
+            "Resolve it before re-running the upgrade.",
+            detail=detail,
+        ))
 
     cr.execute("SELECT count(*) FROM %s" % _TABLE)
     total = cr.fetchone()[0]
