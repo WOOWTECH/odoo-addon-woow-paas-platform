@@ -63,6 +63,29 @@ msgstr ""
 "Plural-Forms: nplurals=1; plural=0;\n"
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid ""
+"\"%(tpl)s\" cannot be provisioned right now: the platform has not pinned a "
+"deployment version for this product. Please contact support."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid ""
+"\"%(tpl)s\" is limited to %(limit)s instance(s) per account, and you have "
+"reached that limit."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid ""
+"\"%(tpl)s\" is sold out; no new instances can be provisioned at the moment."
+msgstr ""
+
+#. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/marketplace/AppMarketplacePage.xml:0
 msgid ""
@@ -71,8 +94,58 @@ msgid ""
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_app_template.py:0
+msgid ""
+"\"Conceal Existing Instances\" must be enabled together with \"Hidden\" "
+"(template: %s). Hiding existing instances while the template stays listed on "
+"the marketplace lets a tenant buy a service they can neither see nor manage. "
+"To list it, turn both switches off."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/migrations/18.0.1.0.140/pre-migrate.py:0
+msgid ""
+"#519: several cloud_service rows point at the same subscription, so the "
+"`woow_paas_cloud_service_subscription_uniq` unique index cannot be created.\n"
+"\n"
+"%(detail)s\n"
+"\n"
+"Decide which service each subscription really belongs to, then re-provision "
+"or delete the rest. Do NOT clear subscription_id to NULL - that would detach "
+"those services from the suspension / billing cron for good."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/migrations/18.0.1.0.144/post-migrate.py:0
+msgid ""
+"#744: the Access policy anchors did not land as an exclusive arc.\n"
+"\n"
+"%(detail)s\n"
+"\n"
+"This migration moves no data, so a failure here means a step of the upgrade "
+"failed silently. Resolve it before re-running the upgrade."
+msgstr ""
+
+#. module: woow_paas_platform
 #: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_security_access_access_policy_rule__cloud_service_id
 msgid "#744：父 policy 的另一半錨點，同樣 store=True 讓 ir.rule 走得到。"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/migrations/18.0.1.0.150/post-migrate.py:0
+msgid ""
+"#768: the Smart Home Access anchors (the three-legged policy arc plus "
+"smart_home_route) did not land correctly.\n"
+"\n"
+"%(detail)s\n"
+"\n"
+"This migration only creates route rows and moves no strings, so a failure "
+"here means a step of the upgrade failed silently. Resolve it before re-"
+"running the upgrade."
 msgstr ""
 
 #. module: woow_paas_platform
@@ -124,8 +197,38 @@ msgstr "%(duration)s %(unit)s 免費試用"
 
 #. module: woow_paas_platform
 #. odoo-python
+#: code:addons/woow_paas_platform/models/sh_subscription_fix.py:0
+msgid ""
+"%(n)s in_progress subscription(s) are more than %(days)s days past due and "
+"were not touched by any billing path during that time "
+"(woow_last_payment_failure_at was never updated).\n"
+"Oldest one: %(name)s (next_payment=%(np)s).\n"
+"Supporting data: %(inv)s cycle invoice(s) created in the last %(days)s "
+"days.\n"
+"Likely causes: the base auto-invoice cron was disabled (#778 collision), or "
+"handling of those subscriptions keeps raising an exception that is being "
+"swallowed."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
 #: code:addons/woow_paas_platform/models/skill.py:0
 msgid "%(name)s v%(version)s (%(scope)s)"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid ""
+"%(reason)s The Helm release is kept so it is not orphaned — an administrator "
+"can create the missing record, or delete and re-create this service."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/wizard/skill_upload_wizard.py:0
+msgid ""
+"%(scope)s skill '%(name)s' v%(version)s already exists; bump the version."
 msgstr ""
 
 #. module: woow_paas_platform
@@ -152,6 +255,12 @@ msgstr "執行中 %s／共 %s"
 #: code:addons/woow_paas_platform/static/src/paas/components/subscription/PlanSelector.js:0
 msgid "%s-day free trial"
 msgstr "%s 天免費試用"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/security_access.py:0
+msgid "%s: %r"
+msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -410,6 +519,18 @@ msgid "A partner can have only one access record per project."
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/ha_paas.py:0
+msgid "A previous instance is being removed. Retry shortly."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid "A service cannot be unbound from its subscription."
+msgstr ""
+
+#. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/configure/AppConfigurationPage.xml:0
 msgid ""
@@ -420,6 +541,14 @@ msgstr ""
 #. module: woow_paas_platform
 #: model:ir.model.constraint,message:woow_paas_platform.constraint_woow_paas_platform_workspace_access_unique_user_workspace
 msgid "A user can only have one access record per workspace."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/workspace_access.py:0
+msgid ""
+"A workspace can only have one owner. Transfer ownership first before "
+"assigning a new owner."
 msgstr ""
 
 #. module: woow_paas_platform
@@ -532,6 +661,12 @@ msgid "AI connection error"
 msgstr "連線錯誤"
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/ai_assistant.py:0
+msgid "AI provider not configured"
+msgstr ""
+
+#. module: woow_paas_platform
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.portal_my_task_paas_agent
 msgid "AI 助理對話"
 msgstr ""
@@ -615,6 +750,12 @@ msgid ""
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid "Access ID is required"
+msgstr ""
+
+#. module: woow_paas_platform
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_service__login_email_otp
 msgid "Access Login: Email OTP"
 msgstr ""
@@ -665,6 +806,13 @@ msgid "Access Token Expires At"
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/ai_assistant.py:0
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid "Access denied"
+msgstr ""
+
+#. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/services/billing_service.js:0
 #: code:addons/woow_paas_platform/static/src/paas/services/cloud_service.js:0
@@ -674,6 +822,35 @@ msgstr ""
 #: code:addons/woow_paas_platform/static/src/paas/services/workspace_service.js:0
 msgid "Access denied."
 msgstr "存取遭拒。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/security_access_access_policy.py:0
+msgid ""
+"Access policy %r is anchored on %s, which has no entry in _ANCHOR_POOL_FIELD "
+"— the plan quota cannot be scoped. Register the anchor model before shipping "
+"it."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/security_access_access_policy.py:0
+msgid "Access policy %r must contain at least one Include rule."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/security_access_access_policy.py:0
+msgid "Access policy quota exceeded: plan '%s' allows %d polic(ies)."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+#: code:addons/woow_paas_platform/controllers/security_access.py:0
+#: code:addons/woow_paas_platform/controllers/smart_home.py:0
+msgid "Access policy quota exceeded: plan allows %d polic(ies)"
+msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -906,10 +1083,23 @@ msgid "Admin Password"
 msgstr "管理員密碼"
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+#: code:addons/woow_paas_platform/controllers/reconcile_report.py:0
+msgid "Admin access required"
+msgstr ""
+
+#. module: woow_paas_platform
 #: model:ir.model.fields,help:woow_paas_platform.field_project_project__external_mcp_allowed
 msgid ""
 "Admin gate for NetworkPolicy egress to external MCP endpoints (design §6.3 "
 "Q1 hybrid scheme). Conservative default — closed."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid "Administrator password must be at least 8 characters"
 msgstr ""
 
 #. module: woow_paas_platform
@@ -984,6 +1174,39 @@ msgid "Agent running"
 msgstr "運行中"
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/ai_assistant.py:0
+msgid "Agent runtime error"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/ai_assistant.py:0
+msgid "Agent runtime is not enabled"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/ai_assistant.py:0
+msgid "Agent runtime is not enabled for this project"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/agent_session.py:0
+msgid ""
+"Agent runtime namespace secret is not configured: set the %s environment "
+"variable (injected from the K8s Secret). The namespace hash is not derived "
+"without it (fail-closed)."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/ai_assistant.py:0
+msgid "Agent runtime not configured"
+msgstr ""
+
+#. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/services/agent_pod_state.js:0
 msgid "Agent starting"
@@ -1014,6 +1237,17 @@ msgid ""
 "API key. Without one the agent pod silently falls back to echo (returns the "
 "user's own message) instead of answering, shadowing the platform default for "
 "every bound project."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/agent_template.py:0
+msgid ""
+"Agent template '%s' is the platform-wide default (Settings → Default Agent "
+"Template) and must stay project-unbound: binding it to a project turns it "
+"into a tenant-bound template, which silently disables the agent-runtime "
+"default fallback for every project. Bind a different template to this "
+"project, or change the platform default first."
 msgstr ""
 
 #. module: woow_paas_platform
@@ -1105,6 +1339,24 @@ msgid ""
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/security_access_access_policy.py:0
+msgid ""
+"Allow policy %r cannot use %s as an Include rule.\n"
+"\n"
+"Why: seat-based Access plans count people by the addresses listed in 'Email "
+"list' rules, so a whole-domain / everyone rule admits an unlimited number of "
+"people while counting as zero. Every one of them still consumes one of the "
+"50 Cloudflare Access seats shared by the whole platform, so the 51st login "
+"is refused — for every tenant, not just this one.\n"
+"What to use instead: list the individual addresses in an 'Email list' "
+"Include rule. To narrow (not widen) access you can still use these selectors "
+"in Require / Exclude rules, and Block policies are unaffected. Bypass "
+"policies are exempt because they skip authentication and therefore consume "
+"no seat."
+msgstr ""
+
+#. module: woow_paas_platform
 #: model:ir.model.fields,help:woow_paas_platform.field_res_config_settings__woow_topup_payment_enabled
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.res_config_settings_view_form
 msgid ""
@@ -1158,6 +1410,36 @@ msgid ""
 "private\n"
 "                templates bind to specific projects. Manage their\n"
 "                draft / published / deprecated / archived lifecycle here."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid "An error occurred while creating the service."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid "An error occurred while creating the workspace. Please try again."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid "An error occurred while estimating the skip-trial charge."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid "An error occurred while inviting the member. Please try again."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid "An error occurred while skipping the trial period."
 msgstr ""
 
 #. module: woow_paas_platform
@@ -1373,8 +1655,38 @@ msgid "Authorization Code"
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/oauth2.py:0
+msgid "Authorization already used."
+msgstr ""
+
+#. module: woow_paas_platform
 #: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_oauth_code__expires_at
 msgid "Authorization code expiration time (10 minutes from creation)"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/oauth2.py:0
+msgid "Authorization code expired or already used."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/oauth2.py:0
+msgid "Authorization code not found."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/oauth2.py:0
+msgid "Authorization code was not issued with PKCE; this client requires PKCE."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/oauth2.py:0
+msgid "Authorization pending."
 msgstr ""
 
 #. module: woow_paas_platform
@@ -1406,6 +1718,12 @@ msgstr ""
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/configure/AppConfigurationPage.xml:0
 msgid "Auto-generated on deployment"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/wallet_topup.py:0
+msgid "Auto-topup amount must be positive (got %s)"
 msgstr ""
 
 #. module: woow_paas_platform
@@ -1707,6 +2025,11 @@ msgid "Built-in (Odoo Core)"
 msgstr ""
 
 #. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_app_template__has_admin_gui
+msgid "Built-in Admin GUI"
+msgstr ""
+
+#. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/project-detail/sections/BasicInfoSection.xml:0
 msgid "Bullet list"
@@ -1728,12 +2051,26 @@ msgid "Bundle Storage"
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/wizard/skill_upload_wizard.py:0
+msgid "Bundle exceeds the 10 MB limit."
+msgstr ""
+
+#. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/access/AccessAppCard.js:0
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/AddPolicyModal.xml:0
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_security_access_access_policy__decision__bypass
 msgid "Bypass"
 msgstr "略過驗證"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/security_access_access_policy.py:0
+msgid ""
+"Bypass policies cannot use identity-based selectors (email domain / email "
+"list). Use IP range, country, or everyone instead."
+msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -1816,6 +2153,12 @@ msgid "Can manage members and workspace settings"
 msgstr "可管理成員與工作區設定"
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/wizard/change_subscription_plan_wizard.py:0
+msgid "Can only change plan on active subscriptions."
+msgstr ""
+
+#. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/InviteMemberModal.js:0
 msgid "Can only view workspace content"
@@ -1883,6 +2226,12 @@ msgid "Cancellation failed"
 msgstr "取消失敗"
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/billing.py:0
+msgid "Cancellation failed. Please try again."
+msgstr ""
+
+#. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/subscription/SubscriptionBadge.js:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/billing/BillingOverviewPage.js:0
@@ -1910,12 +2259,181 @@ msgid "Cannot Remove Addon"
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/agent_template.py:0
+msgid ""
+"Cannot bind agent template '%s' to project '%s': current user must have "
+"owner/admin role on every bound project."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid "Cannot change owner role. Use transfer ownership instead."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/workspace.py:0
+msgid ""
+"Cannot change the owner of workspace %s: ownership carries billing and quota "
+"attribution."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/workspace.py:0
+msgid ""
+"Cannot change the slug of workspace %s: it is the workspace's public "
+"identifier and is unique platform-wide."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/workspace.py:0
+msgid ""
+"Cannot change the ws_hash of workspace %s: it determines the Kubernetes "
+"namespace and public subdomain of every service already deployed there."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/security_access.py:0
+#: code:addons/woow_paas_platform/models/smart_home.py:0
+msgid "Cannot connect to PaaS Operator: %(detail)s"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/workspace.py:0
+msgid "Cannot create a workspace owned by another user (owner_id=%s)."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/project_project.py:0
+msgid ""
+"Cannot delete project \"%s\": tearing down its AI agent runtime failed (%s). "
+"Deletion was aborted to avoid leaving orphaned cloud resources. Please try "
+"again later or contact your administrator."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/workspace_access.py:0
+msgid ""
+"Cannot demote the last owner of workspace '%s'. Transfer ownership first."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/project_access.py:0
+msgid "Cannot re-point an access row (id=%s) to a different partner."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/project_access.py:0
+msgid "Cannot re-point an access row (id=%s) to a different project."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/project_access.py:0
+#: code:addons/woow_paas_platform/models/workspace_access.py:0
+msgid "Cannot re-point an access row (id=%s) to a different user."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/workspace_access.py:0
+msgid "Cannot re-point an access row (id=%s) to a different workspace."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid ""
+"Cannot redeploy: the product \"%(product)s\" has no chart version pinned. "
+"Deploying now would pull whatever is latest in the registry, which is an "
+"irreversible version jump. Set the version in the product settings and try "
+"again."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid ""
+"Cannot remove %(modules)s: still present in Odoo. Please deactivate the "
+"module in Odoo first."
+msgstr ""
+
+#. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/AddonsTab.js:0
 msgid ""
 "Cannot remove addons while the service is %s. Start the service and try "
 "again."
 msgstr "服務目前為 %s，無法移除 addon。請先啟動服務後再試一次。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/project_access.py:0
+msgid "Cannot remove the last owner of project '%s'. Transfer ownership first."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/workspace_access.py:0
+msgid ""
+"Cannot remove the last owner of workspace '%s'. Transfer ownership first."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid "Cannot remove the workspace owner"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid "Cannot rollback service in %(state)s state"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/oauth_client.py:0
+msgid "Cannot set a client_secret on a public client."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/workspace.py:0
+msgid ""
+"Cannot supply a workspace slug: it is derived from the name by the server "
+"(it feeds the public workspace identifier)."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/workspace.py:0
+msgid ""
+"Cannot supply a workspace ws_hash: it is generated by the server and decides "
+"which Kubernetes namespace and public subdomains this workspace owns."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid "Cannot update service in %(state)s state"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid "Cannot verify module states: %(reason)s"
+msgstr ""
 
 #. module: woow_paas_platform
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_security_access__canonical_name
@@ -1933,6 +2451,18 @@ msgstr ""
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/AddFundsModal.js:0
 msgid "Card"
 msgstr "卡片"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/billing.py:0
+msgid "Card binding complete"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/billing.py:0
+msgid "Card binding complete. Returning…"
+msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -2013,6 +2543,12 @@ msgstr ""
 #. module: woow_paas_platform
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_task_form_inherit_chat
 msgid "Channel"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/ai_assistant.py:0
+msgid "Channel not found"
 msgstr ""
 
 #. module: woow_paas_platform
@@ -2103,6 +2639,12 @@ msgid "Citizen digital cert"
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid "Cleanup failed: %(error)s"
+msgstr ""
+
+#. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/marketplace/AppMarketplacePage.xml:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/support-projects/SupportProjectsPage.xml:0
@@ -2142,6 +2684,12 @@ msgstr ""
 #. module: woow_paas_platform
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_oauth_client__client_type
 msgid "Client Type"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/oauth2.py:0
+msgid "Client authentication failed."
 msgstr ""
 
 #. module: woow_paas_platform
@@ -2228,6 +2776,19 @@ msgid "Cloud Service Secret"
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid "Cloud Service must belong to the same workspace."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/ai_assistant.py:0
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid "Cloud Service not found"
+msgstr ""
+
+#. module: woow_paas_platform
 #: model:ir.actions.server,name:woow_paas_platform.ir_cron_check_deploying_services_ir_actions_server
 msgid "Cloud Service: Check Deploying"
 msgstr ""
@@ -2260,6 +2821,15 @@ msgid ""
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid ""
+"Cloud services can only be created by the platform provisioning flow (%"
+"(model)s). Please order from the marketplace instead of writing to this "
+"model directly."
+msgstr ""
+
+#. module: woow_paas_platform
 #: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_workspace__service_ids
 msgid "Cloud services deployed in this workspace"
 msgstr ""
@@ -2284,10 +2854,84 @@ msgid ""
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/smart_home.py:0
+msgid ""
+"Cloudflare Access teardown failed for route(s): %(routes)s. Will retry on "
+"the next cron pass."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/smart_home.py:0
+msgid ""
+"Cloudflare Access teardown failed for route(s): %s. The Smart Home was kept "
+"so the deletion can be retried; its Access app is still live in Cloudflare."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/security_access.py:0
+msgid ""
+"Cloudflare Access teardown failed for route(s): %s. The route was kept so "
+"the deletion can be retried; its Access app is still live in Cloudflare."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid ""
+"Cloudflare Access teardown failed; the Access application for '%s' is still "
+"live. The service record was kept so the deletion can be retried."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid ""
+"Cloudflare Access teardown failed; the Access application is still live. "
+"Will retry on the next cron pass."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/smart_home.py:0
+msgid ""
+"Cloudflare Access teardown reported success but route(s) %(routes)s still "
+"hold Access object id(s); the CF Access app and its reusable policies are "
+"still live. Will retry on the next cron pass."
+msgstr ""
+
+#. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.xml:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/workspace/WorkspaceDetailPage.xml:0
 msgid "Cloudflare Tunnel"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/security_access.py:0
+msgid ""
+"Cloudflare cleanup failed; %(resource)s still live. Will retry on the next "
+"cron pass."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/security_access.py:0
+#: code:addons/woow_paas_platform/models/smart_home.py:0
+msgid ""
+"Cloudflare cleanup failed; the tunnel is still live and billed. The record "
+"was kept so the deletion can be retried. Please try again shortly."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/smart_home.py:0
+msgid ""
+"Cloudflare cleanup failed; the tunnel is still live and billed. Will retry "
+"on the next cron pass."
 msgstr ""
 
 #. module: woow_paas_platform
@@ -2361,6 +3005,11 @@ msgstr "已完成"
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/support-projects/ProjectsOverview.xml:0
 msgid "Completion"
+msgstr ""
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_app_template__conceal_instances
+msgid "Conceal Existing Instances"
 msgstr ""
 
 #. module: woow_paas_platform
@@ -2520,6 +3169,12 @@ msgid "Connection Info"
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid "Connection test failed: %(reason)s"
+msgstr ""
+
+#. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.xml:0
 msgid "Connector"
@@ -2627,6 +3282,36 @@ msgid "Copy domain"
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/workspace.py:0
+msgid ""
+"Could not allocate a free workspace namespace identity after %s attempts. "
+"This is astronomically unlikely for a healthy database (collision odds are "
+"workspaces/2^32 per draw) — check whether ws_hash has been backfilled with a "
+"constant."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/security_access.py:0
+msgid ""
+"Could not confirm availability (Cloudflare check unavailable); try again."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/security_access.py:0
+msgid ""
+"Could not confirm availability (operator not configured); try again later."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/security_access.py:0
+msgid "Could not confirm availability (operator unavailable); try again."
+msgstr ""
+
+#. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/ai-chat/AiChat.js:0
 msgid ""
@@ -2652,6 +3337,13 @@ msgstr "無法載入 AI 助理列表，請重新整理頁面。"
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_security_access_access_policy_rule__rule_type__country
 msgid "Country"
 msgstr "國家"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/security_access_access_policy_rule.py:0
+msgid ""
+"Country must be comma-separated ISO 3166-1 alpha-2 codes, e.g. TW,US — got %r"
+msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -2934,6 +3626,12 @@ msgid "Credit top-up is not available yet. Please contact support."
 msgstr "點數儲值尚未開放，請聯絡客服。"
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/billing.py:0
+msgid "Credit top-up is not yet available."
+msgstr ""
+
+#. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/AddFundsModal.xml:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/billing/TopupStorePage.xml:0
@@ -3070,6 +3768,12 @@ msgstr ""
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/EditDomainModal.xml:0
 msgid "DNS changes may take up to 48 hours to propagate."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/security_access.py:0
+msgid "DNS record already exists"
 msgstr ""
 
 #. module: woow_paas_platform
@@ -3289,6 +3993,12 @@ msgid "Deleting..."
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid "Deletion failed: %(reason)s"
+msgstr ""
+
+#. module: woow_paas_platform
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_oauth_device_code__status__denied
 msgid "Denied"
 msgstr ""
@@ -3363,6 +4073,25 @@ msgstr "部署中"
 #. module: woow_paas_platform
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_service__deployment_id
 msgid "Deployment ID"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid "Deployment failed"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid "Deployment failed: %(detail)s"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid "Deployment timed out after %(minutes)s minutes: %(detail)s"
 msgstr ""
 
 #. module: woow_paas_platform
@@ -3741,6 +4470,18 @@ msgstr "ECPay SDK 載入後未提供 window.ECPay"
 #. module: woow_paas_platform
 #. odoo-python
 #: code:addons/woow_paas_platform/models/ecpay_invoice_cron.py:0
+msgid "ECPay e-invoice issuance failed (retry limit reached)"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/billing.py:0
+msgid "ECPay rejected binding"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/ecpay_invoice_cron.py:0
 msgid "ECPay 發票開立失敗（已達重試上限）"
 msgstr ""
 
@@ -3848,7 +4589,15 @@ msgid ""
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/security_access_access_policy_rule.py:0
+msgid "Email domain must be a bare domain (no @), e.g. acme.com — got %r"
+msgstr ""
+
+#. module: woow_paas_platform
 #. odoo-javascript
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/InviteMemberModal.js:0
 msgid "Email is required"
 msgstr "請輸入電子郵件"
@@ -3856,6 +4605,18 @@ msgstr "請輸入電子郵件"
 #. module: woow_paas_platform
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_security_access_access_policy_rule__rule_type__email_list
 msgid "Email list"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/security_access_access_policy_rule.py:0
+msgid "Email list must be comma-separated email addresses."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/security_access_access_policy.py:0
+msgid "Email quota exceeded: plan '%s' allows %d email(s) per policy."
 msgstr ""
 
 #. module: woow_paas_platform
@@ -4032,6 +4793,11 @@ msgid "Enter your gift card code"
 msgstr ""
 
 #. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_reconcile_report__env_hint
+msgid "Environment Attribution"
+msgstr ""
+
+#. module: woow_paas_platform
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_cloud_app_template_form
 msgid "Environment Variables"
 msgstr ""
@@ -4194,6 +4960,12 @@ msgid "Failed to check addon states"
 msgstr "檢查模組狀態失敗"
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid "Failed to create namespace: %(detail)s"
+msgstr ""
+
+#. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/CreateProjectModal.js:0
 msgid "Failed to create project"
@@ -4206,6 +4978,12 @@ msgid "Failed to create security access"
 msgstr "建立安全存取失敗"
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/security_access.py:0
+msgid "Failed to create security access. Please try again."
+msgstr ""
+
+#. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/configure/AppConfigurationPage.js:0
 msgid "Failed to create service"
@@ -4216,6 +4994,12 @@ msgstr "建立服務失敗"
 #: code:addons/woow_paas_platform/static/src/paas/components/smart-home/CreateSmartHomeModal.js:0
 msgid "Failed to create smart home"
 msgstr "建立 Smart Home 失敗"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/smart_home.py:0
+msgid "Failed to create smart home. Please try again."
+msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -4317,6 +5101,12 @@ msgid "Failed to fetch workspaces"
 msgstr "取得工作區清單失敗"
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid "Failed to get revisions: %(reason)s"
+msgstr ""
+
+#. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/InviteMemberModal.js:0
 msgid "Failed to invite member"
@@ -4345,6 +5135,12 @@ msgstr "無法載入聊天記錄"
 #: code:addons/woow_paas_platform/static/src/paas/services/dashboard_service.js:0
 msgid "Failed to load dashboard"
 msgstr "載入儀表板失敗"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/dashboard.py:0
+msgid "Failed to load dashboard. Please try again."
+msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -4450,6 +5246,12 @@ msgid "Failed to refresh smart home status"
 msgstr "無法重新整理 Smart Home 狀態"
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/security_access.py:0
+msgid "Failed to refresh status. Please try again."
+msgstr ""
+
+#. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/ManagePaymentMethodsModal.js:0
 msgid "Failed to remove card"
@@ -4536,6 +5338,27 @@ msgstr ""
 #. module: woow_paas_platform
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_wallet_topup__failure_message
 msgid "Failure Message"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+#: code:addons/woow_paas_platform/models/security_access.py:0
+#: code:addons/woow_paas_platform/models/smart_home.py:0
+#: code:addons/woow_paas_platform/models/smart_home_route.py:0
+msgid "Field '%s' is immutable after creation."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/smart_home_route.py:0
+msgid "Field '%s' is immutable on a primary Smart Home route."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/ai_assistant.py:0
+msgid "File too large (max 10 MB)"
 msgstr ""
 
 #. module: woow_paas_platform
@@ -4668,6 +5491,12 @@ msgid "Gift card is inactive."
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/wizard/gift_grant_wizard.py:0
+msgid "Gift points must be greater than 0."
+msgstr ""
+
+#. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/McpServersTab.xml:0
 msgid "Go to Project Settings"
@@ -4693,6 +5522,15 @@ msgstr ""
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/AddPolicyModal.xml:0
 msgid "Grant access to matches"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/oauth2.py:0
+msgid ""
+"Grant type \"%(grant_type)s\" is not supported. Use: authorization_code, "
+"refresh_token, client_credentials, or urn:ietf:params:oauth:grant-"
+"type:device_code."
 msgstr ""
 
 #. module: woow_paas_platform
@@ -4732,8 +5570,24 @@ msgid "HA PaaS Free"
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/ha_paas.py:0
+msgid "HA PaaS is not available yet."
+msgstr ""
+
+#. module: woow_paas_platform
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_smart_home__ha_port
 msgid "HA Port"
+msgstr ""
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_res_config_settings__woow_haos_global_instance_cap
+msgid "HAOS Global Instance Cap"
+msgstr ""
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_res_config_settings__woow_haos_sales_paused
+msgid "HAOS Sales Paused"
 msgstr ""
 
 #. module: woow_paas_platform
@@ -4817,6 +5671,11 @@ msgstr ""
 
 #. module: woow_paas_platform
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_cloud_app_template__admin_password_carrier__helm_secret
+msgid "Helm Secret (managed by the chart, hermes-agent / open-design)"
+msgstr ""
+
+#. module: woow_paas_platform
+#: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_cloud_app_template__admin_password_carrier__helm_secret
 msgid "Helm Secret（chart 管理，hermes-agent／open-design）"
 msgstr ""
 
@@ -4837,6 +5696,15 @@ msgstr ""
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/ConfigurationTab.xml:0
 msgid "Helm Values Configuration"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid ""
+"Helm uninstall failed; release '%s' is still live in namespace '%s' (billed "
+"compute / leaked namespace). The service record was kept so the deletion can "
+"be retried. Please try again shortly."
 msgstr ""
 
 #. module: woow_paas_platform
@@ -5097,6 +5965,11 @@ msgid "Hidden"
 msgstr ""
 
 #. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_sh_subscription_plan__storefront_hidden
+msgid "Hidden From Storefront"
+msgstr ""
+
+#. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/configure/AppConfigurationPage.xml:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/ConfigurationTab.xml:0
@@ -5200,6 +6073,11 @@ msgid "How long users stay authenticated before re-login (this route)."
 msgstr ""
 
 #. module: woow_paas_platform
+#: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_cloud_service__session_duration
+msgid "How long users stay authenticated before re-login (this service)."
+msgstr ""
+
+#. module: woow_paas_platform
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_cloud_odoo_addon__category__hr
 msgid "Human Resources"
 msgstr ""
@@ -5261,6 +6139,12 @@ msgstr ""
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_security_access_access_policy_rule__rule_type__ip_range
 msgid "IP range (CIDR)"
 msgstr "IP 範圍（CIDR）"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/security_access_access_policy_rule.py:0
+msgid "IP range must be a valid CIDR, e.g. 203.0.113.0/24 — got %r"
+msgstr ""
 
 #. module: woow_paas_platform
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_app_template__icon
@@ -5357,6 +6241,11 @@ msgid "Incompatible Extra Services"
 msgstr ""
 
 #. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_reconcile_report__partial
+msgid "Incomplete Scan"
+msgstr ""
+
+#. module: woow_paas_platform
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_app_template__ingress_enabled
 msgid "Ingress Enabled"
 msgstr ""
@@ -5374,6 +6263,12 @@ msgstr ""
 #. module: woow_paas_platform
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_service__init_retries
 msgid "Init Retries"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid "Initialization failed after %(retries)s retries: %(error)s"
 msgstr ""
 
 #. module: woow_paas_platform
@@ -5421,6 +6316,30 @@ msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-python
+#: code:addons/woow_paas_platform/controllers/billing.py:0
+msgid ""
+"Insufficient credits. Your balance is %(balance).0f pts but %(amount).0f pts "
+"is required."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+#: code:addons/woow_paas_platform/controllers/security_access.py:0
+#: code:addons/woow_paas_platform/controllers/smart_home.py:0
+msgid "Insufficient permissions"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/subscription_lifecycle_mixin.py:0
+msgid ""
+"Insufficient wallet balance to skip trial. Current balance: %.2f, required: "
+"%.2f. Please top up your wallet first."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
 #: code:addons/woow_paas_platform/models/account_move.py:0
 msgid "Insufficient wallet balance."
 msgstr ""
@@ -5444,6 +6363,24 @@ msgid "Invalid BindCardPayToken"
 msgstr "BindCardPayToken 無效"
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/profile.py:0
+msgid "Invalid carrier type"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/ai_assistant.py:0
+msgid "Invalid channel_id"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/oauth2.py:0
+msgid "Invalid client or redirect URI."
+msgstr ""
+
+#. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/services/mermaid_loader.js:0
 msgid "Invalid diagram syntax. Please check the Mermaid source."
@@ -5457,9 +6394,35 @@ msgstr "網域格式不正確。範例：app.yourdomain.com"
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/profile.py:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/settings/ProfilePage.js:0
 msgid "Invalid email format"
 msgstr "Email 格式不正確"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/oauth2.py:0
+msgid "Invalid or expired code. Please try again."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/ai_assistant.py:0
+msgid "Invalid project_id"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid "Invalid removed_addon_ids: expected a list of addon IDs"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/ai_assistant.py:0
+msgid "Invalid request"
+msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -5474,6 +6437,30 @@ msgstr "伺服器回應無效（%s），伺服器可能正在重新啟動。"
 #: code:addons/woow_paas_platform/static/src/paas/services/workspace_service.js:0
 msgid "Invalid response from server."
 msgstr "伺服器回應無效。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid "Invalid revision number"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid "Invalid role"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/oauth2.py:0
+msgid "Invalid scope(s): %(scopes)s"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/ai_assistant.py:0
+msgid "Invalid stage_id"
+msgstr ""
 
 #. module: woow_paas_platform
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_cloud_odoo_addon__category__inventory
@@ -5606,8 +6593,26 @@ msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-python
+#: code:addons/woow_paas_platform/controllers/billing.py:0
+msgid "Invoice is already paid"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/billing.py:0
+msgid "Invoice is not payable"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
 #: code:addons/woow_paas_platform/models/account_move_invoice_status.py:0
 msgid "Invoice must be posted before issuing."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/billing.py:0
+msgid "Invoice not found"
 msgstr ""
 
 #. module: woow_paas_platform
@@ -5669,6 +6674,15 @@ msgstr ""
 #. module: woow_paas_platform
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__account_move__woow_invoice_issue_state__issuing
 msgid "Issuing"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/ecpay_invoice_cron.py:0
+msgid ""
+"Issuing the ECPay e-invoice for invoice %(name)s failed %(n)s times in a "
+"row.\n"
+"Last error: %(err)s"
 msgstr ""
 
 #. module: woow_paas_platform
@@ -5741,6 +6755,11 @@ msgstr ""
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/CancelSubscriptionModal.xml:0
 msgid "Keep Subscription"
+msgstr ""
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_reconcile_report__kind
+msgid "Kind"
 msgstr ""
 
 #. module: woow_paas_platform
@@ -6327,6 +7346,12 @@ msgid "MCP Server endpoint URL (e.g. https://mcp.example.com/sse)"
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid "MCP Server not found"
+msgstr ""
+
+#. module: woow_paas_platform
 #: model:ir.actions.server,name:woow_paas_platform.ir_cron_retry_mcp_sync_ir_actions_server
 msgid "MCP Server: Retry Tool Sync"
 msgstr ""
@@ -6387,6 +7412,14 @@ msgstr ""
 msgid ""
 "MCP record was populated from a sidecar URL hint and is tied to the backing "
 "cloud service lifecycle"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/agent_template.py:0
+msgid ""
+"MCP server '%s' is not bound to any of template '%s' projects and is not "
+"system-scope."
 msgstr ""
 
 #. module: woow_paas_platform
@@ -6509,6 +7542,11 @@ msgid "Material icon name"
 msgstr ""
 
 #. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_app_template__max_per_partner
+msgid "Max Instances Per Account"
+msgstr ""
+
+#. module: woow_paas_platform
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_agent_session__mcp_snapshot_hash
 msgid "Mcp Snapshot Hash"
 msgstr ""
@@ -6521,6 +7559,18 @@ msgstr ""
 #. module: woow_paas_platform
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_workspace__member_count
 msgid "Member Count"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid "Member not found"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid "Member removed"
 msgstr ""
 
 #. module: woow_paas_platform
@@ -6573,6 +7623,24 @@ msgstr ""
 #. module: woow_paas_platform
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_app_template__min_vcpu
 msgid "Minimum vCPU"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/oauth2.py:0
+msgid "Missing device_code parameter."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/billing.py:0
+msgid "Missing member_id, trade_no, or bind_card_pay_token"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/oauth2.py:0
+msgid "Missing refresh_token parameter."
 msgstr ""
 
 #. module: woow_paas_platform
@@ -6686,18 +7754,26 @@ msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/project-detail/sections/McpServersSection.js:0
 msgid "Name and URL are required"
 msgstr "名稱與 URL 為必填"
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/project-detail/sections/BasicInfoSection.js:0
 msgid "Name cannot be empty"
 msgstr "名稱不可為空"
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/profile.py:0
+#: code:addons/woow_paas_platform/controllers/security_access.py:0
+#: code:addons/woow_paas_platform/controllers/smart_home.py:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/settings/ProfilePage.js:0
 msgid "Name is required"
 msgstr "名稱為必填"
@@ -6814,6 +7890,12 @@ msgid "New Task"
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/wizard/change_subscription_plan_wizard.py:0
+msgid "New plan must be different from current plan."
+msgstr ""
+
+#. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/dashboard/DashboardPage.js:0
 msgid "Next Bill"
@@ -6845,11 +7927,23 @@ msgid "Nickname (e.g. secure-gateway)"
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/ai_assistant.py:0
+msgid "No AI assistant available"
+msgstr ""
+
+#. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/ai-chat/AiChat.js:0
 msgid ""
 "No AI assistant is available. Please ask your administrator to set one up."
 msgstr "目前沒有可用的 AI 助理，請聯繫管理員設定。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/billing.py:0
+msgid "No ECPay provider with ECPG enabled"
+msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -6893,6 +7987,24 @@ msgid "No Smart Home template available"
 msgstr "沒有可用的 Smart Home 範本"
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/ha_api.py:0
+msgid "No access to the workspace containing this security access"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/ha_api.py:0
+msgid "No access to the workspace containing this smart home"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/ha_api.py:0
+msgid "No access to this workspace"
+msgstr ""
+
+#. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/smart-home/CreateSmartHomeModal.xml:0
 msgid ""
@@ -6901,6 +8013,20 @@ msgid ""
 "under\n"
 "                                    Settings → Woow PaaS → Smart Home → "
 "Templates."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+#: code:addons/woow_paas_platform/controllers/security_access.py:0
+#: code:addons/woow_paas_platform/controllers/smart_home.py:0
+msgid "No active subscription"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/wizard/change_subscription_plan_wizard.py:0
+msgid "No active subscription found."
 msgstr ""
 
 #. module: woow_paas_platform
@@ -6922,10 +8048,42 @@ msgid "No addons selected for this service."
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/ai_assistant.py:0
+msgid "No agent template"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/ai_assistant.py:0
+msgid "No agent template configured"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/project_project.py:0
+msgid ""
+"No agent template resolves for this project — configure the platform default "
+"in Settings → Woow PaaS first."
+msgstr ""
+
+#. module: woow_paas_platform
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_project_form_inherit_mcp_skill
 msgid ""
 "No agent template resolves for this project. Configure the\n"
 "                    platform default in Settings → Woow PaaS first."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/security_access.py:0
+msgid "No application route to attach a policy to yet"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/security_access.py:0
+msgid "No application route to configure yet"
 msgstr ""
 
 #. module: woow_paas_platform
@@ -7000,6 +8158,12 @@ msgid "No deadline"
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/ai_assistant.py:0
+msgid "No default agent template"
+msgstr ""
+
+#. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/project-detail/sections/BasicInfoSection.xml:0
 msgid "No description"
@@ -7024,6 +8188,12 @@ msgid "No extra seats"
 msgstr "不加購"
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/ai_assistant.py:0
+msgid "No file uploaded"
+msgstr ""
+
+#. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/billing/InvoiceListPage.xml:0
 msgid "No invoices found."
@@ -7033,6 +8203,15 @@ msgstr ""
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/billing/BillingOverviewPage.xml:0
 msgid "No invoices yet."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/reconcile_report.py:0
+msgid ""
+"No longer in the latest reconciliation's orphan list (the resource may have "
+"been reused by a new provision, or already cleaned up manually). Please "
+"double-check before deleting."
 msgstr ""
 
 #. module: woow_paas_platform
@@ -7060,6 +8239,12 @@ msgstr "目前無孤兒候選（或 cron 尚未跑過第一次對帳）。"
 #. odoo-python
 #: code:addons/woow_paas_platform/models/account_move.py:0
 msgid "No payment journal configured for company %s."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/billing.py:0
+msgid "No payment method configured"
 msgstr ""
 
 #. module: woow_paas_platform
@@ -7108,6 +8293,12 @@ msgid "No services linked to this subscription."
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid "No sidecar available for this project"
+msgstr ""
+
+#. module: woow_paas_platform
 #: model_terms:ir.actions.act_window,help:woow_paas_platform.action_skill
 msgid "No skills yet"
 msgstr ""
@@ -7125,9 +8316,27 @@ msgid "No sub-tasks for this task."
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/subscription_lifecycle_mixin.py:0
+msgid "No subscription linked to this service."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/subscription_lifecycle_mixin.py:0
+msgid "No subscription product found for plan: %s"
+msgstr ""
+
+#. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/billing/SubscriptionListPage.xml:0
 msgid "No subscriptions found."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid "No support project bound to this service."
 msgstr ""
 
 #. module: woow_paas_platform
@@ -7187,6 +8396,24 @@ msgid "No transactions yet."
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid "No user found with email: %(email)s"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/ai_assistant.py:0
+msgid "No user message found"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/ha_paas.py:0
+msgid "No valid partner"
+msgstr ""
+
+#. module: woow_paas_platform
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__project_project__agent_template_binding_status__none
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_cloud_app_template__post_deploy_init_type__none
 msgid "None"
@@ -7238,6 +8465,18 @@ msgstr "暫不開放"
 #: code:addons/woow_paas_platform/static/src/paas/pages/smart-home/SmartHomeDetailPage.js:0
 msgid "Not configured"
 msgstr "尚未設定"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/billing.py:0
+msgid "Not found"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/billing.py:0
+msgid "Not owner"
+msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-python
@@ -7409,6 +8648,18 @@ msgstr ""
 #. module: woow_paas_platform
 #: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_cloud_service__odoo_addon_ids
 msgid "Odoo addons selected for this service"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid "Odoo initialization failed after %(retries)s retries: %(reason)s"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid "Odoo initialization failed: %(reason)s"
 msgstr ""
 
 #. module: woow_paas_platform
@@ -7712,8 +8963,103 @@ msgid "One-time-use authorization code"
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid ""
+"Only a workspace owner or admin can change cloud service bindings (adding "
+"and removing alike). Denied cloud services: woow_paas_platform.cloud_service "
+"%s"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/billing.py:0
+msgid "Only active subscriptions can be cancelled"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/skill.py:0
+msgid "Only administrators can change a skill's project."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/skill.py:0
+msgid "Only administrators can change a skill's scope."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/mcp_server.py:0
+msgid "Only administrators can change an MCP server's project."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/mcp_server.py:0
+msgid "Only administrators can change an MCP server's scope."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/project_project.py:0
+msgid "Only administrators can create a dedicated agent template."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/mcp_tool.py:0
+msgid "Only administrators can re-point an MCP tool to a different server."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid ""
+"Only an active (in_progress) subscription can be bound. Current state: %"
+"(state)s."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/oauth2.py:0
+msgid "Only code_challenge_method=S256 is accepted for this client."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/oauth2.py:0
+msgid "Only response_type=code is supported."
+msgstr ""
+
+#. module: woow_paas_platform
 #: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_mcp_server__project_id
 msgid "Only set for user-scoped MCP servers. Cascade-delete with project."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/project_access.py:0
+msgid ""
+"Only the project owner may modify or remove the owner's own access row "
+"(project %s)."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/workspace_access.py:0
+msgid ""
+"Only the workspace owner may modify or remove the owner's own access row "
+"(workspace %s)."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/workspace_access.py:0
+msgid ""
+"Only the workspace owner may transfer ownership, and only from their own "
+"access row (workspace %s)."
 msgstr ""
 
 #. module: woow_paas_platform
@@ -7776,6 +9122,12 @@ msgstr ""
 #. module: woow_paas_platform
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.res_config_settings_view_form
 msgid "Operator Connection"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/ai_assistant.py:0
+msgid "Operator is not configured"
 msgstr ""
 
 #. module: woow_paas_platform
@@ -7864,8 +9216,31 @@ msgid "PKCE code challenge (S256 or plain)"
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/oauth2.py:0
+msgid "PKCE code_verifier is required."
+msgstr ""
+
+#. module: woow_paas_platform
 #: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_oauth_code__code_challenge_method
 msgid "PKCE method: \"S256\" or \"plain\""
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/oauth2.py:0
+msgid "PKCE verification failed."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/oauth2.py:0
+msgid "PKCE with S256 is required for this client."
+msgstr ""
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,help:woow_paas_platform.field_sh_subscription_plan__cs_storage_gb
+msgid "PVC size (GB); 0 = fall back to the template default."
 msgstr ""
 
 #. module: woow_paas_platform
@@ -7899,6 +9274,26 @@ msgstr ""
 msgid ""
 "PaaS Operator is not configured. Please set Operator URL and API Key in "
 "Settings → Woow PaaS."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid "PaaS Operator not configured"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid ""
+"PaaS Operator not configured. Cannot safely delete service without cleaning "
+"up Kubernetes resources. Contact administrator."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid "PaaS Operator not configured. Contact administrator."
 msgstr ""
 
 #. module: woow_paas_platform
@@ -7991,6 +9386,35 @@ msgid "Partner"
 msgstr ""
 
 #. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_app_template__admin_password_carrier
+msgid "Password Carrier"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid "Password must be at least 8 characters"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid "Password must contain at least one lowercase letter"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid "Password must contain at least one number"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid "Password must contain at least one uppercase letter"
+msgstr ""
+
+#. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/billing/SubscriptionListPage.js:0
 msgid "Past"
@@ -8062,10 +9486,22 @@ msgid "Payment failed. Please retry or contact support."
 msgstr "付款失敗，請重試或聯絡客服。"
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/billing.py:0
+msgid "Payment processing failed."
+msgstr ""
+
+#. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/services/topup_errors.js:0
 msgid "Payment service is temporarily unavailable."
 msgstr "付款服務暫時無法使用。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/billing.py:0
+msgid "Payment service unavailable"
+msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -8123,6 +9559,12 @@ msgid ""
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid "Permission denied"
+msgstr ""
+
+#. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/settings/ProfilePage.xml:0
 msgid "Phone"
@@ -8143,8 +9585,47 @@ msgid "Plan"
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/sh_subscription_plan_service_type.py:0
+msgid ""
+"Plan '%s' 的 service_type=%s 與其 owning template family %s 不一致。plan 分類"
+"必須跟隨掛載它的 template 家族（cloud_app→cloud_service／"
+"smart_home→smart_home／security_access→security_access）。"
+msgstr ""
+
+#. module: woow_paas_platform
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_topup_plan_form
 msgid "Plan Name"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid "Plan not available for this template"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+#: code:addons/woow_paas_platform/controllers/security_access.py:0
+#: code:addons/woow_paas_platform/controllers/smart_home.py:0
+msgid "Plan not found"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/billing.py:0
+msgid "Plan not found or inactive"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_app_template.py:0
+#: code:addons/woow_paas_platform/models/security_access_template.py:0
+#: code:addons/woow_paas_platform/models/smart_home_template.py:0
+msgid ""
+"Plan(s) %s are already linked to %s(s) %s. A subscription plan must belong "
+"to a single service type — its product determines the invoice line text."
 msgstr ""
 
 #. module: woow_paas_platform
@@ -8226,8 +9707,22 @@ msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-python
+#: code:addons/woow_paas_platform/controllers/ai_assistant.py:0
+msgid "Pod spawn failed: %(reason)s"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
 #: code:addons/woow_paas_platform/models/res_partner_wallet.py:0
 msgid "Points refund"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+#: code:addons/woow_paas_platform/controllers/security_access.py:0
+#: code:addons/woow_paas_platform/controllers/smart_home.py:0
+msgid "Policy deleted"
 msgstr ""
 
 #. module: woow_paas_platform
@@ -8243,8 +9738,22 @@ msgid "Policy name is required"
 msgstr "請輸入政策名稱"
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+#: code:addons/woow_paas_platform/controllers/security_access.py:0
+#: code:addons/woow_paas_platform/controllers/smart_home.py:0
+msgid "Policy not found"
+msgstr ""
+
+#. module: woow_paas_platform
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_oauth_device_code__interval
 msgid "Poll Interval (s)"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/oauth2.py:0
+msgid "Polling too frequently."
 msgstr ""
 
 #. module: woow_paas_platform
@@ -8366,6 +9875,12 @@ msgid "Private"
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/agent_template.py:0
+msgid "Private template '%s' must bind at least one project before publishing."
+msgstr ""
+
+#. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/AddFundsModal.xml:0
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/ChangePlanModal.xml:0
@@ -8454,10 +9969,24 @@ msgid "Project Name"
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/ai_assistant.py:0
+msgid "Project access denied"
+msgstr ""
+
+#. module: woow_paas_platform
 #. odoo-javascript
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/ai_assistant.py:0
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/CreateProjectModal.js:0
 msgid "Project name is required"
 msgstr "請輸入專案名稱"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/ai_assistant.py:0
+msgid "Project not found"
+msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -8543,7 +10072,18 @@ msgstr ""
 
 #. module: woow_paas_platform
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_service__provision_partner_id
+msgid "Provision Owner (One Per Account)"
+msgstr ""
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_service__provision_partner_id
 msgid "Provision Owner（每帳號限一）"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/security_access.py:0
+msgid "Provision re-sync failed: %(error)s"
 msgstr ""
 
 #. module: woow_paas_platform
@@ -8555,11 +10095,25 @@ msgid "Provisioning"
 msgstr "佈建中"
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/security_access.py:0
+msgid ""
+"Provisioning denied: this caller may not write the tunnel credential "
+"(tunnel_token is a base.group_system field)."
+msgstr ""
+
+#. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/CreateSecurityAccessModal.js:0
 #: code:addons/woow_paas_platform/static/src/paas/components/smart-home/CreateSmartHomeModal.js:0
 msgid "Provisioning failed"
 msgstr "佈建失敗"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/security_access.py:0
+msgid "Provisioning failed: %(error)s"
+msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -8600,6 +10154,34 @@ msgstr ""
 msgid ""
 "Public URL is not yet verified as resolvable — it may still be propagating"
 msgstr "公開網址尚未驗證可解析，可能仍在生效中"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/oauth_client.py:0
+msgid ""
+"Public clients cannot use the client_credentials grant type. Use a "
+"confidential client for server-to-server access."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/oauth_client.py:0
+msgid "Public clients have no secret to regenerate."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/oauth_client.py:0
+msgid "Public clients must have 'Require PKCE' enabled."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/oauth_client.py:0
+msgid ""
+"Public clients must not have a client_secret. Public clients rely on PKCE "
+"for authorization-code security."
+msgstr ""
 
 #. module: woow_paas_platform
 #: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_oauth_client__client_id
@@ -8740,6 +10322,17 @@ msgid "Recommended"
 msgstr "推薦"
 
 #. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_reconcile_report__reconcilable
+msgid "Reconcilable"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/reconcile_report.py:0
+msgid "Reconciliation failed: %s"
+msgstr ""
+
+#. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/ai-chat/AiChat.js:0
 msgid "Reconnecting to AI assistant..."
@@ -8804,6 +10397,12 @@ msgid "Redirect URI Match Mode"
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/oauth2.py:0
+msgid "Redirect URI mismatch."
+msgstr ""
+
+#. module: woow_paas_platform
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_oauth_client__redirect_uris
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_oauth_client_form
 msgid "Redirect URIs"
@@ -8841,6 +10440,18 @@ msgstr ""
 #. module: woow_paas_platform
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_oauth_token__refresh_expires_at
 msgid "Refresh Token Expires At"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/oauth2.py:0
+msgid "Refresh token expired or revoked."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/oauth2.py:0
+msgid "Refresh token not found."
 msgstr ""
 
 #. module: woow_paas_platform
@@ -9029,9 +10640,37 @@ msgid ""
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid ""
+"Reset admin password is only supported on templates with a built-in admin GUI"
+msgstr ""
+
+#. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/services/mermaid_loader.js:0
 msgid "Reset diagram view"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid "Reset failed. Check operator logs for details."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid "Reset failed. Check service status and retry."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid ""
+"Reset status unknown — the request timed out before the service confirmed "
+"it. The reset may still have taken effect, so the password was not saved. "
+"Wait a few minutes, then press Reset again to issue a new password."
 msgstr ""
 
 #. module: woow_paas_platform
@@ -9043,6 +10682,16 @@ msgstr ""
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/OverviewTab.xml:0
 msgid "Resource Allocation"
+msgstr ""
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_reconcile_report__name
+msgid "Resource Name"
+msgstr ""
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_reconcile_report__resource_uid
+msgid "Resource UID"
 msgstr ""
 
 #. module: woow_paas_platform
@@ -9066,6 +10715,12 @@ msgid "Result"
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid "Resume failed: %(error)s"
+msgstr ""
+
+#. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/ai-chat/AiChat.xml:0
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/RollbackModal.xml:0
@@ -9083,6 +10738,12 @@ msgstr ""
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/RollbackModal.xml:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/OverviewTab.xml:0
 msgid "Revision"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid "Revision must be a non-negative integer"
 msgstr ""
 
 #. module: woow_paas_platform
@@ -9117,9 +10778,21 @@ msgid "Rollback Service"
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid "Rollback failed: %(reason)s"
+msgstr ""
+
+#. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/RollbackModal.xml:0
 msgid "Rollback to Revision"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid "Rollback to revision %(revision)s initiated"
 msgstr ""
 
 #. module: woow_paas_platform
@@ -9143,6 +10816,37 @@ msgstr ""
 #: code:addons/woow_paas_platform/static/src/paas/pages/smart-home/SmartHomeDetailPage.js:0
 msgid "Route URL"
 msgstr "路由網址"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/security_access.py:0
+msgid "Route deleted"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/security_access.py:0
+#: code:addons/woow_paas_platform/controllers/smart_home.py:0
+msgid "Route not found"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/security_access.py:0
+msgid "Route quota exceeded: plan '%s' allows %d route(s)."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/security_access.py:0
+msgid "Route quota exceeded: plan allows %d route(s)"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/security_access.py:0
+msgid "Route sync failed: %(detail)s"
+msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -9244,6 +10948,12 @@ msgid "Sales"
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid "Sales of \"%(tpl)s\" are currently paused."
+msgstr ""
+
+#. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/utils/availability_label.js:0
 msgid "Sales paused"
@@ -9291,6 +11001,11 @@ msgstr ""
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/settings/ProfilePage.xml:0
 msgid "Saving…"
+msgstr ""
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_reconcile_report__scanned_at
+msgid "Scanned At"
 msgstr ""
 
 #. module: woow_paas_platform
@@ -9393,6 +11108,18 @@ msgid ""
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/security_access.py:0
+msgid "Security Access template is required"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/security_access.py:0
+msgid "Security Access template not found or inactive"
+msgstr ""
+
+#. module: woow_paas_platform
 #: model:ir.model,name:woow_paas_platform.model_woow_paas_platform_security_access_access_policy
 msgid "Security Access — Access Policy"
 msgstr ""
@@ -9432,6 +11159,19 @@ msgstr ""
 msgid ""
 "Security Access: max user-defined application routes (excluding the auto-"
 "created primary route). 0 = none allowed."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/security_access.py:0
+msgid "Security access deleted"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/ha_api.py:0
+#: code:addons/woow_paas_platform/controllers/security_access.py:0
+msgid "Security access not found"
 msgstr ""
 
 #. module: woow_paas_platform
@@ -9486,6 +11226,25 @@ msgstr ""
 #. module: woow_paas_platform
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_ai_assistant_form_inherit_woow
 msgid "Select tools to disable..."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/security_access.py:0
+msgid "Selected plan is not a valid Security Access plan"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/smart_home.py:0
+msgid "Selected plan is not available for Smart Home"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/security_access.py:0
+#: code:addons/woow_paas_platform/controllers/smart_home.py:0
+msgid "Selected plan is not available for this template"
 msgstr ""
 
 #. module: woow_paas_platform
@@ -9559,6 +11318,12 @@ msgid "Server error. Please try again later."
 msgstr "伺服器發生錯誤，請稍後再試。"
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/oauth2.py:0
+msgid "Server misconfigured: web.base.url is unset."
+msgstr ""
+
+#. module: woow_paas_platform
 #: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_workspace__ws_hash
 msgid ""
 "Server-generated 8-hex identity of this workspace inside K8s / Cloudflare "
@@ -9609,6 +11374,47 @@ msgid "Service URL"
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid "Service deleted"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid ""
+"Service has no helm release yet — deploy first before resetting password."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid "Service is already being deleted"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid ""
+"Service is finishing an update (usually under a minute). Please wait and try "
+"again."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid ""
+"Service is suspended but could not be scaled back down after the upgrade: %"
+"(error)s"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/ha_paas.py:0
+msgid "Service is suspended. Contact support."
+msgstr ""
+
+#. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/AddonsTab.xml:0
 msgid ""
@@ -9624,7 +11430,21 @@ msgid ""
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid "Service must be running before resetting its admin password."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid "Service must be running to check module states (current: %(state)s)"
+msgstr ""
+
+#. module: woow_paas_platform
 #. odoo-javascript
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/configure/AppConfigurationPage.js:0
 msgid "Service name is required"
 msgstr "請輸入服務名稱"
@@ -9640,6 +11460,12 @@ msgstr "服務名稱至少需要 2 個字元"
 #: code:addons/woow_paas_platform/static/src/paas/pages/configure/AppConfigurationPage.js:0
 msgid "Service name must be at most 100 characters"
 msgstr "服務名稱最多 100 個字元"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid "Service not found"
+msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -9857,6 +11683,14 @@ msgid "Sidecar Image"
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/mcp_server.py:0
+msgid ""
+"Sidecar-backed MCP server '%s' must use an in-cluster URL (http scheme + "
+"hostname ending in '.svc.cluster.local'); got: %s"
+msgstr ""
+
+#. module: woow_paas_platform
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.device_consent
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.oauth2_authorize
 msgid "Signed in as"
@@ -9868,6 +11702,33 @@ msgid "Skill"
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/agent_template.py:0
+msgid ""
+"Skill '%s' is not bound to any of template '%s' projects and is not system-"
+"scope."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/skill.py:0
+msgid "Skill '%s' v%s cannot be deprecated from state '%s' (only published)."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/skill.py:0
+msgid ""
+"Skill '%s' v%s cannot be published from state '%s' (only draft / deprecated)."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/skill.py:0
+msgid "Skill '%s' v%s is already archived."
+msgstr ""
+
+#. module: woow_paas_platform
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_skill_upload_wizard__bundle_file
 msgid "Skill Bundle (.tar.gz)"
 msgstr ""
@@ -9876,6 +11737,14 @@ msgstr ""
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_skill__name
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_skill_upload_wizard__name
 msgid "Skill Name"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/project_project.py:0
+msgid ""
+"Skill bindings can only be edited on a dedicated template — use 'Create "
+"Dedicated Template' first."
 msgstr ""
 
 #. module: woow_paas_platform
@@ -10048,6 +11917,27 @@ msgstr ""
 #. odoo-python
 #: code:addons/woow_paas_platform/models/smart_home.py:0
 msgid ""
+"Smart Home instances can only be created by the platform provisioning flow (%"
+"(model)s). Please use the Smart Home ordering flow instead of writing to "
+"this model directly."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/smart_home.py:0
+msgid "Smart Home template is required"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/smart_home.py:0
+msgid "Smart Home template not found or inactive"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/smart_home.py:0
+msgid ""
 "Smart Home 只能由平台的開通流程建立（%(model)s）。請改從 Smart Home 下單流程"
 "建立，不要直接寫入這個 model。"
 msgstr ""
@@ -10061,10 +11951,23 @@ msgid ""
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/smart_home.py:0
+msgid "Smart home deleted"
+msgstr ""
+
+#. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/smart-home/CreateSmartHomeModal.js:0
 msgid "Smart home name is required"
 msgstr "請輸入 Smart Home 名稱"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/ha_api.py:0
+#: code:addons/woow_paas_platform/controllers/smart_home.py:0
+msgid "Smart home not found"
+msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -10204,6 +12107,13 @@ msgid "Status"
 msgstr "狀態"
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/security_access.py:0
+#: code:addons/woow_paas_platform/models/smart_home.py:0
+msgid "Status refresh failed: %(detail)s"
+msgstr ""
+
+#. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/reconcile-report/ReconcileReportPage.xml:0
 msgid "Still an orphan (confirm again before deleting)"
@@ -10295,6 +12205,20 @@ msgid "Subdomain must be unique across all smart homes."
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/security_access.py:0
+msgid ""
+"Subdomain prefix is immutable. Delete the route and create a new one to "
+"rename."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/security_access.py:0
+msgid "Subdomain prefix is not available: %s"
+msgstr ""
+
+#. module: woow_paas_platform
 #: model:ir.model.constraint,message:woow_paas_platform.constraint_woow_paas_platform_security_access_route_unique_subdomain_prefix
 msgid "Subdomain prefix must be unique across the platform."
 msgstr ""
@@ -10383,6 +12307,56 @@ msgid "Subscription State"
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+#: code:addons/woow_paas_platform/controllers/security_access.py:0
+#: code:addons/woow_paas_platform/controllers/smart_home.py:0
+msgid "Subscription dates are incomplete"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/subscription_lifecycle_mixin.py:0
+msgid "Subscription is not active."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/subscription_lifecycle_mixin.py:0
+msgid "Subscription is not in trial period."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/subscription_lifecycle_mixin.py:0
+msgid ""
+"Subscription journal is not configured. Please go to Settings → Woow PaaS → "
+"Subscription Lifecycle and select a journal."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/billing.py:0
+msgid "Subscription not found"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+#: code:addons/woow_paas_platform/controllers/security_access.py:0
+#: code:addons/woow_paas_platform/controllers/smart_home.py:0
+msgid "Subscription plan is required"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+#: code:addons/woow_paas_platform/controllers/security_access.py:0
+#: code:addons/woow_paas_platform/controllers/smart_home.py:0
+msgid "Subscription plan not found"
+msgstr ""
+
+#. module: woow_paas_platform
 #: model:ir.model,name:woow_paas_platform.model_sh_subscription_subscription
 msgid "Subscription subscription"
 msgstr ""
@@ -10429,6 +12403,12 @@ msgid "Suspend all associated services after the grace period"
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid "Suspend failed: %(error)s"
+msgstr ""
+
+#. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/common/StatusBadge.js:0
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_cloud_service__state__suspended
@@ -10453,6 +12433,12 @@ msgid "Sync Tools"
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid "Sync failed: %(reason)s"
+msgstr ""
+
+#. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/layout/sidebar/Sidebar.js:0
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_mcp_server__scope__system
@@ -10470,6 +12456,28 @@ msgstr ""
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_agent_template__system_prompt
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_agent_template_form
 msgid "System Prompt"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/mcp_server.py:0
+msgid ""
+"System-scope MCP server '%s' must not be linked to a project (scope='system' "
+"requires project_id=NULL)."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/skill.py:0
+msgid ""
+"System-scope skill '%s' must not be linked to a project (scope='system' "
+"requires project_id=NULL)."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/wizard/skill_upload_wizard.py:0
+msgid "System-scope skills must not be linked to a project."
 msgstr ""
 
 #. module: woow_paas_platform
@@ -10508,9 +12516,17 @@ msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/ai_assistant.py:0
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/CreateTaskModal.js:0
 msgid "Task name is required"
 msgstr "請輸入任務名稱"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/ai_assistant.py:0
+msgid "Task not found"
+msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -10579,6 +12595,12 @@ msgid "Template Bound Skills"
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid "Template ID is required"
+msgstr ""
+
+#. module: woow_paas_platform
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_agent_template__name
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_agent_template_form
 msgid "Template Name"
@@ -10605,6 +12627,26 @@ msgid "Template display name (e.g., Security Access)"
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/security_access.py:0
+#: code:addons/woow_paas_platform/controllers/smart_home.py:0
+msgid "Template has no subscription plans configured"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid ""
+"Template misconfigured (invalid default values). Please contact support."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid "Template not found"
+msgstr ""
+
+#. module: woow_paas_platform
 #: model:ir.model.fields,help:woow_paas_platform.field_project_project__resolved_agent_template_id
 msgid ""
 "Template the agent runtime resolves for this project (project-bound "
@@ -10622,6 +12664,12 @@ msgstr ""
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.res_config_settings_view_form
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_mcp_server_form
 msgid "Test Connection"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/security_access_access_policy_rule.py:0
+msgid "The 'Everyone' rule takes no value — got %r."
 msgstr ""
 
 #. module: woow_paas_platform
@@ -10648,11 +12696,31 @@ msgid ""
 msgstr "AI 回覆因連線中斷而不完整，您可以重新傳送訊息以取得完整回覆。"
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/ai_assistant.py:0
+msgid ""
+"The AI reply was generated but could not be saved. Please refresh the page "
+"to confirm."
+msgstr ""
+
+#. module: woow_paas_platform
 #: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_security_access_access_policy__smart_home_route_id
 msgid ""
 "The Smart Home route this policy protects (#768). Each route is its own "
 "Cloudflare Access application. Exactly one of route_id / cloud_service_id / "
 "smart_home_route_id is set."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/ai_assistant.py:0
+msgid "The agent template has no API key"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/ai_assistant.py:0
+msgid "The agent took too long to start. Please try again later."
 msgstr ""
 
 #. module: woow_paas_platform
@@ -10689,11 +12757,23 @@ msgid "The client application this token was issued to"
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/oauth2.py:0
+msgid "The client_id is invalid or the application is inactive."
+msgstr ""
+
+#. module: woow_paas_platform
 #: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_security_access_access_policy__cloud_service_id
 msgid ""
 "The cloud service this policy protects (#744). Its public subdomain is its "
 "own Cloudflare Access application. Exactly one of route_id / "
 "cloud_service_id is set."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/oauth2.py:0
+msgid "The device_code has expired."
 msgstr ""
 
 #. module: woow_paas_platform
@@ -10708,6 +12788,12 @@ msgstr "圖表將在回覆完成後顯示"
 msgid ""
 "The following module(s) are still present in your Odoo instance and must be "
 "uninstalled before removal:"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/workspace_access.py:0
+msgid "The new owner must be an existing member of the workspace."
 msgstr ""
 
 #. module: woow_paas_platform
@@ -10731,6 +12817,15 @@ msgstr ""
 msgid ""
 "The primary route of a Smart Home cannot be deleted — its hostname is served "
 "by the Cloudflare tunnel itself. Delete the Smart Home instead."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid ""
+"The product \"%(product)s\" has no deployment version pinned. Provisioning "
+"was aborted to avoid deploying an unknown chart version. Pin the version in "
+"the seed and cut a new release (#552)."
 msgstr ""
 
 #. module: woow_paas_platform
@@ -10776,6 +12871,12 @@ msgid "The redirect URI used in the authorization request"
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/oauth2.py:0
+msgid "The redirect_uri is not registered for this application."
+msgstr ""
+
+#. module: woow_paas_platform
 #: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_security_access_access_policy__route_id
 msgid ""
 "The route this policy protects. Each protected route is its own Cloudflare "
@@ -10793,6 +12894,28 @@ msgid ""
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid ""
+"The service was deployed and its tunnel route exists, but the DNS record "
+"could not be created, so %(hostname)s will not resolve."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid ""
+"The service was deployed but its public route could not be created, so %"
+"(hostname)s will not be reachable."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/oauth2.py:0
+msgid "The user denied the request."
+msgstr ""
+
+#. module: woow_paas_platform
 #: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_oauth_code__user_id
 msgid "The user who authorized this code"
 msgstr ""
@@ -10800,6 +12923,14 @@ msgstr ""
 #. module: woow_paas_platform
 #: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_oauth_token__user_id
 msgid "The user who authorized this token"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid ""
+"The workspace of a deployed cloud service cannot be changed; its namespace "
+"identity is fixed at creation."
 msgstr ""
 
 #. module: woow_paas_platform
@@ -10827,6 +12958,23 @@ msgstr ""
 #. module: woow_paas_platform
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_cloud_odoo_addon__source_type__third_party
 msgid "Third-party"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/ai_assistant.py:0
+msgid "This Cloud Service already has a Support Project"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/smart_home.py:0
+msgid ""
+"This Smart Home already has a Cloudflare tunnel (%s). Re-provisioning would "
+"create a second, separately billed tunnel and leave this one orphaned with "
+"no record pointing at it. If its DNS record is missing, ask an administrator "
+"to create it for %s; otherwise delete this Smart Home (which tears the "
+"tunnel down) and create it again."
 msgstr ""
 
 #. module: woow_paas_platform
@@ -10871,6 +13019,44 @@ msgstr ""
 #: code:addons/woow_paas_platform/static/src/paas/components/ai-chat/AiChat.js:0
 msgid "This chat channel no longer exists. Please refresh the page."
 msgstr "聊天頻道不存在，請重新整理頁面。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/oauth2.py:0
+msgid "This client is not authorized for the authorization_code grant type."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/oauth2.py:0
+msgid "This client is not authorized for the client_credentials grant type."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/oauth2.py:0
+msgid "This client is not authorized for the device_code grant type."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/oauth2.py:0
+msgid "This client is not authorized for the refresh_token grant type."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/oauth2.py:0
+msgid ""
+"This client requires PKCE. Include code_challenge and "
+"code_challenge_method=S256."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/oauth2.py:0
+msgid "This client requires code_challenge_method=S256."
+msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-python
@@ -10934,6 +13120,12 @@ msgid "This plan is no longer available."
 msgstr "此方案已不再提供。"
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/project_project.py:0
+msgid "This project already has a dedicated template."
+msgstr ""
+
+#. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/project-detail/sections/CloudServiceBindingSection.js:0
 msgid "This project has user-scope MCP servers. Remove them first."
@@ -10958,6 +13150,12 @@ msgid ""
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid "This service has no public address to protect yet."
+msgstr ""
+
+#. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/AccessTab.xml:0
 msgid ""
@@ -10973,6 +13171,34 @@ msgid ""
 "This service's public address is its own Cloudflare Access\n"
 "              application. Turn protection on to require every visitor to\n"
 "              authenticate first."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/wizard/skill_upload_wizard.py:0
+msgid ""
+"This skill bundle was rejected:\n"
+"- %(errors)s"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/smart_home.py:0
+msgid "This smart home has no public address to protect yet."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid ""
+"This subscription does not belong to the owner of this service's workspace "
+"and cannot be bound."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid "This template cannot be deployed directly."
 msgstr ""
 
 #. module: woow_paas_platform
@@ -11037,8 +13263,20 @@ msgid "Token Type"
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/billing.py:0
+msgid "Token not found"
+msgstr ""
+
+#. module: woow_paas_platform
 #: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_oauth_token__refresh_token
 msgid "Token used to obtain a new access token"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/oauth2.py:0
+msgid "Too many attempts. Please wait and try again."
 msgstr ""
 
 #. module: woow_paas_platform
@@ -11293,6 +13531,23 @@ msgid "Tunnel Token"
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/smart_home.py:0
+msgid ""
+"Tunnel created but its DNS record could not be created, so %(hostname)s will "
+"not resolve. The tunnel (%(tunnel_id)s) is kept so it is not orphaned — an "
+"administrator must create the DNS record, or delete and re-create this Smart "
+"Home."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/security_access.py:0
+#: code:addons/woow_paas_platform/models/smart_home.py:0
+msgid "Tunnel creation failed: %(detail)s"
+msgstr ""
+
+#. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/AccessTab.js:0
 msgid "Turn on Access protection"
@@ -11365,6 +13620,24 @@ msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid "Unable to connect to deployment service"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid "Unable to connect to deployment service during deletion"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid "Unable to connect to deployment service. Please try again later."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
 #: code:addons/woow_paas_platform/models/res_partner_wallet.py:0
 msgid "Unable to get wallet loyalty card"
 msgstr ""
@@ -11431,6 +13704,12 @@ msgid "Unassigned"
 msgstr "未分派"
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid "Unauthorized configuration keys: %(keys)s"
+msgstr ""
+
+#. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/project-detail/sections/CloudServiceBindingSection.js:0
 msgid ""
@@ -11453,6 +13732,12 @@ msgstr ""
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/project-detail/sections/BasicInfoSection.xml:0
 msgid "Unbound (no workspace)"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid "Unexpected error during deployment. Check server logs."
 msgstr ""
 
 #. module: woow_paas_platform
@@ -11480,7 +13765,30 @@ msgid "Unknown"
 msgstr "未知"
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/billing.py:0
+msgid "Unknown ECPay error"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/ai_assistant.py:0
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+#: code:addons/woow_paas_platform/controllers/security_access.py:0
+#: code:addons/woow_paas_platform/controllers/smart_home.py:0
+msgid "Unknown action: %(action)s"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/oauth2.py:0
+msgid "Unknown device_code."
+msgstr ""
+
+#. module: woow_paas_platform
 #. odoo-javascript
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
 #: code:addons/woow_paas_platform/static/src/paas/services/billing_service.js:0
 #: code:addons/woow_paas_platform/static/src/paas/services/cloud_service.js:0
 #: code:addons/woow_paas_platform/static/src/paas/services/rpc.js:0
@@ -11523,6 +13831,13 @@ msgstr "更新失敗"
 #. module: woow_paas_platform
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_service_secret__updated_at
 msgid "Updated At"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid "Upgrade failed: %(reason)s"
 msgstr ""
 
 #. module: woow_paas_platform
@@ -11654,6 +13969,22 @@ msgid "User"
 msgstr "使用者"
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/project_access.py:0
+msgid ""
+"User %s (role=%s) cannot assign role '%s' on project %s. Assignable roles "
+"for %s: %s."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/workspace_access.py:0
+msgid ""
+"User %s (role=%s) cannot assign role '%s' on workspace %s. Assignable roles "
+"for %s: %s."
+msgstr ""
+
+#. module: woow_paas_platform
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_oauth_device_code__user_code
 msgid "User Code"
 msgstr ""
@@ -11666,6 +13997,18 @@ msgstr ""
 #. module: woow_paas_platform
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_workspace_access__user_name
 msgid "User Name"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/oauth2.py:0
+msgid "User denied access"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid "User is already a member of this workspace"
 msgstr ""
 
 #. module: woow_paas_platform
@@ -11694,6 +14037,28 @@ msgid ""
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/mcp_server.py:0
+msgid ""
+"User-scope MCP server '%s' must be linked to a project (scope='user' "
+"requires project_id)."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/skill.py:0
+msgid ""
+"User-scope skill '%s' must be linked to a project (scope='user' requires "
+"project_id)."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/wizard/skill_upload_wizard.py:0
+msgid "User-scope skills must be linked to a project."
+msgstr ""
+
+#. module: woow_paas_platform
 #: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_cloud_app_template__workload_type
 msgid ""
 "VM 型 workload 的就緒／啟停判定與容器型不同（見 #423 v1 設計）：就緒讀 VMI "
@@ -11703,6 +14068,11 @@ msgstr ""
 #. module: woow_paas_platform
 #: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_cloud_service__import_progress
 msgid "VM 磁碟映像的 import 進度（例 \"42.31%\"）；僅供顯示，不參與就緒判定"
+msgstr ""
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_reconcile_report__reason
+msgid "Verdict Reason"
 msgstr ""
 
 #. module: woow_paas_platform
@@ -11836,6 +14206,12 @@ msgid "Visitors from this CIDR range."
 msgstr "來自此 CIDR 範圍的訪客。"
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/ai_assistant.py:0
+msgid "WS client unavailable"
+msgstr ""
+
+#. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/billing/BillingOverviewPage.js:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/billing/InvoiceListPage.xml:0
@@ -11954,6 +14330,14 @@ msgid ""
 "plain truthy context value is forgeable over call_kw and no longer works, "
 "see #787) issues the e-invoice. Has no effect when company.auto_invoice is "
 "\"manual\" (the upstream inline hook is a no-op in that case anyway)."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/sh_subscription_plan_cs_spec.py:0
+msgid ""
+"When cs_odoo_workers is greater than 0, cs_ram_gb must be set as well; "
+"otherwise the per-worker memory limit cannot be computed (OOM risk)."
 msgstr ""
 
 #. module: woow_paas_platform
@@ -12160,6 +14544,12 @@ msgid "Workspace Detail"
 msgstr "工作區詳情"
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid "Workspace ID is required"
+msgstr ""
+
+#. module: woow_paas_platform
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_agent_session__workspace_ids_snapshot
 msgid "Workspace Ids Snapshot"
 msgstr ""
@@ -12188,10 +14578,38 @@ msgid "Workspace access"
 msgstr "工作區存取權"
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid "Workspace archived"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid "Workspace name cannot be empty"
+msgstr ""
+
+#. module: woow_paas_platform
 #. odoo-javascript
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/CreateWorkspaceModal.js:0
 msgid "Workspace name is required"
 msgstr "請輸入工作區名稱"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/ai_assistant.py:0
+msgid "Workspace not found"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+#: code:addons/woow_paas_platform/controllers/security_access.py:0
+#: code:addons/woow_paas_platform/controllers/smart_home.py:0
+msgid "Workspace not found or access denied"
+msgstr ""
 
 #. module: woow_paas_platform
 #: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_security_access__workspace_id
@@ -12320,6 +14738,22 @@ msgid "Your smart home tunnel has been configured successfully."
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/subscription_lifecycle_mixin.py:0
+msgid ""
+"Your subscription has expired and the service is suspended. Please renew "
+"your subscription to restore access."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/subscription_lifecycle_mixin.py:0
+msgid ""
+"Your subscription has expired. You have a grace period to renew. During this "
+"time, modifications are not allowed."
+msgstr ""
+
+#. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/SkipTrialModal.xml:0
 msgid "Your trial ends on"
@@ -12345,6 +14779,15 @@ msgstr ""
 #. module: woow_paas_platform
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_cloud_app_template_form
 msgid "[\"tag1\", \"tag2\"]"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/res_lang.py:0
+msgid ""
+"[107] res.lang has no row with code=%s — cannot activate the Traditional "
+"Chinese UI. base/data/res.lang.csv seeds this row on every database, so its "
+"absence means the base module data is incomplete."
 msgstr ""
 
 #. module: woow_paas_platform
@@ -12380,6 +14823,12 @@ msgid ""
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/security_access.py:0
+msgid "already used by another route"
+msgstr ""
+
+#. module: woow_paas_platform
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_cloud_app_template_form
 msgid "app-slug"
 msgstr ""
@@ -12393,6 +14842,12 @@ msgstr ""
 #. module: woow_paas_platform
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_oauth_client_form
 msgid "authorization_code,refresh_token"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/ai_assistant.py:0
+msgid "body is required"
 msgstr ""
 
 #. module: woow_paas_platform
@@ -12427,6 +14882,12 @@ msgid ""
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/ai_assistant.py:0
+msgid "channel_id is required"
+msgstr ""
+
+#. module: woow_paas_platform
 #: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_security_access__connector_version
 msgid ""
 "cloudflared client version reported by the active connector (from the "
@@ -12437,6 +14898,11 @@ msgstr ""
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/InviteMemberModal.xml:0
 msgid "colleague@example.com"
+msgstr ""
+
+#. module: woow_paas_platform
+#: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_cloud_app_template__admin_password_carrier__config_json
+msgid "config.json (config file inside the PVC, mcp-server family)"
 msgstr ""
 
 #. module: woow_paas_platform
@@ -12654,6 +15120,18 @@ msgid ""
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid "it"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/reconcile_report.py:0
+msgid "kind and resource_uid are required"
+msgstr ""
+
+#. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.xml:0
 msgid "lowercase letters, numbers and hyphens"
@@ -12664,6 +15142,12 @@ msgstr ""
 msgid ""
 "manual = user clicked topup; auto = system triggered to cover subscription "
 "invoice shortfall."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/billing.py:0
+msgid "member_id does not match current session"
 msgstr ""
 
 #. module: woow_paas_platform
@@ -12719,6 +15203,18 @@ msgstr ""
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_mcp_n8n_ac1_monthly_product_template
 msgid "n8n MCP 工具包+1access月繳 Subscription"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid "n8n initialization failed after %(retries)s retries: %(reason)s"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid "n8n initialization failed: %(reason)s"
 msgstr ""
 
 #. module: woow_paas_platform
@@ -12946,6 +15442,14 @@ msgid "n8n雲端訂閱服務（6人）+6access月繳 Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+#: code:addons/woow_paas_platform/controllers/security_access.py:0
+#: code:addons/woow_paas_platform/controllers/smart_home.py:0
+msgid "name is required"
+msgstr ""
+
+#. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/billing/InvoiceListPage.xml:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/billing/SubscriptionListPage.xml:0
@@ -12974,6 +15478,12 @@ msgid "open)"
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid "operator client or release coordinates unavailable"
+msgstr ""
+
+#. module: woow_paas_platform
 #: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_security_access__canonical_name
 msgid ""
 "paas-sa-{ws_hash}-{res_hash}. Computed ONCE at create and stored — the "
@@ -12994,10 +15504,39 @@ msgid "per route"
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/billing.py:0
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+#: code:addons/woow_paas_platform/controllers/security_access.py:0
+#: code:addons/woow_paas_platform/controllers/smart_home.py:0
+msgid "plan_id is required"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+#: code:addons/woow_paas_platform/controllers/security_access.py:0
+#: code:addons/woow_paas_platform/controllers/smart_home.py:0
+msgid "policy_ids must be a list"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/security_access.py:0
+msgid "prefix is required"
+msgstr ""
+
+#. module: woow_paas_platform
 #: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_reconcile_report__env_hint
 msgid ""
 "prod / stg / unknown（prod 與 legacy 無 token byte-identical 不可分 → "
 "unknown）"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/ai_assistant.py:0
+msgid "project_id is required"
 msgstr ""
 
 #. module: woow_paas_platform
@@ -13010,6 +15549,15 @@ msgstr ""
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/subscription/PlanTotalBar.xml:0
 msgid "pts/"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/oauth_client.py:0
+msgid ""
+"redirect_uri_match_mode='ha_callback' relaxes the redirect_uri host check "
+"and depends on PKCE to bound the open-redirect surface. Enable 'Require "
+"PKCE'."
 msgstr ""
 
 #. module: woow_paas_platform
@@ -13056,6 +15604,12 @@ msgid "self-hosted application"
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid "server_id is required"
+msgstr ""
+
+#. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.xml:0
 msgid "service URL (default from platform)"
@@ -13078,6 +15632,12 @@ msgstr ""
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.xml:0
 msgid "subdomain prefix"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/security_access.py:0
+msgid "subdomain_prefix is required"
 msgstr ""
 
 #. module: woow_paas_platform
@@ -13133,6 +15693,12 @@ msgid "templateId is required"
 msgstr "缺少 templateId 參數"
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid "the public hostname"
+msgstr ""
+
+#. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/project-detail/sections/CloudServiceBindingSection.js:0
 msgid "the selected service"
@@ -13167,6 +15733,11 @@ msgstr ""
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/billing/TransactionListPage.xml:0
 msgid "transactions"
+msgstr ""
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_reconcile_report__kind
+msgid "tunnel / access_app / access_policy … (matches CfResource.kind)"
 msgstr ""
 
 #. module: woow_paas_platform
@@ -13315,6 +15886,20 @@ msgstr ""
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/settings/PaymentMethodsListPage.xml:0
 msgid "• Exp"
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/discuss_channel.py:0
+msgid ""
+"⚠️ The AI assistant could not reply. Please try again later or contact your "
+"administrator."
+msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/discuss_channel.py:0
+msgid "⚠️ The AI assistant could not reply: %(reason)s Please try again later."
 msgstr ""
 
 #. module: woow_paas_platform
