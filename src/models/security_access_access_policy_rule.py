@@ -10,7 +10,23 @@ from .security_access import (
     _CTX_RULE_REPLACE,
     _CTX_SKIP_ROUTE_SYNC,
     _is_sync_control,
+    _reject_derived_projection_writes,
 )
+
+#: #849：**stored related 投影欄位 → 它的來源錨點欄位**（rule 側三欄）。
+#:
+#: 與 policy 側同型：三欄都是 `related='policy_id.<同名>', store=True`，而
+#: `security/ir_rules.xml` 的 rule member-read 與 owner-admin-manage 兩條 rule 的
+#: domain 走的正是這三根 column（三腿 OR，**不走** `policy_id`）⇒ 直寫任一欄都能
+#: 把一列 rule 的 ir.rule 歸屬推到別的 workspace，而真錨點 `policy_id` 不動。
+#:
+#: 三欄都列：policy 側的 `cloud_service_id` 是**真錨點**（在 `_ANCHOR_FIELDS` 裡、
+#: 由 #848 守），rule 側的同名欄位卻是**投影**——同名不同性質，⛔ 兩張清單不可互抄。
+_RULE_PROJECTION_FIELDS = {
+    'security_access_id': 'policy_id',
+    'cloud_service_id': 'policy_id',
+    'smart_home_id': 'policy_id',
+}
 
 # Shared with the policy格式驗證：bare domain（不可帶 @），如 acme.com。
 _DOMAIN_RE = re.compile(r'^[a-z0-9.-]+\.[a-z]{2,}$', re.IGNORECASE)
@@ -212,6 +228,9 @@ class SecurityAccessAccessPolicyRule(models.Model):
         return rules
 
     def write(self, vals):
+        # #849：投影欄位的直寫守衛，**必須是本方法的第一件事**——拒絕要發生在
+        # `policies` 擷取與 `super().write()` 之前。與 policy 側同一個 helper。
+        _reject_derived_projection_writes(vals, _RULE_PROJECTION_FIELDS)
         policies = self.mapped('policy_id')
         with self.env.cr.savepoint():
             result = super().write(vals)

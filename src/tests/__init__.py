@@ -759,3 +759,10 @@ from . import test_locale_formatting_guard_107
 # 🔴 判準刻意不是「通過／不通過」兩格——靜默丟棄／落地／落地後被 recompute 蓋回
 # 三種輸出不同但都不報錯。DB 值量兩次、ir.rule 歸屬量 2 身分 × 2 時點。
 from . import test_policy_related_anchor_projection_849
+
+# #849 GREEN：五個投影欄位（policy 2 ＋ rule 3）的直寫守衛。兩半缺一不可——
+# G 系列量「租戶／superuser 直寫被大聲拒絕且不落地」，L 系列量「框架自己的
+# related 重算**不被誤擋**」（守衛擋的是 key 出現在 vals 裡，而重算天天在改
+# 這幾根 column；誤擋的症狀是每次搬 route／換錨點都炸，但要在測試裡看到它不炸
+# 才算數）。C 系列蓋 create 側三個載體，只主張不變量不主張機制。
+from . import test_policy_projection_guard_849
