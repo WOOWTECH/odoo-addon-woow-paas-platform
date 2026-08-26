@@ -312,7 +312,9 @@ class TestHaosQuotaModelling(_HaosSeedMixin, TransactionCase):
     症狀只是 DataVolume 停在 ImportInProgress，events 不挖就看不到 quota 拒收。
 
     workspace ns quota ＝ 存活 service 的 allocated_* 加總 × 3，下限
-    8 vCPU / 8Gi / 100Gi（`cloud_service._compute_ns_quota`）。
+    8 vCPU / 8Gi / 100Gi（`cloud_service._compute_ns_quota`）。守線只比較本服務的
+    **邊際貢獻**，不套 workspace floor；floor 只保護低用量 workspace，無法證明
+    共用 workspace 每增加一個 HAOS 時仍有足額 quota。
     """
 
     # W1 PoC 實測（#423 D5）：virt-launcher 的 compute 容器 requests.memory
@@ -363,39 +365,60 @@ class TestHaosQuotaModelling(_HaosSeedMixin, TransactionCase):
             'import 的三 PVC 峰值，不是磁碟大小'
             % (n['min_storage_gb'], n['disk_gi']))
 
+    @staticmethod
+    def _marginal_storage_gi(min_storage_gb):
+        """本服務替 workspace storage quota 增加的 GiB；刻意不套 100Gi floor。"""
+        return min_storage_gb * 3
+
+    @staticmethod
+    def _marginal_ram_gi(min_ram_gb):
+        """本服務替 workspace RAM quota 增加的 GiB；鏡射 production 的 int 截斷。"""
+        return int(min_ram_gb * 3)
+
     def test_storage_quota_covers_cdi_import_peak(self):
-        """quota（min_storage_gb×3，下限 100）必須蓋得住 import 峰值。
+        """storage quota 的邊際貢獻必須蓋得住 import 峰值。
 
         峰值 ＝ 3 顆 PVC × (宣告大小 × CDI filesystem overhead)。
         實測：64Gi → 每顆 67.8 GiB → 峰值 203.5 GiB；72×3＝216 GiB 放行。
+
+        `_compute_ns_quota` 的 100Gi floor 只在 workspace 總量低於 floor 時提供保護；
+        共用 workspace 增加一個 HAOS 時只會增加 min_storage_gb×3。這裡若套 floor，
+        較小的錯誤 min_storage_gb 可能在空 workspace 假綠、加入共用 workspace 才爆。
         """
         n = self._seed_numbers()
-        quota_gi = max(n['min_storage_gb'] * 3, 100)
+        marginal_gi = self._marginal_storage_gi(n['min_storage_gb'])
         peak_gi = (self.CDI_IMPORT_PVC_COUNT * n['disk_gi']
                    * self.CDI_PVC_RENDER_FACTOR)
         self.assertGreaterEqual(
-            quota_gi, peak_gi,
-            'workspace storage quota %.1fGi 蓋不住 CDI import 峰值 %.1fGi'
-            '（%d 顆 × %.1fGi × %.4f 渲染係數）→ scratch PVC 會被 '
-            'ErrExceededQuota 拒收，DataVolume 永遠停在 ImportInProgress'
-            % (quota_gi, peak_gi, self.CDI_IMPORT_PVC_COUNT, n['disk_gi'],
+            marginal_gi, peak_gi,
+            'min_storage_gb=%s → 每個服務只替 workspace storage quota 加 %.1fGi，'
+            '蓋不住 CDI import 峰值 %.1fGi（%d 顆 × %.1fGi × %.4f 渲染係數）'
+            '→ scratch PVC 會被 ErrExceededQuota 拒收，DataVolume 永遠停在 '
+            'ImportInProgress'
+            % (n['min_storage_gb'], marginal_gi, peak_gi,
+               self.CDI_IMPORT_PVC_COUNT, n['disk_gi'],
                self.CDI_PVC_RENDER_FACTOR))
 
     def test_ram_quota_covers_virt_launcher_total(self):
-        """quota（min_ram_gb×3，下限 8）必須蓋得住 virt-launcher pod 總量。
+        """RAM quota 的邊際貢獻必須蓋得住 virt-launcher pod 總量。
 
         總量 ＝ guest RAM ＋ KubeVirt overhead（實測 384 MiB）＋ init 容器 60M，
         **不是** guest RAM 本身。chart 讓 limits==requests，故無 2× 放大。
+
+        `_compute_ns_quota` 的 8Gi floor 只保護低用量 workspace；每新增一個 HAOS
+        實際只增加 int(min_ram_gb×3) Gi。套 floor 會讓過小的 min_ram_gb 在空
+        workspace 假綠，卻在共用 workspace 累積 quota 缺口。
         """
         n = self._seed_numbers()
-        quota_gi = max(int(n['min_ram_gb'] * 3), 8)
+        marginal_gi = self._marginal_ram_gi(n['min_ram_gb'])
         pod_total_gi = (n['mem_gi'] + self.KUBEVIRT_MEM_OVERHEAD_GI
                         + self.INIT_MEM_GI)
         self.assertGreaterEqual(
-            quota_gi, pod_total_gi,
-            'workspace RAM quota %dGi 蓋不住 virt-launcher 總量 %.3fGi'
-            '（guest %.1fGi ＋ KubeVirt overhead %.3fGi ＋ init %.3fGi）'
-            % (quota_gi, pod_total_gi, n['mem_gi'],
+            marginal_gi, pod_total_gi,
+            'min_ram_gb=%s → 每個服務只替 workspace RAM quota 加 %dGi，蓋不住 '
+            'virt-launcher 總量 %.3fGi（guest %.1fGi ＋ KubeVirt overhead %.3fGi '
+            '＋ init %.3fGi）'
+            % (n['min_ram_gb'], marginal_gi, pod_total_gi, n['mem_gi'],
                self.KUBEVIRT_MEM_OVERHEAD_GI, self.INIT_MEM_GI))
 
     def test_min_vcpu_rounds_up_over_guest_cores(self):
