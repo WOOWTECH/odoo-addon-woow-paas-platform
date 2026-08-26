@@ -10,9 +10,12 @@ class ShSubscriptionPlanAc(models.Model):
 
     語意守線（不可漂移）：本欄位是「上限／天花板（MAX）」、**不是**
     「內含席數」——定價＝內含 M=0＋在其上加購（500/seat/月）。seed 一律
-    不寫此欄（全部 default 0）；「0＋已購 AC 席數」的執行期疊加與
-    enforcement 接線屬 OQ-D carrier 實作（follow-up），seed 值本身不足以
-    表達 MAX 語意。
+    不寫此欄（全部 default 0）。
+
+    Enforcement 已接線（#521）：``security_access_access_policy.py`` 的
+    ``_check_access_seat_quota`` 拿本欄位當上限，與跨訂閱全部 route 去重後
+    的 ``email_list`` 位址數比較，超過即擋寫入；0 ＝一席都不給，不是
+    unlimited。
     """
 
     _inherit = 'sh.subscription.plan'
@@ -23,7 +26,8 @@ class ShSubscriptionPlanAc(models.Model):
         help='Access Control: cap on the number of distinct email_list '
              'addresses across every route of this subscription = 0 plus the '
              'AC seats purchased (500/seat/month). MAX/ceiling semantics, NOT '
-             'an included seat count; 0 = no seats purchased. Enforcement is '
-             'wired up once the OQ-D carrier lands (the field is a placeholder '
-             'for now).',
+             'an included seat count; 0 = no seats purchased (blocks the '
+             'first address, not unlimited). Enforcement is wired in '
+             'security_access_access_policy.py::_check_access_seat_quota '
+             '(#521).',
     )
