@@ -297,6 +297,8 @@ WHERE p.cloud_service_id IS NULL;
 ### Open Q4 — Sidebar entry zh-tw 文字 ✅
 **決議：保留英文「Projects」**。implementation phase 不需新增 translation entry；如 sidebar 其它 entry 已 i18n，保持「Projects」literal 即可。
 
+> ⚠ **上面這則決議（含 ✅）已於 2026-08-26 被取代，不再是現行依據。** 取代者＝**#107 Q2(a)**「前端英文一律走 `.po` 翻譯」（2026-08-26 Eugene 裁，載體＝Gitea issue **#908** 留言）：`Sidebar.js` 的 `Projects` 照 `_t()` 包裝送翻，AC #21 的測試斷言（`src/tests/test_ux_routing_views.py`）同步改成要求 `_t()` 包裝形。原文刻意保留不刪，供查「當初為何這樣定」——但依它行事前請先讀本行。
+
 ---
 
 ## Hand-off checklist（Planner → Tester）

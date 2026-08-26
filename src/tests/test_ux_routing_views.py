@@ -84,18 +84,30 @@ class TestSidebarEntry(TransactionCase):
     def test_ac21_sidebar_navitem_renamed_to_projects(self):
         """AC #21: sidebar registers a ``Projects`` nav item.
 
-        Decision Open Q4 = keep the English literal "Projects".
+        Open Q4（plan §Open Q4「保留英文字面 Projects」）**已被 #107 Q2(a)
+        取代**（2026-08-26 Eugene 裁，載體＝#908 留言）：前端英文一律走 .po
+        翻譯，sidebar 這一項照翻。⇒ 本斷言要的是 ``_t()`` 包裝形，**不是**
+        裸字面量；Q4 不再是現行依據，別再拿它當「保留英文」的理由。
+
+        為什麼不寫成「裸字面或 ``_t()`` 都收」：那種形狀對「有人把 ``_t()``
+        解包回裸字面」完全沒有鑑別力，而那正是讓翻譯**靜默消失**的改動——
+        babel jslexer 只抽 ``_t(...)`` 呼叫，解包後 .pot 少一條、畫面永遠
+        英文，卻不會有任何 gate 變紅（#903／#906 同族已吃過一次）。守住
+        ``_t()`` 形＝同時守住「label 存在」與「label 可譯」兩件事。
         """
         sidebar_src = _AssetReader.read(
             'static/src/paas/layout/sidebar/Sidebar.js',
         )
         self.assertTrue(sidebar_src, "Sidebar.js not found")
-        # We look for a nav item named "Projects" (the literal label)
+        # 找 name 為 _t("Projects") 的 nav item（可譯形；裸字面量不算數）
         self.assertRegex(
             sidebar_src,
-            r"""name\s*:\s*['"]Projects['"]""",
+            r"""name\s*:\s*_t\(\s*['"]Projects['"]\s*\)""",
             "AC #21: Sidebar.js must declare a nav item with "
-            "name 'Projects' (Open Q4: keep English literal)",
+            'name: _t("Projects") —— 必須是 _t() 可譯形，裸字面 '
+            'name: "Projects" 不算數。Open Q4（保留英文字面）已被 #107 '
+            'Q2(a) 取代（2026-08-26 Eugene 裁，載體＝#908 留言）：解包回'
+            '裸字面會讓 babel jslexer 抽不到這條，翻譯靜默消失。',
         )
 
 
