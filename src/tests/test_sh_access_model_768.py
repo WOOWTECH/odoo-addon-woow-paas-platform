@@ -118,7 +118,8 @@ class _ShAccessFixture(TransactionCase):
             # email 數那兩條 quota、不是席位，所以這裡給一個明顯夠用的席位額度，
             # 讓紅燈的原因只可能是被測的那一條。呼叫端仍可用 quota kwargs 覆寫。
             # ⚠ 這是 fixture 的 forward coupling，**不是**產品側豁免——「既有 0
-            # 席方案上的資料怎麼辦」仍未拍板（#521 決策點 4）。
+            # 席方案上的資料怎麼辦」＝ #521 決策點 4，已拍板「一律擋（含修改舊
+            # 資料）」（留言 9960）；產品側零豁免就是該裁決。
             'ac_max_access_seats': 99,
         }
         vals.update(quota)

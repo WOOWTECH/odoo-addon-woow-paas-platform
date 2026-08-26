@@ -26,23 +26,39 @@ plan 上的欄位值就是這筆訂閱的席位總額。
 ``_check_emails_per_policy`` 自己的註解已經寫明這**不是** module 級慣例
 （``sa_max_routes`` 的 0 也是「一條都不准」）⇒ 每個欄位各自認定。
 
-## 🔴 三個未經拍板的口徑，本檔刻意把它們攤開
+## 本檔攤開的三個口徑：一格已拍、兩格仍未拍
 
-judgement 不由本 PR 做，但行為必須在 review 時是可見的，所以各配一條斷言：
+行為必須在 review 時是可見的，所以每格各配一條斷言：
 
-1. **base 方案（0 席）＋既有 policy ⇒ 一碰就擋** — ``TestAcSeatBasePlanBlastRadius``
-2. **``exclude`` / ``require`` 群組的位址也計入席位** —
+1. ✅ **base 方案（0 席）＋既有 policy ⇒ 一碰就擋** — ``TestAcSeatBasePlanBlastRadius``
+   ——**已拍板**，見下一節。
+2. 🔴 **``exclude`` / ``require`` 群組的位址也計入席位**（＝未驗前提 3） —
    ``test_addresses_in_exclude_and_require_groups_are_counted_too``
-3. **大小寫折疊：同址不同拼法算一席** —
+   ——**仍未拍板**（``#521`` 留言 9960 明列它「仍是未驗前提」；當時的量測對這題
+   提供 **0 資訊**——兩環境現存規則的 ``group`` 清一色 ``include``，兩種算法在
+   建構上必然相等，不是「量出來剛好一樣」）。
+3. 🔴 **大小寫折疊：同址不同拼法算一席**（＝P-K 家族） —
    ``test_two_spellings_of_one_address_cost_one_seat``
-   （這一格連措辭都沒有，且在未驗分支上是 **fail-open** 那一側）
+   ——**仍未拍板**（同留言明列）。這一格連措辭都沒有，且在未驗分支上是
+   **fail-open** 那一側。
 
-## 🔴 爆炸半徑：本檔的 ``TestAcSeatBasePlanBlastRadius`` 是**刻意攤開**的
+## ✅ 爆炸半徑：已拍板＝一律擋（含修改舊資料）
 
 seed 的 base 方案全部 ``ac_max_access_seats = 0``，所以「base 方案 ＋ 既有
-email_list policy ⇒ 一碰就被擋」。**這個行為未經拍板**（#521 決策點 4 的
-grandfather／全擋／只擋新增三選一還在 Eugene 手上）。本檔不做任何 grandfather、
-不加任何豁免，只把現況**斷言成可見的**，讓 review 時它是攤開的而不是隱含的。
+email_list policy ⇒ 一碰就被擋」。
+
+**Eugene 2026-08-26 拍板：一律擋（含修改舊資料）**；4A（grandfather 豁免名單）
+與 4C（只擋新增）皆未採。裁決載體＝**#521 留言 id 9960**（量測報告＝留言 9959）。
+同批並確認 ``ac_max_access_seats = 0`` 維持「零席位」語意（未驗前提 4 就此關閉）。
+
+⇒ 本檔不做任何 grandfather、不加任何豁免，**這就是裁決本身**。下面那個 class
+把它斷言成可見的，讓行為在 review 與日後回溯時都攤開著。
+
+⚠ 已接受的 blast radius（裁決明文記錄、非副作用）：prod 唯一那筆訂閱與 stg 活訂閱
+中掛 cap=0 方案的那些，接上後**不能列任何 email**。精確範圍是「只擋列 email 白名單
+這一種寫法」——守衛只計 ``rule_type='email_list'``，cap=0 的租戶仍可用
+``ip_range`` / ``country`` / ``everyone`` 型規則。⛔ 不要把它敘述成「base 方案不能
+用存取控制」。
 
 ## 唯一的豁免是 migration cursor flag，而它是機制強制、不是產品寬免
 
@@ -459,19 +475,20 @@ class TestAcSeatQuotaBff(_SeatFixture, TransactionCase):
 
 
 class TestAcSeatBasePlanBlastRadius(_SeatFixture, TransactionCase):
-    """🔴 **此 class 斷言的行為未經拍板，待覆核裁決**（#521 決策點 4）。
+    """✅ **此 class 斷言的行為＝ #521 決策點 4 的裁決本身**（載體＝留言 id 9960）。
 
     seed 的 base 方案全部 ``ac_max_access_seats = 0``（欄位 help 逐字「seed 一律
     不寫此欄」）⇒ 照 1-A 逐字接線之後，**任何 base 方案訂閱上既有的 email_list
     policy，一旦被編輯就會被擋**。
 
-    grandfather ／ 全擋 ／ 只擋新增三種走法屬產品語意、在 Eugene 手上。本 class
-    **不做任何一種**，只把「照判準逐字實作出來的行為」斷言成可見的：
+    **Eugene 2026-08-26 拍板：一律擋（含修改舊資料）**；4A（grandfather 豁免名單）
+    與 4C（只擋新增）皆未採。本 class 不做任何一種，把裁決後的行為釘成可見的：
 
-    - ``test_pre_existing_policy_is_blocked_on_edit`` — 一碰就擋（**這一格未拍板**）
+    - ``test_pre_existing_policy_is_blocked_on_edit`` — 一碰就擋（**＝裁決內容**）
     - ``test_pre_existing_policy_survives_untouched`` — 沒碰就還在（不會被追溯刪除）
 
     兩條合起來才是完整的爆炸半徑：**存量資料不動，但存量資料不可再編輯。**
+    這兩條紅了代表有人把裁決改掉了，不是測試過時。
     """
 
     allow_inherited_tests_method = True
@@ -489,7 +506,8 @@ class TestAcSeatBasePlanBlastRadius(_SeatFixture, TransactionCase):
         return pol
 
     def test_pre_existing_policy_is_blocked_on_edit(self):
-        """**未經拍板**：base 方案（0 席）上的既有 policy，一碰就被擋。
+        """**裁決內容**（#521 決策點 4，留言 9960）：base 方案（0 席）上的既有
+        policy，一碰就被擋——「一律擋（含修改舊資料）」。
 
         **預期 RED（實作前）**：沒有例外。
 

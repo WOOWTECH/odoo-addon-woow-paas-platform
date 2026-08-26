@@ -717,8 +717,13 @@ class SecurityAccessAccessPolicy(models.Model):
         任何帶 email_list policy 的既有 DB **升版當場中斷**。沿用它零成本地
         把三支都涵蓋到，且不必回頭改那三個檔。
         ⚠ 這**不是** grandfather：flag 只活在 migration 那顆 transaction 裡，
-        清掉之後租戶的下一次編輯照擋。「既有超額資料怎麼辦」是 #521 決策點 4，
-        **未拍板**，本方法刻意不做任何豁免。
+        清掉之後租戶的下一次編輯照擋。**（這一段講的是 flag 的作用域，與決策點
+        4 拍不拍板無關，不要因為下面那格已拍就把它刪掉。）**
+
+        「既有超額資料怎麼辦」＝ #521 決策點 4，**Eugene 2026-08-26 已拍板：
+        一律擋（含修改舊資料）**；4A（grandfather 豁免名單）與 4C（只擋新增）
+        皆未採。⇒ 本方法不做任何豁免**就是那個裁決本身**，不是等拍板期間的
+        暫時保守做法。裁決載體＝#521 留言 id **9960**（量測報告＝留言 9959）。
         """
         if getattr(self.env.cr, 'sa_skip_policy_quota', False):
             return
