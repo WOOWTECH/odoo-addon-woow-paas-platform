@@ -41,6 +41,10 @@ class TestGatewayCapabilityPayload530(TransactionCase):
     def setUp(self):
         super().setUp()
         self.controller = PaasController()
+        # #804：不繼承 sandbox seed，也不使用 production default；expected URL
+        # 刻意保留獨立字面量，避免與 production domain lookup 共用來源而假綠。
+        self.env['ir.config_parameter'].sudo().set_param(
+            'woow_paas_platform.paas_domain', 'issue-804.invalid')
         self.workspace = self.env['woow_paas_platform.workspace'].create({
             'name': 'gateway capability workspace',
         })
@@ -133,7 +137,7 @@ class TestGatewayCapabilityPayload530(TransactionCase):
             subdomain='svc-follows-seed')
         self.assertEqual(
             service._gateway_public_url(),
-            'https://svc-follows-seed.woowtech.io/gw-530',
+            'https://svc-follows-seed.issue-804.invalid/gw-530',
             'gateway 網址的子路徑必須來自 seed，不得由 slug 對照表決定')
 
     # ── payload 合約 ────────────────────────────────────────────────────────
