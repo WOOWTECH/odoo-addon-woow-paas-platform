@@ -619,12 +619,14 @@ class SmartHome(models.Model):
                 anchored.write(dict(
                     tunnel_vals,
                     state='error',
-                    error_message=(
-                        "Tunnel created but its DNS record could not be created, "
-                        "so %s will not resolve. The tunnel (%s) is kept so it is "
-                        "not orphaned — an administrator must create the DNS "
-                        "record, or delete and re-create this Smart Home."
-                        % (hostname, result.get('tunnel_id'))
+                    error_message=_(
+                        "Tunnel created but its DNS record could not be "
+                        "created, so %(hostname)s will not resolve. The "
+                        "tunnel (%(tunnel_id)s) is kept so it is not "
+                        "orphaned — an administrator must create the DNS "
+                        "record, or delete and re-create this Smart Home.",
+                        hostname=hostname,
+                        tunnel_id=result.get('tunnel_id'),
                     ),
                 ))
                 _logger.error(
@@ -655,13 +657,16 @@ class SmartHome(models.Model):
         except PaaSOperatorConnectionError as e:
             self.write({
                 'state': 'error',
-                'error_message': f"Cannot connect to PaaS Operator: {e.message}",
+                'error_message': _(
+                    "Cannot connect to PaaS Operator: %(detail)s",
+                    detail=e.message),
             })
             _logger.error("Smart Home provision connection error: %s", e.message)
         except PaaSOperatorError as e:
             self.write({
                 'state': 'error',
-                'error_message': f"Tunnel creation failed: {e.message}",
+                'error_message': _(
+                    "Tunnel creation failed: %(detail)s", detail=e.message),
             })
             _logger.error("Smart Home provision error: %s", e.message)
 
@@ -956,7 +961,8 @@ class SmartHome(models.Model):
         except PaaSOperatorError as e:
             self.write({
                 'tunnel_status': 'error',
-                'error_message': f"Status refresh failed: {e.message}",
+                'error_message': _(
+                    "Status refresh failed: %(detail)s", detail=e.message),
             })
             _logger.warning(
                 "Failed to refresh tunnel status for Smart Home '%s': %s",
@@ -1165,18 +1171,19 @@ class SmartHome(models.Model):
             # 衛。`failed_access` 那條的措辭**逐字不動**（#785／PR #813 的成敗語
             # 意表在斷言它）；lingering-only 才走新措辭。
             if failed_access:
-                error_message = (
-                    "Cloudflare Access teardown failed for route(s): %s. Will "
-                    "retry on the next cron pass." % ', '.join(
-                        str(f) for f in failed_access)
+                error_message = _(
+                    "Cloudflare Access teardown failed for route(s): "
+                    "%(routes)s. Will retry on the next cron pass.",
+                    routes=', '.join(str(f) for f in failed_access),
                 )
             else:
-                error_message = (
-                    "Cloudflare Access teardown reported success but route(s) "
-                    "%s still hold Access object id(s); the CF Access app and "
-                    "its reusable policies are still live. Will retry on the "
-                    "next cron pass." % ', '.join(
-                        str(rid) for rid in lingering_access.ids)
+                error_message = _(
+                    "Cloudflare Access teardown reported success but "
+                    "route(s) %(routes)s still hold Access object id(s); the "
+                    "CF Access app and its reusable policies are still live. "
+                    "Will retry on the next cron pass.",
+                    routes=', '.join(
+                        str(rid) for rid in lingering_access.ids),
                 )
             self.write({'state': 'error', 'error_message': error_message})
             _logger.warning(
@@ -1193,7 +1200,7 @@ class SmartHome(models.Model):
         if self.tunnel_id:
             self.write({
                 'state': 'error',
-                'error_message': (
+                'error_message': _(
                     "Cloudflare cleanup failed; the tunnel is still live and "
                     "billed. Will retry on the next cron pass."
                 ),

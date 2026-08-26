@@ -35,7 +35,7 @@ class GiftGrantWizard(models.TransientModel):
         """灌點進 partner 的 eWallet 錢包並寫 ledger，回 notification。"""
         self.ensure_one()
         if self.points <= 0:
-            raise UserError(_("贈送點數必須大於 0。"))
+            raise UserError(_("Gift points must be greater than 0."))
         partner = self.partner_id.sudo()
         # 走官方 API：自帶 wallet_transaction ledger + 寫 loyalty.card.points。
         partner.add_wallet_points(self.points, self.reason or _("Manual grant"))

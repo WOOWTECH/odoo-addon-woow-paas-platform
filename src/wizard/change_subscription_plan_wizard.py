@@ -1,6 +1,6 @@
 import logging
 
-from odoo import api, fields, models
+from odoo import _, api, fields, models
 from odoo.exceptions import UserError
 
 _logger = logging.getLogger(__name__)
@@ -70,11 +70,11 @@ class ChangeSubscriptionPlanWizard(models.TransientModel):
         )
 
         if not entity or not old_sub:
-            raise UserError("No active subscription found.")
+            raise UserError(_("No active subscription found."))
         if old_sub.state != 'in_progress':
-            raise UserError("Can only change plan on active subscriptions.")
+            raise UserError(_("Can only change plan on active subscriptions."))
         if self.new_plan_id == self.current_plan_id:
-            raise UserError("New plan must be different from current plan.")
+            raise UserError(_("New plan must be different from current plan."))
 
         partner = old_sub.sh_partner_id
 
