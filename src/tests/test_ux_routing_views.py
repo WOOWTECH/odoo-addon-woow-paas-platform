@@ -11,6 +11,7 @@ signal that implementation must produce specific identifiers, while
 preserving fast pytest runs.  E2E may be layered on top later.
 """
 import re
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 from odoo.modules import get_module_path
@@ -32,6 +33,43 @@ class _AssetReader:
     @classmethod
     def exists(cls, *rel_parts: str) -> bool:
         return cls.module_path().joinpath(*rel_parts).is_file()
+
+
+def _normalised_visible_text(node):
+    """Return literal text rendered by an XML node; parser comments are absent."""
+    return ' '.join(''.join(node.itertext()).split())
+
+
+def _no_service_option(root):
+    """Return AC #22's first cloud-service ``option``, if it is unbound."""
+    for select in root.iter('select'):
+        if select.get('id') != 'project_cloud_service':
+            continue
+        children = list(select)
+        if not children or children[0].tag != 'option':
+            return None
+        option = children[0]
+        label = _normalised_visible_text(option).casefold()
+        if (option.get('value') == ''
+                and ('no service' in label or 'unbound' in label)):
+            return option
+    return None
+
+
+def _unbound_badge(root):
+    """Return AC #24's badge container and visible label, if present."""
+    required_classes = {
+        'o_woow_sp_card_workspace',
+        'o_woow_sp_card_unbound',
+    }
+    for container in root.iter('div'):
+        classes = set((container.get('class') or '').split())
+        if (required_classes.issubset(classes)
+                and 't-else' in container.attrib):
+            for label in container.iter('span'):
+                if _normalised_visible_text(label).casefold() == 'unbound':
+                    return container, label
+    return None
 
 
 class TestRouterAlias(TransactionCase):
@@ -115,24 +153,30 @@ class TestCreateProjectModal(TransactionCase):
     """AC #22, #23 — modal allows unbound, drops the `has_project` filter."""
 
     def test_ac22_modal_offers_no_service_option(self):
-        """AC #22: modal exposes a "No service" first option.
+        """AC #22: the modal renders a selectable empty-service option.
 
-        The implementation may surface this via the OWL template (xml)
-        or via a JS-side default; we accept either.  Heuristic: the
-        literal "No service" (or zh-tw equivalent) must appear in one
-        of the modal asset files.
+        Parse the OWL XML and inspect an actual ``option`` node.  Looking for a
+        substring in combined JS/XML lets a comment, function name, or CSS class
+        keep this test green after the user-visible option has disappeared.
         """
-        js = _AssetReader.read(
-            'static/src/paas/components/modal/CreateProjectModal.js',
-        )
         xml = _AssetReader.read(
             'static/src/paas/components/modal/CreateProjectModal.xml',
         )
-        combined = (js + '\n' + xml).lower()
-        self.assertTrue(
-            'no service' in combined or 'unbound' in combined,
-            "AC #22: CreateProjectModal must expose a 'No service' / "
-            "'Unbound' first-class option for unbound project creation",
+        self.assertTrue(xml, "CreateProjectModal.xml not found")
+        root = ET.fromstring(xml)
+        option = _no_service_option(root)
+        self.assertIsNotNone(
+            option,
+            "AC #22: CreateProjectModal must render an empty-value option "
+            "whose visible label identifies 'No service' / 'Unbound'",
+        )
+
+        # Mutation proof: keep comments/identifiers, remove only the visible node.
+        parent = next(node for node in root.iter() if option in list(node))
+        parent.remove(option)
+        self.assertIsNone(
+            _no_service_option(root),
+            "AC #22 guard must turn red after the visible option is removed",
         )
 
     def test_ac23_modal_removes_has_project_filter(self):
@@ -174,22 +218,30 @@ class TestProjectsListBadge(TransactionCase):
     """AC #24 — Projects list page exposes bound/unbound badge."""
 
     def test_ac24_projects_page_shows_binding_state(self):
-        """AC #24: Projects list renders a Bound/Unbound badge column.
+        """AC #24: Projects list renders visible text in its unbound badge.
 
-        Heuristic: a literal "Unbound" / "unbound" must appear in either
-        the page's JS or XML so the badge has visible text for the user.
+        The structural check requires the badge classes, ``t-else`` branch, and
+        a child ``span`` whose literal visible text is exactly ``Unbound``.
+        Comments, JS identifiers, and the CSS class alone cannot satisfy it.
         """
-        js = _AssetReader.read(
-            'static/src/paas/pages/support-projects/SupportProjectsPage.js',
-        )
         xml = _AssetReader.read(
             'static/src/paas/pages/support-projects/SupportProjectsPage.xml',
         )
-        combined = (js + '\n' + xml).lower()
-        self.assertIn(
-            'unbound', combined,
-            "AC #24: SupportProjectsPage must render 'Unbound' badge "
-            "text so users distinguish bound from unbound projects",
+        self.assertTrue(xml, "SupportProjectsPage.xml not found")
+        root = ET.fromstring(xml)
+        badge = _unbound_badge(root)
+        self.assertIsNotNone(
+            badge,
+            "AC #24: SupportProjectsPage must render visible 'Unbound' text "
+            "inside the unbound fallback badge",
+        )
+
+        # Mutation proof: leave the CSS class/comment, remove only visible text.
+        container, label = badge
+        container.remove(label)
+        self.assertIsNone(
+            _unbound_badge(root),
+            "AC #24 guard must turn red after the visible label is removed",
         )
 
 
