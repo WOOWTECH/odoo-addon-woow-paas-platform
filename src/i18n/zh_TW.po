@@ -7406,7 +7406,7 @@ msgstr ""
 #. odoo-python
 #: code:addons/woow_paas_platform/controllers/paas.py:0
 msgid "MCP Server not found"
-msgstr "找不到 MCP Server"
+msgstr "找不到 MCP 伺服器"
 
 #. module: woow_paas_platform
 #: model:ir.actions.server,name:woow_paas_platform.ir_cron_retry_mcp_sync_ir_actions_server
@@ -7478,7 +7478,7 @@ msgid ""
 "MCP server '%s' is not bound to any of template '%s' projects and is not "
 "system-scope."
 msgstr ""
-"MCP server「%s」沒有綁定到 template「%s」的任何一個專案，也不是 system-"
+"MCP 伺服器「%s」沒有綁定到 template「%s」的任何一個專案，也不是 system-"
 "scope。"
 
 #. module: woow_paas_platform
@@ -9058,13 +9058,13 @@ msgstr "只有管理員可以變更 skill 的 scope。"
 #. odoo-python
 #: code:addons/woow_paas_platform/models/mcp_server.py:0
 msgid "Only administrators can change an MCP server's project."
-msgstr "只有管理員可以變更 MCP server 的所屬專案。"
+msgstr "只有管理員可以變更 MCP 伺服器的所屬專案。"
 
 #. module: woow_paas_platform
 #. odoo-python
 #: code:addons/woow_paas_platform/models/mcp_server.py:0
 msgid "Only administrators can change an MCP server's scope."
-msgstr "只有管理員可以變更 MCP server 的 scope。"
+msgstr "只有管理員可以變更 MCP 伺服器的 scope。"
 
 #. module: woow_paas_platform
 #. odoo-python
@@ -9076,7 +9076,7 @@ msgstr "只有管理員可以建立專屬的 agent template。"
 #. odoo-python
 #: code:addons/woow_paas_platform/models/mcp_tool.py:0
 msgid "Only administrators can re-point an MCP tool to a different server."
-msgstr "只有管理員可以把 MCP tool 改指到另一個 server。"
+msgstr "只有管理員可以把 MCP tool 改指到另一個伺服器。"
 
 #. module: woow_paas_platform
 #. odoo-python
@@ -10741,7 +10741,7 @@ msgid ""
 "Wait a few minutes, then press Reset again to issue a new password."
 msgstr ""
 "重設結果未知——請求在服務回覆確認之前就逾時了。重設有可能已經生效，因此新密碼"
-"並未儲存。請等待幾分鐘後再按一次「重設」，以產生新的密碼。"
+"並未儲存。請等待幾分鐘後再按一次 Reset Admin Password，以產生新的密碼。"
 
 #. module: woow_paas_platform
 #: model:ir.model.fields,field_description:woow_paas_platform.field_project_project__resolved_agent_template_id
