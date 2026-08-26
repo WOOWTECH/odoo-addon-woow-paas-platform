@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """repo-lint：把「假綠家族」pitfall 轉成機械 gate 的靜態檢查工具。
 
-三十九個 check 函式，歸為下列三十三條規則（其中四條各由多個函式實作：第 2 條
+四十個 check 函式，歸為下列三十四條規則（其中四條各由多個函式實作：第 2 條
 owl-template 由兩個函式——語法陷阱／i18n 屬性；第 7 條
 capability-gate 由四個函式——slug 集合成員／admin-gui 錨點／gateway 文案錨點／
 Access 頁籤錨點；第 22 條
@@ -530,6 +530,18 @@ test-collectability 由兩個函式——收集面／執行面。這個一對多
                      （同 ladder／anchors／floor），觸發面與掃描範圍共用
                      `_OWL_IMPORT_SCAN_ROOT`，兩者不可能分岔。
                      本 check 因此**沒有** `only_file` 參數——不是「有但不用」。
+
+34. js-i18n-template-literal  `src/static/src/**/*.js`（排除第三方 `lib/`）不得在
+                     template literal 的 `${}` expression 裡直接呼叫 `_t()`。Odoo 18
+                     使用的 Babel 2.10.3 不會遞迴進 `${}`，所以畫面正常、msgid 卻不進
+                     `.pot`，永遠翻不到（#107 實撞、#904）。正解是先把 `_t()` 結果
+                     存進變數，再把變數插值。判準使用會遞迴進 template expression 的
+                     JS scanner，不用「搜尋反引號與 `${`」的脆弱字串拼法；註解、quoted
+                     string、escaped backtick、nested template 都有注入對照。
+                     🔴 **已命名的盲區**：這條只抓 `${}` 內 `_t()`，**抓不到** Babel
+                     與 JS tokenizer 的 regex-vs-division 分歧所造成的其他 msgid 消失；
+                     完整對帳必須拿**真 Babel 當第二把尺**。repo-lint 綠不代表所有 msgid
+                     都抽得到。
 
 用法：
 
@@ -1433,6 +1445,238 @@ def _strip_js_noise(src):
             out[i] = " "
         i += 1
     return "".join(out)
+
+
+_JS_REGEX_PREFIX_KEYWORDS = {
+    "await", "case", "delete", "do", "else", "in", "instanceof", "new",
+    "return", "throw", "typeof", "void", "yield",
+}
+
+
+def _js_identifier_start(ch):
+    return ch == "_" or ch == "$" or ch.isalpha()
+
+
+def _js_identifier_continue(ch):
+    return _js_identifier_start(ch) or ch.isdigit()
+
+
+def _js_skip_quoted(src, pos, quote):
+    """跳過單／雙引號字串；回傳閉引號之後的位置（壞輸入則回 EOF）。"""
+    pos += 1
+    while pos < len(src):
+        if src[pos] == "\\":
+            pos += 2
+        elif src[pos] == quote:
+            return pos + 1
+        else:
+            pos += 1
+    return pos
+
+
+def _js_skip_comment(src, pos):
+    """若 pos 是 JS comment 起點，回 comment 後位置；否則回 None。"""
+    if not src.startswith("/", pos) or pos + 1 >= len(src):
+        return None
+    if src[pos + 1] == "/":
+        end = src.find("\n", pos + 2)
+        return len(src) if end < 0 else end
+    if src[pos + 1] == "*":
+        end = src.find("*/", pos + 2)
+        return len(src) if end < 0 else end + 2
+    return None
+
+
+def _js_skip_space_and_comments(src, pos):
+    """跳過 whitespace/comments；供 `_t /* ... */ (` 的 call 判定共用。"""
+    while pos < len(src):
+        if src[pos].isspace():
+            pos += 1
+            continue
+        end = _js_skip_comment(src, pos)
+        if end is None:
+            break
+        pos = end
+    return pos
+
+
+def _js_skip_regex(src, pos):
+    """跳過從 pos 開始的 regex literal（含 character class 與 flags）。
+
+    這只服務 scanner 的 JS 語意近似，不模擬 Odoo Babel 2.10.3。特別是 Babel 的
+    regex-vs-division tokenize 分歧正是 #904 明文要求保留的 scope boundary：本 gate
+    只找 template expression 內的 `_t()`；完整 msgid 對帳仍必須拿真 Babel 當第二把尺。
+    """
+    i = pos + 1
+    in_class = False
+    while i < len(src):
+        ch = src[i]
+        if ch == "\\":
+            i += 2
+            continue
+        if ch == "\n":
+            return pos + 1       # 不是合法 regex；退回把 `/` 當 operator
+        if ch == "[":
+            in_class = True
+        elif ch == "]":
+            in_class = False
+        elif ch == "/" and not in_class:
+            i += 1
+            while i < len(src) and _js_identifier_continue(src[i]):
+                i += 1
+            return i
+        i += 1
+    return pos + 1
+
+
+def _js_template_t_calls(src):
+    """回 template literal `${}` expression 內 `_t()` 的 source offsets。
+
+    這是一個小型 lexer，不是「找兩個反引號之間的 `${`」：它會跳過 comments、quoted
+    strings、regex literals 與 escapes，並遞迴處理 nested template literals。判準刻意
+    只問 `_t()` **呼叫點是否位於 template expression**，不檢查引數形狀。
+
+    🔴 Scope boundary：它抓不到 Babel 自己因 regex-vs-division tokenization 分歧而吞掉
+    一段普通 code 的另一類 msgid 消失。那一類必須用真 Babel 與 code-side oracle 做
+    第二把尺；本函式回空不等於「所有 `_t()` 都能進 `.pot`」（#904）。
+    """
+    hits = []
+    n = len(src)
+
+    def scan_template(pos):
+        # pos 指向 opening backtick 的下一個字元。
+        while pos < n:
+            ch = src[pos]
+            if ch == "\\":
+                pos += 2
+                continue
+            if ch == "`":
+                return pos + 1
+            if ch == "$" and pos + 1 < n and src[pos + 1] == "{":
+                pos = scan_code(pos + 2, template_expression=True, brace_depth=1)
+                continue
+            pos += 1
+        return pos
+
+    def scan_code(pos, template_expression=False, brace_depth=None):
+        regex_allowed = True
+        previous = None
+        while pos < n:
+            ch = src[pos]
+            if ch.isspace():
+                pos += 1
+                continue
+            comment_end = _js_skip_comment(src, pos)
+            if comment_end is not None:
+                pos = comment_end
+                continue
+            if ch in "'\"":
+                pos = _js_skip_quoted(src, pos, ch)
+                regex_allowed = False
+                previous = "literal"
+                continue
+            if ch == "`":
+                pos = scan_template(pos + 1)
+                regex_allowed = False
+                previous = "literal"
+                continue
+            if ch == "/" and regex_allowed:
+                pos = _js_skip_regex(src, pos)
+                regex_allowed = False
+                previous = "literal"
+                continue
+            if _js_identifier_start(ch):
+                end = pos + 1
+                while end < n and _js_identifier_continue(src[end]):
+                    end += 1
+                name = src[pos:end]
+                after = _js_skip_space_and_comments(src, end)
+                if (template_expression and name == "_t" and previous != "."
+                        and after < n and src[after] == "("):
+                    hits.append(pos)
+                regex_allowed = name in _JS_REGEX_PREFIX_KEYWORDS
+                previous = name
+                pos = end
+                continue
+            if ch == "{" and brace_depth is not None:
+                brace_depth += 1
+                regex_allowed = True
+                previous = ch
+                pos += 1
+                continue
+            if ch == "}" and brace_depth is not None:
+                brace_depth -= 1
+                pos += 1
+                if brace_depth == 0:
+                    return pos
+                regex_allowed = False
+                previous = ch
+                continue
+            if ch in ")]":
+                regex_allowed = False
+            elif ch == ".":
+                regex_allowed = False
+            elif ch in "([{:;,?=+-*%!&|^~<>":
+                regex_allowed = True
+            else:
+                regex_allowed = False
+            previous = ch
+            pos += 1
+        return pos
+
+    scan_code(0)
+    return hits
+
+
+_JS_I18N_TEMPLATE_ROOT = "src/static/src"
+_JS_I18N_TEMPLATE_EXCLUDED_PARTS = ("lib",)
+
+
+def _js_i18n_template_files(root):
+    files = glob.glob(os.path.join(root, _JS_I18N_TEMPLATE_ROOT, "**", "*.js"),
+                      recursive=True)
+    return sorted(path for path in files
+                  if not any(part in _JS_I18N_TEMPLATE_EXCLUDED_PARTS
+                             for part in os.path.relpath(path, root).split(os.sep)))
+
+
+def check_js_i18n_template_literal(root, only_file=None):
+    """`${}` expression 內不得直接呼叫 `_t()`；先取翻譯值再插值（#904）。
+
+    Odoo 18 的 Babel 2.10.3 不會遞迴進 template literal expression：這種呼叫會執行、
+    畫面正常，但 msgid 不進 `.pot`，成功與失敗在 UI 上完全相同。
+
+    🔴 本 gate **只抓 `${}` 內 `_t()`**。它抓不到 Babel 與 JS tokenizer 的
+    regex-vs-division 分歧所造成的其他 msgid 消失；完整 i18n 對帳仍須拿**真 Babel 當
+    第二把尺**。repo-lint 綠不代表所有 msgid 都抽得到。
+    """
+    if only_file:
+        rel = os.path.relpath(only_file, root).replace(os.sep, "/")
+        if (not rel.startswith(_JS_I18N_TEMPLATE_ROOT + "/")
+                or not rel.endswith(".js")
+                or any(part in _JS_I18N_TEMPLATE_EXCLUDED_PARTS
+                       for part in rel.split("/"))):
+            return []
+        files = [only_file]
+    else:
+        files = _js_i18n_template_files(root)
+
+    violations = []
+    for path in files:
+        if not os.path.exists(path):
+            continue
+        rel = os.path.relpath(path, root).replace(os.sep, "/")
+        with open(path, encoding="utf-8", errors="replace") as f:
+            src = f.read()
+        for offset in _js_template_t_calls(src):
+            line = src.count("\n", 0, offset) + 1
+            violations.append(
+                "%s:%d：template literal 的 `${}` expression 內直接呼叫 `_t()`；"
+                "Odoo 18 的 Babel 2.10.3 看不到這個 msgid。請先把 `_t()` 結果存進"
+                "變數，再把變數插值（#904）。本 gate **只抓這個形態**；它抓不到 "
+                "regex-vs-division tokenizer 分歧，完整對帳仍須拿真 Babel 當第二把尺。"
+                % (rel, line))
+    return violations
 
 
 def _strip_xml_comments(src):
@@ -5221,6 +5465,7 @@ REPO_LINT_RULES = {
                             "check_test_class_execution"),
     "route-contract-golden": ("check_route_contract_golden",),
     "owl-relative-import": ("check_owl_relative_import",),
+    "js-i18n-template-literal": ("check_js_i18n_template_literal",),
 }
 
 # 刻意不掛 hook 分派的 check：{函式名: 理由}。現況是空的（每一條都掛得到 hook）。
@@ -5815,7 +6060,8 @@ def run_all(root):
                   + check_test_module_collection(root)
                   + check_test_class_execution(root)
                   + check_route_contract_golden(root)
-                  + check_owl_relative_import(root))
+                  + check_owl_relative_import(root)
+                  + check_js_i18n_template_literal(root))
     if violations:
         print("repo-lint：%d 個違規" % len(violations))
         for v in violations:
@@ -5983,6 +6229,10 @@ def run_hook():
         #   不是「有但不用」，是刻意不留一條沒人走也沒被測到的分支。
         owl_imports = (check_owl_relative_import(root)
                        if _owl_relative_import_watches(rel) else [])
+        # #904：JS i18n P6 是單檔判準；獨立成 ternary 分派，讓 hook dispatch 的
+        # 「.js 分支本身是否還活著」仍有重複掛載的 check 可做遮蔽陽性對照（#612）。
+        js_i18n_template = (check_js_i18n_template_literal(root, only_file=abs_path)
+                            if re.match(r"^src/static/src/.*\.js$", rel) else [])
         if re.match(r"^src/controllers/.*\.py$", rel):
             violations = check_controller_sudo(root, only_file=abs_path)
             violations += check_reuse_values(root, only_file=abs_path)
@@ -6050,7 +6300,8 @@ def run_hook():
             violations = check_kubectl_ns_whitelist_sync(root)
         elif (ladder or availability or poll_facts or anchors or floor
                 or security_rules or one_time_cred or provision or sh_sub_groups
-                or internal_ctx or tunnel_wire or route_golden or owl_imports):
+                or internal_ctx or tunnel_wire or route_golden or owl_imports
+                or js_i18n_template):
             # extra/paas-operator/** 與 docs/tracking/pitfalls/** 不在上面任何分支，
             # 但前者持有階梯的內層常數、後者是 doc-symbol-anchor 的一半輸入；
             # baselines/repo-lint-registry.txt（floor 的另一份輸入）與
@@ -6072,6 +6323,7 @@ def run_hook():
         violations += tunnel_wire
         violations += route_golden
         violations += owl_imports
+        violations += js_i18n_template
         if violations:
             print(json.dumps({
                 "decision": "block",
