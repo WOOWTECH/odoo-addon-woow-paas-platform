@@ -13,8 +13,9 @@ class ShSubscriptionPlanAc(models.Model):
     不寫此欄（全部 default 0）。
 
     Enforcement 已接線（#521）：``security_access_access_policy.py`` 的
-    ``_check_access_seat_quota`` 拿本欄位當上限，與跨訂閱全部 route 去重後
-    的 ``email_list`` 位址數比較，超過即擋寫入；0 ＝一席都不給，不是
+    ``_check_access_seat_quota`` 拿本欄位當上限，與跨**該**訂閱全部 route
+    去重後的 ``email_list`` 位址數比較（計數範圍是單一訂閱內，不跨訂閱；
+    權威措辭見該檔 docstring），超過即擋寫入；0 ＝一席都不給，不是
     unlimited。
     """
 
