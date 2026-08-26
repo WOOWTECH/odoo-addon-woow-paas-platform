@@ -1,6 +1,9 @@
 /** @odoo-module **/
 
 import { _t } from "@web/core/l10n/translation";
+import { formatFloat } from "@web/core/utils/numbers";
+
+import { formatUserDate, formatUserDateTime } from "./datetime_helpers";
 
 /**
  * Shared billing helper utilities.
@@ -15,69 +18,44 @@ import { _t } from "@web/core/l10n/translation";
 // ---------------------------------------------------------------------------
 
 /**
- * Format ISO date string to locale display (e.g. "Apr 12, 2026").
+ * 依 Odoo 使用者語系格式化日期（zh_TW 下為 `2026年08月26日`）。
+ *
+ * ⚠ #107 前寫死 `en-US`，與 `services/utils.js` 寫死的 `zh-TW` 並存
+ * ⇒ 同一個畫面的日期格式取決於走哪條 code path。現已統一走 `res.lang.date_format`。
  *
  * @param {string|null|undefined} dateStr
  * @returns {string}
  */
 export function formatDate(dateStr) {
-  if (!dateStr) return "-";
-  try {
-    const d = new Date(dateStr);
-    return d.toLocaleDateString("en-US", {
-      year: "numeric",
-      month: "short",
-      day: "numeric",
-    });
-  } catch {
-    return dateStr;
-  }
+  return formatUserDate(dateStr, "-");
 }
 
 /**
- * Format ISO date string including time (e.g. "Apr 12, 2026, 02:30 PM").
- * Used by transaction / credit-history views that need timestamp precision.
+ * 依 Odoo 使用者語系格式化日期＋時間（不含秒）。
+ * 交易／點數歷史等需要時間精度的畫面使用。
  *
  * @param {string|null|undefined} dateStr
  * @returns {string}
  */
 export function formatDateTime(dateStr) {
-  if (!dateStr) return "-";
-  try {
-    const d = new Date(dateStr);
-    return d.toLocaleDateString("en-US", {
-      year: "numeric",
-      month: "short",
-      day: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-  } catch {
-    return dateStr;
-  }
+  return formatUserDateTime(dateStr, { showSeconds: false }, "-");
 }
 
 /**
- * Format ISO date string as short date+time without year
- * (e.g. "Apr 12, 02:30 PM").
- * Used by CreditHistoryModal compact rows.
+ * 依 Odoo 使用者語系格式化日期＋時間的精簡版（月／日／時去前導零）。
+ * CreditHistoryModal 的密集列與 Dashboard 活動列使用。
+ *
+ * ⚠ #107 之前這裡刻意不顯示年份（`Apr 12, 02:30 PM`）。改走 Odoo 語系後
+ * **年份會出現**：Odoo 的 localization 只有「完整日期格式」一種概念，
+ * `condensed` 只去前導零（見 `@web/core/l10n/dates` 的 `getCondensedFormat`），
+ * 不會移除年份；要移除就得自己對 `localization.dateFormat` 做語系相依的字串裁切，
+ * 那是新造一個故障面。⇒ 接受年份出現，密度損失若需處理另議。
  *
  * @param {string|null|undefined} dateStr
  * @returns {string}
  */
 export function formatDateTimeShort(dateStr) {
-  if (!dateStr) return "-";
-  try {
-    const d = new Date(dateStr);
-    return d.toLocaleDateString("en-US", {
-      month: "short",
-      day: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-  } catch {
-    return dateStr;
-  }
+  return formatUserDateTime(dateStr, { showSeconds: false, condensed: true }, "-");
 }
 
 // ---------------------------------------------------------------------------
@@ -108,10 +86,10 @@ export function formatDateTimeShort(dateStr) {
 export function formatPoints(value, { signed = false, precision = 2 } = {}) {
   const n = Number(value ?? 0);
   const abs = Math.abs(n);
-  const body = abs.toLocaleString(undefined, {
-    minimumFractionDigits: precision,
-    maximumFractionDigits: precision,
-  });
+  // #107：改走 Odoo 的 formatFloat ⇒ 千分位與小數點跟隨 res.lang
+  // （`localization.thousandsSep` / `decimalPoint` / `grouping`），
+  // 而非原本那個不傳 locale、實際跟隨瀏覽器語言的 Intl 呼叫。
+  const body = formatFloat(abs, { digits: [16, precision] });
   let prefix = "";
   if (signed && n > 0) prefix = "+";
   else if (n < 0) prefix = "-";
@@ -130,10 +108,7 @@ export function formatPoints(value, { signed = false, precision = 2 } = {}) {
  * @returns {string}
  */
 export function formatAmount(amount) {
-  return Number(amount ?? 0).toLocaleString(undefined, {
-    minimumFractionDigits: 0,
-    maximumFractionDigits: 0,
-  });
+  return formatFloat(Number(amount ?? 0), { digits: [16, 0] });
 }
 
 /**
@@ -148,10 +123,7 @@ export function formatAmount(amount) {
  * @returns {string}
  */
 export function formatAmountDecimal(amount) {
-  return Number(amount ?? 0).toLocaleString(undefined, {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  });
+  return formatFloat(Number(amount ?? 0), { digits: [16, 2] });
 }
 
 // ---------------------------------------------------------------------------
@@ -207,8 +179,8 @@ export function formatTopupDescription(txn) {
   const desc = txn.description || "";
   return _t("%(description)s + %(bonus)s bonus = %(total)s pts", {
     description: desc,
-    bonus: bonus.toLocaleString(),
-    total: total.toLocaleString(),
+    bonus: formatFloat(bonus, { digits: [16, 0] }),
+    total: formatFloat(total, { digits: [16, 0] }),
   });
 }
 

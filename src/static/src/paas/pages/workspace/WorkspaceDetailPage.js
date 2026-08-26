@@ -331,7 +331,7 @@ export class WorkspaceDetailPage extends Component {
     }
 
     formatDate(dateString) {
-        return formatDate(dateString, { long: true });
+        return formatDate(dateString);
     }
 
     serviceTypes = [

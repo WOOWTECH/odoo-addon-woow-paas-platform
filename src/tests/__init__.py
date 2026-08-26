@@ -743,3 +743,7 @@ from . import test_tunnel_status_after_teardown_833
 # 沒被包進 noupdate=1 的結構守線）。⚠ 少了這一行，整檔會**從未執行**而測試套件
 # 照樣全綠。
 from . import test_lang_zh_tw_activation_107
+
+# #107 第四層（locale formatter）：日期／時間／數字格式必須跟隨 Odoo 使用者語系
+# 的靜態守線。⚠ 少了這一行，整檔會**從未執行**而測試套件照樣全綠。
+from . import test_locale_formatting_guard_107

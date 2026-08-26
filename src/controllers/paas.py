@@ -4449,7 +4449,14 @@ class PaasController(HiddenChainMixin, Controller):
                 # #627 (i)/E：讓「這個版本號多新」對租戶可見。B 那條對帳 cron 每日
                 # 一次 ⇒ 最多一個週期的偵測延遲，這個欄位就是那個延遲的誠實揭露，
                 # 不是裝飾——沒有它，平台等於假裝自己一直是準的。
-                'last_release_sync_at': service.last_release_sync_at,
+                # #917：這格原本漏了 `.isoformat()`，裸 datetime 進 JSON ⇒ 落到
+                # Odoo 的 `json_default`，序列化成 SQL 空格格式（`2026-08-26 12:34:56`），
+                # 與同一份 payload 其他 datetime 欄位的 ISO `T` 格式不一致，
+                # 而前端那格又是裸 `t-esc` ⇒ 原始字串直接印給租戶。
+                'last_release_sync_at': (
+                    service.last_release_sync_at.isoformat()
+                    if service.last_release_sync_at else None
+                ),
                 # #559：helm_values 有 groups='base.group_system'，屬性直讀會
                 # AccessError。走 model 的唯一入口——租戶看得到的仍是遮罩後的值
                 # （#535），只是 ORM 直讀那條側門被關上了。
