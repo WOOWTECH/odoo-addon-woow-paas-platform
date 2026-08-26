@@ -301,15 +301,16 @@ def joined(violations):
 # ------------------------------------------------------- 陽性對照（綠的前提）
 
 class TestBaselineIsGreen(unittest.TestCase):
-    """一棵乾淨的合成樹必須是綠的。一條恆紅的 gate 通不過這裡。"""
+    """合法 repo root 與合成 addon layout 必須是綠的。一條恆紅的 gate 通不過這裡。"""
 
-    def test_clean_tree_is_green(self):
+    def test_valid_addon_layout_is_green(self):
+        """repo layout：addon source tree 位於 `<root>/src/`。"""
         with patched_baseline({}), tree() as fx:
             self.assertEqual(fx.collection(), [])
             self.assertEqual(fx.execution(), [])
 
-    def test_real_repo_is_green(self):
-        """真 repo（含既有 baseline）必須是綠的——否則 `--all` 永遠紅。"""
+    def test_valid_repo_root_is_green(self):
+        """真 repo root（含既有 baseline）必須是綠的——否則 `--all` 永遠紅。"""
         root = str(pathlib.Path(__file__).resolve().parents[2])
         self.assertEqual(rl.check_test_module_collection(root), [])
         self.assertEqual(rl.check_test_class_execution(root), [])
@@ -570,12 +571,19 @@ class TestProbeFailuresAreBlocked(unittest.TestCase):
             self.assertIn("parse 失敗", joined(fx.collection()))
             self.assertIn("parse 失敗", joined(fx.execution()))
 
-    def test_non_addon_root_is_skipped(self):
-        """沒有 src/__manifest__.py 的 root：本條沒有輸入，不得把乾淨的檔 block。"""
+    def test_wrong_root_fails_loud(self):
+        """缺 `src/__manifest__.py` 不是零違規，兩條判準都必須明確拒絕 wrong root。"""
         d = tempfile.mkdtemp(prefix="test-collectability-noroot-")
         try:
-            self.assertEqual(rl.check_test_module_collection(d), [])
-            self.assertEqual(rl.check_test_class_execution(d), [])
+            collection = rl.check_test_module_collection(d)
+            execution = rl.check_test_class_execution(d)
+            self.assertEqual(len(collection), 1)
+            self.assertEqual(len(execution), 1)
+            for out in (collection[0], execution[0]):
+                self.assertIn("root/layout 前置條件不成立", out)
+                self.assertIn("src/__manifest__.py", out)
+                self.assertIn("不能解讀為零違規", out)
+                self.assertNotIn("掃不到任何", out)
         finally:
             shutil.rmtree(d, ignore_errors=True)
 
