@@ -1067,11 +1067,6 @@ msgid "Admin"
 msgstr "管理員"
 
 #. module: woow_paas_platform
-#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_app_template__has_admin_gui
-msgid "Admin GUI 內建"
-msgstr ""
-
-#. module: woow_paas_platform
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_cloud_app_template_form
 msgid "Admin GUI（平台供給 admin_password）"
 msgstr ""
@@ -4480,12 +4475,6 @@ msgid "ECPay rejected binding"
 msgstr ""
 
 #. module: woow_paas_platform
-#. odoo-python
-#: code:addons/woow_paas_platform/models/ecpay_invoice_cron.py:0
-msgid "ECPay 發票開立失敗（已達重試上限）"
-msgstr ""
-
-#. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.xml:0
 msgid ""
@@ -5582,24 +5571,14 @@ msgstr ""
 
 #. module: woow_paas_platform
 #: model:ir.model.fields,field_description:woow_paas_platform.field_res_config_settings__woow_haos_global_instance_cap
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.res_config_settings_view_form
 msgid "HAOS Global Instance Cap"
 msgstr ""
 
 #. module: woow_paas_platform
 #: model:ir.model.fields,field_description:woow_paas_platform.field_res_config_settings__woow_haos_sales_paused
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.res_config_settings_view_form
 msgid "HAOS Sales Paused"
-msgstr ""
-
-#. module: woow_paas_platform
-#: model:ir.model.fields,field_description:woow_paas_platform.field_res_config_settings__woow_haos_global_instance_cap
-#: model_terms:ir.ui.view,arch_db:woow_paas_platform.res_config_settings_view_form
-msgid "HAOS 全域實例上限"
-msgstr ""
-
-#. module: woow_paas_platform
-#: model:ir.model.fields,field_description:woow_paas_platform.field_res_config_settings__woow_haos_sales_paused
-#: model_terms:ir.ui.view,arch_db:woow_paas_platform.res_config_settings_view_form
-msgid "HAOS 暫停販售"
 msgstr ""
 
 #. module: woow_paas_platform
@@ -5672,11 +5651,6 @@ msgstr ""
 #. module: woow_paas_platform
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_cloud_app_template__admin_password_carrier__helm_secret
 msgid "Helm Secret (managed by the chart, hermes-agent / open-design)"
-msgstr ""
-
-#. module: woow_paas_platform
-#: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_cloud_app_template__admin_password_carrier__helm_secret
-msgid "Helm Secret（chart 管理，hermes-agent／open-design）"
 msgstr ""
 
 #. module: woow_paas_platform
@@ -6522,14 +6496,6 @@ msgstr ""
 #: code:addons/woow_paas_platform/static/src/paas/pages/billing/InvoiceDetailPage.xml:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/billing/InvoiceListPage.xml:0
 msgid "Invoice #"
-msgstr ""
-
-#. module: woow_paas_platform
-#. odoo-python
-#: code:addons/woow_paas_platform/models/ecpay_invoice_cron.py:0
-msgid ""
-"Invoice %(name)s 開立 ECPay 發票連續失敗 %(n)s 次。\n"
-"最後錯誤：%(err)s"
 msgstr ""
 
 #. module: woow_paas_platform
@@ -9244,11 +9210,6 @@ msgid "PVC size (GB); 0 = fall back to the template default."
 msgstr ""
 
 #. module: woow_paas_platform
-#: model:ir.model.fields,help:woow_paas_platform.field_sh_subscription_plan__cs_storage_gb
-msgid "PVC 容量（GB）；0＝沿用 template 預設。"
-msgstr ""
-
-#. module: woow_paas_platform
 #: model:ir.model.fields,field_description:woow_paas_platform.field_res_config_settings__woow_paas_domain
 msgid "PaaS Domain"
 msgstr ""
@@ -10073,11 +10034,6 @@ msgstr ""
 #. module: woow_paas_platform
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_service__provision_partner_id
 msgid "Provision Owner (One Per Account)"
-msgstr ""
-
-#. module: woow_paas_platform
-#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_service__provision_partner_id
-msgid "Provision Owner（每帳號限一）"
 msgstr ""
 
 #. module: woow_paas_platform
@@ -11932,14 +11888,6 @@ msgstr ""
 #. odoo-python
 #: code:addons/woow_paas_platform/controllers/smart_home.py:0
 msgid "Smart Home template not found or inactive"
-msgstr ""
-
-#. module: woow_paas_platform
-#. odoo-python
-#: code:addons/woow_paas_platform/models/smart_home.py:0
-msgid ""
-"Smart Home 只能由平台的開通流程建立（%(model)s）。請改從 Smart Home 下單流程"
-"建立，不要直接寫入這個 model。"
 msgstr ""
 
 #. module: woow_paas_platform
@@ -14906,22 +14854,9 @@ msgid "config.json (config file inside the PVC, mcp-server family)"
 msgstr ""
 
 #. module: woow_paas_platform
-#: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_cloud_app_template__admin_password_carrier__config_json
-msgid "config.json（PVC 內設定檔，mcp-server 家族）"
-msgstr ""
-
-#. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/TopupSuccessModal.xml:0
 msgid "credits"
-msgstr ""
-
-#. module: woow_paas_platform
-#. odoo-python
-#: code:addons/woow_paas_platform/models/sh_subscription_plan_cs_spec.py:0
-msgid ""
-"cs_odoo_workers 大於 0 時必須同時設定 cs_ram_gb，否則無法計算 per-worker 記憶"
-"體上限（OOM 風險）。"
 msgstr ""
 
 #. module: woow_paas_platform
@@ -14991,11 +14926,6 @@ msgstr ""
 #. module: woow_paas_platform
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_cloud_odoo_addon__category__ecommerce
 msgid "eCommerce"
-msgstr ""
-
-#. module: woow_paas_platform
-#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_reconcile_report__env_hint
-msgid "env 歸屬"
 msgstr ""
 
 #. module: woow_paas_platform
@@ -15741,11 +15671,6 @@ msgid "tunnel / access_app / access_policy … (matches CfResource.kind)"
 msgstr ""
 
 #. module: woow_paas_platform
-#: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_reconcile_report__kind
-msgid "tunnel / access_app / access_policy …（對齊 CfResource.kind）"
-msgstr ""
-
-#. module: woow_paas_platform
 #: model:ir.model.constraint,message:woow_paas_platform.constraint_woow_paas_platform_oauth_device_code_unique_user_code
 msgid "user_code must be unique."
 msgstr ""
@@ -15915,30 +15840,6 @@ msgid "✗ Not available:"
 msgstr ""
 
 #. module: woow_paas_platform
-#. odoo-python
-#: code:addons/woow_paas_platform/models/cloud_service.py:0
-msgid "「%(tpl)s」每個帳號最多 %(limit)s 個實例，您已達上限。"
-msgstr ""
-
-#. module: woow_paas_platform
-#. odoo-python
-#: code:addons/woow_paas_platform/models/cloud_service.py:0
-msgid "「%(tpl)s」目前已售罄，暫時無法開通新的實例。"
-msgstr ""
-
-#. module: woow_paas_platform
-#. odoo-python
-#: code:addons/woow_paas_platform/models/cloud_service.py:0
-msgid "「%(tpl)s」目前暫停販售。"
-msgstr ""
-
-#. module: woow_paas_platform
-#. odoo-python
-#: code:addons/woow_paas_platform/models/cloud_service.py:0
-msgid "「%(tpl)s」目前無法開通：平台尚未指定此商品的部署版本。請聯繫客服。"
-msgstr ""
-
-#. module: woow_paas_platform
 #: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_cloud_service__access_unresolved_idp_types
 msgid ""
 "上次 sync 時「有要求、但 Cloudflare 帳號上找不到對應 IdP」的登入方式（如 "
@@ -15952,17 +15853,6 @@ msgid ""
 "上次 sync 時，被要求但在 Cloudflare 帳號上找不到對應 IdP 的登入方式。非空代表"
 "登入限制被**靜默放寬**了（若解析後集合為空，Access app 會 fallback 到所有可"
 "用 IdP）。曝光出來，不要讓 fail-open 的放寬無聲無息。"
-msgstr ""
-
-#. module: woow_paas_platform
-#. odoo-python
-#: code:addons/woow_paas_platform/models/cloud_service.py:0
-msgid "不可解除服務與訂閱的綁定。"
-msgstr ""
-
-#. module: woow_paas_platform
-#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_reconcile_report__partial
-msgid "不完整掃描"
 msgstr ""
 
 #. module: woow_paas_platform
@@ -15983,16 +15873,6 @@ msgid ""
 msgstr ""
 
 #. module: woow_paas_platform
-#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_reconcile_report__reason
-msgid "判定理由"
-msgstr ""
-
-#. module: woow_paas_platform
-#: model:ir.model.fields,field_description:woow_paas_platform.field_sh_subscription_plan__storefront_hidden
-msgid "前台隱藏"
-msgstr ""
-
-#. module: woow_paas_platform
 #: model:ir.model.fields,help:woow_paas_platform.field_sh_subscription_plan__storefront_hidden
 msgid ""
 "勾選後此方案不出現在 /woow 前台任何購買選項；既存訂閱的計費、續期、退點完全不"
@@ -16005,17 +15885,6 @@ msgid "取消"
 msgstr ""
 
 #. module: woow_paas_platform
-#. odoo-python
-#: code:addons/woow_paas_platform/models/cloud_service.py:0
-msgid "只能綁定生效中（in_progress）的訂閱，目前狀態為 %(state)s。"
-msgstr ""
-
-#. module: woow_paas_platform
-#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_reconcile_report__reconcilable
-msgid "可回收"
-msgstr ""
-
-#. module: woow_paas_platform
 #: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_cloud_app_template__max_per_partner
 msgid ""
 "同一 partner（帳號）最多可持有的本範本活躍實例數；0＝不限制。HA PaaS 免費方案"
@@ -16025,11 +15894,6 @@ msgstr ""
 #. module: woow_paas_platform
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_gift_grant_wizard__partner_id
 msgid "客戶"
-msgstr ""
-
-#. module: woow_paas_platform
-#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_app_template__admin_password_carrier
-msgid "密碼載體"
 msgstr ""
 
 #. module: woow_paas_platform
@@ -16072,11 +15936,6 @@ msgid "手動贈送錢包點數"
 msgstr ""
 
 #. module: woow_paas_platform
-#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_reconcile_report__scanned_at
-msgid "掃描時間"
-msgstr ""
-
-#. module: woow_paas_platform
 #: model:ir.model.fields,help:woow_paas_platform.field_res_config_settings__woow_haos_global_instance_cap
 msgid ""
 "整個平台最多同時存在幾台 HAOS（跨所有帳號）。達到上限後商品仍會顯示在應用商"
@@ -16092,11 +15951,6 @@ msgid ""
 "整個平台最多同時存在幾台 HAOS（跨所有帳號）。達到上限後商品仍顯示在應用商店並"
 "標示「已售罄」，但不能下單。留空＝使用內建預設上限（不是「不限」）；填 0 會被"
 "存成未設定，等同留空。（#501）"
-msgstr ""
-
-#. module: woow_paas_platform
-#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_app_template__conceal_instances
-msgid "既有實例一併隱藏"
 msgstr ""
 
 #. module: woow_paas_platform
@@ -16396,11 +16250,6 @@ msgid ""
 msgstr ""
 
 #. module: woow_paas_platform
-#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_app_template__max_per_partner
-msgid "每帳號實例上限"
-msgstr ""
-
-#. module: woow_paas_platform
 #: model:ir.model.fields,help:woow_paas_platform.field_res_config_settings__woow_haos_sales_paused
 msgid ""
 "營運手動停售：不論還剩幾個名額都不再收單。與「已售罄」是兩件事（售罄是達到上"
@@ -16421,16 +16270,6 @@ msgid "請先登入以使用 AI 對話。"
 msgstr ""
 
 #. module: woow_paas_platform
-#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_reconcile_report__resource_uid
-msgid "資源 UID"
-msgstr ""
-
-#. module: woow_paas_platform
-#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_reconcile_report__name
-msgid "資源名稱"
-msgstr ""
-
-#. module: woow_paas_platform
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_gift_grant_wizard_form
 msgid "贈送"
 msgstr ""
@@ -16444,12 +16283,6 @@ msgstr ""
 #. module: woow_paas_platform
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_gift_grant_wizard__points
 msgid "贈送點數"
-msgstr ""
-
-#. module: woow_paas_platform
-#. odoo-python
-#: code:addons/woow_paas_platform/wizard/gift_grant_wizard.py:0
-msgid "贈送點數必須大於 0。"
 msgstr ""
 
 #. module: woow_paas_platform
@@ -16477,22 +16310,11 @@ msgid "送出"
 msgstr ""
 
 #. module: woow_paas_platform
-#. odoo-python
-#: code:addons/woow_paas_platform/models/cloud_service.py:0
-msgid "這筆訂閱不屬於本服務的 workspace 擁有者，不可綁定。"
-msgstr ""
-
-#. module: woow_paas_platform
 #: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_cf_access_policy_reap__kind
 msgid ""
 "這顆 id 是 reusable policy 還是 Access application。operator 的刪除通道不同"
 "（existing_policy_ids vs existing_app_id），送錯欄位會被 CF 當成「刪一顆不存"
 "在的東西」回 404＝成功，帳被消掉而物件留著（#784）。"
-msgstr ""
-
-#. module: woow_paas_platform
-#: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_cloud_service__session_duration
-msgid "通過驗證後多久需要重新登入（本服務）。"
 msgstr ""
 
 #. module: woow_paas_platform
@@ -16978,23 +16800,10 @@ msgid "限量商品供給"
 msgstr ""
 
 #. module: woow_paas_platform
-#. odoo-python
-#: code:addons/woow_paas_platform/models/cloud_service.py:0
-msgid ""
-"雲端服務只能由平台的開通流程建立（%(model)s）。請改從服務市集下單，不要直接寫"
-"入這個 model。"
-msgstr ""
-
-#. module: woow_paas_platform
 #: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_smart_home_route__subdomain_prefix
 msgid ""
 "非 primary route 的使用者自選前綴；hostname = {prefix}.{paas_domain}。本階段"
 "恆空——第二條 route 需要 tunnel ingress 遷移，另票處理（見檔頭）。"
-msgstr ""
-
-#. module: woow_paas_platform
-#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_reconcile_report__kind
-msgid "類別"
 msgstr ""
 
 #. module: woow_paas_platform
