@@ -518,8 +518,18 @@ test-collectability 由兩個函式——收集面／執行面。這個一對多
                      判準刻意只涵蓋**相對路徑**：`@web/...`／`@odoo/owl` 這類 bare
                      specifier 由 Odoo 的 addons 解析，不是檔案系統路徑，靜態解不了
                      ⇒ 硬解只會製造偽陽。這是**具名的盲區**，不是遺漏。
+                     掃描前先剝掉註解（保留字串內容）：JSDoc `@example` 裡的示範 import
+                     不是呼叫站點，其中一個還**故意寫成解析不到的形狀**
+                     ⇒ 不剝就是 2 個誤報（實測）。
                      附掃描器存在性對照（一個一定解析得到的 import），零命中時能分辨
                      「真的沒問題」與「掃描範圍壞了」。
+                     🔴 hook 分派**不做 only_file 切片**：判準是「A 檔的 import 字串」
+                     對上「B 檔存不存在」，而**打破它的那次編輯可能發生在 B**（檔案被
+                     搬走／改名／刪掉），那時 hook 收到的 file_path 是 B 不是 A
+                     ⇒ 切片會讓最常見的一種破壞方式完全沉默。改走預算式跨檔群組
+                     （同 ladder／anchors／floor），觸發面與掃描範圍共用
+                     `_OWL_IMPORT_SCAN_ROOT`，兩者不可能分岔。
+                     本 check 因此**沒有** `only_file` 參數——不是「有但不用」。
 
 用法：
 
@@ -5028,7 +5038,7 @@ def check_sh_subscription_group_isolation(root, only_file=None):
                         "的話請在 PR 裡說明並同步重評 B（見 %s）。"
                         % (rel, line_no, name, SH_SUB_GROUP_DOC))
     # 探針壞掉時輸出與「真的沒問題」一模一樣 ⇒ 用一個一定找得到的字串當存在性對照。
-    if not only_file and not control_seen:
+    if not control_seen:
         violations.append(
             "scripts/audit/repo-lint.py：`check_sh_subscription_group_isolation` 掃了 "
             "%d 個檔卻連 `%s` 都沒看到 —— 掃描範圍壞了，這條的「零命中」是假的。"
@@ -5100,28 +5110,42 @@ _OWL_IMPORT_SCAN_CONTROL = (
     "paas/utils/billing_helpers.js", "./datetime_helpers")
 
 
-def check_owl_relative_import(root, only_file=None):
+# 第 33 條的掃描根目錄。hook 的觸發面（`_owl_relative_import_watches`）與
+# 掃描範圍（`check_owl_relative_import`）**共用這一個常數**，兩者不可能分岔——
+# 分岔的下場是「CI 會抓、hook 完全沉默」，也就是 #596 的形態本身。
+_OWL_IMPORT_SCAN_ROOT = ("src", "static", "src")
+
+
+def _owl_relative_import_watches(rel):
+    """第 33 條的 hook 觸發面：掃描根目錄底下的 `.js`。"""
+    prefix = "/".join(_OWL_IMPORT_SCAN_ROOT) + "/"
+    return rel.startswith(prefix) and rel.endswith(".js")
+
+
+def check_owl_relative_import(root):
     """第 33 條：`src/static/src/**` 的相對 import 必須指到存在的檔。
 
     見檔頭第 33 條。一個路徑打錯會讓 Odoo module loader 連鎖放棄所有相依模組
     ⇒ `/woow` 整個 app 不啟動，而 Python 測試／PR 綠燈都照不到。
+
+    ⚠ **刻意沒有 `only_file` 參數**（與同檔多數 check 不同）。兩個理由：
+    1. 判準是「A 檔的 import 字串」對上「B 檔存不存在」，而打破它的那次編輯
+       可能發生在 **B**（檔案被搬走／改名）——切片會讓那條路徑完全沉默。
+    2. 掃描器的存在性對照需要看得到全樹；切片時 `targets` 只有一個檔，
+       對照恆假 ⇒ 要嘛誤報、要嘛得為切片路徑關掉對照，而關掉對照的那條路徑
+       就沒有鑑別力了。
+    ⇒ 與其留一條「存在但沒人走、也沒被測到」的分支，不如不要有它。
     """
     violations = []
-    base = os.path.join(root, "src", "static", "src")
+    base = os.path.join(root, *_OWL_IMPORT_SCAN_ROOT)
     if not os.path.isdir(base):
         return violations
 
-    if only_file:
-        if not (only_file.endswith(".js") and os.path.abspath(only_file).startswith(
-                os.path.abspath(base) + os.sep)):
-            return violations
-        targets = [os.path.abspath(only_file)]
-    else:
-        targets = []
-        for dirpath, _dirs, files in os.walk(base):
-            for fn in sorted(files):
-                if fn.endswith(".js"):
-                    targets.append(os.path.join(dirpath, fn))
+    targets = []
+    for dirpath, _dirs, files in os.walk(base):
+        for fn in sorted(files):
+            if fn.endswith(".js"):
+                targets.append(os.path.join(dirpath, fn))
 
     control_seen = False
     for path in targets:
@@ -5148,7 +5172,7 @@ def check_owl_relative_import(root, only_file=None):
                 % (rel, spec))
 
     # 探針壞掉時輸出與「真的沒問題」一模一樣 ⇒ 存在性對照。
-    if not only_file and not control_seen:
+    if not control_seen:
         violations.append(
             "scripts/audit/repo-lint.py：`check_owl_relative_import` 掃了 %d 個檔卻連 "
             "`%s` 的 `%s` 都沒看到 —— 掃描範圍壞了，這條的「零命中」是假的。"
@@ -5950,6 +5974,15 @@ def run_hook():
         # 就沒有人會看到了。
         route_golden = (check_route_contract_golden(root)
                         if rel in ROUTE_CONTRACT_FILES else [])
+        # #107 第 33 條：相對 import 是**跨檔**不變式——判準是「A 檔的 import 字串」
+        # 對上「B 檔存不存在」，而**打破它的那次編輯可能發生在 B**（檔案被搬走／改名／
+        # 刪掉），那時 hook 收到的 file_path 是 B 而不是 A。⇒ 不做 only_file 切片，
+        # 動到 src/static/src 底下任何一個 .js 就整棵樹重算
+        # （同 ladder／availability／poll_facts／anchors／floor／security_rules）。
+        # ⚠ 這條 check **沒有** only_file 參數（理由見它的 docstring）——
+        #   不是「有但不用」，是刻意不留一條沒人走也沒被測到的分支。
+        owl_imports = (check_owl_relative_import(root)
+                       if _owl_relative_import_watches(rel) else [])
         if re.match(r"^src/controllers/.*\.py$", rel):
             violations = check_controller_sudo(root, only_file=abs_path)
             violations += check_reuse_values(root, only_file=abs_path)
@@ -5985,13 +6018,8 @@ def run_hook():
             violations += check_gateway_copy_gate_anchor(root)
             violations += check_access_tab_gate_anchor(root)
         elif re.match(r"^src/static/src/.*\.js$", rel):
-            # 第 33 條的判準完全落在單一檔案內（這個檔的 import ↔ 檔案系統）
-            # ⇒ 可以只切這一檔重算。⚠ 但它的**存在性對照**只有全樹掃才有意義
-            #    （切片時 targets 只有一個檔），所以 only_file 路徑刻意不驗對照——
-            #    那一格由 CI 的全樹掃守。
-            violations = check_owl_relative_import(root, only_file=abs_path)
             # anchor 走全域：改 JS（getter 被刪／改名／改判準）壞掉的是 XML 那顆按鈕。
-            violations += check_slug_capability_gate(root, only_file=abs_path)
+            violations = check_slug_capability_gate(root, only_file=abs_path)
             violations += check_admin_gui_gate_anchor(root)
             violations += check_gateway_copy_gate_anchor(root)
             violations += check_access_tab_gate_anchor(root)
@@ -6022,7 +6050,7 @@ def run_hook():
             violations = check_kubectl_ns_whitelist_sync(root)
         elif (ladder or availability or poll_facts or anchors or floor
                 or security_rules or one_time_cred or provision or sh_sub_groups
-                or internal_ctx or tunnel_wire or route_golden):
+                or internal_ctx or tunnel_wire or route_golden or owl_imports):
             # extra/paas-operator/** 與 docs/tracking/pitfalls/** 不在上面任何分支，
             # 但前者持有階梯的內層常數、後者是 doc-symbol-anchor 的一半輸入；
             # baselines/repo-lint-registry.txt（floor 的另一份輸入）與
@@ -6043,6 +6071,7 @@ def run_hook():
         violations += internal_ctx
         violations += tunnel_wire
         violations += route_golden
+        violations += owl_imports
         if violations:
             print(json.dumps({
                 "decision": "block",
