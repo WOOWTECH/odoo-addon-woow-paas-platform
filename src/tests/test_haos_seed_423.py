@@ -22,6 +22,8 @@ import json
 
 from odoo.tests.common import TransactionCase, tagged
 
+from ..models.cloud_service import _internal_provision
+
 MOD = 'woow_paas_platform'
 
 # W2 交付前的 image.tag 佔位字面 —— 已成歷史（現值 `18.1-20260730.0912@sha256:6123d82a…`），
@@ -365,24 +367,113 @@ class TestHaosQuotaModelling(_HaosSeedMixin, TransactionCase):
             'import 的三 PVC 峰值，不是磁碟大小'
             % (n['min_storage_gb'], n['disk_gi']))
 
-    @staticmethod
-    def _marginal_storage_gi(min_storage_gb):
-        """本服務替 workspace storage quota 增加的 GiB；刻意不套 100Gi floor。"""
-        return min_storage_gb * 3
+    # 🔴 兩組 filler 都遠在 floor（8 vCPU／8Gi／100Gi）之上，用意是讓前後兩次
+    # 量測都落在 quota 的線性區。⛔ 別把 filler 改小：floor 一旦咬住「加入本服務
+    # 之前」那次，量到的差就會被灌水。這一格由
+    # `test_measured_marginal_is_filler_independent` 守著——兩組不同 filler 量出
+    # 同一個邊際值，就是「floor 沒有咬住任何一次」的證據。
+    # RAM 取整數是必要的：production 的 `int()` 截斷作用在**加總**上，整數 filler
+    # 才讓差值恰好等於本服務自己那一份的截斷值。
+    _QUOTA_FILLERS = (
+        {'vcpu': 40, 'ram_gb': 60.0, 'storage_gb': 400},
+        {'vcpu': 100, 'ram_gb': 200.0, 'storage_gb': 1000},
+    )
 
-    @staticmethod
-    def _marginal_ram_gi(min_ram_gb):
-        """本服務替 workspace RAM quota 增加的 GiB；鏡射 production 的 int 截斷。"""
-        return int(min_ram_gb * 3)
+    def _parse_quota(self, quota):
+        """把 production 回的 ``(vcpu, "NGi", "MGi")`` 轉成數字三元組。
+
+        ⚠ 這裡耦合的是**回傳格式**（operator ``NamespaceQuotaUpdateRequest``
+        的 wire contract），不是 multiplier。格式改了會在這裡大聲炸，不會靜默
+        轉綠——與 #934 要根治的那種假綠方向相反。
+        """
+        vcpu, ram, storage = quota
+        self.assertTrue(ram.endswith('Gi'), ram)
+        self.assertTrue(storage.endswith('Gi'), storage)
+        return int(vcpu), int(ram[:-2]), int(storage[:-2])
+
+    def _measured_marginal(self, min_vcpu, min_ram_gb, min_storage_gb, filler):
+        """🔴 用 production 的 `_compute_ns_quota` **實測**本服務的邊際貢獻。
+
+        ⛔ 刻意不在測試裡重寫 `×3`。#931 把 floor 的重複拿掉了，卻把 multiplier
+        的重複升格成兩個具名 helper：production 從 ×3 改成 ×2 時，per-service
+        storage headroom 掉到 144Gi、蓋不住 203.5Gi 的 CDI import 峰值，而三支
+        測試因為自己算 `72*3` 全部照樣綠（#934）。這裡改問 production 兩次——
+        加進本服務之前、之後——取差。multiplier 住在哪個常數、叫什麼名字、之後
+        怎麼重構，這條守線都跟得上。
+
+        探針用**自建的**一次性 template，不用 HAOS 那張：`CloudService.create()`
+        的供給閘（停售／未釘版／global cap）與 `max_per_partner` 都掛在 template
+        上，借真商品當探針等於把這條守線綁在營運狀態上。
+        """
+        Svc = self.env['woow_paas_platform.cloud_service']
+        ws = self.env['woow_paas_platform.workspace'].create(
+            {'name': '#934 quota probe ws'})
+        tpl = self.env['woow_paas_platform.cloud_app_template'].create({
+            'name': '#934 quota probe template',
+            'helm_repo_url': 'oci://probe.invalid/charts',
+            'helm_chart_name': 'probe',
+            'helm_chart_version': '0.0.0',
+        })
+
+        def _add(name, vcpu, ram_gb, storage_gb):
+            return _internal_provision(Svc).create({
+                'name': name,
+                'workspace_id': ws.id,
+                'template_id': tpl.id,
+                'allocated_vcpu': vcpu,
+                'allocated_ram_gb': ram_gb,
+                'allocated_storage_gb': storage_gb,
+            })
+
+        _add('#934 filler', filler['vcpu'], filler['ram_gb'],
+             filler['storage_gb'])
+        before = self._parse_quota(Svc._compute_ns_quota(ws))
+        _add('#934 probe', min_vcpu, min_ram_gb, min_storage_gb)
+        after = self._parse_quota(Svc._compute_ns_quota(ws))
+        return {
+            'vcpu': after[0] - before[0],
+            'ram_gi': after[1] - before[1],
+            'storage_gi': after[2] - before[2],
+        }
+
+    def test_measured_marginal_is_filler_independent(self):
+        """🔴 探針自身的守衛：兩組不同 filler 必須量出同一個邊際值。
+
+        這一條證明的是「floor 沒有咬住任何一次量測」——floor 若在其中一次生效，
+        兩組 filler 量出的差會不一樣。沒有它，`_measured_marginal` 可能安靜地
+        回一個被 floor 灌水的數字，而下面兩支守線照樣綠。
+        """
+        n = self._seed_numbers()
+        args = (n['min_vcpu'], n['min_ram_gb'], n['min_storage_gb'])
+        first = self._measured_marginal(*args, self._QUOTA_FILLERS[0])
+        second = self._measured_marginal(*args, self._QUOTA_FILLERS[1])
+        self.assertEqual(
+            first, second,
+            'filler 大小改變了量到的邊際貢獻（%r vs %r）⇒ 至少有一次量測被 '
+            'workspace floor 咬住，下面兩條守線讀到的是灌水後的數字'
+            % (first, second))
+        self.assertGreater(
+            first['storage_gi'], 0,
+            '邊際貢獻量到 0 ⇒ 探針沒真的把服務加進 workspace（或 '
+            '_compute_ns_quota 沒看到它），此時下面的 assertGreaterEqual 等於沒跑')
 
     def test_marginal_quota_does_not_apply_workspace_floors(self):
-        """below-floor 輸入要保留邊際值，不能偷套 workspace floor 而假綠。"""
-        self.assertEqual(
-            self._marginal_ram_gi(1.25), 3,
-            '1.25Gi RAM 的邊際貢獻須保留 int(1.25×3)=3Gi；不得套 8Gi floor')
-        self.assertEqual(
-            self._marginal_storage_gi(20), 60,
-            '20Gi storage 的邊際貢獻須為 60Gi；不得套 100Gi floor')
+        """below-floor 輸入的邊際貢獻不得被 workspace floor 抬起來。
+
+        量的是 production 的實際行為、不是測試自己的算式：一個 1.25Gi／20Gi 的
+        小服務加進已在 floor 之上的 workspace 時，只會讓 quota 增加它自己那一份，
+        8Gi／100Gi 的 floor 對它完全不生效。floor 只保護低用量 workspace，證明不了
+        共用 workspace 每增加一個 HAOS 時仍有足額 quota。
+        """
+        m = self._measured_marginal(1, 1.25, 20, self._QUOTA_FILLERS[0])
+        self.assertLess(
+            m['ram_gi'], 8,
+            '1.25Gi RAM 的邊際貢獻量到 %sGi ⇒ 8Gi floor 被套在單一服務上'
+            % m['ram_gi'])
+        self.assertLess(
+            m['storage_gi'], 100,
+            '20Gi storage 的邊際貢獻量到 %sGi ⇒ 100Gi floor 被套在單一服務上'
+            % m['storage_gi'])
 
     def test_storage_quota_covers_cdi_import_peak(self):
         """storage quota 的邊際貢獻必須蓋得住 import 峰值。
@@ -391,11 +482,16 @@ class TestHaosQuotaModelling(_HaosSeedMixin, TransactionCase):
         實測：64Gi → 每顆 67.8 GiB → 峰值 203.5 GiB；72×3＝216 GiB 放行。
 
         `_compute_ns_quota` 的 100Gi floor 只在 workspace 總量低於 floor 時提供保護；
-        共用 workspace 增加一個 HAOS 時只會增加 min_storage_gb×3。這裡若套 floor，
+        共用 workspace 增加一個 HAOS 時只會增加它自己那一份。這裡若套 floor，
         較小的錯誤 min_storage_gb 可能在空 workspace 假綠、加入共用 workspace 才爆。
+
+        邊際值是向 production **實測**的（`_measured_marginal`），不是在這裡重寫
+        一次 quota 算式——理由見該 method 的 docstring（#934）。
         """
         n = self._seed_numbers()
-        marginal_gi = self._marginal_storage_gi(n['min_storage_gb'])
+        marginal_gi = self._measured_marginal(
+            n['min_vcpu'], n['min_ram_gb'], n['min_storage_gb'],
+            self._QUOTA_FILLERS[0])['storage_gi']
         peak_gi = (self.CDI_IMPORT_PVC_COUNT * n['disk_gi']
                    * self.CDI_PVC_RENDER_FACTOR)
         self.assertGreaterEqual(
@@ -415,11 +511,16 @@ class TestHaosQuotaModelling(_HaosSeedMixin, TransactionCase):
         **不是** guest RAM 本身。chart 讓 limits==requests，故無 2× 放大。
 
         `_compute_ns_quota` 的 8Gi floor 只保護低用量 workspace；每新增一個 HAOS
-        實際只增加 int(min_ram_gb×3) Gi。套 floor 會讓過小的 min_ram_gb 在空
-        workspace 假綠，卻在共用 workspace 累積 quota 缺口。
+        實際只增加它自己那一份。套 floor 會讓過小的 min_ram_gb 在空 workspace
+        假綠，卻在共用 workspace 累積 quota 缺口。
+
+        邊際值是向 production **實測**的（`_measured_marginal`），不是在這裡重寫
+        一次 quota 算式——理由見該 method 的 docstring（#934）。
         """
         n = self._seed_numbers()
-        marginal_gi = self._marginal_ram_gi(n['min_ram_gb'])
+        marginal_gi = self._measured_marginal(
+            n['min_vcpu'], n['min_ram_gb'], n['min_storage_gb'],
+            self._QUOTA_FILLERS[0])['ram_gi']
         pod_total_gi = (n['mem_gi'] + self.KUBEVIRT_MEM_OVERHEAD_GI
                         + self.INIT_MEM_GI)
         self.assertGreaterEqual(
