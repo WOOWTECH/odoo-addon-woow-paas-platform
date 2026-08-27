@@ -9,6 +9,7 @@ from .security_access import (
     _internal_policy_cf_write,
     _is_internal_policy_cf_write,
     _is_sync_control,
+    _reject_derived_projection_writes,
     _reject_identity_anchor_writes,
     _strip_identity_anchors,
 )
@@ -39,6 +40,23 @@ _ANCHOR_LABELS = {
 #:
 #: 清單化而不是在守衛旁邊寫字面值：#522 的成因正是逐欄位手列而漏掉 `tunnel_id`。
 _POLICY_IDENTITY_ANCHOR_FIELDS = ('cf_policy_id',)
+
+#: #849：**stored related 投影欄位 → 它的來源錨點欄位**。租戶一律不得直寫。
+#:
+#: 這兩欄是 `related=..., store=True`：值直接落在 policy 自己那根 column 上、來源列
+#: 一動也不動，而 `security/ir_rules.xml` 的 policy member-read 與 owner-admin-manage
+#: 兩條 rule 正是走這幾根 column 判歸屬（**不走** `route_id`）⇒ 直寫造成**歸屬分裂**
+#: （真錨點在 X、ir.rule 判給 Y），已端到端量到受害者取得跨租戶 read。
+#:
+#: ⛔ **刻意不併進 `_ANCHOR_FIELDS`**：那份清單是**真錨點**，同時餵著 arc 檢查、
+#: sparse precedence 探測、`_access_sync_targets()`、#848 的搬移授權與 #786 的 resync
+#: 觸發集合。把投影欄位塞進去會讓那五處全部改變語意（最直接的：arc 會判定「同時
+#: 掛了兩個錨點」而拒絕每一列合法 policy）。守線清單分開，理由見
+#: `_reject_derived_projection_writes` 的 docstring。
+_POLICY_PROJECTION_FIELDS = {
+    'security_access_id': 'route_id',
+    'smart_home_id': 'smart_home_route_id',
+}
 
 
 def _dedupe_anchors(anchors):
@@ -1039,6 +1057,12 @@ class SecurityAccessAccessPolicy(models.Model):
         return policies
 
     def write(self, vals):
+        # #849：投影欄位的直寫守衛。排在最前面與 #798 同一個理由——拒絕要發生在任何
+        # side effect 之前；而它排在 #798 **之上**是因為這一格連「這個 key 可以出現在
+        # vals 裡」都不成立（`security_access_id` / `smart_home_id` 的值由框架從真錨點
+        # 算出來，呼叫端沒有任何合法理由送它）。⛔ 沒有 su 豁免、沒有 sentinel 逃生門，
+        # 理由見 helper 的 docstring。
+        _reject_derived_projection_writes(vals, _POLICY_PROJECTION_FIELDS)
         # #798：write 側的一半，**必須是本方法的第一件事**——拒絕要發生在任何 side
         # effect（含下面的 pre-write 擷取與 `super().write()`）之前。對**所有人**生效，
         # 含 superuser：`env.su` 豁免會在每個 TransactionCase 與每條 sudo() 路徑上

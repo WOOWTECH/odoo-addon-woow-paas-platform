@@ -352,6 +352,67 @@ def _reject_identity_anchor_writes(env, vals, anchors,
             )
 
 
+def _reject_derived_projection_writes(vals, projections):
+    """#849：拒絕**直寫 stored related 投影欄位**，大聲拒絕。
+
+    ``projections``：``{投影欄位: 它的來源錨點欄位}``——來源欄位只進錯誤訊息，
+    讓呼叫端知道「該寫的是哪一個」。
+
+    ## 這道守衛在守什麼（已實測，不是推論）
+
+    policy 的 ``security_access_id`` / ``smart_home_id`` 與 rule 的
+    ``security_access_id`` / ``cloud_service_id`` / ``smart_home_id`` 都是
+    ``related=... , store=True``。``store=True`` ⇒ 值**直接落在該列自己那根
+    column 上**，來源列一動也不動（``inverse`` 沒裝——related 欄位的 ``readonly``
+    在 ``odoo/fields.py::Field._get_attrs()`` 的 ``related`` 區塊預設為 ``True``，
+    ``Field.setup_related()`` 裝 inverse 的條件因此不成立）。
+
+    而那幾根 column **正是 ``security/ir_rules.xml`` 判歸屬用的**（policy 與 rule
+    的 member-read／owner-admin-manage 兩條 rule，domain 走
+    ``security_access_id`` / ``cloud_service_id`` / ``smart_home_id``，**不走**
+    真錨點 ``route_id`` / ``policy_id``）⇒ 直寫它們會造成**歸屬分裂**：真錨點
+    仍掛在 X，``ir.rule`` 卻改判給 Y。已量到的後果是**受害者取得跨租戶 read**。
+
+    ⚠ ``readonly=True`` 擋不住這條路：``check_field_access_rights('write', ...)``
+    只看欄位的 ``groups=``（``is_accessible``），**不看 ``readonly``**
+    ⇒ 走 ``/web/dataset/call_kw`` 的裸 ORM 寫入照樣落地（#849 已端到端實測）。
+
+    ## 三道既有守線對這個 vals 全部不 fire
+
+    ``_reject_identity_anchor_writes``（#798）只看 ``cf_policy_id``；
+    ``_assert_anchor_move_authorised``（#848）只跑 ``_ANCHOR_FIELDS``（三個真錨點）；
+    ``write()`` 裡 ``if resync:`` 那個 ``check_access('read')`` 排序迴圈（#786）的
+    觸發集合不含投影欄位 ⇒ 連跑都不跑。這兩欄是 policy 上唯一的無守線出口。
+
+    ## 為什麼**沒有** ``is_open`` 逃生門（與 #798 的形狀刻意不同）
+
+    投影欄位**沒有任何合法的直寫路徑**：它的值由框架從來源欄位算出來，而框架的
+    重算走的是低階 ``_write()``（``Field.compute_value`` → cache → ``flush``），
+    **不經過本方法所在的公開 ``write()``**——本 repo 有測試把這件事量成契約
+    （``test_policy_projection_guard_849.py`` 的 L 系列：route 搬 SA、policy 換
+    錨點、rule 搬 policy、create 三條腿，重算全部不被誤擋）。
+
+    另外掃過全 repo 的合法呼叫端（``src/`` / ``scripts/`` / ``src/migrations/``、
+    dict literal、raw SQL、``.sudo().write(``、``_write(``）：對 policy／rule
+    這五個投影欄位的寫入**零命中**（唯一形似的命中是
+    ``route.security_access_id`` 與 ``smart_home_route.smart_home_id``，那是**來源
+    列自己的真欄位**，不經過本守衛）。⇒ 開一道沒有呼叫端的逃生門只會多一個
+    可被 context 打開的面。
+
+    對**所有人**生效含 superuser：``env.su`` 豁免會在每個 ``TransactionCase`` 與
+    每條 ``sudo()`` 路徑上靜默停用守衛（見 ``_INTERNAL_IDENTITY_WRITE`` 註解與
+    ``docs/decisions/patterns/su-env-exempt-guard-false-green.md``）。這一格與
+    ``cf_policy_id`` 同側：**沒有**合法改值路徑 ⇒ 任何 su 豁免都是洞。
+    """
+    for field, source in projections.items():
+        if field in vals:
+            raise UserError(
+                _("Field '%(field)s' is derived from '%(source)s' and cannot "
+                  "be written directly; change '%(source)s' instead.")
+                % {'field': field, 'source': source}
+            )
+
+
 class SecurityAccess(models.Model):
     _name = 'woow_paas_platform.security_access'
     _inherit = ['woow_paas_platform.subscription_lifecycle_mixin']
