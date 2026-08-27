@@ -591,8 +591,10 @@ from . import test_sa_provision_tenant_rpc_805
 # #546 A 段：測試收集完備性 gate，以 Odoo 測試本身為載體（runtime introspection）。
 # 與 repo-lint 的 `test-collectability`（純 AST、PR-time）是同一條性質的**兩條觀測通道**：
 # 這一支是 ground truth，那一支是早期預警鏡像；分歧時去查、不選一邊。
-# ⛔ 刻意不共用 repo-lint 的實作——它把版面寫死成「root 底下才有 src/」，容器裡沒有那一層
-# ⇒ 搬過去會是一個永遠綠的 gate（實證與 issue #828 見該檔 docstring）。
+# ⛔ 刻意不共用 repo-lint 的實作——static `test-collectability` 以前置條件鎖定 repo layout
+#（root 底下有 src/）；runtime container/addon layout 不符合時現在會 fail-loud 回 wrong-root
+# violation，但那只能說明輸入版面不適用，無法回答 Odoo runtime 實際 collectability，故仍需
+# 由本檔獨立 introspection（版面差異與 issue #828 見該檔 docstring）。
 from . import test_suite_collectability
 
 # fix: #648 (b) CloudService 翻 `running` 早於 Public URL 的 DNS 落地——租戶看到綠燈

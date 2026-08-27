@@ -10,6 +10,9 @@ cluster 唯讀列 ``paas-ws-*`` ns 當右集；Odoo 對 live ``helm_namespace`` 
 
 設計 spec：``docs/plans/2026-Q3/2026-07-07-w1-ns-quota-governance-design.md``。
 """
+import os
+from unittest.mock import patch
+
 from odoo.tests import TransactionCase, tagged
 
 from ..services import reconciler as R
@@ -80,10 +83,13 @@ class TestNamespaceLeftSetUnion(TransactionCase):
             'name': 'CS-w', 'workspace_id': self.ws.id, 'template_id': self.template.id,
             'helm_namespace': 'paas-ws-w', 'helm_release_name': 'app-w', 'state': 'running',
         })
-        self.Agent.create({
-            'project_id': self.project.id,
-            'helm_namespace': 'paas-ws-pa-x', 'state': 'active',
-        })
+        with patch.dict(os.environ, {
+            'AGENT_RUNTIME_NAMESPACE_SECRET': 'issue-853-test-only',
+        }):
+            self.Agent.create({
+                'project_id': self.project.id,
+                'helm_namespace': 'paas-ws-pa-x', 'state': 'active',
+            })
         ls = collect_left_set(self.env)
         self.assertIn('paas-ws-w', ls.namespace_names,
                       "CS 共用 ns 未進左集")
@@ -131,9 +137,12 @@ class TestNamespaceLeftSetUnion(TransactionCase):
         agent leg 的顯式守護（CS 側已有 test_empty_helm_namespace_not_in_left_set）：
         _clean 對 CS/agent 兩表對稱，此測試鎖住 agent 半建 ns 不誤當 live、亦不因 leg
         漏蒐而讓活躍 agent ns 判孤兒。"""
-        self.Agent.create({
-            'project_id': self.project.id, 'state': 'spawning',
-        })
+        with patch.dict(os.environ, {
+            'AGENT_RUNTIME_NAMESPACE_SECRET': 'issue-853-test-only',
+        }):
+            self.Agent.create({
+                'project_id': self.project.id, 'state': 'spawning',
+            })
         ls = collect_left_set(self.env)
         self.assertNotIn(False, ls.namespace_names)
         self.assertNotIn('', ls.namespace_names)

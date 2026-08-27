@@ -22,23 +22,19 @@ class、經由哪一道篩子產生差異，再決定改哪一側。
 ## 🔴 為什麼**不**共用 `repo-lint.py` 的實作（這一格有實證，不是偏好）
 
 `repo-lint.py` 的兩條判準把版面**寫死**成「`root` 底下才有 `src/`」
-（`_ADDON_MANIFEST_REL = "src/__manifest__.py"`），而它們的第一行是
-`if not _addon_source_tree_present(root): return violations` —— 一道 fail-open。
+（`_ADDON_MANIFEST_REL = "src/__manifest__.py"`）。#828 修正前，缺這個 manifest 會直接
+`return []`，形成 wrong-root fail-open；現在兩條 check 會各自回傳可歸因的
+root/layout violation，不能再把錯誤版面解讀為零違規。
 
 但 Odoo 測試執行時的 addon 版面**沒有 `src/` 這一層**：CI 的
 `.gitea/workflows/odoo-tests.yml` 做的是 `docker cp src/. "odoo:${MODULE_DIR}/"`，
 把 `src/` 的**內容**攤進 `MODULE_DIR`，所以 manifest 與 `tests/` 直接在 addon 根底下。
+同一份 `tests/test_probe.py` 放進兩種版面時，repo layout 才能得到 class-level verdict；
+container layout 現在會正確 fail-loud，但那是「輸入版面不適用」，不是 Odoo runtime
+實際載入結果。
 
-實證（兩棵樹，`tests/test_probe.py` **逐位元相同**、含**同一個**違規 class）：
-
-    【repo-layout（有 src/）】      _addon_source_tree_present=True   → 1 條違規
-    【container-layout（無 src/）】 _addon_source_tree_present=False  → 0 條違規
-
-⇒ 把那份實作原樣搬進來，得到的是**一個永遠綠的 gate**，而且輸出與「這棵樹很乾淨」完全
-不可區分。更糟的是那道早退排在兩個函式**所有**存在性反向對照之前，安全網一格都走不到——
-那正是本 gate 存在的理由（「gate 自己沒被跑到」）在 gate 內部復刻一次。已另開 issue #828。
-
-本檔因此**不 import 也不移植** `repo-lint.py`，改問 Odoo 已經載好的 class 物件——
+本檔因此**不 import 也不移植** `repo-lint.py`：靜態 check 的 repo-layout 前置條件與
+runtime addon layout 不同；本檔改問 Odoo 已經載好的 class 物件——
 `issubclass()` / `hasattr()` / `getattr()` 就是 loader 與 `TagsSelector` 自己在做的事，
 不需要任何路徑推導，也不需要維護一份會漂移的基底名清單。
 

@@ -43,12 +43,14 @@ class。本 repo 已經實現過一次：``src/tests/test_reconcile_delete_gate.
 """
 import contextlib
 import importlib.util
+import io
 import os
 import pathlib
 import shutil
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 _GATE_PATH = pathlib.Path(__file__).with_name("repo-lint.py")
 _spec = importlib.util.spec_from_file_location("repo_lint_collectability_ut", _GATE_PATH)
@@ -301,15 +303,16 @@ def joined(violations):
 # ------------------------------------------------------- 陽性對照（綠的前提）
 
 class TestBaselineIsGreen(unittest.TestCase):
-    """一棵乾淨的合成樹必須是綠的。一條恆紅的 gate 通不過這裡。"""
+    """合法 repo root 與合成 addon layout 必須是綠的。一條恆紅的 gate 通不過這裡。"""
 
-    def test_clean_tree_is_green(self):
+    def test_valid_addon_layout_is_green(self):
+        """repo layout：addon source tree 位於 `<root>/src/`。"""
         with patched_baseline({}), tree() as fx:
             self.assertEqual(fx.collection(), [])
             self.assertEqual(fx.execution(), [])
 
-    def test_real_repo_is_green(self):
-        """真 repo（含既有 baseline）必須是綠的——否則 `--all` 永遠紅。"""
+    def test_valid_repo_root_is_green(self):
+        """真 repo root（含既有 baseline）必須是綠的——否則 `--all` 永遠紅。"""
         root = str(pathlib.Path(__file__).resolve().parents[2])
         self.assertEqual(rl.check_test_module_collection(root), [])
         self.assertEqual(rl.check_test_class_execution(root), [])
@@ -570,14 +573,53 @@ class TestProbeFailuresAreBlocked(unittest.TestCase):
             self.assertIn("parse 失敗", joined(fx.collection()))
             self.assertIn("parse 失敗", joined(fx.execution()))
 
-    def test_non_addon_root_is_skipped(self):
-        """沒有 src/__manifest__.py 的 root：本條沒有輸入，不得把乾淨的檔 block。"""
+    def test_wrong_root_fails_loud(self):
+        """缺 manifest 時兩條判準各自回一筆可歸因的 violation。"""
         d = tempfile.mkdtemp(prefix="test-collectability-noroot-")
         try:
-            self.assertEqual(rl.check_test_module_collection(d), [])
-            self.assertEqual(rl.check_test_class_execution(d), [])
+            collection = rl.check_test_module_collection(d)
+            execution = rl.check_test_class_execution(d)
+            self.assertEqual(len(collection), 1)
+            self.assertEqual(len(execution), 1)
+            for out in (collection[0], execution[0]):
+                self.assertIn("root/layout 前置條件不成立", out)
+                self.assertIn("src/__manifest__.py", out)
+                self.assertIn("不能解讀為零違規", out)
+                self.assertNotIn("掃不到任何", out)
+            self.assertIn("check_test_module_collection", collection[0])
+            self.assertIn("check_test_class_execution", execution[0])
+            self.assertNotEqual(collection[0], execution[0])
         finally:
             shutil.rmtree(d, ignore_errors=True)
+
+    def test_run_all_keeps_both_attributed_root_violations(self):
+        """aggregation 不去重：兩條 check 保留各自 wrong-root 訊息並 exit 1。"""
+        target_checks = {
+            "check_test_module_collection",
+            "check_test_class_execution",
+        }
+        check_names = {
+            name
+            for names in rl.REPO_LINT_RULES.values()
+            for name in names
+        }
+        with tempfile.TemporaryDirectory(
+                prefix="test-collectability-run-all-") as d:
+            with contextlib.ExitStack() as stack:
+                stack.enter_context(mock.patch.object(
+                    rl, "repo_lint_registry_floor", return_value=[]))
+                for name in sorted(check_names - target_checks):
+                    stack.enter_context(mock.patch.object(
+                        rl, name, return_value=[]))
+                output = io.StringIO()
+                with contextlib.redirect_stdout(output):
+                    exit_code = rl.run_all(d)
+
+        text = output.getvalue()
+        self.assertEqual(exit_code, 1, text)
+        self.assertIn("repo-lint：2 個違規", text)
+        self.assertEqual(text.count("check_test_module_collection"), 1)
+        self.assertEqual(text.count("check_test_class_execution"), 1)
 
 
 # ------------------------------- 🔴 第 3 態：認不得的基底要點名，不猜

@@ -868,6 +868,10 @@ class TestAssembleDeployValues411(TransactionCase):
         self.Service = self.env['woow_paas_platform.cloud_service']
         self.Template = self.env['woow_paas_platform.cloud_app_template']
         self.Workspace = self.env['woow_paas_platform.workspace']
+        # #804：sandbox 會 seed 自己的 paas_domain；本測試主動覆寫成固定、
+        # 非 production 預設值，expected 則刻意保留獨立字面量以避免同源假綠。
+        self.env['ir.config_parameter'].sudo().set_param(
+            'woow_paas_platform.paas_domain', 'issue-804.invalid')
         self.workspace = self.Workspace.create({'name': '411 WS'})
         # open-design template：一次涵蓋全部 4 個 injector（storage_class /
         # image_pull_secrets 對所有 slug 生效；allowed_origins / apiserver_cidrs
@@ -915,7 +919,7 @@ class TestAssembleDeployValues411(TransactionCase):
         # 4. allowed_origins injector（open-design → config.allowedOrigins），
         #    與 base 的 config.existingUserKey 共存於同一 config 子樹
         self.assertEqual(
-            values['config']['allowedOrigins'], 'https://sub.woowtech.io')
+            values['config']['allowedOrigins'], 'https://sub.issue-804.invalid')
         self.assertEqual(values['config']['existingUserKey'], 'keep')
         # 5. apiserver_cidrs injector（open-design → networkPolicy.apiServerCidrs）
         self.assertEqual(
