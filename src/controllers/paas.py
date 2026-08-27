@@ -1282,10 +1282,10 @@ class PaasController(HiddenChainMixin, Controller):
             # 是認證失敗（預設訊息 "Access Denied" 雖無害，但它可帶自訂訊息，且
             # 「登入憑證錯誤」本來就不該被包裝成本端點的業務回應）。
             #
-            # ⚠ 兩處參照實作（`_create_service` / `api_service_skip_trial`）目前
-            # 只擋 `AccessError`，`MissingError` 與 `AccessDenied` 仍走原文分支。
-            # 收斂那兩處屬既有已發版程式碼的改動，另開 follow-up（#567）追，
-            # 不夾帶在本 PR。
+            # #567 已將兩處參照實作（`_create_service` /
+            # `api_service_skip_trial`）收斂為完整 technical triplet：
+            # `AccessDenied` / `AccessError` / `MissingError` 統一轉泛用訊息；
+            # `ValidationError` 與 business `UserError` 仍保留原文。
             _logger.error(
                 "ORM error estimating skip-trial for service %s: %s\n%s",
                 service_id, e, traceback.format_exc(),
@@ -1389,9 +1389,8 @@ class PaasController(HiddenChainMixin, Controller):
             # `action_post` 上送外部電子發票 API，本 PR 未查證。
             raise
 
-        except AccessError as e:
-            # AccessError 繼承 UserError，但訊息帶 Odoo 內部 model／欄位技術名，
-            # 不是「講給租戶聽」的業務規則 → 與未預期例外同樣只回泛用訊息（#520）。
+        except (AccessDenied, AccessError, MissingError) as e:
+            # 權限／ORM 技術例外不是講給租戶看的業務規則，細節只留 server log。
             _logger.error(
                 "Access error skipping trial for service %s: %s\n%s",
                 service_id, e, traceback.format_exc(),
@@ -1509,16 +1508,36 @@ class PaasController(HiddenChainMixin, Controller):
                 return {'success': False, 'error': _('Permission denied')}
             try:
                 service._check_operation_allowed(operation='write')
-            except Exception as e:
+            except OperationalError:
+                raise
+            except (AccessDenied, AccessError, MissingError) as e:
+                _logger.exception("Access error checking service update: %s", e)
+                return {'success': False,
+                        'error': _('An error occurred while updating the service.')}
+            except (ValidationError, UserError) as e:
                 return {'success': False, 'error': str(e)}
+            except Exception as e:
+                _logger.exception("Error checking service update: %s", e)
+                return {'success': False,
+                        'error': _('An error occurred while updating the service.')}
             return self._update_service(service, values, version, odoo_addon_ids)
         elif action == 'delete':
             if access.role not in [ROLE_OWNER, ROLE_ADMIN]:
                 return {'success': False, 'error': _('Permission denied')}
             try:
                 service._check_operation_allowed(operation='write')
-            except Exception as e:
+            except OperationalError:
+                raise
+            except (AccessDenied, AccessError, MissingError) as e:
+                _logger.exception("Access error checking service deletion: %s", e)
+                return {'success': False,
+                        'error': _('An error occurred while deleting the service.')}
+            except (ValidationError, UserError) as e:
                 return {'success': False, 'error': str(e)}
+            except Exception as e:
+                _logger.exception("Error checking service deletion: %s", e)
+                return {'success': False,
+                        'error': _('An error occurred while deleting the service.')}
             return self._delete_service(service)
         else:
             return {'success': False, 'error': _('Unknown action: %(action)s', action=action)}
@@ -1576,8 +1595,18 @@ class PaasController(HiddenChainMixin, Controller):
         # 一層擋狀態。
         try:
             service._check_operation_allowed(operation='write')
-        except Exception as e:
+        except OperationalError:
+            raise
+        except (AccessDenied, AccessError, MissingError) as e:
+            _logger.exception("Access error checking service rollback: %s", e)
+            return {'success': False,
+                    'error': _('An error occurred while rolling back the service.')}
+        except (ValidationError, UserError) as e:
             return {'success': False, 'error': str(e)}
+        except Exception as e:
+            _logger.exception("Error checking service rollback: %s", e)
+            return {'success': False,
+                    'error': _('An error occurred while rolling back the service.')}
 
         return self._rollback_service(service, revision)
 
@@ -1827,8 +1856,22 @@ class PaasController(HiddenChainMixin, Controller):
                           'error': _('Insufficient permissions')}
         try:
             service._check_operation_allowed(operation='write')
-        except Exception as e:
+        except OperationalError:
+            raise
+        except (AccessDenied, AccessError, MissingError) as e:
+            _logger.exception("Access error checking service management: %s", e)
+            return None, {
+                'success': False,
+                'error': _('An error occurred while accessing the service.'),
+            }
+        except (ValidationError, UserError) as e:
             return None, {'success': False, 'error': str(e)}
+        except Exception as e:
+            _logger.exception("Error checking service management: %s", e)
+            return None, {
+                'success': False,
+                'error': _('An error occurred while accessing the service.'),
+            }
         return service, None
 
     @route("/api/workspaces/<int:workspace_id>/services/<int:service_id>/access-config",
@@ -3520,9 +3563,8 @@ class PaasController(HiddenChainMixin, Controller):
             #    徹底解要把寄信移出交易＝動第三方 addon（sh_subscription），不在本 PR
             #    範圍。窗口已由「把可失敗步驟前移到建訂閱之前」縮到最小。
             raise
-        except AccessError as e:
-            # AccessError 繼承 UserError，但訊息帶 Odoo 內部 model／欄位技術名，
-            # 不是「講給租戶聽」的業務規則 → 與未預期例外同樣只回泛用訊息。
+        except (AccessDenied, AccessError, MissingError) as e:
+            # 權限／ORM 技術例外不是講給租戶看的業務規則，細節只留 server log。
             request.env.cr.rollback()
             _logger.error("Access error creating service: %s\n%s", str(e), traceback.format_exc())
             return {'success': False, 'error': _('An error occurred while creating the service.')}
