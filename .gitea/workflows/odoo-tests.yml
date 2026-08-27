@@ -32,8 +32,17 @@ env:
   ODOO_BIN: /opt/bitnami/odoo/bin/odoo
   ADDONS_PATH: /opt/bitnami/odoo/lib/odoo/addons,/opt/bitnami/odoo/custom-addons
   MODULE_DIR: /opt/bitnami/odoo/custom-addons/woow_paas_platform
-  # 沒注入這個變數，TestNamespaceLeftSetUnion 會 fail-closed raise ⇒ 基準憑空多 2E。
-  AGENT_RUNTIME_NAMESPACE_SECRET: ci-full-suite
+  # 🔴 這裡**刻意不再注入** AGENT_RUNTIME_NAMESPACE_SECRET（#935）。
+  #
+  # 它原本存在的理由是「沒注入，TestNamespaceLeftSetUnion 會 fail-closed raise
+  # ⇒ 基準憑空多 2E」。#853（PR #931）已經讓那兩個 fixture 自己用
+  # `patch.dict(os.environ, ...)` 包住 `agent_session.create()`；`src/tests/`
+  # 底下全部 10 個 create 點都各自 scope 了自己的 env（逐點清單見 #935）。
+  #
+  # ⛔ 別「順手補回來」：ambient 變數一旦存在，CI 綠燈就**分不出**「fixture 的
+  #   patch.dict scope 寫對了」和「ambient 變數救了它」——而「測試不依賴環境」
+  #   正是 #853 要守的性質，沒有這個空白它永遠量不到。真的有新測試撞
+  #   fail-closed raise，正解是替那個 fixture 補 patch.dict，不是把這行加回來。
 
 jobs:
   full-suite:
@@ -71,8 +80,8 @@ jobs:
           # 代價是沒有 embedded DNS，所以用 IP 連 postgres。
           docker run -d --name pg -e POSTGRES_USER=odoo -e POSTGRES_PASSWORD=odoo \
             -e POSTGRES_DB=postgres postgres:15
+          # ⛔ 刻意不帶 -e AGENT_RUNTIME_NAMESPACE_SECRET（#935，理由見檔頭 env 段）。
           docker run -d --name odoo \
-            -e AGENT_RUNTIME_NAMESPACE_SECRET="${AGENT_RUNTIME_NAMESPACE_SECRET}" \
             --entrypoint bash "$IMG" -c 'sleep infinity'
           for i in $(seq 1 60); do
             docker exec pg pg_isready -U odoo >/dev/null 2>&1 && break

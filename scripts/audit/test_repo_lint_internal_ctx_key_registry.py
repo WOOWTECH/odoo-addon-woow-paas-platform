@@ -613,12 +613,25 @@ class TestProbeFailuresAreBlocked(unittest.TestCase):
         self.assertTrue(violations, "parse 失敗卻當成無事")
         self.assertIn("broken.py", _joined(violations))
 
-    def test_non_addon_root_has_no_input(self):
-        """不是本 addon 的 root（沒有 manifest）＝本條沒有輸入，不得誤擋。"""
+    def test_wrong_root_fails_loud(self):
+        """缺 manifest 時 fail-loud，不得把錯誤版面解讀為零違規（#936）。
+
+        本條是**否定性**判準（「全 repo 都不准出現未登記的 truthy 閘」），綠燈
+        本來就長成空清單 ⇒ wrong root 回空清單與「這棵樹很乾淨」完全不可區分。
+        #828 對 test-collectability 的兩條修過同一格，這裡是同族的第三條。
+        """
         tmp = tempfile.mkdtemp(prefix="ctx-key-registry-noroot-")
         try:
             with _patched_registry(_REGISTRY_OK):
-                self.assertEqual(rl.check_internal_ctx_key_registry(tmp), [])
+                violations = rl.check_internal_ctx_key_registry(tmp)
+            self.assertEqual(len(violations), 1, violations)
+            out = violations[0]
+            self.assertIn("root/layout 前置條件不成立", out)
+            self.assertIn("src/__manifest__.py", out)
+            self.assertIn("不能解讀為零違規", out)
+            # 歸因要指到**這一條**，不是泛稱：兩條 check 同時撞 wrong root 時，
+            # 訊息一樣就會被誤讀成「同一件事報了兩次」而被去重掉。
+            self.assertIn("check_internal_ctx_key_registry", out)
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
