@@ -9,6 +9,10 @@ import logging
 from typing import Any
 
 from odoo.http import request, route, Controller
+from odoo.exceptions import (
+    AccessDenied, AccessError, MissingError, UserError, ValidationError,
+)
+from psycopg2 import OperationalError
 
 from ..models.smart_home import _platform_order
 from ..models.workspace_access import ROLE_OWNER, ROLE_ADMIN
@@ -124,12 +128,33 @@ class SmartHomeController(Controller):
         if action == "refresh_status":
             return self._refresh_status(smarthome)
 
+        if action == "delete":
+            try:
+                smarthome._check_operation_allowed(operation='write')
+            except OperationalError:
+                raise
+            except (AccessDenied, AccessError, MissingError) as e:
+                _logger.exception(
+                    "Access error checking smart home deletion: %s", e,
+                )
+                return {
+                    "success": False,
+                    "error": _("Failed to delete smart home. Please try again."),
+                }
+            except (ValidationError, UserError) as e:
+                return {"success": False, "error": str(e)}
+            except Exception as e:
+                _logger.exception("Error checking smart home deletion: %s", e)
+                return {
+                    "success": False,
+                    "error": _("Failed to delete smart home. Please try again."),
+                }
+            return self._delete_smarthome(smarthome)
+
         try:
             smarthome._check_operation_allowed(operation='write')
         except Exception as e:
             return {"success": False, "error": str(e)}
-        if action == "delete":
-            return self._delete_smarthome(smarthome)
         return self._provision_smarthome(smarthome)
 
     @route(
@@ -851,9 +876,22 @@ class SmartHomeController(Controller):
         try:
             smarthome.action_delete()
             return {"success": True, "data": {"message": _("Smart home deleted")}}
-        except Exception as e:
-            _logger.error("Failed to delete smart home: %s", e)
+        except OperationalError:
+            raise
+        except (AccessDenied, AccessError, MissingError) as e:
+            _logger.exception("Access error deleting smart home: %s", e)
+            return {
+                "success": False,
+                "error": _("Failed to delete smart home. Please try again."),
+            }
+        except (ValidationError, UserError) as e:
             return {"success": False, "error": str(e)}
+        except Exception as e:
+            _logger.exception("Failed to delete smart home: %s", e)
+            return {
+                "success": False,
+                "error": _("Failed to delete smart home. Please try again."),
+            }
 
     def _provision_smarthome(self, smarthome) -> dict[str, Any]:
         """Provision a smart home tunnel.

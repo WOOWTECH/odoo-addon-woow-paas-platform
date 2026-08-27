@@ -268,6 +268,8 @@ from . import test_subscription_mixin_cascade_sudo_29
 from . import test_low_balance_dedup_retry_389
 # fix: #520 generic create 吞掉業務例外 → 被拒絕的服務仍留在 DB 並被 cron 部署
 from . import test_create_service_validation_rollback_520
+# fix: #567 Phase A PaaS controller technical exception 原文外洩
+from . import test_paas_controller_error_taxonomy_567
 # fix: #352 allow 型 Access 政策的 include 不得整批放行（email_domain/everyone）
 from . import test_allow_policy_bulk_grant_352
 # fix: #521 第 1 層 ac_max_access_seats enforcement（1-A 清單基準，跨訂閱去重）
@@ -309,6 +311,8 @@ from . import test_seed_chart_version_pin_552
 from . import test_chart_pin_fail_closed_552
 # fix: #553 skip-trial-estimate 回傳例外原文 → 外洩 Odoo 內部 model／欄位技術名
 from . import test_skip_trial_estimate_error_leak_553
+# fix: #860 Smart Home delete technical exception 原文外洩
+from . import test_smarthome_delete_error_taxonomy_860
 # fix: #525 B3 reset-admin-password 在提交點之後失敗被回報成「重設失敗」→
 # 已生效的一次性明文密碼永久遺失（此處**不得**補 rollback，理由見該檔開頭）
 from . import test_reset_admin_password_post_commit_525b3
