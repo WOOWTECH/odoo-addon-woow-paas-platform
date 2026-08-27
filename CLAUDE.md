@@ -357,6 +357,10 @@ superpowers 的長期價值產出，透過 `/docs:promote` 升級到 `docs/` 主
 
 Issues 在 Gitea（git-prod.woowtech.io / odoo-addons/woow_paas_platform），一律用 `tea` CLI 操作；`gh-origin` 僅為 mirror。見 `docs/agents/issue-tracker.md`。
 
+### Triage labels
+
+採用五個預設 canonical triage labels：`needs-triage`、`needs-info`、`ready-for-agent`、`ready-for-human`、`wontfix`。見 `docs/agents/triage-labels.md`。
+
 ### Domain docs
 
 單一 context：根目錄 `CONTEXT.md`＝純 glossary；ADR 級決策寫 `docs/decisions/`（不用 `docs/adr/`）。見 `docs/agents/domain.md`。
