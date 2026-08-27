@@ -4901,10 +4901,13 @@ def check_internal_ctx_key_registry(root):
     依據 docs/decisions/519-cloud-service-provision-gate.md
     """
     violations = []
-    if not _addon_source_tree_present(root):
-        return violations          # 不是本 addon 的 root，本條沒有輸入（見上方註解）
-
     ref = "見 %s 與 #536／#787／#788" % INTERNAL_CTX_KEY_DOC
+    if not _addon_source_tree_present(root):
+        # #936：本條是否定性判準（「全 repo 都不准出現未登記的 truthy 閘」），
+        # wrong root 回空清單會與「零違規」不可區分——理由見 _wrong_root_violation。
+        return _wrong_root_result(
+            "internal-ctx-key-registry", "check_internal_ctx_key_registry", ref)
+
     self_rel = REPO_LINT_SELF_REL
 
     for problem in _internal_ctx_key_registry_shape():
@@ -5117,6 +5120,51 @@ def _addon_source_tree_present(root):
     return os.path.exists(os.path.join(root, _ADDON_MANIFEST_REL))
 
 
+WRONG_ROOT_VIOLATION = (
+    "`%s`／`%s`：root/layout 前置條件不成立：找不到 `%s`。本條判準必須以 repo "
+    "root 呼叫；缺 addon source tree 不能解讀為零違規（#828／#936；%s）")
+
+#: `run_hook()` 期間為 True。這是 `run_all` 與 hook 之間**唯一**刻意的行為差異，
+#: 集中在這一個旗標上，不散在六個 check 裡（#936）。
+#:
+#: 🔴 為什麼 hook 模式在 wrong root 上要回空清單，而 `run_all` 要 fail-loud：
+#:   兩者的契約不同。`run_all` 說的是「我稽核完這棵樹，這是全部的違規」——root
+#:   不對時那句話是假的，必須大聲。hook 說的是「你剛才這次編輯有沒有問題」——
+#:   root 不對時它對這次編輯確實沒有話說，攔下來只是噪音，而且會擋住任何在非
+#:   addon 樹上的正當編輯（合成 root 的端對端測試就是這種樹）。
+#:
+#: ⛔ 別把「hook 也 fail-loud」當成更嚴格而改掉：實測過，那會讓 repo-lint 自己的
+#:   兩支 hook 端對端測試（TestHookMode）紅在與被測 gate 無關的理由上，而且
+#:   「補一個 src/__manifest__.py 讓合成 root 看起來像 addon」**更糟**——那棵樹
+#:   會通過 root 判準然後在「找不到 src/models/cloud_service.py」「allowlist 全是
+#:   殭屍條目」上炸開。權威訊號在 CI 的 `--all`，那一側現在是 loud 的。
+_HOOK_MODE = False
+
+
+def _wrong_root_result(rule_name, check_name, ref):
+    """wrong root 時該回什麼：`run_all` ⇒ 一筆可歸因的 violation；hook ⇒ 空清單。"""
+    if _HOOK_MODE:
+        return []
+    return [_wrong_root_violation(rule_name, check_name, ref)]
+
+
+def _wrong_root_violation(rule_name, check_name, ref):
+    """回傳可歸因到**單一** check 的 wrong-root violation。
+
+    🔴 為什麼**否定性**判準不能在 wrong root 上 fail-open：這一類 check 問的是
+    「全 repo 都不准出現 X」「allowlist 有沒有養殭屍條目」「兩端形狀一不一致」，
+    它們的綠燈本來就長成「空清單」。root 不對時回空清單，輸出與「這棵樹很乾淨」
+    **完全不可區分**——gate 寫好了、跑了、回綠了，而它一格都沒走到（#828 的實證：
+    同一份逐位元相同的 probe 檔，放進有／沒有 `src/` 的兩棵樹，得到 1 條違規 vs
+    0 條違規）。
+
+    ⛔ 每個呼叫點各自傳自己的 `check_name`：兩條 check 同時撞 wrong root 時要能
+    分別歸因，訊息一樣就會被誤讀成「同一件事報了兩次」而被去重掉（#936）。
+    """
+    return WRONG_ROOT_VIOLATION % (
+        rule_name, check_name, _ADDON_MANIFEST_REL, ref)
+
+
 PROVISION_SENTINEL_DOC = "docs/decisions/519-cloud-service-provision-gate.md"
 PROVISION_SENTINEL_DEF = "src/models/cloud_service.py"
 # 開閘符號**只准**出現在這些檔（外加 src/tests/ 整個目錄）。新增一條開閘路徑就會
@@ -5157,7 +5205,11 @@ def check_provision_sentinel_allowlist(root, only_file=None):
     """
     violations = []
     if not _addon_source_tree_present(root):
-        return violations          # 不是本 addon 的 root，本條沒有輸入（見上方註解）
+        # #936：本條是否定性判準（allowlist 外不准出現 sentinel ＋ allowlist 有沒有
+        # 養殭屍條目），wrong root 回空清單會與「零違規」不可區分。
+        return _wrong_root_result(
+            "provision-sentinel-allowlist", "check_provision_sentinel_allowlist",
+            "見 %s 與 #519" % PROVISION_SENTINEL_DOC)
     # (a) 陽性對照：定義檔必須真的有這些符號。沒有＝符號被改名／被刪，下面的掃描
     #     會一個都掃不到而恆綠——那是「探針壞掉時輸出與沒問題一模一樣」的形態。
     def_src = _read_repo_file(root, PROVISION_SENTINEL_DEF)
@@ -5238,10 +5290,13 @@ def check_sh_subscription_group_isolation(root, only_file=None):
     """
     violations = []
     if not _addon_source_tree_present(root):
-        # 同第 26 條：不是本 addon 的 root，本條沒有輸入。今天的分派條件
-        # （`rel.startswith("src/")`）剛好踩不到 TestHookMode 的合成 root，但那是
-        # 巧合不是設計——同一個陷阱擺著就會有人踩。
-        return violations
+        # #936：本條是否定性判準（「全 repo 都不准出現那兩個群組名」＋一個存在性
+        # 對照），wrong root 回空清單會與「零違規」不可區分。原註解說「今天的分派
+        # 條件剛好踩不到合成 root，但那是巧合不是設計」——本次就是把那個巧合拆掉。
+        return _wrong_root_result(
+            "sh-subscription-group-isolation",
+            "check_sh_subscription_group_isolation",
+            "見 %s 與 #519 提案 B" % PROVISION_SENTINEL_DOC)
     exts = (".xml", ".csv", ".py")
     if only_file:
         files = [only_file]
@@ -6141,6 +6196,8 @@ def update_baseline(root):
 
 
 def run_hook():
+    global _HOOK_MODE
+    _HOOK_MODE = True          # #936：wrong root 的分流，理由見該旗標的註解
     try:
         payload = json.load(sys.stdin)
         file_path = (payload.get("tool_input") or {}).get("file_path") or ""
@@ -6848,10 +6905,13 @@ def check_tunnel_config_wire_shape(root):
       * 只守這**一條** wire。同 router 其他端點的形狀不在管轄內。
     """
     violations = []
-    if not _addon_source_tree_present(root):
-        return violations          # 不是本 addon 的 root，本條沒有輸入
-
     ref = TUNNEL_CONFIG_REF
+    if not _addon_source_tree_present(root):
+        # #936：本條是否定性判準（operator 宣告 ↔ 平台 client 兩端形狀一致），
+        # wrong root 回空清單會與「零違規」不可區分。
+        return _wrong_root_result(
+            "tunnel-config-wire-shape", "check_tunnel_config_wire_shape", ref)
+
     self_rel = REPO_LINT_SELF_REL
 
     for problem in _tunnel_wire_selftest():
@@ -6950,15 +7010,14 @@ TEST_COLLECTABILITY_REF = (
     "跑 Odoo test-tags ⇒ 這支靜態 gate 是「測試沒被收集／沒被執行」唯一的訊號")
 TEST_SUITE_DIR_REL = "src/tests"
 TEST_SUITE_PKG_REL = "src/tests/__init__.py"
-TEST_COLLECTABILITY_ROOT_VIOLATION = (
-    "`test-collectability`／`%s`：root/layout 前置條件不成立：找不到 "
-    "`src/__manifest__.py`。這兩條判準必須以 repo root 呼叫；缺 addon source tree "
-    "不能解讀為零違規（#828；%s）")
+def _test_collectability_root_result(check_name):
+    """test-collectability 兩條的 wrong-root 回傳值。
 
-
-def _test_collectability_root_violation(check_name):
-    """回傳可歸因到單一 check 的 wrong-root violation。"""
-    return TEST_COLLECTABILITY_ROOT_VIOLATION % (check_name, TEST_COLLECTABILITY_REF)
+    #936：訊息本體與 hook/all 的分流都改走共用的 `_wrong_root_result()`——#828 修
+    的是這兩條，但同一個形狀還住在另外四條否定性判準裡，各寫一份必然漂移。
+    """
+    return _wrong_root_result(
+        "test-collectability", check_name, TEST_COLLECTABILITY_REF)
 
 #: 自家 addon 的絕對 import 前綴。`from odoo.addons.woow_paas_platform.tests.X import Y`
 #: 指的是**本樹自己的檔**，不是 Odoo 核心的測試基底——不還原它，那條 import 的模組路徑
@@ -7471,8 +7530,8 @@ def check_test_module_collection(root):
     violations = []
     if not _addon_source_tree_present(root):
         # #828：這兩條判準都是否定性的；wrong root 回空清單會與「零違規」不可區分。
-        return [_test_collectability_root_violation(
-            "check_test_module_collection")]
+        return _test_collectability_root_result(
+            "check_test_module_collection")
     facts = _test_tree_facts(root)
     for rel, exc in facts["parse_errors"]:
         violations.append(
@@ -7605,8 +7664,8 @@ def check_test_class_execution(root):
     violations = []
     if not _addon_source_tree_present(root):
         # #828：這兩條判準都是否定性的；wrong root 回空清單會與「零違規」不可區分。
-        return [_test_collectability_root_violation(
-            "check_test_class_execution")]
+        return _test_collectability_root_result(
+            "check_test_class_execution")
     facts = _test_tree_facts(root)
     for rel, exc in facts["parse_errors"]:
         violations.append(

@@ -40,24 +40,52 @@ def _normalised_visible_text(node):
     return ' '.join(''.join(node.itertext()).split())
 
 
-def _no_service_option(root):
-    """Return AC #22's first cloud-service ``option``, if it is unbound."""
+def _cloud_service_select(root):
+    """AC #22 的 ``<select>`` 本體——**版面**前置條件，與內容判準分開拿。"""
     for select in root.iter('select'):
-        if select.get('id') != 'project_cloud_service':
-            continue
-        children = list(select)
-        if not children or children[0].tag != 'option':
-            return None
-        option = children[0]
-        label = _normalised_visible_text(option).casefold()
-        if (option.get('value') == ''
-                and ('no service' in label or 'unbound' in label)):
-            return option
+        if select.get('id') == 'project_cloud_service':
+            return select
     return None
 
 
+def _is_no_service_option(node):
+    """🔴 AC #22 的**內容**判準：空值 ＋ 可見文字指名 No service／Unbound。
+
+    ⛔ 刻意與版面判準（「它是不是第一個 child」）分成兩個函式，因為合在一起
+    時它們**不可能同時被觀測到**：拿掉節點，版面判準先短路 return，內容判準
+    一次都不會執行。#931 的 mutation proof 正是這樣通過的——刪掉 option 之後
+    ``children[0]`` 變成 ``<t t-foreach>``，斷言在 ``tag != 'option'`` 就回
+    None，它宣稱在驗的 value/label 兩格從頭到尾沒跑（#932）。
+    """
+    if node.tag != 'option' or node.get('value') != '':
+        return False
+    label = _normalised_visible_text(node).casefold()
+    return 'no service' in label or 'unbound' in label
+
+
+def _no_service_option(root):
+    """Return AC #22's first cloud-service ``option``, if it is unbound.
+
+    ⚠ ``children[0]`` 是刻意的位置耦合：AC #22 的原文就是「first option」，
+    未綁定必須是預設落點。代價是一次無害的 template 重排（把 ``t-foreach``
+    搬上去）也會轉紅——要放寬得先改 AC，不要在這裡偷鬆（#932 (C)）。
+    """
+    select = _cloud_service_select(root)
+    if select is None:
+        return None
+    children = list(select)
+    if not children:
+        return None
+    return children[0] if _is_no_service_option(children[0]) else None
+
+
 def _unbound_badge(root):
-    """Return AC #24's badge container and visible label, if present."""
+    """Return AC #24's badge container and visible label, if present.
+
+    ``t-else`` 是判準的一部分、不是多餘的耦合：badge 必須落在 **fallback**
+    分支，綁定專案不得顯示 Unbound。反向對照見
+    ``test_ac24_guard_rejects_the_bound_branch``。
+    """
     required_classes = {
         'o_woow_sp_card_workspace',
         'o_woow_sp_card_unbound',
@@ -66,6 +94,11 @@ def _unbound_badge(root):
         classes = set((container.get('class') or '').split())
         if (required_classes.issubset(classes)
                 and 't-else' in container.attrib):
+            # ⚠ 遞迴（``iter``）是刻意的——AC 要的是「badge 裡有可見文字」，
+            #   包一層排版 div 不該讓守線失效。⛔ 但正因為它遞迴，呼叫端**不得**
+            #   假設 label 是 container 的直接子節點：#931 的 mutation proof 用
+            #   ``container.remove(label)``，包一層就會丟 ValueError ⇒ 測試 ERROR
+            #   而不是紅或綠（#932）。變異一律改可見文字，不動樹狀結構。
             for label in container.iter('span'):
                 if _normalised_visible_text(label).casefold() == 'unbound':
                     return container, label
@@ -171,12 +204,38 @@ class TestCreateProjectModal(TransactionCase):
             "whose visible label identifies 'No service' / 'Unbound'",
         )
 
-        # Mutation proof: keep comments/identifiers, remove only the visible node.
-        parent = next(node for node in root.iter() if option in list(node))
-        parent.remove(option)
+        # 🔴 Mutation proof：只清掉**可見文字**，節點、value=""、位置全部原樣。
+        # #931 的版本改成刪整個節點，於是 `children[0]` 的版面判準先短路——它
+        # 宣稱在驗的 value/label 兩格一次都沒跑到（#932）。清文字是唯一能逼
+        # 斷言走完內容判準的變異：版面判準此時仍然成立。
+        option.text = ''
+        self.assertFalse(
+            _is_no_service_option(option),
+            "AC #22 guard 必須在可見文字被清掉後轉紅——option 節點與 value='' "
+            "都還在，此時仍判定通過代表它根本沒讀可見文字",
+        )
         self.assertIsNone(
             _no_service_option(root),
-            "AC #22 guard must turn red after the visible option is removed",
+            "AC #22 guard must turn red after the visible label is removed",
+        )
+
+    def test_ac22_guard_rejects_comment_and_class_only(self):
+        """🔴 陽性對照：字樣只出現在 comment／CSS class／識別字時必須不通過。
+
+        #931 換掉的舊版是「JS+XML 合併後找子字串」，下面這棵合成樹會讓它綠。
+        沒有這一條，上面那支測的可能只是「今天的檔剛好長這樣」。
+        """
+        decoy = ET.fromstring(
+            '<templates>'
+            '<select id="project_cloud_service" class="no-service unbound">'
+            '<!-- No service / Unbound project -->'
+            '<option value="1" t-esc="svc.name"/>'
+            '</select>'
+            '</templates>'
+        )
+        self.assertIsNone(
+            _no_service_option(decoy),
+            "AC #22 guard 不得被 comment／CSS class／識別字滿足",
         )
 
     def test_ac23_modal_removes_has_project_filter(self):
@@ -236,13 +295,75 @@ class TestProjectsListBadge(TransactionCase):
             "inside the unbound fallback badge",
         )
 
-        # Mutation proof: leave the CSS class/comment, remove only visible text.
-        container, label = badge
-        container.remove(label)
+        # 🔴 Mutation proof：清可見文字，**不動樹狀結構**。CSS class、t-else、
+        # span 節點全部留著，唯一消失的就是使用者看得到的那幾個字。
+        # #931 的版本用 container.remove(label)，但 label 是遞迴找到的——
+        # badge 哪天包一層排版 div 就會丟 ValueError（見
+        # test_ac24_mutation_proof_survives_a_nested_label）（#932）。
+        _container, label = badge
+        label.text = ''
         self.assertIsNone(
             _unbound_badge(root),
             "AC #24 guard must turn red after the visible label is removed",
         )
+
+    def test_ac24_mutation_proof_survives_a_nested_label(self):
+        """回歸（#932）：label 被包一層時，helper 仍找得到且變異不得爆 ValueError。
+
+        這棵合成樹就是 #931 那版 mutation proof 的觸發條件：``iter('span')``
+        遞迴找得到深層 span，``container.remove(span)`` 卻只認直接子節點 ⇒
+        ``ValueError: list.remove(x): x not in list``，測試 ERROR 而不是紅或綠。
+        """
+        nested = ET.fromstring(
+            '<templates>'
+            '<div class="o_woow_sp_card_workspace o_woow_sp_card_unbound"'
+            ' t-else="">'
+            '<div class="row"><span>Unbound</span></div>'
+            '</div>'
+            '</templates>'
+        )
+        badge = _unbound_badge(nested)
+        self.assertIsNotNone(
+            badge, "包一層排版 div 不該讓 badge 守線失效")
+        _container, label = badge
+        label.text = ''
+        self.assertIsNone(
+            _unbound_badge(nested),
+            "巢狀版面下，清掉可見文字一樣要轉紅")
+
+    def test_ac24_guard_rejects_class_only_badge(self):
+        """🔴 陽性對照：只有 CSS class／comment 帶字樣時必須不通過。"""
+        decoy = ET.fromstring(
+            '<templates>'
+            '<div class="o_woow_sp_card_workspace o_woow_sp_card_unbound"'
+            ' t-else="">'
+            '<!-- Unbound -->'
+            '<span t-esc="project.workspace_name"/>'
+            '</div>'
+            '</templates>'
+        )
+        self.assertIsNone(
+            _unbound_badge(decoy),
+            "AC #24 guard 不得被 CSS class／comment 滿足")
+
+    def test_ac24_guard_rejects_the_bound_branch(self):
+        """🔴 陽性對照：``t-else`` 是判準的一部分——badge 必須在 fallback 分支。
+
+        這一條把「為什麼要求 t-else」變成被斷言的性質：同樣的 class ＋ 同樣的
+        可見文字，掛在 ``t-if`` 分支上代表**綁定專案也會看到 Unbound**，
+        那是真 bug，守線必須不通過。
+        """
+        bound_branch = ET.fromstring(
+            '<templates>'
+            '<div class="o_woow_sp_card_workspace o_woow_sp_card_unbound"'
+            ' t-if="project.cloud_service_name">'
+            '<span>Unbound</span>'
+            '</div>'
+            '</templates>'
+        )
+        self.assertIsNone(
+            _unbound_badge(bound_branch),
+            "badge 掛在 t-if 分支＝綁定專案也顯示 Unbound，守線必須紅")
 
 
 class TestTaskFormLinkedServicesPanel(TransactionCase):

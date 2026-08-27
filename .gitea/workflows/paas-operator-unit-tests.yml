@@ -3,11 +3,22 @@
 # 實測 655 passed / 45 deselected，約 25 秒；因此 PR 與 develop push 都執行，
 # 讓 operator regression 在合併前現形。integration 測試需要真 K8s，仍依
 # CLAUDE.md 的本機 integration recipe 執行，不納入這個普通 CI job。
+#
+# 🔴 這支要進 required 清單之前，**必須先刪掉下面兩份 paths-ignore**（#933）。
+#   判準與理由的權威出處是 .gitea/workflows/repo-lint.yml 的同一段（#538）：
+#   被過濾掉時該 context **不存在**——不是紅也不是綠——而 required 的判準是
+#   「context 存在且成功」⇒ 只動 docs/**、**.md、.claude/** 的 PR 會永遠湊不齊
+#   check、永遠不能 merge，而且症狀與「CI 還在跑」無法區分，重跑也救不回來
+#   （沒觸發就是沒觸發）。已按此判準改成無條件執行的先例：manifest-version-gate.yml。
+#
+#   ⚠ 這支現在是不是 required，**看 develop 分支保護的 status_check_contexts**
+#     ——那是權威來源，刻意不在此複述一個會過期的布林值。
 name: paas-operator-unit-tests
 
 on:
   pull_request:
     # 採 paths-ignore：漏列最多多跑一次，不會讓 operator 改動靜默失去測試。
+    # ⛔ 這句只在「非 required」的前提下成立——升 required 前的動作見檔頭 🔴。
     paths-ignore:
       - "docs/**"
       - "**.md"
