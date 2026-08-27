@@ -359,7 +359,7 @@ Issues 在 Gitea（git-prod.woowtech.io / odoo-addons/woow_paas_platform），�
 
 ### Triage labels
 
-採用五個預設 canonical triage labels：`needs-triage`、`needs-info`、`ready-for-agent`、`ready-for-human`、`wontfix`。見 `docs/agents/triage-labels.md`。
+採用五個預設 canonical triage labels，並以 `agent-context:local-cc`／`agent-context:remote-pi` 標記 agent execution context。見 `docs/agents/triage-labels.md`。
 
 ### Domain docs
 
