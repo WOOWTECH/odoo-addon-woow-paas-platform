@@ -605,6 +605,19 @@ class SubscriptionLifecycleMixin(models.AbstractModel):
             'ac_max_access_seats': (
                 sub.sh_subscription_plan_id.ac_max_access_seats
                 if sub.sh_subscription_plan_id else 0),
+            # #773：**已用**席數（與方案上限並列，前端才能在按下確認**之前**就標出
+            # 「這個方案裝不下」）。
+            #
+            # 🔴 欄位名刻意是 `ac_used_*` 而不是沿用 `ac_max_*` 家族的命名：上面那格的
+            # docstring 已警告過 `ac_max_*` 的語意是**方案上限**；用量若也叫 max 會被誤讀。
+            #
+            # 🔴 由後端算、⛔ 不讓前端自己數：detail payload 另有 `access.access_policies`
+            # 原始陣列，前端若拿它重算就得把「只計 email_list」「strip+lower 折疊」
+            # 「跨 policy 去重」整套規則在瀏覽器再實作一次 ＝ 長出**第三把尺**。
+            # 這裡直接走守衛與 gate 共用的那把（`_seat_usage_for_anchor`）。
+            'ac_used_access_seats': len(
+                self.env['woow_paas_platform.security_access_access_policy']
+                    ._seat_usage_for_anchor(self)),
             'is_trial': sub.sh_trial,
             'trial_end_date': sub.sh_trial_end_date.isoformat() if sub.sh_trial_end_date else None,
             'start_date': sub.sh_start_date.isoformat() if sub.sh_start_date else None,

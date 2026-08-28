@@ -45,16 +45,24 @@
         <t t-else="">
           <div class="o_woow_plan_selector__label">AC Seats:</div>
           <div class="o_woow_plan_selector__seat_options">
-            <div t-attf-class="o_woow_plan_seat {{ isSeatSelected(seatBase, null) ? 'o_woow_plan_seat--selected' : '' }}"
+            <!-- #773：裝不下目前用量的席位選項標一行警告（只標註、不 disable；
+                 權威攔截在後端 gate，見 PlanSelector.js::isSeatOverCurrentUsage）。 -->
+            <div t-attf-class="o_woow_plan_seat {{ isSeatSelected(seatBase, null) ? 'o_woow_plan_seat--selected' : '' }} {{ isSeatOverCurrentUsage(0) ? 'o_woow_plan_seat--over_usage' : '' }}"
                  t-on-click="() => this.onSeatSelect(seatBase, null)">
               <div class="o_woow_plan_seat__label">No extra seats</div>
               <div class="o_woow_plan_seat__delta">Included</div>
+              <div t-if="isSeatOverCurrentUsage(0)" class="o_woow_plan_seat__over_usage">
+                Delete all <t t-esc="props.usedSeats"/> listed email address(es) first
+              </div>
             </div>
             <t t-foreach="seatBase.variants" t-as="variant" t-key="variant.plan_id">
-              <div t-attf-class="o_woow_plan_seat {{ isSeatSelected(seatBase, variant) ? 'o_woow_plan_seat--selected' : '' }}"
+              <div t-attf-class="o_woow_plan_seat {{ isSeatSelected(seatBase, variant) ? 'o_woow_plan_seat--selected' : '' }} {{ isSeatOverCurrentUsage(variant.seats) ? 'o_woow_plan_seat--over_usage' : '' }}"
                    t-on-click="() => this.onSeatSelect(seatBase, variant)">
                 <div class="o_woow_plan_seat__label"><t t-esc="variant.seats"/> seat(s)</div>
                 <div class="o_woow_plan_seat__delta" t-esc="formatSeatDelta(seatBase, variant)"/>
+                <div t-if="isSeatOverCurrentUsage(variant.seats)" class="o_woow_plan_seat__over_usage">
+                  Currently using <t t-esc="props.usedSeats"/> — delete some first
+                </div>
               </div>
             </t>
           </div>

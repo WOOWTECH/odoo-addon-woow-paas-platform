@@ -132,6 +132,21 @@ export class ChangePlanModal extends Component {
     return !!this.props.service.subscription?.is_trial;
   }
 
+  /**
+   * #773：這台服務目前已列出的席位數（去重後的 email 位址數）。
+   *
+   * 🔴 值由後端算好放在 `_get_subscription_info()` 的 `ac_used_access_seats`，
+   * ⛔ 前端不自己數：payload 裡雖然另有 access_policies 原始陣列，但要從它算出席數
+   * 得把「只計 email_list」「strip+lower 折疊」「跨 policy 去重」整套規則在瀏覽器
+   * 重寫一次＝長出第三把尺，與後端 gate／寫入守衛必然漂移。
+   *
+   * 舊 payload（後端尚未升版）沒有這個 key ⇒ 退成 0，效果是「不標任何警告」，
+   * 換方案照樣由後端 gate 把關，不會誤擋。
+   */
+  get usedSeats() {
+    return this.props.service.subscription?.ac_used_access_seats || 0;
+  }
+
   get canConfirm() {
     return (
       !this.state.loadingPlans &&
