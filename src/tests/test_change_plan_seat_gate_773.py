@@ -33,6 +33,7 @@ import pathlib
 from odoo.exceptions import UserError, ValidationError
 from odoo.tests.common import TransactionCase
 
+from ..models.cloud_service import _internal_provision
 from .test_ac_access_seat_enforcement_521 import SEAT_MARKER, _SeatFixture
 
 # gate 的兩則訊息各自的 marker（⛔ 皆非 SEAT_MARKER 的子字串／超字串）
@@ -219,10 +220,17 @@ class TestSeatGateWizardWiring(_SeatFixture, TransactionCase):
             'helm_chart_version': '0.0.0',
             'is_active': True,
         })
-        svc = self.CS.create({
+        # 🔴 `CloudService.create()` 有 #524 的開通閘（ProvisionGateError）：
+        # 全 repo 只有平台開通流程建得了 cloud_service。測試要走同一個把手，
+        # ⛔ 不是繞過閘門——照 `test_cs_plan_gate_949.py::_svc_on` 的既有寫法。
+        svc = _internal_provision(self.CS).create({
             'name': 'Seat Gate CS',
             'workspace_id': self.workspace.id,
             'template_id': template.id,
+            'reference_id': 'test-773-seat-gate',
+            'state': 'running',
+            'subdomain': 'seat-gate-773',
+            'provision_partner_id': self.env.user.partner_id.id,
         })
         plan = self.env['sh.subscription.plan'].create({
             'name': 'CS Seat Plan %s' % seats,
