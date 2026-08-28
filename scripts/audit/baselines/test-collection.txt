@@ -221,6 +221,8 @@
 3	test_cs_access_sync_745.TestCsAccessTeardownPush
 5	test_cs_access_sync_745.TestPolicyAnchorDispatch
 3	test_cs_access_sync_745.TestReconcilerLeftSetCoversCs
+4	test_cs_plan_gate_949.TestChangePlanTemplateWhitelistGate
+4	test_cs_plan_gate_949.TestCreateServiceTemplateWhitelistGate
 2	test_cs_spec_332.TestAllocatedFromPlan
 2	test_cs_spec_332.TestCsSpecFields
 5	test_cs_spec_332.TestCsSpecSeed
