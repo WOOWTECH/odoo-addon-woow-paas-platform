@@ -32,9 +32,12 @@ class TestMcpAdminPassword(TransactionCase):
             'mcp_enabled': False,
             'has_admin_gui': True,
         })
-        # controller._create_service 要求 plan_id；上面兩個 template 都沒掛
-        # subscription_plan_ids，故 controller 不做歸屬檢查，借現成 seed plan 即可。
+        # controller._create_service 要求 plan_id，且會檢查該 plan 屬於這個
+        # template。#949 之前的閘有 fail-open（template 掛零個 plan ⇒ 整條檢查
+        # 被跳過），本檔因此曾經「不掛 plan 也借得到 seed plan」。閘修好之後
+        # 每個受測 template 都得把借用的 plan 真的掛上去——這也才是真實形態。
         self.plan = self.env.ref('woow_paas_platform.plan_mcp_odoo_monthly')
+        self.template.subscription_plan_ids = [(6, 0, self.plan.ids)]
         self.service = _internal_provision(self.env['woow_paas_platform.cloud_service'].with_context(
             mcp_admin_password='old-password',
         )).create({
@@ -586,6 +589,8 @@ class TestMcpAdminPassword(TransactionCase):
             'helm_chart_version': '0.1.5',
             'mcp_enabled': False,
             'has_admin_gui': True,
+            # #949：借用的 seed plan 要真的掛上（理由見 setUp）。
+            'subscription_plan_ids': [(6, 0, self.plan.ids)],
         })
         with self._patch_paas_request():
             result = self.controller._create_service(
@@ -626,6 +631,8 @@ class TestMcpAdminPassword(TransactionCase):
             'helm_chart_version': '0.1.5',
             'mcp_enabled': False,
             'has_admin_gui': False,      # 但沒有 admin GUI
+            # #949：借用的 seed plan 要真的掛上（理由見 setUp）。
+            'subscription_plan_ids': [(6, 0, self.plan.ids)],
         })
         with self._patch_paas_request():
             result = self.controller._create_service(
