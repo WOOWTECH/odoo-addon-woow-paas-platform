@@ -731,6 +731,11 @@ class SecurityAccessAccessPolicy(models.Model):
 
         ## 計數範圍走錨點池，與 ``_check_policy_quota`` 同一把尺
 
+        ⚠ #773 起，「取池 → 去重計數」與「≤ 就放行」這兩段**實作已移到**
+        ``_seat_usage_for_anchor()`` / ``_seat_quota_violation()``，因為四條換方案路徑的
+        降級 gate 必須用**同一把尺**（見那兩個方法的 docstring）。以下兩段講的是那把尺
+        的性質，實作在那裡、不在本方法裡。
+
         判準的字面是「跨該訂閱全部 route」，而 policy 綁的是 route、池欄位是
         stored related ``security_access_id`` ⇒ 用 ``_ANCHOR_POOL_FIELD`` 取池
         欄位，等價於「該 SA 的全部 route」。CS／SH 錨定同理（各自 pool 在自己
@@ -770,18 +775,10 @@ class SecurityAccessAccessPolicy(models.Model):
             if not plan:
                 # 無訂閱／無方案 ⇒ grandfathered，與兩條姊妹 quota 同款。
                 continue
-            anchor = pol._anchor()
-            anchor_field = self._ANCHOR_POOL_FIELD.get(anchor._name)
-            if not anchor_field:
-                raise ValidationError(
-                    "Access policy %r is anchored on %s, which has no entry in "
-                    "_ANCHOR_POOL_FIELD — the Access seat quota cannot be "
-                    "scoped. Register the anchor model before shipping it."
-                    % (pol.name or pol.id, anchor._name))
-            seats = plan.ac_max_access_seats
-            pool = self.sudo().search([(anchor_field, '=', anchor.id)])
-            listed = pool._listed_seat_addresses()
-            if len(listed) > seats:
+            violation = self._seat_quota_violation(pol._anchor(), plan,
+                                                   _blame=pol)
+            if violation:
+                used, seats = violation
                 raise ValidationError(
                     "Access seat quota exceeded: plan '%s' allows %d Access "
                     "seat(s), but this subscription would list %d distinct "
@@ -790,7 +787,66 @@ class SecurityAccessAccessPolicy(models.Model):
                     "across every policy and route, so listing the same "
                     "address twice still costs one seat. Remove addresses, or "
                     "add Access seats to the subscription."
-                    % (plan.name, seats, len(listed)))
+                    % (plan.name, seats, used))
+
+    @api.model
+    def _seat_usage_for_anchor(self, anchor, _blame=None):
+        """該錨點池已列出的席位位址集合（去重後）。
+
+        #773：這是**降級前置合規 gate 與寫入守衛共用的同一把尺**。
+        `_check_access_seat_quota` 與四條換方案路徑的 gate 都只能經由這裡取用量，
+        ⛔ **不得另寫計數**——兩把尺一旦口徑漂開，就會出現「gate 放行、但接下來
+        的寫入被守衛擋」的死結（反向亦然：gate 擋住一個守衛其實允許的換方案）。
+
+        ## 為什麼是「錨點池」而不是「這一批 policy」
+
+        判準是 1-A 的「跨該訂閱全部 route 去重」（#521 留言 9960），
+        所以計數範圍必須是**整個錨點底下的所有 policy**，不是被驗證的那幾筆。
+        錨點→池欄位的對應是 `_ANCHOR_POOL_FIELD` 這張查表（#768：刻意不用三元式）。
+
+        ## 為什麼 `sudo()` 是尺的一部分、不是可省的最佳化
+
+        席位是**平台成本**，不是「這位使用者看得到多少」。租戶側若因 ir.rule 只看得到
+        池中一部分 policy，未 sudo 的計數會**少算**，而少算的症狀（配額安靜地變寬）
+        與「這個方案席位很多」在輸出上完全不可區分。
+        （池仍以錨點 id 收斂 ⇒ sudo 只放寬可見度，不會把別的租戶算進來。）
+
+        :param anchor: cloud_service／security_access／smart_home 之一（`_anchor()` 的回傳）
+        :param _blame: 只用於湊 fail-loud 訊息的來源 policy，可省略
+        :return: 去重後的位址 ``set``（呼叫端自己 ``len()``）
+        """
+        anchor_field = self._ANCHOR_POOL_FIELD.get(anchor._name)
+        if not anchor_field:
+            raise ValidationError(
+                "Access policy %r is anchored on %s, which has no entry in "
+                "_ANCHOR_POOL_FIELD — the Access seat quota cannot be "
+                "scoped. Register the anchor model before shipping it."
+                % ((_blame.name or _blame.id) if _blame else anchor.id,
+                   anchor._name))
+        pool = self.sudo().search([(anchor_field, '=', anchor.id)])
+        return pool._listed_seat_addresses()
+
+    @api.model
+    def _seat_quota_violation(self, anchor, plan, _blame=None):
+        """合規回 ``None``；超額回 ``(used, seats)``。
+
+        #773：**「≤ 就放行」這個比較子全 repo 只有這一份**。守衛與四條換方案路徑的
+        gate 都經過它，所以不可能出現一邊寫 `>`、另一邊寫 `>=` 的漂移。
+
+        🔴 **`plan` 是呼叫端給的，本方法刻意不自己走 `_anchor_plan()`**——
+        降級 gate 問的是「**目標** plan 放不放得下現有用量」，而換方案當下錨點掛的
+        還是**舊** plan；若這裡自己去讀錨點的 plan，gate 會拿舊 cap 比對、永遠放行。
+
+        🔴 **`ac_max_access_seats == 0 ＝ 一席都沒有，不是 unlimited**
+        （Eugene 2026-08-26 逐字裁決「維持 0 席，要用就加購」，載體＝#521 留言 9960 §4）。
+        ⛔ 不要在這裡補 `if not seats: continue` ——相鄰的 `sa_max_access_policies`
+        與 `sa_max_emails_per_policy` 的 0 **是** unlimited，兩種語意都各自拍過板、
+        刻意相反；順手「對齊」會讓整條 fail-open，而且剛好在最需要擋的那格
+        （base 方案的席數全部是 0）。
+        """
+        used = len(self._seat_usage_for_anchor(anchor, _blame=_blame))
+        seats = plan.ac_max_access_seats
+        return None if used <= seats else (used, seats)
 
     def _listed_seat_addresses(self):
         """這批 policy 的 ``email_list`` 位址集合（正規化後去重）。
