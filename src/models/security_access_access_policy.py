@@ -848,6 +848,61 @@ class SecurityAccessAccessPolicy(models.Model):
         seats = plan.ac_max_access_seats
         return None if used <= seats else (used, seats)
 
+    @api.model
+    def _seat_gate_denial(self, anchor, plan):
+        """降級前置合規 gate（#773）：合規回 ``None``，超額回**已組好的拒絕內容**。
+
+        Eugene 2026-08-28 裁決（#773 留言 **10716**）逐字：降級要「由用戶手動處理，
+        不由系統全刪除，所以系統要能偵測是否合規格」。本方法就是那個**偵測**；
+        🔴 它**只回報、絕不刪除任何存取權**——收斂動作一律由租戶自己完成
+        （刪 policy／rule 走既有 ``unlink()`` → CF 同步）。
+
+        ## 為什麼不需要先判「這次是升級還是降級」
+
+        判準寫成「現有用量 ≤ 目標 plan 的席數才放行」之後，升級（席數變大）
+        天然通過，⇒ 不必定義「什麼算降級」，也就少一個會被繞過的分類邊界。
+        （與 issue-leader 2026-08-28 對齊。）
+
+        ## 為什麼文案講「刪除」而不是「編輯」
+
+        rule 側的 ``write()`` 會重跑守衛（``security_access_access_policy_rule.py:247``）
+        而守衛比的是**絕對值**，所以處於超額狀態時，**把清單改短但仍超額照樣被擋**
+        （行為釘在 ``test_pre_existing_policy_is_blocked_on_edit``）。租戶真正可用的
+        收斂通道只有兩條：unlink 整條 rule／整個 policy，或一次改到合規。
+        ⛔ 文案若寫「請編輯位址」會把人導進一個他做不到的操作。
+
+        ## 文案的射程：只講 email 位址數，⛔ 不講「存取權已移除」
+
+        尺只計 ``rule_type == 'email_list'``（見 ``_listed_seat_addresses``），
+        其餘四型（``email_domain``／``ip_range``／``everyone``／``country``）一律算 0 席。
+        租戶把 email 白名單刪光會看到 0 席，但一條 ``email_domain`` 仍在放行整個網域
+        ⇒ 訊息只能承諾席位數，不能敘述成「存取權都拆掉了」。
+
+        :return: ``None``，或 ``{'error': str, 'current_seats': int, 'target_seats': int}``
+        """
+        violation = self._seat_quota_violation(anchor, plan)
+        if not violation:
+            return None
+        used, seats = violation
+        if seats:
+            message = _(
+                "This plan includes %(seats)s Access seat(s), but this service "
+                "currently lists %(used)s email address(es). Delete access "
+                "rules or policies until at most %(seats)s address(es) remain, "
+                "then change the plan."
+            ) % {'seats': seats, 'used': used}
+        else:
+            # 0 席是最常見的目標態（base 方案的席數全部是 0，見 #521 留言 9960 §4），
+            # 值得一句讀得順的文案，不要落到「includes 0 seat(s)」。
+            message = _(
+                "This plan includes no Access seats, but this service currently "
+                "lists %(used)s email address(es). Delete every email allow-list "
+                "rule before changing to this plan."
+            ) % {'used': used}
+        return {'error': message,
+                'current_seats': used,
+                'target_seats': seats}
+
     def _listed_seat_addresses(self):
         """這批 policy 的 ``email_list`` 位址集合（正規化後去重）。
 

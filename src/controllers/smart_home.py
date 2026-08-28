@@ -240,6 +240,29 @@ class SmartHomeController(Controller):
             if not old_sub.sh_end_date or not old_sub.sh_start_date:
                 return {"success": False, "error": _("Subscription dates are incomplete")}
 
+        # #773 降級前置合規 gate：目標 plan 的席數放不下現有用量就**擋住換方案**，
+        # 並告訴租戶要刪到幾個。⛔ 系統不自動刪任何存取權（Eugene 裁決，#773 留言 10716）。
+        #
+        # 位置：所有既有閘之後、**第一個寫入之前**。這一格是硬需求不是風格——
+        # 本端點的第一個 DB 副作用是退點（`refund_wallet_points`），接著才關舊訂閱、
+        # 建新訂閱；gate 放到那之後只能「跑一半再整包回捲」，而 Eugene 裁的是「擋住」。
+        #
+        # ⚠ 刻意排在「無有效訂閱」與日期完整性兩閘**之後**（而不是白名單閘後面就插）：
+        # 那兩閘的訊息更貼近租戶當下的問題，先跑它們可維持既有錯誤優先序；
+        # 三腿的 gate 都落在同一個相對位置，同構好覆核。
+        #
+        # 尺與寫入守衛共用（`_seat_quota_violation` → `_seat_usage_for_anchor`）：
+        # ⛔ 不得在這裡自己數席位，兩把尺漂開會產生「gate 放行但寫入被守衛擋」的死結。
+        #
+        # 升級天然通過（席數變大 ⇒ 用量 ≤ 席數），所以**不需要**先判斷這次是不是降級。
+        _denial = request.env['woow_paas_platform.security_access_access_policy']\
+            ._seat_gate_denial(smarthome, plan)
+        if _denial:
+            return {'success': False,
+                    'error': _denial['error'],
+                    'data': {'current_seats': _denial['current_seats'],
+                             'target_seats': _denial['target_seats']}}
+
         refund = old_sub._compute_unused_refund()
 
         partner = old_sub.sh_partner_id
