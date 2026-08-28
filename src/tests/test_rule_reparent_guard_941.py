@@ -75,17 +75,37 @@ DB 證據由同組不回捲的 RPC 那半提供。
 `TransactionCase` 預設 su env（`env.su` 相關分支整條跳過），而
 `odoo/api.py::call_kw` 把呼叫端 context 整包換進 env，in-process 呼叫模擬不到。
 
-⚠ 本檔在 RED 輪**刻意不 import 也不 patch 任何尚未存在的守衛符號**：RED 要看到
-的紅必須落在「值落地了」那條斷言上，`AttributeError` 是另一種紅。C3a／C3b／C4
-（守衛的 traceback 判準與注入對照）在守衛落地之後才加。
+## RED 輪量到的東西（守衛尚未存在時，CI run 5846，`[941]` 指紋逐行）
+
+本檔在 RED 輪**刻意不 import 也不 patch 任何尚未存在的守衛符號**——紅必須落在
+「值落地了」那條斷言上，`AttributeError` 是另一種紅。量到的原始值：
+
+```
+[941][A1] RAW reparent RPC → http=200 error=None landed_policy_id=406   ← 落地
+[941][A2] ... landed_policy_id=412        （victim policy 錨在 cloud service）
+[941][A3] ... landed_policy_id=418        （victim policy 錨在 smart home route）
+[941][A4] RAW x2many-push RPC → http=200 error=None landed_policy_id=421
+[941][A5] ... landed_policy_id=426 / synced_route_ids=[1022, 1024]  ← 含受害者的 route
+```
+
+⇒ 這同時回答了 #941 留言 10714 掛著的那件事：**端到端可利用**，兩個 incidental
+因素（sync-time read、per-payload 交互）在本 fixture 的形狀下都沒有擋住它。
+B1／B1b 在同一趟就已經是 `AccessError` ⇒ create 側的框架 backstop 成立。
+
+C3a／C3b／C4（守衛的 traceback 判準與注入對照）在守衛落地之後才加，本節之後的
+`_GUARD` 就是那三格用的 patch 標的。
 
 Refs #848 #929 #849
 """
 
 import json
 import logging
+import sys
+import traceback
 import uuid
+from unittest.mock import patch
 
+from odoo.exceptions import AccessError
 from odoo.tests import HttpCase, tagged
 
 from ..models.cloud_service import _internal_provision
@@ -101,6 +121,12 @@ _POLICY = 'woow_paas_platform.security_access_access_policy'
 _RULE = 'woow_paas_platform.security_access_access_policy_rule'
 _CS = 'woow_paas_platform.cloud_service'
 _SH_ROUTE = 'woow_paas_platform.smart_home_route'
+
+#: C3b／C4 停用守衛用的 patch 標的。守衛是 **module-level function**、`write()` 以
+#: 模組全域名稱呼叫它 ⇒ patch 這個名字就等於把守衛 body 拿掉，而且**同一個 process
+#: 內的 HTTP server thread 也吃得到**（走真 RPC 的 C4 靠的正是這一點）。
+_GUARD = ('odoo.addons.woow_paas_platform.models.'
+          'security_access_access_policy_rule._assert_rule_reparent_authorised')
 
 
 def _new_group_user(env, name):
@@ -821,3 +847,121 @@ class TestRuleReparentRegression941(_RuleReparent941Fixture):
             'L2：policy 換錨點之後 rule 的 `security_access_id` 必須重算成 %r'
             '——若仍等於舊值 %r 代表重算被吃掉了（守衛沒 raise、但值也沒更新，'
             '症狀是安靜的）' % (self.sa_a2.id, before))
+
+
+class TestRuleReparentInjectionControls941(_RuleReparent941Fixture):
+    """🔴 C3a／C3b／C4：把守衛停用，證明綠是**守衛造成的**。
+
+    這一組是本檔的判別式所在。少了它，A 系列的綠與「A 系列根本沒打到守衛」
+    （fixture 走偏、RPC 沒到、id 打錯、或某條 constraint 順手擋掉了）在輸出上
+    完全不可區分——那正是本 repo 反覆踩到的假綠形狀。
+    """
+
+    def _stranger_workspace(self, tag):
+        """一個與 wsA／wsB 都無關的第三方（Carol），連 wsB 的成員都不是。"""
+        carol, _ = _new_group_user(self.env, 'carol941%s' % tag)
+        ws_c = self._workspace('WS-C 941 %s' % tag, carol)
+        _, route_c = self._sa_route(ws_c, 'c%s' % tag)
+        pol_c = self._policy(route_c, 'c%s' % tag)
+        rule_c = self._extra_include_rule(pol_c, 'rc%s' % tag)
+        self.assertFalse(
+            self.WorkspaceAccess.sudo().search(
+                [('workspace_id', '=', self.ws_b.id),
+                 ('user_id', '=', carol.id)]),
+            '前提：Carol 不得是 wsB 的成員，否則這一格測的是 A1 不是陌生人')
+        return carol, pol_c, rule_c
+
+    def test_C3a_stranger_reparent_is_rejected_by_the_new_guard(self):
+        """陌生人（完全非成員）搬 rule：守衛在的時候，紅**必須來自新守衛**。
+
+        判準用 traceback 裡的**函式名存在性**，⛔ 不用行號——行號會被任何一次
+        docstring 增修整段推移，而那種失效是靜默的。
+        """
+        carol, pol_c, rule_c = self._stranger_workspace('a')
+
+        try:
+            self.Rule.with_user(carol).browse(rule_c.id).write(
+                {'policy_id': self.pol_b_route.id})
+        except AccessError:
+            frames = traceback.extract_tb(sys.exc_info()[2])
+        else:
+            self.fail('陌生人搬 rule 必須被拒（守衛或既有防線任一擋下都算）')
+
+        names = [f.name for f in frames]
+        _logger.info('[941][C3a] RAW stranger frames=%r', names)
+        self.assertEqual(
+            self._db(_RULE, rule_c.id, 'policy_id'), pol_c.id,
+            '被拒之後 DB 那一格必須仍是舊 policy')
+        self.assertIn(
+            '_assert_rule_reparent_authorised', names,
+            '#941：守衛在的時候，陌生人這一格必須紅在**新守衛**上'
+            '——實際 traceback 的 frame 依序為 %r' % (names,))
+
+    def test_C3b_with_the_guard_disabled_the_stranger_is_not_stopped_by_it(self):
+        """把新守衛停用之後，陌生人這條路上**還剩什麼**——誠實記錄，不預設答案。
+
+        ⚠ rule 側**沒有** policy 側那個 `check_access('read')` 排序迴圈，所以
+        這一格的形狀由實測決定，不能從 #848 的 C3b 外推。兩種結局都合法，但
+        **不論哪一種，擋下它的都不得是新守衛**（那正是「patch 真的生效了」的
+        證明）；哪一種發生則寫進 log 與本 docstring 的量測欄。
+
+        量測（GREEN 輪 CI）：兩個分支的原始輸出見 job log 的 `[941][C3b]` 行。
+        """
+        carol, pol_c, rule_c = self._stranger_workspace('b')
+
+        raised = None
+        frames = []
+        with patch(_GUARD):
+            try:
+                self.Rule.with_user(carol).browse(rule_c.id).write(
+                    {'policy_id': self.pol_b_route.id})
+            except Exception as exc:  # noqa: BLE001 —— 要量的正是「還剩什麼」
+                raised = exc
+                frames = traceback.extract_tb(sys.exc_info()[2])
+
+        names = [f.name for f in frames]
+        landed = self._db(_RULE, rule_c.id, 'policy_id')
+        _logger.info(
+            '[941][C3b] RAW guard-disabled stranger → raised=%s landed=%r '
+            'frames=%r',
+            type(raised).__name__ if raised else None, landed, names)
+
+        self.assertNotIn(
+            '_assert_rule_reparent_authorised', names,
+            '前提：本格必須是在守衛**停用**的狀態下量到的；traceback 裡出現守衛'
+            '代表 patch 沒生效，這一格與 C3a 就變成同一件事（實際 frame %r）'
+            % (names,))
+        if raised is None:
+            # 誠實記錄：守衛之外，rule 側對陌生人沒有第二道防線。
+            self.assertEqual(
+                landed, self.pol_b_route.id,
+                'C3b：守衛停用後沒有拋例外，那值就必須真的落地——「沒拋也沒落地」'
+                '代表有東西靜默丟棄了寫入，那是另一個問題（實際 %r）' % (landed,))
+        else:
+            self.assertEqual(
+                landed, pol_c.id,
+                'C3b：守衛停用後被別的東西擋下（%s），那 DB 就必須原封不動'
+                '（實際 %r）' % (type(raised).__name__, landed))
+
+    def test_C4_injection_control_disabling_the_guard_lets_the_attack_land(self):
+        """🔴 注入對照：把守衛停用，A1 的攻擊必須**翻回成功且值落地**。
+
+        這是「A1 的綠是守衛造成的」唯一的判別式，也是 #941 端到端可利用性的
+        直接證據（真 HTTP session ＋ 非 su 租戶 ＋ 守衛停用）。RED 輪已經量到
+        同一個結論（`landed_policy_id=406`）；本格把它變成**每次 CI 都重跑**的
+        對照，而不是一次性的觀測。
+        """
+        self.authenticate(self.mallory_login, self.mallory_login)
+        self._tenant_write_positive_control(self.rule_a.id, 'c4')
+
+        with patch(_GUARD):
+            status, result, landed = self._attempt_reparent(
+                self.rule_a.id, {'policy_id': self.pol_b_route.id}, 'C4')
+
+        self._assert_ok(
+            status, result,
+            '注入對照：守衛停用後這條 RPC 必須成功（它是 A1 的同一條）')
+        self.assertEqual(
+            landed, self.pol_b_route.id,
+            '注入對照：守衛停用後攻擊必須落地——沒落地代表 A1 的綠不是守衛造成的'
+            '（實際落地 %r）' % (landed,))

@@ -12,6 +12,11 @@ from .security_access import (
     _is_sync_control,
     _reject_derived_projection_writes,
 )
+# #941：純量 Many2one 的 write 值正規化，與 #848 共用同一份實作。⛔ 不複製：
+# 那三行 normalize 邏輯漂掉是無聲的。import 安全——`models/__init__.py` 先載
+# policy module 才載本 module，且**沒有任何模組 import 本 module**（只有
+# `__init__`）⇒ 零循環風險。
+from .security_access_access_policy import _anchor_target_id
 
 #: #849：**stored related 投影欄位 → 它的來源錨點欄位**（rule 側三欄）。
 #:
@@ -27,6 +32,143 @@ _RULE_PROJECTION_FIELDS = {
     'cloud_service_id': 'policy_id',
     'smart_home_id': 'policy_id',
 }
+
+#: #941：rule 的**真錨點**——這一列到底屬於誰，只由這一根欄位決定。
+#:
+#: ⚠ 與上面那張 `_RULE_PROJECTION_FIELDS` 的關係要看清楚：`policy_id` 是那張 map
+#: 的 **value（來源欄位）**、不是 key（被守欄位）⇒ #929 的守衛對它不 fire。
+#: 兩道守衛守的是同一次攻擊的**兩條不同路**：#929 擋「不動真錨點、只改投影欄」，
+#: 本守衛擋「真的改真錨點」。互補、零交集，⛔ 不可把 `policy_id` 塞進那張 map
+#: （那會變成「值不可變」，打死租戶自己合法的同 workspace 搬移）。
+_RULE_ANCHOR_FIELD = 'policy_id'
+
+
+def _assert_rule_reparent_authorised(records, vals):
+    """契約：**把一列 rule 搬到新的 policy 底下，要求對那個新 policy 有 owner／admin。**
+
+    #941，對稱 #848 的 `_assert_anchor_move_authorised`（policy 側）。四個判準逐一
+    對齊：守單一真錨點、對**新**目標做 `check_access('write')`、比對的是「值真的
+    改變」不是「key 在 vals 裡」、su 自動豁免。
+
+    ## 缺口是 write 側專屬的（與 #848 同一個框架不對稱）
+
+    `BaseModel.write` **只有開頭**那一次 `self.check_access('write')`，評估的是
+    **寫入前**的狀態；`super().write()` 落地後零複驗。對照 `BaseModel._create`
+    的**尾端**對新建列再跑一次 `records.check_access('create')`（判別事實是「哪個
+    函式裡有、哪個沒有」，不是行號）。
+
+    套到攻擊形狀 `R.write({'policy_id': P_victim})`：寫入前 R 還掛在攻擊者自己的
+    policy 上 ⇒ 它的三個 stored related 投影欄指向攻擊者的 workspace ⇒ pre-write
+    檢查 PASS；落地後投影欄重算成受害者的 workspace，但 ir.rule 不再評估 ⇒ 放行。
+
+    可利用性因此落在**兩個 workspace 的共同成員**而不是陌生人：rule 的
+    member-read rule（`security/ir_rules.xml` 的
+    `security_access_access_policy_rule_rule_workspace_member`）domain 沒有 role
+    條件，`perm_write=False`；帶 role 條件的是
+    `..._rule_owner_admin_manage`。搬完之後那列進了受害者的 domain、`perm_write`
+    要 owner／admin ⇒ **攻擊者自己也收不回來，是單向注入**。
+
+    🔴 已端到端實測（#941 RED，CI run 5846）：真租戶 HTTP RPC 回 **200**、
+    `policy_id` 真的落成受害者的 policy，route／cloud service／smart home route
+    三種錨點形狀的受害 policy 全部成立，x2many 的 `(1, id, vals)` 側門同樣落地。
+
+    ## 比 #848 多一格嚴重度：`policy_id` 在 resync 的觸發集合裡
+
+    本方法所在的 `write()` 尾端，`policy_id` 是 resync 的觸發 key 之一，而
+    `policies` 是**舊 ∪ 新** ⇒ 一次放行的 reparent 會對**受害者的錨點**呼叫
+    `_sync_access_to_operator()`，把含注入 selector 的 full-state 推進受害者的
+    Cloudflare Access application。RED 那趟量到的 `synced_route_ids` 確實含受害者
+    的 route（守線測試 A5 把「被拒之後受害者的錨點一次都沒被呼叫」釘成契約）。
+
+    ## 為什麼是 `check_access('write')` 而不是自己寫一套 role 比較
+
+    policy model 對 `base.group_user` 的 ACL `perm_write` 是 1，而該 group 上唯一
+    `perm_write=True` 的 ir.rule 是 `..._owner_admin_manage`（member 那條
+    `perm_write=False`）⇒ `check_access('write')` 就**等於**「對該 policy 的
+    workspace 是 owner／admin」，而且沒有第二張會漂的表
+    （`cloud_service_binding_guard.py` 檔頭：「不自己寫第二套 role 比較」）。
+    `base.group_system` 由 `..._rule_admin_full` 全開 ⇒ 平台 admin 照常放行。
+
+    例外**刻意不包裝**：`check_access` 自己拋的 `AccessError` 已經指名是哪個
+    model 的哪個操作被拒，再包一層等於多一個會與 ir.rule 漂開的訊息來源。
+    ⇒ 守線測試斷言的是 exception **class**（本守衛 `AccessError`／#929 的投影欄
+    守衛 `UserError`／`write()` 之後那五個 validator `ValidationError`，三類互斥），
+    ⛔ 不斷言訊息字串。
+
+    ## create 側不加守衛：靠框架 post-check，而且**已經實測過**
+
+    `_create` 尾端那次 `check_access('create')` 會擋下「`policy_id` 指向他人
+    policy」的新列——rule model 上對 `base.group_user` 唯一 `perm_create=True`
+    的 ir.rule 同樣是 `..._owner_admin_manage`。這句話**不是推論**：守線測試 B1／
+    B1b 以真 RPC 與 `with_user()` 兩種形狀各量一次，RED 那趟（守衛尚未存在）就
+    已經回 `AccessError` 且沒有留下任何列。
+
+    ⚠ 殘留條件：post-check 走 `filtered_domain`（純 Python in-memory），本 repo
+    的 ir.rule domain 目前沒有 `child_of`／`parent_of`（`grep -c` = 0）；哪天有人
+    把它們加進這兩條 domain，post-check 會落回真 `search()`，flush 時序的問題重開。
+
+    ## su 豁免是刻意的，這裡與 #798 的結論相反
+
+    `check_access()` 在 `env.su` 下自動 no-op，而 migration `18.0.1.0.39` 那條
+    合法的 rule 建立正是以 superuser 跑。這與 `cf_policy_id`（#798）用 sentinel、
+    對 superuser 也擋**不是**疏漏而是不同的不變量：那一格是「值不可變」（**沒有**
+    合法改值路徑，任何 su 豁免都是洞，見
+    `docs/decisions/patterns/su-env-exempt-guard-false-green.md`），本函式是「值
+    轉移**受限**」（**有**合法改值路徑，只是要 gated）——`#849` 的
+    `test_L4_rule_moved_to_another_policy_recomputes_three_fields` 就以真租戶身分
+    在同一個 workspace 內搬 rule 並斷言三個投影欄重算，那是活的合法路徑。
+    ⇒ 一律封死會打紅既有測試、也會拿掉租戶自己的合法能力。
+
+    代價是本守衛的 deny 分支在 su env 下結構上不可達 ⇒ 守線測試一律走真 RPC 的
+    **非 su** 租戶，並另有一格（C2）把 su 豁免本身斷言成契約。
+
+    ## 清空（寫 ``False``）不在守備範圍——而且它被 NOT NULL 擋著
+
+    沒有「新 policy」要授權 ⇒ 早退。這一格不是破口：`policy_id` 宣告
+    `required=True`，實測（守線測試 E1）清空會撞 Postgres 的
+    `NotNullViolation: null value in column "policy_id" ... violates not-null
+    constraint`。
+
+    ⚠ `_anchor_target_id` 最後一行是 `int(value)`，看起來會被 `NewId` 炸——**不會**：
+    `odoo/api.py::NewId.__bool__` 回 `False`，所以第一道 `if not value: return
+    False` 就短路；new record 的 recordset 走 `value.id`（也是 `NewId`）之後同樣被
+    本函式的 `if not new_id: return` 接住。⇒ 可原樣重用該 helper。
+
+    ## ⛔ 兩個**本單刻意沒有修**的面（另開單，⛔ 不要在這裡順手動）
+
+    1. **policy 與 rule 的 `owner_admin_manage` domain 逐字相同，卻沒有 lockstep
+       gate。** 實測兩條 `domain_force` 字串完全相等（各 363 字元，只有 `model_id`
+       不同），而 `repo-lint.py` 對它們零檢查。本守衛「`target_policy.check_access
+       ('write')` 字面上就是 post-move 的 rule 可寫性判準」這句等價性，靠的正是那
+       份相等；改一邊沒改另一邊，等價性會**無聲**斷掉。
+    2. **rule model 沒宣告 `_allow_sudo_commands`**（框架預設 `True`，全 `src/`
+       零命中）⇒ 未來任何 `policy.sudo().write({'rule_ids': 客戶端送的 commands})`
+       會**同時**關掉框架 pre-check 與本守衛，而且無聲。現況已查證非 sudo
+       （controller 的 `_update_policy` 用 `request.env[...]` ＋ `_rule_replace`）。
+
+    ## ⚠ 存量資料的殘留面（未查證，需 stg／prod 唯讀授權）
+
+    若 DB 裡存在「投影欄與真錨點不一致」的 split 列（#849 修法之前可能造成），
+    本守衛授權的是**目標 policy 宣稱的 workspace**（ir.rule 走投影欄），而不是它
+    真錨點所在的 workspace。本單⛔ **未**查 prod／stg（授權尚未下來），只在此記明。
+    """
+    if _RULE_ANCHOR_FIELD not in vals:
+        return
+    new_id = _anchor_target_id(vals[_RULE_ANCHOR_FIELD])
+    if not new_id:
+        return
+    # 「值真的改變」才驗：UI 整批送欄位時 vals 會帶著與現值相同的 policy_id，那不是
+    # 搬移；而能寫這一列的人，框架開頭那次 `check_access('write')` 已經對它現在掛著
+    # 的 policy 要求過 owner／admin（rule 與 policy 走同一條 workspace walk）。
+    # 判準取自 `docs/decisions/patterns/scope-flip-write-guard-not-ir-rule.md`。
+    if all(rec[_RULE_ANCHOR_FIELD].id == new_id for rec in records):
+        return
+    # comodel 名字從**欄位宣告**取，不寫死字串：欄位改指向別的 model 時這裡自動跟上
+    # （與 #848 的 `records._fields[field].comodel_name` 同一個寫法）。
+    records.env[
+        records._fields[_RULE_ANCHOR_FIELD].comodel_name
+    ].browse(new_id).check_access('write')
+
 
 # Shared with the policy格式驗證：bare domain（不可帶 @），如 acme.com。
 _DOMAIN_RE = re.compile(r'^[a-z0-9.-]+\.[a-z]{2,}$', re.IGNORECASE)
@@ -231,6 +373,11 @@ class SecurityAccessAccessPolicyRule(models.Model):
         # #849：投影欄位的直寫守衛，**必須是本方法的第一件事**——拒絕要發生在
         # `policies` 擷取與 `super().write()` 之前。與 policy 側同一個 helper。
         _reject_derived_projection_writes(vals, _RULE_PROJECTION_FIELDS)
+        # #941：真錨點的歸屬守衛。順序有意義——它必須排在 `super().write()` 與
+        # 任何 side effect（`policies` 擷取、savepoint、operator sync）之前，與
+        # #848 在 `policy.write()` 的位置同構。同時送 `policy_id` ＋ 投影欄的
+        # payload 由上面那道先拒（`UserError`），不漏。
+        _assert_rule_reparent_authorised(self, vals)
         policies = self.mapped('policy_id')
         with self.env.cr.savepoint():
             result = super().write(vals)
