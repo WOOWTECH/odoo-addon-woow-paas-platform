@@ -22,3 +22,21 @@ Use exactly one of these labels when an issue is assigned to an agent execution 
 | --------------------------- | ------------------------------------ |
 | `agent-context:local-cc`    | 由本機 Claude Code agent 執行        |
 | `agent-context:remote-pi`   | 由遠端 Pi agent 執行                 |
+
+## Agent status labels
+
+| Label                        | Meaning                                      |
+| ---------------------------- | -------------------------------------------- |
+| `agent-status:in-progress`   | Agent 已領取並正在處理；完成或停止時移除     |
+
+## Agent assignee labels
+
+Gitea assignee 只能是 Gitea user account；agent identity 改用以下 labels。Issue 交派給 agent 時只使用其中一個：
+
+| Label                       | Meaning                 |
+| --------------------------- | ----------------------- |
+| `agent-assignee:leader1`    | 交由 leader1 agent 處理 |
+| `agent-assignee:leader2`    | 交由 leader2 agent 處理 |
+| `agent-assignee:leader3`    | 交由 leader3 agent 處理 |
+| `agent-assignee:leader4`    | 交由 leader4 agent 處理 |
+| `agent-assignee:leader5`    | 交由 leader5 agent 處理 |

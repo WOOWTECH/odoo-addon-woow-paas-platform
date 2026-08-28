@@ -359,7 +359,7 @@ Issues 在 Gitea（git-prod.woowtech.io / odoo-addons/woow_paas_platform），�
 
 ### Triage labels
 
-採用五個預設 canonical triage labels，並以 `agent-context:local-cc`／`agent-context:remote-pi` 標記 agent execution context。見 `docs/agents/triage-labels.md`。
+採用五個預設 canonical triage labels；agent 工作以 `agent-context:*`、`agent-status:in-progress` 與 `agent-assignee:leader1`～`leader5` 標記。見 `docs/agents/triage-labels.md`。
 
 ### Domain docs
 
