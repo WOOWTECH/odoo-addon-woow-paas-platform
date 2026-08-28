@@ -54,7 +54,7 @@
 |---|---|---|
 | [`archived/`](archived/) | 不再使用但保留考古（含 `archived/memory/`：已被其他載體取代的 memory） | 311 |
 | [`scout/`](scout/) | 決策前偵察，拍板後 promote 到 plans/ 或 decisions/ | 2 |
-| [`agents/`](agents/) | mattpocock-skills 工具自管理區 | 2 |
+| [`agents/`](agents/) | mattpocock-skills 工具自管理區 | 3 |
 | [`superpowers/`](superpowers/) | obra/superpowers plugin 自管理區 | 1 |
 
 > `docs/meeting/` 是指向 repo 外錄音目錄的 symlink，不在版控內，也不屬上述分類。
