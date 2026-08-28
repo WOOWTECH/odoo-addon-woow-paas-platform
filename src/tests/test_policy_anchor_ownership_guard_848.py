@@ -46,9 +46,15 @@ policy model 上對 `base.group_user` 只有兩條 rule，member 那條
 
 ## ⛔ 本守衛**擋不到 #849**
 
-#849 的路徑是 stored related 的 inverse 委派：寫 `policy.security_access_id` 實際
-上寫的是 `route.security_access_id`，`policy.route_id` 完全沒動 ⇒ 本守衛不 fire。
-兩張單是不同的機制、不同的修法落點，別把本檔讀成順便關掉了 #849。
+#849 現行機制（留言 9445，端到端 RPC 量測）：寫 `policy.security_access_id` /
+`policy.smart_home_id` 直接落在 policy 自己那根 stored column 上，
+`policy.route_id` 完全沒動 ⇒ 本守衛不 fire。兩張單是不同的機制、不同的修法
+落點，別把本檔讀成順便關掉了 #849。
+
+（曾誤判為 stored related 帶 `inverse` 委派、寫它們會寫到來源列——該說法已於
+留言 9433 撤回：這兩欄宣告 `related=` 未顯式覆寫 `readonly`，框架
+`_get_attrs` 早把 `readonly` 蓋成 `True`，`setup_related` 不裝 `inverse`，
+值不會外溢到來源列。）
 
 ## 測試分層
 

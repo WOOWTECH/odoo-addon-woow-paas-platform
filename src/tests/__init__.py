@@ -705,7 +705,9 @@ from . import test_sh_unlink_authz_preflight_740
 # `check_access('create')`，`write()` 只在開頭對寫入前狀態檢查一次、寫入後零複驗。
 # 可利用性落在「兩個 workspace 的共同成員」而非陌生人：三條 member-read rule 的
 # domain 都沒有 role 條件 ⇒ 讀得到目標錨點就搬得過去，兩道既有檢查全過。
-# ⛔ 本檔的守衛擋不到 #849（stored related 的 inverse 委派寫的是來源列）。
+# ⛔ 本檔的守衛擋不到 #849——現行機制見留言 9445：寫入直接落在 policy 自己的
+# stored column 上，route_id 不動（曾誤判為 stored related 帶 inverse 委派、
+# 寫到來源列，該說法已於留言 9433 撤回）。
 from . import test_policy_anchor_ownership_guard_848
 
 # feat: #803 `access_protection_lost` 打開之後沒有任何週期性收斂會把它推回去。
