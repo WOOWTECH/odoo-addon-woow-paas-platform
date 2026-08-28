@@ -583,6 +583,16 @@ class TestCloudServiceChangePlanTrialMode(TransactionCase):
             "min_vcpu": 1,
             "min_ram_gb": 1.0,
             "min_storage_gb": 1,
+            # #949：三個 plan 必須真的掛上 template。本組測的是 trial 狀態轉移，
+            # 但它走的是 change-plan 端點，而該端點的方案白名單閘在 #949 之前有
+            # fail-open——template 掛零個 plan 時整條檢查被跳過，所以這個 fixture
+            # 以前不掛也過得去。閘修好之後「零方案 template」會被正確擋下，
+            # fixture 得補成真實 template 該有的樣子（有方案才賣得動）。
+            "subscription_plan_ids": [(6, 0, [
+                self.plan_a_trial7.id,
+                self.plan_b_trial14.id,
+                self.plan_c_notrial.id,
+            ])],
         })
 
         self.owner = self.env["res.users"].create({

@@ -46,7 +46,7 @@
 | [`tracking/landings/`](tracking/landings/) | 已收官 issue 的落地紀錄（檔名帶 issue 編號） | 71 |
 | [`tracking/pitfalls/`](tracking/pitfalls/) | 撞牆時對照：症狀 → 根因 | 45 |
 | [`tracking/followups/`](tracking/followups/) | 尚未收掉的追蹤項 | 2 |
-| [`tracking/test-reports/`](tracking/test-reports/) | E2E / 測試報告 | 2 |
+| [`tracking/test-reports/`](tracking/test-reports/) | E2E / 測試報告 | 3 |
 
 ## 其他
 

@@ -1147,14 +1147,26 @@ class PaasController(HiddenChainMixin, Controller):
         if not plan.exists():
             return {'success': False, 'error': _('Plan not found')}
         # Plan must belong to THIS service's template — symmetric with the
-        # create path's gate (api_deploy_service: `plan not in
-        # template.subscription_plan_ids`). The role check above only gates who
-        # may change the plan, not whether the plan belongs here; without this
-        # an owner could switch to another template's (or an orphan) plan,
-        # producing a subscription/invoice line inconsistent with the service's
-        # template. Lock-step with the SA-side change-plan guard.
+        # create path's gate (`_create_service`, same file). The role check
+        # above only gates who may change the plan, not whether the plan
+        # belongs here; without this an owner could switch to another
+        # template's (or an orphan) plan, producing a subscription/invoice
+        # line inconsistent with the service's template.
+        #
+        # #949：⛔ 這裡**不**能寫成 `if svc_template.subscription_plan_ids and
+        # plan not in …`。那個 truthiness 前綴讓「template 掛零個 plan」時整條
+        # 判斷被跳過 ⇒ 任何 plan 都換得成（fail-open）。空集合時
+        # `plan not in <空集合>` 本來就是 True ⇒ 擋，這才是要的語意。
+        #
+        # 與 SA 端（security_access.py::api_security_access_change_plan）的關係：
+        # 對齊的是它「**template 存在**」那一格。SA 另有 template-less 的 else
+        # 分支（改判 plan 家族），CS **沒有**那一格——`cloud_service.template_id`
+        # 是 `required=True`（DB 側 NOT NULL），服務不可能沒有 template。
+        #
+        # ⇒ 剛建好、還沒掛方案的 template，其上的服務換不了方案。這是刻意選的
+        #   方向（擋 > 放行）：建 template 的人要先把方案掛上去，服務才換得動。
         svc_template = service.template_id.sudo()
-        if svc_template.subscription_plan_ids and plan not in svc_template.subscription_plan_ids:
+        if plan not in svc_template.subscription_plan_ids:
             return {'success': False,
                     'error': _('Plan not available for this template')}
 
@@ -3330,8 +3342,12 @@ class PaasController(HiddenChainMixin, Controller):
         plan = Plan.browse(plan_id)
         if not plan.exists():
             return {'success': False, 'error': _('Subscription plan not found')}
-        # Verify plan belongs to this template
-        if template.sudo().subscription_plan_ids and plan not in template.sudo().subscription_plan_ids:
+        # Verify plan belongs to this template — 與 change-plan 那條
+        # （`api_service_change_plan`）是同一把尺，兩條要一起看。
+        # #949：同樣⛔ 不加 `template.sudo().subscription_plan_ids and` 前綴——
+        # 零方案的 template 會讓整條判斷被跳過（fail-open）。完整理由與「新建
+        # template 要先掛方案」那格寫在 change-plan 側，不在這裡重述。
+        if plan not in template.sudo().subscription_plan_ids:
             return {'success': False, 'error': _('Plan not available for this template')}
 
         # Always generate reference_id server-side (never accept from frontend)
