@@ -179,10 +179,15 @@ jobs:
           echo "── 已知指紋（各自獨立 grep，不吃額度、不過 WARNING 篩子）──"
           for FP in "p_rule_post_migrate" \
                     "legacy policy(ies) carry an allow" \
-                    "include rule(s) from flat policies"; do
+                    "include rule(s) from flat policies" \
+                    "[941]"; do
             echo "  [指紋] ${FP}"
             grep -cF "${FP}" /tmp/test.log
-            grep -F "${FP}" /tmp/test.log | head -10
+            # head 從 10 提到 80：`[941]` 這種「一個測試檔的逐格原始量測」一趟會有
+            # 數十行，而它是 RED／GREEN 判準的**一手證據**（「值有沒有落地」只有
+            # 這裡看得到——上面的 FAIL/ERROR grep 只取得到標題行、取不到斷言訊息）。
+            # 額度給不夠等於這一步在最需要的那一格留空白（run 4679 的教訓）。
+            grep -F "${FP}" /tmp/test.log | head -80
           done
           echo "── 被測程式碼的 WARNING（『那條分支有沒有被走到』常常只有這裡看得到）──"
           grep -c "WARNING" /tmp/test.log

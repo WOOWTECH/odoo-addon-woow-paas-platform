@@ -776,3 +776,13 @@ from . import test_policy_related_anchor_projection_849
 # 才算數）。C 系列蓋 create 側三個載體，只主張不變量不主張機制。
 from . import test_policy_projection_guard_849
 from . import test_change_plan_seat_gate_773
+
+# fix: #941 rule 子模型的真錨點 `policy_id` 沒有歸屬守線（write 側），與 #848 在
+# policy 側修掉的是同一個框架缺口：`BaseModel.write` 只在**寫入前**驗一次
+# ir.rule、落地後零複驗 ⇒ 「把既有 rule 搬進他人 policy」框架不擋，而 #929 的
+# 投影欄守衛只逐 key 比對三個投影欄、`policy_id` 不在其中。
+# A 系列走真 RPC 量攻擊面（含 x2many 側門與「受害者錨點不得被 sync」），
+# B 系列把 create 側的框架 backstop 釘成契約，C 系列證守衛沒擋掉合法路徑
+# （同 workspace 搬移／su／pull 方向／cascade），L 系列證 controller 與框架
+# 自己的 related 重算沒被誤擋。
+from . import test_rule_reparent_guard_941
