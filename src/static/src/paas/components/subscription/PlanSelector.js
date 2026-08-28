@@ -163,6 +163,21 @@ export class PlanSelector extends Component {
     return (this.props.usedSeats || 0) > seats;
   }
 
+  /**
+   * #773：裝不下時要顯示的那一句。
+   *
+   * 🔴 整句在 JS 組好再讓模板 `t-esc`，⛔ 不在 XML 裡把數字用 `<t t-esc/>` 夾在
+   * 文字中間——那會讓抽取器把一句話切成兩個殘缺 msgid（「Delete all」「listed
+   * email address(es) first」），翻譯時無法組回通順的句子。
+   * 參數化形式照本 repo 既有慣例 `_t("%(x)s …", { x })`（見 utils/billing_helpers.js）。
+   */
+  overUsageHint(seats) {
+    const used = this.props.usedSeats || 0;
+    return seats
+      ? _t("Currently using %(used)s — delete some first", { used })
+      : _t("Delete all %(used)s listed email address(es) first", { used });
+  }
+
   formatSeatDelta(base, variant) {
     const delta = variant.price - base.price;
     return _t("+%(amount)s pts/%(unit)s", {

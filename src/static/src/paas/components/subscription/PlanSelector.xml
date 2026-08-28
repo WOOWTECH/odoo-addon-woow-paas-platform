@@ -51,18 +51,16 @@
                  t-on-click="() => this.onSeatSelect(seatBase, null)">
               <div class="o_woow_plan_seat__label">No extra seats</div>
               <div class="o_woow_plan_seat__delta">Included</div>
-              <div t-if="isSeatOverCurrentUsage(0)" class="o_woow_plan_seat__over_usage">
-                Delete all <t t-esc="props.usedSeats"/> listed email address(es) first
-              </div>
+              <div t-if="isSeatOverCurrentUsage(0)" class="o_woow_plan_seat__over_usage"
+                   t-esc="overUsageHint(0)"/>
             </div>
             <t t-foreach="seatBase.variants" t-as="variant" t-key="variant.plan_id">
               <div t-attf-class="o_woow_plan_seat {{ isSeatSelected(seatBase, variant) ? 'o_woow_plan_seat--selected' : '' }} {{ isSeatOverCurrentUsage(variant.seats) ? 'o_woow_plan_seat--over_usage' : '' }}"
                    t-on-click="() => this.onSeatSelect(seatBase, variant)">
                 <div class="o_woow_plan_seat__label"><t t-esc="variant.seats"/> seat(s)</div>
                 <div class="o_woow_plan_seat__delta" t-esc="formatSeatDelta(seatBase, variant)"/>
-                <div t-if="isSeatOverCurrentUsage(variant.seats)" class="o_woow_plan_seat__over_usage">
-                  Currently using <t t-esc="props.usedSeats"/> — delete some first
-                </div>
+                <div t-if="isSeatOverCurrentUsage(variant.seats)" class="o_woow_plan_seat__over_usage"
+                     t-esc="overUsageHint(variant.seats)"/>
               </div>
             </t>
           </div>
