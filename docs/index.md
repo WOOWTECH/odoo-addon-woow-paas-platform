@@ -43,7 +43,7 @@
 
 | 去哪 | 內容 | 篇數 |
 |---|---|---|
-| [`tracking/landings/`](tracking/landings/) | 已收官 issue 的落地紀錄（檔名帶 issue 編號） | 70 |
+| [`tracking/landings/`](tracking/landings/) | 已收官 issue 的落地紀錄（檔名帶 issue 編號） | 71 |
 | [`tracking/pitfalls/`](tracking/pitfalls/) | 撞牆時對照：症狀 → 根因 | 45 |
 | [`tracking/followups/`](tracking/followups/) | 尚未收掉的追蹤項 | 2 |
 | [`tracking/test-reports/`](tracking/test-reports/) | E2E / 測試報告 | 3 |
@@ -54,7 +54,7 @@
 |---|---|---|
 | [`archived/`](archived/) | 不再使用但保留考古（含 `archived/memory/`：已被其他載體取代的 memory） | 311 |
 | [`scout/`](scout/) | 決策前偵察，拍板後 promote 到 plans/ 或 decisions/ | 2 |
-| [`agents/`](agents/) | mattpocock-skills 工具自管理區 | 2 |
+| [`agents/`](agents/) | mattpocock-skills 工具自管理區 | 3 |
 | [`superpowers/`](superpowers/) | obra/superpowers plugin 自管理區 | 1 |
 
 > `docs/meeting/` 是指向 repo 外錄音目錄的 symlink，不在版控內，也不屬上述分類。
