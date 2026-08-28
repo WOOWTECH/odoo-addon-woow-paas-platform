@@ -76,6 +76,32 @@ class ChangeSubscriptionPlanWizard(models.TransientModel):
         if self.new_plan_id == self.current_plan_id:
             raise UserError(_("New plan must be different from current plan."))
 
+        # #773 降級前置合規 gate（第 4 條換方案路徑）。
+        #
+        # 為什麼 wizard 也要補：它走的是與三個 HTTP 端點**同一套**「退點 → 關舊訂閱 →
+        # 建新訂閱」，只是入口在後台。只補三個端點的話，gate 的目的（付費界線生效）
+        # 會被這條路徑直接繞過。
+        #
+        # ⚠ 這條路徑的既有防護與三個端點**不同**，敘述時不要混為一談：
+        #   * plan 白名單閘：**完全沒有**（三個端點都有 template↔plan 歸屬檢查）。
+        #   * role 閘：碼層沒有，但**間接存在**——`_create_and_confirm_subscription` 最後
+        #     那次 `self.write({'subscription_id': ...})` 是**非 sudo** 的
+        #     （`subscription_lifecycle_mixin.py:234`），會撞到 entity 的 ir.rule
+        #     owner/admin 寫入閘（`ir_rules.xml:103` CS／`:175` SH）。
+        #   ⇒ 同 workspace 的非 owner/admin 不是「換得成」，而是**先退了點、關了舊訂閱，
+        #     才在最後一步炸 AccessError**；因為全鏈無 `cr.commit()`，交易會整包回捲。
+        #     那是「先產生副作用再撤」的形狀，不是乾淨的拒絕。
+        # ⇒ 把 gate 插在這裡（三道 UserError 之後、退點之前）順帶把那個形狀也修掉：
+        #   不合規的換方案在**任何副作用發生前**就停住。
+        #
+        # 回錯形狀刻意與三個端點不同：wizard 是 TransientModel action，慣例是
+        # `raise UserError`（同檔上方三道閘皆然），⛔ 不能照抄 controller 的
+        # `{'success': False, ...}` dict——那在 wizard 裡會被當成 action 回傳值。
+        denial = self.env['woow_paas_platform.security_access_access_policy']\
+            ._seat_gate_denial(entity, self.new_plan_id)
+        if denial:
+            raise UserError(denial['error'])
+
         partner = old_sub.sh_partner_id
 
         # 1. Refund unused points to wallet (#318: refund-typed + subscription

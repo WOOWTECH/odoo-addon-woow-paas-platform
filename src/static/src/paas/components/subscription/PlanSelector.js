@@ -25,6 +25,9 @@ export class PlanSelector extends Component {
     selectedPlanId: { type: Number, optional: true },
     onSelect: { type: Function },
     currentPlanId: { type: Number, optional: true },
+    // #773：這台服務目前已用的席位數。optional ⇒ 建立流程（還沒有服務、必然 0 用量）
+    // 的呼叫端不必傳，行為與本 PR 之前完全相同。
+    usedSeats: { type: Number, optional: true },
   };
 
   setup() {
@@ -146,6 +149,35 @@ export class PlanSelector extends Component {
     });
   }
   // 增量：一律 base.unit（年繳為年值；寫死 /月＝12 倍 bug）；不加購由 template 標「已含」
+  /**
+   * #773：這個席位選項裝不裝得下服務目前已列出的位址數？
+   *
+   * 只做**視覺標註、不 disable**：權威判定在後端 gate（四條換方案路徑共用同一把尺），
+   * 前端若也決定「可不可以選」就等於第二個判定處，兩邊一旦漂移使用者會看到
+   * 「畫面說可以但送出被擋」或反過來。標註的目的只是讓人**在按確認之前**就知道
+   * 要先去刪，真正的攔截與可讀訊息仍由後端回。
+   *
+   * @param {number} seats 該選項提供的席位數（「No extra seats」傳 0）
+   */
+  isSeatOverCurrentUsage(seats) {
+    return (this.props.usedSeats || 0) > seats;
+  }
+
+  /**
+   * #773：裝不下時要顯示的那一句。
+   *
+   * 🔴 整句在 JS 組好再讓模板 `t-esc`，⛔ 不在 XML 裡把數字用 `<t t-esc/>` 夾在
+   * 文字中間——那會讓抽取器把一句話切成兩個殘缺 msgid（「Delete all」「listed
+   * email address(es) first」），翻譯時無法組回通順的句子。
+   * 參數化形式照本 repo 既有慣例 `_t("%(x)s …", { x })`（見 utils/billing_helpers.js）。
+   */
+  overUsageHint(seats) {
+    const used = this.props.usedSeats || 0;
+    return seats
+      ? _t("Currently using %(used)s — delete some first", { used })
+      : _t("Delete all %(used)s listed email address(es) first", { used });
+  }
+
   formatSeatDelta(base, variant) {
     const delta = variant.price - base.price;
     return _t("+%(amount)s pts/%(unit)s", {

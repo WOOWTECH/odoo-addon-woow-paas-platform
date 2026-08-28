@@ -775,3 +775,4 @@ from . import test_policy_related_anchor_projection_849
 # 這幾根 column；誤擋的症狀是每次搬 route／換錨點都炸，但要在測試裡看到它不炸
 # 才算數）。C 系列蓋 create 側三個載體，只主張不變量不主張機制。
 from . import test_policy_projection_guard_849
+from . import test_change_plan_seat_gate_773
