@@ -818,3 +818,333 @@ class TestPayInvoiceModalRefetchesWalletOnFailure(TransactionCase):
             '付款失敗分支必須重抓錢包餘額：後端回捲之後（或別的頁籤／自動扣款'
             '動過錢包）`this.billing.wallet` 仍是打 API 之前的舊快取，使用者會'
             '看著一個不存在的餘額決定要不要再按一次')
+
+
+# ---------------------------------------------------------------------------
+# 裁決 C：safe gate ＝「這張發票在交易內可證明不會外呼」
+# ---------------------------------------------------------------------------
+#
+# `_pay_from_wallet` 的 `action_post()` 會觸發上游 `ecpay_invoice_tw` 掛在
+# `account.move.action_post()` 上的 **inline 電子發票外呼**
+# （`ecpay_invoice_tw/models/account_invoice.py:107` → `:217 create_ecpay_invoice()`
+# → `:285 Check_Out()` 一支打到 `einvoice.ecpay.com.tw` 的 HTTP POST，開出**不可逆**
+# 的電子發票）。它只在 `company.auto_invoice == 'automatic'` 且該列沒有平台旗標
+# （平台 override `src/models/account_move.py:117` 對 `woow_skip_upstream_hook` 早退）
+# 時才真的送出去。
+#
+# 對那一類發票，PR-A 原本的兩個機制都會反過來咬人：
+#   * savepoint 回捲會把 `ecpay_invoice_id` / `uniform_state` 一起捲掉 —— ECPay 上那張
+#     真發票還在，而去重守衛（上游 `:221-222`）沒了 ⇒ 下次再付會開**第二張**；
+#   * `OperationalError` 重拋讓框架重播整個 handler 最多 5 次 ⇒ 最多 **5 張**真發票。
+#
+# ⇒ Eugene 裁決 **C**：兩個機制**只**對「可證明無外呼」的發票生效，判準是
+#   `woow_skip_upstream_hook is True` **OR** `auto_invoice != 'automatic'`。
+#   另一類（flagless ＋ automatic）**完整維持 develop 行為**，由 follow-up #980 承接。
+#
+# ## 探針：上游 `create_ecpay_invoice`，不是 HTTP 層
+#
+# 本 class 把 **vendored 上游那支 `create_ecpay_invoice`** 換成 recorder。理由：
+#   1. **零真 ECPay HTTP** —— 換掉的那支正是唯一會走到 `Check_Out()` 的方法，
+#      被測路徑上不存在任何其他抵達 `einvoice.ecpay.com.tw` 的邊。
+#   2. **這個 seam 剛好等於「會不會送出去」** —— 平台 override 是 `super()` 呼叫上游，
+#      所以「上游那支被呼叫到幾次」就是「這一輪會開幾張真發票」。
+#   3. ⛔ **不自訂假型別**：patch 的是 addon 自己的方法物件，不是我另外定義一組同名
+#      dataclass／enum（那會變成「假設契約是這樣」而不是「驗證契約是這樣」）。
+#   4. `patch.object(..., create=False)` 是預設 ⇒ 上游哪天改名，這裡會 **AttributeError**
+#      而不是靜靜地量到 0。
+#
+# ## 三列矩陣與各自的判別式
+#
+# | 列 | 旗標 | `auto_invoice` | 期望 |
+# | --- | --- | --- | --- |
+# | R1 | True | `automatic` | 外呼 **0**（平台 override 短路）；safe 路徑仍成立 |
+# | R2 | False | `manual` | 外呼 **0**（上游 hook 對 manual 是 no-op）；safe 路徑仍成立 |
+# | R3 | False | `automatic` | 外呼 **≥1**（**陽性對照**：證明探針真的在路徑上）；
+#          ⛔ 不重播、⛔ 不套新的 savepoint 回捲語意 |
+#
+# R3 的外呼陽性對照是整組的地基：它若量到 0，R1／R2 的「外呼 0」就退化成恆真
+# （探針根本沒被裝上／路徑改了），而輸出與真綠一模一樣。
+_UPSTREAM_ECPAY_MODULE = 'odoo.addons.ecpay_invoice_tw.models.account_invoice'
+
+
+@tagged('post_install', '-at_install')
+class TestInvoicePayReplaySafetyGate(_InvoicePayFixtureMixin, HttpCase):
+    """裁決 C 的 safe gate：旗標 × `auto_invoice` 三列矩陣。"""
+
+    def setUp(self):
+        super().setUp()
+        self._setup_invoice_fixture('864C2')
+        self.company = self.env.company.sudo()
+
+    # ── fixture：旗標 × auto_invoice ────────────────────────────────────
+    def _make_flagged_invoice(self, amount=_AMOUNT):
+        """帶 `woow_skip_upstream_hook=True` 的發票（＝平台自己開的那些）。"""
+        invoice = self.env['account.move'].sudo().create({
+            'move_type': 'out_invoice',
+            'partner_id': self.partner.id,
+            'woow_skip_upstream_hook': True,
+            'invoice_line_ids': [(0, 0, {
+                'product_id': self.product.id,
+                'quantity': 1,
+                'price_unit': amount,
+                'tax_ids': [(5, 0, 0)],
+            })]})
+        self.assertTrue(
+            invoice.woow_skip_upstream_hook,
+            'fixture 前提：這一列必須真的帶旗標，否則 R1 測的是 R3')
+        return invoice
+
+    def _install_einvoice_probe(self):
+        """把**上游**的 `create_ecpay_invoice` 換成 recorder，回傳呼叫記錄 list。
+
+        ⛔ 這支 recorder **不做任何事**（不打 HTTP、不寫 `ecpay_invoice_id`）——
+        它存在的唯一目的是把「這一輪會送出幾張真電子發票」變成可斷言的數字。
+        list 是 Python 物件，不隨 savepoint／整交易回捲，所以框架重播之後仍讀得到
+        累計次數。
+        """
+        from odoo.addons.ecpay_invoice_tw.models.account_invoice import (
+            AccountMove as UpstreamAccountMove,
+        )
+        calls = []
+
+        def recording(move_self, *args, **kwargs):
+            calls.append(move_self.ids)
+            return None
+
+        patcher = patch.object(
+            UpstreamAccountMove, 'create_ecpay_invoice', recording)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return calls
+
+    def _use_automatic_invoicing(self):
+        """把公司切成 `auto_invoice='automatic'`。
+
+        🔴 **刻意先裝探針再翻設定**，而且兩件事綁在同一個 helper 裡：拆開來寫的話，
+        某天有人只翻設定忘了裝探針，測試就會**真的打到 ECPay**。順序反過來也不行。
+        還原用 `addCleanup` 寫回**原值**（不是寫死 `'manual'`）。
+        """
+        calls = self._install_einvoice_probe()
+        previous = self.company.auto_invoice
+        self.addCleanup(
+            lambda: self.company.write({'auto_invoice': previous}))
+        self.company.write({'auto_invoice': 'automatic'})
+        self.assertEqual(
+            self.company.auto_invoice, 'automatic',
+            'fixture 前提：公司必須真的切到 automatic，否則上游 inline hook 是 no-op、'
+            '整列矩陣退化成 R2')
+        return calls
+
+    def _use_manual_invoicing(self):
+        """維持 `auto_invoice='manual'`（上游 default），一樣裝探針。"""
+        calls = self._install_einvoice_probe()
+        previous = self.company.auto_invoice
+        self.addCleanup(
+            lambda: self.company.write({'auto_invoice': previous}))
+        self.company.write({'auto_invoice': 'manual'})
+        self.assertNotEqual(
+            self.company.auto_invoice, 'automatic',
+            'fixture 前提：R2 這一列必須不是 automatic')
+        return calls
+
+    # ── 注入 ───────────────────────────────────────────────────────────
+    def _break_payment_journal(self):
+        """收款 journal 抽掉 ⇒ `_pay_from_wallet` 在 `action_post()` **之後**
+        （因此在 inline 外呼之後）才 `raise UserError`。回傳復原用 callable。"""
+        previous = self.company.sh_paid_subscription_journal
+        self.company.sh_paid_subscription_journal = False
+        journals = self.env['account.journal'].sudo().search([
+            ('company_id', '=', self.company.id),
+            ('type', 'in', ('bank', 'cash'))])
+        journals.write({'active': False})
+
+        def restore():
+            journals.write({'active': True})
+            self.company.sh_paid_subscription_journal = previous
+        self.addCleanup(restore)
+        return restore
+
+    def _conflict_after_post(self):
+        """在 `action_post()` **之後**拋 40001（每次都拋）。
+
+        注入點選 `deduct_wallet_points`：它排在 `action_post()` 之後，所以每一輪
+        重播都會**先**走完 inline 外呼那一步 —— 這正是「重播 ＝ 重複開真發票」
+        的形狀，也是本 class 量得到「一輪外呼幾次」的原因。
+        """
+        Partner = type(self.env['res.partner'])
+        calls = []
+
+        def exploding(_self, *args, **kwargs):
+            calls.append(1)
+            raise _serialization_failure()
+
+        patcher = patch.object(Partner, 'deduct_wallet_points', exploding)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return calls
+
+    # ================================================================
+    #  R3 陽性對照：flagless ＋ automatic 真的會走到上游 inline 外呼
+    #  （這條不綠，R1／R2 的「外呼 0」全部退化成恆真）
+    # ================================================================
+    def test_flagless_invoice_under_automatic_reaches_the_upstream_einvoice_call(self):
+        einvoice_calls = self._use_automatic_invoicing()
+        self.assertFalse(
+            self.invoice.woow_skip_upstream_hook,
+            'fixture 前提：R3 這一列必須是 flagless')
+
+        result = self._call_pay()
+        self.assertTrue(result.get('success'), '付款應成功（回 %r）' % result)
+
+        self.assertEqual(
+            len(einvoice_calls), 1,
+            'flagless ＋ automatic 的發票在 `action_post()` 時必須真的走到上游 '
+            '`create_ecpay_invoice`（＝會送出一張真電子發票）。量到 %d 次代表探針'
+            '沒裝上或路徑改了 —— 那樣 R1／R2 的「外呼 0」就不是在守什麼東西'
+            % len(einvoice_calls))
+
+    # ================================================================
+    #  R1：flagged ＋ automatic ⇒ 外呼 0，safe 路徑（savepoint／重拋）仍成立
+    # ================================================================
+    def test_flagged_invoice_under_automatic_makes_no_upstream_einvoice_call(self):
+        einvoice_calls = self._use_automatic_invoicing()
+        self.invoice = self._make_flagged_invoice()
+
+        result = self._call_pay()
+        self.assertTrue(result.get('success'), '付款應成功（回 %r）' % result)
+
+        self.assertEqual(
+            len(einvoice_calls), 0,
+            '帶 `woow_skip_upstream_hook` 的發票即使公司是 automatic 也不得走到上游'
+            'inline 外呼（平台 override 短路）——這正是它被判為 replay-safe 的理由')
+
+    def test_flagged_invoice_under_automatic_still_rolls_back_on_failure(self):
+        """R1 仍走 savepoint：失敗後點數／發票狀態零殘留。"""
+        self._use_automatic_invoicing()
+        self.invoice = self._make_flagged_invoice()
+        self._break_payment_journal()
+        before_points = self._points()
+
+        result = self._call_pay()
+        self.assertFalse(result.get('success'), '注入後應失敗（回 %r）' % result)
+
+        self.assertEqual(
+            self._points(), before_points,
+            'flagged 發票（可證明無外呼）必須維持 PR-A 的 savepoint 回捲；'
+            '裁決 C 只縮小適用範圍，不取消它')
+
+    def test_flagged_invoice_under_automatic_still_reraises_operational_error(self):
+        """R1 仍把 40001 交給框架 `retrying()`（回應沒有 `result` 鍵）。"""
+        self._use_automatic_invoicing()
+        self.invoice = self._make_flagged_invoice()
+        self._conflict_after_post()
+
+        parsed = self._post_pay()
+
+        self.assertNotIn(
+            'result', parsed,
+            'flagged 發票必須維持 `except OperationalError: raise`，讓 retrying() '
+            '以新 snapshot 重試；被吞掉的話 #864 格1 的併發面等於沒修（回 %r）'
+            % parsed)
+
+    # ================================================================
+    #  R2：flagless ＋ non-automatic ⇒ 外呼 0，safe 路徑仍成立
+    # ================================================================
+    def test_flagless_invoice_under_manual_makes_no_upstream_einvoice_call(self):
+        einvoice_calls = self._use_manual_invoicing()
+        self.assertFalse(
+            self.invoice.woow_skip_upstream_hook,
+            'fixture 前提：R2 這一列必須是 flagless')
+
+        result = self._call_pay()
+        self.assertTrue(result.get('success'), '付款應成功（回 %r）' % result)
+
+        self.assertEqual(
+            len(einvoice_calls), 0,
+            '`auto_invoice != automatic` 時上游 inline hook 是 no-op ⇒ 即使沒有'
+            '平台旗標也不會外呼，這正是它被判為 replay-safe 的第二條理由')
+
+    def test_flagless_invoice_under_manual_still_rolls_back_on_failure(self):
+        self._use_manual_invoicing()
+        self._break_payment_journal()
+        before_points = self._points()
+
+        result = self._call_pay()
+        self.assertFalse(result.get('success'), '注入後應失敗（回 %r）' % result)
+
+        self.assertEqual(
+            self._points(), before_points,
+            'flagless 但公司非 automatic ⇒ 交易內不會外呼 ⇒ savepoint 回捲照舊。'
+            '裁決 C 的判準是 OR，不是「只有 flagged 才回捲」')
+
+    def test_flagless_invoice_under_manual_still_reraises_operational_error(self):
+        self._use_manual_invoicing()
+        self._conflict_after_post()
+
+        parsed = self._post_pay()
+
+        self.assertNotIn(
+            'result', parsed,
+            'flagless 但非 automatic 的發票一樣要把 40001 交給 retrying()（回 %r）'
+            % parsed)
+
+    # ================================================================
+    #  R3：flagless ＋ automatic ⇒ ⛔ 不重播、⛔ 不套新的 savepoint 語意
+    # ================================================================
+    def test_flagless_invoice_under_automatic_does_not_replay_operational_error(self):
+        """40001 必須被既有的 generic failure 路徑吞下，回 `success: false`。
+
+        修前（PR-A 未加 gate）：例外逸出 → 框架回 JSON-RPC `error`（沒有 `result`）。
+        修後（裁決 C）：回 HTTP 200 ＋ `result.success is False` —— 與 develop 相同。
+        """
+        self._use_automatic_invoicing()
+        self._conflict_after_post()
+
+        parsed = self._post_pay()
+
+        self.assertEqual(
+            parsed.get('result', {}).get('success'), False,
+            'flagless ＋ automatic 的 40001 ⛔ 不得進 framework retrying()：重播會'
+            '把 inline 外呼一起重播 ⇒ 同一筆開出多張不可逆的真電子發票。必須由既有'
+            'generic failure 路徑吞下並回 success:false（＝develop 行為）。回 %r'
+            % parsed)
+
+    def test_flagless_invoice_under_automatic_makes_at_most_one_einvoice_call_under_conflict(self):
+        """整個 request 最多一次外呼——這條才是「不重播」真正要守的東西。
+
+        上一條看的是回應形狀；這條直接量**會開幾張真發票**。沒有 gate 的話框架會
+        重播到 `MAX_TRIES_ON_CONCURRENCY_FAILURE = 5`，而注入點在 `action_post()`
+        之後 ⇒ 每一輪都會先走完 inline 外呼 ⇒ 量到 5。
+        """
+        einvoice_calls = self._use_automatic_invoicing()
+        deduct_calls = self._conflict_after_post()
+
+        self._post_pay()
+
+        self.assertEqual(
+            len(einvoice_calls), 1,
+            '一次 request 最多送出一次 inline 電子發票外呼；量到 %d 次代表框架重播了'
+            'handler（`deduct_wallet_points` 被呼叫 %d 次）⇒ 同一筆開出多張真發票'
+            % (len(einvoice_calls), len(deduct_calls)))
+
+    def test_flagless_invoice_under_automatic_keeps_develop_residue_semantics(self):
+        """⛔ 不套新的 savepoint 回捲語意 —— 這一列完整維持 develop 行為。
+
+        🔴 這條**刻意斷言殘留仍在**。看起來像在守一個 bug，實際守的是「PR-A 的
+        savepoint ⛔ 沒有被套到會外呼的那一類」：一旦套上去，DB 會被捲回 draft，
+        而 ECPay 上那張真發票還在、去重守衛（`uniform_state` / `ecpay_invoice_id`）
+        也被一起捲掉 ⇒ 下次再付開第二張。半成交本身由 **follow-up #980** 承接，
+        ⛔ 不在 PR-A 射程內。
+        """
+        self._use_automatic_invoicing()
+        self._break_payment_journal()
+        before_points = self._points()
+
+        result = self._call_pay()
+        self.assertFalse(result.get('success'), '注入後應失敗（回 %r）' % result)
+
+        self.assertEqual(
+            self._points(), before_points - _AMOUNT,
+            'flagless ＋ automatic 必須維持 develop 的殘留語意（點數已扣、發票已 '
+            'posted）。若這裡變成「沒扣」，代表 savepoint 被套到了會外呼的那一類 ⇒ '
+            'ECPay 上的真發票會變成沒有 DB 對應的孤兒，且去重守衛被回捲（#980）')
