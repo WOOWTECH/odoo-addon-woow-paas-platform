@@ -63,9 +63,14 @@ Odoo + pod verify). Stdlib HS256 (no PyJWT).
 | `iat` / `exp` | unix; 1h TTL |
 | `jti` | uuid hex (replay defence) |
 
-A separate `SKILL_BUNDLE_TOKEN` (env, `token_use=skill_bundle`, carries the
+A separate `SKILL_BUNDLE_TOKEN` (`token_use=skill_bundle`, carries the
 authoritative `project_id` + `workspace_ids`) is what the pod presents back to
-Odoo's skill-bundle endpoint — see §5.
+Odoo's skill-bundle endpoint — see §5. It reaches the pod as an env var either
+way, but the CARRIER depends on the operator's
+`AGENT_RUNTIME_SKILL_BUNDLE_SECRET_ENABLED` (F-GC-1 / #955): off = a literal
+pod-spec env value (legacy), on = `valueFrom.secretKeyRef` against the
+per-release Secret `{release}-skill-bundle`. Either way the pod just reads
+`os.environ` — the change is invisible to the protocol.
 
 ## 3. Inbound — Odoo → Pod (`user_message`)
 
