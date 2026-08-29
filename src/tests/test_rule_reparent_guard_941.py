@@ -105,7 +105,10 @@ import traceback
 import uuid
 from unittest.mock import patch
 
-from odoo.exceptions import AccessError
+from psycopg2 import IntegrityError
+from psycopg2.errorcodes import NOT_NULL_VIOLATION
+
+from odoo.exceptions import AccessError, UserError, ValidationError
 from odoo.tests import HttpCase, tagged
 
 from ..models.cloud_service import _internal_provision
@@ -660,9 +663,42 @@ class TestRuleReparentPositiveControls941(_RuleReparent941Fixture):
 
         （這也是 7.4 的另一半：pull 若可行，攻擊者只要接著 unlink 自己的
         policy，cascade 就會連帶刪掉受害者的 rule。）
+
+        ## #973 F2：補上的三件事，以及**不該**被補成什麼
+
+        原版每道門只有 `assertIn('error', result)` ＋ landed 檢查 ⇒ 日後任何一條
+        validator 開始擋這個 payload，這一格會**無聲地**改成量別人而照樣綠。補：
+
+        1. **exception class 斷言**——必須是 `AccessError`。三類互斥
+           （`ValidationError` ＝ `write()` 之後那五個 validator、`UserError` ＝
+           #929 投影欄守衛、`AccessError` ＝ 授權層）⇒ 這一條就是「擋它的仍然是
+           授權層」的判別式。
+        2. **`SessionExpired` 探針前提**（A 系列有、這裡原本沒有）——回
+           `SessionExpired` 代表 RPC 根本沒帶認證，那樣的「被拒」零意義。
+        3. **陽性對照**——同一個 session、同一條 RPC，對兩個 model 各做一次
+           **合法**寫入。少了它，「三道門都被拒」與「這個 session 對什麼都寫不動」
+           在輸出上不可區分。
+
+        🔴 ⛔ **不要把這一格改寫成「守衛擋的」**：擋下 pull 的是框架**寫入前**那次
+        `check_access('write')`（目標列 R_B 掛在 wsB，Mallory 只有 member-read），
+        本守衛在這條路上根本不 fire（`policy_id` 的**新值**是 Mallory 自己的
+        policy，她對它有 owner）。class 斷言鎖的是「授權層」這個層次，⛔ 不是
+        「哪一道授權」——RPC 回應拿不到 traceback，分不出來的東西就不要宣稱。
         """
         self.authenticate(self.mallory_login, self.mallory_login)
         rule_b = self.pol_b_route.sudo().rule_ids[0]
+
+        # 陽性對照（兩個 model 各一）：同一個 session、同一條 RPC 的合法寫入必須成功
+        self._tenant_write_positive_control(self.rule_a.id, 'c6')
+        pol_name = 'renamed-by-tenant-941-c6'
+        pc_status, pc_result = self._call_kw(
+            _POLICY, 'write', [[self.pol_a.id], {'name': pol_name}])
+        self._assert_ok(
+            pc_status, pc_result,
+            '陽性對照：租戶對自己 workspace 內的 policy 有合法寫入權')
+        self.assertEqual(
+            self._db(_POLICY, self.pol_a.id, 'name'), pol_name,
+            '陽性對照：policy 側的合法欄位必須真的落地，否則兩道 x2many 門零鑑別力')
 
         doors = (
             ('direct-write', _RULE, 'write',
@@ -683,6 +719,17 @@ class TestRuleReparentPositiveControls941(_RuleReparent941Fixture):
                 'error', result,
                 '#941[C6:%s]：把他人的 rule 拉進自己的 policy 必須被拒'
                 '（實際 HTTP %s）' % (tag, status))
+            text = self._error_text(result)
+            self.assertNotIn(
+                'SessionExpired', text,
+                '探針前提[C6:%s]：回的是 SessionExpired ⇒ RPC 沒帶認證，'
+                '這一格零意義（%r）' % (tag, text))
+            self.assertIn(
+                'AccessError', text,
+                '#973 F2[C6:%s]：擋下 pull 的必須仍是**授權層**（AccessError）。'
+                '量到 ValidationError 代表改成被某條 validator 擋、量到 UserError'
+                ' 代表被 #929 的投影欄守衛擋——兩者都表示這一格已經在量別人，'
+                '而「拉不動別人的 rule」這件事不再有守線（實際 %r）' % (tag, text))
             self.assertEqual(
                 landed, self.pol_b_route.id,
                 '#941[C6:%s]：被拒之後 R_B 必須仍掛在 wsB 的 policy 底下'
@@ -728,7 +775,12 @@ class TestRuleReparentPositiveControls941(_RuleReparent941Fixture):
 
 
 class TestRuleReparentEdgeCases941(_RuleReparent941Fixture):
-    """§7 的兩格待查證：清空語意，與被拒之後 session 還活著。"""
+    """守衛自己那幾條分支的覆蓋：§7 的兩格待查證 ＋ #973 F4 的兩條零覆蓋分支。
+
+    E1／E2 是 #941 §7.2／§7.3 的待查證；E3／E4 是 #973 F4 補的——守衛的
+    「值沒真的改變就早退」與「投影欄守衛排在本守衛之前」這兩件事，在 #941 落地
+    時各自只有一句註解（設計當時自己標 [推論]），一格測試都沒有。
+    """
 
     def test_E1_clearing_policy_id_is_rejected_by_required_not_by_the_guard(self):
         """§7.2：`policy_id` 是 `required=True`，守衛的「清空不守」分支是否可達。
@@ -739,21 +791,70 @@ class TestRuleReparentEdgeCases941(_RuleReparent941Fixture):
 
         ⚠ 包在 `env.cr.savepoint()` 裡是刻意的：清空會在 flush 時撞 NOT NULL，
         那是 SQL 之後才丟的例外，不回捲會毒掉 cursor。因此本格**只**主張
-        「有被擋」與 exception class，⛔ 不主張回捲後的 DB 值。
+        「有被擋」與被擋的**層次**，⛔ 不主張回捲後的 DB 值。
+
+        ## #973 F1：為什麼判準不是「那個 exception 叫什麼名字」
+
+        原版只有 `if raised is None: self.fail(...)` ⇒ **拋任何例外都綠**
+        （`MissingError`、fixture 打錯 id、`AttributeError` 都算），而生產碼守衛
+        的 docstring 已經把「清空會撞 NOT NULL」寫成既成事實 ⇒ 那句話當時沒有
+        任何斷言鎖著它。
+
+        補的三條斷言鎖的是**性質**，不是名字：
+
+        1. **不是我們自己那三層擋的**——`AccessError`（本守衛）／`UserError`
+           （#929 投影欄守衛）／`ValidationError`（`write()` 之後那五個
+           validator）三類互斥。這一條就是「守衛確實早退了、沒去管清空」的
+           直接證據。
+        2. **是 DB 的完整性約束擋的**——`psycopg2.IntegrityError`（結構判準，
+           `NotNullViolation` 是它的子類）。
+        3. **而且正是 NOT NULL 那一種**——判準用 `psycopg2.errorcodes` 自己的
+           `NOT_NULL_VIOLATION` 符號比對 `pgcode`（SQLSTATE），⛔ 不寫字面值、
+           也⛔ 不鎖 psycopg2 的 class 名：SQLSTATE 是 ISO SQL 標準碼，class 名
+           會隨 driver 版本漂（psycopg3 就換了 module 路徑）。
+
+        ⚠ 本格是**直接**在 `TransactionCase` 裡 `.write()`，沒經過 `call_kw` 與
+        HTTP 分派那層包裝 ⇒ 拿到的是 driver 的原始例外。走 RPC 的同一個 payload
+        會被 `odoo/http.py` 轉成呼叫端看得到的錯誤封包，**類別不同**，⛔ 不可從
+        本格外推到 RPC 路徑。
         """
         raised = None
         try:
             with self.env.cr.savepoint():
                 self.Rule.with_user(self.mallory).browse(
                     self.rule_a.id).write({'policy_id': False})
-        except Exception as exc:  # noqa: BLE001 —— class 本身就是待量測的量
+        except Exception as exc:  # noqa: BLE001 —— 例外的性質本身就是待量測的量
             raised = exc
-        _logger.info('[941][E1] RAW clear policy_id → raised=%s: %s',
-                     type(raised).__name__ if raised else None, raised)
+        _logger.info(
+            '[941][E1] RAW clear policy_id → raised=%s pgcode=%r: %s',
+            type(raised).__name__ if raised else None,
+            getattr(raised, 'pgcode', None), raised)
         if raised is None:
             self.fail(
                 '§7.2：`policy_id` 宣告 required=True，清空必須被擋'
                 '（沒被擋代表 required 沒有生效，那是另一個缺口）')
+
+        self.assertNotIsInstance(
+            raised, (AccessError, UserError, ValidationError),
+            '#973 F1：清空**不該**被我們自己那三層擋下——守衛對清空是刻意早退的，'
+            '#929 只管三個投影欄，五個 validator 也不問 NULL。量到 %s 代表擋它的'
+            '層次跟生產碼 docstring 寫的不是同一個（實際 %s: %s）'
+            % (type(raised).__name__, type(raised).__name__, raised))
+        self.assertIsInstance(
+            raised, IntegrityError,
+            '#973 F1：擋它的必須是 DB 的完整性約束（實際 %s: %s）'
+            % (type(raised).__name__, raised))
+        self.assertEqual(
+            getattr(raised, 'pgcode', None), NOT_NULL_VIOLATION,
+            '#973 F1：SQLSTATE 必須是 NOT NULL violation——換成別的完整性約束'
+            '（unique／foreign key）代表擋它的是別的東西，生產碼 docstring 那句'
+            '「required=True ⇒ 撞 NOT NULL」就不再成立（實際 class=%s pgcode=%r'
+            ' msg=%s）' % (type(raised).__name__,
+                           getattr(raised, 'pgcode', None), raised))
+        self.assertIn(
+            'policy_id', str(raised),
+            '#973 F1：訊息必須指名 `policy_id` 那一根 column——換成別的欄位的'
+            ' NOT NULL 代表這一格量到的是別的缺陷（實際 %s）' % (raised,))
 
     def test_E2_denied_reparent_leaves_the_session_usable(self):
         """§7.3：被拒之後同一個 session 還能繼續讀寫。
@@ -784,6 +885,154 @@ class TestRuleReparentEdgeCases941(_RuleReparent941Fixture):
             '被拒之後讀回來的 policy_id 必須仍是原值（實際 %r）'
             % (rows[0]['policy_id'],))
         self._tenant_write_positive_control(self.rule_a.id, 'e2-post')
+
+
+    def test_E3_unchanged_policy_id_short_circuits_before_check_access(self):
+        """#973 F4(a)：`policy_id` 送**與現值相同**的值 ⇒ 守衛早退，不做授權檢查。
+
+        守衛的第三道早退（`if all(rec[...].id == new_id ...): return`）在 #941
+        落地時**零測試覆蓋**——沒有任何格子送出過 `policy_id == 現值` 的 rule
+        write。而設計 §1.8 正是靠這條分支論證「`(6, 0, ids)` 對一條**本來就掛著**
+        的 rule 重寫一次，不會被自己的守衛擋」。
+
+        ## 🔴 這一格靠什麼紅（設計時就要想清楚的那件事）
+
+        ⛔ **不能**只斷言「沒有 raise」——那是恆綠的：把早退兩行拿掉，守衛會改成
+        對**現在這個** policy 做 `check_access('write')`，而**能寫這一列的人對它
+        必定有 owner／admin**（rule 與 policy 的 `..._owner_admin_manage` ir.rule
+        domain 逐字相同，各 363 字元、只有 `model_id` 不同——#941 已量過）⇒ 檢查
+        照樣通過、寫入照樣成功、測試照樣綠。**沒有任何 actor 能讓那個分支的移除
+        變成一個可見的拒絕。**
+
+        ⇒ 判別式改成量**那次呼叫本身發生了沒有**：早退的契約是「省掉一次多餘的
+        `check_access`」，不是「放行」。本格在 policy model 的 registry class 上掛
+        spy，斷言：
+
+        * **陽性對照**（值真的改變）：spy 必須錄到對**新** policy 的
+          `check_access('write')` —— 少了它，「零呼叫」與「spy 根本壞了」不可區分。
+        * **本體**（值沒改變）：spy **不得**錄到對那個 policy 的
+          `check_access('write')`，而且那次寫入必須**成功、值仍在原處**。
+
+        把早退兩行拿掉 ⇒ 本體那次寫入會讓 spy 錄到 `('write', pol_a2)` ⇒ 紅。
+
+        ⚠ spy 掛在 `type(env[_POLICY])`（registry class，同 process 的 HTTP server
+        thread 也吃得到，A5 用的是同一個技巧），`finally` 還原：原本 class 自己
+        `__dict__` 裡沒有這個名字（`check_access` 繼承自 `BaseModel`）就 `delattr`，
+        有就寫回去——⛔ 不能無條件 `delattr` 也不能無條件覆寫。
+        """
+        self.authenticate(self.mallory_login, self.mallory_login)
+        self._tenant_write_positive_control(self.rule_a.id, 'e3')
+
+        PolicyCls = type(self.env[_POLICY])
+        _MISSING = object()
+        own_attr = PolicyCls.__dict__.get('check_access', _MISSING)
+        original = PolicyCls.check_access
+        seen = []
+
+        def _spy(records, operation):
+            seen.append((operation, tuple(records.ids)))
+            return original(records, operation)
+
+        PolicyCls.check_access = _spy
+        try:
+            # 陽性對照：值真的改變 ⇒ 守衛必須對**新** policy 做一次 write 檢查
+            status, result, landed = self._attempt_reparent(
+                self.rule_a.id, {'policy_id': self.pol_a2.id}, 'E3-pc')
+            self._assert_ok(status, result,
+                            '前提：同 workspace 的合法搬移必須成功（＝C1 的形狀）')
+            self.assertEqual(
+                landed, self.pol_a2.id,
+                '前提：合法搬移的值必須真的落地（實際 %r）' % (landed,))
+            checked = [ids for op, ids in seen if op == 'write']
+            _logger.info('[941][E3-pc] RAW policy check_access calls=%r', seen)
+            self.assertIn(
+                self.pol_a2.id, [i for ids in checked for i in ids],
+                '探針前提：值真的改變時，spy 必須錄到守衛對新 policy(%r) 的'
+                ' `check_access(\'write\')`；錄不到代表 spy 沒掛上去，'
+                '下面那句「零呼叫」就零鑑別力（實際錄到 %r）'
+                % (self.pol_a2.id, seen))
+            seen.clear()
+
+            # 本體：送與現值相同的 policy_id ⇒ 早退分支
+            status, result, landed = self._attempt_reparent(
+                self.rule_a.id, {'policy_id': self.pol_a2.id}, 'E3')
+        finally:
+            if own_attr is _MISSING:
+                delattr(PolicyCls, 'check_access')
+            else:
+                PolicyCls.check_access = own_attr
+
+        _logger.info('[941][E3] RAW policy check_access calls=%r', seen)
+        self._assert_ok(
+            status, result,
+            '#973 F4(a)：送與現值相同的 policy_id 是合法的 no-op 寫入，必須成功'
+            '（擋掉它會打死 UI 整批送欄位與 `(6, 0, ids)` 那條路）')
+        self.assertEqual(
+            landed, self.pol_a2.id,
+            '#973 F4(a)：no-op 寫入之後值必須仍在原處（實際 %r）' % (landed,))
+        write_checked = [i for op, ids in seen if op == 'write' for i in ids]
+        self.assertNotIn(
+            self.pol_a2.id, write_checked,
+            '#973 F4(a)：`policy_id` 沒有真的改變時，守衛必須在做任何授權檢查'
+            '**之前**就早退——實際對 policy %r 做了 `check_access(\'write\')`。'
+            '這一格紅通常代表那兩行早退被拿掉了（拿掉之後功能不會壞，只是每次'
+            'UI 整批送欄位都多驗一次，而 §1.8 對 `(6, 0, ids)` 的論證失去依據）。'
+            '本次錄到的全部呼叫：%r' % (self.pol_a2.id, seen))
+
+    def test_E4_mixed_payload_is_rejected_by_the_projection_guard_first(self):
+        """#973 F4(b)：`policy_id` ＋ 投影欄同時送 ⇒ **#929 那道先拒**。
+
+        `write()` 的註解逐字宣稱「同時送 `policy_id` ＋ 投影欄的 payload 由上面
+        那道先拒（`UserError`），不漏」——#941 設計當時自己標 **[推論]**，而測試檔
+        裡混合 payload 一格都沒有。這一格把那句話變成量出來的。
+
+        判別式＝ **exception class**：#929 的 `_reject_derived_projection_writes`
+        拋 `UserError`、本守衛拋 `AccessError`，兩類互斥。兩道守衛的順序若被對調，
+        這個 payload 會改拋 `AccessError` ⇒ 本格紅。
+
+        ⚠ 攻擊者刻意用**兩個都非法**的值（`policy_id` 指向 wsB 的 victim policy、
+        `security_access_id` 指向 wsB 的 SA）：兩道守衛都會拒，所以「拒了」不具
+        鑑別力，**只有拒的是哪一類**才有——這正是本格存在的理由。
+        """
+        self.authenticate(self.mallory_login, self.mallory_login)
+        self._tenant_write_positive_control(self.rule_a.id, 'e4')
+
+        status, result = self._call_kw(
+            _RULE, 'write',
+            [[self.rule_a.id], {'policy_id': self.pol_b_route.id,
+                                'security_access_id': self.sa_b.id}])
+        landed_policy = self._db(_RULE, self.rule_a.id, 'policy_id')
+        landed_sa = self._db(_RULE, self.rule_a.id, 'security_access_id')
+        text = self._error_text(result)
+        _logger.info(
+            '[941][E4] RAW mixed-payload RPC → http=%s error=%r '
+            'landed_policy_id=%r landed_security_access_id=%r',
+            status, text if 'error' in result else None,
+            landed_policy, landed_sa)
+
+        self.assertIn(
+            'error', result,
+            '#973 F4(b)：混合 payload 必須被拒（實際 HTTP %s）' % status)
+        self.assertNotIn(
+            'SessionExpired', text,
+            '探針前提：回的是 SessionExpired ⇒ RPC 沒帶認證，這一格零意義（%r）'
+            % text)
+        self.assertIn(
+            'UserError', text,
+            '#973 F4(b)：先拒的必須是 #929 的投影欄守衛（UserError）。量到'
+            ' AccessError 代表兩道守衛的順序被對調了——`write()` 的註解與 #849 '
+            '「投影欄守衛必須是本方法的第一件事」那條要求就不再成立（實際 %r）'
+            % text)
+        self.assertIn(
+            'security_access_id', text,
+            '#973 F4(b)：拒絕訊息必須指名被拒的投影欄，否則分不出擋它的是 #929 '
+            '還是別的 constraint（實際 %r）' % text)
+        self.assertEqual(
+            landed_policy, self.pol_a.id,
+            '#973 F4(b)：被拒之後真錨點必須原封不動（實際 %r）' % (landed_policy,))
+        self.assertEqual(
+            landed_sa, self.sa_a.id,
+            '#973 F4(b)：被拒之後投影欄也必須原封不動（實際 %r）' % (landed_sa,))
 
 
 class TestRuleReparentRegression941(_RuleReparent941Fixture):
@@ -876,6 +1125,12 @@ class TestRuleReparentInjectionControls941(_RuleReparent941Fixture):
 
         判準用 traceback 裡的**函式名存在性**，⛔ 不用行號——行號會被任何一次
         docstring 增修整段推移，而那種失效是靜默的。
+
+        ⚠ **本格刻意違反檔頭「攻擊一律走真 RPC」那條紀律，理由寫在這裡**（#973 F2
+        的 note）：本格的判準是 traceback 的 frame 名，而 `/web/dataset/call_kw`
+        的錯誤封包只帶 `name`／`message`，**拿不到 traceback** ⇒ 走 RPC 就量不到
+        「是哪一道擋的」，只量得到「被擋了」——那正是本格唯一要回答的問題。
+        RPC 面的覆蓋由 A1–A5 提供，本格補的是它們拿不到的那一格。
         """
         carol, pol_c, rule_c = self._stranger_workspace('a')
 
@@ -903,9 +1158,39 @@ class TestRuleReparentInjectionControls941(_RuleReparent941Fixture):
         ⚠ rule 側**沒有** policy 側那個 `check_access('read')` 排序迴圈，所以
         這一格的形狀由實測決定，不能從 #848 的 C3b 外推。兩種結局都合法，但
         **不論哪一種，擋下它的都不得是新守衛**（那正是「patch 真的生效了」的
-        證明）；哪一種發生則寫進 log 與本 docstring 的量測欄。
+        證明）。
 
-        量測（GREEN 輪 CI）：兩個分支的原始輸出見 job log 的 `[941][C3b]` 行。
+        ⚠ 與 C3a 同一個理由走 `with_user()` ＋ ORM 而非 RPC：判準是 traceback 的
+        frame 名，`call_kw` 的錯誤封包帶不出 traceback。
+
+        ## 🔴 量測欄（#973 F3：實測結果搬進檔案，不再指向會過期的 CI log）
+
+        **實際發生的是「有例外」那一支。** GREEN 輪（odoo-tests run 5849，
+        sha `7bfa4f33`）job log 的 `[941][C3b]` 逐字：
+
+            raised=AccessError  landed=491（＝pol_c，原值）
+            frames=['test_C3b_with_the_guard_disabled_the_stranger_is_not_stopped_by_it',
+                    'write', '_check_at_least_one_include',
+                    '__get__', '__get__', '__get__',
+                    '_fetch_field', 'fetch', 'check_access']
+
+        ⇒ 守衛停用之後，擋下陌生人的是 **`_check_at_least_one_include` 讀受害者
+        policy 時撞到的 `AccessError`** —— 那是 `super().write()` **之後**才跑的
+        validator，為了數 include rule 去 fetch victim policy 的欄位，順手觸發了
+        ir.rule 的 read 檢查。
+
+        🔴 這道保護有兩個性質，都要記住：
+
+        * **它是 incidental 的、會漂**：那個 `AccessError` 是「數 include」這件事
+          的副作用，不是歸屬把關。哪天那條 validator 改成 `sudo()` 讀、或改成不
+          fetch policy 欄位，它就無聲消失。
+        * **它對「共同成員」完全不成立**：Mallory 是 wsB 的成員 ⇒ 讀得到 wsB 的
+          policy ⇒ 這條路一點都不會擋她。C4 就是那個反例（守衛停用後她的攻擊
+          `landed_policy_id=494`，成功落地）。
+
+        ⇒ 本單之前，rule 側對**陌生人**有一道會漂的偶然防線，對**共同成員**
+        一道都沒有。本格因此只斷言「擋它的不是新守衛」，⛔ 不把那道 incidental
+        保護寫成契約。
         """
         carol, pol_c, rule_c = self._stranger_workspace('b')
 
