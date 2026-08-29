@@ -7,6 +7,8 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from psycopg2 import OperationalError
+
 from odoo import _, fields
 from odoo.exceptions import UserError, ValidationError
 from odoo.http import request, route, Controller
@@ -1133,8 +1135,6 @@ class BillingController(HiddenChainMixin, Controller):
         frontend; the deduct + post + reconcile sequence lives on the model
         so the subscription cron can reuse it (Phase 2c #5).
         """
-        from odoo.exceptions import UserError
-
         partner = request.env.user.partner_id.sudo()
         invoice = request.env['account.move'].sudo().browse(invoice_id)
         _logger.info(
@@ -1184,14 +1184,78 @@ class BillingController(HiddenChainMixin, Controller):
                 },
             }
 
+        # #864 格1：`_pay_from_wallet()` 的寫入是**分段**的，例外噴在哪一步，
+        # 殘留就累積到哪——`action_post()`（發票 posted、發票號碼已消耗）→
+        # `deduct_wallet_points()`（點數已扣、wallet.transaction 已 INSERT）→
+        # 建 `account.payment` → `reconcile()`。下面的 except 鏈把例外吃掉後不會
+        # 傳播到框架層，request 正常結束 → transaction 照常 commit → 上述殘留
+        # 全部落地：**畫面說失敗，錢卻已經從錢包扣走**。
+        #
+        # 與 #525 A1 的 skip-trial 不同的是加重方向：那裡的殘留把重試**鎖死**，
+        # 這裡的殘留讓重試**再扣一次**——本端點允許 `state == 'posted'` 的發票
+        # 再付一次（金額改取 `amount_residual`），所以使用者看到「失敗」後再按
+        # 一次會成功，代價是同一張發票被扣了兩遍。另外被回捲不掉的
+        # `action_post()` 會燒掉一個發票序號，帳上留下可稽核的跳號缺口。
+        #
+        # 用 savepoint 而不是整個 request 的 `cr.rollback()`：撤回範圍界定在
+        # 「這一段」比界定在「整個 request」穩健——不必依賴「這個 endpoint 在 try
+        # 之前永遠不會有別的寫入」這個會隨程式碼演進失效的前提。附帶好處：
+        # `cr.savepoint()` 失敗時會先 `cr.clear()` 再 `ROLLBACK TO SAVEPOINT`
+        # （`sql_db._FlushingSavepoint.rollback`），ORM cache 與待計算欄位一併清
+        # 乾淨；只補 `cr.rollback()` 得自己處理髒 cache。
+        #
+        # 範本：`paas.py` 的 `api_service_skip_trial`（#525 A1／#533 修過同構缺陷）。
         try:
-            invoice._pay_from_wallet()
-        except UserError as e:
+            with request.env.cr.savepoint():
+                invoice._pay_from_wallet()
+
+        except OperationalError:
+            # #864（沿用 #518／#533 的判準）：並發類 DB 例外（`SerializationFailure`
+            # 40001 等）**必須**傳出去。它是 `Exception` 子類，被下面任何一個
+            # except 收掉的話 Odoo 的 `retrying()`（`odoo/service/model.py`）永遠
+            # 看不到——那一層在本 except 鏈的**外層**，收到 `OperationalError` 才會
+            # 做 `env.cr.rollback()`（connection-level 的整條 ROLLBACK，不是
+            # `ROLLBACK TO SAVEPOINT`）→ `env.reset()` → 重播整個 handler，下一輪
+            # 才依 REPEATABLE READ 拿到**新 snapshot**。吞掉它 ⇒ 一個本來重試就會
+            # 成功的付款變成使用者看到的失敗，而這條路徑上的衝突點（`loyalty.card`
+            # 點數扣除的並發 UPDATE、`account.move` 取號）正是最典型的寫寫衝突形態。
+            #
+            # 必須排在下面兩段之前：`SerializationFailure` 不是 `UserError` 子類，
+            # 但會被最後的 `except Exception` 吃掉。
+            #
+            # 上面那層 `cr.savepoint()` 刻意保留、也不衝突：它管的是「失敗時不留
+            # 金流殘留」，本分支管的是「例外要讓框架看見」。新 snapshot 由
+            # `retrying()` 的整交易 rollback 提供，不是由 savepoint 提供。
+            #
+            # 🔴 重播安全性：`_pay_from_wallet` 這條鏈**純 DB 操作、無外部呼叫**
+            # ⇒ 框架重播整個 handler 不會產生重複的對外副作用。⛔ **同一招不可
+            # 套用到 `api_topup`**——那支 try 內是 ECPay 外呼，重播＝重複扣款。
+            #
+            # 取捨（沿用 `api_service_skip_trial` 同款分支）：攔截面比「會被重試的
+            # 那三種」寬。`retrying()` 只重試 `PG_CONCURRENCY_EXCEPTIONS_TO_RETRY`
+            # （LockNotAvailable / SerializationFailure / DeadlockDetected），其餘
+            # `OperationalError` 原樣拋出 ⇒ 前端拿到框架的錯誤而不是
+            # `{'success': False}`。這是刻意的：連線斷、磁碟滿、statement timeout
+            # 本來就不該被包裝成「業務失敗」回 HTTP 200。收窄成只認那三個 pgcode
+            # 等於把框架的白名單複製一份到這裡，框架改了我們不會知道。
+            raise
+
+        except (ValidationError, UserError) as e:
+            # 業務規則例外（錢包餘額不足、收款 journal 未設…）：訊息本來就是寫給
+            # 使用者看的，原文回前端。統一成泛用字串的話，真正的原因只留在 server
+            # log，使用者與第一線支援都無從排錯。
+            #
+            # ⚠ `AccessError` 也是 `UserError` 子類 ⇒ 會走這一支、把 Odoo 內部
+            # model／欄位技術名原文回給租戶。這是**本端點既有的行為**，本 PR 未改
+            # （PR-A 的射程只有 savepoint ＋ OperationalError 重拋）；範本
+            # `api_service_skip_trial` 另有一段 `except (AccessDenied, AccessError,
+            # MissingError)` 排在前面，要對齊需另開單。
             _logger.info(
                 "[INV] pay UserError invoice=%s err=%s",
                 invoice.id, str(e)[:200],
             )
             return {'success': False, 'error': str(e)}
+
         except Exception as e:
             _logger.error("[INV] pay error invoice=%s: %s\n%s",
                           invoice.id, str(e), traceback.format_exc())

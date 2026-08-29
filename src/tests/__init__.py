@@ -786,3 +786,9 @@ from . import test_change_plan_seat_gate_773
 # （同 workspace 搬移／su／pull 方向／cascade），L 系列證 controller 與框架
 # 自己的 related 重算沒被誤擋。
 from . import test_rule_reparent_guard_941
+# fix: #864 格1（PR-A）api_invoice_pay 半成交 —— `_pay_from_wallet` 分段寫入，
+# 例外被 except 鏈吃掉後框架照常 commit ⇒ 發票 posted（序號已燒）＋點數已扣，
+# 但沒有 payment、沒有 reconcile，而畫面說失敗；再按一次會被**扣第二次**。
+# 三種注入深度（journal 缺失／payment 建好後／reconcile 之後）各配一條深度斷言，
+# 併發那組證 40001 傳得到 retrying()；前端失敗分支重抓錢包走靜態掃描。
+from . import test_invoice_pay_rollback_864
