@@ -215,8 +215,14 @@ choke point、獨立 cursor 的三條硬約束、kill-switch off-state 有聲、
    **鑄出的點數（`credits + bonus`）**。閥若用 TWD，`bonus` 打錯一個 0 照樣過閥。
    ⚠ `loyalty.card.points` 是純 `Float`、**無任何 constraint** ⇒ **DB 層對「補太多」零防線**，
    安全閥就是全部的防線。
-   ⚠ `woow.wallet.topup.amount` 是 `Float` ⇒ 傳給 `expected_amount` 前的取整規則要寫成一條測試；
-   取整錯了會 fail closed（安全）但**安靜地擋掉合法的自動補**——症狀是「自動補都不動作」。
+   ⚠ `woow.wallet.topup.amount` 是 **`fields.Monetary`**（`src/models/wallet_topup.py:33`，行號會漂）
+   ⇒ 傳給 `expected_amount` 前的取整規則要寫成一條測試；取整錯了會 fail closed（安全）但
+   **安靜地擋掉合法的自動補**——症狀是「自動補都不動作」而不是「補錯錢」。
+   🔴 **設計全文 §6.6.7 把它寫成 `Float`，那是原始錯誤**（Odoo 18 的 `Float` 與 `Monetary` 是
+   `Field` 的兩個兄弟類別，不是父子）⇒ 兩個實際後果：照 ADR 去 grep `fields.Float` **找不到這個欄位**；
+   而且 rounding 來源不是 `digits` 而是 `currency_field`（此處為 `currency_id`）的 decimal places
+   （TWD ＝ 0 位）——**取整測試要釘的是「Monetary 依 currency 精度落地後的值」，
+   不是自己 round 一個裸 float**。
 
 5. **🔴 `_CLEANUP_HARD_CANCEL_MIN = 60` 約束的不是這裡。**
    （`src/models/wallet_topup.py:398`，行號會漂，自己重新定位。）
