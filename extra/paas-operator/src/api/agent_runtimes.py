@@ -171,8 +171,25 @@ def _derive_odoo_namespace() -> Optional[str]:
 _VALID_PROBE_STYLES = {"tcpSocket", "httpGet"}
 
 
-def _build_install_values(request: SpawnOrAttachRequest, skill_bundle_token: str):
-    """Helm values for a cold-start install (injects SKILL_BUNDLE_TOKEN env)."""
+def _build_install_values(
+    request: SpawnOrAttachRequest, skill_bundle_token: Optional[str] = None,
+):
+    """Helm values for a cold-start install.
+
+    Two modes, selected by ``settings.agent_runtime_skill_bundle_secret_enabled``
+    (F-GC-1 / #955):
+
+    - flag OFF (default): ``env.SKILL_BUNDLE_TOKEN`` carries the token literally —
+      today's behaviour, byte-for-byte. ``skill_bundle_token`` is REQUIRED here.
+    - flag ON: the token is NOT in the values at all. It lives in the per-release
+      Secret written by :func:`_provision_skill_bundle_secret`, and the values only
+      carry a *reference* so the chart can render ``valueFrom.secretKeyRef``.
+
+    Why the token must leave the values (not just the pod spec): helm stores the
+    user-supplied values in the release Secret, so `helm get values <release>` reads
+    the plaintext back for every revision ever installed. That is a second plaintext
+    surface, independent of the pod spec, and only removing the value closes it.
+    """
     values = {
         "image": {"tag": settings.agent_runtime_image_tag},
         "projectHash": request.project_hash,
@@ -187,7 +204,6 @@ def _build_install_values(request: SpawnOrAttachRequest, skill_bundle_token: str
         "env": {
             "ODOO_BASE_URL": settings.odoo_base_url,
             "PROJECT_HASH": request.project_hash,
-            "SKILL_BUNDLE_TOKEN": skill_bundle_token,
         },
         "networkPolicy": {"egressWorkspaceIds": request.project_workspace_ids},
         # Layer 3 (cold-start half): forward the skill + mcp snapshots so the chart
@@ -201,6 +217,29 @@ def _build_install_values(request: SpawnOrAttachRequest, skill_bundle_token: str
             "mcpSnapshot": json.dumps(request.mcp_snapshot),
         },
     }
+    # F-GC-1 (#955) — the SKILL_BUNDLE_TOKEN carrier. `skillBundleToken.*` is an
+    # optional-but-load-bearing forward: if the operator flips the flag but forgets to
+    # send these keys, the chart silently falls back to its literal branch, renders an
+    # EMPTY token, and the pod comes up healthy while every skill-bundle fetch 401s —
+    # no render error to follow ([[spawn-install-values-missed-forward]], the optional
+    # half). `secretName` is sent explicitly rather than left empty for the chart to
+    # derive, so the operator and chart cannot disagree about the name.
+    if settings.agent_runtime_skill_bundle_secret_enabled:
+        _, release = _names(request.project_hash)
+        values["skillBundleToken"] = {
+            "fromSecret": True,
+            "secretName": _skill_bundle_secret_name(release),
+            "key": _SKILL_BUNDLE_SECRET_KEY,
+        }
+    else:
+        if not skill_bundle_token:
+            raise ValueError(
+                "skill_bundle_token is required when "
+                "agent_runtime_skill_bundle_secret_enabled is off — the pod would "
+                "otherwise come up with an empty token and 401 on every "
+                "skill-bundle fetch (silently)."
+            )
+        values["env"]["SKILL_BUNDLE_TOKEN"] = skill_bundle_token
     # F-PILOT-5: forward the Odoo namespace so the pod's NetworkPolicy ingress
     # (Odoo->pod WS) + egress (pod->Odoo skill-bundle) point at Odoo's real ns,
     # not the chart's placeholder default. Omitted when not derivable (chart default).
@@ -336,6 +375,50 @@ def _provision_llm_secret(namespace: str, release: str, request: SpawnOrAttachRe
     })
 
 
+# F-GC-1 (#955): the per-release skill-bundle Secret. Deliberately NOT merged into
+# `{release}-llm`, for three reasons that each point at existing behaviour:
+#   1. a keyless request provisions no `-llm` Secret at all (_llm_secret_string_data
+#      returns None) — folding the token in would force that early-return open;
+#   2. `_llm_checksum` drives rollout_restart on attach, and this token changes on
+#      EVERY resume, so sharing the Secret would restart the pod on every attach;
+#   3. the two have different lifetimes (tenant-supplied + long-lived vs.
+#      operator-signed + rotated per resume), so one checksum cannot mean both.
+_SKILL_BUNDLE_SECRET_KEY = "SKILL_BUNDLE_TOKEN"
+
+
+def _skill_bundle_secret_name(release: str) -> str:
+    """Per-release Secret name — mirrors the ``{release}-llm`` convention."""
+    return f"{release}-skill-bundle"
+
+
+def _provision_skill_bundle_secret(namespace: str, release: str, token: str) -> None:
+    """Write the freshly signed SKILL_BUNDLE_TOKEN into its per-release Secret.
+
+    ⛔ Uses ``apply_manifest``, NOT ``patch_secret``. ``patch_secret`` builds
+    ``--patch={"data":{...}}`` on the kubectl ARGV, so the base64 token would be
+    readable in ``/proc/<pid>/cmdline`` — ``tests/test_helm.py`` asserts that the
+    subprocess really does receive the payload there. That argv surface is one of the
+    three this issue exists to close, so routing the token through it would defeat the
+    change while looking correct. ``apply_manifest`` writes a temp YAML and passes only
+    the filename.
+
+    Idempotent (kubectl apply), so cold-start and every resume can call it freely.
+    One Secret per release, living in the tenant's own namespace, so a leak stays
+    confined to that tenant (design §8.2 INV-2) and the namespace teardown reclaims it.
+    """
+    k8s_service.apply_manifest({
+        "apiVersion": "v1",
+        "kind": "Secret",
+        "metadata": {
+            "name": _skill_bundle_secret_name(release),
+            "namespace": namespace,
+            "labels": {"paas-managed": "true"},
+        },
+        "type": "Opaque",
+        "stringData": {_SKILL_BUNDLE_SECRET_KEY: token},
+    })
+
+
 def _read_llm_checksum(namespace: str, release: str) -> Optional[str]:
     """Current LLM-credential checksum stamped on the deployment (None if absent)."""
     try:
@@ -366,10 +449,12 @@ def _stamp_llm_checksum(namespace: str, release: str, checksum: str) -> None:
 
 
 def _resume_pod(namespace, release, project_hash, project_id, workspace_ids):
-    """Re-sign SKILL_BUNDLE_TOKEN, patch pod env, THEN scale to 1 (§2.11.1).
+    """Re-sign SKILL_BUNDLE_TOKEN, publish it, THEN scale to 1 (§2.11.1).
 
-    Env patch must precede scale-1 so K8s recreates the pod with the fresh
-    token (avoids the pod racing up with a stale, expired token).
+    The token must be published before scale-1 either way, so the pod cannot race
+    up with a stale, expired token. WHERE it is published depends on
+    ``settings.agent_runtime_skill_bundle_secret_enabled`` (F-GC-1 / #955): the
+    per-release Secret when on, ``kubectl set env`` when off.
     """
     skill_bundle_token = jwt_signer.sign_skill_bundle_token(
         project_hash=project_hash,
@@ -379,9 +464,26 @@ def _resume_pod(namespace, release, project_hash, project_id, workspace_ids):
         # pod also outlives the old hard-coded 1h skill-bundle token.
         exp_seconds=settings.skill_bundle_token_ttl_seconds,
     )
-    k8s_service.set_deployment_env(
-        namespace, release, {"SKILL_BUNDLE_TOKEN": skill_bundle_token},
-    )
+    if settings.agent_runtime_skill_bundle_secret_enabled:
+        # The Secret write MUST precede scale-1 for the same reason the env patch did:
+        # `valueFrom.secretKeyRef` is resolved once, when the container is created, and
+        # is never hot-reloaded — so a pod started before the write reads the OLD token
+        # and there is nothing to correct it afterwards.
+        # Unlike `kubectl set env` this does not touch the pod template, so it creates
+        # no new ReplicaSet — and, because the token is no longer part of the helm
+        # values, a later `helm upgrade --reuse-values` (sync_workspaces leg-1) can no
+        # longer re-render the pod back onto the install-time token (#955 §0.4(C);
+        # measured, see tests/integration/test_skill_bundle_token_secret.py).
+        _provision_skill_bundle_secret(namespace, release, skill_bundle_token)
+    else:
+        # Legacy plain-env path, kept ONLY as the rollback target for the flag.
+        # `allow_sensitive_keys` names the key explicitly so this stays a conscious
+        # exemption rather than a hole every caller inherits; it goes away with the
+        # flag (#955 rollout step 7).
+        k8s_service.set_deployment_env(
+            namespace, release, {"SKILL_BUNDLE_TOKEN": skill_bundle_token},
+            allow_sensitive_keys=frozenset({"SKILL_BUNDLE_TOKEN"}),
+        )
     k8s_service.scale_deployment(namespace, release, 1)
 
 
@@ -412,11 +514,20 @@ def spawn_or_attach(request: SpawnOrAttachRequest, background_tasks: BackgroundT
             # the old hard-coded 1h does not 401 forever on skill-bundle fetch.
             exp_seconds=settings.skill_bundle_token_ttl_seconds,
         )
+        if settings.agent_runtime_skill_bundle_secret_enabled:
+            # BEFORE install: the chart's secretKeyRef is `optional: false`, so a pod
+            # scheduled while the Secret is missing stops at
+            # CreateContainerConfigError. Same ordering, same reason, as
+            # _provision_llm_secret above.
+            _provision_skill_bundle_secret(namespace, release, skill_bundle_token)
+            install_values = _build_install_values(request)
+        else:
+            install_values = _build_install_values(request, skill_bundle_token)
         helm_service.install(
             namespace=namespace,
             name=release,
             chart=settings.agent_runtime_chart,
-            values=_build_install_values(request, skill_bundle_token),
+            values=install_values,
             create_namespace=False,  # ns already applied with paas-managed label
             **_chart_source_kwargs(),
         )
