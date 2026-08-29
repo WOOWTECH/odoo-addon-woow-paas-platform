@@ -40,9 +40,42 @@ class Settings(BaseSettings):
     # --username/--password` (no `helm repo add`; OCI is unavailable in this env).
     # agent_runtime_chart is the bare chart NAME; repo URL / version / read creds
     # are separate env-overridable settings, set by the operator deployment (gap A).
+    #
+    # ⚠️ OPEN (#955, 2026-08-29): the "OCI is unavailable" clause above is from the
+    # 2026-05 gap-C decision and may be stale — `_ensure_oci_login` exists precisely
+    # because the marketplace pulls `oci://jcr-prod.woowtech.io/...` charts. The
+    # charts side reports 0.5.0 is published to BOTH an OCI registry and the classic
+    # Gitea repo, and says the platform pins the OCI channel; this repo's own records
+    # (the gap-C contract table + the pilot pin) say agent-runtime resolves through
+    # `--repo` = the classic Gitea repo. Those two cannot both describe the same
+    # environment. Deliberately NOT guessed here: which channel an environment uses is
+    # decided by its Fleet CD values (AGENT_RUNTIME_CHART / AGENT_RUNTIME_REPO_URL) in
+    # paas-app-bundle-cd, not by this file. Switching to OCI would mean setting
+    # `agent_runtime_chart` to the full `oci://...` ref and leaving repo_url empty —
+    # a wiring change with its own auth path (`_ensure_oci_login`, registry_* creds),
+    # so it needs the Fleet values read first. Resolve before the flag flip.
     agent_runtime_chart: str = "agent-runtime"  # chart NAME (resolved via --repo)
     agent_runtime_repo_url: str = ""  # classic Helm repo URL (--repo), e.g. http://gitea-http.gitea.svc.cluster.local:3000/api/packages/woow-paas/helm
-    agent_runtime_chart_version: str = ""  # chart version (--version); empty = latest in index. This is the CHART version (e.g. 0.1.0), NOT the image tag
+    # Chart version passed as `--version`. This is the CHART version (e.g. 0.5.0),
+    # NOT the image tag. Empty = omit the flag = whatever helm calls latest in the
+    # index (a floating target — that is why we pin).
+    #
+    # Pinned to 0.5.0 for F-GC-1 / #955: 0.5.0 is the first chart version that
+    # renders `SKILL_BUNDLE_TOKEN` from `valueFrom.secretKeyRef`
+    # (woow-paas-charts PR #78, 0.4.5 -> 0.5.0 minor). It is dual-mode with
+    # `skillBundleToken.fromSecret` defaulting to FALSE, so 0.5.0 on its own is
+    # behaviour-identical to 0.4.5 — pinning it does NOT flip anything.
+    #
+    # 🔴 ORDERING: 0.5.0 must be PUBLISHED before this default can resolve. A pin at
+    # an unpublished version makes `helm install` fail for any environment that does
+    # not override this env — so this default and the chart publish are one
+    # lock-step, and #955's WIP gate exists to hold that line.
+    # 🔴 AUTHORITY: the per-environment value is NOT decided here. It is set on the
+    # operator Deployment env (`AGENT_RUNTIME_CHART_VERSION`) from the cross-repo
+    # paas-app-bundle-cd Fleet CD values, which override this default. This constant
+    # is the fallback for environments that set nothing (local/dev) and the record of
+    # what the code expects.
+    agent_runtime_chart_version: str = "0.5.0"  # env AGENT_RUNTIME_CHART_VERSION
     agent_runtime_repo_username: str = ""  # Gitea read:package username (--username); private repo auth
     agent_runtime_repo_password: str = ""  # Gitea read:package token (--password); private repo auth
     agent_runtime_image_tag: str = "1.0.0"  # pod image tag (appVersion) injected into values; 'latest' does not exist, only 1.0.0 is built

@@ -1124,7 +1124,9 @@ reviewer Phase D §6 新發現，無一 high-severity / 無一 code 缺陷。**R
 - **hardening 方案（已落地的形狀）**: operator 建 per-release Secret `{release}-skill-bundle`（key `SKILL_BUNDLE_TOKEN`），install 與 resume 都先寫 Secret 再 install / scale；helm values 只帶 reference（`skillBundleToken.{fromSecret,secretName,key}`）；chart 用 `valueFrom.secretKeyRef` + `optional: false`。**不是 lock-step 硬切**：雙模 + 預設 off，兩 repo 任一單獨部署都不改變行為。
 - **⚠️ 寫入原語的選擇不是任意的**: 用 `apply_manifest`（temp YAML）而**不是** `patch_secret` —— 後者把 base64 payload 組進 `--patch` 放上 kubectl argv（`/proc/<pid>/cmdline`），那正是本單要關掉的三個明文面之一。`_redact_cmd` 只遮 log、遮不到 argv。
 - **順帶量到的既有 drift（#955 §0.4(C)，原為靜態推論、2026-08-29 於 docker-desktop 實測確認）**: `sync-workspaces` 的 `helm upgrade --reuse-values` 會用 install 當時存的 values 重新 render pod template，把 resume 注入的新 token **蓋回 install 那顆**（實測：install / resume / after-sync 三個 sha256 為 A / B / **A**）。token 離開 values 之後這條路徑自然消失；回歸測試見 `extra/paas-operator/tests/integration/test_skill_bundle_token_secret.py`。
-- **owner**: paas-platform（operator，✅ done）+ paas-charts（chart，⏳ 待該 repo agent）。
+- **owner**: paas-platform（operator，✅ done）+ paas-charts（chart，✅ PR 已開、⏳ 待 publish）。
+- **chart 側（2026-08-29 回報）**: `agent-runtime` **0.5.0**（0.4.5→0.5.0 minor），PR https://git-prod.woowtech.io/woow-paas/woow-paas-charts/pulls/78，chart tests 8/8 綠（新增 5 條涵蓋 C3–C6，另有四種故障的 RED 對照）、CI 綠。⚠️ **0.5.0 尚未 publish** —— 要等該 PR merge 進 `main` 且 publish workflow 跑完（含 Verify step）才取得到。`values.schema.json` 全 repo 皆無 ⇒ C7 那個「operator 送新 key 被 schema 擋在 render 前」的風險**不存在**。
+- **順序約束只有一條**: 兩邊 PR 可獨立 merge；**chart 0.5.0 先 publish，才可翻 operator flag**。
 - **上線前仍待補查（Eugene 明示不阻塞實作）**: (a) 其他 SA 是否具備跨 ns pod-read RBAC（決定 population 有多大）；(b) skill bundle 內容的敏感度上限（決定被冒用的後果）。兩者都只影響「medium 是否夠」的事後複核，不改本處置。
 - 對照: [[agent-runtime-operator-chart-install-contract]] §Q2b / §替代方案、design §6.5；issue **#955**（重審 + 實作）、**#155**（TTL stopgap，401→refresh 的真解另案）。
 

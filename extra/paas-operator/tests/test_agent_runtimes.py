@@ -2439,3 +2439,40 @@ class TestSkillBundleTokenSecret:
 
             mock_k8s.set_deployment_env.assert_called_once()
             assert not _secret_manifests(mock_k8s, _SKILL_SECRET)
+
+
+class TestAgentRuntimeChartVersionPin:
+    """#955: the chart version we ship must be a PIN, not a floating latest.
+
+    `agent_runtime_chart_version` empty ⇒ `--version` is omitted ⇒ helm resolves
+    whatever the repo index calls latest. That is a moving target, and for this issue
+    it is specifically the wrong one: the `secretKeyRef` branch only exists from chart
+    **0.5.0** (woow-paas-charts PR #78), so flipping
+    `agent_runtime_skill_bundle_secret_enabled` against an older chart yields a pod
+    with an EMPTY token — healthy-looking, 401 on every skill-bundle fetch, no render
+    error to follow.
+
+    ⚠️ This asserts the **shipped default**, read off the pydantic field rather than
+    the settings singleton: the singleton is mutated by other tests and by env, so
+    reading it would make this test pass for reasons unrelated to what we ship.
+    """
+
+    def test_default_chart_version_is_the_secret_key_ref_pin(self):
+        from src.config import Settings
+
+        default = Settings.model_fields["agent_runtime_chart_version"].default
+        assert default == "0.5.0", (
+            f"shipped chart-version default is {default!r}; #955 needs the pin at the "
+            "first chart version that renders SKILL_BUNDLE_TOKEN via secretKeyRef. "
+            "An empty default means floating latest — see the config.py comment."
+        )
+
+    def test_default_is_forwarded_to_helm_as_version(self):
+        """The pin is worthless if the wiring drops it — forward it as `--version`."""
+        from src.api import agent_runtimes
+        from src.config import Settings
+
+        default = Settings.model_fields["agent_runtime_chart_version"].default
+        with patch("src.api.agent_runtimes.settings.agent_runtime_chart_version",
+                   default):
+            assert agent_runtimes._chart_source_kwargs()["version"] == default

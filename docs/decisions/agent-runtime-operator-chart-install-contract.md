@@ -66,7 +66,14 @@ helm install agent-pa-{hash} agent-runtime \
 
 ### operator deployment env 契約（gap A 須提供）
 
-| env | 值（stg） | 對應 helm |
+> ⚠️ **下表的「值」是 2026-05 gap-C 落地當時的 stg 快照，不是現況。** 這些 env 的
+> per-env 權威值住在跨 repo 的 `paas-app-bundle-cd` Fleet CD values（operator
+> Deployment env），**不在本 repo**；本 repo 只有 `src/config.py` 的 fallback 預設。
+> 要知道某環境現在實際跑什麼版本，去讀那邊或直接看 operator Deployment 的 env，
+> ⛔ 不要引用本表的數字（刻意不在此複述現值——複述的那一刻就開始漂）。
+> 版本欄的形狀（chart version 不是 image tag）與各欄對應的 helm flag 才是本表的內容。
+
+| env | 值（2026-05 stg 快照） | 對應 helm |
 |-----|----------|-----------|
 | `AGENT_RUNTIME_CHART` | `agent-runtime` | chart name |
 | `AGENT_RUNTIME_REPO_URL` | `http://gitea-http.gitea.svc.cluster.local:3000/api/packages/woow-paas/helm` | `--repo` |
