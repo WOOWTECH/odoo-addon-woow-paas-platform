@@ -1114,14 +1114,21 @@ reviewer Phase D §6 新發現，無一 high-severity / 無一 code 缺陷。**R
 
 ## F-GC-1 — SKILL_BUNDLE_TOKEN secretKeyRef hardening（gap C pilot）
 
-- **Severity**: minor（security hardening；pilot 可接受現狀）— ⚠️ **TTL 拉長後此 pilot-接受理由需重審，可能上調 severity**（見下方「為何 pilot 接受」更新）。
+- **Severity**: **medium**（2026-08-29 於 #955 完成重審，原 minor）。上調理由：原 minor 的兩支論證都倒了（見下方兩條）。沒有到 major，因為讀得到的人限於持有該 ns pod-read 權限者、且爆炸半徑是單一租戶。
+- **狀態**: ✅ **重審完成 + operator 側已實作**（#955，branch `feat/security-hardening`）。剩 chart 側（`woow-paas-charts` 雙模 template）與 per-env flag flip；⚠️ **operator 落地 ≠ 上線**，`agent_runtime_skill_bundle_secret_enabled` 預設 off，翻開關前 `AGENT_RUNTIME_CHART_VERSION` 必須先指到會渲染 secretKeyRef 的 chart 版本。
 - **Origin**: agent-runtime-pod epic gap C（operator chart install + WS transport，2026-05-25，PR #63）
 - **問題**: operator 把 `SKILL_BUNDLE_TOKEN` 以 **plain env value** 注入 pod（install 走 helm `values.env.SKILL_BUNDLE_TOKEN`、resume 走 `kubectl set env`）→ token 明文落 pod spec（`kubectl get pod -o yaml` / `describe` 可見）。
 - **為何 pilot 接受（原始論證）**: token 短壽（exp 1h）+ 每次 resume 重簽重注 → 明文風險窗 ≤1h 且輪替；且 plain env 是 operator resume（`kubectl set env`）機制的硬相容需求 — secretKeyRef 會被 `kubectl set env` 的 plain value 覆蓋成 drift。leader 已認同 plain env、secretKeyRef 列此 follow-up。
+- **🔴 原始論證的第二支也不成立（2026-08-29 於 #955 查證）**: 「plain env 是 `kubectl set env` 的硬相容需求」預設了 resume 只能走 `kubectl set env`。實際上 resume 改成「更新 per-release Secret → scale 0→1」即可，完全不碰 pod template，也就沒有 drift 可言。這條前提本身還與本 repo 既有決策相衝：design §8.2 早就寫著「creds 不入 helm values/argv」（`docs/plans/2026-Q2/agent-runtime-pod-design.md` §8.4.10 用它否決「chart 接管 secret」），而 `env.SKILL_BUNDLE_TOKEN` 走的正是 helm values。
 - **⚠️ 接受理由需重審（issue #155 TTL config 化後，2026-06-06）**: 上述「明文風險窗 ≤1h 故可接受」前提已被打掉。issue #155 stopgap 把 `SKILL_BUNDLE_TOKEN` 的 TTL 改 config-driven（`skill_bundle_token_ttl_seconds`，env `SKILL_BUNDLE_TOKEN_TTL_SECONDS`），**預設 7 天（604800s）** — 明文暴露窗從 ≤1h 擴大到 ≤7d（168 倍）。原本 minor/pilot-可接受是建立在短壽輪替上的，TTL 拉長後 plain env vs secretKeyRef 的 risk 評級需重審，**可能上調 severity**；secretKeyRef hardening 的排程優先序應一併重評。
-- **hardening 方案（redesign，非 chart-only）**: operator 改為管 per-release K8s Secret（存 token）+ resume 時 patch 該 Secret；chart 改 `env.valueFrom.secretKeyRef`。需 operator + chart lock-step。
-- **owner**: paas-platform（operator）+ paas-charts（chart）；**待 leader 排程**。
-- 對照: [[agent-runtime-operator-chart-install-contract]] §Q2b / §替代方案、design §6.5。
+- **hardening 方案（已落地的形狀）**: operator 建 per-release Secret `{release}-skill-bundle`（key `SKILL_BUNDLE_TOKEN`），install 與 resume 都先寫 Secret 再 install / scale；helm values 只帶 reference（`skillBundleToken.{fromSecret,secretName,key}`）；chart 用 `valueFrom.secretKeyRef` + `optional: false`。**不是 lock-step 硬切**：雙模 + 預設 off，兩 repo 任一單獨部署都不改變行為。
+- **⚠️ 寫入原語的選擇不是任意的**: 用 `apply_manifest`（temp YAML）而**不是** `patch_secret` —— 後者把 base64 payload 組進 `--patch` 放上 kubectl argv（`/proc/<pid>/cmdline`），那正是本單要關掉的三個明文面之一。`_redact_cmd` 只遮 log、遮不到 argv。
+- **順帶量到的既有 drift（#955 §0.4(C)，原為靜態推論、2026-08-29 於 docker-desktop 實測確認）**: `sync-workspaces` 的 `helm upgrade --reuse-values` 會用 install 當時存的 values 重新 render pod template，把 resume 注入的新 token **蓋回 install 那顆**（實測：install / resume / after-sync 三個 sha256 為 A / B / **A**）。token 離開 values 之後這條路徑自然消失；回歸測試見 `extra/paas-operator/tests/integration/test_skill_bundle_token_secret.py`。
+- **owner**: paas-platform（operator，✅ done）+ paas-charts（chart，✅ PR 已開、⏳ 待 publish）。
+- **chart 側（2026-08-29 回報）**: `agent-runtime` **0.5.0**（0.4.5→0.5.0 minor），PR https://git-prod.woowtech.io/woow-paas/woow-paas-charts/pulls/78，chart tests 8/8 綠（新增 5 條涵蓋 C3–C6，另有四種故障的 RED 對照）、CI 綠。⚠️ **0.5.0 尚未 publish** —— 要等該 PR merge 進 `main` 且 publish workflow 跑完（含 Verify step）才取得到。`values.schema.json` 全 repo 皆無 ⇒ C7 那個「operator 送新 key 被 schema 擋在 render 前」的風險**不存在**。
+- **順序約束只有一條**: 兩邊 PR 可獨立 merge；**chart 0.5.0 先 publish，才可翻 operator flag**。
+- **上線前仍待補查（Eugene 明示不阻塞實作）**: (a) 其他 SA 是否具備跨 ns pod-read RBAC（決定 population 有多大）；(b) skill bundle 內容的敏感度上限（決定被冒用的後果）。兩者都只影響「medium 是否夠」的事後複核，不改本處置。
+- 對照: [[agent-runtime-operator-chart-install-contract]] §Q2b / §替代方案、design §6.5；issue **#955**（重審 + 實作）、**#155**（TTL stopgap，401→refresh 的真解另案）。
 
 ## F-PILOT — agent-runtime pilot e2e durable 回收清單（2026-05-26）
 
