@@ -41,19 +41,20 @@ class Settings(BaseSettings):
     # agent_runtime_chart is the bare chart NAME; repo URL / version / read creds
     # are separate env-overridable settings, set by the operator deployment (gap A).
     #
-    # ⚠️ OPEN (#955, 2026-08-29): the "OCI is unavailable" clause above is from the
-    # 2026-05 gap-C decision and may be stale — `_ensure_oci_login` exists precisely
-    # because the marketplace pulls `oci://jcr-prod.woowtech.io/...` charts. The
-    # charts side reports 0.5.0 is published to BOTH an OCI registry and the classic
-    # Gitea repo, and says the platform pins the OCI channel; this repo's own records
-    # (the gap-C contract table + the pilot pin) say agent-runtime resolves through
-    # `--repo` = the classic Gitea repo. Those two cannot both describe the same
-    # environment. Deliberately NOT guessed here: which channel an environment uses is
-    # decided by its Fleet CD values (AGENT_RUNTIME_CHART / AGENT_RUNTIME_REPO_URL) in
-    # paas-app-bundle-cd, not by this file. Switching to OCI would mean setting
-    # `agent_runtime_chart` to the full `oci://...` ref and leaving repo_url empty —
-    # a wiring change with its own auth path (`_ensure_oci_login`, registry_* creds),
-    # so it needs the Fleet values read first. Resolve before the flag flip.
+    # RESOLVED (#955, 2026-08-29) — the charts side reported "the platform pins the
+    # OCI channel"; measured against the live stg operator, that is NOT true for
+    # agent-runtime. `kubectl -n paas-stg-system get deploy paas-operator-stg` shows
+    # `AGENT_RUNTIME_REPO_URL=https://git-prod.woowtech.io/api/packages/woow-paas/helm`
+    # ⇒ stg resolves this chart through the CLASSIC Gitea Helm repo (`--repo`), and
+    # `agent_runtime_chart` stays the bare name. The OCI ref is a real, separate
+    # publish channel (the marketplace charts do use it, which is why
+    # `_ensure_oci_login` exists) — it just is not the one agent-runtime travels on.
+    # ⇒ NOTHING to change here, and the chart-version pin below must be satisfiable on
+    # the CLASSIC repo. Verified 2026-08-29: 0.5.0 is present in BOTH channels.
+    # ⚠️ The "OCI is unavailable in this env" clause above is a 2026-05 statement that
+    # is now false in general (marketplace charts are OCI); it survives only as the
+    # reason agent-runtime was wired to `--repo`. Which channel any given environment
+    # uses is still decided by its Fleet CD values in paas-app-bundle-cd, not here.
     agent_runtime_chart: str = "agent-runtime"  # chart NAME (resolved via --repo)
     agent_runtime_repo_url: str = ""  # classic Helm repo URL (--repo), e.g. http://gitea-http.gitea.svc.cluster.local:3000/api/packages/woow-paas/helm
     # Chart version passed as `--version`. This is the CHART version (e.g. 0.5.0),

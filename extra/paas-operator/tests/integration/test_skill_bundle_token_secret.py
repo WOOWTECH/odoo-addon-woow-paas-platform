@@ -187,7 +187,7 @@ def _jwt_claims(token: str) -> dict:
     return json.loads(base64.urlsafe_b64decode(payload))
 
 
-def _wait_for_pod_ready(namespace: str, release: str, timeout: int = 120) -> bool:
+def _wait_for_pod_ready(namespace: str, release: str, timeout: int = 420) -> bool:
     deadline = time.time() + timeout
     while time.time() < deadline:
         data = _kubectl_json(
@@ -220,18 +220,58 @@ def _wait_for_replicas(namespace: str, release: str, target: int, timeout: int =
 # --------------------------------------------------------------------------
 
 
+# --------------------------------------------------------------------------
+# chart source：預設 stub；設了 AGENT_RUNTIME_REAL_CHART 就改打真 chart
+# --------------------------------------------------------------------------
+#
+# 同一組斷言、兩種 chart 來源。這是刻意的：stub 模式證明的是「operator 送出去的東西
+# 足以讓一個照規格實作的 chart 渲染出 secretKeyRef」，真 chart 模式才證明「**這個**
+# chart 也對」。兩者用同一份斷言，差別只在 chart 從哪裡來 ⇒ 「換成真 chart 之後
+# 哪一條性質垮掉」是可直接讀出來的，而不需要維護第二份會漂移的斷言。
+#
+# 真 chart 模式（本機，需要 registry 讀權）::
+#
+#     AGENT_RUNTIME_REAL_CHART=oci://jcr-prod.woowtech.io/woow-paas-docker-local/agent-runtime \
+#     AGENT_RUNTIME_REAL_CHART_VERSION=0.5.0 \
+#     AGENT_RUNTIME_REAL_IMAGE_TAG=1.4.4 \
+#     PAAS_REGISTRY_SERVER=jcr-prod.woowtech.io \
+#     PAAS_REGISTRY_USERNAME=... PAAS_REGISTRY_PASSWORD=... \
+#     HELM_REGISTRY_CONFIG=<一個拋棄式路徑>  \
+#         pytest -m integration tests/integration/test_skill_bundle_token_secret.py
+#
+# ⚠️ `HELM_REGISTRY_CONFIG` 請指向**拋棄式**路徑：operator 的 `_ensure_oci_login`
+# 會 `helm registry login` 寫進去。指到 `~/.docker/config.json` 會改寫使用者自己的
+# docker 設定。憑證只經 env → settings → `--password-stdin`，不進 argv。
+_REAL_CHART_ENV = "AGENT_RUNTIME_REAL_CHART"
+_REAL_CHART_VERSION_ENV = "AGENT_RUNTIME_REAL_CHART_VERSION"
+_REAL_IMAGE_TAG_ENV = "AGENT_RUNTIME_REAL_IMAGE_TAG"
+
+
 @pytest.fixture
 def agent_runtime_env(app_client, tmp_path):
-    """Point the operator at the stub chart + the test ns prefix, then clean up.
+    """Point the operator at the chart under test + the test ns prefix, then clean up.
 
     ⚠️ flag 的設定刻意用 try/except：#955 的實作 commit 之前這個欄位還不存在，
     而本檔必須能在 **實作前的樹** 上跑出 RED（TDD 硬 gate）。舊樹上設不進去 ⇒
     測試量到的就是舊行為 ⇒ 在待驗的那條斷言上紅，而不是紅在 fixture 壞掉。
     """
+    import os
     from src.config import settings
 
     project_hash = uuid.uuid4().hex[:16]
-    chart = _write_stub_chart(tmp_path / "agent-runtime-stub")
+    real_chart = os.environ.get(_REAL_CHART_ENV)
+    if real_chart:
+        chart = real_chart
+        chart_version = os.environ.get(_REAL_CHART_VERSION_ENV, "")
+        assert chart_version, (
+            f"{_REAL_CHART_ENV} 有設但 {_REAL_CHART_VERSION_ENV} 沒設 —— 不釘版本就是"
+            "打浮動 latest，那證明不了「0.5.0 這一版對」"
+        )
+        chart_source = f"REAL {chart} --version {chart_version}"
+    else:
+        chart = _write_stub_chart(tmp_path / "agent-runtime-stub")
+        chart_version = ""
+        chart_source = f"STUB {chart}"
 
     saved = {
         name: getattr(settings, name, None)
@@ -239,20 +279,31 @@ def agent_runtime_env(app_client, tmp_path):
             "agent_runtime_chart", "agent_runtime_repo_url",
             "agent_runtime_chart_version", "agent_runtime_repo_username",
             "agent_runtime_repo_password", "namespace_prefix", "odoo_base_url",
-            "agent_runtime_skill_bundle_secret_enabled",
+            "agent_runtime_skill_bundle_secret_enabled", "agent_runtime_image_tag",
+            "registry_server", "registry_username", "registry_password",
         )
     }
-    import os
     saved_auth = os.environ.get("AGENT_RUNTIME_AUTH_SECRET_CURRENT")
     os.environ["AGENT_RUNTIME_AUTH_SECRET_CURRENT"] = _TEST_AUTH_SECRET
 
     settings.agent_runtime_chart = chart
     settings.agent_runtime_repo_url = ""
-    settings.agent_runtime_chart_version = ""
+    settings.agent_runtime_chart_version = chart_version
     settings.agent_runtime_repo_username = ""
     settings.agent_runtime_repo_password = ""
     settings.namespace_prefix = _TEST_PREFIX
-    settings.odoo_base_url = ""
+    settings.odoo_base_url = os.environ.get("AGENT_RUNTIME_TEST_ODOO_BASE_URL", "")
+    if real_chart:
+        # 真 chart 要拉私有 image，且 OCI chart 本身要 `helm registry login`
+        # （`_ensure_oci_login`，走 --password-stdin ⇒ 憑證不進 argv）。
+        settings.agent_runtime_image_tag = os.environ.get(_REAL_IMAGE_TAG_ENV, "1.4.4")
+        settings.registry_server = os.environ.get("PAAS_REGISTRY_SERVER", "")
+        settings.registry_username = os.environ.get("PAAS_REGISTRY_USERNAME", "")
+        settings.registry_password = os.environ.get("PAAS_REGISTRY_PASSWORD", "")
+        assert settings.registry_username and settings.registry_password, (
+            "真 chart 模式需要 PAAS_REGISTRY_USERNAME/PASSWORD —— 少了它 OCI pull 會 "
+            "401、image 會 ImagePullBackOff，而那會被誤讀成「chart 壞了」"
+        )
     flag_present = True
     try:
         settings.agent_runtime_skill_bundle_secret_enabled = True
@@ -261,11 +312,16 @@ def agent_runtime_env(app_client, tmp_path):
 
     namespace = f"{_TEST_PREFIX}pa-{project_hash}"
     release = f"agent-pa-{project_hash}"
+    # 印出 chart 來源：這行是「這一跑到底打的是 stub 還是真 chart」的唯一憑據，
+    # 綠燈本身分不出來（兩種模式的斷言完全一樣，那正是設計意圖）。
+    print(f"\n[#955] chart source = {chart_source}")
     yield {
         "project_hash": project_hash,
         "namespace": namespace,
         "release": release,
         "flag_present": flag_present,
+        "chart_source": chart_source,
+        "is_real_chart": bool(real_chart),
     }
 
     # teardown —— 走 operator 自己的 DELETE（helm uninstall + delete ns），再兜底刪 ns
