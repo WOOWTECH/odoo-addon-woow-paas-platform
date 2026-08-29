@@ -2163,3 +2163,279 @@ class TestEnsureNamespaceEnvLabel:
         labels = ns["metadata"]["labels"]
         assert labels["paas-managed"] == "true"
         assert "paas.woowtech.io/env" not in labels
+
+
+# ---------------------------------------------------------------------------
+# #955 / F-GC-1 — SKILL_BUNDLE_TOKEN 改 per-release Secret + secretKeyRef
+# ---------------------------------------------------------------------------
+
+_SKILL_TOKEN_SENTINEL = "eyJhbGciOiJIUzI1NiJ9.SENTINEL-SKILL-BUNDLE-TOKEN.sig"
+_RELEASE = f"agent-pa-{_HASH}"
+_NAMESPACE = f"paas-ws-pa-{_HASH}"
+_SKILL_SECRET = f"{_RELEASE}-skill-bundle"
+
+
+def _enable_skill_bundle_secret(monkeypatch):
+    """Turn the #955 flag on.
+
+    ⚠️ 刻意吞掉「欄位不存在」：#955 的實作 commit 之前 ``Settings`` 沒有這個欄位
+    （pydantic ``extra="forbid"`` ⇒ 設定會 raise），而這些測試必須能在**實作前的樹**
+    上跑出 RED。吞掉之後測試量到的是舊行為 ⇒ 紅在待驗的那條斷言上，而不是紅在
+    setup 壞掉——後者無法證明「新測試真的測到了新性質」。
+    """
+    from src.config import settings
+    try:
+        monkeypatch.setattr(
+            settings, "agent_runtime_skill_bundle_secret_enabled", True,
+        )
+    except (ValueError, AttributeError):
+        pass
+
+
+def _secret_manifests(mock_k8s, name):
+    """All apply_manifest payloads that are a Secret with the given name."""
+    out = []
+    for call in mock_k8s.apply_manifest.call_args_list:
+        manifest = call.args[0] if call.args else call.kwargs.get("manifest")
+        if (
+            isinstance(manifest, dict)
+            and manifest.get("kind") == "Secret"
+            and (manifest.get("metadata") or {}).get("name") == name
+        ):
+            out.append(manifest)
+    return out
+
+
+class TestSkillBundleTokenSecret:
+    """#955: the skill-bundle token must ride a per-release Secret, not plain env.
+
+    三個明文面必須同時關掉：(1) Deployment/Pod spec 的 literal ``env[].value``；
+    (2) helm release 存的 values / history；(3) kubectl / subprocess 的 argv。
+    第 (1) 面只有真 K8s 量得到（見 ``tests/integration/test_skill_bundle_token_secret.py``）；
+    這裡守的是 operator 這一側：**送給 helm 的 values 不含 token**、**Secret 真的被建**、
+    **resume 不再走 ``kubectl set env``**。
+    """
+
+    def test_cold_start_omits_token_from_helm_values(self, client, monkeypatch):
+        """N1/N3 (INV-A): flag on 時 helm install 的 values 不得帶 token。"""
+        _enable_skill_bundle_secret(monkeypatch)
+        with patch("src.api.agent_runtimes.helm_service") as mock_helm, \
+             patch("src.api.agent_runtimes.k8s_service"), \
+             patch("src.api.agent_runtimes.jwt_signer") as mock_signer:
+            from src.services.helm import HelmException
+            mock_helm.get.side_effect = HelmException(
+                message="not found", command="helm get", stderr="release: not found",
+            )
+            mock_signer.sign_ws_token.return_value = "ws.jwt.token"
+            mock_signer.sign_skill_bundle_token.return_value = _SKILL_TOKEN_SENTINEL
+
+            resp = client.post("/api/agent-runtimes/spawn-or-attach", json=_SPAWN_BODY)
+            assert resp.status_code == 200, resp.text
+
+            values = mock_helm.install.call_args.kwargs["values"]
+            assert "SKILL_BUNDLE_TOKEN" not in values.get("env", {}), (
+                "flag on 時 env.SKILL_BUNDLE_TOKEN 不得再出現在 helm values —— 它會被 "
+                "helm 存進 release Secret，`helm get values` 讀得到明文"
+            )
+            dump = json.dumps(mock_helm.install.call_args.kwargs, default=str)
+            dump += json.dumps(mock_helm.install.call_args.args, default=str)
+            assert _SKILL_TOKEN_SENTINEL not in dump, (
+                "token 字串仍出現在 helm install 的參數裡"
+            )
+
+    def test_cold_start_provisions_secret_before_install(self, client, monkeypatch):
+        """N2 (INV-D): Secret 內容正確，且必須早於 helm install。"""
+        _enable_skill_bundle_secret(monkeypatch)
+        order = []
+        with patch("src.api.agent_runtimes.helm_service") as mock_helm, \
+             patch("src.api.agent_runtimes.k8s_service") as mock_k8s, \
+             patch("src.api.agent_runtimes.jwt_signer") as mock_signer:
+            from src.services.helm import HelmException
+            mock_helm.get.side_effect = HelmException(
+                message="not found", command="helm get", stderr="release: not found",
+            )
+            mock_signer.sign_ws_token.return_value = "ws.jwt.token"
+            mock_signer.sign_skill_bundle_token.return_value = _SKILL_TOKEN_SENTINEL
+
+            def _record_apply(manifest):
+                if (
+                    manifest.get("kind") == "Secret"
+                    and manifest["metadata"]["name"] == _SKILL_SECRET
+                ):
+                    order.append("secret")
+            mock_k8s.apply_manifest.side_effect = _record_apply
+            mock_helm.install.side_effect = lambda *a, **k: order.append("install")
+
+            resp = client.post("/api/agent-runtimes/spawn-or-attach", json=_SPAWN_BODY)
+            assert resp.status_code == 200, resp.text
+
+            manifests = _secret_manifests(mock_k8s, _SKILL_SECRET)
+            assert manifests, f"沒有建立 Secret {_SKILL_SECRET}"
+            manifest = manifests[-1]
+            assert manifest["metadata"]["namespace"] == _NAMESPACE
+            assert manifest["metadata"]["labels"]["paas-managed"] == "true"
+            assert manifest["type"] == "Opaque"
+            assert manifest["stringData"] == {
+                "SKILL_BUNDLE_TOKEN": _SKILL_TOKEN_SENTINEL
+            }
+            assert "secret" in order and "install" in order
+            assert order.index("secret") < order.index("install"), (
+                "Secret 必須在 helm install 之前存在，否則 optional:false 的 "
+                "secretKeyRef 會讓 pod 停在 CreateContainerConfigError"
+            )
+
+    def test_cold_start_forwards_secret_mode_to_chart(self, client, monkeypatch):
+        """N7 (forward contract): flag on 時 chart 的雙模開關必須被 forward。
+
+        這是 [[spawn-install-values-missed-forward]] 的 forward-looking invariant：
+        **optional-but-load-bearing key 漏轉是 silent 的**——chart 會走 literal 分支、
+        pod 照起、只是 token 是空字串，skill-bundle fetch 一律 401 而無 render error。
+        """
+        _enable_skill_bundle_secret(monkeypatch)
+        with patch("src.api.agent_runtimes.helm_service") as mock_helm, \
+             patch("src.api.agent_runtimes.k8s_service"), \
+             patch("src.api.agent_runtimes.jwt_signer") as mock_signer:
+            from src.services.helm import HelmException
+            mock_helm.get.side_effect = HelmException(
+                message="not found", command="helm get", stderr="release: not found",
+            )
+            mock_signer.sign_ws_token.return_value = "ws.jwt.token"
+            mock_signer.sign_skill_bundle_token.return_value = _SKILL_TOKEN_SENTINEL
+
+            resp = client.post("/api/agent-runtimes/spawn-or-attach", json=_SPAWN_BODY)
+            assert resp.status_code == 200, resp.text
+
+            values = mock_helm.install.call_args.kwargs["values"]
+            assert values.get("skillBundleToken", {}).get("fromSecret") is True
+            assert values["skillBundleToken"]["key"] == "SKILL_BUNDLE_TOKEN"
+            assert values["skillBundleToken"]["secretName"] == _SKILL_SECRET
+
+    def test_resume_updates_secret_and_never_sets_env(self, client, monkeypatch):
+        """N4 (INV-B/C): resume 走 Secret 更新，且必須早於 scale-1。"""
+        _enable_skill_bundle_secret(monkeypatch)
+        order = []
+        with patch("src.api.agent_runtimes.helm_service") as mock_helm, \
+             patch("src.api.agent_runtimes.k8s_service") as mock_k8s, \
+             patch("src.api.agent_runtimes.jwt_signer") as mock_signer, \
+             patch("src.api.agent_runtimes.mcp_invalidator"), \
+             patch("src.api.agent_runtimes.skill_invalidator"):
+            mock_helm.get.return_value = MagicMock(status="deployed")
+            mock_k8s.get_deployment_replicas.return_value = 0  # reaped
+            mock_k8s.get_deployment_annotation.return_value = "none"
+            mock_k8s.get_pods.return_value = [MagicMock(phase="Running", ready="1/1")]
+            mock_signer.sign_ws_token.return_value = "ws.jwt.token"
+            mock_signer.sign_skill_bundle_token.return_value = _SKILL_TOKEN_SENTINEL
+
+            def _record_apply(manifest):
+                if (
+                    manifest.get("kind") == "Secret"
+                    and manifest["metadata"]["name"] == _SKILL_SECRET
+                ):
+                    order.append("secret")
+            mock_k8s.apply_manifest.side_effect = _record_apply
+            mock_k8s.scale_deployment.side_effect = lambda *a, **k: order.append("scale")
+
+            resp = client.post("/api/agent-runtimes/spawn-or-attach", json=_SPAWN_BODY)
+            assert resp.status_code == 200, resp.text
+
+            mock_k8s.set_deployment_env.assert_not_called()
+            manifests = _secret_manifests(mock_k8s, _SKILL_SECRET)
+            assert manifests, f"resume 沒有更新 Secret {_SKILL_SECRET}"
+            assert manifests[-1]["stringData"]["SKILL_BUNDLE_TOKEN"] == (
+                _SKILL_TOKEN_SENTINEL
+            )
+            assert "secret" in order and "scale" in order
+            assert order.index("secret") < order.index("scale"), (
+                "Secret 更新必須在 scale-1 之前：secretKeyRef 只在 container 啟動時"
+                "解析，順序反了新 pod 會讀到舊 token（§2.11.1 同一個 race）"
+            )
+
+    def test_resume_endpoint_updates_secret_and_never_sets_env(
+        self, client, monkeypatch
+    ):
+        """N4 的姊妹支：``POST /{hash}/resume`` 端點走的是同一條 ``_resume_pod``，
+        但它有自己的測試（S.5），漏改就會只守住一半的入口。"""
+        _enable_skill_bundle_secret(monkeypatch)
+        order = []
+        with patch("src.api.agent_runtimes.k8s_service") as mock_k8s, \
+             patch("src.api.agent_runtimes.jwt_signer") as mock_signer:
+            mock_signer.sign_skill_bundle_token.return_value = _SKILL_TOKEN_SENTINEL
+
+            def _record_apply(manifest):
+                if (
+                    manifest.get("kind") == "Secret"
+                    and manifest["metadata"]["name"] == _SKILL_SECRET
+                ):
+                    order.append("secret")
+            mock_k8s.apply_manifest.side_effect = _record_apply
+            mock_k8s.scale_deployment.side_effect = lambda *a, **k: order.append("scale")
+
+            resp = client.post(f"/api/agent-runtimes/{_HASH}/resume", json={})
+            assert resp.status_code == 200, resp.text
+
+            mock_k8s.set_deployment_env.assert_not_called()
+            assert order == ["secret", "scale"], (
+                f"resume 端點的順序必須是 secret → scale，實得 {order}"
+            )
+
+    def test_token_never_reaches_logs(self, client, monkeypatch, caplog):
+        """N5 (INV-E): 兩條路徑都不得把 token 寫進 log。"""
+        import logging
+        _enable_skill_bundle_secret(monkeypatch)
+        with caplog.at_level(logging.DEBUG), \
+             patch("src.api.agent_runtimes.helm_service") as mock_helm, \
+             patch("src.api.agent_runtimes.k8s_service"), \
+             patch("src.api.agent_runtimes.jwt_signer") as mock_signer:
+            from src.services.helm import HelmException
+            mock_helm.get.side_effect = HelmException(
+                message="not found", command="helm get", stderr="release: not found",
+            )
+            mock_signer.sign_ws_token.return_value = "ws.jwt.token"
+            mock_signer.sign_skill_bundle_token.return_value = _SKILL_TOKEN_SENTINEL
+
+            resp = client.post("/api/agent-runtimes/spawn-or-attach", json=_SPAWN_BODY)
+            assert resp.status_code == 200, resp.text
+        assert _SKILL_TOKEN_SENTINEL not in caplog.text
+
+    # -- rollback 路徑：flag off 必須與今天 byte-identical -------------------
+
+    def test_flag_off_cold_start_keeps_plain_env(self, client):
+        """N6 (rollback): flag off ⇒ token 照舊進 helm values。
+
+        kill switch 翻回 false 之後要能退回舊行為，所以舊行為也必須有測試守著——
+        否則「可回退」只是宣稱。
+        """
+        with patch("src.api.agent_runtimes.helm_service") as mock_helm, \
+             patch("src.api.agent_runtimes.k8s_service") as mock_k8s, \
+             patch("src.api.agent_runtimes.jwt_signer") as mock_signer:
+            from src.services.helm import HelmException
+            mock_helm.get.side_effect = HelmException(
+                message="not found", command="helm get", stderr="release: not found",
+            )
+            mock_signer.sign_ws_token.return_value = "ws.jwt.token"
+            mock_signer.sign_skill_bundle_token.return_value = _SKILL_TOKEN_SENTINEL
+
+            resp = client.post("/api/agent-runtimes/spawn-or-attach", json=_SPAWN_BODY)
+            assert resp.status_code == 200, resp.text
+
+            values = mock_helm.install.call_args.kwargs["values"]
+            assert values["env"]["SKILL_BUNDLE_TOKEN"] == _SKILL_TOKEN_SENTINEL
+            assert "skillBundleToken" not in values, (
+                "flag off 時不得 forward 新 key —— 舊 chart 收到未知 key 若有 "
+                "values.schema.json additionalProperties:false 會被擋"
+            )
+            assert not _secret_manifests(mock_k8s, _SKILL_SECRET), (
+                "flag off 時不得建立 skill-bundle Secret"
+            )
+
+    def test_flag_off_resume_keeps_set_deployment_env(self, client):
+        """N6 的 resume 半：flag off ⇒ 照舊 kubectl set env。"""
+        with patch("src.api.agent_runtimes.k8s_service") as mock_k8s, \
+             patch("src.api.agent_runtimes.jwt_signer") as mock_signer:
+            mock_signer.sign_skill_bundle_token.return_value = _SKILL_TOKEN_SENTINEL
+
+            resp = client.post(f"/api/agent-runtimes/{_HASH}/resume", json={})
+            assert resp.status_code == 200, resp.text
+
+            mock_k8s.set_deployment_env.assert_called_once()
+            assert not _secret_manifests(mock_k8s, _SKILL_SECRET)

@@ -1874,3 +1874,50 @@ class TestDefaultSaImagePullSecret:
         k.ensure_default_sa_image_pull_secret = MagicMock()
         k.create_namespace("paas-ws-abc", "8", "8Gi", "100Gi")
         k.ensure_default_sa_image_pull_secret.assert_called_once_with("paas-ws-abc")
+
+
+class TestSetDeploymentEnvSensitiveGuard:
+    """#955 / F-GC-1：``set_deployment_env`` 被限縮成「只給非敏感值」。
+
+    ``kubectl set env`` 有兩個明文面：值會上 kubectl argv（``/proc/<pid>/cmdline``），
+    而且會落進 Deployment spec 的 literal ``env[].value``（``kubectl get deploy -o yaml``
+    讀得到）。``_redact_cmd`` 只遮 log，遮不掉這兩個面 —— 所以敏感值一律走 per-release
+    Secret + ``secretKeyRef``（見 ``agent_runtimes._provision_skill_bundle_secret``）。
+
+    這條 guard 是 fail-fast：擋在呼叫當下，而不是等到有人在 stg 用 ``-o yaml`` 撈到
+    明文才發現。⚠️ 判準是 **key 名的敏感詞**，不是值的形狀——值可能是任意字串，形狀
+    判準會有大量偽陰性。
+    """
+
+    @pytest.mark.parametrize("key", [
+        "SKILL_BUNDLE_TOKEN",
+        "LLM_API_KEY",
+        "AGENT_RUNTIME_AUTH_SECRET_CURRENT",
+        "some_password",
+        "db-credential",
+    ])
+    @patch("subprocess.run")
+    def test_refuses_sensitive_env_keys(self, mock_run, key):
+        from src.services.helm import KubernetesService
+
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="", stderr="")
+        with pytest.raises(ValueError, match=key):
+            KubernetesService().set_deployment_env(
+                "paas-ws-abc", "rel", {key: "whatever"},
+            )
+        mock_run.assert_not_called()
+
+    @patch("subprocess.run")
+    def test_still_allows_non_sensitive_env(self, mock_run):
+        """限縮不是移除：非敏感值仍是這個 primitive 的正當用途。"""
+        from src.services.helm import KubernetesService
+
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="", stderr="")
+        KubernetesService().set_deployment_env(
+            "paas-ws-abc", "rel", {"PROJECT_HASH": "abc123", "LOG_LEVEL": "debug"},
+        )
+        argv = mock_run.call_args[0][0]
+        assert "PROJECT_HASH=abc123" in argv
+        assert "LOG_LEVEL=debug" in argv
