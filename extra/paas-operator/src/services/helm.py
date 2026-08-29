@@ -1042,6 +1042,25 @@ class HelmService:
         )
 
 
+# F-GC-1 (#955): key-name markers that make an env var too sensitive for
+# `kubectl set env` (argv + literal pod-spec exposure — see set_deployment_env).
+# Deliberately NOT a bare "KEY": that matches innocuous names like SORT_KEY and a
+# guard that cries wolf gets deleted.
+_SENSITIVE_ENV_KEY_MARKERS = (
+    "TOKEN", "SECRET", "PASSWORD", "PASSWD", "CREDENTIAL", "API_KEY", "APIKEY",
+    "PRIVATE_KEY",
+)
+
+
+def _sensitive_env_key_marker(key: str) -> Optional[str]:
+    """Return the marker that makes ``key`` sensitive, or None."""
+    upper = key.upper()
+    for marker in _SENSITIVE_ENV_KEY_MARKERS:
+        if marker in upper:
+            return marker
+    return None
+
+
 class KubernetesService:
     """Service for Kubernetes operations (via kubectl)."""
 
@@ -1779,15 +1798,48 @@ class KubernetesService:
         )
 
     def set_deployment_env(
-        self, namespace: str, deployment_name: str, env: Dict[str, str]
+        self,
+        namespace: str,
+        deployment_name: str,
+        env: Dict[str, str],
+        allow_sensitive_keys: frozenset = frozenset(),
     ) -> None:
-        """Set/replace environment variables on a deployment via ``kubectl set env``.
+        """Set/replace NON-SENSITIVE environment variables via ``kubectl set env``.
 
-        Triggers a rollout; used on resume to inject a freshly-signed
-        SKILL_BUNDLE_TOKEN BEFORE scaling back to 1 (design §2.11.1 — avoids
-        the pod coming up with a stale token).
+        ⛔ **Never pass a secret through here** (F-GC-1 / #955). ``kubectl set env``
+        leaves the value on two plaintext surfaces that no amount of log redaction
+        reaches:
+
+        1. the kubectl **argv** — readable in ``/proc/<pid>/cmdline`` for the life of
+           the process (``_redact_cmd`` only masks the log line, not the argv);
+        2. the Deployment spec's literal ``env[].value`` — readable forever by anyone
+           with ``get deployment``/``get pod`` in that namespace.
+
+        Secrets belong in a per-release Secret consumed via ``valueFrom.secretKeyRef``
+        — see ``api/agent_runtimes._provision_skill_bundle_secret``. The guard below
+        is fail-fast on the KEY NAME rather than on the value: values are arbitrary
+        strings with no reliable shape, so a value-shaped test would be mostly false
+        negatives.
+
+        ``allow_sensitive_keys`` is the one deliberate hole, and it exists solely so
+        the ``agent_runtime_skill_bundle_secret_enabled=False`` rollback path can keep
+        doing exactly what it does today. It is opt-in per call and per key name, so
+        adding a NEW sensitive use means writing the key into a caller — visible in
+        review — rather than inheriting an exemption. It disappears together with the
+        flag and the plain-env branch (#955 rollout step 7).
         """
         validate_namespace(namespace)
+        for key in env:
+            if key in allow_sensitive_keys:
+                continue
+            marker = _sensitive_env_key_marker(key)
+            if marker:
+                raise ValueError(
+                    f"refusing to set sensitive env {key!r} via `kubectl set env` "
+                    f"(matched {marker!r}): the value would land on the kubectl argv "
+                    "and in the Deployment spec's literal env[].value. Use a "
+                    "per-release Secret + valueFrom.secretKeyRef instead (#955)."
+                )
 
         args = [
             "set", "env",

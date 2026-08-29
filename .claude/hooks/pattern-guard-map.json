@@ -108,7 +108,8 @@
         "docs/decisions/patterns/spawn-install-values-missed-forward.md — 動上游資料→helm install values 組裝點時的系統性漏轉＋contract test",
         "docs/decisions/patterns/external-resource-env-token-naming.md — operator 側在共用外部系統（CF）產生資源的 env token 命名紀律",
         "docs/decisions/patterns/reset-async-budget-ladder.md — 動 helm 呼叫點的 timeout、或動「在 request 內等 K8s 收斂」的 handler 時：--timeout 是 per-operation（--atomic 失敗會再吃一次 wait 做自動 rollback）⇒ subprocess 上限要算 2n＋CLI 開銷，少算會在 rollback 途中 SIGKILL helm ⇒ release 卡 pending-rollback、Secret 停在沒人持有的新密碼；跨層預算須維持階梯（repo-lint reset-budget-ladder 機械攔，CI paths 已含本目錄）",
-        "docs/tracking/pitfalls/operator-route-none-conflates-disabled-and-failed.md — 動 release 的 route 建立路徑、或平台端讀 release 回應時：`route` 缺席**不是**失敗訊號（operator 的 `cloudflare_enabled` 預設 false，且舊 operator 沒有這個欄位）。fail-closed 只能認明說的失敗（`route.status == failed` 或 `route.dns_failed`）；把缺席當失敗會讓沒開 Cloudflare 的環境**每一次部署**都翻 error"
+        "docs/tracking/pitfalls/operator-route-none-conflates-disabled-and-failed.md — 動 release 的 route 建立路徑、或平台端讀 release 回應時：`route` 缺席**不是**失敗訊號（operator 的 `cloudflare_enabled` 預設 false，且舊 operator 沒有這個欄位）。fail-closed 只能認明說的失敗（`route.status == failed` 或 `route.dns_failed`）；把缺席當失敗會讓沒開 Cloudflare 的環境**每一次部署**都翻 error",
+        "docs/tracking/pitfalls/kubectl-secret-write-primitive-argv-exposure.md — 要把敏感值寫進 K8s 時：問的不是「這支有沒有遮 log」而是「這支會不會把值放上 argv」（`patch_secret`／`--from-literal`／`kubectl set env`／`helm --set` 會；`apply_manifest` 的 `-f <file>` 不會）。兩者的 log 遮蔽一樣完整 ⇒ 選錯零訊號"
       ]
     },
     {

@@ -4955,7 +4955,7 @@ paas-operator 修改：
 | secret | 注入方式 | 落點 | 本 gap 對照 |
 |--------|---------|------|------------|
 | `AGENT_RUNTIME_AUTH_SECRET_*`（operator 簽 key）| existingSecret + secretKeyRef（pilot 軌 2 durable：paas-cd existingSecret pin）| operator pod | F-PILOT-8 比照 secretKeyRef |
-| `SKILL_BUNDLE_TOKEN`（per-invocation 短壽）| plain env（install）/ `kubectl set env`（resume）；secretKeyRef hardening 待排（F-GC-1）| agent pod | 短壽 1h → plain 可接受；LLM key 長壽 → 直接 secretKeyRef |
+| `SKILL_BUNDLE_TOKEN`（TTL 現為 7 天，非原本的 1h）| **per-release Secret `{release}-skill-bundle` + secretKeyRef（`optional: false`）**，install 與 resume 同一支 `_provision_skill_bundle_secret`；legacy plain env / `kubectl set env` 保留在 `AGENT_RUNTIME_SKILL_BUNDLE_SECRET_ENABLED=false` 的 rollback 分支 | agent pod | F-GC-1 已於 #955 重審（minor→medium）並落地；原「短壽 1h → plain 可接受」的前提在 #155 把 TTL 改成 7 天時就失效了 |
 | `paas-registry`（F-PILOT-4 agent-runtime）| `ensure_registry_secret` dockerconfigjson + forward imagePullSecrets | tenant ns（**pod 不可讀**）| 本 gap 新增 forward |
 | `LLM_API_KEY`（F-PILOT-8 新）| per-release Secret + secretKeyRef（**pod 可讀**）| agent pod | 本 gap 新增 |
 

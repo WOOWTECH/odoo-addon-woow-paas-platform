@@ -40,9 +40,43 @@ class Settings(BaseSettings):
     # --username/--password` (no `helm repo add`; OCI is unavailable in this env).
     # agent_runtime_chart is the bare chart NAME; repo URL / version / read creds
     # are separate env-overridable settings, set by the operator deployment (gap A).
+    #
+    # RESOLVED (#955, 2026-08-29) — the charts side reported "the platform pins the
+    # OCI channel"; measured against the live stg operator, that is NOT true for
+    # agent-runtime. `kubectl -n paas-stg-system get deploy paas-operator-stg` shows
+    # `AGENT_RUNTIME_REPO_URL=https://git-prod.woowtech.io/api/packages/woow-paas/helm`
+    # ⇒ stg resolves this chart through the CLASSIC Gitea Helm repo (`--repo`), and
+    # `agent_runtime_chart` stays the bare name. The OCI ref is a real, separate
+    # publish channel (the marketplace charts do use it, which is why
+    # `_ensure_oci_login` exists) — it just is not the one agent-runtime travels on.
+    # ⇒ NOTHING to change here, and the chart-version pin below must be satisfiable on
+    # the CLASSIC repo. Verified 2026-08-29: 0.5.0 is present in BOTH channels.
+    # ⚠️ The "OCI is unavailable in this env" clause above is a 2026-05 statement that
+    # is now false in general (marketplace charts are OCI); it survives only as the
+    # reason agent-runtime was wired to `--repo`. Which channel any given environment
+    # uses is still decided by its Fleet CD values in paas-app-bundle-cd, not here.
     agent_runtime_chart: str = "agent-runtime"  # chart NAME (resolved via --repo)
     agent_runtime_repo_url: str = ""  # classic Helm repo URL (--repo), e.g. http://gitea-http.gitea.svc.cluster.local:3000/api/packages/woow-paas/helm
-    agent_runtime_chart_version: str = ""  # chart version (--version); empty = latest in index. This is the CHART version (e.g. 0.1.0), NOT the image tag
+    # Chart version passed as `--version`. This is the CHART version (e.g. 0.5.0),
+    # NOT the image tag. Empty = omit the flag = whatever helm calls latest in the
+    # index (a floating target — that is why we pin).
+    #
+    # Pinned to 0.5.0 for F-GC-1 / #955: 0.5.0 is the first chart version that
+    # renders `SKILL_BUNDLE_TOKEN` from `valueFrom.secretKeyRef`
+    # (woow-paas-charts PR #78, 0.4.5 -> 0.5.0 minor). It is dual-mode with
+    # `skillBundleToken.fromSecret` defaulting to FALSE, so 0.5.0 on its own is
+    # behaviour-identical to 0.4.5 — pinning it does NOT flip anything.
+    #
+    # 🔴 ORDERING: 0.5.0 must be PUBLISHED before this default can resolve. A pin at
+    # an unpublished version makes `helm install` fail for any environment that does
+    # not override this env — so this default and the chart publish are one
+    # lock-step, and #955's WIP gate exists to hold that line.
+    # 🔴 AUTHORITY: the per-environment value is NOT decided here. It is set on the
+    # operator Deployment env (`AGENT_RUNTIME_CHART_VERSION`) from the cross-repo
+    # paas-app-bundle-cd Fleet CD values, which override this default. This constant
+    # is the fallback for environments that set nothing (local/dev) and the record of
+    # what the code expects.
+    agent_runtime_chart_version: str = "0.5.0"  # env AGENT_RUNTIME_CHART_VERSION
     agent_runtime_repo_username: str = ""  # Gitea read:package username (--username); private repo auth
     agent_runtime_repo_password: str = ""  # Gitea read:package token (--password); private repo auth
     agent_runtime_image_tag: str = "1.0.0"  # pod image tag (appVersion) injected into values; 'latest' does not exist, only 1.0.0 is built
@@ -75,19 +109,31 @@ class Settings(BaseSettings):
     # environment via SKILL_BUNDLE_TOKEN_TTL_SECONDS, set by the operator deployment
     # (the operator's own Deployment env lives cross-repo in paas-app-bundle-cd Fleet
     # CD values — NOT rendered by any chart in this repo).
-    # SECURITY (F-GC-1 re-review): SKILL_BUNDLE_TOKEN is injected as a *plain env*
-    # value into the pod spec (not secretKeyRef), so it is readable via
-    # `kubectl get pod -o yaml` / `describe`. F-GC-1 was filed minor/pilot-acceptable
-    # on the premise that the token was short-lived (exp 1h) + re-signed on resume,
-    # so the plaintext exposure window was ≤1h. This default TTL (7 days) widens that
-    # window from ≤1h to ≤7d — a 168x increase — which invalidates the "≤1h so
-    # acceptable" premise. F-GC-1's risk rating (plain env vs secretKeyRef) MUST be
-    # re-reviewed and may need its severity raised; see follow-ups.md F-GC-1.
+    # SECURITY (F-GC-1): re-reviewed 2026-08-29 under #955 — CONCLUDED, severity
+    # minor -> **medium**. The premise behind the original minor ("token lives ≤1h,
+    # so the plaintext pod-spec exposure window is ≤1h") died when this TTL became
+    # 7 days: a 168x wider window. It stays below major because the population is
+    # limited to holders of in-cluster pod-read rights and the blast radius is a
+    # single tenant. The fix is the secretKeyRef path gated by
+    # `agent_runtime_skill_bundle_secret_enabled` below — not a TTL change (401 ->
+    # refresh remains a separate design, issue #155).
     # gt=0 rejects non-positive TTLs (negative / 0 would sign an already-expired
     # token → every skill-bundle fetch 401s); fail closed at config load.
     skill_bundle_token_ttl_seconds: int = Field(
         default=604800, gt=0  # 7 days; env SKILL_BUNDLE_TOKEN_TTL_SECONDS
     )
+
+    # F-GC-1 (#955): carry SKILL_BUNDLE_TOKEN in a per-release K8s Secret and let the
+    # chart inject it via `valueFrom.secretKeyRef`, instead of a literal pod-spec env
+    # value. Default False = today's behaviour byte-for-byte, so operator and chart can
+    # land independently: a new operator against the old chart, or the new (dual-mode)
+    # chart against the old operator, both keep working. The ONE bad combination
+    # (flag on + a chart that has no secretKeyRef branch) is reachable only by flipping
+    # this flag, which is explicit, per-environment and instantly reversible — it is
+    # the kill switch. Flip only after `AGENT_RUNTIME_CHART_VERSION` already points at
+    # a chart that renders the secretKeyRef branch. Once prod has been stable on it,
+    # this flag and the plain-env branch get removed together (see #955 rollout step 7).
+    agent_runtime_skill_bundle_secret_enabled: bool = False  # env AGENT_RUNTIME_SKILL_BUNDLE_SECRET_ENABLED
 
     # Cloudflare Tunnel Integration
     cloudflare_enabled: bool = False  # Set to true to enable automatic route management
