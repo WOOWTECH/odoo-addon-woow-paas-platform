@@ -471,3 +471,68 @@ def test_resume_rotates_secret_without_plaintext_in_spec(
     )
     assert _wait_for_replicas(namespace, release, 1) == 1
     assert _wait_for_pod_ready(namespace, release), "resume 後 pod 沒有重新 Ready"
+
+
+# --------------------------------------------------------------------------
+# 陽性對照 —— optional:false 真的 fail-loud
+# --------------------------------------------------------------------------
+
+
+def test_missing_secret_fails_loud_instead_of_starting_tokenless(
+    app_client, agent_runtime_env
+):
+    """Secret 不見時 pod 必須起不來，而不是帶著空 token 起來。
+
+    這支是上面那些「pod Ready ⇒ secretKeyRef 解得開」斷言的**陽性對照**：沒有它，
+    「Ready」可能只是因為根本沒有人在檢查 Secret（例如 chart 誤用 ``optional: true``，
+    或 env 項根本沒渲染出來）。刻意製造缺席、確認叢集**真的**拒絕，才證明前面那些
+    綠燈量到的是我以為的那條性質。
+
+    這也正是選 ``optional: false`` 的代價與收益：缺 Secret 是 loud 的
+    ``CreateContainerConfigError``（服務中斷、一眼看得到），而不是 pod 健康、行為錯、
+    每一次 skill-bundle fetch 都 401 卻沒有任何 render error 可循。
+    """
+    namespace = agent_runtime_env["namespace"]
+    release = agent_runtime_env["release"]
+    project_hash = agent_runtime_env["project_hash"]
+
+    _cold_start(app_client, project_hash)
+    assert _wait_for_pod_ready(namespace, release), "前提不成立：pod 一開始就沒 Ready"
+
+    # 拿掉 Secret，再殺掉 pod 讓 ReplicaSet 重建一顆
+    subprocess.run(
+        ["kubectl", "delete", "secret", f"{release}-skill-bundle", "-n", namespace],
+        capture_output=True, check=True,
+    )
+    subprocess.run(
+        ["kubectl", "delete", "pod", "-n", namespace,
+         "-l", f"app.kubernetes.io/instance={release}", "--wait=false"],
+        capture_output=True, check=True,
+    )
+
+    # ⚠ ``ContainerCreating`` 是**過渡**狀態，每顆新 pod 都會先經過它。第一個非空的
+    # waiting.reason 就收手 ⇒ 一定讀到它 ⇒ 這支測試永遠紅、而且紅得像是守線失效。
+    # 所以要輪詢到目標狀態出現（或逾時），並回報最後看到的那個。
+    deadline = time.time() + 90
+    reason = None
+    while time.time() < deadline:
+        data = _kubectl_json(
+            "get", "pods", "-n", namespace,
+            "-l", f"app.kubernetes.io/instance={release}",
+        )
+        for pod in (data or {}).get("items", []):
+            if pod.get("metadata", {}).get("deletionTimestamp"):
+                continue
+            for st in pod.get("status", {}).get("containerStatuses", []) or []:
+                waiting = (st.get("state") or {}).get("waiting") or {}
+                if waiting.get("reason"):
+                    reason = waiting["reason"]
+        if reason == "CreateContainerConfigError":
+            break
+        time.sleep(2)
+
+    assert reason == "CreateContainerConfigError", (
+        "Secret 缺席時 pod 必須停在 CreateContainerConfigError（optional: false 的 "
+        f"fail-closed 語意）；實得 waiting.reason={reason!r}。若這裡是 None 或 pod "
+        "照樣 Ready，代表 secretKeyRef 根本沒被強制 ⇒ 本檔其他綠燈都失去意義"
+    )

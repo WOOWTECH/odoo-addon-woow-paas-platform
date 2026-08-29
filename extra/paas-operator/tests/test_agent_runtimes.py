@@ -2025,7 +2025,7 @@ class TestSkillBundleTokenTtl:
 
         captured = {}
 
-        def _capture_env(namespace, release, env):
+        def _capture_env(namespace, release, env, **kwargs):
             if "SKILL_BUNDLE_TOKEN" in env:
                 captured["token"] = env["SKILL_BUNDLE_TOKEN"]
 
