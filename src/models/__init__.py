@@ -1,4 +1,6 @@
 from . import account_move
+# #864 PR-D：所有金流呼叫點共用的 relation-free durable incident ledger。
+from . import billing_incident
 from . import account_move_invoice_status
 from . import ecpay_invoice_cron
 from . import res_partner_invoice
