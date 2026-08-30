@@ -2,17 +2,21 @@
 
 Incident rows are deliberately scalar snapshots.  Their source rows may exist
 only in an outer transaction which later rolls back, so adding a Many2one here
-would make the fail-open record fail exactly when it is needed most.
+would make the fail-open record fail exactly when it is needed most.  The model
+is a global finance ledger: every account manager reads all rows across
+companies by design.
 """
 
 import logging
 import math
+import re
 from datetime import date, datetime
 
+from markupsafe import Markup, escape
 from psycopg2 import sql
 
 from odoo import SUPERUSER_ID, _, api, fields, models
-from odoo.exceptions import UserError
+from odoo.exceptions import AccessError, UserError
 
 
 _logger = logging.getLogger(__name__)
@@ -30,7 +34,9 @@ class BillingIncident(models.Model):
         help=(
             'Payment incidents store the raw ECPay MerchantTradeNo. '
             'Non-payment callers must use a namespaced key such as '
-            '`invoice:<stable-reference>`.'
+            '`invoice:<stable-reference>`. Billing incidents are a global '
+            'finance ledger: every account manager can read every incident '
+            'across companies by design.'
         ),
     )
     kind = fields.Selection(
@@ -141,6 +147,10 @@ class BillingIncident(models.Model):
     })
     _LOG_STATES = frozenset({'open', 'orphan', 'needs_human'})
     _MANUAL_RESULTS = frozenset({'ecpay_found', 'ecpay_not_found'})
+    _MANAGER_WRITABLE_FIELDS = frozenset({
+        'manual_check_result',
+        'resolution_note',
+    })
 
     _LOG_CHAR_FIELDS = frozenset({
         'external_ref', 'kind', 'partner_email', 'currency', 'trade_no',
@@ -160,15 +170,71 @@ class BillingIncident(models.Model):
     _NONNEGATIVE_INPUT_COUNTERS = frozenset({
         'skip_count', 'attempts', 'query_attempts',
     })
+    _SENSITIVE_MARKER_RE = re.compile(
+        r'(?:\bresult[\s_-]*data\b|\bcard[46]?[\s_-]*no\b|'
+        r'\bcard[\s_-]*number\b|\bcvv2?\b|\bpan\b)',
+        re.IGNORECASE,
+    )
+    _PAN_CANDIDATE_RE = re.compile(
+        r'(?<!\d)(?:\d[\s-]*){13,19}(?!\d)')
+    _TRADE_REFERENCE_PREFIX_RE = re.compile(
+        r'(?:merchant[\s_-]*trade[\s_-]*no|trade[\s_-]*no|mtn)'
+        r'\s*[:=#-]?\s*$',
+        re.IGNORECASE,
+    )
+
+    def write(self, values):
+        """Keep the audit snapshot immutable outside controlled sudo flows."""
+        if not self.env.su:
+            if not self.env.user.has_group(
+                    'account.group_account_manager'):
+                raise AccessError(_(
+                    'Only account managers may update billing incidents.'
+                ))
+            forbidden = set(values) - self._MANAGER_WRITABLE_FIELDS
+            if forbidden:
+                raise AccessError(_(
+                    'Account managers may update only the manual verification '
+                    'result and resolution note.'
+                ))
+        return super().write(values)
+
+    @api.model
+    def _sensitive_content_category(self, field_name, value):
+        if self._SENSITIVE_MARKER_RE.search(value):
+            return 'sensitive_marker'
+        # These two fields are explicitly shaped as ECPay references.  Numeric
+        # MTNs/TradeNos must not be mistaken for PANs by coincidence.
+        if field_name in ('external_ref', 'trade_no'):
+            return False
+        for match in self._PAN_CANDIDATE_RE.finditer(value):
+            digits = ''.join(character for character in match.group()
+                             if character.isdigit())
+            if not 13 <= len(digits) <= 19:
+                continue
+            prefix = value[max(0, match.start() - 40):match.start()]
+            if self._TRADE_REFERENCE_PREFIX_RE.search(prefix):
+                continue
+            checksum = 0
+            for index, character in enumerate(reversed(digits)):
+                number = int(character)
+                if index % 2:
+                    number *= 2
+                    if number > 9:
+                        number -= 9
+                checksum += number
+            if checksum % 10 == 0:
+                return 'luhn_pan'
+        return False
 
     @api.model
     def _validate_log_snapshot(self, snapshot):
         """Return a SQL-ready scalar snapshot, or ``False`` fail-soft.
 
-        This validation intentionally sits before opening the independent
-        cursor.  Besides rejecting accidental ORM recordsets, the allowlist is
-        the PCI boundary: fields such as ``ResultData`` or card numbers are not
-        representable through this API.
+        Validation happens before the independent cursor.  The allowlist is a
+        shape boundary, not a complete PCI boundary: callers remain responsible
+        for passing only safe summaries.  Obvious sensitive markers and
+        Luhn-valid PAN-like detail are rejected as defense in depth.
         """
         if not isinstance(snapshot, dict):
             _logger.error(
@@ -261,6 +327,17 @@ class BillingIncident(models.Model):
                         name, type(value).__name__,
                     )
                     return False
+        for name, value in normalized.items():
+            if not isinstance(value, str):
+                continue
+            category = self._sensitive_content_category(name, value)
+            if category:
+                _logger.error(
+                    '[BILLING_INCIDENT] _log rejected sensitive content '
+                    'field=%s category=%s',
+                    name, category,
+                )
+                return False
         for name in self._NONNEGATIVE_INPUT_COUNTERS:
             if name in normalized and (
                     normalized[name] is None or normalized[name] < 0):
@@ -284,10 +361,13 @@ class BillingIncident(models.Model):
             if values is False:
                 return False
 
+            log_ref = str(escape(values['external_ref']))
             now = fields.Datetime.now()
+            # Duplicate observations may refresh evidence, never lifecycle.
+            # State changes belong to explicit transition methods.
             explicit_evidence = [
                 name for name in values
-                if name not in ('external_ref', 'kind')
+                if name not in ('external_ref', 'kind', 'state')
             ]
             insert_values = dict(values)
             insert_values.setdefault('state', 'open')
@@ -350,7 +430,7 @@ class BillingIncident(models.Model):
                     if not existing:
                         _logger.critical(
                             '[BILLING_INCIDENT] upsert returned no row for %s',
-                            values['external_ref'],
+                            log_ref,
                         )
                         cr.commit()
                         return False
@@ -359,8 +439,7 @@ class BillingIncident(models.Model):
                         _logger.critical(
                             '[BILLING_INCIDENT] kind mismatch external_ref=%s '
                             'existing=%s incoming=%s; refusing downgrade',
-                            values['external_ref'], existing_kind,
-                            values['kind'],
+                            log_ref, existing_kind, values['kind'],
                         )
                         cr.commit()
                         return False
@@ -372,7 +451,7 @@ class BillingIncident(models.Model):
                     _logger.critical(
                         '[BILLING_INCIDENT] unresolved upsert produced no row '
                         'external_ref=%s state=%s',
-                        values['external_ref'], existing_state,
+                        log_ref, existing_state,
                     )
                     cr.commit()
                     return False
@@ -407,6 +486,13 @@ class BillingIncident(models.Model):
         return group.users if group else env['res.users']
 
     @api.model
+    def _acquire_review_activity_lock(self, cr, incident_id):
+        cr.execute(
+            'SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))',
+            ('woow.billing.incident.activity:%s' % incident_id,),
+        )
+
+    @api.model
     def _schedule_review_activities(self, incident_id):
         """Best-effort second transaction: one Todo per incident/user."""
         with self.env.registry.cursor() as cr:
@@ -414,10 +500,7 @@ class BillingIncident(models.Model):
                        (self._LOCK_TIMEOUT,))
             env = api.Environment(cr, SUPERUSER_ID, {})
             # Serialize search+create across concurrent duplicate callbacks.
-            cr.execute(
-                'SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))',
-                ('woow.billing.incident.activity:%s' % incident_id,),
-            )
+            self._acquire_review_activity_lock(cr, incident_id)
             cr.execute(
                 sql.SQL(
                     'SELECT external_ref, kind, state FROM {table} WHERE id = %s'
@@ -455,10 +538,15 @@ class BillingIncident(models.Model):
             existing_user_ids = {row[0] for row in cr.fetchall()}
             external_ref, kind, _state = incident
             summary = _('Billing incident requires manual review')
-            note = _(
+            note_template = Markup.escape(_(
                 'Billing incident %(external_ref)s (%(kind)s) requires an '
                 'ECPay verification and an explicit resolution note.'
-            ) % {'external_ref': external_ref, 'kind': kind}
+            ))
+            note = note_template % {
+                'external_ref': escape(external_ref),
+                'kind': escape(kind),
+            }
+            safe_res_name = str(escape(external_ref))
             now = fields.Datetime.now()
             for user in users:
                 if user.id in existing_user_ids:
@@ -476,8 +564,8 @@ class BillingIncident(models.Model):
                     '(%s, %s, %s, %s, %s, %s, %s, %s, %s, '
                     'false, true, %s, %s, %s, %s)',
                     (
-                        model.id, self._name, incident_id, external_ref,
-                        todo.id, user.id, summary, note, fields.Date.today(),
+                        model.id, self._name, incident_id, safe_res_name,
+                        todo.id, user.id, summary, str(note), fields.Date.today(),
                         SUPERUSER_ID, SUPERUSER_ID, now, now,
                     ),
                 )
@@ -486,60 +574,85 @@ class BillingIncident(models.Model):
 
     @api.model
     def _clear_review_activities(self, incident_id):
-        """Best-effort second transaction; touch only this incident's rows."""
+        """Best-effort second transaction; delete only our Todo rows."""
         with self.env.registry.cursor() as cr:
             cr.execute('SET LOCAL lock_timeout = %s',
                        (self._LOCK_TIMEOUT,))
-            api.Environment(cr, SUPERUSER_ID, {})
-            cr.execute(
-                'SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))',
-                ('woow.billing.incident.activity:%s' % incident_id,),
-            )
-            cr.execute(
-                'DELETE FROM mail_activity WHERE res_model = %s AND res_id = %s',
-                (self._name, incident_id),
-            )
+            env = api.Environment(cr, SUPERUSER_ID, {})
+            self._acquire_review_activity_lock(cr, incident_id)
+            todo = env.ref(
+                'mail.mail_activity_data_todo', raise_if_not_found=False)
+            if todo:
+                cr.execute(
+                    'DELETE FROM mail_activity '
+                    'WHERE res_model = %s AND res_id = %s '
+                    'AND activity_type_id = %s',
+                    (self._name, incident_id, todo.id),
+                )
             cr.commit()
             return True
 
-    def _transition_resolved_current_cursor(self, values):
+    def _transition_resolved_current_cursor(
+            self, manual_check_result, resolution_note, resolved_by_ref):
         """Private UI transition; never open the independent `_resolve` cursor."""
         self.ensure_one()
-        self.write({
+        self._acquire_review_activity_lock(self.env.cr, self.id)
+        self.env.cr.execute(
+            sql.SQL('SELECT state FROM {table} WHERE id = %s').format(
+                table=sql.Identifier(self._table)),
+            (self.id,),
+        )
+        row = self.env.cr.fetchone()
+        if not row:
+            raise UserError(_('This billing incident no longer exists.'))
+        if row[0] == 'resolved':
+            raise UserError(_('This billing incident is already resolved.'))
+        self.sudo().write({
             'state': 'resolved',
             'resolved_at': fields.Datetime.now(),
-            'resolved_by_ref': self.env.user.id,
-            **values,
+            'resolved_by_ref': resolved_by_ref,
+            'manual_check_result': manual_check_result,
+            'resolution_note': resolution_note,
         })
         # The UI transaction may already hold this incident row lock.  Delete
-        # only this target's activities on the same cursor to avoid self-lock.
-        self.env.cr.execute(
-            'DELETE FROM mail_activity WHERE res_model = %s AND res_id = %s',
-            (self._name, self.id),
-        )
+        # only this mechanism's Todo on the same cursor to avoid self-lock.
+        todo = self.env.ref(
+            'mail.mail_activity_data_todo', raise_if_not_found=False)
+        if todo:
+            self.env.cr.execute(
+                'DELETE FROM mail_activity '
+                'WHERE res_model = %s AND res_id = %s '
+                'AND activity_type_id = %s',
+                (self._name, self.id, todo.id),
+            )
         return True
 
     def action_mark_manually_resolved(self):
         """Record an ECPay verification and close; never credit/refund money."""
         self.ensure_one()
+        if not self.env.user.has_group('account.group_account_manager'):
+            raise AccessError(_(
+                'Only account managers may resolve billing incidents.'
+            ))
         self.check_access('write')
-        if self.state == 'resolved':
-            raise UserError(_('This billing incident is already resolved.'))
-        if self.manual_check_result not in self._MANUAL_RESULTS:
+        manual_check_result = self.manual_check_result
+        resolution_note = (self.resolution_note or '').strip()
+        resolved_by_ref = self.env.user.id
+        if manual_check_result not in self._MANUAL_RESULTS:
             raise UserError(_(
                 'Choose whether the MerchantTradeNo was found in ECPay '
                 'before resolving this incident.'
             ))
-        note = (self.resolution_note or '').strip()
-        if not note:
+        if not resolution_note:
             raise UserError(_(
                 'A resolution note describing the ECPay verification is '
                 'required.'
             ))
-        return self._transition_resolved_current_cursor({
-            'manual_check_result': self.manual_check_result,
-            'resolution_note': note,
-        })
+        return self.sudo()._transition_resolved_current_cursor(
+            manual_check_result,
+            resolution_note,
+            resolved_by_ref,
+        )
 
     @api.model
     def _resolve(self, external_ref, resolution_note=None,
@@ -588,11 +701,9 @@ class BillingIncident(models.Model):
             if manual_check_result is not None:
                 assignments.append(sql.SQL('manual_check_result = %s'))
                 params.append(manual_check_result)
-            params.append(external_ref)
             query = sql.SQL(
                 'UPDATE {table} SET {assignments} '
-                "WHERE external_ref = %s AND state <> 'resolved' "
-                'RETURNING id'
+                "WHERE id = %s AND state <> 'resolved' RETURNING id"
             ).format(
                 table=sql.Identifier(self._table),
                 assignments=sql.SQL(', ').join(assignments),
@@ -602,27 +713,36 @@ class BillingIncident(models.Model):
                 cr.execute('SET LOCAL lock_timeout = %s',
                            (self._LOCK_TIMEOUT,))
                 api.Environment(cr, SUPERUSER_ID, {})
-                cr.execute(query, params)
+                cr.execute(
+                    sql.SQL(
+                        'SELECT id FROM {table} WHERE external_ref = %s'
+                    ).format(table=sql.Identifier(self._table)),
+                    (external_ref,),
+                )
+                existing = cr.fetchone()
+                if not existing:
+                    cr.commit()
+                    return False
+                incident_id = existing[0]
+                self._acquire_review_activity_lock(cr, incident_id)
+                cr.execute(query, params + [incident_id])
                 row = cr.fetchone()
-                if row:
-                    incident_id = row[0]
-                else:
+                if not row:
                     cr.execute(
                         sql.SQL(
-                            'SELECT id, state FROM {table} '
-                            'WHERE external_ref = %s'
+                            'SELECT state FROM {table} WHERE id = %s'
                         ).format(table=sql.Identifier(self._table)),
-                        (external_ref,),
+                        (incident_id,),
                     )
-                    existing = cr.fetchone()
-                    if not existing:
+                    existing_state = cr.fetchone()
+                    if not existing_state:
                         cr.commit()
                         return False
-                    incident_id, state = existing
-                    if state != 'resolved':
+                    if existing_state[0] != 'resolved':
                         _logger.critical(
                             '[BILLING_INCIDENT] _resolve update returned no row '
-                            'external_ref=%s state=%s', external_ref, state)
+                            'incident_id=%s state=%s',
+                            incident_id, existing_state[0])
                         cr.commit()
                         return False
                 cr.commit()
@@ -639,8 +759,7 @@ class BillingIncident(models.Model):
         except Exception:
             _logger.critical(
                 '[BILLING_INCIDENT] resolve bookkeeping failed; caller flow '
-                'continues unchanged external_ref=%r',
-                external_ref,
+                'continues unchanged',
                 exc_info=True,
             )
             return False

@@ -29,7 +29,7 @@
       <form string="Billing Incident" create="false" delete="false">
         <header>
           <button name="action_mark_manually_resolved"
-                  string="人工已處理"
+                  string="Mark as manually resolved"
                   type="object"
                   class="oe_highlight"
                   groups="account.group_account_manager"
@@ -38,8 +38,11 @@
                  statusbar_visible="open,orphan,needs_human,resolved"/>
         </header>
         <sheet>
+          <div class="alert alert-info" role="alert">
+            Billing incidents are a global finance ledger. Every account manager can read every incident across companies by design.
+          </div>
           <div class="alert alert-warning" role="alert">
-            topup 記錄可能已被回捲、在 Odoo 裡查不到是預期現象，不是關單理由
+            The top-up record may have been rolled back; not finding it in Odoo is expected and is not a reason to close the incident.
           </div>
           <group>
             <group string="Evidence">

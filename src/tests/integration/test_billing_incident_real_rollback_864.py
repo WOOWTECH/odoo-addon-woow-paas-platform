@@ -142,6 +142,26 @@ class TestBillingIncidentRealTransactions864(BaseCase):
             row = cr.fetchone()
             return row and row[0]
 
+    def _set_incident_state(self, incident_id, state):
+        with self.registry.cursor() as cr:
+            cr.execute(
+                'UPDATE woow_billing_incident SET state = %s WHERE id = %s',
+                (state, incident_id),
+            )
+            cr.commit()
+
+    def _todo_count(self, incident_id):
+        with self.registry.cursor() as cr:
+            env = api.Environment(cr, odoo.SUPERUSER_ID, {})
+            todo = env.ref('mail.mail_activity_data_todo')
+            cr.execute(
+                'SELECT COUNT(*) FROM mail_activity '
+                'WHERE res_model = %s AND res_id = %s '
+                'AND activity_type_id = %s',
+                (_MODEL, incident_id, todo.id),
+            )
+            return cr.fetchone()[0]
+
     def test_real_40001_outer_rollback_keeps_incident_but_loses_control_write(self):
         snapshot = self._snapshot('real-40001')
         cr = self.registry.cursor()
@@ -291,3 +311,34 @@ class TestBillingIncidentRealTransactions864(BaseCase):
 
         incident = self._read_incident(snapshot['external_ref'])
         self.assertEqual(incident[2], 1)
+
+    def test_schedule_resolve_orderings_converge_without_stale_todo(self):
+        snapshot = self._snapshot('activity-ordering')
+        incident_id = self._call_log(snapshot)
+        self._set_incident_state(incident_id, 'needs_human')
+
+        with self.registry.cursor() as cr:
+            env = api.Environment(cr, odoo.SUPERUSER_ID, {})
+            self.assertTrue(
+                env[_MODEL]._schedule_review_activities(incident_id))
+        self.assertGreater(self._todo_count(incident_id), 0)
+
+        self.assertEqual(
+            self._call_resolve(
+                snapshot['external_ref'],
+                'schedule-before-resolve ordering',
+            ),
+            incident_id,
+        )
+        self.assertEqual(self._todo_count(incident_id), 0)
+
+        with self.registry.cursor() as cr:
+            env = api.Environment(cr, odoo.SUPERUSER_ID, {})
+            self.assertFalse(
+                env[_MODEL]._schedule_review_activities(incident_id),
+                'resolve-before-late-schedule must reread resolved state',
+            )
+        self.assertEqual(
+            self._todo_count(incident_id), 0,
+            'both transaction orderings must converge without stale Todo',
+        )
