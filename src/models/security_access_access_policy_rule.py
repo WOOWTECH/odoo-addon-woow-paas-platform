@@ -125,9 +125,15 @@ def _assert_rule_reparent_authorised(records, vals):
     ## 清空（寫 ``False``）不在守備範圍——而且它被 NOT NULL 擋著
 
     沒有「新 policy」要授權 ⇒ 早退。這一格不是破口：`policy_id` 宣告
-    `required=True`，實測（守線測試 E1）清空會撞 Postgres 的
-    `NotNullViolation: null value in column "policy_id" ... violates not-null
-    constraint`。
+    `required=True`，清空會撞 Postgres 的 NOT NULL 約束。
+
+    #973 F1：這句話現在**被斷言鎖著**了（守線測試 E1）——它斷言的是**性質**而不是
+    driver 的 class 名：(a) 不是 `AccessError`／`UserError`／`ValidationError`
+    任一（＝不是我們自己那三層擋的，證明守衛確實早退），(b) 是
+    `psycopg2.IntegrityError`，(c) `pgcode` 等於 `psycopg2.errorcodes` 的
+    `NOT_NULL_VIOLATION`（SQLSTATE 是 ISO 標準碼，class 名會隨 driver 版本漂），
+    (d) 訊息指名 `policy_id` 那一根 column。在 #973 之前這句只是散文，E1 的 body
+    只有「有沒有拋例外」——拋任何例外都綠。
 
     ⚠ `_anchor_target_id` 最後一行是 `int(value)`，看起來會被 `NewId` 炸——**不會**：
     `odoo/api.py::NewId.__bool__` 回 `False`，所以第一道 `if not value: return
@@ -161,6 +167,13 @@ def _assert_rule_reparent_authorised(records, vals):
     # 搬移；而能寫這一列的人，框架開頭那次 `check_access('write')` 已經對它現在掛著
     # 的 policy 要求過 owner／admin（rule 與 policy 走同一條 workspace walk）。
     # 判準取自 `docs/decisions/patterns/scope-flip-write-guard-not-ir-rule.md`。
+    #
+    # #973 F4(a)：這條早退由 `test_E3_unchanged_policy_id_short_circuits_before_
+    # check_access` 守著。⚠ 它的判準**不是**「拿掉會被拒」——拿掉之後功能不會壞
+    # （能寫這一列的人對它現在掛著的 policy 必定有 owner／admin，兩個 model 的
+    # `..._owner_admin_manage` domain 逐字相同）⇒ 那樣的測試恆綠。判準是「那次
+    # `check_access` 有沒有真的發生」：測試在 policy model 上掛 spy，值沒改變時
+    # 必須錄到零次 write 檢查，配一格「值真的改變時錄得到」的陽性對照。
     if all(rec[_RULE_ANCHOR_FIELD].id == new_id for rec in records):
         return
     # comodel 名字從**欄位宣告**取，不寫死字串：欄位改指向別的 model 時這裡自動跟上
@@ -377,6 +390,10 @@ class SecurityAccessAccessPolicyRule(models.Model):
         # 任何 side effect（`policies` 擷取、savepoint、operator sync）之前，與
         # #848 在 `policy.write()` 的位置同構。同時送 `policy_id` ＋ 投影欄的
         # payload 由上面那道先拒（`UserError`），不漏。
+        # #973 F4(b)：上面那句原本是 [推論]（設計時自己標的），現在由
+        # `test_E4_mixed_payload_is_rejected_by_the_projection_guard_first` 量著
+        # ——判別式是 exception class：兩道守衛順序若對調，混合 payload 會改拋
+        # `AccessError` 而不是 `UserError`。
         _assert_rule_reparent_authorised(self, vals)
         policies = self.mapped('policy_id')
         with self.env.cr.savepoint():
