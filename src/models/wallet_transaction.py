@@ -15,13 +15,17 @@ debits, refunds), and on legacy top-up rows whose `wallet_transaction_id`
 was never linked back to the `woow_wallet_topup` record. The frontend handles
 the fallback by treating `bonus_amount <= 0` as "render the description as-is".
 
-Known sequence boundary: on a fresh install, the upstream
-`seq_wallet_transaction` omits `implementation`, so it uses Odoo's standard
-`ir.sequence` implementation (`next_by_code` backed by PostgreSQL `nextval`).
-That counter is non-transactional: rollback, savepoint rollback, or framework
-replay may leave gaps in wallet transaction numbers. This differs from
+Known sequence boundary (not fixed by this PR): the upstream static definition
+of `seq_wallet_transaction` omits `implementation`, so its default is Odoo's
+standard `ir.sequence`. Read-only prod/stg observations supplied for #977 match
+that default: both use the global sequence id=19, `company_id=False`, prefix
+`WT`, and `implementation='standard'` (prod `number_next_actual=1`, with about
+zero wallet transactions; stg `number_next_actual=1589`). Standard
+`next_by_code` is backed by PostgreSQL `nextval`, whose allocations do not roll
+back with a transaction, savepoint rollback, or framework replay; known,
+audit-visible numbering gaps can therefore remain. This differs from
 `account.move`, whose transactional numbering comes from `sequence.mixin`.
-Do not infer or test a gapless wallet transaction sequence from rollback.
+Do not infer or test a gapless wallet transaction sequence.
 """
 from odoo import fields, models
 
