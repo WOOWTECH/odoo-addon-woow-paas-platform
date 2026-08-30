@@ -9,7 +9,7 @@ import { router } from "../../core/router";
 
 /**
  * PaymentMethodsListPage — lists ECPG-bound cards, supports delete & set default.
- * On mount, reads URL query for post-3DS status (`bind_status=ok`) to surface a toast.
+ * On mount, surfaces ok/failed/error bind feedback and consumes the callback query.
  */
 export class PaymentMethodsListPage extends Component {
     static template = "woow_paas_platform.PaymentMethodsListPage";
@@ -29,10 +29,24 @@ export class PaymentMethodsListPage extends Component {
         onMounted(async () => {
             // Detect post-3DS redirect via router query params
             const q = this.router.params.query || {};
-            if (q.bind_status === "ok") {
-                this.state.bindSuccess = true;
-                // Clean the query so reload doesn't retrigger.
-                // Hash path without query: "#/settings/payment-methods"
+            const bindStatus = q.bind_status;
+            if (bindStatus) {
+                if (bindStatus === "ok") {
+                    this.state.bindSuccess = true;
+                } else if (bindStatus === "failed") {
+                    this.state.error = _t("Card binding failed. Please try again.");
+                } else if (bindStatus === "error") {
+                    this.state.error = _t(
+                        "We couldn't confirm the card binding. Please try again."
+                    );
+                } else {
+                    // Router query params preserve unknown values. Fail closed to
+                    // generic feedback, then strip them like TopupStorePage does.
+                    this.state.error = _t(
+                        "We couldn't confirm the card binding. Please try again."
+                    );
+                }
+                // Clean every callback query so reload doesn't retrigger it.
                 const cleanHash = window.location.hash.split("?")[0];
                 window.history.replaceState(null, "", cleanHash);
             }
