@@ -667,9 +667,11 @@ class TestInvoicePayConcurrencyReachesRetrying(
     **外層**。controller 一旦用裸 `except Exception` 收掉並正常 return，重試機制
     就整個失效：本來會被自動重試而成功的操作，變成使用者看到的失敗。
 
-    這條路徑安全的理由（PR-A 卡片的 ⛔ 陷阱那格）：`_pay_from_wallet` 純 DB
-    操作、無外部呼叫 ⇒ 框架重播整個 handler 不會產生重複的對外副作用。
-    ⛔ **同一招不可套用到 `api_topup`**——那支 try 內是 ECPay 外呼，重播＝重複扣款。
+    🔴 重播安全不是 `_pay_from_wallet` 的固有性質；本 class 驗的是已通過
+    `_invoice_pay_is_replay_safe()` gate 的 `out_invoice`。flagless ＋ automatic 的
+    相反分支由 `TestInvoicePayReplaySafetyGate` 另行釘住，不得把本 class 的綠燈讀成
+    「付款鏈天生無外呼」。⛔ 同一招也不可套到 `api_topup`——那支 try 內是 ECPay
+    金流外呼，重播＝重複扣款。
 
     🔴 **本 class 量不到的那一格（綠燈不代表它成立）**：這裡注入的是 Python 層
     `raise`，PG 那側的交易**沒有**進入 aborted 狀態。因此「交易真的 aborted 之後，
