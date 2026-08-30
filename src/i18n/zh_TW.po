@@ -17022,11 +17022,14 @@ msgstr ""
 #. module: woow_paas_platform
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_billing_incident_form
 msgid ""
-"Billing incidents are a global finance ledger. Every account manager can "
-"read every incident across companies by design."
+"Billing incident access uses the Odoo role `account.group_account_manager` "
+"(not a Workspace role). It reads all incidents across all companies; review "
+"activities go to all current managers in that Odoo group; no company M2O/rule; "
+"base.group_system behavior is not narrowed."
 msgstr ""
-"帳務 incident 是全域財務帳本；所有 account manager 都可刻意跨公司讀取全部 "
-"incident。"
+"帳務 incident 存取使用 Odoo role `account.group_account_manager`（不是 Workspace "
+"role）；可跨全部公司讀取全部 incident，review activity 派給該 Odoo group 所有現任 "
+"manager；不加 company M2O/rule，也不縮減 base.group_system 行為。"
 
 #. module: woow_paas_platform
 #: code:addons/woow_paas_platform/models/billing_incident.py:0
@@ -17320,12 +17323,14 @@ msgstr "付款 Token 參考"
 #: model:ir.model.fields,help:woow_paas_platform.field_woow_billing_incident__external_ref
 msgid ""
 "Payment incidents store the raw ECPay MerchantTradeNo. Non-payment callers "
-"must use a namespaced key such as `invoice:<stable-reference>`. Billing "
-"incidents are a global finance ledger: every account manager can read every "
-"incident across companies by design."
+"must use a namespaced key such as `invoice:<stable-reference>`. Access belongs "
+"to the Odoo role `account.group_account_manager` (not a Workspace role), which "
+"reads all incidents across all companies; review activities go to all current "
+"managers in that Odoo group."
 msgstr ""
 "付款事件保存原始 ECPay MerchantTradeNo。非付款 caller 必須使用具 namespace 的 key，例如 "
-"`invoice:<stable-reference>`。帳務事件是全域財務帳本：所有 account manager 都可刻意跨公司讀取全部事件。"
+"`invoice:<stable-reference>`。存取屬於 Odoo role `account.group_account_manager`（不是 "
+"Workspace role），可跨全部公司讀取全部 incident，review activity 派給該 Odoo group 所有現任 manager。"
 
 #. module: woow_paas_platform
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_billing_incident__kind__intent
@@ -17442,3 +17447,13 @@ msgstr "未處理"
 #: model:ir.model,name:woow_paas_platform.model_woow_billing_incident
 msgid "Woow Billing Incident"
 msgstr "Woow 帳務事件"
+
+#. module: woow_paas_platform
+#: code:addons/woow_paas_platform/models/billing_incident.py:0
+msgid "Billing incident messages may be created only by the internal activity completion flow."
+msgstr "帳務 incident 訊息只能由內部 activity 完成流程建立。"
+
+#. module: woow_paas_platform
+#: code:addons/woow_paas_platform/models/billing_incident.py:0
+msgid "Billing incident chatter is managed automatically by the internal activity completion flow."
+msgstr "帳務 incident chatter 由內部 activity 完成流程自動管理。"

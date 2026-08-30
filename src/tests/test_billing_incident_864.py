@@ -175,6 +175,45 @@ class TestBillingIncidentSchema864(TransactionCase):
         self.assertEqual(review_type.name, 'Billing incident review')
         self.assertEqual(review_type.res_model, 'woow.billing.incident')
 
+    def test_global_ledger_policy_names_odoo_role_and_has_no_company_rule(self):
+        """Comment #11112 is a durable role contract, not an accident of data."""
+        module_root = Path(__file__).resolve().parents[1]
+        policy_surfaces = {
+            'model': (module_root / 'models' / 'billing_incident.py').read_text(),
+            'view': (module_root / 'views' / 'billing_incident_views.xml').read_text(),
+        }
+        exact_contract = (
+            'Odoo role `account.group_account_manager` (not a Workspace role)',
+            'all incidents across all companies',
+            'all current managers in that Odoo group',
+            'no company M2O/rule; base.group_system behavior is not narrowed',
+        )
+        for surface, source in policy_surfaces.items():
+            normalized_source = ' '.join(source.split())
+            with self.subTest(surface=surface):
+                for wording in exact_contract:
+                    self.assertIn(wording, normalized_source)
+
+        model = self.env['ir.model']._get('woow.billing.incident')
+        manager_group = self.env.ref('account.group_account_manager')
+        accesses = self.env['ir.model.access'].sudo().search([
+            ('model_id', '=', model.id),
+        ])
+        self.assertEqual(accesses.mapped('group_id'), manager_group)
+        self.assertEqual(
+            (accesses.perm_read, accesses.perm_write,
+             accesses.perm_create, accesses.perm_unlink),
+            (True, True, False, False),
+        )
+        self.assertFalse(
+            self.env['ir.rule'].sudo().search([('model_id', '=', model.id)]),
+            'global finance ledger must not acquire any company record rule',
+        )
+        self.assertFalse(
+            {'company_id', 'company_ref'} & set(self.env[model.model]._fields),
+            'global finance ledger must not acquire a company M2O',
+        )
+
     def test_external_ref_is_database_unique(self):
         Incident = self.env['woow.billing.incident']
         ref = 'schema-%s' % uuid.uuid4().hex
@@ -451,11 +490,23 @@ class TestBillingIncidentPublicApi864(TransactionCase):
         ]))
 
     def test_pci_validator_canonicalizes_html_unicode_and_sad_markers(self):
+        entity_digits = ''.join(
+            '&#%s;' % ord(character) for character in '4111111111111111')
         sensitive_details = (
+            '<b>plain verification reason</b>',
+            'plain <!-- hidden comment --> verification reason',
+            'title="plain verification reason"',
+            'plain &amp; verification reason',
+            'plain &lt;b&gt;verification&lt;/b&gt; reason',
+            '<span title="4111111111111111">verification</span>',
             'unlabelled 4111<span>1111</span><span>1111</span><span>1111</span>',
             'unlabelled 4111.1111.1111.1111',
             'unlabelled 4111&#46;1111&#46;1111&#46;1111',
+            'unlabelled %s' % entity_digits,
+            'unlabelled 4111\ufe0f1111\ufe0f1111\ufe0f1111',
             'unlabelled 4111\u200b1111\u200b1111\u200b1111',
+            'unlabelled 4111\u03071111\u03071111\u03071111',
+            'unlabelled 4111\u20dd1111\u20dd1111\u20dd1111',
             'unlabelled ４１１１．１１１１．１１１１．１１１１',
             '<b>PIN</b> block=forbidden-authentication-data',
             'track1 data=forbidden-authentication-data',
@@ -968,6 +1019,10 @@ class TestBillingIncidentPublicApi864(TransactionCase):
                     'feedback': 'verification completed',
                     'attachment_ids': [attachment.id],
                 },
+                {'feedback': '<b>plain verification completed</b>'},
+                {'feedback': 'plain <!-- comment --> verification completed'},
+                {'feedback': 'title="plain verification completed"'},
+                {'feedback': 'plain &amp; verification completed'},
                 {
                     'feedback': (
                         'PAN 4111<span>1111</span><span>1111</span>'
@@ -982,10 +1037,22 @@ class TestBillingIncidentPublicApi864(TransactionCase):
                 self.assertTrue(activity.exists())
                 self.assertTrue(activity.active)
 
-            attachment.write({
-                'res_model': 'mail.activity',
-                'res_id': activity.id,
-            })
+            with self.assertRaises(AccessError):
+                attachment.write({
+                    'res_model': 'mail.activity',
+                    'res_id': activity.id,
+                })
+            attachment.invalidate_recordset(['res_model', 'res_id'])
+            self.assertFalse(attachment.res_model)
+            self.assertFalse(attachment.res_id)
+
+            # Legacy/corrupt pre-guard rows still fail closed at completion.
+            cr.execute(
+                'UPDATE ir_attachment SET res_model = %s, res_id = %s '
+                'WHERE id = %s',
+                ('mail.activity', activity.id, attachment.id),
+            )
+            attachment.invalidate_recordset(['res_model', 'res_id'])
             with self.assertRaises(UserError):
                 activity.action_done()
             self.assertTrue(activity.exists())
@@ -1044,6 +1111,126 @@ class TestBillingIncidentPublicApi864(TransactionCase):
             }))
             self.assertTrue(activity.action_done())
             self.assertFalse(activity.exists())
+            cr.rollback()
+
+    def test_related_message_and_attachment_guards_are_targeted(self):
+        incident_id = self.Incident._log(self._snapshot(
+            external_ref=self.ref + '-related-guards',
+            state='needs_human',
+        ))
+        with self.env.registry.cursor() as cr:
+            env = self.env(cr=cr)
+            incident = env['woow.billing.incident'].sudo().browse(incident_id)
+            review_type = env.ref(
+                'woow_paas_platform.'
+                'mail_activity_type_billing_incident_review')
+            activity = env['mail.activity'].sudo().search([
+                ('res_model', '=', 'woow.billing.incident'),
+                ('res_id', '=', incident_id),
+                ('activity_type_id', '=', review_type.id),
+                ('active', '=', True),
+            ], limit=1)
+            self.assertTrue(activity)
+
+            Message = env['mail.message'].sudo()
+            for body in (
+                    'generic safe body',
+                    'PAN 4111111111111111',
+                    'ResultData=forbidden-related-message'):
+                with self.subTest(body=body), self.assertRaises(AccessError):
+                    Message.create({
+                        'model': 'woow.billing.incident',
+                        'res_id': incident_id,
+                        'message_type': 'comment',
+                        'body': body,
+                    })
+
+            activity.action_feedback(feedback='plain verification completed')
+            protected_message = Message.search([
+                ('model', '=', 'woow.billing.incident'),
+                ('res_id', '=', incident_id),
+            ], order='id desc', limit=1)
+            self.assertTrue(
+                protected_message,
+                '合法 activity-done 必須可經 private chatter capability 留訊息',
+            )
+            original_body = protected_message.body
+            for body in (
+                    'generic safe replacement',
+                    'PAN 4111111111111111',
+                    'ResultData=forbidden-related-write'):
+                with self.subTest(write_body=body), \
+                        self.assertRaises(AccessError):
+                    protected_message.write({'body': body})
+                protected_message.invalidate_recordset(['body'])
+                self.assertEqual(protected_message.body, original_body)
+            with self.assertRaises(AccessError):
+                protected_message.unlink()
+
+            replacement_activity = env['mail.activity'].sudo().search([
+                ('res_model', '=', 'woow.billing.incident'),
+                ('res_id', '=', incident_id),
+                ('activity_type_id', '=', review_type.id),
+                ('active', '=', True),
+            ], limit=1)
+            self.assertTrue(replacement_activity)
+            Attachment = env['ir.attachment'].sudo()
+            protected_targets = (
+                ('woow.billing.incident', incident.id),
+                ('mail.activity', replacement_activity.id),
+                ('mail.message', protected_message.id),
+            )
+            for index, (res_model, res_id) in enumerate(protected_targets):
+                name = 'forbidden-related-%s-%s.bin' % (index, uuid.uuid4().hex)
+                with self.subTest(create_target=(res_model, res_id)), \
+                        self.assertRaises(AccessError):
+                    Attachment.create({
+                        'name': name,
+                        'datas': base64.b64encode(b'caller-controlled payload'),
+                        'res_model': res_model,
+                        'res_id': res_id,
+                    })
+                self.assertFalse(Attachment.search([('name', '=', name)]))
+
+                movable = Attachment.create({
+                    'name': 'movable-%s' % name,
+                    'datas': base64.b64encode(b'legal unrelated payload'),
+                    'res_model': 'res.partner',
+                    'res_id': env.user.partner_id.id,
+                })
+                before = movable.read(['res_model', 'res_id', 'datas'])[0]
+                with self.assertRaises(AccessError):
+                    movable.write({
+                        'datas': base64.b64encode(b'forbidden new payload'),
+                        'res_model': res_model,
+                        'res_id': res_id,
+                    })
+                self.assertEqual(
+                    movable.read(['res_model', 'res_id', 'datas'])[0], before,
+                    'old→protected target move must reject atomically',
+                )
+
+            other_partner = env['res.partner'].create({
+                'name': 'Unrelated attachment control %s' % uuid.uuid4().hex,
+            })
+            control_message = Message.create({
+                'model': 'res.partner',
+                'res_id': other_partner.id,
+                'message_type': 'comment',
+                'body': 'unrelated model message remains legal',
+            })
+            self.assertTrue(control_message.write({
+                'body': 'unrelated message write remains legal',
+            }))
+            control_attachment = Attachment.create({
+                'name': 'unrelated-control.bin',
+                'datas': base64.b64encode(b'unrelated payload'),
+                'res_model': 'res.partner',
+                'res_id': other_partner.id,
+            })
+            self.assertTrue(control_attachment.write({
+                'res_id': env.user.partner_id.id,
+            }))
             cr.rollback()
 
     def test_dedicated_activity_create_and_write_are_not_generic_ingress(self):
@@ -1217,9 +1404,100 @@ class TestBillingIncidentPublicApi864(TransactionCase):
             'resolve 不得刪 generic Todo，只能刪 dedicated review activity',
         )
 
+    def test_schedule_converges_removed_added_and_duplicate_manager_roster(self):
+        manager_group = self.env.ref('account.group_account_manager')
+        removed = new_test_user(
+            self.env,
+            login='billing-roster-removed-%s' % uuid.uuid4().hex,
+            groups='account.group_account_manager',
+        )
+        added = new_test_user(
+            self.env,
+            login='billing-roster-added-%s' % uuid.uuid4().hex,
+            groups='base.group_user',
+        )
+        incident = self.Incident._create_test_fixture({
+            'external_ref': self.ref + '-roster-convergence',
+            'kind': 'charged_not_credited',
+            'state': 'needs_human',
+        })
+        self.assertTrue(
+            self.Incident._ensure_review_activities_current_cursor(incident.id))
+        review_type = self.env.ref(
+            'woow_paas_platform.mail_activity_type_billing_incident_review')
+        activity_domain = [
+            ('res_model', '=', 'woow.billing.incident'),
+            ('res_id', '=', incident.id),
+            ('activity_type_id', '=', review_type.id),
+            ('active', '=', True),
+        ]
+        Activity = self.env['mail.activity'].sudo()
+        self.assertIn(removed.id, Activity.search(activity_domain).user_id.ids)
+
+        removed.write({'groups_id': [(3, manager_group.id)]})
+        added.write({'groups_id': [(4, manager_group.id)]})
+        manager_group.invalidate_recordset(['users'])
+        self.env.cr.execute(
+            'INSERT INTO mail_activity '
+            '(res_model_id, res_model, res_id, res_name, activity_type_id, '
+            'user_id, summary, note, date_deadline, automated, active, '
+            'create_uid, write_uid, create_date, write_date) '
+            'SELECT res_model_id, res_model, res_id, res_name, '
+            'activity_type_id, user_id, %s, note, date_deadline, automated, '
+            'active, create_uid, write_uid, NOW(), NOW() '
+            'FROM mail_activity WHERE res_model = %s AND res_id = %s '
+            'AND activity_type_id = %s AND active = true '
+            'ORDER BY id LIMIT 1',
+            (
+                'Deliberate duplicate roster fixture',
+                'woow.billing.incident', incident.id, review_type.id,
+            ),
+        )
+        Activity.invalidate_model()
+        before_user_ids = Activity.search(activity_domain).user_id.ids
+        before_counts = {
+            user_id: Activity.search_count(
+                activity_domain + [('user_id', '=', user_id)])
+            for user_id in set(before_user_ids)
+        }
+        self.assertGreater(
+            max(before_counts.values()), 1,
+            '前置：至少一位現任 manager 必須有 duplicate active activity',
+        )
+
+        logger_target = (
+            'odoo.addons.woow_paas_platform.models.billing_incident._logger')
+        with patch(logger_target) as logger:
+            self.assertTrue(
+                self.Incident._ensure_review_activities_current_cursor(
+                    incident.id))
+        manager_group.invalidate_recordset(['users'])
+        Activity.invalidate_model()
+        current_manager_ids = sorted(manager_group.users.filtered('active').ids)
+        final_activities = Activity.search(activity_domain)
+        final_user_ids = sorted(final_activities.user_id.ids)
+        final_counts = {
+            user_id: Activity.search_count(
+                activity_domain + [('user_id', '=', user_id)])
+            for user_id in current_manager_ids
+        }
+        self.assertEqual(final_user_ids, current_manager_ids)
+        self.assertEqual(
+            final_counts, {user_id: 1 for user_id in current_manager_ids},
+            'every current manager must have exactly one active dedicated row',
+        )
+        self.assertEqual(len(final_activities), len(current_manager_ids))
+        self.assertNotIn(removed.id, final_user_ids)
+        self.assertIn(added.id, final_user_ids)
+        logged = repr(logger.mock_calls)
+        self.assertNotIn(
+            incident.external_ref, logged,
+            'roster convergence logs must not disclose raw MTN/external_ref',
+        )
+
     def test_needs_human_activity_is_per_manager_deduplicated_and_resolved(self):
         manager_ids = self.env.ref(
-            'account.group_account_manager').users.ids
+            'account.group_account_manager').users.filtered('active').ids
         self.assertTrue(
             manager_ids,
             '前置：sandbox 的 account manager 群組至少要有一位使用者',
@@ -1756,11 +2034,17 @@ class TestBillingIncidentAdminBackend864(TransactionCase):
                 '不是關單理由'
             ),
             (
-                'Billing incidents are a global finance ledger. Every account '
-                'manager can read every incident across companies by design.'
+                'Billing incident access uses the Odoo role '
+                '`account.group_account_manager` (not a Workspace role). It '
+                'reads all incidents across all companies; review activities '
+                'go to all current managers in that Odoo group; no company '
+                'M2O/rule; base.group_system behavior is not narrowed.'
             ): (
-                '帳務 incident 是全域財務帳本；所有 account manager '
-                '都可刻意跨公司讀取全部 incident。'
+                '帳務 incident 存取使用 Odoo role '
+                '`account.group_account_manager`（不是 Workspace role）；可跨'
+                '全部公司讀取全部 incident，review activity 派給該 Odoo group '
+                '所有現任 manager；不加 company M2O/rule，也不縮減 '
+                'base.group_system 行為。'
             ),
         }
         for msgid, msgstr in exact_translations.items():
@@ -1907,10 +2191,13 @@ class TestBillingIncidentRpcWriteGuard864(HttpCase):
         self.assertNotIn('error', result, '%s（回 %r）' % (message, result))
         return result.get('result')
 
-    def _assert_access_error(self, result, message):
+    def _assert_access_error(self, result, message, contains=None):
         self.assertIn('error', result, '%s（回 %r）' % (message, result))
         name = result['error'].get('data', {}).get('name', '')
         self.assertIn('AccessError', name, '%s（回 %r）' % (message, result))
+        if contains:
+            error_text = json.dumps(result['error'], ensure_ascii=False)
+            self.assertIn(contains, error_text, '%s（回 %r）' % (message, result))
 
     def _assert_user_error(self, result, message):
         self.assertIn('error', result, '%s（回 %r）' % (message, result))
@@ -1983,6 +2270,167 @@ class TestBillingIncidentRpcWriteGuard864(HttpCase):
             ('activity_type_id', '=', review_type.id),
         ]))
 
+    def test_manager_rpc_related_create_write_and_move_guards(self):
+        Incident = self.env['woow.billing.incident']
+        self.assertTrue(
+            Incident._ensure_review_activities_current_cursor(
+                self.incident_a.id))
+        review_type = self.env.ref(
+            'woow_paas_platform.mail_activity_type_billing_incident_review')
+        activity = self.env['mail.activity'].sudo().search([
+            ('res_model', '=', 'woow.billing.incident'),
+            ('res_id', '=', self.incident_a.id),
+            ('activity_type_id', '=', review_type.id),
+            ('user_id', '=', self.manager_a.id),
+            ('active', '=', True),
+        ], limit=1)
+        self.assertTrue(activity)
+        activity.with_user(self.manager_a).action_feedback(
+            feedback='plain RPC control verification')
+        protected_message = self.env['mail.message'].sudo().search([
+            ('model', '=', 'woow.billing.incident'),
+            ('res_id', '=', self.incident_a.id),
+        ], order='id desc', limit=1)
+        replacement_activity = self.env['mail.activity'].sudo().search([
+            ('res_model', '=', 'woow.billing.incident'),
+            ('res_id', '=', self.incident_a.id),
+            ('activity_type_id', '=', review_type.id),
+            ('active', '=', True),
+        ], limit=1)
+        self.assertTrue(protected_message and replacement_activity)
+        control_project = self.env['project.project'].with_user(
+            self.manager_a).create({
+                'name': 'Unrelated RPC control %s' % uuid.uuid4().hex,
+            })
+        generic_activity = self.env['mail.activity'].sudo().create({
+            'res_model_id': self.env['ir.model']._get('project.project').id,
+            'res_id': control_project.id,
+            'activity_type_id': self.env.ref(
+                'mail.mail_activity_data_todo').id,
+            'user_id': self.manager_a.id,
+            'summary': 'Unrelated RPC attachment control',
+            'note': 'Billing guards must not affect this activity',
+            'date_deadline': fields.Date.today(),
+        })
+        self.env.cr.flush()
+
+        self.authenticate(self.manager_a_login, self.manager_a_login)
+        for body in (
+                'generic safe RPC body',
+                'PAN 4111111111111111',
+                'ResultData=forbidden-rpc-related'):
+            denied = self._call_kw(
+                'mail.message',
+                'create',
+                [{
+                    'model': 'woow.billing.incident',
+                    'res_id': self.incident_a.id,
+                    'message_type': 'comment',
+                    'body': body,
+                }],
+                {'context': {'woow_billing_incident_chatter': True}},
+            )
+            self._assert_access_error(
+                denied,
+                'manager RPC cannot forge incident chatter create capability',
+                contains='internal activity completion flow',
+            )
+            denied_write = self._call_kw(
+                'mail.message',
+                'write',
+                [[protected_message.id], {'body': body}],
+            )
+            self._assert_access_error(
+                denied_write,
+                'manager RPC cannot rewrite incident-owned chatter',
+                contains='managed automatically',
+            )
+
+        protected_targets = (
+            ('woow.billing.incident', self.incident_a.id),
+            ('mail.activity', replacement_activity.id),
+            ('mail.message', protected_message.id),
+        )
+        for index, (res_model, res_id) in enumerate(protected_targets):
+            name = 'rpc-forbidden-related-%s-%s.bin' % (
+                index, uuid.uuid4().hex)
+            denied_create = self._call_kw(
+                'ir.attachment',
+                'create',
+                [{
+                    'name': name,
+                    'datas': base64.b64encode(
+                        b'forbidden direct payload').decode(),
+                    'res_model': res_model,
+                    'res_id': res_id,
+                }],
+            )
+            self._assert_access_error(
+                denied_create,
+                'RPC attachment create cannot target incident ownership graph',
+                contains='Attachments are not allowed',
+            )
+            self.assertFalse(self.env['ir.attachment'].sudo().search([
+                ('name', '=', name),
+            ]))
+
+        control_name = 'rpc-related-control-%s.bin' % uuid.uuid4().hex
+        control_id = self._assert_ok(
+            self._call_kw(
+                'ir.attachment',
+                'create',
+                [{
+                    'name': control_name,
+                    'datas': base64.b64encode(b'legal control').decode(),
+                    'res_model': 'mail.activity',
+                    'res_id': generic_activity.id,
+                }],
+            ),
+            'unrelated attachment create must remain legal',
+        )
+        self.assertIsInstance(control_id, int)
+        denied_move = self._call_kw(
+            'ir.attachment',
+            'write',
+            [[control_id], {
+                'datas': base64.b64encode(b'forbidden move payload').decode(),
+                'res_model': 'woow.billing.incident',
+                'res_id': self.incident_a.id,
+            }],
+        )
+        self._assert_access_error(
+            denied_move,
+            'RPC old→incident attachment move must reject atomically',
+            contains='Attachments are not allowed',
+        )
+        control = self.env['ir.attachment'].sudo().browse(control_id)
+        control.invalidate_recordset(['res_model', 'res_id', 'datas'])
+        self.assertEqual(control.res_model, 'mail.activity')
+        self.assertEqual(control.res_id, generic_activity.id)
+        self.assertTrue(self._assert_ok(
+            self._call_kw(
+                'ir.attachment',
+                'write',
+                [[control_id], {'name': control_name + '.renamed'}],
+            ),
+            'unrelated attachment write must remain legal',
+        ))
+
+        control_message_id = self._assert_ok(
+            self._call_kw(
+                'mail.message',
+                'create',
+                [{
+                    'model': 'project.project',
+                    'res_id': control_project.id,
+                    'message_type': 'comment',
+                    'body': 'unrelated RPC message remains legal',
+                }],
+            ),
+            'unrelated mail.message create must remain legal',
+        )
+        self.assertIsInstance(control_message_id, int)
+
     def test_manager_rpc_can_write_manual_fields_only_and_denials_are_atomic(self):
         self.authenticate(self.manager_a_login, self.manager_a_login)
         result = self._call_kw(
@@ -2040,6 +2488,10 @@ class TestBillingIncidentRpcWriteGuard864(HttpCase):
         self.authenticate(self.manager_a_login, self.manager_a_login)
         before = self._audit_snapshot(self.incident_a)
         for note in (
+                '<b>plain verification reason</b>',
+                'plain <!-- comment --> verification reason',
+                'title="plain verification reason"',
+                'plain &amp; verification reason',
                 'MTN: 4111111111111111',
                 'ResultData=forbidden-rpc-payload-864',
                 'CVC=123',

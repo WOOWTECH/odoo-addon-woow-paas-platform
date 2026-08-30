@@ -5,8 +5,10 @@ may exist only in an outer transaction which later rolls back, so adding a
 source Many2one here would make the fail-open record fail exactly when it is
 needed most.  ``mail.thread`` contributes only Odoo mail metadata so standard
 ``mail.activity`` create/done/unlink semantics work against an already committed
-incident.  The model is a global finance ledger: every account manager reads all
-rows across companies by design.
+incident.  This global finance ledger is assigned to the Odoo role
+`account.group_account_manager` (not a Workspace role): it can read all
+incidents across all companies, and review activities go to all current
+managers in that Odoo group.
 """
 
 import html
@@ -27,6 +29,11 @@ from odoo.tools.translate import get_translation
 
 _logger = logging.getLogger(__name__)
 
+# Durable policy (#986 comment 11112):
+# Odoo role `account.group_account_manager` (not a Workspace role);
+# all incidents across all companies; all current managers in that Odoo group;
+# no company M2O/rule; base.group_system behavior is not narrowed.
+
 
 class _BillingIncidentCapability:
     """Base for JSON-inexpressible, module-private lifecycle capabilities."""
@@ -43,8 +50,8 @@ class _BillingIncidentCapability:
 _BILLING_INCIDENT_CREATE = _BillingIncidentCapability('test fixture create')
 _BILLING_INCIDENT_RESOLUTION_TRANSITION = _BillingIncidentCapability(
     'resolution transition')
-_BILLING_INCIDENT_ACTIVITY_DONE_POST = _BillingIncidentCapability(
-    'activity done post')
+_BILLING_INCIDENT_CHATTER = _BillingIncidentCapability(
+    'validated activity-done chatter')
 _BILLING_ACTIVITY_SCHEDULER = _BillingIncidentCapability(
     'activity scheduler')
 _BILLING_ACTIVITY_TERMINAL = _BillingIncidentCapability(
@@ -52,8 +59,7 @@ _BILLING_ACTIVITY_TERMINAL = _BillingIncidentCapability(
 _BILLING_INCIDENT_CREATE_CTX_KEY = 'woow_billing_incident_create'
 _BILLING_INCIDENT_RESOLUTION_CTX_KEY = (
     'woow_billing_incident_resolution_transition')
-_BILLING_INCIDENT_ACTIVITY_DONE_CTX_KEY = (
-    'woow_billing_incident_activity_done_post')
+_BILLING_INCIDENT_CHATTER_CTX_KEY = 'woow_billing_incident_chatter'
 _BILLING_ACTIVITY_SCHEDULER_CTX_KEY = 'woow_billing_activity_scheduler'
 _BILLING_ACTIVITY_TERMINAL_CTX_KEY = 'woow_billing_activity_terminal'
 _ODOO_MODULE_UNINSTALL_CTX_KEY = '_force_unlink'
@@ -82,25 +88,27 @@ def _is_resolution_transition(env):
             is _BILLING_INCIDENT_RESOLUTION_TRANSITION)
 
 
-def _activity_done_post(records):
+def _incident_chatter(records):
     return _with_billing_incident_capability(
         records,
-        _BILLING_INCIDENT_ACTIVITY_DONE_CTX_KEY,
-        _BILLING_INCIDENT_ACTIVITY_DONE_POST,
+        _BILLING_INCIDENT_CHATTER_CTX_KEY,
+        _BILLING_INCIDENT_CHATTER,
     )
 
 
-def _is_activity_done_post(env):
-    return (env.context.get(_BILLING_INCIDENT_ACTIVITY_DONE_CTX_KEY)
-            is _BILLING_INCIDENT_ACTIVITY_DONE_POST)
+def _is_incident_chatter(env):
+    return (env.context.get(_BILLING_INCIDENT_CHATTER_CTX_KEY)
+            is _BILLING_INCIDENT_CHATTER)
 
 
 def _activity_scheduler(records):
-    return _with_billing_incident_capability(
+    scheduled = _with_billing_incident_capability(
         records,
         _BILLING_ACTIVITY_SCHEDULER_CTX_KEY,
         _BILLING_ACTIVITY_SCHEDULER,
     )
+    # Odoo activity create/unlink may emit controlled mail.message rows.
+    return _incident_chatter(scheduled)
 
 
 def _is_activity_scheduler(env):
@@ -164,9 +172,10 @@ class BillingIncident(models.Model):
         help=(
             'Payment incidents store the raw ECPay MerchantTradeNo. '
             'Non-payment callers must use a namespaced key such as '
-            '`invoice:<stable-reference>`. Billing incidents are a global '
-            'finance ledger: every account manager can read every incident '
-            'across companies by design.'
+            '`invoice:<stable-reference>`. Access belongs to the Odoo role '
+            '`account.group_account_manager` (not a Workspace role), which '
+            'reads all incidents across all companies; review activities go '
+            'to all current managers in that Odoo group.'
         ),
     )
     kind = fields.Selection(
@@ -315,6 +324,12 @@ class BillingIncident(models.Model):
         r'[A-Za-z0-9][A-Za-z0-9._/-]{0,94}\Z')
     _TRADE_NO_RE = re.compile(r'[A-Za-z0-9][A-Za-z0-9._:/-]{0,63}\Z')
     _CONTROL_CHARACTER_RE = re.compile(r'[\x00-\x1f\x7f]')
+    _HTML_ENTITY_RE = re.compile(
+        r'&(?:#[0-9]+|#x[0-9a-f]+|[a-z][a-z0-9]+);', re.IGNORECASE)
+    _HTML_TAG_OR_COMMENT_RE = re.compile(
+        r'<!--|-->|<![A-Za-z]|<\s*/?\s*[A-Za-z][^>]*>', re.IGNORECASE)
+    _HTML_ATTRIBUTE_RE = re.compile(
+        r'(?<![\w:-])[A-Za-z_:][\w:.-]*\s*=\s*(?:"[^"]*"|\'[^\']*\')')
 
     @api.model_create_multi
     def create(self, values_list):
@@ -324,7 +339,10 @@ class BillingIncident(models.Model):
                 'Billing incidents may be created only by the internal '
                 'durable ledger writer.'
             ))
-        return super().create(values_list)
+        guarded = _incident_chatter(self)
+        created = super(BillingIncident, guarded).create(values_list)
+        # Never return the chatter capability on a recordset the caller keeps.
+        return self.browse(created.ids)
 
     @api.model
     def _create_test_fixture(self, values):
@@ -428,17 +446,13 @@ class BillingIncident(models.Model):
 
     def message_post(self, **kwargs):
         """Disallow free chatter; only validated core activity-done may post."""
-        if not _is_activity_done_post(self.env):
+        if not _is_incident_chatter(self.env):
             raise AccessError(_(
                 'Free-form chatter is disabled for billing incidents.'
             ))
-        category = self._free_text_ingress_category(
-            'message_body', kwargs.get('body', ''))
-        if category:
-            raise UserError(_(
-                'Billing incident activity feedback must contain only safe, '
-                'non-sensitive summaries.'
-            ))
+        # Core renders controlled HTML only after _action_done feedback passed
+        # the plain-text validator.  Do not reject that generated template as
+        # user markup, and never expose this object capability to RPC.
         return super().message_post(**kwargs)
 
     def message_post_with_source(
@@ -478,16 +492,18 @@ class BillingIncident(models.Model):
             raise UserError(_(
                 'Attachments are not allowed on billing incident activities.'
             ))
-        for field_name, value in (
-                ('activity_render_values', render_values),
-                ('activity_post_values', kwargs)):
-            category = self._sensitive_container_category(field_name, value)
-            if category:
-                raise UserError(_(
-                    'Billing incident activity feedback must contain only '
-                    'safe, non-sensitive summaries.'
-                ))
-        guarded = _activity_done_post(self)
+        feedback = render_values.get('feedback')
+        if (feedback not in (None, False)
+                and self._free_text_ingress_category(
+                    'activity_feedback', feedback)):
+            raise UserError(_(
+                'Billing incident activity feedback must contain only safe, '
+                'non-sensitive summaries.'
+            ))
+        # The template/activity metadata is module/core controlled.  Only the
+        # caller-owned feedback above is plain-validated; then an object-only
+        # capability lets core render and persist its expected HTML.
+        guarded = _incident_chatter(self)
         return super(BillingIncident, guarded).message_post_with_source(
             source_ref,
             render_values=render_values,
@@ -495,38 +511,32 @@ class BillingIncident(models.Model):
         )
 
     @api.model
-    def _sensitive_container_category(self, field_name, value):
-        """Validate every string leaf in incident-owned render containers."""
-        if isinstance(value, str):
-            return self._free_text_ingress_category(field_name, value)
-        if isinstance(value, dict):
-            for child in value.values():
-                category = self._sensitive_container_category(
-                    field_name, child)
-                if category:
-                    return category
-        elif isinstance(value, (list, tuple, set)):
-            for child in value:
-                category = self._sensitive_container_category(
-                    field_name, child)
-                if category:
-                    return category
-        return False
-
-    @api.model
     def _canonicalize_pci_text(self, value):
         """Expose HTML-obscured and Unicode-obscured PCI candidates."""
         plaintext = html2plaintext(html.unescape(value))
         normalized = unicodedata.normalize('NFKC', plaintext)
-        without_format_controls = ''.join(
+        without_ignorable_separators = ''.join(
             character for character in normalized
-            if unicodedata.category(character) != 'Cf'
+            if unicodedata.category(character) not in ('Cf', 'Mn', 'Me')
         )
         return ''.join(
             '.' if unicodedata.category(character).startswith('P')
             else character
-            for character in without_format_controls
+            for character in without_ignorable_separators
         )
+
+    @api.model
+    def _raw_markup_category(self, value):
+        """Fail closed on raw, entity-decoded, or visible markup syntax."""
+        if self._HTML_ENTITY_RE.search(value):
+            return 'html_markup'
+        decoded = html.unescape(value)
+        plaintext = html2plaintext(decoded)
+        for candidate in (value, decoded, plaintext):
+            if (self._HTML_TAG_OR_COMMENT_RE.search(candidate)
+                    or self._HTML_ATTRIBUTE_RE.search(candidate)):
+                return 'html_markup'
+        return False
 
     @api.model
     def _sensitive_content_category(self, field_name, value):
@@ -556,9 +566,12 @@ class BillingIncident(models.Model):
 
     @api.model
     def _free_text_ingress_category(self, field_name, value):
-        """Shared PCI validator for detail and every resolution-note seam."""
+        """Require plain text, then canonicalize before marker/PAN checks."""
         if not isinstance(value, str):
             return 'invalid_type'
+        markup_category = self._raw_markup_category(value)
+        if markup_category:
+            return markup_category
         return self._sensitive_content_category(field_name, value)
 
     @api.model
@@ -866,9 +879,10 @@ class BillingIncident(models.Model):
 
     @api.model
     def _account_manager_users(self, env):
+        """Return active members of the Odoo finance role, across companies."""
         group = env.ref(
             'account.group_account_manager', raise_if_not_found=False)
-        return group.users if group else env['res.users']
+        return group.users.filtered('active') if group else env['res.users']
 
     @api.model
     def _acquire_review_activity_lock(self, cr, incident_id):
@@ -898,25 +912,40 @@ class BillingIncident(models.Model):
             raise_if_not_found=False,
         )
         model = self.env['ir.model']._get(self._name)
-        users = self._account_manager_users(self.env)
-        if not users:
-            _logger.error(
-                '[BILLING_INCIDENT] incident id=%s '
-                'category=no_review_assignee', incident_id)
-            return False
         if not (review_type and model):
             _logger.error(
                 '[BILLING_INCIDENT] incident id=%s '
                 'category=missing_activity_dependency', incident_id)
             return False
 
+        users = self._account_manager_users(self.env)
+        current_user_ids = set(users.ids)
         Activity = _activity_scheduler(self.env['mail.activity'].sudo())
-        existing_user_ids = set(Activity.search([
+        activity_domain = [
             ('res_model', '=', self._name),
             ('res_id', '=', incident_id),
             ('activity_type_id', '=', review_type.id),
             ('active', '=', True),
-        ]).user_id.ids)
+        ]
+        existing = Activity.search(activity_domain, order='id')
+        kept_user_ids = set()
+        obsolete = Activity
+        for activity in existing:
+            if (activity.user_id.id not in current_user_ids
+                    or activity.user_id.id in kept_user_ids):
+                obsolete |= activity
+            else:
+                kept_user_ids.add(activity.user_id.id)
+        if obsolete:
+            # Scheduler capability makes this a convergence cleanup, not a
+            # user terminal action; MailActivity.unlink must not re-arm it.
+            obsolete.unlink()
+        if not users:
+            _logger.error(
+                '[BILLING_INCIDENT] incident id=%s '
+                'category=no_review_assignee', incident_id)
+            return False
+        existing_user_ids = kept_user_ids
         external_ref, kind, _state = incident
         activity_values = []
         for user in users:
@@ -1182,6 +1211,128 @@ class BillingIncident(models.Model):
             return False
 
 
+class MailMessage(models.Model):
+    _inherit = 'mail.message'
+
+    @api.model
+    def _targets_billing_incident_values(self, values):
+        model_name = (
+            values['model'] if 'model' in values
+            else self.env.context.get('default_model')
+        )
+        return model_name == 'woow.billing.incident'
+
+    @api.model_create_multi
+    def create(self, values_list):
+        """Only validated activity completion may mint incident chatter."""
+        if (any(self._targets_billing_incident_values(values)
+                for values in values_list)
+                and not _is_incident_chatter(self.env)):
+            raise AccessError(_(
+                'Billing incident messages may be created only by the '
+                'internal activity completion flow.'
+            ))
+        return super().create(values_list)
+
+    def write(self, values):
+        """Reject direct body edits and old/new target moves into chatter."""
+        targets_billing = (
+            self._targets_billing_incident_values(values)
+            or any(message.model == 'woow.billing.incident'
+                   for message in self.sudo())
+        )
+        if targets_billing:
+            core_metadata_only = (
+                _is_incident_chatter(self.env)
+                and not {'body', 'model', 'res_id'} & set(values)
+            )
+            if not core_metadata_only:
+                raise AccessError(_(
+                    'Billing incident chatter is managed automatically by '
+                    'the internal activity completion flow.'
+                ))
+        return super().write(values)
+
+    def unlink(self):
+        """Keep incident chatter immutable outside a real module uninstall."""
+        if (not _is_odoo_module_uninstall(self.env)
+                and any(message.model == 'woow.billing.incident'
+                        for message in self.sudo())):
+            raise AccessError(_(
+                'Billing incident chatter is managed automatically by the '
+                'internal activity completion flow.'
+            ))
+        return super().unlink()
+
+
+class IrAttachment(models.Model):
+    _inherit = 'ir.attachment'
+
+    @api.model
+    def _billing_owned_target(self, res_model, res_id):
+        """Return whether an attachment target belongs to the incident graph."""
+        if res_model == 'woow.billing.incident':
+            return True
+        if not isinstance(res_id, int) or isinstance(res_id, bool) or not res_id:
+            return False
+        if res_model == 'mail.activity':
+            review_type = self.env.ref(
+                'woow_paas_platform.'
+                'mail_activity_type_billing_incident_review',
+                raise_if_not_found=False,
+            )
+            activity = self.env['mail.activity'].sudo().with_context(
+                active_test=False).browse(res_id).exists()
+            return bool(
+                activity
+                and (activity.res_model == 'woow.billing.incident'
+                     or (review_type
+                         and activity.activity_type_id == review_type))
+            )
+        if res_model == 'mail.message':
+            message = self.env['mail.message'].sudo().browse(res_id).exists()
+            return bool(message and message.model == 'woow.billing.incident')
+        return False
+
+    @api.model
+    def _values_billing_owned_target(self, values):
+        res_model = (
+            values['res_model'] if 'res_model' in values
+            else self.env.context.get('default_res_model')
+        )
+        res_id = (
+            values['res_id'] if 'res_id' in values
+            else self.env.context.get('default_res_id')
+        )
+        return self._billing_owned_target(res_model, res_id)
+
+    @api.model_create_multi
+    def create(self, values_list):
+        """Reject payload before a protected attachment row reaches the DB."""
+        if any(self._values_billing_owned_target(values)
+               for values in values_list):
+            raise AccessError(_(
+                'Attachments are not allowed on billing incident activities.'
+            ))
+        return super().create(values_list)
+
+    def write(self, values):
+        """Reject writes on protected rows and old-to-new protected moves."""
+        for attachment in self.sudo():
+            old_target = self._billing_owned_target(
+                attachment.res_model, attachment.res_id)
+            new_target = self._billing_owned_target(
+                values.get('res_model', attachment.res_model),
+                values.get('res_id', attachment.res_id),
+            )
+            if old_target or new_target:
+                raise AccessError(_(
+                    'Attachments are not allowed on billing incident '
+                    'activities.'
+                ))
+        return super().write(values)
+
+
 class MailActivity(models.Model):
     _inherit = 'mail.activity'
 
@@ -1260,6 +1411,13 @@ class MailActivity(models.Model):
         """Serialize the whole core terminal flow with schedule and resolve."""
         incident_ids = self._dedicated_billing_incident_ids()
         Incident = self.env['woow.billing.incident'].sudo()
+        if (incident_ids and feedback not in (None, False)
+                and Incident._free_text_ingress_category(
+                    'activity_feedback', feedback)):
+            raise UserError(_(
+                'Billing incident activity feedback must contain only safe, '
+                'non-sensitive summaries.'
+            ))
         for incident_id in incident_ids:
             Incident._acquire_review_activity_lock(self.env.cr, incident_id)
         guarded = _activity_terminal(self)
@@ -1270,6 +1428,8 @@ class MailActivity(models.Model):
 
     def unlink(self):
         """Re-arm only unresolved dedicated billing alerts after terminal use."""
+        if _is_activity_scheduler(self.env):
+            return super().unlink()
         incident_ids = self._dedicated_billing_incident_ids()
         Incident = self.env['woow.billing.incident'].sudo()
         # Lock before core deletes/archives the terminal activity.  Taking the

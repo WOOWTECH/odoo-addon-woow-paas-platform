@@ -4358,14 +4358,15 @@ INTERNAL_CTX_KEY_REGISTRY = {
         "why": "billing incident 的 unresolved→resolved 首次 audit transition；裸 "
                "sudo／truthy RPC context 都不得改寫 evidence、重開或覆蓋 first audit。",
     },
-    "woow_billing_incident_activity_done_post": {
+    "woow_billing_incident_chatter": {
         "status": "enforced",
-        "sentinel": "_BILLING_INCIDENT_ACTIVITY_DONE_POST",
+        "sentinel": "_BILLING_INCIDENT_CHATTER",
         "defined_in": "src/models/billing_incident.py",
-        "reader": "_is_activity_done_post",
-        "issue": "#864",
-        "why": "billing incident 禁止自由 chatter；只有已驗證 core activity-done source "
-               "可取得 object-identity capability 並落下完成訊息。",
+        "reader": "_is_incident_chatter",
+        "issue": "#864／PR#986 comment 11112 security 收尾",
+        "why": "billing incident 與 mail.message 禁止自由 chatter；只有 feedback／附件先"
+               "驗證完成的 core activity-done source 可取得 object-identity capability，"
+               "讓受控 template HTML 經 super 建立完成訊息。",
     },
     "woow_billing_activity_scheduler": {
         "status": "enforced",

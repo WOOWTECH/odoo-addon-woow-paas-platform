@@ -13,13 +13,33 @@ related:
 ## 適用範圍
 
 本 runbook 只處理 Odoo 後台 **Woow PaaS → Billing Incidents** 中 `state` 不是
-`resolved` 的記錄。操作人必須屬於 `account.group_account_manager`。
+`resolved` 的記錄。操作角色是 Odoo role `account.group_account_manager`，絕非任何
+Workspace role。以下三句是 comment #11112 的 durable security contract，保留 English
+逐字詞組供 regression 鎖定：
+
+- Odoo role `account.group_account_manager` (not a Workspace role)
+- all incidents across all companies
+- all current managers in that Odoo group
+- no company M2O/rule; base.group_system behavior is not narrowed
 
 `woow.billing.incident` 是刻意設計的 **global finance ledger**，不是 company-owned
-業務表：它沒有 `company_ref`／company record rule。每一位 account manager 都可跨
-company 讀取全部 incident，也可依 model allowlist 保存兩個人工查證欄位；這是 Eugene
-裁決的安全契約，不是待補的隔離缺口。`orphan`／`needs_human` 的專屬 review activity
-同樣派給群組內**全體** account managers，不依使用者目前 company 篩選。
+業務表：它沒有 company M2O／company record rule，也不另行縮減既有
+`base.group_system` 系統行為。每一位該 Odoo group 的現任 manager 都可跨全部 company
+讀取全部 incident，也可依 model allowlist 保存兩個人工查證欄位；這是 Eugene 裁決的安全
+契約，不是待補的隔離缺口。`orphan`／`needs_human` 的專屬 review activity 同樣派給該
+Odoo group 內**全體現任** managers，不依使用者目前 company 篩選。初次 schedule 派全體；
+後續 incident schedule／duplicate `_log()` 在同一 advisory lock 內收斂 roster，移除已離組
+使用者與同 user duplicate，再替新進 manager 補到恰一筆 active dedicated activity。本階段
+**沒有 cron**；若 incident 之後完全沒有 schedule／log 觸發，就不宣稱 roster 會自行收斂。
+
+### Fresh evidence（2026-08-31；僅佐證現況）
+
+- prod/stg each currently has 1 `res.company`
+- internal account managers: prod=1/stg=3
+
+以上是 current-state evidence only；policy does not assume single-company。即使未來任一環境
+增加 company，本節的跨全部 company 讀取與全 group 派送契約仍不變，絕不能把上述數字
+誤讀成加入 company M2O／rule 的前提。
 
 畫面上的警告是本流程的不變式：
 
@@ -64,9 +84,14 @@ boundary。共用 sensitive validator 會套到 `_log` 的所有文字 ingress�
 `ResultData`／`Card4No`／`Card6No`／`CardNo`／`CVV`／`CVC`／`CID`／`CSC`／
 `security code`／`SAD`（含 `sensitive authentication data`）／`PIN`／`PIN block`／
 `track1`／`track2`／`magnetic stripe`／`PAN` marker，以及 Luhn-valid 13–19 位 PAN-like
-數字都會被拒絕。validator 在 marker／Luhn 前先做 `html2plaintext` 與 HTML entity decode、
-Unicode NFKC、移除 Unicode category `Cf`，再把常見 punctuation 分隔正規化；因此卡號被
-HTML fragment、點號、全形字元或 U+200B zero-width character 拆開也不會繞過。只有專用
+數字都會被拒絕。所有 caller-controlled incident-owned free text（`detail`、
+`resolution_note`、activity feedback）先在 raw、HTML entity-decoded 與 visible plaintext
+三層掃描；只要出現 HTML tag／comment／quoted attribute／entity markup 就 fail-closed，
+因本產品只接受 plain-text 理由。通過 markup gate 後，validator 才做 HTML entity decode、
+`html2plaintext`、Unicode NFKC，移除 Unicode category `Cf` 與 `Mn`／`Me` variation／
+combining separators，再把常見 punctuation 分隔正規化並跑 marker／PAN Luhn；因此卡號被
+點號、全形字元、U+FE0F variation selector、U+200B zero-width character 或 combining mark
+拆開也不會繞過。只有專用
 `external_ref`／`trade_no` 欄位可豁免「純數字碰巧通過 Luhn」；兩欄仍拒絕上述 marker，
 並另有長度、安全字元與 CRLF/control-character shape gate。`external_ref` 只接受 1–20
 字元 raw provider MTN，
@@ -111,8 +136,15 @@ ledger 的 source/business 欄位仍完全 relation-free。為使用 Odoo 標準
 Many2one／Many2many。
 
 `mail.thread` 帶來的 incident-owned chatter ingress 已刻意縮到唯一 core
-`mail.message_activity_done` source：一般 account manager 的自由 `message_post()` 全拒，activity
-feedback、render values 與最後 body 都先 canonicalize、再套用同一 PCI validator；
-`attachment_ids`／`attachments` 只要非空就直接拒絕，因本階段不掃描檔案內容。這是 model
-ingress boundary，不宣稱能阻止持有惡意 server-side `SUPERUSER` 程式碼的人直接呼叫
-`mail.message.create()`；那種行為已超出本 model 可攔截的呼叫面。
+`mail.message_activity_done` source：一般 account manager 的自由 `message_post()` 全拒；任何
+user feedback/body 都先走 plain-text markup＋PCI validator，`attachment_ids`／`attachments`
+只要非空也直接拒絕，因本階段不掃描檔案內容。驗證完成後才把 JSON-RPC 無法偽造的
+module-private object capability 交給 `message_post_with_source()` 呼叫 `super`，所以 Odoo core
+產生的受控 activity template HTML 可以通過，但 caller markup 不會。
+
+related-model 也在同一 model 檔 targeted 守線：`mail.message` 只有上述 capability 能建立
+`model=woow.billing.incident` 的完成訊息，generic create／write／unlink（含任何 body、PAN 或
+`ResultData`）全拒；`ir.attachment` create／write 在 payload 落 DB 前拒絕直接綁 incident、
+dedicated billing activity 或 incident-owned message，既有 unrelated attachment 搬往這些
+old→new target 也原子拒絕。其他 model 的 message／attachment 行為不受影響。這些 private
+context keys 全部登錄在 repo `INTERNAL_CTX_KEY_REGISTRY`，值只接受 object identity。

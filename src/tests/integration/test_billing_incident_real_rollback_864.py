@@ -19,6 +19,7 @@ import threading
 import time
 import traceback
 import uuid
+from unittest.mock import patch
 
 import odoo
 from psycopg2 import errorcodes
@@ -112,6 +113,9 @@ class TestBillingIncidentRealTransactions864(BaseCase):
                 )
                 env['account.move'].sudo().search([
                     ('ref', '=', self.marker),
+                ]).unlink()
+                env['res.users'].sudo().search([
+                    ('login', 'like', self.marker + '-roster-%'),
                 ]).unlink()
                 env['res.partner'].sudo().search([
                     ('name', 'like', self.marker),
@@ -565,6 +569,96 @@ class TestBillingIncidentRealTransactions864(BaseCase):
             self._review_activity_counts_by_user(incident_id),
             self._expected_review_activity_counts_by_user(),
             'schedule/done race must retain exactly one active alert per manager',
+        )
+
+    def test_duplicate_log_converges_current_manager_roster(self):
+        with self.registry.cursor() as cr:
+            env = api.Environment(cr, odoo.SUPERUSER_ID, {})
+            manager_group = env.ref('account.group_account_manager')
+            base_group = env.ref('base.group_user')
+            removed = env['res.users'].sudo().with_context(
+                no_reset_password=True).create({
+                    'name': '%s-roster-removed' % self.marker,
+                    'login': '%s-roster-removed' % self.marker,
+                    'email': '%s-roster-removed@example.test' % self.marker,
+                    'groups_id': [(6, 0, [manager_group.id])],
+                })
+            added = env['res.users'].sudo().with_context(
+                no_reset_password=True).create({
+                    'name': '%s-roster-added' % self.marker,
+                    'login': '%s-roster-added' % self.marker,
+                    'email': '%s-roster-added@example.test' % self.marker,
+                    'groups_id': [(6, 0, [base_group.id])],
+                })
+            removed_id = removed.id
+            added_id = added.id
+            cr.commit()
+
+        snapshot = self._snapshot(
+            'manager-roster-convergence',
+            state='needs_human',
+        )
+        incident_id = self._call_log(snapshot)
+        self.assertEqual(
+            self._review_activity_counts_by_user(incident_id).get(removed_id),
+            1,
+            'initial schedule must include every manager in the Odoo group',
+        )
+
+        with self.registry.cursor() as cr:
+            env = api.Environment(cr, odoo.SUPERUSER_ID, {})
+            manager_group = env.ref('account.group_account_manager')
+            env['res.users'].sudo().browse(removed_id).write({
+                'groups_id': [(3, manager_group.id)],
+            })
+            env['res.users'].sudo().browse(added_id).write({
+                'groups_id': [(4, manager_group.id)],
+            })
+            review_type = env.ref(
+                'woow_paas_platform.'
+                'mail_activity_type_billing_incident_review')
+            cr.execute(
+                'INSERT INTO mail_activity '
+                '(res_model_id, res_model, res_id, res_name, '
+                'activity_type_id, user_id, summary, note, date_deadline, '
+                'automated, active, create_uid, write_uid, create_date, '
+                'write_date) '
+                'SELECT res_model_id, res_model, res_id, res_name, '
+                'activity_type_id, user_id, %s, note, date_deadline, '
+                'automated, active, create_uid, write_uid, NOW(), NOW() '
+                'FROM mail_activity WHERE res_model = %s AND res_id = %s '
+                'AND activity_type_id = %s AND user_id = %s '
+                'AND active = true ORDER BY id LIMIT 1',
+                (
+                    'integration duplicate roster fixture',
+                    _MODEL, incident_id, review_type.id,
+                    self.manager_user_id,
+                ),
+            )
+            cr.commit()
+        self.assertEqual(
+            self._review_activity_counts_by_user(incident_id).get(
+                self.manager_user_id),
+            2,
+            '前置：現任 manager 必須先有兩筆 active duplicate',
+        )
+
+        logger_target = (
+            'odoo.addons.woow_paas_platform.models.billing_incident._logger')
+        with patch(logger_target) as logger:
+            self.assertEqual(self._call_log(snapshot), incident_id)
+        counts = self._review_activity_counts_by_user(incident_id)
+        self.assertEqual(
+            counts,
+            self._expected_review_activity_counts_by_user(),
+            'duplicate _log must remove former managers/duplicates and add '
+            'new managers before returning',
+        )
+        self.assertNotIn(removed_id, counts)
+        self.assertEqual(counts.get(added_id), 1)
+        self.assertNotIn(
+            snapshot['external_ref'], repr(logger.mock_calls),
+            'roster convergence logging must never disclose raw MTN',
         )
 
     def test_schedule_resolve_orderings_converge_without_stale_todo(self):
