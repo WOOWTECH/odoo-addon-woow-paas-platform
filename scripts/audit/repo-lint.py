@@ -4340,6 +4340,15 @@ INTERNAL_CTX_KEY_REGISTRY = {
                "`sa_internal_identity_write` 分成兩把：既有測試大量開著那一把，共用會"
                "讓本守衛在那些檔裡靜默失效（同型翻車見 smart_home_route 的註解）。",
     },
+    "woow_billing_incident_resolution_transition": {
+        "status": "enforced",
+        "sentinel": "_BILLING_INCIDENT_RESOLUTION_TRANSITION",
+        "defined_in": "src/models/billing_incident.py",
+        "reader": "_is_resolution_transition",
+        "issue": "#864",
+        "why": "billing incident 的 unresolved→resolved 首次 audit transition；裸 "
+               "sudo／truthy RPC context 都不得改寫 evidence、重開或覆蓋 first audit。",
+    },
     "woow_internal_provision": {
         "status": "enforced",
         "sentinel": "_INTERNAL_PROVISION",

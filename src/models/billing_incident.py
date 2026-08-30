@@ -1,12 +1,15 @@
-"""Durable, relation-free billing incident ledger (#864 PR-D).
+"""Durable, source-relation-free billing incident ledger (#864 PR-D).
 
-Incident rows are deliberately scalar snapshots.  Their source rows may exist
-only in an outer transaction which later rolls back, so adding a Many2one here
-would make the fail-open record fail exactly when it is needed most.  The model
-is a global finance ledger: every account manager reads all rows across
-companies by design.
+Incident business fields are deliberately scalar snapshots.  Their source rows
+may exist only in an outer transaction which later rolls back, so adding a
+source Many2one here would make the fail-open record fail exactly when it is
+needed most.  ``mail.thread`` contributes only Odoo mail metadata so standard
+``mail.activity`` create/done/unlink semantics work against an already committed
+incident.  The model is a global finance ledger: every account manager reads all
+rows across companies by design.
 """
 
+import hashlib
 import logging
 import math
 import re
@@ -22,8 +25,50 @@ from odoo.exceptions import AccessError, UserError
 _logger = logging.getLogger(__name__)
 
 
+class _BillingIncidentResolutionTransition:
+    """Unforgeable in-process capability for the first resolution write."""
+
+    __slots__ = ()
+
+    def __repr__(self):
+        return '<billing incident resolution transition>'
+
+
+_BILLING_INCIDENT_RESOLUTION_TRANSITION = (
+    _BillingIncidentResolutionTransition())
+_BILLING_INCIDENT_RESOLUTION_CTX_KEY = (
+    'woow_billing_incident_resolution_transition')
+_ODOO_MODULE_UNINSTALL_CTX_KEY = '_force_unlink'
+
+
+def _resolution_transition(records):
+    """Attach the module-private first-resolution capability to ``records``."""
+    return records.with_context(**{
+        _BILLING_INCIDENT_RESOLUTION_CTX_KEY:
+            _BILLING_INCIDENT_RESOLUTION_TRANSITION,
+    })
+
+
+def _is_resolution_transition(env):
+    return (
+        env.context.get(_BILLING_INCIDENT_RESOLUTION_CTX_KEY)
+        is _BILLING_INCIDENT_RESOLUTION_TRANSITION
+    )
+
+
+def _is_odoo_module_uninstall(env):
+    """Accept core's unlink hint only while this addon is actually uninstalling."""
+    if env.context.get(_ODOO_MODULE_UNINSTALL_CTX_KEY) is not True:
+        return False
+    module = env['ir.module.module'].sudo().search([
+        ('name', '=', 'woow_paas_platform'),
+    ], limit=1)
+    return module.state == 'to remove'
+
+
 class BillingIncident(models.Model):
     _name = 'woow.billing.incident'
+    _inherit = ['mail.thread']
     _description = 'Woow Billing Incident'
     _rec_name = 'external_ref'
     _order = 'last_seen_at desc, id desc'
@@ -149,6 +194,13 @@ class BillingIncident(models.Model):
         'manual_check_result',
         'resolution_note',
     })
+    _RESOLUTION_TRANSITION_FIELDS = frozenset({
+        'state',
+        'resolved_at',
+        'resolved_by_ref',
+        'manual_check_result',
+        'resolution_note',
+    })
 
     _LOG_CHAR_FIELDS = frozenset({
         'external_ref', 'kind', 'partner_email', 'currency', 'trade_no',
@@ -170,11 +222,20 @@ class BillingIncident(models.Model):
     })
     _SENSITIVE_MARKER_RE = re.compile(
         r'(?:\bresult[\s_-]*data\b|\bcard[46]?[\s_-]*no\b|'
-        r'\bcard[\s_-]*number\b|\bcvv2?\b|\bpan\b)',
+        r'\bcard[\s_-]*number\b|\b(?:cvv2?|cvc2?|cid|csc)\b|'
+        r'\b(?:card[\s_-]*)?security[\s_-]*(?:code|number|no)\b|'
+        r'\b(?:sad|sensitive[\s_-]*authentication[\s_-]*data)\b|'
+        r'\bpan\b)',
         re.IGNORECASE,
     )
     _PAN_CANDIDATE_RE = re.compile(
         r'(?<!\d)(?:\d[\s-]*){13,19}(?!\d)')
+    _RAW_MTN_RE = re.compile(r'[A-Za-z0-9_-]{1,20}\Z')
+    _NAMESPACED_EXTERNAL_REF_RE = re.compile(
+        r'[A-Za-z][A-Za-z0-9_-]{0,31}:'
+        r'[A-Za-z0-9][A-Za-z0-9._/-]{0,94}\Z')
+    _TRADE_NO_RE = re.compile(r'[A-Za-z0-9][A-Za-z0-9._:/-]{0,63}\Z')
+    _CONTROL_CHARACTER_RE = re.compile(r'[\x00-\x1f\x7f]')
 
     def _lock_and_refresh_states(self, extra_fields=()):
         """Lock every row and reread lifecycle state from this cursor."""
@@ -199,38 +260,61 @@ class BillingIncident(models.Model):
         }
 
     def write(self, values):
-        """Keep unresolved evidence and every resolved audit immutable."""
-        if not self.env.su:
-            if not self.env.user.has_group(
-                    'account.group_account_manager'):
+        """Lock/re-read first; only one capability may perform first resolve."""
+        states = self._lock_and_refresh_states()
+        if any(state == 'resolved' for state in states.values()):
+            raise AccessError(_(
+                'Resolved billing incidents are immutable.'
+            ))
+
+        if _is_resolution_transition(self.env):
+            if (set(values) != self._RESOLUTION_TRANSITION_FIELDS
+                    or values.get('state') != 'resolved'):
                 raise AccessError(_(
-                    'Only account managers may update billing incidents.'
-                ))
-            states = self._lock_and_refresh_states()
-            if any(state == 'resolved' for state in states.values()):
-                raise AccessError(_(
-                    'Resolved billing incidents are immutable.'
-                ))
-            forbidden = set(values) - self._MANAGER_WRITABLE_FIELDS
-            if forbidden:
-                raise AccessError(_(
-                    'Account managers may update only the manual verification '
-                    'result and resolution note.'
+                    'Billing incident resolution may update only the exact '
+                    'first-resolution audit fields.'
                 ))
             resolution_note = values.get('resolution_note')
-            if resolution_note not in (None, False):
-                if not isinstance(resolution_note, str):
-                    raise UserError(_(
-                        'Resolution notes must contain only safe, '
-                        'non-sensitive summaries.'
-                    ))
-                if self._sensitive_content_category(
-                        'resolution_note', resolution_note):
-                    raise UserError(_(
-                        'Resolution notes must contain only safe, '
-                        'non-sensitive summaries.'
-                    ))
+            if (resolution_note not in (None, False)
+                    and self._free_text_ingress_category(
+                        'resolution_note', resolution_note)):
+                raise UserError(_(
+                    'Resolution notes must contain only safe, '
+                    'non-sensitive summaries.'
+                ))
+            return super().write(values)
+
+        # ``sudo()`` is an ACL tool, not a lifecycle capability.  Generic
+        # unresolved writes remain the account-manager manual-entry seam only.
+        if (self.env.su or not self.env.user.has_group(
+                'account.group_account_manager')):
+            raise AccessError(_(
+                'Only account managers may update billing incidents.'
+            ))
+        forbidden = set(values) - self._MANAGER_WRITABLE_FIELDS
+        if forbidden:
+            raise AccessError(_(
+                'Account managers may update only the manual verification '
+                'result and resolution note.'
+            ))
+        resolution_note = values.get('resolution_note')
+        if (resolution_note not in (None, False)
+                and self._free_text_ingress_category(
+                    'resolution_note', resolution_note)):
+            raise UserError(_(
+                'Resolution notes must contain only safe, '
+                'non-sensitive summaries.'
+            ))
         return super().write(values)
+
+    def unlink(self):
+        """Ledger rows are permanent; only core's real module uninstall may drop."""
+        if _is_odoo_module_uninstall(self.env):
+            return super().unlink()
+        raise AccessError(_(
+            'Billing incidents are immutable ledger entries and cannot be '
+            'deleted.'
+        ))
 
     @api.model
     def _sensitive_content_category(self, field_name, value):
@@ -256,6 +340,38 @@ class BillingIncident(models.Model):
             if checksum % 10 == 0:
                 return 'luhn_pan'
         return False
+
+    @api.model
+    def _free_text_ingress_category(self, field_name, value):
+        """Shared PCI validator for detail and every resolution-note seam."""
+        if not isinstance(value, str):
+            return 'invalid_type'
+        return self._sensitive_content_category(field_name, value)
+
+    @api.model
+    def _provider_reference_category(self, field_name, value):
+        """Validate dedicated provider keys without treating numeric MTN as PAN."""
+        if not isinstance(value, str):
+            return 'invalid_type'
+        category = self._sensitive_content_category(field_name, value)
+        if category:
+            return category
+        if self._CONTROL_CHARACTER_RE.search(value):
+            return 'control_character'
+        if field_name == 'external_ref':
+            if (self._RAW_MTN_RE.fullmatch(value)
+                    or self._NAMESPACED_EXTERNAL_REF_RE.fullmatch(value)):
+                return False
+            return 'invalid_provider_reference_shape'
+        if field_name == 'trade_no':
+            if self._TRADE_NO_RE.fullmatch(value):
+                return False
+            return 'invalid_provider_reference_shape'
+        return 'unsupported_provider_reference_field'
+
+    @api.model
+    def _external_ref_fingerprint(self, external_ref):
+        return hashlib.sha256(external_ref.encode('utf-8')).hexdigest()
 
     @api.model
     def _validate_log_snapshot(self, snapshot):
@@ -298,13 +414,19 @@ class BillingIncident(models.Model):
             if name in self._LOG_CHAR_FIELDS:
                 if value is None or value is False:
                     if name in ('external_ref', 'kind'):
+                        _logger.error(
+                            '[BILLING_INCIDENT] _log rejected field=%s '
+                            'category=required type=%s',
+                            name, type(value).__name__,
+                        )
                         return False
                     normalized[name] = None
                 elif isinstance(value, str):
                     normalized[name] = value
                 else:
                     _logger.error(
-                        '[BILLING_INCIDENT] _log rejected %s type=%s',
+                        '[BILLING_INCIDENT] _log rejected field=%s '
+                        'category=invalid_type type=%s',
                         name, type(value).__name__,
                     )
                     return False
@@ -315,7 +437,8 @@ class BillingIncident(models.Model):
                     normalized[name] = value
                 else:
                     _logger.error(
-                        '[BILLING_INCIDENT] _log rejected %s type=%s',
+                        '[BILLING_INCIDENT] _log rejected field=%s '
+                        'category=invalid_type type=%s',
                         name, type(value).__name__,
                     )
                     return False
@@ -328,7 +451,10 @@ class BillingIncident(models.Model):
                     normalized[name] = float(value)
                 else:
                     _logger.error(
-                        '[BILLING_INCIDENT] _log rejected %s type/value', name)
+                        '[BILLING_INCIDENT] _log rejected field=%s '
+                        'category=invalid_number type=%s',
+                        name, type(value).__name__,
+                    )
                     return False
             elif name in self._LOG_DATETIME_FIELDS:
                 if value is None or value is False:
@@ -345,19 +471,23 @@ class BillingIncident(models.Model):
                         return False
                 else:
                     _logger.error(
-                        '[BILLING_INCIDENT] _log rejected %s type=%s',
+                        '[BILLING_INCIDENT] _log rejected field=%s '
+                        'category=invalid_type type=%s',
                         name, type(value).__name__,
                     )
                     return False
         for name, value in normalized.items():
             if not isinstance(value, str):
                 continue
-            category = self._sensitive_content_category(name, value)
+            if name in ('external_ref', 'trade_no'):
+                category = self._provider_reference_category(name, value)
+            else:
+                category = self._free_text_ingress_category(name, value)
             if category:
                 _logger.error(
-                    '[BILLING_INCIDENT] _log rejected sensitive content '
-                    'field=%s category=%s',
-                    name, category,
+                    '[BILLING_INCIDENT] _log rejected field=%s '
+                    'category=%s type=%s',
+                    name, category, type(value).__name__,
                 )
                 return False
         kind = normalized.get('kind')
@@ -380,7 +510,10 @@ class BillingIncident(models.Model):
             if name in normalized and (
                     normalized[name] is None or normalized[name] < 0):
                 _logger.error(
-                    '[BILLING_INCIDENT] _log rejected negative/null %s', name)
+                    '[BILLING_INCIDENT] _log rejected field=%s '
+                    'category=negative_or_null type=%s',
+                    name, type(normalized[name]).__name__,
+                )
                 return False
         return normalized
 
@@ -399,7 +532,8 @@ class BillingIncident(models.Model):
             if values is False:
                 return False
 
-            log_ref = str(escape(values['external_ref']))
+            ref_fingerprint = self._external_ref_fingerprint(
+                values['external_ref'])
             now = fields.Datetime.now()
             # Duplicate observations may refresh evidence, never lifecycle.
             # State changes belong to explicit transition methods.
@@ -454,7 +588,13 @@ class BillingIncident(models.Model):
                 cr.execute('SET LOCAL lock_timeout = %s',
                            (self._LOCK_TIMEOUT,))
                 api.Environment(cr, SUPERUSER_ID, {})
-                cr.execute(query, [insert_values[name] for name in columns])
+                # Odoo's default SQL exception logger renders query params;
+                # provider references must never be copied into an error log.
+                cr.execute(
+                    query,
+                    [insert_values[name] for name in columns],
+                    log_exceptions=False,
+                )
                 row = cr.fetchone()
                 if not row:
                     cr.execute(
@@ -463,21 +603,23 @@ class BillingIncident(models.Model):
                             'WHERE external_ref = %s'
                         ).format(table=sql.Identifier(self._table)),
                         (values['external_ref'],),
+                        log_exceptions=False,
                     )
                     existing = cr.fetchone()
                     if not existing:
                         _logger.critical(
-                            '[BILLING_INCIDENT] upsert returned no row for %s',
-                            log_ref,
+                            '[BILLING_INCIDENT] upsert returned no row '
+                            'fingerprint=%s',
+                            ref_fingerprint,
                         )
                         cr.commit()
                         return False
                     incident_id, existing_kind, existing_state = existing
                     if existing_kind != values['kind']:
                         _logger.critical(
-                            '[BILLING_INCIDENT] kind mismatch external_ref=%s '
+                            '[BILLING_INCIDENT] kind mismatch fingerprint=%s '
                             'existing=%s incoming=%s; refusing downgrade',
-                            log_ref, existing_kind, values['kind'],
+                            ref_fingerprint, existing_kind, values['kind'],
                         )
                         cr.commit()
                         return False
@@ -488,8 +630,8 @@ class BillingIncident(models.Model):
                         return incident_id
                     _logger.critical(
                         '[BILLING_INCIDENT] unresolved upsert produced no row '
-                        'external_ref=%s state=%s',
-                        log_ref, existing_state,
+                        'fingerprint=%s state=%s',
+                        ref_fingerprint, existing_state,
                     )
                     cr.commit()
                     return False
@@ -572,12 +714,13 @@ class BillingIncident(models.Model):
                 cr.commit()
                 return False
 
-            cr.execute(
-                'SELECT user_id FROM mail_activity WHERE res_model = %s '
-                'AND res_id = %s AND activity_type_id = %s',
-                (self._name, incident_id, review_type.id),
-            )
-            existing_user_ids = {row[0] for row in cr.fetchall()}
+            Activity = env['mail.activity'].sudo()
+            existing_user_ids = set(Activity.search([
+                ('res_model', '=', self._name),
+                ('res_id', '=', incident_id),
+                ('activity_type_id', '=', review_type.id),
+                ('active', '=', True),
+            ]).user_id.ids)
             external_ref, kind, _state = incident
             summary = _('Billing incident requires manual review')
             note_template = Markup.escape(_(
@@ -588,30 +731,21 @@ class BillingIncident(models.Model):
                 'external_ref': escape(external_ref),
                 'kind': escape(kind),
             }
-            safe_res_name = str(escape(external_ref))
-            now = fields.Datetime.now()
-            for user in users:
-                if user.id in existing_user_ids:
-                    continue
-                # `mail.activity.create()` calls message_subscribe/notify on
-                # the target and therefore requires mail.thread.  This ledger
-                # deliberately has no chatter/mixin, so insert the dedicated
-                # review row directly in this best-effort transaction.
-                cr.execute(
-                    'INSERT INTO mail_activity '
-                    '(res_model_id, res_model, res_id, res_name, '
-                    'activity_type_id, user_id, summary, note, date_deadline, '
-                    'automated, active, create_uid, write_uid, create_date, '
-                    'write_date) VALUES '
-                    '(%s, %s, %s, %s, %s, %s, %s, %s, %s, '
-                    'false, true, %s, %s, %s, %s)',
-                    (
-                        model.id, self._name, incident_id, safe_res_name,
-                        review_type.id, user.id, summary, str(note),
-                        fields.Date.today(), SUPERUSER_ID, SUPERUSER_ID,
-                        now, now,
-                    ),
-                )
+            activity_values = [
+                {
+                    'res_model_id': model.id,
+                    'res_id': incident_id,
+                    'activity_type_id': review_type.id,
+                    'user_id': user.id,
+                    'summary': summary,
+                    'note': str(note),
+                    'date_deadline': fields.Date.today(),
+                }
+                for user in users
+                if user.id not in existing_user_ids
+            ]
+            if activity_values:
+                Activity.create(activity_values)
             cr.commit()
             return True
 
@@ -629,12 +763,12 @@ class BillingIncident(models.Model):
                 raise_if_not_found=False,
             )
             if review_type:
-                cr.execute(
-                    'DELETE FROM mail_activity '
-                    'WHERE res_model = %s AND res_id = %s '
-                    'AND activity_type_id = %s',
-                    (self._name, incident_id, review_type.id),
-                )
+                env['mail.activity'].sudo().with_context(
+                    active_test=False).search([
+                        ('res_model', '=', self._name),
+                        ('res_id', '=', incident_id),
+                        ('activity_type_id', '=', review_type.id),
+                    ]).unlink()
             cr.commit()
             return True
 
@@ -646,7 +780,7 @@ class BillingIncident(models.Model):
         states = self._lock_and_refresh_states()
         if states[self.id] == 'resolved':
             raise UserError(_('This billing incident is already resolved.'))
-        self.sudo().write({
+        _resolution_transition(self.sudo()).write({
             'state': 'resolved',
             'resolved_at': fields.Datetime.now(),
             'resolved_by_ref': resolved_by_ref,
@@ -661,12 +795,12 @@ class BillingIncident(models.Model):
             raise_if_not_found=False,
         )
         if review_type:
-            self.env.cr.execute(
-                'DELETE FROM mail_activity '
-                'WHERE res_model = %s AND res_id = %s '
-                'AND activity_type_id = %s',
-                (self._name, self.id, review_type.id),
-            )
+            self.env['mail.activity'].sudo().with_context(
+                active_test=False).search([
+                    ('res_model', '=', self._name),
+                    ('res_id', '=', self.id),
+                    ('activity_type_id', '=', review_type.id),
+                ]).unlink()
         return True
 
     def action_mark_manually_resolved(self):
@@ -695,7 +829,7 @@ class BillingIncident(models.Model):
                 'A resolution note describing the ECPay verification is '
                 'required.'
             ))
-        if self._sensitive_content_category(
+        if self._free_text_ingress_category(
                 'resolution_note', resolution_note):
             raise UserError(_(
                 'Resolution notes must contain only safe, non-sensitive '
@@ -716,101 +850,83 @@ class BillingIncident(models.Model):
         values and return the same integer id.
         """
         try:
-            if not isinstance(external_ref, str) or not external_ref.strip():
+            ref_category = self._provider_reference_category(
+                'external_ref', external_ref)
+            if ref_category:
                 _logger.error(
-                    '[BILLING_INCIDENT] _resolve requires external_ref')
-                return False
-            if resolution_note is not None and not isinstance(
-                    resolution_note, str):
-                _logger.error(
-                    '[BILLING_INCIDENT] _resolve rejected '
-                    'field=resolution_note category=invalid_type type=%s',
-                    type(resolution_note).__name__,
+                    '[BILLING_INCIDENT] _resolve rejected field=external_ref '
+                    'category=%s type=%s',
+                    ref_category, type(external_ref).__name__,
                 )
                 return False
             if resolution_note is not None:
-                category = self._sensitive_content_category(
+                category = self._free_text_ingress_category(
                     'resolution_note', resolution_note)
                 if category:
                     _logger.error(
-                        '[BILLING_INCIDENT] _resolve rejected sensitive '
-                        'content field=resolution_note category=%s',
-                        category,
+                        '[BILLING_INCIDENT] _resolve rejected '
+                        'field=resolution_note category=%s type=%s',
+                        category, type(resolution_note).__name__,
                     )
                     return False
             if (resolved_by_ref is not None
                     and (not isinstance(resolved_by_ref, int)
                          or isinstance(resolved_by_ref, bool))):
                 _logger.error(
-                    '[BILLING_INCIDENT] _resolve rejected resolved_by_ref type')
+                    '[BILLING_INCIDENT] _resolve rejected '
+                    'field=resolved_by_ref category=invalid_type type=%s',
+                    type(resolved_by_ref).__name__,
+                )
                 return False
             if (manual_check_result is not None
                     and manual_check_result not in self._MANUAL_RESULTS):
                 _logger.error(
-                    '[BILLING_INCIDENT] _resolve rejected manual_check_result')
+                    '[BILLING_INCIDENT] _resolve rejected '
+                    'field=manual_check_result '
+                    'category=unsupported_selection type=%s',
+                    type(manual_check_result).__name__,
+                )
                 return False
-
-            now = fields.Datetime.now()
-            assignments = [
-                sql.SQL("state = 'resolved'"),
-                sql.SQL('resolved_at = %s'),
-                sql.SQL('write_uid = %s'),
-                sql.SQL('write_date = %s'),
-            ]
-            params = [now, SUPERUSER_ID, now]
-            if resolution_note is not None:
-                assignments.append(sql.SQL('resolution_note = %s'))
-                params.append(resolution_note)
-            if resolved_by_ref is not None:
-                assignments.append(sql.SQL('resolved_by_ref = %s'))
-                params.append(resolved_by_ref)
-            if manual_check_result is not None:
-                assignments.append(sql.SQL('manual_check_result = %s'))
-                params.append(manual_check_result)
-            query = sql.SQL(
-                'UPDATE {table} SET {assignments} '
-                "WHERE id = %s AND state <> 'resolved' RETURNING id"
-            ).format(
-                table=sql.Identifier(self._table),
-                assignments=sql.SQL(', ').join(assignments),
-            )
 
             with self.env.registry.cursor() as cr:
                 cr.execute('SET LOCAL lock_timeout = %s',
                            (self._LOCK_TIMEOUT,))
-                api.Environment(cr, SUPERUSER_ID, {})
-                cr.execute(
-                    sql.SQL(
-                        'SELECT id FROM {table} WHERE external_ref = %s'
-                    ).format(table=sql.Identifier(self._table)),
-                    (external_ref,),
-                )
-                existing = cr.fetchone()
-                if not existing:
+                env = api.Environment(cr, SUPERUSER_ID, {})
+                incident = env[self._name].search([
+                    ('external_ref', '=', external_ref),
+                ], limit=1)
+                if not incident:
                     cr.commit()
                     return False
-                incident_id = existing[0]
+                incident_id = incident.id
                 self._acquire_review_activity_lock(cr, incident_id)
-                cr.execute(query, params + [incident_id])
-                row = cr.fetchone()
-                if not row:
-                    cr.execute(
-                        sql.SQL(
-                            'SELECT state FROM {table} WHERE id = %s'
-                        ).format(table=sql.Identifier(self._table)),
-                        (incident_id,),
-                    )
-                    existing_state = cr.fetchone()
-                    if not existing_state:
-                        cr.commit()
-                        return False
-                    if existing_state[0] != 'resolved':
-                        _logger.critical(
-                            '[BILLING_INCIDENT] _resolve update returned no row '
-                            'incident_id=%s state=%s',
-                            incident_id, existing_state[0])
-                        cr.commit()
-                        return False
+                states = incident._lock_and_refresh_states((
+                    'manual_check_result',
+                    'resolution_note',
+                    'resolved_by_ref',
+                ))
+                if states[incident_id] == 'resolved':
+                    cr.commit()
+                    return incident_id
+                _resolution_transition(incident.sudo()).write({
+                    'state': 'resolved',
+                    'resolved_at': fields.Datetime.now(),
+                    'resolved_by_ref': (
+                        resolved_by_ref
+                        if resolved_by_ref is not None
+                        else incident.resolved_by_ref
+                    ),
+                    'manual_check_result': (
+                        manual_check_result
+                        if manual_check_result is not None
+                        else incident.manual_check_result
+                    ),
+                    'resolution_note': (
+                        resolution_note
+                        if resolution_note is not None
+                        else incident.resolution_note
+                    ),
+                })
                 cr.commit()
             try:
                 self._clear_review_activities(incident_id)

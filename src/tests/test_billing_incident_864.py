@@ -11,6 +11,7 @@ from lxml import etree
 import polib
 from psycopg2 import IntegrityError
 
+from odoo import fields
 from odoo.exceptions import AccessError, UserError
 from odoo.tests.common import HttpCase, TransactionCase, new_test_user, tagged
 
@@ -56,21 +57,45 @@ class TestBillingIncidentSchema864(TransactionCase):
             'id', 'create_uid', 'write_uid', 'create_date', 'write_date',
             'display_name', '__last_update',
         }
-        custom_fields = set(Incident._fields) - automatic_fields
-        self.assertEqual(
-            custom_fields,
-            set(expected_types),
-            'expected business field 集合必須完整；新增欄位要明確列入守線',
+        mail_infrastructure_fields = set(self.env['mail.thread']._fields)
+        business_fields = (
+            set(Incident._fields)
+            - automatic_fields
+            - mail_infrastructure_fields
         )
         self.assertEqual(
-            {name: Incident._fields[name].type for name in custom_fields},
+            business_fields,
+            set(expected_types),
+            'source/business field 集合必須完整；新增欄位要明確列入守線',
+        )
+        self.assertEqual(
+            {name: Incident._fields[name].type for name in business_fields},
             expected_types,
         )
         relational = {'many2one', 'one2many', 'many2many'}
+        allowed_relational_infrastructure = {
+            'create_uid',
+            'write_uid',
+            'message_follower_ids',
+            'message_ids',
+            'message_partner_ids',
+            'rating_ids',
+            'website_message_ids',
+        }
+        unexpected_relations = {
+            name: field.type
+            for name, field in Incident._fields.items()
+            if (field.type in relational
+                and name not in allowed_relational_infrastructure)
+        }
         self.assertFalse(
-            [(name, Incident._fields[name].type) for name in custom_fields
-             if Incident._fields[name].type in relational],
-            '全部自訂 business snapshot 欄位不可帶 relation/FK',
+            unexpected_relations,
+            '只允許 Odoo audit/mail infrastructure relations；任何新增 '
+            'source/business M2O/O2M/M2M 都必須紅',
+        )
+        self.assertTrue(
+            self.env['ir.model']._get('woow.billing.incident').is_mail_thread,
+            'mail.thread metadata 是 standard mail.activity contract，並非 source FK',
         )
 
         defaults = Incident.default_get([
@@ -140,12 +165,9 @@ class TestBillingIncidentSchema864(TransactionCase):
             'woow_paas_platform.mail_activity_type_billing_incident_review')
         supported_models = dict(
             review_type._fields['res_model']._description_selection(self.env))
-        expected_model = (
-            'woow.billing.incident'
-            if 'woow.billing.incident' in supported_models else False
-        )
+        self.assertIn('woow.billing.incident', supported_models)
         self.assertEqual(review_type.name, 'Billing incident review')
-        self.assertEqual(review_type.res_model, expected_model)
+        self.assertEqual(review_type.res_model, 'woow.billing.incident')
 
     def test_external_ref_is_database_unique(self):
         Incident = self.env['woow.billing.incident'].sudo()
@@ -198,19 +220,40 @@ class TestBillingIncidentPublicApi864(TransactionCase):
     def setUp(self):
         super().setUp()
         self.Incident = self.env['woow.billing.incident']
-        self.ref = '864%s' % uuid.uuid4().hex
+        self.ref = 'test:864%s' % uuid.uuid4().hex
+        self._extra_cleanup_refs = set()
         self.addCleanup(self._purge)
 
     def _purge(self):
         with self.env.registry.cursor() as cr:
             cr.execute(
                 "DELETE FROM mail_activity WHERE res_model = %s AND res_id IN "
-                "(SELECT id FROM woow_billing_incident WHERE external_ref LIKE %s)",
-                ('woow.billing.incident', self.ref + '%'),
+                "(SELECT id FROM woow_billing_incident "
+                " WHERE external_ref LIKE %s OR external_ref = ANY(%s))",
+                (
+                    'woow.billing.incident',
+                    self.ref + '%',
+                    list(self._extra_cleanup_refs),
+                ),
             )
+            for table, model_column in (
+                    ('mail_followers', 'res_model'),
+                    ('mail_message', 'model')):
+                cr.execute(
+                    'DELETE FROM %s WHERE %s = %%s AND res_id IN '
+                    '(SELECT id FROM woow_billing_incident '
+                    ' WHERE external_ref LIKE %%s OR external_ref = ANY(%%s))'
+                    % (table, model_column),
+                    (
+                        'woow.billing.incident',
+                        self.ref + '%',
+                        list(self._extra_cleanup_refs),
+                    ),
+                )
             cr.execute(
-                'DELETE FROM woow_billing_incident WHERE external_ref LIKE %s',
-                (self.ref + '%',),
+                'DELETE FROM woow_billing_incident '
+                'WHERE external_ref LIKE %s OR external_ref = ANY(%s)',
+                (self.ref + '%', list(self._extra_cleanup_refs)),
             )
             cr.commit()
 
@@ -329,6 +372,12 @@ class TestBillingIncidentPublicApi864(TransactionCase):
             'CARD6NO=411111',
             'CardNo 4111111111111111',
             'cvv: 123',
+            'CVC=123',
+            'CID: 123',
+            'card security code 123',
+            'security_code=123',
+            'SAD=forbidden-authentication-data',
+            'sensitive authentication data payload',
             'PAN=4111111111111111',
             'unlabelled 4111111111111111',
             'MTN: 4111111111111111',
@@ -391,27 +440,85 @@ class TestBillingIncidentPublicApi864(TransactionCase):
                 ('external_ref', '=', external_ref),
             ]))
 
-    def test_dedicated_references_allow_pan_coincidence_but_not_markers(self):
-        external_ref = 'MTN: 4111111111111111-%s' % self.ref
-        incident_id = self.Incident._log(self._snapshot(
-            external_ref=external_ref,
-            trade_no='4111111111111111',
-            detail='safe reconciliation summary without card data',
+    def test_provider_reference_shape_allows_raw_mtn_and_namespaced_ref(self):
+        raw_mtn = '20260830123456789012'
+        self._extra_cleanup_refs.add(raw_mtn)
+        raw_id = self.Incident._log(self._snapshot(
+            external_ref=raw_mtn,
+            trade_no='20260830123456789012',
+            detail='safe provider reconciliation summary',
         ))
-        self.assertIsInstance(incident_id, int)
-        self.assertEqual(self._read(incident_id)['trade_no'], '4111111111111111')
+        self.assertIsInstance(raw_id, int)
+        self.assertEqual(
+            self._read(raw_id)['trade_no'], '20260830123456789012')
+
+        luhn_coincidence_mtn = '4111111111111111'
+        self._extra_cleanup_refs.add(luhn_coincidence_mtn)
+        self.assertIsInstance(self.Incident._log(self._snapshot(
+            external_ref=luhn_coincidence_mtn,
+            trade_no=luhn_coincidence_mtn,
+            detail='dedicated provider references may be numeric',
+        )), int)
+
+        namespaced_ref = 'invoice:2026_08-30/abc.DEF'
+        self._extra_cleanup_refs.add(namespaced_ref)
+        namespaced_id = self.Incident._log(self._snapshot(
+            external_ref=namespaced_ref,
+            trade_no='TRADE-20260830_ABC.1',
+        ))
+        self.assertIsInstance(namespaced_id, int)
+
+    def test_provider_references_reject_crlf_controls_bad_shape_and_markers(self):
+        logger = 'odoo.addons.woow_paas_platform.models.billing_incident'
+        cases = (
+            ('external_ref', 'MTN: 4111111111111111'),
+            ('external_ref', 'invoice:bad\r\nforged-log-line'),
+            ('external_ref', 'invoice:bad\x01control'),
+            ('external_ref', '123456789012345678901'),
+            ('external_ref', 'invoice:<script>'),
+            ('trade_no', 'TRADE\r\nFORGED'),
+            ('trade_no', 'TRADE WITH SPACE'),
+            ('trade_no', 'security-code-123'),
+        )
+        for index, (field_name, invalid_value) in enumerate(cases):
+            external_ref = '%s-invalid-provider-%s' % (self.ref, index)
+            values = self._snapshot(external_ref=external_ref)
+            values[field_name] = invalid_value
+            with self.subTest(field_name=field_name, value=invalid_value), \
+                    self.assertLogs(logger, level='ERROR') as logs:
+                self.assertFalse(self.Incident._log(values))
+            output = '\n'.join(logs.output)
+            self.assertNotIn(invalid_value, output)
+            self.assertIn('field=%s' % field_name, output)
+            self.assertIn('category=', output)
+
+        invalid_resolve_ref = 'invoice:lookup\r\nforged'
+        with self.assertLogs(logger, level='ERROR') as logs:
+            self.assertFalse(self.Incident._resolve(
+                invalid_resolve_ref,
+                resolution_note='safe note',
+            ))
+        self.assertNotIn(invalid_resolve_ref, '\n'.join(logs.output))
 
     def test_resolve_rejects_sensitive_note_without_leak_or_db_change(self):
         incident_id = self.Incident._log(self._snapshot(state='needs_human'))
-        secret_note = 'MTN: 4111111111111111'
         logger = 'odoo.addons.woow_paas_platform.models.billing_incident'
-        with self.assertLogs(logger, level='ERROR') as logs:
-            self.assertFalse(self.Incident._resolve(
-                self.ref,
-                resolution_note=secret_note,
-                resolved_by_ref=99,
-            ))
-        self.assertNotIn(secret_note, '\n'.join(logs.output))
+        secret_notes = (
+            'MTN: 4111111111111111',
+            'CVC=123',
+            'CID: 123',
+            'card security code 123',
+            'SAD=forbidden-authentication-data',
+        )
+        for secret_note in secret_notes:
+            with self.subTest(note=secret_note), self.assertLogs(
+                    logger, level='ERROR') as logs:
+                self.assertFalse(self.Incident._resolve(
+                    self.ref,
+                    resolution_note=secret_note,
+                    resolved_by_ref=99,
+                ))
+            self.assertNotIn(secret_note, '\n'.join(logs.output))
         incident = self._read(incident_id)
         self.assertEqual(incident['state'], 'needs_human')
         self.assertFalse(incident['resolution_note'])
@@ -427,11 +534,14 @@ class TestBillingIncidentPublicApi864(TransactionCase):
         incident = self._read(incident_id)
         self.assertEqual(incident['kind'], 'charged_not_credited')
         self.assertEqual(incident['occurrences'], 1)
-        self.assertIn('kind mismatch', '\n'.join(logs.output))
+        output = '\n'.join(logs.output)
+        self.assertIn('kind mismatch', output)
+        self.assertNotIn(self.ref, output)
+        self.assertRegex(output, r'fingerprint=[0-9a-f]{64}\b')
 
     def test_resolve_is_idempotent_missing_safe_and_resolved_log_never_reopens(self):
         self.assertFalse(self.Incident._resolve(
-            'missing-%s' % self.ref,
+            '%s-missing' % self.ref,
             resolution_note='nothing to resolve',
         ))
         incident_id = self.Incident._log(self._snapshot(state='needs_human'))
@@ -465,13 +575,17 @@ class TestBillingIncidentPublicApi864(TransactionCase):
                     level='CRITICAL'):
                 self.assertFalse(self.Incident._log(self._snapshot()))
 
-    def _activity_user_ids(self, incident_id):
+    def _activity_user_ids(self, incident_id, active=None):
         with self.env.registry.cursor() as cr:
-            cr.execute(
-                "SELECT user_id FROM mail_activity WHERE res_model = %s "
-                "AND res_id = %s ORDER BY user_id",
-                ('woow.billing.incident', incident_id),
+            query = (
+                'SELECT user_id FROM mail_activity WHERE res_model = %s '
+                'AND res_id = %s'
             )
+            params = ['woow.billing.incident', incident_id]
+            if active is not None:
+                query += ' AND active = %s'
+                params.append(active)
+            cr.execute(query + ' ORDER BY user_id', params)
             return [row[0] for row in cr.fetchall()]
 
     def _activity_type_ids(self, incident_id):
@@ -500,21 +614,15 @@ class TestBillingIncidentPublicApi864(TransactionCase):
             manager = self._account_manager_users_for_test(env)[:1]
             model = env['ir.model']._get('woow.billing.incident')
             self.assertTrue(activity_type and manager and model)
-            cr.execute(
-                'INSERT INTO mail_activity '
-                '(res_model_id, res_model, res_id, res_name, '
-                'activity_type_id, user_id, summary, note, date_deadline, '
-                'automated, active, create_uid, write_uid, create_date, '
-                'write_date) VALUES '
-                '(%s, %s, %s, %s, %s, %s, %s, %s, CURRENT_DATE, '
-                'false, true, %s, %s, NOW(), NOW())',
-                (
-                    model.id, 'woow.billing.incident', incident_id,
-                    'other activity', activity_type.id, manager.id,
-                    summary, 'Must survive billing review cleanup',
-                    1, 1,
-                ),
-            )
+            env['mail.activity'].sudo().create({
+                'res_model_id': model.id,
+                'res_id': incident_id,
+                'activity_type_id': activity_type.id,
+                'user_id': manager.id,
+                'summary': summary,
+                'note': 'Must survive billing review cleanup',
+                'date_deadline': fields.Date.today(),
+            })
             cr.commit()
             return activity_type.id
 
@@ -524,6 +632,120 @@ class TestBillingIncidentPublicApi864(TransactionCase):
 
     def _account_manager_users_for_test(self, env):
         return env.ref('account.group_account_manager').users
+
+    def test_review_activity_uses_orm_and_bus_then_standard_done_realerts(self):
+        ActivityClass = type(self.env['mail.activity'])
+        UsersClass = type(self.env['res.users'])
+        original_create = ActivityClass.create
+        original_unlink = ActivityClass.unlink
+        original_bus_send = UsersClass._bus_send
+        calls = {'create': 0, 'unlink': 0, 'bus': []}
+
+        def create_spy(records, values):
+            calls['create'] += 1
+            return original_create(records, values)
+
+        def unlink_spy(records):
+            calls['unlink'] += 1
+            return original_unlink(records)
+
+        def bus_spy(users, channel, message):
+            calls['bus'].append((channel, message))
+            return original_bus_send(users, channel, message)
+
+        with patch.object(ActivityClass, 'create', create_spy), \
+                patch.object(ActivityClass, 'unlink', unlink_spy), \
+                patch.object(UsersClass, '_bus_send', bus_spy):
+            incident_id = self.Incident._log(self._snapshot(
+                external_ref=self.ref + '-orm-action-done',
+                state='needs_human',
+            ))
+            self.assertGreater(calls['create'], 0)
+            self.assertTrue(any(
+                channel == 'mail.activity/updated'
+                and message.get('activity_created')
+                for channel, message in calls['bus']
+            ))
+
+            with self.env.registry.cursor() as cr:
+                env = self.env(cr=cr)
+                review_type = env.ref(
+                    'woow_paas_platform.'
+                    'mail_activity_type_billing_incident_review')
+                activity = env['mail.activity'].sudo().search([
+                    ('res_model', '=', 'woow.billing.incident'),
+                    ('res_id', '=', incident_id),
+                    ('activity_type_id', '=', review_type.id),
+                    ('active', '=', True),
+                ], limit=1)
+                self.assertTrue(activity)
+                activity.action_done()
+                incident = env['woow.billing.incident'].browse(incident_id)
+                self.assertEqual(
+                    incident.state,
+                    'needs_human',
+                    'standard activity done 只完成待辦，不得關閉 incident',
+                )
+                cr.commit()
+            self.assertGreater(calls['unlink'], 0)
+
+            self.assertEqual(
+                self.Incident._log(self._snapshot(
+                    external_ref=self.ref + '-orm-action-done',
+                    state='needs_human',
+                )),
+                incident_id,
+            )
+        self.assertTrue(
+            self._activity_user_ids(incident_id, active=True),
+            'done activity 已移除，duplicate observation 必須重新告警',
+        )
+        self.assertEqual(self._read(incident_id)['state'], 'needs_human')
+
+    def test_inactive_dedicated_activity_does_not_suppress_new_active_alert(self):
+        incident_id = self.Incident._log(self._snapshot(
+            external_ref=self.ref + '-inactive-review',
+            state='needs_human',
+        ))
+        manager_ids = sorted(
+            self._account_manager_users_for_test(self.env).ids)
+        with self.env.registry.cursor() as cr:
+            env = self.env(cr=cr)
+            review_type = env.ref(
+                'woow_paas_platform.'
+                'mail_activity_type_billing_incident_review')
+            activities = env['mail.activity'].sudo().search([
+                ('res_model', '=', 'woow.billing.incident'),
+                ('res_id', '=', incident_id),
+                ('activity_type_id', '=', review_type.id),
+            ])
+            self.assertTrue(activities)
+            activities.write({'active': False})
+            cr.commit()
+        self.assertEqual(self._activity_user_ids(incident_id, active=True), [])
+
+        self.assertEqual(
+            self.Incident._log(self._snapshot(
+                external_ref=self.ref + '-inactive-review',
+                state='needs_human',
+            )),
+            incident_id,
+        )
+        self.assertEqual(
+            self._activity_user_ids(incident_id, active=True), manager_ids,
+            'inactive dedicated rows 不得參與 active alert dedupe',
+        )
+        self.assertEqual(
+            self.Incident._resolve(
+                self.ref + '-inactive-review',
+                resolution_note='remove active and inactive dedicated rows',
+            ),
+            incident_id,
+        )
+        self.assertEqual(
+            self._activity_user_ids(incident_id, active=None), [],
+            'resolve cleanup 必須 active_test=False 清掉 custom type 全部 rows',
+        )
 
     def test_generic_todo_does_not_suppress_dedicated_review_activity(self):
         incident_id = self.Incident._log(self._snapshot(
@@ -637,11 +859,11 @@ class TestBillingIncidentPublicApi864(TransactionCase):
             'resolve 只能刪 dedicated review，不得刪其他 activity type',
         )
 
-    def test_activity_html_escapes_untrusted_reference_and_plain_text_outputs(self):
-        malicious_ref = (
-            self.ref + '-<img src=x onerror=alert(864)>')
+    def test_activity_displays_shape_validated_raw_mtn_via_html_safe_note(self):
+        raw_mtn = '20260830987654321012'
+        self._extra_cleanup_refs.add(raw_mtn)
         incident_id = self.Incident._log(self._snapshot(
-            external_ref=malicious_ref,
+            external_ref=raw_mtn,
             state='needs_human',
         ))
         self.assertIsInstance(incident_id, int)
@@ -652,24 +874,21 @@ class TestBillingIncidentPublicApi864(TransactionCase):
                 ('woow.billing.incident', incident_id),
             )
             activities = cr.fetchall()
-        self.assertTrue(activities, '惡意 ref 的人工 incident 仍應建立 Todo')
+        self.assertTrue(activities)
         for note, res_name in activities:
+            self.assertIn(raw_mtn, note)
+            self.assertEqual(res_name, raw_mtn)
             self.assertNotIn('<img', note.lower())
-            self.assertNotIn('<img', res_name.lower())
-            self.assertIn('&lt;img', note.lower())
-            self.assertIn('&lt;img', res_name.lower())
+            self.assertNotIn('<script', note.lower())
 
-        with self.assertLogs(
-                'odoo.addons.woow_paas_platform.models.billing_incident',
-                level='CRITICAL') as logs:
+        malicious_ref = self.ref + '-<img-src=x-onerror=alert864>'
+        logger = 'odoo.addons.woow_paas_platform.models.billing_incident'
+        with self.assertLogs(logger, level='ERROR') as logs:
             self.assertFalse(self.Incident._log(self._snapshot(
                 external_ref=malicious_ref,
-                kind='bind_failed',
+                state='needs_human',
             )))
-        self.assertNotIn(
-            '<img', '\n'.join(logs.output).lower(),
-            'plain-text log 不得輸出可被 HTML renderer 執行的 raw markup',
-        )
+        self.assertNotIn(malicious_ref, '\n'.join(logs.output))
 
     def test_activity_failure_is_fail_soft_after_incident_commit(self):
         target = (
@@ -846,12 +1065,75 @@ class TestBillingIncidentAdminBackend864(TransactionCase):
         self.assertEqual(record.resolution_note, first_note)
         self.assertEqual(record.resolved_at, first_resolved_at)
 
-    def test_manual_resolution_button_rejects_sensitive_sudo_seeded_note(self):
-        record = self.incident.with_user(self.manager)
-        self.incident.sudo().write({
+    def test_sudo_cannot_mutate_evidence_reopen_resolved_or_unlink(self):
+        sudo_record = self.incident.sudo()
+        unresolved_before = self.incident.read([
+            'state', 'detail', 'manual_check_result', 'resolution_note',
+        ])[0]
+        for values in (
+                {'detail': 'sudo-forged evidence'},
+                {'state': 'open'},
+                {'manual_check_result': 'ecpay_found'}):
+            with self.subTest(unresolved_values=values), self.assertRaises(
+                    AccessError):
+                sudo_record.write(values)
+        self.assertEqual(
+            self.incident.read(list(unresolved_before))[0], unresolved_before)
+
+        manager_record = self.incident.with_user(self.manager)
+        manager_record.write({
             'manual_check_result': 'ecpay_found',
-            'resolution_note': 'ResultData=forbidden-button-payload-864',
+            'resolution_note': 'first immutable resolution audit',
         })
+        self.assertTrue(manager_record.action_mark_manually_resolved())
+        resolved_before = self.incident.read([
+            'state', 'detail', 'manual_check_result', 'resolution_note',
+            'resolved_at', 'resolved_by_ref',
+        ])[0]
+        for values in (
+                {'detail': 'late sudo-forged evidence'},
+                {'state': 'needs_human'},
+                {'manual_check_result': 'ecpay_not_found'},
+                {'resolution_note': 'late sudo audit overwrite'}):
+            with self.subTest(resolved_values=values), self.assertRaises(
+                    AccessError):
+                sudo_record.write(values)
+        for record in (
+                sudo_record,
+                sudo_record.with_context(_force_unlink=True)):
+            with self.subTest(context=dict(record.env.context)), \
+                    self.assertRaises(AccessError):
+                record.unlink()
+        self.assertEqual(
+            self.incident.read(list(resolved_before))[0], resolved_before)
+
+    def test_real_odoo_module_uninstall_context_can_remove_ledger_row(self):
+        module = self.env['ir.module.module'].sudo().search([
+            ('name', '=', 'woow_paas_platform'),
+        ], limit=1)
+        self.assertTrue(module)
+        module.write({'state': 'to remove'})
+        self.assertTrue(
+            self.incident.sudo().with_context(_force_unlink=True).unlink())
+        self.assertFalse(self.incident.exists())
+        # TransactionCase rollback restores both module state and ledger row.
+
+    def test_manual_resolution_button_rejects_sensitive_raw_seeded_note(self):
+        record = self.incident.with_user(self.manager)
+        # The public ORM write seam must reject this value, including sudo.
+        # Raw SQL is intentional test corruption for the button's second-line
+        # validation and is rolled back with this TransactionCase.
+        self.env.cr.execute(
+            'UPDATE woow_billing_incident '
+            'SET manual_check_result = %s, resolution_note = %s '
+            'WHERE id = %s',
+            (
+                'ecpay_found',
+                'ResultData=forbidden-button-payload-864',
+                self.incident.id,
+            ),
+        )
+        self.incident.invalidate_recordset()
         with self.assertRaises(UserError):
             record.action_mark_manually_resolved()
         self.incident.invalidate_recordset()
@@ -908,7 +1190,12 @@ class TestBillingIncidentAdminBackend864(TransactionCase):
             'id', 'create_uid', 'write_uid', 'create_date', 'write_date',
             'display_name', '__last_update',
         }
-        for field_name in set(Incident._fields) - automatic_fields:
+        business_fields = (
+            set(Incident._fields)
+            - automatic_fields
+            - set(self.env['mail.thread']._fields)
+        )
+        for field_name in business_fields:
             field = Incident._fields[field_name]
             required_msgids.add(field.string)
             if field.help:
@@ -1215,7 +1502,11 @@ class TestBillingIncidentRpcWriteGuard864(HttpCase):
         before = self._audit_snapshot(self.incident_a)
         for note in (
                 'MTN: 4111111111111111',
-                'ResultData=forbidden-rpc-payload-864'):
+                'ResultData=forbidden-rpc-payload-864',
+                'CVC=123',
+                'CID: 123',
+                'card security code 123',
+                'SAD=forbidden-authentication-data'):
             with self.subTest(note=note):
                 denied = self._call_kw(
                     'woow.billing.incident',
@@ -1269,10 +1560,34 @@ class TestBillingIncidentRpcWriteGuard864(HttpCase):
                     denied,
                     'resolved incident 的人工欄、state、evidence 一律 immutable',
                 )
+                forged = self._call_kw(
+                    'woow.billing.incident',
+                    'write',
+                    [[self.incident_a.id], values],
+                    {'context': {
+                        'woow_billing_incident_resolution_transition': True,
+                    }},
+                )
+                self._assert_access_error(
+                    forged,
+                    'RPC truthy context 不得偽造 module-private transition capability',
+                )
                 self.assertEqual(
                     self._audit_snapshot(self.incident_a), first_audit,
                     '拒絕後必須完整保留 first resolution audit',
                 )
+
+        denied_unlink = self._call_kw(
+            'woow.billing.incident',
+            'unlink',
+            [[self.incident_a.id]],
+            {'context': {'_force_unlink': True}},
+        )
+        self._assert_access_error(
+            denied_unlink,
+            '一般 RPC 不得偽造 Odoo module uninstall context 刪除 ledger',
+        )
+        self.assertEqual(self._audit_snapshot(self.incident_a), first_audit)
 
         unresolved_before = self._audit_snapshot(self.incident_b)
         denied = self._call_kw(

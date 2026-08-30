@@ -17062,6 +17062,19 @@ msgid "Billing Incident"
 msgstr "帳務事件"
 
 #. module: woow_paas_platform
+#: code:addons/woow_paas_platform/models/billing_incident.py:0
+msgid ""
+"Billing incident resolution may update only the exact first-resolution audit "
+"fields."
+msgstr "帳務事件關單只能更新首次關單的精確稽核欄位。"
+
+#. module: woow_paas_platform
+#: code:addons/woow_paas_platform/models/billing_incident.py:0
+msgid ""
+"Billing incidents are immutable ledger entries and cannot be deleted."
+msgstr "帳務事件是不可變的帳本項目，不能刪除。"
+
+#. module: woow_paas_platform
 #: model:ir.actions.act_window,name:woow_paas_platform.action_billing_incident
 #: model:ir.ui.menu,name:woow_paas_platform.menu_billing_incidents
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_billing_incident_list

@@ -5,9 +5,10 @@
     <field name="name">Billing incident review</field>
     <field name="icon">fa-credit-card</field>
     <field name="delay_count">0</field>
-    <!-- Odoo 18 only offers res_model choices for mail.thread models.
-         This relation-free ledger deliberately is not mail.thread, so core
-         cannot model-restrict this type; provenance is its dedicated xmlid. -->
+    <field name="res_model">woow.billing.incident</field>
+    <!-- The ledger has no source/business relation.  mail.thread exists only
+         for standard mail.activity create/notify/action_done semantics, so
+         Odoo 18 can and must restrict this dedicated type to the ledger. -->
   </record>
 
   <record id="view_billing_incident_list" model="ir.ui.view">

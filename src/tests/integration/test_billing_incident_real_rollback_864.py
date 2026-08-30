@@ -22,7 +22,7 @@ from psycopg2 import errorcodes
 from psycopg2.errors import SerializationFailure
 
 from odoo import api, fields
-from odoo.exceptions import AccessError
+from odoo.exceptions import AccessError, UserError
 from odoo.modules.registry import Registry
 from odoo.tests.common import BaseCase, get_db_name, tagged
 
@@ -47,7 +47,7 @@ class TestBillingIncidentRealTransactions864(BaseCase):
             except ValueError:
                 self.fail('BILLING_INCIDENT_TEST_RUN_UUID must be a UUID')
             self.marker = 'b864%s-%s' % (
-                run_uuid, uuid.uuid4().hex)
+                run_uuid, uuid.uuid4().hex[:8])
         else:
             self.marker = 'b864%s' % uuid.uuid4().hex
         self.addCleanup(self._purge)
@@ -86,16 +86,27 @@ class TestBillingIncidentRealTransactions864(BaseCase):
         try:
             with self.registry.cursor() as cr:
                 env = api.Environment(cr, odoo.SUPERUSER_ID, {})
+                external_prefix = 'test:%s%%' % self.marker
                 cr.execute(
                     "DELETE FROM mail_activity WHERE res_model = %s AND res_id IN "
                     "(SELECT id FROM woow_billing_incident "
                     " WHERE external_ref LIKE %s)",
-                    (_MODEL, self.marker + '%'),
+                    (_MODEL, external_prefix),
                 )
+                for table, model_column in (
+                        ('mail_followers', 'res_model'),
+                        ('mail_message', 'model')):
+                    cr.execute(
+                        'DELETE FROM %s WHERE %s = %%s AND res_id IN '
+                        '(SELECT id FROM woow_billing_incident '
+                        ' WHERE external_ref LIKE %%s)'
+                        % (table, model_column),
+                        (_MODEL, external_prefix),
+                    )
                 cr.execute(
                     'DELETE FROM woow_billing_incident '
                     'WHERE external_ref LIKE %s',
-                    (self.marker + '%',),
+                    (external_prefix,),
                 )
                 env['account.move'].sudo().search([
                     ('ref', '=', self.marker),
@@ -112,7 +123,7 @@ class TestBillingIncidentRealTransactions864(BaseCase):
 
     def _snapshot(self, suffix, **overrides):
         values = {
-            'external_ref': '%s-%s' % (self.marker, suffix),
+            'external_ref': 'test:%s-%s' % (self.marker, suffix),
             'kind': 'charged_not_credited',
             'partner_ref': self.invoice_partner_id,
             'partner_email': '%s@example.test' % self.marker,
@@ -316,6 +327,59 @@ class TestBillingIncidentRealTransactions864(BaseCase):
         self.assertEqual(incident[1], 'resolved')
         self.assertEqual(incident[4], 'first committed race audit')
 
+    def test_resolve_and_manager_action_orderings_preserve_first_audit(self):
+        resolve_first = self._snapshot(
+            'resolve-before-manager-action',
+            state='needs_human',
+        )
+        resolve_first_id = self._call_log(resolve_first)
+        manager_cr = self.registry.cursor()
+        try:
+            manager_env = api.Environment(
+                manager_cr, self.manager_user_id, {})
+            stale_action_record = manager_env[_MODEL].browse(resolve_first_id)
+            self.assertEqual(
+                self._call_resolve(
+                    resolve_first['external_ref'],
+                    'resolver won the first transition',
+                ),
+                resolve_first_id,
+            )
+            with self.assertRaises(UserError):
+                stale_action_record.action_mark_manually_resolved()
+            manager_cr.rollback()
+        finally:
+            manager_cr.close()
+        resolved = self._read_incident(resolve_first['external_ref'])
+        self.assertEqual(resolved[1], 'resolved')
+        self.assertEqual(resolved[4], 'resolver won the first transition')
+
+        action_first = self._snapshot(
+            'manager-action-before-resolve',
+            state='needs_human',
+        )
+        action_first_id = self._call_log(action_first)
+        with self.registry.cursor() as cr:
+            manager_env = api.Environment(cr, self.manager_user_id, {})
+            manager_record = manager_env[_MODEL].browse(action_first_id)
+            manager_record.write({
+                'manual_check_result': 'ecpay_found',
+                'resolution_note': 'manager action won the first transition',
+            })
+            self.assertTrue(manager_record.action_mark_manually_resolved())
+            cr.commit()
+        self.assertEqual(
+            self._call_resolve(
+                action_first['external_ref'],
+                'late resolver must not overwrite first audit',
+            ),
+            action_first_id,
+        )
+        resolved = self._read_incident(action_first['external_ref'])
+        self.assertEqual(resolved[1], 'resolved')
+        self.assertEqual(
+            resolved[4], 'manager action won the first transition')
+
     def test_outer_partner_and_invoice_locks_do_not_block_log(self):
         snapshot = self._snapshot('unrelated-locks')
         cr = self.registry.cursor()
@@ -356,9 +420,15 @@ class TestBillingIncidentRealTransactions864(BaseCase):
             )
             self.assertEqual(cr.fetchone()[0], incident_id)
             started = time.monotonic()
-            result = env[_MODEL]._log(snapshot)
+            with self.assertLogs(level='ERROR') as logs:
+                result = env[_MODEL]._log(snapshot)
             elapsed = time.monotonic() - started
             self.assertFalse(result)
+            self.assertNotIn(
+                snapshot['external_ref'],
+                '\n'.join(logs.output),
+                'SQL/application error logs must not render raw external_ref',
+            )
             self.assertLess(
                 elapsed, 3.0,
                 'lock_timeout must bound failure instead of hanging',
