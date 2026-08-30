@@ -21,7 +21,7 @@
 | [`refactor/`](refactor/) | 大規模重構決策（含 invariants） |
 | [`patterns/`](patterns/) | 可複用的 pattern（odoo addon override、ACL 收緊、date helper）——完整索引見 [`patterns/README.md`](patterns/README.md) |
 | [`reviews/`](reviews/) | PR review verdict、CAQA report、PR description draft |
-| （根層） | 不屬上列子類的獨立裁定：[`agent-dataplane-in-cluster-no-cf-access-ip-bypass`](agent-dataplane-in-cluster-no-cf-access-ip-bypass.md)（agent 資料面全 in-cluster）、[`agent-runtime-operator-chart-install-contract`](agent-runtime-operator-chart-install-contract.md)（operator chart 安裝契約）、[`namespace-prefix-enforcement-app-layer-not-rbac`](namespace-prefix-enforcement-app-layer-not-rbac.md)（ns prefix 由 app 層強制）、[`cdi-datavolume-gc-must-stay-off`](cdi-datavolume-gc-must-stay-off.md)（CDI DV GC 必須關——租戶資料刪除保護鏈前提）、[`hermes-agent-command-execution-planes`](hermes-agent-command-execution-planes.md)（hermes-agent 四個指令執行面與 L3 信任邊界） |
+| （根層） | 不屬上列子類的獨立裁定：[`agent-dataplane-in-cluster-no-cf-access-ip-bypass`](agent-dataplane-in-cluster-no-cf-access-ip-bypass.md)（agent 資料面全 in-cluster）、[`agent-runtime-operator-chart-install-contract`](agent-runtime-operator-chart-install-contract.md)（operator chart 安裝契約）、[`namespace-prefix-enforcement-app-layer-not-rbac`](namespace-prefix-enforcement-app-layer-not-rbac.md)（ns prefix 由 app 層強制）、[`cdi-datavolume-gc-must-stay-off`](cdi-datavolume-gc-must-stay-off.md)（CDI DV GC 必須關——租戶資料刪除保護鏈前提）、[`hermes-agent-command-execution-planes`](hermes-agent-command-execution-planes.md)（hermes-agent 四個指令執行面與 L3 信任邊界）、[`864-wallet-charged-not-credited`](864-wallet-charged-not-credited.md)（#864 A 級：錢包「已扣款未入帳」的 query gate ＋ auto-heal 修法） |
 
 ## 命名
 
