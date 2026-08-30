@@ -212,6 +212,77 @@ class _InvoicePayFixtureMixin:
 
 
 @tagged('post_install', '-at_install')
+class TestInvoicePayRejectsNonCustomerInvoices(
+        _InvoicePayFixtureMixin, HttpCase):
+    """付款 endpoint 只接受客戶發票，credit note 必須在 action_post 前拒絕。"""
+
+    def setUp(self):
+        super().setUp()
+        self._setup_invoice_fixture('864T')
+
+    def test_owned_draft_customer_refund_is_rejected_without_payment_or_refund_calls(self):
+        """自家 draft out_refund 走 public endpoint 仍是零付款／零 ECPay 折讓。
+
+        公司刻意切到 automatic，讓 `action_post()` 一旦被走到就會呼叫 vendored
+        `run_refund()`；probe 取代該方法本體，所以測試全程不會送真 ECPay HTTP。
+        """
+        refund = self.env['account.move'].sudo().create({
+            'move_type': 'out_refund',
+            'partner_id': self.partner.id,
+            'invoice_line_ids': [(0, 0, {
+                'product_id': self.product.id,
+                'quantity': 1,
+                'price_unit': _AMOUNT,
+                'tax_ids': [(5, 0, 0)],
+            })],
+        })
+        self.assertEqual(refund.state, 'draft', 'fixture 前提：受測 credit note 必須是 draft')
+        self.assertEqual(
+            refund.partner_id, self.partner,
+            'fixture 前提：受測 credit note 必須屬於目前登入者，不能被 owner gate 先擋掉')
+
+        Move = type(self.env['account.move'])
+        original_pay = Move._pay_from_wallet
+        pay_calls = []
+        refund_calls = []
+
+        def recording_pay(move_self, *args, **kwargs):
+            pay_calls.append(move_self.ids)
+            return original_pay(move_self, *args, **kwargs)
+
+        def recording_refund(move_self, *args, **kwargs):
+            refund_calls.append(move_self.ids)
+            return None
+
+        from odoo.addons.ecpay_invoice_tw.models.account_invoice import (
+            AccountMove as UpstreamAccountMove,
+        )
+
+        company = refund.company_id.sudo()
+        previous_auto_invoice = company.auto_invoice
+        self.addCleanup(
+            lambda: company.write({'auto_invoice': previous_auto_invoice}))
+
+        # 必須先裝 probe 再翻 automatic；順序反過來會留下誤打真 ECPay 的窗口。
+        with patch.object(Move, '_pay_from_wallet', recording_pay), patch.object(
+                UpstreamAccountMove, 'run_refund', recording_refund):
+            company.write({'auto_invoice': 'automatic'})
+            parsed = self._post_pay(refund.id)
+
+        self.assertIn(
+            'result', parsed,
+            '不支援的 move_type 是既有 business-failure JSON contract，不得變成 500／'
+            'JSON-RPC error（回 %r）' % parsed)
+        result = parsed['result']
+        self.assertEqual(
+            (pay_calls, refund_calls), ([], []),
+            'move_type gate 必須落在 `_pay_from_wallet` 之前；兩個 call list 都為空才證明'
+            '付款鏈與 action_post → vendored run_refund 完全沒被走到（回 %r）' % result)
+        self.assertFalse(result.get('success'), 'draft out_refund 必須被拒絕（回 %r）' % result)
+        self.assertTrue(result.get('error'), 'business-failure response 必須帶可顯示的 error')
+
+
+@tagged('post_install', '-at_install')
 class TestInvoicePayFailureLeavesNoResidue(_InvoicePayFixtureMixin, HttpCase):
     """收款 journal 缺失（真實設定錯誤，零 mock）⇒ 不得留下任何金流殘留。"""
 

@@ -967,6 +967,11 @@ class BillingController(HiddenChainMixin, Controller):
     def _invoice_pay_is_replay_safe(self, invoice):
         """這張發票走 `_pay_from_wallet` 時，交易內**可證明**不會對外送出電子發票嗎？
 
+        `api_invoice_pay` 的 `move_type == 'out_invoice'` gate 是權威 endpoint contract；
+        本方法仍對其他類型 fail-closed，純粹是 defense-in-depth：未來若有新 caller
+        重用這個 predicate，不得把會從 `action_post()` 走 `run_refund()` 外呼的
+        `out_refund` 誤判為 replay-safe。本項不取代 endpoint gate。
+
         為什麼要問這件事：`_pay_from_wallet` 會 `action_post()`，而上游
         `ecpay_invoice_tw` 把 inline 開票掛在 `account.move.action_post()` 上
         （`ecpay_invoice_tw/models/account_invoice.py::action_post` → `create_ecpay_invoice`
@@ -997,6 +1002,8 @@ class BillingController(HiddenChainMixin, Controller):
         follow-up **#980** 承接（連同同型的 `api_service_skip_trial`）。本方法只決定
         「要不要套 PR-A 的兩個機制」，不改那一類的既有行為。
         """
+        if invoice.move_type != 'out_invoice':
+            return False
         if invoice.woow_skip_upstream_hook:
             return True
         # ⚠ 這裡**不再 `.sudo()`**：`invoice` 本來就是 `request.env['account.move']
@@ -1213,6 +1220,15 @@ class BillingController(HiddenChainMixin, Controller):
                 invoice.id,
             )
             return {'success': False, 'error': _('Invoice is already paid')}
+        # Endpoint contract：錢包付款只接受客戶發票。必須在 balance 與
+        # `_pay_from_wallet()` 之前拒絕，否則 draft out_refund 的 action_post()
+        # 會在 automatic 模式走上游 `run_refund()`（不可逆 ECPay 外呼）。
+        if invoice.move_type != 'out_invoice':
+            _logger.info(
+                "[INV] pay move_type_reject invoice=%s move_type=%s",
+                invoice.id, invoice.move_type,
+            )
+            return {'success': False, 'error': _('Invoice is not payable')}
 
         amount = invoice.amount_total if invoice.state == 'draft' else invoice.amount_residual
         balance = partner.wallet_balance

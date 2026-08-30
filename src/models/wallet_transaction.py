@@ -14,6 +14,14 @@ Both fields are 0 on rows that don't represent a top-up (e.g. subscription
 debits, refunds), and on legacy top-up rows whose `wallet_transaction_id`
 was never linked back to the `woow_wallet_topup` record. The frontend handles
 the fallback by treating `bonus_amount <= 0` as "render the description as-is".
+
+Known sequence boundary: on a fresh install, the upstream
+`seq_wallet_transaction` omits `implementation`, so it uses Odoo's standard
+`ir.sequence` implementation (`next_by_code` backed by PostgreSQL `nextval`).
+That counter is non-transactional: rollback, savepoint rollback, or framework
+replay may leave gaps in wallet transaction numbers. This differs from
+`account.move`, whose transactional numbering comes from `sequence.mixin`.
+Do not infer or test a gapless wallet transaction sequence from rollback.
 """
 from odoo import fields, models
 
