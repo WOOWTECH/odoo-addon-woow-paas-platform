@@ -9,50 +9,44 @@ import { router } from "../../core/router";
 
 /**
  * PaymentMethodsListPage — lists ECPG-bound cards, supports delete & set default.
- * On mount, surfaces ok/failed/error bind feedback and consumes the callback query.
+ * On mount, surfaces ok/failed/error bind feedback and consumes recognized callbacks.
  */
 export class PaymentMethodsListPage extends Component {
     static template = "woow_paas_platform.PaymentMethodsListPage";
     static components = { WoowCard, WoowButton, WoowIcon };
     static props = {};
 
-    setup() {
-        this.router = router;
-        this.billing = useState(billingService);
-        this.state = useState({
-            bindSuccess: false,
-            deleting: null,       // token id being deleted
-            settingDefault: null, // token id being set default
-            error: null,
-        });
+  setup() {
+    this.router = router;
+    this.billing = useState(billingService);
+    this.state = useState({
+      bindSuccess: false,
+      deleting: null,       // token id being deleted
+      settingDefault: null, // token id being set default
+      error: null,
+    });
 
-        onMounted(async () => {
-            // Detect post-3DS redirect via router query params
-            const q = this.router.params.query || {};
-            const bindStatus = q.bind_status;
-            if (bindStatus) {
-                if (bindStatus === "ok") {
-                    this.state.bindSuccess = true;
-                } else if (bindStatus === "failed") {
-                    this.state.error = _t("Card binding failed. Please try again.");
-                } else if (bindStatus === "error") {
-                    this.state.error = _t(
-                        "We couldn't confirm the card binding. Please try again."
-                    );
-                } else {
-                    // Router query params preserve unknown values. Fail closed to
-                    // generic feedback, then strip them like TopupStorePage does.
-                    this.state.error = _t(
-                        "We couldn't confirm the card binding. Please try again."
-                    );
-                }
-                // Clean every callback query so reload doesn't retrigger it.
-                const cleanHash = window.location.hash.split("?")[0];
-                window.history.replaceState(null, "", cleanHash);
-            }
-            await billingService.fetchPaymentMethods();
-        });
-    }
+    onMounted(async () => {
+      // Detect post-3DS redirect via router query params
+      const q = this.router.params.query || {};
+      const bindStatus = q.bind_status;
+      if (["ok", "failed", "error"].includes(bindStatus)) {
+        if (bindStatus === "ok") {
+          this.state.bindSuccess = true;
+        } else if (bindStatus === "failed") {
+          this.state.error = _t("Card binding failed. Please try again.");
+        } else if (bindStatus === "error") {
+          this.state.error = _t(
+            "We couldn't confirm the card binding. Please try again."
+          );
+        }
+        // Consume known callback queries so reload doesn't retrigger feedback.
+        const cleanHash = window.location.hash.split("?")[0];
+        window.history.replaceState(null, "", cleanHash);
+      }
+      await billingService.fetchPaymentMethods();
+    });
+  }
 
     get cards() {
         return this.billing.paymentMethods;
