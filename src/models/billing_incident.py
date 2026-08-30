@@ -9,7 +9,6 @@ incident.  The model is a global finance ledger: every account manager reads all
 rows across companies by design.
 """
 
-import hashlib
 import logging
 import math
 import re
@@ -20,40 +19,72 @@ from psycopg2 import sql
 
 from odoo import SUPERUSER_ID, _, api, fields, models
 from odoo.exceptions import AccessError, UserError
+from odoo.tools import config
+from odoo.tools.translate import get_translation
 
 
 _logger = logging.getLogger(__name__)
 
 
-class _BillingIncidentResolutionTransition:
-    """Unforgeable in-process capability for the first resolution write."""
+class _BillingIncidentCapability:
+    """Base for JSON-inexpressible, module-private lifecycle capabilities."""
 
-    __slots__ = ()
+    __slots__ = ('_name',)
+
+    def __init__(self, name):
+        self._name = name
 
     def __repr__(self):
-        return '<billing incident resolution transition>'
+        return '<billing incident %s capability>' % self._name
 
 
-_BILLING_INCIDENT_RESOLUTION_TRANSITION = (
-    _BillingIncidentResolutionTransition())
+_BILLING_INCIDENT_CREATE = _BillingIncidentCapability('test fixture create')
+_BILLING_INCIDENT_RESOLUTION_TRANSITION = _BillingIncidentCapability(
+    'resolution transition')
+_BILLING_INCIDENT_ACTIVITY_DONE_POST = _BillingIncidentCapability(
+    'activity done post')
+_BILLING_INCIDENT_CREATE_CTX_KEY = 'woow_billing_incident_create'
 _BILLING_INCIDENT_RESOLUTION_CTX_KEY = (
     'woow_billing_incident_resolution_transition')
+_BILLING_INCIDENT_ACTIVITY_DONE_CTX_KEY = (
+    'woow_billing_incident_activity_done_post')
 _ODOO_MODULE_UNINSTALL_CTX_KEY = '_force_unlink'
+
+
+def _with_billing_incident_capability(records, key, capability):
+    return records.with_context(**{key: capability})
+
+
+def _is_billing_incident_create(env):
+    return (env.context.get(_BILLING_INCIDENT_CREATE_CTX_KEY)
+            is _BILLING_INCIDENT_CREATE)
 
 
 def _resolution_transition(records):
     """Attach the module-private first-resolution capability to ``records``."""
-    return records.with_context(**{
-        _BILLING_INCIDENT_RESOLUTION_CTX_KEY:
-            _BILLING_INCIDENT_RESOLUTION_TRANSITION,
-    })
+    return _with_billing_incident_capability(
+        records,
+        _BILLING_INCIDENT_RESOLUTION_CTX_KEY,
+        _BILLING_INCIDENT_RESOLUTION_TRANSITION,
+    )
 
 
 def _is_resolution_transition(env):
-    return (
-        env.context.get(_BILLING_INCIDENT_RESOLUTION_CTX_KEY)
-        is _BILLING_INCIDENT_RESOLUTION_TRANSITION
+    return (env.context.get(_BILLING_INCIDENT_RESOLUTION_CTX_KEY)
+            is _BILLING_INCIDENT_RESOLUTION_TRANSITION)
+
+
+def _activity_done_post(records):
+    return _with_billing_incident_capability(
+        records,
+        _BILLING_INCIDENT_ACTIVITY_DONE_CTX_KEY,
+        _BILLING_INCIDENT_ACTIVITY_DONE_POST,
     )
+
+
+def _is_activity_done_post(env):
+    return (env.context.get(_BILLING_INCIDENT_ACTIVITY_DONE_CTX_KEY)
+            is _BILLING_INCIDENT_ACTIVITY_DONE_POST)
 
 
 def _is_odoo_module_uninstall(env):
@@ -178,6 +209,11 @@ class BillingIncident(models.Model):
             'CHECK(first_seen_at <= last_seen_at)',
             'Billing incident first seen time cannot be after last seen time.',
         ),
+        (
+            'resolved_at_required',
+            "CHECK(state != 'resolved' OR resolved_at IS NOT NULL)",
+            'Resolved billing incidents must have a resolution timestamp.',
+        ),
     ]
 
     # Safety budget, not a performance knob.  The helper may be called while an
@@ -221,21 +257,57 @@ class BillingIncident(models.Model):
         'skip_count', 'attempts', 'query_attempts',
     })
     _SENSITIVE_MARKER_RE = re.compile(
-        r'(?:\bresult[\s_-]*data\b|\bcard[46]?[\s_-]*no\b|'
-        r'\bcard[\s_-]*number\b|\b(?:cvv2?|cvc2?|cid|csc)\b|'
-        r'\b(?:card[\s_-]*)?security[\s_-]*(?:code|number|no)\b|'
-        r'\b(?:sad|sensitive[\s_-]*authentication[\s_-]*data)\b|'
-        r'\bpan\b)',
+        r'(?<!\w)(?:'
+        r'result[\W_]*data|'
+        r'card[\W_]*[46]?[\W_]*no|'
+        r'card[\W_]*number|'
+        r'c[\W_]*v[\W_]*[vc](?:[\W_]*2)?|'
+        r'c[\W_]*i[\W_]*d|c[\W_]*s[\W_]*c|'
+        r'(?:card[\W_]*)?security[\W_]*(?:code|number|no)|'
+        r's[\W_]*a[\W_]*d|'
+        r'sensitive[\W_]*authentication[\W_]*data|'
+        r'p[\W_]*a[\W_]*n'
+        r')(?!\w)',
         re.IGNORECASE,
     )
     _PAN_CANDIDATE_RE = re.compile(
-        r'(?<!\d)(?:\d[\s-]*){13,19}(?!\d)')
+        r'(?<!\d)(?:\d[\s.,_:/-]*){13,19}(?!\d)')
     _RAW_MTN_RE = re.compile(r'[A-Za-z0-9_-]{1,20}\Z')
     _NAMESPACED_EXTERNAL_REF_RE = re.compile(
         r'[A-Za-z][A-Za-z0-9_-]{0,31}:'
         r'[A-Za-z0-9][A-Za-z0-9._/-]{0,94}\Z')
     _TRADE_NO_RE = re.compile(r'[A-Za-z0-9][A-Za-z0-9._:/-]{0,63}\Z')
     _CONTROL_CHARACTER_RE = re.compile(r'[\x00-\x1f\x7f]')
+
+    @api.model_create_multi
+    def create(self, values_list):
+        """Reject every generic ORM insert, including ``sudo().create()``."""
+        if not _is_billing_incident_create(self.env):
+            raise AccessError(_(
+                'Billing incidents may be created only by the internal '
+                'durable ledger writer.'
+            ))
+        return super().create(values_list)
+
+    @api.model
+    def _create_test_fixture(self, values):
+        """Private in-process fixture seam; unavailable outside test mode.
+
+        Production ``_log`` deliberately remains a raw atomic upsert.  Tests
+        that exercise ORM lifecycle or SQL constraints use this method rather
+        than teaching callers that ``sudo().create()`` is a ledger authority.
+        The sentinel itself is module-private and this underscore method is not
+        callable through Odoo RPC.
+        """
+        if not config['test_enable']:
+            raise AccessError(_(
+                'Billing incident fixture creation is available only in tests.'
+            ))
+        return _with_billing_incident_capability(
+            self.sudo(),
+            _BILLING_INCIDENT_CREATE_CTX_KEY,
+            _BILLING_INCIDENT_CREATE,
+        ).create(values)
 
     def _lock_and_refresh_states(self, extra_fields=()):
         """Lock every row and reread lifecycle state from this cursor."""
@@ -269,7 +341,8 @@ class BillingIncident(models.Model):
 
         if _is_resolution_transition(self.env):
             if (set(values) != self._RESOLUTION_TRANSITION_FIELDS
-                    or values.get('state') != 'resolved'):
+                    or values.get('state') != 'resolved'
+                    or not values.get('resolved_at')):
                 raise AccessError(_(
                     'Billing incident resolution may update only the exact '
                     'first-resolution audit fields.'
@@ -315,6 +388,81 @@ class BillingIncident(models.Model):
             'Billing incidents are immutable ledger entries and cannot be '
             'deleted.'
         ))
+
+    def message_post(self, **kwargs):
+        """Disallow free chatter; only validated core activity-done may post."""
+        if not _is_activity_done_post(self.env):
+            raise AccessError(_(
+                'Free-form chatter is disabled for billing incidents.'
+            ))
+        category = self._free_text_ingress_category(
+            'message_body', kwargs.get('body', ''))
+        if category:
+            raise UserError(_(
+                'Billing incident activity feedback must contain only safe, '
+                'non-sensitive summaries.'
+            ))
+        return super().message_post(**kwargs)
+
+    def message_post_with_source(
+            self, source_ref, render_values=None, **kwargs):
+        """Permit only core's object-backed activity-done rendering path."""
+        activity = (
+            render_values.get('activity')
+            if isinstance(render_values, dict)
+            else None
+        )
+        is_core_activity_done = (
+            source_ref == 'mail.message_activity_done'
+            and isinstance(activity, models.BaseModel)
+            and activity._name == 'mail.activity'
+            and len(activity) == 1
+            and len(self) == 1
+            and activity.res_model == self._name
+            and activity.res_id == self.id
+            and kwargs.get('mail_activity_type_id')
+            == activity.activity_type_id.id
+            and kwargs.get('subtype_xmlid') == 'mail.mt_activities'
+        )
+        if not is_core_activity_done:
+            raise AccessError(_(
+                'Only the standard activity completion message is allowed '
+                'for billing incidents.'
+            ))
+        for field_name, value in (
+                ('activity_render_values', render_values),
+                ('activity_post_values', kwargs)):
+            category = self._sensitive_container_category(field_name, value)
+            if category:
+                raise UserError(_(
+                    'Billing incident activity feedback must contain only '
+                    'safe, non-sensitive summaries.'
+                ))
+        guarded = _activity_done_post(self)
+        return super(BillingIncident, guarded).message_post_with_source(
+            source_ref,
+            render_values=render_values,
+            **kwargs
+        )
+
+    @api.model
+    def _sensitive_container_category(self, field_name, value):
+        """Validate every string leaf in incident-owned render containers."""
+        if isinstance(value, str):
+            return self._free_text_ingress_category(field_name, value)
+        if isinstance(value, dict):
+            for child in value.values():
+                category = self._sensitive_container_category(
+                    field_name, child)
+                if category:
+                    return category
+        elif isinstance(value, (list, tuple, set)):
+            for child in value:
+                category = self._sensitive_container_category(
+                    field_name, child)
+                if category:
+                    return category
+        return False
 
     @api.model
     def _sensitive_content_category(self, field_name, value):
@@ -368,10 +516,6 @@ class BillingIncident(models.Model):
                 return False
             return 'invalid_provider_reference_shape'
         return 'unsupported_provider_reference_field'
-
-    @api.model
-    def _external_ref_fingerprint(self, external_ref):
-        return hashlib.sha256(external_ref.encode('utf-8')).hexdigest()
 
     @api.model
     def _validate_log_snapshot(self, snapshot):
@@ -532,8 +676,6 @@ class BillingIncident(models.Model):
             if values is False:
                 return False
 
-            ref_fingerprint = self._external_ref_fingerprint(
-                values['external_ref'])
             now = fields.Datetime.now()
             # Duplicate observations may refresh evidence, never lifecycle.
             # State changes belong to explicit transition methods.
@@ -608,18 +750,17 @@ class BillingIncident(models.Model):
                     existing = cr.fetchone()
                     if not existing:
                         _logger.critical(
-                            '[BILLING_INCIDENT] upsert returned no row '
-                            'fingerprint=%s',
-                            ref_fingerprint,
+                            '[BILLING_INCIDENT] field=external_ref '
+                            'category=upsert_missing_row'
                         )
                         cr.commit()
                         return False
                     incident_id, existing_kind, existing_state = existing
                     if existing_kind != values['kind']:
                         _logger.critical(
-                            '[BILLING_INCIDENT] kind mismatch fingerprint=%s '
-                            'existing=%s incoming=%s; refusing downgrade',
-                            ref_fingerprint, existing_kind, values['kind'],
+                            '[BILLING_INCIDENT] incident id=%s field=kind '
+                            'category=collision; refusing update',
+                            incident_id,
                         )
                         cr.commit()
                         return False
@@ -629,9 +770,9 @@ class BillingIncident(models.Model):
                         cr.commit()
                         return incident_id
                     _logger.critical(
-                        '[BILLING_INCIDENT] unresolved upsert produced no row '
-                        'fingerprint=%s state=%s',
-                        ref_fingerprint, existing_state,
+                        '[BILLING_INCIDENT] incident id=%s field=state '
+                        'category=unresolved_upsert_missing_row',
+                        incident_id,
                     )
                     cr.commit()
                     return False
@@ -645,18 +786,16 @@ class BillingIncident(models.Model):
                     # is a second best-effort transaction and must never change
                     # the caller-visible result or recurse through `_log`.
                     _logger.error(
-                        '[BILLING_INCIDENT] incident id=%s persisted but '
-                        'review activity creation failed; incident remains '
+                        '[BILLING_INCIDENT] incident id=%s '
+                        'category=activity_schedule_failed; incident remains '
                         'durable',
                         incident_id,
-                        exc_info=True,
                     )
             return incident_id
         except Exception:
             _logger.critical(
-                '[BILLING_INCIDENT] money evidence could not be persisted; '
-                'the caller flow continues unchanged',
-                exc_info=True,
+                '[BILLING_INCIDENT] field=external_ref '
+                'category=persistence_failed; caller flow continues unchanged'
             )
             return False
 
@@ -674,80 +813,98 @@ class BillingIncident(models.Model):
         )
 
     @api.model
+    def _ensure_review_activities_current_cursor(self, incident_id):
+        """Converge one active dedicated alert per manager on this cursor."""
+        self._acquire_review_activity_lock(self.env.cr, incident_id)
+        self.env.cr.execute(
+            sql.SQL(
+                'SELECT external_ref, kind, state FROM {table} WHERE id = %s'
+            ).format(table=sql.Identifier(self._table)),
+            (incident_id,),
+            log_exceptions=False,
+        )
+        incident = self.env.cr.fetchone()
+        if not incident or incident[2] not in ('orphan', 'needs_human'):
+            return False
+
+        review_type = self.env.ref(
+            'woow_paas_platform.'
+            'mail_activity_type_billing_incident_review',
+            raise_if_not_found=False,
+        )
+        model = self.env['ir.model']._get(self._name)
+        users = self._account_manager_users(self.env)
+        if not users:
+            _logger.error(
+                '[BILLING_INCIDENT] incident id=%s '
+                'category=no_review_assignee', incident_id)
+            return False
+        if not (review_type and model):
+            _logger.error(
+                '[BILLING_INCIDENT] incident id=%s '
+                'category=missing_activity_dependency', incident_id)
+            return False
+
+        Activity = self.env['mail.activity'].sudo()
+        existing_user_ids = set(Activity.search([
+            ('res_model', '=', self._name),
+            ('res_id', '=', incident_id),
+            ('activity_type_id', '=', review_type.id),
+            ('active', '=', True),
+        ]).user_id.ids)
+        external_ref, kind, _state = incident
+        activity_values = []
+        for user in users:
+            if user.id in existing_user_ids:
+                continue
+            user_env = self.env(context={
+                **self.env.context,
+                'lang': user.lang or 'en_US',
+            })
+            kind_labels = dict(
+                user_env[self._name]._fields[
+                    'kind']._description_selection(user_env))
+            summary = get_translation(
+                'woow_paas_platform',
+                user_env.lang or 'en_US',
+                'Billing incident requires manual review',
+                (),
+            )
+            note_template = Markup.escape(get_translation(
+                'woow_paas_platform',
+                user_env.lang or 'en_US',
+                'Billing incident %(external_ref)s (%(kind)s) requires an '
+                'ECPay verification and an explicit resolution note.',
+                (),
+            ))
+            note = note_template % {
+                'external_ref': escape(external_ref),
+                'kind': escape(kind_labels[kind]),
+            }
+            activity_values.append({
+                'res_model_id': model.id,
+                'res_id': incident_id,
+                'activity_type_id': review_type.id,
+                'user_id': user.id,
+                'summary': summary,
+                'note': str(note),
+                'date_deadline': fields.Date.today(),
+            })
+        if activity_values:
+            Activity.create(activity_values)
+        return True
+
+    @api.model
     def _schedule_review_activities(self, incident_id):
-        """Best-effort: one dedicated review activity per incident/user."""
+        """Best-effort transaction around current-cursor alert convergence."""
         with self.env.registry.cursor() as cr:
             cr.execute('SET LOCAL lock_timeout = %s',
                        (self._LOCK_TIMEOUT,))
             env = api.Environment(cr, SUPERUSER_ID, {})
-            # Serialize search+create across concurrent duplicate callbacks.
-            self._acquire_review_activity_lock(cr, incident_id)
-            cr.execute(
-                sql.SQL(
-                    'SELECT external_ref, kind, state FROM {table} WHERE id = %s'
-                ).format(table=sql.Identifier(self._table)),
-                (incident_id,),
-            )
-            incident = cr.fetchone()
-            if not incident or incident[2] not in ('orphan', 'needs_human'):
-                cr.commit()
-                return False
-
-            review_type = env.ref(
-                'woow_paas_platform.'
-                'mail_activity_type_billing_incident_review',
-                raise_if_not_found=False,
-            )
-            model = env['ir.model']._get(self._name)
-            users = self._account_manager_users(env)
-            if not users:
-                _logger.error(
-                    '[BILLING_INCIDENT] account.group_account_manager has zero '
-                    'users; incident id=%s has no review assignee', incident_id)
-                cr.commit()
-                return False
-            if not (review_type and model):
-                _logger.error(
-                    '[BILLING_INCIDENT] cannot create review activity for '
-                    'incident id=%s (review_type=%s model=%s)',
-                    incident_id, bool(review_type), bool(model))
-                cr.commit()
-                return False
-
-            Activity = env['mail.activity'].sudo()
-            existing_user_ids = set(Activity.search([
-                ('res_model', '=', self._name),
-                ('res_id', '=', incident_id),
-                ('activity_type_id', '=', review_type.id),
-                ('active', '=', True),
-            ]).user_id.ids)
-            external_ref, kind, _state = incident
-            summary = _('Billing incident requires manual review')
-            note_template = Markup.escape(_(
-                'Billing incident %(external_ref)s (%(kind)s) requires an '
-                'ECPay verification and an explicit resolution note.'
-            ))
-            note = note_template % {
-                'external_ref': escape(external_ref),
-                'kind': escape(kind),
-            }
-            activity_values = [
-                {
-                    'res_model_id': model.id,
-                    'res_id': incident_id,
-                    'activity_type_id': review_type.id,
-                    'user_id': user.id,
-                    'summary': summary,
-                    'note': str(note),
-                    'date_deadline': fields.Date.today(),
-                }
-                for user in users
-                if user.id not in existing_user_ids
-            ]
-            if activity_values:
-                Activity.create(activity_values)
+            result = env[self._name] \
+                ._ensure_review_activities_current_cursor(incident_id)
             cr.commit()
-            return True
+            return result
 
     @api.model
     def _clear_review_activities(self, incident_id):
@@ -847,7 +1004,8 @@ class BillingIncident(models.Model):
         """Resolve by external key in an independent, fail-soft transaction.
 
         Missing keys are not created.  Repeated calls preserve the first audit
-        values and return the same integer id.
+        values, retry dedicated activity cleanup, and return the same integer
+        id.
         """
         try:
             ref_category = self._provider_reference_category(
@@ -892,56 +1050,100 @@ class BillingIncident(models.Model):
                 cr.execute('SET LOCAL lock_timeout = %s',
                            (self._LOCK_TIMEOUT,))
                 env = api.Environment(cr, SUPERUSER_ID, {})
-                incident = env[self._name].search([
-                    ('external_ref', '=', external_ref),
-                ], limit=1)
-                if not incident:
+                try:
+                    cr.execute(
+                        sql.SQL(
+                            'SELECT id FROM {table} '
+                            'WHERE external_ref = %s LIMIT 1'
+                        ).format(table=sql.Identifier(self._table)),
+                        (external_ref,),
+                        log_exceptions=False,
+                    )
+                except Exception:
+                    _logger.critical(
+                        '[BILLING_INCIDENT] field=external_ref '
+                        'category=lookup_failed'
+                    )
+                    return False
+                row = cr.fetchone()
+                if not row:
                     cr.commit()
                     return False
-                incident_id = incident.id
+                incident_id = row[0]
+                incident = env[self._name].browse(incident_id)
                 self._acquire_review_activity_lock(cr, incident_id)
                 states = incident._lock_and_refresh_states((
                     'manual_check_result',
                     'resolution_note',
                     'resolved_by_ref',
                 ))
-                if states[incident_id] == 'resolved':
-                    cr.commit()
-                    return incident_id
-                _resolution_transition(incident.sudo()).write({
-                    'state': 'resolved',
-                    'resolved_at': fields.Datetime.now(),
-                    'resolved_by_ref': (
-                        resolved_by_ref
-                        if resolved_by_ref is not None
-                        else incident.resolved_by_ref
-                    ),
-                    'manual_check_result': (
-                        manual_check_result
-                        if manual_check_result is not None
-                        else incident.manual_check_result
-                    ),
-                    'resolution_note': (
-                        resolution_note
-                        if resolution_note is not None
-                        else incident.resolution_note
-                    ),
-                })
+                if states[incident_id] != 'resolved':
+                    _resolution_transition(incident.sudo()).write({
+                        'state': 'resolved',
+                        'resolved_at': fields.Datetime.now(),
+                        'resolved_by_ref': (
+                            resolved_by_ref
+                            if resolved_by_ref is not None
+                            else incident.resolved_by_ref
+                        ),
+                        'manual_check_result': (
+                            manual_check_result
+                            if manual_check_result is not None
+                            else incident.manual_check_result
+                        ),
+                        'resolution_note': (
+                            resolution_note
+                            if resolution_note is not None
+                            else incident.resolution_note
+                        ),
+                    })
                 cr.commit()
             try:
                 self._clear_review_activities(incident_id)
             except Exception:
                 _logger.error(
-                    '[BILLING_INCIDENT] incident id=%s resolved but activity '
-                    'cleanup failed; resolution remains committed',
+                    '[BILLING_INCIDENT] incident id=%s '
+                    'category=activity_cleanup_failed; resolution remains '
+                    'committed',
                     incident_id,
-                    exc_info=True,
                 )
             return incident_id
         except Exception:
             _logger.critical(
-                '[BILLING_INCIDENT] resolve bookkeeping failed; caller flow '
-                'continues unchanged',
-                exc_info=True,
+                '[BILLING_INCIDENT] field=external_ref '
+                'category=resolve_bookkeeping_failed; caller flow continues '
+                'unchanged'
             )
             return False
+
+
+class MailActivity(models.Model):
+    _inherit = 'mail.activity'
+
+    def unlink(self):
+        """Re-arm only unresolved dedicated billing alerts after terminal use."""
+        review_type = self.env.ref(
+            'woow_paas_platform.'
+            'mail_activity_type_billing_incident_review',
+            raise_if_not_found=False,
+        )
+        incident_ids = []
+        if review_type and not _is_odoo_module_uninstall(self.env):
+            incident_ids = sorted({
+                activity.res_id
+                for activity in self
+                if (activity.res_model == 'woow.billing.incident'
+                    and activity.activity_type_id == review_type)
+            })
+        Incident = self.env['woow.billing.incident'].sudo()
+        # Lock before core deletes/archives the terminal activity.  Taking the
+        # same incident-scoped lock as schedule/resolve prevents the classic
+        # inversion "resolve holds advisory → waits activity row" versus
+        # "done holds activity row → waits advisory".
+        for incident_id in incident_ids:
+            Incident._acquire_review_activity_lock(
+                self.env.cr, incident_id)
+        result = super().unlink()
+        for incident_id in incident_ids:
+            Incident._ensure_review_activities_current_cursor(incident_id)
+        return result

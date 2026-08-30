@@ -14,7 +14,10 @@ registry cursors、真 PostgreSQL 40001、第三條連線驗終態。
 
 import logging
 import os
+import sys
+import threading
 import time
+import traceback
 import uuid
 
 import odoo
@@ -22,7 +25,6 @@ from psycopg2 import errorcodes
 from psycopg2.errors import SerializationFailure
 
 from odoo import api, fields
-from odoo.exceptions import AccessError, UserError
 from odoo.modules.registry import Registry
 from odoo.tests.common import BaseCase, get_db_name, tagged
 
@@ -189,7 +191,7 @@ class TestBillingIncidentRealTransactions864(BaseCase):
             cr.execute(
                 'SELECT COUNT(*) FROM mail_activity '
                 'WHERE res_model = %s AND res_id = %s '
-                'AND activity_type_id = %s',
+                'AND activity_type_id = %s AND active = true',
                 (_MODEL, incident_id, review_type.id),
             )
             return cr.fetchone()[0]
@@ -297,10 +299,17 @@ class TestBillingIncidentRealTransactions864(BaseCase):
         try:
             manager_env = api.Environment(manager_cr, self.manager_user_id, {})
             manager_record = manager_env[_MODEL].browse(incident_id)
+            # A real SQL read fixes cursor A's REPEATABLE READ snapshot.  A
+            # bare browse() would not, and would leave this race untested.
+            manager_cr.execute(
+                'SELECT state FROM woow_billing_incident WHERE id = %s',
+                (incident_id,),
+            )
+            self.assertEqual(manager_cr.fetchone()[0], 'open')
 
-            # Cursor B resolves and commits after cursor A has been opened but
-            # before A attempts its manager write.  The write guard must lock
-            # and reread instead of trusting a stale/bare recordset.
+            # Cursor B resolves and commits after cursor A's snapshot is fixed.
+            # A's subsequent SELECT FOR UPDATE must fail with a real 40001,
+            # never overwrite the first committed audit.
             self.assertEqual(
                 self._call_resolve(
                     snapshot['external_ref'],
@@ -313,7 +322,11 @@ class TestBillingIncidentRealTransactions864(BaseCase):
                     'manual_check_result': 'ecpay_not_found',
                     'resolution_note': 'late cursor must be rejected',
                 })
-            except AccessError:
+            except SerializationFailure as exc:
+                self.assertEqual(
+                    exc.pgcode, errorcodes.SERIALIZATION_FAILURE,
+                    'stale RR ledger write must fail as real PostgreSQL 40001',
+                )
                 manager_cr.rollback()
             else:
                 self.fail(
@@ -338,6 +351,11 @@ class TestBillingIncidentRealTransactions864(BaseCase):
             manager_env = api.Environment(
                 manager_cr, self.manager_user_id, {})
             stale_action_record = manager_env[_MODEL].browse(resolve_first_id)
+            manager_cr.execute(
+                'SELECT state FROM woow_billing_incident WHERE id = %s',
+                (resolve_first_id,),
+            )
+            self.assertEqual(manager_cr.fetchone()[0], 'needs_human')
             self.assertEqual(
                 self._call_resolve(
                     resolve_first['external_ref'],
@@ -345,8 +363,15 @@ class TestBillingIncidentRealTransactions864(BaseCase):
                 ),
                 resolve_first_id,
             )
-            with self.assertRaises(UserError):
+            try:
                 stale_action_record.action_mark_manually_resolved()
+            except SerializationFailure as exc:
+                self.assertEqual(
+                    exc.pgcode, errorcodes.SERIALIZATION_FAILURE,
+                    'stale RR manager action must fail as real 40001',
+                )
+            else:
+                self.fail('stale RR manager action unexpectedly resolved twice')
             manager_cr.rollback()
         finally:
             manager_cr.close()
@@ -439,6 +464,93 @@ class TestBillingIncidentRealTransactions864(BaseCase):
 
         incident = self._read_incident(snapshot['external_ref'])
         self.assertEqual(incident[2], 1)
+
+    def test_concurrent_schedule_and_done_end_with_active_dedicated_alert(self):
+        snapshot = self._snapshot(
+            'activity-schedule-done-race',
+            state='needs_human',
+        )
+        incident_id = self._call_log(snapshot)
+        self.assertGreater(self._review_activity_count(incident_id), 0)
+        with self.registry.cursor() as cr:
+            env = api.Environment(cr, odoo.SUPERUSER_ID, {})
+            review_type = env.ref(
+                'woow_paas_platform.'
+                'mail_activity_type_billing_incident_review')
+            activity_id = env['mail.activity'].sudo().search([
+                ('res_model', '=', _MODEL),
+                ('res_id', '=', incident_id),
+                ('activity_type_id', '=', review_type.id),
+                ('active', '=', True),
+            ], limit=1).id
+        self.assertTrue(activity_id)
+
+        start_barrier = threading.Barrier(2)
+        errors = []
+        # Construct each Environment on the main test thread before worker
+        # start.  During Odoo test loading the main thread owns Registry._lock;
+        # constructing Environment inside workers would test that harness lock,
+        # not PostgreSQL concurrency.  The cursors themselves are two real
+        # pool connections and all ORM work below still runs in each worker.
+        schedule_cr = self.registry._db.cursor()
+        done_cr = self.registry._db.cursor()
+        worker_context = {'mail_notify_force_send': False}
+        schedule_env = api.Environment(
+            schedule_cr, odoo.SUPERUSER_ID, worker_context)
+        done_env = api.Environment(
+            done_cr, odoo.SUPERUSER_ID, worker_context)
+
+        def schedule():
+            try:
+                start_barrier.wait(timeout=5)
+                schedule_cr.execute(
+                    'SET LOCAL lock_timeout = %s', ('5s',))
+                schedule_env[_MODEL] \
+                    ._ensure_review_activities_current_cursor(incident_id)
+                schedule_cr.commit()
+            except Exception as exc:  # surfaced below in the test thread
+                errors.append(('schedule', exc))
+
+        def done():
+            try:
+                start_barrier.wait(timeout=5)
+                done_cr.execute('SET LOCAL lock_timeout = %s', ('5s',))
+                done_env['mail.activity'].sudo().browse(
+                    activity_id).action_done()
+                done_cr.commit()
+            except Exception as exc:  # surfaced below in the test thread
+                errors.append(('done', exc))
+
+        try:
+            threads = [
+                threading.Thread(target=schedule, name='b864-schedule'),
+                threading.Thread(target=done, name='b864-done'),
+            ]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(timeout=10)
+            alive = [thread for thread in threads if thread.is_alive()]
+            stacks = {
+                thread.name: ''.join(traceback.format_stack(
+                    sys._current_frames()[thread.ident]))
+                for thread in alive
+            }
+            self.assertFalse(
+                alive,
+                'schedule/done advisory-lock race threads must terminate: %r'
+                % stacks,
+            )
+        finally:
+            if not schedule_cr.closed:
+                schedule_cr.close()
+            if not done_cr.closed:
+                done_cr.close()
+        self.assertFalse(errors, 'concurrent workers failed: %r' % errors)
+        self.assertGreater(
+            self._review_activity_count(incident_id), 0,
+            'unresolved terminal state must retain an active dedicated alert',
+        )
 
     def test_schedule_resolve_orderings_converge_without_stale_todo(self):
         snapshot = self._snapshot('activity-ordering')

@@ -38,11 +38,14 @@ company 讀取全部 incident，也可依 model allowlist 保存兩個人工查�
 按鈕只會保存 `manual_check_result`、`resolution_note`、`resolved_at`、
 `resolved_by_ref` 並把 incident 關成 `resolved`；它**不會修改 wallet、不會補點、也不會退款**。
 關單前 account manager 只能修改前兩個人工欄位；每次 generic `write()` 都會先對完整
-recordset 做 `FOR UPDATE` 並重讀 state。`sudo()` 不構成 lifecycle 權限；只有模組內
-JSON-RPC 無法表達物件身分的 private capability 能執行一次精確的
-`unresolved → resolved` transition。一旦 `state = resolved`，整筆 first resolution audit
-完全 immutable，連這兩個人工欄位也不得再改。incident ledger 也一律不可 `unlink`
-（一般 `sudo` 與 RPC 偽造 context 皆不例外；只相容 Odoo 真正 module uninstall 流程）。
+recordset 做 `FOR UPDATE` 並重讀 state。`sudo()` 不構成 lifecycle 權限；generic ORM
+`create()`（含 `sudo().create()`）也不能鑄造 ledger row，production 建立只走 `_log()` 的
+raw atomic upsert。測試 fixture 與第一次關單各自只由模組內、JSON-RPC 無法表達物件身分的
+private capability 開門；後者只能執行一次精確的 `unresolved → resolved` transition。
+一旦 `state = resolved`，整筆 first resolution audit 完全 immutable，連這兩個人工欄位也
+不得再改；DB 同時要求 resolved row 的 `resolved_at` 非空。incident ledger 也一律不可
+`unlink`（一般 `sudo` 與 RPC 偽造 context 皆不例外；只相容 Odoo 真正 module uninstall
+流程）。
 
 ECPay **查得到或查不到都只代表「查證結果已記錄，這張 incident 已關單」**。兩種結果都
 不得宣稱按鈕已補償款項，也不得把「關單」寫成「款項已補回」。
@@ -60,13 +63,15 @@ boundary。共用 sensitive validator 會套到 `_log` 的所有文字 ingress�
 `resolution_note` RPC write、人工關單按鈕與 `_resolve(resolution_note)`：明確的
 `ResultData`／`Card4No`／`Card6No`／`CardNo`／`CVV`／`CVC`／`CID`／`CSC`／
 `security code`／`SAD`（含 `sensitive authentication data`）／`PAN` marker，以及
-Luhn-valid 13–19 位 PAN-like 數字都會被拒絕。只有專用 `external_ref`／`trade_no` 欄位
-可豁免「數字碰巧通過 Luhn」；兩欄仍拒絕上述 marker，並另有長度、安全字元與
-CRLF/control-character shape gate。`external_ref` 只接受 1–20 字元 raw provider MTN，
+Luhn-valid 13–19 位 PAN-like 數字（含以點、空白、連字號等標點分隔）都會被拒絕；
+CVC／CID／CSC／security code／SAD 等 marker 的標點分隔寫法也同樣拒絕。只有專用
+`external_ref`／`trade_no` 欄位可豁免「純數字碰巧通過 Luhn」；兩欄仍拒絕上述 marker，
+並另有長度、安全字元與 CRLF/control-character shape gate。`external_ref` 只接受 1–20
+字元 raw provider MTN，
 或 `<namespace>:<safe-reference>`；`trade_no` 只接受 provider-safe 字元。合法 20 碼
 numeric MTN 仍可原樣顯示在 activity／後台，但輸入先經 shape 驗證，HTML 輸出再 escape；
-任何 error/collision log 只記 incident id 或固定 64 hex SHA-256 fingerprint，不回印 raw
-reference。自由文字中的 `MTN:`／`TradeNo:` prefix **不是豁免**。caller 仍有責任只交付
+任何 error/collision log 只記 incident id、field 與 category，不回印 raw reference，也不留
+可枚舉的 fingerprint。自由文字中的 `MTN:`／`TradeNo:` prefix **不是豁免**。caller 仍有責任只交付
 必要、去敏的 `detail` 安全摘要；不得把「通過 validator」解讀為 payload 已符合 PCI。
 
 上述限制避免人工動作與後續自動化重複給點；任何需要改變 wallet 餘額的產品流程不屬於本
@@ -87,8 +92,10 @@ runbook，也不是「人工已處理」按鈕的功能。
 incident 的 generic Todo／其他 activity type，以及其他 incident 的待辦都會保留。
 專屬 type 已限制 `res_model = woow.billing.incident`，是 schedule、dedupe、cleanup 的唯一
 provenance；summary 不是識別依據。dedupe 只看 active 的專屬 activity：inactive／standard
-`action_done()` 後再收到 duplicate observation 會重建 active alert，而完成 activity 本身
-**不會**把 incident 關成 resolved。
+`action_done()`／`unlink()` 若 incident 仍 unresolved，會在同一 transaction、同一 advisory
+lock 機制下立即重建 active alert；不必等下一次 duplicate observation，而且完成 activity 本身
+**不會**把 incident 關成 resolved。activity 的 summary／note 會依每位 manager 的 `lang`
+分別翻譯，`kind` 顯示翻譯後 selection label，不顯示 raw key。
 
 ledger 的 source/business 欄位仍完全 relation-free。為使用 Odoo 標準
 `mail.activity.create()`／notification bus／`action_done()`／`unlink()`，model 繼承
@@ -96,3 +103,9 @@ ledger 的 source/business 欄位仍完全 relation-free。為使用 Odoo 標準
 完成的 incident。這與禁止 outer transaction source row 形成 dangling FK 的約束正交：
 前者是 Odoo mail infrastructure metadata，後者才是禁止加入 ledger 的 business/source
 Many2one／Many2many。
+
+`mail.thread` 帶來的 incident-owned chatter ingress 已刻意縮到唯一 core
+`mail.message_activity_done` source：一般 account manager 的自由 `message_post()` 全拒，activity
+feedback、render values 與最後 body 都套用同一 sensitive validator。這是 model ingress
+boundary，不宣稱能阻止持有惡意 server-side `SUPERUSER` 程式碼的人直接呼叫
+`mail.message.create()`；那種行為已超出本 model 可攔截的呼叫面。
