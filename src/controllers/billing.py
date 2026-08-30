@@ -7,6 +7,8 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from psycopg2 import OperationalError
+
 from odoo import _, fields
 from odoo.exceptions import UserError, ValidationError
 from odoo.http import request, route, Controller
@@ -961,6 +963,66 @@ class BillingController(HiddenChainMixin, Controller):
             return 'overdue'
         return 'waiting'
 
+    # ---- #864 格1（PR-A，裁決 C）：付款路徑的 replay-safe 判準 ----------
+    def _invoice_pay_is_replay_safe(self, invoice):
+        """這張發票走 `_pay_from_wallet` 時，交易內**可證明**不會對外送出電子發票嗎？
+
+        `api_invoice_pay` 的 `move_type == 'out_invoice'` gate 是權威 endpoint contract；
+        本方法仍對其他類型 fail-closed，純粹是 defense-in-depth：未來若有新 caller
+        重用這個 predicate，不得把會從 `action_post()` 走 `run_refund()` 外呼的
+        `out_refund` 誤判為 replay-safe。本項不取代 endpoint gate。
+
+        為什麼要問這件事：`_pay_from_wallet` 會 `action_post()`，而上游
+        `ecpay_invoice_tw` 把 inline 開票掛在 `account.move.action_post()` 上
+        （`ecpay_invoice_tw/models/account_invoice.py::action_post` → `create_ecpay_invoice`
+        → `Check_Out()` 是一支打到 `einvoice.ecpay.com.tw`、開出**不可逆**電子發票的
+        HTTP POST）。交易內只要有那一支，PR-A 的兩個機制都會反過來咬人：
+
+          * `cr.savepoint()` 回捲會把 `ecpay_invoice_id` / `uniform_state` 一起捲掉
+            —— ECPay 上那張真發票還在，而上游的去重守衛正是讀這兩個欄位 ⇒ 下次再付
+            會開**第二張**；
+          * `except OperationalError: raise` 讓框架 `retrying()` 重播整個 handler
+            最多 5 次 ⇒ 同一筆最多開出 **5 張**真發票。
+
+        判準（Eugene 2026-08-29 裁決 C）＝ 兩條**其中之一**成立即安全：
+
+          1. `woow_skip_upstream_hook` —— 平台 override
+             （`src/models/account_move.py::create_ecpay_invoice`）對這一類早退，
+             上游那支根本不會被呼叫到。
+             ⚠ 這裡刻意用 truthiness 而不是 `is True`：欄位是 `fields.Boolean`，兩者
+             等價，而 override 自己也是 truthiness ⇒ 兩邊寫法一致才不會日後漂開。
+          2. `company_id.auto_invoice != 'automatic'` —— 上游的 inline hook 只在
+             `automatic` 下才呼叫 `create_ecpay_invoice`，其餘值是 no-op。
+             ⚠ 讀的是 **`invoice.company_id`** 而不是 `request.env.company`：上游判的
+             就是 `row.company_id.auto_invoice`，跟著它才不會在多公司下判錯邊。
+             ⚠ 這是**正向**比較（「不是 automatic 就安全」）而不是白名單，與上游的
+             `== 'automatic'` 完全鏡射：上游將來新增值時，兩邊會**一起**落到安全側。
+
+        ⛔ 另一類（flagless ＋ `automatic`）的半成交本身**不在 PR-A 射程**，由
+        follow-up **#980** 承接（連同同型的 `api_service_skip_trial`）。本方法只決定
+        「要不要套 PR-A 的兩個機制」，不改那一類的既有行為。
+        """
+        if invoice.move_type != 'out_invoice':
+            return False
+        if invoice.woow_skip_upstream_hook:
+            return True
+        # ⚠ 這裡**不再 `.sudo()`**：`invoice` 本來就是 `request.env['account.move']
+        # .sudo().browse(...)` 出來的，`company_id` 繼承同一個 su env ⇒ 多寫一次
+        # `.sudo()` 是零效果的雜訊，還會讓 repo-lint 的 controller-sudo 計數漂高
+        # （那個 gate 在數「controller 層繞過 ir.rule 的點」，不該被 no-op 灌水）。
+        return invoice.company_id.auto_invoice != 'automatic'
+
+    def _invoice_pay_generic_failure(self, invoice, exc):
+        """付款的泛用失敗回應（內部細節只留 server log）。
+
+        抽成 helper 是因為裁決 C 之後有**兩個**入口會落到這裡：未預期例外，以及
+        replay-unsafe 那一類的 `OperationalError`。訊息與 log 形狀必須逐字相同，
+        否則前端與第一線支援會看到兩種「同一件事」。
+        """
+        _logger.error("[INV] pay error invoice=%s: %s\n%s",
+                      invoice.id, str(exc), traceback.format_exc())
+        return {'success': False, 'error': _('Payment processing failed.')}
+
     def _serialize_invoice(self, invoice):
         """Return a compact dict for invoice list items."""
         return {
@@ -1133,8 +1195,6 @@ class BillingController(HiddenChainMixin, Controller):
         frontend; the deduct + post + reconcile sequence lives on the model
         so the subscription cron can reuse it (Phase 2c #5).
         """
-        from odoo.exceptions import UserError
-
         partner = request.env.user.partner_id.sudo()
         invoice = request.env['account.move'].sudo().browse(invoice_id)
         _logger.info(
@@ -1160,6 +1220,15 @@ class BillingController(HiddenChainMixin, Controller):
                 invoice.id,
             )
             return {'success': False, 'error': _('Invoice is already paid')}
+        # Endpoint contract：錢包付款只接受客戶發票。必須在 balance 與
+        # `_pay_from_wallet()` 之前拒絕，否則 draft out_refund 的 action_post()
+        # 會在 automatic 模式走上游 `run_refund()`（不可逆 ECPay 外呼）。
+        if invoice.move_type != 'out_invoice':
+            _logger.info(
+                "[INV] pay move_type_reject invoice=%s move_type=%s",
+                invoice.id, invoice.move_type,
+            )
+            return {'success': False, 'error': _('Invoice is not payable')}
 
         amount = invoice.amount_total if invoice.state == 'draft' else invoice.amount_residual
         balance = partner.wallet_balance
@@ -1184,18 +1253,111 @@ class BillingController(HiddenChainMixin, Controller):
                 },
             }
 
+        # #864 格1：`_pay_from_wallet()` 的寫入是**分段**的，例外噴在哪一步，
+        # 殘留就累積到哪——`action_post()`（發票 posted、發票號碼已消耗）→
+        # `deduct_wallet_points()`（點數已扣、wallet.transaction 已 INSERT）→
+        # 建 `account.payment` → `reconcile()`。下面的 except 鏈把例外吃掉後不會
+        # 傳播到框架層，request 正常結束 → transaction 照常 commit → 上述殘留
+        # 全部落地：**畫面說失敗，錢卻已經從錢包扣走**。
+        #
+        # 與 #525 A1 的 skip-trial 不同的是加重方向：那裡的殘留把重試**鎖死**，
+        # 這裡的殘留讓重試**再扣一次**——本端點允許 `state == 'posted'` 的發票
+        # 再付一次（金額改取 `amount_residual`），所以使用者看到「失敗」後再按
+        # 一次會成功，代價是同一張發票被扣了兩遍。另外被回捲不掉的
+        # `action_post()` 會燒掉一個發票序號，帳上留下可稽核的跳號缺口。
+        #
+        # ⚠ **裁決 C（Eugene 2026-08-29）縮小了適用範圍**：下面的 savepoint 與
+        # `except OperationalError: raise` **只**對「可證明無外呼」的發票生效
+        # （判準見 `_invoice_pay_is_replay_safe()`）。flagless ＋
+        # `company.auto_invoice == 'automatic'` 那一類完整維持 develop 行為，
+        # 半成交本身由 follow-up **#980** 承接。
+        #
+        # 用 savepoint 而不是整個 request 的 `cr.rollback()`：撤回範圍界定在
+        # 「這一段」比界定在「整個 request」穩健——不必依賴「這個 endpoint 在 try
+        # 之前永遠不會有別的寫入」這個會隨程式碼演進失效的前提。附帶好處：
+        # `cr.savepoint()` 失敗時會先 `cr.clear()` 再 `ROLLBACK TO SAVEPOINT`
+        # （`sql_db._FlushingSavepoint.rollback`），ORM cache 與待計算欄位一併清
+        # 乾淨；只補 `cr.rollback()` 得自己處理髒 cache。
+        #
+        # 範本：`paas.py` 的 `api_service_skip_trial`（#525 A1／#533 修過同構缺陷）。
+        # 裁決 C：下面兩個機制**只**對「可證明無外呼」的發票生效，判準見
+        # `_invoice_pay_is_replay_safe()`。另一類完整維持 develop 行為（#980 承接）。
+        replay_safe = self._invoice_pay_is_replay_safe(invoice)
+        _logger.info(
+            "[INV] pay replay_safe=%s invoice=%s skip_hook=%s auto_invoice=%s",
+            replay_safe, invoice.id, invoice.woow_skip_upstream_hook,
+            invoice.company_id.auto_invoice,
+        )
         try:
-            invoice._pay_from_wallet()
-        except UserError as e:
+            if replay_safe:
+                with request.env.cr.savepoint():
+                    invoice._pay_from_wallet()
+            else:
+                # ⛔ 刻意**不包** savepoint：這一類在 `action_post()` 時就已經對外開了
+                # 一張不可逆的電子發票，回捲只會讓 DB 與 ECPay 分家、並把上游的去重
+                # 守衛一起捲掉。維持 develop 行為＝殘留留在原地，等 #980 處理。
+                invoice._pay_from_wallet()
+
+        except OperationalError as e:
+            if not replay_safe:
+                # ⛔ 不讓框架 `retrying()` 看到它：重播會把 inline 外呼一起重播，
+                # 同一筆開出多張真發票。落回既有的 generic failure 路徑（＝develop
+                # 對 `OperationalError` 的行為：被最後那個 `except Exception` 吞掉）。
+                return self._invoice_pay_generic_failure(invoice, e)
+
+            # #864（沿用 #518／#533 的判準）：並發類 DB 例外（`SerializationFailure`
+            # 40001 等）**必須**傳出去。它是 `Exception` 子類，被下面任何一個
+            # except 收掉的話 Odoo 的 `retrying()`（`odoo/service/model.py`）永遠
+            # 看不到——那一層在本 except 鏈的**外層**，收到 `OperationalError` 才會
+            # 做 `env.cr.rollback()`（connection-level 的整條 ROLLBACK，不是
+            # `ROLLBACK TO SAVEPOINT`）→ `env.reset()` → 重播整個 handler，下一輪
+            # 才依 REPEATABLE READ 拿到**新 snapshot**。吞掉它 ⇒ 一個本來重試就會
+            # 成功的付款變成使用者看到的失敗，而這條路徑上的衝突點（`loyalty.card`
+            # 點數扣除的並發 UPDATE、`account.move` 取號）正是最典型的寫寫衝突形態。
+            #
+            # 必須排在下面兩段之前：`SerializationFailure` 不是 `UserError` 子類，
+            # 但會被最後的 `except Exception` 吃掉。
+            #
+            # 上面那層 `cr.savepoint()` 刻意保留、也不衝突：它管的是「失敗時不留
+            # 金流殘留」，本分支管的是「例外要讓框架看見」。新 snapshot 由
+            # `retrying()` 的整交易 rollback 提供，不是由 savepoint 提供。
+            #
+            # 🔴 重播安全性**不是這條鏈的固有性質，是上面那個 gate 掙來的**
+            # （裁決 C）：走到這裡代表 `replay_safe` 為真 ⇒ `_pay_from_wallet` 這一
+            # 輪的 `action_post()` 不會觸發上游 `ecpay_invoice_tw` 的 inline 開票
+            # 外呼 ⇒ 框架重播整個 handler 不會產生重複的對外副作用。
+            # ⚠ 早期版本這裡寫的是「這條鏈純 DB 操作、無外部呼叫」——那句話**是錯的**
+            # （上游確實掛在 `action_post` 上，已於 #864 查證），gate 就是為了補它。
+            # ⛔ **同一招仍不可套用到 `api_topup`**——那支 try 內是 ECPay 金流外呼，
+            # 重播＝重複扣款，而且它沒有、也不該有這個 gate。
+            #
+            # 取捨（沿用 `api_service_skip_trial` 同款分支）：攔截面比「會被重試的
+            # 那三種」寬。`retrying()` 只重試 `PG_CONCURRENCY_EXCEPTIONS_TO_RETRY`
+            # （LockNotAvailable / SerializationFailure / DeadlockDetected），其餘
+            # `OperationalError` 原樣拋出 ⇒ 前端拿到框架的錯誤而不是
+            # `{'success': False}`。這是刻意的：連線斷、磁碟滿、statement timeout
+            # 本來就不該被包裝成「業務失敗」回 HTTP 200。收窄成只認那三個 pgcode
+            # 等於把框架的白名單複製一份到這裡，框架改了我們不會知道。
+            raise
+
+        except (ValidationError, UserError) as e:
+            # 業務規則例外（錢包餘額不足、收款 journal 未設…）：訊息本來就是寫給
+            # 使用者看的，原文回前端。統一成泛用字串的話，真正的原因只留在 server
+            # log，使用者與第一線支援都無從排錯。
+            #
+            # ⚠ `AccessError` 也是 `UserError` 子類 ⇒ 會走這一支、把 Odoo 內部
+            # model／欄位技術名原文回給租戶。這是**本端點既有的行為**，本 PR 未改
+            # （PR-A 的射程只有 savepoint ＋ OperationalError 重拋）；範本
+            # `api_service_skip_trial` 另有一段 `except (AccessDenied, AccessError,
+            # MissingError)` 排在前面，要對齊需另開單。
             _logger.info(
                 "[INV] pay UserError invoice=%s err=%s",
                 invoice.id, str(e)[:200],
             )
             return {'success': False, 'error': str(e)}
+
         except Exception as e:
-            _logger.error("[INV] pay error invoice=%s: %s\n%s",
-                          invoice.id, str(e), traceback.format_exc())
-            return {'success': False, 'error': _('Payment processing failed.')}
+            return self._invoice_pay_generic_failure(invoice, e)
 
         # _pay_from_wallet → deduct_wallet_points → loyalty.card.points changes,
         # but partner.wallet_balance is a non-stored compute; the recordset

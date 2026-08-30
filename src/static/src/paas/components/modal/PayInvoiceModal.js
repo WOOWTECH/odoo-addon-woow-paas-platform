@@ -82,6 +82,14 @@ export class PayInvoiceModal extends Component {
       this.props.onPaid();
     } else {
       this.state.error = result.error || _t("Payment failed");
+      // #864 格1：付款失敗後餘額必須重抓。後端這一路的失敗會把已扣的點數
+      // 回捲（`api_invoice_pay` 的 savepoint），而 `this.billing.wallet` 仍是
+      // 打 API 之前的舊快取 —— 使用者會看著一個不存在的餘額決定要不要再按
+      // 一次。刻意排在設 error 之後：錯誤訊息立刻渲染，餘額隨後自我修正；
+      // 也刻意排在 `paying = false` 之前，重抓期間確認鈕維持 disabled。
+      // `fetchWallet()` 自帶 try/catch/finally（billing_service.js），失敗只
+      // 進 console，不會把錯誤訊息蓋掉。
+      await billingService.fetchWallet();
       this.state.paying = false;
     }
   }
