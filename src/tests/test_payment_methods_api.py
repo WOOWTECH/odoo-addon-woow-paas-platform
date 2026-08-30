@@ -1,6 +1,14 @@
 """Tests for /api/billing/payment-methods/* wrapper endpoints."""
+import json
+import re
+import xml.etree.ElementTree as ET
+from pathlib import Path
 from unittest.mock import patch
+from urllib.parse import parse_qs, quote, urlsplit
 
+import requests
+
+from odoo.modules import get_module_path
 from odoo.tests.common import HttpCase, TransactionCase
 
 from odoo.addons.woow_paas_platform.controllers.billing import (
@@ -26,6 +34,373 @@ class TestSanitizePhoneForEcpay(TransactionCase):
 
     def test_preserves_plausible_taiwan_mobile(self):
         self.assertEqual(_sanitize_phone_for_ecpay('0912-345-678'), '0912345678')
+
+
+def _read_asset(*parts):
+    path = Path(get_module_path('woow_paas_platform')).joinpath(*parts)
+    return path.read_text(encoding='utf-8')
+
+
+def _js_lexical_code(source):
+    """Mark JavaScript code, excluding comments and quoted string contents."""
+    is_code = bytearray(b'\x01') * len(source)
+    index = 0
+    while index < len(source):
+        if source.startswith('//', index):
+            end = source.find('\n', index + 2)
+            end = len(source) if end < 0 else end
+        elif source.startswith('/*', index):
+            closing = source.find('*/', index + 2)
+            end = len(source) if closing < 0 else closing + 2
+        elif source[index] in ('"', "'", '`'):
+            quote = source[index]
+            end = index + 1
+            while end < len(source):
+                if source[end] == '\\':
+                    end = min(end + 2, len(source))
+                    continue
+                end += 1
+                if source[end - 1] == quote:
+                    break
+        else:
+            index += 1
+            continue
+        is_code[index:end] = b'\x00' * (end - index)
+        index = end
+    return is_code
+
+
+def _find_js_code(source, needle, start=0, is_code=None):
+    """Find ``needle`` whose first character is lexical JavaScript code."""
+    is_code = is_code or _js_lexical_code(source)
+    index = source.find(needle, start)
+    while index >= 0 and not is_code[index]:
+        index = source.find(needle, index + 1)
+    return index
+
+
+def _extract_js_block_span(source, anchor, start=0):
+    """Return a lexical JavaScript block after ``anchor`` and its brace span."""
+    is_code = _js_lexical_code(source)
+    anchor_index = _find_js_code(source, anchor, start, is_code)
+    if anchor_index < 0:
+        return '', -1, -1
+    opening = _find_js_code(source, '{', anchor_index + len(anchor), is_code)
+    if opening < 0:
+        return '', -1, -1
+    depth = 0
+    for index in range(opening, len(source)):
+        if not is_code[index]:
+            continue
+        if source[index] == '{':
+            depth += 1
+        elif source[index] == '}':
+            depth -= 1
+            if depth == 0:
+                return source[opening + 1:index], opening, index
+    return '', -1, -1
+
+
+def _js_code_depths(source, needle):
+    """Return lexical brace depths for every code occurrence of ``needle``."""
+    is_code = _js_lexical_code(source)
+    depths = []
+    depth = 0
+    cursor = 0
+    while cursor < len(source):
+        found = _find_js_code(source, needle, cursor, is_code)
+        stop = len(source) if found < 0 else found
+        for index in range(cursor, stop):
+            if not is_code[index]:
+                continue
+            if source[index] == '{':
+                depth += 1
+            elif source[index] == '}':
+                depth -= 1
+        if found < 0:
+            break
+        depths.append((found, depth))
+        cursor = found + len(needle)
+    return depths
+
+
+def _assigned_error_message(block):
+    match = re.search(
+        r'''this\.state\.error\s*=\s*_t\(\s*(["'])(?P<message>.*?)\1\s*\)''',
+        block,
+        re.DOTALL,
+    )
+    return match.group('message') if match else None
+
+
+def _bind_frontend_contract(source):
+    """Analyse the known callback states and their lexical common cleanup."""
+    callback, _, _ = _extract_js_block_span(source, 'onMounted(async () =>')
+    guarded, _, _ = _extract_js_block_span(
+        callback, 'if (["ok", "failed", "error"].includes(bindStatus))',
+    )
+    blocks = {}
+    spans = {}
+    for status in ('ok', 'failed', 'error'):
+        block, opening, closing = _extract_js_block_span(
+            guarded, f'if (bindStatus === "{status}")',
+        )
+        blocks[status] = block
+        spans[status] = (opening, closing)
+
+    cleanup_depths = _js_code_depths(
+        guarded, 'window.history.replaceState',
+    )
+    cleanup_index = cleanup_depths[0][0] if len(cleanup_depths) == 1 else -1
+    cleanup_is_lexically_common = cleanup_depths == [(cleanup_index, 0)]
+    return {
+        'ok_feedback': 'this.state.bindSuccess = true' in blocks['ok'],
+        'failed_message': _assigned_error_message(blocks['failed']),
+        'error_message': _assigned_error_message(blocks['error']),
+        'cleanup_common': (
+            cleanup_is_lexically_common
+            and cleanup_index > spans['error'][1] >= 0
+        ),
+    }
+
+
+class TestPaymentMethodBindFrontendContract(TransactionCase):
+    """Source-level guard: this repo has no JavaScript runtime test framework."""
+
+    def _sources(self):
+        js = _read_asset(
+            'static', 'src', 'paas', 'pages', 'settings',
+            'PaymentMethodsListPage.js',
+        )
+        xml = ET.fromstring(_read_asset(
+            'static', 'src', 'paas', 'pages', 'settings',
+            'PaymentMethodsListPage.xml',
+        ))
+        return js, xml
+
+    def test_ok_bind_status_has_visible_feedback(self):
+        js, template = self._sources()
+        contract = _bind_frontend_contract(js)
+        self.assertTrue(
+            contract['ok_feedback'],
+            "bind_status=ok must assign the visible success state",
+        )
+        success_branches = [
+            node for node in template.iter('t')
+            if node.get('t-if') == 'state.bindSuccess'
+            and any(child.get('role') == 'alert' for child in node.iter('div'))
+        ]
+        self.assertEqual(len(success_branches), 1)
+
+    def test_failed_bind_status_has_visible_feedback(self):
+        js, template = self._sources()
+        contract = _bind_frontend_contract(js)
+        self.assertIn(
+            'Card binding failed', contract['failed_message'] or '',
+            "bind_status=failed must assign a dedicated visible failure message",
+        )
+        error_branches = [
+            node for node in template.iter('t')
+            if node.get('t-if') == 'state.error'
+            and any(child.get('role') == 'alert' for child in node.iter('div'))
+        ]
+        self.assertEqual(
+            len(error_branches), 1,
+            "The state.error feedback surface must remain a visible alert banner",
+        )
+
+    def test_error_bind_status_has_distinct_visible_feedback(self):
+        js, _template = self._sources()
+        contract = _bind_frontend_contract(js)
+        self.assertIn(
+            "couldn't confirm", contract['error_message'] or '',
+            "bind_status=error must assign a visible processing-error message",
+        )
+        self.assertNotEqual(
+            contract['error_message'], contract['failed_message'],
+            "Business failure and processing error need distinguishable feedback",
+        )
+
+    def test_all_known_bind_statuses_share_query_cleanup(self):
+        js, _template = self._sources()
+        contract = _bind_frontend_contract(js)
+        self.assertTrue(contract['ok_feedback'])
+        self.assertTrue(contract['failed_message'])
+        self.assertTrue(contract['error_message'])
+        self.assertTrue(
+            contract['cleanup_common'],
+            "ok/failed/error must reach one lexical top-level cleanup after "
+            "their branch chain",
+        )
+
+    def test_contract_probe_distinguishes_common_from_ok_only_cleanup(self):
+        """Synthetic +/- controls keep this source guard from token-scan false green."""
+        positive = '''
+            onMounted(async () => {
+                const bindStatus = q.bind_status;
+                if (["ok", "failed", "error"].includes(bindStatus)) {
+                    const stringBrace = "}";
+                    // Comment braces must not close the callback: { }
+                    /* Nor may block-comment braces alter nesting: { } */
+                    if (bindStatus === "ok") {
+                        this.state.bindSuccess = true;
+                    } else if (bindStatus === "failed") {
+                        this.state.error = _t("Card binding failed.");
+                    } else if (bindStatus === "error") {
+                        this.state.error = _t("We couldn't confirm the card binding.");
+                    }
+                    window.history.replaceState(null, "", cleanHash);
+                }
+            });
+        '''
+        ok_only_cleanup = '''
+            onMounted(async () => {
+                const bindStatus = q.bind_status;
+                if (["ok", "failed", "error"].includes(bindStatus)) {
+                    if (bindStatus === "ok") {
+                        this.state.bindSuccess = true;
+                        window.history.replaceState(null, "", cleanHash);
+                    } else if (bindStatus === "failed") {
+                        this.state.error = _t("Card binding failed.");
+                    } else if (bindStatus === "error") {
+                        this.state.error = _t("We couldn't confirm the card binding.");
+                    }
+                }
+            });
+        '''
+        self.assertTrue(_bind_frontend_contract(positive)['cleanup_common'])
+        self.assertFalse(
+            _bind_frontend_contract(ok_only_cleanup)['cleanup_common'],
+            "Negative control has every expected token but cleanup is ok-only",
+        )
+
+    def test_contract_probe_rejects_conditionally_nested_cleanup(self):
+        conditional_cleanup = '''
+            onMounted(async () => {
+                const bindStatus = q.bind_status;
+                if (["ok", "failed", "error"].includes(bindStatus)) {
+                    if (bindStatus === "ok") {
+                        this.state.bindSuccess = true;
+                    } else if (bindStatus === "failed") {
+                        this.state.error = _t("Card binding failed.");
+                    } else if (bindStatus === "error") {
+                        this.state.error = _t("We couldn't confirm the card binding.");
+                    }
+                    if (shouldCleanup) {
+                        window.history.replaceState(null, "", cleanHash);
+                    }
+                }
+            });
+        '''
+        self.assertFalse(
+            _bind_frontend_contract(conditional_cleanup)['cleanup_common'],
+            "Cleanup nested in an extra condition is not common cleanup",
+        )
+
+
+class TestPaymentMethodBindResult(HttpCase):
+    """Public-route contract for the browser-facing ECPG bind landing."""
+
+    _CALLBACK_PATCH = (
+        'odoo.addons.payment_ecpay_ecpg.controllers.ecpg_callback.'
+        'ECPGCallback._handle_bind_callback'
+    )
+
+    def _post_bind_result(
+        self,
+        *,
+        callback_result=None,
+        callback_error=None,
+        trade_no='BIND_PUBLIC_SEAM',
+    ):
+        patch_kwargs = (
+            {'side_effect': callback_error}
+            if callback_error is not None
+            else {'return_value': callback_result}
+        )
+        with patch(self._CALLBACK_PATCH, **patch_kwargs) as callback:
+            response = requests.post(
+                f"{self.base_url()}"
+                "/api/billing/payment-methods/bind-result/"
+                f"{quote(trade_no, safe='')}",
+                data={'RtnCode': '1', 'RtnMsg': 'OK'},
+                allow_redirects=False,
+                timeout=10,
+            )
+        self.assertEqual(response.status_code, 200, response.text[:500])
+        callback.assert_called_once()
+        match = re.search(
+            r'<script>window\.location\.replace\((?P<target>.+?)\);</script>',
+            response.text,
+        )
+        self.assertIsNotNone(match, response.text[:500])
+        target = json.loads(match.group('target'))
+        landing = urlsplit(target)
+        configured_base = self.env['ir.config_parameter'].sudo().get_param(
+            'web.base.url',
+        ).rstrip('/')
+        self.assertEqual(f'{landing.scheme}://{landing.netloc}', configured_base)
+        self.assertEqual(landing.path, '/woow')
+        fragment = landing.fragment
+        path, separator, query_string = fragment.partition('?')
+        self.assertEqual(path, '/settings/payment-methods')
+        self.assertEqual(separator, '?')
+        return response, target, parse_qs(query_string)
+
+    def test_bind_result_true_redirects_with_ok_public_result(self):
+        """True / ALREADY_EXISTS remains a successful browser result."""
+        internal_reason = 'ALREADY_EXISTS_INTERNAL_MARKER'
+        trade_no = 'BIND%&#PUBLIC'
+        response, target, query = self._post_bind_result(
+            callback_result=(True, internal_reason),
+            trade_no=trade_no,
+        )
+
+        self.assertEqual(query.get('bind_status'), ['ok'])
+        self.assertEqual(query.get('bind_code'), ['binding_succeeded'])
+        self.assertEqual(query.get('trade_no'), [trade_no])
+        self.assertIn('trade_no=BIND%25%26%23PUBLIC', target)
+        self.assertNotIn(internal_reason, target)
+        self.assertNotIn(internal_reason, response.text)
+
+    def test_bind_result_false_redirects_with_failed_public_result(self):
+        """Business rejection is visible without exposing its internal reason."""
+        internal_reason = 'PARTNER_NOT_FOUND_INTERNAL_MARKER'
+        response, target, query = self._post_bind_result(
+            callback_result=(False, internal_reason),
+        )
+
+        self.assertEqual(query.get('bind_status'), ['failed'])
+        self.assertEqual(query.get('bind_code'), ['binding_failed'])
+        self.assertEqual(query.get('trade_no'), ['BIND_PUBLIC_SEAM'])
+        self.assertNotIn(internal_reason, target)
+        self.assertNotIn(internal_reason, response.text)
+
+    def test_bind_result_none_redirects_with_error_public_result(self):
+        """Parse/decrypt failure is a coarse processing error for the browser."""
+        internal_reason = 'DECRYPT_FAIL_INTERNAL_MARKER'
+        response, target, query = self._post_bind_result(
+            callback_result=(None, internal_reason),
+        )
+
+        self.assertEqual(query.get('bind_status'), ['error'])
+        self.assertEqual(query.get('bind_code'), ['processing_error'])
+        self.assertEqual(query.get('trade_no'), ['BIND_PUBLIC_SEAM'])
+        self.assertNotIn(internal_reason, target)
+        self.assertNotIn(internal_reason, response.text)
+
+    def test_bind_result_exception_still_lands_with_error_public_result(self):
+        """Unexpected helper failure must land in the SPA, never a 500 page."""
+        internal_reason = 'RTN_999_EXCEPTION_INTERNAL_MARKER'
+        response, target, query = self._post_bind_result(
+            callback_error=RuntimeError(internal_reason),
+        )
+
+        self.assertEqual(query.get('bind_status'), ['error'])
+        self.assertEqual(query.get('bind_code'), ['processing_error'])
+        self.assertEqual(query.get('trade_no'), ['BIND_PUBLIC_SEAM'])
+        self.assertNotIn(internal_reason, target)
+        self.assertNotIn(internal_reason, response.text)
 
 
 class TestPaymentMethodsApi(HttpCase):
@@ -218,7 +593,7 @@ class TestPaymentMethodsApi(HttpCase):
         with patch(
             'odoo.addons.payment_ecpay_ecpg.controllers.ecpg_callback.'
             'ECPGCallback._handle_bind_callback',
-            return_value=None,
+            return_value=(True, 'OK'),
         ):
             # Fresh requests.post() (not self.url_open) to isolate from
             # self.opener's authenticated cookies — simulates ECPay's

@@ -6,6 +6,7 @@ import traceback
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
+from urllib.parse import urlencode
 
 from psycopg2 import OperationalError
 
@@ -29,6 +30,14 @@ ERR_MISSING_PARAMS = 'missing_params'
 ERR_MEMBER_MISMATCH = 'member_id_mismatch'
 ERR_NOT_FOUND = 'not_found'
 ERR_NOT_OWNER = 'not_owner'
+
+# Browser-facing bind result codes are deliberately coarse and stable. Never
+# expose the ECPG helper's provider/internal reason through the redirect URL.
+BIND_RESULT_PUBLIC_CODES = {
+    'ok': 'binding_succeeded',
+    'failed': 'binding_failed',
+    'error': 'processing_error',
+}
 
 # Error codes for /api/billing/redeem-code (gift card → wallet).
 # already_used / expired / inactive / not_a_gift_card 由 GiftRedeemError 從 model
@@ -343,7 +352,8 @@ class BillingController(HiddenChainMixin, Controller):
            server-to-server POST from ECPay that may or may not fire reliably on
            sandbox. We re-use the official `_handle_bind_callback` helper here so
            the payment.token row exists by the time the user lands back in the SPA.
-           Idempotency in the helper handles double-creation if the S2S fires too.
+           Its True/False/None result becomes ok/failed/error; the internal reason
+           is deliberately discarded. Idempotency handles duplicate S2S delivery.
 
         2) Don't 303 to `/woow`. The browser's POST to this endpoint is cross-site,
            so SameSite=Lax cookies are stripped. A server 303 chains the cross-site
@@ -370,20 +380,34 @@ class BillingController(HiddenChainMixin, Controller):
             from odoo.addons.payment_ecpay_ecpg.controllers.ecpg_callback import (
                 ECPGCallback,
             )
-            ECPGCallback()._handle_bind_callback(kw)
+            callback_result = ECPGCallback()._handle_bind_callback(kw)
+            callback_ok = callback_result[0]
+            status = (
+                'ok' if callback_ok is True
+                else 'failed' if callback_ok is False
+                else 'error'
+            )
             _logger.info(
-                "[BIND] bind-result _handle_bind_callback ok trade_no=%s",
-                trade_no,
+                "[BIND] bind-result callback handled trade_no=%s status=%s",
+                trade_no, status,
             )
         except Exception:
-            _logger.exception('bind-result: error persisting bind for trade_no=%s', trade_no)
+            status = 'error'
+            _logger.exception(
+                'bind-result: error persisting bind for trade_no=%s', trade_no,
+            )
 
         base = (request.env['ir.config_parameter'].sudo().get_param('web.base.url')
                 or request.httprequest.url_root).rstrip('/')
-        target = f'{base}/woow#/settings/payment-methods?bind_status=ok&trade_no={trade_no}'
+        query = urlencode({
+            'bind_status': status,
+            'bind_code': BIND_RESULT_PUBLIC_CODES[status],
+            'trade_no': trade_no,
+        })
+        target = f'{base}/woow#/settings/payment-methods?{query}'
         # JS redirect avoids the cross-site POST → 303 → cookie-strip pitfall.
-        title = _('Card binding complete')
-        body_text = _('Card binding complete. Returning…')
+        title = _('Card binding result')
+        body_text = _('Returning to payment methods…')
         html = (
             f'<!doctype html><html><head><meta charset="utf-8"><title>{title}</title>'
             f'<meta http-equiv="refresh" content="0;url={target}">'
