@@ -13,6 +13,7 @@ registry cursors、真 PostgreSQL 40001、第三條連線驗終態。
 """
 
 import logging
+import os
 import time
 import uuid
 
@@ -38,7 +39,16 @@ class TestBillingIncidentRealTransactions864(BaseCase):
     def setUp(self):
         super().setUp()
         self.registry = Registry(get_db_name())
-        self.marker = 'b864%s' % uuid.uuid4().hex
+        run_uuid = os.environ.get('BILLING_INCIDENT_TEST_RUN_UUID')
+        if run_uuid:
+            try:
+                run_uuid = uuid.UUID(run_uuid).hex
+            except ValueError:
+                self.fail('BILLING_INCIDENT_TEST_RUN_UUID must be a UUID')
+            self.marker = 'b864%s-%s' % (
+                run_uuid, uuid.uuid4().hex)
+        else:
+            self.marker = 'b864%s' % uuid.uuid4().hex
         self.addCleanup(self._purge)
         with self.registry.cursor() as cr:
             env = api.Environment(cr, odoo.SUPERUSER_ID, {})
