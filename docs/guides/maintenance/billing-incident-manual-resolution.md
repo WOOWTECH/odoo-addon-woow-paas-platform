@@ -3,7 +3,7 @@ title: 帳務 incident 人工查證與關單 runbook
 category: guides
 status: active
 created: 2026-08-30
-updated: 2026-08-30
+updated: 2026-08-31
 related:
   - docs/decisions/864-wallet-charged-not-credited.md
 ---
@@ -18,8 +18,8 @@ related:
 `woow.billing.incident` 是刻意設計的 **global finance ledger**，不是 company-owned
 業務表：它沒有 `company_ref`／company record rule。每一位 account manager 都可跨
 company 讀取全部 incident，也可依 model allowlist 保存兩個人工查證欄位；這是 Eugene
-裁決的安全契約，不是待補的隔離缺口。`orphan`／`needs_human` 的 Todo 同樣派給群組內
-**全體** account managers，不依使用者目前 company 篩選。
+裁決的安全契約，不是待補的隔離缺口。`orphan`／`needs_human` 的專屬 review activity
+同樣派給群組內**全體** account managers，不依使用者目前 company 篩選。
 
 畫面上的警告是本流程的不變式：
 
@@ -37,6 +37,8 @@ company 讀取全部 incident，也可依 model allowlist 保存兩個人工查�
 
 按鈕只會保存 `manual_check_result`、`resolution_note`、`resolved_at`、
 `resolved_by_ref` 並把 incident 關成 `resolved`；它**不會修改 wallet、不會補點、也不會退款**。
+關單前 account manager 只能修改前兩個人工欄位；一旦 `state = resolved`，整筆 first
+resolution audit 完全 immutable，連這兩個人工欄位也不得再改。
 
 ECPay **查得到或查不到都只代表「查證結果已記錄，這張 incident 已關單」**。兩種結果都
 不得宣稱按鈕已補償款項，也不得把「關單」寫成「款項已補回」。
@@ -50,9 +52,13 @@ ECPay **查得到或查不到都只代表「查證結果已記錄，這張 incid
 - ⛔ 不得把 `ResultData`、卡號或其他卡片密文貼進 `detail`／`resolution_note`。
 
 `_log(snapshot)` 的 field allowlist 只是一道 **shape boundary**，不是完整 PCI
-boundary。它另會擋明確的 `ResultData`／`Card4No`／`Card6No`／`CardNo`／`CVV`／`PAN`
-marker 與 Luhn-valid 13–19 位 PAN-like 數字，但 caller 仍有責任只交付必要、去敏的
-`detail` 安全摘要；不得把「通過 validator」解讀為 payload 已符合 PCI。
+boundary。共用 sensitive validator 會套到 `_log` 的所有文字 ingress、manager
+`resolution_note` RPC write、人工關單按鈕與 `_resolve(resolution_note)`：明確的
+`ResultData`／`Card4No`／`Card6No`／`CardNo`／`CVV`／`PAN` marker，以及 Luhn-valid
+13–19 位 PAN-like 數字都會被拒絕。只有專用 `external_ref`／`trade_no` 欄位可豁免「數字
+碰巧通過 Luhn」；兩欄仍拒絕上述 marker。自由文字中的 `MTN:`／`TradeNo:` prefix
+**不是豁免**。caller 仍有責任只交付必要、去敏的 `detail` 安全摘要；不得把「通過
+validator」解讀為 payload 已符合 PCI。
 
 上述限制避免人工動作與後續自動化重複給點；任何需要改變 wallet 餘額的產品流程不屬於本
 runbook，也不是「人工已處理」按鈕的功能。
@@ -67,5 +73,7 @@ runbook，也不是「人工已處理」按鈕的功能。
 - `resolved_at` 非空
 - `resolved_by_ref` 是執行者的純值 user id
 
-系統只會移除這一筆 incident、且 activity type 精確為本機制 Todo 的 activities；
-同一筆 incident 的其他 activity type 與其他 incident 的待辦都會保留。
+系統只會移除這一筆 incident、且 activity type 精確為
+`woow_paas_platform.mail_activity_type_billing_incident_review` 的 activities；同一筆
+incident 的 generic Todo／其他 activity type，以及其他 incident 的待辦都會保留。
+專屬 type 是 schedule、dedupe、cleanup 的唯一 provenance；summary 不是識別依據。

@@ -28,6 +28,26 @@ class BillingIncident(models.Model):
     _rec_name = 'external_ref'
     _order = 'last_seen_at desc, id desc'
 
+    _KIND_SELECTION = (
+        ('intent', 'Payment intent'),
+        ('charged_not_credited', 'Charged but not credited'),
+        ('callback_tx_missing', 'Callback transaction missing'),
+        ('invoice_half_settled', 'Invoice half settled'),
+        ('bind_failed', 'Card binding failed'),
+        ('stuck_pending', 'Stuck pending payment'),
+        ('manual_invoice_stale', 'Manual invoice stale'),
+    )
+    _STATE_SELECTION = (
+        ('open', 'Open'),
+        ('resolved', 'Resolved'),
+        ('orphan', 'Orphan'),
+        ('needs_human', 'Needs human review'),
+    )
+    _MANUAL_RESULT_SELECTION = (
+        ('ecpay_found', 'Found in ECPay'),
+        ('ecpay_not_found', 'Not found in ECPay'),
+    )
+
     external_ref = fields.Char(
         required=True,
         index=True,
@@ -40,15 +60,7 @@ class BillingIncident(models.Model):
         ),
     )
     kind = fields.Selection(
-        selection=[
-            ('intent', 'Payment intent'),
-            ('charged_not_credited', 'Charged but not credited'),
-            ('callback_tx_missing', 'Callback transaction missing'),
-            ('invoice_half_settled', 'Invoice half settled'),
-            ('bind_failed', 'Card binding failed'),
-            ('stuck_pending', 'Stuck pending payment'),
-            ('manual_invoice_stale', 'Manual invoice stale'),
-        ],
+        selection=list(_KIND_SELECTION),
         required=True,
         index=True,
     )
@@ -63,12 +75,7 @@ class BillingIncident(models.Model):
     rtn_code = fields.Char()
     failure_code = fields.Char()
     state = fields.Selection(
-        selection=[
-            ('open', 'Open'),
-            ('resolved', 'Resolved'),
-            ('orphan', 'Orphan'),
-            ('needs_human', 'Needs human review'),
-        ],
+        selection=list(_STATE_SELECTION),
         required=True,
         default='open',
         index=True,
@@ -99,10 +106,7 @@ class BillingIncident(models.Model):
         help='Scalar source row id which may legitimately dangle after rollback.',
     )
     manual_check_result = fields.Selection(
-        selection=[
-            ('ecpay_found', 'Found in ECPay'),
-            ('ecpay_not_found', 'Not found in ECPay'),
-        ],
+        selection=list(_MANUAL_RESULT_SELECTION),
     )
     resolution_note = fields.Text()
     resolved_at = fields.Datetime()
@@ -136,17 +140,11 @@ class BillingIncident(models.Model):
     # self-deadlock the request thread.
     _LOCK_TIMEOUT = '1s'
 
-    _KINDS = frozenset({
-        'intent',
-        'charged_not_credited',
-        'callback_tx_missing',
-        'invoice_half_settled',
-        'bind_failed',
-        'stuck_pending',
-        'manual_invoice_stale',
-    })
-    _LOG_STATES = frozenset({'open', 'orphan', 'needs_human'})
-    _MANUAL_RESULTS = frozenset({'ecpay_found', 'ecpay_not_found'})
+    _KINDS = frozenset(key for key, _label in _KIND_SELECTION)
+    _STATES = frozenset(key for key, _label in _STATE_SELECTION)
+    _LOG_STATES = _STATES - {'resolved'}
+    _MANUAL_RESULTS = frozenset(
+        key for key, _label in _MANUAL_RESULT_SELECTION)
     _MANAGER_WRITABLE_FIELDS = frozenset({
         'manual_check_result',
         'resolution_note',
@@ -177,19 +175,41 @@ class BillingIncident(models.Model):
     )
     _PAN_CANDIDATE_RE = re.compile(
         r'(?<!\d)(?:\d[\s-]*){13,19}(?!\d)')
-    _TRADE_REFERENCE_PREFIX_RE = re.compile(
-        r'(?:merchant[\s_-]*trade[\s_-]*no|trade[\s_-]*no|mtn)'
-        r'\s*[:=#-]?\s*$',
-        re.IGNORECASE,
-    )
+
+    def _lock_and_refresh_states(self, extra_fields=()):
+        """Lock every row and reread lifecycle state from this cursor."""
+        record_ids = sorted(set(self.ids))
+        if not record_ids:
+            return {}
+        self.env.cr.execute(
+            sql.SQL(
+                'SELECT id FROM {table} WHERE id = ANY(%s) '
+                'ORDER BY id FOR UPDATE'
+            ).format(table=sql.Identifier(self._table)),
+            (record_ids,),
+        )
+        locked_ids = [row[0] for row in self.env.cr.fetchall()]
+        if locked_ids != record_ids:
+            raise UserError(_('This billing incident no longer exists.'))
+        field_names = ['state', *extra_fields]
+        self.invalidate_recordset(field_names)
+        return {
+            row['id']: row['state']
+            for row in self.read(['state', *extra_fields])
+        }
 
     def write(self, values):
-        """Keep the audit snapshot immutable outside controlled sudo flows."""
+        """Keep unresolved evidence and every resolved audit immutable."""
         if not self.env.su:
             if not self.env.user.has_group(
                     'account.group_account_manager'):
                 raise AccessError(_(
                     'Only account managers may update billing incidents.'
+                ))
+            states = self._lock_and_refresh_states()
+            if any(state == 'resolved' for state in states.values()):
+                raise AccessError(_(
+                    'Resolved billing incidents are immutable.'
                 ))
             forbidden = set(values) - self._MANAGER_WRITABLE_FIELDS
             if forbidden:
@@ -197,6 +217,19 @@ class BillingIncident(models.Model):
                     'Account managers may update only the manual verification '
                     'result and resolution note.'
                 ))
+            resolution_note = values.get('resolution_note')
+            if resolution_note not in (None, False):
+                if not isinstance(resolution_note, str):
+                    raise UserError(_(
+                        'Resolution notes must contain only safe, '
+                        'non-sensitive summaries.'
+                    ))
+                if self._sensitive_content_category(
+                        'resolution_note', resolution_note):
+                    raise UserError(_(
+                        'Resolution notes must contain only safe, '
+                        'non-sensitive summaries.'
+                    ))
         return super().write(values)
 
     @api.model
@@ -211,9 +244,6 @@ class BillingIncident(models.Model):
             digits = ''.join(character for character in match.group()
                              if character.isdigit())
             if not 13 <= len(digits) <= 19:
-                continue
-            prefix = value[max(0, match.start() - 40):match.start()]
-            if self._TRADE_REFERENCE_PREFIX_RE.search(prefix):
                 continue
             checksum = 0
             for index, character in enumerate(reversed(digits)):
@@ -246,29 +276,20 @@ class BillingIncident(models.Model):
             _logger.error(
                 '[BILLING_INCIDENT] _log rejected snapshot with non-string key')
             return False
-        unknown = sorted(set(snapshot) - self._LOG_FIELDS)
+        unknown = set(snapshot) - self._LOG_FIELDS
         if unknown:
             _logger.error(
-                '[BILLING_INCIDENT] _log rejected unknown snapshot keys=%s',
-                unknown,
+                '[BILLING_INCIDENT] _log rejected snapshot '
+                'category=unknown_fields count=%s',
+                len(unknown),
             )
             return False
         external_ref = snapshot.get('external_ref')
-        kind = snapshot.get('kind')
         if not isinstance(external_ref, str) or not external_ref.strip():
             _logger.error(
-                '[BILLING_INCIDENT] _log requires a non-empty external_ref')
-            return False
-        if kind not in self._KINDS:
-            _logger.error(
-                '[BILLING_INCIDENT] _log requires a supported kind; got=%r',
-                kind,
-            )
-            return False
-        if 'state' in snapshot and snapshot['state'] not in self._LOG_STATES:
-            _logger.error(
-                '[BILLING_INCIDENT] _log rejected state=%r',
-                snapshot['state'],
+                '[BILLING_INCIDENT] _log rejected field=external_ref '
+                'category=required type=%s',
+                type(external_ref).__name__,
             )
             return False
 
@@ -317,8 +338,9 @@ class BillingIncident(models.Model):
                         normalized[name] = fields.Datetime.to_datetime(value)
                     except (TypeError, ValueError):
                         _logger.error(
-                            '[BILLING_INCIDENT] _log rejected %s datetime=%r',
-                            name, value,
+                            '[BILLING_INCIDENT] _log rejected field=%s '
+                            'category=invalid_datetime type=%s',
+                            name, type(value).__name__,
                         )
                         return False
                 else:
@@ -338,6 +360,22 @@ class BillingIncident(models.Model):
                     name, category,
                 )
                 return False
+        kind = normalized.get('kind')
+        if kind not in self._KINDS:
+            _logger.error(
+                '[BILLING_INCIDENT] _log rejected field=kind '
+                'category=unsupported_selection type=%s',
+                type(kind).__name__,
+            )
+            return False
+        if ('state' in normalized
+                and normalized['state'] not in self._LOG_STATES):
+            _logger.error(
+                '[BILLING_INCIDENT] _log rejected field=state '
+                'category=unsupported_selection type=%s',
+                type(normalized['state']).__name__,
+            )
+            return False
         for name in self._NONNEGATIVE_INPUT_COUNTERS:
             if name in normalized and (
                     normalized[name] is None or normalized[name] < 0):
@@ -465,8 +503,9 @@ class BillingIncident(models.Model):
                     # is a second best-effort transaction and must never change
                     # the caller-visible result or recurse through `_log`.
                     _logger.error(
-                        '[BILLING_INCIDENT] incident id=%s persisted but Todo '
-                        'activity creation failed; incident remains durable',
+                        '[BILLING_INCIDENT] incident id=%s persisted but '
+                        'review activity creation failed; incident remains '
+                        'durable',
                         incident_id,
                         exc_info=True,
                     )
@@ -494,7 +533,7 @@ class BillingIncident(models.Model):
 
     @api.model
     def _schedule_review_activities(self, incident_id):
-        """Best-effort second transaction: one Todo per incident/user."""
+        """Best-effort: one dedicated review activity per incident/user."""
         with self.env.registry.cursor() as cr:
             cr.execute('SET LOCAL lock_timeout = %s',
                        (self._LOCK_TIMEOUT,))
@@ -512,28 +551,31 @@ class BillingIncident(models.Model):
                 cr.commit()
                 return False
 
-            todo = env.ref(
-                'mail.mail_activity_data_todo', raise_if_not_found=False)
+            review_type = env.ref(
+                'woow_paas_platform.'
+                'mail_activity_type_billing_incident_review',
+                raise_if_not_found=False,
+            )
             model = env['ir.model']._get(self._name)
             users = self._account_manager_users(env)
             if not users:
                 _logger.error(
                     '[BILLING_INCIDENT] account.group_account_manager has zero '
-                    'users; incident id=%s has no Todo assignee', incident_id)
+                    'users; incident id=%s has no review assignee', incident_id)
                 cr.commit()
                 return False
-            if not (todo and model):
+            if not (review_type and model):
                 _logger.error(
-                    '[BILLING_INCIDENT] cannot create Todo for incident id=%s '
-                    '(todo=%s model=%s)',
-                    incident_id, bool(todo), bool(model))
+                    '[BILLING_INCIDENT] cannot create review activity for '
+                    'incident id=%s (review_type=%s model=%s)',
+                    incident_id, bool(review_type), bool(model))
                 cr.commit()
                 return False
 
             cr.execute(
                 'SELECT user_id FROM mail_activity WHERE res_model = %s '
                 'AND res_id = %s AND activity_type_id = %s',
-                (self._name, incident_id, todo.id),
+                (self._name, incident_id, review_type.id),
             )
             existing_user_ids = {row[0] for row in cr.fetchall()}
             external_ref, kind, _state = incident
@@ -553,8 +595,8 @@ class BillingIncident(models.Model):
                     continue
                 # `mail.activity.create()` calls message_subscribe/notify on
                 # the target and therefore requires mail.thread.  This ledger
-                # deliberately has no chatter/mixin, so insert the Todo row
-                # directly in this best-effort transaction.
+                # deliberately has no chatter/mixin, so insert the dedicated
+                # review row directly in this best-effort transaction.
                 cr.execute(
                     'INSERT INTO mail_activity '
                     '(res_model_id, res_model, res_id, res_name, '
@@ -565,8 +607,9 @@ class BillingIncident(models.Model):
                     'false, true, %s, %s, %s, %s)',
                     (
                         model.id, self._name, incident_id, safe_res_name,
-                        todo.id, user.id, summary, str(note), fields.Date.today(),
-                        SUPERUSER_ID, SUPERUSER_ID, now, now,
+                        review_type.id, user.id, summary, str(note),
+                        fields.Date.today(), SUPERUSER_ID, SUPERUSER_ID,
+                        now, now,
                     ),
                 )
             cr.commit()
@@ -574,20 +617,23 @@ class BillingIncident(models.Model):
 
     @api.model
     def _clear_review_activities(self, incident_id):
-        """Best-effort second transaction; delete only our Todo rows."""
+        """Best-effort second transaction; delete only our review rows."""
         with self.env.registry.cursor() as cr:
             cr.execute('SET LOCAL lock_timeout = %s',
                        (self._LOCK_TIMEOUT,))
             env = api.Environment(cr, SUPERUSER_ID, {})
             self._acquire_review_activity_lock(cr, incident_id)
-            todo = env.ref(
-                'mail.mail_activity_data_todo', raise_if_not_found=False)
-            if todo:
+            review_type = env.ref(
+                'woow_paas_platform.'
+                'mail_activity_type_billing_incident_review',
+                raise_if_not_found=False,
+            )
+            if review_type:
                 cr.execute(
                     'DELETE FROM mail_activity '
                     'WHERE res_model = %s AND res_id = %s '
                     'AND activity_type_id = %s',
-                    (self._name, incident_id, todo.id),
+                    (self._name, incident_id, review_type.id),
                 )
             cr.commit()
             return True
@@ -597,15 +643,8 @@ class BillingIncident(models.Model):
         """Private UI transition; never open the independent `_resolve` cursor."""
         self.ensure_one()
         self._acquire_review_activity_lock(self.env.cr, self.id)
-        self.env.cr.execute(
-            sql.SQL('SELECT state FROM {table} WHERE id = %s').format(
-                table=sql.Identifier(self._table)),
-            (self.id,),
-        )
-        row = self.env.cr.fetchone()
-        if not row:
-            raise UserError(_('This billing incident no longer exists.'))
-        if row[0] == 'resolved':
+        states = self._lock_and_refresh_states()
+        if states[self.id] == 'resolved':
             raise UserError(_('This billing incident is already resolved.'))
         self.sudo().write({
             'state': 'resolved',
@@ -615,15 +654,18 @@ class BillingIncident(models.Model):
             'resolution_note': resolution_note,
         })
         # The UI transaction may already hold this incident row lock.  Delete
-        # only this mechanism's Todo on the same cursor to avoid self-lock.
-        todo = self.env.ref(
-            'mail.mail_activity_data_todo', raise_if_not_found=False)
-        if todo:
+        # only this mechanism's review row on this cursor to avoid self-lock.
+        review_type = self.env.ref(
+            'woow_paas_platform.'
+            'mail_activity_type_billing_incident_review',
+            raise_if_not_found=False,
+        )
+        if review_type:
             self.env.cr.execute(
                 'DELETE FROM mail_activity '
                 'WHERE res_model = %s AND res_id = %s '
                 'AND activity_type_id = %s',
-                (self._name, self.id, todo.id),
+                (self._name, self.id, review_type.id),
             )
         return True
 
@@ -635,6 +677,11 @@ class BillingIncident(models.Model):
                 'Only account managers may resolve billing incidents.'
             ))
         self.check_access('write')
+        self._acquire_review_activity_lock(self.env.cr, self.id)
+        states = self._lock_and_refresh_states(
+            ('manual_check_result', 'resolution_note'))
+        if states[self.id] == 'resolved':
+            raise UserError(_('This billing incident is already resolved.'))
         manual_check_result = self.manual_check_result
         resolution_note = (self.resolution_note or '').strip()
         resolved_by_ref = self.env.user.id
@@ -647,6 +694,12 @@ class BillingIncident(models.Model):
             raise UserError(_(
                 'A resolution note describing the ECPay verification is '
                 'required.'
+            ))
+        if self._sensitive_content_category(
+                'resolution_note', resolution_note):
+            raise UserError(_(
+                'Resolution notes must contain only safe, non-sensitive '
+                'summaries.'
             ))
         return self.sudo()._transition_resolved_current_cursor(
             manual_check_result,
@@ -670,8 +723,21 @@ class BillingIncident(models.Model):
             if resolution_note is not None and not isinstance(
                     resolution_note, str):
                 _logger.error(
-                    '[BILLING_INCIDENT] _resolve rejected resolution_note type')
+                    '[BILLING_INCIDENT] _resolve rejected '
+                    'field=resolution_note category=invalid_type type=%s',
+                    type(resolution_note).__name__,
+                )
                 return False
+            if resolution_note is not None:
+                category = self._sensitive_content_category(
+                    'resolution_note', resolution_note)
+                if category:
+                    _logger.error(
+                        '[BILLING_INCIDENT] _resolve rejected sensitive '
+                        'content field=resolution_note category=%s',
+                        category,
+                    )
+                    return False
             if (resolved_by_ref is not None
                     and (not isinstance(resolved_by_ref, int)
                          or isinstance(resolved_by_ref, bool))):

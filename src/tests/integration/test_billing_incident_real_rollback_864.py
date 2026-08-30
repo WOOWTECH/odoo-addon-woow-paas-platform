@@ -22,6 +22,7 @@ from psycopg2 import errorcodes
 from psycopg2.errors import SerializationFailure
 
 from odoo import api, fields
+from odoo.exceptions import AccessError
 from odoo.modules.registry import Registry
 from odoo.tests.common import BaseCase, get_db_name, tagged
 
@@ -70,6 +71,14 @@ class TestBillingIncidentRealTransactions864(BaseCase):
             self.conflict_partner_id = conflict.id
             self.control_partner_id = control.id
             self.invoice_partner_id = invoice_partner.id
+            manager = env.ref('account.group_account_manager').users.filtered(
+                lambda user: user.id != odoo.SUPERUSER_ID
+            )[:1]
+            self.assertTrue(
+                manager,
+                'integration 前置：至少一位非 superuser account manager',
+            )
+            self.manager_user_id = manager.id
             self.move_id = move.id
 
     def _purge(self):
@@ -160,15 +169,17 @@ class TestBillingIncidentRealTransactions864(BaseCase):
             )
             cr.commit()
 
-    def _todo_count(self, incident_id):
+    def _review_activity_count(self, incident_id):
         with self.registry.cursor() as cr:
             env = api.Environment(cr, odoo.SUPERUSER_ID, {})
-            todo = env.ref('mail.mail_activity_data_todo')
+            review_type = env.ref(
+                'woow_paas_platform.'
+                'mail_activity_type_billing_incident_review')
             cr.execute(
                 'SELECT COUNT(*) FROM mail_activity '
                 'WHERE res_model = %s AND res_id = %s '
                 'AND activity_type_id = %s',
-                (_MODEL, incident_id, todo.id),
+                (_MODEL, incident_id, review_type.id),
             )
             return cr.fetchone()[0]
 
@@ -268,6 +279,43 @@ class TestBillingIncidentRealTransactions864(BaseCase):
             '%s-control-before' % self.marker,
         )
 
+    def test_two_cursor_late_manager_write_cannot_overwrite_resolution_audit(self):
+        snapshot = self._snapshot('resolved-manager-write-race')
+        incident_id = self._call_log(snapshot)
+        manager_cr = self.registry.cursor()
+        try:
+            manager_env = api.Environment(manager_cr, self.manager_user_id, {})
+            manager_record = manager_env[_MODEL].browse(incident_id)
+
+            # Cursor B resolves and commits after cursor A has been opened but
+            # before A attempts its manager write.  The write guard must lock
+            # and reread instead of trusting a stale/bare recordset.
+            self.assertEqual(
+                self._call_resolve(
+                    snapshot['external_ref'],
+                    'first committed race audit',
+                ),
+                incident_id,
+            )
+            try:
+                manager_record.write({
+                    'manual_check_result': 'ecpay_not_found',
+                    'resolution_note': 'late cursor must be rejected',
+                })
+            except AccessError:
+                manager_cr.rollback()
+            else:
+                self.fail(
+                    'late manager write unexpectedly overwrote a resolved '
+                    'incident from another cursor'
+                )
+        finally:
+            manager_cr.close()
+
+        incident = self._read_incident(snapshot['external_ref'])
+        self.assertEqual(incident[1], 'resolved')
+        self.assertEqual(incident[4], 'first committed race audit')
+
     def test_outer_partner_and_invoice_locks_do_not_block_log(self):
         snapshot = self._snapshot('unrelated-locks')
         cr = self.registry.cursor()
@@ -331,7 +379,7 @@ class TestBillingIncidentRealTransactions864(BaseCase):
             env = api.Environment(cr, odoo.SUPERUSER_ID, {})
             self.assertTrue(
                 env[_MODEL]._schedule_review_activities(incident_id))
-        self.assertGreater(self._todo_count(incident_id), 0)
+        self.assertGreater(self._review_activity_count(incident_id), 0)
 
         self.assertEqual(
             self._call_resolve(
@@ -340,7 +388,7 @@ class TestBillingIncidentRealTransactions864(BaseCase):
             ),
             incident_id,
         )
-        self.assertEqual(self._todo_count(incident_id), 0)
+        self.assertEqual(self._review_activity_count(incident_id), 0)
 
         with self.registry.cursor() as cr:
             env = api.Environment(cr, odoo.SUPERUSER_ID, {})
@@ -349,6 +397,6 @@ class TestBillingIncidentRealTransactions864(BaseCase):
                 'resolve-before-late-schedule must reread resolved state',
             )
         self.assertEqual(
-            self._todo_count(incident_id), 0,
-            'both transaction orderings must converge without stale Todo',
+            self._review_activity_count(incident_id), 0,
+            'both transaction orderings must converge without stale review',
         )

@@ -52,15 +52,25 @@ class TestBillingIncidentSchema864(TransactionCase):
             'resolved_at': 'datetime',
             'resolved_by_ref': 'integer',
         }
+        automatic_fields = {
+            'id', 'create_uid', 'write_uid', 'create_date', 'write_date',
+            'display_name', '__last_update',
+        }
+        custom_fields = set(Incident._fields) - automatic_fields
         self.assertEqual(
-            {name: Incident._fields[name].type for name in expected_types},
+            custom_fields,
+            set(expected_types),
+            'expected business field 集合必須完整；新增欄位要明確列入守線',
+        )
+        self.assertEqual(
+            {name: Incident._fields[name].type for name in custom_fields},
             expected_types,
         )
         relational = {'many2one', 'one2many', 'many2many'}
         self.assertFalse(
-            [(name, Incident._fields[name].type) for name in expected_types
+            [(name, Incident._fields[name].type) for name in custom_fields
              if Incident._fields[name].type in relational],
-            '自訂 business snapshot 欄位不可帶 relation/FK',
+            '全部自訂 business snapshot 欄位不可帶 relation/FK',
         )
 
         defaults = Incident.default_get([
@@ -74,6 +84,68 @@ class TestBillingIncidentSchema864(TransactionCase):
         self.assertEqual(defaults['occurrences'], 1)
         self.assertTrue(defaults['first_seen_at'])
         self.assertTrue(defaults['last_seen_at'])
+
+    def test_enum_selections_are_single_source_for_validators(self):
+        Incident = self.env['woow.billing.incident']
+        expected = {
+            'kind': (
+                ('intent', 'Payment intent'),
+                ('charged_not_credited', 'Charged but not credited'),
+                ('callback_tx_missing', 'Callback transaction missing'),
+                ('invoice_half_settled', 'Invoice half settled'),
+                ('bind_failed', 'Card binding failed'),
+                ('stuck_pending', 'Stuck pending payment'),
+                ('manual_invoice_stale', 'Manual invoice stale'),
+            ),
+            'state': (
+                ('open', 'Open'),
+                ('resolved', 'Resolved'),
+                ('orphan', 'Orphan'),
+                ('needs_human', 'Needs human review'),
+            ),
+            'manual_check_result': (
+                ('ecpay_found', 'Found in ECPay'),
+                ('ecpay_not_found', 'Not found in ECPay'),
+            ),
+        }
+        constants = {
+            'kind': Incident._KIND_SELECTION,
+            'state': Incident._STATE_SELECTION,
+            'manual_check_result': Incident._MANUAL_RESULT_SELECTION,
+        }
+        for field_name, expected_selection in expected.items():
+            with self.subTest(field_name=field_name):
+                self.assertEqual(constants[field_name], expected_selection)
+                self.assertEqual(
+                    tuple(Incident._fields[field_name].selection),
+                    constants[field_name],
+                )
+        self.assertEqual(
+            Incident._KINDS,
+            frozenset(key for key, _label in Incident._KIND_SELECTION),
+        )
+        self.assertEqual(
+            Incident._LOG_STATES,
+            frozenset(key for key, _label in Incident._STATE_SELECTION)
+            - {'resolved'},
+        )
+        self.assertEqual(
+            Incident._MANUAL_RESULTS,
+            frozenset(
+                key for key, _label in Incident._MANUAL_RESULT_SELECTION),
+        )
+
+    def test_review_activity_type_is_model_restricted_when_core_supports_it(self):
+        review_type = self.env.ref(
+            'woow_paas_platform.mail_activity_type_billing_incident_review')
+        supported_models = dict(
+            review_type._fields['res_model']._description_selection(self.env))
+        expected_model = (
+            'woow.billing.incident'
+            if 'woow.billing.incident' in supported_models else False
+        )
+        self.assertEqual(review_type.name, 'Billing incident review')
+        self.assertEqual(review_type.res_model, expected_model)
 
     def test_external_ref_is_database_unique(self):
         Incident = self.env['woow.billing.incident'].sudo()
@@ -259,6 +331,7 @@ class TestBillingIncidentPublicApi864(TransactionCase):
             'cvv: 123',
             'PAN=4111111111111111',
             'unlabelled 4111111111111111',
+            'MTN: 4111111111111111',
         )
         logger = 'odoo.addons.woow_paas_platform.models.billing_incident'
         for index, detail in enumerate(sensitive_details):
@@ -276,6 +349,73 @@ class TestBillingIncidentPublicApi864(TransactionCase):
         self.assertFalse(self.Incident.sudo().search([
             ('external_ref', 'like', self.ref + '-sensitive-%'),
         ]))
+
+    def test_sensitive_validator_covers_every_log_text_ingress(self):
+        logger = 'odoo.addons.woow_paas_platform.models.billing_incident'
+        marker = 'ResultData=secret-all-ingress-864'
+        for index, field_name in enumerate(sorted(
+                self.Incident._LOG_CHAR_FIELDS)):
+            with self.subTest(field_name=field_name):
+                values = self._snapshot(
+                    external_ref='%s-all-text-%s' % (self.ref, index),
+                )
+                values[field_name] = marker
+                with self.assertLogs(logger, level='ERROR') as logs:
+                    self.assertFalse(self.Incident._log(values))
+                self.assertNotIn(marker, '\n'.join(logs.output))
+        self.assertFalse(self.Incident.sudo().search([
+            ('external_ref', 'like', self.ref + '-all-text-%'),
+        ]))
+
+    def test_invalid_selection_and_datetime_never_leak_or_persist(self):
+        logger = 'odoo.addons.woow_paas_platform.models.billing_incident'
+        cases = (
+            ('kind', 'invalid-kind-4111111111111111'),
+            ('state', 'invalid-state-4111111111111111'),
+            ('next_query_at', 'invalid-date-ResultData-4111111111111111'),
+        )
+        for index, (field_name, secret_value) in enumerate(cases):
+            external_ref = '%s-invalid-%s' % (self.ref, index)
+            with self.subTest(field_name=field_name), self.assertLogs(
+                    logger, level='ERROR') as logs:
+                self.assertFalse(self.Incident._log(self._snapshot(
+                    external_ref=external_ref,
+                    **{field_name: secret_value},
+                )))
+            self.assertNotIn(
+                secret_value,
+                '\n'.join(logs.output),
+                '非法輸入 log 只能記 field/category/type，不得回印原值',
+            )
+            self.assertFalse(self.Incident.sudo().search([
+                ('external_ref', '=', external_ref),
+            ]))
+
+    def test_dedicated_references_allow_pan_coincidence_but_not_markers(self):
+        external_ref = 'MTN: 4111111111111111-%s' % self.ref
+        incident_id = self.Incident._log(self._snapshot(
+            external_ref=external_ref,
+            trade_no='4111111111111111',
+            detail='safe reconciliation summary without card data',
+        ))
+        self.assertIsInstance(incident_id, int)
+        self.assertEqual(self._read(incident_id)['trade_no'], '4111111111111111')
+
+    def test_resolve_rejects_sensitive_note_without_leak_or_db_change(self):
+        incident_id = self.Incident._log(self._snapshot(state='needs_human'))
+        secret_note = 'MTN: 4111111111111111'
+        logger = 'odoo.addons.woow_paas_platform.models.billing_incident'
+        with self.assertLogs(logger, level='ERROR') as logs:
+            self.assertFalse(self.Incident._resolve(
+                self.ref,
+                resolution_note=secret_note,
+                resolved_by_ref=99,
+            ))
+        self.assertNotIn(secret_note, '\n'.join(logs.output))
+        incident = self._read(incident_id)
+        self.assertEqual(incident['state'], 'needs_human')
+        self.assertFalse(incident['resolution_note'])
+        self.assertFalse(incident['resolved_at'])
 
     def test_log_kind_mismatch_is_fail_soft_and_keeps_original(self):
         incident_id = self.Incident._log(self._snapshot())
@@ -344,16 +484,22 @@ class TestBillingIncidentPublicApi864(TransactionCase):
             )
             return [row[0] for row in cr.fetchall()]
 
-    def _insert_other_activity(self, incident_id):
+    def _set_incident_state(self, incident_id, state):
+        with self.env.registry.cursor() as cr:
+            cr.execute(
+                'UPDATE woow_billing_incident SET state = %s WHERE id = %s',
+                (state, incident_id),
+            )
+            cr.commit()
+
+    def _insert_activity(self, incident_id, activity_type_xmlid,
+                         summary='Unrelated activity'):
         with self.env.registry.cursor() as cr:
             env = self.env(cr=cr)
-            todo = env.ref('mail.mail_activity_data_todo')
-            other_type = env['mail.activity.type'].search([
-                ('id', '!=', todo.id),
-            ], limit=1)
+            activity_type = env.ref(activity_type_xmlid)
             manager = self._account_manager_users_for_test(env)[:1]
             model = env['ir.model']._get('woow.billing.incident')
-            self.assertTrue(other_type and manager and model)
+            self.assertTrue(activity_type and manager and model)
             cr.execute(
                 'INSERT INTO mail_activity '
                 '(res_model_id, res_model, res_id, res_name, '
@@ -364,16 +510,71 @@ class TestBillingIncidentPublicApi864(TransactionCase):
                 'false, true, %s, %s, NOW(), NOW())',
                 (
                     model.id, 'woow.billing.incident', incident_id,
-                    'other activity', other_type.id, manager.id,
-                    'Unrelated activity', 'Must survive Todo cleanup',
+                    'other activity', activity_type.id, manager.id,
+                    summary, 'Must survive billing review cleanup',
                     1, 1,
                 ),
             )
             cr.commit()
-            return other_type.id
+            return activity_type.id
+
+    def _insert_other_activity(self, incident_id):
+        return self._insert_activity(
+            incident_id, 'mail.mail_activity_data_call')
 
     def _account_manager_users_for_test(self, env):
         return env.ref('account.group_account_manager').users
+
+    def test_generic_todo_does_not_suppress_dedicated_review_activity(self):
+        incident_id = self.Incident._log(self._snapshot(
+            external_ref=self.ref + '-generic-does-not-dedupe',
+        ))
+        self._set_incident_state(incident_id, 'needs_human')
+        todo_id = self._insert_activity(
+            incident_id,
+            'mail.mail_activity_data_todo',
+            summary='Generic Todo must not suppress billing review',
+        )
+        self.assertTrue(self.Incident._schedule_review_activities(incident_id))
+
+        review_type = self.env.ref(
+            'woow_paas_platform.mail_activity_type_billing_incident_review')
+        activity_type_ids = self._activity_type_ids(incident_id)
+        self.assertEqual(activity_type_ids.count(todo_id), 1)
+        self.assertEqual(
+            activity_type_ids.count(review_type.id),
+            len(self._account_manager_users_for_test(self.env)),
+            'dedupe provenance 必須靠 dedicated type，不可被 generic Todo 抑制',
+        )
+
+    def test_resolve_deletes_dedicated_review_but_keeps_generic_todo(self):
+        external_ref = self.ref + '-generic-survives-resolve'
+        incident_id = self.Incident._log(self._snapshot(
+            external_ref=external_ref,
+        ))
+        self._set_incident_state(incident_id, 'needs_human')
+        todo_id = self._insert_activity(
+            incident_id,
+            'mail.mail_activity_data_todo',
+            summary='Generic Todo must survive billing review cleanup',
+        )
+        self.assertTrue(self.Incident._schedule_review_activities(incident_id))
+        review_type = self.env.ref(
+            'woow_paas_platform.mail_activity_type_billing_incident_review')
+        self.assertIn(review_type.id, self._activity_type_ids(incident_id))
+
+        self.assertEqual(
+            self.Incident._resolve(
+                external_ref,
+                resolution_note='dedicated activity cleanup probe',
+            ),
+            incident_id,
+        )
+        self.assertEqual(
+            self._activity_type_ids(incident_id),
+            [todo_id],
+            'resolve 不得刪 generic Todo，只能刪 dedicated review activity',
+        )
 
     def test_needs_human_activity_is_per_manager_deduplicated_and_resolved(self):
         manager_ids = self.env.ref(
@@ -390,7 +591,7 @@ class TestBillingIncidentPublicApi864(TransactionCase):
         self.Incident._log(self._snapshot(state='needs_human'))
         self.assertEqual(
             self._activity_user_ids(incident_id), sorted(manager_ids),
-            '同 incident/user 的 Todo 不得因 duplicate _log 重建',
+            '同 incident/user 的 review activity 不得因 duplicate _log 重建',
         )
         other_ref = self.ref + '-other'
         other_id = self.Incident._log(self._snapshot(
@@ -418,9 +619,10 @@ class TestBillingIncidentPublicApi864(TransactionCase):
 
     def test_resolve_cleanup_keeps_non_todo_activity_on_same_incident(self):
         incident_id = self.Incident._log(self._snapshot(state='needs_human'))
-        todo_id = self.env.ref('mail.mail_activity_data_todo').id
+        review_type_id = self.env.ref(
+            'woow_paas_platform.mail_activity_type_billing_incident_review').id
         other_type_id = self._insert_other_activity(incident_id)
-        self.assertIn(todo_id, self._activity_type_ids(incident_id))
+        self.assertIn(review_type_id, self._activity_type_ids(incident_id))
         self.assertIn(other_type_id, self._activity_type_ids(incident_id))
 
         self.assertEqual(
@@ -432,7 +634,7 @@ class TestBillingIncidentPublicApi864(TransactionCase):
         )
         self.assertEqual(
             self._activity_type_ids(incident_id), [other_type_id],
-            'resolve 只能刪本機制建立的 Todo，不得刪其他 activity type',
+            'resolve 只能刪 dedicated review，不得刪其他 activity type',
         )
 
     def test_activity_html_escapes_untrusted_reference_and_plain_text_outputs(self):
@@ -644,18 +846,29 @@ class TestBillingIncidentAdminBackend864(TransactionCase):
         self.assertEqual(record.resolution_note, first_note)
         self.assertEqual(record.resolved_at, first_resolved_at)
 
+    def test_manual_resolution_button_rejects_sensitive_sudo_seeded_note(self):
+        record = self.incident.with_user(self.manager)
+        self.incident.sudo().write({
+            'manual_check_result': 'ecpay_found',
+            'resolution_note': 'ResultData=forbidden-button-payload-864',
+        })
+        with self.assertRaises(UserError):
+            record.action_mark_manually_resolved()
+        self.incident.invalidate_recordset()
+        self.assertEqual(self.incident.state, 'needs_human')
+        self.assertFalse(self.incident.resolved_at)
+
     def test_manual_resolution_keeps_other_activity_type(self):
         record = self.incident.with_user(self.manager)
         record.write({
             'manual_check_result': 'ecpay_not_found',
             'resolution_note': 'current-cursor Todo-only cleanup',
         })
-        todo = self.env.ref('mail.mail_activity_data_todo')
-        other_type = self.env['mail.activity.type'].search([
-            ('id', '!=', todo.id),
-        ], limit=1)
+        review_type = self.env.ref(
+            'woow_paas_platform.mail_activity_type_billing_incident_review')
+        other_type = self.env.ref('mail.mail_activity_data_call')
         model = self.env['ir.model']._get('woow.billing.incident')
-        for activity_type in (todo, other_type):
+        for activity_type in (review_type, other_type):
             self.env.cr.execute(
                 'INSERT INTO mail_activity '
                 '(res_model_id, res_model, res_id, res_name, '
@@ -680,19 +893,92 @@ class TestBillingIncidentAdminBackend864(TransactionCase):
         )
         self.assertEqual(
             [row[0] for row in self.env.cr.fetchall()], [other_type.id],
-            'current-cursor transition 也只能刪本機制 Todo',
+            'current-cursor transition 也只能刪 dedicated review activity',
         )
 
-    def test_billing_incident_view_sources_and_zh_tw_translations(self):
-        form_arch = etree.fromstring(self.env.ref(
-            'woow_paas_platform.view_billing_incident_form').arch.encode())
-        source = etree.tostring(form_arch, encoding='unicode')
-        self.assertIsNone(
-            re.search(r'[\u3400-\u9fff]', source),
-            'view source 必須是英文；繁中只能放在 zh_TW.po',
+    def test_all_billing_incident_user_visible_sources_have_zh_tw(self):
+        module_root = Path(__file__).resolve().parents[1]
+        model_path = module_root / 'models' / 'billing_incident.py'
+        view_path = module_root / 'views' / 'billing_incident_views.xml'
+        po_path = module_root / 'i18n' / 'zh_TW.po'
+        Incident = self.env['woow.billing.incident']
+
+        required_msgids = {Incident._description}
+        automatic_fields = {
+            'id', 'create_uid', 'write_uid', 'create_date', 'write_date',
+            'display_name', '__last_update',
+        }
+        for field_name in set(Incident._fields) - automatic_fields:
+            field = Incident._fields[field_name]
+            required_msgids.add(field.string)
+            if field.help:
+                required_msgids.add(field.help)
+            if field.type == 'selection':
+                selection = field._description_selection(self.env)
+                required_msgids.update(label for _key, label in selection)
+        required_msgids.update(
+            constraint[2] for constraint in Incident._sql_constraints)
+
+        model_tree = ast.parse(model_path.read_text())
+        for node in ast.walk(model_tree):
+            if (isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Name)
+                    and node.func.id == '_'
+                    and node.args
+                    and isinstance(node.args[0], ast.Constant)
+                    and isinstance(node.args[0].value, str)):
+                required_msgids.add(node.args[0].value)
+
+        view_tree = etree.parse(str(view_path))
+        for view_record in view_tree.xpath(
+                "//record[@model='ir.ui.view']"):
+            for arch in view_record.xpath("./field[@name='arch']/*"):
+                for element in arch.iter():
+                    if element.get('string'):
+                        required_msgids.add(element.get('string'))
+                    if element.text and element.text.strip():
+                        required_msgids.add(' '.join(element.text.split()))
+        for record_model in ('mail.activity.type', 'ir.actions.act_window'):
+            required_msgids.update(
+                ' '.join(node.text.split())
+                for node in view_tree.xpath(
+                    "//record[@model='%s']/field[@name='name']" % record_model)
+                if node.text and node.text.strip()
+            )
+        required_msgids.update(
+            node.get('name') for node in view_tree.xpath('//menuitem')
+            if node.get('name')
+        )
+        required_msgids.discard(None)
+        required_msgids.discard('')
+        self.assertFalse(
+            sorted(msgid for msgid in required_msgids
+                   if re.search(r'[\u3400-\u9fff]', msgid)),
+            'billing incident translatable source 必須保持 English msgid',
+        )
+        self.assertGreaterEqual(
+            len(required_msgids), 70,
+            'billing incident i18n 枚舉異常縮水，可能漏掃 source 類別',
         )
 
-        expected = {
+        po_entries = {
+            entry.msgid: entry
+            for entry in polib.pofile(str(po_path))
+            if not entry.obsolete
+        }
+        missing = sorted(
+            msgid for msgid in required_msgids
+            if (msgid not in po_entries
+                or not po_entries[msgid].msgstr.strip()
+                or 'fuzzy' in po_entries[msgid].flags)
+        )
+        self.assertFalse(
+            missing,
+            '所有 billing incident user-visible source 都需非空 zh_TW：%r'
+            % missing,
+        )
+
+        exact_translations = {
             'Mark as manually resolved': '人工已處理',
             (
                 'The top-up record may have been rolled back; not finding it '
@@ -709,23 +995,8 @@ class TestBillingIncidentAdminBackend864(TransactionCase):
                 '都可刻意跨公司讀取全部 incident。'
             ),
         }
-        button = form_arch.xpath(
-            "//button[@name='action_mark_manually_resolved']")[0]
-        self.assertEqual(button.get('string'), 'Mark as manually resolved')
-        form_text = ' '.join(''.join(form_arch.itertext()).split())
-        for msgid in expected:
-            if msgid != 'Mark as manually resolved':
-                self.assertIn(msgid, form_text)
-
-        po_path = Path(__file__).resolve().parents[1] / 'i18n' / 'zh_TW.po'
-        translations = {
-            entry.msgid: entry.msgstr for entry in polib.pofile(str(po_path))
-        }
-        for msgid, msgstr in expected.items():
-            self.assertEqual(
-                translations.get(msgid), msgstr,
-                'zh_TW.po 缺精確翻譯：%s' % msgid,
-            )
+        for msgid, msgstr in exact_translations.items():
+            self.assertEqual(po_entries[msgid].msgstr, msgstr)
 
     def test_backend_views_action_and_menu_are_manager_only_readonly_snapshot(self):
         manager_group = self.env.ref('account.group_account_manager')
@@ -873,10 +1144,16 @@ class TestBillingIncidentRpcWriteGuard864(HttpCase):
         name = result['error'].get('data', {}).get('name', '')
         self.assertIn('AccessError', name, '%s（回 %r）' % (message, result))
 
+    def _assert_user_error(self, result, message):
+        self.assertIn('error', result, '%s（回 %r）' % (message, result))
+        name = result['error'].get('data', {}).get('name', '')
+        self.assertIn('UserError', name, '%s（回 %r）' % (message, result))
+
     def _audit_snapshot(self, incident):
         incident.invalidate_recordset()
         return incident.read([
             'external_ref', 'kind', 'state', 'trade_no', 'detail',
+            'manual_check_result', 'resolution_note',
             'resolved_at', 'resolved_by_ref',
         ])[0]
 
@@ -932,6 +1209,88 @@ class TestBillingIncidentRpcWriteGuard864(HttpCase):
             [[self.incident_a.id], ['external_ref']],
         )
         self._assert_access_error(denied, '非 account manager 不得讀 incident')
+
+    def test_manager_rpc_rejects_sensitive_resolution_note_atomically(self):
+        self.authenticate(self.manager_a_login, self.manager_a_login)
+        before = self._audit_snapshot(self.incident_a)
+        for note in (
+                'MTN: 4111111111111111',
+                'ResultData=forbidden-rpc-payload-864'):
+            with self.subTest(note=note):
+                denied = self._call_kw(
+                    'woow.billing.incident',
+                    'write',
+                    [[self.incident_a.id], {'resolution_note': note}],
+                )
+                self._assert_user_error(
+                    denied,
+                    'RPC resolution_note 必須套用共用 sensitive validator',
+                )
+                self.assertEqual(self._audit_snapshot(self.incident_a), before)
+
+    def test_resolved_incident_rejects_every_rpc_write_and_keeps_first_audit(self):
+        self.authenticate(self.manager_a_login, self.manager_a_login)
+        self.assertTrue(self._assert_ok(
+            self._call_kw(
+                'woow.billing.incident',
+                'write',
+                [[self.incident_a.id], {
+                    'manual_check_result': 'ecpay_found',
+                    'resolution_note': 'first RPC resolution audit',
+                }],
+            ),
+            'account manager 應可先保存 unresolved 人工查證',
+        ))
+        self.assertTrue(self._assert_ok(
+            self._call_kw(
+                'woow.billing.incident',
+                'action_mark_manually_resolved',
+                [[self.incident_a.id]],
+            ),
+            'account manager 應可透過真 RPC 受控關單',
+        ))
+        first_audit = self._audit_snapshot(self.incident_a)
+        self.assertEqual(first_audit['state'], 'resolved')
+
+        forbidden_writes = (
+            {'manual_check_result': 'ecpay_not_found'},
+            {'resolution_note': 'late RPC audit overwrite'},
+            {'state': 'open'},
+            {'detail': 'late forged evidence'},
+        )
+        for values in forbidden_writes:
+            with self.subTest(values=values):
+                denied = self._call_kw(
+                    'woow.billing.incident',
+                    'write',
+                    [[self.incident_a.id], values],
+                )
+                self._assert_access_error(
+                    denied,
+                    'resolved incident 的人工欄、state、evidence 一律 immutable',
+                )
+                self.assertEqual(
+                    self._audit_snapshot(self.incident_a), first_audit,
+                    '拒絕後必須完整保留 first resolution audit',
+                )
+
+        unresolved_before = self._audit_snapshot(self.incident_b)
+        denied = self._call_kw(
+            'woow.billing.incident',
+            'write',
+            [[self.incident_a.id, self.incident_b.id], {
+                'resolution_note': 'batch write must be atomic',
+            }],
+        )
+        self._assert_access_error(
+            denied,
+            'recordset 任一 resolved 時必須拒絕整批 manager write',
+        )
+        self.assertEqual(self._audit_snapshot(self.incident_a), first_audit)
+        self.assertEqual(
+            self._audit_snapshot(self.incident_b), unresolved_before,
+            '整批拒絕不得局部修改 unresolved row',
+        )
 
     def test_two_company_limited_managers_read_global_ledger_by_design(self):
         incident_ids = [self.incident_a.id, self.incident_b.id]

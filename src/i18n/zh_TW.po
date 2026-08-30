@@ -1426,9 +1426,10 @@ msgstr ""
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/PayInvoiceModal.xml:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/billing/InvoiceDetailPage.xml:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/billing/InvoiceListPage.xml:0
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_billing_incident__amount
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_wallet_topup__amount
 msgid "Amount"
-msgstr ""
+msgstr "金額"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -2010,9 +2011,10 @@ msgid "Bold (Ctrl+B)"
 msgstr ""
 
 #. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_billing_incident__bonus
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_wallet_topup__bonus
 msgid "Bonus"
-msgstr ""
+msgstr "贈送點數"
 
 #. module: woow_paas_platform
 #: model:ir.model.fields,field_description:woow_paas_platform.field_wallet_transaction__bonus_amount
@@ -3713,10 +3715,11 @@ msgstr "點數儲值尚未開放。"
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/AddFundsModal.xml:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/billing/TopupStorePage.xml:0
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_billing_incident__credits
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_topup_plan__credits
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_wallet_topup__credits
 msgid "Credits"
-msgstr ""
+msgstr "點數"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -3731,9 +3734,10 @@ msgid "Credits Left"
 msgstr "剩餘點數"
 
 #. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_billing_incident__currency
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_wallet_topup__currency_id
 msgid "Currency"
-msgstr ""
+msgstr "幣別"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -5415,9 +5419,10 @@ msgid "Failed to update the task stage. Please try again."
 msgstr "更新任務階段失敗，請重試。"
 
 #. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_billing_incident__failure_code
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_wallet_topup__failure_code
 msgid "Failure Code"
-msgstr ""
+msgstr "失敗代碼"
 
 #. module: woow_paas_platform
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_wallet_topup__failure_message
@@ -5633,9 +5638,10 @@ msgstr ""
 
 #. module: woow_paas_platform
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_agent_template_search
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_billing_incident_search
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_skill_search
 msgid "Group By"
-msgstr ""
+msgstr "分組依據"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -6827,7 +6833,9 @@ msgid "Keep Subscription"
 msgstr ""
 
 #. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_billing_incident__kind
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_reconcile_report__kind
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_billing_incident_search
 msgid "Kind"
 msgstr "類別"
 
@@ -12145,6 +12153,7 @@ msgstr "AI 啟動中…（首次啟動需數十秒）"
 #. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.xml:0
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_billing_incident__state
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_agent_session__state
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_agent_template__state
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_service__state
@@ -12155,9 +12164,10 @@ msgstr "AI 啟動中…（首次啟動需數十秒）"
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_workspace__state
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_wallet_topup__state
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_agent_template_search
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_billing_incident_search
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_skill_search
 msgid "State"
-msgstr ""
+msgstr "狀態"
 
 #. module: woow_paas_platform
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_mcp_server__state_message
@@ -17017,3 +17027,342 @@ msgid ""
 msgstr ""
 "帳務 incident 是全域財務帳本；所有 account manager 都可刻意跨公司讀取全部 "
 "incident。"
+
+#. module: woow_paas_platform
+#: code:addons/woow_paas_platform/models/billing_incident.py:0
+msgid "A resolution note describing the ECPay verification is required."
+msgstr "必須填寫描述 ECPay 查證的處理註記。"
+
+#. module: woow_paas_platform
+#: code:addons/woow_paas_platform/models/billing_incident.py:0
+msgid ""
+"Account managers may update only the manual verification result and "
+"resolution note."
+msgstr "account manager 僅可更新人工查證結果與處理註記。"
+
+#. module: woow_paas_platform
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_billing_incident_form
+msgid "Amounts and source"
+msgstr "金額與來源"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_billing_incident__assessment_reason
+msgid "Assessment Reason"
+msgstr "評估原因"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_billing_incident__attempts
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_billing_incident_form
+msgid "Attempts"
+msgstr "嘗試次數"
+
+#. module: woow_paas_platform
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_billing_incident_form
+msgid "Billing Incident"
+msgstr "帳務事件"
+
+#. module: woow_paas_platform
+#: model:ir.actions.act_window,name:woow_paas_platform.action_billing_incident
+#: model:ir.ui.menu,name:woow_paas_platform.menu_billing_incidents
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_billing_incident_list
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_billing_incident_search
+msgid "Billing Incidents"
+msgstr "帳務事件"
+
+#. module: woow_paas_platform
+#: code:addons/woow_paas_platform/models/billing_incident.py:0
+msgid ""
+"Billing incident %(external_ref)s (%(kind)s) requires an ECPay verification "
+"and an explicit resolution note."
+msgstr "帳務事件 %(external_ref)s（%(kind)s）需要 ECPay 查證及明確的處理註記。"
+
+#. module: woow_paas_platform
+#: model:ir.model.constraint,message:woow_paas_platform.constraint_woow_billing_incident_counters_nonnegative
+msgid "Billing incident counters must be non-negative."
+msgstr "帳務事件計數器不得為負數。"
+
+#. module: woow_paas_platform
+#: model:ir.model.constraint,message:woow_paas_platform.constraint_woow_billing_incident_external_ref_uniq
+msgid "Billing incident external reference must be unique."
+msgstr "帳務事件的外部參考必須唯一。"
+
+#. module: woow_paas_platform
+#: model:ir.model.constraint,message:woow_paas_platform.constraint_woow_billing_incident_seen_at_order
+msgid "Billing incident first seen time cannot be after last seen time."
+msgstr "帳務事件的首次發現時間不得晚於最後發現時間。"
+
+#. module: woow_paas_platform
+#: model:ir.model.constraint,message:woow_paas_platform.constraint_woow_billing_incident_occurrences_positive
+msgid "Billing incident occurrences must be at least one."
+msgstr "帳務事件的發生次數必須至少為一。"
+
+#. module: woow_paas_platform
+#: code:addons/woow_paas_platform/models/billing_incident.py:0
+msgid "Billing incident requires manual review"
+msgstr "帳務事件需要人工檢查"
+
+#. module: woow_paas_platform
+#: model:mail.activity.type,name:woow_paas_platform.mail_activity_type_billing_incident_review
+msgid "Billing incident review"
+msgstr "帳務事件檢查"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_billing_incident__kind__callback_tx_missing
+msgid "Callback transaction missing"
+msgstr "Callback 交易不存在"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_billing_incident__kind__bind_failed
+msgid "Card binding failed"
+msgstr "綁卡失敗"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_billing_incident__kind__charged_not_credited
+msgid "Charged but not credited"
+msgstr "已扣款但未入點"
+
+#. module: woow_paas_platform
+#: code:addons/woow_paas_platform/models/billing_incident.py:0
+msgid ""
+"Choose whether the MerchantTradeNo was found in ECPay before resolving this "
+"incident."
+msgstr "處理此事件前，請選擇是否在 ECPay 找到 MerchantTradeNo。"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_billing_incident__detail
+msgid "Detail"
+msgstr "詳細摘要"
+
+#. module: woow_paas_platform
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_billing_incident_form
+msgid "Evidence"
+msgstr "稽核證據"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_billing_incident__external_ref
+msgid "External Ref"
+msgstr "外部參考"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_billing_incident__first_seen_at
+msgid "First Seen At"
+msgstr "首次發現時間"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_billing_incident__manual_check_result__ecpay_found
+msgid "Found in ECPay"
+msgstr "在 ECPay 找到"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_billing_incident__kind__invoice_half_settled
+msgid "Invoice half settled"
+msgstr "發票僅完成部分結算"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_billing_incident__last_seen_at
+msgid "Last Seen At"
+msgstr "最後發現時間"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_billing_incident__last_skipped_at
+msgid "Last Skipped At"
+msgstr "最後略過時間"
+
+#. module: woow_paas_platform
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_billing_incident_form
+msgid "Latest detail"
+msgstr "最新摘要"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_billing_incident__manual_check_result
+msgid "Manual Check Result"
+msgstr "人工查證結果"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_billing_incident__kind__manual_invoice_stale
+msgid "Manual invoice stale"
+msgstr "手動發票狀態過期"
+
+#. module: woow_paas_platform
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_billing_incident_form
+msgid "Manual verification"
+msgstr "人工查證"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_billing_incident__state__needs_human
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_billing_incident_search
+msgid "Needs human review"
+msgstr "需要人工檢查"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_billing_incident__next_query_at
+msgid "Next Query At"
+msgstr "下次查詢時間"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_billing_incident__manual_check_result__ecpay_not_found
+msgid "Not found in ECPay"
+msgstr "未在 ECPay 找到"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_billing_incident__occurrences
+msgid "Occurrences"
+msgstr "發生次數"
+
+#. module: woow_paas_platform
+#: code:addons/woow_paas_platform/models/billing_incident.py:0
+msgid "Only account managers may resolve billing incidents."
+msgstr "只有 account manager 可以處理帳務事件。"
+
+#. module: woow_paas_platform
+#: code:addons/woow_paas_platform/models/billing_incident.py:0
+msgid "Only account managers may update billing incidents."
+msgstr "只有 account manager 可以更新帳務事件。"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_billing_incident__state__open
+msgid "Open"
+msgstr "未處理"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_billing_incident__state__orphan
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_billing_incident_search
+msgid "Orphan"
+msgstr "孤兒事件"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_billing_incident__partner_email
+msgid "Partner Email"
+msgstr "客戶 Email"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_billing_incident__partner_ref
+msgid "Partner Ref"
+msgstr "客戶參考"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_billing_incident__payment_token_ref
+msgid "Payment Token Ref"
+msgstr "付款 Token 參考"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,help:woow_paas_platform.field_woow_billing_incident__external_ref
+msgid ""
+"Payment incidents store the raw ECPay MerchantTradeNo. Non-payment callers "
+"must use a namespaced key such as `invoice:<stable-reference>`. Billing "
+"incidents are a global finance ledger: every account manager can read every "
+"incident across companies by design."
+msgstr ""
+"付款事件保存原始 ECPay MerchantTradeNo。非付款 caller 必須使用具 namespace 的 key，例如 "
+"`invoice:<stable-reference>`。帳務事件是全域財務帳本：所有 account manager 都可刻意跨公司讀取全部事件。"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_billing_incident__kind__intent
+msgid "Payment intent"
+msgstr "付款意圖"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_billing_incident__query_attempts
+msgid "Query Attempts"
+msgstr "查詢嘗試次數"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_billing_incident__resolution_note
+msgid "Resolution Note"
+msgstr "處理註記"
+
+#. module: woow_paas_platform
+#: code:addons/woow_paas_platform/models/billing_incident.py:0
+msgid "Resolution notes must contain only safe, non-sensitive summaries."
+msgstr "處理註記只能包含安全且不具敏感資訊的摘要。"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_billing_incident__state__resolved
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_billing_incident_search
+msgid "Resolved"
+msgstr "已處理"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_billing_incident__resolved_at
+msgid "Resolved At"
+msgstr "處理時間"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_billing_incident__resolved_by_ref
+msgid "Resolved By Ref"
+msgstr "處理者參考"
+
+#. module: woow_paas_platform
+#: code:addons/woow_paas_platform/models/billing_incident.py:0
+msgid "Resolved billing incidents are immutable."
+msgstr "已處理的帳務事件不可變更。"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_billing_incident__rtn_code
+msgid "Rtn Code"
+msgstr "回傳代碼"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,help:woow_paas_platform.field_woow_billing_incident__source_model
+msgid "Scalar source model name only; this is not an ORM relation."
+msgstr "僅保存純量來源 model 名稱；這不是 ORM relation。"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,help:woow_paas_platform.field_woow_billing_incident__source_ref
+msgid "Scalar source row id which may legitimately dangle after rollback."
+msgstr "純量來源資料列 ID；交易回捲後允許其指向不存在的資料列。"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_billing_incident__skip_count
+msgid "Skip Count"
+msgstr "略過次數"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_billing_incident__skip_reason
+msgid "Skip Reason"
+msgstr "略過原因"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_billing_incident__source_model
+msgid "Source Model"
+msgstr "來源 Model"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_billing_incident__source_ref
+msgid "Source Ref"
+msgstr "來源參考"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_billing_incident__kind__stuck_pending
+msgid "Stuck pending payment"
+msgstr "卡在待處理狀態的付款"
+
+#. module: woow_paas_platform
+#: code:addons/woow_paas_platform/models/billing_incident.py:0
+msgid "This billing incident is already resolved."
+msgstr "此帳務事件已處理。"
+
+#. module: woow_paas_platform
+#: code:addons/woow_paas_platform/models/billing_incident.py:0
+msgid "This billing incident no longer exists."
+msgstr "此帳務事件已不存在。"
+
+#. module: woow_paas_platform
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_billing_incident_form
+msgid "Timeline"
+msgstr "時間軸"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_billing_incident__trade_no
+msgid "Trade No"
+msgstr "交易編號"
+
+#. module: woow_paas_platform
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_billing_incident_search
+msgid "Unresolved"
+msgstr "未處理"
+
+#. module: woow_paas_platform
+#: model:ir.model,name:woow_paas_platform.model_woow_billing_incident
+msgid "Woow Billing Incident"
+msgstr "Woow 帳務事件"
