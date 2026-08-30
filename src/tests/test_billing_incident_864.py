@@ -1,6 +1,7 @@
 """#864 PR-D：帳務 incident 地基的 public model／後台行為守線。"""
 
 import ast
+import base64
 import json
 import re
 import uuid
@@ -449,6 +450,31 @@ class TestBillingIncidentPublicApi864(TransactionCase):
             ('external_ref', 'like', self.ref + '-sensitive-%'),
         ]))
 
+    def test_pci_validator_canonicalizes_html_unicode_and_sad_markers(self):
+        sensitive_details = (
+            'unlabelled 4111<span>1111</span><span>1111</span><span>1111</span>',
+            'unlabelled 4111.1111.1111.1111',
+            'unlabelled 4111&#46;1111&#46;1111&#46;1111',
+            'unlabelled 4111\u200b1111\u200b1111\u200b1111',
+            'unlabelled ４１１１．１１１１．１１１１．１１１１',
+            '<b>PIN</b> block=forbidden-authentication-data',
+            'track1 data=forbidden-authentication-data',
+            'track 2 data=forbidden-authentication-data',
+            'magnetic stripe data=forbidden-authentication-data',
+        )
+        logger = 'odoo.addons.woow_paas_platform.models.billing_incident'
+        for index, detail in enumerate(sensitive_details):
+            with self.subTest(detail=detail), self.assertLogs(
+                    logger, level='ERROR') as logs:
+                self.assertFalse(self.Incident._log(self._snapshot(
+                    external_ref='%s-canonical-pci-%s' % (self.ref, index),
+                    detail=detail,
+                )))
+            self.assertNotIn(detail, '\n'.join(logs.output))
+        self.assertFalse(self.Incident.sudo().search([
+            ('external_ref', 'like', self.ref + '-canonical-pci-%'),
+        ]))
+
     def test_sensitive_validator_covers_every_log_text_ingress(self):
         logger = 'odoo.addons.woow_paas_platform.models.billing_incident'
         marker = 'ResultData=secret-all-ingress-864'
@@ -754,15 +780,21 @@ class TestBillingIncidentPublicApi864(TransactionCase):
             manager = self._account_manager_users_for_test(env)[:1]
             model = env['ir.model']._get('woow.billing.incident')
             self.assertTrue(activity_type and manager and model)
-            env['mail.activity'].sudo().create({
-                'res_model_id': model.id,
-                'res_id': incident_id,
-                'activity_type_id': activity_type.id,
-                'user_id': manager.id,
-                'summary': summary,
-                'note': 'Must survive billing review cleanup',
-                'date_deadline': fields.Date.today(),
-            })
+            cr.execute(
+                'INSERT INTO mail_activity '
+                '(res_model_id, res_model, res_id, res_name, '
+                'activity_type_id, user_id, summary, note, date_deadline, '
+                'automated, active, create_uid, write_uid, create_date, '
+                'write_date) VALUES '
+                '(%s, %s, %s, %s, %s, %s, %s, %s, CURRENT_DATE, '
+                'false, true, %s, %s, NOW(), NOW())',
+                (
+                    model.id, 'woow.billing.incident', incident_id,
+                    'legacy generic activity', activity_type.id, manager.id,
+                    summary, 'Must survive billing review cleanup',
+                    env.uid, env.uid,
+                ),
+            )
             cr.commit()
             return activity_type.id
 
@@ -826,12 +858,22 @@ class TestBillingIncidentPublicApi864(TransactionCase):
                     'needs_human',
                     'standard activity done 只完成待辦，不得關閉 incident',
                 )
-                self.assertTrue(env['mail.activity'].sudo().search([
-                    ('res_model', '=', 'woow.billing.incident'),
-                    ('res_id', '=', incident_id),
-                    ('activity_type_id', '=', review_type.id),
-                    ('active', '=', True),
-                ]), 'done 同一 transaction 結束前必須重建 active alert')
+                expected_manager_ids = sorted(
+                    self._account_manager_users_for_test(env).ids)
+                active_user_ids = [
+                    row.user_id.id
+                    for row in env['mail.activity'].sudo().search([
+                        ('res_model', '=', 'woow.billing.incident'),
+                        ('res_id', '=', incident_id),
+                        ('activity_type_id', '=', review_type.id),
+                        ('active', '=', True),
+                    ], order='user_id')
+                ]
+                self.assertEqual(
+                    active_user_ids,
+                    expected_manager_ids,
+                    'done 同一 transaction 結束前必須每位 manager 恰一筆 active alert',
+                )
                 cr.commit()
             self.assertGreater(calls['unlink'], 0)
 
@@ -842,9 +884,10 @@ class TestBillingIncidentPublicApi864(TransactionCase):
                 )),
                 incident_id,
             )
-        self.assertTrue(
+        self.assertEqual(
             self._activity_user_ids(incident_id, active=True),
-            'done 必須立即重建；duplicate observation 只能 dedupe',
+            sorted(self._account_manager_users_for_test(self.env).ids),
+            'done 必須立即重建每位 manager 恰一筆；duplicate observation 只能 dedupe',
         )
         self.assertEqual(self._read(incident_id)['state'], 'needs_human')
 
@@ -880,14 +923,90 @@ class TestBillingIncidentPublicApi864(TransactionCase):
             self.assertTrue(activity.exists())
             self.assertTrue(activity.active)
 
+            completed_user_id = activity.user_id.id
             self.assertTrue(activity.action_done())
-            self.assertTrue(env['mail.activity'].sudo().search([
+            active_for_completed_user = env['mail.activity'].sudo().search_count([
+                ('res_model', '=', 'woow.billing.incident'),
+                ('res_id', '=', incident_id),
+                ('activity_type_id', '=', review_type.id),
+                ('user_id', '=', completed_user_id),
+                ('active', '=', True),
+            ])
+            self.assertEqual(
+                active_for_completed_user,
+                1,
+                'legal core activity-done must re-alert completed user exactly once',
+            )
+            cr.commit()
+
+    def test_activity_done_rejects_attachments_html_pan_and_cvc(self):
+        incident_id = self.Incident._log(self._snapshot(
+            external_ref=self.ref + '-activity-done-ingress',
+            state='needs_human',
+        ))
+        with self.env.registry.cursor() as cr:
+            env = self.env(cr=cr)
+            incident = env['woow.billing.incident'].sudo().browse(incident_id)
+            review_type = env.ref(
+                'woow_paas_platform.'
+                'mail_activity_type_billing_incident_review')
+            activity = env['mail.activity'].sudo().search([
                 ('res_model', '=', 'woow.billing.incident'),
                 ('res_id', '=', incident_id),
                 ('activity_type_id', '=', review_type.id),
                 ('active', '=', True),
-            ]), 'legal core activity-done chatter must succeed and re-alert')
-            cr.commit()
+            ], limit=1)
+            self.assertTrue(activity)
+            attachment = env['ir.attachment'].sudo().create({
+                'name': 'unscanned-proof.txt',
+                'datas': base64.b64encode(b'unscanned attachment content'),
+                'mimetype': 'text/plain',
+            })
+
+            feedback_cases = (
+                {
+                    'feedback': 'verification completed',
+                    'attachment_ids': [attachment.id],
+                },
+                {
+                    'feedback': (
+                        'PAN 4111<span>1111</span><span>1111</span>'
+                        '<span>1111</span>'
+                    ),
+                },
+                {'feedback': 'verification C&#86;C=123 is forbidden'},
+            )
+            for values in feedback_cases:
+                with self.subTest(values=values), self.assertRaises(UserError):
+                    activity.action_feedback(**values)
+                self.assertTrue(activity.exists())
+                self.assertTrue(activity.active)
+
+            attachment.write({
+                'res_model': 'mail.activity',
+                'res_id': activity.id,
+            })
+            with self.assertRaises(UserError):
+                activity.action_done()
+            self.assertTrue(activity.exists())
+            self.assertTrue(activity.active)
+
+            with self.assertRaises(UserError):
+                incident.message_post_with_source(
+                    'mail.message_activity_done',
+                    attachments=[('unscanned-inline.txt', b'content')],
+                    author_id=env.user.partner_id.id,
+                    render_values={
+                        'activity': activity,
+                        'feedback': 'verification completed',
+                        'display_assignee': False,
+                    },
+                    mail_activity_type_id=activity.activity_type_id.id,
+                    subtype_xmlid='mail.mt_activities',
+                )
+            self.assertTrue(activity.exists())
+            self.assertTrue(activity.active)
+            cr.rollback()
 
     def test_message_post_with_non_activity_source_is_rejected(self):
         incident_id = self.Incident._log(self._snapshot(
@@ -919,8 +1038,82 @@ class TestBillingIncidentPublicApi864(TransactionCase):
                 'note': 'No billing incident behavior applies',
                 'date_deadline': fields.Date.today(),
             })
+            self.assertTrue(activity.write({
+                'summary': 'Updated generic activity',
+                'note': 'Generic activity writes remain unaffected',
+            }))
             self.assertTrue(activity.action_done())
             self.assertFalse(activity.exists())
+            cr.rollback()
+
+    def test_dedicated_activity_create_and_write_are_not_generic_ingress(self):
+        incident_id = self.Incident._log(self._snapshot(
+            external_ref=self.ref + '-activity-orm-guard',
+            state='needs_human',
+        ))
+        with self.env.registry.cursor() as cr:
+            env = self.env(cr=cr)
+            Activity = env['mail.activity'].sudo()
+            model = env['ir.model']._get('woow.billing.incident')
+            review_type = env.ref(
+                'woow_paas_platform.'
+                'mail_activity_type_billing_incident_review')
+            todo_type = env.ref('mail.mail_activity_data_todo')
+            activity = Activity.search([
+                ('res_model', '=', 'woow.billing.incident'),
+                ('res_id', '=', incident_id),
+                ('activity_type_id', '=', review_type.id),
+                ('active', '=', True),
+            ], limit=1)
+            self.assertTrue(activity)
+
+            create_values = {
+                'res_model_id': model.id,
+                'res_id': incident_id,
+                'activity_type_id': review_type.id,
+                'user_id': activity.user_id.id,
+                'summary': 'Forged dedicated review',
+                'note': 'Created outside the scheduler',
+                'date_deadline': fields.Date.today(),
+            }
+            partner_model = env['ir.model']._get('res.partner')
+            for values in (
+                    create_values,
+                    {**create_values, 'activity_type_id': todo_type.id},
+                    {
+                        **create_values,
+                        'res_model_id': partner_model.id,
+                        'res_id': env.user.partner_id.id,
+                    }):
+                with self.subTest(create_values=values), \
+                        self.assertRaises(AccessError):
+                    Activity.create(values)
+
+            replacement_user = new_test_user(
+                env,
+                login='billing-activity-reassign-%s' % uuid.uuid4().hex,
+                groups='base.group_user',
+            )
+            before = activity.read([
+                'active', 'note', 'summary', 'res_id',
+                'activity_type_id', 'user_id',
+            ])[0]
+            forbidden_writes = (
+                {'active': False},
+                {'note': 'PAN 4111111111111111'},
+                {'summary': 'Forged summary'},
+                {'res_id': incident_id + 1},
+                {'activity_type_id': todo_type.id},
+                {'user_id': replacement_user.id},
+            )
+            for values in forbidden_writes:
+                with self.subTest(write_values=values), \
+                        self.assertRaises(AccessError):
+                    activity.write(values)
+                self.assertEqual(
+                    activity.read(list(before))[0], before,
+                    'dedicated activity generic write denial must be atomic',
+                )
             cr.rollback()
 
     def test_inactive_dedicated_activity_does_not_suppress_new_active_alert(self):
@@ -941,7 +1134,12 @@ class TestBillingIncidentPublicApi864(TransactionCase):
                 ('activity_type_id', '=', review_type.id),
             ])
             self.assertTrue(activities)
-            activities.write({'active': False})
+            cr.execute(
+                'UPDATE mail_activity SET active = false '
+                'WHERE res_model = %s AND res_id = %s '
+                'AND activity_type_id = %s',
+                ('woow.billing.incident', incident_id, review_type.id),
+            )
             cr.commit()
         self.assertEqual(self._activity_user_ids(incident_id, active=True), [])
 
@@ -1751,6 +1949,38 @@ class TestBillingIncidentRpcWriteGuard864(HttpCase):
         )
         self.assertFalse(self.env['woow.billing.incident'].sudo().search([
             ('external_ref', '=', external_ref),
+        ]))
+
+    def test_manager_rpc_cannot_create_dedicated_billing_activity(self):
+        self.authenticate(self.manager_a_login, self.manager_a_login)
+        review_type = self.env.ref(
+            'woow_paas_platform.mail_activity_type_billing_incident_review')
+        model = self.env['ir.model']._get('woow.billing.incident')
+        values = {
+            'res_model_id': model.id,
+            'res_id': self.incident_a.id,
+            'activity_type_id': review_type.id,
+            'user_id': self.manager_a.id,
+            'summary': 'Forged RPC billing review',
+            'note': 'RPC must not mint dedicated activity rows',
+            'date_deadline': fields.Date.to_string(fields.Date.today()),
+        }
+        for context in ({}, {'woow_billing_activity_scheduler': True}):
+            with self.subTest(context=context):
+                denied = self._call_kw(
+                    'mail.activity',
+                    'create',
+                    [values],
+                    {'context': context},
+                )
+                self._assert_access_error(
+                    denied,
+                    'manager RPC 不得建立 billing incident dedicated activity',
+                )
+        self.assertFalse(self.env['mail.activity'].sudo().search([
+            ('res_model', '=', 'woow.billing.incident'),
+            ('res_id', '=', self.incident_a.id),
+            ('activity_type_id', '=', review_type.id),
         ]))
 
     def test_manager_rpc_can_write_manual_fields_only_and_denials_are_atomic(self):

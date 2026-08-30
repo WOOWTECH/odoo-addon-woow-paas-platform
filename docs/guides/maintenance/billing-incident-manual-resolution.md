@@ -62,9 +62,11 @@ ECPay **查得到或查不到都只代表「查證結果已記錄，這張 incid
 boundary。共用 sensitive validator 會套到 `_log` 的所有文字 ingress、manager
 `resolution_note` RPC write、人工關單按鈕與 `_resolve(resolution_note)`：明確的
 `ResultData`／`Card4No`／`Card6No`／`CardNo`／`CVV`／`CVC`／`CID`／`CSC`／
-`security code`／`SAD`（含 `sensitive authentication data`）／`PAN` marker，以及
-Luhn-valid 13–19 位 PAN-like 數字（含以點、空白、連字號等標點分隔）都會被拒絕；
-CVC／CID／CSC／security code／SAD 等 marker 的標點分隔寫法也同樣拒絕。只有專用
+`security code`／`SAD`（含 `sensitive authentication data`）／`PIN`／`PIN block`／
+`track1`／`track2`／`magnetic stripe`／`PAN` marker，以及 Luhn-valid 13–19 位 PAN-like
+數字都會被拒絕。validator 在 marker／Luhn 前先做 `html2plaintext` 與 HTML entity decode、
+Unicode NFKC、移除 Unicode category `Cf`，再把常見 punctuation 分隔正規化；因此卡號被
+HTML fragment、點號、全形字元或 U+200B zero-width character 拆開也不會繞過。只有專用
 `external_ref`／`trade_no` 欄位可豁免「純數字碰巧通過 Luhn」；兩欄仍拒絕上述 marker，
 並另有長度、安全字元與 CRLF/control-character shape gate。`external_ref` 只接受 1–20
 字元 raw provider MTN，
@@ -91,11 +93,15 @@ runbook，也不是「人工已處理」按鈕的功能。
 `woow_paas_platform.mail_activity_type_billing_incident_review` 的 activities；同一筆
 incident 的 generic Todo／其他 activity type，以及其他 incident 的待辦都會保留。
 專屬 type 已限制 `res_model = woow.billing.incident`，是 schedule、dedupe、cleanup 的唯一
-provenance；summary 不是識別依據。dedupe 只看 active 的專屬 activity：inactive／standard
-`action_done()`／`unlink()` 若 incident 仍 unresolved，會在同一 transaction、同一 advisory
-lock 機制下立即重建 active alert；不必等下一次 duplicate observation，而且完成 activity 本身
-**不會**把 incident 關成 resolved。activity 的 summary／note 會依每位 manager 的 `lang`
-分別翻譯，`kind` 顯示翻譯後 selection label，不顯示 raw key。
+provenance；summary 不是識別依據。billing incident model 或此 dedicated type 的
+`mail.activity.create()` 只能由模組內 scheduler 的 object capability 執行；manager、`sudo` 與
+RPC truthy context 都不能自行鑄造。既有 targeted activity 的 generic `write()` 也全拒（包含
+`active`、note／summary、`res_id`、type、assignee），操作人應回 incident form 查證與關單。
+dedupe 只看 active 的專屬 activity：inactive／standard `action_done()`／`unlink()` 若 incident
+仍 unresolved，會在同一 transaction、同一 advisory lock 機制下立即收斂成**每位 manager
+恰一筆** active alert；不必等下一次 duplicate observation，而且完成 activity 本身**不會**把
+incident 關成 resolved。activity 的 summary／note 會依每位 manager 的 `lang` 分別翻譯，
+`kind` 顯示翻譯後 selection label，不顯示 raw key。
 
 ledger 的 source/business 欄位仍完全 relation-free。為使用 Odoo 標準
 `mail.activity.create()`／notification bus／`action_done()`／`unlink()`，model 繼承
@@ -106,6 +112,7 @@ Many2one／Many2many。
 
 `mail.thread` 帶來的 incident-owned chatter ingress 已刻意縮到唯一 core
 `mail.message_activity_done` source：一般 account manager 的自由 `message_post()` 全拒，activity
-feedback、render values 與最後 body 都套用同一 sensitive validator。這是 model ingress
-boundary，不宣稱能阻止持有惡意 server-side `SUPERUSER` 程式碼的人直接呼叫
+feedback、render values 與最後 body 都先 canonicalize、再套用同一 PCI validator；
+`attachment_ids`／`attachments` 只要非空就直接拒絕，因本階段不掃描檔案內容。這是 model
+ingress boundary，不宣稱能阻止持有惡意 server-side `SUPERUSER` 程式碼的人直接呼叫
 `mail.message.create()`；那種行為已超出本 model 可攔截的呼叫面。

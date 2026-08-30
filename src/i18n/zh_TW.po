@@ -17133,6 +17133,27 @@ msgstr "帳務事件 activity 回饋只能包含安全且不具敏感資訊的�
 #. module: woow_paas_platform
 #. odoo-python
 #: code:addons/woow_paas_platform/models/billing_incident.py:0
+msgid "Attachments are not allowed on billing incident activities."
+msgstr "帳務事件 activity 不允許附件。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/billing_incident.py:0
+msgid ""
+"Billing incident activities are managed automatically. Use the billing "
+"incident form instead."
+msgstr "帳務事件 activity 由系統自動管理；請改用帳務事件表單。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/billing_incident.py:0
+msgid ""
+"Billing incident activities may be created only by the internal scheduler."
+msgstr "帳務事件 activity 只能由內部排程器建立。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/billing_incident.py:0
 msgid ""
 "Billing incidents may be created only by the internal durable ledger writer."
 msgstr "帳務事件只能由內部耐久帳本寫入器建立。"

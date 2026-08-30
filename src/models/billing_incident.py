@@ -9,9 +9,11 @@ incident.  The model is a global finance ledger: every account manager reads all
 rows across companies by design.
 """
 
+import html
 import logging
 import math
 import re
+import unicodedata
 from datetime import date, datetime
 
 from markupsafe import Markup, escape
@@ -19,7 +21,7 @@ from psycopg2 import sql
 
 from odoo import SUPERUSER_ID, _, api, fields, models
 from odoo.exceptions import AccessError, UserError
-from odoo.tools import config
+from odoo.tools import config, html2plaintext
 from odoo.tools.translate import get_translation
 
 
@@ -43,11 +45,17 @@ _BILLING_INCIDENT_RESOLUTION_TRANSITION = _BillingIncidentCapability(
     'resolution transition')
 _BILLING_INCIDENT_ACTIVITY_DONE_POST = _BillingIncidentCapability(
     'activity done post')
+_BILLING_ACTIVITY_SCHEDULER = _BillingIncidentCapability(
+    'activity scheduler')
+_BILLING_ACTIVITY_TERMINAL = _BillingIncidentCapability(
+    'activity terminal')
 _BILLING_INCIDENT_CREATE_CTX_KEY = 'woow_billing_incident_create'
 _BILLING_INCIDENT_RESOLUTION_CTX_KEY = (
     'woow_billing_incident_resolution_transition')
 _BILLING_INCIDENT_ACTIVITY_DONE_CTX_KEY = (
     'woow_billing_incident_activity_done_post')
+_BILLING_ACTIVITY_SCHEDULER_CTX_KEY = 'woow_billing_activity_scheduler'
+_BILLING_ACTIVITY_TERMINAL_CTX_KEY = 'woow_billing_activity_terminal'
 _ODOO_MODULE_UNINSTALL_CTX_KEY = '_force_unlink'
 
 
@@ -85,6 +93,32 @@ def _activity_done_post(records):
 def _is_activity_done_post(env):
     return (env.context.get(_BILLING_INCIDENT_ACTIVITY_DONE_CTX_KEY)
             is _BILLING_INCIDENT_ACTIVITY_DONE_POST)
+
+
+def _activity_scheduler(records):
+    return _with_billing_incident_capability(
+        records,
+        _BILLING_ACTIVITY_SCHEDULER_CTX_KEY,
+        _BILLING_ACTIVITY_SCHEDULER,
+    )
+
+
+def _is_activity_scheduler(env):
+    return (env.context.get(_BILLING_ACTIVITY_SCHEDULER_CTX_KEY)
+            is _BILLING_ACTIVITY_SCHEDULER)
+
+
+def _activity_terminal(records):
+    return _with_billing_incident_capability(
+        records,
+        _BILLING_ACTIVITY_TERMINAL_CTX_KEY,
+        _BILLING_ACTIVITY_TERMINAL,
+    )
+
+
+def _is_activity_terminal(env):
+    return (env.context.get(_BILLING_ACTIVITY_TERMINAL_CTX_KEY)
+            is _BILLING_ACTIVITY_TERMINAL)
 
 
 def _is_odoo_module_uninstall(env):
@@ -266,6 +300,9 @@ class BillingIncident(models.Model):
         r'(?:card[\W_]*)?security[\W_]*(?:code|number|no)|'
         r's[\W_]*a[\W_]*d|'
         r'sensitive[\W_]*authentication[\W_]*data|'
+        r'p[\W_]*i[\W_]*n(?:[\W_]*block)?|'
+        r'track[\W_]*[12](?:[\W_]*data)?|'
+        r'magnetic[\W_]*stripe(?:[\W_]*data)?|'
         r'p[\W_]*a[\W_]*n'
         r')(?!\w)',
         re.IGNORECASE,
@@ -429,6 +466,18 @@ class BillingIncident(models.Model):
                 'Only the standard activity completion message is allowed '
                 'for billing incidents.'
             ))
+        has_activity_attachments = bool(
+            activity.attachment_ids
+            or self.env['ir.attachment'].sudo().search_count([
+                ('res_model', '=', 'mail.activity'),
+                ('res_id', '=', activity.id),
+            ], limit=1)
+        )
+        if (kwargs.get('attachment_ids') or kwargs.get('attachments')
+                or has_activity_attachments):
+            raise UserError(_(
+                'Attachments are not allowed on billing incident activities.'
+            ))
         for field_name, value in (
                 ('activity_render_values', render_values),
                 ('activity_post_values', kwargs)):
@@ -465,14 +514,30 @@ class BillingIncident(models.Model):
         return False
 
     @api.model
+    def _canonicalize_pci_text(self, value):
+        """Expose HTML-obscured and Unicode-obscured PCI candidates."""
+        plaintext = html2plaintext(html.unescape(value))
+        normalized = unicodedata.normalize('NFKC', plaintext)
+        without_format_controls = ''.join(
+            character for character in normalized
+            if unicodedata.category(character) != 'Cf'
+        )
+        return ''.join(
+            '.' if unicodedata.category(character).startswith('P')
+            else character
+            for character in without_format_controls
+        )
+
+    @api.model
     def _sensitive_content_category(self, field_name, value):
-        if self._SENSITIVE_MARKER_RE.search(value):
+        canonical = self._canonicalize_pci_text(value)
+        if self._SENSITIVE_MARKER_RE.search(canonical):
             return 'sensitive_marker'
         # These two fields are explicitly shaped as ECPay references.  Numeric
         # MTNs/TradeNos must not be mistaken for PANs by coincidence.
         if field_name in ('external_ref', 'trade_no'):
             return False
-        for match in self._PAN_CANDIDATE_RE.finditer(value):
+        for match in self._PAN_CANDIDATE_RE.finditer(canonical):
             digits = ''.join(character for character in match.group()
                              if character.isdigit())
             if not 13 <= len(digits) <= 19:
@@ -845,7 +910,7 @@ class BillingIncident(models.Model):
                 'category=missing_activity_dependency', incident_id)
             return False
 
-        Activity = self.env['mail.activity'].sudo()
+        Activity = _activity_scheduler(self.env['mail.activity'].sudo())
         existing_user_ids = set(Activity.search([
             ('res_model', '=', self._name),
             ('res_id', '=', incident_id),
@@ -1120,21 +1185,92 @@ class BillingIncident(models.Model):
 class MailActivity(models.Model):
     _inherit = 'mail.activity'
 
-    def unlink(self):
-        """Re-arm only unresolved dedicated billing alerts after terminal use."""
+    @api.model
+    def _targets_billing_activity_values(self, values):
+        billing_model = self.env['ir.model'].sudo()._get(
+            'woow.billing.incident')
         review_type = self.env.ref(
             'woow_paas_platform.'
             'mail_activity_type_billing_incident_review',
             raise_if_not_found=False,
         )
-        incident_ids = []
-        if review_type and not _is_odoo_module_uninstall(self.env):
-            incident_ids = sorted({
-                activity.res_id
-                for activity in self
-                if (activity.res_model == 'woow.billing.incident'
-                    and activity.activity_type_id == review_type)
-            })
+        res_model_id = values.get(
+            'res_model_id', self.env.context.get('default_res_model_id'))
+        res_model = values.get(
+            'res_model', self.env.context.get('default_res_model'))
+        activity_type_id = values.get(
+            'activity_type_id',
+            self.env.context.get('default_activity_type_id'),
+        )
+        return bool(
+            res_model == 'woow.billing.incident'
+            or (billing_model and res_model_id == billing_model.id)
+            or (review_type and activity_type_id == review_type.id)
+        )
+
+    def _dedicated_billing_incident_ids(self):
+        review_type = self.env.ref(
+            'woow_paas_platform.'
+            'mail_activity_type_billing_incident_review',
+            raise_if_not_found=False,
+        )
+        if not review_type or _is_odoo_module_uninstall(self.env):
+            return []
+        return sorted({
+            activity.res_id
+            for activity in self.sudo()
+            if (activity.res_model == 'woow.billing.incident'
+                and activity.activity_type_id == review_type)
+        })
+
+    @api.model_create_multi
+    def create(self, values_list):
+        """Reserve every billing-incident activity row for the scheduler."""
+        if (not _is_activity_scheduler(self.env)
+                and any(self._targets_billing_activity_values(values)
+                        for values in values_list)):
+            raise AccessError(_(
+                'Billing incident activities may be created only by the '
+                'internal scheduler.'
+            ))
+        return super().create(values_list)
+
+    def write(self, values):
+        """Keep dedicated alerts immutable outside core terminal handling."""
+        targets_billing = (
+            self._targets_billing_activity_values(values)
+            or any(
+                activity.res_model == 'woow.billing.incident'
+                or activity.activity_type_id == self.env.ref(
+                    'woow_paas_platform.'
+                    'mail_activity_type_billing_incident_review',
+                    raise_if_not_found=False,
+                )
+                for activity in self.sudo()
+            )
+        )
+        if targets_billing and not _is_activity_terminal(self.env):
+            raise AccessError(_(
+                'Billing incident activities are managed automatically. '
+                'Use the billing incident form instead.'
+            ))
+        return super().write(values)
+
+    def _action_done(self, feedback=False, attachment_ids=None):
+        """Serialize the whole core terminal flow with schedule and resolve."""
+        incident_ids = self._dedicated_billing_incident_ids()
+        Incident = self.env['woow.billing.incident'].sudo()
+        for incident_id in incident_ids:
+            Incident._acquire_review_activity_lock(self.env.cr, incident_id)
+        guarded = _activity_terminal(self)
+        return super(MailActivity, guarded)._action_done(
+            feedback=feedback,
+            attachment_ids=attachment_ids,
+        )
+
+    def unlink(self):
+        """Re-arm only unresolved dedicated billing alerts after terminal use."""
+        incident_ids = self._dedicated_billing_incident_ids()
         Incident = self.env['woow.billing.incident'].sudo()
         # Lock before core deletes/archives the terminal activity.  Taking the
         # same incident-scoped lock as schedule/resolve prevents the classic

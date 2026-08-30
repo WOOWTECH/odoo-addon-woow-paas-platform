@@ -183,18 +183,28 @@ class TestBillingIncidentRealTransactions864(BaseCase):
             cr.commit()
 
     def _review_activity_count(self, incident_id):
+        return sum(self._review_activity_counts_by_user(incident_id).values())
+
+    def _review_activity_counts_by_user(self, incident_id):
         with self.registry.cursor() as cr:
             env = api.Environment(cr, odoo.SUPERUSER_ID, {})
             review_type = env.ref(
                 'woow_paas_platform.'
                 'mail_activity_type_billing_incident_review')
             cr.execute(
-                'SELECT COUNT(*) FROM mail_activity '
+                'SELECT user_id, COUNT(*) FROM mail_activity '
                 'WHERE res_model = %s AND res_id = %s '
-                'AND activity_type_id = %s AND active = true',
+                'AND activity_type_id = %s AND active = true '
+                'GROUP BY user_id ORDER BY user_id',
                 (_MODEL, incident_id, review_type.id),
             )
-            return cr.fetchone()[0]
+            return dict(cr.fetchall())
+
+    def _expected_review_activity_counts_by_user(self):
+        with self.registry.cursor() as cr:
+            env = api.Environment(cr, odoo.SUPERUSER_ID, {})
+            users = env[_MODEL]._account_manager_users(env)
+            return {user_id: 1 for user_id in users.ids}
 
     def test_real_40001_outer_rollback_keeps_incident_but_loses_control_write(self):
         snapshot = self._snapshot('real-40001')
@@ -471,7 +481,11 @@ class TestBillingIncidentRealTransactions864(BaseCase):
             state='needs_human',
         )
         incident_id = self._call_log(snapshot)
-        self.assertGreater(self._review_activity_count(incident_id), 0)
+        self.assertEqual(
+            self._review_activity_counts_by_user(incident_id),
+            self._expected_review_activity_counts_by_user(),
+            'scheduler must start with exactly one active alert per manager',
+        )
         with self.registry.cursor() as cr:
             env = api.Environment(cr, odoo.SUPERUSER_ID, {})
             review_type = env.ref(
@@ -547,9 +561,10 @@ class TestBillingIncidentRealTransactions864(BaseCase):
             if not done_cr.closed:
                 done_cr.close()
         self.assertFalse(errors, 'concurrent workers failed: %r' % errors)
-        self.assertGreater(
-            self._review_activity_count(incident_id), 0,
-            'unresolved terminal state must retain an active dedicated alert',
+        self.assertEqual(
+            self._review_activity_counts_by_user(incident_id),
+            self._expected_review_activity_counts_by_user(),
+            'schedule/done race must retain exactly one active alert per manager',
         )
 
     def test_schedule_resolve_orderings_converge_without_stale_todo(self):

@@ -4367,6 +4367,24 @@ INTERNAL_CTX_KEY_REGISTRY = {
         "why": "billing incident 禁止自由 chatter；只有已驗證 core activity-done source "
                "可取得 object-identity capability 並落下完成訊息。",
     },
+    "woow_billing_activity_scheduler": {
+        "status": "enforced",
+        "sentinel": "_BILLING_ACTIVITY_SCHEDULER",
+        "defined_in": "src/models/billing_incident.py",
+        "reader": "_is_activity_scheduler",
+        "issue": "#864",
+        "why": "billing incident／dedicated type 的 mail.activity create 只准模組內 "
+               "scheduler；manager、sudo 與 truthy RPC context 都不得鑄造 alert。",
+    },
+    "woow_billing_activity_terminal": {
+        "status": "enforced",
+        "sentinel": "_BILLING_ACTIVITY_TERMINAL",
+        "defined_in": "src/models/billing_incident.py",
+        "reader": "_is_activity_terminal",
+        "issue": "#864",
+        "why": "只把 core activity terminal flow 內部需要的 write 傳過 targeted "
+               "mail.activity guard；generic RPC write 不可取得。",
+    },
     "woow_internal_provision": {
         "status": "enforced",
         "sentinel": "_INTERNAL_PROVISION",
