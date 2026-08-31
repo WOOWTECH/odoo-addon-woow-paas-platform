@@ -23,6 +23,7 @@ from psycopg2 import sql
 
 from odoo import SUPERUSER_ID, _, api, fields, models
 from odoo.exceptions import AccessError, UserError
+from odoo.osv import expression
 from odoo.tools import config, html2plaintext
 from odoo.tools.translate import get_translation
 
@@ -32,7 +33,8 @@ _logger = logging.getLogger(__name__)
 # Durable policy (#986 comment 11112):
 # Odoo role `account.group_account_manager` (not a Workspace role);
 # all incidents across all companies; all current managers in that Odoo group;
-# no company M2O/rule; base.group_system behavior is not narrowed.
+# no company M2O/rule; base.group_system behavior is not narrowed.  That last
+# clause is not an incident grant: a pure system-only user is not a manager.
 
 
 class _BillingIncidentCapability:
@@ -63,6 +65,12 @@ _BILLING_INCIDENT_CHATTER_CTX_KEY = 'woow_billing_incident_chatter'
 _BILLING_ACTIVITY_SCHEDULER_CTX_KEY = 'woow_billing_activity_scheduler'
 _BILLING_ACTIVITY_TERMINAL_CTX_KEY = 'woow_billing_activity_terminal'
 _ODOO_MODULE_UNINSTALL_CTX_KEY = '_force_unlink'
+_BILLING_INTERNAL_CONTEXT_ALLOWLIST = frozenset({
+    'allowed_company_ids',
+    'lang',
+    'mail_notify_force_send',
+    'tz',
+})
 
 
 def _with_billing_incident_capability(records, key, capability):
@@ -101,14 +109,30 @@ def _is_incident_chatter(env):
             is _BILLING_INCIDENT_CHATTER)
 
 
+def _with_clean_billing_internal_context(records, **capabilities):
+    """Discard caller context except the small operational allowlist."""
+    context = {
+        key: value
+        for key, value in records.env.context.items()
+        if key in _BILLING_INTERNAL_CONTEXT_ALLOWLIST
+    }
+    context.update(capabilities)
+    return records.with_context(context)
+
+
 def _activity_scheduler(records):
-    scheduled = _with_billing_incident_capability(
+    # Enter capabilities only after rebuilding context from an allowlist.  In
+    # particular, caller-controlled default_* keys must never become defaults
+    # for the scheduler's ORM create.
+    return _with_clean_billing_internal_context(
         records,
-        _BILLING_ACTIVITY_SCHEDULER_CTX_KEY,
-        _BILLING_ACTIVITY_SCHEDULER,
+        **{
+            _BILLING_ACTIVITY_SCHEDULER_CTX_KEY:
+                _BILLING_ACTIVITY_SCHEDULER,
+            # Odoo activity create/unlink may emit controlled messages.
+            _BILLING_INCIDENT_CHATTER_CTX_KEY: _BILLING_INCIDENT_CHATTER,
+        }
     )
-    # Odoo activity create/unlink may emit controlled mail.message rows.
-    return _incident_chatter(scheduled)
 
 
 def _is_activity_scheduler(env):
@@ -117,10 +141,11 @@ def _is_activity_scheduler(env):
 
 
 def _activity_terminal(records):
-    return _with_billing_incident_capability(
+    return _with_clean_billing_internal_context(
         records,
-        _BILLING_ACTIVITY_TERMINAL_CTX_KEY,
-        _BILLING_ACTIVITY_TERMINAL,
+        **{
+            _BILLING_ACTIVITY_TERMINAL_CTX_KEY: _BILLING_ACTIVITY_TERMINAL,
+        }
     )
 
 
@@ -300,7 +325,7 @@ class BillingIncident(models.Model):
         'skip_count', 'attempts', 'query_attempts',
     })
     _SENSITIVE_MARKER_RE = re.compile(
-        r'(?<!\w)(?:'
+        r'(?<![A-Za-z0-9])(?:'
         r'result[\W_]*data|'
         r'card[\W_]*[46]?[\W_]*no|'
         r'card[\W_]*number|'
@@ -313,11 +338,21 @@ class BillingIncident(models.Model):
         r'track[\W_]*[12](?:[\W_]*data)?|'
         r'magnetic[\W_]*stripe(?:[\W_]*data)?|'
         r'p[\W_]*a[\W_]*n'
-        r')(?!\w)',
+        r')(?![A-Za-z0-9])',
+        re.IGNORECASE,
+    )
+    # CJK text is normally written without word separators, so English-style
+    # lookarounds would let phrases such as「看到卡片安全碼」bypass the gate.
+    _SENSITIVE_CJK_MARKER_RE = re.compile(
+        r'(?:信用卡|卡片)?安全碼|'
+        r'p[\W_]*i[\W_]*n[\W_]*(?:碼|區[\W_]*塊)|'
+        r'磁[\W_]*條(?:[\W_]*資料)?|'
+        r'軌[\W_]*道[\W_]*資料|'
+        r'授[\W_]*權[\W_]*碼',
         re.IGNORECASE,
     )
     _PAN_CANDIDATE_RE = re.compile(
-        r'(?<!\d)(?:\d[\s.,_:/-]*){13,19}(?!\d)')
+        r'(?<![^\W_])(?:\d[.]*){13,19}(?![^\W_])')
     _RAW_MTN_RE = re.compile(r'[A-Za-z0-9_-]{1,20}\Z')
     _NAMESPACED_EXTERNAL_REF_RE = re.compile(
         r'[A-Za-z][A-Za-z0-9_-]{0,31}:'
@@ -515,14 +550,15 @@ class BillingIncident(models.Model):
         """Expose HTML-obscured and Unicode-obscured PCI candidates."""
         plaintext = html2plaintext(html.unescape(value))
         normalized = unicodedata.normalize('NFKC', plaintext)
-        without_ignorable_separators = ''.join(
-            character for character in normalized
-            if unicodedata.category(character) not in ('Cf', 'Mn', 'Me')
-        )
+        # Unicode letters/digits are the only boundaries that retain identity.
+        # Every other category becomes one uniform separator, including Mc,
+        # So/emoji, Sk, Cf, Mn, and Me.  A PAN split by any such character then
+        # reaches the same 13–19 digit Luhn candidate scan.
         return ''.join(
-            '.' if unicodedata.category(character).startswith('P')
-            else character
-            for character in without_ignorable_separators
+            character
+            if unicodedata.category(character)[0] in ('L', 'N')
+            else '.'
+            for character in normalized
         )
 
     @api.model
@@ -541,7 +577,8 @@ class BillingIncident(models.Model):
     @api.model
     def _sensitive_content_category(self, field_name, value):
         canonical = self._canonicalize_pci_text(value)
-        if self._SENSITIVE_MARKER_RE.search(canonical):
+        if (self._SENSITIVE_MARKER_RE.search(canonical)
+                or self._SENSITIVE_CJK_MARKER_RE.search(canonical)):
             return 'sensitive_marker'
         # These two fields are explicitly shaped as ECPay references.  Numeric
         # MTNs/TradeNos must not be mistaken for PANs by coincidence.
@@ -976,6 +1013,9 @@ class BillingIncident(models.Model):
                 'kind': escape(kind_labels[kind]),
             }
             activity_values.append({
+                # Explicitly own every security-sensitive stored input.  No
+                # caller default_* value may alter target, assignee, lifecycle,
+                # provenance, content, or attachments.
                 'res_model_id': model.id,
                 'res_id': incident_id,
                 'activity_type_id': review_type.id,
@@ -983,9 +1023,27 @@ class BillingIncident(models.Model):
                 'summary': summary,
                 'note': str(note),
                 'date_deadline': fields.Date.today(),
+                'active': True,
+                'attachment_ids': [(5, 0, 0)],
+                'automated': False,
+                'request_partner_id': False,
+                'recommended_activity_type_id': False,
+                'previous_activity_type_id': False,
             })
         if activity_values:
             Activity.create(activity_values)
+        return True
+
+    @api.model
+    def _converge_unresolved_review_activities_current_cursor(self):
+        """Converge the manager roster for every unresolved ledger row."""
+        self.env.cr.execute(
+            sql.SQL(
+                "SELECT id FROM {table} WHERE state <> 'resolved' ORDER BY id"
+            ).format(table=sql.Identifier(self._table)),
+        )
+        for incident_id, in self.env.cr.fetchall():
+            self._ensure_review_activities_current_cursor(incident_id)
         return True
 
     @api.model
@@ -1211,8 +1269,58 @@ class BillingIncident(models.Model):
             return False
 
 
+class ResGroups(models.Model):
+    _inherit = 'res.groups'
+
+    def write(self, values):
+        """Converge unresolved alerts when this exact Odoo role changes."""
+        manager_group_id = self.env['ir.model.data']._xmlid_to_res_id(
+            'account.group_account_manager', raise_if_not_found=False)
+        roster_changed = bool(
+            manager_group_id
+            and manager_group_id in self.ids
+            and 'users' in values
+            and not _is_odoo_module_uninstall(self.env)
+        )
+        result = super().write(values)
+        if roster_changed:
+            self.browse(manager_group_id).invalidate_recordset(['users'])
+            self.env['woow.billing.incident'].sudo() \
+                ._converge_unresolved_review_activities_current_cursor()
+        return result
+
+
 class MailMessage(models.Model):
     _inherit = 'mail.message'
+
+    @api.model
+    def _has_billing_message_access_authority(self):
+        return bool(
+            self.env.user.has_group('account.group_account_manager')
+            or _is_incident_chatter(self.env)
+            or _is_odoo_module_uninstall(self.env)
+        )
+
+    @api.model
+    def _search(self, domain, offset=0, limit=None, order=None):
+        """Do not expose incident chatter through author/creator shortcuts."""
+        if not self._has_billing_message_access_authority():
+            domain = expression.AND([
+                domain,
+                [('model', '!=', 'woow.billing.incident')],
+            ])
+        return super()._search(domain, offset, limit, order)
+
+    def _get_forbidden_access(self, operation):
+        forbidden = super()._get_forbidden_access(operation)
+        if not self._has_billing_message_access_authority():
+            incident_ids = [
+                message.id
+                for message in self.sudo()
+                if message.model == 'woow.billing.incident'
+            ]
+            forbidden |= self.browse(incident_ids)
+        return forbidden
 
     @api.model
     def _targets_billing_incident_values(self, values):
@@ -1268,13 +1376,40 @@ class MailMessage(models.Model):
 class IrAttachment(models.Model):
     _inherit = 'ir.attachment'
 
+    _BILLING_TARGET_CARRIERS = frozenset({
+        'woow.billing.incident',
+        'mail.activity',
+        'mail.message',
+    })
+    _CANONICAL_TARGET_RES_ID_RE = re.compile(r'[1-9][0-9]*\Z')
+
+    @api.model
+    def _canonical_billing_target_res_id(self, res_model, res_id):
+        """Canonicalize target ids before any protected-carrier decision."""
+        if res_model not in self._BILLING_TARGET_CARRIERS:
+            return res_id
+        if isinstance(res_id, bool):
+            raise AccessError(_(
+                'Attachments are not allowed on billing incident activities.'
+            ))
+        if isinstance(res_id, int) and res_id > 0:
+            return res_id
+        if (isinstance(res_id, str)
+                and self._CANONICAL_TARGET_RES_ID_RE.fullmatch(res_id)):
+            return int(res_id)
+        # Floats, zero, signs, whitespace, leading zeroes, Unicode digits, and
+        # every other ambiguous carrier id fail closed before ORM coercion.
+        raise AccessError(_(
+            'Attachments are not allowed on billing incident activities.'
+        ))
+
     @api.model
     def _billing_owned_target(self, res_model, res_id):
         """Return whether an attachment target belongs to the incident graph."""
+        canonical_res_id = self._canonical_billing_target_res_id(
+            res_model, res_id)
         if res_model == 'woow.billing.incident':
             return True
-        if not isinstance(res_id, int) or isinstance(res_id, bool) or not res_id:
-            return False
         if res_model == 'mail.activity':
             review_type = self.env.ref(
                 'woow_paas_platform.'
@@ -1282,7 +1417,7 @@ class IrAttachment(models.Model):
                 raise_if_not_found=False,
             )
             activity = self.env['mail.activity'].sudo().with_context(
-                active_test=False).browse(res_id).exists()
+                active_test=False).browse(canonical_res_id).exists()
             return bool(
                 activity
                 and (activity.res_model == 'woow.billing.incident'
@@ -1290,7 +1425,8 @@ class IrAttachment(models.Model):
                          and activity.activity_type_id == review_type))
             )
         if res_model == 'mail.message':
-            message = self.env['mail.message'].sudo().browse(res_id).exists()
+            message = self.env['mail.message'].sudo().browse(
+                canonical_res_id).exists()
             return bool(message and message.model == 'woow.billing.incident')
         return False
 
@@ -1314,10 +1450,19 @@ class IrAttachment(models.Model):
             raise AccessError(_(
                 'Attachments are not allowed on billing incident activities.'
             ))
-        return super().create(values_list)
+        attachments = super().create(values_list)
+        # Recheck actual stored targets in case ORM defaults/conversion produced
+        # a final target different from the preflight payload.
+        if any(self._billing_owned_target(
+                attachment.res_model, attachment.res_id)
+                for attachment in attachments.sudo()):
+            raise AccessError(_(
+                'Attachments are not allowed on billing incident activities.'
+            ))
+        return attachments
 
     def write(self, values):
-        """Reject writes on protected rows and old-to-new protected moves."""
+        """Reject protected old, prospective, and ORM-final targets."""
         for attachment in self.sudo():
             old_target = self._billing_owned_target(
                 attachment.res_model, attachment.res_id)
@@ -1330,11 +1475,79 @@ class IrAttachment(models.Model):
                     'Attachments are not allowed on billing incident '
                     'activities.'
                 ))
-        return super().write(values)
+        result = super().write(values)
+        if any(self._billing_owned_target(
+                attachment.res_model, attachment.res_id)
+                for attachment in self.sudo()):
+            raise AccessError(_(
+                'Attachments are not allowed on billing incident activities.'
+            ))
+        return result
 
 
 class MailActivity(models.Model):
     _inherit = 'mail.activity'
+
+    @api.model
+    def _has_billing_activity_access_authority(self):
+        return bool(
+            self.env.user.has_group('account.group_account_manager')
+            or _is_activity_scheduler(self.env)
+            or _is_activity_terminal(self.env)
+            or _is_odoo_module_uninstall(self.env)
+        )
+
+    def _dedicated_billing_activities(self):
+        review_type = self.env.ref(
+            'woow_paas_platform.'
+            'mail_activity_type_billing_incident_review',
+            raise_if_not_found=False,
+        )
+        if not review_type:
+            return self.browse()
+        dedicated_ids = [
+            activity.id
+            for activity in self.sudo()
+            if (activity.res_model == 'woow.billing.incident'
+                and activity.activity_type_id == review_type)
+        ]
+        return self.browse(dedicated_ids)
+
+    def _require_billing_activity_access_authority(self, operation):
+        dedicated = self._dedicated_billing_activities()
+        if dedicated and not self._has_billing_activity_access_authority():
+            raise dedicated._make_access_error(operation)
+
+    def _check_access(self, operation):
+        result = super()._check_access(operation)
+        if self._has_billing_activity_access_authority():
+            return result
+        dedicated = self._dedicated_billing_activities()
+        if not dedicated:
+            return result
+        existing = result[0] if result else self.browse()
+        forbidden = existing | dedicated
+        return forbidden, lambda: forbidden._make_access_error(operation)
+
+    @api.model
+    def _search(self, domain, offset=0, limit=None, order=None):
+        """Assigned-to-me never bypasses current finance-role membership."""
+        if not self._has_billing_activity_access_authority():
+            review_type = self.env.ref(
+                'woow_paas_platform.'
+                'mail_activity_type_billing_incident_review',
+                raise_if_not_found=False,
+            )
+            if review_type:
+                domain = expression.AND([
+                    domain,
+                    [
+                        '|',
+                        ('res_model', '!=', 'woow.billing.incident'),
+                        ('activity_type_id', '!=', review_type.id),
+                    ],
+                ])
+        return super()._search(domain, offset, limit, order)
 
     @api.model
     def _targets_billing_activity_values(self, values):
@@ -1409,6 +1622,7 @@ class MailActivity(models.Model):
 
     def _action_done(self, feedback=False, attachment_ids=None):
         """Serialize the whole core terminal flow with schedule and resolve."""
+        self._require_billing_activity_access_authority('write')
         incident_ids = self._dedicated_billing_incident_ids()
         Incident = self.env['woow.billing.incident'].sudo()
         if (incident_ids and feedback not in (None, False)
@@ -1428,6 +1642,7 @@ class MailActivity(models.Model):
 
     def unlink(self):
         """Re-arm only unresolved dedicated billing alerts after terminal use."""
+        self._require_billing_activity_access_authority('unlink')
         if _is_activity_scheduler(self.env):
             return super().unlink()
         incident_ids = self._dedicated_billing_incident_ids()

@@ -38,7 +38,10 @@ class TestBillingIncidentPolicy986(unittest.TestCase):
                 'prod/stg each currently has 1 `res.company`',
                 'prod=1/stg=3',
                 'current-state evidence only',
-                'policy does not assume single-company'):
+                'policy does not assume single-company',
+                '`base.group_system` alone does not grant',
+                'unresolved incidents',
+                'current account-manager'):
             self.assertIn(evidence, runbook)
 
     def test_acl_is_odoo_account_manager_and_has_no_company_rule(self):

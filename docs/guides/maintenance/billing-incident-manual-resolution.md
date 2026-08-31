@@ -24,13 +24,19 @@ Workspace role。以下三句是 comment #11112 的 durable security contract，
 
 `woow.billing.incident` 是刻意設計的 **global finance ledger**，不是 company-owned
 業務表：它沒有 company M2O／company record rule，也不另行縮減既有
-`base.group_system` 系統行為。每一位該 Odoo group 的現任 manager 都可跨全部 company
-讀取全部 incident，也可依 model allowlist 保存兩個人工查證欄位；這是 Eugene 裁決的安全
-契約，不是待補的隔離缺口。`orphan`／`needs_human` 的專屬 review activity 同樣派給該
-Odoo group 內**全體現任** managers，不依使用者目前 company 篩選。初次 schedule 派全體；
-後續 incident schedule／duplicate `_log()` 在同一 advisory lock 內收斂 roster，移除已離組
-使用者與同 user duplicate，再替新進 manager 補到恰一筆 active dedicated activity。本階段
-**沒有 cron**；若 incident 之後完全沒有 schedule／log 觸發，就不宣稱 roster 會自行收斂。
+`base.group_system` 系統行為。這句不構成額外授權：`base.group_system` alone does not grant
+incident read/write/menu access；只有**目前仍在** `account.group_account_manager` 的帳號可
+存取，即使是 system-only 帳號也不例外。每一位該 Odoo group 的現任 manager 都可跨全部
+company 讀取全部 incident，也可依 model allowlist 保存兩個人工查證欄位；這是 Eugene 裁決
+的安全契約，不是待補的隔離缺口。`orphan`／`needs_human` 的專屬 review activity 同樣派給
+該 Odoo group 內**全體現任** managers，不依使用者目前 company 篩選。初次 schedule 派
+全體；後續 incident schedule／duplicate `_log()` 在同一 advisory lock 內收斂 roster。另有
+只針對該 manager group `users` 變更的 `res.groups` hook，在同一 transaction 收斂**所有
+unresolved incidents**：撤掉離組者的 dedicated activities、移除 duplicate，再替新進
+manager 補到每人恰一筆 active dedicated activity；其他 group 的 users 變更不觸發。角色
+撤銷後，即使 stale activity 仍 assigned、incident message 的 author/create_uid 仍是本人，
+`mail.activity`／`mail.message` 的 direct-ID read/search/action gate 也要求當下 group membership。
+本階段不靠 cron 才達成 role revocation。
 
 ### Fresh evidence（2026-08-31；僅佐證現況）
 
@@ -83,15 +89,17 @@ boundary。共用 sensitive validator 會套到 `_log` 的所有文字 ingress�
 `resolution_note` RPC write、人工關單按鈕與 `_resolve(resolution_note)`：明確的
 `ResultData`／`Card4No`／`Card6No`／`CardNo`／`CVV`／`CVC`／`CID`／`CSC`／
 `security code`／`SAD`（含 `sensitive authentication data`）／`PIN`／`PIN block`／
-`track1`／`track2`／`magnetic stripe`／`PAN` marker，以及 Luhn-valid 13–19 位 PAN-like
-數字都會被拒絕。所有 caller-controlled incident-owned free text（`detail`、
+`track1`／`track2`／`magnetic stripe`／`PAN` marker，以及中文「安全碼／卡片安全碼／
+信用卡安全碼／PIN碼／PIN區塊／磁條／磁條資料／軌道資料／授權碼」與 Luhn-valid 13–19 位
+PAN-like 數字都會被拒絕。所有 caller-controlled incident-owned free text（`detail`、
 `resolution_note`、activity feedback）先在 raw、HTML entity-decoded 與 visible plaintext
 三層掃描；只要出現 HTML tag／comment／quoted attribute／entity markup 就 fail-closed，
 因本產品只接受 plain-text 理由。通過 markup gate 後，validator 才做 HTML entity decode、
-`html2plaintext`、Unicode NFKC，移除 Unicode category `Cf` 與 `Mn`／`Me` variation／
-combining separators，再把常見 punctuation 分隔正規化並跑 marker／PAN Luhn；因此卡號被
-點號、全形字元、U+FE0F variation selector、U+200B zero-width character 或 combining mark
-拆開也不會繞過。只有專用
+`html2plaintext`、Unicode NFKC，並以 Unicode letter/digit 作唯一邊界：**所有**非
+letter/digit 字元一律轉成同一 separator，再跑 marker／PAN Luhn。因此卡號被 Mc（如
+U+0903）、So／emoji、Sk、Cf、Mn、Me、點號、全形字元、U+FE0F variation selector、
+U+200B zero-width character 或 combining mark 拆開都不會繞過；合法中文查證理由只要不含
+上述 marker 仍可通過。只有專用
 `external_ref`／`trade_no` 欄位可豁免「純數字碰巧通過 Luhn」；兩欄仍拒絕上述 marker，
 並另有長度、安全字元與 CRLF/control-character shape gate。`external_ref` 只接受 1–20
 字元 raw provider MTN，
@@ -125,7 +133,11 @@ RPC truthy context 都不能自行鑄造。既有 targeted activity 的 generic 
 dedupe 只看 active 的專屬 activity：inactive／standard `action_done()`／`unlink()` 若 incident
 仍 unresolved，會在同一 transaction、同一 advisory lock 機制下立即收斂成**每位 manager
 恰一筆** active alert；不必等下一次 duplicate observation，而且完成 activity 本身**不會**把
-incident 關成 resolved。activity 的 summary／note 會依每位 manager 的 `lang` 分別翻譯，
+incident 關成 resolved。terminal flow 進 scheduler object capability 前會用 allowlist 重建
+乾淨 context，完全丟棄 caller `default_*`；scheduler create 同時明寫 target、type、assignee、
+content、deadline、`active=True`、`attachment_ids=[(5, 0, 0)]` 與其他 security-sensitive 欄，
+因此 RPC 的 `default_active=False`／`default_attachment_ids` 無法污染重建活動。activity 的
+summary／note 會依每位 manager 的 `lang` 分別翻譯，
 `kind` 顯示翻譯後 selection label，不顯示 raw key。
 
 ledger 的 source/business 欄位仍完全 relation-free。為使用 Odoo 標準
@@ -144,7 +156,11 @@ module-private object capability 交給 `message_post_with_source()` 呼叫 `sup
 
 related-model 也在同一 model 檔 targeted 守線：`mail.message` 只有上述 capability 能建立
 `model=woow.billing.incident` 的完成訊息，generic create／write／unlink（含任何 body、PAN 或
-`ResultData`）全拒；`ir.attachment` create／write 在 payload 落 DB 前拒絕直接綁 incident、
-dedicated billing activity 或 incident-owned message，既有 unrelated attachment 搬往這些
-old→new target 也原子拒絕。其他 model 的 message／attachment 行為不受影響。這些 private
-context keys 全部登錄在 repo `INTERNAL_CTX_KEY_REGISTRY`，值只接受 object identity。
+`ResultData`）全拒；其 read/search 也要求 current account-manager，不接受 author/create_uid
+捷徑。`ir.attachment` create／write 在 payload 落 DB 前拒絕直接綁 incident、dedicated
+billing activity 或 incident-owned message，既有 unrelated attachment 搬往這些 old→new
+與 ORM final target 也原子拒絕。protected carrier 的 `res_id` 先 canonicalize：canonical
+positive numeric string 轉 int 後再查 target；float、bool、zero、leading-zero／帶符號／空白等
+noncanonical 值一律 fail-closed；合法其他 model control 不受影響。其他 model 的
+message／attachment 行為不受影響。這些 private context keys 全部登錄在 repo
+`INTERNAL_CTX_KEY_REGISTRY`，值只接受 object identity。
