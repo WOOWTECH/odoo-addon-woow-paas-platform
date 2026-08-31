@@ -1399,7 +1399,8 @@ class TestBillingIncidentPublicApi864(TransactionCase):
             # Legacy/repair evidence must outlive its ephemeral dedicated
             # activity carrier.  Completion re-arms a fresh alert, but the old
             # activity id disappears and its payload becomes direct incident
-            # evidence instead of being cascade-deleted with the carrier.
+            # evidence instead of entering core's generic parent-attachment
+            # cleanup.
             original_activity_id = activity.id
             original_activity_user_id = activity.user_id.id
             cr.execute(
@@ -1481,27 +1482,28 @@ class TestBillingIncidentPublicApi864(TransactionCase):
             self.assertTrue(activity.action_done())
             self.assertFalse(activity.exists())
 
-            cascade_activity = env['mail.activity'].sudo().create({
+            ordinary_activity = env['mail.activity'].sudo().create({
                 'res_model_id': env['ir.model']._get('res.partner').id,
                 'res_id': partner.id,
                 'activity_type_id': env.ref(
                     'mail.mail_activity_data_todo').id,
                 'user_id': env.user.id,
-                'summary': 'Generic parent-unlink cascade control',
+                'summary': 'Generic parent-unlink cleanup control',
                 'note': 'Core must still remove this direct attachment',
                 'date_deadline': fields.Date.today(),
             })
-            cascade_attachment = env['ir.attachment'].sudo().create({
-                'name': 'generic-parent-cascade-control.bin',
+            ordinary_attachment = env['ir.attachment'].sudo().create({
+                'name': 'generic-parent-cleanup-control.bin',
                 'datas': base64.b64encode(b'ordinary activity payload'),
                 'res_model': 'mail.activity',
-                'res_id': cascade_activity.id,
+                'res_id': ordinary_activity.id,
             })
-            self.assertTrue(cascade_activity.unlink())
-            self.assertFalse(cascade_activity.exists())
+            self.assertTrue(ordinary_activity.unlink())
+            self.assertFalse(ordinary_activity.exists())
             self.assertFalse(
-                cascade_attachment.exists(),
-                'ordinary activity parent unlink 必須維持 core attachment cleanup',
+                ordinary_attachment.exists(),
+                'Odoo BaseModel.unlink() 的 generic parent attachment cleanup '
+                '必須仍可刪 ordinary activity payload；這不是 DB FK cascade',
             )
             cr.rollback()
 
@@ -2865,6 +2867,23 @@ class TestBillingIncidentAdminBackend864(TransactionCase):
             ('name', '=', 'woow_paas_platform'),
         ], limit=1)
         self.assertTrue(module)
+        self.assertTrue(
+            self.env['woow.billing.incident']
+            ._ensure_review_activities_current_cursor(self.incident.id))
+        review_type = self.env.ref(
+            'woow_paas_platform.mail_activity_type_billing_incident_review')
+        dedicated_activity = self.env['mail.activity'].sudo().search([
+            ('res_model', '=', 'woow.billing.incident'),
+            ('res_id', '=', self.incident.id),
+            ('activity_type_id', '=', review_type.id),
+            ('user_id', '=', self.manager.id),
+            ('active', '=', True),
+        ], limit=1)
+        self.assertTrue(dedicated_activity)
+        activity_attachment = self.env['ir.attachment'].sudo().create({
+            'name': 'module-uninstall-activity-evidence.bin',
+            'datas': base64.b64encode(b'legacy activity evidence'),
+        })
         attachment = self.env['ir.attachment'].sudo().create({
             'name': 'module-uninstall-incident-evidence.bin',
             'datas': base64.b64encode(b'legacy direct evidence'),
@@ -2872,10 +2891,25 @@ class TestBillingIncidentAdminBackend864(TransactionCase):
         self.env.cr.execute(
             'UPDATE ir_attachment SET res_model = %s, res_id = %s '
             'WHERE id = %s',
+            ('mail.activity', dedicated_activity.id, activity_attachment.id),
+        )
+        self.env.cr.execute(
+            'UPDATE ir_attachment SET res_model = %s, res_id = %s '
+            'WHERE id = %s',
             ('woow.billing.incident', self.incident.id, attachment.id),
         )
-        attachment.invalidate_recordset(['res_model', 'res_id'])
+        (activity_attachment | attachment).invalidate_recordset([
+            'res_model', 'res_id',
+        ])
         module.write({'state': 'to remove'})
+        self.assertTrue(
+            dedicated_activity.sudo().with_context(_force_unlink=True).unlink())
+        self.assertFalse(dedicated_activity.exists())
+        self.assertFalse(
+            activity_attachment.exists(),
+            '真 module uninstall 必須跳過 evidence re-anchor，讓 Odoo '
+            'BaseModel.unlink() 同 transaction 清掉 parent direct attachment',
+        )
         self.assertTrue(
             attachment.sudo().with_context(_force_unlink=True).unlink())
         self.assertFalse(attachment.exists())
@@ -4017,6 +4051,20 @@ class TestBillingIncidentRpcWriteGuard864(HttpCase):
             protected_message_attachment,
             protected_forged,
         ) = legacy_protected
+        legacy_share_token = str(uuid.uuid4())
+        self.env.cr.execute(
+            'UPDATE ir_attachment SET public = true, access_token = %s '
+            'WHERE id = %s',
+            (legacy_share_token, protected_activity_attachment.id),
+        )
+        protected_activity_attachment.invalidate_recordset([
+            'public', 'access_token', 'datas', 'checksum',
+        ])
+        self.assertTrue(protected_activity_attachment.public)
+        self.assertEqual(
+            protected_activity_attachment.access_token, legacy_share_token)
+        protected_activity_content = protected_activity_attachment.datas
+        protected_activity_checksum = protected_activity_attachment.checksum
 
         def attachments_still_in_db(attachment_ids):
             # A fresh verification cursor avoids trusting stale ORM recordsets
@@ -4088,6 +4136,38 @@ class TestBillingIncidentRpcWriteGuard864(HttpCase):
             )],
             'carrier 消失後 legacy evidence 必須直接改錨 incident',
         )
+        protected_activity_attachment.invalidate_recordset([
+            'public', 'access_token', 'datas', 'checksum',
+        ])
+        self.assertFalse(
+            protected_activity_attachment.public,
+            '改錨 direct incident evidence 必須同一次 private write 收回 public',
+        )
+        self.assertFalse(
+            protected_activity_attachment.access_token,
+            '改錨 direct incident evidence 必須清除 Odoo 18 share token',
+        )
+        self.assertEqual(
+            protected_activity_attachment.datas, protected_activity_content,
+            '收斂 visibility 不得改 evidence bytes',
+        )
+        self.assertEqual(
+            protected_activity_attachment.checksum,
+            protected_activity_checksum,
+            '收斂 visibility 不得改 evidence checksum',
+        )
+        self.authenticate(None, None)
+        for url in (
+                '/web/content/%s' % protected_activity_attachment.id,
+                '/web/content/%s?access_token=%s' % (
+                    protected_activity_attachment.id, legacy_share_token)):
+            with self.subTest(anonymous_url=url):
+                response = self.url_open(url)
+                self.assertEqual(
+                    response.status_code, 404,
+                    'anonymous 不得用 public 或 re-anchor 前 token 取得 evidence',
+                )
+        self.authenticate(self.manager_a_login, self.manager_a_login)
         reanchored_denial = self._call_kw(
             'ir.attachment', 'unlink',
             [[protected_activity_attachment.id]],

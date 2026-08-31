@@ -1553,6 +1553,206 @@ class TestBillingIncidentRealTransactions864(BaseCase):
             'each fault-injected path must reach and raise from its postcheck',
         )
 
+    def test_attachment_unlink_commit_oracles_use_three_real_connections(self):
+        """Caught denial and private cleanup must have durable DB oracles."""
+        from odoo.addons.woow_paas_platform.models import billing_incident
+
+        incident_id = self._call_log(self._snapshot(
+            'attachment-unlink-commit-oracles',
+            state='needs_human',
+        ))
+        with self.registry.cursor() as setup_cr:
+            setup_env = api.Environment(
+                setup_cr, odoo.SUPERUSER_ID, {})
+            ordinary = setup_env['ir.attachment'].sudo().create({
+                'name': '%s-mixed-ordinary.bin' % self.marker,
+                'datas': b'b3JkaW5hcnk=',
+                'res_model': 'res.partner',
+                'res_id': self.control_partner_id,
+            })
+            protected_mixed, protected_cleanup = (
+                setup_env['ir.attachment'].sudo().create([{
+                    'name': '%s-%s.bin' % (self.marker, purpose),
+                    'datas': b'cHJvdGVjdGVk',
+                } for purpose in ('mixed-protected', 'private-cleanup')])
+            )
+            setup_cr.execute(
+                'UPDATE ir_attachment SET res_model = %s, res_id = %s '
+                'WHERE id = ANY(%s)',
+                (
+                    _MODEL,
+                    incident_id,
+                    [protected_mixed.id, protected_cleanup.id],
+                ),
+            )
+            ordinary_id = ordinary.id
+            protected_mixed_id = protected_mixed.id
+            protected_cleanup_id = protected_cleanup.id
+            # This is the setup visibility boundary required by the oracle.
+            setup_cr.commit()
+
+        mixed_ids = sorted([ordinary_id, protected_mixed_id])
+        caller_cr = self.registry.cursor()
+        try:
+            caller_env = api.Environment(
+                caller_cr, self.manager_user_id, {})
+            try:
+                caller_env['ir.attachment'].browse(mixed_ids).unlink()
+            except AccessError:
+                # Deliberately make any pre-denial partial unlink durable.
+                caller_cr.commit()
+            else:
+                self.fail(
+                    'mixed protected＋ordinary unlink must raise AccessError')
+        finally:
+            caller_cr.close()
+
+        with self.registry.cursor() as verify_cr:
+            verify_cr.execute(
+                'SELECT id FROM ir_attachment WHERE id = ANY(%s) ORDER BY id',
+                (mixed_ids,),
+            )
+            self.assertEqual(
+                [row_id for row_id, in verify_cr.fetchall()],
+                mixed_ids,
+                'third connection must see both rows after catch＋commit',
+            )
+
+        with self.registry.cursor() as cleanup_cr:
+            cleanup_env = api.Environment(
+                cleanup_cr, odoo.SUPERUSER_ID, {})
+            payload = cleanup_env['ir.attachment'].sudo().browse(
+                protected_cleanup_id)
+            self.assertTrue(
+                billing_incident._attachment_cleanup(payload).unlink())
+            cleanup_cr.commit()
+
+        with self.registry.cursor() as verify_cr:
+            verify_cr.execute(
+                'SELECT id FROM ir_attachment WHERE id = ANY(%s) ORDER BY id',
+                ([
+                    ordinary_id,
+                    protected_mixed_id,
+                    protected_cleanup_id,
+                ],),
+            )
+            self.assertEqual(
+                [row_id for row_id, in verify_cr.fetchall()],
+                mixed_ids,
+                'third connection must see only private-cleanup payload gone',
+            )
+
+    def test_parent_activity_cleanup_matches_core_and_real_uninstall(self):
+        """Normal cleanup stays core; true uninstall skips evidence re-anchor."""
+        from odoo.addons.woow_paas_platform.models import billing_incident
+
+        incident_id = self._call_log(self._snapshot(
+            'parent-activity-cleanup',
+            state='needs_human',
+        ))
+        with self.registry.cursor() as setup_cr:
+            setup_env = api.Environment(
+                setup_cr, odoo.SUPERUSER_ID, {})
+            review_type = setup_env.ref(
+                'woow_paas_platform.'
+                'mail_activity_type_billing_incident_review')
+            dedicated = setup_env['mail.activity'].sudo().search([
+                ('res_model', '=', _MODEL),
+                ('res_id', '=', incident_id),
+                ('activity_type_id', '=', review_type.id),
+                ('user_id', '=', self.manager_user_id),
+                ('active', '=', True),
+            ], limit=1)
+            self.assertTrue(dedicated)
+            ordinary = setup_env['mail.activity'].sudo().create({
+                'res_model_id': setup_env['ir.model']._get(
+                    'res.partner').id,
+                'res_id': self.control_partner_id,
+                'activity_type_id': setup_env.ref(
+                    'mail.mail_activity_data_todo').id,
+                'user_id': self.manager_user_id,
+                'summary': '%s ordinary parent cleanup' % self.marker,
+                'note': 'generic Odoo cleanup control',
+                'date_deadline': fields.Date.today(),
+            })
+            ordinary_attachment = setup_env['ir.attachment'].sudo().create({
+                'name': '%s-ordinary-parent-attachment.bin' % self.marker,
+                'datas': b'b3JkaW5hcnkgcGF5bG9hZA==',
+                'res_model': 'mail.activity',
+                'res_id': ordinary.id,
+            })
+            dedicated_attachment = setup_env['ir.attachment'].sudo().create({
+                'name': '%s-uninstall-parent-attachment.bin' % self.marker,
+                'datas': b'dW5pbnN0YWxsIHBheWxvYWQ=',
+            })
+            setup_cr.execute(
+                'UPDATE ir_attachment SET res_model = %s, res_id = %s '
+                'WHERE id = %s',
+                ('mail.activity', dedicated.id, dedicated_attachment.id),
+            )
+            ordinary_id = ordinary.id
+            ordinary_attachment_id = ordinary_attachment.id
+            dedicated_id = dedicated.id
+            dedicated_attachment_id = dedicated_attachment.id
+            setup_cr.commit()
+
+        with self.registry.cursor() as ordinary_cr:
+            ordinary_env = api.Environment(
+                ordinary_cr, self.manager_user_id, {})
+            self.assertTrue(
+                ordinary_env['mail.activity'].browse(ordinary_id).unlink())
+            ordinary_cr.commit()
+        with self.registry.cursor() as verify_cr:
+            verify_cr.execute(
+                'SELECT '
+                'EXISTS(SELECT 1 FROM mail_activity WHERE id = %s), '
+                'EXISTS(SELECT 1 FROM ir_attachment WHERE id = %s)',
+                (ordinary_id, ordinary_attachment_id),
+            )
+            self.assertEqual(
+                verify_cr.fetchone(),
+                (False, False),
+                'Odoo BaseModel.unlink(), not a DB FK cascade, must delete '
+                'the ordinary parent and its direct attachment',
+            )
+
+        uninstall_cr = self.registry.cursor()
+        try:
+            uninstall_env = api.Environment(
+                uninstall_cr, odoo.SUPERUSER_ID, {})
+            module = uninstall_env['ir.module.module'].sudo().search([
+                ('name', '=', 'woow_paas_platform'),
+            ], limit=1)
+            original_state = module.state
+            module.write({'state': 'to remove'})
+            uninstall_activity = uninstall_env['mail.activity'].sudo() \
+                .with_context(_force_unlink=True).browse(dedicated_id)
+            self.assertTrue(
+                billing_incident._is_odoo_module_uninstall(
+                    uninstall_activity.env),
+                'test must enter both real state=to remove and core context',
+            )
+            self.assertTrue(uninstall_activity.unlink())
+            module.write({'state': original_state})
+            uninstall_cr.commit()
+        finally:
+            uninstall_cr.close()
+
+        with self.registry.cursor() as verify_cr:
+            verify_cr.execute(
+                'SELECT '
+                'EXISTS(SELECT 1 FROM mail_activity WHERE id = %s), '
+                'EXISTS(SELECT 1 FROM ir_attachment WHERE id = %s), '
+                '(SELECT state FROM ir_module_module WHERE id = %s)',
+                (dedicated_id, dedicated_attachment_id, module.id),
+            )
+            self.assertEqual(
+                verify_cr.fetchone(),
+                (False, False, original_state),
+                'true uninstall must skip re-anchor and let core parent '
+                'attachment cleanup run, then restore module fixture state',
+            )
+
     def test_resolution_and_roster_mutation_share_one_lock_order(self):
         """Manual/independent cleanup cannot deadlock roster convergence."""
         from odoo.addons.woow_paas_platform.models import billing_incident

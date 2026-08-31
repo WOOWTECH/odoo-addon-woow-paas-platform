@@ -2363,10 +2363,22 @@ class MailActivity(models.Model):
                 ('res_id', 'in', activities.ids),
             ])
             if attachments:
-                _attachment_cleanup(attachments).write({
+                reattach_values = {
                     'res_model': 'woow.billing.incident',
                     'res_id': incident_id,
-                })
+                    # Odoo 18 serves ``public`` attachments without the target
+                    # ACL.  Re-anchoring and visibility hardening are one
+                    # private-capability write, never two observable states.
+                    'public': False,
+                }
+                # Odoo 18 core defines this token on ir.attachment and accepts
+                # it in /web/content instead of normal ACLs.  Keep the guard
+                # conditional for registries which remove/rename the optional
+                # field, but clear it whenever present.  No content field is
+                # included, so datas/checksum remain unchanged.
+                if 'access_token' in attachments._fields:
+                    reattach_values['access_token'] = False
+                _attachment_cleanup(attachments).write(reattach_values)
         return True
 
     def _billing_incident_ids(self):
