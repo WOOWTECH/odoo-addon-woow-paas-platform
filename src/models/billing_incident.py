@@ -61,7 +61,7 @@ _BILLING_ACTIVITY_TERMINAL = _BillingIncidentCapability(
 _BILLING_ROSTER_MUTATION = _BillingIncidentCapability(
     'manager roster mutation')
 _BILLING_ATTACHMENT_CLEANUP = _BillingIncidentCapability(
-    'squatted attachment cleanup')
+    'attachment cleanup or evidence reattach')
 _BILLING_INCIDENT_CREATE_CTX_KEY = 'woow_billing_incident_create'
 _BILLING_INCIDENT_RESOLUTION_CTX_KEY = (
     'woow_billing_incident_resolution_transition')
@@ -2053,6 +2053,12 @@ class IrAttachment(models.Model):
 
     def write(self, values):
         """Lock old/prospective carriers before check/write and postcheck."""
+        if _is_attachment_cleanup(self.env):
+            # The same JSON-inexpressible capability deletes future-id attack
+            # payloads and preserves legacy evidence before its dedicated
+            # activity carrier is deleted.  Both are server-only metadata
+            # maintenance inside the carrier transaction.
+            return super().write(values)
         carrier_targets = []
         for attachment in self.sudo():
             for res_model, res_id in (
@@ -2342,6 +2348,27 @@ class MailActivity(models.Model):
         return sorted(set(
             self._dedicated_billing_activities().sudo().mapped('res_id')))
 
+    def _reattach_dedicated_billing_evidence(self):
+        """Move legacy carrier payloads to the durable incident ledger row."""
+        if not self or _is_odoo_module_uninstall(self.env):
+            return True
+        dedicated = self.sudo()
+        _acquire_billing_carrier_target_locks(
+            self.env.cr,
+            [('mail.activity', activity_id) for activity_id in dedicated.ids],
+        )
+        for incident_id, activities in dedicated.grouped('res_id').items():
+            attachments = self.env['ir.attachment'].sudo().search([
+                ('res_model', '=', self._name),
+                ('res_id', 'in', activities.ids),
+            ])
+            if attachments:
+                _attachment_cleanup(attachments).write({
+                    'res_model': 'woow.billing.incident',
+                    'res_id': incident_id,
+                })
+        return True
+
     def _billing_incident_ids(self):
         return sorted(set(
             self._billing_incident_activities().sudo().mapped('res_id')))
@@ -2359,13 +2386,11 @@ class MailActivity(models.Model):
                 'Billing incident activity feedback must contain only safe, '
                 'non-sensitive summaries.'
             ))
+        # Explicit incoming/M2M payloads remain forbidden.  Direct legacy
+        # ``res_model='mail.activity'`` evidence is handled separately: it is
+        # atomically reattached to the incident before the carrier disappears.
         has_linked_attachments = bool(
-            dedicated.sudo().mapped('attachment_ids')
-            or self.env['ir.attachment'].sudo().search_count([
-                ('res_model', '=', self._name),
-                ('res_id', 'in', dedicated.ids),
-            ], limit=1)
-        )
+            dedicated.sudo().mapped('attachment_ids'))
         if attachment_ids or has_linked_attachments:
             raise UserError(_(
                 'Attachments are not allowed on billing incident activities.'
@@ -2483,6 +2508,7 @@ class MailActivity(models.Model):
             # A review activity is only a dismissible alert; the incident form
             # button is the sole resolution transition.
             guarded = _activity_terminal(dedicated)
+            guarded._reattach_dedicated_billing_evidence()
             super(MailActivity, guarded).unlink()
             for incident_id in dedicated_incident_ids:
                 Incident._ensure_review_activities_current_cursor(
@@ -2490,22 +2516,25 @@ class MailActivity(models.Model):
         return messages, next_activities
 
     def unlink(self):
-        """Re-arm only unresolved dedicated billing alerts after terminal use."""
+        """Preserve evidence, then re-arm unresolved dedicated alerts."""
         self._require_billing_activity_access_authority('unlink')
-        if _is_activity_scheduler(self.env):
-            return super().unlink()
+        scheduler_cleanup = _is_activity_scheduler(self.env)
         dedicated = self._dedicated_billing_activities()
-        self._validate_dedicated_terminal_inputs(dedicated)
+        if not scheduler_cleanup:
+            self._validate_dedicated_terminal_inputs(dedicated)
         incident_ids = self._billing_incident_ids()
         dedicated_incident_ids = sorted(set(
             dedicated.sudo().mapped('res_id')))
         Incident = self.env['woow.billing.incident'].sudo()
         if incident_ids:
-            # Lock before core deletes/archives the terminal activity.  Every
+            # Lock before reattaching evidence and deleting the carrier.  Every
             # incident path enters roster first, then sorted review locks.
             Incident._acquire_review_activity_locks(
                 self.env.cr, incident_ids)
+        dedicated._reattach_dedicated_billing_evidence()
         result = super().unlink()
+        if scheduler_cleanup:
+            return result
         for incident_id in dedicated_incident_ids:
             Incident._ensure_review_activities_current_cursor(
                 incident_id, silent=True)

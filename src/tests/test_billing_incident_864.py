@@ -1396,33 +1396,52 @@ class TestBillingIncidentPublicApi864(TransactionCase):
             self.assertFalse(attachment.res_model)
             self.assertFalse(attachment.res_id)
 
-            # Legacy/corrupt pre-guard rows still fail closed at completion.
+            # Legacy/repair evidence must outlive its ephemeral dedicated
+            # activity carrier.  Completion re-arms a fresh alert, but the old
+            # activity id disappears and its payload becomes direct incident
+            # evidence instead of being cascade-deleted with the carrier.
+            original_activity_id = activity.id
+            original_activity_user_id = activity.user_id.id
             cr.execute(
                 'UPDATE ir_attachment SET res_model = %s, res_id = %s '
                 'WHERE id = %s',
-                ('mail.activity', activity.id, attachment.id),
+                ('mail.activity', original_activity_id, attachment.id),
             )
             attachment.invalidate_recordset(['res_model', 'res_id'])
-            with self.assertRaises(UserError):
-                activity.action_done()
-            self.assertTrue(activity.exists())
-            self.assertTrue(activity.active)
+            self.assertFalse(activity.action_done())
+            self.assertFalse(
+                env['mail.activity'].sudo().browse(
+                    original_activity_id).exists())
+            attachment.invalidate_recordset(['res_model', 'res_id'])
+            self.assertTrue(attachment.exists())
+            self.assertEqual(
+                (attachment.res_model, attachment.res_id),
+                ('woow.billing.incident', incident.id),
+            )
 
+            replacement = env['mail.activity'].sudo().search([
+                ('res_model', '=', 'woow.billing.incident'),
+                ('res_id', '=', incident_id),
+                ('activity_type_id', '=', review_type.id),
+                ('user_id', '=', original_activity_user_id),
+                ('active', '=', True),
+            ], limit=1)
+            self.assertTrue(replacement)
             with self.assertRaises(UserError):
                 incident.message_post_with_source(
                     'mail.message_activity_done',
                     attachments=[('unscanned-inline.txt', b'content')],
                     author_id=env.user.partner_id.id,
                     render_values={
-                        'activity': activity,
+                        'activity': replacement,
                         'feedback': 'verification completed',
                         'display_assignee': False,
                     },
-                    mail_activity_type_id=activity.activity_type_id.id,
+                    mail_activity_type_id=replacement.activity_type_id.id,
                     subtype_xmlid='mail.mt_activities',
                 )
-            self.assertTrue(activity.exists())
-            self.assertTrue(activity.active)
+            self.assertTrue(replacement.exists())
+            self.assertTrue(replacement.active)
             cr.rollback()
 
     def test_message_post_with_non_activity_source_is_rejected(self):
@@ -1461,6 +1480,29 @@ class TestBillingIncidentPublicApi864(TransactionCase):
             }))
             self.assertTrue(activity.action_done())
             self.assertFalse(activity.exists())
+
+            cascade_activity = env['mail.activity'].sudo().create({
+                'res_model_id': env['ir.model']._get('res.partner').id,
+                'res_id': partner.id,
+                'activity_type_id': env.ref(
+                    'mail.mail_activity_data_todo').id,
+                'user_id': env.user.id,
+                'summary': 'Generic parent-unlink cascade control',
+                'note': 'Core must still remove this direct attachment',
+                'date_deadline': fields.Date.today(),
+            })
+            cascade_attachment = env['ir.attachment'].sudo().create({
+                'name': 'generic-parent-cascade-control.bin',
+                'datas': base64.b64encode(b'ordinary activity payload'),
+                'res_model': 'mail.activity',
+                'res_id': cascade_activity.id,
+            })
+            self.assertTrue(cascade_activity.unlink())
+            self.assertFalse(cascade_activity.exists())
+            self.assertFalse(
+                cascade_attachment.exists(),
+                'ordinary activity parent unlink 必須維持 core attachment cleanup',
+            )
             cr.rollback()
 
     def test_related_message_and_attachment_guards_are_targeted(self):
@@ -2104,6 +2146,19 @@ class TestBillingIncidentPublicApi864(TransactionCase):
             ('res_model', '=', 'woow.billing.incident'),
             ('res_id', '=', incident.id),
         ]
+        removed_activity = Activity.search(
+            activity_domain + [('user_id', '=', removed.id)], limit=1)
+        self.assertTrue(removed_activity)
+        roster_evidence = self.env['ir.attachment'].sudo().create({
+            'name': 'legacy-roster-evidence-%s.bin' % uuid.uuid4().hex,
+            'datas': base64.b64encode(b'legacy roster evidence'),
+        })
+        self.env.cr.execute(
+            'UPDATE ir_attachment SET res_model = %s, res_id = %s '
+            'WHERE id = %s',
+            ('mail.activity', removed_activity.id, roster_evidence.id),
+        )
+        roster_evidence.invalidate_recordset(['res_model', 'res_id'])
         self.assertIn(removed.id, Activity.search(activity_domain).user_id.ids)
         self.assertEqual(Followers.search_count(
             follower_domain + [('partner_id', '=', removed.partner_id.id)]), 1)
@@ -2182,6 +2237,14 @@ class TestBillingIncidentPublicApi864(TransactionCase):
         self.assertEqual(len(final_activities), len(current_manager_ids))
         self.assertNotIn(removed.id, final_user_ids)
         self.assertIn(added.id, final_user_ids)
+        self.assertFalse(removed_activity.exists())
+        roster_evidence.invalidate_recordset(['res_model', 'res_id'])
+        self.assertTrue(roster_evidence.exists())
+        self.assertEqual(
+            (roster_evidence.res_model, roster_evidence.res_id),
+            ('woow.billing.incident', incident.id),
+            'roster convergence 刪 dedicated carrier 前必須保全 evidence provenance',
+        )
         self.assertEqual(Followers.search_count(
             follower_domain + [('partner_id', '=', removed.partner_id.id)]), 0)
         self.assertEqual(Followers.search_count(
@@ -2853,6 +2916,7 @@ class TestBillingIncidentAdminBackend864(TransactionCase):
             'woow_paas_platform.mail_activity_type_billing_incident_review')
         other_type = self.env.ref('mail.mail_activity_data_call')
         model = self.env['ir.model']._get('woow.billing.incident')
+        dedicated_activity_id = False
         for activity_type in (review_type, other_type):
             self.env.cr.execute(
                 'INSERT INTO mail_activity '
@@ -2861,7 +2925,7 @@ class TestBillingIncidentAdminBackend864(TransactionCase):
                 'automated, active, create_uid, write_uid, create_date, '
                 'write_date) VALUES '
                 '(%s, %s, %s, %s, %s, %s, %s, %s, CURRENT_DATE, '
-                'false, true, %s, %s, NOW(), NOW())',
+                'false, true, %s, %s, NOW(), NOW()) RETURNING id',
                 (
                     model.id, 'woow.billing.incident', record.id,
                     'manual cleanup', activity_type.id, self.manager.id,
@@ -2869,8 +2933,32 @@ class TestBillingIncidentAdminBackend864(TransactionCase):
                     1, 1,
                 ),
             )
+            activity_id = self.env.cr.fetchone()[0]
+            if activity_type == review_type:
+                dedicated_activity_id = activity_id
+
+        cleanup_evidence = self.env['ir.attachment'].sudo().create({
+            'name': 'manual-cleanup-legacy-evidence.bin',
+            'datas': base64.b64encode(b'manual cleanup evidence'),
+        })
+        self.env.cr.execute(
+            'UPDATE ir_attachment SET res_model = %s, res_id = %s '
+            'WHERE id = %s',
+            ('mail.activity', dedicated_activity_id, cleanup_evidence.id),
+        )
+        cleanup_evidence.invalidate_recordset(['res_model', 'res_id'])
 
         self.assertTrue(record.action_mark_manually_resolved())
+        self.assertFalse(
+            self.env['mail.activity'].sudo().browse(
+                dedicated_activity_id).exists())
+        cleanup_evidence.invalidate_recordset(['res_model', 'res_id'])
+        self.assertTrue(cleanup_evidence.exists())
+        self.assertEqual(
+            (cleanup_evidence.res_model, cleanup_evidence.res_id),
+            ('woow.billing.incident', record.id),
+            'resolution cleanup 必須先把 dedicated carrier evidence 改錨 ledger',
+        )
         self.env.cr.execute(
             'SELECT activity_type_id FROM mail_activity '
             'WHERE res_model = %s AND res_id = %s ORDER BY activity_type_id',
@@ -3903,9 +3991,7 @@ class TestBillingIncidentRpcWriteGuard864(HttpCase):
         # repair even though the create guard rejects that shape today.
         # Corrupt only their generic relation stamps so the unlink operation
         # under test still crosses the real account-manager RPC seam.
-        purposes = (
-            'single', 'activity', 'message', 'forged', 'mixed', 'cleanup',
-        )
+        purposes = ('single', 'activity', 'message', 'forged')
         legacy_protected = self.env['ir.attachment'].sudo().create([{
             'name': 'rpc-direct-unlink-%s-%s.bin' % (
                 purpose, uuid.uuid4().hex),
@@ -3915,8 +4001,6 @@ class TestBillingIncidentRpcWriteGuard864(HttpCase):
             ('woow.billing.incident', self.incident_a.id),
             ('mail.activity', replacement_activity.id),
             ('mail.message', protected_message.id),
-            ('woow.billing.incident', self.incident_a.id),
-            ('woow.billing.incident', self.incident_a.id),
             ('woow.billing.incident', self.incident_a.id),
         )
         for attachment, (res_model, res_id) in zip(
@@ -3932,20 +4016,22 @@ class TestBillingIncidentRpcWriteGuard864(HttpCase):
             protected_activity_attachment,
             protected_message_attachment,
             protected_forged,
-            protected_mixed,
-            protected_cleanup,
         ) = legacy_protected
 
-        def attachment_ids_still_in_db(attachment_ids):
-            # A fresh third cursor + raw DB read avoids trusting stale ORM
-            # recordsets after the real HTTP request transaction returns.
+        def attachments_still_in_db(attachment_ids):
+            # A fresh verification cursor avoids trusting stale ORM recordsets
+            # or assuming that an uncommitted caller deletion is visible.
             with self.env.registry.cursor() as cr:
                 cr.execute(
-                    'SELECT id FROM ir_attachment WHERE id = ANY(%s) '
-                    'ORDER BY id',
+                    'SELECT id, res_model, res_id FROM ir_attachment '
+                    'WHERE id = ANY(%s) ORDER BY id',
                     (attachment_ids,),
                 )
-                return [row_id for row_id, in cr.fetchall()]
+                return cr.fetchall()
+
+        def attachment_ids_still_in_db(attachment_ids):
+            return [row_id for row_id, _res_model, _res_id
+                    in attachments_still_in_db(attachment_ids)]
 
         denied_unlink = self._call_kw(
             'ir.attachment', 'unlink', [[protected_single.id]],
@@ -3981,6 +4067,41 @@ class TestBillingIncidentRpcWriteGuard864(HttpCase):
             carrier_attachment_ids,
         )
 
+        original_activity_id = replacement_activity.id
+        self.assertTrue(self._assert_ok(
+            self._call_kw(
+                'mail.activity', 'unlink', [[original_activity_id]]),
+            'account manager parent unlink 應刪 dedicated carrier 並重建 alert',
+        ))
+        with self.env.registry.cursor() as cr:
+            cr.execute(
+                'SELECT id FROM mail_activity WHERE id = %s',
+                (original_activity_id,),
+            )
+            self.assertFalse(cr.fetchone(), '原 dedicated carrier 必須已刪除')
+        self.assertEqual(
+            attachments_still_in_db([protected_activity_attachment.id]),
+            [(
+                protected_activity_attachment.id,
+                'woow.billing.incident',
+                self.incident_a.id,
+            )],
+            'carrier 消失後 legacy evidence 必須直接改錨 incident',
+        )
+        reanchored_denial = self._call_kw(
+            'ir.attachment', 'unlink',
+            [[protected_activity_attachment.id]],
+        )
+        self._assert_access_error(
+            reanchored_denial,
+            'account manager RPC 仍不得刪 reattached incident evidence',
+            contains='Attachments are not allowed',
+        )
+        self.assertEqual(
+            attachment_ids_still_in_db([protected_activity_attachment.id]),
+            [protected_activity_attachment.id],
+        )
+
         forged_unlink = self._call_kw(
             'ir.attachment', 'unlink', [[protected_forged.id]],
             {'context': {'woow_billing_attachment_cleanup': True}},
@@ -3995,19 +4116,45 @@ class TestBillingIncidentRpcWriteGuard864(HttpCase):
             [protected_forged.id],
         )
 
+        # Build the mixed and private-cleanup payloads on a dedicated cursor
+        # and commit them before either caller runs.  The later fresh cursor
+        # assertions therefore cannot pass merely because setup was invisible.
+        with self.env.registry.cursor() as setup_cr:
+            setup_env = self.env(cr=setup_cr)
+            protected_mixed, protected_cleanup = (
+                setup_env['ir.attachment'].sudo().create([{
+                    'name': 'rpc-dedicated-cursor-%s-%s.bin' % (
+                        purpose, uuid.uuid4().hex),
+                    'datas': base64.b64encode(b'dedicated cursor payload'),
+                } for purpose in ('mixed', 'cleanup')])
+            )
+            setup_cr.execute(
+                'UPDATE ir_attachment SET res_model = %s, res_id = %s '
+                'WHERE id = ANY(%s)',
+                (
+                    'woow.billing.incident', self.incident_a.id,
+                    [protected_mixed.id, protected_cleanup.id],
+                ),
+            )
+            setup_cr.commit()
+
         mixed_ids = [control_id, protected_mixed.id]
-        try:
-            self.env['ir.attachment'].with_user(
-                self.manager_a).browse(mixed_ids).unlink()
-        except AccessError:
-            pass
-        else:
-            self.fail(
-                'mixed protected＋ordinary recordset 必須 preflight 後整批拒絕')
+        with self.env.registry.cursor() as caller_cr:
+            caller_env = self.env(cr=caller_cr)
+            try:
+                caller_env['ir.attachment'].with_user(
+                    self.manager_a.id).browse(mixed_ids).unlink()
+            except AccessError:
+                # Deliberately commit after the caller catches the denial.  A
+                # partial delete before AccessError would now become durable.
+                caller_cr.commit()
+            else:
+                self.fail(
+                    'mixed protected＋ordinary recordset 必須 preflight 後整批拒絕')
         self.assertEqual(
             attachment_ids_still_in_db(mixed_ids),
             sorted(mixed_ids),
-            'caller catch AccessError 後也不得 partial delete 任一 attachment',
+            'caller catch＋commit 後 fresh cursor 必須仍看見 mixed 兩筆',
         )
 
         self.assertTrue(self._assert_ok(
@@ -4021,13 +4168,21 @@ class TestBillingIncidentRpcWriteGuard864(HttpCase):
         )
 
         from odoo.addons.woow_paas_platform.models import billing_incident
-        self.assertTrue(
-            billing_incident._attachment_cleanup(protected_cleanup).unlink(),
-            'server-only private cleanup capability 必須保留正常清理路徑',
-        )
+        cleanup_payload_ids = [protected_cleanup.id, protected_mixed.id]
+        with self.env.registry.cursor() as cleanup_cr:
+            cleanup_env = self.env(cr=cleanup_cr)
+            cleanup_payloads = cleanup_env['ir.attachment'].sudo().browse(
+                cleanup_payload_ids)
+            self.assertTrue(
+                billing_incident._attachment_cleanup(
+                    cleanup_payloads).unlink(),
+                'server-only private cleanup capability 必須可刪指定惡意 payload',
+            )
+            cleanup_cr.commit()
         self.assertEqual(
-            attachment_ids_still_in_db([protected_cleanup.id]),
+            attachment_ids_still_in_db(cleanup_payload_ids),
             [],
+            'private cleanup commit 後 fresh cursor 必須驗到 payload 已刪',
         )
 
         control_message_id = self._assert_ok(
