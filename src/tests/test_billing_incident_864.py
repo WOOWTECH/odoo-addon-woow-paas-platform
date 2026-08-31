@@ -4361,6 +4361,396 @@ class TestBillingIncidentRpcWriteGuard864(HttpCase):
         )
         self.assertIsInstance(control_message_id, int)
 
+    def test_manager_rpc_activity_m2m_writer_rejects_protected_links(self):
+        """Commands 4/6 must not turn an ordinary activity into a carrier."""
+        self.assertTrue(
+            self.env['woow.billing.incident']
+            ._ensure_review_activities_current_cursor(self.incident_a.id))
+        review_type = self.env.ref(
+            'woow_paas_platform.mail_activity_type_billing_incident_review')
+        dedicated = self.env['mail.activity'].sudo().search([
+            ('res_model', '=', 'woow.billing.incident'),
+            ('res_id', '=', self.incident_a.id),
+            ('activity_type_id', '=', review_type.id),
+            ('user_id', '=', self.manager_a.id),
+            ('active', '=', True),
+        ], limit=1)
+        self.assertTrue(dedicated)
+        project = self.env['project.project'].with_user(
+            self.manager_a).create({
+                'name': 'M2M relation-writer control %s' % uuid.uuid4().hex,
+            })
+        ordinary = self.env['mail.activity'].sudo().create({
+            'res_model_id': self.env['ir.model']._get(
+                'project.project').id,
+            'res_id': project.id,
+            'activity_type_id': self.env.ref(
+                'mail.mail_activity_data_todo').id,
+            'user_id': self.manager_a.id,
+            'summary': 'Ordinary relation-writer destination',
+            'date_deadline': fields.Date.today(),
+        })
+        protected, ordinary_attachment, ambiguous = (
+            self.env['ir.attachment'].sudo().create([{
+                'name': 'rpc-relation-writer-%s-%s.bin' % (
+                    purpose, uuid.uuid4().hex),
+                'datas': base64.b64encode(
+                    ('relation writer %s' % purpose).encode()),
+                'res_model': 'project.project',
+                'res_id': project.id,
+            } for purpose in ('protected', 'ordinary', 'ambiguous')])
+        )
+        self.env.cr.execute(
+            'INSERT INTO activity_attachment_rel '
+            '(activity_id, attachment_id) VALUES '
+            '(%s, %s), (%s, %s), (%s, %s)',
+            (
+                dedicated.id, protected.id,
+                dedicated.id, ambiguous.id,
+                ordinary.id, ambiguous.id,
+            ),
+        )
+        self.env.cr.flush()
+
+        self.authenticate(self.manager_a_login, self.manager_a_login)
+        ambiguous_original_name = ambiguous.name
+        for command in (
+                [(3, ambiguous.id, 0)],
+                [(5, 0, 0)],
+                [(1, ambiguous.id, {'name': 'forbidden-command-update'})],
+                [(2, ambiguous.id, 0)]):
+            with self.subTest(ambiguous_command=command):
+                denial = self._call_kw(
+                    'mail.activity', 'write',
+                    [[ordinary.id], {'attachment_ids': command}],
+                )
+                self._assert_access_error(
+                    denial,
+                    'commands 1/2/3/5 也不得改動 protected↔ordinary graph',
+                    contains='Attachments are not allowed',
+                )
+                with self.env.registry.cursor() as verify_cr:
+                    verify_cr.execute(
+                        'SELECT name FROM ir_attachment WHERE id = %s',
+                        (ambiguous.id,),
+                    )
+                    self.assertEqual(
+                        verify_cr.fetchone(), (ambiguous_original_name,))
+                    verify_cr.execute(
+                        'SELECT activity_id FROM activity_attachment_rel '
+                        'WHERE attachment_id = %s ORDER BY activity_id',
+                        (ambiguous.id,),
+                    )
+                    self.assertEqual(
+                        [activity_id for activity_id, in verify_cr.fetchall()],
+                        sorted([dedicated.id, ordinary.id]),
+                    )
+        self.env.cr.execute(
+            'DELETE FROM activity_attachment_rel '
+            'WHERE activity_id = %s AND attachment_id = %s',
+            (ordinary.id, ambiguous.id),
+        )
+        self.env.cr.flush()
+
+        forbidden_created_name = (
+            'rpc-relation-command-create-%s.bin' % uuid.uuid4().hex)
+        command_zero_denial = self._call_kw(
+            'mail.activity', 'write',
+            [[ordinary.id], {'attachment_ids': [(0, 0, {
+                'name': forbidden_created_name,
+                'datas': base64.b64encode(
+                    b'forbidden command create').decode(),
+                'res_model': 'woow.billing.incident',
+                'res_id': self.incident_a.id,
+            })]}],
+        )
+        self._assert_access_error(
+            command_zero_denial,
+            'command 0 prospective protected target 必須 fail-before-create',
+            contains='Attachments are not allowed',
+        )
+        self.assertFalse(self.env['ir.attachment'].sudo().search([
+            ('name', '=', forbidden_created_name),
+        ]))
+
+        forbidden_activity_summary = (
+            'RPC create relation writer %s' % uuid.uuid4().hex)
+        create_denial = self._call_kw(
+            'mail.activity', 'create', [{
+                'res_model_id': self.env['ir.model']._get(
+                    'project.project').id,
+                'res_id': project.id,
+                'activity_type_id': self.env.ref(
+                    'mail.mail_activity_data_todo').id,
+                'user_id': self.manager_a.id,
+                'summary': forbidden_activity_summary,
+                'date_deadline': fields.Date.to_string(fields.Date.today()),
+                'attachment_ids': [(4, protected.id, 0)],
+            }],
+        )
+        self._assert_access_error(
+            create_denial,
+            'activity create command 4 也必須先走 provenance protocol',
+            contains='Attachments are not allowed',
+        )
+        self.assertFalse(self.env['mail.activity'].sudo().search([
+            ('summary', '=', forbidden_activity_summary),
+        ]))
+
+        for command in (
+                [(4, protected.id, 0)],
+                [(6, 0, [protected.id])]):
+            with self.subTest(command=command):
+                denial = self._call_kw(
+                    'mail.activity', 'write',
+                    [[ordinary.id], {'attachment_ids': command}],
+                )
+                self._assert_access_error(
+                    denial,
+                    'ordinary activity 不得透過 M2M command 連 protected evidence',
+                    contains='Attachments are not allowed',
+                )
+                with self.env.registry.cursor() as verify_cr:
+                    verify_cr.execute(
+                        'SELECT activity_id, attachment_id '
+                        'FROM activity_attachment_rel '
+                        'WHERE activity_id = ANY(%s) '
+                        'AND attachment_id = ANY(%s) '
+                        'ORDER BY activity_id, attachment_id',
+                        ([ordinary.id, dedicated.id],
+                         [protected.id, ordinary_attachment.id]),
+                    )
+                    self.assertEqual(
+                        verify_cr.fetchall(),
+                        [(dedicated.id, protected.id)],
+                        '拒絕前後全部 relation 必須逐筆不變',
+                    )
+
+        self.assertTrue(self._assert_ok(
+            self._call_kw(
+                'mail.activity', 'write',
+                [[ordinary.id], {
+                    'attachment_ids': [(4, ordinary_attachment.id, 0)],
+                }],
+            ),
+            'ordinary attachment 的 command 4 正對照必須成功',
+        ))
+        self.assertTrue(self._assert_ok(
+            self._call_kw(
+                'mail.activity', 'write',
+                [[ordinary.id], {
+                    'attachment_ids': [(6, 0, [ordinary_attachment.id])],
+                }],
+            ),
+            'ordinary attachment 的 command 6 正對照必須成功',
+        ))
+        with self.env.registry.cursor() as verify_cr:
+            verify_cr.execute(
+                'SELECT activity_id, attachment_id '
+                'FROM activity_attachment_rel '
+                'WHERE activity_id = ANY(%s) '
+                'AND attachment_id = ANY(%s) '
+                'ORDER BY activity_id, attachment_id',
+                ([ordinary.id, dedicated.id],
+                 [protected.id, ordinary_attachment.id]),
+            )
+            self.assertEqual(verify_cr.fetchall(), [
+                (dedicated.id, protected.id),
+                (ordinary.id, ordinary_attachment.id),
+            ])
+
+    def test_m2m_evidence_read_download_requires_current_manager(self):
+        """Public/token/direct-partner anchors cannot bypass M2M provenance."""
+        review_type = self.env.ref(
+            'woow_paas_platform.mail_activity_type_billing_incident_review')
+        todo_type = self.env.ref('mail.mail_activity_data_todo')
+        incident_model = self.env['ir.model']._get('woow.billing.incident')
+        carrier = self.env['mail.activity'].sudo().create({
+            'res_model_id': self.env['ir.model']._get('res.partner').id,
+            'res_id': self.manager_a.partner_id.id,
+            'activity_type_id': todo_type.id,
+            'user_id': self.manager_a.id,
+            'summary': 'Legacy incident read-gate carrier',
+            'date_deadline': fields.Date.today(),
+        })
+        self.env.cr.execute(
+            'UPDATE mail_activity SET res_model_id = %s, res_model = %s, '
+            'res_id = %s WHERE id = %s',
+            (incident_model.id, 'woow.billing.incident',
+             self.incident_a.id, carrier.id),
+        )
+        attachment = self.env['ir.attachment'].sudo().create({
+            'name': 'm2m-read-gate-%s.bin' % uuid.uuid4().hex,
+            'datas': base64.b64encode(b'protected m2m read bytes'),
+            'res_model': 'res.partner',
+            'res_id': self.manager_a.partner_id.id,
+        })
+        share_token = str(uuid.uuid4())
+        self.env.cr.execute(
+            'UPDATE ir_attachment SET public = true, access_token = %s '
+            'WHERE id = %s',
+            (share_token, attachment.id),
+        )
+        self.env.cr.execute(
+            'INSERT INTO activity_attachment_rel '
+            '(activity_id, attachment_id) VALUES (%s, %s)',
+            (carrier.id, attachment.id),
+        )
+        self.env['mail.activity'].invalidate_model()
+        attachment.invalidate_recordset()
+        self.env.cr.flush()
+        urls = (
+            '/web/content/%s' % attachment.id,
+            '/web/content/%s?access_token=%s' % (
+                attachment.id, share_token),
+        )
+
+        self.authenticate(None, None)
+        for url in urls:
+            with self.subTest(anonymous_url=url):
+                self.assertEqual(
+                    self.url_open(url).status_code, 404,
+                    'anonymous public/token M2M evidence 必須一律 404',
+                )
+
+        self.authenticate(self.regular_login, self.regular_login)
+        self._assert_access_error(
+            self._call_kw(
+                'ir.attachment', 'read',
+                [[attachment.id], ['name', 'datas']],
+            ),
+            'nonmanager 不得 direct-read M2M evidence',
+        )
+        visible = self._assert_ok(
+            self._call_kw(
+                'ir.attachment', 'search_read',
+                [[('id', '=', attachment.id)], ['id']],
+            ),
+            'nonmanager search itself must remain a non-oracle success',
+        )
+        self.assertEqual(visible, [])
+
+        self.authenticate(self.manager_a_login, self.manager_a_login)
+        manager_rows = self._assert_ok(
+            self._call_kw(
+                'ir.attachment', 'read',
+                [[attachment.id], ['name', 'datas']],
+            ),
+            'current account manager 必須可讀 evidence',
+        )
+        self.assertEqual(manager_rows[0]['id'], attachment.id)
+        for url in urls:
+            with self.subTest(current_manager_url=url):
+                self.assertEqual(self.url_open(url).status_code, 200)
+
+        manager_group = self.env.ref('account.group_account_manager')
+        self.authenticate(self.system_login, self.system_login)
+        self.assertTrue(self._assert_ok(
+            self._call_kw(
+                'res.users', 'write',
+                [[self.manager_a.id], {
+                    'groups_id': [(3, manager_group.id)],
+                }],
+            ),
+            'test must revoke the first manager through the real RPC seam',
+        ))
+
+        self.authenticate(self.manager_a_login, self.manager_a_login)
+        self._assert_access_error(
+            self._call_kw(
+                'ir.attachment', 'read',
+                [[attachment.id], ['name', 'datas']],
+            ),
+            'former manager 不得再 direct-read M2M evidence',
+        )
+        former_visible = self._assert_ok(
+            self._call_kw(
+                'ir.attachment', 'search_read',
+                [[('id', '=', attachment.id)], ['id']],
+            ),
+            'former manager search must not reveal the protected id',
+        )
+        self.assertEqual(former_visible, [])
+        for url in urls:
+            with self.subTest(former_manager_url=url):
+                self.assertEqual(self.url_open(url).status_code, 404)
+
+        self.authenticate(self.manager_b_login, self.manager_b_login)
+        current_rows = self._assert_ok(
+            self._call_kw(
+                'ir.attachment', 'read',
+                [[attachment.id], ['name', 'datas']],
+            ),
+            '另一位 current account manager 應可讀 global evidence',
+        )
+        self.assertEqual(current_rows[0]['id'], attachment.id)
+        for url in urls:
+            with self.subTest(other_current_manager_url=url):
+                self.assertEqual(self.url_open(url).status_code, 200)
+
+        # Keep the imported XML id live in this test: both OR legs are part of
+        # the contract even though this fixture uses the incident-target leg.
+        self.assertTrue(review_type)
+
+    def test_attachment_mutation_precheck_unifies_denial_oracles(self):
+        """Hidden, missing and protected rows expose one AccessError shape."""
+        protected = self.env['ir.attachment'].sudo().create({
+            'name': 'mutation-oracle-%s.bin' % uuid.uuid4().hex,
+            'datas': base64.b64encode(b'protected mutation oracle'),
+        })
+        self.env.cr.execute(
+            'UPDATE ir_attachment SET res_model = %s, res_id = %s '
+            'WHERE id = %s',
+            ('woow.billing.incident', self.incident_a.id, protected.id),
+        )
+        protected.invalidate_recordset(['res_model', 'res_id'])
+        self.env.cr.flush()
+        missing_id = protected.id + 10 ** 7
+
+        for method, values in (
+                ('write', {'name': 'forbidden-oracle-rename'}),
+                ('unlink', None)):
+            with self.subTest(method=method):
+                args = [[protected.id]]
+                missing_args = [[missing_id]]
+                if values is not None:
+                    args.append(values)
+                    missing_args.append(values)
+                self.authenticate(self.regular_login, self.regular_login)
+                hidden = self._call_kw('ir.attachment', method, args)
+                missing = self._call_kw(
+                    'ir.attachment', method, missing_args)
+                self.authenticate(
+                    self.manager_a_login, self.manager_a_login)
+                protected_denial = self._call_kw(
+                    'ir.attachment', method, args)
+                for response, label in (
+                        (hidden, 'hidden'),
+                        (missing, 'missing'),
+                        (protected_denial, 'protected')):
+                    self._assert_access_error(
+                        response,
+                        '%s %s attachment must fail as AccessError'
+                        % (label, method),
+                        contains='Attachments are not allowed',
+                    )
+                self.assertEqual(
+                    self._rpc_error_signature(hidden),
+                    self._rpc_error_signature(missing),
+                )
+                self.assertEqual(
+                    self._rpc_error_signature(missing),
+                    self._rpc_error_signature(protected_denial),
+                )
+                with self.env.registry.cursor() as verify_cr:
+                    verify_cr.execute(
+                        'SELECT name FROM ir_attachment WHERE id = %s',
+                        (protected.id,),
+                    )
+                    row = verify_cr.fetchone()
+                self.assertTrue(row, 'protected evidence must remain durable')
+                self.assertNotEqual(row[0], 'forbidden-oracle-rename')
+
     def test_manager_rpc_m2m_evidence_guard_and_parent_reanchor(self):
         Incident = self.env['woow.billing.incident']
         self.assertTrue(
@@ -4456,8 +4846,8 @@ class TestBillingIncidentRpcWriteGuard864(HttpCase):
             with self.subTest(committed_public_url=url):
                 response = self.url_open(url)
                 self.assertEqual(
-                    response.status_code, 200,
-                    '改錨前 committed public/token URL 必須是可用的陽性對照',
+                    response.status_code, 404,
+                    'legacy M2M evidence 改錨前也不得由 public/token 匿名讀取',
                 )
 
         self.authenticate(self.manager_a_login, self.manager_a_login)

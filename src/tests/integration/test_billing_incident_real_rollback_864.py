@@ -2086,6 +2086,372 @@ class TestBillingIncidentRealTransactions864(BaseCase):
                 'ordinary-only write＋unlink 正對照必須保留 core behavior',
             )
 
+    def test_mixed_action_done_is_atomic_before_generic_completion(self):
+        """Ambiguous dedicated evidence must roll back the whole mixed call."""
+        incident_id = self._call_log(self._snapshot(
+            'mixed-action-done-atomic', state='needs_human'))
+        marker = '%s-mixed-action-done' % self.marker
+        with self.registry.cursor() as setup_cr:
+            env = api.Environment(setup_cr, odoo.SUPERUSER_ID, {})
+            review_type = env.ref(
+                'woow_paas_platform.'
+                'mail_activity_type_billing_incident_review')
+            dedicated = env['mail.activity'].sudo().search([
+                ('res_model', '=', _MODEL),
+                ('res_id', '=', incident_id),
+                ('activity_type_id', '=', review_type.id),
+                ('user_id', '=', self.manager_user_id),
+                ('active', '=', True),
+            ], limit=1)
+            self.assertTrue(dedicated)
+            activity_values = {
+                'res_model_id': env['ir.model']._get('res.partner').id,
+                'res_id': self.control_partner_id,
+                'activity_type_id': env.ref(
+                    'mail.mail_activity_data_todo').id,
+                'user_id': self.manager_user_id,
+                'date_deadline': fields.Date.today(),
+            }
+            generic = env['mail.activity'].sudo().create({
+                **activity_values,
+                'summary': '%s-generic' % marker,
+            })
+            ordinary_carrier = env['mail.activity'].sudo().create({
+                **activity_values,
+                'summary': '%s-ordinary-carrier' % marker,
+            })
+            evidence = env['ir.attachment'].sudo().create({
+                'name': '%s-evidence.bin' % marker,
+                'datas': b'bWl4ZWQgYWN0aW9uIGF0b21pY2l0eQ==',
+                'res_model': 'res.partner',
+                'res_id': self.control_partner_id,
+            })
+            setup_cr.execute(
+                'INSERT INTO activity_attachment_rel '
+                '(activity_id, attachment_id) VALUES (%s, %s), (%s, %s)',
+                (
+                    dedicated.id, evidence.id,
+                    ordinary_carrier.id, evidence.id,
+                ),
+            )
+            setup_cr.execute(
+                'SELECT id, res_model, res_id, public, access_token, '
+                'checksum, store_fname, db_datas '
+                'FROM ir_attachment WHERE id = %s',
+                (evidence.id,),
+            )
+            expected_attachment = setup_cr.fetchone()
+            setup_cr.execute(
+                'SELECT activity_id, attachment_id '
+                'FROM activity_attachment_rel WHERE attachment_id = %s '
+                'ORDER BY activity_id',
+                (evidence.id,),
+            )
+            expected_edges = setup_cr.fetchall()
+            setup_cr.execute(
+                'SELECT id FROM mail_message '
+                'WHERE model = %s AND res_id = %s ORDER BY id',
+                ('res.partner', self.control_partner_id),
+            )
+            expected_messages = setup_cr.fetchall()
+            generic_id = generic.id
+            dedicated_id = dedicated.id
+            ordinary_carrier_id = ordinary_carrier.id
+            evidence_id = evidence.id
+            setup_cr.commit()
+
+        with self.registry.cursor() as caller_cr:
+            env = api.Environment(caller_cr, self.manager_user_id, {})
+            try:
+                env['mail.activity'].browse([
+                    generic_id, dedicated_id,
+                ])._action_done(feedback='safe mixed atomicity feedback')
+            except AccessError as exc:
+                denial = str(exc)
+                caller_cr.commit()
+            else:
+                self.fail('ambiguous mixed _action_done must fail loud')
+        self.assertIn('ambiguous provenance', denial)
+
+        with self.registry.cursor() as verify_cr:
+            verify_cr.execute(
+                'SELECT id, active FROM mail_activity '
+                'WHERE id = ANY(%s) ORDER BY id',
+                ([generic_id, dedicated_id, ordinary_carrier_id],),
+            )
+            self.assertEqual(
+                verify_cr.fetchall(),
+                sorted([
+                    (generic_id, True),
+                    (dedicated_id, True),
+                    (ordinary_carrier_id, True),
+                ]),
+                'caller catch＋commit 後 generic/dedicated/ordinary 全不變',
+            )
+            verify_cr.execute(
+                'SELECT id, res_model, res_id, public, access_token, '
+                'checksum, store_fname, db_datas '
+                'FROM ir_attachment WHERE id = %s',
+                (evidence_id,),
+            )
+            self.assertEqual(verify_cr.fetchone(), expected_attachment)
+            verify_cr.execute(
+                'SELECT activity_id, attachment_id '
+                'FROM activity_attachment_rel WHERE attachment_id = %s '
+                'ORDER BY activity_id',
+                (evidence_id,),
+            )
+            self.assertEqual(verify_cr.fetchall(), expected_edges)
+            verify_cr.execute(
+                'SELECT id FROM mail_message '
+                'WHERE model = %s AND res_id = %s ORDER BY id',
+                ('res.partner', self.control_partner_id),
+            )
+            self.assertEqual(
+                verify_cr.fetchall(), expected_messages,
+                'generic completion message must also roll back',
+            )
+
+        # Remove only the test-created ordinary conflict.  The remaining
+        # dedicated carrier has one incident meaning and is the positive
+        # control for a mixed generic+dedicated completion.
+        with self.registry.cursor() as repair_cr:
+            repair_cr.execute(
+                'DELETE FROM activity_attachment_rel '
+                'WHERE activity_id = %s AND attachment_id = %s',
+                (ordinary_carrier_id, evidence_id),
+            )
+            repair_cr.commit()
+        with self.registry.cursor() as positive_cr:
+            env = api.Environment(
+                positive_cr, self.manager_user_id, {})
+            messages, _next = env['mail.activity'].browse([
+                generic_id, dedicated_id,
+            ])._action_done(feedback='same incident positive control')
+            self.assertEqual(len(messages), 1)
+            positive_cr.commit()
+        with self.registry.cursor() as verify_cr:
+            verify_cr.execute(
+                'SELECT id FROM mail_activity WHERE id = ANY(%s)',
+                ([generic_id, dedicated_id],),
+            )
+            self.assertFalse(verify_cr.fetchall())
+            verify_cr.execute(
+                'SELECT res_model, res_id FROM ir_attachment WHERE id = %s',
+                (evidence_id,),
+            )
+            self.assertEqual(verify_cr.fetchone(), (_MODEL, incident_id))
+            verify_cr.execute(
+                'SELECT 1 FROM activity_attachment_rel '
+                'WHERE attachment_id = %s',
+                (evidence_id,),
+            )
+            self.assertFalse(
+                verify_cr.fetchone(),
+                'same-incident positive must re-anchor and clear every edge',
+            )
+
+    def test_concurrent_m2m_link_and_parent_reanchor_leave_no_stale_edge(self):
+        """A relation writer must wait for terminal re-anchor, then deny."""
+        from odoo.addons.woow_paas_platform.models import billing_incident
+
+        incident_id = self._call_log(self._snapshot(
+            'm2m-link-parent-reanchor-race', state='needs_human'))
+        marker = '%s-m2m-link-reanchor' % self.marker
+        with self.registry.cursor() as setup_cr:
+            env = api.Environment(setup_cr, odoo.SUPERUSER_ID, {})
+            review_type = env.ref(
+                'woow_paas_platform.'
+                'mail_activity_type_billing_incident_review')
+            dedicated = env['mail.activity'].sudo().search([
+                ('res_model', '=', _MODEL),
+                ('res_id', '=', incident_id),
+                ('activity_type_id', '=', review_type.id),
+                ('user_id', '=', self.manager_user_id),
+                ('active', '=', True),
+            ], limit=1)
+            self.assertTrue(dedicated)
+            ordinary = env['mail.activity'].sudo().create({
+                'res_model_id': env['ir.model']._get('res.partner').id,
+                'res_id': self.control_partner_id,
+                'activity_type_id': env.ref(
+                    'mail.mail_activity_data_todo').id,
+                'user_id': self.manager_user_id,
+                'summary': marker,
+                'date_deadline': fields.Date.today(),
+            })
+            evidence = env['ir.attachment'].sudo().create({
+                'name': '%s-evidence.bin' % marker,
+                'datas': b'cmVsYXRpb24gd3JpdGVyIHJhY2U=',
+                'res_model': 'res.partner',
+                'res_id': self.control_partner_id,
+            })
+            setup_cr.execute(
+                'INSERT INTO activity_attachment_rel '
+                '(activity_id, attachment_id) VALUES (%s, %s)',
+                (dedicated.id, evidence.id),
+            )
+            dedicated_id = dedicated.id
+            ordinary_id = ordinary.id
+            evidence_id = evidence.id
+            setup_cr.commit()
+
+        parent_cr = self.registry._db.cursor()
+        linker_cr = self.registry._db.cursor()
+        parent_env = api.Environment(
+            parent_cr, self.manager_user_id, {
+                'mail_notify_force_send': False,
+            })
+        linker_env = api.Environment(linker_cr, self.manager_user_id, {})
+        parent_cr.execute('SELECT pg_backend_pid()')
+        parent_pid = parent_cr.fetchone()[0]
+        linker_cr.execute('SELECT pg_backend_pid()')
+        linker_pid = linker_cr.fetchone()[0]
+        self.assertNotEqual(parent_pid, linker_pid)
+
+        parent_holds_carrier = threading.Event()
+        release_parent = threading.Event()
+        linker_started = threading.Event()
+        results = {}
+        errors = []
+        gate_guard = threading.Lock()
+        parent_gated = False
+        original_locks = (
+            billing_incident._acquire_billing_carrier_target_locks)
+
+        def hold_parent_after_carrier_lock(cr, targets):
+            nonlocal parent_gated
+            result = original_locks(cr, targets)
+            should_gate = False
+            if cr is parent_cr and ('mail.activity', dedicated_id) in targets:
+                with gate_guard:
+                    if not parent_gated:
+                        parent_gated = True
+                        should_gate = True
+            if should_gate:
+                parent_holds_carrier.set()
+                if not release_parent.wait(timeout=5):
+                    raise AssertionError(
+                        'test did not release parent carrier lock')
+            return result
+
+        def reanchor_parent():
+            try:
+                parent_cr.execute(
+                    'SET LOCAL lock_timeout = %s', ('5s',))
+                results['parent'] = parent_env['mail.activity'].browse(
+                    dedicated_id).unlink()
+                parent_cr.commit()
+            except Exception as exc:
+                errors.append(('parent', exc))
+                parent_cr.rollback()
+
+        def link_from_ordinary():
+            try:
+                self.assertTrue(parent_holds_carrier.wait(timeout=5))
+                linker_started.set()
+                linker_cr.execute(
+                    'SET LOCAL lock_timeout = %s', ('5s',))
+                try:
+                    linker_env['mail.activity'].browse(ordinary_id).write({
+                        'attachment_ids': [(4, evidence_id, 0)],
+                    })
+                except AccessError as exc:
+                    results['link_error'] = str(exc)
+                    linker_cr.commit()
+                else:
+                    results['link_allowed'] = True
+                    linker_cr.commit()
+            except Exception as exc:
+                errors.append(('link', exc))
+                linker_cr.rollback()
+
+        waiting = False
+        try:
+            with patch.object(
+                    billing_incident,
+                    '_acquire_billing_carrier_target_locks',
+                    hold_parent_after_carrier_lock):
+                parent_thread = threading.Thread(
+                    target=reanchor_parent,
+                    name='b864-parent-reanchor-race',
+                )
+                linker_thread = threading.Thread(
+                    target=link_from_ordinary,
+                    name='b864-m2m-relation-writer-race',
+                )
+                parent_thread.start()
+                linker_thread.start()
+                self.assertTrue(
+                    parent_holds_carrier.wait(timeout=5),
+                    'parent must own the dedicated carrier lock first',
+                )
+                self.assertTrue(linker_started.wait(timeout=5))
+                deadline = time.monotonic() + 5
+                while time.monotonic() < deadline:
+                    with self.registry.cursor() as observer_cr:
+                        observer_cr.execute(
+                            'SELECT wait_event_type, state '
+                            'FROM pg_stat_activity WHERE pid = %s',
+                            (linker_pid,),
+                        )
+                        row = observer_cr.fetchone()
+                    if row and row[0] == 'Lock' and row[1] == 'active':
+                        waiting = True
+                        break
+                    if not linker_thread.is_alive():
+                        break
+                    time.sleep(0.02)
+                release_parent.set()
+                parent_thread.join(timeout=10)
+                linker_thread.join(timeout=10)
+                self.assertFalse(
+                    [thread.name for thread in (parent_thread, linker_thread)
+                     if thread.is_alive()],
+                    'relation-writer／cleanup overlap must terminate',
+                )
+        finally:
+            release_parent.set()
+            if not parent_cr.closed:
+                parent_cr.rollback()
+                parent_cr.close()
+            if not linker_cr.closed:
+                linker_cr.rollback()
+                linker_cr.close()
+
+        self.assertTrue(
+            waiting,
+            'M2M relation writer must really wait on the parent carrier lock',
+        )
+        self.assertFalse(errors, 'concurrent workers failed: %r' % errors)
+        self.assertTrue(results.get('parent'))
+        self.assertNotIn('link_allowed', results)
+        self.assertIn('Attachments are not allowed',
+                      results.get('link_error', ''))
+        with self.registry.cursor() as verify_cr:
+            verify_cr.execute(
+                'SELECT 1 FROM mail_activity WHERE id = %s',
+                (dedicated_id,),
+            )
+            self.assertFalse(
+                verify_cr.fetchone(),
+                'terminal cleanup must not be blocked by the losing linker',
+            )
+            verify_cr.execute(
+                'SELECT res_model, res_id FROM ir_attachment WHERE id = %s',
+                (evidence_id,),
+            )
+            self.assertEqual(verify_cr.fetchone(), (_MODEL, incident_id))
+            verify_cr.execute(
+                'SELECT activity_id, attachment_id '
+                'FROM activity_attachment_rel WHERE attachment_id = %s',
+                (evidence_id,),
+            )
+            self.assertFalse(
+                verify_cr.fetchall(),
+                'terminal re-anchor must leave no stale M2M edge',
+            )
+
     def test_parent_activity_cleanup_matches_core_and_real_uninstall(self):
         """Normal cleanup stays core; true uninstall skips evidence re-anchor."""
         from odoo.addons.woow_paas_platform.models import billing_incident

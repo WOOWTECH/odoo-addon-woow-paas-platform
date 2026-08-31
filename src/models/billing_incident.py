@@ -2079,12 +2079,13 @@ class IrAttachment(models.Model):
 
     @api.model
     def _read_billing_attachment_provenance(
-            self, cr, attachment_ids, extra_direct_targets=()):
-        """Read every direct/M2M carrier from the supplied transaction view."""
+            self, cr, attachment_ids, extra_direct_targets=(),
+            extra_m2m_links=()):
+        """Read direct/M2M carriers plus a relation writer's final graph."""
         attachment_ids = sorted(set(attachment_ids))
         extra_direct_targets = set(extra_direct_targets)
         attachment_rows = set()
-        m2m_links = set()
+        m2m_links = set(extra_m2m_links)
         if attachment_ids:
             cr.execute(
                 'SELECT id, res_model, res_id FROM ir_attachment '
@@ -2141,13 +2142,18 @@ class IrAttachment(models.Model):
 
     @api.model
     def _fresh_billing_attachment_provenance(
-            self, attachment_ids, extra_direct_targets=()):
+            self, attachment_ids, extra_direct_targets=(),
+            extra_m2m_links=()):
         visibility_cr = self.env.registry._db.cursor()
         try:
             visibility_cr.execute(
                 'SET TRANSACTION ISOLATION LEVEL READ COMMITTED')
             return self._read_billing_attachment_provenance(
-                visibility_cr, attachment_ids, extra_direct_targets)
+                visibility_cr,
+                attachment_ids,
+                extra_direct_targets,
+                extra_m2m_links,
+            )
         finally:
             visibility_cr.close()
 
@@ -2170,22 +2176,33 @@ class IrAttachment(models.Model):
 
     @api.model
     def _lock_and_refresh_billing_attachment_provenance(
-            self, attachment_ids=(), extra_direct_targets=()):
+            self, attachment_ids=(), extra_direct_targets=(),
+            extra_m2m_links=()):
         """Fresh lookup, carrier locks, then authoritative fresh recheck.
 
         The caller cursor is merged only to retain same-transaction rows which
         a separate READ COMMITTED cursor cannot see.  Committed stale-race
-        ownership always comes from the fresh pre/post-lock snapshots.
+        ownership always comes from the fresh pre/post-lock snapshots.  A
+        relation writer supplies its prospective final M2M edges here so the
+        destination activity participates in the exact same advisory protocol.
         """
         attachment_ids = sorted(set(attachment_ids))
         extra_direct_targets = set(extra_direct_targets)
+        extra_m2m_links = set(extra_m2m_links)
 
         def read_merged():
             return self._merge_billing_attachment_provenance(
                 self._fresh_billing_attachment_provenance(
-                    attachment_ids, extra_direct_targets),
+                    attachment_ids,
+                    extra_direct_targets,
+                    extra_m2m_links,
+                ),
                 self._read_billing_attachment_provenance(
-                    self.env.cr, attachment_ids, extra_direct_targets),
+                    self.env.cr,
+                    attachment_ids,
+                    extra_direct_targets,
+                    extra_m2m_links,
+                ),
             )
 
         snapshot = read_merged()
@@ -2207,6 +2224,31 @@ class IrAttachment(models.Model):
         raise AccessError(_(
             'Attachments are not allowed on billing incident activities.'
         ))
+
+    @api.model
+    def _activity_m2m_links(self, activity_ids):
+        """Return fresh committed plus same-transaction M2M relation rows."""
+        activity_ids = sorted(set(activity_ids))
+        if not activity_ids:
+            return set()
+
+        def read(cr):
+            cr.execute(
+                'SELECT attachment_id, activity_id '
+                'FROM activity_attachment_rel '
+                'WHERE activity_id = ANY(%s)',
+                (activity_ids,),
+            )
+            return set(cr.fetchall())
+
+        visibility_cr = self.env.registry._db.cursor()
+        try:
+            visibility_cr.execute(
+                'SET TRANSACTION ISOLATION LEVEL READ COMMITTED')
+            committed = read(visibility_cr)
+        finally:
+            visibility_cr.close()
+        return committed | read(self.env.cr)
 
     @api.model
     def _activity_carrier_attachment_ids(self, activity_ids):
@@ -2233,6 +2275,74 @@ class IrAttachment(models.Model):
         finally:
             visibility_cr.close()
         return committed_ids | read(self.env.cr)
+
+    @api.model
+    def _has_billing_attachment_read_authority(self):
+        return bool(
+            self.env.su
+            or (self.env.user.active
+                and self.env.user.has_group(
+                    'account.group_account_manager'))
+            or _is_attachment_cleanup(self.env)
+            or _is_odoo_module_uninstall(self.env)
+        )
+
+    @api.model
+    def _read_gate_billing_attachment_provenance(self, attachment_ids):
+        """Classify legacy direct/M2M evidence without taking writer locks."""
+        return self._merge_billing_attachment_provenance(
+            self._fresh_billing_attachment_provenance(attachment_ids),
+            self._read_billing_attachment_provenance(
+                self.env.cr, attachment_ids),
+        )
+
+    @api.model
+    def _search(self, domain, offset=0, limit=None, order=None):
+        """Hide legacy M2M evidence from every non-current manager."""
+        query = super()._search(domain, offset, limit, order)
+        if self._has_billing_attachment_read_authority():
+            return query
+        ids = [
+            attachment_id
+            for attachment_id, in self.env.execute_query(query.select(
+                self._field_to_sql(self._table, 'id'),
+            ))
+        ]
+        if not ids:
+            return query
+        snapshot = self._read_gate_billing_attachment_provenance(ids)
+        allowed_ids = [
+            attachment_id
+            for attachment_id in ids
+            if attachment_id not in snapshot['protected_attachment_ids']
+        ]
+        return self.browse(allowed_ids)._as_query(order)
+
+    def validate_access(self, access_token):
+        """Apply provenance after core token/public validation, never before."""
+        validated = super().validate_access(access_token)
+        if self._has_billing_attachment_read_authority():
+            return validated
+        snapshot = self._read_gate_billing_attachment_provenance(self.ids)
+        if snapshot['protected_attachment_ids']:
+            self._raise_billing_attachment_guard()
+        return validated
+
+    def _precheck_billing_attachment_mutation(self, mode, values=None):
+        """Normalize hidden/missing/protected mutation failures to one error."""
+        # Core's attachment delegation browses ``values`` directly.  Reject an
+        # ambiguous protected carrier id before bool/float can reach SQL, while
+        # still doing no row/provenance lookup before core authorization.
+        if values and values.get('res_model') in self._BILLING_TARGET_CARRIERS:
+            self._billing_direct_target(
+                values.get('res_model'), values.get('res_id'))
+        try:
+            self.check(mode, values=values)
+        except AccessError:
+            self._raise_billing_attachment_guard()
+        existing_ids = set(self.sudo().exists().ids)
+        if existing_ids != set(self.ids):
+            self._raise_billing_attachment_guard()
 
     @api.model
     def _create_billing_direct_targets(self, values_list):
@@ -2287,6 +2397,10 @@ class IrAttachment(models.Model):
             # Only this object-identity capability may atomically re-anchor,
             # privatize, clear tokens, or remove malicious future-id payloads.
             return super().write(values)
+        # Core delegation and existence checks must precede every sudo/raw
+        # provenance lookup.  All denials deliberately share one AccessError.
+        self._precheck_billing_attachment_mutation(
+            'write', values=values)
         attachments = self.sudo()
         prospective_targets = [
             target
@@ -2330,6 +2444,9 @@ class IrAttachment(models.Model):
         if (_is_attachment_cleanup(self.env)
                 or _is_odoo_module_uninstall(self.env)):
             return super().unlink()
+        # As in write(), never distinguish a hidden or missing id by entering
+        # the privileged provenance/lock protocol first.
+        self._precheck_billing_attachment_mutation('unlink')
         snapshot = self._lock_and_refresh_billing_attachment_provenance(
             self.ids)
         if snapshot['protected']:
@@ -2515,7 +2632,9 @@ class MailActivity(models.Model):
                 or (review_type and activity.activity_type_id == review_type)
             )
         )
-        if protected and not _is_activity_terminal(self.env):
+        if (protected
+                and not _is_activity_terminal(self.env)
+                and not _is_activity_scheduler(self.env)):
             raise AccessError(_(
                 'Billing incident activities are managed automatically. '
                 'Use the billing incident form instead.'
@@ -2541,10 +2660,14 @@ class MailActivity(models.Model):
         return sorted(set(
             self._dedicated_billing_activities().sudo().mapped('res_id')))
 
-    def _reattach_dedicated_billing_evidence(self):
-        """Re-anchor evidence only when all provenance has one meaning."""
+    def _prepare_dedicated_billing_evidence(self):
+        """Preflight and lock every carrier without mutating any evidence."""
         if not self or _is_odoo_module_uninstall(self.env):
-            return True
+            return {
+                'attachment_ids': frozenset(),
+                'snapshot': False,
+                'incident_by_attachment': {},
+            }
         carriers = self.sudo()
         carrier_targets = {
             ('mail.activity', activity_id) for activity_id in carriers.ids
@@ -2577,8 +2700,6 @@ class MailActivity(models.Model):
                 'Billing incident evidence has ambiguous provenance; '
                 'parent deletion was cancelled.'
             ))
-        if not attachment_ids:
-            return True
 
         incident_by_attachment = {}
         conflict_reason = False
@@ -2614,6 +2735,23 @@ class MailActivity(models.Model):
                 'Billing incident evidence has ambiguous provenance; '
                 'parent deletion was cancelled.'
             ))
+        return {
+            'attachment_ids': frozenset(attachment_ids),
+            'snapshot': snapshot,
+            'incident_by_attachment': incident_by_attachment,
+        }
+
+    def _reattach_dedicated_billing_evidence(self, prepared=None):
+        """Re-anchor a preflighted, single-meaning evidence graph."""
+        if not self or _is_odoo_module_uninstall(self.env):
+            return True
+        prepared = prepared or self._prepare_dedicated_billing_evidence()
+        attachment_ids = set(prepared['attachment_ids'])
+        if not attachment_ids:
+            return True
+        snapshot = prepared['snapshot']
+        incident_by_attachment = prepared['incident_by_attachment']
+        Attachment = self.env['ir.attachment'].sudo()
 
         attachment_ids_by_incident = {}
         for attachment_id, incident_id in incident_by_attachment.items():
@@ -2675,6 +2813,314 @@ class MailActivity(models.Model):
                 'Attachments are not allowed on billing incident activities.'
             ))
 
+    @api.model
+    def _canonical_attachment_command_id(self, value):
+        """Reject every non-canonical RPC id before relation inspection."""
+        if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+            return value
+        if (isinstance(value, str)
+                and self._CANONICAL_ACTIVITY_TARGET_ID_RE.fullmatch(value)):
+            return int(value)
+        self.env['ir.attachment']._raise_billing_attachment_guard()
+
+    @api.model
+    def _normalized_attachment_commands(self, value):
+        """Normalize all command shapes which Odoo's M2M writer can reach."""
+        if isinstance(value, models.BaseModel):
+            if value._name != 'ir.attachment':
+                self.env['ir.attachment']._raise_billing_attachment_guard()
+            return [(6, 0, list(value.ids))]
+        if value is False or value is None:
+            return [(5, 0, 0)]
+        if isinstance(value, tuple):
+            if (len(value) == 3
+                    and isinstance(value[0], int)
+                    and not isinstance(value[0], bool)
+                    and 0 <= value[0] <= 6):
+                return [value]
+            return [(6, 0, list(value))]
+        if not isinstance(value, list):
+            self.env['ir.attachment']._raise_billing_attachment_guard()
+        if not value:
+            return []
+        if not isinstance(value[0], (tuple, list)):
+            return [(6, 0, list(value))]
+        return value
+
+    @api.model
+    def _preauthorize_attachment_command_id(
+            self, attachment_id, mode, values=None):
+        """Run core attachment delegation before any sudo provenance read."""
+        Attachment = self.env['ir.attachment']
+        attachment_id = self._canonical_attachment_command_id(attachment_id)
+        attachment = Attachment.browse(attachment_id)
+        try:
+            attachment.check(mode, values=values)
+        except AccessError:
+            Attachment._raise_billing_attachment_guard()
+        if not attachment.sudo().exists():
+            Attachment._raise_billing_attachment_guard()
+        return attachment_id
+
+    @api.model
+    def _inspect_attachment_relation_commands(self, value):
+        """Preauthorize commands and return their provenance-relevant plan."""
+        Attachment = self.env['ir.attachment']
+        commands = self._normalized_attachment_commands(value)
+        referenced_ids = set()
+        prospective_targets = set()
+        creates_relation = False
+        normalized = []
+        for command in commands:
+            if (not isinstance(command, (tuple, list))
+                    or not command
+                    or not isinstance(command[0], int)
+                    or isinstance(command[0], bool)
+                    or command[0] not in range(7)):
+                Attachment._raise_billing_attachment_guard()
+            operation = command[0]
+            if operation == 0:
+                if len(command) < 3 or not isinstance(command[2], dict):
+                    Attachment._raise_billing_attachment_guard()
+                values = dict(command[2])
+                try:
+                    Attachment.browse().check('create', values=values)
+                except AccessError:
+                    Attachment._raise_billing_attachment_guard()
+                prospective_targets.update(
+                    Attachment._create_billing_direct_targets([values]))
+                creates_relation = True
+                normalized.append((0, 0, values))
+                continue
+            if operation in (5,):
+                normalized.append((5, 0, 0))
+                continue
+            if operation == 6:
+                if len(command) < 3:
+                    Attachment._raise_billing_attachment_guard()
+                raw_ids = command[2]
+                if isinstance(raw_ids, int) and not isinstance(raw_ids, bool):
+                    raw_ids = [raw_ids]
+                if not isinstance(raw_ids, (tuple, list)):
+                    Attachment._raise_billing_attachment_guard()
+                canonical_ids = []
+                for raw_id in raw_ids:
+                    attachment_id = self._preauthorize_attachment_command_id(
+                        raw_id, 'read')
+                    referenced_ids.add(attachment_id)
+                    canonical_ids.append(attachment_id)
+                normalized.append((6, 0, canonical_ids))
+                continue
+            if len(command) < 2:
+                Attachment._raise_billing_attachment_guard()
+            values = command[2] if len(command) > 2 else 0
+            mode = {
+                1: 'write',
+                2: 'unlink',
+                3: 'read',
+                4: 'read',
+            }[operation]
+            if operation == 1 and not isinstance(values, dict):
+                Attachment._raise_billing_attachment_guard()
+            attachment_id = self._preauthorize_attachment_command_id(
+                command[1], mode, values=values if operation == 1 else None)
+            referenced_ids.add(attachment_id)
+            if operation == 1:
+                attachment = Attachment.sudo().browse(attachment_id)
+                target = Attachment._billing_direct_target(
+                    values.get('res_model', attachment.res_model),
+                    values.get('res_id', attachment.res_id),
+                )
+                if target:
+                    prospective_targets.add(target)
+            normalized.append((operation, attachment_id, values))
+        return {
+            'commands': normalized,
+            'referenced_ids': referenced_ids,
+            'prospective_targets': prospective_targets,
+            'creates_relation': creates_relation,
+        }
+
+    @api.model
+    def _apply_attachment_relation_commands(self, current_ids, plan):
+        final_ids = set(current_ids)
+        for operation, attachment_id, payload in plan['commands']:
+            if operation == 0:
+                continue
+            if operation in (2, 3):
+                final_ids.discard(attachment_id)
+            elif operation == 4:
+                final_ids.add(attachment_id)
+            elif operation == 5:
+                final_ids.clear()
+            elif operation == 6:
+                final_ids = set(payload)
+        return final_ids
+
+    @api.model
+    def _reject_protected_attachment_relation_plan(
+            self, snapshot, affected_ids, prospective_targets=()):
+        Attachment = self.env['ir.attachment']
+        if (snapshot['protected_attachment_ids'] & set(affected_ids)
+                or snapshot['protected_extra_targets']
+                & set(prospective_targets)):
+            Attachment._raise_billing_attachment_guard()
+
+    def _preflight_attachment_relation_write(self, value):
+        """Lock destinations/carriers and reject before the ORM mutates M2M."""
+        self.check_access('write')
+        plan = self._inspect_attachment_relation_commands(value)
+        Attachment = self.env['ir.attachment']
+        destination_targets = {
+            ('mail.activity', activity_id) for activity_id in self.ids
+        }
+        authorized_current_ids = set()
+        snapshot = False
+        final_by_activity = {}
+        for _attempt in range(8):
+            current_links = Attachment._activity_m2m_links(self.ids)
+            current_by_activity = {
+                activity_id: set()
+                for activity_id in self.ids
+            }
+            for attachment_id, activity_id in current_links:
+                current_by_activity.setdefault(
+                    activity_id, set()).add(attachment_id)
+            current_ids = {
+                attachment_id
+                for attachment_ids in current_by_activity.values()
+                for attachment_id in attachment_ids
+            }
+            for attachment_id in sorted(
+                    current_ids - authorized_current_ids):
+                self._preauthorize_attachment_command_id(
+                    attachment_id, 'read')
+                authorized_current_ids.add(attachment_id)
+            final_by_activity = {
+                activity_id: self._apply_attachment_relation_commands(
+                    current_by_activity.get(activity_id, set()), plan)
+                for activity_id in self.ids
+            }
+            affected_ids = (
+                current_ids | plan['referenced_ids']
+                | {attachment_id
+                   for attachment_ids in final_by_activity.values()
+                   for attachment_id in attachment_ids}
+            )
+            final_links = {
+                (attachment_id, activity_id)
+                for activity_id, attachment_ids in final_by_activity.items()
+                for attachment_id in attachment_ids
+            }
+            snapshot = (
+                Attachment._lock_and_refresh_billing_attachment_provenance(
+                    affected_ids,
+                    extra_direct_targets=(
+                        destination_targets | plan['prospective_targets']),
+                    extra_m2m_links=final_links,
+                )
+            )
+            if Attachment._activity_m2m_links(self.ids) <= current_links:
+                break
+        else:
+            Attachment._raise_billing_attachment_guard()
+
+        self._reject_protected_attachment_relation_plan(
+            snapshot,
+            affected_ids,
+            prospective_targets=plan['prospective_targets'],
+        )
+        protected_destinations = (
+            snapshot['protected_extra_targets'] & destination_targets)
+        if protected_destinations:
+            final_ids = {
+                attachment_id
+                for activity_id, attachment_ids in final_by_activity.items()
+                if ('mail.activity', activity_id) in protected_destinations
+                for attachment_id in attachment_ids
+            }
+            if (not _is_activity_scheduler(self.env)
+                    or final_ids
+                    or plan['creates_relation']):
+                Attachment._raise_billing_attachment_guard()
+        return snapshot
+
+    @api.model
+    def _preflight_attachment_relation_create(
+            self, values_list, billing_branches):
+        """Apply the same attachment protocol before activity ids exist."""
+        Attachment = self.env['ir.attachment']
+        for values, targets_billing in zip(values_list, billing_branches):
+            if 'attachment_ids' not in values:
+                continue
+            virtual_values = {
+                name: value
+                for name, value in values.items()
+                if name != 'attachment_ids'
+            }
+            self.new(virtual_values).check_access('create')
+            plan = self._inspect_attachment_relation_commands(
+                values['attachment_ids'])
+            final_ids = self._apply_attachment_relation_commands(set(), plan)
+            if (targets_billing
+                    and (not _is_activity_scheduler(self.env)
+                         or final_ids
+                         or plan['creates_relation'])):
+                Attachment._raise_billing_attachment_guard()
+            snapshot = (
+                Attachment._lock_and_refresh_billing_attachment_provenance(
+                    plan['referenced_ids'],
+                    extra_direct_targets=plan['prospective_targets'],
+                )
+            )
+            self._reject_protected_attachment_relation_plan(
+                snapshot,
+                plan['referenced_ids'],
+                prospective_targets=plan['prospective_targets'],
+            )
+
+    def _postcheck_attachment_relation_graph(self):
+        """Validate stored relations under destination/carrier locks."""
+        if not self:
+            return True
+        Attachment = self.env['ir.attachment']
+        destination_targets = {
+            ('mail.activity', activity_id) for activity_id in self.ids
+        }
+        snapshot = False
+        links = set()
+        for _attempt in range(8):
+            links = Attachment._activity_m2m_links(self.ids)
+            attachment_ids = {
+                attachment_id for attachment_id, _activity_id in links
+            }
+            snapshot = (
+                Attachment._lock_and_refresh_billing_attachment_provenance(
+                    attachment_ids,
+                    extra_direct_targets=destination_targets,
+                    extra_m2m_links=links,
+                )
+            )
+            if Attachment._activity_m2m_links(self.ids) <= links:
+                break
+        else:
+            Attachment._raise_billing_attachment_guard()
+        self._reject_protected_attachment_relation_plan(
+            snapshot,
+            {attachment_id for attachment_id, _activity_id in links},
+        )
+        protected_destinations = (
+            snapshot['protected_extra_targets'] & destination_targets)
+        if protected_destinations:
+            protected_destination_ids = {
+                res_id for _res_model, res_id in protected_destinations
+            }
+            if (not _is_activity_scheduler(self.env)
+                    or any(activity_id in protected_destination_ids
+                           for _attachment_id, activity_id in links)):
+                Attachment._raise_billing_attachment_guard()
+        return True
+
     @api.model_create_multi
     def create(self, values_list):
         """Strictly canonicalize only possible billing targets before core."""
@@ -2697,6 +3143,8 @@ class MailActivity(models.Model):
             if targets_billing else dict(values)
             for values, targets_billing in zip(values_list, billing_branches)
         ]
+        guarded._preflight_attachment_relation_create(
+            canonical_values, billing_branches)
         if (not _is_activity_scheduler(guarded.env)
                 and any(billing_branches)):
             raise AccessError(_(
@@ -2719,6 +3167,11 @@ class MailActivity(models.Model):
                 _cleanup_prebuilt_billing_carrier_attachments(
                     self.env, 'mail.activity', protected.ids)
             guarded._validate_stored_billing_activity_create(activities)
+            if any(
+                    'attachment_ids' in values
+                    for values in canonical_values):
+                guarded.browse(
+                    activities.ids)._postcheck_attachment_relation_graph()
         return self.browse(activities.ids)
 
     def write(self, values):
@@ -2741,15 +3194,27 @@ class MailActivity(models.Model):
             self._canonical_activity_target_values(values)
             if targets_billing else dict(values)
         )
-        if targets_billing and not _is_activity_terminal(self.env):
+        scheduler_empty_relation_write = (
+            targets_billing
+            and _is_activity_scheduler(self.env)
+            and set(write_values) == {'attachment_ids'}
+        )
+        if (targets_billing
+                and not _is_activity_terminal(self.env)
+                and not scheduler_empty_relation_write):
             raise AccessError(_(
                 'Billing incident activities are managed automatically. '
                 'Use the billing incident form instead.'
             ))
+        if 'attachment_ids' in write_values:
+            self._preflight_attachment_relation_write(
+                write_values['attachment_ids'])
         with self.env.cr.savepoint(flush=False):
             result = super().write(write_values)
             self.flush_recordset()
             self._validate_stored_billing_activity_write(self)
+            if 'attachment_ids' in write_values:
+                self._postcheck_attachment_relation_graph()
         return result
 
     def _action_done(self, feedback=False, attachment_ids=None):
@@ -2769,26 +3234,34 @@ class MailActivity(models.Model):
             Incident._acquire_review_activity_locks(
                 self.env.cr, incident_ids)
 
-        # Generic activities keep the complete Odoo contract, including their
-        # standard completion message and automatic next activity.
+        # Preflight every dedicated carrier before generic core is allowed to
+        # post a message or delete its activity.  These locks remain held until
+        # the surrounding transaction ends, so the prepared graph stays valid.
+        guarded = _activity_terminal(dedicated)
+        prepared_evidence = (
+            guarded._prepare_dedicated_billing_evidence()
+            if dedicated else None
+        )
+
+        # Generic core completion plus dedicated re-anchor/delete/re-arm is one
+        # rollback unit.  A caller may catch our provenance AccessError and
+        # commit; no generic message/activity mutation may then survive.
         generic = self - dedicated
         messages = self.env['mail.message']
         next_activities = self.env['mail.activity']
-        if generic:
-            messages, next_activities = super(
-                MailActivity, generic)._action_done(
-                    feedback=feedback,
-                    attachment_ids=attachment_ids,
-                )
-
-        if dedicated:
-            # Do not call core _action_done for the dedicated type: core posts
-            # to followers before unlinking, which can address a stale roster.
-            # Re-anchor, parent deletion, and silent re-arm are one rollback
-            # unit even if a caller catches the module provenance denial.
-            with self.env.cr.savepoint(flush=False):
-                guarded = _activity_terminal(dedicated)
-                guarded._reattach_dedicated_billing_evidence()
+        with self.env.cr.savepoint(flush=False):
+            if generic:
+                messages, next_activities = super(
+                    MailActivity, generic)._action_done(
+                        feedback=feedback,
+                        attachment_ids=attachment_ids,
+                    )
+            if dedicated:
+                # Do not call core _action_done for the dedicated type: core
+                # posts to followers before unlinking, which can address a
+                # stale roster.
+                guarded._reattach_dedicated_billing_evidence(
+                    prepared=prepared_evidence)
                 super(MailActivity, guarded).unlink()
                 for incident_id in dedicated_incident_ids:
                     Incident._ensure_review_activities_current_cursor(
