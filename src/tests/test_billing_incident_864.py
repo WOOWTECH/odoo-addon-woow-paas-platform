@@ -2802,11 +2802,24 @@ class TestBillingIncidentAdminBackend864(TransactionCase):
             ('name', '=', 'woow_paas_platform'),
         ], limit=1)
         self.assertTrue(module)
+        attachment = self.env['ir.attachment'].sudo().create({
+            'name': 'module-uninstall-incident-evidence.bin',
+            'datas': base64.b64encode(b'legacy direct evidence'),
+        })
+        self.env.cr.execute(
+            'UPDATE ir_attachment SET res_model = %s, res_id = %s '
+            'WHERE id = %s',
+            ('woow.billing.incident', self.incident.id, attachment.id),
+        )
+        attachment.invalidate_recordset(['res_model', 'res_id'])
         module.write({'state': 'to remove'})
+        self.assertTrue(
+            attachment.sudo().with_context(_force_unlink=True).unlink())
+        self.assertFalse(attachment.exists())
         self.assertTrue(
             self.incident.sudo().with_context(_force_unlink=True).unlink())
         self.assertFalse(self.incident.exists())
-        # TransactionCase rollback restores both module state and ledger row.
+        # TransactionCase rollback restores module state and deleted rows.
 
     def test_manual_resolution_button_rejects_sensitive_raw_seeded_note(self):
         record = self.incident.with_user(self.manager)
@@ -3728,7 +3741,7 @@ class TestBillingIncidentRpcWriteGuard864(HttpCase):
                 'caller default_attachment_ids 不得進入 internal create',
             )
 
-    def test_manager_rpc_related_create_write_and_move_guards(self):
+    def test_manager_rpc_related_create_write_unlink_and_move_guards(self):
         Incident = self.env['woow.billing.incident']
         self.assertTrue(
             Incident._ensure_review_activities_current_cursor(
@@ -3885,6 +3898,137 @@ class TestBillingIncidentRpcWriteGuard864(HttpCase):
             ),
             'unrelated attachment write must remain legal',
         ))
+
+        # Direct evidence rows can exist from legacy data or controlled data
+        # repair even though the create guard rejects that shape today.
+        # Corrupt only their generic relation stamps so the unlink operation
+        # under test still crosses the real account-manager RPC seam.
+        purposes = (
+            'single', 'activity', 'message', 'forged', 'mixed', 'cleanup',
+        )
+        legacy_protected = self.env['ir.attachment'].sudo().create([{
+            'name': 'rpc-direct-unlink-%s-%s.bin' % (
+                purpose, uuid.uuid4().hex),
+            'datas': base64.b64encode(b'legacy direct evidence'),
+        } for purpose in purposes])
+        protected_stamps = (
+            ('woow.billing.incident', self.incident_a.id),
+            ('mail.activity', replacement_activity.id),
+            ('mail.message', protected_message.id),
+            ('woow.billing.incident', self.incident_a.id),
+            ('woow.billing.incident', self.incident_a.id),
+            ('woow.billing.incident', self.incident_a.id),
+        )
+        for attachment, (res_model, res_id) in zip(
+                legacy_protected, protected_stamps):
+            self.env.cr.execute(
+                'UPDATE ir_attachment SET res_model = %s, res_id = %s '
+                'WHERE id = %s',
+                (res_model, res_id, attachment.id),
+            )
+        legacy_protected.invalidate_recordset(['res_model', 'res_id'])
+        (
+            protected_single,
+            protected_activity_attachment,
+            protected_message_attachment,
+            protected_forged,
+            protected_mixed,
+            protected_cleanup,
+        ) = legacy_protected
+
+        def attachment_ids_still_in_db(attachment_ids):
+            # A fresh third cursor + raw DB read avoids trusting stale ORM
+            # recordsets after the real HTTP request transaction returns.
+            with self.env.registry.cursor() as cr:
+                cr.execute(
+                    'SELECT id FROM ir_attachment WHERE id = ANY(%s) '
+                    'ORDER BY id',
+                    (attachment_ids,),
+                )
+                return [row_id for row_id, in cr.fetchall()]
+
+        denied_unlink = self._call_kw(
+            'ir.attachment', 'unlink', [[protected_single.id]],
+        )
+        self._assert_access_error(
+            denied_unlink,
+            'account manager RPC 不得刪 direct incident evidence attachment',
+            contains='Attachments are not allowed',
+        )
+        self.assertEqual(
+            attachment_ids_still_in_db([protected_single.id]),
+            [protected_single.id],
+            '真 RPC 拒絕後第三 cursor／DB 仍必須保有 direct evidence',
+        )
+
+        for carrier_attachment in (
+                protected_activity_attachment,
+                protected_message_attachment):
+            carrier_denial = self._call_kw(
+                'ir.attachment', 'unlink', [[carrier_attachment.id]],
+            )
+            self._assert_access_error(
+                carrier_denial,
+                'account manager RPC 不得刪 incident-owned carrier attachment',
+                contains='Attachments are not allowed',
+            )
+        carrier_attachment_ids = sorted([
+            protected_activity_attachment.id,
+            protected_message_attachment.id,
+        ])
+        self.assertEqual(
+            attachment_ids_still_in_db(carrier_attachment_ids),
+            carrier_attachment_ids,
+        )
+
+        forged_unlink = self._call_kw(
+            'ir.attachment', 'unlink', [[protected_forged.id]],
+            {'context': {'woow_billing_attachment_cleanup': True}},
+        )
+        self._assert_access_error(
+            forged_unlink,
+            'JSON truthy context 不得偽造 private attachment cleanup capability',
+            contains='Attachments are not allowed',
+        )
+        self.assertEqual(
+            attachment_ids_still_in_db([protected_forged.id]),
+            [protected_forged.id],
+        )
+
+        mixed_ids = [control_id, protected_mixed.id]
+        try:
+            self.env['ir.attachment'].with_user(
+                self.manager_a).browse(mixed_ids).unlink()
+        except AccessError:
+            pass
+        else:
+            self.fail(
+                'mixed protected＋ordinary recordset 必須 preflight 後整批拒絕')
+        self.assertEqual(
+            attachment_ids_still_in_db(mixed_ids),
+            sorted(mixed_ids),
+            'caller catch AccessError 後也不得 partial delete 任一 attachment',
+        )
+
+        self.assertTrue(self._assert_ok(
+            self._call_kw('ir.attachment', 'unlink', [[control_id]]),
+            'account manager 必須仍可刪 unrelated attachment 正對照',
+        ))
+        self.assertEqual(
+            attachment_ids_still_in_db([control_id]),
+            [],
+            'unrelated positive control 必須真的從 DB 刪除',
+        )
+
+        from odoo.addons.woow_paas_platform.models import billing_incident
+        self.assertTrue(
+            billing_incident._attachment_cleanup(protected_cleanup).unlink(),
+            'server-only private cleanup capability 必須保留正常清理路徑',
+        )
+        self.assertEqual(
+            attachment_ids_still_in_db([protected_cleanup.id]),
+            [],
+        )
 
         control_message_id = self._assert_ok(
             self._call_kw(

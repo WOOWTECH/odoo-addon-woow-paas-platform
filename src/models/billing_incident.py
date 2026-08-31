@@ -2108,6 +2108,35 @@ class IrAttachment(models.Model):
                 ))
         return result
 
+    def unlink(self):
+        """Preflight the whole recordset before deleting incident evidence."""
+        if not self:
+            return super().unlink()
+        if (_is_attachment_cleanup(self.env)
+                or _is_odoo_module_uninstall(self.env)):
+            return super().unlink()
+
+        attachments = self.sudo()
+        carrier_targets = [
+            target
+            for attachment in attachments
+            for target in [self._billing_carrier_target(
+                attachment.res_model, attachment.res_id)]
+            if target
+        ]
+        _acquire_billing_carrier_target_locks(
+            self.env.cr, carrier_targets)
+        committed_owned = self._committed_billing_owned_carrier_targets(
+            carrier_targets)
+        if (committed_owned
+                or any(self._billing_owned_target(
+                    attachment.res_model, attachment.res_id)
+                    for attachment in attachments)):
+            raise AccessError(_(
+                'Attachments are not allowed on billing incident activities.'
+            ))
+        return super().unlink()
+
 
 class MailActivity(models.Model):
     _inherit = 'mail.activity'
