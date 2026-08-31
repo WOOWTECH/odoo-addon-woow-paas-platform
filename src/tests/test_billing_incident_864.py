@@ -476,9 +476,16 @@ class TestBillingIncidentPublicApi864(TransactionCase):
             '安全碼：123',
             '卡片安全碼：123',
             '信用卡安全碼：123',
+            '信用卡安全码：123',
+            '驗證碼：123',
+            '验证码：123',
             'PIN碼：1234',
             'PIN區塊：forbidden',
             '磁條：forbidden',
+            '磁軌資料：forbidden',
+            '磁轨数据：forbidden',
+            '第二軌：forbidden',
+            '第二轨：forbidden',
             '軌道資料：forbidden',
             '授權碼：forbidden',
             'unlabelled 4111111111111111',
@@ -655,9 +662,16 @@ class TestBillingIncidentPublicApi864(TransactionCase):
             '安全碼：123',
             '卡片安全碼：123',
             '信用卡安全碼：123',
+            '信用卡安全码：123',
+            '驗證碼：123',
+            '验证码：123',
             'PIN碼：1234',
             'PIN區塊：forbidden',
             '磁條資料：forbidden',
+            '磁軌資料：forbidden',
+            '磁轨数据：forbidden',
+            '第二軌：forbidden',
+            '第二轨：forbidden',
             '軌道資料：forbidden',
             '授權碼：forbidden',
         )
@@ -1055,8 +1069,15 @@ class TestBillingIncidentPublicApi864(TransactionCase):
                     'verification CVC=123 is forbidden',
                     '查證時看到CVC碼：123',
                     '查證時看到卡片安全碼：123',
+                    '查證時看到信用卡安全码：123',
+                    '查證時看到驗證碼：123',
+                    '查證時看到验证码：123',
                     '查證時看到 PIN區塊：forbidden',
                     '查證時看到磁條資料：forbidden',
+                    '查證時看到磁軌資料：forbidden',
+                    '查證時看到磁轨数据：forbidden',
+                    '查證時看到第二軌：forbidden',
+                    '查證時看到第二轨：forbidden',
                     '查證時看到軌道資料：forbidden',
                     '查證時看到授權碼：forbidden',
                     '分隔卡號 4111\u09031111\u09031111\u09031111'):
@@ -1325,6 +1346,249 @@ class TestBillingIncidentPublicApi864(TransactionCase):
                 'res_id': env.user.partner_id.id,
             }))
             cr.rollback()
+
+    def test_future_id_attachment_squatting_cannot_bind_billing_targets(self):
+        incident = self.Incident._create_test_fixture({
+            'external_ref': self.ref + '-future-id-squatting',
+            'kind': 'charged_not_credited',
+            'state': 'needs_human',
+        })
+        Attachment = self.env['ir.attachment'].sudo()
+        for malformed_res_id in (False, 0.0, 'not-an-id', '０１'):
+            with self.subTest(direct_incident_res_id=malformed_res_id), \
+                    self.assertRaises(AccessError):
+                Attachment.create({
+                    'name': 'direct-incident-%s.bin' % uuid.uuid4().hex,
+                    'datas': base64.b64encode(b'direct incident payload'),
+                    'res_model': 'woow.billing.incident',
+                    'res_id': malformed_res_id,
+                })
+
+        def exact_next_id(table):
+            self.env.cr.execute(
+                "SELECT nextval(pg_get_serial_sequence(%s, 'id'))",
+                (table,),
+            )
+            # The consumed value cannot be reused.  With the standard +1
+            # sequence increment, the next ORM insert receives this exact id.
+            return self.env.cr.fetchone()[0] + 1
+
+        future_activity_id = exact_next_id('mail_activity')
+        activity_payload = Attachment.create({
+            'name': 'future-billing-activity-%s.bin' % uuid.uuid4().hex,
+            'datas': base64.b64encode(b'future activity payload'),
+            'res_model': 'mail.activity',
+            'res_id': future_activity_id,
+        })
+        with self.assertRaises(AccessError), self.env.cr.savepoint():
+            self.Incident._ensure_review_activities_current_cursor(incident.id)
+        self.env.invalidate_all()
+        self.assertFalse(
+            self.env['mail.activity'].sudo().browse(future_activity_id).exists(),
+            'incident activity must roll back when its future id was squatted',
+        )
+        activity_payload.invalidate_recordset(['res_model', 'res_id'])
+        self.assertEqual(activity_payload.res_model, 'mail.activity')
+        self.assertEqual(activity_payload.res_id, future_activity_id)
+
+        partner = self.env['res.partner'].create({
+            'name': 'Future attachment control %s' % uuid.uuid4().hex,
+        })
+        todo_type = self.env.ref('mail.mail_activity_data_todo')
+        partner_model = self.env['ir.model']._get('res.partner')
+        future_control_activity_id = exact_next_id('mail_activity')
+        control_activity_payload = Attachment.create({
+            'name': 'future-control-activity-%s.bin' % uuid.uuid4().hex,
+            'datas': base64.b64encode(b'legal future activity payload'),
+            'res_model': 'mail.activity',
+            'res_id': future_control_activity_id,
+        })
+        control_activity = self.env['mail.activity'].sudo().create({
+            'res_model_id': partner_model.id,
+            'res_id': partner.id,
+            'activity_type_id': todo_type.id,
+            'user_id': self.env.user.id,
+            'summary': 'Legal future attachment control',
+            'note': 'Other target models remain legal',
+            'date_deadline': fields.Date.today(),
+        })
+        self.assertEqual(control_activity.id, future_control_activity_id)
+        self.assertTrue(control_activity_payload.exists())
+
+        self.assertTrue(
+            self.Incident._ensure_review_activities_current_cursor(incident.id))
+        review_type = self.env.ref(
+            'woow_paas_platform.mail_activity_type_billing_incident_review')
+        review_activity = self.env['mail.activity'].sudo().search([
+            ('res_model', '=', 'woow.billing.incident'),
+            ('res_id', '=', incident.id),
+            ('activity_type_id', '=', review_type.id),
+            ('active', '=', True),
+        ], limit=1)
+        self.assertTrue(review_activity)
+
+        future_message_id = exact_next_id('mail_message')
+        message_payload = Attachment.create({
+            'name': 'future-billing-message-%s.bin' % uuid.uuid4().hex,
+            'datas': base64.b64encode(b'future message payload'),
+            'res_model': 'mail.message',
+            'res_id': future_message_id,
+        })
+        with self.assertRaises(AccessError), self.env.cr.savepoint():
+            review_activity.action_feedback(
+                feedback='future message attachment squatting probe')
+        self.env.invalidate_all()
+        self.assertFalse(
+            self.env['mail.message'].sudo().browse(future_message_id).exists(),
+            'incident message must roll back when its future id was squatted',
+        )
+        self.assertTrue(review_activity.exists())
+        self.assertTrue(review_activity.active)
+        message_payload.invalidate_recordset(['res_model', 'res_id'])
+        self.assertEqual(message_payload.res_model, 'mail.message')
+        self.assertEqual(message_payload.res_id, future_message_id)
+
+        future_control_message_id = exact_next_id('mail_message')
+        control_message_payload = Attachment.create({
+            'name': 'future-control-message-%s.bin' % uuid.uuid4().hex,
+            'datas': base64.b64encode(b'legal future message payload'),
+            'res_model': 'mail.message',
+            'res_id': future_control_message_id,
+        })
+        control_message = self.env['mail.message'].sudo().create({
+            'model': 'res.partner',
+            'res_id': partner.id,
+            'message_type': 'comment',
+            'body': 'Legal other-model future attachment control',
+        })
+        self.assertEqual(control_message.id, future_control_message_id)
+        self.assertTrue(control_message_payload.exists())
+
+        (activity_payload | control_activity_payload | message_payload
+         | control_message_payload).unlink()
+
+    def test_activity_target_ids_are_strict_and_all_incident_types_are_guarded(self):
+        incident = self.Incident._create_test_fixture({
+            'external_ref': self.ref + '-strict-activity-target',
+            'kind': 'charged_not_credited',
+            'state': 'open',
+        })
+        Activity = self.env['mail.activity'].sudo()
+        billing_model = self.env['ir.model']._get('woow.billing.incident')
+        partner_model = self.env['ir.model']._get('res.partner')
+        review_type = self.env.ref(
+            'woow_paas_platform.mail_activity_type_billing_incident_review')
+        todo_type = self.env.ref('mail.mail_activity_data_todo')
+        partner = self.env['res.partner'].create({
+            'name': 'Strict activity target control %s' % uuid.uuid4().hex,
+        })
+        base_values = {
+            'res_model_id': billing_model.id,
+            'res_id': incident.id,
+            'activity_type_id': todo_type.id,
+            'user_id': self.env.user.id,
+            'summary': 'Generic type still targets billing incident',
+            'note': 'Only the scheduler may create any incident activity',
+            'date_deadline': fields.Date.today(),
+        }
+
+        for values in (
+                base_values,
+                {
+                    **base_values,
+                    'res_model_id': str(billing_model.id),
+                    'res_id': str(incident.id),
+                    'activity_type_id': str(todo_type.id),
+                }):
+            with self.subTest(values=values), self.assertRaises(AccessError):
+                Activity.create(values)
+
+        with self.assertRaises(AccessError):
+            Activity.with_context(
+                default_res_model_id=str(billing_model.id),
+                default_res_id=str(incident.id),
+                default_activity_type_id=str(todo_type.id),
+            ).create({
+                'user_id': self.env.user.id,
+                'summary': 'Default model id bypass probe',
+                'note': 'Defaults must be canonicalized before target checks',
+                'date_deadline': fields.Date.today(),
+            })
+        with self.assertRaises(AccessError):
+            Activity.with_context(
+                default_activity_type_id=str(review_type.id),
+            ).create({
+                **base_values,
+                'res_model_id': partner_model.id,
+                'res_id': partner.id,
+                'activity_type_id': str(review_type.id),
+            })
+
+        generic_values = {
+            **base_values,
+            'res_model_id': str(partner_model.id),
+            'res_id': str(partner.id),
+            'activity_type_id': str(todo_type.id),
+            'summary': 'Canonical numeric string control',
+        }
+        control = Activity.create(generic_values)
+        self.assertEqual(control.res_model_id, partner_model)
+        self.assertEqual(control.res_id, partner.id)
+        self.assertEqual(control.activity_type_id, todo_type)
+
+        unicode_id = ''.join(
+            chr(0xFF10 + int(digit)) for digit in str(partner.id))
+        for field_name, valid_id in (
+                ('res_model_id', partner_model.id),
+                ('res_id', partner.id),
+                ('activity_type_id', todo_type.id)):
+            for malformed in (
+                    '0%s' % valid_id, float(valid_id), True, unicode_id):
+                values = {
+                    **base_values,
+                    'res_model_id': partner_model.id,
+                    'res_id': partner.id,
+                    'activity_type_id': todo_type.id,
+                    field_name: malformed,
+                }
+                with self.subTest(
+                        field_name=field_name, malformed=malformed), \
+                        self.assertRaises(AccessError):
+                    Activity.create(values)
+
+                before = control.read([
+                    'res_model_id', 'res_id', 'activity_type_id', 'summary',
+                ])[0]
+                with self.assertRaises(AccessError):
+                    control.write({field_name: malformed})
+                self.assertEqual(control.read(list(before))[0], before)
+
+        for field_name, valid_id in (
+                ('res_model_id', partner_model.id),
+                ('res_id', partner.id),
+                ('activity_type_id', todo_type.id)):
+            values = {
+                **base_values,
+                'res_model_id': partner_model.id,
+                'res_id': partner.id,
+                'activity_type_id': todo_type.id,
+            }
+            values.pop(field_name)
+            with self.subTest(default_field=field_name), \
+                    self.assertRaises(AccessError):
+                Activity.with_context(**{
+                    'default_%s' % field_name: True,
+                }).create(values)
+
+        other_partner = self.env['res.partner'].create({
+            'name': 'Strict write target control %s' % uuid.uuid4().hex,
+        })
+        self.assertTrue(control.write({
+            'res_model_id': str(partner_model.id),
+            'res_id': str(other_partner.id),
+            'activity_type_id': str(todo_type.id),
+        }))
+        self.assertEqual(control.res_id, other_partner.id)
 
     def test_dedicated_activity_create_and_write_are_not_generic_ingress(self):
         incident_id = self.Incident._log(self._snapshot(
@@ -1620,6 +1884,51 @@ class TestBillingIncidentPublicApi864(TransactionCase):
             current_manager_ids,
             'manager group hook 必須同 transaction 收斂所有 unresolved incidents',
         )
+
+        implied_candidate = new_test_user(
+            self.env,
+            login='billing-roster-implied-%s' % uuid.uuid4().hex,
+            groups='base.group_user',
+        )
+        implying_group = self.env['res.groups'].sudo().create({
+            'name': 'Billing roster implied path %s' % uuid.uuid4().hex,
+            'users': [(4, implied_candidate.id)],
+        })
+        implying_group.write({'implied_ids': [(4, manager_group.id)]})
+        implied_candidate.invalidate_recordset(['groups_id'])
+        Activity.invalidate_model()
+        self.assertIn(manager_group, implied_candidate.groups_id)
+        self.assertEqual(Activity.search_count(
+            activity_domain + [('user_id', '=', implied_candidate.id)]), 1,
+            'res.groups implied_ids add path 必須即時補恰一筆 activity',
+        )
+        implying_group._remove_group(manager_group)
+        implied_candidate.invalidate_recordset(['groups_id'])
+        Activity.invalidate_model()
+        self.assertNotIn(manager_group, implied_candidate.groups_id)
+        self.assertEqual(Activity.search_count(
+            activity_domain + [('user_id', '=', implied_candidate.id)]), 0,
+            'res.groups implied_ids remove path 必須即時移除 stale activity',
+        )
+
+        unlink_candidate = new_test_user(
+            self.env,
+            login='billing-roster-unlink-%s' % uuid.uuid4().hex,
+            groups='account.group_account_manager',
+        )
+        Activity.invalidate_model()
+        self.assertEqual(Activity.search_count(
+            activity_domain + [('user_id', '=', unlink_candidate.id)]), 1,
+            'res.users.create manager path 必須即時補恰一筆 activity',
+        )
+        unlink_candidate_id = unlink_candidate.id
+        self.assertTrue(unlink_candidate.sudo().unlink())
+        Activity.invalidate_model()
+        self.assertEqual(Activity.search_count(
+            activity_domain + [('user_id', '=', unlink_candidate_id)]), 0,
+            'res.users.unlink manager path 必須移除 stale activity',
+        )
+
         logged = repr(logger.mock_calls)
         self.assertNotIn(
             incident.external_ref, logged,
@@ -2442,14 +2751,29 @@ class TestBillingIncidentRpcWriteGuard864(HttpCase):
         self.assertTrue(protected_message)
         self.assertEqual(protected_message.author_id, self.manager_a.partner_id)
 
-        self.assertTrue(manager_group.sudo().write({
-            'users': [
-                (3, self.manager_a.id),
-                (4, self.regular_user.id),
-            ],
-        }))
-        self.manager_a.invalidate_recordset(['groups_id'])
-        self.regular_user.invalidate_recordset(['groups_id'])
+        # Exercise the standard res.users API path used by the user form.  A
+        # res.groups.write(users=...) hook alone does not see these commands.
+        self.authenticate(self.system_login, self.system_login)
+        self.assertTrue(self._assert_ok(
+            self._call_kw(
+                'res.users', 'write',
+                [[self.manager_a.id], {
+                    'groups_id': [(3, manager_group.id)],
+                }],
+            ),
+            'standard user.write must remove the account-manager role',
+        ))
+        self.assertTrue(self._assert_ok(
+            self._call_kw(
+                'res.users', 'write',
+                [[self.regular_user.id], {
+                    'groups_id': [(4, manager_group.id)],
+                }],
+            ),
+            'standard user.write must add the account-manager role',
+        ))
+        self.manager_a.invalidate_recordset(['groups_id', 'active'])
+        self.regular_user.invalidate_recordset(['groups_id', 'active'])
         self.assertIn(user_group, self.manager_a.groups_id)
         self.assertNotIn(manager_group, self.manager_a.groups_id)
         self.assertIn(manager_group, self.regular_user.groups_id)
@@ -2466,20 +2790,61 @@ class TestBillingIncidentRpcWriteGuard864(HttpCase):
             activity_domain + [('user_id', '=', self.regular_user.id)],
             limit=1,
         )
-        self.assertTrue(replacement, '新 manager 必須同 transaction 補齊 activity')
+        self.assertEqual(
+            len(replacement), 1,
+            '新 manager 必須在 user.write 同 transaction 補恰一筆 activity',
+        )
+        for incident in (self.incident_a, self.incident_b):
+            self.assertEqual(Activity.search_count([
+                ('res_model', '=', 'woow.billing.incident'),
+                ('res_id', '=', incident.id),
+                ('activity_type_id', '=', review_type.id),
+                ('user_id', '=', self.regular_user.id),
+                ('active', '=', True),
+            ]), 1, 'user.write must converge every unresolved incident')
 
-        # Corrupt/stale fixture proves direct-ID access is still denied even if
-        # a row survives a concurrent/manual bypass after roster convergence.
+        self.assertTrue(self._assert_ok(
+            self._call_kw(
+                'res.users', 'write',
+                [[self.regular_user.id], {'active': False}],
+            ),
+            'deactivate current manager through standard user.write',
+        ))
+        self.assertEqual(Activity.search_count(
+            activity_domain + [('user_id', '=', self.regular_user.id)]), 0)
+        self.assertTrue(self._assert_ok(
+            self._call_kw(
+                'res.users', 'write',
+                [[self.regular_user.id], {'active': True}],
+            ),
+            'reactivate current manager through standard user.write',
+        ))
+        self.regular_user.invalidate_recordset(['active', 'groups_id'])
+        self.assertTrue(self.regular_user.active)
+        self.assertIn(manager_group, self.regular_user.groups_id)
+        replacement = Activity.search(
+            activity_domain + [('user_id', '=', self.regular_user.id)],
+        )
+        self.assertEqual(
+            len(replacement), 1,
+            'reactivation must restore exactly one active dedicated activity',
+        )
+
+        # A deliberately corrupt generic-type incident activity proves that
+        # current-group search/read/action gates cover every incident target,
+        # not only the dedicated review type.  Roster convergence above must
+        # still remove the real stale dedicated row assigned to the old user.
+        todo_type = self.env.ref('mail.mail_activity_data_todo')
         self.env.cr.execute(
             'INSERT INTO mail_activity '
             '(res_model_id, res_model, res_id, res_name, activity_type_id, '
             'user_id, summary, note, date_deadline, automated, active, '
             'create_uid, write_uid, create_date, write_date) '
-            'SELECT res_model_id, res_model, res_id, res_name, '
-            'activity_type_id, %s, summary, note, date_deadline, automated, '
-            'active, create_uid, write_uid, NOW(), NOW() '
+            'SELECT res_model_id, res_model, res_id, res_name, %s, '
+            '%s, summary, note, date_deadline, automated, active, '
+            'create_uid, write_uid, NOW(), NOW() '
             'FROM mail_activity WHERE id = %s RETURNING id',
-            (self.manager_a.id, replacement.id),
+            (todo_type.id, self.manager_a.id, replacement.id),
         )
         stale_activity_id = self.env.cr.fetchone()[0]
         Activity.invalidate_model()
@@ -2497,13 +2862,13 @@ class TestBillingIncidentRpcWriteGuard864(HttpCase):
                 'mail.activity', 'read',
                 [[stale_activity_id], ['summary']],
             ),
-            '離組後即使 assigned 也不得 read dedicated activity',
+            '離組後即使 assigned 也不得 read generic incident activity',
         )
         self._assert_access_error(
             self._call_kw(
                 'mail.activity', 'action_done', [[stale_activity_id]],
             ),
-            '離組後即使 assigned 也不得 action dedicated activity',
+            '離組後即使 assigned 也不得 action generic incident activity',
         )
         self._assert_access_error(
             self._call_kw(
@@ -2992,7 +3357,16 @@ class TestBillingIncidentRpcWriteGuard864(HttpCase):
 
     def test_manager_rpc_rejects_sensitive_resolution_note_atomically(self):
         self.authenticate(self.manager_a_login, self.manager_a_login)
+        legal_note = '已於 ECPay 後台核對交易狀態，帳務資料一致。'
+        self.assertTrue(self._assert_ok(
+            self._call_kw(
+                'woow.billing.incident', 'write',
+                [[self.incident_a.id], {'resolution_note': legal_note}],
+            ),
+            '合法中文 resolution_note 不得被 SAD marker 誤殺',
+        ))
         before = self._audit_snapshot(self.incident_a)
+        self.assertEqual(before['resolution_note'], legal_note)
         for note in (
                 '<b>plain verification reason</b>',
                 'plain <!-- comment --> verification reason',
@@ -3005,8 +3379,15 @@ class TestBillingIncidentRpcWriteGuard864(HttpCase):
                 'card security code 123',
                 'SAD=forbidden-authentication-data',
                 '卡片安全碼：123',
+                '信用卡安全码：123',
+                '驗證碼：123',
+                '验证码：123',
                 'PIN區塊：forbidden',
                 '磁條資料：forbidden',
+                '磁軌資料：forbidden',
+                '磁轨数据：forbidden',
+                '第二軌：forbidden',
+                '第二轨：forbidden',
                 '軌道資料：forbidden',
                 '授權碼：forbidden',
                 '分隔卡號 4111\u09031111\u09031111\u09031111'):

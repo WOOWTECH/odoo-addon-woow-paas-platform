@@ -30,13 +30,18 @@ incident read/write/menu access；只有**目前仍在** `account.group_account_
 company 讀取全部 incident，也可依 model allowlist 保存兩個人工查證欄位；這是 Eugene 裁決
 的安全契約，不是待補的隔離缺口。`orphan`／`needs_human` 的專屬 review activity 同樣派給
 該 Odoo group 內**全體現任** managers，不依使用者目前 company 篩選。初次 schedule 派
-全體；後續 incident schedule／duplicate `_log()` 在同一 advisory lock 內收斂 roster。另有
-只針對該 manager group `users` 變更的 `res.groups` hook，在同一 transaction 收斂**所有
-unresolved incidents**：撤掉離組者的 dedicated activities、移除 duplicate，再替新進
-manager 補到每人恰一筆 active dedicated activity；其他 group 的 users 變更不觸發。角色
-撤銷後，即使 stale activity 仍 assigned、incident message 的 author/create_uid 仍是本人，
-`mail.activity`／`mail.message` 的 direct-ID read/search/action gate 也要求當下 group membership。
-本階段不靠 cron 才達成 role revocation。
+全體；後續 incident schedule／duplicate `_log()` 在同一 advisory lock 內收斂 roster。
+`res.users` 的 targeted create/write/unlink hook 會比較 account-manager membership 與 `active`
+before/after；標準 user form／API 經 `groups_id`（含 reified group 欄位）增刪角色，或
+停用／復用／刪除使用者時，都會在同一 transaction 收斂**所有 unresolved incidents**：撤掉
+離組／inactive 者的 dedicated activities、移除 duplicate，再替新進／reactivated manager
+補到每人恰一筆 active dedicated activity。`res.groups` 的 `users`／`implied_ids`／unlink 路徑
+也保留相同 before/after roster hook；無 roster delta 的其他 group 變更不觸發收斂。兩條路徑
+共用 object-identity recursion guard，RPC truthy context 無法跳過。角色撤銷後，即使 stale
+activity 仍 assigned、incident message 的 author/create_uid 仍是本人，`mail.activity`／
+`mail.message` 的 direct-ID read/search/action gate 也要求當下 group membership；activity gate
+涵蓋**所有** `res_model=woow.billing.incident` rows，不只 dedicated type。本階段不靠 cron
+才達成 role revocation。
 
 ### Fresh evidence（2026-08-31；僅佐證現況）
 
@@ -90,8 +95,9 @@ boundary。共用 sensitive validator 會套到 `_log` 的所有文字 ingress�
 `ResultData`／`Card4No`／`Card6No`／`CardNo`／`CVV`／`CVC`／`CID`／`CSC`／
 `security code`／`SAD`（含 `sensitive authentication data`）／`PIN`／`PIN block`／
 `track1`／`track2`／`magnetic stripe`／`PAN` marker，以及中文「安全碼／卡片安全碼／
-信用卡安全碼／PIN碼／PIN區塊／磁條／磁條資料／軌道資料／授權碼」與 Luhn-valid 13–19 位
-PAN-like 數字都會被拒絕。所有 caller-controlled incident-owned free text（`detail`、
+信用卡安全碼／信用卡安全码／驗證碼／验证码／PIN碼／PIN區塊／磁條／磁條資料／磁軌／磁轨／
+第一、第二軌／第一、第二轨／軌道資料／轨道数据／卡背三碼／卡背三码／授權碼」與 Luhn-valid
+13–19 位 PAN-like 數字都會被拒絕。所有 caller-controlled incident-owned free text（`detail`、
 `resolution_note`、activity feedback）先在 raw、HTML entity-decoded 與 visible plaintext
 三層掃描；只要出現 HTML tag／comment／quoted attribute／entity markup 就 fail-closed，
 因本產品只接受 plain-text 理由。通過 markup gate 後，validator 才做 HTML entity decode、
@@ -157,10 +163,20 @@ module-private object capability 交給 `message_post_with_source()` 呼叫 `sup
 related-model 也在同一 model 檔 targeted 守線：`mail.message` 只有上述 capability 能建立
 `model=woow.billing.incident` 的完成訊息，generic create／write／unlink（含任何 body、PAN 或
 `ResultData`）全拒；其 read/search 也要求 current account-manager，不接受 author/create_uid
-捷徑。`ir.attachment` create／write 在 payload 落 DB 前拒絕直接綁 incident、dedicated
-billing activity 或 incident-owned message，既有 unrelated attachment 搬往這些 old→new
-與 ORM final target 也原子拒絕。protected carrier 的 `res_id` 先 canonicalize：canonical
-positive numeric string 轉 int 後再查 target；float、bool、zero、leading-zero／帶符號／空白等
-noncanonical 值一律 fail-closed；合法其他 model control 不受影響。其他 model 的
-message／attachment 行為不受影響。這些 private context keys 全部登錄在 repo
-`INTERNAL_CTX_KEY_REGISTRY`，值只接受 object identity。
+捷徑。`mail.activity` create/write 與其 `default_*` context 中的 `res_model_id`／
+`activity_type_id`／`res_id` 都先做 strict positive ASCII int canonicalization；canonical numeric
+string 轉 int，bool／float／Unicode digit／zero／leading-zero／帶符號／空白 fail-closed。super
+後再依 stored `res_model`／activity type 驗證：任何 incident target 只能是 module scheduler
+建立的 dedicated type，generic type 也不能由 manager／sudo 鑄造。
+
+`ir.attachment` create／write 在 payload 落 DB 前拒絕直接綁 incident、incident-target
+activity 或 incident-owned message，既有 unrelated attachment 搬往這些 old→new 與 ORM final
+target 也原子拒絕；直接 `res_model=woow.billing.incident` 不依 `res_id` shape／row existence
+無條件拒絕。另有 future-ID squatting gate：incident activity／message 經 super 得到 final id 後，
+若已存在 dangling `ir.attachment(res_model='mail.activity'|'mail.message', res_id=<new id>)` 就拋錯，
+讓新 billing target 在 caller transaction／savepoint 回捲；預埋 payload可維持 dangling，但該
+sequence id 已消耗，永不連上 billing target。protected attachment carrier 的 `res_id` 仍先
+canonicalize：canonical positive numeric string 轉 int 後再查 target；float、bool、zero、
+leading-zero／帶符號／空白等 noncanonical 值一律 fail-closed；合法其他 model control 不受
+影響。其他 model 的 message／activity／attachment 行為不受影響。這些 private context keys
+全部登錄在 repo `INTERNAL_CTX_KEY_REGISTRY`，值只接受 object identity。

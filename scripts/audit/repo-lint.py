@@ -4386,6 +4386,16 @@ INTERNAL_CTX_KEY_REGISTRY = {
         "why": "只把 core activity terminal flow 內部需要的 write 傳過 targeted "
                "mail.activity guard；generic RPC write 不可取得。",
     },
+    "woow_billing_roster_mutation": {
+        "status": "enforced",
+        "sentinel": "_BILLING_ROSTER_MUTATION",
+        "defined_in": "src/models/billing_incident.py",
+        "reader": "_is_roster_mutation",
+        "issue": "#864／PR#986 round 8",
+        "why": "res.users／res.groups 的 membership、active 與 implied-group hook "
+               "共用遞迴抑制；truthy RPC context 不得跳過同 transaction roster "
+               "convergence。",
+    },
     "woow_internal_provision": {
         "status": "enforced",
         "sentinel": "_INTERNAL_PROVISION",

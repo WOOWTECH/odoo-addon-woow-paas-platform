@@ -608,12 +608,86 @@ class TestBillingIncidentRealTransactions864(BaseCase):
         with self.registry.cursor() as cr:
             env = api.Environment(cr, odoo.SUPERUSER_ID, {})
             manager_group = env.ref('account.group_account_manager')
+            review_type = env.ref(
+                'woow_paas_platform.'
+                'mail_activity_type_billing_incident_review')
+            # Seed a duplicate before the standard res.users API mutation.  The
+            # user.write hook itself must remove both the stale former-manager
+            # row and this duplicate, then add the new manager immediately.
+            cr.execute(
+                'INSERT INTO mail_activity '
+                '(res_model_id, res_model, res_id, res_name, '
+                'activity_type_id, user_id, summary, note, date_deadline, '
+                'automated, active, create_uid, write_uid, create_date, '
+                'write_date) '
+                'SELECT res_model_id, res_model, res_id, res_name, '
+                'activity_type_id, user_id, %s, note, date_deadline, '
+                'automated, active, create_uid, write_uid, NOW(), NOW() '
+                'FROM mail_activity WHERE res_model = %s AND res_id = %s '
+                'AND activity_type_id = %s AND user_id = %s '
+                'AND active = true ORDER BY id LIMIT 1',
+                (
+                    'integration duplicate before user write',
+                    _MODEL, incident_id, review_type.id,
+                    self.manager_user_id,
+                ),
+            )
+            env['mail.activity'].invalidate_model()
             env['res.users'].sudo().browse(removed_id).write({
                 'groups_id': [(3, manager_group.id)],
             })
             env['res.users'].sudo().browse(added_id).write({
                 'groups_id': [(4, manager_group.id)],
             })
+            immediate_counts = env['mail.activity'].sudo().read_group(
+                domain=[
+                    ('res_model', '=', _MODEL),
+                    ('res_id', '=', incident_id),
+                    ('activity_type_id', '=', review_type.id),
+                    ('active', '=', True),
+                ],
+                fields=['user_id'],
+                groupby=['user_id'],
+            )
+            self.assertEqual(
+                {row['user_id'][0]: row['user_id_count']
+                 for row in immediate_counts},
+                {
+                    user_id: 1
+                    for user_id in manager_group.users.filtered('active').ids
+                },
+                'res.users.write(groups_id) must converge in the same cursor',
+            )
+            added = env['res.users'].sudo().browse(added_id)
+            added.write({'active': False})
+            self.assertFalse(env['mail.activity'].sudo().search([
+                ('res_model', '=', _MODEL),
+                ('res_id', '=', incident_id),
+                ('activity_type_id', '=', review_type.id),
+                ('user_id', '=', added_id),
+                ('active', '=', True),
+            ]), 'deactivation must remove the active manager alert immediately')
+            added.write({'active': True})
+            self.assertEqual(env['mail.activity'].sudo().search_count([
+                ('res_model', '=', _MODEL),
+                ('res_id', '=', incident_id),
+                ('activity_type_id', '=', review_type.id),
+                ('user_id', '=', added_id),
+                ('active', '=', True),
+            ]), 1, 'reactivation must restore exactly one alert immediately')
+            cr.commit()
+        self.assertEqual(
+            self._review_activity_counts_by_user(incident_id),
+            self._expected_review_activity_counts_by_user(),
+            'user.write group/active paths must commit an exact current roster',
+        )
+        self.assertNotIn(
+            removed_id, self._review_activity_counts_by_user(incident_id),
+            'former manager stale activity must be deleted by user.write',
+        )
+
+        with self.registry.cursor() as cr:
+            env = api.Environment(cr, odoo.SUPERUSER_ID, {})
             review_type = env.ref(
                 'woow_paas_platform.'
                 'mail_activity_type_billing_incident_review')
