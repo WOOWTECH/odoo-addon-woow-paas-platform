@@ -504,7 +504,7 @@ class BillingIncident(models.Model):
         r'c[\W_]*v[\W_]*[vc](?:[\W_]*2)?|'
         r'c[\W_]*v[\W_]*n(?:[\W_]*2)?|'
         r'c[\W_]*i[\W_]*d|c[\W_]*s[\W_]*c|'
-        r'card[\W_]*verification[\W_]*value|'
+        r'card[\W_]*verification[\W_]*(?:value|code)|'
         r'(?:card[\W_]*)?security[\W_]*(?:code|number|no)|'
         r's[\W_]*a[\W_]*d|'
         r'sensitive[\W_]*authentication[\W_]*data|'
@@ -518,17 +518,20 @@ class BillingIncident(models.Model):
     # CJK text is normally written without word separators, so English-style
     # lookarounds would let phrases such as「看到卡片安全碼」bypass the gate.
     _SENSITIVE_CJK_MARKER_RE = re.compile(
-        r'(?:信用[\W_]*卡|卡[\W_]*片|卡)[\W_]*(?:號|号)'
+        r'(?:信[\W_]*用[\W_]*卡|卡[\W_]*片|卡)[\W_]*(?:號|号)'
         r'(?:[\W_]*(?:碼|码))?|'
         r'主[\W_]*(?:帳|账)[\W_]*(?:號|号)|'
         r'敏[\W_]*感[\W_]*(?:驗[\W_]*證|验[\W_]*证|'
         r'認[\W_]*證|认[\W_]*证)[\W_]*'
         r'(?:資[\W_]*料|资料|數[\W_]*據|数[\W_]*据)|'
-        r'(?:信用卡|卡片|卡)?[\W_]*安全[\W_]*(?:碼|码)|'
-        r'(?:安全[\W_]*)?(?:驗[\W_]*證|验[\W_]*证)'
-        r'[\W_]*(?:碼|码|值)|'
-        r'(?:(?:信用卡|卡片)[\W_]*)?背[\W_]*(?:面|後|后)[\W_]*'
+        r'(?:(?:信[\W_]*用[\W_]*卡|卡[\W_]*片|卡)[\W_]*)?'
+        r'安[\W_]*全[\W_]*(?:碼|码)|'
+        r'(?:安[\W_]*全[\W_]*)?'
+        r'(?:驗[\W_]*證|验[\W_]*证)[\W_]*(?:碼|码|值)|'
+        r'(?:(?:信[\W_]*用[\W_]*卡|卡[\W_]*片)[\W_]*)?'
+        r'背[\W_]*(?:面|後|后)[\W_]*'
         r'(?:末[\W_]*)?(?:三|3)[\W_]*(?:碼|码)|'
+        r'末[\W_]*(?:三|3)[\W_]*(?:碼|码)|'
         r'(?:個[\W_]*人[\W_]*識[\W_]*別|个[\W_]*人[\W_]*识[\W_]*别)'
         r'[\W_]*(?:碼|码)|'
         r'p[\W_]*i[\W_]*n[\W_]*(?:碼|码|區[\W_]*塊|区[\W_]*块)|'
@@ -540,6 +543,14 @@ class BillingIncident(models.Model):
         r'授[\W_]*權[\W_]*(?:碼|码)',
         re.IGNORECASE,
     )
+    _CARD_CONTEXT_RE = re.compile(
+        r'(?<![A-Za-z0-9])c[\W_]*a[\W_]*r[\W_]*d'
+        r'(?![A-Za-z0-9])|'
+        r'信[\W_]*用[\W_]*卡|卡[\W_]*片|卡',
+        re.IGNORECASE,
+    )
+    _SHORT_DIGIT_SEQUENCE_RE = re.compile(r'\d(?:[\W_]*\d)*')
+    _CARD_CONTEXT_DIGIT_DISTANCE = 24
     # CJK labels normally touch the first digit (``卡號4111…``).  Only ASCII
     # provider-identifier adjacency suppresses a candidate; non-ASCII letters
     # remain visible to marker scanning but act as PAN boundaries.
@@ -807,11 +818,34 @@ class BillingIncident(models.Model):
         return False
 
     @api.model
+    def _has_card_context_short_digits(self, canonical):
+        """Reject 3–4 digits near card wording without guessing a full label."""
+        contexts = tuple(self._CARD_CONTEXT_RE.finditer(canonical))
+        if not contexts:
+            return False
+        for digits_match in self._SHORT_DIGIT_SEQUENCE_RE.finditer(canonical):
+            digit_count = sum(
+                character.isdigit() for character in digits_match.group())
+            if digit_count not in (3, 4):
+                continue
+            for context_match in contexts:
+                gap = max(
+                    context_match.start() - digits_match.end(),
+                    digits_match.start() - context_match.end(),
+                    0,
+                )
+                if gap <= self._CARD_CONTEXT_DIGIT_DISTANCE:
+                    return True
+        return False
+
+    @api.model
     def _sensitive_content_category(self, field_name, value):
         canonical = self._canonicalize_pci_text(value)
         marker_category = self._sensitive_marker_category(value)
         if marker_category:
             return marker_category
+        if self._has_card_context_short_digits(canonical):
+            return 'card_context_short_digits'
         for match in self._PAN_CANDIDATE_RE.finditer(canonical):
             digits = ''.join(character for character in match.group()
                              if character.isdigit())

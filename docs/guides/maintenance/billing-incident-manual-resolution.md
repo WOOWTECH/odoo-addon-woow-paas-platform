@@ -104,22 +104,25 @@ ECPay **查得到或查不到都只代表「查證結果已記錄，這張 incid
 boundary。共用 sensitive validator 會套到 `_log` 的所有文字 ingress、manager
 `resolution_note` RPC write、人工關單按鈕與 `_resolve(resolution_note)`：明確的
 `ResultData`／`Card4No`／`Card6No`／`CardNo`／`CVV`／`CVC`／`CID`／`CSC`／
-`security code`／`card verification value`／`CVN`／`CVN2`／`SAD`（含
-`sensitive authentication data`）／`PIN`／`PIN block`／`track1`／`track2`／
-`magnetic stripe`／`PAN` marker，以及中文「安全碼／卡片安全碼／信用卡安全碼／
+`security code`／`card verification value`／`card verification code`／`CVN`／`CVN2`／
+`SAD`（含 `sensitive authentication data`）／`PIN`／`PIN block`／`track1`／`track2`／
+`magnetic stripe`／`PAN` marker，以及中文「卡號／卡号／安全碼／卡片安全碼／信用卡安全碼／
 信用卡安全码／驗證碼／验证码／PIN碼／PIN區塊／磁條／磁條資料／磁軌／磁轨／第一、第二軌／
 第一、第二轨／軌道資料／轨道数据／卡背三碼／卡背三码／卡片背面（末）三碼／
 卡片背面（末）三码／信用卡背面（末）三碼／信用卡背面（末）三码／背後三碼／背后三码／
-授權碼」與 Luhn-valid
-13–19 位 PAN-like 數字都會被拒絕。所有 caller-controlled incident-owned free text（`detail`、
+末三碼／末三码／授權碼」與 Luhn-valid 13–19 位 PAN-like 數字都會被拒絕。所有
+caller-controlled incident-owned free text（`detail`、
 `resolution_note`、activity feedback）先在 raw、HTML entity-decoded 與 visible plaintext
 三層掃描；只要出現 HTML tag／comment／quoted attribute／entity markup 就 fail-closed，
 因本產品只接受 plain-text 理由。通過 markup gate 後，validator 才做 HTML entity decode、
 `html2plaintext`、Unicode NFKC，並以 Unicode letter/digit 作唯一邊界：**所有**非
 letter/digit 字元一律轉成同一 separator，再跑 marker／PAN Luhn。因此卡號被 Mc（如
 U+0903）、So／emoji、Sk、Cf、Mn、Me、點號、全形字元、U+FE0F variation selector、
-U+200B zero-width character 或 combining mark 拆開都不會繞過；合法中文查證理由只要不含
-上述 marker 仍可通過。只有專用
+U+200B zero-width character 或 combining mark 拆開都不會繞過；這也適用於上述 CJK／CVN
+marker 各字之間的 zero-width separator。另有一把保守的 **defense-in-depth heuristic**：只要
+`卡`／`卡片`／`信用卡`／`card` 語境附近出現 3–4 位數（含 separator 拆分）就拒絕，不要求 caller
+剛好寫出完整的「背面三碼」詞組。它不是語意 DLP 或完整 PCI boundary，且會刻意 over-block
+含 card 語境的合法短數字；不含 card 語境的「HTTP 交易查詢回應 200」仍可通過。只有專用
 `external_ref`／`trade_no` 欄位可豁免「純數字碰巧通過 Luhn」；兩欄仍拒絕上述 marker，
 並另有長度、安全字元與 CRLF/control-character shape gate。`external_ref` 只接受 1–20
 字元 raw provider MTN，
@@ -129,8 +132,9 @@ numeric MTN 與 `invoice:123` 可通過，純 numeric 即使碰巧符合 Luhn �
 合法不構成 marker 豁免。raw MTN 只在 incident form/list 的明示 `external_ref`／`trade_no`
 專欄顯示，不進 activity `res_name`／summary／note，也不進 activity ORM SQL params；
 任何 error/collision log 只記 incident id、field 與 category，不回印 raw reference，也不留
-可枚舉的 fingerprint。自由文字中的 `MTN:`／`TradeNo:` prefix **不是豁免**。caller 仍有責任只交付
-必要、去敏的 `detail` 安全摘要；不得把「通過 validator」解讀為 payload 已符合 PCI。
+可枚舉的 fingerprint。自由文字中的 `MTN:`／`TradeNo:` prefix **不是豁免**。上述 marker、
+Luhn 與 card-context heuristic 都只是 defense-in-depth；caller 仍有責任只交付必要、去敏的
+`detail` 安全摘要，不得把「通過 validator」解讀為 payload 已符合 PCI。
 
 上述限制避免人工動作與後續自動化重複給點；任何需要改變 wallet 餘額的產品流程不屬於本
 runbook，也不是「人工已處理」按鈕的功能。

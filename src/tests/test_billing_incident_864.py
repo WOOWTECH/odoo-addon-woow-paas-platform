@@ -455,6 +455,10 @@ class TestBillingIncidentPublicApi864(TransactionCase):
             external_ref=self.ref + '-legal-chinese-detail',
             detail='已於 ECPay 後台核對交易狀態，帳務資料一致。',
         )), int, '合法中文查證理由不得被 marker gate 誤殺')
+        self.assertIsInstance(self.Incident._log(self._snapshot(
+            external_ref=self.ref + '-legal-http-detail',
+            detail='HTTP 交易查詢回應 200，交易狀態一致。',
+        )), int, '無 card 語境的合法中文 HTTP／交易理由不得被誤殺')
 
         sensitive_details = (
             'ResultData=secret-payload-864',
@@ -470,8 +474,10 @@ class TestBillingIncidentPublicApi864(TransactionCase):
             'CSC/123',
             'card security code 123',
             'card verification value 123',
+            'card verification code: 123',
             'CVN: 123',
             'CVN2: 123',
+            'C\u200bV\u200bN\u200b2: 123',
             'security_code=123',
             'security.code:123',
             'S.A.D=forbidden-authentication-data',
@@ -480,9 +486,12 @@ class TestBillingIncidentPublicApi864(TransactionCase):
             'PAN=4111111111111111',
             '卡號4111111111111111',
             '卡号4111111111111111',
+            '卡\u200b號：4111',
+            '卡\u200b号：4111',
             '敏感驗證資料：forbidden',
             '敏感认证数据：forbidden',
             '安全碼：123',
+            '安\u200b全\u200b碼：123',
             '卡片安全碼：123',
             '信用卡安全碼：123',
             '信用卡安全码：123',
@@ -493,11 +502,18 @@ class TestBillingIncidentPublicApi864(TransactionCase):
             '卡片背面末三碼：123',
             '卡片背面末三码：123',
             '信用卡背面三碼：123',
+            '信用卡背面三碼',
             '信用卡背面三码：123',
             '信用卡背面末三碼：123',
             '信用卡背面末三码：123',
             '背後三碼：123',
             '背后三码：123',
+            '末三碼：123',
+            '末三码：123',
+            '卡的參考資料是 123',
+            '卡片記錄 1234',
+            '信用卡查詢碼 123',
+            'card reference 1234',
             '個人識別碼：1234',
             '个人识别码：1234',
             '驗證碼：123',
@@ -750,14 +766,19 @@ class TestBillingIncidentPublicApi864(TransactionCase):
             'CID: 123',
             'card security code 123',
             'card verification value 123',
+            'card verification code: 123',
             'CVN: 123',
             'CVN2: 123',
+            'C\u200bV\u200bN\u200b2: 123',
             'SAD=forbidden-authentication-data',
             '卡號4111111111111111',
             '卡号4111111111111111',
+            '卡\u200b號：4111',
+            '卡\u200b号：4111',
             '敏感驗證資料：forbidden',
             '敏感认证数据：forbidden',
             '安全碼：123',
+            '安\u200b全\u200b碼：123',
             '卡片安全碼：123',
             '信用卡安全碼：123',
             '信用卡安全码：123',
@@ -768,11 +789,18 @@ class TestBillingIncidentPublicApi864(TransactionCase):
             '卡片背面末三碼：123',
             '卡片背面末三码：123',
             '信用卡背面三碼：123',
+            '信用卡背面三碼',
             '信用卡背面三码：123',
             '信用卡背面末三碼：123',
             '信用卡背面末三码：123',
             '背後三碼：123',
             '背后三码：123',
+            '末三碼：123',
+            '末三码：123',
+            '卡的參考資料是 123',
+            '卡片記錄 1234',
+            '信用卡查詢碼 123',
+            'card reference 1234',
             '個人識別碼：1234',
             '个人识别码：1234',
             '驗證碼：123',
@@ -808,7 +836,7 @@ class TestBillingIncidentPublicApi864(TransactionCase):
             external_ref=legal_ref,
             state='needs_human',
         ))
-        legal_note = '已於 ECPay 後台核對交易狀態，帳務資料一致。'
+        legal_note = 'HTTP 交易查詢回應 200，交易狀態一致。'
         self.assertEqual(
             self.Incident._resolve(
                 legal_ref,
@@ -1206,6 +1234,9 @@ class TestBillingIncidentPublicApi864(TransactionCase):
                     '查證時看到 CVN：123',
                     '查證時看到 CVN2：123',
                     '查證時看到 card verification value：123',
+                    '查證時看到 card verification code：123',
+                    '查證時看到 C\u200bV\u200bN\u200b2：123',
+                    '查證時看到安\u200b全\u200b碼：123',
                     '查證時看到卡片安全碼：123',
                     '查證時看到信用卡安全码：123',
                     '查證時看到卡片驗證值：123',
@@ -1215,11 +1246,18 @@ class TestBillingIncidentPublicApi864(TransactionCase):
                     '查證時看到卡片背面末三碼：123',
                     '查證時看到卡片背面末三码：123',
                     '查證時看到信用卡背面三碼：123',
+                    '查證時看到信用卡背面三碼',
                     '查證時看到信用卡背面三码：123',
                     '查證時看到信用卡背面末三碼：123',
                     '查證時看到信用卡背面末三码：123',
                     '查證時看到背後三碼：123',
                     '查證時看到背后三码：123',
+                    '查證時看到末三碼：123',
+                    '查證時看到末三码：123',
+                    '查證卡的參考資料是 123',
+                    '查證卡片記錄 1234',
+                    '查證信用卡查詢碼 123',
+                    'card reference 1234',
                     '查證時看到個人識別碼：1234',
                     '查證時看到个人识别码：1234',
                     '查證時看到驗證碼：123',
@@ -1236,6 +1274,8 @@ class TestBillingIncidentPublicApi864(TransactionCase):
                     '查證時看到授權碼：forbidden',
                     '卡號4111111111111111',
                     '卡号4111111111111111',
+                    '卡\u200b號：4111',
+                    '卡\u200b号：4111',
                     '敏感驗證資料：forbidden',
                     '敏感认证数据：forbidden',
                     '分隔卡號 4111\u09031111\u09031111\u09031111'):
@@ -1247,7 +1287,7 @@ class TestBillingIncidentPublicApi864(TransactionCase):
 
             completed_user_id = activity.user_id.id
             safe_feedback = (
-                '已於 ECPay 後台核對本筆帳務，資料一致。')
+                'HTTP 交易查詢回應 200，已核對交易狀態一致。')
             message_floor = env['mail.message'].sudo().search(
                 [], order='id desc', limit=1).id
             notification_floor = env['mail.notification'].sudo().search(
