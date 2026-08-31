@@ -776,7 +776,7 @@ class TestBillingIncidentRealTransactions864(BaseCase):
             )
 
     def test_concurrent_future_message_attachment_is_serialized_and_removed(self):
-        """Message completion wins while an overlapping payload is purged."""
+        """Guarded message creation wins while its payload is purged."""
         snapshot = self._snapshot(
             'future-message-attachment-race',
             state='needs_human',
@@ -850,14 +850,26 @@ class TestBillingIncidentRealTransactions864(BaseCase):
                 attachment_inserted.set()
                 attachment_cr.rollback()
 
-        def complete_activity():
+        def create_controlled_message():
             try:
                 self.assertTrue(attachment_inserted.wait(timeout=5))
                 target_cr.execute('SET LOCAL lock_timeout = %s', ('5s',))
-                target_env['mail.activity'].sudo().browse(
-                    activity_id).with_user(
-                        self.manager_user_id).action_feedback(
-                            feedback='%s safe verification' % marker)
+                activity = target_env['mail.activity'].sudo().browse(
+                    activity_id).with_user(self.manager_user_id)
+                incident = target_env[_MODEL].with_user(
+                    self.manager_user_id).browse(incident_id)
+                message = incident.message_post_with_source(
+                    'mail.message_activity_done',
+                    author_id=activity.env.user.partner_id.id,
+                    render_values={
+                        'activity': activity,
+                        'feedback': '%s safe verification' % marker,
+                        'display_assignee': False,
+                    },
+                    mail_activity_type_id=activity.activity_type_id.id,
+                    subtype_xmlid='mail.mt_activities',
+                )
+                self.assertEqual(message.id, future_message_id)
                 target_cr.commit()
             except Exception as exc:
                 errors.append(('target', exc))
@@ -870,7 +882,7 @@ class TestBillingIncidentRealTransactions864(BaseCase):
                     name='b864-future-message-attachment',
                 ),
                 threading.Thread(
-                    target=complete_activity,
+                    target=create_controlled_message,
                     name='b864-future-message-target',
                 ),
             ]
@@ -914,7 +926,7 @@ class TestBillingIncidentRealTransactions864(BaseCase):
                 ('activity_type_id', '=', review_type.id),
                 ('user_id', '=', self.manager_user_id),
                 ('active', '=', True),
-            ]), 'completion must still re-arm the manager alert')
+            ]), 'guarded message probe must leave the manager alert active')
             generic_message = env['mail.message'].sudo().browse(
                 generic_message_id).exists()
             generic_attachment = env['ir.attachment'].sudo().browse(
@@ -1090,25 +1102,43 @@ class TestBillingIncidentRealTransactions864(BaseCase):
                         ('active', '=', True),
                     ], limit=1)
                     self.assertTrue(current_activity)
+                    current_partner_id = env['res.users'].sudo().browse(
+                        self.manager_user_id).partner_id.id
                     message_floor = env['mail.message'].sudo().search(
                         [], order='id desc', limit=1).id
-                    current_activity.with_user(
+                    notification_floor = env['mail.notification'].sudo().search(
+                        [], order='id desc', limit=1).id
+                    mail_floor = env['mail.mail'].sudo().search(
+                        [], order='id desc', limit=1).id
+                    feedback = 'post-race terminal feedback must stay ephemeral'
+                    self.assertFalse(current_activity.with_user(
                         self.manager_user_id).action_feedback(
-                            feedback='post-race notification control')
-                    message = env['mail.message'].sudo().search([
+                            feedback=feedback))
+                    self.assertFalse(env['mail.message'].sudo().search([
                         ('id', '>', message_floor),
-                        ('model', '=', _MODEL),
-                        ('res_id', '=', incident_id),
-                    ], order='id desc', limit=1)
-                    self.assertTrue(message)
+                    ]), 'dedicated terminal must create no mail.message')
                     self.assertFalse(env['mail.notification'].sudo().search([
-                        ('mail_message_id', '=', message.id),
-                        ('res_partner_id', '=', former_partner_id),
-                    ]), 'former manager must receive no notification after race')
+                        ('id', '>', notification_floor),
+                        ('res_partner_id', 'in', [
+                            former_partner_id, current_partner_id,
+                        ]),
+                    ]), 'former/current notification rows must both stay zero')
                     self.assertFalse(env['mail.mail'].sudo().search([
-                        ('mail_message_id', '=', message.id),
-                        ('recipient_ids', 'in', [former_partner_id]),
-                    ]), 'former manager must receive no outgoing mail after race')
+                        ('id', '>', mail_floor),
+                        ('recipient_ids', 'in', [
+                            former_partner_id, current_partner_id,
+                        ]),
+                    ]), 'former/current outgoing mail must both stay zero')
+                    self.assertFalse(env['mail.message'].sudo().search([
+                        ('body', 'ilike', feedback),
+                    ]), 'dedicated terminal feedback must not persist')
+                    self.assertEqual(env['mail.activity'].sudo().search_count([
+                        ('res_model', '=', _MODEL),
+                        ('res_id', '=', incident_id),
+                        ('activity_type_id', '=', review_type.id),
+                        ('user_id', '=', self.manager_user_id),
+                        ('active', '=', True),
+                    ]), 1, 'completed current user must have one active alert')
                     cr.commit()
 
     def test_scheduler_second_cursor_is_read_committed_before_roster_read(self):
@@ -1522,6 +1552,217 @@ class TestBillingIncidentRealTransactions864(BaseCase):
             {name: True for name, _callback in operations},
             'each fault-injected path must reach and raise from its postcheck',
         )
+
+    def test_resolution_and_roster_mutation_share_one_lock_order(self):
+        """Manual/independent cleanup cannot deadlock roster convergence."""
+        from odoo.addons.woow_paas_platform.models import billing_incident
+
+        cases = (
+            ('manual', 'res.users'),
+            ('independent', 'res.groups'),
+        )
+        for resolution_path, mutation_path in cases:
+            with self.subTest(
+                    resolution_path=resolution_path,
+                    mutation_path=mutation_path):
+                with self.registry.cursor() as cr:
+                    env = api.Environment(cr, odoo.SUPERUSER_ID, {
+                        'mail_notify_force_send': False,
+                    })
+                    manager_group = env.ref(
+                        'account.group_account_manager')
+                    base_group = env.ref('base.group_user')
+                    former = env['res.users'].sudo().with_context(
+                        no_reset_password=True).create({
+                            'name': '%s-roster-lock-%s' % (
+                                self.marker, resolution_path),
+                            'login': '%s-roster-lock-%s' % (
+                                self.marker, resolution_path),
+                            'email': '%s-roster-lock-%s@example.test' % (
+                                self.marker, resolution_path),
+                            'groups_id': [(6, 0, [
+                                base_group.id, manager_group.id,
+                            ])],
+                        })
+                    former_id = former.id
+                    former_partner_id = former.partner_id.id
+                    cr.commit()
+
+                snapshot = self._snapshot(
+                    'resolve-roster-lock-%s' % resolution_path,
+                    state='needs_human',
+                )
+                incident_id = self._call_log(snapshot)
+                if resolution_path == 'manual':
+                    with self.registry.cursor() as cr:
+                        manager_env = api.Environment(
+                            cr, self.manager_user_id, {})
+                        manager_env[_MODEL].browse(incident_id).write({
+                            'manual_check_result': 'ecpay_not_found',
+                            'resolution_note': (
+                                'manual roster lock ordering verification'),
+                        })
+                        cr.commit()
+
+                resolve_cr = self.registry._db.cursor()
+                mutation_cr = self.registry._db.cursor()
+                worker_context = {'mail_notify_force_send': False}
+                resolve_env = api.Environment(
+                    resolve_cr, self.manager_user_id, worker_context)
+                mutation_env = api.Environment(
+                    mutation_cr, odoo.SUPERUSER_ID, worker_context)
+                start_barrier = threading.Barrier(2)
+                mutation_has_roster_lock = threading.Event()
+                gate_guard = threading.Lock()
+                gated = {'mutation': False, 'resolution': False}
+                errors = []
+                results = []
+                original_lock = billing_incident._acquire_billing_roster_lock
+
+                def ordered_roster_lock(cr):
+                    role = 'mutation' if cr is mutation_cr else 'resolution'
+                    with gate_guard:
+                        first = not gated[role]
+                        if first:
+                            gated[role] = True
+                    if not first:
+                        return original_lock(cr)
+                    start_barrier.wait(timeout=5)
+                    if role == 'mutation':
+                        result = original_lock(cr)
+                        mutation_has_roster_lock.set()
+                        return result
+                    if not mutation_has_roster_lock.wait(timeout=5):
+                        raise AssertionError(
+                            'mutation worker did not acquire roster lock first')
+                    return original_lock(cr)
+
+                def resolve():
+                    def perform_resolution():
+                        resolve_cr.execute(
+                            'SET LOCAL lock_timeout = %s', ('5s',))
+                        if resolution_path == 'manual':
+                            return resolve_env[_MODEL].browse(
+                                incident_id).action_mark_manually_resolved()
+                        return resolve_env[_MODEL]._resolve(
+                            snapshot['external_ref'],
+                            resolution_note=(
+                                'independent roster lock ordering '
+                                'verification'),
+                            resolved_by_ref=self.manager_user_id,
+                        )
+
+                    try:
+                        try:
+                            result = perform_resolution()
+                        except SerializationFailure as exc:
+                            # A cursor whose RR snapshot predates the roster
+                            # winner may see 40001 while deleting an activity
+                            # that winner already removed.  Odoo retries the
+                            # whole RPC on 40001; mirror that production seam.
+                            self.assertEqual(
+                                exc.pgcode,
+                                errorcodes.SERIALIZATION_FAILURE,
+                            )
+                            resolve_cr.rollback()
+                            result = perform_resolution()
+                        results.append(('resolution', result))
+                        resolve_cr.commit()
+                    except Exception as exc:
+                        errors.append(('resolution', exc))
+                        resolve_cr.rollback()
+
+                def mutate_roster():
+                    try:
+                        mutation_cr.execute(
+                            'SET LOCAL lock_timeout = %s', ('5s',))
+                        manager_group = mutation_env.ref(
+                            'account.group_account_manager')
+                        if mutation_path == 'res.users':
+                            mutation_env['res.users'].sudo().browse(
+                                former_id).write({
+                                    'groups_id': [(3, manager_group.id)],
+                                })
+                        else:
+                            manager_group.sudo().write({
+                                'users': [(3, former_id)],
+                            })
+                        mutation_cr.commit()
+                    except Exception as exc:
+                        errors.append(('mutation', exc))
+                        mutation_cr.rollback()
+
+                try:
+                    with patch.object(
+                            billing_incident,
+                            '_acquire_billing_roster_lock',
+                            ordered_roster_lock):
+                        threads = [
+                            threading.Thread(
+                                target=resolve,
+                                name='b864-resolve-roster-%s'
+                                % resolution_path,
+                            ),
+                            threading.Thread(
+                                target=mutate_roster,
+                                name='b864-mutate-roster-%s'
+                                % mutation_path,
+                            ),
+                        ]
+                        for thread in threads:
+                            thread.start()
+                        for thread in threads:
+                            thread.join(timeout=10)
+                    alive = [
+                        thread for thread in threads if thread.is_alive()]
+                    stacks = {
+                        thread.name: ''.join(traceback.format_stack(
+                            sys._current_frames()[thread.ident]))
+                        for thread in alive
+                    }
+                    self.assertFalse(
+                        alive,
+                        'resolution/roster workers must not deadlock: %r'
+                        % stacks,
+                    )
+                finally:
+                    if not resolve_cr.closed:
+                        resolve_cr.close()
+                    if not mutation_cr.closed:
+                        mutation_cr.close()
+                self.assertFalse(
+                    errors,
+                    'resolution/roster workers failed: %r' % errors,
+                )
+                self.assertTrue(gated['mutation'] and gated['resolution'])
+                self.assertEqual(results, [('resolution', incident_id if (
+                    resolution_path == 'independent') else True)])
+
+                with self.registry.cursor() as cr:
+                    env = api.Environment(cr, odoo.SUPERUSER_ID, {})
+                    review_type = env.ref(
+                        'woow_paas_platform.'
+                        'mail_activity_type_billing_incident_review')
+                    incident = env[_MODEL].sudo().browse(incident_id)
+                    self.assertEqual(incident.state, 'resolved')
+                    self.assertFalse(env['mail.activity'].sudo().with_context(
+                        active_test=False).search([
+                            ('res_model', '=', _MODEL),
+                            ('res_id', '=', incident_id),
+                            ('activity_type_id', '=', review_type.id),
+                        ]), 'resolved incident must retain no dedicated activity')
+                    self.assertFalse(env['mail.followers'].sudo().search([
+                        ('res_model', '=', _MODEL),
+                        ('res_id', '=', incident_id),
+                        ('partner_id', '=', former_partner_id),
+                    ]), 'former manager must retain no incident following')
+                    former = env['res.users'].sudo().browse(former_id)
+                    self.assertNotIn(
+                        env.ref('account.group_account_manager'),
+                        former.groups_id,
+                    )
+                    with self.assertRaises(AccessError):
+                        incident.with_user(former).read(['external_ref'])
 
     def test_schedule_resolve_orderings_converge_without_stale_todo(self):
         snapshot = self._snapshot('activity-ordering')

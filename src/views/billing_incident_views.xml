@@ -55,6 +55,9 @@
           <div class="alert alert-warning" role="alert">
             The top-up record may have been rolled back; not finding it in Odoo is expected and is not a reason to close the incident.
           </div>
+          <div class="alert alert-warning" role="alert">
+            Completing a review activity only dismisses and re-arms it; it does not resolve the incident or send a resolution notification. Use “Mark as manually resolved” to close the incident.
+          </div>
           <group>
             <group string="Evidence">
               <field name="external_ref" readonly="1"/>

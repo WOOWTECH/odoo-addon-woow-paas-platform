@@ -17022,6 +17022,16 @@ msgstr ""
 #. module: woow_paas_platform
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_billing_incident_form
 msgid ""
+"Completing a review activity only dismisses and re-arms it; it does not "
+"resolve the incident or send a resolution notification. Use “Mark as "
+"manually resolved” to close the incident."
+msgstr ""
+"完成 review activity 只會略過並重新建立提醒；不會關閉 incident，也不會寄送"
+"結案通知。請使用「人工已處理」關閉 incident。"
+
+#. module: woow_paas_platform
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_billing_incident_form
+msgid ""
 "Billing incident access uses the Odoo role `account.group_account_manager` "
 "(not a Workspace role). It reads all incidents across all companies; review "
 "activities go to all current managers in that Odoo group; no company M2O/rule; "
@@ -17103,8 +17113,12 @@ msgstr "帳務事件 #%(incident_id)s：%(kind)s，需要人工檢查"
 #: code:addons/woow_paas_platform/models/billing_incident.py:0
 msgid ""
 "Billing Incident #%(incident_id)s (%(kind)s) requires an ECPay verification "
-"and an explicit resolution note."
-msgstr "帳務事件 #%(incident_id)s（%(kind)s）需要 ECPay 查證及明確的處理註記。"
+"and an explicit resolution note. Completing this review activity only "
+"dismisses and re-arms it; it does not resolve the incident or send a "
+"resolution notification."
+msgstr ""
+"帳務事件 #%(incident_id)s（%(kind)s）需要 ECPay 查證及明確的處理註記。完成此 "
+"review activity 只會略過並重新建立提醒；不會關閉 incident，也不會寄送結案通知。"
 
 #. module: woow_paas_platform
 #: model:ir.model.constraint,message:woow_paas_platform.constraint_woow_billing_incident_counters_nonnegative

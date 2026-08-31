@@ -42,7 +42,10 @@ write 與 unlink 路徑保留同一守線。兩條 role-mutation 路徑都在 `s
 transaction advisory lock，完成 membership 修改與全 unresolved convergence 後才隨 commit
 釋放。scheduler 的獨立 cursor 在任何 snapshot query 前改為 READ COMMITTED，取得同一 global
 lock 後才讀現任 roster；所以與 revocation 重疊時，不會以過期 snapshot 重建 former-manager
-follower。這些路徑共用 object-identity recursion guard，RPC truthy context 無法跳過。角色撤銷後，即使 stale
+follower。**所有 incident activity path 的鎖序固定為 global roster advisory lock → incident review
+lock**：schedule／ensure、role convergence、UI `_transition_resolved_current_cursor`、獨立 `_resolve`
+cleanup、`_clear_review_activities`、`mail.activity` done／unlink 全部只可走同一 helper，禁止任何
+review → roster 反轉。這些路徑共用 object-identity recursion guard，RPC truthy context 無法跳過。角色撤銷後，即使 stale
 activity 仍 assigned、incident message 的 author/create_uid 仍是本人，`mail.activity`／
 `mail.message` 的 direct-ID read/search/action gate 也要求當下 group membership；activity gate
 涵蓋**所有** `res_model=woow.billing.incident` rows，不只 dedicated type。本階段不靠 cron
@@ -101,10 +104,13 @@ ECPay **查得到或查不到都只代表「查證結果已記錄，這張 incid
 boundary。共用 sensitive validator 會套到 `_log` 的所有文字 ingress、manager
 `resolution_note` RPC write、人工關單按鈕與 `_resolve(resolution_note)`：明確的
 `ResultData`／`Card4No`／`Card6No`／`CardNo`／`CVV`／`CVC`／`CID`／`CSC`／
-`security code`／`SAD`（含 `sensitive authentication data`）／`PIN`／`PIN block`／
-`track1`／`track2`／`magnetic stripe`／`PAN` marker，以及中文「安全碼／卡片安全碼／
-信用卡安全碼／信用卡安全码／驗證碼／验证码／PIN碼／PIN區塊／磁條／磁條資料／磁軌／磁轨／
-第一、第二軌／第一、第二轨／軌道資料／轨道数据／卡背三碼／卡背三码／授權碼」與 Luhn-valid
+`security code`／`card verification value`／`CVN`／`CVN2`／`SAD`（含
+`sensitive authentication data`）／`PIN`／`PIN block`／`track1`／`track2`／
+`magnetic stripe`／`PAN` marker，以及中文「安全碼／卡片安全碼／信用卡安全碼／
+信用卡安全码／驗證碼／验证码／PIN碼／PIN區塊／磁條／磁條資料／磁軌／磁轨／第一、第二軌／
+第一、第二轨／軌道資料／轨道数据／卡背三碼／卡背三码／卡片背面（末）三碼／
+卡片背面（末）三码／信用卡背面（末）三碼／信用卡背面（末）三码／背後三碼／背后三码／
+授權碼」與 Luhn-valid
 13–19 位 PAN-like 數字都會被拒絕。所有 caller-controlled incident-owned free text（`detail`、
 `resolution_note`、activity feedback）先在 raw、HTML entity-decoded 與 visible plaintext
 三層掃描；只要出現 HTML tag／comment／quoted attribute／entity markup 就 fail-closed，
@@ -147,10 +153,16 @@ provenance；summary 不是識別依據。billing incident model 或此 dedicate
 `mail.activity.create()` 只能由模組內 scheduler 的 object capability 執行；manager、`sudo` 與
 RPC truthy context 都不能自行鑄造。既有 targeted activity 的 generic `write()` 也全拒（包含
 `active`、note／summary、`res_id`、type、assignee），操作人應回 incident form 查證與關單。
-dedupe 只看 active 的專屬 activity：inactive／standard `action_done()`／`unlink()` 若 incident
-仍 unresolved，會在同一 transaction、同一 advisory lock 機制下立即收斂成**每位 manager
-恰一筆** active alert；不必等下一次 duplicate observation，而且完成 activity 本身**不會**把
-incident 關成 resolved。terminal flow 進 scheduler object capability 前會用 allowlist 重建
+dedupe 只看 active 的專屬 activity：inactive／`action_done()`／`unlink()` 若 incident 仍
+unresolved，會在同一 transaction、同一 roster→review advisory lock 順序下立即收斂成
+**每位 manager 恰一筆** active alert；不必等下一次 duplicate observation。唯一合法結案動作是
+incident form 的「人工已處理」按鈕；完成 activity 只會 dismiss 後 re-arm，**不會**把 incident
+關成 resolved，也**不會**呼叫 core `message_post_with_source`、通知 followers 或寄送結案通知。
+合法 feedback 只做 markup／PCI 驗證、不持久化；回傳是 core contract 的 empty `mail.message`／
+empty next activities。任何 supplied／inline／linked attachment 都在取鎖前 fail-closed。generic
+activities 仍走 Odoo `super` 的標準完成行為。silent re-arm 只送 bus update，不建立
+`mail.message`／`mail.notification`／`mail.mail`，因此 revocation-first overlap 不會對 former 或
+current manager 產生 stale follower email。terminal flow 進 scheduler object capability 前會用 allowlist 重建
 乾淨 context，完全丟棄 caller `default_*`；scheduler create 同時明寫 target、type、assignee、
 content、deadline、`active=True`、`attachment_ids=[(5, 0, 0)]` 與其他 security-sensitive 欄，
 因此 RPC 的 `default_active=False`／`default_attachment_ids` 無法污染重建活動。activity 的
@@ -159,20 +171,21 @@ content、deadline、`active=True`、`attachment_ids=[(5, 0, 0)]` 與其他 secu
 仍可正常開啟 incident，manager 再從 form/list 明示專欄查看 MTN。
 
 ledger 的 source/business 欄位仍完全 relation-free。為使用 Odoo 標準
-`mail.activity.create()`／notification bus／`action_done()`／`unlink()`，model 繼承
-`mail.thread`；其 follower/message relational metadata 只指向已由第一個獨立交易 commit
+`mail.activity.create()`／notification bus／`unlink()`（generic activity 的 `action_done()` 也維持
+標準行為），model 繼承 `mail.thread`；專屬 review 的 terminal path 刻意不走 core message-post
+分支。其 follower/message relational metadata 只指向已由第一個獨立交易 commit
 完成的 incident。這與禁止 outer transaction source row 形成 dangling FK 的約束正交：
 前者是 Odoo mail infrastructure metadata，後者才是禁止加入 ledger 的 business/source
 Many2one／Many2many。
 
-`mail.thread` 帶來的 incident-owned chatter ingress 已刻意縮到唯一 core
-`mail.message_activity_done` source：一般 account manager 的自由 `message_post()` 全拒；一般
+`mail.thread` 帶來的 incident-owned chatter ingress 仍只允許受控
+`mail.message_activity_done` source 作 defense-in-depth／core compatibility；**專屬 review terminal
+不再呼叫它，也不建立完成訊息**。一般 account manager 的自由 `message_post()` 全拒；一般
 manager 也不能直接 `message_subscribe()`，incident follower 只能由持有 module-private scheduler
-capability 且已取得 global roster lock 的 convergence 維護。任何 user feedback/body 都先走
-plain-text markup＋PCI validator，`attachment_ids`／`attachments`
-只要非空也直接拒絕，因本階段不掃描檔案內容。驗證完成後才把 JSON-RPC 無法偽造的
-module-private object capability 交給 `message_post_with_source()` 呼叫 `super`，所以 Odoo core
-產生的受控 activity template HTML 可以通過，但 caller markup 不會。
+capability 且已取得 global roster lock 的 convergence 維護。任何受控 source body 都先走
+plain-text markup＋PCI validator，`attachment_ids`／`attachments` 只要非空也直接拒絕，因本階段
+不掃描檔案內容。JSON-RPC 無法偽造的 module-private object capability 僅保留既有 message graph
+守線測試與相容性；不得把它重新接回 dedicated `_action_done()`。
 
 related-model 也在同一 model 檔 targeted 守線：`mail.message` 只有上述 capability 能建立
 `model=woow.billing.incident` 的完成訊息，generic create／write／unlink（含任何 body、PAN 或

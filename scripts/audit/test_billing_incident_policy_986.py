@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """PR #986 comment 11112 global-finance-ledger policy regression."""
 
+import ast
 import csv
 import pathlib
 import unittest
@@ -44,6 +45,108 @@ class TestBillingIncidentPolicy986(unittest.TestCase):
                 'unresolved incidents',
                 'current account-manager'):
             self.assertIn(evidence, runbook)
+
+    def test_every_incident_activity_path_uses_roster_then_review_lock(self):
+        source = _MODEL.read_text(encoding='utf-8')
+        tree = ast.parse(source)
+        classes = {
+            node.name: node
+            for node in tree.body
+            if isinstance(node, ast.ClassDef)
+        }
+
+        def method(class_name, method_name):
+            matches = [
+                node for node in classes[class_name].body
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and node.name == method_name
+            ]
+            self.assertEqual(
+                len(matches), 1,
+                '%s.%s must exist exactly once' % (class_name, method_name),
+            )
+            return matches[0]
+
+        def call_lines(node, call_name):
+            return sorted(
+                call.lineno
+                for call in ast.walk(node)
+                if isinstance(call, ast.Call)
+                and (
+                    (isinstance(call.func, ast.Attribute)
+                     and call.func.attr == call_name)
+                    or (isinstance(call.func, ast.Name)
+                        and call.func.id == call_name)
+                )
+            )
+
+        helper = method(
+            'BillingIncident', '_acquire_review_activity_locks')
+        roster_lines = call_lines(helper, '_acquire_billing_roster_lock')
+        review_lines = call_lines(helper, '_acquire_review_activity_lock')
+        self.assertEqual(len(roster_lines), 1)
+        self.assertEqual(len(review_lines), 1)
+        self.assertLess(
+            roster_lines[0], review_lines[0],
+            'global roster advisory lock must precede every incident review lock',
+        )
+
+        direct_review_callers = set()
+        for class_node in classes.values():
+            for function in class_node.body:
+                if not isinstance(
+                        function, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    continue
+                if call_lines(function, '_acquire_review_activity_lock'):
+                    direct_review_callers.add(
+                        (class_node.name, function.name))
+        self.assertEqual(
+            direct_review_callers,
+            {('BillingIncident', '_acquire_review_activity_locks')},
+            'no activity path may acquire the review lock directly',
+        )
+
+        for class_name, method_name in (
+                ('BillingIncident',
+                 '_ensure_review_activities_current_cursor'),
+                ('BillingIncident', '_clear_review_activities'),
+                ('BillingIncident', '_transition_resolved_current_cursor'),
+                ('BillingIncident', 'action_mark_manually_resolved'),
+                ('BillingIncident', '_resolve'),
+                ('MailActivity', '_action_done'),
+                ('MailActivity', 'unlink')):
+            with self.subTest(path='%s.%s' % (class_name, method_name)):
+                self.assertTrue(
+                    call_lines(
+                        method(class_name, method_name),
+                        '_acquire_review_activity_locks',
+                    ),
+                    'path must enter the roster→review lock helper',
+                )
+
+        schedule = method('BillingIncident', '_schedule_review_activities')
+        convergence = method(
+            'BillingIncident',
+            '_converge_unresolved_review_activities_current_cursor',
+        )
+        self.assertTrue(call_lines(
+            schedule, '_ensure_review_activities_current_cursor'))
+        self.assertTrue(call_lines(
+            convergence, '_acquire_billing_roster_lock'))
+        self.assertTrue(call_lines(
+            convergence, '_ensure_review_activities_current_cursor'))
+        role_hooks = {
+            'ResUsers': ('create', 'write', 'unlink'),
+            'ResGroups': ('create', 'copy', 'write', 'unlink'),
+        }
+        for class_name, method_names in role_hooks.items():
+            for method_name in method_names:
+                with self.subTest(path='%s.%s' % (class_name, method_name)):
+                    hook = method(class_name, method_name)
+                    self.assertTrue(call_lines(
+                        hook, '_acquire_billing_roster_lock'))
+                    self.assertTrue(call_lines(
+                        hook, '_converge_billing_roster_if_changed'))
 
     def test_acl_is_odoo_account_manager_and_has_no_company_rule(self):
         with _ACL.open(encoding='utf-8', newline='') as stream:

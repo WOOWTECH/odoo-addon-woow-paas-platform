@@ -152,19 +152,20 @@ def _with_clean_billing_internal_context(records, **capabilities):
     return records.with_context(context)
 
 
-def _activity_scheduler(records):
+def _activity_scheduler(records, silent=False):
     # Enter capabilities only after rebuilding context from an allowlist.  In
     # particular, caller-controlled default_* keys must never become defaults
-    # for the scheduler's ORM create.
-    return _with_clean_billing_internal_context(
-        records,
-        **{
-            _BILLING_ACTIVITY_SCHEDULER_CTX_KEY:
-                _BILLING_ACTIVITY_SCHEDULER,
-            # Odoo activity create/unlink may emit controlled messages.
-            _BILLING_INCIDENT_CHATTER_CTX_KEY: _BILLING_INCIDENT_CHATTER,
-        }
-    )
+    # for the scheduler's ORM create.  A dedicated terminal re-arm is silent:
+    # it restores the UI alert without creating assignment mail artifacts.
+    capabilities = {
+        _BILLING_ACTIVITY_SCHEDULER_CTX_KEY:
+            _BILLING_ACTIVITY_SCHEDULER,
+        # Initial scheduling may emit controlled assignment messages.
+        _BILLING_INCIDENT_CHATTER_CTX_KEY: _BILLING_INCIDENT_CHATTER,
+    }
+    if silent:
+        capabilities['mail_activity_quick_update'] = True
+    return _with_clean_billing_internal_context(records, **capabilities)
 
 
 def _is_activity_scheduler(env):
@@ -501,7 +502,9 @@ class BillingIncident(models.Model):
         r'card[\W_]*[46]?[\W_]*no|'
         r'card[\W_]*number|'
         r'c[\W_]*v[\W_]*[vc](?:[\W_]*2)?|'
+        r'c[\W_]*v[\W_]*n(?:[\W_]*2)?|'
         r'c[\W_]*i[\W_]*d|c[\W_]*s[\W_]*c|'
+        r'card[\W_]*verification[\W_]*value|'
         r'(?:card[\W_]*)?security[\W_]*(?:code|number|no)|'
         r's[\W_]*a[\W_]*d|'
         r'sensitive[\W_]*authentication[\W_]*data|'
@@ -524,8 +527,8 @@ class BillingIncident(models.Model):
         r'(?:信用卡|卡片|卡)?[\W_]*安全[\W_]*(?:碼|码)|'
         r'(?:安全[\W_]*)?(?:驗[\W_]*證|验[\W_]*证)'
         r'[\W_]*(?:碼|码|值)|'
-        r'信用卡[\W_]*背[\W_]*面[\W_]*末[\W_]*(?:三|3)'
-        r'[\W_]*(?:碼|码)|'
+        r'(?:(?:信用卡|卡片)[\W_]*)?背[\W_]*(?:面|後|后)[\W_]*'
+        r'(?:末[\W_]*)?(?:三|3)[\W_]*(?:碼|码)|'
         r'(?:個[\W_]*人[\W_]*識[\W_]*別|个[\W_]*人[\W_]*识[\W_]*别)'
         r'[\W_]*(?:碼|码)|'
         r'p[\W_]*i[\W_]*n[\W_]*(?:碼|码|區[\W_]*塊|区[\W_]*块)|'
@@ -1183,12 +1186,19 @@ class BillingIncident(models.Model):
         )
 
     @api.model
-    def _ensure_review_activities_current_cursor(self, incident_id):
+    def _acquire_review_activity_locks(self, cr, incident_ids):
+        """Take the one global lock order: roster, then sorted incidents."""
+        _acquire_billing_roster_lock(cr)
+        for incident_id in sorted(set(incident_ids)):
+            self._acquire_review_activity_lock(cr, incident_id)
+
+    @api.model
+    def _ensure_review_activities_current_cursor(
+            self, incident_id, silent=False):
         """Converge one active dedicated alert per manager on this cursor."""
         # Global roster lock must precede incident/activity locks everywhere.
         # Mutations hold it from before core membership writes through commit.
-        _acquire_billing_roster_lock(self.env.cr)
-        self._acquire_review_activity_lock(self.env.cr, incident_id)
+        self._acquire_review_activity_locks(self.env.cr, [incident_id])
         self.env.cr.execute(
             sql.SQL(
                 'SELECT kind, state FROM {table} WHERE id = %s'
@@ -1227,7 +1237,8 @@ class BillingIncident(models.Model):
             stale_follower_domain)
         if stale_followers:
             stale_followers.unlink()
-        Activity = _activity_scheduler(self.env['mail.activity'].sudo())
+        Activity = _activity_scheduler(
+            self.env['mail.activity'].sudo(), silent=silent)
         activity_domain = [
             ('res_model', '=', self._name),
             ('res_id', '=', incident_id),
@@ -1280,7 +1291,10 @@ class BillingIncident(models.Model):
                 'woow_paas_platform',
                 user_env.lang or 'en_US',
                 'Billing Incident #%(incident_id)s (%(kind)s) requires an '
-                'ECPay verification and an explicit resolution note.',
+                'ECPay verification and an explicit resolution note. '
+                'Completing this review activity only dismisses and re-arms '
+                'it; it does not resolve the incident or send a resolution '
+                'notification.',
                 (),
             ))
             note = note_template % {
@@ -1367,8 +1381,10 @@ class BillingIncident(models.Model):
         with self.env.registry.cursor() as cr:
             cr.execute('SET LOCAL lock_timeout = %s',
                        (self._LOCK_TIMEOUT,))
+            cr.transaction = api.Transaction(self.env.registry)
             env = api.Environment(cr, SUPERUSER_ID, {})
-            self._acquire_review_activity_lock(cr, incident_id)
+            env[self._name]._acquire_review_activity_locks(
+                cr, [incident_id])
             review_type = env.ref(
                 'woow_paas_platform.'
                 'mail_activity_type_billing_incident_review',
@@ -1388,7 +1404,7 @@ class BillingIncident(models.Model):
             self, manual_check_result, resolution_note, resolved_by_ref):
         """Private UI transition; never open the independent `_resolve` cursor."""
         self.ensure_one()
-        self._acquire_review_activity_lock(self.env.cr, self.id)
+        self._acquire_review_activity_locks(self.env.cr, [self.id])
         states = self._lock_and_refresh_states()
         if states[self.id] == 'resolved':
             raise UserError(_('This billing incident is already resolved.'))
@@ -1423,7 +1439,7 @@ class BillingIncident(models.Model):
                 'Only account managers may resolve billing incidents.'
             ))
         self.check_access('write')
-        self._acquire_review_activity_lock(self.env.cr, self.id)
+        self._acquire_review_activity_locks(self.env.cr, [self.id])
         states = self._lock_and_refresh_states(
             ('manual_check_result', 'resolution_note'))
         if states[self.id] == 'resolved':
@@ -1504,6 +1520,7 @@ class BillingIncident(models.Model):
             with self.env.registry.cursor() as cr:
                 cr.execute('SET LOCAL lock_timeout = %s',
                            (self._LOCK_TIMEOUT,))
+                cr.transaction = api.Transaction(self.env.registry)
                 env = api.Environment(cr, SUPERUSER_ID, {})
                 try:
                     cr.execute(
@@ -1526,7 +1543,7 @@ class BillingIncident(models.Model):
                     return False
                 incident_id = row[0]
                 incident = env[self._name].browse(incident_id)
-                self._acquire_review_activity_lock(cr, incident_id)
+                incident._acquire_review_activity_locks(cr, [incident_id])
                 states = incident._lock_and_refresh_states((
                     'manual_check_result',
                     'resolution_note',
@@ -2243,20 +2260,53 @@ class MailActivity(models.Model):
             ))
         return True
 
-    def _dedicated_billing_incident_ids(self):
+    def _dedicated_billing_activities(self):
         review_type = self.env.ref(
             'woow_paas_platform.'
             'mail_activity_type_billing_incident_review',
             raise_if_not_found=False,
         )
         if not review_type or _is_odoo_module_uninstall(self.env):
-            return []
-        return sorted({
-            activity.res_id
+            return self.browse()
+        return self.browse([
+            activity.id
             for activity in self.sudo()
             if (activity.res_model == 'woow.billing.incident'
                 and activity.activity_type_id == review_type)
-        })
+        ])
+
+    def _dedicated_billing_incident_ids(self):
+        return sorted(set(
+            self._dedicated_billing_activities().sudo().mapped('res_id')))
+
+    def _billing_incident_ids(self):
+        return sorted(set(
+            self._billing_incident_activities().sudo().mapped('res_id')))
+
+    def _validate_dedicated_terminal_inputs(
+            self, dedicated, feedback=False, attachment_ids=None):
+        """Validate caller content before taking either activity lock."""
+        if not dedicated:
+            return
+        Incident = self.env['woow.billing.incident'].sudo()
+        if (feedback not in (None, False)
+                and Incident._free_text_ingress_category(
+                    'activity_feedback', feedback)):
+            raise UserError(_(
+                'Billing incident activity feedback must contain only safe, '
+                'non-sensitive summaries.'
+            ))
+        has_linked_attachments = bool(
+            dedicated.sudo().mapped('attachment_ids')
+            or self.env['ir.attachment'].sudo().search_count([
+                ('res_model', '=', self._name),
+                ('res_id', 'in', dedicated.ids),
+            ], limit=1)
+        )
+        if attachment_ids or has_linked_attachments:
+            raise UserError(_(
+                'Attachments are not allowed on billing incident activities.'
+            ))
 
     @api.model_create_multi
     def create(self, values_list):
@@ -2336,44 +2386,64 @@ class MailActivity(models.Model):
         return result
 
     def _action_done(self, feedback=False, attachment_ids=None):
-        """Serialize the whole core terminal flow with schedule and resolve."""
+        """Dismiss dedicated alerts silently; preserve core for generic rows."""
         self._require_billing_activity_access_authority('write')
-        incident_ids = self._dedicated_billing_incident_ids()
-        Incident = self.env['woow.billing.incident'].sudo()
-        if (incident_ids and feedback not in (None, False)
-                and Incident._free_text_ingress_category(
-                    'activity_feedback', feedback)):
-            raise UserError(_(
-                'Billing incident activity feedback must contain only safe, '
-                'non-sensitive summaries.'
-            ))
-        if incident_ids:
-            _acquire_billing_roster_lock(self.env.cr)
-        for incident_id in incident_ids:
-            Incident._acquire_review_activity_lock(self.env.cr, incident_id)
-        guarded = _activity_terminal(self)
-        return super(MailActivity, guarded)._action_done(
+        dedicated = self._dedicated_billing_activities()
+        self._validate_dedicated_terminal_inputs(
+            dedicated,
             feedback=feedback,
             attachment_ids=attachment_ids,
         )
+        incident_ids = self._billing_incident_ids()
+        dedicated_incident_ids = sorted(set(
+            dedicated.sudo().mapped('res_id')))
+        Incident = self.env['woow.billing.incident'].sudo()
+        if incident_ids:
+            Incident._acquire_review_activity_locks(
+                self.env.cr, incident_ids)
+
+        # Generic activities keep the complete Odoo contract, including their
+        # standard completion message and automatic next activity.
+        generic = self - dedicated
+        messages = self.env['mail.message']
+        next_activities = self.env['mail.activity']
+        if generic:
+            messages, next_activities = super(
+                MailActivity, generic)._action_done(
+                    feedback=feedback,
+                    attachment_ids=attachment_ids,
+                )
+
+        if dedicated:
+            # Do not call core _action_done for the dedicated type: core posts
+            # to followers before unlinking, which can address a stale roster.
+            # A review activity is only a dismissible alert; the incident form
+            # button is the sole resolution transition.
+            guarded = _activity_terminal(dedicated)
+            super(MailActivity, guarded).unlink()
+            for incident_id in dedicated_incident_ids:
+                Incident._ensure_review_activities_current_cursor(
+                    incident_id, silent=True)
+        return messages, next_activities
 
     def unlink(self):
         """Re-arm only unresolved dedicated billing alerts after terminal use."""
         self._require_billing_activity_access_authority('unlink')
         if _is_activity_scheduler(self.env):
             return super().unlink()
-        incident_ids = self._dedicated_billing_incident_ids()
+        dedicated = self._dedicated_billing_activities()
+        self._validate_dedicated_terminal_inputs(dedicated)
+        incident_ids = self._billing_incident_ids()
+        dedicated_incident_ids = sorted(set(
+            dedicated.sudo().mapped('res_id')))
         Incident = self.env['woow.billing.incident'].sudo()
         if incident_ids:
-            _acquire_billing_roster_lock(self.env.cr)
-        # Lock before core deletes/archives the terminal activity.  Taking the
-        # same incident-scoped lock as schedule/resolve prevents the classic
-        # inversion "resolve holds advisory → waits activity row" versus
-        # "done holds activity row → waits advisory".
-        for incident_id in incident_ids:
-            Incident._acquire_review_activity_lock(
-                self.env.cr, incident_id)
+            # Lock before core deletes/archives the terminal activity.  Every
+            # incident path enters roster first, then sorted review locks.
+            Incident._acquire_review_activity_locks(
+                self.env.cr, incident_ids)
         result = super().unlink()
-        for incident_id in incident_ids:
-            Incident._ensure_review_activities_current_cursor(incident_id)
+        for incident_id in dedicated_incident_ids:
+            Incident._ensure_review_activities_current_cursor(
+                incident_id, silent=True)
         return result

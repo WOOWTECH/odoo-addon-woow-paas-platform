@@ -469,6 +469,9 @@ class TestBillingIncidentPublicApi864(TransactionCase):
             'C-I-D=123',
             'CSC/123',
             'card security code 123',
+            'card verification value 123',
+            'CVN: 123',
+            'CVN2: 123',
             'security_code=123',
             'security.code:123',
             'S.A.D=forbidden-authentication-data',
@@ -485,8 +488,16 @@ class TestBillingIncidentPublicApi864(TransactionCase):
             '信用卡安全码：123',
             '卡片驗證值：123',
             '卡片验证值：123',
+            '卡片背面三碼：123',
+            '卡片背面三码：123',
+            '卡片背面末三碼：123',
+            '卡片背面末三码：123',
+            '信用卡背面三碼：123',
+            '信用卡背面三码：123',
             '信用卡背面末三碼：123',
             '信用卡背面末三码：123',
+            '背後三碼：123',
+            '背后三码：123',
             '個人識別碼：1234',
             '个人识别码：1234',
             '驗證碼：123',
@@ -738,6 +749,9 @@ class TestBillingIncidentPublicApi864(TransactionCase):
             'CVC=123',
             'CID: 123',
             'card security code 123',
+            'card verification value 123',
+            'CVN: 123',
+            'CVN2: 123',
             'SAD=forbidden-authentication-data',
             '卡號4111111111111111',
             '卡号4111111111111111',
@@ -749,8 +763,16 @@ class TestBillingIncidentPublicApi864(TransactionCase):
             '信用卡安全码：123',
             '卡片驗證值：123',
             '卡片验证值：123',
+            '卡片背面三碼：123',
+            '卡片背面三码：123',
+            '卡片背面末三碼：123',
+            '卡片背面末三码：123',
+            '信用卡背面三碼：123',
+            '信用卡背面三码：123',
             '信用卡背面末三碼：123',
             '信用卡背面末三码：123',
+            '背後三碼：123',
+            '背后三码：123',
             '個人識別碼：1234',
             '个人识别码：1234',
             '驗證碼：123',
@@ -780,6 +802,23 @@ class TestBillingIncidentPublicApi864(TransactionCase):
         self.assertEqual(incident['state'], 'needs_human')
         self.assertFalse(incident['resolution_note'])
         self.assertFalse(incident['resolved_at'])
+
+        legal_ref = self.ref + '-legal-chinese-resolution'
+        legal_id = self.Incident._log(self._snapshot(
+            external_ref=legal_ref,
+            state='needs_human',
+        ))
+        legal_note = '已於 ECPay 後台核對交易狀態，帳務資料一致。'
+        self.assertEqual(
+            self.Incident._resolve(
+                legal_ref,
+                resolution_note=legal_note,
+                resolved_by_ref=99,
+            ),
+            legal_id,
+            '合法中文 resolution reason 必須通過共用 validator',
+        )
+        self.assertEqual(self._read(legal_id)['resolution_note'], legal_note)
 
     def test_log_kind_mismatch_is_fail_soft_and_keeps_original(self):
         incident_id = self.Incident._log(self._snapshot())
@@ -1056,7 +1095,11 @@ class TestBillingIncidentPublicApi864(TransactionCase):
                     'done 同一 transaction 結束前必須每位 manager 恰一筆 active alert',
                 )
                 cr.commit()
-            self.assertGreater(calls['unlink'], 0)
+            self.assertTrue(any(
+                channel == 'mail.activity/updated'
+                and message.get('activity_deleted')
+                for channel, message in calls['bus']
+            ), 'dedicated terminal must emit the standard deletion bus update')
 
             self.assertEqual(
                 self.Incident._log(self._snapshot(
@@ -1160,12 +1203,23 @@ class TestBillingIncidentPublicApi864(TransactionCase):
             for feedback in (
                     'verification CVC=123 is forbidden',
                     '查證時看到CVC碼：123',
+                    '查證時看到 CVN：123',
+                    '查證時看到 CVN2：123',
+                    '查證時看到 card verification value：123',
                     '查證時看到卡片安全碼：123',
                     '查證時看到信用卡安全码：123',
                     '查證時看到卡片驗證值：123',
                     '查證時看到卡片验证值：123',
+                    '查證時看到卡片背面三碼：123',
+                    '查證時看到卡片背面三码：123',
+                    '查證時看到卡片背面末三碼：123',
+                    '查證時看到卡片背面末三码：123',
+                    '查證時看到信用卡背面三碼：123',
+                    '查證時看到信用卡背面三码：123',
                     '查證時看到信用卡背面末三碼：123',
                     '查證時看到信用卡背面末三码：123',
+                    '查證時看到背後三碼：123',
+                    '查證時看到背后三码：123',
                     '查證時看到個人識別碼：1234',
                     '查證時看到个人识别码：1234',
                     '查證時看到驗證碼：123',
@@ -1192,8 +1246,41 @@ class TestBillingIncidentPublicApi864(TransactionCase):
                 self.assertTrue(activity.active)
 
             completed_user_id = activity.user_id.id
-            self.assertTrue(activity.action_feedback(
-                feedback='已於 ECPay 後台核對交易狀態，帳務資料一致。'))
+            safe_feedback = (
+                '已於 ECPay 後台核對本筆帳務，資料一致。')
+            message_floor = env['mail.message'].sudo().search(
+                [], order='id desc', limit=1).id
+            notification_floor = env['mail.notification'].sudo().search(
+                [], order='id desc', limit=1).id
+            mail_floor = env['mail.mail'].sudo().search(
+                [], order='id desc', limit=1).id
+
+            messages, next_activities = activity._action_done(
+                feedback=safe_feedback)
+
+            self.assertEqual(messages._name, 'mail.message')
+            self.assertEqual(next_activities._name, 'mail.activity')
+            self.assertFalse(
+                messages,
+                'dedicated done core contract must return empty mail.message',
+            )
+            self.assertFalse(
+                next_activities,
+                'dedicated done core contract must return empty next activities',
+            )
+            self.assertFalse(activity.exists(), 'original activity is dismissed')
+            self.assertFalse(env['mail.message'].sudo().search([
+                ('id', '>', message_floor),
+            ]), 'dedicated done must not create any mail.message')
+            self.assertFalse(env['mail.notification'].sudo().search([
+                ('id', '>', notification_floor),
+            ]), 'dedicated done must not create any mail.notification')
+            self.assertFalse(env['mail.mail'].sudo().search([
+                ('id', '>', mail_floor),
+            ]), 'dedicated done must not enqueue any mail.mail')
+            self.assertFalse(env['mail.message'].sudo().search([
+                ('body', 'ilike', safe_feedback),
+            ]), 'validated activity feedback must not be persisted')
             active_for_completed_user = env['mail.activity'].sudo().search_count([
                 ('res_model', '=', 'woow.billing.incident'),
                 ('res_id', '=', incident_id),
@@ -1204,7 +1291,12 @@ class TestBillingIncidentPublicApi864(TransactionCase):
             self.assertEqual(
                 active_for_completed_user,
                 1,
-                'legal core activity-done must re-alert completed user exactly once',
+                'legal dedicated done must re-alert completed user exactly once',
+            )
+            self.assertEqual(
+                incident.state,
+                'needs_human',
+                'activity completion must never resolve the incident',
             )
             cr.commit()
 
@@ -1363,14 +1455,20 @@ class TestBillingIncidentPublicApi864(TransactionCase):
                         'body': body,
                     })
 
-            activity.action_feedback(feedback='plain verification completed')
-            protected_message = Message.search([
-                ('model', '=', 'woow.billing.incident'),
-                ('res_id', '=', incident_id),
-            ], order='id desc', limit=1)
+            protected_message = incident.message_post_with_source(
+                'mail.message_activity_done',
+                author_id=env.user.partner_id.id,
+                render_values={
+                    'activity': activity,
+                    'feedback': 'private message guard verification',
+                    'display_assignee': False,
+                },
+                mail_activity_type_id=activity.activity_type_id.id,
+                subtype_xmlid='mail.mt_activities',
+            )
             self.assertTrue(
                 protected_message,
-                '合法 activity-done 必須可經 private chatter capability 留訊息',
+                'private guarded source must still exercise message defenses',
             )
             original_body = protected_message.body
             for body in (
@@ -1545,8 +1643,18 @@ class TestBillingIncidentPublicApi864(TransactionCase):
             'res_model': 'mail.message',
             'res_id': future_message_id,
         })
-        self.assertTrue(review_activity.action_feedback(
-            feedback='future message attachment squatting probe'))
+        message = incident.message_post_with_source(
+            'mail.message_activity_done',
+            author_id=self.env.user.partner_id.id,
+            render_values={
+                'activity': review_activity,
+                'feedback': 'future message attachment squatting probe',
+                'display_assignee': False,
+            },
+            mail_activity_type_id=review_activity.activity_type_id.id,
+            subtype_xmlid='mail.mt_activities',
+        )
+        self.assertEqual(message.id, future_message_id)
         self.env.invalidate_all()
         squatted_message = self.env['mail.message'].sudo().browse(
             future_message_id).exists()
@@ -2511,6 +2619,11 @@ class TestBillingIncidentAdminBackend864(TransactionCase):
         self.assertIn('帳務事件 #%s' % self.incident.id, zh_note)
         self.assertIn('Charged but not credited', en_note)
         self.assertIn('已扣款但未入點', zh_note)
+        self.assertIn(
+            'does not resolve the incident or send a resolution notification',
+            en_note,
+        )
+        self.assertIn('不會關閉 incident，也不會寄送結案通知', zh_note)
         self.assertNotIn(self.incident.external_ref, en_summary + en_note)
         self.assertNotIn(self.incident.external_ref, zh_summary + zh_note)
         self.assertNotIn('(charged_not_credited)', en_note)
@@ -3223,12 +3336,19 @@ class TestBillingIncidentRpcWriteGuard864(HttpCase):
             ('user_id', '=', self.manager_a.id),
             ('active', '=', True),
         ], limit=1)
-        activity.with_user(self.manager_a).action_feedback(
-            feedback='role revocation message ownership probe')
-        protected_message = self.env['mail.message'].sudo().search([
-            ('model', '=', 'woow.billing.incident'),
-            ('res_id', '=', self.incident_a.id),
-        ], order='id desc', limit=1)
+        manager_activity = activity.with_user(self.manager_a)
+        protected_message = self.incident_a.with_user(
+            self.manager_a).message_post_with_source(
+                'mail.message_activity_done',
+                author_id=self.manager_a.partner_id.id,
+                render_values={
+                    'activity': manager_activity,
+                    'feedback': 'role revocation message ownership probe',
+                    'display_assignee': False,
+                },
+                mail_activity_type_id=manager_activity.activity_type_id.id,
+                subtype_xmlid='mail.mt_activities',
+            )
         self.assertTrue(protected_message)
         self.assertEqual(protected_message.author_id, self.manager_a.partner_id)
         follower_domain = [
@@ -3330,22 +3450,32 @@ class TestBillingIncidentRpcWriteGuard864(HttpCase):
 
         message_floor = self.env['mail.message'].sudo().search(
             [], order='id desc', limit=1).id
-        self.assertTrue(replacement.with_user(self.regular_user).action_feedback(
-            feedback='post-revocation notification control'))
-        post_revocation_message = self.env['mail.message'].sudo().search([
+        notification_floor = self.env['mail.notification'].sudo().search(
+            [], order='id desc', limit=1).id
+        mail_floor = self.env['mail.mail'].sudo().search(
+            [], order='id desc', limit=1).id
+        feedback = 'post-revocation terminal feedback stays ephemeral'
+        self.assertFalse(
+            replacement.with_user(self.regular_user).action_feedback(
+                feedback=feedback),
+            'dedicated action_feedback returns False for empty message contract',
+        )
+        self.assertFalse(self.env['mail.message'].sudo().search([
             ('id', '>', message_floor),
-            ('model', '=', 'woow.billing.incident'),
-            ('res_id', '=', self.incident_a.id),
-        ], order='id desc', limit=1)
-        self.assertTrue(post_revocation_message)
+        ]), 'dedicated terminal must create no mail.message')
+        partner_ids = (
+            self.manager_a.partner_id | self.regular_user.partner_id).ids
         self.assertFalse(self.env['mail.notification'].sudo().search([
-            ('mail_message_id', '=', post_revocation_message.id),
-            ('res_partner_id', '=', self.manager_a.partner_id.id),
-        ]), 'former manager must receive no later incident notification row')
+            ('id', '>', notification_floor),
+            ('res_partner_id', 'in', partner_ids),
+        ]), 'former/current notification rows must both stay zero')
         self.assertFalse(self.env['mail.mail'].sudo().search([
-            ('mail_message_id', '=', post_revocation_message.id),
-            ('recipient_ids', 'in', self.manager_a.partner_id.ids),
-        ]), 'former manager must receive no later outgoing incident mail')
+            ('id', '>', mail_floor),
+            ('recipient_ids', 'in', partner_ids),
+        ]), 'former/current outgoing incident mail must both stay zero')
+        self.assertFalse(self.env['mail.message'].sudo().search([
+            ('body', 'ilike', feedback),
+        ]), 'dedicated activity feedback must not persist')
         replacement = Activity.search(
             activity_domain + [('user_id', '=', self.regular_user.id)],
             limit=1,
@@ -3356,11 +3486,11 @@ class TestBillingIncidentRpcWriteGuard864(HttpCase):
         current_message = self._assert_ok(
             self._call_kw(
                 'mail.message', 'read',
-                [[post_revocation_message.id], ['body']],
+                [[protected_message.id], ['body']],
             ),
             'current manager must retain normal incident-message read access',
         )
-        self.assertEqual(current_message[0]['id'], post_revocation_message.id)
+        self.assertEqual(current_message[0]['id'], protected_message.id)
         self._assert_access_error(
             self._call_kw(
                 'woow.billing.incident', 'message_subscribe',
@@ -3573,12 +3703,19 @@ class TestBillingIncidentRpcWriteGuard864(HttpCase):
             ('active', '=', True),
         ], limit=1)
         self.assertTrue(activity)
-        activity.with_user(self.manager_a).action_feedback(
-            feedback='plain RPC control verification')
-        protected_message = self.env['mail.message'].sudo().search([
-            ('model', '=', 'woow.billing.incident'),
-            ('res_id', '=', self.incident_a.id),
-        ], order='id desc', limit=1)
+        manager_activity = activity.with_user(self.manager_a)
+        protected_message = self.incident_a.with_user(
+            self.manager_a).message_post_with_source(
+                'mail.message_activity_done',
+                author_id=self.manager_a.partner_id.id,
+                render_values={
+                    'activity': manager_activity,
+                    'feedback': 'plain RPC control verification',
+                    'display_assignee': False,
+                },
+                mail_activity_type_id=manager_activity.activity_type_id.id,
+                subtype_xmlid='mail.mt_activities',
+            )
         replacement_activity = self.env['mail.activity'].sudo().search([
             ('res_model', '=', 'woow.billing.incident'),
             ('res_id', '=', self.incident_a.id),
@@ -3737,12 +3874,19 @@ class TestBillingIncidentRpcWriteGuard864(HttpCase):
             ('user_id', '=', self.manager_a.id),
             ('active', '=', True),
         ], limit=1)
-        activity.with_user(self.manager_a).action_feedback(
-            feedback='canonical attachment guard setup')
-        protected_message = self.env['mail.message'].sudo().search([
-            ('model', '=', 'woow.billing.incident'),
-            ('res_id', '=', self.incident_a.id),
-        ], order='id desc', limit=1)
+        manager_activity = activity.with_user(self.manager_a)
+        protected_message = self.incident_a.with_user(
+            self.manager_a).message_post_with_source(
+                'mail.message_activity_done',
+                author_id=self.manager_a.partner_id.id,
+                render_values={
+                    'activity': manager_activity,
+                    'feedback': 'canonical attachment guard setup',
+                    'display_assignee': False,
+                },
+                mail_activity_type_id=manager_activity.activity_type_id.id,
+                subtype_xmlid='mail.mt_activities',
+            )
         replacement = self.env['mail.activity'].sudo().search([
             ('res_model', '=', 'woow.billing.incident'),
             ('res_id', '=', self.incident_a.id),
