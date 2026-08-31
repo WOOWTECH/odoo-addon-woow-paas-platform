@@ -277,6 +277,45 @@ class TestBillingIncidentRealTransactions864(BaseCase):
             'same-transaction control write must disappear on outer rollback',
         )
 
+    def test_outer_rollback_leaves_durable_dangling_scalar_source_ref(self):
+        snapshot = self._snapshot(
+            'dangling-source-ref',
+            source_model='res.partner',
+        )
+        cr = self.registry.cursor()
+        try:
+            env = api.Environment(cr, odoo.SUPERUSER_ID, {})
+            source = env['res.partner'].create({
+                'name': '%s-dangling-source' % self.marker,
+            })
+            snapshot['source_ref'] = source.id
+            incident_id = env[_MODEL]._log(snapshot)
+            self.assertIsInstance(incident_id, int)
+            cr.rollback()
+        finally:
+            cr.close()
+
+        with self.registry.cursor() as verify_cr:
+            verify_cr.execute(
+                'SELECT 1 FROM res_partner WHERE id = %s',
+                (snapshot['source_ref'],),
+            )
+            self.assertFalse(
+                verify_cr.fetchone(),
+                'outer transaction source row must disappear after real rollback',
+            )
+            verify_cr.execute(
+                'SELECT id, source_model, source_ref FROM '
+                'woow_billing_incident WHERE external_ref = %s',
+                (snapshot['external_ref'],),
+            )
+            row = verify_cr.fetchone()
+        self.assertEqual(
+            row,
+            (incident_id, 'res.partner', snapshot['source_ref']),
+            'durable incident must retain only the deliberately dangling scalar',
+        )
+
     def test_duplicate_log_atomically_increments_occurrences(self):
         first = self._snapshot('duplicate', detail='first')
         second = self._snapshot('duplicate', detail='second')

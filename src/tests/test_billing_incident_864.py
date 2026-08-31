@@ -477,8 +477,16 @@ class TestBillingIncidentPublicApi864(TransactionCase):
             '卡片安全碼：123',
             '信用卡安全碼：123',
             '信用卡安全码：123',
+            '卡片驗證值：123',
+            '卡片验证值：123',
+            '信用卡背面末三碼：123',
+            '信用卡背面末三码：123',
+            '個人識別碼：1234',
+            '个人识别码：1234',
             '驗證碼：123',
             '验证码：123',
+            '驗證值：123',
+            '验证值：123',
             'PIN碼：1234',
             'PIN區塊：forbidden',
             '磁條：forbidden',
@@ -549,22 +557,77 @@ class TestBillingIncidentPublicApi864(TransactionCase):
             ('external_ref', 'like', self.ref + '-canonical-pci-%'),
         ]))
 
-    def test_sensitive_validator_covers_every_log_text_ingress(self):
-        logger = 'odoo.addons.woow_paas_platform.models.billing_incident'
-        marker = 'ResultData=secret-all-ingress-864'
-        for index, field_name in enumerate(sorted(
-                self.Incident._LOG_CHAR_FIELDS)):
-            with self.subTest(field_name=field_name):
-                values = self._snapshot(
-                    external_ref='%s-all-text-%s' % (self.ref, index),
+    def test_structured_log_fields_do_not_run_free_text_pci_scans(self):
+        structured_cases = (
+            {
+                'partner_email': 'pin@example.com',
+                'failure_code': 'PAN_REVIEW',
+                'rtn_code': 'PIN',
+                'skip_reason': 'PAN_REQUIRED',
+                'assessment_reason': 'PIN_REVIEW',
+                'currency': 'PAN',
+                'source_model': 'pan.payment.pin',
+                'trade_no': 'PAN-4111111111111111',
+            },
+            {
+                'partner_email': 'pan@example.com',
+                'failure_code': 'PIN_REQUIRED',
+                'rtn_code': 'PAN',
+                'skip_reason': 'PIN_REVIEW',
+                'assessment_reason': 'PAN_REVIEW',
+                'currency': 'PIN',
+                'source_model': 'pin.payment.pan',
+                'trade_no': 'PIN-4111111111111111',
+            },
+        )
+        for index, structured in enumerate(structured_cases):
+            with self.subTest(structured=structured):
+                incident_id = self.Incident._log(self._snapshot(
+                    external_ref='%s-structured-%s' % (self.ref, index),
+                    detail='safe reconciliation summary',
+                    **structured,
+                ))
+                self.assertIsInstance(
+                    incident_id, int,
+                    'email/provider/code fields must use their own shape, not '
+                    'free-text PIN/PAN marker scanning',
                 )
-                values[field_name] = marker
-                with self.assertLogs(logger, level='ERROR') as logs:
-                    self.assertFalse(self.Incident._log(values))
-                self.assertNotIn(marker, '\n'.join(logs.output))
-        self.assertFalse(self.Incident.sudo().search([
-            ('external_ref', 'like', self.ref + '-all-text-%'),
-        ]))
+
+        logger = 'odoo.addons.woow_paas_platform.models.billing_incident'
+        for index, detail in enumerate((
+                'ResultData=secret-free-text-864',
+                'PAN 4111111111111111')):
+            with self.subTest(detail=detail), self.assertLogs(
+                    logger, level='ERROR') as logs:
+                self.assertFalse(self.Incident._log(self._snapshot(
+                    external_ref='%s-free-text-only-%s' % (self.ref, index),
+                    partner_email='pan@example.com',
+                    failure_code='PIN_REQUIRED',
+                    detail=detail,
+                )))
+            self.assertNotIn(detail, '\n'.join(logs.output))
+
+    def test_structured_log_fields_enforce_email_code_and_model_shape(self):
+        logger = 'odoo.addons.woow_paas_platform.models.billing_incident'
+        cases = (
+            ('partner_email', 'not-an-email'),
+            ('partner_email', 'pin@example.com\r\nforged'),
+            ('partner_email', '%s@example.com' % ('a' * 245)),
+            ('currency', 'PIN VALUE'),
+            ('failure_code', 'PAN\nFORGED'),
+            ('skip_reason', '<b>PIN</b>'),
+            ('assessment_reason', 'PAN reason'),
+            ('source_model', 'PAN Model'),
+        )
+        for index, (field_name, invalid_value) in enumerate(cases):
+            with self.subTest(field_name=field_name), self.assertLogs(
+                    logger, level='ERROR') as logs:
+                self.assertFalse(self.Incident._log(self._snapshot(
+                    external_ref='%s-invalid-structured-%s' % (
+                        self.ref, index),
+                    **{field_name: invalid_value},
+                )))
+            self.assertNotIn(invalid_value, '\n'.join(logs.output))
 
     def test_invalid_selection_and_datetime_never_leak_or_persist(self):
         logger = 'odoo.addons.woow_paas_platform.models.billing_incident'
@@ -581,11 +644,15 @@ class TestBillingIncidentPublicApi864(TransactionCase):
                     external_ref=external_ref,
                     **{field_name: secret_value},
                 )))
+            output = '\n'.join(logs.output)
             self.assertNotIn(
                 secret_value,
-                '\n'.join(logs.output),
+                output,
                 '非法輸入 log 只能記 field/category/type，不得回印原值',
             )
+            if field_name in ('kind', 'state'):
+                self.assertIn('category=unsupported_selection', output)
+                self.assertNotIn('category=sensitive_marker', output)
             self.assertFalse(self.Incident.sudo().search([
                 ('external_ref', '=', external_ref),
             ]))
@@ -618,7 +685,7 @@ class TestBillingIncidentPublicApi864(TransactionCase):
         ))
         self.assertIsInstance(namespaced_id, int)
 
-    def test_provider_references_reject_crlf_controls_bad_shape_and_markers(self):
+    def test_provider_references_reject_crlf_controls_and_bad_shape(self):
         logger = 'odoo.addons.woow_paas_platform.models.billing_incident'
         cases = (
             ('external_ref', 'MTN: 4111111111111111'),
@@ -628,7 +695,6 @@ class TestBillingIncidentPublicApi864(TransactionCase):
             ('external_ref', 'invoice:<script>'),
             ('trade_no', 'TRADE\r\nFORGED'),
             ('trade_no', 'TRADE WITH SPACE'),
-            ('trade_no', 'security-code-123'),
         )
         for index, (field_name, invalid_value) in enumerate(cases):
             external_ref = '%s-invalid-provider-%s' % (self.ref, index)
@@ -663,8 +729,16 @@ class TestBillingIncidentPublicApi864(TransactionCase):
             '卡片安全碼：123',
             '信用卡安全碼：123',
             '信用卡安全码：123',
+            '卡片驗證值：123',
+            '卡片验证值：123',
+            '信用卡背面末三碼：123',
+            '信用卡背面末三码：123',
+            '個人識別碼：1234',
+            '个人识别码：1234',
             '驗證碼：123',
             '验证码：123',
+            '驗證值：123',
+            '验证值：123',
             'PIN碼：1234',
             'PIN區塊：forbidden',
             '磁條資料：forbidden',
@@ -1070,8 +1144,16 @@ class TestBillingIncidentPublicApi864(TransactionCase):
                     '查證時看到CVC碼：123',
                     '查證時看到卡片安全碼：123',
                     '查證時看到信用卡安全码：123',
+                    '查證時看到卡片驗證值：123',
+                    '查證時看到卡片验证值：123',
+                    '查證時看到信用卡背面末三碼：123',
+                    '查證時看到信用卡背面末三码：123',
+                    '查證時看到個人識別碼：1234',
+                    '查證時看到个人识别码：1234',
                     '查證時看到驗證碼：123',
                     '查證時看到验证码：123',
+                    '查證時看到驗證值：123',
+                    '查證時看到验证值：123',
                     '查證時看到 PIN區塊：forbidden',
                     '查證時看到磁條資料：forbidden',
                     '查證時看到磁軌資料：forbidden',
@@ -1380,16 +1462,23 @@ class TestBillingIncidentPublicApi864(TransactionCase):
             'res_model': 'mail.activity',
             'res_id': future_activity_id,
         })
-        with self.assertRaises(AccessError), self.env.cr.savepoint():
-            self.Incident._ensure_review_activities_current_cursor(incident.id)
+        self.assertTrue(
+            self.Incident._ensure_review_activities_current_cursor(incident.id))
         self.env.invalidate_all()
-        self.assertFalse(
-            self.env['mail.activity'].sudo().browse(future_activity_id).exists(),
-            'incident activity must roll back when its future id was squatted',
+        squatted_activity = self.env['mail.activity'].sudo().browse(
+            future_activity_id).exists()
+        self.assertTrue(
+            squatted_activity,
+            'controlled billing alert must survive future-id squatting',
         )
-        activity_payload.invalidate_recordset(['res_model', 'res_id'])
-        self.assertEqual(activity_payload.res_model, 'mail.activity')
-        self.assertEqual(activity_payload.res_id, future_activity_id)
+        self.assertFalse(
+            activity_payload.exists(),
+            'pre-planted activity payload must be deleted, not roll back alert',
+        )
+        self.assertFalse(self.env['ir.attachment'].sudo().search([
+            ('res_model', '=', 'mail.activity'),
+            ('res_id', '=', future_activity_id),
+        ]))
 
         partner = self.env['res.partner'].create({
             'name': 'Future attachment control %s' % uuid.uuid4().hex,
@@ -1434,19 +1523,23 @@ class TestBillingIncidentPublicApi864(TransactionCase):
             'res_model': 'mail.message',
             'res_id': future_message_id,
         })
-        with self.assertRaises(AccessError), self.env.cr.savepoint():
-            review_activity.action_feedback(
-                feedback='future message attachment squatting probe')
+        self.assertTrue(review_activity.action_feedback(
+            feedback='future message attachment squatting probe'))
         self.env.invalidate_all()
-        self.assertFalse(
-            self.env['mail.message'].sudo().browse(future_message_id).exists(),
-            'incident message must roll back when its future id was squatted',
+        squatted_message = self.env['mail.message'].sudo().browse(
+            future_message_id).exists()
+        self.assertTrue(
+            squatted_message,
+            'controlled incident message must survive future-id squatting',
         )
-        self.assertTrue(review_activity.exists())
-        self.assertTrue(review_activity.active)
-        message_payload.invalidate_recordset(['res_model', 'res_id'])
-        self.assertEqual(message_payload.res_model, 'mail.message')
-        self.assertEqual(message_payload.res_id, future_message_id)
+        self.assertFalse(
+            message_payload.exists(),
+            'pre-planted message payload must be deleted, not roll back message',
+        )
+        self.assertFalse(self.env['ir.attachment'].sudo().search([
+            ('res_model', '=', 'mail.message'),
+            ('res_id', '=', future_message_id),
+        ]))
 
         future_control_message_id = exact_next_id('mail_message')
         control_message_payload = Attachment.create({
@@ -1464,10 +1557,9 @@ class TestBillingIncidentPublicApi864(TransactionCase):
         self.assertEqual(control_message.id, future_control_message_id)
         self.assertTrue(control_message_payload.exists())
 
-        (activity_payload | control_activity_payload | message_payload
-         | control_message_payload).unlink()
+        (control_activity_payload | control_message_payload).unlink()
 
-    def test_activity_target_ids_are_strict_and_all_incident_types_are_guarded(self):
+    def test_activity_canonicalization_is_scoped_to_possible_billing_targets(self):
         incident = self.Incident._create_test_fixture({
             'external_ref': self.ref + '-strict-activity-target',
             'kind': 'charged_not_credited',
@@ -1482,7 +1574,7 @@ class TestBillingIncidentPublicApi864(TransactionCase):
         partner = self.env['res.partner'].create({
             'name': 'Strict activity target control %s' % uuid.uuid4().hex,
         })
-        base_values = {
+        billing_values = {
             'res_model_id': billing_model.id,
             'res_id': incident.id,
             'activity_type_id': todo_type.id,
@@ -1493,16 +1585,15 @@ class TestBillingIncidentPublicApi864(TransactionCase):
         }
 
         for values in (
-                base_values,
+                billing_values,
                 {
-                    **base_values,
+                    **billing_values,
                     'res_model_id': str(billing_model.id),
                     'res_id': str(incident.id),
                     'activity_type_id': str(todo_type.id),
                 }):
             with self.subTest(values=values), self.assertRaises(AccessError):
                 Activity.create(values)
-
         with self.assertRaises(AccessError):
             Activity.with_context(
                 default_res_model_id=str(billing_model.id),
@@ -1510,85 +1601,74 @@ class TestBillingIncidentPublicApi864(TransactionCase):
                 default_activity_type_id=str(todo_type.id),
             ).create({
                 'user_id': self.env.user.id,
-                'summary': 'Default model id bypass probe',
-                'note': 'Defaults must be canonicalized before target checks',
+                'summary': 'Default billing model probe',
+                'note': 'Billing defaults remain strict',
                 'date_deadline': fields.Date.today(),
             })
         with self.assertRaises(AccessError):
-            Activity.with_context(
-                default_activity_type_id=str(review_type.id),
-            ).create({
-                **base_values,
+            Activity.create({
+                **billing_values,
                 'res_model_id': partner_model.id,
                 'res_id': partner.id,
                 'activity_type_id': str(review_type.id),
             })
 
         generic_values = {
-            **base_values,
-            'res_model_id': str(partner_model.id),
-            'res_id': str(partner.id),
-            'activity_type_id': str(todo_type.id),
-            'summary': 'Canonical numeric string control',
+            **billing_values,
+            'res_model_id': partner_model.id,
+            'res_id': partner.id,
+            'activity_type_id': todo_type.id,
+            'summary': 'Explicit other-model core control',
         }
-        control = Activity.create(generic_values)
+        control = Activity.with_context(
+            default_res_id=False,
+            default_activity_type_id=False,
+        ).create(generic_values)
         self.assertEqual(control.res_model_id, partner_model)
         self.assertEqual(control.res_id, partner.id)
         self.assertEqual(control.activity_type_id, todo_type)
+        self.assertTrue(control.with_context(
+            default_res_id=False,
+            default_activity_type_id=False,
+        ).write({'summary': 'Other-model write keeps core behavior'}))
 
-        unicode_id = ''.join(
-            chr(0xFF10 + int(digit)) for digit in str(partner.id))
-        for field_name, valid_id in (
-                ('res_model_id', partner_model.id),
-                ('res_id', partner.id),
-                ('activity_type_id', todo_type.id)):
+        strict_values = {
+            'res_model_id': billing_model.id,
+            'res_id': incident.id,
+            'activity_type_id': todo_type.id,
+        }
+        for field_name, valid_id in strict_values.items():
+            unicode_id = ''.join(
+                chr(0xFF10 + int(digit)) for digit in str(valid_id))
             for malformed in (
                     '0%s' % valid_id, float(valid_id), True, unicode_id):
-                values = {
-                    **base_values,
-                    'res_model_id': partner_model.id,
-                    'res_id': partner.id,
-                    'activity_type_id': todo_type.id,
-                    field_name: malformed,
-                }
+                values = {**billing_values, field_name: malformed}
+                if field_name == 'res_model_id':
+                    values['activity_type_id'] = review_type.id
                 with self.subTest(
                         field_name=field_name, malformed=malformed), \
                         self.assertRaises(AccessError):
                     Activity.create(values)
 
-                before = control.read([
-                    'res_model_id', 'res_id', 'activity_type_id', 'summary',
-                ])[0]
-                with self.assertRaises(AccessError):
-                    control.write({field_name: malformed})
-                self.assertEqual(control.read(list(before))[0], before)
-
-        for field_name, valid_id in (
-                ('res_model_id', partner_model.id),
-                ('res_id', partner.id),
-                ('activity_type_id', todo_type.id)):
-            values = {
-                **base_values,
-                'res_model_id': partner_model.id,
-                'res_id': partner.id,
-                'activity_type_id': todo_type.id,
-            }
-            values.pop(field_name)
-            with self.subTest(default_field=field_name), \
-                    self.assertRaises(AccessError):
-                Activity.with_context(**{
-                    'default_%s' % field_name: True,
-                }).create(values)
-
-        other_partner = self.env['res.partner'].create({
-            'name': 'Strict write target control %s' % uuid.uuid4().hex,
-        })
-        self.assertTrue(control.write({
-            'res_model_id': str(partner_model.id),
-            'res_id': str(other_partner.id),
-            'activity_type_id': str(todo_type.id),
-        }))
-        self.assertEqual(control.res_id, other_partner.id)
+        # Even if a future converter/default path evades preflight, the final
+        # stored incident target remains reserved.  Patch only the classifier
+        # to force execution through that postcheck.
+        ActivityClass = type(Activity)
+        with patch.object(
+                ActivityClass,
+                '_targets_billing_activity_values',
+                return_value=False):
+            with self.assertRaises(AccessError):
+                Activity.create(billing_values)
+            before = control.read([
+                'res_model_id', 'res_id', 'activity_type_id', 'summary',
+            ])[0]
+            with self.assertRaises(AccessError):
+                control.write({
+                    'res_model_id': billing_model.id,
+                    'res_id': incident.id,
+                })
+            self.assertEqual(control.read(list(before))[0], before)
 
     def test_dedicated_activity_create_and_write_are_not_generic_ingress(self):
         incident_id = self.Incident._log(self._snapshot(
@@ -1761,6 +1841,57 @@ class TestBillingIncidentPublicApi864(TransactionCase):
             'resolve 不得刪 generic Todo，只能刪 dedicated review activity',
         )
 
+    def test_incident_followers_are_limited_to_current_active_managers(self):
+        manager_group = self.env.ref('account.group_account_manager')
+        manager = new_test_user(
+            self.env,
+            login='billing-follower-manager-%s' % uuid.uuid4().hex,
+            groups='account.group_account_manager',
+        )
+        nonmanager = new_test_user(
+            self.env,
+            login='billing-follower-regular-%s' % uuid.uuid4().hex,
+            groups='base.group_user',
+        )
+        incident = self.Incident._create_test_fixture({
+            'external_ref': self.ref + '-follower-authority',
+            'kind': 'charged_not_credited',
+            'state': 'needs_human',
+        })
+        self.assertTrue(
+            self.Incident._ensure_review_activities_current_cursor(incident.id))
+        Followers = self.env['mail.followers'].sudo()
+        follower_domain = [
+            ('res_model', '=', 'woow.billing.incident'),
+            ('res_id', '=', incident.id),
+        ]
+        self.assertEqual(Followers.search_count(
+            follower_domain + [('partner_id', '=', manager.partner_id.id)]), 1)
+        self.assertTrue(incident.with_user(manager).message_subscribe(
+            partner_ids=[manager.partner_id.id]))
+        with self.assertRaises(AccessError):
+            incident.with_user(manager).message_subscribe(
+                partner_ids=[nonmanager.partner_id.id])
+        with self.assertRaises(AccessError):
+            incident.with_user(nonmanager).message_subscribe(
+                partner_ids=[manager.partner_id.id])
+
+        unrelated = self.env['res.partner'].create({
+            'name': 'Follower cleanup scope %s' % uuid.uuid4().hex,
+        })
+        unrelated.message_subscribe(partner_ids=[manager.partner_id.id])
+        manager_group.sudo().write({'users': [(3, manager.id)]})
+        self.assertEqual(Followers.search_count(
+            follower_domain + [('partner_id', '=', manager.partner_id.id)]), 0)
+        self.assertEqual(Followers.search_count([
+            ('res_model', '=', 'res.partner'),
+            ('res_id', '=', unrelated.id),
+            ('partner_id', '=', manager.partner_id.id),
+        ]), 1, 'role revocation cleanup must affect only incident followers')
+        with self.assertRaises(AccessError):
+            incident.with_user(manager).message_subscribe(
+                partner_ids=[manager.partner_id.id])
+
     def test_schedule_converges_removed_added_and_duplicate_manager_roster(self):
         manager_group = self.env.ref('account.group_account_manager')
         removed = new_test_user(
@@ -1797,7 +1928,14 @@ class TestBillingIncidentPublicApi864(TransactionCase):
             ('active', '=', True),
         ]
         Activity = self.env['mail.activity'].sudo()
+        Followers = self.env['mail.followers'].sudo()
+        follower_domain = [
+            ('res_model', '=', 'woow.billing.incident'),
+            ('res_id', '=', incident.id),
+        ]
         self.assertIn(removed.id, Activity.search(activity_domain).user_id.ids)
+        self.assertEqual(Followers.search_count(
+            follower_domain + [('partner_id', '=', removed.partner_id.id)]), 1)
 
         self.env.cr.execute(
             'INSERT INTO mail_activity '
@@ -1873,6 +2011,10 @@ class TestBillingIncidentPublicApi864(TransactionCase):
         self.assertEqual(len(final_activities), len(current_manager_ids))
         self.assertNotIn(removed.id, final_user_ids)
         self.assertIn(added.id, final_user_ids)
+        self.assertEqual(Followers.search_count(
+            follower_domain + [('partner_id', '=', removed.partner_id.id)]), 0)
+        self.assertEqual(Followers.search_count(
+            follower_domain + [('partner_id', '=', added.partner_id.id)]), 1)
         second_user_ids = sorted(Activity.search([
             ('res_model', '=', 'woow.billing.incident'),
             ('res_id', '=', second_incident.id),
@@ -1891,17 +2033,45 @@ class TestBillingIncidentPublicApi864(TransactionCase):
             groups='base.group_user',
         )
         implying_group = self.env['res.groups'].sudo().create({
-            'name': 'Billing roster implied path %s' % uuid.uuid4().hex,
+            'name': 'Billing roster implied create path %s' % uuid.uuid4().hex,
             'users': [(4, implied_candidate.id)],
+            'implied_ids': [(4, manager_group.id)],
         })
-        implying_group.write({'implied_ids': [(4, manager_group.id)]})
         implied_candidate.invalidate_recordset(['groups_id'])
         Activity.invalidate_model()
         self.assertIn(manager_group, implied_candidate.groups_id)
         self.assertEqual(Activity.search_count(
             activity_domain + [('user_id', '=', implied_candidate.id)]), 1,
-            'res.groups implied_ids add path 必須即時補恰一筆 activity',
+            'res.groups create users+implied_ids 必須即時補恰一筆 activity',
         )
+        self.assertEqual(Followers.search_count(
+            follower_domain + [
+                ('partner_id', '=', implied_candidate.partner_id.id),
+            ]), 1)
+
+        copy_candidate = new_test_user(
+            self.env,
+            login='billing-roster-copy-%s' % uuid.uuid4().hex,
+            groups='base.group_user',
+        )
+        copied_group = implying_group.copy(default={
+            'name': 'Billing roster implied copy path %s' % uuid.uuid4().hex,
+            'users': [(4, copy_candidate.id)],
+        })
+        copy_candidate.invalidate_recordset(['groups_id'])
+        Activity.invalidate_model()
+        self.assertIn(manager_group, copy_candidate.groups_id)
+        self.assertEqual(Activity.search_count(
+            activity_domain + [('user_id', '=', copy_candidate.id)]), 1,
+            'res.groups copy users+implied chain 必須即時收斂 activity',
+        )
+        copied_group._remove_group(manager_group)
+        copy_candidate.invalidate_recordset(['groups_id'])
+        Activity.invalidate_model()
+        self.assertNotIn(manager_group, copy_candidate.groups_id)
+        self.assertEqual(Activity.search_count(
+            activity_domain + [('user_id', '=', copy_candidate.id)]), 0)
+
         implying_group._remove_group(manager_group)
         implied_candidate.invalidate_recordset(['groups_id'])
         Activity.invalidate_model()
@@ -1910,6 +2080,10 @@ class TestBillingIncidentPublicApi864(TransactionCase):
             activity_domain + [('user_id', '=', implied_candidate.id)]), 0,
             'res.groups implied_ids remove path 必須即時移除 stale activity',
         )
+        self.assertEqual(Followers.search_count(
+            follower_domain + [
+                ('partner_id', '=', implied_candidate.partner_id.id),
+            ]), 0)
 
         unlink_candidate = new_test_user(
             self.env,
@@ -2750,6 +2924,15 @@ class TestBillingIncidentRpcWriteGuard864(HttpCase):
         ], order='id desc', limit=1)
         self.assertTrue(protected_message)
         self.assertEqual(protected_message.author_id, self.manager_a.partner_id)
+        follower_domain = [
+            ('res_model', '=', 'woow.billing.incident'),
+            ('res_id', '=', self.incident_a.id),
+        ]
+        Followers = self.env['mail.followers'].sudo()
+        self.assertEqual(Followers.search_count(
+            follower_domain + [
+                ('partner_id', '=', self.manager_a.partner_id.id),
+            ]), 1, 'activity create must subscribe its current manager assignee')
 
         # Exercise the standard res.users API path used by the user form.  A
         # res.groups.write(users=...) hook alone does not see these commands.
@@ -2786,6 +2969,10 @@ class TestBillingIncidentRpcWriteGuard864(HttpCase):
         Activity = self.env['mail.activity'].sudo()
         self.assertEqual(Activity.search_count(
             activity_domain + [('user_id', '=', self.manager_a.id)]), 0)
+        self.assertEqual(Followers.search_count(
+            follower_domain + [
+                ('partner_id', '=', self.manager_a.partner_id.id),
+            ]), 0, 'role removal must synchronously revoke incident following')
         replacement = Activity.search(
             activity_domain + [('user_id', '=', self.regular_user.id)],
             limit=1,
@@ -2829,6 +3016,51 @@ class TestBillingIncidentRpcWriteGuard864(HttpCase):
             len(replacement), 1,
             'reactivation must restore exactly one active dedicated activity',
         )
+        self.assertEqual(Followers.search_count(
+            follower_domain + [
+                ('partner_id', '=', self.regular_user.partner_id.id),
+            ]), 1, 'reactivated current manager must regain necessary following')
+
+        message_floor = self.env['mail.message'].sudo().search(
+            [], order='id desc', limit=1).id
+        self.assertTrue(replacement.with_user(self.regular_user).action_feedback(
+            feedback='post-revocation notification control'))
+        post_revocation_message = self.env['mail.message'].sudo().search([
+            ('id', '>', message_floor),
+            ('model', '=', 'woow.billing.incident'),
+            ('res_id', '=', self.incident_a.id),
+        ], order='id desc', limit=1)
+        self.assertTrue(post_revocation_message)
+        self.assertFalse(self.env['mail.notification'].sudo().search([
+            ('mail_message_id', '=', post_revocation_message.id),
+            ('res_partner_id', '=', self.manager_a.partner_id.id),
+        ]), 'former manager must receive no later incident notification row')
+        self.assertFalse(self.env['mail.mail'].sudo().search([
+            ('mail_message_id', '=', post_revocation_message.id),
+            ('recipient_ids', 'in', self.manager_a.partner_id.ids),
+        ]), 'former manager must receive no later outgoing incident mail')
+        replacement = Activity.search(
+            activity_domain + [('user_id', '=', self.regular_user.id)],
+            limit=1,
+        )
+        self.assertEqual(len(replacement), 1)
+
+        self.authenticate(self.regular_login, self.regular_login)
+        current_message = self._assert_ok(
+            self._call_kw(
+                'mail.message', 'read',
+                [[post_revocation_message.id], ['body']],
+            ),
+            'current manager must retain normal incident-message read access',
+        )
+        self.assertEqual(current_message[0]['id'], post_revocation_message.id)
+        self.assertTrue(self._assert_ok(
+            self._call_kw(
+                'woow.billing.incident', 'message_subscribe',
+                [[self.incident_a.id], [self.regular_user.partner_id.id]],
+            ),
+            'current active manager may subscribe its manager partner',
+        ))
 
         # A deliberately corrupt generic-type incident activity proves that
         # current-group search/read/action gates cover every incident target,
@@ -2856,6 +3088,13 @@ class TestBillingIncidentRpcWriteGuard864(HttpCase):
                 [[self.incident_a.id], ['external_ref']],
             ),
             '離組後 incident read 必須立即拒絕',
+        )
+        self._assert_access_error(
+            self._call_kw(
+                'woow.billing.incident', 'message_subscribe',
+                [[self.incident_a.id], [self.manager_a.partner_id.id]],
+            ),
+            '離組後不得重新訂閱 incident',
         )
         self._assert_access_error(
             self._call_kw(
@@ -3093,27 +3332,31 @@ class TestBillingIncidentRpcWriteGuard864(HttpCase):
             ('mail.message', protected_message.id),
         )
         for index, (res_model, res_id) in enumerate(protected_targets):
-            name = 'rpc-forbidden-related-%s-%s.bin' % (
-                index, uuid.uuid4().hex)
-            denied_create = self._call_kw(
-                'ir.attachment',
-                'create',
-                [{
-                    'name': name,
-                    'datas': base64.b64encode(
-                        b'forbidden direct payload').decode(),
-                    'res_model': res_model,
-                    'res_id': res_id,
-                }],
-            )
-            self._assert_access_error(
-                denied_create,
-                'RPC attachment create cannot target incident ownership graph',
-                contains='Attachments are not allowed',
-            )
-            self.assertFalse(self.env['ir.attachment'].sudo().search([
-                ('name', '=', name),
-            ]))
+            for context in (
+                    {},
+                    {'woow_billing_attachment_cleanup': True}):
+                name = 'rpc-forbidden-related-%s-%s.bin' % (
+                    index, uuid.uuid4().hex)
+                denied_create = self._call_kw(
+                    'ir.attachment',
+                    'create',
+                    [{
+                        'name': name,
+                        'datas': base64.b64encode(
+                            b'forbidden direct payload').decode(),
+                        'res_model': res_model,
+                        'res_id': res_id,
+                    }],
+                    {'context': context},
+                )
+                self._assert_access_error(
+                    denied_create,
+                    'RPC attachment create cannot forge cleanup capability',
+                    contains='Attachments are not allowed',
+                )
+                self.assertFalse(self.env['ir.attachment'].sudo().search([
+                    ('name', '=', name),
+                ]))
 
         control_name = 'rpc-related-control-%s.bin' % uuid.uuid4().hex
         control_id = self._assert_ok(
@@ -3138,6 +3381,7 @@ class TestBillingIncidentRpcWriteGuard864(HttpCase):
                 'res_model': 'woow.billing.incident',
                 'res_id': self.incident_a.id,
             }],
+            {'context': {'woow_billing_attachment_cleanup': True}},
         )
         self._assert_access_error(
             denied_move,
@@ -3249,6 +3493,7 @@ class TestBillingIncidentRpcWriteGuard864(HttpCase):
             'ir.attachment',
             'write',
             [[legacy_protected.id], {'name': 'forbidden-old-target-rename'}],
+            {'context': {'woow_billing_attachment_cleanup': True}},
         )
         self._assert_access_error(
             denied_old_target,

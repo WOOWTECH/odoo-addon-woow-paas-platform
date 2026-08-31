@@ -24,7 +24,7 @@ from psycopg2 import sql
 from odoo import SUPERUSER_ID, _, api, fields, models
 from odoo.exceptions import AccessError, UserError
 from odoo.osv import expression
-from odoo.tools import config, html2plaintext
+from odoo.tools import config, html2plaintext, single_email_re
 from odoo.tools.translate import get_translation
 
 
@@ -60,6 +60,8 @@ _BILLING_ACTIVITY_TERMINAL = _BillingIncidentCapability(
     'activity terminal')
 _BILLING_ROSTER_MUTATION = _BillingIncidentCapability(
     'manager roster mutation')
+_BILLING_ATTACHMENT_CLEANUP = _BillingIncidentCapability(
+    'squatted attachment cleanup')
 _BILLING_INCIDENT_CREATE_CTX_KEY = 'woow_billing_incident_create'
 _BILLING_INCIDENT_RESOLUTION_CTX_KEY = (
     'woow_billing_incident_resolution_transition')
@@ -67,6 +69,7 @@ _BILLING_INCIDENT_CHATTER_CTX_KEY = 'woow_billing_incident_chatter'
 _BILLING_ACTIVITY_SCHEDULER_CTX_KEY = 'woow_billing_activity_scheduler'
 _BILLING_ACTIVITY_TERMINAL_CTX_KEY = 'woow_billing_activity_terminal'
 _BILLING_ROSTER_MUTATION_CTX_KEY = 'woow_billing_roster_mutation'
+_BILLING_ATTACHMENT_CLEANUP_CTX_KEY = 'woow_billing_attachment_cleanup'
 _ODOO_MODULE_UNINSTALL_CTX_KEY = '_force_unlink'
 _BILLING_INTERNAL_CONTEXT_ALLOWLIST = frozenset({
     'allowed_company_ids',
@@ -170,6 +173,21 @@ def _is_roster_mutation(env):
             is _BILLING_ROSTER_MUTATION)
 
 
+def _attachment_cleanup(records):
+    return _with_clean_billing_internal_context(
+        records,
+        **{
+            _BILLING_ATTACHMENT_CLEANUP_CTX_KEY:
+                _BILLING_ATTACHMENT_CLEANUP,
+        }
+    )
+
+
+def _is_attachment_cleanup(env):
+    return (env.context.get(_BILLING_ATTACHMENT_CLEANUP_CTX_KEY)
+            is _BILLING_ATTACHMENT_CLEANUP)
+
+
 def _active_account_manager_roster_ids(env):
     """Read the effective active finance roster without active_test/cache drift."""
     # res.users.active may still be a pending ORM write (notably after core
@@ -187,6 +205,18 @@ def _active_account_manager_roster_ids(env):
         (manager_group_id,),
     )
     return frozenset(user_id for user_id, in env.cr.fetchall())
+
+
+def _active_account_manager_partner_ids(env):
+    user_ids = sorted(_active_account_manager_roster_ids(env))
+    if not user_ids:
+        return frozenset()
+    env.cr.execute(
+        'SELECT DISTINCT partner_id FROM res_users '
+        'WHERE id = ANY(%s) AND partner_id IS NOT NULL',
+        (user_ids,),
+    )
+    return frozenset(partner_id for partner_id, in env.cr.fetchall())
 
 
 def _converge_billing_roster_if_changed(env, before):
@@ -360,6 +390,14 @@ class BillingIncident(models.Model):
     })
     _LOG_FLOAT_FIELDS = frozenset({'amount', 'credits', 'bonus'})
     _LOG_DATETIME_FIELDS = frozenset({'last_skipped_at', 'next_query_at'})
+    _LOG_FREE_TEXT_FIELDS = frozenset({'detail'})
+    _LOG_PROVIDER_REFERENCE_FIELDS = frozenset({'external_ref', 'trade_no'})
+    _LOG_EMAIL_FIELDS = frozenset({'partner_email'})
+    _LOG_SELECTION_FIELDS = frozenset({'kind', 'state'})
+    _LOG_CODE_FIELDS = frozenset({
+        'currency', 'rtn_code', 'failure_code', 'skip_reason',
+        'assessment_reason', 'source_model',
+    })
     _LOG_FIELDS = (
         _LOG_CHAR_FIELDS | _LOG_INTEGER_FIELDS | _LOG_FLOAT_FIELDS |
         _LOG_DATETIME_FIELDS
@@ -388,7 +426,12 @@ class BillingIncident(models.Model):
     # lookarounds would let phrases such as「看到卡片安全碼」bypass the gate.
     _SENSITIVE_CJK_MARKER_RE = re.compile(
         r'(?:信用卡|卡片|卡)?[\W_]*安全[\W_]*(?:碼|码)|'
-        r'(?:安全[\W_]*)?(?:驗[\W_]*證|验[\W_]*证)[\W_]*(?:碼|码)|'
+        r'(?:安全[\W_]*)?(?:驗[\W_]*證|验[\W_]*证)'
+        r'[\W_]*(?:碼|码|值)|'
+        r'信用卡[\W_]*背[\W_]*面[\W_]*末[\W_]*(?:三|3)'
+        r'[\W_]*(?:碼|码)|'
+        r'(?:個[\W_]*人[\W_]*識[\W_]*別|个[\W_]*人[\W_]*识[\W_]*别)'
+        r'[\W_]*(?:碼|码)|'
         r'p[\W_]*i[\W_]*n[\W_]*(?:碼|码|區[\W_]*塊|区[\W_]*块)|'
         r'磁[\W_]*(?:條|条|軌|轨)(?:[\W_]*(?:資料|数据))?|'
         r'第[\W_]*(?:一|二|1|2)[\W_]*(?:軌|轨)'
@@ -405,6 +448,11 @@ class BillingIncident(models.Model):
         r'[A-Za-z][A-Za-z0-9_-]{0,31}:'
         r'[A-Za-z0-9][A-Za-z0-9._/-]{0,94}\Z')
     _TRADE_NO_RE = re.compile(r'[A-Za-z0-9][A-Za-z0-9._:/-]{0,63}\Z')
+    _SNAPSHOT_CODE_RE = re.compile(
+        r'[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}\Z')
+    _SOURCE_MODEL_RE = re.compile(
+        r'[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+\Z')
+    _EMAIL_MAX_LENGTH = 254
     _CONTROL_CHARACTER_RE = re.compile(r'[\x00-\x1f\x7f]')
     _HTML_ENTITY_RE = re.compile(
         r'&(?:#[0-9]+|#x[0-9a-f]+|[a-z][a-z0-9]+);', re.IGNORECASE)
@@ -526,6 +574,24 @@ class BillingIncident(models.Model):
             'deleted.'
         ))
 
+    def message_subscribe(self, partner_ids=None, subtype_ids=None):
+        """Allow incident followers only from the live finance roster."""
+        if not self or not partner_ids:
+            return True
+        roster_user_ids = _active_account_manager_roster_ids(self.env)
+        roster_partner_ids = _active_account_manager_partner_ids(self.env)
+        caller_is_current_manager = self.env.uid in roster_user_ids
+        if (not (_is_activity_scheduler(self.env)
+                 or caller_is_current_manager)
+                or not set(partner_ids).issubset(roster_partner_ids)):
+            raise AccessError(_(
+                'Only current account managers may follow billing incidents.'
+            ))
+        return super().message_subscribe(
+            partner_ids=partner_ids,
+            subtype_ids=subtype_ids,
+        )
+
     def message_post(self, **kwargs):
         """Disallow free chatter; only validated core activity-done may post."""
         if not _is_incident_chatter(self.env):
@@ -627,10 +693,6 @@ class BillingIncident(models.Model):
         if (self._SENSITIVE_MARKER_RE.search(canonical)
                 or self._SENSITIVE_CJK_MARKER_RE.search(canonical)):
             return 'sensitive_marker'
-        # These two fields are explicitly shaped as ECPay references.  Numeric
-        # MTNs/TradeNos must not be mistaken for PANs by coincidence.
-        if field_name in ('external_ref', 'trade_no'):
-            return False
         for match in self._PAN_CANDIDATE_RE.finditer(canonical):
             digits = ''.join(character for character in match.group()
                              if character.isdigit())
@@ -660,12 +722,9 @@ class BillingIncident(models.Model):
 
     @api.model
     def _provider_reference_category(self, field_name, value):
-        """Validate dedicated provider keys without treating numeric MTN as PAN."""
+        """Validate provider keys by shape, never as free-text PCI ingress."""
         if not isinstance(value, str):
             return 'invalid_type'
-        category = self._sensitive_content_category(field_name, value)
-        if category:
-            return category
         if self._CONTROL_CHARACTER_RE.search(value):
             return 'control_character'
         if field_name == 'external_ref':
@@ -680,13 +739,34 @@ class BillingIncident(models.Model):
         return 'unsupported_provider_reference_field'
 
     @api.model
+    def _structured_snapshot_category(self, field_name, value):
+        """Validate snapshot metadata with its own non-free-text shape."""
+        if not isinstance(value, str):
+            return 'invalid_type'
+        if self._CONTROL_CHARACTER_RE.search(value):
+            return 'control_character'
+        if field_name in self._LOG_EMAIL_FIELDS:
+            if len(value) > self._EMAIL_MAX_LENGTH:
+                return 'invalid_email_length'
+            if not single_email_re.fullmatch(value):
+                return 'invalid_email_shape'
+            return False
+        if field_name == 'source_model':
+            return (False if self._SOURCE_MODEL_RE.fullmatch(value)
+                    else 'invalid_model_shape')
+        if field_name in self._LOG_CODE_FIELDS:
+            return (False if self._SNAPSHOT_CODE_RE.fullmatch(value)
+                    else 'invalid_code_shape')
+        return 'unsupported_structured_field'
+
+    @api.model
     def _validate_log_snapshot(self, snapshot):
         """Return a SQL-ready scalar snapshot, or ``False`` fail-soft.
 
-        Validation happens before the independent cursor.  The allowlist is a
-        shape boundary, not a complete PCI boundary: callers remain responsible
-        for passing only safe summaries.  Obvious sensitive markers and
-        Luhn-valid PAN-like detail are rejected as defense in depth.
+        Validation happens before the independent cursor.  Each structured
+        scalar uses its own email/provider/code/enum shape.  Only actual
+        free-text evidence is scanned for sensitive markers and Luhn-valid
+        PAN-like content as defense in depth.
         """
         if not isinstance(snapshot, dict):
             _logger.error(
@@ -785,10 +865,16 @@ class BillingIncident(models.Model):
         for name, value in normalized.items():
             if not isinstance(value, str):
                 continue
-            if name in ('external_ref', 'trade_no'):
+            if name in self._LOG_PROVIDER_REFERENCE_FIELDS:
                 category = self._provider_reference_category(name, value)
-            else:
+            elif name in self._LOG_FREE_TEXT_FIELDS:
                 category = self._free_text_ingress_category(name, value)
+            elif name in self._LOG_SELECTION_FIELDS:
+                # Selection membership below is the complete shape.  PIN/PAN
+                # substrings are irrelevant for enum codes.
+                continue
+            else:
+                category = self._structured_snapshot_category(name, value)
             if category:
                 _logger.error(
                     '[BILLING_INCIDENT] _log rejected field=%s '
@@ -1006,6 +1092,19 @@ class BillingIncident(models.Model):
 
         users = self._account_manager_users(self.env)
         current_user_ids = set(users.ids)
+        current_partner_ids = set(users.partner_id.ids)
+        follower_domain = [
+            ('res_model', '=', self._name),
+            ('res_id', '=', incident_id),
+        ]
+        stale_follower_domain = list(follower_domain)
+        if current_partner_ids:
+            stale_follower_domain.append(
+                ('partner_id', 'not in', sorted(current_partner_ids)))
+        stale_followers = self.env['mail.followers'].sudo().search(
+            stale_follower_domain)
+        if stale_followers:
+            stale_followers.unlink()
         Activity = _activity_scheduler(self.env['mail.activity'].sudo())
         activity_domain = [
             ('res_model', '=', self._name),
@@ -1081,11 +1180,26 @@ class BillingIncident(models.Model):
             })
         if activity_values:
             Activity.create(activity_values)
+        # Repair a missing follower even when its dedicated activity already
+        # existed.  The object capability is required because this sudo caller
+        # is infrastructure, not itself a finance-role member.
+        _activity_scheduler(self.sudo().browse(incident_id)).message_subscribe(
+            partner_ids=sorted(current_partner_ids),
+        )
         return True
 
     @api.model
     def _converge_unresolved_review_activities_current_cursor(self):
-        """Converge the manager roster for every unresolved ledger row."""
+        """Converge live followers and alerts after any roster mutation."""
+        current_partner_ids = _active_account_manager_partner_ids(self.env)
+        stale_follower_domain = [('res_model', '=', self._name)]
+        if current_partner_ids:
+            stale_follower_domain.append(
+                ('partner_id', 'not in', sorted(current_partner_ids)))
+        stale_followers = self.env['mail.followers'].sudo().search(
+            stale_follower_domain)
+        if stale_followers:
+            stale_followers.unlink()
         self.env.cr.execute(
             sql.SQL(
                 "SELECT id FROM {table} WHERE state <> 'resolved' ORDER BY id"
@@ -1371,6 +1485,30 @@ class ResUsers(models.Model):
 class ResGroups(models.Model):
     _inherit = 'res.groups'
 
+    @api.model_create_multi
+    def create(self, values_list):
+        """Converge after core finishes users plus implied-group expansion."""
+        if (_is_roster_mutation(self.env)
+                or not any({'users', 'implied_ids'} & set(values)
+                           for values in values_list)):
+            return super().create(values_list)
+        before = _active_account_manager_roster_ids(self.env)
+        guarded = _roster_mutation(self)
+        groups = super(ResGroups, guarded).create(values_list)
+        _converge_billing_roster_if_changed(guarded.env, before)
+        return self.browse(groups.ids)
+
+    def copy(self, default=None):
+        """Converge once after copy replays users/implied values via create."""
+        if _is_roster_mutation(self.env):
+            return super().copy(default)
+        before = _active_account_manager_roster_ids(self.env)
+        guarded = _roster_mutation(self)
+        groups = guarded.browse(self.ids)
+        copied = super(ResGroups, groups).copy(default)
+        _converge_billing_roster_if_changed(guarded.env, before)
+        return self.browse(copied.ids)
+
     def write(self, values):
         """Retain users/implied-group paths and converge only on roster delta."""
         if (_is_roster_mutation(self.env)
@@ -1456,13 +1594,13 @@ class MailMessage(models.Model):
                 'Billing incident messages may be created only by the '
                 'internal activity completion flow.'
             ))
-        if incident_messages and self.env['ir.attachment'].sudo().search_count([
-            ('res_model', '=', 'mail.message'),
-            ('res_id', 'in', incident_messages.ids),
-        ]):
-            raise AccessError(_(
-                'Attachments are not allowed on billing incident activities.'
-            ))
+        if incident_messages:
+            squatted = self.env['ir.attachment'].sudo().search([
+                ('res_model', '=', 'mail.message'),
+                ('res_id', 'in', incident_messages.ids),
+            ])
+            if squatted:
+                _attachment_cleanup(squatted).unlink()
         return messages
 
     def write(self, values):
@@ -1570,6 +1708,8 @@ class IrAttachment(models.Model):
     @api.model_create_multi
     def create(self, values_list):
         """Reject payload before a protected attachment row reaches the DB."""
+        if _is_attachment_cleanup(self.env):
+            return super().create(values_list)
         if any(self._values_billing_owned_target(values)
                for values in values_list):
             raise AccessError(_(
@@ -1588,6 +1728,8 @@ class IrAttachment(models.Model):
 
     def write(self, values):
         """Reject protected old, prospective, and ORM-final targets."""
+        if _is_attachment_cleanup(self.env):
+            return super().write(values)
         for attachment in self.sudo():
             old_target = self._billing_owned_target(
                 attachment.res_model, attachment.res_id)
@@ -1690,9 +1832,9 @@ class MailActivity(models.Model):
         return canonical
 
     @api.model
-    def _with_canonical_activity_target_defaults(self):
+    def _with_canonical_activity_target_defaults(self, field_names=()):
         context = dict(self.env.context)
-        for field_name in self._BILLING_ACTIVITY_TARGET_ID_FIELDS:
+        for field_name in field_names:
             context_name = 'default_%s' % field_name
             if context_name in context:
                 context[context_name] = self._canonical_activity_target_id(
@@ -1700,7 +1842,17 @@ class MailActivity(models.Model):
         return self.with_context(context)
 
     @api.model
-    def _targets_billing_activity_values(self, values):
+    def _canonical_activity_target_candidate(self, value):
+        """Return a canonical positive id, or ``False`` without rejecting."""
+        if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+            return value
+        if (isinstance(value, str)
+                and self._CANONICAL_ACTIVITY_TARGET_ID_RE.fullmatch(value)):
+            return int(value)
+        return False
+
+    @api.model
+    def _targets_billing_activity_values(self, values, include_defaults=True):
         billing_model = self.env['ir.model'].sudo()._get(
             'woow.billing.incident')
         review_type = self.env.ref(
@@ -1708,24 +1860,22 @@ class MailActivity(models.Model):
             'mail_activity_type_billing_incident_review',
             raise_if_not_found=False,
         )
+        defaults = self.env.context if include_defaults else {}
         res_model_id = values.get(
-            'res_model_id', self.env.context.get('default_res_model_id'))
-        res_model = values.get(
-            'res_model', self.env.context.get('default_res_model'))
+            'res_model_id', defaults.get('default_res_model_id'))
+        res_model = values.get('res_model')
+        if 'res_model_id' not in values and not res_model:
+            res_model = defaults.get('default_res_model')
         activity_type_id = values.get(
-            'activity_type_id',
-            self.env.context.get('default_activity_type_id'),
-        )
-        model_from_id = (
-            self.env['ir.model'].sudo().browse(res_model_id).exists().model
-            if res_model_id
-            else False
-        )
+            'activity_type_id', defaults.get('default_activity_type_id'))
+        canonical_model_id = self._canonical_activity_target_candidate(
+            res_model_id)
+        canonical_type_id = self._canonical_activity_target_candidate(
+            activity_type_id)
         return bool(
             res_model == 'woow.billing.incident'
-            or model_from_id == 'woow.billing.incident'
-            or (billing_model and res_model_id == billing_model.id)
-            or (review_type and activity_type_id == review_type.id)
+            or (billing_model and canonical_model_id == billing_model.id)
+            or (review_type and canonical_type_id == review_type.id)
         )
 
     @api.model
@@ -1757,12 +1907,33 @@ class MailActivity(models.Model):
             ))
         incident_activities = protected.filtered(
             lambda activity: activity.res_model == 'woow.billing.incident')
-        if incident_activities and self.env['ir.attachment'].sudo().search_count([
-            ('res_model', '=', 'mail.activity'),
-            ('res_id', 'in', incident_activities.ids),
-        ]):
+        if incident_activities:
+            squatted = self.env['ir.attachment'].sudo().search([
+                ('res_model', '=', 'mail.activity'),
+                ('res_id', 'in', incident_activities.ids),
+            ])
+            if squatted:
+                _attachment_cleanup(squatted).unlink()
+        return True
+
+    @api.model
+    def _validate_stored_billing_activity_write(self, activities):
+        """Reject converter-created incident/dedicated targets after write."""
+        review_type = self.env.ref(
+            'woow_paas_platform.'
+            'mail_activity_type_billing_incident_review',
+            raise_if_not_found=False,
+        )
+        protected = activities.sudo().filtered(
+            lambda activity: (
+                activity.res_model == 'woow.billing.incident'
+                or (review_type and activity.activity_type_id == review_type)
+            )
+        )
+        if protected and not _is_activity_terminal(self.env):
             raise AccessError(_(
-                'Attachments are not allowed on billing incident activities.'
+                'Billing incident activities are managed automatically. '
+                'Use the billing incident form instead.'
             ))
         return True
 
@@ -1783,15 +1954,28 @@ class MailActivity(models.Model):
 
     @api.model_create_multi
     def create(self, values_list):
-        """Reserve every final incident target for the dedicated scheduler."""
-        guarded = self._with_canonical_activity_target_defaults()
-        canonical_values = [
-            guarded._canonical_activity_target_values(values)
+        """Strictly canonicalize only possible billing targets before core."""
+        billing_branches = [
+            self._targets_billing_activity_values(values)
             for values in values_list
         ]
+        strict_default_fields = {
+            field_name
+            for values, targets_billing in zip(values_list, billing_branches)
+            if targets_billing
+            for field_name in self._BILLING_ACTIVITY_TARGET_ID_FIELDS
+            if (field_name not in values
+                and 'default_%s' % field_name in self.env.context)
+        }
+        guarded = self._with_canonical_activity_target_defaults(
+            strict_default_fields)
+        canonical_values = [
+            guarded._canonical_activity_target_values(values)
+            if targets_billing else dict(values)
+            for values, targets_billing in zip(values_list, billing_branches)
+        ]
         if (not _is_activity_scheduler(guarded.env)
-                and any(guarded._targets_billing_activity_values(values)
-                        for values in canonical_values)):
+                and any(billing_branches)):
             raise AccessError(_(
                 'Billing incident activities may be created only by the '
                 'internal scheduler.'
@@ -1801,29 +1985,33 @@ class MailActivity(models.Model):
         return self.browse(activities.ids)
 
     def write(self, values):
-        """Canonicalize ids, then keep all incident targets immutable."""
-        guarded = self._with_canonical_activity_target_defaults()
-        canonical_values = guarded._canonical_activity_target_values(values)
-        records = guarded.browse(self.ids)
-        review_type = guarded.env.ref(
+        """Keep core coercion for other models; postcheck every final target."""
+        review_type = self.env.ref(
             'woow_paas_platform.'
             'mail_activity_type_billing_incident_review',
             raise_if_not_found=False,
         )
         targets_billing = (
-            guarded._targets_billing_activity_values(canonical_values)
+            self._targets_billing_activity_values(
+                values, include_defaults=False)
             or any(
                 activity.res_model == 'woow.billing.incident'
                 or (review_type and activity.activity_type_id == review_type)
-                for activity in records.sudo()
+                for activity in self.sudo()
             )
         )
-        if targets_billing and not _is_activity_terminal(guarded.env):
+        write_values = (
+            self._canonical_activity_target_values(values)
+            if targets_billing else dict(values)
+        )
+        if targets_billing and not _is_activity_terminal(self.env):
             raise AccessError(_(
                 'Billing incident activities are managed automatically. '
                 'Use the billing incident form instead.'
             ))
-        return super(MailActivity, records).write(canonical_values)
+        result = super().write(write_values)
+        self._validate_stored_billing_activity_write(self)
+        return result
 
     def _action_done(self, feedback=False, attachment_ids=None):
         """Serialize the whole core terminal flow with schedule and resolve."""

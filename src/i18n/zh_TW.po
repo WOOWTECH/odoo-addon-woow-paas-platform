@@ -17457,3 +17457,8 @@ msgstr "帳務 incident 訊息只能由內部 activity 完成流程建立。"
 #: code:addons/woow_paas_platform/models/billing_incident.py:0
 msgid "Billing incident chatter is managed automatically by the internal activity completion flow."
 msgstr "帳務 incident chatter 由內部 activity 完成流程自動管理。"
+
+#. module: woow_paas_platform
+#: code:addons/woow_paas_platform/models/billing_incident.py:0
+msgid "Only current account managers may follow billing incidents."
+msgstr "只有目前有效的會計管理員可以追蹤帳務 incident。"
