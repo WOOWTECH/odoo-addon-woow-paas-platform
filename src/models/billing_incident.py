@@ -1686,6 +1686,12 @@ class ResGroups(models.Model):
         return result
 
 
+# Every carrier create/write rollback unit below uses ``flush=False`` and then
+# target-flushes only the guarded recordset.  The default flushing savepoint
+# would also flush unrelated pending business state (which may intentionally
+# be transitional, such as a temporarily unset journal).  The targeted SQL is
+# nevertheless inside the savepoint, so a postcheck exception rolls it back;
+# the true catch-then-commit contract is covered by the multi-cursor test.
 class MailMessage(models.Model):
     _inherit = 'mail.message'
 
@@ -1738,8 +1744,9 @@ class MailMessage(models.Model):
             ))
         # The savepoint belongs to this override, not its caller: a caller may
         # swallow our postcheck AccessError and still commit the request.
-        with self.env.cr.savepoint():
+        with self.env.cr.savepoint(flush=False):
             messages = super().create(values_list)
+            messages.flush_recordset()
             incident_messages = messages.sudo().filtered(
                 lambda message: message.model == 'woow.billing.incident')
             # Once super has allocated ids, immediately enter the same carrier
@@ -1782,8 +1789,9 @@ class MailMessage(models.Model):
                 ))
         # Keep the ORM write and stored-final-target postcheck in one rollback
         # unit even when an outer caller catches AccessError and commits.
-        with self.env.cr.savepoint():
+        with self.env.cr.savepoint(flush=False):
             result = super().write(values)
+            self.flush_recordset()
             incident_messages = self.sudo().filtered(
                 lambda message: message.model == 'woow.billing.incident')
             if incident_messages and not _is_incident_chatter(self.env):
@@ -1966,8 +1974,9 @@ class IrAttachment(models.Model):
             raise AccessError(_(
                 'Attachments are not allowed on billing incident activities.'
             ))
-        with self.env.cr.savepoint():
+        with self.env.cr.savepoint(flush=False):
             attachments = super().create(values_list)
+            attachments.flush_recordset()
             # Recheck actual stored targets in case ORM defaults/conversion
             # produced a final target different from the preflight payload.
             final_targets = [
@@ -2024,8 +2033,9 @@ class IrAttachment(models.Model):
                     'Attachments are not allowed on billing incident '
                     'activities.'
                 ))
-        with self.env.cr.savepoint():
+        with self.env.cr.savepoint(flush=False):
             result = super().write(values)
+            self.flush_recordset()
             final_targets = [
                 target
                 for attachment in self.sudo()
@@ -2276,8 +2286,9 @@ class MailActivity(models.Model):
                 'Billing incident activities may be created only by the '
                 'internal scheduler.'
             ))
-        with self.env.cr.savepoint():
+        with self.env.cr.savepoint(flush=False):
             activities = super(MailActivity, guarded).create(canonical_values)
+            activities.flush_recordset()
             # Super allocates the ids.  Enter their carrier locks immediately,
             # purge both committed and same-transaction future-id payloads,
             # then validate the final stored target/type.
@@ -2318,8 +2329,9 @@ class MailActivity(models.Model):
                 'Billing incident activities are managed automatically. '
                 'Use the billing incident form instead.'
             ))
-        with self.env.cr.savepoint():
+        with self.env.cr.savepoint(flush=False):
             result = super().write(write_values)
+            self.flush_recordset()
             self._validate_stored_billing_activity_write(self)
         return result
 
