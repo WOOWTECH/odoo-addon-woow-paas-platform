@@ -106,6 +106,18 @@ class TestBillingIncidentRealTransactions864(BaseCase):
                         % (table, model_column),
                         (_MODEL, external_prefix),
                     )
+                # Creating/removing roster users converges every unresolved
+                # incident, including unrelated rows already in this test DB.
+                # Odoo's assignment notification body names the marker user,
+                # so purge those marker-owned side effects even when res_id
+                # belongs to an older incident fixture.
+                cr.execute(
+                    'DELETE FROM mail_message WHERE model = %s '
+                    'AND (COALESCE(subject, \'\') LIKE %s '
+                    'OR COALESCE(body, \'\') LIKE %s)',
+                    (_MODEL, '%' + self.marker + '%',
+                     '%' + self.marker + '%'),
+                )
                 cr.execute(
                     'DELETE FROM woow_billing_incident '
                     'WHERE external_ref LIKE %s',
