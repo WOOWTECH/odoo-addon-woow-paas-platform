@@ -1946,294 +1946,394 @@ class IrAttachment(models.Model):
         )
 
     @api.model
-    def _committed_billing_owned_carrier_targets(self, targets):
-        """Read target ownership after lock wait, outside the caller RR view."""
-        targets = set(targets)
-        if not targets:
-            return set()
-        activity_ids = sorted(
-            res_id for res_model, res_id in targets
-            if res_model == 'mail.activity')
-        message_ids = sorted(
-            res_id for res_model, res_id in targets
-            if res_model == 'mail.message')
+    def _billing_review_activity_type_id(self):
         review_type = self.env.ref(
             'woow_paas_platform.'
             'mail_activity_type_billing_incident_review',
             raise_if_not_found=False,
         )
-        owned = set()
-        visibility_cr = self.env.registry._db.cursor()
-        try:
-            # Odoo's outer transaction is REPEATABLE READ.  This fresh view is
-            # required when the advisory wait ended after a concurrent commit.
-            visibility_cr.execute(
-                'SET TRANSACTION ISOLATION LEVEL READ COMMITTED')
-            if activity_ids:
-                visibility_cr.execute(
-                    'SELECT id FROM mail_activity '
-                    'WHERE id = ANY(%s) AND ('
-                    'res_model = %s OR activity_type_id = %s)',
-                    (
-                        activity_ids,
-                        'woow.billing.incident',
-                        review_type.id if review_type else 0,
-                    ),
-                )
-                owned.update(
-                    ('mail.activity', res_id)
-                    for res_id, in visibility_cr.fetchall()
-                )
-            if message_ids:
-                visibility_cr.execute(
-                    'SELECT id FROM mail_message '
-                    'WHERE id = ANY(%s) AND model = %s',
-                    (message_ids, 'woow.billing.incident'),
-                )
-                owned.update(
-                    ('mail.message', res_id)
-                    for res_id, in visibility_cr.fetchall()
-                )
-        finally:
-            visibility_cr.close()
-        return owned
+        return review_type.id if review_type else False
 
     @api.model
-    def _dedicated_billing_m2m_attachment_links(self, cr, attachment_ids):
-        """Return ``(attachment_id, activity_id)`` incident-evidence links."""
-        attachment_ids = sorted(set(attachment_ids))
-        if not attachment_ids:
-            return set()
-        review_type = self.env.ref(
-            'woow_paas_platform.'
-            'mail_activity_type_billing_incident_review',
-            raise_if_not_found=False,
+    def _billing_direct_target(self, res_model, res_id):
+        """Return one canonical direct ownership target, or ``False``."""
+        if res_model not in self._BILLING_TARGET_CARRIERS:
+            return False
+        return (
+            res_model,
+            self._canonical_billing_target_res_id(res_model, res_id),
         )
-        if not review_type:
-            return set()
-        cr.execute(
-            'SELECT rel.attachment_id, activity.id '
-            'FROM activity_attachment_rel rel '
-            'JOIN mail_activity activity ON activity.id = rel.activity_id '
-            'WHERE rel.attachment_id = ANY(%s) '
-            'AND activity.res_model = %s '
-            'AND activity.activity_type_id = %s',
-            (
-                attachment_ids,
-                'woow.billing.incident',
-                review_type.id,
-            ),
-        )
-        return set(cr.fetchall())
 
     @api.model
-    def _committed_billing_attachment_snapshot(self, attachment_ids):
-        """Read attachment targets and activity M2M provenance freshly."""
+    def _classify_billing_attachment_provenance(self, raw):
+        """Classify direct and M2M carriers with one shared OR predicate."""
+        review_type_id = self._billing_review_activity_type_id()
+        activity_rows = {}
+        for activity_id, res_model, res_id, activity_type_id in raw[
+                'activity_rows']:
+            activity_rows.setdefault(activity_id, set()).add((
+                res_model, res_id, activity_type_id,
+            ))
+        message_rows = {}
+        for message_id, model, res_id in raw['message_rows']:
+            message_rows.setdefault(message_id, set()).add((model, res_id))
+
+        def target_policy(target):
+            res_model, res_id = target
+            if res_model == 'woow.billing.incident':
+                return True, {res_id}, False
+            if res_model == 'mail.activity':
+                rows = activity_rows.get(res_id, set())
+                protected = {
+                    row for row in rows
+                    if (row[0] == 'woow.billing.incident'
+                        or (review_type_id
+                            and row[2] == review_type_id))
+                }
+                incidents = {
+                    activity_res_id
+                    for activity_res_model, activity_res_id, _type_id
+                    in protected
+                    if activity_res_model == 'woow.billing.incident'
+                }
+                wrong_target = any(
+                    review_type_id
+                    and activity_type_id == review_type_id
+                    and activity_res_model != 'woow.billing.incident'
+                    for activity_res_model, _activity_res_id, activity_type_id
+                    in protected
+                )
+                return bool(protected), incidents, wrong_target
+            if res_model == 'mail.message':
+                incidents = {
+                    message_res_id
+                    for model, message_res_id
+                    in message_rows.get(res_id, set())
+                    if model == 'woow.billing.incident'
+                }
+                return bool(incidents), incidents, False
+            return False, set(), False
+
+        incident_ids_by_attachment = {}
+        protected_attachment_ids = set()
+        wrong_target_attachment_ids = set()
+        direct_owned_attachment_ids = set()
+        carrier_targets = set(raw['extra_direct_targets'])
+        for attachment_id, res_model, res_id in raw['attachment_rows']:
+            target = self._billing_direct_target(res_model, res_id)
+            if not target:
+                continue
+            carrier = self._billing_carrier_target(res_model, res_id)
+            if carrier:
+                carrier_targets.add(carrier)
+            protected, incident_ids, wrong_target = target_policy(target)
+            if protected:
+                protected_attachment_ids.add(attachment_id)
+                direct_owned_attachment_ids.add(attachment_id)
+                incident_ids_by_attachment.setdefault(
+                    attachment_id, set()).update(incident_ids)
+            if wrong_target:
+                wrong_target_attachment_ids.add(attachment_id)
+
+        protected_m2m_links = set()
+        nonprotected_m2m_links = set()
+        for attachment_id, activity_id in raw['m2m_links']:
+            carrier_targets.add(('mail.activity', activity_id))
+            protected, incident_ids, wrong_target = target_policy((
+                'mail.activity', activity_id,
+            ))
+            link = (attachment_id, activity_id)
+            if protected:
+                protected_m2m_links.add(link)
+                protected_attachment_ids.add(attachment_id)
+                incident_ids_by_attachment.setdefault(
+                    attachment_id, set()).update(incident_ids)
+            else:
+                nonprotected_m2m_links.add(link)
+            if wrong_target:
+                wrong_target_attachment_ids.add(attachment_id)
+
+        protected_extra_targets = set()
+        for target in raw['extra_direct_targets']:
+            protected, _incident_ids, _wrong_target = target_policy(target)
+            if protected:
+                protected_extra_targets.add(target)
+
+        return {
+            **raw,
+            'carrier_targets': carrier_targets,
+            'direct_owned_attachment_ids': direct_owned_attachment_ids,
+            'protected_attachment_ids': protected_attachment_ids,
+            'protected_extra_targets': protected_extra_targets,
+            'protected_m2m_links': protected_m2m_links,
+            'nonprotected_m2m_links': nonprotected_m2m_links,
+            'wrong_target_attachment_ids': wrong_target_attachment_ids,
+            'incident_ids_by_attachment': {
+                attachment_id: frozenset(incident_ids)
+                for attachment_id, incident_ids
+                in incident_ids_by_attachment.items()
+            },
+            'protected': bool(
+                protected_attachment_ids or protected_extra_targets),
+        }
+
+    @api.model
+    def _read_billing_attachment_provenance(
+            self, cr, attachment_ids, extra_direct_targets=()):
+        """Read every direct/M2M carrier from the supplied transaction view."""
         attachment_ids = sorted(set(attachment_ids))
-        if not attachment_ids:
-            return {
-                'carrier_targets': set(),
-                'incident_attachment_ids': set(),
-                'm2m_links': set(),
-            }
-        visibility_cr = self.env.registry._db.cursor()
-        try:
-            # The caller can have an old REPEATABLE READ snapshot after waiting
-            # for a parent activity transaction.  Ownership must be decided
-            # from the latest committed direct stamp *and* M2M relation.
-            visibility_cr.execute(
-                'SET TRANSACTION ISOLATION LEVEL READ COMMITTED')
-            visibility_cr.execute(
+        extra_direct_targets = set(extra_direct_targets)
+        attachment_rows = set()
+        m2m_links = set()
+        if attachment_ids:
+            cr.execute(
                 'SELECT id, res_model, res_id FROM ir_attachment '
                 'WHERE id = ANY(%s)',
                 (attachment_ids,),
             )
-            rows = visibility_cr.fetchall()
-            m2m_links = self._dedicated_billing_m2m_attachment_links(
-                visibility_cr, attachment_ids)
-        finally:
-            visibility_cr.close()
-        carrier_targets = {
-            target
-            for _attachment_id, res_model, res_id in rows
-            for target in [self._billing_carrier_target(res_model, res_id)]
-            if target
+            attachment_rows.update(cr.fetchall())
+            cr.execute(
+                'SELECT attachment_id, activity_id '
+                'FROM activity_attachment_rel '
+                'WHERE attachment_id = ANY(%s)',
+                (attachment_ids,),
+            )
+            m2m_links.update(cr.fetchall())
+
+        direct_targets = set(extra_direct_targets)
+        for _attachment_id, res_model, res_id in attachment_rows:
+            target = self._billing_direct_target(res_model, res_id)
+            if target:
+                direct_targets.add(target)
+        activity_ids = {
+            res_id for res_model, res_id in direct_targets
+            if res_model == 'mail.activity'
         }
+        activity_ids.update(
+            activity_id for _attachment_id, activity_id in m2m_links)
+        message_ids = {
+            res_id for res_model, res_id in direct_targets
+            if res_model == 'mail.message'
+        }
+        activity_rows = set()
+        message_rows = set()
+        if activity_ids:
+            cr.execute(
+                'SELECT id, res_model, res_id, activity_type_id '
+                'FROM mail_activity WHERE id = ANY(%s)',
+                (sorted(activity_ids),),
+            )
+            activity_rows.update(cr.fetchall())
+        if message_ids:
+            cr.execute(
+                'SELECT id, model, res_id FROM mail_message '
+                'WHERE id = ANY(%s)',
+                (sorted(message_ids),),
+            )
+            message_rows.update(cr.fetchall())
         return {
-            'carrier_targets': carrier_targets,
-            'incident_attachment_ids': {
-                attachment_id
-                for attachment_id, res_model, _res_id in rows
-                if res_model == 'woow.billing.incident'
-            },
+            'attachment_rows': attachment_rows,
             'm2m_links': m2m_links,
+            'extra_direct_targets': extra_direct_targets,
+            'activity_rows': activity_rows,
+            'message_rows': message_rows,
         }
 
     @api.model
-    def _create_billing_carrier_targets(self, values_list):
+    def _fresh_billing_attachment_provenance(
+            self, attachment_ids, extra_direct_targets=()):
+        visibility_cr = self.env.registry._db.cursor()
+        try:
+            visibility_cr.execute(
+                'SET TRANSACTION ISOLATION LEVEL READ COMMITTED')
+            return self._read_billing_attachment_provenance(
+                visibility_cr, attachment_ids, extra_direct_targets)
+        finally:
+            visibility_cr.close()
+
+    @api.model
+    def _merge_billing_attachment_provenance(self, *snapshots):
+        raw = {
+            key: set()
+            for key in (
+                'attachment_rows',
+                'm2m_links',
+                'extra_direct_targets',
+                'activity_rows',
+                'message_rows',
+            )
+        }
+        for snapshot in snapshots:
+            for key in raw:
+                raw[key].update(snapshot[key])
+        return self._classify_billing_attachment_provenance(raw)
+
+    @api.model
+    def _lock_and_refresh_billing_attachment_provenance(
+            self, attachment_ids=(), extra_direct_targets=()):
+        """Fresh lookup, carrier locks, then authoritative fresh recheck.
+
+        The caller cursor is merged only to retain same-transaction rows which
+        a separate READ COMMITTED cursor cannot see.  Committed stale-race
+        ownership always comes from the fresh pre/post-lock snapshots.
+        """
+        attachment_ids = sorted(set(attachment_ids))
+        extra_direct_targets = set(extra_direct_targets)
+
+        def read_merged():
+            return self._merge_billing_attachment_provenance(
+                self._fresh_billing_attachment_provenance(
+                    attachment_ids, extra_direct_targets),
+                self._read_billing_attachment_provenance(
+                    self.env.cr, attachment_ids, extra_direct_targets),
+            )
+
+        snapshot = read_merged()
+        locked_targets = set()
+        # Every relation carrier participates, including ordinary activities.
+        # That is what makes an ordinary→protected update visible after wait.
+        for _attempt in range(8):
+            new_targets = snapshot['carrier_targets'] - locked_targets
+            if new_targets:
+                _acquire_billing_carrier_target_locks(
+                    self.env.cr, new_targets)
+                locked_targets.update(new_targets)
+            snapshot = read_merged()
+            if snapshot['carrier_targets'] <= locked_targets:
+                return snapshot
+        _logger.error(
+            '[BILLING_INCIDENT] '
+            'category=attachment_provenance_lock_convergence_failed')
+        raise AccessError(_(
+            'Attachments are not allowed on billing incident activities.'
+        ))
+
+    @api.model
+    def _activity_carrier_attachment_ids(self, activity_ids):
+        """Return direct and all M2M attachment ids after carrier lock wait."""
+        activity_ids = sorted(set(activity_ids))
+        if not activity_ids:
+            return set()
+
+        def read(cr):
+            cr.execute(
+                'SELECT id FROM ir_attachment '
+                'WHERE res_model = %s AND res_id = ANY(%s) '
+                'UNION SELECT attachment_id FROM activity_attachment_rel '
+                'WHERE activity_id = ANY(%s)',
+                ('mail.activity', activity_ids, activity_ids),
+            )
+            return {attachment_id for attachment_id, in cr.fetchall()}
+
+        visibility_cr = self.env.registry._db.cursor()
+        try:
+            visibility_cr.execute(
+                'SET TRANSACTION ISOLATION LEVEL READ COMMITTED')
+            committed_ids = read(visibility_cr)
+        finally:
+            visibility_cr.close()
+        return committed_ids | read(self.env.cr)
+
+    @api.model
+    def _create_billing_direct_targets(self, values_list):
         targets = []
         for values in values_list:
             res_model = values.get(
                 'res_model', self.env.context.get('default_res_model'))
             res_id = values.get(
                 'res_id', self.env.context.get('default_res_id'))
-            target = self._billing_carrier_target(res_model, res_id)
+            target = self._billing_direct_target(res_model, res_id)
             if target:
                 targets.append(target)
         return targets
 
+    @api.model
+    def _raise_billing_attachment_guard(self):
+        raise AccessError(_(
+            'Attachments are not allowed on billing incident activities.'
+        ))
+
     @api.model_create_multi
     def create(self, values_list):
-        """Lock/canonicalize carriers before checking and writing payload."""
-        carrier_targets = self._create_billing_carrier_targets(values_list)
-        _acquire_billing_carrier_target_locks(
-            self.env.cr, carrier_targets)
-        committed_owned = self._committed_billing_owned_carrier_targets(
-            carrier_targets)
-        if (committed_owned
-                or any(self._values_billing_owned_target(values)
-                       for values in values_list)):
-            raise AccessError(_(
-                'Attachments are not allowed on billing incident activities.'
-            ))
+        """Use the shared fresh direct+M2M ownership protocol twice."""
+        prospective_targets = self._create_billing_direct_targets(values_list)
+        preflight = self._lock_and_refresh_billing_attachment_provenance(
+            extra_direct_targets=prospective_targets)
+        if preflight['protected']:
+            self._raise_billing_attachment_guard()
         with self.env.cr.savepoint(flush=False):
             attachments = super().create(values_list)
             attachments.flush_recordset()
-            # Recheck actual stored targets in case ORM defaults/conversion
-            # produced a final target different from the preflight payload.
             final_targets = [
                 target
                 for attachment in attachments.sudo()
-                for target in [self._billing_carrier_target(
+                for target in [self._billing_direct_target(
                     attachment.res_model, attachment.res_id)]
                 if target
             ]
-            _acquire_billing_carrier_target_locks(
-                self.env.cr, final_targets)
-            final_committed_owned = (
-                self._committed_billing_owned_carrier_targets(final_targets))
-            if (final_committed_owned
-                    or any(self._billing_owned_target(
-                        attachment.res_model, attachment.res_id)
-                        for attachment in attachments.sudo())):
-                raise AccessError(_(
-                    'Attachments are not allowed on billing incident '
-                    'activities.'
-                ))
+            postcheck = (
+                self._lock_and_refresh_billing_attachment_provenance(
+                    attachments.ids,
+                    extra_direct_targets=final_targets,
+                )
+            )
+            if postcheck['protected']:
+                self._raise_billing_attachment_guard()
         return attachments
 
     def write(self, values):
-        """Lock old/prospective carriers before check/write and postcheck."""
+        """Reject every mutation when direct or M2M provenance is protected."""
         if _is_attachment_cleanup(self.env):
-            # The same JSON-inexpressible capability deletes future-id attack
-            # payloads and preserves legacy evidence before its dedicated
-            # activity carrier is deleted.  Both are server-only metadata
-            # maintenance inside the carrier transaction.
+            # Only this object-identity capability may atomically re-anchor,
+            # privatize, clear tokens, or remove malicious future-id payloads.
             return super().write(values)
-        carrier_targets = []
-        for attachment in self.sudo():
-            for res_model, res_id in (
-                    (attachment.res_model, attachment.res_id),
-                    (
-                        values.get('res_model', attachment.res_model),
-                        values.get('res_id', attachment.res_id),
-                    )):
-                target = self._billing_carrier_target(res_model, res_id)
-                if target:
-                    carrier_targets.append(target)
-        _acquire_billing_carrier_target_locks(
-            self.env.cr, carrier_targets)
-        committed_owned = self._committed_billing_owned_carrier_targets(
-            carrier_targets)
-        if committed_owned:
-            raise AccessError(_(
-                'Attachments are not allowed on billing incident activities.'
-            ))
-        for attachment in self.sudo():
-            old_target = self._billing_owned_target(
-                attachment.res_model, attachment.res_id)
-            new_target = self._billing_owned_target(
+        attachments = self.sudo()
+        prospective_targets = [
+            target
+            for attachment in attachments
+            for target in [self._billing_direct_target(
                 values.get('res_model', attachment.res_model),
                 values.get('res_id', attachment.res_id),
-            )
-            if old_target or new_target:
-                raise AccessError(_(
-                    'Attachments are not allowed on billing incident '
-                    'activities.'
-                ))
+            )]
+            if target
+        ]
+        preflight = self._lock_and_refresh_billing_attachment_provenance(
+            attachments.ids,
+            extra_direct_targets=prospective_targets,
+        )
+        if preflight['protected']:
+            self._raise_billing_attachment_guard()
         with self.env.cr.savepoint(flush=False):
             result = super().write(values)
             self.flush_recordset()
             final_targets = [
                 target
                 for attachment in self.sudo()
-                for target in [self._billing_carrier_target(
+                for target in [self._billing_direct_target(
                     attachment.res_model, attachment.res_id)]
                 if target
             ]
-            _acquire_billing_carrier_target_locks(
-                self.env.cr, final_targets)
-            final_committed_owned = (
-                self._committed_billing_owned_carrier_targets(final_targets))
-            if (final_committed_owned
-                    or any(self._billing_owned_target(
-                        attachment.res_model, attachment.res_id)
-                        for attachment in self.sudo())):
-                raise AccessError(_(
-                    'Attachments are not allowed on billing incident '
-                    'activities.'
-                ))
+            postcheck = (
+                self._lock_and_refresh_billing_attachment_provenance(
+                    self.ids,
+                    extra_direct_targets=final_targets,
+                )
+            )
+            if postcheck['protected']:
+                self._raise_billing_attachment_guard()
         return result
 
     def unlink(self):
-        """Preflight the whole recordset before deleting incident evidence."""
+        """Preflight the whole recordset with the shared ownership protocol."""
         if not self:
             return super().unlink()
         if (_is_attachment_cleanup(self.env)
                 or _is_odoo_module_uninstall(self.env)):
             return super().unlink()
-
-        attachments = self.sudo()
-        attachment_ids = attachments.ids
-        # Discover committed M2M carriers on a fresh view before entering the
-        # same advisory-lock protocol used by direct activity attachments.
-        # The second fresh snapshot after the wait is authoritative: a parent
-        # may have atomically cleared the M2M edge and re-anchored the row while
-        # this caller's REPEATABLE READ view stayed stale.
-        committed_before_lock = (
-            self._committed_billing_attachment_snapshot(attachment_ids))
-        carrier_targets = {
-            target
-            for attachment in attachments
-            for target in [self._billing_carrier_target(
-                attachment.res_model, attachment.res_id)]
-            if target
-        }
-        carrier_targets.update(
-            committed_before_lock['carrier_targets'])
-        carrier_targets.update(
-            ('mail.activity', activity_id)
-            for _attachment_id, activity_id
-            in committed_before_lock['m2m_links']
-        )
-        _acquire_billing_carrier_target_locks(
-            self.env.cr, carrier_targets)
-        committed_after_lock = (
-            self._committed_billing_attachment_snapshot(attachment_ids))
-        committed_owned = self._committed_billing_owned_carrier_targets(
-            committed_after_lock['carrier_targets'])
-        local_m2m_links = self._dedicated_billing_m2m_attachment_links(
-            self.env.cr, attachment_ids)
-        if (committed_owned
-                or committed_after_lock['incident_attachment_ids']
-                or committed_after_lock['m2m_links']
-                or local_m2m_links
-                or any(self._billing_owned_target(
-                    attachment.res_model, attachment.res_id)
-                    for attachment in attachments)):
-            raise AccessError(_(
-                'Attachments are not allowed on billing incident activities.'
-            ))
+        snapshot = self._lock_and_refresh_billing_attachment_provenance(
+            self.ids)
+        if snapshot['protected']:
+            self._raise_billing_attachment_guard()
         return super().unlink()
 
 
@@ -2442,49 +2542,112 @@ class MailActivity(models.Model):
             self._dedicated_billing_activities().sudo().mapped('res_id')))
 
     def _reattach_dedicated_billing_evidence(self):
-        """Move legacy carrier payloads to the durable incident ledger row."""
+        """Re-anchor evidence only when all provenance has one meaning."""
         if not self or _is_odoo_module_uninstall(self.env):
             return True
-        dedicated = self.sudo()
-        _acquire_billing_carrier_target_locks(
-            self.env.cr,
-            [('mail.activity', activity_id) for activity_id in dedicated.ids],
+        carriers = self.sudo()
+        carrier_targets = {
+            ('mail.activity', activity_id) for activity_id in carriers.ids
+        }
+        Attachment = self.env['ir.attachment'].sudo()
+        attachment_ids = set()
+        snapshot = False
+        # Discover before locking so all known direct/M2M carriers enter the
+        # deterministic global order together.  Re-read after the wait to pick
+        # up a transaction which held one selected carrier before this parent.
+        for _attempt in range(8):
+            attachment_ids.update(
+                Attachment._activity_carrier_attachment_ids(carriers.ids))
+            snapshot = (
+                Attachment._lock_and_refresh_billing_attachment_provenance(
+                    attachment_ids,
+                    extra_direct_targets=carrier_targets,
+                )
+            )
+            refreshed_ids = Attachment._activity_carrier_attachment_ids(
+                carriers.ids)
+            if refreshed_ids <= attachment_ids:
+                break
+            attachment_ids.update(refreshed_ids)
+        else:
+            _logger.error(
+                '[BILLING_INCIDENT] '
+                'category=attachment_provenance_lock_convergence_failed')
+            raise AccessError(_(
+                'Billing incident evidence has ambiguous provenance; '
+                'parent deletion was cancelled.'
+            ))
+        if not attachment_ids:
+            return True
+
+        incident_by_attachment = {}
+        conflict_reason = False
+        for attachment_id in sorted(attachment_ids):
+            incident_ids = snapshot['incident_ids_by_attachment'].get(
+                attachment_id, frozenset())
+            has_ordinary_m2m = any(
+                linked_attachment_id == attachment_id
+                for linked_attachment_id, _activity_id
+                in snapshot['nonprotected_m2m_links']
+            )
+            if attachment_id in snapshot['wrong_target_attachment_ids']:
+                conflict_reason = 'dedicated_wrong_target'
+            elif has_ordinary_m2m:
+                conflict_reason = 'protected_and_ordinary_m2m'
+            elif len(incident_ids) > 1:
+                conflict_reason = 'multiple_incidents'
+            elif len(incident_ids) != 1:
+                conflict_reason = 'missing_incident'
+            if conflict_reason:
+                break
+            incident_by_attachment[attachment_id] = next(iter(incident_ids))
+
+        if conflict_reason:
+            # Deliberately log only a fixed category/reason.  Attachment ids,
+            # names, anchors, tokens, and bytes are evidence and never logs.
+            _logger.error(
+                '[BILLING_INCIDENT] '
+                'category=attachment_provenance_conflict reason=%s',
+                conflict_reason,
+            )
+            raise AccessError(_(
+                'Billing incident evidence has ambiguous provenance; '
+                'parent deletion was cancelled.'
+            ))
+
+        attachment_ids_by_incident = {}
+        for attachment_id, incident_id in incident_by_attachment.items():
+            attachment_ids_by_incident.setdefault(
+                incident_id, []).append(attachment_id)
+        for incident_id, incident_attachment_ids in sorted(
+                attachment_ids_by_incident.items()):
+            attachments = Attachment.browse(incident_attachment_ids)
+            reattach_values = {
+                'res_model': 'woow.billing.incident',
+                'res_id': incident_id,
+                # Re-anchor, visibility hardening, and token revocation are one
+                # private-capability write.  No content field is ever included.
+                'public': False,
+            }
+            if 'access_token' in attachments._fields:
+                reattach_values['access_token'] = False
+            _attachment_cleanup(attachments).write(reattach_values)
+
+        # Every M2M edge was included in the preflight.  Clear all of them only
+        # after every attachment has a durable private direct incident anchor.
+        self.env.cr.execute(
+            'DELETE FROM activity_attachment_rel '
+            'WHERE attachment_id = ANY(%s)',
+            (sorted(attachment_ids),),
         )
-        for incident_id, activities in dedicated.grouped('res_id').items():
-            direct_attachments = self.env['ir.attachment'].sudo().search([
-                ('res_model', '=', self._name),
-                ('res_id', 'in', activities.ids),
+        linked_activity_ids = {
+            activity_id
+            for _attachment_id, activity_id in snapshot['m2m_links']
+        }
+        if linked_activity_ids:
+            self.browse(linked_activity_ids).invalidate_recordset([
+                'attachment_ids',
             ])
-            m2m_attachments = activities.sudo().mapped('attachment_ids')
-            # One row can carry both the legacy direct stamp and the Odoo M2M
-            # edge.  Recordset union deduplicates it before the single private
-            # metadata write, preserving bytes/checksum.
-            attachments = direct_attachments | m2m_attachments
-            if attachments:
-                reattach_values = {
-                    'res_model': 'woow.billing.incident',
-                    'res_id': incident_id,
-                    # Odoo 18 serves ``public`` attachments without the target
-                    # ACL.  Re-anchoring and visibility hardening are one
-                    # private-capability write, never two observable states.
-                    'public': False,
-                }
-                # Odoo 18 core defines this token on ir.attachment and accepts
-                # it in /web/content instead of normal ACLs.  Keep the guard
-                # conditional for registries which remove/rename the optional
-                # field, but clear it whenever present.  No content field is
-                # included, so datas/checksum remain unchanged.
-                if 'access_token' in attachments._fields:
-                    reattach_values['access_token'] = False
-                _attachment_cleanup(attachments).write(reattach_values)
-            if m2m_attachments:
-                # Clear provenance only after every linked payload has its
-                # durable private incident anchor.  This ORM write and the
-                # subsequent parent unlink share the caller transaction; the
-                # terminal capability cannot be forged through JSON RPC.
-                _activity_terminal(activities).write({
-                    'attachment_ids': [(5, 0, 0)],
-                })
         return True
 
     def _billing_incident_ids(self):
@@ -2621,14 +2784,15 @@ class MailActivity(models.Model):
         if dedicated:
             # Do not call core _action_done for the dedicated type: core posts
             # to followers before unlinking, which can address a stale roster.
-            # A review activity is only a dismissible alert; the incident form
-            # button is the sole resolution transition.
-            guarded = _activity_terminal(dedicated)
-            guarded._reattach_dedicated_billing_evidence()
-            super(MailActivity, guarded).unlink()
-            for incident_id in dedicated_incident_ids:
-                Incident._ensure_review_activities_current_cursor(
-                    incident_id, silent=True)
+            # Re-anchor, parent deletion, and silent re-arm are one rollback
+            # unit even if a caller catches the module provenance denial.
+            with self.env.cr.savepoint(flush=False):
+                guarded = _activity_terminal(dedicated)
+                guarded._reattach_dedicated_billing_evidence()
+                super(MailActivity, guarded).unlink()
+                for incident_id in dedicated_incident_ids:
+                    Incident._ensure_review_activities_current_cursor(
+                        incident_id, silent=True)
         return messages, next_activities
 
     def unlink(self):
@@ -2636,6 +2800,7 @@ class MailActivity(models.Model):
         self._require_billing_activity_access_authority('unlink')
         scheduler_cleanup = _is_activity_scheduler(self.env)
         dedicated = self._dedicated_billing_activities()
+        evidence_carriers = self._stored_billing_activity_targets(self)
         if not scheduler_cleanup:
             self._validate_dedicated_terminal_inputs(dedicated)
         incident_ids = self._billing_incident_ids()
@@ -2647,11 +2812,14 @@ class MailActivity(models.Model):
             # incident path enters roster first, then sorted review locks.
             Incident._acquire_review_activity_locks(
                 self.env.cr, incident_ids)
-        dedicated._reattach_dedicated_billing_evidence()
-        result = super().unlink()
-        if scheduler_cleanup:
-            return result
-        for incident_id in dedicated_incident_ids:
-            Incident._ensure_review_activities_current_cursor(
-                incident_id, silent=True)
+        # Include both OR legs: any incident-target activity and any dedicated
+        # review type.  A dedicated type on a non-incident target reaches the
+        # provenance validator and fails loud instead of falling into core.
+        with self.env.cr.savepoint(flush=False):
+            evidence_carriers._reattach_dedicated_billing_evidence()
+            result = super().unlink()
+            if not scheduler_cleanup:
+                for incident_id in dedicated_incident_ids:
+                    Incident._ensure_review_activities_current_cursor(
+                        incident_id, silent=True)
         return result

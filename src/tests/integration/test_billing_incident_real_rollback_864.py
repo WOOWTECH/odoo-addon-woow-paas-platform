@@ -12,6 +12,7 @@ registry cursors、真 PostgreSQL 40001、第三條連線驗終態。
 本 tag 刻意 `-standard`；PR-D 不改 CI workflow，須在 sandbox 明確選 tag。
 """
 
+import base64
 import logging
 import os
 import sys
@@ -1680,6 +1681,409 @@ class TestBillingIncidentRealTransactions864(BaseCase):
                 [row_id for row_id, in verify_cr.fetchall()],
                 mixed_ids,
                 'third connection must see only private-cleanup payload gone',
+            )
+
+    def test_parent_reanchor_rejects_ambiguous_provenance_atomically(self):
+        """No carrier ordering may silently choose an incident anchor."""
+        incident_a = self._call_log(self._snapshot(
+            'provenance-incident-a', state='needs_human'))
+        incident_b = self._call_log(self._snapshot(
+            'provenance-incident-b', state='needs_human'))
+        marker = '%s-provenance' % self.marker
+
+        with self.registry.cursor() as setup_cr:
+            env = api.Environment(setup_cr, odoo.SUPERUSER_ID, {})
+            review_type = env.ref(
+                'woow_paas_platform.'
+                'mail_activity_type_billing_incident_review')
+            todo_type = env.ref('mail.mail_activity_data_todo')
+            incident_model = env['ir.model']._get(_MODEL)
+            partner_model = env['ir.model']._get('res.partner')
+            template = env['mail.activity'].sudo().search([
+                ('res_model', '=', _MODEL),
+                ('res_id', '=', incident_a),
+                ('activity_type_id', '=', review_type.id),
+                ('user_id', '=', self.manager_user_id),
+                ('active', '=', True),
+            ], limit=1)
+            self.assertTrue(template)
+
+            def clone_activity(suffix, res_model, res_model_id, res_id,
+                               activity_type_id):
+                setup_cr.execute(
+                    'INSERT INTO mail_activity '
+                    '(res_model_id, res_model, res_id, res_name, '
+                    'activity_type_id, user_id, summary, note, date_deadline, '
+                    'automated, active, create_uid, write_uid, '
+                    'create_date, write_date) '
+                    'SELECT %s, %s, %s, res_name, %s, user_id, %s, note, '
+                    'date_deadline, automated, active, create_uid, write_uid, '
+                    'NOW(), NOW() FROM mail_activity WHERE id = %s '
+                    'RETURNING id',
+                    (
+                        res_model_id,
+                        res_model,
+                        res_id,
+                        activity_type_id,
+                        '%s-%s' % (marker, suffix),
+                        template.id,
+                    ),
+                )
+                return setup_cr.fetchone()[0]
+
+            multi_parent = clone_activity(
+                'multi-parent', _MODEL, incident_model.id,
+                incident_a, review_type.id)
+            multi_other = clone_activity(
+                'multi-other', _MODEL, incident_model.id,
+                incident_b, review_type.id)
+            direct_parent = clone_activity(
+                'direct-parent', _MODEL, incident_model.id,
+                incident_a, review_type.id)
+            shared_parent = clone_activity(
+                'shared-parent', _MODEL, incident_model.id,
+                incident_a, review_type.id)
+            ordinary_other = clone_activity(
+                'ordinary-other', 'res.partner', partner_model.id,
+                self.control_partner_id, todo_type.id)
+            wrong_parent = clone_activity(
+                'wrong-parent', 'res.partner', partner_model.id,
+                self.control_partner_id, review_type.id)
+            success_parent = clone_activity(
+                'success-parent', _MODEL, incident_model.id,
+                incident_a, review_type.id)
+            success_other = clone_activity(
+                'success-other', _MODEL, incident_model.id,
+                incident_a, review_type.id)
+
+            attachments = env['ir.attachment'].sudo().create([{
+                'name': '%s-%s.bin' % (marker, purpose),
+                'datas': base64.b64encode(
+                    ('payload-%s' % purpose).encode()),
+                'res_model': 'res.partner',
+                'res_id': self.control_partner_id,
+            } for purpose in (
+                'multi-incident', 'direct-conflict', 'shared-purpose',
+                'wrong-target', 'same-incident-success',
+            )])
+            (
+                multi_attachment,
+                direct_attachment,
+                shared_attachment,
+                wrong_attachment,
+                success_attachment,
+            ) = attachments
+            for attachment in attachments:
+                token = '%s-token-%s' % (marker, attachment.id)
+                setup_cr.execute(
+                    'UPDATE ir_attachment SET public = true, access_token = %s '
+                    'WHERE id = %s',
+                    (token, attachment.id),
+                )
+            setup_cr.execute(
+                'UPDATE ir_attachment SET res_model = %s, res_id = %s '
+                'WHERE id = %s',
+                (_MODEL, incident_b, direct_attachment.id),
+            )
+            setup_cr.execute(
+                'UPDATE ir_attachment SET res_model = %s, res_id = %s '
+                'WHERE id = %s',
+                ('mail.activity', success_parent, success_attachment.id),
+            )
+            setup_cr.execute(
+                'INSERT INTO activity_attachment_rel '
+                '(activity_id, attachment_id) VALUES '
+                '(%s, %s), (%s, %s), (%s, %s), (%s, %s), '
+                '(%s, %s), (%s, %s), (%s, %s), (%s, %s)',
+                (
+                    multi_parent, multi_attachment.id,
+                    multi_other, multi_attachment.id,
+                    direct_parent, direct_attachment.id,
+                    shared_parent, shared_attachment.id,
+                    ordinary_other, shared_attachment.id,
+                    wrong_parent, wrong_attachment.id,
+                    success_parent, success_attachment.id,
+                    success_other, success_attachment.id,
+                ),
+            )
+            failure_parent_ids = [
+                multi_parent, direct_parent, shared_parent, wrong_parent,
+            ]
+            failure_attachment_ids = [
+                multi_attachment.id,
+                direct_attachment.id,
+                shared_attachment.id,
+                wrong_attachment.id,
+            ]
+            expected_attachment_rows = {}
+            setup_cr.execute(
+                'SELECT id, res_model, res_id, public, access_token, '
+                'checksum, store_fname, db_datas FROM ir_attachment '
+                'WHERE id = ANY(%s) ORDER BY id',
+                (failure_attachment_ids,),
+            )
+            for row in setup_cr.fetchall():
+                expected_attachment_rows[row[0]] = row[1:]
+            setup_cr.execute(
+                'SELECT activity_id, attachment_id '
+                'FROM activity_attachment_rel '
+                'WHERE attachment_id = ANY(%s) '
+                'ORDER BY activity_id, attachment_id',
+                (failure_attachment_ids,),
+            )
+            expected_failure_edges = setup_cr.fetchall()
+            success_attachment_id = success_attachment.id
+            setup_cr.commit()
+
+        logger_target = (
+            'odoo.addons.woow_paas_platform.models.billing_incident._logger')
+        denial_messages = []
+        with patch(logger_target) as logger:
+            for parent_id in failure_parent_ids:
+                with self.registry.cursor() as caller_cr:
+                    caller_env = api.Environment(
+                        caller_cr, self.manager_user_id, {})
+                    try:
+                        caller_env['mail.activity'].browse(parent_id).unlink()
+                    except AccessError as error:
+                        denial_messages.append(str(error))
+                        caller_cr.commit()
+                    else:
+                        self.fail(
+                            'ambiguous provenance parent unlink must fail loud')
+            log_calls = repr(logger.mock_calls)
+        self.assertTrue(denial_messages)
+        self.assertTrue(all(
+            'ambiguous provenance' in message
+            for message in denial_messages
+        ), 'denial 必須是 module 自訂 provenance error，不是 core ACL')
+        self.assertIn('category=attachment_provenance_conflict', log_calls)
+        self.assertNotIn(marker, log_calls, 'provenance log 不得記 attachment raw')
+
+        with self.registry.cursor() as verify_cr:
+            verify_cr.execute(
+                'SELECT id FROM mail_activity WHERE id = ANY(%s) ORDER BY id',
+                (failure_parent_ids,),
+            )
+            self.assertEqual(
+                [activity_id for activity_id, in verify_cr.fetchall()],
+                sorted(failure_parent_ids),
+                '任一 ambiguity 都不得刪 parent',
+            )
+            verify_cr.execute(
+                'SELECT id, res_model, res_id, public, access_token, '
+                'checksum, store_fname, db_datas FROM ir_attachment '
+                'WHERE id = ANY(%s) ORDER BY id',
+                (failure_attachment_ids,),
+            )
+            self.assertEqual(
+                {row[0]: row[1:] for row in verify_cr.fetchall()},
+                expected_attachment_rows,
+                'catch＋commit 後 bytes/token/anchor 必須逐欄不變',
+            )
+            verify_cr.execute(
+                'SELECT activity_id, attachment_id '
+                'FROM activity_attachment_rel '
+                'WHERE attachment_id = ANY(%s) '
+                'ORDER BY activity_id, attachment_id',
+                (failure_attachment_ids,),
+            )
+            self.assertEqual(
+                verify_cr.fetchall(), expected_failure_edges,
+                'catch＋commit 後全部 M2M relations 必須不變',
+            )
+
+        from odoo.addons.woow_paas_platform.models import billing_incident
+        with self.registry.cursor() as success_cr:
+            success_env = api.Environment(
+                success_cr, self.manager_user_id, {})
+            success_record = success_env['mail.activity'].browse(
+                success_parent)
+            self.assertTrue(
+                billing_incident._activity_scheduler(
+                    success_record).unlink())
+            success_cr.commit()
+        with self.registry.cursor() as verify_cr:
+            verify_cr.execute(
+                'SELECT res_model, res_id, public, access_token '
+                'FROM ir_attachment WHERE id = %s',
+                (success_attachment_id,),
+            )
+            self.assertEqual(
+                verify_cr.fetchone(), (_MODEL, incident_a, False, None),
+                '同 incident multiple carriers 去重後必須原子改錨 private',
+            )
+            verify_cr.execute(
+                'SELECT 1 FROM activity_attachment_rel '
+                'WHERE attachment_id = %s',
+                (success_attachment_id,),
+            )
+            self.assertFalse(
+                verify_cr.fetchall(),
+                '成功改錨必須清除 attachment 的全部 M2M provenance',
+            )
+
+    def test_attachment_guard_rechecks_fresh_after_real_carrier_wait(self):
+        """An ordinary pre-lock edge becoming protected must deny stale write."""
+        incident_id = self._call_log(self._snapshot(
+            'attachment-carrier-stale-race', state='needs_human'))
+        marker = '%s-carrier-stale' % self.marker
+        with self.registry.cursor() as setup_cr:
+            env = api.Environment(setup_cr, odoo.SUPERUSER_ID, {})
+            ordinary = env['mail.activity'].sudo().create({
+                'res_model_id': env['ir.model']._get('res.partner').id,
+                'res_id': self.control_partner_id,
+                'activity_type_id': env.ref(
+                    'mail.mail_activity_data_todo').id,
+                'user_id': self.manager_user_id,
+                'summary': marker,
+                'date_deadline': fields.Date.today(),
+            })
+            stale_attachment = env['ir.attachment'].sudo().create({
+                'name': '%s-protected.bin' % marker,
+                'datas': b'c3RhbGUgY2Fycmllcg==',
+                'res_model': 'res.partner',
+                'res_id': self.control_partner_id,
+            })
+            ordinary_control = env['ir.attachment'].sudo().create({
+                'name': '%s-ordinary.bin' % marker,
+                'datas': b'b3JkaW5hcnkgY29udHJvbA==',
+                'res_model': 'res.partner',
+                'res_id': self.control_partner_id,
+            })
+            setup_cr.execute(
+                'INSERT INTO activity_attachment_rel '
+                '(activity_id, attachment_id) VALUES (%s, %s)',
+                (ordinary.id, stale_attachment.id),
+            )
+            ordinary_id = ordinary.id
+            stale_attachment_id = stale_attachment.id
+            ordinary_control_id = ordinary_control.id
+            setup_cr.commit()
+
+        blocker_cr = self.registry.cursor()
+        caller_cr = self.registry._db.cursor()
+        caller_env = api.Environment(
+            caller_cr, odoo.SUPERUSER_ID, {})
+        caller_cr.execute('SELECT pg_backend_pid()')
+        caller_pid = caller_cr.fetchone()[0]
+        results = {'caller_pid': caller_pid}
+        ready = threading.Event()
+        done = threading.Event()
+        try:
+            blocker_cr.execute('SELECT pg_backend_pid()')
+            blocker_pid = blocker_cr.fetchone()[0]
+            blocker_cr.execute(
+                'SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))',
+                ('mail.activity:%s' % ordinary_id,),
+            )
+            blocker_cr.execute(
+                'UPDATE mail_activity SET res_model_id = '
+                '(SELECT id FROM ir_model WHERE model = %s), '
+                'res_model = %s, res_id = %s WHERE id = %s',
+                (_MODEL, _MODEL, incident_id, ordinary_id),
+            )
+
+            def stale_writer():
+                try:
+                    ready.set()
+                    try:
+                        caller_env['ir.attachment'].sudo().browse(
+                            stale_attachment_id).write({'public': True})
+                    except AccessError as error:
+                        results['error'] = str(error)
+                        caller_cr.commit()
+                    else:
+                        results['allowed'] = True
+                        caller_cr.commit()
+                except Exception:
+                    results['traceback'] = traceback.format_exc()
+                    caller_cr.rollback()
+                finally:
+                    done.set()
+
+            thread = threading.Thread(target=stale_writer, daemon=True)
+            thread.start()
+            self.assertTrue(ready.wait(5), 'caller cursor must start')
+            self.assertNotEqual(
+                blocker_pid, caller_pid,
+                'integration 必須使用不同 pg_backend_pid',
+            )
+            waiting = False
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline:
+                with self.registry.cursor() as observe_cr:
+                    observe_cr.execute(
+                        'SELECT wait_event_type, state FROM pg_stat_activity '
+                        'WHERE pid = %s',
+                        (caller_pid,),
+                    )
+                    row = observe_cr.fetchone()
+                if row and row[0] == 'Lock' and row[1] == 'active':
+                    waiting = True
+                    break
+                time.sleep(0.02)
+            blocker_cr.commit()
+            if not done.wait(10):
+                with self.registry.cursor() as diagnose_cr:
+                    diagnose_cr.execute(
+                        'SELECT pid, wait_event_type, wait_event, state, query '
+                        'FROM pg_stat_activity WHERE pid = ANY(%s) '
+                        'ORDER BY pid',
+                        ([blocker_pid, caller_pid],),
+                    )
+                    results['timeout_activity'] = diagnose_cr.fetchall()
+            self.assertTrue(
+                done.is_set(),
+                'stale writer must terminate: %r'
+                % results.get('timeout_activity'),
+            )
+            thread.join(timeout=1)
+            self.assertTrue(
+                waiting,
+                'caller 必須與 blocker 同時存在並真正在 carrier lock 等待',
+            )
+        finally:
+            if not blocker_cr.closed:
+                blocker_cr.rollback()
+                blocker_cr.close()
+            if not caller_cr.closed:
+                caller_cr.rollback()
+                caller_cr.close()
+
+        self.assertNotIn('traceback', results, results.get('traceback'))
+        self.assertNotIn('allowed', results)
+        self.assertIn('Attachments are not allowed', results.get('error', ''))
+        with self.registry.cursor() as verify_cr:
+            verify_cr.execute(
+                'SELECT public FROM ir_attachment WHERE id = %s',
+                (stale_attachment_id,),
+            )
+            self.assertEqual(
+                verify_cr.fetchone(), (None,),
+                'post-lock fresh denial 後 write 必須完全 rollback',
+            )
+            verify_cr.execute(
+                'SELECT 1 FROM activity_attachment_rel '
+                'WHERE activity_id = %s AND attachment_id = %s',
+                (ordinary_id, stale_attachment_id),
+            )
+            self.assertTrue(verify_cr.fetchone())
+
+        with self.registry.cursor() as control_cr:
+            env = api.Environment(control_cr, odoo.SUPERUSER_ID, {})
+            control = env['ir.attachment'].sudo().browse(ordinary_control_id)
+            self.assertTrue(control.write({'public': True}))
+            self.assertTrue(control.unlink())
+            control_cr.commit()
+        with self.registry.cursor() as verify_cr:
+            verify_cr.execute(
+                'SELECT 1 FROM ir_attachment WHERE id = %s',
+                (ordinary_control_id,),
+            )
+            self.assertFalse(
+                verify_cr.fetchone(),
+                'ordinary-only write＋unlink 正對照必須保留 core behavior',
             )
 
     def test_parent_activity_cleanup_matches_core_and_real_uninstall(self):

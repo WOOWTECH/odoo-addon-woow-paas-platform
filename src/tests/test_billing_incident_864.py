@@ -4571,6 +4571,162 @@ class TestBillingIncidentRpcWriteGuard864(HttpCase):
                     '改錨後 public URL 與舊 token URL 都必須失效',
                 )
 
+    def test_manager_rpc_m2m_or_predicate_and_write_guards(self):
+        """Both ownership legs reject every M2M-only payload mutation."""
+        review_type = self.env.ref(
+            'woow_paas_platform.mail_activity_type_billing_incident_review')
+        todo_type = self.env.ref('mail.mail_activity_data_todo')
+        incident_model = self.env['ir.model']._get('woow.billing.incident')
+        partner_model = self.env['ir.model']._get('res.partner')
+        control_project = self.env['project.project'].with_user(
+            self.manager_a).create({
+                'name': 'M2M write ACL control %s' % uuid.uuid4().hex,
+            })
+        attachment_acl_carrier = self.env['mail.activity'].sudo().create({
+            'res_model_id': self.env['ir.model']._get('project.project').id,
+            'res_id': control_project.id,
+            'activity_type_id': todo_type.id,
+            'user_id': self.manager_a.id,
+            'summary': 'Ordinary direct anchor for RPC ACL control',
+            'date_deadline': fields.Date.today(),
+        })
+
+        generic_incident = self.env['mail.activity'].sudo().create({
+            'res_model_id': partner_model.id,
+            'res_id': self.manager_a.partner_id.id,
+            'activity_type_id': todo_type.id,
+            'user_id': self.manager_a.id,
+            'summary': 'Generic-type incident M2M guard',
+            'date_deadline': fields.Date.today(),
+        })
+        dedicated_wrong_target = self.env['mail.activity'].sudo().create({
+            'res_model_id': partner_model.id,
+            'res_id': self.manager_a.partner_id.id,
+            'activity_type_id': todo_type.id,
+            'user_id': self.manager_a.id,
+            'summary': 'Dedicated wrong-target M2M guard',
+            'date_deadline': fields.Date.today(),
+        })
+        self.env.cr.execute(
+            'UPDATE mail_activity SET '
+            'res_model_id = %s, res_model = %s, res_id = %s '
+            'WHERE id = %s',
+            (
+                incident_model.id,
+                'woow.billing.incident',
+                self.incident_a.id,
+                generic_incident.id,
+            ),
+        )
+        self.env.cr.execute(
+            'UPDATE mail_activity SET activity_type_id = %s WHERE id = %s',
+            (review_type.id, dedicated_wrong_target.id),
+        )
+        self.env['mail.activity'].invalidate_model()
+
+        generic_public, generic_datas, missing_type, dedicated_datas = (
+            self.env['ir.attachment'].sudo().create([{
+                'name': 'rpc-m2m-or-%s-%s.bin' % (
+                    purpose, uuid.uuid4().hex),
+                'datas': base64.b64encode(
+                    ('original %s' % purpose).encode()),
+                'res_model': 'mail.activity',
+                'res_id': attachment_acl_carrier.id,
+            } for purpose in (
+                'generic-public', 'generic-datas',
+                'missing-review-type', 'dedicated-datas',
+            )])
+        )
+        self.env.cr.execute(
+            'INSERT INTO activity_attachment_rel '
+            '(activity_id, attachment_id) VALUES '
+            '(%s, %s), (%s, %s), (%s, %s), (%s, %s)',
+            (
+                generic_incident.id, generic_public.id,
+                generic_incident.id, generic_datas.id,
+                generic_incident.id, missing_type.id,
+                dedicated_wrong_target.id, dedicated_datas.id,
+            ),
+        )
+        original_datas = {
+            attachment.id: attachment.datas
+            for attachment in (
+                generic_public, generic_datas, missing_type, dedicated_datas)
+        }
+        self.env.cr.flush()
+
+        self.authenticate(self.manager_a_login, self.manager_a_login)
+        write_cases = (
+            (generic_public, {'public': True}),
+            (generic_datas, {
+                'datas': base64.b64encode(b'forbidden replacement').decode(),
+            }),
+            (dedicated_datas, {
+                'datas': base64.b64encode(b'forbidden dedicated').decode(),
+            }),
+        )
+        for attachment, values in write_cases:
+            with self.subTest(write_attachment=attachment.id):
+                denial = self._call_kw(
+                    'ir.attachment', 'write', [[attachment.id], values])
+                self._assert_access_error(
+                    denial,
+                    'M2M-only incident evidence 的任何 write 都必須由 module 拒絕',
+                    contains='Attachments are not allowed',
+                )
+
+        AttachmentClass = type(self.env['ir.attachment'])
+        with patch.object(
+                AttachmentClass,
+                '_billing_review_activity_type_id',
+                return_value=False):
+            missing_denial = self._call_kw(
+                'ir.attachment', 'unlink', [[missing_type.id]])
+        self._assert_access_error(
+            missing_denial,
+            'review type 缺失時 incident-target M2M 必須 fail closed',
+            contains='Attachments are not allowed',
+        )
+
+        for attachment in (generic_public, dedicated_datas):
+            with self.subTest(unlink_attachment=attachment.id):
+                denial = self._call_kw(
+                    'ir.attachment', 'unlink', [[attachment.id]])
+                self._assert_access_error(
+                    denial,
+                    'OR predicate 任一 leg 的 M2M evidence 都不得 unlink',
+                    contains='Attachments are not allowed',
+                )
+
+        self.authenticate(None, None)
+        with self.env.registry.cursor() as verify_cr:
+            attachment_ids = [
+                generic_public.id,
+                generic_datas.id,
+                missing_type.id,
+                dedicated_datas.id,
+            ]
+            verify_env = self.env(cr=verify_cr)
+            rows = verify_env['ir.attachment'].sudo().browse(
+                attachment_ids).exists()
+            self.assertEqual(len(rows), 4)
+            for attachment in rows:
+                self.assertFalse(attachment.public)
+                self.assertEqual(
+                    attachment.datas, original_datas[attachment.id])
+            verify_cr.execute(
+                'SELECT activity_id, attachment_id '
+                'FROM activity_attachment_rel '
+                'WHERE attachment_id = ANY(%s) ORDER BY attachment_id',
+                ([
+                    generic_public.id,
+                    generic_datas.id,
+                    missing_type.id,
+                    dedicated_datas.id,
+                ],),
+            )
+            self.assertEqual(len(verify_cr.fetchall()), 4)
+
     def test_rpc_attachment_target_ids_are_canonicalized_fail_closed(self):
         self.assertTrue(
             self.env['woow.billing.incident']

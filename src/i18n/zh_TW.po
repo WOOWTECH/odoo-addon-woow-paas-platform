@@ -17164,6 +17164,14 @@ msgstr "帳務事件 activity 不允許附件。"
 #. odoo-python
 #: code:addons/woow_paas_platform/models/billing_incident.py:0
 msgid ""
+"Billing incident evidence has ambiguous provenance; parent deletion was "
+"cancelled."
+msgstr "帳務事件證據的來源不明確；已取消刪除上層記錄。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/billing_incident.py:0
+msgid ""
 "Billing incident activities are managed automatically. Use the billing "
 "incident form instead."
 msgstr "帳務事件 activity 由系統自動管理；請改用帳務事件表單。"
