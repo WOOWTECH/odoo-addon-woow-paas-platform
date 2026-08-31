@@ -78,6 +78,23 @@ _BILLING_INTERNAL_CONTEXT_ALLOWLIST = frozenset({
     'tz',
 })
 _BILLING_ROSTER_LOCK_NAME = 'woow.billing.incident.account-manager-roster'
+_BILLING_CARRIER_MODELS = frozenset({'mail.activity', 'mail.message'})
+
+
+def _acquire_billing_carrier_target_lock(cr, res_model, res_id):
+    """Serialize one future-id carrier through the transaction commit."""
+    if res_model not in _BILLING_CARRIER_MODELS:
+        return
+    cr.execute(
+        'SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))',
+        ('%s:%s' % (res_model, res_id),),
+    )
+
+
+def _acquire_billing_carrier_target_locks(cr, targets):
+    """Use one deterministic order for attachment and target transactions."""
+    for res_model, res_id in sorted(set(targets)):
+        _acquire_billing_carrier_target_lock(cr, res_model, res_id)
 
 
 def _acquire_billing_roster_lock(cr):
@@ -195,6 +212,57 @@ def _attachment_cleanup(records):
 def _is_attachment_cleanup(env):
     return (env.context.get(_BILLING_ATTACHMENT_CLEANUP_CTX_KEY)
             is _BILLING_ATTACHMENT_CLEANUP)
+
+
+def _cleanup_prebuilt_billing_carrier_attachments(
+        env, res_model, res_ids):
+    """Delete same-transaction and newly committed future-id payloads.
+
+    Odoo transactions are REPEATABLE READ.  After waiting on the carrier lock,
+    the target cursor's old snapshot cannot see an attachment which committed
+    during that wait.  A fresh READ COMMITTED cleanup cursor handles committed
+    rows; the target cursor then handles its own uncommitted rows.  The target
+    transaction owns the advisory lock throughout both passes, so no protocol-
+    compliant attachment writer can enter between them.
+    """
+    res_ids = sorted(set(res_ids))
+    if res_model not in _BILLING_CARRIER_MODELS or not res_ids:
+        return
+
+    deleted_ids = []
+    cleanup_cr = env.registry._db.cursor()
+    try:
+        cleanup_cr.execute(
+            'SET TRANSACTION ISOLATION LEVEL READ COMMITTED')
+        # Reuse the already loaded registry.  Besides avoiding redundant lookup,
+        # this is essential when a worker runs while Odoo's test loader owns
+        # Registry._lock on the main thread.
+        cleanup_cr.transaction = api.Transaction(env.registry)
+        cleanup_env = api.Environment(cleanup_cr, SUPERUSER_ID, {})
+        committed = cleanup_env['ir.attachment'].sudo().search([
+            ('res_model', '=', res_model),
+            ('res_id', 'in', res_ids),
+        ])
+        deleted_ids = committed.ids
+        if committed:
+            _attachment_cleanup(committed).unlink()
+        cleanup_cr.commit()
+    finally:
+        cleanup_cr.close()
+
+    env['ir.attachment'].invalidate_model()
+    local_domain = [
+        ('res_model', '=', res_model),
+        ('res_id', 'in', res_ids),
+    ]
+    if deleted_ids:
+        # The target cursor may retain an older MVCC snapshot of rows deleted
+        # by the fresh cursor.  Excluding known ids avoids a stale DELETE and
+        # the resulting 40001 while still finding same-transaction payloads.
+        local_domain.append(('id', 'not in', deleted_ids))
+    local = env['ir.attachment'].sudo().search(local_domain)
+    if local:
+        _attachment_cleanup(local).unlink()
 
 
 def _active_account_manager_roster_ids(env):
@@ -447,6 +515,12 @@ class BillingIncident(models.Model):
     # CJK text is normally written without word separators, so English-style
     # lookarounds would let phrases such as「看到卡片安全碼」bypass the gate.
     _SENSITIVE_CJK_MARKER_RE = re.compile(
+        r'(?:信用[\W_]*卡|卡[\W_]*片|卡)[\W_]*(?:號|号)'
+        r'(?:[\W_]*(?:碼|码))?|'
+        r'主[\W_]*(?:帳|账)[\W_]*(?:號|号)|'
+        r'敏[\W_]*感[\W_]*(?:驗[\W_]*證|验[\W_]*证|'
+        r'認[\W_]*證|认[\W_]*证)[\W_]*'
+        r'(?:資[\W_]*料|资料|數[\W_]*據|数[\W_]*据)|'
         r'(?:信用卡|卡片|卡)?[\W_]*安全[\W_]*(?:碼|码)|'
         r'(?:安全[\W_]*)?(?:驗[\W_]*證|验[\W_]*证)'
         r'[\W_]*(?:碼|码|值)|'
@@ -463,8 +537,11 @@ class BillingIncident(models.Model):
         r'授[\W_]*權[\W_]*(?:碼|码)',
         re.IGNORECASE,
     )
+    # CJK labels normally touch the first digit (``卡號4111…``).  Only ASCII
+    # provider-identifier adjacency suppresses a candidate; non-ASCII letters
+    # remain visible to marker scanning but act as PAN boundaries.
     _PAN_CANDIDATE_RE = re.compile(
-        r'(?<![^\W_])(?:\d[.]*){13,19}(?![^\W_])')
+        r'(?<![A-Za-z0-9_])(?:\d[.]*){13,19}(?![A-Za-z0-9_])')
     _RAW_MTN_RE = re.compile(r'[A-Za-z0-9_-]{1,20}\Z')
     _NAMESPACED_EXTERNAL_REF_RE = re.compile(
         r'[A-Za-z][A-Za-z0-9_-]{0,31}:'
@@ -1659,24 +1736,31 @@ class MailMessage(models.Model):
                 'Billing incident messages may be created only by the '
                 'internal activity completion flow.'
             ))
-        messages = super().create(values_list)
-        incident_messages = messages.sudo().filtered(
-            lambda message: message.model == 'woow.billing.incident')
-        # Recheck stored model after defaults/conversion, then close future-id
-        # squatting: a dangling attachment may have named this message id
-        # before the protected message row existed.
-        if incident_messages and not _is_incident_chatter(self.env):
-            raise AccessError(_(
-                'Billing incident messages may be created only by the '
-                'internal activity completion flow.'
-            ))
-        if incident_messages:
-            squatted = self.env['ir.attachment'].sudo().search([
-                ('res_model', '=', 'mail.message'),
-                ('res_id', 'in', incident_messages.ids),
-            ])
-            if squatted:
-                _attachment_cleanup(squatted).unlink()
+        # The savepoint belongs to this override, not its caller: a caller may
+        # swallow our postcheck AccessError and still commit the request.
+        with self.env.cr.savepoint():
+            messages = super().create(values_list)
+            incident_messages = messages.sudo().filtered(
+                lambda message: message.model == 'woow.billing.incident')
+            # Once super has allocated ids, immediately enter the same carrier
+            # locks as ir.attachment.  Cleanup precedes final authorization so
+            # an attachment-first attacker can never roll back a valid core
+            # completion message.
+            if incident_messages:
+                _acquire_billing_carrier_target_locks(
+                    self.env.cr,
+                    [('mail.message', message_id)
+                     for message_id in incident_messages.ids],
+                )
+                _cleanup_prebuilt_billing_carrier_attachments(
+                    self.env, 'mail.message', incident_messages.ids)
+            # Recheck stored model after defaults/conversion inside the same
+            # savepoint as super().create().
+            if incident_messages and not _is_incident_chatter(self.env):
+                raise AccessError(_(
+                    'Billing incident messages may be created only by the '
+                    'internal activity completion flow.'
+                ))
         return messages
 
     def write(self, values):
@@ -1696,7 +1780,18 @@ class MailMessage(models.Model):
                     'Billing incident chatter is managed automatically by '
                     'the internal activity completion flow.'
                 ))
-        return super().write(values)
+        # Keep the ORM write and stored-final-target postcheck in one rollback
+        # unit even when an outer caller catches AccessError and commits.
+        with self.env.cr.savepoint():
+            result = super().write(values)
+            incident_messages = self.sudo().filtered(
+                lambda message: message.model == 'woow.billing.incident')
+            if incident_messages and not _is_incident_chatter(self.env):
+                raise AccessError(_(
+                    'Billing incident chatter is managed automatically by '
+                    'the internal activity completion flow.'
+                ))
+        return result
 
     def unlink(self):
         """Keep incident chatter immutable outside a real module uninstall."""
@@ -1781,31 +1876,142 @@ class IrAttachment(models.Model):
         )
         return self._billing_owned_target(res_model, res_id)
 
+    @api.model
+    def _billing_carrier_target(self, res_model, res_id):
+        """Return one canonical advisory target, or ``False``."""
+        if res_model not in _BILLING_CARRIER_MODELS:
+            return False
+        return (
+            res_model,
+            self._canonical_billing_target_res_id(res_model, res_id),
+        )
+
+    @api.model
+    def _committed_billing_owned_carrier_targets(self, targets):
+        """Read target ownership after lock wait, outside the caller RR view."""
+        targets = set(targets)
+        if not targets:
+            return set()
+        activity_ids = sorted(
+            res_id for res_model, res_id in targets
+            if res_model == 'mail.activity')
+        message_ids = sorted(
+            res_id for res_model, res_id in targets
+            if res_model == 'mail.message')
+        review_type = self.env.ref(
+            'woow_paas_platform.'
+            'mail_activity_type_billing_incident_review',
+            raise_if_not_found=False,
+        )
+        owned = set()
+        visibility_cr = self.env.registry._db.cursor()
+        try:
+            # Odoo's outer transaction is REPEATABLE READ.  This fresh view is
+            # required when the advisory wait ended after a concurrent commit.
+            visibility_cr.execute(
+                'SET TRANSACTION ISOLATION LEVEL READ COMMITTED')
+            if activity_ids:
+                visibility_cr.execute(
+                    'SELECT id FROM mail_activity '
+                    'WHERE id = ANY(%s) AND ('
+                    'res_model = %s OR activity_type_id = %s)',
+                    (
+                        activity_ids,
+                        'woow.billing.incident',
+                        review_type.id if review_type else 0,
+                    ),
+                )
+                owned.update(
+                    ('mail.activity', res_id)
+                    for res_id, in visibility_cr.fetchall()
+                )
+            if message_ids:
+                visibility_cr.execute(
+                    'SELECT id FROM mail_message '
+                    'WHERE id = ANY(%s) AND model = %s',
+                    (message_ids, 'woow.billing.incident'),
+                )
+                owned.update(
+                    ('mail.message', res_id)
+                    for res_id, in visibility_cr.fetchall()
+                )
+        finally:
+            visibility_cr.close()
+        return owned
+
+    @api.model
+    def _create_billing_carrier_targets(self, values_list):
+        targets = []
+        for values in values_list:
+            res_model = values.get(
+                'res_model', self.env.context.get('default_res_model'))
+            res_id = values.get(
+                'res_id', self.env.context.get('default_res_id'))
+            target = self._billing_carrier_target(res_model, res_id)
+            if target:
+                targets.append(target)
+        return targets
+
     @api.model_create_multi
     def create(self, values_list):
-        """Reject payload before a protected attachment row reaches the DB."""
-        if _is_attachment_cleanup(self.env):
-            return super().create(values_list)
-        if any(self._values_billing_owned_target(values)
-               for values in values_list):
+        """Lock/canonicalize carriers before checking and writing payload."""
+        carrier_targets = self._create_billing_carrier_targets(values_list)
+        _acquire_billing_carrier_target_locks(
+            self.env.cr, carrier_targets)
+        committed_owned = self._committed_billing_owned_carrier_targets(
+            carrier_targets)
+        if (committed_owned
+                or any(self._values_billing_owned_target(values)
+                       for values in values_list)):
             raise AccessError(_(
                 'Attachments are not allowed on billing incident activities.'
             ))
-        attachments = super().create(values_list)
-        # Recheck actual stored targets in case ORM defaults/conversion produced
-        # a final target different from the preflight payload.
-        if any(self._billing_owned_target(
-                attachment.res_model, attachment.res_id)
-                for attachment in attachments.sudo()):
-            raise AccessError(_(
-                'Attachments are not allowed on billing incident activities.'
-            ))
+        with self.env.cr.savepoint():
+            attachments = super().create(values_list)
+            # Recheck actual stored targets in case ORM defaults/conversion
+            # produced a final target different from the preflight payload.
+            final_targets = [
+                target
+                for attachment in attachments.sudo()
+                for target in [self._billing_carrier_target(
+                    attachment.res_model, attachment.res_id)]
+                if target
+            ]
+            _acquire_billing_carrier_target_locks(
+                self.env.cr, final_targets)
+            final_committed_owned = (
+                self._committed_billing_owned_carrier_targets(final_targets))
+            if (final_committed_owned
+                    or any(self._billing_owned_target(
+                        attachment.res_model, attachment.res_id)
+                        for attachment in attachments.sudo())):
+                raise AccessError(_(
+                    'Attachments are not allowed on billing incident '
+                    'activities.'
+                ))
         return attachments
 
     def write(self, values):
-        """Reject protected old, prospective, and ORM-final targets."""
-        if _is_attachment_cleanup(self.env):
-            return super().write(values)
+        """Lock old/prospective carriers before check/write and postcheck."""
+        carrier_targets = []
+        for attachment in self.sudo():
+            for res_model, res_id in (
+                    (attachment.res_model, attachment.res_id),
+                    (
+                        values.get('res_model', attachment.res_model),
+                        values.get('res_id', attachment.res_id),
+                    )):
+                target = self._billing_carrier_target(res_model, res_id)
+                if target:
+                    carrier_targets.append(target)
+        _acquire_billing_carrier_target_locks(
+            self.env.cr, carrier_targets)
+        committed_owned = self._committed_billing_owned_carrier_targets(
+            carrier_targets)
+        if committed_owned:
+            raise AccessError(_(
+                'Attachments are not allowed on billing incident activities.'
+            ))
         for attachment in self.sudo():
             old_target = self._billing_owned_target(
                 attachment.res_model, attachment.res_id)
@@ -1818,13 +2024,27 @@ class IrAttachment(models.Model):
                     'Attachments are not allowed on billing incident '
                     'activities.'
                 ))
-        result = super().write(values)
-        if any(self._billing_owned_target(
-                attachment.res_model, attachment.res_id)
-                for attachment in self.sudo()):
-            raise AccessError(_(
-                'Attachments are not allowed on billing incident activities.'
-            ))
+        with self.env.cr.savepoint():
+            result = super().write(values)
+            final_targets = [
+                target
+                for attachment in self.sudo()
+                for target in [self._billing_carrier_target(
+                    attachment.res_model, attachment.res_id)]
+                if target
+            ]
+            _acquire_billing_carrier_target_locks(
+                self.env.cr, final_targets)
+            final_committed_owned = (
+                self._committed_billing_owned_carrier_targets(final_targets))
+            if (final_committed_owned
+                    or any(self._billing_owned_target(
+                        attachment.res_model, attachment.res_id)
+                        for attachment in self.sudo())):
+                raise AccessError(_(
+                    'Attachments are not allowed on billing incident '
+                    'activities.'
+                ))
         return result
 
 
@@ -1955,19 +2175,28 @@ class MailActivity(models.Model):
         )
 
     @api.model
-    def _validate_stored_billing_activity_create(self, activities):
-        """Validate final related model/type and close future-id squatting."""
+    def _stored_billing_activity_targets(self, activities):
         review_type = self.env.ref(
             'woow_paas_platform.'
             'mail_activity_type_billing_incident_review',
             raise_if_not_found=False,
         )
-        protected = activities.sudo().filtered(
+        return activities.sudo().filtered(
             lambda activity: (
                 activity.res_model == 'woow.billing.incident'
                 or (review_type and activity.activity_type_id == review_type)
             )
         )
+
+    @api.model
+    def _validate_stored_billing_activity_create(self, activities):
+        """Validate the final related model/type after carrier cleanup."""
+        review_type = self.env.ref(
+            'woow_paas_platform.'
+            'mail_activity_type_billing_incident_review',
+            raise_if_not_found=False,
+        )
+        protected = self._stored_billing_activity_targets(activities)
         invalid = protected.filtered(
             lambda activity: (
                 not _is_activity_scheduler(self.env)
@@ -1981,15 +2210,6 @@ class MailActivity(models.Model):
                 'Billing incident activities may be created only by the '
                 'internal scheduler.'
             ))
-        incident_activities = protected.filtered(
-            lambda activity: activity.res_model == 'woow.billing.incident')
-        if incident_activities:
-            squatted = self.env['ir.attachment'].sudo().search([
-                ('res_model', '=', 'mail.activity'),
-                ('res_id', 'in', incident_activities.ids),
-            ])
-            if squatted:
-                _attachment_cleanup(squatted).unlink()
         return True
 
     @api.model
@@ -2056,8 +2276,21 @@ class MailActivity(models.Model):
                 'Billing incident activities may be created only by the '
                 'internal scheduler.'
             ))
-        activities = super(MailActivity, guarded).create(canonical_values)
-        guarded._validate_stored_billing_activity_create(activities)
+        with self.env.cr.savepoint():
+            activities = super(MailActivity, guarded).create(canonical_values)
+            # Super allocates the ids.  Enter their carrier locks immediately,
+            # purge both committed and same-transaction future-id payloads,
+            # then validate the final stored target/type.
+            protected = guarded._stored_billing_activity_targets(activities)
+            if protected:
+                _acquire_billing_carrier_target_locks(
+                    self.env.cr,
+                    [('mail.activity', activity_id)
+                     for activity_id in protected.ids],
+                )
+                _cleanup_prebuilt_billing_carrier_attachments(
+                    self.env, 'mail.activity', protected.ids)
+            guarded._validate_stored_billing_activity_create(activities)
         return self.browse(activities.ids)
 
     def write(self, values):
@@ -2085,8 +2318,9 @@ class MailActivity(models.Model):
                 'Billing incident activities are managed automatically. '
                 'Use the billing incident form instead.'
             ))
-        result = super().write(write_values)
-        self._validate_stored_billing_activity_write(self)
+        with self.env.cr.savepoint():
+            result = super().write(write_values)
+            self._validate_stored_billing_activity_write(self)
         return result
 
     def _action_done(self, feedback=False, attachment_ids=None):

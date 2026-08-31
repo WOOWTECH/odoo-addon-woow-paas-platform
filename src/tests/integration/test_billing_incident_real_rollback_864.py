@@ -26,6 +26,7 @@ from psycopg2 import errorcodes
 from psycopg2.errors import SerializationFailure
 
 from odoo import api, fields
+from odoo.exceptions import AccessError
 from odoo.modules.registry import Registry
 from odoo.tests.common import BaseCase, get_db_name, tagged
 
@@ -117,6 +118,20 @@ class TestBillingIncidentRealTransactions864(BaseCase):
                     'OR COALESCE(body, \'\') LIKE %s)',
                     (_MODEL, '%' + self.marker + '%',
                      '%' + self.marker + '%'),
+                )
+                cr.execute(
+                    'DELETE FROM ir_attachment WHERE name LIKE %s',
+                    ('%' + self.marker + '%',),
+                )
+                cr.execute(
+                    'DELETE FROM mail_activity WHERE COALESCE(summary, \'\') '
+                    'LIKE %s',
+                    ('%' + self.marker + '%',),
+                )
+                cr.execute(
+                    'DELETE FROM mail_message WHERE COALESCE(subject, \'\') '
+                    'LIKE %s OR COALESCE(body, \'\') LIKE %s',
+                    ('%' + self.marker + '%', '%' + self.marker + '%'),
                 )
                 cr.execute(
                     'DELETE FROM woow_billing_incident '
@@ -622,6 +637,296 @@ class TestBillingIncidentRealTransactions864(BaseCase):
             'schedule/done race must retain exactly one active alert per manager',
         )
 
+    def test_concurrent_future_activity_attachment_is_serialized_and_removed(self):
+        """Attachment-first overlap must end with the alert, never its payload."""
+        snapshot = self._snapshot(
+            'future-activity-attachment-race',
+            state='open',
+        )
+        incident_id = self._call_log(snapshot)
+        self._set_incident_state(incident_id, 'needs_human')
+        marker = '%s-future-activity' % self.marker
+
+        with self.registry.cursor() as cr:
+            env = api.Environment(cr, odoo.SUPERUSER_ID, {})
+            generic_activity = env['mail.activity'].sudo().create({
+                'res_model_id': env['ir.model']._get('res.partner').id,
+                'res_id': self.control_partner_id,
+                'activity_type_id': env.ref(
+                    'mail.mail_activity_data_todo').id,
+                'user_id': self.manager_user_id,
+                'summary': '%s-generic-control' % marker,
+                'note': 'generic target control',
+                'date_deadline': fields.Date.today(),
+            })
+            generic_attachment = env['ir.attachment'].sudo().create({
+                'name': '%s-generic-control.bin' % marker,
+                'datas': b'Z2VuZXJpYyBjb250cm9s',
+                'res_model': 'mail.activity',
+                'res_id': generic_activity.id,
+            })
+            generic_activity_id = generic_activity.id
+            generic_attachment_id = generic_attachment.id
+            cr.commit()
+
+        with self.registry.cursor() as cr:
+            cr.execute(
+                "SELECT nextval(pg_get_serial_sequence(%s, 'id'))",
+                ('mail_activity',),
+            )
+            future_activity_id = cr.fetchone()[0] + 1
+
+        attachment_cr = self.registry._db.cursor()
+        target_cr = self.registry._db.cursor()
+        worker_context = {'mail_notify_force_send': False}
+        attachment_env = api.Environment(
+            attachment_cr, odoo.SUPERUSER_ID, worker_context)
+        target_env = api.Environment(
+            target_cr, odoo.SUPERUSER_ID, worker_context)
+        attachment_inserted = threading.Event()
+        errors = []
+
+        def attach_future_id():
+            try:
+                attachment_cr.execute(
+                    'SET LOCAL lock_timeout = %s', ('5s',))
+                attachment_env['ir.attachment'].sudo().create({
+                    'name': '%s-racing-payload.bin' % marker,
+                    'datas': b'Zm9yYmlkZGVuIGFjdGl2aXR5IHBheWxvYWQ=',
+                    'res_model': 'mail.activity',
+                    'res_id': future_activity_id,
+                })
+                attachment_inserted.set()
+                # Keep this transaction open so target-first code misses the
+                # uncommitted row.  The advisory protocol must instead wait,
+                # then remove it after this commit.
+                time.sleep(0.3)
+                attachment_cr.commit()
+            except Exception as exc:
+                errors.append(('attachment', exc))
+                attachment_inserted.set()
+                attachment_cr.rollback()
+
+        def create_alert():
+            try:
+                self.assertTrue(attachment_inserted.wait(timeout=5))
+                target_cr.execute('SET LOCAL lock_timeout = %s', ('5s',))
+                target_env[_MODEL] \
+                    ._ensure_review_activities_current_cursor(incident_id)
+                target_cr.commit()
+            except Exception as exc:
+                errors.append(('target', exc))
+                target_cr.rollback()
+
+        try:
+            threads = [
+                threading.Thread(
+                    target=attach_future_id,
+                    name='b864-future-activity-attachment',
+                ),
+                threading.Thread(
+                    target=create_alert,
+                    name='b864-future-activity-target',
+                ),
+            ]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(timeout=10)
+            self.assertFalse(
+                [thread.name for thread in threads if thread.is_alive()],
+                'future activity carrier race threads must terminate',
+            )
+        finally:
+            if not attachment_cr.closed:
+                attachment_cr.close()
+            if not target_cr.closed:
+                target_cr.close()
+        self.assertFalse(errors, 'concurrent workers failed: %r' % errors)
+
+        with self.registry.cursor() as cr:
+            env = api.Environment(cr, odoo.SUPERUSER_ID, {})
+            review_type = env.ref(
+                'woow_paas_platform.'
+                'mail_activity_type_billing_incident_review')
+            alert = env['mail.activity'].sudo().browse(
+                future_activity_id).exists()
+            self.assertTrue(alert, 'attack must not roll back the review alert')
+            self.assertEqual(alert.res_model, _MODEL)
+            self.assertEqual(alert.res_id, incident_id)
+            self.assertEqual(alert.activity_type_id, review_type)
+            incident_activity_ids = env['mail.activity'].sudo().search([
+                ('res_model', '=', _MODEL),
+                ('res_id', '=', incident_id),
+            ]).ids
+            self.assertFalse(env['ir.attachment'].sudo().search([
+                ('res_model', '=', 'mail.activity'),
+                ('res_id', 'in', incident_activity_ids),
+            ]), 'incident activity graph must contain no attachment linkage')
+            generic_activity = env['mail.activity'].sudo().browse(
+                generic_activity_id).exists()
+            generic_attachment = env['ir.attachment'].sudo().browse(
+                generic_attachment_id).exists()
+            self.assertTrue(generic_activity and generic_attachment)
+            self.assertEqual(generic_activity.res_model, 'res.partner')
+            self.assertEqual(generic_attachment.res_model, 'mail.activity')
+            self.assertEqual(
+                generic_attachment.res_id, generic_activity_id,
+                'generic target control must remain unaffected',
+            )
+
+    def test_concurrent_future_message_attachment_is_serialized_and_removed(self):
+        """Message completion wins while an overlapping payload is purged."""
+        snapshot = self._snapshot(
+            'future-message-attachment-race',
+            state='needs_human',
+        )
+        incident_id = self._call_log(snapshot)
+        marker = '%s-future-message' % self.marker
+
+        with self.registry.cursor() as cr:
+            env = api.Environment(cr, odoo.SUPERUSER_ID, {})
+            review_type = env.ref(
+                'woow_paas_platform.'
+                'mail_activity_type_billing_incident_review')
+            activity = env['mail.activity'].sudo().search([
+                ('res_model', '=', _MODEL),
+                ('res_id', '=', incident_id),
+                ('activity_type_id', '=', review_type.id),
+                ('user_id', '=', self.manager_user_id),
+                ('active', '=', True),
+            ], limit=1)
+            self.assertTrue(activity)
+            activity_id = activity.id
+            generic_message = env['mail.message'].sudo().create({
+                'model': 'res.partner',
+                'res_id': self.control_partner_id,
+                'message_type': 'comment',
+                'subject': '%s-generic-control' % marker,
+                'body': 'generic message target control',
+            })
+            generic_attachment = env['ir.attachment'].sudo().create({
+                'name': '%s-generic-control.bin' % marker,
+                'datas': b'Z2VuZXJpYyBjb250cm9s',
+                'res_model': 'mail.message',
+                'res_id': generic_message.id,
+            })
+            generic_message_id = generic_message.id
+            generic_attachment_id = generic_attachment.id
+            cr.commit()
+
+        with self.registry.cursor() as cr:
+            cr.execute(
+                "SELECT nextval(pg_get_serial_sequence(%s, 'id'))",
+                ('mail_message',),
+            )
+            future_message_id = cr.fetchone()[0] + 1
+
+        attachment_cr = self.registry._db.cursor()
+        target_cr = self.registry._db.cursor()
+        worker_context = {'mail_notify_force_send': False}
+        attachment_env = api.Environment(
+            attachment_cr, odoo.SUPERUSER_ID, worker_context)
+        target_env = api.Environment(
+            target_cr, odoo.SUPERUSER_ID, worker_context)
+        attachment_inserted = threading.Event()
+        errors = []
+
+        def attach_future_id():
+            try:
+                attachment_cr.execute(
+                    'SET LOCAL lock_timeout = %s', ('5s',))
+                attachment_env['ir.attachment'].sudo().create({
+                    'name': '%s-racing-payload.bin' % marker,
+                    'datas': b'Zm9yYmlkZGVuIG1lc3NhZ2UgcGF5bG9hZA==',
+                    'res_model': 'mail.message',
+                    'res_id': future_message_id,
+                })
+                attachment_inserted.set()
+                time.sleep(0.3)
+                attachment_cr.commit()
+            except Exception as exc:
+                errors.append(('attachment', exc))
+                attachment_inserted.set()
+                attachment_cr.rollback()
+
+        def complete_activity():
+            try:
+                self.assertTrue(attachment_inserted.wait(timeout=5))
+                target_cr.execute('SET LOCAL lock_timeout = %s', ('5s',))
+                target_env['mail.activity'].sudo().browse(
+                    activity_id).with_user(
+                        self.manager_user_id).action_feedback(
+                            feedback='%s safe verification' % marker)
+                target_cr.commit()
+            except Exception as exc:
+                errors.append(('target', exc))
+                target_cr.rollback()
+
+        try:
+            threads = [
+                threading.Thread(
+                    target=attach_future_id,
+                    name='b864-future-message-attachment',
+                ),
+                threading.Thread(
+                    target=complete_activity,
+                    name='b864-future-message-target',
+                ),
+            ]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(timeout=10)
+            self.assertFalse(
+                [thread.name for thread in threads if thread.is_alive()],
+                'future message carrier race threads must terminate',
+            )
+        finally:
+            if not attachment_cr.closed:
+                attachment_cr.close()
+            if not target_cr.closed:
+                target_cr.close()
+        self.assertFalse(errors, 'concurrent workers failed: %r' % errors)
+
+        with self.registry.cursor() as cr:
+            env = api.Environment(cr, odoo.SUPERUSER_ID, {})
+            message = env['mail.message'].sudo().browse(
+                future_message_id).exists()
+            self.assertTrue(
+                message, 'attack must not roll back the completion message')
+            self.assertEqual(message.model, _MODEL)
+            self.assertEqual(message.res_id, incident_id)
+            incident_message_ids = env['mail.message'].sudo().search([
+                ('model', '=', _MODEL),
+                ('res_id', '=', incident_id),
+            ]).ids
+            self.assertFalse(env['ir.attachment'].sudo().search([
+                ('res_model', '=', 'mail.message'),
+                ('res_id', 'in', incident_message_ids),
+            ]), 'incident message graph must contain no attachment linkage')
+            review_type = env.ref(
+                'woow_paas_platform.'
+                'mail_activity_type_billing_incident_review')
+            self.assertTrue(env['mail.activity'].sudo().search([
+                ('res_model', '=', _MODEL),
+                ('res_id', '=', incident_id),
+                ('activity_type_id', '=', review_type.id),
+                ('user_id', '=', self.manager_user_id),
+                ('active', '=', True),
+            ]), 'completion must still re-arm the manager alert')
+            generic_message = env['mail.message'].sudo().browse(
+                generic_message_id).exists()
+            generic_attachment = env['ir.attachment'].sudo().browse(
+                generic_attachment_id).exists()
+            self.assertTrue(generic_message and generic_attachment)
+            self.assertEqual(generic_message.model, 'res.partner')
+            self.assertEqual(generic_attachment.res_model, 'mail.message')
+            self.assertEqual(
+                generic_attachment.res_id, generic_message_id,
+                'generic target control must remain unaffected',
+            )
+
     def test_schedule_subscription_and_revocation_barrier_converge(self):
         from odoo.addons.woow_paas_platform.models import billing_incident
 
@@ -1010,6 +1315,212 @@ class TestBillingIncidentRealTransactions864(BaseCase):
         self.assertNotIn(
             snapshot['external_ref'], repr(logger.mock_calls),
             'roster convergence logging must never disclose raw MTN',
+        )
+
+    def test_postcheck_denials_survive_caller_catch_commit_for_all_carriers(self):
+        """A swallowed postcheck exception must still roll its ORM write back."""
+        snapshot = self._snapshot('postcheck-savepoint')
+        incident_id = self._call_log(snapshot)
+        marker = '%s-postcheck' % self.marker
+        with self.registry.cursor() as cr:
+            env = api.Environment(cr, odoo.SUPERUSER_ID, {})
+            Message = env['mail.message'].sudo()
+            Attachment = env['ir.attachment'].sudo()
+            Activity = env['mail.activity'].sudo()
+            message = Message.create({
+                'model': 'res.partner',
+                'res_id': self.control_partner_id,
+                'message_type': 'comment',
+                'subject': '%s-message-control' % marker,
+                'body': 'original message body',
+            })
+            attachment = Attachment.create({
+                'name': '%s-attachment-control.bin' % marker,
+                'datas': b'b3JpZ2luYWwgYXR0YWNobWVudA==',
+                'res_model': 'res.partner',
+                'res_id': self.control_partner_id,
+            })
+            activity = Activity.create({
+                'res_model_id': env['ir.model']._get('res.partner').id,
+                'res_id': self.control_partner_id,
+                'activity_type_id': env.ref(
+                    'mail.mail_activity_data_todo').id,
+                'user_id': self.manager_user_id,
+                'summary': '%s-activity-control' % marker,
+                'note': 'original activity note',
+                'date_deadline': fields.Date.today(),
+            })
+            message_id = message.id
+            attachment_id = attachment.id
+            activity_id = activity.id
+            cr.commit()
+
+        create_message_subject = '%s-message-create' % marker
+        create_attachment_name = '%s-attachment-create.bin' % marker
+        create_activity_summary = '%s-activity-create' % marker
+        denials = {}
+
+        def catch_and_commit(name, callback):
+            cr = self.registry.cursor()
+            try:
+                env = api.Environment(cr, odoo.SUPERUSER_ID, {})
+                try:
+                    callback(env)
+                except AccessError:
+                    denials[name] = True
+                else:
+                    denials[name] = False
+                # Deliberately no outer savepoint/rollback: this models a
+                # caller swallowing AccessError and completing its request.
+                cr.commit()
+            finally:
+                cr.close()
+
+        def create_message(env):
+            Message = env['mail.message'].sudo()
+            MessageClass = type(Message)
+            with patch.object(
+                    MessageClass,
+                    '_targets_billing_incident_values',
+                    return_value=False):
+                Message.create({
+                    'model': _MODEL,
+                    'res_id': incident_id,
+                    'message_type': 'comment',
+                    'subject': create_message_subject,
+                    'body': 'postcheck-only forbidden create',
+                })
+
+        def write_message(env):
+            Message = env['mail.message'].sudo()
+            MessageClass = type(Message)
+            with patch.object(
+                    MessageClass,
+                    '_targets_billing_incident_values',
+                    return_value=False):
+                Message.browse(message_id).write({
+                    'model': _MODEL,
+                    'res_id': incident_id,
+                    'body': 'postcheck-only forbidden write',
+                })
+
+        def create_attachment(env):
+            Attachment = env['ir.attachment'].sudo()
+            AttachmentClass = type(Attachment)
+            with patch.object(
+                    AttachmentClass,
+                    '_values_billing_owned_target',
+                    return_value=False):
+                Attachment.create({
+                    'name': create_attachment_name,
+                    'datas': b'Zm9yYmlkZGVuIGNyZWF0ZQ==',
+                    'res_model': 'woow.billing.incident',
+                    'res_id': incident_id,
+                })
+
+        def write_attachment(env):
+            Attachment = env['ir.attachment'].sudo()
+            AttachmentClass = type(Attachment)
+            original = AttachmentClass._billing_owned_target
+            protected_calls = 0
+
+            def bypass_prospective_once(records, res_model, res_id):
+                nonlocal protected_calls
+                if res_model == 'woow.billing.incident':
+                    protected_calls += 1
+                    if protected_calls == 1:
+                        return False
+                return original(records, res_model, res_id)
+
+            with patch.object(
+                    AttachmentClass,
+                    '_billing_owned_target',
+                    bypass_prospective_once):
+                Attachment.browse(attachment_id).write({
+                    'datas': b'Zm9yYmlkZGVuIHdyaXRl',
+                    'res_model': 'woow.billing.incident',
+                    'res_id': incident_id,
+                })
+
+        def create_activity(env):
+            Activity = env['mail.activity'].sudo()
+            ActivityClass = type(Activity)
+            with patch.object(
+                    ActivityClass,
+                    '_targets_billing_activity_values',
+                    return_value=False):
+                Activity.create({
+                    'res_model_id': env['ir.model']._get(_MODEL).id,
+                    'res_id': incident_id,
+                    'activity_type_id': env.ref(
+                        'mail.mail_activity_data_todo').id,
+                    'user_id': self.manager_user_id,
+                    'summary': create_activity_summary,
+                    'note': 'postcheck-only forbidden create',
+                    'date_deadline': fields.Date.today(),
+                })
+
+        def write_activity(env):
+            Activity = env['mail.activity'].sudo()
+            ActivityClass = type(Activity)
+            with patch.object(
+                    ActivityClass,
+                    '_targets_billing_activity_values',
+                    return_value=False):
+                Activity.browse(activity_id).write({
+                    'res_model_id': env['ir.model']._get(_MODEL).id,
+                    'res_id': incident_id,
+                    'summary': '%s-activity-forbidden-write' % marker,
+                })
+
+        operations = (
+            ('mail.message.create', create_message),
+            ('mail.message.write', write_message),
+            ('ir.attachment.create', create_attachment),
+            ('ir.attachment.write', write_attachment),
+            ('mail.activity.create', create_activity),
+            ('mail.activity.write', write_activity),
+        )
+        for name, callback in operations:
+            catch_and_commit(name, callback)
+
+        # A genuinely independent third cursor is the only observer used for
+        # the post-catch durable state assertions.
+        with self.registry.cursor() as cr:
+            env = api.Environment(cr, odoo.SUPERUSER_ID, {})
+            self.assertFalse(env['mail.message'].sudo().search([
+                ('subject', '=', create_message_subject),
+            ]))
+            message = env['mail.message'].sudo().browse(message_id).exists()
+            self.assertTrue(message)
+            self.assertEqual(message.model, 'res.partner')
+            self.assertEqual(message.res_id, self.control_partner_id)
+            self.assertEqual(
+                str(message.body), '<p>original message body</p>')
+
+            self.assertFalse(env['ir.attachment'].sudo().search([
+                ('name', '=', create_attachment_name),
+            ]))
+            attachment = env['ir.attachment'].sudo().browse(
+                attachment_id).exists()
+            self.assertTrue(attachment)
+            self.assertEqual(attachment.res_model, 'res.partner')
+            self.assertEqual(attachment.res_id, self.control_partner_id)
+            self.assertEqual(
+                attachment.datas, b'b3JpZ2luYWwgYXR0YWNobWVudA==')
+
+            self.assertFalse(env['mail.activity'].sudo().search([
+                ('summary', '=', create_activity_summary),
+            ]))
+            activity = env['mail.activity'].sudo().browse(activity_id).exists()
+            self.assertTrue(activity)
+            self.assertEqual(activity.res_model, 'res.partner')
+            self.assertEqual(activity.res_id, self.control_partner_id)
+            self.assertEqual(activity.summary, '%s-activity-control' % marker)
+        self.assertEqual(
+            denials,
+            {name: True for name, _callback in operations},
+            'each fault-injected path must reach and raise from its postcheck',
         )
 
     def test_schedule_resolve_orderings_converge_without_stale_todo(self):

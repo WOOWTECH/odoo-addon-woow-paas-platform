@@ -475,6 +475,10 @@ class TestBillingIncidentPublicApi864(TransactionCase):
             'SAD=forbidden-authentication-data',
             'sensitive authentication data payload',
             'PAN=4111111111111111',
+            '卡號4111111111111111',
+            '卡号4111111111111111',
+            '敏感驗證資料：forbidden',
+            '敏感认证数据：forbidden',
             '安全碼：123',
             '卡片安全碼：123',
             '信用卡安全碼：123',
@@ -499,6 +503,7 @@ class TestBillingIncidentPublicApi864(TransactionCase):
             '軌道資料：forbidden',
             '授權碼：forbidden',
             'unlabelled 4111111111111111',
+            '交易4111111111111111',
             'unlabelled 4111.1111-1111 1111',
             'MTN: 4111111111111111',
         )
@@ -734,6 +739,10 @@ class TestBillingIncidentPublicApi864(TransactionCase):
             'CID: 123',
             'card security code 123',
             'SAD=forbidden-authentication-data',
+            '卡號4111111111111111',
+            '卡号4111111111111111',
+            '敏感驗證資料：forbidden',
+            '敏感认证数据：forbidden',
             '安全碼：123',
             '卡片安全碼：123',
             '信用卡安全碼：123',
@@ -1171,6 +1180,10 @@ class TestBillingIncidentPublicApi864(TransactionCase):
                     '查證時看到第二轨：forbidden',
                     '查證時看到軌道資料：forbidden',
                     '查證時看到授權碼：forbidden',
+                    '卡號4111111111111111',
+                    '卡号4111111111111111',
+                    '敏感驗證資料：forbidden',
+                    '敏感认证数据：forbidden',
                     '分隔卡號 4111\u09031111\u09031111\u09031111'):
                 with self.subTest(feedback=feedback), \
                         self.assertRaises(UserError):
