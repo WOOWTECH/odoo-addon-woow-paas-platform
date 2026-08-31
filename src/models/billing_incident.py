@@ -1999,6 +1999,77 @@ class IrAttachment(models.Model):
         return owned
 
     @api.model
+    def _dedicated_billing_m2m_attachment_links(self, cr, attachment_ids):
+        """Return ``(attachment_id, activity_id)`` incident-evidence links."""
+        attachment_ids = sorted(set(attachment_ids))
+        if not attachment_ids:
+            return set()
+        review_type = self.env.ref(
+            'woow_paas_platform.'
+            'mail_activity_type_billing_incident_review',
+            raise_if_not_found=False,
+        )
+        if not review_type:
+            return set()
+        cr.execute(
+            'SELECT rel.attachment_id, activity.id '
+            'FROM activity_attachment_rel rel '
+            'JOIN mail_activity activity ON activity.id = rel.activity_id '
+            'WHERE rel.attachment_id = ANY(%s) '
+            'AND activity.res_model = %s '
+            'AND activity.activity_type_id = %s',
+            (
+                attachment_ids,
+                'woow.billing.incident',
+                review_type.id,
+            ),
+        )
+        return set(cr.fetchall())
+
+    @api.model
+    def _committed_billing_attachment_snapshot(self, attachment_ids):
+        """Read attachment targets and activity M2M provenance freshly."""
+        attachment_ids = sorted(set(attachment_ids))
+        if not attachment_ids:
+            return {
+                'carrier_targets': set(),
+                'incident_attachment_ids': set(),
+                'm2m_links': set(),
+            }
+        visibility_cr = self.env.registry._db.cursor()
+        try:
+            # The caller can have an old REPEATABLE READ snapshot after waiting
+            # for a parent activity transaction.  Ownership must be decided
+            # from the latest committed direct stamp *and* M2M relation.
+            visibility_cr.execute(
+                'SET TRANSACTION ISOLATION LEVEL READ COMMITTED')
+            visibility_cr.execute(
+                'SELECT id, res_model, res_id FROM ir_attachment '
+                'WHERE id = ANY(%s)',
+                (attachment_ids,),
+            )
+            rows = visibility_cr.fetchall()
+            m2m_links = self._dedicated_billing_m2m_attachment_links(
+                visibility_cr, attachment_ids)
+        finally:
+            visibility_cr.close()
+        carrier_targets = {
+            target
+            for _attachment_id, res_model, res_id in rows
+            for target in [self._billing_carrier_target(res_model, res_id)]
+            if target
+        }
+        return {
+            'carrier_targets': carrier_targets,
+            'incident_attachment_ids': {
+                attachment_id
+                for attachment_id, res_model, _res_id in rows
+                if res_model == 'woow.billing.incident'
+            },
+            'm2m_links': m2m_links,
+        }
+
+    @api.model
     def _create_billing_carrier_targets(self, values_list):
         targets = []
         for values in values_list:
@@ -2123,18 +2194,40 @@ class IrAttachment(models.Model):
             return super().unlink()
 
         attachments = self.sudo()
-        carrier_targets = [
+        attachment_ids = attachments.ids
+        # Discover committed M2M carriers on a fresh view before entering the
+        # same advisory-lock protocol used by direct activity attachments.
+        # The second fresh snapshot after the wait is authoritative: a parent
+        # may have atomically cleared the M2M edge and re-anchored the row while
+        # this caller's REPEATABLE READ view stayed stale.
+        committed_before_lock = (
+            self._committed_billing_attachment_snapshot(attachment_ids))
+        carrier_targets = {
             target
             for attachment in attachments
             for target in [self._billing_carrier_target(
                 attachment.res_model, attachment.res_id)]
             if target
-        ]
+        }
+        carrier_targets.update(
+            committed_before_lock['carrier_targets'])
+        carrier_targets.update(
+            ('mail.activity', activity_id)
+            for _attachment_id, activity_id
+            in committed_before_lock['m2m_links']
+        )
         _acquire_billing_carrier_target_locks(
             self.env.cr, carrier_targets)
+        committed_after_lock = (
+            self._committed_billing_attachment_snapshot(attachment_ids))
         committed_owned = self._committed_billing_owned_carrier_targets(
-            carrier_targets)
+            committed_after_lock['carrier_targets'])
+        local_m2m_links = self._dedicated_billing_m2m_attachment_links(
+            self.env.cr, attachment_ids)
         if (committed_owned
+                or committed_after_lock['incident_attachment_ids']
+                or committed_after_lock['m2m_links']
+                or local_m2m_links
                 or any(self._billing_owned_target(
                     attachment.res_model, attachment.res_id)
                     for attachment in attachments)):
@@ -2358,10 +2451,15 @@ class MailActivity(models.Model):
             [('mail.activity', activity_id) for activity_id in dedicated.ids],
         )
         for incident_id, activities in dedicated.grouped('res_id').items():
-            attachments = self.env['ir.attachment'].sudo().search([
+            direct_attachments = self.env['ir.attachment'].sudo().search([
                 ('res_model', '=', self._name),
                 ('res_id', 'in', activities.ids),
             ])
+            m2m_attachments = activities.sudo().mapped('attachment_ids')
+            # One row can carry both the legacy direct stamp and the Odoo M2M
+            # edge.  Recordset union deduplicates it before the single private
+            # metadata write, preserving bytes/checksum.
+            attachments = direct_attachments | m2m_attachments
             if attachments:
                 reattach_values = {
                     'res_model': 'woow.billing.incident',
@@ -2379,6 +2477,14 @@ class MailActivity(models.Model):
                 if 'access_token' in attachments._fields:
                     reattach_values['access_token'] = False
                 _attachment_cleanup(attachments).write(reattach_values)
+            if m2m_attachments:
+                # Clear provenance only after every linked payload has its
+                # durable private incident anchor.  This ORM write and the
+                # subsequent parent unlink share the caller transaction; the
+                # terminal capability cannot be forged through JSON RPC.
+                _activity_terminal(activities).write({
+                    'attachment_ids': [(5, 0, 0)],
+                })
         return True
 
     def _billing_incident_ids(self):
@@ -2398,12 +2504,10 @@ class MailActivity(models.Model):
                 'Billing incident activity feedback must contain only safe, '
                 'non-sensitive summaries.'
             ))
-        # Explicit incoming/M2M payloads remain forbidden.  Direct legacy
-        # ``res_model='mail.activity'`` evidence is handled separately: it is
-        # atomically reattached to the incident before the carrier disappears.
-        has_linked_attachments = bool(
-            dedicated.sudo().mapped('attachment_ids'))
-        if attachment_ids or has_linked_attachments:
+        # Explicit incoming payloads remain forbidden.  Pre-existing direct
+        # or M2M legacy evidence is instead re-anchored to the incident before
+        # its ephemeral dedicated carrier disappears.
+        if attachment_ids:
             raise UserError(_(
                 'Attachments are not allowed on billing incident activities.'
             ))

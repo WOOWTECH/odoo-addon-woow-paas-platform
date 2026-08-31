@@ -1363,6 +1363,19 @@ class TestBillingIncidentPublicApi864(TransactionCase):
                 'datas': base64.b64encode(b'unscanned attachment content'),
                 'mimetype': 'text/plain',
             })
+            m2m_attachment = env['ir.attachment'].sudo().create({
+                'name': 'legacy-m2m-unscanned-proof.txt',
+                'datas': base64.b64encode(b'legacy m2m attachment content'),
+                'mimetype': 'text/plain',
+            })
+            cr.execute(
+                'INSERT INTO activity_attachment_rel '
+                '(activity_id, attachment_id) VALUES (%s, %s)',
+                (activity.id, m2m_attachment.id),
+            )
+            m2m_attachment.invalidate_recordset(['datas', 'checksum'])
+            m2m_content = m2m_attachment.datas
+            m2m_checksum = m2m_attachment.checksum
 
             feedback_cases = (
                 {
@@ -1418,6 +1431,28 @@ class TestBillingIncidentPublicApi864(TransactionCase):
             self.assertEqual(
                 (attachment.res_model, attachment.res_id),
                 ('woow.billing.incident', incident.id),
+            )
+            m2m_attachment.invalidate_recordset([
+                'res_model', 'res_id', 'public', 'access_token',
+                'datas', 'checksum',
+            ])
+            self.assertTrue(m2m_attachment.exists())
+            self.assertEqual(
+                (m2m_attachment.res_model, m2m_attachment.res_id),
+                ('woow.billing.incident', incident.id),
+            )
+            self.assertFalse(m2m_attachment.public)
+            self.assertFalse(m2m_attachment.access_token)
+            self.assertEqual(m2m_attachment.datas, m2m_content)
+            self.assertEqual(m2m_attachment.checksum, m2m_checksum)
+            cr.execute(
+                'SELECT 1 FROM activity_attachment_rel '
+                'WHERE activity_id = %s OR attachment_id = %s',
+                (original_activity_id, m2m_attachment.id),
+            )
+            self.assertFalse(
+                cr.fetchone(),
+                'dedicated _action_done 必須在 parent delete 前清 M2M link',
             )
 
             replacement = env['mail.activity'].sudo().search([
@@ -2155,12 +2190,35 @@ class TestBillingIncidentPublicApi864(TransactionCase):
             'name': 'legacy-roster-evidence-%s.bin' % uuid.uuid4().hex,
             'datas': base64.b64encode(b'legacy roster evidence'),
         })
+        roster_m2m_evidence = self.env['ir.attachment'].sudo().create({
+            'name': 'm2m-roster-evidence-%s.bin' % uuid.uuid4().hex,
+            'datas': base64.b64encode(b'm2m roster evidence'),
+            'res_model': 'res.partner',
+            'res_id': removed.partner_id.id,
+        })
+        roster_m2m_token = str(uuid.uuid4())
         self.env.cr.execute(
             'UPDATE ir_attachment SET res_model = %s, res_id = %s '
             'WHERE id = %s',
             ('mail.activity', removed_activity.id, roster_evidence.id),
         )
+        self.env.cr.execute(
+            'UPDATE ir_attachment SET public = true, access_token = %s '
+            'WHERE id = %s',
+            (roster_m2m_token, roster_m2m_evidence.id),
+        )
+        self.env.cr.execute(
+            'INSERT INTO activity_attachment_rel '
+            '(activity_id, attachment_id) VALUES (%s, %s)',
+            (removed_activity.id, roster_m2m_evidence.id),
+        )
         roster_evidence.invalidate_recordset(['res_model', 'res_id'])
+        roster_m2m_evidence.invalidate_recordset([
+            'res_model', 'res_id', 'public', 'access_token',
+            'datas', 'checksum',
+        ])
+        roster_m2m_content = roster_m2m_evidence.datas
+        roster_m2m_checksum = roster_m2m_evidence.checksum
         self.assertIn(removed.id, Activity.search(activity_domain).user_id.ids)
         self.assertEqual(Followers.search_count(
             follower_domain + [('partner_id', '=', removed.partner_id.id)]), 1)
@@ -2246,6 +2304,29 @@ class TestBillingIncidentPublicApi864(TransactionCase):
             (roster_evidence.res_model, roster_evidence.res_id),
             ('woow.billing.incident', incident.id),
             'roster convergence 刪 dedicated carrier 前必須保全 evidence provenance',
+        )
+        roster_m2m_evidence.invalidate_recordset([
+            'res_model', 'res_id', 'public', 'access_token',
+            'datas', 'checksum',
+        ])
+        self.assertTrue(roster_m2m_evidence.exists())
+        self.assertEqual(
+            (roster_m2m_evidence.res_model, roster_m2m_evidence.res_id),
+            ('woow.billing.incident', incident.id),
+            'roster convergence 必須把 M2M-only evidence 改錨 ledger',
+        )
+        self.assertFalse(roster_m2m_evidence.public)
+        self.assertFalse(roster_m2m_evidence.access_token)
+        self.assertEqual(roster_m2m_evidence.datas, roster_m2m_content)
+        self.assertEqual(roster_m2m_evidence.checksum, roster_m2m_checksum)
+        self.env.cr.execute(
+            'SELECT 1 FROM activity_attachment_rel '
+            'WHERE activity_id = %s OR attachment_id = %s',
+            (removed_activity.id, roster_m2m_evidence.id),
+        )
+        self.assertFalse(
+            self.env.cr.fetchone(),
+            'roster parent delete 必須原子清掉 dedicated activity M2M link',
         )
         self.assertEqual(Followers.search_count(
             follower_domain + [('partner_id', '=', removed.partner_id.id)]), 0)
@@ -4279,6 +4360,216 @@ class TestBillingIncidentRpcWriteGuard864(HttpCase):
             'unrelated mail.message create must remain legal',
         )
         self.assertIsInstance(control_message_id, int)
+
+    def test_manager_rpc_m2m_evidence_guard_and_parent_reanchor(self):
+        Incident = self.env['woow.billing.incident']
+        self.assertTrue(
+            Incident._ensure_review_activities_current_cursor(
+                self.incident_a.id))
+        review_type = self.env.ref(
+            'woow_paas_platform.mail_activity_type_billing_incident_review')
+        dedicated = self.env['mail.activity'].sudo().search([
+            ('res_model', '=', 'woow.billing.incident'),
+            ('res_id', '=', self.incident_a.id),
+            ('activity_type_id', '=', review_type.id),
+            ('user_id', '=', self.manager_a.id),
+            ('active', '=', True),
+        ], limit=1)
+        self.assertTrue(dedicated)
+        control_project = self.env['project.project'].with_user(
+            self.manager_a).create({
+                'name': 'Ordinary M2M control %s' % uuid.uuid4().hex,
+            })
+        ordinary = self.env['mail.activity'].sudo().create({
+            'res_model_id': self.env['ir.model']._get(
+                'project.project').id,
+            'res_id': control_project.id,
+            'activity_type_id': self.env.ref(
+                'mail.mail_activity_data_todo').id,
+            'user_id': self.manager_a.id,
+            'summary': 'Ordinary M2M provenance control',
+            'note': 'Billing evidence rules must not capture this link',
+            'date_deadline': fields.Date.today(),
+        })
+        (
+            m2m_detached,
+            m2m_other_model,
+            direct_and_m2m,
+            ordinary_m2m,
+        ) = self.env['ir.attachment'].sudo().create([{
+            'name': 'rpc-m2m-provenance-%s-%s.bin' % (
+                purpose, uuid.uuid4().hex),
+            'datas': base64.b64encode(
+                ('m2m provenance %s' % purpose).encode()),
+            **({
+                'res_model': 'res.partner',
+                'res_id': self.manager_a.partner_id.id,
+            } if purpose == 'other-model' else ({
+                'res_model': 'project.project',
+                'res_id': control_project.id,
+            } if purpose == 'ordinary' else {})),
+        } for purpose in (
+            'detached', 'other-model', 'direct-and-m2m', 'ordinary',
+        )])
+        share_token = str(uuid.uuid4())
+        self.env.cr.execute(
+            'UPDATE ir_attachment SET public = true, access_token = %s '
+            'WHERE id = %s',
+            (share_token, m2m_detached.id),
+        )
+        # Test-only legacy corruption: the public API correctly rejects both
+        # direct and M2M attachment ingress on a dedicated activity.
+        self.env.cr.execute(
+            'UPDATE ir_attachment SET res_model = %s, res_id = %s '
+            'WHERE id = %s',
+            ('mail.activity', dedicated.id, direct_and_m2m.id),
+        )
+        self.env.cr.execute(
+            'INSERT INTO activity_attachment_rel '
+            '(activity_id, attachment_id) VALUES '
+            '(%s, %s), (%s, %s), (%s, %s), (%s, %s)',
+            (
+                dedicated.id, m2m_detached.id,
+                dedicated.id, m2m_other_model.id,
+                dedicated.id, direct_and_m2m.id,
+                ordinary.id, ordinary_m2m.id,
+            ),
+        )
+        evidence = m2m_detached | m2m_other_model | direct_and_m2m
+        evidence.invalidate_recordset([
+            'res_model', 'res_id', 'public', 'access_token',
+            'datas', 'checksum',
+        ])
+        original_payload = {
+            attachment.id: (attachment.datas, attachment.checksum)
+            for attachment in evidence
+        }
+        self.assertTrue(m2m_detached.public)
+        self.assertEqual(m2m_detached.access_token, share_token)
+        self.env.cr.flush()
+
+        self.authenticate(None, None)
+        for url in (
+                '/web/content/%s' % m2m_detached.id,
+                '/web/content/%s?access_token=%s' % (
+                    m2m_detached.id, share_token)):
+            with self.subTest(committed_public_url=url):
+                response = self.url_open(url)
+                self.assertEqual(
+                    response.status_code, 200,
+                    '改錨前 committed public/token URL 必須是可用的陽性對照',
+                )
+
+        self.authenticate(self.manager_a_login, self.manager_a_login)
+        for attachment in (m2m_detached, m2m_other_model):
+            denied = self._call_kw(
+                'ir.attachment', 'unlink', [[attachment.id]],
+            )
+            self._assert_access_error(
+                denied,
+                'account manager RPC 不得刪 M2M-only incident evidence',
+                contains='Attachments are not allowed',
+            )
+
+        mixed_ids = sorted([ordinary_m2m.id, m2m_detached.id])
+        mixed_denial = self._call_kw(
+            'ir.attachment', 'unlink', [mixed_ids],
+        )
+        self._assert_access_error(
+            mixed_denial,
+            'M2M evidence＋ordinary attachment unlink 必須整批 preflight 拒絕',
+            contains='Attachments are not allowed',
+        )
+        with self.env.registry.cursor() as verify_cr:
+            verify_cr.execute(
+                'SELECT id FROM ir_attachment '
+                'WHERE id = ANY(%s) ORDER BY id',
+                (mixed_ids,),
+            )
+            self.assertEqual(
+                [row_id for row_id, in verify_cr.fetchall()], mixed_ids)
+
+        ordinary_id = ordinary.id
+        self.assertTrue(self._assert_ok(
+            self._call_kw('mail.activity', 'unlink', [[ordinary_id]]),
+            'ordinary activity M2M parent unlink 必須維持 core behavior',
+        ))
+        with self.env.registry.cursor() as verify_cr:
+            verify_cr.execute(
+                'SELECT 1 FROM mail_activity WHERE id = %s',
+                (ordinary_id,),
+            )
+            self.assertFalse(verify_cr.fetchone())
+            verify_cr.execute(
+                'SELECT res_model, res_id FROM ir_attachment WHERE id = %s',
+                (ordinary_m2m.id,),
+            )
+            self.assertEqual(
+                verify_cr.fetchone(),
+                ('project.project', control_project.id),
+                'ordinary parent unlink 不得把普通 M2M attachment 改錨 incident',
+            )
+            verify_cr.execute(
+                'SELECT 1 FROM activity_attachment_rel '
+                'WHERE activity_id = %s OR attachment_id = %s',
+                (ordinary_id, ordinary_m2m.id),
+            )
+            self.assertFalse(
+                verify_cr.fetchone(),
+                'ordinary parent unlink 只清 core M2M relation、attachment 存活',
+            )
+
+        dedicated_id = dedicated.id
+        self.assertTrue(self._assert_ok(
+            self._call_kw('mail.activity', 'unlink', [[dedicated_id]]),
+            'terminal parent unlink 必須保全 direct＋M2M evidence',
+        ))
+        with self.env.registry.cursor() as verify_cr:
+            verify_cr.execute(
+                'SELECT id FROM mail_activity WHERE id = %s',
+                (dedicated_id,),
+            )
+            self.assertFalse(verify_cr.fetchone())
+            verify_cr.execute(
+                'SELECT attachment_id FROM activity_attachment_rel '
+                'WHERE activity_id = %s OR attachment_id = ANY(%s)',
+                (dedicated_id, evidence.ids),
+            )
+            self.assertFalse(
+                verify_cr.fetchall(),
+                'parent delete 前必須清空 dedicated activity M2M provenance',
+            )
+
+        evidence.invalidate_recordset([
+            'res_model', 'res_id', 'public', 'access_token',
+            'datas', 'checksum',
+        ])
+        self.assertEqual(len(evidence.exists()), 3)
+        for attachment in evidence:
+            with self.subTest(reanchored_attachment=attachment.id):
+                self.assertEqual(
+                    (attachment.res_model, attachment.res_id),
+                    ('woow.billing.incident', self.incident_a.id),
+                )
+                self.assertFalse(attachment.public)
+                self.assertFalse(attachment.access_token)
+                self.assertEqual(
+                    (attachment.datas, attachment.checksum),
+                    original_payload[attachment.id],
+                    'union 去重改錨不得改 attachment bytes/checksum',
+                )
+
+        self.authenticate(None, None)
+        for url in (
+                '/web/content/%s' % m2m_detached.id,
+                '/web/content/%s?access_token=%s' % (
+                    m2m_detached.id, share_token)):
+            with self.subTest(revoked_old_url=url):
+                response = self.url_open(url)
+                self.assertEqual(
+                    response.status_code, 404,
+                    '改錨後 public URL 與舊 token URL 都必須失效',
+                )
 
     def test_rpc_attachment_target_ids_are_canonicalized_fail_closed(self):
         self.assertTrue(

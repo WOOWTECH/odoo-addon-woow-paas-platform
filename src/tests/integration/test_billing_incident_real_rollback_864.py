@@ -1576,6 +1576,23 @@ class TestBillingIncidentRealTransactions864(BaseCase):
                     'datas': b'cHJvdGVjdGVk',
                 } for purpose in ('mixed-protected', 'private-cleanup')])
             )
+            protected_m2m = setup_env['ir.attachment'].sudo().create({
+                'name': '%s-mixed-m2m-protected.bin' % self.marker,
+                'datas': b'bTJtIHByb3RlY3RlZA==',
+                'res_model': 'res.partner',
+                'res_id': self.control_partner_id,
+            })
+            review_type = setup_env.ref(
+                'woow_paas_platform.'
+                'mail_activity_type_billing_incident_review')
+            dedicated = setup_env['mail.activity'].sudo().search([
+                ('res_model', '=', _MODEL),
+                ('res_id', '=', incident_id),
+                ('activity_type_id', '=', review_type.id),
+                ('user_id', '=', self.manager_user_id),
+                ('active', '=', True),
+            ], limit=1)
+            self.assertTrue(dedicated)
             setup_cr.execute(
                 'UPDATE ir_attachment SET res_model = %s, res_id = %s '
                 'WHERE id = ANY(%s)',
@@ -1585,27 +1602,40 @@ class TestBillingIncidentRealTransactions864(BaseCase):
                     [protected_mixed.id, protected_cleanup.id],
                 ),
             )
+            setup_cr.execute(
+                'INSERT INTO activity_attachment_rel '
+                '(activity_id, attachment_id) VALUES (%s, %s)',
+                (dedicated.id, protected_m2m.id),
+            )
             ordinary_id = ordinary.id
             protected_mixed_id = protected_mixed.id
+            protected_m2m_id = protected_m2m.id
+            protected_m2m_activity_id = dedicated.id
             protected_cleanup_id = protected_cleanup.id
             # This is the setup visibility boundary required by the oracle.
             setup_cr.commit()
 
-        mixed_ids = sorted([ordinary_id, protected_mixed_id])
-        caller_cr = self.registry.cursor()
-        try:
-            caller_env = api.Environment(
-                caller_cr, self.manager_user_id, {})
+        direct_mixed_ids = sorted([ordinary_id, protected_mixed_id])
+        m2m_mixed_ids = sorted([ordinary_id, protected_m2m_id])
+        mixed_ids = sorted(set(direct_mixed_ids + m2m_mixed_ids))
+        for provenance, payload_ids in (
+                ('direct', direct_mixed_ids),
+                ('m2m', m2m_mixed_ids)):
+            caller_cr = self.registry.cursor()
             try:
-                caller_env['ir.attachment'].browse(mixed_ids).unlink()
-            except AccessError:
-                # Deliberately make any pre-denial partial unlink durable.
-                caller_cr.commit()
-            else:
-                self.fail(
-                    'mixed protected＋ordinary unlink must raise AccessError')
-        finally:
-            caller_cr.close()
+                caller_env = api.Environment(
+                    caller_cr, self.manager_user_id, {})
+                try:
+                    caller_env['ir.attachment'].browse(payload_ids).unlink()
+                except AccessError:
+                    # Deliberately make any pre-denial partial unlink durable.
+                    caller_cr.commit()
+                else:
+                    self.fail(
+                        '%s protected＋ordinary unlink must raise AccessError'
+                        % provenance)
+            finally:
+                caller_cr.close()
 
         with self.registry.cursor() as verify_cr:
             verify_cr.execute(
@@ -1615,7 +1645,16 @@ class TestBillingIncidentRealTransactions864(BaseCase):
             self.assertEqual(
                 [row_id for row_id, in verify_cr.fetchall()],
                 mixed_ids,
-                'third connection must see both rows after catch＋commit',
+                'third connection must see every mixed row after catch＋commit',
+            )
+            verify_cr.execute(
+                'SELECT 1 FROM activity_attachment_rel '
+                'WHERE activity_id = %s AND attachment_id = %s',
+                (protected_m2m_activity_id, protected_m2m_id),
+            )
+            self.assertTrue(
+                verify_cr.fetchone(),
+                'third connection must still see the protected M2M link',
             )
 
         with self.registry.cursor() as cleanup_cr:
@@ -1633,6 +1672,7 @@ class TestBillingIncidentRealTransactions864(BaseCase):
                 ([
                     ordinary_id,
                     protected_mixed_id,
+                    protected_m2m_id,
                     protected_cleanup_id,
                 ],),
             )
