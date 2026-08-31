@@ -622,6 +622,232 @@ class TestBillingIncidentRealTransactions864(BaseCase):
             'schedule/done race must retain exactly one active alert per manager',
         )
 
+    def test_schedule_subscription_and_revocation_barrier_converge(self):
+        from odoo.addons.woow_paas_platform.models import billing_incident
+
+        # The schedule-before-revocation ordering is covered by the true RPC
+        # revocation test; this barrier forces the inverse overlap where an
+        # already-running revocation owns the global lock and the RC scheduler
+        # must refresh after waiting.
+        for ordering in ('revocation_first',):
+            with self.subTest(ordering=ordering):
+                with self.registry.cursor() as cr:
+                    env = api.Environment(cr, odoo.SUPERUSER_ID, {})
+                    manager_group = env.ref('account.group_account_manager')
+                    former = env['res.users'].sudo().with_context(
+                        no_reset_password=True).create({
+                            'name': '%s-roster-race-%s' % (
+                                self.marker, ordering),
+                            'login': '%s-roster-race-%s' % (
+                                self.marker, ordering),
+                            'email': '%s-roster-race-%s@example.test' % (
+                                self.marker, ordering),
+                            'groups_id': [(6, 0, [manager_group.id])],
+                        })
+                    former_id = former.id
+                    former_partner_id = former.partner_id.id
+                    cr.commit()
+
+                snapshot = self._snapshot(
+                    'roster-race-%s' % ordering,
+                    state='open',
+                )
+                incident_id = self._call_log(snapshot)
+                self._set_incident_state(incident_id, 'needs_human')
+
+                schedule_cr = self.registry._db.cursor()
+                revoke_cr = self.registry._db.cursor()
+                worker_context = {'mail_notify_force_send': False}
+                schedule_env = api.Environment(
+                    schedule_cr, odoo.SUPERUSER_ID, worker_context)
+                revoke_env = api.Environment(
+                    revoke_cr, odoo.SUPERUSER_ID, worker_context)
+                start_barrier = threading.Barrier(2)
+                gate_guard = threading.Lock()
+                gated_cursors = set()
+                acquired = []
+                errors = []
+                original_lock = billing_incident._acquire_billing_roster_lock
+
+                def barrier_roster_lock(cr):
+                    cursor_id = id(cr)
+                    with gate_guard:
+                        first_call = cursor_id not in gated_cursors
+                        gated_cursors.add(cursor_id)
+                    if first_call:
+                        start_barrier.wait(timeout=5)
+                        should_delay = (
+                            (ordering == 'schedule_first'
+                             and cr is revoke_cr)
+                            or (ordering == 'revocation_first'
+                                and cr is schedule_cr)
+                        )
+                        if should_delay:
+                            time.sleep(0.1)
+                    result = original_lock(cr)
+                    with gate_guard:
+                        if first_call:
+                            acquired.append(
+                                'schedule' if cr is schedule_cr else 'revoke')
+                    return result
+
+                def schedule():
+                    try:
+                        schedule_cr.rollback()
+                        schedule_cr.execute(
+                            'SET TRANSACTION ISOLATION LEVEL READ COMMITTED')
+                        schedule_cr.execute(
+                            'SET LOCAL lock_timeout = %s', ('5s',))
+                        schedule_env[_MODEL] \
+                            ._ensure_review_activities_current_cursor(
+                                incident_id)
+                        schedule_cr.commit()
+                    except Exception as exc:
+                        errors.append(('schedule', exc))
+
+                def revoke():
+                    try:
+                        manager_group = revoke_env.ref(
+                            'account.group_account_manager')
+                        revoke_env['res.users'].sudo().browse(former_id).write({
+                            'groups_id': [(3, manager_group.id)],
+                        })
+                        revoke_cr.commit()
+                    except Exception as exc:
+                        errors.append(('revoke', exc))
+
+                try:
+                    with patch.object(
+                            billing_incident,
+                            '_acquire_billing_roster_lock',
+                            barrier_roster_lock):
+                        threads = [
+                            threading.Thread(
+                                target=schedule,
+                                name='b864-roster-schedule-%s' % ordering,
+                            ),
+                            threading.Thread(
+                                target=revoke,
+                                name='b864-roster-revoke-%s' % ordering,
+                            ),
+                        ]
+                        for thread in threads:
+                            thread.start()
+                        for thread in threads:
+                            thread.join(timeout=10)
+                    alive = [
+                        thread for thread in threads if thread.is_alive()]
+                    self.assertFalse(
+                        alive,
+                        'schedule/revocation barrier threads must terminate: %r'
+                        % [thread.name for thread in alive],
+                    )
+                finally:
+                    if not schedule_cr.closed:
+                        schedule_cr.close()
+                    if not revoke_cr.closed:
+                        revoke_cr.close()
+                self.assertFalse(
+                    errors,
+                    'schedule/revocation workers failed: %r' % errors,
+                )
+                expected_first = (
+                    'schedule' if ordering == 'schedule_first' else 'revoke')
+                self.assertEqual(
+                    acquired[0], expected_first,
+                    'barrier probe must exercise the requested lock ordering',
+                )
+
+                with self.registry.cursor() as cr:
+                    env = api.Environment(cr, odoo.SUPERUSER_ID, {
+                        'mail_notify_force_send': False,
+                    })
+                    review_type = env.ref(
+                        'woow_paas_platform.'
+                        'mail_activity_type_billing_incident_review')
+                    self.assertFalse(env['mail.followers'].sudo().search([
+                        ('res_model', '=', _MODEL),
+                        ('res_id', '=', incident_id),
+                        ('partner_id', '=', former_partner_id),
+                    ]), 'former manager follower must converge to zero')
+                    self.assertFalse(env['mail.activity'].sudo().search([
+                        ('res_model', '=', _MODEL),
+                        ('res_id', '=', incident_id),
+                        ('activity_type_id', '=', review_type.id),
+                        ('user_id', '=', former_id),
+                        ('active', '=', True),
+                    ]), 'former manager activity must converge to zero')
+                    current_activity = env['mail.activity'].sudo().search([
+                        ('res_model', '=', _MODEL),
+                        ('res_id', '=', incident_id),
+                        ('activity_type_id', '=', review_type.id),
+                        ('user_id', '=', self.manager_user_id),
+                        ('active', '=', True),
+                    ], limit=1)
+                    self.assertTrue(current_activity)
+                    message_floor = env['mail.message'].sudo().search(
+                        [], order='id desc', limit=1).id
+                    current_activity.with_user(
+                        self.manager_user_id).action_feedback(
+                            feedback='post-race notification control')
+                    message = env['mail.message'].sudo().search([
+                        ('id', '>', message_floor),
+                        ('model', '=', _MODEL),
+                        ('res_id', '=', incident_id),
+                    ], order='id desc', limit=1)
+                    self.assertTrue(message)
+                    self.assertFalse(env['mail.notification'].sudo().search([
+                        ('mail_message_id', '=', message.id),
+                        ('res_partner_id', '=', former_partner_id),
+                    ]), 'former manager must receive no notification after race')
+                    self.assertFalse(env['mail.mail'].sudo().search([
+                        ('mail_message_id', '=', message.id),
+                        ('recipient_ids', 'in', [former_partner_id]),
+                    ]), 'former manager must receive no outgoing mail after race')
+                    cr.commit()
+
+    def test_scheduler_second_cursor_is_read_committed_before_roster_read(self):
+        from odoo.addons.woow_paas_platform.models import billing_incident
+
+        snapshot = self._snapshot(
+            'scheduler-read-committed',
+            state='open',
+        )
+        incident_id = self._call_log(snapshot)
+        self._set_incident_state(incident_id, 'needs_human')
+        observed_isolation = []
+        original_lock = billing_incident._acquire_billing_roster_lock
+
+        def observe_isolation_before_roster_lock(cr):
+            cr.execute('SHOW transaction_isolation')
+            observed_isolation.append(cr.fetchone()[0])
+            return original_lock(cr)
+
+        original_test_enable = billing_incident.config['test_enable']
+        try:
+            billing_incident.config['test_enable'] = False
+            with patch.object(
+                    billing_incident,
+                    '_acquire_billing_roster_lock',
+                    observe_isolation_before_roster_lock):
+                with self.registry.cursor() as cr:
+                    env = api.Environment(cr, odoo.SUPERUSER_ID, {})
+                    self.assertTrue(
+                        env[_MODEL]._schedule_review_activities(incident_id))
+        finally:
+            billing_incident.config['test_enable'] = original_test_enable
+        self.assertTrue(observed_isolation)
+        self.assertEqual(
+            set(observed_isolation),
+            {'read committed'},
+            'scheduler second cursor must switch isolation before its first '
+            'roster/advisory-lock snapshot path',
+        )
+        self.assertEqual(
+            self._review_activity_counts_by_user(incident_id),
+            self._expected_review_activity_counts_by_user(),
+        )
+
     def test_duplicate_log_converges_current_manager_roster(self):
         with self.registry.cursor() as cr:
             env = api.Environment(cr, odoo.SUPERUSER_ID, {})

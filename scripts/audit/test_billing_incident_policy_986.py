@@ -39,6 +39,7 @@ class TestBillingIncidentPolicy986(unittest.TestCase):
                 'prod=1/stg=3',
                 'current-state evidence only',
                 'policy does not assume single-company',
+                '現況佐證，不是 single-company policy',
                 '`base.group_system` alone does not grant',
                 'unresolved incidents',
                 'current account-manager'):

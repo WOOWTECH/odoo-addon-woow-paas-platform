@@ -17088,10 +17088,23 @@ msgstr "帳務事件"
 #. module: woow_paas_platform
 #. odoo-python
 #: code:addons/woow_paas_platform/models/billing_incident.py:0
+msgid "Billing Incident #%(incident_id)s — %(kind)s"
+msgstr "帳務事件 #%(incident_id)s — %(kind)s"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/billing_incident.py:0
 msgid ""
-"Billing incident %(external_ref)s (%(kind)s) requires an ECPay verification "
+"Billing Incident #%(incident_id)s: %(kind)s requires manual review"
+msgstr "帳務事件 #%(incident_id)s：%(kind)s，需要人工檢查"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/billing_incident.py:0
+msgid ""
+"Billing Incident #%(incident_id)s (%(kind)s) requires an ECPay verification "
 "and an explicit resolution note."
-msgstr "帳務事件 %(external_ref)s（%(kind)s）需要 ECPay 查證及明確的處理註記。"
+msgstr "帳務事件 #%(incident_id)s（%(kind)s）需要 ECPay 查證及明確的處理註記。"
 
 #. module: woow_paas_platform
 #: model:ir.model.constraint,message:woow_paas_platform.constraint_woow_billing_incident_counters_nonnegative
@@ -17112,12 +17125,6 @@ msgstr "帳務事件的首次發現時間不得晚於最後發現時間。"
 #: model:ir.model.constraint,message:woow_paas_platform.constraint_woow_billing_incident_occurrences_positive
 msgid "Billing incident occurrences must be at least one."
 msgstr "帳務事件的發生次數必須至少為一。"
-
-#. module: woow_paas_platform
-#. odoo-python
-#: code:addons/woow_paas_platform/models/billing_incident.py:0
-msgid "Billing incident requires manual review"
-msgstr "帳務事件需要人工檢查"
 
 #. module: woow_paas_platform
 #. odoo-python
@@ -17462,3 +17469,8 @@ msgstr "帳務 incident chatter 由內部 activity 完成流程自動管理。"
 #: code:addons/woow_paas_platform/models/billing_incident.py:0
 msgid "Only current account managers may follow billing incidents."
 msgstr "只有目前有效的會計管理員可以追蹤帳務 incident。"
+
+#. module: woow_paas_platform
+#: code:addons/woow_paas_platform/models/billing_incident.py:0
+msgid "Only the internal billing scheduler may follow incidents."
+msgstr "只有內部帳務排程器可以維護帳務 incident 的追蹤者。"

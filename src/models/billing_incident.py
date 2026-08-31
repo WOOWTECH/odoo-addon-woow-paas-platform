@@ -77,6 +77,15 @@ _BILLING_INTERNAL_CONTEXT_ALLOWLIST = frozenset({
     'mail_notify_force_send',
     'tz',
 })
+_BILLING_ROSTER_LOCK_NAME = 'woow.billing.incident.account-manager-roster'
+
+
+def _acquire_billing_roster_lock(cr):
+    """Serialize effective finance-roster reads and mutations until commit."""
+    cr.execute(
+        'SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))',
+        (_BILLING_ROSTER_LOCK_NAME,),
+    )
 
 
 def _with_billing_incident_capability(records, key, capability):
@@ -241,7 +250,9 @@ class BillingIncident(models.Model):
     _name = 'woow.billing.incident'
     _inherit = ['mail.thread']
     _description = 'Woow Billing Incident'
-    _rec_name = 'external_ref'
+    # Never let generic relational labels copy the raw provider reference into
+    # mail.activity.res_name or another model's SQL parameters.
+    _rec_name = 'kind'
     _order = 'last_seen_at desc, id desc'
 
     _KIND_SELECTION = (
@@ -328,6 +339,17 @@ class BillingIncident(models.Model):
     resolution_note = fields.Text()
     resolved_at = fields.Datetime()
     resolved_by_ref = fields.Integer()
+
+    @api.depends('kind')
+    def _compute_display_name(self):
+        kind_labels = dict(
+            self._fields['kind']._description_selection(self.env))
+        for incident in self:
+            incident.display_name = _(
+                'Billing Incident #%(incident_id)s — %(kind)s',
+                incident_id=incident.id,
+                kind=kind_labels.get(incident.kind, incident.kind or '-'),
+            )
 
     _sql_constraints = [
         (
@@ -517,13 +539,7 @@ class BillingIncident(models.Model):
         }
 
     def write(self, values):
-        """Lock/re-read first; only one capability may perform first resolve."""
-        states = self._lock_and_refresh_states()
-        if any(state == 'resolved' for state in states.values()):
-            raise AccessError(_(
-                'Resolved billing incidents are immutable.'
-            ))
-
+        """Pre-authorize generic writes before taking any incident row lock."""
         if _is_resolution_transition(self.env):
             if (set(values) != self._RESOLUTION_TRANSITION_FIELDS
                     or values.get('state') != 'resolved'
@@ -540,15 +556,24 @@ class BillingIncident(models.Model):
                     'Resolution notes must contain only safe, '
                     'non-sensitive summaries.'
                 ))
+            # The unforgeable transition capability still uses the same
+            # controlled lock/re-read that makes first resolution immutable.
+            states = self._lock_and_refresh_states()
+            if any(state == 'resolved' for state in states.values()):
+                raise AccessError(_(
+                    'Resolved billing incidents are immutable.'
+                ))
             return super().write(values)
 
-        # ``sudo()`` is an ACL tool, not a lifecycle capability.  Generic
-        # unresolved writes remain the account-manager manual-entry seam only.
+        # Do not browse, lock, or otherwise distinguish caller-supplied ids
+        # until the role and model ACL both pass.  ``sudo()`` is an ACL tool,
+        # not a lifecycle capability.
         if (self.env.su or not self.env.user.has_group(
                 'account.group_account_manager')):
             raise AccessError(_(
                 'Only account managers may update billing incidents.'
             ))
+        self.check_access('write')
         forbidden = set(values) - self._MANAGER_WRITABLE_FIELDS
         if forbidden:
             raise AccessError(_(
@@ -563,6 +588,12 @@ class BillingIncident(models.Model):
                 'Resolution notes must contain only safe, '
                 'non-sensitive summaries.'
             ))
+
+        states = self._lock_and_refresh_states()
+        if any(state == 'resolved' for state in states.values()):
+            raise AccessError(_(
+                'Resolved billing incidents are immutable.'
+            ))
         return super().write(values)
 
     def unlink(self):
@@ -575,15 +606,15 @@ class BillingIncident(models.Model):
         ))
 
     def message_subscribe(self, partner_ids=None, subtype_ids=None):
-        """Allow incident followers only from the live finance roster."""
+        """Reserve incident follower changes for roster-locked scheduling."""
         if not self or not partner_ids:
             return True
-        roster_user_ids = _active_account_manager_roster_ids(self.env)
+        if not _is_activity_scheduler(self.env):
+            raise AccessError(_(
+                'Only the internal billing scheduler may follow incidents.'
+            ))
         roster_partner_ids = _active_account_manager_partner_ids(self.env)
-        caller_is_current_manager = self.env.uid in roster_user_ids
-        if (not (_is_activity_scheduler(self.env)
-                 or caller_is_current_manager)
-                or not set(partner_ids).issubset(roster_partner_ids)):
+        if not set(partner_ids).issubset(roster_partner_ids):
             raise AccessError(_(
                 'Only current account managers may follow billing incidents.'
             ))
@@ -688,11 +719,19 @@ class BillingIncident(models.Model):
         return False
 
     @api.model
-    def _sensitive_content_category(self, field_name, value):
+    def _sensitive_marker_category(self, value):
         canonical = self._canonicalize_pci_text(value)
         if (self._SENSITIVE_MARKER_RE.search(canonical)
                 or self._SENSITIVE_CJK_MARKER_RE.search(canonical)):
             return 'sensitive_marker'
+        return False
+
+    @api.model
+    def _sensitive_content_category(self, field_name, value):
+        canonical = self._canonicalize_pci_text(value)
+        marker_category = self._sensitive_marker_category(value)
+        if marker_category:
+            return marker_category
         for match in self._PAN_CANDIDATE_RE.finditer(canonical):
             digits = ''.join(character for character in match.group()
                              if character.isdigit())
@@ -722,11 +761,14 @@ class BillingIncident(models.Model):
 
     @api.model
     def _provider_reference_category(self, field_name, value):
-        """Validate provider keys by shape, never as free-text PCI ingress."""
+        """Allow numeric coincidences, but never marker-labelled secrets."""
         if not isinstance(value, str):
             return 'invalid_type'
         if self._CONTROL_CHARACTER_RE.search(value):
             return 'control_character'
+        marker_category = self._sensitive_marker_category(value)
+        if marker_category:
+            return marker_category
         if field_name == 'external_ref':
             if (self._RAW_MTN_RE.fullmatch(value)
                     or self._NAMESPACED_EXTERNAL_REF_RE.fullmatch(value)):
@@ -1066,16 +1108,19 @@ class BillingIncident(models.Model):
     @api.model
     def _ensure_review_activities_current_cursor(self, incident_id):
         """Converge one active dedicated alert per manager on this cursor."""
+        # Global roster lock must precede incident/activity locks everywhere.
+        # Mutations hold it from before core membership writes through commit.
+        _acquire_billing_roster_lock(self.env.cr)
         self._acquire_review_activity_lock(self.env.cr, incident_id)
         self.env.cr.execute(
             sql.SQL(
-                'SELECT external_ref, kind, state FROM {table} WHERE id = %s'
+                'SELECT kind, state FROM {table} WHERE id = %s'
             ).format(table=sql.Identifier(self._table)),
             (incident_id,),
             log_exceptions=False,
         )
         incident = self.env.cr.fetchone()
-        if not incident or incident[2] not in ('orphan', 'needs_human'):
+        if not incident or incident[1] not in ('orphan', 'needs_human'):
             return False
 
         review_type = self.env.ref(
@@ -1131,7 +1176,7 @@ class BillingIncident(models.Model):
                 'category=no_review_assignee', incident_id)
             return False
         existing_user_ids = kept_user_ids
-        external_ref, kind, _state = incident
+        kind, _state = incident
         activity_values = []
         for user in users:
             if user.id in existing_user_ids:
@@ -1143,21 +1188,26 @@ class BillingIncident(models.Model):
             kind_labels = dict(
                 user_env[self._name]._fields[
                     'kind']._description_selection(user_env))
-            summary = get_translation(
+            summary_template = get_translation(
                 'woow_paas_platform',
                 user_env.lang or 'en_US',
-                'Billing incident requires manual review',
+                'Billing Incident #%(incident_id)s: %(kind)s requires '
+                'manual review',
                 (),
             )
+            summary = summary_template % {
+                'incident_id': incident_id,
+                'kind': kind_labels[kind],
+            }
             note_template = Markup.escape(get_translation(
                 'woow_paas_platform',
                 user_env.lang or 'en_US',
-                'Billing incident %(external_ref)s (%(kind)s) requires an '
+                'Billing Incident #%(incident_id)s (%(kind)s) requires an '
                 'ECPay verification and an explicit resolution note.',
                 (),
             ))
             note = note_template % {
-                'external_ref': escape(external_ref),
+                'incident_id': incident_id,
                 'kind': escape(kind_labels[kind]),
             }
             activity_values.append({
@@ -1191,6 +1241,7 @@ class BillingIncident(models.Model):
     @api.model
     def _converge_unresolved_review_activities_current_cursor(self):
         """Converge live followers and alerts after any roster mutation."""
+        _acquire_billing_roster_lock(self.env.cr)
         current_partner_ids = _active_account_manager_partner_ids(self.env)
         stale_follower_domain = [('res_model', '=', self._name)]
         if current_partner_ids:
@@ -1212,7 +1263,19 @@ class BillingIncident(models.Model):
     @api.model
     def _schedule_review_activities(self, incident_id):
         """Best-effort transaction around current-cursor alert convergence."""
-        with self.env.registry.cursor() as cr:
+        # Real scheduler transactions bypass Registry.cursor's signaling
+        # query so READ COMMITTED can be the first SQL statement.  Odoo's
+        # TransactionCase/HttpCase cursor shim must remain on its shared test
+        # transaction; the true raw-cursor contract is covered by integration.
+        cursor_factory = (
+            self.env.registry.cursor
+            if config['test_enable']
+            else self.env.registry._db.cursor
+        )
+        with cursor_factory() as cr:
+            if not config['test_enable']:
+                cr.execute(
+                    'SET TRANSACTION ISOLATION LEVEL READ COMMITTED')
             cr.execute('SET LOCAL lock_timeout = %s',
                        (self._LOCK_TIMEOUT,))
             env = api.Environment(cr, SUPERUSER_ID, {})
@@ -1451,6 +1514,7 @@ class ResUsers(models.Model):
         """Converge after create's final implied-group and active state."""
         if _is_roster_mutation(self.env):
             return super().create(values_list)
+        _acquire_billing_roster_lock(self.env.cr)
         before = _active_account_manager_roster_ids(self.env)
         guarded = _roster_mutation(self)
         users = super(ResUsers, guarded).create(values_list)
@@ -1463,6 +1527,7 @@ class ResUsers(models.Model):
         if (_is_roster_mutation(self.env)
                 or not self._may_change_billing_manager_roster(values)):
             return super().write(values)
+        _acquire_billing_roster_lock(self.env.cr)
         before = _active_account_manager_roster_ids(self.env)
         guarded = _roster_mutation(self)
         records = guarded.browse(self.ids)
@@ -1474,6 +1539,7 @@ class ResUsers(models.Model):
         """Deleting an active manager removes stale alerts in this transaction."""
         if _is_roster_mutation(self.env):
             return super().unlink()
+        _acquire_billing_roster_lock(self.env.cr)
         before = _active_account_manager_roster_ids(self.env)
         guarded = _roster_mutation(self)
         records = guarded.browse(self.ids)
@@ -1487,14 +1553,21 @@ class ResGroups(models.Model):
 
     @api.model_create_multi
     def create(self, values_list):
-        """Converge after core finishes users plus implied-group expansion."""
-        if (_is_roster_mutation(self.env)
-                or not any({'users', 'implied_ids'} & set(values)
-                           for values in values_list)):
+        """Capture every effective default/copy carrier, not only raw values."""
+        if _is_roster_mutation(self.env):
             return super().create(values_list)
+        _acquire_billing_roster_lock(self.env.cr)
         before = _active_account_manager_roster_ids(self.env)
         guarded = _roster_mutation(self)
         groups = super(ResGroups, guarded).create(values_list)
+        # GroupsImplied.create pops explicit ``users`` before generic default
+        # expansion.  With context/ir.default carriers, users and implied_ids
+        # therefore arrive only inside generic create and core misses its
+        # propagation write.  Replay each final user set under the private
+        # recursion guard so effective implied membership is materialized.
+        for group in groups.filtered(lambda item: (
+                item.users and item.implied_ids)):
+            group.write({'users': [(6, 0, group.users.ids)]})
         _converge_billing_roster_if_changed(guarded.env, before)
         return self.browse(groups.ids)
 
@@ -1502,6 +1575,7 @@ class ResGroups(models.Model):
         """Converge once after copy replays users/implied values via create."""
         if _is_roster_mutation(self.env):
             return super().copy(default)
+        _acquire_billing_roster_lock(self.env.cr)
         before = _active_account_manager_roster_ids(self.env)
         guarded = _roster_mutation(self)
         groups = guarded.browse(self.ids)
@@ -1514,6 +1588,7 @@ class ResGroups(models.Model):
         if (_is_roster_mutation(self.env)
                 or not {'users', 'implied_ids'} & set(values)):
             return super().write(values)
+        _acquire_billing_roster_lock(self.env.cr)
         before = _active_account_manager_roster_ids(self.env)
         guarded = _roster_mutation(self)
         groups = guarded.browse(self.ids)
@@ -1525,6 +1600,7 @@ class ResGroups(models.Model):
         """Catch implied-group deletion if it changes effective membership."""
         if _is_roster_mutation(self.env):
             return super().unlink()
+        _acquire_billing_roster_lock(self.env.cr)
         before = _active_account_manager_roster_ids(self.env)
         guarded = _roster_mutation(self)
         groups = guarded.browse(self.ids)
@@ -2025,6 +2101,8 @@ class MailActivity(models.Model):
                 'Billing incident activity feedback must contain only safe, '
                 'non-sensitive summaries.'
             ))
+        if incident_ids:
+            _acquire_billing_roster_lock(self.env.cr)
         for incident_id in incident_ids:
             Incident._acquire_review_activity_lock(self.env.cr, incident_id)
         guarded = _activity_terminal(self)
@@ -2040,6 +2118,8 @@ class MailActivity(models.Model):
             return super().unlink()
         incident_ids = self._dedicated_billing_incident_ids()
         Incident = self.env['woow.billing.incident'].sudo()
+        if incident_ids:
+            _acquire_billing_roster_lock(self.env.cr)
         # Lock before core deletes/archives the terminal activity.  Taking the
         # same incident-scoped lock as schedule/resolve prevents the classic
         # inversion "resolve holds advisory → waits activity row" versus
