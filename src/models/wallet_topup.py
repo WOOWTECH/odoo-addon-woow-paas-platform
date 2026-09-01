@@ -237,6 +237,11 @@ class WalletTopup(models.Model):
                     tx.reference, charge_amount, self.id, self.partner_id.id,
                     self.partner_id.email or '(none)',
                 )
+                # #864 PR-E 順序：incident 先落地（獨立交易，即使自己失敗也
+                # fail-soft 不拋），下面那個 `state='failed'` 標記才是保底。
+                self._log_charged_not_credited_incident(
+                    tx, token, charge_amount, currency,
+                )
                 self.write({
                     'state': 'failed',
                     'failure_code': TOPUP_WALLET_CREDIT_FAILED,
@@ -292,6 +297,11 @@ class WalletTopup(models.Model):
                 self.id, self.partner_id.id,
                 self.partner_id.email or '(none)',
             )
+            # #864 PR-E 順序：incident 先落地（獨立交易，即使自己失敗也
+            # fail-soft 不拋），下面那個 `state='failed'` 標記才是保底。
+            self._log_charged_not_credited_incident(
+                tx, token, charge_amount, currency,
+            )
             self.write({
                 'state': 'failed',
                 'failure_code': TOPUP_WALLET_CREDIT_FAILED,
@@ -303,6 +313,71 @@ class WalletTopup(models.Model):
             return False, TOPUP_WALLET_CREDIT_FAILED
 
         return True, TOPUP_OK
+
+    def _log_charged_not_credited_incident(self, tx, token, charge_amount, currency):
+        """獨立交易落一筆 CHARGED_NOT_CREDITED incident（#864 PR-D／PR-E）。
+
+        兩個呼叫端都是「ECPay 已確認扣款（``tx.state == 'done'``），但入帳／
+        記帳後續處理失敗」——這正是 double-charge 冷卻閘（見
+        ``sh_subscription_fix.py`` 的 ``_double_charge_cooldown_active``）
+        要讀的那個訊號。
+
+        🔴 順序：呼叫端必須在 ``self.write({'state': 'failed', ...})``
+        **之前**呼叫這個 method——``woow.billing.incident._log()`` 用獨立
+        cursor commit，即使它自己失敗也只 fail-soft 記 log、不往上拋，這樣
+        原本那個 ``failed`` 標記仍是保底，兩者不互相取代。
+
+        snapshot 只放 allowlisted 純量／代碼：``detail`` 刻意寫死通用句子，
+        不帶 ``str(exc)`` 原始內容——ECPay 例外訊息可能夾帶 PAN-like 內容或
+        HTML 片段，``woow.billing.incident._validate_log_snapshot`` 對這兩者
+        是 fail-soft 拒收**整筆**（見 ``billing_incident.py`` 模組
+        docstring）；與其賭一次 regex 不如從源頭不放。原始例外仍完整留在
+        ``self.failure_message``（未被本 method 動到）。同理刻意不帶
+        ``partner_email``——沿用 ``account_move_invoice_status.py`` 既有
+        的教訓：email 形狀驗證失敗會讓整筆 snapshot 被拒收、告警靜默消失，
+        識別走 ``partner_ref`` / ``source_ref`` 即可。
+
+        🔴 這個 method 本身也是「incident 寫入」的一部分，必須自己包
+        try/except（抄 ``cf_access_policy_reap.py`` 的形狀）：``_log()`` 的
+        contract 是「內部已吞掉所有例外、永不外拋」，但這個 method 在呼叫
+        ``_log()`` 之前還有一段組 snapshot dict 的 Python 邏輯——這段本身若
+        炸掉（如未來重構誤觸型別錯誤），⛔ 不能讓例外反過來連累呼叫端
+        `charge_via_token` 那個保底的 `state='failed'` 標記。失敗只
+        log critical，不外拋。
+        """
+        try:
+            incident_id = self.env['woow.billing.incident']._log({
+                'external_ref': tx.reference,
+                'kind': 'charged_not_credited',
+                'partner_ref': self.partner_id.id or None,
+                'payment_token_ref': token.id if token else None,
+                'amount': float(charge_amount),
+                'credits': self.credits,
+                'bonus': self.bonus,
+                'currency': currency.name if currency else None,
+                'trade_no': tx.reference,
+                'failure_code': TOPUP_WALLET_CREDIT_FAILED,
+                'source_model': self._name,
+                'source_ref': self.id,
+                'detail': (
+                    'ECPay 已接受扣款（tx.state=done）但入帳／記帳後續處理'
+                    '失敗；原始例外請查 woow.wallet.topup.failure_message '
+                    '與伺服器 log。'
+                ),
+            })
+            _logger.info(
+                '[TOPUP_AUTO] charged_not_credited incident logged topup=%s '
+                'tx=%s incident_id=%s',
+                self.id, tx.id, incident_id,
+            )
+        except Exception:
+            _logger.critical(
+                '[TOPUP_AUTO] CRITICAL: charged_not_credited incident '
+                'logging itself failed (topup=%s tx=%s) — the charge has '
+                'already happened; only the failed marker below now stands '
+                'as evidence',
+                self.id, tx.id,
+            )
 
     def _on_payment_done(self, tx):
         """Credit the wallet when the linked payment transaction succeeds.
