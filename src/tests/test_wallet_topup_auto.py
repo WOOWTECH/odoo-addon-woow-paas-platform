@@ -151,6 +151,10 @@ class TestChargeViaToken(TransactionCase):
 
     def test_charge_via_token_successful_charge_credits_wallet_and_creates_invoice(self):
         """End-to-end happy path: charge -> wallet credited -> invoice created with skip flag."""
+        # #864 PR-C：儲值發票的開票狀態改由 res.company.auto_invoice 決定
+        # （fail-closed resolver），不再寫死 'pending'。本測試斷言的是「自動開票
+        # 政策下 cron 撿得到」，故顯式把政策設成 automatic。
+        self.env.company.auto_invoice = 'automatic'
         provider, token = self._setup_ecpg_token('AB12345678')
         topup = self.env['woow.wallet.topup'].create_auto_topup(
             partner=self.partner, amount=50.0,
@@ -174,7 +178,9 @@ class TestChargeViaToken(TransactionCase):
         # Invoice created with skip flag
         self.assertTrue(topup.invoice_account_move_id)
         self.assertTrue(topup.invoice_account_move_id.woow_skip_upstream_hook)
-        self.assertEqual(topup.invoice_account_move_id.woow_invoice_issue_state, 'pending')
+        # manual 政策下的對應行為由 test_invoice_issue_policy_864.py 蓋。
+        self.assertEqual(
+            topup.invoice_account_move_id.woow_invoice_issue_state, 'pending')
 
     def test_charge_via_token_3ds_required_keeps_pending_state(self):
         """3DS redirect: state stays 'pending', not 'done', not 'failed'."""

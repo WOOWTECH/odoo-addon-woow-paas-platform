@@ -141,6 +141,9 @@ _CONFIG_PARAMETERS = [
     'woow_paas_platform.max_consecutive_payment_failures',
     # #778 配套 3：計費靜默告警的門檻天數（'0' 停用；缺值走模組內建預設）
     'woow_paas_platform.billing_silence_alert_days',
+    # #864 PR-C：manual 發票老化告警的門檻天數（'0' 停用；缺值／非法值走
+    # models/account_move_invoice_status.py 的內建預設 7 天）
+    'woow_paas_platform.manual_invoice_aging_days',
     'woow_paas_platform.sa_default_service_url',
     'woow_paas_platform.agent_idle_reap_seconds',
     'woow_paas_platform.agent_gc_seconds',

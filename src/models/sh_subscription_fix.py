@@ -356,6 +356,36 @@ class ShSubscriptionFix(models.Model):
             "%s recent cycle invoice(s); activities created",
             len(frozen), days, recent_invoices)
 
+    def _generate_invoice_vals(self):
+        """[#864 PR-C] choke point：替訂閱家族**四個**建票入口 stamp 開票政策。
+
+        上游 ``sh.subscription.subscription._generate_invoice_vals()`` 回傳的
+        vals 不含 ``woow_invoice_issue_state`` ⇒ 建出來的 move 吃欄位 default
+        ``not_required`` ⇒ 上游 inline hook 碰不到、平台 async cron 也揀不到
+        （只揀 ``pending`` / ``failed``）⇒ **永遠不開票，而且管理員連手動補救鈕
+        都按不下去**（``action_woow_retry_ecpay_invoice`` 對 ``not_required``
+        直接 raise）。
+
+        四個入口共用這一支 vals builder（上游 ``sh_subscription_confirm`` /
+        ``sh_generate_invoice`` / ``_sh_create_period_invoice``，加上平台的
+        ``subscription_lifecycle_mixin._skip_trial``）⇒ 只補其中一個入口＝只修
+        四分之一，而且下一個新入口會再犯一次。故在 choke point 上 stamp。
+
+        ⚠ 與 cycle invoice 既有的顯式覆寫**不衝突**：``_get_or_create_cycle_
+        invoice`` 是在拿到 vals **之後**才蓋成 ``not_required``（儲值時已開過
+        ECPay 發票，不重複開），那一步仍然勝出。
+
+        ⚠ ``self`` 可能是空 recordset（上游 ``_sh_create_auto_invoice`` 的既知
+        bug，見本 class docstring）⇒ ``sh_company_id`` 取不到時退回
+        ``env.company``，resolver 本身對空 recordset 也是 fail-closed。
+        """
+        vals = super()._generate_invoice_vals()
+        vals['woow_invoice_issue_state'] = (
+            self.env['account.move']._woow_resolve_invoice_issue_state(
+                self.sh_company_id or self.env.company)
+        )
+        return vals
+
     @api.model
     def _sh_create_auto_invoice(self):
         """Daily auto-invoice cron with T19 dunning semantics.

@@ -489,6 +489,12 @@ class WalletTopup(models.Model):
         self.ensure_one()
         product = self._get_topup_product()
         line_name = f"Wallet Topup: {self.plan_id.name}" if self.plan_id else "Wallet Topup"
+        # #864 PR-C（裁決 ④）：開票政策由 res.company.auto_invoice 決定，與訂閱
+        # 家族共用同一顆 fail-closed resolver。原本這裡寫死 'pending' ⇒ 平台的
+        # async cron（完全不看 auto_invoice，只要看到 pending 就開）會無條件自動
+        # 開票，「paas 選 manual」根本不生效。
+        issue_state = self.env['account.move']._woow_resolve_invoice_issue_state(
+            self.env.company)
         move_vals = {
             'move_type': 'out_invoice',
             'partner_id': self.partner_id.id,
@@ -501,7 +507,7 @@ class WalletTopup(models.Model):
                 'quantity': 1.0,
                 'price_unit': self.amount,
             })],
-            'woow_invoice_issue_state': 'pending',
+            'woow_invoice_issue_state': issue_state,
             # Path B: PaaS issues e-invoices via cron only. The skip flag
             # short-circuits the upstream `create_ecpay_invoice` action_post
             # hook so the same move isn't issued twice (once inline, once by

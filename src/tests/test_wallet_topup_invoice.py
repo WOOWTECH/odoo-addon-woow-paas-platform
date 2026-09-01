@@ -57,7 +57,14 @@ class TestManualTopupInvoiceSkipsHook(TransactionCase):
         )
 
     def test_manual_topup_invoice_marked_pending_for_cron(self):
-        """Manual topup invoice woow_invoice_issue_state='pending' so cron picks it up."""
+        """Under the automatic policy the topup invoice is queued for the cron.
+
+        #864 PR-C：儲值發票的開票狀態改由 res.company.auto_invoice 決定
+        （fail-closed resolver），不再寫死 'pending'。本測試要驗的是「自動開票
+        政策下 cron 撿得到」，故顯式把政策設成 automatic；manual 政策的對應行為
+        由 test_invoice_issue_policy_864.py 蓋。
+        """
+        self.env.company.auto_invoice = 'automatic'
         topup = self._make_manual_topup()
         invoice = topup._ensure_topup_invoice()
         self.assertEqual(

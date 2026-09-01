@@ -75,6 +75,10 @@ class TestEcpayInvoiceTopup(TransactionCase):
         return method
 
     def test_topup_done_creates_pending_invoice(self):
+        # #864 PR-C：儲值發票的開票狀態改由 res.company.auto_invoice 決定（fail-closed resolver），
+        # 不再寫死 'pending'。本測試要驗的是「自動開票政策下 cron 撿得到」，故顯式
+        # 把政策設成 automatic；manual 政策的對應行為由 test_invoice_issue_policy_864.py 蓋。
+        self.env.company.auto_invoice = 'automatic'
         self.topup._on_payment_done(self.tx)
         self.assertTrue(
             self.topup.invoice_account_move_id,
