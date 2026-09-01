@@ -519,9 +519,14 @@ class WalletTopup(models.Model):
         try:
             move.action_post()
         except Exception:
-            # Leave the move in draft for a human / cron to recover. The
-            # woow_invoice_issue_state stays 'pending' so the issuing cron
-            # ignores it (it filters posted moves only).
+            # Leave the move in draft for a human / cron to recover.
+            # ⚠ #864 PR-C 更正：這裡原本寫「issue state 維持 'pending' 所以開票
+            # cron 不會撿」——那句話現在是錯的：政策為 manual 時 stamp 出來的就是
+            # 'manual'，而 automatic 時才是 'pending'，兩者都不是這裡的理由。
+            # cron 不撿它的**真正原因是這張 move 還停在 draft**：
+            # `_cron_issue_pending_invoices` 的 domain 帶 ('state', '=', 'posted')。
+            # 守線見 tests/test_invoice_issue_policy_864.py 的
+            # TestCronIgnoresDraftMoves864（含 posted+pending 陽性對照）。
             _logger.exception(
                 "CRITICAL: topup invoice action_post failed; wallet was credited "
                 "(or pending credit) but no e-invoice will be issued without "

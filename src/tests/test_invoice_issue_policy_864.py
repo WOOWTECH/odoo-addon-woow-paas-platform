@@ -13,9 +13,13 @@
 from datetime import date, timedelta
 from unittest.mock import patch
 
+from lxml import etree
+
 from odoo import fields
 from odoo.exceptions import UserError
 from odoo.tests.common import TransactionCase
+from odoo.tests import tagged
+from odoo.tools.safe_eval import safe_eval
 
 
 class TestInvoiceIssuePolicyResolver864(TransactionCase):
@@ -430,13 +434,46 @@ class TestStaleManualInvoiceAlert864(TransactionCase):
             self._incident_of(fresh),
             '未逾 7 天的不得告警（證明 fallback 不是無限小）')
 
-    def test_zero_threshold_disables_the_scan(self):
-        """'0' ＝ 明確停用（沿 max_consecutive_payment_failures 慣例）。"""
+    def test_zero_threshold_falls_back_to_seven_days(self):
+        """🔴 `'0'` **不是** disable，是 fail-safe 回 7 天（Eugene 2026-09-01 終判）。
+
+        老化告警是安全／稽核機制。「把門檻設成 0 就靜默不告警」是未授權的產品
+        語意——那種開關會讓稽核告警整條消失，而且資料面看起來跟「沒有逾期發票」
+        一模一樣，正是本 issue 家族的根因（一堆 admin 可改的 gate 疊起來讓金流
+        靜默卡死）。⛔ 本模組沒有 disable 逃生門。
+        """
         self.ICP.set_param(self.PARAM, '0')
-        move = self._aged_manual_invoice(days_old=999)
+        self.assertEqual(self.Move._woow_manual_aging_days(), 7)
+        old = self._aged_manual_invoice(days_old=10)
+        fresh = self._aged_manual_invoice(days_old=3)
         self.Move._cron_alert_stale_manual_invoices()
-        self.assertIsNone(self._incident_of(move))
-        self.assertFalse(self._activity_count())
+        self.assertTrue(
+            self._incident_of(old),
+            "'0' 不得停用掃描：逾 7 天的發票仍然必須告警")
+        self.assertIsNone(
+            self._incident_of(fresh),
+            '前提檢查：fallback 是 7 天，不是 0 天（否則未逾期的也會被告警，'
+            '本測試就分不出「有跑」和「門檻變成 0」）')
+        self.assertTrue(self._activity_count())
+
+    def test_negative_threshold_falls_back_to_seven_days(self):
+        """負值同樣 fail-safe 回 7——⛔ 不得變成另一條 disable 的側門。"""
+        self.ICP.set_param(self.PARAM, '-30')
+        self.assertEqual(self.Move._woow_manual_aging_days(), 7)
+        old = self._aged_manual_invoice(days_old=10)
+        fresh = self._aged_manual_invoice(days_old=3)
+        self.Move._cron_alert_stale_manual_invoices()
+        self.assertTrue(self._incident_of(old))
+        self.assertIsNone(self._incident_of(fresh))
+
+    def test_missing_param_falls_back_to_seven_days(self):
+        """param 被刪掉／從未設定也是 7（不是 0、不是炸掉）。"""
+        self.env['ir.config_parameter'].sudo().search(
+            [('key', '=', self.PARAM)]).unlink()
+        self.assertEqual(self.Move._woow_manual_aging_days(), 7)
+        old = self._aged_manual_invoice(days_old=10)
+        self.Move._cron_alert_stale_manual_invoices()
+        self.assertTrue(self._incident_of(old))
 
     def test_second_run_is_idempotent(self):
         """重跑只累加 occurrences，不會多一筆 incident、也不重複轟炸 activity。"""
@@ -455,3 +492,224 @@ class TestStaleManualInvoiceAlert864(TransactionCase):
         self.assertEqual(
             self._activity_count(), first_activities,
             '上一波 activity 還在時不得重複建（summary 即 dedup 鍵）')
+
+
+@tagged('post_install', '-at_install')
+class TestManualRetryButtonVisibility864(TransactionCase):
+    """驗收 5 的**另一半：UI 入口**。`manual` 下後台按鈕必須真的看得見。
+
+    🔴 只驗 Python method 按得下去是不夠的：method 通得過、而 view 的
+    ``invisible`` 表達式把按鈕藏起來時，管理員在真實 UI 上仍然無路可走——那是
+    #864「連手動補救鈕都按不下去」的同一個病，只是換到 view 層。
+
+    ⛔ 本測試刻意**不做**字串存在檢查（例如 ``'manual' in arch``）：那種寫法在
+    舊的 ``invisible="woow_invoice_issue_state not in ('failed', 'error')"``
+    底下**照樣會通過**（arch 裡本來就有 selection 的 manual 字樣），零鑑別力。
+    改成把 ``invisible`` 表達式**實際求值**，逐個狀態問「這顆按鈕看不看得見」。
+    """
+
+    _BUTTON = 'action_woow_retry_ecpay_invoice'
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.view = cls.env.ref('ecpay_invoice_tw.ecpay_invoice_view_form')
+        cls.manager = cls.env['res.users'].create({
+            'name': 'Acct Manager 864',
+            'login': 'acct_manager_864',
+            'groups_id': [
+                (4, cls.env.ref('base.group_user').id),
+                (4, cls.env.ref('account.group_account_manager').id),
+            ],
+        })
+        # 🔴 陰性對照要挑「看得到 account.move、但不是 manager」的身分。
+        # 用完全沒有 account 權限的使用者是壞的對照：get_view 會先丟
+        # AccessError，測試變成在驗「他讀不到 account.move」而不是在驗
+        # 「這顆鈕是 manager 專屬」——後者才是本次修改真正該守的邊界。
+        cls.billing_user = cls.env['res.users'].create({
+            'name': 'Billing User 864',
+            'login': 'billing_user_864',
+            'groups_id': [
+                (4, cls.env.ref('base.group_user').id),
+                (4, cls.env.ref('account.group_account_invoice').id),
+            ],
+        })
+
+    def _button_node(self, user):
+        arch = self.env['account.move'].with_user(user).get_view(
+            self.view.id, 'form')['arch']
+        nodes = etree.fromstring(arch.encode()).xpath(
+            "//button[@name='%s']" % self._BUTTON)
+        return nodes[0] if nodes else None
+
+    def _invisible_for(self, state):
+        """把按鈕的 invisible 表達式對某個 issue state 求值。"""
+        node = self._button_node(self.manager)
+        self.assertIsNotNone(
+            node, '前提檢查：account manager 必須拿得到這顆按鈕節點')
+        expr = node.get('invisible')
+        self.assertTrue(
+            expr,
+            '前提檢查：按鈕必須帶 invisible 條件；沒有條件的話本測試分不出'
+            '「條件正確」與「條件被整個拿掉」')
+        return bool(safe_eval(expr, {'woow_invoice_issue_state': state}))
+
+    def test_button_is_visible_for_manual(self):
+        """🔴 本次必修：`manual` 是「該開票、但依政策由人工開」，按鈕必須看得見。"""
+        self.assertFalse(
+            self._invisible_for('manual'),
+            'manual 的發票在後台必須看得到手動開票鈕，否則 auto_invoice=manual '
+            '的租戶永遠開不出發票（method 可呼叫不等於 UI 上按得到）')
+
+    def test_button_stays_visible_for_failed_and_error(self):
+        """既有兩格不得因為本次修改而消失（回歸守線）。"""
+        for state in ('failed', 'error'):
+            with self.subTest(state=state):
+                self.assertFalse(self._invisible_for(state))
+
+    def test_button_stays_hidden_where_the_action_refuses(self):
+        """陰性對照：`action_woow_retry_ecpay_invoice()` 會 raise 的兩格仍要藏。
+
+        按鈕若對這兩格也顯示，等於給管理員一顆按下去必定跳錯的鈕。
+        """
+        for state in ('not_required', 'issued'):
+            with self.subTest(state=state):
+                self.assertTrue(self._invisible_for(state))
+
+    def test_button_is_not_offered_to_non_managers(self):
+        """⛔ 授權不得被放寬：看得到發票、但不是 manager 的人拿不到這顆按鈕。"""
+        self.assertIsNotNone(
+            self._button_node(self.manager),
+            '前提檢查：manager 拿得到節點，否則下面的 assertIsNone 零鑑別力')
+        self.assertIsNone(
+            self._button_node(self.billing_user),
+            '本次修改只放寬「顯示於哪些狀態」，⛔ 不得放寬 groups')
+
+
+class TestRetryGuardOnRealInvoiceNumber864(TransactionCase):
+    """必修 3：已確認開立的發票 ⛔ 不得再次對外開票（雙面測）。
+
+    PR-C 把 `manual` 納入 retry 的 UI 入口，等於擴大了「這顆鈕可以按到哪些
+    move」的可達面，所以既有的重送洞必須在同一刀收口。
+
+    🔴 判準必須是 **ECPay 回傳的發票號碼非空**（``ecpay_invoice_id.name``），
+    ⛔ 不是「``ecpay_invoice_id`` 這個 m2o 有沒有值」：開票失敗可能留下一筆
+    號碼為空的殘值 ``uniform.invoice``，用「有沒有 id」當判準會把**合法的
+    retry 一起擋死**——那是把一個重送洞換成一個永久卡死。
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.Cron = self.env['woow_paas_platform.ecpay_invoice_cron']
+        self.partner = self.env['res.partner'].create({'name': 'RetryGuard864'})
+
+    def _posted_invoice(self, issue_state, ecpay_number=None,
+                        attach_residual=False):
+        move = self.env['account.move'].sudo().create({
+            'move_type': 'out_invoice',
+            'partner_id': self.partner.id,
+            'invoice_date': date.today(),
+            'invoice_line_ids': [(0, 0, {
+                'name': 'retry guard probe',
+                'quantity': 1.0,
+                'price_unit': 100.0,
+            })],
+        })
+        move.action_post()
+        move.write({'woow_invoice_issue_state': issue_state})
+        if ecpay_number is not None or attach_residual:
+            move.write({
+                'ecpay_invoice_id': self.env['uniform.invoice'].sudo().create({
+                    'name': ecpay_number or '',
+                    'company_id': self.env.company.id,
+                }).id,
+            })
+        return move
+
+    def test_move_with_real_invoice_number_is_refused_and_calls_nothing(self):
+        """真發票號碼存在 ⇒ 拒絕，且**外呼 0 次**。"""
+        move = self._posted_invoice('manual', ecpay_number='AB12345678')
+        with patch.object(
+                type(self.Cron), '_issue_one', autospec=True) as issue_one:
+            with self.assertRaises(UserError):
+                move.action_woow_retry_ecpay_invoice()
+        self.assertFalse(
+            issue_one.called,
+            '已經開出來的發票不得再次觸發對外開票——外呼必須是 0 次')
+
+    def test_failed_move_with_residual_id_and_blank_number_can_still_retry(self):
+        """🔴 反面：殘值 id ＋ 號碼為空的 retryable failure **仍然要能 retry**。
+
+        這條是「守衛有沒有寫過頭」的判別式：如果判準寫成「``ecpay_invoice_id``
+        有值就擋」，這條會紅——而那種寫法會讓所有留下殘值的失敗永久卡死。
+        """
+        move = self._posted_invoice('failed', attach_residual=True)
+        self.assertTrue(
+            move.ecpay_invoice_id,
+            '前提檢查：必須真的掛著殘值 id，否則本測試沒有測到那個分支')
+        self.assertFalse(
+            move.ecpay_invoice_id.name,
+            '前提檢查：殘值的號碼必須是空的')
+        with patch.object(
+                type(self.Cron), '_issue_one', autospec=True) as issue_one:
+            self.assertTrue(move.action_woow_retry_ecpay_invoice())
+        self.assertTrue(
+            issue_one.called, '合法的 retry 不得被守衛擋死')
+
+    def test_manual_move_without_any_number_still_retries(self):
+        """回歸守線：乾淨的 manual（連殘值都沒有）不受本守衛影響。"""
+        move = self._posted_invoice('manual')
+        with patch.object(
+                type(self.Cron), '_issue_one', autospec=True) as issue_one:
+            self.assertTrue(move.action_woow_retry_ecpay_invoice())
+        self.assertTrue(issue_one.called)
+
+
+class TestCronIgnoresDraftMoves864(TransactionCase):
+    """必修 4 的機器化：cron 不撿 draft，與 issue state 無關。
+
+    `wallet_topup._create_topup_invoice()` 的失敗分支註解原本宣稱「issue state
+    維持 pending 所以 cron 不會撿」——PR-C 之後那句話是錯的（政策為 manual 時
+    它就是 `'manual'`）。真正的原因是 move 還停在 `draft`，而
+    `_cron_issue_pending_invoices` 的 domain 要求 `state='posted'`。
+    這個 class 把那句修正後的敘述變成機器檢查，而不是只留一段散文。
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.Cron = self.env['woow_paas_platform.ecpay_invoice_cron']
+        self.partner = self.env['res.partner'].create({'name': 'DraftCron864'})
+
+    def _move(self, issue_state, post):
+        move = self.env['account.move'].sudo().create({
+            'move_type': 'out_invoice',
+            'partner_id': self.partner.id,
+            'invoice_date': date.today(),
+            'invoice_line_ids': [(0, 0, {
+                'name': 'draft cron probe',
+                'quantity': 1.0,
+                'price_unit': 100.0,
+            })],
+        })
+        if post:
+            move.action_post()
+        move.write({'woow_invoice_issue_state': issue_state})
+        return move
+
+    def test_draft_moves_are_never_picked_whatever_the_issue_state(self):
+        draft_pending = self._move('pending', post=False)
+        draft_manual = self._move('manual', post=False)
+        posted_pending = self._move('pending', post=True)
+        self.assertEqual(draft_pending.state, 'draft', '前提檢查')
+        self.assertEqual(draft_manual.state, 'draft', '前提檢查')
+        with patch.object(
+                type(self.Cron), '_issue_one', autospec=True) as issue_one:
+            self.Cron._cron_issue_pending_invoices()
+        picked = {call.args[1].id for call in issue_one.call_args_list}
+        self.assertIn(
+            posted_pending.id, picked,
+            '陽性對照失敗：cron 連 posted+pending 都沒撿，本測試無鑑別力')
+        self.assertNotIn(draft_pending.id, picked)
+        self.assertNotIn(
+            draft_manual.id, picked,
+            'draft 不被撿的原因是 state，不是 issue state')

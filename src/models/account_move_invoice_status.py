@@ -6,8 +6,11 @@ from odoo.exceptions import UserError
 
 _logger = logging.getLogger(__name__)
 
-#: #864 PR-C：`manual` 發票的老化告警門檻（天）。`'0'` ＝ 明確停用；缺值或非法值
-#: 走模組內建預設。沿 `woow_paas_platform.billing_silence_alert_days` 的慣例走
+#: #864 PR-C：`manual` 發票的老化告警門檻（天）。**正整數才生效**；`'0'`、負值、
+#: 非法值、缺值一律 fail-safe 回內建預設。🔴 ⛔ **沒有 disable 逃生門**
+#: （Eugene 2026-09-01 終判）——見 `_woow_manual_aging_days()` 的 docstring。
+#: ⚠ 這一點刻意**與** `woow_paas_platform.billing_silence_alert_days` 的
+#: 「'0' 停用」慣例**不同**：那是通知節流，這是稽核告警。載體形式仍沿用同一套
 #: 「模組常數 ＋ get_param」，而不是 res.config.settings 的 `config_parameter=` 欄位。
 #: ⚠ 新增 config_parameter 必須同步加進 `src/hooks.py` 的 `_CONFIG_PARAMETERS`，
 #: 否則卸載 addon 時這個 key 會留在 DB。
@@ -94,8 +97,23 @@ class AccountMoveInvoiceStatus(models.Model):
         開」的發票，這顆鈕就是人工開票的入口。⛔ 不要為了「收緊守衛」把它加進
         下面的拒絕清單；那會讓 `auto_invoice='manual'` 的租戶永遠開不出發票
         （這正是 #864 要修的病：連手動補救鈕都按不下去）。
+
+        🔴 但 ``manual`` 進了 UI 入口，也就擴大了「這顆鈕按得到哪些 move」的
+        可達面，所以同時收口重送洞：**已經拿到真 ECPay 發票號碼的 move，⛔ 一律
+        拒絕再次對外開票**。判準是 ``ecpay_invoice_id.name`` 非空——⛔ 不可只看
+        ``ecpay_invoice_id`` 這個 m2o 有沒有值：開票失敗會留下號碼為空的殘值
+        ``uniform.invoice``，用「有沒有 id」當判準會把**合法的 retry 一起擋死**，
+        等於把一個重送洞換成一個永久卡死。守衛順帶也保護既有的
+        ``failed``／``error`` 兩格。
         """
         self.ensure_one()
+        # 先於 issue state 判斷：狀態欄是我們自己寫的，發票號碼是 ECPay 給的。
+        # `issued` 這格在 demo 模式下也會被寫出來，只有號碼有鑑別力（§0.6#3）。
+        if self.ecpay_invoice_id.name:
+            raise UserError(_(
+                "This invoice already has an ECPay invoice number (%s). "
+                "Re-issuing would create a duplicate e-invoice."
+            ) % self.ecpay_invoice_id.name)
         if self.woow_invoice_issue_state == 'issued':
             raise UserError(_("This invoice has already been issued."))
         if self.woow_invoice_issue_state == 'not_required':
@@ -117,16 +135,33 @@ class AccountMoveInvoiceStatus(models.Model):
 
     @api.model
     def _woow_manual_aging_days(self):
-        """讀老化門檻天數；缺值／非法值一律退回內建預設，⛔ 不讓 cron 炸掉。"""
+        """老化門檻天數。🔴 **回傳值恆為正整數**。
+
+        `'0'`、負值、非法值、缺值——全部 fail-safe 回內建
+        ``_MANUAL_AGING_DEFAULT_DAYS``（7），⛔ 也不讓 cron 炸掉。
+
+        🔴 ⛔ **這裡刻意沒有 disable 逃生門**（Eugene 2026-09-01 終判）：老化
+        告警是安全／稽核機制，而「把門檻設成 0 就靜默不告警」是未授權的產品
+        語意——那種開關會讓稽核告警整條消失，**且資料面看起來跟「沒有逾期發票」
+        一模一樣**。這正是本 issue 家族的根因（一堆 admin 可改的 gate 疊起來讓
+        金流靜默卡死）。未來若真要 disable，須 Eugene 另行明示。
+        """
         raw = self.env['ir.config_parameter'].sudo().get_param(
             _MANUAL_AGING_PARAM, str(_MANUAL_AGING_DEFAULT_DAYS))
         try:
-            return int(raw)
+            days = int(raw)
         except (TypeError, ValueError):
             _logger.warning(
                 "[ECPAY_INV] invalid %s=%r; falling back to %s",
                 _MANUAL_AGING_PARAM, raw, _MANUAL_AGING_DEFAULT_DAYS)
             return _MANUAL_AGING_DEFAULT_DAYS
+        if days <= 0:
+            _logger.warning(
+                "[ECPAY_INV] %s=%r is not a positive number of days; falling "
+                "back to %s. This alert has no disable switch by design.",
+                _MANUAL_AGING_PARAM, raw, _MANUAL_AGING_DEFAULT_DAYS)
+            return _MANUAL_AGING_DEFAULT_DAYS
+        return days
 
     @api.model
     def _cron_alert_stale_manual_invoices(self):
@@ -142,6 +177,8 @@ class AccountMoveInvoiceStatus(models.Model):
         鑑別力的證據是 ``ecpay_invoice_id.name``（``uniform.invoice`` 的統一發票
         號碼）。詳見設計 §0.6 第 3 條。
 
+        門檻天數見 ``_woow_manual_aging_days()``：⛔ **恆開**，沒有 disable 開關。
+
         以 ``create_date`` 而非 ``invoice_date`` 計齡：``invoice_date`` 是可被
         回填／前推的會計日期，``create_date`` 是系統觀測到這張 move 進來的時間。
 
@@ -149,9 +186,9 @@ class AccountMoveInvoiceStatus(models.Model):
         ``invoice:<id>`` upsert ⇒ 重跑冪等、只累加 occurrences）＋ ``mail.activity``
         （summary 為 dedup 鍵，上一波沒被處理完就不重複轟炸）。
         """
+        # `_woow_manual_aging_days()` 保證回正整數（⛔ 無 disable 逃生門），
+        # 所以這裡沒有、也不該有「門檻不合法就整段 return」的早退分支。
         days = self._woow_manual_aging_days()
-        if days <= 0:
-            return  # '0'（或任何非正值）＝ 明確停用
         cutoff = fields.Datetime.now() - timedelta(days=days)
         # ⛔ 刻意不下 `limit`：逾期條件不會自己解除（沒人開票的發票明天還是逾期），
         # 所以任何固定上限都會讓第 N+1 筆**永遠**掃不到——每個 tick 都被同一批
