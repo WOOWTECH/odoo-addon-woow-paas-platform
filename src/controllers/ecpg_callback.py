@@ -85,8 +85,12 @@ class WoowECPGCallbackInbox(ECPGCallback):
             rtn_code = data.get('RtnCode')
             snapshot = {
                 'external_ref': merchant_trade_no,
-                # 完全沒有預登記的真孤兒才會用到這個 kind；已有 intent 的
-                # 那一列由同一個 statement 原地更新、kind 不變（裁決 G1）。
+                # 這個 kind 只在「完全沒有預登記」時才會真的落地。key 已被
+                # 佔用時，同一個 statement 只更新 evidence 欄位、**保留該列
+                # 原本的 kind**（`intent`，或已經被升級成
+                # `charged_not_credited` 的那一列）——裁決 G1／Q3。
+                # ⚠ 有了 fail-closed 預登記之後，本平台發起的付款一定先有
+                # intent 列 ⇒ 走到「真孤兒」這條的只剩「不是我們發起的 MTN」。
                 'kind': 'callback_tx_missing',
                 # RtnCode 是 int，rtn_code 欄位是 Char ⇒ 不轉 str 會被型別
                 # 檢查整筆拒收，而且是靜默的（fail-soft 回 False）。
