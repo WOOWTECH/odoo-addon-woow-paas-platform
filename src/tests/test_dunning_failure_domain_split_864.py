@@ -17,9 +17,20 @@ savepoint()`` 包住的失敗域：
 的寫入（cancel 狀態）在它自己炸掉時會被回捲（證明是真的 nested savepoint、
 不只是「例外被吞掉」）；cron 不會被單一 subscription 的 dunning bug 卡死，
 下一筆照常處理。
+
+🔴 兩個失敗域對 ``OperationalError``（並發／連線類 DB 例外）與一般例外的處理
+必須不同：一般例外 fail-soft 吞掉，``OperationalError`` 必須往外拋（見
+``docs/decisions/patterns/post-commit-bookkeeping-rollback-unit.md`` 規則一，
+``_on_payment_failure`` 的 ``except OperationalError: raise``）。這組測試
+**直接呼叫 ``_on_payment_failure``**，不透過 ``_sh_create_auto_invoice`` 整條
+cron——外層 ``_process_subscription_billing`` 自己也有一顆 ``except
+Exception:``，如果只從整條 cron 觀察，OperationalError 會被那層吃掉，測不出
+``_on_payment_failure`` 自己有沒有正確往外拋（inner contract）。
 """
 from datetime import date, timedelta
 from unittest.mock import patch
+
+from psycopg2 import OperationalError
 
 from odoo.tests.common import TransactionCase
 
@@ -67,6 +78,18 @@ class TestDunningFailureDomainSplit864(TransactionCase):
 
     def _run_cron(self):
         self.Sub._sh_create_auto_invoice()
+
+    def _make_invoice(self, partner):
+        """給直接呼叫 `_on_payment_failure` 用的最小 draft invoice。
+
+        兩個 OperationalError 測試都在 domain 1（counter write）或
+        `_notify_low_balance` 本身就被 mock 掉，invoice 的真實內容不會被
+        formatLang 等處讀到——只要是個合法 account.move 記錄即可。
+        """
+        return self.env['account.move'].sudo().create({
+            'move_type': 'out_invoice',
+            'partner_id': partner.id,
+        })
 
     # --- Domain 1 (counter) 必須撐過 domain 2（通知）的例外 ---------------- #
 
@@ -164,3 +187,75 @@ class TestDunningFailureDomainSplit864(TransactionCase):
         sub.invalidate_recordset()
         self.assertEqual(sub.woow_consecutive_payment_failures, 1)
         self.assertEqual(sub.state, 'in_progress')
+
+    # --- OperationalError 必須往外拋，不得被 fail-soft 吞掉 ----------------- #
+    # 直接呼叫 _on_payment_failure（不透過整條 cron），避開外層
+    # _process_subscription_billing 自己的 except Exception 把訊號吃掉。
+
+    def test_operational_error_in_counter_write_propagates(self):
+        """domain 1（失敗計數）踩到 OperationalError 必須往外拋，不能吞。"""
+        partner = self._make_partner("OpErrDomain1")
+        sub = self._make_sub_record(partner)
+        invoice = self._make_invoice(partner)
+
+        with patch.object(type(self.Sub), 'write', autospec=True,
+                           side_effect=OperationalError('simulated 40001')):
+            with self.assertRaises(OperationalError):
+                sub._on_payment_failure(sub, invoice, date.today(), 6)
+
+    def test_operational_error_in_notify_propagates(self):
+        """domain 2（通知/cancel）踩到 OperationalError 必須往外拋，不能吞。
+
+        🔴 刻意不用 ``self.assertRaises(...)`` 當 context manager——它自己會在
+        區塊外開一顆 flushing savepoint，例外一穿出來就 ROLLBACK TO
+        SAVEPOINT，回捲邊界剛好是整個 with 區塊，會連 domain 1 早於 domain 2
+        之前就已經成功、獨立 RELEASE 掉的那個 savepoint 寫入一起吃掉（見
+        ``docs/tracking/pitfalls/odoo-assertraises-savepoint-rollback.md``）。
+        改用裸 try/except + self.fail() 兜底。
+        """
+        partner = self._make_partner("OpErrDomain2")
+        sub = self._make_sub_record(partner)
+        invoice = self._make_invoice(partner)
+
+        with patch.object(type(self.Sub), '_notify_low_balance',
+                           side_effect=OperationalError('simulated 40001')):
+            try:
+                sub._on_payment_failure(sub, invoice, date.today(), 6)
+            except OperationalError:
+                pass
+            else:
+                self.fail(
+                    'OperationalError must propagate out of '
+                    '_on_payment_failure, not be swallowed'
+                )
+
+        sub.invalidate_recordset()
+        self.assertEqual(
+            sub.woow_consecutive_payment_failures, 1,
+            'domain 1 在 domain 2 拋出 OperationalError 之前就已經正常完成、'
+            '正常持久化',
+        )
+
+    # --- 對照：直接呼叫這個 seam 時，一般例外仍然 fail-soft（不是只有透過 --- #
+    # --- 整條 cron 才吞得住）------------------------------------------------ #
+
+    def test_generic_exception_in_counter_write_still_fail_soft_direct_call(self):
+        """同一個 seam（直接呼叫）下，一般例外（非 OperationalError）仍要吞。"""
+        partner = self._make_partner("GenericErrDomain1")
+        sub = self._make_sub_record(partner)
+        invoice = self._make_invoice(partner)
+
+        with patch.object(type(self.Sub), 'write', autospec=True,
+                           side_effect=RuntimeError('not a DB error')):
+            sub._on_payment_failure(sub, invoice, date.today(), 6)  # 不應拋出
+
+    def test_generic_exception_in_notify_still_fail_soft_direct_call(self):
+        partner = self._make_partner("GenericErrDomain2")
+        sub = self._make_sub_record(partner)
+        invoice = self._make_invoice(partner)
+
+        with patch.object(type(self.Sub), '_notify_low_balance',
+                           side_effect=RuntimeError('not a DB error')):
+            sub._on_payment_failure(sub, invoice, date.today(), 6)  # 不應拋出
+        sub.invalidate_recordset()
+        self.assertEqual(sub.woow_consecutive_payment_failures, 1)

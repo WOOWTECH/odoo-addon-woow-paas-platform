@@ -7,9 +7,9 @@ double-charge 的安全機制，跟 `billing_silence_alert_days` 那種「'0' �
 的通知節流語意不同。
 
 `_double_charge_cooldown_active` 本身的「真讀到 incident」行為交給
-`test_double_charge_cooldown_gate_864.py`（走 BaseCase／真 registry cursor，
-證明 RR 快照盲區與 partner-only 判準）；本檔只驗 resolver 的四個 fail-safe
-分支 + 卸載清理登記。
+`integration/test_double_charge_cooldown_864.py`（走 BaseCase／真 registry
+cursor，證明 RR 快照盲區與 partner-only 判準）；本檔只驗 resolver 的四個
+fail-safe 分支 + 卸載清理登記。
 """
 from odoo.tests.common import TransactionCase
 
