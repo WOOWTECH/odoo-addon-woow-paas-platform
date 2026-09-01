@@ -483,18 +483,36 @@ class WalletTopup(models.Model):
         **阻塞式** ``FOR UPDATE``，拿到之後才重讀狀態走冪等守衛。
 
         為什麼是阻塞式而不是 ``NOWAIT``：``NOWAIT`` 是 **scanner 側**的語意
-        （cron 搶不到就跳過、下輪再撿）。callback 側要的是相反的東西——短暫
-        等待、拿到鎖、發現別人已經補完了，然後**乾淨地什麼都不做**。用
-        ``NOWAIT`` 會把「別人正在補」變成一個錯誤往上拋。
+        （cron 搶不到就跳過、下輪再撿）。callback 側不能那樣做——它沒有「下
+        一輪」，把「別人正在補」當場變成錯誤往上拋，等於把一次可收斂的競爭
+        變成一次失敗。所以這裡等，讓 winner 先把事情做完。
 
         ``SET LOCAL lock_timeout`` 讓等待有界，而且**用完就還原**：這個
         method 跑在呼叫端的交易裡，把逾時值留給後面的 SQL 會變成一個沒人預期
         的副作用（發票、記帳那些語句會跟著在 1 秒後失敗）。
 
-        ⚠ **行為變更揭露**（PR body 也有）：contention 之下，callback 從原本
-        的「RR 40001 ＋ ``retrying()`` 整段重跑」變成「短暫等待；等不到就
-        ``lock_timeout`` 錯誤 → ECPay 重送」。replay 側因為已經持有同一列的
-        鎖，這裡的重入是 no-op（同交易再取一次 ``FOR UPDATE`` 不會等自己）。
+        🔴 **contention 下 loser 的實際結局（照量測寫，⛔ 不是「乾淨冪等
+        退出」）**——見 ``tests/integration/test_callback_replay_864.py`` 的
+        雙向決定性競態：
+
+        * **本 method 當 loser**（replay 先入帳並 commit）：這裡先卡在阻塞式
+          ``FOR UPDATE`` 上；winner commit 之後鎖放開，而本交易的
+          REPEATABLE READ 快照已經比那一列的最新版本舊 ⇒ PostgreSQL 直接給
+          **40001（serialization failure）**，⛔ **不會**走到下面那個冪等守衛。
+          production 上這條路徑是 RPC dispatch，Odoo 的 ``retrying()`` 會用
+          新快照重放整個請求，**第二趟**才會被下面的冪等守衛擋下來。
+          ⚠ ``retrying()`` **只掛 RPC dispatch**（#864 PR-E 輪已定案，cron 沒
+          有），所以測試環境裡不存在——測試斷言到 40001 為止，重放那一段是
+          production 行為，⛔ 沒有被測試斷言。
+        * **等超過 ``lock_timeout``**：``LockNotAvailable``（55P03）往上拋 →
+          對 ECPay 是一次失敗回應 → 由它重送。
+        * **scanner（replay）當 loser**：它走的是 ``FOR UPDATE NOWAIT``，當場
+          記 ``lock_not_available`` 跳過、留給下一輪；下一輪看到 topup 已
+          ``done`` ⇒ 冪等收工。
+
+        兩個方向都實測過**零重複入帳**——那是這一格的安全底線。
+        replay 側因為已經持有同一列的鎖，這裡的重入是 no-op（同交易再取一次
+        ``FOR UPDATE`` 不會等自己）。
         """
         self.ensure_one()
         _logger.info(

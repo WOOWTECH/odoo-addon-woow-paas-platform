@@ -1844,6 +1844,211 @@ class TestCallbackReplayEngine864(BaseCase):
             '沒拿到鎖就 ⛔ 不入帳',
         )
 
+    # --- (6d) 決定性雙向競態：winner 真跑 choke ＋ 真 commit --------------- #
+    #
+    # ⚠ 為什麼這幾條刻意**不用「兩個 worker thread 各跑一次 ORM」**：Odoo `-u`
+    #   測試載入期間主執行緒持有 `Registry._lock`，worker 一建
+    #   `api.Environment` 就卡在那顆 harness 鎖上（本 PR 一輪實測過）⇒ 那樣測
+    #   到的是 harness 不是 PostgreSQL。這裡改用「主執行緒 ＋ 事前在主執行緒
+    #   建好的第二條真 cursor／env」，順序用 commit 的時點決定，⛔ 不靠 sleep
+    #   猜時序，也不靠 Registry._lock。
+
+    def _second_connection_env(self):
+        """在**主執行緒**建好第二條真連線與它的 Environment。
+
+        `api.Environment.__new__` 只在 `cr.transaction is None` 時才會去碰
+        `Registry(...)`（那正是 worker thread 會卡住的地方）；在主執行緒先建
+        好之後，之後就算在別的執行緒用它也不會再碰那顆鎖。
+        """
+        cr = self.registry._db.cursor()
+        env = api.Environment(cr, odoo.SUPERUSER_ID, {})
+        return cr, env
+
+    def test_replay_wins_then_callback_loses_with_a_serialization_failure(
+            self):
+        """方向一：replay 先入帳並 commit，callback 側在 choke 阻塞後的實測結局。
+
+        winner **真的**走 `_on_payment_done` 並**真的** commit（⛔ 不是取鎖後
+        rollback）。loser 走同一個 choke，先卡在阻塞式 `FOR UPDATE` 上，等
+        winner commit 之後才解開——此時它的 REPEATABLE READ 快照已經比那一列
+        的最新版本舊，PostgreSQL 直接給 40001。
+
+        ⚠ 測試只斷言到「40001 冒出來 ＋ 零重複入帳」。production 上那條路徑是
+        RPC dispatch，Odoo 的 `retrying()` 會重放整個請求、第二趟被冪等守衛擋
+        下——但 `retrying()` **只掛 RPC dispatch**（E 輪已定案），測試環境裡根
+        本不存在，所以重放行為只寫進 docstring／PR body，⛔ 不在這裡假裝斷言。
+        """
+        _reference, partner_id, topup_id = self._seed_case('W1')
+        before = self._points(partner_id)
+
+        loser_cr, loser_env = self._second_connection_env()
+        raised = None
+        try:
+            # loser 先把自己的 RR 快照釘住（讀一次那一列），這樣它看到的版本
+            # 就是 winner 動手之前的那個——production 上 callback 進來時本來
+            # 就是這個局面。
+            loser_cr.execute(
+                'SELECT state FROM woow_wallet_topup WHERE id = %s',
+                (topup_id,))
+            self.assertEqual(loser_cr.fetchone()[0], 'pending')
+
+            # --- winner：真的走 choke、真的 commit ------------------------- #
+            with self.registry.cursor() as winner_cr:
+                winner_env = api.Environment(
+                    winner_cr, odoo.SUPERUSER_ID, {})
+                winner_topup = winner_env['woow.wallet.topup'].sudo().browse(
+                    topup_id)
+                winner_topup._on_payment_done(
+                    winner_topup.payment_transaction_id)
+                winner_cr.commit()
+
+            self.assertEqual(
+                self._wallet_tx_count(partner_id), 1,
+                '前置：winner 必須真的入帳並 commit（⛔ 不是取鎖後 rollback）',
+            )
+
+            # --- loser：走同一個 choke ------------------------------------- #
+            loser_topup = loser_env['woow.wallet.topup'].sudo().browse(
+                topup_id)
+            try:
+                loser_topup._on_payment_done(
+                    loser_topup.payment_transaction_id)
+                loser_cr.commit()
+            except Exception as exc:
+                raised = exc
+        finally:
+            try:
+                loser_cr.rollback()
+            finally:
+                if not loser_cr.closed:
+                    loser_cr.close()
+
+        self.assertIsInstance(
+            raised, psycopg2.errors.SerializationFailure,
+            '🔴 照實測寫：RR 快照比那一列的最新版本舊 ⇒ choke 的 `FOR UPDATE` '
+            '給的是 40001，**不是**「乾淨冪等退出」。measured=%r' % (raised,),
+        )
+        self.assertEqual(
+            self._points(partner_id) - before, 550.0,
+            '🔴 安全底線：兩種順序下都只准入帳一次',
+        )
+        self.assertEqual(
+            self._wallet_tx_count(partner_id), 1,
+            '🔴 wallet.transaction 恰一筆——重複入帳在帳上就是多一列',
+        )
+
+    def test_the_real_replay_cron_as_winner_produces_the_same_loser_outcome(
+            self):
+        """同方向、winner 換成**真的 cron**：loser 的結局一樣是 40001。
+
+        上一條的 winner 是「手動呼叫 choke」；這一條把 winner 換成完整的
+        `_cron_replay_callback_inbox()`（含候選 query／per-record cursor／
+        NOWAIT／resolved transition），證明 loser 的結局不是被我挑出來的
+        winner 形狀決定的。
+        """
+        reference, partner_id, topup_id = self._seed_case('W2')
+        before = self._points(partner_id)
+
+        loser_cr, loser_env = self._second_connection_env()
+        raised = None
+        try:
+            loser_cr.execute(
+                'SELECT state FROM woow_wallet_topup WHERE id = %s',
+                (topup_id,))
+            self.assertEqual(loser_cr.fetchone()[0], 'pending')
+
+            summary = self._run_replay()
+            self.assertGreaterEqual(summary['credited'], 1, summary)
+            self.assertEqual(self._incident(reference)['state'], 'resolved')
+
+            loser_topup = loser_env['woow.wallet.topup'].sudo().browse(
+                topup_id)
+            try:
+                loser_topup._on_payment_done(
+                    loser_topup.payment_transaction_id)
+                loser_cr.commit()
+            except Exception as exc:
+                raised = exc
+        finally:
+            try:
+                loser_cr.rollback()
+            finally:
+                if not loser_cr.closed:
+                    loser_cr.close()
+
+        self.assertIsInstance(
+            raised, psycopg2.errors.SerializationFailure,
+            'winner 是真 cron 時 loser 的結局必須一樣 measured=%r' % (raised,),
+        )
+        self.assertEqual(self._points(partner_id) - before, 550.0)
+        self.assertEqual(self._wallet_tx_count(partner_id), 1)
+
+    def test_callback_wins_then_the_real_scanner_loses_on_nowait(self):
+        """方向二：callback 先入帳，**真的** scanner 撞 NOWAIT ⇒ 跳過、下輪冪等。
+
+        winner 走 `_on_payment_done` 真入帳；在它 commit **之前**跑真的
+        `_cron_replay_callback_inbox()`——scanner 側是 `FOR UPDATE NOWAIT`，
+        所以它當場拿不到鎖、記 `lock_not_available` 並留給下一輪（⛔ 不是等）。
+        winner commit 之後再跑一輪：這次看到 topup 已 done ⇒ 冪等收工。
+        兩趟加起來 credit 恰一次。
+        """
+        reference, partner_id, topup_id = self._seed_case('W3')
+        before = self._points(partner_id)
+
+        winner_cr = self.registry._db.cursor()
+        try:
+            winner_env = api.Environment(winner_cr, odoo.SUPERUSER_ID, {})
+            winner_topup = winner_env['woow.wallet.topup'].sudo().browse(
+                topup_id)
+            # winner 真的走 choke 入帳；先不 commit，讓 scanner 撞得到鎖。
+            winner_topup._on_payment_done(
+                winner_topup.payment_transaction_id)
+
+            contended = self._run_replay()
+
+            self.assertEqual(
+                contended['credited'], 0,
+                '🔴 scanner 側是 NOWAIT：拿不到鎖就當場跳過，'
+                '⛔ 不得等、更不得入第二筆 %r' % (contended,),
+            )
+            self.assertEqual(
+                contended['skipped_by_reason'].get('lock_not_available'), 1,
+                '照實測寫：replay loser 的結局是 NOWAIT 跳過留下輪 %r'
+                % (contended,),
+            )
+            row = self._incident(reference)
+            self.assertEqual(row['skip_reason'], 'lock_not_available')
+            self.assertIsNone(
+                row['last_skipped_at'],
+                '沒拿到鎖＝沒評估過 ⇒ 下一輪必須還撿得回來',
+            )
+
+            winner_cr.commit()
+        finally:
+            if not winner_cr.closed:
+                winner_cr.close()
+
+        self.assertEqual(
+            self._wallet_tx_count(partner_id), 1,
+            '前置：winner 必須真的入帳並 commit',
+        )
+
+        second_round = self._run_replay()
+
+        self.assertEqual(
+            second_round['credited'], 0,
+            '下一輪看到 topup 已 done ⇒ 冪等收工，⛔ 不得再補 %r'
+            % (second_round,),
+        )
+        self.assertGreaterEqual(second_round['already_credited'], 1,
+                                second_round)
+        self.assertEqual(
+            self._points(partner_id) - before, 550.0,
+            '🔴 安全底線：兩種順序下都只准入帳一次',
+        )
+        self.assertEqual(self._wallet_tx_count(partner_id), 1)
+        self.assertEqual(self._incident(reference)['state'], 'resolved')
+
     # --- (7) 與 cleanup cron 的互動：replay 先跑、兩段互不連坐 ------------- #
 
     def _age_topup(self, topup_id, minutes):
