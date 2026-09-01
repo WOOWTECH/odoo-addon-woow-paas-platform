@@ -145,6 +145,11 @@ _CONFIG_PARAMETERS = [
     # 缺值一律 fail-safe 回 models/account_move_invoice_status.py 的內建 7 天。
     # ⛔ 刻意沒有 disable 開關——與上面 #778 那條的 '0' 停用語意**不同**）
     'woow_paas_platform.manual_invoice_aging_days',
+    # #864 PR-E：double-charge 冷卻閘窗口（小時）。正整數才生效；'0'／負值／
+    # 非法值／缺值一律 fail-safe 回 models/sh_subscription_fix.py 的內建 24
+    # 小時（Eugene 裁決 2026-09-01，comment 11215）。⛔ 刻意沒有 disable 開關
+    # ——同 manual_invoice_aging_days 的理由：這是防重複扣款的安全機制。
+    'woow_paas_platform.double_charge_cooldown_hours',
     'woow_paas_platform.sa_default_service_url',
     'woow_paas_platform.agent_idle_reap_seconds',
     'woow_paas_platform.agent_gc_seconds',

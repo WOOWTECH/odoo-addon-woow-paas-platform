@@ -1,7 +1,9 @@
 import base64
 import logging
+from datetime import timedelta
 
 from dateutil.relativedelta import relativedelta
+from psycopg2 import OperationalError
 
 from odoo import _, api, fields, models
 from odoo.exceptions import ValidationError
@@ -37,6 +39,20 @@ _BILLING_SSOT_PARAM = 'sh_subscription_wallet.billing_ssot'
 _BILLING_SILENCE_PARAM = 'woow_paas_platform.billing_silence_alert_days'
 _BILLING_SILENCE_SUMMARY = '計費路徑靜默：到期訂閱連續多日未被處理'
 _BILLING_SILENCE_DEFAULT_DAYS = 3
+
+#: #864 PR-E：double-charge 冷卻閘窗口（小時）。缺值／非整數／<=0 全部
+#: fail-safe 回內建 24（Eugene 裁決，2026-09-01，comment 11215——同日稍早一次
+#: UI 誤觸顯示過的「24 小時」已作廢，這是其後以文字明示的有效裁決，值恰好
+#: 相同、授權來源不同）。比照 `_MANUAL_AGING_PARAM`（PR-C）模式：模組常數 ＋
+#: get_param，同步進 `src/hooks.py` 的 `_CONFIG_PARAMETERS`。
+_DOUBLE_CHARGE_COOLDOWN_PARAM = 'woow_paas_platform.double_charge_cooldown_hours'
+_DOUBLE_CHARGE_COOLDOWN_DEFAULT_HOURS = 24
+
+#: 冷卻閘獨立 cursor 那個 SELECT 的 lock_timeout——同 ``billing_incident.py``
+#: 的 ``BillingIncident._LOCK_TIMEOUT`` 值，避免這條純讀查詢在
+#: ``woow_billing_incident`` 上撞到並發 DDL／長交易的 ACCESS EXCLUSIVE 鎖時
+#: 無界卡住整個 cron tick。
+_DOUBLE_CHARGE_COOLDOWN_QUERY_LOCK_TIMEOUT = '1s'
 
 
 class ShSubscriptionFix(models.Model):
@@ -550,36 +566,110 @@ class ShSubscriptionFix(models.Model):
         )
 
     def _on_payment_failure(self, subscription, invoice, today, threshold):
-        """Increment counter, possibly auto-cancel + notify."""
-        new_count = subscription.woow_consecutive_payment_failures + 1
-        subscription.write({
-            'woow_consecutive_payment_failures': new_count,
-            'woow_last_payment_failure_at': fields.Datetime.now(),
-        })
+        """Increment counter, possibly auto-cancel + notify.
 
-        # Per-cycle low-balance warning. Marker 只在信真的排進佇列後才蓋，且會在
-        # 那封信投遞失敗時重新打開——判準與蓋章都走共用 helper，因為
-        # `low_balance_warning_cron` 是同一個 marker 的**第二個**寫入者（#389）。
-        partner = subscription.sh_partner_id
-        warn_key = subscription.sh_date_of_next_payment or today
-        if self._low_balance_warning_needs_send(subscription, warn_key):
-            mail = self._notify_low_balance(partner, invoice)
-            self._stamp_low_balance_warning(subscription, warn_key, mail)
+        #864 PR-E：這個 method 跑在 ``_process_subscription_billing`` 那顆外層
+        savepoint **之內**，而該 savepoint 這時已經含有本輪已經確定的 charge
+        結果（新開的 invoice；若這輪是走 auto-topup 的 CHARGED_NOT_CREDITED，
+        還包含 ``woow.wallet.topup`` 的 ``state='failed'`` 標記——真正不可回捲
+        的那份證據已由 ``wallet_topup.charge_via_token`` 用獨立 cursor commit
+        進 ``woow.billing.incident``，不受這裡影響）。這個 method 本身完全沒有
+        保護：``_notify_low_balance``（``:706-729``）背後連呼兩次 ``formatLang``
+        都沒包，任一步炸掉就會讓外層 savepoint 整個回捲，把前面那些已經確定的
+        charge 結果一起連坐捲掉。
 
-        # Threshold check (Decision 4: hard-cancel; Decision 3: 0 = disabled).
-        if threshold and new_count >= threshold:
-            _logger.warning(
-                "[SUB_FIX] auto_cancel sub=%s after %s consecutive failures",
-                subscription.id, new_count,
+        修法：把「dunning bookkeeping」拆成兩個各自獨立的失敗域，各自用
+        ``self.env.cr.savepoint()`` 包住（bare try/except 不夠——``formatLang``
+        雖是純 Python，但 ``_queue_low_balance_mail``／``_notify_subscription_
+        cancelled`` 內部仍有真 DB 寫入，若真的踩到 DB 層例外，沒有 savepoint
+        會讓 PG transaction 卡在 aborted 狀態，禍延同一 cron tick 後續的其他
+        subscription；savepoint 進出並 flush，見
+        ``docs/decisions/patterns/post-commit-bookkeeping-rollback-unit.md``
+        規則三）：
+
+        1. 失敗計數（``woow_consecutive_payment_failures`` / ``woow_last_
+           payment_failure_at``）——這本身就是「這輪真的失敗了」的既成事實，
+           不該被下面通知信的 bug 牽連回捲。
+        2. 通知／cancel（低餘額信、逾 threshold 的 cancel + 一次性通知）——
+           對照組是同檔 ``_send_invoice_pdf`` 既有的 fail-soft + warning 共識。
+
+        兩個失敗域各自吞一般例外、各自記 log——外層 savepoint 因此看不到這裡
+        的一般例外，charge 結果不會被連坐。🔴 ``OperationalError``（並發／連線
+        類 DB 例外，如 ``SerializationFailure`` 40001）例外：兩個失敗域都必須
+        往外拋，不能被這裡的 fail-soft catch 吞掉——此刻 PG transaction 已經
+        aborted，吞掉只會讓後續 flush 再炸（見
+        ``docs/decisions/patterns/post-commit-bookkeeping-rollback-unit.md``
+        規則一）。
+
+        🔴 這裡的 ``raise`` 只保證**這個 method 自己**不吞 OperationalError；
+        它不會外傳到 Odoo 的 RPC ``retrying()``（``odoo/service/model.py``）
+        ——那是 ``call_kw`` 專用的重試包裝，cron job 走 ``ir_cron._callback``
+        這條完全不同的鏈，本來就不經過它。實際接住這個往外拋的例外的，是呼叫
+        端 ``_process_subscription_billing``（同檔 ``:451``/``:463`` 附近）
+        自己的 ``try/except Exception``：那顆 savepoint 回捲的範圍是**這一筆
+        subscription 這一輪**，記一行 log 後 ``continue`` 到 for 迴圈的下一筆
+        ——不會、也不該把整條 cron 或別的 subscription 一起拖下去。
+
+        因此**沒有同一個 cron tick 內的重試**：這一筆的 ``next_payment`` 沒有
+        在這輪被推進（只有 ``_on_payment_success`` 才推進），所以隔天的 cron
+        會因為 ``next_payment <= today`` 仍為真而自然重新撿到它、重跑一次
+        （呼應 T19g 的 dunning 語意）。「這筆重試」等的是次日 cron，不是任何
+        同輪內的自動重跑機制。
+        """
+        try:
+            with self.env.cr.savepoint():
+                subscription.write({
+                    'woow_consecutive_payment_failures':
+                        subscription.woow_consecutive_payment_failures + 1,
+                    'woow_last_payment_failure_at': fields.Datetime.now(),
+                })
+        except OperationalError:
+            raise
+        except Exception:
+            _logger.exception(
+                "[SUB_FIX] failure-counter bookkeeping failed for "
+                "subscription %s; this tick's charge result still stands",
+                subscription.id,
             )
-            subscription.write({'state': 'cancel'})
-            if not subscription.woow_cancellation_notified:
-                self._notify_subscription_cancelled(subscription, invoice)
-                subscription.write({'woow_cancellation_notified': True})
-        else:
-            _logger.info(
-                "[SUB_FIX] auto_invoice failure recorded sub=%s failures=%s/%s",
-                subscription.id, new_count, threshold or '∞',
+        # 不論上面那個 savepoint 成功或回捲，這裡都是重讀後的權威值——成功時
+        # 是新值；回捲時 savepoint 的 flush+clear 已把 cache 洗回 DB 現值。
+        new_count = subscription.woow_consecutive_payment_failures
+
+        try:
+            with self.env.cr.savepoint():
+                # Per-cycle low-balance warning. Marker 只在信真的排進佇列後才
+                # 蓋，且會在那封信投遞失敗時重新打開——判準與蓋章都走共用
+                # helper，因為 `low_balance_warning_cron` 是同一個 marker 的
+                # **第二個**寫入者（#389）。
+                partner = subscription.sh_partner_id
+                warn_key = subscription.sh_date_of_next_payment or today
+                if self._low_balance_warning_needs_send(subscription, warn_key):
+                    mail = self._notify_low_balance(partner, invoice)
+                    self._stamp_low_balance_warning(subscription, warn_key, mail)
+
+                # Threshold check (Decision 4: hard-cancel; Decision 3: 0 = disabled).
+                if threshold and new_count >= threshold:
+                    _logger.warning(
+                        "[SUB_FIX] auto_cancel sub=%s after %s consecutive failures",
+                        subscription.id, new_count,
+                    )
+                    subscription.write({'state': 'cancel'})
+                    if not subscription.woow_cancellation_notified:
+                        self._notify_subscription_cancelled(subscription, invoice)
+                        subscription.write({'woow_cancellation_notified': True})
+                else:
+                    _logger.info(
+                        "[SUB_FIX] auto_invoice failure recorded sub=%s failures=%s/%s",
+                        subscription.id, new_count, threshold or '∞',
+                    )
+        except OperationalError:
+            raise
+        except Exception:
+            _logger.exception(
+                "[SUB_FIX] dunning notify/cancel bookkeeping failed for "
+                "subscription %s; failure counter and charge result from "
+                "this tick still stand",
+                subscription.id,
             )
 
     def _send_invoice_pdf(self, subscription, invoice):
@@ -868,6 +958,9 @@ class ShSubscriptionFix(models.Model):
         - ``'sdk_error'``                   — exception from _send_payment_request
         - ``'wallet_credit_failed'``        — ECPay charged but wallet credit failed
         - ``'invalid_state'``               — topup state guard (concurrent caller)
+        - ``'cooldown_active'``             — #864 PR-E: recent unresolved
+          charged_not_credited incident for this partner; refusing to
+          re-charge
 
         TODO: remove after one stable release once all callers migrated.
         Tracked in: ``docs/plans/2026-05-03-invoice-issue-fix-path-b.md``
@@ -883,6 +976,20 @@ class ShSubscriptionFix(models.Model):
         token = self._resolve_default_token(partner)
         if not token:
             return False, 'no_token'
+
+        # #864 PR-E double-charge 冷卻閘：同 partner 若在冷卻窗口內已有一筆
+        # 未 resolved 的 charged_not_credited incident，代表上一次很可能已經
+        # 真的扣過款——不要再送一次。插在 resolve token 成功之後、
+        # create_auto_topup 之前，這樣才不會對「根本沒有可用 token」的情況
+        # 誤判成命中冷卻。
+        if self._double_charge_cooldown_active(partner):
+            _logger.warning(
+                '[AUTO_TOPUP] cooldown active — refusing to re-charge '
+                'partner=%s shortfall=%s (unresolved charged_not_credited '
+                'incident within cooldown window; see woow.billing.incident)',
+                partner.id, shortfall,
+            )
+            return False, 'cooldown_active'
 
         # Note: create_auto_topup pre-condition (amount > 0) is already checked
         # above, so any ValidationError reaching here would be a programming bug
@@ -932,3 +1039,78 @@ class ShSubscriptionFix(models.Model):
         if token and token.active and token.ecpg_bindcard_id:
             return token
         return self.env['payment.token']
+
+    @api.model
+    def _double_charge_cooldown_hours(self):
+        """冷卻窗口小時數。🔴 回傳值恆為正整數。
+
+        缺值／非整數／``<=0`` 全部 fail-safe 回內建
+        ``_DOUBLE_CHARGE_COOLDOWN_DEFAULT_HOURS``（24）——與
+        ``_woow_manual_aging_days``（PR-C）同一套 fail-safe 慣例：這是防
+        double-charge 的安全機制，不給「設 0 就停用」的逃生門，避免把
+        「冷卻閘失效」偽裝成「合法設定」。
+        """
+        raw = self.env['ir.config_parameter'].sudo().get_param(
+            _DOUBLE_CHARGE_COOLDOWN_PARAM,
+            str(_DOUBLE_CHARGE_COOLDOWN_DEFAULT_HOURS),
+        )
+        try:
+            hours = int(raw)
+        except (TypeError, ValueError):
+            _logger.warning(
+                "[AUTO_TOPUP] invalid %s=%r; falling back to %s",
+                _DOUBLE_CHARGE_COOLDOWN_PARAM, raw,
+                _DOUBLE_CHARGE_COOLDOWN_DEFAULT_HOURS,
+            )
+            return _DOUBLE_CHARGE_COOLDOWN_DEFAULT_HOURS
+        if hours <= 0:
+            _logger.warning(
+                "[AUTO_TOPUP] %s=%r is not a positive number of hours; "
+                "falling back to %s. This cooldown has no disable switch "
+                "by design.",
+                _DOUBLE_CHARGE_COOLDOWN_PARAM, raw,
+                _DOUBLE_CHARGE_COOLDOWN_DEFAULT_HOURS,
+            )
+            return _DOUBLE_CHARGE_COOLDOWN_DEFAULT_HOURS
+        return hours
+
+    def _double_charge_cooldown_active(self, partner):
+        """同 partner 在冷卻窗口內是否有未 resolved 的 charged_not_credited incident。
+
+        🔴🔴 決定性陷阱（#864 PR-E 設計文，逐字遵守）：⛔ 不可以用一般 ORM
+        ``search`` 讀 incident。Odoo 是 REPEATABLE READ，這個 cron tick 的快照
+        凍結在起跑那一刻；而 incident 是
+        ``woow.billing.incident._log()`` 用**獨立 cursor**在同一輪期間
+        commit 的 ⇒ 同一個 cron tick 內，本 method 若沿用 ``self.env`` 的
+        ORM search，讀不到「剛剛才被別的獨立 cursor commit 進去」的那筆列
+        ⇒ 同一個 partner 有兩筆同日到期訂閱時，第二筆會判定「沒有冷卻中的
+        incident」而真的被扣兩次。
+
+        ✅ 正解：``self.env.registry.cursor()`` 開一條新 cursor，繞過本 tick
+        的 RR 快照直接讀，讀完立刻關（``with`` 區塊結束即 close，不 commit
+        任何東西——這裡只讀不寫）。
+
+        ⛔ 也不可以改讀 ``woow.wallet.topup`` 的 ``failed`` 標記——那個標記
+        正是會被 ``_process_subscription_billing`` 的 savepoint 回捲掉的
+        東西（CHARGED_NOT_CREDITED 分支若savepoint 之後又整段回捲，topup
+        列可能整個消失）；只有 incident 是真正commit 過、可信的證據。
+
+        命中冷卻窗口只 fail-safe 不重扣，不寫任何新的產品狀態（不建
+        incident、不動 topup/tx）——純觀測、log 一行讓維運看得到。
+        """
+        hours = self._double_charge_cooldown_hours()
+        cutoff = fields.Datetime.now() - timedelta(hours=hours)
+        with self.env.registry.cursor() as cr:
+            # 必須是這條獨立連線的第一個statement：見
+            # billing_incident.py._log() 同一手法的註解——lock_timeout 只對
+            # 本連線、本次呼叫生效，不設的話另一條連線可能無界卡住。
+            cr.execute('SET LOCAL lock_timeout = %s',
+                       (_DOUBLE_CHARGE_COOLDOWN_QUERY_LOCK_TIMEOUT,))
+            cr.execute(
+                "SELECT 1 FROM woow_billing_incident "
+                "WHERE partner_ref = %s AND kind = 'charged_not_credited' "
+                "AND state != 'resolved' AND last_seen_at >= %s "
+                "LIMIT 1",
+                (partner.id, cutoff),
+            )
+            return cr.fetchone() is not None
