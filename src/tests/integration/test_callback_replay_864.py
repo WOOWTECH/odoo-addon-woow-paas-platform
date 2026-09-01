@@ -1038,14 +1038,33 @@ class TestCallbackReplayEngine864(BaseCase):
                     env['loyalty.card'].sudo().search(
                         [('partner_id', 'in', partners.ids)]).unlink()
                     partners.unlink()
-                if not self.topup_product_preexisted:
-                    env['product.product'].sudo().search(
-                        [('default_code', '=', 'WALLET_TOPUP')]).unlink()
                 cr.commit()
         except Exception:
             _logger.exception(
                 '#864 PR-G replay engine fixture cleanup failed (marker=%s)',
                 self.marker,
+            )
+        # 獨立一段、獨立 cursor：上面任一步失敗都不該讓這顆**共用**的
+        # placeholder product 留在測試 DB 裡——它會讓別檔的
+        # `test_topup_product_is_lazy_created_once` 前置不成立，而那個症狀
+        # 看起來完全不像是本檔造成的。
+        if getattr(self, 'topup_product_preexisted', True):
+            return
+        try:
+            with self.registry.cursor() as cr:
+                env = api.Environment(cr, odoo.SUPERUSER_ID, {})
+                product = env['product.product'].sudo().search(
+                    [('default_code', '=', 'WALLET_TOPUP')])
+                if product:
+                    env['account.move'].sudo().search([
+                        ('invoice_line_ids.product_id', 'in', product.ids),
+                    ]).unlink()
+                    product.unlink()
+                cr.commit()
+        except Exception:
+            _logger.exception(
+                '#864 PR-G shared WALLET_TOPUP product cleanup failed '
+                '(marker=%s)', self.marker,
             )
 
     # --- fixtures ------------------------------------------------------ #
