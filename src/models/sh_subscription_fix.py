@@ -597,10 +597,24 @@ class ShSubscriptionFix(models.Model):
         的一般例外，charge 結果不會被連坐。🔴 ``OperationalError``（並發／連線
         類 DB 例外，如 ``SerializationFailure`` 40001）例外：兩個失敗域都必須
         往外拋，不能被這裡的 fail-soft catch 吞掉——此刻 PG transaction 已經
-        aborted，吞掉只會讓後續 flush 再炸；往外拋才能讓 Odoo 的 `retrying()`
-        看見並用新 snapshot 整段重跑（見
+        aborted，吞掉只會讓後續 flush 再炸（見
         ``docs/decisions/patterns/post-commit-bookkeeping-rollback-unit.md``
         規則一）。
+
+        🔴 這裡的 ``raise`` 只保證**這個 method 自己**不吞 OperationalError；
+        它不會外傳到 Odoo 的 RPC ``retrying()``（``odoo/service/model.py``）
+        ——那是 ``call_kw`` 專用的重試包裝，cron job 走 ``ir_cron._callback``
+        這條完全不同的鏈，本來就不經過它。實際接住這個往外拋的例外的，是呼叫
+        端 ``_process_subscription_billing``（同檔 ``:451``/``:463`` 附近）
+        自己的 ``try/except Exception``：那顆 savepoint 回捲的範圍是**這一筆
+        subscription 這一輪**，記一行 log 後 ``continue`` 到 for 迴圈的下一筆
+        ——不會、也不該把整條 cron 或別的 subscription 一起拖下去。
+
+        因此**沒有同一個 cron tick 內的重試**：這一筆的 ``next_payment`` 沒有
+        在這輪被推進（只有 ``_on_payment_success`` 才推進），所以隔天的 cron
+        會因為 ``next_payment <= today`` 仍為真而自然重新撿到它、重跑一次
+        （呼應 T19g 的 dunning 語意）。「這筆重試」等的是次日 cron，不是任何
+        同輪內的自動重跑機制。
         """
         try:
             with self.env.cr.savepoint():

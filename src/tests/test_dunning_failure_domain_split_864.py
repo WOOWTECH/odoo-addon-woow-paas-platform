@@ -42,6 +42,7 @@ class TestDunningFailureDomainSplit864(TransactionCase):
         super().setUpClass()
         cls.Sub = cls.env['sh.subscription.subscription']
         cls.Partner = cls.env['res.partner']
+        cls.Move = cls.env['account.move']
 
     def _make_partner(self, name, balance=0.0):
         return self.Partner.create({
@@ -78,6 +79,9 @@ class TestDunningFailureDomainSplit864(TransactionCase):
 
     def _run_cron(self):
         self.Sub._sh_create_auto_invoice()
+
+    def _invoices_for(self, sub):
+        return self.Move.search([('sh_subscription_id', '=', sub.id)])
 
     def _make_invoice(self, partner):
         """給直接呼叫 `_on_payment_failure` 用的最小 draft invoice。
@@ -117,6 +121,20 @@ class TestDunningFailureDomainSplit864(TransactionCase):
                 for msg in log_cm.output),
             'domain 2 的例外必須被記成 fail-soft warning，而不是靜默吞掉',
         )
+        # 🔴 直接觀測外層 `_process_subscription_billing` savepoint 已確定的
+        # charge 結果（本輪新開的 invoice）本身仍在——不只靠 counter 間接推論。
+        # domain 2 的例外住在 `_on_payment_failure` 自己的 nested savepoint
+        # 內，回捲範圍不該波及外層那顆已經 create() 過的 invoice 記錄。
+        invoices = self._invoices_for(sub)
+        self.assertEqual(
+            len(invoices), 1,
+            '外層 savepoint 已確定的 invoice 必須存活，不因 domain 2 的例外被連坐',
+        )
+        self.assertTrue(
+            invoices.exists(),
+            'invoice record 必須是真的還在資料庫裡（exists()），不是被回捲後 '
+            '留在 cache 裡的幽靈值',
+        )
 
     # --- Domain 2 自己的寫入在自己炸掉時要被回捲（證明是真 savepoint） ------ #
 
@@ -143,6 +161,18 @@ class TestDunningFailureDomainSplit864(TransactionCase):
             '單純吞例外）',
         )
         self.assertFalse(sub.woow_cancellation_notified)
+        # 🔴 同上：外層 `_process_subscription_billing` savepoint 已確定的
+        # invoice 必須存活，即使 domain 2 自己的 cancel 狀態被回捲。
+        invoices = self._invoices_for(sub)
+        self.assertEqual(
+            len(invoices), 1,
+            '外層 savepoint 已確定的 invoice 必須存活，不因 domain 2 的例外被連坐',
+        )
+        self.assertTrue(
+            invoices.exists(),
+            'invoice record 必須是真的還在資料庫裡（exists()），不是被回捲後 '
+            '留在 cache 裡的幽靈值',
+        )
 
     # --- cron 不因單一 subscription 的 dunning bug 卡死 --------------------- #
 
