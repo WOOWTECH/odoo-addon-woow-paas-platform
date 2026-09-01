@@ -35,10 +35,12 @@ fixture ⇒ 整段安靜地什麼都不做而測試全綠。
 
 import logging
 import threading
+import time
 import uuid
 from datetime import timedelta
 
 import odoo
+import psycopg2
 from odoo import api, fields
 from odoo.modules.registry import Registry
 from odoo.tests.common import BaseCase, get_db_name, tagged
@@ -440,6 +442,57 @@ class TestIntentToChargedNotCreditedPromotion864(BaseCase):
             '「錢已經扣了但記不下來」必須出聲 logs=%r' % (logs.output,),
         )
 
+    # --- (2b) SF3：same-kind open 重入沿 `_log` 既有觀測語意 -------------- #
+
+    def test_charged_not_credited_reentry_updates_observation_in_place(self):
+        """已經是 CNI 的 open 列再寫一次＝重複觀測，⛔ 不是拒收。
+
+        同一筆 topup 的兩個 CHARGED_NOT_CREDITED 分支都可能連續觸發；
+        第二次不該噴 `promotion_refused`（那是「錢扣了但記不下來」的警報，
+        用在正常重入上會把真正的警報淹掉）。
+        """
+        ref = self._ref('07')
+        intent_id = self._call('_log', self._intent(ref))
+        promoted = self._call('_log_charged_not_credited', self._cni(ref))
+        self.assertEqual(promoted, intent_id)
+        self.assertEqual(self._row(ref)['occurrences'], 2)
+
+        again = self._call('_log_charged_not_credited', self._cni(ref))
+
+        self.assertEqual(
+            again, intent_id,
+            'same-kind 重入回同一個穩定 id（沿 `_log` 既有同 kind 觀測語意）',
+        )
+        row = self._row(ref)
+        self.assertEqual(row['kind'], 'charged_not_credited')
+        self.assertEqual(
+            row['occurrences'], 3,
+            '重複觀測要累加 occurrences，⛔ 不是被當成 collision 丟掉',
+        )
+        self.assertEqual(row['state'], 'open')
+
+    def test_charged_not_credited_reentry_does_not_reopen_a_resolved_row(self):
+        """已 resolved 的 CNI 列重入 ⛔ 不得被動到（Q3 硬錨：不可重開）。"""
+        ref = self._ref('08')
+        self._call('_log', self._intent(ref))
+        self._call('_log_charged_not_credited', self._cni(ref))
+        with self.registry.cursor() as cr:
+            cr.execute(
+                'UPDATE %s SET state = %%s, resolved_at = %%s, '
+                'occurrences = 9 WHERE external_ref = %%s' % _INCIDENT_TABLE,
+                ('resolved', fields.Datetime.now(), ref))
+            cr.commit()
+
+        result = self._call('_log_charged_not_credited', self._cni(ref))
+
+        self.assertIs(result, False)
+        row = self._row(ref)
+        self.assertEqual(row['state'], 'resolved')
+        self.assertEqual(
+            row['occurrences'], 9,
+            '已結案的列連觀測值都 ⛔ 不得被後到的重入推進',
+        )
+
     # --- (3) 錨4：升級之後 callback 只補 facts，kind 不回改 ---------------- #
 
     def test_callback_after_promotion_adds_facts_and_keeps_the_kind(self):
@@ -516,6 +569,116 @@ class TestIntentToChargedNotCreditedPromotion864(BaseCase):
                 promoted_row[field], fresh_row[field],
                 '冷卻閘讀的 %s 欄位語意必須等價' % field,
             )
+
+
+@tagged('post_install', '-at_install', '-standard', 'callback_replay_864')
+class TestAtomicUpsertUnderRealConcurrency864(BaseCase):
+    """Q3 錨1 的直接證據：同一個 external_ref 上兩條真連線同時寫。
+
+    「先查有沒有 intent、再決定寫哪個 kind」是 TOCTOU：併發的預登記在查與寫
+    之間 commit，就會把**正常路徑**變成「丟掉 callback 事實＋噴一則 critical」。
+    這一條把那個時序**做出來**——對手在另一條連線上把 intent 插進去但**不
+    commit**，`_log_callback_evidence` 的 `INSERT … ON CONFLICT` 因此卡在重複
+    鍵上，等對手 commit 之後才解開並走 DO UPDATE。
+
+    ⚠ 對手只跑 raw SQL：Odoo `-u` 測試載入期間主執行緒持有 `Registry._lock`，
+    worker thread 一建 `api.Environment` 就會卡在那顆 harness 鎖上（實測），
+    所以 ORM 那一側一定要留在主執行緒。
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.registry = Registry(get_db_name())
+        self.marker = 'G864U%s' % uuid.uuid4().hex[:9].upper()
+        self.addCleanup(self._purge)
+
+    def _purge(self):
+        try:
+            with self.registry.cursor() as cr:
+                cr.execute(
+                    'DELETE FROM %s WHERE external_ref LIKE %%s'
+                    % _INCIDENT_TABLE, (self.marker + '%',))
+                cr.commit()
+        except Exception:
+            _logger.exception(
+                '#864 PR-G atomic upsert fixture cleanup failed (marker=%s)',
+                self.marker,
+            )
+
+    def _row(self, ref):
+        with self.registry.cursor() as cr:
+            cr.execute(
+                'SELECT id, kind, state, rtn_code, trade_no, occurrences '
+                'FROM %s WHERE external_ref = %%s' % _INCIDENT_TABLE, (ref,))
+            row = cr.fetchone()
+            return row and dict(zip(
+                ('id', 'kind', 'state', 'rtn_code', 'trade_no',
+                 'occurrences'), row))
+
+    def test_callback_upsert_survives_a_concurrent_uncommitted_intent(self):
+        ref = '%s-C1' % self.marker
+        inserted = threading.Event()
+        failures = []
+
+        def _competing_intent():
+            """另一條真連線：插入 intent 但先不 commit，製造重複鍵等待。"""
+            cr = self.registry._db.cursor()
+            try:
+                cr.execute(
+                    'INSERT INTO %s (external_ref, kind, state, partner_ref, '
+                    'amount, skip_count, attempts, query_attempts, '
+                    'first_seen_at, last_seen_at, occurrences, create_uid, '
+                    'write_uid, create_date, write_date) VALUES '
+                    "(%%s, 'intent', 'open', %%s, %%s, 0, 0, 0, "
+                    'now(), now(), 1, %%s, %%s, now(), now())'
+                    % _INCIDENT_TABLE,
+                    (ref, 4242, 500.0, odoo.SUPERUSER_ID, odoo.SUPERUSER_ID))
+                inserted.set()
+                time.sleep(0.3)
+                cr.commit()
+            except Exception as exc:  # pragma: no cover - 診斷用
+                failures.append(exc)
+                inserted.set()
+            finally:
+                if not cr.closed:
+                    cr.close()
+
+        thread = threading.Thread(target=_competing_intent, name='g864-intent')
+        thread.start()
+        try:
+            self.assertTrue(
+                inserted.wait(timeout=30),
+                '前置：對手必須真的把 intent 插進去（未 commit）')
+            with self.registry.cursor() as cr:
+                env = api.Environment(cr, odoo.SUPERUSER_ID, {})
+                evidence_id = env[_INCIDENT_MODEL]._log_callback_evidence({
+                    'external_ref': ref,
+                    'kind': 'callback_tx_missing',
+                    'rtn_code': '1',
+                    'trade_no': '%sTN' % self.marker,
+                    'detail': 'ECPay callback 事實（測試 fixture）。',
+                })
+        finally:
+            thread.join(timeout=30)
+        self.assertFalse(failures, '對手執行緒不得出錯：%r' % (failures,))
+
+        self.assertTrue(
+            evidence_id,
+            '🔴 併發的預登記在「查」與「寫」之間 commit 時，callback 事實'
+            '⛔ 不得被丟掉——這正是不做 pre-read 的理由',
+        )
+        row = self._row(ref)
+        self.assertEqual(
+            row['kind'], 'intent',
+            '撞上的是別人剛 commit 的 intent 列 ⇒ 原地更新、kind 不動',
+        )
+        self.assertEqual(row['rtn_code'], '1')
+        self.assertEqual(row['trade_no'], '%sTN' % self.marker)
+        self.assertEqual(
+            row['occurrences'], 2,
+            '一次插入＋一次觀測 ⇒ 2；若變成另開一列或整筆被丟，這裡都會紅',
+        )
+        self.assertEqual(row['id'], evidence_id)
 
 
 @tagged('post_install', '-at_install', '-standard', 'callback_replay_864')
@@ -613,7 +776,7 @@ class TestReplayOutcomeMarkers864(BaseCase):
         ok = self._mark(
             '_mark_replay_skip_current_cursor', ref, 'lock_not_available')
 
-        self.assertIs(ok, True)
+        self.assertTrue(ok, '回傳的是 incident id（供呼叫端排人工覆核用）')
         row = self._row(ref)
         self.assertEqual(row['skip_reason'], 'lock_not_available')
         self.assertEqual(
@@ -639,7 +802,7 @@ class TestReplayOutcomeMarkers864(BaseCase):
             '_mark_replay_skip_current_cursor', ref,
             'cancelled_needs_human', 'needs_human')
 
-        self.assertIs(ok, True)
+        self.assertTrue(ok)
         row = self._row(ref)
         self.assertEqual(row['state'], 'needs_human')
         self.assertEqual(row['skip_reason'], 'cancelled_needs_human')
@@ -739,8 +902,8 @@ class TestReplayOutcomeMarkers864(BaseCase):
 
             wrapper = env[_INCIDENT_MODEL]._mark_replay_skip_independent(
                 ref, 'lock_not_available')
-            self.assertIs(
-                wrapper, True,
+            self.assertTrue(
+                wrapper,
                 'independent 形換一條連線 ⇒ 跳過痕跡仍留得下來；'
                 '沒有它，「搶不到鎖」這個分支就是零痕跡的裸 continue',
             )
@@ -1101,8 +1264,7 @@ class TestCallbackReplayEngine864(BaseCase):
         return topup, tx
 
     def _seed_case(self, suffix, topup_state='pending', tx_state='pending',
-                   rtn_code='1', trade_no=True, with_topup=True,
-                   first_seen_at=None):
+                   rtn_code='1', trade_no=True, with_topup=True):
         """建立「callback 已到達、tx 沒被更新」的完整局面並 commit。"""
         reference = '%s%s' % (self.marker, suffix)
         with self.registry.cursor() as cr:
@@ -1133,19 +1295,6 @@ class TestCallbackReplayEngine864(BaseCase):
             env[_INCIDENT_MODEL]._log_callback_evidence(evidence)
             partner_id = partner.id
             cr.commit()
-        if first_seen_at is not None:
-            # 🔴 必須換一條 cursor：incident 是 `_log` 用**獨立交易**在本
-            # cursor 的 RR 快照**之後**才 commit 的 ⇒ 在原 cursor 上 UPDATE
-            # 會匹配 0 列而且**不報錯**（本 PR 要修的正是同一個陷阱；本測試
-            # 自己先踩過一次）。
-            with self.registry.cursor() as aging_cr:
-                aging_cr.execute(
-                    'UPDATE %s SET first_seen_at = %%s WHERE external_ref = %%s'
-                    % _INCIDENT_TABLE, (first_seen_at, reference))
-                self.assertEqual(
-                    aging_cr.rowcount, 1,
-                    '前置：推老 first_seen_at 必須真的改到那一列')
-                aging_cr.commit()
         return reference, partner_id, topup_id
 
     # --- probes -------------------------------------------------------- #
@@ -1168,12 +1317,14 @@ class TestCallbackReplayEngine864(BaseCase):
     def _incident(self, reference):
         with self.registry.cursor() as cr:
             cr.execute(
-                'SELECT state, skip_reason, skip_count, attempts '
+                'SELECT state, skip_reason, skip_count, attempts, '
+                'last_skipped_at, occurrences, last_seen_at '
                 'FROM %s WHERE external_ref = %%s' % _INCIDENT_TABLE,
                 (reference,))
             row = cr.fetchone()
             return row and dict(zip(
-                ('state', 'skip_reason', 'skip_count', 'attempts'), row))
+                ('state', 'skip_reason', 'skip_count', 'attempts',
+                 'last_skipped_at', 'occurrences', 'last_seen_at'), row))
 
     def _topup_state(self, topup_id):
         with self.registry.cursor() as cr:
@@ -1293,10 +1444,12 @@ class TestCallbackReplayEngine864(BaseCase):
     # --- (4) 逐狀態矩陣：每一格都有確切痕跡，⛔ 沒有裸 continue ------------ #
 
     def test_state_matrix_leaves_an_exact_marker_on_every_branch(self):
-        aged = fields.Datetime.now() - timedelta(
-            minutes=self.env_hard_cancel_min() + 5)
         # ⚠ suffix 要短：external_ref 走 raw-MTN 值域（最長 20 字元），
         #   marker 已佔 14 字元，超過就會被 `_log` 拒收、整格靜默不存在。
+        # 🔴 顯式狀態轉移**只有三格**（裁決 blocker）：`no_topup_row` → orphan
+        #   （設計分支 C 的真孤兒）、`intent_without_charge` 與
+        #   `cancelled_needs_human` → needs_human。其餘一律留 `open` ＋ skip
+        #   欄位，⛔ G 的 cron 不寫任何「時間驅動的升級／放棄」。
         cases = {
             'draft': dict(suffix='D1', kwargs=dict(topup_state='draft'),
                           state='needs_human',
@@ -1308,10 +1461,7 @@ class TestCallbackReplayEngine864(BaseCase):
                               state='needs_human',
                               reason='cancelled_needs_human'),
             'norow': dict(suffix='N1', kwargs=dict(with_topup=False),
-                          state='open', reason='no_topup_row'),
-            'agedrow': dict(suffix='A1',
-                            kwargs=dict(with_topup=False, first_seen_at=aged),
-                            state='orphan', reason='intent_aged_out'),
+                          state='orphan', reason='no_topup_row'),
             'rtnbad': dict(suffix='R1', kwargs=dict(rtn_code='10100058'),
                            state='open', reason='callback_not_successful'),
             'notrade': dict(suffix='T1', kwargs=dict(trade_no=False),
@@ -1325,15 +1475,6 @@ class TestCallbackReplayEngine864(BaseCase):
                 self._incident(reference),
                 '前置：%s 的 incident 必須真的建起來（external_ref 過長會被'
                 '靜默拒收，那會讓整格變成假綠）' % name)
-            if spec['kwargs'].get('first_seen_at') is not None:
-                with self.registry.cursor() as probe:
-                    probe.execute(
-                        'SELECT first_seen_at FROM %s WHERE external_ref = %%s'
-                        % _INCIDENT_TABLE, (reference,))
-                    self.assertLess(
-                        probe.fetchone()[0], aged + timedelta(minutes=1),
-                        '前置：%s 的 first_seen_at 必須真的被推老，'
-                        '否則測到的是別的分支' % name)
             seeded[name] = (reference, partner_id, topup_id)
         # 🔴 陽性對照：同一批裡混一筆合法的 pending。只有它該被補，
         #    其餘分毫未動——⛔ 不能只靠「什麼都沒發生」當綠燈。
@@ -1368,38 +1509,98 @@ class TestCallbackReplayEngine864(BaseCase):
             env = api.Environment(cr, odoo.SUPERUSER_ID, {})
             return env['woow.wallet.topup']._CLEANUP_HARD_CANCEL_MIN
 
-    def test_aged_but_uncreditable_intent_leaves_the_scan_set_as_orphan(self):
-        """逾時仍補不了的預登記轉 orphan：收斂掃描集合，⛔ 不是結案。
+    def test_a_skipped_intent_is_not_rescanned_until_evidence_changes(self):
+        """防餓死：評估過的列不再每輪重掃——但那是**候選集合**策略，⛔ 不是狀態轉移。
 
-        沒有這一格的話，每一筆被拒的刷卡都會留下一列永遠 ``open`` 的 intent，
-        每輪被撈出來再跳過一次，最後把 batch 名額佔滿、把真正該補的餓死。
-        ⚠ 人工清單的判準是**年齡**（``state != 'resolved'``），所以這些列在
-        人工清單上一個都不會少——收斂的只有 cron 的掃描集合。
+        G 的 cron ⛔ 不寫任何「時間驅動的升級／放棄」：被拒的刷卡留 `open`
+        ＋ skip 欄位，人工隊列按**年齡查詢** derive 得到它。所以「別再每 10
+        分鐘重掃一次」只能靠候選集合的判準做，不能靠改狀態。
         """
-        aged = fields.Datetime.now() - timedelta(
-            minutes=self.env_hard_cancel_min() + 5)
-        old_ref, old_partner, _old_topup = self._seed_case(
-            'X1', rtn_code='10100058', first_seen_at=aged)
-        fresh_ref, _fresh_partner, _fresh_topup = self._seed_case(
-            'X2', rtn_code='10100058')
+        reference, partner_id, _topup_id = self._seed_case(
+            'S1', rtn_code='10100058')
+
+        self._run_replay()
+        first = self._incident(reference)
+        self.assertEqual(
+            (first['state'], first['skip_reason'], first['skip_count']),
+            ('open', 'callback_not_successful', 1),
+        )
 
         self._run_replay()
 
-        old_row = self._incident(old_ref)
+        second = self._incident(reference)
         self.assertEqual(
-            (old_row['state'], old_row['skip_reason']),
-            ('orphan', 'callback_not_successful'),
-            '逾時的那一筆要離開掃描集合，但**確切 reason 必須留著**——'
-            '換成籠統的 aged 值就把診斷資訊丟了',
+            second['skip_count'], 1,
+            '沒有新事實就 ⛔ 不該再被撈出來評估一次——否則被拒的刷卡會逐輪'
+            '累積、把 batch 名額佔滿，把真正該補的餓死',
         )
-        fresh_row = self._incident(fresh_ref)
         self.assertEqual(
-            (fresh_row['state'], fresh_row['skip_reason']),
-            ('open', 'callback_not_successful'),
-            '陽性對照：還沒逾時的同型列仍留在掃描集合裡（可能還會等到'
-            '後續的成功 callback），⛔ 不可以一律轉 orphan',
+            second['state'], 'open',
+            '⛔ 不得為了收斂掃描集合而改狀態（那會變成 G 自己造的放棄語意）',
         )
-        self.assertEqual(self._points(old_partner), 0.0)
+
+    def test_a_late_successful_callback_reselects_a_skipped_intent(self):
+        """🔴 「不能永久 filter」的判別式：後到的成功 callback 必須讓它回來。
+
+        被 skip 過的列收到晚到的成功 callback ⇒ evidence 的時戳前進 ⇒
+        重新入選 ⇒ 真的入帳。沒有這條，防餓死策略就變成永久黑名單。
+        """
+        reference, partner_id, topup_id = self._seed_case(
+            'S2', rtn_code='10100058')
+        self._run_replay()
+        self.assertEqual(
+            self._incident(reference)['skip_reason'],
+            'callback_not_successful')
+        before = self._points(partner_id)
+
+        # 晚到的成功 callback：走的是 production 的同一支 atomic upsert。
+        with self.registry.cursor() as cr:
+            env = api.Environment(cr, odoo.SUPERUSER_ID, {})
+            self.assertTrue(env[_INCIDENT_MODEL]._log_callback_evidence({
+                'external_ref': reference,
+                'kind': 'callback_tx_missing',
+                'rtn_code': '1',
+                'trade_no': '%sTN' % self.marker,
+                'detail': 'ECPay callback 事實（測試 fixture）。',
+            }))
+
+        self._run_replay()
+
+        self.assertEqual(
+            self._points(partner_id) - before, 550.0,
+            '🔴 後到的成功 callback 必須讓已被 skip 的列重新入選並真的入帳',
+        )
+        self.assertEqual(self._wallet_tx_count(partner_id), 1)
+        self.assertEqual(self._topup_state(topup_id), 'done')
+        self.assertEqual(self._incident(reference)['state'], 'resolved')
+
+    def test_lock_not_available_does_not_count_as_an_attempt(self):
+        """搶不到鎖＝根本沒評估 ⇒ ⛔ 不得因此把自己排除在下一輪之外。"""
+        reference, partner_id, topup_id = self._seed_case('S3')
+        before = self._points(partner_id)
+
+        with self.registry.cursor() as holder:
+            holder.execute(
+                'SELECT id FROM woow_wallet_topup WHERE id = %s FOR UPDATE',
+                (topup_id,))
+            self._run_replay()
+
+        locked = self._incident(reference)
+        self.assertEqual(locked['skip_reason'], 'lock_not_available')
+        self.assertEqual(locked['skip_count'], 1)
+        self.assertIsNone(
+            locked['last_skipped_at'],
+            '沒拿到鎖就沒有「評估過」這件事：⛔ 不得寫 last_skipped_at，'
+            '否則這一筆會被候選判準永久排除，而它其實一次都沒被看過',
+        )
+
+        self._run_replay()
+
+        self.assertEqual(
+            self._points(partner_id) - before, 550.0,
+            '鎖釋放後的下一輪必須撿得回來並真的入帳',
+        )
+        self.assertEqual(self._incident(reference)['state'], 'resolved')
 
     def test_already_credited_topup_is_resolved_not_recredited(self):
         reference, partner_id, topup_id = self._seed_case(
@@ -1483,86 +1684,165 @@ class TestCallbackReplayEngine864(BaseCase):
 
     # --- (6) 真競態：兩條連線同時 replay 同一筆 ---------------------------- #
 
-    def test_concurrent_contender_on_the_same_row_credits_at_most_once(self):
-        """🔴 真競態：另一條連線與 replay 同時搶同一列的 topup 行鎖。
+    # --- (6b) SF2：升級成 needs_human／orphan 之後 best-effort 排人工覆核 -- #
 
-        ⚠ **為什麼對手用 raw SQL 而不是也跑一次 replay**：Odoo 的 `-u` 測試載入
-        期間，**主執行緒持有 ``Registry._lock``**，worker thread 一旦建立
-        ``api.Environment`` 就會卡在那顆 harness 鎖上直到主執行緒放手
-        （本輪實測：worker 停在 ``api.Environment(...)``，恰好在主執行緒
-        ``join`` 逾時那一刻才前進；PostgreSQL 端全程 idle、零 lock wait）。
-        ⇒ 「兩邊都跑 ORM replay」在這個 harness 下結構上做不到，測出來的會是
-        harness 鎖不是 PostgreSQL 併發。同一份紀錄也寫在
-        ``test_billing_incident_real_rollback_864.py`` 的 race 註解裡。
+    def _review_activity_count(self, reference):
+        with self.registry.cursor() as cr:
+            env = api.Environment(cr, odoo.SUPERUSER_ID, {})
+            review_type = env.ref(
+                'woow_paas_platform.'
+                'mail_activity_type_billing_incident_review')
+            cr.execute(
+                'SELECT COUNT(*) FROM mail_activity a '
+                'JOIN %s i ON i.id = a.res_id '
+                'WHERE a.res_model = %%s AND a.activity_type_id = %%s '
+                'AND a.active = true AND i.external_ref = %%s'
+                % _INCIDENT_TABLE,
+                (_INCIDENT_MODEL, review_type.id, reference))
+            return cr.fetchone()[0]
 
-        ⇒ 對手改成**在主執行緒建立的裸 cursor 上跑 raw SQL 行鎖**——那正是
-        production 上另一個競爭者（callback 走 ``_set_done`` 寫 topup 列）在
-        資料庫層的形狀。兩邊在 barrier 上對齊後由 PostgreSQL 決勝負。
+    def test_escalation_schedules_a_human_review_activity(self):
+        reference, _partner_id, _topup_id = self._seed_case(
+            'H1', topup_state='cancelled')
+        self.assertEqual(self._review_activity_count(reference), 0)
 
-        不變式（⛔ 不押誰贏）：這一輪**最多**入帳一次；補跑一輪之後**恰好**
-        入帳一次。
-        """
-        reference, partner_id, topup_id = self._seed_case('RC2')
-        before = self._points(partner_id)
-        barrier = threading.Barrier(2)
-        contender_cr = self.registry._db.cursor()
-        contender = {}
-
-        def _contend():
-            try:
-                contender_cr.execute('SET LOCAL lock_timeout = %s', ('1s',))
-                barrier.wait(timeout=30)
-                contender_cr.execute(
-                    'SELECT id FROM woow_wallet_topup WHERE id = %s '
-                    'FOR UPDATE NOWAIT', (topup_id,))
-                contender['won'] = bool(contender_cr.fetchone())
-            except Exception as exc:
-                contender['error'] = type(exc).__name__
-            finally:
-                try:
-                    contender_cr.rollback()
-                except Exception:
-                    pass
-
-        thread = threading.Thread(target=_contend, name='g864-contender')
-        thread.start()
-        try:
-            barrier.wait(timeout=30)
-            race_summary = self._run_replay()
-            thread.join(timeout=30)
-            self.assertFalse(
-                thread.is_alive(), '前置：對手執行緒必須跑完')
-        finally:
-            if not contender_cr.closed:
-                contender_cr.close()
-
-        raced_delta = self._points(partner_id) - before
-        self.assertIn(
-            raced_delta, (0.0, 550.0),
-            '競態這一輪只可能「補了一次」或「這輪讓給對手」，'
-            '⛔ 不可能是別的數字 summary=%r contender=%r'
-            % (race_summary, contender),
-        )
-        self.assertLessEqual(self._wallet_tx_count(partner_id), 1)
-        self.assertTrue(
-            contender.get('won') or contender.get('error')
-            == 'LockNotAvailable',
-            '前置：對手要嘛拿到鎖、要嘛被 NOWAIT 當場拒絕——'
-            '兩者皆非代表這一格根本沒有競爭 contender=%r' % (contender,),
-        )
-
-        # 補跑一輪（此時無競爭）：不論剛剛誰贏，總帳必須恰好一次。
         self._run_replay()
 
-        self.assertEqual(
-            self._points(partner_id) - before, 550.0,
-            '🔴 不論競態誰贏，錢包最終只准增加一次',
+        row = self._incident(reference)
+        self.assertEqual((row['state'], row['skip_reason']),
+                         ('needs_human', 'cancelled_needs_human'))
+        self.assertGreaterEqual(
+            self._review_activity_count(reference), 1,
+            '升級成 needs_human 之後必須有人工覆核 activity——'
+            '不然「轉人工」只是欄位上的字，沒有人會看到',
+        )
+
+    def test_review_activity_failure_does_not_roll_back_the_escalation(self):
+        """activity 排不出來 ⛔ 不得回捲已 commit 的 transition、不得殺批次。
+
+        用**真的**故障製造：另一條連線對 `mail_activity` 取 ACCESS EXCLUSIVE，
+        `_schedule_review_activities` 的 1 秒 `lock_timeout` 因此到期而拋。
+        ⛔ 沒有 mock 我們自己的任何一段。
+        """
+        first_ref, _p1, _t1 = self._seed_case('H2', topup_state='cancelled')
+        # 同一批第二筆：證明第一筆的 activity 故障沒有殺掉整批。
+        # ⚠ 這裡刻意**不**混一筆會被入帳的：`LOCK TABLE mail_activity` 也會
+        # 擋住入帳路徑上的 `_transition_resolved_current_cursor`（它會清同一
+        # 張表的覆核 activity）⇒ 那一筆會變成 `lock_not_available`，測到的就
+        # 不是「activity 故障不殺批次」而是「我把入帳也一起鎖住了」。
+        second_ref, _p2, _t2 = self._seed_case('H4', topup_state='cancelled')
+
+        with self.registry.cursor() as blocker:
+            blocker.execute(
+                'LOCK TABLE mail_activity IN ACCESS EXCLUSIVE MODE')
+            summary = self._run_replay()
+
+        for name, reference in (('第一筆', first_ref), ('第二筆', second_ref)):
+            row = self._incident(reference)
+            self.assertEqual(
+                (row['state'], row['skip_reason']),
+                ('needs_human', 'cancelled_needs_human'),
+                '🔴 %s：activity 是 best-effort，它失敗 ⛔ 不得回捲已經 commit '
+                '的狀態轉移，也不得讓後面的筆不跑 %r' % (name, summary),
+            )
+            self.assertEqual(
+                self._review_activity_count(reference), 0,
+                '前置：%s 的 activity 這一輪必須真的排不出來，'
+                '否則本測沒有鑑別力' % name,
+            )
+        self.assertGreaterEqual(
+            summary['skipped_by_reason'].get('cancelled_needs_human', 0), 2,
+            '兩筆都必須被處理到（⛔ 不是第一筆炸掉就收工）%r' % (summary,),
+        )
+
+    # --- (6c) SF4：公版 choke point 的阻塞式行鎖 -------------------------- #
+
+    def _call_choke_point(self, topup_id):
+        """在一條乾淨的 cursor 上直接呼叫 `_on_payment_done`。"""
+        with self.registry.cursor() as cr:
+            env = api.Environment(cr, odoo.SUPERUSER_ID, {})
+            topup = env['woow.wallet.topup'].sudo().browse(topup_id)
+            topup._on_payment_done(topup.payment_transaction_id)
+            cr.commit()
+
+    def _hold_topup_lock(self, topup_id, seconds, ready):
+        """另一條真連線持有該列的行鎖（只跑 raw SQL，⛔ 不建 Environment）。"""
+        def _holder():
+            cr = self.registry._db.cursor()
+            try:
+                cr.execute(
+                    'SELECT id FROM woow_wallet_topup WHERE id = %s '
+                    'FOR UPDATE', (topup_id,))
+                ready.set()
+                time.sleep(seconds)
+                cr.rollback()
+            finally:
+                ready.set()
+                if not cr.closed:
+                    cr.close()
+        thread = threading.Thread(target=_holder, name='g864-choke-holder')
+        thread.start()
+        return thread
+
+    def test_choke_point_waits_for_the_lock_then_exits_idempotently(self):
+        """公版 choke：contention 下先等鎖，拿到之後靠冪等守衛乾淨退出。"""
+        _reference, partner_id, topup_id = self._seed_case('L1')
+        self._run_replay()
+        self.assertEqual(self._topup_state(topup_id), 'done')
+        self.assertEqual(self._wallet_tx_count(partner_id), 1)
+        points_after_first = self._points(partner_id)
+
+        ready = threading.Event()
+        thread = self._hold_topup_lock(topup_id, 0.4, ready)
+        self.assertTrue(ready.wait(timeout=30), '前置：對手必須真的拿到鎖')
+        started = time.monotonic()
+        self._call_choke_point(topup_id)
+        elapsed = time.monotonic() - started
+        thread.join(timeout=30)
+
+        self.assertGreater(
+            elapsed, 0.2,
+            '🔴 判別式：入口是**阻塞式** FOR UPDATE ⇒ 它必須真的等過鎖。'
+            '沒等就代表鎖根本沒加，這條測不到 contention 語意（elapsed=%.3f）'
+            % elapsed,
         )
         self.assertEqual(
             self._wallet_tx_count(partner_id), 1,
-            'wallet.transaction 恰一筆——重複入帳在帳上就是多一列',
+            '等到鎖之後重讀狀態、走冪等守衛乾淨退出 ⇒ ⛔ 不得重複入帳',
         )
-        self.assertEqual(self._incident(reference)['state'], 'resolved')
+        self.assertEqual(self._points(partner_id), points_after_first)
+
+    def test_choke_point_times_out_instead_of_waiting_forever(self):
+        """`SET LOCAL lock_timeout` 是安全參數：⛔ 不得無界等待。"""
+        _reference, partner_id, topup_id = self._seed_case('L2')
+        before = self._points(partner_id)
+
+        ready = threading.Event()
+        thread = self._hold_topup_lock(topup_id, 3.0, ready)
+        self.assertTrue(ready.wait(timeout=30), '前置：對手必須真的拿到鎖')
+        started = time.monotonic()
+        raised = None
+        try:
+            self._call_choke_point(topup_id)
+        except Exception as exc:
+            raised = exc
+        elapsed = time.monotonic() - started
+        thread.join(timeout=30)
+
+        self.assertIsInstance(
+            raised, psycopg2.errors.LockNotAvailable,
+            'lock_timeout 到期的 SQLSTATE 是 55P03；⛔ 不可以是「等到天荒地老」'
+            '也不可以是別的錯（raised=%r elapsed=%.3f）' % (raised, elapsed),
+        )
+        self.assertLess(
+            elapsed, 2.5,
+            '必須在 lock_timeout 內放棄，⛔ 不是等對手放手（elapsed=%.3f）'
+            % elapsed,
+        )
+        self.assertEqual(
+            self._points(partner_id), before,
+            '沒拿到鎖就 ⛔ 不入帳',
+        )
 
     # --- (7) 與 cleanup cron 的互動：replay 先跑、兩段互不連坐 ------------- #
 

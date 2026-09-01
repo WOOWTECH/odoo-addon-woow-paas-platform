@@ -487,10 +487,13 @@ class BillingIncident(models.Model):
         'failed_belongs_to_pr_f',
         'callback_not_successful',
         'missing_trade_no',
-        'intent_aged_out',
         'credit_failed',
     })
     # Skips may escalate an incident for a human, never close it.
+    # ⛔ No time-driven escalation lives here: the cron never invents an
+    # "old enough to give up" clock.  The human queue is *derived* by an age
+    # query (`state != 'resolved' AND create_date < now - X`), which is a
+    # question, not a state transition.
     _REPLAY_SKIP_STATES = frozenset({'needs_human', 'orphan'})
 
     _LOG_CHAR_FIELDS = frozenset({
@@ -1186,7 +1189,12 @@ class BillingIncident(models.Model):
             if values is False:
                 return False
 
-            now = fields.Datetime.now()
+            # 🔴 微秒精度，⛔ 不用 `fields.Datetime.now()`（它 truncate 到秒）。
+            # 這個時戳是 replay 候選集合的判準之一（「自上次評估以來 evidence
+            # 有沒有新事實」＝ `last_skipped_at < write_date`）。截到秒的話，
+            # 「跳過」與「同一秒內晚到的成功 callback」在資料庫裡完全相同 ⇒
+            # 那筆 callback 會被永久 filter 掉，而那正是裁決要求必須測的那條。
+            now = datetime.now()
             # Duplicate observations may refresh evidence, never lifecycle.
             # State changes belong to explicit transition methods.
             explicit_evidence = [
@@ -1221,8 +1229,16 @@ class BillingIncident(models.Model):
                 sql.SQL('write_date = EXCLUDED.write_date'),
             ])
             if promote_from is not None:
-                # 只准這一個來源 kind 被升級；其餘一律走下面的拒收分支。
-                kind_guard = sql.SQL('{table}.kind = {source} AND ').format(
+                # 只准這一個來源 kind 被升級（⛔ 無反向、⛔ 無其他來源）。
+                # 另外放行 **same-kind 重入**：已經是目標 kind 的 open 列再寫
+                # 一次是**重複觀測**（沿 `_log` 既有同 kind 語意累加
+                # occurrences／刷新 last_seen_at），⛔ 不是 collision。同一筆
+                # topup 的兩個 CHARGED_NOT_CREDITED 分支可能連續觸發，把它當
+                # 拒收會用「錢扣了但記不下來」的 critical 淹掉真正的警報。
+                kind_guard = sql.SQL(
+                    '({table}.kind = {source} '
+                    'OR {table}.kind = EXCLUDED.kind) AND '
+                ).format(
                     table=sql.Identifier(self._table),
                     source=sql.Literal(promote_from),
                 )
@@ -1252,6 +1268,20 @@ class BillingIncident(models.Model):
                 # otherwise wait on the caller's own outer transaction forever.
                 cr.execute('SET LOCAL lock_timeout = %s',
                            (self._LOCK_TIMEOUT,))
+                # 🔴 READ COMMITTED，⛔ 不是 Odoo 預設的 REPEATABLE READ。
+                # 這支 upsert 存在的理由就是「另一條連線可能正在寫同一個 key」：
+                # RR 之下，當我們卡在重複鍵上、對方 commit 之後，我們會拿到
+                # 40001 而**整筆事實被丟掉**（fail-soft ⇒ 靜默）。READ COMMITTED
+                # 會重讀對方剛 commit 的那一列並正常走 DO UPDATE。
+                # ⚠ 順序刻意是「lock_timeout 先、隔離級別後」：PostgreSQL 只
+                # 要求 `SET TRANSACTION` 早於第一個 **query／DML**，`SET` 本身
+                # 不算；而 PR-D 有一條測試釘住「碰 incident 表之前先武裝
+                # lock_timeout」，那個契約 ⛔ 不動。
+                # ⚠ test 模式下 `registry.cursor()` 給的是 TestCursor（共用同
+                # 一條測試交易）⇒ ⛔ 不能也不需要改它的隔離級別。
+                if not self.env.registry.in_test_mode():
+                    cr.execute(
+                        'SET TRANSACTION ISOLATION LEVEL READ COMMITTED')
                 api.Environment(cr, SUPERUSER_ID, {})
                 # Odoo's default SQL exception logger renders query params;
                 # provider references must never be copied into an error log.
@@ -1600,7 +1630,8 @@ class BillingIncident(models.Model):
 
     @api.model
     def _mark_replay_skip_current_cursor(self, external_ref, skip_reason,
-                                         state=None, bump_attempts=False):
+                                         state=None, bump_attempts=False,
+                                         touch_last_skipped=True):
         """Stamp one replay skip on the caller's own transaction (#864 PR-G).
 
         Use this form inside the per-record transaction that already holds the
@@ -1639,11 +1670,19 @@ class BillingIncident(models.Model):
                 )
                 return False
 
-            now = fields.Datetime.now()
+            # 微秒精度，理由同 `_upsert_incident_snapshot`：這個值要和
+            # `write_date` 做嚴格大小比較，截到秒會讓同一秒內的先後不可分辨。
+            now = datetime.now()
             assignments = [sql.SQL('skip_reason = %s')]
             params = [skip_reason]
-            assignments.append(sql.SQL('last_skipped_at = %s'))
-            params.append(now)
+            if touch_last_skipped:
+                # `last_skipped_at` 的語意是「**評估過**並決定跳過的時間」，
+                # 它同時是候選集合的判準（`last_skipped_at < write_date` ＝
+                # 自上次評估以來有新事實）。搶不到行鎖代表這一列**根本沒被
+                # 評估過** ⇒ ⛔ 不得蓋這個時戳，否則它會被永久排除在候選之外，
+                # 而它一次都沒被看過。
+                assignments.append(sql.SQL('last_skipped_at = %s'))
+                params.append(now)
             assignments.append(sql.SQL('skip_count = skip_count + 1'))
             if bump_attempts:
                 assignments.append(sql.SQL('attempts = attempts + 1'))
@@ -1675,7 +1714,9 @@ class BillingIncident(models.Model):
                     'category=absent_or_resolved reason=%s', skip_reason,
                 )
                 return False
-            return True
+            # Returns the stable integer id so the caller can schedule the
+            # human-review activity for an escalated row after its own commit.
+            return row[0]
         except Exception:
             _logger.error(
                 '[BILLING_INCIDENT] replay skip failed reason=%s '
@@ -1685,7 +1726,8 @@ class BillingIncident(models.Model):
 
     @api.model
     def _mark_replay_skip_independent(self, external_ref, skip_reason,
-                                      state=None, bump_attempts=False):
+                                      state=None, bump_attempts=False,
+                                      touch_last_skipped=True):
         """Persist a skip on a fresh connection (#864 PR-G).
 
         Reserved for the case the current-cursor form cannot serve: the
@@ -1705,6 +1747,7 @@ class BillingIncident(models.Model):
                 marked = env[self._name]._mark_replay_skip_current_cursor(
                     external_ref, skip_reason, state=state,
                     bump_attempts=bump_attempts,
+                    touch_last_skipped=touch_last_skipped,
                 )
                 cr.commit()
                 return marked

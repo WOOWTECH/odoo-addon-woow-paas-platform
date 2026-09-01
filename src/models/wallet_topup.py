@@ -468,16 +468,56 @@ class WalletTopup(models.Model):
                 self.id, tx.id,
             )
 
+    # 公版 choke point 的行鎖預算（#864 PR-G SF4）。沿 PR-D／PR-E 既有的 1s
+    # 前例：這是**安全參數不是效能旋鈕**——入口可能被 cron 的 per-record
+    # cursor 持有著，無界等待會把 request thread 卡死。
+    _CHOKE_LOCK_TIMEOUT = '1s'
+
     def _on_payment_done(self, tx):
         """Credit the wallet when the linked payment transaction succeeds.
 
         Idempotent: replaying with the same tx is a no-op.
+
+        🔴 #864 PR-G SF4 —— **這是平台唯一的入帳 choke point，所以互斥點也放
+        在這裡**（G 定公版，PR-F 沿用）。進來的第一件事是對自己那一列取
+        **阻塞式** ``FOR UPDATE``，拿到之後才重讀狀態走冪等守衛。
+
+        為什麼是阻塞式而不是 ``NOWAIT``：``NOWAIT`` 是 **scanner 側**的語意
+        （cron 搶不到就跳過、下輪再撿）。callback 側要的是相反的東西——短暫
+        等待、拿到鎖、發現別人已經補完了，然後**乾淨地什麼都不做**。用
+        ``NOWAIT`` 會把「別人正在補」變成一個錯誤往上拋。
+
+        ``SET LOCAL lock_timeout`` 讓等待有界，而且**用完就還原**：這個
+        method 跑在呼叫端的交易裡，把逾時值留給後面的 SQL 會變成一個沒人預期
+        的副作用（發票、記帳那些語句會跟著在 1 秒後失敗）。
+
+        ⚠ **行為變更揭露**（PR body 也有）：contention 之下，callback 從原本
+        的「RR 40001 ＋ ``retrying()`` 整段重跑」變成「短暫等待；等不到就
+        ``lock_timeout`` 錯誤 → ECPay 重送」。replay 側因為已經持有同一列的
+        鎖，這裡的重入是 no-op（同交易再取一次 ``FOR UPDATE`` 不會等自己）。
         """
         self.ensure_one()
         _logger.info(
             "[TOPUP] _on_payment_done entry topup=%s state=%s tx=%s tx_state=%s",
             self.id, self.state, tx.id, tx.state,
         )
+        self.env.cr.execute('SHOW lock_timeout')
+        previous_lock_timeout = self.env.cr.fetchone()[0]
+        self.env.cr.execute('SET LOCAL lock_timeout = %s',
+                            (self._CHOKE_LOCK_TIMEOUT,))
+        self.env.cr.execute(
+            'SELECT id FROM woow_wallet_topup WHERE id = %s FOR UPDATE',
+            (self.id,),
+        )
+        # 還原只放在**成功之後**，⛔ 不放 finally：逾時的話這條交易已經
+        # aborted，那個 `SET LOCAL` 只會拋 InFailedSqlTransaction 把真正的
+        # LockNotAvailable 蓋掉（實測踩過）。而交易 abort／rollback 本來就會
+        # 把 `SET LOCAL` 一起還原，所以失敗路徑不需要也不應該補這一手。
+        self.env.cr.execute('SET LOCAL lock_timeout = %s',
+                            (previous_lock_timeout,))
+        # 鎖只擋並發 writer，⛔ 不會刷新本 env 的 record cache ⇒ 必須重讀，
+        # 否則冪等守衛看的是**取鎖之前**那個已經過期的快照。
+        self.invalidate_recordset(['state', 'wallet_transaction_id'])
         if self.state == 'done' or self.wallet_transaction_id:
             _logger.info(
                 "[TOPUP] _on_payment_done skip already done topup=%s wallet_tx=%s",
@@ -572,6 +612,9 @@ class WalletTopup(models.Model):
         '由 #864 PR-G 的 callback replay 自動補入帳並結案；'
         '依據為 provider callback 回報的成功代碼與交易編號。'
     )
+    # 升級成這兩個狀態的列要 best-effort 排人工覆核 activity（SF2）。
+    # blocker 撤掉時間驅動的升級之後這兩態變稀有 ⇒ activity 不會氾濫。
+    _REPLAY_REVIEW_STATES = frozenset({'needs_human', 'orphan'})
     _REPLAY_ALREADY_CREDITED_NOTE = (
         '由 #864 PR-G 的 callback replay 結案：這筆早已入帳（topup 已 done），'
         'inbox 裡的事實只是晚到的重複觀測。'
@@ -587,31 +630,42 @@ class WalletTopup(models.Model):
         用 ``self.env`` 讀不到它們（同 ``_double_charge_cooldown_active``
         的教訓）。
 
-        入集合條件刻意**不是**「rtn_code = '1'」：``RtnCode != 1``（真的被拒）
-        與「有預登記但 callback 從沒來過而且已經老掉」這兩種局面也必須被撈出來
-        留痕，否則它們永遠停在 ``open``、零 log 零告警，而人工清單按年齡撈時
-        又找不到任何處置紀錄。**成功與否的判定一律在拿到行鎖之後才做。**
+        入集合條件三段，每一段都有它必須存在的理由：
 
-        排序用 ``COALESCE(last_skipped_at, last_seen_at)``（最久沒被碰的優先）
-        ⇒ 一筆卡住的列不會每輪都佔住 batch 名額把新進來的餓死。
+        1. ``kind = 'intent' AND state <> 'resolved'`` —— 只有已結案的才真的
+           出局。``needs_human``／``orphan`` **仍在候選裡**：它們是給人看的
+           標記，⛔ 不是「cron 不再理它」的意思。
+        2. ``rtn_code IS NOT NULL`` —— inbox 裝的是**已經收到 callback 的**
+           那些。沒收到 callback 的預登記不是「跳過」，它只是還沒有事實可談；
+           把它撈出來只能發明一個新的 skip 語意，而那是產品值不是實作細節。
+        3. ``last_skipped_at IS NULL OR last_skipped_at < write_date`` ——
+           防餓死。評估過就先讓開，**直到 evidence 有新事實**（atomic upsert
+           會把 ``write_date`` 推前）才重新入選。
+           🔴 這是**候選集合**策略，⛔ 不是狀態轉移：被拒的刷卡留在 ``open``、
+           skip 欄位完整，人工隊列照設計文用**年齡查詢** derive 得到它。
+           G 的 cron ⛔ 不寫任何「時間驅動的升級／放棄」，也不另造一個鐘
+           （那會與 §6.6.3b 已裁的 T2＝4h 打架）。
+
+        ⚠ 判準必須是「自上次**評估**以來有沒有新事實」，所以搶不到行鎖時
+        ⛔ 不可以蓋 ``last_skipped_at``（見
+        ``billing_incident._mark_replay_skip_current_cursor`` 的同名參數）。
         """
-        aged_cutoff = fields.Datetime.now() - timedelta(
-            minutes=self._CLEANUP_HARD_CANCEL_MIN)
         with self.env.registry.cursor() as cr:
             cr.execute('SET LOCAL lock_timeout = %s',
                        (self._REPLAY_LOCK_TIMEOUT,))
             cr.execute(
                 "SELECT external_ref, rtn_code, trade_no, source_model, "
-                "source_ref, first_seen_at "
+                "source_ref "
                 "FROM woow_billing_incident "
-                "WHERE kind = 'intent' AND state = 'open' "
-                "AND (rtn_code IS NOT NULL OR first_seen_at < %s) "
+                "WHERE kind = 'intent' AND state <> 'resolved' "
+                "AND rtn_code IS NOT NULL "
+                "AND (last_skipped_at IS NULL OR last_skipped_at < write_date) "
                 "ORDER BY COALESCE(last_skipped_at, last_seen_at) "
                 "LIMIT %s",
-                (aged_cutoff, self._REPLAY_BATCH_SIZE),
+                (self._REPLAY_BATCH_SIZE,),
             )
             columns = ('external_ref', 'rtn_code', 'trade_no', 'source_model',
-                       'source_ref', 'first_seen_at')
+                       'source_ref')
             return [dict(zip(columns, row)) for row in cr.fetchall()]
 
     @api.model
@@ -676,9 +730,7 @@ class WalletTopup(models.Model):
         取阻塞式 ``FOR UPDATE``）。⛔ 不得反序，否則兩顆 cron 交叉死鎖。
         """
         external_ref = candidate['external_ref']
-        aged_cutoff = fields.Datetime.now() - timedelta(
-            minutes=self._CLEANUP_HARD_CANCEL_MIN)
-        aged = candidate['first_seen_at'] < aged_cutoff
+        escalated = []
         try:
             with self.env.registry.cursor() as cr:
                 # 必須是這條連線的第一個 statement。
@@ -688,36 +740,33 @@ class WalletTopup(models.Model):
                 incidents = env['woow.billing.incident'].sudo()
 
                 def _skip(reason, state=None, bump_attempts=False):
-                    # 逾時之後仍補不了的預登記轉 `orphan`（設計文 §5.5 的老化
-                    # 規則，這裡一致套用到每一個不可補的分支，不只「topup 列
-                    # 不存在」那一格）。⚠ 這一格是**掃描集合**的收斂，不是
-                    # 結案：確切 skip_reason 原樣保留供診斷，而人工清單的判準
-                    # 是年齡（`state != 'resolved' AND create_date < cutoff`）
-                    # ⇒ 這些列在人工清單上一個都不會少。
-                    # 沒有它的話，每一筆被拒的刷卡都會留下一列永遠 `open` 的
-                    # intent，每 10 分鐘被撈出來再跳過一次，最後把 batch 名額
-                    # 佔滿、把真正該補的那幾筆餓死。
-                    if state is None and aged:
-                        state = 'orphan'
-                    incidents._mark_replay_skip_current_cursor(
+                    # 🔴 ⛔ 這裡**沒有**任何時間條件。G 的 cron 不寫「時間驅動
+                    # 的升級／放棄」狀態——人工隊列照設計文用**年齡查詢**
+                    # derive（`state != 'resolved' AND create_date < now - X`），
+                    # 那是查詢不是狀態轉移；G 不建佇列、不另造鐘（會與
+                    # §6.6.3b 已裁的 T2＝4h 打架）。
+                    # 顯式狀態轉移只有設計分支本來就有的那幾格，由呼叫端明寫。
+                    marked = incidents._mark_replay_skip_current_cursor(
                         external_ref, reason, state=state,
                         bump_attempts=bump_attempts)
                     cr.commit()
+                    if marked and state in self._REPLAY_REVIEW_STATES:
+                        # commit 之後才排（best-effort）：activity 排不出來
+                        # ⛔ 不得回捲已經 commit 的 transition。
+                        escalated.append(marked)
                     return 'skipped', reason
 
                 if (candidate['source_model'] != self._name
                         or not candidate['source_ref']):
-                    return _skip('intent_aged_out', state='orphan') if aged \
-                        else _skip('no_topup_row')
+                    return _skip('no_topup_row', state='orphan')
 
                 cr.execute(
                     'SELECT id FROM woow_wallet_topup WHERE id = %s '
                     'FOR UPDATE NOWAIT', (candidate['source_ref'],))
                 if not cr.fetchone():
-                    # 主交易整段回捲過（topup 列根本不存在）。給它一個窗口
-                    # 等主交易 commit；過了 hard-cancel 年齡才判成孤兒。
-                    return _skip('intent_aged_out', state='orphan') if aged \
-                        else _skip('no_topup_row')
+                    # 主交易整段回捲過（topup 列根本不存在）＝設計分支 C 的
+                    # 真孤兒 ⇒ 直接標 orphan 交人工，⛔ 不等一個自訂的鐘。
+                    return _skip('no_topup_row', state='orphan')
 
                 # --- 鎖到之後才重讀（⛔ 不用鎖前那次讀的值）--------------- #
                 cr.execute(
@@ -793,9 +842,13 @@ class WalletTopup(models.Model):
                 return 'credited', None
         except psycopg2.errors.LockNotAvailable:
             # 別人正在處理這一筆。本 cursor 已 aborted ⇒ 痕跡只能換一條連線寫。
+            # 🔴 `touch_last_skipped=False`：沒拿到鎖代表這一列**根本沒被評估**
+            # ⇒ ⛔ 不算一次 attempt、下一輪仍要撿得回來。蓋了時戳等於把一個
+            # 從沒被看過的列永久排除在候選之外。
             self.env['woow.billing.incident'].sudo() \
                 ._mark_replay_skip_independent(
-                    external_ref, 'lock_not_available')
+                    external_ref, 'lock_not_available',
+                    touch_last_skipped=False)
             return 'skipped', 'lock_not_available'
         except psycopg2.errors.SerializationFailure:
             self.env['woow.billing.incident'].sudo() \
@@ -812,6 +865,20 @@ class WalletTopup(models.Model):
                 ._mark_replay_skip_independent(
                     external_ref, 'credit_failed', bump_attempts=True)
             return 'failed', None
+        finally:
+            # #864 PR-G SF2：升級成 needs_human／orphan 的那些列，在 transition
+            # **commit 之後**才 best-effort 排人工覆核 activity。排不出來只記
+            # log 就繼續——⛔ 不得回捲已 commit 的 transition、⛔ 不得殺掉整批。
+            for incident_id in escalated:
+                try:
+                    self.env['woow.billing.incident'].sudo() \
+                        ._schedule_review_activities(incident_id)
+                except Exception:
+                    _logger.error(
+                        '[TOPUP_REPLAY] incident id=%s '
+                        'category=activity_schedule_failed; the escalation '
+                        'itself is already durable', incident_id,
+                    )
 
     @api.model
     def _has_unreplayed_callback_evidence(self, topup):
