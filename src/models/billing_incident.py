@@ -470,6 +470,32 @@ class BillingIncident(models.Model):
         'resolution_note',
     })
 
+    # #864 PR-G.  Every "decided not to replay" branch has to leave a durable
+    # trace; a bare `continue` makes "nothing happened today" and "every row
+    # was blocked" look identical in the log.  The vocabulary is closed on
+    # purpose: `skipped_by_reason` is an ops-facing tally, and a free-text
+    # reason would give it an unbounded value domain.
+    # ⛔ No success/resolution word belongs here.  Crediting resolves an
+    # incident and must go through `_transition_resolved_current_cursor`, so
+    # `already_credited` / `credited` are rejected by both skip helpers.
+    _REPLAY_SKIP_REASONS = frozenset({
+        'lock_not_available',
+        'no_topup_row',
+        'missing_payment_transaction',
+        'intent_without_charge',
+        'cancelled_needs_human',
+        'failed_belongs_to_pr_f',
+        'callback_not_successful',
+        'missing_trade_no',
+        'credit_failed',
+    })
+    # Skips may escalate an incident for a human, never close it.
+    # ⛔ No time-driven escalation lives here: the cron never invents an
+    # "old enough to give up" clock.  The human queue is *derived* by an age
+    # query (`state != 'resolved' AND create_date < now - X`), which is a
+    # question, not a state transition.
+    _REPLAY_SKIP_STATES = frozenset({'needs_human', 'orphan'})
+
     _LOG_CHAR_FIELDS = frozenset({
         'external_ref', 'kind', 'partner_email', 'currency', 'trade_no',
         'rtn_code', 'failure_code', 'state', 'skip_reason',
@@ -1075,12 +1101,100 @@ class BillingIncident(models.Model):
         It returns only the integer incident id (or ``False``) so no recordset
         backed by a closed cursor can escape.
         """
+        return self._upsert_incident_snapshot(snapshot, match_kind=True)
+
+    @api.model
+    def _log_callback_evidence(self, snapshot):
+        """Attach provider callback facts to whichever row owns this key.
+
+        #864 PR-G.  The payment caller pre-registers ``kind='intent'`` before
+        the irreversible outbound call, so by the time a callback arrives the
+        key is usually already taken.  ``_log`` would refuse that write: its
+        upsert carries ``WHERE kind = EXCLUDED.kind``, so a cross-kind hit
+        returns no row, logs ``category=collision`` and drops the facts.
+
+        Deciding the kind by reading first would be a TOCTOU: a concurrent
+        pre-registration committed between the read and the write turns the
+        **normal** path into a dropped callback plus a spurious critical log.
+        So this helper never pre-reads.  One statement does both jobs:
+
+        * key already present (any kind) -> update only the evidence columns;
+          ``kind`` is not in the SET list, so an ``intent`` row stays
+          ``intent`` and merely gains ``rtn_code`` / ``trade_no``;
+        * key absent -> insert ``callback_tx_missing``, which is therefore
+          exactly "a callback with no pre-registration at all".
+
+        ``_log``'s own cross-kind refusal is deliberately left untouched: it
+        guards callers who must not silently retype an incident.  Validation,
+        PCI allowlisting and the fail-soft contract are shared, so this path
+        cannot bypass PR-D's gate.
+        """
+        return self._upsert_incident_snapshot(snapshot, match_kind=False)
+
+    @api.model
+    def _log_charged_not_credited(self, snapshot):
+        """Record "the card was charged but we failed to credit" (#864 PR-G).
+
+        This exists because two writers legitimately own the same key.  The
+        payment caller pre-registers ``kind='intent'`` on the raw
+        MerchantTradeNo *before* the irreversible call (PR-G), and the failure
+        path writes ``charged_not_credited`` on the **same** reference (PR-E).
+        With ``UNIQUE(external_ref)`` there can only ever be one row per
+        MerchantTradeNo, and ``_log`` fixes ``kind`` at insert time — so
+        without this helper the pre-registration silently swallows PR-E's
+        incident, and
+        ``sh_subscription_fix._double_charge_cooldown_active`` (which selects
+        ``kind = 'charged_not_credited'``) stops finding anything: the
+        double-charge guard would be dead code again.
+
+        So the row carries a lifecycle: ``intent`` is what we knew before the
+        call, ``charged_not_credited`` is what we know after it.  One
+        statement performs both jobs atomically — insert when the key is free,
+        promote when an unresolved ``intent`` holds it — so there is no
+        read-then-write window for a concurrent writer to fall into.
+
+        ⛔ The promotion is one-way and single-sourced: only ``intent`` may
+        become ``charged_not_credited``.  Any other existing kind, or an
+        already resolved row, is refused; the refusal is fail-soft (the
+        caller's own ``failed`` marker is the backstop) but never silent —
+        money has already moved by the time we get here.
+        """
+        if not isinstance(snapshot, dict) or snapshot.get(
+                'kind') != 'charged_not_credited':
+            _logger.error(
+                '[BILLING_INCIDENT] _log_charged_not_credited rejected '
+                'field=kind category=wrong_helper'
+            )
+            return False
+        return self._upsert_incident_snapshot(
+            snapshot, match_kind=False, promote_from='intent')
+
+    @api.model
+    def _upsert_incident_snapshot(self, snapshot, match_kind,
+                                  promote_from=None):
+        """Shared body of `_log` / `_log_callback_evidence` /
+        `_log_charged_not_credited`.
+
+        Two knobs, both about what the ``ON CONFLICT`` branch may do:
+
+        * ``match_kind`` — refuse a row whose ``kind`` differs from the
+          snapshot (``_log``), or update it in place keeping its own kind
+          (callback evidence);
+        * ``promote_from`` — allow exactly one lifecycle transition: an
+          unresolved row of that kind has its ``kind`` rewritten to the
+          snapshot's.  Anything else is refused and logged.
+        """
         try:
             values = self._validate_log_snapshot(snapshot)
             if values is False:
                 return False
 
-            now = fields.Datetime.now()
+            # 🔴 微秒精度，⛔ 不用 `fields.Datetime.now()`（它 truncate 到秒）。
+            # 這個時戳是 replay 候選集合的判準之一（「自上次評估以來 evidence
+            # 有沒有新事實」＝ `last_skipped_at < write_date`）。截到秒的話，
+            # 「跳過」與「同一秒內晚到的成功 callback」在資料庫裡完全相同 ⇒
+            # 那筆 callback 會被永久 filter 掉，而那正是裁決要求必須測的那條。
+            now = datetime.now()
             # Duplicate observations may refresh evidence, never lifecycle.
             # State changes belong to explicit transition methods.
             explicit_evidence = [
@@ -1114,13 +1228,34 @@ class BillingIncident(models.Model):
                 sql.SQL('write_uid = EXCLUDED.write_uid'),
                 sql.SQL('write_date = EXCLUDED.write_date'),
             ])
+            if promote_from is not None:
+                # 只准這一個來源 kind 被升級（⛔ 無反向、⛔ 無其他來源）。
+                # 另外放行 **same-kind 重入**：已經是目標 kind 的 open 列再寫
+                # 一次是**重複觀測**（沿 `_log` 既有同 kind 語意累加
+                # occurrences／刷新 last_seen_at），⛔ 不是 collision。同一筆
+                # topup 的兩個 CHARGED_NOT_CREDITED 分支可能連續觸發，把它當
+                # 拒收會用「錢扣了但記不下來」的 critical 淹掉真正的警報。
+                kind_guard = sql.SQL(
+                    '({table}.kind = {source} '
+                    'OR {table}.kind = EXCLUDED.kind) AND '
+                ).format(
+                    table=sql.Identifier(self._table),
+                    source=sql.Literal(promote_from),
+                )
+                updates.append(sql.SQL('kind = EXCLUDED.kind'))
+            elif match_kind:
+                kind_guard = sql.SQL('{table}.kind = EXCLUDED.kind AND ').format(
+                    table=sql.Identifier(self._table))
+            else:
+                kind_guard = sql.SQL('')
             query = sql.SQL(
                 'INSERT INTO {table} ({columns}) VALUES ({placeholders}) '
                 'ON CONFLICT (external_ref) DO UPDATE SET {updates} '
-                'WHERE {table}.kind = EXCLUDED.kind '
-                "AND {table}.state <> 'resolved' "
+                'WHERE {kind_guard}'
+                "{table}.state <> 'resolved' "
                 'RETURNING id, state'
             ).format(
+                kind_guard=kind_guard,
                 table=sql.Identifier(self._table),
                 columns=sql.SQL(', ').join(map(sql.Identifier, columns)),
                 placeholders=sql.SQL(', ').join(
@@ -1133,6 +1268,20 @@ class BillingIncident(models.Model):
                 # otherwise wait on the caller's own outer transaction forever.
                 cr.execute('SET LOCAL lock_timeout = %s',
                            (self._LOCK_TIMEOUT,))
+                # 🔴 READ COMMITTED，⛔ 不是 Odoo 預設的 REPEATABLE READ。
+                # 這支 upsert 存在的理由就是「另一條連線可能正在寫同一個 key」：
+                # RR 之下，當我們卡在重複鍵上、對方 commit 之後，我們會拿到
+                # 40001 而**整筆事實被丟掉**（fail-soft ⇒ 靜默）。READ COMMITTED
+                # 會重讀對方剛 commit 的那一列並正常走 DO UPDATE。
+                # ⚠ 順序刻意是「lock_timeout 先、隔離級別後」：PostgreSQL 只
+                # 要求 `SET TRANSACTION` 早於第一個 **query／DML**，`SET` 本身
+                # 不算；而 PR-D 有一條測試釘住「碰 incident 表之前先武裝
+                # lock_timeout」，那個契約 ⛔ 不動。
+                # ⚠ test 模式下 `registry.cursor()` 給的是 TestCursor（共用同
+                # 一條測試交易）⇒ ⛔ 不能也不需要改它的隔離級別。
+                if not self.env.registry.in_test_mode():
+                    cr.execute(
+                        'SET TRANSACTION ISOLATION LEVEL READ COMMITTED')
                 api.Environment(cr, SUPERUSER_ID, {})
                 # Odoo's default SQL exception logger renders query params;
                 # provider references must never be copied into an error log.
@@ -1160,7 +1309,21 @@ class BillingIncident(models.Model):
                         cr.commit()
                         return False
                     incident_id, existing_kind, existing_state = existing
-                    if existing_kind != values['kind']:
+                    if promote_from is not None:
+                        # ⛔ fail-soft 不等於靜默：走到這裡代表錢已經扣了而
+                        # 這筆事實記不下來，維運要數得到它。
+                        _logger.critical(
+                            '[BILLING_INCIDENT] incident id=%s '
+                            'category=promotion_refused reason=%s; the charge '
+                            'already happened and this evidence is dropped',
+                            incident_id,
+                            'already_resolved'
+                            if existing_state == 'resolved'
+                            else 'unexpected_source_kind',
+                        )
+                        cr.commit()
+                        return False
+                    if match_kind and existing_kind != values['kind']:
                         _logger.critical(
                             '[BILLING_INCIDENT] incident id=%s field=kind '
                             'category=collision; refusing update',
@@ -1464,6 +1627,137 @@ class BillingIncident(models.Model):
                     ('activity_type_id', '=', review_type.id),
                 ]).unlink()
         return True
+
+    @api.model
+    def _mark_replay_skip_current_cursor(self, external_ref, skip_reason,
+                                         state=None, bump_attempts=False,
+                                         touch_last_skipped=True):
+        """Stamp one replay skip on the caller's own transaction (#864 PR-G).
+
+        Use this form inside the per-record transaction that already holds the
+        topup row lock, so the trace commits with — or rolls back with — the
+        decision it describes.  For the branch whose whole problem is that the
+        caller's transaction is already aborted (``LockNotAvailable`` / 40001)
+        use ``_mark_replay_skip_independent`` instead: on an aborted
+        transaction every statement dies in ``InFailedSqlTransaction``, so the
+        skip would leave no trace at all.
+
+        ``skip_count`` is incremented in SQL, never read-modify-written: two
+        cron workers may legitimately skip the same incident, and a
+        caller-computed absolute value silently loses one of them.
+
+        Fail-soft like ``_log``: bookkeeping must not kill the batch.
+        """
+        try:
+            if skip_reason not in self._REPLAY_SKIP_REASONS:
+                _logger.error(
+                    '[BILLING_INCIDENT] replay skip rejected field=skip_reason '
+                    'category=unsupported_reason'
+                )
+                return False
+            if state is not None and state not in self._REPLAY_SKIP_STATES:
+                _logger.error(
+                    '[BILLING_INCIDENT] replay skip rejected field=state '
+                    'category=unsupported_skip_state'
+                )
+                return False
+            reference_category = self._provider_reference_category(
+                'external_ref', external_ref)
+            if reference_category:
+                _logger.error(
+                    '[BILLING_INCIDENT] replay skip rejected '
+                    'field=external_ref category=%s', reference_category,
+                )
+                return False
+
+            # 微秒精度，理由同 `_upsert_incident_snapshot`：這個值要和
+            # `write_date` 做嚴格大小比較，截到秒會讓同一秒內的先後不可分辨。
+            now = datetime.now()
+            assignments = [sql.SQL('skip_reason = %s')]
+            params = [skip_reason]
+            if touch_last_skipped:
+                # `last_skipped_at` 的語意是「**評估過**並決定跳過的時間」，
+                # 它同時是候選集合的判準（`last_skipped_at < write_date` ＝
+                # 自上次評估以來有新事實）。搶不到行鎖代表這一列**根本沒被
+                # 評估過** ⇒ ⛔ 不得蓋這個時戳，否則它會被永久排除在候選之外，
+                # 而它一次都沒被看過。
+                assignments.append(sql.SQL('last_skipped_at = %s'))
+                params.append(now)
+            assignments.append(sql.SQL('skip_count = skip_count + 1'))
+            if bump_attempts:
+                assignments.append(sql.SQL('attempts = attempts + 1'))
+            if state is not None:
+                assignments.append(sql.SQL('state = %s'))
+                params.append(state)
+            assignments.append(sql.SQL('write_uid = %s'))
+            params.append(SUPERUSER_ID)
+            assignments.append(sql.SQL('write_date = %s'))
+            params.append(now)
+            query = sql.SQL(
+                'UPDATE {table} SET {assignments} '
+                "WHERE external_ref = %s AND state <> 'resolved' "
+                'RETURNING id'
+            ).format(
+                table=sql.Identifier(self._table),
+                assignments=sql.SQL(', ').join(assignments),
+            )
+            params.append(external_ref)
+            # Odoo's default SQL exception logger renders query params;
+            # provider references must never be copied into an error log.
+            self.env.cr.execute(query, params, log_exceptions=False)
+            row = self.env.cr.fetchone()
+            if not row:
+                # Either the key is gone or the incident is already resolved.
+                # Both mean "there is nothing here to annotate", never "retry".
+                _logger.info(
+                    '[BILLING_INCIDENT] replay skip skipped '
+                    'category=absent_or_resolved reason=%s', skip_reason,
+                )
+                return False
+            # Returns the stable integer id so the caller can schedule the
+            # human-review activity for an escalated row after its own commit.
+            return row[0]
+        except Exception:
+            _logger.error(
+                '[BILLING_INCIDENT] replay skip failed reason=%s '
+                'category=persistence_failed; batch continues', skip_reason,
+            )
+            return False
+
+    @api.model
+    def _mark_replay_skip_independent(self, external_ref, skip_reason,
+                                      state=None, bump_attempts=False,
+                                      touch_last_skipped=True):
+        """Persist a skip on a fresh connection (#864 PR-G).
+
+        Reserved for the case the current-cursor form cannot serve: the
+        caller's transaction was aborted by ``LockNotAvailable`` or a
+        serialization failure, which is exactly when the skip most needs to be
+        recorded.  One attempt only — a retry here would re-enter the same
+        contention it is reporting.
+        """
+        try:
+            with self.env.registry.cursor() as cr:
+                # Must be the first statement on the new connection, for the
+                # same reason as `_log`: an unbounded wait would hang the cron
+                # worker behind the very lock it just failed to take.
+                cr.execute('SET LOCAL lock_timeout = %s',
+                           (self._LOCK_TIMEOUT,))
+                env = api.Environment(cr, SUPERUSER_ID, {})
+                marked = env[self._name]._mark_replay_skip_current_cursor(
+                    external_ref, skip_reason, state=state,
+                    bump_attempts=bump_attempts,
+                    touch_last_skipped=touch_last_skipped,
+                )
+                cr.commit()
+                return marked
+        except Exception:
+            _logger.error(
+                '[BILLING_INCIDENT] replay skip (independent) failed '
+                'reason=%s category=persistence_failed; batch continues',
+                skip_reason,
+            )
+            return False
 
     def action_mark_manually_resolved(self):
         """Record an ECPay verification and close; never credit/refund money."""

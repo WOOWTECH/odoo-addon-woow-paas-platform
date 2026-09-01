@@ -16,6 +16,8 @@ from odoo.http import request, route, Controller
 
 from .ha_paas import HiddenChainMixin
 from odoo.tools import str2bool
+# #864 PR-G：手動與自動兩條儲值路徑共用同一組穩定失敗碼，⛔ 不各寫一份字面值。
+from ..models.wallet_topup import TOPUP_INTENT_NOT_RECORDED
 
 _logger = logging.getLogger(__name__)
 
@@ -671,6 +673,25 @@ class BillingController(HiddenChainMixin, Controller):
         # inside ecpay_addon's _ecpg_build_merchant_trade_no preserves
         # uniqueness.
         reference = f"TOPUP{uuid.uuid4().hex[:15].upper()}"
+        # #864 PR-G：付款意圖預登記必須落在**不可逆外呼之前**，而且是獨立交易
+        # commit —— 3DS callback 可能在本 request 的交易 commit 之前就抵達，
+        # 那時 payment.transaction 這一列還不存在，vendored pay_callback 查無
+        # tx 就回 `1|OK` 叫 ECPay 停止重送 ⇒ 錢永不入帳且零告警。
+        # 🔴 裁決 Q1（issue-leader 2026-09-01）：預登記寫不進去 ⇒ fail-closed，
+        # ⛔ 不外呼。錯誤面沿用既有 envelope 與既有字串，只有技術 code 是新的。
+        if not topup._log_topup_intent(reference, token=token,
+                                       charge_amount=plan.amount):
+            topup.write({
+                'state': 'failed',
+                'failure_code': TOPUP_INTENT_NOT_RECORDED,
+                'failure_message': (
+                    'INTENT_NOT_RECORDED: payment intent pre-registration '
+                    'failed; charge deliberately not attempted'
+                ),
+            })
+            return {'success': False,
+                    'error': _('Payment service unavailable'),
+                    'code': TOPUP_INTENT_NOT_RECORDED}
         try:
             result = token._charge(
                 amount=plan.amount,
