@@ -87,29 +87,30 @@ class AccountMoveInvoiceStatus(models.Model):
         return 'pending' if company[:1].auto_invoice == 'automatic' else 'manual'
 
     def _woow_ecpay_issuance_confirmed(self):
-        """這張 move 是否**已確認開立**（⇒ 重送會產生重複的真實發票）。
+        """ECPay 是否**已核發真實發票號碼**給這張 move。
 
-        🔴 判別式是**合取**，⛔ 不是任一單一條件：
+        🔴 **這是本模組唯一的判準**：``ecpay_invoice_cron._issue_one()`` 與
+        ``action_woow_retry_ecpay_invoice()`` 共用同一顆，⛔ 兩處不得各自寫
+        條件——一個用 OR、一個用 AND，差集就是「一邊放行、另一邊靜默當成功」
+        的破口（#864 review BLOCK 的成因）。
 
-            ``ecpay_invoice_id.name`` 非空  **且**  ``uniform_state == 'invoiced'``
+        判準＝``ecpay_invoice_id.name`` 非空。依據是 vendored
+        ``ecpay_invoice_tw`` 的 ``create_ecpay_invoice()``：``uniform.invoice``
+        記錄在**呼叫 ECPay 之前**就先建好（只帶 ``company_id``、``name`` 為
+        NULL）；``RtnCode != 1`` 直接 raise，此時 ``self.ecpay_invoice_id``
+        還沒被指派。號碼只會來自 ``aReturn_Info['InvoiceNo']``。
+        ⇒ **號碼非空 ⟺ ECPay 真的核發過一張發票**。
 
-        依據（讀 vendored ``ecpay_invoice_tw/models/account_invoice.py`` 的
-        ``create_ecpay_invoice()``）：``uniform.invoice`` 記錄在**呼叫 ECPay 之前**
-        就先建好（只帶 ``company_id``、``name`` 為 NULL）；``RtnCode != 1`` 直接
-        raise，**此時 ``self.ecpay_invoice_id`` 還沒被指派**。只有成功才依序寫
-        ``record.name = InvoiceNo`` → ``self.ecpay_invoice_id = record`` →
-        ``self.uniform_state = 'invoiced'``。⇒ 三者同時成立才代表真的開出去了。
+        ⛔ 不可只判 ``ecpay_invoice_id`` 非空：開票失敗可能留下號碼為空的殘值，
+        那樣寫會把合法的 retry 一起擋死。
 
-        ⛔ **不可只判 ``ecpay_invoice_id`` 非空**：那會把失敗殘值一起擋死——
-        用一個永久卡死換掉一個重送洞。
-        ⛔ **也不可只判 ``name`` 非空**：``invalid``（已作廢）／``Discounted``
-        （已折讓）都帶著真號碼卻不是成功開立狀態，那樣會連它們一起擋掉。
-        ⚠ 放行那些是安全的：上游 ``create_ecpay_invoice()`` 自己還有一道
-        **disjunction** 守衛（``uniform_state == 'invoiced' or ecpay_invoice_id``），
-        位於本守衛下游，且 ``_forced_ecpay_issue()`` 繞不過它。
+        ⚠ ``uniform_state`` 是 ``invalid``（已作廢）／``Discounted``（已折讓）
+        時**仍然回 True**：號碼已經核發出去了，重開會產生第二張真發票。這兩格
+        要的是 fail-loud（讓人來判斷），⛔ 不是自動重開、更不是靜默標成已開。
+        作廢後要重開屬產品決策，本模組不自行發明。
         """
         self.ensure_one()
-        return bool(self.ecpay_invoice_id.name) and self.uniform_state == 'invoiced'
+        return bool(self.ecpay_invoice_id.name)
 
     def action_woow_retry_ecpay_invoice(self):
         """Manual fallback for `account.group_account_manager` users.
@@ -124,10 +125,10 @@ class AccountMoveInvoiceStatus(models.Model):
         （這正是 #864 要修的病：連手動補救鈕都按不下去）。
 
         🔴 但 ``manual`` 進了 UI 入口，也就擴大了「這顆鈕按得到哪些 move」的
-        可達面，所以同時收口重送洞：**已確認開立的 move ⛔ 一律拒絕再次對外開票**。
-        判別式見 ``_woow_ecpay_issuance_confirmed()``（號碼非空 **且**
-        ``uniform_state == 'invoiced'`` 的合取），守衛順帶覆蓋既有的
-        ``failed``／``error`` 兩格同洞。
+        可達面，所以同時收口重送洞：**ECPay 已核發真實發票號碼的 move，⛔ 一律
+        拒絕再次對外開票**。判準見 ``_woow_ecpay_issuance_confirmed()``，與
+        ``ecpay_invoice_cron._issue_one()`` **共用同一顆**；守衛置於所有 issue
+        state 判斷之前，故 base 的 ``failed``／``error`` 兩格同洞一併覆蓋。
         """
         self.ensure_one()
         # 先於所有 issue state 判斷：`woow_invoice_issue_state` 是我們自己寫的欄位
@@ -136,8 +137,9 @@ class AccountMoveInvoiceStatus(models.Model):
         # 同洞也由這一道一併覆蓋。
         if self._woow_ecpay_issuance_confirmed():
             raise UserError(_(
-                "This invoice already has a confirmed ECPay invoice number "
-                "(%s). Re-issuing would create a duplicate e-invoice."
+                "ECPay has already issued invoice number %s for this "
+                "document. Re-issuing would create a second real invoice; "
+                "resolve it manually instead."
             ) % self.ecpay_invoice_id.name)
         if self.woow_invoice_issue_state == 'issued':
             raise UserError(_("This invoice has already been issued."))

@@ -586,139 +586,6 @@ class TestManualRetryButtonVisibility864(TransactionCase):
             '本次修改只放寬「顯示於哪些狀態」，⛔ 不得放寬 groups')
 
 
-class TestRetryGuardOnConfirmedIssuance864(TransactionCase):
-    """Medium A：**已確認開立**的發票 ⛔ 不得重送；**失敗殘值**必須仍可 retry。
-
-    🔴 判別式是**合取**，不是單一條件（裁決逐字：「真 ECPay invoice number 存在
-    **且**狀態代表成功開立」）：
-
-        `ecpay_invoice_id.name` 非空  AND  `uniform_state == 'invoiced'`
-
-    依據是上游 `ecpay_invoice_tw/models/account_invoice.py` 的
-    `create_ecpay_invoice()`：`uniform.invoice` 記錄在**呼叫 ECPay 之前**就先建好
-    （只帶 `company_id`，`name` 為 NULL）；`RtnCode != 1` 直接 raise，此時
-    `self.ecpay_invoice_id` **還沒被指派**。只有成功才依序寫
-    `record.name = InvoiceNo` → `self.ecpay_invoice_id = record` →
-    `self.uniform_state = 'invoiced'`。
-    ⇒ 三者同時成立才代表「這張真的開出去了」。
-
-    ⛔ **不可只判 `ecpay_invoice_id` 非空**：那會把失敗殘值一起擋死，
-    等於用一個永久卡死換掉一個重送洞。
-    ⛔ **也不可只判 `name` 非空**：那會連 `invalid`（已作廢）／`Discounted`
-    （已折讓）這些「號碼還在、但已不是成功開立狀態」的 move 一起擋掉。
-    ⚠ 放行它們是安全的：上游 `create_ecpay_invoice()` 自己還有一道
-    **disjunction** 守衛（`uniform_state == 'invoiced' or ecpay_invoice_id`），
-    位於本守衛下游且 `_forced_ecpay_issue()` 繞不過去。
-
-    守衛放在所有 issue state 判斷**之前**，所以 base 的 `failed`／`error`
-    兩格同洞一併覆蓋。
-    """
-
-    def setUp(self):
-        super().setUp()
-        self.Cron = self.env['woow_paas_platform.ecpay_invoice_cron']
-        self.partner = self.env['res.partner'].create({'name': 'RetryGuard864'})
-
-    def _posted_invoice(self, issue_state, ecpay_number=None,
-                        uniform_state=None, attach_uniform=False):
-        move = self.env['account.move'].sudo().create({
-            'move_type': 'out_invoice',
-            'partner_id': self.partner.id,
-            'invoice_date': date.today(),
-            'invoice_line_ids': [(0, 0, {
-                'name': 'retry guard probe',
-                'quantity': 1.0,
-                'price_unit': 100.0,
-            })],
-        })
-        move.action_post()
-        vals = {'woow_invoice_issue_state': issue_state}
-        if ecpay_number is not None or attach_uniform:
-            vals['ecpay_invoice_id'] = self.env['uniform.invoice'].sudo().create({
-                'name': ecpay_number or '',
-                'company_id': self.env.company.id,
-            }).id
-        if uniform_state is not None:
-            vals['uniform_state'] = uniform_state
-        move.write(vals)
-        return move
-
-    def _retry(self, move):
-        """回傳 (是否拋 UserError, _issue_one 被呼叫幾次)。"""
-        with patch.object(
-                type(self.Cron), '_issue_one', autospec=True) as issue_one:
-            try:
-                move.action_woow_retry_ecpay_invoice()
-                raised = False
-            except UserError:
-                raised = True
-        return raised, issue_one.call_count
-
-    # ---- 已確認開立：擋 ----------------------------------------------
-
-    def test_confirmed_issuance_is_refused_and_calls_nothing(self):
-        """號碼非空 ＋ uniform_state='invoiced' ⇒ 拒絕，且**外呼 0 次**。"""
-        move = self._posted_invoice(
-            'manual', ecpay_number='AB12345678', uniform_state='invoiced')
-        raised, calls = self._retry(move)
-        self.assertTrue(raised, '已確認開立的發票必須拒絕重送')
-        self.assertEqual(calls, 0, '拒絕時外呼必須是 0 次')
-
-    def test_guard_also_covers_base_failed_and_error(self):
-        """裁決要求：guard 順帶覆蓋 base 的 failed／error 同洞。"""
-        for issue_state in ('failed', 'error'):
-            with self.subTest(issue_state=issue_state):
-                move = self._posted_invoice(
-                    issue_state, ecpay_number='AB8765432',
-                    uniform_state='invoiced')
-                raised, calls = self._retry(move)
-                self.assertTrue(raised)
-                self.assertEqual(calls, 0)
-
-    # ---- 失敗殘值 / 非成功狀態：放行 ----------------------------------
-
-    def test_residual_uniform_record_without_number_can_still_retry(self):
-        """🔴 掛著殘值 `uniform.invoice`、號碼為空 ⇒ **仍可 retry**。
-
-        這條是「守衛有沒有寫過頭」的判別式：若判準寫成「`ecpay_invoice_id`
-        有值就擋」，這條會紅。
-        """
-        move = self._posted_invoice('failed', attach_uniform=True)
-        self.assertTrue(move.ecpay_invoice_id, '前提：真的掛著殘值 id')
-        self.assertFalse(move.ecpay_invoice_id.name, '前提：號碼是空的')
-        raised, calls = self._retry(move)
-        self.assertFalse(raised, '失敗殘值不得被守衛擋死')
-        self.assertEqual(calls, 1)
-
-    def test_number_present_but_state_not_invoiced_can_retry(self):
-        """🔴 **合取的判別式**：有號碼、但 `uniform_state` 不是 `invoiced`。
-
-        `invalid`（已作廢）／`Discounted`（已折讓）都帶著真號碼，卻不是
-        「成功開立」狀態。若守衛只判 `name` 非空，這條會紅。
-        放行是安全的——上游 `create_ecpay_invoice()` 自己的 disjunction 守衛
-        （`uniform_state == 'invoiced' or ecpay_invoice_id`）仍在下游擋著。
-        """
-        for uniform_state in ('invalid', 'Discounted'):
-            with self.subTest(uniform_state=uniform_state):
-                move = self._posted_invoice(
-                    'manual', ecpay_number='AB1111111',
-                    uniform_state=uniform_state)
-                self.assertTrue(move.ecpay_invoice_id.name, '前提：號碼非空')
-                raised, calls = self._retry(move)
-                self.assertFalse(
-                    raised,
-                    '%s 不是成功開立狀態，⛔ 守衛不得只憑號碼非空就擋'
-                    % uniform_state)
-                self.assertEqual(calls, 1)
-
-    def test_clean_manual_move_still_retries(self):
-        """回歸守線：連 uniform.invoice 都沒掛的乾淨 manual 不受影響。"""
-        move = self._posted_invoice('manual')
-        raised, calls = self._retry(move)
-        self.assertFalse(raised)
-        self.assertEqual(calls, 1)
-
-
 class TestCronIgnoresDraftMoves864(TransactionCase):
     """必修 4 的機器化：cron 不撿 draft，與 issue state 無關。
 
@@ -767,3 +634,194 @@ class TestCronIgnoresDraftMoves864(TransactionCase):
         self.assertNotIn(
             draft_manual.id, picked,
             'draft 不被撿的原因是 state，不是 issue state')
+
+
+class _EcpayHttpSpy:
+    """ECPay **HTTP 邊界**的 spy：`ECPay_Invoice_Send.CheckOut()`。
+
+    這是 SDK 裡真正要出網的那一層（它下面的 `process_data` 才是 requests，
+    但那層要處理 AES 編解碼，做不出可用的假回應）。把 spy 放這裡的意義是：
+    `create_ecpay_invoice()` 的**全部真實邏輯**都照跑——包含上游自己的重複開立
+    守衛、`validate_ecpay_invoice()`、`uniform.invoice` 記錄建立、
+    `ecpay_invoice_id` / `uniform_state` 的寫入——只有出網那一下被攔下來。
+
+    ⛔ 刻意**不** mock `_issue_one`、也**不** mock `create_ecpay_invoice`：
+    那樣只會驗到「守衛放行了」，驗不到「放行之後到底有沒有真的開票」。
+    上一輪就是這樣漏掉靜默假成功的。
+    """
+
+    #: `ecpay_invoice_init(invoice, api_uri, method, ...)` 把 **method** 放進
+    #: `Invoice_Method`、把 **api_uri** 放進 `Invoice_Url`。開立走
+    #: ('B2CInvoice/Issue', 'INVOICE')、開立後回查走
+    #: ('B2CInvoice/GetIssue', 'INVOICE_SEARCH')。
+    #: ⚠ 分派與計數要看 `Invoice_Method`（'INVOICE' / 'INVOICE_SEARCH'），
+    #: ⛔ 不是看 URI —— 用 URI 的字尾去比對 Invoice_Method 會**永遠不匹配**，
+    #: 結果是「外呼次數恆為 0」，看起來像實作沒打 ECPay（探針壞掉的假紅）。
+    _METHOD_ISSUE = 'INVOICE'
+    _METHOD_QUERY = 'INVOICE_SEARCH'
+
+    def __init__(self, invoice_no='AB12345678'):
+        self.calls = []          # [(Invoice_Method, Invoice_Url), ...]
+        self.invoice_no = invoice_no
+
+    def __call__(self, arParameters=None, HashKey='', HashIV='',
+                 Invoice_Method='', ServiceURL=''):
+        self.calls.append((Invoice_Method, ServiceURL))
+        if Invoice_Method == self._METHOD_QUERY:
+            # 開立成功後上游會回查明細；Items 空即可（process_return_info 會把
+            # Item* 併成空字串），ZeroTaxRateReason 是它會 del 掉的 key。
+            # 回傳的其餘 key 都會被 write 進 uniform.invoice，故只能放真欄位。
+            return {'RtnCode': 1, 'RtnMsg': 'ok',
+                    'Items': [], 'ZeroTaxRateReason': ''}
+        return {'RtnCode': 1, 'RtnMsg': '開立發票成功',
+                'InvoiceNo': self.invoice_no}
+
+    @property
+    def issue_calls(self):
+        """真正「開立」的外呼（不含開立後的回查）。"""
+        return [c for c in self.calls if c[0] == self._METHOD_ISSUE]
+
+
+class TestRetryRealCallPath864(TransactionCase):
+    """🔴 走完整 call path（action → `_issue_one` → 上游 → ECPay HTTP 邊界）。
+
+    上一輪的守衛測試把 `_issue_one` 整個 mock 掉，所以只證明了「守衛放行」，
+    完全沒看到放行之後 `_issue_one` 會用 OR 短路**未打 ECPay 就 write
+    `issued`／`issued_at`**——靜默假成功。本 class 就是要讓那種情況測得出來：
+    唯一的 mock 在 ECPay 的 HTTP 邊界，觀測的是**外呼次數與最終狀態**。
+    """
+
+    _CHECKOUT = ('odoo.addons.ecpay_invoice_tw.sdk.ecpay_main.'
+                 'ECPay_Invoice_Send.CheckOut')
+
+    def setUp(self):
+        super().setUp()
+        self.Cron = self.env['woow_paas_platform.ecpay_invoice_cron']
+        # validate_ecpay_invoice() 要求客戶有地址（或發票寄送地址）
+        self.partner = self.env['res.partner'].create({
+            'name': 'RealCallPath864',
+            # validate_ecpay_invoice() 要求客戶有地址（或發票寄送地址）
+            'street': 'No. 1, Test Rd.',
+        })
+        # prepare_item_list() 會取 line.product_id.name[:30] 與
+        # line.product_uom_id.name[:6]；沒有 product 的行會讓空 recordset 的
+        # name 變成 False 而炸在 False[:30]（'bool' object is not subscriptable），
+        # 那會讓測試在**還沒走到 ECPay 邊界**之前就失敗，看起來像「沒外呼」。
+        self.product = self.env['product.product'].create({
+            'name': 'Real Call Path Service 864',
+            'type': 'service',
+        })
+
+    def _posted_invoice(self, issue_state, ecpay_number=None,
+                        uniform_state=None, attach_uniform=False):
+        move = self.env['account.move'].sudo().create({
+            'move_type': 'out_invoice',
+            'partner_id': self.partner.id,
+            'invoice_date': date.today(),
+            'invoice_line_ids': [(0, 0, {
+                'product_id': self.product.id,
+                'name': 'real call path probe',
+                'quantity': 1.0,
+                'price_unit': 100.0,
+            })],
+        })
+        move.action_post()
+        vals = {'woow_invoice_issue_state': issue_state}
+        if ecpay_number is not None or attach_uniform:
+            vals['ecpay_invoice_id'] = self.env['uniform.invoice'].sudo().create({
+                'name': ecpay_number or '',
+                'company_id': self.env.company.id,
+            }).id
+        if uniform_state is not None:
+            vals['uniform_state'] = uniform_state
+        move.write(vals)
+        return move
+
+    def _retry_through_real_path(self, move):
+        """回傳 (是否 UserError, spy)。⛔ 全程不 mock `_issue_one`。"""
+        spy = _EcpayHttpSpy()
+        with patch(self._CHECKOUT, new=spy):
+            try:
+                move.action_woow_retry_ecpay_invoice()
+                raised = False
+            except UserError:
+                raised = True
+        move.invalidate_recordset()
+        return raised, spy
+
+    # ---- (a) 已確認開立 → fail-closed、外呼 0 -------------------------
+
+    def test_a_confirmed_issued_is_fail_closed_with_zero_ecpay_calls(self):
+        move = self._posted_invoice(
+            'manual', ecpay_number='AB12345678', uniform_state='invoiced')
+        raised, spy = self._retry_through_real_path(move)
+        self.assertTrue(raised, '已確認開立必須 fail-closed')
+        self.assertEqual(spy.calls, [], 'ECPay 外呼必須是 0 次')
+
+    # ---- (b) 失敗殘值（無成功號碼）→ 真的 retry、外呼 1 ---------------
+
+    def test_b_failed_residual_without_number_really_reissues(self):
+        """🔴 上一輪這條是假綠：mock 掉 `_issue_one` 之後看不到它沒打 ECPay。"""
+        move = self._posted_invoice('failed', attach_uniform=True)
+        self.assertTrue(move.ecpay_invoice_id, '前提：掛著殘值 id')
+        self.assertFalse(move.ecpay_invoice_id.name, '前提：號碼是空的')
+        raised, spy = self._retry_through_real_path(move)
+        self.assertFalse(raised, '失敗殘值必須能真的 retry')
+        self.assertEqual(
+            len(spy.issue_calls), 1,
+            '必須**真的**打一次 ECPay 開立——只把狀態寫成 issued 是靜默假成功')
+        self.assertEqual(move.woow_invoice_issue_state, 'issued')
+        self.assertEqual(
+            move.ecpay_invoice_id.name, 'AB12345678',
+            '成功後必須帶回 ECPay 真號碼')
+
+    # ---- (c) invalid／Discounted ＋ 真號碼 → UserError、不 stamp -------
+
+    def test_c_voided_or_discounted_with_number_raises_and_never_stamps(self):
+        """🔴 `invalid`／`Discounted` 帶著真號碼 ⇒ fail-loud，⛔ 不得靜默 stamp。"""
+        for uniform_state in ('invalid', 'Discounted'):
+            with self.subTest(uniform_state=uniform_state):
+                move = self._posted_invoice(
+                    'manual', ecpay_number='AB9999999',
+                    uniform_state=uniform_state)
+                raised, spy = self._retry_through_real_path(move)
+                self.assertTrue(
+                    raised, '%s ＋ 真號碼必須 fail-loud' % uniform_state)
+                self.assertEqual(spy.calls, [], 'ECPay 外呼必須是 0 次')
+                self.assertNotEqual(
+                    move.woow_invoice_issue_state, 'issued',
+                    '⛔ 未打 ECPay 不得把狀態寫成 issued（靜默假成功）')
+
+    def test_guard_also_covers_base_failed_and_error(self):
+        """裁決要求：同一顆守衛順帶覆蓋 base 的 `failed`／`error` 兩格同洞。"""
+        for issue_state in ('failed', 'error'):
+            with self.subTest(issue_state=issue_state):
+                move = self._posted_invoice(
+                    issue_state, ecpay_number='AB8765432',
+                    uniform_state='invoiced')
+                raised, spy = self._retry_through_real_path(move)
+                self.assertTrue(raised)
+                self.assertEqual(spy.calls, [])
+
+    def test_clean_manual_without_any_uniform_record_really_issues(self):
+        """回歸守線：連 uniform.invoice 都沒掛的乾淨 manual 會真的開票。"""
+        move = self._posted_invoice('manual')
+        raised, spy = self._retry_through_real_path(move)
+        self.assertFalse(raised)
+        self.assertEqual(len(spy.issue_calls), 1)
+        self.assertEqual(move.woow_invoice_issue_state, 'issued')
+
+    # ---- cron 側走同一顆判準（不能有 OR/AND 兩把尺的差集）-------------
+
+    def test_cron_issue_one_never_stamps_issued_without_calling_ecpay(self):
+        """`_issue_one` 直呼：有真號碼時 ⛔ 不得 stamp issued／issued_at。"""
+        move = self._posted_invoice(
+            'pending', ecpay_number='AB5555555', uniform_state='invoiced')
+        spy = _EcpayHttpSpy()
+        with patch(self._CHECKOUT, new=spy):
+            self.Cron._issue_one(move)
+        move.invalidate_recordset()
+        self.assertEqual(spy.calls, [], 'ECPay 外呼必須是 0 次')
+        self.assertNotEqual(
+            move.woow_invoice_issue_state, 'issued',
+            '⛔ 未打 ECPay 卻寫 issued＝靜默假成功（這正是 inherited bug）')
