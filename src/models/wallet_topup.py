@@ -680,6 +680,17 @@ class WalletTopup(models.Model):
                 incidents = env['woow.billing.incident'].sudo()
 
                 def _skip(reason, state=None, bump_attempts=False):
+                    # 逾時之後仍補不了的預登記轉 `orphan`（設計文 §5.5 的老化
+                    # 規則，這裡一致套用到每一個不可補的分支，不只「topup 列
+                    # 不存在」那一格）。⚠ 這一格是**掃描集合**的收斂，不是
+                    # 結案：確切 skip_reason 原樣保留供診斷，而人工清單的判準
+                    # 是年齡（`state != 'resolved' AND create_date < cutoff`）
+                    # ⇒ 這些列在人工清單上一個都不會少。
+                    # 沒有它的話，每一筆被拒的刷卡都會留下一列永遠 `open` 的
+                    # intent，每 10 分鐘被撈出來再跳過一次，最後把 batch 名額
+                    # 佔滿、把真正該補的那幾筆餓死。
+                    if state is None and aged:
+                        state = 'orphan'
                     incidents._mark_replay_skip_current_cursor(
                         external_ref, reason, state=state,
                         bump_attempts=bump_attempts)
