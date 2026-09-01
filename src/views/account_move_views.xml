@@ -6,11 +6,19 @@
         <field name="inherit_id" ref="ecpay_invoice_tw.ecpay_invoice_view_form"/>
         <field name="arch" type="xml">
             <xpath expr="//button[@name='create_ecpay_invoice']" position="after">
+                <!-- #864 PR-C：`manual` ＝「該開票、但依政策由人工開」，這顆鈕就是
+                     那條政策的**唯一 UI 入口**。⛔ 不可把 manual 從可見狀態拿掉：
+                     method 呼叫得通不等於管理員在畫面上按得到（#864 的病就是
+                     「連手動補救鈕都按不下去」）。groups 維持 account manager，
+                     ⛔ 不放寬。可見狀態的守線在
+                     tests/test_invoice_issue_policy_864.py 的
+                     TestManualRetryButtonVisibility864（求值 invisible 表達式，
+                     不是字串比對）。 -->
                 <button name="action_woow_retry_ecpay_invoice" type="object"
                         class="oe_stat_button oe_highlight"
                         icon="fa-refresh" string="Retry ECPay E-Invoice"
                         groups="account.group_account_manager"
-                        invisible="woow_invoice_issue_state not in ('failed', 'error')"/>
+                        invisible="woow_invoice_issue_state not in ('failed', 'error', 'manual')"/>
             </xpath>
             <xpath expr="//page[@id='uniform_invoice']/group" position="inside">
                 <group string="PaaS Issuance Tracking">

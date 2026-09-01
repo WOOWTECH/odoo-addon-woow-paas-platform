@@ -64,16 +64,55 @@ class EcpayInvoiceCron(models.AbstractModel):
                 )
 
     def _issue_one(self, move):
-        """Try once to issue an ECPay invoice for `move`, recording outcome."""
-        # Already issued (e.g. another cron tick or the inline trigger
-        # succeeded) — sync our tracking field and exit.
-        if move.uniform_state == 'invoiced' or move.ecpay_invoice_id:
-            move.write({
-                'woow_invoice_issue_state': 'issued',
-                'woow_invoice_last_error': False,
-            })
-            self._sync_topup_invoice_issued_at(move)
+        """Try once to issue an ECPay invoice for `move`, recording outcome.
+
+        🔴 **本方法的任何路徑都不得「沒打 ECPay 卻把狀態寫成 ``issued``（或
+        stamp ``invoice_issued_at``）」**。這裡原本有一段 OR 短路
+        （``uniform_state == 'invoiced' or ecpay_invoice_id``）會直接寫
+        ``issued`` 就 return——它同時吃掉兩種完全不同的情況：
+
+        * 真的已核發（有號碼）⇒ 把它標成 issued 看似對，但那是**未經查證的
+          自我宣稱**，而且會把「作廢／折讓後又被送進來」也一起吞掉；
+        * 只有號碼為空的**失敗殘值** ⇒ 標成 issued 是**靜默假成功**：對帳報表
+          全綠、客戶手上一張發票都沒有。
+
+        改成與 ``account.move._woow_ecpay_issuance_confirmed()`` **共用同一顆
+        判準**（⛔ 不再有 OR／AND 兩把尺的差集）：
+
+        * 有真號碼 ⇒ ``_record_failure()`` fail-loud（外呼 0 次、⛔ 不 stamp
+          issued），重試上限後轉 ``error`` 並通知帳務管理群組，由人處理；
+        * 沒有真號碼但掛著殘值連結 ⇒ 先解除連結再開票，否則上游
+          ``create_ecpay_invoice()`` 自己的重複守衛
+          （``uniform_state == 'invoiced' or ecpay_invoice_id``）會把**合法的
+          retry 擋死**。
+
+        ⚠ 還有第三格：``uniform_state == 'invoiced'`` **卻沒有號碼**（資料不
+        一致）。本判準刻意回 ``False``——沒有號碼就不能宣稱「已核發」。它會往下
+        走進上游，被上游那道重複守衛 raise，落到 ``_record_failure()``：外呼 0
+        次、⛔ 不 stamp issued、原因寫進 ``woow_invoice_last_error`` 由人處理。
+        移除 OR 短路之後上游守衛才**真的可達**（在那之前它永遠碰不到），
+        由 ``test_ecpay_invoice_retry`` 的
+        ``test_already_invoiced_without_number_is_refused_not_stamped`` 覆蓋。
+        """
+        if move._woow_ecpay_issuance_confirmed():
+            self._record_failure(
+                move,
+                "ECPay invoice number %s is already issued for this move; "
+                "refusing to re-issue (needs manual reconciliation)."
+                % move.ecpay_invoice_id.name,
+            )
             return
+
+        if move.ecpay_invoice_id:
+            # 號碼為空的殘值：不是發票，只是失敗留下的空殼。留著它的話上游的
+            # 重複守衛會擋掉真正的 retry，所以先解除連結（⛔ 不刪記錄，保留
+            # 稽核痕跡）。
+            _logger.warning(
+                "[ECPAY_INV] move=%s detaching numberless residual "
+                "uniform.invoice=%s before re-issuing",
+                move.id, move.ecpay_invoice_id.id,
+            )
+            move.write({'ecpay_invoice_id': False})
 
         move.write({'woow_invoice_issue_state': 'issuing'})
         try:

@@ -10,5 +10,23 @@
             <field name="interval_type">minutes</field>
             <field name="active" eval="True"/>
         </record>
+
+        <!-- #864 PR-C：manual 發票的老化告警（daily）。判準與告警形態見
+             account.move._cron_alert_stale_manual_invoices 的 docstring；門檻
+             param woow_paas_platform.manual_invoice_aging_days（正整數才生效；
+             '0'／負值／非法值／缺值一律 fail-safe 回 7 天。⛔ 無 disable 開關）。
+             ⚠ 記錄放在本檔而不是新開一個 xml：新檔要動 __manifest__.py 的 data
+             清單，而依 #691 改制 manifest 版號是 develop 唯一 required check 的
+             判準，本 PR 刻意完全不碰它。
+             ⚠ noupdate=1：日後改 interval 要改 DB 或走 migration。 -->
+        <record id="ir_cron_alert_stale_manual_invoices" model="ir.cron">
+            <field name="name">Alert stale manual ECPay invoices</field>
+            <field name="model_id" ref="account.model_account_move"/>
+            <field name="state">code</field>
+            <field name="code">model._cron_alert_stale_manual_invoices()</field>
+            <field name="interval_number">1</field>
+            <field name="interval_type">days</field>
+            <field name="active" eval="True"/>
+        </record>
     </data>
 </odoo>

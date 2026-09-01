@@ -489,6 +489,12 @@ class WalletTopup(models.Model):
         self.ensure_one()
         product = self._get_topup_product()
         line_name = f"Wallet Topup: {self.plan_id.name}" if self.plan_id else "Wallet Topup"
+        # #864 PR-C（裁決 ④）：開票政策由 res.company.auto_invoice 決定，與訂閱
+        # 家族共用同一顆 fail-closed resolver。原本這裡寫死 'pending' ⇒ 平台的
+        # async cron（完全不看 auto_invoice，只要看到 pending 就開）會無條件自動
+        # 開票，「paas 選 manual」根本不生效。
+        issue_state = self.env['account.move']._woow_resolve_invoice_issue_state(
+            self.env.company)
         move_vals = {
             'move_type': 'out_invoice',
             'partner_id': self.partner_id.id,
@@ -501,7 +507,7 @@ class WalletTopup(models.Model):
                 'quantity': 1.0,
                 'price_unit': self.amount,
             })],
-            'woow_invoice_issue_state': 'pending',
+            'woow_invoice_issue_state': issue_state,
             # Path B: PaaS issues e-invoices via cron only. The skip flag
             # short-circuits the upstream `create_ecpay_invoice` action_post
             # hook so the same move isn't issued twice (once inline, once by
@@ -513,9 +519,14 @@ class WalletTopup(models.Model):
         try:
             move.action_post()
         except Exception:
-            # Leave the move in draft for a human / cron to recover. The
-            # woow_invoice_issue_state stays 'pending' so the issuing cron
-            # ignores it (it filters posted moves only).
+            # Leave the move in draft for a human / cron to recover.
+            # ⚠ #864 PR-C 更正：這裡原本寫「issue state 維持 'pending' 所以開票
+            # cron 不會撿」——那句話現在是錯的：政策為 manual 時 stamp 出來的就是
+            # 'manual'，而 automatic 時才是 'pending'，兩者都不是這裡的理由。
+            # cron 不撿它的**真正原因是這張 move 還停在 draft**：
+            # `_cron_issue_pending_invoices` 的 domain 帶 ('state', '=', 'posted')。
+            # 守線見 tests/test_invoice_issue_policy_864.py 的
+            # TestCronIgnoresDraftMoves864（含 posted+pending 陽性對照）。
             _logger.exception(
                 "CRITICAL: topup invoice action_post failed; wallet was credited "
                 "(or pending credit) but no e-invoice will be issued without "
