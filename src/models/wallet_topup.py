@@ -3,7 +3,9 @@ import math
 import uuid
 from datetime import timedelta
 
-from odoo import _, api, fields, models
+import psycopg2
+
+from odoo import _, api, fields, models, SUPERUSER_ID
 from odoo.exceptions import ValidationError
 
 _logger = logging.getLogger(__name__)
@@ -20,6 +22,8 @@ TOPUP_CURRENCY_NOT_CONFIGURED = 'currency_not_configured'
 TOPUP_3DS_REQUIRED = '3ds_required'
 TOPUP_SDK_ERROR = 'sdk_error'
 TOPUP_WALLET_CREDIT_FAILED = 'wallet_credit_failed'
+# #864 PR-G：付款意圖預登記寫不進去 ⇒ fail-closed，⛔ 不外呼。
+TOPUP_INTENT_NOT_RECORDED = 'intent_not_recorded'
 
 
 class WalletTopup(models.Model):
@@ -165,6 +169,7 @@ class WalletTopup(models.Model):
         Return codes (message):
             'ok'                          - charge succeeded
             'invalid_state'               - topup not in 'draft' state (concurrent/replay)
+            'intent_not_recorded'         - #864 PR-G pre-registration failed; fail-closed, ZERO outbound calls
             'no_token'                    - token missing/inactive/no ecpg_bindcard_id
             'provider_not_enabled'        - token's provider has no enable_ecpg
             'currency_not_configured'    - neither provider nor TWD available
@@ -201,6 +206,21 @@ class WalletTopup(models.Model):
         # 20-char limit on ECPay reference; UUID hex keeps unique portion first
         # so ecpay's _ecpg_build_merchant_trade_no truncation preserves uniqueness.
         reference = f'TOPUP{uuid.uuid4().hex[:15].upper()}'
+
+        # #864 PR-G：預登記必須落在**不可逆外呼之前**。這裡是最早可能的
+        # 位置——reference（＝MTN）剛算出來，tx 都還沒建立，所以 fail-closed
+        # 退出時零外呼、零 tx 殘留。
+        if not self._log_topup_intent(reference, token=token,
+                                      charge_amount=charge_amount):
+            self.write({
+                'state': 'failed',
+                'failure_code': TOPUP_INTENT_NOT_RECORDED,
+                'failure_message': (
+                    'INTENT_NOT_RECORDED: payment intent pre-registration '
+                    'failed; charge deliberately not attempted'
+                ),
+            })
+            return False, TOPUP_INTENT_NOT_RECORDED
 
         tx = self.env['payment.transaction'].sudo().create({
             'provider_id': provider.id,
@@ -313,6 +333,69 @@ class WalletTopup(models.Model):
             return False, TOPUP_WALLET_CREDIT_FAILED
 
         return True, TOPUP_OK
+
+    def _log_topup_intent(self, reference, token=None, charge_amount=None):
+        """外呼之前用獨立交易寫一筆付款意圖預登記（#864 PR-G）。
+
+        **為什麼一定要在外呼之前**：3DS callback 可能在本 request 的交易
+        commit **之前**就抵達 ⇒ 那時 ``payment.transaction`` 這一列還不存在
+        ⇒ vendored ``pay_callback`` 查無 tx、回 ``1|OK`` 叫 ECPay 停止重送
+        ⇒ 錢永不入帳而且零告警。預登記（``woow.billing.incident._log()``
+        的獨立 cursor ＋ commit）是唯一在那個時點就已經跨連線可見的東西，
+        callback inbox 與 ``_cron_replay_callback_inbox`` 都靠它對帳。
+
+        ``external_ref`` 用 ``reference`` 原文：topup 的 reference 是
+        ``"TOPUP"`` ＋ 15 碼大寫 hex ＝ 20 字元純 alnum，vendored 的
+        ``_ecpg_build_merchant_trade_no``（去非 alnum、截 20）對它是恆等
+        ⇒ MTN ≡ reference。⛔ 不在平台側自抄一份 sanitize 規則（會漂）。
+
+        回傳 incident id 或 ``False``。呼叫端對 ``False`` **必須 fail-closed**
+        （issue-leader 2026-09-01 裁決 Q1）：⛔ 不得靜默繼續外呼——沒有預登記
+        的那一筆就是本 PR 要消滅的掉款洞本身，而且它無聲。
+
+        ``_log`` 契約是永不外拋；這裡仍自己包一層 try/except，因為組 snapshot
+        的那段 Python 邏輯若未來重構誤觸型別錯誤，也必須收斂成 ``False``
+        ＋ critical log，⛔ 不得把例外丟回付款流程。
+        """
+        self.ensure_one()
+        try:
+            incident_id = self.env['woow.billing.incident']._log({
+                'external_ref': reference,
+                'kind': 'intent',
+                'partner_ref': self.partner_id.id or None,
+                'payment_token_ref': token.id if token else None,
+                'amount': float(
+                    charge_amount if charge_amount is not None else self.amount
+                ),
+                'credits': self.credits,
+                'bonus': self.bonus,
+                'currency': self.currency_id.name or None,
+                'source_model': self._name,
+                'source_ref': self.id,
+                # 通用句子：⛔ 不放 provider 原始訊息／ResultData 密文
+                # （PAN-like 與 HTML 都會讓整筆 snapshot 被 fail-soft 拒收，
+                #  等於預登記靜默消失；PCI 面見 billing_incident 模組 docstring）。
+                'detail': (
+                    '付款意圖預登記：在不可逆外呼之前以獨立交易寫入，'
+                    '供 callback inbox 與 replay 對帳使用。'
+                ),
+            })
+        except Exception:
+            _logger.critical(
+                '[TOPUP] CRITICAL: payment intent pre-registration raised '
+                'before the outbound call (topup=%s); fail-closed, no charge '
+                'will be attempted', self.id,
+            )
+            return False
+        if not incident_id:
+            _logger.critical(
+                '[TOPUP] CRITICAL: payment intent pre-registration failed '
+                '(topup=%s); fail-closed, no charge will be attempted — '
+                'without it a callback arriving before commit would be '
+                'answered 1|OK and the money would never be credited',
+                self.id,
+            )
+        return incident_id
 
     def _log_charged_not_credited_incident(self, tx, token, charge_amount, currency):
         """獨立交易落一筆 CHARGED_NOT_CREDITED incident（#864 PR-D／PR-E）。
@@ -472,14 +555,310 @@ class WalletTopup(models.Model):
     _CLEANUP_GRACE_MIN = 30
     _CLEANUP_HARD_CANCEL_MIN = 60
 
+    # #864 PR-G — replay 引擎的形狀常數。
+    # ⚠ G 先落地 ⇒ **G 定義形狀、PR-F 沿用**：入帳 choke point、行鎖形態、
+    #   per-record cursor、skip 痕跡全部照這裡。⛔ 不要各寫一套。
+    _REPLAY_BATCH_SIZE = 50
+    # 逾時是安全參數不是效能參數：這條 cursor 可能與正在進行的付款 request
+    # 搶同一列，無界等待會把 cron worker 卡在它自己剛回報的競爭上。
+    _REPLAY_LOCK_TIMEOUT = '1s'
+    _REPLAY_RESOLUTION_NOTE = (
+        '由 #864 PR-G 的 callback replay 自動補入帳並結案；'
+        '依據為 provider callback 回報的成功代碼與交易編號。'
+    )
+    _REPLAY_ALREADY_CREDITED_NOTE = (
+        '由 #864 PR-G 的 callback replay 結案：這筆早已入帳（topup 已 done），'
+        'inbox 裡的事實只是晚到的重複觀測。'
+    )
+
+    @api.model
+    def _replay_candidates(self):
+        """撈出「可能需要補入帳」的預登記——**獨立 cursor，繞 RR 快照**。
+
+        🔴 為什麼不能用一般 ORM ``search``：Odoo 的 cron tick 是 REPEATABLE
+        READ，快照凍結在起跑那一刻；而預登記與 callback 事實都是
+        ``woow.billing.incident`` 用**獨立 cursor** commit 的，同一個 tick 內
+        用 ``self.env`` 讀不到它們（同 ``_double_charge_cooldown_active``
+        的教訓）。
+
+        入集合條件刻意**不是**「rtn_code = '1'」：``RtnCode != 1``（真的被拒）
+        與「有預登記但 callback 從沒來過而且已經老掉」這兩種局面也必須被撈出來
+        留痕，否則它們永遠停在 ``open``、零 log 零告警，而人工清單按年齡撈時
+        又找不到任何處置紀錄。**成功與否的判定一律在拿到行鎖之後才做。**
+
+        排序用 ``COALESCE(last_skipped_at, last_seen_at)``（最久沒被碰的優先）
+        ⇒ 一筆卡住的列不會每輪都佔住 batch 名額把新進來的餓死。
+        """
+        aged_cutoff = fields.Datetime.now() - timedelta(
+            minutes=self._CLEANUP_HARD_CANCEL_MIN)
+        with self.env.registry.cursor() as cr:
+            cr.execute('SET LOCAL lock_timeout = %s',
+                       (self._REPLAY_LOCK_TIMEOUT,))
+            cr.execute(
+                "SELECT external_ref, rtn_code, trade_no, source_model, "
+                "source_ref, first_seen_at "
+                "FROM woow_billing_incident "
+                "WHERE kind = 'intent' AND state = 'open' "
+                "AND (rtn_code IS NOT NULL OR first_seen_at < %s) "
+                "ORDER BY COALESCE(last_skipped_at, last_seen_at) "
+                "LIMIT %s",
+                (aged_cutoff, self._REPLAY_BATCH_SIZE),
+            )
+            columns = ('external_ref', 'rtn_code', 'trade_no', 'source_model',
+                       'source_ref', 'first_seen_at')
+            return [dict(zip(columns, row)) for row in cr.fetchall()]
+
+    @api.model
+    def _cron_replay_callback_inbox(self):
+        """把 inbox 裡「已收到成功 callback」的預登記補成入帳（#864 PR-G）。
+
+        每一筆走自己的獨立 cursor。**這不是效能考量是正確性考量**：
+        ``FOR UPDATE NOWAIT`` 搶不到會拋 ``LockNotAvailable``，PostgreSQL 當場
+        把整條交易標成 aborted ⇒ 共用一條 cursor 的話，之後每一筆的第一個 SQL
+        都死在 ``InFailedSqlTransaction``；而且任一筆撞 40001 會把**整輪**
+        （含前面已補成功的）一起回捲，連 ``skip_count``／``needs_human`` 這些
+        安全閥標記也跟著消失。
+
+        ⛔ 例外不外拋：cron 沒有同 tick 重試（``retrying()`` 只掛 RPC
+        dispatch），拋出去只會讓後面的筆數一起不跑。
+        """
+        candidates = self._replay_candidates()
+        summary = {
+            'scanned': len(candidates),
+            'credited': 0,
+            'already_credited': 0,
+            'failed': 0,
+            'skipped_by_reason': {},
+        }
+        for candidate in candidates:
+            outcome, reason = self._replay_one_callback_intent(candidate)
+            if outcome == 'credited':
+                summary['credited'] += 1
+            elif outcome == 'already_credited':
+                summary['already_credited'] += 1
+            elif outcome == 'failed':
+                summary['failed'] += 1
+            else:
+                summary['skipped_by_reason'][reason] = (
+                    summary['skipped_by_reason'].get(reason, 0) + 1)
+        # 🔴 零也要印：這是讓「今天沒事」與「每一筆都被擋掉」在日誌上可分辨的
+        # 唯一辦法，也是 heartbeat 的依附點。
+        _logger.info(
+            '[TOPUP_REPLAY] scanned=%s credited=%s already_credited=%s '
+            'failed=%s skipped_by_reason=%s',
+            summary['scanned'], summary['credited'],
+            summary['already_credited'], summary['failed'],
+            summary['skipped_by_reason'],
+        )
+        return summary
+
+    @api.model
+    def _replay_one_callback_intent(self, candidate):
+        """處理一筆預登記；回傳 ``(outcome, reason)``。
+
+        步驟固定（G 定形狀、F 沿用）：
+        1. 對 topup 列 ``FOR UPDATE NOWAIT`` 取序列化點；
+        2. **拿到鎖之後才重讀**狀態與事實（⛔ 不用鎖前那次讀的值）；
+        3. 逐狀態分流，每一個「決定不補」的分支都寫確切 ``skip_reason``；
+        4. 入帳只走唯一 choke point ``self._on_payment_done(tx)``；
+        5. 標記 incident ``resolved`` **在同一個交易內**（⛔ 不另開 cursor，
+           否則會出現「補了但沒標」或「標了但沒補」的裂縫）。
+
+        鎖序固定 **topup → incident**（第 5 步的 transition 會對 incident 列
+        取阻塞式 ``FOR UPDATE``）。⛔ 不得反序，否則兩顆 cron 交叉死鎖。
+        """
+        external_ref = candidate['external_ref']
+        aged_cutoff = fields.Datetime.now() - timedelta(
+            minutes=self._CLEANUP_HARD_CANCEL_MIN)
+        aged = candidate['first_seen_at'] < aged_cutoff
+        try:
+            with self.env.registry.cursor() as cr:
+                # 必須是這條連線的第一個 statement。
+                cr.execute('SET LOCAL lock_timeout = %s',
+                           (self._REPLAY_LOCK_TIMEOUT,))
+                env = api.Environment(cr, SUPERUSER_ID, {})
+                incidents = env['woow.billing.incident'].sudo()
+
+                def _skip(reason, state=None, bump_attempts=False):
+                    incidents._mark_replay_skip_current_cursor(
+                        external_ref, reason, state=state,
+                        bump_attempts=bump_attempts)
+                    cr.commit()
+                    return 'skipped', reason
+
+                if (candidate['source_model'] != self._name
+                        or not candidate['source_ref']):
+                    return _skip('intent_aged_out', state='orphan') if aged \
+                        else _skip('no_topup_row')
+
+                cr.execute(
+                    'SELECT id FROM woow_wallet_topup WHERE id = %s '
+                    'FOR UPDATE NOWAIT', (candidate['source_ref'],))
+                if not cr.fetchone():
+                    # 主交易整段回捲過（topup 列根本不存在）。給它一個窗口
+                    # 等主交易 commit；過了 hard-cancel 年齡才判成孤兒。
+                    return _skip('intent_aged_out', state='orphan') if aged \
+                        else _skip('no_topup_row')
+
+                # --- 鎖到之後才重讀（⛔ 不用鎖前那次讀的值）--------------- #
+                cr.execute(
+                    'SELECT id, state, rtn_code, trade_no '
+                    'FROM woow_billing_incident WHERE external_ref = %s',
+                    (external_ref,))
+                incident_row = cr.fetchone()
+                if not incident_row or incident_row[1] != 'open':
+                    # 另一個 worker 已經處理掉了。它寫下的終態就是痕跡本身，
+                    # ⛔ 不再疊一層 skip（也寫不進去：resolved 是不可覆寫的）。
+                    return 'skipped', 'incident_not_open'
+                incident_id, _state, rtn_code, trade_no = incident_row
+
+                topup = env['woow.wallet.topup'].sudo().browse(
+                    candidate['source_ref'])
+                if topup.state == 'done':
+                    incidents.browse(
+                        incident_id)._transition_resolved_current_cursor(
+                            None, self._REPLAY_ALREADY_CREDITED_NOTE,
+                            SUPERUSER_ID)
+                    cr.commit()
+                    return 'already_credited', None
+                if topup.state == 'draft':
+                    # 還沒外呼過，callback 不該存在 ⇒ ⛔ 不入帳。
+                    return _skip('intent_without_charge', state='needs_human')
+                if topup.state == 'failed':
+                    # `_on_payment_done` 的守衛只擋 done、擋不住 failed；而
+                    # `wallet_credit_failed` 的自動補點是 **PR-F** 的射程。
+                    return _skip('failed_belongs_to_pr_f')
+                if topup.state == 'cancelled':
+                    # 已被 hard-cancel、tx 也被 `_set_canceled` 動過 ⇒ 狀態
+                    # 不可信。⛔ 不自動復活（那是自動出錢的變體）。
+                    return _skip('cancelled_needs_human', state='needs_human')
+
+                # --- 這裡開始只剩 pending：驗事實再入帳 -------------------- #
+                if rtn_code != '1':
+                    return _skip('callback_not_successful')
+                if not trade_no:
+                    # ECPay 給了單號＝它那邊真的有這筆；缺了就 ⛔ 不補。
+                    return _skip('missing_trade_no')
+                tx = topup.payment_transaction_id
+                if not tx:
+                    return _skip('missing_payment_transaction',
+                                 state='needs_human')
+
+                # 唯一入帳 choke point。
+                # 🔴 必須用 `topup`（＝**這條 per-record cursor** 上的
+                # recordset）。用 `self.browse(...)` 會落回外層 cron 那條
+                # cursor，而行鎖是這條 cursor 拿的 ⇒ 外層那條寫同一列時等自己
+                # 的鎖，**自我死鎖**（實測會整支測試掛住直到 timeout）。
+                topup._on_payment_done(tx)
+                # 入帳（不可逆）之後才做的 tx 狀態對齊只是**記帳**：它失敗
+                # ⛔ 不得把已經發生的入帳一起回捲（見
+                # docs/decisions/patterns/post-commit-bookkeeping-rollback-unit.md）。
+                try:
+                    with cr.savepoint():
+                        if trade_no and not tx.provider_reference:
+                            tx.provider_reference = trade_no
+                        if tx.state not in ('done', 'cancel'):
+                            tx._set_done()
+                except Exception:
+                    _logger.exception(
+                        '[TOPUP_REPLAY] wallet credited but the transaction '
+                        'state could not be reconciled topup=%s tx=%s',
+                        topup.id, tx.id,
+                    )
+                incidents.browse(
+                    incident_id)._transition_resolved_current_cursor(
+                        None, self._REPLAY_RESOLUTION_NOTE, SUPERUSER_ID)
+                cr.commit()
+                _logger.info(
+                    '[TOPUP_REPLAY] credited topup=%s tx=%s', topup.id, tx.id)
+                return 'credited', None
+        except psycopg2.errors.LockNotAvailable:
+            # 別人正在處理這一筆。本 cursor 已 aborted ⇒ 痕跡只能換一條連線寫。
+            self.env['woow.billing.incident'].sudo() \
+                ._mark_replay_skip_independent(
+                    external_ref, 'lock_not_available')
+            return 'skipped', 'lock_not_available'
+        except psycopg2.errors.SerializationFailure:
+            self.env['woow.billing.incident'].sudo() \
+                ._mark_replay_skip_independent(
+                    external_ref, 'credit_failed', bump_attempts=True)
+            return 'failed', 'serialization_failure'
+        except Exception:
+            _logger.exception(
+                '[TOPUP_REPLAY] replay failed for one intent; the batch '
+                'continues (the row keeps its own cursor, so nothing else '
+                'is rolled back)',
+            )
+            self.env['woow.billing.incident'].sudo() \
+                ._mark_replay_skip_independent(
+                    external_ref, 'credit_failed', bump_attempts=True)
+            return 'failed', None
+
+    @api.model
+    def _has_unreplayed_callback_evidence(self, topup):
+        """這筆 topup 的 inbox 裡有沒有「還沒補完的成功 callback」（#864 PR-G）。
+
+        🔴 **必須走獨立 cursor**：incident 是別的連線用獨立交易 commit 的，
+        cron tick 的 REPEATABLE READ 快照凍結在起跑那一刻 ⇒ 用 ``self.env``
+        的 ORM search 會讀不到「這一輪剛被 replay 或 callback 寫進去的列」
+        （同 ``_double_charge_cooldown_active`` 的教訓）。
+
+        🔴 **讀不到就當作「有」**：這道閘的下游動作是 hard-cancel——不可逆、
+        而且會把「ECPay 說收了錢」的那一筆標成使用者放棄。查不出來時**晚一輪
+        再說**是免費的，猜錯方向不是。
+        """
+        reference = topup.payment_transaction_id.reference
+        if not reference:
+            return False
+        try:
+            with self.env.registry.cursor() as cr:
+                cr.execute('SET LOCAL lock_timeout = %s',
+                           (self._REPLAY_LOCK_TIMEOUT,))
+                cr.execute(
+                    "SELECT 1 FROM woow_billing_incident "
+                    "WHERE external_ref = %s AND kind = 'intent' "
+                    "AND rtn_code = '1' AND trade_no IS NOT NULL "
+                    "AND state <> 'resolved' LIMIT 1",
+                    (reference,),
+                )
+                return cr.fetchone() is not None
+        except Exception:
+            _logger.error(
+                '[TOPUP] callback evidence gate unavailable for topup=%s; '
+                'deferring hard-cancel one round rather than cancelling a '
+                'top-up that may already be paid', topup.id,
+            )
+            return True
+
     @api.model
     def _cron_cleanup_pending_topups(self):
         """Reconcile pending topups whose callback was missed / dropped.
 
         - tx already done → credit (catch-up).
         - tx error/cancel → mark topup failed.
-        - tx still pending > HARD_CANCEL_MIN → cancel tx + mark topup cancelled.
+        - tx still pending > HARD_CANCEL_MIN → cancel tx + mark topup cancelled,
+          **除非** inbox 裡有還沒補完的成功 callback（#864 PR-G）。
+
+        🔴 #864 PR-G：``_cron_replay_callback_inbox()`` 掛在這裡、**在迴圈之前**
+        呼叫，理由有二：
+        (1) ⛔ 不新增 cron，也 ⛔ 不改 ``src/data/cron_topup.xml``——那個
+            ``<record>`` 在 ``noupdate="1"`` 區塊裡，既有安裝升版時對它的更新會
+            被靜默 skip ⇒ 「測試（fresh install）全綠、stg 舊 DB 上 replay 根本
+            不會跑」。從程式碼呼叫繞開整個 sticky 問題。
+        (2) **replay 必須先於 hard-cancel**：反過來的話 cleanup 會先把這一筆標
+            成 ``cancelled``，replay 隨後只能轉人工，自癒就失效了。
+
+        🔴 兩段是**各自的 failure domain**（裁決②）：replay 段拋例外 ⛔ 不得讓
+        cleanup 段死掉；反向也成立——replay 是在自己的獨立 cursor 上 commit 的，
+        cleanup 段之後在 cron cursor 上出事，結構上回捲不掉它。
         """
+        try:
+            self._cron_replay_callback_inbox()
+        except Exception:
+            _logger.exception(
+                '[TOPUP] cron replay segment failed; the cleanup segment '
+                'below still runs (separate failure domains)',
+            )
         now = fields.Datetime.now()
         grace = now - timedelta(minutes=self._CLEANUP_GRACE_MIN)
         hard = now - timedelta(minutes=self._CLEANUP_HARD_CANCEL_MIN)
@@ -514,6 +893,15 @@ class WalletTopup(models.Model):
                 )
                 topup._on_payment_failed(tx)
             elif tx.state in ('draft', 'pending') and topup.create_date < hard:
+                # #864 PR-G：ECPay 已經回報成功、只是還沒補完的那一筆 ⛔ 不能
+                # 被 hard-cancel（那正是本病的末期形態：看起來像使用者放棄）。
+                if self._has_unreplayed_callback_evidence(topup):
+                    _logger.info(
+                        "[TOPUP] cron cleanup hard-cancel skipped "
+                        "(successful callback pending replay) topup=%s tx=%s",
+                        topup.id, tx.id,
+                    )
+                    continue
                 _logger.info(
                     "[TOPUP] cron cleanup hard-cancel stuck 3DS topup=%s tx=%s tx_state=%s",
                     topup.id, tx.id, tx.state,
