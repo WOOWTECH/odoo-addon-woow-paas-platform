@@ -586,16 +586,32 @@ class TestManualRetryButtonVisibility864(TransactionCase):
             '本次修改只放寬「顯示於哪些狀態」，⛔ 不得放寬 groups')
 
 
-class TestRetryGuardOnRealInvoiceNumber864(TransactionCase):
-    """必修 3：已確認開立的發票 ⛔ 不得再次對外開票（雙面測）。
+class TestRetryGuardOnConfirmedIssuance864(TransactionCase):
+    """Medium A：**已確認開立**的發票 ⛔ 不得重送；**失敗殘值**必須仍可 retry。
 
-    PR-C 把 `manual` 納入 retry 的 UI 入口，等於擴大了「這顆鈕可以按到哪些
-    move」的可達面，所以既有的重送洞必須在同一刀收口。
+    🔴 判別式是**合取**，不是單一條件（裁決逐字：「真 ECPay invoice number 存在
+    **且**狀態代表成功開立」）：
 
-    🔴 判準必須是 **ECPay 回傳的發票號碼非空**（``ecpay_invoice_id.name``），
-    ⛔ 不是「``ecpay_invoice_id`` 這個 m2o 有沒有值」：開票失敗可能留下一筆
-    號碼為空的殘值 ``uniform.invoice``，用「有沒有 id」當判準會把**合法的
-    retry 一起擋死**——那是把一個重送洞換成一個永久卡死。
+        `ecpay_invoice_id.name` 非空  AND  `uniform_state == 'invoiced'`
+
+    依據是上游 `ecpay_invoice_tw/models/account_invoice.py` 的
+    `create_ecpay_invoice()`：`uniform.invoice` 記錄在**呼叫 ECPay 之前**就先建好
+    （只帶 `company_id`，`name` 為 NULL）；`RtnCode != 1` 直接 raise，此時
+    `self.ecpay_invoice_id` **還沒被指派**。只有成功才依序寫
+    `record.name = InvoiceNo` → `self.ecpay_invoice_id = record` →
+    `self.uniform_state = 'invoiced'`。
+    ⇒ 三者同時成立才代表「這張真的開出去了」。
+
+    ⛔ **不可只判 `ecpay_invoice_id` 非空**：那會把失敗殘值一起擋死，
+    等於用一個永久卡死換掉一個重送洞。
+    ⛔ **也不可只判 `name` 非空**：那會連 `invalid`（已作廢）／`Discounted`
+    （已折讓）這些「號碼還在、但已不是成功開立狀態」的 move 一起擋掉。
+    ⚠ 放行它們是安全的：上游 `create_ecpay_invoice()` 自己還有一道
+    **disjunction** 守衛（`uniform_state == 'invoiced' or ecpay_invoice_id`），
+    位於本守衛下游且 `_forced_ecpay_issue()` 繞不過去。
+
+    守衛放在所有 issue state 判斷**之前**，所以 base 的 `failed`／`error`
+    兩格同洞一併覆蓋。
     """
 
     def setUp(self):
@@ -604,7 +620,7 @@ class TestRetryGuardOnRealInvoiceNumber864(TransactionCase):
         self.partner = self.env['res.partner'].create({'name': 'RetryGuard864'})
 
     def _posted_invoice(self, issue_state, ecpay_number=None,
-                        attach_residual=False):
+                        uniform_state=None, attach_uniform=False):
         move = self.env['account.move'].sudo().create({
             'move_type': 'out_invoice',
             'partner_id': self.partner.id,
@@ -616,53 +632,91 @@ class TestRetryGuardOnRealInvoiceNumber864(TransactionCase):
             })],
         })
         move.action_post()
-        move.write({'woow_invoice_issue_state': issue_state})
-        if ecpay_number is not None or attach_residual:
-            move.write({
-                'ecpay_invoice_id': self.env['uniform.invoice'].sudo().create({
-                    'name': ecpay_number or '',
-                    'company_id': self.env.company.id,
-                }).id,
-            })
+        vals = {'woow_invoice_issue_state': issue_state}
+        if ecpay_number is not None or attach_uniform:
+            vals['ecpay_invoice_id'] = self.env['uniform.invoice'].sudo().create({
+                'name': ecpay_number or '',
+                'company_id': self.env.company.id,
+            }).id
+        if uniform_state is not None:
+            vals['uniform_state'] = uniform_state
+        move.write(vals)
         return move
 
-    def test_move_with_real_invoice_number_is_refused_and_calls_nothing(self):
-        """真發票號碼存在 ⇒ 拒絕，且**外呼 0 次**。"""
-        move = self._posted_invoice('manual', ecpay_number='AB12345678')
+    def _retry(self, move):
+        """回傳 (是否拋 UserError, _issue_one 被呼叫幾次)。"""
         with patch.object(
                 type(self.Cron), '_issue_one', autospec=True) as issue_one:
-            with self.assertRaises(UserError):
+            try:
                 move.action_woow_retry_ecpay_invoice()
-        self.assertFalse(
-            issue_one.called,
-            '已經開出來的發票不得再次觸發對外開票——外呼必須是 0 次')
+                raised = False
+            except UserError:
+                raised = True
+        return raised, issue_one.call_count
 
-    def test_failed_move_with_residual_id_and_blank_number_can_still_retry(self):
-        """🔴 反面：殘值 id ＋ 號碼為空的 retryable failure **仍然要能 retry**。
+    # ---- 已確認開立：擋 ----------------------------------------------
 
-        這條是「守衛有沒有寫過頭」的判別式：如果判準寫成「``ecpay_invoice_id``
-        有值就擋」，這條會紅——而那種寫法會讓所有留下殘值的失敗永久卡死。
+    def test_confirmed_issuance_is_refused_and_calls_nothing(self):
+        """號碼非空 ＋ uniform_state='invoiced' ⇒ 拒絕，且**外呼 0 次**。"""
+        move = self._posted_invoice(
+            'manual', ecpay_number='AB12345678', uniform_state='invoiced')
+        raised, calls = self._retry(move)
+        self.assertTrue(raised, '已確認開立的發票必須拒絕重送')
+        self.assertEqual(calls, 0, '拒絕時外呼必須是 0 次')
+
+    def test_guard_also_covers_base_failed_and_error(self):
+        """裁決要求：guard 順帶覆蓋 base 的 failed／error 同洞。"""
+        for issue_state in ('failed', 'error'):
+            with self.subTest(issue_state=issue_state):
+                move = self._posted_invoice(
+                    issue_state, ecpay_number='AB8765432',
+                    uniform_state='invoiced')
+                raised, calls = self._retry(move)
+                self.assertTrue(raised)
+                self.assertEqual(calls, 0)
+
+    # ---- 失敗殘值 / 非成功狀態：放行 ----------------------------------
+
+    def test_residual_uniform_record_without_number_can_still_retry(self):
+        """🔴 掛著殘值 `uniform.invoice`、號碼為空 ⇒ **仍可 retry**。
+
+        這條是「守衛有沒有寫過頭」的判別式：若判準寫成「`ecpay_invoice_id`
+        有值就擋」，這條會紅。
         """
-        move = self._posted_invoice('failed', attach_residual=True)
-        self.assertTrue(
-            move.ecpay_invoice_id,
-            '前提檢查：必須真的掛著殘值 id，否則本測試沒有測到那個分支')
-        self.assertFalse(
-            move.ecpay_invoice_id.name,
-            '前提檢查：殘值的號碼必須是空的')
-        with patch.object(
-                type(self.Cron), '_issue_one', autospec=True) as issue_one:
-            self.assertTrue(move.action_woow_retry_ecpay_invoice())
-        self.assertTrue(
-            issue_one.called, '合法的 retry 不得被守衛擋死')
+        move = self._posted_invoice('failed', attach_uniform=True)
+        self.assertTrue(move.ecpay_invoice_id, '前提：真的掛著殘值 id')
+        self.assertFalse(move.ecpay_invoice_id.name, '前提：號碼是空的')
+        raised, calls = self._retry(move)
+        self.assertFalse(raised, '失敗殘值不得被守衛擋死')
+        self.assertEqual(calls, 1)
 
-    def test_manual_move_without_any_number_still_retries(self):
-        """回歸守線：乾淨的 manual（連殘值都沒有）不受本守衛影響。"""
+    def test_number_present_but_state_not_invoiced_can_retry(self):
+        """🔴 **合取的判別式**：有號碼、但 `uniform_state` 不是 `invoiced`。
+
+        `invalid`（已作廢）／`Discounted`（已折讓）都帶著真號碼，卻不是
+        「成功開立」狀態。若守衛只判 `name` 非空，這條會紅。
+        放行是安全的——上游 `create_ecpay_invoice()` 自己的 disjunction 守衛
+        （`uniform_state == 'invoiced' or ecpay_invoice_id`）仍在下游擋著。
+        """
+        for uniform_state in ('invalid', 'Discounted'):
+            with self.subTest(uniform_state=uniform_state):
+                move = self._posted_invoice(
+                    'manual', ecpay_number='AB1111111',
+                    uniform_state=uniform_state)
+                self.assertTrue(move.ecpay_invoice_id.name, '前提：號碼非空')
+                raised, calls = self._retry(move)
+                self.assertFalse(
+                    raised,
+                    '%s 不是成功開立狀態，⛔ 守衛不得只憑號碼非空就擋'
+                    % uniform_state)
+                self.assertEqual(calls, 1)
+
+    def test_clean_manual_move_still_retries(self):
+        """回歸守線：連 uniform.invoice 都沒掛的乾淨 manual 不受影響。"""
         move = self._posted_invoice('manual')
-        with patch.object(
-                type(self.Cron), '_issue_one', autospec=True) as issue_one:
-            self.assertTrue(move.action_woow_retry_ecpay_invoice())
-        self.assertTrue(issue_one.called)
+        raised, calls = self._retry(move)
+        self.assertFalse(raised)
+        self.assertEqual(calls, 1)
 
 
 class TestCronIgnoresDraftMoves864(TransactionCase):

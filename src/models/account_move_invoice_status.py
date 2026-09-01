@@ -86,6 +86,31 @@ class AccountMoveInvoiceStatus(models.Model):
         """
         return 'pending' if company[:1].auto_invoice == 'automatic' else 'manual'
 
+    def _woow_ecpay_issuance_confirmed(self):
+        """這張 move 是否**已確認開立**（⇒ 重送會產生重複的真實發票）。
+
+        🔴 判別式是**合取**，⛔ 不是任一單一條件：
+
+            ``ecpay_invoice_id.name`` 非空  **且**  ``uniform_state == 'invoiced'``
+
+        依據（讀 vendored ``ecpay_invoice_tw/models/account_invoice.py`` 的
+        ``create_ecpay_invoice()``）：``uniform.invoice`` 記錄在**呼叫 ECPay 之前**
+        就先建好（只帶 ``company_id``、``name`` 為 NULL）；``RtnCode != 1`` 直接
+        raise，**此時 ``self.ecpay_invoice_id`` 還沒被指派**。只有成功才依序寫
+        ``record.name = InvoiceNo`` → ``self.ecpay_invoice_id = record`` →
+        ``self.uniform_state = 'invoiced'``。⇒ 三者同時成立才代表真的開出去了。
+
+        ⛔ **不可只判 ``ecpay_invoice_id`` 非空**：那會把失敗殘值一起擋死——
+        用一個永久卡死換掉一個重送洞。
+        ⛔ **也不可只判 ``name`` 非空**：``invalid``（已作廢）／``Discounted``
+        （已折讓）都帶著真號碼卻不是成功開立狀態，那樣會連它們一起擋掉。
+        ⚠ 放行那些是安全的：上游 ``create_ecpay_invoice()`` 自己還有一道
+        **disjunction** 守衛（``uniform_state == 'invoiced' or ecpay_invoice_id``），
+        位於本守衛下游，且 ``_forced_ecpay_issue()`` 繞不過它。
+        """
+        self.ensure_one()
+        return bool(self.ecpay_invoice_id.name) and self.uniform_state == 'invoiced'
+
     def action_woow_retry_ecpay_invoice(self):
         """Manual fallback for `account.group_account_manager` users.
 
@@ -99,20 +124,20 @@ class AccountMoveInvoiceStatus(models.Model):
         （這正是 #864 要修的病：連手動補救鈕都按不下去）。
 
         🔴 但 ``manual`` 進了 UI 入口，也就擴大了「這顆鈕按得到哪些 move」的
-        可達面，所以同時收口重送洞：**已經拿到真 ECPay 發票號碼的 move，⛔ 一律
-        拒絕再次對外開票**。判準是 ``ecpay_invoice_id.name`` 非空——⛔ 不可只看
-        ``ecpay_invoice_id`` 這個 m2o 有沒有值：開票失敗會留下號碼為空的殘值
-        ``uniform.invoice``，用「有沒有 id」當判準會把**合法的 retry 一起擋死**，
-        等於把一個重送洞換成一個永久卡死。守衛順帶也保護既有的
-        ``failed``／``error`` 兩格。
+        可達面，所以同時收口重送洞：**已確認開立的 move ⛔ 一律拒絕再次對外開票**。
+        判別式見 ``_woow_ecpay_issuance_confirmed()``（號碼非空 **且**
+        ``uniform_state == 'invoiced'`` 的合取），守衛順帶覆蓋既有的
+        ``failed``／``error`` 兩格同洞。
         """
         self.ensure_one()
-        # 先於 issue state 判斷：狀態欄是我們自己寫的，發票號碼是 ECPay 給的。
-        # `issued` 這格在 demo 模式下也會被寫出來，只有號碼有鑑別力（§0.6#3）。
-        if self.ecpay_invoice_id.name:
+        # 先於所有 issue state 判斷：`woow_invoice_issue_state` 是我們自己寫的欄位
+        # （`issued` 在 demo 模式下照樣會被寫出來，§0.6#3），而發票號碼與
+        # `uniform_state` 是上游依 ECPay 回應寫的。故 base 的 failed／error 兩格
+        # 同洞也由這一道一併覆蓋。
+        if self._woow_ecpay_issuance_confirmed():
             raise UserError(_(
-                "This invoice already has an ECPay invoice number (%s). "
-                "Re-issuing would create a duplicate e-invoice."
+                "This invoice already has a confirmed ECPay invoice number "
+                "(%s). Re-issuing would create a duplicate e-invoice."
             ) % self.ecpay_invoice_id.name)
         if self.woow_invoice_issue_state == 'issued':
             raise UserError(_("This invoice has already been issued."))
