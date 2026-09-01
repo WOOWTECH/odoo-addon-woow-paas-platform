@@ -2,6 +2,7 @@
 
 import ast
 import base64
+import hashlib
 import json
 import re
 import threading
@@ -4361,6 +4362,111 @@ class TestBillingIncidentRpcWriteGuard864(HttpCase):
         )
         self.assertIsInstance(control_message_id, int)
 
+    def test_attachment_rpc_create_preauthorizes_batch_before_provenance(self):
+        """Every create value must pass core delegation before provenance."""
+        marker = uuid.uuid4().hex
+        portal_user, portal_login = self._new_user(
+            'billing-rpc-attachment-portal-%s' % marker,
+            self.env.ref('base.group_portal'),
+            self.company_a,
+        )
+        hidden_project = self.env['project.project'].with_user(
+            self.manager_a).create({
+                'name': 'Attachment hidden create target %s' % marker,
+            })
+        missing_project_id = hidden_project.id + 10 ** 7
+        cases = {
+            'hidden': {
+                'res_model': 'project.project',
+                'res_id': hidden_project.id,
+            },
+            'missing': {
+                'res_model': 'project.project',
+                'res_id': missing_project_id,
+            },
+            'protected': {
+                'res_model': 'woow.billing.incident',
+                'res_id': self.incident_a.id,
+            },
+            'ordinary': {
+                'res_model': 'res.partner',
+                'res_id': self.regular_user.partner_id.id,
+            },
+        }
+        AttachmentClass = type(self.env['ir.attachment'])
+        original_provenance = (
+            AttachmentClass._lock_and_refresh_billing_attachment_provenance)
+        provenance_calls = []
+
+        def provenance_spy(records, *args, **kwargs):
+            provenance_calls.append((records.env.uid, args, kwargs))
+            return original_provenance(records, *args, **kwargs)
+
+        self.authenticate(portal_login, portal_login)
+        responses = {}
+        created_names = []
+        with patch.object(
+                AttachmentClass,
+                '_lock_and_refresh_billing_attachment_provenance',
+                provenance_spy):
+            for label, target in cases.items():
+                name = 'rpc-create-preauth-%s-%s.bin' % (label, marker)
+                created_names.append(name)
+                responses[label] = self._call_kw(
+                    'ir.attachment', 'create', [{
+                        'name': name,
+                        'datas': base64.b64encode(
+                            ('create preauth %s' % label).encode()).decode(),
+                        **target,
+                    }],
+                )
+
+            batch_names = [
+                'rpc-create-preauth-batch-ordinary-%s.bin' % marker,
+                'rpc-create-preauth-batch-protected-%s.bin' % marker,
+            ]
+            created_names.extend(batch_names)
+            responses['batch'] = self._call_kw(
+                'ir.attachment', 'create', [[
+                    {
+                        'name': batch_names[0],
+                        'datas': base64.b64encode(
+                            b'batch ordinary first').decode(),
+                        **cases['ordinary'],
+                    },
+                    {
+                        'name': batch_names[1],
+                        'datas': base64.b64encode(
+                            b'batch protected second').decode(),
+                        **cases['protected'],
+                    },
+                ]],
+            )
+
+        signatures = []
+        for label, response in responses.items():
+            self._assert_access_error(
+                response,
+                '%s unauthorized create must be the uniform module denial'
+                % label,
+                contains='Attachments are not allowed',
+            )
+            signatures.append(self._rpc_error_signature(response))
+        self.assertEqual(
+            len(set(signatures)), 1,
+            'hidden/missing/protected/ordinary/batch create denials must '
+            'have one AccessError shape',
+        )
+        self.assertEqual(
+            provenance_calls, [],
+            'no unauthorized create value may enter fresh SQL/advisory '
+            'provenance before the complete batch passes core delegation',
+        )
+        self.assertFalse(self.env['ir.attachment'].sudo().search([
+            ('name', 'in', created_names),
+        ]))
+        self.assertTrue(portal_user)
+
     def test_manager_rpc_activity_m2m_writer_rejects_protected_links(self):
         """Commands 4/6 must not turn an ordinary activity into a carrier."""
         self.assertTrue(
@@ -4526,6 +4632,38 @@ class TestBillingIncidentRpcWriteGuard864(HttpCase):
                         '拒絕前後全部 relation 必須逐筆不變',
                     )
 
+        command_zero_name = (
+            'rpc-relation-command-zero-ordinary-%s.bin' % uuid.uuid4().hex)
+        self.assertTrue(self._assert_ok(
+            self._call_kw(
+                'mail.activity', 'write',
+                [[ordinary.id], {
+                    'attachment_ids': [(0, 0, {
+                        'name': command_zero_name,
+                        'datas': base64.b64encode(
+                            b'ordinary command zero').decode(),
+                        'res_model': 'project.project',
+                        'res_id': project.id,
+                    })],
+                }],
+            ),
+            'ordinary attachment 的 command 0 core 正對照必須成功',
+        ))
+        command_zero_attachment = self.env['ir.attachment'].sudo().search([
+            ('name', '=', command_zero_name),
+        ], limit=1)
+        self.assertTrue(command_zero_attachment)
+        with self.env.registry.cursor() as verify_cr:
+            verify_cr.execute(
+                'SELECT activity_id FROM activity_attachment_rel '
+                'WHERE attachment_id = %s ORDER BY activity_id',
+                (command_zero_attachment.id,),
+            )
+            self.assertEqual(
+                [activity_id for activity_id, in verify_cr.fetchall()],
+                [ordinary.id],
+            )
+
         self.assertTrue(self._assert_ok(
             self._call_kw(
                 'mail.activity', 'write',
@@ -4558,6 +4696,234 @@ class TestBillingIncidentRpcWriteGuard864(HttpCase):
                 (dedicated.id, protected.id),
                 (ordinary.id, ordinary_attachment.id),
             ])
+
+    def test_ordinary_activity_with_protected_m2m_evidence_is_a_carrier(self):
+        """Assigned-to-me must not expose a legacy protected M2M carrier."""
+        marker = uuid.uuid4().hex
+        todo_type = self.env.ref('mail.mail_activity_data_todo')
+        ordinary = self.env['mail.activity'].sudo().create({
+            'res_model_id': self.env['ir.model']._get('res.partner').id,
+            'res_id': self.regular_user.partner_id.id,
+            'activity_type_id': todo_type.id,
+            'user_id': self.regular_user.id,
+            'summary': 'Protected ordinary carrier %s' % marker,
+            'date_deadline': fields.Date.today(),
+        })
+        evidence = self.env['ir.attachment'].sudo().create({
+            'name': 'protected-ordinary-carrier-%s.bin' % marker,
+            'datas': base64.b64encode(b'legacy conflict evidence'),
+            'res_model': 'res.partner',
+            'res_id': self.regular_user.partner_id.id,
+        })
+        self.env.cr.execute(
+            'UPDATE ir_attachment SET res_model = %s, res_id = %s '
+            'WHERE id = %s',
+            ('woow.billing.incident', self.incident_a.id, evidence.id),
+        )
+        self.env.cr.execute(
+            'INSERT INTO activity_attachment_rel '
+            '(activity_id, attachment_id) VALUES (%s, %s)',
+            (ordinary.id, evidence.id),
+        )
+        self.env['mail.activity'].invalidate_model()
+        evidence.invalidate_recordset(['res_model', 'res_id'])
+        self.env.cr.flush()
+
+        self.authenticate(self.regular_login, self.regular_login)
+        visible = self._assert_ok(
+            self._call_kw(
+                'mail.activity', 'search_read',
+                [[('id', '=', ordinary.id)], ['id']],
+            ),
+            'nonmanager carrier search must be a non-oracle success',
+        )
+        self.assertEqual(visible, [])
+        for method, args in (
+                ('read', [[ordinary.id], ['summary']]),
+                ('web_read', [[ordinary.id], {'summary': {}}]),
+                ('action_open_document', [[ordinary.id]])):
+            with self.subTest(method=method):
+                self._assert_access_error(
+                    self._call_kw('mail.activity', method, args),
+                    'assigned nonmanager must not use %s on a protected '
+                    'ordinary carrier' % method,
+                )
+
+        self.authenticate(self.manager_b_login, self.manager_b_login)
+        manager_visible = self._assert_ok(
+            self._call_kw(
+                'mail.activity', 'search_read',
+                [[('id', '=', ordinary.id)], ['id', 'summary']],
+            ),
+            'current manager must find the ordinary protected carrier',
+        )
+        self.assertEqual([row['id'] for row in manager_visible], [ordinary.id])
+        manager_read = self._assert_ok(
+            self._call_kw(
+                'mail.activity', 'read',
+                [[ordinary.id], ['summary']],
+            ),
+            'current manager must read the ordinary protected carrier',
+        )
+        self.assertEqual(manager_read[0]['id'], ordinary.id)
+        manager_web_read = self._assert_ok(
+            self._call_kw(
+                'mail.activity', 'web_read',
+                [[ordinary.id], {'summary': {}}],
+            ),
+            'current manager web_read must remain available',
+        )
+        self.assertEqual(manager_web_read[0]['id'], ordinary.id)
+        action = self._assert_ok(
+            self._call_kw(
+                'mail.activity', 'action_open_document', [[ordinary.id]],
+            ),
+            'current manager direct action must remain available',
+        )
+        self.assertEqual(action['res_model'], 'res.partner')
+        self.assertEqual(action['res_id'], self.regular_user.partner_id.id)
+
+    def test_attachment_search_pushes_all_protected_carriers_before_limit(self):
+        """Name/checksum/limit/order searches must have no evidence oracle."""
+        marker = uuid.uuid4().hex
+        self.assertTrue(
+            self.env['woow.billing.incident']
+            ._ensure_review_activities_current_cursor(self.incident_a.id))
+        review_type = self.env.ref(
+            'woow_paas_platform.mail_activity_type_billing_incident_review')
+        dedicated = self.env['mail.activity'].sudo().search([
+            ('res_model', '=', 'woow.billing.incident'),
+            ('res_id', '=', self.incident_a.id),
+            ('activity_type_id', '=', review_type.id),
+            ('user_id', '=', self.manager_a.id),
+            ('active', '=', True),
+        ], limit=1)
+        self.assertTrue(dedicated)
+        protected_message = self.incident_a.with_user(
+            self.manager_a).message_post_with_source(
+                'mail.message_activity_done',
+                author_id=self.manager_a.partner_id.id,
+                render_values={
+                    'activity': dedicated.with_user(self.manager_a),
+                    'feedback': 'safe search predicate fixture',
+                    'display_assignee': False,
+                },
+                mail_activity_type_id=dedicated.activity_type_id.id,
+                subtype_xmlid='mail.mt_activities',
+            )
+        payloads = sorted(
+            (b'search oracle checksum candidate low',
+             b'search oracle checksum candidate high'),
+            key=lambda payload: hashlib.sha1(payload).hexdigest(),
+        )
+        names = {
+            'direct': 'attachment-search-%s-00-direct.bin' % marker,
+            'activity': 'attachment-search-%s-10-activity.bin' % marker,
+            'message': 'attachment-search-%s-20-message.bin' % marker,
+            'm2m': 'attachment-search-%s-30-m2m.bin' % marker,
+            'ordinary': 'attachment-search-%s-99-known.bin' % marker,
+        }
+        attachments = self.env['ir.attachment'].sudo().create([{
+            'name': names[label],
+            'datas': base64.b64encode(
+                payloads[0] if label == 'direct' else (
+                    payloads[1] if label == 'ordinary'
+                    else ('protected %s' % label).encode())),
+            'res_model': 'res.partner',
+            'res_id': self.regular_user.partner_id.id,
+            'public': True,
+        } for label in names])
+        by_label = dict(zip(names, attachments))
+        self.env.cr.execute(
+            'UPDATE ir_attachment SET res_model = %s, res_id = %s '
+            'WHERE id = %s',
+            ('woow.billing.incident', self.incident_a.id,
+             by_label['direct'].id),
+        )
+        self.env.cr.execute(
+            'UPDATE ir_attachment SET res_model = %s, res_id = %s '
+            'WHERE id = %s',
+            ('mail.activity', dedicated.id, by_label['activity'].id),
+        )
+        self.env.cr.execute(
+            'UPDATE ir_attachment SET res_model = %s, res_id = %s '
+            'WHERE id = %s',
+            ('mail.message', protected_message.id, by_label['message'].id),
+        )
+        self.env.cr.execute(
+            'INSERT INTO activity_attachment_rel '
+            '(activity_id, attachment_id) VALUES (%s, %s)',
+            (dedicated.id, by_label['m2m'].id),
+        )
+        attachments.invalidate_recordset([
+            'res_model', 'res_id', 'checksum', 'name', 'public',
+        ])
+        self.env.cr.flush()
+        direct = by_label['direct']
+        ordinary = by_label['ordinary']
+        self.assertLess(direct.name, ordinary.name)
+        self.assertLess(direct.checksum, ordinary.checksum)
+        all_ids = attachments.ids
+        broad_domain = [('id', 'in', all_ids)]
+
+        self.authenticate(self.regular_login, self.regular_login)
+        for field_name, value in (
+                ('name', direct.name), ('checksum', direct.checksum)):
+            with self.subTest(exact_oracle=field_name):
+                rows = self._assert_ok(
+                    self._call_kw(
+                        'ir.attachment', 'search_read',
+                        [[(field_name, '=', value)], ['id']],
+                    ),
+                    'protected exact %s search remains non-oracle'
+                    % field_name,
+                )
+                self.assertEqual(rows, [])
+        for order in ('name asc', 'checksum asc'):
+            with self.subTest(limit_order=order):
+                rows = self._assert_ok(
+                    self._call_kw(
+                        'ir.attachment', 'search_read',
+                        [[('id', 'in', [direct.id, ordinary.id])],
+                         ['id', 'name', 'checksum']],
+                        {'order': order, 'limit': 1},
+                    ),
+                    'protected rows must be excluded before limit/order',
+                )
+                self.assertEqual(
+                    [row['id'] for row in rows], [ordinary.id])
+        broad_rows = self._assert_ok(
+            self._call_kw(
+                'ir.attachment', 'search_read',
+                [broad_domain, ['id', 'name']],
+                {'order': 'name asc'},
+            ),
+            'broad nonmanager search must remain a non-oracle success',
+        )
+        self.assertEqual([row['id'] for row in broad_rows], [ordinary.id])
+
+        self.authenticate(self.manager_b_login, self.manager_b_login)
+        manager_limited = self._assert_ok(
+            self._call_kw(
+                'ir.attachment', 'search_read',
+                [[('id', 'in', [direct.id, ordinary.id])], ['id']],
+                {'order': 'name asc', 'limit': 1},
+            ),
+            'current manager limit/order is the positive control',
+        )
+        self.assertEqual([row['id'] for row in manager_limited], [direct.id])
+        manager_broad = self._assert_ok(
+            self._call_kw(
+                'ir.attachment', 'search_read',
+                [broad_domain, ['id']],
+                {'order': 'name asc'},
+            ),
+            'current manager broad search must see every evidence carrier',
+        )
+        self.assertEqual(
+            [row['id'] for row in manager_broad],
+            [by_label[label].id for label in names],
+        )
 
     def test_m2m_evidence_read_download_requires_current_manager(self):
         """Public/token/direct-partner anchors cannot bypass M2M provenance."""

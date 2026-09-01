@@ -2251,6 +2251,195 @@ class TestBillingIncidentRealTransactions864(BaseCase):
                 'same-incident positive must re-anchor and clear every edge',
             )
 
+    def test_mixed_action_done_rolls_back_after_generic_side_effects(self):
+        """A caught fault after reattach must restore the complete mixed graph."""
+        incident_id = self._call_log(self._snapshot(
+            'mixed-action-done-post-generic-fault', state='needs_human'))
+        marker = '%s-mixed-post-generic' % self.marker
+        with self.registry.cursor() as setup_cr:
+            env = api.Environment(setup_cr, odoo.SUPERUSER_ID, {})
+            review_type = env.ref(
+                'woow_paas_platform.'
+                'mail_activity_type_billing_incident_review')
+            dedicated = env['mail.activity'].sudo().search([
+                ('res_model', '=', _MODEL),
+                ('res_id', '=', incident_id),
+                ('activity_type_id', '=', review_type.id),
+                ('user_id', '=', self.manager_user_id),
+                ('active', '=', True),
+            ], limit=1)
+            self.assertTrue(dedicated)
+            generic = env['mail.activity'].sudo().create({
+                'res_model_id': env['ir.model']._get('res.partner').id,
+                'res_id': self.control_partner_id,
+                'activity_type_id': env.ref(
+                    'mail.mail_activity_data_todo').id,
+                'user_id': self.manager_user_id,
+                'summary': '%s-generic' % marker,
+                'date_deadline': fields.Date.today(),
+            })
+            evidence = env['ir.attachment'].sudo().create({
+                'name': '%s-dedicated-evidence.bin' % marker,
+                'datas': base64.b64encode(b'dedicated fault evidence'),
+                'res_model': 'res.partner',
+                'res_id': self.control_partner_id,
+                'public': True,
+            })
+            generic_attachment = env['ir.attachment'].sudo().create({
+                'name': '%s-generic-attachment.bin' % marker,
+                'datas': base64.b64encode(b'generic fault attachment'),
+                'res_model': 'mail.activity',
+                'res_id': generic.id,
+                'public': True,
+            })
+            setup_cr.execute(
+                'INSERT INTO activity_attachment_rel '
+                '(activity_id, attachment_id) VALUES (%s, %s)',
+                (dedicated.id, evidence.id),
+            )
+            activity_ids = [generic.id, dedicated.id]
+            attachment_ids = [evidence.id, generic_attachment.id]
+            setup_cr.execute(
+                'SELECT id, res_model, res_id, activity_type_id, user_id, '
+                'summary, active FROM mail_activity '
+                'WHERE id = ANY(%s) ORDER BY id',
+                (activity_ids,),
+            )
+            expected_activities = setup_cr.fetchall()
+            setup_cr.execute(
+                'SELECT id, model, res_id, body, mail_activity_type_id '
+                'FROM mail_message WHERE model = %s AND res_id = %s '
+                'ORDER BY id',
+                ('res.partner', self.control_partner_id),
+            )
+            expected_messages = setup_cr.fetchall()
+            setup_cr.execute(
+                'SELECT id, res_model, res_id, public, access_token, '
+                'checksum, store_fname, db_datas FROM ir_attachment '
+                'WHERE id = ANY(%s) ORDER BY id',
+                (attachment_ids,),
+            )
+            expected_attachments = setup_cr.fetchall()
+            setup_cr.execute(
+                'SELECT activity_id, attachment_id '
+                'FROM activity_attachment_rel '
+                'WHERE attachment_id = ANY(%s) '
+                'ORDER BY activity_id, attachment_id',
+                (attachment_ids,),
+            )
+            expected_relations = setup_cr.fetchall()
+            generic_id = generic.id
+            dedicated_id = dedicated.id
+            evidence_id = evidence.id
+            setup_cr.commit()
+
+        fault_observation = {}
+        with self.registry.cursor() as caller_cr:
+            env = api.Environment(caller_cr, self.manager_user_id, {})
+            ActivityClass = type(env['mail.activity'])
+            original_reattach = (
+                ActivityClass._reattach_dedicated_billing_evidence)
+
+            def reattach_then_fault(records, prepared=None):
+                result = original_reattach(records, prepared=prepared)
+                # Core generic completion dispatches through this module's
+                # unlink override too.  Let that first ordinary call finish;
+                # inject only in the later dedicated reattach phase.
+                if dedicated_id not in records.ids:
+                    return result
+                records.env['ir.attachment'].flush_model([
+                    'res_model', 'res_id',
+                ])
+                caller_cr.execute(
+                    'SELECT 1 FROM mail_activity WHERE id = %s',
+                    (generic_id,),
+                )
+                fault_observation['generic_deleted'] = not caller_cr.fetchone()
+                caller_cr.execute(
+                    'SELECT id FROM mail_message '
+                    'WHERE model = %s AND res_id = %s ORDER BY id',
+                    ('res.partner', self.control_partner_id),
+                )
+                fault_observation['messages_changed'] = (
+                    caller_cr.fetchall()
+                    != [(row[0],) for row in expected_messages]
+                )
+                caller_cr.execute(
+                    'SELECT res_model, res_id FROM ir_attachment '
+                    'WHERE id = %s',
+                    (evidence_id,),
+                )
+                evidence_target = caller_cr.fetchone()
+                fault_observation['evidence_target'] = evidence_target
+                fault_observation['evidence_reanchored'] = (
+                    evidence_target == (_MODEL, incident_id)
+                )
+                caller_cr.execute(
+                    'SELECT 1 FROM activity_attachment_rel '
+                    'WHERE attachment_id = %s',
+                    (evidence_id,),
+                )
+                fault_observation['relations_cleared'] = (
+                    not caller_cr.fetchone())
+                self.assertTrue(result)
+                raise AccessError('injected post-generic reattach fault')
+
+            with patch.object(
+                    ActivityClass,
+                    '_reattach_dedicated_billing_evidence',
+                    reattach_then_fault):
+                try:
+                    env['mail.activity'].browse([
+                        generic_id, dedicated_id,
+                    ])._action_done(
+                        feedback='safe post-generic fault feedback')
+                except AccessError as exc:
+                    denial = str(exc)
+                    caller_cr.commit()
+                else:
+                    self.fail('injected post-generic fault must escape')
+        self.assertIn('injected post-generic', denial)
+        self.assertEqual(fault_observation, {
+            'generic_deleted': True,
+            'messages_changed': True,
+            'evidence_target': (_MODEL, incident_id),
+            'evidence_reanchored': True,
+            'relations_cleared': True,
+        }, 'fault must run only after real generic and dedicated side effects')
+
+        # A third cursor proves catch+normal commit cannot preserve any side
+        # effect which ran before the injected fault.
+        with self.registry.cursor() as verify_cr:
+            verify_cr.execute(
+                'SELECT id, res_model, res_id, activity_type_id, user_id, '
+                'summary, active FROM mail_activity '
+                'WHERE id = ANY(%s) ORDER BY id',
+                (activity_ids,),
+            )
+            self.assertEqual(verify_cr.fetchall(), expected_activities)
+            verify_cr.execute(
+                'SELECT id, model, res_id, body, mail_activity_type_id '
+                'FROM mail_message WHERE model = %s AND res_id = %s '
+                'ORDER BY id',
+                ('res.partner', self.control_partner_id),
+            )
+            self.assertEqual(verify_cr.fetchall(), expected_messages)
+            verify_cr.execute(
+                'SELECT id, res_model, res_id, public, access_token, '
+                'checksum, store_fname, db_datas FROM ir_attachment '
+                'WHERE id = ANY(%s) ORDER BY id',
+                (attachment_ids,),
+            )
+            self.assertEqual(verify_cr.fetchall(), expected_attachments)
+            verify_cr.execute(
+                'SELECT activity_id, attachment_id '
+                'FROM activity_attachment_rel '
+                'WHERE attachment_id = ANY(%s) '
+                'ORDER BY activity_id, attachment_id',
+                (attachment_ids,),
+            )
+            self.assertEqual(verify_cr.fetchall(), expected_relations)
+
     def test_concurrent_m2m_link_and_parent_reanchor_leave_no_stale_edge(self):
         """A relation writer must wait for terminal re-anchor, then deny."""
         from odoo.addons.woow_paas_platform.models import billing_incident

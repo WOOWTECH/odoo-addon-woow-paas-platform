@@ -24,7 +24,7 @@ from psycopg2 import sql
 from odoo import SUPERUSER_ID, _, api, fields, models
 from odoo.exceptions import AccessError, UserError
 from odoo.osv import expression
-from odoo.tools import config, html2plaintext, single_email_re
+from odoo.tools import Query, SQL, config, html2plaintext, single_email_re
 from odoo.tools.translate import get_translation
 
 
@@ -2277,6 +2277,91 @@ class IrAttachment(models.Model):
         return committed_ids | read(self.env.cr)
 
     @api.model
+    def _billing_protected_attachment_query(self):
+        """Return an unpaginated SQL Query for every protected evidence row."""
+        review_type_id = self._billing_review_activity_type_id() or 0
+        alias = 'billing_protected_attachment'
+        query = Query(
+            self.env, alias, SQL.identifier(self._table))
+        attachment_id = SQL.identifier(alias, 'id')
+        res_model = SQL.identifier(alias, 'res_model')
+        res_id = SQL.identifier(alias, 'res_id')
+        query.add_where(SQL(
+            """(
+                %s = %s
+                OR (
+                    %s = %s
+                    AND EXISTS (
+                        SELECT 1
+                        FROM mail_activity AS billing_direct_activity
+                        WHERE billing_direct_activity.id = %s
+                          AND (
+                            billing_direct_activity.res_model = %s
+                            OR billing_direct_activity.activity_type_id = %s
+                          )
+                    )
+                )
+                OR (
+                    %s = %s
+                    AND EXISTS (
+                        SELECT 1
+                        FROM mail_message AS billing_direct_message
+                        WHERE billing_direct_message.id = %s
+                          AND billing_direct_message.model = %s
+                    )
+                )
+                OR EXISTS (
+                    SELECT 1
+                    FROM activity_attachment_rel AS billing_m2m_relation
+                    JOIN mail_activity AS billing_m2m_activity
+                      ON billing_m2m_activity.id =
+                         billing_m2m_relation.activity_id
+                    WHERE billing_m2m_relation.attachment_id = %s
+                      AND (
+                        billing_m2m_activity.res_model = %s
+                        OR billing_m2m_activity.activity_type_id = %s
+                      )
+                )
+            )""",
+            res_model, 'woow.billing.incident',
+            res_model, 'mail.activity', res_id,
+            'woow.billing.incident', review_type_id,
+            res_model, 'mail.message', res_id,
+            'woow.billing.incident',
+            attachment_id,
+            'woow.billing.incident', review_type_id,
+        ))
+        return query
+
+    @api.model
+    def _billing_protected_activity_carrier_query(self):
+        """Return direct carriers plus ordinary activities carrying evidence."""
+        review_type_id = self._billing_review_activity_type_id() or 0
+        alias = 'billing_protected_activity'
+        query = Query(
+            self.env, alias, SQL.identifier('mail_activity'))
+        activity_id = SQL.identifier(alias, 'id')
+        query.add_where(SQL(
+            """(
+                %s = %s
+                OR %s = %s
+                OR EXISTS (
+                    SELECT 1
+                    FROM activity_attachment_rel AS billing_carrier_relation
+                    WHERE billing_carrier_relation.activity_id = %s
+                      AND billing_carrier_relation.attachment_id IN %s
+                )
+            )""",
+            SQL.identifier(alias, 'res_model'),
+            'woow.billing.incident',
+            SQL.identifier(alias, 'activity_type_id'),
+            review_type_id,
+            activity_id,
+            self._billing_protected_attachment_query().subselect(),
+        ))
+        return query
+
+    @api.model
     def _has_billing_attachment_read_authority(self):
         return bool(
             self.env.su
@@ -2298,25 +2383,18 @@ class IrAttachment(models.Model):
 
     @api.model
     def _search(self, domain, offset=0, limit=None, order=None):
-        """Hide legacy M2M evidence from every non-current manager."""
-        query = super()._search(domain, offset, limit, order)
-        if self._has_billing_attachment_read_authority():
-            return query
-        ids = [
-            attachment_id
-            for attachment_id, in self.env.execute_query(query.select(
-                self._field_to_sql(self._table, 'id'),
-            ))
-        ]
-        if not ids:
-            return query
-        snapshot = self._read_gate_billing_attachment_provenance(ids)
-        allowed_ids = [
-            attachment_id
-            for attachment_id in ids
-            if attachment_id not in snapshot['protected_attachment_ids']
-        ]
-        return self.browse(allowed_ids)._as_query(order)
+        """Push every protected provenance leg below pagination in SQL."""
+        if not self._has_billing_attachment_read_authority():
+            # A Query-valued domain becomes one SQL ``NOT IN (subquery)`` in
+            # BaseModel._search.  It therefore reaches core ir.attachment's
+            # first SELECT before its offset/limit/order and Python delegation;
+            # no candidate attachment ids are materialized by this override.
+            domain = expression.AND([
+                domain,
+                [('id', 'not in',
+                  self._billing_protected_attachment_query())],
+            ])
+        return super()._search(domain, offset, limit, order)
 
     def validate_access(self, access_token):
         """Apply provenance after core token/public validation, never before."""
@@ -2363,9 +2441,47 @@ class IrAttachment(models.Model):
             'Attachments are not allowed on billing incident activities.'
         ))
 
+    @api.model
+    def _preauthorize_billing_attachment_create(self, values_list):
+        """Delegate the complete batch to core before privileged provenance."""
+        # Core's own create() groups these pairs after content normalization,
+        # but check('create', values=...) only consumes these two fields.  Run
+        # the equivalent delegation for every incoming value first, including
+        # effective context defaults, and normalize every denial before any
+        # sudo/raw/fresh-SQL/advisory provenance seam can run.
+        for values in values_list:
+            # First run core's caller-level attachment authorization without a
+            # target.  This must precede even billing-id shape validation, so
+            # an unauthorized caller cannot use bool/float/etc. as an oracle.
+            try:
+                self.browse().check('create', values={})
+            except AccessError:
+                self._raise_billing_attachment_guard()
+            check_values = {
+                'res_model': values.get(
+                    'res_model',
+                    self.env.context.get('default_res_model')),
+                'res_id': values.get(
+                    'res_id', self.env.context.get('default_res_id')),
+            }
+            if check_values['res_model'] in self._BILLING_TARGET_CARRIERS:
+                # Core browses raw ids and PostgreSQL rejects e.g. integer =
+                # boolean before it can delegate.  Canonicalize only after the
+                # caller-level core gate, then delegate the effective target.
+                check_values['res_id'] = (
+                    self._canonical_billing_target_res_id(
+                        check_values['res_model'], check_values['res_id'])
+                )
+            try:
+                self.browse().check('create', values=check_values)
+            except AccessError:
+                self._raise_billing_attachment_guard()
+        return True
+
     @api.model_create_multi
     def create(self, values_list):
-        """Use the shared fresh direct+M2M ownership protocol twice."""
+        """Preauthorize the batch, then run fresh ownership protocol twice."""
+        self._preauthorize_billing_attachment_create(values_list)
         prospective_targets = self._create_billing_direct_targets(values_list)
         preflight = self._lock_and_refresh_billing_attachment_provenance(
             extra_direct_targets=prospective_targets)
@@ -2467,20 +2583,45 @@ class MailActivity(models.Model):
     @api.model
     def _has_billing_activity_access_authority(self):
         return bool(
-            self.env.user.has_group('account.group_account_manager')
+            self.env.su
+            or (self.env.user.active
+                and self.env.user.has_group('account.group_account_manager'))
             or _is_activity_scheduler(self.env)
             or _is_activity_terminal(self.env)
             or _is_odoo_module_uninstall(self.env)
         )
 
     def _billing_incident_activities(self):
-        """Return every activity stored on the ledger, regardless of type."""
-        incident_ids = [
-            activity.id
-            for activity in self.sudo()
-            if activity.res_model == 'woow.billing.incident'
+        """Return every direct or M2M protected activity carrier."""
+        if not self:
+            return self.browse()
+        Attachment = self.env['ir.attachment']
+        query = Attachment._billing_protected_activity_carrier_query()
+        query.add_where(SQL(
+            '%s = ANY(%s)',
+            SQL.identifier(query.table, 'id'),
+            list(self.ids),
+        ))
+        protected_ids = [
+            activity_id for activity_id, in self.env.execute_query(
+                query.select(SQL.identifier(query.table, 'id')))
         ]
-        return self.browse(incident_ids)
+        # ``self.new()`` is used by the M2M create preflight and has no SQL id.
+        # Preserve the direct-target fail-closed check for that virtual row.
+        review_type = self.env.ref(
+            'woow_paas_platform.'
+            'mail_activity_type_billing_incident_review',
+            raise_if_not_found=False,
+        )
+        virtual = self.filtered(
+            lambda activity: (
+                not isinstance(activity.id, int)
+                and (activity.res_model == 'woow.billing.incident'
+                     or (review_type
+                         and activity.activity_type_id == review_type))
+            )
+        )
+        return self.browse(protected_ids) | virtual
 
     def _require_billing_activity_access_authority(self, operation):
         incident_activities = self._billing_incident_activities()
@@ -2501,11 +2642,12 @@ class MailActivity(models.Model):
 
     @api.model
     def _search(self, domain, offset=0, limit=None, order=None):
-        """Assigned-to-me never bypasses current finance-role membership."""
+        """Assigned-to-me never exposes direct or M2M protected carriers."""
         if not self._has_billing_activity_access_authority():
             domain = expression.AND([
                 domain,
-                [('res_model', '!=', 'woow.billing.incident')],
+                [('id', 'not in', self.env['ir.attachment']
+                  ._billing_protected_activity_carrier_query())],
             ])
         return super()._search(domain, offset, limit, order)
 
