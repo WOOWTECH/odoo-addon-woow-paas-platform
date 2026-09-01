@@ -666,7 +666,9 @@ class WalletTopup(models.Model):
         1. 對 topup 列 ``FOR UPDATE NOWAIT`` 取序列化點；
         2. **拿到鎖之後才重讀**狀態與事實（⛔ 不用鎖前那次讀的值）；
         3. 逐狀態分流，每一個「決定不補」的分支都寫確切 ``skip_reason``；
-        4. 入帳只走唯一 choke point ``self._on_payment_done(tx)``；
+        4. 入帳只走唯一 choke point ``topup._on_payment_done(tx)``——``topup``
+           必須是**這條 per-record cursor** 上的 recordset（見該行註解：用外層
+           cron 那條 cursor 會等自己的鎖、自我死鎖）；
         5. 標記 incident ``resolved`` **在同一個交易內**（⛔ 不另開 cursor，
            否則會出現「補了但沒標」或「標了但沒補」的裂縫）。
 
