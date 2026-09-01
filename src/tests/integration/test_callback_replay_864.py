@@ -281,6 +281,244 @@ class TestCallbackEvidenceUpsert864(BaseCase):
 
 
 @tagged('post_install', '-at_install', '-standard', 'callback_replay_864')
+class TestIntentToChargedNotCreditedPromotion864(BaseCase):
+    """🔴 跨 PR 交互：intent 與 charged_not_credited 撞同一個 external_ref。
+
+    `UNIQUE(external_ref)` ＋ `_log()` 的 kind 在 INSERT 當下定死 ⇒ 一個 MTN
+    只能有一列、而且 kind 改不了。PR-G 的預登記與 PR-E 的 CHARGED_NOT_CREDITED
+    用的**是同一個值**（`tx.reference` ＝ MTN）⇒ 若不處理，預登記會先佔住 key，
+    PR-E 那筆 `_log` 撞 kind collision 被丟棄 ⇒
+    `sh_subscription_fix._double_charge_cooldown_active` 查的
+    `kind='charged_not_credited'` 永遠查不到 ⇒ **PR-E 要擋的重複扣款回來了**。
+
+    裁決 Q3＝B：原地升級 kind（`intent → charged_not_credited`），單一 statement
+    原子完成，⛔ 無反向、⛔ 無其他來源 kind。
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.registry = Registry(get_db_name())
+        self.marker = 'G864C%s' % uuid.uuid4().hex[:9].upper()
+        self.addCleanup(self._purge)
+
+    def _purge(self):
+        try:
+            with self.registry.cursor() as cr:
+                cr.execute(
+                    'DELETE FROM %s WHERE external_ref LIKE %%s'
+                    % _INCIDENT_TABLE, (self.marker + '%',))
+                env = api.Environment(cr, odoo.SUPERUSER_ID, {})
+                env['res.partner'].sudo().search(
+                    [('name', 'like', self.marker)]).unlink()
+                cr.commit()
+        except Exception:
+            _logger.exception(
+                '#864 PR-G promotion fixture cleanup failed (marker=%s)',
+                self.marker,
+            )
+
+    def _ref(self, suffix):
+        return '%s-%s' % (self.marker, suffix)
+
+    def _call(self, method, *args, **kwargs):
+        with self.registry.cursor() as cr:
+            env = api.Environment(cr, odoo.SUPERUSER_ID, {})
+            return getattr(env[_INCIDENT_MODEL], method)(*args, **kwargs)
+
+    def _row(self, ref):
+        with self.registry.cursor() as cr:
+            cr.execute(
+                'SELECT id, kind, state, partner_ref, rtn_code, trade_no, '
+                'failure_code, occurrences, last_seen_at '
+                'FROM %s WHERE external_ref = %%s' % _INCIDENT_TABLE, (ref,))
+            row = cr.fetchone()
+            return row and dict(zip(
+                ('id', 'kind', 'state', 'partner_ref', 'rtn_code', 'trade_no',
+                 'failure_code', 'occurrences', 'last_seen_at'), row))
+
+    def _intent(self, ref, partner_ref=4242):
+        return {
+            'external_ref': ref, 'kind': 'intent',
+            'partner_ref': partner_ref, 'amount': 500.0,
+            'source_model': 'woow.wallet.topup', 'source_ref': 909,
+            'detail': '付款意圖預登記（測試 fixture）。',
+        }
+
+    def _cni(self, ref, partner_ref=4242):
+        return {
+            'external_ref': ref, 'kind': 'charged_not_credited',
+            'partner_ref': partner_ref, 'amount': 500.0,
+            'failure_code': 'wallet_credit_failed',
+            'source_model': 'woow.wallet.topup', 'source_ref': 909,
+            'detail': 'ECPay 已接受扣款但入帳失敗（測試 fixture）。',
+        }
+
+    # --- (1) 原地升級 kind ------------------------------------------------ #
+
+    def test_intent_is_promoted_to_charged_not_credited_in_place(self):
+        ref = self._ref('01')
+        intent_id = self._call('_log', self._intent(ref))
+        self.assertTrue(intent_id)
+
+        promoted = self._call('_log_charged_not_credited', self._cni(ref))
+
+        self.assertEqual(
+            promoted, intent_id,
+            '同一筆錢＝同一列（UNIQUE(external_ref) 的前提）：⛔ 不另開一列',
+        )
+        row = self._row(ref)
+        self.assertEqual(
+            row['kind'], 'charged_not_credited',
+            '🔴 沒有這一步，PR-E 的 incident 會被 kind collision 丟掉，'
+            '重複扣款冷卻閘就永遠查不到東西',
+        )
+        self.assertEqual(row['failure_code'], 'wallet_credit_failed')
+        self.assertEqual(row['occurrences'], 2)
+
+    def test_charged_not_credited_inserts_directly_when_no_intent_exists(self):
+        ref = self._ref('02')
+        self.assertIsNone(self._row(ref), '前置：這個 key 必須不存在')
+
+        incident_id = self._call('_log_charged_not_credited', self._cni(ref))
+
+        self.assertTrue(incident_id)
+        row = self._row(ref)
+        self.assertEqual(row['kind'], 'charged_not_credited')
+        self.assertEqual(row['state'], 'open')
+        self.assertEqual(row['occurrences'], 1)
+
+    # --- (2) 只准 intent → CNI 這一個方向 --------------------------------- #
+
+    def test_promotion_refuses_a_row_of_any_other_kind(self):
+        ref = self._ref('03')
+        self.assertTrue(self._call('_log_callback_evidence', {
+            'external_ref': ref, 'kind': 'callback_tx_missing',
+            'rtn_code': '1', 'trade_no': '%sTN' % self.marker,
+            'detail': 'ECPay callback 事實（測試 fixture）。',
+        }))
+
+        result = self._call('_log_charged_not_credited', self._cni(ref))
+
+        self.assertIs(
+            result, False,
+            '⛔ 只准 intent → charged_not_credited 這一個方向；'
+            '其他來源 kind 一律拒收（fail-soft，但必須出聲）',
+        )
+        self.assertEqual(self._row(ref)['kind'], 'callback_tx_missing')
+
+    def test_promotion_refuses_a_resolved_row(self):
+        ref = self._ref('04')
+        self._call('_log', self._intent(ref))
+        with self.registry.cursor() as cr:
+            cr.execute(
+                'UPDATE %s SET state = %%s, resolved_at = %%s '
+                'WHERE external_ref = %%s' % _INCIDENT_TABLE,
+                ('resolved', fields.Datetime.now(), ref))
+            cr.commit()
+
+        result = self._call('_log_charged_not_credited', self._cni(ref))
+
+        self.assertIs(result, False, '已結案的列 ⛔ 不得被重開成 CNI')
+        self.assertEqual(self._row(ref)['kind'], 'intent')
+
+    def test_promotion_refusal_is_logged_not_silent(self):
+        ref = self._ref('05')
+        self._call('_log_callback_evidence', {
+            'external_ref': ref, 'kind': 'callback_tx_missing',
+            'detail': 'ECPay callback 事實（測試 fixture）。',
+        })
+
+        with self.assertLogs(
+                'odoo.addons.woow_paas_platform.models.billing_incident',
+                level=logging.ERROR) as logs:
+            self._call('_log_charged_not_credited', self._cni(ref))
+
+        self.assertTrue(
+            any('promotion' in line and 'refus' in line
+                for line in logs.output),
+            '拒收分支 fail-soft ⛔ 不代表可以靜默：'
+            '「錢已經扣了但記不下來」必須出聲 logs=%r' % (logs.output,),
+        )
+
+    # --- (3) 錨4：升級之後 callback 只補 facts，kind 不回改 ---------------- #
+
+    def test_callback_after_promotion_adds_facts_and_keeps_the_kind(self):
+        ref = self._ref('06')
+        self._call('_log', self._intent(ref))
+        self._call('_log_charged_not_credited', self._cni(ref))
+
+        evidence_id = self._call('_log_callback_evidence', {
+            'external_ref': ref, 'kind': 'callback_tx_missing',
+            'rtn_code': '1', 'trade_no': '%sTN' % self.marker,
+            'detail': 'ECPay callback 事實（測試 fixture）。',
+        })
+
+        self.assertTrue(evidence_id)
+        row = self._row(ref)
+        self.assertEqual(
+            row['kind'], 'charged_not_credited',
+            '陽性對照：晚到的 callback 只補事實，⛔ 不得把 kind 改回去',
+        )
+        self.assertEqual(row['rtn_code'], '1')
+        self.assertEqual(row['trade_no'], '%sTN' % self.marker)
+
+    # --- (4) 錨2：等價性＝**攔截行為**相等，不是「查得到列」 ---------------- #
+
+    def test_promoted_row_blocks_the_cooldown_exactly_like_a_fresh_insert(
+            self):
+        """升級出來的列，對 PR-E 冷卻閘的攔截行為必須等於直接 insert 的列。
+
+        ⛔ 不能只斷言「列查得到」——那把「欄位語意等價」換成了「有東西在」。
+        判別式是三個 partner 各自跑一次真的 `_double_charge_cooldown_active`：
+        升級來的擋、直接 insert 的擋、沒有 incident 的**不**擋。
+        """
+        with self.registry.cursor() as cr:
+            env = api.Environment(cr, odoo.SUPERUSER_ID, {})
+            promoted_partner = env['res.partner'].create(
+                {'name': '%s-promoted' % self.marker}).id
+            fresh_partner = env['res.partner'].create(
+                {'name': '%s-fresh' % self.marker}).id
+            control_partner = env['res.partner'].create(
+                {'name': '%s-control' % self.marker}).id
+            cr.commit()
+
+        promoted_ref, fresh_ref = self._ref('P1'), self._ref('F1')
+        self._call('_log', self._intent(promoted_ref, promoted_partner))
+        self.assertTrue(self._call(
+            '_log_charged_not_credited',
+            self._cni(promoted_ref, promoted_partner)))
+        self.assertTrue(self._call(
+            '_log_charged_not_credited', self._cni(fresh_ref, fresh_partner)))
+
+        def _blocked(partner_id):
+            with self.registry.cursor() as cr:
+                env = api.Environment(cr, odoo.SUPERUSER_ID, {})
+                partner = env['res.partner'].browse(partner_id)
+                return env['sh.subscription.subscription'] \
+                    ._double_charge_cooldown_active(partner)
+
+        self.assertIs(
+            _blocked(promoted_partner), True,
+            '🔴 升級來的列必須真的擋下重複扣款——這是本裁決的整個重點',
+        )
+        self.assertIs(
+            _blocked(fresh_partner), True,
+            '對照：直接 insert 的列（PR-E 原本的形狀）當然要擋',
+        )
+        self.assertIs(
+            _blocked(control_partner), False,
+            '陽性對照：沒有 incident 的 partner ⛔ 不可以被擋——'
+            '否則上面兩個 True 只是「這支 gate 恆真」',
+        )
+        promoted_row, fresh_row = self._row(promoted_ref), self._row(fresh_ref)
+        for field in ('kind', 'state'):
+            self.assertEqual(
+                promoted_row[field], fresh_row[field],
+                '冷卻閘讀的 %s 欄位語意必須等價' % field,
+            )
+
+
+@tagged('post_install', '-at_install', '-standard', 'callback_replay_864')
 class TestReplayOutcomeMarkers864(BaseCase):
     """replay 的「決定不入帳」痕跡：⛔ 不可裸 continue。
 

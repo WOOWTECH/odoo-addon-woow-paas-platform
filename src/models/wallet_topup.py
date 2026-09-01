@@ -429,25 +429,31 @@ class WalletTopup(models.Model):
         log critical，不外拋。
         """
         try:
-            incident_id = self.env['woow.billing.incident']._log({
-                'external_ref': tx.reference,
-                'kind': 'charged_not_credited',
-                'partner_ref': self.partner_id.id or None,
-                'payment_token_ref': token.id if token else None,
-                'amount': float(charge_amount),
-                'credits': self.credits,
-                'bonus': self.bonus,
-                'currency': currency.name if currency else None,
-                'trade_no': tx.reference,
-                'failure_code': TOPUP_WALLET_CREDIT_FAILED,
-                'source_model': self._name,
-                'source_ref': self.id,
-                'detail': (
-                    'ECPay 已接受扣款（tx.state=done）但入帳／記帳後續處理'
-                    '失敗；原始例外請查 woow.wallet.topup.failure_message '
-                    '與伺服器 log。'
-                ),
-            })
+            # #864 PR-G：⛔ 不能用泛用的 `_log`。PR-G 的預登記已經用**同一個**
+            # `tx.reference` 佔住那一列（`UNIQUE(external_ref)`），而 `_log` 的
+            # kind 在 INSERT 當下定死 ⇒ 走 `_log` 會撞 kind collision、事實被
+            # 丟棄，冷卻閘從此查不到東西。專用 API 做的是原地升級
+            # `intent → charged_not_credited`（單 statement、無 pre-read）。
+            incident_id = self.env[
+                'woow.billing.incident']._log_charged_not_credited({
+                    'external_ref': tx.reference,
+                    'kind': 'charged_not_credited',
+                    'partner_ref': self.partner_id.id or None,
+                    'payment_token_ref': token.id if token else None,
+                    'amount': float(charge_amount),
+                    'credits': self.credits,
+                    'bonus': self.bonus,
+                    'currency': currency.name if currency else None,
+                    'trade_no': tx.reference,
+                    'failure_code': TOPUP_WALLET_CREDIT_FAILED,
+                    'source_model': self._name,
+                    'source_ref': self.id,
+                    'detail': (
+                        'ECPay 已接受扣款（tx.state=done）但入帳／記帳後續處理'
+                        '失敗；原始例外請查 woow.wallet.topup.failure_message '
+                        '與伺服器 log。'
+                    ),
+                })
             _logger.info(
                 '[TOPUP_AUTO] charged_not_credited incident logged topup=%s '
                 'tx=%s incident_id=%s',

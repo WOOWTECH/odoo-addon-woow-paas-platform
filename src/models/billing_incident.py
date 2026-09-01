@@ -1129,12 +1129,57 @@ class BillingIncident(models.Model):
         return self._upsert_incident_snapshot(snapshot, match_kind=False)
 
     @api.model
-    def _upsert_incident_snapshot(self, snapshot, match_kind):
-        """Shared body of `_log` / `_log_callback_evidence`.
+    def _log_charged_not_credited(self, snapshot):
+        """Record "the card was charged but we failed to credit" (#864 PR-G).
 
-        ``match_kind`` is the only difference: it decides whether a row whose
-        ``kind`` differs from the snapshot is refused (``_log``) or updated in
-        place keeping its own kind (callback evidence).
+        This exists because two writers legitimately own the same key.  The
+        payment caller pre-registers ``kind='intent'`` on the raw
+        MerchantTradeNo *before* the irreversible call (PR-G), and the failure
+        path writes ``charged_not_credited`` on the **same** reference (PR-E).
+        With ``UNIQUE(external_ref)`` there can only ever be one row per
+        MerchantTradeNo, and ``_log`` fixes ``kind`` at insert time — so
+        without this helper the pre-registration silently swallows PR-E's
+        incident, and
+        ``sh_subscription_fix._double_charge_cooldown_active`` (which selects
+        ``kind = 'charged_not_credited'``) stops finding anything: the
+        double-charge guard would be dead code again.
+
+        So the row carries a lifecycle: ``intent`` is what we knew before the
+        call, ``charged_not_credited`` is what we know after it.  One
+        statement performs both jobs atomically — insert when the key is free,
+        promote when an unresolved ``intent`` holds it — so there is no
+        read-then-write window for a concurrent writer to fall into.
+
+        ⛔ The promotion is one-way and single-sourced: only ``intent`` may
+        become ``charged_not_credited``.  Any other existing kind, or an
+        already resolved row, is refused; the refusal is fail-soft (the
+        caller's own ``failed`` marker is the backstop) but never silent —
+        money has already moved by the time we get here.
+        """
+        if not isinstance(snapshot, dict) or snapshot.get(
+                'kind') != 'charged_not_credited':
+            _logger.error(
+                '[BILLING_INCIDENT] _log_charged_not_credited rejected '
+                'field=kind category=wrong_helper'
+            )
+            return False
+        return self._upsert_incident_snapshot(
+            snapshot, match_kind=False, promote_from='intent')
+
+    @api.model
+    def _upsert_incident_snapshot(self, snapshot, match_kind,
+                                  promote_from=None):
+        """Shared body of `_log` / `_log_callback_evidence` /
+        `_log_charged_not_credited`.
+
+        Two knobs, both about what the ``ON CONFLICT`` branch may do:
+
+        * ``match_kind`` — refuse a row whose ``kind`` differs from the
+          snapshot (``_log``), or update it in place keeping its own kind
+          (callback evidence);
+        * ``promote_from`` — allow exactly one lifecycle transition: an
+          unresolved row of that kind has its ``kind`` rewritten to the
+          snapshot's.  Anything else is refused and logged.
         """
         try:
             values = self._validate_log_snapshot(snapshot)
@@ -1175,11 +1220,18 @@ class BillingIncident(models.Model):
                 sql.SQL('write_uid = EXCLUDED.write_uid'),
                 sql.SQL('write_date = EXCLUDED.write_date'),
             ])
-            kind_guard = (
-                sql.SQL('{table}.kind = EXCLUDED.kind AND ').format(
+            if promote_from is not None:
+                # 只准這一個來源 kind 被升級；其餘一律走下面的拒收分支。
+                kind_guard = sql.SQL('{table}.kind = {source} AND ').format(
+                    table=sql.Identifier(self._table),
+                    source=sql.Literal(promote_from),
+                )
+                updates.append(sql.SQL('kind = EXCLUDED.kind'))
+            elif match_kind:
+                kind_guard = sql.SQL('{table}.kind = EXCLUDED.kind AND ').format(
                     table=sql.Identifier(self._table))
-                if match_kind else sql.SQL('')
-            )
+            else:
+                kind_guard = sql.SQL('')
             query = sql.SQL(
                 'INSERT INTO {table} ({columns}) VALUES ({placeholders}) '
                 'ON CONFLICT (external_ref) DO UPDATE SET {updates} '
@@ -1227,6 +1279,20 @@ class BillingIncident(models.Model):
                         cr.commit()
                         return False
                     incident_id, existing_kind, existing_state = existing
+                    if promote_from is not None:
+                        # ⛔ fail-soft 不等於靜默：走到這裡代表錢已經扣了而
+                        # 這筆事實記不下來，維運要數得到它。
+                        _logger.critical(
+                            '[BILLING_INCIDENT] incident id=%s '
+                            'category=promotion_refused reason=%s; the charge '
+                            'already happened and this evidence is dropped',
+                            incident_id,
+                            'already_resolved'
+                            if existing_state == 'resolved'
+                            else 'unexpected_source_kind',
+                        )
+                        cr.commit()
+                        return False
                     if match_kind and existing_kind != values['kind']:
                         _logger.critical(
                             '[BILLING_INCIDENT] incident id=%s field=kind '

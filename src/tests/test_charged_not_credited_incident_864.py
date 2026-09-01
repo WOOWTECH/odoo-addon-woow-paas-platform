@@ -186,12 +186,19 @@ class TestChargedNotCreditedIncident864(TransactionCase):
         call_order = []
         IncidentModel = type(self.env['woow.billing.incident'])
         original_log = IncidentModel._log
+        original_cni = IncidentModel._log_charged_not_credited
 
         def _log_recorder(incident_self, snapshot):
-            # #864 PR-G 之後這條路徑上有兩筆 `_log`（外呼前的 intent 預登記、
-            # 以及 CHARGED_NOT_CREDITED），記下 kind 才分得出誰是誰。
+            # #864 PR-G 之後這條路徑上有兩筆 incident 寫入：外呼前的 intent
+            # 預登記走泛用 `_log`，CHARGED_NOT_CREDITED 走專用 API（它要做
+            # 的是原地升級 kind，泛用 `_log` 會撞 kind collision）。兩支都要
+            # 錄，順序語意才不會因為換 API 而漂。
             call_order.append('log:%s' % snapshot.get('kind'))
             return original_log(incident_self, snapshot)
+
+        def _cni_recorder(incident_self, snapshot):
+            call_order.append('log:%s' % snapshot.get('kind'))
+            return original_cni(incident_self, snapshot)
 
         TopupModel = type(topup)
         original_write = TopupModel.write
@@ -204,6 +211,8 @@ class TestChargedNotCreditedIncident864(TransactionCase):
         with self._patch_send_payment_request(side_effect=_set_done_then_raise), \
                 patch.object(IncidentModel, '_log', autospec=True,
                              side_effect=_log_recorder), \
+                patch.object(IncidentModel, '_log_charged_not_credited',
+                             autospec=True, side_effect=_cni_recorder), \
                 patch.object(TopupModel, 'write', autospec=True,
                              side_effect=_write_recorder):
             topup.charge_via_token(token)
@@ -231,20 +240,14 @@ class TestChargedNotCreditedIncident864(TransactionCase):
             raise RuntimeError('inner callback boom')
 
         IncidentModel = type(self.env['woow.billing.incident'])
-        original_log = IncidentModel._log
-
-        def _boom_only_for_the_failure_incident(incident_self, snapshot):
-            # #864 PR-G：同一條路徑上現在有兩筆 `_log`。本測要守的是
-            # 「**CHARGED_NOT_CREDITED 那一筆**炸掉不得連累 failed 標記」；
-            # 外呼前的 intent 預登記是另一回事（它失敗是 fail-closed、根本
-            # 不會走到這裡），⛔ 不可以一起炸，否則測到的是別的分支。
-            if snapshot.get('kind') == 'charged_not_credited':
-                raise RuntimeError('incident write boom')
-            return original_log(incident_self, snapshot)
-
+        # #864 PR-G：本測要守的是「**CHARGED_NOT_CREDITED 那一筆**寫入炸掉
+        # 不得連累 failed 保底標記」。外呼前的 intent 預登記是另一回事（它
+        # 失敗是 fail-closed，根本走不到這裡），⛔ 不可以一起炸，否則測到的
+        # 是別的分支。專用 API 讓這個切分變成天然的。
         with self._patch_send_payment_request(side_effect=_set_done_then_raise), \
-                patch.object(IncidentModel, '_log', autospec=True,
-                             side_effect=_boom_only_for_the_failure_incident):
+                patch.object(IncidentModel, '_log_charged_not_credited',
+                             autospec=True,
+                             side_effect=RuntimeError('incident write boom')):
             ok, msg = topup.charge_via_token(token)
 
         self.assertFalse(ok)
@@ -266,21 +269,23 @@ class TestChargedNotCreditedIncident864(TransactionCase):
         IncidentModel = type(self.env['woow.billing.incident'])
         with self._patch_send_payment_request(
                 side_effect=RuntimeError('network timeout')), \
-                patch.object(IncidentModel, '_log', autospec=True) as mock_log:
+                patch.object(IncidentModel, '_log', autospec=True) as mock_log, \
+                patch.object(IncidentModel, '_log_charged_not_credited',
+                             autospec=True) as mock_cni:
             ok, msg = topup.charge_via_token(token)
 
         self.assertFalse(ok)
         self.assertEqual(msg, 'sdk_error')
         self.assertEqual(topup.state, 'failed')
-        # #864 PR-G 之後 `charge_via_token` 在外呼**之前**會多寫一筆
-        # `kind='intent'` 的預登記 ⇒ 判準從「`_log` 完全沒被呼叫」收斂成
-        # 「沒有 `charged_not_credited` 那一筆」，那才是本對照組真正在守的東西。
+        # #864 PR-G 之後這條路徑上會多一筆外呼前的 `kind='intent'` 預登記。
+        # 判準寫成**雙向**（intent 有、CNI 無）而不是只有「CNI 無」——後者
+        # 在「整條 charge 路徑壞掉、什麼都沒發生」時一樣是綠的。
         self.assertEqual(
             [call.args[1].get('kind') for call in mock_log.call_args_list],
             ['intent'],
-            '真 SDK error ⛔ 不得落 charged_not_credited；'
-            '只該有 PR-G 的外呼前預登記那一筆',
+            '真 SDK error 路徑上仍必須有外呼前的預登記（證明走到那裡了）',
         )
+        mock_cni.assert_not_called()
 
     def test_tx_not_done_does_not_log_incident(self):
         """tx 結束在非 done 狀態（ECPay 明確拒絕）不是 CHARGED_NOT_CREDITED。"""
@@ -295,18 +300,20 @@ class TestChargedNotCreditedIncident864(TransactionCase):
 
         IncidentModel = type(self.env['woow.billing.incident'])
         with self._patch_send_payment_request(side_effect=_set_error), \
-                patch.object(IncidentModel, '_log', autospec=True) as mock_log:
+                patch.object(IncidentModel, '_log', autospec=True) as mock_log, \
+                patch.object(IncidentModel, '_log_charged_not_credited',
+                             autospec=True) as mock_cni:
             ok, msg = topup.charge_via_token(token)
 
         self.assertFalse(ok)
         self.assertEqual(topup.state, 'failed')
-        # 同上（#864 PR-G）：判準是「沒有 charged_not_credited 那一筆」。
+        # 同上（#864 PR-G）：雙向判準，intent 有、CNI 無。
         self.assertEqual(
             [call.args[1].get('kind') for call in mock_log.call_args_list],
             ['intent'],
-            'tx 結束在非 done ⛔ 不得落 charged_not_credited；'
-            '只該有 PR-G 的外呼前預登記那一筆',
+            'tx 結束在非 done 的路徑上仍必須有外呼前的預登記',
         )
+        mock_cni.assert_not_called()
 
     # --- PCI/sanitize：raw 例外文字不得流進 detail -------------------------- #
 
