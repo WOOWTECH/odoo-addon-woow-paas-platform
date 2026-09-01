@@ -3,6 +3,7 @@ import logging
 from datetime import timedelta
 
 from dateutil.relativedelta import relativedelta
+from psycopg2 import OperationalError
 
 from odoo import _, api, fields, models
 from odoo.exceptions import ValidationError
@@ -46,6 +47,12 @@ _BILLING_SILENCE_DEFAULT_DAYS = 3
 #: get_param，同步進 `src/hooks.py` 的 `_CONFIG_PARAMETERS`。
 _DOUBLE_CHARGE_COOLDOWN_PARAM = 'woow_paas_platform.double_charge_cooldown_hours'
 _DOUBLE_CHARGE_COOLDOWN_DEFAULT_HOURS = 24
+
+#: 冷卻閘獨立 cursor 那個 SELECT 的 lock_timeout——同 ``billing_incident.py``
+#: 的 ``BillingIncident._LOCK_TIMEOUT`` 值，避免這條純讀查詢在
+#: ``woow_billing_incident`` 上撞到並發 DDL／長交易的 ACCESS EXCLUSIVE 鎖時
+#: 無界卡住整個 cron tick。
+_DOUBLE_CHARGE_COOLDOWN_QUERY_LOCK_TIMEOUT = '1s'
 
 
 class ShSubscriptionFix(models.Model):
@@ -586,8 +593,14 @@ class ShSubscriptionFix(models.Model):
         2. 通知／cancel（低餘額信、逾 threshold 的 cancel + 一次性通知）——
            對照組是同檔 ``_send_invoice_pdf`` 既有的 fail-soft + warning 共識。
 
-        兩個失敗域各自吞例外、各自記 log，都不外拋——外層 savepoint 因此永遠
-        看不到這裡的例外，charge 結果不會被連坐。
+        兩個失敗域各自吞一般例外、各自記 log——外層 savepoint 因此看不到這裡
+        的一般例外，charge 結果不會被連坐。🔴 ``OperationalError``（並發／連線
+        類 DB 例外，如 ``SerializationFailure`` 40001）例外：兩個失敗域都必須
+        往外拋，不能被這裡的 fail-soft catch 吞掉——此刻 PG transaction 已經
+        aborted，吞掉只會讓後續 flush 再炸；往外拋才能讓 Odoo 的 `retrying()`
+        看見並用新 snapshot 整段重跑（見
+        ``docs/decisions/patterns/post-commit-bookkeeping-rollback-unit.md``
+        規則一）。
         """
         try:
             with self.env.cr.savepoint():
@@ -596,6 +609,8 @@ class ShSubscriptionFix(models.Model):
                         subscription.woow_consecutive_payment_failures + 1,
                     'woow_last_payment_failure_at': fields.Datetime.now(),
                 })
+        except OperationalError:
+            raise
         except Exception:
             _logger.exception(
                 "[SUB_FIX] failure-counter bookkeeping failed for "
@@ -633,6 +648,8 @@ class ShSubscriptionFix(models.Model):
                         "[SUB_FIX] auto_invoice failure recorded sub=%s failures=%s/%s",
                         subscription.id, new_count, threshold or '∞',
                     )
+        except OperationalError:
+            raise
         except Exception:
             _logger.exception(
                 "[SUB_FIX] dunning notify/cancel bookkeeping failed for "
@@ -1070,6 +1087,11 @@ class ShSubscriptionFix(models.Model):
         hours = self._double_charge_cooldown_hours()
         cutoff = fields.Datetime.now() - timedelta(hours=hours)
         with self.env.registry.cursor() as cr:
+            # 必須是這條獨立連線的第一個statement：見
+            # billing_incident.py._log() 同一手法的註解——lock_timeout 只對
+            # 本連線、本次呼叫生效，不設的話另一條連線可能無界卡住。
+            cr.execute('SET LOCAL lock_timeout = %s',
+                       (_DOUBLE_CHARGE_COOLDOWN_QUERY_LOCK_TIMEOUT,))
             cr.execute(
                 "SELECT 1 FROM woow_billing_incident "
                 "WHERE partner_ref = %s AND kind = 'charged_not_credited' "
