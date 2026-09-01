@@ -473,6 +473,8 @@ from . import test_billing_ssot_guard
 # 會因為換了值而恆綠，測試退化成沒有鑑別力的形狀。
 from . import test_sa_sync_ctx_forgery_536
 from . import test_billing_silence_alert
+# feat: #864 PR-D 帳務 incident 地基（純值 schema／獨立交易／後台人工關單）
+from . import test_billing_incident_864
 
 # fix: #528 停權中刪 access policy ⇒ CF 同步被 state gate 靜默略過 ⇒ CF
 # reusable policy 永久孤兒。RED 群集：B1／D1（gate 擋掉時 doomed id 沒有任何
@@ -552,6 +554,8 @@ from . import test_access_failopen_compensation_794
 # TransactionCase 的 cursor 不可 commit/rollback ⇒ 結構上造不出「整筆交易被
 # 丟棄」這個事件，而那正是 #794 的成因本身。
 from .integration import test_failopen_real_rollback_794  # noqa: F401
+# #864 PR-D：真 registry cursors／真 40001／rollback 存活與 lock timeout。
+from .integration import test_billing_incident_real_rollback_864  # noqa: F401
 
 # fix: #785 SH route 的 `_capture_access_teardown()` 用同一個 `None` 表達兩種
 # 語意（「沒東西要拆」vs「有東西但預測推不動」），消費端一律 `continue`、不計入

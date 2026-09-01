@@ -4,7 +4,7 @@
 > 分類的定義與寫新檔該放哪，見 [`README.md`](README.md)。
 > 本檔由 `scripts/audit/gen-docs-index.py` 產生，數字即時算出——**不要手改**。
 
-目前共 **664** 份文件（含 `archived/` 311 份）。
+目前共 **665** 份文件（含 `archived/` 311 份）。
 
 ## 我要照步驟做一件事
 

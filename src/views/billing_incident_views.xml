@@ -1,0 +1,154 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<odoo>
+  <record id="mail_activity_type_billing_incident_review"
+          model="mail.activity.type">
+    <field name="name">Billing incident review</field>
+    <field name="icon">fa-credit-card</field>
+    <field name="delay_count">0</field>
+    <field name="res_model">woow.billing.incident</field>
+    <!-- The ledger has no source/business relation.  mail.thread exists only
+         for standard mail.activity create/notify/action_done semantics, so
+         Odoo 18 can and must restrict this dedicated type to the ledger. -->
+  </record>
+
+  <record id="view_billing_incident_list" model="ir.ui.view">
+    <field name="name">woow.billing.incident.list</field>
+    <field name="model">woow.billing.incident</field>
+    <field name="arch" type="xml">
+      <list string="Billing Incidents" create="false" delete="false"
+            decoration-danger="state == 'needs_human'"
+            decoration-warning="state == 'orphan'"
+            decoration-muted="state == 'resolved'">
+        <field name="external_ref"/>
+        <field name="kind"/>
+        <field name="partner_email"/>
+        <field name="amount"/>
+        <field name="currency"/>
+        <field name="trade_no"/>
+        <field name="state" widget="badge"/>
+        <field name="assessment_reason"/>
+        <field name="last_seen_at"/>
+        <field name="occurrences"/>
+      </list>
+    </field>
+  </record>
+
+  <record id="view_billing_incident_form" model="ir.ui.view">
+    <field name="name">woow.billing.incident.form</field>
+    <field name="model">woow.billing.incident</field>
+    <field name="arch" type="xml">
+      <form string="Billing Incident" create="false" delete="false">
+        <header>
+          <button name="action_mark_manually_resolved"
+                  string="Mark as manually resolved"
+                  type="object"
+                  class="oe_highlight"
+                  groups="account.group_account_manager"
+                  invisible="state == 'resolved'"/>
+          <field name="state" widget="statusbar" readonly="1"
+                 statusbar_visible="open,orphan,needs_human,resolved"/>
+        </header>
+        <sheet>
+          <div class="alert alert-info" role="alert">
+            Billing incident access uses the Odoo role `account.group_account_manager` (not a Workspace role). It reads all incidents across all companies; review activities go to all current managers in that Odoo group; no company M2O/rule; base.group_system behavior is not narrowed.
+          </div>
+          <div class="alert alert-warning" role="alert">
+            The top-up record may have been rolled back; not finding it in Odoo is expected and is not a reason to close the incident.
+          </div>
+          <div class="alert alert-warning" role="alert">
+            Completing a review activity only dismisses and re-arms it; it does not resolve the incident or send a resolution notification. Use “Mark as manually resolved” to close the incident.
+          </div>
+          <group>
+            <group string="Evidence">
+              <field name="external_ref" readonly="1"/>
+              <field name="kind" readonly="1"/>
+              <field name="partner_ref" readonly="1"/>
+              <field name="partner_email" readonly="1"/>
+              <field name="payment_token_ref" readonly="1"/>
+              <field name="trade_no" readonly="1"/>
+              <field name="rtn_code" readonly="1"/>
+              <field name="failure_code" readonly="1"/>
+              <field name="assessment_reason" readonly="1"/>
+            </group>
+            <group string="Amounts and source">
+              <field name="amount" readonly="1"/>
+              <field name="credits" readonly="1"/>
+              <field name="bonus" readonly="1"/>
+              <field name="currency" readonly="1"/>
+              <field name="source_model" readonly="1"/>
+              <field name="source_ref" readonly="1"/>
+            </group>
+          </group>
+          <group>
+            <group string="Attempts">
+              <field name="skip_reason" readonly="1"/>
+              <field name="last_skipped_at" readonly="1"/>
+              <field name="skip_count" readonly="1"/>
+              <field name="attempts" readonly="1"/>
+              <field name="next_query_at" readonly="1"/>
+              <field name="query_attempts" readonly="1"/>
+            </group>
+            <group string="Timeline">
+              <field name="first_seen_at" readonly="1"/>
+              <field name="last_seen_at" readonly="1"/>
+              <field name="occurrences" readonly="1"/>
+              <field name="resolved_at" readonly="1"/>
+              <field name="resolved_by_ref" readonly="1"/>
+            </group>
+          </group>
+          <group string="Latest detail">
+            <field name="detail" readonly="1" nolabel="1"/>
+          </group>
+          <group string="Manual verification">
+            <field name="manual_check_result"
+                   readonly="state == 'resolved'"/>
+            <field name="resolution_note"
+                   readonly="state == 'resolved'"/>
+          </group>
+        </sheet>
+      </form>
+    </field>
+  </record>
+
+  <record id="view_billing_incident_search" model="ir.ui.view">
+    <field name="name">woow.billing.incident.search</field>
+    <field name="model">woow.billing.incident</field>
+    <field name="arch" type="xml">
+      <search string="Billing Incidents">
+        <field name="external_ref"/>
+        <field name="trade_no"/>
+        <field name="partner_email"/>
+        <field name="kind"/>
+        <filter name="unresolved" string="Unresolved"
+                domain="[('state', '!=', 'resolved')]"/>
+        <filter name="needs_human" string="Needs human review"
+                domain="[('state', '=', 'needs_human')]"/>
+        <filter name="orphan" string="Orphan"
+                domain="[('state', '=', 'orphan')]"/>
+        <filter name="resolved" string="Resolved"
+                domain="[('state', '=', 'resolved')]"/>
+        <group expand="0" string="Group By">
+          <filter name="group_kind" string="Kind" context="{'group_by': 'kind'}"/>
+          <filter name="group_state" string="State" context="{'group_by': 'state'}"/>
+        </group>
+      </search>
+    </field>
+  </record>
+
+  <record id="action_billing_incident" model="ir.actions.act_window">
+    <field name="name">Billing Incidents</field>
+    <field name="res_model">woow.billing.incident</field>
+    <field name="view_mode">list,form</field>
+    <field name="search_view_id" ref="view_billing_incident_search"/>
+    <field name="groups_id" eval="[(4, ref('account.group_account_manager'))]"/>
+    <field name="context">{'create': False, 'delete': False}</field>
+    <field name="domain">[]</field>
+  </record>
+
+  <menuitem id="menu_billing_incidents"
+            name="Billing Incidents"
+            parent="menu_woow_paas_platform_root"
+            action="action_billing_incident"
+            groups="account.group_account_manager"
+            sequence="60"/>
+</odoo>

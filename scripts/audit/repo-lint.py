@@ -4340,6 +4340,62 @@ INTERNAL_CTX_KEY_REGISTRY = {
                "`sa_internal_identity_write` 分成兩把：既有測試大量開著那一把，共用會"
                "讓本守衛在那些檔裡靜默失效（同型翻車見 smart_home_route 的註解）。",
     },
+    "woow_billing_incident_create": {
+        "status": "enforced",
+        "sentinel": "_BILLING_INCIDENT_CREATE",
+        "defined_in": "src/models/billing_incident.py",
+        "reader": "_is_billing_incident_create",
+        "issue": "#864",
+        "why": "billing incident generic ORM create（含 sudo）不得鑄造 ledger；只有 "
+               "test-mode private fixture seam 可取得 object-identity capability。",
+    },
+    "woow_billing_incident_resolution_transition": {
+        "status": "enforced",
+        "sentinel": "_BILLING_INCIDENT_RESOLUTION_TRANSITION",
+        "defined_in": "src/models/billing_incident.py",
+        "reader": "_is_resolution_transition",
+        "issue": "#864",
+        "why": "billing incident 的 unresolved→resolved 首次 audit transition；裸 "
+               "sudo／truthy RPC context 都不得改寫 evidence、重開或覆蓋 first audit。",
+    },
+    "woow_billing_incident_chatter": {
+        "status": "enforced",
+        "sentinel": "_BILLING_INCIDENT_CHATTER",
+        "defined_in": "src/models/billing_incident.py",
+        "reader": "_is_incident_chatter",
+        "issue": "#864／PR#986 comment 11112 security 收尾",
+        "why": "billing incident 與 mail.message 禁止自由 chatter；只有 feedback／附件先"
+               "驗證完成的 core activity-done source 可取得 object-identity capability，"
+               "讓受控 template HTML 經 super 建立完成訊息。",
+    },
+    "woow_billing_activity_scheduler": {
+        "status": "enforced",
+        "sentinel": "_BILLING_ACTIVITY_SCHEDULER",
+        "defined_in": "src/models/billing_incident.py",
+        "reader": "_is_activity_scheduler",
+        "issue": "#864",
+        "why": "billing incident／dedicated type 的 mail.activity create 只准模組內 "
+               "scheduler；manager、sudo 與 truthy RPC context 都不得鑄造 alert。",
+    },
+    "woow_billing_activity_terminal": {
+        "status": "enforced",
+        "sentinel": "_BILLING_ACTIVITY_TERMINAL",
+        "defined_in": "src/models/billing_incident.py",
+        "reader": "_is_activity_terminal",
+        "issue": "#864",
+        "why": "只把 core activity terminal flow 內部需要的 write 傳過 targeted "
+               "mail.activity guard；generic RPC write 不可取得。",
+    },
+    "woow_billing_roster_mutation": {
+        "status": "enforced",
+        "sentinel": "_BILLING_ROSTER_MUTATION",
+        "defined_in": "src/models/billing_incident.py",
+        "reader": "_is_roster_mutation",
+        "issue": "#864／PR#986 round 8",
+        "why": "res.users／res.groups 的 membership、active 與 implied-group hook "
+               "共用遞迴抑制；truthy RPC context 不得跳過同 transaction roster "
+               "convergence。",
+    },
     "woow_internal_provision": {
         "status": "enforced",
         "sentinel": "_INTERNAL_PROVISION",

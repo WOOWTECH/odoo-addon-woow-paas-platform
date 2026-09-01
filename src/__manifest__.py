@@ -34,6 +34,7 @@
         # fresh-install 路徑在 hooks.post_init_hook）
         "data/billing_ssot_guard.xml",
         "views/menu.xml",
+        "views/billing_incident_views.xml",
         "data/ai_assistant_data.xml",
         "data/mcp_server_cron.xml",
         "data/cloud_service_cron.xml",
