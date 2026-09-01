@@ -27,6 +27,20 @@ _Avoid_: 「使用者權限」「Odoo 角色」「群組角色」
 
 > ⚠ **`res_users.share` 不是第二個訊號。** 它是 stored computed，唯一依據就是 `groups_id` 裡有沒有 `base.group_user`（`odoo/addons/base/models/res_users.py:386` 欄位定義、`:531-534` 的 `_compute_share`）。**「`share=True`」與「非 `base.group_user`」是同一個事實的兩種讀法**，並列出現時不構成互相佐證——拿它們當兩把尺互證是零證據。
 
+**Workspace**：租戶的資源容器，同時是該租戶在 K8s／Cloudflare 上的**身分錨點**。它擁有的東西掛在自己身上（`cloud_service`、`smart_home`、`security_access`、`agent_session`、`project_project`／`project_task`，以及成員的 `workspace_access`），恰有一個 `owner_id`（`required`、`ondelete='restrict'`），狀態只有 `active` 與 `archived` 兩種。model 見 `src/models/workspace.py:24`。
+_Avoid_: 「專案」「租戶」（租戶是**人**，workspace 是**容器**，一個租戶可以有多個）「namespace」（那是 workspace 的投影，不是它本身）
+
+> 🔴 **它有兩個識別碼，只有一個是伺服器權威的，而它們決定的東西不同。**
+>
+> - `ws_hash`——8 hex、`readonly`、伺服器產生、**從不由租戶輸入推導**。**K8s namespace（`paas-ws-{ws_hash}`）與公開子網域（`paas-cs-/sa-/sm-{ws_hash}-...`）吃的是它**（#677；見 `src/controllers/paas.py:3386`、`:3388`、`src/controllers/ha_paas.py:273-274`）。
+> - `slug`——URL 友善識別碼，由 `name` 推導 ⇒ **租戶影響得到**。只用在 URL，**不參與任何基礎設施命名**。
+>
+> ⚠ 兩者都有 `UNIQUE` constraint，但角色不對稱：`unique_ws_hash` 是 #677 的**唯一**真正守線，不是 belt-and-braces。跨租戶碰撞檢查在 Python 層做不到——`_generate_slug()` 的 `search_count` 走呼叫者身分、受 `ir.rule` 限制，而攻擊者正好站在「看不見受害者」的位置上 ⇒ 那種檢查對他恆回 0、靜默放行。DB constraint 不看 `ir.rule` 也不怕 TOCTOU（見 `src/models/workspace.py:46-56` 的逐字說明）。**寫任何碰基礎設施命名的 code 前先確認你吃的是 `ws_hash` 不是 `slug`。**
+
+> ⚠ **Workspace 不是計費單位。** 訂閱掛在**每一個服務**上（`subscription_id` 來自 `src/models/subscription_lifecycle_mixin.py`，由 CloudService／SmartHome／SecurityAccess 三個 model 各自持有），workspace 本體沒有 `subscription_id` 欄位。所以「這個 workspace 的訂閱狀態」不是一個有定義的問題——要問的是「這個 workspace 裡的哪個服務」。
+
+> ⚠ **建立 workspace 有兩條路，而租戶只走得通其中一條**——見下方 **Tenant（租戶）** 的說明，那裡有 2026-09-01 的 prod 量測。
+
 **Workspace role**：租戶在**單一 workspace 內**的角色，一個 workspace 成員一筆，存於 `woow_paas_platform.workspace_access` 的 `role` 欄位（`required=True`、`default='user'`）。階層由低到高 `guest < user < admin < owner`（見 `src/models/workspace_access.py` 的 `ROLE_HIERARCHY`）。**同一個人在不同 workspace 可以是不同 role**；每個 workspace 恰有一個 `owner`（由 model 層 `_check_owner_count` 強制），轉移要走 `transfer_ownership`。
 _Avoid_: 「群組」「權限等級」「帳號角色」
 
