@@ -764,6 +764,14 @@ class TestCallbackReplayEngine864(BaseCase):
                            'WHERE id = %s', (method.id,))
             self.payment_method_id = method.id
             self.currency_id = env.ref('base.TWD').id
+            # `_on_payment_done` → `_ensure_topup_invoice` 會惰性建出一顆
+            # **共用**的 `WALLET_TOPUP` product 並 commit。本檔是真 commit 的
+            # integration test ⇒ 不清掉的話，同一個測試 DB 裡
+            # `TestEcpayInvoiceTopup.test_topup_product_is_lazy_created_once`
+            # 的「第一次 topup 之前不該存在」前置就不成立。只刪**本檔建的那顆**。
+            self.topup_product_preexisted = bool(
+                env['product.product'].sudo().search(
+                    [('default_code', '=', 'WALLET_TOPUP')], limit=1))
             cr.commit()
 
     def tearDown(self):
@@ -792,6 +800,9 @@ class TestCallbackReplayEngine864(BaseCase):
                     env['loyalty.card'].sudo().search(
                         [('partner_id', 'in', partners.ids)]).unlink()
                     partners.unlink()
+                if not self.topup_product_preexisted:
+                    env['product.product'].sudo().search(
+                        [('default_code', '=', 'WALLET_TOPUP')]).unlink()
                 cr.commit()
         except Exception:
             _logger.exception(
@@ -1099,6 +1110,39 @@ class TestCallbackReplayEngine864(BaseCase):
         with self.registry.cursor() as cr:
             env = api.Environment(cr, odoo.SUPERUSER_ID, {})
             return env['woow.wallet.topup']._CLEANUP_HARD_CANCEL_MIN
+
+    def test_aged_but_uncreditable_intent_leaves_the_scan_set_as_orphan(self):
+        """逾時仍補不了的預登記轉 orphan：收斂掃描集合，⛔ 不是結案。
+
+        沒有這一格的話，每一筆被拒的刷卡都會留下一列永遠 ``open`` 的 intent，
+        每輪被撈出來再跳過一次，最後把 batch 名額佔滿、把真正該補的餓死。
+        ⚠ 人工清單的判準是**年齡**（``state != 'resolved'``），所以這些列在
+        人工清單上一個都不會少——收斂的只有 cron 的掃描集合。
+        """
+        aged = fields.Datetime.now() - timedelta(
+            minutes=self.env_hard_cancel_min() + 5)
+        old_ref, old_partner, _old_topup = self._seed_case(
+            'X1', rtn_code='10100058', first_seen_at=aged)
+        fresh_ref, _fresh_partner, _fresh_topup = self._seed_case(
+            'X2', rtn_code='10100058')
+
+        self._run_replay()
+
+        old_row = self._incident(old_ref)
+        self.assertEqual(
+            (old_row['state'], old_row['skip_reason']),
+            ('orphan', 'callback_not_successful'),
+            '逾時的那一筆要離開掃描集合，但**確切 reason 必須留著**——'
+            '換成籠統的 aged 值就把診斷資訊丟了',
+        )
+        fresh_row = self._incident(fresh_ref)
+        self.assertEqual(
+            (fresh_row['state'], fresh_row['skip_reason']),
+            ('open', 'callback_not_successful'),
+            '陽性對照：還沒逾時的同型列仍留在掃描集合裡（可能還會等到'
+            '後續的成功 callback），⛔ 不可以一律轉 orphan',
+        )
+        self.assertEqual(self._points(old_partner), 0.0)
 
     def test_already_credited_topup_is_resolved_not_recredited(self):
         reference, partner_id, topup_id = self._seed_case(

@@ -107,6 +107,8 @@ class TestTopupIntentManualRoute864(HttpCase):
         return mock
 
     def _incident_rows(self, external_ref=None):
+        """⚠ 無 external_ref 時**必須**限定在本測試自己的 partner：這是共用
+        測試 DB，其他 case／其他檔留下的 intent 列會讓全域查詢永遠非空。"""
         if external_ref:
             self.env.cr.execute(
                 'SELECT external_ref, kind, state FROM %s '
@@ -114,8 +116,10 @@ class TestTopupIntentManualRoute864(HttpCase):
         else:
             self.env.cr.execute(
                 'SELECT external_ref, kind, state FROM %s '
-                "WHERE kind = 'intent' AND source_model = %%s"
-                % _INCIDENT_TABLE, ('woow.wallet.topup',))
+                "WHERE kind = 'intent' AND source_model = %%s "
+                'AND partner_ref = %%s'
+                % _INCIDENT_TABLE,
+                ('woow.wallet.topup', self.user.partner_id.id))
         return self.env.cr.fetchall()
 
     # --- (1) 預登記在外呼之前 --------------------------------------------- #

@@ -188,7 +188,9 @@ class TestChargedNotCreditedIncident864(TransactionCase):
         original_log = IncidentModel._log
 
         def _log_recorder(incident_self, snapshot):
-            call_order.append('log')
+            # #864 PR-G 之後這條路徑上有兩筆 `_log`（外呼前的 intent 預登記、
+            # 以及 CHARGED_NOT_CREDITED），記下 kind 才分得出誰是誰。
+            call_order.append('log:%s' % snapshot.get('kind'))
             return original_log(incident_self, snapshot)
 
         TopupModel = type(topup)
@@ -207,9 +209,11 @@ class TestChargedNotCreditedIncident864(TransactionCase):
             topup.charge_via_token(token)
 
         self.assertEqual(
-            call_order, ['log', 'write_failed'],
+            call_order,
+            ['log:intent', 'log:charged_not_credited', 'write_failed'],
             'incident 必須先於 failed 標記寫入——寫反的話 incident 失敗時 '
-            '這筆 charge 結果就沒有任何東西保底',
+            '這筆 charge 結果就沒有任何東西保底。'
+            '（#864 PR-G：最前面那筆 intent 是外呼前的預登記）',
         )
         self._external_refs_to_purge.append(topup.payment_transaction_id.reference)
 
@@ -227,9 +231,20 @@ class TestChargedNotCreditedIncident864(TransactionCase):
             raise RuntimeError('inner callback boom')
 
         IncidentModel = type(self.env['woow.billing.incident'])
+        original_log = IncidentModel._log
+
+        def _boom_only_for_the_failure_incident(incident_self, snapshot):
+            # #864 PR-G：同一條路徑上現在有兩筆 `_log`。本測要守的是
+            # 「**CHARGED_NOT_CREDITED 那一筆**炸掉不得連累 failed 標記」；
+            # 外呼前的 intent 預登記是另一回事（它失敗是 fail-closed、根本
+            # 不會走到這裡），⛔ 不可以一起炸，否則測到的是別的分支。
+            if snapshot.get('kind') == 'charged_not_credited':
+                raise RuntimeError('incident write boom')
+            return original_log(incident_self, snapshot)
+
         with self._patch_send_payment_request(side_effect=_set_done_then_raise), \
                 patch.object(IncidentModel, '_log', autospec=True,
-                             side_effect=RuntimeError('incident write boom')):
+                             side_effect=_boom_only_for_the_failure_incident):
             ok, msg = topup.charge_via_token(token)
 
         self.assertFalse(ok)
@@ -257,7 +272,15 @@ class TestChargedNotCreditedIncident864(TransactionCase):
         self.assertFalse(ok)
         self.assertEqual(msg, 'sdk_error')
         self.assertEqual(topup.state, 'failed')
-        mock_log.assert_not_called()
+        # #864 PR-G 之後 `charge_via_token` 在外呼**之前**會多寫一筆
+        # `kind='intent'` 的預登記 ⇒ 判準從「`_log` 完全沒被呼叫」收斂成
+        # 「沒有 `charged_not_credited` 那一筆」，那才是本對照組真正在守的東西。
+        self.assertEqual(
+            [call.args[1].get('kind') for call in mock_log.call_args_list],
+            ['intent'],
+            '真 SDK error ⛔ 不得落 charged_not_credited；'
+            '只該有 PR-G 的外呼前預登記那一筆',
+        )
 
     def test_tx_not_done_does_not_log_incident(self):
         """tx 結束在非 done 狀態（ECPay 明確拒絕）不是 CHARGED_NOT_CREDITED。"""
@@ -277,7 +300,13 @@ class TestChargedNotCreditedIncident864(TransactionCase):
 
         self.assertFalse(ok)
         self.assertEqual(topup.state, 'failed')
-        mock_log.assert_not_called()
+        # 同上（#864 PR-G）：判準是「沒有 charged_not_credited 那一筆」。
+        self.assertEqual(
+            [call.args[1].get('kind') for call in mock_log.call_args_list],
+            ['intent'],
+            'tx 結束在非 done ⛔ 不得落 charged_not_credited；'
+            '只該有 PR-G 的外呼前預登記那一筆',
+        )
 
     # --- PCI/sanitize：raw 例外文字不得流進 detail -------------------------- #
 
