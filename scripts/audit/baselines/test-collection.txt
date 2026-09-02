@@ -175,6 +175,7 @@
 3	test_cloud_service.TestInjectAllowedOrigins
 8	test_cloud_service.TestInjectApiServerCidrs
 2	test_cloud_service.TestInjectStorageClass
+6	test_cloud_service_acl.TestCloudServiceAdminBypass
 2	test_cloud_service_acl.TestCloudServiceControllerRegression
 5	test_cloud_service_acl.TestCloudServiceWorkspaceRule
 13	test_cloud_service_authz_676.TestCloudServiceWriteAuthz676

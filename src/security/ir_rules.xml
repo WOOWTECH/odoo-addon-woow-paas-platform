@@ -111,6 +111,40 @@
             <field name="perm_unlink" eval="True"/>
         </record>
 
+        <!-- #994 admin bypass：`group_system` 永真腿。
+
+             為什麼這個 model 該有、而 SmartHome / SmartHomeRoute / Workspace 不該有——
+             判準是同一條（見下方 SmartHome 那段的「加了會是一條沒有消費者的放寬。
+             日後真的長出後台用例再補」）：**有沒有真的呼叫者**。`cloud_service` 有，
+             而且只有它有——`src/views/cloud_service_views.xml` 定義了 list/form
+             ＋ `action_cloud_service`，那是維運處置異常服務（卡 `in_progress`、
+             `error`、租戶回報但自己不是成員的那些）唯一的後台入口。
+
+             缺了這一腿的後果不是「權限不足」的錯誤訊息，而是**清單恆空**：上面兩條
+             都綁 `base.group_user`，而 `base.group_system` 透過 implied_ids 內含
+             `base.group_user` ⇒ 管理員同樣受成員條件約束；本 model 又沒有 global
+             rule，Odoo 把同一使用者適用的 group rule 全部 OR 起來（`ir_rule.py`
+             `_compute_domain`）⇒ 沒有任何一腿為真。prod 實測（2026-09-01）：
+             `workspace_access` 全表僅一列，`action_cloud_service` 對 Administrator
+             呈現空清單，而叢集上有 `state=running` 的服務。
+
+             ⚠ 這條是**放寬**：`group_system` 取得全租戶 CRUD。與其餘 11 個 model
+             現況一致，不是新的信任邊界，但改動它時請當授權變更看待。守著它不被
+             寫寬的是 `test_cloud_service_acl.TestCloudServiceAdminBypass` 的
+             `test_plain_internal_user_still_cannot_read_foreign_service`——那支在
+             `groups` 誤綁成 `base.group_user` 時會紅，其餘四支不會。 -->
+
+        <record id="cloud_service_rule_admin_full" model="ir.rule">
+            <field name="name">CloudService: admin full CRUD (group_system bypass)</field>
+            <field name="model_id" ref="model_woow_paas_platform_cloud_service"/>
+            <field name="domain_force">[(1, '=', 1)]</field>
+            <field name="groups" eval="[(4, ref('base.group_system'))]"/>
+            <field name="perm_read" eval="True"/>
+            <field name="perm_write" eval="True"/>
+            <field name="perm_create" eval="True"/>
+            <field name="perm_unlink" eval="True"/>
+        </record>
+
         <!-- SmartHome（#524）：本 model 在此之前**一條 rule 都沒有**，而
              `ir.model.access.csv` 給 `base.group_user` 的是 `1,1,1,0`
              ⇒ ir.rule 這一層是空的，任何已登入租戶對**全站**的 smart_home
