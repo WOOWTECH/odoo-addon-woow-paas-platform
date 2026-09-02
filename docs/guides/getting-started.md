@@ -131,7 +131,7 @@ kubectl port-forward -n dev-sandbox-<slug> svc/<slug>-odoo-dev-sandbox-nginx 808
 
 K8s Dev Sandbox 的 `post-create.sh` hook 會**自動探索 in-cluster 的 PaaS Operator**（`paas-operator.paas-system.svc.cluster.local`）並寫進 Odoo 設定，通常不需手動配置。
 
-若要改接本機自跑的 Operator（`uvicorn ... --port 8000`），在 **Settings → Woow PaaS** 手動覆寫 URL / API Key（從 pod 連回宿主機的細節見 [CLAUDE.md](../../CLAUDE.md) §PaaS Operator Local Development）。
+若要改接本機自跑的 Operator（`uvicorn ... --port 8000`），在 **Settings → Woow PaaS** 手動覆寫 URL / API Key（從 pod 連回宿主機的細節見 [`paas-operator-dev` skill](../../.claude/skills/paas-operator-dev/SKILL.md) §PaaS Operator Local Development）。
 
 ### 5. Verify Setup
 
@@ -146,7 +146,7 @@ K8s Dev Sandbox 的 `post-create.sh` hook 會**自動探索 in-cluster 的 PaaS 
 
 完整且權威的目錄結構單一維護於專案根的 `README.md` 與 `CLAUDE.md`「Directory Structure」章節，避免在此重複手寫而漂移。請以那兩處為準。以下只列開發最常碰到的幾個切入點：
 
-- `src/controllers/` — HTTP / JSON API（共 10 個 controller，依範圍拆分；對照表見 `CLAUDE.md` 的「API Endpoints」controller 表，或直接 grep `@route`）
+- `src/controllers/` — HTTP / JSON API（依範圍拆成多個 controller；端點權威＝`grep -rn '@route' src/controllers/`，唯一例外 `portal.py` 無自有 route——見 `CLAUDE.md` §API Endpoints）
 - `src/models/` — Odoo ORM models
 - `src/static/src/paas/` — Standalone OWL App（`core/router.js` 為 hash-based router 入口）
 - `extra/paas-operator/` — PaaS Operator（FastAPI 包 Helm CLI，含 helm chart）
@@ -162,7 +162,7 @@ K8s Dev Sandbox 的 `post-create.sh` hook 會**自動探索 in-cluster 的 PaaS 
 
 #### Backend (Odoo)
 - **Models**: `src/models/` (PostgreSQL ORM)
-- **Controllers**: `src/controllers/` — 10 個 controller 依範圍拆分（非單一檔），對照表見 `CLAUDE.md`「API Endpoints」controller 表
+- **Controllers**: `src/controllers/` — 依範圍拆成多個 controller（非單一檔）；端點權威＝`grep -rn '@route' src/controllers/`
 - **Views**: `src/views/` (QWeb templates)
 
 #### PaaS Operator (FastAPI)
@@ -258,7 +258,7 @@ local 模式以 hostPath 即時掛載 `src/`，故檔案編輯立即反映在 po
 
 ## Adding New Features
 
-> 檢查清單權威＝repo 根 `CLAUDE.md` §Odoo Module Patterns（含 `config_parameter` 卸載清理鐵律——新增 config_parameter 欄位必同步 `src/hooks.py` `_CONFIG_PARAMETERS`）。本節為含完整程式碼樣板的教學展開。
+> 本節即為新增 model／OWL component 的**權威 checklist**（`CLAUDE.md` §Odoo Module Patterns 只留指針）。`config_parameter` 卸載清理鐵律——新增 `woow_paas_platform.*` key 必同步 `src/hooks.py` `_CONFIG_PARAMETERS`——仍在 `CLAUDE.md` §Odoo Module Patterns，兩種寫法（`config_parameter=` 欄位 vs 模組常數＋`get_param()`）的守線差異見該段。
 
 ### Adding a New Odoo Model
 
@@ -303,7 +303,7 @@ local 模式以 hostPath 即時掛載 `src/`，故檔案編輯立即反映在 po
 
 ### Adding a New OWL Component
 
-1. **Create component file**: `src/static/src/paas/components/MyComponent.js`
+1. **Create component file**: `src/static/src/paas/components/<name>/MyComponent.js`（每元件一資料夾，如 `components/card/WoowCard.{js,xml}`；scss 同放）
    ```javascript
    /** @odoo-module **/
 
@@ -317,7 +317,7 @@ local 模式以 hostPath 即時掛載 `src/`，故檔案編輯立即反映在 po
    }
    ```
 
-2. **Create template file**: `src/static/src/paas/components/MyComponent.xml`
+2. **Create template file**: `src/static/src/paas/components/<name>/MyComponent.xml`
    ```xml
    <?xml version="1.0" encoding="UTF-8"?>
    <templates xml:space="preserve">
@@ -329,14 +329,7 @@ local 模式以 hostPath 即時掛載 `src/`，故檔案編輯立即反映在 po
    </templates>
    ```
 
-3. **Register in manifest** `src/__manifest__.py`:
-   ```python
-   'woow_paas_platform.assets_paas': [
-       # ...
-       'woow_paas_platform/static/src/paas/components/MyComponent.js',
-       'woow_paas_platform/static/src/paas/components/MyComponent.xml',
-   ],
-   ```
+3. **不必登記 manifest**：`woow_paas_platform.assets_paas` 已用 glob 收 `static/src/paas/**/*.js`、`**/*.xml`、`components/**/*.scss`、`pages/**/*.scss`（`src/__manifest__.py`）。只有需要固定載入順序的第三方 lib（`static/src/paas/lib/`）才逐檔寫明。
 
 4. **Use in parent component**:
    ```javascript

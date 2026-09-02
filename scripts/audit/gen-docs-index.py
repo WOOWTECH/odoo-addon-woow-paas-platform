@@ -28,7 +28,6 @@ ROUTES = [
         ("guides/deployment", "上 prod／stg、發版、升版、image 重釘"),
         ("guides/testing", "跑測試、E2E、本機沙盒"),
         ("guides/development", "開發期工具與架構"),
-        ("guides/frameworks", "superpowers / SuperClaude 用法"),
     ]),
     ("我要查一個事實或規格", "reference/", [
         ("reference/api", "HTTP / JSON API 端點"),
@@ -75,7 +74,7 @@ L.append("|---|---|---|")
 L.append(f"| [`archived/`](archived/) | 不再使用但保留考古（含 `archived/memory/`：已被其他載體取代的 memory） | {n('archived/')} |")
 L.append(f"| [`scout/`](scout/) | 決策前偵察，拍板後 promote 到 plans/ 或 decisions/ | {n('scout/')} |")
 L.append(f"| [`agents/`](agents/) | mattpocock-skills 工具自管理區 | {n('agents/')} |")
-L.append(f"| [`superpowers/`](superpowers/) | obra/superpowers plugin 自管理區 | {n('superpowers/')} |")
+L.append(f"| [`superpowers/`](superpowers/) | 已退役 obra/superpowers plugin 的舊產出區（只剩歷史） | {n('superpowers/')} |")
 L.append("")
 L.append("> `docs/meeting/` 是指向 repo 外錄音目錄的 symlink，不在版控內，也不屬上述分類。")
 L.append("")
