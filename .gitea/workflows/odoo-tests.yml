@@ -118,6 +118,9 @@ jobs:
             || { tail -40 /tmp/install.log; echo "::error::install 失敗"; exit 1; }
 
       - name: 跑全套測試
+        # id 是 #963 格 A 的錨點：C2／C3／C4 綁的是「測試真的跑完了嗎」，
+        # 不是「前一個判準綠不綠」。理由寫在 C2 上方。
+        id: run_tests
         run: |
           set +e
           docker exec odoo "${ODOO_BIN}" -d test -u woow_paas_platform \
@@ -159,6 +162,46 @@ jobs:
           echo "──   known-failures 清空後這裡零筆是常態；對照在 self-test 的注入樣本集）──"
           grep -cE ": (FAIL|ERROR): " /tmp/test.log
           grep -E ": (FAIL|ERROR): " /tmp/test.log | head -60
+          # 🔴 #963 格 B：**每一筆 FAIL/ERROR 的 traceback** 也要落進 job log。
+          #
+          # 為什麼上面那兩行不夠：`: FAIL: ` 只取得到**標題行**
+          # （`<logger>: FAIL: <class>.<method>`），而「斷在哪一行、實際 vs 期望值」
+          # 全在標題行之後的 traceback 裡。那份 log 只活在容器內，job 一結束就沒了
+          # ⇒ **有紅燈的時候反而拿不到判斷憑據**，只能重跑一趟 6～11 分鐘的全套去猜。
+          # #567 那條（`test_skip_trial_operational_error_is_reraised`）就是卡在這：
+          # 「測試寫錯 vs 實作回歸」是行為判斷題，而判斷材料一直取不到。
+          #
+          # ⛔ 刻意**不** dump 整份 /tmp/test.log：裡面有 Odoo 啟動期的設定回顯
+          #    （含 db 連線參數），而 job log 是可經 API 取回的載體。這裡只取
+          #    「FAIL/ERROR 標題行往後 ${TB_CTX} 行」這個窗口——traceback 的內容是
+          #    檔名／行號／原始碼行／例外訊息，不含環境變數與 secret。
+          #
+          # TB_CTX=60：Odoo 的 test traceback 走 HttpCase ⇒ 跨 controller／ORM 多層，
+          # 實測 20～45 行；60 留餘裕，又不至於把下一筆整個蓋掉。
+          echo "── 每筆 FAIL/ERROR 的 traceback（#963 格 B）──"
+          TB_CTX=60
+          TB_MAX=20
+          TB_TOTAL=$(grep -cE ": (FAIL|ERROR): " /tmp/test.log)
+          echo "  FAIL/ERROR 共 ${TB_TOTAL:-0} 筆"
+          # 窗口是「往後 ${TB_CTX} 行**或遇到下一筆 FAIL/ERROR 即止**」，取先到的那個。
+          # ⚠ 只用固定行數會出事：連續失敗時前一筆的窗口會把後面好幾筆整個吞進去，
+          #   同一段 traceback 被重印 N 次（本機合成 25 筆的對照跑出 1242 行）——
+          #   看起來「印很多」，實際鑑別力反而被稀釋。
+          awk -v ctx="${TB_CTX}" -v maxn="${TB_MAX}" '''
+            /: (FAIL|ERROR): / {
+              n++
+              if (n <= maxn) {
+                printf "  ──── #%d 於 /tmp/test.log:%d（最多 %d 行，遇到下一筆即止）────\n", n, NR, ctx
+                print; left = ctx; next
+              }
+              left = 0; next
+            }
+            left > 0 { print; left-- }
+          ''' /tmp/test.log
+          # 🔴 有截斷就明說截了幾筆：沉默的上限會被讀成「就只有這些」。
+          if [ "${TB_TOTAL:-0}" -gt "${TB_MAX}" ]; then
+            echo "  ⚠ 只印了前 ${TB_MAX} 筆，另有 $((TB_TOTAL - TB_MAX)) 筆 traceback **未印**（不是沒有）"
+          fi
           echo "── 哨兵自己的 detail 行（證明它被收集且真的跑了）──"
           while read -r s; do
             case "$s" in ''|\#*) continue;; esac
@@ -215,14 +258,60 @@ jobs:
       # 「有 class 沒跑」——兩者的輸出長得一樣，但修法完全相反（一個是跑
       # `--update-baseline`，一個是去查測試為什麼沒被收集）。先驗左半邊再做差集。
       # PR 上由 test-collection-audit.yml 跑同一件事，這裡是 develop 側的保險。
+      #
+      # 🔴 #963 格 A：C2／C3／C4 的執行條件綁的是「測試**真的跑完**了嗎」，
+      # 不是「前一個判準綠不綠」。
+      #
+      # 改前：五個 gate 全吃預設的 `success()` ⇒ **C5 一紅，C2／C3／C4 整個不跑**，
+      # 而 C3 正是產生「哪些測試真的被執行了」那份證據的 gate
+      # ⇒ **證據恰好在有失敗的時候消失**（08-28 查 #956 時實撞：判準③ 只能退回
+      #   鑑別力較弱的替代量測——總數 +18，而等量增減會互相抵銷）。
+      #
+      # ⛔ 但**不能寫裸 `if: always()`**：那樣連「image 拉不到／Odoo 沒起來／測試
+      #    根本沒跑」也會讓這三格去讀一份不存在或殘缺的 /tmp/test.log，而輸出與
+      #    「真的跑了而且結果就是這樣」**不可區分** ＝ 假證據。
+      # ⇒ 條件綁 `跑全套測試`（`id: run_tests`）那一步的 outcome。它涵蓋兩個失效方向：
+      #    (a) 測試跑了但 log 截斷 ⇒ 那一步自己 `exit 1`（抓不到 summary 行）⇒ failure；
+      #    (b) setup 任一步失敗 ⇒ 那一步根本不會跑 ⇒ outcome=skipped。
+      #    兩者都落在 `!= 'success'`，三格照樣不跑。
+      #
+      # ⚠ C0／C5 **刻意維持預設 `success()`**：本段開頭「順序有意義」講的就是它們
+      #   ——哨兵沒過，後面的差集不成立。格 A 只把「產證據」那三格從「前一個判準綠」
+      #   解耦，不動任何判準本身，也不動判準之間的先後語意。
+      # ⚠ job 的 conclusion 不受影響：C5 紅了就是紅了，後面的步驟跑綠**不會**把 job
+      #   洗綠（本 job 沒有任何一步掛 `continue-on-error`）。
       - name: C2 baseline vs 原始碼（先確認差集的左半邊是新的）
+        id: c2
+        if: always() && steps.run_tests.outcome == 'success'
         run: python3 scripts/audit/test_collection_audit.py --check-baseline
 
       - name: C3 實際執行清單雙向差集
+        id: c3
+        if: always() && steps.run_tests.outcome == 'success'
         run: python3 scripts/audit/test_collection_audit.py --check-executed /tmp/test.log
 
       - name: C4 skip 盤點
+        id: c4
+        if: always() && steps.run_tests.outcome == 'success'
         run: python3 scripts/audit/test_collection_audit.py --check-skips /tmp/test.log
+
+      # 🔴 格 A 的自檢：把條件的**解析結果**印出來。
+      # 本 repo 的 workflow 到目前為止沒有用過 `steps.<id>.outcome`（只用過裸
+      # `always()`）⇒「這個 runner 支不支援 steps context」是個**未驗前提**。
+      # 若不支援，表達式會靜默求值成空字串 ⇒ 三格永遠 skip，而 skip 與「沒紅所以
+      # 不必跑」在 job 摘要上長得一樣 —— 那等於把一個證據缺口換成另一個。
+      # ⇒ 這一步直接印四個 outcome，看 job log 一眼就能判。純 echo，不會失敗，
+      #   不參與判準（`if: always()`，無 `continue-on-error` 需求）。
+      - name: 格 A 自檢（印出執行條件的解析結果，不是判準）
+        if: always()
+        run: |
+          echo "run_tests.outcome = '${{ steps.run_tests.outcome }}'"
+          echo "C2.outcome        = '${{ steps.c2.outcome }}'"
+          echo "C3.outcome        = '${{ steps.c3.outcome }}'"
+          echo "C4.outcome        = '${{ steps.c4.outcome }}'"
+          echo "判讀：run_tests=success 時，C2／C3／C4 必須是 success 或 failure，"
+          echo "      **不得是 skipped**（是 skipped ⇒ 格 A 沒生效）；"
+          echo "      四格全空 ⇒ runner 不支援 steps context，見上方註解。"
 
       # 升級條件＝兩個**狀態**（不是時間）：repo-lint 的 test-collectability 豁免清單
       # 清空 ＋ develop push 全套連續 3 次全綠。滿足時腳本以 exit 3 提醒「可以回
