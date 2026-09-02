@@ -19,11 +19,17 @@ method 名拼錯時，`ir.cron` 每次到點都會**靜默失敗**（框架吞�
   * Python → `ast` 解析出 class 的 `_name` 與所有 `def` 名
 再做名字層級的比對，輸出「是哪一個」不是「差幾個」。
 
-## ⚠ standalone utility，**不是 CI gate**
+## 兩種身分：CI gate 的**唯一實作** ＋ 手動跑的 standalone utility
 
-目前沒有任何 workflow 或 hook 會呼叫本檔——需要時由人手動跑。把它收進
-`scripts/audit/repo-lint.py` 是**還沒做**的事（見
-`docs/tracking/followups/follow-ups.md` 的 F-803-1）；那會動到 gate 行為、需要 review。
+本檔是 `scripts/audit/repo-lint.py` 第 35 條 `cron-wiring` 的**唯一實作**（#960）：
+repo-lint 用 `importlib` 從 sibling 位置載入本檔、呼叫 `check(root=…, verbose=False)`，
+⛔ **不複製**下面那段 AST／XML 邏輯過去——兩份實作必然漂移，而漂移的那天兩邊都是綠的。
+於是 CI（`.gitea/workflows/repo-lint.yml`）與 PostToolUse hook 都走得到這一格。
+
+本檔仍可獨立執行（下面的用法不變）。🔴 `python_models()` / `cron_records()` /
+`check()` 的 `root` 參數預設 `None` ＝ 沿用模組層的 `REPO_ROOT`，所以獨立跑的行為與
+輸出**與加入 root 參數之前逐字相同**；只有 repo-lint 會傳 root 進來——它必須能對合成
+的 fixture 樹跑，那正是 meta-test 注入壞樣本的方式。
 
 ## 用法
 
@@ -66,10 +72,19 @@ SRC = REPO_ROOT / 'src'
 CODE_CALL = re.compile(r'^\s*model\.(?P<meth>[A-Za-z_]\w*)\s*\(')
 
 
-def python_models() -> dict[str, dict]:
+def _src_dir(root=None) -> pathlib.Path:
+    """`src/` 的位置。
+
+    `root=None` ＝維持既有行為（相對**本檔**往上兩層的 `REPO_ROOT`）；傳 root 進來
+    時改看那棵樹——repo-lint 與 meta-test 的合成 fixture 樹都走這條。
+    """
+    return SRC if root is None else pathlib.Path(root) / 'src'
+
+
+def python_models(root=None) -> dict[str, dict]:
     """{_name: {'file':…, 'methods': {…}, 'xmlid': model_…}}，用 AST 不用 grep。"""
     out = {}
-    for py in sorted((SRC / 'models').glob('*.py')):
+    for py in sorted((_src_dir(root) / 'models').glob('*.py')):
         try:
             tree = ast.parse(py.read_text(encoding='utf-8'))
         except SyntaxError:
@@ -94,10 +109,10 @@ def python_models() -> dict[str, dict]:
     return out
 
 
-def cron_records(only: str | None = None):
+def cron_records(only: str | None = None, root=None):
     """[(檔名, xmlid, model_ref, code 字串)]，用 XML 解析不用 grep。"""
     out = []
-    for xml in sorted((SRC / 'data').glob('*.xml')):
+    for xml in sorted((_src_dir(root) / 'data').glob('*.xml')):
         if only and xml.name != only:
             continue
         for rec in ET.parse(xml).iter('record'):
@@ -113,12 +128,17 @@ def cron_records(only: str | None = None):
     return out
 
 
-def check(only=None, verbose=True):
-    models = python_models()
+def check(only=None, verbose=True, root=None):
+    """回 `(掃到幾筆 ir.cron, 問題訊息 list)`。
+
+    `root=None` ＝ `REPO_ROOT`（獨立跑）；`verbose=False` 關掉 print 副作用
+    （repo-lint 走這條——gate 的輸出格式由 repo-lint 決定，不由本檔 print）。
+    """
+    models = python_models(root)
     by_xmlid = {v['xmlid']: (k, v) for k, v in models.items()}
     problems = []
     checked = 0
-    for fname, xmlid, ref, code in cron_records(only):
+    for fname, xmlid, ref, code in cron_records(only, root):
         checked += 1
         label = '%s :: %s' % (fname, xmlid)
         if ref and '.' in ref:          # 跨模組 ref（如 project.model_project_project）
