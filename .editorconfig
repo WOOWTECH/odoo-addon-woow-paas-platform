@@ -1,0 +1,15 @@
+# 縮排規則的單一來源（CLAUDE.md §Code Style Guide 只指到這裡）。
+# repo-lint 第 36 條 `indentation` 只驗 PR **新增**的檔：既有檔跟該檔現況、不重排。
+root = true
+
+[*.py]
+indent_style = space
+indent_size = 4
+
+[src/static/src/**.{js,scss,xml}]
+indent_style = space
+indent_size = 2
+
+[src/{views,data,security}/**.xml]
+indent_style = space
+indent_size = 4
