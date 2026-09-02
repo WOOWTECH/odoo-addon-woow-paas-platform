@@ -257,6 +257,7 @@
 7	test_ecpay_invoice_retry.TestEcpayInvoiceRetry
 5	test_ecpay_invoice_subscription.TestEcpayInvoiceSubscription
 5	test_ecpay_invoice_topup.TestEcpayInvoiceTopup
+11	test_ecpg_callback_inbox_864.TestEcpgCallbackInbox864
 11	test_gateway_capability_payload_530.TestGatewayCapabilityPayload530
 4	test_gift_grant_wizard.TestGiftGrantWizard
 10	test_gift_redeem.TestGiftRedeem
@@ -717,6 +718,7 @@
 1	test_template_max_per_partner_336.TestMaxPerPartnerField
 6	test_topup_controller.TestTopupController
 4	test_topup_cron.TestTopupCron
+3	test_topup_intent_preregistration_864.TestTopupIntentManualRoute864
 4	test_topup_plan_best_value.TestTopupPlanBestValue
 2	test_topup_status.TestTopupStatusEndpoint
 4	test_trial_reset_guard_367.TestTrialResetGuard367

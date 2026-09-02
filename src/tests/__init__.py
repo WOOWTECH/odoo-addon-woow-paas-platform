@@ -565,6 +565,17 @@ from .integration import test_billing_incident_real_rollback_864  # noqa: F401
 # #864 PR-E：真 cron tick／獨立 cursor 讀 incident——冷卻閘讀的是「別的連線
 # 同輪 commit 的列」，TransactionCase 的 savepoint cursor 造不出這個事件。
 from .integration import test_double_charge_cooldown_864  # noqa: F401
+# #864 PR-G：callback 預登記／inbox／replay。真跨連線 cursor 是唯一能證明
+# 「callback 早於主交易 commit 到達仍接得住」的載體；TransactionCase 的
+# fixture 對被測碼的 registry.cursor() 不可見，HttpCase 的 TestCursor 把
+# 獨立交易退化成 savepoint ⇒ 兩者都造不出本題的事件。
+from .integration import test_callback_replay_864  # noqa: F401
+# #864 PR-G：手動儲值 route 的 fail-closed 預登記政策。刻意**不帶**
+# `-standard` ⇒ 這是 PR-G 唯一會被 CI（odoo-tests.yml）選中的守線。
+from . import test_topup_intent_preregistration_864  # noqa: F401
+# #864 PR-G：pay_callback override 的 inbox 落地 ＋ 對外回應 byte-identical。
+# 同樣刻意不帶 `-standard`（CI 盲區補償）。
+from . import test_ecpg_callback_inbox_864  # noqa: F401
 
 # fix: #785 SH route 的 `_capture_access_teardown()` 用同一個 `None` 表達兩種
 # 語意（「沒東西要拆」vs「有東西但預測推不動」），消費端一律 `continue`、不計入
