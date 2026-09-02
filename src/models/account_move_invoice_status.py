@@ -223,7 +223,7 @@ class AccountMoveInvoiceStatus(models.Model):
         return days
 
     @api.model
-    def _woow_stale_manual_domain(self, cutoff):
+    def _woow_stale_manual_domain(self, cutoff, include_alerted=False):
         """老化判準的**唯一**來源（掃描、計數、截斷實查三處共用）。
 
         判準：``move_type='out_invoice'``、``state='posted'``、
@@ -242,19 +242,22 @@ class AccountMoveInvoiceStatus(models.Model):
         ``search_count`` 若各寫一份，改了一邊沒改另一邊時症狀是「告警訊息裡的
         數字對不上」——而那是無聲的。
         """
-        return [
+        domain = [
             ('move_type', '=', 'out_invoice'),
             ('state', '=', 'posted'),
             ('woow_invoice_issue_state', '=', 'manual'),
             ('create_date', '<=', cutoff),
-            # #990：已告警過的離開視窗，否則 limit 會被舊批佔死（見欄位註解）。
-            ('woow_aging_alerted_at', '=', False),
             # 🔴 有 ECPay 發票號碼＝真的開出來了，不算逾期——即使 issue
             # state 還停在 manual。狀態欄是我們自己寫的，號碼才是對方給的。
             '|',
             ('ecpay_invoice_id', '=', False),
             ('ecpay_invoice_id.name', 'in', [False, '']),
         ]
+        if not include_alerted:
+            # #990：已告警過的離開**掃描視窗**，否則 limit 會被舊批佔死
+            # （見 `woow_aging_alerted_at` 的欄位註解）。
+            domain.append(('woow_aging_alerted_at', '=', False))
+        return domain
 
     @api.model
     def _cron_alert_stale_manual_invoices(self, limit=None, scan_batch=None,
@@ -303,16 +306,29 @@ class AccountMoveInvoiceStatus(models.Model):
         # 所以這裡沒有、也不該有「門檻不合法就整段 return」的早退分支。
         days = self._woow_manual_aging_days()
         cutoff = fields.Datetime.now() - timedelta(days=days)
-        limit = _AGING_ALERT_LIMIT if limit is None else limit
-        scan_batch = _AGING_SCAN_BATCH if scan_batch is None else scan_batch
-        max_scan = _AGING_MAX_SCAN if max_scan is None else max_scan
+        # 🔴 三個預算旋鈕一律夾到 >= 1。⛔ 不可以讓 0／負值原樣傳下去：
+        # Odoo 的 `search(limit=0)` 語意是**無上限**（不是「不撈」）⇒ 一個
+        # `scan_batch=0` 會讓這支 cron 一次把整張表撈進記憶體，而症狀是
+        # 「某天 cron 特別慢／OOM」，與設定錯誤看不出關聯。`limit=0` 則會讓
+        # `while attempted < limit` 一次都不進去（靜默不告警）——同樣無聲。
+        limit = max(1, int(limit if limit is not None else _AGING_ALERT_LIMIT))
+        scan_batch = max(1, int(
+            scan_batch if scan_batch is not None else _AGING_SCAN_BATCH))
+        max_scan = max(1, int(
+            max_scan if max_scan is not None else _AGING_MAX_SCAN))
 
         Move = self.sudo()
         domain = self._woow_stale_manual_domain(cutoff)
-        # ⚠ 在**寫任何 marker 之前**取總數：寫完再算會把本輪處理掉的排除在外，
-        # 告警訊息裡的數字就會從「總逾期數」縮水成「這批的筆數」——而縮水的
-        # 那一側是無聲的（沒有人會發現數字變小了）。
-        pending_total = Move.search_count(domain)
+        # ⚠ 兩件事分開：
+        #   * `domain`（不含已告警者）＝**掃描視窗**，limit 要能前進靠它；
+        #   * `pending_total` 要回答的是「**目前仍逾期的總數**」，那是給管理員
+        #     看的規模，⛔ 不可以把已告警但仍未開票的 move 排除掉——那會讓數字
+        #     隨著告警進度**單調下降**，看起來像問題在收斂，實際上一張都沒被處理。
+        #     ⇒ 用 `include_alerted=True` 的同一顆 domain（單一來源加參數，
+        #     ⛔ 不複製一份條件）。
+        # ⚠ 仍然在**寫任何 marker 之前**取：寫完再算會把本輪處理掉的也算漏。
+        pending_total = Move.search_count(
+            self._woow_stale_manual_domain(cutoff, include_alerted=True))
 
         Incident = self.env['woow.billing.incident']
         now = fields.Datetime.now()
@@ -399,10 +415,14 @@ class AccountMoveInvoiceStatus(models.Model):
         ``sh_subscription_fix._cron_billing_silence_alert``。
 
         🔴 #990：``moves`` 自 batch 化之後只是**這一輪處理的那批**，⛔ 不是
-        全部逾期數。note 裡的總數必須用 ``pending_total``（呼叫端在寫任何
-        marker **之前**取的 ``search_count``），否則管理員看到的數字會從
-        「總逾期數」縮水成 ``limit``——而縮水的那一側完全無聲，正是這條告警
-        本來要偵測的那種靜默。省略時退回 ``len(moves)``（相容舊呼叫端）。
+        全部逾期數。note 裡的總數必須用 ``pending_total``，否則管理員看到的
+        數字會從「總逾期數」縮水成 ``limit``——而縮水的那一側完全無聲，正是
+        這條告警本來要偵測的那種靜默。省略時退回 ``len(moves)``（相容舊呼叫端）。
+
+        🔴 ``pending_total`` 的口徑是「**目前仍逾期的總數**」——含**已告警但
+        仍未開票**的那些（呼叫端用 ``include_alerted=True`` 的 domain 取）。
+        ⛔ 不可以只算「還沒告警的」：那個數字會隨告警進度**單調下降**，
+        看起來像問題在收斂，而實際上一張發票都沒有被人處理。
         """
         Activity = self.env['mail.activity'].sudo()
         if Activity.search_count([('summary', '=', _MANUAL_AGING_SUMMARY)]):
@@ -421,9 +441,10 @@ class AccountMoveInvoiceStatus(models.Model):
         anchor = moves[0]
         total = len(moves) if pending_total is None else pending_total
         note = _(
-            "%(total)s posted invoice(s) have been waiting more than %(days)s "
+            "%(total)s posted invoice(s) are still waiting more than %(days)s "
             "days for a manual ECPay e-invoice and still have no invoice "
-            "number (%(batch)s of them were logged in this run).\n"
+            "number (%(batch)s of them were logged in this run; the total "
+            "includes invoices already alerted in earlier runs).\n"
             "Oldest one in this run: %(name)s (created %(created)s).\n"
             "Issue them from the invoice form (\"Retry ECPay e-invoice\"), or "
             "switch the company's \"Issue e-invoice\" setting to automatic.\n"
