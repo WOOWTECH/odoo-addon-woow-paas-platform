@@ -46,6 +46,10 @@ class AccountMoveInvoiceStatus(models.Model):
     woow_invoice_retry_count = fields.Integer(default=0, copy=False)
     woow_invoice_last_error = fields.Text(copy=False)
     woow_invoice_next_retry_at = fields.Datetime(copy=False)
+    # ⚠ RED 階段：欄位先存在（讓測試跑得動、不會紅在 AttributeError），
+    # 但 cron ⛔ 不寫它、domain ⛔ 不看它 —— 修法在下一顆 commit。
+    woow_aging_alerted_at = fields.Datetime(
+        string='Aging Alert Sent At', index=True, copy=False, readonly=True)
     woow_skip_upstream_hook = fields.Boolean(
         default=False,
         copy=False,
@@ -191,8 +195,26 @@ class AccountMoveInvoiceStatus(models.Model):
         return days
 
     @api.model
-    def _cron_alert_stale_manual_invoices(self):
+    def _woow_stale_manual_domain(self, cutoff):
+        """老化判準（⚠ RED 階段：**沒有** marker 排除條件）。"""
+        return [
+            ('move_type', '=', 'out_invoice'),
+            ('state', '=', 'posted'),
+            ('woow_invoice_issue_state', '=', 'manual'),
+            ('create_date', '<=', cutoff),
+            '|',
+            ('ecpay_invoice_id', '=', False),
+            ('ecpay_invoice_id.name', 'in', [False, '']),
+        ]
+
+    @api.model
+    def _cron_alert_stale_manual_invoices(self, limit=None, scan_batch=None,
+                                          max_scan=None):
         """[#864 PR-C] ``manual`` 發票沒人開就是另一種靜默，逾期則落案並告警。
+
+        ⚠ **RED 階段的 naive 版**（#990 的缺陷本身）：``limit`` 直接下在
+        ``search`` 上，而逾期條件不自消 ⇒ 每一輪撈到的都是同一批最舊的
+        ⇒ 後排永遠餓死。``scan_batch`` / ``max_scan`` 收下但不生效。
 
         判準：``state='posted'``、``woow_invoice_issue_state='manual'``、
         ``create_date`` 已逾 N 天，且 **ECPay 回傳的發票號碼仍為空**。
@@ -225,17 +247,8 @@ class AccountMoveInvoiceStatus(models.Model):
         # 「已經真的開出來」的判準放進 domain（而不是取回後再 filtered）：
         # 判準只留一份，且 order/limit 若日後要加也不會與它錯位。
         stale = self.sudo().search(
-            [
-                ('move_type', '=', 'out_invoice'),
-                ('state', '=', 'posted'),
-                ('woow_invoice_issue_state', '=', 'manual'),
-                ('create_date', '<=', cutoff),
-                # 🔴 有 ECPay 發票號碼＝真的開出來了，不算逾期——即使 issue
-                # state 還停在 manual。狀態欄是我們自己寫的，號碼才是對方給的。
-                '|',
-                ('ecpay_invoice_id', '=', False),
-                ('ecpay_invoice_id.name', 'in', [False, '']),
-            ],
+            self._woow_stale_manual_domain(cutoff),
+            limit=limit or None,
             order='create_date asc, id asc',
         )
         if not stale:
