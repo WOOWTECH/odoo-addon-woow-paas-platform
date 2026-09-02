@@ -229,6 +229,92 @@ class TestStaleManualAgingBatch990(TransactionCase):
             still_in_domain,
             '已告警的 move 必須離開掃描 domain，否則掃描量會線性成長')
 
+    # ── 🔴 游標：單次呼叫內真的跨到第二批 ────────────────────────────
+    def test_cursor_advances_to_a_second_batch_within_one_call(self):
+        """🔴 `('id','>',last_id)` 在**同一次呼叫**內真的把視窗推到第二批。
+
+        ⚠ 這條補的是本組原本的一個**覆蓋盲區**（#1027 覆核 finding 1）：
+        其餘測試沒有任何一條讓 while 迴圈跑出第二次非空 `Move.search()` 並處理
+        ——兩條 `scan_batch=2` 的同時 `max_scan=2`（第一批後就 break），
+        其餘 fixture ≤6 而預設 `scan_batch` 是 1000。⇒ 把 `('id','>',last_id)`
+        拿掉，整檔仍然全綠，游標的存在理由零覆蓋。
+
+        游標為什麼必要：`_log()` 是 fail-soft（回 `False`），失敗的列**不會**被
+        標 marker、仍留在 domain 裡；沒有游標的話 `search` 會反覆撈回同一批，
+        迴圈原地空轉直到打完 `limit`——而輸出看起來只是「處理了 limit 筆」。
+
+        本條的構造：前兩筆 `_log` 失敗（不標 marker ⇒ 留在 domain）、後兩筆成功。
+        `scan_batch=2` ⇒ 第一批只有前兩筆；要處理到後兩筆，**必須**靠游標跨批。
+        """
+        moves = self._aged_batch(4)
+        failing_ids = set(moves[:2].ids)
+        Incident = type(self.env['woow.billing.incident'])
+        original_log = Incident._log
+
+        def _selective_log(self_, snapshot):
+            if snapshot.get('source_ref') in failing_ids:
+                return False
+            return original_log(self_, snapshot)
+
+        searches = []
+        Move = type(self.env['account.move'])
+        original_search = Move.search
+
+        def _counting_search(self_, domain, *args, **kwargs):
+            rows = original_search(self_, domain, *args, **kwargs)
+            searches.append(len(rows))
+            return rows
+
+        with patch.object(Incident, '_log', _selective_log), \
+                patch.object(Move, 'search', _counting_search):
+            self.Move._cron_alert_stale_manual_invoices(
+                limit=4, scan_batch=2, max_scan=1000)
+
+        marked, unmarked = self._marked(moves)
+        self.assertEqual(
+            sorted(marked.ids), sorted(moves[2:].ids),
+            '後兩筆（_log 成功者）必須在**同一次呼叫**內被處理到並標上 marker；'
+            '沒有游標的話迴圈會反覆撈回前兩筆、永遠到不了它們。實際 marked=%s'
+            % sorted(marked.ids))
+        self.assertEqual(
+            sorted(unmarked.ids), sorted(failing_ids),
+            '_log 失敗的兩筆 ⛔ 不得被標 marker（要留給下一輪）')
+
+        non_empty = [n for n in searches if n]
+        self.assertGreaterEqual(
+            len(non_empty), 2,
+            '必須真的發生**第二次非空 search**（＝游標推進），⛔ 不能只看最終'
+            '狀態就宣稱跨批了。實際各次 search 的回傳筆數：%s' % searches)
+
+    # ── ③ 預算旋鈕的 ≤0 守衛 ─────────────────────────────────────────
+    def test_non_positive_scan_batch_does_not_fetch_everything(self):
+        """`scan_batch=0` ⛔ 不得變成「一次撈光」。
+
+        🔴 Odoo 的 `search(limit=0)` 語意是**無上限**（不是「不撈」）
+        ⇒ 把 0 原樣傳下去，這支 cron 會一次把整張表撈進記憶體，
+        而症狀是「某天 cron 特別慢／OOM」，與設定錯誤看不出關聯。
+        """
+        self._aged_batch(3)
+        limits_seen = []
+        Move = type(self.env['account.move'])
+        original_search = Move.search
+
+        def _recording_search(self_, domain, *args, **kwargs):
+            limits_seen.append(kwargs.get('limit'))
+            return original_search(self_, domain, *args, **kwargs)
+
+        with patch.object(Move, 'search', _recording_search):
+            self.Move._cron_alert_stale_manual_invoices(
+                limit=3, scan_batch=0, max_scan=1000)
+
+        batch_limits = [x for x in limits_seen if x is not None]
+        self.assertTrue(
+            batch_limits, '前提：至少要有一次帶 limit 的 search')
+        self.assertTrue(
+            all(x >= 1 for x in batch_limits),
+            'scan_batch=0 必須被夾成 >= 1，⛔ 不可以原樣傳給 search（0＝無上限）。'
+            '實際傳出去的 limit：%s' % batch_limits)
+
     # ── N+1 收斂：掃描與寫入分層 ──────────────────────────────────────
     def test_independent_cursor_count_matches_writes_not_scans(self):
         """直接量 N+1 的定義：獨立 cursor 只在**寫入**時開，不隨掃描量成長。
@@ -354,3 +440,42 @@ class TestStaleManualAgingBatch990(TransactionCase):
         self.assertIn(
             '2 of them were logged in this run', note,
             'note 也要說明這一輪處理了幾筆，否則管理員無法判斷是否還在追趕')
+
+    def test_activity_note_total_counts_already_alerted_invoices(self):
+        """🔴 `total` 的口徑是「**目前仍逾期**」，含已告警但仍沒開票的那些。
+
+        ⚠ 這條補的是 #1027 覆核 finding 2：`pending_total` 原本用的是**掃描
+        視窗**的 domain（不含已告警者）⇒ 那個數字會隨告警進度**單調下降**，
+        看起來像問題在收斂，而實際上一張發票都沒有被人處理——正是這條告警
+        本來要偵測的那種靜默，換一個形狀又長回來。
+
+        構造：5 筆逾期，第一輪 limit=2 先把 2 筆標成已告警；清掉 activity
+        （否則 summary dedup 會讓第二輪不建）後跑第二輪 limit=1
+        ⇒ 第二輪的 note 必須報 **total=5**（含前一輪已告警的 2 筆），
+        而不是 3（＝只算掃描視窗裡剩下的）。
+        """
+        moves = self._aged_batch(5)
+
+        self.Move._cron_alert_stale_manual_invoices(limit=2)
+        marked, _rest = self._marked(moves)
+        self.assertEqual(
+            len(marked), 2, '前提：第一輪必須標掉 2 筆，否則第二輪測不到差別')
+
+        # summary 是 dedup 鍵：不清掉的話第二輪根本不建 activity。
+        self.env['mail.activity'].sudo().search(
+            [('summary', '=', self.SUMMARY)]).unlink()
+
+        self.Move._cron_alert_stale_manual_invoices(limit=1)
+
+        notes = self._activity_notes()
+        self.assertTrue(notes, '第二輪必須建 mail.activity')
+        note = notes[0]
+        total_match = re.search(r'(\d+)\s+posted invoice', note)
+        self.assertTrue(total_match, 'note 格式改了，抓不到總數：%s' % note)
+        self.assertEqual(
+            total_match.group(1), '5',
+            'total 要含已告警但仍逾期的 2 筆（＝5），⛔ 不是只算掃描視窗裡的 3；'
+            '否則數字會隨告警進度單調下降、看起來像在收斂。實際 note：%s' % note)
+        self.assertIn(
+            '1 of them were logged in this run', note,
+            'batch 仍然只算這一輪處理的筆數')
