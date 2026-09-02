@@ -72,6 +72,7 @@ from unittest.mock import MagicMock, patch
 from odoo.exceptions import AccessError, UserError
 from odoo.tests import tagged
 
+from ..controllers import smart_home as _sh_controller
 from .test_smart_home_authz_524 import _SmartHome524Fixture
 
 _logger = logging.getLogger(__name__)
@@ -88,6 +89,40 @@ _UNLINK_PERMISSION_MODELS = (_MODEL, _ROUTE_MODEL)
 #: 這種斷言必須說得出零的是哪幾個，否則換一個新 method 進來時它還是綠的）。
 _EXTERNAL_METHODS = ('sync_access_app', 'delete_tunnel', 'create_tunnel',
                      'get_tunnel_status')
+
+#: 刪除端點寫「授權被拒」那行 log 的 logger（`src/controllers/smart_home.py`）。
+#: **不是猜的字串常數**：直接取被測模組自己的 `_logger.name`
+#: （目前值＝`odoo.addons.woow_paas_platform.controllers.smart_home`）。
+#: 理由是失效形態——`assertLogs` 綁錯 logger 名時的失敗訊息是
+#: 「no logs of level ERROR or higher triggered on <name>」，與「controller 真的
+#: 沒寫這行 log」**不可區分**；套件路徑一旦漂掉（改目錄／換 addon 名），A1／A2／A3
+#: 會一起紅在錯誤的歸因上，而那兩種紅的修法完全不同。
+LOG_SH_CTRL = _sh_controller._logger.name
+
+#: 那一行的訊息前綴 —— `src/controllers/smart_home.py:905`，
+#: `_delete_smarthome()` 的 `except (AccessDenied, AccessError, MissingError)`。
+#:
+#: 🔴 **這個前綴是量出來的，不是讀出來的。** 同一支 controller 上還有一支長得
+#: 幾乎一樣的 `_logger.exception("Access error checking smart home deletion: %s", e)`
+#: （:137-139），包住的是 `smarthome._check_operation_allowed(operation='write')`。
+#: 那支**對本條路徑是死碼**：`_check_operation_allowed()`
+#: （`models/subscription_lifecycle_mixin.py:371`）的 docstring 與實作都只
+#: `raise UserError`（訂閱過期／寬限期），一條也不會丟 AccessError。
+#: 本題的 unlink 前置檢查是在 `action_delete()` 裡丟的
+#: （`models/smart_home.py:767` → `_assert_unlink_authorized()` → `check_access('unlink')`），
+#: 而 `action_delete()` 是由 `_delete_smarthome()` 呼叫的 ⇒ 例外被 :905 那支接住。
+#: 實測（CI run 6697 的 job log，A1／A2／A3 各一筆、共 3 筆）：
+#:   `... controllers.smart_home: Access error deleting smart home: You are not`
+#:   `allowed to delete 'Smart Home Instance' (woow_paas_platform.smart_home) records.`
+#: 而 `Access error checking smart home deletion` 在同一份 log 裡是 **0 筆**。
+#: ⇒ 兩支只差幾個字、都在同一支 logger、都是 AccessError 分支，**光讀碼會選錯**。
+#:
+#: 錨在前綴、而不是「該 logger 的任何一筆 ERROR」：同一個 method 裡的泛用
+#: `except Exception` 分支寫的是 ``Failed to delete smart home: ...``（:913）
+#: ⇒ 不區分的話，哪天擋下來的例外型別漂成別的，判準照樣綠，
+#: 而「擋下來的是**授權檢查**」這個歸因就沒人守了。
+#: 兩個前綴互不為對方的前綴，`startswith` 分得開。
+_CTRL_DENY_PREFIX = 'Access error deleting smart home:'
 
 
 class _Sh740Fixture(_SmartHome524Fixture):
@@ -257,23 +292,57 @@ class _Sh740Fixture(_SmartHome524Fixture):
             % (tag, payload))
         return payload.get('error') or ''
 
-    def _assert_denied_by_the_preflight(self, error, tag):
+    def _assert_denied_by_the_preflight(self, captured, tag):
         """歸因：擋下來的必須是**主表** `smart_home` 的 unlink 權，也就是前置檢查。
+
+        ⚠ **錨點在 server log，不在端點回給租戶的字串**——這是 **#947**（＝**#860**
+        落地）之後的重新錨定：那張 PR 把刪除端點的技術訊息換成通用句
+        （`Failed to delete smart home. Please try again.`），舊判準讀的那段字串
+        整個消失了（#956：A1／A2／A3 三條一起紅）。原始例外仍然留在
+        `src/controllers/smart_home.py:905` 的
+        `_logger.exception("Access error deleting smart home: %s", e)`
+        ⇒ 判準搬到那裡。**兩個方向逐字保留、沒有改弱**，換的只是觀測管道。
+        ⚠ 那一支不是包住 `_check_operation_allowed` 的 :137-139——選錯的理由與
+        實測見 `_CTRL_DENY_PREFIX` 上方註解。
+
+        ⚠ 舊 docstring 說的「不用 `assertLogs`、因為要綁 `ir_model` 的內部 logger、
+        跨 Odoo 版本脆」在這裡**不適用**：現在綁的是**本 addon 自己的 controller**
+        的 logger 與訊息格式，不是 Odoo 核心的。
 
         🔴 判別式刻意用**帶右括號**的 `(woow_paas_platform.smart_home)`：
         `woow_paas_platform.smart_home_route` 這個字串包含
         `woow_paas_platform.smart_home` ⇒ 不帶右括號的比對對 route 那條訊息**也會
         通過**，那正是修復前 B／C 兩形態實際回的訊息 ⇒ 判準會零鑑別力。
         另外再明確排除 route 那條，兩個方向都釘住。
+
+        🔴 而這個字串**不是程式裡的字面文字**：它是 Odoo 核心 `check_access()` 丟的
+        `AccessError` 的 `str(e)`，經 `%s` 帶進那行 log 的**動態內容**。
+        ⇒ 想驗這條斷言有沒有鑑別力，要動的是「什麼東西進了那行 log」（例如把
+        `%s`／`e` 換成固定字串），在原始碼裡 grep 是找不到可改的字面字串的。
+
+        ⚠ 讀的是 `captured.records` 的 `getMessage()`，**不是**本 repo 其他測試慣用的
+        `captured.output`：`_logger.exception()` 帶 `exc_info` ⇒ `output` 會把整段
+        traceback（檔名、原始碼行）一起格式化進去，替下面的 `assertNotIn` 製造
+        一整片與被測行為無關的命中面。這裡只要那一行 log 的訊息本體。
         """
+        messages = [r.getMessage() for r in captured.records]
+        denied = [m for m in messages if m.startswith(_CTRL_DENY_PREFIX)]
+        self.assertTrue(
+            denied,
+            '%s：controller 沒寫出「授權被拒」那行 log（前綴 %r，'
+            '`controllers/smart_home.py:905`）。同一個 method 的泛用 '
+            '`except Exception` 分支寫的是 "Failed to delete smart home: ..."（:913）'
+            '⇒ 只收到那一支代表擋下來的不是 AccessError，歸因不成立。實收 %r'
+            % (tag, _CTRL_DENY_PREFIX, messages))
+        blob = '\n'.join(denied)
         self.assertIn(
-            '(woow_paas_platform.smart_home)', error,
+            '(woow_paas_platform.smart_home)', blob,
             '%s：歸因失敗——擋下來的必須是主表的 unlink 權（前置檢查），'
-            '回 %r' % (tag, error))
+            'log 收到 %r' % (tag, denied))
         self.assertNotIn(
-            'smart_home_route', error,
+            'smart_home_route', blob,
             '%s：歸因失敗——修復前 B／C 是被 route 那張 ACL 擋在 teardown '
-            '**之後**，那正是本題要消滅的形狀。回 %r' % (tag, error))
+            '**之後**，那正是本題要消滅的形狀。log 收到 %r' % (tag, denied))
 
     def _assert_no_external_call(self, client, tag):
         """列名：逐一斷言每一個 method 都沒被呼叫（不是只比總數）。"""
@@ -311,36 +380,55 @@ class TestSh740NoExternalCallWhenDenied(_Sh740Fixture):
 
     def test_A1_no_route_denied_delete_sends_nothing(self):
         home = self._mk_no_route('740 A1')
-        client, payload, _b, _a = self._tenant_delete(home, 'A1/no-route')
-        error = self._assert_endpoint_denied(payload, 'A1')
+        # ⚠ `with` 必須包住 `_tenant_delete()`：那行 log 是 HTTP 請求**處理當下**寫出的，
+        #   早於下面的斷言 helper 被呼叫 —— 只把 helper 包起來會一筆都捕不到。
+        with self.assertLogs(LOG_SH_CTRL, level=logging.ERROR) as captured:
+            client, payload, _b, _a = self._tenant_delete(home, 'A1/no-route')
+        self._assert_endpoint_denied(payload, 'A1')
         self._assert_no_external_call(client, 'A1')
-        self._assert_denied_by_the_preflight(error, 'A1')
+        self._assert_denied_by_the_preflight(captured, 'A1')
 
     def test_A2_with_route_denied_delete_sends_nothing(self):
-        """⚠ 這條的歸因判準讀的是**端點回給租戶的字串**，而那段字串本身已經開單
-        要改掉（**#860**：刪除端點把 Odoo 例外原文整段回租戶＝外洩面）。
+        """⚠ **這條的歸因判準已經重新錨定過一次**，把來龍去脈留在這裡。
 
-        **這條紅了先確認是不是 #860 落地**；若是，把判準重新錨定到新的可觀測訊號，
-        **不要把斷言改弱**（改弱＝把「擋在 teardown 之前」這條守線拆掉）。
+        舊判準讀的是**端點回給租戶的字串**，而上一版 docstring 自己預言過那段字串
+        會被改掉（**#860**：刪除端點把 Odoo 例外原文整段回租戶＝外洩面）。
+        它在 **#947** 真的落地了：端點改回通用句
+        `Failed to delete smart home. Please try again.`，錨點整個消失
+        ⇒ A1／A2／A3 三條一起紅（**#956**）。
 
-        為什麼仍然選端點字串而不是 `assertLogs`：租戶看得到的那句話**就是**本題的
-        產品面契約之一（修前它說的是 route 子表，修後必須說主表），而 `assertLogs`
-        要綁 `odoo.addons.base.models.ir_model` 的內部 logger 與訊息格式，跨 Odoo
-        版本更脆。結構性的那一半（「停在 savepoint 之前」）由 A4 與 F 系列的 spy
-        承擔，不靠字串。
+        照上一版留下的指示辦：**重新錨定到新的可觀測訊號、不把斷言改弱**。
+        新錨點是 server log —— 原始例外仍然被 `controllers/smart_home.py` 的
+        `_logger.exception()` 寫出來，「擋在主表而不是 route」這條守線因此還在。
+        兩個方向的斷言逐字保留，見 `_assert_denied_by_the_preflight`。
+
+        ⚠ 上一版寫的「為什麼不用 `assertLogs`」是針對 **Odoo 核心**
+        `odoo.addons.base.models.ir_model` 的內部 logger（跨版本脆）——現在綁的是
+        **本 addon 自己的 controller** 的 logger 與訊息格式，不是同一件事，
+        那段勸退不適用。至於「租戶看得到的那句話」那一半產品面契約，#947 之後
+        歸該 PR 自己的測試管，本檔不再兼管（本檔守的是歸因，不是文案）。
+
+        結構性的那一半（「停在 savepoint 之前」）仍由 A4 與 F 系列的 spy 承擔，
+        不靠字串。
         """
         home = self._mk_with_route('740 A2', protected=False)
-        client, payload, _b, _a = self._tenant_delete(home, 'A2/route-plain')
-        error = self._assert_endpoint_denied(payload, 'A2')
+        # ⚠ `with` 必須包住 `_tenant_delete()`：那行 log 是 HTTP 請求**處理當下**寫出的，
+        #   早於下面的斷言 helper 被呼叫 —— 只把 helper 包起來會一筆都捕不到。
+        with self.assertLogs(LOG_SH_CTRL, level=logging.ERROR) as captured:
+            client, payload, _b, _a = self._tenant_delete(home, 'A2/route-plain')
+        self._assert_endpoint_denied(payload, 'A2')
         self._assert_no_external_call(client, 'A2')
-        self._assert_denied_by_the_preflight(error, 'A2')
+        self._assert_denied_by_the_preflight(captured, 'A2')
 
     def test_A3_access_teardown_is_not_pushed_when_denied(self):
         home = self._mk_with_route('740 A3', protected=True)
-        client, payload, _b, _a = self._tenant_delete(home, 'A3/route-access')
-        error = self._assert_endpoint_denied(payload, 'A3')
+        # ⚠ `with` 必須包住 `_tenant_delete()`：那行 log 是 HTTP 請求**處理當下**寫出的，
+        #   早於下面的斷言 helper 被呼叫 —— 只把 helper 包起來會一筆都捕不到。
+        with self.assertLogs(LOG_SH_CTRL, level=logging.ERROR) as captured:
+            client, payload, _b, _a = self._tenant_delete(home, 'A3/route-access')
+        self._assert_endpoint_denied(payload, 'A3')
         self._assert_no_external_call(client, 'A3')
-        self._assert_denied_by_the_preflight(error, 'A3')
+        self._assert_denied_by_the_preflight(captured, 'A3')
 
     def test_A4_denied_delete_never_enters_the_teardown_savepoint(self):
         """前置檢查必須在 `try:`／savepoint **之外**：被拒時整條補償路徑不得被進入。
