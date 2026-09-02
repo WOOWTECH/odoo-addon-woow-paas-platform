@@ -151,8 +151,14 @@ class AccessResyncCron(models.AbstractModel):
         #
         # ⚠ 空手那一行不得寫成 "nothing to do"：「掃了 0 列」與「掃了 500 列全被
         # 擋」是兩件事，同一句話要能分開，所以計數永遠印出來。
-        (_logger.warning if (totals['gated'] or totals['failed'])
-         else _logger.info)(
+        #
+        # 🔴 **升級成 WARNING 的判準只看 `failed`，`gated` 不參與**（#961）。
+        # `gated` ＝被 liveness gate 擋掉、這輪推不動（SA/SH 停權中、CS 已進
+        # `deleting`），那是**預期狀態**不是異常——本方法 docstring 的「不開 force
+        # 旁路」那段逐字說過：那一刻對外根本沒有東西可達，旗標留著是實話。長期停權
+        # 的租戶會讓這一行每 15 分鐘 warn 一次＝96 次／日，正好長成上面那個「洪水
+        # 等於沒有訊號」的形狀。三個計數照印 ⇒ 訊號不丟，只是不再每輪拉警報。
+        (_logger.warning if totals['failed'] else _logger.info)(
             "[ACCESS_RESYNC] scanned=%d pushed=%d gated=%d failed=%d | %s",
             totals['scanned'], totals['pushed'], totals['gated'],
             totals['failed'], ' '.join(per_leg))
