@@ -241,6 +241,26 @@ msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-python
+#: code:addons/woow_paas_platform/models/account_move_invoice_status.py:0
+msgid ""
+"%(n)s posted invoice(s) have been waiting more than %(days)s days for a "
+"manual ECPay e-invoice and still have no invoice number.\n"
+"Oldest one: %(name)s (created %(created)s).\n"
+"Issue them from the invoice form (\"Retry ECPay e-invoice\"), or switch the "
+"company's \"Issue e-invoice\" setting to automatic.\n"
+"Note: woow_invoice_issue_state='issued' is NOT proof of issuance "
+"(ecpay_demo_mode defaults to True); the ECPay invoice number is."
+msgstr ""
+"有 %(n)s 張已過帳的帳單等待人工開立 ECPay 電子發票逾 %(days)s "
+"天，仍未取得發票號碼。\n"
+"最舊的一張：%(name)s（建立於 %(created)s）。\n"
+"請從帳單表單開立（「Retry ECPay e-invoice」），或把公司的「Issue "
+"e-invoice」設定改為自動。\n"
+"注意：woow_invoice_issue_state='issued' "
+"不能當成已開立的證明（ecpay_demo_mode 預設為 True），ECPay 發票號碼才是。"
+
+#. module: woow_paas_platform
+#. odoo-python
 #: code:addons/woow_paas_platform/models/skill.py:0
 msgid "%(name)s v%(version)s (%(scope)s)"
 msgstr ""
@@ -7581,6 +7601,11 @@ msgstr ""
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_wallet_topup__source__manual
 msgid "Manual (user-initiated)"
 msgstr ""
+
+#. module: woow_paas_platform
+#: model:ir.model.fields.selection,name:woow_paas_platform.selection__account_move__woow_invoice_issue_state__manual
+msgid "Manual Issue (by policy)"
+msgstr "人工開立（依政策）"
 
 #. module: woow_paas_platform
 #. odoo-python
