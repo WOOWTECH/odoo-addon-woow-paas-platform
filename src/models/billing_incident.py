@@ -3494,7 +3494,17 @@ class MailActivity(models.Model):
             or snapshot['wrong_target_attachment_ids'])
 
     def _preflight_attachment_relation_write(self, value, may_skip=False):
-        """Lock destinations/carriers and reject before the ORM mutates M2M."""
+        """Lock destinations/carriers and reject before the ORM mutates M2M.
+
+        回傳**明確布林**，語意是「呼叫端寫入後要不要 postcheck」：
+        True＝走完了完整協定（8-attempt 收斂迴圈），寫入後必須跑
+        `_postcheck_attachment_relation_graph`；False＝短路成立，鎖已持有到
+        commit，postcheck 無事可驗。
+
+        ⛔ 不要改回傳 snapshot／其他物件、讓呼叫端做真值判斷——一旦有人讓完
+        整路徑回 None 或空 dict，postcheck 會**靜默不跑**，而格1／格2 的計數
+        判準同時失效（失敗與成功的輸出一模一樣，測不出來）。
+        """
         self.check_access('write')
         plan = self._inspect_attachment_relation_commands(value)
         if may_skip and not self._attachment_relation_write_touches_billing(
@@ -3577,7 +3587,8 @@ class MailActivity(models.Model):
                     or final_ids
                     or plan['creates_relation']):
                 Attachment._raise_billing_attachment_guard()
-        return snapshot
+        # 走完完整協定 ⇒ 呼叫端必須 postcheck。⛔ 不要回 snapshot（見 docstring）。
+        return True
 
     @api.model
     def _preflight_attachment_relation_create(
@@ -3742,14 +3753,16 @@ class MailActivity(models.Model):
             ))
         guarded_relation_write = False
         if 'attachment_ids' in write_values:
-            guarded_relation_write = bool(
-                self._preflight_attachment_relation_write(
-                    write_values['attachment_ids'],
-                    # targets_billing 為真時（含 values 本身把目標改寫成
-                    # billing）探測讀到的是寫入前的舊 row，判不準，一律不短路。
-                    # 短路成立時 preflight 回 False ⇒ 這裡連 postcheck 一起跳。
-                    may_skip=not targets_billing,
-                )
+            # preflight 回明確布林：True＝走了完整協定，寫入後必須 postcheck；
+            # False＝短路已持鎖到 commit，跳過 postcheck。
+            # ⛔ 不要再包 bool()——那會把「完整路徑回 None／空 dict」這種退化
+            # 靜默吃掉，變成不跑 postcheck，且格1／格2 的計數判準同時失效。
+            guarded_relation_write = self._preflight_attachment_relation_write(
+                write_values['attachment_ids'],
+                # targets_billing 為真時（含 values 本身把目標改寫成
+                # billing）探測讀到的是寫入前的舊 row，判不準，一律不短路。
+                # 短路成立時 preflight 回 False ⇒ 這裡連 postcheck 一起跳。
+                may_skip=not targets_billing,
             )
         with self.env.cr.savepoint(flush=False):
             result = super().write(write_values)
