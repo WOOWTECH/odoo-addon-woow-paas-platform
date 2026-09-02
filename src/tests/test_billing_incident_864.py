@@ -4875,6 +4875,25 @@ class TestBillingIncidentRpcWriteGuard864(HttpCase):
         AttachmentClass, provenance_spy, provenance_calls = (
             self._provenance_lock_spy())
         self.authenticate(self.manager_a_login, self.manager_a_login)
+        # ⚠ 這兩腿刻意只用 op4（指名既有 id）／op5（清空）——這是本測試「≥2」
+        # 那個下界推論的**設計前提**，不是隨手挑的：
+        #   1. 為何是 op4／op5：兩者都不會讓
+        #      `_inspect_attachment_relation_commands` 產出 prospective_targets
+        #      或 creates_relation，所以探測會真的走進鎖後 snapshot，
+        #      `_lock_and_refresh_billing_attachment_provenance` 才會被呼叫到
+        #      「探測 1 次 ＋ 完整路徑收斂迴圈 ≥1 次」＝ ≥2。
+        #   2. 哪一行早退會讓 ≥2 失效：src/models/billing_incident.py 的
+        #      `_attachment_relation_write_touches_billing` 裡那條 fail-closed
+        #      早退——條件文字為
+        #      `if plan['prospective_targets'] or plan['creates_relation']:`
+        #      → `return True`（撰稿時在 :3432，⚠ 行號會漂，以條件文字為準）。
+        #      落進它就**零呼叫**直接回 True：探測那 1 次根本不存在，於是
+        #      `>=2` 會紅得像守衛壞了，實際是這個測試的前提被打破。
+        #   3. 🔴 要加第三腿的人：先確認新形態**不落進**上面那條早退分支
+        #      （op0 憑空 create → creates_relation；op1 改寫 res_model/res_id
+        #      → prospective_targets，兩者都會落進去）。若新形態必然落進去，
+        #      必須另立計數判準，⛔ 不可以只是把 `>=2` 調小——那會連短路與完
+        #      整路徑都分不開，退回這裡刻意不用 `>0` 的老問題。
         commands = {
             'referenced_id': [(4, direct_owned.id, 0)],
             'current_link_only': [(5, 0, 0)],
