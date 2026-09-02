@@ -3402,10 +3402,118 @@ class MailActivity(models.Model):
                 & set(prospective_targets)):
             Attachment._raise_billing_attachment_guard()
 
-    def _preflight_attachment_relation_write(self, value):
-        """Lock destinations/carriers and reject before the ORM mutates M2M."""
+    def _attachment_relation_write_touches_billing(self, plan):
+        """鎖後探測：這批 relation command 是否碰得到 incident 證據。
+
+        ⛔ 這裡**不是**無鎖廉價探測。lock 必須先於判斷：「查完」到 commit 之間
+        就是 TOCTOU 窗口，protocol-compliant 的 protector 可以在窗口裡讓某個
+        attachment 變成 protected（例如 scheduler 建出 dedicated review
+        activity，讓一張 future-id 的 attachment 追溯成 incident 證據），而短路
+        路徑既不序列化也不 postcheck 的話，就會把一張已 protected 的
+        attachment 掛到 ordinary carrier 上。
+
+        所以這裡直接呼叫完整路徑用的**同一支**
+        `_lock_and_refresh_billing_attachment_provenance`：同一組 advisory
+        key、同一個取鎖排序、同一份 snapshot 語意，零行自寫 lock 邏輯。它本身
+        就是 read → 鎖 `carrier_targets` → 重讀 → 收斂到
+        `carrier_targets ⊆ locked_targets` 才回，因此判斷依據是**鎖後**那次重
+        讀的 snapshot，⛔ 不是鎖前的讀值。
+
+        短路省下來的是 preflight 的 8-attempt 收斂迴圈與整套 postcheck，
+        ⛔ 不是 advisory lock 本身——advisory lock 便宜，而且只有撞到同一個
+        carrier target 的並行寫入才會等，那正是必須序列化的情況。
+
+        判準 fail-closed：任何無法在這一輪判定的形態一律回 True，交回原本的
+        完整協定。
+        """
+        Attachment = self.env['ir.attachment']
+        if not self.ids:
+            return True
+        if plan['prospective_targets'] or plan['creates_relation']:
+            # command 1（改寫 res_model/res_id）可以把既有 attachment 指向新的
+            # protected 目標；command 0（憑空 create）更關鍵——它產生的
+            # attachment id 在 preflight 當下還不存在，任何鎖與探測都涵蓋不到
+            # 它，只有寫入後的 postcheck 看得見，而短路正是跳過 postcheck。
+            # 這兩種形態一律走完整協定。
+            return True
+        destination_targets = {
+            ('mail.activity', activity_id) for activity_id in self.ids
+        }
+        # command 5（清空）自身不帶 id、command 6（整批替換）看不到被替換掉
+        # 的舊連結，所以探測集合必須同時涵蓋 self 現有 attachment_ids 快照。
+        # 這裡刻意用 _activity_m2m_links 的合併讀，不用 ORM 欄位——committed
+        # 但本交易 RR 快照看不到的連結，只有 fresh cursor 那半邊看得見。
+        current_links = Attachment._activity_m2m_links(self.ids)
+        current_by_activity = {
+            activity_id: set()
+            for activity_id in self.ids
+        }
+        for attachment_id, activity_id in current_links:
+            current_by_activity.setdefault(
+                activity_id, set()).add(attachment_id)
+        current_ids = {
+            attachment_id for attachment_id, _activity_id in current_links
+        }
+        for attachment_id in sorted(current_ids):
+            # 保留完整協定「現存連結必須可讀」的授權語意與拒絕順序，短路只跳過
+            # 收斂迴圈與 postcheck，不跳過任何一道授權。
+            self._preauthorize_attachment_command_id(attachment_id, 'read')
+        final_by_activity = {
+            activity_id: self._apply_attachment_relation_commands(
+                current_by_activity.get(activity_id, set()), plan)
+            for activity_id in self.ids
+        }
+        final_links = {
+            (attachment_id, activity_id)
+            for activity_id, attachment_ids in final_by_activity.items()
+            for attachment_id in attachment_ids
+        }
+        affected_ids = (
+            current_ids | plan['referenced_ids']
+            | {attachment_id
+               for attachment_ids in final_by_activity.values()
+               for attachment_id in attachment_ids}
+        )
+        # 與完整路徑那次呼叫逐一同參數（此路徑 prospective_targets 恆空，所以
+        # extra_direct_targets 就是 destination_targets）。extra_m2m_links 只會
+        # 替 snapshot **增加** m2m 邊，而 carrier_targets 對每條 m2m 邊都
+        # `add(('mail.activity', activity_id))` ⇒ 鎖的集合只增不減，不可能小於
+        # 完整路徑會鎖的集合。
+        snapshot = Attachment._lock_and_refresh_billing_attachment_provenance(
+            affected_ids,
+            extra_direct_targets=destination_targets,
+            extra_m2m_links=final_links,
+        )
+        if not (Attachment._activity_m2m_links(self.ids) <= current_links):
+            # 取鎖前讀到的 current_links 已經過期（別人在窗口裡 commit 過）⇒
+            # 探測集合可能漏掉新連結，不敢下短路結論，交回完整協定收斂。
+            # 這一格與完整路徑迴圈尾端的收斂條件是同一條判準。
+            return True
+        return bool(
+            snapshot['protected']
+            or snapshot['wrong_target_attachment_ids'])
+
+    def _preflight_attachment_relation_write(self, value, may_skip=False):
+        """Lock destinations/carriers and reject before the ORM mutates M2M.
+
+        回傳**明確布林**，語意是「呼叫端寫入後要不要 postcheck」：
+        True＝走完了完整協定（8-attempt 收斂迴圈），寫入後必須跑
+        `_postcheck_attachment_relation_graph`；False＝短路成立，鎖已持有到
+        commit，postcheck 無事可驗。
+
+        ⛔ 不要改回傳 snapshot／其他物件、讓呼叫端做真值判斷——一旦有人讓完
+        整路徑回 None 或空 dict，postcheck 會**靜默不跑**，而格1／格2 的計數
+        判準同時失效（失敗與成功的輸出一模一樣，測不出來）。
+        """
         self.check_access('write')
         plan = self._inspect_attachment_relation_commands(value)
+        if may_skip and not self._attachment_relation_write_touches_billing(
+                plan):
+            # 探測已經在同一組 carrier target 上取過鎖（持有到 commit）且鎖後
+            # 重讀確認與 incident 證據無關：跳過的是下面的 8-attempt 收斂迴圈。
+            # 回傳 False 讓 write() 一併跳過 postcheck——鎖持有到 commit ⇒
+            # protocol-compliant 的 writer 動不了這張圖 ⇒ postcheck 無事可驗。
+            return False
         Attachment = self.env['ir.attachment']
         destination_targets = {
             ('mail.activity', activity_id) for activity_id in self.ids
@@ -3479,7 +3587,8 @@ class MailActivity(models.Model):
                     or final_ids
                     or plan['creates_relation']):
                 Attachment._raise_billing_attachment_guard()
-        return snapshot
+        # 走完完整協定 ⇒ 呼叫端必須 postcheck。⛔ 不要回 snapshot（見 docstring）。
+        return True
 
     @api.model
     def _preflight_attachment_relation_create(
@@ -3642,14 +3751,24 @@ class MailActivity(models.Model):
                 'Billing incident activities are managed automatically. '
                 'Use the billing incident form instead.'
             ))
+        guarded_relation_write = False
         if 'attachment_ids' in write_values:
-            self._preflight_attachment_relation_write(
-                write_values['attachment_ids'])
+            # preflight 回明確布林：True＝走了完整協定，寫入後必須 postcheck；
+            # False＝短路已持鎖到 commit，跳過 postcheck。
+            # ⛔ 不要再包 bool()——那會把「完整路徑回 None／空 dict」這種退化
+            # 靜默吃掉，變成不跑 postcheck，且格1／格2 的計數判準同時失效。
+            guarded_relation_write = self._preflight_attachment_relation_write(
+                write_values['attachment_ids'],
+                # targets_billing 為真時（含 values 本身把目標改寫成
+                # billing）探測讀到的是寫入前的舊 row，判不準，一律不短路。
+                # 短路成立時 preflight 回 False ⇒ 這裡連 postcheck 一起跳。
+                may_skip=not targets_billing,
+            )
         with self.env.cr.savepoint(flush=False):
             result = super().write(write_values)
             self.flush_recordset()
             self._validate_stored_billing_activity_write(self)
-            if 'attachment_ids' in write_values:
+            if guarded_relation_write:
                 self._postcheck_attachment_relation_graph()
         return result
 
