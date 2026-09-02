@@ -39,12 +39,33 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # ⛔ 刻意**不用** `cache: pip`。拿掉的是一個「零效益、有破壞力」的機制：
+      #
+      # 效益為零：runner image（`docker.gitea.com/runner-images:ubuntu-latest`）的
+      # hostedtoolcache 已經預裝了 requirements.txt 指定的全部版本 ⇒ 每一趟
+      # `pip install -r requirements.txt` 對每一行都印 `Requirement already satisfied`，
+      # 從頭到尾沒有下載、沒有建置、沒有寫入 ⇒ `pip cache dir` 指的
+      # `/root/.cache/pip` **從來不會被建立**，也就沒有東西可快取。
+      #
+      # 破壞力：`setup-python@v5` 的 **post 階段**（cache-save）用 `fs.existsSync`
+      # 檢查那個路徑，不存在就 `throw` ⇒ 四個真正的步驟全部 success，job 卻被判
+      # failure。實測 run 6776～6809 連續 9 趟都是這個形態，錯誤原文：
+      #   `::error::Cache folder path is retrieved for pip but doesn't exist on
+      #    disk: /root/.cache/pip. This likely indicates that there are no
+      #    dependencies to cache.`
+      # 這是上游公認的 bug（actions/setup-python #815／#932／#1169），已在
+      # **v6.0.0** 由 PR #1182 把 hard error 降級為 warning；但 `v5` 這條線在
+      # v5.6.0 之後凍結，我們釘的 `@v5` 解析到的 commit **沒有**那個修法。
+      #
+      # ⚠ 另一個候選修法是「setup-python 之前先 `mkdir -p ~/.cache/pip`」。
+      #   不選它的理由：那是替一個不產生任何快取內容的機制**造一個空目錄去騙過
+      #   存在性檢查**——症狀消失、零效益的機制留著，下一個人還要再讀一次這段。
+      #   ⇒ 真的哪天 runner image 不再預裝、pip 真的會下載時，再把 cache 加回來
+      #     （屆時目錄自然存在，本 bug 也不會觸發）。
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-          cache: pip
-          cache-dependency-path: extra/paas-operator/requirements.txt
 
       - name: Install dependencies
         working-directory: extra/paas-operator
