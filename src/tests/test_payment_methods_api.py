@@ -256,14 +256,24 @@ def _code_keyword_positions(source, is_code, keyword):
 
 
 def _guarded_has_only_known_branches(guarded, spans, is_code):
-    """guarded 區塊裡除了三個已知分支，不得再有第四個分支。
+    """guarded 區塊裡不得再長出**分支形狀**的第四條路。
 
     #983 盲區 4：原本的迴圈硬編死 ``('ok', 'failed', 'error')``，對 guarded 區塊
-    裡任何第四個 else / fallback 分支既不抽取也不檢查。改成「消費掉三個已知分支
-    之後，對剩下沒被消費的文字做掃描」：
-      - 相鄰兩個已知分支之間的間隙，只能是一個 ``else`` 加空白；
-      - 三分支鏈以外的地方不得出現 code 位置的 ``else``（scope creep 的形狀）；
-      - 三分支以外不得再出現 ``bindStatus ===`` 比對（沒掛 else 的平行分支）。
+    裡任何第四個 else 分支既不抽取也不檢查。改成「消費掉三個已知分支之後，對剩下
+    沒被消費的文字做掃描」。**實際保證的只有這三件事**：
+      - 三個已知分支依 ok → failed → error 的順序出現，相鄰間隙只能是一個
+        ``else`` 加空白；
+      - 三分支鏈以外的地方不得出現 code 位置的 ``else``（＝ else-if 鏈延伸出的
+        第四分支）；
+      - 三分支以外不得再出現 ``bindStatus ===`` 比對（＝沒掛 ``else`` 的平行分支）。
+
+    ⚠ **明寫它不保證的**（刻意留的缺口，別讀成「任何額外分支都會被攔」）：guarded
+    區塊內既不掛 ``else``、也不比對 ``bindStatus`` 的任意陳述式——例如
+    ``if (somethingUnrelated) { doExtraSideEffect(); }``——這裡看不到。因為它與
+    合法的 cleanup 前置語句（``PaymentMethodsListPage.js:43-45`` 的
+    ``const cleanHash = …``）在字面上無法區分，收緊會誤殺真實檔。缺口由
+    ``test_known_limitation_unrelated_statement_is_not_flagged_as_scope_creep``
+    釘成可執行的紀錄，不靠這段散文。
     """
     ordered = [spans[status] for status in ('ok', 'failed', 'error')]
     if any(anchor < 0 or closing < 0 for anchor, _opening, closing in ordered):
@@ -419,8 +429,11 @@ class TestPaymentMethodBindFrontendContract(TransactionCase):
         )
         self.assertTrue(
             contract['known_branches_only'],
-            "The guarded block must hold exactly the ok/failed/error chain; "
-            "any extra fallback branch is unreviewed callback scope creep",
+            "The ok/failed/error chain must stay in order with no further "
+            "`else` branch and no further `bindStatus ===` comparison outside "
+            "it. Statements carrying neither shape are outside this check's "
+            "reach; see "
+            "test_known_limitation_unrelated_statement_is_not_flagged_as_scope_creep",
         )
 
     def test_contract_probe_distinguishes_common_from_ok_only_cleanup(self):
@@ -587,7 +600,12 @@ class TestPaymentMethodBindFrontendContract(TransactionCase):
         )
 
     def test_guard_rejects_unknown_else_branch(self):
-        """盲區 4：guarded 區塊裡多出來的第四個分支必須被看見。"""
+        """盲區 4：guarded 區塊裡多出來的第四個 ``else`` 分支必須被看見。
+
+        ⚠ 攔得到的是 ``else`` 這個形狀（與沒掛 else 的 ``bindStatus ===`` 平行
+        分支），不是「任何額外程式碼」——缺口見下一格
+        ``test_known_limitation_unrelated_statement_is_not_flagged_as_scope_creep``。
+        """
         unknown_else_branch = '''
             onMounted(async () => {
               const bindStatus = q.bind_status;
@@ -614,7 +632,64 @@ class TestPaymentMethodBindFrontendContract(TransactionCase):
         self.assertTrue(contract['cleanup_common'])
         self.assertFalse(
             contract['known_branches_only'],
-            "A fourth fallback branch inside the guarded block is scope creep",
+            "A fourth `else` branch inside the guarded block is scope creep",
+        )
+
+    # ── #983：已知限制的可執行紀錄（不是保證，是缺口的所有權） ──────────
+
+    def test_known_limitation_unrelated_statement_is_not_flagged_as_scope_creep(self):
+        """🔴 已知限制（刻意留的缺口，不是漏寫）。
+
+        ``_guarded_has_only_known_branches`` 只認兩種**分支形狀**：code 位置的
+        ``else``，以及三分支之外的 ``bindStatus ===`` 比對。下面這個樣本在 cleanup
+        之前插入 ``if (somethingUnrelated) { doExtraSideEffect(); }``，兩種形狀都
+        不含，所以現行判準判它**通過**——這一格斷言的是現行行為，不是期望行為。
+
+        為什麼不收緊：收成「三分支之後只准空白／else 膠水」會誤殺真實檔
+        ``src/static/src/paas/pages/settings/PaymentMethodsListPage.js:43-45`` 的
+        cleanup 前置語句::
+
+             43        // Consume known callback queries so reload doesn't retrigger feedback.
+             44        const cleanHash = window.location.hash.split("?")[0];
+             45        window.history.replaceState(null, "", cleanHash);
+
+        那段合法前置語句與這裡的額外側效應在字面上無法區分，而逼前端改寫不在
+        #983 範圍內。
+
+        未來若有人收緊判準，這格會紅，逼他一併處理真實檔那個前置語句——缺口有主，
+        不會變成沒人負責的靜默漏洞。
+        """
+        unrelated_statement = '''
+            onMounted(async () => {
+              const bindStatus = q.bind_status;
+              if (["ok", "failed", "error"].includes(bindStatus)) {
+                if (bindStatus === "ok") {
+                  this.state.bindSuccess = true;
+                } else if (bindStatus === "failed") {
+                  this.state.error = _t("Card binding failed. Please try again.");
+                } else if (bindStatus === "error") {
+                  this.state.error = _t("We couldn't confirm the card binding.");
+                }
+                if (somethingUnrelated) {
+                  doExtraSideEffect();
+                }
+                const cleanHash = window.location.hash.split("?")[0];
+                window.history.replaceState(null, "", cleanHash);
+              }
+            });
+        '''
+        contract = _bind_frontend_contract(unrelated_statement)
+        # 其餘四格全部合法，所以最後那格的值只反映「額外陳述式」這一件事
+        self.assertTrue(contract['ok_feedback'])
+        self.assertTrue(contract['failed_message'])
+        self.assertTrue(contract['error_message'])
+        self.assertTrue(contract['cleanup_common'])
+        self.assertTrue(
+            contract['known_branches_only'],
+            "Documented gap: an extra statement carrying neither `else` nor a "
+            "`bindStatus ===` comparison is literally indistinguishable from "
+            "the real file's cleanup preamble, so it is not flagged. "
+            "Tightening this must also handle PaymentMethodsListPage.js:43-45.",
         )
 
 
