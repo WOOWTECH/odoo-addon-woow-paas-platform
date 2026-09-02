@@ -163,9 +163,12 @@ superpowers（obra）、SuperClaude（`/sc:*`）與 ccpm 均已退役（ccpm 202
 
 ### Indentation
 
-- JavaScript / OWL / XML / SCSS: 2 spaces
+規則的單一來源是 `.editorconfig`（repo-lint 第 36 條 `indentation` 只驗 PR **新增**的檔）：
+
 - Python: 4 spaces (PEP 8)
-- 編輯既有檔一律跟該檔現況（2026-03 前的檔多為 4 spaces），不要順手重排縮排
+- `src/static/src/**`（OWL JS／template XML／SCSS）: 2 spaces
+- 其餘 Odoo XML（`src/views/`、`src/data/`、`src/security/`）: 4 spaces（與 Odoo core 一致）
+- 編輯既有檔一律跟該檔現況（2026-03 前的前端檔多為 4 spaces），不要順手重排縮排
 
 ### Python
 
