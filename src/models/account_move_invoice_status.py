@@ -21,6 +21,17 @@ _MANUAL_AGING_DEFAULT_DAYS = 7
 #: `tests/test_invoice_issue_policy_864.py` 刻意雙寫（同步哨兵）。
 _MANUAL_AGING_SUMMARY = '手動開票逾期：發票已過帳但 ECPay 發票號碼仍為空'
 
+#: #990 老化掃描的三個預算旋鈕（形狀抄 `access_resync_cron._resync_leg`，
+#: 該處 docstring 引 #791 覆核 F1 ——同一個「naive limit 餓死後排」問題）。
+#: `_AGING_ALERT_LIMIT` 限的是「這一輪**寫幾筆 incident**」，**成敗都算**
+#: （只算成功的話，`_log` 持續失敗時這一輪會一路打到 `_AGING_MAX_SCAN`，
+#: 變成失敗時做得比成功時還多）。
+_AGING_ALERT_LIMIT = 500
+#: 每次 `search` 抓幾列（游標分批的批量，不是預算）。
+_AGING_SCAN_BATCH = 1000
+#: 掃描筆數安全上界；踩到必出聲，且「是否真的被截斷」用**實查**判定。
+_AGING_MAX_SCAN = 20000
+
 
 class AccountMoveInvoiceStatus(models.Model):
     _inherit = 'account.move'
@@ -46,10 +57,27 @@ class AccountMoveInvoiceStatus(models.Model):
     woow_invoice_retry_count = fields.Integer(default=0, copy=False)
     woow_invoice_last_error = fields.Text(copy=False)
     woow_invoice_next_retry_at = fields.Datetime(copy=False)
-    # ⚠ RED 階段：欄位先存在（讓測試跑得動、不會紅在 AttributeError），
-    # 但 cron ⛔ 不寫它、domain ⛔ 不看它 —— 修法在下一顆 commit。
+    #: #864 #990：老化告警的去重 marker。非空＝這張 move 已經被
+    #: `_cron_alert_stale_manual_invoices` 告警過，⛔ 不再進掃描視窗。
+    #:
+    #: 🔴 **為什麼需要它**：逾期條件**不會自消**（沒人手動開票前它一直符合
+    #: domain），所以 naive `search(limit=N)` 的視窗會被同一批舊 move 佔死、
+    #: 後排永遠餓死（#791 覆核 F1 的同一個形狀）。把「已告警」寫進 move 本身
+    #: 才能讓它離開 domain ⇒ 視窗會前進。
+    #:
+    #: ⚠ 失效方向是刻意選的：marker **只在** `Incident._log()` 回傳非 False
+    #: 時才寫，且它走主 cursor、incident 走獨立 cursor ⇒ 主交易若回捲，marker
+    #: 消失而 incident 還在 ⇒ 下一輪重掃、upsert 累加 occurrences ＝**重複告警**
+    #: （無害）。⛔ 反過來「marker 寫了但 incident 沒寫」＝漏告警，不會發生。
     woow_aging_alerted_at = fields.Datetime(
-        string='Aging Alert Sent At', index=True, copy=False, readonly=True)
+        string='Aging Alert Sent At',
+        index=True,
+        copy=False,
+        readonly=True,
+        help='Set when the manual-invoice aging cron has logged a billing '
+             'incident for this move. Non-empty rows leave the scan window so '
+             'newly-aged invoices can be reached (see #990).',
+    )
     woow_skip_upstream_hook = fields.Boolean(
         default=False,
         copy=False,
@@ -196,28 +224,12 @@ class AccountMoveInvoiceStatus(models.Model):
 
     @api.model
     def _woow_stale_manual_domain(self, cutoff):
-        """老化判準（⚠ RED 階段：**沒有** marker 排除條件）。"""
-        return [
-            ('move_type', '=', 'out_invoice'),
-            ('state', '=', 'posted'),
-            ('woow_invoice_issue_state', '=', 'manual'),
-            ('create_date', '<=', cutoff),
-            '|',
-            ('ecpay_invoice_id', '=', False),
-            ('ecpay_invoice_id.name', 'in', [False, '']),
-        ]
+        """老化判準的**唯一**來源（掃描、計數、截斷實查三處共用）。
 
-    @api.model
-    def _cron_alert_stale_manual_invoices(self, limit=None, scan_batch=None,
-                                          max_scan=None):
-        """[#864 PR-C] ``manual`` 發票沒人開就是另一種靜默，逾期則落案並告警。
-
-        ⚠ **RED 階段的 naive 版**（#990 的缺陷本身）：``limit`` 直接下在
-        ``search`` 上，而逾期條件不自消 ⇒ 每一輪撈到的都是同一批最舊的
-        ⇒ 後排永遠餓死。``scan_batch`` / ``max_scan`` 收下但不生效。
-
-        判準：``state='posted'``、``woow_invoice_issue_state='manual'``、
-        ``create_date`` 已逾 N 天，且 **ECPay 回傳的發票號碼仍為空**。
+        判準：``move_type='out_invoice'``、``state='posted'``、
+        ``woow_invoice_issue_state='manual'``、``create_date`` 已逾 N 天、
+        **尚未告警過**（``woow_aging_alerted_at`` 為空），且 **ECPay 回傳的
+        發票號碼仍為空**。
 
         🔴 判準 ⛔ **不能用** ``woow_invoice_issue_state == 'issued'`` 當「已真的
         開出來」：``res.company.ecpay_demo_mode`` 預設 ``True``，demo 之下開票
@@ -226,71 +238,171 @@ class AccountMoveInvoiceStatus(models.Model):
         鑑別力的證據是 ``ecpay_invoice_id.name``（``uniform.invoice`` 的統一發票
         號碼）。詳見設計 §0.6 第 3 條。
 
-        門檻天數見 ``_woow_manual_aging_days()``：⛔ **恆開**，沒有 disable 開關。
+        ⚠ 抽成一支的理由是**只留一份真相**：掃描 domain 與「還剩幾筆」的
+        ``search_count`` 若各寫一份，改了一邊沒改另一邊時症狀是「告警訊息裡的
+        數字對不上」——而那是無聲的。
+        """
+        return [
+            ('move_type', '=', 'out_invoice'),
+            ('state', '=', 'posted'),
+            ('woow_invoice_issue_state', '=', 'manual'),
+            ('create_date', '<=', cutoff),
+            # #990：已告警過的離開視窗，否則 limit 會被舊批佔死（見欄位註解）。
+            ('woow_aging_alerted_at', '=', False),
+            # 🔴 有 ECPay 發票號碼＝真的開出來了，不算逾期——即使 issue
+            # state 還停在 manual。狀態欄是我們自己寫的，號碼才是對方給的。
+            '|',
+            ('ecpay_invoice_id', '=', False),
+            ('ecpay_invoice_id.name', 'in', [False, '']),
+        ]
 
+    @api.model
+    def _cron_alert_stale_manual_invoices(self, limit=None, scan_batch=None,
+                                          max_scan=None):
+        """[#864 PR-C／#990] ``manual`` 發票沒人開就是另一種靜默，逾期則落案並告警。
+
+        判準見 ``_woow_stale_manual_domain()``；門檻天數見
+        ``_woow_manual_aging_days()``（⛔ **恆開**，沒有 disable 開關）。
         以 ``create_date`` 而非 ``invoice_date`` 計齡：``invoice_date`` 是可被
         回填／前推的會計日期，``create_date`` 是系統觀測到這張 move 進來的時間。
 
         落地：PR-D 的 ``woow.billing.incident``（獨立交易寫入、以 ``external_ref``
-        ``invoice:<id>`` upsert ⇒ 重跑冪等、只累加 occurrences）＋ ``mail.activity``
-        （summary 為 dedup 鍵，上一波沒被處理完就不重複轟炸）。
+        ``invoice:<id>`` upsert）＋ ``mail.activity``（summary 為 dedup 鍵）。
+
+        ## 🔴 #990：為什麼是 id 游標批次，而不是 ``search(limit=N)``
+
+        逾期條件**不會自消**（沒人手動開票前它一直符合 domain），而 ``_order``
+        讓最舊的那批永遠排在前面 ⇒ 每個 tick 的 limit 視窗都被同一批舊 move
+        佔住 ⇒ **新變老的 move 永遠拿不到告警**，而那個狀態與「今天沒事做」在
+        輸出上完全一樣。這與 ``access_resync_cron._resync_leg``（#791 覆核 F1）
+        是同一個形狀，解法也照抄：沿 id 游標一批批掃過去，``limit`` 只算
+        「這一輪對外寫幾筆」。
+
+        視窗前進靠**兩件事同時成立**，缺一不可：
+
+        1. ``woow_aging_alerted_at`` 讓已告警的 move **離開 domain**
+           ⇒ 下一輪的視窗會落在新的 move 上；
+        2. ``id > last_id`` 游標讓**這一輪**不重掃同一列——⚠ 這一條不是多餘的：
+           ``Incident._log()`` 是 fail-soft（回 ``False``），失敗的那些**不會**被
+           標 marker、仍留在 domain 裡；沒有游標的話同一批會被反覆撈出來，
+           迴圈原地空轉直到打完 ``limit``。
+
+        ⚠ 掃描順序從 ``create_date asc, id asc`` 改成 ``id``：游標的正確性完全
+        建立在「這一批的最大 id 之後還有沒有列」上（⛔ 不靠 ``_order``，顯式
+        帶 ``order='id'``）。對 ``account.move`` 而言 id 與 ``create_date`` 同向
+        （都是建立時序），「最舊的先告警」這個性質仍近似成立。
+
+        ⚠ **每一輪都出聲，零命中那輪也是**，而且空手那一行同樣自帶計數：
+        「掃了 0 列」與「掃了 500 列全被排除」是兩件事，同一句話要能分開。
+
+        :param limit: 這一輪最多寫幾筆 incident（**成敗都算**）。
+        :param scan_batch: 每次 ``search`` 的批量。
+        :param max_scan: 掃描筆數安全上界；踩到必出聲。
         """
         # `_woow_manual_aging_days()` 保證回正整數（⛔ 無 disable 逃生門），
         # 所以這裡沒有、也不該有「門檻不合法就整段 return」的早退分支。
         days = self._woow_manual_aging_days()
         cutoff = fields.Datetime.now() - timedelta(days=days)
-        # ⛔ 刻意不下 `limit`：逾期條件不會自己解除（沒人開票的發票明天還是逾期），
-        # 所以任何固定上限都會讓第 N+1 筆**永遠**掃不到——每個 tick 都被同一批
-        # 最舊的佔滿。那是零訊號的盲區，不是「下一輪收斂」。真的多到跑不完時，
-        # 本身就是必須有人處理的事故。
-        #
-        # 「已經真的開出來」的判準放進 domain（而不是取回後再 filtered）：
-        # 判準只留一份，且 order/limit 若日後要加也不會與它錯位。
-        stale = self.sudo().search(
-            self._woow_stale_manual_domain(cutoff),
-            limit=limit or None,
-            order='create_date asc, id asc',
-        )
-        if not stale:
-            return
+        limit = _AGING_ALERT_LIMIT if limit is None else limit
+        scan_batch = _AGING_SCAN_BATCH if scan_batch is None else scan_batch
+        max_scan = _AGING_MAX_SCAN if max_scan is None else max_scan
+
+        Move = self.sudo()
+        domain = self._woow_stale_manual_domain(cutoff)
+        # ⚠ 在**寫任何 marker 之前**取總數：寫完再算會把本輪處理掉的排除在外，
+        # 告警訊息裡的數字就會從「總逾期數」縮水成「這批的筆數」——而縮水的
+        # 那一側是無聲的（沒有人會發現數字變小了）。
+        pending_total = Move.search_count(domain)
+
         Incident = self.env['woow.billing.incident']
-        for move in stale:
-            # ⚠ snapshot 刻意不帶 partner_email、detail 刻意不帶 move.name：
-            # `_validate_log_snapshot` 對 email 形狀與自由文字的敏感內容是
-            # fail-soft 拒收（整筆回 False）⇒ 一旦被拒，這筆告警就靜默消失。
-            # 識別走 external_ref / source_ref（都是純量、且不經內容驗證器）；
-            # 人看的名字放在下面 mail.activity 的 note 裡。
-            Incident._log({
-                'external_ref': 'invoice:%s' % move.id,
-                'kind': 'manual_invoice_stale',
-                'partner_ref': move.partner_id.id or None,
-                'amount': move.amount_total,
-                'currency': move.currency_id.name or None,
-                'source_model': 'account.move',
-                'source_ref': move.id,
-                'assessment_reason': 'manual_invoice_aging',
-                'detail': (
-                    '發票已過帳且開票政策為人工開票（manual），逾 %s 天仍未取得 '
-                    'ECPay 統一發票號碼。識別請用 external_ref / source_ref。'
-                    % days
-                ),
-            })
-        self._woow_notify_stale_manual_invoices(stale, days)
-        # ids 只印前 20 筆：沒有 limit 的掃描在事故現場可能是四位數，整串 id
-        # 會把 log 洗掉；完整清單在 woow.billing.incident（external_ref 可查）。
-        _logger.error(
-            "[ECPAY_INV] %s manual invoice(s) posted >%sd without an ECPay "
-            "invoice number; incidents logged, first ids=%s",
-            len(stale), days, stale.ids[:20],
+        now = fields.Datetime.now()
+        last_id = 0
+        scanned = 0
+        attempted = 0          # 已對外寫幾筆（成敗都算）＝ limit 的計量單位
+        failed = 0
+        alerted = Move.browse()
+        truncated = False
+
+        while attempted < limit:
+            rows = Move.search(
+                domain + [('id', '>', last_id)],
+                limit=scan_batch, order='id')
+            if not rows:
+                break
+            last_id = rows[-1].id
+            scanned += len(rows)
+            for move in rows:
+                # ⚠ snapshot 刻意不帶 partner_email、detail 刻意不帶 move.name：
+                # `_validate_log_snapshot` 對 email 形狀與自由文字的敏感內容是
+                # fail-soft 拒收（整筆回 False）⇒ 一旦被拒，這筆告警就靜默消失。
+                # 識別走 external_ref / source_ref（都是純量、且不經內容驗證器）；
+                # 人看的名字放在下面 mail.activity 的 note 裡。
+                incident_id = Incident._log({
+                    'external_ref': 'invoice:%s' % move.id,
+                    'kind': 'manual_invoice_stale',
+                    'partner_ref': move.partner_id.id or None,
+                    'amount': move.amount_total,
+                    'currency': move.currency_id.name or None,
+                    'source_model': 'account.move',
+                    'source_ref': move.id,
+                    'assessment_reason': 'manual_invoice_aging',
+                    'detail': (
+                        '發票已過帳且開票政策為人工開票（manual），逾 %s 天仍未取得 '
+                        'ECPay 統一發票號碼。識別請用 external_ref / source_ref。'
+                        % days
+                    ),
+                })
+                attempted += 1
+                if incident_id:
+                    # 🔴 marker **只在 incident 真的落地後**才寫。順序反過來就是
+                    # 「標了但沒落案」＝永久漏告警，而且無聲。
+                    move.woow_aging_alerted_at = now
+                    alerted |= move
+                else:
+                    # `_log` 已經吞掉例外並自行 log；這裡只計數，⛔ 不標 marker
+                    # ⇒ 下一輪還撿得回來。
+                    failed += 1
+                if attempted >= limit:
+                    break
+            if scanned >= max_scan:
+                # 「是不是真的被截斷」用**實查**不用猜：拿「這一批是滿的」當代理
+                # 判準時，剛好整除 `scan_batch` 就會發假截斷警報。訊號通膨與訊號
+                # 缺席一樣糟（同 access_resync_cron 的教訓）。
+                truncated = bool(Move.search(
+                    domain + [('id', '>', last_id)], limit=1, order='id'))
+                break
+
+        if alerted:
+            self._woow_notify_stale_manual_invoices(alerted, days, pending_total)
+
+        if truncated:
+            _logger.warning(
+                "[ECPAY_INV] aging scan cap (%d) reached before the stale rows "
+                "were exhausted — the rest wait for the next run", max_scan)
+        # ids 只印前 20 筆：事故現場可能是四位數，整串 id 會把 log 洗掉；
+        # 完整清單在 woow.billing.incident（external_ref `invoice:<id>` 可查）。
+        (_logger.error if alerted or failed else _logger.info)(
+            "[ECPAY_INV] aging scan: scanned=%d alerted=%d failed=%d "
+            "pending_total=%d days=%d truncated=%s first_ids=%s",
+            scanned, len(alerted), failed, pending_total, days, truncated,
+            alerted.ids[:20],
         )
+        return len(alerted)
 
     @api.model
-    def _woow_notify_stale_manual_invoices(self, moves, days):
+    def _woow_notify_stale_manual_invoices(self, moves, days,
+                                           pending_total=None):
         """建 mail.activity 給 ``account.group_account_manager``。
 
         summary 即 dedup 鍵：上一波告警還沒被處理完就不重複建（處理完消失，
         再犯再告警）。形狀沿 ``ecpay_invoice_cron._notify_admin_on_error`` 與
         ``sh_subscription_fix._cron_billing_silence_alert``。
+
+        🔴 #990：``moves`` 自 batch 化之後只是**這一輪處理的那批**，⛔ 不是
+        全部逾期數。note 裡的總數必須用 ``pending_total``（呼叫端在寫任何
+        marker **之前**取的 ``search_count``），否則管理員看到的數字會從
+        「總逾期數」縮水成 ``limit``——而縮水的那一側完全無聲，正是這條告警
+        本來要偵測的那種靜默。省略時退回 ``len(moves)``（相容舊呼叫端）。
         """
         Activity = self.env['mail.activity'].sudo()
         if Activity.search_count([('summary', '=', _MANUAL_AGING_SUMMARY)]):
@@ -307,16 +419,19 @@ class AccountMoveInvoiceStatus(models.Model):
                 bool(todo), bool(manager_group), bool(model))
             return
         anchor = moves[0]
+        total = len(moves) if pending_total is None else pending_total
         note = _(
-            "%(n)s posted invoice(s) have been waiting more than %(days)s days "
-            "for a manual ECPay e-invoice and still have no invoice number.\n"
-            "Oldest one: %(name)s (created %(created)s).\n"
+            "%(total)s posted invoice(s) have been waiting more than %(days)s "
+            "days for a manual ECPay e-invoice and still have no invoice "
+            "number (%(batch)s of them were logged in this run).\n"
+            "Oldest one in this run: %(name)s (created %(created)s).\n"
             "Issue them from the invoice form (\"Retry ECPay e-invoice\"), or "
             "switch the company's \"Issue e-invoice\" setting to automatic.\n"
             "Note: woow_invoice_issue_state='issued' is NOT proof of issuance "
             "(ecpay_demo_mode defaults to True); the ECPay invoice number is."
         ) % {
-            'n': len(moves),
+            'total': total,
+            'batch': len(moves),
             'days': days,
             'name': anchor.name or anchor.id,
             'created': anchor.create_date,
