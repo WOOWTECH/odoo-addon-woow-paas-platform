@@ -1,16 +1,19 @@
 ---
 title: HA App OAuth 串接與開通包（給 Elmo）
 category: reference
-status: contract-v1.1（OAuth 段可實作；§7 開通契約已定、平台端已實作 Refs #336；status 枚舉 v1.1 6 值）
+status: implemented（OAuth 段與 §7 開通 API 皆已實作；stg 2026-07-13／prod 2026-07-14 驗活；status 枚舉 v1.1 6 值）
 audience: Elmo / HA App 開發團隊
 created: 2026-07-11
+updated: 2026-09-02
 source-of-truth:
   - src/controllers/oauth2.py（OAuth 2.0 provider：authorize / device_authorization / token / introspect / revoke）
-  - src/models/oauth_client.py（client 註冊、client_type、redirect 比對、scope/grant 解析）
+  - src/models/oauth_client.py（client 註冊、client_type、redirect 比對、scope/grant 解析；`ha:provision` 冪等 healer `_ensure_ha_app_provision_scope`）
   - src/models/oauth_token.py（access / refresh token TTL 與驗證）
   - src/models/oauth_code.py（authorization code 生命週期）
   - src/models/oauth_device_code.py（RFC 8628 device flow 參數與 polling 狀態機）
-  - src/data/oauth_clients.xml（seed 的 public client `woow-ha-smart-home`）
+  - src/controllers/ha_paas.py（開通 API：`POST /api/ha-paas/provision`、`GET /api/ha-paas/status`）
+  - src/data/oauth_clients.xml（seed 的 public client：`woow-ha-smart-home`＝HA component 用、`woow-ha-app`＝本文件的 HA App 用）
+  - src/data/oauth_ha_provision_scope_update.xml（`ha:provision` healer 的 `<function>`，每次 `-u` 重跑）
   - src/views/oauth_client_views.xml（後台 OAuth Clients 管理畫面）
 related:
   - docs/reference/api/ha-component-integration.md（HA custom component 串接規格，與本文件的 consumer 不同）
@@ -19,12 +22,12 @@ related:
 
 # HA App OAuth 串接與開通包（給 Elmo）
 
-> **文件狀態：OAuth 段可實作、開通契約 v1 已定（contract-first）。** 目的是讓 Elmo 拿整包當「HA App AI 開發的輸入 context」（2026-07-10 定價對齊會議決議：把目標＋context 整包丟給 AI 做）。
+> **文件狀態：OAuth 段與 §7 開通 API 皆已實作並驗活（stg 2026-07-13、prod 2026-07-14）。** 目的是讓 Elmo 拿整包當「HA App AI 開發的輸入 context」（2026-07-10 定價對齊會議決議：把目標＋context 整包丟給 AI 做）。
 >
 > - **2026-07-12 契約 §7 升 v1.1**：status 枚舉由 4 值擴為 6 值（新增 `suspended`／`deleting` 直映 `cloud_service.state`）；`ha_url` 仍僅 `ready` 給。詳見 §7.3。平台端已隨 [#336](https://git-prod.woowtech.io/odoo-addons/woow_paas_platform/issues/336) 實作完成（`POST /api/ha-paas/provision`＋`GET /api/ha-paas/status`）。
-> - **OAuth 段（§1–§6）已可用**：平台早已是自寫的 OAuth 2.0 provider，以下每個技術主張都附 code 出處（`file:line`），可直接照做。
-> - **開通 API 段（§7）是契約 v1.1**：2026-07-12 拍板 contract-first——App 與平台 #336 實作**雙方依 §7 為準**；平台端實作已完成（Refs [#336](https://git-prod.woowtech.io/odoo-addons/woow_paas_platform/issues/336)）。
-> - **憑證另發**：本文件**不含**任何真實 `client_id` / `client_secret`；HA App 專用 client 由 ops 註冊後另循安全管道發放（見 §3）。
+> - **OAuth 段（§1–§6）已可用**：平台早已是自寫的 OAuth 2.0 provider，以下每個技術主張都附 code 出處（`file:line`，2026-09-02 對過 `develop` 重校）。
+> - **開通 API 段（§7）＝契約 v1.1，雙方均已實作**：2026-07-12 拍板 contract-first——App 與平台 #336 實作**雙方依 §7 為準**；平台端已落地於 `src/controllers/ha_paas.py`（provision `:158`、status `:220`），Refs [#336](https://git-prod.woowtech.io/odoo-addons/woow_paas_platform/issues/336)。
+> - **App client 已 seed 進碼**：`client_id` = **`woow-ha-app`**（xmlid `oauth_client_ha_app`，`src/data/oauth_clients.xml:34-43`）。它是 **public client、沒有 `client_secret`**，故 `client_id` 非機密、比照 `woow-ha-smart-home` 先例明碼 seed；本文件仍**不含**任何 secret（見 §3）。
 
 Refs：[#337](https://git-prod.woowtech.io/odoo-addons/woow_paas_platform/issues/337)（本串接包 task）、[#336](https://git-prod.woowtech.io/odoo-addons/woow_paas_platform/issues/336)（HA PaaS 0 元隱藏訂閱＋開通 API）、[#340](https://git-prod.woowtech.io/odoo-addons/woow_paas_platform/issues/340)（App 專用 public client 建置＋stg device flow 驗證＋憑證交付）。
 
@@ -41,7 +44,7 @@ App OAuth 登入  →  打「開通 HA」API  →  App 端輪詢狀態（明確�
 HA instance 建立沒那麼快）  →  ready 拿 URL 綁定  →  之後全走 HA endpoint（Webview）
 ```
 
-本文件把上面第 1 段（OAuth 登入）講到可以直接實作，第 2–4 段（開通 / 輪詢 / 綁定）依 §7 契約 v1（平台端實作追 #336）。
+本文件把上面第 1 段（OAuth 登入）講到可以直接實作，第 2–4 段（開通 / 輪詢 / 綁定）依 §7 契約 v1.1（平台端已實作，見 `src/controllers/ha_paas.py`）。
 
 ### ⚠️ 名詞界定：HA App ≠ HA custom component（很重要，別混）
 
@@ -51,7 +54,7 @@ HA instance 建立沒那麼快）  →  ready 拿 URL 綁定  →  之後全走 
 | --- | --- | --- |
 | 是什麼 | 安裝在**使用者已有的 HA instance 內**的 Python component（`woow_paas_smart_home`） | Elmo 開發的**手機原生 App** |
 | 誰連誰 | HA instance → 回連平台，讀既有 SH/SA 服務資料 | App → 平台，**開通一個新的 HA instance** |
-| OAuth client | `woow-ha-smart-home`（seed，`client_id` 硬編在 component `const.py`） | **尚未存在，需 ops 新註冊**（前置 [#340](https://git-prod.woowtech.io/odoo-addons/woow_paas_platform/issues/340)；見 §3、§9 風險 1） |
+| OAuth client | `woow-ha-smart-home`（seed，`client_id` 硬編在 component `const.py`） | **`woow-ha-app`**（seed `oauth_client_ha_app`，`oauth_clients.xml:34-43`；[#340](https://git-prod.woowtech.io/odoo-addons/woow_paas_platform/issues/340) 已交付，見 §3、§9 風險 1） |
 | redirect 比對 | `ha_callback` mode（scheme∈{http,https}、path 固定） | **device flow 主線下 App 不做 redirect**（2026-07-12 拍板；見 §9 風險 3） |
 
 **不要複用 `woow-ha-smart-home` 這個 client 給 App。** 原因見 §9。
@@ -60,39 +63,39 @@ HA instance 建立沒那麼快）  →  ready 拿 URL 綁定  →  之後全走 
 
 ## 給 Elmo 的開發順序建議（兩段式）
 
-拍板（2026-07-12）：授權主線走 **device flow（§6）**。建議 Elmo 分兩階段推進，不必等 #336 才動工：
+拍板（2026-07-12）：授權主線走 **device flow（§6）**。以下兩階段的平台端前置**皆已完成**（#336／#340 皆已關），Elmo 可直接兩段並行：
 
-- **階段 A — 現在就能做**（不依賴 #336）：
-  1. 等 ops 交付 **App 專用 `client_id`**（前置 [#340](https://git-prod.woowtech.io/odoo-addons/woow_paas_platform/issues/340)）。
+- **階段 A — OAuth 打通**：
+  1. 使用 App 專用 `client_id` = **`woow-ha-app`**（public client、無 secret；[#340](https://git-prod.woowtech.io/odoo-addons/woow_paas_platform/issues/340) 已交付）。
   2. 照 **§6** 接 device flow，先用**既有 read scopes**（如 `workspace:read`、`smarthome:read`）**驗通登入取 token**——這條路現況即可跑，不需等開通 API。
   3. 以取得的 token 呼叫既有讀取端點，確認 OAuth 端到端打通。
-- **階段 B — 可與平台平行開發**（契約 v1 已定）：照 **§7** 契約 v1 實作開通（`POST /api/ha-paas/provision`）＋狀態輪詢（`GET /api/ha-paas/status`）＋ ready 拿 URL 綁定（見 §8 階段 2–4）；平台 #336 完成後 **stg 聯調**。
+- **階段 B — 開通串接**（契約 v1.1）：照 **§7** 實作開通（`POST /api/ha-paas/provision`）＋狀態輪詢（`GET /api/ha-paas/status`）＋ ready 拿 URL 綁定（見 §8 階段 2–4）；平台 #336 已完成，stg／prod 端點皆已驗活（見 §9）。
 
-**等 ops 交付的前置**：App 專用 `client_id`（[#340](https://git-prod.woowtech.io/odoo-addons/woow_paas_platform/issues/340)：client 建置＋stg device flow 驗證＋憑證交付）。
+**平台端前置已全數完成**（[#340](https://git-prod.woowtech.io/odoo-addons/woow_paas_platform/issues/340)：client 建置＋stg device flow 驗證＋憑證交付，2026-07-14 關單）：prod base URL = `https://paas.woowtech.io`。
 
 ---
 
 ## 1. 平台 OAuth 2.0 能力總覽
 
-平台是**自寫**的 OAuth 2.0 provider（非 Odoo 內建），實作在 `src/controllers/oauth2.py`，類別 `OAuth2Controller`（`src/controllers/oauth2.py:132`）。
+平台是**自寫**的 OAuth 2.0 provider（非 Odoo 內建），實作在 `src/controllers/oauth2.py`，類別 `OAuth2Controller`（`src/controllers/oauth2.py:147`）。
 
 ### 1.1 支援的 grant types
 
-`/oauth2/token` 的 dispatch 在 `src/controllers/oauth2.py:462-478`：
+`/oauth2/token` 的 dispatch 在 `src/controllers/oauth2.py:464-491`：
 
 | grant_type | 支援 | 用途 | 實作 |
 | --- | --- | --- | --- |
-| `authorization_code` | ✅ | 標準授權碼流程；**支援 PKCE**（S256 / plain） | `_handle_authorization_code`（`oauth2.py:579`） |
-| `refresh_token` | ✅ | 換發新 access token，**帶 rotation**（舊 token 立即撤銷） | `_handle_refresh_token`（`oauth2.py:662`） |
-| `client_credentials` | ✅ | 機器對機器（無使用者情境，用 SUPERUSER 身分） | `_handle_client_credentials`（`oauth2.py:703`） |
-| `urn:ietf:params:oauth:grant-type:device_code` | ✅ | RFC 8628 裝置授權碼＋輪詢 | `_handle_device_code`（`oauth2.py:740`） |
+| `authorization_code` | ✅ | 標準授權碼流程；**支援 PKCE**（S256 / plain） | `_handle_authorization_code`（`oauth2.py:592`） |
+| `refresh_token` | ✅ | 換發新 access token，**帶 rotation**（舊 token 立即撤銷） | `_handle_refresh_token`（`oauth2.py:675`） |
+| `client_credentials` | ✅ | 機器對機器（無使用者情境，用 SUPERUSER 身分） | `_handle_client_credentials`（`oauth2.py:716`） |
+| `urn:ietf:params:oauth:grant-type:device_code` | ✅ | RFC 8628 裝置授權碼＋輪詢 | `_handle_device_code`（`oauth2.py:753`） |
 
-> **給 App 的建議**（2026-07-12 拍板）：HA App 授權主線走 **Device Authorization Grant（RFC 8628）**，見 §6——依自家先例（`woow_paas_smart_home` component 的 Companion App WebView 登入已用 device flow；現有 HA client 也已加此 grant，`oauth_clients.xml:21`）。**Authorization Code + PKCE**（RFC 8252，見 §5）為替代方案。App 專用 client 建置與 stg 驗證見前置 [#340](https://git-prod.woowtech.io/odoo-addons/woow_paas_platform/issues/340)。
+> **給 App 的建議**（2026-07-12 拍板）：HA App 授權主線走 **Device Authorization Grant（RFC 8628）**，見 §6——依自家先例（`woow_paas_smart_home` component 的 Companion App WebView 登入已用 device flow；現有 HA client 也已加此 grant，`oauth_clients.xml:21`）。**Authorization Code + PKCE**（RFC 8252，見 §5）為替代方案。App 專用 client（`woow-ha-app`）建置與 stg／prod 驗證已完成（[#340](https://git-prod.woowtech.io/odoo-addons/woow_paas_platform/issues/340)）。
 
 ### 1.2 PKCE
 
-- S256 驗證邏輯：`base64url(sha256(code_verifier))` 去 padding 後與 `code_challenge` 比對（`src/controllers/oauth2.py:61-79`）。
-- **public client 一律強制 PKCE 且只收 S256**（缺 `code_challenge` 或 method≠S256 在 authorize 階段即拒：`oauth2.py:184-207`；token 階段再擋一次 downgrade：`oauth2.py:611-650`）。
+- S256 驗證邏輯：`base64url(sha256(code_verifier))` 去 padding 後與 `code_challenge` 比對（`src/controllers/oauth2.py:76-94`）。
+- **public client 一律強制 PKCE 且只收 S256**（缺 `code_challenge` 或 method≠S256 在 authorize 階段即拒：`oauth2.py:199-222`；token 階段再擋一次 downgrade：`oauth2.py:624-663`）。
 
 ---
 
@@ -102,15 +105,15 @@ HA instance 建立沒那麼快）  →  ready 拿 URL 綁定  →  之後全走 
 
 | 端點 | Method | auth | 用途 | 出處 |
 | --- | --- | --- | --- | --- |
-| `/oauth2/authorize` | GET | user（需先登入 Odoo session） | 顯示授權同意頁 | `oauth2.py:137` |
-| `/oauth2/authorize` | POST | user | 處理 Allow / Deny，簽發 authorization code | `oauth2.py:255` |
-| `/oauth2/device_authorization` | POST | none | RFC 8628 §3.1–3.2：簽發 `device_code` + `user_code` | `oauth2.py:338` |
-| `/device` | GET / POST | user | RFC 8628 §3.3：使用者輸入 `user_code` 的驗證頁 | `oauth2.py:392` / `oauth2.py:400` |
-| `/oauth2/token` | POST | none | 換發 token（上表 4 種 grant） | `oauth2.py:452` |
-| `/oauth2/introspect` | POST | none | RFC 7662 token 內省（需 client 認證） | `oauth2.py:795` |
-| `/oauth2/revoke` | POST | none | RFC 7009 token 撤銷 | `oauth2.py:843` |
+| `/oauth2/authorize` | GET | user（需先登入 Odoo session） | 顯示授權同意頁 | `oauth2.py:152` |
+| `/oauth2/authorize` | POST | user | 處理 Allow / Deny，簽發 authorization code | `oauth2.py:259` |
+| `/oauth2/device_authorization` | POST | none | RFC 8628 §3.1–3.2：簽發 `device_code` + `user_code` | `oauth2.py:342` |
+| `/device` | GET / POST | user | RFC 8628 §3.3：使用者輸入 `user_code` 的驗證頁 | `oauth2.py:396` / `oauth2.py:404` |
+| `/oauth2/token` | POST | none | 換發 token（上表 4 種 grant） | `oauth2.py:464` |
+| `/oauth2/introspect` | POST | none | RFC 7662 token 內省（需 client 認證） | `oauth2.py:808` |
+| `/oauth2/revoke` | POST | none | RFC 7009 token 撤銷 | `oauth2.py:856` |
 
-> 其它平台 controller 若要以 Bearer token 保護自家 API，可呼叫 helper `verify_oauth_token(req, required_scopes=[...])`（`oauth2.py:82`）——**#336 的開通 API 預期就是用這支做鑑權**。
+> 其它平台 controller 若要以 Bearer token 保護自家 API，可呼叫 helper `verify_oauth_token(req, required_scopes=[...])`（`oauth2.py:97`）——**#336 的開通 API 就是用這支做鑑權**（`ha_paas.py:14` import、`:32` 呼叫）。
 
 ---
 
@@ -136,17 +139,19 @@ Client 存在 Odoo model `woow_paas_platform.oauth_client`（`src/models/oauth_c
 
 - **後台 model 管理，無自助註冊 API**：Odoo 後台選單 **Woow PaaS → OAuth Clients**（`src/views/oauth_client_views.xml:85`）由 ops 建立與維護。
 - **憑證發放**：
-  - **public client（App 建議）**：**沒有 client_secret**，只有 `client_id`。持有證明由 PKCE 的 `code_verifier` 提供（`oauth2.py:504-511`：public client 若在 token 端帶 secret 會被直接拒）。
-  - confidential client：後台 form 有「Regenerate Secret」按鈕，secret 一次性彈窗顯示、之後只存 hash（`oauth_client.py:381-399`；該按鈕對 public client 隱藏：`oauth_client_views.xml:32`）。
-- **seed client 範例**（僅供理解結構，**不是**給 App 用的）：`woow-ha-smart-home`，public + PKCE，見 `src/data/oauth_clients.xml:14-24`。
+  - **public client（App 建議）**：**沒有 client_secret**，只有 `client_id`。持有證明由 PKCE 的 `code_verifier` 提供（`oauth2.py:517-524`：public client 若在 token 端帶 secret 會被直接拒）。
+  - confidential client：後台 form 有「Regenerate Secret」按鈕，secret 一次性彈窗顯示、之後只存 hash（`oauth_client.py:402-420`；該按鈕對 public client 隱藏：`oauth_client_views.xml:32`）。
+- **兩個 seed 的 public client**（皆明碼進碼、`client_id` 非機密）：
+  - `woow-ha-smart-home`——HA custom component 用，`ha_callback` redirect mode + PKCE，見 `src/data/oauth_clients.xml:14-24`。**不是**給 App 用的。
+  - **`woow-ha-app`——本文件的 HA App 用**（xmlid `oauth_client_ha_app`），device flow + refresh token，scopes `workspace:read smarthome:read ha:provision`，見 `src/data/oauth_clients.xml:34-43`、§9 風險 1 的欄位表。
 
-> 🔐 **憑證絕不進版控 / 不寫進本文件。** App 專用 client 註冊後，`client_id`（及 confidential 情境的一次性 secret）由 ops 循安全管道交付 Elmo。
+> 🔐 **`client_secret` 絕不進版控 / 不寫進本文件。** 分清楚兩者：`client_id` 是 OAuth 規格上的 **public identifier**（RFC 6749 §2.2），public client 本就沒有 secret，所以 `woow-ha-app` 明碼 seed 進碼、也寫在本文件裡；只有 confidential client 的一次性 `client_secret` 屬機密，由 ops 循安全管道交付、絕不落地在 repo 或本文件。
 
 ---
 
 ## 4. Scopes
 
-平台目前定義的 scope 共 **5 個**，語意在授權同意頁的 `scope_descriptions`（`src/controllers/oauth2.py:224-233`），seed client 的 `scopes` 欄位見 `oauth_clients.xml:22`：
+平台目前定義的 scope 共 **6 個**，語意在模組級 `SCOPE_DESCRIPTIONS`（`src/controllers/oauth2.py:29-39`，授權同意頁與 `/device` 頁共用），各 seed client 的 `scopes` 欄位見 `oauth_clients.xml:22`（component）與 `:42`（App）：
 
 | Scope | 授權範圍 |
 | --- | --- |
@@ -155,10 +160,11 @@ Client 存在 Odoo model `woow_paas_platform.oauth_client`（`src/models/oauth_c
 | `smarthome:tunnel` | 取得 Smart Home 的 tunnel token（高權限） |
 | `security-access:read` | 讀取 Security Access 清單 / detail / 狀態 |
 | `security-access:tunnel` | 取得 Security Access 的 tunnel token（高權限） |
+| `ha:provision` | **寫入**：開通 / 管理使用者的雲端 HA instance（App 主流程唯一必要，見 §7） |
 
-> ⚠️ **開通 scope 已定名 `ha:provision`（§7 契約 v1）。** 上列 5 個現有 scope 全是「讀取既有服務」；HA App 觸發「開通」這個**寫入 / 佈建**動作用新增的 `ha:provision`（App 主流程唯一必要 scope）。實作（seed＋idempotent healer）隨 #336、client 掛上此 scope 隨 #340，見 §7、§9 風險 2。
+> ⚠️ **`ha:provision` 已實作上線。** 上表**前 5 個** scope 全是「讀取既有服務」；只有 `ha:provision` 是**寫入 / 佈建**。實作已隨 [#336](https://git-prod.woowtech.io/odoo-addons/woow_paas_platform/issues/336) 落地——seed 在 `oauth_clients.xml:42`、既有 DB 靠冪等 healer `_ensure_ha_app_provision_scope`（`oauth_client.py:318`）補；`woow-ha-app` client 已掛上此 scope（[#340](https://git-prod.woowtech.io/odoo-addons/woow_paas_platform/issues/340) 已關）。見 §7、§9 風險 2。
 >
-> scope 若要新增，seed 是 `noupdate="1"`（`oauth_clients.xml:5`），既有 DB 須靠 idempotent healer（如現有的 `_ensure_ha_smart_home_sa_scopes`，`oauth_client.py:290` + `oauth_scope_updates.xml`）覆蓋升級，不能只改 XML。
+> scope 若要新增，seed 是 `noupdate="1"`（`oauth_clients.xml:5`），既有 DB 須靠 idempotent healer 覆蓋升級，不能只改 XML。現有兩支先例：`_ensure_ha_smart_home_sa_scopes`（`oauth_client.py:290` + `oauth_scope_updates.xml`）與 `_ensure_ha_app_provision_scope`（`oauth_client.py:318` + `oauth_ha_provision_scope_update.xml`），兩者皆從 `post_init_hook`（`hooks.py:242`，新裝）與 `<function>`（每次 `-u`，升級）兩處呼叫。
 
 ---
 
@@ -169,7 +175,7 @@ Token 生命週期（`src/controllers/oauth2.py:19-21`）：
 | Token | TTL | 出處 |
 | --- | --- | --- |
 | access token | **1 小時** | `oauth2.py:19` |
-| refresh token | **30 天**（換發時 rotation，舊的立即 revoke：`oauth2.py:692-693`） | `oauth2.py:20` |
+| refresh token | **30 天**（換發時 rotation，舊的立即 revoke：`oauth2.py:705-714`） | `oauth2.py:20` |
 | authorization code | **10 分鐘**，一次性（`oauth_code.py:70-73`） | `oauth2.py:21` |
 
 ### 5.1 步驟
@@ -190,7 +196,7 @@ Token 生命週期（`src/controllers/oauth2.py:19-21`）：
 
    使用者在此登入平台（`auth='user'`）並於同意頁按 Allow。
 
-3. 平台 302 導回：`<APP_REDIRECT_URI>?code=<CODE>&state=<CSRF>`（`oauth2.py:308-334`）。App 先核對 `state`。
+3. 平台 302 導回：`<APP_REDIRECT_URI>?code=<CODE>&state=<CSRF>`（`oauth2.py:312-338`）。App 先核對 `state`。
 
 4. App 以授權碼換 token（**public client 不帶 client_secret**）：
 
@@ -203,7 +209,7 @@ Token 生命週期（`src/controllers/oauth2.py:19-21`）：
      -d code_verifier=<VERIFIER>
    ```
 
-   回應（`oauth2.py:563-577`）：
+   回應（`oauth2.py:576-583`）：
 
    ```json
    {
@@ -240,9 +246,9 @@ Token 生命週期（`src/controllers/oauth2.py:19-21`）：
      -d scope=workspace:read
    ```
 
-   回應（`oauth2.py:383-390`）含 `device_code`、`user_code`、`verification_uri`、`verification_uri_complete`、`expires_in`、`interval`。
+   回應（`oauth2.py:387-394`）含 `device_code`、`user_code`、`verification_uri`、`verification_uri_complete`、`expires_in`、`interval`。
 
-2. App 顯示 `user_code` 與 `verification_uri`（可做成 QR），使用者到 `/device` 登入並輸入 `user_code`、按 Allow（`oauth2.py:400-448`）。
+2. App 顯示 `user_code` 與 `verification_uri`（可做成 QR），使用者到 `/device` 登入並輸入 `user_code`、按 Allow（`oauth2.py:396-460`）。
 
 3. App 依 `interval` 秒輪詢 `/oauth2/token`：
 
@@ -253,7 +259,7 @@ Token 生命週期（`src/controllers/oauth2.py:19-21`）：
      -d client_id=<APP_CLIENT_ID>
    ```
 
-   狀態機（`oauth2.py:773-791`）：`authorization_pending`（續等）/ `slow_down`（放慢，interval +5）/ `access_denied` / `expired_token`；核准後回與 §5 步驟 4 相同的 token JSON。
+   狀態機（`oauth2.py:786-795`）：`authorization_pending`（續等）/ `slow_down`（放慢，interval +5）/ `access_denied` / `expired_token`；核准後回與 §5 步驟 4 相同的 token JSON。
 
 > **注意**：這裡的輪詢是 **OAuth token 輪詢**（等使用者授權完成），與 §0 流程圖階段 3 的「**開通狀態**輪詢」（等 HA instance 建好）是**兩個不同的輪詢**，別混。
 
@@ -261,7 +267,7 @@ Token 生命週期（`src/controllers/oauth2.py:19-21`）：
 
 ## 7. 開通 API（契約 v1.1 — App 與 #336 實作雙方依此為準）
 
-> ✅ **契約 v1.1（2026-07-12 拍板 contract-first；同日 status 枚舉擴為 6 值）。** Elmo 的 App 照本節實作、平台 #336 照本節實作。任何變更需**雙向知會並更新本節**（本節即 single source of truth）。平台端實作已完成（Refs [#336](https://git-prod.woowtech.io/odoo-addons/woow_paas_platform/issues/336)）。
+> ✅ **契約 v1.1（2026-07-12 拍板 contract-first；同日 status 枚舉擴為 6 值）。** Elmo 的 App 照本節實作、平台 #336 照本節實作。任何變更需**雙向知會並更新本節**（本節即 single source of truth）。平台端實作已完成並驗活（Refs [#336](https://git-prod.woowtech.io/odoo-addons/woow_paas_platform/issues/336)；程式碼 `src/controllers/ha_paas.py`）。
 
 所有路徑相對於平台 base URL（實際 stg / prod 網域由 ops 提供）。鑑權一律帶 `Authorization: Bearer <access_token>`（token 取得見 §6 device flow 主線 / §5 替代），所需 scope 見 §7.1。
 
@@ -269,10 +275,11 @@ Token 生命週期（`src/controllers/oauth2.py:19-21`）：
 
 | Scope | 用途 | 狀態 |
 | --- | --- | --- |
-| `ha:provision` | 開通 HA instance（App 主流程**唯一必要** scope） | **新增**；seed＋idempotent healer 隨 #336 實作、client 掛上此 scope 隨 #340 建立 |
+| `ha:provision` | 開通 HA instance（App 主流程**唯一必要** scope） | **已上線**：seed `oauth_clients.xml:42`＋healer `oauth_client.py:318`（#336）；`woow-ha-app` 已掛上（#340 已關） |
 
 ### 7.2 `POST /api/ha-paas/provision` — 觸發開通
 
+- **出處**：`src/controllers/ha_paas.py:158`。
 - **Auth**：`Authorization: Bearer <access_token>`（scope：`ha:provision`）。
 - **語意**：**冪等、每帳號限一**——已存在則回現況、不重複建。
 - **回應**：
@@ -285,6 +292,7 @@ Token 生命週期（`src/controllers/oauth2.py:19-21`）：
 
 ### 7.3 `GET /api/ha-paas/status` — 查開通狀態（輪詢用）
 
+- **出處**：`src/controllers/ha_paas.py:220`。
 - **Auth**：同 §7.2（`Bearer` token，scope `ha:provision`）。
 - **回應**：`200 {"status": "none"|"provisioning"|"ready"|"error"|"suspended"|"deleting", "ha_url": …, "error": …}`
   - `status`（**v1.1 6 值**）：`none`（尚未開通）／`provisioning`（建置中）／`ready`（就緒）／`error`（佈建失敗）／`suspended`（服務已停用，直映平台 `cloud_service.state`）／`deleting`（刪除中，直映平台 `cloud_service.state`）。
@@ -306,7 +314,7 @@ Token 生命週期（`src/controllers/oauth2.py:19-21`）：
 
 ## 8. HA 開通串接全流程（sequence diagram）
 
-> 階段 1（OAuth）為現況可實作；階段 2–4 依 §7 契約 v1；平台實作追 #336。
+> 四個階段的平台端**皆已實作**：OAuth 段見 §1–§6（`src/controllers/oauth2.py`），開通段依 §7 契約 v1.1（`src/controllers/ha_paas.py`）。stg（2026-07-13）與 prod（2026-07-14）皆已驗活，見 §9。
 
 ```mermaid
 sequenceDiagram
@@ -346,32 +354,44 @@ sequenceDiagram
 
 ---
 
-## 9. 風險 / 待辦（考古發現 — 給 leader / Eugene）
+## 9. 風險 / 待辦（考古發現 → 落地結果）
 
-以下是考古 OAuth 現況後，判斷「撐不撐得起 HA App 串接」的缺口。**本文件只記錄，不自行改 `src/`。**
+原始內容是 2026-07-11 考古當下判斷「撐不撐得起 HA App 串接」的缺口。**風險 1–3 已於 2026-07-12～07-14 全數解除**（[#336](https://git-prod.woowtech.io/odoo-addons/woow_paas_platform/issues/336) 實作＋[#340](https://git-prod.woowtech.io/odoo-addons/woow_paas_platform/issues/340) 驗證交付，兩張皆已關單）；每條保留原始判斷，並補上實際落地結果與量測出處。風險 4 是現況仍成立的限制。
 
-1. **HA App 需要一個全新的 OAuth client（不可複用 `woow-ha-smart-home`）。**
-   - 既有 `woow-ha-smart-home` 是 `ha_callback` redirect mode（`oauth_clients.xml:19`），`client_id` 硬編在 HA component 的 `const.py`（`oauth_client.py:26-35` 註解），consumer 是「HA instance 內的 component」而非手機 App。
-   - **前置 [#340](https://git-prod.woowtech.io/odoo-addons/woow_paas_platform/issues/340)（建置）**：由 ops 為 HA App 新註冊一個 public client（`client_type=public`；public client 一律強制 `require_pkce=True`——對 device flow 路徑無影響，device 端不檢查 PKCE，且保留 §5 替代路徑時有用）。
-   - **grants**：走 device flow 主線，新 client 的 `grant_types` 需含 `urn:ietf:params:oauth:grant-type:device_code` 與 `refresh_token`（若也保留 §5 替代路徑再加 `authorization_code`）。
-   - **redirect_uris**：純 device flow 下 redirect 不參與流程，但 model 的 `redirect_uris` 目前為 `required`（`oauth_client.py:60`），**能否留空／需填佔位值待 #340 於 stg 驗證**。
+1. ✅ **已解除 — HA App 專用 OAuth client 已 seed 進碼**（確實沒有複用 `woow-ha-smart-home`）。
+   - **原判斷（仍成立）**：既有 `woow-ha-smart-home` 是 `ha_callback` redirect mode（`oauth_clients.xml:19`），`client_id` 硬編在 HA component 的 `const.py`（`oauth_client.py:26-35` 註解），consumer 是「HA instance 內的 component」而非手機 App。
+   - **落地方式與原規劃不同**：原本要「ops 後台手建」，最後改由 #336 **直接 seed 進碼**（`client_id` 非機密、self-contained＋healer 冪等；先例＝`woow-ha-smart-home` 亦明碼 seed）。record 在 `src/data/oauth_clients.xml:34-43`：
 
-2. **開通 scope `ha:provision`（契約 v1 已定名）。**
-   - 現有 5 個 scope 全是「讀取既有 SH/SA」（§4），開通用的寫入 scope `ha:provision` 已於 §7 契約 v1 定名。
-   - **實作追 #336**：新增 `ha:provision` 並在既有 DB 以 idempotent healer 升級（seed 是 `noupdate=1`，改 XML 到不了既有 DB）；healer 需求不變。client 掛上此 scope 隨 #340。
+     | 欄位 | 值 |
+     | --- | --- |
+     | xmlid | `oauth_client_ha_app` |
+     | `client_id` | `woow-ha-app` |
+     | `client_type` | `public`（`require_pkce=True`——device flow 不檢查 PKCE，保留 §5 替代路徑時才有用） |
+     | `grant_types` | `urn:ietf:params:oauth:grant-type:device_code,refresh_token` |
+     | `scopes` | `workspace:read smarthome:read ha:provision` |
+     | `redirect_uri_match_mode` | `exact` |
+     | `redirect_uris` | `urn:ietf:wg:oauth:2.0:oob` |
 
-3. **redirect_uri scheme 限制：`ha_callback` mode 拒 custom scheme。**（**2026-07-12 已拍板走 §6 device flow 繞開此題，前置 [#340](https://git-prod.woowtech.io/odoo-addons/woow_paas_platform/issues/340)；以下保留供考古**）
+   - **`redirect_uris` 的答案（原記為「待 #340 於 stg 驗證」）**：model 欄位**至今仍是 `required=True`**（`oauth_client.py:60`），沒有放寬成可留空；seed 改用 RFC 8252 的 out-of-band URI `urn:ietf:wg:oauth:2.0:oob` 當**佔位值**滿足必填，device flow 全程不觸 redirect 比對。
+   - **驗證**：stg 2026-07-13 device flow 端到端全綠（含同意頁 scope 描述、refresh rotation、`/device` 手機版面）；prod 2026-07-14 唯讀煙測——`POST https://paas.woowtech.io/oauth2/device_authorization`（`client_id=woow-ha-app`、`scope=ha:provision`）回 **200**、`GET /api/ha-paas/status` 無 token 回 **401**。兩次紀錄見 [#340](https://git-prod.woowtech.io/odoo-addons/woow_paas_platform/issues/340)。
+
+2. ✅ **已解除 — 開通 scope `ha:provision` 已實作上線。**
+   - **原判斷**：現有 5 個 scope 全是「讀取既有 SH/SA」（§4），開通這個寫入動作缺一個 scope。
+   - **落地**（#336）：`SCOPE_DESCRIPTIONS` 已含 `ha:provision`（`oauth2.py:29-39`，現共 **6 個**）；seed 在 `oauth_clients.xml:42`。既有 DB 靠冪等 healer `_ensure_ha_app_provision_scope`（`oauth_client.py:318`）補——從 `post_init_hook`（`hooks.py:242`，新裝）與 `oauth_ha_provision_scope_update.xml` 的 `<function>`（每次 `-u`，升級）**兩處**呼叫，覆蓋兩條路徑（seed 是 `noupdate=1`，只改 XML 到不了既有 DB）。
+
+3. ✅ **已繞開 — redirect_uri scheme 限制不影響 App**（2026-07-12 拍板走 §6 device flow；以下保留供考古）
    - `_check_ha_callback_uri` 只接受 `scheme∈{http,https}`（`oauth_client.py:217`），手機 App 常用的 custom scheme（如 `woowha://callback`）會被拒。
    - `exact` mode 是純字串逐字比對（`oauth_client.py:190-193`），custom scheme / universal link 可直接註冊。
-   - **原待拍板選項（考古）**：若改走 §5 Auth Code 路徑，App 端 redirect 策略可選 custom scheme + `exact` mode／universal link／loopback `http://127.0.0.1`（RFC 8252），並據此決定新 client 的 `redirect_uri_match_mode` 與 `redirect_uris`。device flow 主線下此題不觸發。
+   - **現況**：`woow-ha-app` 用 `exact` mode ＋ oob 佔位值（見風險 1），device flow 主線下 redirect 完全不參與流程，此題不觸發。
+   - **原待拍板選項（考古）**：若改走 §5 Auth Code 路徑，App 端 redirect 策略可選 custom scheme + `exact` mode／universal link／loopback `http://127.0.0.1`（RFC 8252），並據此決定 client 的 `redirect_uri_match_mode` 與 `redirect_uris`。
 
-4. **無自助 client 註冊 / 憑證發放 API。**
+4. ⚠️ **仍成立 — 無自助 client 註冊 / 憑證發放 API。**
    - 目前只有 Odoo 後台 model（`oauth_client_views.xml`）由 ops 手動建、憑證一次性顯示。
-   - **影響**：HA App client 的建立與憑證交付是**人工 ops 流程**，需納入上線清單；本文件不含真實憑證。
+   - **對 HA App 的影響已消失**（改走 seed 進碼，見風險 1）；但**下一個第三方整合方**若不走 seed 路徑，client 建立與憑證交付仍是人工 ops 流程。本文件一律不含 `client_secret`。
 
 ---
 
 ## 附錄：token 內省與撤銷
 
-- **內省**（確認 token 是否有效、帶哪些 scope）：`POST /oauth2/introspect`，需 client 認證，回 `active` / `scope` / `client_id` / `username` / `exp` / `sub`（`oauth2.py:795-839`，RFC 7662）。
-- **撤銷**（登出 / 換帳號）：`POST /oauth2/revoke`，帶 `token`＋client 認證，一律回 200（`oauth2.py:843-877`，RFC 7009）。
+- **內省**（確認 token 是否有效、帶哪些 scope）：`POST /oauth2/introspect`，需 client 認證，回 `active` / `scope` / `client_id` / `username` / `exp` / `sub`（`oauth2.py:808-852`，RFC 7662）。
+- **撤銷**（登出 / 換帳號）：`POST /oauth2/revoke`，帶 `token`＋client 認證，一律回 200（`oauth2.py:856-890`，RFC 7009）。
