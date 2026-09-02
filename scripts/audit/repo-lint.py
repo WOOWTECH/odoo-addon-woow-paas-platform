@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """repo-lint：把「假綠家族」pitfall 轉成機械 gate 的靜態檢查工具。
 
-四十個 check 函式，歸為下列三十四條規則（其中四條各由多個函式實作：第 2 條
+四十一個 check 函式，歸為下列三十五條規則（其中四條各由多個函式實作：第 2 條
 owl-template 由兩個函式——語法陷阱／i18n 屬性；第 7 條
 capability-gate 由四個函式——slug 集合成員／admin-gui 錨點／gateway 文案錨點／
 Access 頁籤錨點；第 22 條
@@ -543,6 +543,34 @@ test-collectability 由兩個函式——收集面／執行面。這個一對多
                      完整對帳必須拿**真 Babel 當第二把尺**。repo-lint 綠不代表所有 msgid
                      都抽得到。
 
+35. cron-wiring      `src/data/*.xml` 裡 `model="ir.cron"` 的 record：`code` 呼叫的
+                     method 名、與 `model_id` 的 `ref`，都要對得上 `src/models/` 裡
+                     真的存在的實體。
+                     🔴 method 名拼錯時 `ir.cron` 每次到點**靜默失敗**（框架吞例外只
+                     寫 log），而這三件在拼錯的情況下**全部照樣成立**：模組 `-u` 安裝
+                     成功、cron 記錄真的建進 DB（Odoo 不檢查 `code` 字串的內容）、單元
+                     測試全綠（測試是**直呼** method，根本沒走 ir.cron 那條路）
+                     ⇒ 三個綠燈都看不見這一格，而症狀是「cron 看起來裝好了、卻永遠
+                     沒有效果」（#803 F-803-1）。同型的還有 `model_id` 的 `ref` 指向
+                     **另一個存在的** model：ref 有效、XML 載得起來，只有「code 呼叫的
+                     method 不在那個 model 上」會露餡。
+                     判準兩邊都**列名**、不用 `grep -c`（數量對不代表是哪一個對）：
+                     XML 側 `xml.etree` 解析 `code` 與 `model_id/@ref`，Python 側 `ast`
+                     解析 class 的 `_name` 與所有 `def`，輸出「是哪一個」不是「差幾個」。
+                     🔴 **實作不住在本檔**：唯一實作是 sibling 的
+                     `scripts/audit/verify-cron-wiring.py`，本檔以 importlib 載入它再
+                     轉接。複製一份進來的下場是兩份實作漂移，而漂移那天兩邊都是綠的。
+                     載入失敗／掃到零筆 ir.cron 一律當違規——這是否定性判準，探針壞掉
+                     時「零筆全部接得上」與「真的全部接得上」的輸出完全一樣。
+                     🔴 hook 分派**不做 only_file 切片**：判準跨「cron XML ↔ model .py」
+                     兩端，打破它的那次編輯可能發生在**任一端**（改 .py 把 method 改名
+                     或刪掉時，hook 收到的 file_path 是 .py 而不是 XML）。
+                     已命名的盲區（不是遺漏）：`model_id` 的 ref **帶模組前綴**者是跨
+                     模組 ref，略過不驗——本條只讀 `src/models/`，看不到別的 addon 的
+                     `_name`；AST 也只看 class 自己 body 裡的 `def`，**繼承來的 method
+                     看不到**，日後把 `_cron_*` 放進 mixin 會誤報。
+                     依據 docs/tracking/landings/803-access-resync-cron-handoff.md
+
 用法：
 
   scripts/audit/repo-lint.py --all                # 全 repo 掃描（CI / merge 前手動）
@@ -557,6 +585,7 @@ import csv
 import glob
 import io
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -5577,6 +5606,7 @@ REPO_LINT_RULES = {
     "route-contract-golden": ("check_route_contract_golden",),
     "owl-relative-import": ("check_owl_relative_import",),
     "js-i18n-template-literal": ("check_js_i18n_template_literal",),
+    "cron-wiring": ("check_cron_wiring",),
 }
 
 # 刻意不掛 hook 分派的 check：{函式名: 理由}。現況是空的（每一條都掛得到 hook）。
@@ -6172,7 +6202,8 @@ def run_all(root):
                   + check_test_class_execution(root)
                   + check_route_contract_golden(root)
                   + check_owl_relative_import(root)
-                  + check_js_i18n_template_literal(root))
+                  + check_js_i18n_template_literal(root)
+                  + check_cron_wiring(root))
     if violations:
         print("repo-lint：%d 個違規" % len(violations))
         for v in violations:
@@ -6346,6 +6377,13 @@ def run_hook():
         # 「.js 分支本身是否還活著」仍有重複掛載的 check 可做遮蔽陽性對照（#612）。
         js_i18n_template = (check_js_i18n_template_literal(root, only_file=abs_path)
                             if re.match(r"^src/static/src/.*\.js$", rel) else [])
+        # #960 第 35 條：cron 接線是**跨檔**不變式（cron XML 的 `code`／`model_id`
+        # ↔ model .py 的 `_name`／`def`），而打破它的那次編輯可能發生在**任一端**
+        # ——把 `_cron_*` 改名或刪掉時，hook 收到的 file_path 是 .py 不是 XML。
+        # ⇒ 不做 only_file 切片，動到任一端就整條重算（同 ladder／anchors／floor／
+        # owl_imports）。觸發面 `_cron_wiring_watches` 的形狀與實作的 glob 對齊。
+        cron_wiring = (check_cron_wiring(root)
+                       if _cron_wiring_watches(rel) else [])
         if re.match(r"^src/controllers/.*\.py$", rel):
             violations = check_controller_sudo(root, only_file=abs_path)
             violations += check_reuse_values(root, only_file=abs_path)
@@ -6414,7 +6452,7 @@ def run_hook():
         elif (ladder or availability or poll_facts or anchors or floor
                 or security_rules or one_time_cred or provision or sh_sub_groups
                 or internal_ctx or tunnel_wire or route_golden or owl_imports
-                or js_i18n_template):
+                or js_i18n_template or cron_wiring):
             # extra/paas-operator/** 與 docs/tracking/pitfalls/** 不在上面任何分支，
             # 但前者持有階梯的內層常數、後者是 doc-symbol-anchor 的一半輸入；
             # baselines/repo-lint-registry.txt（floor 的另一份輸入）與
@@ -6437,6 +6475,7 @@ def run_hook():
         violations += route_golden
         violations += owl_imports
         violations += js_i18n_template
+        violations += cron_wiring
         if violations:
             print(json.dumps({
                 "decision": "block",
@@ -7874,6 +7913,99 @@ def check_test_class_execution(root):
                 "請加一個可選 tag 當入口（%s）"
                 % (rel, node.lineno, name,
                    "／".join(sorted(tags)) or "（空）", ref))
+    return violations
+
+
+# --------------------------------------------------------------------------- #
+#  35. cron-wiring（#960；來源 #803 F-803-1）                                   #
+# --------------------------------------------------------------------------- #
+
+CRON_WIRING_DOC = "docs/tracking/landings/803-access-resync-cron-handoff.md"
+CRON_WIRING_REF = "見 %s 與 #803／#960" % CRON_WIRING_DOC
+
+#: 第 35 條的**唯一實作**住在 sibling script。⛔ 不把那段 AST／XML 邏輯複製進本檔：
+#: 兩份實作必然漂移，而漂移的那天兩邊都是綠的（本檔第 15、17 條就是為了治這個形態）。
+#: 🔴 路徑一律從 `__file__`（`SCRIPT_DIR`）推、不用 cwd：CI 的 cwd 是 repo 根、hook
+#:    模式的 cwd 不定，用 cwd 推會在 hook 下靜默載不到——而「載不到」若被寫成回空
+#:    清單，輸出與「全部接得上」完全一樣。所以載入失敗當違規（見 check 本體）。
+_CRON_WIRING_IMPL_REL = "scripts/audit/verify-cron-wiring.py"
+_CRON_WIRING_IMPL_PATH = os.path.join(SCRIPT_DIR, "verify-cron-wiring.py")
+_CRON_WIRING_IMPL = None
+
+
+def _cron_wiring_impl():
+    """載入 sibling 的 `verify-cron-wiring.py`（檔名帶連字號 ⇒ 只能走 importlib）。
+
+    載不到就回 `None`（或往上拋），由呼叫端轉成違規訊息——這裡刻意不 fail-open。
+    """
+    global _CRON_WIRING_IMPL
+    if _CRON_WIRING_IMPL is None:
+        spec = importlib.util.spec_from_file_location(
+            "woow_verify_cron_wiring", _CRON_WIRING_IMPL_PATH)
+        if spec is None or spec.loader is None:
+            return None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        _CRON_WIRING_IMPL = module
+    return _CRON_WIRING_IMPL
+
+
+#: 第 35 條的 hook 觸發面。形狀刻意與 `verify-cron-wiring.py` 的兩個 glob 對齊
+#: （`src/data/*.xml`／`src/models/*.py`，皆**非遞迴**）：觸發面比掃描範圍窄會讓
+#: 某類編輯完全沉默，寬則會白跑，兩者分岔的下場都是「CI 會抓、hook 說不出話」。
+_CRON_WIRING_WATCH_RE = re.compile(r"^src/(data/[^/]+\.xml|models/[^/]+\.py)$")
+
+
+def _cron_wiring_watches(rel):
+    """第 35 條的 hook 觸發面：cron XML 與 model .py **兩端**都要接住。"""
+    return bool(_CRON_WIRING_WATCH_RE.match(rel))
+
+
+def check_cron_wiring(root):
+    """第 35 條：`ir.cron` 的 `code` method 名與 `model_id` ref 都要對得上實體。
+
+    見檔頭第 35 條。本函式只做三件事：載入 sibling 的唯一實作、把它的
+    `(掃到幾筆, 問題清單)` 轉成 repo-lint 的違規訊息、以及替**否定性判準**補上
+    「探針壞掉」的對照。判準本身一行都不在這裡——複製一份就是製造第二個真相源。
+
+    🔴 三種「什麼都沒查到」都當違規，不當通過：
+      * 載入不到實作（檔被搬走／改名／語法壞掉）；
+      * `check()` 執行時炸開；
+      * 掃到**零筆** `ir.cron`（掃描範圍壞了；「0 筆全部接得上」與「真的全部接得上」
+        在輸出上完全一樣——那正是實作 docstring 開頭寫死路徑那段講的形態）。
+    wrong root 走 `_wrong_root_result()`（#828／#936）：`--all` fail-loud、hook 安靜。
+    """
+    if not _addon_source_tree_present(root):
+        # #936：本條是否定性判準（「找不到接不上的 cron」），wrong root 回空清單會與
+        # 「全部接得上」完全不可區分。
+        return _wrong_root_result("cron-wiring", "check_cron_wiring",
+                                  CRON_WIRING_REF)
+    try:
+        impl = _cron_wiring_impl()
+    except Exception as exc:
+        return ["%s：載入 `%s` 失敗（%s：%s）——第 35 條根本沒有跑到，而「沒跑到」與"
+                "「全部接得上」的輸出一模一樣（%s）"
+                % (REPO_LINT_SELF_REL, _CRON_WIRING_IMPL_REL,
+                   type(exc).__name__, exc, CRON_WIRING_REF)]
+    if impl is None or not hasattr(impl, "check"):
+        return ["%s：`%s` 載入不到、或它沒有 `check()`——第 35 條的唯一實作不見了。"
+                "⛔ 修法不是把邏輯複製回本檔（兩份實作必然漂移），是把那個檔補回來"
+                "（%s）"
+                % (REPO_LINT_SELF_REL, _CRON_WIRING_IMPL_REL, CRON_WIRING_REF)]
+    try:
+        checked, problems = impl.check(verbose=False, root=root)
+    except Exception as exc:
+        return ["%s：`%s` 的 `check()` 執行時炸開（%s：%s）——例外被讀成零違規就是"
+                "假綠（%s）"
+                % (REPO_LINT_SELF_REL, _CRON_WIRING_IMPL_REL,
+                   type(exc).__name__, exc, CRON_WIRING_REF)]
+    violations = ["%s（%s）" % (problem, CRON_WIRING_REF) for problem in problems]
+    if not checked:
+        violations.append(
+            "%s：一筆 `ir.cron` record 都沒掃到（root=%s）。本條是否定性判準，掃描"
+            "範圍壞掉時「零筆全部接得上」與「真的全部接得上」在輸出上完全一樣 ⇒ 零筆"
+            "當違規，不當乾淨（%s）"
+            % (_CRON_WIRING_IMPL_REL, root, CRON_WIRING_REF))
     return violations
 
 

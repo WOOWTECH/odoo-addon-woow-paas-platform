@@ -10,6 +10,7 @@
 1	fn:check_conceal_instances_gate
 1	fn:check_config_parameter_uninstall
 1	fn:check_controller_sudo
+1	fn:check_cron_wiring
 1	fn:check_data_noupdate
 1	fn:check_doc_symbol_anchor
 1	fn:check_duplicate_class_methods
@@ -49,6 +50,7 @@
 1	rule:conceal-instances
 1	rule:config-parameter-uninstall
 1	rule:controller-sudo
+1	rule:cron-wiring
 1	rule:data-noupdate
 1	rule:doc-symbol-anchor
 1	rule:duplicate-class-methods
