@@ -22,6 +22,23 @@
 | [`tracking/`](tracking/README.md) | 已收官的一次性報告（CAQA / reviewer / test coverage / deliverables），逐檔原因見其 README |
 | [`reference/`](reference/) | 被取代的 spec（如早期整站 API 設計稿 `woowtech-paas-api-specification.md`） |
 
+## 看板快照（top-level 檔）
+
+`paas-issue-memory` note（PaaS 上線推進看板）與其前身 `dispatcher-board` 的全文存檔。issue-leader role 規定大修剪前全文存 `docs/archived/`；檔名後綴即存檔時點（`pre-clean`＝清已關 issue 前、`pre-gate`＝加 gate 段前、`pre-trim`＝大幅精簡前、`pre-v176-landing`＝v176 landing 落板前）。內容原樣保留；其中 3 檔（dispatcher-board、08-27 pre-trim、08-28 pre-clean）首行 `[N lines total]` 是 `maestri note read` 的輸出標頭，一併保留。
+
+| 檔案 | 存檔時點 |
+|------|----------|
+| `dispatcher-board-2026-08-01_08-05.md` | 2026-08-01 08:05，舊看板 `dispatcher-board` |
+| `paas-issue-memory-2026-08-16-pre-clean.md` | 2026-08-16 pre-clean |
+| `paas-issue-memory-2026-08-21-pre-clean.md` | 2026-08-21 pre-clean |
+| `paas-issue-memory-2026-08-22-pre-clean.md` | 2026-08-22 pre-clean |
+| `paas-issue-memory-2026-08-23-pre-clean.md` | 2026-08-23 pre-clean |
+| `paas-issue-memory-2026-08-24-pre-clean.md` | 2026-08-24 pre-clean |
+| `paas-issue-memory-2026-08-24-pre-gate.md` | 2026-08-24 pre-gate |
+| `paas-issue-memory-2026-08-27-pre-v176-landing.md` | 2026-08-27 pre-v176-landing |
+| `paas-issue-memory-2026-08-27-pre-trim.md` | 2026-08-27 pre-trim（該輪削 70%，見 08-28 檔頁首「本輪修剪紀錄」） |
+| `paas-issue-memory-2026-08-28-pre-clean.md` | 2026-08-28 pre-clean |
+
 ## 命名
 
 - 保留原檔名（含原日期前綴）
