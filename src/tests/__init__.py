@@ -817,3 +817,10 @@ from . import test_rule_reparent_guard_941
 # 併發那組證 40001 傳得到 retrying()；前端失敗分支重抓錢包走靜態掃描。
 from . import test_invoice_pay_rollback_864
 from . import test_invoice_issue_policy_864
+
+# #993：`woow.billing.incident.trade_no` 統一存 provider TradeNo（Eugene 裁決 A）。
+# 病＝欄位沒有語意宣告，PR-E 寫我方 reference、PR-G 寫 ECPay TradeNo，而 upsert 的
+# explicit_evidence 讓後者被前者無聲覆寫——那是平台唯一一份 ECPay 交易編號。
+# T1/T3 刻意走生產碼的 `_log_charged_not_credited_incident`，⛔ 不自己組 snapshot
+# （測試自己傳 trade_no 的話，改生產碼不會讓它轉綠＝零鑑別力）。
+from . import test_trade_no_semantics_993
