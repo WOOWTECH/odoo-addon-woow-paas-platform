@@ -17,11 +17,12 @@
 | [`tracking/`](tracking/README.md) | **問題與追蹤** — issue / pitfall / follow-up / 收官紀錄 | sandbox 故障、incident timeline、技術債清單、test report、[`landings/`](tracking/landings/) 已收官 issue 的落地紀錄 |
 | [`archived/`](archived/README.md) | **歷史檔案** — 不再使用但保留考古 | [`ccpm-v2/`](archived/ccpm-v2/README.md) 退役的 ccpm PRD / epic、ccpm-v1 context、退役 plan、[`memory/`](archived/memory/) 已被其他載體取代的 memory |
 
-加上三個不算主題類的輔助區：
+加上不算主題類的輔助區：
 
 - [`superpowers/`](superpowers/README.md) — obra/superpowers plugin 自動寫入的 specs / plans，promote 後落到主結構
 - [`scout/`](scout/README.md) — **決策前偵察** — 還沒成案的衝擊分析 / decision matrix / 可行性調查；拍板後 promote 到 `plans/`（成案）或 `decisions/`（定案），不留長期文件
 - [`agents/`](agents/issue-tracker.md) — mattpocock-skills 工具自管理區：issue tracker／domain docs 的消費規則（setup skill 產生，可直接手改）
+- `.out-of-scope/`（repo 根，不在 `docs/` 下）— mattpocock `/triage` 的拒絕紀錄 KB：一個概念一檔，`wontfix` 時寫下為什麼不做，之後同類請求進來時 triage 會拿它去重。路徑由 skill 寫死在 repo 根，不能搬進 `docs/`；「決定不做」若有 ADR 級份量，另在 `decisions/` 寫一份並互連。與 issue label `cat-out-of-scope`（非 paas 管轄、排工作跳過）語意不同，勿混用。
 
 ## 何時用哪類？
 
