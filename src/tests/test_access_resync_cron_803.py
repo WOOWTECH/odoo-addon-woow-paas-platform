@@ -471,6 +471,32 @@ class TestResyncCronScanShape(TransactionCase, _ResyncMixin):
             '一輪一行彙總——多行等於逐列出聲（log 洪水），零行等於靜默')
         return lines[0]
 
+    def _summary_record(self, captured):
+        """彙總行的 `LogRecord`——判準與 `_summary()` 同一條，只是多帶 level。
+
+        ⚠ 鎖的是**這一行**的 level，不是「整輪沒有 WARNING」：同一輪裡
+        `truncated`（scan cap 打滿）與逐列失敗各自有獨立的 WARNING，拿整份
+        `captured.output` 當判準會把那兩條也綁進來，改別的東西就會誤紅。
+        """
+        line = self._summary(captured)
+        records = [r for r in captured.records if 'scanned=' in r.getMessage()]
+        self.assertEqual(
+            len(records), 1, '彙總行與 `_summary()` 的判準必須撈到同一筆')
+        self.assertTrue(
+            line.endswith(records[0].getMessage()),
+            '撈到的 record 必須就是 `_summary()` 那一行')
+        return records[0]
+
+    def _assert_scan_cap_untouched(self, captured):
+        """前提：fixture 遠低於 `max_scan`，scan cap 那條 WARNING 沒被誤觸。
+
+        不驗這一格的話，「彙總行是 WARNING」有兩個都成立的解釋（升級條件命中／
+        scan cap 打滿），而後者是別條 log ⇒ 兩格 level 測試會失去鑑別力。
+        """
+        self.assertEqual(
+            [m for m in captured.output if 'scan cap' in m], [],
+            'fixture 誤觸 scan cap ⇒ 這一輪的 WARNING 不是彙總行升級來的')
+
     def test_D1_full_scale_blockers_cannot_starve_the_queue(self):
         """#791 F1 原尺度：520 筆推不動的列擋在前面。
 
@@ -573,3 +599,44 @@ class TestResyncCronScanShape(TransactionCase, _ResyncMixin):
             'operator 回的 app id 必須真的落在列上——守衛擋掉回存時，'
             '旗標雖然被清掉，列上卻沒有重試錨點')
         self.assertFalse(self._lost(target))
+
+    def test_D6_gated_only_round_stays_info(self):
+        """`gated` 是預期狀態 ⇒ 只有 gated 的那一輪，彙總行必須留在 INFO。
+
+        `gated` 記的是「被 liveness gate 擋掉、這輪推不動」的列（SA/SH 停權中、
+        CS 已進 `deleting`）——那是**常態**，本方法的 docstring 逐字說過旗標留著
+        是實話。長期停權的租戶會讓這一行每 15 分鐘 warn 一次＝96 行／日，而
+        `cf_access_policy_reap._warn_if_deferred` 的 docstring 也逐字寫過那個下場：
+        「無條件 warning 會變成 log 洪水，而洪水等於沒有訊號」。
+
+        三個計數照印（D2／D3／D4 守著），這裡只釘 level。
+        """
+        self._routes(self.dead_sa, 3)
+        with self.assertLogs(LOG_CRON, level=logging.INFO) as captured:
+            self._run_cron()
+
+        self._assert_scan_cap_untouched(captured)
+        record = self._summary_record(captured)
+        self.assertIn('gated=3', record.getMessage(), '前提：這一輪真的有 gated')
+        self.assertIn('failed=0', record.getMessage(), '前提：這一輪沒有 failed')
+        self.assertEqual(
+            record.levelno, logging.INFO,
+            '被 gate 擋掉是預期行為，升到 WARNING 等於每 15 分鐘拉一次假警報')
+
+    def test_D7_failed_round_escalates_to_warning(self):
+        """`failed`（推了但失敗）才是異常 ⇒ 彙總行必須升到 WARNING。
+
+        與 D6 成對：只拿掉 `gated` 那半條件、把 `failed` 也一起拿掉的話，異常那
+        一輪就跟著靜音了——這一格擋的正是那種過度修正。
+        """
+        self._routes(self.live_sa, 1)
+        self.client.sync_access_app.side_effect = Exception('operator down')
+        with self.assertLogs(LOG_CRON, level=logging.INFO) as captured:
+            self._run_cron()
+
+        self._assert_scan_cap_untouched(captured)
+        record = self._summary_record(captured)
+        self.assertIn('failed=1', record.getMessage(), '前提：這一輪真的有 failed')
+        self.assertEqual(
+            record.levelno, logging.WARNING,
+            '推了而且失敗是異常，彙總行靜音等於沒有人會發現')

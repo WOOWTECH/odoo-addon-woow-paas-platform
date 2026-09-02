@@ -27,6 +27,27 @@ on:
     - cron: "0 18 * * *"
   workflow_dispatch:
 
+# 🔴 序列化：同一時間只跑一趟 odoo-tests。
+#
+# 這是**第二道**防線，第一道是容器名帶 run id（見下面「起 postgres + odoo」）。
+# 兩道都要：唯一名讓兩趟並行時不互撞也不互刪，序列化讓它們根本不並行——
+# 後者還順帶避免兩趟搶同一台 runner 的 CPU／磁碟（全套 6 分鐘是在獨佔下量的）。
+#
+# `cancel-in-progress: false` 是刻意的：排隊，不取消。取消掉的那趟會變成
+# 「沒有結果」，而本 workflow 的每一趟都是某張 PR 的驗收證據。
+#
+# 依據：Gitea Actions 的 workflow 層級 `concurrency` 在 **1.26.0** 落地
+# （go-gitea/gitea PR #32751，release blog 的 Major Highlights 明列
+# 「Workflows can declare concurrency groups...」）。本站台實測版本
+# `tea api -X GET /version` → **1.27.0**，晚於 1.26.0。
+# ⚠ 就算判斷錯了也不會弄死這支 workflow：gitea 的 act fork 解析 workflow 用
+#   `yaml.NewDecoder(in).Decode(w)`（`pkg/model/workflow.go`），**沒有**
+#   `KnownFields(true)` ⇒ 不認得的頂層欄位是**靜默忽略**，不是解析失敗。
+#   最壞情況是這段不生效、退回只靠唯一容器名那道，不會讓 job 跑不起來。
+concurrency:
+  group: odoo-tests-runner
+  cancel-in-progress: false
+
 env:
   JCR: artifactory-jcr-artifactory-nginx.jfrog.svc.cluster.local
   ODOO_BIN: /opt/bitnami/odoo/bin/odoo
@@ -75,20 +96,43 @@ jobs:
 
       - name: 起 postgres + odoo（預設 bridge）
         run: |
+          # 🔴 容器名帶 run id，**不可以**改回固定的 `pg`／`odoo`。
+          #
+          # 這台是**單一 act-runner**，但它會**並行**跑兩趟 odoo-tests。固定容器名在
+          # 並行下有兩個病，而且兩個都不會以「我的碼壞了」的形式出現：
+          #  1. **互撞**：後起的那趟撞 `container name "/pg" already in use` ⇒ exit 125。
+          #  2. **互刪**：先跑完的那趟收尾 `docker rm -f odoo pg`（無主檢查）會把
+          #     **別人正在跑的**容器刪掉 ⇒ 對方的 odoo 瞬間消失，症狀是 install 幾秒內
+          #     死、install.log 只有一行，看起來像「我的 addon 裝不起來」。
+          #
+          # ⛔ 也**不要**改成「起容器前先 `docker rm -f pg odoo`」——那在並行下是主動
+          #    殺掉別人，把互撞換成必然的互刪，比原病更糟。
+          # ⇒ 正解是唯一名：兩趟各自起自己的、各自刪自己的，殘留也不會擋到下一趟。
+          #
+          # `github.run_id` 在本 runner 上實測會展開（job 7060 的 streak 段印出
+          # `echo "6737 ..."`，正是該 run 的 id）。用 `$GITHUB_ENV` 傳給後續步驟是
+          # 本 job 已經在用的慣例（下面 `PG_IP=` 與上一步的 `IMG=` 都是這個寫法）。
+          PG_CT="pg-${{ github.run_id }}"
+          ODOO_CT="odoo-${{ github.run_id }}"
+          echo "PG_CT=$PG_CT" >> "$GITHUB_ENV"
+          echo "ODOO_CT=$ODOO_CT" >> "$GITHUB_ENV"
+          echo "本趟容器名：$PG_CT / $ODOO_CT"
           # 刻意不建自訂 docker network：自訂 network MTU 1500 > pod eth0 1450，
           # 外網 TLS 會被靜默丟包（既有已知坑）。預設 bridge 是 1400。
           # 代價是沒有 embedded DNS，所以用 IP 連 postgres。
-          docker run -d --name pg -e POSTGRES_USER=odoo -e POSTGRES_PASSWORD=odoo \
+          # ⚠ `POSTGRES_USER=odoo` / `POSTGRES_PASSWORD=odoo` 是 **DB 帳密**，
+          #   與容器名無關，**不要**跟著改成帶 run id 的形式。
+          docker run -d --name "$PG_CT" -e POSTGRES_USER=odoo -e POSTGRES_PASSWORD=odoo \
             -e POSTGRES_DB=postgres postgres:15
           # ⛔ 刻意不帶 -e AGENT_RUNTIME_NAMESPACE_SECRET（#935，理由見檔頭 env 段）。
-          docker run -d --name odoo \
+          docker run -d --name "$ODOO_CT" \
             --entrypoint bash "$IMG" -c 'sleep infinity'
           for i in $(seq 1 60); do
-            docker exec pg pg_isready -U odoo >/dev/null 2>&1 && break
+            docker exec "$PG_CT" pg_isready -U odoo >/dev/null 2>&1 && break
             sleep 2
           done
-          docker exec pg pg_isready -U odoo
-          PG_IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' pg)
+          docker exec "$PG_CT" pg_isready -U odoo
+          PG_IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$PG_CT")
           [ -n "$PG_IP" ] || { echo "::error::拿不到 pg IP"; exit 1; }
           echo "PG_IP=$PG_IP" >> "$GITHUB_ENV"
 
@@ -96,12 +140,12 @@ jobs:
         run: |
           # 整棵換掉、不要只 cp diff：舊 image 的 tests/__init__.py 會 import
           # 後來才新增的測試檔 → ImportError → 整條 -u 掛掉。
-          docker exec odoo rm -rf "${MODULE_DIR}"
-          docker exec odoo mkdir -p "${MODULE_DIR}"
-          docker cp src/. "odoo:${MODULE_DIR}/"
-          docker exec odoo sh -c "find ${MODULE_DIR} -name __pycache__ -type d -exec rm -rf {} + || true"
+          docker exec "${ODOO_CT}" rm -rf "${MODULE_DIR}"
+          docker exec "${ODOO_CT}" mkdir -p "${MODULE_DIR}"
+          docker cp src/. "${ODOO_CT}:${MODULE_DIR}/"
+          docker exec "${ODOO_CT}" sh -c "find ${MODULE_DIR} -name __pycache__ -type d -exec rm -rf {} + || true"
           echo "--- 覆蓋驗證：容器內版號應等於本 checkout ---"
-          docker exec odoo sh -c "grep -m1 version ${MODULE_DIR}/__manifest__.py"
+          docker exec "${ODOO_CT}" sh -c "grep -m1 version ${MODULE_DIR}/__manifest__.py"
           grep -m1 version src/__manifest__.py
 
       - name: Install（不跑測試）
@@ -110,7 +154,7 @@ jobs:
           # 兩步法同一個 DB 是 0F/0E —— 合併＝大規模假紅。
           # --limit-memory-hard=0 是必要的：ThreadedServer.start() 無條件把 RLIMIT_AS
           # 壓到預設 2.5 GB，在這台 256 核機器上會噴 MemoryError（本機不會重現）。
-          docker exec odoo "${ODOO_BIN}" -d test -i woow_paas_platform \
+          docker exec "${ODOO_CT}" "${ODOO_BIN}" -d test -i woow_paas_platform \
             --stop-after-init --without-demo=all --no-http \
             --limit-memory-hard=0 --max-cron-threads=0 \
             --addons-path="${ADDONS_PATH}" --data-dir=/tmp/odoo-data \
@@ -123,7 +167,7 @@ jobs:
         id: run_tests
         run: |
           set +e
-          docker exec odoo "${ODOO_BIN}" -d test -u woow_paas_platform \
+          docker exec "${ODOO_CT}" "${ODOO_BIN}" -d test -u woow_paas_platform \
             --test-enable --test-tags /woow_paas_platform \
             --stop-after-init --limit-memory-hard=0 --max-cron-threads=0 \
             --http-port=18069 --gevent-port=18072 \
@@ -396,6 +440,13 @@ jobs:
             fi
           fi
 
-      - name: 收尾
+      # 🔴 只刪**自己這一趟**的容器。改前是 `docker rm -f odoo pg`——固定名、無主檢查
+      # ⇒ 並行時會把別人正在跑的容器刪掉，而對方看到的症狀是自己的 install 無故猝死。
+      # ⚠ 這裡刻意用 `${{ github.run_id }}` 的**字面展開**，不用上面匯出的
+      #   `$ODOO_CT`／`$PG_CT`：本步是 `if: always()`，而起容器那一步若在寫
+      #   `$GITHUB_ENV` 之前就失敗，那兩個變數會是空的 ⇒ `docker rm -f "" ""`。
+      #   字面形式在任何情況下都是良好定義的名字，刪不到就 `|| true`。
+      - name: 收尾（只刪本趟自己的容器）
         if: always()
-        run: docker rm -f odoo pg 2>/dev/null || true
+        run: |
+          docker rm -f "odoo-${{ github.run_id }}" "pg-${{ github.run_id }}" 2>/dev/null || true
