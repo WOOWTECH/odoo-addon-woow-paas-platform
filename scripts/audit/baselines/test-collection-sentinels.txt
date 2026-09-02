@@ -16,3 +16,23 @@
 # 現行哨兵＝#543 的 P-rule migration 迴歸測試。它是全樹唯一踩在
 # allow × email_domain 交集上的測試，因此同時是 migration bypass 分支的行使者。
 test_security_access_p_rule_migration.TestPRuleMigration.test_cursor_bypass_flag_cleared_after_migrate
+
+# ── #956（2026-09-02）：740×3 ＋ 567×1 ────────────────────────────────────
+# 為什麼要進這份清單：這四條是 #956 的驗收對象，而驗收要問的是
+# 「它們**這一趟真的執行了**嗎」——而 **C3 回答不了這個問題**。
+#   C3（`--check-executed`）走 `extract_executed(log, "class")`，class 粒度回的是
+#   `set`；而 `_diff_report()` 只有在左右**都是 dict** 時才比對方法數
+#   ⇒ C3 的方法數比對永不執行，它只證明「這個 class 至少有 1 個 method 出現」。
+#   （實測：baseline 是 748 個 class／3801 個 method，而 C2 與 C3 都印「748 項」。）
+#   C2 有比方法數，但兩邊都是**靜態**的（原始碼 vs baseline），不碰 log；
+#   C4 只列被 skip 的、C5 只列 FAIL/ERROR ⇒ 綠燈或從沒被收集的方法在兩者都沉默。
+# ⇒ 四道判準沒有任何一道在守「這個 class 的 N 個 method 是不是全部執行了」。
+#   本檔的 C0（`check_sentinels`）是**唯一** method 粒度的那個
+#   （`extract_executed(log, "method")`，沒出現就 FATAL(2) 並擋掉後面所有差集）。
+#
+# ⚠ 照本檔檔頭的規矩：這四條**由紅轉綠之後不要刪**——問的是「在不在」，不是「紅不紅」。
+#   只有那條測試本身被移除或改名時才刪行。
+test_sh_unlink_authz_preflight_740.TestSh740NoExternalCallWhenDenied.test_A1_no_route_denied_delete_sends_nothing
+test_sh_unlink_authz_preflight_740.TestSh740NoExternalCallWhenDenied.test_A2_with_route_denied_delete_sends_nothing
+test_sh_unlink_authz_preflight_740.TestSh740NoExternalCallWhenDenied.test_A3_access_teardown_is_not_pushed_when_denied
+test_paas_controller_error_taxonomy_567.TestPaaSCreateAndSkipErrorTaxonomy567.test_skip_trial_operational_error_is_reraised
