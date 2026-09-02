@@ -32,6 +32,7 @@
 | Odoo | stock `odoo:18.0` image，`workers=6`、`max_cron_threads=2`、`limit_time_cpu=600`／`real=1200`、`limit_memory_soft=4G`／`hard=5G`、`proxy_mode=True`、`list_db=False`、`dbfilter=^odoo$` |
 | DB | `pgvector/pg17`，DB 名 `odoo`／user `woow-odoo`，**207 MB**；extensions＝pg_trgm 1.6（10+ 個 index 在用）、plpgsql、**vector 0.8.3（孤兒：0 欄位／0 index／0 相依，可 DROP）** |
 | filestore | **1.9 GB**（`/var/lib/odoo/filestore/odoo`） |
+| 金流 | ECPay 測試商店 `2000132`、`demo_mode=True`、87 筆測試 transaction（與 paas 同一組，無正式金鑰） |
 | 規模 | 202 installed modules（**28 個非官方**＋l10n_tw）、35 active users、637 partners、1968 posted moves、website 已裝 |
 | addons | PVC `/mnt/extra-addons`，57 個模組目錄（只 28 個有裝）；`clone.sh` 是手動跑的、對 clone 失敗只 WARN；`_repos/*` 16 個目錄**全無 .git**，且與 clone.sh 清單不同組；活目錄含 sed patch 與手改（`woow_hr_portal` 與 `_repos` 差 19 檔） |
 | 對外 | cloudflared token tunnel（hostname 在 CF dashboard）、nginx sidecar |
@@ -99,8 +100,8 @@
 2. 最終 `pg_dump -Fc`＋filestore tar → 離叢集副本 → 校驗
 3. restore 進 `paas-odoo-postgresql` 成**新 DB**（名 `woow_prod`；不碰 `bitnami_odoo`）；filestore 進 paas-odoo PVC `filestore/woow_prod`；略過 vector extension
 4. 對新 DB `-u all`、裝 `woow_paas_platform`
-5. **replay 設定**（不抄值、重設）：`woow_paas_platform.{operator_url,operator_api_key,apiserver_cidrs,deploy_env,namespace_prefix,paas_domain,grace_period_days,cleanup_after_months,sa_default_service_url,topup_payment_enabled,default_enable_agent_runtime}`；`default_agent_template_id`／`default_ai_assistant_id`／`default_ai_config_id` 存 record id，**必須重選**；`sh_subscription_wallet.billing_ssot`；ecpay 三鍵以 aiot 現有的為準（金流在那邊）；`web.base.url=https://aiot.woowtech.io`
-6. 改 paas-odoo 的 `ODOO_DATABASE_NAME`／`dbfilter` → `woow_prod`（`paas-app-bundle-cd` Fleet values，GitOps）；odoo.conf 覆寫 `workers≥4`、`limit_time_cpu=600`、`limit_time_real=1200`、memory limit 對齊 aiot
+5. **replay 設定**（不抄值、重設）：`woow_paas_platform.{operator_url,operator_api_key,apiserver_cidrs,deploy_env,namespace_prefix,paas_domain,grace_period_days,cleanup_after_months,sa_default_service_url,topup_payment_enabled,default_enable_agent_runtime}`；`default_agent_template_id`／`default_ai_assistant_id`／`default_ai_config_id` 存 record id，**必須重選**；`sh_subscription_wallet.billing_ssot`；ecpay 三鍵**不用 replay**——隨 aiot DB 自帶，且 09-02 實測兩邊是**同一組測試商店**（MerchantID `2000132`、`demo_mode=True`、paas provider state=test／aiot=enabled、aiot 87 筆 transaction 全為測試模式）⇒ 目前**沒有任何一邊持有正式金鑰**，正式金鑰是切換後另一件事；`web.base.url=https://aiot.woowtech.io`
+6. 改 paas-odoo 的 `ODOO_DATABASE_NAME`／`dbfilter` → `woow_prod`（`paas-app-bundle-cd` Fleet values，GitOps）；odoo.conf 覆寫 `workers=6`（對齊 aiot 實測值）、`limit_time_cpu=600`、`limit_time_real=1200`、memory limit 對齊 aiot
 7. 改 `paas-system/pg-backup` cronjob 目標 DB → `woow_prod`
 8. 驗證：ERP 抽查、`/woow`、金流 sandbox 交易、LINE webhook
 9. DNS：`aiot.woowtech.io` 從舊 tunnel CNAME 切到平台 ingress；traefik ingress 加該 host；`paas.woowtech.io` 保留為別名
