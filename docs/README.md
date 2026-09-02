@@ -17,11 +17,12 @@
 | [`tracking/`](tracking/README.md) | **問題與追蹤** — issue / pitfall / follow-up / 收官紀錄 | sandbox 故障、incident timeline、技術債清單、test report、[`landings/`](tracking/landings/) 已收官 issue 的落地紀錄 |
 | [`archived/`](archived/README.md) | **歷史檔案** — 不再使用但保留考古 | [`ccpm-v2/`](archived/ccpm-v2/README.md) 退役的 ccpm PRD / epic、ccpm-v1 context、退役 plan、[`memory/`](archived/memory/) 已被其他載體取代的 memory |
 
-加上三個不算主題類的輔助區：
+加上不算主題類的輔助區：
 
-- [`superpowers/`](superpowers/README.md) — obra/superpowers plugin 自動寫入的 specs / plans，promote 後落到主結構
+- [`superpowers/`](superpowers/README.md) — **已退役**的 obra/superpowers plugin 舊產出區（0 份待 promote），只剩歷史；新產出不再落這裡
 - [`scout/`](scout/README.md) — **決策前偵察** — 還沒成案的衝擊分析 / decision matrix / 可行性調查；拍板後 promote 到 `plans/`（成案）或 `decisions/`（定案），不留長期文件
 - [`agents/`](agents/issue-tracker.md) — mattpocock-skills 工具自管理區：issue tracker／domain docs 的消費規則（setup skill 產生，可直接手改）
+- `.out-of-scope/`（repo 根，不在 `docs/` 下）— mattpocock `/triage` 的拒絕紀錄 KB：一個概念一檔，`wontfix` 時寫下為什麼不做，之後同類請求進來時 triage 會拿它去重。路徑由 skill 寫死在 repo 根，不能搬進 `docs/`；「決定不做」若有 ADR 級份量，另在 `decisions/` 寫一份並互連。與 issue label `cat-out-of-scope`（非 paas 管轄、排工作跳過）語意不同，勿混用。
 
 ## 何時用哪類？
 
@@ -89,8 +90,8 @@ related: [docs/decisions/xxx.md, docs/reference/features/yyy.md]
 
 ## 工具介接
 
-- **obra/superpowers**：brainstorming / writing-plans skill 自動寫到 `docs/superpowers/`（工具自管理區），透過 `/docs:promote` 升級到主結構
-- **SuperClaude_Framework**：`claudedocs/` 是 SC 自用 namespace（已 git-ignored），不入版控；`/sc:pm` 不啟用
+- **mattpocock/skills**（現行）：issue tracker／triage labels／domain docs 的消費規則在 [`agents/`](agents/issue-tracker.md)；`/triage` 的拒絕紀錄 KB 在 repo 根 `.out-of-scope/`；`research` 產出照本檔分類落檔
+- **obra/superpowers、SuperClaude_Framework、ccpm**：均已退役。舊指南在 [`archived/guides/frameworks/`](archived/guides/frameworks/)；`docs/superpowers/` 只剩歷史，`/docs:promote` 僅供清舊產出；`claudedocs/` 保持 git-ignored
 
 ## CI 檢核
 

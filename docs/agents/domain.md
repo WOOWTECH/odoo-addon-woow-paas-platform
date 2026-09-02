@@ -23,3 +23,7 @@ Engineering skills 探索 codebase 前，先照本檔規則消費 domain 文件�
 ## 術語晉升路徑
 
 進行中案件的術語表先跟著該案 decision doc（例：#411）；詞條穩定後晉升進 `CONTEXT.md`。
+
+## 已知的 skill 硬編碼
+
+`/improve-codebase-architecture` 的 SKILL.md 把 ADR 位置寫死在 `docs/adr/`，看不到本 repo 的 `docs/decisions/`；用它時在 prompt 明講「ADR 在 `docs/decisions/`（含 `patterns/`、`refactor/`）」。

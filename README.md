@@ -6,8 +6,6 @@ Odoo 18 addon module providing the foundation for a multi-tenant PaaS applicatio
 
 - **Standalone OWL Application** - Independent frontend at `/woow` with hash-based routing
 - **Configuration Settings** - System settings via `res.config.settings`
-- **Menu Structure** - Root menu "Woow PaaS" ready for child items
-- **Claude Code PM** - Project management integration
 
 ## Quick Start — Local Dev Sandbox
 
@@ -43,7 +41,7 @@ open http://localhost:8080          # login: admin / admin
 ```
 
 > 沒有 `woow-dev` plugin 時，in-repo 保留 woow 專屬 helper：
-> `./.claude/skills/k8s-dev-sandbox/scripts/{test,extend,e2e-seed,seed-from-stg}.sh`（完整生命週期已移至 plugin）。
+> `./.claude/skills/k8s-dev-sandbox/scripts/{woow-test,woow-extend,e2e-seed,e2e-seed-reset-button,seed-from-stg}.sh`（完整生命週期已移至 plugin）。
 
 ## Running Tests
 

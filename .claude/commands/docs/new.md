@@ -14,7 +14,7 @@ allowed-tools: AskUserQuestion, Read, Write, Bash, LS
 
 - `category`：`guides` | `reference` | `decisions` | `plans` | `tracking`
   - `archived/` 不可手動建檔（從其他類移入）
-  - `superpowers/` 由 obra/superpowers plugin 管理，不手動建
+  - `superpowers/` 是已退役 obra/superpowers plugin 的舊產出區，不手動建也不再有新產出
 - `name`：kebab-case slug（小寫字母起頭、可含數字與連字號）
 
 例：
@@ -128,4 +128,4 @@ related: [<list from step 2>]
 
 - **不更新 INDEX**：本 repo 暫不維護 `docs/INDEX.md`（Phase 2 才加 CI 自動產生）
 - **frontmatter `updated` 維護**：由作者後續編輯時手動更新，本指令不重複觸發
-- **與 superpowers 的關係**：本指令只建「使用者主動寫」的文件。superpowers 產出由 plugin 自動寫到 `docs/superpowers/`，要升級到主結構走 `/docs:promote`。
+- **與 superpowers 的關係**：superpowers 已退役（2026-09-03）。歷史產出在 `docs/superpowers/`，要撈舊的走 `/docs:promote`；新文件一律用本指令。
