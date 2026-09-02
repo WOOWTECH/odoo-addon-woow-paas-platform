@@ -27,27 +27,6 @@ on:
     - cron: "0 18 * * *"
   workflow_dispatch:
 
-# 🔴 序列化：同一時間只跑一趟 odoo-tests。
-#
-# 這是**第二道**防線，第一道是容器名帶 run id（見下面「起 postgres + odoo」）。
-# 兩道都要：唯一名讓兩趟並行時不互撞也不互刪，序列化讓它們根本不並行——
-# 後者還順帶避免兩趟搶同一台 runner 的 CPU／磁碟（全套 6 分鐘是在獨佔下量的）。
-#
-# `cancel-in-progress: false` 是刻意的：排隊，不取消。取消掉的那趟會變成
-# 「沒有結果」，而本 workflow 的每一趟都是某張 PR 的驗收證據。
-#
-# 依據：Gitea Actions 的 workflow 層級 `concurrency` 在 **1.26.0** 落地
-# （go-gitea/gitea PR #32751，release blog 的 Major Highlights 明列
-# 「Workflows can declare concurrency groups...」）。本站台實測版本
-# `tea api -X GET /version` → **1.27.0**，晚於 1.26.0。
-# ⚠ 就算判斷錯了也不會弄死這支 workflow：gitea 的 act fork 解析 workflow 用
-#   `yaml.NewDecoder(in).Decode(w)`（`pkg/model/workflow.go`），**沒有**
-#   `KnownFields(true)` ⇒ 不認得的頂層欄位是**靜默忽略**，不是解析失敗。
-#   最壞情況是這段不生效、退回只靠唯一容器名那道，不會讓 job 跑不起來。
-concurrency:
-  group: odoo-tests-runner
-  cancel-in-progress: false
-
 env:
   JCR: artifactory-jcr-artifactory-nginx.jfrog.svc.cluster.local
   ODOO_BIN: /opt/bitnami/odoo/bin/odoo
