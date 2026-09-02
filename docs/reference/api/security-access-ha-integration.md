@@ -297,7 +297,7 @@ Response（`200`，`security_access.to_dict()` 完整輸出，欄位順序以實
   `login_google`、`login_email_otp`
 - `access_policies`（新增 / 修改 / 刪除 / 重排都不動 route `id`）
 
-controller `_update_route`（`src/controllers/security_access.py:551`）以
+controller `_update_route`（`src/controllers/security_access.py:664`）以
 `route_id` filter 既有 record 後 `route_rec.write(vals)`、回傳同筆；
 access-config / policy CRUD 同理。`action_provision` / 重新 sync 也只把
 `dns_record_id` / `access_app_id` **寫回既有 record**，不重建、不換 `id`。
@@ -310,7 +310,7 @@ access-config / policy CRUD 同理。`action_provision` / 重新 sync 也只把
 UserError: Subdomain prefix is immutable. Delete the route and create a new one to rename.
 ```
 
-（`src/models/security_access.py:1029-1036`）。`_update_route` 根本不接受
+（`src/models/security_access.py:1887-1895`）。`_update_route` 根本不接受
 `subdomain_prefix` 欄位，前端也只在「新增 route」時可填 prefix、無 edit-prefix UI。
 因此「改某條 route 的 hostname」在 API 上必然呈現為**舊 route 消失 + 新 route
 出現（新 `id`）**，server 端**不提供**「new route 是 old route 的 rename」關聯訊號
