@@ -144,8 +144,7 @@ docker compose restart web
 ### Related
 
 - Pitfall 2（asset rebuild）
-- `CLAUDE.md` §Update module after changes — 簡化版命令
-- `CLAUDE.md` §Run Odoo with this addon — `--stop-after-init` 用法
+- `docs/guides/testing/TESTING.md` §Run in K8s Dev Sandbox — pod 內只升級不測試／`--stop-after-init` 用法（原 CLAUDE.md 的 odoo-bin 段已於 2026-09 移除：本 repo 沒有 odoo-bin）
 
 ---
 

@@ -1,41 +1,19 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+本檔每個 session 自動載入（含 subagent／maestri leader）：只放 always-needed 的守線與指針，branch-specific 內容下沉到被指到的檔。新守線**不寫回本檔**（登錄點見下方 Known patterns；政策 `docs/decisions/harness-distillation.md`；`/retro` 以本檔不變長為硬約束）。
 
 ## Project Overview
 
-`woow_paas_platform` is an Odoo 18 addon module providing the foundation for a multi-tenant PaaS application. The module includes:
+`woow_paas_platform`：Odoo 18 addon（版號在 `src/__manifest__.py`），多租戶 PaaS 平台。租戶在 `/woow`（standalone OWL app，hash routing）的 marketplace 選 `cloud_app_template`，Odoo 只透過 HTTP 呼叫 `extra/paas-operator/`（FastAPI；Helm／kubectl 操作全在這裡，另負責 Cloudflare DNS／Tunnel）把 `cloud_service` 部署到 K8s——Odoo 端程式碼不直接呼叫 Helm／kubectl。
 
-- **Standalone OWL Application** - Independent frontend at `/woow` with hash-based routing
-- **Configuration Settings** - System settings via `res.config.settings`
-- **Menu Structure** - Root menu "Woow PaaS" ready for child items
-
-### Cloud Services
-
-允許使用者透過 Kubernetes 與 Helm 部署容器化應用。
-
-**Key Components**:
-
-- **CloudAppTemplate** model - Application marketplace templates (AnythingLLM, n8n, PostgreSQL, etc.)
-- **CloudService** model - Deployed service instances with lifecycle management
-- **PaaS Operator Service** - FastAPI service at `extra/paas-operator/` that wraps Helm CLI operations
-- **Marketplace UI** - OWL components for browsing and deploying applications
-
-**Architecture**:
-
-```
-┌─────────────┐      ┌──────────────┐      ┌──────────────┐
-│   Odoo      │─────▶│ PaaS Operator│─────▶│ Kubernetes   │
-│  (Frontend) │ HTTP │   (FastAPI)  │ Helm │ + User Pods  │
-└─────────────┘      └──────────────┘      └──────────────┘
-```
+- 子系統 spec（model、state、UI 流程、架構圖）：`docs/reference/features/cloud-services.md`
+- 名詞定義：`CONTEXT.md`；operator API 與架構：`extra/paas-operator/README.md`
 
 ## paas-platform 開發
 
-- 平台開發是在 Odoo 框架上開發 addon，加速 PaaS 平台。**儘量不使用 Odoo 原生網頁**，以 `/woow` 為入口（如 `/my` 等 Odoo 原生頁面租戶不會用到）。
-- 已有 addon dependencies 不要重造輪子，除非要修 bug 或補原始 addon 沒有的功能。
-- Odoo ERP 與 PaaS 共存（Odoo 同時供官方網站使用）。
-- `k8s-dev-sandbox` skill 可設定在 `woow-k3s` 或 `docker-desktop` context 管理 sandbox 環境。
+- **儘量不使用 Odoo 原生網頁**：前台功能一律以 `/woow`（standalone OWL app，`src/controllers/paas.py` 的 `@route("/woow")`）為入口，不在 `/web`／`/my` 等原生路由上開新頁面或新曝光點。⚠ 原生路由並未關閉——`/my` portal 與 `/report` PDF 會繞過 `/woow` 的呈現層過濾（見 `docs/decisions/patterns/hidden-template-presentation-chain.md` §定性邊界）；`src/controllers/portal.py` 是唯一刻意擴充原生頁的例外（見下方 API Endpoints）。
+- 已有 addon dependencies 不要重造輪子：新增 model／欄位／流程前先確認 `src/__manifest__.py` `depends` 裡的上游 addon（原始碼不在本 repo，本機路徑見 `.sandbox.yml` 的 `PAAS_CI_ADDONS_PATH` 註解）有沒有現成實作，有就用 `_inherit` 擴充（實例 `src/models/ai_assistant.py`、`src/models/sh_subscription_plan_cs_spec.py`）；只有修 bug 或補原始 addon 沒有的功能才自建。
+- Odoo ERP 與 PaaS 共存（同一套 Odoo／company 也供官方網站與 ERP 使用）⇒ 不改 company 級或全域預設（`company.auto_invoice`、`company.account_sale_tax_id`、上游 addon 的 hook 行為等），PaaS 需要不同行為時在本 addon 層隔離（實例 `woow_skip_upstream_hook`、seed 明寫 `taxes_id`；依據 `docs/decisions/philosophy/billing-philosophy.md` §5「與上游 ERP 解耦」）。
 
 ## kubectl
 
@@ -46,12 +24,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **IMPORTANT**: kubectl 請明確指定 `--context`。
 
-本 repo 的 skill script（`deploy-stg` / `e2e-seed*`）走共用守衛
-[`.claude/skills/lib/kube-context.sh`](.claude/skills/lib/kube-context.sh)（#32）：切換
-context 只作用在該次執行（**不再改動 `~/.kube/config`**），且值受 `.sandbox.yml` 的
-`allowed_kube_contexts[_<task>]` 值域白名單管制 —— 「這個 context 可用」與「這個 context
-是這次任務該用的那一個」是兩個維度，後者才是 cross-cluster 事故的內容。逃生門
-`SANDBOX_ALLOW_ANY_KUBE_CONTEXT=1`。woow-dev plugin 端有對應的同名機制與同一個宣告鍵。
+跑或改本 repo 的 skill script（`deploy-stg` / `e2e-seed*`）時，kubectl context 由共用守衛 [`.claude/skills/lib/kube-context.sh`](.claude/skills/lib/kube-context.sh)（#32）驗值域並隔離 kubeconfig（不改 `~/.kube/config`）；白名單宣告在 `.sandbox.yml` 的 `allowed_kube_contexts[_<task>]`（與 woow-dev plugin 同鍵），逃生門 `SANDBOX_ALLOW_ANY_KUBE_CONTEXT=1`。機制與理由見該檔檔頭。
 
 ### ⛔ 鐵律：woow-k3s 是共用叢集，本 repo（paas 平台開發/維運）的 kubectl 只能操作以下 namespace
 
@@ -68,15 +41,21 @@ context 只作用在該次執行（**不再改動 `~/.kube/config`**），且值
 | `dev-sandbox-*` | 開發時的 dev sandbox |
 | `fleet-local`（**僅限 `paas-*` 前綴資源**） | 平台 Fleet 的 GitRepo／Bundle，以及 `valuesFrom` 注入用 secret（`paas-operator-fleet-secrets`、`paas-operator-stg-fleet-secrets`、`paas-odoo-fleet-secrets`…） |
 
-⚠ **`fleet-local` 是本表唯一「按資源名前綴授權」而非整個 ns 授權的項目**——它同時住著叢集上其他部署的 Fleet 資源，`paas-*` 以外的 GitRepo／Bundle／secret 一律不碰。之所以必須列進來：平台自己的 Fleet 注入 secret 全部住在這裡，`paas-app-bundle-cd` 的 CLAUDE.md／README 也把 `kubectl get secret ... -n fleet-local`、`kubectl patch bundle -n fleet-local`（force sync）寫成標準平台程序，本表漏列會讓兩份文件對同一個 ns 給出相反指引（2026-08-06 查 `paas-operator-fleet-secrets` 時撞到）。
+⚠ **`fleet-local` 是本表唯一「按資源名前綴授權」而非整個 ns 授權的項目**——它同時住著叢集上其他部署的 Fleet 資源，`paas-*` 以外的 GitRepo／Bundle／secret 一律不碰；`kubectl-ns-guard` hook 只驗 namespace、不驗資源名，這一層沒有機器守線。為何必須列入與 2026-08-06 補列經緯（`paas-app-bundle-cd` 文件把 `-n fleet-local` 操作寫成標準程序）見 [`docs/guides/deployment/shared-cluster-paas-scope-guard.md`](docs/guides/deployment/shared-cluster-paas-scope-guard.md)（下稱 guard doc）。
 
-其餘 namespace 屬叢集上其他部署（客戶實例、gitea、longhorn-system 等），**絕對不碰**。跨 ns 唯讀盤點（get/list）僅供歸屬分流——非上述 namespace 的資源只列不動，嚴禁任何寫入/刪除；叢集級設定（default StorageClass、Longhorn settings 等）影響全叢集，動之前須與叢集運維協調。（實例教訓：2026-07-08 盤點 48 顆 Released PV，其中 ~39 顆屬其他部署，差點被當平台殘留清理——見 issue #319。）
+其餘 namespace 屬叢集上其他部署（客戶實例、gitea、longhorn-system 等），**絕對不碰**。跨 ns 唯讀盤點（get/list）僅供歸屬分流——非上述 namespace 的資源只列不動，嚴禁任何寫入/刪除；叢集級設定（default StorageClass、Longhorn settings 等）影響全叢集，動之前須與叢集運維協調。起源實例（2026-07-08 Released PV 盤點，#319）與 cluster-wide 掃描的分流／溯源做法見 guard doc。派工給其他 agent／workflow 且會碰 kubectl 時，把上表白名單寫進派工 prompt（hook 只守本 repo 的 Bash 層）。
 
 本鐵律另有 Bash 層機器守線：PreToolUse hook [`.claude/hooks/kubectl-ns-guard.py`](.claude/hooks/kubectl-ns-guard.py) 擋 `--context woow-k3s` 下寫入／exec 類指令的越界 namespace（唯讀盤點不擋；寫入類未帶 `--context` 也擋）。一次性繞過：指令前綴 `KUBECTL_NS_GUARD=off `。白名單三份副本（本表／guard doc／hook 常數）由 repo-lint `kubectl-ns-whitelist-sync` 對帳，改一份必須同步三份。
 
 ## git
 
 PR / Issue / Comment 描述一律使用 zh-tw 繁體中文。
+
+PR 由 agent 開（建 branch → push → `tea` 開 PR，標題前綴「⛔ 勿代 merge｜待 <覆核者> 覆核 — 」），**merge 是人工 gate、agent 不代 merge**——與 prod build `/approve` 同級（`.claude/commands/woow/deploy.md` Step 6）。
+
+`src/__manifest__.py` 版號**一般 PR 不動**（必須等於 `origin/develop`）；只有**新增** `src/migrations/<X>/` 的 PR（X＝新版號）與 `release/*` 發版 PR 才 bump——`manifest-version-gate` 是 develop 唯一 required check，三條規則權威在 `scripts/ci/manifest-version-gate.py` docstring（#691）。
+
+PR 的 CI 綠燈**不含 Odoo 測試**（`.gitea/workflows/odoo-tests.yml` 刻意不掛 `pull_request`，只在 merge 進 develop 後與每日 02:00 跑）⇒ 動 `src/` 的 PR 合併前自己在沙盒跑測試（見下方 Run tests for this module），並把結果寫進 PR 描述（#906：綠燈 merge 後 develop 紅）。
 
 ## Browser Automation
 
@@ -85,57 +64,37 @@ E2E 測試依場景選工具（皆 `--headed`，看得到瀏覽器）：
 1. **UX 流程 / 操作類**（點擊、填表、導航）→ `playwright-cli`（`open --headed`）
 2. **UI 畫面渲染 / 視覺驗證**（截圖、CSS）→ `agent-browser --headed`
 
-本地 e2e / 整合測試一律走 `k8s-dev-sandbox` skill，不要用 docker compose。
+本地 e2e / 整合測試一律在 K8s Dev Sandbox 內跑（`/woow-dev:k8s-dev-sandbox`，用法見下方 §K8s Dev Sandbox），不要用 docker compose。
 
 E2E／smoke test 產物（截圖、log）先送交使用者或把路徑列進報告，之後才清理；清理只刪自己本次建立的資源。
 
 ## Development Commands
 
-### Run Odoo with this addon
+### Run tests for this module（一律在沙盒 odoo pod 內）
 
-```bash
-# From odoo-server root
-./odoo-bin -c odoo.conf -u woow_paas_platform
-```
+本 repo 沒有 `odoo-bin`／`odoo.conf`。建沙盒見 README §Quick Start；跑測試 `/woow-dev:k8s-dev-sandbox test <slug> --module woow_paas_platform`（等同 CI 的 `--test-tags /woow_paas_platform`）；只升級不測試、單一 test class 的 pod 內指令見 `docs/guides/testing/TESTING.md` §Run in K8s Dev Sandbox。
 
-### Update module after changes
+新增／改名測試 class 後手改 `scripts/audit/baselines/test-collection.txt`（CI `test-collection-audit` C2 雙向差集會紅；⚠ 用 `scripts/audit/test_collection_audit.py --update-baseline` 重產，**不是** `repo-lint.py --update-baseline`）。
 
-```bash
-./odoo-bin -c odoo.conf -u woow_paas_platform --stop-after-init
-```
+### PaaS Operator Tests
 
-### Run tests for this module
-
-```bash
-# Odoo module tests
-./odoo-bin -c odoo.conf --test-enable --test-tags /woow_paas_platform --stop-after-init
-
-# PaaS Operator unit tests (mocked k8s, default pytest skips -m integration)
-cd extra/paas-operator
-pytest tests/ -v --cov=src
-```
+unit tests（與 CI `.gitea/workflows/paas-operator-unit-tests.yml` 同式）：`cd extra/paas-operator && python -m pytest tests/ -m "not integration"`；`pytest.ini` addopts 預設已排除 integration。
 
 #### PaaS Operator Integration Tests (real K8s)
 
-**No CI runner** — 改動 `extra/paas-operator/` 合併前必須本機跑 integration tests（真 K8s；unit-test mocks 蓋不住的 contract drift）。完整 recipe（⚠ helm 必須用 3.13.3 不可用系統 helm、`REQUIRE_KUBEVIRT`、殘留 namespace 清理）見 **`paas-operator-dev` skill**（`.claude/skills/paas-operator-dev/SKILL.md`）與 `extra/paas-operator/tests/integration/README.md`。
+**integration tests 沒有 CI runner（unit 有）** — 改動 `extra/paas-operator/` 合併前必須本機跑 integration tests（真 K8s；unit-test mocks 蓋不住的 contract drift）。完整 recipe（⚠ helm 必須用 3.13.3 不可用系統 helm、`REQUIRE_KUBEVIRT`、殘留 namespace 清理）見 **`paas-operator-dev` skill**（`.claude/skills/paas-operator-dev/SKILL.md`）與 `extra/paas-operator/tests/integration/README.md`。無 Ingress 時本機連 operator（port-forward、API key、Docker 容器改用 `host.docker.internal`）也在同一個 skill。
 
-### K8s Dev Sandbox (Recommended)
+### K8s Dev Sandbox
 
-本機開發與測試首選（namespace 隔離、TTL 自動清理、可跑測試）。**已移植成 `woow-dev` plugin 通用工具（舊名 `woowprd`），優先用 `/woow-dev:k8s-dev-sandbox <command>`**（onboard / create / up / list / status / logs / test / extend / destroy / build；被測 repo 的子命令帶 `--repo "$(git rev-parse --show-toplevel)"`，`create`/`destroy` 必帶 `--context`）。架構、三種模式（local hostPath / ci-local / stg 的 addons 路徑差異）、平台 seed 的 `.sandbox/{pre-install,post-create}.sh` opt-in hook 詳見 plugin 的 SKILL.md；移植設計見 `docs/plans/2026-Q2/2026-06-11-k8s-sandbox-plugin-port-{design,implementation}.md`。
-
-in-repo `.claude/skills/k8s-dev-sandbox/` 僅剩未進通用 plugin 的 woow 專屬工具：`woow-test.sh`（沙盒內跑模組測試，`--keep-on-fail`）、`woow-extend.sh`（TTL）、`e2e-seed.sh` / `seed-from-stg.sh`（e2e fixture / stg clone helper）。
-
-### PaaS Operator Local Development
-
-無 Ingress 時用 port-forward 連本機 operator。指令、API key 取得、Odoo 設定值與 Docker 容器要改用 `host.docker.internal` 的注意事項，見 **`paas-operator-dev` skill**（`.claude/skills/paas-operator-dev/SKILL.md`）。
+本機開發與測試一律走沙盒：用 `woow-dev` plugin `/woow-dev:k8s-dev-sandbox <subcommand>`（舊名 `woowprd`；`create`/`destroy` 必帶 `--context`，需要被測 repo 的子命令帶 `--repo "$(git rev-parse --show-toplevel)"`）。子命令、三種 mode、`.sandbox/` hook 以 plugin 的 SKILL.md 為準；本 repo 的宣告在 `.sandbox.yml`；上手指令見 README §Quick Start。in-repo `k8s-dev-sandbox` skill 只剩 woow 專屬 helper（test／extend／e2e seed／stg clone），生命週期子命令已移除。
 
 ### Release & Build paas-odoo Image
 
-發版用 `/woow:deploy`：讀 `src/__manifest__.py` 版號 → pre-flight → 打 `v{version}` tag → push 觸發 cross-repo CI（`trigger-odoo-build.yml` → `paas-odoo-ci` build & push image，image tag 為時間戳、不綁單一 addon 版本）。⚠ **prod build 卡人工核可 gate**：push tag 只跑到「開 approval issue」就停，要授權者留言 `/approve` 才真的 build ⇒ **agent 不代簽、且 phase 1 綠燈 ≠ 發版完成**。tag 規則、pre-flight 檢查、核可 gate 與前置條件（`CI_GITEA_TOKEN` 雙 org Write）見 [`.claude/commands/woow/deploy.md`](.claude/commands/woow/deploy.md)。
+發版一律走 `/woow:deploy`（[`.claude/commands/woow/deploy.md`](.claude/commands/woow/deploy.md)）：#691 起版號只由 `release/<版號>` 發版 PR bump，merge 後才打 `v{version}` tag → `.gitea/workflows/trigger-odoo-build.yml` dispatch `paas-odoo-ci`（image tag 為時間戳、不綁單一 addon 版本；前置 `CI_GITEA_TOKEN` 雙 org Write）。⚠ **prod build 卡人工核可 gate**：push tag 只跑到「開 approval issue」就停，要授權者留言 `/approve` 才真的 build ⇒ **agent 不代簽——即使人類當場明確授權、即使手上憑證就是授權者本人（2026-08-16 反面先例，裁決無例外）；且 phase 1 綠燈 ≠ 發版完成**。
 
 ### Deploy Staging (deploy-stg)
 
-部署 staging 到 K8s dev sandbox：`/woow:deploy-stg [ref] [--slug x] [--image ...]`（tea 建 `stg-*` tag 觸發 CI → 輪詢完成 → 委派 plugin create.sh 部署到 `dev-sandbox-{slug}`）。前置：`tea login add --name gitea --url https://git-prod.woowtech.io --token <token>`（repo + write:packages scope）。完整流程、skip-build 用法、image 命名規則見 [`.claude/skills/deploy-stg/SKILL.md`](.claude/skills/deploy-stg/SKILL.md)；日誌 / 銷毀走 `/woow-dev:k8s-dev-sandbox logs|destroy`。
+部署 staging 到 dev sandbox → `deploy-stg` skill（[`.claude/skills/deploy-stg/SKILL.md`](.claude/skills/deploy-stg/SKILL.md)；frontmatter `name` 為 `woow:deploy-stg`，呼叫時加 `/` 前綴）。前置條件（tea login／token scope）、參數、`--skip-build`／`--image`、image 命名、以及 agent 必走的兩段式跑法（自跑輪詢迴圈會被 harness 砍 sleep 而 exit 5、不可重跑）都在該 skill；沙盒日誌／銷毀走 `/woow-dev:k8s-dev-sandbox logs|destroy`。
 
 ## Architecture
 
@@ -143,74 +102,42 @@ in-repo `.claude/skills/k8s-dev-sandbox/` 僅剩未進通用 plugin 的 woow 專
 
 頂層佈局：`src/`（Odoo addon 源碼＋`static/src/paas/` standalone OWL app）、`extra/paas-operator/`（FastAPI 包 Helm CLI；helm chart 已移至 woow-paas-charts repo）、`extra/cloudflare/`、`docs/`、`.claude/skills/`。細節用 `ls` 看即可；詳細結構與檔案列表已交由其他文件維護，避免雙寫漂移：
 
-- 模組總覽：`README.md`
-- 子系統 spec：`docs/reference/features/`
-- API 規格與路由：`docs/reference/api/`（或直接 grep `@route` / 看 `src/static/src/paas/core/router.js`）
-- 架構決策：`docs/decisions/`
-- docs 6 類規則：`docs/README.md`
+- 子系統 feature spec：`docs/reference/features/`
+- 端點與前端路由：見下方「API Endpoints」（`docs/reference/api/` 只放跨系統協定 contract，不是端點清單）
 
 ### Standalone OWL Application (`/woow`)
 
-The module provides an independent frontend application:
-
-**Entry Point**: `src/controllers/paas.py` → `/woow`
-**Template**: `src/views/paas_app.xml`
-**Assets**: `woow_paas_platform.assets_paas` bundle
+入口 `src/controllers/paas.py` 的 `@route("/woow")` render `src/views/paas_app.xml`（template id `paas_app`，`t-call-assets` 載入 `woow_paas_platform.assets_paas` bundle）；前端 hash 路由由 `src/static/src/paas/core/router.js` 接手。新元件放 `src/static/src/paas/components/<name>/`（每元件一資料夾，scss 同放）；`assets_paas` 已用 glob 收 `static/src/paas/**`（`src/__manifest__.py`），新元件**不必**登記 manifest。
 
 ### API Endpoints
 
-實際 endpoints 分散在 `src/controllers/` 多個檔案（各檔案範圍看檔名與其 `@route` 即明；唯一例外 `portal.py` **沒有自有 route**——它覆寫原生 `ProjectCustomerPortal` 的 view-value hook 注入 agent 卡片，grep `@route` 找不到它）。完整端點與 OWL hash-based 路由詳見 `docs/reference/api/`，或直接 grep `@route` 與 `src/static/src/paas/core/router.js`。
+端點權威＝`grep -rn '@route' src/controllers/`（各檔範圍看檔名即明）＋ OWL hash 路由 `src/static/src/paas/core/router.js`；`docs/reference/api/` 只放跨系統協定 contract（agent-runtime WebSocket、HA／Security Access），**不是**端點清單——整站 API 設計稿已 archive（見 `docs/reference/README.md` §子目錄）。唯一例外 `src/controllers/portal.py` **沒有自有 route**——它覆寫原生 `ProjectCustomerPortal` 的 view-value hook 注入 agent 卡片，grep `@route` 找不到它。
 
 ### Odoo Module Patterns
 
-**Adding a new model:**
-
-1. Create `src/models/your_model.py` with class inheriting `models.Model`
-2. Add import in `src/models/__init__.py`
-3. Add security rules in `src/security/ir.model.access.csv`
-4. Create views in `src/views/your_model_views.xml`
-5. Update `src/__manifest__.py` data list
-
-**Adding frontend assets:**
-
-1. Put OWL components in `src/static/src/paas/components/`
-2. Register in `src/__manifest__.py` under `woow_paas_platform.assets_paas`
-
-**Extending existing models:**
-
-```python
-class ResConfigSettings(models.TransientModel):
-    _inherit = 'res.config.settings'
-    # Add fields with config_parameter for system settings
-```
+新增 Odoo model／OWL component 的逐步 checklist（含程式碼樣板、ACL、manifest、更新指令）→ `docs/guides/getting-started.md` §Adding New Features（該節為權威）。ACL 那步另有 pattern-guard hook 在編輯 `src/security/` 時自動推播必讀 docs。
 
 **使用 `config_parameter` 時的卸載清理：**
 
-Odoo 卸載 addon 時**不會**自動清除 `ir.config_parameter` 記錄。若欄位使用了 `config_parameter`，必須同步更新 `src/hooks.py` 中的 `_CONFIG_PARAMETERS` 列表，確保卸載時能正確清理。
+Odoo 卸載 addon 時**不會**自動清除 `ir.config_parameter` 記錄；`uninstall_hook` 只刪 `src/hooks.py` `_CONFIG_PARAMETERS` 清單內的 key。新增任何 `woow_paas_platform.*` key 都要登記進該清單，兩種寫法的守線不同：
 
-```python
-# src/hooks.py
-_CONFIG_PARAMETERS = [
-    'woow_paas_platform.operator_url',
-    'woow_paas_platform.operator_api_key',
-    # 新增 config_parameter 時，務必加到這裡
-]
-```
+- `res.config.settings` 欄位的 `config_parameter=`：repo-lint `config-parameter-uninstall` 機械對帳（只認字面量、只查「宣告了沒登記」單向）。
+- 「模組常數＋`get_param()`」寫法：lint 掃不到，登記之外要自己補一支 registered-for-uninstall 測試（範例 `src/tests/test_public_url_dns_gate_648.py::TestNewConfigParametersAreRegisteredForUninstall`）。
 
 ## Known patterns
 
-改 model / ACL / lifecycle / seed / OWL template 前的守線知識採兩層供給，不雙寫在本檔：
+改任何守護路徑（權威清單＝下列 map 各 class 的 `pattern`；涵蓋 model／ACL／seed／OWL template／controller／tests／operator 等，本行不窮舉）前的守線知識採兩層供給，不雙寫在本檔：
 
 1. **pattern-guard hook（機器強制）**：編輯守護路徑時 hook 自動列出必讀 docs，讀完重試即放行；對照表 `.claude/hooks/pattern-guard-map.json`（新增守線在此 append）。
 2. **完整索引（人工查閱）**：[`docs/decisions/patterns/README.md`](docs/decisions/patterns/README.md)「何時必看」表。
+
+新守線的登錄點（三分流，勿寫回本檔）：綁路徑 → `.claude/hooks/pattern-guard-map.json` append；可機械判定 → `scripts/audit/repo-lint.py` 加 check（gate 比散文強）；判斷類 → pattern／pitfall doc ＋ 各自 README 索引。
 
 唯二留本檔的高頻 invariant：
 
 - **CloudService / Project decoupling**：Invariants 見 `docs/decisions/refactor/cloud-service-project-decouple.md`
   的 §Invariants（該段即權威清單；此處刻意不寫條數——寫下就會漂，見 #615）。
-- **Seeded `agent_template_default` 必須 tenant-neutral**（unbound + 無 user-scope 綁定；經 sudo 廣播為全租戶 fallback）。綁定當下有 code guard fail-loud（`src/models/agent_template.py:125`）；設計依據 `docs/decisions/patterns/seed-agent-template-design.md`；與 `agent_template_demo`（draft、可綁 project 測試）分工勿互換。
-
-可機械判定的守線改進 `scripts/audit/repo-lint.py`（gate 比散文強）。
+- **Seeded 平台預設 agent_template 的 tenant-neutral invariant**：`agent_template_default` 必須 tenant-neutral（unbound + 無 user-scope 綁定；經 sudo 廣播為全租戶 fallback）。綁定當下有 code guard fail-loud（`src/models/agent_template.py` `_check_not_platform_default_when_bound`）；設計依據 `docs/decisions/patterns/seed-agent-template-design.md`；與 `agent_template_demo`（draft、可綁 project 測試）分工勿互換。
 
 Pitfall 持久化紀錄（debug 撞牆時對照）：完整索引見 [`docs/tracking/pitfalls/README.md`](docs/tracking/pitfalls/README.md)（一行症狀 + 機械化狀態）。其中已機械化者撞到 gate / guard 時訊息內附 doc 指針，不需預先記憶。
 
@@ -219,21 +146,18 @@ Follow-up 追蹤：`docs/tracking/followups/follow-ups.md`（隨 cycle 持續累
 ## Docs organisation
 
 **找文件** → [`docs/index.md`](docs/index.md)（依「我現在想做什麼」routing，篇數由
-`scripts/audit/gen-docs-index.py` 即時算出）。**寫新文件該放哪** → [`docs/README.md`](docs/README.md)
-（分類定義與決策樹，權威來源）。這兩份不在本檔複述——先前複述的版本已漂移成錯的
-（本檔曾寫「6 類 + 1 工具自管理區」，實際是 6 類 + 3 個輔助區）。
+`scripts/audit/gen-docs-index.py` 即時算出）。**寫新文件該放哪、建檔／promote 指令** → [`docs/README.md`](docs/README.md)
+（分類定義、決策樹與「建檔工具」表，權威來源）。分類清單不在本檔複述——複述過的版本已漂移成錯的。
 
-**工具指令**：
+**動過 `docs/` 後**（新增／刪除／搬移任何 tracked `.md`，或改了 `scripts/audit/gen-docs-index.py`）：跑 `python3 scripts/audit/gen-docs-index.py` 重產 `docs/index.md`；`--check` 只比對不寫檔（exit 0＝同步）。CI `.gitea/workflows/docs-link-check.yml` 的 `docs-index-sync` job 跑同一個 `--check` 且**會紅**——同 workflow 的 lychee link check 才是 warning-only（排除清單在 `.lychee.toml`），所以連結本機先驗：`lychee --offline --config .lychee.toml <改動的 .md>`（`--offline` 只驗相對路徑、不打網路；要驗外部 URL 拿掉它）。
 
-- `/docs:new <category> <name>` — 建新 doc（產 frontmatter 模板）
-- `/docs:promote superpowers:<file>` — 把 superpowers 探索 promote 到主結構
-- 動過 `docs/` 結構後跑 `python3 scripts/audit/gen-docs-index.py` 重產索引（`--check` 可驗是否同步）
+`/docs:promote` 只剩清 `docs/superpowers/` 舊產出用（superpowers 已退役，該目錄目前 0 份待 promote）；新文件一律 `/docs:new`。
 
-**CI 策略**：
+## Framework integration
 
-- Phase 1（目前）：lychee broken link check，PR 觸發，失敗只 warning
-- Phase 2（穩定後）：升級為 block merge + orphan doc check
-- 例外清單：`docs/archived/`、`docs/superpowers/`
+現行只用 **mattpocock/skills**（Claude Code 官方 marketplace plugin `mattpocock-skills`；plugin 與 skills.sh 副本二選一、勿同裝，skill 清單以 plugin 為準）；它對 issue tracker／triage labels／domain docs 的消費規則由 `setup-matt-pocock-skills` 產在 `docs/agents/`（見下方 Agent skills），PM 一律走 Gitea issues。`research` 產出照 `docs/README.md` 的分類落檔（決策前偵察 → `docs/scout/`）。
+
+superpowers（obra）、SuperClaude（`/sc:*`）與 ccpm 均已退役（ccpm 2026-08-07，#631）；superpowers plugin 須在 `~/.claude/settings.json` 與 `.claude/settings.local.json` 停用（`"superpowers@claude-plugins-official": false`），否則 SessionStart 仍會注入它的 skill 規則。歷史產出 → [`docs/archived/ccpm-v2/README.md`](docs/archived/ccpm-v2/README.md) 與 `docs/superpowers/`；舊指南在 `docs/archived/guides/frameworks/`。
 
 ## Code Style Guide
 
@@ -241,20 +165,23 @@ Follow-up 追蹤：`docs/tracking/followups/follow-ups.md`（隨 cycle 持續累
 
 - JavaScript / OWL / XML / SCSS: 2 spaces
 - Python: 4 spaces (PEP 8)
+- 編輯既有檔一律跟該檔現況（2026-03 前的檔多為 4 spaces），不要順手重排縮排
 
 ### Python
 
 ```python
-# Model naming
-class WoowSubscription(models.Model):
-    _name = 'woow_paas_platform.subscription'
-    _description = 'PaaS Subscription'
+# Model naming：_name 一律 `woow_paas_platform.<snake_case>`（module 名＋底線，
+# 不用 Odoo 慣用的點分式）；class 名不加 Woow 前綴。實檔：src/models/skill.py
+class Skill(models.Model):
+    _name = 'woow_paas_platform.skill'
+    _description = 'Project-scoped Agent Skill Bundle'
 
-# Field definitions - use keyword arguments
+# Field definitions - use keyword arguments（Many2one 的 comodel 可放第一個位置參數）
 name = fields.Char(
-    string='Name',
+    string='Skill Name',
     required=True,
-    help='Brief description for users',
+    index=True,
+    help='Slug from SKILL.md frontmatter; unique per (project, version).',
 )
 ```
 
@@ -298,58 +225,16 @@ export class SubscriptionCard extends Component {
 
 ### Odoo Module
 
-- Odoo version: 18.0
 - Odoo core modules 與 third-party addons: 權威清單見 `src/__manifest__.py` 的 `depends`（含 ai_base_gt、odoo_ai_assistant_chatgpt_connector、sh_subscription 系列、ecpay 系列等）
-- External fonts: Google Fonts (Manrope, Outfit), Material Symbols
-
-### PaaS Operator Service
-
-- Python 3.11+
-- FastAPI
-- Helm 3.13+
-- kubectl 1.28+
-- Kubernetes cluster access
+- External fonts: Google Fonts (Manrope, Outfit) 與 Material Symbols 已在 `src/views/paas_app.xml` 的 `<link>` 全域載入（OAuth 頁另載於 `src/views/oauth2_templates.xml`）；SCSS 一律用 `src/static/src/paas/styles/00_variables.scss` 的 `$woow-font-display`／`$woow-font-body` 變數。
 
 ### Deployment
 
-- Kubernetes 1.28+ (K3s recommended for self-hosted)
-- PostgreSQL 14+ (for Odoo)
-- Cloudflare DNS (or custom domain for Ingress)
+- 從零架叢集／DNS／DB 的前置條件見 `docs/guides/deployment/k8s-setup.md` §Prerequisites；平台實際入口走 Cloudflare Tunnel（上表 `paas-cloudflare-system`），不建 Ingress／DNS A record。
 
-## Framework integration
+### PaaS Operator Service
 
-本 repo 同時用兩套 Claude Code framework，各自 scope 與整合點不同。**詳細使用指南漸進載入** — 需要哪套再讀對應檔，不要一次全載：
-
-| Framework                                                                                                                      | Scope / 安裝形式                                | 主要用途                                                                             | 詳細指南                                                                         |
-| ------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------- | ------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------- |
-| **superpowers**（[obra/superpowers](https://github.com/obra/superpowers)）                                                     | User-scope plugin（SessionStart hook 自動注入） | 16+ skills：brainstorming / writing-plans / TDD / debugging / code-review / worktree | [`docs/guides/frameworks/superpowers.md`](docs/guides/frameworks/superpowers.md) |
-| **SuperClaude_Framework**（[SuperClaude-Org/SuperClaude_Framework](https://github.com/SuperClaude-Org/SuperClaude_Framework)） | User-scope `~/.claude/commands/sc/*`            | 30+ slash commands；本 repo 只用 `/sc:brainstorm` + ad hoc 其他                      | [`docs/guides/frameworks/superclaude.md`](docs/guides/frameworks/superclaude.md) |
-
-### 整合點：`/docs:promote`
-
-superpowers 的長期價值產出，透過 `/docs:promote` 升級到 `docs/` 主結構（6 類，見上方 Docs organisation）：
-
-```
-/docs:promote superpowers:<filename>        # 從 docs/superpowers/{specs,plans}/
-```
-
-### 新 feature 探索入口
-
-`/sc:brainstorm`（SuperClaude）或 superpowers `brainstorming` skill 做探索式對話。**兩者產出都沒有自動流向主結構**——`/sc:brainstorm` 寫 `claudedocs/`（git-ignored），superpowers 寫 `docs/superpowers/`（工具自管理區）；要留下來得手動走 `/docs:new` 或 `/docs:promote`。
-
-實際要開工的項目**開 Gitea issue**（`tea` CLI，見下方 Agent skills）。
-
-### 不啟用清單
-
-- **`/sc:pm`**（SuperClaude）— 預設寫 `docs/{temp,patterns,pdca,mistakes,checklists}/`，與本 repo 6 類結構衝突；PM 工作流走 Gitea issues
-- **ccpm**（[automazeio/ccpm](https://github.com/automazeio/ccpm)）— **2026-08-07 停用**（#631）。實際 PM 早已走 Gitea issues，`.claude/epics/` 近三個月無異動。歷史產出（23 份 PRD ＋ 23 個 epic）archive 到 [`docs/archived/ccpm-v2/`](docs/archived/ccpm-v2/README.md)；更早的 v1 context 在 `docs/archived/ccpm-v1/context/`
-
-### 兩套之間的關係
-
-- **PM 不由 framework 承擔**——走 Gitea issues（`tea` CLI）。這不是規劃，是實況：近期工作（#598 / #614 / #615 / #621 / #626 / #627…）全部 issue-driven
-- **superpowers** 是輔助工具集（owns `docs/superpowers/` 工具自管理區）
-- **SuperClaude** 是 ad hoc command 庫（產出多在 `claudedocs/` git-ignored）
-- **superpowers `brainstorming`** 與 **`/sc:brainstorm`** 功能重疊：擇一即可，兩者產出都要**手動** promote 才進主結構
+- 改 `extra/paas-operator/` 前：工具鏈版本以 `extra/paas-operator/Dockerfile` 釘的 `python` image／`HELM_VERSION`／`KUBECTL_VERSION` 為準，Python 套件見同目錄 `requirements.txt`；本機 helm 大版號陷阱見上方 §PaaS Operator Integration Tests。
 
 ## Agent skills
 
@@ -359,7 +244,7 @@ Issues 在 Gitea（git-prod.woowtech.io / odoo-addons/woow_paas_platform），�
 
 ### Triage labels
 
-採用五個預設 canonical triage labels；agent 工作以 `agent-context:*`、`agent-status:in-progress` 與 `agent-assignee:leader1`～`leader5` 標記。見 `docs/agents/triage-labels.md`。
+Work-state label 六選一（open issue 同時只掛一個；mattpocock 五個 canonical role → 本 repo label 的對映表在文件內）；agent 工作以 `agent-context:*`、`agent-status:in-progress` 與 `agent-assignee:leader1`～`leader5` 標記。見 `docs/agents/triage-labels.md`。
 
 ### Domain docs
 
