@@ -37,10 +37,47 @@ T1 與 T3 是同一個根因的兩條不同路徑（有／沒有 callback eviden
 的 commit 走另一條連線，而 `TransactionCase` 自己的 `self.env.cr` 是 REPEATABLE READ，
 同一個 test 內用 ORM 讀不到剛被別的 cursor commit 的列。
 """
+import importlib.util
+import logging
+import os
 from types import SimpleNamespace
+from unittest.mock import patch
 
+import odoo
+from odoo.modules.migration import MigrationManager
 from odoo.tests.common import TransactionCase
 from odoo.tests import tagged
+
+#: 本 PR 新增的 migration。⚠ 目錄名與 `src/__manifest__.py` 的版號必須同步
+#: （`manifest-version-gate` 的規則 B；且 Odoo 對「目錄版號 > manifest」的
+#: migration 是**靜默 no-op**）。T7 就是在守這一格。
+_MIGRATION_VERSION = '18.0.1.0.177'
+_MODULE = 'woow_paas_platform'
+_MIGRATION_DIR = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), '..', 'migrations',
+                 _MIGRATION_VERSION)
+)
+_MIGRATION_LOGGER = (
+    'odoo.addons.woow_paas_platform.migrations.%s.post-migrate'
+    % _MIGRATION_VERSION
+)
+
+
+def _load_migrate():
+    """按路徑載入 `migrate(cr, version)`（沿 test_agent_pod_phase_a_migration 慣例）。
+
+    ⚠ 這種載入法**證明不了 Odoo 的 loader 會發現這個檔**——目錄名或檔名寫錯
+    （`post_migrate.py` vs `post-migrate.py`、版號段多一位）時它照樣載得到，
+    而 prod 升版靜默不跑。那一格由 T7 用 Odoo 自己的 loader 守。
+    """
+    path = os.path.join(_MIGRATION_DIR, 'post-migrate.py')
+    if not os.path.exists(path):
+        return None
+    spec = importlib.util.spec_from_file_location(
+        'woow_993_post_migrate_%s' % _MIGRATION_VERSION.replace('.', '_'), path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return getattr(module, 'migrate', None)
 
 
 @tagged('post_install', '-at_install')
@@ -219,3 +256,196 @@ class TestTradeNoSemantics993(TransactionCase):
             'TradeNo 可寫）。實際值 %r —— 若等於 external_ref %r，'
             '就是把我方 reference 冒充成 provider 單號。'
             % (after['trade_no'], reference))
+
+    # ── T4–T6：backfill migration（合成資料的陽性＋陰性對照）──────────
+    def _seed_incident_row(self, external_ref, trade_no, kind='charged_not_credited'):
+        """用獨立 cursor 直接 seed 一列（繞過 `_log` 的 kind guard）。"""
+        self._refs_to_purge.append(external_ref)
+        with self.env.registry.cursor() as cr:
+            cr.execute(
+                "INSERT INTO woow_billing_incident "
+                "(external_ref, kind, state, trade_no, occurrences, "
+                " first_seen_at, last_seen_at, create_uid, write_uid, "
+                " create_date, write_date) "
+                "VALUES (%s, %s, 'open', %s, 1, now(), now(), 1, 1, "
+                "        now(), now())",
+                (external_ref, kind, trade_no),
+            )
+            cr.commit()
+
+    def _read_trade_no(self, external_ref):
+        with self.env.registry.cursor() as cr:
+            cr.execute(
+                'SELECT trade_no FROM woow_billing_incident '
+                'WHERE external_ref = %s', (external_ref,))
+            row = cr.fetchone()
+        return row[0] if row else None
+
+    def test_T4_backfill_is_idempotent_and_logs_its_rowcount(self):
+        """跑兩次：第一次清掉、第二次 0 列；兩次都必須 **log 出 rowcount**。
+
+        🔴 為什麼一定要 log 數字：沒有它，「跑了但 0 列」與「根本沒跑到」在 log 上
+        完全不可區分——那正是本 issue 家族一直在修的那種無聲。
+
+        ⚠ `assertLogs` 的 level 傳**數值** `logging.INFO`，⛔ 不傳字串：Odoo 的
+        `addLevelName(RUNBOT=25, "INFO")` 覆寫了 stdlib 的名稱表，字串 `'INFO'`
+        會被解析成 25 ⇒ `_logger.info()`（20）落在門檻外 ⇒ 恆抓不到。
+        """
+        migrate = _load_migrate()
+        self.assertIsNotNone(
+            migrate, 'src/migrations/%s/post-migrate.py 必須存在且 expose '
+                     'migrate(cr, version)' % _MIGRATION_VERSION)
+
+        ref = 'TOPUP993BACKFILL0001'
+        self._seed_incident_row(ref, trade_no=ref)  # trade_no == external_ref
+
+        with self.env.registry.cursor() as cr:
+            with self.assertLogs(_MIGRATION_LOGGER, level=logging.INFO) as first:
+                migrate(cr, '18.0.1.0.176')
+            cr.commit()
+        self.assertIsNone(
+            self._read_trade_no(ref),
+            '第一次跑必須把「trade_no == external_ref」的列清成 NULL')
+        self.assertTrue(
+            any('cleared 1 row' in line for line in first.output),
+            'migration 必須 log 出實際影響列數（第一次應為 1）；實際：%s'
+            % first.output)
+
+        with self.env.registry.cursor() as cr:
+            with self.assertLogs(_MIGRATION_LOGGER, level=logging.INFO) as second:
+                migrate(cr, '18.0.1.0.176')
+            cr.commit()
+        self.assertTrue(
+            any('cleared 0 row' in line for line in second.output),
+            '第二次跑必須是 no-op（0 列）且仍然出聲；實際：%s' % second.output)
+
+    def test_T5_backfill_clears_only_the_masquerading_rows(self):
+        """🔴 陽性＋陰性對照：該清的清、真 TradeNo ⛔ 不可誤殺、NULL 不變。
+
+        只驗「(a) 被清掉」是不夠的——那條斷言在一個「把整欄都清成 NULL」的
+        錯誤實作下**照樣綠**。必須同時釘住 (b) 不被動。
+        """
+        migrate = _load_migrate()
+        self.assertIsNotNone(migrate)
+
+        ref_a = 'TOPUP993MASQUERADE01'          # (a) trade_no == external_ref ⇒ 該清
+        ref_b = 'TOPUP993REALTRADE001'          # (b) 真 provider TradeNo ⇒ ⛔ 不可動
+        ref_c = 'TOPUP993NULLTRADE001'          # (c) 本來就 NULL ⇒ 不變
+        self._seed_incident_row(ref_a, trade_no=ref_a)
+        self._seed_incident_row(ref_b, trade_no=self.PROVIDER_TRADE_NO)
+        self._seed_incident_row(ref_c, trade_no=None)
+
+        with self.env.registry.cursor() as cr:
+            migrate(cr, '18.0.1.0.176')
+            cr.commit()
+
+        self.assertIsNone(
+            self._read_trade_no(ref_a), '(a) 冒充 provider 單號的我方 reference 必須被清')
+        self.assertEqual(
+            self._read_trade_no(ref_b), self.PROVIDER_TRADE_NO,
+            '(b) 🔴 真的 provider TradeNo ⛔ 不得被誤殺——它是平台唯一一份 '
+            'ECPay 交易編號')
+        self.assertIsNone(
+            self._read_trade_no(ref_c), '(c) 本來就 NULL 的不變')
+
+    def test_T6_backfill_survives_a_missing_table(self):
+        """表不存在時 ⛔ 不得拋例外（有人可能從沒有 PR-D 的舊 DB 升上來）。
+
+        用 patch 讓 `to_regclass` 那一步回空，等價於「這個 DB 還沒有那張表」
+        ——⛔ 不真的 DROP TABLE（那會炸掉同一個 DB 上的其他測試）。
+        """
+        migrate = _load_migrate()
+        self.assertIsNotNone(migrate)
+
+        class _NoTableCursor:
+            """只回答 to_regclass ⇒ NULL；其餘 execute 一律視為不該被呼叫。"""
+
+            def __init__(self):
+                self.executed = []
+
+            def execute(self, query, params=None):
+                self.executed.append(query)
+                if 'to_regclass' not in query:
+                    raise AssertionError(
+                        '表不存在時 ⛔ 不該再下任何查詢，實際下了：%s' % query)
+
+            def fetchone(self):
+                return (None,)
+
+        fake = _NoTableCursor()
+        try:
+            migrate(fake, '18.0.1.0.176')
+        except Exception as exc:  # noqa: BLE001 — 這裡就是要證明不拋
+            self.fail('表不存在時 migration 不得拋例外，實際：%r' % exc)
+        self.assertEqual(
+            len(fake.executed), 1,
+            '應該只問一次 to_regclass 就 return；實際：%s' % fake.executed)
+
+    # ── T7：Odoo 自己的 loader 真的看得到這支 migration ───────────────
+    def test_T7_odoo_loader_lists_the_migration_in_the_post_stage(self):
+        """🔴 用 **Odoo 自己的 loader** 證明這支會被列進 post 階段。
+
+        ⚠ 為什麼 T4–T6 不夠：它們用 `spec_from_file_location` **按路徑**載入，
+        目錄名或檔名寫錯（`post_migrate.py` vs `post-migrate.py`、版號段多一位、
+        目錄版號 > manifest）時 T4–T6 **照樣全綠**，而 prod 升版**靜默不跑**
+        ——那是「測試從未執行」那一族。
+
+        ⛔ 不自己抄 `VERSION_RE`／檔名規則當判準：那只是把同一個假設寫兩遍。
+        這裡實例化真的 `MigrationManager`，讓它自己去掃檔案，再讓
+        `migrate_module(pkg, 'post')` 自己去挑版本與 stage；我們只攔 `exec_script`
+        看它最後**要執行哪些檔**。
+        """
+        manifest_version = odoo.modules.module.get_manifest(_MODULE)['version']
+        self.assertEqual(
+            manifest_version, _MIGRATION_VERSION,
+            'migration 目錄名必須等於 manifest 版號：Odoo 的執行視窗是 '
+            '`installed < 目錄版本 <= manifest`，目錄版號比 manifest 大時'
+            '**靜默 no-op**（manifest-version-gate 規則 B 守的也是這個）')
+
+        pkg = SimpleNamespace(
+            name=_MODULE,
+            state='to upgrade',
+            installed_version='18.0.1.0.176',
+            load_version='18.0.1.0.176',
+            data={'version': manifest_version},
+        )
+        manager = MigrationManager(self.env.cr, [pkg])
+
+        # (1) loader 有沒有**發現**這個檔
+        found = manager.migrations.get(_MODULE, {}).get('module', {})
+        self.assertIn(
+            _MIGRATION_VERSION, found,
+            'Odoo 的 migration loader 沒有發現 %s 這個版本目錄——檢查目錄名是否'
+            '符合它的 VERSION_RE。它掃到的版本：%s'
+            % (_MIGRATION_VERSION, sorted(found)))
+        self.assertTrue(
+            any(os.path.basename(f) == 'post-migrate.py'
+                for f in found[_MIGRATION_VERSION]),
+            'loader 在 %s 底下沒看到 post-migrate.py，掃到的是：%s'
+            % (_MIGRATION_VERSION, found[_MIGRATION_VERSION]))
+
+        # (2) 它會不會被列進 **post** 階段執行
+        executed = []
+
+        def _capture(cr, installed_version, pyfile, addon, stage, version=None):
+            executed.append((stage, os.path.basename(pyfile), version))
+
+        with patch('odoo.modules.migration.exec_script', _capture):
+            manager.migrate_module(pkg, 'post')
+
+        self.assertTrue(
+            any(stage == 'post' and name == 'post-migrate.py'
+                and _MIGRATION_VERSION in (version or '')
+                for stage, name, version in executed),
+            'Odoo 沒有把 %s/post-migrate.py 排進 post 階段（installed=%s → '
+            'manifest=%s 的視窗內）。它排到的是：%s'
+            % (_MIGRATION_VERSION, pkg.installed_version, manifest_version,
+               executed))
+
+        # (3) 陰性對照：同一支 ⛔ 不該出現在 pre 階段
+        executed.clear()
+        with patch('odoo.modules.migration.exec_script', _capture):
+            manager.migrate_module(pkg, 'pre')
+        self.assertFalse(
+            [e for e in executed if e[1] == 'post-migrate.py'],
+            'post-migrate.py ⛔ 不該被排進 pre 階段；實際：%s' % executed)
