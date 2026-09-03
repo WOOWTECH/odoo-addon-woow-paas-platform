@@ -444,7 +444,18 @@ class WalletTopup(models.Model):
                     'credits': self.credits,
                     'bonus': self.bonus,
                     'currency': currency.name if currency else None,
-                    'trade_no': tx.reference,
+                    # 🔴 #993：⛔ **不寫 `trade_no`**。這裡沒有 provider 給的
+                    # 單號可寫——`tx.reference` 是我方 MerchantTradeNo，它已經
+                    # 在同一個 snapshot 的 `external_ref` 裡了（同值、冗餘）。
+                    # 寫進來的實害不是重複而是**覆寫**：`_upsert_incident_snapshot`
+                    # 把 `trade_no` 列進 `explicit_evidence`（`billing_incident.py`
+                    # 的 `explicit_evidence` 那段）⇒ `ON CONFLICT DO UPDATE SET
+                    # trade_no = EXCLUDED.trade_no` ⇒ 若 PR-G 的 callback
+                    # evidence 已經把**真的 ECPay TradeNo** 寫進這一列（kind 仍是
+                    # `intent`），這次 promote 會把它蓋掉——而那是平台**唯一一份**
+                    # ECPay 交易編號（vendored addon 只在查得到 tx 時才寫
+                    # `tx.provider_reference`，本場景正是查不到）。Eugene 2026-09-02
+                    # 裁決 A（#993 留言 11404）。
                     'failure_code': TOPUP_WALLET_CREDIT_FAILED,
                     'source_model': self._name,
                     'source_ref': self.id,

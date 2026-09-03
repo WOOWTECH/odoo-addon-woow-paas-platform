@@ -371,18 +371,37 @@ class TestZhTwActivationWiring107(TransactionCase):
             manifest = ast.literal_eval(fh.read())
         self.assertIn('data/lang_zh_tw_activation.xml', manifest['data'])
 
-    def test_migration_dir_matches_manifest_version(self):
-        """規則 B：新增的 migration 目錄名必須等於 manifest 版號。
+    def test_migration_dir_is_within_the_manifest_window(self):
+        """本支 migration 的目錄版號必須 **<= manifest 版號**（否則靜默 no-op）。
 
-        名字取錯的那一側是**靜默 no-op**（Odoo 的執行視窗是
-        `installed < 目錄 <= manifest`）。
+        Odoo 的執行視窗是 `installed < 目錄 <= manifest`
+        （`odoo/modules/migration.py` 的 `compare()`）⇒ 目錄版號**大於** manifest
+        的那一支永遠不會被執行，而且**不報錯**。這條守的就是那一格。
+
+        🔴 **2026-09-03（#993）改判準：`==` → `<=`。**
+        原本寫的是 `assertEqual(manifest['version'], _MIGRATION_VERSION)`，
+        那把「manifest 版號」硬綁在 **#107 自己的目錄名**上
+        ⇒ **之後任何一顆帶 migration 的 PR bump 版號都會讓這條紅**，
+        而它紅的理由與 #107 這支 migration 會不會被執行**無關**
+        （#993 bump 到 `18.0.1.0.177` 時實際撞到：`'18.0.1.0.177' != '18.0.1.0.176'`）。
+
+        ⚠ 換句話說，原本的斷言驗的是一個**會過期的巧合**（當時 #107 剛好是最新版號），
+        不是它宣稱要守的性質。改成 `<=` 之後，這條在往後每一次 bump 都仍然成立，
+        而「目錄 > manifest ⇒ 靜默 no-op」那個真正的風險依然被擋住。
         """
         import ast
+
+        from odoo.tools.parse_version import parse_version
 
         manifest_path = os.path.join(_addon_root(), '__manifest__.py')
         with open(manifest_path, encoding='utf-8') as fh:
             manifest = ast.literal_eval(fh.read())
-        self.assertEqual(manifest['version'], _MIGRATION_VERSION)
+        self.assertLessEqual(
+            parse_version(_MIGRATION_VERSION),
+            parse_version(manifest['version']),
+            '#107 的 migration 目錄 %s 必須 <= manifest 版號 %s，否則 Odoo 的'
+            '執行視窗（installed < 目錄 <= manifest）永遠涵蓋不到它，而且不報錯'
+            % (_MIGRATION_VERSION, manifest['version']))
         self.assertTrue(os.path.isfile(os.path.join(
             _addon_root(), 'migrations', _MIGRATION_VERSION,
             'post-migrate.py')))

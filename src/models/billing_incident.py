@@ -368,7 +368,29 @@ class BillingIncident(models.Model):
     credits = fields.Float()
     bonus = fields.Float()
     currency = fields.Char()
-    trade_no = fields.Char(index=True)
+    #: #993（Eugene 裁決 A）：**只裝 provider（ECPay）配發的 TradeNo**。
+    #: ⛔ 不得放我方的 MerchantTradeNo／`reference`——那是 `external_ref` 的職責，
+    #: 兩者同值時這一欄是冗餘的，而**不同值時把我方的寫進來就是覆寫證據**。
+    #:
+    #: 🔴 為什麼這一欄要有語意宣告（根因就是它原本沒有）：`_upsert_incident_snapshot`
+    #: 把 snapshot 裡除 `external_ref`／`kind`／`state` 以外的每一欄都展成
+    #: `ON CONFLICT DO UPDATE SET <欄> = EXCLUDED.<欄>` ⇒ 任何寫入者只要把
+    #: `trade_no` 放進 snapshot，就會覆寫掉先前寫進去的值。PR-G 的 callback
+    #: evidence 寫的是**真的 ECPay TradeNo**，而在「callback 早到、tx 還查不到」
+    #: 的場景裡，vendored addon 不會寫 `tx.provider_reference`
+    #: ⇒ **這一欄是平台唯一一份 ECPay 交易編號**，蓋掉就是銷毀。
+    #: 覆寫還完全無聲：`_TRADE_NO_RE` 對兩種形狀都放行，validator 不擋、log 不叫。
+    trade_no = fields.Char(
+        index=True,
+        help=(
+            "Provider-issued trade number (ECPay TradeNo). Only write the "
+            "value the payment provider gave us in its callback payload. "
+            "Never store our own MerchantTradeNo / payment.transaction "
+            "reference here -- that belongs in external_ref. When a callback "
+            "arrives before the transaction is visible, this column is the "
+            "platform's only record of the provider-side trade number."
+        ),
+    )
     rtn_code = fields.Char()
     failure_code = fields.Char()
     state = fields.Selection(

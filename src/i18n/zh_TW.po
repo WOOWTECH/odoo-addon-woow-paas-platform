@@ -17387,6 +17387,16 @@ msgstr ""
 "Workspace role），可跨全部公司讀取全部 incident，review activity 派給該 Odoo group 所有現任 manager。"
 
 #. module: woow_paas_platform
+#: model:ir.model.fields,help:woow_paas_platform.field_woow_billing_incident__trade_no
+msgid ""
+"Provider-issued trade number (ECPay TradeNo). Only write the value the "
+"payment provider gave us in its callback payload. Never store our own "
+"MerchantTradeNo / payment.transaction reference here -- that belongs in "
+"external_ref. When a callback arrives before the transaction is visible, "
+"this column is the platform's only record of the provider-side trade "
+"number."
+msgstr "Provider（ECPay）配發的交易單號（TradeNo）。只寫 payment provider 在 callback payload 裡給我們的值。⛔ 不得把我方的 MerchantTradeNo／payment.transaction reference 寫進來——那屬於 external_ref。當 callback 早於 transaction 可見時，這一欄是平台唯一一份 provider 側的交易單號紀錄。"
+#. module: woow_paas_platform
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_billing_incident__kind__intent
 msgid "Payment intent"
 msgstr "付款意圖"
