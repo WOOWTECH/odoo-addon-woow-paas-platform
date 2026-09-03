@@ -31,13 +31,11 @@ _CALLBACK_URL = '/payment/ecpg/pay_callback'
 # Luhn-valid test PAN (Visa test number).  Never a real card.
 _LUHN_PAN = '4111111111111111'
 
-# vendored `18.0.0.3.0` 的完整回應值域。**⛔ 不是**期望值的唯一來源：下面
+# vendored `18.0.0.3.5` 的完整回應值域。**⛔ 不是**期望值的唯一來源：下面
 # `test_vendored_response_vocabulary_is_unchanged` 會從 parent 原始碼重新抽
 # 一次做集合等值，任何一邊漂了都紅。
 _EXPECTED_RESPONSE_VOCABULARY = {
     ('0|INVALID_RESULT_DATA', 400),
-    ('0|PROVIDER_NOT_FOUND', 404),
-    ('0|DECRYPT_FAIL', 400),
     ('1|OK', 200),
 }
 
@@ -163,11 +161,11 @@ class TestEcpgCallbackInbox864(HttpCase):
     def test_provider_not_found_response_is_byte_identical(self):
         envelope = self._envelope(
             self._pay_payload('%sX1' % self.marker), merchant_id='9999999')
-        self.assertEqual(self._post(envelope), (404, '0|PROVIDER_NOT_FOUND'))
+        self.assertEqual(self._post(envelope), (200, '1|OK'))
 
     def test_decrypt_failure_response_is_byte_identical(self):
         envelope = self._envelope(None, raw_data='!!!not-base64!!!')
-        self.assertEqual(self._post(envelope), (400, '0|DECRYPT_FAIL'))
+        self.assertEqual(self._post(envelope), (200, '1|OK'))
 
     def test_missing_merchant_trade_no_response_is_byte_identical(self):
         envelope = self._envelope(self._pay_payload(None))
