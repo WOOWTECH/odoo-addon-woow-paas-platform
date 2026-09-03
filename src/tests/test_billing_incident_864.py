@@ -17,7 +17,7 @@ import polib
 from psycopg2 import IntegrityError
 
 import odoo
-from odoo import api, fields
+from odoo import Command, api, fields
 from odoo.exceptions import AccessError, UserError
 from odoo.modules.registry import Registry
 from odoo.tests.common import (
@@ -4984,6 +4984,19 @@ class TestBillingIncidentRpcWriteGuard864(HttpCase):
                     'assigned nonmanager must not use %s on a protected '
                     'ordinary carrier' % method,
                 )
+
+        # Native MailActivity._search 會對非本人 activity 套用 target 的
+        # _mail_post_access（res.partner 為 write）；先補齊該無關前提，讓陽性腿
+        # 只量 billing carrier guard 是否正確放行 account manager。
+        partner_manager_group = self.env.ref('base.group_partner_manager')
+        self.manager_b.sudo().write({
+            'groups_id': [Command.link(partner_manager_group.id)],
+        })
+        self.assertTrue(
+            self.regular_user.partner_id.with_user(self.manager_b).has_access(
+                'write'),
+            'positive manager must satisfy native activity target access',
+        )
 
         self.authenticate(self.manager_b_login, self.manager_b_login)
         manager_visible = self._assert_ok(
