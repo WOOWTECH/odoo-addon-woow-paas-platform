@@ -134,7 +134,20 @@ class TestChargedNotCreditedIncident864(TransactionCase):
         self.assertEqual(incident['state'], 'open')
         self.assertEqual(incident['partner_ref'], self.partner.id)
         self.assertEqual(incident['payment_token_ref'], token.id)
-        self.assertEqual(incident['trade_no'], ref)
+        # 🔴 #993（Eugene 裁決 A）：PR-E **不再**寫 `trade_no`。
+        # ⚠ 這不是把測試改綠——改前這裡斷言的是 `trade_no == ref`（我方
+        # MerchantTradeNo），而那正是缺陷：`_upsert_incident_snapshot` 會把
+        # `trade_no` 展成 `ON CONFLICT ... SET trade_no = EXCLUDED.trade_no`
+        # ⇒ 若 PR-G 的 callback evidence 已經把**真的 ECPay TradeNo** 寫進
+        # 這一列（kind 仍是 `intent`），這次 promote 就會把它蓋掉；而在
+        # 「callback 早到、tx 查不到」的場景，那是平台唯一一份 ECPay 交易編號。
+        # ⇒ `trade_no` 從此只由 provider callback 寫入；我方 reference 的
+        # 位置一直都在同一列的 `external_ref`——⚠ 這支 helper 的 SELECT
+        # 不含該欄（它是 WHERE 條件），所以這裡不另外斷言它：那會是恆真的。
+        self.assertIsNone(
+            incident['trade_no'],
+            'PR-E 路徑不得寫 trade_no（#993）——沒有 provider callback 就沒有 '
+            'provider TradeNo 可寫；我方 reference 屬於 external_ref')
         self.assertEqual(incident['failure_code'], 'wallet_credit_failed')
         self.assertEqual(incident['source_model'], 'woow.wallet.topup')
         self.assertEqual(incident['source_ref'], topup.id)
