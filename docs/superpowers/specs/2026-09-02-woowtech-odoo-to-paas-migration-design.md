@@ -56,7 +56,7 @@
 | 3 | canonical domain（`web.base.url`） | **維持 `aiot.woowtech.io`** |
 | 4 | 切換窗 | 未定；Phase 2 排練綠後再排。**切換不刪舊環境** |
 | 5 | snapshot repo 形式 | 單一 `mirror-internal/woowtech-erp-addons-snapshot` |
-| 6 | `woow_portal_ui` theme css（prod 07-23 > GitHub 06-19） | 推回 GitHub（PR #2）再走 mirror |
+| 6 | `woow_portal_ui` theme css（prod 07-23 > GitHub 06-19） | **改走 PVC 快照**（09-03）：GitHub PR #2 已開但 WOOWTECH 不是我方 repo、無 merge 權；PR 留檔，哪天合了再切回 mirror |
 
 ## 5. Phase 1 — image（可先行、零風險）
 
@@ -65,9 +65,9 @@
 **模組來源三路**：
 | 來源 | 模組 |
 |---|---|
-| gitea mirror（釘 commit） | odoo_core_patch_browser_enhancement、im_livechat_ai、woow_line_base、woow_odoo_line_liff、woow_odoo_livechat_line、woow_portal_ui（PR #2 merge 後） |
+| gitea mirror（釘 commit） | odoo_core_patch_browser_enhancement、im_livechat_ai、woow_line_base、woow_odoo_line_liff、woow_odoo_livechat_line |
 | paas-odoo-ci 已有 | ecpay_invoice_tw、payment_ecpay（版本 18.0.1.1.1 兩邊相同，不動） |
-| snapshot repo `10013d5e0870` | barcode_scanner_×7、cloud_link×2、sales_enhance、woow_hr_portal×4、woow_hr_payroll、auth_oauth_proxy_fix、new_customer_default_language、woow_notification_enhancement、hide_menu_user、order_line_sequences |
+| snapshot repo（21 模組） | barcode_scanner_×7、cloud_link×2、sales_enhance、woow_hr_portal×4、woow_hr_payroll、auth_oauth_proxy_fix、new_customer_default_language、woow_notification_enhancement、hide_menu_user、order_line_sequences、**woow_portal_ui** |
 
 **pip**：`install.sh` 的 15 個（fs==2.4.16、vuefinder-wsgi==1.5.2、munch、cachetools、google-auth-oauthlib、openpyxl、ofxparse、qifparse、pycryptodomex、PyPDF2、python-barcode、anthropic、openai、google-genai、pyOpenSSL）∪ manifest 宣告的 6 個（python-barcode、qrcode、Pillow、pycryptodomex、PyPDF2、requests）＋本地 wheel `fs_googledrivefs-2.4.4`。manifest 不是完整來源（cloud_link 靠 fs 卻沒宣告），故取聯集。
 
@@ -125,7 +125,7 @@
 
 ## 11. 開放項
 - 切換日期（Phase 2 綠後排）
-- PR #2 merge（Eugene，WOOWTECH 帳號）→ 觸發 mirror sync
+- ~~PR #2 merge~~ 已改走快照；PR #2 留檔
 - mcp／n8n 最終歸屬（Phase 5 之後）
 - `http.py` ProxyFix 是否需要（Phase 2 驗）
 
