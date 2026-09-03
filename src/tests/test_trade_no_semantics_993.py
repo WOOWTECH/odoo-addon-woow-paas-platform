@@ -57,14 +57,12 @@ _MIGRATION_DIR = os.path.abspath(
     os.path.join(os.path.dirname(__file__), '..', 'migrations',
                  _MIGRATION_VERSION)
 )
-_MIGRATION_LOGGER = (
-    'odoo.addons.woow_paas_platform.migrations.%s.post-migrate'
-    % _MIGRATION_VERSION
-)
 
+def _load_migration_module():
+    """按路徑載入 migration 模組**物件**（沿 test_agent_pod_phase_a_migration 慣例）。
 
-def _load_migrate():
-    """按路徑載入 `migrate(cr, version)`（沿 test_agent_pod_phase_a_migration 慣例）。
+    回**模組**而不是只回 `migrate`：T4 要對它的 `_logger` 做 `assertLogs`，
+    而那個 logger 的**名字是猜不到的**（見 T4 docstring）。
 
     ⚠ 這種載入法**證明不了 Odoo 的 loader 會發現這個檔**——目錄名或檔名寫錯
     （`post_migrate.py` vs `post-migrate.py`、版號段多一位）時它照樣載得到，
@@ -77,7 +75,7 @@ def _load_migrate():
         'woow_993_post_migrate_%s' % _MIGRATION_VERSION.replace('.', '_'), path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    return getattr(module, 'migrate', None)
+    return module
 
 
 @tagged('post_install', '-at_install')
@@ -301,17 +299,36 @@ class TestTradeNoSemantics993(TransactionCase):
         ⚠ `assertLogs` 的 level 傳**數值** `logging.INFO`，⛔ 不傳字串：Odoo 的
         `addLevelName(RUNBOT=25, "INFO")` 覆寫了 stdlib 的名稱表，字串 `'INFO'`
         會被解析成 25 ⇒ `_logger.info()`（20）落在門檻外 ⇒ 恆抓不到。
+
+        🔴 **`assertLogs` 吃的是 Logger 物件，⛔ 不是猜出來的 dotted 名。**
+        migration 模組的 `logging.getLogger(__name__)` 綁的是**載入時的 `__name__`**，
+        而那個值有三種互不相同、且**非父子關係**的可能：
+
+        * 本檔用 `spec_from_file_location('woow_993_post_migrate_18_0_1_0_177', …)`
+          載入 ⇒ `__name__` 就是那個字串；
+        * Odoo 真跑時走 `odoo.modules.migration.load_script`，給的 `__name__`
+          只是 `'post-migrate'`；
+        * 「看起來合理」的 `odoo.addons.woow_paas_platform.migrations.<版本>.post-migrate`
+          **從來不是**其中任何一個。
+
+        ⇒ 傳名字進 `assertLogs` 會抓不到任何一條 record，錯誤訊息是
+        `no logs of level INFO or higher triggered on …`——那長得像「migration 沒印
+        log」（生產碼的鍋），實際上是測試自己對名字的假設錯了。
+        傳 `module._logger` 就完全跳過命名這一層。
         """
-        migrate = _load_migrate()
+        module = _load_migration_module()
         self.assertIsNotNone(
-            migrate, 'src/migrations/%s/post-migrate.py 必須存在且 expose '
-                     'migrate(cr, version)' % _MIGRATION_VERSION)
+            module, 'src/migrations/%s/post-migrate.py 必須存在' % _MIGRATION_VERSION)
+        migrate = getattr(module, 'migrate', None)
+        self.assertIsNotNone(
+            migrate, 'post-migrate.py 必須 expose migrate(cr, version)')
+        migration_logger = module._logger
 
         ref = 'TOPUP993BACKFILL0001'
         self._seed_incident_row(ref, trade_no=ref)  # trade_no == external_ref
 
         with self.env.registry.cursor() as cr:
-            with self.assertLogs(_MIGRATION_LOGGER, level=logging.INFO) as first:
+            with self.assertLogs(migration_logger, level=logging.INFO) as first:
                 migrate(cr, '18.0.1.0.176')
             cr.commit()
         self.assertIsNone(
@@ -323,7 +340,7 @@ class TestTradeNoSemantics993(TransactionCase):
             % first.output)
 
         with self.env.registry.cursor() as cr:
-            with self.assertLogs(_MIGRATION_LOGGER, level=logging.INFO) as second:
+            with self.assertLogs(migration_logger, level=logging.INFO) as second:
                 migrate(cr, '18.0.1.0.176')
             cr.commit()
         self.assertTrue(
@@ -336,7 +353,9 @@ class TestTradeNoSemantics993(TransactionCase):
         只驗「(a) 被清掉」是不夠的——那條斷言在一個「把整欄都清成 NULL」的
         錯誤實作下**照樣綠**。必須同時釘住 (b) 不被動。
         """
-        migrate = _load_migrate()
+        module = _load_migration_module()
+        self.assertIsNotNone(module)
+        migrate = getattr(module, 'migrate', None)
         self.assertIsNotNone(migrate)
 
         ref_a = 'TOPUP993MASQUERADE01'          # (a) trade_no == external_ref ⇒ 該清
@@ -365,7 +384,9 @@ class TestTradeNoSemantics993(TransactionCase):
         用 patch 讓 `to_regclass` 那一步回空，等價於「這個 DB 還沒有那張表」
         ——⛔ 不真的 DROP TABLE（那會炸掉同一個 DB 上的其他測試）。
         """
-        migrate = _load_migrate()
+        module = _load_migration_module()
+        self.assertIsNotNone(module)
+        migrate = getattr(module, 'migrate', None)
         self.assertIsNotNone(migrate)
 
         class _NoTableCursor:
