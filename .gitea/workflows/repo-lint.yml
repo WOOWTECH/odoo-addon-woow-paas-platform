@@ -58,6 +58,8 @@ on:
       - "docs/tracking/pitfalls/**"
       - ".claude/hooks/**"
       - "CLAUDE.md"
+      # 第 36 條 indentation 的規則來源：改 .editorconfig 也要跑（同「輸入檔都要在白名單」義務）。
+      - ".editorconfig"
       # kubectl-ns-whitelist-sync 的**第二份**輸入。CLAUDE.md 已在上一行，但這條
       # check 比的是兩份副本是否相等 ⇒ 只列一份的話，「只改 guard doc」的 PR 不觸發
       # repo-lint，gate 對它最該守的那一半（有人在敘事版增減 namespace）完全休眠，
@@ -101,7 +103,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # 第 36 條 indentation 用 `git diff --no-renames --diff-filter=A origin/<base> HEAD` 找本 PR
+      # 新增的檔：兩點式比的是 tree，只要 base tip 的 tree 就夠、不需要 merge-base ⇒ 淺 clone 也
+      # 能算，不必像 manifest-version-gate 那樣 fetch-depth: 0。Gitea 的 pull_request 事件 checkout
+      # 的是 refs/pull/<n>/head（PR head，Gitea 沒有 GitHub 的 merge ref），兩點式對兩種 HEAD 都成立。
+      # base ref 由下一步的 env 顯式傳給 gate（不信任 runner 自動注入的 GITHUB_BASE_REF，同
+      # manifest-version-gate 的慣例）；找不到時 gate 直接紅、不猜。
+      - name: 取回 base 分支（indentation gate 的新增檔判定用）
+        run: git fetch --no-tags --depth=1 origin "+refs/heads/${{ github.event.pull_request.base.ref }}:refs/remotes/origin/${{ github.event.pull_request.base.ref }}"
       - run: python3 scripts/audit/repo-lint.py --all
+        env:
+          REPO_LINT_INDENT_BASE: origin/${{ github.event.pull_request.base.ref }}
 
       # #524 ③：workspace-scoped model 必須有「對 Internal User 生效」的 record
       # rule。刻意是**獨立檔案、不併進 repo-lint.py**（PR #517 動過那支，兩張單

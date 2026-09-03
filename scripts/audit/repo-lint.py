@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """repo-lint：把「假綠家族」pitfall 轉成機械 gate 的靜態檢查工具。
 
-四十一個 check 函式，歸為下列三十五條規則（其中四條各由多個函式實作：第 2 條
+四十二個 check 函式，歸為下列三十六條規則（其中四條各由多個函式實作：第 2 條
 owl-template 由兩個函式——語法陷阱／i18n 屬性；第 7 條
 capability-gate 由四個函式——slug 集合成員／admin-gui 錨點／gateway 文案錨點／
 Access 頁籤錨點；第 22 條
@@ -570,6 +570,35 @@ test-collectability 由兩個函式——收集面／執行面。這個一對多
                      `_name`；AST 也只看 class 自己 body 裡的 `def`，**繼承來的 method
                      看不到**，日後把 `_cron_*` 放進 mixin 會誤報。
                      依據 docs/tracking/landings/803-access-resync-cron-handoff.md
+36. indentation      PR **新增**的 .py／.js／.scss／.xml 檔，縮排單位必須等於 `.editorconfig`
+                     對該路徑宣告的 indent_size，且不得用 tab。量法是**結構性取樣**：
+                     Python 取 tokenize 的 INDENT；XML 只看以 `<` 起頭的行（`eval="[`
+                     之類的屬性續行不算——審查實測天真的「相鄰行增量」會讓 Odoo data
+                     檔的續行對齊 7 反超真正的 4）；JS／SCSS 只在上一行以 `{[(` 結尾時
+                     採下一行（hanging indent、參數對齊不算）。眾數必須**唯一**且等於
+                     indent_size，並列＝混用、紅。註解與字串先遮蔽（既有的
+                     `_strip_js_noise`；XML 另遮 CDATA），字串裡的 `/*` 吃不掉程式碼。
+                     只驗**新增檔**（`git diff --no-renames --diff-filter=A origin/<base>
+                     HEAD` ∪ staged 新增 ∪ untracked；`--no-renames` 因為改名＋改內容會
+                     被判 R 而從 A 消失）：codebase 是分裂的——2026-03-24 寫下「前端
+                     2 spaces」時 repo 幾乎全是 4-space，審查把規則後新增的 211 個真實
+                     檔當新檔重跑，55 個不合規（前端通篇 4、後端偶有 2）⇒ 驗既有檔會
+                     立刻大片紅，而「編輯既有檔跟該檔現況、不重排」正是 CLAUDE.md 的
+                     規則；gate 落地後新檔才必須合規。
+                     模式：`--all` 下 .editorconfig 讀不到／沒有 indent_size／三個探針
+                     檔（manifest／root.js／menu.xml）算不出預期寬度／**是** git repo 卻
+                     找不到 base ref ⇒ 一律紅（探針壞掉時「零違規」與「全部合規」輸出
+                     相同）；非 git 工作樹（其他測試 copytree 的鏡像）沒有「本 PR 新增」
+                     的概念 ⇒ 不判。hook 只驗 untracked，且以**該檔自己的**
+                     `git rev-parse --show-toplevel` 為 root（`.claude/worktrees/<x>/`
+                     下的檔才對得上 .editorconfig，#776 同型）；.editorconfig 不在／不在
+                     git 工作樹／已追蹤 ⇒ 不判（hook 不擋開發，`--all` 會紅）。
+                     🔴 `.editorconfig` 是規則的**唯一**來源，本檔不內建第二份路徑→寬度
+                     表；vendored 只認明確前綴 src/static/src/paas/lib/、src/static/lib/
+                     與 *.min.js（`lib` 不當路徑段關鍵字，否則 src/models/lib/ 也被放過）。
+                     ⚠ 只驗縮排寬度與 tab，不驗其他格式；兩點式 `git diff base HEAD`
+                     比的是 tree，base 已刪而本 PR 仍保留的檔會被當「新增」（可接受）。
+                     依據 CLAUDE.md §Code Style Guide、.editorconfig
 
 用法：
 
@@ -581,6 +610,8 @@ hook 模式輸出 {"decision":"block","reason":...} 讓 model 立即自我修正
 Fail-open：hook 模式下任何內部錯誤 → exit 0，絕不擋開發。
 """
 import ast
+import subprocess
+import collections
 import csv
 import glob
 import io
@@ -5564,6 +5595,314 @@ def check_owl_relative_import(root):
                _OWL_IMPORT_SCAN_CONTROL[1]))
     return violations
 
+# --------------------------------------------------------------------------- #
+#  36. indentation                                                             #
+# --------------------------------------------------------------------------- #
+
+EDITORCONFIG_REL = ".editorconfig"
+INDENT_DOC = "CLAUDE.md §Code Style Guide（Indentation）＋ .editorconfig"
+#: 探針對照：這三個既有檔必須各自被 .editorconfig 的某個 section 算出預期寬度。
+#: 少一個就代表 section 被改空或 glob 翻譯壞掉，而那時「零違規」與「全部合規」的
+#: 輸出一模一樣（否定性判準必配陽性對照）。
+_INDENT_PROBE_FILES = (
+    ("src/__manifest__.py", 4),
+    ("src/static/src/paas/root.js", 2),
+    ("src/views/menu.xml", 4),
+)
+_INDENT_EXTS = (".py", ".js", ".scss", ".xml")
+#: vendored 只認明確前綴（`lib` 不能當路徑段關鍵字：src/models/lib/ 也會被放過）。
+_INDENT_VENDORED_PREFIXES = ("src/static/src/paas/lib/", "src/static/lib/")
+_INDENT_SKIP_PARTS = ("node_modules", "__pycache__")
+_INDENT_OPENERS = ("{", "[", "(")
+
+
+def _editorconfig_glob_re(pattern):
+    """editorconfig glob 子集 → regex：`*`（不跨 /）、`**`、`?`、`{a,b}`、`[abc]`。
+    沒有 `/` 的 pattern 匹配任何目錄下的 basename；有 `/` 的以 .editorconfig 所在目錄
+    （repo 根）為錨。"""
+    anchored = "/" in pattern
+    i, out = 0, []
+    while i < len(pattern):
+        ch = pattern[i]
+        if pattern.startswith("**", i):
+            out.append(".*"); i += 2
+        elif ch == "*":
+            out.append("[^/]*"); i += 1
+        elif ch == "?":
+            out.append("[^/]"); i += 1
+        elif ch == "{" and "}" in pattern[i:]:
+            j = pattern.index("}", i)
+            out.append("(?:%s)" % "|".join(re.escape(a) for a in pattern[i + 1:j].split(",")))
+            i = j + 1
+        elif ch == "[" and "]" in pattern[i:]:
+            j = pattern.index("]", i)
+            out.append(pattern[i:j + 1]); i = j + 1
+        else:
+            out.append(re.escape(ch)); i += 1
+    body = "".join(out)
+    if anchored:
+        return re.compile("^" + body.lstrip("/") + "$")
+    return re.compile("(?:^|/)" + body + "$")
+
+
+def _parse_editorconfig(text):
+    """回 [(regex, {key: value})]，依檔內順序（後者覆蓋前者，editorconfig 語意）。"""
+    sections, cur = [], None
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith(("#", ";")):
+            continue
+        if line.startswith("[") and line.endswith("]"):
+            cur = {}
+            sections.append((line[1:-1].strip(), cur))
+            continue
+        if "=" in line and cur is not None:
+            k, v = line.split("=", 1)
+            cur[k.strip().lower()] = v.strip().lower()
+    return [(_editorconfig_glob_re(pat), props) for pat, props in sections]
+
+
+def _indent_rule_for(rel, sections):
+    """回 (indent_size 或 None, indent_style 或 None)。"""
+    size = style = None
+    for rx, props in sections:
+        if rx.search(rel):
+            if props.get("indent_size", "").isdigit():
+                size = int(props["indent_size"])
+            if "indent_style" in props:
+                style = props["indent_style"]
+    return size, style
+
+
+def _indent_strip_noise(src, kind):
+    """註解（與 JS／SCSS 的字串字面值）換等長空白、保留行號。
+    JS／SCSS 直接用既有的 `_strip_js_noise`：逐字元掃描、認得字串邊界，字串裡的
+    `/*` 不會把後面的程式碼一路吃到下一個 `*/`（天真 regex 會）。XML 先遮 CDATA
+    再剝 `<!-- -->`，同理。"""
+    if kind == "xml":
+        src = re.sub(r"<!\[CDATA\[.*?\]\]>",
+                     lambda m: re.sub(r"[^\n]", " ", m.group(0)), src, flags=re.DOTALL)
+        return _strip_xml_comments(src)
+    return _strip_js_noise(src)
+
+
+def _indent_deltas_text(src, kind):
+    """非 Python：回 (增量清單, tab 行號清單)。**結構性取樣**，不是所有相鄰行：
+    XML 只看以 `<` 起頭的行（屬性續行、`eval="[` 對齊不算）；JS／SCSS 只在上一個
+    非空白行以 `{`／`[`／`(` 結尾時採下一行的增量（hanging indent、參數對齊不算）。
+    審查實測：Odoo data XML 每筆 record 帶兩行 `eval` 續行時，天真的「相鄰行增量」
+    會讓 7 反超 4 成眾數，把合規檔打成違規。"""
+    deltas, tabs = [], []
+    prev_col, prev_opener = None, False
+    for no, line in enumerate(src.splitlines(), 1):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        lead = line[:len(line) - len(line.lstrip(" \t"))]
+        if "\t" in lead:
+            tabs.append(no)
+        col = len(lead.expandtabs(8))
+        if kind == "xml":
+            if stripped.startswith("<"):
+                if prev_col is not None and col > prev_col:
+                    deltas.append(col - prev_col)
+                prev_col = col
+            continue
+        if prev_opener and prev_col is not None and col > prev_col:
+            deltas.append(col - prev_col)
+        prev_col = col
+        prev_opener = stripped.endswith(_INDENT_OPENERS)
+    return deltas, tabs
+
+
+def _indent_deltas_python(src):
+    """Python：只看 tokenize 的 INDENT（docstring 續行、括號內續行都不是 INDENT）。
+    parse 不了回 (None, None)，呼叫端當違規。"""
+    deltas, tabs, stack = [], [], [0]
+    try:
+        toks = list(tokenize.generate_tokens(io.StringIO(src).readline))
+    except (tokenize.TokenError, SyntaxError, IndentationError):
+        return None, None
+    for tok in toks:
+        if tok.type == tokenize.INDENT:
+            if "\t" in tok.string:
+                tabs.append(tok.start[0])
+            col = len(tok.string.expandtabs(8))
+            deltas.append(col - stack[-1])
+            stack.append(col)
+        elif tok.type == tokenize.DEDENT and len(stack) > 1:
+            stack.pop()
+    return deltas, tabs
+
+
+def _indent_winners(deltas):
+    """增量眾數（可能並列）。"""
+    counts = collections.Counter(deltas)
+    if not counts:
+        return set(), counts
+    best = max(counts.values())
+    return {d for d, c in counts.items() if c == best}, counts
+
+
+def _indent_base_ref():
+    override = os.environ.get("REPO_LINT_INDENT_BASE")
+    if override:
+        return override
+    base = os.environ.get("GITHUB_BASE_REF") or "develop"
+    if base.startswith("refs/heads/"):
+        base = base[len("refs/heads/"):]
+    return "origin/" + base   # 分支名可含 `/`（release/x），不截斷
+
+
+def _git_lines(root, *args):
+    r = subprocess.run(["git", *args], cwd=root, capture_output=True, text=True)
+    if r.returncode != 0:
+        raise RuntimeError((r.stderr or r.stdout).strip()[:200])
+    return [line for line in r.stdout.splitlines() if line.strip()]
+
+
+def _indent_new_files(root):
+    """回 (rel 清單, 錯誤訊息或 None)。三個來源聯集：base..HEAD 新增（兩點式比 tree，
+    淺 clone 可用）、staged 新增、untracked（本機在 commit 前跑也抓得到）。"""
+    base = _indent_base_ref()
+    probe = subprocess.run(["git", "rev-parse", "--verify", "--quiet", base],
+                           cwd=root, capture_output=True)
+    if probe.returncode != 0:
+        return [], ("找不到 base ref `%s`——無從得知哪些檔是本 PR 新增的，不猜。本機請 "
+                    "`git fetch origin develop`；CI 由 repo-lint.yml「取回 base 分支」步驟供給；"
+                    "要換 base 設 REPO_LINT_INDENT_BASE" % base)
+    try:
+        # --no-renames：改名＋改內容的檔會被 git 預設的相似度偵測標成 R 而從 A 消失，
+        # 那正是「新路徑、內容已動」最該驗的形狀（審查實測 62 行檔改 3 行即被判 R）。
+        added = _git_lines(root, "diff", "--no-renames", "--name-only", "--diff-filter=A", base, "HEAD")
+        staged = _git_lines(root, "diff", "--cached", "--name-only", "--diff-filter=A")
+        untracked = _git_lines(root, "ls-files", "--others", "--exclude-standard")
+    except RuntimeError as exc:
+        return [], "git 失敗：%s" % exc
+    return sorted(set(added) | set(staged) | set(untracked)), None
+
+
+def _indentation_watches(rel):
+    return (rel.endswith(_INDENT_EXTS)
+            and not rel.endswith(".min.js")
+            and not rel.startswith(_INDENT_VENDORED_PREFIXES)
+            and not any(part in _INDENT_SKIP_PARTS for part in rel.split("/")))
+
+
+def check_indentation(root, only_file=None):
+    """PR 新增檔的縮排單位必須等於 .editorconfig 對該路徑宣告的 indent_size（第 36 條）。
+
+    只驗新增檔：既有檔跟該檔現況、不重排（CLAUDE.md §Code Style Guide）。
+
+    量法是**結構性取樣**：Python 取 tokenize 的 INDENT；XML 只看以 `<` 起頭的行；
+    JS／SCSS 只在上一行以 `{[(` 結尾時採下一行——增量的眾數必須**唯一**且等於
+    indent_size；並列（例如 4-space 的 class 裡塞了 2-space 的陣列）視為混用，紅。
+    註解與字串字面值先遮蔽（`_strip_js_noise`／CDATA＋`<!--`），字串裡的 `/*` 吃不掉
+    後面的程式碼。
+
+    模式差異（寫清楚，不用「一律」）：
+    * `--all`：.editorconfig 讀不到／沒有 indent_size section／三個探針檔算不出預期
+      寬度／**是** git repo 卻找不到 base ref ⇒ 一律當違規（這些情況下「零違規」與
+      「全部合規」的輸出完全一樣）。非 git 工作樹（其他測試 copytree 的鏡像）沒有
+      「本 PR 新增」的概念 ⇒ 不判。
+    * hook（only_file）：以**該檔自己的** `git rev-parse --show-toplevel` 當 root（巢狀
+      worktree `.claude/worktrees/<x>/` 下的檔才對得上 .editorconfig 與 rel，#776 同型），
+      只驗 untracked；.editorconfig 讀不到、不在 git 工作樹、已追蹤 ⇒ 不判（hook 不擋
+      開發，同一個 root 跑 `--all` 會紅）。「沒有 indent_size section」在 hook 也紅——
+      那是 repo 內的設定壞了，修一次就好。
+    """
+    if only_file is not None:
+        # realpath 兩邊都做：`--show-toplevel` 回的是解析過 symlink 的路徑（macOS 的
+        # /var → /private/var），hook 給的 file_path 未必是，relpath 會算出 `..` 而誤判成
+        # 「不在 repo 內」。
+        only_file = os.path.realpath(only_file)
+        top = subprocess.run(["git", "rev-parse", "--show-toplevel"],
+                             cwd=os.path.dirname(only_file) or root,
+                             capture_output=True, text=True)
+        if top.returncode != 0 or not top.stdout.strip():
+            return []  # 不在 git 工作樹：無從分類，hook 不判
+        root = os.path.realpath(top.stdout.strip())
+    ec_path = os.path.join(root, EDITORCONFIG_REL)
+    try:
+        with open(ec_path, encoding="utf-8") as f:
+            sections = _parse_editorconfig(f.read())
+    except OSError as exc:
+        if only_file is not None:
+            return []  # hook 不擋開發；同一個 root 跑 --all 會紅
+        return ["%s：讀不到（%s）——縮排規則的單一來源不見了，本 gate 整條失去鑑別力（%s）"
+                % (EDITORCONFIG_REL, exc, INDENT_DOC)]
+    if not any("indent_size" in props for _, props in sections):
+        return ["%s：沒有任何 section 宣告 indent_size ⇒ 探針對照失效，零違規與全部合規"
+                "輸出相同（%s）" % (EDITORCONFIG_REL, INDENT_DOC)]
+
+    violations = []
+    if only_file is None:
+        for probe_rel, expected in _INDENT_PROBE_FILES:
+            if not os.path.exists(os.path.join(root, probe_rel)):
+                violations.append("%s：探針檔不存在——請把 _INDENT_PROBE_FILES 改指現存檔（%s）"
+                                  % (probe_rel, INDENT_DOC))
+                continue
+            size, _ = _indent_rule_for(probe_rel, sections)
+            if size != expected:
+                violations.append("%s：.editorconfig 對它算出 indent_size=%s，預期 %d——glob 翻譯或 "
+                                  "section 被改壞，本 gate 對整類檔案沉默（%s）"
+                                  % (probe_rel, size, expected, INDENT_DOC))
+        if violations:
+            return violations
+        # 非 git 工作樹（例如其他測試用 copytree 鏡像出來的 root）沒有「本 PR 新增」這個
+        # 概念，不判。這與「是 git repo 但找不到 base ref」不同：後者是 fetch 沒做，要紅。
+        inside = subprocess.run(["git", "rev-parse", "--is-inside-work-tree"],
+                                cwd=root, capture_output=True, text=True)
+        if inside.returncode != 0 or inside.stdout.strip() != "true":
+            return []
+        files, err = _indent_new_files(root)
+        if err:
+            return ["indentation：%s（%s）" % (err, INDENT_DOC)]
+        files = [f for f in files if _indentation_watches(f)]
+    else:
+        rel = os.path.relpath(only_file, root).replace(os.sep, "/")
+        if rel.startswith("..") or not _indentation_watches(rel):
+            return []
+        tracked = subprocess.run(["git", "ls-files", "--error-unmatch", "--", rel],
+                                 cwd=root, capture_output=True)
+        if tracked.returncode != 1:
+            # 0＝已追蹤（既有檔，不歸本 gate）；其他＝git 本身失敗（無從分類，不判）。
+            return []
+        files = [rel]
+
+    for rel in files:
+        path = os.path.join(root, rel)
+        if not os.path.isfile(path):
+            continue
+        size, style = _indent_rule_for(rel, sections)
+        if size is None:
+            continue
+        with open(path, encoding="utf-8", errors="replace") as f:
+            src = f.read()
+        kind = rel.rsplit(".", 1)[-1]
+        if kind == "py":
+            deltas, tabs = _indent_deltas_python(src)
+            if deltas is None:
+                violations.append("%s：tokenize 失敗（語法／縮排錯誤），量不了縮排——先修到能 parse（%s）"
+                                  % (rel, INDENT_DOC))
+                continue
+        else:
+            deltas, tabs = _indent_deltas_text(_indent_strip_noise(src, kind), kind)
+        if tabs and (style or "space") == "space":
+            violations.append("%s：第 %s 行用 tab 縮排；.editorconfig 對此路徑規定 indent_style = space（%s）"
+                              % (rel, "、".join(str(n) for n in tabs[:5]), INDENT_DOC))
+        winners, counts = _indent_winners(deltas)
+        if not winners:
+            continue  # 沒有任何結構性縮排增量：無證據，不判
+        if winners != {size}:
+            shape = ("並列 %s（混用）" % "／".join(str(w) for w in sorted(winners))
+                     if len(winners) > 1 else "量到 %d 空格" % next(iter(winners)))
+            violations.append(
+                "%s：縮排單位%s（結構性增量眾數；分佈 %s），.editorconfig 對此路徑規定 %d。"
+                "本 gate 只驗 PR 新增的檔；既有檔跟該檔現況、不重排（%s）"
+                % (rel, shape, dict(sorted(counts.items())), size, INDENT_DOC))
+    return violations
+
 
 REPO_LINT_RULES = {
     "controller-sudo": ("check_controller_sudo",),
@@ -5607,6 +5946,7 @@ REPO_LINT_RULES = {
     "owl-relative-import": ("check_owl_relative_import",),
     "js-i18n-template-literal": ("check_js_i18n_template_literal",),
     "cron-wiring": ("check_cron_wiring",),
+    "indentation": ("check_indentation",),
 }
 
 # 刻意不掛 hook 分派的 check：{函式名: 理由}。現況是空的（每一條都掛得到 hook）。
@@ -6203,7 +6543,8 @@ def run_all(root):
                   + check_route_contract_golden(root)
                   + check_owl_relative_import(root)
                   + check_js_i18n_template_literal(root)
-                  + check_cron_wiring(root))
+                  + check_cron_wiring(root)
+                  + check_indentation(root))
     if violations:
         print("repo-lint：%d 個違規" % len(violations))
         for v in violations:
@@ -6384,6 +6725,9 @@ def run_hook():
         # owl_imports）。觸發面 `_cron_wiring_watches` 的形狀與實作的 glob 對齊。
         cron_wiring = (check_cron_wiring(root)
                        if _cron_wiring_watches(rel) else [])
+        # #36：新增檔的縮排；hook 只驗 untracked（check 內自判），分派條件只看副檔名與 vendored 目錄。
+        indentation = (check_indentation(root, only_file=abs_path)
+                       if _indentation_watches(rel) else [])
         if re.match(r"^src/controllers/.*\.py$", rel):
             violations = check_controller_sudo(root, only_file=abs_path)
             violations += check_reuse_values(root, only_file=abs_path)
@@ -6476,6 +6820,7 @@ def run_hook():
         violations += owl_imports
         violations += js_i18n_template
         violations += cron_wiring
+        violations += indentation
         if violations:
             print(json.dumps({
                 "decision": "block",
