@@ -4,6 +4,8 @@ allowed-tools: Read, Write, Edit, AskUserQuestion, Bash, Glob
 
 # /docs:promote — 把 superpowers 探索升級到主結構
 
+> **2026-09-03**：superpowers plugin 已退役，`docs/superpowers/` 不再有新產出；本指令只剩清舊產出用（目前 0 份待 promote）。新文件一律 `/docs:new`。
+
 superpowers brainstorming/writing-plans 跑完之後，把其中**長期有價值**的決策、pitfall、follow-up、可複用 pattern 從工具自管理區搬到 `docs/` 主結構，並建立雙向 cross-link。
 
 > **2026-08-07（#631）**：原本還有 `ccpm:<feature-name>` 分支（從 `.claude/prds/` / `.claude/epics/` promote）。

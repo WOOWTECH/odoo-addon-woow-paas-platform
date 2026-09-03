@@ -4,6 +4,7 @@ import ast
 import base64
 import hashlib
 import json
+import logging
 import re
 import threading
 import time
@@ -15,9 +16,24 @@ from lxml import etree
 import polib
 from psycopg2 import IntegrityError
 
-from odoo import fields
+import odoo
+from odoo import api, fields
 from odoo.exceptions import AccessError, UserError
-from odoo.tests.common import HttpCase, TransactionCase, new_test_user, tagged
+from odoo.modules.registry import Registry
+from odoo.tests.common import (
+    BaseCase,
+    HttpCase,
+    TransactionCase,
+    get_db_name,
+    new_test_user,
+    tagged,
+)
+
+from odoo.addons.woow_paas_platform.models.billing_incident import (
+    _acquire_billing_carrier_target_locks,
+)
+
+_RACE_LOGGER = logging.getLogger(__name__)
 
 
 @tagged('post_install', '-at_install')
@@ -4697,6 +4713,226 @@ class TestBillingIncidentRpcWriteGuard864(HttpCase):
                 (ordinary.id, ordinary_attachment.id),
             ])
 
+    def _relation_write_fixture(self, purpose):
+        """Build one ordinary activity plus its own unrelated attachment."""
+        marker = uuid.uuid4().hex
+        project = self.env['project.project'].with_user(
+            self.manager_a).create({
+                'name': 'Relation writer %s %s' % (purpose, marker),
+            })
+        ordinary = self.env['mail.activity'].sudo().create({
+            'res_model_id': self.env['ir.model']._get('project.project').id,
+            'res_id': project.id,
+            'activity_type_id': self.env.ref(
+                'mail.mail_activity_data_todo').id,
+            'user_id': self.manager_a.id,
+            'summary': 'Relation writer %s destination' % purpose,
+            'date_deadline': fields.Date.today(),
+        })
+        attachment = self.env['ir.attachment'].sudo().create({
+            'name': 'rpc-relation-%s-%s.bin' % (purpose, marker),
+            'datas': base64.b64encode(
+                ('relation %s payload' % purpose).encode()),
+            'res_model': 'project.project',
+            'res_id': project.id,
+        })
+        return project, ordinary, attachment
+
+    def _provenance_lock_spy(self):
+        """Return the attachment class, its spy callable and the call log."""
+        AttachmentClass = type(self.env['ir.attachment'])
+        original_provenance = (
+            AttachmentClass._lock_and_refresh_billing_attachment_provenance)
+        provenance_calls = []
+
+        def provenance_spy(records, *args, **kwargs):
+            provenance_calls.append((args, kwargs))
+            return original_provenance(records, *args, **kwargs)
+
+        return AttachmentClass, provenance_spy, provenance_calls
+
+    def _relation_postcheck_spy(self):
+        """Return the activity class, its postcheck spy and the call log."""
+        ActivityClass = type(self.env['mail.activity'])
+        original_postcheck = (
+            ActivityClass._postcheck_attachment_relation_graph)
+        postcheck_calls = []
+
+        def postcheck_spy(records, *args, **kwargs):
+            postcheck_calls.append(tuple(records.ids))
+            return original_postcheck(records, *args, **kwargs)
+
+        return ActivityClass, postcheck_spy, postcheck_calls
+
+    def _activity_ids_for_attachment(self, attachment_id):
+        with self.env.registry.cursor() as verify_cr:
+            verify_cr.execute(
+                'SELECT activity_id FROM activity_attachment_rel '
+                'WHERE attachment_id = %s ORDER BY activity_id',
+                (attachment_id,),
+            )
+            return [activity_id for activity_id, in verify_cr.fetchall()]
+
+    def test_unrelated_relation_write_skips_the_loop_and_the_postcheck(self):
+        """無關 attachment 的 M2M 寫入：收斂迴圈 0 次、postcheck 0 次。
+
+        ⚠ 短路路徑**仍然取 carrier lock**（走完整路徑同一支
+        `_lock_and_refresh_billing_attachment_provenance`），所以「0 次呼叫」
+        ⛔ 不是判準。判準是每次寫入**恰好 1 次**——那一次就是鎖後探測；完整
+        路徑最少是 preflight 迴圈 1 次 ＋ postcheck 1 次 ＝ 2 次，且
+        `_postcheck_attachment_relation_graph` 一次都不得被呼叫。
+        """
+        _project, ordinary, unrelated = self._relation_write_fixture(
+            'shortcircuit')
+        AttachmentClass, provenance_spy, provenance_calls = (
+            self._provenance_lock_spy())
+        ActivityClass, postcheck_spy, postcheck_calls = (
+            self._relation_postcheck_spy())
+        self.authenticate(self.manager_a_login, self.manager_a_login)
+        with patch.object(
+                AttachmentClass,
+                '_lock_and_refresh_billing_attachment_provenance',
+                provenance_spy), patch.object(
+                    ActivityClass,
+                    '_postcheck_attachment_relation_graph',
+                    postcheck_spy):
+            before_add = len(provenance_calls)
+            added = self._call_kw(
+                'mail.activity', 'write',
+                [[ordinary.id], {
+                    'attachment_ids': [(4, unrelated.id, 0)],
+                }],
+            )
+            add_calls = len(provenance_calls) - before_add
+            before_clear = len(provenance_calls)
+            cleared = self._call_kw(
+                'mail.activity', 'write',
+                [[ordinary.id], {'attachment_ids': [(5, 0, 0)]}],
+            )
+            clear_calls = len(provenance_calls) - before_clear
+        # 正對照：兩次寫入都必須真的成功並落到 DB，否則次數訊號可能只是因為
+        # 請求在抵達 relation 協定之前就被擋掉，這個訊號會沒有鑑別力。
+        self.assertTrue(self._assert_ok(
+            added, 'command 4 無關 attachment 寫入必須成功'))
+        self.assertTrue(self._assert_ok(
+            cleared, 'command 5 清空無關 relation 必須成功'))
+        self.assertEqual(
+            self._activity_ids_for_attachment(unrelated.id), [],
+            'command 5 之後 relation 必須真的從 DB 消失',
+        )
+        self.assertEqual(
+            add_calls, 1,
+            'command 4 短路：只准鎖後探測那一次，⛔ 不得再進 8-attempt 收斂'
+            '迴圈（measured=%s）' % add_calls,
+        )
+        self.assertEqual(
+            clear_calls, 1,
+            'command 5 短路：只准鎖後探測那一次（measured=%s）' % clear_calls,
+        )
+        self.assertEqual(
+            postcheck_calls, [],
+            '短路成立時 lock 持有到 commit ⇒ postcheck 無事可驗，'
+            '⛔ 一次都不得被呼叫（measured=%r）' % (postcheck_calls,),
+        )
+
+    def test_incident_owned_relation_write_still_locks_and_denies(self):
+        """碰到 incident 證據時 lock 協定與拒絕都必須原樣保留。"""
+        self.assertTrue(
+            self.env['woow.billing.incident']
+            ._ensure_review_activities_current_cursor(self.incident_a.id))
+        review_type = self.env.ref(
+            'woow_paas_platform.mail_activity_type_billing_incident_review')
+        dedicated = self.env['mail.activity'].sudo().search([
+            ('res_model', '=', 'woow.billing.incident'),
+            ('res_id', '=', self.incident_a.id),
+            ('activity_type_id', '=', review_type.id),
+            ('user_id', '=', self.manager_a.id),
+            ('active', '=', True),
+        ], limit=1)
+        self.assertTrue(dedicated)
+        project, ordinary, ambiguous = self._relation_write_fixture(
+            'incident-owned')
+        direct_owned = self.env['ir.attachment'].sudo().create({
+            'name': 'rpc-relation-direct-owned-%s.bin' % uuid.uuid4().hex,
+            'datas': base64.b64encode(b'direct owned evidence'),
+            'res_model': 'project.project',
+            'res_id': project.id,
+        })
+        # ambiguous 由 dedicated 帶著（command 不會提到它的 id，只有 self 現有
+        # 連結看得見）；direct_owned 則是命令直接引用的 incident-owned 證據。
+        self.env.cr.execute(
+            'INSERT INTO activity_attachment_rel '
+            '(activity_id, attachment_id) VALUES (%s, %s), (%s, %s)',
+            (dedicated.id, ambiguous.id, ordinary.id, ambiguous.id),
+        )
+        self.env.cr.execute(
+            'UPDATE ir_attachment SET res_model = %s, res_id = %s '
+            'WHERE id = %s',
+            ('woow.billing.incident', self.incident_a.id, direct_owned.id),
+        )
+        self.env.cr.flush()
+
+        AttachmentClass, provenance_spy, provenance_calls = (
+            self._provenance_lock_spy())
+        self.authenticate(self.manager_a_login, self.manager_a_login)
+        # ⚠ 這兩腿刻意只用 op4（指名既有 id）／op5（清空）——這是本測試「≥2」
+        # 那個下界推論的**設計前提**，不是隨手挑的：
+        #   1. 為何是 op4／op5：兩者都不會讓
+        #      `_inspect_attachment_relation_commands` 產出 prospective_targets
+        #      或 creates_relation，所以探測會真的走進鎖後 snapshot，
+        #      `_lock_and_refresh_billing_attachment_provenance` 才會被呼叫到
+        #      「探測 1 次 ＋ 完整路徑收斂迴圈 ≥1 次」＝ ≥2。
+        #   2. 哪一行早退會讓 ≥2 失效：src/models/billing_incident.py 的
+        #      `_attachment_relation_write_touches_billing` 裡那條 fail-closed
+        #      早退——條件文字為
+        #      `if plan['prospective_targets'] or plan['creates_relation']:`
+        #      → `return True`（撰稿時在 :3432，⚠ 行號會漂，以條件文字為準）。
+        #      落進它就**零呼叫**直接回 True：探測那 1 次根本不存在，於是
+        #      `>=2` 會紅得像守衛壞了，實際是這個測試的前提被打破。
+        #   3. 🔴 要加第三腿的人：先確認新形態**不落進**上面那條早退分支
+        #      （op0 憑空 create → creates_relation；op1 改寫 res_model/res_id
+        #      → prospective_targets，兩者都會落進去）。若新形態必然落進去，
+        #      必須另立計數判準，⛔ 不可以只是把 `>=2` 調小——那會連短路與完
+        #      整路徑都分不開，退回這裡刻意不用 `>0` 的老問題。
+        commands = {
+            'referenced_id': [(4, direct_owned.id, 0)],
+            'current_link_only': [(5, 0, 0)],
+        }
+        for label, command in commands.items():
+            with self.subTest(incident_owned_command=label):
+                before = len(provenance_calls)
+                with patch.object(
+                        AttachmentClass,
+                        '_lock_and_refresh_billing_attachment_provenance',
+                        provenance_spy):
+                    denial = self._call_kw(
+                        'mail.activity', 'write',
+                        [[ordinary.id], {'attachment_ids': command}],
+                    )
+                self._assert_access_error(
+                    denial,
+                    'incident-owned 證據的 relation write 必須仍被擋（%s）'
+                    % label,
+                    contains='Attachments are not allowed',
+                )
+                self.assertGreaterEqual(
+                    len(provenance_calls) - before, 2,
+                    'incident-owned 證據的 relation write 必須仍走完整協定：'
+                    '鎖後探測 1 次 ＋ 至少進 8-attempt 收斂迴圈 1 次。'
+                    '⚠ 這裡刻意 ⛔ 不用 ">0"——短路路徑自己也會呼叫 1 次，'
+                    '">0" 分不開短路與完整路徑（%s，measured=%s）'
+                    % (label, len(provenance_calls) - before),
+                )
+        self.assertEqual(
+            self._activity_ids_for_attachment(ambiguous.id),
+            sorted([dedicated.id, ordinary.id]),
+            '拒絕之後 protected 證據的既有 relation 必須逐筆不變',
+        )
+        self.assertEqual(
+            self._activity_ids_for_attachment(direct_owned.id), [],
+            '被拒絕的 command 4 不得留下任何新 relation',
+        )
+
     def test_ordinary_activity_with_protected_m2m_evidence_is_a_carrier(self):
         """Assigned-to-me must not expose a legacy protected M2M carrier."""
         marker = uuid.uuid4().hex
@@ -5862,3 +6098,352 @@ class TestBillingIncidentRpcWriteGuard864(HttpCase):
         )
         self.incident_b.invalidate_recordset()
         self.assertEqual(self.incident_b.state, 'orphan')
+
+
+@tagged(
+    'post_install', '-at_install', 'billing_relation_race_987')
+class TestBillingAttachmentShortCircuitRace987(BaseCase):
+    """#987 nit1：短路路徑必須把 carrier target 序列化到 commit 為止。
+
+    ⛔ 不能用 `TransactionCase`：它的 fixture 沒 commit，被測碼的
+    `registry._db.cursor()` 是第二條連線看不到 ⇒ 整段安靜地什麼都不做而全綠。
+    ⛔ 不能用 `HttpCase`：`enter_test_mode` 把 `registry.cursor()` 退化成
+    `TestCursor`（savepoint 語意、跨 request thread 序列化）⇒ 兩條「交易」其實
+    共用同一條 PG session，`pg_advisory_xact_lock` 永遠不會擋，這條測不到任何
+    東西。骨架沿用 `src/tests/integration/test_callback_replay_864.py` 的
+    `BaseCase` ＋ 真 `Registry` cursor ＋ 真 commit。
+
+    競態形狀（照 #987 nit1 v2 裁示）：
+
+    - **交易 A**：對 ordinary activity 寫入一張**當下無關**的 attachment X。
+      X 的 `res_model='mail.activity'`、`res_id=N`，N 是另一個**現在還是
+      ordinary** 的 activity ⇒ X 現在不是 protected ⇒ 探測會判「無關」。
+      A 的鎖集合含 `('mail.activity', N)`：`_classify_…` 對每張 attachment 的
+      direct target 都 `carrier_targets.add(...)`，這正是 future-id／延後
+      protected 的序列化點。
+    - **交易 B（protector）**：在**另一條真連線**上照同一套 advisory 協定
+      把 N 變成 dedicated review activity ⇒ X 追溯成 protected。
+      B 刻意只走 SQL 層（取鎖 → 鎖後重讀 → 決定 → commit）：ORM 那條路
+      `_validate_stored_billing_activity_write` 本來就直接拒絕這種轉換，
+      而這裡要量的是**序列化**，不是 B 自己的守衛。
+
+    🔴 判別式＝`assertFalse(got_lock_early)`（`locked.wait(timeout=2.0)`）：
+    v1 的無鎖探測讓 B 立刻拿到鎖 ⇒ 翻紅；改用
+    `_lock_and_refresh_billing_attachment_provenance` 的版本 B 必須等到
+    A commit ⇒ 翻綠。
+    後面的 `assertTrue(locked.wait(timeout=30))` 是**陽性對照**：B 若根本沒發出
+    取鎖請求（探針壞掉），前一格會假綠，這格會抓到。
+
+    ══════════════════════════════════════════════════════════════════════
+    🔴 看到紅燈：先分「紅在時序」還是「紅在 invariant」，⛔ 不要先調 timeout
+    ══════════════════════════════════════════════════════════════════════
+
+    這格跑兩條**真** PG 連線＋真 commit，紅燈有兩種完全不同的意思。判準＝
+    **traceback 最後那個斷言是哪一格**，照下表對即可，不必讀完整支測試。
+
+    ── 甲類：紅在時序（CI 機器慢／排程抖動）＝**不是缺陷** ──────────────
+    特徵：紅的是某個 `Event.wait()` / `Thread.join()` 逾時，訊息以「前置：」
+    開頭或根本沒有訊息。清單（全部都是 timeout=30 的等待）：
+      · `assertTrue(probed.wait(timeout=30))`  — A 沒走到短路探測
+      · `assertTrue(started.wait(timeout=30))` — B 的連線沒開起來
+      · `assertTrue(finished.wait(timeout=30))`
+      · `assertFalse(thread_a.is_alive())`／`assertFalse(protector.is_alive())`
+    ⛔ **不准調大 timeout 硬湊**——30 秒已比任何合理排程抖動大一個數量級，調了
+    只是把 flaky 藏起來。正解是**兩件事一起做**（只做一件 C2 gate 會紅）：
+      1. 把 `'-standard'` 加回本 class 的 `@tagged`；
+      2. 從 `scripts/audit/baselines/test-collection.txt` 移除
+         `1<TAB>test_billing_incident_864.TestBillingAttachmentShortCircuitRace987`
+    並到 issue #1010 留言，把本 class 列進「需 `--test-tags` input 才跑得到」
+    清單（CI 目前只跑 `--test-tags /woow_paas_platform`，選不中 `-standard`）。
+
+    ── 乙類：紅在 invariant ＝**守衛真的破了**，缺陷在生產碼 ────────────
+    生產碼＝`src/models/billing_incident.py` 的
+    `_attachment_relation_write_touches_billing()` 與其鎖協定。清單：
+      · `assertFalse(got_lock_early, ...)`（🔴 判別式，`timeout=2.0` 那格）
+        ⇒ A 還沒 commit，B 就在 2 秒內取得 carrier lock ⇒ 短路探測是**無鎖**
+        的，TOCTOU 窗口成立。（注意方向：機器**慢**只會讓這格更容易綠，所以
+        它翻紅不可能是「機器慢」造成的——這正是它適合當判別式的理由。）
+      · `assertEqual(outcome.get('decision'), 'aborted', ...)`
+        ⇒ B 取鎖後重讀沒看到 A 已 commit 的 relation ⇒ 序列化語意破了（鎖集合
+        不含該 carrier target，或 snapshot 讀在取鎖之前）。
+      · `assertNotEqual(self._activity_type_id(carrier_id), review_type_id)`
+        ⇒ B 放棄轉換後仍留下部分寫入。
+      · 🔴 `assertFalse(carrier_is_protected and ...)`（最終 invariant）
+        ⇒ ordinary carrier 上出現 protected attachment，正是 #987 要防的結果
+        本身。
+    ⛔ 乙類**不准**用「退回 `-standard`」打發，要修生產碼。
+
+    ── 丙類：三格灰區，先看 dict 再歸類 ────────────────────────────────
+      · `assertTrue(locked.wait(timeout=30))`（陽性對照）：`outcome` 是空的
+        ⇒ B 的 thread 早就爆掉（探針壞了，缺陷在**測試**）；`outcome` 有
+        `decision` 或 `error` ⇒ 機器慢，歸甲類。
+      · `assertTrue(writer.get('ok'), ...)`：看 `writer['error']`。DB 連線／
+        lock timeout 類 ⇒ 甲類；`ValidationError`／`AccessError` 這種來自守衛
+        的例外 ⇒ 乙類（短路路徑把合法寫入擋掉了）。
+      · `assertEqual(self._linked_activity_ids(attachment_id), [...])`：A 的
+        commit 沒落地。`writer['ok']` 為 True 卻沒落地 ⇒ 乙類（寫入被靜默吞
+        掉）；`writer['ok']` 為 False ⇒ 併到上一格判。
+    """
+
+    _REVIEW_TYPE_XMLID = (
+        'woow_paas_platform.mail_activity_type_billing_incident_review')
+
+    def setUp(self):
+        super().setUp()
+        self.registry = Registry(get_db_name())
+        self.marker = 'R987%s' % uuid.uuid4().hex[:10]
+        self.addCleanup(self._purge)
+
+    # --- fixtures ------------------------------------------------------ #
+
+    def _purge(self):
+        # ⛔ 刻意走 raw SQL：測試結束時 attachment 可能已經被 protector 變成
+        # protected，ORM 的 unlink 守衛會直接拒絕，清不掉自己建的 fixture。
+        like = self.marker + '%'
+        try:
+            with self.registry.cursor() as cr:
+                cr.execute(
+                    'DELETE FROM activity_attachment_rel WHERE attachment_id '
+                    'IN (SELECT id FROM ir_attachment WHERE name LIKE %s)',
+                    ('race-' + like,))
+                cr.execute(
+                    'DELETE FROM ir_attachment WHERE name LIKE %s',
+                    ('race-' + like,))
+                cr.execute(
+                    'DELETE FROM mail_activity WHERE summary LIKE %s',
+                    (like,))
+                cr.commit()
+                env = api.Environment(cr, odoo.SUPERUSER_ID, {})
+                env['project.project'].sudo().search(
+                    [('name', 'like', self.marker)]).unlink()
+                cr.commit()
+        except Exception:
+            _RACE_LOGGER.exception(
+                '#987 nit1 race fixture cleanup failed (marker=%s)',
+                self.marker,
+            )
+
+    def _seed(self):
+        """建立 ordinary 目的地、未來會被 protect 的 carrier N，以及 X。"""
+        with self.registry.cursor() as cr:
+            env = api.Environment(cr, odoo.SUPERUSER_ID, {})
+            project = env['project.project'].create({
+                'name': 'race %s' % self.marker,
+            })
+            model_id = env['ir.model']._get('project.project').id
+            todo_type = env.ref('mail.mail_activity_data_todo').id
+            common = {
+                'res_model_id': model_id,
+                'res_id': project.id,
+                'activity_type_id': todo_type,
+                'user_id': env.uid,
+                'date_deadline': fields.Date.today(),
+            }
+            destination = env['mail.activity'].create(dict(
+                common, summary='%s destination' % self.marker))
+            carrier = env['mail.activity'].create(dict(
+                common, summary='%s carrier' % self.marker))
+            attachment = env['ir.attachment'].create({
+                'name': 'race-%s.bin' % self.marker,
+                'datas': base64.b64encode(b'#987 nit1 race payload'),
+                'res_model': 'mail.activity',
+                'res_id': carrier.id,
+            })
+            ids = (destination.id, carrier.id, attachment.id)
+            cr.commit()
+        return ids
+
+    # --- observations --------------------------------------------------- #
+
+    def _review_type_id(self):
+        with self.registry.cursor() as cr:
+            env = api.Environment(cr, odoo.SUPERUSER_ID, {})
+            return env.ref(self._REVIEW_TYPE_XMLID).id
+
+    def _activity_type_id(self, activity_id):
+        with self.registry.cursor() as cr:
+            cr.execute(
+                'SELECT activity_type_id FROM mail_activity WHERE id = %s',
+                (activity_id,))
+            row = cr.fetchone()
+            return row[0] if row else None
+
+    def _linked_activity_ids(self, attachment_id):
+        with self.registry.cursor() as cr:
+            cr.execute(
+                'SELECT activity_id FROM activity_attachment_rel '
+                'WHERE attachment_id = %s ORDER BY activity_id',
+                (attachment_id,))
+            return [activity_id for activity_id, in cr.fetchall()]
+
+    # --- the protector on a second real connection ---------------------- #
+
+    def _protector(self, carrier_id, attachment_id, review_type_id,
+                   started, locked, finished, outcome):
+        """B：取 carrier lock → 鎖後重讀 → 只有安全時才把 N 變 protected。"""
+        def _run():
+            cr = self.registry._db.cursor()
+            try:
+                # 🔴 READ COMMITTED 是必要條件，不是風格：Odoo 的 cursor 預設
+                # REPEATABLE READ，快照在**第一個 statement** 就定住 ⇒ 取鎖後
+                # 的重讀會看不見 A 在等待期間 commit 的那條 relation，B 會照
+                # 舊快照放行，GREEN 版也會違反 invariant。生產碼的 fresh read
+                # （`_fresh_billing_attachment_provenance`）用的就是這一行。
+                cr.execute('SET TRANSACTION ISOLATION LEVEL READ COMMITTED')
+                # 連線真的開起來之後才宣告 started，否則「B 還沒發出取鎖請求」
+                # 會被誤讀成「B 被鎖擋住」——這條測試最容易長出來的假綠。
+                started.set()
+                # 與生產碼同一支取鎖函式、同一組 key、同一個排序。
+                _acquire_billing_carrier_target_locks(
+                    cr, [('mail.activity', carrier_id)])
+                locked.set()
+                # 協定的第二半：鎖後重讀。若這張 attachment 這時已經掛在
+                # ordinary carrier 上，把 N 變 protected 就會生出「protected
+                # attachment 掛在 ordinary activity 上」⇒ 放棄。
+                cr.execute(
+                    'SELECT activity_id FROM activity_attachment_rel '
+                    'WHERE attachment_id = %s', (attachment_id,))
+                blockers = [activity_id for activity_id, in cr.fetchall()]
+                if blockers:
+                    outcome['decision'] = 'aborted'
+                    outcome['blockers'] = blockers
+                    cr.rollback()
+                    return
+                cr.execute(
+                    'UPDATE mail_activity SET activity_type_id = %s, '
+                    'res_model = %s WHERE id = %s',
+                    (review_type_id, 'woow.billing.incident', carrier_id))
+                outcome['decision'] = 'protected'
+                cr.commit()
+            except Exception as exc:  # pragma: no cover - 診斷用
+                outcome['decision'] = 'error'
+                outcome['error'] = repr(exc)
+                cr.rollback()
+            finally:
+                finished.set()
+                if not cr.closed:
+                    cr.close()
+
+        return threading.Thread(target=_run, name='race987-protector')
+
+    def test_short_circuit_serializes_the_protector_until_commit(self):
+        destination_id, carrier_id, attachment_id = self._seed()
+        review_type_id = self._review_type_id()
+
+        probed = threading.Event()
+        resume = threading.Event()
+        started = threading.Event()
+        locked = threading.Event()
+        finished = threading.Event()
+        outcome = {}
+        writer = {}
+
+        # A 的 cursor／Environment 一律在**主執行緒**先建好：Odoo `-u` 測試載入
+        # 期間主執行緒持有 `Registry._lock`，worker 一建 Environment 就會卡在
+        # 那顆 harness 鎖上（PR-G 一輪實測過）⇒ 那樣測到的是 harness 不是
+        # PostgreSQL。
+        cr_a = self.registry._db.cursor()
+        env_a = api.Environment(cr_a, odoo.SUPERUSER_ID, {})
+        ActivityClass = type(env_a['mail.activity'])
+        original_probe = (
+            ActivityClass._attachment_relation_write_touches_billing)
+
+        def probe_then_hold(records, plan):
+            touches = original_probe(records, plan)
+            if records.ids == [destination_id]:
+                # 窗口就開在「探測回來（GREEN 版此時已持有 carrier lock）」
+                # 到「commit」之間——正是 TOCTOU 要打的那一段。
+                probed.set()
+                resume.wait(timeout=30)
+            return touches
+
+        def _writer():
+            try:
+                env_a['mail.activity'].browse(destination_id).write({
+                    'attachment_ids': [(4, attachment_id, 0)],
+                })
+                cr_a.commit()
+                writer['ok'] = True
+            except Exception as exc:  # pragma: no cover - 診斷用
+                writer['ok'] = False
+                writer['error'] = repr(exc)
+                cr_a.rollback()
+
+        protector = self._protector(
+            carrier_id, attachment_id, review_type_id,
+            started, locked, finished, outcome)
+        thread_a = threading.Thread(target=_writer, name='race987-writer')
+        try:
+            with patch.object(
+                    ActivityClass,
+                    '_attachment_relation_write_touches_billing',
+                    probe_then_hold):
+                thread_a.start()
+                self.assertTrue(
+                    probed.wait(timeout=30),
+                    '前置：A 必須真的走到短路探測並停在窗口裡',
+                )
+                protector.start()
+                self.assertTrue(
+                    started.wait(timeout=30),
+                    '前置：B 的連線必須真的開起來（否則下一格的「沒拿到鎖」'
+                    '量到的是 B 還沒起跑，不是被鎖擋住）',
+                )
+
+                # 🔴 判別式：A 還沒 commit ⇒ B ⛔ 不得拿到 carrier lock。
+                got_lock_early = locked.wait(timeout=2.0)
+                resume.set()
+                thread_a.join(timeout=30)
+                self.assertFalse(
+                    got_lock_early,
+                    '🔴 短路路徑必須在**判斷之前**就鎖住 carrier target 並持有'
+                    '到 commit：B 在 A 的窗口裡拿到鎖，代表探測是無鎖的，'
+                    'TOCTOU 窗口成立（v1 版本就是紅在這一格）',
+                )
+            self.assertFalse(thread_a.is_alive())
+            self.assertTrue(
+                writer.get('ok'), '前置：A 的寫入必須真的成功並 commit（%r）'
+                % (writer,))
+            self.assertEqual(
+                self._linked_activity_ids(attachment_id), [destination_id],
+                '前置：A commit 之後那條 relation 必須真的在 DB 裡，'
+                '否則上一格的「B 等到了」沒有鑑別力',
+            )
+
+            # 陽性對照：B 真的有在等鎖，A commit 之後必須拿得到。
+            self.assertTrue(
+                locked.wait(timeout=30),
+                '陽性對照：B 必須在 A commit 之後真的取得 carrier lock；'
+                '一直取不到代表這條測試根本沒發出取鎖請求（探針壞了）',
+            )
+            self.assertTrue(finished.wait(timeout=30))
+            protector.join(timeout=30)
+            self.assertFalse(protector.is_alive())
+        finally:
+            resume.set()
+            thread_a.join(timeout=30)
+            protector.join(timeout=30)
+            try:
+                cr_a.rollback()
+            finally:
+                if not cr_a.closed:
+                    cr_a.close()
+
+        self.assertEqual(
+            outcome.get('decision'), 'aborted',
+            'B 鎖後重讀必須看到 A 已 commit 的那條 relation 而放棄轉換'
+            '（outcome=%r）' % (outcome,),
+        )
+        self.assertNotEqual(
+            self._activity_type_id(carrier_id), review_type_id,
+            'B 放棄之後 ⛔ 不得留下任何部分寫入',
+        )
+        # 🔴 invariant：最終狀態不得出現 protected attachment 掛在 ordinary
+        # carrier 上。X 的 protected 與否由它的 direct target N 決定。
+        carrier_is_protected = (
+            self._activity_type_id(carrier_id) == review_type_id)
+        self.assertFalse(
+            carrier_is_protected
+            and destination_id in self._linked_activity_ids(attachment_id),
+            '🔴 invariant：protected attachment ⛔ 不得掛在 ordinary carrier 上',
+        )

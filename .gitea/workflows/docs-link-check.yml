@@ -7,6 +7,12 @@ on:
       - 'CLAUDE.md'
       - '.lychee.toml'
       - '.gitea/workflows/docs-link-check.yml'
+      # docs-index-sync 這個 job 的**第二類**輸入：索引是產生出來的，所以
+      # 「產生器改了、索引沒重產」跟「文件增減了、索引沒重產」是同一種漂移。
+      # 少了這一行，只動 generator 的 PR 不觸發本 workflow ⇒ 那道 gate 對它
+      # 最該守的另一半完全休眠，而輸出與「跑了而且沒事」完全相同
+      # （repo-lint.yml 的 paths 註解裡記著 #461／#547 兩次同型事故）。
+      - 'scripts/audit/gen-docs-index.py'
 
 jobs:
   lychee:
@@ -47,3 +53,25 @@ jobs:
           fi
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "> Phase 1: failures do not block merge. Phase 2 will enable blocking + orphan check." >> $GITHUB_STEP_SUMMARY
+
+  # ⚠ 這個 job 與上面的 lychee 是**兩件事**：lychee 是 Phase 1 warning-only
+  # （`continue-on-error: true`），本 job **會紅**。刻意不併進 lychee job——
+  # 併進去就會繼承那個 continue-on-error，gate 變成裝飾品（跑了、紅了、
+  # 然後被吞掉，輸出與通過完全相同）。workflow 標題仍寫著「Phase 1 —
+  # warning only」，那句只描述 lychee，不描述本 job。
+  docs-index-sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # docs/index.md 的每個數字都由 gen-docs-index.py 從 `git ls-files docs/`
+      # 即時算出。CLAUDE.md 要求「動過 docs/ 結構後跑一次」，但在此之前**沒有
+      # 任何機器守線在對帳**——`gen-docs-index` 在整個 repo 裡只被自己引用，
+      # 8 個 workflow／repo-lint.py／.claude/hooks/ 全都沒呼叫它。
+      # 結果就是靜默漂移：commit 604997cf 收了 10 份 doc 進 docs/archived/，
+      # 索引停在舊值（665 vs 實際 675）直到 2026-09-02 才被人發現。
+      #
+      # `--check` 只比對、不寫檔；相符 exit 0、不符 exit 1（實測兩個方向皆驗過：
+      # 手改索引數字 → exit 1；新增一份 tracked doc 不重產 → exit 1）。
+      - name: docs/index.md 與實況對帳
+        run: python3 scripts/audit/gen-docs-index.py --check

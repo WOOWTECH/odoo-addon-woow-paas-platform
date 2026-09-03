@@ -52,7 +52,7 @@ HA component 以 OAuth 2.0 Authorization Code + PKCE 取得 access token，再�
 | Scopes（seed）    | 見 §1.2                                                                   |
 
 > public client **不得**在 `/oauth2/token` 帶 `client_secret`：帶了會被
-> `_authenticate_client` 直接拒絕（`src/controllers/oauth2.py:382`）。PKCE 的
+> `_authenticate_client` 直接拒絕（`src/controllers/oauth2.py:517-523`）。PKCE 的
 > `code_verifier` 取代 secret 作為持有證明。
 
 Seed 記錄見 `src/data/oauth_clients.xml`（`noupdate="1"`，僅 fresh install
@@ -161,7 +161,7 @@ POST {BASE}/oauth2/token
 - **Rotation**：每次 refresh 都會**撤銷舊 token**並發新的 access + refresh pair。
   component 端必須以回應裡的新 `refresh_token` 取代舊值。
 - **Scope 不變**：refresh 沿用原 token 的 scope，**不會改變授權範圍**
-  （`src/controllers/oauth2.py:573` 以 `token.scope` 重發）。
+  （`src/controllers/oauth2.py:712` 以 `token.scope` 重發）。
 - 舊 refresh token 過期 / 已撤銷 → `400 {"error":"invalid_grant", ...}`。
 
 ### 1.6 既有 entry 的 reauth 行為
@@ -356,7 +356,7 @@ Authorization: Bearer <access_token>
   tunnel-token 端點組好回傳。
 - `mcp`（2026-07 補錄，#270）：字串，值為 `""` 或 `"ha_mcp_tools"`，來自
   active plan 的 `mcp_integration`（`smart_home.to_dict()` →
-  `_get_mcp_integration()`，`src/models/smart_home.py:320`；欄位定義
+  `_get_mcp_integration()`，`src/models/smart_home.py:972`；欄位定義
   `src/models/sh_subscription_plan_sh_mcp.py:14`）。無訂閱 / plan 無旗標
   一律回 `""`（非 `null`、非缺欄位）。語意見 §4.4 的 reconcile 說明。
 
@@ -377,7 +377,7 @@ Authorization: Bearer <access_token>
 > 這裡的 `subdomain` 是**完整 FQDN**（`{prefix}.{paas_domain}`，controller 組好），
 > 與 detail 裡的 `subdomain`（prefix）不同。各欄缺值皆回 `""`。
 
-`mcp` 欄位（2026-07 補錄，#270；`src/controllers/ha_api.py:251`）與 §4.3
+`mcp` 欄位（2026-07 補錄，#270；`src/controllers/ha_api.py:252`）與 §4.3
 `to_dict()` 同源同值。component 端契約＝**每次同步 reconcile 到當前值**
 （冪等收斂，非一次性建立）：
 

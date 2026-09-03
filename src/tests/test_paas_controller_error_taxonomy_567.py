@@ -208,9 +208,32 @@ class TestPaaSCreateAndSkipErrorTaxonomy567(HttpCase):
         downstream.assert_not_called()
 
     def test_skip_trial_operational_error_is_reraised(self):
+        """🔴 `request.env` 必須是 **workspace owner** 的 env，不能是 `self.env`。
+
+        隔壁 `test_create_operational_error_is_reraised` 用 `self.env` 是對的——它
+        呼叫的是**私有**的 `_create_service()`，前面沒有任何閘。本條呼叫的是**公開
+        端點** `api_service_skip_trial()`，而它在 try 之前有兩道會 return 的閘
+        （`src/controllers/paas.py:1357` 的 Service not found、`:1361` 的
+        Admin access required）。
+
+        `self.env` 是 `HttpCase` 的 SUPERUSER env，而
+        `Workspace.check_user_access()`（`src/models/workspace.py:434-450`）
+        **沒有 superuser 旁路**：它就是去 `workspace_access` 搜 `user_id`，搜不到
+        回 `False`。`Workspace.create()`（`:207-225`）只替 `owner_id` 建那一列
+        ⇒ 用 `self.env` 呼叫會停在閘 2，`_skip_trial()` 一次都不會被呼叫，
+        `assertRaises` 收到的是「OperationalError not raised」。
+
+        ⚠ `setUp` 的 `self.authenticate('admin', 'admin')` 只影響 **HTTP session**，
+        影響不到 `self.env` ⇒ 直接呼叫端點時幫不上忙。同檔走真 HTTP 的
+        `test_skip_trial_technical_errors_are_generic_and_triggered` 之所以能走到
+        `_skip_trial()`，靠的就是那個 session，不是 `self.env`。
+
+        Refs #956 #567 #947
+        """
         controller = PaasController()
         downstream = MagicMock()
-        with patch(_REQUEST, new=MagicMock(env=self.env)), patch.object(
+        owner_env = self.env(user=self.workspace.owner_id)
+        with patch(_REQUEST, new=MagicMock(env=owner_env)), patch.object(
             SubscriptionLifecycleMixin, '_skip_trial',
             side_effect=OperationalError('skip-retry-567'),
         ) as raised, patch.object(
