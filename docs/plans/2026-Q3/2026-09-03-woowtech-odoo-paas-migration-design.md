@@ -1,4 +1,20 @@
-# woowtech-odoo → paas 平台移植：設計 spec
+---
+title: woowtech-odoo → paas 移植（基底翻轉）
+category: plans
+status: draft
+created: 2026-09-03T03:44:22Z
+updated: 2026-09-03T03:44:22Z
+related:
+  - ../../decisions/philosophy/billing-philosophy.md
+  - https://git-prod.woowtech.io/odoo-addons/woow_paas_platform/issues/994
+  - https://git-prod.woowtech.io/odoo-addons/woow_paas_platform/issues/996
+---
+
+# woowtech-odoo → paas 移植（基底翻轉）
+
+## 目的
+
+把 prod `woowtech-odoo`（aiot.woowtech.io：公司 ERP＋官網＋金流）整個併進 paas 平台的 `paas-odoo`，成為單一 Odoo instance。給執行移植的人（含 agent）看：方案為何、裁決了什麼、每個 phase 做什麼與怎麼驗。
 
 - 日期：2026-09-02　狀態：draft，待 Eugene review
 - 來源：brainstorming session 2026-09-01～02，六項裁決與全部量測見文末附件
@@ -128,6 +144,12 @@
 - ~~PR #2 merge~~ 已改走快照；PR #2 留檔
 - mcp／n8n 最終歸屬（Phase 5 之後）
 - `http.py` ProxyFix 是否需要（Phase 2 驗）
+
+## 相關
+
+- [billing-philosophy §5「與上游 ERP 解耦」](../../decisions/philosophy/billing-philosophy.md)——本計畫是它的反向操作（同一顆 Odoo 同時當 ERP 與平台），落地後該節要補一段對照
+- #994（cloud_service admin 永真腿，已合）、#996（`(4, ref())` 累積，開著）
+- 決策紀錄與量測原始檔：`~/Documents/woow/AREA-odoo/woow-addons/woowtech-odoo-migration-state.md`
 
 ## 附件（`~/Documents/woow/AREA-odoo/woow-addons/`）
 `woowtech-odoo-migration-state.md`（裁決＋進度）、`woowtech-odoo-{pvc,db}-inventory.log`、`woowtech-odoo-manifests.tsv`、`woowtech-odoo-repos-inventory.tsv`、`woowtech-odoo-live-vs-{repos,mirror}-diff.*`、`erp-live-addons-snapshot/`（tar＋SHA256SUMS）、`erp-mirrors/`、`erp-snapshot-repo/`、`erp-upstream/`、`gitea-mirror-setup.log`、`woow_portal_ui-theme-css.diff`
