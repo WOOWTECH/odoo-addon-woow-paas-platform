@@ -818,6 +818,12 @@ from . import test_rule_reparent_guard_941
 from . import test_invoice_pay_rollback_864
 from . import test_invoice_issue_policy_864
 
+# #990：老化告警 cron 的 batch 化。unbounded 掃描＋逐 move 獨立 cursor 的 N+1，
+# 而 naive `limit` 會讓後排永遠餓死（逾期條件不自消 ⇒ 舊批佔死視窗，#791 F1 的
+# 同一個形狀）。核心判準是「視窗會前進」，觀測用 incident 存在性而不是 marker
+# （marker 是修法的實作細節，拿它當判準會讓 RED 紅在錯的地方）。
+from . import test_stale_manual_aging_batch_990
+
 # #993：`woow.billing.incident.trade_no` 統一存 provider TradeNo（Eugene 裁決 A）。
 # 病＝欄位沒有語意宣告，PR-E 寫我方 reference、PR-G 寫 ECPay TradeNo，而 upsert 的
 # explicit_evidence 讓後者被前者無聲覆寫——那是平台唯一一份 ECPay 交易編號。

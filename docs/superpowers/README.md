@@ -1,5 +1,7 @@
 # superpowers/ — 工具自管理區
 
+> **已退役（2026-09-03）**：obra/superpowers plugin 不再使用，本目錄不會再有新產出（`plans/` 目前 0 份）。留著只為 `/docs:promote` 撈舊檔與考古。
+
 **obra/superpowers plugin** 的 brainstorming / writing-plans skill 會自動寫入這裡。**不是主題類目錄**，是工具的暫存／草稿區。
 
 ## 為什麼存在

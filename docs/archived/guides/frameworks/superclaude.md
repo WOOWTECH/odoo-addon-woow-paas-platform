@@ -1,10 +1,12 @@
 ---
 title: SuperClaude_Framework (SuperClaude-Org)
-category: guides
-status: active
+category: archived
+status: archived
 created: 2026-05-19
 updated: 2026-05-19
 ---
+
+> **已退役**：SuperClaude_Framework 已退役（`~/.claude/commands/sc/` 不再安裝），本檔留作考古；現行框架＝mattpocock/skills，消費規則見 `docs/agents/`。
 
 # SuperClaude_Framework — `/sc:*` Commands
 
