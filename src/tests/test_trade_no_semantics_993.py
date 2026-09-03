@@ -258,20 +258,31 @@ class TestTradeNoSemantics993(TransactionCase):
             % (after['trade_no'], reference))
 
     # ── T4–T6：backfill migration（合成資料的陽性＋陰性對照）──────────
-    def _seed_incident_row(self, external_ref, trade_no, kind='charged_not_credited'):
-        """用獨立 cursor 直接 seed 一列（繞過 `_log` 的 kind guard）。"""
+    def _seed_incident_row(self, external_ref, trade_no,
+                           kind='charged_not_credited'):
+        """用生產碼的 `_log()` seed 一列（⛔ 不自己寫 INSERT）。
+
+        ⚠ 第一版我手寫 `INSERT INTO woow_billing_incident (...)`，漏掉
+        `skip_count`（NOT NULL 無 default）⇒ 整條 `NotNullViolation`，T4／T5
+        在 CI 是 **ERROR 不是 FAIL**。教訓：seed 的欄位清單是對 schema 的
+        **假設**，而生產碼的 `_log()` 已經把那份假設維護好了（`insert_values`
+        的那串 `setdefault`）——用它就不會隨 schema 演進而腐爛。
+        """
         self._refs_to_purge.append(external_ref)
-        with self.env.registry.cursor() as cr:
-            cr.execute(
-                "INSERT INTO woow_billing_incident "
-                "(external_ref, kind, state, trade_no, occurrences, "
-                " first_seen_at, last_seen_at, create_uid, write_uid, "
-                " create_date, write_date) "
-                "VALUES (%s, %s, 'open', %s, 1, now(), now(), 1, 1, "
-                "        now(), now())",
-                (external_ref, kind, trade_no),
-            )
-            cr.commit()
+        snapshot = {
+            'external_ref': external_ref,
+            'kind': kind,
+            'partner_ref': self.partner.id,
+            'detail': '993 backfill fixture',
+        }
+        if trade_no is not None:
+            snapshot['trade_no'] = trade_no
+        incident_id = self.env['woow.billing.incident']._log(snapshot)
+        self.assertTrue(
+            incident_id,
+            'fixture seed 失敗（_log 回 False ⇒ snapshot 被 validator 拒收）；'
+            'external_ref=%r trade_no=%r' % (external_ref, trade_no))
+        return incident_id
 
     def _read_trade_no(self, external_ref):
         with self.env.registry.cursor() as cr:
