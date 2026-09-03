@@ -52,7 +52,7 @@
 | # | 題 | 裁決 |
 |---|---|---|
 | 1 | alan 的 HA workspace／service | **連資料一起拋**（alan 確認為測試帳號） |
-| 2 | 28 個自製模組進 CI 的來源 | **gitea `mirror-internal`**：9 個 GitHub 找得到的走 mirror；20 個找不到／孤兒的走單一 snapshot repo |
+| 2 | 28 個自製模組進 CI 的來源 | **gitea `mirror-internal`**：9 個 GitHub 找得到的走 mirror；21 個（找不到／孤兒／無 merge 權）走單一 snapshot repo |
 | 3 | canonical domain（`web.base.url`） | **維持 `aiot.woowtech.io`** |
 | 4 | 切換窗 | 未定；Phase 2 排練綠後再排。**切換不刪舊環境** |
 | 5 | snapshot repo 形式 | 單一 `mirror-internal/woowtech-erp-addons-snapshot` |
