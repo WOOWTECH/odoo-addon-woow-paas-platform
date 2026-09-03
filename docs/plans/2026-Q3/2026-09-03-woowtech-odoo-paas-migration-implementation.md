@@ -3,7 +3,7 @@ title: woowtech-odoo → paas 移植（基底翻轉）— implementation
 category: plans
 status: draft
 created: 2026-09-03T04:11:22Z
-updated: 2026-09-03T14:40:00Z
+updated: 2026-09-04T00:30:00Z
 related:
   - ./2026-09-03-woowtech-odoo-paas-migration-design.md
   - https://git-prod.woowtech.io/odoo-addons/woow_paas_platform/issues/994
@@ -54,7 +54,10 @@ related:
   → ✅ head 沙盒 custom-addons 36 目錄、28/28 在 ir_module_module（26 uninstalled＋2 installed＝ecpay）、/web/health 200、/woow → login 200
 - [x] 1.7 PR（⛔ 勿代 merge）→ Eugene 合 → 依 `/woow:deploy` 發版流程上 prod（**image 先上、ERP addon 不裝**）
   → ✅ 2026-09-03：paas-odoo-ci#127 merge → tag `v18.0.1.0.177`（develop d1e1633c）→ paas-odoo-ci approval issue #128 `/approve` → phase 2 run 7095 三行錨點全對 → image `paas-odoo:20260903.0732`（digest `sha256:4f60f430…af8e`）→ CD PR-A paas-app-bundle-cd#126（三處 pin＋SKIP=no）／PR-B #127（切回 yes）皆 merge；prod pod 兩容器 digest 4f60f430… 五方一致、custom-addons 36 目錄、抽查 9 個 ERP addon 在 `ir_module_module` 皆 `uninstalled`、`/web/health` 200。⚠ 「DB 不動」不成立：同版帶 #993 migration `.177` 與相依 addon `payment_ecpay_ecpg` 3.0→3.5，故走 SOP 兩段式 `-u all`（判準與實證見 `docs/guides/deployment/prod-release-sop.md` §5.1）；ERP addon 本身零安裝。Phase 2 進入條件（跑穩 ≥1 天）自 08:33Z 起算。
-- [ ] 1.8 **補 vendor `sale_combo_enhanced`**（Phase 2.4 量出：aiot installed 的 29 個非官方模組中唯一不在 image 者；來源 aiot PVC `/mnt/extra-addons/sale_combo_enhanced`，18.0.1.1.0、13 檔，snapshot repo 亦補）→ `config/paas-addons.list` +1 → 新 image → 依 1.7 發版 → **Phase 2 重跑 2.4–2.6**。同 PR 一併裁 `ai_livechat_gt`／`ai_mail_gt` 是否 vendor（見 2.5）
+- [ ] 1.8 **補 vendor `sale_combo_enhanced`**（Phase 2.4 量出：aiot installed 的 29 個非官方模組中唯一不在 image 者；來源 aiot PVC `/mnt/extra-addons/sale_combo_enhanced`，18.0.1.1.0、13 檔）
+  → 09-04 開出：snapshot `mirror-internal/woowtech-erp-addons-snapshot` PR #1（034dcaddcf9f）→ paas-odoo-ci PR #129（`addons/`＋`paas-addons.list` +1，check-addon-lists 4/4）皆 ⛔ 待 Eugene 合
+  → 合併後：`build-image.yml` 手動 dispatch **`addon_ref=v18.0.1.0.177`**（addon 無版號變化，不必發平台版；pitfall ci-addon-ref-empty-drifting-default-branch）→ `/approve` → CD 三處 pin 同進同退（`SKIP=yes` 即可，新模組在 prod 只是 uninstalled）→ **Phase 2 重跑 2.4–2.6**（`dev-sandbox-p2aiot` 換 image 重 restore）
+  → `ai_livechat_gt`／`ai_mail_gt` 裁定**不 vendor**（見 2.5／4.4）
 
 ### Phase 2 — sandbox 排練（決定性驗證）
 
@@ -85,9 +88,11 @@ related:
 - [x] 2.8 rollback 演練 → ✅ 沙盒版「`ODOO_DATABASE_NAME` 切換」＝改 odoo configmap `db_name`＋rollout restart（`switch-db.sh`）：woow_prod → woow_p2aiot **116 s** 到 `/web/login` 200，`database/list=['woow_p2aiot']`、admin 登入 uid 2、83 模組、`/woow` 正常；再切回 woow_prod **307 s（同樣含 `-u web`；prod 無此步）**。三段 rollback 中「指回平台 DB」這段證明可退
   - 離叢集副本（Phase 3 方法驗證）：dump 經 HTTP over port-forward 18 s、sha 相符；filestore 1.66 GB 走 100 MB 分塊逐塊 sha256（port-forward 會死、python http.server 無 Range）→ 首輪 4/17 塊（~1.3 MB/s）後被 2.8 演練的 pod 重啟打斷（接收 pod 換了），重跑結果補記 state 檔；方法本身成立、但 Phase 3 要預留 30 分以上
 
-**離開條件**：2.6 全綠、2.8 通過、耗時已記錄。→ **條件式通過**：流程與數字全到位，但 image 缺 `sale_combo_enhanced`（Phase 1.8）⇒ 新 image 出來後**重跑 2.4–2.6**（同沙盒可重用：drop `woow_prod` 重 restore 約 2 分）才算離開。Eugene 待裁：(a) `ai_livechat_gt`／`ai_mail_gt` vendor 或 SQL；(b) `sale_combo_enhanced` vendor 或切換前在 aiot 解除安裝。
+**離開條件**：2.6 全綠、2.8 通過、耗時已記錄。→ **條件式通過**：流程與數字全到位，但 image 缺 `sale_combo_enhanced`（Phase 1.8）⇒ 新 image 出來後**重跑 2.4–2.6**（同沙盒可重用：drop `woow_prod` 重 restore 約 2 分）才算離開。✅ Eugene 2026-09-04 裁決：(a) `ai_livechat_gt`／`ai_mail_gt` **SQL 改回 uninstalled**（不 vendor，維持 aiot 現狀，寫進 4.4）；(b) `sale_combo_enhanced` **vendor**（1.8 → paas-odoo-ci PR #129＋snapshot mirror-internal PR #1）；(c) `seed-from-stg.sh` **最小 fail-loud**（woow_paas_platform PR #1039）。
 
 ### Phase 3 — 保護（切換前 24h 內）
+
+> 📣 排定 Phase 3／4 日期後**先通知 issue-leader**：#955 prod 半邊（operator image／agentRuntime 0.5.0／skillBundleSecret）以「Phase 3 開始前 ≥24h 全部落地」為硬條件，它要對這條線（2026-09-04 協調）。
 
 - [ ] 3.1 當日 `pg_dump -Fc`＋既有每日 dump 各一份 → 離叢集（本機＋NAS）。⚠ **不可用 `kubectl exec`／`cp` 從 pod 拉**（>~20 MB 尾端截斷，見 2.1）：先叢集內 push 到 paas 側 PVC（同 2.1 方法），再以 HTTP over port-forward 分塊＋逐塊 sha256 拉到本機；完整性判準 `pg_restore -f /dev/null`（`-l` 驗不到）
 - [ ] 3.2 filestore tar → 離叢集；`sha256sum` 存證（同上方法；1.66 GB 分塊拉約 20–30 分，`gzip -t`＋檔數 7,193／bytes 對源頭 `find`／`du -sb`）
@@ -103,7 +108,7 @@ related:
 - [ ] 4.1 公告；cloudflared `scale --replicas=0`（aiot 外部斷）；Odoo 本體保持 up
 - [ ] 4.2 最終 dump＋filestore tar：**叢集內 push** 到 paas-odoo pod（aiot odoo pod `pg_dump 18.4 | curl -T -`、`tar | gzip -1 | curl -T -`，實測合計 ~1 分）→ 校驗（`pg_restore -f /dev/null`、`gzip -t`、檔數／bytes）→ 離叢集副本可事後補拉
 - [ ] 4.3 restore 進 `paas-odoo-postgresql` 成 **`woow_prod`**（同 2.2：`-L` 去 vector——bn_odoo 非 superuser 建不了、**`--no-owner --no-privileges`**；pg_restore 17.6 在 paas-odoo pod 內；實測 52 s）；filestore 進 paas-odoo PVC `filestore/woow_prod`（20Gi 夠；解壓 29 s）
-- [ ] 4.4 對 `woow_prod`：neutralize 不做（正式切換要 cron／mail／payment 活著，但 **web.base.url 改 https://aiot.woowtech.io 前先 freeze**）→ `-u all`（4m42s；ERROR 只允許 `Importing test framework` 那條）→ `-i woow_paas_platform`（48 s；預期 ERROR：ai_base_gt `CREATE EXTENSION vector`、`sh_journal_id` NOT NULL 暫態）→ **SQL 修 `to install` 且不在 addons_path 的列**（`ai_livechat_gt`／`ai_mail_gt`，除非已 vendor）→ assert `res_company.sh_journal_id` 非空、無 to upgrade/to install/to remove
+- [ ] 4.4 對 `woow_prod`：neutralize 不做（正式切換要 cron／mail／payment 活著，但 **web.base.url 改 https://aiot.woowtech.io 前先 freeze**）→ `-u all`（4m42s；ERROR 只允許 `Importing test framework` 那條）→ `-i woow_paas_platform`（48 s；預期 ERROR：ai_base_gt `CREATE EXTENSION vector`、`sh_journal_id` NOT NULL 暫態）→ **SQL 修 `to install` 且不在 addons_path 的列**（`ai_livechat_gt`／`ai_mail_gt`；09-04 裁決：不 vendor、就用這步 SQL）→ assert `res_company.sh_journal_id` 非空、無 to upgrade/to install/to remove
 - [ ] 4.5 replay 設定（spec §8 步驟 5 清單；**`default_*_id` 三個要重選**；ecpay 不動；`web.base.url=https://aiot.woowtech.io`）
 - [ ] 4.6 `paas-app-bundle-cd` 改 Fleet values：`ODOO_DATABASE_NAME=woow_prod`、`dbfilter=^woow_prod$`、odoo.conf `workers=6`／`limit_time_cpu=600`／`limit_time_real=1200`／memory 對齊 → PR → 合 → Fleet 套用 → pod 重啟
 - [ ] 4.7 `paas-system/pg-backup` cronjob 目標 DB → `woow_prod`
