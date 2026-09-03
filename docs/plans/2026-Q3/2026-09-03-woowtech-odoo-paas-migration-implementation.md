@@ -34,11 +34,12 @@ related:
 **進入條件**：Phase 0 全勾。
 **產出**：`paas-odoo-ci` 新 image，內含 ERP 28 個自製模組＋pip 依賴。
 
-- [ ] 1.1 在 `paas-odoo-ci` 開分支；Dockerfile 加兩段：
-  - clone 5 個 mirror（`Woow_odoo_core_patch_browser_enhancement`、`Woow_odoo_ai_livechat`、`woow_line_base`、`Woow_odoo_line_liff`、`woow_odoo_livechat_line`）**釘 commit sha**（取 09-02 對帳值，見 `gitea-mirror-setup.log`），只 copy 模組子目錄進 addons path
-  - clone snapshot repo 釘 `3a572a32a92e`，21 個目錄整批 copy
+- [ ] 1.1 在 `paas-odoo-ci` 開分支，**照該 repo 的規矩 vendor**（不是 build 時 clone——`Dockerfile:5` 是 `COPY ./addons/` 全量，沒有任何 clone 步驟；權威見 paas-odoo-ci `CLAUDE.md` §Addon 管理架構）：
+  - 26 個模組目錄複製進 `addons/`（5 個從 gitea mirror 的本機 clone、21 個從 `woowtech-erp-addons-snapshot`），commit message 記每個來源 repo＋sha（該 repo 慣例 `chore: 同步 X 至上游（sha）`）
+  - `config/paas-addons.list` 同步 +26（CI `check-addon-lists.sh` 強制與 `addons/` 目錄集合**嚴格相等**）
   - ⚠ `sh_document_management`／`Odoo_tool-device_borrow`／`Woow_odoo_acconting_enhance` 三個 mirror **不進 image**（ERP 沒裝）
-- [ ] 1.2 pip：`requirements` 加 spec §5 的聯集（15＋6），另 `fs_googledrivefs-2.4.4` wheel 從 snapshot repo 的 `cloud_link_gdrive/packages/` 裝
+  - ⚠ `cloud-addons.list` **不動**（ERP 模組不開放給 cloud-odoo 租戶）
+- [ ] 1.2 pip：**不能手改 `requirements-paas.txt`**（CI 每次 build 用 `generate-requirements.sh` 從各 addon manifest 的 `external_dependencies.python` 重產並覆寫）。唯一正路＝把相依寫進各 addon 自己的 manifest，且必須是 **pip 可安裝的名稱**（產生器把它當 pip 行；Odoo 18 `check_python_external_dependency` 用 `Requirement()` 解析，pip 名與 `==` spec 都合法）。依「逐模組 grep 實際 import」的 audit 決定：`PIL`→`Pillow`；`cloud_link` 補 fs／vuefinder-wsgi／munch／cachetools；`cloud_link_gdrive` 補 fs.googledrivefs==2.4.4（PyPI 有同版，取代 vendored wheel）＋google 家族；三個模組補 requests。install.sh 其餘套件無已裝模組 import，不搬。
 - [ ] 1.3 **不做** `http.py` ProxyFix patch（Phase 2 驗）
 - [ ] 1.4 build stg image（`deploy-stg` skill 的 image 路徑），記 tag
 - [ ] 1.5 sandbox（docker-desktop）用新 image 對**現行 `bitnami_odoo` 快照**跑全模組測試：
@@ -60,6 +61,7 @@ related:
   ```
   校驗：`pg_restore -l` 能列、tar 能 `-t`；記大小（預期 dump ≈ 數十 MB、filestore 1.9 GB）
 - [ ] 2.2 sandbox（Phase 1 image）建新 DB `woow_prod`；`pg_restore -l` 產清單、**刪 `EXTENSION vector` 那行**、`-L` 餵回；filestore 解到 `data_dir/filestore/woow_prod`
+  - ⚠ **沙盒的 postgres 是 `pgvector/pgvector:pg15`、prod 是 bitnami 17.6（無 vector）**（09-03 實測）⇒ 在沙盒「忘了略過 vector」也會成功，這步**不會自然被驗到**。要嘛臨時起一顆 bitnami 17.6 容器做 restore 對照，要嘛至少 assert `-L` 清單裡沒有 `EXTENSION - vector` 那行。另外 pg15 的 `pg_restore` 讀 pg17 產的 `-Fc` dump 可能拒絕新格式，先比 `pg_restore --version`。
 - [ ] 2.3 **neutralize**（restore 完、起 Odoo 前，直接 SQL）：`UPDATE ir_cron SET active=false`；`UPDATE ir_mail_server SET active=false`；`UPDATE fetchmail_server SET active=false`；`UPDATE payment_provider SET state='disabled'`；`web.base.url` 改 sandbox host
 - [ ] 2.4 `odoo -d woow_prod -u all --stop-after-init`（對齊 stock vs bitnami build）→ log 零 ERROR
 - [ ] 2.5 `odoo -d woow_prod -i woow_paas_platform --stop-after-init` → 記錄拉進來的 depends 清單、零 ERROR
