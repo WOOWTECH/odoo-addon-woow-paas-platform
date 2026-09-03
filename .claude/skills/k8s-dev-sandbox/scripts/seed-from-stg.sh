@@ -66,18 +66,44 @@ fi
 echo -e "${BLUE}[1/5] pg_dump from ${SRC_NAMESPACE}...${NC}"
 kubectl --context woow-k3s exec -n "$SRC_NAMESPACE" "$SRC_PG_POD" -- \
     pg_dump -U odoo -d "$SRC_DB" -F c -f "/tmp/stg.dump"
-echo -e "${GREEN}✓ Dumped to ${SRC_PG_POD}:/tmp/stg.dump${NC}"
+# 源頭側的 size／sha256 是後面每一段搬運的對照組——沒有它，「本機檔＝本機檔」的
+# 校驗零鑑別力（見 docs/tracking/pitfalls/kubectl-exec-stdout-tail-truncation-large-stream.md）。
+SRC_SIZE=$(kubectl --context woow-k3s exec -n "$SRC_NAMESPACE" "$SRC_PG_POD" -- stat -c %s /tmp/stg.dump)
+SRC_SHA=$(kubectl --context woow-k3s exec -n "$SRC_NAMESPACE" "$SRC_PG_POD" -- sha256sum /tmp/stg.dump | cut -d' ' -f1)
+echo -e "${GREEN}✓ Dumped to ${SRC_PG_POD}:/tmp/stg.dump (${SRC_SIZE} bytes, sha256 ${SRC_SHA:0:12}…)${NC}"
 
 # --- 2. cp dump 出來到本機 ---
 echo -e "${BLUE}[2/5] kubectl cp dump to local...${NC}"
 kubectl --context woow-k3s cp -c postgres "${SRC_NAMESPACE}/${SRC_PG_POD}:/tmp/stg.dump" "$DUMP_FILE"
-DUMP_SIZE=$(du -h "$DUMP_FILE" | cut -f1)
-echo -e "${GREEN}✓ Local dump size: ${DUMP_SIZE}${NC}"
+# 🔴 `kubectl cp`（＝exec stdout 串流）從 pod 拉 >~20 MB 會尾端截斷且 exit 0；截斷的 dump
+# `pg_restore -l` 照樣列完整 TOC，restore 卻「部分成功」。這裡用源頭 size＋sha256 對照，
+# 不相等就停，不要往下 drop target DB。
+LOCAL_SIZE=$(stat -f %z "$DUMP_FILE" 2>/dev/null || stat -c %s "$DUMP_FILE")
+LOCAL_SHA=$( (shasum -a 256 "$DUMP_FILE" 2>/dev/null || sha256sum "$DUMP_FILE") | cut -d' ' -f1)
+if [ "$LOCAL_SIZE" != "$SRC_SIZE" ] || [ "$LOCAL_SHA" != "$SRC_SHA" ]; then
+    echo -e "${RED}✗ Local dump does not match source: size ${LOCAL_SIZE} vs ${SRC_SIZE}, sha256 ${LOCAL_SHA:0:12}… vs ${SRC_SHA:0:12}…${NC}" >&2
+    echo -e "${RED}  kubectl exec/cp stdout 串流截斷（已知坑：docs/tracking/pitfalls/kubectl-exec-stdout-tail-truncation-large-stream.md）。${NC}" >&2
+    echo -e "${RED}  重跑一次通常不會好；dump 超過 ~20 MB 請改叢集內 pod-to-pod 搬運（同 doc 的修法 1）。target 尚未動到。${NC}" >&2
+    rm -f "$DUMP_FILE"
+    exit 1
+fi
+echo -e "${GREEN}✓ Local dump verified: ${LOCAL_SIZE} bytes, sha256 matches source${NC}"
 
 # --- 3. cp dump 進 target sandbox ---
 echo -e "${BLUE}[3/5] kubectl cp dump to ${TARGET_NAMESPACE}...${NC}"
 kubectl --context woow-k3s cp -c postgres "$DUMP_FILE" "${TARGET_NAMESPACE}/${TARGET_PG_POD}:/tmp/stg.dump"
-echo -e "${GREEN}✓ Uploaded to target${NC}"
+# 上傳方向目前沒觀察到截斷，但便宜的校驗照做；`pg_restore -f /dev/null` 是全讀（-l 只讀檔頭），
+# 這是「餵進 pg_restore 前」最後一道能證明 archive 完整的檢查——放在 drop DB 之前。
+TARGET_SHA=$(kubectl --context woow-k3s exec -n "$TARGET_NAMESPACE" "$TARGET_PG_POD" -- sha256sum /tmp/stg.dump | cut -d' ' -f1)
+if [ "$TARGET_SHA" != "$SRC_SHA" ]; then
+    echo -e "${RED}✗ Uploaded dump sha256 ${TARGET_SHA:0:12}… != source ${SRC_SHA:0:12}…; aborting before touching ${TARGET_DB}.${NC}" >&2
+    exit 1
+fi
+if ! kubectl --context woow-k3s exec -n "$TARGET_NAMESPACE" "$TARGET_PG_POD" -- pg_restore -f /dev/null /tmp/stg.dump; then
+    echo -e "${RED}✗ pg_restore -f /dev/null failed on target: archive incomplete or unreadable; aborting before touching ${TARGET_DB}.${NC}" >&2
+    exit 1
+fi
+echo -e "${GREEN}✓ Uploaded to target and verified (sha256 match, full-read OK)${NC}"
 
 # --- 4. drop and restore target DB ---
 echo -e "${BLUE}[4/5] pg_restore in ${TARGET_NAMESPACE}...${NC}"
@@ -116,18 +142,24 @@ TARGET_ODOO_POD=$(kubectl --context woow-k3s get pod -n "$TARGET_NAMESPACE" -l a
 
 if [ -n "$SRC_ODOO_POD" ] && [ -n "$TARGET_ODOO_POD" ]; then
     # tar pipe streams directly between pods (no intermediate disk).
-    # `|| true` because tar prints a benign "Unexpected EOF" on stream close
-    # despite all files transferring; the size check after this is the real
-    # smoke test.
+    # 🔴 源頭這一半仍是 exec stdout 串流：>~20 MB 會尾端截斷——tar 的 "Unexpected EOF"
+    # 就是截斷本身，不是良性訊息，所以不再 grep 掉、也不再 `|| true`。真正的判準是
+    # 下面「target 檔數／bytes 對源頭」；不相等就 fail-loud（DB 已 restore 完，但
+    # filestore 不完整照樣會讓 asset／logo 500，別讓它靜默成功）。
     kubectl --context woow-k3s exec -n "$SRC_NAMESPACE" "$SRC_ODOO_POD" -- \
         tar cf - -C "/root/.local/share/Odoo/filestore/${SRC_DB}" . \
       | kubectl --context woow-k3s exec -i -n "$TARGET_NAMESPACE" "$TARGET_ODOO_POD" -- \
-        tar xf - -C "/root/.local/share/Odoo/filestore/${TARGET_DB}/" \
-      2>&1 | grep -v "Unexpected EOF" || true
-    SIZE=$(kubectl --context woow-k3s exec -n "$TARGET_NAMESPACE" "$TARGET_ODOO_POD" -- \
-        du -sh "/root/.local/share/Odoo/filestore/${TARGET_DB}/" 2>/dev/null \
-        | cut -f1 || echo "?")
-    echo -e "${GREEN}✓ filestore synced (size: ${SIZE})${NC}"
+        tar xf - -C "/root/.local/share/Odoo/filestore/${TARGET_DB}/" || true
+    SRC_FS=$(kubectl --context woow-k3s exec -n "$SRC_NAMESPACE" "$SRC_ODOO_POD" -- \
+        sh -c "cd /root/.local/share/Odoo/filestore/${SRC_DB} && echo \$(find . -type f | wc -l) \$(du -sb . | cut -f1)")
+    DST_FS=$(kubectl --context woow-k3s exec -n "$TARGET_NAMESPACE" "$TARGET_ODOO_POD" -- \
+        sh -c "cd /root/.local/share/Odoo/filestore/${TARGET_DB} && echo \$(find . -type f | wc -l) \$(du -sb . | cut -f1)")
+    if [ "$SRC_FS" != "$DST_FS" ]; then
+        echo -e "${RED}✗ filestore mismatch: source (files bytes) = ${SRC_FS}, target = ${DST_FS}${NC}" >&2
+        echo -e "${RED}  exec stdout 串流截斷（docs/tracking/pitfalls/kubectl-exec-stdout-tail-truncation-large-stream.md）；DB 已 restore、filestore 不完整。${NC}" >&2
+        exit 1
+    fi
+    echo -e "${GREEN}✓ filestore synced and verified (files bytes: ${DST_FS})${NC}"
 else
     echo -e "${YELLOW}⚠ skipped filestore sync (could not resolve odoo pods)${NC}"
 fi
