@@ -52,7 +52,8 @@ related:
   - **離開條件**：差集為空（照 #994 的 base/head 對照法，兩次都跑、逐 class 比對名字不比條數）
 - [x] 1.6 `odoo -u woow_paas_platform` 對現行 DB 起得來、`/woow` 首頁 200、模組列表多出 28 個 `uninstalled`
   → ✅ head 沙盒 custom-addons 36 目錄、28/28 在 ir_module_module（26 uninstalled＋2 installed＝ecpay）、/web/health 200、/woow → login 200
-- [ ] 1.7 PR（⛔ 勿代 merge）→ Eugene 合 → 依 `/woow:deploy` 發版流程上 prod（**image 先上、DB 不動**）
+- [x] 1.7 PR（⛔ 勿代 merge）→ Eugene 合 → 依 `/woow:deploy` 發版流程上 prod（**image 先上、ERP addon 不裝**）
+  → ✅ 2026-09-03：paas-odoo-ci#127 merge → tag `v18.0.1.0.177`（develop d1e1633c）→ paas-odoo-ci approval issue #128 `/approve` → phase 2 run 7095 三行錨點全對 → image `paas-odoo:20260903.0732`（digest `sha256:4f60f430…af8e`）→ CD PR-A paas-app-bundle-cd#126（三處 pin＋SKIP=no）／PR-B #127（切回 yes）皆 merge；prod pod 兩容器 digest 4f60f430… 五方一致、custom-addons 36 目錄、抽查 9 個 ERP addon 在 `ir_module_module` 皆 `uninstalled`、`/web/health` 200。⚠ 「DB 不動」不成立：同版帶 #993 migration `.177` 與相依 addon `payment_ecpay_ecpg` 3.0→3.5，故走 SOP 兩段式 `-u all`（判準與實證見 `docs/guides/deployment/prod-release-sop.md` §5.1）；ERP addon 本身零安裝。Phase 2 進入條件（跑穩 ≥1 天）自 08:33Z 起算。
 
 ### Phase 2 — sandbox 排練（決定性驗證）
 

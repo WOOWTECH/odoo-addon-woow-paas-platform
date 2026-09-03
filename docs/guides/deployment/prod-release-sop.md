@@ -254,7 +254,7 @@ grep -rnE 'version:|tag:|digest:|image:' /tmp/paas-app-bundle-cd/*/fleet.yaml /t
 > - **變更落在相依 addon**（`sh_subscription` 系列、`ecpay` 系列等，見 `src/__manifest__.py` 的 `depends`）→ **gate 不會碰它們**，仍須走下方兩段式。
 > - **判斷方法**：`git diff <上一版 tag>..<本次 tag> --name-only | grep -v '^src/'`——命中非本 addon 的 addon 路徑就走兩段式；不確定就當作要走（多跑一次 `-u` 是冪等的，漏跑是靜默失效）。
 >
-> ⚠ **未驗**：`SKIP="no"` 時 Bitnami entrypoint **實際會升哪些模組**（全部已安裝模組？只有 `-u` 清單？）**沒有人實測過**。上表的「涵蓋所有已安裝模組」是依 entrypoint 語意的推斷，不是實測結論。真要依賴這條做決策前請先實測並回填。
+> ✅ **已驗（2026-09-03，.176→.177 發版）**：`SKIP="no"` 時 Bitnami entrypoint 跑的是 `odoo_execute --update=all`（＝ `-u all`，只動已安裝模組）——prod pod 內實讀 `/opt/bitnami/scripts/libodoo.sh` 第 179／208 行（兩處分支同一指令）。首例實證：prod `payment_ecpay_ecpg` 18.0.0.3.0、image 內 18.0.0.3.5（含 `data/ir_cron.xml`、`mail_template.xml`、`security.xml` 新 group、ACL、新 model `ecpay.callback.log`）；gate 的 `-u woow_paas_platform` 跑完後 log 出現 `ERROR odoo.modules.registry: Model ecpay.callback.log has no table`（**這行就是「相依 addon 沒被升」的可觀測症狀**，gate 不會因它失敗），主容器 `-u all` 103.7s 後 DB 讀到 ecpg 18.0.0.3.5、表／group／cron／ACL 全落地、boot log ERROR 0。CD PR：paas-app-bundle-cd#126（PR-A）／#127（PR-B）。
 >
 > **兩段式（相依 addon 有 seed 變更時）**：
 > **PR-A（promote）**：換 `image.tag` ＋ `image.digest` ＋ **gate initContainer 的 `image`**（三處同改，S1 陷阱），並設 `ODOO_SKIP_MODULES_UPDATE="no"`（boot 自動跑 `-u`）
@@ -286,7 +286,7 @@ grep -rnE 'version:|tag:|digest:|image:' /tmp/paas-app-bundle-cd/*/fleet.yaml /t
                                                          Image addon version:
 5.〔人類操作者親跑〕建發版前 DB snapshot：pg + data      兩顆皆 readyToUse=true
    兩顆 PVC 都要，命名                                   且 markRemoved=false
-   paas-odoo-{pg,data}-pre{版號}-{YYYYMMDD}              （只看 list 有東西會誤判）
+   snap-paas-odoo-{pg,fs}-pre{版號}-{YYYYMMDD}           （只看 list 有東西會誤判）
    未確認 readyToUse 前不得進步驟 6 —— 見 §5.1.1
 6. PR-A（promote）：paas-app-bundle-cd 開 branch，改     git -C cd diff 必須同時出現
    paas-odoo/values-prod.yaml 的 三處 image pin：        tag: / digest: / gate 的 image:
@@ -334,7 +334,39 @@ grep -rnE 'version:|tag:|digest:|image:' /tmp/paas-app-bundle-cd/*/fleet.yaml /t
 | PostgreSQL 資料　`pvc-9aa6ed19-5798-40b5-8689-7a7ab910a67d` | `paas-odoo-pg-pre78-20260725` | 200 MB |
 | Odoo filestore data | `paas-odoo-data-pre78-20260725` | 13 MB |
 
-**命名慣例**：`paas-odoo-{pg,data}-pre{目標版號}-{YYYYMMDD}`（例：2026-07-25 升 `.78` → `paas-odoo-pg-pre78-20260725`）。讓「這顆對應哪一次發版」自解釋 —— 事故當下沒有時間猜哪顆能用。
+**命名慣例**：`snap-paas-odoo-{pg,fs}-pre{目標版號}-{YYYYMMDD}`（例：2026-09-03 升 `.177` → `snap-paas-odoo-pg-pre177-20260903`／`snap-paas-odoo-fs-pre177-20260903`）。讓「這顆對應哪一次發版」自解釋 —— 事故當下沒有時間猜哪顆能用。⚠ 本節先前寫 `paas-odoo-{pg,data}-…`，但叢集上 2026-07-16 起的 8 顆（pre68／73／109／118）實際都是 `snap-…-{pg,fs}-…`，只有 07-25 那顆 `paas-odoo-pg-pre78-20260725` 例外——2026-09-03 對齊成叢集多數形式，`grep pre{版號}` 兩種都抓得到。
+
+**建立方式（Longhorn 原生 Snapshot CR；叢集沒有 CSI `VolumeSnapshot` CRD，`kubectl get volumesnapshot` 會回 "doesn't have a resource type"）**——先由 PVC 查出 Longhorn volume 名，再 apply 兩顆：
+
+```bash
+# 1) PVC → Longhorn volume 名（＝ PV 的 csi.volumeHandle，形如 pvc-<uuid>）
+for p in data-paas-odoo-postgresql-0 paas-odoo; do
+  pv=$(kubectl --context woow-k3s -n paas-system get pvc "$p" -o jsonpath='{.spec.volumeName}')
+  echo "$p → $(kubectl --context woow-k3s get pv "$pv" -o jsonpath='{.spec.csi.volumeHandle}')"
+done
+# 2) 兩顆一次 apply（volume 填上一步的值；2026-09-03 實值：pg=pvc-9aa6ed19-…, fs=pvc-d226804b-…）
+kubectl --context woow-k3s -n longhorn-system apply -f - <<'EOF'
+apiVersion: longhorn.io/v1beta2
+kind: Snapshot
+metadata:
+  name: snap-paas-odoo-pg-pre<版號>-<YYYYMMDD>
+  namespace: longhorn-system
+spec:
+  createSnapshot: true
+  volume: <pg 的 pvc-uuid>
+---
+apiVersion: longhorn.io/v1beta2
+kind: Snapshot
+metadata:
+  name: snap-paas-odoo-fs-pre<版號>-<YYYYMMDD>
+  namespace: longhorn-system
+spec:
+  createSnapshot: true
+  volume: <filestore 的 pvc-uuid>
+EOF
+```
+
+`readyToUse=true` 通常 30 秒內；驗法見下方。
 
 > **🔴 建完必須驗 `readyToUse=true` 才算數 ——「有一顆 snapshot」≠「有還原點」。**
 >
@@ -1059,7 +1091,7 @@ Fleet GitOps 的 rollback = **把 pin 值改回上一個已知良好版本**：
 [ ] 2.5 無回歸超集 gate（§9 坑 #11）：新 image/chart 是 prod 現役的「超集」
        （`git merge-base --is-ancestor <現役來源 commit> <新來源 commit>`；版號單調不退；chart 模板 wiring 未砍）
 [ ] 2.6（paas-odoo）發版前 DB snapshot —— 【人類操作者親跑，agent 不代勞】
-       建 paas-odoo-{pg,data}-pre{版號}-{YYYYMMDD} 兩顆（PostgreSQL + filestore data）
+       建 snap-paas-odoo-{pg,fs}-pre{版號}-{YYYYMMDD} 兩顆（PostgreSQL + filestore data；Longhorn Snapshot CR，範本見 §5.1.1）
        agent 職責僅止於：確認兩顆 readyToUse=true 且 markRemoved=false 才可繼續；
        未確認 = STOP，不得進 step 3（prod DB 無離線備份，snapshot 是唯一還原錨點，§5.1.1）
 [ ] 3. clone/pull paas-app-bundle-cd，改對應 <component>/values-<env>.yaml image.tag
