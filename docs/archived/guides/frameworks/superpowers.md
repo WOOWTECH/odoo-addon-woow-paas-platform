@@ -1,10 +1,12 @@
 ---
 title: superpowers framework (obra/superpowers)
-category: guides
-status: active
+category: archived
+status: archived
 created: 2026-05-19
 updated: 2026-05-19
 ---
+
+> **已退役**：superpowers（obra）plugin 已退役（2026-09-03 定案），本檔留作考古；現行框架＝mattpocock/skills，消費規則見 `docs/agents/`。
 
 # superpowers — Claude Code Plugin
 

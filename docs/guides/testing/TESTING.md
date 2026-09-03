@@ -71,23 +71,49 @@ From the odoo-bin directory:
 ./odoo-bin -c odoo.conf --test-enable --test-tags woow_paas_platform --stop-after-init
 ```
 
-> 註：`--test-tags woow_paas_platform`（tag 位置）與 `--test-tags /woow_paas_platform`（module 位置，CLAUDE.md 用法）語意等價——Odoo 自動把模組名加為每個 test class 的 tag，兩種寫法都選中本模組全部測試。
+> 註：`--test-tags woow_paas_platform`（tag 位置）與 `--test-tags /woow_paas_platform`（module 位置，CI `odoo-tests.yml` 與 plugin `test.sh` 用法）語意等價——Odoo 自動把模組名加為每個 test class 的 tag，兩種寫法都選中本模組全部測試。
 
 ### Run in K8s Dev Sandbox
 
-If using the K8s dev sandbox:
+沙盒內跑模組測試（推薦；`--keep-on-fail` 失敗時保留沙盒）：
 
 ```bash
-# 沙盒內跑模組測試（推薦）
-/woow-dev:k8s-dev-sandbox test <sandbox-name> --module woow_paas_platform
-
-# 或手動在 Odoo pod 內執行（NS=dev-sandbox-<slug>、DB=woow_<branch>）
-NS=dev-sandbox-<slug>; ODOO=$(kubectl get deploy -n $NS -o name | grep odoo | head -1)
-kubectl exec -n $NS $ODOO -- \
-  odoo -d woow_<branch> --test-enable --test-tags woow_paas_platform --stop-after-init
+/woow-dev:k8s-dev-sandbox test <slug> --module woow_paas_platform
 ```
 
+手動在 Odoo pod 內執行時，三個旗標不可省（來源：plugin `scripts/test.sh` 與 `scripts/shell.sh` 檔頭）：
+`-c /etc/odoo/odoo.conf`（否則 db 退回 local socket、記憶體上限退回內建預設而 MemoryError）、
+`--http-port=18069 --gevent-port=18072`（主 process 佔 8069，否則 Address already in use）。
+
+```bash
+CTX=<docker-desktop|woow-k3s>; SLUG=<slug>; NS="dev-sandbox-${SLUG}"; DB="woow_<branch>"
+ODOO=$(kubectl --context "$CTX" get deploy -n "$NS" \
+  -l "app.kubernetes.io/instance=${SLUG},app.kubernetes.io/component=odoo" \
+  -o jsonpath='{.items[0].metadata.name}')
+
+# 全模組測試（等同 plugin test）
+kubectl --context "$CTX" exec -n "$NS" "deploy/${ODOO}" -- \
+  odoo -c /etc/odoo/odoo.conf -d "$DB" -u woow_paas_platform \
+  --test-enable --test-tags /woow_paas_platform --stop-after-init \
+  --http-port=18069 --gevent-port=18072 --log-level=test
+
+# 只升級模組、不跑測試（改 python / XML / security 後）
+kubectl --context "$CTX" exec -n "$NS" "deploy/${ODOO}" -- \
+  odoo -c /etc/odoo/odoo.conf -d "$DB" -u woow_paas_platform --stop-after-init \
+  --http-port=18069 --gevent-port=18072
+
+# 單一 test class（`模組.檔名:Class`；tag 位置寫法，與 /module 語意見上註）
+kubectl --context "$CTX" exec -n "$NS" "deploy/${ODOO}" -- \
+  odoo -c /etc/odoo/odoo.conf -d "$DB" --test-enable \
+  --test-tags woow_paas_platform.test_cloud_app_template:TestCloudAppTemplate \
+  --stop-after-init --http-port=18069 --gevent-port=18072 --log-level=test
+```
+
+> `-u` 在沒裝模組的 DB 上是 no-op 且回 exit 0（「0 tests ran」假綠）；plugin `test.sh` 會攔，手動跑要自己看 log 的 `Ran N tests`。
+
 ### Run Specific Test Class
+
+沙盒內的 pod-exec 版本見上節。
 
 ```bash
 ./odoo-bin -c odoo.conf --test-enable \
