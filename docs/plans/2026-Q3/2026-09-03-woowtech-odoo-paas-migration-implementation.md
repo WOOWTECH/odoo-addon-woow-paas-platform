@@ -27,7 +27,7 @@ related:
 - [x] gitea `mirror-internal/woowtech-erp-addons-snapshot` 21 個模組（`3a572a32a92e`），css 與 prod byte-identical
 - [x] 28 個活模組 tar＋SHA256 存證（`erp-live-addons-snapshot/`）
 - [x] spec 核准（PR #1003 merged）
-- [ ] Gitea 追蹤單（本檔 PR 開出後開）
+- [x] Gitea 追蹤單 #1032
 
 ### Phase 1 — image（可先行，對現行 paas DB 零行為變化）
 
