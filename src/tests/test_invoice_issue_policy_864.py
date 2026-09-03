@@ -475,15 +475,39 @@ class TestStaleManualInvoiceAlert864(TransactionCase):
         self.Move._cron_alert_stale_manual_invoices()
         self.assertTrue(self._incident_of(old))
 
-    def test_second_run_is_idempotent(self):
-        """重跑只累加 occurrences，不會多一筆 incident、也不重複轟炸 activity。"""
+    def test_second_run_does_not_realert_the_same_invoice(self):
+        """重跑不重複告警同一張發票：不多一筆 incident、occurrences 不再累加。
+
+        🔴 **#990 改變了這一格的語意，這不是把測試改綠**：原本每個 tick 都對
+        每筆逾期 move 重呼一次 `_log`（所以 occurrences 會累加到 2），而那正是
+        這張單要修的 N+1——N 筆 move ＝ N 條獨立交易，每天重來一次。
+
+        #990 之後已告警的 move 由 `woow_aging_alerted_at` 帶出掃描 domain
+        ⇒ 第二輪根本不會再碰它 ⇒ `occurrences` 停在 1。**資訊沒有損失**：
+        「這張發票逾期多久沒人處理」改用 incident 的 `first_seen_at` 算年齡，
+        ⛔ 不需要靠每日累加（累加的代價就是那個 N+1）。
+
+        仍然必須成立的三件事沒有變：不得產生第二筆 incident（`external_ref`
+        UNIQUE）、不得重複轟炸 activity（summary 即 dedup 鍵）、
+        以及第二輪**確實有跑**（用 marker 證明它不是因為 cron 沒執行而綠）。
+        """
         move = self._aged_manual_invoice(days_old=10)
         self.Move._cron_alert_stale_manual_invoices()
         first_activities = self._activity_count()
+
+        move.invalidate_recordset(['woow_aging_alerted_at'])
+        self.assertTrue(
+            move.woow_aging_alerted_at,
+            '前提檢查：第一輪必須標上 marker，否則下面的「第二輪不重跑」是恆真')
+
         self.Move._cron_alert_stale_manual_invoices()
+
         row = self._incident_of(move)
         self.assertTrue(row)
-        self.assertEqual(row[2], 2, 'upsert 應只把 occurrences 加到 2')
+        self.assertEqual(
+            row[2], 1,
+            '#990：已告警的 move 離開 domain ⇒ 第二輪不再 _log ⇒ '
+            'occurrences 停在 1（改前是 2，見本測試 docstring）')
         with self.env.registry.cursor() as cr:
             cr.execute(
                 'SELECT COUNT(*) FROM woow_billing_incident '
