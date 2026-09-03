@@ -34,19 +34,24 @@ related:
 **進入條件**：Phase 0 全勾。
 **產出**：`paas-odoo-ci` 新 image，內含 ERP 28 個自製模組＋pip 依賴。
 
-- [ ] 1.1 在 `paas-odoo-ci` 開分支，**照該 repo 的規矩 vendor**（不是 build 時 clone——`Dockerfile:5` 是 `COPY ./addons/` 全量，沒有任何 clone 步驟；權威見 paas-odoo-ci `CLAUDE.md` §Addon 管理架構）：
+- [x] 1.1 在 `paas-odoo-ci` 開分支，**照該 repo 的規矩 vendor**（不是 build 時 clone——`Dockerfile:5` 是 `COPY ./addons/` 全量，沒有任何 clone 步驟；權威見 paas-odoo-ci `CLAUDE.md` §Addon 管理架構）：
+  → ✅ 09-03 paas-odoo-ci PR #127 commit 355a1834（26 模組，5 mirror＋21 snapshot@3a572a32）
   - 26 個模組目錄複製進 `addons/`（5 個從 gitea mirror 的本機 clone、21 個從 `woowtech-erp-addons-snapshot`），commit message 記每個來源 repo＋sha（該 repo 慣例 `chore: 同步 X 至上游（sha）`）
   - `config/paas-addons.list` 同步 +26（CI `check-addon-lists.sh` 強制與 `addons/` 目錄集合**嚴格相等**）
   - ⚠ `sh_document_management`／`Odoo_tool-device_borrow`／`Woow_odoo_acconting_enhance` 三個 mirror **不進 image**（ERP 沒裝）
   - ⚠ `cloud-addons.list` **不動**（ERP 模組不開放給 cloud-odoo 租戶）
-- [ ] 1.2 pip：**不能手改 `requirements-paas.txt`**（CI 每次 build 用 `generate-requirements.sh` 從各 addon manifest 的 `external_dependencies.python` 重產並覆寫）。唯一正路＝把相依寫進各 addon 自己的 manifest，且必須是 **pip 可安裝的名稱**（產生器把它當 pip 行；Odoo 18 `check_python_external_dependency` 用 `Requirement()` 解析，pip 名與 `==` spec 都合法）。依「逐模組 grep 實際 import」的 audit 決定：`PIL`→`Pillow`；`cloud_link` 補 fs／vuefinder-wsgi／munch／cachetools；`cloud_link_gdrive` 補 fs.googledrivefs==2.4.4（PyPI 有同版，取代 vendored wheel）＋google 家族；三個模組補 requests。install.sh 其餘套件無已裝模組 import，不搬。
-- [ ] 1.3 **不做** `http.py` ProxyFix patch（Phase 2 驗）
-- [ ] 1.4 build stg image（`deploy-stg` skill 的 image 路徑），記 tag
-- [ ] 1.5 sandbox（docker-desktop）用新 image 對**現行 `bitnami_odoo` 快照**跑全模組測試：
+- [x] 1.2 pip：**不能手改 `requirements-paas.txt`**（CI 每次 build 用 `generate-requirements.sh` 從各 addon manifest 的 `external_dependencies.python` 重產並覆寫）。唯一正路＝把相依寫進各 addon 自己的 manifest，且必須是 **pip 可安裝的名稱**（產生器把它當 pip 行；Odoo 18 `check_python_external_dependency` 用 `Requirement()` 解析，pip 名與 `==` spec 都合法）。依「逐模組 grep 實際 import」的 audit 決定：`PIL`→`Pillow`；`cloud_link` 補 fs／vuefinder-wsgi／munch／cachetools；`cloud_link_gdrive` 補 fs.googledrivefs==2.4.4（PyPI 有同版，取代 vendored wheel）＋google 家族；三個模組補 requests。install.sh 其餘套件無已裝模組 import，不搬。
+  → ✅ commit d7f6ae25；pip dry-run 一次解開；build log pip 層實跑 42s
+- [x] 1.3 **不做** `http.py` ProxyFix patch（Phase 2 驗）
+- [x] 1.4 build stg image（`deploy-stg` skill 的 image 路徑），記 tag
+  → ✅ head `paas-odoo-stg:20260903.0547`（run 7058）、base `paas-odoo-stg:20260903.0550`（main，run 7059；兩者 woow_paas_platform 同版 18.0.1.0.177／tests sha 41994ee697dc）
+- [x] 1.5 sandbox（docker-desktop）用新 image 對**現行 `bitnami_odoo` 快照**跑全模組測試：
+  → ✅ woow-k3s `dev-sandbox-erp-{base,head}`（本機 docker 對 jcr-prod 憑證失效，改在叢集跑）：兩邊各 **3844 支、14 failed＋11 error、25 支紅逐支同名、差集空**（log `phase1-test-erp-{base,head}.log`、清單 `phase1-red-*.txt`、摘要 `phase1-diff-summary.txt`）
   - base：現行 image → `N failed` 清單
   - head：新 image → 清單
   - **離開條件**：差集為空（照 #994 的 base/head 對照法，兩次都跑、逐 class 比對名字不比條數）
-- [ ] 1.6 `odoo -u woow_paas_platform` 對現行 DB 起得來、`/woow` 首頁 200、模組列表多出 28 個 `uninstalled`
+- [x] 1.6 `odoo -u woow_paas_platform` 對現行 DB 起得來、`/woow` 首頁 200、模組列表多出 28 個 `uninstalled`
+  → ✅ head 沙盒 custom-addons 36 目錄、28/28 在 ir_module_module（26 uninstalled＋2 installed＝ecpay）、/web/health 200、/woow → login 200
 - [ ] 1.7 PR（⛔ 勿代 merge）→ Eugene 合 → 依 `/woow:deploy` 發版流程上 prod（**image 先上、DB 不動**）
 
 ### Phase 2 — sandbox 排練（決定性驗證）
