@@ -3,7 +3,7 @@ title: woowtech-odoo → paas 移植（基底翻轉）— implementation
 category: plans
 status: draft
 created: 2026-09-03T04:11:22Z
-updated: 2026-09-04T03:45:00Z
+updated: 2026-09-04T05:00:00Z
 related:
   - ./2026-09-03-woowtech-odoo-paas-migration-design.md
   - https://git-prod.woowtech.io/odoo-addons/woow_paas_platform/issues/994
@@ -59,7 +59,7 @@ related:
   → 合併後：`build-image.yml` 手動 dispatch **`addon_ref=v18.0.1.0.177`**（addon 無版號變化，不必發平台版；pitfall ci-addon-ref-empty-drifting-default-branch）→ `/approve` → CD 三處 pin 同進同退（`SKIP=yes` 即可，新模組在 prod 只是 uninstalled）→ **Phase 2 重跑 2.4–2.6**（`dev-sandbox-p2aiot` 換 image 重 restore）
   → `ai_livechat_gt`／`ai_mail_gt` 裁定**不 vendor**（見 2.5／4.4）
   → ✅ 09-04：snapshot#1 23:56Z／paas-odoo-ci#129 23:57Z 合 → dispatch run 7237 → approval #132（eugene 03:16:38Z）→ run 7249 build 成功，image **`paas-odoo:20260904.0150`** digest `sha256:228e339e793c1b1d690efdd279d341bece149e3af1272d4425de7762e8567fe4`（三行錨點對 v18.0.1.0.177、registry HEAD 複驗一致）
-- [ ] 1.8b CD promote：paas-app-bundle-cd **PR #129**（三處 pin → 20260904.0150／228e339e…，`SKIP=yes`，同版換圖走 gate skip 分支）→ Eugene 合（先合 #128 等兩顆 operator pod Ready 再合）→ 驗收：pod imageID 228e339e…、gate log「版本一致 skip」、/web/health 200、BundleDeployment nonModified
+- [x] 1.8b CD promote：paas-app-bundle-cd **PR #129**（三處 pin → 20260904.0150／228e339e…，`SKIP=yes`，同版換圖走 gate skip 分支）→ ✅ 09-04 04:45:24Z 合（#128 先於 04:44:33Z 合，operator 兩顆 pod c05a6ffe… Ready 後）→ 驗收 04:53Z：pod `paas-odoo-7f7b7c84c-m5m5r` 主容器與 gate imageID **228e339e…**、gate log `image=18.0.1.0.177 db=18.0.1.0.177 → 版本一致 skip`、主容器 ERROR 0／81 modules 0 queries、/web/health 200、/woow 303、bundle 1/1 nonModified=true、env SKIP=yes。**Phase 1 全部完成：prod 現跑 image 含全部 29 個 ERP 模組。**
 
 ### Phase 2 — sandbox 排練（決定性驗證）
 
@@ -130,7 +130,7 @@ related:
 
 ## 驗證
 
-- [x] Phase 1：base/head 差集為空（log 留 sibling 目錄）；1.8 image 已建，1.8b CD promote 待合
+- [x] Phase 1：base/head 差集為空（log 留 sibling 目錄）；1.8 image 已建、1.8b prod 已驗（09-04 04:53Z）
 - [x] Phase 2：2.6 全項有證據、2.8 rollback 演練通過、耗時已記（09-03 條件式 → 09-04 以 image 20260904.0150 重跑 2.4–2.6 ✅ 離開）
 - [ ] Phase 3：3.4 還原驗證通過、sha256 表已填
 - [ ] Phase 4：4.8 全綠、rollback 三段各自能退（至少 4.6 那段在 Phase 2 演練過）
