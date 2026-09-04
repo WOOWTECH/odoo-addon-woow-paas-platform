@@ -26,6 +26,11 @@ on:
     # 02:00 台北（UTC+8）＝ 18:00 UTC 前一日。排程只在**預設分支**上跑（本 repo ＝ develop）。
     - cron: "0 18 * * *"
   workflow_dispatch:
+    inputs:
+      image:
+        description: "覆寫測試用 image（留空＝paas-odoo-ci:latest）。發版 pre-flight 可填 paas-odoo:latest 或 paas-odoo:<tag>"
+        required: false
+        default: ""
 
 env:
   JCR: artifactory-jcr-artifactory-nginx.jfrog.svc.cluster.local
@@ -64,14 +69,34 @@ jobs:
             docker login "${JCR}" -u "${{ secrets.JCR_USERNAME }}" --password-stdin
 
       - name: Pull paas-odoo image
+        env:
+          IMAGE_INPUT: ${{ inputs.image }}
         run: |
-          IMG=""
-          for CAND in "${JCR}/woow-paas-docker-local/paas-odoo:latest" \
-                      "${JCR}/woow-paas-docker-local/paas-odoo-stg:latest"; do
-            if docker pull "$CAND"; then IMG="$CAND"; break; fi
-          done
-          [ -n "$IMG" ] || { echo "::error::拉不到 paas-odoo image"; exit 1; }
-          echo "IMG=$IMG" >> "$GITHUB_ENV"
+          # 無斜線的相對名稱會補上平台 JCR 路徑；含斜線視為完整 image ref，
+          # 原樣使用，避免把 registry/repository 再 prefix 一次。
+          case "${IMAGE_INPUT}" in
+            "")  IMG="${JCR}/woow-paas-docker-local/paas-odoo-ci:latest" ;;
+            */*) IMG="${IMAGE_INPUT}" ;;
+            *)   IMG="${JCR}/woow-paas-docker-local/${IMAGE_INPUT}" ;;
+          esac
+          echo "Resolved test image: ${IMG}"
+
+          if ! docker pull "${IMG}"; then
+            echo "::error::拉不到測試 image ${IMG}。fallback 已被刻意移除，理由見 #1035：fallback 到 prod/stg image 會讓 vendored drift 再度隱形。修法：回 paas-odoo-ci 重跑 main build，確認 paas-odoo-ci:latest 存在後再重跑。"
+            exit 1
+          fi
+
+          if ! REPO_DIGEST=$(docker inspect --format '{{index .RepoDigests 0}}' "${IMG}"); then
+            echo "::error::已 pull ${IMG}，但無法解析 RepoDigest；拒絕用不可對帳的 image 繼續測試。"
+            exit 1
+          fi
+          if [ -z "${REPO_DIGEST}" ] || [ "${REPO_DIGEST}" = "<no value>" ]; then
+            echo "::error::已 pull ${IMG}，但 RepoDigest 為空；拒絕用不可對帳的 image 繼續測試。"
+            exit 1
+          fi
+          echo "Resolved RepoDigest: ${REPO_DIGEST}"
+          echo "::notice title=odoo-tests image RepoDigest::${REPO_DIGEST}"
+          echo "IMG=${IMG}" >> "$GITHUB_ENV"
 
       - name: 起 postgres + odoo（預設 bridge）
         run: |
