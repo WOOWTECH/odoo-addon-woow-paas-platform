@@ -53,7 +53,7 @@ websocket／SPDY 都會；不是程序提早結束（尾端加 `sleep` 無效）
 
 ## 波及範圍
 
-- `.claude/skills/k8s-dev-sandbox/scripts/seed-from-stg.sh` 第 2 步 `kubectl cp` 從 stg pod 拉 dump 到本機＝同一條路徑；stg dump 超過 ~20 MB 即會截斷（restore 會報 end of file，不靜默，但要知道原因不在 dump 本身）。待改：改成叢集內 pod-to-pod 或加 `pg_restore -f /dev/null` 驗證。
+- `.claude/skills/woow-e2e-fixtures/scripts/seed-from-stg.sh` 第 2 步 `kubectl cp` 從 stg pod 拉 dump 到本機＝同一條路徑；stg dump 超過 ~20 MB 即會截斷（restore 會報 end of file，不靜默，但要知道原因不在 dump 本身）。待改：改成叢集內 pod-to-pod 或加 `pg_restore -f /dev/null` 驗證。
 - 移植 plan Phase 2.1／Phase 3／Phase 4 的搬運步驤（已在 plan 內改寫）。
 - `docs/guides/testing/odoo-sandbox-ci-local-two-track-test.md` 的 `tar | kubectl exec -i` 是上傳方向，實測未受影響。
 

@@ -5290,7 +5290,7 @@ PROVISION_SENTINEL_ALLOWLIST = {
     PROVISION_SENTINEL_DEF,                      # sentinel 的定義處
     "src/controllers/paas.py",                   # marketplace 下單
     "src/controllers/ha_paas.py",                # HA provision（auth=none + Bearer）
-    ".claude/skills/k8s-dev-sandbox/scripts/e2e-seed-reset-button.sh",   # odoo shell seed
+    ".claude/skills/woow-e2e-fixtures/scripts/e2e-seed-reset-button.sh",   # odoo shell seed
 }
 PROVISION_SENTINEL_ALLOW_PREFIXES = ("src/tests/",)
 # 判準的錨點。三個一起找是刻意的：只找函式名的話，把 sentinel 改名成別的字

@@ -40,7 +40,7 @@ open http://localhost:8080          # login: admin / admin
 /woow-dev:k8s-dev-sandbox destroy <sandbox-name> --context docker-desktop    # 銷毀
 ```
 
-> in-repo `.claude/skills/k8s-dev-sandbox/` 只剩 woow 專屬 fixture／clone helper：
+> in-repo `.claude/skills/woow-e2e-fixtures/` 只剩 woow 專屬 fixture／clone helper：
 > `scripts/{e2e-seed,e2e-seed-reset-button,seed-from-stg}.sh`（生命週期與 test／extend 都在 plugin；測試通過後的 e2e seed 由 `.sandbox/post-test.sh` hook 接手，帶 `WOOW_E2E_SEED=1`）。
 
 ## Running Tests

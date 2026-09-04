@@ -27,7 +27,7 @@
  *
  * 前置（詳見 README.md）：
  *   1. sandbox 跑著且跑的是含 #460 S1 的程式碼
- *   2. bash .claude/skills/k8s-dev-sandbox/scripts/e2e-seed-reset-button.sh <slug> --context <ctx>
+ *   2. bash .claude/skills/woow-e2e-fixtures/scripts/e2e-seed-reset-button.sh <slug> --context <ctx>
  *   3. export SANDBOX_BASE_URL=<sandbox 對外 URL>
  */
 import { test, expect, Page } from '@playwright/test';
@@ -91,7 +91,7 @@ function loadFixture(): Fixture {
   if (!fs.existsSync(FIXTURE_PATH)) {
     throw new Error(
       `Fixture manifest not found at ${FIXTURE_PATH}. ` +
-        'Run .claude/skills/k8s-dev-sandbox/scripts/e2e-seed-reset-button.sh first.'
+        'Run .claude/skills/woow-e2e-fixtures/scripts/e2e-seed-reset-button.sh first.'
     );
   }
   return JSON.parse(fs.readFileSync(FIXTURE_PATH, 'utf-8')) as Fixture;

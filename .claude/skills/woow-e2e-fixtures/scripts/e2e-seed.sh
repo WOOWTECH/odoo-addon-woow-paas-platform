@@ -13,7 +13,7 @@
 #      'browser-e2e-skill' 對齊，否則 spec 找不到列。改其一就要同步另一邊。
 #
 # Usage:
-#   .claude/skills/k8s-dev-sandbox/scripts/e2e-seed.sh [NAME] [OPTIONS]
+#   .claude/skills/woow-e2e-fixtures/scripts/e2e-seed.sh [NAME] [OPTIONS]
 #
 # Arguments:
 #   NAME                Sandbox name (slug). If omitted, auto-detect from current branch.
@@ -30,9 +30,9 @@
 #   -h, --help          Show usage.
 #
 # Examples:
-#   .claude/skills/k8s-dev-sandbox/scripts/e2e-seed.sh
-#   .claude/skills/k8s-dev-sandbox/scripts/e2e-seed.sh feat-skill-list --context docker-desktop
-#   .claude/skills/k8s-dev-sandbox/scripts/e2e-seed.sh feat-skill-list --reset
+#   .claude/skills/woow-e2e-fixtures/scripts/e2e-seed.sh
+#   .claude/skills/woow-e2e-fixtures/scripts/e2e-seed.sh feat-skill-list --context docker-desktop
+#   .claude/skills/woow-e2e-fixtures/scripts/e2e-seed.sh feat-skill-list --reset
 
 set -euo pipefail
 

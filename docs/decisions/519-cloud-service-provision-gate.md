@@ -177,7 +177,7 @@ fixpoint，再找 receiver 落在那些 handle 上的 `.create(` / `.copy(`。
 - production 的直接建立點只有 `controllers/paas.py`（marketplace 下單）與
   `controllers/ha_paas.py`（HA provision，`auth='none'` + 自訂 Bearer，**繞過**
   `_create_service`）兩處。
-- 另有 `.claude/skills/k8s-dev-sandbox/scripts/e2e-seed-reset-button.sh`
+- 另有 `.claude/skills/woow-e2e-fixtures/scripts/e2e-seed-reset-button.sh`
   （`odoo shell`、SUPERUSER、永久無訂閱）。
 - XML/CSV seed data、migrations、SQL INSERT、change_plan／`_do_resume`／redeploy／
   clone、`services/reconciler.py`、operator webhook 全部逐項排除（附陽性對照）。
