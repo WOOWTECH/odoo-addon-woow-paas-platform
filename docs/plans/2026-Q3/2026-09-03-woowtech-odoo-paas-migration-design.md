@@ -101,6 +101,14 @@ related:
 6. **檢核點**：ERP 抽查（登入、會計報表、payroll、LINE webhook 路由存在）、`/woow` 起得來、marketplace 列得出 template、模組衝突清單（ERP 與平台 depends 的交集：ai_base_gt 家族、sh_subscription 家族——ERP PVC 有但沒裝，預期無衝突，**要驗**）
 7. 記錄 restore 耗時（預估 <30 min）
 
+### §6 勘誤（2026-09-03 Phase 2 排練實測，細節見 implementation plan Phase 2）
+
+- 第 1 點「唯讀 exec 取 dump／tar」**不可用**：`kubectl exec … > file` 對 >~20 MB 串流尾端截斷且 exit 0（1.9 GB 跑 19 分才 reset）。改為**叢集內 pod-to-pod push**（aiot ns 的 NP 只擋 ingress）；詳見 [`docs/tracking/pitfalls/kubectl-exec-stdout-tail-truncation-large-stream.md`](../../tracking/pitfalls/kubectl-exec-stdout-tail-truncation-large-stream.md)。
+- 第 2 點「略過 `CREATE EXTENSION vector`」的理由修正：prod bitnami 17.6 image **有** vector 0.8.0，但 `trusted=f` 且 `bn_odoo` 非 superuser ⇒ 建不了；略過仍必要（權限），aiot 的 vector 零使用（無欄位／索引／依賴）故無損。restore 另須 `--no-owner --no-privileges`（角色 woow-odoo → bn_odoo）。
+- §4 表「28 個非官方」實為 **29**：`sale_combo_enhanced`（installed）未被計入、也未 vendor 進 paas-odoo-ci#127（26 新增＋2 既有＝28）⇒ Phase 1 需補 1.8。
+- 第 6 點衝突實況：`ai_base_gt` 安裝時直接 `CREATE EXTENSION IF NOT EXISTS vector`（失敗不中斷）；`sh_subscription` 的 `res_company.sh_journal_id` NOT NULL 暫態 ERROR（結束後已有值）；aiot 的 `ir_module_module` 留有 92 列 image 沒有的模組，其中 `ai_livechat_gt`／`ai_mail_gt` auto_install 被拉成 `to install` 卡住 ⇒ Phase 4 runbook 要嘛 vendor 要嘛 SQL 改回 uninstalled。
+- §5 開放項 ProxyFix：Odoo 18 只在 `X-Forwarded-Host` 存在時套 ProxyFix；帶 Host＋Proto=https 時 `web.base.url` 正確寫成 https ⇒ image **不需** `http.py` patch，但 Phase 4 前置要在 CF dashboard 確認平台 tunnel 的 service 打 traefik **websecure**（cloudflared 為 remote-managed，叢集內看不到規則），切換後以 aiot 登入頁 OAuth `redirect_uri` 為驗收。
+
 ## 7. Phase 3 — 保護（Eugene 的硬要求）
 
 切換前必做、全部離叢集副本：
