@@ -477,8 +477,8 @@ say -r 180 "主人，staging 環境部署完成了"
 # 跳過建立 tag，輪詢已存在 git tag 的 CI 狀態（git tag 格式）
 /woow:deploy-stg --skip-build --tag stg-20260329.1400
 
-# 銷毀 staging sandbox
-/k8s-dev-sandbox destroy stg
+# 銷毀 staging sandbox（in-repo skill 已無 destroy，走 plugin）
+/woow-dev:k8s-dev-sandbox destroy stg --context woow-k3s
 ```
 
 ## 疑難排解

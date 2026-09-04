@@ -86,7 +86,7 @@ unit tests（與 CI `.gitea/workflows/paas-operator-unit-tests.yml` 同式）：
 
 ### K8s Dev Sandbox
 
-本機開發與測試一律走沙盒：用 `woow-dev` plugin `/woow-dev:k8s-dev-sandbox <subcommand>`（舊名 `woowprd`；`create`/`destroy` 必帶 `--context`，需要被測 repo 的子命令帶 `--repo "$(git rev-parse --show-toplevel)"`）。子命令、三種 mode、`.sandbox/` hook 以 plugin 的 SKILL.md 為準；本 repo 的宣告在 `.sandbox.yml`；上手指令見 README §Quick Start。in-repo `k8s-dev-sandbox` skill 只剩 woow 專屬 helper（test／extend／e2e seed／stg clone），生命週期子命令已移除。
+本機開發與測試一律走沙盒：用 `woow-dev` plugin `/woow-dev:k8s-dev-sandbox <subcommand>`（舊名 `woowprd`；`create`/`destroy` 必帶 `--context`，需要被測 repo 的子命令帶 `--repo "$(git rev-parse --show-toplevel)"`）。子命令、三種 mode、`.sandbox/` hook 以 plugin 的 SKILL.md 為準；本 repo 的宣告在 `.sandbox.yml`；上手指令見 README §Quick Start。in-repo `k8s-dev-sandbox` skill 只剩 woow 專屬 seed helper（e2e seed／stg clone）；test／extend 已由 plugin 取代（2026-09-04），測試後 e2e seed 走 `.sandbox/post-test.sh` hook（`WOOW_E2E_SEED=1`）。
 
 ### Release & Build paas-odoo Image
 

@@ -10,6 +10,8 @@ metadata:
 > 來源：feat/project-setting 一次本機 sandbox 測試 session（2026-06-01）。`woow-test.sh` 報綠，但 Odoo log 實際是 `0 failed, 0 error(s) of 0 tests` —— **一個 test 都沒跑**。woow-test.sh 只看 `kubectl exec` 的 exit code（0）就印 banner，而 `odoo -u <uninstalled-module>` 對沒裝起來的模組是 no-op，exit 0、0 tests。改用 `-i woow_paas_platform --test-enable --test-tags /woow_paas_platform` 後實跑 **1142 tests**，false green 才破。
 >
 > woow-test.sh / CLAUDE.md 的修正另以小修分支處理（見本檔 §How to avoid 末段）。
+>
+> **狀態（2026-09-04）**：`woow-test.sh` 已退役；0-test 假綠守衛內建在 woow-dev plugin `test.sh`（`${CLAUDE_PLUGIN_ROOT}/skills/k8s-dev-sandbox/scripts/test.sh`） 的 `of 0 tests when loading database` 檢查（機械化）。下文的 `woow-test.sh` 皆指退役前的版本。
 
 ## Symptom
 

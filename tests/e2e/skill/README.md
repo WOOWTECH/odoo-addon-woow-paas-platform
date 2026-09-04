@@ -22,7 +22,8 @@ Plan: `docs/plans/2026-Q2/2026-05-28-skill-e2e-and-is-latest-drift-fix.md` Task 
 2. **取得 sandbox 對外 URL**（用 list/status 腳本看 ingress / nodePort）：
 
    ```bash
-   bash .claude/skills/k8s-dev-sandbox/scripts/status.sh feat-skill-list
+   # in-repo status.sh 已隨生命週期移到 woow-dev plugin
+   /woow-dev:k8s-dev-sandbox status feat-skill-list --context docker-desktop
    # 把 URL 設成 SANDBOX_BASE_URL
    export SANDBOX_BASE_URL=<URL>
    ```
@@ -32,13 +33,15 @@ Plan: `docs/plans/2026-Q2/2026-05-28-skill-e2e-and-is-latest-drift-fix.md` Task 
    ```bash
    # 冪等 seed：建 project + draft skill 並 commit
    bash .claude/skills/k8s-dev-sandbox/scripts/e2e-seed.sh feat-skill-list --context docker-desktop
-   # 或與 module test 一併跑（測試通過後自動 seed）：
-   bash .claude/skills/k8s-dev-sandbox/scripts/woow-test.sh feat-skill-list --e2e-seed
+   # 或與 module test 一併跑（測試通過後由 .sandbox/post-test.sh hook 自動 seed；
+   # 舊 woow-test.sh --e2e-seed 已於 2026-09-04 退役）：
+   WOOW_E2E_SEED=1 bash "${CLAUDE_PLUGIN_ROOT}/skills/k8s-dev-sandbox/scripts/test.sh" feat-skill-list \
+       --repo "$(git rev-parse --show-toplevel)" --context docker-desktop
    ```
 
    - `e2e-seed.sh` 的 `--name` / `--version` 預設（`browser-e2e-skill` / `1.0.0`）必須與 spec 的
      `SKILL_E2E_NAME` 對齊，spec 才找得到列。
-   - spec 會把該筆推進到 archived，所以重跑請帶 `--reset`（`woow-test.sh --e2e-seed` 已預設帶）；
+   - spec 會把該筆推進到 archived，所以重跑請帶 `--reset`（`.sandbox/post-test.sh` hook 已預設帶）；
      要清掉 fixture 用 `e2e-seed.sh <slug> --purge`。
 
 4. **建立 screenshot 目錄**：
