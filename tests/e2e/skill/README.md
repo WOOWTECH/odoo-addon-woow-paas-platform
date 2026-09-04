@@ -32,7 +32,7 @@ Plan: `docs/plans/2026-Q2/2026-05-28-skill-e2e-and-is-latest-drift-fix.md` Task 
 
    ```bash
    # 冪等 seed：建 project + draft skill 並 commit
-   bash .claude/skills/k8s-dev-sandbox/scripts/e2e-seed.sh feat-skill-list --context docker-desktop
+   bash .claude/skills/woow-e2e-fixtures/scripts/e2e-seed.sh feat-skill-list --context docker-desktop
    # 或與 module test 一併跑（測試通過後由 .sandbox/post-test.sh hook 自動 seed；
    # 舊 woow-test.sh --e2e-seed 已於 2026-09-04 退役）：
    WOOW_E2E_SEED=1 bash "${CLAUDE_PLUGIN_ROOT}/skills/k8s-dev-sandbox/scripts/test.sh" feat-skill-list \

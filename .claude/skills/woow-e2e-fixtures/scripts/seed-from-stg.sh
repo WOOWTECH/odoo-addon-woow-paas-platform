@@ -4,14 +4,14 @@
 # 把 stg 的 Odoo DB 整個 pg_dump → restore 到 sandbox，避免重新設定 ECPay / paas-operator
 #
 # Usage:
-#   .claude/skills/k8s-dev-sandbox/scripts/seed-from-stg.sh [TARGET_SLUG]
+#   .claude/skills/woow-e2e-fixtures/scripts/seed-from-stg.sh [TARGET_SLUG]
 #
 # Arguments:
 #   TARGET_SLUG    Sandbox name (default: auto-detect from current branch)
 #
 # Examples:
-#   .claude/skills/k8s-dev-sandbox/scripts/seed-from-stg.sh
-#   .claude/skills/k8s-dev-sandbox/scripts/seed-from-stg.sh smart-home-sub
+#   .claude/skills/woow-e2e-fixtures/scripts/seed-from-stg.sh
+#   .claude/skills/woow-e2e-fixtures/scripts/seed-from-stg.sh smart-home-sub
 
 set -euo pipefail
 

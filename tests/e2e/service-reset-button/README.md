@@ -41,7 +41,7 @@ fixture 只要 DB 裡有 `state=running` 且掛對 template 的 `CloudService` �
 2. **seed fixture**（冪等，可重跑）：
 
    ```bash
-   bash .claude/skills/k8s-dev-sandbox/scripts/e2e-seed-reset-button.sh <slug> --context docker-desktop
+   bash .claude/skills/woow-e2e-fixtures/scripts/e2e-seed-reset-button.sh <slug> --context docker-desktop
    ```
 
    會建 1 個 workspace（`reset-button-e2e-ws`，owner = admin）＋ 4 個 `state=running`

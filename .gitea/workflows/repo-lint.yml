@@ -97,7 +97,9 @@ on:
       #   只補其中一個目錄。其餘同 root 的目錄今天仍在白名單外——要查現況請拿
       #   repo-lint.py 的 `_PROVISION_SENTINEL_ROOTS` 對照本清單即時算，刻意不在這裡
       #   複述目錄清單或個數（會靜默漂掉，本檔上面 scripts/seed 那段記著實例）。
-      - ".claude/skills/k8s-dev-sandbox/**"
+      # ⚠ 2026-09-04 這個目錄由 `k8s-dev-sandbox` 改名為 `woow-e2e-fixtures`（與
+      #   woow-dev plugin 的同名 skill 區隔）；上面 PR #843 那段講的是改名前的路徑。
+      - ".claude/skills/woow-e2e-fixtures/**"
 jobs:
   repo-lint:
     runs-on: ubuntu-latest
@@ -232,7 +234,7 @@ jobs:
             total=$((total + found))
           done
           # 完備性：`.claude/skills/*/tests/` 底下不該有「沒人跑」的測試。
-          # 只掃 tests/ 目錄（不是全 skills/），所以 k8s-dev-sandbox 那種需要真叢集的
+          # 只掃 tests/ 目錄（不是全 skills/），所以 woow-e2e-fixtures 那種需要真叢集的
           # scripts/{e2e-seed,seed-from-stg}.sh 不會被誤收——它們本來就不是無外部相依的單元測試。
           unrun=$(find .claude/skills -path '*/tests/*' -name '*.sh' \
                     ! -path '.claude/skills/deploy-stg/tests/*' | sort)

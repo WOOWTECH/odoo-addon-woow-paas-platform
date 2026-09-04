@@ -20,7 +20,7 @@ if [ "${WOOW_E2E_SEED:-0}" != "1" ]; then
     exit 0
 fi
 
-SEEDER="${REPO_ROOT}/.claude/skills/k8s-dev-sandbox/scripts/e2e-seed.sh"
+SEEDER="${REPO_ROOT}/.claude/skills/woow-e2e-fixtures/scripts/e2e-seed.sh"
 if [ ! -f "$SEEDER" ]; then
     echo "post-test hook: 找不到 seeder ${SEEDER}" >&2
     exit 1

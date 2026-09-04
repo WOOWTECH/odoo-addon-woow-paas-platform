@@ -16,7 +16,7 @@
 #      spec 的 RESET_BTN_E2E_FIXTURE）。
 #
 # Usage:
-#   .claude/skills/k8s-dev-sandbox/scripts/e2e-seed-reset-button.sh [NAME] [OPTIONS]
+#   .claude/skills/woow-e2e-fixtures/scripts/e2e-seed-reset-button.sh [NAME] [OPTIONS]
 #
 # Arguments:
 #   NAME                Sandbox name (slug). If omitted, auto-detect from current branch.
@@ -30,8 +30,8 @@
 #   -h, --help          Show usage.
 #
 # Examples:
-#   .claude/skills/k8s-dev-sandbox/scripts/e2e-seed-reset-button.sh e2e464 --context docker-desktop
-#   .claude/skills/k8s-dev-sandbox/scripts/e2e-seed-reset-button.sh e2e464 --purge
+#   .claude/skills/woow-e2e-fixtures/scripts/e2e-seed-reset-button.sh e2e464 --context docker-desktop
+#   .claude/skills/woow-e2e-fixtures/scripts/e2e-seed-reset-button.sh e2e464 --purge
 
 set -euo pipefail
 
