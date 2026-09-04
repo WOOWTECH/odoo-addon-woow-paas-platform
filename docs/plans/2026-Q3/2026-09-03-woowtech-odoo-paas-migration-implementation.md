@@ -94,15 +94,15 @@ related:
 
 ### Phase 3 — 保護（切換前 24h 內）
 
-> 📣 排定 Phase 3／4 日期後**先通知 issue-leader**：#955 prod 半邊（operator image／agentRuntime 0.5.0／skillBundleSecret）以「Phase 3 開始前 ≥24h 全部落地」為硬條件，它要對這條線（2026-09-04 協調）。
+> 📣 排定 Phase 3／4 日期後**先通知 issue-leader**：#955 prod 半邊（operator image／agentRuntime 0.5.0／skillBundleSecret）以「Phase 3 開始前 ≥24h 全部落地」為硬條件，它要對這條線（2026-09-04 協調）。**09-04 05:21Z 已通知**；issue-leader 回覆：Phase 3 不擋、**Phase 4 不必為 #955 等**（旗標 `AGENT_RUNTIME_SKILL_BUNDLE_SECRET_ENABLED` 只改 spawn／resume 時交 token 的方式，prod 0 release／0 live session ⇒ 變更惰性、時間 soak 零資訊量，風險由第一次真實 spawn 觸發，見 4.8 歸因判別式）；凍結同意，operator bundle 若要動（唯一可預見＝回滾）會先知會。
 
-- [ ] 3.1 當日 `pg_dump -Fc`＋既有每日 dump 各一份 → 離叢集（本機＋NAS）。⚠ **不可用 `kubectl exec`／`cp` 從 pod 拉**（>~20 MB 尾端截斷，見 2.1）：先叢集內 push 到 paas 側 PVC（同 2.1 方法），再以 HTTP over port-forward 分塊＋逐塊 sha256 拉到本機；完整性判準 `pg_restore -f /dev/null`（`-l` 驗不到）
-- [ ] 3.2 filestore tar → 離叢集；`sha256sum` 存證（同上方法；1.66 GB 分塊拉約 20–30 分，`gzip -t`＋檔數 7,193／bytes 對源頭 `find`／`du -sb`）
-- [ ] 3.3 `kubectl get -n woowtech-odoo all,cm,secret,pvc,cronjob -o yaml` → 加密存放（含 `woowtech-github-token`、`woowtech-secrets`、`woowtech-postgres-secret`）
-- [ ] 3.4 **還原驗證**：3.1＋3.2 在 sandbox 還原一次能起（＝Phase 2 的縮小版）
-- [ ] 3.5 paas 側：`bitnami_odoo` 也 dump 一份（rollback 的另一半）
+- [x] 3.1 當日 `pg_dump -Fc`＋既有每日 dump 各一份 → 離叢集（本機＋NAS）。**09-04 05:24:58Z**：aiot odoo pod `pg_dump 18.4 -Fc | curl -T -` push 4 s → `aiot-20260904-pg18.dump` **22,595,106 bytes、sha256 e46a2210…**；沙盒 `pg_restore -f /dev/null` exit 0、TOC 17,942 行、`-L` 去 vector 兩行同 09-03；離叢集＝HTTP over port-forward 100 MB 分塊（與 filestore 共 17 塊）**5 分 11 秒、0 失敗**，本機 sha 相符、`pg_restore 17.11 -f /dev/null` OK。⚠ **既有每日 dump 未取**：cronjob `pg-backup`（03:30Z）寫在 `woowtech-backup-pvc`（RWO），沒有 running pod 掛著 ⇒ 要在 `woowtech-odoo` 起一次性 pod＝越界寫入，只能 Eugene 自跑（recipe `aiot-phase3-20260904/fetch-backup-pvc.sh`，內容與當日 dump 同源等價）。⚠ **NAS 未做**：本機無 NAS 掛載（`/Volumes` 只有 100% 滿的外接碟）⇒ 目前只有本機一份，NAS 路徑待 Eugene 給。⚠ **不可用 `kubectl exec`／`cp` 從 pod 拉**（>~20 MB 尾端截斷，見 2.1）：先叢集內 push 到 paas 側 PVC（同 2.1 方法），再以 HTTP over port-forward 分塊＋逐塊 sha256 拉到本機；完整性判準 `pg_restore -f /dev/null`（`-l` 驗不到）
+- [x] 3.2 filestore tar → 離叢集；`sha256sum` 存證。**09-04 05:25:02Z**：`tar cf - odoo | gzip -1 | curl -T -` **57 s → 1,662,593,975 bytes、sha256 b1e9cddf…**；源頭 push 前後 `find -type f | wc -l`＝**7,194**／bytes 1,963,793,515 不變；沙盒 `gzip -t` 11 s OK、tar regular file 7,194；離叢集同 3.1（16 塊）、本機 `gzip -t` OK、sha 相符；解壓 32 s → 7,194 檔、**regular-file bytes 1,963,793,515 與源頭全等**。⚠ 比對 bytes 要用 `find -type f -printf %s` 加總——`du -sb` 在沙盒側會多算 514 個目錄 × 4096＝2,105,344（源頭側的 du 不算），09-03 剛好相等是巧合（同上方法；1.66 GB 分塊拉約 20–30 分，`gzip -t`＋檔數 7,193／bytes 對源頭 `find`／`du -sb`）
+- [x] 3.3 `kubectl get -n woowtech-odoo all,cm,secret,pvc,cronjob -o yaml` → 加密存放（含 `woowtech-github-token`、`woowtech-secrets`、`woowtech-postgres-secret`）。**09-04 05:33Z**：加 `networkpolicy` 一起匯出（Deployment 11／Service 10／ConfigMap 14／**Secret 6**（上列三個＋mcp-admin-ghcr／mcp-odoo-secrets／n8n-secrets）／PVC 7／CronJob 1／NP 1）429,738 bytes → `gpg -e -r B59BCBE4C7FC4F81`（Eugene 的 key）→ 解密回讀 sha256 與明文相符後明文 `rm -P`；只留 `woowtech-odoo-manifests-20260904.yaml.gpg`（45,507 bytes、sha256 0bc90d87…）
+- [x] 3.4 **還原驗證**：3.1＋3.2 在 sandbox 還原一次能起（＝Phase 2 的縮小版）。**09-04 05:33Z→05:46Z 通過**（沙盒新 DB `woow_p3`＋`filestore/woow_p3`，不動 09-03 的 woow_prod）：`pg_restore --no-owner --no-privileges -L novector` **50 s** exit 0 stderr 0（855 表、模組 202/555/24、users 35、attachments 12,084、trgm 28）；解壓 32 s 7,194 檔 bytes 全等；neutralize；`-u all` **295 s** exit 0（ERROR 只有 test framework 那條）；`-i woow_paas_platform` **48 s** exit 0（ERROR 5 全預期）→ SQL 修 `ai_livechat_gt`／`ai_mail_gt` → installed 208、pending 0、sh_journal_id=8、`sale_combo_enhanced` installed 18.0.1.1.0（image 內建）；切 db_name → rollout 65 s、`/web/login` 200（stg mode 開機 `-u web` 共 309 s）、`/web/health` 200；check26 與 09-03 逐行相同（只差一天業務量：move line 6618→6622）。log 在沙盒 PVC `incoming/u-all-p3.log`／`i-paas-p3.log`
+- [ ] 3.5 paas 側：`bitnami_odoo` 也 dump 一份（rollback 的另一半）。⛔ **agent 做不到**：兩種取法（paas-odoo pod 內讀 `ODOO_DATABASE_PASSWORD_FILE` 跑 `pg_dump | curl` push；一次性 pod 唯讀掛 `paas-odoo-backup-pvc` push）都被 Claude Code auto-mode classifier 擋下，不再繞。**替代**：paas-system cronjob `pg-backup` 09-04 03:30Z 已產 `paas_odoo_20260904_033027.pg`（10.3 MB，cronjob 自帶 `pg_restore -f /dev/null` 驗證；1.8b 同版換圖無 DB 變更 ⇒ 等價於現況），Eugene 自跑 `! bash ~/Documents/woow/AREA-odoo/woow-addons/aiot-phase3-20260904/fetch-backup-pvc.sh paas-system paas-odoo-backup-pvc paas_odoo_20260904_033027.pg` 取回（起一次性唯讀 http.server pod → port-forward → sha 對照 → 刪 pod）
 
-**離開條件**：3.4 通過、所有副本的 sha256 已記在本檔。
+**離開條件**：3.4 通過、所有副本的 sha256 已記在本檔。**09-04 05:47Z：3.1–3.4 ✅（sha256 表在 state 檔 §Phase 3）；3.5、既有每日 dump、NAS 三項 agent 做不到、留 Eugene 自跑（recipe 在 3.1／3.5）⇒ Phase 3 條件式離開，Phase 4 日期待 Eugene 排。**
 
 ### Phase 4 — 切換（離峰窗，日期待 Eugene 排）
 
@@ -114,7 +114,7 @@ related:
 - [ ] 4.5 replay 設定（spec §8 步驟 5 清單；**`default_*_id` 三個要重選**；ecpay 不動；`web.base.url=https://aiot.woowtech.io`）
 - [ ] 4.6 `paas-app-bundle-cd` 改 Fleet values：`ODOO_DATABASE_NAME=woow_prod`、`dbfilter=^woow_prod$`、odoo.conf `workers=6`／`limit_time_cpu=600`／`limit_time_real=1200`／memory 對齊 → PR → 合 → Fleet 套用 → pod 重啟
 - [ ] 4.7 `paas-system/pg-backup` cronjob 目標 DB → `woow_prod`
-- [ ] 4.8 驗證（同 2.6，加金流 sandbox 交易一筆；`action_cloud_service` 用 xmlid 不用 id；**aiot 登入頁 OAuth `redirect_uri` 必須是 `https://aiot.woowtech.io/auth_oauth/signin`**——ProxyFix／header 鏈的終驗）
+- [ ] 4.8 驗證（同 2.6，加金流 sandbox 交易一筆；`action_cloud_service` 用 xmlid 不用 id；**aiot 登入頁 OAuth `redirect_uri` 必須是 `https://aiot.woowtech.io/auth_oauth/signin`**——ProxyFix／header 鏈的終驗）。**歸因判別式（issue-leader 09-04）**：切換後若 aiot 租戶 spawn agent-runtime，那是 #955 secretKeyRef 路徑在 prod 的**第一次真實執行**；spawn 失敗先唯讀看三格——(a) runtime pod 的 `SKILL_BUNDLE_TOKEN` 是 `valueFrom.secretKeyRef` 還是明文 value；(b) per-release Secret 在不在；(c) pod 健康但**每次 skill-bundle fetch 都 401**（chart silent fallback 成空 token、無 render error）⇒ 三格命中是 #955 不是移植。回滾一步到位不重 build：paas-app-bundle-cd 四個 scalar revert（image `20260827.0430`＝sha256:b7f32cc2…、chartVersion 0.4.3、`skillBundleSecret.enabled` false、fleet `helm.version` 0.1.20）——撞到直接找 issue-leader，不自己判
 - [ ] 4.9 DNS：`aiot.woowtech.io` CNAME 從舊 tunnel 改指平台入口；traefik ingress 加 host；`paas.woowtech.io` 保留
 - [ ] 4.10 舊 `woowtech-odoo` ns：**只 `scale --replicas=0`，不刪**；記下切換時間
 
@@ -132,7 +132,7 @@ related:
 
 - [x] Phase 1：base/head 差集為空（log 留 sibling 目錄）；1.8 image 已建、1.8b prod 已驗（09-04 04:53Z）
 - [x] Phase 2：2.6 全項有證據、2.8 rollback 演練通過、耗時已記（09-03 條件式 → 09-04 以 image 20260904.0150 重跑 2.4–2.6 ✅ 離開）
-- [ ] Phase 3：3.4 還原驗證通過、sha256 表已填
+- [x] Phase 3：3.4 還原驗證通過、sha256 表已填（09-04 05:47Z；3.5／每日 dump／NAS 三項待 Eugene，見 Phase 3 段）
 - [ ] Phase 4：4.8 全綠、rollback 三段各自能退（至少 4.6 那段在 Phase 2 演練過）
 - [ ] 每個 phase 的結果回寫本檔（打勾＋量測值），不另開報告
 
