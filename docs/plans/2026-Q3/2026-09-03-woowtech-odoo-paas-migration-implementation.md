@@ -3,7 +3,7 @@ title: woowtech-odoo → paas 移植（基底翻轉）— implementation
 category: plans
 status: draft
 created: 2026-09-03T04:11:22Z
-updated: 2026-09-04T00:30:00Z
+updated: 2026-09-04T03:45:00Z
 related:
   - ./2026-09-03-woowtech-odoo-paas-migration-design.md
   - https://git-prod.woowtech.io/odoo-addons/woow_paas_platform/issues/994
@@ -54,10 +54,12 @@ related:
   → ✅ head 沙盒 custom-addons 36 目錄、28/28 在 ir_module_module（26 uninstalled＋2 installed＝ecpay）、/web/health 200、/woow → login 200
 - [x] 1.7 PR（⛔ 勿代 merge）→ Eugene 合 → 依 `/woow:deploy` 發版流程上 prod（**image 先上、ERP addon 不裝**）
   → ✅ 2026-09-03：paas-odoo-ci#127 merge → tag `v18.0.1.0.177`（develop d1e1633c）→ paas-odoo-ci approval issue #128 `/approve` → phase 2 run 7095 三行錨點全對 → image `paas-odoo:20260903.0732`（digest `sha256:4f60f430…af8e`）→ CD PR-A paas-app-bundle-cd#126（三處 pin＋SKIP=no）／PR-B #127（切回 yes）皆 merge；prod pod 兩容器 digest 4f60f430… 五方一致、custom-addons 36 目錄、抽查 9 個 ERP addon 在 `ir_module_module` 皆 `uninstalled`、`/web/health` 200。⚠ 「DB 不動」不成立：同版帶 #993 migration `.177` 與相依 addon `payment_ecpay_ecpg` 3.0→3.5，故走 SOP 兩段式 `-u all`（判準與實證見 `docs/guides/deployment/prod-release-sop.md` §5.1）；ERP addon 本身零安裝。Phase 2 進入條件（跑穩 ≥1 天）自 08:33Z 起算。
-- [ ] 1.8 **補 vendor `sale_combo_enhanced`**（Phase 2.4 量出：aiot installed 的 29 個非官方模組中唯一不在 image 者；來源 aiot PVC `/mnt/extra-addons/sale_combo_enhanced`，18.0.1.1.0、13 檔）
+- [x] 1.8 **補 vendor `sale_combo_enhanced`**（image 已建；CD 見 1.8b）（Phase 2.4 量出：aiot installed 的 29 個非官方模組中唯一不在 image 者；來源 aiot PVC `/mnt/extra-addons/sale_combo_enhanced`，18.0.1.1.0、13 檔）
   → 09-04 開出：snapshot `mirror-internal/woowtech-erp-addons-snapshot` PR #1（034dcaddcf9f）→ paas-odoo-ci PR #129（`addons/`＋`paas-addons.list` +1，check-addon-lists 4/4）皆 ⛔ 待 Eugene 合
   → 合併後：`build-image.yml` 手動 dispatch **`addon_ref=v18.0.1.0.177`**（addon 無版號變化，不必發平台版；pitfall ci-addon-ref-empty-drifting-default-branch）→ `/approve` → CD 三處 pin 同進同退（`SKIP=yes` 即可，新模組在 prod 只是 uninstalled）→ **Phase 2 重跑 2.4–2.6**（`dev-sandbox-p2aiot` 換 image 重 restore）
   → `ai_livechat_gt`／`ai_mail_gt` 裁定**不 vendor**（見 2.5／4.4）
+  → ✅ 09-04：snapshot#1 23:56Z／paas-odoo-ci#129 23:57Z 合 → dispatch run 7237 → approval #132（eugene 03:16:38Z）→ run 7249 build 成功，image **`paas-odoo:20260904.0150`** digest `sha256:228e339e793c1b1d690efdd279d341bece149e3af1272d4425de7762e8567fe4`（三行錨點對 v18.0.1.0.177、registry HEAD 複驗一致）
+- [ ] 1.8b CD promote：paas-app-bundle-cd **PR #129**（三處 pin → 20260904.0150／228e339e…，`SKIP=yes`，同版換圖走 gate skip 分支）→ Eugene 合（先合 #128 等兩顆 operator pod Ready 再合）→ 驗收：pod imageID 228e339e…、gate log「版本一致 skip」、/web/health 200、BundleDeployment nonModified
 
 ### Phase 2 — sandbox 排練（決定性驗證）
 
@@ -88,7 +90,7 @@ related:
 - [x] 2.8 rollback 演練 → ✅ 沙盒版「`ODOO_DATABASE_NAME` 切換」＝改 odoo configmap `db_name`＋rollout restart（`switch-db.sh`）：woow_prod → woow_p2aiot **116 s** 到 `/web/login` 200，`database/list=['woow_p2aiot']`、admin 登入 uid 2、83 模組、`/woow` 正常；再切回 woow_prod **307 s（同樣含 `-u web`；prod 無此步）**。三段 rollback 中「指回平台 DB」這段證明可退
   - 離叢集副本（Phase 3 方法驗證）：dump 經 HTTP over port-forward 18 s、sha 相符；filestore 1.66 GB 走 100 MB 分塊逐塊 sha256（port-forward 會死、python http.server 無 Range）→ 首輪 4/17 塊（~1.3 MB/s）後被 2.8 演練的 pod 重啟打斷（接收 pod 換了），重跑結果補記 state 檔；方法本身成立、但 Phase 3 要預留 30 分以上
 
-**離開條件**：2.6 全綠、2.8 通過、耗時已記錄。→ **條件式通過**：流程與數字全到位，但 image 缺 `sale_combo_enhanced`（Phase 1.8）⇒ 新 image 出來後**重跑 2.4–2.6**（同沙盒可重用：drop `woow_prod` 重 restore 約 2 分）才算離開。✅ Eugene 2026-09-04 裁決：(a) `ai_livechat_gt`／`ai_mail_gt` **SQL 改回 uninstalled**（不 vendor，維持 aiot 現狀，寫進 4.4）；(b) `sale_combo_enhanced` **vendor**（1.8 → paas-odoo-ci PR #129＋snapshot mirror-internal PR #1）；(c) `seed-from-stg.sh` **最小 fail-loud**（woow_paas_platform PR #1039）。
+**離開條件**：2.6 全綠、2.8 通過、耗時已記錄。→ 09-03 **條件式通過**（image 缺 `sale_combo_enhanced`）→ ✅ **09-04 以新 image `20260904.0150` 重跑 2.4–2.6 通過，Phase 2 離開**：先刪沙盒 PVC `data_dir/addons/18.0/sale_combo_enhanced` 副本（否則 addons_path 順序會蓋掉 image 內那份）、`set image`＋db_name 切回平台 DB、drop 重 restore（52 s）、neutralize → `-u all` **285 s** exit 0（ERROR 仍只有 barcode_scanner_account 那條 benign；`sale_combo_enhanced` 自 `custom-addons/` 載入 185/202、1.13 s）→ `-i` **46 s**（新裝同 6 個；ERROR 5 與 09-03 逐條同類：test framework／`CREATE EXTENSION vector`／`sh_journal_id` NOT NULL ×2／`ai_*_gt` inconsistent → SQL 改回 uninstalled）→ `sale_combo_enhanced` installed 18.0.1.1.0、`sh_journal_id`=8、模組 uninstalled=553 installed=208 uninstallable=24 → 切 woow_prod 305 s → check26 全項與 09-03 相同（登入 uid 2、Journal Items 6,618、Payslips、LINE 四 route、/woow 200、template 16、action_cloud_service OK）。✅ Eugene 2026-09-04 裁決：(a) `ai_livechat_gt`／`ai_mail_gt` **SQL 改回 uninstalled**（不 vendor，維持 aiot 現狀，寫進 4.4）；(b) `sale_combo_enhanced` **vendor**（1.8 → paas-odoo-ci PR #129＋snapshot mirror-internal PR #1）；(c) `seed-from-stg.sh` **最小 fail-loud**（woow_paas_platform PR #1039）。
 
 ### Phase 3 — 保護（切換前 24h 內）
 
@@ -128,8 +130,8 @@ related:
 
 ## 驗證
 
-- [ ] Phase 1：base/head 差集為空（log 留 sibling 目錄）
-- [x] Phase 2：2.6 全項有證據、2.8 rollback 演練通過、耗時已記（09-03；**條件式**——待 1.8 新 image 重跑 2.4–2.6）
+- [x] Phase 1：base/head 差集為空（log 留 sibling 目錄）；1.8 image 已建，1.8b CD promote 待合
+- [x] Phase 2：2.6 全項有證據、2.8 rollback 演練通過、耗時已記（09-03 條件式 → 09-04 以 image 20260904.0150 重跑 2.4–2.6 ✅ 離開）
 - [ ] Phase 3：3.4 還原驗證通過、sha256 表已填
 - [ ] Phase 4：4.8 全綠、rollback 三段各自能退（至少 4.6 那段在 Phase 2 演練過）
 - [ ] 每個 phase 的結果回寫本檔（打勾＋量測值），不另開報告
