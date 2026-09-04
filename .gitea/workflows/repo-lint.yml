@@ -233,7 +233,7 @@ jobs:
           done
           # 完備性：`.claude/skills/*/tests/` 底下不該有「沒人跑」的測試。
           # 只掃 tests/ 目錄（不是全 skills/），所以 k8s-dev-sandbox 那種需要真叢集的
-          # scripts/woow-test.sh 不會被誤收——它本來就不是無外部相依的單元測試。
+          # scripts/{e2e-seed,seed-from-stg}.sh 不會被誤收——它們本來就不是無外部相依的單元測試。
           unrun=$(find .claude/skills -path '*/tests/*' -name '*.sh' \
                     ! -path '.claude/skills/deploy-stg/tests/*' | sort)
           if [ -n "$unrun" ]; then

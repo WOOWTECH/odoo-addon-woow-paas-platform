@@ -198,7 +198,7 @@ ci-local 模式的 `/mnt/extra-addons` 是**烤進 image 的層，沒有掛任�
 
 `kubectl rollout restart` 會用同一顆 image 起全新 container，檔案系統從 image layer
 重新展開 ⇒ 前一個 pod 實例上的 chown 與 cp **全部蒸發**。而
-`.claude/skills/k8s-dev-sandbox/scripts/woow-test.sh` 在**測試成功與失敗兩條路徑的最後都會**
+沙盒 `test`（現為 woow-dev plugin `test.sh`（`${CLAUDE_PLUGIN_ROOT}/skills/k8s-dev-sandbox/scripts/test.sh`），原 in-repo `woow-test.sh`）在**測試成功與失敗兩條路徑的最後都會**
 `kubectl rollout restart` + `rollout status`（因為測試用 `--stop-after-init` 會把 odoo
 停掉，要重新拉起來）。
 

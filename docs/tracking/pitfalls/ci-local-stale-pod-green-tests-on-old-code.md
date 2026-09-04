@@ -71,7 +71,7 @@ pod `hermes013-odoo-dev-sandbox-odoo-7c4dc98597-94l8b`，`startTime 2026-08-10T0
 `kubectl delete pod` 讓 controller 重建——都會從**同一份 image** 長出乾淨的容器層，
 先前疊上去的修補不會被帶過去。跑一次 `woow-test.sh` 就會發生一次：它在測試成功與失敗**兩條路徑
 的最後都會** `kubectl rollout restart`（測試用 `--stop-after-init`，跑完要把 odoo 拉回來），
-見 `.claude/skills/k8s-dev-sandbox/scripts/woow-test.sh`。
+原 `.claude/skills/k8s-dev-sandbox/scripts/woow-test.sh`（2026-09-04 退役），現行 woow-dev plugin `test.sh`（`${CLAUDE_PLUGIN_ROOT}/skills/k8s-dev-sandbox/scripts/test.sh`） 同樣兩條路徑都 rollout。
 
 本次研判是 sandbox 在驗收窗口內經歷了一次 pod 重建：namespace 的
 `sandbox.woow.tw/expires = 2026-08-11T05:42:32Z`（24h TTL ⇒ 標記寫於 `05:42:32Z`）與 pod 的
@@ -160,7 +160,7 @@ grep -n version src/__manifest__.py
 
 ## 機械化狀態：`—`（已評估、落點明確，但本次是純 doc PR 不動 code）
 
-與姊妹篇不同，**這條有明確可掛載點**：`.claude/skills/k8s-dev-sandbox/scripts/woow-test.sh` 在跑測試
+與姊妹篇不同，**這條有明確可掛載點**：woow-dev plugin `test.sh`（`${CLAUDE_PLUGIN_ROOT}/skills/k8s-dev-sandbox/scripts/test.sh`）（原 in-repo `woow-test.sh`，2026-09-04 退役）在跑測試
 **之前**對帳「pod 內的 code」與「期望的 commit」，不一致就 fail-loud（它已經有一道
 「0 tests 也報綠」的 false-green guard，同一個位置再加一道同型的）。兩種判準與各自的弱點：
 
