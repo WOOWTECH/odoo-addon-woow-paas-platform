@@ -845,6 +845,35 @@ class TestAutoRecreditPostgresCapability864(BaseCase):
         self.assertEqual(self._wallet_tx_count(partner_id), 1)
         self.assertEqual(self._incident(reference)['state'], 'resolved')
 
+    def test_query_outcome_survives_explicit_outer_rollback(self):
+        """Mutant 用 caller cursor 時，本測會因三個 audit 欄位全消失而紅。"""
+        reference = self._seed_branch_a('Q1')[0]
+        next_query_at = fields.Datetime.now() + timedelta(minutes=2)
+        with self.registry.cursor() as outer_cr:
+            env = api.Environment(outer_cr, odoo.SUPERUSER_ID, {})
+            recorded = env[
+                'woow.billing.incident'] \
+                ._record_query_outcome_independent(
+                    reference,
+                    verdict='indeterminate',
+                    reason='awaiting_capture',
+                    next_query_at=next_query_at,
+                    increment_attempt=True,
+                )
+            self.assertTrue(recorded)
+            # 判別式的承重點：outcome 寫完後，caller transaction 真 rollback。
+            outer_cr.rollback()
+        with self.registry.cursor() as verify_cr:
+            verify_cr.execute(
+                'SELECT last_query_verdict, assessment_reason, '
+                'query_attempts, next_query_at '
+                'FROM woow_billing_incident WHERE external_ref = %s',
+                (reference,))
+            self.assertEqual(
+                verify_cr.fetchone(),
+                ('indeterminate', 'awaiting_capture', 1, next_query_at),
+            )
+
     def test_negative_control_without_independent_cursor_would_rollback(self):
         """永久 control：same-cursor rollback 必須刪列；mutation 另留紅證。"""
         marker = 'test:%s' % uuid.uuid4().hex
