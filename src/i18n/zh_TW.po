@@ -17531,3 +17531,133 @@ msgstr "只有目前有效的會計管理員可以追蹤帳務 incident。"
 #: code:addons/woow_paas_platform/models/billing_incident.py:0
 msgid "Only the internal billing scheduler may follow incidents."
 msgstr "只有內部帳務排程器可以維護帳務 incident 的追蹤者。"
+
+#. module: woow_paas_platform
+#: model:ir.model,name:woow_paas_platform.model_woow_paas_platform_ecpg_query_circuit
+msgid "ECPG Credit Query Circuit"
+msgstr "ECPG 信用卡查詢熔斷器"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields.selection,name:woow_paas_platform.selection__wallet_transaction__woow_credit_origin__normal
+msgid "Normal credit"
+msgstr "一般入點"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields.selection,name:woow_paas_platform.selection__wallet_transaction__woow_credit_origin__auto_recredit
+msgid "Auto recredit"
+msgstr "自動補點"
+
+#. module: woow_paas_platform
+#: code:addons/woow_paas_platform/models/payment_transaction.py:0
+msgid "Reconstructed wallet top-ups require the query-gated repair process."
+msgstr "重建的錢包儲值只能由具查單閘門的修復流程處理。"
+
+#. module: woow_paas_platform
+#: code:addons/woow_paas_platform/models/wallet_topup.py:0
+msgid "Reconstructed wallet top-ups may be credited only by the query-gated repair process."
+msgstr "重建的錢包儲值只能由具查單閘門的修復流程補點。"
+
+#. module: woow_paas_platform
+#: code:addons/woow_paas_platform/models/wallet_topup.py:0
+msgid "Repair incident references are managed only by the query-gated repair process."
+msgstr "修復事件 reference 只能由具查單閘門的修復流程管理。"
+
+#. module: woow_paas_platform
+#: code:addons/woow_paas_platform/models/wallet_topup.py:0
+msgid "Wallet credit completed without a wallet transaction record."
+msgstr "錢包補點完成，但未建立錢包交易記錄。"
+
+#. module: woow_paas_platform
+#: code:addons/woow_paas_platform/models/wallet_topup.py:0
+msgid "Unable to get wallet loyalty card."
+msgstr "無法取得錢包 loyalty card。"
+
+#. module: woow_paas_platform
+#: code:addons/woow_paas_platform/models/wallet_topup.py:0
+msgid "Unable to lock wallet loyalty card."
+msgstr "無法鎖定錢包 loyalty card。"
+
+#. module: woow_paas_platform
+#: code:addons/woow_paas_platform/models/wallet_transaction.py:0
+msgid "Wallet credit audit metadata is managed only by the internal credit process."
+msgstr "錢包補點稽核 metadata 只能由內部補點流程管理。"
+
+#. module: woow_paas_platform
+#: code:addons/woow_paas_platform/models/account_move_invoice_status.py:0
+msgid "ECPay MerchantTradeNo audit keys are managed only by the internal top-up invoice process."
+msgstr "ECPay MerchantTradeNo 稽核 key 只能由內部儲值發票流程管理。"
+
+#. module: woow_paas_platform
+#: code:addons/woow_paas_platform/models/ecpg_query_circuit.py:0
+msgid "ECPG query circuits may be created only by the internal writer."
+msgstr "ECPG 查詢熔斷器只能由內部 writer 建立。"
+
+#. module: woow_paas_platform
+#: code:addons/woow_paas_platform/models/ecpg_query_circuit.py:0
+msgid "ECPG query circuits may be updated only by the internal writer."
+msgstr "ECPG 查詢熔斷器只能由內部 writer 更新。"
+
+#. module: woow_paas_platform
+#: code:addons/woow_paas_platform/models/ecpg_query_circuit.py:0
+msgid "ECPG query circuits may be deleted only during module uninstall."
+msgstr "ECPG 查詢熔斷器只能在 module uninstall 時刪除。"
+
+#. module: woow_paas_platform
+#: code:addons/woow_paas_platform/models/account_move_invoice_status.py:0
+msgid "PR-F cannot backfill account.move MTN: %(count)s ambiguous move group(s); first move ids=%(ids)s."
+msgstr "PR-F 無法 backfill account.move MTN：有 %(count)s 組 ambiguous move；第一組 move ids=%(ids)s。"
+
+#. module: woow_paas_platform
+#: code:addons/woow_paas_platform/models/account_move_invoice_status.py:0
+msgid "PR-F cannot create account_move_woow_ecpay_mtn_uniq: %(count)s duplicate key group(s); first move ids=%(ids)s."
+msgstr "PR-F 無法建立 account_move_woow_ecpay_mtn_uniq：有 %(count)s 組 duplicate key；第一組 move ids=%(ids)s。"
+
+#. module: woow_paas_platform
+#: code:addons/woow_paas_platform/models/account_move_invoice_status.py:0
+msgid "PR-F backfill produced %(count)s duplicate MTN group(s); first move ids=%(ids)s."
+msgstr "PR-F backfill 產生 %(count)s 組 duplicate MTN；第一組 move ids=%(ids)s。"
+
+#. module: woow_paas_platform
+#: code:addons/woow_paas_platform/models/wallet_transaction.py:0
+msgid "PR-F cannot create wallet_transaction_topup_payment_tx_uniq: %(count)s duplicate key group(s); first transaction ids=%(ids)s. Resolve data manually; automatic deduplication is forbidden."
+msgstr "PR-F 無法建立 wallet_transaction_topup_payment_tx_uniq：有 %(count)s 組 duplicate key；第一組 transaction ids=%(ids)s。請人工處理資料，禁止自動去重。"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_billing_incident__last_query_at
+msgid "Last Query At"
+msgstr "最後查單時間"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_billing_incident__last_query_verdict
+msgid "Last Query Verdict"
+msgstr "最後查單判定"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_billing_incident__origin_xid
+msgid "Origin Xid"
+msgstr "來源 transaction XID"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_billing_incident__repair_topup_ref
+msgid "Repair Topup Ref"
+msgstr "修復儲值 reference"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_billing_incident__t1_overdue_at
+msgid "T1 Overdue At"
+msgstr "T1 逾時時間"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_billing_incident__topup_plan_ref
+msgid "Topup Plan Ref"
+msgstr "儲值方案 reference"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_billing_incident__topup_source
+msgid "Topup Source"
+msgstr "儲值來源"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_billing_incident__wallet_transaction_ref
+msgid "Wallet Transaction Ref"
+msgstr "錢包交易 reference"

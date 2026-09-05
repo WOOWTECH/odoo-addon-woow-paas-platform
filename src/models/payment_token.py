@@ -58,13 +58,48 @@ class PaymentToken(models.Model):
             self.id, tx.id, reference, tx.state,
         )
 
+        # #864 PR-F：外呼前凍結所有 durable incident 所需純 scalar。except
+        # 區塊不可 ORM read：若外層已 aborted，任何 lazy field access 都會再炸。
+        manual_snapshot = None
+        if purpose_field == 'woow_topup_id' and purpose_id:
+            topup = self.env['woow.wallet.topup'].sudo().browse(purpose_id).exists()
+            if topup:
+                self.env.cr.execute('SELECT pg_current_xact_id()::text')
+                origin_xid = self.env.cr.fetchone()[0]
+                manual_snapshot = {
+                    'external_ref': reference,
+                    'kind': 'charged_not_credited',
+                    'partner_ref': topup.partner_id.id or None,
+                    'payment_token_ref': self.id,
+                    'amount': float(amount),
+                    'credits': topup.credits,
+                    'bonus': topup.bonus,
+                    'currency': topup.currency_id.name or None,
+                    'failure_code': 'wallet_credit_failed',
+                    'source_model': topup._name,
+                    'source_ref': topup.id,
+                    'origin_xid': origin_xid,
+                    'topup_plan_ref': topup.plan_id.id or None,
+                    'topup_source': topup.source,
+                    'detail': 'ECPay 已確認扣款但 manual top-up 入帳 callback 失敗。',
+                }
         try:
             send_result = tx._send_payment_request()
-        except Exception:
+        except Exception as exc:
             _logger.exception(
                 "[PAY_TOKEN] _send_payment_request exception token=%s tx=%s",
                 self.id, tx.id,
             )
+            # 只讀 Odoo Environment cache，不觸發 SQL。cache 沒有 ``done``
+            # 就 fail-closed 留在 sdk_error，不猜測 provider 是否已扣款。
+            cached_tx_state = tx.env.cache.get(
+                tx, tx._fields['state'], None)
+            if manual_snapshot and cached_tx_state == 'done':
+                self.env['woow.billing.incident']._log_charged_not_credited(
+                    manual_snapshot)
+                # Controller catch 後可嘗試寫 local marker；跨 seam 只帶 Python
+                # marker，不帶任何 recordset。
+                setattr(exc, '_woow_charged_not_credited', True)
             raise
 
         redirect_url = None

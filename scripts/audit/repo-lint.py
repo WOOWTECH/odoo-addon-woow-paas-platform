@@ -4400,6 +4400,33 @@ INTERNAL_CTX_KEY_REGISTRY = {
                "`sa_internal_identity_write` 分成兩把：既有測試大量開著那一把，共用會"
                "讓本守衛在那些檔裡靜默失效（同型翻車見 smart_home_route 的註解）。",
     },
+    "_woow_auto_recredit_skip_invoice": {
+        "status": "enforced",
+        "sentinel": "_AUTO_RECREDIT_CAPABILITY",
+        "defined_in": "src/models/wallet_topup.py",
+        "reader": "_is_auto_recredit_skip_invoice",
+        "issue": "#864",
+        "why": "PR-F repair 已驗 query 後只跳過同一 transaction 的 invoice；裸 truthy "
+               "RPC context 不得略過不可逆電子發票防線。",
+    },
+    "_woow_wallet_credit_metadata_write": {
+        "status": "enforced",
+        "sentinel": "_WALLET_CREDIT_METADATA_CAPABILITY",
+        "defined_in": "src/models/wallet_transaction.py",
+        "reader": "_is_wallet_credit_metadata",
+        "issue": "#864",
+        "why": "auto-recredit origin／incident ref 是 exactly-once 與每日上限的稽核輸入；"
+               "一般 RPC 不得偽造或清除。",
+    },
+    "_woow_ecpay_mtn_write": {
+        "status": "enforced",
+        "sentinel": "_ECPAY_MTN_WRITE_CAPABILITY",
+        "defined_in": "src/models/account_move_invoice_status.py",
+        "reader": "_is_ecpay_mtn_write",
+        "issue": "#864",
+        "why": "account.move 的 MTN 是電子發票 exactly-once key；readonly UI 不足以擋"
+               "call_kw 偽造，只有 top-up invoice path 可寫。",
+    },
     "woow_billing_incident_create": {
         "status": "enforced",
         "sentinel": "_BILLING_INCIDENT_CREATE",
