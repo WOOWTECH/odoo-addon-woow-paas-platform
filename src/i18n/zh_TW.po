@@ -17621,3 +17621,43 @@ msgstr "PR-F backfill 產生 %(count)s 組 duplicate MTN；第一組 move ids=%(
 #: code:addons/woow_paas_platform/models/wallet_transaction.py:0
 msgid "PR-F cannot create wallet_transaction_topup_payment_tx_uniq: %(count)s duplicate key group(s); first transaction ids=%(ids)s. Resolve data manually; automatic deduplication is forbidden."
 msgstr "PR-F 無法建立 wallet_transaction_topup_payment_tx_uniq：有 %(count)s 組 duplicate key；第一組 transaction ids=%(ids)s。請人工處理資料，禁止自動去重。"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_billing_incident__last_query_at
+msgid "Last Query At"
+msgstr "最後查單時間"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_billing_incident__last_query_verdict
+msgid "Last Query Verdict"
+msgstr "最後查單判定"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_billing_incident__origin_xid
+msgid "Origin Xid"
+msgstr "來源 transaction XID"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_billing_incident__repair_topup_ref
+msgid "Repair Topup Ref"
+msgstr "修復儲值 reference"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_billing_incident__t1_overdue_at
+msgid "T1 Overdue At"
+msgstr "T1 逾時時間"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_billing_incident__topup_plan_ref
+msgid "Topup Plan Ref"
+msgstr "儲值方案 reference"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_billing_incident__topup_source
+msgid "Topup Source"
+msgstr "儲值來源"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_billing_incident__wallet_transaction_ref
+msgid "Wallet Transaction Ref"
+msgstr "錢包交易 reference"

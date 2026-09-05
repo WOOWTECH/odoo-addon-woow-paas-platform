@@ -1981,9 +1981,9 @@ class WalletTopup(models.Model):
                 candidate['topup_plan_ref']).exists()
             if candidate['topup_plan_ref'] else False
         )
-        currency = env['res.currency'].sudo().search([
-            ('name', '=', candidate['currency']),
-        ], limit=1)
+        # Fresh DB 的 base.TWD 預設可能 active=False；一般 search 會被
+        # active_test 靜默濾掉。XMLID 是此 currency 的 authoritative identity。
+        currency = env.ref('base.TWD', raise_if_not_found=False)
         source_valid = (
             candidate['topup_source'] == 'manual'
             and bool(plan)

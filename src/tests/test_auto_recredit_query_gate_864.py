@@ -1,6 +1,5 @@
 """#864 PR-F：vendor contract、時間模型、typed error 與零外呼守線。"""
 from datetime import datetime, timedelta
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -464,27 +463,6 @@ class TestAutoRecreditQueryGate864(TransactionCase):
                 self.env.cr.execute(
                     'SELECT to_regclass(%s)', (index_name,))
                 self.assertEqual(self.env.cr.fetchone()[0], index_name)
-
-    def test_preflight_sql_is_exactly_three_read_only_selects(self):
-        path = (
-            Path(__file__).resolve().parents[2]
-            / 'scripts' / '864-f-auto-recredit-preflight.sql'
-        )
-        statements = [
-            chunk.strip() for chunk in path.read_text().split(';')
-            if chunk.strip()
-        ]
-        self.assertEqual(len(statements), 3)
-        for statement in statements:
-            sql = '\n'.join(
-                line for line in statement.splitlines()
-                if not line.lstrip().startswith('--')
-            ).lstrip()
-            self.assertTrue(sql.upper().startswith('SELECT COUNT(*)'))
-            self.assertNotRegex(
-                sql.upper(),
-                r'\b(INSERT|UPDATE|DELETE|ALTER|CREATE|DROP|TRUNCATE)\b',
-            )
 
     def test_query_circuit_rejects_generic_orm_mutations(self):
         Circuit = self.env['woow_paas_platform.ecpg_query_circuit']

@@ -276,6 +276,13 @@ class TestAutoRecreditPostgresCapability864(BaseCase):
         self._age_incident(reference, 16)
         return reference, partner_id, token_id, source_ref, incident_id
 
+    def _set_currency_active(self, active):
+        with self.registry.cursor() as cr:
+            cr.execute(
+                'UPDATE res_currency SET active = %s WHERE id = %s',
+                (active, self.currency_id))
+            cr.commit()
+
     def _age_incident(self, reference, minutes):
         with self.registry.cursor() as cr:
             when = fields.Datetime.now() - timedelta(minutes=minutes)
@@ -417,6 +424,15 @@ class TestAutoRecreditPostgresCapability864(BaseCase):
         self.assertEqual(self._incident(reference)['state'], 'needs_human')
 
     def test_branch_b_reconstructs_only_after_real_outer_rollback(self):
+        with self.registry.cursor() as cr:
+            cr.execute(
+                'SELECT active FROM res_currency WHERE id = %s',
+                (self.currency_id,))
+            original_currency_active = cr.fetchone()[0]
+        self.addCleanup(
+            self._set_currency_active, original_currency_active)
+        self._set_currency_active(False)
+
         reference, partner_id, _token_id, old_topup_id, _incident_id = (
             self._seed_branch_b('B1'))
         with self.registry.cursor() as cr:
@@ -424,6 +440,16 @@ class TestAutoRecreditPostgresCapability864(BaseCase):
                 'SELECT 1 FROM woow_wallet_topup WHERE id = %s',
                 (old_topup_id,))
             self.assertFalse(cr.fetchone(), '前置：outer rollback 必須真刪 source')
+            cr.execute(
+                'SELECT origin_xid FROM woow_billing_incident '
+                'WHERE external_ref = %s', (reference,))
+            origin_xid = cr.fetchone()[0]
+            cr.execute(
+                'SELECT pg_xact_status(%s::xid8)', (origin_xid,))
+            self.assertEqual(
+                cr.fetchone()[0], 'aborted',
+                '前置：Branch B 只接受 PostgreSQL 真正判定 aborted 的 origin',
+            )
         before = self._points(partner_id)
         with self._mock_safe_query() as query, patch(
                 'requests.sessions.Session.request',
@@ -431,7 +457,11 @@ class TestAutoRecreditPostgresCapability864(BaseCase):
             summary = self._run_cron()
         self.assertEqual(query.call_count, 2)
         network.assert_not_called()
-        self.assertEqual(summary['reconstructed'], 1)
+        self.assertEqual(
+            summary['reconstructed'], 1,
+            'Branch B 未 reconstruct：summary=%r incident=%r'
+            % (summary, self._incident(reference)),
+        )
         self.assertEqual(self._points(partner_id) - before, 105.0)
         self.assertEqual(self._wallet_tx_count(partner_id), 1)
         row = self._incident(reference)
