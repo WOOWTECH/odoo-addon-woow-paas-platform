@@ -36,3 +36,26 @@ test_sh_unlink_authz_preflight_740.TestSh740NoExternalCallWhenDenied.test_A1_no_
 test_sh_unlink_authz_preflight_740.TestSh740NoExternalCallWhenDenied.test_A2_with_route_denied_delete_sends_nothing
 test_sh_unlink_authz_preflight_740.TestSh740NoExternalCallWhenDenied.test_A3_access_teardown_is_not_pushed_when_denied
 test_paas_controller_error_taxonomy_567.TestPaaSCreateAndSkipErrorTaxonomy567.test_skip_trial_operational_error_is_reraised
+
+# ── #1051（2026-09-05）：replay skip 的 rollback 存活判別式 ──────────────────
+# 為什麼要進這份清單：它守的性質（`_mark_replay_skip_independent` 寫的標記在外層
+# 交易 rollback 後仍在）**唯一**的機械判別式就是這一條。而「這條有沒有被執行」
+# 四道判準沒有一道答得出來——
+#   C2 兩邊都是靜態（原始碼 vs baseline），不碰 log；且 `_diff_report()` 的方法數
+#     比對只抓**變少**（`test_collection_audit.py` `if right[k] < left[k]`）⇒ 連
+#     baseline 的條數寫大了都不會紅；
+#   C3 的 class 粒度只證明「這個 class 至少有 1 個 method 出現」；
+#   C4／C5 只列 skip 與 FAIL/ERROR，綠燈或沒被收集的方法在兩者都沉默。
+# ⇒ 這條測試若哪天靜默不再被收集（改 tag、搬檔、改 selector），輸出會與「跑了而且
+#   通過」一模一樣——那正是 #1010 已經發生過一次的形狀（`callback_replay_864` 整批
+#   從未進 CI，而 C2 還把它印成「合法 opt-out」）。
+#
+# 只放正向判別式那一條：同 class 的陰性對照
+# `test_replay_skip_current_cursor_dies_with_outer_rollback` 是它的佐證，不是判別式
+# 本身；判別式在、對照不在，突變仍然抓得到。
+#
+# ⚠ 子套件底下的檔**帶著套件名**（`integration.` 前綴）——那是 Odoo `_TEST_ID` 的
+#   識別字空間（`test_collection_audit.py` `_tests_module_path` docstring，樣本見同檔
+#   `--self-test` 的 `woow_paas_platform.integration.test_i.TestI.test_w`）。少了前綴
+#   C0 會 FATAL 並擋掉後面所有差集。
+integration.test_auto_recredit_864.TestAutoRecreditPostgresCapability864.test_replay_skip_independent_survives_outer_rollback

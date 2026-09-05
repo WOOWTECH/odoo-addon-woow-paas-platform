@@ -8,6 +8,7 @@
 1	fn:check_admin_gui_gate_anchor
 1	fn:check_assertlogs_numeric_level
 1	fn:check_availability_reason_labels
+1	fn:check_bulk_grant_ruler_sync
 1	fn:check_conceal_instances_gate
 1	fn:check_config_parameter_uninstall
 1	fn:check_controller_sudo
@@ -49,6 +50,7 @@
 1	rule:access-payload-shape-matches-operator-schema
 1	rule:assertlogs-numeric-level
 1	rule:availability-reason-labels
+1	rule:bulk-grant-ruler-sync
 1	rule:capability-gate
 1	rule:conceal-instances
 1	rule:config-parameter-uninstall

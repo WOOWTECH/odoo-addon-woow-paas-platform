@@ -3,6 +3,7 @@ from . import account_move
 from . import billing_incident
 from . import account_move_invoice_status
 from . import ecpay_invoice_cron
+from . import ecpg_query_circuit
 from . import res_partner_invoice
 from . import sh_subscription_fix
 from . import sh_subscription_warning_field

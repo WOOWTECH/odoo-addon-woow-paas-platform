@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""`access-payload-shape-matches-operator-schema`（repo-lint 第 37 條）的自檢。
+"""`access-payload-shape-matches-operator-schema`（repo-lint 第 38 條）的自檢。
 
 守的是**這條規則自己**的鑑別力，不是被守的那棵樹乾不乾淨。分兩半：
 
