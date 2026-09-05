@@ -1,0 +1,6 @@
+# #1052：src/tests/__init__.py 是照時序 tail-append 的 import 清單。平行 PR 的 add/add
+# 衝突歷來每一次人工解法都是取兩側聯集（34 個 merge commit 裡 11 個明寫解衝突，抽驗的
+# 3 個 commit body 都附集合聯集驗證、缺 NONE）。union 是 git 內建 merge driver：只加不減，
+# 結構上不會靜默丟掉任何一側的 import；它唯一的新失效形態（同一行留兩份）由
+# scripts/audit/repo-lint.py 的 test-collectability 第 (4) 格攔。
+src/tests/__init__.py merge=union
