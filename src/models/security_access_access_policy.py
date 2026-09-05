@@ -473,11 +473,20 @@ class SecurityAccessAccessPolicy(models.Model):
                           "(email domain / email list). Use IP range, country, "
                           "or everyone instead."))
 
-    #: #352：讓「不特定多數人」通過認證的 include 選擇器。
+    #: #352（email_domain／everyone）＋ #521 P-J（ip_range／country）：讓
+    #: 「不特定多數人」通過認證的 include 選擇器。
     #:
     #: AC 方案按人數計費，而人數是「數 email_list 規則裡的位址」算出來的
-    #: ——這兩種選擇器計 0 人卻放行無限多人。
-    _BULK_GRANT_RULE_TYPES = ('email_domain', 'everyone')
+    #: ——這四種選擇器計 0 人卻放行無限多人。剩下的 ``email_list`` 是唯一
+    #: 「說得出是誰」的 include 選擇器，也就是 allow 政策唯一可用的那一種。
+    #:
+    #: 🔴 這份清單在前端有一份鏡像：``src/static/src/paas/components/modal/
+    #: AddPolicyModal.js`` 的 module-level ``BULK_GRANT_RULE_TYPES``（builder 用它
+    #: 決定 allow+include 下拉要不要提供該選擇器、以及切到 allow 時要重寫哪些既有
+    #: 列）。兩份漂開的症狀是「UI 讓租戶選得到、送出必被拒」，租戶端零線索可循，
+    #: 開發側則是 repo-lint 綠／odoo-tests 綠（前端無測試）⇒ 由 repo-lint 第 37 條
+    #: ``bulk-grant-ruler-sync`` 機械對帳（#543 的根因正是兩份清單分離）。
+    _BULK_GRANT_RULE_TYPES = ('email_domain', 'everyone', 'ip_range', 'country')
 
     @api.constrains('decision', 'rule_ids')
     def _check_allow_policy_no_bulk_grant(self):
@@ -485,12 +494,18 @@ class SecurityAccessAccessPolicy(models.Model):
 
         ## 為什麼要擋
 
-        Cloudflare Access 的席位是 **per-ACCOUNT** 的全平台共用池（50 席），而且
-        是**使用者實際認證登入時**才消耗一席。AC 方案按人數計費，計數方式是數
-        ``email_list`` 規則裡的位址數——``email_domain``（整個網域放行）與
-        ``everyone``（所有人放行）**計 0 人**。兩者相乘的後果不是「少收一點
-        錢」，而是：租戶用一條規則放進不特定多數人，這些人登入時照樣吃席位，
-        第 51 人登入當場被擋——**受害的是平台上其他租戶，而他們零 workaround**。
+        Cloudflare Access 的席位是 **per-ACCOUNT** 的全平台共用池，而且是**使用
+        者實際認證登入時**才消耗一席。AC 方案按人數計費，計數方式是數
+        ``email_list`` 規則裡的位址數——``email_domain``（整個網域放行）、
+        ``everyone``（所有人放行）、``ip_range``（整段 IP，極端如 ``0.0.0.0/0``）
+        與 ``country``（整個國家）**一律計 0 人**。兩者相乘的後果不是「少收一點
+        錢」，而是：租戶用一條規則放進不特定多數人，這些人登入時照樣吃席位，池
+        子用完之後下一個人登入當場被擋——**受害的是平台上其他租戶，而他們零
+        workaround**。
+
+        ⚠ 席位池的**精確席數**是 Cloudflare 方案的外部常數（會隨方案變動），刻意
+        不寫在本檔也不寫進租戶可見訊息（#890，Eugene 2026-09-05 裁「拿掉數字」）
+        ——精確值與其時效見 ``docs/reference/gotchas/cf-zero-trust-seat-semantics.md``。
 
         ## 為什麼只擋 include
 
@@ -498,22 +513,41 @@ class SecurityAccessAccessPolicy(models.Model):
         ``require``（AND）與 ``exclude``（NOT）只會**縮小**放行範圍——
         「allow 但排除 evil.com 這個網域」是正當且常見的寫法，擋它沒有道理。
 
-        ## 為什麼 bypass 豁免
+        ## 為什麼 bypass 豁免（#521 P-J＝Eugene 2026-09-05 裁決 (B)「只擋 allow」）
 
         bypass 政策**不驗證身分**，使用者不經 Cloudflare 認證 ⇒ **不消耗席位**，
-        因此不是繞過席數計費的路徑。而且無差別禁用 ``everyone`` 會與
-        ``_check_decision_selector_compat`` 打架：那條規定 bypass 不得用
-        identity-based 選擇器（email_domain / email_list），只剩 ip_range /
-        country / everyone 三種寫法，再拿掉 everyone 就只剩兩種。
+        因此不是繞過席數計費的路徑；bypass + IP 是既有的運維工具（stg 現有
+        ``odoo-stg-ip-bypass`` 等規則就是這個形狀），且已在席位盤點口徑裡看得見
+        （#521 留言 9960 §2 盤點納入 bypass，**盤點口徑不因本守衛改動**）。
+
+        🔴 而且擴到 bypass 會讓 bypass 政策**一種寫法都不剩**：
+        ``_check_decision_selector_compat`` 規定 bypass 不得用 identity-based
+        選擇器（email_domain / email_list），若本守衛再把 ip_range / country /
+        everyone 也擋掉，五型全禁而 ``_check_at_least_one_include`` 又要求每個
+        policy 至少一條 include ⇒ bypass policy 建不出來。⇒ (B) 在結構上是**必需**
+        而非偏好。
+
+        機制上這道豁免**不是**靠列舉，而是靠下面 ``decision != 'allow'`` 那行早退
+        ——它在 rule_type 判定**之前**，所以 bypass 的規則結構上到不了
+        ``_BULK_GRANT_RULE_TYPES``。⛔ 動那行等於同時撤掉本段的全部論證。
 
         ``deny`` 同樣不受限：整批**封鎖**一個網域不會放任何人進來。
 
         ## 本檢查的邊界
 
-        擋掉繞過寫法 **≠ 席數計費成立**。``ac_max_access_seats`` 至今沒有任何
-        程式碼在讀，補完本檢查後席位數與實際放行人數之間仍然沒有連線（#521）。
-        另外 allow + include + ``ip_range``（如 ``0.0.0.0/0``）與 ``country``
-        同樣不計人頭卻會佔席位，是第三、四條繞過路徑，**不在本次範圍**。
+        擋掉繞過寫法 **≠ 席數計費成立**：本守衛只保證「allow 政策的 include 群組
+        說得出放行的是誰」，它與 ``ac_max_access_seats`` 的席數上限之間仍然沒有
+        連線（那條線在 ``_check_access_seat_quota``，另一把尺）。
+
+        ⚠ **本守衛與席位盤點是刻意分離的兩把尺，⛔ 不要「對齊」**：
+        ``_listed_seat_addresses`` 只計 ``rule_type == 'email_list'``、不分
+        decision、不分 group（#521 留言 9960 §2）。把 ip_range / country 加進本
+        清單**不會**連動席位計數；反過來把它們加進 ``_listed_seat_addresses``
+        會同時推翻 9960 §4（cap=0 的租戶仍可用非 email_list 型規則）。
+
+        四條繞過路徑（#352 收 email_domain／everyone，#521 P-J 收 ip_range／
+        country）到此收齊；allow 政策的 include 群組現在只剩 ``email_list``
+        可用——這是刻意的產品收窄，不是副作用。
 
         ## migration bypass：``cr.sa_skip_bulk_grant_check``（#543）
 
@@ -560,11 +594,12 @@ class SecurityAccessAccessPolicy(models.Model):
             raise ValidationError(
                 _("Allow policy %r cannot use %s as an Include rule.\n\n"
                   "Why: seat-based Access plans count people by the addresses "
-                  "listed in 'Email list' rules, so a whole-domain / everyone "
-                  "rule admits an unlimited number of people while counting as "
-                  "zero. Every one of them still consumes one of the 50 "
-                  "Cloudflare Access seats shared by the whole platform, so the "
-                  "51st login is refused — for every tenant, not just this one.\n"
+                  "listed in 'Email list' rules, so a whole-domain, everyone, "
+                  "IP-range or country rule admits an unlimited number of "
+                  "people while counting as zero. Every one of them still "
+                  "draws on the Cloudflare Access seat pool shared by the whole "
+                  "platform, and once that pool is exhausted the next login is "
+                  "refused — for every tenant, not just this one.\n"
                   "What to use instead: list the individual addresses in an "
                   "'Email list' Include rule. To narrow (not widen) access you "
                   "can still use these selectors in Require / Exclude rules, and "
@@ -877,6 +912,11 @@ class SecurityAccessAccessPolicy(models.Model):
         其餘四型（``email_domain``／``ip_range``／``everyone``／``country``）一律算 0 席。
         租戶把 email 白名單刪光會看到 0 席，但一條 ``email_domain`` 仍在放行整個網域
         ⇒ 訊息只能承諾席位數，不能敘述成「存取權都拆掉了」。
+
+        ⚠ #521 P-J 之後那四型在 **allow 政策的 include 群組**已被
+        ``_check_allow_policy_no_bulk_grant`` 擋掉，但本段敘述仍然完整成立——
+        它們在 ``deny`` / ``bypass`` 政策、以及 ``require`` / ``exclude`` 群組
+        裡都還寫得出來，而本尺**不分 decision、不分 group**。
 
         :return: ``None``，或 ``{'error': str, 'current_seats': int, 'target_seats': int}``
         """

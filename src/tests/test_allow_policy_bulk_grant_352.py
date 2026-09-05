@@ -1,15 +1,26 @@
-"""#352：allow 型 Access 政策的 include 規則不得「整批放行」。
+"""#352 ＋ #521 P-J：allow 型 Access 政策的 include 規則不得「整批放行」。
 
 ## 缺陷
 
-Cloudflare Access 的席位是 **per-ACCOUNT** 的全平台共用池（50 席），而且是
-**使用者實際認證登入時**才消耗一席。AC 方案按人數計費，人數的計算方式是數
-``email_list`` 規則裡的位址——``email_domain``（整個網域放行）與 ``everyone``
-（所有人放行）**計 0 人**。
+Cloudflare Access 的席位是 **per-ACCOUNT** 的全平台共用池，而且是**使用者實際
+認證登入時**才消耗一席。AC 方案按人數計費，人數的計算方式是數 ``email_list``
+規則裡的位址——``email_domain``（整個網域放行）、``everyone``（所有人放行）、
+``ip_range``（整段 IP）與 ``country``（整個國家）**一律計 0 人**。
 
 兩者相乘的後果不是「少收一點錢」：租戶用一條規則放進不特定多數人，這些人登入
-時照樣吃席位，第 51 人登入當場被擋——**受害的是平台上其他租戶，而他們零
-workaround**。
+時照樣吃席位，池子用完之後下一個人登入當場被擋——**受害的是平台上其他租戶，
+而他們零 workaround**。
+
+⚠ 席位池的精確席數是 Cloudflare 方案的外部常數、會過期，刻意不寫在本檔也不寫
+進租戶可見訊息（#890，Eugene 2026-09-05 裁「拿掉數字」）；精確值見
+``docs/reference/gotchas/cf-zero-trust-seat-semantics.md``。
+
+## 四型是分兩批收齊的
+
+#352（2026-08）收 ``email_domain`` / ``everyone``；``ip_range`` / ``country``
+當時被明文標記為「第三、四條繞過路徑，不在本次範圍」，由 **#521 P-J** 補上
+（Eugene 2026-09-05 裁決 **(B) 只擋 allow**）。⇒ allow 政策的 include 群組現在
+只剩 ``email_list`` 可用，這是刻意的產品收窄。
 
 ## 兩層都要擋
 
@@ -29,14 +40,18 @@ issue 內文原本寫「UI 已不提供這兩種規則選項」，實查不成�
 - **只擋 include**：include 是 OR（命中即放行），整批放行的入口在這。
   ``require``（AND）與 ``exclude``（NOT）只會**縮小**範圍——「allow 但排除
   evil.com」是正當寫法。
-- **bypass 豁免**：bypass 不驗證身分、使用者不經認證 ⇒ 不消耗席位，不是繞過
-  路徑；且無差別禁用 ``everyone`` 會與既有的
-  ``_check_decision_selector_compat``（bypass 不得用 identity selector）打架，
-  讓 bypass 只剩兩種寫法。
+- **bypass 豁免（#521 P-J 裁決 (B)）**：bypass 不驗證身分、使用者不經認證 ⇒
+  不消耗席位，不是繞過路徑；bypass + IP 是既有的運維工具（stg 現有
+  ``odoo-stg-ip-bypass`` 等規則就是這個形狀）。而且擴到 bypass 會讓 bypass
+  政策**一種寫法都不剩**：``_check_decision_selector_compat`` 已禁掉
+  email_domain / email_list，本守衛若再禁掉 ip_range / country / everyone，
+  五型全禁而「至少一條 include」又是硬規則 ⇒ bypass policy 建不出來。
+  ⇒ (B) 在結構上是必需，不是偏好。
 - **deny 不受限**：整批**封鎖**一個網域不會放任何人進來。
 - 本檢查擋的是繞過寫法，**不等於席數計費成立**——``ac_max_access_seats`` 至今
   沒有任何程式碼在讀（#521）。
 """
+import uuid
 from unittest.mock import MagicMock, patch
 
 from odoo.exceptions import ValidationError
@@ -244,15 +259,211 @@ class TestAllowPolicyBulkGrantModel(_BulkGrantFixture, TransactionCase):
     def test_bypass_include_everyone_ok(self):
         """bypass 豁免：不驗證身分 ⇒ 不消耗席位。
 
-        而且無差別禁用 everyone 會與 ``_check_decision_selector_compat``
-        打架——那條規定 bypass 不得用 email_domain / email_list，只剩
-        ip_range / country / everyone，再拿掉 everyone 就只剩兩種寫法。
+        #521 P-J 之後這條論證更強：``_check_decision_selector_compat`` 已禁掉
+        bypass 的 email_domain / email_list，本守衛若再擴到 bypass，剩下的
+        ip_range / country / everyone 也全禁 ⇒ 五型全禁、而「至少一條 include」
+        是硬規則 ⇒ bypass policy 一種都建不出來。豁免的機制是守衛裡
+        ``decision != 'allow'`` 那行早退，不是型別列舉。
         """
         pol = self._make_policy(
             'bypass-everyone', decision='bypass',
             rules=[self._rule('include', 'everyone')])
         self.assertEqual(pol.decision, 'bypass')
         self.assertEqual(pol.rule_ids[0].rule_type, 'everyone')
+
+    # ------------- #521 P-J：ip_range / country（第三、四條繞過路徑）------ #
+
+    def test_allow_include_ip_range_rejected(self):
+        """P-J (i)：allow + include ip_range＝不算人頭放進整段 IP。"""
+        self._assert_bulk_grant_rejected(
+            lambda: self._make_policy(
+                'allow-iprange',
+                rules=[self._rule('include', 'ip_range', '10.0.0.0/8')]),
+            'ip_range')
+
+    def test_allow_include_ip_range_wide_open_rejected(self):
+        """P-J：``0.0.0.0/0`` 是同一條路徑的極端版——整個網際網路都放行，
+        計 0 人。守衛判的是 rule_type，不判 CIDR 寬窄，所以窄段一樣擋
+        （擋的是「席位計數看不見這些人」，不是「這段 IP 有多大」）。"""
+        self._assert_bulk_grant_rejected(
+            lambda: self._make_policy(
+                'allow-iprange-all',
+                rules=[self._rule('include', 'ip_range', '0.0.0.0/0')]),
+            'ip_range')
+
+    def test_allow_include_country_rejected(self):
+        """P-J (ii)：allow + include country＝不算人頭放進整個國家。"""
+        self._assert_bulk_grant_rejected(
+            lambda: self._make_policy(
+                'allow-country',
+                rules=[self._rule('include', 'country', 'TW')]),
+            'country')
+
+    def test_allow_include_mixed_ip_range_still_rejected(self):
+        """合法 email_list 夾帶一條 ip_range 仍被擋：include 是 OR，一條整批
+        放行就等於整批放行（與 email_domain 那格同構）。"""
+        self._assert_bulk_grant_rejected(
+            lambda: self._make_policy(
+                'allow-mixed-ip',
+                rules=[self._rule('include', 'email_list', 'a@acme.com'),
+                       self._rule('include', 'ip_range', '10.0.0.0/8')]),
+            'ip_range')
+
+    def test_standalone_rule_create_ip_range_rejected(self):
+        """rule.create 的顯式回呼路徑也要涵蓋新型別（policy 的
+        @api.constrains 對「單獨建 rule」不會觸發）。"""
+        pol = self._make_policy('allow-standalone-ip')
+        self._assert_bulk_grant_rejected(
+            lambda: self.Rule.create({
+                'policy_id': pol.id, 'group': 'include',
+                'rule_type': 'ip_range', 'rule_value': '192.0.2.0/24'}),
+            'ip_range')
+        self.assertEqual(len(pol.rule_ids), 1,
+                         '被拒的 rule.create 不得留下列（savepoint 回捲）')
+
+    def test_rule_write_type_flip_to_country_rejected(self):
+        """rule.write 把既有 include email_list 改成 country 也是同一個繞過。"""
+        pol = self._make_policy('allow-flip-country')
+        rule = pol.rule_ids[0]
+        self._assert_bulk_grant_rejected(
+            lambda: rule.write({'rule_type': 'country',
+                                'rule_value': 'TW'}),
+            'country')
+
+    def test_bypass_policy_flipped_to_allow_rejected(self):
+        """🔴 P-J 唯一擴大既有資料射程的那一格：一條**合法的** bypass +
+        ip_range 政策（stg 運維規則的形狀）被翻成 allow 時，當場被擋。
+
+        它在 P-J 之前是放行的——判準綁 ``decision``，所以翻旗就是新的違規
+        事件，而不是回頭追殺舊資料。舊資料本身不動（守衛只在寫入時跑）。
+        """
+        pol = self._make_policy(
+            'ops-bypass', decision='bypass',
+            rules=[self._rule('include', 'ip_range', '114.32.21.18')])
+        self.assertEqual(pol.decision, 'bypass')
+        self._assert_bulk_grant_rejected(
+            lambda: pol.write({'decision': 'allow'}), 'ip_range')
+
+    # ---------------- P-J 的陽性對照：(B) 只擋 allow ---------------- #
+
+    def test_bypass_include_bare_ip_ok(self):
+        """🔴 (iii) 裁決 (B) 的行為錨：bypass + ip_range **不擋**。
+
+        rule_value 刻意用**無 CIDR 後綴**的 ``114.32.21.18``——那正是 stg
+        現有 ``odoo-stg-ip-bypass`` 那兩條運維規則的形狀（``ip_network(...,
+        strict=False)`` 接受裸 IP，等同 /32）。這一格紅了就代表 P-J 打破了
+        stg 的運維通道，而那條通道在別處**沒有任何測試釘住**。
+        """
+        pol = self._make_policy(
+            'bypass-bare-ip', decision='bypass',
+            rules=[self._rule('include', 'ip_range', '114.32.21.18')])
+        self.assertEqual(pol.decision, 'bypass')
+        self.assertEqual(pol.rule_ids[0].rule_type, 'ip_range')
+        self.assertEqual(pol.rule_ids[0].rule_value, '114.32.21.18')
+
+    def test_bypass_include_country_ok(self):
+        """(iii) 同批：bypass + country 也不擋（同一條 decision 早退）。"""
+        pol = self._make_policy(
+            'bypass-country', decision='bypass',
+            rules=[self._rule('include', 'country', 'TW')])
+        self.assertEqual(pol.rule_ids[0].rule_type, 'country')
+
+    def test_deny_include_ip_range_ok(self):
+        """deny 不受限：整批**封鎖**一段 IP 不會放任何人進來。"""
+        pol = self._make_policy(
+            'deny-iprange', decision='deny',
+            rules=[self._rule('include', 'ip_range', '10.0.0.0/8')])
+        self.assertEqual(pol.decision, 'deny')
+
+    def test_allow_require_ip_range_ok(self):
+        """require(AND) ip_range 只**縮小**範圍——「allow 這些人、而且必須從
+        公司 IP 進來」是正當寫法，擋它沒有道理。"""
+        pol = self._make_policy(
+            'allow-require-ip',
+            rules=[self._rule('include', 'email_list', 'a@acme.com'),
+                   self._rule('require', 'ip_range', '10.0.0.0/8')])
+        self.assertEqual(len(pol.rule_ids), 2)
+
+    def test_allow_exclude_country_ok(self):
+        """exclude(NOT) country 同理：只縮小範圍。"""
+        pol = self._make_policy(
+            'allow-exclude-country',
+            rules=[self._rule('include', 'email_list', 'a@acme.com'),
+                   self._rule('exclude', 'country', 'CN')])
+        self.assertEqual(len(pol.rule_ids), 2)
+
+    # ---------------- 租戶身分（非 su）------------------------------ #
+
+    def _tenant_route(self):
+        """建一位只有 ``base.group_user`` 的租戶，連同他自己 own 的
+        workspace / SA / route，回傳 ``(tenant, route)``。
+
+        workspace 一定要用 ``with_user(tenant).create()``：``Workspace.create()``
+        會依 ``owner_id`` 自動 bootstrap 一列 owner 的 ``workspace_access``，
+        而 ``_check_owner_count`` 限制一個 workspace 只能有一個 owner ⇒ 事後
+        補列會撞「A workspace can only have one owner」（做法同
+        ``test_rule_reparent_guard_941``）。
+        """
+        suffix = uuid.uuid4().hex[:8]
+        login = 'bulkgrant_%s' % suffix
+        tenant = self.env['res.users'].sudo().create({
+            'name': 'Bulk Grant Tenant %s' % suffix,
+            'login': login,
+            'password': login,
+            'email': '%s@test.example' % login,
+            'groups_id': [(6, 0, [self.env.ref('base.group_user').id])],
+        })
+        ws = self.env['woow_paas_platform.workspace'].with_user(tenant).create(
+            {'name': 'Bulk Grant Tenant WS %s' % suffix})
+        sa = self.SA.sudo().create(
+            {'name': 'Tenant GW %s' % suffix, 'workspace_id': ws.id})
+        route = self.Route.sudo().create(
+            {'security_access_id': sa.id,
+             'subdomain_prefix': 'bulk-tenant-%s' % suffix})
+        return tenant, route
+
+    def test_tenant_identity_allow_include_ip_range_rejected(self):
+        """🔴 守衛在**租戶身分**下一樣擋，而且擋的是 ValidationError。
+
+        ``TransactionCase`` 預設跑在 su env（``env.su=True``），只在 su 下驗過
+        的守衛分不出「守衛有效」與「守衛只在 su 下有效」——而 stored related 的
+        ``compute_sudo`` 會讓 ``@api.constrains`` 多跑一趟 su，那一趟不吃
+        ir.rule，兩者的輸出一模一樣。
+
+        ⚠ **陽性對照必配**：先證明同一位租戶建得起合法的 email_list 政策（守衛
+        以外的門——ACL、ir.rule、錨點——都是通的），否則「被擋」可能只是因為他
+        根本沒有權限，這一格就會在守衛失效時照樣綠。
+
+        ⚠ ``with_user().create()`` 包在 ``savepoint()`` 裡是刻意的：``_create``
+        先 INSERT 再做 post-check，不回捲會讓 transaction 進 aborted 狀態、後續
+        查詢全 ``InFailedSqlTransaction``（同 ``test_rule_reparent_guard_941``）。
+        """
+        tenant, route = self._tenant_route()
+        TenantPolicy = self.Policy.with_user(tenant)
+
+        # 陽性對照：合法寫法必須真的建得起來（證明這條租戶路徑是通的）
+        legal = TenantPolicy.create({
+            'route_id': route.id, 'name': 'tenant-legal', 'decision': 'allow',
+            'rule_ids': [self._rule('include', 'email_list', 't@acme.com')]})
+        self.assertTrue(legal.id, '前提：租戶必須建得起合法的 allow 政策')
+
+        raised = None
+        try:
+            with self.env.cr.savepoint():
+                TenantPolicy.create({
+                    'route_id': route.id, 'name': 'tenant-iprange',
+                    'decision': 'allow',
+                    'rule_ids': [self._rule('include', 'ip_range',
+                                            '10.0.0.0/8')]})
+        except Exception as exc:  # noqa: BLE001 —— class 本身就是待量測的量
+            raised = exc
+        self.assertIsInstance(
+            raised, ValidationError,
+            '租戶身分下必須被守衛擋（ValidationError）；實際 %r' % (raised,))
+        msg = str(raised)
+        self.assertIn('ip_range', msg, msg)
+        self.assertIn('Email list', msg, msg)
+        self.assertIn('seat', msg.lower(), msg)
 
 
 class TestAllowPolicyBulkGrantEndpoint(_BulkGrantFixture, TransactionCase):
@@ -301,6 +512,31 @@ class TestAllowPolicyBulkGrantEndpoint(_BulkGrantFixture, TransactionCase):
         res = self._create_via_api(
             'api-everyone', [{'rule_type': 'everyone', 'rule_value': ''}])
         self._assert_api_rejected(res, 'everyone')
+
+    def test_api_create_ip_range_rejected(self):
+        """#521 P-J：API 這條路徑也要涵蓋新型別（UI 濾掉了 ≠ 擋住了）。"""
+        res = self._create_via_api(
+            'api-iprange', [{'rule_type': 'ip_range',
+                             'rule_value': '10.0.0.0/8'}])
+        self._assert_api_rejected(res, 'ip_range')
+        self.assertFalse(
+            self.Policy.search([('security_access_id', '=', self.sa.id)]),
+            "API 被拒後不得留下 policy 資料。")
+
+    def test_api_create_country_rejected(self):
+        res = self._create_via_api(
+            'api-country', [{'rule_type': 'country', 'rule_value': 'TW'}])
+        self._assert_api_rejected(res, 'country')
+
+    def test_api_create_bypass_ip_range_ok(self):
+        """(iii) 的 API 側陽性對照：bypass + ip_range 經 API 仍建得起來——
+        stg 的運維規則就是這個形狀，裁決 (B) 明文不擋。"""
+        res = self._create_via_api(
+            'api-bypass-ip',
+            [{'rule_type': 'ip_range', 'rule_value': '114.32.21.18'}],
+            decision='bypass')
+        self.assertTrue(res['success'], res.get('error'))
+        self.assertEqual(res['data']['include'][0]['rule_type'], 'ip_range')
 
     def test_api_create_email_list_ok(self):
         """正向：API 仍然開得成 email_list 政策（沒有把整條路封死）。"""

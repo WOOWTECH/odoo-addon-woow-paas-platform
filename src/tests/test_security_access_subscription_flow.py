@@ -998,8 +998,11 @@ class TestSecurityAccessAccessControl(TransactionCase):
         with _patch_request(self.env), \
                 patch(MOCK_GET_CLIENT, return_value=mc), \
                 patch(MOCK_GET_CLIENT_MODEL, return_value=mc):
+            # #521 P-J：decision 用 deny——allow + include + ip_range 現在會先撞
+            # 上 bulk-grant 守衛，success 照樣是 False 但理由不是「rule 非法」，
+            # 本格會靜默停止量它宣稱在量的東西。
             res = self.controller._create_policy(sa, {
-                'name': 'bad', 'decision': 'allow',
+                'name': 'bad', 'decision': 'deny',
                 'rule_type': 'ip_range', 'rule_value': 'nope'})
         self.assertFalse(res['success'])
 
