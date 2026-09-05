@@ -360,6 +360,21 @@ class TestAutoRecreditPostgresCapability864(BaseCase):
                 'wallet_transaction_ref', 'repair_topup_ref',
                 'next_query_at'), row))
 
+    def _skip_row(self, reference):
+        """#1051：replay skip 的四個承載欄位，一律用 fresh cursor 讀。
+
+        ⚠ 不併進 `_incident`：那支是 query-audit 用的欄位集合，兩邊各自演化。
+        """
+        with self.registry.cursor() as cr:
+            cr.execute(
+                'SELECT skip_reason, skip_count, attempts, last_skipped_at '
+                'FROM woow_billing_incident WHERE external_ref = %s',
+                (reference,))
+            row = cr.fetchone()
+            return row and dict(zip((
+                'skip_reason', 'skip_count', 'attempts',
+                'last_skipped_at'), row))
+
     def _mock_safe_query(self):
         def _query(_client, merchant_trade_no):
             return self._safe_lookup(merchant_trade_no)
@@ -873,6 +888,73 @@ class TestAutoRecreditPostgresCapability864(BaseCase):
                 verify_cr.fetchone(),
                 ('indeterminate', 'awaiting_capture', 1, next_query_at),
             )
+
+    def test_replay_skip_independent_survives_outer_rollback(self):
+        """#1051：replay skip 標記寫完**之後**外層交易真 rollback，痕跡仍須在。
+
+        與 PR-G `test_independent_wrapper_persists_after_caller_cursor_aborted`
+        （`integration/test_callback_replay_864.py`）互補、不重複——那條打的是
+        「aborted cursor 上寫不進去，所以需要第二形」；本條打的是另一個性質：
+        independent 形自己 commit，所以**健康**的 caller 交易事後 rollback
+        也帶不走它。
+
+        ⚠ 為什麼非要這一條：run 2518 把 `_mark_replay_skip_independent` 退化成
+        caller-cursor 形，全綠。PR-F 那條 40001 路徑先讓 aborted cursor
+        rollback／關閉、才從外層**健康** cursor 寫標記，測試又正常離開該
+        cursor（context manager 收尾時 commit）⇒ 對那條路徑突變等價，
+        `test_true_40001_is_recorded_then_next_round_credits_once` 照樣綠。
+        本條把「事後 rollback 也帶不走」單獨拉出來當判別式。
+        """
+        reference = self._seed_branch_a('S1')[0]
+        self.assertEqual(
+            self._skip_row(reference),
+            {'skip_reason': None, 'skip_count': 0, 'attempts': 0,
+             'last_skipped_at': None},
+            '前置：seed 出來的 incident 不得已帶 skip 痕跡，否則本測沒有鑑別力',
+        )
+
+        with self.registry.cursor() as outer_cr:
+            env = api.Environment(outer_cr, odoo.SUPERUSER_ID, {})
+            marked = env['woow.billing.incident'] \
+                ._mark_replay_skip_independent(
+                    reference, 'lock_not_available', bump_attempts=True)
+            self.assertTrue(marked, '前置：標記必須先寫成功')
+            # 判別式的承重點：這條 cursor 是**健康**的（⛔ 不用 1/0 打 abort、
+            # ⛔ 不用 raise 偽造 transaction failure），標記寫完後才 rollback。
+            outer_cr.rollback()
+
+        # 第三條 fresh cursor：independent 形已自行 commit ⇒ 四個欄位全都還在。
+        row = self._skip_row(reference)
+        self.assertEqual(row['skip_reason'], 'lock_not_available')
+        self.assertEqual(row['skip_count'], 1)
+        self.assertEqual(row['attempts'], 1)
+        self.assertIsNotNone(row['last_skipped_at'])
+
+    def test_replay_skip_current_cursor_dies_with_outer_rollback(self):
+        """陰性對照：同一形狀改走 current-cursor 形，rollback 必須帶走標記。
+
+        沒有這條，上面那條「rollback 後還在」可能只是因為 rollback 根本沒作用
+        （探針壞掉）而恆綠。本條證明這支探針有鑑別力。
+
+        ⚠ 突變（independent 形退化成 caller cursor）**不會**讓本條紅——它動的
+        是 independent 形、本條呼叫的是 current-cursor 形。這正是「對照」。
+        """
+        reference = self._seed_branch_a('S2')[0]
+        before = self._skip_row(reference)
+
+        with self.registry.cursor() as outer_cr:
+            env = api.Environment(outer_cr, odoo.SUPERUSER_ID, {})
+            marked = env['woow.billing.incident'] \
+                ._mark_replay_skip_current_cursor(
+                    reference, 'lock_not_available', bump_attempts=True)
+            self.assertTrue(
+                marked, '前置：同一條 cursor 上必須先寫得進去，否則不是對照')
+            outer_cr.rollback()
+
+        self.assertEqual(
+            self._skip_row(reference), before,
+            'current-cursor 形與 caller 同交易 ⇒ rollback 必須把標記整個帶走',
+        )
 
     def test_negative_control_without_independent_cursor_would_rollback(self):
         """永久 control：same-cursor rollback 必須刪列；mutation 另留紅證。"""
