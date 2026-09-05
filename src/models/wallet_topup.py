@@ -850,6 +850,10 @@ class WalletTopup(models.Model):
                 # 入帳（不可逆）之後才做的 tx 狀態對齊只是**記帳**：它失敗
                 # ⛔ 不得把已經發生的入帳一起回捲（見
                 # docs/decisions/patterns/post-commit-bookkeeping-rollback-unit.md）。
+                # ⚠ #1052 標記（非裁定）：本站點與上列 doc 的規則一（OperationalError
+                # 必須外拋）分歧——下方 `except Exception:` 未分流 OperationalError。
+                # `cr` 是本列專用的獨立 cursor（不是外層 cron 那條），規則是否轉移
+                # 到 per-record cursor、還是刻意例外，待裁定；裁定前別照抄本站形狀。
                 try:
                     with cr.savepoint():
                         if trade_no and not tx.provider_reference:

@@ -29,7 +29,8 @@
         "docs/tracking/pitfalls/orm-test-green-endpoint-leak-blindness.md — backend ORM test 全綠遮蔽 controller sudo bypass 的 incident 敘事",
         "docs/decisions/patterns/hidden-template-presentation-chain.md — 動 /woow 曝光點或**既有服務的操作端點**時：先分層（曝光層 is_hidden vs 實例層 conceal_instances，#471），實例層判準用 template_id.conceal_instances（repo-lint check_conceal_instances_gate 機械攔），gate 要放在能力/狀態判準之前",
         "docs/decisions/patterns/helm-reset-values-unified-pipeline.md — 動租戶 reconfigure/升級端點的 helm values 組裝時：背景執行緒無 ORM，全量 values 必主執行緒先算（_assemble_deploy_values）＋傳 reset_values=True",
-        "docs/decisions/patterns/capability-gate-single-source-field.md — 回傳 template 子物件的 service payload 要鏡射能力欄位（has_admin_gui）給前端：直接搬不推導，否則前端只能猜 slug → 後端放行、租戶按不到（#357 C01 → #460）"
+        "docs/decisions/patterns/capability-gate-single-source-field.md — 回傳 template 子物件的 service payload 要鏡射能力欄位（has_admin_gui）給前端：直接搬不推導，否則前端只能猜 slug → 後端放行、租戶按不到（#357 C01 → #460）",
+        "docs/decisions/patterns/post-commit-bookkeeping-rollback-unit.md — 動「先對外部系統下達不可回捲的變更、再寫 DB」的 method（_reset_admin_password／_execute_deploy／action_redeploy／遠端 provision）時：先定位提交點，再問這個 except 落在哪一側——之後的例外只是**記帳**失敗，不得翻轉回應語意、不得補 cr.rollback()（會把「一致但租戶不知情」換成 DB↔叢集不一致）；回捲單位要對齊事實邊界（憑證落庫與衍生記帳分開包 cr.savepoint()），OperationalError 一律外拋（#518）。paas.py／billing.py／ha_paas.py 都有 cr.savepoint() 站點（#1052 補列）"
       ]
     },
     {
@@ -62,6 +63,14 @@
         "docs/decisions/patterns/reset-async-budget-ladder.md — 動 _reset_admin_password 的落庫／狀態語意時：提交點＝operator 回 2xx（commit-on-secret，C11′），2xx 前失敗保證叢集仍是舊密碼所以刻意不落庫、成功必 stamp upgrading 交給 cron／前端輪詢收斂；改提交點要連同不變式一起重寫，勿照舊 C11「已生效」語意把它「修正」回去",
         "docs/decisions/patterns/post-commit-bookkeeping-rollback-unit.md — 動「先對外部系統下達不可回捲的變更、再寫 DB」的 method（_reset_admin_password／_execute_deploy／action_redeploy／遠端 provision）時：先定位提交點，再問這個 except 落在哪一側——之後的例外只是**記帳**失敗，不得翻轉回應語意、不得補 cr.rollback()（會把「一致但租戶不知情」換成 DB↔叢集不一致）；回捲單位要對齊事實邊界（憑證落庫與衍生記帳分開包 cr.savepoint()），OperationalError 一律外拋（#518）",
         "docs/tracking/pitfalls/operator-route-none-conflates-disabled-and-failed.md — 動 release 的 route 建立路徑、或平台端讀 release 回應時：`route` 缺席**不是**失敗訊號（operator 的 `cloudflare_enabled` 預設 false，且舊 operator 沒有這個欄位）。fail-closed 只能認明說的失敗（`route.status == failed` 或 `route.dns_failed`）；把缺席當失敗會讓沒開 Cloudflare 的環境**每一次部署**都翻 error"
+      ]
+    },
+    {
+      "class": "post-commit-bookkeeping-carriers",
+      "pattern": "^src/models/(wallet_topup|cf_access_policy_reap|sh_subscription_fix|access_resync_cron|subscription_lifecycle_cron|low_balance_warning_cron)\\.py$",
+      "why": "這六個檔各有 cr.savepoint()／獨立 registry.cursor() 站點（#1052 盤點：17 個帶 savepoint 的檔只有 8 個落在 model-write-guard 的 regex 裡），其中 wallet_topup.py 是全 repo 唯一在註解裡指名 post-commit-bookkeeping doc 的站點——卻不在守線射程內。savepoint 的 flavour 各站不同（post-effect 記帳／pre-effect atomicity／batch isolation／lock-release 補償），改之前先分清楚這一站是哪一種，再決定 OperationalError 要不要外拋",
+      "docs": [
+        "docs/decisions/patterns/post-commit-bookkeeping-rollback-unit.md — 動「先對外部系統下達不可回捲的變更、再寫 DB」的 method 時：先定位提交點，再問這個 except 落在哪一側——之後的例外只是**記帳**失敗，不得翻轉回應語意、不得補 cr.rollback()；回捲單位要對齊事實邊界，OperationalError 一律外拋（#518）。⚠ 本 class 的六個檔裡 wallet_topup.py／cloud_service.py／access_resync_cron.py 各有一站與規則一分歧、已加「#1052 標記（非裁定）」註解，裁定前別照抄任何一站的形狀"
       ]
     },
     {
