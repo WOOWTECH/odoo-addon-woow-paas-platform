@@ -97,7 +97,7 @@ controller 的 `except Exception` 又把它吞成 HTTP 200 的 `{"success": fals
 """
 import json
 import uuid
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from odoo.tests import HttpCase, tagged
 
