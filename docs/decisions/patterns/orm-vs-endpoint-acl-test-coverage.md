@@ -32,6 +32,25 @@ metadata:
 
 **反推**：backend ORM 層所有 test 全綠（如 `test_project_decouple.py` B1-B5），**不保證**該 model 對應 endpoint cross-user 安全。每個 list endpoint 至少要對應 1 條 HttpCase cross-user negative。
 
+### ⚠ 唯一的 carve-out：不回傳給 caller 的「成本計數」（#896，2026-09-05）
+
+本 invariant 的判準是「結果**直接 return 給 caller**」。配額／席位這種**平台成本**的
+計數是另一回事，而且方向相反：它不外流任何 row，反而是**未** sudo 才會出事——
+`ir.rule` 濾掉呼叫者看不到的列 ⇒ 計數少算 ⇒ 配額安靜地變寬，而「配額變寬」與
+「方案上限很大」在輸出上完全不可區分（無訊號失效）。
+
+⇒ 一個 controller sudo 要吃這條 carve-out，必須**同時**滿足：
+
+1. domain 已由**歸屬錨點的 id** 收斂（sudo 只放寬可見度，不放寬範圍）；
+2. 結果**只用於一個布林判定**，⛔ 不得（也不可經由錯誤訊息）回傳給 caller；
+3. 未授權呼叫者在**到達這個計數之前**就已被 gate 擋掉，並有一格 HttpCase
+   cross-user negative 明寫「連配額狀態都拿不到」。
+
+實例＝`src/controllers/security_access.py::_create_policy` 的 `existing`
+計數，對應測試 `src/tests/test_policy_quota_pool_sudo_896.py::TestPolicyQuotaBffSudoCrossUser896`
+（C1 證 domain 沒被放寬、C2 證計數仍正確、C3 證非成員拿不到配額狀態）。
+⛔ 不符合上述三格的 sudo 不吃這條 carve-out，照 L2 拔掉。
+
 ## What it looks like
 
 ### 反例（unsafe — 三變體 family，本 repo 在 cycle 6 close 4 個 instance）

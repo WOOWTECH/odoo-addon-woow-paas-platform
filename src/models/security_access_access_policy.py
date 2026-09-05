@@ -714,7 +714,18 @@ class SecurityAccessAccessPolicy(models.Model):
                       "_ANCHOR_POOL_FIELD — the plan quota cannot be scoped. "
                       "Register the anchor model before shipping it.")
                     % (pol.name or pol.id, anchor._name))
-            count = self.search_count([(anchor_field, '=', anchor.id)])
+            # #896：`sudo()` 是尺的一部分，不是可省的最佳化——與同檔
+            # `_seat_usage_for_anchor()` 同一個理由。配額是**平台成本**，不是
+            # 「這位呼叫者看得到多少」：`ir.rule` 只讓呼叫者看到池中一部分
+            # policy 時，裸 `search_count` 會**少算**，而少算的症狀是「配額安靜
+            # 地變寬」——與「方案的政策數上限很大」在輸出上完全不可區分。
+            # #924 已在真沙盒量到這個落差（非成員裸 `search_count` 0 vs
+            # `sudo()` 2）。當時端到端不可達，靠的是兩個**不屬於這個守衛**的
+            # 外部性質：stored related `security_access_id` 的 `compute_sudo`
+            # 重算讓大多數路徑跑在 su env、以及 #848 的 `AccessError` 前置擋掉
+            # 跨錨點搬移；任一被改動這裡就露出來，而且露出來時無訊號。
+            # （池仍以錨點 id 收斂 ⇒ sudo 只放寬可見度，不會把別的租戶算進來。）
+            count = self.sudo().search_count([(anchor_field, '=', anchor.id)])
             if count > quota:
                 raise ValidationError(
                     _("Access policy quota exceeded: plan '%s' allows %d "
@@ -778,14 +789,21 @@ class SecurityAccessAccessPolicy(models.Model):
         ``_anchor()`` / ``_anchor_plan()`` 是唯一裁決處，計數範圍與配額來源
         因此不可能漂開。
 
-        ## 為什麼池的 search 要 ``sudo()``（與 ``_check_policy_quota`` 不同）
+        ## 為什麼池的 search 要 ``sudo()``
 
         席位是**平台成本**，不是這位使用者看得到多少。租戶側若因 ir.rule 只看
         得到池中一部分 policy，未 sudo 的計數會**少算**，而少算的症狀是「配額
         安靜地變寬」——與「方案席位很多」在輸出上完全不可區分。
-        ``_check_policy_quota`` 沒有 sudo 是既有形狀，不在本次範圍內改；兩者
-        的差異刻意寫在這裡，免得後人把其中一邊「順手對齊」成另一邊。
         （池仍以錨點 id 收斂 ⇒ sudo 只放寬可見度，不會把別的租戶算進來。）
+
+        ⚠ **這一段曾經寫著「``_check_policy_quota`` 沒有 sudo 是既有形狀，不在
+        本次範圍內改」——#896 已經把那一邊也補上 sudo（2026-09-05）**，兩條
+        quota 的計數口徑因此一致。⛔ 別再把任何一邊改回裸 ``search_count``：
+        少算的症狀無訊號，#924 已在真沙盒量到落差（非成員裸 ``search_count`` 0
+        vs ``sudo()`` 2）。
+        ⚠ 這裡講的**只是「數池子」那一次查詢**；讀 record 內容一律維持呼叫者的
+        env，sudo 不得外溢（``_listed_seat_addresses()`` 讀的是 sudo 過的 pool，
+        因為它就是那把尺的一部分）。
 
         ## migration bypass 沿用 ``cr.sa_skip_policy_quota``
 
