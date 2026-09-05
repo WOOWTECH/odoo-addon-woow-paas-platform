@@ -150,6 +150,10 @@ _CONFIG_PARAMETERS = [
     # 小時（Eugene 裁決 2026-09-01，comment 11215）。⛔ 刻意沒有 disable 開關
     # ——同 manual_invoice_aging_days 的理由：這是防重複扣款的安全機制。
     'woow_paas_platform.double_charge_cooldown_hours',
+    # #864 PR-F：QueryTrade auto-recredit kill-switch 與 independent-cron
+    # heartbeat。兩者是常數＋get_param 寫法，必須在卸載時顯式清理。
+    'woow_paas_platform.auto_recredit_enabled',
+    'woow_paas_platform.auto_recredit_heartbeat_at',
     'woow_paas_platform.sa_default_service_url',
     'woow_paas_platform.agent_idle_reap_seconds',
     'woow_paas_platform.agent_gc_seconds',

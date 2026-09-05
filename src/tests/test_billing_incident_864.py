@@ -65,6 +65,14 @@ class TestBillingIncidentSchema864(TransactionCase):
             'last_seen_at': 'datetime',
             'occurrences': 'integer',
             'assessment_reason': 'char',
+            'last_query_at': 'datetime',
+            'last_query_verdict': 'char',
+            'origin_xid': 'char',
+            'wallet_transaction_ref': 'integer',
+            'repair_topup_ref': 'integer',
+            'topup_plan_ref': 'integer',
+            'topup_source': 'char',
+            't1_overdue_at': 'datetime',
             'detail': 'text',
             'source_model': 'char',
             'source_ref': 'integer',
@@ -3263,8 +3271,11 @@ class TestBillingIncidentAdminBackend864(TransactionCase):
             'trade_no', 'rtn_code', 'failure_code', 'state', 'skip_reason',
             'last_skipped_at', 'skip_count', 'attempts', 'next_query_at',
             'query_attempts', 'first_seen_at', 'last_seen_at', 'occurrences',
-            'assessment_reason', 'detail', 'source_model', 'source_ref',
-            'resolved_at', 'resolved_by_ref',
+            'assessment_reason', 'last_query_verdict', 'last_query_at',
+            'origin_xid', 'topup_plan_ref', 'topup_source',
+            'wallet_transaction_ref', 'repair_topup_ref', 't1_overdue_at',
+            'detail', 'source_model', 'source_ref', 'resolved_at',
+            'resolved_by_ref',
         }
         for name in snapshot_fields:
             nodes = form_arch.xpath("//field[@name='%s']" % name)

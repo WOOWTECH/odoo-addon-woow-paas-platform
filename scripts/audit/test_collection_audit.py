@@ -96,6 +96,8 @@ BASELINE = _HERE / "baselines" / "test-collection.txt"
 GREEN_STREAK = _HERE / "baselines" / "test-collection-green-streak.txt"
 SENTINELS = _HERE / "baselines" / "test-collection-sentinels.txt"
 KNOWN_FAILURES = _HERE / "baselines" / "test-collection-known-failures.txt"
+WORKFLOW_REL = pathlib.Path('.gitea/workflows/odoo-tests.yml')
+_TEST_TAGS_ARG = re.compile(r'--test-tags\s+([^\s\\]+)')
 
 # 升級條件之一：「連續 N 次 develop push 全套全綠」。N 取 3。
 GREEN_STREAK_REQUIRED = 3
@@ -269,6 +271,42 @@ ZERO_GATE_SELECTED = "選得中·條數0"
 ZERO_GATE_UNSELECTED = "選不中·條數0"
 
 
+def workflow_selected_tags(root: pathlib.Path) -> set[str]:
+    """從真 workflow selector 推導 baseline 可被選到的 positive tags。
+
+    `/module` 由 Odoo 隱式補 `standard`；comma-separated 的額外 tag 則逐字
+    納入。這裡 fail-loud 要求唯一 `--test-tags`，避免 workflow 與 audit
+    各自維護一份清單後漂移。
+    """
+    workflow = root / WORKFLOW_REL
+    if not workflow.is_file():
+        raise CollectionNotClean([
+            '找不到 %s，無法判定 CI 真正選哪些 test tags' % workflow,
+        ])
+    matches = _TEST_TAGS_ARG.findall(workflow.read_text(encoding='utf-8'))
+    if len(matches) != 1:
+        raise CollectionNotClean([
+            '%s 必須恰有一個 --test-tags；實得 %s' %
+            (workflow, len(matches)),
+        ])
+    selected: set[str] = set()
+    for selector in matches[0].split(','):
+        selector = selector.strip()
+        if not selector or selector.startswith('-'):
+            continue
+        if selector.startswith('/'):
+            selected.add('standard')
+            continue
+        tag = selector.split('/', 1)[0].split(':', 1)[0]
+        if tag:
+            selected.add(tag)
+    if not selected:
+        raise CollectionNotClean([
+            '%s 的 --test-tags 沒有任何 positive selector' % workflow,
+        ])
+    return selected
+
+
 def scan_expected(
     root: pathlib.Path,
 ) -> tuple[dict[str, int], list[tuple[str, str]], list[tuple[str, str]]]:
@@ -278,9 +316,10 @@ def scan_expected(
 
     1. `_test_class_kind() == tagged` —— 傳遞繼承到 `odoo.tests.common.BaseCase`，
        也就是 `tag_selector.py:69` 的 `hasattr(test, 'test_tags')` 為真。
-    2. `'standard' in _test_effective_tags()` —— `--test-tags /woow_paas_platform`
-       的空 tag 被 `tag_selector.py:41-44` 補成 `standard`；沒有它的 class 連**精確
-       指名**都選不到（實測 `EXIT=0` ＋ `of 0 tests`，與「跑過而且全過」不可區分）。
+    2. `_test_effective_tags()` 與 workflow `--test-tags` 的 positive selector
+       有交集；`/woow_paas_platform` 由 `tag_selector.py:41-44` 隱式補成
+       `standard`，另含本 repo 明列的 `auto_recredit_864`。沒有交集的 class
+       連精確指名都選不到（實測 `EXIT=0`＋`of 0 tests`）。
     3. 條數＝`_expected_methods()`（loader 篩子④／④'）。
 
     🔴 **前提：收集面必須乾淨。** 沒被 `__init__.py` import 的檔對 loader 而言不存在，
@@ -314,6 +353,7 @@ def scan_expected(
 
     facts = lint._test_tree_facts(root_s)
     suite = lint.TEST_SUITE_DIR_REL
+    selected_tags = workflow_selected_tags(root)
     expected: dict[str, int] = {}
     excluded: list[tuple[str, str]] = []
     zero_count: list[tuple[str, str]] = []
@@ -350,20 +390,26 @@ def scan_expected(
                                        % (ZERO_GATE_UNSELECTED, why[kind])))
                 continue
             tags = lint._test_effective_tags(facts, rel, name)
-            if "standard" not in tags:
-                excluded.append((ident, "有效 tag ＝ %s，不含 `standard` ⇒ 標準跑選不到"
-                                        "（合法 opt-out，見 repo-lint 的 (b) 那一格）"
-                                        % ("／".join(sorted(tags)) or "（空）")))
+            if tags.isdisjoint(selected_tags):
+                excluded.append((
+                    ident,
+                    "有效 tag ＝ %s，與 workflow positive selector ＝ %s 無交集 "
+                    "⇒ CI 選不到（合法 opt-out，見 repo-lint 的 (b) 那一格）"
+                    % (
+                        "／".join(sorted(tags)) or "（空）",
+                        "／".join(sorted(selected_tags)),
+                    ),
+                ))
                 continue
             n = len(_expected_methods(lint, facts, rel, name, node))
             if n:
                 expected[ident] = n
             else:
-                # 格一：**選得中**（有效 tag 含 `standard`）卻算出 0 條。
+                # 格一：**選得中**（有效 tag 命中 workflow selector）卻算出 0 條。
                 # 這一格比格二危險：這個 class 標準跑真的會被 loader 走到，
                 # 條數 0 只是**靜態這一側**的結論。兩邊不一致時，C2 的雙向差集
                 # 對它完全沉默（baseline 沒有它、預期也沒有它 ⇒ 差集為空）。
-                zero_count.append((ident, "[%s] 有效 tag 含 `standard` ⇒ 標準跑選得中，"
+                zero_count.append((ident, "[%s] 有效 tag 命中 workflow selector ⇒ CI 選得中，"
                                           "但靜態條數＝0 ⇒ 不進 baseline。成因可能是"
                                           "真的沒有測試方法，也可能是判準盲點"
                                           "（`test_x = lambda`／`setattr`／decorator "
@@ -388,7 +434,8 @@ BASELINE_HEADER = """\
 # 判準**不在本檔**：class 選不選得到、條數怎麼算，全部呼叫 repo-lint.py 的
 # test-collectability 實作（_test_class_kind / _test_effective_tags /
 # _test_has_inherited_flag）。這裡只是把那份判準的結果落成可被 diff 覆核的清單。
-#   選中：傳遞繼承到 odoo.tests.common.BaseCase，且有效 tag 含 standard
+#   選中：傳遞繼承到 odoo.tests.common.BaseCase，且有效 tag 與
+#         `.gitea/workflows/odoo-tests.yml` 的 positive selector 有交集
 #   條數：loader 篩子④ cls.__dict__ 的 def test*；帶 allow_inherited_tests_method
 #         （可繼承！）者改走整條 MRO 去重
 #
@@ -943,6 +990,9 @@ SELF_TEST_CLASS_FIXTURE_FAILURE_LINE_MUTANTS = {
 #: `test_reconciler_diff.py` 就是這個形狀，而 module 級判準對它整檔放行。
 SELF_TEST_TREE = {
     "src/__manifest__.py": "{'name': 'probe'}\n",
+    ".gitea/workflows/odoo-tests.yml": (
+        "run: odoo --test-tags /probe\\\\\n"
+    ),
     "src/tests/__init__.py": (
         "from . import test_mix\n"
         "from . import test_inherit\n"
@@ -1056,7 +1106,21 @@ def self_test() -> int:
         if extract_executed(p, "module") != {"woow_paas_platform"}:
             failures.append(f"module 粒度切分錯：{extract_executed(p, 'module')}")
 
-    # (3) scan_expected：判準借自 repo-lint，這裡驗的是「借對了」
+    # (3) workflow selector：module selector 映成 standard，額外 tag 逐字納入。
+    with tempfile.TemporaryDirectory() as td:
+        root = pathlib.Path(td)
+        workflow = root / WORKFLOW_REL
+        workflow.parent.mkdir(parents=True, exist_ok=True)
+        workflow.write_text(
+            'run: odoo --test-tags /probe,auto_recredit_864\\\\\n',
+            encoding='utf-8',
+        )
+        got_tags = workflow_selected_tags(root)
+        if got_tags != {'standard', 'auto_recredit_864'}:
+            failures.append(
+                'workflow selector 解析錯：%r' % sorted(got_tags))
+
+    # (4) scan_expected：判準借自 repo-lint，這裡驗的是「借對了」
     with tempfile.TemporaryDirectory() as td:
         root = pathlib.Path(td)
         _write_tree(root, SELF_TEST_TREE)
@@ -1323,7 +1387,8 @@ def self_test() -> int:
             print(f"  ✗ {f}")
         return 1
     print("SELF-TEST PASS：SKIP_LINE 四形態＋陰性對照／粒度切分（含子套件，"
-          "點數判法在那裡會錯）／scan_expected（混合檔逐 class、篩子④' 旗標可繼承、"
+          "點數判法在那裡會錯）／workflow selector（module→standard＋額外 tag）／"
+          "scan_expected（混合檔逐 class、篩子④' 旗標可繼承、"
           "-standard 列名排除、子套件識別字、條數 0 的兩格各自列名且成因可分辨、"
           "P1 守恆＋其陽性對照）／收集面不乾淨時拒絕預測／"
           "FAILURE_LINE 注入式樣本集（%d 陽性＋%d 陰性，並用兩組共 %d 個蓄意寫壞的"

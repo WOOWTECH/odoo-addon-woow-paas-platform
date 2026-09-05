@@ -172,7 +172,7 @@ jobs:
         run: |
           set +e
           docker exec "${ODOO_CT}" "${ODOO_BIN}" -d test -u woow_paas_platform \
-            --test-enable --test-tags /woow_paas_platform \
+            --test-enable --test-tags /woow_paas_platform,auto_recredit_864 \
             --stop-after-init --limit-memory-hard=0 --max-cron-threads=0 \
             --http-port=18069 --gevent-port=18072 \
             --addons-path="${ADDONS_PATH}" --data-dir=/tmp/odoo-data \

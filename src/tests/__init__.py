@@ -52,6 +52,7 @@ from . import test_payment_token_charge
 from . import test_wallet_topup_classify_failure
 from . import test_wallet_topup_invoice
 from . import test_wallet_topup_payment_hooks
+from . import test_auto_recredit_query_gate_864
 from . import test_payment_transaction_overrides
 from . import test_topup_controller
 from . import test_topup_status
@@ -156,6 +157,7 @@ from . import test_portal_agent_page
 from . import test_portal_agent_persist
 # feat: portal task agent chat — minimal task-context hook (TransactionCase)
 from .integration import test_ecpay_invoice_real  # noqa: F401 — surface as module to odoo test loader
+from .integration import test_auto_recredit_864  # noqa: F401 — PR-F true-cursor tag
 # feat: agent context enrichment (spec 2026-06-04 — TDD)
 from . import test_agent_context_builder
 from . import test_agent_context_endpoint
