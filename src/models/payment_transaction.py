@@ -18,6 +18,16 @@ class PaymentTransaction(models.Model):
     )
 
     def _set_done(self, state_message=None, **kwargs):
+        # 必須在 ``super()`` 前拒絕：vendored webhook 若 catch 我方例外後仍
+        # commit，super 已寫入的 state 就會落地，違反 reconstructed row
+        # callback lifecycle 封閉不變式。
+        for tx in self:
+            topup = tx.woow_topup_id.sudo()
+            if topup and topup.repair_incident_ref:
+                raise ValidationError(_(
+                    'Reconstructed wallet top-ups require the query-gated '
+                    'repair process.'
+                ))
         _logger.info(
             "[PAY_TX] _set_done called tx_ids=%s refs=%s topup_ids=%s msg=%r",
             self.ids, self.mapped('reference'), self.mapped('woow_topup_id').ids,
@@ -26,13 +36,6 @@ class PaymentTransaction(models.Model):
         res = super()._set_done(state_message=state_message, **kwargs)
         for tx in self:
             topup = tx.woow_topup_id.sudo()
-            if topup and topup.repair_incident_ref:
-                # 重建列只可由 query-gated PR-F repair 入帳；晚到 callback
-                # 不得繞過 ECPG assessment 與 safety gates。
-                raise ValidationError(_(
-                    'Reconstructed wallet top-ups require the query-gated '
-                    'repair process.'
-                ))
             if topup and topup.state in ('draft', 'pending'):
                 _logger.info(
                     "[PAY_TX] _set_done → topup._on_payment_done tx=%s ref=%s topup=%s topup_state=%s",

@@ -477,6 +477,24 @@ class TestAutoRecreditPostgresCapability864(BaseCase):
             self.assertTrue(repair[0])
             self.assertIsNone(repair[1])
             repaired_tx = env['payment.transaction'].sudo().browse(repair[2])
+            cr.execute(
+                "UPDATE payment_transaction SET state = 'pending' "
+                'WHERE id = %s', (repaired_tx.id,))
+            repaired_tx.invalidate_recordset(['state'])
+            try:
+                repaired_tx._set_done('late provider success')
+            except ValidationError:
+                pass
+            else:
+                self.fail(
+                    'reconstructed tx 的 late _set_done 必須 fail-loud')
+            cr.execute(
+                'SELECT state FROM payment_transaction WHERE id = %s',
+                (repaired_tx.id,))
+            self.assertEqual(
+                cr.fetchone()[0], 'pending',
+                '_set_done 必須在 super 前拒絕，不得先把 state 改成 done',
+            )
             try:
                 repaired_tx._set_error('late provider error')
             except ValidationError:
@@ -484,6 +502,13 @@ class TestAutoRecreditPostgresCapability864(BaseCase):
             else:
                 self.fail(
                     'reconstructed tx 的 late _set_error 必須 fail-loud')
+            cr.execute(
+                'SELECT state FROM payment_transaction WHERE id = %s',
+                (repaired_tx.id,))
+            self.assertEqual(cr.fetchone()[0], 'pending')
+            cr.execute(
+                "UPDATE payment_transaction SET state = 'done' WHERE id = %s",
+                (repaired_tx.id,))
             cr.execute(
                 'SELECT state, kind FROM woow_billing_incident '
                 'WHERE external_ref = %s', ('invoice:' + reference,))
