@@ -109,6 +109,11 @@ def _warn_grandfathered_bulk_grants(policies):
 
     呼叫端必須在 cursor flag 清掉之後才呼叫本函式，否則守衛會直接 return，
     這份清單會是空的（列不出來 ≠ 沒有）。
+
+    ⚠ #521 P-J（2026-09-05）把 ``ip_range`` / ``country`` 納入該常數 ⇒ 本清單對
+    舊 DB 會**自動變長**（多列出 allow × ip_range / country 的歷史政策）。那是
+    上面「自動跟著擴大」那句話正在生效，不是回歸；升版本身不會因此中斷——
+    ``sa_skip_bulk_grant_check`` 的檢查在守衛最外層、先於 rule_type 判定。
     """
     grandfathered = []
     for pol in policies.exists():
@@ -122,9 +127,10 @@ def _warn_grandfathered_bulk_grants(policies):
         "18.0.1.0.39 P-rule migration: %s legacy policy(ies) carry an allow + "
         "bulk-grant Include rule predating the #352 guard and were migrated "
         "AS-IS (aborting the upgrade would not have removed the grant — the "
-        "flat columns already held it). Each admits an unbounded number of "
-        "people while counting as zero Cloudflare Access seats; re-author them "
-        "with an 'Email list' Include rule. Policies: %s",
+        "flat columns already held it). Each admits people the seat count "
+        "cannot see (they count as zero addresses yet still draw on the shared "
+        "Cloudflare Access seat pool); re-author them with an 'Email list' "
+        "Include rule. Policies: %s",
         len(grandfathered),
         ', '.join('id=%s %r' % (p.id, p.name or '') for p in grandfathered))
 

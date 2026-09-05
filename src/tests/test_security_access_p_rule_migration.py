@@ -49,23 +49,29 @@ class TestPRuleMigration(TransactionCase):
     #: 建 policy 時用來滿足 at-least-one-include 的**鷹架** rule，之後整批被
     #: raw SQL 刪掉。刻意寫死成安全型別（不吃 rule_type 參數）——見
     #: _make_legacy_policy 的說明。
-    _SCAFFOLD_RULE = {'group': 'include', 'rule_type': 'ip_range',
-                      'rule_value': '10.0.0.0/8'}
+    _SCAFFOLD_RULE = {'group': 'include', 'rule_type': 'email_list',
+                      'rule_value': 'scaffold@example.com'}
 
     def _make_legacy_policy(self, decision, rule_type, rule_value, prefix):
         """Create a policy, then force it into the pre-.39 shape: flat columns
         set + its rule rows removed (raw SQL — an ORM unlink of the last include
         would trip the new constraint).
 
-        鷹架 rule 固定用 ip_range，**不**用參數的 rule_type（#543）：policy 一定
+        鷹架 rule 固定用**安全型別**、**不**用參數的 rule_type（#543）：policy 一定
         要帶至少一條 include 才建得起來，但那條 rule 建完立刻被下面的 DELETE 清
         掉，migrate() 只讀 flat 欄位（post-migrate.py 的 SELECT 走 raw SQL，完全
         不看 rule 表），所以鷹架的型別對受測程式碼**零影響**。
 
-        反過來，若鷹架照抄參數，decision='allow' × rule_type='email_domain' 這組
-        會在 ORM create 當場撞上 _check_allow_policy_no_bulk_grant（#352），測試
-        直接死在 fixture、`migrate()` 那行**永遠不會被執行**——探針壞在抵達受測
-        程式碼之前，而失敗輸出跟「migration 真的有缺陷」長得一模一樣。
+        反過來，若鷹架照抄參數，decision='allow' × 任一 bulk-grant 型別會在 ORM
+        create 當場撞上 _check_allow_policy_no_bulk_grant（#352），測試直接死在
+        fixture、`migrate()` 那行**永遠不會被執行**——探針壞在抵達受測程式碼之
+        前，而失敗輸出跟「migration 真的有缺陷」長得一模一樣。
+
+        🔴 #521 P-J（2026-09-05）把 ``ip_range`` / ``country`` 也納入
+        ``_BULK_GRANT_RULE_TYPES`` ⇒ 原本的鷹架型別 ``ip_range`` **自己變成了那顆
+        炸彈**，已改成 ``email_list``。那是 allow 政策的 include 群組現在唯一還合
+        法的型別，也就是「安全型別」在今天的唯一解——⛔ 換成別型之前先確認它不
+        在該常數裡，否則本 class 會整個死在 fixture。
         """
         sa = self.SA.create(
             {'name': 'PRM GW ' + prefix, 'workspace_id': self.workspace.id})
@@ -141,11 +147,17 @@ class TestPRuleMigration(TransactionCase):
         `Rule.create`（flat 欄位沒寫進去、或 policy 被 `if pol.rule_ids:` 略過都算），
         它們照樣通過 ——「修法沒被執行」與「修法有效」輸出完全一樣。
 
-        「規則真的被建出來」那組斷言就是用來補這一格的，而它能補得起來是因為
-        **全樹只有這一條測試踩在 `allow` × `email_domain` 的交集上**（同檔另兩條分別
-        是 `deny` × `email_domain` 與 `allow` × `ip_range`，都不會觸發 #352 守衛）。
-        ⇒ 這條 rule 建得出來，就等於 bypass 分支這一趟真的被走到了：沒有
+        「規則真的被建出來」那組斷言就是用來補這一格的：本測試的 fixture 落在
+        `allow` × `email_domain` 這個**必然觸發 #352 守衛**的交集上 ⇒ 這條 rule 建
+        得出來，就等於 bypass 分支這一趟真的被走到了；沒有
         `sa_skip_bulk_grant_check`，`Rule.create` 會當場拋 ValidationError。
+
+        ⚠ #521 P-J（2026-09-05）之後，同檔 `test_migration_idempotent` 的
+        `allow` × `ip_range` **也**落進守衛值域（ip_range 已納入
+        `_BULK_GRANT_RULE_TYPES`）⇒ 「全樹只有這一條踩在交集上」不再成立，本格
+        的鑑別力論證不受影響（多一條同向證據），但那條測試從此也依賴同一顆
+        flag：flag 壞掉會有兩條紅，不是一條。同檔 `test_flat_policy_becomes_
+        include_rule` 的 `deny` × `email_domain` 仍在守衛值域外（decision 早退）。
 
         跨層佐證刻意**不**寫成本測試的斷言，留給 job log：分支被走到時
         `_warn_grandfathered_bulk_grants()` 必然印出

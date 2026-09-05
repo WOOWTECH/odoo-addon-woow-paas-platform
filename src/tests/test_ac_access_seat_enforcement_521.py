@@ -60,6 +60,12 @@ email_list policy ⇒ 一碰就被擋」。
 ``ip_range`` / ``country`` / ``everyone`` 型規則。⛔ 不要把它敘述成「base 方案不能
 用存取控制」。
 
+⚠ #521 P-J（2026-09-05）之後這句要加一個限定詞：那三型在 **allow 政策的 include
+群組**已被另一把尺（``_check_allow_policy_no_bulk_grant``）擋掉，本檔講的席位尺
+（``_listed_seat_addresses``）**不分 decision、不分 group**，完全沒有連動。cap=0
+的租戶仍寫得出這三型——在 ``deny`` / ``bypass`` 政策，或 ``require`` / ``exclude``
+群組裡。兩把尺刻意分離，⛔ 不要為了「口徑一致」把任一邊對齊另一邊。
+
 ## 唯一的豁免是 migration cursor flag，而它是機制強制、不是產品寬免
 
 ``cr.sa_skip_policy_quota`` 由 ``18.0.1.0.37`` / ``.39`` / ``.150`` 三支 migration
