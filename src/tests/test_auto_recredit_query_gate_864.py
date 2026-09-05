@@ -452,6 +452,11 @@ class TestAutoRecreditQueryGate864(TransactionCase):
         self.assertEqual(ECPGTransientError('x').category, 'transient')
 
     def test_named_partial_indexes_exist_after_module_init(self):
+        """CI 先以 ``-i`` 建 fresh DB；本測證明兩個 init index 都已落地。
+
+        這不是只驗 upgrade：若 account.move init 在 topup table 建立前跨表查詢，
+        workflow 會先死在 Install step，根本到不了此 method。
+        """
         for index_name in (
                 'wallet_transaction_topup_payment_tx_uniq',
                 'account_move_woow_ecpay_mtn_uniq'):
