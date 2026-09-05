@@ -830,3 +830,4 @@ from . import test_stale_manual_aging_batch_990
 # T1/T3 刻意走生產碼的 `_log_charged_not_credited_incident`，⛔ 不自己組 snapshot
 # （測試自己傳 trade_no 的話，改生產碼不會讓它轉綠＝零鑑別力）。
 from . import test_trade_no_semantics_993
+from . import test_helm_values_addon_builder_1052  # #1052：addon helm values builder characterization
