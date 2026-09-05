@@ -913,8 +913,19 @@ class SecurityAccessController(Controller):
             return {"success": False,
                     "error": _("No application route to attach a policy to yet")}
         # two-layer quota: constraint re-checks at ORM layer (lock-step with
-        # the model's _check_policy_quota — an SA-LEVEL total). sudo on
-        # subscription_id read only: portal owners lack ACL on the subscription.
+        # the model's _check_policy_quota — an SA-LEVEL total). sudo on the
+        # subscription_id read: portal owners lack ACL on the subscription.
+        #
+        # #896：`existing` 的計數也走 `sudo()`，與 model 端
+        # `_check_policy_quota` 的池計數對齊（同一天一起改）。額度是**平台
+        # 成本**，不是「這位呼叫者看得到多少」——`ir.rule` 只讓呼叫者看到池中
+        # 一部分 policy 時，裸 `search_count` 會少算，而少算的症狀是「配額安靜
+        # 地變寬」，與「方案的政策數上限很大」在輸出上完全不可區分。
+        # ⛔ sudo 只包**這一次計數**：`sa` 本身仍由 `_gated_sa()` 以呼叫者的
+        # env 把關，Policy.create() 以下也一律留在呼叫者 env（本前置只是快速
+        # 失敗，真正的守線是 model 那條 constraint）。
+        # （domain 以 `security_access_id` 收斂 ⇒ sudo 只放寬可見度，不會把別
+        # 的 SA／租戶的 policy 算進來。）
         #
         # quota 0 = unlimited (#743), in step with the model constraint. This
         # pre-check runs BEFORE Policy.create(), so without the exemption here
@@ -928,7 +939,7 @@ class SecurityAccessController(Controller):
             "woow_paas_platform.security_access_access_policy"]
         if sub and sub.sh_subscription_plan_id:
             quota = sub.sh_subscription_plan_id.sa_max_access_policies
-            existing = Policy.search_count(
+            existing = Policy.sudo().search_count(
                 [("security_access_id", "=", sa.id)])
             if quota and existing >= quota:
                 return {"success": False,
