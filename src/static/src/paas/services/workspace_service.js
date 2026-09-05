@@ -4,6 +4,14 @@ import { _t } from "@web/core/l10n/translation";
 import { jsonRpc } from "./rpc";
 
 /**
+ * #1052：provision 走 operator 的 helm 安裝，平台側 HELM_OPERATION_TIMEOUT 是 120 秒
+ * （src/services/paas_operator.py）。本檔改用共用 rpc.js 之前沒有 client timeout；共用版
+ * 預設 30 秒會在伺服器還在等 helm 時先 abort，租戶看到 timeout、後端卻照常完成。
+ * 所以 provision 給比伺服器預算大的預算；其餘 19 個呼叫都是快速 CRUD，吃預設 30 秒。
+ */
+const PROVISION_REQUEST_TIMEOUT_MS = 150000;
+
+/**
  * @typedef {Object} WorkspaceData
  * @property {number} id - Workspace ID
  * @property {string} name - Workspace name
@@ -551,9 +559,11 @@ export const workspaceService = reactive({
     async provisionSmartHome(workspaceId, homeId) {
         this.operationLoading.provisionSmartHome = true;
         try {
-            const result = await jsonRpc(`/api/workspaces/${workspaceId}/smarthomes/${homeId}`, {
-                action: "provision",
-            });
+            const result = await jsonRpc(
+                `/api/workspaces/${workspaceId}/smarthomes/${homeId}`,
+                { action: "provision" },
+                PROVISION_REQUEST_TIMEOUT_MS
+            );
             if (result.success) {
                 return { success: true, data: result.data };
             } else {
