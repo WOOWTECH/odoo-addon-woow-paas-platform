@@ -651,19 +651,23 @@ class TestSecurityAccessAccessEndpoints(HttpCase):
         """owner update 用三組 replace 既有 policy 的整組 rules（delete-before-
         create + sa_rule_replace，不被『至少 1 include』過渡空狀態誤擋）。"""
         self.authenticate(self.alice.login, self.alice.login)
+        # #521 P-J：新的 include 用 email_list——self.pol 是 allow 政策，而
+        # allow + include + ip_range 現在會被 `_check_allow_policy_no_bulk_grant`
+        # 擋下（controller 會回 success=False）。本格量的是「三組 replace 不被
+        # 『至少 1 include』的過渡空狀態誤擋」，與 rule_type 無關。
         res = self._rpc(
             f'/api/workspaces/{self.workspace.id}'
             f'/security-accesses/{self.sa.id}/access-policies',
             {'action': 'update', 'policy_id': self.pol.id,
-             'include': [{'rule_type': 'ip_range',
-                          'rule_value': '10.0.0.0/8'}],
+             'include': [{'rule_type': 'email_list',
+                          'rule_value': 'replaced@acme.com'}],
              'exclude': [{'rule_type': 'email_domain',
                           'rule_value': 'evil.com'}]})
         self.assertTrue(res.get('success'), res)
         data = res['data']
         self.assertEqual(
             data['include'],
-            [{'rule_type': 'ip_range', 'rule_value': '10.0.0.0/8'}])
+            [{'rule_type': 'email_list', 'rule_value': 'replaced@acme.com'}])
         self.assertEqual(
             data['exclude'],
             [{'rule_type': 'email_domain', 'rule_value': 'evil.com'}])
