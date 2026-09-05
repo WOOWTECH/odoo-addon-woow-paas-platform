@@ -830,3 +830,6 @@ from . import test_stale_manual_aging_batch_990
 # T1/T3 刻意走生產碼的 `_log_charged_not_credited_incident`，⛔ 不自己組 snapshot
 # （測試自己傳 trade_no 的話，改生產碼不會讓它轉綠＝零鑑別力）。
 from . import test_trade_no_semantics_993
+# #1052：SmartHome／SecurityAccess 的 _do_resume guard 改問 mixin 的 _is_halted() seam
+# （cron 已經在用它）。RED-first：兩條方向相反的斷言在 develop 上都紅——見檔頭 RED 預測。
+from . import test_lifecycle_is_halted_seam_1052
