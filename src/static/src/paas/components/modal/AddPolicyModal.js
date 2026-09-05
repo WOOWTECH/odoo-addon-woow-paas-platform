@@ -5,6 +5,19 @@ import { _t } from "@web/core/l10n/translation";
 import { WoowButton } from "../button/WoowButton";
 import { WoowIcon } from "../icon/WoowIcon";
 
+// 🔴 後端 `_check_allow_policy_no_bulk_grant` 的 `_BULK_GRANT_RULE_TYPES`
+// (src/models/security_access_access_policy.py) 在前端的**唯一**鏡像：allow 政策
+// 的 include 群組不得使用的選擇器（#352 收 email_domain／everyone，#521 P-J 收
+// ip_range／country）。四型都「放行無限多人卻計 0 人」，而登入者照樣吃 Cloudflare
+// Access 的全平台共用席位池。
+//
+// 這裡是 builder 端的**便利過濾**，真正的 gate 在後端；但兩份漂開的症狀是「UI 讓
+// 租戶選得到、送出必被拒」，租戶端沒有任何線索可循 ⇒ 由 repo-lint
+// `bulk-grant-ruler-sync` 機械對帳（#543 的根因正是同一種「兩份清單分離」）。
+// ⛔ 不要在本檔別處再寫一份型別字面量——`selectorOptionsFor` 與 `setDecision`
+// 都必須讀這一份。
+const BULK_GRANT_RULE_TYPES = ["email_domain", "everyone", "ip_range", "country"];
+
 /**
  * AddPolicyModal Component
  *
@@ -104,34 +117,37 @@ export class AddPolicyModal extends Component {
   // policies because Cloudflare rejects them.
   get selectorOptions() {
     const all = [
-      { value: "email_domain", label: _t("Emails ending in a domain"), identity: true, bulk: true },
-      { value: "email_list", label: _t("List of emails"), identity: true, bulk: false },
-      { value: "ip_range", label: _t("IP range (CIDR)"), identity: false, bulk: false },
-      { value: "everyone", label: _t("Everyone"), identity: false, bulk: true },
-      { value: "country", label: _t("Country"), identity: false, bulk: false },
+      { value: "email_domain", label: _t("Emails ending in a domain"), identity: true },
+      { value: "email_list", label: _t("List of emails"), identity: true },
+      { value: "ip_range", label: _t("IP range (CIDR)"), identity: false },
+      { value: "everyone", label: _t("Everyone"), identity: false },
+      { value: "country", label: _t("Country"), identity: false },
     ];
     return this.state.decision === "bypass"
       ? all.filter((o) => !o.identity)
       : all;
   }
 
-  // #352: an Allow policy's INCLUDE rules must not admit an unlimited,
-  // uncounted crowd — seat-based Access plans count people by the addresses in
-  // "List of emails" rules, while a whole-domain / everyone rule counts as zero
-  // yet still burns Cloudflare seats from the 50-seat pool shared by the entire
-  // platform. Mirrors the backend constraint
-  // (_check_allow_policy_no_bulk_grant), which is the real gate — this only
-  // keeps the builder from offering a choice the server will reject.
+  // #352 / #521 P-J: an Allow policy's INCLUDE rules must not admit an
+  // unlimited, uncounted crowd — seat-based Access plans count people by the
+  // addresses in "List of emails" rules, while a whole-domain, everyone,
+  // IP-range or country rule counts as zero yet still draws on the Cloudflare
+  // Access seat pool shared by the entire platform. Mirrors the backend
+  // constraint (_check_allow_policy_no_bulk_grant), which is the real gate —
+  // this only keeps the builder from offering a choice the server will reject.
+  // ⇒ after P-J the only Include selector left for an Allow policy is
+  // "List of emails"; that narrowing is deliberate, not a bug.
   //
   // Scoped to include (OR = grants access). Require (AND) and Exclude (NOT)
   // only NARROW access, so "allow everyone at acme.com except evil.com" stays
-  // expressible. Block/Bypass policies are unaffected.
+  // expressible. Block/Bypass policies are unaffected — a Bypass policy skips
+  // authentication and therefore consumes no seat.
   selectorOptionsFor(groupKey) {
     const options = this.selectorOptions;
     if (this.state.decision !== "allow" || groupKey !== "include") {
       return options;
     }
-    return options.filter((o) => !o.bulk);
+    return options.filter((o) => !BULK_GRANT_RULE_TYPES.includes(o.value));
   }
 
   _defaultRuleType(groupKey) {
@@ -186,12 +202,16 @@ export class AddPolicyModal extends Component {
   setDecision(decision) {
     this.state.decision = decision;
     if (decision === "allow") {
-      // #352: switching Block/Bypass → Allow can leave a bulk-grant selector
-      // sitting in the include group, which the backend now rejects. Rewrite
-      // it the same way the bypass branch below rewrites identity selectors,
-      // so the builder state stays submittable.
+      // #352 / #521 P-J: switching Block/Bypass → Allow can leave a bulk-grant
+      // selector sitting in the include group, which the backend rejects.
+      // Rewrite it the same way the bypass branch below rewrites identity
+      // selectors, so the builder state stays submittable.
+      // ⛔ Reads BULK_GRANT_RULE_TYPES — do NOT re-list the types here: a
+      // Bypass policy's include group is typically ip_range, so a stale literal
+      // list would leave exactly the Bypass → Allow path producing a payload
+      // the server refuses.
       for (const row of this.state.include) {
-        if (row.rule_type === "email_domain" || row.rule_type === "everyone") {
+        if (BULK_GRANT_RULE_TYPES.includes(row.rule_type)) {
           row.rule_type = "email_list";
           row.rule_value = "";
         }

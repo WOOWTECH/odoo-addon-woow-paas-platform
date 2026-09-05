@@ -448,6 +448,16 @@ class BillingIncident(models.Model):
     )
     occurrences = fields.Integer(required=True, default=1)
     assessment_reason = fields.Char()
+    # #864 PR-F：query audit 與 branch-B reconstruct 僅存純值；外層付款
+    # transaction 可 rollback，任何 Many2one/FK 都會在最需要證據時寫不進去。
+    last_query_at = fields.Datetime(index=True)
+    last_query_verdict = fields.Char()
+    origin_xid = fields.Char(index=True)
+    wallet_transaction_ref = fields.Integer(index=True)
+    repair_topup_ref = fields.Integer(index=True)
+    topup_plan_ref = fields.Integer(index=True)
+    topup_source = fields.Char()
+    t1_overdue_at = fields.Datetime(index=True)
     detail = fields.Text()
     source_model = fields.Char(
         help='Scalar source model name only; this is not an ORM relation.',
@@ -541,6 +551,15 @@ class BillingIncident(models.Model):
         'callback_not_successful',
         'missing_trade_no',
         'credit_failed',
+        # PR-F query/cleanup outcomes；封閉 vocabulary 讓 ops counter 可聚合。
+        'too_early', 'query_circuit_open', 'query_transient',
+        'query_indeterminate', 'query_unsafe', 'query_config_error',
+        'query_protocol_error', 'query_business_error', 'query_invalid_input',
+        't2_expired', 'kill_switch_off', 'credit_cap_exceeded',
+        'partner_daily_limit', 'possible_manual_credit',
+        'origin_transaction_in_progress', 'source_missing_after_commit',
+        'postgres_xid_capability_missing', 'cleanup_waiting_callback_replay',
+        'cleanup_waiting_auto_recredit', 'reconstruct_incomplete',
     })
     # Skips may escalate an incident for a human, never close it.
     # ⛔ No time-driven escalation lives here: the cron never invents an
@@ -552,21 +571,25 @@ class BillingIncident(models.Model):
     _LOG_CHAR_FIELDS = frozenset({
         'external_ref', 'kind', 'partner_email', 'currency', 'trade_no',
         'rtn_code', 'failure_code', 'state', 'skip_reason',
-        'assessment_reason', 'detail', 'source_model',
+        'assessment_reason', 'last_query_verdict', 'origin_xid', 'topup_source', 'detail', 'source_model',
     })
     _LOG_INTEGER_FIELDS = frozenset({
         'partner_ref', 'payment_token_ref', 'skip_count', 'attempts',
-        'query_attempts', 'source_ref',
+        'query_attempts', 'source_ref', 'wallet_transaction_ref', 'repair_topup_ref',
+        'topup_plan_ref',
     })
     _LOG_FLOAT_FIELDS = frozenset({'amount', 'credits', 'bonus'})
-    _LOG_DATETIME_FIELDS = frozenset({'last_skipped_at', 'next_query_at'})
+    _LOG_DATETIME_FIELDS = frozenset({
+        'last_skipped_at', 'next_query_at', 'last_query_at', 't1_overdue_at',
+    })
     _LOG_FREE_TEXT_FIELDS = frozenset({'detail'})
     _LOG_PROVIDER_REFERENCE_FIELDS = frozenset({'external_ref', 'trade_no'})
     _LOG_EMAIL_FIELDS = frozenset({'partner_email'})
     _LOG_SELECTION_FIELDS = frozenset({'kind', 'state'})
     _LOG_CODE_FIELDS = frozenset({
         'currency', 'rtn_code', 'failure_code', 'skip_reason',
-        'assessment_reason', 'source_model',
+        'assessment_reason', 'last_query_verdict', 'origin_xid',
+        'topup_source', 'source_model',
     })
     _LOG_FIELDS = (
         _LOG_CHAR_FIELDS | _LOG_INTEGER_FIELDS | _LOG_FLOAT_FIELDS |
@@ -1810,6 +1833,82 @@ class BillingIncident(models.Model):
                 'reason=%s category=persistence_failed; batch continues',
                 skip_reason,
             )
+            return False
+
+    @api.model
+    def _transition_needs_human_independent(self, external_ref, reason,
+                                            assessment_reason=None):
+        """用 fresh transaction 執行 PR-F fail-closed terminal transition。
+
+        不走 generic ``write``：incident 是不可變帳務 ledger，scanner 不可取得
+        user-writable lifecycle capability。狀態 commit 後才排 activity，與 PR-G
+        replay escalation 同形。
+        """
+        if reason not in self._REPLAY_SKIP_REASONS:
+            _logger.error(
+                '[BILLING_INCIDENT] PR-F terminal transition rejected '
+                'category=unsupported_reason')
+            return False
+        marked = False
+        try:
+            with self.env.registry.cursor() as cr:
+                cr.execute('SET LOCAL lock_timeout = %s', (self._LOCK_TIMEOUT,))
+                env = api.Environment(cr, SUPERUSER_ID, {})
+                incident = env[self._name].sudo()
+                now = fields.Datetime.now()
+                cr.execute(
+                    'UPDATE woow_billing_incident SET state = %s, skip_reason = %s, '
+                    'assessment_reason = COALESCE(%s, assessment_reason), '
+                    'last_skipped_at = %s, skip_count = skip_count + 1, '
+                    'write_uid = %s, write_date = %s '
+                    "WHERE external_ref = %s AND state <> 'resolved' RETURNING id",
+                    ('needs_human', reason, assessment_reason, now,
+                     SUPERUSER_ID, now, external_ref), log_exceptions=False)
+                row = cr.fetchone()
+                cr.commit()
+                marked = row and row[0]
+            if marked:
+                incident._schedule_review_activities(marked)
+            return marked
+        except Exception:
+            _logger.exception('[BILLING_INCIDENT] PR-F terminal transition failed')
+            return False
+
+    @api.model
+    def _record_query_outcome_independent(
+            self, external_ref, *, verdict=None, reason=None, next_query_at=None,
+            increment_attempt=True, skip_reason=None, t1_overdue=False):
+        """用 fresh cursor 保存 query audit，避免被 cron 的 RR snapshot 隱藏。"""
+        try:
+            with self.env.registry.cursor() as cr:
+                cr.execute('SET LOCAL lock_timeout = %s', (self._LOCK_TIMEOUT,))
+                now = fields.Datetime.now()
+                assignments = [
+                    'last_query_at = %s',
+                    'last_query_verdict = COALESCE(%s, last_query_verdict)',
+                    'assessment_reason = %s', 'next_query_at = %s',
+                    'write_uid = %s', 'write_date = %s',
+                ]
+                params = [now, verdict, reason, next_query_at, SUPERUSER_ID, now]
+                if increment_attempt:
+                    assignments.append('query_attempts = query_attempts + 1')
+                if skip_reason:
+                    assignments.extend(['skip_reason = %s', 'last_skipped_at = %s',
+                                        'skip_count = skip_count + 1'])
+                    params.extend([skip_reason, now])
+                if t1_overdue:
+                    assignments.append('t1_overdue_at = COALESCE(t1_overdue_at, %s)')
+                    params.append(now)
+                params.append(external_ref)
+                cr.execute(
+                    'UPDATE woow_billing_incident SET ' + ', '.join(assignments) +
+                    " WHERE external_ref = %s AND state = 'open'", params,
+                    log_exceptions=False)
+                updated = cr.rowcount == 1
+                cr.commit()
+                return updated
+        except Exception:
+            _logger.exception('[BILLING_INCIDENT] PR-F query audit failed')
             return False
 
     def action_mark_manually_resolved(self):
