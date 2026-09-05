@@ -8400,19 +8400,28 @@ def _access_payload_shape_watches(rel):
             or rel == REPO_LINT_SELF_REL)
 
 
-def _access_payload_own_returns(func):
-    """`func` **自己**的 Return 節點（不進入巢狀 def／lambda 的 body）。"""
-    out = []
+#: builder 內對 payload 就地改 key 的 dict method——看到就當「解不出來」（#1052 review：
+#: 原版只認 `name[k] = v`，`payload.update({...})`／`payload |= {...}` 會被當乾淨放行）。
+_ACCESS_PAYLOAD_MUTATORS = frozenset({"update", "setdefault", "pop", "popitem", "clear"})
+
+
+def _access_payload_own_nodes(func):
+    """`func` **自己**作用域內的節點（不進入巢狀 def／lambda 的 body）。
+
+    兩支 helper 共用同一個作用域邊界：巢狀 helper 裡撞名的區域變數不該污染外層判定。
+    """
     stack = list(func.body)
     while stack:
         node = stack.pop()
-        if isinstance(node, ast.Return):
-            out.append(node)
-            continue
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
             continue
+        yield node
         stack.extend(ast.iter_child_nodes(node))
-    return out
+
+
+def _access_payload_own_returns(func):
+    """`func` **自己**的 Return 節點（不進入巢狀 def／lambda 的 body）。"""
+    return [node for node in _access_payload_own_nodes(func) if isinstance(node, ast.Return)]
 
 
 def _access_payload_return_keys(func):
@@ -8420,8 +8429,9 @@ def _access_payload_return_keys(func):
 
     只認兩種形狀（三條腿今天都是第一種）：
       (i)  `return {...}`，每個 key 都是字串常數；
-      (ii) `return name`，且 `name` 在同一函式內被 `name = {...}` 綁過（同樣全字串
-           key）、之後**沒有**任何 `name[...] = ...` 下標賦值。
+      (ii) `return name`，且 `name` 在同一函式內被 `name = {...}` 綁過**恰好一次**（同樣全
+           字串 key），之後**沒有**任何就地改動：`name[...] = ...`／`del name[...]`／
+           `name |= ...`／`name.update(...)` 等 ``_ACCESS_PAYLOAD_MUTATORS``。
     其他一律回 None ⇒ 呼叫端當違規。本條是否定性判準，「解不出來」與「沒有違規」的
     輸出必須不同——不然把 return 改成動態組 dict 就靜默逃出守線。
     """
@@ -8430,18 +8440,29 @@ def _access_payload_return_keys(func):
         return None
     value = returns[0].value
     if isinstance(value, ast.Name):
-        bound = None
-        for node in ast.walk(func):
+        name = value.id
+        bound = []
+        for node in _access_payload_own_nodes(func):
             if (isinstance(node, ast.Assign) and len(node.targets) == 1
                     and isinstance(node.targets[0], ast.Name)
-                    and node.targets[0].id == value.id):
-                bound = node.value
+                    and node.targets[0].id == name):
+                bound.append(node.value)
+            elif (isinstance(node, ast.AugAssign)
+                    and isinstance(node.target, ast.Name) and node.target.id == name):
+                return None            # payload |= {...}
             elif (isinstance(node, ast.Subscript)
                     and isinstance(node.value, ast.Name)
-                    and node.value.id == value.id
-                    and isinstance(node.ctx, ast.Store)):
-                return None            # payload[k] = … 動態加 key，靜態看不到
-        value = bound
+                    and node.value.id == name
+                    and isinstance(node.ctx, (ast.Store, ast.Del))):
+                return None            # payload[k] = … / del payload[k]，靜態看不到
+            elif (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                    and isinstance(node.func.value, ast.Name)
+                    and node.func.value.id == name
+                    and node.func.attr in _ACCESS_PAYLOAD_MUTATORS):
+                return None            # payload.update({...}) 等就地改 key
+        if len(bound) != 1:
+            return None                # 綁零次或多次：哪一份是最後的 static 看不出來
+        value = bound[0]
     if not isinstance(value, ast.Dict):
         return None
     keys = set()
@@ -8450,6 +8471,48 @@ def _access_payload_return_keys(func):
             return None                # `**spread` 或非字串 key
         keys.add(key.value)
     return keys
+
+
+def _access_payload_field_is_required(default):
+    """pydantic 欄位是否 required——只看「有沒有預設值」。
+
+    `x: T`、`x: T = Field(...)`、`Field(default=...)`、`Field(description=...)`（無 default）
+    是 required；`= None`、`Field(None)`、`Field(default_factory=...)` 等一律 optional。
+    """
+    if default is None:
+        return True
+    if isinstance(default, ast.Call) and _tunnel_wire_name(default.func) == "Field":
+        if default.args:
+            first = default.args[0]
+            return isinstance(first, ast.Constant) and first.value is Ellipsis
+        for kw in default.keywords:
+            if kw.arg == "default":
+                return isinstance(kw.value, ast.Constant) and kw.value.value is Ellipsis
+            if kw.arg == "default_factory":
+                return False
+        return True
+    return False
+
+
+def _access_payload_schema_fields(source, class_name):
+    """schemas.py 裡 `class <class_name>(BaseModel)` 的 ``(全部欄位, required 欄位)``；找不到回 None。
+
+    與 `_tunnel_wire_schema_models` 同樣只認 `BaseModel` 直接子類的 `AnnAssign`。
+    """
+    for node in ast.parse(source).body:
+        if not (isinstance(node, ast.ClassDef) and node.name == class_name):
+            continue
+        if not any(_tunnel_wire_name(base) == "BaseModel" for base in node.bases):
+            continue
+        fields, required = set(), set()
+        for stmt in node.body:
+            if not (isinstance(stmt, ast.AnnAssign) and isinstance(stmt.target, ast.Name)):
+                continue
+            fields.add(stmt.target.id)
+            if _access_payload_field_is_required(stmt.value):
+                required.add(stmt.target.id)
+        return fields, required
+    return None
 
 
 def check_access_payload_shape_matches_operator_schema(root):
@@ -8467,7 +8530,10 @@ def check_access_payload_shape_matches_operator_schema(root):
     判準（跨端比對）：
       (i)  schemas.py 的 `class AccessSyncRequest(BaseModel)` 欄位名集合；
       (ii) `src/models/*.py` 每個 `_build_access_payload` 回傳 dict literal 的 key 集合；
-      (iii) 兩者相等，逐 builder 報缺／多的 key。
+      (iii) builder 的 key ⊆ schema 全部欄位（多送的 key pydantic 預設**靜默丟棄**，送了等於
+            沒送），且 schema 的 required 欄位 ⊆ builder 的 key（少送 required ⇒ 422）。
+            有預設值的欄位（`Optional[...] = Field(None)`、`default_factory`）可以不送——今天
+            三腿都送滿 10 個、含兩個 Optional，那是選擇不是本條的要求。逐 builder 報缺／多。
 
     陽性對照（否定性結論必配）：
       (a) schemas.py 讀不到／parse 不動／找不到該 class（或它沒有欄位）⇒ 違規；
@@ -8477,7 +8543,8 @@ def check_access_payload_shape_matches_operator_schema(root):
 
     ⚠ 覆蓋邊界（刻意寫下來）：
       * 只比對**頂層 key 集合**。`policies` 裡每個 policy dict 的形狀（`AccessPolicySpec`）
-        不驗；欄位型別、required、語意都不驗。把本條的綠讀成「這條 wire 一定會通」是錯的。
+        不驗；欄位型別與語意不驗，required 只看「有沒有預設值」。把本條的綠讀成「這條 wire
+        一定會通」是錯的。
       * 只認 `def _build_access_payload` 這個名字；改名的 builder 會落進 (b) 而不是靜默放行。
       * schema 端只認 `BaseModel` 直接子類的 `AnnAssign`（沿用 `_tunnel_wire_schema_models`），
         繼承自其他 model 的欄位看不到——`AccessSyncRequest` 今天沒有父類欄位。
@@ -8493,13 +8560,13 @@ def check_access_payload_shape_matches_operator_schema(root):
     schema_rel = ACCESS_PAYLOAD_SCHEMAS_REL
     try:
         with io.open(os.path.join(root, schema_rel), encoding="utf-8") as handle:
-            schema_models = _tunnel_wire_schema_models(handle.read())
+            parsed = _access_payload_schema_fields(handle.read(), ACCESS_PAYLOAD_SCHEMA_CLASS)
     except (IOError, OSError, UnicodeDecodeError, SyntaxError) as exc:
         violations.append(
             "%s：讀不到或 parse 失敗（%s）——本條的判準是否定性的，讀不到的檔「沒有"
             "違規」與「有違規但看不到」輸出完全相同（%s）" % (schema_rel, exc, ref))
         return violations
-    fields = schema_models.get(ACCESS_PAYLOAD_SCHEMA_CLASS)
+    fields, required = parsed if parsed else (set(), set())
     if not fields:
         violations.append(
             "%s：找不到 `class %s(BaseModel)`，或它沒有宣告任何欄位。三條腿鏡射的就是"
@@ -8538,19 +8605,23 @@ def check_access_payload_shape_matches_operator_schema(root):
         if keys is None:
             violations.append(
                 "%s:%d：`%s` 的回傳形狀解不出來——只認 `return {...}`（全字串 key）或 "
-                "`return name`（name 綁到這種 literal 且之後沒有下標賦值）。本條是否定性"
+                "`return name`（name 綁到這種 literal 恰好一次，且之後沒有下標賦值／`|=`／"
+                "`.update()` 等就地改動）。本條是否定性"
                 "判準，解不出來當違規：要嘛改回可解的形狀，要嘛連本 check 一起擴充（%s）"
                 % (rel, node.lineno, ACCESS_PAYLOAD_BUILDER, ref))
             continue
-        missing = sorted(fields - keys)
+        missing = sorted(required - keys)
         extra = sorted(keys - fields)
         if missing or extra:
+            parts = []
+            if missing:
+                parts.append("缺 required 欄位 %s（runtime 422，而 422 說不出是哪一邊寫錯）" % missing)
+            if extra:
+                parts.append("多了 schema 沒有的 %s（pydantic 預設靜默丟棄，送了等於沒送）" % extra)
             violations.append(
-                "%s:%d：`%s` 的 key 集合與 operator `%s` 不一致——缺 %s、多 %s。整組"
-                "鏡射是拍板的（#10），三條腿與 schema 任一邊漂了都只會在 runtime 422 才"
-                "看到，而 422 說不出是哪一邊寫錯（%s）"
+                "%s:%d：`%s` 的 key 集合與 operator `%s` 不一致——%s。整組鏡射是拍板的（#10）（%s）"
                 % (rel, node.lineno, ACCESS_PAYLOAD_BUILDER,
-                   ACCESS_PAYLOAD_SCHEMA_CLASS, missing, extra, ref))
+                   ACCESS_PAYLOAD_SCHEMA_CLASS, "、".join(parts), ref))
     return violations
 
 

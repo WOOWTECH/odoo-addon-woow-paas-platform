@@ -3,10 +3,13 @@
 
 守的是**這條規則自己**的鑑別力，不是被守的那棵樹乾不乾淨。分兩半：
 
-* **敏感度**：builder 少一個 key、多一個 key、schema class 不見、builder 少於三個、
-  return 形狀解不出來——五種都要紅，而且訊息要說得出是哪一種；
+* **敏感度**：builder 少一個 required key、多一個 key、schema class 不見、builder 少於
+  三個、return 形狀解不出來（下標賦值／`.update()`／`|=`／綁兩次）——都要紅，而且訊息
+  要說得出是哪一種；
 * **特異性**：三條腿都送滿 schema 欄位的合成樹不得誤報；`return name` 綁到 dict
-  literal 的形狀（documented shape ii）也不得誤報。
+  literal 的形狀（documented shape ii）也不得誤報；省略**有預設值**的欄位不得誤報
+  （#1052 review：原版把 Optional 當 required，schema 加一個 Optional 就三腿全紅）；
+  巢狀 helper 裡撞名的區域變數不得污染外層判定。
 
 最後一組對**真實 repo** 跑：今天三條腿都送滿 10 個欄位（#1052 覆核實測），這條 gate
 在真樹上必須是綠的——這是「check 沒有恆紅」的陽性對照，也是 CI 每張 PR 都會跑到的那格。
@@ -34,11 +37,13 @@ _FIELDS = ("enabled", "canonical_name", "app_name", "primary_hostname",
            "policies", "existing_app_id", "existing_policy_ids")
 
 
-def _schema_source(fields=_FIELDS, class_name="AccessSyncRequest"):
-    lines = ["from pydantic import BaseModel, Field", "",
+def _schema_source(fields=_FIELDS, class_name="AccessSyncRequest", optional=()):
+    """`fields` 全 required（`Field(...)`）；`optional` 另加成 `Optional[str] = Field(None)`。"""
+    lines = ["from typing import Optional", "from pydantic import BaseModel, Field", "",
              "class Other(BaseModel):", "    x: int", "",
              "class %s(BaseModel):" % class_name]
     lines += ["    %s: str = Field(...)" % f for f in fields]
+    lines += ["    %s: Optional[str] = Field(None)" % f for f in optional]
     return "\n".join(lines) + "\n"
 
 
@@ -52,6 +57,25 @@ def _builder_source(keys=_FIELDS, shape="literal"):
     elif shape == "mutated":
         ret = ("        payload = {\n%s,\n        }\n"
                "        payload['late'] = 1\n"
+               "        return payload\n" % body)
+    elif shape == "updated":
+        ret = ("        payload = {\n%s,\n        }\n"
+               "        payload.update({'late': 1})\n"
+               "        return payload\n" % body)
+    elif shape == "augassign":
+        ret = ("        payload = {\n%s,\n        }\n"
+               "        payload |= {'late': 1}\n"
+               "        return payload\n" % body)
+    elif shape == "double-bound":
+        ret = ("        payload = {}\n"
+               "        payload = {\n%s,\n        }\n"
+               "        return payload\n" % body)
+    elif shape == "nested-shadow":
+        ret = ("        payload = {\n%s,\n        }\n"
+               "        def _helper():\n"
+               "            payload = {}\n"
+               "            payload['x'] = 1\n"
+               "            return payload\n"
                "        return payload\n" % body)
     else:
         raise ValueError(shape)
@@ -96,6 +120,19 @@ class TestSpecificity(_Case):
         self.write_builders([_builder_source()] * 3)
         self.assertEqual(self.run_check(), [])
 
+    def test_optional_field_may_be_omitted(self):
+        """schema 多一個 `Optional[str] = Field(None)`、三腿都不送 ⇒ 不是違規（pydantic 合法）。"""
+        self.write_schema(_schema_source(optional=("later_added",)))
+        self.write_builders([_builder_source(), _builder_source(), _builder_source()])
+        self.assertEqual(self.run_check(), [])
+
+    def test_nested_helper_shadowing_name_does_not_poison_outer(self):
+        """巢狀 helper 裡同名區域變數的下標賦值不算外層 payload 的改動。"""
+        self.write_schema(_schema_source())
+        self.write_builders([_builder_source(shape="nested-shadow"),
+                             _builder_source(), _builder_source()])
+        self.assertEqual(self.run_check(), [])
+
     def test_bound_name_return_is_recognised(self):
         self.write_schema(_schema_source())
         self.write_builders([_builder_source(shape="bound-name")] * 3)
@@ -113,7 +150,8 @@ class TestSensitivity(_Case):
         v = self.run_check()
         self.assertEqual(len(v), 1, v)
         self.assertIn("leg1.py", v[0])
-        self.assertIn("缺 ['session_duration']", v[0])
+        self.assertIn("缺 required 欄位 ['session_duration']", v[0])
+        self.assertNotIn("多了", v[0])
 
     def test_extra_key_names_the_key(self):
         self.write_schema(_schema_source())
@@ -121,7 +159,8 @@ class TestSensitivity(_Case):
                              _builder_source(), _builder_source()])
         v = self.run_check()
         self.assertEqual(len(v), 1, v)
-        self.assertIn("多 ['bogus']", v[0])
+        self.assertIn("多了 schema 沒有的 ['bogus']", v[0])
+        self.assertNotIn("缺 required", v[0])
 
     def test_schema_class_absent_is_a_violation_not_clean(self):
         self.write_schema(_schema_source(class_name="SomethingElse"))
@@ -138,6 +177,33 @@ class TestSensitivity(_Case):
         v = self.run_check()
         self.assertEqual(len(v), 1, v)
         self.assertIn("少於", v[0])
+
+    def test_update_call_is_unrecognised_shape(self):
+        """`payload.update({...})`：#1052 review 抓到原版當乾淨放行；必須紅。"""
+        self.write_schema(_schema_source())
+        self.write_builders([_builder_source(shape="updated"),
+                             _builder_source(), _builder_source()])
+        v = self.run_check()
+        self.assertEqual(len(v), 1, v)
+        self.assertIn("解不出來", v[0])
+
+    def test_augassign_is_unrecognised_shape(self):
+        """`payload |= {...}`：同上。"""
+        self.write_schema(_schema_source())
+        self.write_builders([_builder_source(shape="augassign"),
+                             _builder_source(), _builder_source()])
+        v = self.run_check()
+        self.assertEqual(len(v), 1, v)
+        self.assertIn("解不出來", v[0])
+
+    def test_double_binding_is_unrecognised_shape(self):
+        """綁兩次：AST 走訪順序不是原始碼順序，哪份是最後的看不出來 ⇒ 紅。"""
+        self.write_schema(_schema_source())
+        self.write_builders([_builder_source(shape="double-bound"),
+                             _builder_source(), _builder_source()])
+        v = self.run_check()
+        self.assertEqual(len(v), 1, v)
+        self.assertIn("解不出來", v[0])
 
     def test_mutated_dict_is_unrecognised_shape(self):
         """`payload['late'] = …` 之後才 return：靜態看不到 key，必須紅而不是放行。"""
