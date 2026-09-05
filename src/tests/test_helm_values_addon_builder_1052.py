@@ -19,7 +19,7 @@ fixture 不走 ``write()``：每個案例各自 ``create`` 一筆服務，避開
 """
 from odoo.tests.common import TransactionCase, tagged
 
-from ..models.cloud_service import _internal_provision
+from ..models.cloud_service import ODOO_SELECTED_ADDONS_PATH, _internal_provision
 
 #: operator 側 ``update_module_list.py`` 讀的 odoo.conf 就是被這條路徑 append 過的那份，
 #: 所以它是跨系統的固定值，這裡以字面量釘住、不從實作 import（否則實作改了測試跟著改，等於沒守）。
@@ -103,3 +103,7 @@ class TestOdooAddonHelmValuesShape(TransactionCase):
                        values['customPostInitScripts']['00-addons-path.sh']):
             self.assertIn('grep -q "selected-addons"', script)
         self.assertIn('selected-addons', _PINNED_PATH)
+
+    def test_constant_is_the_pinned_contract_value(self):
+        """6b 之後：實作改用常數，常數值必須等於釘住的跨系統字面量。"""
+        self.assertEqual(ODOO_SELECTED_ADDONS_PATH, _PINNED_PATH)
