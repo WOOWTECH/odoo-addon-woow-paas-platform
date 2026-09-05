@@ -402,8 +402,10 @@ class SecurityAccessAccessPolicyRule(models.Model):
             policies._check_at_least_one_include()
             policies._check_emails_per_policy()
             policies._check_decision_selector_compat()
-            # #352：把既有規則改成 email_domain / everyone、或把它從 exclude
-            # 搬進 include，都是同一個繞過（見 policy 上的 constraint）。
+            # #352／#521 P-J：把既有規則改成 `_BULK_GRANT_RULE_TYPES` 裡的任一型
+            # （email_domain / everyone / ip_range / country）、或把它從 exclude
+            # 搬進 include，都是同一個繞過（見 policy 上的 constraint）。⛔ 這裡
+            # 刻意不複述型別清單當判準——判準只有 policy 上那一份常數。
             policies._check_allow_policy_no_bulk_grant()
             # #521：改 rule_value（加位址）或把 rule 搬到另一個 policy 都會動到
             # 席位計數。`policies` 上面已經把**舊**與**新** policy 都聯集進來，

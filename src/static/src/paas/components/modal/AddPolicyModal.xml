@@ -53,10 +53,11 @@
             </p>
             <p t-if="state.decision === 'allow'" class="o_woow_sa_field_hint">
               Allow grants access per person: Include rules must name who gets
-              in, so whole-domain and "everyone" rules are not offered there
-              (they admit an uncounted crowd while still consuming Cloudflare
-              Access seats). You can still use them in Require / Exclude rules
-              to narrow access.
+              in, so whole-domain, "everyone", IP range and country rules are
+              not offered there (they admit an uncounted crowd while still
+              consuming Cloudflare Access seats from the pool shared by the
+              whole platform). You can still use them in Require / Exclude
+              rules to narrow access.
             </p>
           </div>
 

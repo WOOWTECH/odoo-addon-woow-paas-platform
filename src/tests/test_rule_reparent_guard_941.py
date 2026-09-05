@@ -1051,8 +1051,8 @@ class TestRuleReparentRegression941(_RuleReparent941Fixture):
         resp = self.url_open(url, data=json.dumps({
             'jsonrpc': '2.0', 'method': 'call',
             'params': {'action': 'update', 'policy_id': self.pol_a.id,
-                       'include': [{'rule_type': 'ip_range',
-                                    'rule_value': '10.0.0.0/8'}],
+                       'include': [{'rule_type': 'email_list',
+                                    'rule_value': 'l1-replaced@example.com'}],
                        'exclude': [{'rule_type': 'email_domain',
                                     'rule_value': 'evil.example'}]},
         }), headers={'Content-Type': 'application/json'})
@@ -1071,7 +1071,8 @@ class TestRuleReparentRegression941(_RuleReparent941Fixture):
         self.env.flush_all()
         self.assertEqual(
             res['data']['include'],
-            [{'rule_type': 'ip_range', 'rule_value': '10.0.0.0/8'}],
+            [{'rule_type': 'email_list',
+              'rule_value': 'l1-replaced@example.com'}],
             'L1：新的 include 必須真的落地（實際 %r）' % (res['data'],))
 
     def test_L2_framework_related_recompute_is_not_falsely_blocked(self):
