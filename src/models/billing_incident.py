@@ -1853,7 +1853,8 @@ class BillingIncident(models.Model):
                 cr.execute('SET LOCAL lock_timeout = %s', (self._LOCK_TIMEOUT,))
                 now = fields.Datetime.now()
                 assignments = [
-                    'last_query_at = %s', 'last_query_verdict = %s',
+                    'last_query_at = %s',
+                    'last_query_verdict = COALESCE(%s, last_query_verdict)',
                     'assessment_reason = %s', 'next_query_at = %s',
                     'write_uid = %s', 'write_date = %s',
                 ]

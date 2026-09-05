@@ -1,4 +1,5 @@
 """#864 PR-F：vendor contract、時間模型、typed error 與零外呼守線。"""
+import uuid
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -396,6 +397,41 @@ class TestAutoRecreditQueryGate864(TransactionCase):
                     candidate, provider, exc)
             self.assertEqual(result, ('skipped', 'query_transient'))
             self.assertTrue(record.call_args.kwargs['increment_attempt'])
+
+    def test_transient_query_preserves_previous_vendor_verdict(self):
+        reference = 'test:864-%s' % uuid.uuid4().hex
+        Incident = self.env['woow.billing.incident']
+        self.assertTrue(Incident._log({
+            'external_ref': reference,
+            'kind': 'charged_not_credited',
+            'partner_ref': self.env.user.partner_id.id,
+            'amount': 100.0,
+            'credits': 100.0,
+            'bonus': 0.0,
+            'currency': 'TWD',
+            'failure_code': 'wallet_credit_failed',
+            'detail': 'PR-F query audit fixture.',
+        }))
+        self.assertTrue(Incident._record_query_outcome_independent(
+            reference,
+            verdict='indeterminate',
+            reason='awaiting_capture',
+            next_query_at=fields.Datetime.now() + timedelta(minutes=2),
+        ))
+        self.assertTrue(Incident._record_query_outcome_independent(
+            reference,
+            verdict=None,
+            reason='query_transient',
+            next_query_at=fields.Datetime.now() + timedelta(minutes=5),
+            skip_reason='query_transient',
+        ))
+        with self.env.registry.cursor() as cr:
+            cr.execute(
+                'SELECT last_query_verdict, assessment_reason '
+                'FROM woow_billing_incident WHERE external_ref = %s',
+                (reference,))
+            self.assertEqual(
+                cr.fetchone(), ('indeterminate', 'query_transient'))
 
     def test_platform_constructs_stage_client_while_network_stays_blocked(self):
         from odoo.addons.payment_ecpay_ecpg.sdk import ECPGClient
