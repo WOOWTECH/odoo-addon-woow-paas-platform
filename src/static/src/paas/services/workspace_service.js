@@ -1,62 +1,7 @@
 /** @odoo-module **/
 import { reactive } from "@odoo/owl";
 import { _t } from "@web/core/l10n/translation";
-
-/**
- * JSON-RPC helper for Odoo API calls
- * Odoo type="json" routes wrap response in { jsonrpc: "2.0", result: {...} }
- * @param {string} url - API endpoint
- * @param {Object} params - Request parameters
- * @returns {Promise<Object>} API response result
- * @throws {Error} Network or API errors
- */
-async function jsonRpc(url, params) {
-    let response;
-    try {
-        response = await fetch(url, {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-                jsonrpc: "2.0",
-                method: "call",
-                params: params,
-                id: Math.floor(Math.random() * 1000000),
-            }),
-        });
-    } catch (networkError) {
-        throw new Error(_t("Network error. Please check your connection and try again."));
-    }
-
-    // Check HTTP status before parsing
-    if (!response.ok) {
-        if (response.status === 401) {
-            throw new Error(_t("Session expired. Please refresh the page."));
-        } else if (response.status === 403) {
-            throw new Error(_t("Access denied."));
-        } else if (response.status >= 500) {
-            throw new Error(_t("Server error. Please try again later."));
-        }
-        throw new Error(_t("Request failed with status %s", response.status));
-    }
-
-    // Parse JSON response
-    let data;
-    try {
-        data = await response.json();
-    } catch (parseError) {
-        throw new Error(_t("Invalid response from server."));
-    }
-
-    // Handle JSON-RPC error
-    if (data.error) {
-        const errorMsg = data.error.data?.message || data.error.message || _t("Unknown error");
-        throw new Error(errorMsg);
-    }
-
-    return data.result;
-}
+import { jsonRpc } from "./rpc";
 
 /**
  * @typedef {Object} WorkspaceData
