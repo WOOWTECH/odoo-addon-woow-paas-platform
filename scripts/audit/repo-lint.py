@@ -404,9 +404,8 @@ test-collectability 由兩個函式——收集面／執行面。這個一對多
                          `from .integration import …`），外加幽靈條目（import 了不存在
                          的檔 ＝ 執行期 ImportError ⇒ 整套一條都收不到）與頂層
                          re-export（子套件的 `__init__.py` 不在 loader 視野裡），
-                         再加重複條目（同一模組被 import 兩次：`.gitattributes` 對
-                         `src/tests/__init__.py` 宣告 `merge=union` 後唯一的新失效
-                         形態，#1052）。
+                         再加重複條目（同一模組被 import 兩次：平行 PR 各 append 一行
+                         同名 import、解衝突時兩側都留下的典型產物，#1052）。
                      (2) **執行面**：`src/tests/` 下每一個 `unittest.TestCase` 的傳遞
                          子類，必須同時傳遞繼承到 `odoo.tests.common.BaseCase`。
                          🔴 **逐 class 不是逐檔**：`test_reconciler_diff.py` 同檔三個
@@ -7962,10 +7961,11 @@ def check_test_module_collection(root):
         寫了 `from . import test_x` 而 `src/tests/__init__.py` 沒有 re-export 它時，
         (1) 是綠的、Odoo 卻收不到——所以這一格要獨立判。
     (4) **重複**：同一個 `__init__.py` 把同一個模組 import 兩次。執行期無害（第二次
-        import 是 no-op），但 `.gitattributes` 對 `src/tests/__init__.py` 宣告
-        `merge=union` 之後（#1052），它是 union driver **唯一**新增的失效形態：
-        add/add 衝突取兩側聯集、只加不減，兩側各加同一行就留下兩份。這一格讓它在
-        lint 就紅，不靠 review 目測。
+        import 是 no-op），但它是 tail-append 清單解 add/add 衝突時「兩側都留」的
+        典型產物（#1052）。⚠ 曾考慮對這個檔宣告 `.gitattributes` `merge=union` 免掉
+        人工解衝突，review 實測否決：union 在「一側刪一行、另一側在附近加一行」時會
+        **靜默復活被刪的 import**，而那個形態沒有任何 gate 抓得到（檔還在、只 import
+        一次、有被 import）。所以衝突仍交給人解，這一格只擋解錯的結果。
 
     非 `test_` 前綴的模組（`smart_home_fixture.py`）天然不在範圍：loader 那個
     `name.startswith('test_')` 本來就不會挑它。
@@ -8031,9 +8031,8 @@ def check_test_module_collection(root):
         if first == lineno:
             continue
         violations.append(
-            "%s:%d：重複 import 了 `%s`（第一次在 :%d）。`.gitattributes` 對這個檔宣告 "
-            "`merge=union`：add/add 衝突會保留兩側各自加的同一行——union 只加不減，"
-            "重複行是它唯一的新失效形態。刪掉其中一行即可（#1052；%s）"
+            "%s:%d：重複 import 了 `%s`（第一次在 :%d）。多半是解 add/add 衝突時兩側各自"
+            "加的同一行都留下來了。刪掉其中一行即可（#1052；%s）"
             % (init_rel, lineno, path.replace("/", "."), first, ref))
 
     # (3) 頂層 re-export：Odoo 只讀 `src.tests` 自己的 `test_*` 屬性。

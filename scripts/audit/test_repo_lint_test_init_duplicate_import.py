@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """`test-collectability`（repo-lint 第 31 條）收集面第 (4) 格——重複 import——的自檢。
 
-#1052 對 `src/tests/__init__.py` 宣告 `.gitattributes` 的 `merge=union`。union 只加不減，
-結構上不會丟 import，但兩側各加同一行時會留下兩份；那是它**唯一**的新失效形態，
-由 `check_test_module_collection` 的第 (4) 格攔。本檔守的是**那一格自己的鑑別力**：
+`src/tests/__init__.py` 是 tail-append 的 import 清單，平行 PR 解 add/add 衝突時兩側各加
+的同一行常被一起留下；那個結果由 `check_test_module_collection` 的第 (4) 格攔（#1052；
+曾考慮的 `merge=union` 因會靜默復活被刪的 import 而否決）。本檔守的是**那一格自己的鑑別力**：
 
 * **敏感度**：同一個 `__init__.py` 對同一模組出現第二個 level-1 `ImportFrom` 要紅，
   訊息要點名兩個行號；
@@ -70,7 +70,7 @@ class TestSensitivity(_Case):
         self.assertIn("src/tests/__init__.py:3", v[0])
         self.assertIn("第一次在 :1", v[0])
         self.assertIn("test_a", v[0])
-        self.assertIn("merge=union", v[0])
+        self.assertIn("重複 import", v[0])
 
     def test_triplicate_reports_each_extra_occurrence(self):
         """三份 ⇒ 兩條違規（第 2、3 次各一條），不是一條。"""

@@ -37,7 +37,9 @@ Module contract（#1052）
    搬走 class 會 KeyError），再重指約 20 處寫死
    ``odoo.addons.woow_paas_platform.models.billing_incident`` 的測試站點
    （``patch('…billing_incident._logger')`` 型搬檔後會靜默假綠）。
-   ⚠ 本 docstring 前四段的措辭被 986 測試逐字斷言，改字要連測試一起改。
+   ⚠ 986 測試逐字斷言的是上方既有段落裡的三句 ACL 措辭（``account.group_account_manager``
+   那段）與 import 區下方那行 ``no company M2O/rule`` 註解；本「Module contract」段沒有測試守，
+   改它不會紅，但改那四處要連測試一起改。
 """
 
 import html
