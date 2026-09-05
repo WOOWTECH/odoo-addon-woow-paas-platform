@@ -1,6 +1,7 @@
 import logging
 
-from odoo import fields, models
+from odoo import _, fields, models
+from odoo.exceptions import ValidationError
 
 _logger = logging.getLogger(__name__)
 
@@ -24,20 +25,37 @@ class PaymentTransaction(models.Model):
         )
         res = super()._set_done(state_message=state_message, **kwargs)
         for tx in self:
-            if tx.woow_topup_id and tx.woow_topup_id.state in ('draft', 'pending'):
+            topup = tx.woow_topup_id.sudo()
+            if topup and topup.repair_incident_ref:
+                # 重建列只可由 query-gated PR-F repair 入帳；晚到 callback
+                # 不得繞過 ECPG assessment 與 safety gates。
+                raise ValidationError(_(
+                    'Reconstructed wallet top-ups require the query-gated '
+                    'repair process.'
+                ))
+            if topup and topup.state in ('draft', 'pending'):
                 _logger.info(
                     "[PAY_TX] _set_done → topup._on_payment_done tx=%s ref=%s topup=%s topup_state=%s",
-                    tx.id, tx.reference, tx.woow_topup_id.id, tx.woow_topup_id.state,
+                    tx.id, tx.reference, topup.id, topup.state,
                 )
-                tx.woow_topup_id.sudo()._on_payment_done(tx)
-            elif tx.woow_topup_id:
+                topup._on_payment_done(tx)
+            elif topup:
                 _logger.info(
                     "[PAY_TX] _set_done skip topup callback (state=%s) tx=%s topup=%s",
-                    tx.woow_topup_id.state, tx.id, tx.woow_topup_id.id,
+                    topup.state, tx.id, topup.id,
                 )
         return res
 
     def _set_error(self, state_message=None, **kwargs):
+        # 與 _set_done 對稱：reconstructed row 的任何 provider callback
+        # 都不得改 lifecycle；只有 query-gated repair capability 可收斂。
+        for tx in self:
+            topup = tx.woow_topup_id.sudo()
+            if topup and topup.repair_incident_ref:
+                raise ValidationError(_(
+                    'Reconstructed wallet top-ups require the query-gated '
+                    'repair process.'
+                ))
         _logger.info(
             "[PAY_TX] _set_error called tx_ids=%s refs=%s topup_ids=%s msg=%r",
             self.ids, self.mapped('reference'), self.mapped('woow_topup_id').ids,

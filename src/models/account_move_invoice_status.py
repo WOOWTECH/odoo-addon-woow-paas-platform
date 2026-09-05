@@ -2,7 +2,7 @@ import logging
 from datetime import timedelta
 
 from odoo import _, api, fields, models
-from odoo.exceptions import UserError
+from odoo.exceptions import AccessError, UserError
 
 _logger = logging.getLogger(__name__)
 
@@ -32,6 +32,22 @@ _AGING_SCAN_BATCH = 1000
 #: 掃描筆數安全上界；踩到必出聲，且「是否真的被截斷」用**實查**判定。
 _AGING_MAX_SCAN = 20000
 
+_ECPAY_MTN_WRITE_CTX = '_woow_ecpay_mtn_write'
+_ECPAY_MTN_WRITE_CAPABILITY = object()
+
+
+def _ecpay_mtn_write(records):
+    return records.with_context(**{
+        _ECPAY_MTN_WRITE_CTX: _ECPAY_MTN_WRITE_CAPABILITY,
+    })
+
+
+def _is_ecpay_mtn_write(env):
+    return (
+        env.context.get(_ECPAY_MTN_WRITE_CTX)
+        is _ECPAY_MTN_WRITE_CAPABILITY
+    )
+
 
 class AccountMoveInvoiceStatus(models.Model):
     _inherit = 'account.move'
@@ -53,6 +69,14 @@ class AccountMoveInvoiceStatus(models.Model):
         default='not_required',
         index=True,
         copy=False,
+    )
+    # PR-F 發票 idempotency key：這是我方 MerchantTradeNo，不是 provider
+    # TradeNo；nullable legacy rows 只可在 diagnostics 通過後 backfill。
+    woow_ecpay_mtn = fields.Char(
+        index=True,
+        copy=False,
+        readonly=True,
+        groups='base.group_system',
     )
     woow_invoice_retry_count = fields.Integer(default=0, copy=False)
     woow_invoice_last_error = fields.Text(copy=False)
@@ -78,6 +102,26 @@ class AccountMoveInvoiceStatus(models.Model):
              'incident for this move. Non-empty rows leave the scan window so '
              'newly-aged invoices can be reached (see #990).',
     )
+    @api.model_create_multi
+    def create(self, values_list):
+        if (not _is_ecpay_mtn_write(self.env)
+                and any(values.get('woow_ecpay_mtn')
+                        for values in values_list)):
+            raise AccessError(_(
+                'ECPay MerchantTradeNo audit keys are managed only by the '
+                'internal top-up invoice process.'
+            ))
+        return super().create(values_list)
+
+    def write(self, values):
+        if ('woow_ecpay_mtn' in values
+                and not _is_ecpay_mtn_write(self.env)):
+            raise AccessError(_(
+                'ECPay MerchantTradeNo audit keys are managed only by the '
+                'internal top-up invoice process.'
+            ))
+        return super().write(values)
+
     woow_skip_upstream_hook = fields.Boolean(
         default=False,
         copy=False,
@@ -91,6 +135,111 @@ class AccountMoveInvoiceStatus(models.Model):
              'effect when company.auto_invoice is "manual" (the upstream inline '
              'hook is a no-op in that case anyway).',
     )
+
+    def init(self):
+        """建 index 前先 fail-loud 診斷 MTN backfill，禁止猜測 duplicate。"""
+        # account.move core 自己有 init()；extension 不得吃掉它的 SQL setup。
+        super().init()
+        cr = self.env.cr
+        # 既有 stamp 與 legacy topup invoice projection 是同一 candidate set；
+        # 一張 invoice 對到多個 reference 屬 ambiguous，禁止猜測。
+        cr.execute("""
+            SELECT COUNT(*) FROM (
+                SELECT wt.invoice_account_move_id
+                FROM woow_wallet_topup wt
+                JOIN payment_transaction pt ON pt.id = wt.payment_transaction_id
+                WHERE wt.invoice_account_move_id IS NOT NULL AND pt.reference IS NOT NULL
+                GROUP BY wt.invoice_account_move_id
+                HAVING COUNT(DISTINCT pt.reference) > 1
+            ) groups
+        """)
+        ambiguous = cr.fetchone()[0]
+        if ambiguous:
+            cr.execute("""
+                SELECT ARRAY_AGG(wt.invoice_account_move_id ORDER BY wt.invoice_account_move_id)
+                FROM woow_wallet_topup wt JOIN payment_transaction pt ON pt.id = wt.payment_transaction_id
+                WHERE wt.invoice_account_move_id IS NOT NULL AND pt.reference IS NOT NULL
+                GROUP BY wt.invoice_account_move_id HAVING COUNT(DISTINCT pt.reference) > 1
+                ORDER BY wt.invoice_account_move_id LIMIT 1
+            """)
+            raise UserError(_(
+                'PR-F cannot backfill account.move MTN: %(count)s ambiguous move group(s); '
+                'first move ids=%(ids)s.'
+            ) % {'count': ambiguous, 'ids': cr.fetchone()[0]})
+        cr.execute("""
+            SELECT COUNT(*) FROM (
+                SELECT candidate_mtn FROM (
+                    SELECT id AS move_id, woow_ecpay_mtn AS candidate_mtn FROM account_move
+                    WHERE woow_ecpay_mtn IS NOT NULL
+                    UNION ALL
+                    SELECT am.id AS move_id, pt.reference AS candidate_mtn
+                    FROM woow_wallet_topup wt
+                    JOIN payment_transaction pt ON pt.id = wt.payment_transaction_id
+                    JOIN account_move am ON am.id = wt.invoice_account_move_id
+                    WHERE am.woow_ecpay_mtn IS NULL AND pt.reference IS NOT NULL
+                ) candidates GROUP BY candidate_mtn HAVING COUNT(DISTINCT move_id) > 1
+            ) groups
+        """)
+        duplicate = cr.fetchone()[0]
+        if duplicate:
+            cr.execute("""
+                SELECT ARRAY_AGG(DISTINCT move_id ORDER BY move_id) FROM (
+                    SELECT id AS move_id, woow_ecpay_mtn AS candidate_mtn FROM account_move
+                    WHERE woow_ecpay_mtn IS NOT NULL
+                    UNION ALL
+                    SELECT am.id AS move_id, pt.reference AS candidate_mtn
+                    FROM woow_wallet_topup wt JOIN payment_transaction pt ON pt.id = wt.payment_transaction_id
+                    JOIN account_move am ON am.id = wt.invoice_account_move_id
+                    WHERE am.woow_ecpay_mtn IS NULL AND pt.reference IS NOT NULL
+                ) candidates WHERE candidate_mtn = (
+                    SELECT candidate_mtn FROM (
+                        SELECT id AS move_id, woow_ecpay_mtn AS candidate_mtn FROM account_move
+                        WHERE woow_ecpay_mtn IS NOT NULL
+                        UNION ALL
+                        SELECT am.id AS move_id, pt.reference AS candidate_mtn
+                        FROM woow_wallet_topup wt JOIN payment_transaction pt ON pt.id = wt.payment_transaction_id
+                        JOIN account_move am ON am.id = wt.invoice_account_move_id
+                        WHERE am.woow_ecpay_mtn IS NULL AND pt.reference IS NOT NULL
+                    ) valueset GROUP BY candidate_mtn HAVING COUNT(DISTINCT move_id) > 1 LIMIT 1)
+            """)
+            raise UserError(_(
+                'PR-F cannot create account_move_woow_ecpay_mtn_uniq: %(count)s duplicate '
+                'key group(s); first move ids=%(ids)s.'
+            ) % {'count': duplicate, 'ids': cr.fetchone()[0]})
+        cr.execute("""
+            UPDATE account_move am SET woow_ecpay_mtn = source.reference
+            FROM (
+                SELECT wt.invoice_account_move_id AS move_id, MIN(pt.reference) AS reference
+                FROM woow_wallet_topup wt JOIN payment_transaction pt ON pt.id = wt.payment_transaction_id
+                WHERE wt.invoice_account_move_id IS NOT NULL AND pt.reference IS NOT NULL
+                GROUP BY wt.invoice_account_move_id
+            ) source
+            WHERE am.id = source.move_id AND am.woow_ecpay_mtn IS NULL
+        """)
+        # Backfill 本身也是新輸入；DDL 前重查，不假設先前 projection 仍代表
+        # 當下 DB truth。
+        cr.execute("""
+            SELECT COUNT(*) FROM (
+                SELECT woow_ecpay_mtn FROM account_move
+                WHERE woow_ecpay_mtn IS NOT NULL
+                GROUP BY woow_ecpay_mtn HAVING COUNT(*) > 1
+            ) groups
+        """)
+        duplicate_after_backfill = cr.fetchone()[0]
+        if duplicate_after_backfill:
+            cr.execute("""
+                SELECT ARRAY_AGG(id ORDER BY id) FROM account_move
+                WHERE woow_ecpay_mtn = (
+                    SELECT woow_ecpay_mtn FROM account_move WHERE woow_ecpay_mtn IS NOT NULL
+                    GROUP BY woow_ecpay_mtn HAVING COUNT(*) > 1 ORDER BY woow_ecpay_mtn LIMIT 1)
+            """)
+            raise UserError(_(
+                'PR-F backfill produced %(count)s duplicate MTN group(s); first move ids=%(ids)s.'
+            ) % {'count': duplicate_after_backfill, 'ids': cr.fetchone()[0]})
+        cr.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS account_move_woow_ecpay_mtn_uniq
+            ON account_move (woow_ecpay_mtn) WHERE woow_ecpay_mtn IS NOT NULL
+        """)
 
     # ------------------------------------------------------------------
     # #864 PR-C：開票政策 resolver（訂閱家族與儲值兩個呼叫點共用這一顆）

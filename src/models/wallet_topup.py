@@ -4,11 +4,24 @@ import uuid
 from datetime import timedelta
 
 import psycopg2
+import requests
 
 from odoo import _, api, fields, models, SUPERUSER_ID
-from odoo.exceptions import ValidationError
+from odoo.exceptions import AccessError, ValidationError
+
+from .account_move_invoice_status import _ecpay_mtn_write
+from .wallet_transaction import _wallet_credit_metadata
 
 _logger = logging.getLogger(__name__)
+
+# JSON/RPC 無法偽造 object identity。只有 query-gated PR-F repair path 可帶
+# 此 capability，用來抑制 same-transaction invoice creation。
+_AUTO_RECREDIT_CAPABILITY = object()
+_AUTO_RECREDIT_SKIP_INVOICE_CTX = '_woow_auto_recredit_skip_invoice'
+
+
+def _is_auto_recredit_skip_invoice(env):
+    return env.context.get(_AUTO_RECREDIT_SKIP_INVOICE_CTX) is _AUTO_RECREDIT_CAPABILITY
 
 
 # Stable failure codes returned by `charge_via_token`. Mirrors the constants
@@ -59,6 +72,13 @@ class WalletTopup(models.Model):
 
     failure_code = fields.Char()
     failure_message = fields.Char()
+    # Branch-B reconstructed row 沒有正常 callback lifecycle；此 scalar
+    # ledger link 防止 callback/cleanup 繞過 PR-F safety gates。
+    repair_incident_ref = fields.Integer(
+        index=True,
+        readonly=True,
+        groups='base.group_system',
+    )
 
     invoice_carrier_type = fields.Selection([
         ('email', 'Email carrier'),
@@ -74,6 +94,26 @@ class WalletTopup(models.Model):
     invoice_lovecode = fields.Char()
     invoice_account_move_id = fields.Many2one('account.move', readonly=True)
     invoice_issued_at = fields.Datetime(readonly=True)
+
+    @api.model_create_multi
+    def create(self, values_list):
+        if (not _is_auto_recredit_skip_invoice(self.env)
+                and any(values.get('repair_incident_ref')
+                        for values in values_list)):
+            raise AccessError(_(
+                'Repair incident references are managed only by the '
+                'query-gated repair process.'
+            ))
+        return super().create(values_list)
+
+    def write(self, values):
+        if ('repair_incident_ref' in values
+                and not _is_auto_recredit_skip_invoice(self.env)):
+            raise AccessError(_(
+                'Repair incident references are managed only by the '
+                'query-gated repair process.'
+            ))
+        return super().write(values)
 
     _FAILURE_KEYWORDS = (
         ('card_declined', ('declined', 'decline', '10100248')),
@@ -243,25 +283,26 @@ class WalletTopup(models.Model):
             self.id, tx.id, reference, charge_amount, token.id,
         )
 
+        # 外呼前先凍結 durable incident 所需的所有純 scalar。失敗後 PostgreSQL
+        # transaction 可能已 aborted；except 區塊不得再 lazy-read ORM 欄位。
+        origin_xid = self._origin_xid()
+        cni_snapshot = self._freeze_charged_not_credited_snapshot(
+            tx, token, charge_amount, currency, origin_xid=origin_xid,
+        )
         try:
             result = tx._send_payment_request()
         except Exception as e:
-            if tx.state == 'done':
-                # Inner callback (_set_done → _on_payment_done) raised AFTER ECPay
-                # accepted the charge. Card was actually charged; route to CRITICAL
-                # path so ops gets the manual-reconciliation alert with full context.
+            cached_tx_state = tx.env.cache.get(
+                tx, tx._fields['state'], None)
+            if cached_tx_state == 'done':
                 _logger.exception(
-                    'CRITICAL: auto-topup tx _set_done() ran (ECPay charged tx=%s '
-                    'amount=%.2f) but inner callback raised; manual reconciliation '
-                    'required (topup=%s, partner=%s, partner_email=%s)',
-                    tx.reference, charge_amount, self.id, self.partner_id.id,
-                    self.partner_id.email or '(none)',
+                    'CRITICAL: auto-topup callback confirmed a charge but '
+                    'wallet credit failed (topup=%s partner=%s)',
+                    cni_snapshot['source_ref'], cni_snapshot['partner_ref'],
                 )
                 # #864 PR-E 順序：incident 先落地（獨立交易，即使自己失敗也
                 # fail-soft 不拋），下面那個 `state='failed'` 標記才是保底。
-                self._log_charged_not_credited_incident(
-                    tx, token, charge_amount, currency,
-                )
+                self._log_charged_not_credited_snapshot(cni_snapshot)
                 self.write({
                     'state': 'failed',
                     'failure_code': TOPUP_WALLET_CREDIT_FAILED,
@@ -310,18 +351,13 @@ class WalletTopup(models.Model):
             self._on_payment_done(tx)
         except Exception as e:
             _logger.exception(
-                'CRITICAL: auto-topup charged ECPay (tx=%s amount=%.2f currency=%s) '
-                'but post-charge bookkeeping failed; manual reconciliation required '
-                '(topup=%s, partner=%s, partner_email=%s)',
-                tx.reference, charge_amount, self.currency_id.name,
-                self.id, self.partner_id.id,
-                self.partner_id.email or '(none)',
+                'CRITICAL: auto-topup charge succeeded but post-charge '
+                'bookkeeping failed (topup=%s partner=%s)',
+                cni_snapshot['source_ref'], cni_snapshot['partner_ref'],
             )
             # #864 PR-E 順序：incident 先落地（獨立交易，即使自己失敗也
             # fail-soft 不拋），下面那個 `state='failed'` 標記才是保底。
-            self._log_charged_not_credited_incident(
-                tx, token, charge_amount, currency,
-            )
+            self._log_charged_not_credited_snapshot(cni_snapshot)
             self.write({
                 'state': 'failed',
                 'failure_code': TOPUP_WALLET_CREDIT_FAILED,
@@ -397,8 +433,67 @@ class WalletTopup(models.Model):
             )
         return incident_id
 
-    def _log_charged_not_credited_incident(self, tx, token, charge_amount, currency):
-        """獨立交易落一筆 CHARGED_NOT_CREDITED incident（#864 PR-D／PR-E）。
+    def _origin_xid(self):
+        """在 failure handling 前凍結 outer xid。
+
+        ``pg_current_xact_id()`` 即使對原本可能沒有 xid 的 transaction，也會
+        刻意配置真實 xid；此副作用已接受，因 Branch B 必須區分仍在執行與已被
+        PostgreSQL abort 的 payment transaction。
+        """
+        self.env.cr.execute('SELECT pg_current_xact_id()::text')
+        return self.env.cr.fetchone()[0]
+
+    def _freeze_charged_not_credited_snapshot(
+            self, tx, token, charge_amount, currency, *, origin_xid=None):
+        """在外呼／入帳失敗區域之前凍結 CHARGED_NOT_CREDITED 純 scalar。"""
+        self.ensure_one()
+        return {
+            'external_ref': tx.reference,
+            'kind': 'charged_not_credited',
+            'partner_ref': self.partner_id.id or None,
+            'payment_token_ref': token.id if token else None,
+            'amount': float(charge_amount),
+            'credits': self.credits,
+            'bonus': self.bonus,
+            'currency': currency.name if currency else None,
+            'failure_code': TOPUP_WALLET_CREDIT_FAILED,
+            'source_model': self._name,
+            'source_ref': self.id,
+            'origin_xid': origin_xid,
+            'topup_plan_ref': self.plan_id.id or None,
+            'topup_source': self.source,
+            'detail': (
+                'ECPay 已接受扣款（tx.state=done）但入帳／記帳後續處理'
+                '失敗；原始例外請查 woow.wallet.topup.failure_message '
+                '與伺服器 log。'
+            ),
+        }
+
+    def _log_charged_not_credited_snapshot(self, snapshot):
+        """以獨立交易寫入已凍結 snapshot；此 method 不讀任何 ORM 欄位。"""
+        try:
+            incident_id = self.env[
+                'woow.billing.incident']._log_charged_not_credited(snapshot)
+            _logger.info(
+                '[TOPUP_AUTO] charged_not_credited incident logged '
+                'incident_id=%s', incident_id,
+            )
+            return incident_id
+        except Exception:
+            _logger.critical(
+                '[TOPUP_AUTO] CRITICAL: charged_not_credited incident '
+                'logging itself failed — the charge has already happened'
+            )
+            return False
+
+    def _log_charged_not_credited_incident(
+            self, tx, token, charge_amount, currency, *, origin_xid=None):
+        """相容既有 caller：先凍結，再以獨立交易落 CNI incident。
+
+        新的外呼失敗路徑必須在進入 failure region 前直接呼叫
+        ``_freeze_charged_not_credited_snapshot``，不得在 except 內走本 wrapper。
+
+        獨立交易落一筆 CHARGED_NOT_CREDITED incident（#864 PR-D／PR-E）。
 
         兩個呼叫端都是「ECPay 已確認扣款（``tx.state == 'done'``），但入帳／
         記帳後續處理失敗」——這正是 double-charge 冷卻閘（見
@@ -428,56 +523,10 @@ class WalletTopup(models.Model):
         `charge_via_token` 那個保底的 `state='failed'` 標記。失敗只
         log critical，不外拋。
         """
-        try:
-            # #864 PR-G：⛔ 不能用泛用的 `_log`。PR-G 的預登記已經用**同一個**
-            # `tx.reference` 佔住那一列（`UNIQUE(external_ref)`），而 `_log` 的
-            # kind 在 INSERT 當下定死 ⇒ 走 `_log` 會撞 kind collision、事實被
-            # 丟棄，冷卻閘從此查不到東西。專用 API 做的是原地升級
-            # `intent → charged_not_credited`（單 statement、無 pre-read）。
-            incident_id = self.env[
-                'woow.billing.incident']._log_charged_not_credited({
-                    'external_ref': tx.reference,
-                    'kind': 'charged_not_credited',
-                    'partner_ref': self.partner_id.id or None,
-                    'payment_token_ref': token.id if token else None,
-                    'amount': float(charge_amount),
-                    'credits': self.credits,
-                    'bonus': self.bonus,
-                    'currency': currency.name if currency else None,
-                    # 🔴 #993：⛔ **不寫 `trade_no`**。這裡沒有 provider 給的
-                    # 單號可寫——`tx.reference` 是我方 MerchantTradeNo，它已經
-                    # 在同一個 snapshot 的 `external_ref` 裡了（同值、冗餘）。
-                    # 寫進來的實害不是重複而是**覆寫**：`_upsert_incident_snapshot`
-                    # 把 `trade_no` 列進 `explicit_evidence`（`billing_incident.py`
-                    # 的 `explicit_evidence` 那段）⇒ `ON CONFLICT DO UPDATE SET
-                    # trade_no = EXCLUDED.trade_no` ⇒ 若 PR-G 的 callback
-                    # evidence 已經把**真的 ECPay TradeNo** 寫進這一列（kind 仍是
-                    # `intent`），這次 promote 會把它蓋掉——而那是平台**唯一一份**
-                    # ECPay 交易編號（vendored addon 只在查得到 tx 時才寫
-                    # `tx.provider_reference`，本場景正是查不到）。Eugene 2026-09-02
-                    # 裁決 A（#993 留言 11404）。
-                    'failure_code': TOPUP_WALLET_CREDIT_FAILED,
-                    'source_model': self._name,
-                    'source_ref': self.id,
-                    'detail': (
-                        'ECPay 已接受扣款（tx.state=done）但入帳／記帳後續處理'
-                        '失敗；原始例外請查 woow.wallet.topup.failure_message '
-                        '與伺服器 log。'
-                    ),
-                })
-            _logger.info(
-                '[TOPUP_AUTO] charged_not_credited incident logged topup=%s '
-                'tx=%s incident_id=%s',
-                self.id, tx.id, incident_id,
-            )
-        except Exception:
-            _logger.critical(
-                '[TOPUP_AUTO] CRITICAL: charged_not_credited incident '
-                'logging itself failed (topup=%s tx=%s) — the charge has '
-                'already happened; only the failed marker below now stands '
-                'as evidence',
-                self.id, tx.id,
-            )
+        snapshot = self._freeze_charged_not_credited_snapshot(
+            tx, token, charge_amount, currency, origin_xid=origin_xid,
+        )
+        return self._log_charged_not_credited_snapshot(snapshot)
 
     # 公版 choke point 的行鎖預算（#864 PR-G SF4）。沿 PR-D／PR-E 既有的 1s
     # 前例：這是**安全參數不是效能旋鈕**——入口可能被 cron 的 per-record
@@ -546,7 +595,15 @@ class WalletTopup(models.Model):
                             (previous_lock_timeout,))
         # 鎖只擋並發 writer，⛔ 不會刷新本 env 的 record cache ⇒ 必須重讀，
         # 否則冪等守衛看的是**取鎖之前**那個已經過期的快照。
-        self.invalidate_recordset(['state', 'wallet_transaction_id'])
+        self.invalidate_recordset([
+            'state', 'wallet_transaction_id', 'repair_incident_ref',
+        ])
+        if (self.repair_incident_ref
+                and not _is_auto_recredit_skip_invoice(self.env)):
+            raise ValidationError(_(
+                'Reconstructed wallet top-ups may be credited only by the '
+                'query-gated repair process.'
+            ))
         if self.state == 'done' or self.wallet_transaction_id:
             _logger.info(
                 "[TOPUP] _on_payment_done skip already done topup=%s wallet_tx=%s",
@@ -600,7 +657,11 @@ class WalletTopup(models.Model):
         # Create the customer invoice so the issuing cron can later call
         # ecpay_invoice_tw. Best-effort: a failure here does not roll back the
         # wallet credit that already happened above.
-        self._ensure_topup_invoice()
+        # PR-F auto-recredit 先 commit 點數；invoice 另走 best-effort
+        # transaction。journal failure 不得 rollback 已驗證的 ECPay credit；
+        # reconstructed row 永不自動開票。
+        if not _is_auto_recredit_skip_invoice(self.env):
+            self._ensure_topup_invoice()
 
     def _on_payment_failed(self, tx):
         """Record failure details when the linked payment transaction fails."""
@@ -910,6 +971,44 @@ class WalletTopup(models.Model):
                     )
 
     @api.model
+    def _pending_reconciliation_blocker(self, topup):
+        """用 fresh cursor 回傳 unresolved inbox/CNI blocker 與其 key。
+
+        Cleanup 不可成為第二個 abandonment clock。tx 尚未建立／已 rollback 時，
+        仍可用 durable incident 的 ``source_model/source_ref`` 找回 intent。
+        """
+        reference = (
+            topup.payment_transaction_id.reference
+            if topup.payment_transaction_id else None
+        )
+        try:
+            with self.env.registry.cursor() as cr:
+                cr.execute('SET LOCAL lock_timeout = %s',
+                           (self._REPLAY_LOCK_TIMEOUT,))
+                cr.execute(
+                    "SELECT external_ref, kind FROM woow_billing_incident "
+                    "WHERE state <> 'resolved' AND "
+                    "(external_ref = %s OR "
+                    "(source_model = %s AND source_ref = %s)) AND ("
+                    "(kind = 'intent' AND rtn_code = '1' "
+                    "AND trade_no IS NOT NULL) "
+                    "OR kind = 'charged_not_credited') "
+                    "ORDER BY id LIMIT 1",
+                    (reference, self._name, topup.id),
+                    log_exceptions=False,
+                )
+                row = cr.fetchone()
+                return (
+                    {'external_ref': row[0], 'kind': row[1]}
+                    if row else False
+                )
+        except Exception:
+            _logger.error(
+                '[TOPUP] reconciliation blocker unavailable; '
+                'deferring cancel topup=%s', topup.id)
+            return {'external_ref': None, 'kind': 'unavailable'}
+
+    @api.model
     def _has_unreplayed_callback_evidence(self, topup):
         """這筆 topup 的 inbox 裡有沒有「還沒補完的成功 callback」（#864 PR-G）。
 
@@ -922,28 +1021,7 @@ class WalletTopup(models.Model):
         而且會把「ECPay 說收了錢」的那一筆標成使用者放棄。查不出來時**晚一輪
         再說**是免費的，猜錯方向不是。
         """
-        reference = topup.payment_transaction_id.reference
-        if not reference:
-            return False
-        try:
-            with self.env.registry.cursor() as cr:
-                cr.execute('SET LOCAL lock_timeout = %s',
-                           (self._REPLAY_LOCK_TIMEOUT,))
-                cr.execute(
-                    "SELECT 1 FROM woow_billing_incident "
-                    "WHERE external_ref = %s AND kind = 'intent' "
-                    "AND rtn_code = '1' AND trade_no IS NOT NULL "
-                    "AND state <> 'resolved' LIMIT 1",
-                    (reference,),
-                )
-                return cr.fetchone() is not None
-        except Exception:
-            _logger.error(
-                '[TOPUP] callback evidence gate unavailable for topup=%s; '
-                'deferring hard-cancel one round rather than cancelling a '
-                'top-up that may already be paid', topup.id,
-            )
-            return True
+        return bool(self._pending_reconciliation_blocker(topup))
 
     @api.model
     def _cron_cleanup_pending_topups(self):
@@ -974,6 +1052,12 @@ class WalletTopup(models.Model):
                 '[TOPUP] cron replay segment failed; the cleanup segment '
                 'below still runs (separate failure domains)',
             )
+        try:
+            self._cron_auto_recredit_charged_not_credited()
+        except Exception:
+            _logger.exception(
+                '[TOPUP] PR-F auto-recredit failed; pending cleanup still runs',
+            )
         now = fields.Datetime.now()
         grace = now - timedelta(minutes=self._CLEANUP_GRACE_MIN)
         hard = now - timedelta(minutes=self._CLEANUP_HARD_CANCEL_MIN)
@@ -989,10 +1073,24 @@ class WalletTopup(models.Model):
         for topup in stuck:
             tx = topup.payment_transaction_id
             if not tx:
-                _logger.info(
-                    "[TOPUP] cron cleanup no tx → cancelled topup=%s",
-                    topup.id,
-                )
+                # hard age 前沒有 tx 不代表使用者放棄；到 hard age 仍必須先過
+                # 同一個 durable blocker gate。
+                if topup.create_date >= hard:
+                    continue
+                blocker = self._pending_reconciliation_blocker(topup)
+                if blocker:
+                    if blocker['external_ref']:
+                        reason = (
+                            'cleanup_waiting_auto_recredit'
+                            if blocker['kind'] == 'charged_not_credited'
+                            else 'cleanup_waiting_callback_replay'
+                        )
+                        self.env['woow.billing.incident'].sudo() \
+                            ._mark_replay_skip_independent(
+                                blocker['external_ref'], reason,
+                                touch_last_skipped=False)
+                    continue
+                _logger.info("[TOPUP] cron cleanup no tx → cancelled topup=%s", topup.id)
                 topup.write({'state': 'cancelled'})
                 continue
             if tx.state == 'done':
@@ -1010,11 +1108,22 @@ class WalletTopup(models.Model):
             elif tx.state in ('draft', 'pending') and topup.create_date < hard:
                 # #864 PR-G：ECPay 已經回報成功、只是還沒補完的那一筆 ⛔ 不能
                 # 被 hard-cancel（那正是本病的末期形態：看起來像使用者放棄）。
-                if self._has_unreplayed_callback_evidence(topup):
+                blocker = self._pending_reconciliation_blocker(topup)
+                if blocker:
+                    if blocker['external_ref']:
+                        reason = (
+                            'cleanup_waiting_auto_recredit'
+                            if blocker['kind'] == 'charged_not_credited'
+                            else 'cleanup_waiting_callback_replay'
+                        )
+                        self.env['woow.billing.incident'].sudo() \
+                            ._mark_replay_skip_independent(
+                                blocker['external_ref'], reason,
+                                touch_last_skipped=False)
                     _logger.info(
-                        "[TOPUP] cron cleanup hard-cancel skipped "
-                        "(successful callback pending replay) topup=%s tx=%s",
-                        topup.id, tx.id,
+                        '[TOPUP] cron cleanup hard-cancel skipped '
+                        'blocker=%s topup=%s tx=%s',
+                        blocker['kind'], topup.id, tx.id,
                     )
                     continue
                 _logger.info(
@@ -1029,6 +1138,1017 @@ class WalletTopup(models.Model):
                         topup.id, tx.id,
                     )
                 topup.write({'state': 'cancelled'})
+
+    # #864 PR-F：ECPG QueryTrade auto-recredit ------------------------ #
+    _AUTO_RECREDIT_T0_MINUTES = 10
+    _AUTO_RECREDIT_T1_MINUTES = 15
+    _AUTO_RECREDIT_T2_MINUTES = 4 * 60
+    _AUTO_RECREDIT_BATCH_SIZE = 5
+    _AUTO_RECREDIT_LOCK_TIMEOUT = '1s'
+    _AUTO_RECREDIT_PARAM = 'woow_paas_platform.auto_recredit_enabled'
+    _AUTO_RECREDIT_HEARTBEAT_PARAM = 'woow_paas_platform.auto_recredit_heartbeat_at'
+    # 封閉 vendor contract mapping。測試直接對 vendored enum 的 key set；
+    # future addon 增值時必須 fail-closed，而非靜默 drift。
+    _AUTO_RECREDIT_VERDICT_ACTIONS = {
+        'safe': 'credit_after_second_query',
+        'unsafe': 'needs_human',
+        'indeterminate': 'retry_until_t2',
+    }
+    _AUTO_RECREDIT_REASON_ACTIONS = {
+        'captured_amount_confirmed': 'credit_after_second_query',
+        'not_found_or_not_visible': 'retry_short',
+        'awaiting_capture': 'retry_short',
+        'adverse_lifecycle': 'needs_human',
+        'adverse_close_record': 'needs_human',
+        'amount_mismatch': 'needs_human',
+        'closed_amount_mismatch': 'needs_human',
+        'close_data_missing': 'retry_medium',
+        'close_data_amount_mismatch': 'retry_medium',
+        'unknown_lifecycle': 'retry_medium',
+    }
+
+    @api.model
+    def _auto_recredit_enabled(self):
+        """Malformed config 一律 fail-closed；kill-switch off-state 必須有聲。"""
+        raw = self.env['ir.config_parameter'].sudo().get_param(
+            self._AUTO_RECREDIT_PARAM, 'True')
+        if raw in ('True', '1', True):
+            return True
+        if raw in ('False', '0', False):
+            return False
+        _logger.error('[TOPUP_RECREDIT] invalid kill-switch value; fail closed')
+        return False
+
+    @api.model
+    def _auto_recredit_candidates(self):
+        """用 fresh snapshot 讀 candidates，不沿用 cron 的 RR snapshot。"""
+        with self.env.registry.cursor() as cr:
+            cr.execute('SET LOCAL lock_timeout = %s',
+                       (self._AUTO_RECREDIT_LOCK_TIMEOUT,))
+            cr.execute(
+                "SELECT id, external_ref, partner_ref, payment_token_ref, amount, "
+                "credits, bonus, currency, trade_no, source_ref, origin_xid, "
+                "topup_plan_ref, topup_source, first_seen_at, query_attempts, "
+                "t1_overdue_at FROM woow_billing_incident "
+                "WHERE kind = 'charged_not_credited' AND state = 'open' "
+                "AND failure_code = 'wallet_credit_failed' "
+                "AND (next_query_at IS NULL OR next_query_at <= NOW()) "
+                "ORDER BY first_seen_at, id LIMIT %s", (self._AUTO_RECREDIT_BATCH_SIZE,))
+            names = ('id', 'external_ref', 'partner_ref', 'payment_token_ref',
+                     'amount', 'credits', 'bonus', 'currency', 'trade_no',
+                     'source_ref', 'origin_xid', 'topup_plan_ref',
+                     'topup_source', 'first_seen_at', 'query_attempts',
+                     't1_overdue_at')
+            return [dict(zip(names, row)) for row in cr.fetchall()]
+
+    @api.model
+    def _auto_recredit_pg_capable(self):
+        """任何 external query 前先探測 PostgreSQL >=13 xid8 support。
+
+        ``pg_current_xact_id`` 會刻意配置 xid；此副作用已接受，Branch B 才能
+        區分 in-progress 與 aborted work。
+        """
+        try:
+            with self.env.registry.cursor() as cr:
+                cr.execute('SELECT pg_xact_status(pg_current_xact_id())')
+                return cr.fetchone()[0] == 'in progress'
+        except Exception:
+            _logger.exception('[TOPUP_RECREDIT] PostgreSQL xid8 capability unavailable')
+            return False
+
+    @api.model
+    def _auto_recredit_timing(self, candidate, now):
+        first_seen = fields.Datetime.to_datetime(candidate['first_seen_at'])
+        age = now - first_seen
+        if age >= timedelta(minutes=self._AUTO_RECREDIT_T2_MINUTES):
+            return 't2'
+        if age < timedelta(minutes=self._AUTO_RECREDIT_T0_MINUTES):
+            return 't0'
+        return 't1' if age >= timedelta(minutes=self._AUTO_RECREDIT_T1_MINUTES) else 'ready'
+
+    @api.model
+    def _auto_recredit_next(self, candidate, minutes):
+        """Durable retry 時間含 deterministic jitter，且永不越過 T2。"""
+        first_seen = fields.Datetime.to_datetime(candidate['first_seen_at'])
+        deadline = first_seen + timedelta(
+            minutes=self._AUTO_RECREDIT_T2_MINUTES)
+        jitter_seconds = (
+            candidate['id'] * 17 + candidate['query_attempts'] * 13
+        ) % 31
+        return min(
+            fields.Datetime.now()
+            + timedelta(minutes=minutes, seconds=jitter_seconds),
+            deadline,
+        )
+
+    @api.model
+    def _auto_recredit_retry_minutes(self, candidate, category):
+        if category == 'short':
+            return 2
+        if category == 'medium':
+            return 5
+        attempt = max(1, int(candidate['query_attempts'] or 0) + 1)
+        return min(2 ** attempt, 30)
+
+    @api.model
+    def _auto_recredit_expected_amount(self, candidate):
+        amount = candidate['amount']
+        if (isinstance(amount, bool) or not isinstance(amount, (int, float))
+                or amount <= 0 or int(amount) != amount):
+            return False
+        return int(amount)
+
+    @api.model
+    def _auto_recredit_credit_cap_ok(self, candidate):
+        total = (candidate['credits'] or 0) + (candidate['bonus'] or 0)
+        if total <= 0 or not math.isfinite(total):
+            return False
+        plans = self.env['woow_paas_platform.topup_plan'].sudo().search([
+            ('active', '=', True)])
+        cap = max((p.credits + p.bonus for p in plans), default=0)
+        return bool(cap and total <= cap)
+
+    @api.model
+    def _auto_recredit_partner_daily_ok(self, candidate):
+        """用 fresh cursor 守同一 partner 每個 UTC day 最多自動補一次。"""
+        today = fields.Date.today()
+        start = fields.Datetime.to_datetime(today)
+        end = start + timedelta(days=1)
+        try:
+            with self.env.registry.cursor() as cr:
+                cr.execute('SET LOCAL lock_timeout = %s',
+                           (self._AUTO_RECREDIT_LOCK_TIMEOUT,))
+                cr.execute(
+                    "SELECT 1 FROM wallet_transaction "
+                    "WHERE partner_id = %s "
+                    "AND woow_credit_origin = 'auto_recredit' "
+                    "AND create_date >= %s AND create_date < %s LIMIT 1",
+                    (candidate['partner_ref'], start, end),
+                    log_exceptions=False,
+                )
+                return cr.fetchone() is None
+        except Exception:
+            _logger.exception(
+                '[TOPUP_RECREDIT] partner/day safety probe failed')
+            return False
+
+    @api.model
+    def _auto_recredit_possible_manual_credit(self, candidate):
+        """用 fresh cursor 偵測 incident 後的 support/manual credit。
+
+        support adjustment 未必帶 payment tx FK；因此用同 partner＋first_seen
+        後相同點數做保守偵測：寧可轉人工，也不可補第二次。
+        """
+        total = (candidate['credits'] or 0) + (candidate['bonus'] or 0)
+        try:
+            with self.env.registry.cursor() as cr:
+                cr.execute('SET LOCAL lock_timeout = %s',
+                           (self._AUTO_RECREDIT_LOCK_TIMEOUT,))
+                cr.execute(
+                    "SELECT 1 FROM wallet_transaction WHERE partner_id = %s "
+                    "AND create_date >= %s AND amount = %s "
+                    "AND COALESCE(woow_repair_incident_ref, 0) <> %s LIMIT 1",
+                    (candidate['partner_ref'], candidate['first_seen_at'], total,
+                     candidate['id']), log_exceptions=False)
+                return cr.fetchone() is not None
+        except Exception:
+            # 此 guard 保護不可逆 credit；probe unavailable 不得解讀成「沒有
+            # manual credit」。
+            _logger.exception('[TOPUP_RECREDIT] manual-credit safety probe failed')
+            return True
+
+    @api.model
+    def _auto_recredit_provider(self, candidate):
+        """query 前解析 provider，讓 typed 403 能開啟正確 shared scope。"""
+        token = self.env['payment.token'].sudo().browse(
+            candidate['payment_token_ref']).exists()
+        provider = token.provider_id if token else self.env['payment.provider']
+        if not provider:
+            # Branch A 仍可由 payment.transaction 找回 provider。
+            topup = self.sudo().browse(candidate['source_ref']).exists()
+            provider = topup.payment_transaction_id.provider_id if topup else provider
+        if (not provider
+                or provider.code != 'ECPay'
+                or not provider.enable_ecpg
+                or not provider.MerchantID
+                or not provider.HashKey
+                or not provider.HashIV):
+            raise ValueError(
+                'missing or invalid ECPay provider for durable incident')
+        return provider
+
+    @api.model
+    def _auto_recredit_query(self, candidate, provider=None):
+        """呼叫一次 vendor public interface；平台絕不解析 provider raw status。"""
+        from odoo.addons.payment_ecpay_ecpg.sdk import ECPGClient
+        provider = provider or self._auto_recredit_provider(candidate)
+        client = ECPGClient(
+            provider.MerchantID, provider.HashKey, provider.HashIV,
+            sandbox=(provider.state != 'enabled'),
+        )
+        lookup = client.query_credit_trade(candidate['external_ref'])
+        return provider, lookup.assess_for_credit(
+            expected_amount=self._auto_recredit_expected_amount(candidate))
+
+    @api.model
+    def _auto_recredit_mark_terminal(
+            self, candidate, reason, assessment_reason=None):
+        marked = self.env[
+            'woow.billing.incident'].sudo()._transition_needs_human_independent(
+                candidate['external_ref'], reason, assessment_reason)
+        if not marked:
+            return 'failed', 'terminal_transition_failed'
+        return 'needs_human', reason
+
+    @api.model
+    def _auto_recredit_handle_query_exception(
+            self, candidate, provider, exc, *, t1_overdue=False):
+        """窮舉 vendored error interface；config/protocol 類不可盲目 retry。"""
+        from odoo.addons.payment_ecpay_ecpg.sdk import (
+            ECPGConfigError, ECPGCreditTradeQueryError, ECPGProtocolError,
+            ECPGQueryForbiddenError, ECPGTransientError,
+        )
+        Incident = self.env['woow.billing.incident'].sudo()
+        if isinstance(exc, ECPGQueryForbiddenError):
+            if not provider:
+                return self._auto_recredit_mark_terminal(
+                    candidate, 'query_invalid_input')
+            try:
+                count, blocked_until = self.env[
+                    'woow_paas_platform.ecpg_query_circuit'].sudo() \
+                    ._record_forbidden(
+                        provider.MerchantID, provider.id,
+                        exc.retry_after_seconds)
+            except Exception:
+                _logger.exception(
+                    '[TOPUP_RECREDIT] cannot persist shared 403 circuit')
+                return self._auto_recredit_mark_terminal(
+                    candidate, 'query_circuit_open')
+            Circuit = self.env[
+                'woow_paas_platform.ecpg_query_circuit'].sudo()
+            if (count >= 2
+                    and Circuit._claim_repeat_forbidden_alert(
+                        provider.MerchantID)):
+                Incident._record_query_outcome_independent(
+                    candidate['external_ref'],
+                    reason='query_circuit_open',
+                    increment_attempt=True,
+                    t1_overdue=t1_overdue,
+                )
+                return self._auto_recredit_mark_terminal(
+                    candidate, 'query_circuit_open')
+            deadline = fields.Datetime.to_datetime(
+                candidate['first_seen_at']) + timedelta(
+                    minutes=self._AUTO_RECREDIT_T2_MINUTES)
+            recorded = Incident._record_query_outcome_independent(
+                candidate['external_ref'],
+                next_query_at=min(blocked_until, deadline),
+                increment_attempt=True,
+                skip_reason='query_circuit_open',
+                t1_overdue=t1_overdue,
+            )
+            if not recorded:
+                return 'failed', 'query_audit_failed'
+            return 'skipped', 'query_circuit_open'
+        if isinstance(exc, (
+                ECPGTransientError,
+                requests.exceptions.Timeout,
+                requests.exceptions.ConnectionError,
+        )):
+            recorded = Incident._record_query_outcome_independent(
+                candidate['external_ref'],
+                next_query_at=self._auto_recredit_next(
+                    candidate,
+                    self._auto_recredit_retry_minutes(
+                        candidate, 'transient')),
+                increment_attempt=True,
+                skip_reason='query_transient',
+                t1_overdue=t1_overdue,
+            )
+            if not recorded:
+                return 'failed', 'query_audit_failed'
+            return 'skipped', 'query_transient'
+        if isinstance(exc, ECPGConfigError):
+            terminal_reason = 'query_config_error'
+        elif isinstance(exc, ECPGProtocolError):
+            terminal_reason = 'query_protocol_error'
+        elif isinstance(exc, ECPGCreditTradeQueryError):
+            terminal_reason = 'query_business_error'
+        else:
+            terminal_reason = 'query_invalid_input'
+        Incident._record_query_outcome_independent(
+            candidate['external_ref'],
+            reason=terminal_reason,
+            increment_attempt=True,
+            t1_overdue=t1_overdue,
+        )
+        return self._auto_recredit_mark_terminal(
+            candidate, terminal_reason)
+
+    @api.model
+    def _auto_recredit_assessment_action(self, assessment):
+        """驗證 verdict/reason 是 vendored contract 允許的封閉組合。"""
+        verdict = assessment.verdict.value
+        reason = assessment.reason.value
+        action = self._AUTO_RECREDIT_VERDICT_ACTIONS.get(verdict)
+        reason_action = self._AUTO_RECREDIT_REASON_ACTIONS.get(reason)
+        valid = (
+            action == 'credit_after_second_query'
+            and reason_action == 'credit_after_second_query'
+            or action == 'needs_human'
+            and reason_action == 'needs_human'
+            or action == 'retry_until_t2'
+            and reason_action in ('retry_short', 'retry_medium')
+        )
+        return action if valid else False
+
+    @api.model
+    def _auto_recredit_record_assessment(
+            self, candidate, assessment, timing, *, next_query_at=None,
+            skip_reason=None):
+        """每一次真 HTTP query 都 durable 記錄 verdict/reason/attempt。"""
+        return self.env[
+            'woow.billing.incident'].sudo()._record_query_outcome_independent(
+                candidate['external_ref'],
+                verdict=assessment.verdict.value,
+                reason=assessment.reason.value,
+                next_query_at=next_query_at,
+                increment_attempt=True,
+                skip_reason=skip_reason,
+                t1_overdue=(timing == 't1'),
+            )
+
+    @api.model
+    def _auto_recredit_one(self, candidate):
+        """在 credit transaction 之外連續查兩次；第二次仍 SAFE 才補。"""
+        Incident = self.env['woow.billing.incident'].sudo()
+        now = fields.Datetime.now()
+        timing = self._auto_recredit_timing(candidate, now)
+        if timing == 't1' and not candidate.get('t1_overdue_at'):
+            _logger.warning(
+                '[TOPUP_RECREDIT] incident exceeded soft T1; '
+                'query/retry remains enabled incident_id=%s',
+                candidate['id'],
+            )
+        if timing == 't2':
+            return self._auto_recredit_mark_terminal(
+                candidate, 't2_expired')
+        if not self._auto_recredit_enabled():
+            return self._auto_recredit_mark_terminal(
+                candidate, 'kill_switch_off')
+        if not self._auto_recredit_expected_amount(candidate):
+            return self._auto_recredit_mark_terminal(
+                candidate, 'query_invalid_input')
+        if not self._auto_recredit_credit_cap_ok(candidate):
+            return self._auto_recredit_mark_terminal(
+                candidate, 'credit_cap_exceeded')
+        if not self._auto_recredit_partner_daily_ok(candidate):
+            return self._auto_recredit_mark_terminal(
+                candidate, 'partner_daily_limit')
+        if self._auto_recredit_possible_manual_credit(candidate):
+            return self._auto_recredit_mark_terminal(
+                candidate, 'possible_manual_credit')
+        if timing == 't0':
+            recorded = Incident._record_query_outcome_independent(
+                candidate['external_ref'],
+                next_query_at=(
+                    fields.Datetime.to_datetime(candidate['first_seen_at'])
+                    + timedelta(minutes=self._AUTO_RECREDIT_T0_MINUTES)
+                ),
+                increment_attempt=False,
+                skip_reason='too_early',
+            )
+            return (
+                ('skipped', 'too_early') if recorded
+                else ('failed', 'query_audit_failed')
+            )
+
+        try:
+            provider = self._auto_recredit_provider(candidate)
+        except Exception:
+            # provider/config lookup 尚未發出 HTTP，不能灌大 query_attempts。
+            return self._auto_recredit_mark_terminal(
+                candidate, 'query_invalid_input')
+        try:
+            # circuit 用 fresh cursor 讀，且 next_query_at 必 clamp 到 T2。
+            blocked_until = self.env[
+                'woow_paas_platform.ecpg_query_circuit'].sudo() \
+                ._blocked_until(provider.MerchantID)
+        except Exception:
+            _logger.exception(
+                '[TOPUP_RECREDIT] shared circuit lookup failed')
+            return self._auto_recredit_mark_terminal(
+                candidate, 'query_circuit_open')
+        if blocked_until and blocked_until > now:
+            deadline = fields.Datetime.to_datetime(
+                candidate['first_seen_at']) + timedelta(
+                    minutes=self._AUTO_RECREDIT_T2_MINUTES)
+            recorded = Incident._record_query_outcome_independent(
+                candidate['external_ref'],
+                next_query_at=min(blocked_until, deadline),
+                increment_attempt=False,
+                skip_reason='query_circuit_open',
+                t1_overdue=(timing == 't1'),
+            )
+            return (
+                ('skipped', 'query_circuit_open') if recorded
+                else ('failed', 'query_audit_failed')
+            )
+        try:
+            provider, assessment = self._auto_recredit_query(
+                candidate, provider)
+            self.env[
+                'woow_paas_platform.ecpg_query_circuit'].sudo() \
+                ._record_success(provider.MerchantID)
+        except Exception as exc:
+            return self._auto_recredit_handle_query_exception(
+                candidate, provider, exc, t1_overdue=(timing == 't1'))
+
+        action = self._auto_recredit_assessment_action(assessment)
+        if not action:
+            self._auto_recredit_record_assessment(
+                candidate, assessment, timing)
+            return self._auto_recredit_mark_terminal(
+                candidate, 'query_invalid_input')
+        if action == 'needs_human':
+            self._auto_recredit_record_assessment(
+                candidate, assessment, timing)
+            return self._auto_recredit_mark_terminal(
+                candidate, 'query_unsafe', assessment.reason.value)
+        if action == 'retry_until_t2':
+            reason_action = self._AUTO_RECREDIT_REASON_ACTIONS[
+                assessment.reason.value]
+            minutes = self._auto_recredit_retry_minutes(
+                candidate,
+                'short' if reason_action == 'retry_short' else 'medium',
+            )
+            recorded = self._auto_recredit_record_assessment(
+                candidate, assessment, timing,
+                next_query_at=self._auto_recredit_next(candidate, minutes),
+                skip_reason='query_indeterminate',
+            )
+            return (
+                ('skipped', 'query_indeterminate') if recorded
+                else ('failed', 'query_audit_failed')
+            )
+
+        # 第一次 SAFE 也要留下 query attempt，不能只記失敗。
+        if not self._auto_recredit_record_assessment(
+                candidate, assessment, timing):
+            return 'failed', 'query_audit_failed'
+
+        # Query 與 credit 非原子：真正動錢前再做一次 fresh query。
+        try:
+            _provider, second = self._auto_recredit_query(
+                candidate, provider)
+            self.env[
+                'woow_paas_platform.ecpg_query_circuit'].sudo() \
+                ._record_success(provider.MerchantID)
+        except Exception as exc:
+            return self._auto_recredit_handle_query_exception(
+                candidate, provider, exc, t1_overdue=(timing == 't1'))
+
+        second_action = self._auto_recredit_assessment_action(second)
+        if not second_action:
+            self._auto_recredit_record_assessment(
+                candidate, second, timing)
+            return self._auto_recredit_mark_terminal(
+                candidate, 'query_invalid_input')
+        if second_action == 'needs_human':
+            self._auto_recredit_record_assessment(
+                candidate, second, timing)
+            return self._auto_recredit_mark_terminal(
+                candidate, 'query_unsafe', second.reason.value)
+        if second_action == 'retry_until_t2':
+            second_reason_action = self._AUTO_RECREDIT_REASON_ACTIONS[
+                second.reason.value]
+            minutes = self._auto_recredit_retry_minutes(
+                candidate,
+                'short' if second_reason_action == 'retry_short'
+                else 'medium',
+            )
+            recorded = self._auto_recredit_record_assessment(
+                candidate, second, timing,
+                next_query_at=self._auto_recredit_next(candidate, minutes),
+                skip_reason='query_indeterminate',
+            )
+            return (
+                ('skipped', 'query_indeterminate') if recorded
+                else ('failed', 'query_audit_failed')
+            )
+        if not second.is_safe_to_credit:
+            return self._auto_recredit_mark_terminal(
+                candidate, 'query_invalid_input')
+        if not self._auto_recredit_record_assessment(
+                candidate, second, timing):
+            return 'failed', 'query_audit_failed'
+        return self._auto_recredit_credit(
+            candidate, second.reason.value,
+            provider.id, provider.MerchantID)
+
+    @api.model
+    def _auto_recredit_credit(
+            self, candidate, assessment_reason, provider_id, merchant_id):
+        """每筆獨立 transaction：scanner NOWAIT，入帳沿用 G blocking choke。"""
+        external_ref = candidate['external_ref']
+        try:
+            with self.env.registry.cursor() as cr:
+                cr.execute('SET LOCAL lock_timeout = %s',
+                           (self._AUTO_RECREDIT_LOCK_TIMEOUT,))
+                env = api.Environment(cr, SUPERUSER_ID, {})
+                cr.execute(
+                    'SELECT id FROM woow_wallet_topup WHERE id = %s '
+                    'FOR UPDATE NOWAIT',
+                    (candidate['source_ref'],),
+                    log_exceptions=False,
+                )
+                row = cr.fetchone()
+                if not row:
+                    cr.rollback()
+                else:
+                    topup = env['woow.wallet.topup'].sudo().browse(row[0])
+                    topup.invalidate_recordset([
+                        'state', 'wallet_transaction_id',
+                        'payment_transaction_id', 'repair_incident_ref',
+                    ])
+                    if topup.wallet_transaction_id:
+                        env['woow.billing.incident'].browse(
+                            candidate['id']
+                        )._transition_resolved_current_cursor(
+                            None,
+                            'PR-F 確認該 top-up 已有 wallet transaction。',
+                            SUPERUSER_ID,
+                        )
+                        cr.commit()
+                        return 'already_credited', 'already_credited'
+
+                    tx = topup.payment_transaction_id
+                    card = topup.partner_id.get_wallet_loyalty_card()
+                    if not card:
+                        cr.rollback()
+                        return self._auto_recredit_mark_terminal(
+                            candidate, 'reconstruct_incomplete',
+                            assessment_reason)
+                    # 固定鎖序：topup → loyalty card → incident。
+                    cr.execute(
+                        'SELECT id FROM loyalty_card WHERE id = %s '
+                        'FOR UPDATE NOWAIT', (card.id,),
+                        log_exceptions=False)
+                    if not cr.fetchone():
+                        cr.rollback()
+                        return self._auto_recredit_mark_terminal(
+                            candidate, 'reconstruct_incomplete',
+                            assessment_reason)
+                    cr.execute(
+                        'SELECT state, kind, failure_code, partner_ref, '
+                        'payment_token_ref, amount, credits, bonus, currency, '
+                        'source_ref, topup_plan_ref, topup_source '
+                        'FROM woow_billing_incident WHERE id = %s FOR UPDATE',
+                        (candidate['id'],), log_exceptions=False)
+                    incident_row = cr.fetchone()
+                    incident_names = (
+                        'state', 'kind', 'failure_code', 'partner_ref',
+                        'payment_token_ref', 'amount', 'credits', 'bonus',
+                        'currency', 'source_ref', 'topup_plan_ref',
+                        'topup_source',
+                    )
+                    incident = (
+                        dict(zip(incident_names, incident_row))
+                        if incident_row else None
+                    )
+                    expected_snapshot = {
+                        name: candidate[name] for name in (
+                            'partner_ref', 'payment_token_ref', 'amount',
+                            'credits', 'bonus', 'currency', 'source_ref',
+                            'topup_plan_ref', 'topup_source',
+                        )
+                    }
+                    incident_snapshot = (
+                        {name: incident[name] for name in expected_snapshot}
+                        if incident else None
+                    )
+                    valid = bool(
+                        incident
+                        and incident['state'] == 'open'
+                        and incident['kind'] == 'charged_not_credited'
+                        and incident['failure_code'] ==
+                        TOPUP_WALLET_CREDIT_FAILED
+                        and incident_snapshot == expected_snapshot
+                        and topup.state == 'failed'
+                        and topup.failure_code ==
+                        TOPUP_WALLET_CREDIT_FAILED
+                        and not topup.repair_incident_ref
+                        and topup.partner_id.id == candidate['partner_ref']
+                        and topup.plan_id.id ==
+                        (candidate['topup_plan_ref'] or False)
+                        and topup.source == candidate['topup_source']
+                        and topup.amount == candidate['amount']
+                        and topup.credits == candidate['credits']
+                        and topup.bonus == candidate['bonus']
+                        and topup.currency_id.name == candidate['currency']
+                        and tx
+                        and tx.woow_topup_id.id == topup.id
+                        and tx.state == 'done'
+                        and tx.reference == external_ref
+                        and tx.partner_id.id == candidate['partner_ref']
+                        and tx.provider_id.id == provider_id
+                        and tx.provider_id.MerchantID == merchant_id
+                        and tx.token_id.id == candidate['payment_token_ref']
+                        and tx.amount == candidate['amount']
+                        and tx.currency_id.name == candidate['currency']
+                    )
+                    if not valid:
+                        cr.rollback()
+                        return self._auto_recredit_mark_terminal(
+                            candidate, 'reconstruct_incomplete',
+                            assessment_reason)
+
+                    topup.with_context(**{
+                        _AUTO_RECREDIT_SKIP_INVOICE_CTX:
+                            _AUTO_RECREDIT_CAPABILITY,
+                    })._on_payment_done(tx)
+                    topup.invalidate_recordset(['wallet_transaction_id'])
+                    wtx = topup.wallet_transaction_id
+                    if not wtx:
+                        raise ValidationError(_(
+                            'Wallet credit completed without a wallet '
+                            'transaction record.'
+                        ))
+                    _wallet_credit_metadata(wtx).write({
+                        'woow_credit_origin': 'auto_recredit',
+                        'woow_repair_incident_ref': candidate['id'],
+                    })
+                    cr.execute(
+                        'UPDATE woow_billing_incident '
+                        'SET wallet_transaction_ref = %s, write_uid = %s, '
+                        'write_date = %s WHERE id = %s',
+                        (wtx.id, SUPERUSER_ID, fields.Datetime.now(),
+                         candidate['id']),
+                        log_exceptions=False,
+                    )
+                    env['woow.billing.incident'].browse(
+                        candidate['id']
+                    )._transition_resolved_current_cursor(
+                        None,
+                        'PR-F QueryTrade confirmed capture; wallet credited.',
+                        SUPERUSER_ID,
+                    )
+                    topup_id = topup.id
+                    cr.commit()
+                    # 發票一定在點數＋incident commit 之後另開 transaction。
+                    self._auto_recredit_invoice_followup(topup_id)
+                    return 'credited', 'captured_amount_confirmed'
+
+            # source row 不存在時另開 READ COMMITTED cursor；Branch B 必須
+            # 先鎖 incident，不能沿用上面已建立 RR snapshot 的 cursor。
+            return self._auto_recredit_branch_b(
+                candidate, assessment_reason, provider_id, merchant_id)
+        except psycopg2.errors.LockNotAvailable:
+            marked = self.env['woow.billing.incident'].sudo() \
+                ._mark_replay_skip_independent(
+                    external_ref, 'lock_not_available',
+                    touch_last_skipped=False)
+            return (
+                ('skipped', 'lock_not_available') if marked
+                else ('failed', 'skip_persistence_failed')
+            )
+        except psycopg2.errors.SerializationFailure:
+            self.env['woow.billing.incident'].sudo() \
+                ._mark_replay_skip_independent(
+                    external_ref, 'credit_failed', bump_attempts=True)
+            return 'failed', 'serialization_failure'
+        except Exception:
+            _logger.exception(
+                '[TOPUP_RECREDIT] one credit transaction failed')
+            self.env['woow.billing.incident'].sudo() \
+                ._mark_replay_skip_independent(
+                    external_ref, 'credit_failed', bump_attempts=True)
+            return 'failed', 'credit_failed'
+
+    @api.model
+    def _auto_recredit_branch_b(
+            self, candidate, assessment_reason, provider_id, merchant_id):
+        """只有 origin transaction 確認 aborted 才可 reconstruct。"""
+        if (not candidate.get('origin_xid')
+                or not str(candidate['origin_xid']).isdigit()):
+            return self._auto_recredit_mark_terminal(
+                candidate, 'reconstruct_incomplete', assessment_reason)
+        try:
+            with self.env.registry.cursor() as cr:
+                cr.execute('SET LOCAL lock_timeout = %s',
+                           (self._AUTO_RECREDIT_LOCK_TIMEOUT,))
+                # topup 查無後才來到此處；新 cursor 在第一個 query 前改成
+                # READ COMMITTED，才能看見 origin transaction 隨後的 commit。
+                cr.execute('SET TRANSACTION ISOLATION LEVEL READ COMMITTED')
+                env = api.Environment(cr, SUPERUSER_ID, {})
+                cr.execute(
+                    'SELECT state, kind, failure_code, partner_ref, '
+                    'payment_token_ref, amount, credits, bonus, currency, '
+                    'trade_no, source_ref, origin_xid, topup_plan_ref, '
+                    'topup_source FROM woow_billing_incident '
+                    'WHERE id = %s FOR UPDATE',
+                    (candidate['id'],), log_exceptions=False)
+                row = cr.fetchone()
+                names = (
+                    'state', 'kind', 'failure_code', 'partner_ref',
+                    'payment_token_ref', 'amount', 'credits', 'bonus',
+                    'currency', 'trade_no', 'source_ref', 'origin_xid',
+                    'topup_plan_ref', 'topup_source',
+                )
+                current = dict(zip(names, row)) if row else None
+                expected = {
+                    name: candidate[name] for name in (
+                        'partner_ref', 'payment_token_ref', 'amount',
+                        'credits', 'bonus', 'currency', 'trade_no',
+                        'source_ref', 'origin_xid', 'topup_plan_ref',
+                        'topup_source',
+                    )
+                }
+                current_snapshot = (
+                    {name: current[name] for name in expected}
+                    if current else None
+                )
+                if (not current
+                        or current['state'] != 'open'
+                        or current['kind'] != 'charged_not_credited'
+                        or current['failure_code'] !=
+                        TOPUP_WALLET_CREDIT_FAILED
+                        or current_snapshot != expected):
+                    cr.rollback()
+                    return self._auto_recredit_mark_terminal(
+                        candidate, 'reconstruct_incomplete',
+                        assessment_reason)
+
+                cr.execute(
+                    'SELECT pg_xact_status(%s::xid8)',
+                    (candidate['origin_xid'],),
+                    log_exceptions=False)
+                status = cr.fetchone()[0]
+                if status == 'in progress':
+                    next_query_at = self._auto_recredit_next(candidate, 2)
+                    now = fields.Datetime.now()
+                    cr.execute(
+                        'UPDATE woow_billing_incident '
+                        'SET next_query_at = %s, '
+                        "skip_reason = 'origin_transaction_in_progress', "
+                        'last_skipped_at = %s, skip_count = skip_count + 1, '
+                        'write_uid = %s, write_date = %s WHERE id = %s',
+                        (next_query_at, now, SUPERUSER_ID, now,
+                         candidate['id']),
+                        log_exceptions=False,
+                    )
+                    cr.commit()
+                    return 'skipped', 'origin_transaction_in_progress'
+                if status == 'committed':
+                    cr.execute(
+                        'SELECT wt.id FROM woow_wallet_topup wt '
+                        'JOIN payment_transaction pt '
+                        'ON pt.id = wt.payment_transaction_id '
+                        'WHERE wt.id = %s AND pt.reference = %s LIMIT 1',
+                        (candidate['source_ref'],
+                         candidate['external_ref']),
+                        log_exceptions=False,
+                    )
+                    visible_topup = cr.fetchone()
+                    cr.rollback()
+                    if visible_topup:
+                        return self._auto_recredit_credit(
+                            candidate, assessment_reason,
+                            provider_id, merchant_id)
+                    return self._auto_recredit_mark_terminal(
+                        candidate, 'source_missing_after_commit',
+                        assessment_reason)
+                if status != 'aborted':
+                    cr.rollback()
+                    return self._auto_recredit_mark_terminal(
+                        candidate, 'reconstruct_incomplete',
+                        assessment_reason)
+                return self._auto_recredit_reconstruct_current_cursor(
+                    env, cr, candidate, assessment_reason,
+                    provider_id, merchant_id)
+        except psycopg2.errors.LockNotAvailable:
+            marked = self.env['woow.billing.incident'].sudo() \
+                ._mark_replay_skip_independent(
+                    candidate['external_ref'], 'lock_not_available',
+                    touch_last_skipped=False)
+            return (
+                ('skipped', 'lock_not_available') if marked
+                else ('failed', 'skip_persistence_failed')
+            )
+        except Exception:
+            _logger.exception(
+                '[TOPUP_RECREDIT] branch-B reconstruction failed')
+            self.env['woow.billing.incident'].sudo() \
+                ._mark_replay_skip_independent(
+                    candidate['external_ref'], 'credit_failed',
+                    bump_attempts=True)
+            return 'failed', 'reconstruction_failed'
+
+    @api.model
+    def _auto_recredit_invoice_followup(self, topup_id):
+        """僅 Branch A：credit commit 後以 fresh cursor create/recover invoice。"""
+        try:
+            with self.env.registry.cursor() as cr:
+                env = api.Environment(cr, SUPERUSER_ID, {})
+                topup = env['woow.wallet.topup'].sudo().browse(topup_id).exists()
+                if topup and topup.state == 'done' and not topup.invoice_account_move_id:
+                    topup._ensure_topup_invoice()
+                cr.commit()
+        except Exception:
+            _logger.exception(
+                '[TOPUP_RECREDIT] wallet credit committed but invoice follow-up failed topup=%s',
+                topup_id,
+            )
+
+    @api.model
+    def _auto_recredit_reconstruct_current_cursor(
+            self, env, cr, candidate, assessment_reason,
+            provider_id, merchant_id):
+        """只重建已確認 aborted 且 scalar evidence 完整的付款；零外呼。"""
+        partner = env['res.partner'].sudo().browse(
+            candidate['partner_ref']).exists()
+        token = env['payment.token'].sudo().browse(
+            candidate['payment_token_ref']).exists()
+        plan = (
+            env['woow_paas_platform.topup_plan'].sudo().browse(
+                candidate['topup_plan_ref']).exists()
+            if candidate['topup_plan_ref'] else False
+        )
+        currency = env['res.currency'].sudo().search([
+            ('name', '=', candidate['currency']),
+        ], limit=1)
+        source_valid = (
+            candidate['topup_source'] == 'manual'
+            and bool(plan)
+            or candidate['topup_source'] == 'auto'
+            and not candidate['topup_plan_ref']
+            and candidate['credits'] == candidate['amount']
+            and candidate['bonus'] == 0
+        )
+        valid = bool(
+            partner
+            and token
+            and token.partner_id.id == partner.id
+            and token.provider_id.id == provider_id
+            and token.provider_id.MerchantID == merchant_id
+            and token.ecpg_bindcard_id
+            and currency
+            and currency.name == 'TWD'
+            and source_valid
+            and (not plan or (
+                plan.amount == candidate['amount']
+                and plan.credits == candidate['credits']
+                and plan.bonus == candidate['bonus']))
+        )
+        if not valid:
+            cr.rollback()
+            return self._auto_recredit_mark_terminal(
+                candidate, 'reconstruct_incomplete', assessment_reason)
+        existing = env['payment.transaction'].sudo().search([
+            ('reference', '=', candidate['external_ref']),
+        ], limit=1)
+        if existing:
+            cr.rollback()
+            return self._auto_recredit_mark_terminal(
+                candidate, 'source_missing_after_commit', assessment_reason)
+
+        topup = env['woow.wallet.topup'].sudo().with_context(**{
+            _AUTO_RECREDIT_SKIP_INVOICE_CTX: _AUTO_RECREDIT_CAPABILITY,
+        }).create({
+            'partner_id': partner.id,
+            'plan_id': candidate['topup_plan_ref'] or False,
+            'amount': candidate['amount'],
+            'credits': candidate['credits'],
+            'bonus': candidate['bonus'],
+            'currency_id': currency.id,
+            'state': 'failed',
+            'source': candidate['topup_source'],
+            'failure_code': TOPUP_WALLET_CREDIT_FAILED,
+            'repair_incident_ref': candidate['id'],
+        })
+        tx = env['payment.transaction'].sudo().create({
+            'provider_id': token.provider_id.id,
+            'payment_method_id': token.payment_method_id.id,
+            'partner_id': partner.id,
+            'amount': candidate['amount'],
+            'currency_id': currency.id,
+            'reference': candidate['external_ref'],
+            'token_id': token.id,
+            'operation': 'offline',
+            'woow_topup_id': topup.id,
+            # 只有 callback 寫入的 provider TradeNo 可進此欄；我方 MTN
+            # 永遠留在 reference/external_ref。
+            'provider_reference': candidate.get('trade_no') or False,
+        })
+        cr.execute(
+            "UPDATE payment_transaction SET state = 'done' WHERE id = %s",
+            (tx.id,), log_exceptions=False)
+        tx.invalidate_recordset(['state'])
+        topup.write({'payment_transaction_id': tx.id})
+        card = partner.get_wallet_loyalty_card()
+        if not card:
+            raise ValidationError(_('Unable to get wallet loyalty card.'))
+        cr.execute(
+            'SELECT id FROM loyalty_card WHERE id = %s FOR UPDATE NOWAIT',
+            (card.id,), log_exceptions=False)
+        if not cr.fetchone():
+            raise ValidationError(_('Unable to lock wallet loyalty card.'))
+        topup.with_context(**{
+            _AUTO_RECREDIT_SKIP_INVOICE_CTX: _AUTO_RECREDIT_CAPABILITY,
+        })._on_payment_done(tx)
+        topup.invalidate_recordset(['wallet_transaction_id'])
+        wtx = topup.wallet_transaction_id
+        if not wtx:
+            raise ValidationError(_(
+                'Wallet credit completed without a wallet transaction record.'
+            ))
+        _wallet_credit_metadata(wtx).write({
+            'woow_credit_origin': 'auto_recredit',
+            'woow_repair_incident_ref': candidate['id'],
+        })
+        cr.execute(
+            'UPDATE woow_billing_incident '
+            'SET wallet_transaction_ref = %s, repair_topup_ref = %s, '
+            'write_uid = %s, write_date = %s WHERE id = %s',
+            (wtx.id, topup.id, SUPERUSER_ID, fields.Datetime.now(),
+             candidate['id']), log_exceptions=False)
+        env['woow.billing.incident'].browse(
+            candidate['id'])._transition_resolved_current_cursor(
+                None,
+                'PR-F reconstructed an aborted payment and credited wallet.',
+                SUPERUSER_ID,
+            )
+        partner_id = partner.id
+        topup_id = topup.id
+        cr.commit()
+
+        # 重建 topup 的 id 與原列不同，自動開電子發票有 duplicate invoice
+        # 風險；另建人工 incident，禁止在本 transaction 開票。
+        self.env['woow.billing.incident']._log({
+            'external_ref': 'invoice:%s' % candidate['external_ref'],
+            'kind': 'manual_invoice_stale',
+            'state': 'needs_human',
+            'partner_ref': partner_id,
+            'source_model': 'woow.wallet.topup',
+            'source_ref': topup_id,
+            'detail': 'PR-F 重建儲值已補點，電子發票必須人工覆核。',
+        })
+        return 'reconstructed', 'origin_transaction_aborted'
+
+    @api.model
+    def _auto_recredit_stamp_heartbeat(self):
+        """每輪無條件 stamp，讓另一顆 cron 分得出 disabled 與空 queue。"""
+        self.env['ir.config_parameter'].sudo().set_param(
+            self._AUTO_RECREDIT_HEARTBEAT_PARAM,
+            fields.Datetime.to_string(fields.Datetime.now()),
+        )
+
+    @api.model
+    def _cron_auto_recredit_charged_not_credited(self):
+        """執行 QueryTrade auto-heal；每個 candidate 各自一筆 transaction。"""
+        candidates = self._auto_recredit_candidates()
+        summary = {
+            'scanned': len(candidates),
+            'credited': 0,
+            'reconstructed': 0,
+            'already_credited': 0,
+            'needs_human': 0,
+            'failed': 0,
+            'skipped_by_reason': {},
+        }
+        if candidates and not self._auto_recredit_pg_capable():
+            for candidate in candidates:
+                outcome, reason = self._auto_recredit_mark_terminal(
+                    candidate, 'postgres_xid_capability_missing')
+                summary[outcome] = summary.get(outcome, 0) + 1
+                summary['skipped_by_reason'][reason] = (
+                    summary['skipped_by_reason'].get(reason, 0) + 1)
+            self._auto_recredit_stamp_heartbeat()
+            _logger.error(
+                '[TOPUP_RECREDIT] PostgreSQL xid capability missing; '
+                'scanned=%s needs_human=%s',
+                summary['scanned'], summary['needs_human'])
+            return summary
+        for candidate in candidates:
+            outcome, reason = self._auto_recredit_one(candidate)
+            if outcome in summary:
+                summary[outcome] += 1
+            else:
+                summary['failed'] += 1
+            if reason and outcome in ('skipped', 'needs_human', 'failed'):
+                summary['skipped_by_reason'][reason] = (
+                    summary['skipped_by_reason'].get(reason, 0) + 1)
+        self._auto_recredit_stamp_heartbeat()
+        _logger.info(
+            '[TOPUP_RECREDIT] scanned=%s credited=%s reconstructed=%s '
+            'already_credited=%s needs_human=%s failed=%s '
+            'skipped_by_reason=%s',
+            summary['scanned'], summary['credited'],
+            summary['reconstructed'], summary['already_credited'],
+            summary['needs_human'], summary['failed'],
+            summary['skipped_by_reason'],
+        )
+        return summary
 
     def _ensure_topup_invoice(self):
         """Create the customer invoice tied to this topup if not already created.
@@ -1086,6 +2206,9 @@ class WalletTopup(models.Model):
                 'price_unit': self.amount,
             })],
             'woow_invoice_issue_state': issue_state,
+            # 同一 MTN 是 cross-topup invoice idempotency key；Branch-B
+            # reconstruction 會取得新 topup id，所以不可再只靠 TOPUP-{id}。
+            'woow_ecpay_mtn': self.payment_transaction_id.reference or False,
             # Path B: PaaS issues e-invoices via cron only. The skip flag
             # short-circuits the upstream `create_ecpay_invoice` action_post
             # hook so the same move isn't issued twice (once inline, once by
@@ -1093,7 +2216,8 @@ class WalletTopup(models.Model):
             'woow_skip_upstream_hook': True,
         }
         move_vals.update(self._map_carrier_to_ecpay_vals())
-        move = self.env['account.move'].sudo().create(move_vals)
+        move = _ecpay_mtn_write(
+            self.env['account.move'].sudo()).create(move_vals)
         try:
             move.action_post()
         except Exception:

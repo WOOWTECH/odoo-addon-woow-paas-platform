@@ -69,6 +69,8 @@
               <field name="rtn_code" readonly="1"/>
               <field name="failure_code" readonly="1"/>
               <field name="assessment_reason" readonly="1"/>
+              <field name="last_query_verdict" readonly="1"/>
+              <field name="last_query_at" readonly="1"/>
             </group>
             <group string="Amounts and source">
               <field name="amount" readonly="1"/>
@@ -77,6 +79,11 @@
               <field name="currency" readonly="1"/>
               <field name="source_model" readonly="1"/>
               <field name="source_ref" readonly="1"/>
+              <field name="origin_xid" readonly="1"/>
+              <field name="topup_plan_ref" readonly="1"/>
+              <field name="topup_source" readonly="1"/>
+              <field name="wallet_transaction_ref" readonly="1"/>
+              <field name="repair_topup_ref" readonly="1"/>
             </group>
           </group>
           <group>
@@ -87,6 +94,7 @@
               <field name="attempts" readonly="1"/>
               <field name="next_query_at" readonly="1"/>
               <field name="query_attempts" readonly="1"/>
+              <field name="t1_overdue_at" readonly="1"/>
             </group>
             <group string="Timeline">
               <field name="first_seen_at" readonly="1"/>
