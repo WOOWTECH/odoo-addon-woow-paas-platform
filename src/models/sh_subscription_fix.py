@@ -54,6 +54,15 @@ _DOUBLE_CHARGE_COOLDOWN_DEFAULT_HOURS = 24
 #: 無界卡住整個 cron tick。
 _DOUBLE_CHARGE_COOLDOWN_QUERY_LOCK_TIMEOUT = '1s'
 
+#: #864 PR-F：auto-recredit 掛在 10 分鐘 cleanup cron；另一顆 billing
+#: silence cron 用 heartbeat 判斷「queue 空」與「scanner 沒跑」兩個世界。
+#: 只在 incident 已達 T2=4h 且 heartbeat 超過三個 tick（30m）時升人工，
+#: 因此不建立 T2 之外的第二個放棄時鐘。
+_AUTO_RECREDIT_HEARTBEAT_PARAM = (
+    'woow_paas_platform.auto_recredit_heartbeat_at')
+_AUTO_RECREDIT_T2_HOURS = 4
+_AUTO_RECREDIT_HEARTBEAT_STALE_MINUTES = 30
+
 
 class ShSubscriptionFix(models.Model):
     """Fix upstream sh_subscription bug in _sh_create_auto_invoice.
@@ -281,6 +290,47 @@ class ShSubscriptionFix(models.Model):
         return True
 
     @api.model
+    def _escalate_stale_auto_recredit_heartbeat(self):
+        """scanner 靜默時仍在同一個 T2 將 CNI 轉人工。"""
+        now = fields.Datetime.now()
+        raw = self.env['ir.config_parameter'].sudo().get_param(
+            _AUTO_RECREDIT_HEARTBEAT_PARAM)
+        heartbeat = False
+        if raw:
+            try:
+                heartbeat = fields.Datetime.to_datetime(raw)
+            except (TypeError, ValueError):
+                _logger.error(
+                    '[AUTO_TOPUP] invalid auto-recredit heartbeat; '
+                    'treating scanner as stale')
+        if (heartbeat
+                and heartbeat >= now - timedelta(
+                    minutes=_AUTO_RECREDIT_HEARTBEAT_STALE_MINUTES)):
+            return 0
+        deadline = now - timedelta(hours=_AUTO_RECREDIT_T2_HOURS)
+        with self.env.registry.cursor() as cr:
+            cr.execute('SET LOCAL lock_timeout = %s',
+                       (_DOUBLE_CHARGE_COOLDOWN_QUERY_LOCK_TIMEOUT,))
+            cr.execute(
+                "SELECT external_ref FROM woow_billing_incident "
+                "WHERE kind = 'charged_not_credited' AND state = 'open' "
+                "AND failure_code = 'wallet_credit_failed' "
+                "AND first_seen_at <= %s ORDER BY first_seen_at, id "
+                "LIMIT 500", (deadline,), log_exceptions=False)
+            references = [row[0] for row in cr.fetchall()]
+        transitioned = 0
+        Incident = self.env['woow.billing.incident'].sudo()
+        for reference in references:
+            if Incident._transition_needs_human_independent(
+                    reference, 't2_expired'):
+                transitioned += 1
+        if transitioned:
+            _logger.error(
+                '[AUTO_TOPUP] auto-recredit heartbeat stale; '
+                '%s incident(s) reached T2 and were escalated', transitioned)
+        return transitioned
+
+    @api.model
     def _cron_billing_silence_alert(self):
         """[#778 配套 3] 偵測計費路徑靜默死亡，告警帳務管理群組。
 
@@ -297,6 +347,14 @@ class ShSubscriptionFix(models.Model):
         （mail.activity → account.group_account_manager），activity 未被
         處理前不重建（處理完消失，再犯再告警）。
         """
+        # 先跑 PR-F heartbeat backstop；既有 billing silence 設成 0 也不得
+        # 關掉金流 auto-recredit 的 T2 fail-safe。
+        try:
+            self._escalate_stale_auto_recredit_heartbeat()
+        except Exception:
+            _logger.exception(
+                '[AUTO_TOPUP] auto-recredit heartbeat backstop failed')
+
         ICP = self.env['ir.config_parameter'].sudo()
         raw = ICP.get_param(
             _BILLING_SILENCE_PARAM, str(_BILLING_SILENCE_DEFAULT_DAYS))

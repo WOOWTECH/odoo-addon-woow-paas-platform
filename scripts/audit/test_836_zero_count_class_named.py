@@ -128,6 +128,10 @@ LEAKED_GATE1 = ("test_leak.TestDroppedByAssign",
 LEAKED_GATE2 = ("test_leak._MixinAssign",)
 
 TREE = {
+    # 合成 root 明示最小 workflow selector；真 repo 缺檔仍由被測物 fail-loud。
+    ".gitea/workflows/odoo-tests.yml": (
+        "run: odoo --test-tags /probe\\\\\n"
+    ),
     # `_addon_source_tree_present()` 靠這個檔判斷「這是本 addon 的 root」；
     # #828 修正前少了它會 fail-open；現在會回明確 wrong-root violation，但仍只測到
     # layout 前置條件、測不到 zero-count 歸因，所以這棵樹必須保留 manifest。
