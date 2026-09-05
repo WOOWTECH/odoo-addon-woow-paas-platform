@@ -8637,6 +8637,8 @@ def check_bulk_grant_ruler_sync(root):
                     "打錯字的型別在 `in` 比對下永遠不命中，守衛與 UI 過濾雙雙靜默"
                     "失效，而輸出跟「這一型本來就不在清單裡」一模一樣（%s）"
                     % (name, unknown, sorted(domain), BULK_GRANT_SYNC_REF))
+    return violations
+
 
 # --------------------------------------------------------------------------- #
 #  38. access-payload-shape-matches-operator-schema                            #
