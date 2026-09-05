@@ -306,8 +306,8 @@ symlink）。理由：rc 是會被執行的碼，平台代寫即成平台依賴�
   地方。
 - **租戶目前無法自助注入 `extraEnv`**：`helm_value_specs` 是可開的 allowlist，hermes-agent
   template 現在只開 2 個 optional key（`auth.minimaxApiKey`、`auth.openrouterApiKey`；
-  `src/data/cloud_app_templates.xml`），過濾在 `src/controllers/paas.py:2682`
-  `_filter_allowed_helm_values`。
+  `src/data/cloud_app_templates.xml`），過濾在 `src/models/cloud_app_template.py`
+  `CloudAppTemplate._filter_allowed_helm_values`（#1052 自 controller 搬入）。
 
 ### 明確否決的兩條路（連理由，避免被重新提案）
 

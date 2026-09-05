@@ -6,6 +6,11 @@ from odoo.exceptions import ValidationError
 
 _logger = logging.getLogger(__name__)
 
+# #535：`helm_value_specs` 解析失敗的哨兵。與「template 本來就沒有 specs」必須分得開
+# ——後者是正常狀態（例 `cloud_app_ha_paas`），前者代表無從得知哪些鍵是租戶填的憑證，
+# 遮罩層只能 fail-closed 全遮。用哨兵而不是 None／{}，是因為那兩個值都可能是合法結果。
+SPECS_UNPARSEABLE = object()
+
 # #501：限量商品的**內建**全域實例上限（slug → 台數）。
 #
 # 這是**安全網不是設定值**——`ir.config_parameter` 有值就覆寫它（營運可不發版調整，
@@ -644,6 +649,112 @@ class CloudAppTemplate(models.Model):
                 len(unpinned - active), sorted((unpinned - active).mapped('slug')),
             )
 
+    # ------------------------------------------------------------------ #
+    #  helm_value_specs 的解析與白名單（#1052：自 PaasController 搬入，收尾 #559） #
+    # ------------------------------------------------------------------ #
+    # 這三個 method 只讀 template 自己的欄位、不碰 request，本來就是 template 的
+    # 語意；留在 controller 時 model 層要用它們得反向 import controller。
+    # 遮罩（``PaasController._sanitize_helm_values``／``_password_spec_paths``）
+    # 是 API 回應層的關切，刻意留在 controller。
+
+    def _parse_helm_value_specs_or_fail(self):
+        """Parse helm_value_specs, returning ``SPECS_UNPARSEABLE`` on failure.
+
+        #535：遮罩層必須分得出「這個 template 本來就沒有 specs」與「specs 在那裡但
+        我讀不懂」——前者代表沒有租戶填入的憑證可遮（正常，例如 ``cloud_app_ha_paas``），
+        後者代表**無從得知哪些鍵是憑證**，只能 fail-closed 全遮。
+        ``_parse_helm_value_specs`` 把兩者都壓成 ``{}``（顯示路徑要的優雅降級），
+        所以判定端不能用它的回傳值分辨。這裡是單一 parser，兩個 wrapper 共用。
+        """
+        if not self or not self.helm_value_specs:
+            return {}
+        try:
+            return json.loads(self.helm_value_specs)
+        except (json.JSONDecodeError, TypeError):
+            # Defense-in-depth: a stray literal newline inside a JSON string value
+            # (e.g. a seed XML that wrapped a long label/description across lines)
+            # makes strict json.loads raise. Silently returning {} here would nuke the
+            # ENTIRE Application Settings section — including required fields the user
+            # must fill — so the service can never launch. Degrade to a tolerant parse
+            # (strict=False allows control chars) so the section still renders, and log
+            # loudly so the malformed seed data gets noticed and cleaned.
+            try:
+                specs = json.loads(self.helm_value_specs, strict=False)
+                _logger.error(
+                    "helm_value_specs for template %s contains control characters "
+                    "inside string values; parsed with strict=False as a fallback. "
+                    "Fix the seed data so JSON strings are not split across lines.",
+                    self.name,
+                )
+                return specs
+            except (json.JSONDecodeError, TypeError):
+                _logger.error("Invalid helm_value_specs for template %s", self.name)
+                return SPECS_UNPARSEABLE
+
+    def _parse_helm_value_specs(self) -> dict[str, list]:
+        """Parse this template's helm_value_specs JSON.
+
+        Returns:
+            dict with 'required' and 'optional' lists, or empty dict if no specs
+            （解析失敗也壓成 ``{}``——顯示路徑要的優雅降級；要分辨失敗用
+            ``_parse_helm_value_specs_or_fail``）
+        """
+        specs = self._parse_helm_value_specs_or_fail()
+        return {} if specs is SPECS_UNPARSEABLE else specs
+
+    def _filter_allowed_helm_values(self, values):
+        """
+        Filter Helm values to only include keys allowed by this template's value_specs.
+
+        This prevents users from overriding critical system values like namespace,
+        resource limits, or security settings that should be controlled by the template.
+
+        Args:
+            values (dict): User-provided Helm values
+
+        Returns:
+            tuple: (filtered_values dict, rejected_keys list)
+        """
+        if not values:
+            return {}, []
+
+        specs = self._parse_helm_value_specs()
+        if not specs:
+            # No specs defined - allow all values (backward compatibility)
+            return values, []
+
+        # Build set of allowed keys from specs
+        allowed_keys = set()
+
+        # Get keys from required and optional fields
+        for field_list in [specs.get('required', []), specs.get('optional', [])]:
+            for field in field_list:
+                if isinstance(field, dict) and 'key' in field:
+                    allowed_keys.add(field['key'])
+                elif isinstance(field, str):
+                    allowed_keys.add(field)
+
+        if not allowed_keys:
+            # No keys defined in specs - allow all
+            return values, []
+
+        # Filter values to only allowed keys
+        filtered = {}
+        rejected = []
+        for key, value in values.items():
+            if key in allowed_keys:
+                filtered[key] = value
+            else:
+                rejected.append(key)
+
+        if rejected:
+            _logger.warning(
+                "Rejected unauthorized Helm value keys %s for template %s",
+                rejected, self.name
+            )
+
+        return filtered, rejected
+
     @api.model
     def _heal_sticky_helm_value_specs(self):
         """Upgrade healer for the fix/n8n-creation-issue seed correction.
@@ -651,7 +762,7 @@ class CloudAppTemplate(models.Model):
         DBs first installed under the historical ``<data noupdate="1">`` block carry a
         sticky ``ir.model.data.noupdate=True`` on the cloud_app_* seeds, so the corrected
         ``helm_value_specs`` (clean single-line JSON) is silently skipped on ``-u``.
-        Runtime still works because ``PaasController._parse_helm_value_specs`` falls back
+        Runtime still works because ``CloudAppTemplate._parse_helm_value_specs`` falls back
         to ``strict=False``, but the DB row stays dirty and logs an ERROR on every
         template fetch.
 
