@@ -104,6 +104,7 @@ from odoo.tests import HttpCase, tagged
 from odoo.addons.woow_paas_platform.models.workspace_access import (
     ROLE_ADMIN, ROLE_OWNER, ROLE_USER,
 )
+from .operator_contract import operator_client  # #1052：受 spec 約束的 client double
 
 _MODEL = 'woow_paas_platform.security_access'
 _ROUTE_MODEL = 'woow_paas_platform.security_access_route'
@@ -288,7 +289,10 @@ class _Sa805Fixture(HttpCase):
     #  operator mock（本檔一律不對外送）                                   #
     # ------------------------------------------------------------------ #
     def _operator_client(self, **extra):
-        client = MagicMock()
+        # #1052：受 PaaSOperatorClient spec 約束的 double——配到 client 上沒有的
+        # method 直接 AttributeError，不會再靠 MagicMock 真值假裝通過（下方那段
+        # 「回傳形狀要給全」的警語正是這類假綠的形狀）。
+        client = operator_client()
         self.expected_token = 'tok-805-%s' % uuid.uuid4().hex[:12]
         self.expected_tunnel_id = 'tun-805-%s' % uuid.uuid4().hex[:8]
         self.expected_tunnel_name = 'name-805-%s' % uuid.uuid4().hex[:6]

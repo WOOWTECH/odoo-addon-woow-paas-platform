@@ -27,6 +27,7 @@ from unittest.mock import MagicMock, patch
 
 from odoo.tests.common import TransactionCase
 from ..models.cloud_service import _internal_provision
+from .operator_contract import status_response  # #1052：get_status 形狀的唯一定義處
 
 
 # KubeVirt 的 VM 跑在 virt-launcher pod 裡，而 haos chart 把
@@ -51,18 +52,13 @@ def _status(release_status='deployed', pods=None, **vm_fields):
 
     預設模擬「未帶 include_vm」——operator 此時回 ``vm_included: False`` 與
     ``vmis: None``（不是 ``[]``），這個區別正是 fail-closed 的依據。
+
+    #1052：形狀的唯一定義處是 ``operator_contract.status_response``（對帳到 operator
+    ``ReleaseStatusResponse``）。本檔原本手抄的 7 key 版本少了 ``pod_retrieval_error``；
+    消費端一律 ``status.get('pod_retrieval_error')``（cloud_service.py 的 pod 就緒判定），
+    多一個 ``None`` key 與缺 key 等價。
     """
-    body = {
-        'release': {'status': release_status, 'revision': 1},
-        'pods': pods if pods is not None else [],
-        'vm_included': False,
-        'vmis': None,
-        'datavolumes': None,
-        'vmi_retrieval_error': None,
-        'datavolume_retrieval_error': None,
-    }
-    body.update(vm_fields)
-    return body
+    return status_response(release_status, pods, **vm_fields)
 
 
 class _Base(TransactionCase):

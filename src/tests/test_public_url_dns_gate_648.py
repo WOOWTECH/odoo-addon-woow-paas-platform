@@ -67,6 +67,7 @@ from odoo import fields
 from odoo.tests.common import TransactionCase, tagged
 
 from ..models.cloud_service import _internal_provision
+from .operator_contract import status_response  # #1052：get_status 形狀的唯一定義處
 
 #: 被測碼以 ``dns_probe.resolve_state(...)`` 形式（module attribute）查名字，
 #: 所以 patch 來源模組即涵蓋所有呼叫者。
@@ -83,20 +84,13 @@ def _status(release_status='deployed', pods=None, **extra):
 
     預設帶一顆健康的 pod ⇒ **pod/VM 那層必定通過**，這樣任何 not-ready 都只可能
     來自本檔要加的 DNS 閘。否則測試會紅在錯的分支上。
+
+    #1052：形狀的唯一定義處是 ``operator_contract.status_response``；本檔只保留
+    「預設一顆健康 pod」這個本檔專屬的預設值。
     """
-    body = {
-        'release': {'status': release_status, 'revision': 1},
-        'pods': pods if pods is not None else [
-            {'name': 'p', 'phase': 'Running', 'ready': '1/1'}],
-        'pod_retrieval_error': None,
-        'vm_included': False,
-        'vmis': None,
-        'datavolumes': None,
-        'vmi_retrieval_error': None,
-        'datavolume_retrieval_error': None,
-    }
-    body.update(extra)
-    return body
+    if pods is None:
+        pods = [{'name': 'p', 'phase': 'Running', 'ready': '1/1'}]
+    return status_response(release_status, pods, **extra)
 
 
 class _DnsGateCase(TransactionCase):

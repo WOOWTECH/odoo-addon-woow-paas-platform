@@ -830,3 +830,7 @@ from . import test_stale_manual_aging_batch_990
 # T1/T3 刻意走生產碼的 `_log_charged_not_credited_incident`，⛔ 不自己組 snapshot
 # （測試自己傳 trade_no 的話，改生產碼不會讓它轉綠＝零鑑別力）。
 from . import test_trade_no_semantics_993
+# #1052：8 支 _woow_migrate_* delegate 只有 1 支有刪除守衛；本檔掃 migrations/ 的呼叫點
+# 逐一 hasattr（陽性對照＝已知 8 對必須都被掃到）。operator_contract.py 是共用件、
+# 刻意不在此登記（同 smart_home_fixture.py）。
+from . import test_migration_delegate_liveness

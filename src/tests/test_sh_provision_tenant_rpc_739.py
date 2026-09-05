@@ -61,13 +61,14 @@ grep 符號名）：
 """
 import json
 import uuid
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from odoo.tests import HttpCase, tagged
 
 from odoo.addons.woow_paas_platform.models.workspace_access import (
     ROLE_ADMIN, ROLE_OWNER, ROLE_USER,
 )
+from .operator_contract import operator_client  # #1052：受 spec 約束的 client double
 from .smart_home_fixture import sh_model
 
 _MODEL = 'woow_paas_platform.smart_home'
@@ -202,7 +203,8 @@ class _Sh739Fixture(HttpCase):
     #  operator mock（本檔一律不對外送）                                   #
     # ------------------------------------------------------------------ #
     def _operator_client(self, **extra):
-        client = MagicMock()
+        # #1052：受 PaaSOperatorClient spec 約束的 double（同 test_sa_provision_tenant_rpc_805）。
+        client = operator_client()
         self.expected_token = 'tok-739-%s' % uuid.uuid4().hex[:12]
         client.create_tunnel.return_value = {
             'tunnel_id': 'tun-739-%s' % uuid.uuid4().hex[:8],
