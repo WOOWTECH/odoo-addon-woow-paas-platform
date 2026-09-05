@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """repo-lint：把「假綠家族」pitfall 轉成機械 gate 的靜態檢查工具。
 
-四十二個 check 函式，歸為下列三十六條規則（其中四條各由多個函式實作：第 2 條
+四十三個 check 函式，歸為下列三十七條規則（其中四條各由多個函式實作：第 2 條
 owl-template 由兩個函式——語法陷阱／i18n 屬性；第 7 條
 capability-gate 由四個函式——slug 集合成員／admin-gui 錨點／gateway 文案錨點／
 Access 頁籤錨點；第 22 條
@@ -599,6 +599,16 @@ test-collectability 由兩個函式——收集面／執行面。這個一對多
                      ⚠ 只驗縮排寬度與 tab，不驗其他格式；兩點式 `git diff base HEAD`
                      比的是 tree，base 已刪而本 PR 仍保留的檔會被當「新增」（可接受）。
                      依據 CLAUDE.md §Code Style Guide、.editorconfig
+37. access-payload-shape-matches-operator-schema
+                     三條腿的 `_build_access_payload()`（cloud_service／SecurityAccessRoute／
+                     SmartHomeRoute）回傳 dict literal 的 key 集合，必須等於 operator
+                     `AccessSyncRequest`（extra/paas-operator/src/models/schemas.py）的
+                     欄位集合。#1052：整組鏡射是 2026-08-15 CS access 設計拍板 #10 的
+                     刻意選擇，但鏡射的守線只有兩支測試**手抄**的 key 清單（SA route 那
+                     腿零斷言）——operator 加一個欄位時三條腿照送、兩支測試照綠、422 在
+                     runtime 才炸，而 422 說不出是哪一邊寫錯。同第 30 條：兩端不在同一個
+                     執行環境，repo-lint 是唯一兩端都在的地方。陽性對照：schema class
+                     找不到／builder 少於 3 個／return 形狀解不出來，一律當違規不當乾淨。
 
 用法：
 
@@ -5947,6 +5957,8 @@ REPO_LINT_RULES = {
     "js-i18n-template-literal": ("check_js_i18n_template_literal",),
     "cron-wiring": ("check_cron_wiring",),
     "indentation": ("check_indentation",),
+    "access-payload-shape-matches-operator-schema": (
+        "check_access_payload_shape_matches_operator_schema",),
 }
 
 # 刻意不掛 hook 分派的 check：{函式名: 理由}。現況是空的（每一條都掛得到 hook）。
@@ -6544,7 +6556,8 @@ def run_all(root):
                   + check_owl_relative_import(root)
                   + check_js_i18n_template_literal(root)
                   + check_cron_wiring(root)
-                  + check_indentation(root))
+                  + check_indentation(root)
+                  + check_access_payload_shape_matches_operator_schema(root))
     if violations:
         print("repo-lint：%d 個違規" % len(violations))
         for v in violations:
@@ -6698,6 +6711,11 @@ def run_hook():
         # 同時讀兩端才成立 ⇒ 不做 only_file 切片，動到任一端就整條重算。
         tunnel_wire = (check_tunnel_config_wire_shape(root)
                        if _tunnel_config_wire_watches(rel) else [])
+        # #1052 第 37 條：operator 的 AccessSyncRequest ↔ 三條腿的 _build_access_payload
+        # 是跨端不變式，壞掉的常常是另一端（改 schema 紅在三條腿、改一條腿紅在 schema）
+        # ⇒ 同 tunnel_wire：不做 only_file 切片，動到任一端就整條重算。
+        access_payload = (check_access_payload_shape_matches_operator_schema(root)
+                          if _access_payload_shape_watches(rel) else [])
         # #648：schema 與 golden 互為對方的判準，壞掉的是「兩者一致」這個跨檔不變式
         # 本身 ⇒ 不做 only_file 切片，動到任一份就整條重算。**這一支特別需要 hook**：
         # 它守的正是「改了 operator 的序列化又忘了重產 golden」，而 operator 那側
@@ -6796,7 +6814,7 @@ def run_hook():
         elif (ladder or availability or poll_facts or anchors or floor
                 or security_rules or one_time_cred or provision or sh_sub_groups
                 or internal_ctx or tunnel_wire or route_golden or owl_imports
-                or js_i18n_template or cron_wiring):
+                or js_i18n_template or cron_wiring or access_payload):
             # extra/paas-operator/** 與 docs/tracking/pitfalls/** 不在上面任何分支，
             # 但前者持有階梯的內層常數、後者是 doc-symbol-anchor 的一半輸入；
             # baselines/repo-lint-registry.txt（floor 的另一份輸入）與
@@ -6816,6 +6834,7 @@ def run_hook():
         violations += sh_sub_groups
         violations += internal_ctx
         violations += tunnel_wire
+        violations += access_payload
         violations += route_golden
         violations += owl_imports
         violations += js_i18n_template
@@ -8351,6 +8370,187 @@ def check_cron_wiring(root):
             "範圍壞掉時「零筆全部接得上」與「真的全部接得上」在輸出上完全一樣 ⇒ 零筆"
             "當違規，不當乾淨（%s）"
             % (_CRON_WIRING_IMPL_REL, root, CRON_WIRING_REF))
+    return violations
+
+
+# --------------------------------------------------------------------------- #
+#  37. access-payload-shape-matches-operator-schema                            #
+# --------------------------------------------------------------------------- #
+
+#: 兩端：operator 的 pydantic 宣告 ↔ 平台三條腿的 payload builder。與第 30 條同一個
+#: 理由住在 repo-lint——`extra/paas-operator/` 不進 paas-odoo image、fastapi 不在
+#: Odoo 的 venv，沒有任何一個測試執行環境同時看得到兩端。
+ACCESS_PAYLOAD_SCHEMAS_REL = "extra/paas-operator/src/models/schemas.py"
+ACCESS_PAYLOAD_SCHEMA_CLASS = "AccessSyncRequest"
+ACCESS_PAYLOAD_BUILDER = "_build_access_payload"
+ACCESS_PAYLOAD_MODELS_RE = r"^src/models/[^/]+\.py$"
+#: 三條腿（cloud_service／SecurityAccessRoute／SmartHomeRoute）是拍板留分的
+#: （docs/plans/2026-Q3/2026-08-15-cs-access-control-design.md 拍板 #10 整組鏡射）。
+#: 掃到少於三個 builder ＝ 有人改了名或掃描範圍壞了，不是「乾淨」。
+ACCESS_PAYLOAD_MIN_BUILDERS = 3
+ACCESS_PAYLOAD_REF = (
+    "見 #1052；拍板 docs/plans/2026-Q3/2026-08-15-cs-access-control-design.md #10；"
+    "手抄 key 清單在 src/tests/test_cs_access_sync_745.py／test_sh_access_sync_768.py")
+
+
+def _access_payload_shape_watches(rel):
+    """hook 分派判準：與 check 的輸入共用同一組常數，兩者不可能分岔。"""
+    return (rel == ACCESS_PAYLOAD_SCHEMAS_REL
+            or re.match(ACCESS_PAYLOAD_MODELS_RE, rel) is not None
+            or rel == REPO_LINT_SELF_REL)
+
+
+def _access_payload_own_returns(func):
+    """`func` **自己**的 Return 節點（不進入巢狀 def／lambda 的 body）。"""
+    out = []
+    stack = list(func.body)
+    while stack:
+        node = stack.pop()
+        if isinstance(node, ast.Return):
+            out.append(node)
+            continue
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            continue
+        stack.extend(ast.iter_child_nodes(node))
+    return out
+
+
+def _access_payload_return_keys(func):
+    """`_build_access_payload` 回傳 dict 的 key 集合；解不出來回 None。
+
+    只認兩種形狀（三條腿今天都是第一種）：
+      (i)  `return {...}`，每個 key 都是字串常數；
+      (ii) `return name`，且 `name` 在同一函式內被 `name = {...}` 綁過（同樣全字串
+           key）、之後**沒有**任何 `name[...] = ...` 下標賦值。
+    其他一律回 None ⇒ 呼叫端當違規。本條是否定性判準，「解不出來」與「沒有違規」的
+    輸出必須不同——不然把 return 改成動態組 dict 就靜默逃出守線。
+    """
+    returns = _access_payload_own_returns(func)
+    if len(returns) != 1 or returns[0].value is None:
+        return None
+    value = returns[0].value
+    if isinstance(value, ast.Name):
+        bound = None
+        for node in ast.walk(func):
+            if (isinstance(node, ast.Assign) and len(node.targets) == 1
+                    and isinstance(node.targets[0], ast.Name)
+                    and node.targets[0].id == value.id):
+                bound = node.value
+            elif (isinstance(node, ast.Subscript)
+                    and isinstance(node.value, ast.Name)
+                    and node.value.id == value.id
+                    and isinstance(node.ctx, ast.Store)):
+                return None            # payload[k] = … 動態加 key，靜態看不到
+        value = bound
+    if not isinstance(value, ast.Dict):
+        return None
+    keys = set()
+    for key in value.keys:
+        if not (isinstance(key, ast.Constant) and isinstance(key.value, str)):
+            return None                # `**spread` 或非字串 key
+        keys.add(key.value)
+    return keys
+
+
+def check_access_payload_shape_matches_operator_schema(root):
+    """#1052：三條腿的 `_build_access_payload()` key 集合必須等於 operator `AccessSyncRequest`。
+
+    守的 bug class：**跨部署單元的 wire 契約，兩端各自的測試都蓋不到**（與第 30 條
+    同族）。CS access 是 2026-08-15 設計拍板 #10「整組鏡射 SA route」的刻意選擇——
+    三條腿各自持有一份 payload builder，operator 端只有一個 `AccessSyncRequest`。
+    #1052 覆核實測：形狀今天是一致的（三腿都送滿 10 個欄位），但守線只有兩支測試
+    **手抄**的 key 清單（`test_cs_access_sync_745.py`／`test_sh_access_sync_768.py`），
+    SA route 那腿零斷言，且沒有一份從 schemas.py 推導。⇒ operator 加一個欄位時三條
+    腿照送 10 key、兩支測試照綠、422 在 runtime 才炸——而 422 說不出是哪一邊寫錯
+    （`cloud_service.py` 該 builder 的 docstring 自己這樣寫）。
+
+    判準（跨端比對）：
+      (i)  schemas.py 的 `class AccessSyncRequest(BaseModel)` 欄位名集合；
+      (ii) `src/models/*.py` 每個 `_build_access_payload` 回傳 dict literal 的 key 集合；
+      (iii) 兩者相等，逐 builder 報缺／多的 key。
+
+    陽性對照（否定性結論必配）：
+      (a) schemas.py 讀不到／parse 不動／找不到該 class（或它沒有欄位）⇒ 違規；
+      (b) builder 少於 ``ACCESS_PAYLOAD_MIN_BUILDERS``（3）⇒ 違規——三條腿是拍板的，
+          少一條不是乾淨，是有人改名或掃描範圍壞了；
+      (c) return 形狀解不出來 ⇒ 違規（`_access_payload_return_keys` 只認兩種形狀）。
+
+    ⚠ 覆蓋邊界（刻意寫下來）：
+      * 只比對**頂層 key 集合**。`policies` 裡每個 policy dict 的形狀（`AccessPolicySpec`）
+        不驗；欄位型別、required、語意都不驗。把本條的綠讀成「這條 wire 一定會通」是錯的。
+      * 只認 `def _build_access_payload` 這個名字；改名的 builder 會落進 (b) 而不是靜默放行。
+      * schema 端只認 `BaseModel` 直接子類的 `AnnAssign`（沿用 `_tunnel_wire_schema_models`），
+        繼承自其他 model 的欄位看不到——`AccessSyncRequest` 今天沒有父類欄位。
+    """
+    violations = []
+    ref = ACCESS_PAYLOAD_REF
+    if not _addon_source_tree_present(root):
+        # #936：否定性判準，wrong root 回空清單會與「零違規」不可區分。
+        return _wrong_root_result(
+            "access-payload-shape-matches-operator-schema",
+            "check_access_payload_shape_matches_operator_schema", ref)
+
+    schema_rel = ACCESS_PAYLOAD_SCHEMAS_REL
+    try:
+        with io.open(os.path.join(root, schema_rel), encoding="utf-8") as handle:
+            schema_models = _tunnel_wire_schema_models(handle.read())
+    except (IOError, OSError, UnicodeDecodeError, SyntaxError) as exc:
+        violations.append(
+            "%s：讀不到或 parse 失敗（%s）——本條的判準是否定性的，讀不到的檔「沒有"
+            "違規」與「有違規但看不到」輸出完全相同（%s）" % (schema_rel, exc, ref))
+        return violations
+    fields = schema_models.get(ACCESS_PAYLOAD_SCHEMA_CLASS)
+    if not fields:
+        violations.append(
+            "%s：找不到 `class %s(BaseModel)`，或它沒有宣告任何欄位。三條腿鏡射的就是"
+            "這個 class；它不在 ⇒ 掃描器壞了或 schema 被改名，不是乾淨（%s）"
+            % (schema_rel, ACCESS_PAYLOAD_SCHEMA_CLASS, ref))
+        return violations
+
+    builders = []
+    for path in sorted(glob.glob(os.path.join(root, "src", "models", "*.py"))):
+        rel = os.path.relpath(path, root)
+        with open(path, encoding="utf-8", errors="replace") as f:
+            source = f.read()
+        try:
+            tree = ast.parse(source)
+        except SyntaxError as exc:
+            violations.append(
+                "%s：parse 失敗（%s）——解析不了的檔在本條裡等於「沒有 builder」，而那"
+                "與「沒有違規」的輸出一模一樣；當違規不當無事（%s）" % (rel, exc, ref))
+            continue
+        for node in ast.walk(tree):
+            if (isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                    and node.name == ACCESS_PAYLOAD_BUILDER):
+                builders.append((rel, node))
+
+    if len(builders) < ACCESS_PAYLOAD_MIN_BUILDERS:
+        violations.append(
+            "src/models/：只找到 %d 個 `%s` 定義（%s），少於 %d。三條腿（cloud_service／"
+            "SecurityAccessRoute／SmartHomeRoute）是拍板留分的；少一條不是乾淨，是有人"
+            "把 builder 改了名或掃描範圍壞了（%s）"
+            % (len(builders), ACCESS_PAYLOAD_BUILDER,
+               ", ".join("%s:%d" % (r, n.lineno) for r, n in builders) or "無",
+               ACCESS_PAYLOAD_MIN_BUILDERS, ref))
+
+    for rel, node in builders:
+        keys = _access_payload_return_keys(node)
+        if keys is None:
+            violations.append(
+                "%s:%d：`%s` 的回傳形狀解不出來——只認 `return {...}`（全字串 key）或 "
+                "`return name`（name 綁到這種 literal 且之後沒有下標賦值）。本條是否定性"
+                "判準，解不出來當違規：要嘛改回可解的形狀，要嘛連本 check 一起擴充（%s）"
+                % (rel, node.lineno, ACCESS_PAYLOAD_BUILDER, ref))
+            continue
+        missing = sorted(fields - keys)
+        extra = sorted(keys - fields)
+        if missing or extra:
+            violations.append(
+                "%s:%d：`%s` 的 key 集合與 operator `%s` 不一致——缺 %s、多 %s。整組"
+                "鏡射是拍板的（#10），三條腿與 schema 任一邊漂了都只會在 runtime 422 才"
+                "看到，而 422 說不出是哪一邊寫錯（%s）"
+                % (rel, node.lineno, ACCESS_PAYLOAD_BUILDER,
+                   ACCESS_PAYLOAD_SCHEMA_CLASS, missing, extra, ref))
     return violations
 
 
