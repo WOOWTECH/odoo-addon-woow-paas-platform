@@ -95,6 +95,13 @@ class WalletTopup(models.Model):
     invoice_account_move_id = fields.Many2one('account.move', readonly=True)
     invoice_issued_at = fields.Datetime(readonly=True)
 
+    def init(self):
+        """self table 建好後才建立跨 topup/account.move 的 MTN backstop。"""
+        parent_init = getattr(super(), 'init', None)
+        if parent_init:
+            parent_init()
+        self.env['account.move']._init_woow_ecpay_mtn_index()
+
     @api.model_create_multi
     def create(self, values_list):
         if (not _is_auto_recredit_skip_invoice(self.env)

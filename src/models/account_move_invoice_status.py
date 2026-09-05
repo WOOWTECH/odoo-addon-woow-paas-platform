@@ -136,10 +136,14 @@ class AccountMoveInvoiceStatus(models.Model):
              'hook is a no-op in that case anyway).',
     )
 
-    def init(self):
-        """建 index 前先 fail-loud 診斷 MTN backfill，禁止猜測 duplicate。"""
-        # account.move core 自己有 init()；extension 不得吃掉它的 SQL setup。
-        super().init()
+    @api.model
+    def _init_woow_ecpay_mtn_index(self):
+        """topup table 建立後才診斷、backfill 並建立 MTN index。
+
+        這不能是 account.move 的 framework ``init()``：fresh install 時
+        account.move 比 woow.wallet.topup 先初始化，跨表 SQL 會撞
+        UndefinedTable。由 ``WalletTopup.init()`` 在自己的 table 已存在後呼叫。
+        """
         cr = self.env.cr
         # 既有 stamp 與 legacy topup invoice projection 是同一 candidate set；
         # 一張 invoice 對到多個 reference 屬 ambiguous，禁止猜測。
