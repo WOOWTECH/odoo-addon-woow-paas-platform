@@ -52,6 +52,7 @@ from . import test_payment_token_charge
 from . import test_wallet_topup_classify_failure
 from . import test_wallet_topup_invoice
 from . import test_wallet_topup_payment_hooks
+from . import test_auto_recredit_query_gate_864
 from . import test_payment_transaction_overrides
 from . import test_topup_controller
 from . import test_topup_status
@@ -156,6 +157,7 @@ from . import test_portal_agent_page
 from . import test_portal_agent_persist
 # feat: portal task agent chat — minimal task-context hook (TransactionCase)
 from .integration import test_ecpay_invoice_real  # noqa: F401 — surface as module to odoo test loader
+from .integration import test_auto_recredit_864  # noqa: F401 — PR-F true-cursor tag
 # feat: agent context enrichment (spec 2026-06-04 — TDD)
 from . import test_agent_context_builder
 from . import test_agent_context_endpoint
@@ -830,6 +832,16 @@ from . import test_stale_manual_aging_batch_990
 # T1/T3 刻意走生產碼的 `_log_charged_not_credited_incident`，⛔ 不自己組 snapshot
 # （測試自己傳 trade_no 的話，改生產碼不會讓它轉綠＝零鑑別力）。
 from . import test_trade_no_semantics_993
+
+# fix: #896 `_check_policy_quota` 的「數池子」`search_count` 沒有 `sudo()` ⇒
+# `ir.rule` 濾掉呼叫者看不到的列 ⇒ 少算 ⇒ 配額靜默放行（症狀與「方案上限很大」
+# 輸出完全相同，沒有訊號分得出來）。少算是 **0-或-全**：ir.rule 判歸屬走的就是
+# `_ANCHOR_POOL_FIELD` 那幾根 column、與池的 domain 同一根 ⇒ 非成員看到 0、成員
+# 看到全部。#924 已在真沙盒量到落差（非成員 0 vs sudo 2），端到端不可達靠的是
+# stored related 的 compute_sudo 重算與 #848 的 AccessError 前置兩個**外部**性質。
+# 🔴 測試刻意**直接以寫入者 env 呼叫守衛**：走 compute_sudo 重算那條修前也會擋
+# （測試會「修前綠」＝零鑑別力），走 CS→CS write 那條修前紅在 #848 而非本格。
+from . import test_policy_quota_pool_sudo_896
 # #1052：SmartHome／SecurityAccess 的 _do_resume guard 改問 mixin 的 _is_halted() seam
 # （cron 已經在用它）。RED-first：兩條方向相反的斷言在 develop 上都紅——見檔頭 RED 預測。
 from . import test_lifecycle_is_halted_seam_1052

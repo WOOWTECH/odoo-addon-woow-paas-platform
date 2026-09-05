@@ -705,6 +705,30 @@ class BillingController(HiddenChainMixin, Controller):
                 "[TOPUP] charge exception topup=%s partner=%s",
                 topup.id, partner.id,
             )
+            # PR-F：payment_token._charge 可能已觀測 tx.done 並 durable 寫入
+            # CHARGED_NOT_CREDITED。先看純 Python marker，避免 aborted PG
+            # transaction 上的 invalidate/read 再拋一次。若 local marker 寫入
+            # 也因 40001 後的 aborted transaction 失敗，就 rollback 本 request；
+            # durable incident 已在獨立 transaction 存活，Branch B 會收斂。
+            if getattr(e, '_woow_charged_not_credited', False):
+                try:
+                    topup.write({
+                        'state': 'failed',
+                        'failure_code': 'wallet_credit_failed',
+                        'failure_message': (
+                            'CHARGED_NOT_CREDITED: payment callback failed'),
+                    })
+                except OperationalError:
+                    request.env.cr.rollback()
+                return {
+                    'success': False,
+                    'error': _('Payment service unavailable'),
+                    'code': 'wallet_credit_failed',
+                }
+            topup.invalidate_recordset(['state', 'failure_code'])
+            if topup.failure_code == 'wallet_credit_failed':
+                return {'success': False, 'error': _('Payment service unavailable'),
+                        'code': 'wallet_credit_failed'}
             topup.write({'state': 'failed', 'failure_code': 'sdk_error',
                          'failure_message': str(e)[:200]})
             return {'success': False, 'error': _('Payment service unavailable'),

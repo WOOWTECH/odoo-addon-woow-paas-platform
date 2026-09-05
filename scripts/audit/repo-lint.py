@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """repo-lint：把「假綠家族」pitfall 轉成機械 gate 的靜態檢查工具。
 
-四十二個 check 函式，歸為下列三十六條規則（其中四條各由多個函式實作：第 2 條
+四十三個 check 函式，歸為下列三十七條規則（其中四條各由多個函式實作：第 2 條
 owl-template 由兩個函式——語法陷阱／i18n 屬性；第 7 條
 capability-gate 由四個函式——slug 集合成員／admin-gui 錨點／gateway 文案錨點／
 Access 頁籤錨點；第 22 條
@@ -599,6 +599,31 @@ test-collectability 由兩個函式——收集面／執行面。這個一對多
                      ⚠ 只驗縮排寬度與 tab，不驗其他格式；兩點式 `git diff base HEAD`
                      比的是 tree，base 已刪而本 PR 仍保留的檔會被當「新增」（可接受）。
                      依據 CLAUDE.md §Code Style Guide、.editorconfig
+37. bulk-grant-ruler-sync
+                     allow 政策的 include 群組不得使用的 rule_type 清單，前後端必須
+                     是**同一份**：後端 `security_access_access_policy.py` 的
+                     `_BULK_GRANT_RULE_TYPES`（守衛真的讀的那一份）↔ 前端
+                     `AddPolicyModal.js` 的 `BULK_GRANT_RULE_TYPES`（builder 用來濾
+                     allow+include 下拉選單的那一份），集合相等。
+                     🔴 兩份漂開**沒有任何 runtime 訊號**：只在後端＝UI 讓租戶選得到
+                     卻送出必被拒（租戶看到的是「我照 UI 選的，它說不行」）；只在前端
+                     ＝守衛根本沒擋，UI 只是把選項藏起來，直接打 API 就進得去。兩種
+                     情況下 repo-lint 綠、odoo-tests 綠（前端沒有測試）、`-u` 安裝成功。
+                     #543 的根因正是同一種形態——「守衛清單」與「migration bypass
+                     清單」是分離的兩份。
+                     第三個判準：兩份裡的每個值都必須是 rule 子 model `rule_type`
+                     Selection 的合法鍵——打錯字的型別在 `in` 比對下**永遠不命中**，
+                     守衛與 UI 過濾雙雙靜默失效，而輸出跟「這一型本來就不在清單裡」
+                     一模一樣。
+                     錨點抓不到（改名／搬走／改寫成 computed／出現第二份）一律當違規，
+                     不當通過：這是否定性判準，「找不到」與「兩份一致」的輸出相同。
+                     🔴 hook 分派**不做 only_file 切片**：判準跨兩端，打破它的那次編輯
+                     可能發生在任一端（改後端常數忘了改前端，或反過來把前端那份順手
+                     清掉）⇒ 動到任一端就整條重算（同 cron-wiring／route-contract）。
+                     已命名的盲區（不是遺漏）：同檔 `setDecision('bypass')` 分支另有一
+                     份 identity 型別字面量，它鏡像的是 `_check_decision_selector_compat`，
+                     不在本條射程內。
+                     依據 #352／#521 P-J（Eugene 2026-09-05 裁 (B) 只擋 allow）／#543
 
 用法：
 
@@ -4400,6 +4425,33 @@ INTERNAL_CTX_KEY_REGISTRY = {
                "`sa_internal_identity_write` 分成兩把：既有測試大量開著那一把，共用會"
                "讓本守衛在那些檔裡靜默失效（同型翻車見 smart_home_route 的註解）。",
     },
+    "_woow_auto_recredit_skip_invoice": {
+        "status": "enforced",
+        "sentinel": "_AUTO_RECREDIT_CAPABILITY",
+        "defined_in": "src/models/wallet_topup.py",
+        "reader": "_is_auto_recredit_skip_invoice",
+        "issue": "#864",
+        "why": "PR-F repair 已驗 query 後只跳過同一 transaction 的 invoice；裸 truthy "
+               "RPC context 不得略過不可逆電子發票防線。",
+    },
+    "_woow_wallet_credit_metadata_write": {
+        "status": "enforced",
+        "sentinel": "_WALLET_CREDIT_METADATA_CAPABILITY",
+        "defined_in": "src/models/wallet_transaction.py",
+        "reader": "_is_wallet_credit_metadata",
+        "issue": "#864",
+        "why": "auto-recredit origin／incident ref 是 exactly-once 與每日上限的稽核輸入；"
+               "一般 RPC 不得偽造或清除。",
+    },
+    "_woow_ecpay_mtn_write": {
+        "status": "enforced",
+        "sentinel": "_ECPAY_MTN_WRITE_CAPABILITY",
+        "defined_in": "src/models/account_move_invoice_status.py",
+        "reader": "_is_ecpay_mtn_write",
+        "issue": "#864",
+        "why": "account.move 的 MTN 是電子發票 exactly-once key；readonly UI 不足以擋"
+               "call_kw 偽造，只有 top-up invoice path 可寫。",
+    },
     "woow_billing_incident_create": {
         "status": "enforced",
         "sentinel": "_BILLING_INCIDENT_CREATE",
@@ -5947,6 +5999,7 @@ REPO_LINT_RULES = {
     "js-i18n-template-literal": ("check_js_i18n_template_literal",),
     "cron-wiring": ("check_cron_wiring",),
     "indentation": ("check_indentation",),
+    "bulk-grant-ruler-sync": ("check_bulk_grant_ruler_sync",),
 }
 
 # 刻意不掛 hook 分派的 check：{函式名: 理由}。現況是空的（每一條都掛得到 hook）。
@@ -6544,7 +6597,8 @@ def run_all(root):
                   + check_owl_relative_import(root)
                   + check_js_i18n_template_literal(root)
                   + check_cron_wiring(root)
-                  + check_indentation(root))
+                  + check_indentation(root)
+                  + check_bulk_grant_ruler_sync(root))
     if violations:
         print("repo-lint：%d 個違規" % len(violations))
         for v in violations:
@@ -6728,6 +6782,11 @@ def run_hook():
         # #36：新增檔的縮排；hook 只驗 untracked（check 內自判），分派條件只看副檔名與 vendored 目錄。
         indentation = (check_indentation(root, only_file=abs_path)
                        if _indentation_watches(rel) else [])
+        # #521 P-J 第 37 條：bulk-grant 型別清單是**跨檔**不變式（後端常數 ↔ 前端
+        # 鏡像），打破它的那次編輯可能發生在任一端 ⇒ 不做 only_file 切片，動到任一
+        # 端就整條重算（同 cron_wiring／route_golden／owl_imports）。
+        bulk_grant_sync = (check_bulk_grant_ruler_sync(root)
+                           if _bulk_grant_ruler_watches(rel) else [])
         if re.match(r"^src/controllers/.*\.py$", rel):
             violations = check_controller_sudo(root, only_file=abs_path)
             violations += check_reuse_values(root, only_file=abs_path)
@@ -6796,7 +6855,7 @@ def run_hook():
         elif (ladder or availability or poll_facts or anchors or floor
                 or security_rules or one_time_cred or provision or sh_sub_groups
                 or internal_ctx or tunnel_wire or route_golden or owl_imports
-                or js_i18n_template or cron_wiring):
+                or js_i18n_template or cron_wiring or bulk_grant_sync):
             # extra/paas-operator/** 與 docs/tracking/pitfalls/** 不在上面任何分支，
             # 但前者持有階梯的內層常數、後者是 doc-symbol-anchor 的一半輸入；
             # baselines/repo-lint-registry.txt（floor 的另一份輸入）與
@@ -6821,6 +6880,7 @@ def run_hook():
         violations += js_i18n_template
         violations += cron_wiring
         violations += indentation
+        violations += bulk_grant_sync
         if violations:
             print(json.dumps({
                 "decision": "block",
@@ -8351,6 +8411,213 @@ def check_cron_wiring(root):
             "範圍壞掉時「零筆全部接得上」與「真的全部接得上」在輸出上完全一樣 ⇒ 零筆"
             "當違規，不當乾淨（%s）"
             % (_CRON_WIRING_IMPL_REL, root, CRON_WIRING_REF))
+    return violations
+
+
+#: 第 37 條的兩端。後端是判準的**唯一真相源**（守衛真的讀它），前端只是 builder
+#: 的便利過濾——但兩份漂開時壞的是租戶那一端，而且沒有任何 runtime 訊號。
+_BULK_GRANT_PY_REL = "src/models/security_access_access_policy.py"
+_BULK_GRANT_JS_REL = "src/static/src/paas/components/modal/AddPolicyModal.js"
+_BULK_GRANT_RULE_MODEL_REL = "src/models/security_access_access_policy_rule.py"
+_BULK_GRANT_PY_NAME = "_BULK_GRANT_RULE_TYPES"
+_BULK_GRANT_JS_NAME = "BULK_GRANT_RULE_TYPES"
+BULK_GRANT_SYNC_REF = "見本檔檔頭第 37 條與 #352／#521 P-J／#543"
+
+#: hook 觸發面：**兩端**都要接住。打破這條不變式的那次編輯可能發生在任一端
+#: （改後端常數忘了改前端，或反過來把前端那份「順手清乾淨」），而 hook 拿到的
+#: file_path 就是被改的那一個 ⇒ 不做 only_file 切片，動到任一端就整條重算。
+_BULK_GRANT_WATCH_RELS = (_BULK_GRANT_PY_REL, _BULK_GRANT_JS_REL,
+                          _BULK_GRANT_RULE_MODEL_REL)
+
+#: JS 那份是 `const NAME = ["a", "b"];`。刻意只認這一種形狀：認得太寬鬆會讓
+#: 「有人把它改寫成 computed／import 進來」靜默通過，而那正是判準失效的樣子。
+_BULK_GRANT_JS_RE = re.compile(
+    r"const\s+" + _BULK_GRANT_JS_NAME + r"\s*=\s*\[(?P<body>[^\]]*)\]\s*;")
+_BULK_GRANT_JS_ITEM_RE = re.compile(r"""["'](?P<val>[a-z_]+)["']""")
+
+
+def _bulk_grant_ruler_watches(rel):
+    """第 37 條的 hook 觸發面：後端常數、前端鏡像、rule 子 model 三個檔。"""
+    return rel in _BULK_GRANT_WATCH_RELS
+
+
+def _bulk_grant_py_types(root):
+    """從 `.py` 的 AST 取 `_BULK_GRANT_RULE_TYPES`；回 `(set|None, 錯誤字串|None)`。"""
+    path = os.path.join(root, _BULK_GRANT_PY_REL)
+    if not os.path.exists(path):
+        return None, "找不到 `%s`" % _BULK_GRANT_PY_REL
+    with open(path, encoding="utf-8") as f:
+        src = f.read()
+    try:
+        tree = ast.parse(src)
+    except SyntaxError as exc:
+        return None, "`%s` parse 失敗（%s）" % (_BULK_GRANT_PY_REL, exc)
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign):
+            continue
+        names = [t.id for t in node.targets if isinstance(t, ast.Name)]
+        if _BULK_GRANT_PY_NAME not in names:
+            continue
+        value = node.value
+        if not isinstance(value, (ast.Tuple, ast.List)):
+            return None, ("`%s` 的 `%s` 不再是字面 tuple／list（實際 %s）——判準只認"
+                          "字面量，改成 computed 之後這條 gate 會靜默失去鑑別力"
+                          % (_BULK_GRANT_PY_REL, _BULK_GRANT_PY_NAME,
+                             type(value).__name__))
+        items = []
+        for elt in value.elts:
+            if not (isinstance(elt, ast.Constant) and isinstance(elt.value, str)):
+                return None, ("`%s` 的 `%s` 含非字串字面元素——同上，判準只認字面量"
+                              % (_BULK_GRANT_PY_REL, _BULK_GRANT_PY_NAME))
+            items.append(elt.value)
+        return set(items), None
+    return None, ("`%s` 裡找不到 `%s` 的賦值——錨點壞了（改名／搬走），而「找不到」"
+                  "與「兩份一致」在輸出上完全一樣"
+                  % (_BULK_GRANT_PY_REL, _BULK_GRANT_PY_NAME))
+
+
+def _bulk_grant_strip_js_comments(src):
+    """只遮掉 JS 註解，**保留字串字面量**。
+
+    ⛔ 這裡不能用既有的 `_strip_js_noise`：那支連 quoted string 一起遮掉，而本條
+    要讀的正是字串內容 —— 用它的結果是清單恆為空集合，而「空集合 ≠ 後端那份」
+    看起來就像一條抓到東西的紅燈，實際上探針已經瞎了。
+    """
+    out, i, n = [], 0, len(src)
+    quote = None
+    while i < n:
+        ch = src[i]
+        if quote:
+            out.append(ch)
+            if ch == "\\" and i + 1 < n:
+                out.append(src[i + 1])
+                i += 2
+                continue
+            if ch == quote:
+                quote = None
+            i += 1
+            continue
+        if ch in "\"'`":
+            quote = ch
+            out.append(ch)
+            i += 1
+            continue
+        if ch == "/" and i + 1 < n and src[i + 1] == "/":
+            while i < n and src[i] != "\n":
+                i += 1
+            continue
+        if ch == "/" and i + 1 < n and src[i + 1] == "*":
+            end = src.find("*/", i + 2)
+            i = n if end == -1 else end + 2
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
+def _bulk_grant_js_types(root):
+    """從 `.js` 取 `BULK_GRANT_RULE_TYPES` 陣列；回 `(set|None, 錯誤字串|None)`。"""
+    path = os.path.join(root, _BULK_GRANT_JS_REL)
+    if not os.path.exists(path):
+        return None, "找不到 `%s`" % _BULK_GRANT_JS_REL
+    with open(path, encoding="utf-8") as f:
+        src = _bulk_grant_strip_js_comments(f.read())
+    bodies = [m.group("body") for m in _BULK_GRANT_JS_RE.finditer(src)]
+    if not bodies:
+        return None, ("`%s` 裡找不到 `const %s = [...]`——前端那份鏡像被改名、刪掉、"
+                      "或改寫成別種形狀了。⛔ 修法不是放寬判準：那份清單存在的唯一"
+                      "理由就是可被機械對帳"
+                      % (_BULK_GRANT_JS_REL, _BULK_GRANT_JS_NAME))
+    if len(bodies) > 1:
+        return None, ("`%s` 裡有 %d 份 `const %s = [...]`——第二份就是下一次漂移的載體"
+                      % (_BULK_GRANT_JS_REL, len(bodies), _BULK_GRANT_JS_NAME))
+    return set(_BULK_GRANT_JS_ITEM_RE.findall(bodies[0])), None
+
+
+def _bulk_grant_rule_type_domain(root):
+    """rule 子 model `rule_type` Selection 的合法值域；回 `(set|None, 錯誤|None)`。"""
+    path = os.path.join(root, _BULK_GRANT_RULE_MODEL_REL)
+    if not os.path.exists(path):
+        return None, "找不到 `%s`" % _BULK_GRANT_RULE_MODEL_REL
+    with open(path, encoding="utf-8") as f:
+        try:
+            tree = ast.parse(f.read())
+        except SyntaxError as exc:
+            return None, "`%s` parse 失敗（%s）" % (_BULK_GRANT_RULE_MODEL_REL, exc)
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Assign)
+                and any(isinstance(t, ast.Name) and t.id == "rule_type"
+                        for t in node.targets)
+                and isinstance(node.value, ast.Call)):
+            continue
+        for kw in node.value.keywords:
+            if kw.arg != "selection" or not isinstance(kw.value, ast.List):
+                continue
+            keys = set()
+            for elt in kw.value.elts:
+                if (isinstance(elt, ast.Tuple) and elt.elts
+                        and isinstance(elt.elts[0], ast.Constant)
+                        and isinstance(elt.elts[0].value, str)):
+                    keys.add(elt.elts[0].value)
+            if keys:
+                return keys, None
+    return None, ("`%s` 裡抓不到 `rule_type` 的 selection 值域——錨點壞了"
+                  % _BULK_GRANT_RULE_MODEL_REL)
+
+
+def check_bulk_grant_ruler_sync(root):
+    """第 37 條：allow+include 的 bulk-grant 型別清單，前後端必須是同一份。
+
+    見檔頭第 37 條。三個判準，全部是**列名**不是數量：
+
+    1. 後端 `_BULK_GRANT_RULE_TYPES`（守衛真的讀的那一份）與前端
+       `BULK_GRANT_RULE_TYPES`（builder 用來濾下拉選單的那一份）**集合相等**；
+    2. 兩個錨點都抓得到——抓不到當違規，不當通過（否定性判準的必要配套）；
+    3. 兩份裡的每個值都是 `rule_type` Selection 的合法鍵——打錯字的型別在
+       `in` 比對下**永遠不命中**，守衛與過濾同時靜默失效，而輸出跟「這一型不在
+       清單裡」完全一樣。
+
+    🔴 為什麼值得一條 gate：兩份漂開沒有任何 runtime 訊號。UI 照樣提供那個選項、
+    租戶填完值送出、伺服器丟 ValidationError——租戶看到的是「我照 UI 選的，它說
+    不行」，而開發側全綠（repo-lint 綠、odoo-tests 綠、前端沒有測試）。#543 的
+    根因就是同一種形態：「守衛清單」與「migration bypass 清單」是分離的兩份。
+
+    ⚠ **已命名的盲區**（不是遺漏）：本條只對帳 bulk-grant 這一份清單。同檔
+    `setDecision('bypass')` 分支另有一份 identity 型別字面量
+    （`email_domain` / `email_list`），它鏡像的是
+    `_check_decision_selector_compat`，不在本條射程內。
+    """
+    if not _addon_source_tree_present(root):
+        return _wrong_root_result("bulk-grant-ruler-sync",
+                                  "check_bulk_grant_ruler_sync",
+                                  BULK_GRANT_SYNC_REF)
+    violations = []
+    py_types, py_err = _bulk_grant_py_types(root)
+    js_types, js_err = _bulk_grant_js_types(root)
+    domain, domain_err = _bulk_grant_rule_type_domain(root)
+    for err in (py_err, js_err, domain_err):
+        if err:
+            violations.append("%s（%s）" % (err, BULK_GRANT_SYNC_REF))
+    if py_types is None or js_types is None:
+        return violations
+    if py_types != js_types:
+        violations.append(
+            "bulk-grant 型別清單前後端不一致：`%s` 的 `%s` = %s，`%s` 的 `%s` = %s"
+            "（只在後端 = UI 讓租戶選得到卻必被拒；只在前端 = 守衛根本沒擋，UI 只是"
+            "藏起來，直接打 API 就進得去）。差集 py-only=%s / js-only=%s（%s）"
+            % (_BULK_GRANT_PY_REL, _BULK_GRANT_PY_NAME, sorted(py_types),
+               _BULK_GRANT_JS_REL, _BULK_GRANT_JS_NAME, sorted(js_types),
+               sorted(py_types - js_types), sorted(js_types - py_types),
+               BULK_GRANT_SYNC_REF))
+    if domain:
+        for name, types in (("py", py_types), ("js", js_types)):
+            unknown = sorted(types - domain)
+            if unknown:
+                violations.append(
+                    "bulk-grant 清單（%s 側）含不存在的 rule_type %s——合法值域是 %s。"
+                    "打錯字的型別在 `in` 比對下永遠不命中，守衛與 UI 過濾雙雙靜默"
+                    "失效，而輸出跟「這一型本來就不在清單裡」一模一樣（%s）"
+                    % (name, unknown, sorted(domain), BULK_GRANT_SYNC_REF))
     return violations
 
 
