@@ -122,7 +122,8 @@ related:
 
 ### Phase 5 — 收尾（切換後 ≥2 週）
 
-- [ ] 5.1 mcp-odoo×3／n8n 改指 `paas-odoo.paas-system.svc`；先驗 `paas-system` NetworkPolicy 是否放行來源 ns。⚠ **要提前**：4.10 起 mcp-odoo×2 已壞（指向 scale 0 的舊 Odoo）；另 Phase 4 撈出的 follow-up：Fleet Monitored=False（4.6）、prod-rack 三條規則的 `noTLSVerify` 關回、舊 tunnel 殘留路由清理、workers=6＋8072 路由、PVC `incoming/` 1.7G 最終快照可刪（離叢集副本拉完後）
+- [x] 5.1 mcp-odoo×3／n8n 改指 `paas-odoo.paas-system.svc`；先驗 `paas-system` NetworkPolicy 是否放行來源 ns。**09-04 16:33–16:36Z 提前做完（Relay，Eugene go）**：cm `mcp-admin-config`（4 key）／`mcp-admin-init-config`（2 key）→ `http://paas-odoo.paas-system.svc`／`woow_prod`＋rollout mcp-odoo／mcp-odoo-admin；順手修 `n8n-mcp` 既有故障（`N8N_API_URL` 指向 woowtech-n8n ns 一個 replicas=0 的 n8n → `n8n.woowtech-odoo.svc:5678`）。驗：XML-RPC uid=2、四模型筆數與舊站一致、MCP 端到端 initialize→38 tools→`search_count` 599、n8n-mcp `/api/v1/workflows` 200。**不動**：mcp-odoo-social（連 Odoo SaaS，且 /data 在 PVC、改 CM 不生效）、n8n 本體（走外部 https://aiot.woowtech.io，已通）。paas-system NP 不必改（ingress 無 from）。
+  - Phase 4 撈出的 follow-up 落地紀錄：**Fleet Deployed／Monitored=False → CD #133**（09-04 16:45Z；比預期急：helm rev 100 起 failed、CD 停擺；選 B＝chart 原生 `odooDatabaseFilter`＋刪重複 env，DB pod 不重啟；合併後 Ready=False 一次——helm 3-way 把兩條 env 一起刪掉，下一張 PR 補回原位，Groove 四實驗證明）；**workers=6＋websocket 8072 → CD #134**（09-04 23:39Z；`extraContainerPorts`／`service.extraPorts`／`ingress.extraPaths`＋`extraRules` 四 host `/websocket`／conf `gevent_port`＋`db_maxconn 6／32`／資源 2/4Gi→6/8Gi；驗：Fleet 四條件 True、8072 LISTEN、log `Evented Service … 0.0.0.0:8072`、四 host 握手 101——⚠ 探針要 `--http1.1`＋`Origin`）。仍待：prod-rack 三條 `noTLSVerify` 關回、舊 tunnel 殘留路由、PVC `incoming/` 1.7G 快照可刪、`odooSkipInstall→true` 與 `correctDrift` 兩個政策題、Discuss 兩帳號即時收訊（Eugene）
 - [ ] 5.2 密碼全輪換（admin、SMTP、postgres、GitHub token、CF tunnel token）
 - [ ] 5.3 alan 的 HA：`helm uninstall` ＋ 刪 `paas-ws-8594c519`（PVC 隨 `longhorn-delete` 消失，已裁決）
 - [ ] 5.4 `billing-philosophy.md` §5 補「本次為反向操作」對照段
