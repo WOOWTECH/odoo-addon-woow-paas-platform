@@ -9,6 +9,35 @@ incident.  This global finance ledger is assigned to the Odoo role
 `account.group_account_manager` (not a Workspace role): it can read all
 incidents across all companies, and review activities go to all current
 managers in that Odoo group.
+
+Module contract（#1052）
+=======================
+
+本檔除了 ``BillingIncident`` 之外還住著五個 Odoo std model 的 override——
+``ResUsers``／``ResGroups``／``MailMessage``／``IrAttachment``／``MailActivity``
+——它們是 incident 的 **enforcement surface**，與 ``BillingIncident`` 同檔是刻意的，
+不是「ACL 順手放這裡」。拆檔之前要知道的四件事：
+
+1. **roster→review 鎖序是跨 class 的不變式。** ``MailActivity._action_done`` 與
+   ``MailActivity.unlink`` 必須經 ``BillingIncident._acquire_review_activity_locks``
+   進入，**不可**直接呼叫 ``_acquire_review_activity_lock``；``ResUsers``／
+   ``ResGroups`` 的 create/write/unlink 必須先取 ``_acquire_billing_roster_lock``。
+   這條由 ``scripts/audit/test_billing_incident_policy_986.py`` 以**單一檔案**的
+   AST 斷言——它把本檔 parse 成一張 class 表再逐 class 檢查。
+2. **``_incident_chatter()`` 是兩面協定。** grant 半邊在 ``BillingIncident``
+   （``_log``／``_resolve`` 流程內），gate 半邊 ``_is_incident_chatter()`` 在
+   ``MailMessage`` 的 create/write/unlink 守衛裡；拆開兩檔就是把授權者與它的閘門
+   物理分離。
+3. **六個 module-private 名字兩側共用**：``_logger``、``_is_incident_chatter``、
+   ``_is_odoo_module_uninstall``、``_is_activity_scheduler``、
+   ``_acquire_billing_roster_lock``、``_active_account_manager_roster_ids``。
+   另有 ``_acquire_billing_carrier_target_locks`` 只被三個 override 用、但被
+   ``src/tests/test_billing_incident_864.py`` 以模組路徑直接 import。
+4. **任何搬家都不是「純 move」。** 先重寫上述 986 稽核測試（它寫死本檔路徑，
+   搬走 class 會 KeyError），再重指約 20 處寫死
+   ``odoo.addons.woow_paas_platform.models.billing_incident`` 的測試站點
+   （``patch('…billing_incident._logger')`` 型搬檔後會靜默假綠）。
+   ⚠ 本 docstring 前四段的措辭被 986 測試逐字斷言，改字要連測試一起改。
 """
 
 import html
@@ -2059,6 +2088,10 @@ class ResGroups(models.Model):
 # be transitional, such as a temporarily unset journal).  The targeted SQL is
 # nevertheless inside the savepoint, so a postcheck exception rolls it back;
 # the true catch-then-commit contract is covered by the multi-cursor test.
+#
+# 🔗 #1052：本 class 是 incident 的 enforcement surface 之一，與 BillingIncident
+# 同檔是刻意的——它持有 `_incident_chatter()` 協定的 gate 半邊（grant 半邊在
+# BillingIncident._log／_resolve）。拆檔前先讀檔頭「Module contract」段。
 class MailMessage(models.Model):
     _inherit = 'mail.message'
 
@@ -2886,6 +2919,11 @@ class IrAttachment(models.Model):
         return super().unlink()
 
 
+# 🔗 #1052：本 class 是 incident 的 enforcement surface 之一，與 BillingIncident
+# 同檔是刻意的——_action_done／unlink 直呼 BillingIncident 的
+# _acquire_review_activity_locks／_ensure_review_activities_current_cursor／
+# _free_text_ingress_category，鎖序由 scripts/audit/test_billing_incident_policy_986.py
+# 以單檔 AST 斷言。拆檔前先讀檔頭「Module contract」段。
 class MailActivity(models.Model):
     _inherit = 'mail.activity'
 
