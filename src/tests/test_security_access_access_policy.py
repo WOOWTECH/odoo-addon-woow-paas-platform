@@ -90,10 +90,14 @@ class TestAccessPolicyModel(TransactionCase):
                 'decision': 'deny', 'rule_type': 'email_domain',
                 'rule_value': '@acme.com'})
         # ip_range 必須是 CIDR
+        # #521 P-J：decision 刻意用 deny——allow + include + ip_range 現在會先撞
+        # 上 `_check_allow_policy_no_bulk_grant`，本格就會在「CIDR 格式」以外的
+        # 理由變綠（同樣是 ValidationError，肉眼分不出來）。deny 不受該守衛管，
+        # 探針才留在它該量的那條分支上。
         with self.assertRaises(ValidationError):
             self.Policy.create({
                 'route_id': route.id, 'name': 'bad2',
-                'decision': 'allow', 'rule_type': 'ip_range',
+                'decision': 'deny', 'rule_type': 'ip_range',
                 'rule_value': 'not-an-ip'})
 
     def test_policy_quota_enforced_sa_level_total(self):
@@ -284,11 +288,16 @@ class TestAccessPolicyModel(TransactionCase):
                                      'rule_value': 'a@x.com, b@x.com, c@x.com'})]})
 
     def test_to_dict_aggregates_rule_groups(self):
-        """to_dict 依 group 聚合 rule_ids 成 include/require/exclude 三陣列。"""
+        """to_dict 依 group 聚合 rule_ids 成 include/require/exclude 三陣列。
+
+        #521 P-J：decision 用 ``deny``——本格要在 include 群裡同時放 email_list
+        與 ip_range（才驗得出同群多條的順序），而 allow 政策的 include 已只允許
+        email_list。to_dict 不看 decision，換成 deny 不減損本格量到的東西。
+        """
         sa = self._make_sa()
         route = self._make_route(sa)
         pol = self.Policy.create({
-            'route_id': route.id, 'name': 'multi', 'decision': 'allow',
+            'route_id': route.id, 'name': 'multi', 'decision': 'deny',
             'rule_ids': [
                 (0, 0, {'group': 'include', 'rule_type': 'email_list',
                         'rule_value': 'user@acme.com', 'sequence': 1}),
@@ -359,10 +368,14 @@ class TestAccessPolicyRule(TransactionCase):
             {'name': 'AR GW', 'workspace_id': self.workspace.id})
         self.route = self.Route.create({
             'security_access_id': self.sa.id, 'subdomain_prefix': 'ar-route'})
+        # #521 P-J：鷹架 include 改用 email_list——allow 政策的 include 群組現在
+        # 只剩這一型合法（ip_range／country 已納入 `_BULK_GRANT_RULE_TYPES`）。
+        # 若鷹架留在 ip_range，整個 class 會死在 setUp，而失敗輸出跟「受測的
+        # rule 驗證真的壞了」長得一模一樣。
         self.pol = self.Policy.create({
             'route_id': self.route.id, 'name': 'base', 'decision': 'allow',
-            'rule_ids': [(0, 0, {'group': 'include', 'rule_type': 'ip_range',
-                                 'rule_value': '10.0.0.0/8'})]})
+            'rule_ids': [(0, 0, {'group': 'include', 'rule_type': 'email_list',
+                                 'rule_value': 'base@acme.com'})]})
 
     def test_everyone_rejects_value(self):
         with self.assertRaises(ValidationError):
