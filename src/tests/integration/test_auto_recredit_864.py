@@ -503,6 +503,23 @@ class TestAutoRecreditPostgresCapability864(BaseCase):
         self.assertEqual(self._wallet_tx_count(partner_id), 0)
         self.assertEqual(self._points(partner_id), 0.0)
 
+    def test_branch_b_non_twd_candidate_fails_closed(self):
+        reference, partner_id, *_rest = self._seed_branch_b('B3')
+        with self.registry.cursor() as cr:
+            cr.execute(
+                "UPDATE woow_billing_incident SET currency = 'USD' "
+                'WHERE external_ref = %s', (reference,))
+            cr.commit()
+        with self._mock_safe_query() as query:
+            summary = self._run_cron()
+        self.assertEqual(query.call_count, 2)
+        self.assertEqual(summary['needs_human'], 1)
+        self.assertEqual(self._wallet_tx_count(partner_id), 0)
+        self.assertEqual(self._points(partner_id), 0.0)
+        self.assertEqual(
+            self._incident(reference)['skip_reason'],
+            'reconstruct_incomplete')
+
     def test_shared_403_circuit_blocks_second_incident_without_http(self):
         from odoo.addons.payment_ecpay_ecpg.sdk import (
             ECPGQueryForbiddenError,

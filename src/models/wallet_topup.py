@@ -2001,6 +2001,7 @@ class WalletTopup(models.Model):
             and token.ecpg_bindcard_id
             and currency
             and currency.name == 'TWD'
+            and candidate['currency'] == 'TWD'
             and source_valid
             and (not plan or (
                 plan.amount == candidate['amount']
