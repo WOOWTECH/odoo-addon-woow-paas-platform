@@ -849,8 +849,9 @@ from . import test_migration_delegate_liveness
 
 # #1054（階段 1 量測，**未修法**）：配額計數的第二／第三家族走 `len(o2m)`，而
 # `One2many.read` → `search_fetch` 的 docstring 逐字說會套 access rules ⇒ 與 #896
-# 同機制、不同承載體。route 這邊**不能沿用** #896「當前不可達」的結論：
-# `security_access_route.security_access_id` 是普通 m2o（沒有 compute_sudo 重算
-# backstop），route 側也沒有 #848 那種 anchor-move 守衛。本檔把三個問題寫成斷言
-# 讓 CI 的紅綠集合回答，**預期在 develop 上有紅**（紅的那幾格就是量測結果）。
+# 同機制、不同承載體。🔴 第一趟量測（run 2668）翻掉了「非成員 = 少算載體」這個
+# 前提：o2m 取值前先有一道對**父記錄**的 `check_access('read')`
+# （`models.py:4124 fetch`）⇒ 讀不到錨點的人 fail-closed（AccessError），讀得到的
+# 人必是成員、而成員看得到整池（0-或-全）。所以本檔的判別式改成直接量「有沒有
+# 『寫得動父記錄、卻只看得到一部分子列』的身分」（A6／C5），三種結論由紅綠讀出。
 from . import test_quota_len_o2m_reach_1054
