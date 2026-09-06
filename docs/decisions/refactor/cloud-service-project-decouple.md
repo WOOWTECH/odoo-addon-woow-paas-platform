@@ -142,7 +142,7 @@ Odoo `ir_rule.py:140-168` 對同 group 多 rule 採 **OR 語意**。`project.pro
    - `project.task_visibility_rule_project_user`
    恢復其中任一條，B1 leak（[[cross-workspace-task-data-leak]]）立刻復活。Migration `src/migrations/18.0.1.0.23/post-migrate.py:93-107` 是這個 invariant 的 enforcement 點。
 5. **`base.group_user` 在 `project.project` / `project.task` 上的 ACL 必須 + ir.rule 框住**：今天 `ir.model.access.csv:26-27` 給 RWCU，靠 `project_rule_workspace_member` + `project_task_rule_workspace_member` 兩條 rule 收緊。任何拔 rule 但留 RWCU 的動作 = leak。
-6. **AI prompt 注入 `helm_values` 必須經 `_sanitize_helm_values`**（`src/models/discuss_channel.py:41-49`）。新增任何把 `service.helm_values` 流向使用者可見 surface（AI prompt / logs / API response）的程式碼，要先檢查 sanitizer 是否覆蓋。
+6. **AI prompt 注入 `helm_values` 必須經遮罩。** 現行機制（2026-06-05 `6347c154` 起，取代原 `discuss_channel.py` 的 `_sanitize_helm_values`）：`src/models/agent_session.py` 的 `_ctx_service_config()`——先按 template 的 `agent_context_keys` **whitelist 抽取** key path（fail-closed，沒白名單就整段不注入），再以 `_sanitize_obj()` 做第二層遮罩，超長即丟棄。API response 面另由 `src/controllers/paas.py` 的 `PaasController._sanitize_helm_values` 遮（spec-driven `type: password` ＋ 黑名單）。⚠ `agent_session.py` 仍留一支**無呼叫者**的 `_sanitize_helm_values()`（#1052 盤點時發現，死碼）——別把它當成現行守線。新增任何把 `service.helm_values` 流向使用者可見 surface（AI prompt / logs / API response）的程式碼，要先檢查上述兩道 sanitizer 是否覆蓋。
 7. **`***REDACTED***` 字面 literal 是 audit token**。改名要全 grep 同步（codebase + tests + plan + 既有 incident docs）。
 
 ## See also
