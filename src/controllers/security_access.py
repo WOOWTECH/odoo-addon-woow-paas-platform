@@ -634,6 +634,13 @@ class SecurityAccessController(Controller):
         sub = sa.sudo().subscription_id
         if sub and sub.sh_subscription_plan_id:
             quota = sub.sh_subscription_plan_id.sa_max_routes
+            # #1054：與 model 端 `_check_route_quota` 同形的 `len(o2m)`（同一
+            # 個機制，見那邊的註解）。這一層更不會少算：呼叫者一律先過
+            # `_get_workspace_or_error()`（要有該 workspace 的 workspace_access
+            # 列）⇒ 必是成員 ⇒ route 的 ir.rule 讓他看得到整池。⛔ 兩層要
+            # lock-step：model 端哪天補上 sudo，這裡也要一起補，否則前置與
+            # constraint 的口徑分歧會是靜默的。守線＝
+            # `src/tests/test_quota_len_o2m_reach_1054.py`。
             count = len(sa.route_ids)
             if count >= quota:
                 return {"success": False,
