@@ -45,6 +45,7 @@ from unittest.mock import MagicMock, patch
 from odoo.exceptions import UserError
 from odoo.tests.common import TransactionCase, tagged
 from ..models.cloud_service import _internal_provision
+from .operator_contract import status_response  # #1052：get_status 形狀的唯一定義處
 from .smart_home_fixture import sh_model  # #524：建立閘 fixture helper
 
 # 兩個 model 都在**自己的 module namespace** 頂部 `from ..services.paas_operator import
@@ -219,19 +220,12 @@ class TestHealthyProvisionUnchanged(_SmartHomeCase):
 # ====================================================================== #
 
 def _status(release_status='deployed', pods=None, **extra):
-    """組一份 operator ``get_status`` 形狀的回應（沿用 W5a 測試的形狀）。"""
-    body = {
-        'release': {'status': release_status, 'revision': 1},
-        'pods': pods if pods is not None else [],
-        'pod_retrieval_error': None,
-        'vm_included': False,
-        'vmis': None,
-        'datavolumes': None,
-        'vmi_retrieval_error': None,
-        'datavolume_retrieval_error': None,
-    }
-    body.update(extra)
-    return body
+    """組一份 operator ``get_status`` 形狀的回應（沿用 W5a 測試的形狀）。
+
+    #1052：形狀的唯一定義處是 ``operator_contract.status_response``（與本檔原本手抄的
+    8 key 版本逐 key 相同）。
+    """
+    return status_response(release_status, pods, **extra)
 
 
 class _ReadinessCase(TransactionCase):

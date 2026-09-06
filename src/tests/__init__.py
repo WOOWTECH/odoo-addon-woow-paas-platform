@@ -842,3 +842,7 @@ from . import test_trade_no_semantics_993
 # 🔴 測試刻意**直接以寫入者 env 呼叫守衛**：走 compute_sudo 重算那條修前也會擋
 # （測試會「修前綠」＝零鑑別力），走 CS→CS write 那條修前紅在 #848 而非本格。
 from . import test_policy_quota_pool_sudo_896
+# #1052：8 支 _woow_migrate_* delegate 只有 1 支有刪除守衛；本檔掃 migrations/ 的呼叫點
+# 逐一 hasattr（陽性對照＝_KNOWN 的 13 對必須都被掃到，含 5 支不帶前綴的）。operator_contract.py 是共用件、
+# 刻意不在此登記（同 smart_home_fixture.py）。
+from . import test_migration_delegate_liveness
