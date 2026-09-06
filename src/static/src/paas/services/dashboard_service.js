@@ -1,49 +1,7 @@
 /** @odoo-module **/
 import { reactive } from "@odoo/owl";
 import { _t } from "@web/core/l10n/translation";
-
-/** Default timeout for API requests (30 seconds). */
-const REQUEST_TIMEOUT_MS = 30000;
-
-/**
- * JSON-RPC helper. Mirrors the shape used by profile_service / cloud_service /
- * billing_service so the dashboard error handling matches the rest of the app.
- */
-async function jsonRpc(url, params, timeoutMs = REQUEST_TIMEOUT_MS) {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-    let response;
-    try {
-        response = await fetch(url, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-                jsonrpc: "2.0",
-                method: "call",
-                params,
-                id: Math.floor(Math.random() * 1000000),
-            }),
-            signal: controller.signal,
-        });
-    } catch (error) {
-        if (error.name === "AbortError") throw new Error(_t("Request timed out."));
-        throw new Error(_t("Network error."));
-    } finally {
-        clearTimeout(timeoutId);
-    }
-    if (!response.ok) {
-        if (response.status === 401) throw new Error(_t("Session expired. Please refresh."));
-        if (response.status === 403) throw new Error(_t("Access denied."));
-        if (response.status >= 500) throw new Error(_t("Server error."));
-        throw new Error(_t("Request failed (%s)", response.status));
-    }
-    const json = await response.json();
-    if (json.error) {
-        const msg = json.error.data?.message || json.error.message || _t("Request failed");
-        throw new Error(msg);
-    }
-    return json.result;
-}
+import { jsonRpc } from "./rpc";
 
 /**
  * dashboardService — reactive store for the post-login dashboard summary.

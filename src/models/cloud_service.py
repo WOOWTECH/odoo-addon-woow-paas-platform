@@ -23,6 +23,16 @@ _logger = logging.getLogger(__name__)
 #: #528 的待回收 CF Access policy 帳本（三腿共用）。
 _CF_REAP_MODEL = 'woow_paas_platform.cf_access_policy_reap'
 
+#: #1052：租戶勾選的 addon 在 Odoo pod 內的落點。`_build_odoo_addon_helm_values` 的 initContainer
+#: 把 addon 複製到這裡、再用 sed 把它 append 進 odoo.conf 的 addons_path。兩段 sed 打的 conf
+#: 路徑字面不同：initContainer 用 PVC 路徑 `/bitnami/odoo/conf/odoo.conf`（run.sh 之前 /opt 那條
+#: 還不存在，見 docs/tracking/landings/prod-odoo-paas-not-installed.md），post-init script 與
+#: operator 側 `extra/paas-operator/src/services/odoo_scripts/update_module_list.py`
+#: （`ODOO_CONF_PATH`）用 `/opt/bitnami/odoo/conf/odoo.conf`；operator 讀到的 addons_path 就是
+#: 那次 append 的結果。兩個 sed 的冪等判準是 `grep -q "selected-addons"`，所以路徑必須含
+#: `selected-addons` 這段（守衛：test_helm_values_addon_builder_1052）。
+ODOO_SELECTED_ADDONS_PATH = '/opt/bitnami/odoo/selected-addons'
+
 
 # ------------------------------------------------------------------------- #
 #  #519：cloud_service 的建立閘（private sentinel）                           #
@@ -1678,7 +1688,7 @@ class CloudService(models.Model):
                 copy_addons.append(addon.technical_name)
 
         values = {}
-        selected_addons_path = '/opt/bitnami/odoo/selected-addons'
+        selected_addons_path = ODOO_SELECTED_ADDONS_PATH
 
         if copy_addons:
             addon_list = ' '.join(copy_addons)

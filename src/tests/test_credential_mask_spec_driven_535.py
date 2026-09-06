@@ -38,7 +38,8 @@ _ANCHOR_PASSWORD_SPECS = {
 def _password_keys_of(template):
     """獨立於受測程式碼，自己把 template 的 password spec key 解出來。
 
-    刻意**不呼叫** ``PaasController._parse_helm_value_specs`` / ``_password_spec_paths``：
+    刻意**不呼叫** ``CloudAppTemplate._parse_helm_value_specs``（#1052 自 controller 搬入）
+    / ``PaasController._password_spec_paths``：
     那是受測物的一部分，拿它產生測試資料的話，它壞掉時測試會一起退化成 0 輪迴圈
     （探針與被測物同時失效、輸出卻和「全部通過」一模一樣）。
     """

@@ -859,3 +859,5 @@ from . import test_lifecycle_is_halted_seam_1052
 # 人必是成員、而成員看得到整池（0-或-全）。所以本檔的判別式改成直接量「有沒有
 # 『寫得動父記錄、卻只看得到一部分子列』的身分」（A6／C5），三種結論由紅綠讀出。
 from . import test_quota_len_o2m_reach_1054
+
+from . import test_helm_values_addon_builder_1052  # #1052：addon helm values builder characterization
