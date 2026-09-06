@@ -210,6 +210,12 @@ class AccessResyncCron(models.AbstractModel):
         savepoint 是必須的：`_sync_access_to_operator()` 在真的打到 operator 之後
         才回存 CF id、消帳、清旗標，中途拋例外時那些半成品必須跟著回捲，否則下一
         輪面對的是一個「旗標還在、但列上狀態已經被改過一半」的列。
+
+        ⚠ #1052 標記（非裁定）：這個 savepoint 同時包住 operator 外呼與 2xx 之後的
+        落帳——落帳失敗會回捲到「外部已生效、DB 未記」的狀態，這正是
+        docs/decisions/patterns/post-commit-bookkeeping-rollback-unit.md 要避免的
+        形態；且下方 `except Exception` 未分流 OperationalError（該 doc 規則一）。
+        是否因為下一輪 resync 會重推而刻意如此，待裁定；裁定前別照抄本站形狀。
         """
         try:
             with self.env.cr.savepoint():

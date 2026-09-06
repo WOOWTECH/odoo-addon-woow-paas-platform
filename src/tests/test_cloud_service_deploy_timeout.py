@@ -32,6 +32,7 @@ from unittest.mock import MagicMock, patch
 from odoo import fields
 from odoo.tests.common import TransactionCase
 from ..models.cloud_service import _internal_provision
+from .operator_contract import status_response  # #1052：get_status 形狀的唯一定義處
 
 
 # 容器型的預設門檻（分鐘）。實作端以模組常數提供，測試這裡獨立寫一份——
@@ -51,18 +52,13 @@ _VIRT_LAUNCHER = [{'name': 'virt-launcher-svc-test', 'phase': 'Running',
 
 
 def _status(release_status='deployed', pods=None, **vm_fields):
-    """組一份 operator ``get_status`` 形狀的回應（與 W5a 測試同型）。"""
-    body = {
-        'release': {'status': release_status, 'revision': 1},
-        'pods': pods if pods is not None else [],
-        'vm_included': False,
-        'vmis': None,
-        'datavolumes': None,
-        'vmi_retrieval_error': None,
-        'datavolume_retrieval_error': None,
-    }
-    body.update(vm_fields)
-    return body
+    """組一份 operator ``get_status`` 形狀的回應（與 W5a 測試同型）。
+
+    #1052：形狀的唯一定義處是 ``operator_contract.status_response``；本檔原本手抄的
+    7 key 版本少了 ``pod_retrieval_error``，消費端一律 ``.get()``，多一個 ``None`` key
+    與缺 key 等價。
+    """
+    return status_response(release_status, pods, **vm_fields)
 
 
 def _vm_stuck_status(**overrides):
