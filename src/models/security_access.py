@@ -513,8 +513,17 @@ def _assert_route_anchor_move_authorised(records, vals):
     例外**刻意不包裝**：`check_access` 自己拋的 `AccessError` 已經指名是哪個 model
     的哪個操作被拒，再包一層等於多一個會與 ir.rule 漂開的訊息來源。⇒ 守線測試斷言
     的是 exception **class**（本守衛 `AccessError`／identity-anchor 守衛
-    `UserError`／`write()` 之後的 validator `ValidationError`，三類互斥），
-    ⛔ 不斷言訊息字串。
+    `UserError`／`write()` 之後的 validator `ValidationError`），⛔ 不斷言訊息字串。
+
+    ⚠ 那三類互斥只涵蓋「目標 SA **存在**」的情形。`new_id` 指向一列**不存在**的
+    記錄時（已被刪除、或呼叫端猜的整數），這裡不是拋 `AccessError` 而是
+    `MissingError`——`check_access` 內部的 `filtered_domain` 會去讀那一列的
+    `workspace_id`，`Field.__get__` 對抓不到的 real record 直接拋。⛔ 不要「順手加
+    `.exists()`」：空 recordset 的 `check_access` 因 `any(self._ids)` 為假而**整段
+    跳過**，那會把「目標不存在」變成**放行**（比現狀糟），要收就得顯式判存在性再
+    fail-closed。本函式**刻意維持現狀**：搬移仍然不落地（例外發生在 `super().write()`
+    之前），而 #848／#941 兩道同型守衛是同一個形狀——單獨收斂這一道會製造三道之間
+    的漂移。⇒ 三道一起收斂，另開單（本單只在此記明，⛔ 不在這裡順手動）。
 
     ## **舊**錨點刻意不再驗一次（與 #848／#941 同一個依賴，不是遺漏）
 

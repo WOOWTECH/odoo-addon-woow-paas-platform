@@ -55,15 +55,20 @@ Access 狀態推向受害者那一側。A3 把「被拒之後那次 sync 一次�
 
 ## 🔴 本檔最容易假綠的那一格，與五道對策
 
-route 的 `write()` 之後還有 `@api.constrains` 會拋 `ValidationError`，而配額守衛的
-read 副作用會拋 `AccessError`——**與本守衛同一個 class** ⇒ 只斷言「有拋 AccessError」
-的攻擊格，在守衛不存在時（有訂閱的受害者）一樣會綠。對策：
+route 的 `write()` 之後還有 `@api.constrains` 會拋 `ValidationError`，而配額守衛
+讀 o2m 的 read 副作用會拋 `AccessError`——**與本守衛同一個 class** ⇒ 只斷言「有拋
+AccessError」的攻擊格，在守衛不存在時（有訂閱的受害者）一樣會綠。對策：
 
 1. 攻擊格的受害者 SA 一律**無訂閱**（配額守衛整條 continue）⇒ 副作用不會發生。
 2. B2（有訂閱）那一格改用 **traceback 的函式名存在性**當判準，⛔ 不用 exception
-   class（那一格兩邊都是 `AccessError`，class 零鑑別力）。
-3. C4「patch 掉守衛、攻擊必須翻回成功且值落地」——唯一能區分「我的守衛擋的」與
-   「別的東西擋的」的判別式。
+   class。⚠ 那一格守衛失效時**不是** #1054 B2 量到的 `AccessError`：本檔的
+   Mallory 是 wsB 的成員（#1054 的 attacker 不是）⇒ 她讀得到受害者 SA、也看得到
+   整池 route ⇒ 撞的是配額本身的 `ValidationError`。它的 `except` 因此收兩類，
+   讓紅落在判準那句而不是變成未捕捉例外的 ERROR。
+3. C4「patch 掉守衛、攻擊必須翻回成功且值落地」——它是「A1 的綠是守衛造成的」的
+   判別式。⚠ **C4 對「呼叫點被整行拿掉」這種 mutation 零鑑別力**（`patch()` 換的
+   是 module 屬性，呼叫點不在就不會被觸發 ⇒ C4 照樣綠）⇒ ⛔ 不可拿 C4 的綠單獨
+   當「守衛還在」的證據，要配 A1／A2／A3／B2c／B2／C3a 一起讀。
 4. 每格攻擊前跑 `_tenant_write_positive_control`。
 5. 值落地與否一律讀**裸 SQL**（`_db()`），不用 ORM——ORM 讀會把「這一列已經被判給
    別人、我讀不到」誤讀成「寫入被丟棄」。
@@ -164,8 +169,11 @@ class _RouteAnchorMove1071Fixture(HttpCase):
     * SA 一律**不給訂閱** ⇒ `_check_route_quota` 開頭 `continue` ⇒ 配額守衛的
       read 副作用（今天唯一擋得住有訂閱受害者的東西）不參與，攻擊格量到的是
       **授權層**本身。B2 那一格是唯一的例外，它自己掛訂閱。
-    * route 建立時走 `_skip_route_sync` ⇒ create 腿不打 operator；回傳時把 context
-      關掉，這樣測試裡的 write 才走得到真實的 sync 觸發（A3 需要）。
+    * route 建立時走 `_skip_route_sync` ⇒ create 腿不打 operator。回傳時
+      `.with_context(sa_skip_route_sync=False)` 只是**不讓這個 fixture 物件把 skip
+      sentinel 帶進後續任何直接對它做的 ORM write**（照 #941 `_route()` 的慣例）——
+      ⛔ 它**不是** A3 的前提：A3 走真 RPC，server 端從 session 重建 env，Python
+      物件身上的 context 根本傳不過去（覆核時實測過這條因果不成立）。
     """
 
     def setUp(self):
@@ -562,9 +570,17 @@ class TestRouteAnchorMoveReach1071(_RouteAnchorMove1071Fixture):
         那是 incidental 的：配額守衛哪天改成 `sudo()` 讀、或受害者取消訂閱，
         保護就無聲消失。
 
-        🔴 判準因此**不能**是 exception class——配額那條路與本守衛拋的都是
-        `AccessError`，class 在這一格零鑑別力。改用 traceback 的**函式名存在性**
+        🔴 判準因此**不能**是 exception class。改用 traceback 的**函式名存在性**
         （⛔ 不用行號：行號會被任何一次 docstring 增修整段推移，而那種失效是靜默的）。
+
+        ⚠ `except` 刻意收兩類（覆核時推導出來的，⛔ 不要收窄回單一 `AccessError`）：
+        本檔的 Mallory **是** wsB 的普通成員（#1054 的 attacker **不是**）⇒ 守衛被
+        拿掉時她讀得到受害者 SA、也看得到它底下**整池** route ⇒ `_check_route_quota`
+        數到 2 > 上限 1，拋的是 `ValidationError` 而不是 #1054 B2 那趟的
+        `AccessError`。只收 `AccessError` 會讓守衛失效那趟變成**未捕捉例外的
+        ERROR**，紅在 traceback 頂端而不是紅在下面那句判準上——訊息因此說不出
+        「擋它的不是新守衛」這件事。收兩類之後 GREEN 輪不受影響（守衛先拋
+        `AccessError`，frame 含守衛 ⇒ 綠）。
 
         ⚠ 與檔頭「攻擊一律走真 RPC」的紀律相反，理由同 class docstring：
         `call_kw` 的錯誤封包只帶 `name`／`message`，拿不到 traceback。
@@ -581,22 +597,26 @@ class TestRouteAnchorMoveReach1071(_RouteAnchorMove1071Fixture):
 
         try:
             view.write({'security_access_id': self.sa_b.id})
-        except AccessError:
+        except (AccessError, ValidationError) as exc:
+            raised = exc
             frames = traceback.extract_tb(sys.exc_info()[2])
         else:
             self.fail('有訂閱的受害者 SA 這條路同樣必須被擋')
 
         names = [f.name for f in frames]
-        _logger.info('[1071][B2] RAW subscribed-victim frames=%r', names)
+        _logger.info('[1071][B2] RAW subscribed-victim raised=%s frames=%r',
+                     type(raised).__name__, names)
         self.assertEqual(
             self._db(_ROUTE, self.route_a.id, 'security_access_id'),
             self.sa_a.id,
             '被拒的搬移不得留下任何錨點變更')
         self.assertIn(
             '_assert_route_anchor_move_authorised', names,
-            '#1071：有訂閱時擋下來的必須是**新守衛**，不是配額守衛讀 o2m 的'
-            ' read 副作用（那道 incidental 的保護會隨配額實作改寫而無聲消失，'
-            '⛔ 不可拿它當授權層）。實際 traceback 的 frame 依序為 %r' % (names,))
+            '#1071：有訂閱時擋下來的必須是**新守衛**，不是 `_check_route_quota` 的'
+            '副作用（讀不到受害者 SA 的 `AccessError`／數到超額的 `ValidationError`'
+            '——兩者都是配額實作的偶然產物，改寫成 `sudo()` 讀或取消訂閱就無聲消失，'
+            '⛔ 不可拿它當授權層）。實際擋它的是 %s，traceback 的 frame 依序為 %r'
+            % (type(raised).__name__, names))
 
 
 class TestRouteAnchorMoveCreateBackstop1071(_RouteAnchorMove1071Fixture):
@@ -818,9 +838,15 @@ class TestRouteAnchorMoveInjectionControls1071(_RouteAnchorMove1071Fixture):
     def test_C4_injection_control_disabling_the_guard_lets_the_attack_land(self):
         """🔴 注入對照：把守衛停用，A1 的攻擊必須**翻回成功且值落地**。
 
-        這是「A1 的綠是守衛造成的」唯一的判別式，也是本單端到端可利用性的直接
-        證據（真 HTTP session ＋非 su 租戶＋守衛停用）。run 2674 的 B2c 已經量到
-        同一個結論；本格把它變成**每次 CI 都重跑**的對照，而不是一次性的觀測。
+        這是「A1 的綠是守衛造成的」判別式，也是本單端到端可利用性的直接證據
+        （真 HTTP session ＋非 su 租戶＋守衛停用）。run 2674 的 B2c 已經量到同一個
+        結論；本格把它變成**每次 CI 都重跑**的對照，而不是一次性的觀測。
+
+        ⚠ **本格對「呼叫點被整行拿掉」那一種 mutation 零鑑別力**：`patch(_GUARD)`
+        替換的是 module 屬性，`write()` 裡不再呼叫它時 patch 根本不會被觸發 ⇒ 攻擊
+        照樣落地、本格照樣綠。⇒ ⛔ 不可拿本格的綠單獨當「守衛還在」的證據；那件事
+        由 A1／A2／A3／B2c／B2／C3a 負責，本格負責的是反向那一半（「守衛在的時候，
+        把它拿掉攻擊就會成功」）。
         """
         self.authenticate(self.mallory_login, self.mallory_login)
         self._tenant_write_positive_control(self.route_a.id, 'c4')
@@ -950,8 +976,9 @@ class TestRouteAnchorMoveEdgeCases1071(_RouteAnchorMove1071Fixture):
             self.assertIn(
                 self.sa_a2.id, checked,
                 '探針前提：值真的改變時，spy 必須錄到守衛對新 SA(%r) 的'
-                ' `check_access(\'write\')`；錄不到代表 spy 沒掛上去，'
-                '下面那句「零呼叫」就零鑑別力（實際錄到 %r）'
+                ' `check_access(\'write\')`；錄不到有兩種成因——spy 沒掛上去，'
+                '或**守衛的呼叫點／那行 check_access 被拿掉了**——兩者都會讓'
+                '下面那句「零呼叫」零鑑別力（實際錄到 %r）'
                 % (self.sa_a2.id, seen))
             seen.clear()
 
