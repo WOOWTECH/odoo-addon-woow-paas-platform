@@ -32,7 +32,7 @@ Odoo 全套跑完印的是
 | 檔案沒被 `tests/__init__.py` 匯入（機制 A，#467） | ❌ | ❌ | ❌ 完全看不出來 | repo-lint |
 | 基底拿不到 `test_tags`（機制 B，#544／#684） | ❌ | ❌ | ❌ | repo-lint |
 | 整批 deselect（tag 沒匹配／module 沒裝） | ❌ | ❌ | ❌ | **C0／C3** |
-| 測試 class／方法被靜默刪掉 | ❌ | ❌ | ❌ | **C2** |
+| 測試 class／方法增減後 baseline 漂移 | ❌ | ❌ | ❌ | **C2** |
 | **skip** | ✅ | ✅ | ❌（`skipped` 不出現在 summary） | **C4** |
 | 新增紅燈 | ✅ | ✅ | ✅（但只有數字）| **C5** |
 
@@ -50,7 +50,7 @@ Odoo 全套跑完印的是
 ## 檢查
 
     C0 --check-sentinels 完整性哨兵：必然存在的那幾條沒出現 ⇒ 本次差集結論一律不成立
-    C2 --check-baseline  靜態預測的預期 class 清單 vs baseline 檔（雙向差集）
+    C2 --check-baseline  靜態預測的預期 class 清單 vs baseline 檔（集合雙向差集＋方法數等值）
     C3 --check-executed  baseline vs 測試 log 的實際執行清單（雙向差集）
     C4 --check-skips     測試 log 的 skip 盤點（列名＋理由，配白名單）
     C5 --check-failures  失敗／錯誤**集合**差（驗收標準：集合相同、不得新增）
@@ -659,20 +659,28 @@ def check_upgrade_readiness() -> int:
 
 def _diff_report(title: str, left_name: str, right_name: str,
                  left: dict[str, int] | set[str], right: dict[str, int] | set[str]) -> int:
-    """雙向差集並列名。
+    """雙向差集與共同項目的計數等值比對，逐項列名。
 
     ⚠ 為什麼一定要雙向：單向（只檢查 baseline 每一項是否還在）有假綠洞——
     **把項目從 baseline 拿掉就通過了**。雙向才會讓「baseline 被偷偷刪一行」以
     「actual 多出一項」的形式浮上來。
+
+    dict 的共同項目也必須雙向檢查計數：變少代表測試消失，變多代表新增測試後
+    baseline 已過期。growth 若只 warning，C2 仍會以成功退出碼放行過期 baseline，
+    並讓後續 C3 把 baseline drift 誤報成執行缺漏；因此兩個方向都直接 FAIL。
     """
     ls, rs = set(left), set(right)
     gone, added = sorted(ls - rs), sorted(rs - ls)
     shrunk = []
+    grown = []
     if isinstance(left, dict) and isinstance(right, dict):
         shrunk = sorted(
             (k, left[k], right[k]) for k in ls & rs if right[k] < left[k]
         )
-    if not gone and not added and not shrunk:
+        grown = sorted(
+            (k, left[k], right[k]) for k in ls & rs if right[k] > left[k]
+        )
+    if not gone and not added and not shrunk and not grown:
         print(f"{title} PASS：{left_name} 與 {right_name} 完全一致（{len(ls)} 項）")
         return 0
     if gone:
@@ -688,6 +696,11 @@ def _diff_report(title: str, left_name: str, right_name: str,
         print(f"\n{title} FAIL — 以下 {len(shrunk)} 個 class 的 test 方法數變少了"
               "（class 還在，但裡面的測試消失了）：")
         for ident, before, after in shrunk:
+            print(f"  ! {ident}   {before} → {after}")
+    if grown:
+        print(f"\n{title} FAIL — 以下 {len(grown)} 個 class 的 test 方法數變多了"
+              "（新增測試尚未同步 baseline）：")
+        for ident, before, after in grown:
             print(f"  ! {ident}   {before} → {after}")
     return 1
 
@@ -1371,15 +1384,32 @@ def self_test() -> int:
             globals()["CLASS_FIXTURE_FAILURE_LINE"] = real_fixture_rx
             globals()["KNOWN_FAILURES"] = real_kf
 
-    # (6) 雙向差集：單向會有「把項目從 baseline 拿掉就通過」的假綠洞
+    # (6) 雙向差集與方法數等值：集合或計數任一方向漂移都要紅。
+    # growth 另配一組等值陰性對照，避免修法變成「共同鍵一律紅」仍通過 self-test。
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
         rc_del = _diff_report("X", "baseline", "actual", {"a": 1}, {"a": 1, "b": 1})
         rc_shrink = _diff_report("Y", "baseline", "actual", {"a": 5}, {"a": 3})
+        rc_growth = _diff_report(
+            "Z", "baseline", "actual",
+            {"growth_probe.TestGrowth": 2}, {"growth_probe.TestGrowth": 3},
+        )
+        rc_equal = _diff_report(
+            "W", "baseline", "actual",
+            {"equal_probe.TestEqual": 4}, {"equal_probe.TestEqual": 4},
+        )
+    diff_output = buf.getvalue()
     if rc_del == 0:
         failures.append("差集不是雙向：baseline 少一行（actual 多出來）卻通過了")
     if rc_shrink == 0:
         failures.append("沒偵測到 class 還在但 test 方法數變少")
+    if rc_growth == 0:
+        failures.append("沒偵測到 class 還在但 test 方法數變多（baseline 條數寫小）")
+    if ("growth_probe.TestGrowth" not in diff_output
+            or "2 → 3" not in diff_output):
+        failures.append("方法數 growth 雖失敗但沒有列出 class／baseline／實際條數")
+    if rc_equal != 0:
+        failures.append("方法數完全相同的陰性對照被誤判成差異")
 
     if failures:
         print("SELF-TEST FAIL：")
@@ -1392,7 +1422,8 @@ def self_test() -> int:
           "-standard 列名排除、子套件識別字、條數 0 的兩格各自列名且成因可分辨、"
           "P1 守恆＋其陽性對照）／收集面不乾淨時拒絕預測／"
           "FAILURE_LINE 注入式樣本集（%d 陽性＋%d 陰性，並用兩組共 %d 個蓄意寫壞的"
-          "變異體反驗樣本集的鑑別力）／完整性哨兵／C5 失敗集合差／雙向差集 —— 全部命中"
+          "變異體反驗樣本集的鑑別力）／完整性哨兵／C5 失敗集合差／"
+          "雙向差集＋方法數增減與等值陰性對照 —— 全部命中"
           % (sum(1 for _, i in SELF_TEST_FAILURE_LINES if i),
              sum(1 for _, i in SELF_TEST_FAILURE_LINES if not i),
              len(SELF_TEST_FAILURE_LINE_MUTANTS) +
