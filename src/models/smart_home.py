@@ -1068,7 +1068,11 @@ class SmartHome(models.Model):
             "[SH] _do_resume sh=%s name=%s state=%s pre_suspend=%s",
             self.id, self.name, self.state, self.pre_suspend_state,
         )
-        if self.state != 'suspended':
+        # #1052：判準走 mixin 的 `_is_halted()` seam——cron 已經用它決定要不要呼叫
+        # 本方法（subscription_lifecycle_cron.py），mixin 預設就是 `state == 'suspended'`，
+        # 零行為變化。內聯 literal 會讓將來的 override（#482/#497 那種「state 被改寫
+        # 但仍在停權中」）只在 cron 生效、在這裡靜默 no-op。
+        if not self._is_halted():
             return
 
         service_url = self.original_service_url or f"http://localhost:{self.ha_port}"

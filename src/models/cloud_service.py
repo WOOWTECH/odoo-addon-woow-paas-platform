@@ -2455,6 +2455,11 @@ class CloudService(models.Model):
             try:
                 # 逐筆 savepoint：一筆失敗不得中斷整批。用 savepoint 而非裸 try 是
                 # 因為 OperationalError 之後 cursor 已不可用，後續會連帶全部失敗。
+                # ⚠ #1052 標記（非裁定）：本站點是逐筆 batch isolation，不是 post-
+                # commit-bookkeeping-rollback-unit.md 講的「外部已生效後的記帳」；
+                # 下方 `except Exception` 把 OperationalError 一併吞進 failed 清單，
+                # 與該 doc 規則一（OperationalError 必須外拋）分歧。規則是否適用於
+                # 非 post-effect 站點，待裁定；裁定前別照抄本站形狀。
                 with self.env.cr.savepoint():
                     status = client.get_status(
                         namespace=service.helm_namespace,

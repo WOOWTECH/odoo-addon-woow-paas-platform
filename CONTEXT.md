@@ -44,7 +44,11 @@ _Avoid_: 「專案」「租戶」（租戶是**人**，workspace 是**容器**�
 **Workspace role**：租戶在**單一 workspace 內**的角色，一個 workspace 成員一筆，存於 `woow_paas_platform.workspace_access` 的 `role` 欄位（`required=True`、`default='user'`）。階層由低到高 `guest < user < admin < owner`（見 `src/models/workspace_access.py` 的 `ROLE_HIERARCHY`）。**同一個人在不同 workspace 可以是不同 role**；每個 workspace 恰有一個 `owner`（由 model 層 `_check_owner_count` 強制），轉移要走 `transfer_ownership`。
 _Avoid_: 「群組」「權限等級」「帳號角色」
 
-> ⚠ **`ASSIGNABLE_ROLES`（只含 admin／user／guest，用來擋「指派 owner」）的強制點只在 controller 層**（`src/controllers/paas.py` 兩處），model 層沒有對應守衛。所以「owner 不可被指派」這句話只在**走 BFF 的路徑上**成立，不是 model 不變式——描述授權時要標明是哪一層擋的。
+> ⚠ **`ASSIGNABLE_ROLES` 與 `ASSIGNABLE_ROLES_BY_ROLE` 是兩個名字很像、分居兩層、職責不同的常數——別把前者讀成「model 層沒有守衛」。**（2026-09-05 更正，#1052：本段原本寫「強制點只在 controller 層，model 層沒有對應守衛」，那是過度的敘述。）
+>
+> - **model 層有兩道守衛**（`src/models/workspace_access.py`）：`_check_assignable_role`（grantor-aware，查表 `ASSIGNABLE_ROLES_BY_ROLE`，接在 `create()`／`write()` 上——非 owner 授不出 owner、`user`／`guest` 授不出任何角色）與 `@api.constrains` 的 `_check_owner_count`（同一 workspace 第二個 owner 直接 `ValidationError`）。⚠ 前者對 `env.is_superuser()`（含任何 `.sudo()` recordset）豁免、後者不豁免；所以「一個 workspace 恰一個 owner」對 sudo 路徑也成立，「誰能授誰」對 sudo 路徑不成立。
+> - **controller 層另有一把 `ASSIGNABLE_ROLES`**（只含 admin／user／guest），只被 `src/controllers/paas.py` 的 `_invite_member`／`_update_member_role` 讀，用途是 **payload-shape 驗證**：把「指派 owner」在進 ORM 之前就擋成乾淨的錯誤，逼它走 `transfer_ownership`（demote-then-promote，走 sentinel 開閘）。它擋的形狀 model 層也擋得住（會撞 `_check_owner_count`），差別只在錯誤形態。
+> - **真正的洞不是「第二個 owner」**（constraint 擋住），而是 **sudo 路徑對 `_check_assignable_role` 的豁免**：任何 `.sudo()` 的寫入都能替 `user`／`guest` 角色的呼叫者授出 `admin`。描述授權時仍要標明是哪一層擋的、以及那一層對 su 是否生效。
 
 > ⚠ **兩者撞名，而且會撞在同一個檔案裡。** `ROLE_USER = 'user'`（Workspace role 的第二低階）與 `base.group_user`（Odoo group role）只是碰巧同字，**語意完全無關、也不互相蘊含**：一個 Workspace role 是 `owner` 的人，Odoo group role 可能是 `base.group_portal`——兩軸各自獨立。
 >
