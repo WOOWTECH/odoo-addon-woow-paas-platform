@@ -284,11 +284,6 @@ class TestCloudServiceController(TransactionCase):
 
     def test_helm_values_filtering(self):
         """Test that only allowed Helm values are passed through."""
-        # Import the controller to test the helper method
-        from ..controllers.paas import PaasController
-
-        controller = PaasController()
-
         # Values with allowed and disallowed keys
         user_values = {
             'replicas': 3,            # allowed
@@ -297,10 +292,7 @@ class TestCloudServiceController(TransactionCase):
             'image': 'evil:latest',   # NOT allowed
         }
 
-        filtered, rejected = controller._filter_allowed_helm_values(
-            user_values,
-            self.template_with_specs,
-        )
+        filtered, rejected = self.template_with_specs._filter_allowed_helm_values(user_values)
 
         # Only allowed keys should remain
         self.assertIn('replicas', filtered)
@@ -315,10 +307,6 @@ class TestCloudServiceController(TransactionCase):
 
     def test_helm_values_filtering_no_specs(self):
         """Test that all values pass through when no specs defined."""
-        from ..controllers.paas import PaasController
-
-        controller = PaasController()
-
         # Template without specs
         template_no_specs = self.Template.create({
             'name': 'No Specs Template',
@@ -335,10 +323,7 @@ class TestCloudServiceController(TransactionCase):
             'any_key': 'any_value',
         }
 
-        filtered, rejected = controller._filter_allowed_helm_values(
-            user_values,
-            template_no_specs,
-        )
+        filtered, rejected = template_no_specs._filter_allowed_helm_values(user_values)
 
         # All values should pass through, nothing rejected
         self.assertEqual(filtered, user_values)
@@ -346,28 +331,14 @@ class TestCloudServiceController(TransactionCase):
 
     def test_helm_values_filtering_empty_values(self):
         """Test filtering with empty values."""
-        from ..controllers.paas import PaasController
-
-        controller = PaasController()
-
-        filtered, rejected = controller._filter_allowed_helm_values(
-            {},
-            self.template_with_specs,
-        )
+        filtered, rejected = self.template_with_specs._filter_allowed_helm_values({})
 
         self.assertEqual(filtered, {})
         self.assertEqual(rejected, [])
 
     def test_helm_values_filtering_none_values(self):
         """Test filtering with None values."""
-        from ..controllers.paas import PaasController
-
-        controller = PaasController()
-
-        filtered, rejected = controller._filter_allowed_helm_values(
-            None,
-            self.template_with_specs,
-        )
+        filtered, rejected = self.template_with_specs._filter_allowed_helm_values(None)
 
         self.assertEqual(filtered, {})
         self.assertEqual(rejected, [])
@@ -513,7 +484,7 @@ class TestSeedTemplateHelmValueSpecs(TransactionCase):
         controller = PaasController()
         n8n = self.env.ref('woow_paas_platform.cloud_app_n8n')
 
-        specs = controller._parse_helm_value_specs(n8n)
+        specs = n8n._parse_helm_value_specs()
         required_keys = {f['key'] for f in specs.get('required', [])}
         self.assertIn('_init.owner_email', required_keys)
         self.assertIn('_init.owner_password', required_keys)
@@ -536,8 +507,6 @@ class TestSeedTemplateHelmValueSpecs(TransactionCase):
     def test_parse_tolerates_embedded_newline_fallback(self):
         """Defense-in-depth: a stray newline inside a string value must degrade to a
         tolerant parse (strict=False) and still surface the required keys, never {}."""
-        from ..controllers.paas import PaasController
-        controller = PaasController()
         tmpl = self.Template.create({
             'name': 'Newline Specs',
             'slug': 'newline-specs',
@@ -547,7 +516,7 @@ class TestSeedTemplateHelmValueSpecs(TransactionCase):
             # Literal newline embedded INSIDE the label string value.
             'helm_value_specs': '{"required": [{"key": "k", "label": "Broken\nLabel"}], "optional": []}',
         })
-        specs = controller._parse_helm_value_specs(tmpl)
+        specs = tmpl._parse_helm_value_specs()
         self.assertEqual(
             [f['key'] for f in specs.get('required', [])], ['k'],
             "parser must recover required keys from control-char JSON, not return {}",

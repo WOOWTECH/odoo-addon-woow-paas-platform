@@ -1,62 +1,15 @@
 /** @odoo-module **/
 import { reactive } from "@odoo/owl";
 import { _t } from "@web/core/l10n/translation";
+import { jsonRpc } from "./rpc";
 
 /**
- * JSON-RPC helper for Odoo API calls
- * Odoo type="json" routes wrap response in { jsonrpc: "2.0", result: {...} }
- * @param {string} url - API endpoint
- * @param {Object} params - Request parameters
- * @returns {Promise<Object>} API response result
- * @throws {Error} Network or API errors
+ * #1052：provision 走 operator 的 helm 安裝，平台側 HELM_OPERATION_TIMEOUT 是 120 秒
+ * （src/services/paas_operator.py）。本檔改用共用 rpc.js 之前沒有 client timeout；共用版
+ * 預設 30 秒會在伺服器還在等 helm 時先 abort，租戶看到 timeout、後端卻照常完成。
+ * 所以 provision 給比伺服器預算大的預算；其餘 19 個呼叫都是快速 CRUD，吃預設 30 秒。
  */
-async function jsonRpc(url, params) {
-    let response;
-    try {
-        response = await fetch(url, {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-                jsonrpc: "2.0",
-                method: "call",
-                params: params,
-                id: Math.floor(Math.random() * 1000000),
-            }),
-        });
-    } catch (networkError) {
-        throw new Error(_t("Network error. Please check your connection and try again."));
-    }
-
-    // Check HTTP status before parsing
-    if (!response.ok) {
-        if (response.status === 401) {
-            throw new Error(_t("Session expired. Please refresh the page."));
-        } else if (response.status === 403) {
-            throw new Error(_t("Access denied."));
-        } else if (response.status >= 500) {
-            throw new Error(_t("Server error. Please try again later."));
-        }
-        throw new Error(_t("Request failed with status %s", response.status));
-    }
-
-    // Parse JSON response
-    let data;
-    try {
-        data = await response.json();
-    } catch (parseError) {
-        throw new Error(_t("Invalid response from server."));
-    }
-
-    // Handle JSON-RPC error
-    if (data.error) {
-        const errorMsg = data.error.data?.message || data.error.message || _t("Unknown error");
-        throw new Error(errorMsg);
-    }
-
-    return data.result;
-}
+const PROVISION_REQUEST_TIMEOUT_MS = 150000;
 
 /**
  * @typedef {Object} WorkspaceData
@@ -606,9 +559,11 @@ export const workspaceService = reactive({
     async provisionSmartHome(workspaceId, homeId) {
         this.operationLoading.provisionSmartHome = true;
         try {
-            const result = await jsonRpc(`/api/workspaces/${workspaceId}/smarthomes/${homeId}`, {
-                action: "provision",
-            });
+            const result = await jsonRpc(
+                `/api/workspaces/${workspaceId}/smarthomes/${homeId}`,
+                { action: "provision" },
+                PROVISION_REQUEST_TIMEOUT_MS
+            );
             if (result.success) {
                 return { success: true, data: result.data };
             } else {

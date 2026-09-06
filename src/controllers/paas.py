@@ -27,6 +27,7 @@ from ..services.paas_operator import (
     PaaSOperatorError,
     PaaSOperatorConnectionError,
 )
+from ..models.cloud_app_template import SPECS_UNPARSEABLE  # #1052：哨兵隨 parser 搬到 template model
 from ..models.cloud_service import _internal_provision
 # #536：sync-control 的兩個逃生門只認模組私有 sentinel（`call_kw` 把呼叫端
 # context 整包換進 env，只判 truthy 的 key 租戶自己就打得開）。
@@ -57,12 +58,6 @@ _SSRF_ALLOWED_SCHEMES = frozenset({'http', 'https'})
 # docs/decisions/patterns/two-layer-acl-lockstep.md。
 _ADDON_REMOVAL_SAFE_STATES = frozenset({
     'uninstalled', 'uninstallable', 'not_found'})
-
-
-# #535：`helm_value_specs` 解析失敗的哨兵。與「template 本來就沒有 specs」必須分得開
-# ——後者是正常狀態（例 `cloud_app_ha_paas`），前者代表無從得知哪些鍵是租戶填的憑證，
-# 遮罩層只能 fail-closed 全遮。用哨兵而不是 None／{}，是因為那兩個值都可能是合法結果。
-SPECS_UNPARSEABLE = object()
 
 
 # #535：`_lookup_helm_value` 的「這個鍵不存在」哨兵。不能用 None——helm_values 裡
@@ -978,7 +973,7 @@ class PaasController(HiddenChainMixin, Controller):
             data['helm_chart_version'] = template.helm_chart_version
             data['helm_default_values'] = self._safe_json_load(
                 template.helm_default_values, {}, 'helm_default_values', template.name)
-            data['helm_value_specs'] = self._parse_helm_value_specs(template)
+            data['helm_value_specs'] = template._parse_helm_value_specs()
             data['full_description'] = template.full_description or ''
         return data
 
@@ -2939,54 +2934,6 @@ class PaasController(HiddenChainMixin, Controller):
             return default
 
     @staticmethod
-    def _parse_helm_value_specs_or_fail(template: Any) -> Any:
-        """Parse helm_value_specs, returning ``SPECS_UNPARSEABLE`` on failure.
-
-        #535：遮罩層必須分得出「這個 template 本來就沒有 specs」與「specs 在那裡但
-        我讀不懂」——前者代表沒有租戶填入的憑證可遮（正常，例如 ``cloud_app_ha_paas``），
-        後者代表**無從得知哪些鍵是憑證**，只能 fail-closed 全遮。
-        ``_parse_helm_value_specs`` 把兩者都壓成 ``{}``（顯示路徑要的優雅降級），
-        所以判定端不能用它的回傳值分辨。這裡是單一 parser，兩個 wrapper 共用。
-        """
-        if not template or not template.helm_value_specs:
-            return {}
-        try:
-            return json.loads(template.helm_value_specs)
-        except (json.JSONDecodeError, TypeError):
-            # Defense-in-depth: a stray literal newline inside a JSON string value
-            # (e.g. a seed XML that wrapped a long label/description across lines)
-            # makes strict json.loads raise. Silently returning {} here would nuke the
-            # ENTIRE Application Settings section — including required fields the user
-            # must fill — so the service can never launch. Degrade to a tolerant parse
-            # (strict=False allows control chars) so the section still renders, and log
-            # loudly so the malformed seed data gets noticed and cleaned.
-            try:
-                specs = json.loads(template.helm_value_specs, strict=False)
-                _logger.error(
-                    "helm_value_specs for template %s contains control characters "
-                    "inside string values; parsed with strict=False as a fallback. "
-                    "Fix the seed data so JSON strings are not split across lines.",
-                    template.name,
-                )
-                return specs
-            except (json.JSONDecodeError, TypeError):
-                _logger.error("Invalid helm_value_specs for template %s", template.name)
-                return SPECS_UNPARSEABLE
-
-    @staticmethod
-    def _parse_helm_value_specs(template: Any) -> dict[str, list]:
-        """Parse helm_value_specs JSON from a template record.
-
-        Args:
-            template: CloudAppTemplate record
-
-        Returns:
-            dict with 'required' and 'optional' lists, or empty dict if no specs
-        """
-        specs = PaasController._parse_helm_value_specs_or_fail(template)
-        return {} if specs is SPECS_UNPARSEABLE else specs
-
-    @staticmethod
     def _password_spec_paths(specs: Any) -> set[tuple[str, ...]]:
         """從 helm_value_specs 取出所有 ``type: password`` 的鍵路徑。
 
@@ -3077,7 +3024,7 @@ class PaasController(HiddenChainMixin, Controller):
         # 「無從得知哪些鍵是憑證」時全遮，而不是全放。舊碼收了 template 參數卻
         # 整段沒用到，於是傳什麼 template 進來輸出都一樣——連「傳錯 template」都
         # 沒有任何測試會紅。
-        parsed_specs = cls._parse_helm_value_specs_or_fail(template)
+        parsed_specs = template._parse_helm_value_specs_or_fail() if template else {}
         if not template or parsed_specs is SPECS_UNPARSEABLE:
             _logger.error(
                 "Cannot determine credential keys for helm_values (template=%s); "
@@ -3142,60 +3089,6 @@ class PaasController(HiddenChainMixin, Controller):
         return _mask_secrets(values)
 
     # _build_mcp_sidecar_config moved to CloudService model
-
-    def _filter_allowed_helm_values(self, values: dict[str, Any] | None, template: Any) -> tuple[dict[str, Any], list[str]]:
-        """
-        Filter Helm values to only include keys allowed by template's value_specs.
-
-        This prevents users from overriding critical system values like namespace,
-        resource limits, or security settings that should be controlled by the template.
-
-        Args:
-            values (dict): User-provided Helm values
-            template: CloudAppTemplate record with helm_value_specs
-
-        Returns:
-            tuple: (filtered_values dict, rejected_keys list)
-        """
-        if not values:
-            return {}, []
-
-        specs = self._parse_helm_value_specs(template)
-        if not specs:
-            # No specs defined - allow all values (backward compatibility)
-            return values, []
-
-        # Build set of allowed keys from specs
-        allowed_keys = set()
-
-        # Get keys from required and optional fields
-        for field_list in [specs.get('required', []), specs.get('optional', [])]:
-            for field in field_list:
-                if isinstance(field, dict) and 'key' in field:
-                    allowed_keys.add(field['key'])
-                elif isinstance(field, str):
-                    allowed_keys.add(field)
-
-        if not allowed_keys:
-            # No keys defined in specs - allow all
-            return values, []
-
-        # Filter values to only allowed keys
-        filtered = {}
-        rejected = []
-        for key, value in values.items():
-            if key in allowed_keys:
-                filtered[key] = value
-            else:
-                rejected.append(key)
-
-        if rejected:
-            _logger.warning(
-                "Rejected unauthorized Helm value keys %s for template %s",
-                rejected, template.name
-            )
-
-        return filtered, rejected
 
     @classmethod
     def _drop_masked_echo_values(
@@ -3408,7 +3301,7 @@ class PaasController(HiddenChainMixin, Controller):
         except (json.JSONDecodeError, TypeError):
             _logger.error("Invalid helm_default_values for template %s; blocking create", template.name)
             return {'success': False, 'error': _('Template misconfigured (invalid default values). Please contact support.')}
-        filtered_user_values, _rejected = self._filter_allowed_helm_values(values, template)
+        filtered_user_values, _rejected = template._filter_allowed_helm_values(values)
 
         # Extract _init.* keys (not Helm values, used for post-deploy init)
         init_params = {}
@@ -3712,7 +3605,7 @@ class PaasController(HiddenChainMixin, Controller):
 
             # Filter user values to only allowed keys, reject unauthorized
             existing_values = service._helm_values_dict()  # #559：唯一入口
-            filtered_user_values, rejected_keys = self._filter_allowed_helm_values(values, service.template_id)
+            filtered_user_values, rejected_keys = service.template_id._filter_allowed_helm_values(values)
             if rejected_keys:
                 return {'success': False, 'error': _('Unauthorized configuration keys: %(keys)s', keys=', '.join(rejected_keys))}
             # _init.* are one-time provisioning params consumed at creation (stored on
@@ -4522,7 +4415,7 @@ class PaasController(HiddenChainMixin, Controller):
                 # service.template_id.has_admin_gui，#357 C01）收斂到同一欄位。
                 # 前端原本自建 slug 白名單，與這裡不一致 → 後端放行、按鈕卻不出現。
                 'has_admin_gui': bool(service.template_id.has_admin_gui),
-                'helm_value_specs': self._parse_helm_value_specs(service.template_id),
+                'helm_value_specs': service.template_id._parse_helm_value_specs(),
             },
             'helm_revision': service.helm_revision,
             'created_date': service.create_date.isoformat() if service.create_date else None,
