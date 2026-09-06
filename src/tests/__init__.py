@@ -846,3 +846,7 @@ from . import test_policy_quota_pool_sudo_896
 # 逐一 hasattr（陽性對照＝_KNOWN 的 13 對必須都被掃到，含 5 支不帶前綴的）。operator_contract.py 是共用件、
 # 刻意不在此登記（同 smart_home_fixture.py）。
 from . import test_migration_delegate_liveness
+
+# #1052：SmartHome／SecurityAccess 的 _do_resume guard 改問 mixin 的 _is_halted() seam
+# （cron 已經在用它）。RED-first：兩條方向相反的斷言在 develop 上都紅——見檔頭 RED 預測。
+from . import test_lifecycle_is_halted_seam_1052
