@@ -860,3 +860,14 @@ from . import test_migration_delegate_liveness
 # #1052：SmartHome／SecurityAccess 的 _do_resume guard 改問 mixin 的 _is_halted() seam
 # （cron 已經在用它）。RED-first：兩條方向相反的斷言在 develop 上都紅——見檔頭 RED 預測。
 from . import test_lifecycle_is_halted_seam_1052
+
+# #1054（階段 1 量測，**未修法**）：配額計數的第二／第三家族走 `len(o2m)`，而
+# `One2many.read` → `search_fetch` 的 docstring 逐字說會套 access rules ⇒ 與 #896
+# 同機制、不同承載體。🔴 第一趟量測（run 2668）翻掉了「非成員 = 少算載體」這個
+# 前提：o2m 取值前先有一道對**父記錄**的 `check_access('read')`
+# （`models.py:4124 fetch`）⇒ 讀不到錨點的人 fail-closed（AccessError），讀得到的
+# 人必是成員、而成員看得到整池（0-或-全）。所以本檔的判別式改成直接量「有沒有
+# 『寫得動父記錄、卻只看得到一部分子列』的身分」（A6／C5），三種結論由紅綠讀出。
+from . import test_quota_len_o2m_reach_1054
+
+from . import test_helm_values_addon_builder_1052  # #1052：addon helm values builder characterization

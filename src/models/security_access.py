@@ -2010,6 +2010,20 @@ class SecurityAccessRoute(models.Model):
             if not sub or not sub.sh_subscription_plan_id:
                 continue
             quota = sub.sh_subscription_plan_id.sa_max_routes
+            # #1054：這個 `len(o2m)` 跑在寫入者自己的 env 上，而
+            # `One2many.read` 走 `search_fetch`（`odoo/fields.py`）——它的
+            # docstring 逐字說會套 domain **and access rules** ⇒ 讀出來的長度
+            # 是 rule-filtered 的長度，機制與 #896 那條 `search_count` 相同。
+            # 上一行 `sa.sudo().subscription_id` 有 sudo、這一行沒有，是刻意
+            # 留著的：2026-09-06 量測（run 2674）結論是**結構上不可達**——
+            # 讀不到 `sa` 的人在這一行就 AccessError（fail-closed），讀得到的
+            # 人必是該 workspace 的成員，而 route 的 ir.rule 判歸屬走同一份
+            # 成員關係 ⇒ 他看得到整池、計數正確。Eugene 裁決 (2)：不加 sudo，
+            # 改用 regression guard 守住那個**外部性質**。
+            # 🔴 安全性不在這一行，在 `src/security/ir_rules.xml`：一旦有人給
+            # 非 owner/admin 開 route 的 create/write 腿、或收窄 member 的 read
+            # 腿，這裡就會少算而**症狀與「方案上限很大」完全不可區分**。守線＝
+            # `src/tests/test_quota_len_o2m_reach_1054.py`（改這附近先讀它）。
             count = len(sa.route_ids)
             if count > quota:
                 raise ValidationError(

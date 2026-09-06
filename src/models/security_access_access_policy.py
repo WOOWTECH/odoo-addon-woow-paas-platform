@@ -632,6 +632,15 @@ class SecurityAccessAccessPolicy(models.Model):
             if not quota:  # 0 = unlimited
                 continue
             count = 0
+            # #1054：`pol.rule_ids` 是本檔第三個 `len(o2m)` 家族——同樣走
+            # `search_fetch`、同樣吃 ir.rule、同樣跑在寫入者 env 上。之所以
+            # 今天不會少算：本 constraint 的 trigger 只有 `rule_ids`，只有
+            # 「寫 policy 的 rule_ids」會觸發它（直接建／改子列不會回頭跑
+            # parent 的 constraint），而寫 policy 需要 policy 的 write 權 ⇒ 寫
+            # 得動的人必然看得到整組 rule。讀不到 policy 的人在這一行直接
+            # AccessError（fail-closed）。2026-09-06 量測（run 2674）判**結構
+            # 上不可達**，Eugene 裁 (2) 不加 sudo；守線＝
+            # `src/tests/test_quota_len_o2m_reach_1054.py`。
             for rule in pol.rule_ids.filtered(
                     lambda r: r.rule_type == 'email_list'):
                 count += len([e for e in (rule.rule_value or '').split(',')
