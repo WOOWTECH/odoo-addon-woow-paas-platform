@@ -286,7 +286,8 @@ jobs:
                     "legacy policy(ies) carry an allow" \
                     "include rule(s) from flat policies" \
                     "[941]" \
-                    "[849L]"; do
+                    "[849L]" \
+                    "[1071]"; do
             echo "  [指紋] ${FP}"
             grep -cF "${FP}" /tmp/test.log
             # head 從 10 提到 80：`[941]` 這種「一個測試檔的逐格原始量測」一趟會有

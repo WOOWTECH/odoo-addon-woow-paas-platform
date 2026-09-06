@@ -88,6 +88,15 @@ _ROUTE_IDENTITY_ANCHOR_FIELDS = (
     'access_app_id',    # WHICH CF Access application this route configures
 )
 
+#: #1071：route 的**真錨點**——這一列屬於哪個 workspace，只由這一根欄位決定。
+#:
+#: ⚠ 與上面那張 `_ROUTE_IDENTITY_ANCHOR_FIELDS` 的性質**完全不同**，⛔ 不可合併：
+#: 那兩根是「值不可變」（伺服器擁有的 CF 物件 id，沒有合法改值路徑 ⇒ 連 superuser
+#: 都擋，用 sentinel 開閘）；本欄位是「值轉移**受限**」（route 本來就搬得動——
+#: `test_policy_projection_guard_849.py::test_L1_route_moved_to_another_sa_...`
+#: 就是活的合法路徑），只是要 gated。混進那張清單等於封死 L1。
+_ROUTE_ANCHOR_FIELD = 'security_access_id'
+
 
 class _InternalIdentityWrite:
     """Marker type for the identity-anchor escape hatch — see below."""
@@ -411,6 +420,198 @@ def _reject_derived_projection_writes(vals, projections):
                   "be written directly; change '%(source)s' instead.")
                 % {'field': field, 'source': source}
             )
+
+
+def _anchor_target_id(value):
+    """把一個 Many2one 的 write 值正規化成 id（或 ``False``）。
+
+    只涵蓋**純量** Many2one 的三種合法寫法（id / ``False`` / recordset），刻意
+    **不**重演 x2many 的指令語意——本 repo 對「逐一重演框架的解析規則」有明確教訓
+    （#657 同一行修了兩次，`cloud_service_binding_guard.py` 檔頭逐字記著）。
+    今天服務的四個錨點（policy 的三個 `_ANCHOR_FIELDS`、rule 的 `policy_id`、
+    route 的 `_ROUTE_ANCHOR_FIELD`）全是純量 M2O；哪天出現 x2many 錨點，這裡要換成
+    `_cs_binding_diff_fields` 那種「比對實際綁定、不解析指令」的形狀，而不是在這裡
+    多加幾個 elif。
+
+    ⚠ 最後一行 `int(value)` 看起來會被 `NewId` 炸——**不會**：
+    `odoo/api.py::NewId.__bool__` 回 `False`，第一道 `if not value` 就短路；
+    new record 的 recordset 走 `value.id`（也是 `NewId`），同樣被呼叫端的
+    `if not new_id` 接住。
+
+    ## #1071：這支從 policy module **下沉**到本檔，理由是 import 方向
+
+    原本住在 `security_access_access_policy.py`（#848），rule module 從那裡 import
+    （#941 檔頭逐字寫著「⛔ 不複製：那三行 normalize 邏輯漂掉是無聲的」）。route 的
+    守衛住在本檔，而本檔**不能** import policy module——policy module 自己
+    `from .security_access import ...`（今天已載著 7 個名字），反向再拉一條就是
+    A→B→A 的環。⇒ helper 下沉到 DAG 底層，policy module 改成從本檔 import 並保留
+    給 rule module 用（`from X import Y` 只看 X 的 namespace 有沒有 Y，
+    `models/__init__.py` 的載入順序 security_access → policy → rule 保證 rule
+    module 執行 import 時 policy module 早已跑完）。⛔ 不在本檔複製第二份。
+    """
+    if not value:
+        return False
+    if isinstance(value, models.BaseModel):
+        return value.id
+    return int(value)
+
+
+def _assert_route_anchor_move_authorised(records, vals):
+    """契約：**把一條 route 搬到新的 Security Access 底下，要求對那個新 SA 有 owner／admin。**
+
+    #1071，對稱 policy 側的 `_assert_anchor_move_authorised`（#848）與 rule 側的
+    `_assert_rule_reparent_authorised`（#941）。四個判準逐一對齊：守單一真錨點、對
+    **新**目標做 `check_access('write')`、比對的是「值真的改變」不是「key 在 vals
+    裡」、su 自動豁免。
+
+    ## 缺口是 write 側專屬的（與 #848／#941 同一個框架不對稱）
+
+    `BaseModel.write` **只有開頭**那一次 `self.check_access('write')`，評估的是
+    **寫入前**的狀態；`super().write()` 落地後零複驗。對照 `BaseModel._create`
+    的**尾端**對新建列再跑一次 `records.check_access('create')`（判別事實是「哪個
+    函式裡有、哪個沒有」，不是行號）。
+
+    套到攻擊形狀 `R.write({'security_access_id': SA_victim})`：寫入前 R 還掛在攻擊者
+    自己的 SA 上 ⇒ route 的 ir.rule walk（`security_access_id.workspace_id.
+    access_ids`）判給攻擊者的 workspace ⇒ pre-write 檢查 PASS；落地後 walk 改指
+    受害者，但 ir.rule 不再評估 ⇒ 放行。
+
+    ## 🔴 在本單之前，這條路上**一道守線都沒有**（run 2674 實測）
+
+    看起來擋著它的那道其實是**配額守衛的副作用**：`_check_route_quota` 為了數
+    `len(sa.route_ids)` 去讀 o2m，順手觸發對父記錄的 `check_access('read')`
+    ⇒ 讀不到受害者 SA 的人在那裡撞 `AccessError`。但守衛開頭就有
+    `if not sub or not sub.sh_subscription_plan_id: continue` ——**受害者 SA 沒有
+    訂閱時整條提前 continue，連 `route_ids` 都碰不到** ⇒ 那道副作用不發生，
+    而 write 路徑上沒有任何其他授權層。
+
+    量測（不是推論）：CI run **2674**（job 8018，branch `test/1054-reach`@`0506f937`，
+    2026-09-06 03:52Z）跑 3934 條、**唯一**一條紅是
+    `test_quota_len_o2m_reach_1054.py::TestRouteQuotaEndToEndReach1054::
+    test_B2c_move_into_an_unsubscribed_victim_sa_is_blocked`，形狀
+    `AssertionError: Exception not raised`（該格已隨本單移進
+    `test_route_anchor_move_guard_1071.py` 當判別式）。同 class 的
+    `test_B2_...subscribed...` 綠 ⇒ 兩格合起來把「今天擋住有訂閱那格的是配額守衛的
+    read 副作用、不是授權層」釘死。
+
+    可利用性因此落在**兩個 workspace 的共同成員**而不是陌生人：route 的
+    member-read rule（`security/ir_rules.xml` 的
+    `security_access_route_rule_workspace_member`）domain 沒有 role 條件、
+    `perm_write=False`，任何成員都讀得到該 workspace 的 SA id ⇒ 「A 的 owner／admin
+    ＋ B 的普通成員」把 A 的 route 寫進 B 的 SA。搬完之後那列進了 B 的 domain、
+    `perm_write` 要 owner／admin ⇒ **攻擊者自己也收不回來，是單向注入**。
+
+    ## 為什麼是 `check_access('write')` 而不是自己寫一套 role 比較
+
+    SA model 對 `base.group_user` 的 ACL `perm_write` 是 1，而該 group 上唯一
+    `perm_write=True` 的 ir.rule 是 `security_access_rule_owner_admin_manage`
+    （member 那條 `perm_write=False`）⇒ `check_access('write')` 就**等於**「對該
+    SA 的 workspace 是 owner／admin」，而且沒有第二張會漂的表
+    （`cloud_service_binding_guard.py` 檔頭：「不自己寫第二套 role 比較」）。
+    `base.group_system` 由 `security_access_rule_admin_full` 全開 ⇒ 平台 admin 照常。
+
+    例外**刻意不包裝**：`check_access` 自己拋的 `AccessError` 已經指名是哪個 model
+    的哪個操作被拒，再包一層等於多一個會與 ir.rule 漂開的訊息來源。⇒ 守線測試斷言
+    的是 exception **class**（本守衛 `AccessError`／identity-anchor 守衛
+    `UserError`／`write()` 之後的 validator `ValidationError`），⛔ 不斷言訊息字串。
+
+    ⚠ 那三類互斥只涵蓋「目標 SA **存在**」的情形。`new_id` 指向一列**不存在**的
+    記錄時（已被刪除、或呼叫端猜的整數），這裡不是拋 `AccessError` 而是
+    `MissingError`——`check_access` 內部的 `filtered_domain` 會去讀那一列的
+    `workspace_id`，`Field.__get__` 對抓不到的 real record 直接拋。⛔ 不要「順手加
+    `.exists()`」：空 recordset 的 `check_access` 因 `any(self._ids)` 為假而**整段
+    跳過**，那會把「目標不存在」變成**放行**（比現狀糟），要收就得顯式判存在性再
+    fail-closed。本函式**刻意維持現狀**：搬移仍然不落地（例外發生在 `super().write()`
+    之前），而 #848／#941 兩道同型守衛是同一個形狀——單獨收斂這一道會製造三道之間
+    的漂移。⇒ 三道一起收斂，另開單（本單只在此記明，⛔ 不在這裡順手動）。
+
+    ## **舊**錨點刻意不再驗一次（與 #848／#941 同一個依賴，不是遺漏）
+
+    框架開頭那次 `self.check_access('write')` 走的就是 route 自己的 ir.rule，而它的
+    domain 正是「舊 SA 的 workspace 是不是我 owner／admin」⇒ 舊錨點方向**已經**被
+    要求過，顯式再驗一次是冗餘，而且會多出一把與框架各自演化的尺。這件事不是靠
+    推論放著：pull direction（把**別人的** route 拉進自己的 SA）由守線測試的 C6
+    釘住，形狀照抄 #941 的
+    `test_C6_pull_direction_is_blocked_by_the_framework_pre_check`。
+
+    ## `security_access_id` **不在** resync 觸發集合裡——但受害者仍推得動
+
+    與 #941 的 `policy_id` 不同：本檔 `SecurityAccessRoute.write()` 的兩個 side-effect
+    觸發集合是 `('service_url', 'http_host_header')` 與 `('is_protected',
+    'login_google', 'login_email_otp', 'session_duration')`，錨點**兩個都不在**
+    ⇒ 單獨改錨點不觸發任何 operator 呼叫。
+
+    ⚠ 但混合 payload 會：`for sa in self.mapped('security_access_id')` 在
+    `super().write()` **之後**求值 ⇒ 取到的是**新**（受害者）SA，而
+    `_build_route_payload()` 迭代的是那顆 SA **全部**的 `route_ids`（含剛搬進去的
+    那條）⇒ 一次放行的搬移＋一個 `service_url` 就把注入的 route 推進受害者的
+    Cloudflare tunnel ingress。守線測試 A3 因此把「被拒之後受害者的 SA 一次都沒被
+    `_sync_routes_to_operator()` 呼叫」斷言成契約（配陽性對照）。
+
+    ## su 豁免是刻意的，這裡與 `_ROUTE_IDENTITY_ANCHOR_FIELDS`（#798）相反
+
+    `check_access()` 在 `env.su` 下自動 no-op。這與同檔 `dns_record_id` /
+    `access_app_id` 用 sentinel、對 superuser 也擋**不是**疏漏而是不同的不變量：
+    那兩根是「值不可變」（**沒有**合法改值路徑，任何 su 豁免都是洞，見
+    `docs/decisions/patterns/su-env-exempt-guard-false-green.md`），本函式是「值
+    轉移**受限**」（**有**合法改值路徑，只是要 gated）——
+    `test_policy_projection_guard_849.py::test_L1_route_moved_to_another_sa_
+    recomputes_projection` 就以 `sudo()` 搬 route 並斷言底下 policy／rule 的投影欄
+    重算，那是活的合法路徑，一律封死會打紅它、也會拿掉維運能力。
+
+    代價是本守衛的 deny 分支在 su env 下結構上不可達 ⇒ 守線測試的攻擊格一律走真
+    RPC 的**非 su** 租戶，並另有一格（C2）把 su 豁免本身斷言成契約。
+
+    ## 清空（寫 ``False``）不在守備範圍——而且它被 NOT NULL 擋著
+
+    沒有「新 SA」要授權 ⇒ 早退。這一格不是破口：`security_access_id` 宣告
+    `required=True`，清空會撞 Postgres 的 NOT NULL 約束。守線測試 E1 把它斷言成
+    **性質**而不是 driver 的 class 名（照 #973 F1 的判準：不是我們自己那三層擋的
+    ／是 `psycopg2.IntegrityError` ／ `pgcode` 等於 `NOT_NULL_VIOLATION` ／訊息指名
+    該 column）。
+
+    ## create 側不加守衛：靠框架 post-check
+
+    `_create` 尾端那次 `check_access('create')` 會擋下「`security_access_id` 指向
+    他人 SA」的新列——route model 上對 `base.group_user` 唯一 `perm_create=True`
+    的 ir.rule 同樣是 `..._owner_admin_manage`。守線測試 B1／B1b 以真 RPC 與
+    `with_user()` 兩種形狀各量一次（共同成員與陌生人兩種身分）。
+
+    ## ⛔ 本函式**擋不到**的兩件事（都在本單範圍外，另開單，⛔ 不要在這裡順手動）
+
+    1. **舊 SA 在搬移後不會被重推、state 也不重算。** `write()` 沒有 policy 側
+       #786 那套 `pre_anchor_state` ／ lost-anchor 重推，也沒有 create／unlink 腿
+       尾端那次 `_recompute_route_state()` ⇒ 搬走最後一條 route 的舊 SA 會停在
+       `'active'` 而不是落回 `'active_no_route'`，而它的 tunnel ingress 仍留著已
+       搬走的 hostname。本守衛只管**授權**，不改這件事——su／owner 的合法搬移
+       照樣會踩到。
+    2. **policy／rule 上同名的 stored related `security_access_id`。** 那是投影
+       欄、不是真錨點，寫它由 `_reject_derived_projection_writes`（#849）擋；它
+       `related=` 未顯式 `readonly=False` ⇒ 框架不裝 `inverse` ⇒ 值不會回寫到
+       route，不經過本函式。⛔ 兩張清單不可互抄（同名不同性質，與 #941 檔頭那條
+       警告同型）。
+    """
+    if _ROUTE_ANCHOR_FIELD not in vals:
+        return
+    new_id = _anchor_target_id(vals[_ROUTE_ANCHOR_FIELD])
+    if not new_id:
+        return
+    # 「值真的改變」才驗：UI 整批送欄位時 vals 會帶著與現值相同的 SA id，那不是
+    # 搬移；而能寫這一列的人，框架開頭那次 `check_access('write')` 已經對它現在掛著
+    # 的 SA 要求過 owner／admin（route 與 SA 走同一條 workspace walk）。判準取自
+    # `docs/decisions/patterns/scope-flip-write-guard-not-ir-rule.md`。
+    #
+    # 這條早退由守線測試 E3 守著。⚠ 它的判準**不是**「拿掉會被拒」——拿掉之後功能
+    # 不會壞（能寫這一列的人對它現在掛著的 SA 必定有 owner／admin）⇒ 那樣的測試恆
+    # 綠。判準是「那次 `check_access` 有沒有真的發生」：測試在 SA model 上掛 spy，
+    # 值沒改變時必須錄到零次 write 檢查，配一格「值真的改變時錄得到」的陽性對照。
+    if all(rec[_ROUTE_ANCHOR_FIELD].id == new_id for rec in records):
+        return
+    # comodel 名字從**欄位宣告**取，不寫死字串：欄位改指向別的 model 時這裡自動跟上
+    # （與 #848／#941 同一個寫法）。
+    records.env[
+        records._fields[_ROUTE_ANCHOR_FIELD].comodel_name
+    ].browse(new_id).check_access('write')
 
 
 class SecurityAccess(models.Model):
@@ -1911,6 +2112,15 @@ class SecurityAccessRoute(models.Model):
                         _("Subdomain prefix is immutable. Delete the route "
                           "and create a new one to rename.")
                     )
+        # #1071：錨點搬移的**歸屬**守衛，對稱 policy 側 #848 與 rule 側 #941。
+        # 位置在任何狀態變更之前——新錨點的授權要在 `super().write()` 之前成立。
+        #
+        # 排在上面兩道**之後**是刻意的，順序決定混合 payload 拒的是哪一類：
+        # `_reject_identity_anchor_writes`（`UserError`）與 prefix 不可變
+        # （`UserError`）守的是「值不可變」、對 superuser 也擋；本函式是授權層、
+        # su 豁免。與 policy／rule 側「投影欄／identity 守衛先、授權守衛後」同序
+        # （#941 的 E4 把那個順序斷言成契約），本檔由守線測試 E4 對應釘住。
+        _assert_route_anchor_move_authorised(self, vals)
         # Atomicity scope (see create): the savepoint guarantees ONLY the
         # Odoo side — on a sync failure the DB write (service_url/header) rolls
         # back so the row never claims a value the operator never accepted.
