@@ -6,6 +6,12 @@ from odoo.exceptions import ValidationError
 # 就打得開。判定與開閘 helper 都住在 SA 那支（本子模型沒有自己的 sentinel）。
 from .security_access import (
     _CTX_SKIP_ROUTE_SYNC,
+    # #1071：`_anchor_target_id` 從本檔**下沉**到 `security_access.py`（route 的
+    # 守衛住在那裡，而那一支不能 import 本 module——本 module 自己就 import 它，
+    # 反向再拉一條是循環）。這一行是 re-export：rule module 的
+    # `from .security_access_access_policy import _anchor_target_id`（#941）因此
+    # 一個字都不用改。⛔ 不要在三個檔各留一份 normalize——那三行漂掉是無聲的。
+    _anchor_target_id,
     _internal_policy_cf_write,
     _is_internal_policy_cf_write,
     _is_sync_control,
@@ -104,23 +110,6 @@ def _arc_violation(label, present):
         "Access policy %r has no anchor. Set exactly one of %s — an "
         "unanchored policy can never be pushed to Cloudflare and is "
         "invisible to its own workspace." % (label, choices))
-
-
-def _anchor_target_id(value):
-    """把一個 Many2one 的 write 值正規化成 id（或 ``False``）。
-
-    只涵蓋**純量** Many2one 的三種合法寫法（id / ``False`` / recordset），刻意
-    **不**重演 x2many 的指令語意——本 repo 對「逐一重演框架的解析規則」有明確教訓
-    （#657 同一行修了兩次，`cloud_service_binding_guard.py` 檔頭逐字記著）。三個
-    錨點今天全是純量 M2O；哪天出現 x2many 錨點，這裡要換成
-    `_cs_binding_diff_fields` 那種「比對實際綁定、不解析指令」的形狀，而不是在這裡
-    多加幾個 elif。
-    """
-    if not value:
-        return False
-    if isinstance(value, models.BaseModel):
-        return value.id
-    return int(value)
 
 
 def _assert_anchor_move_authorised(records, vals):

@@ -659,6 +659,16 @@ from . import test_public_url_dns_gate_648
 # 健康 route 不觸發閘——這三條紅了代表守線被改成用缺席當判準。
 from . import test_route_dns_failed_648
 
+# fix: #1071 route 的真錨點 `security_access_id` 在 write 側沒有歸屬守衛——
+# 對稱 #848（policy）／#941（rule）補 `_assert_route_anchor_move_authorised`。
+# 🔴 判別式＝ B2c（自 `test/1054-reach` 移來，run 2674 job 8018 唯一那條紅，
+# 形狀 `AssertionError: Exception not raised`）：受害者 SA **無訂閱**時
+# `_check_route_quota` 提前 continue ⇒ 今天擋住有訂閱那格的 read 副作用不發生，
+# 那條路上零守線。B2 一併移來並收緊成「必須紅在新守衛上」（兩邊都是
+# `AccessError`，class 零鑑別力 ⇒ 判準是 traceback 的函式名）。
+# 注入對照：C4（patch 掉守衛，攻擊必須翻回落地）；回歸面：C1／C2／L1。
+from . import test_route_anchor_move_guard_1071
+
 # fix: #822 `action_provision` 第一次 provision 的「孤兒窗口」——`create_tunnel` 已
 # 在 CF 建出 tunnel、而它的 id 還沒落進 DB 的那一段——四支 except 一律零補償
 # ⇒ 守衛 `if self.tunnel_id:` 不成立、DB 沒有任何東西指向剛建的那顆。
