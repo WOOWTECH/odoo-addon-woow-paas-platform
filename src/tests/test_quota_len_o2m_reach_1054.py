@@ -1,6 +1,18 @@
 """#1054：配額計數的第二／第三個家族——``len(one2many)`` 同樣吃 ``ir.rule``。
 
-本檔是 **階段 1 的量測工具，不是修法**：src 一行都沒動。
+本檔原為階段 1 的**可達性量測**，量完後由 Eugene 裁決 **(2) 不修 production
+behavior、把它併進 `develop` 當 regression guard**——所以 src 的行為一行都沒動
+（三個站點只加了指回本檔的註解）。
+
+## 🔴 它守的不是守衛本身，是讓守衛安全的那個**外部性質**
+
+量測結論是 **(b) 結構上不可達 ＋ (c) 非成員 fail-closed**：三處 `len(o2m)` 之所以
+今天不會被少算，靠的**不是** `sudo()`，而是「**能寫父記錄的身分，必然看得到整池**」
+這條 `ir.rule` 性質（A6 ／ C5 ／ D1 ／ D2 就是在釘它）。那條性質哪天被改窄——例如
+有人給非 owner/admin 開一條 create 腿、或把 member 的 read 腿收掉一半——缺口就會
+活過來，而**症狀與「方案上限很大」在輸出上完全不可區分**，沒有任何訊號分得出來。
+本檔的用途就是在那一天變紅。⛔ 所以這幾格不是「重複測 ACL」，刪掉等於把
+`len(o2m)` 那三處的唯一守線一起刪掉。
 
 ## 病灶（與 #896 同機制，不同承載體）
 
@@ -47,7 +59,11 @@
    ``check_access('write')``，寫入後**不再**重驗 record rule ⇒ 把 m2o 錨點改寫
    到自己看不到的記錄上，rule 這層攔不住。route 側又沒有 ``policy`` 的
    ``_assert_anchor_move_authorised``（#848）／``rule`` 的 #941 對應物
-   ⇒ 那條路上唯一還會說話的就是 ``@api.constrains``。B2 ／ B2c 量的就是這個。
+   ⇒ 那條路上唯一還會說話的就是 ``@api.constrains``。B2 量的就是這個。
+   ⚠ 同源但**繞過配額**的另一條（受害者 SA 沒有訂閱 ⇒ 守衛讀 ``sub`` 為空、
+   **在碰到 ``route_ids`` 之前就 ``continue``** ⇒ 那條路上不剩任何授權層）在本檔
+   量到後已移交 **#1071**，不在本檔範圍。它同時說明 **B2 的綠是靠守衛自身的 read
+   檢查、不是靠授權層**。
 
 ## ⚠ 兩個踩過的坑，改法寫在這裡免得下一個人重踩
 
@@ -61,10 +77,20 @@
   每格假綠。所以換 env 前一律 ``invalidate_all()``——真實寫入路徑上該 o2m 剛被
   ``modified()`` 洗掉、本來就是冷的，這是**重現真實狀態**不是製造 bug。
 
-## RED 紀律
+## 量測留痕（兩趟，紅綠都寫下來免得日後只剩結論）
 
-本趟**預期恰一格紅**：``test_B2c_...``（見該格 docstring）。其餘 17 格預期綠。
-紅在別的格、或紅在別的形狀＝前提壞了，不是缺口被證實。
+* **run 2668＝無效量測**：5 ERROR，兩種形狀都不是預測的。① A1／A3／C1 撞
+  ``AccessError``——那不是 fixture 壞掉，是量測給了另一個答案（見上面「翻掉的前提」）；
+  ② B1／B2 撞 ``TypeError``——``assertRaises`` 不吃 tuple。
+* **run 2674＝有效量測**：``1 failed, 0 error(s) of 3934``，唯一那條 FAIL 是已移交
+  #1071 的 anchor-move 格（形狀 ``Exception not raised``，與預測逐字相同），其餘
+  17 格全綠 ⇒ 結論 **(b)＋(c)**。
+
+## 本檔併入後的紅綠紀律
+
+移除 #1071 那一格後，本檔**每一格都應該是綠的**。任何一格轉紅都不是「測試過時」，
+而是上面那條外部性質變了——先照該格 docstring 判是 (a)／(b)／(c) 哪一種，再決定
+要不要把三處 ``len(o2m)`` 補上 ``sudo()``。⛔ 別把斷言放寬讓它轉綠。
 """
 
 import uuid
@@ -535,41 +561,12 @@ class TestRouteQuotaEndToEndReach1054(_LenO2mQuota1054Fixture):
             sa_attacker.sudo(),
             '被擋的搬移不得留下任何錨點變更')
 
-    def test_B2c_move_into_an_unsubscribed_victim_sa_is_blocked(self):
-        """🔴 **本趟唯一預期紅的一格**——而且它量到的不是配額，是 anchor move。
-
-        同一次搬移，只把受害者 SA 換成**沒有訂閱**的：
-        ``_check_route_quota`` 讀 ``sub`` 為空 ⇒ **在碰到 ``route_ids`` 之前就
-        ``continue``** ⇒ B2 那道 ``AccessError`` 不會發生，而 write 路徑上又沒有
-        任何其他授權層（理由見 B2 docstring）⇒ 攻擊者的 route 直接落進受害者
-        的 SA。
-
-        預期紅的形狀：``AssertionError: Exception not raised``。
-
-        ⚠ **這不是 #1054 的配額缺口**——沒有訂閱的 SA 本來就不受配額管
-        （grandfathered）。它是 route 側缺少 ``_assert_anchor_move_authorised``
-        （policy 有 #848、rule 有 #941）的跨租戶 anchor-move 缺口，範圍在
-        #1054 之外，建議另開單。放在這裡是因為量測本身順手撞到，而且它同時
-        說明了「B2 的綠是靠守衛的 read 檢查，不是靠授權層」——守衛一旦提前
-        ``continue``，那條路就完全沒有守線。
-        """
-        sa_victim, _v = self._victim_sa(quota=None, n_routes=1, tag='b2c')
-        self.assertFalse(
-            sa_victim.sudo().subscription_id,
-            '前提：受害者 SA 不得有訂閱，否則量到的是 B2 那條路')
-        sa_attacker = self._sa(self.ws_attacker, 'b2catk')
-        mine = self._route(sa_attacker, 'b2cmine')
-        view = self._cold_view(mine, self.attacker, ['security_access_id'])
-        with self.assertRaises(Exception) as cm:
-            view.write({'security_access_id': sa_victim.id})
-        self.assertIsInstance(cm.exception, (ValidationError, AccessError))
-
     def test_B3_the_same_move_is_caught_under_su(self):
         """判別對照：**同一次搬移**在 su env 下被配額擋住。
 
         它把 B2 的綠歸因鎖死：su 下守衛數得到真值（受害者 1 條＋搬進來 1 條
         ＞ 上限 1）⇒ ``ValidationError``。若本格紅，代表 fixture 沒把受害者 SA
-        填到額滿，B2 ／ B2c 的解讀都要作廢。
+        填到額滿，B2 的解讀就要作廢。
         """
         sa_victim, _v = self._victim_sa(quota=1, n_routes=1, tag='b3')
         sa_attacker = self._sa(self.ws_attacker, 'b3atk')
