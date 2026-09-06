@@ -2010,12 +2010,24 @@ class PaasController(HiddenChainMixin, Controller):
         # 豁免從 UI 不可達（`existing >= quota` 在 0 >= 0 時第一條就擋掉），而
         # CS access 變體的規格正是 `sa_max_access_policies = 0`（拍板 4）。
         # `sudo()` 只用在讀訂閱：租戶對 `sh.subscription.subscription` 沒有讀權。
+        #
+        # #1053：`existing` 的計數也走 `sudo()`，與 model 端 `_check_policy_quota`
+        # 的池計數對齊（#896 已對 SA 錨點做同一件事，三個孿生體同進退）。額度是
+        # **平台成本**，不是「這位呼叫者看得到多少」——`ir.rule` 只讓呼叫者看到
+        # 池中一部分 policy 時，裸 `search_count` 會少算，而少算的症狀是「配額安
+        # 靜地變寬」，與「方案的政策數上限很大」在輸出上完全不可區分。
+        # ⛔ sudo 只包**這一次計數**：`service` 仍由 `_get_workspace_service_or_error`
+        # 以呼叫者的 env 把關（非成員在到達這裡前就被擋掉），`Policy.create()`
+        # 以下也一律留在呼叫者 env——本前置只是快速失敗，真正的守線是 model 那
+        # 條 constraint。
+        # （domain 以 `cloud_service_id` 收斂 ⇒ sudo 只放寬可見度，不會把別的
+        # service／租戶的 policy 算進來。）
         Policy = request.env[
             'woow_paas_platform.security_access_access_policy']
         sub = service.sudo().subscription_id
         if sub and sub.sh_subscription_plan_id:
             quota = sub.sh_subscription_plan_id.sa_max_access_policies
-            existing = Policy.search_count(
+            existing = Policy.sudo().search_count(
                 [('cloud_service_id', '=', service.id)])
             if quota and existing >= quota:
                 return {'success': False,

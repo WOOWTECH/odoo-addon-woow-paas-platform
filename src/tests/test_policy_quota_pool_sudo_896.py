@@ -73,11 +73,14 @@ from odoo.tests.common import HttpCase, TransactionCase, tagged
 
 from ..models.cloud_service import _internal_provision
 from ..models.security_access import _skip_route_sync
+from ..models.smart_home_route import _sm_skip_access_sync
+from .smart_home_fixture import sh_model
 
 _POLICY = 'woow_paas_platform.security_access_access_policy'
 _CS = 'woow_paas_platform.cloud_service'
 _SA = 'woow_paas_platform.security_access'
 _ROUTE = 'woow_paas_platform.security_access_route'
+_SH_ROUTE = 'woow_paas_platform.smart_home_route'
 
 
 def _new_group_user(env, name):
@@ -186,6 +189,30 @@ class _PolicyQuotaSudo896Fixture(TransactionCase):
             'subdomain_prefix': 'r896%s-%s' % (tag, uuid.uuid4().hex[:6]),
         })
         return sa, route.with_context(sa_skip_route_sync=False)
+
+    def _sh_route(self, workspace, tag):
+        """#1053：B3 用的 SH 錨點。
+
+        ⚠ 兩件事刻意照 `test_sh_access_endpoints_768.py` 的 fixture，不要「簡化」：
+
+        * `sh_model()` 開建立閘（#524 起 `SmartHome.create()` 有一道無 su 豁免的
+          閘），建完 `with_env(self.env)` 把 sentinel **洗掉**——不洗的話 fixture
+          自己把受測守衛一起關掉了。
+        * ⛔ **不帶 `tunnel_id`**：有 live tunnel 時 route 的
+          `_sync_access_to_operator()` liveness gate 會放行，fixture 會真的去打
+          operator。
+        """
+        sh = sh_model(self.env).sudo().create({
+            'name': 'SH 896 %s' % tag,
+            'workspace_id': workspace.id,
+        }).with_env(self.env)
+        sh.sudo().write({'subdomain': 'sh896%s-%s' % (tag, uuid.uuid4().hex[:8])})
+        self.assertFalse(
+            sh.sudo().tunnel_id,
+            '前提：SH 不得有 live tunnel，否則 sync 會真的打 operator')
+        route = _sm_skip_access_sync(self.env[_SH_ROUTE].sudo()).create(
+            {'smart_home_id': sh.id, 'is_primary': True})
+        return sh.sudo(), route.with_context(sm_skip_access_sync=False)
 
     def _plan(self, name, **quota):
         return self.env['sh.subscription.plan'].sudo().create(
@@ -356,7 +383,8 @@ class TestPolicyPoolVisibilityIsAllOrNothing896(_PolicyQuotaSudo896Fixture):
     ``ir.rule`` 判歸屬走的就是 ``_ANCHOR_POOL_FIELD`` 那幾根 column，與池的
     domain **同一根**。所以合法呼叫者（該 workspace 的成員）必然看得到整池，
     ``controllers/security_access.py::_create_policy`` 的前置計數對他永遠不會
-    少算。這兩格把這個前提釘住：日後有人把 rule 改成「部分可見」，這裡會紅，
+    少算。這三格把這個前提釘住（三根 column 各一格，#1053 補上 SH 那根）：日後
+    有人把 rule 改成「部分可見」，這裡會紅，
     而不是讓 BFF 那條悄悄變成可利用。
     """
 
@@ -386,6 +414,32 @@ class TestPolicyPoolVisibilityIsAllOrNothing896(_PolicyQuotaSudo896Fixture):
         self.assertEqual(as_owner.search_count(domain), 3)
         self.assertEqual(
             self.Policy.with_user(self.outsider).search_count(domain), 0)
+
+    def test_B3_member_sees_the_whole_sh_pool(self):
+        """#1053：第三根 column（`smart_home_id`）也必須是 0-或-全。
+
+        🔴 少了這一格，B1／B2 只釘住 `security_access_id` 與 `cloud_service_id`
+        兩根。日後有人收窄 `ir_rules.xml` 那條 read rule 的 **SH 那一腿**，B1／B2
+        照樣綠，而 SH 錨點的 BFF 前置計數（`controllers/smart_home.py::
+        _create_sh_access_policy`，#1053 加的 `sudo()`）就會**無聲**地從
+        defense-in-depth 變成真的在補一個可利用的少算。
+
+        ⚠ domain 用 `smart_home_id`（`_ANCHOR_POOL_FIELD` 登記的池欄位、也是
+        model 端 `_check_policy_quota` 數的同一根），不是 `smart_home_route_id`
+        ——後者只說「這條 policy 掛在哪條 route」，不是池。
+        """
+        sh, route = self._sh_route(self.ws_victim, 'b3')
+        for i in range(3):
+            self._policy('sh%d' % i, smart_home_route_id=route.id)
+        domain = [('smart_home_id', '=', sh.id)]
+        as_owner = self.Policy.with_user(self.victim_owner)
+        self.assertFalse(as_owner.env.su, '前提：必須跑在非 su env')
+        self.assertEqual(
+            as_owner.search_count(domain), 3,
+            'workspace 成員必須看得到整池——這正是 SH 的 BFF 前置不會少算的理由')
+        self.assertEqual(
+            self.Policy.with_user(self.outsider).search_count(domain), 0,
+            '非成員必須是 0（0-或-全，沒有中間值）')
 
 
 @tagged('post_install', '-at_install')

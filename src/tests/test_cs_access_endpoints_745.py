@@ -520,3 +520,129 @@ class TestCsAccessApiPayload(_CsAccessEndpointFixture):
                          ['f2'])
         self.assertNotIn('access_app_id', access,
                          '伺服器擁有的 CF id 不該外流給前端')
+
+
+@tagged('post_install', '-at_install')
+class TestCsAccessQuotaBffSudoCrossUser1053(_CsAccessEndpointFixture):
+    """C 系列（#1053）：`_create_service_access_policy` 那顆新 `sudo()` 的
+    cross-user negative。
+
+    `repo-lint` 的 `controller-sudo` gate 要求「controller 每多一個 `sudo()`，
+    就要有一格 HttpCase cross-user negative test」——理由是 controller 層的 sudo
+    繞過 `ir.rule`，是 B1-class data leak 的主要來源（判準＝
+    `docs/decisions/patterns/orm-vs-endpoint-acl-test-coverage.md` 的 carve-out
+    三格）。本組就是 CS 錨點的那一格。
+
+    ⚠ **這三格不是 RED 判別式。** 它們要回答的是「這顆新 sudo 有沒有製造出新的
+    洩漏面」，不是「修前會不會紅」。修前修後都綠是**預期**的：policy 的 ir.rule
+    判歸屬走的就是 `_ANCHOR_POOL_FIELD` 那幾根 column（CS 是 `cloud_service_id`），
+    與池的 domain 同一根 ⇒ 可見度是 0-或-全；而本端點的呼叫者一律先過
+    `_get_workspace_service_or_error`（＝該 workspace 的 owner/admin）⇒ 必然看得
+    到整池，前置計數對合法呼叫者永遠不會少算。⛔ 不要為了湊 RED 放寬斷言。
+    真正會紅的那條在 model 端，#896 的 `test_A1_outsider_env_still_hits_the_
+    policy_quota` 已經釘住。
+    """
+
+    def _subscribe(self, service, **quota):
+        """把一份帶額度的方案綁到 `service` 上。
+
+        `sh_partner_id` 必須是**錨點 workspace 的 owner**：
+        `cloud_service._assert_subscription_binding()` 逐字要求兩者相等。
+        `ac_max_access_seats` 給明顯夠用的值——#521 席位守衛預設 0，否則帶
+        email_list 的 fixture 會先被它擋掉，紅燈原因就不是本組要驗的那一條。
+        """
+        owner = service.sudo().workspace_id.owner_id
+        self.assertTrue(owner, '前提：錨點必須有 workspace owner')
+        plan = self.env['sh.subscription.plan'].sudo().create(dict({
+            'name': 'CS AC Plan 1053 %s' % uuid.uuid4().hex[:6],
+            'sh_duration': 1, 'sh_unit': 'month', 'sh_plan_price': 100,
+            'sh_no_of_billing_cycle': -1,
+            'ac_max_access_seats': 99,
+        }, **quota))
+        sub = self.env['sh.subscription.subscription'].sudo().create({
+            'sh_partner_id': owner.partner_id.id,
+            'state': 'in_progress'})
+        sub.sudo().sh_subscription_plan_id = plan.id
+        service.sudo().subscription_id = sub.id
+        return sub
+
+    def _pool(self, service):
+        """池計數一律以 superuser 讀——這是真值，不是呼叫者視角。"""
+        return self.Policy.sudo().search_count(
+            [('cloud_service_id', '=', service.id)])
+
+    def _create(self, name, **extra):
+        payload = {'action': 'create', 'name': name, 'decision': 'allow',
+                   'include': [{'rule_type': 'email_list',
+                                'rule_value': '%s@example.com' % name}]}
+        payload.update(extra)
+        with patch(MOCK_GET_CLIENT, return_value=self._mock()):
+            return self._access_policies(payload)
+
+    # ------------------------------------------------------------------ #
+    def test_C1_another_tenants_pool_is_not_counted_against_this_service(self):
+        """sudo 只放寬可見度，**不放寬 domain**：別的租戶的池不算進來。
+
+        bob 的 W2 服務塞滿 5 條；alice 的服務方案上限 2、目前 1 條 ⇒ alice 必須
+        還建得出第 2 條。這一格擋的是「加 sudo 時順手把 domain 放寬／拿掉」——
+        那會同時造成誤擋與跨租戶資訊外洩，而且**只有加了 sudo 之後才做得到**
+        （未 sudo 時 ir.rule 本來就擋著別人的列）。
+        """
+        for i in range(5):
+            self._policy(self.svc_w2, name='c1-foreign-%d' % i)
+        self._policy(self.svc, name='c1-mine')
+        self._subscribe(self.svc, sa_max_access_policies=2)
+        self.assertEqual(self._pool(self.svc_w2), 5, '前提：外池要夠大')
+        self.assertEqual(self._pool(self.svc), 1, '前提：自己的池 1 條')
+
+        self.authenticate(self.alice_login, self.alice_login)
+        res = self._create('c1-second')
+        self._assert_ok(
+            res, '別的租戶的 5 條不得吃掉這台服務的額度')
+        self.assertEqual(self._pool(self.svc), 2)
+        self.assertEqual(self._pool(self.svc_w2), 5,
+                         '外池不得被這次請求動到')
+
+    def test_C2_own_pool_still_hits_the_quota(self):
+        """自己的池額滿仍照擋——sudo 之後計數仍然正確，不是恆 0 也不是恆大。
+
+        C1 的必要陽性對照：少了它，一個「sudo 之後恆回 0」的壞實作也會讓 C1 綠。
+        """
+        self._policy(self.svc, name='c2-first')
+        self._subscribe(self.svc, sa_max_access_policies=1)
+        before = self._pool(self.svc)
+
+        self.authenticate(self.alice_login, self.alice_login)
+        res = self._create('c2-overflow')
+        self.assertFalse(res.get('success'), '超額的第二條沒被擋（回 %r）' % (res,))
+        self.assertIn(
+            'quota', (res.get('error') or '').lower(),
+            '歸因：必須是配額那條。回 %r 的話可能是 role gate／arc／#352 守衛'
+            '頂替上來，而那幾者與「配額有效」在 falsy 上不可區分' % (res,))
+        self.assertEqual(self._pool(self.svc), before,
+                         '被擋的請求不得留下任何 policy')
+
+    def test_C3_non_member_denied_at_the_gate_and_learns_nothing(self):
+        """🔴 gate 要求的 cross-user negative：非成員被擋，且**拿不到配額狀態**。
+
+        alice 的服務已額滿。bob（W2 的 owner、W1 的完全非成員）打同一個端點：
+        必須停在 workspace gate，⛔ 錯誤訊息**不得**是配額那條——那等於用新 sudo
+        把「別人的池滿了沒」漏給未授權呼叫者。
+        """
+        self._policy(self.svc, name='c3-first')
+        self._subscribe(self.svc, sa_max_access_policies=1)
+        before = self._pool(self.svc)
+        self.assertFalse(
+            self.w1.sudo().access_ids.filtered(
+                lambda a: a.user_id == self.bob),
+            '前提：bob 不得是 W1 成員，否則本格零鑑別力')
+
+        self.authenticate(self.bob_login, self.bob_login)
+        res = self._create('c3-injected')
+        self.assertTrue(isinstance(res, dict), '端點爆掉而不是結構化拒絕：%r' % (res,))
+        self.assertFalse(res.get('success'), '非成員沒被擋（回 %r）' % (res,))
+        self.assertNotIn(
+            'quota', (res.get('error') or '').lower(),
+            '非成員不得從錯誤訊息得知這台服務的配額狀態（%r）' % (res,))
+        self.assertEqual(self._pool(self.svc), before,
+                         '被拒的請求不得建出任何 policy')
