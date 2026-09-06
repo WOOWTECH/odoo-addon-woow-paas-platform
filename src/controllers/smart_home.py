@@ -652,11 +652,25 @@ class SmartHomeController(Controller):
         # 從 UI 不可達（`existing >= quota` 在 0 >= 0 時第一條就擋掉），而 SH 的
         # 40 筆 AC 變體 `sa_max_access_policies` 全部走 default 0。
         # `sudo()` 只用在讀訂閱：租戶對 `sh.subscription.subscription` 沒有讀權。
+        #
+        # #1053：`existing` 的計數也走 `sudo()`，與 model 端 `_check_policy_quota`
+        # 的池計數對齊（#896 已對 SA 錨點做同一件事，三個孿生體同進退）。額度是
+        # **平台成本**，不是「這位呼叫者看得到多少」——`ir.rule` 只讓呼叫者看到
+        # 池中一部分 policy 時，裸 `search_count` 會少算，而少算的症狀是「配額安
+        # 靜地變寬」，與「方案的政策數上限很大」在輸出上完全不可區分。
+        # ⛔ sudo 只包**這一次計數**：`smarthome` 仍由
+        # `_get_workspace_smarthome_or_error` 以呼叫者的 env 把關（非成員在到達
+        # 這裡前就被擋掉），`Policy.create()` 以下也一律留在呼叫者 env——本前置
+        # 只是快速失敗，真正的守線是 model 那條 constraint。
+        # （domain 以 `smart_home_id` 收斂 ⇒ sudo 只放寬可見度，不會把別的 SH／
+        # 租戶的 policy 算進來。⚠ 這裡用 `smart_home_id` 而非 create_vals 的
+        # `smart_home_route_id`：前者是 SH 級的池，與 model 端 quota 的池同一
+        # 根，後者只是這一條 policy 掛在哪條 route。）
         Policy = request.env[_POLICY_MODEL]
         sub = smarthome.sudo().subscription_id
         if sub and sub.sh_subscription_plan_id:
             quota = sub.sh_subscription_plan_id.sa_max_access_policies
-            existing = Policy.search_count(
+            existing = Policy.sudo().search_count(
                 [("smart_home_id", "=", smarthome.id)])
             if quota and existing >= quota:
                 return {"success": False,

@@ -1218,3 +1218,105 @@ class TestShChangePlanTemplateGate(_ShAccessEndpointFixture):
                     self._change_plan(self.plan_foreign.id),
                     '%s 送一個不屬於 SH 的方案，回的必須還是 role gate——'
                     '收到 template 閘的訊息代表兩道閘的順序反了' % label)
+
+
+@tagged('post_install', '-at_install')
+class TestShAccessQuotaBffSudoCrossUser1053(_ShAccessEndpointFixture):
+    """C 系列（#1053）：`_create_sh_access_policy` 那顆新 `sudo()` 的
+    cross-user negative。
+
+    `repo-lint` 的 `controller-sudo` gate 要求「controller 每多一個 `sudo()`，
+    就要有一格 HttpCase cross-user negative test」（判準＝
+    `docs/decisions/patterns/orm-vs-endpoint-acl-test-coverage.md` 的 carve-out
+    三格）。本組就是 SH 錨點的那一格。
+
+    ⚠ **與 K 系列的分工**（不是重複，但有一格是刻意的重疊）：
+
+    * `K3` 已經測「別台 SH 的池不吃本台額度」，但它的外池 `sh_b` 在**同一個
+      workspace**（同租戶、alice 自己的另一台）⇒ 那一格在 sudo 之前就會綠，
+      因為 ir.rule 本來就讓 alice 看得到自己 workspace 的整池。
+      `C1` 把外池搬到 **bob 的 W2**——只有加了 sudo 之後，計數才「看得到」那
+      些列，也才有機會把它們錯算進來。這是 K3 照不到的那一半。
+    * `C2` 與 `K2` 測同一個性質（自己的池額滿仍照擋），**刻意保留**：它是 C1
+      在同一個 class 內的陽性對照——少了它，一個「sudo 之後恆回 0」的壞實作也
+      會讓 C1 綠。⛔ 不要因為「K2 有了」就把它拿掉，那會讓 C1 的鑑別力依賴另一
+      個 class 的存續。
+    * `C3` 全新：非成員打同一個端點，不得從錯誤訊息得知配額狀態。
+
+    ⚠ **這三格不是 RED 判別式**，理由同 CS 那組（可見度 0-或-全、呼叫者必然是
+    成員）⇒ 修前修後都綠是預期的。⛔ 不要為了湊 RED 放寬斷言。
+    """
+
+    def _pool(self, smarthome):
+        """池計數一律以 superuser 讀——這是真值，不是呼叫者視角。
+
+        用 `smart_home_id`（SH 級池欄位，`_ANCHOR_POOL_FIELD` 登記的那根、也是
+        model 端 `_check_policy_quota` 數的同一根），不是 `smart_home_route_id`。
+        """
+        return self.Policy.sudo().search_count(
+            [('smart_home_id', '=', smarthome.id)])
+
+    # ------------------------------------------------------------------ #
+    def test_C1_another_tenants_pool_is_not_counted_against_this_smarthome(
+            self):
+        """sudo 只放寬可見度，**不放寬 domain**：別的**租戶**的池不算進來。
+
+        K3 的外池在同 workspace，未 sudo 時 alice 本來就看得到 ⇒ 那一格對這顆
+        sudo 沒有鑑別力。本格把外池放到 bob 的 W2：只有 sudo 之後計數才「看得
+        到」那些列，domain 一被放寬就會誤擋。
+        """
+        sh_foreign = self._smart_home(self.w2, 'SH W2 1053')
+        route_foreign = self._route(sh_foreign)
+        for i in range(5):
+            self._policy(route_foreign, name='c1-foreign-%d' % i)
+        self._policy(self.route, name='c1-mine')
+        self._subscribe(self.sh, sa_max_access_policies=2)
+        self.assertEqual(self._pool(sh_foreign), 5, '前提：外池要夠大')
+        self.assertEqual(self._pool(self.sh), 1, '前提：自己的池 1 條')
+
+        self.authenticate(self.alice_login, self.alice_login)
+        res = self._access_policies(self._create_policy_payload('c1-second'))
+        self._assert_ok(res, '別的租戶的 5 條不得吃掉這台 SH 的額度')
+        self.assertEqual(self._pool(self.sh), 2)
+        self.assertEqual(self._pool(sh_foreign), 5,
+                         '外池不得被這次請求動到')
+
+    def test_C2_own_pool_still_hits_the_quota(self):
+        """自己的池額滿仍照擋——C1 的同 class 陽性對照（與 K2 同性質，刻意保留）。"""
+        self._policy(self.route, name='c2-first')
+        self._subscribe(self.sh, sa_max_access_policies=1)
+        before = self._pool(self.sh)
+
+        self.authenticate(self.alice_login, self.alice_login)
+        res = self._access_policies(self._create_policy_payload('c2-overflow'))
+        self.assertFalse(res.get('success'), '超額的第二條沒被擋（回 %r）' % (res,))
+        self.assertIn(
+            'quota', self._error_text(res).lower(),
+            '歸因：必須是配額那條。回 %r 的話可能是 role gate／arc／#352 守衛'
+            '頂替上來，而那幾者與「配額有效」在 falsy 上不可區分' % (res,))
+        self.assertEqual(self._pool(self.sh), before,
+                         '被擋的請求不得留下任何 policy')
+
+    def test_C3_non_member_denied_at_the_gate_and_learns_nothing(self):
+        """🔴 gate 要求的 cross-user negative：非成員被擋，且**拿不到配額狀態**。
+
+        alice 的 SH 已額滿。bob（W2 的 owner、W1 的完全非成員）打同一個端點：
+        必須停在 `_get_workspace_or_error`，⛔ 錯誤訊息**不得**是配額那條。
+        """
+        self._policy(self.route, name='c3-first')
+        self._subscribe(self.sh, sa_max_access_policies=1)
+        before = self._pool(self.sh)
+        self.assertFalse(
+            self.w1.sudo().access_ids.filtered(
+                lambda a: a.user_id == self.bob),
+            '前提：bob 不得是 W1 成員，否則本格零鑑別力')
+
+        self.authenticate(self.bob_login, self.bob_login)
+        res = self._access_policies(self._create_policy_payload('c3-injected'))
+        self.assertTrue(isinstance(res, dict), '端點爆掉而不是結構化拒絕：%r' % (res,))
+        self.assertFalse(res.get('success'), '非成員沒被擋（回 %r）' % (res,))
+        self.assertNotIn(
+            'quota', self._error_text(res).lower(),
+            '非成員不得從錯誤訊息得知這台 SH 的配額狀態（%r）' % (res,))
+        self.assertEqual(self._pool(self.sh), before,
+                         '被拒的請求不得建出任何 policy')
