@@ -846,3 +846,11 @@ from . import test_policy_quota_pool_sudo_896
 # 逐一 hasattr（陽性對照＝_KNOWN 的 13 對必須都被掃到，含 5 支不帶前綴的）。operator_contract.py 是共用件、
 # 刻意不在此登記（同 smart_home_fixture.py）。
 from . import test_migration_delegate_liveness
+
+# #1054（階段 1 量測，**未修法**）：配額計數的第二／第三家族走 `len(o2m)`，而
+# `One2many.read` → `search_fetch` 的 docstring 逐字說會套 access rules ⇒ 與 #896
+# 同機制、不同承載體。route 這邊**不能沿用** #896「當前不可達」的結論：
+# `security_access_route.security_access_id` 是普通 m2o（沒有 compute_sudo 重算
+# backstop），route 側也沒有 #848 那種 anchor-move 守衛。本檔把三個問題寫成斷言
+# 讓 CI 的紅綠集合回答，**預期在 develop 上有紅**（紅的那幾格就是量測結果）。
+from . import test_quota_len_o2m_reach_1054
