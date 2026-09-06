@@ -847,6 +847,10 @@ from . import test_policy_quota_pool_sudo_896
 # 刻意不在此登記（同 smart_home_fixture.py）。
 from . import test_migration_delegate_liveness
 
+# #1052：SmartHome／SecurityAccess 的 _do_resume guard 改問 mixin 的 _is_halted() seam
+# （cron 已經在用它）。RED-first：兩條方向相反的斷言在 develop 上都紅——見檔頭 RED 預測。
+from . import test_lifecycle_is_halted_seam_1052
+
 # #1054（階段 1 量測，**未修法**）：配額計數的第二／第三家族走 `len(o2m)`，而
 # `One2many.read` → `search_fetch` 的 docstring 逐字說會套 access rules ⇒ 與 #896
 # 同機制、不同承載體。🔴 第一趟量測（run 2668）翻掉了「非成員 = 少算載體」這個
