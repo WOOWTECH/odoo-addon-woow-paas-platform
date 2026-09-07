@@ -1409,7 +1409,11 @@ class KubernetesService:
         """Create/update a dockerconfigjson secret for private registry access.
 
         Reads registry credentials from settings. If not configured, skips.
-        Uses kubectl apply so it's idempotent.
+        Uses kubectl replace (falling back to create when absent) so it's
+        idempotent **without** leaving the credential in the
+        ``kubectl.kubernetes.io/last-applied-configuration`` annotation
+        that ``kubectl apply`` would write — see #823 CP-12 and the comment
+        at the call site below.
 
         Args:
             namespace: Target namespace
@@ -1417,10 +1421,11 @@ class KubernetesService:
         Returns:
             Secret name if created, None if registry not configured
         """
-        # #284 W0-hardening: this mutate method (kubectl apply of a dockerconfigjson
-        # Secret) previously relied on caller discipline for the namespace. Validate
-        # it at the entry point so a future caller can't apply into an out-of-prefix
-        # ns (RBAC does not enforce the prefix — this app layer is the only boundary).
+        # #284 W0-hardening: this mutate method (it writes a dockerconfigjson
+        # Secret — via kubectl replace/create since #823 CP-12) previously relied on
+        # caller discipline for the namespace. Validate it at the entry point so a
+        # future caller can't write into an out-of-prefix ns (RBAC does not enforce
+        # the prefix — this app layer is the only boundary).
         validate_namespace(namespace)
         if not settings.registry_server or not settings.registry_username:
             return None
