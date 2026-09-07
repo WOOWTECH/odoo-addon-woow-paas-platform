@@ -1409,7 +1409,11 @@ class KubernetesService:
         """Create/update a dockerconfigjson secret for private registry access.
 
         Reads registry credentials from settings. If not configured, skips.
-        Uses kubectl apply so it's idempotent.
+        Uses kubectl replace (falling back to create when absent) so it's
+        idempotent **without** leaving the credential in the
+        ``kubectl.kubernetes.io/last-applied-configuration`` annotation
+        that ``kubectl apply`` would write — see #823 CP-12 and the comment
+        at the call site below.
 
         Args:
             namespace: Target namespace
@@ -1417,10 +1421,11 @@ class KubernetesService:
         Returns:
             Secret name if created, None if registry not configured
         """
-        # #284 W0-hardening: this mutate method (kubectl apply of a dockerconfigjson
-        # Secret) previously relied on caller discipline for the namespace. Validate
-        # it at the entry point so a future caller can't apply into an out-of-prefix
-        # ns (RBAC does not enforce the prefix — this app layer is the only boundary).
+        # #284 W0-hardening: this mutate method (it writes a dockerconfigjson
+        # Secret — via kubectl replace/create since #823 CP-12) previously relied on
+        # caller discipline for the namespace. Validate it at the entry point so a
+        # future caller can't write into an out-of-prefix ns (RBAC does not enforce
+        # the prefix — this app layer is the only boundary).
         validate_namespace(namespace)
         if not settings.registry_server or not settings.registry_username:
             return None
@@ -1460,14 +1465,47 @@ class KubernetesService:
             secret_file = f.name
 
         try:
-            self._run_command(["apply", "-f", secret_file])
-            logger.info(
-                "Registry secret '%s' ensured in namespace '%s'",
-                settings.registry_secret_name,
-                namespace,
-            )
+            # 🔴 #823 CP-12：⛔ 不可用 `kubectl apply`。client-side apply 會把**整份
+            # manifest**（含 `.data[".dockerconfigjson"]` 的憑證 base64）寫進
+            # `kubectl.kubernetes.io/last-applied-configuration` annotation
+            # ⇒ 同一份憑證在 etcd 裡多存一份、且是任何有 get secret 權限的人都讀得到的
+            # metadata。`replace` 是整份 PUT：送出的 manifest 沒有 `annotations` 欄位，
+            # 所以舊的 annotation 連同其中的憑證會一併被清掉。
+            #
+            # 為什麼不是別的做法（docker-desktop 實測，見 PR 描述）：
+            #   * `apply --server-side`：對**既有** CSA 物件只是把 annotation 轉交給
+            #     `kubectl-last-applied` manager 繼續維護（實測 189B → 172B），**清不掉**；
+            #     只有全新物件才乾淨。既有租戶的憑證副本會留著。
+            #   * `apply` 後補 `annotate ...last-applied-configuration-`：曝光窗每次呼叫
+            #     重開一次，而且把三方 merge 的 baseline 永久清空 ⇒ apply 從此無法偵測
+            #     「欄位被從 manifest 拿掉了要刪除」，退化成只能新增／覆蓋。
+            #   * `replace --force`：那是 delete + re-create，對正被 pod 當
+            #     `imagePullSecrets` 引用的 secret 會開一個真實的存在性空窗。
+            self._run_command(["replace", "-f", secret_file])
+        except KubectlException as exc:
+            if not self.is_not_found_error(exc):
+                raise
+            # 全新 namespace 的第一次：secret 還不存在，`replace` 會 404。
+            # `create` 同樣不寫 last-applied annotation。
+            try:
+                self._run_command(["create", "-f", secret_file])
+            except KubectlException as exc_create:
+                if not self.is_already_exists_error(exc_create):
+                    raise
+                # TOCTOU：`replace` 探到 NotFound 與這次 `create` 之間，另一個併發
+                # 呼叫（API 重試／同時建同一租戶）先把它建出來了。內容同源（都來自
+                # settings）⇒ 良性，收斂成一次 replace 把內容確定寫對。
+                # ⚠ 原本單一 `apply` 具備原子的「不存在則建、存在則更新」語意，
+                # 拆成兩步後這個窗才出現——所以這個分支不是防禦性冗餘，是必要的。
+                self._run_command(["replace", "-f", secret_file])
         finally:
             Path(secret_file).unlink(missing_ok=True)
+
+        logger.info(
+            "Registry secret '%s' ensured in namespace '%s'",
+            settings.registry_secret_name,
+            namespace,
+        )
 
         return settings.registry_secret_name
 
@@ -1482,6 +1520,22 @@ class KubernetesService:
         """
         stderr = (exc.stderr or "").lower()
         return "(notfound)" in stderr.replace(" ", "") or "not found" in stderr
+
+    @staticmethod
+    def is_already_exists_error(exc: "KubectlException") -> bool:
+        """True only when kubectl failed because the object already exists.
+
+        與 ``is_not_found_error`` 同一道收窄：``ensure_registry_secret`` 的
+        replace → create fallback 之間有 TOCTOU 窗，併發呼叫時後到的那個會拿到
+        AlreadyExists。那是**良性**的（先到的已經寫進同一份內容，兩者同源自
+        settings），但⛔ 不能把整個例外類別當成它——否則一個 Forbidden 會被
+        當成「別人剛好建好了」而靜默吞掉。
+        """
+        stderr = (exc.stderr or "").lower()
+        return (
+            "(alreadyexists)" in stderr.replace(" ", "")
+            or "already exists" in stderr
+        )
 
     def _get_default_service_account(
         self, namespace: str
