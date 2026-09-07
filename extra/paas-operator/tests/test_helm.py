@@ -1303,6 +1303,137 @@ class TestKubernetesService:
             k8s_service.ensure_registry_secret("kube-system")
         mock_run.assert_not_called()
 
+    # ── #823 CP-12：憑證不得經由 last-applied annotation 外洩 ──────────────
+    #
+    # `kubectl apply`（client-side）會把整份 manifest 寫進
+    # `kubectl.kubernetes.io/last-applied-configuration`，其中含 `.data` 的憑證
+    # base64 ⇒ 同一份憑證在 etcd 多存一份。改用 `replace`（整份 PUT，新 manifest
+    # 不帶 annotations ⇒ 舊的連同憑證一併清掉）。
+    #
+    # ⚠ 這幾個測試驗的是「**呼叫了什麼 kubectl 子指令**」，⛔ 不是「annotation 真的
+    #    不見了」——後者要真叢集，證據在 PR 描述的 docker-desktop 端到端那節。
+    #    寫在這裡是為了擋回退：有人把 replace 改回 apply 時，這裡會紅。
+
+    @staticmethod
+    def _reg_settings(mock_settings):
+        mock_settings.registry_server = "jcr-prod.woowtech.io"
+        mock_settings.registry_username = "ci-bot"
+        mock_settings.registry_password = "pw"
+        mock_settings.registry_secret_name = "paas-registry"
+        mock_settings.namespace_prefix = "paas-ws-"
+        return mock_settings
+
+    @patch("src.services.helm.settings")
+    @patch("subprocess.run")
+    def test_ensure_registry_secret_uses_replace_never_apply(
+        self, mock_run, mock_settings, k8s_service
+    ):
+        """🔴 回退守衛：這條路徑⛔不可以出現 `kubectl apply`。
+
+        apply 會把憑證寫進 last-applied annotation（#823 CP-12 要消除的正是它）。
+        """
+        self._reg_settings(mock_settings)
+        mock_run.return_value = Mock(returncode=0, stdout="", stderr="")
+
+        k8s_service.ensure_registry_secret("paas-ws-abc123")
+
+        assert mock_run.call_count == 1
+        argv = mock_run.call_args_list[0][0][0]
+        assert "replace" in argv, f"應該用 replace，實際 argv={argv}"
+        assert "apply" not in argv, (
+            "🔴 回退到 kubectl apply：憑證會被寫進 last-applied annotation。argv=%s" % argv
+        )
+        assert "--force" not in argv, (
+            "⛔ --force 是 delete+re-create，對被 pod 引用的 imagePullSecret 會開存在性空窗"
+        )
+
+    @patch("src.services.helm.settings")
+    @patch("subprocess.run")
+    def test_ensure_registry_secret_creates_when_absent(
+        self, mock_run, mock_settings, k8s_service
+    ):
+        """全新 namespace 第一次：replace 會 404 ⇒ 必須 fallback 到 create。
+
+        沒有這個分支，整條租戶 provisioning 會炸在第一次呼叫。
+        """
+        self._reg_settings(mock_settings)
+        mock_run.side_effect = [
+            Mock(returncode=1, stdout="", stderr='Error from server (NotFound): secrets "paas-registry" not found'),
+            Mock(returncode=0, stdout="", stderr=""),
+        ]
+
+        k8s_service.ensure_registry_secret("paas-ws-abc123")
+
+        assert mock_run.call_count == 2
+        assert "replace" in mock_run.call_args_list[0][0][0]
+        assert "create" in mock_run.call_args_list[1][0][0]
+
+    @patch("src.services.helm.settings")
+    @patch("subprocess.run")
+    def test_ensure_registry_secret_tolerates_concurrent_create(
+        self, mock_run, mock_settings, k8s_service
+    ):
+        """TOCTOU：replace 探到 NotFound 與 create 之間，另一個併發呼叫先建好了。
+
+        原本單一 `apply` 有原子的「不存在則建、存在則更新」語意；拆成兩步後這個窗
+        才出現 ⇒ AlreadyExists 必須被視為良性並收斂成 replace，⛔ 不可往上拋。
+        """
+        self._reg_settings(mock_settings)
+        mock_run.side_effect = [
+            Mock(returncode=1, stdout="", stderr='Error from server (NotFound): secrets "paas-registry" not found'),
+            Mock(returncode=1, stdout="", stderr='Error from server (AlreadyExists): secrets "paas-registry" already exists'),
+            Mock(returncode=0, stdout="", stderr=""),
+        ]
+
+        k8s_service.ensure_registry_secret("paas-ws-abc123")
+
+        assert mock_run.call_count == 3
+        assert "create" in mock_run.call_args_list[1][0][0]
+        assert "replace" in mock_run.call_args_list[2][0][0]
+
+    @patch("src.services.helm.settings")
+    @patch("subprocess.run")
+    def test_ensure_registry_secret_reraises_non_notfound(
+        self, mock_run, mock_settings, k8s_service
+    ):
+        """⛔ 只有 NotFound 才 fallback。Forbidden／timeout 必須往上拋。
+
+        把整個 KubectlException 當成 NotFound，會讓一個 RBAC Forbidden 偽裝成
+        「還沒建好」而被靜默吞掉（`is_not_found_error` docstring 講的正是這件事）。
+        """
+        self._reg_settings(mock_settings)
+        mock_run.return_value = Mock(
+            returncode=1, stdout="",
+            stderr='Error from server (Forbidden): secrets is forbidden',
+        )
+
+        with pytest.raises(KubectlException):
+            k8s_service.ensure_registry_secret("paas-ws-abc123")
+
+        assert mock_run.call_count == 1, "Forbidden ⛔ 不可以再試 create"
+
+    @patch("src.services.helm.settings")
+    @patch("subprocess.run")
+    def test_ensure_registry_secret_reraises_non_already_exists_on_create(
+        self, mock_run, mock_settings, k8s_service
+    ):
+        """⛔ create 分支同樣只收窄到 AlreadyExists。
+
+        沒有這一格，`is_already_exists_error` 若被寫成「create 失敗一律再 replace
+        一次」，一個 ResourceQuota exceeded 會被吞成「別人剛好建好了」，然後第三次
+        呼叫再炸一次、訊息卻是 replace 的——真正的原因被蓋掉。
+        """
+        self._reg_settings(mock_settings)
+        mock_run.side_effect = [
+            Mock(returncode=1, stdout="", stderr='Error from server (NotFound): secrets "paas-registry" not found'),
+            Mock(returncode=1, stdout="", stderr='Error from server (Forbidden): exceeded quota'),
+        ]
+
+        with pytest.raises(KubectlException):
+            k8s_service.ensure_registry_secret("paas-ws-abc123")
+
+        assert mock_run.call_count == 2, "非 AlreadyExists ⛔ 不可以再試 replace"
+
     @patch("subprocess.run")
     def test_patch_configmap_merge_patches_data_only(self, mock_run, k8s_service):
         """patch_configmap merge-patches ONLY the data field so the chart-created
