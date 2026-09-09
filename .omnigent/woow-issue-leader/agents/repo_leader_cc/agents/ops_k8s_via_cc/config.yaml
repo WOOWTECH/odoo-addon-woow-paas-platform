@@ -53,26 +53,23 @@ guardrails:
             && event.data.name in ["Bash", "Shell", "bash", "developer__shell", "shell", "sys_os_shell", "terminal"]
             && has(event.data.arguments.command)
             && event.data.arguments.command.matches("\\bkubectl\\b")
+            // 明確指向本機 docker-desktop 就整條放行——共用叢集鐵律不管本機測試叢集
+            && !event.data.arguments.command.matches("--context(=|\\s+)[\"']?docker-desktop[\"']?(\\s|$)")
             && (
-                 // 寫入類但沒帶 --context：預設 context 可能就是 woow-k3s，無法證明安全
+                 // 寫入類但沒帶（可辨識的）--context：預設 context 可能就是 woow-k3s
                  (event.data.arguments.command.matches("\\b(delete|apply|patch|edit|scale|exec|cp|drain|cordon|annotate|label|replace|rollout|set|create|run|expose|autoscale|taint|uncordon|attach|port-forward|proxy|debug)\\b")
-                  && !event.data.arguments.command.matches("--context[=\\s]+\\S"))
-                 // 以下只在明確指向 woow-k3s 時才套用（docker-desktop 是本機叢集，不受此鐵律管）
-              || (event.data.arguments.command.matches("--context[=\\s]+woow-k3s")
-                  && (
-                       // 串接／替換：無法證明「每一段」都在白名單內
-                       event.data.arguments.command.matches("(&&|\\|\\||;|\\||`|\\$\\(|\\n)")
-                       // -n 出現超過一次：無法確定哪一個生效
-                    || event.data.arguments.command.matches("(^|\\s)(-n|--namespace)[=\\s][\\s\\S]*(^|\\s)(-n|--namespace)[=\\s]")
-                       // 寫入類但 namespace 不在白名單（含完全沒帶 -n）
-                    || (event.data.arguments.command.matches("\\b(delete|apply|patch|edit|scale|exec|cp|drain|cordon|annotate|label|replace|rollout|set|create|run|expose|autoscale|taint|uncordon|attach|port-forward|proxy|debug)\\b")
-                        && !event.data.arguments.command.matches("(^|\\s)(-n|--namespace)[=\\s]+(paas-ws-[A-Za-z0-9._-]+|paas-ws-stg-[A-Za-z0-9._-]+|paas-system|paas-stg-system|paas-cloudflare-system|paas-stg-cloudflare-system|dev-sandbox-[A-Za-z0-9._-]+|fleet-local)(\\s|$)"))
-                       // 從檔案套用 manifest：檔案內的 metadata.namespace 會蓋掉命令列的 -n，
-                       // regex 看不到檔案內容 ⇒ 除非 --dry-run，否則擋
-                    || (event.data.arguments.command.matches("\\b(apply|create|replace|patch)\\b")
-                        && event.data.arguments.command.matches("(^|\\s)(-f|--filename|-k|--kustomize)[=\\s]")
-                        && !event.data.arguments.command.matches("--dry-run"))
-                  ))
+                  && !event.data.arguments.command.matches("--context(=|\\s+)[\"']?[A-Za-z0-9]"))
+                 // 串接／替換：無法證明「每一段」都在白名單內
+              || event.data.arguments.command.matches("(&&|\\|\\||;|\\||`|\\$\\(|\\n)")
+                 // -n 出現超過一次：無法確定哪一個生效
+              || event.data.arguments.command.matches("(^|\\s)(-n|--namespace)[=\\s][\\s\\S]*(^|\\s)(-n|--namespace)[=\\s]")
+                 // 寫入類但 namespace 不在白名單（含完全沒帶 -n）
+              || (event.data.arguments.command.matches("\\b(delete|apply|patch|edit|scale|exec|cp|drain|cordon|annotate|label|replace|rollout|set|create|run|expose|autoscale|taint|uncordon|attach|port-forward|proxy|debug)\\b")
+                  && !event.data.arguments.command.matches("(^|\\s)(-n|--namespace)[=\\s]+[\"']?(paas-ws-[A-Za-z0-9._-]+|paas-ws-stg-[A-Za-z0-9._-]+|paas-system|paas-stg-system|paas-cloudflare-system|paas-stg-cloudflare-system|dev-sandbox-[A-Za-z0-9._-]+|fleet-local)[\"']?(\\s|$)"))
+                 // 從檔案套 manifest：檔案內的 metadata.namespace 會蓋掉命令列的 -n
+              || (event.data.arguments.command.matches("\\b(apply|create|replace|patch)\\b")
+                  && event.data.arguments.command.matches("(^|\\s)(-f|--filename|-k|--kustomize)[=\\s]")
+                  && !event.data.arguments.command.matches("--dry-run"))
             )
             ? {"result": "DENY", "reason": "woow-k3s 是共用叢集，且 shell／manifest 內容無法用 regex 證明安全：寫入類 kubectl 必須明確帶 --context、單一不串接、帶恰好一個白名單內的 -n；從檔案套 manifest 需 --dry-run（檔案內的 metadata.namespace 會覆蓋 -n）。本機 docker-desktop 不受此規則限制。"} : {"result": "ALLOW"}
     p_board_read_only:
@@ -129,7 +126,7 @@ guardrails:
             && has(event.data.arguments.command)
             && (
                  (event.data.arguments.command.matches("\\bgit\\b[\\s\\S]*\\bpush\\b")
-                  && event.data.arguments.command.matches("(--tags|--follow-tags|refs/tags/|[\\s:]([A-Za-z0-9._-]+-)?v[0-9])"))
+                  && event.data.arguments.command.matches("(--tags|--follow-tags|refs/tags/|[\\s:][\"\']?([A-Za-z0-9._-]+-)?v[0-9])"))
               || event.data.arguments.command.matches("refs/tags/")
               || event.data.arguments.command.matches("\\b(tea|gh|glab)\\b[\\s\\S]*\\brelease")
               || event.data.arguments.command.matches("\\bgh\\b[\\s\\S]*\\bapi\\b[\\s\\S]*git/refs")

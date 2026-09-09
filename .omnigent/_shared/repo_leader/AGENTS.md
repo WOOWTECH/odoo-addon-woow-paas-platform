@@ -100,10 +100,17 @@ title＝續談**。同一個 worker 在同一張 issue 上的後續追問一律�
 
 `.woow-issues/` **只有 `woow-issue-leader` 能寫**。你和你的 worker 對它唯讀。
 
-⚠ 這**不是紀律，是機器強制**：CEL policy **P-board** 會 DENY 任何提到 `.woow-issues/` 而
-無法證明是唯讀的指令——包含 `python3`／`perl`／`node` heredoc 寫檔、`sh -c`、以及唯讀動詞
-開頭但串接了寫入的指令。唯讀請用**單一不串接**的 `cat` / `less` / `head` / `tail` /
-`grep` / `rg` / `ls` / `wc` / `diff` / `git diff` / `git show`。
+`P-board` 有**兩側，強度不同**：
+
+- 比對**工具名**的那一側（`Write`／`Edit`／`MultiEdit`／`sys_os_write`／`sys_os_edit`）
+  是**可靠的**——它不看 shell 字串，繞不過。
+- 比對 **shell 指令字串**的那一側是 **best-effort**：它會 DENY 任何提到 `.woow-issues/`
+  而無法證明是唯讀的指令（含 `python3`／`perl`／`node` heredoc 寫檔、`sh -c`、唯讀動詞
+  開頭但串接了寫入），但**已知可被 shell 轉義與變數展開繞過**。
+
+⛔ 所以「只有 issue-leader 能寫看板」**首先是紀律規則**，守線是安全網。
+唯讀請用**單一不串接**的 `cat` / `less` / `head` / `tail` / `grep` / `rg` / `ls` / `wc` /
+`diff` / `git diff` / `git show`。
 
 要更新看板，把內容寫進回報，由 issue-leader 代寫。
 

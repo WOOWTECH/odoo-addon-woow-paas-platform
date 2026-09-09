@@ -101,7 +101,7 @@ guardrails:
             && has(event.data.arguments.command)
             && (
                  (event.data.arguments.command.matches("\\bgit\\b[\\s\\S]*\\bpush\\b")
-                  && event.data.arguments.command.matches("(--tags|--follow-tags|refs/tags/|[\\s:]([A-Za-z0-9._-]+-)?v[0-9])"))
+                  && event.data.arguments.command.matches("(--tags|--follow-tags|refs/tags/|[\\s:][\"\']?([A-Za-z0-9._-]+-)?v[0-9])"))
               || event.data.arguments.command.matches("refs/tags/")
               || event.data.arguments.command.matches("\\b(tea|gh|glab)\\b[\\s\\S]*\\brelease")
               || event.data.arguments.command.matches("\\bgh\\b[\\s\\S]*\\bapi\\b[\\s\\S]*git/refs")

@@ -152,7 +152,10 @@ def _ns_alternation() -> str:
 #      gh api repos/o/r/issues/1/comments -f body=/approve             → 舊版 ALLOW
 #      tea comments create 823 '/approve'                             → 舊版 ALLOW
 #      gh api -X PUT repos/o/r/pulls/1/merge                          → 舊版 ALLOW
-#    反轉之後 regex 就是 sound 的：誤擋會 fail loud（worker 會回報被擋），漏擋是靜默的。
+#    反轉之後**失敗方向**變成 fail-closed，大幅降低常見的漏擋：誤擋會 fail loud（worker
+#    會回報被擋、人看得到），漏擋才是靜默的。
+#    ⚠ 但這仍是 **best-effort**——regex 對 shell 字串永遠不可能 sound，漏擋仍可能靜默
+#    發生。改善的是失敗方向，不是把 regex 變成可靠的解析器（見 README §守線的強度分級）。
 #
 # ⚠ 跳脫層數：Python raw string → YAML block scalar（不處理跳脫）→ CEL 字串（`\\` → `\`）
 #    → regex。所以 regex 的每一個反斜線在這裡都寫成 `\\`。
@@ -249,7 +252,8 @@ CEL_APPROVE = f"""event.type == "tool_call"
 #   2. 指令裡出現 refs/tags/（任何工具寫 tag ref）
 #   3. forge CLI ＋ release（建 release 等於建 tag）
 #   4. `git tag <非 flag>`＝建立 tag（`git tag -l` / `--list` / `-n` 是讀，放行）
-TAG_SHAPE_RE = r"(--tags|--follow-tags|refs/tags/|[\\s:]([A-Za-z0-9._-]+-)?v[0-9])"
+# 🔴 FIX ROUND 3：`[\\s:]` 後面要容許一個引號——`git push origin "v1.7.6"` 舊版滑過。
+TAG_SHAPE_RE = r"(--tags|--follow-tags|refs/tags/|[\\s:][\"\']?([A-Za-z0-9._-]+-)?v[0-9])"
 CEL_TAG = f"""event.type == "tool_call"
 && event.data.name in {_cel_list(SHELL_TOOLS)}
 && has(event.data.arguments.command)
@@ -286,30 +290,41 @@ K8S_FILE_VERBS = ["apply", "create", "replace", "patch"]
 _K8S_WRITE = "|".join(K8S_WRITE_VERBS)
 _K8S_FILE = "|".join(K8S_FILE_VERBS)
 
+# ⚠ context 比對一律經過這兩個 regex，不要在別處另寫一份。
+# 🔴 FIX ROUND 3：舊版寫 `--context[=\s]+woow-k3s`，認不到引號形式——
+#    `kubectl --context "woow-k3s" delete pod x -n gitea` 會整個滑過（實測 ALLOW）。
+#    而且「沒帶 --context」那條又因為 `\S` 看到了 `"` 而認為有帶，兩條同時失效。
+#
+# 判斷方向也一併改成 allowlist：**只有明確認得出來的本機 context 才脫離共用叢集規則**，
+# 其餘（`woow-k3s`、`woow-k3s-prod`、拼錯的、認不出來的）一律走嚴格分支。這比「比對
+# woow-k3s 子字串」更 sound——認不出來時 fail-closed，而不是放行。
+_CTX = r"--context(=|\\s+)[\"']?"
+# 明確認得的本機開發叢集（CLAUDE.md：docker-desktop 是本機測試／開發用）。
+K8S_LOCAL_CONTEXT_RE = _CTX + r"docker-desktop[\"']?(\\s|$)"
+# 有帶 context 且值看起來是個真的 context 名（不是空字串或孤零零一個引號）。
+K8S_CONTEXT_PRESENT_RE = _CTX + r"[A-Za-z0-9]"
+
 CEL_KUBECTL = f"""event.type == "tool_call"
 && event.data.name in {_cel_list(SHELL_TOOLS)}
 && has(event.data.arguments.command)
 && event.data.arguments.command.matches("\\\\bkubectl\\\\b")
+// 明確指向本機 docker-desktop 就整條放行——共用叢集鐵律不管本機測試叢集
+&& !event.data.arguments.command.matches("{K8S_LOCAL_CONTEXT_RE}")
 && (
-     // 寫入類但沒帶 --context：預設 context 可能就是 woow-k3s，無法證明安全
+     // 寫入類但沒帶（可辨識的）--context：預設 context 可能就是 woow-k3s
      (event.data.arguments.command.matches("\\\\b({_K8S_WRITE})\\\\b")
-      && !event.data.arguments.command.matches("--context[=\\\\s]+\\\\S"))
-     // 以下只在明確指向 woow-k3s 時才套用（docker-desktop 是本機叢集，不受此鐵律管）
-  || (event.data.arguments.command.matches("--context[=\\\\s]+woow-k3s")
-      && (
-           // 串接／替換：無法證明「每一段」都在白名單內
-           event.data.arguments.command.matches("{SHELL_CHAIN_RE}")
-           // -n 出現超過一次：無法確定哪一個生效
-        || event.data.arguments.command.matches("(^|\\\\s)(-n|--namespace)[=\\\\s][\\\\s\\\\S]*(^|\\\\s)(-n|--namespace)[=\\\\s]")
-           // 寫入類但 namespace 不在白名單（含完全沒帶 -n）
-        || (event.data.arguments.command.matches("\\\\b({_K8S_WRITE})\\\\b")
-            && !event.data.arguments.command.matches("(^|\\\\s)(-n|--namespace)[=\\\\s]+({_ns_alternation()})(\\\\s|$)"))
-           // 從檔案套用 manifest：檔案內的 metadata.namespace 會蓋掉命令列的 -n，
-           // regex 看不到檔案內容 ⇒ 除非 --dry-run，否則擋
-        || (event.data.arguments.command.matches("\\\\b({_K8S_FILE})\\\\b")
-            && event.data.arguments.command.matches("(^|\\\\s)(-f|--filename|-k|--kustomize)[=\\\\s]")
-            && !event.data.arguments.command.matches("--dry-run"))
-      ))
+      && !event.data.arguments.command.matches("{K8S_CONTEXT_PRESENT_RE}"))
+     // 串接／替換：無法證明「每一段」都在白名單內
+  || event.data.arguments.command.matches("{SHELL_CHAIN_RE}")
+     // -n 出現超過一次：無法確定哪一個生效
+  || event.data.arguments.command.matches("(^|\\\\s)(-n|--namespace)[=\\\\s][\\\\s\\\\S]*(^|\\\\s)(-n|--namespace)[=\\\\s]")
+     // 寫入類但 namespace 不在白名單（含完全沒帶 -n）
+  || (event.data.arguments.command.matches("\\\\b({_K8S_WRITE})\\\\b")
+      && !event.data.arguments.command.matches("(^|\\\\s)(-n|--namespace)[=\\\\s]+[\\"']?({_ns_alternation()})[\\"']?(\\\\s|$)"))
+     // 從檔案套 manifest：檔案內的 metadata.namespace 會蓋掉命令列的 -n
+  || (event.data.arguments.command.matches("\\\\b({_K8S_FILE})\\\\b")
+      && event.data.arguments.command.matches("(^|\\\\s)(-f|--filename|-k|--kustomize)[=\\\\s]")
+      && !event.data.arguments.command.matches("--dry-run"))
 )
 ? {{"result": "DENY", "reason": "woow-k3s 是共用叢集，且 shell／manifest 內容無法用 regex 證明安全：寫入類 kubectl 必須明確帶 --context、單一不串接、帶恰好一個白名單內的 -n；從檔案套 manifest 需 --dry-run（檔案內的 metadata.namespace 會覆蓋 -n）。本機 docker-desktop 不受此規則限制。"}} : {{"result": "ALLOW"}}"""
 
@@ -858,12 +873,18 @@ CEL_VECTORS: dict[str, dict[str, list]] = {
             _shell("tea releases create --tag v1.7.6"),
             _shell("gh release create v1.7.6"),
             _shell("git tag v1.7.6"),
+            # 🔴 FIX ROUND 3：tag 形態前面帶引號舊版滑過
+            _shell('git push origin "v1.7.6"'),
+            _shell("git push origin 'v1.7.6'"),
+            _shell('git push origin "operator-v2.0.1"'),
         ],
         "allow": [
             _shell("git push origin develop"),
             _shell("git push -u origin feat/omnigent-agent-bundles"),
             _shell("git push origin fix/823-cp12"),
             _shell("git push origin release/v1.7.6"),   # 這是 branch，不是 tag
+            _shell('git push origin "develop"'),         # 引號 branch 不得誤擋
+            _shell("git push origin 'feat/omnigent-agent-bundles'"),
             _shell("git tag -l"),                        # 讀取用法（flag 開頭）
             _shell("git tag --list 'v1.*'"),
             _shell("git log --oneline -1"),
@@ -917,6 +938,15 @@ CEL_VECTORS: dict[str, dict[str, list]] = {
             _shell("kubectl --context woow-k3s create -f /tmp/x.yaml -n paas-system"),
             _shell("kubectl --context woow-k3s replace -f /tmp/x.yaml -n paas-system"),
             _shell("kubectl --context woow-k3s apply -k overlays/prod -n paas-system"),
+            # 🔴 FIX ROUND 3：引號形式的 context（四種組合）舊版整個滑過
+            _shell('kubectl --context "woow-k3s" delete pod x -n gitea'),
+            _shell("kubectl --context='woow-k3s' delete pod x -n gitea"),
+            _shell("kubectl --context 'woow-k3s' delete pod x -n gitea"),
+            _shell('kubectl --context="woow-k3s" apply -f /tmp/x.yaml'),
+            _shell('kubectl --context "woow-k3s" apply -f /tmp/x.yaml -n paas-system'),
+            # 認不出來的 context 一律走嚴格分支（fail-closed，不是比對 woow-k3s 子字串）
+            _shell("kubectl --context woow-k3s-prod delete pod x -n gitea"),
+            _shell("kubectl --context some-unknown-cluster delete pod x -n gitea"),
 
         ],
         "allow": [
@@ -928,6 +958,11 @@ CEL_VECTORS: dict[str, dict[str, list]] = {
             # 🔴 1-1：docker-desktop 是本機測試叢集，不套 woow-k3s 的白名單
             _shell("kubectl --context docker-desktop delete pod foo -n whatever"),
             _shell("kubectl --context docker-desktop apply -f x.yaml -n gitea"),
+            # 🔴 FIX ROUND 3 回歸：本機 context 的引號形式一樣要放行
+            _shell('kubectl --context "docker-desktop" delete pod x -n gitea'),
+            _shell("kubectl --context='docker-desktop' apply -f x.yaml -n gitea"),
+            # 引號形式的白名單 namespace 也要認得
+            _shell('kubectl --context woow-k3s delete pod foo -n "paas-system"'),
             # -f 帶 --dry-run 可以（不會真的落地）
             _shell("kubectl --context woow-k3s apply -f x.yaml -n paas-ws-stg-demo --dry-run=server"),
             _shell("kubectl --context woow-k3s delete gitrepo paas-app -n fleet-local"),

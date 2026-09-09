@@ -87,8 +87,14 @@ omnigent 的 venv，而且 `function.path` 打錯字會讓 worker 連 `Read` 都
 🔴 **這是 FIX ROUND 1 的核心修正。** 原本每一道都寫成「整條 command 看起來安全 → 放行」，
 而 shell 沒辦法用單一 regex 可靠解析——覆核者實跑證明了 9 個繞過（串接、重複 `-n`、把安全
 動詞當 resource 名、heredoc 餵 `python3`、`gh api -f body=/approve`、`gh api -X PUT
-.../merge`…）。反轉成「**無法證明安全就 DENY**」之後，regex 就是 sound 的：
-**誤擋會 fail loud（worker 會回報被擋），漏擋是靜默的。**
+.../merge`…）。
+
+反轉成「**無法證明安全就 DENY**」之後，**失敗方向變成 fail-closed**，大幅降低常見的漏擋：
+誤擋會 fail loud（worker 會回報被擋、人看得到），漏擋才是靜默的。
+
+⚠ 但這**仍然只是 best-effort**——**regex 對 shell 字串永遠不可能 sound**，漏擋仍可能靜默
+發生（已知向量見下方 §守線的強度分級）。反轉改善的是**失敗方向**，不是把 regex 變成可靠
+的解析器。
 
 | 守線 | 掛在哪 | 擋什麼 |
 | --- | --- | --- |
