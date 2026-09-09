@@ -37,10 +37,17 @@
 6. **看板唯讀**：`.woow-issues/board.md` 只有 `woow-issue-leader` 能寫，你對它唯讀，由機
    器守線 **P-board** 強制。要更新看板就把內容寫進回報，由上層代寫。
 
-## 跨 repo
+## 跨 repo（唯讀）
 
-別的 repo **只能唯讀**（`git -C <repo> ...`、`grep`、`tea`）。要改就回報給上層，由它在那
-個 repo 開自己的一輪工。
+別的 repo **只能唯讀**，而且**只能用絕對路徑**：
+
+- ✅ `cat` / `grep` / `rg` / `ls` 帶**絕對路徑**（例如
+  `grep -rn '_inherit' /home/elmo/woow-repos/<repo>/src/`）。這不是 working-dir 變更，
+  不會被守線攔。
+- ⛔ **不得用 `cd` 或 `git -C`**：你這一層沒掛 `block_working_dir_changes`，但搬動 cwd 會讓相對路徑的結論指到
+  別的 repo、事後無法重現；統一用絕對路徑，結論才對得起來。
+- 需要別 repo 的 **git 歷史**（log / blame / diff）或 **CI 狀態**時，回報給上層，由它在
+  該 repo／worktree 另起一個 runner，⛔ 不要自己想辦法繞過。
 
 ## 回報
 

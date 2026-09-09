@@ -61,8 +61,8 @@
 - runner 啟動時已經把 cwd 設在你的 worktree，**你不需要 `cd`**。
 - 要在子目錄跑測試就把路徑當參數傳（`python -m pytest src/tests/test_x.py`），
   ⛔ 不要 `cd src && pytest`。
-- **跨 repo 對你完全不開放**（`git -C` 也被擋）。需要別的 repo 的資訊或改動，一律回報給
-  上層，由它派 `scout_pi_*` 去讀、或在那個 repo 開它自己的一輪工。
+- **跨 repo 只剩絕對路徑的唯讀**：`grep -rn x /home/elmo/woow-repos/<repo>/src/` 可以，
+  `git -C <repo> log` 不行。需要別 repo 的 git 歷史或改動，一律回報給上層。
 
 ## 回報
 

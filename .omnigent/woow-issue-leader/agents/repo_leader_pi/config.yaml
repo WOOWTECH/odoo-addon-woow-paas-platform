@@ -64,13 +64,15 @@ guardrails:
           expression: |-
             event.type == "tool_call" && (
               (event.data.name in ["sys_os_write", "sys_os_edit", "Write", "Edit", "MultiEdit", "write", "edit"] && (
-                (has(event.data.arguments.path) && event.data.arguments.path.matches("(^|/)\\.woow-issues/board\\.md$"))
-                || (has(event.data.arguments.file_path) && event.data.arguments.file_path.matches("(^|/)\\.woow-issues/board\\.md$"))
+                (has(event.data.arguments.path) && event.data.arguments.path.matches("\\.woow-issues/"))
+                || (has(event.data.arguments.file_path) && event.data.arguments.file_path.matches("\\.woow-issues/"))
               ))
               || (event.data.name in ["Bash", "Shell", "bash", "developer__shell", "shell", "sys_os_shell", "terminal"]
                   && has(event.data.arguments.command)
-                  && event.data.arguments.command.matches("(>>?\\s*[^\\s;|&]*\\.woow-issues/board\\.md|\\b(tee|rm|truncate|patch|cp|mv|dd)\\b[^;|&]*\\.woow-issues/board\\.md|\\bsed\\b[^;|&]*(-i|--in-place)[^;|&]*\\.woow-issues/board\\.md)"))
-            ) ? {"result": "DENY", "reason": "看板 .woow-issues/board.md 只有 woow-issue-leader 能寫；把要更新的內容寫進回報，由上層代寫。"} : {"result": "ALLOW"}
+                  && event.data.arguments.command.matches("\\.woow-issues/")
+                  && !(event.data.arguments.command.matches("^\\s*(cat|less|head|tail|grep|rg|ls|wc|diff|git\\s+diff|git\\s+show)\\b")
+                       && !event.data.arguments.command.matches("(&&|\\|\\||;|\\||`|\\$\\(|\\n)")))
+            ) ? {"result": "DENY", "reason": "看板 .woow-issues/ 只有 woow-issue-leader 能寫。唯讀請用單一不串接的 cat / less / head / tail / grep / rg / ls / wc / diff / git diff / git show；要更新內容就寫進回報，由上層代寫。"} : {"result": "ALLOW"}
     p_model_fast_tier_only:
       type: function
       on: [tool_call]
@@ -96,8 +98,8 @@ guardrails:
             event.type == "tool_call"
             && event.data.name in ["Bash", "Shell", "bash", "developer__shell", "shell", "sys_os_shell", "terminal"]
             && has(event.data.arguments.command)
-            && event.data.arguments.command.matches("\\b(tea\\s+(pr|pulls)\\s+merge|gh\\s+pr\\s+merge|glab\\s+mr\\s+merge)\\b")
-            ? {"result": "DENY", "reason": "merge 是人工 gate，agent 不代 merge。開好 PR 等人來 merge。"} : {"result": "ALLOW"}
+            && event.data.arguments.command.matches("(\\b(tea|gh|glab)\\b[\\s\\S]*\\bmerge\\b|\\bcurl\\b[\\s\\S]*merge)")
+            ? {"result": "DENY", "reason": "merge 是人工 gate，agent 不代 merge（含 gh api / tea pulls merge 等變形）。開好 PR 等人來 merge。"} : {"result": "ALLOW"}
     p_approve_no_agent_signoff:
       type: function
       on: [tool_call]
@@ -109,7 +111,6 @@ guardrails:
             && event.data.name in ["Bash", "Shell", "bash", "developer__shell", "shell", "sys_os_shell", "terminal"]
             && has(event.data.arguments.command)
             && event.data.arguments.command.matches("/approve")
-            && event.data.arguments.command.matches("(\\btea\\b[^;|&]*\\bcomment\\b|\\bgh\\b[^;|&]*\\bcomment\\b|\\bglab\\b[^;|&]*\\bnote\\b|\\bcurl\\b)")
             ? {"result": "DENY", "reason": "prod build 的 /approve 核可只能由授權者本人送出——即使人類當場明確授權、即使手上憑證就是授權者本人，agent 也不代簽。"} : {"result": "ALLOW"}
     p_tag_no_agent_tag_push:
       type: function
@@ -121,9 +122,14 @@ guardrails:
             event.type == "tool_call"
             && event.data.name in ["Bash", "Shell", "bash", "developer__shell", "shell", "sys_os_shell", "terminal"]
             && has(event.data.arguments.command)
-            && event.data.arguments.command.matches("\\bgit\\b[^;|&]*\\bpush\\b")
-            && event.data.arguments.command.matches("(--tags|--follow-tags|refs/tags/|[\\s:]([A-Za-z0-9._-]+-)?v[0-9])")
-            ? {"result": "DENY", "reason": "發版 tag 由人工推，agent 不推 tag（v<版號> / --tags / refs/tags/ 三種形態都擋）。"} : {"result": "ALLOW"}
+            && (
+                 (event.data.arguments.command.matches("\\bgit\\b[\\s\\S]*\\bpush\\b")
+                  && event.data.arguments.command.matches("(--tags|--follow-tags|refs/tags/|[\\s:]([A-Za-z0-9._-]+-)?v[0-9])"))
+              || event.data.arguments.command.matches("refs/tags/")
+              || event.data.arguments.command.matches("\\b(tea|gh|glab)\\b[\\s\\S]*\\brelease")
+              || event.data.arguments.command.matches("\\bgit\\s+tag\\s+[^-\\s]")
+            )
+            ? {"result": "DENY", "reason": "發版 tag 由人工推，agent 不推 tag、不建 release（v<版號> / --tags / refs/tags/ / git tag <name> / forge release 皆擋）。"} : {"result": "ALLOW"}
     max_tool_calls_per_session:
       type: function
       function:

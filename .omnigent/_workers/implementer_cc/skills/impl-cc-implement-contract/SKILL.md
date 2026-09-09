@@ -11,7 +11,7 @@ description: claude-native 實作 worker 的工單執行流程：待在 worktree
 
 ## 步驟
 
-1. **確認 worktree**。`pwd` 對照工單給的路徑；`git -C . rev-parse --abbrev-ref HEAD` 對照
+1. **確認 worktree**。`pwd` 對照工單給的路徑；`git rev-parse --abbrev-ref HEAD` 對照
    工單給的 branch。不對就停下來回報，⛔ 不要自己另開一個。
    ⛔ **不要 `cd`**——`block_working_dir_changes` 會 DENY 所有 `cd` / `git -C` /
    `git worktree`。runner 已經把 cwd 設在你的 worktree，跑子目錄的測試請把路徑當參數

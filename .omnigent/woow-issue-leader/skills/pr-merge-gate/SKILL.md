@@ -5,14 +5,34 @@ description: PR 收斂與人工 merge gate：覆核完成後該做什麼、以�
 
 # pr-merge-gate
 
-## ⛔ 核心：merge 是人工 gate
+## 兩件事要分清楚
 
-PR 由 agent 開，**merge 由人做**。你、`repo_leader`、所有 worker 都不代 merge。
-機器守線 **P-merge** 會 DENY `tea pr merge` / `gh pr merge` / `glab mr merge`。
+這是**兩層不同的規則**，常被混為一談：
+
+### 1. 「agent 永遠不代 merge」——絕對，不分類型
+
+不管是純 docs、typo 修正還是大重構，**agent 一律不按 merge**。機器守線 **P-merge** 會
+DENY 所有 forge CLI 的 merge 路徑（含 `gh api -X PUT .../merge` 這種 REST 變形）。
 
 這跟 prod build 的 `/approve` 同級：**即使人類當場明確授權、即使手上憑證就是授權者本
-人，也不代簽**（2026-08-16 反面先例，裁決無例外）。機器守線 **P-approve**、**P-tag** 分
-別擋 `/approve` 留言與推 tag。
+人，也不代簽**（2026-08-16 反面先例，裁決無例外）。
+
+### 2. 「人類覆核者的拍板分級」——分類型
+
+這一層決定的是**人類**看完之後要不要再找人討論，不是 agent 能不能動手：
+
+| PR 類型 | 人類覆核者可以怎麼做 |
+| --- | --- |
+| 純 docs／純 bug fix／test-only／純 CI-config，**且無待討論的取捨** | CI 全綠 ＋ 覆核 diff 後**可直接合併** |
+| 含取捨／行為權衡／動生產碼行為／`feat`／`refactor`／CI **政策**變更 | **待人類拍板**，不要逕自合併 |
+
+⚠ 「純 CI-config」指的是設定值調整（逾時、快取鍵、runner 標籤）；改變**什麼情況會擋下
+PR** 屬於 CI 政策，落在第二列。
+
+你的工作是把 PR 收斂到「人類可以套用上表判斷」的狀態，並在 issue 留言裡**明講這張 PR 落
+在哪一列、依據是什麼**。⛔ 你自己不做第 1 層的動作。
+
+機器守線 **P-approve**、**P-tag** 另外擋 `/approve` 留言與推 tag。
 
 ## PR 收斂流程
 

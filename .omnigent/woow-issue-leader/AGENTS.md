@@ -34,15 +34,16 @@ woow-issue-leader                     ← 你
 issue 的後續追問一律複用同一個 title；換一張 issue 就換 title，不要在舊 session 裡塞新
 議題。
 
-⛔ 不要再做「Leader 初始化」那一套（把身分／守線在每次 context 清空後重貼一次）。
-Omnigent 的 prompt 由 bundle 的 `AGENTS.md` 承載，每個 session 開場就已經有；重貼只是
-浪費 context。
+你的身分與守線由 bundle 的 `AGENTS.md` 承載，每個 session 開場就已經在 context 裡。
+⛔ 不需要在對話裡重貼一次——那只是浪費 context。
 
 ## 一張 issue 一個 runner，workspace 就是 worktree
 
 每張 issue 起一個獨立 runner，工作目錄設成該 issue 的 worktree：
 
 ```bash
+# ⚠ 這兩行是在 **launch host 的 shell** 裡跑的（建 runner 之前），
+#   不是在任何已受 block_working_dir_changes 約束的 worker session 裡跑。
 git -C <repo> worktree add ../wt-<issue-id> -b <type>/<issue-id> origin/<整合分支>
 cd ../wt-<issue-id> && omnigent run --server <url> <bundle>
 ```
@@ -68,8 +69,8 @@ cd ../wt-<issue-id> && omnigent run --server <url> <bundle>
 | 對帳追蹤 | `tracker_via_cc` | `tracker_via_pi` | 六 repo `tea` 對帳、查重、開單 |
 | 查證 | `researcher_via_cc` | `researcher_via_pi` | 上游 addon / Odoo 行為查證（唯讀） |
 
-⛔ 舊的 preset 文法（`ccou`／`pisx` 那種代號串）**整套廢除**。現在只有兩個維度：
-**選 worker 名字**（角色＋harness）＋**派工當下用 `args.model` 指定 model**。
+派工只有兩個維度：**選 worker 名字**（角色＋harness）＋**派工當下用 `args.model` 指定
+model**。
 
 ### `args.model`
 
@@ -94,15 +95,15 @@ cd ../wt-<issue-id> && omnigent run --server <url> <bundle>
 
 ### 工單怎麼寫
 
-`args.input` **直接吃長文**，工單多長都直接寫進去。
+`args.input` **直接吃長文**——工單多長都直接寫進去，⛔ 不要落成 `.scratch/` 實檔再帶路
+徑（多一層檔案就多一個漂移點）。
 
-⛔ 舊的「工單超過幾行就落 `.scratch/` 實檔、派工只帶路徑」那套**廢除**——那是為了繞
-開舊平台的訊息長度限制，Omnigent 沒有這個限制，多一層檔案只會多一個漂移點。
+派工是可靠的：`sys_session_send` 回傳 handle，子代完成會**自動喚醒你**，結果進 inbox
+（`sys_read_inbox`）。所以——
 
-同樣廢除的還有：「ask 可能靜默丟失，要自己補送」、「2–3 分鐘逾時 exit 143 但其實已送
-達，不要憑 exit code 重送」。`sys_session_send` 回傳 handle、子代完成會自動喚醒你、結果
-進 inbox（`sys_read_inbox`）——**不要 busy-poll，也不要重送**。inbox 空但你派出去的
-worker 還在跑，就直接結束這一輪，子代做完會叫醒你。
+- ⛔ **不要 busy-poll**，也不要用 timer 自己戳進度。
+- ⛔ **不要因為「怕沒送到」而重送**。
+- inbox 空但你派出去的 worker 還在跑，就**直接結束這一輪**；子代做完會叫醒你。
 
 ## 看板：`.woow-issues/board.md`
 
@@ -115,8 +116,13 @@ worker 還在跑，就直接結束這一輪，子代做完會叫醒你。
 
 ## ⛔ 鐵律（不可協商）
 
-1. **不代 merge**。merge 是**人工 gate**。你、`repo_leader`、worker 都不准 merge。機器
-   守線 **P-merge** 會 DENY `tea pr merge` / `gh pr merge` / `glab mr merge`。
+1. **不代 merge**。merge 是**人工 gate**，**絕對、不分 PR 類型**——純 docs 也一樣。你、
+   `repo_leader`、worker 都不准 merge。機器守線 **P-merge** 會 DENY 所有 forge CLI 的
+   merge 路徑（含 `gh api -X PUT .../merge` 這種 REST 變形）。
+   ⚠ 另有一層**人類覆核者的拍板分級**（純 docs／bug fix／test-only／純 CI-config 且無取
+   捨 → CI 綠＋覆核後可直接合併；含取捨／行為權衡／動生產碼行為／`feat`／`refactor`／
+   CI 政策 → 待人類拍板）。那一層決定的是**人類**要不要再找人討論，**不是**你能不能動
+   手——你在任何一列都不按 merge。詳見 `pr-merge-gate` skill。
 2. **不代簽 approval**。prod build 的 `/approve` 核可留言只能由授權者本人送出——
    **即使人類當場明確授權、即使手上憑證就是授權者本人，也不代簽**（2026-08-16 反面先
    例，裁決無例外）。機器守線 **P-approve** 會 DENY 送出 `/approve` 留言的指令。
@@ -146,13 +152,20 @@ worker 還在跑，就直接結束這一輪，子代做完會叫醒你。
   `ops_k8s_*` 或 `scout_pi_*` 現場量，不要引用幾天前的舊數字。
 - 不要用 `git status` 推論子代成功；讀它回報的結果，再自己跑 gate。
 
-## 跨 repo
+## 跨 repo（唯讀）
 
-六個 repo 的事務**只能唯讀**（`git -C <repo> ...`、`grep`、`tea`）。要在別的 repo 改
-東西，就在那個 repo 開它自己的 worktree、派它自己的一輪工。
+別的 repo **只能唯讀**，而且**只能用絕對路徑**：
 
-⚠ 跨 repo 唯讀操作若透過 `claude-native` 的 worker 執行，runner 必須帶
-`--permission-mode auto`；`acceptEdits` 會被 claude CLI 自己擋掉。
+- ✅ `cat` / `grep` / `rg` / `ls` 帶**絕對路徑**（例如
+  `grep -rn '_inherit' /home/elmo/woow-repos/<repo>/src/`）。這不是 working-dir 變更，
+  不會被守線攔。
+- ⛔ **不得用 `cd` 或 `git -C`**：你這一層沒掛 `block_working_dir_changes`，但搬動 cwd 會讓相對路徑的結論指到
+  別的 repo、事後無法重現；統一用絕對路徑，結論才對得起來。
+- 需要別 repo 的 **git 歷史**（log / blame / diff）或 **CI 狀態**時，回報給上層，由它在
+  該 repo／worktree 另起一個 runner，⛔ 不要自己想辦法繞過。
+
+⚠ 跨 repo 唯讀若由 `claude-native` worker 執行，runner 要帶 `--permission-mode auto`；
+`acceptEdits` 會被 claude CLI 自己擋掉。
 
 ## 你身上的機器守線
 

@@ -139,25 +139,49 @@ def _ns_alternation() -> str:
 #    `function.path` 打錯字會讓 worker 連 Read 都被 DENY。CEL 的語法錯在 compile 階段
 #    就 ValueError，錯得響亮。
 
-BOARD_PATH_RE = r"(^|/)\\.woow-issues/board\\.md$"
-# shell 改寫看板：把「改寫動作」與「看板路徑」綁在同一條 regex 裡，避免
-# `cat board.md 2>/dev/null` 這種純讀取被誤殺。
-BOARD_SHELL_RE = (
-    r"(>>?\\s*[^\\s;|&]*\\.woow-issues/board\\.md"
-    r"|\\b(tee|rm|truncate|patch|cp|mv|dd)\\b[^;|&]*\\.woow-issues/board\\.md"
-    r"|\\bsed\\b[^;|&]*(-i|--in-place)[^;|&]*\\.woow-issues/board\\.md)"
+# 判斷方向：**「無法證明安全就 DENY」**，不是「看起來安全就放行」。
+#
+# 🔴 這是 FIX ROUND 1 的核心修正。原本的寫法是「整條 command 看起來安全 → 放行」，
+#    而 shell 沒辦法用單一 regex 可靠解析，覆核者實跑證明可以繞過（每一條都已納入
+#    CEL_VECTORS 的 deny 向量做回歸）：
+#      kubectl ... get pods -A && kubectl ... delete pod x -n gitea   → 舊版 ALLOW
+#      kubectl ... delete pod get -n gitea                            → 舊版 ALLOW（resource 叫 get）
+#      kubectl ... delete pod x -n paas-system -n gitea               → 舊版 ALLOW（重複 -n）
+#      kubectl delete pod x -n gitea                                  → 舊版 ALLOW（缺 --context）
+#      python3 - <<'PY' / open('.woow-issues/board.md','w') / PY       → 舊版 ALLOW
+#      gh api repos/o/r/issues/1/comments -f body=/approve             → 舊版 ALLOW
+#      tea comments create 823 '/approve'                             → 舊版 ALLOW
+#      gh api -X PUT repos/o/r/pulls/1/merge                          → 舊版 ALLOW
+#    反轉之後 regex 就是 sound 的：誤擋會 fail loud（worker 會回報被擋），漏擋是靜默的。
+#
+# ⚠ 跳脫層數：Python raw string → YAML block scalar（不處理跳脫）→ CEL 字串（`\\` → `\`）
+#    → regex。所以 regex 的每一個反斜線在這裡都寫成 `\\`。
+
+# shell 串接／替換：出現任何一個就代表「這條 command 不只做一件事」，無法用 regex 證明安全。
+SHELL_CHAIN_RE = r"(&&|\\|\\||;|\\||`|\\$\\(|\\n)"
+
+# ── P-board ──────────────────────────────────────────────────────────────────
+# 「提到 .woow-issues/ 且無法證明是唯讀」就 DENY。⛔ 不再枚舉寫入動詞——枚舉永遠列不完
+#    （heredoc 餵給 python3／perl／node 就繞過了，覆核者實跑證明過）。
+BOARD_DIR_RE = r"\\.woow-issues/"
+# 唯讀白名單：必須**從頭**就是這些動詞，而且整條不得有串接（串接之後做什麼無法證明）。
+BOARD_READ_ONLY_RE = (
+    r"^\\s*(cat|less|head|tail|grep|rg|ls|wc|diff|git\\s+diff|git\\s+show)\\b"
 )
 
 CEL_BOARD = f"""event.type == "tool_call" && (
   (event.data.name in {_cel_list(WRITE_TOOLS)} && (
-    (has(event.data.arguments.path) && event.data.arguments.path.matches("{BOARD_PATH_RE}"))
-    || (has(event.data.arguments.file_path) && event.data.arguments.file_path.matches("{BOARD_PATH_RE}"))
+    (has(event.data.arguments.path) && event.data.arguments.path.matches("{BOARD_DIR_RE}"))
+    || (has(event.data.arguments.file_path) && event.data.arguments.file_path.matches("{BOARD_DIR_RE}"))
   ))
   || (event.data.name in {_cel_list(SHELL_TOOLS)}
       && has(event.data.arguments.command)
-      && event.data.arguments.command.matches("{BOARD_SHELL_RE}"))
-) ? {{"result": "DENY", "reason": "看板 .woow-issues/board.md 只有 woow-issue-leader 能寫；把要更新的內容寫進回報，由上層代寫。"}} : {{"result": "ALLOW"}}"""
+      && event.data.arguments.command.matches("{BOARD_DIR_RE}")
+      && !(event.data.arguments.command.matches("{BOARD_READ_ONLY_RE}")
+           && !event.data.arguments.command.matches("{SHELL_CHAIN_RE}")))
+) ? {{"result": "DENY", "reason": "看板 .woow-issues/ 只有 woow-issue-leader 能寫。唯讀請用單一不串接的 cat / less / head / tail / grep / rg / ls / wc / diff / git diff / git show；要更新內容就寫進回報，由上層代寫。"}} : {{"result": "ALLOW"}}"""
 
+# ── P-model ──────────────────────────────────────────────────────────────────
 CEL_MODEL = f"""event.type == "tool_call"
 && event.data.name == "sys_session_send"
 && has(event.data.arguments.agent)
@@ -167,36 +191,77 @@ CEL_MODEL = f"""event.type == "tool_call"
      && event.data.arguments.args.model in {_cel_list(FAST_MODELS)})
 ? {{"result": "DENY", "reason": "scout_pi / tracker / researcher 是簡單查尋任務：派工必須顯式帶 args.model，且必須落在 build-bundles.py 的 FAST_MODELS 名單內。"}} : {{"result": "ALLOW"}}"""
 
+# ── P-merge ──────────────────────────────────────────────────────────────────
+# 保守化：任何 forge CLI（tea / gh / glab）只要同一條指令裡出現 merge 就 DENY——不再只認
+# `<cli> pr merge` 三種字面組合。這樣 `gh api -X PUT repos/o/r/pulls/1/merge`、`sh -c '...'`、
+# 串接、子命令變形（tea pulls merge）一律涵蓋。
+# 本機 `git merge` 不受影響（沒有 tea/gh/glab token）——那是合法的分支整併。
 CEL_MERGE = f"""event.type == "tool_call"
 && event.data.name in {_cel_list(SHELL_TOOLS)}
 && has(event.data.arguments.command)
-&& event.data.arguments.command.matches("\\\\b(tea\\\\s+(pr|pulls)\\\\s+merge|gh\\\\s+pr\\\\s+merge|glab\\\\s+mr\\\\s+merge)\\\\b")
-? {{"result": "DENY", "reason": "merge 是人工 gate，agent 不代 merge。開好 PR 等人來 merge。"}} : {{"result": "ALLOW"}}"""
+&& event.data.arguments.command.matches("(\\\\b(tea|gh|glab)\\\\b[\\\\s\\\\S]*\\\\bmerge\\\\b|\\\\bcurl\\\\b[\\\\s\\\\S]*merge)")
+? {{"result": "DENY", "reason": "merge 是人工 gate，agent 不代 merge（含 gh api / tea pulls merge 等變形）。開好 PR 等人來 merge。"}} : {{"result": "ALLOW"}}"""
 
+# ── P-approve ────────────────────────────────────────────────────────────────
+# 只要 command 裡出現 `/approve` 就 DENY。⛔ 拿掉「且匹配 tea/gh/glab/curl」那個連言——
+#    worker 沒有任何合法理由打出這個字串，而枚舉工具名永遠漏（gh api -f body=/approve、
+#    tea comments create 都是覆核者實跑證明的繞過）。
 CEL_APPROVE = f"""event.type == "tool_call"
 && event.data.name in {_cel_list(SHELL_TOOLS)}
 && has(event.data.arguments.command)
 && event.data.arguments.command.matches("/approve")
-&& event.data.arguments.command.matches("(\\\\btea\\\\b[^;|&]*\\\\bcomment\\\\b|\\\\bgh\\\\b[^;|&]*\\\\bcomment\\\\b|\\\\bglab\\\\b[^;|&]*\\\\bnote\\\\b|\\\\bcurl\\\\b)")
 ? {{"result": "DENY", "reason": "prod build 的 /approve 核可只能由授權者本人送出——即使人類當場明確授權、即使手上憑證就是授權者本人，agent 也不代簽。"}} : {{"result": "ALLOW"}}"""
 
-# ⚠ 內建 github_policy 對這個 case 無效：實測 `git push origin v1.2.3` 只回 ASK
-#    （URL regex 硬編 github.com，Gitea 判不出 repo），而且完全不認 `tea`。所以自己比對。
+# ── P-tag ────────────────────────────────────────────────────────────────────
+# ⚠ 內建 github_policy 對這個 case 無效：實測 `git push origin v1.2.3` 只回 ASK（URL regex
+#    硬編 github.com，Gitea 判不出 repo），且完全不認 `tea`。所以自己比對。
+# 保守化四條，任一成立即 DENY：
+#   1. git push ＋ tag 形態（v<版號> / --tags / --follow-tags / refs/tags/）
+#   2. 指令裡出現 refs/tags/（任何工具寫 tag ref）
+#   3. forge CLI ＋ release（建 release 等於建 tag）
+#   4. `git tag <非 flag>`＝建立 tag（`git tag -l` / `--list` / `-n` 是讀，放行）
+TAG_SHAPE_RE = r"(--tags|--follow-tags|refs/tags/|[\\s:]([A-Za-z0-9._-]+-)?v[0-9])"
 CEL_TAG = f"""event.type == "tool_call"
 && event.data.name in {_cel_list(SHELL_TOOLS)}
 && has(event.data.arguments.command)
-&& event.data.arguments.command.matches("\\\\bgit\\\\b[^;|&]*\\\\bpush\\\\b")
-&& event.data.arguments.command.matches("(--tags|--follow-tags|refs/tags/|[\\\\s:]([A-Za-z0-9._-]+-)?v[0-9])")
-? {{"result": "DENY", "reason": "發版 tag 由人工推，agent 不推 tag（v<版號> / --tags / refs/tags/ 三種形態都擋）。"}} : {{"result": "ALLOW"}}"""
+&& (
+     (event.data.arguments.command.matches("\\\\bgit\\\\b[\\\\s\\\\S]*\\\\bpush\\\\b")
+      && event.data.arguments.command.matches("{TAG_SHAPE_RE}"))
+  || event.data.arguments.command.matches("refs/tags/")
+  || event.data.arguments.command.matches("\\\\b(tea|gh|glab)\\\\b[\\\\s\\\\S]*\\\\brelease")
+  || event.data.arguments.command.matches("\\\\bgit\\\\s+tag\\\\s+[^-\\\\s]")
+)
+? {{"result": "DENY", "reason": "發版 tag 由人工推，agent 不推 tag、不建 release（v<版號> / --tags / refs/tags/ / git tag <name> / forge release 皆擋）。"}} : {{"result": "ALLOW"}}"""
 
+# ── P-kubectl（僅 ops_k8s）──────────────────────────────────────────────────
+# 反轉後的四條，任一成立即 DENY（權威白名單見上方 K8S_ALLOWED_NAMESPACES 註解）：
+#   1. 提到 kubectl 且含 shell 串接／替換 ⇒ 無法證明「每一段」都在白名單內
+#   2. 提到 kubectl 且 -n / --namespace 出現超過一次 ⇒ 無法確定哪一個生效
+#   3. 寫入／exec 類 verb 且沒能匹配到白名單 namespace（含完全沒帶 -n 的情形）
+#   4. 寫入／exec 類 verb 但沒帶 --context
+# ⚠ 動詞比對刻意用寬鬆的 \b(verb)\b：在 DENY 方向多匹配只會多擋（fail loud），
+#    不像舊版的「安全動詞」比對多匹配就會漏放（靜默）。
+K8S_WRITE_VERBS = [
+    # 任務書列出的：
+    "delete", "apply", "patch", "edit", "scale", "exec", "cp", "drain", "cordon",
+    "annotate", "label", "replace", "rollout", "set",
+    # 補上同樣是寫入／取得執行權的（漏擋是靜默的，寧可多擋）：
+    "create", "run", "expose", "autoscale", "taint", "uncordon", "attach",
+    "port-forward", "proxy", "debug",
+]
 CEL_KUBECTL = f"""event.type == "tool_call"
 && event.data.name in {_cel_list(SHELL_TOOLS)}
 && has(event.data.arguments.command)
 && event.data.arguments.command.matches("\\\\bkubectl\\\\b")
-&& event.data.arguments.command.matches("--context[=\\\\s]+woow-k3s")
-&& !event.data.arguments.command.matches("\\\\bkubectl\\\\s+(?:\\\\S+\\\\s+){{0,10}}?(?:{"|".join(K8S_SAFE_VERBS)})\\\\b")
-&& !event.data.arguments.command.matches("(^|\\\\s)(-n|--namespace)[=\\\\s]+({_ns_alternation()})(\\\\s|$)")
-? {{"result": "DENY", "reason": "woow-k3s 是共用叢集：寫入／exec 類 kubectl 的 namespace 必須在 paas 白名單內，而且要明確帶 -n（fail-closed，不吃 current namespace）。"}} : {{"result": "ALLOW"}}"""
+&& (
+     event.data.arguments.command.matches("{SHELL_CHAIN_RE}")
+  || event.data.arguments.command.matches("(^|\\\\s)(-n|--namespace)[=\\\\s][\\\\s\\\\S]*(^|\\\\s)(-n|--namespace)[=\\\\s]")
+  || (event.data.arguments.command.matches("\\\\b({"|".join(K8S_WRITE_VERBS)})\\\\b")
+      && !event.data.arguments.command.matches("(^|\\\\s)(-n|--namespace)[=\\\\s]+({_ns_alternation()})(\\\\s|$)"))
+  || (event.data.arguments.command.matches("\\\\b({"|".join(K8S_WRITE_VERBS)})\\\\b")
+      && !event.data.arguments.command.matches("--context[=\\\\s]+\\\\S"))
+)
+? {{"result": "DENY", "reason": "woow-k3s 是共用叢集，且 shell 無法用 regex 可靠解析 ⇒ 無法證明安全就擋：寫入／exec 類 kubectl 必須是**單一不串接**的指令、明確帶 --context、且帶**恰好一個**白名單內的 -n。"}} : {{"result": "ALLOW"}}"""
 
 
 # ── policy YAML 片段 ─────────────────────────────────────────────────────────
@@ -320,7 +385,9 @@ WORKERS: dict[str, dict[str, object]] = {
         "desc": "實作 worker（pi）：同 implementer_cc，換 pi 額度池、跨 vendor 的另一個方向。",
     },
     "verifier_cc": {
-        "short": "ver_cc", "harness": "claude-native", "permission_mode": None,
+        # permission_mode: auto —— headless 的 claude-native worker 沒人能回答 permission
+        # prompt，不設會卡死。read_only_os 在 policy 層本來就擋寫入，補這個不放寬唯讀性質。
+        "short": "ver_cc", "harness": "claude-native", "permission_mode": "auto",
         "os_env": True, "readonly": True,
         "desc": "覆核 worker（claude-native）：唯讀，只對著驗收契約審 pi 實作的 diff。",
     },
@@ -553,6 +620,24 @@ def _import_omnigent():
     return spec_mod
 
 
+def _skill_frontmatter_name(skill_md: Path) -> str:
+    """讀一支 SKILL.md 的 frontmatter `name`。
+
+    ⚠ skill 名的**唯一**權威是 frontmatter，目錄名一律被忽略（`_parse_skill`）。查重必須
+    看這個欄位——看目錄名會漏掉「不同目錄、同 frontmatter name」的 first-wins 吞噬。
+    """
+    text = skill_md.read_text()
+    if not text.startswith("---"):
+        return f"<{skill_md} 缺 frontmatter>"
+    _, _, rest = text.partition("---")
+    front, _, _ = rest.partition("\n---")
+    for line in front.splitlines():
+        key, sep, value = line.partition(":")
+        if sep and key.strip() == "name":
+            return value.strip()
+    return f"<{skill_md} frontmatter 缺 name>"
+
+
 def _walk(spec, path=""):
     """深度優先走訪整棵 spec 樹，yield (dotted-path, spec)。"""
     here = f"{path}.{spec.name}" if path else str(spec.name)
@@ -583,6 +668,8 @@ def _send(agent: str, args: dict | None = None) -> dict:
 
 
 CEL_VECTORS: dict[str, dict[str, list]] = {
+    # ⚠ 🔴 標記的向量＝FIX ROUND 1 覆核者**實跑證明可繞過**的 payload。它們現在是回歸
+    #    測試：任何一條再度回到 ALLOW，第 8 項就會紅。
     "p_board_read_only": {
         "deny": [
             _write_ev(".woow-issues/board.md"),
@@ -590,21 +677,35 @@ CEL_VECTORS: dict[str, dict[str, list]] = {
             _write_ev("/home/elmo/woow-repos/paas/woow_paas_platform/.woow-issues/board.md"),
             _write_ev(".woow-issues/board.md", key="path", name="sys_os_write"),
             _write_ev(".woow-issues/board.md", key="path", name="edit"),
+            # 看板目錄整個唯讀，不只 board.md
+            _write_ev(".woow-issues/notes.md"),
             _shell("echo x >> .woow-issues/board.md"),
             _shell("echo x > ./.woow-issues/board.md"),
             _shell("sed -i 's/a/b/' .woow-issues/board.md"),
             _shell("rm .woow-issues/board.md"),
             _shell("cp /tmp/new .woow-issues/board.md", name="sys_os_shell"),
+            # 🔴 覆核者實跑：heredoc 餵給直譯器——枚舉寫入動詞永遠列不完
+            _shell("python3 - <<'PY'\nopen('.woow-issues/board.md','w').write('x')\nPY"),
+            _shell("perl -e 'open(F,\">\",\".woow-issues/board.md\"); print F \"x\"'"),
+            _shell("node -e \"require('fs').writeFileSync('.woow-issues/board.md','x')\""),
+            _shell("sh -c \"echo x > .woow-issues/board.md\""),
+            _shell("cat <<'EOF' > .woow-issues/board.md\nx\nEOF"),
+            _shell("tee .woow-issues/board.md <<< x"),
+            # 唯讀動詞開頭但串接了寫入——無法證明安全
+            _shell("cat .woow-issues/board.md && echo x > .woow-issues/board.md"),
+            _shell("grep x .woow-issues/board.md; rm .woow-issues/board.md"),
         ],
         "allow": [
             _write_ev("docs/index.md"),
-            _write_ev(".woow-issues/notes.md"),
             _write_ev("src/models/skill.py", key="path", name="sys_os_write"),
             _shell("cat .woow-issues/board.md"),
             _shell("cat .woow-issues/board.md 2>/dev/null"),
             _shell("grep -n TODO .woow-issues/board.md"),
+            _shell("head -50 .woow-issues/board.md"),
+            _shell("git diff .woow-issues/board.md"),
+            _shell("ls -la .woow-issues/"),
             _shell("echo x >> docs/notes.md"),
-            # 欄位缺席時不可 DENY（也不可因為讀不到欄位而 abstain 成漏擋）
+            # 欄位缺席時不可 DENY，也不可因為讀不到欄位而 abstain 成漏擋
             {"type": "tool_call", "target": "Edit",
              "data": {"name": "Edit", "arguments": {}}},
             {"type": "tool_call", "target": "Read",
@@ -624,7 +725,6 @@ CEL_VECTORS: dict[str, dict[str, list]] = {
             _send("tracker_via_pi", {"purpose": "triage", "model": "claude-sonnet-5"}),
             _send("researcher_via_cc", {"purpose": "search",
                                         "model": "databricks-claude-haiku-4-5"}),
-            # 不受管的角色，不帶 model 也合法
             _send("impl_cc_via_cc", {"purpose": "implement"}),
             _send("ver_pi_via_cc", {"purpose": "review"}),
             _send("ops_k8s_via_pi", {"purpose": "deploy"}),
@@ -635,15 +735,23 @@ CEL_VECTORS: dict[str, dict[str, list]] = {
         "deny": [
             _shell("tea pr merge 1079"),
             _shell("tea pulls merge 1079"),
+            _shell("tea pulls  merge  1082"),
             _shell("gh pr merge 42 --squash"),
             _shell("glab mr merge 7"),
             _shell("cd /repo && tea  pr   merge 3", name="sys_os_shell"),
+            # 🔴 REST API 直打 merge endpoint——舊版只認 `<cli> pr merge` 三種字面組合
+            _shell("gh api -X PUT repos/o/r/pulls/1/merge"),
+            _shell("gh api --method PUT /repos/o/r/pulls/1082/merge"),
+            _shell("curl -X PUT https://git-prod.woowtech.io/api/v1/repos/o/r/pulls/1/merge"),
+            _shell("sh -c 'gh pr merge 42'"),
+            _shell("echo go && gh pr merge 42"),
         ],
         "allow": [
             _shell("tea pr create --title x"),
             _shell("tea pulls list"),
             _shell("gh pr view 42"),
-            _shell("git merge origin/develop"),
+            _shell("git merge origin/develop"),      # 本機分支整併，非 forge merge
+            _shell("git merge --abort"),
             _shell("echo 'merge is a human gate'"),
             {"type": "tool_call", "target": "Bash", "data": {"name": "Bash", "arguments": {}}},
         ],
@@ -654,10 +762,16 @@ CEL_VECTORS: dict[str, dict[str, list]] = {
             _shell('gh issue comment 42 --body "/approve"'),
             _shell("glab mr note 7 -m '/approve'"),
             _shell("curl -X POST -d '{\"body\":\"/approve\"}' https://git-prod.woowtech.io/api/v1/x"),
+            # 🔴 覆核者實跑：舊版的「且匹配 tea/gh/glab/curl」連言擋不住這兩條
+            _shell("gh api repos/o/r/issues/1/comments -f body=/approve"),
+            _shell("tea comments create 823 '/approve'"),
+            _shell("echo /approve | tea comment 823 -"),
+            _shell("printf '/approve' > /tmp/c && tea comment 823 -F /tmp/c"),
+            # 過度擋（刻意）：worker 沒有任何合法理由打出這個字串
+            _shell("grep -rn '/approve' docs/"),
         ],
         "allow": [
             _shell("tea comment 823 '已完成，等人工核可'"),
-            _shell("grep -rn '/approve' docs/"),
             _shell("cat .claude/commands/woow/deploy.md"),
             _shell("gh pr view 42"),
         ],
@@ -669,13 +783,22 @@ CEL_VECTORS: dict[str, dict[str, list]] = {
             _shell("git push origin refs/tags/v1.7.6"),
             _shell("git push origin operator-v2.0.1"),
             _shell("git push --follow-tags origin develop"),
+            _shell("git push origin HEAD:refs/tags/v9"),
+            _shell("sh -c 'git push origin v1.7.6'"),
+            _shell("echo ok && git push origin v1.7.6"),
+            # 不經 git push 的建 tag／建 release 路徑
+            _shell("gh api repos/o/r/git/refs -f ref=refs/tags/v1.0"),
+            _shell("tea releases create --tag v1.7.6"),
+            _shell("gh release create v1.7.6"),
+            _shell("git tag v1.7.6"),
         ],
         "allow": [
             _shell("git push origin develop"),
             _shell("git push -u origin feat/omnigent-agent-bundles"),
             _shell("git push origin fix/823-cp12"),
             _shell("git push origin release/v1.7.6"),   # 這是 branch，不是 tag
-            _shell("git tag -l"),
+            _shell("git tag -l"),                        # 讀取用法（flag 開頭）
+            _shell("git tag --list 'v1.*'"),
             _shell("git log --oneline -1"),
         ],
     },
@@ -684,9 +807,24 @@ CEL_VECTORS: dict[str, dict[str, list]] = {
             _shell("kubectl --context woow-k3s delete pod foo -n gitea"),
             _shell("kubectl --context woow-k3s apply -f x.yaml -n longhorn-system"),
             _shell("kubectl --context woow-k3s exec -it pod -n default -- sh"),
-            # fail-closed：寫入類沒帶 -n 一律擋（不吃 current namespace）
             _shell("kubectl --context woow-k3s delete pod foo"),
             _shell("kubectl delete -f manifests/get-config.yaml --context woow-k3s"),
+            # 🔴 覆核者實跑的四條繞過
+            _shell("kubectl --context woow-k3s get pods -A && kubectl --context woow-k3s delete pod x -n gitea"),
+            _shell("kubectl --context woow-k3s delete pod x -n gitea && kubectl --context woow-k3s delete pod y -n paas-system"),
+            _shell("kubectl --context woow-k3s delete pod get -n gitea"),
+            _shell("kubectl --context woow-k3s delete pod x -n paas-system -n gitea"),
+            _shell("kubectl delete pod x -n gitea"),                       # 缺 --context
+            # 同型再補
+            _shell("kubectl --context woow-k3s delete pod x -n paas-system; kubectl --context woow-k3s delete pod y -n gitea"),
+            _shell("kubectl --context woow-k3s delete pod x -n paas-system | tee /tmp/l"),
+            _shell("kubectl --context woow-k3s delete pod $(kubectl get pod -o name -n gitea) -n paas-system"),
+            _shell("kubectl --context woow-k3s create ns evil"),
+            _shell("kubectl --context woow-k3s scale deploy/x --replicas=0 -n gitea"),
+            _shell("kubectl --context woow-k3s cp /tmp/x pod:/tmp -n gitea"),
+            _shell("kubectl --context woow-k3s drain node-1"),
+            # 過度擋（刻意，見 README）：非 woow-k3s 的寫入若不在白名單 ns 也擋
+            _shell("kubectl --context docker-desktop delete pod foo -n whatever"),
         ],
         "allow": [
             _shell("kubectl --context woow-k3s get pods -A"),
@@ -696,8 +834,9 @@ CEL_VECTORS: dict[str, dict[str, list]] = {
             _shell("kubectl --context woow-k3s apply -f x.yaml -n paas-ws-stg-demo"),
             _shell("kubectl --context woow-k3s rollout restart deploy/x -n dev-sandbox-abc"),
             _shell("kubectl --context woow-k3s delete gitrepo paas-app -n fleet-local"),
-            _shell("kubectl --context docker-desktop delete pod foo -n whatever"),
+            _shell("kubectl --context docker-desktop apply -f x.yaml -n dev-sandbox-abc"),
             _shell("kubectl --context woow-k3s logs pod -n gitea"),
+            _shell("kubectl --context woow-k3s top pods -n longhorn-system"),
         ],
     },
 }
@@ -748,11 +887,22 @@ def run_checks() -> int:
            f"{len(all_links)} 個 symlink，0 斷鏈" if not broken else str(broken))
 
     # 1. 原始樹 parse + validate
-    spec = spec_mod.parse(LEADER_DIR, expand_env=False)
-    res = spec_mod.validate(spec)
-    r.item("1. parse() + validate()（原始樹）", not res.errors,
-           "errors=[]" if not res.errors
-           else "; ".join(f"{e.path}: {e.message}" for e in res.errors[:6]))
+    #    ⚠ parse() 本身會對壞掉的 YAML 拋例外，必須包起來——否則一份手改壞的 config.yaml
+    #    會用 traceback 中斷整輪驗收，後面每一項都不會跑到（實測 mutation K）。
+    spec = None
+    try:
+        spec = spec_mod.parse(LEADER_DIR, expand_env=False)
+        res = spec_mod.validate(spec)
+        r.item("1. parse() + validate()（原始樹）", not res.errors,
+               "errors=[]" if not res.errors
+               else "; ".join(f"{e.path}: {e.message}" for e in res.errors[:6]))
+    except Exception as exc:  # noqa: BLE001
+        r.item("1. parse() + validate()（原始樹）", False,
+               f"{type(exc).__name__}: {exc}")
+    if spec is None:
+        print()
+        print(f"總計：{r.failed} 項 FAIL（原始樹 parse 失敗，其餘檢查無法進行）")
+        return 1
     nodes = dict(_walk(spec))
 
     # 4. 每個 thin shell 的 skills 數 == 來源池對應 worker 的 skill 數
@@ -823,16 +973,23 @@ def run_checks() -> int:
     r.guard("5a. agent name 唯一且符合 ^[a-zA-Z0-9_-]+$", c5a)
 
     def c5b():
-        pool = []
-        for w in WORKERS:
-            pool += [f.parent.name for f in sorted((WORKERS_DIR / w / "skills").glob("*/SKILL.md"))]
-        pool += [f.parent.name for f in sorted((LEADER_DIR / "skills").glob("*/SKILL.md"))]
-        parsed = sorted({sk.name for sp_ in nodes.values() for sk in sp_.skills})
-        bad = [n for n in parsed if not _re.match(r"^[a-z0-9-]+$", n)]
-        dup = {n for n in pool if pool.count(n) > 1}
-        return (not bad and not dup,
-                f"{len(pool)} 份實體 skill、{len(parsed)} 個不重複 name，0 重複"
-                if not bad and not dup else f"bad={bad} dup={dup}")
+        # ⚠ 🔴 FIX ROUND 1：舊版用 `f.parent.name`（**目錄名**）查重是錯的欄位——
+        #    skill 名一律取自 frontmatter，目錄名被忽略。兩個不同目錄、frontmatter 同名時
+        #    `discover_host_skills` 會 first-wins 吃掉後者，而舊檢查完全看不到。
+        #    這裡直接讀每支 SKILL.md 的 frontmatter `name`，保留 list（不是 set）再查重。
+        pool: list[tuple[str, str]] = []   # (frontmatter name, 檔案路徑)
+        for src in [WORKERS_DIR / w / "skills" for w in WORKERS] + [LEADER_DIR / "skills"]:
+            for f in sorted(src.glob("*/SKILL.md")):
+                pool.append((_skill_frontmatter_name(f), str(f.relative_to(OMNIGENT_DIR))))
+        names = [n for n, _ in pool]
+        bad = sorted({n for n in names if not _re.match(r"^[a-z0-9-]+$", n)})
+        dup = sorted({n for n in names if names.count(n) > 1})
+        # 目錄名與 frontmatter name 不一致本身不是錯，但會讓人讀錯樹 ⇒ 一併提醒。
+        mismatch = [f"{path}: 目錄名 {path.split('/')[-2]!r} != frontmatter {n!r}"
+                    for n, path in pool if path.split("/")[-2] != n]
+        ok = not bad and not dup and not mismatch
+        return ok, (f"{len(pool)} 份實體 skill 的 frontmatter name 全數唯一且合法"
+                    if ok else f"bad={bad} dup={dup} mismatch={mismatch[:3]}")
     r.guard("5b. skill name 符合 ^[a-z0-9-]+$ 且來源全域唯一", c5b)
 
     # 6. 每個 thin shell 都出現在上層 tools.agents

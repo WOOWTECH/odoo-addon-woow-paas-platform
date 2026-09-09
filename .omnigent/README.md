@@ -1,6 +1,6 @@
 # woow Omnigent multi-agent bundle
 
-取代原本 Maestri 的 `woow-issue-leader` / `woow-repo-agent-leader` 編制。
+woow 六個 repo 的 issue／實作編制。**本檔是給維護者看的**，不進任何 agent 的 prompt。
 
 ```
 woow-issue-leader                     ← issue 層總指揮（claude-native）
@@ -41,6 +41,10 @@ python3 .omnigent/build-bundles.py --check   # 驗收（產物不同步也會判
 啟動一輪工（一張 issue 一個 runner，workspace 就是該 issue 的 worktree）：
 
 ```bash
+# ⚠ 這三行在 **launch host 的 shell** 裡跑，是「建 runner 之前」的準備動作。
+#   它們**不是**在任何 agent session 裡跑的——implementer 身上的
+#   block_working_dir_changes 會 DENY `cd` / `git -C` / `git worktree`，那是刻意的，
+#   worktree 的建立與銷毀屬於人／launch host，不屬於 worker。
 git -C <repo> worktree add ../wt-<issue-id> -b <type>/<issue-id> origin/<整合分支>
 cd ../wt-<issue-id>
 omnigent run --server <url> .omnigent/woow-issue-leader
@@ -78,14 +82,31 @@ omnigent run --server <url> .omnigent/woow-issue-leader
 `omnigent.policies.builtins.cel.cel_policy`（⛔ 不寫自訂 Python policy 模組——那要裝進
 omnigent 的 venv，而且 `function.path` 打錯字會讓 worker 連 `Read` 都被 DENY）。
 
+### 判斷方向：無法證明安全就 DENY
+
+🔴 **這是 FIX ROUND 1 的核心修正。** 原本每一道都寫成「整條 command 看起來安全 → 放行」，
+而 shell 沒辦法用單一 regex 可靠解析——覆核者實跑證明了 9 個繞過（串接、重複 `-n`、把安全
+動詞當 resource 名、heredoc 餵 `python3`、`gh api -f body=/approve`、`gh api -X PUT
+.../merge`…）。反轉成「**無法證明安全就 DENY**」之後，regex 就是 sound 的：
+**誤擋會 fail loud（worker 會回報被擋），漏擋是靜默的。**
+
 | 守線 | 掛在哪 | 擋什麼 |
 | --- | --- | --- |
-| `p_board_read_only` | 除 issue-leader 外**全部** | 寫 `.woow-issues/board.md`（相對／`./`／絕對三種寫法，以及 shell 改寫） |
+| `p_board_read_only` | 除 issue-leader 外**全部** | 任何提到 `.woow-issues/` 而**無法證明是唯讀**的指令（唯讀＝單一不串接、且以 `cat`/`less`/`head`/`tail`/`grep`/`rg`/`ls`/`wc`/`diff`/`git diff`/`git show` 開頭） |
 | `p_model_fast_tier_only` | 三層 leader | 對 `scout_pi` / `tracker` / `researcher` 派工未帶或帶了非快層 `args.model` |
-| `p_merge_no_agent_merge` | 全部 | `tea pr\|pulls merge`、`gh pr merge`、`glab mr merge` |
-| `p_approve_no_agent_signoff` | 全部 | 送出 `/approve` 留言的指令 |
-| `p_tag_no_agent_tag_push` | 全部 | `git push` 推 tag（`v<版號>` / `--tags` / `refs/tags/`） |
-| `p_kubectl_namespace_scope` | 僅 `ops_k8s_*` | `--context woow-k3s` 下寫入／exec 類 kubectl 的越界 namespace |
+| `p_merge_no_agent_merge` | 全部 | 任何 forge CLI（`tea`/`gh`/`glab`）同句出現 `merge`，或 `curl` 打 merge endpoint |
+| `p_approve_no_agent_signoff` | 全部 | 指令中**出現 `/approve` 字串**（不再限定工具名） |
+| `p_tag_no_agent_tag_push` | 全部 | `git push`＋tag 形態、`refs/tags/`、forge `release`、`git tag <name>` |
+| `p_kubectl_namespace_scope` | 僅 `ops_k8s_*` | 提到 `kubectl` 且：含串接／`-n` 出現多次／寫入 verb 但 ns 不在白名單／寫入 verb 但沒帶 `--context` |
+
+### ⚠ 已知的刻意誤擋（fail loud，不放寬）
+
+| 被擋的合法操作 | 為什麼不放寬 |
+| --- | --- |
+| `grep -rn '/approve' docs/` | 放寬就要回到「枚舉工具名」，而那正是被繞過的原因 |
+| `kubectl --context woow-k3s get pods -A && echo done`（唯讀＋串接） | 串接之後做什麼無法用 regex 證明；拆成兩條指令即可 |
+| `kubectl --context docker-desktop delete pod x -n whatever` | 規則不分 context。本機沙盒的正規流程走 `dev-sandbox-*`（在白名單內），不受影響 |
+| `git tag v1.0`（本機建 tag，未推） | 建 tag 是發版動作的第一步；讀取用法 `git tag -l` / `--list` 不受影響 |
 
 ### ⚠ CEL 是 fail-OPEN 的
 
