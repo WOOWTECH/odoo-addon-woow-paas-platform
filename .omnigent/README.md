@@ -101,12 +101,62 @@ omnigent 的 venv，而且 `function.path` 打錯字會讓 worker 連 `Read` 都
 
 ### ⚠ 已知的刻意誤擋（fail loud，不放寬）
 
-| 被擋的合法操作 | 為什麼不放寬 |
+| 被擋的合法操作 | 替代做法 | 為什麼不放寬 |
+| --- | --- | --- |
+| `grep -rn '/approve' docs/` | 搜尋字串去掉斜線：`grep -rn approve docs/` | 放寬就要回到「枚舉工具名」，那正是被繞過的原因 |
+| `kubectl ... get ... && echo done`（唯讀＋串接） | **拆成兩次 tool call** | 串接之後做什麼無法用 regex 證明 |
+| `kubectl --context woow-k3s apply -f x.yaml` | 先 `--dry-run=server`；真要套用走 `deploy-stg` skill 或交給人 | manifest 內的 `metadata.namespace` 會覆蓋 `-n`，regex 看不到檔案內容 |
+| `git tag v1.0`（本機建 tag，未推） | 讀取用 `git tag -l` / `--list`；建 tag 交給人 | 建 tag 是發版動作的第一步 |
+
+⚠ `kubectl --context docker-desktop ...` **不再被擋**（FIX ROUND 2）：docker-desktop 是本
+機測試／開發用叢集，鐵律限定的是 woow-k3s 這個共用叢集。舊版不分 context，會毀掉
+`/woow-dev:k8s-dev-sandbox` 的 create／destroy／test 工作流。
+
+### 🔴 守線的強度分級（讀這段再決定要不要信任某條守線）
+
+**不是每一條守線都一樣強。** 混為一談會導致兩種錯誤：把 best-effort 的當成保證（危險），
+或把可靠的也當成擺設（浪費）。
+
+#### A. Sound —— 繞不過，可以當成保證
+
+| 守線 | 為什麼可靠 |
 | --- | --- |
-| `grep -rn '/approve' docs/` | 放寬就要回到「枚舉工具名」，而那正是被繞過的原因 |
-| `kubectl --context woow-k3s get pods -A && echo done`（唯讀＋串接） | 串接之後做什麼無法用 regex 證明；拆成兩條指令即可 |
-| `kubectl --context docker-desktop delete pod x -n whatever` | 規則不分 context。本機沙盒的正規流程走 `dev-sandbox-*`（在白名單內），不受影響 |
-| `git tag v1.0`（本機建 tag，未推） | 建 tag 是發版動作的第一步；讀取用法 `git tag -l` / `--list` 不受影響 |
+| `read_only_os` | 比對**工具名**（`Write`/`Edit`/`sys_os_write`…），不看 shell 字串 |
+| **省略 `os_env`** | `sys_os_read/write/edit/shell` 四支**根本不註冊**——沒有這個工具就做不到 |
+| `p_model_fast_tier_only` | 讀的是 `sys_session_send` 的**結構化參數**，不是 shell 字串 |
+| `headless_subagent_purpose_guard` / `spawn_bounds` | 同上，結構化參數 |
+| `block_working_dir_changes` | 有自己的 shell 解析（非單一 regex），且只需判斷 `cd`/`git -C` 這種固定形狀 |
+| repo 的 `.claude/hooks/kubectl-ns-guard.py` | 用 `shlex` 正確解析，剝 heredoc、認 `bash -c`、認 `--`；且 repo-lint 對帳白名單 |
+
+#### B. Best-effort —— 防手滑，**不是安全邊界**
+
+`p_merge_no_agent_merge`、`p_approve_no_agent_signoff`、`p_tag_no_agent_tag_push`、
+`p_escape_obfuscated_command`、`p_kubectl_namespace_scope`、以及 `p_board_read_only`
+的 **shell 那一側**（它比對工具名的那一側屬於 A 類）。
+
+這些都是**對 raw shell 字串做 regex 比對**。**regex 對 shell 字串永遠不可能 sound**——
+shell 有太多等價寫法。它們擋得掉常見寫法，擋不住刻意規避。
+
+**威脅模型是「防 agent 犯錯」，不是「防 agent 攻擊」。** LLM 不會為了規避一道它不知道存
+在的守線，去把指令名寫成轉義形式。所以本 bundle **刻意不再追 regex 完備性**——每加一層都
+在增加誤擋，而且贏不了。
+
+#### 已知繞過向量（刻意不修，全部記在 `CEL_VECTORS` 的 `known_gap`）
+
+| 形式 | 例子 |
+| --- | --- |
+| 變數展開 | `V=v1.7.6; git push origin $V` |
+| 命令替換 | `curl -X PUT "$API/pulls/1/$(printf 'me'; printf 'rge')"` |
+| 引號切斷 | `tea comment 823 '/appr''ove'` |
+| base64 解碼後由 stdin 送 body | `echo L2FwcHJvdmU= \| base64 -d \| tea comment 823 -F -` |
+| 檔案 body | `base64 -d /tmp/b.b64 > /tmp/b && tea comment 823 -F /tmp/b` |
+| `$'\x..'` hex 轉義 | `tea comment 823 $'\x2f\x61\x70\x70\x72\x6f\x76\x65'` |
+
+`p_escape_obfuscated_command` 只便宜地攔掉**反斜線轉義**那一類（`kube\ctl`、`me\rge`、
+`pu\sh`）——因為那一招最常見且成本最低。其餘不追。
+
+`known_gap` 向量會實際執行：它們**不判 FAIL**（記錄的是「我們知道這裡漏」），但若哪天變
+成 DENY，驗收第 8 項會在 PASS 訊息裡講出來，提示可以升級成正式的 deny 向量。
 
 ### ⚠ CEL 是 fail-OPEN 的
 
@@ -123,6 +173,27 @@ CEL 參照不存在的欄位時回 `None`＝**abstain＝ALLOW**。所以：
 實測 `git push origin v1.2.3` 只回 **ASK**（URL regex 硬編 `github.com`，Gitea 判不出
 repo），而且完全不認 `tea`。所以 `p_tag_no_agent_tag_push` 自己對 command 字串做 regex。
 
+### ⛔ 為什麼不用 `enforce_sandbox` 斷網（評估過，不可行）
+
+`P-merge`／`P-approve`／`P-tag` 防的都是**對 Gitea 的網路寫入**，所以「乾脆讓唯讀 worker
+斷網」看起來是那個真正 sound 的一層。實測後**三個獨立原因都否決了它**：
+
+1. **會斷掉 harness 自己的 LLM 呼叫。** `enforce_sandbox` 覆寫的是 agent **子行程**的
+   sandbox（`sys_agent_start` 攔截點），而 bwrap 後端在 `allow_network=False` 時加
+   `--unshare-net`；對 `claude-native` 來說被包住的就是 `claude` CLI 本身 ⇒ 連不到
+   Anthropic API，worker 直接不能跑。`enforce_sandbox` 的參數只有
+   `sandbox_type / allow_network / write_paths / read_paths / env_passthrough`，
+   **沒有** egress allowlist 可以替 LLM API 開洞。
+2. **會把「刻意省略 `os_env`」這個 sound 的守線反過來拆掉。** runner 套用 verdict 的
+   `_apply_sandbox_override_from_verdict` 會做 `if spec.os_env is None: spec.os_env =
+   OSEnvSpec()`——實測對 `researcher_via_pi` 套下去，`os_env` 從 `None` 變成一個完整的
+   `OSEnvSpec`。而「省略 `os_env` ⇒ 四支 `sys_os_*` 都不註冊」正是唯讀 worker 最強的那道
+   保證。等於為了加一層 best-effort，拆掉一層 sound 的。
+3. `sandbox: {type: none}` 搭 `allow_network: false` 會直接
+   `ValueError: sandbox type 'none' cannot restrict network`。
+
+⇒ 唯讀 worker 的保證維持在 **A 類**：`read_only_os` ＋ **省略 `os_env`**。
+
 ### ⚠ `cost_budget` 只掛 claude-native
 
 pi 是 subscription 且無 catalog pricing，掛上去會走 `_UNPRICED_ASK`，**每個 session 卡一次
@@ -138,9 +209,12 @@ pi 是 subscription 且無 catalog pricing，掛上去會走 `_UNPRICED_ASK`，*
 `build-bundles.py` 的 `K8S_ALLOWED_NAMESPACES`。**後兩份不在 repo-lint 對帳範圍內——改白
 名單時五份都要一起改。**
 
-`p_kubectl_namespace_scope` 是 **regex 比對，不做 shell 解析**：認不出 `bash -c` 包一層、
-認不出 script 檔裡的 kubectl。它是**提醒層**；解析等級的保證仍在
-`.claude/hooks/kubectl-ns-guard.py`。
+**權威守線是 repo 的 `.claude/hooks/kubectl-ns-guard.py`**（用 `shlex` 正確解析，且
+repo-lint 對帳白名單）；workspace 設成本 repo／其 worktree 時它會自動載入。
+`p_kubectl_namespace_scope` 是 **第二層 defense-in-depth、best-effort**：regex 比對、不做
+shell 解析，認不出 `bash -c` 包一層或 script 檔裡的 kubectl，**已知可被 shell 轉義繞過**。
+⛔ 不要在任何地方把它寫成「機器強制」或暗示它擋得住刻意規避。它的價值是「workspace 不在
+本 repo 時仍有一層接得住手滑」。
 
 ## 機器相關的值
 

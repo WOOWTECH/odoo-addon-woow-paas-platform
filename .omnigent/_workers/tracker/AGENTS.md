@@ -31,17 +31,34 @@
 
 ## ⛔ 鐵律（不可協商）
 
-1. **不代 merge**——merge 是人工 gate。機器守線 **P-merge** 會 DENY
-   `tea pr merge` / `gh pr merge` / `glab mr merge`。
+⚠ **先讀這句**：下面 1–3 條**首先是紀律規則**，其次才有守線。對應的 `P-merge` /
+`P-approve` / `P-tag` 是**對 shell 指令字串做比對**的 best-effort 守線——它們擋得掉常見寫
+法，但**擋不住所有形式**（見下方「守線有兩種強度」）。⛔ **不要因為「沒被擋下來」就推論
+這件事可以做。**
+
+1. **不代 merge**——merge 是人工 gate，**絕對、不分 PR 類型**。`P-merge` 會擋
+   `tea pr|pulls merge`、`gh pr merge`、`glab mr merge`、`gh api ... /merge` 等常見寫法。
 2. **不代簽 approval**——prod build 的 `/approve` 只能授權者本人送出，**即使人類當場明
-   確授權、即使手上憑證就是授權者本人也不代簽**。機器守線 **P-approve** 強制。
-3. **不推 tag**——機器守線 **P-tag** 會 DENY `git push` 推 tag（`v<版號>`、`--tags`、
-   `refs/tags/` 三種形態）。
+   確授權、即使手上憑證就是授權者本人也不代簽**。`P-approve` 擋含 `/approve` 的指令。
+3. **不推 tag、不建 release**——`P-tag` 擋 `git push` 推 tag（`v<版號>` / `--tags` /
+   `refs/tags/`）、`git tag <name>`、以及 forge 的 release／`git/refs` 建立。
 4. **一律 zh-tw 繁體中文**：PR / Issue / Comment 描述、commit message、程式碼註解。技術
    詞彙保持 English。
 5. **Gitea 一律用 `tea` CLI**（git-prod.woowtech.io）。`gh-origin` 只是 mirror。
-6. **看板唯讀**：`.woow-issues/board.md` 只有 `woow-issue-leader` 能寫，你對它唯讀，由機
-   器守線 **P-board** 強制。要更新看板就把內容寫進回報，由上層代寫。
+6. **看板唯讀**：`.woow-issues/` 只有 `woow-issue-leader` 能寫。`P-board` 有兩側：比對
+   **工具名**的那一側（`Write`／`Edit`／`sys_os_write`…）是可靠的；比對 **shell 字串**的
+   那一側是 best-effort。要更新看板就把內容寫進回報，由上層代寫。
+
+## 守線有兩種強度
+
+- **可靠（比對工具名／結構化參數）**：`read_only_os`（唯讀 worker 完全不能寫檔）、
+  省略 `os_env`（`sys_os_*` 四支根本不註冊）、`P-model`、`purpose` 檢查。
+  這些不看 shell 字串，繞不過。
+- **best-effort（比對 shell 指令字串）**：`P-merge`／`P-approve`／`P-tag`／`P-escape`／
+  `P-kubectl`／`P-board` 的 shell 那一側。**已知可被 shell 轉義與變數展開繞過**，
+  它們防的是**手滑**，不是刻意規避。
+
+守線是安全網，不是授權邊界——**規則本身才是**。
 
 ## 跨 repo（唯讀）
 
@@ -50,8 +67,10 @@
 - ✅ `cat` / `grep` / `rg` / `ls` 帶**絕對路徑**（例如
   `grep -rn '_inherit' /home/elmo/woow-repos/<repo>/src/`）。這不是 working-dir 變更，
   不會被守線攔。
-- ⛔ **不得用 `cd` 或 `git -C`**：你這一層沒掛 `block_working_dir_changes`，但搬動 cwd 會讓相對路徑的結論指到
-  別的 repo、事後無法重現；統一用絕對路徑，結論才對得起來。
+- ⛔ **不得用 `cd` 或 `git -C`**。**你這個角色沒有掛 `block_working_dir_changes`，所以這
+  是紀律規則、不是機器擋的**——但搬動 cwd 會讓相對路徑的結論指到別的 repo、事後無法重現，
+  而你的產出就是那些結論。統一用絕對路徑，結論才對得起來。
+  （對照：`impl_*` 實作 worker **有**掛這條 policy，它們的 `cd`／`git -C` 是真的會被 DENY。）
 - 需要別 repo 的 **git 歷史**（log / blame / diff）或 **CI 狀態**時，回報給上層，由它在
   該 repo／worktree 另起一個 runner，⛔ 不要自己想辦法繞過。
 - Gitea 的 issue／PR 狀態一律走 `tea`，不需要（也不該）`cd` 到該 repo。

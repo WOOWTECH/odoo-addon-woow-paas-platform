@@ -54,14 +54,27 @@ guardrails:
             && has(event.data.arguments.command)
             && event.data.arguments.command.matches("\\bkubectl\\b")
             && (
-                 event.data.arguments.command.matches("(&&|\\|\\||;|\\||`|\\$\\(|\\n)")
-              || event.data.arguments.command.matches("(^|\\s)(-n|--namespace)[=\\s][\\s\\S]*(^|\\s)(-n|--namespace)[=\\s]")
-              || (event.data.arguments.command.matches("\\b(delete|apply|patch|edit|scale|exec|cp|drain|cordon|annotate|label|replace|rollout|set|create|run|expose|autoscale|taint|uncordon|attach|port-forward|proxy|debug)\\b")
-                  && !event.data.arguments.command.matches("(^|\\s)(-n|--namespace)[=\\s]+(paas-ws-[A-Za-z0-9._-]+|paas-ws-stg-[A-Za-z0-9._-]+|paas-system|paas-stg-system|paas-cloudflare-system|paas-stg-cloudflare-system|dev-sandbox-[A-Za-z0-9._-]+|fleet-local)(\\s|$)"))
-              || (event.data.arguments.command.matches("\\b(delete|apply|patch|edit|scale|exec|cp|drain|cordon|annotate|label|replace|rollout|set|create|run|expose|autoscale|taint|uncordon|attach|port-forward|proxy|debug)\\b")
+                 // 寫入類但沒帶 --context：預設 context 可能就是 woow-k3s，無法證明安全
+                 (event.data.arguments.command.matches("\\b(delete|apply|patch|edit|scale|exec|cp|drain|cordon|annotate|label|replace|rollout|set|create|run|expose|autoscale|taint|uncordon|attach|port-forward|proxy|debug)\\b")
                   && !event.data.arguments.command.matches("--context[=\\s]+\\S"))
+                 // 以下只在明確指向 woow-k3s 時才套用（docker-desktop 是本機叢集，不受此鐵律管）
+              || (event.data.arguments.command.matches("--context[=\\s]+woow-k3s")
+                  && (
+                       // 串接／替換：無法證明「每一段」都在白名單內
+                       event.data.arguments.command.matches("(&&|\\|\\||;|\\||`|\\$\\(|\\n)")
+                       // -n 出現超過一次：無法確定哪一個生效
+                    || event.data.arguments.command.matches("(^|\\s)(-n|--namespace)[=\\s][\\s\\S]*(^|\\s)(-n|--namespace)[=\\s]")
+                       // 寫入類但 namespace 不在白名單（含完全沒帶 -n）
+                    || (event.data.arguments.command.matches("\\b(delete|apply|patch|edit|scale|exec|cp|drain|cordon|annotate|label|replace|rollout|set|create|run|expose|autoscale|taint|uncordon|attach|port-forward|proxy|debug)\\b")
+                        && !event.data.arguments.command.matches("(^|\\s)(-n|--namespace)[=\\s]+(paas-ws-[A-Za-z0-9._-]+|paas-ws-stg-[A-Za-z0-9._-]+|paas-system|paas-stg-system|paas-cloudflare-system|paas-stg-cloudflare-system|dev-sandbox-[A-Za-z0-9._-]+|fleet-local)(\\s|$)"))
+                       // 從檔案套用 manifest：檔案內的 metadata.namespace 會蓋掉命令列的 -n，
+                       // regex 看不到檔案內容 ⇒ 除非 --dry-run，否則擋
+                    || (event.data.arguments.command.matches("\\b(apply|create|replace|patch)\\b")
+                        && event.data.arguments.command.matches("(^|\\s)(-f|--filename|-k|--kustomize)[=\\s]")
+                        && !event.data.arguments.command.matches("--dry-run"))
+                  ))
             )
-            ? {"result": "DENY", "reason": "woow-k3s 是共用叢集，且 shell 無法用 regex 可靠解析 ⇒ 無法證明安全就擋：寫入／exec 類 kubectl 必須是**單一不串接**的指令、明確帶 --context、且帶**恰好一個**白名單內的 -n。"} : {"result": "ALLOW"}
+            ? {"result": "DENY", "reason": "woow-k3s 是共用叢集，且 shell／manifest 內容無法用 regex 證明安全：寫入類 kubectl 必須明確帶 --context、單一不串接、帶恰好一個白名單內的 -n；從檔案套 manifest 需 --dry-run（檔案內的 metadata.namespace 會覆蓋 -n）。本機 docker-desktop 不受此規則限制。"} : {"result": "ALLOW"}
     p_board_read_only:
       type: function
       on: [tool_call]
@@ -90,7 +103,7 @@ guardrails:
             event.type == "tool_call"
             && event.data.name in ["Bash", "Shell", "bash", "developer__shell", "shell", "sys_os_shell", "terminal"]
             && has(event.data.arguments.command)
-            && event.data.arguments.command.matches("(\\b(tea|gh|glab)\\b[\\s\\S]*\\bmerge\\b|\\bcurl\\b[\\s\\S]*merge)")
+            && event.data.arguments.command.matches("(\\b(tea|gh|glab)\\b[\\s\\S]*\\bmerge\\b|\\bcurl\\b[\\s\\S]*merge|\\b(tea|gh|glab)\\s+(pulls?|pr|mr)\\s+m[a-z]*\\b)")
             ? {"result": "DENY", "reason": "merge 是人工 gate，agent 不代 merge（含 gh api / tea pulls merge 等變形）。開好 PR 等人來 merge。"} : {"result": "ALLOW"}
     p_approve_no_agent_signoff:
       type: function
@@ -119,9 +132,24 @@ guardrails:
                   && event.data.arguments.command.matches("(--tags|--follow-tags|refs/tags/|[\\s:]([A-Za-z0-9._-]+-)?v[0-9])"))
               || event.data.arguments.command.matches("refs/tags/")
               || event.data.arguments.command.matches("\\b(tea|gh|glab)\\b[\\s\\S]*\\brelease")
+              || event.data.arguments.command.matches("\\bgh\\b[\\s\\S]*\\bapi\\b[\\s\\S]*git/refs")
+              || event.data.arguments.command.matches("-X\\s+(POST|PATCH|PUT)[\\s\\S]*git/refs")
               || event.data.arguments.command.matches("\\bgit\\s+tag\\s+[^-\\s]")
             )
             ? {"result": "DENY", "reason": "發版 tag 由人工推，agent 不推 tag、不建 release（v<版號> / --tags / refs/tags/ / git tag <name> / forge release 皆擋）。"} : {"result": "ALLOW"}
+    p_escape_obfuscated_command:
+      type: function
+      on: [tool_call]
+      function:
+        path: omnigent.policies.builtins.cel.cel_policy
+        arguments:
+          expression: |-
+            event.type == "tool_call"
+            && event.data.name in ["Bash", "Shell", "bash", "developer__shell", "shell", "sys_os_shell", "terminal"]
+            && has(event.data.arguments.command)
+            && event.data.arguments.command.matches("\\\\[a-zA-Z0-9]")
+            && event.data.arguments.command.matches("(k\\\\?u\\\\?b\\\\?e|m\\\\?e\\\\?r\\\\?g\\\\?e|a\\\\?p\\\\?p\\\\?r\\\\?o\\\\?v\\\\?e|t\\\\?a\\\\?g|p\\\\?u\\\\?s\\\\?h|b\\\\?o\\\\?a\\\\?r\\\\?d|w\\\\?o\\\\?o\\\\?w\\\\?-\\\\?i\\\\?s\\\\?s\\\\?u\\\\?e\\\\?s)")
+            ? {"result": "DENY", "reason": "指令同時含反斜線轉義序列與敏感字根（kube／merge／approve／tag／push／board）——這種寫法無法用字串比對判斷真正要執行什麼。請改用不含轉義的直白寫法。"} : {"result": "ALLOW"}
     max_tool_calls_per_session:
       type: function
       function:

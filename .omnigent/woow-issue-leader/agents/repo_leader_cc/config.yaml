@@ -101,7 +101,7 @@ guardrails:
             event.type == "tool_call"
             && event.data.name in ["Bash", "Shell", "bash", "developer__shell", "shell", "sys_os_shell", "terminal"]
             && has(event.data.arguments.command)
-            && event.data.arguments.command.matches("(\\b(tea|gh|glab)\\b[\\s\\S]*\\bmerge\\b|\\bcurl\\b[\\s\\S]*merge)")
+            && event.data.arguments.command.matches("(\\b(tea|gh|glab)\\b[\\s\\S]*\\bmerge\\b|\\bcurl\\b[\\s\\S]*merge|\\b(tea|gh|glab)\\s+(pulls?|pr|mr)\\s+m[a-z]*\\b)")
             ? {"result": "DENY", "reason": "merge 是人工 gate，agent 不代 merge（含 gh api / tea pulls merge 等變形）。開好 PR 等人來 merge。"} : {"result": "ALLOW"}
     p_approve_no_agent_signoff:
       type: function
@@ -130,9 +130,24 @@ guardrails:
                   && event.data.arguments.command.matches("(--tags|--follow-tags|refs/tags/|[\\s:]([A-Za-z0-9._-]+-)?v[0-9])"))
               || event.data.arguments.command.matches("refs/tags/")
               || event.data.arguments.command.matches("\\b(tea|gh|glab)\\b[\\s\\S]*\\brelease")
+              || event.data.arguments.command.matches("\\bgh\\b[\\s\\S]*\\bapi\\b[\\s\\S]*git/refs")
+              || event.data.arguments.command.matches("-X\\s+(POST|PATCH|PUT)[\\s\\S]*git/refs")
               || event.data.arguments.command.matches("\\bgit\\s+tag\\s+[^-\\s]")
             )
             ? {"result": "DENY", "reason": "發版 tag 由人工推，agent 不推 tag、不建 release（v<版號> / --tags / refs/tags/ / git tag <name> / forge release 皆擋）。"} : {"result": "ALLOW"}
+    p_escape_obfuscated_command:
+      type: function
+      on: [tool_call]
+      function:
+        path: omnigent.policies.builtins.cel.cel_policy
+        arguments:
+          expression: |-
+            event.type == "tool_call"
+            && event.data.name in ["Bash", "Shell", "bash", "developer__shell", "shell", "sys_os_shell", "terminal"]
+            && has(event.data.arguments.command)
+            && event.data.arguments.command.matches("\\\\[a-zA-Z0-9]")
+            && event.data.arguments.command.matches("(k\\\\?u\\\\?b\\\\?e|m\\\\?e\\\\?r\\\\?g\\\\?e|a\\\\?p\\\\?p\\\\?r\\\\?o\\\\?v\\\\?e|t\\\\?a\\\\?g|p\\\\?u\\\\?s\\\\?h|b\\\\?o\\\\?a\\\\?r\\\\?d|w\\\\?o\\\\?o\\\\?w\\\\?-\\\\?i\\\\?s\\\\?s\\\\?u\\\\?e\\\\?s)")
+            ? {"result": "DENY", "reason": "指令同時含反斜線轉義序列與敏感字根（kube／merge／approve／tag／push／board）——這種寫法無法用字串比對判斷真正要執行什麼。請改用不含轉義的直白寫法。"} : {"result": "ALLOW"}
     max_tool_calls_per_session:
       type: function
       function:

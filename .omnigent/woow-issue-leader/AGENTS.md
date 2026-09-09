@@ -159,8 +159,12 @@ model**。
 - ✅ `cat` / `grep` / `rg` / `ls` 帶**絕對路徑**（例如
   `grep -rn '_inherit' /home/elmo/woow-repos/<repo>/src/`）。這不是 working-dir 變更，
   不會被守線攔。
-- ⛔ **不得用 `cd` 或 `git -C`**：你這一層沒掛 `block_working_dir_changes`，但搬動 cwd 會讓相對路徑的結論指到
-  別的 repo、事後無法重現；統一用絕對路徑，結論才對得起來。
+- ⛔ **不得用 `cd` 或 `git -C`**。**你這一層沒有掛 `block_working_dir_changes`，所以這是
+  紀律規則、不是機器擋的**——但搬動 cwd 會讓相對路徑的結論指到別的 repo、事後無法重現。
+  統一用絕對路徑。
+  （對照：`impl_*` 實作 worker **有**掛這條 policy，它們的 `cd`／`git -C` 會被 DENY；
+  其餘唯讀 worker 與你一樣是紀律規則。建 worktree 的 `git -C ... worktree add` 是在
+  **launch host 的 shell** 跑的，不在任何受約束的 session 裡。）
 - 需要別 repo 的 **git 歷史**（log / blame / diff）或 **CI 狀態**時，回報給上層，由它在
   該 repo／worktree 另起一個 runner，⛔ 不要自己想辦法繞過。
 
@@ -178,6 +182,6 @@ model**。
 | `blast_radius` (`gate_pushes: true`) | push／merge／deploy 類指令要人工放行 |
 | P-board | **不掛在你身上**——全樹只有你能寫 `.woow-issues/board.md`，其他 18 個 bundle 都掛 |
 | P-model | 對 scout／tracker／researcher 派工必須顯式指定快層 model |
-| P-merge / P-approve / P-tag | 見上方鐵律 |
+| P-merge / P-approve / P-tag / P-escape | 見上方鐵律。⚠ 這幾條是**對 shell 字串做比對的 best-effort 守線**，擋得掉常見寫法、擋不住刻意規避——**沒被擋不等於可以做** |
 | `max_tool_calls_per_session` / `detect_loop` / `detect_thrashing` | 迴圈與空轉偵測 |
 | `cost_budget` | 花費上限（僅 claude-native 系；pi 系刻意不掛，見 README） |

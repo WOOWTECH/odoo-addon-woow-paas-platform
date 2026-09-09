@@ -160,6 +160,35 @@ def _ns_alternation() -> str:
 # shell 串接／替換：出現任何一個就代表「這條 command 不只做一件事」，無法用 regex 證明安全。
 SHELL_CHAIN_RE = r"(&&|\\|\\||;|\\||`|\\$\\(|\\n)"
 
+# ── P-escape（組 3-1，便宜加固）────────────────────────────────────────────
+# shell 允許在指令名中間插反斜線轉義（`kube\ctl`、`gh pr me\rge`）來規避字串比對。
+# 這條**不追完備性**——它只便宜地攔掉「同一條指令裡同時出現反斜線轉義序列與敏感字根」
+# 這個組合，就能擋掉覆核者列的大多數轉義向量。
+# ⚠ 它攔不住 `''` 切斷、`$'\x..'` hex 轉義、base64 解碼後由 stdin 送 body 等其他形式
+#    （見 README §已知繞過向量，以及 CEL_VECTORS 的 known_gap 區）。
+#    威脅模型是**防 agent 犯錯，不是防 agent 攻擊**：LLM 不會為了規避一道它不知道存在
+#    的守線，去把指令名寫成轉義形式。繼續追 regex 完備性是贏不了的仗。
+ESCAPE_SEQ_RE = r"\\\\[a-zA-Z0-9]"
+# 敏感字根本身也可能被轉義切斷（`me\rge`、`pu\sh`），所以字元之間要容許一個可選的反斜線。
+# `\\\\?` 經 YAML → CEL 兩層還原後是 regex 的「可選的字面反斜線」。
+_SENSITIVE_ROOTS = ["kube", "merge", "approve", "tag", "push", "board", "woow-issues"]
+
+
+def _escape_tolerant(word: str) -> str:
+    """把 word 轉成「允許字元之間插入反斜線轉義」的 regex 片段。"""
+    return r"\\\\?".join(word)
+
+
+SENSITIVE_ROOT_RE = "(" + "|".join(_escape_tolerant(w) for w in _SENSITIVE_ROOTS) + ")"
+
+CEL_ESCAPE = f"""event.type == "tool_call"
+&& event.data.name in {_cel_list(SHELL_TOOLS)}
+&& has(event.data.arguments.command)
+&& event.data.arguments.command.matches("{ESCAPE_SEQ_RE}")
+&& event.data.arguments.command.matches("{SENSITIVE_ROOT_RE}")
+? {{"result": "DENY", "reason": "指令同時含反斜線轉義序列與敏感字根（kube／merge／approve／tag／push／board）——這種寫法無法用字串比對判斷真正要執行什麼。請改用不含轉義的直白寫法。"}} : {{"result": "ALLOW"}}"""
+
+
 # ── P-board ──────────────────────────────────────────────────────────────────
 # 「提到 .woow-issues/ 且無法證明是唯讀」就 DENY。⛔ 不再枚舉寫入動詞——枚舉永遠列不完
 #    （heredoc 餵給 python3／perl／node 就繞過了，覆核者實跑證明過）。
@@ -199,7 +228,7 @@ CEL_MODEL = f"""event.type == "tool_call"
 CEL_MERGE = f"""event.type == "tool_call"
 && event.data.name in {_cel_list(SHELL_TOOLS)}
 && has(event.data.arguments.command)
-&& event.data.arguments.command.matches("(\\\\b(tea|gh|glab)\\\\b[\\\\s\\\\S]*\\\\bmerge\\\\b|\\\\bcurl\\\\b[\\\\s\\\\S]*merge)")
+&& event.data.arguments.command.matches("(\\\\b(tea|gh|glab)\\\\b[\\\\s\\\\S]*\\\\bmerge\\\\b|\\\\bcurl\\\\b[\\\\s\\\\S]*merge|\\\\b(tea|gh|glab)\\\\s+(pulls?|pr|mr)\\\\s+m[a-z]*\\\\b)")
 ? {{"result": "DENY", "reason": "merge 是人工 gate，agent 不代 merge（含 gh api / tea pulls merge 等變形）。開好 PR 等人來 merge。"}} : {{"result": "ALLOW"}}"""
 
 # ── P-approve ────────────────────────────────────────────────────────────────
@@ -229,39 +258,60 @@ CEL_TAG = f"""event.type == "tool_call"
       && event.data.arguments.command.matches("{TAG_SHAPE_RE}"))
   || event.data.arguments.command.matches("refs/tags/")
   || event.data.arguments.command.matches("\\\\b(tea|gh|glab)\\\\b[\\\\s\\\\S]*\\\\brelease")
+  || event.data.arguments.command.matches("\\\\bgh\\\\b[\\\\s\\\\S]*\\\\bapi\\\\b[\\\\s\\\\S]*git/refs")
+  || event.data.arguments.command.matches("-X\\\\s+(POST|PATCH|PUT)[\\\\s\\\\S]*git/refs")
   || event.data.arguments.command.matches("\\\\bgit\\\\s+tag\\\\s+[^-\\\\s]")
 )
 ? {{"result": "DENY", "reason": "發版 tag 由人工推，agent 不推 tag、不建 release（v<版號> / --tags / refs/tags/ / git tag <name> / forge release 皆擋）。"}} : {{"result": "ALLOW"}}"""
 
 # ── P-kubectl（僅 ops_k8s）──────────────────────────────────────────────────
-# 反轉後的四條，任一成立即 DENY（權威白名單見上方 K8S_ALLOWED_NAMESPACES 註解）：
-#   1. 提到 kubectl 且含 shell 串接／替換 ⇒ 無法證明「每一段」都在白名單內
-#   2. 提到 kubectl 且 -n / --namespace 出現超過一次 ⇒ 無法確定哪一個生效
-#   3. 寫入／exec 類 verb 且沒能匹配到白名單 namespace（含完全沒帶 -n 的情形）
-#   4. 寫入／exec 類 verb 但沒帶 --context
-# ⚠ 動詞比對刻意用寬鬆的 \b(verb)\b：在 DENY 方向多匹配只會多擋（fail loud），
-#    不像舊版的「安全動詞」比對多匹配就會漏放（靜默）。
+# ⚠ 這一層是 **defense-in-depth、best-effort**，**不是安全邊界**。權威守線是 repo 的
+#    PreToolUse hook `.claude/hooks/kubectl-ns-guard.py`（用 shlex 正確解析，且 repo-lint
+#    有對帳）。本層已知可被 shell escape 繞過（見 README §守線的強度分級），只擋「agent
+#    寫錯」，擋不住刻意規避。
+#
+# 🔴 FIX ROUND 2：整條規則**只在 woow-k3s 相關時才啟動**。
+#    舊版不分 context，把 `--context docker-desktop delete pod x -n gitea` 也擋掉了——
+#    那是本機測試／開發用叢集（CLAUDE.md），擋它會毀掉 /woow-dev:k8s-dev-sandbox 的
+#    create／destroy／test 工作流。鐵律限定的是 woow-k3s 這個共用叢集。
 K8S_WRITE_VERBS = [
-    # 任務書列出的：
     "delete", "apply", "patch", "edit", "scale", "exec", "cp", "drain", "cordon",
     "annotate", "label", "replace", "rollout", "set",
-    # 補上同樣是寫入／取得執行權的（漏擋是靜默的，寧可多擋）：
     "create", "run", "expose", "autoscale", "taint", "uncordon", "attach",
     "port-forward", "proxy", "debug",
 ]
+# 會從檔案讀 manifest 的動詞——manifest 內的 metadata.namespace 會**覆蓋**命令列的 -n，
+# 而那份檔案的內容 regex 看不到（FIX ROUND 2 / 1-2 的寫實失誤案例）。
+K8S_FILE_VERBS = ["apply", "create", "replace", "patch"]
+_K8S_WRITE = "|".join(K8S_WRITE_VERBS)
+_K8S_FILE = "|".join(K8S_FILE_VERBS)
+
 CEL_KUBECTL = f"""event.type == "tool_call"
 && event.data.name in {_cel_list(SHELL_TOOLS)}
 && has(event.data.arguments.command)
 && event.data.arguments.command.matches("\\\\bkubectl\\\\b")
 && (
-     event.data.arguments.command.matches("{SHELL_CHAIN_RE}")
-  || event.data.arguments.command.matches("(^|\\\\s)(-n|--namespace)[=\\\\s][\\\\s\\\\S]*(^|\\\\s)(-n|--namespace)[=\\\\s]")
-  || (event.data.arguments.command.matches("\\\\b({"|".join(K8S_WRITE_VERBS)})\\\\b")
-      && !event.data.arguments.command.matches("(^|\\\\s)(-n|--namespace)[=\\\\s]+({_ns_alternation()})(\\\\s|$)"))
-  || (event.data.arguments.command.matches("\\\\b({"|".join(K8S_WRITE_VERBS)})\\\\b")
+     // 寫入類但沒帶 --context：預設 context 可能就是 woow-k3s，無法證明安全
+     (event.data.arguments.command.matches("\\\\b({_K8S_WRITE})\\\\b")
       && !event.data.arguments.command.matches("--context[=\\\\s]+\\\\S"))
+     // 以下只在明確指向 woow-k3s 時才套用（docker-desktop 是本機叢集，不受此鐵律管）
+  || (event.data.arguments.command.matches("--context[=\\\\s]+woow-k3s")
+      && (
+           // 串接／替換：無法證明「每一段」都在白名單內
+           event.data.arguments.command.matches("{SHELL_CHAIN_RE}")
+           // -n 出現超過一次：無法確定哪一個生效
+        || event.data.arguments.command.matches("(^|\\\\s)(-n|--namespace)[=\\\\s][\\\\s\\\\S]*(^|\\\\s)(-n|--namespace)[=\\\\s]")
+           // 寫入類但 namespace 不在白名單（含完全沒帶 -n）
+        || (event.data.arguments.command.matches("\\\\b({_K8S_WRITE})\\\\b")
+            && !event.data.arguments.command.matches("(^|\\\\s)(-n|--namespace)[=\\\\s]+({_ns_alternation()})(\\\\s|$)"))
+           // 從檔案套用 manifest：檔案內的 metadata.namespace 會蓋掉命令列的 -n，
+           // regex 看不到檔案內容 ⇒ 除非 --dry-run，否則擋
+        || (event.data.arguments.command.matches("\\\\b({_K8S_FILE})\\\\b")
+            && event.data.arguments.command.matches("(^|\\\\s)(-f|--filename|-k|--kustomize)[=\\\\s]")
+            && !event.data.arguments.command.matches("--dry-run"))
+      ))
 )
-? {{"result": "DENY", "reason": "woow-k3s 是共用叢集，且 shell 無法用 regex 可靠解析 ⇒ 無法證明安全就擋：寫入／exec 類 kubectl 必須是**單一不串接**的指令、明確帶 --context、且帶**恰好一個**白名單內的 -n。"}} : {{"result": "ALLOW"}}"""
+? {{"result": "DENY", "reason": "woow-k3s 是共用叢集，且 shell／manifest 內容無法用 regex 證明安全：寫入類 kubectl 必須明確帶 --context、單一不串接、帶恰好一個白名單內的 -n；從檔案套 manifest 需 --dry-run（檔案內的 metadata.namespace 會覆蓋 -n）。本機 docker-desktop 不受此規則限制。"}} : {{"result": "ALLOW"}}"""
 
 
 # ── policy YAML 片段 ─────────────────────────────────────────────────────────
@@ -323,6 +373,7 @@ P_COST = _fn_policy(
 P_MERGE = _cel_yaml("p_merge_no_agent_merge", CEL_MERGE)
 P_APPROVE = _cel_yaml("p_approve_no_agent_signoff", CEL_APPROVE)
 P_TAG = _cel_yaml("p_tag_no_agent_tag_push", CEL_TAG)
+P_ESCAPE = _cel_yaml("p_escape_obfuscated_command", CEL_ESCAPE)
 P_BOARD = _cel_yaml("p_board_read_only", CEL_BOARD)
 P_MODEL = _cel_yaml("p_model_fast_tier_only", CEL_MODEL)
 P_KUBECTL = _cel_yaml("p_kubectl_namespace_scope", CEL_KUBECTL)
@@ -489,7 +540,7 @@ def _guardrails_worker(worker: str, via: str) -> str:
         body += [P_WORKTREE, P_WORKDIR]
     if worker == "ops_k8s":
         body.append(P_KUBECTL)
-    body += [P_BOARD, P_MERGE, P_APPROVE, P_TAG]
+    body += [P_BOARD, P_MERGE, P_APPROVE, P_TAG, P_ESCAPE]
     body += P_SAFETY
     if w["harness"] == "claude-native":
         body.append(P_COST)
@@ -501,7 +552,7 @@ def leader_config(leader: str) -> str:
     via = str(cfg["via"])
     agents = [thin_name(w, via) for w in WORKERS]
     pol = ["guardrails:", "  ask_timeout: 86400", "  policies:"]
-    body = P_LEADER_ORCH + [P_BOARD, P_MODEL, P_MERGE, P_APPROVE, P_TAG] + P_SAFETY
+    body = P_LEADER_ORCH + [P_BOARD, P_MODEL, P_MERGE, P_APPROVE, P_TAG, P_ESCAPE] + P_SAFETY
     if cfg["harness"] == "claude-native":
         body.append(P_COST)
     return "\n".join([
@@ -532,7 +583,7 @@ def leader_config(leader: str) -> str:
 def issue_leader_config() -> str:
     pol = ["guardrails:", "  ask_timeout: 86400", "  policies:"]
     # ⚠ P-board 刻意**不掛**在 issue-leader 身上：全樹只有它能寫看板。
-    body = P_LEADER_ORCH + [P_MODEL, P_MERGE, P_APPROVE, P_TAG] + P_SAFETY + [P_COST]
+    body = P_LEADER_ORCH + [P_MODEL, P_MERGE, P_APPROVE, P_TAG, P_ESCAPE] + P_SAFETY + [P_COST]
     return "\n".join([
         GENERATED_HEADER,
         "spec_version: 1",
@@ -626,7 +677,10 @@ def _skill_frontmatter_name(skill_md: Path) -> str:
     ⚠ skill 名的**唯一**權威是 frontmatter，目錄名一律被忽略（`_parse_skill`）。查重必須
     看這個欄位——看目錄名會漏掉「不同目錄、同 frontmatter name」的 first-wins 吞噬。
     """
-    text = skill_md.read_text()
+    try:
+        text = skill_md.read_text()
+    except OSError as exc:
+        return f"<{skill_md} 讀取失敗: {exc}>"
     if not text.startswith("---"):
         return f"<{skill_md} 缺 frontmatter>"
     _, _, rest = text.partition("---")
@@ -755,6 +809,10 @@ CEL_VECTORS: dict[str, dict[str, list]] = {
             _shell("echo 'merge is a human gate'"),
             {"type": "tool_call", "target": "Bash", "data": {"name": "Bash", "arguments": {}}},
         ],
+        "known_gap": [
+            _shell("M=merge; gh pr $M 42"),                   # 子命令存在變數裡
+            _shell("curl -X PUT \"$API/pulls/1/$(printf 'me'; printf 'rge')\""),
+        ],
     },
     "p_approve_no_agent_signoff": {
         "deny": [
@@ -774,6 +832,15 @@ CEL_VECTORS: dict[str, dict[str, list]] = {
             _shell("tea comment 823 '已完成，等人工核可'"),
             _shell("cat .claude/commands/woow/deploy.md"),
             _shell("gh pr view 42"),
+        ],
+        # ⚠ known_gap：字串比對擋不住、且**刻意不修**的向量。威脅模型是「防 agent 犯錯」，
+        #    不是「防 agent 攻擊」——LLM 不會為了規避一道它不知道存在的守線而這樣寫。
+        #    留在這裡是為了：(1) 誠實記錄漏在哪 (2) 哪天行為變了會被講出來。
+        "known_gap": [
+            _shell("echo L2FwcHJvdmU= | base64 -d | tea comment 823 -F -"),
+            _shell("tea comment 823 '/appr''ove'"),
+            _shell("tea comment 823 $'\\x2f\\x61\\x70\\x70\\x72\\x6f\\x76\\x65'"),
+            _shell("base64 -d /tmp/b.b64 > /tmp/b && tea comment 823 -F /tmp/b"),
         ],
     },
     "p_tag_no_agent_tag_push": {
@@ -801,6 +868,28 @@ CEL_VECTORS: dict[str, dict[str, list]] = {
             _shell("git tag --list 'v1.*'"),
             _shell("git log --oneline -1"),
         ],
+        "known_gap": [
+            _shell("V=v1.7.6; git push origin $V"),          # 版號存在變數裡
+            _shell("git push origin \"$(cat /tmp/tagname)\""),
+        ],
+    },
+    "p_escape_obfuscated_command": {
+        "deny": [
+            _shell("kube\\ctl --context woow-k3s delete pod x -n gitea"),
+            _shell("gh pr me\\rge 42"),
+            _shell("git pu\\sh origin v1.0"),
+            _shell("tea comment 823 '/appro\\ve'"),
+            _shell("echo x > .woow-iss\\ues/board.md"),
+            _shell("git push origin refs/ta\\gs/v1.0"),
+        ],
+        "allow": [
+            _shell("echo hello"),
+            _shell("grep -rn 'x' src/"),
+            _shell("printf 'a\\tb'"),          # 有轉義但無敏感字根
+            _shell("sed -e 's/a\\tb/x/' f.txt"),
+            _shell("kubectl --context woow-k3s get pods -n paas-system"),  # 有字根但無轉義
+            _shell("git push origin develop"),
+        ],
     },
     "p_kubectl_namespace_scope": {
         "deny": [
@@ -823,16 +912,24 @@ CEL_VECTORS: dict[str, dict[str, list]] = {
             _shell("kubectl --context woow-k3s scale deploy/x --replicas=0 -n gitea"),
             _shell("kubectl --context woow-k3s cp /tmp/x pod:/tmp -n gitea"),
             _shell("kubectl --context woow-k3s drain node-1"),
-            # 過度擋（刻意，見 README）：非 woow-k3s 的寫入若不在白名單 ns 也擋
-            _shell("kubectl --context docker-desktop delete pod foo -n whatever"),
+            # 🔴 1-2：manifest 內的 metadata.namespace 會覆蓋命令列的 -n，regex 看不到檔案內容
+            _shell("kubectl --context woow-k3s apply -n paas-system -f /tmp/gitea.yaml"),
+            _shell("kubectl --context woow-k3s create -f /tmp/x.yaml -n paas-system"),
+            _shell("kubectl --context woow-k3s replace -f /tmp/x.yaml -n paas-system"),
+            _shell("kubectl --context woow-k3s apply -k overlays/prod -n paas-system"),
+
         ],
         "allow": [
             _shell("kubectl --context woow-k3s get pods -A"),
             _shell("kubectl get pods -n gitea --context woow-k3s"),
             _shell("kubectl --context woow-k3s describe pod foo -n longhorn-system"),
             _shell("kubectl --context woow-k3s delete pod foo -n paas-system"),
-            _shell("kubectl --context woow-k3s apply -f x.yaml -n paas-ws-stg-demo"),
             _shell("kubectl --context woow-k3s rollout restart deploy/x -n dev-sandbox-abc"),
+            # 🔴 1-1：docker-desktop 是本機測試叢集，不套 woow-k3s 的白名單
+            _shell("kubectl --context docker-desktop delete pod foo -n whatever"),
+            _shell("kubectl --context docker-desktop apply -f x.yaml -n gitea"),
+            # -f 帶 --dry-run 可以（不會真的落地）
+            _shell("kubectl --context woow-k3s apply -f x.yaml -n paas-ws-stg-demo --dry-run=server"),
             _shell("kubectl --context woow-k3s delete gitrepo paas-app -n fleet-local"),
             _shell("kubectl --context docker-desktop apply -f x.yaml -n dev-sandbox-abc"),
             _shell("kubectl --context woow-k3s logs pod -n gitea"),
@@ -870,8 +967,14 @@ def run_checks() -> int:
     ⚠ 順序刻意先做**結構**檢查（斷鏈 symlink / skills 數）再做 materialize：斷鏈的
     symlink 會讓 materialize_bundle 直接拋例外，先驗結構才看得到真正的病因。
     """
-    spec_mod = _import_omnigent()
     r = Report()
+    try:
+        spec_mod = _import_omnigent()
+    except Exception as exc:  # noqa: BLE001
+        r.item("(前置) 載入 omnigent.spec", False, f"{type(exc).__name__}: {exc}")
+        print()
+        print("總計：1 項 FAIL（omnigent 載不進來，無法驗收）")
+        return 1
 
     # 0. 產物是否與 build-bundles.py 同步（等同 gen-docs-index.py --check 的角色）
     def c0():
@@ -881,10 +984,12 @@ def run_checks() -> int:
     r.guard("0. 產物與 build-bundles.py 同步", c0)
 
     # 7. 斷鏈 symlink 數為 0（提前跑：斷鏈是其他檢查的病因）
-    all_links = [p for p in OMNIGENT_DIR.rglob("*") if p.is_symlink()]
-    broken = [str(p.relative_to(OMNIGENT_DIR)) for p in all_links if not p.exists()]
-    r.item("7. 斷鏈 symlink == 0", not broken,
-           f"{len(all_links)} 個 symlink，0 斷鏈" if not broken else str(broken))
+    def c7():
+        all_links = [q for q in OMNIGENT_DIR.rglob("*") if q.is_symlink()]
+        broken = [str(q.relative_to(OMNIGENT_DIR)) for q in all_links if not q.exists()]
+        return not broken, (f"{len(all_links)} 個 symlink，0 斷鏈"
+                            if not broken else str(broken))
+    r.guard("7. 斷鏈 symlink == 0", c7)
 
     # 1. 原始樹 parse + validate
     #    ⚠ parse() 本身會對壞掉的 YAML 拋例外，必須包起來——否則一份手改壞的 config.yaml
@@ -1027,48 +1132,97 @@ def run_checks() -> int:
 def _cel_policies(nodes) -> dict[str, str]:
     """從**已 parse 的樹**收集所有 CEL 運算式（不是從原始碼猜）。"""
     out: dict[str, str] = {}
-    for s in nodes.values():
-        if not s.guardrails or not s.guardrails.policies:
+    for sp_ in nodes.values():
+        if not sp_.guardrails or not sp_.guardrails.policies:
             continue
-        for p in s.guardrails.policies:
-            fn = getattr(p, "function", None)
-            if fn and fn.path.endswith("cel.cel_policy"):
-                out[p.name] = fn.arguments["expression"]
+        for pol in sp_.guardrails.policies:
+            fn = getattr(pol, "function", None)
+            if not fn or not fn.path.endswith("cel.cel_policy"):
+                continue
+            # arguments 可能缺 expression（手改壞的 config）——不要讓 KeyError 中斷整輪
+            expr = (fn.arguments or {}).get("expression")
+            out[pol.name] = expr if isinstance(expr, str) else "<缺 expression>"
     return out
 
 
 def _check_cel(nodes) -> tuple[bool, str]:
+    """對每一支 CEL 運算式做雙向測試。
+
+    ⚠ 這裡的每一個外部呼叫都各自包 try/catch 並**累積**錯誤，不是讓第一個例外炸掉整輪。
+    實測過三次同型事故（materialize_bundle、parse、以及本函式的 cel_policy compile）：
+    一支運算式編譯失敗，就會讓其餘 5 支與上百個向量完全不跑，而外層只看到一個 FAIL。
+    """
     sp = os.environ.get("OMNIGENT_SITE_PACKAGES", DEFAULT_SITE_PACKAGES)
     if sp and sp not in sys.path:
         sys.path.insert(0, sp)
-    from omnigent.policies.builtins.cel import cel_policy  # noqa: PLC0415
+    try:
+        from omnigent.policies.builtins.cel import cel_policy  # noqa: PLC0415
+    except Exception as exc:  # noqa: BLE001
+        return False, f"無法載入 cel_policy: {type(exc).__name__}: {exc}"
 
     exprs = _cel_policies(nodes)
     bad: list[str] = []
     tested = 0
+    gap_open = 0
+    gap_closed: list[str] = []
+
     missing = sorted(set(exprs) - set(CEL_VECTORS))
     if missing:
         # ⛔ 沒有向量的 CEL policy 直接判 FAIL：守線 fail-OPEN，沒測等於不存在。
         bad.append(f"缺雙向測試向量: {missing}")
+
     for name, expr in sorted(exprs.items()):
         if name not in CEL_VECTORS:
             continue
-        evaluate = cel_policy(expression=expr, reason="policy")
-        for ev in CEL_VECTORS[name]["deny"]:
+        try:
+            evaluate = cel_policy(expression=expr, reason="policy")
+        except Exception as exc:  # noqa: BLE001
+            # 這一支編譯不過 ⇒ 記下來，繼續測其餘每一支
+            bad.append(f"{name}: 編譯失敗 {type(exc).__name__}: {exc}")
+            continue
+        vectors = CEL_VECTORS[name]
+
+        def _verdict(ev):
+            try:
+                got = evaluate(ev)
+            except Exception as exc:  # noqa: BLE001
+                return None, f"{type(exc).__name__}: {exc}"
+            return got, None
+
+        for ev in vectors.get("deny", []):
             tested += 1
-            got = evaluate(ev)
-            if not got or got.get("result") != "DENY":
+            got, err = _verdict(ev)
+            if err:
+                bad.append(f"{name}: 評估違規事件時拋例外 {err}")
+            elif not got or got.get("result") != "DENY":
                 bad.append(f"{name}: 違規事件未被 DENY → {got!r} :: "
                            f"{ev['data'].get('arguments')}")
-        for ev in CEL_VECTORS[name]["allow"]:
+        for ev in vectors.get("allow", []):
             tested += 1
-            got = evaluate(ev)
-            if got and got.get("result") == "DENY":
-                bad.append(f"{name}: 合法事件被 DENY → "
-                           f"{ev['data'].get('arguments')}")
+            got, err = _verdict(ev)
+            if err:
+                bad.append(f"{name}: 評估合法事件時拋例外 {err}")
+            elif got and got.get("result") == "DENY":
+                bad.append(f"{name}: 合法事件被 DENY → {ev['data'].get('arguments')}")
+        # known_gap：已知擋不住、且**刻意不修**的向量（見 README §已知繞過向量）。
+        # 不判 FAIL——它們記錄的是「我們知道這裡漏」。但若哪天變成 DENY，這裡會講出來，
+        # 讓人把它升級成正式的 deny 向量。
+        for ev in vectors.get("known_gap", []):
+            tested += 1
+            got, err = _verdict(ev)
+            if err:
+                bad.append(f"{name}: 評估 known_gap 事件時拋例外 {err}")
+            elif got and got.get("result") == "DENY":
+                gap_closed.append(f"{name}: {ev['data'].get('arguments', {}).get('command', '')[:60]}")
+            else:
+                gap_open += 1
+
     ok = not bad
-    detail = (f"{len(exprs)} 支運算式 / {tested} 個事件全部符合預期" if ok
+    detail = (f"{len(exprs)} 支運算式 / {tested} 個事件符合預期"
+              f"（其中 {gap_open} 個 known_gap 仍為已知漏洞）" if ok
               else f"{len(bad)} 個失敗: " + "; ".join(bad[:6]))
+    if ok and gap_closed:
+        detail += f"；⬆ {len(gap_closed)} 個 known_gap 現在已被擋，可升級成 deny 向量: {gap_closed[:3]}"
     return ok, detail
 
 

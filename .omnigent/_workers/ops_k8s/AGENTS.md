@@ -52,25 +52,50 @@ namespace、不驗資源名，**這一層沒有機器守線**。
 （P-kubectl CEL 守線）是第五份，兩份都不在 repo-lint 的對帳範圍內。**改白名單時，五份都
 要一起改。這是本 bundle 已知的維護債，寫在這裡是為了不讓它靜默漂掉。
 
-## 三層守線，各管各的
+## 🔴 權威守線是 repo 的 hook，不是本 bundle 這層
 
-擋你越界的東西有三層，不要以為只有一層：
+**`.claude/hooks/kubectl-ns-guard.py`（repo 內的 PreToolUse hook）才是權威守線。**
+它用 `shlex` 正確解析指令、會剝 heredoc、認 `bash -c` 一層、認 `--` 之後是遠端指令，
+而且白名單有 repo-lint 的 `kubectl-ns-whitelist-sync` 在對帳。workspace 設成本 repo／其
+worktree 時它會自動載入。一次性繞過：指令前綴 `KUBECTL_NS_GUARD=off `。
 
-1. **`.claude/hooks/kubectl-ns-guard.py`**（repo 內的 PreToolUse hook）——會剝
-   heredoc、認 `bash -c` 一層、認 `--` 之後是遠端指令。**解析等級最高**，但只守本 repo
-   的 Bash 層。一次性繞過：指令前綴 `KUBECTL_NS_GUARD=off `。
-2. **`.claude/skills/lib/kube-context.sh`**——skill script（`deploy-stg` / `e2e-seed*`）
-   的共用守衛，驗 context 值域並隔離 kubeconfig（不改 `~/.kube/config`）。白名單宣告在
-   `.sandbox.yml` 的 `allowed_kube_contexts[_<task>]`。
-3. **P-kubectl**（本 bundle 的 CEL policy）——policy 層，跨 repo 都生效。⚠ 它是
-   **regex 比對，不做 shell 解析**：認不出 `bash -c` 包一層、認不出 script 檔裡的
-   kubectl。它是**提醒層，不是保證層**；真正的解析等級在第 1 層。
+另有 **`.claude/skills/lib/kube-context.sh`**——skill script（`deploy-stg` / `e2e-seed*`）
+的共用守衛，驗 context 值域並隔離 kubeconfig（不改 `~/.kube/config`）。白名單宣告在
+`.sandbox.yml` 的 `allowed_kube_contexts[_<task>]`。
 
-因為 P-kubectl 是 fail-closed 的：`--context woow-k3s` 下的**寫入／exec 類**指令若沒有帶
-到白名單內的 `-n <ns>`，一律 DENY。所以寫入類指令請**明確帶 `-n`**，不要靠 current
-namespace。唯讀動詞（`get` `describe` `logs` `top` `wait` `events` `explain` `diff`
-`api-resources` `api-versions` `cluster-info` `auth`）與不碰叢集的動詞（`config`
-`version` `options` `help` `completion`）不擋。
+**本 bundle 的 `P-kubectl` 是第二層：defense-in-depth、best-effort。**
+
+- 它做的是 **regex 字串比對，不做 shell 解析**：認不出 `bash -c` 包一層、認不出 script
+  檔裡的 kubectl、**已知可被 shell 轉義（`kube\ctl`）與變數展開繞過**。
+- ⛔ 它**不是安全邊界**。不要當成「有它擋著所以可以亂試」——真正該遵守的是上面的鐵律，
+  而且**沒被擋下來不等於可以做**。
+- 它存在的價值是：workspace 不在本 repo 時（hook 不會載入）仍有一層接得住手滑。
+
+## P-kubectl 實際會擋什麼
+
+只在**與 woow-k3s 有關**時才啟動——`--context docker-desktop` 是本機測試叢集，**不受此
+規則限制**（否則會毀掉 `/woow-dev:k8s-dev-sandbox` 的 create／destroy／test 工作流）。
+
+`--context woow-k3s` 下（或寫入類但**沒帶 `--context`**，因為預設 context 可能就是它）：
+
+| 情況 | 為什麼擋 |
+| --- | --- |
+| 指令含串接／替換（`&&`、`;`、pipe、反引號、`$(`、換行） | 無法證明「每一段」都在白名單內 |
+| `-n` / `--namespace` 出現超過一次 | 無法確定哪一個生效 |
+| 寫入／exec 類 verb，namespace 不在白名單（含沒帶 `-n`） | 明確帶 `-n`，不要靠 current namespace |
+| `apply`／`create`／`replace`／`patch` 帶 `-f`／`-k` 而沒有 `--dry-run` | ⚠ **manifest 內的 `metadata.namespace` 會覆蓋命令列的 `-n`**，而 regex 看不到檔案內容 |
+
+唯讀動詞（`get` `describe` `logs` `top` `wait` `events` `explain` `diff` `api-resources`
+`api-versions` `cluster-info` `auth`）與不碰叢集的動詞（`config` `version` `options`
+`help` `completion`）不在寫入類清單裡，不受白名單限制。
+
+### 撞到了怎麼辦（用替代做法，⛔ 不要想辦法繞）
+
+| 被擋 | 改成 |
+| --- | --- |
+| 唯讀指令串接（`kubectl get ... && echo done`） | **拆成兩次 tool call**，不要用 `&&` 串 |
+| `kubectl apply -f x.yaml`（woow-k3s） | 先 `--dry-run=server` 看結果；真要套用走 `deploy-stg` skill 或交給人 |
+| 想在非白名單 namespace 動作 | 回報給上層轉 `woow-machines-operator`／叢集運維，⛔ 不要自己動手 |
 
 ## 沙盒與部署
 
