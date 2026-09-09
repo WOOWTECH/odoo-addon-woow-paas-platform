@@ -1,0 +1,116 @@
+# ⚠ 由 .omnigent/build-bundles.py 產生——⛔ 不要手改。
+#   改 build-bundles.py 再重跑：python3 .omnigent/build-bundles.py
+
+spec_version: 1
+name: tracker_via_cc
+description: 對帳 worker（pi）：六 repo tea 對帳、查重、開單；有寫權但只寫產物。
+
+executor:
+  type: omnigent
+  config:
+    harness: pi
+
+# prompt 由 AGENTS.md symlink 承載（→ _workers/tracker/AGENTS.md）。
+# ⛔ 不要改寫成 `instructions: <相對路徑>`：containment 檢查會讓外指 symlink 回
+#    None，接著整條路徑字串被當成 system prompt，而且不報錯。
+
+# ⛔ 一律固定 `all`。名單模式在 claude-native 下形同 all、不強制；在 pi 下卻會下
+#    --no-skills 把 host skill 一併關掉——跨 harness 行為相反。
+skills: all
+
+os_env:
+  # ⚠ cwd 不決定 harness 的 process cwd（實測）——它是 server 模式的**邊界**與
+  #   sys_os_* / config_path containment 的錨點。設在六個 repo 的共同父目錄，讓跨 repo
+  #   唯讀查詢落在邊界內。這是全樹唯一一個機器相關的絕對路徑。
+  type: caller_process
+  cwd: /home/elmo/woow-repos
+  sandbox:
+    type: none
+
+guardrails:
+  # ⚠ child 不繼承 parent 的 guardrails.policies（實測）⇒ 每個 worker 自帶完整
+  #   policy，不能靠 leader 罩下來。
+  ask_timeout: 86400
+  policies:
+    blast_radius:
+      type: function
+      on: [tool_call]
+      function:
+        path: omnigent.policies.builtins.orchestration.blast_radius
+        arguments:
+          gate_pushes: true
+    p_board_read_only:
+      type: function
+      on: [tool_call]
+      function:
+        path: omnigent.policies.builtins.cel.cel_policy
+        arguments:
+          expression: |-
+            event.type == "tool_call" && (
+              (event.data.name in ["sys_os_write", "sys_os_edit", "Write", "Edit", "MultiEdit", "write", "edit"] && (
+                (has(event.data.arguments.path) && event.data.arguments.path.matches("(^|/)\\.woow-issues/board\\.md$"))
+                || (has(event.data.arguments.file_path) && event.data.arguments.file_path.matches("(^|/)\\.woow-issues/board\\.md$"))
+              ))
+              || (event.data.name in ["Bash", "Shell", "bash", "developer__shell", "shell", "sys_os_shell", "terminal"]
+                  && has(event.data.arguments.command)
+                  && event.data.arguments.command.matches("(>>?\\s*[^\\s;|&]*\\.woow-issues/board\\.md|\\b(tee|rm|truncate|patch|cp|mv|dd)\\b[^;|&]*\\.woow-issues/board\\.md|\\bsed\\b[^;|&]*(-i|--in-place)[^;|&]*\\.woow-issues/board\\.md)"))
+            ) ? {"result": "DENY", "reason": "看板 .woow-issues/board.md 只有 woow-issue-leader 能寫；把要更新的內容寫進回報，由上層代寫。"} : {"result": "ALLOW"}
+    p_merge_no_agent_merge:
+      type: function
+      on: [tool_call]
+      function:
+        path: omnigent.policies.builtins.cel.cel_policy
+        arguments:
+          expression: |-
+            event.type == "tool_call"
+            && event.data.name in ["Bash", "Shell", "bash", "developer__shell", "shell", "sys_os_shell", "terminal"]
+            && has(event.data.arguments.command)
+            && event.data.arguments.command.matches("\\b(tea\\s+(pr|pulls)\\s+merge|gh\\s+pr\\s+merge|glab\\s+mr\\s+merge)\\b")
+            ? {"result": "DENY", "reason": "merge 是人工 gate，agent 不代 merge。開好 PR 等人來 merge。"} : {"result": "ALLOW"}
+    p_approve_no_agent_signoff:
+      type: function
+      on: [tool_call]
+      function:
+        path: omnigent.policies.builtins.cel.cel_policy
+        arguments:
+          expression: |-
+            event.type == "tool_call"
+            && event.data.name in ["Bash", "Shell", "bash", "developer__shell", "shell", "sys_os_shell", "terminal"]
+            && has(event.data.arguments.command)
+            && event.data.arguments.command.matches("/approve")
+            && event.data.arguments.command.matches("(\\btea\\b[^;|&]*\\bcomment\\b|\\bgh\\b[^;|&]*\\bcomment\\b|\\bglab\\b[^;|&]*\\bnote\\b|\\bcurl\\b)")
+            ? {"result": "DENY", "reason": "prod build 的 /approve 核可只能由授權者本人送出——即使人類當場明確授權、即使手上憑證就是授權者本人，agent 也不代簽。"} : {"result": "ALLOW"}
+    p_tag_no_agent_tag_push:
+      type: function
+      on: [tool_call]
+      function:
+        path: omnigent.policies.builtins.cel.cel_policy
+        arguments:
+          expression: |-
+            event.type == "tool_call"
+            && event.data.name in ["Bash", "Shell", "bash", "developer__shell", "shell", "sys_os_shell", "terminal"]
+            && has(event.data.arguments.command)
+            && event.data.arguments.command.matches("\\bgit\\b[^;|&]*\\bpush\\b")
+            && event.data.arguments.command.matches("(--tags|--follow-tags|refs/tags/|[\\s:]([A-Za-z0-9._-]+-)?v[0-9])")
+            ? {"result": "DENY", "reason": "發版 tag 由人工推，agent 不推 tag（v<版號> / --tags / refs/tags/ 三種形態都擋）。"} : {"result": "ALLOW"}
+    max_tool_calls_per_session:
+      type: function
+      function:
+        path: omnigent.policies.builtins.safety.max_tool_calls_per_session
+        arguments:
+          limit: 400
+    detect_loop:
+      type: function
+      function:
+        path: omnigent.policies.builtins.safety.detect_loop
+        arguments:
+          window: 10
+          threshold: 3
+    detect_thrashing:
+      type: function
+      function:
+        path: omnigent.policies.builtins.context.detect_thrashing
+        arguments:
+          consecutive_threshold: 5
+          window: 10
+          action: ASK
