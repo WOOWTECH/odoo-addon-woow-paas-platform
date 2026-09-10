@@ -23,18 +23,36 @@
 repo-lint `kubectl-ns-whitelist-sync` 的對帳範圍內 ⇒ 必然漂移。dispatcher 跑的是 repo 裡
 **原封不動**那一支，真相只有一個來源。
 
-## 判定採聯集（寧可多跑、不可漏守）
+## 判定採聯集（寧可多跑一次檢查、不可漏守）
 
   A. payload 的 `cwd` 落在某個 repo 底下（agent `cd` 進去後的常態）
-  B. 指令文字出現該 repo 的路徑（相對於 workspace 根、絕對路徑、或目錄名）
-     —— 補住 `cd` 在指令中間、`git -C <path>`、`pushd`、直接用絕對路徑等寫法。
+  B. **path-token 解析**：`shlex.split` 抽出路徑型 token，以 cwd 與 workspace 根兩個基準
+     各 `normpath` 一次，等於某個 repo 或落在它底下就命中。補住 `cd ../repoA`、
+     `git -C <path>`、`pushd`、`env -C`、`bash -c "cd … && …"`、絕對路徑等寫法。
 
-## 兩種回傳協定都要能過
+⛔ **沒有「對整條 command 做裸字串比對」這一層**（FIX ROUND 7 移除）。那層把 `repo.name`
+當裸字串比對 ⇒ `git commit -m "fix repoA bug"` 誤命中，而誤命中與下面的 fail-closed
+**相乘**會擋掉一條完全合法的 commit。唯一例外是 `shlex` 解析失敗時的 fallback。
 
-  - `kubectl-ns-guard.py`：**stdout JSON**（`hookSpecificOutput.permissionDecision: deny`），
-    exit code 是 0 ⇒ 必須偵測 stdout 並**短路**，否則後面的 hook 會再吐一份 JSON，
-    兩份混在 stdout 上 claude 解析不了。
-  - 其餘三支：**exit 2** 代表 block。
+## repo hook 的回傳：三種情況，三種處置
+
+  - **exit 2**＝repo hook 刻意 block ⇒ **原樣透傳**（它的 stderr 就是給使用者看的理由，
+    ⛔ 不可被 dispatcher 的診斷訊息蓋掉）。
+  - **stdout JSON 判 deny**（`kubectl-ns-guard.py` 走這條，exit code 是 **0**）⇒ 偵測到就
+    **短路**，否則後面的 hook 會再吐一份 JSON，兩份混在 stdout 上 claude 解析不了。
+  - **其餘任何非 0**＝hook 自己掛了、**沒有**給出判斷 ⇒ 見下。
+
+## PreToolUse 的失敗一律 fail-closed（判準是「有沒有拿到判斷」）
+
+⚠ hook 協定裡**只有 exit 2 代表 block**，其餘非 0 是「非阻斷性錯誤」——原樣回傳等於
+**放行**。所以 PreToolUse 下這些全部正規化成 exit 2：timeout、非 0 且非 2 的 exit code
+（crash／exception／exit 1／exit 7）、hook 檔不存在或不可執行、呼叫本身拋例外、以及
+**命中的 repo 有 `settings.json` 但讀不到／解不開**。
+
+PostToolUse 一律 warning-only（工具已執行完，擋也改變不了結果）。
+
+⛔ 分界點：命中的 repo **根本沒有** `settings.json` ⇒ 正常情況，**不擋**。只有「宣稱有守線
+却載不起來」才擋。
 
 ## ⚠ 不要靠 shebang
 
@@ -70,6 +88,12 @@ SKIP_DIRS = {".git", "node_modules", "__pycache__", ".venv", ".omnigent-runtime"
 DIR_ARG_TOKENS = {"cd", "pushd", "-C", "--directory"}
 #: PreToolUse 的 hook 失敗時改為放行的逃生門（⛔ 只在 repo hook 自己壞掉時臨時用）。
 FAIL_OPEN_ENV = "OMNIGENT_DISPATCH_FAIL_OPEN"
+#: `shlex` 不吃 shell 的語法字元，會把它們黏在 token 邊緣（`(cd`、`group/repoA;`）。
+#: 取路徑前先剝掉，否則 `(cd group/repoA; …)` 這種子 shell 寫法會因為多一個 `;` 而漏判。
+SHELL_PUNCT = "();&|,"
+#: hook 協定裡**唯一**代表 block 的 exit code。其餘非 0 是「非阻斷性錯誤」，
+#: Claude Code 會照跑工具 ⇒ 不可原樣回傳（見 _hook_failure）。
+BLOCK_EXIT_CODE = 2
 #: 會觸發「零命中告警」的工具（這些是真的會改動或執行東西的）。
 WARN_TOOLS = {"Bash", "Edit", "Write", "MultiEdit", "NotebookEdit"}
 
@@ -101,38 +125,43 @@ def _command_of(payload: dict) -> str:
     return " ".join(str(p) for p in parts if p)
 
 
-#: `-c` 之後是 shell payload（`bash -c "cd ../repoA && …"`）⇒ 遞迴解析一層。
-SHELL_PAYLOAD_FLAGS = {"-c"}
+def _path_tokens(text: str, _depth: int = 0) -> list[str] | None:
+    """從指令文字抽出「看起來是路徑」的 token。回傳 `None` 代表**解析失敗**。
 
-
-def _path_tokens(text: str, _depth: int = 0) -> list[str]:
-    """從指令文字抽出「看起來是路徑」的 token。
-
-    兩種來源：
+    三種來源：
       1. token 本身含 `/` 或以 `.` 開頭（`../repoA`、`group/repoA`、`./x`）
-      2. `cd` / `pushd` / `git -C` / `env -C` 的**下一個** token（即使它不含 `/`）
+      2. `cd` / `pushd` / `git -C` / `env -C` 的**下一個** token（即使它不含 `/`，
+         例如 `cd repoA`）
+      3. `-c` 類 flag 後面的 shell payload，遞迴抽一層（`bash -c "cd ../repoA && …"`）
 
-    ⚠ `shlex.split` 對未閉合的引號會丟 `ValueError` ⇒ 包起來並 fallback 成空列表，
-    讓呼叫端還有字串比對那一層可用。**絕不能因為解析失敗就整個漏守。**
+    ⚠ **回傳 `None` 與回傳 `[]` 是兩件不同的事**：
+      - `[]`＝解析成功、這條指令裡沒有任何路徑 token（⇒ 可以放心不命中）
+      - `None`＝`shlex` 解析不出來（引號不對稱、未終止字串…）⇒ **無法證明安全**，
+        呼叫端必須倒向保守：fallback 回寬鬆的字串比對（寧可多命中）。
+    ⛔ 不可把解析失敗當成 `[]`——那會把「看不懂」誤判成「沒有路徑」而漏守。
     """
     try:
         tokens = shlex.split(text, comments=False, posix=True)
     except ValueError:
-        return []
+        return None
     out: list[str] = []
     expect_dir = False
     expect_payload = False
-    for tok in tokens:
+    for raw_tok in tokens:
+        tok = _strip_shell_punct(raw_tok)
         if expect_dir:
             out.append(tok)
             expect_dir = False
         if expect_payload:
-            # `bash -c "cd ../repoA && …"`：payload 本身是一條指令 ⇒ 遞迴抽一層。
+            # payload 本身是一條指令 ⇒ 遞迴抽一層。
             # ⚠ 深度限 1：再深就該懷疑是刻意混淆，而本 hook 防的是手滑不是攻擊。
             if _depth < 1:
-                out.extend(_path_tokens(tok, _depth + 1))
+                inner = _path_tokens(raw_tok, _depth + 1)
+                if inner is None:
+                    return None          # 內層看不懂 ⇒ 整條倒向保守
+                out.extend(inner)
             expect_payload = False
-        if tok in SHELL_PAYLOAD_FLAGS:
+        if _is_shell_payload_flag(tok):
             expect_payload = True
             continue
         if tok in DIR_ARG_TOKENS:
@@ -147,59 +176,110 @@ def _path_tokens(text: str, _depth: int = 0) -> list[str]:
     return out
 
 
-def _resolved_candidates(payload_cwd: Path, text: str) -> set[Path]:
+def _strip_shell_punct(tok: str) -> str:
+    """剝掉 token 邊緣的 shell 語法字元。
+
+    `shlex.split("(cd group/repoA; echo hi)")` 會給出 `['(cd', 'group/repoA;', …]`——
+    語法字元黏在 token 上。不剝的話子 shell 寫法會漏判（FIX ROUND 7 實測：改用
+    path-token 後 `(cd group/repoA; echo hi)` 零命中，而它是合理的 shell 寫法）。
+
+    ⚠ 剝掉之後仍然要通過「像路徑」的判斷（含 `/`、以 `.` 開頭，或跟在 `cd` 之類後面）
+    才會被當候選 ⇒ **不會**把 `git commit -m "fix repoA bug"` 那種誤命中帶回來。
+    """
+    return tok.strip(SHELL_PUNCT)
+
+
+def _is_shell_payload_flag(tok: str) -> bool:
+    """這個 token 後面是不是一段 shell payload？
+
+    認 `-c` 與 `sh -lc` / `bash -ec` 這種把 `c` 併進短 flag 串的寫法
+    （`-lc`／`-ec`／`-xc` 都是實務上會看到的）。
+    """
+    if tok == "-c":
+        return True
+    return (
+        len(tok) > 1
+        and tok[0] == "-"
+        and tok[1] != "-"
+        and tok.endswith("c")
+        and tok[1:].isalpha()
+    )
+
+
+def _resolved_candidates(payload_cwd: Path, text: str) -> tuple[set[Path], bool]:
     """把 path token 以 **cwd 與 WS_ROOT 兩個基準**各 resolve 一次。
+
+    :returns: `(候選路徑集合, 解析是否失敗)`。失敗時集合為空、旗標為 `True`，
+        呼叫端要改用寬鬆比對。
 
     兩個基準都要試，因為 agent 可能寫相對於當前位置的路徑（`cd ../repoA`），也可能寫
     相對於 workspace 根的路徑（`cd group/repoA`）——光靠單一基準會漏。
 
-    `os.path.normpath` 順帶解掉連續斜線（`group//repoA`）與 `..`，不碰檔案系統
+    `os.path.normpath` 順帶解掉連續斜線（`../repoA//x`）、尾斜線與 `..`，不碰檔案系統
     （⛔ 不用 `Path.resolve()`：它會跟隨 symlink 並在路徑不存在時行為依版本而異，
     而我們只要語意上的正規化）。
     """
+    tokens = _path_tokens(text)
+    if tokens is None:
+        return set(), True
     out: set[Path] = set()
-    for tok in _path_tokens(text):
+    for tok in tokens:
         if not tok or tok.startswith("-"):
             continue
         for base in (payload_cwd, WS_ROOT):
             raw = tok if os.path.isabs(tok) else os.path.join(str(base), tok)
             out.add(Path(os.path.normpath(raw)))
-    return out
+    return out, False
+
+
+def _loose_match(repo: Path, text: str) -> bool:
+    """寬鬆的字串比對——**只在 `shlex` 解析失敗時**當 fallback 用。
+
+    ⛔ 這層會誤命中（`git commit -m "fix repoA bug"` 會中 `repo.name`），所以它
+    **不再是常態判定**（FIX ROUND 7 把它從 targets() 的常態路徑移除）。留著是因為
+    「解析不出來」屬於「無法證明安全」，那時寧可多命中也不能漏守。
+    """
+    rel = repo.relative_to(WS_ROOT).as_posix()
+    for needle in (rel, str(repo), repo.name):
+        if needle and re.search(r"(?<![\w/.-])" + re.escape(needle) + r"(?![\w-])", text):
+            return True
+    return False
 
 
 def targets(payload: dict) -> list[Path]:
     """判斷這道呼叫可能作用到哪些 repo。
 
-    三層聯集，**寧可多跑（最多多一次檢查）、不可漏守**：
+    兩層聯集（**寧可多跑一次檢查、不可漏守**）：
 
       A. payload 的 `cwd` 落在某個 repo 底下（agent `cd` 進去後的常態）
-      B. 指令文字出現該 repo 的路徑／目錄名（字面比對）
-      C. **path-token 解析**：把 token 當路徑、以 cwd 與 WS_ROOT 兩個基準 resolve，
-         落在某個 repo 內就算命中
+      B. **path-token 解析**：把 token 當路徑、以 cwd 與 WS_ROOT 兩個基準各
+         `normpath` 一次，等於某個 repo 或落在它底下就命中
 
-    ⚠ C 是 FIX ROUND 6 補的。只有 A／B 時，**`cd ../repoA`（從 sibling repo 進入）
-    會零命中**——cwd 不在 repoA 內、字串裡沒有 `group/repoA`、而裸 `repoA` 的 regex
-    禁止前一字元是 `/` 所以 `../repoA` 不中。那是多 repo 共同祖先下**極常見**的寫法
-    （不是對抗性規避），後面接 kubectl 就等於鐵律失效。
+    ⚠ **FIX ROUND 7 移除了原本的第三層「對整條 command 做裸字串 regex」**。
+    那層會把 `repo.name` 當裸字串比對 ⇒ `git commit -m "fix repoA bug"` 誤命中
+    （覆核實測）。而誤命中與同輪的 fail-closed 修正**相乘**：誤命中一個不相干的
+    repo、那個 repo 的 hook 又因任何理由失敗 ⇒ 一條完全合法的 `git commit` 被擋。
+    commit message／PR body 提到 repo 名是極常見的寫法，所以這裡的誤擋不是「便宜的
+    保守選擇」，而是會阻斷日常工作。
+
+    ⛔ 唯一例外：`shlex` 解析失敗時仍退回寬鬆比對（見 `_loose_match`）——
+    「看不懂」必須倒向保守。
     """
     try:
         cwd = Path(payload.get("cwd") or os.getcwd()).resolve()
     except OSError:
         cwd = WS_ROOT
     text = _command_of(payload)
-    candidates = _resolved_candidates(cwd, text)
+    candidates, degraded = _resolved_candidates(cwd, text)
     hits: list[Path] = []
     for repo in guarded_repos():
-        if cwd == repo or repo in cwd.parents:          # A
+        if cwd == repo or repo in cwd.parents:                        # A
             hits.append(repo)
             continue
-        rel = repo.relative_to(WS_ROOT).as_posix()      # B
-        needles = {rel, str(repo), repo.name}
-        if any(re.search(r"(?<![\w/.-])" + re.escape(n) + r"(?![\w-])", text)
-               for n in needles if n):
+        if any(c == repo or repo in c.parents for c in candidates):    # B
             hits.append(repo)
             continue
-        if any(c == repo or repo in c.parents for c in candidates):   # C
+        if degraded and _loose_match(repo, text):                      # fallback
             hits.append(repo)
     return hits
 
@@ -230,39 +310,89 @@ def _is_blocking_stdout(text: str) -> bool:
     return data.get("decision") == "block"
 
 
-def _hook_failure(event: str, repo: Path, command: str, kind: str, detail: str) -> int:
-    """repo hook 自己失敗（timeout／執行不了）時的處置。
+#: 各種失敗原因對應的處置建議（拒絕訊息要能直接照著做，不是只說「失敗了」）。
+_FAILURE_HINTS = {
+    "timeout": "調高該 repo `.claude/settings.json` 裡那支 hook 的 `timeout`，或修它為什麼這麼慢",
+    "非預期的 exit code": "那支 hook 自己 crash 了（exception／exit 1／exit 7…）——看它的 stderr 修它。"
+                          "⚠ hook 協定裡**只有 exit 2 代表 block**，其餘非 0 是「非阻斷性錯誤」",
+    "無法執行": "確認 hook 檔存在、路徑對、且 `python3` 跑得起來",
+    "settings.json 載不起來": "修該 repo 的 `.claude/settings.json`（JSON 語法／檔案權限）",
+}
 
-    🔴 **PreToolUse 一律 fail-closed（exit 2）**：它是安全 gate，放行一個沒被檢查過的
-    指令，等於那道守線在這一次完全不存在。FIX ROUND 6 之前這裡只寫 stderr 就 `continue`，
-    最後回 0 ⇒ **fail-OPEN**（覆核實跑：repo hook `timeout: 1` 實際 sleep 2，指令照樣放行）。
 
-    **PostToolUse 保留 warning-only**：工具已經執行完了，擋也改變不了結果。
+def _hook_failure(event: str, repo: Path, subject: str, kind: str, detail: str) -> int:
+    """repo hook 無法給出判斷時的處置。回傳要用的 exit code。
 
-    ⚠ fail-closed 有誤擋風險：repo hook 自己有 bug 卡住的話，**該 repo 的所有操作都會被擋**。
-    所以訊息必須可診斷（哪個 repo、哪支 hook、什麼原因、怎麼逆轉），並留一個明確的逃生門。
+    🔴 **PreToolUse 一律 fail-closed（exit 2）**，涵蓋**所有**「無法確認這道指令安全」
+    的理由，不只 timeout：
+
+      | 失敗形態 | 為什麼也要擋 |
+      | --- | --- |
+      | `timeout` | hook 沒跑完，沒有判斷 |
+      | 非 0 且**非 2** 的 exit code | hook crash／exception／exit 1／exit 7。⚠ hook 協定裡**只有 exit 2 代表 block**，其餘非 0 是「非阻斷性錯誤」⇒ 原樣回傳等於放行 |
+      | hook 檔不存在／不可執行 | 同上，沒有判斷 |
+      | 呼叫本身拋例外（OSError…） | 同上 |
+      | 命中的 repo 有 `settings.json` 但讀不到／解不開 | **宣稱有守線却載不起來** |
+
+    ⚠ FIX ROUND 6 只補了 timeout 那一條，其餘三條仍 fail-open（覆核實跑：
+    `Pre hook exits 7 → rc=7`、`Pre invalid settings JSON → rc=0`）。
+    ⛔ 判準是「**有沒有拿到判斷**」，不是「失敗長什麼樣」——任何新的失敗形態都走這裡。
+
+    **PostToolUse 一律 warning-only（exit 0）**：工具已經執行完了，擋也改變不了結果。
+    （FIX ROUND 7 之前「非 0 exit code」這條路徑會原樣回傳 rc=7，與文件敘述不一致。）
+
+    ⛔ **exit 2 不走這裡**——那是 repo hook 刻意的 block，要原樣透傳，它的 stderr 就是
+    給使用者看的理由，不可被本函式的訊息蓋掉。
+
+    ⚠ fail-closed 有誤擋風險：repo hook 自己有 bug 的話，**該 repo 的所有操作都會被擋**。
+    所以訊息必須可診斷（哪個 repo、哪個對象、什麼原因、怎麼逆轉），並留明確的逃生門。
     """
     if event != "PreToolUse":
         sys.stderr.write(
-            f"[dispatch-hook] {event} hook {kind}（已執行完的工具不擋）：{repo.name} / {command}\n"
-            f"  {detail}\n")
+            f"[dispatch-hook] ⚠ {event} hook {kind}（工具已執行完，不擋）："
+            f"{repo.name} / {subject}\n  {detail}\n")
         return 0
     if os.environ.get(FAIL_OPEN_ENV, "").strip() not in ("", "0", "false", "False"):
         sys.stderr.write(
             f"[dispatch-hook] ⚠ {FAIL_OPEN_ENV} 已設，放行一個**未經檢查**的指令："
-            f"{repo.name} / {command}（{kind}）\n")
+            f"{repo.name} / {subject}（{kind}）\n")
         return 0
     sys.stderr.write(
-        "[dispatch-hook] ⛔ 拒絕執行：轉呼叫 repo 的 hook 失敗，無法確認這道指令安全。\n"
+        "[dispatch-hook] ⛔ 拒絕執行：轉呼叫 repo 的守線失敗，無法確認這道指令安全。\n"
         f"  repo      : {repo}\n"
-        f"  hook      : {command}\n"
+        f"  對象      : {subject}\n"
         f"  事件／原因: {event} / {kind}\n"
         f"  細節      : {detail}\n"
-        "  為什麼擋 : PreToolUse 是安全 gate；hook 沒跑完就放行，等於那道守線這次不存在。\n"
-        "  怎麼處理 : (1) 修那支 repo hook，或在該 repo 的 .claude/settings.json 調高它的\n"
-        "             timeout；(2) 確認 hook 檔存在且 python3 跑得起來；\n"
-        f"             (3) 真的要硬過：export {FAIL_OPEN_ENV}=1（⛔ 會放行未經檢查的指令）。\n")
+        "  為什麼擋 : PreToolUse 是安全 gate；沒拿到判斷就放行，等於那道守線這次不存在。\n"
+        f"  怎麼處理 : (1) {_FAILURE_HINTS.get(kind, '修上面那個對象')}；\n"
+        f"             (2) 真的要硬過：export {FAIL_OPEN_ENV}=1"
+        "（⛔ 會放行未經檢查的指令）。\n")
     return 2
+
+
+def _load_settings(event: str, repo: Path) -> tuple[dict | None, int]:
+    """讀某個 repo 的 `.claude/settings.json`。回傳 `(settings, 要用的 exit code)`。
+
+    ⚠ 分界點是「**宣稱有守線却載不起來**」vs「**本來就沒有守線**」：
+
+      - 檔案存在但讀不到／解不開 ⇒ PreToolUse **fail-closed**（BLOCKING 3）。
+      - 檔案**根本不存在** ⇒ 正常情況，**絕不可擋**。`guarded_repos()` 只會回傳有
+        `settings.json` 的 repo，所以這條理論上走不到；留著是因為 glob 與 read 之間
+        檔案可能被刪（TOCTOU），而那時「不存在」仍然是「本來就沒有守線」。
+    """
+    path = repo / ".claude" / "settings.json"
+    if not path.exists():
+        return None, 0          # 本來就沒有守線 ⇒ 不擋
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        return None, _hook_failure(event, repo, str(path),
+                                   "settings.json 載不起來", str(exc))
+    if not isinstance(data, dict):
+        return None, _hook_failure(event, repo, str(path),
+                                   "settings.json 載不起來",
+                                   f"最外層不是 JSON object（是 {type(data).__name__}）")
+    return data, 0
 
 
 def main() -> int:  # noqa: PLR0911, PLR0912
@@ -280,10 +410,10 @@ def main() -> int:  # noqa: PLR0911, PLR0912
     executed = 0
 
     for repo_root in matched_repos:
-        settings_path = repo_root / ".claude" / "settings.json"
-        try:
-            settings = json.loads(settings_path.read_text())
-        except (OSError, json.JSONDecodeError):
+        settings, rc = _load_settings(event, repo_root)
+        if rc:
+            return rc
+        if settings is None:
             continue
         groups = (settings.get("hooks") or {}).get(event) or []
         for group in groups:
@@ -321,20 +451,32 @@ def main() -> int:  # noqa: PLR0911, PLR0912
                     sys.stdout.write(proc.stdout)
                 if proc.stderr:
                     sys.stderr.write(proc.stderr)
-                # ⚠ 短路兩種 block 協定：exit 非 0，或 stdout JSON 判 deny。
-                #   不短路的話後面的 hook 會再吐一份 JSON，兩份混在 stdout 上無法解析。
+                # ⛔ exit 2 ＝ repo hook 刻意的 block ⇒ **原樣透傳**。它的 stderr 就是
+                #    給使用者看的理由，不可被我們的診斷訊息蓋掉。
+                if proc.returncode == BLOCK_EXIT_CODE:
+                    return BLOCK_EXIT_CODE
+                # 其餘非 0 ＝ hook 自己掛了，**沒有**給出判斷。原樣回傳的話 Claude Code
+                # 視為「非阻斷性錯誤」而照跑工具 ⇒ fail-open（BLOCKING 2）。
                 if proc.returncode != 0:
-                    return proc.returncode
+                    rc = _hook_failure(
+                        event, repo_root, command, "非預期的 exit code",
+                        f"exit {proc.returncode}"
+                        + (f"；stderr: {proc.stderr.strip()[:200]}" if proc.stderr else ""))
+                    if rc:
+                        return rc
+                    continue
+                # stdout JSON 判 deny（kubectl-ns-guard 走這條，exit code 是 0）⇒ 短路，
+                # 否則後面的 hook 會再吐一份 JSON，兩份混在 stdout 上 claude 解析不了。
                 if _is_blocking_stdout(proc.stdout or ""):
                     return 0
 
     # ── 零命中告警 ────────────────────────────────────────────────────────────
-    # 命中了 repo 卻沒有任何 hook 真的跑起來 ⇒ 接線可能壞了（matcher 改了、settings.json
-    # 讀不到…）。只對真的會改動／執行東西的工具告警，避免噪音。
+    # 命中了 repo 卻沒有任何 hook 真的跑起來 ⇒ 接線可能壞了（matcher 改了…）。
+    # 只對真的會改動／執行東西的工具告警，避免噪音。
     #
     # ⚠ **這個告警抓不到「targets() 回空」那一類漏守**（FIX ROUND 6 的 BLOCKING 1 正是
     #   那一類：`cd ../repoA` 讓 targets() 回空）。它是 path-token 解析的**輔助**，
-    #   ⛔ 不是替代品。真正的守線在 targets() 的三層聯集。
+    #   ⛔ 不是替代品。真正的守線在 targets() 的兩層聯集。
     if executed == 0 and matched_repos and tool_name in WARN_TOOLS:
         names = ", ".join(r.name for r in matched_repos)
         sys.stderr.write(

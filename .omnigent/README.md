@@ -138,25 +138,58 @@ repo-lint `kubectl-ns-whitelist-sync` 的對帳範圍內 ⇒ 必然漂移。disp
 ⇒ **整條鏈的強度由較弱的那一環決定**：只要 target detection 漏判，A 類的 repo hook 就不會
 被執行到。FIX ROUND 6 的 BLOCKING 1 正是這個——`cd ../repoA`（從 sibling repo 進入）零命中。
 
-target detection 採三層聯集（寧可多跑、不可漏守）：
+target detection 採**兩層聯集**（寧可多跑一次檢查、不可漏守）：
 
 | 層 | 判斷 |
 | --- | --- |
 | A | payload 的 `cwd` 落在某個 repo 底下 |
-| B | 指令文字出現該 repo 的相對路徑／絕對路徑／目錄名（字面比對） |
-| C | **path-token 解析**：`shlex.split` 抽出路徑型 token（含 `/`、以 `.` 開頭，或 `cd`／`pushd`／`git -C`／`env -C` 的下一個 token，以及 `-c` 的 shell payload 遞迴一層），**以 cwd 與 workspace 根兩個基準各 resolve 一次**，落在某個 repo 內就命中。`normpath` 順帶解掉 `group//repoA` 與 `..` |
+| B | **path-token 解析**：`shlex.split` 抽出路徑型 token（含 `/`、以 `.` 開頭，或 `cd`／`pushd`／`git -C`／`env -C` 的下一個 token，以及 `-c`／`-lc` 類 flag 的 shell payload 遞迴一層），**以 cwd 與 workspace 根兩個基準各 `normpath` 一次**，等於某個 repo 或落在它底下就命中。`normpath` 順帶解掉 `../repoA//x`、尾斜線與 `..`；取路徑前先剝掉 `shlex` 留在 token 邊緣的 shell 標點（`(cd`、`group/repoA;`） |
+
+⛔ **FIX ROUND 7 移除了原本的第三層「對整條 command 做裸字串 regex」。** 那層把 `repo.name`
+當裸字串比對 ⇒ `git commit -m "fix repoA bug"` **誤命中**（覆核實測）。
+
+為什麼這個誤擋不能照「寧可誤擋」原則接受：它與 fail-closed **相乘**——誤命中一個不相干的
+repo、而那個 repo 的 hook 又因任何理由失敗 ⇒ 一條**完全合法的 `git commit` 被擋下**。
+commit message／PR body 提到 repo 名是極常見的寫法，所以這裡的誤擋不是便宜的保守選擇，
+而是會阻斷日常工作。
+
+⚠ 唯一例外：`shlex` 解析失敗（引號不對稱、未終止字串…）時**仍退回寬鬆比對**。
+「看不懂」屬於「無法證明安全」，必須倒向保守。⛔ 不可把解析失敗當成「沒有路徑」。
 
 ### ⚠ hook 失敗的事件分級（fail-closed 的取捨）
 
-| 事件 | hook timeout／執行失敗時 | 理由 |
-| --- | --- | --- |
-| **PreToolUse** | ⛔ **fail-closed（exit 2）** | 它是安全 gate。放行一個沒被檢查過的指令，等於那道守線**這一次完全不存在** |
-| **PostToolUse** | warning-only | 工具已經執行完了，擋也改變不了結果 |
+**判準是「有沒有拿到判斷」，不是「失敗長什麼樣」。** PreToolUse 是安全 gate，所以
+**所有**「無法確認這道指令安全」的理由都同樣 fail-closed：
 
-⚠ **fail-closed 的誤擋風險是真的**：repo hook 自己有 bug 卡住的話，**該 repo 的所有操作都會
-被擋**。所以拒絕訊息設計成可診斷——明寫 repo、哪支 hook、timeout 還是執行失敗、為什麼擋、
-以及三種處理方式。逃生門是 `export OMNIGENT_DISPATCH_FAIL_OPEN=1`（⛔ 會放行未經檢查的指令，
-且每次都留 stderr 警告）。
+| 失敗形態 | PreToolUse | PostToolUse |
+| --- | --- | --- |
+| hook `timeout` | ⛔ **exit 2** | warning-only |
+| 非 0 且 **非 2** 的 exit code（crash／exception／exit 1／exit 7） | ⛔ **exit 2** | warning-only |
+| hook 檔不存在／不可執行（shell 回 127） | ⛔ **exit 2** | warning-only |
+| 呼叫本身拋例外（`OSError`…） | ⛔ **exit 2** | warning-only |
+| 命中的 repo **有** `settings.json` 但讀不到／解不開 | ⛔ **exit 2** | warning-only |
+| repo hook 回 **exit 2**（刻意 block） | **原樣透傳** | 原樣透傳 |
+| 命中的 repo **根本沒有** `settings.json` | ✅ **不擋** | 不擋 |
+| 有 `settings.json` 但沒有 matching hook | ✅ **不擋**（留零命中告警） | 不擋 |
+
+⚠ **`exit 2` 為什麼要原樣透傳**：那是 repo hook 刻意的 block，它的 stderr 就是給使用者看的
+理由，不可被 dispatcher 的診斷訊息蓋掉。`kubectl-ns-guard` 走 stdout JSON 協定（exit 0）的
+那條路徑也不可被破壞——dispatcher 偵測到 deny JSON 會短路。
+
+⚠ **「沒有 settings.json」與「有但載不起來」的分界點**：前者是正常情況（那個 repo 本來就
+沒有守線），後者是**宣稱有守線却載不起來** ⇒ 只有後者擋。實作上
+`guarded_repos()` 只會回傳有 `settings.json` 的 repo，所以「沒有」那條理論上走不到；
+留著處理 glob 與 read 之間檔案被刪的 TOCTOU，而那時「不存在」仍然算「本來就沒有守線」。
+
+⚠ **fail-closed 的誤擋風險是真的**：repo hook 自己有 bug 的話，**該 repo 的所有操作都會被
+擋**。所以拒絕訊息設計成可診斷——明寫 repo、對象、事件／原因、細節，以及**依失敗形態給出
+對應的處置建議**（timeout 要調 `timeout`、crash 要看它的 stderr、settings 壞了要修 JSON）。
+逃生門是 `export OMNIGENT_DISPATCH_FAIL_OPEN=1`（⛔ 會放行未經檢查的指令，且每次都留警告）。
+
+⚠ FIX ROUND 6 只補了 `timeout` 一條，其餘三條仍 fail-open（覆核實跑：`Pre hook exits 7
+→ rc=7`、`Pre invalid settings JSON → rc=0`）。**而當時的突變測試也只錐在 timeout** ⇒
+26 個 case 全綠卻抓不到：**測試的盲點跟程式的盲點一模一樣**。現在拆成 Z1／Z2／Z3／Z4
+四個 case 各自錐一種失敗形態。
 
 ### ⚠ 零命中告警抓不到「targets() 回空」那一類
 
@@ -165,7 +198,7 @@ dispatcher 在「命中了 repo、但沒有任何 hook 真的跑起來」時寫�
 
 ⛔ **它抓不到 BLOCKING 1 那一類漏守**——那一類的症狀就是 `targets()` 回**空**，
 連「命中了 repo」這個前提都不成立。告警是 path-token 解析的**輔助，不是替代品**。
-真正的守線在 targets() 的三層聯集。
+真正的守線在 targets() 的兩層聯集。
 
 ### known_gap（已知涵蓋不到，刻意不追）
 
@@ -174,6 +207,7 @@ dispatcher 在「命中了 repo、但沒有任何 hook 真的跑起來」時寫�
 | 路徑藏在變數裡（`D=../repoA; cd $D`） | 需要追蹤變數賦值，那是 shell 解譯器的工作 |
 | 指令寫進 script 檔再執行（`bash run.sh`） | 本 hook 看不到檔案內容（repo 的 `kubectl-ns-guard` 檔頭也明寫它不涵蓋這層） |
 | `bash -c` 巢狀兩層以上 | payload 遞迴限深度 1——再深就該懷疑是刻意混淆，而本 hook 防的是**手滑不是攻擊** |
+| 路徑被 shell 展開才成形（`cd "$(git rev-parse --show-toplevel)"`） | 同上，需要真的跑 shell 才知道結果 |
 
 ### 三個接線前提（缺一個就完全不生效，驗收第 15 項機器強制）
 
@@ -265,8 +299,16 @@ dispatcher 在「命中了 repo、但沒有任何 hook 真的跑起來」時寫�
    ⚠ 第四個前提（FIX ROUND 6 補）：**target detection 猜錯 repo 也是靜默漏守**——
    `cd ../repoA`（從 sibling repo 進入）在只有「cwd ＋ 字面比對」兩層時完全零命中，
    後面接 kubectl 就等於鐵律失效。現在補了 path-token 解析（突變 Y 實證）。
-   ⚠ 第五個（同輪補）：**repo hook 自己 timeout 時原本 fail-OPEN**——只寫 stderr 就放行。
-   PreToolUse 已改成 fail-closed（exit 2），PostToolUse 保留 warning-only（突變 Z 實證）。
+   ⚠ 第五個（ROUND 6 補、ROUND 7 補完）：**repo hook 沒能給出判斷時原本 fail-OPEN**。
+   ROUND 6 只修了 `timeout`；`exit 7`（crash）、hook 檔不存在、以及**命中的 repo 有
+   `settings.json` 但解不開**三條路徑仍然放行（覆核實跑 `rc=7` / `rc=0`）。
+   現在 PreToolUse 下**所有**失敗形態一律 exit 2（見 §hook 失敗的事件分級），
+   PostToolUse 一律 warning-only（突變 Z1／Z2／Z3／Z4 各錐一種）。
+   ⚠ 第六個（ROUND 7 補）：**target detection 誤命中也會害人**——裸字串比對讓
+   `git commit -m "fix repoA bug"` 命中不相干的 repo，與 fail-closed 相乘就會擋掉一條
+   合法的 commit。已移除那層（突變 AA 實證）。
+   ⚠ 第七個（ROUND 7 補）：**兩份 dispatcher 副本漂移**——一份補了守線一份沒補，守線只在
+   其中一條派工路徑生效且不會報錯。→ 驗收第 16 項對 hash（突變 AB 實證）。
 10. 🔴 **CLAUDE.md 的 on-demand 注入只綁 `Read` 工具。** 用 `cat` / `grep` 讀檔不會觸發注入
     ⇒ 在共同祖先 workspace 下，worker 連那點補償都沒有。
     ⇒ 關鍵守線知識必須**寫進 prompt**，⛔ 不要假設 worker 讀得到 repo 的 CLAUDE.md 或 skills。

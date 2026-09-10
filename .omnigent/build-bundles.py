@@ -45,6 +45,7 @@ thin shell 的 `config.yaml`、`AGENTS.md` 與 `skills/` **全部都是實體檔
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import shutil
@@ -796,6 +797,8 @@ def run_checks() -> int:
     r.guard("14. dispatcher hook 端到端（fixture repo，零副作用）", _check_dispatcher)
     r.guard("15. dispatcher 接線前提（PreToolUse＋PostToolUse／不靠 shebang／skills 同層）",
             _check_hook_wiring)
+    r.guard("16. 所有 dispatcher 副本逐字相同（漂移＝守線只在一條路徑生效）",
+            _check_dispatcher_copies)
 
     print()
     print(f"總計：{r.failed} 項 FAIL" if r.failed else "總計：全部 PASS")
@@ -1231,6 +1234,37 @@ def _check_no_tracked_symlinks() -> tuple[bool, str]:
     return True, f"0 個 mode 120000（{summary}）"
 
 
+def _check_dispatcher_copies() -> tuple[bool, str]:
+    """第 16 項：所有 dispatcher 副本必須**逐字相同**。
+
+    🔴 為什麼要獨立一項：第 0 項（產物同步）目前**恰好**也能抓到這件事，因為 `build()`
+    把 `hooks/` 列進複製清單。但那是間接的——若有人改 `build()` 不再複製 `hooks/`，
+    第 0 項不會抱怨，而兩份 dispatcher 就開始漂移。**一份補了守線、一份沒補，守線只在
+    其中一條派工路徑生效，而且不會報錯**（靜默失效）。所以這一項直接對 hash，
+    不管 `build()` 怎麼做。
+    """
+    copies = sorted(q for q in OMNIGENT_DIR.rglob("hooks/dispatch-hook.py")
+                    if "__pycache__" not in q.parts)
+    if len(copies) < 2:
+        return False, (f"只找到 {len(copies)} 份 dispatcher（預期至少 2：issue-leader ＋ "
+                       "每個 claude-native 的 repo-leader）")
+    digests = {}
+    for q in copies:
+        digests.setdefault(hashlib.sha256(q.read_bytes()).hexdigest(), []).append(
+            str(q.relative_to(OMNIGENT_DIR)))
+    if len(digests) != 1:
+        groups = "；".join(f"{d[:8]}…: {v}" for d, v in digests.items())
+        return False, f"{len(copies)} 份 dispatcher 有 {len(digests)} 種內容（漂移了）：{groups}"
+    # 每個掛 hooks/ 的 bundle 都要有對應的 dispatcher
+    expect = {LEADER_DIR} | {LEADER_DIR / "agents" / k for k, v in LEADERS.items()
+                             if v["harness"] == "claude-native"}
+    missing = sorted(str(d.name) for d in expect
+                     if not (d / "hooks" / "dispatch-hook.py").is_file())
+    if missing:
+        return False, f"這些 bundle 缺 dispatcher：{missing}"
+    return True, f"{len(copies)} 份逐字相同（sha256 {next(iter(digests))[:12]}…）"
+
+
 def _check_dispatcher() -> tuple[bool, str]:
     """第 14 項：dispatcher hook 端到端（委派給 test-dispatcher.py）。
 
@@ -1245,7 +1279,8 @@ def _check_dispatcher() -> tuple[bool, str]:
                           timeout=300, check=False)
     out = ((proc.stdout or "") + (proc.stderr or "")).strip()
     if proc.returncode != 0:
-        return False, f"dispatcher 端到端失敗：{out[:300]}"
+        # 截斷放寬：失敗訊息開頭是「所有失敗情境的標籤」，截太短會把關鍵情境切掉。
+        return False, f"dispatcher 端到端失敗：{out[:900]}"
     return True, out.lstrip("✅ ").strip()
 
 

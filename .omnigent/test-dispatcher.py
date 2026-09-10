@@ -157,6 +157,30 @@ def run_tests() -> tuple[bool, str]:  # noqa: PLR0915
             # 絕對路徑但落在 workspace 外 ⇒ 不得誤觸發
             ("19. 絕對路徑但在 workspace 外（不得誤觸發）",
              bash("cat /etc/hostname", root), "none"),
+            # ── FIX ROUND 7 / BLOCKING 1：路徑形態補完 ─────────────────────────
+            ("25. cd ../repoA/subdir（repo 的子目錄）",
+             bash("cd ../repoA/subdir && echo hi", root / "group" / "other"), "marker"),
+            ("26. ../repoA//x（路徑中間重複 slash）",
+             bash("cat ../repoA//x", root / "group" / "other"), "marker"),
+            ("27. ../repoA/（尾端 slash）",
+             bash("cd ../repoA/ && echo hi", root / "group" / "other"), "marker"),
+            ("28. cd repoA（裸相對名，cwd 在 group）",
+             bash("cd repoA && echo hi", root / "group"), "marker"),
+            # ── FIX ROUND 7 / BLOCKING 1：**必須不命中**（誤擋會阻斷日常工作）──
+            # 🔴 覆核實測的誤命中：舊版把 repo.name 當裸字串比對，commit message 裡
+            #    提到 repo 名就命中。而誤命中與同輪的 fail-closed 修正**相乘**——誤命中
+            #    的 repo 其 hook 若因任何理由失敗，一條合法的 git commit 就被擋下。
+            ('29. git commit -m "fix repoA bug"（不得誤觸發）',
+             bash('git commit -m "fix repoA bug"', root), "none"),
+            ("30. echo ../repoAX（相近但不同名，不得誤觸發）",
+             bash("echo ../repoAX", root / "group" / "other"), "none"),
+            ("31. cd /tmp && ls（workspace 外，不得誤觸發）",
+             bash("cd /tmp && ls", root), "none"),
+            ("32. pytest 參數含 tests/（不得誤觸發）",
+             bash("python3 -m pytest tests/ -k foo --maxfail=1", root), "none"),
+            # 解析失敗（引號不對稱）⇒ 必須倒向保守：fallback 回寬鬆比對而多命中
+            ('33. 引號不對稱（解析失敗 ⇒ 必須倒向保守命中）',
+             bash('git commit -m "fix repoA bug', root), "marker"),
         ]
         for label, payload, expect in cases:
             rc, out, err = _run(root, payload, marker)
@@ -228,7 +252,7 @@ def run_tests() -> tuple[bool, str]:  # noqa: PLR0915
 
         # ── FIX ROUND 6 / BLOCKING 2：hook 失敗的事件分級 ────────────────────
         g = root / "group" / "repoA"
-        gs = g / ".claude" / "settings.json"
+        gs = g / ".claude" / "settings.json"   # 下面 FIX ROUND 7 的情境也用這個
         gs.write_text(json.dumps({"hooks": {
             "PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command",
                 "command": 'python3 "$CLAUDE_PROJECT_DIR/.claude/hooks/slow.py"',
@@ -266,6 +290,89 @@ def run_tests() -> tuple[bool, str]:  # noqa: PLR0915
         else:
             results.append("22")
 
+        # ── FIX ROUND 7 / BLOCKING 2／3：PreToolUse 的**所有**失敗形態都要 fail-closed ──
+        # ⚠ ROUND 6 只補了 timeout，其餘兩條仍 fail-open（覆核實跑：exits 7 → rc=7、
+        #   invalid settings JSON → rc=0）。判準是「有沒有拿到判斷」，不是失敗長什麼樣。
+        (g / ".claude" / "hooks" / "crash.py").write_text(
+            "import sys\nsys.stderr.write('hook deliberate failure\\n')\nsys.exit(7)\n")
+        (g / ".claude" / "hooks" / "block2.py").write_text(
+            "import sys\nsys.stderr.write('repo 刻意 block 的理由\\n')\nsys.exit(2)\n")
+
+        def _gs(hook_file: str, event: str = "PreToolUse",
+                matcher: str = "Bash", timeout: int | None = None) -> None:
+            entry: dict = {"type": "command",
+                           "command": f'python3 "$CLAUDE_PROJECT_DIR/.claude/hooks/{hook_file}"'}
+            if timeout is not None:
+                entry["timeout"] = timeout
+            gs.write_text(json.dumps({"hooks": {event: [
+                {"matcher": matcher, "hooks": [entry]}]}}))
+
+        # 34. 非 timeout 的失敗（exit 7 ＝ crash／exception）⇒ fail-closed
+        _gs("crash.py")
+        rc, _, err = _run(root, bash("echo hi", g), marker)
+        if rc != 2:
+            bad.append(f"34. PreToolUse hook exit 7 應 fail-closed（exit 2），實得 {rc}"
+                       "——hook 協定裡只有 exit 2 代表 block，其餘非 0 會被視為非阻斷性"
+                       "錯誤而照跑工具")
+        elif "拒絕執行" not in err or "怎麼處理" not in err:
+            bad.append(f"34. 拒絕訊息不可診斷：{err[:120]!r}")
+        else:
+            results.append("34")
+
+        # 35. hook 檔不存在（shell 回 127）⇒ fail-closed
+        _gs("does-not-exist.py")
+        rc, _, err = _run(root, bash("echo hi", g), marker)
+        if rc != 2:
+            bad.append(f"35. hook 檔不存在應 fail-closed，實得 {rc}")
+        else:
+            results.append("35")
+
+        # 36. settings.json 讀不到／解不開 ⇒ fail-closed（且要說出是哪個檔）
+        gs.write_text("{ this is not json")
+        rc, _, err = _run(root, bash("echo hi", g), marker)
+        if rc != 2:
+            bad.append(f"36. settings.json 解析失敗應 fail-closed，實得 {rc}")
+        elif "settings.json" not in err:
+            bad.append(f"36. 拒絕訊息沒說出是哪個檔：{err[:120]!r}")
+        else:
+            results.append("36")
+
+        # 37. ⛔ exit 2 必須**原樣透傳**，理由不可被我們的診斷訊息蓋掉
+        _gs("block2.py")
+        rc, _, err = _run(root, bash("echo hi", g), marker)
+        if rc != 2:
+            bad.append(f"37. repo hook 的 exit 2 應原樣透傳，實得 {rc}")
+        elif "repo 刻意 block 的理由" not in err:
+            bad.append("37. repo hook 的 block 理由沒被傳遞")
+        elif "拒絕執行" in err:
+            bad.append("37. repo hook 刻意的 block 被我們的診斷訊息包裝掉了"
+                       "（那段 stderr 就是給使用者看的理由）")
+        else:
+            results.append("37")
+
+        # 38. PostToolUse 的非 timeout 失敗 ⇒ 仍 warning-only（與文件敘述一致）
+        _gs("crash.py", event="PostToolUse", matcher="Write")
+        rc, _, err = _run(root, {"hook_event_name": "PostToolUse", "tool_name": "Write",
+                                 "cwd": str(g), "tool_input": {"file_path": str(g / "x.py")}},
+                          marker)
+        if rc != 0:
+            bad.append(f"38. PostToolUse hook exit 7 應 warning-only（文件如此敘述），"
+                       f"實得 exit {rc}")
+        elif "不擋" not in err:
+            bad.append("38. PostToolUse 失敗沒留下 warning")
+        else:
+            results.append("38")
+
+        # 39. ⛔ 命中的 repo **根本沒有** settings.json ⇒ 正常情況，絕不可擋
+        #     分界點：「宣稱有守線却載不起來」才擋，「本來就沒有守線」不擋。
+        nb = root / "plainrepo"
+        (nb / ".claude").mkdir(parents=True)
+        rc, _, err = _run(root, bash("echo hi", nb), marker)
+        if rc != 0:
+            bad.append(f"39. 沒有 settings.json 的 repo 不該被擋，實得 exit {rc}")
+        else:
+            results.append("39")
+
         # ── X4：零命中告警 ───────────────────────────────────────────────────
         # 23. 命中 repo 但沒有 matching hook ⇒ 要有 warning
         rc, _, err = _run(root, bash("echo hi", root / "repoC"), marker)
@@ -282,8 +389,13 @@ def run_tests() -> tuple[bool, str]:  # noqa: PLR0915
 
     ok = not bad
     n = len(set(results))
-    return ok, (f"{n} 個情境全部符合預期" if ok
-                else f"{len(bad)} 個情境不符：" + "；".join(bad[:4]))
+    if ok:
+        return True, f"{n} 個情境全部符合預期"
+    # ⚠ 先印**所有**失敗情境的精簡標籤再附細節：一個弱化改動可能同時弄壞十幾個情境，
+    #   只印前幾筆細節會把真正該看的那個情境截掉（也讓突變測試的 EXPECT_KEY 失準）。
+    labels = [b.split("：", 1)[0].strip() for b in bad]
+    return False, (f"{len(bad)} 個情境不符 [{'; '.join(labels)}]"
+                   f"｜細節：" + "；".join(bad[:3]))
 
 
 if __name__ == "__main__":

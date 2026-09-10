@@ -102,6 +102,10 @@ fi
 #
 # ⚠ 改 `generate-worker.py` 裡 CEL 的 case 末尾都要 `python3 build-bundles.py` 重產：
 #   第 8 項是從**已 parse 的樹**抽運算式，靜態 config 沒重產就還是舊的 CEL ⇒ 驗不到。
+#
+# ⚠ 改 dispatcher **來源**的 case 末尾都要 `python3 build-bundles.py` 重產：否則副本沒跟著
+#   變，會連帶紅第 0（產物不同步）與第 16（兩份漂移）項，把焦點從「dispatcher 邏輯變弱」
+#   模糊掉。要驗「兩份漂移」本身，用專門的 case AB。
 #   （動態 worker 的部分會立刻反映，但 p_model／p_board 只掛在 leader 的靜態 config 上。）
 
 run_mut A "把 repo-leader 的 skills 副本換成 symlink" "7,10" "" \
@@ -315,7 +319,7 @@ cfg["hooks"].pop("PostToolUse")
 p.write_text(json.dumps(cfg, indent=2))
 PY'
 
-run_mut X "dispatcher 不覆寫 CLAUDE_PROJECT_DIR（repo hook 找不到檔）" "0,14" "" \
+run_mut X "dispatcher 不覆寫 CLAUDE_PROJECT_DIR（repo hook 找不到檔）" "14" "" \
 'python3 - <<"PY"
 import pathlib
 p = pathlib.Path("woow-issue-leader/hooks/dispatch-hook.py")
@@ -323,30 +327,108 @@ s = p.read_text()
 old = """                env[\"CLAUDE_PROJECT_DIR\"] = str(repo_root)"""
 assert old in s, "CLAUDE_PROJECT_DIR 覆寫點定位失效"
 p.write_text(s.replace(old, "                pass  # 不覆寫", 1))
+import subprocess; subprocess.run(["python3", "build-bundles.py"], check=True, capture_output=True)
 PY'
 
 
-run_mut Y "dispatcher 拿掉 path-token 解析（cd ../repoA 會零命中）" "0,14" "cd ../repoA" \
+run_mut Y "dispatcher 拿掉 path-token 解析（cd ../repoA 會零命中）" "14" "cd ../repoA" \
 'python3 - <<"PY"
 import pathlib
 # 退回 FIX ROUND 6 之前：只有 A（cwd）與 B（字串比對）兩層，沒有 C（path-token）。
 p = pathlib.Path("woow-issue-leader/hooks/dispatch-hook.py")
 s = p.read_text()
-old = "        if any(c == repo or repo in c.parents for c in candidates):   # C"
-assert old in s, "path-token 命中判斷（C 層）定位失效"
-p.write_text(s.replace(old, "        if False:   # C 被拿掉", 1))
+# 定位 path-token 命中那一行（⚠ 不要比對行尾註解的層號字母——FIX ROUND 7 重編層號時
+# 它從 C 變成 B，舊定位就靜默失效成 no-op 了）。
+old = "if any(c == repo or repo in c.parents for c in candidates):"
+assert old in s, "path-token 命中判斷的定位失效"
+p.write_text(s.replace(old, "if False:  # path-token 命中判斷被拿掉", 1))
+import subprocess; subprocess.run(["python3", "build-bundles.py"], check=True, capture_output=True)
 PY'
 
-run_mut Z "PreToolUse 的 hook 失敗改回 fail-open" "0,14" "PreToolUse hook timeout" \
+# ── FIX ROUND 7：原本的突變 Z 只錐在「timeout」──────────────────────────────────
+# 🔴 所以三個 fail-open 漏洞（非-timeout 失敗、settings.json 解析失敗）存在時，26 個
+#    case 仍然全綠：**測試的盲點跟程式的盲點一模一樣**。拆成三個各自錐不同失敗形態的
+#    case，每個都用 EXPECT_KEY 斷言紅在對應的場景名上。
+
+run_mut Z1 "PreToolUse 的 timeout 改回 fail-open" "14" "PreToolUse hook timeout" \
 'python3 - <<"PY"
 import pathlib
 p = pathlib.Path("woow-issue-leader/hooks/dispatch-hook.py")
 s = p.read_text()
 old = "    if event != \"PreToolUse\":"
 assert old in s, "事件分級判斷定位失效"
-# 讓每個事件都走 warning-only 那條 ⇒ 退回 fail-OPEN
 p.write_text(s.replace(old, "    if True:  # 退回 fail-open", 1))
+import subprocess; subprocess.run(["python3", "build-bundles.py"], check=True, capture_output=True)
 PY'
+
+run_mut Z2 "PreToolUse 的非-timeout 失敗（exit 7）改回 fail-open" "14" "hook exit 7" \
+'python3 - <<"PY"
+import pathlib
+# 退回 FIX ROUND 6：非 0 的 exit code 原樣回傳。⚠ 那等於 fail-open——hook 協定裡
+# 只有 exit 2 代表 block，exit 7 會被視為「非阻斷性錯誤」而照跑工具。
+p = pathlib.Path("woow-issue-leader/hooks/dispatch-hook.py")
+s = p.read_text()
+old = """                if proc.returncode != 0:
+                    rc = _hook_failure("""
+assert old in s, "非預期 exit code 的處理定位失效"
+new = """                if proc.returncode != 0:
+                    return proc.returncode
+                if False:
+                    rc = _hook_failure("""
+p.write_text(s.replace(old, new, 1))
+import subprocess; subprocess.run(["python3", "build-bundles.py"], check=True, capture_output=True)
+PY'
+
+run_mut Z3 "settings.json 解析失敗改回 fail-open" "14" "settings.json 解析失敗" \
+'python3 - <<"PY"
+import pathlib
+# 退回 FIX ROUND 6：讀不到／解不開就 continue ⇒ 宣稱有守線却載不起來，卻照樣放行。
+p = pathlib.Path("woow-issue-leader/hooks/dispatch-hook.py")
+s = p.read_text()
+old = """        return None, _hook_failure(event, repo, str(path),
+                                   "settings.json 載不起來", str(exc))"""
+assert old in s, "settings.json 失敗處理定位失效"
+p.write_text(s.replace(old, "        return None, 0  # 退回 fail-open", 1))
+import subprocess; subprocess.run(["python3", "build-bundles.py"], check=True, capture_output=True)
+PY'
+
+run_mut Z4 "repo hook 刻意的 exit 2 被我們的診斷訊息包裝掉" "14" "包裝掉" \
+'python3 - <<"PY"
+import pathlib
+# exit 2 是 repo hook 刻意的 block，它的 stderr 就是給使用者看的理由。
+# 拿掉原樣透傳那條 ⇒ 會掉進「非預期 exit code」而被我們的訊息蓋掉。
+p = pathlib.Path("woow-issue-leader/hooks/dispatch-hook.py")
+s = p.read_text()
+old = """                if proc.returncode == BLOCK_EXIT_CODE:
+                    return BLOCK_EXIT_CODE"""
+assert old in s, "exit 2 原樣透傳的定位失效"
+p.write_text(s.replace(old, "                pass  # 原樣透傳被拿掉", 1))
+import subprocess; subprocess.run(["python3", "build-bundles.py"], check=True, capture_output=True)
+PY'
+
+run_mut AA "targets() 退回裸字串 regex（commit message 提到 repo 名就誤命中）" \
+  "14" "git commit" \
+'python3 - <<"PY"
+import pathlib
+# 退回 FIX ROUND 6：把 _loose_match 從「只在解析失敗時 fallback」變成常態判定。
+# ⚠ 那層把 repo.name 當裸字串比對 ⇒ `git commit -m "fix repoA bug"` 誤命中，
+#   而誤命中與 fail-closed 相乘會擋掉一條完全合法的 git commit。
+p = pathlib.Path("woow-issue-leader/hooks/dispatch-hook.py")
+s = p.read_text()
+old = "        if degraded and _loose_match(repo, text):                      # fallback"
+assert old in s, "fallback 條件定位失效"
+p.write_text(s.replace(old, "        if _loose_match(repo, text):  # 退回常態裸字串比對", 1))
+import subprocess; subprocess.run(["python3", "build-bundles.py"], check=True, capture_output=True)
+PY'
+
+run_mut AB "兩份 dispatcher 漂移（手改其中一份）" "0,16" "漂移" \
+'python3 - <<"PY"
+import pathlib
+# ⚠ 一份補了守線、一份沒補 ⇒ 守線只在其中一條派工路徑生效，而且不會報錯（靜默失效）。
+p = pathlib.Path("woow-issue-leader/agents/repo_leader_cc/hooks/dispatch-hook.py")
+p.write_text(p.read_text() + "\n# 手改的副本，與來源漂移了\n")
+PY'
+
 
 echo
 if [ "$FAIL_N" -eq 0 ]; then
