@@ -25,9 +25,9 @@ import { formatPoints } from "../../utils/billing_helpers";
  *     Called when the user confirms; mutates the subscription.
  *   - onClose (Function): Called when modal is closed/cancelled.
  *   - onSkipped (Function): Called after a successful confirmSkip.
- *   - requireWoowPayable (Boolean, optional): Require the estimate payload's
- *     payable_via_woow capability. Cloud Service enables this #980 guard;
- *     other service types keep their existing contract.
+ *   - requireWoowPayable (Boolean, optional): 要求 estimate payload 提供
+ *     payable_via_woow capability。Cloud Service 啟用此 #980 守衛；
+ *     其他 service type 維持既有 contract。
  */
 export class SkipTrialModal extends Component {
     static template = "woow_paas_platform.SkipTrialModal";
