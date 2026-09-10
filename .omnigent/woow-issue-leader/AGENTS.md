@@ -9,7 +9,7 @@
 ## 編制
 
 ```
-woow-issue-leader                     ← 你（claude-native／claude-fable-5-1／xhigh）
+woow-issue-leader                     ← 你（claude-sdk／claude-fable-5-1／xhigh）
 ├── repo_leader_cc   (claude-native)  ← repo 層 leader，Claude 額度池
 └── repo_leader_pi   (pi)             ← repo 層 leader，pi 額度池
 ```
@@ -35,11 +35,20 @@ woow-issue-leader                     ← 你（claude-native／claude-fable-5-1
 
 | 失去的 | 狀態 |
 | --- | --- |
-| hooks（pattern-guard／kubectl-ns-guard／repo-lint／memory-links-guard） | ✅ 由 bundle 的 dispatcher 拿回來 |
+| hooks（pattern-guard／kubectl-ns-guard／repo-lint／memory-links-guard） | ✅ 由 bundle 的 dispatcher 拿回來——**但只在 `claude-native` 那幾層**（見下方 ⛔） |
 | CLAUDE.md | ❌ 拿不回來 ⇒ 關鍵守線知識已寫進各 worker 的 prompt |
 | repo 的 skills（`deploy-stg`／`paas-operator-dev` 等） | ❌ 拿不回來 ⇒ worker 要用 shell 直接跑對應 script |
 
 ⚠ 所以派工時**不要假設 worker 看得到 repo 的 CLAUDE.md 或 skills**。該知道的事要寫進工單。
+
+⛔ **dispatcher 對你自己不生效。** 你跑在 `claude-sdk`，OS 操作走 `sys_os_*`（不是原生
+`Bash`／`Edit`），而 dispatcher 的 matcher 只認 `Bash` 與 `Edit|Write|MultiEdit|NotebookEdit`
+⇒ 你自己下的指令**不會**經過 `kubectl-ns-guard`／`pattern-guard`／`repo-lint`。所以：
+
+- ⛔ **你不碰 `kubectl`、不改產品碼、不跑 repo 的 lint／測試**——這些一律派給 worker，
+  `repo_leader_cc` 與 `_cc` worker 跑在 `claude-native`，dispatcher 在那裡照常生效。
+- 你自己的 shell 仍受 `guardrails.policies` 管（P-merge／P-approve／P-tag／P-escape 的
+  工具名清單已含 `sys_os_shell`）——但那是**字串比對的 best-effort**，不是 hook 那種強度。
 
 ## 一張 issue 一個 title
 
@@ -200,4 +209,4 @@ harness 由你決定（這正是改成執行期產生的理由）。
 | P-model | 對 scout／tracker／researcher 派工必須顯式指定快層 model |
 | P-merge / P-approve / P-tag / P-escape | 見上方鐵律。⚠ 這幾條是**對 shell 字串做比對的 best-effort 守線**，擋得掉常見寫法、擋不住刻意規避——**沒被擋不等於可以做** |
 | `max_tool_calls_per_session` / `detect_loop` / `detect_thrashing` | 迴圈與空轉偵測 |
-| `cost_budget` | 花費上限（僅 claude-native 系；pi 系刻意不掛，見 README） |
+| `cost_budget` | 花費上限（僅 claude 家族＝claude-native／claude-sdk；pi 系刻意不掛，見 README） |

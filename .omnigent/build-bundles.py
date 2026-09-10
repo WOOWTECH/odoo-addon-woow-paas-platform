@@ -185,6 +185,15 @@ def issue_leader_config() -> str:
     pol = ["guardrails:", f"  ask_timeout: {ASK_TIMEOUT}", "  policies:"]
     # ⚠ P-board 刻意**不掛**在 issue-leader 身上：全樹只有它能寫看板。
     body = P_LEADER_ORCH + [P_MODEL, P_MERGE, P_APPROVE, P_TAG, P_ESCAPE] + P_SAFETY + [P_COST]
+    # ⛔ 頂層 leader 的 harness 不可以是任何 `*-native`——Omnigent Web UI 的
+    #    Agents → Custom agents 子選單會把它**整個過濾掉**（實測：同一組實驗只差
+    #    harness 一欄，`pi` 出現、`claude-native` 不出現）。根因在
+    #    `web/src/hooks/useAvailableAgents.ts` 的 enrich：custom agent 解析出的
+    #    native key 若與清單中某個 builtin 相同就自我剔除，而 `claude-native`
+    #    的 key `claude` 正好撞上 seeded builtin `claude-native-ui`。
+    #    `claude-sdk` 不在 native 表內 ⇒ 選得到（polly／debby 亦同）。第 17 項是 gate。
+    # ⚠ model 仍取 claude 家族那一格：claude-sdk 與 claude-native 同屬 claude 家族，
+    #    都只吃 id 含 `claude` 的 model（`claude-fable-5-1` 合法）。
     model, effort = ROSTER["repo-leader"]["models"]["claude-native"]
     return "\n".join([
         GENERATED_HEADER,
@@ -193,7 +202,7 @@ def issue_leader_config() -> str:
         "description: woow 六 repo 的 issue 層總指揮：讀 issue、拆工單、派給兩個 "
         "repo_leader、收斂回 Gitea 與看板；自己不寫碼。",
         "",
-        _executor("claude-native", "auto", model=model, effort=effort),
+        _executor("claude-sdk", "auto", model=model, effort=effort),
         "",
         _spawn_note(),
         "",
@@ -799,6 +808,9 @@ def run_checks() -> int:
             _check_hook_wiring)
     r.guard("16. 所有 dispatcher 副本逐字相同（漂移＝守線只在一條路徑生效）",
             _check_dispatcher_copies)
+    # 17：UI picker 過濾——選不到就等於這個 agent 不存在，而且靜默。
+    r.guard("17. 頂層 leader 的 harness 不得是 *-native（UI picker 會過濾掉）",
+            lambda: _check_top_leader_harness_pickable(spec))
 
     print()
     print(f"總計：{r.failed} 項 FAIL" if r.failed else "總計：全部 PASS")
@@ -1334,6 +1346,40 @@ def _check_hook_wiring() -> tuple[bool, str]:
             bad.append(f"{k}: pi harness 不該有 hooks/（pi 沒有 hook 機制）")
     notes.append("claude-native 層皆有 hooks/＋skills/，pi 層無 hooks/")
     return (not bad), ("；".join(notes) if not bad else "；".join(bad[:4]))
+
+
+def _check_top_leader_harness_pickable(spec) -> tuple[bool, str]:
+    """第 17 項：頂層 leader 的 harness 不得是任何 `*-native`。
+
+    🔴 為什麼要 gate：Omnigent Web UI 的 Agents → Custom agents 子選單**選不到**
+    `*-native` harness 的 custom agent，而且**不報錯**——選單裡就是沒有那一列。
+    `web/src/hooks/useAvailableAgents.ts` enrich harness 後，若 custom agent 解析出的
+    native key 與清單中某個 builtin 相同就 `enriched.filter(a => a.id !== agent.id)`
+    把自己剔除；`claude-native` → key `claude`，正好撞上 seeded builtin
+    `claude-native-ui`（harness 也是 `claude-native`）⇒ 必然命中。
+
+    實測對照（同一台 server，逐個 `sys_agent_get`）：`h1-probe-pi`(pi) ✅、
+    `q3-probe`(pi) ✅、`claude`(claude-sdk) ✅／`h1-probe-cn`(claude-native) ❌、
+    `h2-dispatch-bundle`(claude-native) ❌、`woow_issue_leader`(claude-native) ❌。
+    `h1-probe-pi` 與 `h1-probe-cn` 是同一組實驗、只差 harness 一欄。
+
+    ⚠ 只管**頂層** bundle。sub-agent（`repo_leader_cc`）與執行期產生的 worker 不出現在
+    頂層 picker，不受這個 filter 影響，而且它們**需要** claude-native 才有 hook 機制
+    （dispatcher 靠 claude CLI 讀 `--plugin-dir` 底下的 hooks.json）⇒ ⛔ 不要因為這一項
+    去改它們的 harness。
+    """
+    harness = (getattr(spec.executor, "config", None) or {}).get("harness")
+    if not harness:
+        return False, "頂層 config.yaml 讀不到 executor.config.harness"
+    if harness.endswith("-native"):
+        return False, (
+            f"頂層 leader 的 harness 是 {harness!r}——Omnigent Web UI 的 Custom agents "
+            "選單會把 *-native 的 custom agent 過濾掉（useAvailableAgents.ts：native key "
+            "撞上同 key 的 builtin 就自我剔除），使用者根本選不到這個 agent，而且不報錯。"
+            "改用 claude-sdk（claude 家族、同樣吃 claude-* model）。"
+            "⛔ 不要順手改 sub-agent／worker 的 harness——它們不在頂層 picker，"
+            "且需要 claude-native 才有 dispatcher hook。")
+    return True, f"harness={harness}（非 *-native，UI picker 選得到）"
 
 
 def main() -> int:
