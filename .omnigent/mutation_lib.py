@@ -1,13 +1,12 @@
 """突變測試的共用套用函式：**在改檔之前**斷言定位字串仍然有效。
 
-⚠ 檔名用底線（不是 repo 在 `.omnigent/` 慣用的連字號）因為它**要被 import**——
-`mutation-lib.py` 這種名字 `import` 不進來。
+規則只有一條：**定位字串必須在目標檔案裡全域命中恰好 1 次。** 0 次或 >1 次一律 fail loud。
 
 ## 為什麼這道斷言要存在（三次實際失效）
 
 突變測試是所有 CEL 與 dispatcher 守線的守線；而突變本身靠「在目標檔案裡找一段字串再改掉」
-定位。那個定位字串會隨著被測程式重構而失效，**而失效的症狀是突變靜默變成 no-op**
-——測試照樣顯示綠，但它其實什麼都沒驗。本 repo 已經踩過三次：
+定位。那個定位字串會隨著被測程式重構而失效，**而失效的症狀是突變靜默變成 no-op 或改到錯的
+位置**——測試照樣顯示綠，但它其實什麼都沒驗。本 repo 已經踩過三次：
 
 | 輪次 | 突變 | 失效方式 |
 | --- | --- | --- |
@@ -15,27 +14,45 @@
 | FIX ROUND 7 | `Y` | 比對的是行尾註解的層號字母（`# C`），重編層號後 ⇒ no-op |
 | FIX ROUND 8 | `Z1` | 字串變成兩處，`replace(…, 1)` 改到了**錯的函式** |
 
-三次都是靠人工稽核或下游指紋斷言**碰巧**接住。依 `CLAUDE.md`
-「可機械判定 → 加 check，gate 比散文強」，這條升成 gate。
+依 `CLAUDE.md`「可機械判定 → 加 check，gate 比散文強」，這條升成 gate。
+
+## ⛔ 為什麼**不**提供 `anchor=`（縮範圍）機制——連補三輪的教訓
+
+ROUND 9 加了 `anchor=`：定位字串命中多處時，給一個錨點（通常是所屬函式的 `def` 行）把搜尋
+範圍縮到「錨點所屬區塊」。區塊邊界用縮排判斷。然後：
+
+| 輪次 | 補了什麼 | 立刻冒出的新洞 |
+| --- | --- | --- |
+| ROUND 9 | `anchor=` ＋ 縮排區塊 | 錨點**自己**不唯一；定位字串落在區塊**外**也會被改 |
+| ROUND 10 | 錨點須唯一 ＋ 定位字串須區塊內唯一 | 函式體內的**頂格註解**、**shell heredoc** 讓區塊提早截斷 |
+| ROUND 11 | 跳過註解行 ＋「縮排不可信就拒絕」 | **註解裡的假三引號**把奇偶判斷帶歪；heredoc 內容裡**縮排的假結束符**被誤認 |
+
+⚠ 每補一次就冒一個新洞，**那是抽象錯了的訊號，不是實作不夠仔細**。根因是：想用「不解析
+語法的啟發式」去判斷「語法上的區塊邊界」，這件事本身不可能 sound——而且截斷的後果**不是
+漏報，是把該報的錯變成靜默改錯**（本該報「區塊內歧義」的情況只看到截斷點前面那一個命中）。
+
+⇒ ROUND 12 **整套拆掉**。改用「全域命中恰好 1 次」這個**sound 但略寬**的規則：
+全域唯一的字串只可能對到一個位置，**不需要知道任何語法**——沒有邊界要猜，就沒有猜錯的洞。
+
+**代價**：定位字串會長一點（要把足夠的上下文包進去才唯一）。實測只有 2 個突變受影響
+（`Z1`／`AC`），兩者加長後解析到的行號與之前完全相同。為了那 2 個去養一個永遠補不完的
+啟發式，不划算。
+
+⛔ 所以：**不要再加 `anchor=` 或任何「縮範圍」參數。** 需要定到特定位置就把定位字串加長到
+全域唯一；需要連同後面一段可變內容一起換掉就用 `edit_span()`。
 
 ## 斷言內容（套用前，fail loud）
 
-1. 定位字串命中次數 **≥ 1**——命中 0 ＝ 它已經失效了。
-2. 命中 **> 1 次**時**必須**同時給錨點（`anchor=`，通常是所屬函式的 `def` 行）；
-   只給字串不給錨點 ⇒ 報錯。這正是 `Z1` 那次事故：兩處都中，`replace(…, 1)` 改了前面那個。
-3. **錨點自己也必須唯一**（它也是定位字串）。
-4. 定位字串必須落在錨點所屬**區塊內**（縮排判定，見 `_block_bounds`）**且區塊內唯一**——
-   `anchor=` 的語意是「縮範圍」，⛔ 不是「從這裡往後找第一個」。
-
-⚠ 第 3、4 條是 FIX ROUND 10 補的：ROUND 9 只做 `anchor in text` ＋ `index(needle, start)`，
-於是 anchor 不唯一時會靜默改到第一個區塊，而 needle 只要在 anchor **後面任何地方**就會被改。
-那等於把「定位字串會靜默失效」往上推一層（改靠 anchor，但 anchor 自己沒人守），不是解決。
+1. 定位字串**命中 0 次** ⇒ 它已經失效了（被測程式重構過）。
+2. 定位字串**命中 >1 次** ⇒ 會改到其中任意一處，很可能是錯的那一處。
 
 ⛔ 這些一律 `raise`（不是 warning）。`mutation-tests.sh` 會把這個例外當成該 case 的
 硬失敗並把訊息原樣印出來——⛔ 不可以降級成「no-op 警告」，那就退回成我們要修的那個問題。
 
 ⚠ 這是**加強**而不是取代 `mutation-tests.sh` 裡的 `_tree_hash` no-op 守衛：那一層抓的是
-「改完內容或權限卻沒有實際差異」（例如突變 N 只 `chmod`），兩層管不同的事。
+「改完內容或權限卻沒有實際差異」（例如突變 `N` 只 `chmod`），兩層管不同的事。
+
+⚠ 檔名用底線（不是 repo 在 `.omnigent/` 慣用的連字號）因為它**要被 import**。
 """
 
 from __future__ import annotations
@@ -45,7 +62,7 @@ from pathlib import Path
 
 
 class MutationLocatorError(RuntimeError):
-    """定位字串已失效，或命中多處卻沒給錨點。"""
+    """定位字串已失效（命中 0 次），或不唯一（命中 >1 次）。"""
 
 
 def _mut() -> str:
@@ -59,119 +76,8 @@ def _excerpt(needle: str, limit: int = 90) -> str:
     return flat if len(flat) <= limit else flat[:limit] + "…"
 
 
-def _indent_of(line: str) -> int:
-    """行首空白的寬度（tab 當 8 欄，與 Python／YAML 的慣例一致）。"""
-    width = 0
-    for ch in line:
-        if ch == " ":
-            width += 1
-        elif ch == "\t":
-            width += 8 - (width % 8)
-        else:
-            break
-    return width
-
-
-def _block_bounds(text: str, anchor_idx: int) -> tuple[int, int]:
-    """回傳 anchor 所屬區塊的 `[起, 迄)` 字元範圍。
-
-    規則：**從 anchor 那一行開始，到下一個「縮排 ≤ anchor 行縮排」的非空行為止**（或 EOF）。
-    空行跳過（它不代表區塊結束）。
-
-    ⚠ 刻意選這個通用規則而不是語言特定的語法解析：本專案的突變目標檔有 Python、YAML 與
-    shell，三者都是縮排表達層級 ⇒ 同一條規則就夠，而且不需要為每種語言養一個 parser。
-    """
-    line_start = text.rfind("\n", 0, anchor_idx) + 1
-    lines = text[line_start:].splitlines(keepends=True)
-    if not lines:
-        return line_start, len(text)
-    base = _indent_of(lines[0])
-    pos = line_start + len(lines[0])
-    for line in lines[1:]:
-        stripped = line.strip()
-        # 空行與「整行只有註解」的行在 Python／YAML／shell **都不終止區塊** ⇒ 跳過。
-        # ⚠ 不跳過的話，函式體內一個頂格註解就會把區塊提早截斷（實測：覆核者的
-        #   dedented-comment fixture 會因此靜默改到截斷點前面那一個）。
-        if not stripped or stripped.startswith("#"):
-            pos += len(line)
-            continue
-        if _indent_of(line) <= base:
-            return line_start, pos
-        pos += len(line)
-    return line_start, len(text)
-
-
-#: 讓「用縮排判斷區塊邊界」不再可信的訊號。出現任一個就**拒絕使用 anchor 機制**。
-#: ⚠ 刻意不為 Python／YAML／shell 各養一個語法解析器——那是又一個會漂的啟發式。
-#:    原則是「**不確定就 fail loud，不要猜**」：能可靠判斷的情境用縮排規則，不能的退回到
-#:    更嚴的「定位字串必須全域唯一」。
-
-
-def _unclosed_in(block: str, token: str) -> bool:
-    """區塊裡這個多行字串起訖符**有沒有成對收掉**。
-
-    奇數次 ⇒ 有一個開了沒關 ⇒ 區塊邊界很可能就截在那個字串中間 ⇒ 縮排不可信。
-    偶數次 ⇒ 字串完整含在區塊內，它外面的縮排仍然可信。
-    """
-    return block.count(token) % 2 == 1
-
-
-def _heredoc_unclosed(block: str) -> bool:
-    """區塊裡有 heredoc 起始、但**結束符不在區塊內**。
-
-    結束符不在區塊內 ⇒ 邊界截在 heredoc 內容中間（內容常在第 0 欄）⇒ 縮排不可信。
-    """
-    import re as _re
-
-    for m in _re.finditer(r"<<-?\s*([\"\']?)([A-Za-z_][A-Za-z0-9_]*)\1", block):
-        delim = m.group(2)
-        rest = block[m.end():]
-        if not any(line.strip() == delim for line in rest.splitlines()):
-            return True
-    return False
-
-
-def _indent_untrustworthy(block: str) -> str | None:
-    """區塊裡有沒有讓縮排判斷失效的東西？回傳原因，或 `None`。
-
-    三種訊號（都實測過會讓縮排規則算錯邊界）：
-
-      - **前導空白混用 tab 與空格**：同一個縮排深度會算出兩種數字 ⇒ 無條件不可信。
-      - **heredoc 起始而結束符不在區塊內**：內容常在第 0 欄，邊界會截在內容中間。
-      - **多行字串起訖符在區塊內出現奇數次**：有一個開了沒關 ⇒ 邊界截在字串中間。
-
-    ⚠ 後兩者刻意用「**有沒有收掉**」而不是「**有沒有出現**」來判斷（FIX ROUND 11）：
-    只要出現就拒絕的話，任何帶 docstring 的函式都無法用 anchor——實測會退回 `Z1`／`AC`
-    這兩個**已經驗證過定位正確**的突變。而「收掉了」本身就證明邊界沒截在裡面，
-    那時縮排仍然可信 ⇒ 不需要退回。⛔ 這不是語法解析，只是數有沒有成對。
-    """
-    for line in block.splitlines():
-        lead = line[: len(line) - len(line.lstrip())]
-        if "\t" in lead and " " in lead:
-            return "有一行的前導空白混用 tab 與空格"
-    if _heredoc_unclosed(block):
-        return "區塊內有 heredoc 起始（`<<`）而結束符不在區塊內"
-    for token, name in (('"""', "三個雙引號"), ("'''", "三個單引號")):
-        if _unclosed_in(block, token):
-            return "區塊內的多行字串起訖符（" + name + "）出現奇數次（開了沒關）"
-    return None
-
-
-def _locate(text: str, needle: str, anchor: str | None, *, what: str,
-            path: str = "") -> int:
-    """回傳 `needle` 在 `text` 裡的起始位置，套用前先跑完全部斷言。
-
-    ⚠ FIX ROUND 10 補了 anchor 自己的兩個漏。ROUND 9 的版本只做 `anchor in text` 然後
-    `text.index(needle, start)`，於是：
-
-      - **anchor 自己不唯一**時，靜默改到第一個 anchor 之後的命中；
-      - needle 只要出現在 anchor **後面任何地方**就會被改——`anchor=` 從「縮範圍」
-        變成「往後找第一個」，一個遙遠的同名字串就會被默默改掉。
-
-    ⇒ 那等於把「定位字串會靜默失效」這個問題**往上推一層**（needle 不可靠就改靠 anchor，
-    但 anchor 本身也是定位字串、而且沒人守），不是解決。現在 anchor 必須唯一，且 needle
-    必須落在 anchor 所屬**區塊內**並在區塊內唯一。
-    """
+def _locate(text: str, needle: str, *, what: str, path: str = "") -> int:
+    """回傳 `needle` 在 `text` 裡的位置；**全域命中恰好 1 次**才算有效。"""
     where = f"（{path}）" if path else ""
     if not needle:
         raise MutationLocatorError(f"突變 {_mut()}{where}：{what}是空字串")
@@ -183,97 +89,43 @@ def _locate(text: str, needle: str, anchor: str | None, *, what: str,
             "    ⇒ 被測程式重構後這個突變已經變成 no-op，它宣稱要驗的那道守線其實沒被驗到。"
             "請更新定位字串。"
         )
-    if hits > 1 and anchor is None:
+    if hits > 1:
         raise MutationLocatorError(
-            f"突變 {_mut()}{where}：{what}**命中 {hits} 次**卻沒給錨點\n"
+            f"突變 {_mut()}{where}：{what}**命中 {hits} 次**（不唯一）\n"
             f"    字串: {_excerpt(needle)}\n"
             "    ⇒ 這樣會改到其中任意一處（很可能是錯的那一處）。"
-            "請加 `anchor=` 指定所屬函式的 def 行，或把字串改成唯一。"
+            "請把定位字串**加長到全域唯一**（把上下文包進來，多行也可以）。\n"
+            "      ⛔ 不要改用「縮範圍」的錨點機制——那條路連補三輪每次都冒新洞，"
+            "已於 FIX ROUND 12 拆除，理由見本檔檔頭。"
         )
-    if anchor is None:
-        return text.index(needle)
-
-    # ── anchor 自己也是定位字串，所以也要守 ───────────────────────────────────
-    anchor_hits = text.count(anchor)
-    if anchor_hits == 0:
-        raise MutationLocatorError(
-            f"突變 {_mut()}{where}：錨點在目標檔案裡命中 0 次（已失效）\n"
-            f"    錨點: {_excerpt(anchor)}"
-        )
-    if anchor_hits > 1:
-        raise MutationLocatorError(
-            f"突變 {_mut()}{where}：錨點**命中 {anchor_hits} 次**（不唯一）\n"
-            f"    錨點: {_excerpt(anchor)}\n"
-            "    ⇒ 錨點不唯一的話會縮到第一個區塊，可能不是你要的那個。"
-            "請把錨點改成唯一（例如帶上完整的 def 簽名）。"
-        )
-
-    # ── needle 必須落在 anchor 所屬區塊內，且區塊內唯一 ───────────────────────
-    bs, be = _block_bounds(text, text.index(anchor))
-    block = text[bs:be]
-
-    # ── 縮排不可信時**拒絕 anchor 機制**，改要求定位字串全域唯一 ───────────────
-    # ⚠ 為什麼不是「盡力猜一個邊界」：算錯邊界的症狀是把「區塊內歧義」這個**該報的錯**
-    #   變成**靜默改到截斷點前面那一個**（實測：覆核者的 dedented-comment 與 heredoc
-    #   fixture 都默默改到第 2 行）。那正是這道 gate 要消除的性質。
-    reason = _indent_untrustworthy(block)
-    if reason is not None:
-        if hits == 1:
-            return text.index(needle)   # 全域唯一 ⇒ 不靠 anchor 也能唯一定位
-        raise MutationLocatorError(
-            f"突變 {_mut()}{where}：縮排無法可靠判斷區塊邊界，**不能用 anchor 縮範圍**\n"
-            f"    原因: {reason}\n"
-            f"    錨點: {_excerpt(anchor)}\n"
-            f"    字串: {_excerpt(needle)}（全域命中 {hits} 次）\n"
-            "    ⇒ 這種內容下用縮排算出的邊界可能提早截斷，而截斷的後果是「本該報"
-            "『區塊內歧義』的情況變成靜默改到前面那一個」。\n"
-            "      請把定位字串加長到**全域唯一**（不靠 anchor），或改用 edit_span()。"
-        )
-    in_block = block.count(needle)
-    if in_block == 0:
-        raise MutationLocatorError(
-            f"突變 {_mut()}{where}：{what}**不在錨點所屬區塊內**\n"
-            f"    錨點: {_excerpt(anchor)}\n"
-            f"    字串: {_excerpt(needle)}\n"
-            "    ⇒ 它在檔案別處有命中，但不在這個區塊裡。`anchor=` 的語意是**縮範圍**，"
-            "不是「從這裡往後找第一個」⇒ 請確認錨點選對了，或改用唯一的定位字串。"
-        )
-    if in_block > 1:
-        raise MutationLocatorError(
-            f"突變 {_mut()}{where}：{what}在錨點所屬區塊內**命中 {in_block} 次**（仍歧義）\n"
-            f"    錨點: {_excerpt(anchor)}\n"
-            f"    字串: {_excerpt(needle)}\n"
-            "    ⇒ 縮到這個區塊之後還是不唯一。請把定位字串加長到唯一。"
-        )
-    return bs + block.index(needle)
+    return text.index(needle)
 
 
-def edit(path: str | Path, *, old: str, new: str, anchor: str | None = None) -> None:
-    """把 `old` 的**第一個有效命中**換成 `new`，套用前跑完定位斷言。
+def edit(path: str | Path, *, old: str, new: str) -> None:
+    """把 `old` 換成 `new`，套用前先斷言 `old` 在目標檔案裡全域唯一。
 
-    :param anchor: 當 `old` 命中多處時**必填**——通常是所屬函式的 `def …(` 那一行。
+    :param old: 定位字串，**必須全域唯一**。不唯一就把上下文包進來加長它（多行可以）。
     """
     target = Path(path)
     text = target.read_text()
-    i = _locate(text, old, anchor, what="定位字串", path=str(target))
+    i = _locate(text, old, what="定位字串", path=str(target))
     target.write_text(text[:i] + new + text[i + len(old):])
 
 
-def edit_span(path: str | Path, *, start: str, through: str, new: str,
-              anchor: str | None = None) -> None:
+def edit_span(path: str | Path, *, start: str, through: str, new: str) -> None:
     """把「`start` 開頭、到 `through` 結尾」這一整段換成 `new`。
 
-    用於那種「要連同後面一段可變內容一起換掉」的突變（例如把一個長 regex 的
-    alternation 整段砍短）。`through` 在 `start` **之後**才開始找。
+    用於那種「要連同後面一段可變內容一起換掉」的突變（例如把一個長 regex 的 alternation
+    整段砍短）。`start` 必須全域唯一；`through` 在 `start` **之後**才開始找。
     """
     target = Path(path)
     text = target.read_text()
-    i = _locate(text, start, anchor, what="區間起點", path=str(target))
+    i = _locate(text, start, what="區間起點", path=str(target))
     try:
         j = text.index(through, i) + len(through)
     except ValueError:
         raise MutationLocatorError(
-            f"突變 {_mut()}{where}：區間終點在起點之後找不到\n"
+            f"突變 {_mut()}（{target}）：區間終點在起點之後找不到\n"
             f"    起點: {_excerpt(start)}\n"
             f"    終點: {_excerpt(through)}"
         ) from None

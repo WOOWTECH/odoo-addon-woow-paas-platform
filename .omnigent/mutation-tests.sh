@@ -371,11 +371,19 @@ run_mut Z1 "PreToolUse 的 timeout 改回 fail-open" "14" "PreToolUse hook timeo
 'python3 - <<"PY"
 import mutation_lib, pathlib
 p = pathlib.Path("woow-issue-leader/hooks/dispatch-hook.py")
-# ⚠ 先錨定 _hook_failure 再找 ——「if event != "PreToolUse":」在 _untrusted 裡也有一份，
-#   直接 replace(…, 1) 會改到錯的函式（變成 AC 的重複）。這是定位字串歧義的第三次事故。
-mutation_lib.edit(str(p), old="    if event != \"PreToolUse\":",
-                  new="    if True:  # 退回 fail-open",
-                  anchor="def _hook_failure(")
+# ⚠ 定位字串必須包到第三行的 f-string：「if event != "PreToolUse":」本身全檔有兩份
+#   （_hook_failure 與 _untrusted 各一），只有接在後面那行訊息是 _hook_failure 獨有的。
+#   曾經靠 anchor=「縮範圍」解，但「用縮排推區塊邊界」連補三輪每次都冒新漏，
+#   FIX ROUND 12 已拆除；現在一律把定位字串加長到全域唯一（詳見 mutation_lib.py 檔頭）。
+old = """    if event != "PreToolUse":
+        sys.stderr.write(
+            f"[dispatch-hook] ⚠ {event} hook {kind}（工具已執行完，不擋）："
+"""
+new = """    if True:  # 退回 fail-open
+        sys.stderr.write(
+            f"[dispatch-hook] ⚠ {event} hook {kind}（工具已執行完，不擋）："
+"""
+mutation_lib.edit(str(p), old=old, new=new)
 import subprocess; subprocess.run(["python3", "build-bundles.py"], check=True, capture_output=True)
 PY'
 
@@ -452,10 +460,17 @@ import pathlib, subprocess
 # 退回 FIX ROUND 7：dispatcher 自己壞掉就 return 0。⚠ 那比 repo hook 失敗更危險——
 # CLAUDE_PROJECT_DIR 沒設時 targets() 回空 ⇒ 所有 repo 的守線一起靜默消失。
 p = pathlib.Path("woow-issue-leader/hooks/dispatch-hook.py")
-mutation_lib.edit(str(p),
-                  old="    if event != \"PreToolUse\":\n        sys.stderr.write(\n",
-                  new="    if True:  # 退回 fail-open\n        sys.stderr.write(\n",
-                  anchor="def _untrusted(")
+# ⚠ 同 Z1：前兩行在 _hook_failure 裡也有一份，必須包到第三行那句 _untrusted 獨有的
+#   訊息才全域唯一（anchor 縮範圍機制已於 FIX ROUND 12 拆除）。
+old = """    if event != "PreToolUse":
+        sys.stderr.write(
+            f"[dispatch-hook] ⚠ {event}：dispatcher 自己拿不到判斷（{reason}），"
+"""
+new = """    if True:  # 退回 fail-open
+        sys.stderr.write(
+            f"[dispatch-hook] ⚠ {event}：dispatcher 自己拿不到判斷（{reason}），"
+"""
+mutation_lib.edit(str(p), old=old, new=new)
 subprocess.run(["python3", "build-bundles.py"], check=True, capture_output=True)
 PY'
 
