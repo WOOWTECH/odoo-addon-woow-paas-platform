@@ -68,7 +68,9 @@ bash .omnigent/mutation-tests.sh [case 代號]  # 突變測試（每個 case 斷
 | `woow-issue-leader/AGENTS.md` ＋ `skills/` | issue-leader 的 prompt 與 4 個 skill | 手改 |
 | `generate-worker.py` | 執行期產生器 ＋ 對照表 ＋ **7 支 CEL 與所有 policy 片段** | 手改 |
 | `hooks/dispatch-hook.py` ＋ `hooks.json` | dispatcher | 手改 |
-| `build-bundles.py` | 三份靜態 config 的產生器 ＋ 15 項驗收 | 手改 |
+| `build-bundles.py` | 三份靜態 config 的產生器 ＋ **17 項驗收** | 手改 |
+| `test-dispatcher.py` | dispatcher 端到端（fixture、零副作用；51 情境） | 手改 |
+| `mutation-tests.sh` ＋ `mutation_lib.py` | 突變測試與它的套用函式庫——**套用前**斷言定位字串仍有效（見 §定位字串的唯一性）。⚠ `mutation_lib` 用底線命名因為它要被 `import` | 手改 |
 | **三份 `config.yaml`** ＋ repo-leader 的 `AGENTS.md`／`skills/`／`hooks/` | 產物 | ⛔ **勿手改**（drift 由第 0 項對帳） |
 
 ⚠ **CEL 與 policy 片段住在 `generate-worker.py`，不在 `build-bundles.py`。** 因為產生器要在
@@ -553,6 +555,37 @@ run_mut <代號> <說明> <預期紅的項號> <預期紅的 CEL policy> <突變
   的 compile error。
 - **無條件斷言突變真的改到檔案**（內容＋權限 hash 有變），否則是 no-op 假綠。
 - **baseline case**（不施加突變）必須全 PASS，否則其餘 case 的結果都不可信。
+
+### 🔴 定位字串的唯一性是機器斷言（FIX ROUND 9）
+
+突變靠「在目標檔案裡找一段字串再改掉」定位，而那個定位字串會隨被測程式重構而失效——
+**失效的症狀是突變靜默變成 no-op**：測試照樣綠，但它其實什麼都沒驗。這類事故已經三次：
+
+| 輪次 | 突變 | 失效方式 |
+| --- | --- | --- |
+| FIX ROUND 5 | `G` | `sed` 的目標字串被改掉 ⇒ no-op 卻顯示 PASS |
+| FIX ROUND 7 | `Y` | 比對行尾註解的層號字母（`# C`），重編層號後 ⇒ no-op |
+| FIX ROUND 8 | `Z1` | 字串變兩處，`replace(…, 1)` 改到了**錯的函式** |
+
+三次都是靠人工稽核或下游指紋斷言**碰巧**接住。依 `CLAUDE.md`
+「可機械判定 → 加 check，gate 比散文強」，這條升成 gate：
+
+所有改檔的突變一律走 `mutation_lib.edit()` / `edit_span()`，它在**套用之前**斷言：
+
+1. 定位字串命中 **≥ 1 次**（命中 0 ＝ 已失效 → `raise`）
+2. 命中 **> 1 次**時**必須**同時給 `anchor=`（通常是所屬函式的 `def` 行）；
+   只給字串不給錨點 → `raise`
+3. 給了錨點時，錨點本身也要命中，且定位字串要在錨點**之後**才開始找
+
+錯誤訊息會說出**哪個突變、哪個檔案、哪個字串、命中幾次**，並指出該怎麼修。
+`mutation-tests.sh` 把這個例外當成該 case 的**硬失敗**並原樣印出訊息
+（⛔ 不是降級成「no-op 警告」——那就退回成我們要修的那個問題）。
+
+⚠ 這是**加強**而不是取代 `_tree_hash` 的 no-op 守衛：那一層抓「有套用但內容／權限沒有實際
+差異」（例如突變 `N` 只 `chmod`），兩層管不同的事。
+
+⚠ 只有「會改既有檔案內容」的突變需要這道斷言。純新增／刪除檔案的突變
+（`rm -rf`、`chmod`、寫入新檔）沒有定位字串，不在範圍內。
 
 突變一律用 Python 寫、不用 `sed`：`sed` 只能按字面定位，而 K 的事故正是定位不準。需要改
 某支 policy 時先定位它的 YAML block 再改。

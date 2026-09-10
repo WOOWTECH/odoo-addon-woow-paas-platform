@@ -12,6 +12,9 @@
 # ⇒ 所以每個 case 都必須宣告**失敗指紋**，由本 script 機械斷言：
 #      EXPECT_ITEMS   預期紅的驗收項號（逗號分隔）。實際紅的集合必須**完全相等**——
 #                     多紅一項（誤傷）與少紅一項（守線失效）都算該 case 失敗。
+#      定位斷言       改檔的突變一律走 `mutation_lib.edit()` / `edit_span()`，它會在**套用前**
+#                     斷言定位字串仍然有效（命中 0 次、或命中多處卻沒給錨點 ⇒ fail loud）。
+#                     ⛔ 不要回頭寫 `s.replace(old, new, 1)`——那正是三次靜默 no-op 的來源。
 #      EXPECT_KEY     FAIL 訊息裡**必須出現**的關鍵字。CEL 相關時放 policy 名（抓「紅錯
 #                     policy」）；dispatcher 相關時放情境名（抓「紅錯情境」）。這一欄是
 #                     項號比對抓不到的那一層：突變 K 的舊寫法項號與預期完全相同，只有
@@ -45,14 +48,32 @@ run_mut () {
   local TD; TD=$(mktemp -d "${TMPDIR:-/tmp}/omni-mut-XXXX")
   cp -a "$WT/.omnigent" "$TD/"
   local before; before=$(_tree_hash "$TD/.omnigent")
-  ( cd "$TD/.omnigent" && eval "$mutation" ) >/dev/null 2>&1
+  # ⚠ 突變的 stderr **不可以吞掉**：mutation_lib 的定位斷言是靠 raise 表達的，吞掉就退回成
+  #   「靜默 no-op」——正是這道 gate 要修的問題。MUT_CODE 讓錯誤訊息能說出是哪個突變。
+  local mut_err; mut_err=$( cd "$TD/.omnigent" && MUT_CODE="$code" eval "$mutation" 2>&1 >/dev/null )
+  local mut_rc=$?
   local after; after=$(_tree_hash "$TD/.omnigent")
+
+  local problems=()
+  # (0) 🔴 套用前的定位斷言（mutation_lib）失敗 ⇒ 這個 case 直接判死，不必再跑驗收。
+  #     這層抓的是「定位字串失效／命中多處沒給錨點」，而它的症狀原本是靜默 no-op。
+  if [ "$mut_rc" -ne 0 ]; then
+    FAIL_N=$((FAIL_N+1))
+    printf '✗ %-2s %s\n' "$code" "$label"
+    printf '     ⚠ 突變套用失敗（定位斷言不通過，尚未改到任何檔案）\n'
+    # 從 Error 那行起全部保留——訊息的後續行（實際字串、提示）才是能修的資訊；
+    # ⛔ 不要用 `grep -v '^    '` 去掉 traceback，那會連訊息本體一起砍掉。
+    printf '%s\n' "$mut_err" | awk '/Error: /{f=1} f' | sed 's/^/       /'
+    chmod -R u+rwX "$TD" 2>/dev/null || true
+    rm -rf "$TD"
+    return 0
+  fi
 
   local out; out=$( cd "$TD/.omnigent" && python3 build-bundles.py --check 2>&1 )
   local actual_items; actual_items=$(printf '%s\n' "$out" | _fail_items)
-  local problems=()
 
-  # (1) 突變必須真的改到東西——否則是 no-op 假綠（突變 G 的歷史教訓）
+  # (1) 突變必須真的改到東西。⚠ 保留這層：它抓的是「有套用、但內容／權限沒有實際差異」
+  #     （例如突變 N 只 chmod），與 (0) 的定位斷言管不同的事。
   [ "$before" = "$after" ] && problems+=("突變未改到任何檔案（no-op，可能是定位字串已失效）")
   # (2) 紅的項號集合必須完全相等
   [ "$actual_items" != "$expect_items" ] \
@@ -118,7 +139,7 @@ PY'
 
 run_mut B "issue-leader 的 tools.agents 少列一個 repo-leader" "0,6" "" \
 'python3 - <<"PY"
-import pathlib
+import mutation_lib, pathlib
 p = pathlib.Path("woow-issue-leader/config.yaml")
 p.write_text("\n".join(l for l in p.read_text().splitlines()
                        if "- repo_leader_pi" not in l) + "\n")
@@ -126,58 +147,56 @@ PY'
 
 run_mut C "把 worker 名字加回 tools.agents（退回舊架構的徵兆）" "0,1,2,6,10" "" \
 'python3 - <<"PY"
-import pathlib
-p = pathlib.Path("woow-issue-leader/agents/repo_leader_cc/config.yaml")
-s = p.read_text().replace("spawn: true", "spawn: true\ntools:\n  agents:\n    - implement_cc", 1)
-p.write_text(s)
+import mutation_lib, pathlib
+# ⚠ 用換行界定：`spawn: true` 在這份 config 裡有兩處——註解裡一處、真正的指令一處。
+#   不界定的話會改到註解那處（FIX ROUND 9 的定位斷言抓到的）。
+mutation_lib.edit("woow-issue-leader/agents/repo_leader_cc/config.yaml",
+                  old="\nspawn: true\n",
+                  new="\nspawn: true\ntools:\n  agents:\n    - implement_cc\n")
 PY'
 
 run_mut D "repo-leader 的 prompt 改成 instructions: <相對路徑>" "0,3" "" \
 'python3 - <<"PY"
-import pathlib
+import mutation_lib, pathlib
 d = pathlib.Path("woow-issue-leader/agents/repo_leader_cc")
 (d / "AGENTS.md").unlink()
-p = d / "config.yaml"
-p.write_text(p.read_text().replace(
-    "skills: all", "instructions: ../../../_shared/repo_leader/AGENTS.md\nskills: all", 1))
+mutation_lib.edit(str(d / "config.yaml"), old="skills: all",
+                  new="instructions: ../../../_shared/repo_leader/AGENTS.md\nskills: all")
 PY'
 
 run_mut E "模板的 skill frontmatter name 用底線" "4,5b,8" "" \
 'python3 - <<"PY"
-import pathlib
+import mutation_lib, pathlib
 for p in pathlib.Path("woow-issue-leader/_templates").rglob("scout-pi-recon/SKILL.md"):
-    p.write_text(p.read_text().replace("name: scout-pi-recon", "name: scout_pi_recon", 1))
+    mutation_lib.edit(str(p), old="name: scout-pi-recon", new="name: scout_pi_recon")
 PY'
 
 run_mut F "內建 policy function.path 打錯字" "9" "" \
 'python3 - <<"PY"
-import pathlib
+import mutation_lib, pathlib
 p = pathlib.Path("woow-issue-leader/generate-worker.py")
-p.write_text(p.read_text().replace("orchestration.read_only_os", "orchestration.read_only_oss"))
+mutation_lib.edit(str(p), old="orchestration.read_only_os",
+                  new="orchestration.read_only_oss")
 PY'
 
 run_mut G "P-tag 拿掉 refs/tags 與 v<版號> 形態（守線變弱）" "8" "p_tag_no_agent_tag_push" \
 'python3 - <<"PY"
-import pathlib
+import mutation_lib, pathlib
 p = pathlib.Path("woow-issue-leader/generate-worker.py")
-s = p.read_text()
-needle = "(--tags|--follow-tags|refs/tags/|"
-i = s.index(needle)
-j = s.index(")", s.index("v[0-9]", i)) + 1
-p.write_text(s[:i] + "(--tags)" + s[j:])
+# 從 alternation 開頭一路換到 `v[0-9])` 結尾（整段砍成只剩 --tags）
+mutation_lib.edit_span(str(p), start="(--tags|--follow-tags|refs/tags/|",
+                       through="v[0-9])", new="(--tags)")
 import subprocess; subprocess.run(["python3", "build-bundles.py"], check=True, capture_output=True)
 PY'
 
 run_mut H "P-model 拿掉 has() 護欄（缺欄位 → fail-OPEN）" "8" "p_model_fast_tier_only" \
 'python3 - <<"PY"
-import pathlib
+import mutation_lib, pathlib
 p = pathlib.Path("woow-issue-leader/generate-worker.py")
-s = p.read_text()
 old = """&& !(has(event.data.arguments.args)
      && has(event.data.arguments.args.model)
      && event.data.arguments.args.model in"""
-assert old in s, "P-model 的 has() 護欄定位失效"
-p.write_text(s.replace(old, "&& !(event.data.arguments.args.model in", 1))
+mutation_lib.edit(str(p), old=old, new="&& !(event.data.arguments.args.model in")
 import subprocess; subprocess.run(["python3", "build-bundles.py"], check=True, capture_output=True)
 PY'
 
@@ -193,28 +212,25 @@ PY'
 
 run_mut J "P-approve 退回「且匹配工具名」的連言" "8" "p_approve_no_agent_signoff" \
 'python3 - <<"PY"
-import pathlib
+import mutation_lib, pathlib
 p = pathlib.Path("woow-issue-leader/generate-worker.py")
-s = p.read_text()
 old = chr(38)*2 + """ event.data.arguments.command.matches("/approve")"""
-assert old in s
-p.write_text(s.replace(old, old + "\n" + chr(38)*2
-                       + """ event.data.arguments.command.matches("\\\\btea\\\\b")""", 1))
+mutation_lib.edit(str(p), old=old, new=old + "\n" + chr(38)*2
+                  + """ event.data.arguments.command.matches("\\\\btea\\\\b")""")
 import subprocess; subprocess.run(["python3", "build-bundles.py"], check=True, capture_output=True)
 PY'
 
 run_mut K "P-kubectl 拿掉串接偵測（精準定位該 policy block）" "8" "p_kubectl_namespace_scope" \
 'python3 - <<"PY"
+import mutation_lib
 import pathlib, subprocess
 # ⚠ SHELL_CHAIN_RE 同時被 p_board_read_only 用到 ⇒ 不能改它的定義。
 #   kubectl 那一行是 `|| event…`，board 那一行是 `&& !event…` ⇒ 用前綴唯一定位。
 p = pathlib.Path("woow-issue-leader/generate-worker.py")
-s = p.read_text()
 q = chr(34)
 needle = "|| event.data.arguments.command.matches(" + q + "{SHELL_CHAIN_RE}" + q + ")"
-assert needle in s, "kubectl 的串接偵測行定位失效"
 repl = "|| event.data.arguments.command.matches(" + q + "(?!x)x" + q + ")"
-p.write_text(s.replace(needle, repl, 1))
+mutation_lib.edit(str(p), old=needle, new=repl)
 subprocess.run(["python3", "build-bundles.py"], check=True, capture_output=True)
 PY'
 
@@ -222,18 +238,18 @@ PY'
 
 run_mut L "config.yaml 手改壞（YAML 語法錯）" "0,1" "" \
 'python3 - <<"PY"
-import pathlib
+import mutation_lib, pathlib
 p = pathlib.Path("woow-issue-leader/agents/repo_leader_cc/config.yaml")
 p.write_text(p.read_text() + "\nblast_radius:\n  bad: [\n")
 PY'
 
 run_mut M "一支 CEL 編譯失敗（是否遮蔽其餘運算式與向量）" "8" "p_approve_no_agent_signoff" \
 'python3 - <<"PY"
-import pathlib
+import mutation_lib, pathlib
 p = pathlib.Path("woow-issue-leader/generate-worker.py")
-s = p.read_text()
 old = """event.data.arguments.command.matches("/approve")"""
-p.write_text(s.replace(old, old[:-1], 1))   # 少一個右括號 → compile error
+# 少一個右括號 → compile error
+mutation_lib.edit(str(p), old=old, new=old[:-1])
 import subprocess; subprocess.run(["python3", "build-bundles.py"], check=True, capture_output=True)
 PY'
 
@@ -242,20 +258,23 @@ run_mut N "模板的 SKILL.md 讀不到（驗例外被轉成 FAIL 而非中斷�
 
 run_mut O "P-kubectl context 判斷退回不認引號" "8" "p_kubectl_namespace_scope" \
 'python3 - <<"PY"
+import mutation_lib
 import pathlib, subprocess
 # _CTX 的 ["\x27]? 是「容許引號」那一段；拿掉它就退回 FIX ROUND 3 之前的行為。
 p = pathlib.Path("woow-issue-leader/generate-worker.py")
-s = p.read_text()
-old = "[" + chr(92) + chr(34) + chr(39) + "]?"
-assert old in s, "_CTX 的引號容許段定位失效"
-p.write_text(s.replace(old, "", 1))
+# ⚠ 直接定位 `_CTX` 的定義行：`[\"\x27]?` 這個片段在 namespace matcher 那行也有兩處，
+#   只給片段會改到那裡 ⇒ 變成在驗 namespace 的引號容許度，不是 context 的
+#   （FIX ROUND 9 的定位斷言抓到的）。
+old = "_CTX = r" + chr(34) + "--context(=|" + chr(92)*2 + "s+)[" + chr(92) + chr(34) + chr(39) + "]?" + chr(34)
+mutation_lib.edit(str(p), old=old,
+                  new="_CTX = r" + chr(34) + "--context(=|" + chr(92)*2 + "s+)" + chr(34))
 subprocess.run(["python3", "build-bundles.py"], check=True, capture_output=True)
 PY'
 
 
 run_mut Q "手改 repo-leader 的 AGENTS.md 副本（產物 drift）" "0" "" \
 'python3 - <<"PY"
-import pathlib
+import mutation_lib, pathlib
 p = pathlib.Path("woow-issue-leader/agents/repo_leader_cc/AGENTS.md")
 p.write_text(p.read_text() + "\n手改的內容，來源池沒有這一行\n")
 PY'
@@ -264,9 +283,9 @@ PY'
 #   ⇒ 這件事同時被兩道檢查守住（第 10 項模擬上傳、第 11 項掃全樹）。
 run_mut R "把 os_env.cwd 改回絕對路徑（deployed server 會拒收）" "10,11" "" \
 'python3 - <<"PY"
-import pathlib, subprocess
+import mutation_lib, pathlib, subprocess
 p = pathlib.Path("woow-issue-leader/generate-worker.py")
-p.write_text(p.read_text().replace("  cwd: .", "  cwd: /home/elmo/woow-repos", 1))
+mutation_lib.edit(str(p), old="  cwd: .", new="  cwd: /home/elmo/woow-repos")
 subprocess.run(["python3", "build-bundles.py"], check=True, capture_output=True)
 PY'
 
@@ -291,22 +310,22 @@ PY'
 
 run_mut U "worker config 設 skills_filter: none（壓掉 dispatcher 與所有 repo hooks）" "4,8" "" \
 'python3 - <<"PY"
-import pathlib
+import mutation_lib, pathlib
 p = pathlib.Path("woow-issue-leader/generate-worker.py")
 q = chr(34)
-p.write_text(p.read_text().replace(q + "skills: all" + q, q + "skills: none" + q, 1))
+mutation_lib.edit(str(p), old=q + "skills: all" + q, new=q + "skills: none" + q)
 PY'
 
 
 run_mut V "產生器拿掉防線 1（harness × model 家族檢查）" "4" "" \
 'python3 - <<"PY"
-import pathlib
+import mutation_lib, pathlib
 p = pathlib.Path("woow-issue-leader/generate-worker.py")
-s = p.read_text()
-old = "    _check_model_family(harness, model)      # <- DEFENCE1"
-if old not in s:
-    old = [l for l in s.splitlines() if "_check_model_family(harness, model)" in l][0]
-p.write_text(s.replace(old, "    pass  # 防線 1 被拿掉", 1))
+# ⚠ 只比對到呼叫本身，不含行尾註解——ROUND 7 的定位字串寫了一個**從來不存在**的
+#   `# <- DEFENCE1` 註解，靠一個 fallback 才矇對（FIX ROUND 9 的定位斷言抓到的）。
+#   行尾註解會隨文案調整而變，⛔ 不要拿它當定位依據（同 ROUND 7 突變 Y 的教訓）。
+mutation_lib.edit(str(p), old="    _check_model_family(harness, model)",
+                  new="    pass  # 防線 1 被拿掉  #")
 PY'
 
 
@@ -321,27 +340,25 @@ PY'
 
 run_mut X "dispatcher 不覆寫 CLAUDE_PROJECT_DIR（repo hook 找不到檔）" "14" "" \
 'python3 - <<"PY"
-import pathlib
+import mutation_lib, pathlib
 p = pathlib.Path("woow-issue-leader/hooks/dispatch-hook.py")
-s = p.read_text()
 old = """                env[\"CLAUDE_PROJECT_DIR\"] = str(repo_root)"""
-assert old in s, "CLAUDE_PROJECT_DIR 覆寫點定位失效"
-p.write_text(s.replace(old, "                pass  # 不覆寫", 1))
+mutation_lib.edit(str(p), old=old, new="                pass  # 不覆寫")
 import subprocess; subprocess.run(["python3", "build-bundles.py"], check=True, capture_output=True)
 PY'
 
 
 run_mut Y "dispatcher 拿掉 path-token 解析（cd ../repoA 會零命中）" "14" "cd ../repoA" \
 'python3 - <<"PY"
+import mutation_lib
 import pathlib
 # 退回 FIX ROUND 6 之前：只有 A（cwd）與 B（字串比對）兩層，沒有 C（path-token）。
 p = pathlib.Path("woow-issue-leader/hooks/dispatch-hook.py")
-s = p.read_text()
+
 # 定位 path-token 命中那一行（⚠ 不要比對行尾註解的層號字母——FIX ROUND 7 重編層號時
 # 它從 C 變成 B，舊定位就靜默失效成 no-op 了）。
 old = "if any(c == repo or repo in c.parents for c in candidates):"
-assert old in s, "path-token 命中判斷的定位失效"
-p.write_text(s.replace(old, "if False:  # path-token 命中判斷被拿掉", 1))
+mutation_lib.edit(str(p), old=old, new="if False:  # path-token 命中判斷被拿掉")
 import subprocess; subprocess.run(["python3", "build-bundles.py"], check=True, capture_output=True)
 PY'
 
@@ -352,76 +369,70 @@ PY'
 
 run_mut Z1 "PreToolUse 的 timeout 改回 fail-open" "14" "PreToolUse hook timeout" \
 'python3 - <<"PY"
-import pathlib
+import mutation_lib, pathlib
 p = pathlib.Path("woow-issue-leader/hooks/dispatch-hook.py")
-s = p.read_text()
 # ⚠ 先錨定 _hook_failure 再找 ——「if event != "PreToolUse":」在 _untrusted 裡也有一份，
 #   直接 replace(…, 1) 會改到錯的函式（變成 AC 的重複）。這是定位字串歧義的第三次事故。
-start = s.index("def _hook_failure(")
-old = "    if event != \"PreToolUse\":"
-i = s.index(old, start)
-s = s[:i] + "    if True:  # 退回 fail-open" + s[i + len(old):]
-p.write_text(s)
+mutation_lib.edit(str(p), old="    if event != \"PreToolUse\":",
+                  new="    if True:  # 退回 fail-open",
+                  anchor="def _hook_failure(")
 import subprocess; subprocess.run(["python3", "build-bundles.py"], check=True, capture_output=True)
 PY'
 
 run_mut Z2 "PreToolUse 的非-timeout 失敗（exit 7）改回 fail-open" "14" "hook exit 7" \
 'python3 - <<"PY"
+import mutation_lib
 import pathlib
 # 退回 FIX ROUND 6：非 0 的 exit code 原樣回傳。⚠ 那等於 fail-open——hook 協定裡
 # 只有 exit 2 代表 block，exit 7 會被視為「非阻斷性錯誤」而照跑工具。
 p = pathlib.Path("woow-issue-leader/hooks/dispatch-hook.py")
-s = p.read_text()
 old = """                if proc.returncode != 0:
                     rc = _hook_failure("""
-assert old in s, "非預期 exit code 的處理定位失效"
 new = """                if proc.returncode != 0:
                     return proc.returncode
                 if False:
                     rc = _hook_failure("""
-p.write_text(s.replace(old, new, 1))
+mutation_lib.edit(str(p), old=old, new=new)
 import subprocess; subprocess.run(["python3", "build-bundles.py"], check=True, capture_output=True)
 PY'
 
 run_mut Z3 "settings.json 解析失敗改回 fail-open" "14" "settings.json 解析失敗" \
 'python3 - <<"PY"
+import mutation_lib
 import pathlib
 # 退回 FIX ROUND 6：讀不到／解不開就 continue ⇒ 宣稱有守線却載不起來，卻照樣放行。
 p = pathlib.Path("woow-issue-leader/hooks/dispatch-hook.py")
-s = p.read_text()
 old = """        return None, _hook_failure(event, repo, str(path),
                                    "settings.json 載不起來", str(exc))"""
-assert old in s, "settings.json 失敗處理定位失效"
-p.write_text(s.replace(old, "        return None, 0  # 退回 fail-open", 1))
+mutation_lib.edit(str(p), old=old, new="        return None, 0  # 退回 fail-open")
 import subprocess; subprocess.run(["python3", "build-bundles.py"], check=True, capture_output=True)
 PY'
 
 run_mut Z4 "repo hook 刻意的 exit 2 被我們的診斷訊息包裝掉" "14" "包裝掉" \
 'python3 - <<"PY"
+import mutation_lib
 import pathlib
 # exit 2 是 repo hook 刻意的 block，它的 stderr 就是給使用者看的理由。
 # 拿掉原樣透傳那條 ⇒ 會掉進「非預期 exit code」而被我們的訊息蓋掉。
 p = pathlib.Path("woow-issue-leader/hooks/dispatch-hook.py")
-s = p.read_text()
 old = """                if proc.returncode == BLOCK_EXIT_CODE:
                     return BLOCK_EXIT_CODE"""
-assert old in s, "exit 2 原樣透傳的定位失效"
-p.write_text(s.replace(old, "                pass  # 原樣透傳被拿掉", 1))
+mutation_lib.edit(str(p), old=old, new="                pass  # 原樣透傳被拿掉")
 import subprocess; subprocess.run(["python3", "build-bundles.py"], check=True, capture_output=True)
 PY'
 
 run_mut AA "targets() 退回裸字串 regex（commit message 提到 repo 名就誤命中）" \
   "14" "git commit" \
 'python3 - <<"PY"
+import mutation_lib
 import pathlib
 # 退回 FIX ROUND 6：把 _loose_match 從「只在解析失敗時 fallback」變成常態判定。
 # ⚠ 那層把 repo.name 當裸字串比對 ⇒ `git commit -m "fix repoA bug"` 誤命中，
 #   而誤命中與 fail-closed 相乘會擋掉一條完全合法的 git commit。
 p = pathlib.Path("woow-issue-leader/hooks/dispatch-hook.py")
-s = p.read_text()
 old = "        if degraded and _loose_match(repo, text):                      # fallback"
-assert old in s, "fallback 條件定位失效"
-p.write_text(s.replace(old, "        if _loose_match(repo, text):  # 退回常態裸字串比對", 1))
+mutation_lib.edit(str(p), old=old,
+                  new="        if _loose_match(repo, text):  # 退回常態裸字串比對")
 import subprocess; subprocess.run(["python3", "build-bundles.py"], check=True, capture_output=True)
 PY'
 
@@ -436,28 +447,26 @@ PY'
 
 run_mut AC "dispatcher 自己拿不到判斷時改回 rc=0（fail-open）" "14" "CLAUDE_PROJECT_DIR 未設" \
 'python3 - <<"PY"
+import mutation_lib
 import pathlib, subprocess
 # 退回 FIX ROUND 7：dispatcher 自己壞掉就 return 0。⚠ 那比 repo hook 失敗更危險——
 # CLAUDE_PROJECT_DIR 沒設時 targets() 回空 ⇒ 所有 repo 的守線一起靜默消失。
 p = pathlib.Path("woow-issue-leader/hooks/dispatch-hook.py")
-s = p.read_text()
-old = "    if event != \"PreToolUse\":\n        sys.stderr.write(\n"
-i = s.index("def _untrusted(")
-j = s.index(old, i)
-s = s[:j] + "    if True:  # 退回 fail-open\n        sys.stderr.write(\n" + s[j + len(old):]
-p.write_text(s)
+mutation_lib.edit(str(p),
+                  old="    if event != \"PreToolUse\":\n        sys.stderr.write(\n",
+                  new="    if True:  # 退回 fail-open\n        sys.stderr.write(\n",
+                  anchor="def _untrusted(")
 subprocess.run(["python3", "build-bundles.py"], check=True, capture_output=True)
 PY'
 
 run_mut AD "緊急逆轉門改成預設開啟" "14" "hook exit 7" \
 'python3 - <<"PY"
+import mutation_lib
 import pathlib, subprocess
 # 逆轉門預設開啟 ⇒ 等於所有守線預設關閉，而且只會留一行 stderr 警告。
 p = pathlib.Path("woow-issue-leader/hooks/dispatch-hook.py")
-s = p.read_text()
 old = "def _bypassed(text: str = \"\") -> bool:"
-assert old in s, "逆轉門判斷定位失效"
-p.write_text(s.replace(old, old + "\n    return True  # 預設開啟", 1))
+mutation_lib.edit(str(p), old=old, new=old + "\n    return True  # 預設開啟")
 subprocess.run(["python3", "build-bundles.py"], check=True, capture_output=True)
 PY'
 
