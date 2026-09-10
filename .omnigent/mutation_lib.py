@@ -88,10 +88,73 @@ def _block_bounds(text: str, anchor_idx: int) -> tuple[int, int]:
     base = _indent_of(lines[0])
     pos = line_start + len(lines[0])
     for line in lines[1:]:
-        if line.strip() and _indent_of(line) <= base:
+        stripped = line.strip()
+        # 空行與「整行只有註解」的行在 Python／YAML／shell **都不終止區塊** ⇒ 跳過。
+        # ⚠ 不跳過的話，函式體內一個頂格註解就會把區塊提早截斷（實測：覆核者的
+        #   dedented-comment fixture 會因此靜默改到截斷點前面那一個）。
+        if not stripped or stripped.startswith("#"):
+            pos += len(line)
+            continue
+        if _indent_of(line) <= base:
             return line_start, pos
         pos += len(line)
     return line_start, len(text)
+
+
+#: 讓「用縮排判斷區塊邊界」不再可信的訊號。出現任一個就**拒絕使用 anchor 機制**。
+#: ⚠ 刻意不為 Python／YAML／shell 各養一個語法解析器——那是又一個會漂的啟發式。
+#:    原則是「**不確定就 fail loud，不要猜**」：能可靠判斷的情境用縮排規則，不能的退回到
+#:    更嚴的「定位字串必須全域唯一」。
+
+
+def _unclosed_in(block: str, token: str) -> bool:
+    """區塊裡這個多行字串起訖符**有沒有成對收掉**。
+
+    奇數次 ⇒ 有一個開了沒關 ⇒ 區塊邊界很可能就截在那個字串中間 ⇒ 縮排不可信。
+    偶數次 ⇒ 字串完整含在區塊內，它外面的縮排仍然可信。
+    """
+    return block.count(token) % 2 == 1
+
+
+def _heredoc_unclosed(block: str) -> bool:
+    """區塊裡有 heredoc 起始、但**結束符不在區塊內**。
+
+    結束符不在區塊內 ⇒ 邊界截在 heredoc 內容中間（內容常在第 0 欄）⇒ 縮排不可信。
+    """
+    import re as _re
+
+    for m in _re.finditer(r"<<-?\s*([\"\']?)([A-Za-z_][A-Za-z0-9_]*)\1", block):
+        delim = m.group(2)
+        rest = block[m.end():]
+        if not any(line.strip() == delim for line in rest.splitlines()):
+            return True
+    return False
+
+
+def _indent_untrustworthy(block: str) -> str | None:
+    """區塊裡有沒有讓縮排判斷失效的東西？回傳原因，或 `None`。
+
+    三種訊號（都實測過會讓縮排規則算錯邊界）：
+
+      - **前導空白混用 tab 與空格**：同一個縮排深度會算出兩種數字 ⇒ 無條件不可信。
+      - **heredoc 起始而結束符不在區塊內**：內容常在第 0 欄，邊界會截在內容中間。
+      - **多行字串起訖符在區塊內出現奇數次**：有一個開了沒關 ⇒ 邊界截在字串中間。
+
+    ⚠ 後兩者刻意用「**有沒有收掉**」而不是「**有沒有出現**」來判斷（FIX ROUND 11）：
+    只要出現就拒絕的話，任何帶 docstring 的函式都無法用 anchor——實測會退回 `Z1`／`AC`
+    這兩個**已經驗證過定位正確**的突變。而「收掉了」本身就證明邊界沒截在裡面，
+    那時縮排仍然可信 ⇒ 不需要退回。⛔ 這不是語法解析，只是數有沒有成對。
+    """
+    for line in block.splitlines():
+        lead = line[: len(line) - len(line.lstrip())]
+        if "\t" in lead and " " in lead:
+            return "有一行的前導空白混用 tab 與空格"
+    if _heredoc_unclosed(block):
+        return "區塊內有 heredoc 起始（`<<`）而結束符不在區塊內"
+    for token, name in (('"""', "三個雙引號"), ("'''", "三個單引號")):
+        if _unclosed_in(block, token):
+            return "區塊內的多行字串起訖符（" + name + "）出現奇數次（開了沒關）"
+    return None
 
 
 def _locate(text: str, needle: str, anchor: str | None, *, what: str,
@@ -148,6 +211,24 @@ def _locate(text: str, needle: str, anchor: str | None, *, what: str,
     # ── needle 必須落在 anchor 所屬區塊內，且區塊內唯一 ───────────────────────
     bs, be = _block_bounds(text, text.index(anchor))
     block = text[bs:be]
+
+    # ── 縮排不可信時**拒絕 anchor 機制**，改要求定位字串全域唯一 ───────────────
+    # ⚠ 為什麼不是「盡力猜一個邊界」：算錯邊界的症狀是把「區塊內歧義」這個**該報的錯**
+    #   變成**靜默改到截斷點前面那一個**（實測：覆核者的 dedented-comment 與 heredoc
+    #   fixture 都默默改到第 2 行）。那正是這道 gate 要消除的性質。
+    reason = _indent_untrustworthy(block)
+    if reason is not None:
+        if hits == 1:
+            return text.index(needle)   # 全域唯一 ⇒ 不靠 anchor 也能唯一定位
+        raise MutationLocatorError(
+            f"突變 {_mut()}{where}：縮排無法可靠判斷區塊邊界，**不能用 anchor 縮範圍**\n"
+            f"    原因: {reason}\n"
+            f"    錨點: {_excerpt(anchor)}\n"
+            f"    字串: {_excerpt(needle)}（全域命中 {hits} 次）\n"
+            "    ⇒ 這種內容下用縮排算出的邊界可能提早截斷，而截斷的後果是「本該報"
+            "『區塊內歧義』的情況變成靜默改到前面那一個」。\n"
+            "      請把定位字串加長到**全域唯一**（不靠 anchor），或改用 edit_span()。"
+        )
     in_block = block.count(needle)
     if in_block == 0:
         raise MutationLocatorError(
