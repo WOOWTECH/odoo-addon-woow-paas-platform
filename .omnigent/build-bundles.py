@@ -1159,6 +1159,14 @@ def run_checks() -> int:
     # 9. 每支內建 policy 的 function.path 實跑 resolve
     r.guard("9. 內建 policy function.path resolve", lambda: _check_policy_paths(nodes))
 
+    # 10-12：模擬**實際啟動路徑**（omnigent run → _bundle_agent → cli._bundle → server
+    # validate）。第 1／2 項驗的是 parse/validate，證明不了這條路會通。
+    r.guard("10. 上傳路徑：原始樹必敗／materialize 後必成／skills 前後相等",
+            _check_upload_path)
+    r.guard("11. launcher 端到端（run-leader.py --check-only）", _check_launcher)
+    r.guard("12. remote 嚴格上傳相容性（已知待拍板，不判 FAIL）",
+            _check_remote_upload_compat)
+
     print()
     print(f"總計：{r.failed} 項 FAIL" if r.failed else "總計：全部 PASS")
     return 1 if r.failed else 0
@@ -1284,6 +1292,175 @@ def _check_policy_paths(nodes) -> tuple[bool, str]:
     ok = not bad
     return ok, (f"{len(seen)} 個不重複 function.path 全部 resolve 成功" if ok
                 else "; ".join(bad[:5]))
+
+
+# ── 上傳路徑驗證（FIX ROUND 3）─────────────────────────────────────────────────
+#
+# 🔴 這一組是補最嚴重的驗收盲點：原本驗的是「原始樹 parse/validate」＋「materialize 後
+#    parse/validate」，兩者都綠——但 `materialize_bundle()` **在使用者的實際啟動路徑上
+#    根本不會被呼叫**（它只在 source 是單檔 YAML 或 `omnigent server --agent` preregister
+#    時觸發）。實際路徑是 `omnigent run <目錄>` → `chat._bundle_agent()` → `cli._bundle()`，
+#    那裡對目錄是 `rglob` ＋ `is_file()`，**不解 symlink**。所以驗的是一條不存在的路。
+#
+# 本組改成直接拿 server 端會用的那兩個函式（`cli._bundle` ＋
+# `server.bundles.validate_agent_bundle`）模擬上傳，並把「原始樹必敗」也鎖成斷言——
+# 那是現況的證據，哪天上游改了行為（變成會自動解引用）這一項會紅，提醒我們 launcher
+# 可能不再需要。
+
+#: 可啟動的 bundle root（目前只有 issue-leader；repo_leader 與 worker 都是 sub-agent）。
+LAUNCHABLE_BUNDLES = [LEADER_DIR]
+LAUNCHER = OMNIGENT_DIR / "run-leader.py"
+
+
+def _skill_map_of(spec) -> dict[str, frozenset[str]]:
+    """{dotted agent name: frozenset(skill name)}；與 run-leader.py 的同名函式同語意。"""
+    out: dict[str, frozenset[str]] = {}
+
+    def walk(node, path: str = "") -> None:
+        here = f"{path}.{node.name}" if path else str(node.name)
+        out[here] = frozenset(sk.name for sk in node.skills)
+        for child in node.sub_agents:
+            walk(child, here)
+
+    walk(spec)
+    return out
+
+
+def _upload_bits():
+    """取得模擬上傳需要的三個上游函式（import 失敗轉成訊息，不讓整輪中斷）。"""
+    sp = os.environ.get("OMNIGENT_SITE_PACKAGES", DEFAULT_SITE_PACKAGES)
+    if sp and sp not in sys.path:
+        sys.path.insert(0, sp)
+    from omnigent.cli import _bundle  # noqa: PLC0415
+    from omnigent.server.bundles import validate_agent_bundle  # noqa: PLC0415
+    from omnigent.spec import materialize_bundle, parse  # noqa: PLC0415
+
+    return _bundle, validate_agent_bundle, materialize_bundle, parse
+
+
+def _tar_members(data: bytes):
+    import io  # noqa: PLC0415
+    import tarfile  # noqa: PLC0415
+
+    return tarfile.open(fileobj=io.BytesIO(data)).getmembers()
+
+
+def _check_upload_path() -> tuple[bool, str]:
+    """模擬實際上傳路徑：原始樹必敗、materialize 後必成、skills 前後必相等。"""
+    bundle, validate_bundle, materialize, parse_spec = _upload_bits()
+    notes: list[str] = []
+    bad: list[str] = []
+
+    for root in LAUNCHABLE_BUNDLES:
+        name = root.name
+
+        # (一) 直接對原始樹上傳：**預期失敗**（鎖住現況；symlink 檔會變 tar link entry）
+        raw = bundle(root)
+        raw_links = [m.name for m in _tar_members(raw) if m.issym() or m.islnk()]
+        try:
+            validate_bundle(raw, enforce_handler_allowlist=False)
+        except Exception as exc:  # noqa: BLE001
+            notes.append(f"{name}: 原始樹如預期被拒（{type(exc).__name__}）")
+        else:
+            bad.append(
+                f"{name}: 原始樹竟然通過 validate——上游行為可能變了（tar link entry "
+                f"{len(raw_links)}）。若上游已自動解引用，launcher 或許不再必要，請重新評估"
+            )
+        # 原始樹的 symlink 目錄 silent drop：tar 內不該有任何 SKILL.md
+        raw_skills = [m.name for m in _tar_members(raw)
+                      if m.isfile() and m.name.endswith("SKILL.md")]
+        notes.append(f"{name}: 原始樹 tar link entry {len(raw_links)}／SKILL.md {len(raw_skills)} 筆")
+
+        # (二) 先 materialize 再上傳：**預期成功**，且 tar 內 symlink 數 = 0
+        with tempfile.TemporaryDirectory() as td:
+            tree = materialize(root, Path(td) / name)
+            tree_links = [q for q in tree.rglob("*") if q.is_symlink()]
+            if tree_links:
+                bad.append(f"{name}: materialize 後樹內仍有 {len(tree_links)} 條 symlink")
+            data = bundle(tree)
+            members = _tar_members(data)
+            tar_links = [m.name for m in members if m.issym() or m.islnk()]
+            if tar_links:
+                bad.append(f"{name}: materialize 後 tar 仍有 link entry {tar_links[:3]}")
+            try:
+                spec_after = validate_bundle(data, enforce_handler_allowlist=False)
+            except Exception as exc:  # noqa: BLE001
+                bad.append(f"{name}: materialize 後 validate 仍失敗 {type(exc).__name__}: {exc}")
+                continue
+
+            # (三) skills 數量與名稱集合：materialize 前後必須完全相等
+            before = _skill_map_of(parse_spec(root, expand_env=False))
+            after = _skill_map_of(spec_after)
+            if before != after:
+                diff = [f"{k}: 前 {sorted(before.get(k, ()))} != 後 {sorted(after.get(k, ()))}"
+                        for k in sorted(set(before) | set(after))
+                        if before.get(k) != after.get(k)]
+                bad.append(f"{name}: skills 前後不一致 {diff[:3]}")
+            total = sum(len(v) for v in after.values())
+            tar_skills = [m.name for m in members
+                          if m.isfile() and m.name.endswith("SKILL.md")]
+            if len(tar_skills) != total:
+                bad.append(f"{name}: tar 內 SKILL.md {len(tar_skills)} != spec skills {total}")
+            notes.append(
+                f"{name}: materialize 後 link 0／SKILL.md {len(tar_skills)} 筆／"
+                f"skills 前後一致（{len(after)} agent、共 {total} 支）"
+            )
+
+    return (not bad), ("；".join(notes) if not bad else "; ".join(bad[:4]))
+
+
+def _check_launcher() -> tuple[bool, str]:
+    """端到端跑一次 launcher 的自檢（`--check-only`）。
+
+    ⚠ 這一項是「launcher 真的有做 materialize」的唯一守線：若有人把 launcher 裡的
+    `materialize_bundle` 換成 `copytree`（或乾脆拿掉），launcher 自己的 symlink 斷言會
+    失敗、exit 非 0，這裡就會紅。
+    """
+    if not LAUNCHER.exists():
+        return False, f"找不到 launcher {LAUNCHER}"
+    if not os.access(LAUNCHER, os.X_OK):
+        return False, f"launcher 不可執行（chmod +x {LAUNCHER}）"
+    # --rewrite-cwd：os_env.cwd 絕對路徑是待拍板的設計問題（見 README §待拍板），
+    # 這裡要驗的是 symlink／skills 那一層，所以用它繞過 cwd 那一條。
+    proc = subprocess.run(
+        [str(LAUNCHER), "--check-only", "--rewrite-cwd"],
+        capture_output=True, text=True, timeout=300, check=False,
+    )
+    out = (proc.stdout or "") + (proc.stderr or "")
+    if proc.returncode != 0:
+        tail = " / ".join(line.strip() for line in out.strip().splitlines()[-4:])
+        return False, f"launcher --check-only 失敗（exit {proc.returncode}）：{tail}"
+    for marker in ("樹內 symlink 0", "tar link entry 0", "skills 前後一致", "自檢通過"):
+        if marker not in out:
+            return False, f"launcher 輸出缺少預期斷言 {marker!r}"
+    return True, "launcher --check-only 自檢通過（symlink 0／skills 前後一致）"
+
+
+def _check_remote_upload_compat() -> tuple[bool, str]:
+    """deployed（multi-user）server 的嚴格相容性——**目前已知不通過，待拍板**。
+
+    ⚠ 刻意**不判 FAIL**（同 CEL 的 known_gap 機制）：`os_env.cwd` 寫絕對路徑是使用者
+    ROUND 0 定案的約束，而 deployed server 以
+    `enforce_handler_allowlist=not local_single_user_enabled()` 呼叫 validate，該模式會拒
+    絕絕對路徑。要嘛改成相對路徑、要嘛永遠靠 launcher 的 `--rewrite-cwd`——選型由使用者
+    決定，不由本腳本替他決定。這一項負責把現況**講出來**，並在行為變化時提醒。
+    """
+    bundle, validate_bundle, materialize, _ = _upload_bits()
+    lines: list[str] = []
+    for root in LAUNCHABLE_BUNDLES:
+        with tempfile.TemporaryDirectory() as td:
+            tree = materialize(root, Path(td) / root.name)
+            data = bundle(tree)
+            try:
+                validate_bundle(data, enforce_handler_allowlist=True)
+            except Exception as exc:  # noqa: BLE001
+                lines.append(f"{root.name}: 如現況被拒 → {exc}")
+            else:
+                lines.append(
+                    f"{root.name}: ⬆ 嚴格模式現在**通過了**——若已改成相對 cwd，"
+                    "請把本項升級成硬性斷言並移除 launcher 的 --rewrite-cwd 預設說明"
+                )
+    return True, "；".join(lines)
 
 
 def main() -> int:

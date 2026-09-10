@@ -25,7 +25,9 @@ woow-issue-leader                     ← issue 層總指揮（claude-native）
 | `woow-issue-leader/AGENTS.md` ＋ `skills/` | issue-leader 的 prompt 與 3 個 skill | 手改 |
 | **所有 `config.yaml`** | 19 份（1 leader ＋ 2 repo_leader ＋ 16 thin shell） | ⛔ **產物，勿手改** |
 | 所有 `AGENTS.md` / `skills` symlink | 34 條 | ⛔ **產物，勿手改** |
-| `build-bundles.py` | 產生器 ＋ 驗收 | 手改 |
+| `build-bundles.py` | 產生器 ＋ 驗收（`--check` 12 項） | 手改 |
+| `run-leader.py` | **啟動入口**（materialize ＋自檢後才跑 `omnigent run`） | 手改 |
+| `mutation-tests.sh` | 突變測試：證明驗收有牙齒（16 個 case） | 手改 |
 | `config.yaml`（根目錄那一份） | Omnigent CLI 的 **專案層預設**（`omnigent config`，untracked，機器本地） | 不屬本 bundle |
 
 ## 用法
@@ -33,6 +35,7 @@ woow-issue-leader                     ← issue 層總指揮（claude-native）
 ```bash
 python3 .omnigent/build-bundles.py           # 重產所有 config.yaml 與 symlink
 python3 .omnigent/build-bundles.py --check   # 驗收（產物不同步也會判 FAIL）
+bash .omnigent/mutation-tests.sh             # 突變測試：確認驗收真的有牙齒
 ```
 
 改了 `build-bundles.py` **一定要重跑一次不帶參數的版本**再 commit，否則 `--check` 的第 0
@@ -47,10 +50,96 @@ python3 .omnigent/build-bundles.py --check   # 驗收（產物不同步也會判
 #   worktree 的建立與銷毀屬於人／launch host，不屬於 worker。
 git -C <repo> worktree add ../wt-<issue-id> -b <type>/<issue-id> origin/<整合分支>
 cd ../wt-<issue-id>
-omnigent run --server <url> .omnigent/woow-issue-leader
+
+# ⛔ 一定要走 launcher，不要直接 omnigent run（理由見下一節）
+<repo>/.omnigent/run-leader.py --rewrite-cwd -- --server <url>
 ```
 
-## ⛔ 六條會靜默壞掉的規則
+## ⛔ 啟動：為什麼一定要走 launcher
+
+```bash
+# ⛔ 錯（會壞，而且其中一種壞法是靜默的）
+omnigent run .omnigent/woow-issue-leader
+
+# ✅ 對
+.omnigent/run-leader.py [--check-only] [--rewrite-cwd] [-- <透傳給 omnigent run 的參數>]
+```
+
+`omnigent run <目錄>` 最終走 `chat._bundle_agent()` → `cli._bundle()`，而 `_bundle()` 對
+**目錄**來源是 `source.rglob("*")` ＋ `if file_path.is_file()`（`cli.py:5529-5538`），
+**不解 symlink**——只有 source 是**單檔 YAML** 時才會先 materialize（`cli.py:5508`）。
+本 bundle 有 34 條 symlink，於是兩種型態各有各的壞法：
+
+| 型態 | 數量 | 行為 |
+| --- | --- | --- |
+| symlink **檔**（`AGENTS.md`） | 18 | **loud fail**：tar 裡留下 link entry，server 端 `extract_safe` 直接拒（`spec/tar_utils.py:126`）：`tarball contains a link (not allowed)` |
+| symlink **目錄**（`skills/`） | 16 | ⛔ **silent drop**：`rglob` 不遞迴進去，tar 內 SKILL.md 只剩 3 筆（leader 自己的實體 skills），16 份 thin shell 的 skills 全部消失——而 `validate` 照樣回 valid、那些 agent 的 `skills` 變成 `[]`，**不報錯** |
+
+所以**光修 symlink 檔不夠**，`skills/` 還是會靜默不見。launcher 做的事：
+
+1. `materialize_bundle()` 複製到臨時目錄並解引用所有 symlink。
+2. 對解引用後的樹跑 `cli._bundle()` ＋ `validate_agent_bundle()` **自檢**（樹內 symlink
+   數＝0、tar 內 link entry＝0、validate 通過、**skills 前後名稱集合完全相等**）；
+   任一項不符就 **fail loud 並停下**，不啟動。
+3. 把臨時樹（不是版控的原始樹）交給 `omnigent run`。
+4. `omnigent run` 結束後刪掉臨時樹（`--keep-tree` 可保留除錯；生命週期＝這一次 run）。
+
+### ⚠ 改用 local server **不能**規避
+
+三條啟動路徑全都呼叫同一個 `_bundle_agent(spec_path)`（已逐一查證）：
+
+| 函式 | 用途 |
+| --- | --- |
+| `chat._chat_via_daemon()` | daemon-backed server（remote） |
+| `chat._chat_local()` | 「Start a **local** server with the agent and open the REPL」 |
+| `chat._run_local_headless_prompt()` | local server ＋單一 prompt |
+
+⇒ local 與 remote 的症狀完全相同，唯一差別是 `enforce_handler_allowlist`（見下方
+§待拍板）。唯一**不**經過這條打包路徑的是 `omnigent server --agent <path>` 的
+preregister（`cli.py:1483-1487` 自己會 materialize），那是另一種部署方式。
+
+### ⚠ 為什麼原本的驗收沒抓到
+
+原本驗的是「原始樹 parse/validate」＋「materialize 後的樹 parse/validate」，兩者都綠。
+但 `materialize_bundle()` **在實際啟動路徑上根本不會被呼叫**（只有單檔 YAML 或
+`server --agent` 才觸發）⇒ 驗的是一條不存在於實際流程的路。
+
+現在由驗收第 **10／11／12** 項補上：直接拿 server 端會用的那兩個函式模擬上傳，其中
+第 10 項把「**原始樹必敗**」也鎖成斷言（上游哪天改成自動解引用，該項會紅，提醒我們
+重新評估 launcher 是否還需要），第 11 項端到端跑一次 launcher 的自檢。
+
+### 🔴 待拍板：`os_env.cwd` 是絕對路徑，deployed server 會拒收
+
+deployed（multi-user）server 以 `enforce_handler_allowlist=not local_single_user_enabled()`
+呼叫 validate（`server/routes/sessions/routes_agent.py:280` 等四處），而該模式**拒絕絕對
+路徑的 `os_env.cwd`**：
+
+```
+agent os_env.cwd must be a relative path within the workspace
+(no absolute paths or '..'); got '/home/elmo/woow-repos'
+```
+
+本 bundle 目前宣告 `cwd: /home/elmo/woow-repos`（六 repo 的共同父目錄，原意是當
+containment 錨點）。因此：
+
+| 啟動目標 | `enforce` | 結果 |
+| --- | --- | --- |
+| deployed server（`~/.omnigent/config.yaml` 的預設） | `True` | ⛔ **拒收** |
+| local server（`--server local`；managed local spawn 會設 `OMNIGENT_LOCAL_SINGLE_USER`） | `False` | ✅ 通過 |
+
+兩條可選的路，**選型待使用者拍板**：
+
+1. **改成 `cwd: .`**（相對）。⚠ 注意 runner 一律用 `OMNIGENT_RUNNER_WORKSPACE` 覆寫 cwd
+   （`runner/tool_dispatch.py:6247-6259`：`if runner_workspace is not None: spec.cwd =
+   str(runner_workspace)`），所以 spec 裡寫什麼在 runner 模式下本來就不生效——「絕對路徑
+   當 containment 錨點」這個原意其實沒有達成。
+2. **維持絕對路徑**，靠 launcher 的 `--rewrite-cwd`（只改臨時樹，版控內容不動）。
+
+launcher 預設 **不**改寫（fail loud 並指出這一節），要用得自己加旗標。驗收第 12 項會把
+現況講出來但**不判 FAIL**（同 CEL 的 `known_gap` 機制）；若哪天嚴格模式通過了，它也會說，
+提示可以把該項升級成硬性斷言。
+
+## ⛔ 七條會靜默壞掉的規則
 
 全部實測過，違反時 **`validate()` 不會紅**：
 
@@ -68,13 +157,22 @@ omnigent run --server <url> .omnigent/woow-issue-leader
    者）——所以每個 skill 都加了 worker 前綴。→ 驗收第 5b 項擋。
 6. **`skills:` 一律固定 `all`。** 名單模式在 claude-native 下形同 `all`、不強制；在 pi
    下卻會下 `--no-skills` **把 host skill 一併關掉**——跨 harness 行為相反。
+7. 🔴 **symlink 在「上傳」這條路上會壞，而且其中一種是靜默的。**（FIX ROUND 3 新增）
+   `omnigent run <目錄>` 的打包器不解 symlink：symlink **檔**變成 tar link entry → server
+   **loud fail**；symlink **目錄**被 `rglob` 跳過 → tar 裡那些 `SKILL.md` **完全消失**，
+   而 `validate` 照樣回 valid、`skills` 變 `[]`，⛔ 不報錯。
+   ⇒ **一定要走 `run-leader.py`**（先 materialize 再上傳）。→ 驗收第 10／11 項擋。
+   ⚠ 注意這一條**不是**前六條那種「寫 config 時的規則」，而是**啟動方式**的規則——
+   前六條寫對了也躲不掉它，因為它發生在打包階段。完整說明見 §啟動。
 
 另外兩條會影響行為但不會壞掉的：
 
 - **child 不繼承 parent 的 `guardrails.policies`** ⇒ 每個 worker 自帶完整 policy。
-- **`os_env.cwd` 不決定 harness process cwd**，它只是邊界與 containment 錨點；唯讀
-  worker（`verifier_pi` / `scout_pi` / `researcher`）**完全省略** `os_env` block，四支
-  `sys_os_*` 就一支都不註冊。
+- **`os_env.cwd` 不決定 harness process cwd**——runner 一律用
+  `OMNIGENT_RUNNER_WORKSPACE` 覆寫它（`runner/tool_dispatch.py:6247-6259`）。它名義上是
+  邊界與 containment 錨點，但在 runner 模式下寫什麼都不生效，⚠ 而且寫**絕對路徑**會讓
+  deployed server 直接拒收整個 bundle（見 §待拍板）。唯讀 worker（`verifier_pi` /
+  `scout_pi` / `researcher`）**完全省略** `os_env` block，四支 `sys_os_*` 就一支都不註冊。
 
 ## Guardrails
 

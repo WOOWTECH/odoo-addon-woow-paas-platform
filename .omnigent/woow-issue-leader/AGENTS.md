@@ -45,7 +45,10 @@ issue 的後續追問一律複用同一個 title；換一張 issue 就換 title�
 # ⚠ 這兩行是在 **launch host 的 shell** 裡跑的（建 runner 之前），
 #   不是在任何已受 block_working_dir_changes 約束的 worker session 裡跑。
 git -C <repo> worktree add ../wt-<issue-id> -b <type>/<issue-id> origin/<整合分支>
-cd ../wt-<issue-id> && omnigent run --server <url> <bundle>
+cd ../wt-<issue-id>
+# ⛔ 一定要走 launcher——直接 `omnigent run <bundle 目錄>` 會壞：打包器不解 symlink，
+#    AGENTS.md 會讓 server 拒收，而 skills/ 會**靜默消失**（見 .omnigent/README.md §啟動）。
+<repo>/.omnigent/run-leader.py --rewrite-cwd -- --server <url>
 ```
 
 - **整合分支不要寫死**：`develop` / `main` / `master` 因 repo 而異，先確認。
