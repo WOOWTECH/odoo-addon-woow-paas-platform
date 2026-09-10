@@ -174,10 +174,53 @@ OS 操作一律改走 `mcp__omnigent__sys_os_*` ⇒ matcher `Bash` 與 `Edit|Wri
 （`BUNDLE_DIR / "hooks"`），每個 `claude-native` worker 的 dispatcher 都是從這裡複製的
 （`generate-worker.py:747`）。刪了它，worker 那層的守線會**靜默**消失。
 
-⚠ 頂層 leader 自己跑 shell 的守線改由 `guardrails.policies` 承擔：六道 CEL 的
-`event.data.name in [...]` 都**已經列了 `sys_os_shell`**，而 `mcp__omnigent__*` 的 tool call
-是在 server 端的 `ProxyMcpManager` 用原始工具名（`sys_os_shell`）評估的
+⚠ 頂層 leader 自己跑 shell 的守線改由 `guardrails.policies` 承擔：**它掛的 5 道 CEL**（見
+下表）的 `event.data.name in [...]` 都**已經列了 `sys_os_shell`**，而 `mcp__omnigent__*` 的
+tool call 是在 server 端的 `ProxyMcpManager` 用原始工具名（`sys_os_shell`）評估的
 （`inner/claude_sdk_executor.py:2113-2122` 的 double-evaluation guard 說明了這條路徑），所以照樣命中。
+
+### 🔴 「這一層掛幾道」≠「全樹有幾道」
+
+⚠ 兩個數字很容易混：`generate-worker.py` 裡共有 **7 支** CEL 運算式（驗收第 8 項掃的就是這 7
+支／159 個事件，涵蓋全樹含執行期產生的 worker），但**沒有任何一層同時掛滿 7 支**。實查
+（`yaml.safe_load` 各層 config 的 `guardrails.policies`，數 `path` 結尾為 `cel.cel_policy` 的）：
+
+**基本四支**＝P-merge／P-approve／P-tag／P-escape（對 shell 字串比對，每一層都掛）。各層在此
+之上的增減：
+
+| 層 | policies | CEL | ＝基本四支 ＋ | 沒掛的 |
+| --- | --- | --- | --- | --- |
+| `woow_issue_leader`（頂層） | 11 | **5** | P-model | **P-board**（刻意，見下） |
+| `repo_leader_cc` | 12 | 6 | P-model ＋ P-board | — |
+| `repo_leader_pi` | 11 | 6 | P-model ＋ P-board | `cost_budget`（非 CEL，見 §cost_budget） |
+| 執行期產生的 `ops_k8s` worker | 11 | 6 | P-board ＋ **P-kubectl**（第 7 支，只存在於動態 config） | P-model |
+| 執行期產生的 `implement_cc` worker | 12 | 5 | P-board | P-model、P-kubectl |
+
+⚠ **P-model 只掛在會派工的那幾層**（它管的是 `sys_session_send` 的 `args.model`）——worker 不
+派工，掛了也沒有事件會命中。
+
+🔴 **這張表的每一格都必須用實跑產生器取得，⛔ 不可以目視推導。** 本節的第一版就是目視推導寫
+的，把動態 `ops_k8s` worker 標成「基本四支 ＋ P-model ＋ P-kubectl」——實跑
+`generate("ops_k8s", "claude-native", …)` 後才發現它**根本沒掛 P-model**（理由就是上一段）。
+這與本節要修的錯誤是同一類：**文件描述與實際 policy 組成不符，而且不會有任何 gate 報錯**。
+重跑指令（零副作用，寫進臨時目錄）：
+
+```python
+import importlib.util, pathlib, tempfile, yaml
+spec = importlib.util.spec_from_file_location("gw", ".omnigent/woow-issue-leader/generate-worker.py")
+gw = importlib.util.module_from_spec(spec); spec.loader.exec_module(gw)
+def counts(d):
+    pol = d["guardrails"]["policies"]
+    return len(pol), sorted(k for k, v in pol.items()
+                            if v.get("function", {}).get("path", "").endswith("cel.cel_policy"))
+# 靜態三層讀 config.yaml；動態層先 gw.generate(purpose, harness, <tmpdir>) 再讀產出的 config.yaml
+```
+
+⛔ **頂層少的那一道是 `p_board_read_only`，這是刻意的，不是漏掛。** P-board 擋的是「對
+`.woow-issues/board.md` 的寫入」，而 issue-leader 本人就是**唯一該寫看板的角色**（沿用 Maestri
+`paas-issue-memory` note「只有你可改、leaders 唯讀」的設計）⇒ 掛上去會擋到 leader 自己。
+⛔ 不要「補齊」它。`build-bundles.py` 的 `issue_leader_config()` 在 `body` 組裝處、以及產物
+`config.yaml` 的 `guardrails:` 之前，各有一句同義註記。
 
 ### ⛔ 為什麼不改寫成 CEL policy
 
@@ -568,17 +611,28 @@ repo），而且完全不認 `tea`。所以 `p_tag_no_agent_tag_push` 自己對 
 ### ⚠ `cost_budget` 只掛 claude 家族（claude-native／claude-sdk）
 
 pi 是 subscription 且無 catalog pricing，掛上去會走 `_UNPRICED_ASK`，**每個 session 卡一次
-人工批准**，會毀掉無人值守。claude 家族兩種 harness 都有定價來源，差別只在精度：
+人工批准**，會毀掉無人值守。claude 家族兩種 harness 都有**計價路徑**（⚠ 計價路徑 ≠ 一定查得到
+價格，見下方條件句），差別在精度：
 
-| harness | 定價來源 | 精度 |
+| harness | 計價路徑 | 精度 |
 | --- | --- | --- |
 | `claude-native` | Claude Code 的 statusLine 直接回報 `cumulative_cost_usd` | 實際帳單 |
 | `claude-sdk` | 回報 token 用量＋model，server 端查 MLflow catalog 定價（`_sessions/orchestration.py` 的 `has_tokens` 分支） | 估算值 |
 
-⚠ 殘留風險：頂層 leader 改成 `claude-sdk` 後就走估算那條。若 `claude-fable-5-1` 哪天不在
-catalog 內，`_usage_is_unpriced()` 會讓 `cost_budget` 回 `_UNPRICED_ASK`——headless 的 leader
-沒人能回答，會卡住。真的發生就把 `P_COST` 從 `issue_leader_config()` 拿掉（那是**人工裁決**，
-⛔ 不要靠 agent 自己判斷）。
+✅ **已驗證（2026-09-10，雙人各自實跑 `fetch_model_pricing('claude-fable-5-1')`）**：頂層 leader
+現用的 `claude-fable-5-1` **在 catalog 內**，per-million `input 10.0 / output 50.0`
+（`cache_read 0.25 / cache_write 12.5`）⇒ `claude-sdk` 這條估算路徑查得到價，
+`cost_budget` 正常計價，**不會**走 `_UNPRICED_ASK`。
+
+⚠ **這是有前提的事實，前提是 model。** 若日後把頂層 leader 換成別的 model，**必須重驗那個
+model 在不在 catalog**：查不到時 `_usage_is_unpriced()` 會讓 `cost_budget` 回
+`_UNPRICED_ASK`，而 headless 的 leader 沒人能回答 ApprovalCard ⇒ 每個 session 卡住。真的踩到
+就把 `P_COST` 從 `issue_leader_config()` 拿掉——那是**人工裁決**，⛔ 不要靠 agent 自己判斷。
+重驗指令：
+
+```
+python3 -c "from omnigent.llms.context_window import fetch_model_pricing; print(fetch_model_pricing('<model-id>'))"
+```
 
 ### 🔴 白名單同步債
 
