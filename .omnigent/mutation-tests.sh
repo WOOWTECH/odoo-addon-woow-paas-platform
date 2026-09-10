@@ -355,9 +355,13 @@ run_mut Z1 "PreToolUse 的 timeout 改回 fail-open" "14" "PreToolUse hook timeo
 import pathlib
 p = pathlib.Path("woow-issue-leader/hooks/dispatch-hook.py")
 s = p.read_text()
+# ⚠ 先錨定 _hook_failure 再找 ——「if event != "PreToolUse":」在 _untrusted 裡也有一份，
+#   直接 replace(…, 1) 會改到錯的函式（變成 AC 的重複）。這是定位字串歧義的第三次事故。
+start = s.index("def _hook_failure(")
 old = "    if event != \"PreToolUse\":"
-assert old in s, "事件分級判斷定位失效"
-p.write_text(s.replace(old, "    if True:  # 退回 fail-open", 1))
+i = s.index(old, start)
+s = s[:i] + "    if True:  # 退回 fail-open" + s[i + len(old):]
+p.write_text(s)
 import subprocess; subprocess.run(["python3", "build-bundles.py"], check=True, capture_output=True)
 PY'
 
@@ -429,6 +433,33 @@ p = pathlib.Path("woow-issue-leader/agents/repo_leader_cc/hooks/dispatch-hook.py
 p.write_text(p.read_text() + "\n# 手改的副本，與來源漂移了\n")
 PY'
 
+
+run_mut AC "dispatcher 自己拿不到判斷時改回 rc=0（fail-open）" "14" "CLAUDE_PROJECT_DIR 未設" \
+'python3 - <<"PY"
+import pathlib, subprocess
+# 退回 FIX ROUND 7：dispatcher 自己壞掉就 return 0。⚠ 那比 repo hook 失敗更危險——
+# CLAUDE_PROJECT_DIR 沒設時 targets() 回空 ⇒ 所有 repo 的守線一起靜默消失。
+p = pathlib.Path("woow-issue-leader/hooks/dispatch-hook.py")
+s = p.read_text()
+old = "    if event != \"PreToolUse\":\n        sys.stderr.write(\n"
+i = s.index("def _untrusted(")
+j = s.index(old, i)
+s = s[:j] + "    if True:  # 退回 fail-open\n        sys.stderr.write(\n" + s[j + len(old):]
+p.write_text(s)
+subprocess.run(["python3", "build-bundles.py"], check=True, capture_output=True)
+PY'
+
+run_mut AD "緊急逆轉門改成預設開啟" "14" "hook exit 7" \
+'python3 - <<"PY"
+import pathlib, subprocess
+# 逆轉門預設開啟 ⇒ 等於所有守線預設關閉，而且只會留一行 stderr 警告。
+p = pathlib.Path("woow-issue-leader/hooks/dispatch-hook.py")
+s = p.read_text()
+old = "def _bypassed(text: str = \"\") -> bool:"
+assert old in s, "逆轉門判斷定位失效"
+p.write_text(s.replace(old, old + "\n    return True  # 預設開啟", 1))
+subprocess.run(["python3", "build-bundles.py"], check=True, capture_output=True)
+PY'
 
 echo
 if [ "$FAIL_N" -eq 0 ]; then

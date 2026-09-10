@@ -54,6 +54,23 @@ PostToolUse 一律 warning-only（工具已執行完，擋也改變不了結果�
 ⛔ 分界點：命中的 repo **根本沒有** `settings.json` ⇒ 正常情況，**不擋**。只有「宣稱有守線
 却載不起來」才擋。
 
+## dispatcher **自己**拿不到判斷時也 fail-closed（更危險的一層）
+
+上面講的是「repo hook 拿不到判斷」。但 dispatcher 自己壞掉更糟：repo hook 失敗只影響那一個
+repo，**dispatcher 自己壞掉會讓所有 repo 的守線一起靜默消失**。所以 PreToolUse 下這些也是
+exit 2：stdin 不是合法 JSON／讀不到、缺 `tool_name`、缺 `cwd` 或 `cwd` 不存在、
+`CLAUDE_PROJECT_DIR` 未設或不存在、以及 dispatcher 本身拋出的**未預期例外**。
+
+⛔ 唯一不擋的是「`WS_ROOT` 存在但底下沒有任何 repo」——那代表這個 workspace 本來就沒有守線
+要轉呼叫。PostToolUse 一律 warning-only。
+
+## 緊急逆轉門 `DISPATCH_HOOK=off`
+
+照 repo 既有慣例（`kubectl-ns-guard.py` 的 `KUBECTL_NS_GUARD=off`）：指令前綴
+`DISPATCH_HOOK=off <指令>`（一次性）或 `export DISPATCH_HOOK=off`（整個 session）。
+⛔ **緊急用，不是日常用法**——開啟它等於關掉所有 repo 的所有守線。每則拒絕訊息都會印出
+逆轉方式，人被擋住時不必翻文件。
+
 ## ⚠ 不要靠 shebang
 
 bundle 打包會**掉 exec bit**（755 → 644），所以 `hooks.json` 的 command 一律寫
@@ -75,9 +92,18 @@ import re
 import shlex
 import subprocess
 import sys
+import traceback
 from pathlib import Path
 
-WS_ROOT = Path(os.environ.get("CLAUDE_PROJECT_DIR") or ".").resolve()
+#: workspace 根的**唯一**來源。claude CLI 自己注入（實測：等於啟動 claude 時的 cwd）；
+#: omnigent 不設它。
+#: ⛔ **無法從 hook 檔位置推導**——`CLAUDE_PLUGIN_ROOT` 指向 materialize 後的 bundle，
+#:    與 workspace **無包含關係**（實測兩者是互不包含的路徑）⇒ 這個變數沒有替代來源。
+#:    所以它缺失時只能 fail-closed，見 `_workspace_problem()`。
+WS_ROOT_RAW = os.environ.get("CLAUDE_PROJECT_DIR")
+#: ⚠ 這裡仍保留 `"."` 的退路，只為了讓下面的 helper 在 `main()` 驗過之前不會炸；
+#:    **真正的判斷在 `main()` 開頭**——沒驗過就不會走到任何用到它的地方。
+WS_ROOT = Path(WS_ROOT_RAW or ".").resolve()
 #: 從 workspace 根往下找 repo 的深度上限（本機佈局最深是 `WOOW/<repo>` = 2）。
 MAX_DEPTH = 4
 #: 轉呼叫單一 hook 的逾時上限（秒）。repo 的 repo-lint --hook 可能偏慢。
@@ -87,6 +113,15 @@ SKIP_DIRS = {".git", "node_modules", "__pycache__", ".venv", ".omnigent-runtime"
 #: 這些 token 的**下一個** token 是目錄（`cd x`／`pushd x`／`git -C x`／`env -C x`）。
 DIR_ARG_TOKENS = {"cd", "pushd", "-C", "--directory"}
 #: PreToolUse 的 hook 失敗時改為放行的逃生門（⛔ 只在 repo hook 自己壞掉時臨時用）。
+#: 🔴 **緊急逆轉門**，照 repo 既有慣例（`.claude/hooks/kubectl-ns-guard.py` 的
+#:    `KUBECTL_NS_GUARD=off`）：`export DISPATCH_HOOK=off`（整個 session）或指令前綴
+#:    `DISPATCH_HOOK=off <指令>`（一次性）。
+#: ⛔ **這不是日常用法**：關掉它等於關掉**所有 repo 的所有守線**（kubectl namespace 白名單、
+#:    pattern-guard、repo-lint…）。只在「dispatcher 或某支 repo hook 自己壞掉、擋住了正常
+#:    工作」時當逃生用，修好就關掉。
+BYPASS_ENV = "DISPATCH_HOOK"
+BYPASS_VALUE = "off"
+#: 舊名（FIX ROUND 6 引入）保留為別名，避免已經寫進筆記的人踩空。
 FAIL_OPEN_ENV = "OMNIGENT_DISPATCH_FAIL_OPEN"
 #: `shlex` 不吃 shell 的語法字元，會把它們黏在 token 邊緣（`(cd`、`group/repoA;`）。
 #: 取路徑前先剝掉，否則 `(cd group/repoA; …)` 這種子 shell 寫法會因為多一個 `;` 而漏判。
@@ -310,6 +345,84 @@ def _is_blocking_stdout(text: str) -> bool:
     return data.get("decision") == "block"
 
 
+def _bypassed(text: str = "") -> bool:
+    """緊急逆轉門是否開啟。兩種形式，照 `kubectl-ns-guard.py` 的既有慣例：
+
+      1. `export DISPATCH_HOOK=off`（整個 session）
+      2. 指令前綴 `DISPATCH_HOOK=off <指令>`（一次性）
+
+    ⛔ 開啟它等於**關掉所有 repo 的所有守線**，不是日常用法。
+    """
+    for name in (BYPASS_ENV, FAIL_OPEN_ENV):
+        value = os.environ.get(name, "").strip().lower()
+        if name == BYPASS_ENV and value == BYPASS_VALUE:
+            return True
+        # 舊別名當初是「設任何 truthy 值就放行」，維持原語意
+        if name == FAIL_OPEN_ENV and value not in ("", "0", "false"):
+            return True
+    return bool(text) and bool(
+        re.search(rf"(?:^|[\s;]){re.escape(BYPASS_ENV)}={BYPASS_VALUE}\b", text))
+
+
+def _untrusted(event: str, reason: str, detail: str, *, text: str = "") -> int:
+    """**dispatcher 自己**拿不到判斷時的處置。回傳要用的 exit code。
+
+    🔴 這一層與 `_hook_failure`（repo hook 拿不到判斷）是**兩件不同的事**，而且這層更危險：
+    repo hook 失敗只影響那一個 repo，**dispatcher 自己壞掉會讓所有 repo 的守線一起靜默
+    消失**。最典型的是 `CLAUDE_PROJECT_DIR` 沒設 ⇒ `targets()` 回空 ⇒ 每一道指令都暢行，
+    而唯一的徵兆是一個「零命中告警」——而那個告警**區分不了**「真的無關指令」與「守線全掉」。
+
+    涵蓋（PreToolUse 一律 exit 2）：
+      - stdin 不是合法 JSON／讀不到
+      - 缺 `tool_name`
+      - 缺 `cwd`／`cwd` 指向不存在的目錄
+      - `CLAUDE_PROJECT_DIR` 未設／指向不存在的目錄
+      - dispatcher 本身拋出未預期例外（traceback 進 stderr 供診斷）
+
+    ⛔ 不在此列（正常情況，**不擋**）：`WS_ROOT` 存在但底下沒有任何帶 `.claude/settings.json`
+    的 repo——那代表這個 workspace 本來就沒有要轉呼叫的守線。
+
+    PostToolUse 一律 warning-only（工具已執行完，擋也改變不了結果）。
+    """
+    if _bypassed(text):
+        sys.stderr.write(
+            f"[dispatch-hook] ⚠ {BYPASS_ENV}={BYPASS_VALUE} 已開，放行一個**完全未經守線檢查**"
+            f"的指令（{reason}）。⛔ 這等於關掉所有 repo 的守線，修好就關掉。\n")
+        return 0
+    if event != "PreToolUse":
+        sys.stderr.write(
+            f"[dispatch-hook] ⚠ {event}：dispatcher 自己拿不到判斷（{reason}），"
+            f"但工具已執行完、不擋。\n  {detail}\n")
+        return 0
+    sys.stderr.write(
+        "[dispatch-hook] ⛔ 拒絕執行：**dispatcher 自己**拿不到判斷，無法確認這道指令安全。\n"
+        f"  原因      : {reason}\n"
+        f"  細節      : {detail}\n"
+        "  為什麼擋 : dispatcher 是所有 repo 守線在共同祖先 workspace 下的唯一通路。\n"
+        "             它壞掉而放行 ⇒ 每一個 repo 的 kubectl 白名單／pattern-guard／repo-lint\n"
+        "             全部一起靜默消失，而唯一徵兆是一個分辨不出差別的「零命中」告警。\n"
+        f"  怎麼逆轉 : 指令前綴 `{BYPASS_ENV}={BYPASS_VALUE} <指令>`（一次性），或\n"
+        f"             `export {BYPASS_ENV}={BYPASS_VALUE}`（整個 session）。\n"
+        "             ⛔ 那是**緊急逆轉門、不是日常用法**——等於關掉所有 repo 的守線。\n")
+    return 2
+
+
+def _workspace_problem() -> str | None:
+    """`CLAUDE_PROJECT_DIR` 不可信的理由，或 `None`。
+
+    ⚠ 實測過才敢 fail-closed：claude CLI 自己注入這個變數（omnigent 不設），值等於啟動
+    claude 時的 cwd；plugin hook 路徑與 sub-agent 路徑都有設。
+    ⛔ 而且它**沒有替代來源**——`CLAUDE_PLUGIN_ROOT` 指向 materialize 後的 bundle，與
+    workspace 無包含關係，推導不出 workspace 根。
+    """
+    if not WS_ROOT_RAW or not WS_ROOT_RAW.strip():
+        return ("CLAUDE_PROJECT_DIR 未設；dispatcher 無從得知 workspace 根在哪"
+                "（這個變數沒有替代來源：CLAUDE_PLUGIN_ROOT 指向 bundle，不是 workspace）")
+    if not Path(WS_ROOT_RAW).is_dir():
+        return f"CLAUDE_PROJECT_DIR 指向不存在的目錄：{WS_ROOT_RAW!r}"
+    return None
+
+
 #: 各種失敗原因對應的處置建議（拒絕訊息要能直接照著做，不是只說「失敗了」）。
 _FAILURE_HINTS = {
     "timeout": "調高該 repo `.claude/settings.json` 裡那支 hook 的 `timeout`，或修它為什麼這麼慢",
@@ -352,10 +465,10 @@ def _hook_failure(event: str, repo: Path, subject: str, kind: str, detail: str) 
             f"[dispatch-hook] ⚠ {event} hook {kind}（工具已執行完，不擋）："
             f"{repo.name} / {subject}\n  {detail}\n")
         return 0
-    if os.environ.get(FAIL_OPEN_ENV, "").strip() not in ("", "0", "false", "False"):
+    if _bypassed():
         sys.stderr.write(
-            f"[dispatch-hook] ⚠ {FAIL_OPEN_ENV} 已設，放行一個**未經檢查**的指令："
-            f"{repo.name} / {subject}（{kind}）\n")
+            f"[dispatch-hook] ⚠ {BYPASS_ENV}={BYPASS_VALUE} 已開，放行一個**未經檢查**的"
+            f"指令：{repo.name} / {subject}（{kind}）\n")
         return 0
     sys.stderr.write(
         "[dispatch-hook] ⛔ 拒絕執行：轉呼叫 repo 的守線失敗，無法確認這道指令安全。\n"
@@ -365,8 +478,8 @@ def _hook_failure(event: str, repo: Path, subject: str, kind: str, detail: str) 
         f"  細節      : {detail}\n"
         "  為什麼擋 : PreToolUse 是安全 gate；沒拿到判斷就放行，等於那道守線這次不存在。\n"
         f"  怎麼處理 : (1) {_FAILURE_HINTS.get(kind, '修上面那個對象')}；\n"
-        f"             (2) 真的要硬過：export {FAIL_OPEN_ENV}=1"
-        "（⛔ 會放行未經檢查的指令）。\n")
+        f"             (2) 真的要硬過：指令前綴 `{BYPASS_ENV}={BYPASS_VALUE} <指令>`"
+        "（⛔ 緊急逆轉門，等於關掉所有 repo 的守線）。\n")
     return 2
 
 
@@ -395,16 +508,36 @@ def _load_settings(event: str, repo: Path) -> tuple[dict | None, int]:
     return data, 0
 
 
-def main() -> int:  # noqa: PLR0911, PLR0912
-    raw = sys.stdin.read()
+def main(raw: str) -> int:  # noqa: PLR0911, PLR0912
+    # ── dispatcher 自己可不可信？不可信就不要假裝有判斷（見 _untrusted）──────────
+    # ⚠ FIX ROUND 7 之前這裡是 `return 0`，註解還寫著「dispatcher 自己絕不該變成故障點」
+    #    ——方向剛好相反：它**是**所有 repo 守線的唯一通路，壞掉時靜默放行才是最糟的。
     try:
         payload = json.loads(raw)
-    except json.JSONDecodeError:
-        return 0  # dispatcher 自己絕不該變成故障點
+    except json.JSONDecodeError as exc:
+        return _untrusted("PreToolUse", "stdin 不是合法 JSON", str(exc), text=raw)
     if not isinstance(payload, dict):
-        return 0
+        return _untrusted("PreToolUse", "stdin 的最外層不是 JSON object",
+                          f"是 {type(payload).__name__}", text=raw)
     event = payload.get("hook_event_name") or "PreToolUse"
-    tool_name = payload.get("tool_name") or ""
+    text = _command_of(payload) or raw
+
+    problem = _workspace_problem()
+    if problem:
+        return _untrusted(event, "workspace 根不可信", problem, text=text)
+
+    tool_name = payload.get("tool_name")
+    if not tool_name or not isinstance(tool_name, str):
+        return _untrusted(event, "payload 缺 tool_name",
+                          "沒有工具名就無法比對 repo hook 的 matcher ⇒ 等於略過所有守線",
+                          text=text)
+
+    raw_cwd = payload.get("cwd")
+    if not raw_cwd or not isinstance(raw_cwd, str):
+        return _untrusted(event, "payload 缺 cwd",
+                          "cwd 是判斷「這道指令作用到哪個 repo」的主要依據", text=text)
+    if not Path(raw_cwd).is_dir():
+        return _untrusted(event, "payload 的 cwd 指向不存在的目錄", repr(raw_cwd), text=text)
 
     matched_repos = targets(payload)
     executed = 0
@@ -485,5 +618,31 @@ def main() -> int:  # noqa: PLR0911, PLR0912
     return 0
 
 
+def _entry() -> int:
+    """進入點：把 stdin 讀取與**任何未預期例外**也納入 fail-closed。
+
+    ⚠ 前面每一條都是「我們想到的失敗形態」。這一層接的是想不到的那些——dispatcher 自己
+    拋出 `AttributeError`／`KeyError`／權限錯誤時，若讓 Python 以非 2 的 exit code 收場，
+    Claude Code 會視為「非阻斷性錯誤」而照跑工具 ⇒ 又是一次靜默放行。
+    """
+    try:
+        raw = sys.stdin.read()
+    except Exception as exc:  # noqa: BLE001
+        return _untrusted("PreToolUse", "讀不到 stdin", f"{type(exc).__name__}: {exc}")
+    # 例外處理用得到 event，先盡力解析一次（解不出來就當 PreToolUse：往保守倒）
+    event = "PreToolUse"
+    try:
+        guess = json.loads(raw)
+        if isinstance(guess, dict):
+            event = guess.get("hook_event_name") or "PreToolUse"
+    except (json.JSONDecodeError, TypeError, ValueError):
+        pass
+    try:
+        return main(raw)
+    except Exception:  # noqa: BLE001
+        return _untrusted(event, "dispatcher 自己拋出未預期例外",
+                          traceback.format_exc().strip(), text=raw)
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(_entry())

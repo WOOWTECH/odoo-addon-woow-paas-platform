@@ -172,6 +172,40 @@ commit message／PR body 提到 repo 名是極常見的寫法，所以這裡的�
 | 命中的 repo **根本沒有** `settings.json` | ✅ **不擋** | 不擋 |
 | 有 `settings.json` 但沒有 matching hook | ✅ **不擋**（留零命中告警） | 不擋 |
 
+### 🔴 還有一層：**dispatcher 自己**拿不到判斷（FIX ROUND 8）
+
+上面整張表講的是「repo hook 拿不到判斷」。但還有更危險的一層——**dispatcher 自己壞掉**：
+
+| 失敗形態 | PreToolUse | PostToolUse |
+| --- | --- | --- |
+| stdin 不是合法 JSON／讀不到 | ⛔ **exit 2** | warning-only |
+| 缺 `tool_name`（沒有工具名就無法比對 matcher） | ⛔ **exit 2** | warning-only |
+| 缺 `cwd`／`cwd` 指向不存在的目錄 | ⛔ **exit 2** | warning-only |
+| `CLAUDE_PROJECT_DIR` 未設／指向不存在的目錄 | ⛔ **exit 2** | warning-only |
+| dispatcher 拋出**未預期例外**（traceback 進 stderr） | ⛔ **exit 2** | warning-only |
+| `WS_ROOT` 存在但底下**沒有任何** repo | ✅ **不擋**（本來就沒有守線要轉） | 不擋 |
+
+⚠ **為什麼這層比上一層更危險**：repo hook 失敗只影響那一個 repo；dispatcher 自己壞掉
+（最典型是 `CLAUDE_PROJECT_DIR` 沒設）會讓 `targets()` 回空 ⇒ **所有 repo 的所有守線一起
+靜默消失**，而唯一徵兆是一個「零命中告警」——而那個告警**區分不了**「真的無關指令」與
+「守線全掉」。
+
+⚠ stdin 解不開時**無法判斷事件類型** ⇒ 保守當成 PreToolUse（fail-closed）。
+
+### ⚠ `CLAUDE_PROJECT_DIR` 沒有替代來源（實測，這是敢 fail-closed 的前提）
+
+把它改成 fail-closed 有「**brick 整台機器**」的風險——若它在正常啟動路徑上本來就沒值，
+每個 worker 的每次 tool call 都會被擋。所以動手前用真實 claude CLI 量過：
+
+| 問題 | 實測結果 |
+| --- | --- |
+| omnigent 會設它嗎？ | ❌ 不設（源碼 0 命中）——是 **claude CLI 自己注入**（二進位 27 處） |
+| `--plugin-dir` 啟動時的值 | ✅ **啟動 claude 時的 cwd**（＝ runner workspace） |
+| sub-agent 情境 | ✅ 仍然有設（實測那次唯一的 hook 觸發就是 sub-agent 的 Bash 呼叫） |
+| 能不能改從 hook 檔位置推導 workspace 根？ | ⛔ **不行**——`CLAUDE_PLUGIN_ROOT` 指向 materialize 後的 bundle，與 workspace **無包含關係** |
+
+最後一列是關鍵：這個變數**沒有替代來源**，所以它缺失時只能 fail-closed ＋ 留逆轉門。
+
 ⚠ **`exit 2` 為什麼要原樣透傳**：那是 repo hook 刻意的 block，它的 stderr 就是給使用者看的
 理由，不可被 dispatcher 的診斷訊息蓋掉。`kubectl-ns-guard` 走 stdout JSON 協定（exit 0）的
 那條路徑也不可被破壞——dispatcher 偵測到 deny JSON 會短路。
@@ -184,7 +218,25 @@ commit message／PR body 提到 repo 名是極常見的寫法，所以這裡的�
 ⚠ **fail-closed 的誤擋風險是真的**：repo hook 自己有 bug 的話，**該 repo 的所有操作都會被
 擋**。所以拒絕訊息設計成可診斷——明寫 repo、對象、事件／原因、細節，以及**依失敗形態給出
 對應的處置建議**（timeout 要調 `timeout`、crash 要看它的 stderr、settings 壞了要修 JSON）。
-逃生門是 `export OMNIGENT_DISPATCH_FAIL_OPEN=1`（⛔ 會放行未經檢查的指令，且每次都留警告）。
+### 🔴 緊急逆轉門 `DISPATCH_HOOK=off`
+
+fail-closed 的代價是「壞掉時全面停擺」，所以照 repo 既有慣例
+（`.claude/hooks/kubectl-ns-guard.py` 的 `KUBECTL_NS_GUARD=off`）留一個逆轉門，兩種形式：
+
+```bash
+DISPATCH_HOOK=off <指令>          # 一次性（指令前綴）
+export DISPATCH_HOOK=off          # 整個 session
+```
+
+⛔ **這是緊急逆轉門，不是日常用法。** 開啟它等於**關掉所有 repo 的所有守線**——kubectl
+namespace 白名單、`pattern-guard`、`repo-lint`、`memory-links-guard` 全部不再觸發。
+只在「dispatcher 或某支 repo hook 自己壞掉、擋住了正常工作」時當逃生用，**修好就關掉**。
+每次放行都會在 stderr 留一行警告，寫明這是未經守線檢查的指令。
+
+它同時覆蓋兩層（repo hook 失敗與 dispatcher 自己失敗）。舊名
+`OMNIGENT_DISPATCH_FAIL_OPEN`（FIX ROUND 6 引入）保留為別名，避免已寫進筆記的人踩空。
+
+⚠ 每一則拒絕訊息都會印出逆轉方式——人被擋住時不需要翻文件。
 
 ⚠ FIX ROUND 6 只補了 `timeout` 一條，其餘三條仍 fail-open（覆核實跑：`Pre hook exits 7
 → rc=7`、`Pre invalid settings JSON → rc=0`）。**而當時的突變測試也只錐在 timeout** ⇒
@@ -307,6 +359,11 @@ dispatcher 在「命中了 repo、但沒有任何 hook 真的跑起來」時寫�
    ⚠ 第六個（ROUND 7 補）：**target detection 誤命中也會害人**——裸字串比對讓
    `git commit -m "fix repoA bug"` 命中不相干的 repo，與 fail-closed 相乘就會擋掉一條
    合法的 commit。已移除那層（突變 AA 實證）。
+   ⚠ 第八個（ROUND 8 補）：**dispatcher 自己拿不到判斷時原本也 fail-open**。
+   ROUND 7 修的是「repo hook 拿不到判斷」，但 `CLAUDE_PROJECT_DIR` 沒設／stdin 壞掉／
+   缺 `tool_name` 或 `cwd`／dispatcher 自己拋例外這幾條仍 rc=0——而這層**更危險**：
+   它會讓**所有 repo 的守線一起**靜默消失，不是只影響一個 repo。現已全部 exit 2
+   （突變 AC 實證），並附緊急逆轉門 `DISPATCH_HOOK=off`（突變 AD 驗它不可預設開啟）。
    ⚠ 第七個（ROUND 7 補）：**兩份 dispatcher 副本漂移**——一份補了守線一份沒補，守線只在
    其中一條派工路徑生效且不會報錯。→ 驗收第 16 項對 hash（突變 AB 實證）。
 10. 🔴 **CLAUDE.md 的 on-demand 注入只綁 `Read` 工具。** 用 `cat` / `grep` 讀檔不會觸發注入

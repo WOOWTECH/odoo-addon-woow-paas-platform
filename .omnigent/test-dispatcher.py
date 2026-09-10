@@ -99,6 +99,25 @@ def _fixture(root: Path) -> None:
     }}))
 
 
+def _run_raw(root: Path | None, raw: str, *, extra_env: dict | None = None,
+             unset: tuple[str, ...] = ()) -> tuple[int, str, str]:
+    """餵**原始字串**給 dispatcher（驗 stdin 不是合法 JSON 之類的情境）。
+
+    `root=None` 代表刻意不設 `CLAUDE_PROJECT_DIR`。
+    """
+    env = dict(os.environ)
+    env.pop("OMNIGENT_DISPATCH_FAIL_OPEN", None)
+    env.pop("DISPATCH_HOOK", None)
+    if root is not None:
+        env["CLAUDE_PROJECT_DIR"] = str(root)
+    env.update(extra_env or {})
+    for key in unset:
+        env.pop(key, None)
+    proc = subprocess.run([sys.executable, str(DISPATCHER)], input=raw, text=True,
+                          capture_output=True, env=env, timeout=120, check=False)
+    return proc.returncode, proc.stdout, proc.stderr
+
+
 def _run(root: Path, payload: dict, marker: Path,
          extra_env: dict | None = None) -> tuple[int, str, str]:
     env = dict(os.environ)
@@ -372,6 +391,103 @@ def run_tests() -> tuple[bool, str]:  # noqa: PLR0915
             bad.append(f"39. 沒有 settings.json 的 repo 不該被擋，實得 exit {rc}")
         else:
             results.append("39")
+
+        # ── FIX ROUND 8：**dispatcher 自己**拿不到判斷時也要 fail-closed ──────────
+        # 🔴 這層比「repo hook 失敗」更危險：repo hook 失敗只影響那一個 repo，dispatcher
+        #    自己壞掉（例如 CLAUDE_PROJECT_DIR 沒設）會讓**所有 repo 的守線一起靜默消失**，
+        #    而唯一徵兆是一個「零命中告警」——那個告警區分不了「真的無關指令」與「守線全掉」。
+        def _pl(event: str = "PreToolUse", **over) -> str:
+            base: dict = {"hook_event_name": event, "tool_name": "Bash",
+                          "cwd": str(a), "tool_input": {"command": "echo hi"}}
+            base.update(over)
+            return json.dumps({k: v for k, v in base.items() if v is not None})
+
+        untrusted_cases: list[tuple[str, dict]] = [
+            ("40. stdin 不是合法 JSON", {"raw": "{ this is not json"}),
+            ("41. 缺 tool_name", {"raw": _pl(tool_name=None)}),
+            ("42. 缺 cwd", {"raw": _pl(cwd=None)}),
+            ("43. cwd 指向不存在的目錄（在 repo 底下）",
+             {"raw": _pl(cwd=str(a / "nope" / "deep"))}),
+            ("44. cwd 指向不存在的目錄（在 repo 外）", {"raw": _pl(cwd="/nonexistent/zzz")}),
+            ("45. CLAUDE_PROJECT_DIR 未設", {"raw": _pl(), "root": None,
+                                             "unset": ("CLAUDE_PROJECT_DIR",)}),
+            ("46. CLAUDE_PROJECT_DIR 指向不存在的目錄",
+             {"raw": _pl(), "extra_env": {"CLAUDE_PROJECT_DIR": "/nonexistent/ws"}}),
+        ]
+        for label, kw in untrusted_cases:
+            rc, _, err = _run_raw(kw.pop("root", root), kw.pop("raw"), **kw)
+            if rc != 2:
+                bad.append(f"{label}：PreToolUse 下 dispatcher 自己拿不到判斷應 fail-closed"
+                           f"（exit 2），實得 {rc}——靜默放行會讓所有 repo 的守線一起消失")
+            elif "拒絕執行" not in err or "怎麼逆轉" not in err:
+                bad.append(f"{label}：拒絕訊息不可診斷（缺原因或逆轉方式）：{err[:100]!r}")
+            else:
+                results.append(label.split(".")[0])
+
+        # 47. dispatcher 自己拋出未預期例外 ⇒ 也要落到 exit 2（不能讓 Python 以非 2 收場）
+        with tempfile.TemporaryDirectory(prefix="disp-boom-") as td2:
+            boom = Path(td2) / "dispatch-hook.py"
+            boom.write_text(DISPATCHER.read_text().replace(
+                "    matched_repos = targets(payload)",
+                "    raise AttributeError('刻意注入的未預期例外')", 1))
+            env = dict(os.environ)
+            env["CLAUDE_PROJECT_DIR"] = str(root)
+            env.pop("DISPATCH_HOOK", None)
+            env.pop("OMNIGENT_DISPATCH_FAIL_OPEN", None)
+            pr = subprocess.run([sys.executable, str(boom)], input=_pl(), text=True,
+                                capture_output=True, env=env, timeout=120, check=False)
+            if pr.returncode != 2:
+                bad.append(f"47. 未預期例外應落到 exit 2，實得 {pr.returncode}"
+                           "（非 2 會被 Claude Code 視為非阻斷性錯誤而照跑工具）")
+            elif "AttributeError" not in pr.stderr:
+                bad.append("47. 未預期例外的 traceback 沒進 stderr（無法診斷）")
+            else:
+                results.append("47")
+
+        # 48. 同樣情境在 PostToolUse 下一律 warning-only（工具已執行完，擋也沒用）
+        post_ok = True
+        for label, kw in [("缺 tool_name", {"raw": _pl("PostToolUse", tool_name=None)}),
+                          ("缺 cwd", {"raw": _pl("PostToolUse", cwd=None)}),
+                          ("CLAUDE_PROJECT_DIR 未設",
+                           {"raw": _pl("PostToolUse"), "root": None,
+                            "unset": ("CLAUDE_PROJECT_DIR",)})]:
+            rc, _, _ = _run_raw(kw.pop("root", root), kw.pop("raw"), **kw)
+            if rc != 0:
+                bad.append(f"48. PostToolUse／{label} 應 warning-only，實得 exit {rc}")
+                post_ok = False
+        if post_ok:
+            results.append("48")
+
+        # ── ⛔ 以下兩種**不該擋**，擋了就是把整台機器 brick 掉 ───────────────────
+        # 49. WS_ROOT 存在但底下沒有任何帶 .claude/settings.json 的 repo ⇒ 正常情況
+        with tempfile.TemporaryDirectory(prefix="disp-empty-ws-") as td3:
+            empty_ws = Path(td3)
+            rc, _, err = _run_raw(empty_ws, json.dumps(
+                {"hook_event_name": "PreToolUse", "tool_name": "Bash",
+                 "cwd": str(empty_ws), "tool_input": {"command": "echo hi"}}))
+            if rc != 0:
+                bad.append(f"49. WS_ROOT 存在但無 repo 不該擋（那代表本來就沒有守線要轉），"
+                           f"實得 exit {rc}")
+            else:
+                results.append("49")
+
+        # 50／51. 緊急逆轉門（照 kubectl-ns-guard.py 的慣例：env 形式 ＋ 指令前綴形式）
+        rc, _, err = _run_raw(None, _pl(), extra_env={"DISPATCH_HOOK": "off"},
+                              unset=("CLAUDE_PROJECT_DIR",))
+        if rc != 0:
+            bad.append(f"50. export DISPATCH_HOOK=off 應放行，實得 exit {rc}")
+        elif "關掉所有" not in err:
+            bad.append("50. 逆轉門沒警告「這等於關掉所有 repo 的守線」")
+        else:
+            results.append("50")
+        rc, _, err = _run_raw(None, json.dumps(
+            {"hook_event_name": "PreToolUse", "tool_name": "Bash", "cwd": str(a),
+             "tool_input": {"command": "DISPATCH_HOOK=off kubectl get pods"}}),
+            unset=("CLAUDE_PROJECT_DIR",))
+        if rc != 0:
+            bad.append(f"51. 指令前綴 DISPATCH_HOOK=off（一次性）應放行，實得 exit {rc}")
+        else:
+            results.append("51")
 
         # ── X4：零命中告警 ───────────────────────────────────────────────────
         # 23. 命中 repo 但沒有 matching hook ⇒ 要有 warning
