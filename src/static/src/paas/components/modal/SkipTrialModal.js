@@ -25,6 +25,9 @@ import { formatPoints } from "../../utils/billing_helpers";
  *     Called when the user confirms; mutates the subscription.
  *   - onClose (Function): Called when modal is closed/cancelled.
  *   - onSkipped (Function): Called after a successful confirmSkip.
+ *   - requireWoowPayable (Boolean, optional): Require the estimate payload's
+ *     payable_via_woow capability. Cloud Service enables this #980 guard;
+ *     other service types keep their existing contract.
  */
 export class SkipTrialModal extends Component {
     static template = "woow_paas_platform.SkipTrialModal";
@@ -35,6 +38,7 @@ export class SkipTrialModal extends Component {
         confirmSkip: { type: Function },
         onClose: { type: Function },
         onSkipped: { type: Function },
+        requireWoowPayable: { type: Boolean, optional: true },
     };
 
     setup() {
@@ -77,8 +81,19 @@ export class SkipTrialModal extends Component {
             !this.state.loadingEstimate &&
             !this.state.estimateError &&
             !!this.state.estimate &&
+            (!this.props.requireWoowPayable ||
+                this.state.estimate.payable_via_woow === true) &&
             this.state.estimate.sufficient &&
             !this.state.skipping
+        );
+    }
+
+    get isPaymentBlocked() {
+        return (
+            !!this.props.requireWoowPayable &&
+            !!this.state.estimate &&
+            this.state.estimate.payable_via_woow !== true &&
+            !!this.state.estimate.pay_blocked_reason
         );
     }
 

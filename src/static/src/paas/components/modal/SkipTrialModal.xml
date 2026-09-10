@@ -75,8 +75,18 @@
                             </div>
                         </div>
 
+                        <div t-if="isPaymentBlocked" class="o_woow_pay_warning">
+                            <WoowIcon name="'warning'" size="20"/>
+                            <p>
+                                <t t-if="state.estimate.pay_blocked_reason === 'flagless_automatic_not_payable'">
+                                    This invoice cannot be paid in /woow while automatic e-invoicing is enabled. Please contact support.
+                                </t>
+                                <t t-else="">Invoice is not payable</t>
+                            </p>
+                        </div>
+
                         <!-- Insufficient balance warning + top-up link -->
-                        <t t-if="!state.estimate.sufficient">
+                        <t t-if="!isPaymentBlocked and !state.estimate.sufficient">
                             <div class="o_woow_pay_warning">
                                 <WoowIcon name="'warning'" size="20"/>
                                 <div>

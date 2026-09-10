@@ -193,7 +193,7 @@ export const cloudService = reactive({
      * @returns {Promise<{success: boolean, data?: Object, error?: string}>}
      *   data has keys: untaxed, tax_rate, tax_amount, total, currency,
      *   wallet_balance, sufficient, shortage, billing_cycle_start,
-     *   billing_cycle_end.
+     *   billing_cycle_end, payable_via_woow, pay_blocked_reason.
      */
     async getSkipTrialEstimate(serviceId) {
         try {

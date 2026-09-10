@@ -35,9 +35,15 @@
 
 **5. 與上游 ERP 解耦**
 
-不論官方網站或 ERP 對 `company.auto_invoice` 的設定為何，PaaS 透過 `woow_skip_upstream_hook` 機制隔離上游 hook，**一律走自己的異步 cron 流程**（`ecpay_invoice_cron`）開立發票，含 retry 與失敗通知機制。
+PaaS 自己建立、帶 `woow_skip_upstream_hook=True` 的發票隔離上游 inline hook，並依
+`woow_invoice_issue_state` 走自己的異步 cron 流程（`ecpay_invoice_cron`），含 retry
+與失敗通知機制；不改 company 級預設，也不改 ERP／官網的原生開票行為。
 
-這保證了 PaaS 的開票行為可預測、可控、與上游設定無耦合。
+`/woow` 也可能列出 ERP／官網建立的 flagless 發票。#980 的 A 窄守衛規定：當該張發票的
+`company.auto_invoice='automatic'` 時，list/detail 必須先標示不可由 `/woow` 付款，付款
+端點與目前會建立 flagless 發票的 skip-trial 必須在任何 savepoint、wallet 扣款、
+`action_post()` 前拒絕。這不是 B 方案：平台不抑制 inline einvoice、不把 flagless 發票
+改送 async cron。`auto_invoice!='automatic'` 時，flagless 發票維持既有 `/woow` 付款行為。
 
 > **Scope limitation (2026-05):** The current `woow_skip_upstream_hook` mechanism
 > only isolates `out_invoice` issuance (`create_ecpay_invoice`). Refund flows
@@ -53,7 +59,7 @@
 | 只有實際動用信用卡才產生發票 | cycle invoice 標 `not_required`；儲值 + auto-topup 補差額才送 ECPay |
 | ECPay 自動開發票串接 | `ecpay_invoice_cron` 異步呼叫 `create_ecpay_invoice()`，含 retry + 失敗通知 |
 | Odoo invoice 與 ECPay 發票關聯 | 透過 `account.move.ecpay_invoice_id` 連接（既有上游機制） |
-| 與上游解耦 | `woow_skip_upstream_hook` 隔離 ERP/官網的 `auto_invoice` 設定 |
+| 與上游解耦 | 帶 skip flag 的 PaaS 發票走 async；flagless＋automatic 在 `/woow` 前置拒付，不改 ERP／官網 hook |
 
 ---
 

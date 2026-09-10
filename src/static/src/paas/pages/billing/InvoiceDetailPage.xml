@@ -49,12 +49,21 @@
                             </span>
 
                             <div class="o_woow_invoice_sidebar_actions">
-                                <t t-if="canPay">
-                                    <WoowButton variant="'primary'" size="'md'" onClick.bind="showPayDialog" class="'o_woow_full_width'">
+                                <t t-if="isPaymentDue">
+                                    <WoowButton variant="'primary'" size="'md'" disabled="!canPay" onClick.bind="showPayDialog" class="'o_woow_full_width'">
                                         <WoowIcon name="'payment'" size="18"/>
                                         Pay Now
                                     </WoowButton>
                                 </t>
+                                <div t-if="isPaymentBlocked" class="o_woow_pay_warning">
+                                    <WoowIcon name="'warning'" size="20"/>
+                                    <span>
+                                        <t t-if="invoice.pay_blocked_reason === 'flagless_automatic_not_payable'">
+                                            This invoice cannot be paid in /woow while automatic e-invoicing is enabled. Please contact support.
+                                        </t>
+                                        <t t-else="">Invoice is not payable</t>
+                                    </span>
+                                </div>
                                 <a t-att-href="downloadUrl" target="_blank" class="o_woow_invoice_download_btn">
                                     <WoowIcon name="'download'" size="18"/>
                                     Download PDF

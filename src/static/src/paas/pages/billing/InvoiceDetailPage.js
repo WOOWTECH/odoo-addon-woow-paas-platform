@@ -51,10 +51,22 @@ export class InvoiceDetailPage extends Component {
     return `o_woow_invoice_status_${this.statusInfo.color}`;
   }
 
-  get canPay() {
+  get isPaymentDue() {
     if (!this.invoice) return false;
     const status = this.invoice.status_label || "draft";
     return status === "waiting" || status === "overdue";
+  }
+
+  get canPay() {
+    return this.isPaymentDue && this.invoice?.payable_via_woow === true;
+  }
+
+  get isPaymentBlocked() {
+    return (
+      this.isPaymentDue &&
+      this.invoice?.payable_via_woow !== true &&
+      !!this.invoice?.pay_blocked_reason
+    );
   }
 
   get dueLabel() {

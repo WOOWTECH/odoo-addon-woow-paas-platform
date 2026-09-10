@@ -16,8 +16,9 @@ PaaS 的開票流程刻意與上游 `ecpay_invoice_tw` 的 inline `action_post()
 2. **`woow_skip_upstream_hook=True` 是隔離旗標**：阻止上游
    `ecpay_invoice_tw` 在 `_pay_from_wallet` 的同一個 transaction 內
    inline 呼叫 `create_ecpay_invoice`（會在失敗時 rollback wallet 扣款）。
-3. **預期 `company.auto_invoice='manual'`**，但即使 ops 改成
-   `'automatic'`，PaaS 仍可正常運作（skip flag 已短路上游 hook）。
+3. **預期 `company.auto_invoice='manual'`**。若 ops 改成 `'automatic'`，只有帶
+   skip flag、可證明不會 inline 外呼的發票可由 `/woow` 付款；flagless 發票仍列出，
+   但付款與目前會建立 flagless 發票的 skip-trial 會先行拒絕並要求聯絡客服（#980 A）。
 
 ## Architecture
 
@@ -142,18 +143,21 @@ def create_ecpay_invoice(self):
 
 ## 如果 ops 把 `company.auto_invoice='automatic'` 會怎樣？
 
-PaaS 仍可正常運作。
+- **帶 `woow_skip_upstream_hook=True` 的 PaaS invoice**（手動儲值、auto-topup、
+  cycle）仍可由 `/woow` 正常付款；上游 inline hook 被短路。
+- **Async cron** 透過 module-private sentinel 開門，繞過自己的 short-circuit，照常開立。
+- **flagless invoice** 仍會出現在 `/woow` 發票清單，但 list/detail payload 會標成
+  `payable_via_woow=false` 與 `pay_blocked_reason=flagless_automatic_not_payable`；付款端點
+  在 savepoint、wallet 扣款與 `action_post()` 前拒絕。這是 #980 的 A 窄守衛，**不是**
+  抑制上游 inline 開票或改走 async 的 B 方案。
+- **skip-trial** 以實際 `_generate_invoice_vals()` 預演首張發票；目前該路徑建立的是
+  flagless invoice，因此 automatic 下 estimate 會先揭露相同原因，confirm 端點拒絕。
+  未來 choke point 若開始 stamp skip flag，兩端會透過同一 predicate 自動放行。
+- **ERP／官網原生流程不變**：flagless invoice 仍由上游 hook 按既有方式處理；只有
+  `/woow` 的 wallet payment／skip-trial surface 收窄。
 
-- **PaaS 開立的 invoice**（手動儲值、auto-topup、cycle）都帶
-  `woow_skip_upstream_hook=True`，上游 `ecpay_invoice_tw` 的 inline hook
-  會被短路，不會嘗試開立電子發票或 rollback transaction。
-- **Async cron** 透過 `with_context(woow_force_issue=True)` 開後門
-  繞過自己的 short-circuit，照常完成開立。
-- **第三方 / 人工建立的 invoice**（沒設 PaaS flag）行為不變，
-  上游 hook 該怎麼跑就怎麼跑（保持向後相容）。
-
-> 預設 `company.auto_invoice='manual'`（上游 default）即可，PaaS 的設計
-> 不依賴它。Task 2.1 的 override 就是給未來上游或人為改設定時的雙重保險。
+> 預設仍是 `company.auto_invoice='manual'`（上游 default）。切成 automatic 前要先確認
+> 所有預期由 `/woow` 自助付款的 invoice 都有 skip flag；本模組不替 ops 改 company 設定。
 
 ## Operational Considerations
 
