@@ -376,7 +376,8 @@ P_SAFETY = [
 ]
 # ⚠ pi 系刻意不掛 cost_budget：subscription 模型在 catalog 無定價時會回 _UNPRICED_ASK
 #    （cost.py），每個 session 卡一次人工批准，會毀掉無人值守。claude 家族兩種 harness
-#    都有定價來源，差別只在精度：claude-native 由 Claude Code 的 statusLine 直接回報
+#    都有**計價路徑**（⚠ 不等於「一定查得到價格」——實際有沒有價格取決於該 model 在不在
+#    catalog，換 model 要重驗），差別在精度：claude-native 由 Claude Code 的 statusLine 直接回報
 #    total_cost_usd（claude_native_status.py，實際帳單）；claude-sdk 回報 token 用量＋
 #    model，由 server 端查 catalog 定價（orchestration.py 的 has_tokens 分支，估算值）。
 P_COST = _fn_policy(
