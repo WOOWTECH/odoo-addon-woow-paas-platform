@@ -485,6 +485,21 @@ mutation_lib.edit(str(p), old=old, new=old + "\n    return True  # 預設開啟"
 subprocess.run(["python3", "build-bundles.py"], check=True, capture_output=True)
 PY'
 
+run_mut AE "頂層 leader 的 harness 改回 claude-native（UI picker 選不到）" "17" "Custom agents" \
+'python3 - <<"PY"
+import mutation_lib
+import pathlib, subprocess
+# 真實事故的重演：改回 *-native，Omnigent Web UI 的 Custom agents 選單就**選不到**
+# woow_issue_leader，而且完全不報錯（useAvailableAgents.ts 的 enrich 自我剔除）。
+# ⚠ 突變改的是**產生器**並立刻重產，所以第 0 項（產物同步）不該紅——紅點必須單獨落在
+#   第 17 項，否則就是「紅錯地方」（開頭歷史事故 3 的形態）。
+p = pathlib.Path("build-bundles.py")
+old = "        _executor(\"claude-sdk\", \"auto\", model=model, effort=effort),"
+new = "        _executor(\"claude-native\", \"auto\", model=model, effort=effort),"
+mutation_lib.edit(str(p), old=old, new=new)
+subprocess.run(["python3", "build-bundles.py"], check=True, capture_output=True)
+PY'
+
 echo
 if [ "$FAIL_N" -eq 0 ]; then
   echo "總計：$PASS_N 個 case 全部符合預期指紋"

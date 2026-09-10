@@ -375,12 +375,14 @@ P_SAFETY = [
                {"consecutive_threshold": 5, "window": 10, "action": "ASK"}),
 ]
 # ⚠ pi 系刻意不掛 cost_budget：subscription 模型在 catalog 無定價時會回 _UNPRICED_ASK
-#    （cost.py），每個 session 卡一次人工批准，會毀掉無人值守。claude-native 的用量由
-#    Claude Code 自己的 statusLine 回報 total_cost_usd（claude_native_status.py），有定價。
+#    （cost.py），每個 session 卡一次人工批准，會毀掉無人值守。claude 家族兩種 harness
+#    都有定價來源，差別只在精度：claude-native 由 Claude Code 的 statusLine 直接回報
+#    total_cost_usd（claude_native_status.py，實際帳單）；claude-sdk 回報 token 用量＋
+#    model，由 server 端查 catalog 定價（orchestration.py 的 has_tokens 分支，估算值）。
 P_COST = _fn_policy(
     "cost_budget", "omnigent.policies.builtins.cost.cost_budget",
     {"max_cost_usd": 25.0, "ask_thresholds_usd": [5.0, 15.0]},
-    note="⛔ 只掛 claude-native。pi 系掛上去會被 _UNPRICED_ASK 卡住每個 session（見上方註解）。")
+    note="⛔ 只掛 claude 家族（claude-native／claude-sdk）。pi 系掛上去會被 _UNPRICED_ASK 卡住每個 session（見上方註解）。")
 
 P_MERGE = _cel_yaml("p_merge_no_agent_merge", CEL_MERGE)
 P_APPROVE = _cel_yaml("p_approve_no_agent_signoff", CEL_APPROVE)

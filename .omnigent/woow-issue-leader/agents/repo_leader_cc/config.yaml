@@ -167,7 +167,7 @@ guardrails:
           consecutive_threshold: 5
           window: 10
           action: ASK
-    # ⛔ 只掛 claude-native。pi 系掛上去會被 _UNPRICED_ASK 卡住每個 session（見上方註解）。
+    # ⛔ 只掛 claude 家族（claude-native／claude-sdk）。pi 系掛上去會被 _UNPRICED_ASK 卡住每個 session（見上方註解）。
     cost_budget:
       type: function
       function:

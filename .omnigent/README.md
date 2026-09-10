@@ -6,7 +6,8 @@ woow 六個 repo 的 issue／實作編制。**本檔是給維護者看的**，�
 cd /home/elmo/woow-repos && omnigent run .omnigent/woow-issue-leader --server <url>
    ↑ workspace = 六 repo 的共同祖先（不是任何單一 repo——理由見 §workspace）
 
-woow-issue-leader/          claude-native／claude-fable-5-1／xhigh／spawn: true
+woow-issue-leader/          claude-sdk／claude-fable-5-1／xhigh／spawn: true
+   ⚠ 頂層一定是 claude-sdk，⛔ 不可以是 *-native（UI picker 會過濾掉，見 §UI picker）
 ├── config.yaml             產物
 ├── AGENTS.md               手改
 ├── hooks/                  ⭐ dispatcher：把子 repo 的 hooks 拿回來（§dispatcher）
@@ -68,7 +69,7 @@ bash .omnigent/mutation-tests.sh [case 代號]  # 突變測試（每個 case 斷
 | `woow-issue-leader/AGENTS.md` ＋ `skills/` | issue-leader 的 prompt 與 4 個 skill | 手改 |
 | `generate-worker.py` | 執行期產生器 ＋ 對照表 ＋ **7 支 CEL 與所有 policy 片段** | 手改 |
 | `hooks/dispatch-hook.py` ＋ `hooks.json` | dispatcher | 手改 |
-| `build-bundles.py` | 三份靜態 config 的產生器 ＋ **17 項驗收** | 手改 |
+| `build-bundles.py` | 三份靜態 config 的產生器 ＋ **19 項驗收** | 手改 |
 | `test-dispatcher.py` | dispatcher 端到端（fixture、零副作用；51 情境） | 手改 |
 | `mutation-tests.sh` ＋ `mutation_lib.py` | 突變測試與它的套用函式庫——**套用前**斷言定位字串仍有效（見 §定位字串的唯一性）。⚠ `mutation_lib` 用底線命名因為它要被 `import` | 手改 |
 | **三份 `config.yaml`** ＋ repo-leader 的 `AGENTS.md`／`skills/`／`hooks/` | 產物 | ⛔ **勿手改**（drift 由第 0 項對帳） |
@@ -76,6 +77,36 @@ bash .omnigent/mutation-tests.sh [case 代號]  # 突變測試（每個 case 斷
 ⚠ **CEL 與 policy 片段住在 `generate-worker.py`，不在 `build-bundles.py`。** 因為產生器要在
 **執行期**跑（repo-leader 派工前呼叫它），而 `build-bundles.py` 不在 bundle 內、執行期拿不到。
 真相放在執行期拿得到的那一邊，`build-bundles.py` import 過來用 ⇒ 只有一份。
+
+## UI picker：頂層 leader 的 harness ⛔ 不可以是 `*-native`
+
+Omnigent Web UI 的 Agents → **Custom agents** 子選單**選不到** `*-native` harness 的 custom
+agent，而且**不報錯**——選單裡就是沒有那一列，看起來像 agent 沒上傳成功。
+
+根因在 `web/src/hooks/useAvailableAgents.ts:295-305`：enrich harness 之後，若該 custom agent
+解析出的 native key 與清單中某個 builtin 相同，就 `enriched.filter(a => a.id !== agent.id)`
+把自己剔除。`claude-native` → key `claude`，而 seeded builtin `claude-native-ui` 的 harness
+正是 `claude-native` ⇒ **必然命中**。`claude-sdk` 不在 native 表內，所以安全（polly／debby
+也都是 `claude-sdk`）。
+
+實測對照（同一台 server，逐個 `sys_agent_get`；`h1-probe-pi` 與 `h1-probe-cn` 是同一組實驗、
+只差 harness 一欄）：
+
+| agent | harness | 出現在 picker |
+| --- | --- | --- |
+| `h1-probe-pi` | `pi` | ✅ |
+| `q3-probe` | `pi` | ✅ |
+| `claude` | `claude-sdk` | ✅ |
+| `h1-probe-cn` | `claude-native` | ❌ |
+| `h2-dispatch-bundle` | `claude-native` | ❌ |
+| `woow_issue_leader`（修正前） | `claude-native` | ❌ |
+
+⇒ **驗收第 17 項**機器強制頂層 harness 不得以 `-native` 結尾（突變 AE 實證）。
+
+⛔ **只管頂層。** `repo_leader_cc` 與執行期產生的 `_cc` worker 不出現在頂層 picker（它們是
+sub-agent／`sys_session_create` 起的 session），不受這個 filter 影響，而且它們**需要**
+`claude-native` 才有 hook 機制 ⇒ 不要因為這一項去動它們的 harness，也不要動
+`generate-worker.py` 的 `ROSTER` 對照表。
 
 ## workspace：為什麼一定要抬到共同祖先
 
@@ -121,6 +152,32 @@ repo 實際註冊的 4 支（dispatcher 兩種事件都要支援）：
 | PreToolUse | `Bash` | `kubectl-ns-guard.py` |
 | PostToolUse | `Edit\|Write\|MultiEdit\|NotebookEdit` | `repo-lint.py --hook` |
 | PostToolUse | `Edit\|Write\|MultiEdit\|NotebookEdit` | `memory-links-guard.py` |
+
+### 🔴 哪幾層真的有 dispatcher（頂層 leader **沒有**）
+
+| 層 | harness | 模型看到的 shell／編輯工具 | dispatcher |
+| --- | --- | --- | --- |
+| `woow_issue_leader`（頂層） | `claude-sdk` | `mcp__omnigent__sys_os_shell` / `sys_os_write` / `sys_os_edit` | ⛔ **不生效** |
+| `repo_leader_cc` | `claude-native` | `Bash` / `Edit` / `Write`（claude CLI 原生） | ✅ |
+| `implement`／`review`／`ops_k8s` 的 `_cc` worker | `claude-native` | 同上 | ✅ |
+| `repo_leader_pi`／`_pi` worker | `pi` | pi 自己的工具 | ⛔（pi 無 hook 機制） |
+
+⚠ 頂層那格的機制：`claude-sdk` 一樣會發 `--plugin-dir <bundle>`
+（`claude_agent_sdk/_internal/transport/subprocess_cli.py:726`，與 native 的
+`inner/bundle_skills.py:109` 等價），所以 `hooks/hooks.json` **有被註冊**；但
+`inner/claude_sdk_executor.py:2381` 把模型的 base tool set 釘成 `["Skill", "ToolSearch"]`，
+OS 操作一律改走 `mcp__omnigent__sys_os_*` ⇒ matcher `Bash` 與 `Edit|Write|MultiEdit|NotebookEdit`
+**永遠不會命中**。**這不影響守線**：頂層 leader 自己不跑 kubectl、不寫產品碼，真正會跑的
+`repo_leader_cc` 與 `_cc` worker 都還是 `claude-native`，各自帶自己那份 dispatcher。
+
+⛔ **`hooks/` 目錄不可以因此刪掉**——`generate-worker.py` 的 `HOOKS_DIR` 就指向它
+（`BUNDLE_DIR / "hooks"`），每個 `claude-native` worker 的 dispatcher 都是從這裡複製的
+（`generate-worker.py:747`）。刪了它，worker 那層的守線會**靜默**消失。
+
+⚠ 頂層 leader 自己跑 shell 的守線改由 `guardrails.policies` 承擔：六道 CEL 的
+`event.data.name in [...]` 都**已經列了 `sys_os_shell`**，而 `mcp__omnigent__*` 的 tool call
+是在 server 端的 `ProxyMcpManager` 用原始工具名（`sys_os_shell`）評估的
+（`inner/claude_sdk_executor.py:2113-2122` 的 double-evaluation guard 說明了這條路徑），所以照樣命中。
 
 ### ⛔ 為什麼不改寫成 CEL policy
 
@@ -508,11 +565,20 @@ repo），而且完全不認 `tea`。所以 `p_tag_no_agent_tag_push` 自己對 
 
 ⇒ 唯讀 worker 的保證維持在 **A 類**：`read_only_os` ＋ **省略 `os_env`**。
 
-### ⚠ `cost_budget` 只掛 claude-native
+### ⚠ `cost_budget` 只掛 claude 家族（claude-native／claude-sdk）
 
 pi 是 subscription 且無 catalog pricing，掛上去會走 `_UNPRICED_ASK`，**每個 session 卡一次
-人工批准**，會毀掉無人值守。claude-native 的用量由 Claude Code 自己的 statusLine 回報
-`total_cost_usd`，有定價可比。
+人工批准**，會毀掉無人值守。claude 家族兩種 harness 都有定價來源，差別只在精度：
+
+| harness | 定價來源 | 精度 |
+| --- | --- | --- |
+| `claude-native` | Claude Code 的 statusLine 直接回報 `cumulative_cost_usd` | 實際帳單 |
+| `claude-sdk` | 回報 token 用量＋model，server 端查 MLflow catalog 定價（`_sessions/orchestration.py` 的 `has_tokens` 分支） | 估算值 |
+
+⚠ 殘留風險：頂層 leader 改成 `claude-sdk` 後就走估算那條。若 `claude-fable-5-1` 哪天不在
+catalog 內，`_usage_is_unpriced()` 會讓 `cost_budget` 回 `_UNPRICED_ASK`——headless 的 leader
+沒人能回答，會卡住。真的發生就把 `P_COST` 從 `issue_leader_config()` 拿掉（那是**人工裁決**，
+⛔ 不要靠 agent 自己判斷）。
 
 ### 🔴 白名單同步債
 
@@ -532,7 +598,7 @@ shell 解析，認不出 `bash -c` 包一層或 script 檔裡的 kubectl，**已
 
 ## 驗收與突變測試的關係
 
-`--check` 有 18 項驗收。但**「全部 PASS」本身不代表驗收有效**——本 repo 已經抓到三次
+`--check` 有 19 項驗收。但**「全部 PASS」本身不代表驗收有效**——本 repo 已經抓到三次
 「檢查看起來在運作、其實沒驗到」的事故，三次都是同一個根因：**只看有沒有 `[FAIL]`，
 不看紅在哪**。
 
