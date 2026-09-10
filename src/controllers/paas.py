@@ -37,6 +37,16 @@ from ..models.security_access import _rule_replace, _skip_route_sync
 _logger = logging.getLogger(__name__)
 
 
+class _SkipTrialInvoiceNotPayable(UserError):
+    """`/woow` skip-trial 的穩定 capability 拒絕形狀。"""
+
+    def __init__(self, reason):
+        self.reason = reason
+        super().__init__(
+            _('This invoice cannot be paid in /woow while automatic '
+              'e-invoicing is enabled. Please contact support.'))
+
+
 # Cloud metadata endpoints must never be reachable from a user-provided
 # MCP URL. cluster.local resolves into pod-network IPs and must stay
 # allowed (sidecar-backed URL form).
@@ -1261,7 +1271,7 @@ class PaasController(HiddenChainMixin, Controller):
             },
         }
 
-    def _skip_trial_invoice_payability(self, service):
+    def _skip_trial_invoice_payability(self, service, sub=None):
         """預演 skip-trial 將建立的 invoice，套用 billing 的 replay-safe SSOT。
 
         `_generate_invoice_vals()` 是實際 `_skip_trial()` 建票的共同 choke point；用
@@ -1269,9 +1279,22 @@ class PaasController(HiddenChainMixin, Controller):
         choke point 開始 stamp skip flag，estimate 與 mutation 會自動一起放行，
         不會留下第二套「skip-trial 永遠 flagless」的硬編判準。
         """
-        sub = service._sub()
+        sub = sub or service._sub()
         invoice = request.env['account.move'].new(sub._generate_invoice_vals())
         return _invoice_payability_fields(invoice)
+
+    def _ensure_skip_trial_invoice_payable(self, service, sub):
+        """在 lifecycle business gates 之後、第一個 mutation 之前 fail-loud。"""
+        payability = self._skip_trial_invoice_payability(service, sub=sub)
+        if payability['payable_via_woow']:
+            return
+        _logger.info(
+            "[CLOUD_SVC] skip_trial flagless_automatic_reject "
+            "service=%s company=%s",
+            service.id, sub.sh_company_id.id,
+        )
+        raise _SkipTrialInvoiceNotPayable(
+            payability['pay_blocked_reason'])
 
     @route("/api/cloud-services/services/<int:service_id>/skip-trial-estimate", auth="user", methods=["POST"], type="json")
     def api_service_skip_trial_estimate(self, service_id: int, **kw: Any) -> dict[str, Any]:
@@ -1393,26 +1416,19 @@ class PaasController(HiddenChainMixin, Controller):
         # `ROLLBACK TO SAVEPOINT`（`sql_db._FlushingSavepoint.rollback`），ORM
         # cache 與待計算欄位一併清乾淨；只補 `cr.rollback()` 得自己處理髒 cache。
         try:
-            # #980 A：先跑 side-effect-free estimate，既重用 `_skip_trial` 的三道
-            # business precondition，也讓下方預演只處理一筆確實會建立的 invoice。
-            service._skip_trial_estimate()
-            payability = self._skip_trial_invoice_payability(service)
-            if not payability['payable_via_woow']:
-                _logger.info(
-                    "[CLOUD_SVC] skip_trial flagless_automatic_reject "
-                    "service=%s company=%s",
-                    service.id, service._sub().sh_company_id.id,
-                )
-                return {
-                    'success': False,
-                    'error': _(
-                        'This invoice cannot be paid in /woow while automatic '
-                        'e-invoicing is enabled. Please contact support.'),
-                    'code': payability['pay_blocked_reason'],
-                }
+            # #980：由 lifecycle seam 在原 `_skip_trial()` business precondition
+            # 之後呼叫 guard；guard 通過後，model 才開 mutation savepoint。如此既保留
+            # #567 的 gate／taxonomy contract，又仍早於 trial write、建票與付款鏈。
+            invoice_info = service._skip_trial(
+                before_mutation=lambda sub: (
+                    self._ensure_skip_trial_invoice_payable(service, sub)))
 
-            with request.env.cr.savepoint():
-                invoice_info = service._skip_trial()
+        except _SkipTrialInvoiceNotPayable as e:
+            return {
+                'success': False,
+                'error': str(e),
+                'code': e.reason,
+            }
 
         except OperationalError:
             # #533：並發類 DB 例外（`SerializationFailure` 40001 等）**必須**傳出去。
@@ -1428,8 +1444,9 @@ class PaasController(HiddenChainMixin, Controller):
             # 必須排在 #520／#525 那三段之前：`SerializationFailure` 不是
             # `UserError` 子類，但會被最後的 `except Exception` 吃掉。
             #
-            # 上面那層 `cr.savepoint()`（#525 A1）**刻意保留、也不衝突**：它管的是
-            # 「失敗時不留金流殘留」，本分支管的是「例外要讓框架看見」。新 snapshot
+            # model 內 guard 之後的 mutation `cr.savepoint()`（#525 A1）**刻意保留、
+            # 也不衝突**：它管的是「失敗時不留金流殘留」，本分支管的是「例外要讓
+            # 框架看見」。新 snapshot
             # 由 `retrying()` 的整交易 rollback 提供，不是由 savepoint 提供
             # ——`ROLLBACK TO SAVEPOINT` 不換 transaction、不換 snapshot。
             #
