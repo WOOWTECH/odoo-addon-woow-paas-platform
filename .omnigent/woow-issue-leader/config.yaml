@@ -7,14 +7,22 @@ description: woow 六 repo 的 issue 層總指揮：讀 issue、拆工單、派�
 
 executor:
   type: omnigent
+  reasoning_effort: xhigh
+  model: claude-fable-5-1
   config:
     harness: claude-native
-    # headless worker 沒人能回答 ApprovalCard，而 managed Claude settings 停用
-    # bypassPermissions；`auto` 自動放行且在 managed settings 下合法。
+    # headless 的 leader 沒人能回答 ApprovalCard，而 managed Claude settings
+    # 停用 bypassPermissions；`auto` 自動放行且在 managed settings 下合法。
     permission_mode: auto
 
-# prompt 由同目錄的 AGENTS.md 承載（實體副本，來源：./AGENTS.md（實體檔，非 symlink））。
-# ⛔ 不要手改這份副本——改來源再跑 build-bundles.py（drift 由 --check 第 0 項對帳）。
+# spawn: true 是這個架構的關鍵——worker 不再是靜態 sub-agent，而是由本層在執行期
+# 用 generate-worker.py 寫出 config 後以 sys_session_create(config_path=…) 起來。
+# ⚠ 實測：動態 config 的 harness / model / guardrails.policies / spawn 全部生效，
+#   且**不需要**在 tools.agents 列名（那套靜態 allowlist 已廢）。
+spawn: true
+
+# prompt 由同目錄的 AGENTS.md 承載（實體檔，來源：./AGENTS.md（手改，非產物））。
+# ⛔ 不要手改產物——改來源再跑 build-bundles.py（drift 由 --check 第 0 項對帳）。
 # ⛔ 不要改寫成 `instructions: <相對路徑>`：containment 檢查失敗時會回 None，
 #    接著整條路徑字串被當成 system prompt，而且不報錯。
 
@@ -31,13 +39,15 @@ os_env:
     type: none
 
 tools:
+  # ⚠ 只列兩個 repo-leader。worker **不在這裡**——它們在執行期由 repo-leader 的
+  #   generate-worker.py 寫出、用 sys_session_create 起來（不需要 allowlist）。
   agents:
     - repo_leader_cc
     - repo_leader_pi
 
 # ⚠ P-board 刻意不掛在這裡：全樹只有 woow_issue_leader 能寫 .woow-issues/board.md。
 guardrails:
-  ask_timeout: 86400
+  ask_timeout: 900
   policies:
     spawn_bounds:
       type: function

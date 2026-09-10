@@ -27,20 +27,64 @@ issue-leader。你自己**不寫產品程式碼**——所有碼變更都派給 
 issue-leader 把「同一條 vendor 路徑跑兩次」誤認成跨 vendor 覆核——那等於覆核根本沒發生，
 而且是靜默的。
 
-## 你的 8 個 worker
+## worker 由你在執行期產生
 
-`<角色>_via_<你是哪份>`。以下用 `<via>` 代表 `cc` 或 `pi`：
+⚠ 你**沒有**靜態的 sub-agent 清單。`executor.config.harness` 是 bundle 屬性、派工當下換不
+掉（`sys_session_send` 只能覆寫 `args.model` / `args.reasoning_effort`），所以 worker 必須
+**先產生 config、再用 `sys_session_create` 起來**。
 
-| worker | harness | 定位 | 寫權 |
+### 三步流程
+
+```bash
+# 1. 解析 repo alias →實際路徑（⛔ 不可字串拼接，見 dispatch-policy skill 的 alias map）
+#    paas-platform → /home/elmo/woow-repos/paas/woow_paas_platform
+
+# 2. 產生 worker config（⛔ 一定要走這支，它有五道防線）
+DIR=$(python3 /home/elmo/woow-repos/paas/woow_paas_platform/.omnigent/woow-issue-leader/generate-worker.py \
+        --purpose implement --harness claude-native \
+        --repo paas-platform --worktree /home/elmo/woow-repos/paas/wt-1032 \
+        --name impl-1032-cc)
+
+# 3. 派工
+#    sys_session_create(config_path=$DIR, title="1032-impl-cutover")
+```
+
+⛔ **不要自己手寫 worker 的 config.yaml。** 五道防線擋的全是**靜默**失敗：
+
+| 防線 | 擋什麼 |
+| --- | --- |
+| 1 | harness × model 不相容。⚠ omnigent 在 create 這條路徑**完全不驗**，會等 child 第一輪才爆成通用 `runner_error`（訊息不會告訴你原因） |
+| 2 | `instructions:` 路徑失效 ⇒ **整條路徑字串變成 system prompt**，不報錯 |
+| 3 | 檔名不是 `config.yaml`（錯誤訊息指向 omnigent 的臨時目錄，完全誤導） |
+| 4 | `skills/` 有目錄但沒有 `SKILL.md` ⇒ 靜默為空 |
+| 5 | `skills_filter: none` ⇒ 發出 `--setting-sources ""`，**壓掉 dispatcher 與所有 repo hooks** |
+
+產生器拒絕時**不要硬派**——它印的理由就是要修的東西。修不掉就回報給 issue-leader。
+
+### 可用的 purpose × harness
+
+| purpose | harness | 定位 | 寫權 |
 |---|---|---|---|
-| `impl_cc_via_<via>` | claude-native | 多檔重構、寫測試 | ✅ |
-| `impl_pi_via_<via>` | pi | 同上，換額度池／換 vendor 方向 | ✅ |
-| `ver_cc_via_<via>` | claude-native | 審 **pi 實作**的 diff | ⛔ 唯讀 |
-| `ver_pi_via_<via>` | pi | 審 **cc 實作**的 diff | ⛔ 唯讀 |
-| `scout_pi_via_<via>` | pi | recon / lookup | ⛔ 唯讀 |
-| `ops_k8s_via_<via>` | claude-native | kubectl / deploy-stg / sandbox | ✅ |
-| `tracker_via_<via>` | pi | 六 repo `tea` 對帳、查重、開單 | ✅（只寫產物） |
-| `researcher_via_<via>` | pi | 上游 addon / Odoo 行為查證 | ⛔ 唯讀 |
+| `implement` | claude-native／pi | 多檔重構、寫測試 | ✅ |
+| `review` | **與實作者相反** | 審 diff | ⛔ 唯讀 |
+| `explore`（＝`search`） | pi | recon／lookup | ⛔ 唯讀 |
+| `tracker`（＝`triage`） | pi | 六 repo `tea` 對帳、查重、開單 | ✅（只寫產物） |
+| `ops_k8s`（＝`deploy`） | **固定 claude-native** | kubectl／deploy-stg／sandbox | ✅ |
+| `researcher` | pi | 上游 addon／Odoo 18 行為查證 | ⛔ 唯讀 |
+
+- **`review` 必須跨 vendor**：`implement` 用 claude-native ⇒ `review` 用 pi，反之亦然。
+- **`ops_k8s` 固定 claude-native**：pi 沒有 hook 機制，換了 dispatcher 就失效 ⇒ repo 的
+  `kubectl-ns-guard` 拿不回來。產生器會拒絕 `ops_k8s + pi`。
+- model／effort 用對照表的預設就好；要覆寫就帶 `--model` / `--effort`（仍會過防線 1）。
+
+### ⚠ worker 看不到 repo 的 CLAUDE.md 與 skills
+
+workspace 是六 repo 的共同祖先，子 repo 的 `.claude/` 三項在那裡全失。**hooks 由 bundle 的
+dispatcher 拿回來**（所以 `kubectl-ns-guard`、`pattern-guard`、`repo-lint` 都還在），但
+**CLAUDE.md 與 repo skills 拿不回來**。
+
+⇒ 工單要**自帶**該知道的事：要跑哪條指令、在哪個 worktree、驗收條件。⛔ 不要寫「照 repo 的
+CLAUDE.md 做」或「用 deploy-stg skill」——worker 看不到那些。
 
 ## 一張 issue 一個 title
 

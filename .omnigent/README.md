@@ -3,156 +3,226 @@
 woow 六個 repo 的 issue／實作編制。**本檔是給維護者看的**，不進任何 agent 的 prompt。
 
 ```
-woow-issue-leader                     ← issue 層總指揮（claude-native）
-├── repo_leader_cc   (claude-native)  ← repo 層 leader，Claude 額度池
-│   └── 8 個 worker thin shell（*_via_cc）
-└── repo_leader_pi   (pi)             ← repo 層 leader，pi 額度池
-    └── 8 個 worker thin shell（*_via_pi）
+cd /home/elmo/woow-repos && omnigent run .omnigent/woow-issue-leader --server <url>
+   ↑ workspace = 六 repo 的共同祖先（不是任何單一 repo——理由見 §workspace）
+
+woow-issue-leader/          claude-native／claude-fable-5-1／xhigh／spawn: true
+├── config.yaml             產物
+├── AGENTS.md               手改
+├── hooks/                  ⭐ dispatcher：把子 repo 的 hooks 拿回來（§dispatcher）
+├── skills/                 ⚠ **必須存在**，否則不發 --plugin-dir、dispatcher 不生效
+│   ├── issue-triage/  pr-merge-gate/  board-reconcile/
+│   └── dispatch-policy/    對照表與 alias map 的使用規則
+├── _templates/             ⭐ 產生器的模板來源（8 份 worker prompt ＋ skills）
+├── generate-worker.py      ⭐ 執行期產生器（五道防線，§產生器）
+└── agents/
+    ├── repo_leader_cc/     claude-native／claude-fable-5-1／xhigh／spawn: true
+    └── repo_leader_pi/     pi／gpt-6-astra／xhigh／spawn: true
+        （⚠ 底下**沒有** agents/——worker 在執行期產生）
 ```
 
-**16 個 thin shell = 8 個 worker 角色 × 2 個 repo_leader**。prompt 與 skill 的**單一來源**
-在 `_workers/<worker>/`（8 份）與 `_shared/repo_leader/`（1 份，靠「harness 自辨」段落服務
-兩份 repo_leader）；`build-bundles.py` 把它們**複製**成每個 thin shell 自己的實體檔。
+## 🔴 worker 是執行期產生的，不是靜態 sub-agent
 
-<!-- retired-ok:start 這兩句是現行規則「禁止 symlink」，規則必須能說出它禁止什麼 -->
-⛔ **版控裡一條 symlink 都不能有**，也⛔ **不要手改任何副本**——改來源再重跑產生器。
-理由與歷史見 §已廢止的設計；drift 由 `--check` 第 0 項逐檔比對內容。
+這是本架構的核心決定。原因是實測出來的硬限制：
+
+> **`executor.config.harness` 是 bundle 屬性，派工當下換不掉。**
+> `sys_session_send` 只能覆寫 `args.model` / `args.reasoning_effort`，harness 不在其中。
+
+而需求是「harness 由 issue-leader 的判斷決定」（同一個 purpose 可能要 claude-native 或 pi，
+視額度池與跨 vendor 覆核方向而定）⇒ 靜態 bundle 做不到，只有**執行期產生 config** 做得到。
+
+`sys_session_create(config_path=<dir>)` 實測可行，而且：
+
+| 實測結果 | 意義 |
+| --- | --- |
+| 動態 config 的 harness / model / `guardrails.policies` / `spawn` 全部生效 | 守線不會因為動態而變弱 |
+| **不需要**在父層列靜態 allowlist | 不再需要為每個組合預先宣告 |
+| 可遞迴再生下一層 | worker 自己也能再派工（若給 `spawn: true`） |
+<!-- retired-ok:start 這一列在說明新架構為何免疫兩個已廢止設計的問題，必須點名它們 -->
+| 產出都是實體檔 | 天然免疫 symlink 與副本 drift 兩個舊問題（見 §已廢止的設計） |
 <!-- retired-ok:end -->
 
-## 目錄
+派工流程（repo-leader 做）：
 
-| 路徑 | 內容 | 誰維護 |
-| --- | --- | --- |
-| `_workers/<worker>/AGENTS.md` | 8 份 worker prompt（**實體**） | 手改 |
-| `_workers/<worker>/skills/<skill>/SKILL.md` | 8 份 worker skill（**實體**） | 手改 |
-| `_shared/repo_leader/AGENTS.md` | repo_leader 共用 prompt（**實體**） | 手改 |
-| `woow-issue-leader/AGENTS.md` ＋ `skills/` | issue-leader 的 prompt 與 3 個 skill | 手改 |
-| **所有 `config.yaml`** | 19 份（1 leader ＋ 2 repo_leader ＋ 16 thin shell） | ⛔ **產物，勿手改** |
-| thin shell 與 repo_leader 的 `AGENTS.md` ＋ `skills/` | 18 份 `AGENTS.md` ＋ 16 份 `skills/` 的**實體副本** | ⛔ **產物，勿手改**（drift 由 `--check` 第 0 項對帳） |
-| `build-bundles.py` | 產生器 ＋ 驗收（`--check` 12 項） | 手改 |
-| `mutation-tests.sh` | 突變測試：證明驗收**紅在對的地方**（baseline ＋ 18 個 case，每個帶失敗指紋） | 手改 |
-| `config.yaml`（根目錄那一份） | Omnigent CLI 的 **專案層預設**（`omnigent config`，untracked，機器本地） | 不屬本 bundle |
+```bash
+DIR=$(python3 <paas-platform>/.omnigent/woow-issue-leader/generate-worker.py \
+        --purpose implement --harness claude-native --repo paas-platform \
+        --worktree /home/elmo/woow-repos/paas/wt-1032 --name impl-1032-cc)
+# → sys_session_create(config_path=$DIR, title="1032-impl-cutover")
+```
 
 ## 用法
 
 ```bash
-python3 .omnigent/build-bundles.py           # 重產所有 config.yaml 與實體副本
-python3 .omnigent/build-bundles.py --check   # 驗收（產物不同步也會判 FAIL）
-bash .omnigent/mutation-tests.sh             # 突變測試（可帶 case 代號只跑一個，如 `K`）
+python3 .omnigent/build-bundles.py           # 重產三份靜態 config ＋ repo-leader 的副本
+python3 .omnigent/build-bundles.py --check   # 驗收 15 項（含產生器自檢與 dispatcher 端到端）
+python3 .omnigent/woow-issue-leader/generate-worker.py --self-check   # 只驗產生器
+python3 .omnigent/test-dispatcher.py         # 只驗 dispatcher（fixture repo，零副作用）
+bash .omnigent/mutation-tests.sh [case 代號]  # 突變測試（每個 case 斷言「紅在哪」）
 ```
 
-改了 `build-bundles.py` **一定要重跑一次不帶參數的版本**再 commit，否則 `--check` 的第 0
-項會紅。
+| 路徑 | 內容 | 誰維護 |
+| --- | --- | --- |
+| `_templates/<role>/AGENTS.md` ＋ `skills/` | 8 份 worker prompt／skill（**產生器的來源**） | 手改 |
+| `_shared/repo_leader/AGENTS.md` | repo-leader 共用 prompt | 手改 |
+| `woow-issue-leader/AGENTS.md` ＋ `skills/` | issue-leader 的 prompt 與 4 個 skill | 手改 |
+| `generate-worker.py` | 執行期產生器 ＋ 對照表 ＋ **7 支 CEL 與所有 policy 片段** | 手改 |
+| `hooks/dispatch-hook.py` ＋ `hooks.json` | dispatcher | 手改 |
+| `build-bundles.py` | 三份靜態 config 的產生器 ＋ 15 項驗收 | 手改 |
+| **三份 `config.yaml`** ＋ repo-leader 的 `AGENTS.md`／`skills/`／`hooks/` | 產物 | ⛔ **勿手改**（drift 由第 0 項對帳） |
 
-啟動一輪工（一張 issue 一個 runner，workspace 就是該 issue 的 worktree）：
+⚠ **CEL 與 policy 片段住在 `generate-worker.py`，不在 `build-bundles.py`。** 因為產生器要在
+**執行期**跑（repo-leader 派工前呼叫它），而 `build-bundles.py` 不在 bundle 內、執行期拿不到。
+真相放在執行期拿得到的那一邊，`build-bundles.py` import 過來用 ⇒ 只有一份。
+
+## workspace：為什麼一定要抬到共同祖先
 
 ```bash
-# ⚠ 這三行在 **launch host 的 shell** 裡跑，是「建 runner 之前」的準備動作。
-#   它們**不是**在任何 agent session 裡跑的——implementer 身上的
-#   block_working_dir_changes 會 DENY `cd` / `git -C` / `git worktree`，那是刻意的，
-#   worktree 的建立與銷毀屬於人／launch host，不屬於 worker。
-git -C <repo> worktree add ../wt-<issue-id> -b <type>/<issue-id> origin/<整合分支>
-cd ../wt-<issue-id>
-
-omnigent run .omnigent/woow-issue-leader --server <url>
+cd /home/elmo/woow-repos && omnigent run .omnigent/woow-issue-leader --server <url>
 ```
 
-⚠ 這條指令在舊佈局下是壞的（見 §啟動 的歷史小節），現在可以直接用。
-**不要**再加任何 launcher 包裝。
+⚠ **不能**在單一 repo 內啟動：**top-level session 之間不能互相 `sys_session_send`**，
+跨 repo 統籌只有「同一棵樹」這個形狀成立。
 
-## 啟動
+代價（實測）：**子 repo 的 `.claude/` 三項全失**。
 
-```bash
-cd <該 issue 的 worktree>
-omnigent run .omnigent/woow-issue-leader --server <url>
-```
+| 失去的 | 能不能拿回來 |
+| --- | --- |
+| **hooks** | ✅ **能**——`hooks/dispatch-hook.py`（§dispatcher） |
+| **CLAUDE.md** | ❌ 拿不回來（見下方 `--add-dir` 評估）⇒ 關鍵守線知識已寫進各 worker 的 prompt |
+| **skills** | ❌ 拿不回來 ⇒ worker 要用 shell 直接跑對應 script，或回報給上層 |
 
-就這樣，沒有 launcher、沒有包裝 script。
+⚠ on-demand 注入**只綁 `Read` 工具** ⇒ 用 `cat` / `grep` 連那點補償都沒有。
 
-⚠ **`cd` 到哪裡啟動就決定了整個 session 的檔案邊界**——runner 用啟動時的 shell cwd 當
-`sys_os_*` 的 containment 錨點，bundle 裡的 `os_env.cwd` 寫什麼都不生效（見下節）。
-⇒ 一張 issue 一個 runner，站在那張 issue 的 worktree 裡啟動。
+### ⛔ `--add-dir` ＋ `CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD=1` 不可行（已查證）
 
-上傳前想先自檢就跑 `python3 .omnigent/build-bundles.py --check`——第 10 項會拿 server 端
-真正用的那兩個函式（`cli._bundle` ＋ `server.bundles.validate_agent_bundle`）模擬一次上傳。
+這兩者同時給才能把 CLAUDE.md 與 skills 疊加回來，但 omnigent 給不了：
 
-### ⚠ 為什麼原本的驗收沒抓到上傳路徑的問題
+- 能透傳 CLI flag 的只有 `harness.<canonical>.args`（config 層），而
+  `resolve_harness_args` **只有 `cli.py` 一個呼叫點**——即**只影響 CLI 直接啟動的 harness**。
+- **sub-agent / `sys_session_create` 路徑完全不經過它**；`executor.config` 能帶進
+  `terminal_launch_args` 的只有 `permission_mode` 與 `yolo` 兩個欄位，沒有任意 args 透傳。
 
-原本驗的是「原始樹 parse/validate」＋「materialize 後的樹 parse/validate」，兩者都綠。
-但 `materialize_bundle()` **在實際啟動路徑上根本不會被呼叫**（只有 source 是單檔 YAML 或
-`omnigent server --agent` preregister 時才觸發）⇒ 驗的是一條**不存在於實際流程**的路。
+⇒ 單給環境變數無效（缺 `--add-dir`）。**損失就是 CLAUDE.md 與 repo skills**，補償是
+dispatcher 把**機器強制那一層**（hooks）完整拿回來，以及把關鍵知識寫進 prompt。
 
-教訓：驗收要對著**實際會跑的那條 code path**，不是對著一個語意相近的 API。現在第 10 項
-直接 import `cli._bundle` ＋ `server.bundles.validate_agent_bundle`，跟 server 收到的是
-同一份 bytes。
+## dispatcher
 
-## 🔴 `os_env.cwd` 寫什麼都不生效——但寫絕對路徑會出事
+`hooks/dispatch-hook.py` 讀 PreToolUse／PostToolUse 的 payload，判斷指令落在哪些子 repo，
+**轉呼叫那些 repo 自己註冊的 hook command**，原樣傳遞 stdout／stderr／exit code。
 
-這是本 bundle 最容易被誤解的一點，兩件事要分清楚：
+repo 實際註冊的 4 支（dispatcher 兩種事件都要支援）：
 
-**1. 正常 runner 路徑下，spec 裡的 `cwd` 根本不生效。**
-runner 一律用 `OMNIGENT_RUNNER_WORKSPACE` 覆寫它——
-`runner/tool_dispatch.py::_resolve_os_env_spec`（約 6247-6259 行）：
-「Runner workspace is authoritative — overrides whatever the spec declared
-(relative or absolute)」。覆寫發生在 `OSEnvironment` 建立**之前**，所以 harness 的實際
-cwd **與** `sys_os_*` 的 containment 錨點**兩者都**以 workspace 為準。
+| 事件 | matcher | hook |
+| --- | --- | --- |
+| PreToolUse | `Edit\|Write\|MultiEdit\|NotebookEdit` | `pattern-guard.py` |
+| PreToolUse | `Bash` | `kubectl-ns-guard.py` |
+| PostToolUse | `Edit\|Write\|MultiEdit\|NotebookEdit` | `repo-lint.py --hook` |
+| PostToolUse | `Edit\|Write\|MultiEdit\|NotebookEdit` | `memory-links-guard.py` |
 
-⇒ **實際錨點 = 啟動 `omnigent run` 時的 shell cwd**（本 bundle 的用法就是那個 worktree）。
-⇒ 想讓跨 repo 唯讀落在邊界內，**不能**靠在 spec 寫父目錄，要靠**啟動時站在哪裡**。
+### ⛔ 為什麼不改寫成 CEL policy
 
-**2. 沒有 workspace 的 runner 上，絕對 `cwd` 會生效——而且那是已登錄的漏洞面。**
-`server/bundles.py::_cwd_escapes_workspace`（約 58-70 行）：絕對或含 `..` 的 cwd
-「on a runner without `OMNIGENT_RUNNER_WORKSPACE` it becomes the agent environment root
-and copytree source, exposing the host filesystem」（**GHSA-p8rw-8qj3-hf33**）。
-所以 deployed（multi-user）server 以 `enforce_handler_allowlist=True` 直接**拒收整個
-bundle**（約 140-152 行）。
+把 `kubectl-ns-guard` 的 namespace 白名單搬進 CEL，它會變成**第四份副本**，而且不在
+repo-lint `kubectl-ns-whitelist-sync` 的對帳範圍內 ⇒ 必然漂移。dispatcher 跑的是 repo 裡
+**原封不動**那一支，真相只有一個來源。
 
-⇒ 結論：絕對路徑在「有 workspace」時**無效**、在「沒有 workspace」時**危險**、上 deployed
-server 時**被拒**。三種情況沒有一種是好的 ⇒ **一律寫 `.`**。驗收第 11 項機器強制。
+### 三個接線前提（缺一個就完全不生效，驗收第 15 項機器強制）
 
-⚠ 本 repo 的檢查比 server **更嚴**：`server/bundles.py` 只看 **root spec** 的 cwd（不遞迴
-sub-agent），所以只有 sub-agent 寫絕對路徑時 server 不會拒——但曝光面還在。第 11 項掃全樹。
+1. **同層必須有 `skills/`**——否則不發 `--plugin-dir`，`hooks.json` 根本不被讀取
+   （`inner/bundle_skills.py`）。
+2. **command 不可靠 shebang**——bundle 打包會掉 exec bit（755 → 644）⇒ 一律寫
+   `python3 "${CLAUDE_PLUGIN_ROOT}/hooks/dispatch-hook.py"`。
+3. **轉呼叫時要把 `CLAUDE_PROJECT_DIR` 覆寫成該 repo 根**——repo 的 hook command 都寫
+   `"$CLAUDE_PROJECT_DIR/.claude/hooks/x.py"`，不覆寫就找不到檔。
 
-## ⛔ 七條會靜默壞掉的規則
+### 兩種 block 協定都要能過
 
-全部實測過，違反時 **`validate()` 不會紅**。
+- `kubectl-ns-guard` 走 **stdout JSON**（`permissionDecision: deny`），exit code 是 **0**
+  ⇒ dispatcher 必須偵測 stdout 並**短路**，否則後面的 hook 會再吐一份 JSON，兩份混在
+  stdout 上 claude 解析不了。
+- 其餘三支走 **exit 2**。
 
-⚠ 這份清單**只列現行仍成立的規則**。因設計變更而不再成立的，移到 §已廢止的設計 ——
-**過時的警告與錯的警告一樣危險**，不留在這裡。
+### pi 拿不回來
 
-1. **prompt 只能用同目錄的 `AGENTS.md` 實體檔承載。** ⛔ 不要改寫成
-   `instructions: <相對路徑>`：`_read_contained_file` 的 containment 檢查失敗時回 `None`，
-   接著**整條路徑字串被當成 system prompt**，而且不報錯。→ 驗收第 3 項擋
-   （它斷言 `instructions` 非空、含 marker、且不長得像路徑字串）。
-<!-- retired-ok:start 本條規則就是「禁止 symlink」，必須能說出禁止的對象與量級 -->
-2. **版控裡一條 symlink 都不能有。** `omnigent run <目錄>` 的打包器不解 symlink：
-   symlink **目錄**會被 `rglob` 跳過 ⇒ 整批 skills **靜默**消失（實測量級：tar 內 SKILL.md
-   從 19 筆掉到 3 筆，而 `validate` 照樣回 valid、`skills` 變 `[]`）。
-   ⇒ 全樹改用實體副本。→ 驗收第 7（工作目錄）／12（git index）項擋。
-   ⛔ 不要為了「少一點重複」把它加回來；副本是產物，drift 由第 0 項對帳。
-   詳細機制見 §已廢止的設計。
-<!-- retired-ok:end -->
-3. **每個 thin shell 都要列進上層 `tools.agents`。** 這是「sub-agent 沒被發現」的安全網：
-   引用不存在的 sub-agent 會 **loud fail**，把靜默消失變成明確錯誤。→ 驗收第 6 項擋。
-4. **`tools.agents` 列的是 YAML `name`，不是資料夾名。** `name` 省略時是 `None`、不會
-   fallback 成目錄名 ⇒ 那個 sub-agent 永遠無法被引用。本樹刻意讓兩者相同，直接填掉這個坑。
-5. **skill name 一律取自 frontmatter（目錄名被忽略），正則 `^[a-z0-9-]+$`（不允許底
-   線），而且來源池必須全域唯一**（`discover_host_skills` first-wins 去重會吃掉同名後
-   者）——所以每個 skill 都加了 worker 前綴。→ 驗收第 5b 項擋（讀 frontmatter，不是目錄名）。
-6. **`skills:` 一律固定 `all`。** 名單模式在 claude-native 下形同 `all`、不強制；在 pi
-   下卻會下 `--no-skills` **把 host skill 一併關掉**——跨 harness 行為相反。
+`pi --help | grep -ci hook` = **0**，pi 沒有 hook 機制 ⇒ **`ops_k8s` 固定 claude-native**
+（產生器會直接拒絕 `ops_k8s + pi`），`repo_leader_pi` 不配 `hooks/`。
+
+## 產生器的五道防線
+
+⛔ 任一道不過就 **fail loud 並拒絕輸出路徑**——寧可不派工，也不要派一個會在第一輪才爆、
+或守線靜默失效的 worker。
+
+| # | 防的東西 | 做法 |
+| --- | --- | --- |
+| 1 | `executor.model` 與 harness 不相容 | **寫檔前**呼叫 `model_override.model_family_mismatch()`。⚠ 實測這條路徑 omnigent **完全不驗**（家族檢查只掛在 `sys_session_send` 的 `args.model`），create 會成功，等 child 第一輪才爆成通用 `runner_error` |
+| 2 | `instructions:` 路徑失效 → **路徑字串變成 system prompt** | 只寫實體 `AGENTS.md`；寫完 `parse()` 驗 instructions 非空、含 marker、不像路徑字串 |
+| 3 | 檔名不是 `config.yaml` | 硬編檔名。⚠ 實測錯誤訊息是 `config.yaml not found in /tmp/tmpXXXX/agent`，完全誤導 |
+| 4 | `skills/` 有目錄無 `SKILL.md` → 靜默空 | 產生後驗 skills 數 == 模板預期數 |
+| 5 | ⛔ `skills_filter` 設 `none` | 它會發 `--setting-sources ""`，**壓掉 dispatcher 與所有 repo hooks** ⇒ 一律固定 `all` |
+
+## 對照表
+
+真相在 `generate-worker.py` 的 `ROSTER`；給人看的摘要在 `skills/dispatch-policy/SKILL.md`。
+硬規則：claude 家族只吃 id 含 `claude` 的 model（`opus`／`sonnet`／`fable` 等 CLI alias 一律
+被防線 1 擋下）；effort 只用 `high`／`xhigh`（`ultra` 只有 pi 原生支援，claude 上**靜默降級**）。
+
+## ⛔ 十條會靜默壞掉的規則
+
+全部實測過，違反時**不會有錯誤訊息**——有些連 `validate()` 都是綠的。
+
+⚠ 這份清單**只列現行仍成立的規則**。因架構變更而不再成立的，移到 §已廢止的設計 ——
+**過時的警告與錯的警告一樣危險**。
+
+### 產生 config 時
+
+1. **`executor.config.harness` 是 bundle 屬性，派工當下換不掉。** `sys_session_send` 只能
+   覆寫 `args.model` / `args.reasoning_effort`。寫了別的覆寫不會報錯，**只是沒效果**。
+   ⇒ 要換 harness 只有「產生 config ＋ `sys_session_create`」這條路。這就是本架構的起點。
+2. 🔴 **`sys_session_create(config_path=…)` 這條路徑完全不驗 harness × model 家族相容性。**
+   家族檢查只掛在 `sys_session_send` 的 `args.model`。create 會**成功**，等 child 第一輪才爆
+   成通用 `runner_error`（訊息不會告訴你是 model 不相容）。
+   ⇒ 產生器防線 1 在**寫檔前**自己驗。→ 驗收第 4 項擋（突變 V 實證）。
+3. **prompt 只能用同目錄的 `AGENTS.md` 實體檔承載。** ⛔ 不要改寫成
+   `instructions: <相對路徑>`：containment 檢查失敗時回 `None`，接著**整條路徑字串被當成
+   system prompt**，不報錯。→ 產生器防線 2 ＋ 驗收第 3 項擋。
+4. **檔名必須恰好是 `config.yaml`。** ⚠ 寫錯的錯誤訊息是
+   `config.yaml not found in /tmp/tmpXXXX/agent`——路徑指向 omnigent 的臨時解壓目錄，
+   完全看不出是你寫錯檔名。→ 產生器防線 3。
+5. **`skills/` 有目錄但沒有 `SKILL.md` ⇒ 靜默為空。** `validate()` 不會紅。
+   → 產生器防線 4 ＋ 驗收第 4 項。
+6. 🔴 **`skills:` 一律固定 `all`，⛔ 絕不可設 `none`。** `none` 發出
+   `--setting-sources ""`（`inner/bundle_skills.py`），把 settings sources 整個關掉——
+   bundle skills 還在（走 `--plugin-dir`）所以**看起來正常**，但 repo 的 `kubectl-ns-guard`
+   / `pattern-guard` / `repo-lint` 全部不再觸發。名單模式在 claude-native 下形同 `all`、
+   在 pi 下卻等於 `none` ⇒ 跨 harness 行為相反。→ 產生器防線 5（突變 U 實證）。
 7. **`os_env.cwd` 寫什麼都不生效，但寫絕對路徑會讓 deployed server 拒收整個 bundle。**
-   runner 一律用 `OMNIGENT_RUNNER_WORKSPACE` 覆寫它，harness 的實際 cwd 與 `sys_os_*` 的
-   containment 錨點**兩者都**不看 spec；而絕對路徑在沒有 workspace 的 runner 上會變成
-   agent environment root 與 copytree source（**GHSA-p8rw-8qj3-hf33**）。
-   ⇒ **一律寫 `.`**。→ 驗收第 11 項擋。容易誤解成「寫父目錄就能擴大 containment 範圍」，
-   ⛔ 不能——實際錨點是啟動 `omnigent run` 時的 shell cwd。完整說明見 §`os_env.cwd`。
+   runner 一律用 `OMNIGENT_RUNNER_WORKSPACE` 覆寫它（harness 實際 cwd **與** `sys_os_*` 的
+   containment 錨點兩者都不看 spec）；絕對路徑在沒有 workspace 的 runner 上會變成 agent
+   environment root 與 copytree source（**GHSA-p8rw-8qj3-hf33**，high）。
+   ⇒ 一律 `.`。→ 驗收第 10／11 項擋（突變 R 實證，兩道同時紅）。
+8. **skill name 取自 frontmatter（目錄名被忽略），正則 `^[a-z0-9-]+$`（不允許底線），
+   而且模板之間必須全域唯一**（`discover_host_skills` first-wins 去重會吃掉同名後者）。
+   → 驗收第 5b 項擋。
+
+### hook／dispatcher 接線（缺一個就是整層守線靜默消失）
+
+9. 🔴 **三個接線前提，缺任一個 dispatcher 完全不生效，而且不會有任何錯誤訊息：**
+   - **同層必須有 `skills/`**——否則不發 `--plugin-dir`，`hooks.json` 根本不被讀取。
+   - **command 不可靠 shebang**——bundle 打包會掉 exec bit（755 → 644），hook 變成不可執行
+     而靜默不跑 ⇒ 一律寫 `python3 "${CLAUDE_PLUGIN_ROOT}/hooks/x.py"`。
+   - **轉呼叫時要覆寫 `CLAUDE_PROJECT_DIR` 成該 repo 根**——repo 的 hook command 都寫
+     `"$CLAUDE_PROJECT_DIR/.claude/hooks/x.py"`，不覆寫就找不到檔。
+   → 驗收第 14／15 項擋（突變 T／W／X 實證）。
+10. 🔴 **CLAUDE.md 的 on-demand 注入只綁 `Read` 工具。** 用 `cat` / `grep` 讀檔不會觸發注入
+    ⇒ 在共同祖先 workspace 下，worker 連那點補償都沒有。
+    ⇒ 關鍵守線知識必須**寫進 prompt**，⛔ 不要假設 worker 讀得到 repo 的 CLAUDE.md 或 skills。
 
 另外兩條會影響行為但不會壞掉的：
 
-- **child 不繼承 parent 的 `guardrails.policies`** ⇒ 每個 worker 自帶完整 policy。
-- **唯讀 worker 完全省略 `os_env` block**（`verifier_pi` / `scout_pi` / `researcher`）⇒
-  四支 `sys_os_*` 一支都不註冊，這是 A 類 sound 的守線。
+- **child 不繼承 parent 的 `guardrails.policies`** ⇒ 每個 worker 自帶完整 policy
+  （產生器負責，驗收第 8 項對產生器輸出也跑 CEL 雙向測試）。
+- **唯讀 worker 完全省略 `os_env` block** ⇒ 四支 `sys_os_*` 一支都不註冊，這是 A 類 sound
+  的守線。
 
 ## Guardrails
 

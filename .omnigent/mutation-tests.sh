@@ -95,179 +95,234 @@ fi
 # ── 各 case ───────────────────────────────────────────────────────────────────
 # run_mut <代號> <說明> <預期紅的項號> <預期紅的 CEL policy（選填）> <突變指令>
 #
-# ⚠ 突變一律用 python 寫（不用 sed）：sed 只能按字面定位，突變 K 的事故就是它在同一份
-#   config 命中兩處、改壞了另一支 policy。python 可以先定位 policy block 再改。
+# ⚠ 突變一律用 python 寫（不用 sed）：sed 只能按字面定位，突變 K 的歷史事故就是它在同一份
+#   config 命中兩處、改壞了另一支 policy ⇒ 紅錯地方。
+#
+# ⚠ 改 `generate-worker.py` 裡 CEL 的 case 末尾都要 `python3 build-bundles.py` 重產：
+#   第 8 項是從**已 parse 的樹**抽運算式，靜態 config 沒重產就還是舊的 CEL ⇒ 驗不到。
+#   （動態 worker 的部分會立刻反映，但 p_model／p_board 只掛在 leader 的靜態 config 上。）
 
-run_mut A "把一份 skills 實體副本換回 symlink" "7,10" "" \
+run_mut A "把 repo-leader 的 skills 副本換成 symlink" "7,10" "" \
 'python3 - <<"PY"
 import pathlib, shutil, os
-d = pathlib.Path("woow-issue-leader/agents/repo_leader_cc/agents/scout_pi_via_cc/skills")
+d = pathlib.Path("woow-issue-leader/agents/repo_leader_cc/skills")
 shutil.rmtree(d)
-os.symlink("../../../../../_workers/scout_pi/skills", d)
+os.symlink("../../skills", d)
 PY'
 
-run_mut B "thin shell 從上層 tools.agents 拿掉" "0,6" "" \
+run_mut B "issue-leader 的 tools.agents 少列一個 repo-leader" "0,6" "" \
 'python3 - <<"PY"
 import pathlib
-p = pathlib.Path("woow-issue-leader/agents/repo_leader_pi/config.yaml")
-p.write_text("\n".join(l for l in p.read_text().splitlines(keepends=False)
-                       if "- tracker_via_pi" not in l) + "\n")
+p = pathlib.Path("woow-issue-leader/config.yaml")
+p.write_text("\n".join(l for l in p.read_text().splitlines()
+                       if "- repo_leader_pi" not in l) + "\n")
 PY'
 
-run_mut C "prompt 改寫成 instructions: <相對路徑>（靜默把路徑當 prompt）" "0,3" "" \
+run_mut C "把 worker 名字加回 tools.agents（退回舊架構的徵兆）" "0,1,2,6,10" "" \
 'python3 - <<"PY"
 import pathlib
-d = pathlib.Path("woow-issue-leader/agents/repo_leader_cc/agents/ops_k8s_via_cc")
+p = pathlib.Path("woow-issue-leader/agents/repo_leader_cc/config.yaml")
+s = p.read_text().replace("spawn: true", "spawn: true\ntools:\n  agents:\n    - implement_cc", 1)
+p.write_text(s)
+PY'
+
+run_mut D "repo-leader 的 prompt 改成 instructions: <相對路徑>" "0,3" "" \
+'python3 - <<"PY"
+import pathlib
+d = pathlib.Path("woow-issue-leader/agents/repo_leader_cc")
 (d / "AGENTS.md").unlink()
 p = d / "config.yaml"
 p.write_text(p.read_text().replace(
-    "skills: all", "instructions: ../../../../_workers/ops_k8s/AGENTS.md\nskills: all", 1))
+    "skills: all", "instructions: ../../../_shared/repo_leader/AGENTS.md\nskills: all", 1))
 PY'
 
-run_mut D "agent name 重複（全樹唯一被破壞）" "0,1,2,4,10" "" \
+run_mut E "模板的 skill frontmatter name 用底線" "4,5b,8" "" \
 'python3 - <<"PY"
 import pathlib
-p = pathlib.Path("woow-issue-leader/agents/repo_leader_pi/agents/ver_pi_via_pi/config.yaml")
-p.write_text(p.read_text().replace("name: ver_pi_via_pi", "name: ver_cc_via_pi", 1))
-PY'
-
-# ⚠ 預期不含第 0 項：本突變同時改來源池與副本 ⇒ 兩邊一致、沒有 drift。
-#   含第 10 項：不合法的 skill name 連 server 端 validate 也會拒（原本漏推導）。
-run_mut E "skill frontmatter name 用底線（違反 ^[a-z0-9-]+\$）" "1,2,5b,10" "" \
-'python3 - <<"PY"
-import pathlib
-for p in pathlib.Path(".").rglob("scout-pi-recon/SKILL.md"):
+for p in pathlib.Path("woow-issue-leader/_templates").rglob("scout-pi-recon/SKILL.md"):
     p.write_text(p.read_text().replace("name: scout-pi-recon", "name: scout_pi_recon", 1))
 PY'
 
-run_mut F "內建 policy function.path 打錯字" "0,9,10" "" \
+run_mut F "內建 policy function.path 打錯字" "9" "" \
 'python3 - <<"PY"
 import pathlib
-p = pathlib.Path("woow-issue-leader/agents/repo_leader_cc/agents/ver_cc_via_cc/config.yaml")
+p = pathlib.Path("woow-issue-leader/generate-worker.py")
 p.write_text(p.read_text().replace("orchestration.read_only_os", "orchestration.read_only_oss"))
 PY'
 
-run_mut G "P-tag 拿掉 refs/tags 與 v<版號> 形態（守線變弱）" "0,8" "p_tag_no_agent_tag_push" \
+run_mut G "P-tag 拿掉 refs/tags 與 v<版號> 形態（守線變弱）" "8" "p_tag_no_agent_tag_push" \
 'python3 - <<"PY"
 import pathlib
+p = pathlib.Path("woow-issue-leader/generate-worker.py")
+s = p.read_text()
 needle = "(--tags|--follow-tags|refs/tags/|"
-for p in pathlib.Path(".").rglob("config.yaml"):
-    s = p.read_text()
-    i = s.find(needle)
-    if i == -1: continue
-    j = s.index(")", s.index("v[0-9]", i)) + 1
-    p.write_text(s[:i] + "(--tags)" + s[j:])
+i = s.index(needle)
+j = s.index(")", s.index("v[0-9]", i)) + 1
+p.write_text(s[:i] + "(--tags)" + s[j:])
+import subprocess; subprocess.run(["python3", "build-bundles.py"], check=True, capture_output=True)
 PY'
 
-run_mut H "P-model 拿掉 has() 護欄（缺欄位 → fail-OPEN）" "0,8" "p_model_fast_tier_only" \
+run_mut H "P-model 拿掉 has() 護欄（缺欄位 → fail-OPEN）" "8" "p_model_fast_tier_only" \
 'python3 - <<"PY"
 import pathlib
+p = pathlib.Path("woow-issue-leader/generate-worker.py")
+s = p.read_text()
 old = """&& !(has(event.data.arguments.args)
-                 && has(event.data.arguments.args.model)
-                 && event.data.arguments.args.model in"""
-new = """&& !(event.data.arguments.args.model in"""
-for p in pathlib.Path(".").rglob("config.yaml"):
-    s = p.read_text()
-    if old in s:
-        p.write_text(s.replace(old, new))
+     && has(event.data.arguments.args.model)
+     && event.data.arguments.args.model in"""
+assert old in s, "P-model 的 has() 護欄定位失效"
+p.write_text(s.replace(old, "&& !(event.data.arguments.args.model in", 1))
+import subprocess; subprocess.run(["python3", "build-bundles.py"], check=True, capture_output=True)
 PY'
 
-# ⚠ 刻意**同時**加到來源池與所有副本：否則第 0 項（drift）與第 4 項（skills 數不符）
-#   也會紅，焦點就從「frontmatter 同名查重」模糊掉了。這個 case 要單獨驗 5b。
-run_mut I "不同目錄、frontmatter 同名（first-wins 吞噬）" "5b" "" \
+run_mut I "模板裡不同目錄、frontmatter 同名（first-wins 吞噬）" "5b" "" \
 'python3 - <<"PY"
 import pathlib
 body = ("---\nname: researcher-upstream-addon\n"
         "description: 故意與 researcher 的 skill 同名（不同目錄）\n---\n\nx\n")
-roots = [pathlib.Path("_workers/scout_pi/skills")]
-roots += [q for q in pathlib.Path(".").rglob("scout_pi_via_*/skills")]
-for r in roots:
-    d = r / "another-dir"
-    d.mkdir(parents=True, exist_ok=True)
-    (d / "SKILL.md").write_text(body)
+d = pathlib.Path("woow-issue-leader/_templates/scout_pi/skills/another-dir")
+d.mkdir(parents=True, exist_ok=True)
+(d / "SKILL.md").write_text(body)
 PY'
 
-run_mut J "P-approve 退回「且匹配工具名」的連言（覆核者的繞過復活）" "0,8" "p_approve_no_agent_signoff" \
+run_mut J "P-approve 退回「且匹配工具名」的連言" "8" "p_approve_no_agent_signoff" \
 'python3 - <<"PY"
 import pathlib
+p = pathlib.Path("woow-issue-leader/generate-worker.py")
+s = p.read_text()
 old = chr(38)*2 + """ event.data.arguments.command.matches("/approve")"""
-new = old + "\n            " + old.lstrip()
-for p in pathlib.Path(".").rglob("config.yaml"):
-    s = p.read_text()
-    if old in s:
-        p.write_text(s.replace(old, old + "\n            " + chr(38)*2
-                               + """ event.data.arguments.command.matches("\\\\btea\\\\b")""", 1))
+assert old in s
+p.write_text(s.replace(old, old + "\n" + chr(38)*2
+                       + """ event.data.arguments.command.matches("\\\\btea\\\\b")""", 1))
+import subprocess; subprocess.run(["python3", "build-bundles.py"], check=True, capture_output=True)
 PY'
 
-run_mut K "P-kubectl 拿掉串接偵測（精準定位該 policy block）" "0,8" "p_kubectl_namespace_scope" \
+run_mut K "P-kubectl 拿掉串接偵測（精準定位該 policy block）" "8" "p_kubectl_namespace_scope" \
 'python3 - <<"PY"
-import pathlib
-# ⚠ 先定位 p_kubectl_namespace_scope 的 YAML block 再改——SHELL_CHAIN_RE 同時被
-#   p_board_read_only 用到，按字面找第一個命中會改壞 board policy（歷史事故）。
-needle = """event.data.arguments.command.matches("(""" + chr(38)*2 + "|"
-for p in pathlib.Path(".").rglob("config.yaml"):
-    s = p.read_text()
-    i = s.find("p_kubectl_namespace_scope:")
-    if i == -1: continue
-    j = s.find("\n    p_", i + 1)
-    if j == -1: j = len(s)
-    block = s[i:j]
-    k = block.find(needle)
-    if k == -1: continue
-    end = block.index("\n", k)
-    block = block[:k] + """event.data.arguments.command.matches("(?!x)x")""" + block[end:]
-    p.write_text(s[:i] + block + s[j:])
+import pathlib, subprocess
+# ⚠ SHELL_CHAIN_RE 同時被 p_board_read_only 用到 ⇒ 不能改它的定義。
+#   kubectl 那一行是 `|| event…`，board 那一行是 `&& !event…` ⇒ 用前綴唯一定位。
+p = pathlib.Path("woow-issue-leader/generate-worker.py")
+s = p.read_text()
+q = chr(34)
+needle = "|| event.data.arguments.command.matches(" + q + "{SHELL_CHAIN_RE}" + q + ")"
+assert needle in s, "kubectl 的串接偵測行定位失效"
+repl = "|| event.data.arguments.command.matches(" + q + "(?!x)x" + q + ")"
+p.write_text(s.replace(needle, repl, 1))
+subprocess.run(["python3", "build-bundles.py"], check=True, capture_output=True)
 PY'
+
+
 
 run_mut L "config.yaml 手改壞（YAML 語法錯）" "0,1" "" \
 'python3 - <<"PY"
 import pathlib
-p = pathlib.Path("woow-issue-leader/agents/repo_leader_cc/agents/ops_k8s_via_cc/config.yaml")
+p = pathlib.Path("woow-issue-leader/agents/repo_leader_cc/config.yaml")
 p.write_text(p.read_text() + "\nblast_radius:\n  bad: [\n")
 PY'
 
-run_mut M "一支 CEL 編譯失敗（是否遮蔽其餘運算式與向量）" "0,8" "p_approve_no_agent_signoff" \
+run_mut M "一支 CEL 編譯失敗（是否遮蔽其餘運算式與向量）" "8" "p_approve_no_agent_signoff" \
 'python3 - <<"PY"
 import pathlib
+p = pathlib.Path("woow-issue-leader/generate-worker.py")
+s = p.read_text()
 old = """event.data.arguments.command.matches("/approve")"""
-for p in pathlib.Path(".").rglob("config.yaml"):
-    s = p.read_text()
-    if "p_approve_no_agent_signoff" in s and old in s:
-        p.write_text(s.replace(old, old[:-1], 1))   # 少一個右括號 → compile error
+p.write_text(s.replace(old, old[:-1], 1))   # 少一個右括號 → compile error
+import subprocess; subprocess.run(["python3", "build-bundles.py"], check=True, capture_output=True)
 PY'
 
-# ⚠ chmod 的是**副本**不是來源池：parse 讀的是 thin shell 裡的副本，改來源池的權限
-#   第 1 項不會紅（這是 symlink 時代留下的錯誤假設，FIX ROUND 5 修正）。
-#   驗的是「讀檔失敗被 r.guard 轉成 FAIL，不是 traceback 中斷整輪」。
-run_mut N "SKILL.md 讀不到（驗例外被轉成 FAIL 而非中斷整輪）" "0,1" "" \
-'chmod 000 woow-issue-leader/agents/repo_leader_cc/agents/tracker_via_cc/skills/tracker-cross-repo-tea/SKILL.md'
+run_mut N "模板的 SKILL.md 讀不到（驗例外被轉成 FAIL 而非中斷整輪）" "2,4,5b,8,10,13" "" \
+'chmod 000 woow-issue-leader/_templates/tracker/skills/tracker-cross-repo-tea/SKILL.md'
 
-run_mut O "P-kubectl context 判斷退回不認引號（FIX ROUND 3 的回歸）" "0,8" "p_kubectl_namespace_scope" \
+run_mut O "P-kubectl context 判斷退回不認引號" "8" "p_kubectl_namespace_scope" \
 'python3 - <<"PY"
-import pathlib
-for p in pathlib.Path(".").rglob("config.yaml"):
-    s = p.read_text()
-    if "docker-desktop" not in s: continue
-    p.write_text(s.replace("""--context(=|\\\\s+)[\\"\x27]?docker-desktop""",
-                           "--context[=\\\\s]+docker-desktop"))
+import pathlib, subprocess
+# _CTX 的 ["\x27]? 是「容許引號」那一段；拿掉它就退回 FIX ROUND 3 之前的行為。
+p = pathlib.Path("woow-issue-leader/generate-worker.py")
+s = p.read_text()
+old = "[" + chr(92) + chr(34) + chr(39) + "]?"
+assert old in s, "_CTX 的引號容許段定位失效"
+p.write_text(s.replace(old, "", 1))
+subprocess.run(["python3", "build-bundles.py"], check=True, capture_output=True)
 PY'
 
-run_mut Q "手改一份產生出來的 AGENTS.md 副本（實體副本方案的唯一守線）" "0" "" \
+
+run_mut Q "手改 repo-leader 的 AGENTS.md 副本（產物 drift）" "0" "" \
 'python3 - <<"PY"
 import pathlib
-p = pathlib.Path("woow-issue-leader/agents/repo_leader_cc/agents/impl_cc_via_cc/AGENTS.md")
+p = pathlib.Path("woow-issue-leader/agents/repo_leader_cc/AGENTS.md")
 p.write_text(p.read_text() + "\n手改的內容，來源池沒有這一行\n")
 PY'
 
-run_mut R "把 os_env.cwd 改回絕對路徑（deployed server 會拒收）" "0,11" "" \
+# ⚠ 第 10 項也紅是對的：絕對 cwd 會讓 deployed server（enforce=True）拒收整個 bundle
+#   ⇒ 這件事同時被兩道檢查守住（第 10 項模擬上傳、第 11 項掃全樹）。
+run_mut R "把 os_env.cwd 改回絕對路徑（deployed server 會拒收）" "10,11" "" \
 'python3 - <<"PY"
-import pathlib
-p = pathlib.Path("woow-issue-leader/agents/repo_leader_cc/agents/impl_cc_via_cc/config.yaml")
+import pathlib, subprocess
+p = pathlib.Path("woow-issue-leader/generate-worker.py")
 p.write_text(p.read_text().replace("  cwd: .", "  cwd: /home/elmo/woow-repos", 1))
+subprocess.run(["python3", "build-bundles.py"], check=True, capture_output=True)
 PY'
 
-run_mut S "刪掉一份 skills 副本（整批 skills 消失的量級縮小版）" "0,4" "" \
-'rm -rf woow-issue-leader/agents/repo_leader_pi/agents/tracker_via_pi/skills'
+
+run_mut S "刪掉一份模板的 skills（整批 skills 消失）" "4,8" "" \
+'rm -rf woow-issue-leader/_templates/tracker/skills'
+
+# ── 本輪新增（§八 要求）────────────────────────────────────────────────────────
+
+run_mut T "hooks.json 改成靠 shebang（bundle 打包會掉 exec bit）" "15" "" \
+'python3 - <<"PY"
+import pathlib, json
+for p in pathlib.Path(".").rglob("hooks/hooks.json"):
+    cfg = json.loads(p.read_text())
+    for groups in cfg["hooks"].values():
+        for g in groups:
+            for h in g["hooks"]:
+                # 拿掉 python3 前綴，改成直接執行（靠 shebang）
+                h["command"] = h["command"].replace("python3 ", "", 1)
+    p.write_text(json.dumps(cfg, indent=2))
+PY'
+
+run_mut U "worker config 設 skills_filter: none（壓掉 dispatcher 與所有 repo hooks）" "4,8" "" \
+'python3 - <<"PY"
+import pathlib
+p = pathlib.Path("woow-issue-leader/generate-worker.py")
+q = chr(34)
+p.write_text(p.read_text().replace(q + "skills: all" + q, q + "skills: none" + q, 1))
+PY'
+
+
+run_mut V "產生器拿掉防線 1（harness × model 家族檢查）" "4" "" \
+'python3 - <<"PY"
+import pathlib
+p = pathlib.Path("woow-issue-leader/generate-worker.py")
+s = p.read_text()
+old = "    _check_model_family(harness, model)      # <- DEFENCE1"
+if old not in s:
+    old = [l for l in s.splitlines() if "_check_model_family(harness, model)" in l][0]
+p.write_text(s.replace(old, "    pass  # 防線 1 被拿掉", 1))
+PY'
+
+
+run_mut W "dispatcher 不支援 PostToolUse（repo 有 2 支 PostToolUse hook）" "0,15" "" \
+'python3 - <<"PY"
+import pathlib, json
+p = pathlib.Path("woow-issue-leader/hooks/hooks.json")
+cfg = json.loads(p.read_text())
+cfg["hooks"].pop("PostToolUse")
+p.write_text(json.dumps(cfg, indent=2))
+PY'
+
+run_mut X "dispatcher 不覆寫 CLAUDE_PROJECT_DIR（repo hook 找不到檔）" "0,14" "" \
+'python3 - <<"PY"
+import pathlib
+p = pathlib.Path("woow-issue-leader/hooks/dispatch-hook.py")
+s = p.read_text()
+old = """                env[\"CLAUDE_PROJECT_DIR\"] = str(repo_root)"""
+assert old in s, "CLAUDE_PROJECT_DIR 覆寫點定位失效"
+p.write_text(s.replace(old, "                pass  # 不覆寫", 1))
+PY'
+
 
 echo
 if [ "$FAIL_N" -eq 0 ]; then

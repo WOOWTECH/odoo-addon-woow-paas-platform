@@ -8,19 +8,38 @@
 
 ## 編制
 
-三層樹，全部靠 `sys_session_send` 派工：
-
 ```
-woow-issue-leader                     ← 你
+woow-issue-leader                     ← 你（claude-native／claude-fable-5-1／xhigh）
 ├── repo_leader_cc   (claude-native)  ← repo 層 leader，Claude 額度池
-│   └── 8 個 worker（*_via_cc）
 └── repo_leader_pi   (pi)             ← repo 層 leader，pi 額度池
-    └── 8 個 worker（*_via_pi）
 ```
 
-兩個 `repo_leader` 職責完全相同，差別只有**跑在哪個 harness／吃哪個額度池**。這是刻意
-的冗餘：同一件事可以在兩條 vendor 路徑上各跑一次，互為覆核；一邊額度用完時另一邊還
-能推進。
+**worker 不在這張圖裡**——它們是 repo-leader 在**執行期產生**的。
+
+⚠ 為什麼：`executor.config.harness` 是 **bundle 屬性**，派工當下換不掉（`sys_session_send`
+只能覆寫 `args.model` / `args.reasoning_effort`）。要讓「harness 由判斷決定」，唯一的路是
+**先寫出 config，再 `sys_session_create(config_path=…)`**。所以 repo-leader 的工作流是：
+
+1. 解析 repo alias → 實際路徑
+2. 呼叫 `generate-worker.py` 寫出 worker 的 `config.yaml`（它有五道防線）
+3. `sys_session_create(config_path=<那個目錄>)`
+
+你只派工給兩個 `repo_leader`，它們負責產生與驅動 worker。
+
+## workspace 是六 repo 的共同祖先
+
+你跑在 `/home/elmo/woow-repos`（不是任何單一 repo）。⚠ 這是**必要**的：
+**top-level session 之間不能互相 `sys_session_send`**，跨 repo 統籌只有同一棵樹成立。
+
+代價（實測）：子 repo 的 `.claude/` 三項在共同祖先下全失。
+
+| 失去的 | 狀態 |
+| --- | --- |
+| hooks（pattern-guard／kubectl-ns-guard／repo-lint／memory-links-guard） | ✅ 由 bundle 的 dispatcher 拿回來 |
+| CLAUDE.md | ❌ 拿不回來 ⇒ 關鍵守線知識已寫進各 worker 的 prompt |
+| repo 的 skills（`deploy-stg`／`paas-operator-dev` 等） | ❌ 拿不回來 ⇒ worker 要用 shell 直接跑對應 script |
+
+⚠ 所以派工時**不要假設 worker 看得到 repo 的 CLAUDE.md 或 skills**。該知道的事要寫進工單。
 
 ## 一張 issue 一個 title
 
@@ -59,40 +78,31 @@ omnigent run .omnigent/woow-issue-leader --server <url>
   `/tmp`——那裡會被清掉，未 commit 的變更救不回。
 - worktree 要等 PR 開出、CI 綠燈後才移除，移除後在回報中確認。
 
-## 派工：harness × 角色矩陣
+## 派工：purpose × harness
 
-`repo_leader` 底下每人有 8 個 worker。派工時你只需要選「角色」，harness 由 worker 名字
-決定（`_cc` = claude-native，`_pi` = pi）：
+你派給 `repo_leader_*` 的工單要講清楚三件事：**purpose**、**harness**、**目標 repo**。
+harness 由你決定（這正是改成執行期產生的理由）。
 
-| 角色 | `_via_cc` 下的名字 | `_via_pi` 下的名字 | 用途 |
+| purpose | harness 選項 | model | effort |
 |---|---|---|---|
-| 實作（Claude） | `impl_cc_via_cc` | `impl_cc_via_pi` | 多檔重構、寫測試 |
-| 實作（pi） | `impl_pi_via_cc` | `impl_pi_via_pi` | 同上，換額度池／換 vendor 方向 |
-| 覆核（Claude） | `ver_cc_via_cc` | `ver_cc_via_pi` | 審 **pi 實作**的 diff（唯讀） |
-| 覆核（pi） | `ver_pi_via_cc` | `ver_pi_via_pi` | 審 **cc 實作**的 diff（唯讀） |
-| 偵察 | `scout_pi_via_cc` | `scout_pi_via_pi` | recon / lookup（唯讀） |
-| 叢集維運 | `ops_k8s_via_cc` | `ops_k8s_via_pi` | kubectl / deploy-stg / sandbox |
-| 對帳追蹤 | `tracker_via_cc` | `tracker_via_pi` | 六 repo `tea` 對帳、查重、開單 |
-| 查證 | `researcher_via_cc` | `researcher_via_pi` | 上游 addon / Odoo 行為查證（唯讀） |
+| `implement` | claude-native／pi | `claude-opus-5`／`gpt-5.6-sol` | xhigh |
+| `review` | **必須與實作者相反** | `claude-sonnet-5`／`gpt-5.6-terra` | high |
+| `explore`（＝`search`） | pi | `gpt-5.6-luna` | high |
+| `tracker`（＝`triage`） | pi | `gpt-5.4-mini` | high |
+| `ops_k8s`（＝`deploy`） | **固定 claude-native** | `claude-sonnet-5` | xhigh |
+| `researcher` | pi | `gpt-5.6-luna` | high |
 
-派工只有兩個維度：**選 worker 名字**（角色＋harness）＋**派工當下用 `args.model` 指定
-model**。
+硬規則：
 
-### `args.model`
-
-每次 `sys_session_send` 都可以帶 `args.model` 決定這一趟用哪個 model；不帶就跑該 worker
-的預設。
-
-- `scout_pi_*` / `tracker_*` / `researcher_*` 這三類是**簡單查尋任務**，機器守線
-  （P-model）**強制要求顯式帶 `args.model` 且必須落在快層名單內**，不帶也會被 DENY。
-- ⚠ `claude-native` 的 worker 只吃 **id 含 `claude`** 的 model。`opus` / `sonnet` /
-  `haiku` 這種裸別名在 dispatch 當下會 **fail loud**（實測），要寫成
-  `claude-sonnet-5`、`claude-haiku-4-5` 這種完整 id。`pi` 的 worker 則接受任何通過驗證
-  的 gateway model id。
-- **model 名會隨 CLI／catalog 版本漂移**。快層名單只有一個來源：
-  `.omnigent/build-bundles.py` 的 `FAST_MODELS` 常數。改那一處，然後重跑
-  `python3 .omnigent/build-bundles.py` 重產所有 `config.yaml`。想知道當下真的有哪些
-  model 可用，在 session 內呼叫 `sys_list_models`。
+- **`review` 的 harness 必須與被審 diff 的實作者相反。** 同 vendor 自審不算覆核。
+- **`ops_k8s` 固定 claude-native。** pi 沒有 hook 機制 ⇒ 換成 pi 會讓 dispatcher 失效、
+  repo 的 `kubectl-ns-guard` 拿不回來。產生器會直接拒絕 `ops_k8s + pi`。
+- **model 不要用 CLI alias**（`opus`／`sonnet`／`fable`）：claude 家族只吃 id 含 `claude` 的
+  完整 id，alias 會被產生器的防線 1 擋下。
+- **effort 只用 `high` / `xhigh`**。`ultra` 只有 pi 原生支援，在 claude 上**靜默降級**成
+  `xhigh`——寫了不報錯也沒效果。
+- model 與 effort 的真相在 `generate-worker.py` 的 `ROSTER`；要改就改那裡，⛔ 不要在工單裡
+  另寫一套。
 
 ### `args.purpose`
 
@@ -116,7 +126,7 @@ model**。
 跨 issue 的狀態記在 repo 內的 `.woow-issues/board.md`。
 
 - **只有你（woow-issue-leader）可以寫**。
-- 樹上其他所有 agent（兩個 `repo_leader` 與全部 16 個 worker）對這個檔**唯讀**，由機器
+- 樹上其他所有 agent（兩個 `repo_leader` 與所有執行期產生的 worker）對這個檔**唯讀**，由機器
   守線 **P-board** 強制（CEL policy，DENY 寫入／編輯工具與 shell 改寫）。
 - 看板寫「誰在做什麼、卡在哪」，不寫已完成的流水帳。
 
