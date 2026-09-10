@@ -46,7 +46,9 @@ issue 的後續追問一律複用同一個 title；換一張 issue 就換 title�
 #   不是在任何已受 block_working_dir_changes 約束的 worker session 裡跑。
 git -C <repo> worktree add ../wt-<issue-id> -b <type>/<issue-id> origin/<整合分支>
 cd ../wt-<issue-id>
-omnigent run <repo>/.omnigent/woow-issue-leader --server <url>
+# workspace 就是這個 worktree，所以用相對路徑——worktree 是從 branch checkout 出來的，
+# 裡面本來就有 .omnigent/。⛔ 不要指向別份樹，那會讓啟動的 bundle 與 workspace 不一致。
+omnigent run .omnigent/woow-issue-leader --server <url>
 ```
 
 - **整合分支不要寫死**：`develop` / `main` / `master` 因 repo 而異，先確認。

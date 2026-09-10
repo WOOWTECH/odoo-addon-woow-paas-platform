@@ -10,9 +10,10 @@ executor:
   config:
     harness: pi
 
-# prompt 由 AGENTS.md symlink 承載（→ _shared/repo_leader/AGENTS.md）。
-# ⛔ 不要改寫成 `instructions: <相對路徑>`：containment 檢查會讓外指 symlink 回
-#    None，接著整條路徑字串被當成 system prompt，而且不報錯。
+# prompt 由同目錄的 AGENTS.md 承載（實體副本，來源：_shared/repo_leader/AGENTS.md）。
+# ⛔ 不要手改這份副本——改來源再跑 build-bundles.py（drift 由 --check 第 0 項對帳）。
+# ⛔ 不要改寫成 `instructions: <相對路徑>`：containment 檢查失敗時會回 None，
+#    接著整條路徑字串被當成 system prompt，而且不報錯。
 
 skills: all
 
@@ -27,7 +28,7 @@ os_env:
     type: none
 
 tools:
-  # ⛔ 每個 thin shell 都必須列在這裡。這是斷鏈 symlink 的安全網：引用不存在的
+  # ⛔ 每個 thin shell 都必須列在這裡。這是「sub-agent 沒被發現」的安全網：引用不存在的
   #    sub-agent 會 loud fail，把「靜默少一個 sub-agent」變成明確錯誤。
   #    列的是 YAML `name`，不是資料夾名（本樹刻意讓兩者相同）。
   agents:

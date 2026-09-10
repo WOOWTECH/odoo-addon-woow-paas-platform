@@ -7,20 +7,20 @@
     python3 .omnigent/build-bundles.py --check   # 只驗收，不寫檔（CI／PR 用）
 
 樹形：`woow-issue-leader` → 2 個 `repo_leader` → 各 8 個 worker thin shell。
-thin shell 只有自己的 `config.yaml`，`AGENTS.md` 與 `skills/` 都是 symlink 指回
-`_workers/<worker>/` 的**單一實體**——8 份 prompt 服務 16 個 agent。
+thin shell 的 `config.yaml`、`AGENTS.md` 與 `skills/` **全部都是實體檔**，由本 script 從
+`_workers/<worker>/` 的單一來源**複製**出來。⛔ 不要手改副本——改來源再重跑本 script。
 
 ⚠ 本檔是全樹**所有** `config.yaml` 與所有 CEL 運算式的唯一來源。config.yaml 是產物，
    ⛔ 不要手改；改這裡再重跑。
 
 ── 為什麼寫成這樣（每一條都是實測過的靜默失敗，不要「優化」掉）────────────────
 
-1. **prompt 只能用 `AGENTS.md` symlink 承載**。⛔ 禁止改寫成 `instructions: <相對路徑>`
-   搭外指 symlink：`spec/parser.py::_read_contained_file` 的 containment 檢查會讓外指
-   symlink 回 None，接著**整條路徑字串被當成 system prompt**，而且不報錯。
-   context-file 路徑（`AGENTS.md`）沒有 containment 檢查，symlink 正常跟隨。
-2. **symlink 一律用 `os.path.relpath` 推算**，不要手數 `../`。斷鏈時 `is_dir()` 回 False
-   → **靜默少發現一個 sub-agent**。
+1. **prompt 只能用同目錄的 `AGENTS.md` 實體檔承載**。⛔ 禁止改寫成
+   `instructions: <相對路徑>`：`spec/parser.py::_read_contained_file` 的 containment 檢查
+   失敗時會回 None，接著**整條路徑字串被當成 system prompt**，而且不報錯。
+2. **每個 thin shell 的 `AGENTS.md` 與 `skills/` 都是實體副本，不是 symlink**。
+   `omnigent run <目錄>` 的打包器不解 symlink（symlink 目錄會被 `rglob` 跳過，整批 skills
+   **靜默**消失）⇒ 版控裡一條 symlink 都不能有。驗收第 7／12 項機器強制。
 3. **每個 thin shell 都必須列進上層 `tools.agents`**——這是第 2 條的安全網：
    `tools.agents` 引用不存在的 sub-agent 會 **loud fail**（`spec/validator.py`），把靜默
    消失變成明確錯誤。
@@ -531,9 +531,10 @@ def _executor(harness: str, permission_mode: str | None) -> str:
 
 def _prompt_note(target: str) -> str:
     return (
-        f"# prompt 由 AGENTS.md symlink 承載（→ {target}）。\n"
-        "# ⛔ 不要改寫成 `instructions: <相對路徑>`：containment 檢查會讓外指 symlink 回\n"
-        "#    None，接著整條路徑字串被當成 system prompt，而且不報錯。"
+        f"# prompt 由同目錄的 AGENTS.md 承載（實體副本，來源：{target}）。\n"
+        "# ⛔ 不要手改這份副本——改來源再跑 build-bundles.py（drift 由 --check 第 0 項對帳）。\n"
+        "# ⛔ 不要改寫成 `instructions: <相對路徑>`：containment 檢查失敗時會回 None，\n"
+        "#    接著整條路徑字串被當成 system prompt，而且不報錯。"
     )
 
 
@@ -609,7 +610,7 @@ def leader_config(leader: str) -> str:
         OS_ENV_BLOCK.rstrip(),
         "",
         "tools:",
-        "  # ⛔ 每個 thin shell 都必須列在這裡。這是斷鏈 symlink 的安全網：引用不存在的",
+        "  # ⛔ 每個 thin shell 都必須列在這裡。這是「sub-agent 沒被發現」的安全網：引用不存在的",
         "  #    sub-agent 會 loud fail，把「靜默少一個 sub-agent」變成明確錯誤。",
         "  #    列的是 YAML `name`，不是資料夾名（本樹刻意讓兩者相同）。",
         "  agents:",
@@ -1044,7 +1045,8 @@ class Report:
     def guard(self, n: str, fn) -> None:
         """跑一項檢查；例外一律轉成 FAIL。
 
-        ⚠ 這不是裝飾用的：實測過「斷鏈 symlink 讓 materialize_bundle 直接拋例外」，
+        ⚠ 這不是裝飾用的：實測過「壞掉的樹讓 materialize_bundle 直接拋例外」（當時是斷鏈
+        symlink；symlink 已於 FIX ROUND 4 全面移除，但同類例外仍可能來自其他壞法），
         沒有這層包裝的話後面每一項檢查都不會跑到，一個壞掉的檢查就能遮住其餘全部。
         """
         try:
@@ -1057,8 +1059,8 @@ class Report:
 def run_checks() -> int:
     """跑完第 5 節的每一項驗收並印出結果。回傳 exit code。
 
-    ⚠ 順序刻意先做**結構**檢查（斷鏈 symlink / skills 數）再做 materialize：斷鏈的
-    symlink 會讓 materialize_bundle 直接拋例外，先驗結構才看得到真正的病因。
+    ⚠ 順序刻意先做**結構**檢查（symlink 殘留 / skills 數）再做 materialize：結構壞掉時
+    materialize_bundle 會直接拋例外，先驗結構才看得到真正的病因。
     """
     r = Report()
     try:
@@ -1109,8 +1111,8 @@ def run_checks() -> int:
     nodes = dict(_walk(spec))
 
     # 4. 每個 thin shell 的 skills 數 == 來源池對應 worker 的 skill 數
-    #    ⚠ 這一項是「skills symlink 指到沒有 SKILL.md 的目錄 → 靜默為空」的唯一守線：
-    #    實測 validate() 對斷鏈 skills symlink 完全不會紅。
+    #    ⚠ 這一項守的是「某個 thin shell 的 skills 副本缺了／空了 → 靜默為空」：
+    #    實測 validate() 對「skills 目錄存在但沒有 SKILL.md」完全不會紅（突變 S 實證）。
     def c4():
         src_counts = {
             w: len(list((WORKERS_DIR / w / "skills").glob("*/SKILL.md"))) for w in WORKERS
@@ -1229,6 +1231,8 @@ def run_checks() -> int:
     r.guard("10. 實際上傳路徑：原始樹直接上傳必須成功且內容完整", _check_upload_path)
     r.guard("11. 所有 os_env.cwd 為相對路徑", _check_relative_cwd)
     r.guard("12. git index 無 symlink（mode 120000）", _check_no_tracked_symlinks)
+    # 13：文件與實作矛盾已經發生三次，散文守不住 ⇒ 上 gate。
+    r.guard("13. 無廢止詞彙殘留（prompt 零容忍／README 限歷史區）", _check_retired_terms)
 
     print()
     print(f"總計：{r.failed} 項 FAIL" if r.failed else "總計：全部 PASS")
@@ -1372,11 +1376,10 @@ def _check_policy_paths(nodes) -> tuple[bool, str]:
 
 #: 可啟動的 bundle root（目前只有 issue-leader；repo_leader 與 worker 都是 sub-agent）。
 LAUNCHABLE_BUNDLES = [LEADER_DIR]
-LAUNCHER = OMNIGENT_DIR / "run-leader.py"
 
 
 def _skill_map_of(spec) -> dict[str, frozenset[str]]:
-    """{dotted agent name: frozenset(skill name)}；與 run-leader.py 的同名函式同語意。"""
+    """{dotted agent name: frozenset(skill name)}。"""
     out: dict[str, frozenset[str]] = {}
 
     def walk(node, path: str = "") -> None:
@@ -1468,6 +1471,109 @@ def _check_upload_path() -> tuple[bool, str]:
         )
 
     return (not bad), ("；".join(notes) if not bad else "; ".join(bad[:4]))
+
+
+# ── 廢止詞彙掃描（FIX ROUND 5）─────────────────────────────────────────────────
+#
+# 🔴 這是**第三次**出現「文件與實作矛盾」的 blocking（R0 的 prompt 與 policy 相反、
+#    R2 的 README 自相矛盾、R5 的 symlink 殘留描述）。散文守不住，所以上 gate。
+#    **過時的警告與錯的警告一樣危險**——讀者會照著做。
+#
+# 難點是「合法提及」：第 7／12 項**本身就在驗 symlink**，§已廢止的設計 章節也必須能談它。
+# 純詞彙比對會誤報到不可用。所以分三層，每層規則不同：
+#
+#   L1  agent 會讀到的 prompt（AGENTS.md / SKILL.md）
+#       → **零容忍**。agent 不需要知道某個設計曾經存在；過時描述會直接誤導它的行為。
+#   L2  README.md（人讀的）
+#       → 允許，但只在「歷史區」：標題含「已廢止」的章節，或帶 `<!-- legacy-ok -->` 標記。
+#   L3  實作碼（build-bundles.py / mutation-tests.sh）
+#       → 只掃**已移除的識別符**（見下方清單）。不掃 `symlink`——  # legacy-ok
+#         那是它正在檢查的東西，掃了等於禁止實作本身。
+
+#: 已廢止的設計詞彙：出現在 L1／L2 非歷史區就是錯的現行敘述。
+RETIRED_TERMS = ["symlink", "mode 120000", "run-leader", "--rewrite-cwd"]  # legacy-ok
+#: 已移除的識別符：連實作碼裡都不該再出現（殘留＝指向不存在的東西）。
+REMOVED_IDENTIFIERS = ["run-leader", "run_leader", "--rewrite-cwd", "LAUNCHER"]  # legacy-ok
+#: L2 的歷史區標記（整章節放行）。
+LEGACY_MARKER = "legacy-ok"
+LEGACY_HEADING = "已廢止"
+#: 刻意提及的區塊標記。用途：**規則本身就是「禁止 X」時，它必須能說出 X**——
+#: 例如「版控裡一條 symlink 都不能有」。純詞彙比對無法區分「描述成現行做法」與
+#: 「明文禁止」，所以要作者顯式標記；標記這個動作本身就迫使人停下來想一次
+#: 「我是在描述現行做法嗎？」——那正是這道 gate 的價值。
+#: 寫法：`<!-- retired-ok:start 理由 -->` … `<!-- retired-ok:end -->`（HTML 註解不渲染）。
+RETIRED_OK_START = "retired-ok:start"
+RETIRED_OK_END = "retired-ok:end"
+
+
+def _prompt_files() -> list[Path]:
+    """L1：agent 實際會讀到的 prompt（來源池 ＋ leader 自己的；產物是副本，不重複掃）。"""
+    out: list[Path] = []
+    for base in (WORKERS_DIR, SHARED_DIR, LEADER_DIR):
+        for name in ("AGENTS.md", "SKILL.md"):
+            out += [q for q in base.rglob(name)
+                    if "__pycache__" not in q.parts
+                    # 產物（thin shell 的副本）與來源內容相同，掃來源就夠
+                    and "/agents/" not in str(q.relative_to(OMNIGENT_DIR))]
+    return sorted(set(out))
+
+
+def _check_retired_terms() -> tuple[bool, str]:
+    """掃出「已廢止設計仍被當成現行做法描述」的地方。"""
+    bad: list[str] = []
+    scanned = 0
+
+    # ── L1：prompt 零容忍 ──────────────────────────────────────────────────
+    for f in _prompt_files():
+        scanned += 1
+        rel = f.relative_to(OMNIGENT_DIR)
+        for n, line in enumerate(f.read_text().splitlines(), 1):
+            for term in RETIRED_TERMS:
+                if term in line:
+                    bad.append(f"{rel}:{n} 出現廢止詞彙 {term!r}（prompt 層零容忍）")
+
+    # ── L2：README 只在歷史區放行 ──────────────────────────────────────────
+    readme = OMNIGENT_DIR / "README.md"
+    if readme.is_file():
+        scanned += 1
+        in_legacy = False
+        in_retired_ok = False
+        for n, line in enumerate(readme.read_text().splitlines(), 1):
+            if line.startswith("## "):
+                # 章節切換：標題含「已廢止」才算歷史區
+                in_legacy = LEGACY_HEADING in line
+            if LEGACY_MARKER in line:
+                in_legacy = True
+            if RETIRED_OK_START in line:
+                in_retired_ok = True
+            elif RETIRED_OK_END in line:
+                in_retired_ok = False
+            if in_legacy or in_retired_ok:
+                continue
+            for term in RETIRED_TERMS:
+                if term in line:
+                    bad.append(
+                        f"README.md:{n} 出現廢止詞彙 {term!r} 且不在歷史區"
+                        "（要嘛刪掉，要嘛移進 §已廢止的設計）"
+                    )
+
+        if in_retired_ok:
+            bad.append("README.md: 有 retired-ok:start 沒有對應的 retired-ok:end"
+                       "（未關閉的區塊會放行整份檔案的其餘內容）")
+
+    # ── L3：實作碼只掃已移除的識別符 ───────────────────────────────────────
+    for f in sorted(OMNIGENT_DIR.glob("*.py")) + sorted(OMNIGENT_DIR.glob("*.sh")):
+        scanned += 1
+        rel = f.relative_to(OMNIGENT_DIR)
+        for n, line in enumerate(f.read_text().splitlines(), 1):
+            if LEGACY_MARKER in line:
+                continue
+            for ident in REMOVED_IDENTIFIERS:
+                if ident in line:
+                    bad.append(f"{rel}:{n} 殘留已移除的識別符 {ident!r}")
+
+    return (not bad), (f"掃 {scanned} 個檔案，無廢止詞彙殘留" if not bad
+                       else f"{len(bad)} 處：" + "；".join(bad[:5]))
 
 
 def _check_relative_cwd() -> tuple[bool, str]:

@@ -10,9 +10,10 @@ executor:
   config:
     harness: pi
 
-# prompt 由 AGENTS.md symlink 承載（→ _workers/verifier_pi/AGENTS.md）。
-# ⛔ 不要改寫成 `instructions: <相對路徑>`：containment 檢查會讓外指 symlink 回
-#    None，接著整條路徑字串被當成 system prompt，而且不報錯。
+# prompt 由同目錄的 AGENTS.md 承載（實體副本，來源：_workers/verifier_pi/AGENTS.md）。
+# ⛔ 不要手改這份副本——改來源再跑 build-bundles.py（drift 由 --check 第 0 項對帳）。
+# ⛔ 不要改寫成 `instructions: <相對路徑>`：containment 檢查失敗時會回 None，
+#    接著整條路徑字串被當成 system prompt，而且不報錯。
 
 # ⛔ 一律固定 `all`。名單模式在 claude-native 下形同 all、不強制；在 pi 下卻會下
 #    --no-skills 把 host skill 一併關掉——跨 harness 行為相反。

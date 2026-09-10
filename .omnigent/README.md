@@ -10,10 +10,14 @@ woow-issue-leader                     ← issue 層總指揮（claude-native）
     └── 8 個 worker thin shell（*_via_pi）
 ```
 
-**16 個 thin shell = 8 個 worker 角色 × 2 個 repo_leader**，但 prompt 與 skill 只有
-**8 份實體**：thin shell 的 `AGENTS.md` 與 `skills/` 都是 symlink 指回
-`_workers/<worker>/`。兩份 `repo_leader` 的 `AGENTS.md` 同樣 symlink 到
-`_shared/repo_leader/AGENTS.md`（同一個檔，靠「harness 自辨」段落服務兩邊）。
+**16 個 thin shell = 8 個 worker 角色 × 2 個 repo_leader**。prompt 與 skill 的**單一來源**
+在 `_workers/<worker>/`（8 份）與 `_shared/repo_leader/`（1 份，靠「harness 自辨」段落服務
+兩份 repo_leader）；`build-bundles.py` 把它們**複製**成每個 thin shell 自己的實體檔。
+
+<!-- retired-ok:start 這兩句是現行規則「禁止 symlink」，規則必須能說出它禁止什麼 -->
+⛔ **版控裡一條 symlink 都不能有**，也⛔ **不要手改任何副本**——改來源再重跑產生器。
+理由與歷史見 §已廢止的設計；drift 由 `--check` 第 0 項逐檔比對內容。
+<!-- retired-ok:end -->
 
 ## 目錄
 
@@ -24,17 +28,17 @@ woow-issue-leader                     ← issue 層總指揮（claude-native）
 | `_shared/repo_leader/AGENTS.md` | repo_leader 共用 prompt（**實體**） | 手改 |
 | `woow-issue-leader/AGENTS.md` ＋ `skills/` | issue-leader 的 prompt 與 3 個 skill | 手改 |
 | **所有 `config.yaml`** | 19 份（1 leader ＋ 2 repo_leader ＋ 16 thin shell） | ⛔ **產物，勿手改** |
-| thin shell 與 repo_leader 的 `AGENTS.md` ＋ `skills/` | 18 份 `AGENTS.md` ＋ 16 份 `skills/` 的**實體副本**（FIX ROUND 4 前是 symlink） | ⛔ **產物，勿手改**（drift 由 `--check` 第 0 項對帳） |
+| thin shell 與 repo_leader 的 `AGENTS.md` ＋ `skills/` | 18 份 `AGENTS.md` ＋ 16 份 `skills/` 的**實體副本** | ⛔ **產物，勿手改**（drift 由 `--check` 第 0 項對帳） |
 | `build-bundles.py` | 產生器 ＋ 驗收（`--check` 12 項） | 手改 |
-| `mutation-tests.sh` | 突變測試：證明驗收有牙齒（baseline ＋ 18 個 case） | 手改 |
+| `mutation-tests.sh` | 突變測試：證明驗收**紅在對的地方**（baseline ＋ 18 個 case，每個帶失敗指紋） | 手改 |
 | `config.yaml`（根目錄那一份） | Omnigent CLI 的 **專案層預設**（`omnigent config`，untracked，機器本地） | 不屬本 bundle |
 
 ## 用法
 
 ```bash
-python3 .omnigent/build-bundles.py           # 重產所有 config.yaml 與 symlink
+python3 .omnigent/build-bundles.py           # 重產所有 config.yaml 與實體副本
 python3 .omnigent/build-bundles.py --check   # 驗收（產物不同步也會判 FAIL）
-bash .omnigent/mutation-tests.sh             # 突變測試：確認驗收真的有牙齒
+bash .omnigent/mutation-tests.sh             # 突變測試（可帶 case 代號只跑一個，如 `K`）
 ```
 
 改了 `build-bundles.py` **一定要重跑一次不帶參數的版本**再 commit，否則 `--check` 的第 0
@@ -53,59 +57,34 @@ cd ../wt-<issue-id>
 omnigent run .omnigent/woow-issue-leader --server <url>
 ```
 
-⚠ 這條指令曾經是壞的（symlink 佈局時代），FIX ROUND 4 改成實體副本後才能直接用。
-**不要**再加任何 launcher 包裝——見 §啟動。
+⚠ 這條指令在舊佈局下是壞的（見 §啟動 的歷史小節），現在可以直接用。
+**不要**再加任何 launcher 包裝。
 
 ## 啟動
 
 ```bash
+cd <該 issue 的 worktree>
 omnigent run .omnigent/woow-issue-leader --server <url>
 ```
 
-就這樣，沒有 launcher、沒有包裝 script。上傳前想先自檢就跑
-`python3 .omnigent/build-bundles.py --check`（第 10 項會拿 server 端真正用的那兩個函式模擬
-一次上傳）。
+就這樣，沒有 launcher、沒有包裝 script。
 
-### 🔴 為什麼這裡曾經需要一支 launcher（歷史，別再走回去）
+⚠ **`cd` 到哪裡啟動就決定了整個 session 的檔案邊界**——runner 用啟動時的 shell cwd 當
+`sys_os_*` 的 containment 錨點，bundle 裡的 `os_env.cwd` 寫什麼都不生效（見下節）。
+⇒ 一張 issue 一個 runner，站在那張 issue 的 worktree 裡啟動。
 
-本樹原本用 **symlink** 讓 16 個 thin shell 共用 8 份 prompt／skills。而
-`omnigent run <目錄>` 最終走 `chat._bundle_agent()` → `cli._bundle()`，`_bundle()` 對
-**目錄**來源是 `source.rglob("*")` ＋ `if file_path.is_file()`（`cli.py:5529-5538`），
-**不解 symlink**（只有 source 是**單檔 YAML** 時才會先 materialize，`cli.py:5508`）。
-於是兩種 symlink 各有各的壞法：
+上傳前想先自檢就跑 `python3 .omnigent/build-bundles.py --check`——第 10 項會拿 server 端
+真正用的那兩個函式（`cli._bundle` ＋ `server.bundles.validate_agent_bundle`）模擬一次上傳。
 
-| 型態 | 當時數量 | 行為 |
-| --- | --- | --- |
-| symlink **檔**（`AGENTS.md`） | 18 | **loud fail**：tar 留下 link entry，server 端 `extract_safe` 直接拒（`spec/tar_utils.py:126`） |
-| symlink **目錄**（`skills/`） | 16 | ⛔ **silent drop**：`rglob` 不遞迴進去，**tar 內 SKILL.md 從 19 筆掉到 3 筆**（只剩 leader 自己的實體 skills），而 `validate` 照樣回 valid、那 16 個 agent 的 `skills` 變成 `[]`，**不報錯** |
-
-⚠ 三條啟動路徑全都呼叫同一個 `_bundle_agent(spec_path)`——`chat._chat_via_daemon()`（remote）、
-`chat._chat_local()`（「Start a **local** server with the agent」）、
-`chat._run_local_headless_prompt()` ⇒ **改用 local server 也規避不了**。唯一不經過這條打包
-路徑的是 `omnigent server --agent <path>` 的 preregister（`cli.py:1483-1487` 自己 materialize）。
-
-**FIX ROUND 4 的裁決：放棄 symlink，改成版控 16 份實體副本**（`build-bundles.py` 產生）。
-理由是失效模式的性質——symlink 方案把一個**靜默**失效擺在「人要記得走某個入口」的前提上；
-實體副本的失效模式是 drift，而 drift 由 `--check` 第 0 項逐檔比對**內容**、**會紅、看得見**。
-用「會紅的風險」換掉「會靜默的風險」。
-
-代價：`.omnigent/` 從 42 個實體檔＋34 條 symlink 變成 **78 個實體檔、0 條 symlink**。
-那 16 份副本是**產物**，性質跟 19 份 `config.yaml` 完全相同。
-
-⇒ 所以這套組合是一體的，**不要只改其中一半**：
-- 實體副本（第 7／12 項鎖住「一條 symlink 都不能有」）
-- `--check` 第 0 項是副本 drift 的唯一守線（突變 Q 實證它會紅）
-- 第 10 項直接對原始樹模擬上傳（不再經 materialize），鎖住「這條路真的會通」
-
-### ⚠ 為什麼原本的驗收沒抓到
+### ⚠ 為什麼原本的驗收沒抓到上傳路徑的問題
 
 原本驗的是「原始樹 parse/validate」＋「materialize 後的樹 parse/validate」，兩者都綠。
-但 `materialize_bundle()` **在實際啟動路徑上根本不會被呼叫**（只有單檔 YAML 或
-`server --agent` 才觸發）⇒ 驗的是一條**不存在於實際流程**的路。
+但 `materialize_bundle()` **在實際啟動路徑上根本不會被呼叫**（只有 source 是單檔 YAML 或
+`omnigent server --agent` preregister 時才觸發）⇒ 驗的是一條**不存在於實際流程**的路。
 
 教訓：驗收要對著**實際會跑的那條 code path**，不是對著一個語意相近的 API。現在第 10 項
-直接 import `cli._bundle` ＋ `server.bundles.validate_agent_bundle`，跟 server 收到的
-是同一份 bytes。
+直接 import `cli._bundle` ＋ `server.bundles.validate_agent_bundle`，跟 server 收到的是
+同一份 bytes。
 
 ## 🔴 `os_env.cwd` 寫什麼都不生效——但寫絕對路徑會出事
 
@@ -134,36 +113,38 @@ server 時**被拒**。三種情況沒有一種是好的 ⇒ **一律寫 `.`**�
 ⚠ 本 repo 的檢查比 server **更嚴**：`server/bundles.py` 只看 **root spec** 的 cwd（不遞迴
 sub-agent），所以只有 sub-agent 寫絕對路徑時 server 不會拒——但曝光面還在。第 11 項掃全樹。
 
-## ⛔ 八條會靜默壞掉的規則
+## ⛔ 七條會靜默壞掉的規則
 
-全部實測過，違反時 **`validate()` 不會紅**：
+全部實測過，違反時 **`validate()` 不會紅**。
 
-1. **prompt 只能用 `AGENTS.md` symlink 承載。** 改寫成 `instructions: <相對路徑>` 搭外指
-   symlink 時，containment 檢查會回 `None`，接著**整條路徑字串被當成 system prompt**，
-   而且不報錯。→ 驗收第 3 項擋。
-2. **symlink 一律用 `os.path.relpath` 推算，不要手數 `../`。** 斷鏈時 `is_dir()` 回
-   False → **靜默少發現一個 sub-agent／少一批 skill**。→ 驗收第 4、7 項擋。
-3. **每個 thin shell 都要列進上層 `tools.agents`。** 這是第 2 條的安全網：引用不存在的
-   sub-agent 會 **loud fail**。→ 驗收第 6 項擋。
+⚠ 這份清單**只列現行仍成立的規則**。因設計變更而不再成立的，移到 §已廢止的設計 ——
+**過時的警告與錯的警告一樣危險**，不留在這裡。
+
+1. **prompt 只能用同目錄的 `AGENTS.md` 實體檔承載。** ⛔ 不要改寫成
+   `instructions: <相對路徑>`：`_read_contained_file` 的 containment 檢查失敗時回 `None`，
+   接著**整條路徑字串被當成 system prompt**，而且不報錯。→ 驗收第 3 項擋
+   （它斷言 `instructions` 非空、含 marker、且不長得像路徑字串）。
+<!-- retired-ok:start 本條規則就是「禁止 symlink」，必須能說出禁止的對象與量級 -->
+2. **版控裡一條 symlink 都不能有。** `omnigent run <目錄>` 的打包器不解 symlink：
+   symlink **目錄**會被 `rglob` 跳過 ⇒ 整批 skills **靜默**消失（實測量級：tar 內 SKILL.md
+   從 19 筆掉到 3 筆，而 `validate` 照樣回 valid、`skills` 變 `[]`）。
+   ⇒ 全樹改用實體副本。→ 驗收第 7（工作目錄）／12（git index）項擋。
+   ⛔ 不要為了「少一點重複」把它加回來；副本是產物，drift 由第 0 項對帳。
+   詳細機制見 §已廢止的設計。
+<!-- retired-ok:end -->
+3. **每個 thin shell 都要列進上層 `tools.agents`。** 這是「sub-agent 沒被發現」的安全網：
+   引用不存在的 sub-agent 會 **loud fail**，把靜默消失變成明確錯誤。→ 驗收第 6 項擋。
 4. **`tools.agents` 列的是 YAML `name`，不是資料夾名。** `name` 省略時是 `None`、不會
-   fallback 成目錄名。本樹刻意讓兩者相同，直接填掉這個坑。
+   fallback 成目錄名 ⇒ 那個 sub-agent 永遠無法被引用。本樹刻意讓兩者相同，直接填掉這個坑。
 5. **skill name 一律取自 frontmatter（目錄名被忽略），正則 `^[a-z0-9-]+$`（不允許底
    線），而且來源池必須全域唯一**（`discover_host_skills` first-wins 去重會吃掉同名後
-   者）——所以每個 skill 都加了 worker 前綴。→ 驗收第 5b 項擋。
+   者）——所以每個 skill 都加了 worker 前綴。→ 驗收第 5b 項擋（讀 frontmatter，不是目錄名）。
 6. **`skills:` 一律固定 `all`。** 名單模式在 claude-native 下形同 `all`、不強制；在 pi
    下卻會下 `--no-skills` **把 host skill 一併關掉**——跨 harness 行為相反。
-7. 🔴 **symlink 目錄在上傳路徑上會被 silent drop。**（FIX ROUND 3 發現，ROUND 4 根治）
-   `omnigent run <目錄>` 的打包器不解 symlink：symlink **目錄**被 `rglob` 跳過，
-   **tar 內 SKILL.md 從 19 筆掉到 3 筆**——16 個 agent 的 skills 整批消失，而 `validate`
-   照樣回 valid、`skills` 變 `[]`，⛔ 不報錯（symlink **檔**則是 loud fail，看得到）。
-   ⇒ **已根治**：全樹改成實體副本，驗收第 7／12 項鎖住「一條 symlink 都不能有」。
-   ⚠ 這一條**不是**前六條那種「寫 config 時的規則」，而是**佈局／啟動方式**的規則——
-   前六條全寫對也躲不掉它，因為它發生在打包階段。⛔ 不要為了「少一點重複」把 symlink
-   加回來；那 16 份副本是產物，drift 由 `--check` 第 0 項對帳。完整說明見 §啟動。
-8. 🔴 **`os_env.cwd` 寫什麼都不生效，但寫絕對路徑會讓 deployed server 拒收整個 bundle。**
-   （FIX ROUND 4 新增）runner 一律用 `OMNIGENT_RUNNER_WORKSPACE` 覆寫它，harness 的實際
-   cwd 與 `sys_os_*` 的 containment 錨點**兩者都**不看 spec；而絕對路徑在沒有 workspace
-   的 runner 上會變成 agent environment root 與 copytree source（**GHSA-p8rw-8qj3-hf33**）。
+7. **`os_env.cwd` 寫什麼都不生效，但寫絕對路徑會讓 deployed server 拒收整個 bundle。**
+   runner 一律用 `OMNIGENT_RUNNER_WORKSPACE` 覆寫它，harness 的實際 cwd 與 `sys_os_*` 的
+   containment 錨點**兩者都**不看 spec；而絕對路徑在沒有 workspace 的 runner 上會變成
+   agent environment root 與 copytree source（**GHSA-p8rw-8qj3-hf33**）。
    ⇒ **一律寫 `.`**。→ 驗收第 11 項擋。容易誤解成「寫父目錄就能擴大 containment 範圍」，
    ⛔ 不能——實際錨點是啟動 `omnigent run` 時的 shell cwd。完整說明見 §`os_env.cwd`。
 
@@ -172,7 +153,6 @@ sub-agent），所以只有 sub-agent 寫絕對路徑時 server 不會拒——�
 - **child 不繼承 parent 的 `guardrails.policies`** ⇒ 每個 worker 自帶完整 policy。
 - **唯讀 worker 完全省略 `os_env` block**（`verifier_pi` / `scout_pi` / `researcher`）⇒
   四支 `sys_os_*` 一支都不註冊，這是 A 類 sound 的守線。
-  （`os_env.cwd` 本身的坑已升格為上面第 8 條。）
 
 ## Guardrails
 
@@ -320,11 +300,92 @@ shell 解析，認不出 `bash -c` 包一層或 script 檔裡的 kubectl，**已
 ⛔ 不要在任何地方把它寫成「機器強制」或暗示它擋得住刻意規避。它的價值是「workspace 不在
 本 repo 時仍有一層接得住手滑」。
 
+## 驗收與突變測試的關係
+
+`--check` 有 13 項驗收。但**「全部 PASS」本身不代表驗收有效**——本 repo 已經抓到三次
+「檢查看起來在運作、其實沒驗到」的事故，三次都是同一個根因：**只看有沒有 `[FAIL]`，
+不看紅在哪**。
+
+| 事故 | 症狀 |
+| --- | --- |
+| 突變 G | 定位字串被改過 → 突變變成 no-op，卻顯示 PASS（**假綠**） |
+| 第 12 項 | 在非 git repo 的臨時目錄假紅 → 每個 case 都紅（**失去鑑別力**） |
+| 突變 K | 同一份 config 命中兩處、改壞了另一支 policy → **紅錯地方** |
+
+⇒ 每個 mutation case 都宣告**失敗指紋**，由 `mutation-tests.sh` 機械斷言：
+
+```
+run_mut <代號> <說明> <預期紅的項號> <預期紅的 CEL policy> <突變指令>
+```
+
+- **項號集合必須完全相等**——多紅一項（誤傷別的檢查）與少紅一項（守線失效）都算該 case
+  失敗，不是「有紅就算過」。
+- **CEL 相關要指名 policy**，它必須出現在 FAIL 訊息裡。⚠ 這道斷言不可省：突變 K 的舊寫法
+  項號是 `[0,8]`，與預期**完全相同**，只有 policy 名能揭露它其實紅在 `p_board_read_only`
+  的 compile error。
+- **無條件斷言突變真的改到檔案**（內容＋權限 hash 有變），否則是 no-op 假綠。
+- **baseline case**（不施加突變）必須全 PASS，否則其餘 case 的結果都不可信。
+
+突變一律用 Python 寫、不用 `sed`：`sed` 只能按字面定位，而 K 的事故正是定位不準。需要改
+某支 policy 時先定位它的 YAML block 再改。
+
+## 已廢止的設計（歷史紀錄，⛔ 不要走回去）
+
+<!-- legacy-ok: 本章節刻意保留已廢止設計的名詞與機制，供「為什麼不能那樣做」的追溯。
+     廢止詞彙掃描（驗收第 13 項）只在本章節內放行這些詞。 -->
+
+這一節記錄**已經移除**的設計與當初移除的理由。⛔ 這裡寫的東西**都不是現行做法**——
+不要照著做。放在這裡是因為每一條都有人會想「為什麼不乾脆……」，而答案有實測依據。
+
+### 1. symlink 佈局（FIX ROUND 0–3 用過，ROUND 4 移除）
+
+原本用 symlink 讓 16 個 thin shell 共用 8 份 prompt／skills（`AGENTS.md` → 來源檔、
+`skills/` → 來源目錄）。**廢止原因**：`omnigent run <目錄>` 最終走
+`chat._bundle_agent()` → `cli._bundle()`，而 `_bundle()` 對**目錄**來源是
+`source.rglob("*")` ＋ `if file_path.is_file()`（`cli.py:5529-5538`），**不解 symlink**
+（只有 source 是**單檔 YAML** 時才會先 materialize，`cli.py:5508`）。兩種型態各有壞法：
+
+| 型態 | 當時數量 | 行為 |
+| --- | --- | --- |
+| symlink **檔**（`AGENTS.md`） | 18 | **loud fail**：tar 留下 link entry，server 端 `extract_safe` 直接拒（`spec/tar_utils.py:126`）：`tarball contains a link (not allowed)` |
+| symlink **目錄**（`skills/`） | 16 | ⛔ **silent drop**：`rglob` 不遞迴進去，**tar 內 SKILL.md 從 19 筆掉到 3 筆**（只剩 leader 自己的），而 `validate` 照樣回 valid、那 16 個 agent 的 `skills` 變成 `[]`，**不報錯** |
+
+⚠ **改用 local server 規避不了**：三條啟動路徑全呼叫同一個 `_bundle_agent(spec_path)` ——
+`chat._chat_via_daemon()`（remote）、`chat._chat_local()`（「Start a **local** server with
+the agent」）、`chat._run_local_headless_prompt()`。唯一不經過這條打包路徑的是
+`omnigent server --agent <path>` 的 preregister（`cli.py:1483-1487` 自己 materialize）。
+
+**取捨**：實體副本的失效模式是 drift，由 `--check` 第 0 項逐檔比對內容、**會紅、看得見**；
+symlink 的失效模式是**靜默**的。用「會紅的風險」換掉「會靜默的風險」。
+代價在 git 層面是負的（78 項 → 77 項，見 §啟動 上方的數字）。
+
+**附帶廢止的一條規則**：當時有「symlink 一律用 `os.path.relpath` 推算，不要手數 `../`」
+（斷鏈時 `is_dir()` 回 False → 靜默少發現一個 sub-agent）。沒有 symlink 之後這條不再適用，
+已從現行清單移除。
+
+### 2. `run-leader.py` launcher（FIX ROUND 3 新增，ROUND 4 移除）
+
+symlink 時代需要一支 launcher，先 `materialize_bundle()` 解引用再交給 `omnigent run`。
+改成實體副本後原始樹可以直接上傳（實測：link entry 0、SKILL.md 19 筆、
+`enforce_handler_allowlist` True／False 皆過）⇒ launcher 唯一的存在理由消失。
+
+**為什麼移除而不是降級成選用工具**：留一個只剩包裝功能的入口，會讓維護者困惑「我到底該走
+哪個」——而那個困惑正是當時那個 blocking 的來源。自檢價值保留在 `--check` 第 10 項。
+
+### 3. `os_env.cwd` 寫絕對路徑（FIX ROUND 0 定案，ROUND 4 移除）
+
+原本寫 `/home/elmo/woow-repos`（六 repo 的共同父目錄），本意是當 `sys_os_*` 的 containment
+錨點、讓跨 repo 唯讀落在邊界內。**廢止原因**：那個本意從來沒達成（runner 覆寫 cwd），
+而且絕對路徑有兩個實際代價——deployed server 直接拒收、沒有 workspace 的 runner 上會暴露
+host filesystem（GHSA-p8rw-8qj3-hf33）。詳見 §`os_env.cwd`。
+
 ## 機器相關的值
 
-全樹只有一個機器相關的絕對路徑：`os_env.cwd: /home/elmo/woow-repos`（六個 repo 的共同父
-目錄，作為 `sys_os_*` containment 的錨點）。換機器時改 `build-bundles.py` 的
-`OS_ENV_BLOCK` 再重跑。
+**產生出來的 bundle 裡沒有任何機器相關的絕對路徑**——`os_env.cwd` 一律是 `.`（理由見
+§`os_env.cwd`）。換機器不需要改 `build-bundles.py`。
+
+唯一與本機綁定的是 worker prompt 裡舉例用的跨 repo 唯讀路徑（`/home/elmo/woow-repos/<repo>/…`
+這種 `grep` 範例），那些在 `_workers/*/AGENTS.md` 的來源池裡，改了重跑產生器即可。
 
 快層 model 名單同理，只有 `build-bundles.py` 的 `FAST_MODELS` 一處；model 名會隨 CLI／
 catalog 版本漂移，當下可用的用 `sys_list_models` 查。
