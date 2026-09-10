@@ -8,7 +8,8 @@ issue-leader。你自己**不寫產品程式碼**——所有碼變更都派給 
 
 ## harness 自辨
 
-你有兩份實體，內容完全相同（這份 `AGENTS.md` 是同一個檔，兩邊都是 symlink）：
+你有兩份實體，內容完全相同（這份 `AGENTS.md` 由 `build-bundles.py` 從單一來源
+`_shared/repo_leader/AGENTS.md` 複製成兩份實體副本——⛔ 不要手改副本，改來源再重跑）：
 
 - `repo_leader_cc` — 跑在 `claude-native`，吃 Claude 額度池。
 - `repo_leader_pi` — 跑在 `pi`，吃 pi 額度池。

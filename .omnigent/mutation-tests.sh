@@ -30,8 +30,20 @@ run_mut () {
   echo
 }
 
-run_mut "A. skills symlink 指到不存在的目錄（靜默為空）" \
-  'rm woow-issue-leader/agents/repo_leader_cc/agents/scout_pi_via_cc/skills; ln -s ../../../../../_workers/NOPE/skills woow-issue-leader/agents/repo_leader_cc/agents/scout_pi_via_cc/skills'
+# ── baseline：不施加任何突變，**必須全部 PASS** ────────────────────────────────
+# ⚠ 這一項是突變測試自己的健全性檢查。基線若是紅的（例如某個檢查在臨時目錄環境下假紅），
+#   每個 case 都會紅 ⇒ 整套突變測試失去鑑別力、比沒有更糟。實際踩過：第 12 項
+#   （git index 無 symlink）在非 git repo 的臨時目錄裡 `git ls-files` 會失敗。
+echo "### baseline（無突變，預期全部 PASS）"
+BASE_TD=$(mktemp -d "${TMPDIR:-/tmp}/omni-base-XXXX")
+cp -a "$WT/.omnigent" "$BASE_TD/"
+( cd "$BASE_TD/.omnigent" && python3 build-bundles.py --check 2>&1 \
+    | grep -E '^\[FAIL\]|^總計' | sed 's/^/    /' )
+rm -rf "$BASE_TD"
+echo
+
+run_mut "A. 把 skills 實體副本換回 symlink（FIX ROUND 4 要擋的就是這個）" \
+  'rm -rf woow-issue-leader/agents/repo_leader_cc/agents/scout_pi_via_cc/skills; ln -s ../../../../../_workers/scout_pi/skills woow-issue-leader/agents/repo_leader_cc/agents/scout_pi_via_cc/skills'
 
 run_mut "B. thin shell 從上層 tools.agents 拿掉" \
   "sed -i '/- tracker_via_pi/d' woow-issue-leader/agents/repo_leader_pi/config.yaml"
@@ -126,12 +138,11 @@ for p in pathlib.Path('.').rglob('config.yaml'):
         p.write_text(s)
 PY"
 
-run_mut "P. launcher 跳過 materialize（改成保留 symlink 的 copytree）" \
-  "python3 - <<'PY'
-import pathlib
-p = pathlib.Path('run-leader.py'); s = p.read_text()
-old = 'materialize_bundle(source, tree)'
-new = '__import__(\"shutil\").copytree(source, tree, symlinks=True)'
-assert old in s
-p.write_text(s.replace(old, new))
-PY"
+run_mut "Q. 手改一份產生出來的 AGENTS.md 副本（實體副本方案的唯一守線）" \
+  "printf '\\n手改的內容，來源池沒有這一行\\n' >> woow-issue-leader/agents/repo_leader_cc/agents/impl_cc_via_cc/AGENTS.md"
+
+run_mut "R. 把 os_env.cwd 改回絕對路徑（deployed server 會拒收）" \
+  "sed -i 's|^  cwd: \\.$|  cwd: /home/elmo/woow-repos|' woow-issue-leader/agents/repo_leader_cc/agents/impl_cc_via_cc/config.yaml"
+
+run_mut "S. 刪掉一份 skills 副本（整批 skills 消失的量級縮小版）" \
+  "rm -rf woow-issue-leader/agents/repo_leader_pi/agents/tracker_via_pi/skills"

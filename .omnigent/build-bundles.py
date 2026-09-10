@@ -426,13 +426,37 @@ P_WORKDIR = _fn_policy(
          "這是 worktree_guard 的另一半：擋掉「先 cd 出去、再寫相對路徑」的逃逸。\n"
          "副作用（刻意）：implementer 不能跨 repo，跨 repo 唯讀是 leader 的職責。")
 
+# ── os_env ───────────────────────────────────────────────────────────────────
+# 🔴 `cwd` 一律寫 `.`。⛔ 不要寫絕對路徑（本樹曾寫 `/home/elmo/woow-repos`，已移除）。
+#
+# 兩件事要分清楚，這是下游維護者最容易誤解的一點：
+#
+# 1. **正常 runner 路徑下，spec 裡的 `cwd` 根本不生效。** runner 一律用
+#    `OMNIGENT_RUNNER_WORKSPACE` 覆寫它——見
+#    `runner/tool_dispatch.py::_resolve_os_env_spec`（「Runner workspace is authoritative
+#    — overrides whatever the spec declared (relative or absolute)」，約 6247-6259 行）。
+#    覆寫發生在 `OSEnvironment` 建立**之前**，所以 harness 的實際 cwd **與**
+#    `sys_os_*` 的 containment 錨點**兩者都**以 workspace 為準，不是以 spec 為準。
+#    ⇒ 實際錨點 = 啟動 `omnigent run` 時的 shell cwd（本 bundle 用法就是那個 worktree）。
+#    ⇒ 想讓跨 repo 唯讀落在邊界內，**不能**靠在這裡寫父目錄，要靠啟動時站在哪裡。
+#
+# 2. **沒有 workspace 的 runner 上，絕對 `cwd` 會生效——而且那是一個已登錄的漏洞面。**
+#    `server/bundles.py::_cwd_escapes_workspace`（約 58-70 行）：絕對或含 `..` 的 cwd
+#    「on a runner without OMNIGENT_RUNNER_WORKSPACE it becomes the agent environment root
+#    and copytree source, exposing the host filesystem」（GHSA-p8rw-8qj3-hf33）。
+#    所以 deployed（multi-user）server 以 `enforce_handler_allowlist=True` 直接**拒收**
+#    整個 bundle（`server/bundles.py` 約 140-152 行）。
+#
+# ⇒ 結論：寫絕對路徑在「有 workspace」時無效、在「沒有 workspace」時危險、上 deployed
+#    server 時被拒。三種情況沒有一種是好的 ⇒ 一律 `.`。驗收第 13 項機器強制這件事。
 OS_ENV_BLOCK = """
 os_env:
-  # ⚠ cwd 不決定 harness 的 process cwd（實測）——它是 server 模式的**邊界**與
-  #   sys_os_* / config_path containment 的錨點。設在六個 repo 的共同父目錄，讓跨 repo
-  #   唯讀查詢落在邊界內。這是全樹唯一一個機器相關的絕對路徑。
+  # ⚠ cwd 寫 `.` 是刻意的：runner 一律用 OMNIGENT_RUNNER_WORKSPACE 覆寫它（見
+  #   build-bundles.py 的 OS_ENV_BLOCK 註解），所以這裡寫什麼都不會生效；而寫絕對路徑
+  #   會讓 deployed server 直接拒收整個 bundle（GHSA-p8rw-8qj3-hf33）。
+  #   ⛔ 不要改成絕對路徑——實際的 containment 錨點是啟動 omnigent run 時的 shell cwd。
   type: caller_process
-  cwd: /home/elmo/woow-repos
+  cwd: .
   sandbox:
     type: none
 """
@@ -635,18 +659,52 @@ def _write(path: Path, text: str, *, check: bool, diffs: list[str]) -> None:
     path.write_text(text)
 
 
-def _symlink(link: Path, target: Path, *, check: bool, diffs: list[str]) -> None:
-    """建相對 symlink。⛔ 一律用 os.path.relpath 推算，不要手數 `../`——斷鏈時
-    `is_dir()` 回 False，會**靜默**少發現一個 sub-agent／少一批 skill。"""
-    rel = os.path.relpath(target, link.parent)
+def _copy_file(dest: Path, source: Path, *, check: bool, diffs: list[str]) -> None:
+    """把來源池的檔案複製成**實體副本**。
+
+    🔴 這裡原本是 symlink，FIX ROUND 4 改成實體副本。理由是失效模式的性質：
+    symlink 方案有一個**靜默**失效——`omnigent run <目錄>` 的打包器不解 symlink，
+    symlink 目錄（`skills/`）會被 `rglob` 跳過，tar 內 SKILL.md 從 19 筆掉到 3 筆，
+    而 `validate` 照樣回 valid、那些 agent 的 `skills` 變 `[]`，不報錯。
+    實體副本的失效模式是 drift（有人手改其中一份副本），而 drift 由 `--check` 第 0 項
+    機械對帳、**會紅、看得見**。用「會紅的風險」換掉「會靜默的風險」。
+
+    ⚠ 所以第 0 項是這個方案的唯一守線：它比對的是**內容**（不是 mtime、不是大小），
+    任何一份副本被手改都會讓它紅。突變測試 Q 實證這件事。
+    """
+    text = source.read_text()
     if check:
-        if not link.is_symlink() or os.readlink(link) != rel:
-            diffs.append(f"{link.relative_to(OMNIGENT_DIR.parent)} -> {rel}")
+        current = dest.read_text() if dest.is_file() else None
+        if current != text:
+            diffs.append(str(dest.relative_to(OMNIGENT_DIR.parent)))
         return
-    link.parent.mkdir(parents=True, exist_ok=True)
-    if link.is_symlink() or link.exists():
-        link.unlink()
-    link.symlink_to(rel)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if dest.is_symlink():  # 從舊的 symlink 佈局升級上來
+        dest.unlink()
+    dest.write_text(text)
+
+
+def _copy_tree(dest: Path, source: Path, *, check: bool, diffs: list[str]) -> None:
+    """把來源池的整個目錄複製成實體副本（逐檔比對內容；多餘的檔案也算 drift）。"""
+    wanted = {q.relative_to(source): q for q in sorted(source.rglob("*")) if q.is_file()}
+    if check:
+        have = {q.relative_to(dest) for q in dest.rglob("*") if q.is_file()} \
+            if dest.is_dir() and not dest.is_symlink() else set()
+        for rel, src_file in wanted.items():
+            target = dest / rel
+            if not target.is_file() or target.read_text() != src_file.read_text():
+                diffs.append(str(target.relative_to(OMNIGENT_DIR.parent)))
+        for extra in sorted(have - set(wanted)):
+            diffs.append(f"{(dest / extra).relative_to(OMNIGENT_DIR.parent)}（多餘檔案）")
+        return
+    if dest.is_symlink():  # 從舊的 symlink 佈局升級上來
+        dest.unlink()
+    elif dest.is_dir():
+        shutil.rmtree(dest)
+    for rel, src_file in wanted.items():
+        target = dest / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(src_file.read_text())
 
 
 def build(*, check: bool = False) -> list[str]:
@@ -655,16 +713,16 @@ def build(*, check: bool = False) -> list[str]:
     for leader, cfg in LEADERS.items():
         base = LEADER_DIR / "agents" / leader
         _write(base / "config.yaml", leader_config(leader), check=check, diffs=diffs)
-        _symlink(base / "AGENTS.md", SHARED_DIR / "repo_leader" / "AGENTS.md",
-                 check=check, diffs=diffs)
+        _copy_file(base / "AGENTS.md", SHARED_DIR / "repo_leader" / "AGENTS.md",
+                   check=check, diffs=diffs)
         for worker in WORKERS:
             shell = base / "agents" / thin_name(worker, str(cfg["via"]))
             _write(shell / "config.yaml", worker_config(worker, str(cfg["via"])),
                    check=check, diffs=diffs)
-            _symlink(shell / "AGENTS.md", WORKERS_DIR / worker / "AGENTS.md",
-                     check=check, diffs=diffs)
-            _symlink(shell / "skills", WORKERS_DIR / worker / "skills",
-                     check=check, diffs=diffs)
+            _copy_file(shell / "AGENTS.md", WORKERS_DIR / worker / "AGENTS.md",
+                       check=check, diffs=diffs)
+            _copy_tree(shell / "skills", WORKERS_DIR / worker / "skills",
+                       check=check, diffs=diffs)
     return diffs
 
 
@@ -1018,13 +1076,18 @@ def run_checks() -> int:
                            else f"{len(diffs)} 個不同步: {diffs[:5]}")
     r.guard("0. 產物與 build-bundles.py 同步", c0)
 
-    # 7. 斷鏈 symlink 數為 0（提前跑：斷鏈是其他檢查的病因）
+    # 7. 版控內不得有任何 symlink（FIX ROUND 4：改成實體副本後的硬性斷言）
+    #    🔴 這一項取代了原本的「斷鏈 symlink == 0」。symlink 一條都不該有了——
+    #    `omnigent run <目錄>` 的打包器不解 symlink，symlink 目錄會被 rglob 跳過而
+    #    **靜默**掉整批 skills（實測：tar 內 SKILL.md 從 19 筆掉到 3 筆）。
     def c7():
-        all_links = [q for q in OMNIGENT_DIR.rglob("*") if q.is_symlink()]
-        broken = [str(q.relative_to(OMNIGENT_DIR)) for q in all_links if not q.exists()]
-        return not broken, (f"{len(all_links)} 個 symlink，0 斷鏈"
-                            if not broken else str(broken))
-    r.guard("7. 斷鏈 symlink == 0", c7)
+        links = [str(q.relative_to(OMNIGENT_DIR)) for q in OMNIGENT_DIR.rglob("*")
+                 if q.is_symlink()]
+        n_files = sum(1 for q in OMNIGENT_DIR.rglob("*")
+                      if q.is_file() and "__pycache__" not in q.parts)
+        return not links, (f"0 條 symlink（{n_files} 個實體檔）" if not links
+                           else f"仍有 {len(links)} 條 symlink：{links[:3]}")
+    r.guard("7. 版控內 symlink == 0（實體副本）", c7)
 
     # 1. 原始樹 parse + validate
     #    ⚠ parse() 本身會對壞掉的 YAML 拋例外，必須包起來——否則一份手改壞的 config.yaml
@@ -1064,7 +1127,9 @@ def run_checks() -> int:
         return not bad, (f"來源池={src_counts}" if not bad else "; ".join(bad[:5]))
     r.guard("4. thin shell skills 數 == 來源池 skill 數", c4)
 
-    # 2. materialize_bundle 後：0 個 symlink，且 re-validate 全綠
+    # 2. materialize_bundle 後仍然合法（FIX ROUND 4 後語意變了：樹裡本來就沒有 symlink
+    #    了，所以這一項不再是「驗解引用」，而是驗「複製一份後 spec 仍等價」——
+    #    `omnigent server --agent` 的 preregister 路徑會做這個複製）
     def c2():
         with tempfile.TemporaryDirectory() as td:
             dest = Path(td) / "bundle"
@@ -1080,7 +1145,7 @@ def run_checks() -> int:
             if len(mnodes) != len(nodes):
                 return False, f"複製後 agent 數 {len(mnodes)} != 原始樹 {len(nodes)}"
             return True, (f"symlinks=0、errors=[]、{len(mnodes)} 個 agent 全數複製")
-    r.guard("2. materialize_bundle 後 0 symlink + re-validate 全綠", c2)
+    r.guard("2. materialize_bundle 後仍 0 symlink 且 re-validate 全綠", c2)
 
     # 3. 每個 leaf agent 的 instructions 非空、含 marker、且不等於任何檔案路徑字串
     def c3():
@@ -1161,11 +1226,9 @@ def run_checks() -> int:
 
     # 10-12：模擬**實際啟動路徑**（omnigent run → _bundle_agent → cli._bundle → server
     # validate）。第 1／2 項驗的是 parse/validate，證明不了這條路會通。
-    r.guard("10. 上傳路徑：原始樹必敗／materialize 後必成／skills 前後相等",
-            _check_upload_path)
-    r.guard("11. launcher 端到端（run-leader.py --check-only）", _check_launcher)
-    r.guard("12. remote 嚴格上傳相容性（已知待拍板，不判 FAIL）",
-            _check_remote_upload_compat)
+    r.guard("10. 實際上傳路徑：原始樹直接上傳必須成功且內容完整", _check_upload_path)
+    r.guard("11. 所有 os_env.cwd 為相對路徑", _check_relative_cwd)
+    r.guard("12. git index 無 symlink（mode 120000）", _check_no_tracked_symlinks)
 
     print()
     print(f"總計：{r.failed} 項 FAIL" if r.failed else "總計：全部 PASS")
@@ -1346,121 +1409,130 @@ def _tar_members(data: bytes):
 
 
 def _check_upload_path() -> tuple[bool, str]:
-    """模擬實際上傳路徑：原始樹必敗、materialize 後必成、skills 前後必相等。"""
-    bundle, validate_bundle, materialize, parse_spec = _upload_bits()
+    """模擬**實際啟動路徑**：原始樹直接打包上傳必須成功。
+
+    🔴 FIX ROUND 4 把這一項從「原始樹必敗」翻成**正向斷言**。
+    symlink 時代這一項鎖的是「現況就是壞的」（`tarball contains a link (not allowed)`，
+    且 symlink 目錄 silent drop 讓 tar 內 SKILL.md 只剩 3 筆）。改成實體副本後，
+    `omnigent run <目錄>` 可以直接跑 ⇒ 斷言方向反過來：**必須成功，而且內容必須完整**。
+
+    驗的東西（全部對著 server 端真正會用的那兩個函式）：
+      1. tar 內 link entry == 0
+      2. 兩種 `enforce_handler_allowlist` 都通過（deployed server 走 True）
+      3. tar 內 SKILL.md 筆數 == spec 樹的 skills 總數（抓整批 skills 消失）
+      4. 直接上傳的 spec 與本機 `parse()` 的結果**逐 agent 等價**（skills 名稱集合相同）
+    """
+    bundle, validate_bundle, _materialize, parse_spec = _upload_bits()
     notes: list[str] = []
     bad: list[str] = []
 
     for root in LAUNCHABLE_BUNDLES:
         name = root.name
+        data = bundle(root)                    # ← 未經 materialize，就是實際路徑用的打包器
+        members = _tar_members(data)
+        links = [m.name for m in members if m.issym() or m.islnk()]
+        if links:
+            bad.append(f"{name}: tar 內有 {len(links)} 個 link entry，server 會拒：{links[:3]}")
+            continue
 
-        # (一) 直接對原始樹上傳：**預期失敗**（鎖住現況；symlink 檔會變 tar link entry）
-        raw = bundle(root)
-        raw_links = [m.name for m in _tar_members(raw) if m.issym() or m.islnk()]
-        try:
-            validate_bundle(raw, enforce_handler_allowlist=False)
-        except Exception as exc:  # noqa: BLE001
-            notes.append(f"{name}: 原始樹如預期被拒（{type(exc).__name__}）")
-        else:
-            bad.append(
-                f"{name}: 原始樹竟然通過 validate——上游行為可能變了（tar link entry "
-                f"{len(raw_links)}）。若上游已自動解引用，launcher 或許不再必要，請重新評估"
-            )
-        # 原始樹的 symlink 目錄 silent drop：tar 內不該有任何 SKILL.md
-        raw_skills = [m.name for m in _tar_members(raw)
-                      if m.isfile() and m.name.endswith("SKILL.md")]
-        notes.append(f"{name}: 原始樹 tar link entry {len(raw_links)}／SKILL.md {len(raw_skills)} 筆")
-
-        # (二) 先 materialize 再上傳：**預期成功**，且 tar 內 symlink 數 = 0
-        with tempfile.TemporaryDirectory() as td:
-            tree = materialize(root, Path(td) / name)
-            tree_links = [q for q in tree.rglob("*") if q.is_symlink()]
-            if tree_links:
-                bad.append(f"{name}: materialize 後樹內仍有 {len(tree_links)} 條 symlink")
-            data = bundle(tree)
-            members = _tar_members(data)
-            tar_links = [m.name for m in members if m.issym() or m.islnk()]
-            if tar_links:
-                bad.append(f"{name}: materialize 後 tar 仍有 link entry {tar_links[:3]}")
+        specs = {}
+        for strict in (True, False):
             try:
-                spec_after = validate_bundle(data, enforce_handler_allowlist=False)
+                specs[strict] = validate_bundle(data, enforce_handler_allowlist=strict)
             except Exception as exc:  # noqa: BLE001
-                bad.append(f"{name}: materialize 後 validate 仍失敗 {type(exc).__name__}: {exc}")
-                continue
+                bad.append(
+                    f"{name}: validate(enforce={strict}) 失敗 {type(exc).__name__}: {exc}"
+                    + ("（deployed multi-user server 走的就是 True）" if strict else "")
+                )
+        if True not in specs:
+            continue
 
-            # (三) skills 數量與名稱集合：materialize 前後必須完全相等
-            before = _skill_map_of(parse_spec(root, expand_env=False))
-            after = _skill_map_of(spec_after)
-            if before != after:
-                diff = [f"{k}: 前 {sorted(before.get(k, ()))} != 後 {sorted(after.get(k, ()))}"
-                        for k in sorted(set(before) | set(after))
-                        if before.get(k) != after.get(k)]
-                bad.append(f"{name}: skills 前後不一致 {diff[:3]}")
-            total = sum(len(v) for v in after.values())
-            tar_skills = [m.name for m in members
-                          if m.isfile() and m.name.endswith("SKILL.md")]
-            if len(tar_skills) != total:
-                bad.append(f"{name}: tar 內 SKILL.md {len(tar_skills)} != spec skills {total}")
-            notes.append(
-                f"{name}: materialize 後 link 0／SKILL.md {len(tar_skills)} 筆／"
-                f"skills 前後一致（{len(after)} agent、共 {total} 支）"
+        spec = specs[True]
+        got = _skill_map_of(spec)
+        want = _skill_map_of(parse_spec(root, expand_env=False))
+        if got != want:
+            diff = [f"{k}: 上傳後 {sorted(got.get(k, ()))} != 本機 {sorted(want.get(k, ()))}"
+                    for k in sorted(set(got) | set(want)) if got.get(k) != want.get(k)]
+            bad.append(f"{name}: 上傳後的 spec 與本機 parse 不等價 {diff[:3]}")
+        total = sum(len(v) for v in want.values())
+        tar_skills = [m.name for m in members if m.isfile() and m.name.endswith("SKILL.md")]
+        if len(tar_skills) != total:
+            bad.append(
+                f"{name}: tar 內 SKILL.md {len(tar_skills)} 筆 != spec skills 總數 {total}"
+                "（整批 skills 消失的徵兆）"
             )
+        notes.append(
+            f"{name}: 直接上傳 OK（link 0、enforce True/False 皆過）／"
+            f"SKILL.md {len(tar_skills)} 筆 == skills 總數 {total}／"
+            f"agent {len(got)} 個與本機 parse 等價"
+        )
 
     return (not bad), ("；".join(notes) if not bad else "; ".join(bad[:4]))
 
 
-def _check_launcher() -> tuple[bool, str]:
-    """端到端跑一次 launcher 的自檢（`--check-only`）。
+def _check_relative_cwd() -> tuple[bool, str]:
+    """所有 config.yaml 的 `os_env.cwd` 必須是相對路徑。
 
-    ⚠ 這一項是「launcher 真的有做 materialize」的唯一守線：若有人把 launcher 裡的
-    `materialize_bundle` 換成 `copytree`（或乾脆拿掉），launcher 自己的 symlink 斷言會
-    失敗、exit 非 0，這裡就會紅。
+    🔴 FIX ROUND 4 新增，取代上一輪那個「已知待拍板、不判 FAIL」的版本。
+    裁決：一律寫 `.`。絕對路徑在「有 `OMNIGENT_RUNNER_WORKSPACE`」時無效（runner 覆寫
+    它）、在「沒有 workspace」時會變成 agent environment root 與 copytree source 而暴露
+    host filesystem（GHSA-p8rw-8qj3-hf33）、上 deployed server 時整個 bundle 被拒。
+    三種情況沒有一種是好的 ⇒ 機器強制，防止下次又寫回去。
+
+    ⚠ 本項比 server 端**更嚴**，刻意如此：`server/bundles.py` 只檢查 **root spec** 的
+    `os_env.cwd`（`os_env = getattr(spec, "os_env", None)`，不遞迴 sub-agent），所以只有
+    sub-agent 寫絕對路徑時 deployed server **不會**拒收——但那個 sub-agent 在沒有
+    workspace 的 runner 上仍有 GHSA-p8rw-8qj3-hf33 的曝光面。實測：只改一個 thin shell
+    的 cwd，第 10 項（模擬上傳）不會紅，只有本項會紅。
     """
-    if not LAUNCHER.exists():
-        return False, f"找不到 launcher {LAUNCHER}"
-    if not os.access(LAUNCHER, os.X_OK):
-        return False, f"launcher 不可執行（chmod +x {LAUNCHER}）"
-    # --rewrite-cwd：os_env.cwd 絕對路徑是待拍板的設計問題（見 README §待拍板），
-    # 這裡要驗的是 symlink／skills 那一層，所以用它繞過 cwd 那一條。
+    import re as _re2  # noqa: PLC0415
+
+    pattern = _re2.compile(r"^\s*cwd:\s*(\S+)\s*$")
+    bad: list[str] = []
+    seen = 0
+    for cfg in sorted(OMNIGENT_DIR.rglob("config.yaml")):
+        if "__pycache__" in cfg.parts:
+            continue
+        for i, line in enumerate(cfg.read_text().splitlines(), 1):
+            m = pattern.match(line)
+            if not m:
+                continue
+            seen += 1
+            value = m.group(1).strip("\"'")
+            if value.startswith(("/", "~")) or ".." in Path(value).parts:
+                bad.append(f"{cfg.relative_to(OMNIGENT_DIR)}:{i} cwd={value!r}")
+    return (not bad), (f"{seen} 處 cwd 全部為相對路徑" if not bad
+                       else f"絕對或逃逸路徑：{bad[:4]}")
+
+
+def _check_no_tracked_symlinks() -> tuple[bool, str]:
+    """git index 裡不得有 mode 120000（symlink）的項目。
+
+    ⚠ 與第 7 項的差別：第 7 項看**工作目錄**，這一項看 **git index**——兩者可能不一致
+    （例如 symlink 已在工作目錄刪掉但 index 還留著，或反之）。版控才是別人 clone 會拿到的。
+    """
     proc = subprocess.run(
-        [str(LAUNCHER), "--check-only", "--rewrite-cwd"],
-        capture_output=True, text=True, timeout=300, check=False,
+        ["git", "ls-files", "-s", "--", str(OMNIGENT_DIR.name)],
+        cwd=OMNIGENT_DIR.parent, capture_output=True, text=True, check=False,
     )
-    out = (proc.stdout or "") + (proc.stderr or "")
-    if proc.returncode != 0:
-        tail = " / ".join(line.strip() for line in out.strip().splitlines()[-4:])
-        return False, f"launcher --check-only 失敗（exit {proc.returncode}）：{tail}"
-    for marker in ("樹內 symlink 0", "tar link entry 0", "skills 前後一致", "自檢通過"):
-        if marker not in out:
-            return False, f"launcher 輸出缺少預期斷言 {marker!r}"
-    return True, "launcher --check-only 自檢通過（symlink 0／skills 前後一致）"
-
-
-def _check_remote_upload_compat() -> tuple[bool, str]:
-    """deployed（multi-user）server 的嚴格相容性——**目前已知不通過，待拍板**。
-
-    ⚠ 刻意**不判 FAIL**（同 CEL 的 known_gap 機制）：`os_env.cwd` 寫絕對路徑是使用者
-    ROUND 0 定案的約束，而 deployed server 以
-    `enforce_handler_allowlist=not local_single_user_enabled()` 呼叫 validate，該模式會拒
-    絕絕對路徑。要嘛改成相對路徑、要嘛永遠靠 launcher 的 `--rewrite-cwd`——選型由使用者
-    決定，不由本腳本替他決定。這一項負責把現況**講出來**，並在行為變化時提醒。
-    """
-    bundle, validate_bundle, materialize, _ = _upload_bits()
-    lines: list[str] = []
-    for root in LAUNCHABLE_BUNDLES:
-        with tempfile.TemporaryDirectory() as td:
-            tree = materialize(root, Path(td) / root.name)
-            data = bundle(tree)
-            try:
-                validate_bundle(data, enforce_handler_allowlist=True)
-            except Exception as exc:  # noqa: BLE001
-                lines.append(f"{root.name}: 如現況被拒 → {exc}")
-            else:
-                lines.append(
-                    f"{root.name}: ⬆ 嚴格模式現在**通過了**——若已改成相對 cwd，"
-                    "請把本項升級成硬性斷言並移除 launcher 的 --rewrite-cwd 預設說明"
-                )
-    return True, "；".join(lines)
+    if proc.returncode != 0 or not proc.stdout.strip():
+        # 不在 git repo 內（例如突變測試把 .omnigent 複製到臨時目錄後跑 --check）⇒
+        # 這一項無從判斷，跳過而不是假紅。⚠ 假紅會讓突變測試的基線變成「1 項 FAIL」，
+        # 每個 case 都紅 ⇒ 整套突變測試失去鑑別力，比沒有更糟。
+        return True, "不在 git repo 內（或無 tracked 檔案），跳過"
+    modes: dict[str, int] = {}
+    links: list[str] = []
+    for line in proc.stdout.splitlines():
+        if not line.strip():
+            continue
+        mode, _, rest = line.partition(" ")
+        modes[mode] = modes.get(mode, 0) + 1
+        if mode == "120000":
+            links.append(rest.split("\t")[-1])
+    if links:
+        return False, f"git index 仍有 {len(links)} 個 symlink（mode 120000）：{links[:3]}"
+    summary = "／".join(f"mode {m}: {n} 個" for m, n in sorted(modes.items()))
+    return True, f"0 個 mode 120000（{summary}）"
 
 
 def main() -> int:
@@ -1470,10 +1542,13 @@ def main() -> int:
     args = ap.parse_args()
     if args.check:
         return run_checks()
-    diffs = build(check=False)
+    build(check=False)
     n_shells = len(WORKERS) * len(LEADERS)
+    n_files = sum(1 for q in OMNIGENT_DIR.rglob("*")
+                  if q.is_file() and "__pycache__" not in q.parts)
     print(f"已產生 {n_shells} 個 thin shell、{n_shells + len(LEADERS) + 1} 份 config.yaml、"
-          f"{n_shells * 2 + len(LEADERS)} 條 symlink。")
+          f"{n_shells + len(LEADERS)} 份 AGENTS.md 副本（實體，非 symlink）。")
+    print(f"（.omnigent/ 共 {n_files} 個檔案、0 條 symlink）")
     print("接著跑：python3 .omnigent/build-bundles.py --check")
     return 0
 

@@ -46,12 +46,13 @@ issue 的後續追問一律複用同一個 title；換一張 issue 就換 title�
 #   不是在任何已受 block_working_dir_changes 約束的 worker session 裡跑。
 git -C <repo> worktree add ../wt-<issue-id> -b <type>/<issue-id> origin/<整合分支>
 cd ../wt-<issue-id>
-# ⛔ 一定要走 launcher——直接 `omnigent run <bundle 目錄>` 會壞：打包器不解 symlink，
-#    AGENTS.md 會讓 server 拒收，而 skills/ 會**靜默消失**（見 .omnigent/README.md §啟動）。
-<repo>/.omnigent/run-leader.py --rewrite-cwd -- --server <url>
+omnigent run <repo>/.omnigent/woow-issue-leader --server <url>
 ```
 
 - **整合分支不要寫死**：`develop` / `main` / `master` 因 repo 而異，先確認。
+- ⚠ **`cd` 到哪裡啟動就決定了整個 session 的檔案邊界**：runner 用啟動時的 shell cwd 當
+  `sys_os_*` 的 containment 錨點（`OMNIGENT_RUNNER_WORKSPACE`），bundle 裡的 `os_env.cwd`
+  寫什麼都不生效。⇒ 要讓 worker 讀得到某個路徑，就得在啟動前站對位置，⛔ 不是去改 bundle。
 - worktree 只能建在 repo 旁邊的 sibling 目錄（`../wt-*`），⛔ 不可建在 scratchpad 或
   `/tmp`——那裡會被清掉，未 commit 的變更救不回。
 - worktree 要等 PR 開出、CI 綠燈後才移除，移除後在回報中確認。

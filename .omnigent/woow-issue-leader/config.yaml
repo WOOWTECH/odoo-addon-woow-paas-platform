@@ -20,11 +20,12 @@ executor:
 skills: all
 
 os_env:
-  # ⚠ cwd 不決定 harness 的 process cwd（實測）——它是 server 模式的**邊界**與
-  #   sys_os_* / config_path containment 的錨點。設在六個 repo 的共同父目錄，讓跨 repo
-  #   唯讀查詢落在邊界內。這是全樹唯一一個機器相關的絕對路徑。
+  # ⚠ cwd 寫 `.` 是刻意的：runner 一律用 OMNIGENT_RUNNER_WORKSPACE 覆寫它（見
+  #   build-bundles.py 的 OS_ENV_BLOCK 註解），所以這裡寫什麼都不會生效；而寫絕對路徑
+  #   會讓 deployed server 直接拒收整個 bundle（GHSA-p8rw-8qj3-hf33）。
+  #   ⛔ 不要改成絕對路徑——實際的 containment 錨點是啟動 omnigent run 時的 shell cwd。
   type: caller_process
-  cwd: /home/elmo/woow-repos
+  cwd: .
   sandbox:
     type: none
 
