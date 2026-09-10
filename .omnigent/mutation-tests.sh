@@ -12,8 +12,10 @@
 # ⇒ 所以每個 case 都必須宣告**失敗指紋**，由本 script 機械斷言：
 #      EXPECT_ITEMS   預期紅的驗收項號（逗號分隔）。實際紅的集合必須**完全相等**——
 #                     多紅一項（誤傷）與少紅一項（守線失效）都算該 case 失敗。
-#      EXPECT_POLICY  CEL 相關時，預期紅的 policy 名稱。它必須出現在 FAIL 訊息裡，
-#                     這正是抓「紅錯 policy」的那道斷言。
+#      EXPECT_KEY     FAIL 訊息裡**必須出現**的關鍵字。CEL 相關時放 policy 名（抓「紅錯
+#                     policy」）；dispatcher 相關時放情境名（抓「紅錯情境」）。這一欄是
+#                     項號比對抓不到的那一層：突變 K 的舊寫法項號與預期完全相同，只有
+#                     policy 名能揭露它其實紅在別支 policy 上。
 #    另外無條件斷言：突變**確實改到檔案**（內容 hash 有變），否則是 no-op 假綠。
 #
 # 用法：bash .omnigent/mutation-tests.sh [case 代號…]
@@ -37,7 +39,7 @@ _tree_hash () {
 }
 
 run_mut () {
-  local code="$1" label="$2" expect_items="$3" expect_policy="$4" mutation="$5"
+  local code="$1" label="$2" expect_items="$3" expect_key="$4" mutation="$5"
   if [ -n "$ONLY" ] && ! grep -qw "$code" <<< "$ONLY"; then return 0; fi
 
   local TD; TD=$(mktemp -d "${TMPDIR:-/tmp}/omni-mut-XXXX")
@@ -56,15 +58,15 @@ run_mut () {
   [ "$actual_items" != "$expect_items" ] \
     && problems+=("項號不符：預期 [$expect_items]，實際 [${actual_items:-無}]")
   # (3) CEL 相關：預期的 policy 名必須出現在 FAIL 訊息裡
-  if [ -n "$expect_policy" ]; then
-    printf '%s\n' "$out" | grep '^\[FAIL\]' | grep -q "$expect_policy" \
-      || problems+=("FAIL 訊息裡找不到預期的 policy「$expect_policy」← 可能紅錯地方")
+  if [ -n "$expect_key" ]; then
+    printf '%s\n' "$out" | grep '^\[FAIL\]' | grep -qF "$expect_key" \
+      || problems+=("FAIL 訊息裡找不到預期的關鍵字「$expect_key」← 可能紅錯地方")
   fi
 
   if [ ${#problems[@]} -eq 0 ]; then
     PASS_N=$((PASS_N+1))
     printf '✓ %-2s %-58s 紅 [%s]%s\n' "$code" "$label" "$actual_items" \
-      "${expect_policy:+ ← $expect_policy}"
+      "${expect_key:+ ← $expect_key}"
   else
     FAIL_N=$((FAIL_N+1))
     printf '✗ %-2s %s\n' "$code" "$label"
@@ -93,7 +95,7 @@ if [ -z "$ONLY" ] || grep -qw baseline <<< "$ONLY"; then
 fi
 
 # ── 各 case ───────────────────────────────────────────────────────────────────
-# run_mut <代號> <說明> <預期紅的項號> <預期紅的 CEL policy（選填）> <突變指令>
+# run_mut <代號> <說明> <預期紅的項號> <FAIL 訊息必須含的關鍵字（選填）> <突變指令>
 #
 # ⚠ 突變一律用 python 寫（不用 sed）：sed 只能按字面定位，突變 K 的歷史事故就是它在同一份
 #   config 命中兩處、改壞了另一支 policy ⇒ 紅錯地方。
@@ -323,6 +325,28 @@ assert old in s, "CLAUDE_PROJECT_DIR 覆寫點定位失效"
 p.write_text(s.replace(old, "                pass  # 不覆寫", 1))
 PY'
 
+
+run_mut Y "dispatcher 拿掉 path-token 解析（cd ../repoA 會零命中）" "0,14" "cd ../repoA" \
+'python3 - <<"PY"
+import pathlib
+# 退回 FIX ROUND 6 之前：只有 A（cwd）與 B（字串比對）兩層，沒有 C（path-token）。
+p = pathlib.Path("woow-issue-leader/hooks/dispatch-hook.py")
+s = p.read_text()
+old = "        if any(c == repo or repo in c.parents for c in candidates):   # C"
+assert old in s, "path-token 命中判斷（C 層）定位失效"
+p.write_text(s.replace(old, "        if False:   # C 被拿掉", 1))
+PY'
+
+run_mut Z "PreToolUse 的 hook 失敗改回 fail-open" "0,14" "PreToolUse hook timeout" \
+'python3 - <<"PY"
+import pathlib
+p = pathlib.Path("woow-issue-leader/hooks/dispatch-hook.py")
+s = p.read_text()
+old = "    if event != \"PreToolUse\":"
+assert old in s, "事件分級判斷定位失效"
+# 讓每個事件都走 warning-only 那條 ⇒ 退回 fail-OPEN
+p.write_text(s.replace(old, "    if True:  # 退回 fail-open", 1))
+PY'
 
 echo
 if [ "$FAIL_N" -eq 0 ]; then

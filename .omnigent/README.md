@@ -126,6 +126,55 @@ repo 實際註冊的 4 支（dispatcher 兩種事件都要支援）：
 repo-lint `kubectl-ns-whitelist-sync` 的對帳範圍內 ⇒ 必然漂移。dispatcher 跑的是 repo 裡
 **原封不動**那一支，真相只有一個來源。
 
+### 🔴 強度分級：repo hook 是 A 類，dispatcher 的 target detection 不是
+
+⚠ 這兩件事**強度完全不同**，混為一談會高估整條鏈：
+
+| 環節 | 強度 | 理由 |
+| --- | --- | --- |
+| **repo hook 執行後的判定** | **A 類 sound** | 跑的是 repo 裡原封不動那支（`kubectl-ns-guard` 用 `shlex` 正確解析、剝 heredoc、認 `bash -c`），且白名單有 repo-lint 對帳 |
+| **dispatcher 的 target detection** | ⚠ **單點 best-effort glue** | 它要從 payload 猜「這道指令作用到哪些 repo」。猜錯 ⇒ 那支 hook 不會被呼叫，**而且是靜默的** |
+
+⇒ **整條鏈的強度由較弱的那一環決定**：只要 target detection 漏判，A 類的 repo hook 就不會
+被執行到。FIX ROUND 6 的 BLOCKING 1 正是這個——`cd ../repoA`（從 sibling repo 進入）零命中。
+
+target detection 採三層聯集（寧可多跑、不可漏守）：
+
+| 層 | 判斷 |
+| --- | --- |
+| A | payload 的 `cwd` 落在某個 repo 底下 |
+| B | 指令文字出現該 repo 的相對路徑／絕對路徑／目錄名（字面比對） |
+| C | **path-token 解析**：`shlex.split` 抽出路徑型 token（含 `/`、以 `.` 開頭，或 `cd`／`pushd`／`git -C`／`env -C` 的下一個 token，以及 `-c` 的 shell payload 遞迴一層），**以 cwd 與 workspace 根兩個基準各 resolve 一次**，落在某個 repo 內就命中。`normpath` 順帶解掉 `group//repoA` 與 `..` |
+
+### ⚠ hook 失敗的事件分級（fail-closed 的取捨）
+
+| 事件 | hook timeout／執行失敗時 | 理由 |
+| --- | --- | --- |
+| **PreToolUse** | ⛔ **fail-closed（exit 2）** | 它是安全 gate。放行一個沒被檢查過的指令，等於那道守線**這一次完全不存在** |
+| **PostToolUse** | warning-only | 工具已經執行完了，擋也改變不了結果 |
+
+⚠ **fail-closed 的誤擋風險是真的**：repo hook 自己有 bug 卡住的話，**該 repo 的所有操作都會
+被擋**。所以拒絕訊息設計成可診斷——明寫 repo、哪支 hook、timeout 還是執行失敗、為什麼擋、
+以及三種處理方式。逃生門是 `export OMNIGENT_DISPATCH_FAIL_OPEN=1`（⛔ 會放行未經檢查的指令，
+且每次都留 stderr 警告）。
+
+### ⚠ 零命中告警抓不到「targets() 回空」那一類
+
+dispatcher 在「命中了 repo、但沒有任何 hook 真的跑起來」時寫一行 stderr
+（只對 `Bash`／`Edit`／`Write`／`MultiEdit`／`NotebookEdit` 告警，避免噪音）。
+
+⛔ **它抓不到 BLOCKING 1 那一類漏守**——那一類的症狀就是 `targets()` 回**空**，
+連「命中了 repo」這個前提都不成立。告警是 path-token 解析的**輔助，不是替代品**。
+真正的守線在 targets() 的三層聯集。
+
+### known_gap（已知涵蓋不到，刻意不追）
+
+| 形式 | 為什麼不追 |
+| --- | --- |
+| 路徑藏在變數裡（`D=../repoA; cd $D`） | 需要追蹤變數賦值，那是 shell 解譯器的工作 |
+| 指令寫進 script 檔再執行（`bash run.sh`） | 本 hook 看不到檔案內容（repo 的 `kubectl-ns-guard` 檔頭也明寫它不涵蓋這層） |
+| `bash -c` 巢狀兩層以上 | payload 遞迴限深度 1——再深就該懷疑是刻意混淆，而本 hook 防的是**手滑不是攻擊** |
+
 ### 三個接線前提（缺一個就完全不生效，驗收第 15 項機器強制）
 
 1. **同層必須有 `skills/`**——否則不發 `--plugin-dir`，`hooks.json` 根本不被讀取
@@ -213,6 +262,11 @@ repo-lint `kubectl-ns-whitelist-sync` 的對帳範圍內 ⇒ 必然漂移。disp
    - **轉呼叫時要覆寫 `CLAUDE_PROJECT_DIR` 成該 repo 根**——repo 的 hook command 都寫
      `"$CLAUDE_PROJECT_DIR/.claude/hooks/x.py"`，不覆寫就找不到檔。
    → 驗收第 14／15 項擋（突變 T／W／X 實證）。
+   ⚠ 第四個前提（FIX ROUND 6 補）：**target detection 猜錯 repo 也是靜默漏守**——
+   `cd ../repoA`（從 sibling repo 進入）在只有「cwd ＋ 字面比對」兩層時完全零命中，
+   後面接 kubectl 就等於鐵律失效。現在補了 path-token 解析（突變 Y 實證）。
+   ⚠ 第五個（同輪補）：**repo hook 自己 timeout 時原本 fail-OPEN**——只寫 stderr 就放行。
+   PreToolUse 已改成 fail-closed（exit 2），PostToolUse 保留 warning-only（突變 Z 實證）。
 10. 🔴 **CLAUDE.md 的 on-demand 注入只綁 `Read` 工具。** 用 `cat` / `grep` 讀檔不會觸發注入
     ⇒ 在共同祖先 workspace 下，worker 連那點補償都沒有。
     ⇒ 關鍵守線知識必須**寫進 prompt**，⛔ 不要假設 worker 讀得到 repo 的 CLAUDE.md 或 skills。
@@ -280,7 +334,12 @@ omnigent 的 venv，而且 `function.path` 打錯字會讓 worker 連 `Read` 都
 | `p_model_fast_tier_only` | 讀的是 `sys_session_send` 的**結構化參數**，不是 shell 字串 |
 | `headless_subagent_purpose_guard` / `spawn_bounds` | 同上，結構化參數 |
 | `block_working_dir_changes` | 有自己的 shell 解析（非單一 regex），且只需判斷 `cd`/`git -C` 這種固定形狀 |
-| repo 的 `.claude/hooks/kubectl-ns-guard.py` | 用 `shlex` 正確解析，剝 heredoc、認 `bash -c`、認 `--`；且 repo-lint 對帳白名單 |
+| repo 的 `.claude/hooks/kubectl-ns-guard.py`（**被執行到之後**的判定） | 用 `shlex` 正確解析，剝 heredoc、認 `bash -c`、認 `--`；且 repo-lint 對帳白名單 |
+
+⚠ **但它要先被執行到。** 在共同祖先 workspace 下，repo hook 只能透過 dispatcher 被呼叫，
+而 **dispatcher 的 target detection 是 B 類 best-effort glue**（它要猜「這道指令作用到哪些
+repo」，猜錯就靜默不呼叫）⇒ **整條鏈的強度由較弱的那一環決定**。詳見 §dispatcher 的
+「強度分級」。⛔ 不要因為 repo hook 本身是 A 類，就以為整條鏈是 A 類。
 
 #### B. Best-effort —— 防手滑，**不是安全邊界**
 

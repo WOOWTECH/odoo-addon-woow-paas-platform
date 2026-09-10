@@ -531,9 +531,17 @@ def resolve_purpose(purpose: str) -> str:
 
 # ── worker config 產生 ───────────────────────────────────────────────────────
 
-def worker_config(purpose: str, harness: str, *, model: str, effort: str,
-                  description: str) -> str:
-    """組出 worker 的 config.yaml 內容。"""
+def _worker_config(purpose: str, harness: str, *, model: str, effort: str,
+                   description: str) -> str:
+    """組出 worker 的 config.yaml 內容。
+
+    ⛔ **不要直接呼叫這支。** 它只負責「把欄位組成 YAML 字串」，**不做任何驗證**——
+    五道防線全在 `generate()` 裡。覆核實測：直接呼叫
+    `_worker_config("ops_k8s", "pi", model="gpt-6-astra", …)` 能產出 9030 bytes 的
+    config，而那是個 **ops_k8s 不支援的 harness ＋ 不相容的 model** 的組合。
+
+    ⇒ 一律走 `generate()`（或 CLI）。前綴 `_` 就是在說這件事。
+    """
     spec = ROSTER[purpose]
     readonly = not spec["writes"]
     lines = [
@@ -727,7 +735,7 @@ def generate(purpose: str, harness: str, out_dir: Path, *,
     if repo:
         desc += f"，目標 repo {repo}"
     (out_dir / "config.yaml").write_text(
-        worker_config(purpose, harness, model=model, effort=effort, description=desc))
+        _worker_config(purpose, harness, model=model, effort=effort, description=desc))
     # 防線 2：只寫**實體** AGENTS.md，不用 instructions 路徑、不用 symlink
     shutil.copy2(template_dir / "AGENTS.md", out_dir / "AGENTS.md")
     skills_dst = out_dir / "skills"

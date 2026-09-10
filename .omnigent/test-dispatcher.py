@@ -63,6 +63,27 @@ def _fixture(root: Path) -> None:
                          "hooks": [{"type": "command",
                                     "command": 'python3 "$CLAUDE_PROJECT_DIR/.claude/hooks/marker.py"'}]}],
     }}))
+    # ── group/repoA：驗 sibling 相對路徑（`cd ../repoA`）；group/other 是無 hook 的 sibling
+    g = root / "group" / "repoA"
+    (g / ".claude" / "hooks").mkdir(parents=True)
+    (g / ".claude" / "hooks" / "marker.py").write_text(
+        "import json,os,sys,pathlib\n"
+        "p = json.load(sys.stdin)\n"
+        "pathlib.Path(os.environ['MARKER_FILE']).write_text(\n"
+        "    f\"{p.get('hook_event_name','?')}|{os.environ.get('CLAUDE_PROJECT_DIR','')}\")\n")
+    (g / ".claude" / "hooks" / "slow.py").write_text("import time\ntime.sleep(3)\n")
+    (g / ".claude" / "settings.json").write_text(json.dumps({"hooks": {
+        "PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command",
+            "command": 'python3 "$CLAUDE_PROJECT_DIR/.claude/hooks/marker.py"'}]}],
+    }}))
+    (root / "group" / "other").mkdir(parents=True)
+    # ── repoC：有 settings.json 但**沒有**任何 matching hook（驗零命中告警）
+    c = root / "repoC"
+    (c / ".claude").mkdir(parents=True)
+    (c / ".claude" / "settings.json").write_text(json.dumps({"hooks": {
+        "PreToolUse": [{"matcher": "NotebookEdit", "hooks": [{"type": "command",
+            "command": "true"}]}]}}))
+
     # ── repoB：PreToolUse 走 stdout JSON deny（exit 0）——kubectl-ns-guard 的協定
     b = root / "nested" / "repoB"
     (b / ".claude" / "hooks").mkdir(parents=True)
@@ -78,10 +99,13 @@ def _fixture(root: Path) -> None:
     }}))
 
 
-def _run(root: Path, payload: dict, marker: Path) -> tuple[int, str, str]:
+def _run(root: Path, payload: dict, marker: Path,
+         extra_env: dict | None = None) -> tuple[int, str, str]:
     env = dict(os.environ)
     env["CLAUDE_PROJECT_DIR"] = str(root)      # claude 給的是 workspace 根
     env["MARKER_FILE"] = str(marker)
+    env.pop("OMNIGENT_DISPATCH_FAIL_OPEN", None)
+    env.update(extra_env or {})
     if marker.exists():
         marker.unlink()
     proc = subprocess.run([sys.executable, str(DISPATCHER)], input=json.dumps(payload),
@@ -114,6 +138,25 @@ def run_tests() -> tuple[bool, str]:  # noqa: PLR0915
             ("5. pushd", bash("pushd repoA && echo hi", root), "marker"),
             ("6. 絕對路徑不 cd", bash(f"echo hi > {a}/f.txt", root), "marker"),
             ("11. 與任何 repo 無關（不得誤觸發）", bash("echo unrelated", root), "none"),
+            # ── FIX ROUND 6：path-token 解析（BLOCKING 1／NON-BLOCKING 1）────────
+            # 🔴 覆核者實跑證明的漏守：從 sibling repo `cd ../repoA` 時三種比對全不中
+            #   （cwd 不在 repoA 內、字串沒有 `group/repoA`、裸 `repoA` 的 regex 禁止前一
+            #   字元是 `/`）。這是多 repo 共同祖先下**極常見**的寫法，不是對抗性規避。
+            ("13. cd ../repoA（從 sibling repo）",
+             bash("cd ../repoA && echo hi", root / "group" / "other"), "marker"),
+            ("14. cd ../../group/repoA（多層回彈）",
+             bash("cd ../../group/repoA && echo hi", root / "group" / "repoA"), "marker"),
+            ("15. group//repoA（重複 slash）",
+             bash("cd group//repoA && echo hi", root), "marker"),
+            ("16. env -C ../repoA（不 cd 也作用到 repo）",
+             bash("env -C ../repoA echo hi", root / "group" / "other"), "marker"),
+            ("17. bash -c 包一層的相對上跳（payload 遞迴解析）",
+             bash('bash -c "cd ../repoA && echo hi"', root / "group" / "other"), "marker"),
+            ("18. (cd repoA; …) 子 shell 寫法",
+             bash("(cd group/repoA; echo hi)", root), "marker"),
+            # 絕對路徑但落在 workspace 外 ⇒ 不得誤觸發
+            ("19. 絕對路徑但在 workspace 外（不得誤觸發）",
+             bash("cat /etc/hostname", root), "none"),
         ]
         for label, payload, expect in cases:
             rc, out, err = _run(root, payload, marker)
@@ -183,8 +226,63 @@ def run_tests() -> tuple[bool, str]:  # noqa: PLR0915
         else:
             results.append("10")
 
+        # ── FIX ROUND 6 / BLOCKING 2：hook 失敗的事件分級 ────────────────────
+        g = root / "group" / "repoA"
+        gs = g / ".claude" / "settings.json"
+        gs.write_text(json.dumps({"hooks": {
+            "PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command",
+                "command": 'python3 "$CLAUDE_PROJECT_DIR/.claude/hooks/slow.py"',
+                "timeout": 1}]}],
+            "PostToolUse": [{"matcher": "Write", "hooks": [{"type": "command",
+                "command": 'python3 "$CLAUDE_PROJECT_DIR/.claude/hooks/slow.py"',
+                "timeout": 1}]}],
+        }}))
+        # 20. PreToolUse hook timeout ⇒ **必須 fail-closed（exit 2）**
+        rc, _, err = _run(root, bash("echo hi", g), marker)
+        if rc != 2:
+            bad.append(f"20. PreToolUse hook timeout 應 fail-closed（exit 2），實得 {rc}"
+                       "——放行一個沒被檢查過的指令＝那道守線這次不存在")
+        elif "拒絕執行" not in err or "怎麼處理" not in err:
+            bad.append(f"20. 拒絕訊息不可診斷（缺 repo／hook／原因／逆轉方式）：{err[:120]!r}")
+        else:
+            results.append("20")
+        # 21. PostToolUse hook timeout ⇒ 仍 warning-only（工具已執行完，擋也沒用）
+        rc, _, err = _run(root, {"hook_event_name": "PostToolUse", "tool_name": "Write",
+                                 "cwd": str(g), "tool_input": {"file_path": str(g / "x.py")}},
+                          marker)
+        if rc != 0:
+            bad.append(f"21. PostToolUse hook timeout 應 warning-only，實得 exit {rc}")
+        elif "timeout" not in err:
+            bad.append("21. PostToolUse timeout 沒有留下 warning")
+        else:
+            results.append("21")
+        # 22. 逃生門：OMNIGENT_DISPATCH_FAIL_OPEN=1 讓 PreToolUse 放行
+        env_extra = {"OMNIGENT_DISPATCH_FAIL_OPEN": "1"}
+        rc, _, err = _run(root, bash("echo hi", g), marker, extra_env=env_extra)
+        if rc != 0:
+            bad.append(f"22. 逃生門未生效，實得 exit {rc}")
+        elif "未經檢查" not in err:
+            bad.append("22. 逃生門沒有警告這是未經檢查的指令")
+        else:
+            results.append("22")
+
+        # ── X4：零命中告警 ───────────────────────────────────────────────────
+        # 23. 命中 repo 但沒有 matching hook ⇒ 要有 warning
+        rc, _, err = _run(root, bash("echo hi", root / "repoC"), marker)
+        if "沒有任何" not in err:
+            bad.append(f"23. 零命中但沒有告警：{err[:100]!r}")
+        else:
+            results.append("23")
+        # 24. workspace 根的無關指令 ⇒ **不得**有告警（否則全是噪音）
+        rc, _, err = _run(root, bash("echo unrelated", root), marker)
+        if err.strip():
+            bad.append(f"24. 無關指令竟然有告警（噪音）：{err[:100]!r}")
+        else:
+            results.append("24")
+
     ok = not bad
-    return ok, (f"12 個情境全部符合預期（{','.join(sorted(set(results), key=len))}）" if ok
+    n = len(set(results))
+    return ok, (f"{n} 個情境全部符合預期" if ok
                 else f"{len(bad)} 個情境不符：" + "；".join(bad[:4]))
 
 
