@@ -1280,7 +1280,12 @@ class PaasController(HiddenChainMixin, Controller):
         不會留下第二套「skip-trial 永遠 flagless」的硬編判準。
         """
         sub = sub or service._sub()
-        invoice = request.env['account.move'].new(sub._generate_invoice_vals())
+        invoice_vals = sub._generate_invoice_vals()
+        # 上游 vals 帶 journal_id 卻不帶 company_id；先釘回 subscription company，
+        # 再用 sudo 建 transient move，避免租戶因 account.journal read ACL 在
+        # `_compute_company_id` 爆 AccessError，也避免誤吃 request env company。
+        invoice_vals['company_id'] = sub.sh_company_id.id
+        invoice = request.env['account.move'].sudo().new(invoice_vals)
         return _invoice_payability_fields(invoice)
 
     def _ensure_skip_trial_invoice_payable(self, service, sub):
@@ -1300,9 +1305,11 @@ class PaasController(HiddenChainMixin, Controller):
     def api_service_skip_trial_estimate(self, service_id: int, **kw: Any) -> dict[str, Any]:
         """Return the upcoming-invoice breakdown for skip-trial confirmation.
 
-        Side-effect-free: computes untaxed / tax / total + wallet sufficiency
-        without mutating the subscription. Used by the confirm modal so the
-        displayed total matches what `api_service_skip_trial` will charge.
+        Computes untaxed / tax / total + wallet sufficiency without
+        persisting business mutations, then materializes an unsaved
+        ``account.move`` preview to derive the payability fields. Used by the
+        confirm modal so the displayed total and guard match what
+        `api_service_skip_trial` will charge.
         """
         CloudService = request.env['woow_paas_platform.cloud_service']
         service = CloudService.browse(service_id)
@@ -1316,16 +1323,17 @@ class PaasController(HiddenChainMixin, Controller):
 
         # #553：原本是「一律 `str(e)`」——連 ORM 例外都照吐給租戶。分類比照
         # `_create_service`（#520／PR #523）與上方 `api_service_skip_trial`
-        # （#525 A1／PR #527）。本端點 side-effect-free（`_skip_trial_estimate`
-        # 只讀不寫），所以**不需要** rollback／savepoint，只需要分類訊息。
+        # （#525 A1／PR #527）。本端點只讀資料並以 `account.move.new()` 建立
+        # 未落庫的 preview，沒有 DB mutation，所以**不需要** rollback／savepoint，
+        # 只需要分類訊息。
         try:
             estimate = service._skip_trial_estimate()
             estimate.update(self._skip_trial_invoice_payability(service))
 
         except OperationalError:
-            # #533：本站也是**枚舉補到的**（issue 未點名）。這支 side-effect-free
-            # （`_skip_trial_estimate` 只讀不寫，所以上面刻意沒有 savepoint），
-            # **沒有殘留面**——但「並發類例外被裸 `except Exception` 吞掉 ⇒
+            # #533：本站也是**枚舉補到的**（issue 未點名）。這支沒有 DB mutation
+            # （只有讀取與未落庫的 `account.move.new()` preview，故刻意不設
+            # savepoint），**沒有殘留面**——但「並發類例外被裸 `except Exception` 吞掉 ⇒
             # `retrying()` 看不到」這個結構缺口與另外兩站完全相同。
             #
             # 只讀不寫一樣撞得到 40001：Odoo 的 cursor 是 REPEATABLE READ，讀取在

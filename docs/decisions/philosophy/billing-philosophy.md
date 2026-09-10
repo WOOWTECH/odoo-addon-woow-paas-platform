@@ -41,9 +41,14 @@ PaaS 自己建立、帶 `woow_skip_upstream_hook=True` 的發票隔離上游 inl
 
 `/woow` 也可能列出 ERP／官網建立的 flagless 發票。#980 的 A 窄守衛規定：當該張發票的
 `company.auto_invoice='automatic'` 時，list/detail 必須先標示不可由 `/woow` 付款，付款
-端點與目前會建立 flagless 發票的 skip-trial 必須在任何 savepoint、wallet 扣款、
-`action_post()` 前拒絕。這不是 B 方案：平台不抑制 inline einvoice、不把 flagless 發票
-改送 async cron。`auto_invoice!='automatic'` 時，flagless 發票維持既有 `/woow` 付款行為。
+端點與目前會建立 flagless 發票的 **Cloud Service skip-trial** 必須在任何 savepoint、
+wallet 扣款、`action_post()` 前拒絕。這不是 B 方案：平台不抑制 inline einvoice、不把
+flagless 發票改送 async cron。`auto_invoice!='automatic'` 時，flagless 發票維持既有
+`/woow` 付款行為。
+
+此處的 skip-trial 守衛**僅涵蓋 Cloud Service**。Security Access 與 Smart Home 的
+skip-trial 尚未傳入同一個 `before_mutation` guard，因此未受保護；這是既有缺口，留待
+#864 §8.3 的產品取捨裁決。現況不得概括成全產品 replay-safe。
 
 > **Scope limitation (2026-05):** The current `woow_skip_upstream_hook` mechanism
 > only isolates `out_invoice` issuance (`create_ecpay_invoice`). Refund flows

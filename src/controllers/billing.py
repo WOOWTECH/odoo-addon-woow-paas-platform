@@ -51,17 +51,18 @@ ERR_REDEEM_FAILED = 'redeem_failed'  # 防禦性 fallback（未帶 code 的 Vali
 # #980 A：`/woow` 對 flagless＋automatic 的發票 fail-loud。code 同時用於
 # mutation error 與 list/detail/skip-trial estimate payload，前端只讀、不推導。
 INVOICE_PAY_BLOCKED_FLAGLESS_AUTOMATIC = 'flagless_automatic_not_payable'
-INVOICE_PAY_BLOCKED_UNSUPPORTED_MOVE = 'invoice_not_payable'
+INVOICE_PAY_BLOCKED_NOT_PAYABLE = 'invoice_not_payable'
 
 
 def _invoice_pay_is_replay_safe(invoice):
     """回傳 `_pay_from_wallet` 是否可證明不會 inline 對外開電子發票。
 
-    這是 #977 裁決 C 與 #980 A 共用的唯一判準：out_invoice 且（平台 skip 旗標
-    或公司不是 automatic）才安全。讀 invoice.company_id，鏡射上游 action_post
-    的逐列判準；呼叫端不得另寫第二套 flag/company 判斷。
+    這是 #977 裁決 C 與 #980 A 共用的唯一判準：有 company 的 out_invoice 且
+    （平台 skip 旗標或公司不是 automatic）才安全；company 空集一律 fail-closed。
+    讀 invoice.company_id，鏡射上游 action_post 的逐列判準；呼叫端不得另寫第二套
+    flag/company 判斷。
     """
-    if invoice.move_type != 'out_invoice':
+    if invoice.move_type != 'out_invoice' or not invoice.company_id:
         return False
     if invoice.woow_skip_upstream_hook:
         return True
@@ -73,8 +74,8 @@ def _invoice_payability_fields(invoice):
     payable = _invoice_pay_is_replay_safe(invoice)
     if payable:
         reason = None
-    elif invoice.move_type != 'out_invoice':
-        reason = INVOICE_PAY_BLOCKED_UNSUPPORTED_MOVE
+    elif invoice.move_type != 'out_invoice' or not invoice.company_id:
+        reason = INVOICE_PAY_BLOCKED_NOT_PAYABLE
     else:
         reason = INVOICE_PAY_BLOCKED_FLAGLESS_AUTOMATIC
     return {
@@ -1268,7 +1269,11 @@ class BillingController(HiddenChainMixin, Controller):
                 "[INV] pay state_reject invoice=%s state=%s",
                 invoice.id, invoice.state,
             )
-            return {'success': False, 'error': _('Invoice is not payable')}
+            return {
+                'success': False,
+                'error': _('Invoice is not payable'),
+                'code': INVOICE_PAY_BLOCKED_NOT_PAYABLE,
+            }
         if invoice.payment_state == 'paid':
             _logger.info(
                 "[INV] pay already_paid invoice=%s",
@@ -1283,7 +1288,11 @@ class BillingController(HiddenChainMixin, Controller):
                 "[INV] pay move_type_reject invoice=%s move_type=%s",
                 invoice.id, invoice.move_type,
             )
-            return {'success': False, 'error': _('Invoice is not payable')}
+            return {
+                'success': False,
+                'error': _('Invoice is not payable'),
+                'code': INVOICE_PAY_BLOCKED_NOT_PAYABLE,
+            }
 
         # #980 A：同一顆 replay-safe predicate 同時驅動 payload 與 mutation guard。
         # 必須在 balance、savepoint、wallet 扣款與 action_post 前拒絕；否則
@@ -1301,6 +1310,14 @@ class BillingController(HiddenChainMixin, Controller):
                     'e-invoicing is enabled. Please contact support.'),
                 'code': payability['pay_blocked_reason'],
             }
+
+        # 保留 #864 的逐筆 forensics；值直接取自上方同一顆 predicate 的
+        # 結果與輸入，避免 log 與真正的 guard 無聲漂移。
+        _logger.info(
+            "[INV] pay replay_safe=%s invoice=%s skip_hook=%s auto_invoice=%s",
+            payability['payable_via_woow'], invoice.id,
+            invoice.woow_skip_upstream_hook, invoice.company_id.auto_invoice,
+        )
 
         amount = invoice.amount_total if invoice.state == 'draft' else invoice.amount_residual
         balance = partner.wallet_balance

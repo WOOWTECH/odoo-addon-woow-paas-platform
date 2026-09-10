@@ -18,7 +18,8 @@ PaaS 的開票流程刻意與上游 `ecpay_invoice_tw` 的 inline `action_post()
    inline 呼叫 `create_ecpay_invoice`（會在失敗時 rollback wallet 扣款）。
 3. **預期 `company.auto_invoice='manual'`**。若 ops 改成 `'automatic'`，只有帶
    skip flag、可證明不會 inline 外呼的發票可由 `/woow` 付款；flagless 發票仍列出，
-   但付款與目前會建立 flagless 發票的 skip-trial 會先行拒絕並要求聯絡客服（#980 A）。
+   但付款與目前會建立 flagless 發票的 **Cloud Service skip-trial** 會先行拒絕並要求
+   聯絡客服（#980 A）。
 
 ## Architecture
 
@@ -150,11 +151,16 @@ def create_ecpay_invoice(self):
   `payable_via_woow=false` 與 `pay_blocked_reason=flagless_automatic_not_payable`；付款端點
   在 savepoint、wallet 扣款與 `action_post()` 前拒絕。這是 #980 的 A 窄守衛，**不是**
   抑制上游 inline 開票或改走 async 的 B 方案。
-- **skip-trial** 以實際 `_generate_invoice_vals()` 預演首張發票；目前該路徑建立的是
-  flagless invoice，因此 automatic 下 estimate 會先揭露相同原因，confirm 端點拒絕。
-  未來 choke point 若開始 stamp skip flag，兩端會透過同一 predicate 自動放行。
+- **Cloud Service skip-trial** 以實際 `_generate_invoice_vals()` 預演首張發票；目前該
+  路徑建立的是 flagless invoice，因此 automatic 下 estimate 會先揭露相同原因，confirm
+  端點拒絕。未來 choke point 若開始 stamp skip flag，兩端會透過同一 predicate 自動放行。
 - **ERP／官網原生流程不變**：flagless invoice 仍由上游 hook 按既有方式處理；只有
-  `/woow` 的 wallet payment／skip-trial surface 收窄。
+  `/woow` 的 wallet payment 與 Cloud Service skip-trial surface 收窄。
+
+> **射程限制**：#980 的 skip-trial 守衛目前只接在 Cloud Service。Security Access 與
+> Smart Home 的 skip-trial 尚未傳入同一個 `before_mutation` guard，因此**不受此守衛保護**；
+> 這是既有缺口，留待 #864 §8.3 的產品取捨裁決。不得把目前狀態描述成全產品
+> replay-safe。
 
 > 預設仍是 `company.auto_invoice='manual'`（上游 default）。切成 automatic 前要先確認
 > 所有預期由 `/woow` 自助付款的 invoice 都有 skip flag；本模組不替 ops 改 company 設定。

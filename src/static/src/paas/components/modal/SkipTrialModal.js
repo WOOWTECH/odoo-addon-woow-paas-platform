@@ -92,8 +92,7 @@ export class SkipTrialModal extends Component {
         return (
             !!this.props.requireWoowPayable &&
             !!this.state.estimate &&
-            this.state.estimate.payable_via_woow !== true &&
-            !!this.state.estimate.pay_blocked_reason
+            this.state.estimate.payable_via_woow !== true
         );
     }
 

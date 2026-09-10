@@ -12,10 +12,15 @@
 from datetime import date, timedelta
 import json
 import os
-from unittest.mock import patch
+from types import SimpleNamespace
+import uuid
+from unittest.mock import MagicMock, patch
 
+from odoo.exceptions import AccessError
 from odoo.tests.common import HttpCase, TransactionCase, tagged
 
+from ..controllers import paas as paas_controller_module
+from ..controllers.billing import _invoice_pay_is_replay_safe
 from ..models.cloud_service import _internal_provision
 
 _BLOCKED_CODE = 'flagless_automatic_not_payable'
@@ -108,9 +113,9 @@ class TestInvoicePayFlaglessGuard980(
             3000.0, description='980 invoice guard test credit')
         self.partner.invalidate_recordset(['wallet_balance'])
 
-    def _make_invoice(self, flagged):
+    def _make_invoice(self, flagged, move_type='out_invoice'):
         return self.env['account.move'].sudo().create({
-            'move_type': 'out_invoice',
+            'move_type': move_type,
             'partner_id': self.partner.id,
             'company_id': self.company.id,
             'woow_skip_upstream_hook': flagged,
@@ -199,6 +204,19 @@ class TestInvoicePayFlaglessGuard980(
         self.assertEqual(einvoice_calls, [], 'skip flag 必須短路上游 inline hook')
         self.assertEqual(self._points(), before_points - 500.0)
 
+    def test_not_payable_mutation_rejections_return_the_payload_code(self):
+        refund = self._make_invoice(flagged=False, move_type='out_refund')
+        refund_result = self._pay(refund)
+        self.assertFalse(refund_result.get('success'), refund_result)
+        self.assertEqual(refund_result.get('code'), 'invoice_not_payable')
+
+        self.invoice.button_cancel()
+        self.invoice.invalidate_recordset()
+        self.assertEqual(self.invoice.state, 'cancel', 'fixture 前提：發票必須已取消')
+        state_result = self._pay()
+        self.assertFalse(state_result.get('success'), state_result)
+        self.assertEqual(state_result.get('code'), 'invoice_not_payable')
+
     def test_list_payload_mirrors_payability_for_both_sides_of_the_gate(self):
         self._use_automatic_invoicing()
         flagged = self._make_invoice(flagged=True)
@@ -229,12 +247,19 @@ class TestInvoicePayFlaglessGuard980(
 @tagged('post_install', '-at_install')
 class TestSkipTrialFlaglessGuard980(
         _AutomaticInvoiceProbeMixin, HttpCase):
-    """skip-trial 三格矩陣＋estimate payload，全部走 public HTTP seam。"""
+    """非 admin workspace owner 的 skip-trial 三格與 estimate HTTP 矩陣。"""
 
     def setUp(self):
         super().setUp()
-        self.authenticate('admin', 'admin')
-        self.user = self.env.ref('base.user_admin')
+        suffix = uuid.uuid4().hex[:8]
+        self.login = 'skip_trial_owner_980_%s' % suffix
+        self.user = self.env['res.users'].sudo().create({
+            'name': 'Skip Trial Owner 980',
+            'login': self.login,
+            'password': self.login,
+            'email': '%s@example.test' % self.login,
+            'groups_id': [(6, 0, [self.env.ref('base.group_user').id])],
+        })
         self.partner = self.user.partner_id
         self.company = self.env.company.sudo()
 
@@ -322,6 +347,7 @@ class TestSkipTrialFlaglessGuard980(
         self.partner.sudo().add_wallet_points(
             3000.0, description='980 skip-trial guard test credit')
         self.partner.invalidate_recordset(['wallet_balance'])
+        self.authenticate(self.login, self.login)
 
     def _post(self, suffix):
         response = self.url_open(
@@ -368,6 +394,33 @@ class TestSkipTrialFlaglessGuard980(
             return values
 
         return patch.object(Subscription, '_generate_invoice_vals', flagged)
+
+    def test_http_actor_is_non_admin_owner_without_journal_read_access(self):
+        response = self.url_open(
+            '/web/session/get_session_info',
+            data=json.dumps({
+                'jsonrpc': '2.0',
+                'method': 'call',
+                'id': 980,
+                'params': {},
+            }),
+            headers={'Content-Type': 'application/json'},
+        )
+        payload = response.json()
+        self.assertIn('result', payload, 'HTTP session probe 失敗：%r' % payload)
+        self.assertEqual(
+            payload['result']['uid'], self.user.id,
+            'HTTP session 必須真的是非 admin workspace owner，不是 admin fixture',
+        )
+        self.assertFalse(
+            self.user.has_group('base.group_system'),
+            'fixture 前提：owner 不得有 system/admin 群組',
+        )
+        access = self.workspace.with_user(self.user).check_user_access(self.user)
+        self.assertTrue(access, 'fixture 前提：HTTP actor 必須是 workspace member')
+        self.assertEqual(access.role, 'owner', 'fixture 前提：HTTP actor 必須是 owner')
+        with self.assertRaises(AccessError):
+            self.env['account.journal'].with_user(self.user).check_access('read')
 
     def test_automatic_flagless_is_rejected_with_zero_side_effects(self):
         einvoice_calls = self._use_automatic_invoicing()
@@ -418,13 +471,30 @@ class TestSkipTrialFlaglessGuard980(
         self.assertTrue(self._invoices().woow_skip_upstream_hook)
 
     def test_estimate_payload_uses_the_same_three_cell_matrix(self):
-        self._use_automatic_invoicing()
+        einvoice_calls = self._use_automatic_invoicing()
+        before_points = self._points()
+        before_sub = self._sub_snapshot()
+        before_payments = set(self.env['account.payment'].sudo().search([
+            ('partner_id', '=', self.partner.id),
+        ]).ids)
 
-        automatic_flagless = self._post('skip-trial-estimate')['data']
+        estimate_result = self._post('skip-trial-estimate')
+        self.assertTrue(estimate_result.get('success'), estimate_result)
+        automatic_flagless = estimate_result['data']
         self.assertEqual(
             (automatic_flagless['payable_via_woow'],
              automatic_flagless['pay_blocked_reason']),
             (False, _BLOCKED_CODE))
+        self.assertEqual(einvoice_calls, [], 'estimate 不得抵達上游 ECPay seam')
+        self.assertEqual(self._points(), before_points, 'estimate 不得扣 wallet')
+        self.assertEqual(self._sub_snapshot(), before_sub, 'estimate 不得結束 trial')
+        self.assertFalse(self._invoices(), 'transient preview 不得建立 invoice')
+        self.assertEqual(
+            set(self.env['account.payment'].sudo().search([
+                ('partner_id', '=', self.partner.id),
+            ]).ids),
+            before_payments,
+            'estimate 不得建立 payment')
 
         self.company.write({'auto_invoice': 'manual'})
         manual_flagless = self._post('skip-trial-estimate')['data']
@@ -440,6 +510,67 @@ class TestSkipTrialFlaglessGuard980(
             (automatic_flagged['payable_via_woow'],
              automatic_flagged['pay_blocked_reason']),
             (True, None))
+
+
+@tagged('post_install', '-at_install')
+class TestSkipTrialPreviewContract980(TransactionCase):
+    """preview 的 company/ACL SSOT 窄 contract，不另造產品 policy。"""
+
+    def test_preview_stamps_subscription_company_then_uses_sudo_new(self):
+        controller = paas_controller_module.PaasController()
+        request_mock = MagicMock()
+        request_mock.env.company.id = 7
+        Move = request_mock.env.__getitem__.return_value
+        preview = Move.sudo.return_value.new.return_value
+        vals = {'journal_id': 99}
+        sub = MagicMock()
+        sub.sh_company_id.id = 42
+        sub._generate_invoice_vals.return_value = vals
+        expected = {
+            'payable_via_woow': False,
+            'pay_blocked_reason': _BLOCKED_CODE,
+        }
+
+        with patch.object(paas_controller_module, 'request', request_mock), \
+                patch.object(
+                    paas_controller_module,
+                    '_invoice_payability_fields',
+                    return_value=expected,
+                ) as payability:
+            result = controller._skip_trial_invoice_payability(
+                MagicMock(), sub=sub)
+
+        self.assertEqual(result, expected)
+        self.assertEqual(
+            vals['company_id'], 42,
+            'preview 必須釘 subscription company，不得誤吃 request env company',
+        )
+        Move.sudo.assert_called_once_with()
+        Move.sudo.return_value.new.assert_called_once_with(vals)
+        payability.assert_called_once_with(preview)
+
+    def test_replay_safe_predicate_fails_closed_without_invoice_company(self):
+        invoice = SimpleNamespace(
+            move_type='out_invoice',
+            woow_skip_upstream_hook=True,
+            company_id=False,
+        )
+        self.assertFalse(
+            _invoice_pay_is_replay_safe(invoice),
+            '缺 company 時即使 skip flag 為真也必須 fail-closed',
+        )
+
+        invoice.company_id = SimpleNamespace(auto_invoice='manual')
+        invoice.woow_skip_upstream_hook = False
+        self.assertTrue(
+            _invoice_pay_is_replay_safe(invoice),
+            'predicate 必須讀 invoice company 的 manual policy',
+        )
+        invoice.company_id.auto_invoice = 'automatic'
+        self.assertFalse(
+            _invoice_pay_is_replay_safe(invoice),
+            '同一 invoice company 切 automatic 後必須拒絕',
+        )
 
 
 @tagged('post_install', '-at_install')
@@ -486,8 +617,17 @@ class TestFlaglessPaymentFrontendContract980(TransactionCase):
         js_source = self._source('skip_js')
         xml_source = self._source('skip_xml')
         self.assertIn('payable_via_woow === true', js_source)
-        self.assertIn('pay_blocked_reason', js_source)
+        blocked_getter = js_source.split(
+            'get isPaymentBlocked()', 1)[1].split('onBackdropClick', 1)[0]
+        self.assertNotIn(
+            'pay_blocked_reason', blocked_getter,
+            'payable 欄位缺失時仍須顯示 fallback，不可要求 reason 同時存在',
+        )
         self.assertIn(_BLOCKED_COPY, ' '.join(xml_source.split()))
+        self.assertIn(
+            '<t t-else="">Invoice is not payable</t>', xml_source,
+            '未知或缺失 reason 必須顯示可翻譯 fallback',
+        )
         self.assertIn('disabled="!canConfirm"', xml_source)
         self.assertIn(
             'requireWoowPayable="true"', self._source('service_xml'),
