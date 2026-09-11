@@ -385,6 +385,31 @@ P_COST = _fn_policy(
     {"max_cost_usd": 350.0, "ask_thresholds_usd": [70.0, 210.0]},
     note="⛔ 只掛 claude 家族（claude-native／claude-sdk）。pi 系掛上去會被 _UNPRICED_ASK 卡住每個 session（見上方註解）。")
 
+# ── 頂層 issue-leader 專用：按日計的花費上限 ─────────────────────────────────
+# issue-leader 是**長時間運作的單一 session**，per-session 累計的 cost_budget 遲早撞到上限
+# （#1094 抬到 350 只是延後）。改掛 user_daily_cost_budget：閘門邏輯與 cost_budget 相同，
+# 但計的是 session owner **當天（UTC）跨所有 session** 的累計，每天歸零 ⇒ 撞到上限隔天
+# （UTC 00:00＝台灣 08:00）下一輪自動放行，不必重開 session。
+# ⚠ 額度是 owner 當日**所有** session 的總和（含派出去的 worker、含同一人在 UI 開的其他
+#   session），不是 leader 自己的。先寬鬆（700），看實際運作再收。
+# ⚠ 刻意不設 ask_thresholds_usd：ASK 是 fail-closed（ASK_TIMEOUT 900s），無人值守時等於硬停。
+# ⚠ 前提：session 要有 owner grant。UI 建的頂層 session 有（2026-09-11 實測
+#   GET /v1/sessions/<id>/owner → {"owner": "eugene"}）；single-user mode 沒有 ⇒ policy
+#   永遠不觸發＝無煞車（builder.py::_load_user_daily_cost 回零）。換 server 部署要重驗。
+# engine 每個 turn／tool call 重建並重讀 rollup（routes_hooks.py::_build_engine），跨日不需重啟。
+P_COST_DAILY = _fn_policy(
+    "user_daily_cost_budget", "omnigent.policies.builtins.cost.user_daily_cost_budget",
+    {"max_cost_usd": 700.0},
+    note="頂層 issue-leader 專用：owner 當天（UTC）跨 session 累計，每天歸零；不設 ask 門檻（ASK fail-closed）。\n"
+         "前提是 session 有 owner grant，single-user mode 下永遠不觸發。")
+
+# 頂層 issue-leader 不掛 max_tool_calls_per_session：它是整個 session 累計、超過就 DENY，
+# 對長時間運作的單一 session 是錯的形狀（會比花費更早撞到）。detect_loop／detect_thrashing
+# 是滑動視窗，保留。
+P_SAFETY_LEADER = [p for p in P_SAFETY
+                   if not p.lstrip().startswith("max_tool_calls_per_session:")]
+assert len(P_SAFETY_LEADER) == len(P_SAFETY) - 1, "P_SAFETY 形狀變了，重新確認要拿掉哪一條"
+
 P_MERGE = _cel_yaml("p_merge_no_agent_merge", CEL_MERGE)
 P_APPROVE = _cel_yaml("p_approve_no_agent_signoff", CEL_APPROVE)
 P_TAG = _cel_yaml("p_tag_no_agent_tag_push", CEL_TAG)
