@@ -382,7 +382,7 @@ P_SAFETY = [
 #    model，由 server 端查 catalog 定價（orchestration.py 的 has_tokens 分支，估算值）。
 P_COST = _fn_policy(
     "cost_budget", "omnigent.policies.builtins.cost.cost_budget",
-    {"max_cost_usd": 25.0, "ask_thresholds_usd": [5.0, 15.0]},
+    {"max_cost_usd": 350.0, "ask_thresholds_usd": [70.0, 210.0]},
     note="⛔ 只掛 claude 家族（claude-native／claude-sdk）。pi 系掛上去會被 _UNPRICED_ASK 卡住每個 session（見上方註解）。")
 
 P_MERGE = _cel_yaml("p_merge_no_agent_merge", CEL_MERGE)

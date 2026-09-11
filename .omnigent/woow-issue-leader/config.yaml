@@ -161,5 +161,5 @@ guardrails:
       function:
         path: omnigent.policies.builtins.cost.cost_budget
         arguments:
-          max_cost_usd: 25.0
-          ask_thresholds_usd: [5.0, 15.0]
+          max_cost_usd: 350.0
+          ask_thresholds_usd: [70.0, 210.0]
