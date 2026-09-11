@@ -440,16 +440,25 @@ P_WORKTREE = _fn_policy(
     {"allowed_root": "'<工單指定的 worktree>'"}, on=["tool_call"],
     note="allowed_root 只用在 deny 訊息；真正的規則是「絕對路徑或含 .. 的寫入路徑一律\n"
          "DENY」。它要成立，前提是 cwd 不會被搬走 → 見下面的 block_working_dir_changes。")
-# ⚠ 沒給 allowed_dirs ⇒ **所有** cd / pushd / popd / git -C 一律 DENY。這是刻意的：
+# ⚠ allowed_dirs 只含該 issue 的 worktree ⇒ cd / git -C 只能進 worktree 本身或其子目錄，
+#   其餘（`..`、別的 repo、共同祖先）一律 DENY；git worktree add/move/remove 一律 DENY。
 #   worktree_guard 擋不住「先 cd 出去、再寫相對路徑」，兩條合起來才是完整的封閉。
+#   runner 的 cwd 是共同祖先（OMNIGENT_RUNNER_WORKSPACE），不是 worktree ⇒ implementer
+#   開工第一件事是 `cd <worktree>`；沒有 allowed_dirs 它連自己的 worktree 都進不去。
 #   代價是 implementer 完全不能跨 repo（連 git -C 都不行）——跨 repo 是 leader 的事。
-P_WORKDIR = _fn_policy(
-    "block_working_dir_changes",
-    "omnigent.policies.builtins.working_dir.block_working_dir_changes",
-    {"block_cd": True, "block_worktree": True, "action": "deny"},
-    note="未給 allowed_dirs ⇒ 所有 cd / pushd / popd / git -C / git worktree 一律 DENY。\n"
-         "這是 worktree_guard 的另一半：擋掉「先 cd 出去、再寫相對路徑」的逃逸。\n"
-         "副作用（刻意）：implementer 不能跨 repo，跨 repo 唯讀是 leader 的職責。")
+def _p_workdir(worktree: str | None) -> str:
+    """有 worktree ⇒ allowed_dirs 只含它；沒有 ⇒ 舊行為（cd 全 DENY，只給 self-check 用）。"""
+    args: dict[str, object] = {"block_cd": True, "block_worktree": True, "action": "deny"}
+    if worktree:
+        args["allowed_dirs"] = [worktree]
+    return _fn_policy(
+        "block_working_dir_changes",
+        "omnigent.policies.builtins.working_dir.block_working_dir_changes",
+        args,
+        note="allowed_dirs 只含本 issue 的 worktree ⇒ cd / git -C 只能進 worktree 或其子目錄，\n"
+             "其餘一律 DENY；git worktree add/move/remove 一律 DENY。\n"
+             "這是 worktree_guard 的另一半：擋掉「先 cd 出去、再寫相對路徑」的逃逸。\n"
+             "副作用（刻意）：implementer 不能跨 repo，跨 repo 唯讀是 leader 的職責。")
 
 # ── os_env ───────────────────────────────────────────────────────────────────
 # 🔴 `cwd` 一律寫 `.`。⛔ 不要寫絕對路徑（本樹曾寫 `/home/elmo/woow-repos`，已移除）。
@@ -462,7 +471,9 @@ P_WORKDIR = _fn_policy(
 #    — overrides whatever the spec declared (relative or absolute)」，約 6247-6259 行）。
 #    覆寫發生在 `OSEnvironment` 建立**之前**，所以 harness 的實際 cwd **與**
 #    `sys_os_*` 的 containment 錨點**兩者都**以 workspace 為準，不是以 spec 為準。
-#    ⇒ 實際錨點 = 啟動 `omnigent run` 時的 shell cwd（本 bundle 用法就是那個 worktree）。
+#    ⇒ 實際錨點 = 啟動 `omnigent run` 時的 shell cwd（本 bundle 用法是六 repo 的共同祖先
+#       `/home/elmo/woow-repos`，**不是** worktree——implementer 靠 _p_workdir 填的
+#       allowed_dirs 自己 `cd` 進去，見 #1092）。
 #    ⇒ 想讓跨 repo 唯讀落在邊界內，**不能**靠在這裡寫父目錄，要靠啟動時站在哪裡。
 #
 # 2. **沒有 workspace 的 runner 上，絕對 `cwd` 會生效——而且那是一個已登錄的漏洞面。**
@@ -560,7 +571,7 @@ def resolve_purpose(purpose: str) -> str:
 # ── worker config 產生 ───────────────────────────────────────────────────────
 
 def _worker_config(purpose: str, harness: str, *, model: str, effort: str,
-                   description: str) -> str:
+                   description: str, worktree: str | None = None) -> str:
     """組出 worker 的 config.yaml 內容。
 
     ⛔ **不要直接呼叫這支。** 它只負責「把欄位組成 YAML 字串」，**不做任何驗證**——
@@ -604,7 +615,7 @@ def _worker_config(purpose: str, harness: str, *, model: str, effort: str,
         "skills: all",
         OS_ENV_BLOCK.rstrip(),
         "",
-        _guardrails(purpose, harness),
+        _guardrails(purpose, harness, worktree=worktree),
     ]
     return "\n".join(lines) + "\n"
 
@@ -615,7 +626,7 @@ def _safe_name(purpose: str, harness: str) -> str:
     return f"{purpose.replace('-', '_')}_{via}"
 
 
-def _guardrails(purpose: str, harness: str) -> str:
+def _guardrails(purpose: str, harness: str, *, worktree: str | None = None) -> str:
     """worker 的完整 policy 集合。
 
     ⚠ child **不繼承** parent 的 `guardrails.policies`（實測：create body 只帶
@@ -632,7 +643,7 @@ def _guardrails(purpose: str, harness: str) -> str:
     if readonly:
         body.append(P_READONLY)
     if purpose == "implement":
-        body += [P_WORKTREE, P_WORKDIR]
+        body += [P_WORKTREE, _p_workdir(worktree)]
     if purpose == "ops_k8s":
         body.append(P_KUBECTL)
     body += [P_BOARD, P_MERGE, P_APPROVE, P_TAG, P_ESCAPE]
@@ -763,7 +774,8 @@ def generate(purpose: str, harness: str, out_dir: Path, *,
     if repo:
         desc += f"，目標 repo {repo}"
     (out_dir / "config.yaml").write_text(
-        _worker_config(purpose, harness, model=model, effort=effort, description=desc))
+        _worker_config(purpose, harness, model=model, effort=effort, description=desc,
+                       worktree=worktree))
     # 防線 2：只寫**實體** AGENTS.md，不用 instructions 路徑、不用 symlink
     shutil.copy2(template_dir / "AGENTS.md", out_dir / "AGENTS.md")
     skills_dst = out_dir / "skills"
@@ -832,7 +844,9 @@ def main() -> int:
     ap.add_argument("--model", help="覆寫對照表的 model（仍會過防線 1）")
     ap.add_argument("--effort", choices=["high", "xhigh"], help="覆寫對照表的 effort")
     ap.add_argument("--repo", help="目標 repo alias（寫進 description）")
-    ap.add_argument("--worktree", help="該 issue 的 worktree 絕對路徑（寫進 description）")
+    ap.add_argument("--worktree",
+                help="該 issue 的 worktree 絕對路徑（寫進 description；implement 另填進 "
+                     "block_working_dir_changes.allowed_dirs）")
     ap.add_argument("--out-dir", default=None,
                     help="worker 目錄的父層（預設 $OMNIGENT_RUNNER_WORKSPACE/.omnigent-runtime/workers）")
     ap.add_argument("--self-check", action="store_true", help="自檢所有組合，不留檔")

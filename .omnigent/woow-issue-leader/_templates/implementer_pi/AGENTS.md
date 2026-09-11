@@ -68,14 +68,19 @@
 
 ## ⛔ 不要離開你的 worktree
 
-`block_working_dir_changes`（`block_cd: true`、未給 `allowed_dirs`）會 **DENY 所有 `cd` /
-`pushd` / `popd` / `git -C <path>` / `git worktree add|move|remove`**。這是刻意的——
+`block_working_dir_changes`（`block_cd: true`、`allowed_dirs` 只含工單給的 worktree）會 **DENY
+所有進不到 worktree 或其子目錄的 `cd` / `pushd` / `popd` / `git -C <path>`，以及所有
+`git worktree add|move|remove`**。這是刻意的——
 `worktree_guard` 只能擋「絕對路徑或 `..` 逃逸」的寫入，**它擋不住「先 `cd` 出去、再寫相對
 路徑」**。兩條守線只有在 cwd 從頭到尾不動的前提下才成立。
 
 實務上這代表：
 
-- runner 啟動時已經把 cwd 設在你的 worktree，**你不需要 `cd`**。
+- runner 的 cwd 是六 repo 的共同祖先（`/home/elmo/woow-repos`），**不是**你的 worktree。
+  開工第一件事：`cd <工單給的 worktree 絕對路徑>`（⛔ 相對路徑的 `cd` 會被擋）。不確定
+  shell 是否保留 cwd 時，每條指令都以 `cd <worktree> && ` 開頭——多 cd 一次無害。
+- 檔案讀寫工具的 `path` 一律相對、不含 `..`，基準是 harness 行程的 cwd（＝共同祖先），
+  寫成 `paas/wt-<id>/src/x.py` 這種形式。
 - 要在子目錄跑測試就把路徑當參數傳（`python -m pytest src/tests/test_x.py`），
   ⛔ 不要 `cd src && pytest`。
 - **跨 repo 只剩絕對路徑的唯讀**：`grep -rn x /home/elmo/woow-repos/<repo>/src/` 可以，
