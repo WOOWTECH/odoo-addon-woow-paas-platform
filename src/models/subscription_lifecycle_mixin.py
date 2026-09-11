@@ -1,4 +1,5 @@
 import logging
+from contextlib import nullcontext
 from datetime import date, timedelta
 
 from dateutil.relativedelta import relativedelta
@@ -457,12 +458,17 @@ class SubscriptionLifecycleMixin(models.AbstractModel):
             'billing_cycle_end': (today + delta).isoformat(),
         }
 
-    def _skip_trial(self):
+    def _skip_trial(self, before_mutation=None):
         """Skip the trial period and start paid billing immediately.
 
         Creates the first invoice and advances the next payment date
         by one billing cycle.
 
+        Args:
+            before_mutation: 選用的 side-effect-free guard；在既有 business
+                precondition 之後、savepoint 與第一筆寫入之前呼叫。提供此 callback
+                時，本方法會自行包住 mutation savepoint，讓 caller 不必把 guard
+                放進 savepoint 內。
         Returns:
             dict with invoice info
         Raises:
@@ -481,8 +487,6 @@ class SubscriptionLifecycleMixin(models.AbstractModel):
         if not sub.sh_trial:
             raise UserError(_("Subscription is not in trial period."))
 
-        today = fields.Date.today()
-
         # Check wallet balance before proceeding
         partner = sub.sh_partner_id
         plan_price = sub.sh_plan_price
@@ -498,47 +502,61 @@ class SubscriptionLifecycleMixin(models.AbstractModel):
                 % (partner.wallet_balance, plan_price)
             )
 
-        # End trial and set billing to start today
-        sub.write({
-            'sh_trial': False,
-            'sh_trial_end_date': today - relativedelta(days=1),
-            'sh_start_date': today,
-            'sh_date_of_next_payment': today,
-        })
+        # #980：controller 的 `/woow` payability guard 由這個 seam 注入。它必須
+        # 排在既有 business precondition 之後（保留 #567 taxonomy），但仍早於
+        # savepoint／trial write／建票／扣款與 action_post。
+        if before_mutation is not None:
+            before_mutation(sub)
 
-        # Generate and create invoice
-        invoice_vals = sub._generate_invoice_vals()
-        invoice = self.env['account.move'].sudo().create(invoice_vals)
-        sub.compute_view_invoice()
-        _logger.info(
-            "[SUB_MIXIN] _skip_trial invoice created sub=%s invoice=%s amount=%s",
-            sub.id, invoice.id, invoice.amount_total,
+        mutation_scope = (
+            self.env.cr.savepoint()
+            if before_mutation is not None
+            else nullcontext()
         )
+        with mutation_scope:
+            today = fields.Date.today()
 
-        # Advance next payment by one billing cycle
-        unit_deltas = {
-            'day': relativedelta(days=sub.sh_recurrency),
-            'week': relativedelta(weeks=sub.sh_recurrency),
-            'month': relativedelta(months=sub.sh_recurrency),
-            'year': relativedelta(years=sub.sh_recurrency),
-        }
-        delta = unit_deltas.get(sub.sh_unit)
-        if delta:
-            sub.sh_date_of_next_payment = today + delta
+            # End trial and set billing to start today
+            sub.write({
+                'sh_trial': False,
+                'sh_trial_end_date': today - relativedelta(days=1),
+                'sh_start_date': today,
+                'sh_date_of_next_payment': today,
+            })
 
-        # Post/pay invoice based on company settings
-        sub._handle_invoice_creation(invoice)
+            # Generate and create invoice
+            invoice_vals = sub._generate_invoice_vals()
+            invoice = self.env['account.move'].sudo().create(invoice_vals)
+            sub.compute_view_invoice()
+            _logger.info(
+                "[SUB_MIXIN] _skip_trial invoice created sub=%s invoice=%s amount=%s",
+                sub.id, invoice.id, invoice.amount_total,
+            )
 
-        _logger.info(
-            "[SUB_MIXIN] _skip_trial done entity=%s:%s sub=%s invoice=%s amount=%s next_payment=%s",
-            self._name, self.id, sub.id, invoice.name,
-            invoice.amount_total, sub.sh_date_of_next_payment,
-        )
+            # Advance next payment by one billing cycle
+            unit_deltas = {
+                'day': relativedelta(days=sub.sh_recurrency),
+                'week': relativedelta(weeks=sub.sh_recurrency),
+                'month': relativedelta(months=sub.sh_recurrency),
+                'year': relativedelta(years=sub.sh_recurrency),
+            }
+            delta = unit_deltas.get(sub.sh_unit)
+            if delta:
+                sub.sh_date_of_next_payment = today + delta
 
-        return {
-            'invoice_id': invoice.id,
-            'amount': invoice.amount_total,
-        }
+            # Post/pay invoice based on company settings
+            sub._handle_invoice_creation(invoice)
+
+            _logger.info(
+                "[SUB_MIXIN] _skip_trial done entity=%s:%s sub=%s invoice=%s amount=%s next_payment=%s",
+                self._name, self.id, sub.id, invoice.name,
+                invoice.amount_total, sub.sh_date_of_next_payment,
+            )
+
+            return {
+                'invoice_id': invoice.id,
+                'amount': invoice.amount_total,
+            }
 
     # ----------------------------------------------------------------
     # Suspend / Resume / Cleanup (abstract — implemented by subclass)

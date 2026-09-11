@@ -95,14 +95,23 @@
                                 </span>
                             </div>
                             <div class="o_woow_invoice_col o_woow_invoice_col_action">
-                                <t t-if="canPay(invoice)">
+                                <t t-if="isPaymentDue(invoice)">
                                     <WoowButton
                                         variant="'primary'"
                                         size="'sm'"
+                                        disabled="!canPay(invoice)"
                                         onClick="(ev) => this.showPay(ev, invoice)">
                                         Pay Now
                                     </WoowButton>
                                 </t>
+                                <span
+                                    t-if="isPaymentBlocked(invoice)"
+                                    class="o_woow_invoice_pay_blocked_reason">
+                                    <t t-if="invoice.pay_blocked_reason === 'flagless_automatic_not_payable'">
+                                        This invoice cannot be paid in /woow while automatic e-invoicing is enabled. Please contact support.
+                                    </t>
+                                    <t t-else="">Invoice is not payable</t>
+                                </span>
                             </div>
                         </div>
                     </t>

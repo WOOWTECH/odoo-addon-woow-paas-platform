@@ -6693,7 +6693,11 @@ msgstr "此帳單已付款"
 
 #. module: woow_paas_platform
 #. odoo-python
+#. odoo-javascript
 #: code:addons/woow_paas_platform/controllers/billing.py:0
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/SkipTrialModal.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/billing/InvoiceDetailPage.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/billing/InvoiceListPage.xml:0
 msgid "Invoice is not payable"
 msgstr "此帳單無法付款"
 
@@ -13217,6 +13221,17 @@ msgstr ""
 #: code:addons/woow_paas_platform/models/loyalty_card.py:0
 msgid "This gift card is being redeemed by another request. Please retry."
 msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#. odoo-javascript
+#: code:addons/woow_paas_platform/controllers/billing.py:0
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/SkipTrialModal.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/billing/InvoiceDetailPage.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/billing/InvoiceListPage.xml:0
+msgid "This invoice cannot be paid in /woow while automatic e-invoicing is enabled. Please contact support."
+msgstr "自動開立電子發票已啟用，此帳單無法在 /woow 付款。請聯絡客服。"
 
 #. module: woow_paas_platform
 #. odoo-python

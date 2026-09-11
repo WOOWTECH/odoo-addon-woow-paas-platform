@@ -90,9 +90,21 @@ export class InvoiceListPage extends Component {
     return `o_woow_invoice_status_${this.getStatusInfo(invoice).color}`;
   }
 
-  canPay(invoice) {
+  isPaymentDue(invoice) {
     const status = invoice.status_label || "draft";
     return status === "waiting" || status === "overdue";
+  }
+
+  canPay(invoice) {
+    return this.isPaymentDue(invoice) && invoice.payable_via_woow === true;
+  }
+
+  isPaymentBlocked(invoice) {
+    return (
+      this.isPaymentDue(invoice) &&
+      invoice.payable_via_woow !== true &&
+      !!invoice.pay_blocked_reason
+    );
   }
 
   formatPoints(amount) {
