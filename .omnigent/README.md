@@ -190,7 +190,7 @@ tool call 是在 server 端的 `ProxyMcpManager` 用原始工具名（`sys_os_sh
 
 | 層 | policies | CEL | ＝基本四支 ＋ | 沒掛的 |
 | --- | --- | --- | --- | --- |
-| `woow_issue_leader`（頂層） | 11 | **5** | P-model | **P-board**（刻意，見下） |
+| `woow_issue_leader`（頂層） | 10 | **5** | P-model | **P-board**（刻意，見下）；`max_tool_calls_per_session`；花費改掛 `user_daily_cost_budget`（兩者見 §頂層 issue-leader 改掛） |
 | `repo_leader_cc` | 12 | 6 | P-model ＋ P-board | — |
 | `repo_leader_pi` | 11 | 6 | P-model ＋ P-board | `cost_budget`（非 CEL，見 §cost_budget） |
 | 執行期產生的 `ops_k8s` worker | 11 | 6 | P-board ＋ **P-kubectl**（第 7 支，只存在於動態 config） | P-model |
@@ -633,6 +633,32 @@ model 在不在 catalog**：查不到時 `_usage_is_unpriced()` 會讓 `cost_bud
 ```
 python3 -c "from omnigent.llms.context_window import fetch_model_pricing; print(fetch_model_pricing('<model-id>'))"
 ```
+
+### 頂層 issue-leader 改掛 `user_daily_cost_budget`（按日計）＋不掛 `max_tool_calls_per_session`
+
+issue-leader 是**長時間運作的單一 session**，任何「整個 session 累計」的上限遲早撞到：
+`cost_budget` 的 `max_cost_usd`（#1094 抬到 350 只是延後）與 `max_tool_calls_per_session`
+（400 次，會比花費更早撞到）都是這種形狀。2026-09-11 起頂層改成：
+
+| 守線 | 頂層 issue-leader | repo-leader／worker |
+| --- | --- | --- |
+| 花費 | `user_daily_cost_budget`：owner **當天（UTC）跨所有 session** 累計，`max_cost_usd: 700`，不設 ask 門檻 | `cost_budget`（per-session，350／70／210）不變 |
+| 工具呼叫次數 | 不掛（只留滑動視窗的 `detect_loop`／`detect_thrashing`） | `max_tool_calls_per_session: 400` 不變 |
+
+**撞到上限隔天會自動繼續**：rollup 按 UTC 日分桶（UTC 00:00＝台灣 08:00 歸零），engine 每個
+turn／tool call 都重建並重讀 store（`routes_hooks.py::_build_engine`），所以跨日後的**下一輪**
+直接放行，不必重開 session。但被 DENY 的那一輪不會自動重試——隔天要有新的觸發
+（子代完成的喚醒、或人在 UI 送一句話）它才會動。
+
+⚠ 三個前提／代價：
+
+1. **額度是 owner 當日所有 session 的總和**——含派出去的 worker、含同一人在 UI 開的其他
+   session（例如 Claude Code 終端 session）。700 是先寬鬆觀察的值，看實際運作再收。
+2. **session 要有 owner grant**。UI 建的頂層 session 有（2026-09-11 實測
+   `GET /v1/sessions/<id>/owner` → `{"owner": "eugene"}`）；single-user mode 沒有 ⇒
+   `_load_user_daily_cost` 回零、policy 永遠不觸發＝**無煞車**。換 server 部署要重驗。
+3. **不設 `ask_thresholds_usd`**：ASK 是 fail-closed（`ask_timeout: 900`），無人值守時
+   一個 ASK 等於硬停，而且 decline 不記錄門檻、下一輪再問。要提醒就看 UI 的花費，不靠 ASK。
 
 ### 🔴 白名單同步債
 
