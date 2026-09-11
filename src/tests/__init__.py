@@ -828,6 +828,7 @@ from . import test_rule_reparent_guard_941
 # 三種注入深度（journal 缺失／payment 建好後／reconcile 之後）各配一條深度斷言，
 # 併發那組證 40001 傳得到 retrying()；前端失敗分支重抓錢包走靜態掃描。
 from . import test_invoice_pay_rollback_864
+from . import test_invoice_pay_flagless_guard_980
 from . import test_invoice_issue_policy_864
 
 # #990：老化告警 cron 的 batch 化。unbounded 掃描＋逐 move 獨立 cursor 的 N+1，

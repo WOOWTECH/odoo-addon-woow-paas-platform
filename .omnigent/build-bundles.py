@@ -94,6 +94,7 @@ OS_ENV_BLOCK = GEN.OS_ENV_BLOCK
 ASK_TIMEOUT = GEN.ASK_TIMEOUT
 ROSTER = GEN.ROSTER
 P_SAFETY, P_COST = GEN.P_SAFETY, GEN.P_COST
+P_SAFETY_LEADER, P_COST_DAILY = GEN.P_SAFETY_LEADER, GEN.P_COST_DAILY
 P_MERGE, P_APPROVE, P_TAG, P_ESCAPE = GEN.P_MERGE, GEN.P_APPROVE, GEN.P_TAG, GEN.P_ESCAPE
 P_BOARD, P_MODEL, P_KUBECTL = GEN.P_BOARD, GEN.P_MODEL, GEN.P_KUBECTL
 P_LEADER_ORCH, P_BLAST, P_READONLY = GEN.P_LEADER_ORCH, GEN.P_BLAST, GEN.P_READONLY
@@ -186,7 +187,11 @@ def issue_leader_config() -> str:
     """issue 層總指揮。workspace 是六 repo 的共同祖先，它持有 alias map。"""
     pol = ["guardrails:", f"  ask_timeout: {ASK_TIMEOUT}", "  policies:"]
     # ⚠ P-board 刻意**不掛**在 issue-leader 身上：全樹只有它能寫看板。
-    body = P_LEADER_ORCH + [P_MODEL, P_MERGE, P_APPROVE, P_TAG, P_ESCAPE] + P_SAFETY + [P_COST]
+    # ⚠ 頂層是長時間運作的單一 session ⇒ 安全網用 P_SAFETY_LEADER（不含整 session 累計的
+    #    max_tool_calls_per_session）、花費用 P_COST_DAILY（owner 當日總額，每天歸零），
+    #    理由見 generate-worker.py 該兩個常數的註解。repo-leader／worker 仍用 per-session 版。
+    body = (P_LEADER_ORCH + [P_MODEL, P_MERGE, P_APPROVE, P_TAG, P_ESCAPE]
+            + P_SAFETY_LEADER + [P_COST_DAILY])
     # ⛔ 頂層 leader 的 harness 不可以是任何 `*-native`——Omnigent Web UI 的
     #    Agents → Custom agents 子選單會把它**整個過濾掉**（實測：同一組實驗只差
     #    harness 一欄，`pi` 出現、`claude-native` 不出現）。根因在

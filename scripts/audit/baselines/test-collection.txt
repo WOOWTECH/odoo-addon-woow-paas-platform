@@ -11,12 +11,14 @@
 # 判準**不在本檔**：class 選不選得到、條數怎麼算，全部呼叫 repo-lint.py 的
 # test-collectability 實作（_test_class_kind / _test_effective_tags /
 # _test_has_inherited_flag）。這裡只是把那份判準的結果落成可被 diff 覆核的清單。
-#   選中：傳遞繼承到 odoo.tests.common.BaseCase，且有效 tag 含 standard
+#   選中：傳遞繼承到 odoo.tests.common.BaseCase，且有效 tag 與
+#         `.gitea/workflows/odoo-tests.yml` 的 positive selector 有交集
 #   條數：loader 篩子④ cls.__dict__ 的 def test*；帶 allow_inherited_tests_method
 #         （可繼承！）者改走整條 MRO 去重
 #
 # 這份清單目前是**靜態預測**，尚未與真實 CI 執行清單對帳過
 # （對帳排程：B+C 觸發策略落地後第一趟 develop push 全套，見 issue #546）。
+18	integration.test_auto_recredit_864.TestAutoRecreditPostgresCapability864
 2	test_ac_access_seat_enforcement_521.TestAcSeatBasePlanBlastRadius
 1	test_ac_access_seat_enforcement_521.TestAcSeatQuotaBff
 10	test_ac_access_seat_enforcement_521.TestAcSeatQuotaModel
@@ -125,7 +127,6 @@
 1	test_auto_enable_agent_runtime.TestAutoEnableToggleSetting
 1	test_auto_enable_agent_runtime.TestAutoEnableUninstallCleanup
 2	test_auto_enable_agent_runtime.TestBackfillExistingProjects
-18	integration.test_auto_recredit_864.TestAutoRecreditPostgresCapability864
 23	test_auto_recredit_query_gate_864.TestAutoRecreditQueryGate864
 1	test_billing_incident_864.TestBillingAttachmentShortCircuitRace987
 10	test_billing_incident_864.TestBillingIncidentAdminBackend864
@@ -317,6 +318,10 @@
 10	test_invoice_issue_policy_864.TestStaleManualInvoiceAlert864
 4	test_invoice_issue_policy_864.TestSubscriptionInvoiceStamp864
 3	test_invoice_issue_policy_864.TestTopupInvoiceStamp864
+3	test_invoice_pay_flagless_guard_980.TestFlaglessPaymentFrontendContract980
+6	test_invoice_pay_flagless_guard_980.TestInvoicePayFlaglessGuard980
+5	test_invoice_pay_flagless_guard_980.TestSkipTrialFlaglessGuard980
+2	test_invoice_pay_flagless_guard_980.TestSkipTrialPreviewContract980
 5	test_invoice_pay_rollback_864.TestInvoicePayConcurrencyReachesRetrying
 6	test_invoice_pay_rollback_864.TestInvoicePayDeepFailureLeavesNoResidue
 9	test_invoice_pay_rollback_864.TestInvoicePayFailureLeavesNoResidue
