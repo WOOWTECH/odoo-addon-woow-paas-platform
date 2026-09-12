@@ -18,6 +18,8 @@ exclude = [
   "^http://gitea-http\\.gitea\\.svc\\.cluster\\.local",
   "^http://paas-operator\\.paas-system",
   "^https://jcr-prod\\.woowtech\\.io",
+  # 私有 Gitea，匿名存取必 404；CLAUDE.md 規定外部 issue 用絕對 URL，故排除（#979）
+  "^https://git-prod\\.woowtech\\.io",
   # Localhost / loopback in dev docs
   "^http://localhost",
   "^http://127\\.0\\.0\\.1",
