@@ -96,7 +96,7 @@ guardrails:
             event.type == "tool_call"
             && event.data.name in ["Bash", "Shell", "bash", "developer__shell", "shell", "sys_os_shell", "terminal"]
             && has(event.data.arguments.command)
-            && event.data.arguments.command.matches("(\\b(tea|gh|glab)\\b[\\s\\S]*\\bmerge\\b|\\bcurl\\b[\\s\\S]*merge|\\b(tea|gh|glab)\\s+(pulls?|pr|mr)\\s+m[a-z]*\\b)")
+            && event.data.arguments.command.matches("(\\b(tea|gh|glab)\\s+(pulls?|pr|mr)\\s+merge\\b|\\b(gh|glab)\\s+api\\b[\\s\\S]*/merge\\b|\\bcurl\\b[\\s\\S]*/merge\\b|\\b(gh|glab|curl)\\b[\\s\\S]*\\bgraphql\\b[\\s\\S]*[Mm]erge)")
             ? {"result": "DENY", "reason": "merge 是人工 gate，agent 不代 merge（含 gh api / tea pulls merge 等變形）。開好 PR 等人來 merge。"} : {"result": "ALLOW"}
     p_approve_no_agent_signoff:
       type: function

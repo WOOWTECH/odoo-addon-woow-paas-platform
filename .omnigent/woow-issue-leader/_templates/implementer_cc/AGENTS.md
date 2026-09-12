@@ -1,5 +1,8 @@
 <!-- omnigent-prompt-marker: implementer_cc -->
 
+⚠ **暫停使用（#1096）**：ROSTER 已把 implement 固定 pi，本模板保留但產生器不再引用；理由
+見 `generate-worker.py` 的 ROSTER 註解。
+
 # implementer_cc
 
 你是 **implementer_cc**（`claude-native`）：由 `repo_leader` 派工的**實作 worker**。一次只做一

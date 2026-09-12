@@ -20,12 +20,17 @@ description: 派工對照表與 repo alias map 的使用規則：怎麼選 harne
 ```bash
 # 1. 產生（⛔ 一定要走這支，它有五道防線）
 DIR=$(python3 <paas-platform root>/.omnigent/woow-issue-leader/generate-worker.py \
-        --purpose implement --harness claude-native \
+        --purpose implement --harness pi \
         --repo paas-platform --worktree /home/elmo/woow-repos/paas/wt-1032 \
-        --name impl-1032-cc)
-# 2. 派工
-#    sys_session_create(config_path=$DIR, title="1032-impl-cutover")
+        --name impl-1032-pi)
+# 2. 建 session（⛔ 不帶工單）
+#    conversation_id = sys_session_create(config_path=$DIR) 回傳的 conversation_id
+# 3. 送工單——這是唯一的喚醒線
+#    sys_session_send(session_id=<conversation_id>, args.purpose="implement", args.input=<工單>)
 ```
+
+`sys_session_create` 一步起（帶 message）沒有 handle，worker 完成後無處投遞；只有上面的
+兩步起法會建立可靠的一跳喚醒線。
 
 ⛔ **不要自己手寫 worker 的 config.yaml**。五道防線擋的都是**靜默**失敗：harness×model 不
 相容（omnigent 在這條路徑完全不驗，會等 child 第一輪才爆成通用 `runner_error`）、
@@ -40,17 +45,18 @@ DIR=$(python3 <paas-platform root>/.omnigent/woow-issue-leader/generate-worker.p
 | purpose | harness | model | effort |
 |---|---|---|---|
 | `repo-leader` | claude-native／pi | `claude-fable-5-1`／`gpt-6-astra` | xhigh |
-| `implement` | claude-native／pi | `claude-opus-5`／`gpt-5.6-sol` | xhigh |
-| `review` | **反向 vendor** | `claude-sonnet-5`／`gpt-5.6-terra` | high |
+| `implement` | **固定 pi** | `gpt-5.6-sol` | xhigh |
+| `review` | **固定 claude-native** | `claude-sonnet-5` | high |
 | `explore`（＝`search`） | pi | `gpt-5.6-luna` | high |
-| `tracker`（＝`triage`） | pi | `gpt-5.4-mini` | high |
+| `tracker`（＝`triage`） | pi | `gpt-5.6-terra` | high |
 | `ops_k8s`（＝`deploy`） | **固定 claude-native** | `claude-sonnet-5` | xhigh |
 | `researcher` | pi | `gpt-5.6-luna` | high |
 
 硬規則：
 
-- **`review` 的 harness 必須與被審 diff 的實作者相反**。`implement` 用 claude-native ⇒
-  `review` 用 pi，反之亦然。同 vendor 自審不算覆核。
+- **實作固定 pi ⇒ 覆核固定 claude-native（單向）**，跨 vendor 自動成立。產生器會拒絕
+  `implement + claude-native`：上游 `worktree_guard` 對 Claude 原生 Edit／Write 必帶的
+  絕對 `file_path` 一律 DENY，implement_cc 實測不能改檔。
 - **`ops_k8s` 固定 claude-native**。pi 沒有 hook 機制（`pi --help` 完全沒有 hook），換成 pi
   會讓 dispatcher 失效 ⇒ repo 的 `kubectl-ns-guard` 拿不回來。產生器會直接拒絕 `ops_k8s + pi`。
 - **claude 家族只吃 id 含 `claude` 的 model**：`opus` / `sonnet` / `fable` 這些 CLI alias

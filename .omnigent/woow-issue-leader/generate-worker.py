@@ -14,7 +14,7 @@
 
 ## 用法
 
-    generate-worker.py --purpose implement --harness claude-native --repo paas-platform \\
+    generate-worker.py --purpose implement --harness pi --repo paas-platform \\
                        --worktree /home/elmo/woow-repos/paas/wt-1032 --name impl-1032
     # → 寫出 <out-dir>/<name>/{config.yaml, AGENTS.md, skills/, hooks/}
     #   印出該目錄的絕對路徑，交給 sys_session_create(config_path=<那個路徑>)
@@ -221,14 +221,20 @@ CEL_MODEL = f"""event.type == "tool_call"
 ? {{"result": "DENY", "reason": "scout_pi / tracker / researcher 是簡單查尋任務：派工必須顯式帶 args.model，且必須落在 build-bundles.py 的 FAST_MODELS 名單內。"}} : {{"result": "ALLOW"}}"""
 
 # ── P-merge ──────────────────────────────────────────────────────────────────
-# 保守化：任何 forge CLI（tea / gh / glab）只要同一條指令裡出現 merge 就 DENY——不再只認
-# `<cli> pr merge` 三種字面組合。這樣 `gh api -X PUT repos/o/r/pulls/1/merge`、`sh -c '...'`、
-# 串接、子命令變形（tea pulls merge）一律涵蓋。
+# 只擋四種真正的 merge 路徑：`<cli> pr|pulls|mr merge`（tea / gh / glab；含 `sh -c`、串接、
+# 多空白變形）、`gh|glab api … /merge`、`curl … /merge`（REST 直打 merge endpoint），以及
+# `gh|glab|curl … graphql … [Mm]erge`。GraphQL mutation 不走 `/merge` 路徑，前三條吃不到；
+# 第四條鎖在 `graphql` 字面值語境，才不會誤擋 PR 標題。
+# ⚠ 已知取捨：`gh api graphql` 查詢 `mergeable` 這類唯讀查詢也會被誤擋；守線寧可錯殺，
+#    且這不阻斷核心工作流，因此刻意接受。
+# ⛔ 不用「指令裡有 tea/gh/glab ＋ 任何位置出現 merge 字」的寬鬆版——那會誤擋 PR 標題前綴
+#    `⛔ 勿代 merge｜…`（鐵律 4）、issue／留言描述含 merge 字、`tea … && git merge-tree`
+#    （2026-09-11 #979 實測：管線因此開不了 PR；詳見 #1096）。
 # 本機 `git merge` 不受影響（沒有 tea/gh/glab token）——那是合法的分支整併。
 CEL_MERGE = f"""event.type == "tool_call"
 && event.data.name in {_cel_list(SHELL_TOOLS)}
 && has(event.data.arguments.command)
-&& event.data.arguments.command.matches("(\\\\b(tea|gh|glab)\\\\b[\\\\s\\\\S]*\\\\bmerge\\\\b|\\\\bcurl\\\\b[\\\\s\\\\S]*merge|\\\\b(tea|gh|glab)\\\\s+(pulls?|pr|mr)\\\\s+m[a-z]*\\\\b)")
+&& event.data.arguments.command.matches("(\\\\b(tea|gh|glab)\\\\s+(pulls?|pr|mr)\\\\s+merge\\\\b|\\\\b(gh|glab)\\\\s+api\\\\b[\\\\s\\\\S]*/merge\\\\b|\\\\bcurl\\\\b[\\\\s\\\\S]*/merge\\\\b|\\\\b(gh|glab|curl)\\\\b[\\\\s\\\\S]*\\\\bgraphql\\\\b[\\\\s\\\\S]*[Mm]erge)")
 ? {{"result": "DENY", "reason": "merge 是人工 gate，agent 不代 merge（含 gh api / tea pulls merge 等變形）。開好 PR 等人來 merge。"}} : {{"result": "ALLOW"}}"""
 
 # ── P-approve ────────────────────────────────────────────────────────────────
@@ -508,12 +514,15 @@ ASK_TIMEOUT = 900
 #   - claude 家族 harness **只吃 id 含 `claude`** 的 model ⇒ `opus` / `sonnet` / `fable`
 #     這些 CLI alias 一律被 `model_family_mismatch` 擋下（防線 1 會在寫檔前攔到）。
 #   - `ultra` 只有 pi 原生支援，claude 上**靜默降級成 `xhigh`** ⇒ 只用 `high` / `xhigh`。
+#   - `implement` **固定 pi**：上游 `worktree_guard` 對 Claude 原生 Edit／Write 必帶的絕對
+#     `file_path` 一律 DENY，implement_cc 實測不能改檔（#1096）。
 #   - `ops_k8s` **固定 claude-native**：pi 沒有 hook 機制（`pi --help | grep -ci hook` = 0），
 #     換成 pi 會讓 dispatcher 失效 ⇒ repo 的 kubectl-ns-guard 拿不回來。
 #
 #: 實際可用的 model（`sys_list_models` 實測）。改這裡就是改全樹。
-PI_MODELS = ["gpt-5.3-codex-spark", "gpt-5.4", "gpt-5.4-mini", "gpt-5.5",
-             "gpt-5.6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-6-astra"]
+# `gpt-5.4-mini` 不列：Codex 以 ChatGPT 帳號拒絕 mini（2026-09-11 probe 1 實證）。
+PI_MODELS = ["gpt-5.3-codex-spark", "gpt-5.4", "gpt-5.5", "gpt-5.6-luna",
+             "gpt-5.6-sol", "gpt-5.6-terra", "gpt-6-astra"]
 CC_MODELS = ["claude-opus-5", "claude-fable-5-1", "claude-sonnet-5", "claude-fable-5-1[1m]"]
 
 #: purpose → {harness 選項: (model, effort)}；`template` 指向 `_templates/` 的來源目錄。
@@ -525,16 +534,17 @@ ROSTER: dict[str, dict[str, object]] = {
         "writes": True,
     },
     "implement": {
-        "template": {"claude-native": "implementer_cc", "pi": "implementer_pi"},
-        "models": {"claude-native": ("claude-opus-5", "xhigh"),
-                   "pi": ("gpt-5.6-sol", "xhigh")},
+        # ⛔ 固定 pi：上游 `worktree_guard` 對 Claude 原生 Edit／Write 必帶的絕對
+        # `file_path` 一律 DENY（`policies/builtins/orchestration.py:590`），implement_cc
+        # 實測不能改檔（#1096）。`_templates/implementer_cc/` 保留、暫停使用。
+        "template": {"pi": "implementer_pi"},
+        "models": {"pi": ("gpt-5.6-sol", "xhigh")},
         "writes": True,
     },
     "review": {
-        # ⚠ 跨 vendor：派工時 harness 必須與被審 diff 的實作者**相反**（repo-leader 負責）。
-        "template": {"claude-native": "verifier_cc", "pi": "verifier_pi"},
-        "models": {"claude-native": ("claude-sonnet-5", "high"),
-                   "pi": ("gpt-5.6-terra", "high")},
+        # ⚠ 覆核固定 claude-native：實作固定 pi ⇒ 跨 vendor 自動成立（單向）。
+        "template": {"claude-native": "verifier_cc"},
+        "models": {"claude-native": ("claude-sonnet-5", "high")},
         "writes": False,
     },
     "explore": {
@@ -544,7 +554,8 @@ ROSTER: dict[str, dict[str, object]] = {
     },
     "tracker": {
         "template": {"pi": "tracker"},
-        "models": {"pi": ("gpt-5.4-mini", "high")},
+        # terra 在 #1092 review 與 probe 2／3 實跑過。
+        "models": {"pi": ("gpt-5.6-terra", "high")},
         "writes": True,            # 只寫產物（issue／PR／對帳報告），不碰產品碼
     },
     "ops_k8s": {
@@ -753,10 +764,15 @@ def generate(purpose: str, harness: str, out_dir: Path, *,
         raise GenerateFailure(
             f"purpose {purpose!r} 的 prompt 不由本檔產生（repo-leader 是靜態 bundle）")
     if harness not in templates:
+        detail = ""
+        if purpose == "implement":
+            detail = ("。⛔ implement 固定 pi：上游 worktree_guard 對 Claude 原生 Edit／Write "
+                      "的絕對 file_path 一律 DENY，implement_cc 實測不能改檔。")
+        elif purpose == "ops_k8s":
+            detail = "。⛔ ops_k8s 固定 claude-native：pi 沒有 hook 機制，換了 dispatcher 就失效。"
         raise GenerateFailure(
             f"purpose {purpose!r} 不支援 harness {harness!r}（只支援 {sorted(templates)}）"
-            + ("。⛔ ops_k8s 固定 claude-native：pi 沒有 hook 機制，換了 dispatcher 就失效。"
-               if purpose == "ops_k8s" else ""))
+            + detail)
     default_model, default_effort = spec["models"][harness]
     model = model or default_model
     effort = effort or default_effort
@@ -819,11 +835,18 @@ def self_check() -> tuple[bool, str]:
         for harness, model in (("claude-sdk", "gpt-6-astra"), ("claude-native", "opus"),
                                ("claude-native", "gpt-5.6-sol")):
             try:
-                generate("implement", "claude-native", Path(td) / "neg", model=model)
+                generate("review", "claude-native", Path(td) / "neg", model=model)
             except GenerateFailure:
                 pass
             else:
                 bad.append(f"反面案例未被擋下：claude-native + {model}")
+        # harness 不在該 purpose 的支援清單（implement 固定 pi）
+        try:
+            generate("implement", "claude-native", Path(td) / "neg3")
+        except GenerateFailure:
+            pass
+        else:
+            bad.append("反面案例未被擋下：implement + claude-native（worktree_guard 擋 Claude 原生寫檔）")
         # harness 不在該 purpose 的支援清單（ops_k8s 固定 claude-native）
         try:
             generate("ops_k8s", "pi", Path(td) / "neg2")
@@ -832,7 +855,9 @@ def self_check() -> tuple[bool, str]:
         else:
             bad.append("反面案例未被擋下：ops_k8s + pi（pi 沒有 hook 機制）")
     ok = not bad
-    return ok, (f"{len(made)} 種組合全數產生並通過五道防線：{', '.join(made)}" if ok
+    checked = len(made) + 1  # 另計 implement + claude-native 固定拒絕案例（#1096）
+    return ok, (f"{checked} 種組合自檢通過（{len(made)} 種可產生＋1 種 implement 固定 pi "
+                f"拒絕案例）：{', '.join(made)}" if ok
                 else f"{len(bad)} 個問題：" + "；".join(bad[:4]))
 
 

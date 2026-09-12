@@ -500,6 +500,49 @@ mutation_lib.edit(str(p), old=old, new=new)
 subprocess.run(["python3", "build-bundles.py"], check=True, capture_output=True)
 PY'
 
+run_mut AF "P-merge 退回寬鬆版（PR 標題含 merge 被誤擋）" "8" "p_merge_no_agent_merge" \
+'python3 - <<"PY"
+import mutation_lib, pathlib, subprocess
+p = pathlib.Path("woow-issue-leader/generate-worker.py")
+b = chr(92) * 4
+old = "(tea|gh|glab)" + b + "s+(pulls?|pr|mr)" + b + "s+merge"
+new = "(tea|gh|glab)" + b + "b[" + b + "s" + b + "S]*" + b + "bmerge"
+mutation_lib.edit(str(p), old=old, new=new)
+subprocess.run(["python3", "build-bundles.py"], check=True, capture_output=True)
+PY'
+
+run_mut AG "P-merge 拿掉 CLI 的 merge 子命令路徑" "8" "p_merge_no_agent_merge" \
+'python3 - <<"PY"
+import mutation_lib, pathlib, subprocess
+p = pathlib.Path("woow-issue-leader/generate-worker.py")
+b = chr(92) * 4
+old = b + "b(tea|gh|glab)" + b + "s+(pulls?|pr|mr)" + b + "s+merge" + b + "b|"
+mutation_lib.edit(str(p), old=old, new="(?!x)x|")
+subprocess.run(["python3", "build-bundles.py"], check=True, capture_output=True)
+PY'
+
+run_mut AH "P-merge 拿掉 forge API 的 merge endpoint" "8" "p_merge_no_agent_merge" \
+'python3 - <<"PY"
+import mutation_lib, pathlib, subprocess
+p = pathlib.Path("woow-issue-leader/generate-worker.py")
+b = chr(92) * 4
+old = b + "b(gh|glab)" + b + "s+api" + b + "b[" + b + "s" + b + "S]*/merge" + b + "b|"
+mutation_lib.edit(str(p), old=old, new="(?!x)x|")
+subprocess.run(["python3", "build-bundles.py"], check=True, capture_output=True)
+PY'
+
+run_mut AI "P-merge 拿掉 graphql 語境的 alternation" "8" "p_merge_no_agent_merge" \
+'python3 - <<"PY"
+import mutation_lib, pathlib, subprocess
+p = pathlib.Path("woow-issue-leader/generate-worker.py")
+b = chr(92) * 4
+# 新增路徑位於 regex 最後：保留前置 `|`，把該分支換成永不命中的 expression。
+old = "|" + b + "b(gh|glab|curl)" + b + "b[" + b + "s" + b + "S]*" \
+      + b + "bgraphql" + b + "b[" + b + "s" + b + "S]*[Mm]erge"
+mutation_lib.edit(str(p), old=old, new="|(?!x)x")
+subprocess.run(["python3", "build-bundles.py"], check=True, capture_output=True)
+PY'
+
 echo
 if [ "$FAIL_N" -eq 0 ]; then
   echo "總計：$PASS_N 個 case 全部符合預期指紋"
