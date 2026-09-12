@@ -221,8 +221,12 @@ CEL_MODEL = f"""event.type == "tool_call"
 ? {{"result": "DENY", "reason": "scout_pi / tracker / researcher 是簡單查尋任務：派工必須顯式帶 args.model，且必須落在 build-bundles.py 的 FAST_MODELS 名單內。"}} : {{"result": "ALLOW"}}"""
 
 # ── P-merge ──────────────────────────────────────────────────────────────────
-# 只擋三種真正的 merge 路徑：`<cli> pr|pulls|mr merge`（tea / gh / glab；含 `sh -c`、串接、
-# 多空白變形）、`gh|glab api … /merge`、`curl … /merge`（REST 直打 merge endpoint）。
+# 只擋四種真正的 merge 路徑：`<cli> pr|pulls|mr merge`（tea / gh / glab；含 `sh -c`、串接、
+# 多空白變形）、`gh|glab api … /merge`、`curl … /merge`（REST 直打 merge endpoint），以及
+# `gh|glab|curl … graphql … [Mm]erge`。GraphQL mutation 不走 `/merge` 路徑，前三條吃不到；
+# 第四條鎖在 `graphql` 字面值語境，才不會誤擋 PR 標題。
+# ⚠ 已知取捨：`gh api graphql` 查詢 `mergeable` 這類唯讀查詢也會被誤擋；守線寧可錯殺，
+#    且這不阻斷核心工作流，因此刻意接受。
 # ⛔ 不用「指令裡有 tea/gh/glab ＋ 任何位置出現 merge 字」的寬鬆版——那會誤擋 PR 標題前綴
 #    `⛔ 勿代 merge｜…`（鐵律 4）、issue／留言描述含 merge 字、`tea … && git merge-tree`
 #    （2026-09-11 #979 實測：管線因此開不了 PR；詳見 #1096）。
@@ -230,7 +234,7 @@ CEL_MODEL = f"""event.type == "tool_call"
 CEL_MERGE = f"""event.type == "tool_call"
 && event.data.name in {_cel_list(SHELL_TOOLS)}
 && has(event.data.arguments.command)
-&& event.data.arguments.command.matches("(\\\\b(tea|gh|glab)\\\\s+(pulls?|pr|mr)\\\\s+merge\\\\b|\\\\b(gh|glab)\\\\s+api\\\\b[\\\\s\\\\S]*/merge\\\\b|\\\\bcurl\\\\b[\\\\s\\\\S]*/merge\\\\b)")
+&& event.data.arguments.command.matches("(\\\\b(tea|gh|glab)\\\\s+(pulls?|pr|mr)\\\\s+merge\\\\b|\\\\b(gh|glab)\\\\s+api\\\\b[\\\\s\\\\S]*/merge\\\\b|\\\\bcurl\\\\b[\\\\s\\\\S]*/merge\\\\b|\\\\b(gh|glab|curl)\\\\b[\\\\s\\\\S]*\\\\bgraphql\\\\b[\\\\s\\\\S]*[Mm]erge)")
 ? {{"result": "DENY", "reason": "merge 是人工 gate，agent 不代 merge（含 gh api / tea pulls merge 等變形）。開好 PR 等人來 merge。"}} : {{"result": "ALLOW"}}"""
 
 # ── P-approve ────────────────────────────────────────────────────────────────

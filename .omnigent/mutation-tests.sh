@@ -531,6 +531,18 @@ mutation_lib.edit(str(p), old=old, new="(?!x)x|")
 subprocess.run(["python3", "build-bundles.py"], check=True, capture_output=True)
 PY'
 
+run_mut AI "P-merge 拿掉 graphql 語境的 alternation" "8" "p_merge_no_agent_merge" \
+'python3 - <<"PY"
+import mutation_lib, pathlib, subprocess
+p = pathlib.Path("woow-issue-leader/generate-worker.py")
+b = chr(92) * 4
+# 新增路徑位於 regex 最後：保留前置 `|`，把該分支換成永不命中的 expression。
+old = "|" + b + "b(gh|glab|curl)" + b + "b[" + b + "s" + b + "S]*" \
+      + b + "bgraphql" + b + "b[" + b + "s" + b + "S]*[Mm]erge"
+mutation_lib.edit(str(p), old=old, new="|(?!x)x")
+subprocess.run(["python3", "build-bundles.py"], check=True, capture_output=True)
+PY'
+
 echo
 if [ "$FAIL_N" -eq 0 ]; then
   echo "總計：$PASS_N 個 case 全部符合預期指紋"

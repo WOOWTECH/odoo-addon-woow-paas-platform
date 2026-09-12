@@ -447,6 +447,10 @@ CEL_VECTORS: dict[str, dict[str, list]] = {
             _shell("gh api -X PUT repos/o/r/pulls/5/merge"),
             _shell("gh api --method PUT /repos/o/r/pulls/1082/merge"),
             _shell("curl -X PUT https://git-prod.woowtech.io/api/v1/repos/o/r/pulls/1/merge"),
+            # 🔴 GraphQL merge 路徑不含 `/merge` endpoint，必須另鎖 graphql 語境
+            _shell("gh api graphql -f query='mutation { mergePullRequest(input:{pullRequestId:\"PR_x\"}) { clientMutationId } }'"),
+            _shell("curl -X POST https://api.github.com/graphql -d '{\"query\":\"mutation { mergePullRequest(input:{pullRequestId:\\\"PR_x\\\"}) { clientMutationId } }\"}'"),
+            _shell("curl -X POST https://api.github.com/graphql -d '{\"query\":\"mutation { enablePullRequestAutoMerge(input:{pullRequestId:\\\"PR_x\\\"}) { clientMutationId } }\"}'"),
             _shell("sh -c 'gh pr merge 42'"),
             _shell("echo go && gh pr merge 42"),
         ],
@@ -458,6 +462,8 @@ CEL_VECTORS: dict[str, dict[str, list]] = {
             _shell("git merge origin/develop"),      # 本機分支整併，非 forge merge
             _shell("git merge --abort"),
             _shell("echo 'merge is a human gate'"),
+            # 沒有 graphql 語境的文件搜尋不得誤擋
+            _shell("curl -sSL https://example.com/docs | grep -i merge"),
             {"type": "tool_call", "target": "Bash", "data": {"name": "Bash", "arguments": {}}},
         ],
         "known_gap": [

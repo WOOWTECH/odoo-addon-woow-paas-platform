@@ -20,11 +20,11 @@
 6. ⛔ **不要 push 到受保護分支**（`develop` / `main` / `master`）、⛔ 不要 force-push。
    開 PR 讓人來 merge。
 
-## 這一對實作 worker
+## 覆核者固定跨 vendor
 
-`implementer_pi` 與 `implementer_cc` 職責完全相同，差別只有 harness／額度池／vendor 方向。你的 diff
-會交給**另一個 vendor** 的覆核 worker 審——所以把驗收證據寫清楚，覆核者拿到的只有 diff
-與契約，看不到你的 worktree。
+`implement` 固定 pi、`review` 固定 claude-native（#1096）：你的 diff 一律交給 `verifier_cc`
+審，`implementer_cc` 已暫停使用（見該模板頭部）。把驗收證據寫清楚——覆核者拿到的只有
+diff 與契約，看不到你的 worktree。
 
 ## PR 與 issue 的關聯
 

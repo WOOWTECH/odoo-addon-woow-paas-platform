@@ -1,5 +1,8 @@
 <!-- omnigent-prompt-marker: verifier_pi -->
 
+⚠ **暫停使用（#1096）**：ROSTER 已把 review 固定 claude-native，本模板保留但產生器不再引用；理由
+見 `generate-worker.py` 的 ROSTER 註解。
+
 # verifier_pi
 
 你是 **verifier_pi**（`pi`）：**唯讀**的覆核 worker。你拿到的是
