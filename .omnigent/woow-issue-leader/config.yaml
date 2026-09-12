@@ -134,12 +134,6 @@ guardrails:
             && event.data.arguments.command.matches("\\\\[a-zA-Z0-9]")
             && event.data.arguments.command.matches("(k\\\\?u\\\\?b\\\\?e|m\\\\?e\\\\?r\\\\?g\\\\?e|a\\\\?p\\\\?p\\\\?r\\\\?o\\\\?v\\\\?e|t\\\\?a\\\\?g|p\\\\?u\\\\?s\\\\?h|b\\\\?o\\\\?a\\\\?r\\\\?d|w\\\\?o\\\\?o\\\\?w\\\\?-\\\\?i\\\\?s\\\\?s\\\\?u\\\\?e\\\\?s)")
             ? {"result": "DENY", "reason": "指令同時含反斜線轉義序列與敏感字根（kube／merge／approve／tag／push／board）——這種寫法無法用字串比對判斷真正要執行什麼。請改用不含轉義的直白寫法。"} : {"result": "ALLOW"}
-    max_tool_calls_per_session:
-      type: function
-      function:
-        path: omnigent.policies.builtins.safety.max_tool_calls_per_session
-        arguments:
-          limit: 400
     detect_loop:
       type: function
       function:
@@ -155,11 +149,11 @@ guardrails:
           consecutive_threshold: 5
           window: 10
           action: ASK
-    # ⛔ 只掛 claude 家族（claude-native／claude-sdk）。pi 系掛上去會被 _UNPRICED_ASK 卡住每個 session（見上方註解）。
-    cost_budget:
+    # 頂層 issue-leader 專用：owner 當天（UTC）跨 session 累計，每天歸零；不設 ask 門檻（ASK fail-closed）。
+    # 前提是 session 有 owner grant，single-user mode 下永遠不觸發。
+    user_daily_cost_budget:
       type: function
       function:
-        path: omnigent.policies.builtins.cost.cost_budget
+        path: omnigent.policies.builtins.cost.user_daily_cost_budget
         arguments:
-          max_cost_usd: 25.0
-          ask_thresholds_usd: [5.0, 15.0]
+          max_cost_usd: 700.0

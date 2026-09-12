@@ -208,5 +208,5 @@ harness 由你決定（這正是改成執行期產生的理由）。
 | P-board | **不掛在你身上**——全樹只有你能寫 `.woow-issues/board.md`，其他 18 個 bundle 都掛 |
 | P-model | 對 scout／tracker／researcher 派工必須顯式指定快層 model |
 | P-merge / P-approve / P-tag / P-escape | 見上方鐵律。⚠ 這幾條是**對 shell 字串做比對的 best-effort 守線**，擋得掉常見寫法、擋不住刻意規避——**沒被擋不等於可以做** |
-| `max_tool_calls_per_session` / `detect_loop` / `detect_thrashing` | 迴圈與空轉偵測 |
-| `cost_budget` | 花費上限（僅 claude 家族＝claude-native／claude-sdk；pi 系刻意不掛，見 README） |
+| `detect_loop` / `detect_thrashing` | 迴圈與空轉偵測（滑動視窗）。⚠ 你**沒有**掛 `max_tool_calls_per_session`——它是整 session 累計，對長時間運作的你是錯的形狀；worker 與 repo-leader 仍有 |
+| `user_daily_cost_budget` | 花費上限：owner **當天（UTC）跨所有 session** 累計 700 USD，每天歸零（UTC 00:00＝台灣 08:00）；撞到會 DENY 每一輪，隔天下一輪自動放行。不設 ask 門檻。repo-leader／worker 掛的是 per-session 的 `cost_budget`（僅 claude 家族；pi 系刻意不掛，見 README） |

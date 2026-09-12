@@ -95,6 +95,15 @@
   flex-direction: column;
   gap: 0.5rem;
   width: 100%;
+
+  > .o_woow_pay_warning {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.5rem;
+    color: #dc2626;
+    font-size: 0.8rem;
+    line-height: 1.4;
+  }
 }
 
 .o_woow_full_width {
