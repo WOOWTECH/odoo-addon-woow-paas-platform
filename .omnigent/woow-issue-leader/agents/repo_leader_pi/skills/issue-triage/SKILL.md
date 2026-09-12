@@ -26,9 +26,10 @@ description: issue 進來時的分流：值不值得做、拆成什麼工單、�
 
 ## 3. 選 harness 與角色
 
-- 要**兩條 vendor 路徑互相覆核**的重要變更 → 兩個 `repo_leader` 各跑一輪。
+- 需要兩輪獨立判斷的重要變更 → 兩個 `repo_leader` 各跑一輪；worker 路徑仍固定為 pi 實作、
+  claude-native 覆核。
 - 只是單線推進 → 挑一個 `repo_leader`（看哪邊額度池還有餘裕）。
-- 覆核者一定要**跨 vendor**：`impl_cc_*` 的 diff → `ver_pi_*`；`impl_pi_*` → `ver_cc_*`。
+- 實作固定 pi、覆核固定 claude-native：`impl_pi_*` 的 diff → `ver_cc_*`，單向確保跨 vendor。
 
 ## 4. `args.purpose` 對照
 
@@ -45,3 +46,13 @@ description: issue 進來時的分流：值不值得做、拆成什麼工單、�
 work-state label **六選一**，同一張 open issue 同時只掛一個。agent 工作另外掛
 `agent-context:*`、`agent-status:in-progress`、`agent-assignee:leader1`～`leader5`。
 細節見 repo 的 `docs/agents/triage-labels.md`。
+
+派工 `repo_leader_*` 之後，標 `agent-status:in-progress` ＋ `agent-context:*`：
+
+```bash
+tea issues edit <n> --add-labels agent-status:in-progress,agent-context:<context> \
+  --login git-prod.woowtech.io --repo <owner/repo> < /dev/null
+```
+
+然後**結束回合**——責任結束，不等結果。之後的 `agent-status:blocked`／
+`agent-status:pr-open`／`needs-*` 由 `repo_leader` 掛。

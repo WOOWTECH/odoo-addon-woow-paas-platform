@@ -19,6 +19,7 @@ woow-issue-leader/          claude-sdk／claude-fable-5-1／xhigh／spawn: true
 └── agents/
     ├── repo_leader_cc/     claude-native／claude-fable-5-1／xhigh／spawn: true
     └── repo_leader_pi/     pi／gpt-6-astra／xhigh／spawn: true
+        ← 擁有 issue 全程（impl→review→驗收→PR→Gitea label）；issue-leader 派完即結束
         （⚠ 底下**沒有** agents/——worker 在執行期產生）
 ```
 
@@ -29,8 +30,9 @@ woow-issue-leader/          claude-sdk／claude-fable-5-1／xhigh／spawn: true
 > **`executor.config.harness` 是 bundle 屬性，派工當下換不掉。**
 > `sys_session_send` 只能覆寫 `args.model` / `args.reasoning_effort`，harness 不在其中。
 
-而需求是「harness 由 issue-leader 的判斷決定」（同一個 purpose 可能要 claude-native 或 pi，
-視額度池與跨 vendor 覆核方向而定）⇒ 靜態 bundle 做不到，只有**執行期產生 config** 做得到。
+而需求是依 `ROSTER` 為不同 purpose 指定 harness，並在 config 裡帶入 worktree 守線；#1096
+起 implement 固定 pi、review 固定 claude-native。這些都是派工時才知道的資料 ⇒ 靜態 bundle
+做不到，只有**執行期產生 config** 做得到。
 
 `sys_session_create(config_path=<dir>)` 實測可行，而且：
 
@@ -47,16 +49,29 @@ woow-issue-leader/          claude-sdk／claude-fable-5-1／xhigh／spawn: true
 
 ```bash
 DIR=$(python3 <paas-platform>/.omnigent/woow-issue-leader/generate-worker.py \
-        --purpose implement --harness claude-native --repo paas-platform \
-        --worktree /home/elmo/woow-repos/paas/wt-1032 --name impl-1032-cc)
-# → sys_session_create(config_path=$DIR, title="1032-impl-cutover")
+        --purpose implement --harness pi --repo paas-platform \
+        --worktree /home/elmo/woow-repos/paas/wt-1032 --name impl-1032-pi)
+# conversation_id = sys_session_create(config_path=$DIR) 回傳的 conversation_id（⛔ 不帶工單）
+# sys_session_send(session_id=<conversation_id>, args.purpose="implement", args.input=<工單>)
 ```
+
+## 誰通知誰（喚醒只保證一跳）
+
+1. 每一段「誰呼叫 `sys_session_send` → 誰被喚醒」都可靠；完成結果會投遞給該次 send 的
+   發起者。
+2. `sys_session_create` 一步起（帶 message）沒有 task handle，完成無處投遞，永遠不會喚醒
+   發起者。必須先 create，再對回傳的 conversation_id 呼叫 send。
+3. 被 inbox 叫醒的那一輪做完，不會再往上通知父代；三層鏈的第二跳傳不回來。omnigent
+   是第三方，本案不改。
+
+因此狀態放 Gitea label，escalation 第一收件人是人；issue-leader 派完即結束，repo_leader
+擁有 issue 全程。
 
 ## 用法
 
 ```bash
 python3 .omnigent/build-bundles.py           # 重產三份靜態 config ＋ repo-leader 的副本
-python3 .omnigent/build-bundles.py --check   # 驗收 15 項（含產生器自檢與 dispatcher 端到端）
+python3 .omnigent/build-bundles.py --check   # 驗收 19 項（含產生器自檢與 dispatcher 端到端）
 python3 .omnigent/woow-issue-leader/generate-worker.py --self-check   # 只驗產生器
 python3 .omnigent/test-dispatcher.py         # 只驗 dispatcher（fixture repo，零副作用）
 bash .omnigent/mutation-tests.sh [case 代號]  # 突變測試（每個 case 斷言「紅在哪」）
@@ -159,8 +174,11 @@ repo 實際註冊的 4 支（dispatcher 兩種事件都要支援）：
 | --- | --- | --- | --- |
 | `woow_issue_leader`（頂層） | `claude-sdk` | `mcp__omnigent__sys_os_shell` / `sys_os_write` / `sys_os_edit` | ⛔ **不生效** |
 | `repo_leader_cc` | `claude-native` | `Bash` / `Edit` / `Write`（claude CLI 原生） | ✅ |
-| `implement`／`review`／`ops_k8s` 的 `_cc` worker | `claude-native` | 同上 | ✅ |
+| `review`／`ops_k8s` 的 `_cc` worker | `claude-native` | 同上 | ✅ |
 | `repo_leader_pi`／`_pi` worker | `pi` | pi 自己的工具 | ⛔（pi 無 hook 機制） |
+
+#1096 起 `implement` 固定 pi、`review` 固定 claude-native；因此實作與覆核的跨 vendor 路徑
+固定為單向。
 
 ⚠ 頂層那格的機制：`claude-sdk` 一樣會發 `--plugin-dir <bundle>`
 （`claude_agent_sdk/_internal/transport/subprocess_cli.py:726`，與 native 的
@@ -194,7 +212,8 @@ tool call 是在 server 端的 `ProxyMcpManager` 用原始工具名（`sys_os_sh
 | `repo_leader_cc` | 12 | 6 | P-model ＋ P-board | — |
 | `repo_leader_pi` | 11 | 6 | P-model ＋ P-board | `cost_budget`（非 CEL，見 §cost_budget） |
 | 執行期產生的 `ops_k8s` worker | 11 | 6 | P-board ＋ **P-kubectl**（第 7 支，只存在於動態 config） | P-model |
-| 執行期產生的 `implement_cc` worker | 12 | 5 | P-board | P-model、P-kubectl |
+| 執行期產生的 `implement_pi` worker | 11 | 5 | P-board | P-model、P-kubectl、`cost_budget` |
+| 執行期產生的 `review_cc` worker | 11 | 5 | P-board | P-model、P-kubectl |
 
 ⚠ **P-model 只掛在會派工的那幾層**（它管的是 `sys_session_send` 的 `args.model`）——worker 不
 派工，掛了也沒有事件會命中。
@@ -400,6 +419,7 @@ dispatcher 在「命中了 repo、但沒有任何 hook 真的跑起來」時寫�
 ## 對照表
 
 真相在 `generate-worker.py` 的 `ROSTER`；給人看的摘要在 `skills/dispatch-policy/SKILL.md`。
+#1096 起 implement 固定 pi、review 固定 claude-native，跨 vendor 覆核為單向。
 硬規則：claude 家族只吃 id 含 `claude` 的 model（`opus`／`sonnet`／`fable` 等 CLI alias 一律
 被防線 1 擋下）；effort 只用 `high`／`xhigh`（`ultra` 只有 pi 原生支援，claude 上**靜默降級**）。
 
@@ -503,7 +523,7 @@ omnigent 的 venv，而且 `function.path` 打錯字會讓 worker 連 `Read` 都
 | --- | --- | --- |
 | `p_board_read_only` | 除 issue-leader 外**全部** | 任何提到 `.woow-issues/` 而**無法證明是唯讀**的指令（唯讀＝單一不串接、且以 `cat`/`less`/`head`/`tail`/`grep`/`rg`/`ls`/`wc`/`diff`/`git diff`/`git show` 開頭） |
 | `p_model_fast_tier_only` | 三層 leader | 對 `scout_pi` / `tracker` / `researcher` 派工未帶或帶了非快層 `args.model` |
-| `p_merge_no_agent_merge` | 全部 | 任何 forge CLI（`tea`/`gh`/`glab`）同句出現 `merge`，或 `curl` 打 merge endpoint |
+| `p_merge_no_agent_merge` | 全部 | forge CLI 的 `pr`／`pulls`／`mr merge` 子命令，或 `gh`／`glab` API、`curl` 直打 merge endpoint |
 | `p_approve_no_agent_signoff` | 全部 | 指令中**出現 `/approve` 字串**（不再限定工具名） |
 | `p_tag_no_agent_tag_push` | 全部 | `git push`＋tag 形態、`refs/tags/`、forge `release`、`git tag <name>` |
 | `p_kubectl_namespace_scope` | 僅 `ops_k8s_*` | 提到 `kubectl` 且：含串接／`-n` 出現多次／寫入 verb 但 ns 不在白名單／寫入 verb 但沒帶 `--context` |

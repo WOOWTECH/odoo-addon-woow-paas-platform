@@ -436,6 +436,7 @@ CEL_VECTORS: dict[str, dict[str, list]] = {
     "p_merge_no_agent_merge": {
         "deny": [
             _shell("tea pr merge 1079"),
+            _shell("tea pr merge 1"),
             _shell("tea pulls merge 1079"),
             _shell("tea pulls  merge  1082"),
             _shell("gh pr merge 42 --squash"),
@@ -443,6 +444,7 @@ CEL_VECTORS: dict[str, dict[str, list]] = {
             _shell("cd /repo && tea  pr   merge 3", name="sys_os_shell"),
             # 🔴 REST API 直打 merge endpoint——舊版只認 `<cli> pr merge` 三種字面組合
             _shell("gh api -X PUT repos/o/r/pulls/1/merge"),
+            _shell("gh api -X PUT repos/o/r/pulls/5/merge"),
             _shell("gh api --method PUT /repos/o/r/pulls/1082/merge"),
             _shell("curl -X PUT https://git-prod.woowtech.io/api/v1/repos/o/r/pulls/1/merge"),
             _shell("sh -c 'gh pr merge 42'"),
@@ -450,6 +452,7 @@ CEL_VECTORS: dict[str, dict[str, list]] = {
         ],
         "allow": [
             _shell("tea pr create --title x"),
+            _shell("tea pr create --title '⛔ 勿代 merge｜待 Eugene 覆核 — chore: x' --base develop"),
             _shell("tea pulls list"),
             _shell("gh pr view 42"),
             _shell("git merge origin/develop"),      # 本機分支整併，非 forge merge
