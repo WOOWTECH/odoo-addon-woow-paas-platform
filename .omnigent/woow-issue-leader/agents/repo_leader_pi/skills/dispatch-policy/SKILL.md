@@ -26,6 +26,8 @@ DIR=$(python3 <paas-platform root>/.omnigent/woow-issue-leader/generate-worker.p
         --name impl-1032-pi)
 # implement 必須同時給 --repo-root 與 --worktree：worktree 由 worker 自己
 # `git -C <repo-root> worktree add <worktree>`，兩個路徑都進 allowed_dirs；你只指定路徑。
+# --name 同時是 agent name 與目錄名（預設 <purpose>_<cc|pi>），建議 <purpose>-<issue>-<cc|pi>；
+# 同名不衝突（每次上傳都是新的 session-scoped agent），只用來在 UI／log 分辨是哪張 issue 的 worker。
 # 2. 建 session（⛔ 不帶工單）
 #    conversation_id = sys_session_create(config_path=$DIR) 回傳的 conversation_id
 # 3. 送工單——這是唯一的喚醒線

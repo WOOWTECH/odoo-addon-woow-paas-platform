@@ -621,6 +621,30 @@ import pathlib
 pathlib.Path("woow-issue-leader/_templates/_shared/orphan.md").write_text("## 沒人引用的片段\n")
 PY'
 
+# ── 2026-09-14 第四批（review F12／F13）───────────────────────────────────────
+
+# ⚠ F12 的取捨要被測到：把 `refs/tags/` 那條限定成只在 push 語境成立，唯讀 fetch 就放行了——
+#   但 `git update-ref refs/tags/v1.0 HEAD` 這種不經 push、也不是 `git tag <name>` 的建 tag
+#   plumbing 也跟著滑過（forge 的 `gh api … git/refs` 另有一條分支擋，不受影響）。
+run_mut AS "P-tag 把 refs/tags/ 限定在 push 語境（F12 放寬）" "8" "p_tag_no_agent_tag_push" \
+'python3 - <<"PY"
+import mutation_lib, pathlib, subprocess
+p = pathlib.Path("woow-issue-leader/generate-worker.py")
+old = """  || event.data.arguments.command.matches("refs/tags/")
+"""
+mutation_lib.edit(str(p), old=old, new="""  || event.data.arguments.command.matches("push[^|]*refs/tags/")
+""")
+subprocess.run(["python3", "build-bundles.py"], check=True, capture_output=True)
+PY'
+
+run_mut AT "產生器忽略 --name（agent name 退回 purpose_harness）" "4" "impl-1032-cc" \
+'python3 - <<"PY"
+import mutation_lib, pathlib
+p = pathlib.Path("woow-issue-leader/generate-worker.py")
+mutation_lib.edit(str(p), old="    name = _agent_name(purpose, harness, name)\n",
+                  new="    name = _safe_name(purpose, harness)\n")
+PY'
+
 echo
 if [ "$FAIL_N" -eq 0 ]; then
   echo "總計：$PASS_N 個 case 全部符合預期指紋"

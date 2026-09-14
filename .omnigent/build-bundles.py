@@ -541,9 +541,22 @@ CEL_VECTORS: dict[str, dict[str, list]] = {
             _shell('git push origin "v1.7.6"'),
             _shell("git push origin 'v1.7.6'"),
             _shell('git push origin "operator-v2.0.1"'),
+            # ⚠ 刻意誤擋（review F12，2026-09-14 裁決不放寬）：branch 名長得像 tag、唯讀 fetch 帶
+            #    refs/tags/。列成 deny 向量是讓這個取捨**被測到**——哪天有人放寬 regex，這裡會講出來。
+            #    替代寫法在 deny 訊息與 README「已知的刻意誤擋」表。
+            _shell("git push origin 1032-v18-upgrade"),
+            _shell("git push origin HEAD:v2-x"),
+            _shell("git fetch origin refs/tags/v1.7.6"),
+            # `refs/tags/` 不分讀寫地擋，換來的是這條 plumbing 建 tag 也被擋（限定 push 語境就會漏）
+            _shell("git update-ref refs/tags/v1.7.6 HEAD"),
         ],
         "allow": [
             _shell("git push origin develop"),
+            # F12 的替代寫法必須放行：branch 用 <type>/<issue-id>-… 形式、讀 tag 不寫 refs/tags/
+            _shell("git push -u origin feat/1032-odoo18-v2-cutover"),
+            _shell("git push origin chore/1032-v18-upgrade"),
+            _shell("git fetch origin --tags"),
+            _shell("git ls-remote --tags origin"),
             _shell("git push -u origin feat/omnigent-agent-bundles"),
             _shell("git push origin fix/823-cp12"),
             _shell("git push origin release/v1.7.6"),   # 這是 branch，不是 tag
