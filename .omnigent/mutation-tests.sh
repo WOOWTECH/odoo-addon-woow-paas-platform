@@ -129,7 +129,8 @@ fi
 #   模糊掉。要驗「兩份漂移」本身，用專門的 case AB。
 #   （動態 worker 的部分會立刻反映，但 p_board 只掛在 leader 的靜態 config 上。）
 
-run_mut A "把 repo-leader 的 skills 副本換成 symlink" "7,10" "" \
+# ⚠ 第 0 項也紅：symlink 指向 issue-leader 的整個 skills/，帶進 REPO_LEADER_SKILLS 以外的 skill（多餘 skill＝drift）。
+run_mut A "把 repo-leader 的 skills 副本換成 symlink" "0,7,10" "" \
 'python3 - <<"PY"
 import pathlib, shutil, os
 d = pathlib.Path("woow-issue-leader/agents/repo_leader_cc/skills")
@@ -155,7 +156,8 @@ mutation_lib.edit("woow-issue-leader/agents/repo_leader_cc/config.yaml",
                   new="\nspawn: true\ntools:\n  agents:\n    - implement_cc\n")
 PY'
 
-run_mut D "repo-leader 的 prompt 改成 instructions: <相對路徑>" "0,3" "" \
+# ⚠ 第 19 項也紅：instructions 變成路徑字串後，副本的 instructions 不再含身分行。
+run_mut D "repo-leader 的 prompt 改成 instructions: <相對路徑>" "0,3,19" "" \
 'python3 - <<"PY"
 import mutation_lib, pathlib
 d = pathlib.Path("woow-issue-leader/agents/repo_leader_cc")
@@ -529,6 +531,23 @@ b = chr(92) * 4
 old = "|" + b + "b(gh|glab|curl)" + b + "b[" + b + "s" + b + "S]*" \
       + b + "bgraphql" + b + "b[" + b + "s" + b + "S]*[Mm]erge"
 mutation_lib.edit(str(p), old=old, new="|(?!x)x")
+subprocess.run(["python3", "build-bundles.py"], check=True, capture_output=True)
+PY'
+
+run_mut AJ "leader prompt 守線表宣稱 config 沒有的 policy（F5 那類漂移）" "18" "no_such_policy" \
+'python3 - <<"PY"
+import mutation_lib, pathlib
+p = pathlib.Path("woow-issue-leader/AGENTS.md")
+old = "| `spawn_bounds` | 每輪最多 6 次派工（`sys_session_send` ＋ `sys_session_create` 合計） |"
+mutation_lib.edit(str(p), old=old, new=old + "\n| `no_such_policy` | 假的 |")
+PY'
+
+run_mut AK "build-bundles.py 不再蓋 repo-leader 身分行（副本留佔位符）" "19" "佔位符" \
+'python3 - <<"PY"
+import mutation_lib, pathlib, subprocess
+p = pathlib.Path("build-bundles.py")
+mutation_lib.edit(str(p), old="    return src[:start] + IDENTITY_LINE[leader] + src[end:]",
+                  new="    return src")
 subprocess.run(["python3", "build-bundles.py"], check=True, capture_output=True)
 PY'
 

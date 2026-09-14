@@ -48,8 +48,8 @@ namespace、不驗資源名，**這一層沒有機器守線**。
 2. `docs/guides/deployment/shared-cluster-paas-scope-guard.md` 散文
 3. `.claude/hooks/kubectl-ns-guard.py` 的 `ALLOWED_NAMESPACES` 常數
 
-**這份 `AGENTS.md` 是第四份，`.omnigent/build-bundles.py` 的 `K8S_ALLOWED_NAMESPACES`
-（P-kubectl CEL 守線）是第五份，兩份都不在 repo-lint 的對帳範圍內。**改白名單時，五份都
+**這份 `AGENTS.md` 是第四份，`.omnigent/woow-issue-leader/generate-worker.py` 的
+`K8S_ALLOWED_NAMESPACES`（P-kubectl CEL 守線）是第五份，兩份都不在 repo-lint 的對帳範圍內。**改白名單時，五份都
 要一起改。這是本 bundle 已知的維護債，寫在這裡是為了不讓它靜默漂掉。
 
 ## 🔴 權威守線是 repo 的 hook，不是本 bundle 這層

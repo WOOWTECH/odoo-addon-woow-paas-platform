@@ -11,9 +11,11 @@ description: issue 進來時的分流：值不值得做、拆成什麼工單、�
 
 ## 1. 先判斷值不值得做
 
-- 是不是既有 issue 的重複？先派 `tracker_*` 查重。
-- 資訊夠不夠拆成可驗收的工單？不夠就先派 `scout_pi_*` 或 `researcher_*` 補齊，
+- 是不是既有 issue 的重複？派 `repo_leader` 帶 `args.purpose="triage"` 查重。
+- 資訊夠不夠拆成可驗收的工單？不夠就派 `repo_leader` 帶 `explore`／`researcher` 補齊，
   ⛔ 不要拿模糊需求直接派 `implement`。
+- ⛔ **你自己不產生任何 worker**（tracker／scout／researcher 也不例外）——worker 一律由
+  `repo_leader` 在執行期產生；你只分配 issue、標 label、結束回合（2026-09-14 裁決）。
 
 ## 2. 拆成可驗收的工單
 

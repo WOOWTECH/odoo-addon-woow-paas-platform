@@ -83,7 +83,7 @@ WRITE_TOOLS = ["sys_os_write", "sys_os_edit", "Write", "Edit", "MultiEdit", "wri
 #      1. CLAUDE.md「⛔ 鐵律」表格
 #      2. docs/guides/deployment/shared-cluster-paas-scope-guard.md
 #      3. .claude/hooks/kubectl-ns-guard.py::ALLOWED_NAMESPACES
-#    第四份是 .omnigent/_workers/ops_k8s/AGENTS.md 的表格。
+#    第四份是 .omnigent/woow-issue-leader/_templates/ops_k8s/AGENTS.md 的表格。
 #    ⚠ 本檔與 AGENTS.md 那兩份**不在** repo-lint 對帳範圍——改白名單時五份都要一起改。
 K8S_ALLOWED_NAMESPACES = [
     "paas-ws-*",
