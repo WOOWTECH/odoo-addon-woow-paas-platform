@@ -562,7 +562,7 @@ omnigent 的 venv，而且 `function.path` 打錯字會讓 worker 連 `Read` 都
 | `kubectl --context woow-k3s apply -f x.yaml` | 先 `--dry-run=server`；真要套用走 `deploy-stg` skill 或交給人 | manifest 內的 `metadata.namespace` 會覆蓋 `-n`，regex 看不到檔案內容 |
 | `git tag v1.0`（本機建 tag，未推） | 讀取用 `git tag -l` / `--list`；建 tag 交給人 | 建 tag 是發版動作的第一步 |
 | `git push origin 1032-v18-upgrade`／`git push origin HEAD:v2-x`（branch 名以 `<字>-v<數字>` 開頭、或 `HEAD:v…`） | branch 一律 `<type>/<issue-id>-…`（`chore/1032-v18-upgrade` 就過） | tag 形態是 `[\s:]["']?(<字>-)?v<數字>` 的字串比對；放寬 `v<數字>` 後面的邊界，每一種都會多一個真 tag 滑過的形狀（review F12，2026-09-14 裁決不放寬） |
-| `git fetch origin refs/tags/v1.7.6`（唯讀） | `git fetch origin --tags`／`git ls-remote --tags origin`／`git tag -l` | `refs/tags/` 出現即擋、不分讀寫——限定 push 語境就會漏掉 `gh api … git/refs` 這種不經 push 的建 tag 路徑 |
+| `git fetch origin refs/tags/v1.7.6`（唯讀） | `git fetch origin --tags`／`git ls-remote --tags origin`／`git tag -l` | `refs/tags/` 出現即擋、不分讀寫——限定 push 語境就會漏掉 `git update-ref refs/tags/v1 HEAD` 這種不經 push、也不是 `git tag <name>` 的建 tag plumbing（forge 的 `gh api … git/refs` 另有一條分支擋，不受影響；突變 AS 驗這件事） |
 
 ⚠ `kubectl --context docker-desktop ...` **不再被擋**（FIX ROUND 2）：docker-desktop 是本
 機測試／開發用叢集，鐵律限定的是 woow-k3s 這個共用叢集。舊版不分 context，會毀掉
