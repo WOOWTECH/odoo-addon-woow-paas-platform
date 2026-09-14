@@ -40,9 +40,12 @@ issue comment 說明，⛔ 不要猜。猜錯會讓同一條 vendor 路徑被誤
 #    paas-platform → /home/elmo/woow-repos/paas/woow_paas_platform
 
 # 2. 產生 worker config（⛔ 一定要走這支，它有五道防線）
+#    implement 必須同時給 --repo-root 與 --worktree：worktree 由 worker **自己建**
+#    （你只指定路徑，⛔ 不要替它建），兩個路徑都會進 block_working_dir_changes.allowed_dirs。
 DIR=$(python3 /home/elmo/woow-repos/paas/woow_paas_platform/.omnigent/woow-issue-leader/generate-worker.py \
         --purpose implement --harness pi \
-        --repo paas-platform --worktree /home/elmo/woow-repos/paas/wt-1032 \
+        --repo paas-platform --repo-root /home/elmo/woow-repos/paas/woow_paas_platform \
+        --worktree /home/elmo/woow-repos/paas/wt-1032 \
         --name impl-1032-pi)
 
 # 3. 建 session（⛔ 不帶工單）
@@ -107,12 +110,11 @@ title＝續談**。同一個 worker 在同一張 issue 上的後續追問一律�
 ## 派工
 
 - `args.purpose` **必填**（機器守線會擋）：`implement`、`review`、`explore`、`search`、
-  `deploy`、`triage`。
-- `args.model` 選填，決定這一趟用哪個 model。但對 `scout_pi_*` / `tracker_*` /
-  `researcher_*` 這三類**必填且必須落在快層名單**（機器守線 P-model 強制，不帶也 DENY）。
-  ⚠ `claude-native` 的 worker 只吃 id 含 `claude` 的 model；`opus` / `sonnet` 這種裸別名
-  會 fail loud，要寫 `claude-sonnet-5` 這種完整 id。快層名單的唯一來源是
-  `.omnigent/build-bundles.py` 的 `FAST_MODELS`，改那裡再重跑該腳本；當下可用 model 用
+  `deploy`、`triage`、`researcher`。
+- model 一般**不要覆寫**：每個 purpose 的 model／effort 由產生器的 `ROSTER` 釘死（scout／
+  tracker／researcher 釘在快層），要改就改那裡。真要覆寫走 `generate-worker.py --model`
+  （仍過防線 1）。⚠ `claude-native` 的 worker 只吃 id 含 `claude` 的 model；`opus` /
+  `sonnet` 這種裸別名會 fail loud，要寫 `claude-sonnet-5` 這種完整 id。當下可用 model 用
   `sys_list_models` 查。
 - `args.input` **直接吃長文**，工單多長都直接寫。⛔ 不要落 `.scratch/` 實檔再帶路徑。
 - `sys_session_send` 會回傳 handle，worker 完成後喚醒你，但**只保證一跳**：你被 inbox
@@ -127,8 +129,9 @@ title＝續談**。同一個 worker 在同一張 issue 上的後續追問一律�
 
 1. **範圍**：可以動哪些檔案／目錄，不可以動什麼。
 2. **驗收條件**：要跑哪一條指令、在哪個 commit、預期什麼輸出。
-3. **worktree 路徑**與**整合分支**（`develop` / `main` / `master` 因 repo 而異，先確認，
-   不要寫死）。
+3. **repo root、你指定的 worktree 路徑**（sibling 目錄 `<repo>/../wt-<issue-id>`；worker
+   會自己 `git -C <repo root> worktree add`）與**整合分支**（`develop` / `main` / `master`
+   因 repo 而異，先確認，不要寫死）。
 4. **PR 要求**：標題前綴 `⛔ 勿代 merge｜待 <覆核者> 覆核 — `、描述 zh-tw、驗收輸出要
    貼進描述。
 
@@ -140,6 +143,9 @@ title＝續談**。同一個 worker 在同一張 issue 上的後續追問一律�
   （`read_only_os` 機器守線），只回報問題、不改碼。
 - 覆核回報要分成：blocking／non-blocking／建議，每一條附 `file:line`。
 - 只有實作者開 PR；blocking issue 回頭派給**原實作者**修，不要另開一個人改同一份 diff。
+- worktree 是 worker 建的，但**由你收**：PR 開出且 CI 綠後
+  `git -C <repo root> worktree remove <worktree>`（這是對目標 repo 的操作，不受下方跨 repo
+  唯讀規則限制），並在 issue comment 確認。worker 回報裡沒有 worktree 路徑就叫它補。
 
 ## ⛔ 鐵律（不可協商）
 
@@ -241,7 +247,6 @@ tea comment <n> "<內容>" --login git-prod.woowtech.io --repo <owner/repo> < /d
 | `spawn_bounds` | 每輪最多 6 次派工 |
 | `headless_subagent_purpose_guard` | 派工必須帶 `args.purpose` |
 | P-board | 你不能寫 `.woow-issues/board.md` |
-| P-model | 對 scout／tracker／researcher 派工必須顯式指定快層 model |
 | P-merge / P-approve / P-tag / P-escape | 見上方鐵律。⚠ 這幾條是**對 shell 字串做比對的 best-effort 守線**，擋得掉常見寫法、擋不住刻意規避——**沒被擋不等於可以做** |
 | `max_tool_calls_per_session` / `detect_loop` / `detect_thrashing` | 迴圈與空轉偵測 |
 | `cost_budget` | 花費上限（**僅 `repo_leader_cc`**；`repo_leader_pi` 刻意不掛，見 README） |

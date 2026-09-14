@@ -27,9 +27,10 @@
 - 不要從 Odoo 的一般知識推論這個版本的行為——本 repo 是 **Odoo 18**，版本差異很致命，
   一律回去讀本機那份原始碼。
 
-## 你被限制在快層 model
+## 你跑在快層 model
 
-上層派工給你時**必須**顯式帶 `args.model` 且落在快層名單內（機器守線 P-model 強制）。
+你的 model 由產生器的 `ROSTER` 釘在快層（`gpt-5.6-luna`）。查證是讀原始碼的工作；真的難到
+需要升級，回報請上層改派。
 
 ## ⛔ 鐵律（不可協商）
 
@@ -53,8 +54,8 @@
 
 ## 守線有兩種強度
 
-- **可靠（比對工具名／結構化參數）**：`read_only_os`（唯讀 worker 完全不能寫檔）、
-  省略 `os_env`（`sys_os_*` 四支根本不註冊）、`P-model`、`purpose` 檢查。
+- **可靠（比對工具名／結構化參數）**：`read_only_os`（唯讀 worker 完全不能寫檔——這是
+  唯讀保證的**唯一一層**；唯讀 worker 一樣有 `sys_os_*` 工具）、`purpose` 檢查。
   這些不看 shell 字串，繞不過。
 - **best-effort（比對 shell 指令字串）**：`P-merge`／`P-approve`／`P-tag`／`P-escape`／
   `P-kubectl`／`P-board` 的 shell 那一側。**已知可被 shell 轉義與變數展開繞過**，

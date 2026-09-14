@@ -21,8 +21,11 @@ description: 派工對照表與 repo alias map 的使用規則：怎麼選 harne
 # 1. 產生（⛔ 一定要走這支，它有五道防線）
 DIR=$(python3 <paas-platform root>/.omnigent/woow-issue-leader/generate-worker.py \
         --purpose implement --harness pi \
-        --repo paas-platform --worktree /home/elmo/woow-repos/paas/wt-1032 \
+        --repo paas-platform --repo-root /home/elmo/woow-repos/paas/woow_paas_platform \
+        --worktree /home/elmo/woow-repos/paas/wt-1032 \
         --name impl-1032-pi)
+# implement 必須同時給 --repo-root 與 --worktree：worktree 由 worker 自己
+# `git -C <repo-root> worktree add <worktree>`，兩個路徑都進 allowed_dirs；你只指定路徑。
 # 2. 建 session（⛔ 不帶工單）
 #    conversation_id = sys_session_create(config_path=$DIR) 回傳的 conversation_id
 # 3. 送工單——這是唯一的喚醒線

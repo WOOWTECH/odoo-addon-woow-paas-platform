@@ -50,10 +50,19 @@ woow-issue-leader/          claude-sdk／claude-fable-5-1／xhigh／spawn: true
 ```bash
 DIR=$(python3 <paas-platform>/.omnigent/woow-issue-leader/generate-worker.py \
         --purpose implement --harness pi --repo paas-platform \
+        --repo-root /home/elmo/woow-repos/paas/woow_paas_platform \
         --worktree /home/elmo/woow-repos/paas/wt-1032 --name impl-1032-pi)
 # conversation_id = sys_session_create(config_path=$DIR) 回傳的 conversation_id（⛔ 不帶工單）
 # sys_session_send(session_id=<conversation_id>, args.purpose="implement", args.input=<工單>)
 ```
+
+⚠ **worktree 由 implement worker 自己建**（2026-09-14 裁決）：repo-leader 只指定路徑、不代建。
+`--repo-root` 與 `--worktree` 兩個路徑都進 worker 的 `block_working_dir_changes.allowed_dirs`
+（`git -C <repo-root> worktree add` 才進得去），該層的 `block_worktree` 因此關掉；「進 repo root
+只為建 worktree、改檔只能在 worktree 裡」是紀律規則，機器擋不住。worker 完成後把 worktree
+路徑、branch、PR 回報給 repo-leader；PR 開出且 CI 綠後由 repo-leader 移除。runner 只有一個、
+永遠在共同祖先啟動——⛔ 不要為某張 issue 另起「以 worktree 當 workspace」的 runner（dispatcher
+會找不到任何 sibling repo，全部 repo hooks 靜默消失）。
 
 ## 誰通知誰（喚醒只保證一跳）
 
@@ -82,7 +91,7 @@ bash .omnigent/mutation-tests.sh [case 代號]  # 突變測試（每個 case 斷
 | `_templates/<role>/AGENTS.md` ＋ `skills/` | 8 份 worker prompt／skill（**產生器的來源**） | 手改 |
 | `_shared/repo_leader/AGENTS.md` | repo-leader 共用 prompt | 手改 |
 | `woow-issue-leader/AGENTS.md` ＋ `skills/` | issue-leader 的 prompt 與 4 個 skill | 手改 |
-| `generate-worker.py` | 執行期產生器 ＋ 對照表 ＋ **7 支 CEL 與所有 policy 片段** | 手改 |
+| `generate-worker.py` | 執行期產生器 ＋ 對照表 ＋ **6 支 CEL 與所有 policy 片段** | 手改 |
 | `hooks/dispatch-hook.py` ＋ `hooks.json` | dispatcher | 手改 |
 | `build-bundles.py` | 三份靜態 config 的產生器 ＋ **19 項驗收** | 手改 |
 | `test-dispatcher.py` | dispatcher 端到端（fixture、零副作用；51 情境） | 手改 |
@@ -199,29 +208,33 @@ tool call 是在 server 端的 `ProxyMcpManager` 用原始工具名（`sys_os_sh
 
 ### 🔴 「這一層掛幾道」≠「全樹有幾道」
 
-⚠ 兩個數字很容易混：`generate-worker.py` 裡共有 **7 支** CEL 運算式（驗收第 8 項掃的就是這 7
-支／159 個事件，涵蓋全樹含執行期產生的 worker），但**沒有任何一層同時掛滿 7 支**。實查
-（`yaml.safe_load` 各層 config 的 `guardrails.policies`，數 `path` 結尾為 `cel.cel_policy` 的）：
+⚠ 兩個數字很容易混：`generate-worker.py` 裡共有 **6 支** CEL 運算式（驗收第 8 項掃的就是這 6
+支，事件數以 `--check` 當下印出的為準，涵蓋全樹含執行期產生的 worker），但**沒有任何一層同時
+掛滿 6 支**。實查（`yaml.safe_load` 各層 config 的 `guardrails.policies`，數 `path` 結尾為
+`cel.cel_policy` 的；2026-09-14 那次退役後重數，見 §已廢止的設計 第 5 條）：
 
 **基本四支**＝P-merge／P-approve／P-tag／P-escape（對 shell 字串比對，每一層都掛）。各層在此
 之上的增減：
 
 | 層 | policies | CEL | ＝基本四支 ＋ | 沒掛的 |
 | --- | --- | --- | --- | --- |
-| `woow_issue_leader`（頂層） | 10 | **5** | P-model | **P-board**（刻意，見下）；`max_tool_calls_per_session`；花費改掛 `user_daily_cost_budget`（兩者見 §頂層 issue-leader 改掛） |
-| `repo_leader_cc` | 12 | 6 | P-model ＋ P-board | — |
-| `repo_leader_pi` | 11 | 6 | P-model ＋ P-board | `cost_budget`（非 CEL，見 §cost_budget） |
-| 執行期產生的 `ops_k8s` worker | 11 | 6 | P-board ＋ **P-kubectl**（第 7 支，只存在於動態 config） | P-model |
-| 執行期產生的 `implement_pi` worker | 11 | 5 | P-board | P-model、P-kubectl、`cost_budget` |
-| 執行期產生的 `review_cc` worker | 11 | 5 | P-board | P-model、P-kubectl |
+| `woow_issue_leader`（頂層） | 9 | **4** | — | **P-board**（刻意，見下）；`max_tool_calls_per_session`；花費改掛 `user_daily_cost_budget`（兩者見 §頂層 issue-leader 改掛） |
+| `repo_leader_cc` | 11 | 5 | P-board | — |
+| `repo_leader_pi` | 10 | 5 | P-board | `cost_budget`（非 CEL，見 §cost_budget） |
+| 執行期產生的 `ops_k8s` worker | 11 | 6 | P-board ＋ **P-kubectl**（第 6 支，只存在於動態 config） | — |
+| 執行期產生的 `implement_pi` worker | 11 | 5 | P-board | P-kubectl、`cost_budget` |
+| 執行期產生的 `review_cc` worker | 11 | 5 | P-board | P-kubectl |
+| 執行期產生的 `explore_pi`／`researcher_pi` worker | 10 | 5 | P-board | P-kubectl、`cost_budget` |
+| 執行期產生的 `tracker_pi` worker | 9 | 5 | P-board | `read_only_os`（它要寫產物）、P-kubectl、`cost_budget` |
 
-⚠ **P-model 只掛在會派工的那幾層**（它管的是 `sys_session_send` 的 `args.model`）——worker 不
-派工，掛了也沒有事件會命中。
-
+<!-- retired-ok:start 下面這段是本節自己抓過的目視推導事故紀錄，必須點名當時那支 policy -->
 🔴 **這張表的每一格都必須用實跑產生器取得，⛔ 不可以目視推導。** 本節的第一版就是目視推導寫
 的，把動態 `ops_k8s` worker 標成「基本四支 ＋ P-model ＋ P-kubectl」——實跑
-`generate("ops_k8s", "claude-native", …)` 後才發現它**根本沒掛 P-model**（理由就是上一段）。
-這與本節要修的錯誤是同一類：**文件描述與實際 policy 組成不符，而且不會有任何 gate 報錯**。
+`generate("ops_k8s", "claude-native", …)` 後才發現它**根本沒掛 P-model**（P-model 只掛派工層，
+而且已於 2026-09-14 整支退役）。同一類事故第二次：README 曾把「唯讀 worker 省略 `os_env`」寫成
+A 類守線，實跑 `_worker_config()` 才發現唯讀 worker 一樣有 `os_env`（見 §已廢止的設計 第 6 條）。
+兩次都是：**文件描述與實際 policy 組成不符，而且不會有任何 gate 報錯**。
+<!-- retired-ok:end -->
 重跑指令（零副作用，寫進臨時目錄）：
 
 ```python
@@ -496,8 +509,10 @@ dispatcher 在「命中了 repo、但沒有任何 hook 真的跑起來」時寫�
 
 - **child 不繼承 parent 的 `guardrails.policies`** ⇒ 每個 worker 自帶完整 policy
   （產生器負責，驗收第 8 項對產生器輸出也跑 CEL 雙向測試）。
-- **唯讀 worker 完全省略 `os_env` block** ⇒ 四支 `sys_os_*` 一支都不註冊，這是 A 類 sound
-  的守線。
+- **唯讀 worker 的保證只有 `read_only_os` 一層**（比對工具名，A 類）。⚠ 唯讀 worker 的 config
+  **一樣有** `os_env` 區塊、`sys_os_*` 會註冊——本 README 舊版把「config 不寫 `os_env` ⇒ 不註冊」列為第二層 A 類守線，是
+  文件先於實作的錯誤描述，2026-09-14 實跑 `_worker_config()` 確認後裁決照實作改文件
+  （見 §已廢止的設計 第 6 條）。
 
 ## Guardrails
 
@@ -522,7 +537,6 @@ omnigent 的 venv，而且 `function.path` 打錯字會讓 worker 連 `Read` 都
 | 守線 | 掛在哪 | 擋什麼 |
 | --- | --- | --- |
 | `p_board_read_only` | 除 issue-leader 外**全部** | 任何提到 `.woow-issues/` 而**無法證明是唯讀**的指令（唯讀＝單一不串接、且以 `cat`/`less`/`head`/`tail`/`grep`/`rg`/`ls`/`wc`/`diff`/`git diff`/`git show` 開頭） |
-| `p_model_fast_tier_only` | 三層 leader | 對 `scout_pi` / `tracker` / `researcher` 派工未帶或帶了非快層 `args.model` |
 | `p_merge_no_agent_merge` | 全部 | forge CLI 的 `pr`／`pulls`／`mr merge` 子命令，或 `gh`／`glab` API、`curl` 直打 merge endpoint |
 | `p_approve_no_agent_signoff` | 全部 | 指令中**出現 `/approve` 字串**（不再限定工具名） |
 | `p_tag_no_agent_tag_push` | 全部 | `git push`＋tag 形態、`refs/tags/`、forge `release`、`git tag <name>` |
@@ -551,8 +565,6 @@ omnigent 的 venv，而且 `function.path` 打錯字會讓 worker 連 `Read` 都
 | 守線 | 為什麼可靠 |
 | --- | --- |
 | `read_only_os` | 比對**工具名**（`Write`/`Edit`/`sys_os_write`…），不看 shell 字串 |
-| **省略 `os_env`** | `sys_os_read/write/edit/shell` 四支**根本不註冊**——沒有這個工具就做不到 |
-| `p_model_fast_tier_only` | 讀的是 `sys_session_send` 的**結構化參數**，不是 shell 字串 |
 | `headless_subagent_purpose_guard` / `spawn_bounds` | 同上，結構化參數 |
 | `block_working_dir_changes` | 有自己的 shell 解析（非單一 regex），且只需判斷 `cd`/`git -C` 這種固定形狀 |
 | repo 的 `.claude/hooks/kubectl-ns-guard.py`（**被執行到之後**的判定） | 用 `shlex` 正確解析，剝 heredoc、認 `bash -c`、認 `--`；且 repo-lint 對帳白名單 |
@@ -618,15 +630,15 @@ repo），而且完全不認 `tea`。所以 `p_tag_no_agent_tag_push` 自己對 
    Anthropic API，worker 直接不能跑。`enforce_sandbox` 的參數只有
    `sandbox_type / allow_network / write_paths / read_paths / env_passthrough`，
    **沒有** egress allowlist 可以替 LLM API 開洞。
-2. **會把「刻意省略 `os_env`」這個 sound 的守線反過來拆掉。** runner 套用 verdict 的
-   `_apply_sandbox_override_from_verdict` 會做 `if spec.os_env is None: spec.os_env =
-   OSEnvSpec()`——實測對 `researcher_via_pi` 套下去，`os_env` 從 `None` 變成一個完整的
-   `OSEnvSpec`。而「省略 `os_env` ⇒ 四支 `sys_os_*` 都不註冊」正是唯讀 worker 最強的那道
-   保證。等於為了加一層 best-effort，拆掉一層 sound 的。
+2. runner 套用 verdict 的 `_apply_sandbox_override_from_verdict` 會做
+   `if spec.os_env is None: spec.os_env = OSEnvSpec()`（實測對唯讀 researcher 套下去，`os_env`
+   變成一個完整的 `OSEnvSpec`）。⚠ 舊版 README 在此主張這會「拆掉唯讀 worker 不寫 `os_env`
+   的 sound 守線」——但實作上唯讀 worker 本來就有 `os_env`（2026-09-14 實跑確認，見 §已廢止的
+   設計 第 6 條），所以這一點**不再是否決理由**，留作紀錄。
 3. `sandbox: {type: none}` 搭 `allow_network: false` 會直接
    `ValueError: sandbox type 'none' cannot restrict network`。
 
-⇒ 唯讀 worker 的保證維持在 **A 類**：`read_only_os` ＋ **省略 `os_env`**。
+⇒ 唯讀 worker 的保證維持在 **A 類**：`read_only_os`（一層）。
 
 ### ⚠ `cost_budget` 只掛 claude 家族（claude-native／claude-sdk）
 
@@ -848,6 +860,30 @@ host filesystem（GHSA-p8rw-8qj3-hf33）。詳見 §`os_env.cwd`。
 
 ⛔ 不要重新引入 `anchor=` 或任何「縮範圍」參數。
 
+### 5. P-model CEL（`p_model_fast_tier_only`；FIX ROUND 1 起，2026-09-14 退役）
+
+原本掛在三層 leader 上，要求對 scout／tracker／researcher 派工必須顯式帶落在 `FAST_MODELS`
+名單內的 `args.model`。**廢止原因**（review 實跑）：它的 agent regex 只認
+`^(scout_pi|tracker|researcher)_via_(cc|pi)$`——那是靜態 sub-agent 時代的名字；worker 改成執行期
+產生後 `_safe_name()` 產的是 `explore_pi`／`tracker_pi`／`researcher_pi`，六個名字**零命中**，而
+兩步起法的 `sys_session_send(session_id=…)` 也未必帶 `agent` 欄位 ⇒ 這支 CEL **從未擋過任何事件**。
+驗收第 8 項的向量還在測 `scout_pi_via_cc` 這些舊名，所以雙向測試全綠——綠在一個沒人會送出的
+事件上。更矛盾的是 `FAST_MODELS` 全是 claude 系，而 ROSTER 給這三個角色的預設是
+`gpt-5.6-luna`／`terra`：若它真的活著，每次用預設派工都 DENY。
+
+裁決是退役而不是修：model 已由 `ROSTER` 在產生 config 時釘死，`args.model` 覆寫不是常規路徑，
+沒有第二層的必要。⛔ 不要重新引入——要限制 model 就改 `ROSTER` 那一格；驗收第 13 項的
+`RETIRED_TERMS` 已把 `P-model`／`FAST_MODELS`／`快層名單` 列為廢止詞彙。
+
+### 6. 「唯讀 worker 省略 `os_env`」敘述（FIX ROUND 0 起，2026-09-14 改正）
+
+README 與七份 worker 模板都曾把「唯讀 worker 省略 `os_env` ⇒ `sys_os_*` 四支不註冊」列為唯讀
+worker **最強**的 A 類保證，並以此為由之一否決 `enforce_sandbox`。**改正原因**：實跑
+`_worker_config("review"|"explore"|"researcher", …)`，三種唯讀 worker 的 config **都有** `os_env:`
+區塊（`_worker_config` 算了 `readonly` 卻沒用它）。這是文件先於實作、且沒有 gate 會紅的錯誤描述。
+裁決：照實作改文件——唯讀保證只有 `read_only_os` 一層（比對工具名，仍是 A 類）。
+`RETIRED_TERMS` 已把「省略 `os_env`」列為廢止詞彙，prompt 層零容忍。
+
 ## 機器相關的值
 
 **產生出來的 bundle 裡沒有任何機器相關的絕對路徑**——`os_env.cwd` 一律是 `.`（理由見
@@ -856,5 +892,5 @@ host filesystem（GHSA-p8rw-8qj3-hf33）。詳見 §`os_env.cwd`。
 唯一與本機綁定的是 worker prompt 裡舉例用的跨 repo 唯讀路徑（`/home/elmo/woow-repos/<repo>/…`
 這種 `grep` 範例），那些在 `_workers/*/AGENTS.md` 的來源池裡，改了重跑產生器即可。
 
-快層 model 名單同理，只有 `build-bundles.py` 的 `FAST_MODELS` 一處；model 名會隨 CLI／
-catalog 版本漂移，當下可用的用 `sys_list_models` 查。
+快層 model 同理，釘在 `generate-worker.py` 的 `ROSTER`（scout／tracker／researcher 那幾格）；
+model 名會隨 CLI／catalog 版本漂移，當下可用的用 `sys_list_models` 查。

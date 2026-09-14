@@ -11,11 +11,14 @@ description: claude-native 實作 worker 的工單執行流程：待在 worktree
 
 ## 步驟
 
-1. **確認 worktree**。開工先 `cd <工單給的 worktree 絕對路徑>`；`pwd` 對照工單給的
-   路徑，`git rev-parse --abbrev-ref HEAD` 對照 branch。不對就停下來回報，⛔ 不要另開。
-   `block_working_dir_changes` 的 `allowed_dirs` 只含該 worktree：相對路徑的 cd、cd 到別處、
-   `git -C <別處>`、`git worktree add|move|remove` 都會被 DENY。跑子目錄的測試把路徑當
-   參數傳（`python -m pytest src/tests/test_x.py`），⛔ 不要 `cd src && pytest`。
+1. **建 worktree、再進去**。worktree 是你自己建的：
+   `git -C <工單給的 repo root> worktree add <工單給的 worktree 路徑> -b <type>/<issue-id> origin/<整合分支>`
+   （已存在就直接用）。接著 `cd <worktree 絕對路徑>`；`pwd` 對照工單給的路徑，
+   `git rev-parse --abbrev-ref HEAD` 對照 branch。不對就停下來回報，⛔ 不要換路徑另開。
+   `block_working_dir_changes` 的 `allowed_dirs` 只含 repo root 與該 worktree：相對路徑的
+   cd、cd 到別處、`git -C <別處>` 都會被 DENY。⛔ 進 repo root 只為建 worktree，不要在主
+   checkout 裡改檔。跑子目錄的測試把路徑當參數傳（`python -m pytest src/tests/test_x.py`），
+   ⛔ 不要 `cd src && pytest`。
 2. **確認整合分支**。`develop` / `main` / `master` 因 repo 而異——用
    `git symbolic-ref refs/remotes/origin/HEAD` 或直接看 repo 的 `CLAUDE.md`，⛔ 不要寫死。
 3. **只動契約點名的檔案**。動之前先讀，不要憑檔名猜內容。
