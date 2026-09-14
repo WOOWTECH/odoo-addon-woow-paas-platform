@@ -52,6 +52,11 @@ DIR=$(python3 <paas-platform>/.omnigent/woow-issue-leader/generate-worker.py \
         --purpose implement --harness pi --repo paas-platform \
         --repo-root /home/elmo/woow-repos/paas/woow_paas_platform \
         --worktree /home/elmo/woow-repos/paas/wt-1032 --name impl-1032-pi)
+# --name 同時是 worker 的 agent name 與目錄名（預設 <purpose>_<cc|pi>；規則 ^[a-zA-Z0-9_-]+$）。
+# 同名不衝突：omnigent 每次 config_path 上傳都建一個新的 session-scoped agent row，name 只是
+# 給 UI／log 看的標籤（review F13 查證：server/routes/_sessions/orchestration.py
+# ::_create_session_from_bundle 明寫「Agent names are user-authored labels, not global content
+# identities」）。建議 <purpose>-<issue>-<cc|pi>，才分得出是哪張 issue 的 worker。
 # conversation_id = sys_session_create(config_path=$DIR) 回傳的 conversation_id（⛔ 不帶工單）
 # sys_session_send(session_id=<conversation_id>, args.purpose="implement", args.input=<工單>)
 ```
@@ -556,6 +561,8 @@ omnigent 的 venv，而且 `function.path` 打錯字會讓 worker 連 `Read` 都
 | `kubectl get pods \| grep -i delete` **放行**（不是誤擋，是刻意放） | — | pipe 之後不得再有 `kubectl`，所以後段的 `delete`／`-n` 只可能是 grep／jq 的參數，寫入動詞與 `-n` 重複的比對都只看第一段 |
 | `kubectl --context woow-k3s apply -f x.yaml` | 先 `--dry-run=server`；真要套用走 `deploy-stg` skill 或交給人 | manifest 內的 `metadata.namespace` 會覆蓋 `-n`，regex 看不到檔案內容 |
 | `git tag v1.0`（本機建 tag，未推） | 讀取用 `git tag -l` / `--list`；建 tag 交給人 | 建 tag 是發版動作的第一步 |
+| `git push origin 1032-v18-upgrade`／`git push origin HEAD:v2-x`（branch 名以 `<字>-v<數字>` 開頭、或 `HEAD:v…`） | branch 一律 `<type>/<issue-id>-…`（`chore/1032-v18-upgrade` 就過） | tag 形態是 `[\s:]["']?(<字>-)?v<數字>` 的字串比對；放寬 `v<數字>` 後面的邊界，每一種都會多一個真 tag 滑過的形狀（review F12，2026-09-14 裁決不放寬） |
+| `git fetch origin refs/tags/v1.7.6`（唯讀） | `git fetch origin --tags`／`git ls-remote --tags origin`／`git tag -l` | `refs/tags/` 出現即擋、不分讀寫——限定 push 語境就會漏掉 `gh api … git/refs` 這種不經 push 的建 tag 路徑 |
 
 ⚠ `kubectl --context docker-desktop ...` **不再被擋**（FIX ROUND 2）：docker-desktop 是本
 機測試／開發用叢集，鐵律限定的是 woow-k3s 這個共用叢集。舊版不分 context，會毀掉

@@ -40,6 +40,10 @@ DIR=$(python3 /home/elmo/woow-repos/paas/woow_paas_platform/.omnigent/woow-issue
         --repo paas-platform --repo-root /home/elmo/woow-repos/paas/woow_paas_platform \
         --worktree /home/elmo/woow-repos/paas/wt-1032 \
         --name impl-1032-pi)
+#    --name 同時是 worker 的 agent name 與目錄名（預設 <purpose>_<cc|pi>），寫成
+#    <purpose>-<issue>-<cc|pi> 讓 UI／log 分得出是哪張 issue 的 worker。同名不衝突（每次上傳都是
+#    新的 session-scoped agent）；會撞的是 sys_session_send 的 title——同一個 parent 底下 title
+#    要唯一，照「一張 issue 一個 title」的規則走就不會撞。
 
 # 3. 建 session（⛔ 不帶工單）
 #    conversation_id = sys_session_create(config_path=$DIR) 回傳的 conversation_id

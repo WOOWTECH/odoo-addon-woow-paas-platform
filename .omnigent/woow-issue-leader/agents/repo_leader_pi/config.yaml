@@ -114,7 +114,7 @@ guardrails:
               || event.data.arguments.command.matches("-X\\s+(POST|PATCH|PUT)[\\s\\S]*git/refs")
               || event.data.arguments.command.matches("\\bgit\\s+tag\\s+[^-\\s]")
             )
-            ? {"result": "DENY", "reason": "發版 tag 由人工推，agent 不推 tag、不建 release（v<版號> / --tags / refs/tags/ / git tag <name> / forge release 皆擋）。"} : {"result": "ALLOW"}
+            ? {"result": "DENY", "reason": "發版 tag 由人工推，agent 不推 tag、不建 release（v<版號> / --tags / refs/tags/ / git tag <name> / forge release 皆擋）。⚠ 刻意誤擋：branch 名以 <字>-v<數字> 開頭（如 1032-v18-upgrade）或 HEAD:v… 也會命中——branch 名改用 <type>/<issue-id>-… 形式；只是要讀 tag 用 git fetch --tags / git ls-remote --tags / git tag -l。"} : {"result": "ALLOW"}
     p_escape_obfuscated_command:
       type: function
       on: [tool_call]

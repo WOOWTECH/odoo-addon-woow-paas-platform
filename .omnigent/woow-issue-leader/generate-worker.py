@@ -16,7 +16,12 @@
 
     generate-worker.py --purpose implement --harness pi --repo paas-platform \\
                        --repo-root /home/elmo/woow-repos/paas/woow_paas_platform \\
-                       --worktree /home/elmo/woow-repos/paas/wt-1032 --name impl-1032
+                       --worktree /home/elmo/woow-repos/paas/wt-1032 --name impl-1032-pi
+    # --name 同時是 worker 的 **agent name 與目錄名**（預設 <purpose>_<cc|pi>）。同名不衝突——
+    # omnigent 每次 config_path 上傳都建一個新的 session-scoped agent row，name 只是標籤
+    # （server/routes/_sessions/orchestration.py::_create_session_from_bundle 明寫「Agent names
+    # are user-authored labels, not global content identities」）；它的用途是讓 UI／log 分得出
+    # 這是哪張 issue 的 worker，建議寫成 <purpose>-<issue>-<cc|pi>。
     # implement 必須同時給 --repo-root 與 --worktree：worktree 由 worker **自己** `git -C
     # <repo-root> worktree add <worktree>`（2026-09-14 裁決），兩個路徑都要進 allowed_dirs。
     # P-path 的前綴＝worktree 相對於 runner workspace（$OMNIGENT_RUNNER_WORKSPACE，可用
@@ -244,6 +249,12 @@ CEL_APPROVE = f"""event.type == "tool_call"
 #   3. forge CLI ＋ release（建 release 等於建 tag）
 #   4. `git tag <非 flag>`＝建立 tag（`git tag -l` / `--list` / `-n` 是讀，放行）
 # 🔴 FIX ROUND 3：`[\\s:]` 後面要容許一個引號——`git push origin "v1.7.6"` 舊版滑過。
+# ⚠ 刻意誤擋（review F12，2026-09-14 裁決不放寬）：branch 名以 `<字>-v<數字>` 開頭
+#    （`git push origin 1032-v18-upgrade`）、`HEAD:v2-x`、以及唯讀的 `git fetch origin refs/tags/v1`
+#    都會 DENY。放寬要改的是 regex 的邊界（`v[0-9]` 後面接什麼、`refs/tags/` 限定 push 語境），
+#    每一種放寬都會多一個真 tag 滑過的形狀；worker 照 `<type>/<issue-id>-…` 命名 branch 就不會
+#    撞到，讀 tag 用 `git fetch --tags`／`git ls-remote --tags`／`git tag -l`。deny 訊息與 README
+#    「已知的刻意誤擋」表都有替代寫法；CEL_VECTORS 把這三條列為 deny 向量，讓取捨被測到。
 TAG_SHAPE_RE = r"(--tags|--follow-tags|refs/tags/|[\\s:][\"\']?([A-Za-z0-9._-]+-)?v[0-9])"
 CEL_TAG = f"""event.type == "tool_call"
 && event.data.name in {_cel_list(SHELL_TOOLS)}
@@ -257,7 +268,7 @@ CEL_TAG = f"""event.type == "tool_call"
   || event.data.arguments.command.matches("-X\\\\s+(POST|PATCH|PUT)[\\\\s\\\\S]*git/refs")
   || event.data.arguments.command.matches("\\\\bgit\\\\s+tag\\\\s+[^-\\\\s]")
 )
-? {{"result": "DENY", "reason": "發版 tag 由人工推，agent 不推 tag、不建 release（v<版號> / --tags / refs/tags/ / git tag <name> / forge release 皆擋）。"}} : {{"result": "ALLOW"}}"""
+? {{"result": "DENY", "reason": "發版 tag 由人工推，agent 不推 tag、不建 release（v<版號> / --tags / refs/tags/ / git tag <name> / forge release 皆擋）。⚠ 刻意誤擋：branch 名以 <字>-v<數字> 開頭（如 1032-v18-upgrade）或 HEAD:v… 也會命中——branch 名改用 <type>/<issue-id>-… 形式；只是要讀 tag 用 git fetch --tags / git ls-remote --tags / git tag -l。"}} : {{"result": "ALLOW"}}"""
 
 # ── P-kubectl（僅 ops_k8s）──────────────────────────────────────────────────
 # ⚠ 這一層是 **defense-in-depth、best-effort**，**不是安全邊界**。權威守線是 repo 的
@@ -652,7 +663,7 @@ def resolve_purpose(purpose: str) -> str:
 # ── worker config 產生 ───────────────────────────────────────────────────────
 
 def _worker_config(purpose: str, harness: str, *, model: str, effort: str,
-                   description: str, worktree: str | None = None,
+                   description: str, name: str | None = None, worktree: str | None = None,
                    repo_root: str | None = None, worktree_rel: str | None = None) -> str:
     """組出 worker 的 config.yaml 內容。
 
@@ -668,7 +679,7 @@ def _worker_config(purpose: str, harness: str, *, model: str, effort: str,
         f"#   purpose={purpose} harness={harness} model={model} effort={effort}",
         "",
         "spec_version: 1",
-        f"name: {_safe_name(purpose, harness)}",
+        f"name: {name or _safe_name(purpose, harness)}",
         f"description: {description}",
         "",
         "executor:",
@@ -705,9 +716,28 @@ def _worker_config(purpose: str, harness: str, *, model: str, effort: str,
 
 
 def _safe_name(purpose: str, harness: str) -> str:
-    """agent name：`^[a-zA-Z0-9_-]+$`，且要能看出 purpose 與 harness。"""
+    """預設 agent name：`^[a-zA-Z0-9_-]+$`，且要能看出 purpose 與 harness。"""
     via = "cc" if harness == "claude-native" else "pi"
     return f"{purpose.replace('-', '_')}_{via}"
+
+
+#: omnigent 的 agent name 規則（spec/parser）：`^[a-zA-Z0-9_-]+$`。
+AGENT_NAME_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
+
+
+def _agent_name(purpose: str, harness: str, name: str | None) -> str:
+    """`--name` 同時是 agent name 與目錄名（review F13）；沒給就用 `<purpose>_<cc|pi>`。
+
+    同名**不衝突**：omnigent 每次 `config_path` 上傳都建一個新的 session-scoped agent row，
+    name 只是給 UI／log 看的標籤，不是全域身分。所以這裡只驗字元集，不驗唯一性。
+    """
+    if not name:
+        return _safe_name(purpose, harness)
+    if not AGENT_NAME_RE.match(name):
+        raise GenerateFailure(
+            f"--name {name!r} 不合 agent name 規則 ^[a-zA-Z0-9_-]+$（它同時是 agent name 與目錄名；"
+            "建議 <purpose>-<issue>-<cc|pi>，例如 impl-1032-pi）")
+    return name
 
 
 def _guardrails(purpose: str, harness: str, *, worktree: str | None = None,
@@ -886,11 +916,13 @@ def _worktree_rel(worktree: str, repo_root: str, workspace: str) -> str:
 def generate(purpose: str, harness: str, out_dir: Path, *,
              model: str | None = None, effort: str | None = None,
              repo: str | None = None, worktree: str | None = None,
-             repo_root: str | None = None, workspace: str | None = None) -> dict:
+             repo_root: str | None = None, workspace: str | None = None,
+             name: str | None = None) -> dict:
     """產生一個 worker bundle 目錄並跑完五道防線。回傳自檢摘要。
 
     `workspace` 預設 `$OMNIGENT_RUNNER_WORKSPACE`（再退回 cwd）——它是 worker 檔案工具相對
-    路徑的基準，P-path 的前綴由 worktree 相對它算出。
+    路徑的基準，P-path 的前綴由 worktree 相對它算出。`name` 是 agent name（＝CLI 的目錄名），
+    沒給就 `<purpose>_<cc|pi>`。
     """
     purpose = resolve_purpose(purpose)
     worktree_rel: str | None = None
@@ -929,14 +961,14 @@ def generate(purpose: str, harness: str, out_dir: Path, *,
         raise GenerateFailure(f"模板不存在：{template_dir / 'AGENTS.md'}")
     expect_skills = len(list((template_dir / "skills").glob("*/SKILL.md")))
 
-    name = _safe_name(purpose, harness)
+    name = _agent_name(purpose, harness, name)
     out_dir.mkdir(parents=True, exist_ok=True)
     desc = f"{purpose} worker（{harness}／{model}）"
     if repo:
         desc += f"，目標 repo {repo}"
     (out_dir / "config.yaml").write_text(
         _worker_config(purpose, harness, model=model, effort=effort, description=desc,
-                       worktree=worktree, repo_root=repo_root, worktree_rel=worktree_rel))
+                       name=name, worktree=worktree, repo_root=repo_root, worktree_rel=worktree_rel))
     # 防線 2：只寫**實體** AGENTS.md（模板＋展開 _shared/ 片段），不用 instructions 路徑、不用 symlink
     (out_dir / "AGENTS.md").write_text(render_prompt(template_dir))
     skills_dst = out_dir / "skills"
@@ -1027,6 +1059,20 @@ def self_check() -> tuple[bool, str]:
             pass
         else:
             bad.append("反面案例未被擋下：implement 不帶 worktree（P-path 沒有前綴可掛）")
+        # --name 是 agent name（review F13）：合法的要真的寫進 config；不合規則的要拒絕
+        try:
+            info = generate("review", "claude-native", Path(td) / "impl-1032-cc", name="impl-1032-cc")
+        except GenerateFailure as exc:
+            bad.append(f"--name 合法卻被拒絕：{exc}")
+        else:
+            if info["name"] != "impl-1032-cc":
+                bad.append(f"--name 沒有成為 agent name（預期 'impl-1032-cc'，實得 {info['name']!r}）")
+        try:
+            generate("review", "claude-native", Path(td) / "neg6", name="impl 1032")
+        except GenerateFailure:
+            pass
+        else:
+            bad.append("反面案例未被擋下：--name 含空白（不合 ^[a-zA-Z0-9_-]+$）")
         # worktree 不在 workspace 底下 ⇒ 拒絕（worker 的 cwd 是 workspace，進不去）
         try:
             generate("implement", "pi", Path(td) / "neg5", worktree="/tmp/wt-x",
@@ -1036,9 +1082,9 @@ def self_check() -> tuple[bool, str]:
         else:
             bad.append("反面案例未被擋下：worktree 不在 workspace 底下")
     ok = not bad
-    checked = len(made) + 3  # 另計三種固定拒絕：implement+claude-native（#1096）、implement 缺 worktree、worktree 不在 workspace
-    return ok, (f"{checked} 種組合自檢通過（{len(made)} 種可產生＋3 種固定拒絕案例：implement 固定 pi／"
-                f"implement 缺 worktree／worktree 不在 workspace）：{', '.join(made)}" if ok
+    checked = len(made) + 4  # 另計四種固定拒絕：implement+claude-native（#1096）、implement 缺 worktree、worktree 不在 workspace、--name 不合規則
+    return ok, (f"{checked} 種組合自檢通過（{len(made)} 種可產生＋4 種固定拒絕案例：implement 固定 pi／"
+                f"implement 缺 worktree／worktree 不在 workspace／--name 不合規則；--name 合法時成為 agent name）：{', '.join(made)}" if ok
                 else f"{len(bad)} 個問題：" + "；".join(bad[:4]))
 
 
@@ -1046,7 +1092,10 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--purpose", help=f"可用：{sorted(ROSTER)} ＋別名 {sorted(PURPOSE_ALIASES)}")
     ap.add_argument("--harness", choices=["claude-native", "pi"])
-    ap.add_argument("--name", help="worker 目錄名（預設用 purpose_harness）")
+    ap.add_argument("--name",
+                    help="worker 的 agent name 兼目錄名（預設 <purpose>_<cc|pi>；規則 ^[a-zA-Z0-9_-]+$）。"
+                         "同名不衝突（每次上傳都是新的 session-scoped agent），只用來在 UI／log 分辨是哪張 "
+                         "issue 的 worker；建議 <purpose>-<issue>-<cc|pi>，例如 impl-1032-pi")
     ap.add_argument("--model", help="覆寫對照表的 model（仍會過防線 1）")
     ap.add_argument("--effort", choices=["high", "xhigh"], help="覆寫對照表的 effort")
     ap.add_argument("--repo", help="目標 repo alias（寫進 description）")
@@ -1082,7 +1131,7 @@ def main() -> int:
     try:
         info = generate(args.purpose, args.harness, parent / name, model=args.model,
                         effort=args.effort, repo=args.repo, worktree=args.worktree,
-                        repo_root=args.repo_root, workspace=args.workspace)
+                        repo_root=args.repo_root, workspace=args.workspace, name=args.name)
     except GenerateFailure as exc:
         print(f"✗ 拒絕產生：{exc}", file=sys.stderr)
         print("⛔ 不要用 sys_session_create 派這個 worker。", file=sys.stderr)
