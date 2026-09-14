@@ -75,12 +75,16 @@ worktree 時它會自動載入。一次性繞過：指令前綴 `KUBECTL_NS_GUAR
 
 只在**與 woow-k3s 有關**時才啟動——`--context docker-desktop` 是本機測試叢集，**不受此
 規則限制**（否則會毀掉 `/woow-dev:k8s-dev-sandbox` 的 create／destroy／test 工作流）。
+⚠ 這個例外只在**整條指令只有一個 `kubectl`** 時成立：同一條裡再出現第二個 `kubectl`
+（不論它帶什麼 context）就回到嚴格規則——否則 `--context docker-desktop … && kubectl
+--context woow-k3s delete …` 會整條滑過。
 
 `--context woow-k3s` 下（或寫入類但**沒帶 `--context`**，因為預設 context 可能就是它）：
 
 | 情況 | 為什麼擋 |
 | --- | --- |
-| 指令含串接／替換（`&&`、`;`、pipe、反引號、`$(`、換行） | 無法證明「每一段」都在白名單內 |
+| 指令含串接／替換（`&&`、`\|\|`、`;`、反引號、`$(`、換行） | 無法證明「每一段」都在白名單內 |
+| 含 pipe，但**第一段不是唯讀 kubectl**（`kubectl` 開頭、含唯讀動詞、不含寫入動詞），或 pipe **之後再出現 `kubectl`** | `kubectl get … \| grep`／`jq`／`tail` 放行；`… \| xargs kubectl delete`、`… \| kubectl apply -f -` 才擋 |
 | `-n` / `--namespace` 出現超過一次 | 無法確定哪一個生效 |
 | 寫入／exec 類 verb，namespace 不在白名單（含沒帶 `-n`） | 明確帶 `-n`，不要靠 current namespace |
 | `apply`／`create`／`replace`／`patch` 帶 `-f`／`-k` 而沒有 `--dry-run` | ⚠ **manifest 內的 `metadata.namespace` 會覆蓋命令列的 `-n`**，而 regex 看不到檔案內容 |
@@ -93,7 +97,8 @@ worktree 時它會自動載入。一次性繞過：指令前綴 `KUBECTL_NS_GUAR
 
 | 被擋 | 改成 |
 | --- | --- |
-| 唯讀指令串接（`kubectl get ... && echo done`） | **拆成兩次 tool call**，不要用 `&&` 串 |
+| 唯讀指令串接（`kubectl get ... && echo done`） | **拆成兩次 tool call**，不要用 `&&` 串（pipe 接 `grep`／`jq`／`tail` 可以直接用，不必拆） |
+| `kubectl exec … \| grep x`（exec 是寫入類，pipe 不放行） | 先單獨跑 `exec`，在回報裡自己篩 |
 | `kubectl apply -f x.yaml`（woow-k3s） | 先 `--dry-run=server` 看結果；真要套用走 `deploy-stg` skill 或交給人 |
 | 想在非白名單 namespace 動作 | 回報給上層轉 `woow-machines-operator`／叢集運維，⛔ 不要自己動手 |
 
@@ -119,13 +124,9 @@ prod build 卡人工核可：push tag 只會跑到「開 approval issue」就停
 例，裁決無例外）。且 phase 1 綠燈 ≠ 發版完成。** 機器守線 **P-approve** 會 DENY 送出
 `/approve` 留言的指令，**P-tag** 會 DENY `git push` 推 tag。
 
-## ⛔ 其他鐵律
+<!-- include: iron-rules -->
 
-1. **不代 merge**——merge 是人工 gate。機器守線 **P-merge** 強制。
-2. **一律 zh-tw 繁體中文**：PR / Issue / Comment 描述、commit message、程式碼註解。技術
-   詞彙保持 English。
-3. **Gitea 一律用 `tea` CLI**。
-4. **看板唯讀**：`.woow-issues/board.md` 只有 `woow-issue-leader` 能寫（**P-board** 強制）。
+<!-- include: guard-strength -->
 
 ## 回報
 
