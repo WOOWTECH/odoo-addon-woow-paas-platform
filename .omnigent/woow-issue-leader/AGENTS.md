@@ -203,8 +203,8 @@ Gitea label 是 single source of truth；看板只是從 Gitea 重建的 derived
   紀律規則、不是機器擋的**——但搬動 cwd 會讓相對路徑的結論指到別的 repo、事後無法重現。
   統一用絕對路徑。
   （對照：`impl_*` 實作 worker **有**掛這條 policy，它們的 `cd`／`git -C` 會被 DENY；
-  其餘唯讀 worker 與你一樣是紀律規則。建 worktree 的 `git -C ... worktree add` 是在
-  **launch host 的 shell** 跑的，不在任何受約束的 session 裡。）
+  其餘唯讀 worker 與你一樣是紀律規則。建 worktree 的 `git -C <repo root> worktree add` 由
+  implement worker 自己在 session 內跑——repo root 在它的 `allowed_dirs` 裡，進得去。）
 - 需要別 repo 的 **git 歷史**（log / blame / diff）或 **CI 狀態**時，回報給上層，由它在
   該 repo／worktree 另起一個 runner，⛔ 不要自己想辦法繞過。
 

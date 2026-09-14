@@ -124,7 +124,9 @@ title＝續談**。同一個 worker 在同一張 issue 上的後續追問一律�
 2. **驗收條件**：要跑哪一條指令、在哪個 commit、預期什麼輸出。
 3. **repo root、你指定的 worktree 路徑**（sibling 目錄 `<repo>/../wt-<issue-id>`；worker
    會自己 `git -C <repo root> worktree add`）與**整合分支**（`develop` / `main` / `master`
-   因 repo 而異，先確認，不要寫死）。
+   因 repo 而異，先確認，不要寫死）。worker 的檔案工具寫入被 **`P-path`**（A 類）鎖在這個
+   worktree 底下——前綴由產生器用 worktree 相對 runner workspace 的路徑算出，所以 worktree
+   必須在 workspace（六 repo 的共同祖先）底下，否則產生器直接拒絕。
 4. **PR 要求**：標題前綴 `⛔ 勿代 merge｜待 <覆核者> 覆核 — `、描述 zh-tw、驗收輸出要
    貼進描述。
 
@@ -225,8 +227,8 @@ tea comment <n> "<內容>" --login git-prod.woowtech.io --repo <owner/repo> < /d
   紀律規則、不是機器擋的**——但搬動 cwd 會讓相對路徑的結論指到別的 repo、事後無法重現。
   統一用絕對路徑。
   （對照：`impl_*` 實作 worker **有**掛這條 policy，它們的 `cd`／`git -C` 會被 DENY；
-  其餘唯讀 worker 與你一樣是紀律規則。建 worktree 的 `git -C ... worktree add` 是在
-  **launch host 的 shell** 跑的，不在任何受約束的 session 裡。）
+  其餘唯讀 worker 與你一樣是紀律規則。建 worktree 的 `git -C <repo root> worktree add` 由
+  implement worker 自己在 session 內跑——repo root 在它的 `allowed_dirs` 裡，進得去。）
 - 需要別 repo 的 **git 歷史**（log / blame / diff）或 **CI 狀態**時，加 `needs-info`，並在
   issue comment 說明需要哪個 repo 的歷史／CI 狀態，由人決定，⛔ 不要自己想辦法繞過。
 
