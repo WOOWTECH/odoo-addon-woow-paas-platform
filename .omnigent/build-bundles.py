@@ -88,7 +88,6 @@ GEN = _load_generator()
 # 以下全部轉指向 generate-worker.py 的定義（⛔ 不要在本檔重新定義，那就是第二份真相）
 SHELL_TOOLS = GEN.SHELL_TOOLS
 WRITE_TOOLS = GEN.WRITE_TOOLS
-FAST_MODELS = GEN.FAST_MODELS
 K8S_ALLOWED_NAMESPACES = GEN.K8S_ALLOWED_NAMESPACES
 OS_ENV_BLOCK = GEN.OS_ENV_BLOCK
 ASK_TIMEOUT = GEN.ASK_TIMEOUT
@@ -96,7 +95,7 @@ ROSTER = GEN.ROSTER
 P_SAFETY, P_COST = GEN.P_SAFETY, GEN.P_COST
 P_SAFETY_LEADER, P_COST_DAILY = GEN.P_SAFETY_LEADER, GEN.P_COST_DAILY
 P_MERGE, P_APPROVE, P_TAG, P_ESCAPE = GEN.P_MERGE, GEN.P_APPROVE, GEN.P_TAG, GEN.P_ESCAPE
-P_BOARD, P_MODEL, P_KUBECTL = GEN.P_BOARD, GEN.P_MODEL, GEN.P_KUBECTL
+P_BOARD, P_KUBECTL = GEN.P_BOARD, GEN.P_KUBECTL
 P_LEADER_ORCH, P_BLAST, P_READONLY = GEN.P_LEADER_ORCH, GEN.P_BLAST, GEN.P_READONLY
 P_WORKTREE = GEN.P_WORKTREE
 # ⚠ 沒有 P_WORKDIR：#1092 起 block_working_dir_changes 改由 `GEN._p_workdir(worktree)` 在
@@ -158,7 +157,7 @@ def leader_config(leader: str) -> str:
     harness = str(cfg["harness"])
     model, effort = ROSTER["repo-leader"]["models"][harness]
     pol = ["guardrails:", f"  ask_timeout: {ASK_TIMEOUT}", "  policies:"]
-    body = P_LEADER_ORCH + [P_BOARD, P_MODEL, P_MERGE, P_APPROVE, P_TAG, P_ESCAPE] + P_SAFETY
+    body = P_LEADER_ORCH + [P_BOARD, P_MERGE, P_APPROVE, P_TAG, P_ESCAPE] + P_SAFETY
     if harness == "claude-native":
         body.append(P_COST)
     return "\n".join([
@@ -190,7 +189,7 @@ def issue_leader_config() -> str:
     # ⚠ 頂層是長時間運作的單一 session ⇒ 安全網用 P_SAFETY_LEADER（不含整 session 累計的
     #    max_tool_calls_per_session）、花費用 P_COST_DAILY（owner 當日總額，每天歸零），
     #    理由見 generate-worker.py 該兩個常數的註解。repo-leader／worker 仍用 per-session 版。
-    body = (P_LEADER_ORCH + [P_MODEL, P_MERGE, P_APPROVE, P_TAG, P_ESCAPE]
+    body = (P_LEADER_ORCH + [P_MERGE, P_APPROVE, P_TAG, P_ESCAPE]
             + P_SAFETY_LEADER + [P_COST_DAILY])
     # ⛔ 頂層 leader 的 harness 不可以是任何 `*-native`——Omnigent Web UI 的
     #    Agents → Custom agents 子選單會把它**整個過濾掉**（實測：同一組實驗只差
@@ -361,14 +360,6 @@ def _write_ev(path: str, key: str = "file_path", name: str = "Edit") -> dict:
             "data": {"name": name, "arguments": {key: path}}}
 
 
-def _send(agent: str, args: dict | None = None) -> dict:
-    arguments: dict = {"agent": agent, "title": "t"}
-    if args is not None:
-        arguments["args"] = args
-    return {"type": "tool_call", "target": "sys_session_send",
-            "data": {"name": "sys_session_send", "arguments": arguments}}
-
-
 CEL_VECTORS: dict[str, dict[str, list]] = {
     # ⚠ 🔴 標記的向量＝FIX ROUND 1 覆核者**實跑證明可繞過**的 payload。它們現在是回歸
     #    測試：任何一條再度回到 ALLOW，第 8 項就會紅。
@@ -412,25 +403,6 @@ CEL_VECTORS: dict[str, dict[str, list]] = {
              "data": {"name": "Edit", "arguments": {}}},
             {"type": "tool_call", "target": "Read",
              "data": {"name": "Read", "arguments": {"file_path": ".woow-issues/board.md"}}},
-        ],
-    },
-    "p_model_fast_tier_only": {
-        "deny": [
-            _send("scout_pi_via_cc", {"purpose": "explore"}),          # 沒帶 model
-            _send("scout_pi_via_cc"),                                   # 連 args 都沒有
-            _send("tracker_via_pi", {"purpose": "triage"}),
-            _send("researcher_via_cc", {"purpose": "search", "model": "claude-opus-5"}),
-            _send("scout_pi_via_pi", {"purpose": "explore", "model": "opus"}),
-        ],
-        "allow": [
-            _send("scout_pi_via_cc", {"purpose": "explore", "model": "claude-haiku-4-5"}),
-            _send("tracker_via_pi", {"purpose": "triage", "model": "claude-sonnet-5"}),
-            _send("researcher_via_cc", {"purpose": "search",
-                                        "model": "databricks-claude-haiku-4-5"}),
-            _send("impl_cc_via_cc", {"purpose": "implement"}),
-            _send("ver_pi_via_cc", {"purpose": "review"}),
-            _send("ops_k8s_via_pi", {"purpose": "deploy"}),
-            _shell("echo hi"),
         ],
     },
     "p_merge_no_agent_merge": {
@@ -1112,9 +1084,14 @@ def _check_upload_path() -> tuple[bool, str]:
 
 #: 已廢止的設計詞彙：出現在 L1／L2 非歷史區就是錯的現行敘述。
 RETIRED_TERMS = ["symlink", "mode 120000", "run-leader", "--rewrite-cwd",  # legacy-ok
-                 "thin shell", "thin_shell", "tools.agents"]  # legacy-ok
+                 "thin shell", "thin_shell", "tools.agents",  # legacy-ok
+                 # 2026-09-14 退役的 P-model 與它的名單／「省略 os_env」敘述（README §已廢止 第 5／6 條）
+                 "P-model", "p_model_fast_tier_only", "FAST_MODELS", "快層名單",  # legacy-ok
+                 "省略 `os_env`", "省略 os_env"]  # legacy-ok
 #: 已移除的識別符：連實作碼裡都不該再出現（殘留＝指向不存在的東西）。
-REMOVED_IDENTIFIERS = ["run-leader", "run_leader", "--rewrite-cwd", "LAUNCHER"]  # legacy-ok
+REMOVED_IDENTIFIERS = ["run-leader", "run_leader", "--rewrite-cwd", "LAUNCHER",  # legacy-ok
+                       "P_MODEL", "CEL_MODEL", "FAST_MODELS", "FAST_ONLY_ROLES",  # legacy-ok
+                       "p_model_fast_tier_only"]  # legacy-ok
 #: L2 的歷史區標記（整章節放行）。
 LEGACY_MARKER = "legacy-ok"
 LEGACY_HEADING = "已廢止"

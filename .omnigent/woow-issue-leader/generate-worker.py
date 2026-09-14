@@ -15,7 +15,10 @@
 ## 用法
 
     generate-worker.py --purpose implement --harness pi --repo paas-platform \\
+                       --repo-root /home/elmo/woow-repos/paas/woow_paas_platform \\
                        --worktree /home/elmo/woow-repos/paas/wt-1032 --name impl-1032
+    # implement 必須同時給 --repo-root 與 --worktree：worktree 由 worker **自己** `git -C
+    # <repo-root> worktree add <worktree>`（2026-09-14 裁決），兩個路徑都要進 allowed_dirs。
     # → 寫出 <out-dir>/<name>/{config.yaml, AGENTS.md, skills/, hooks/}
     #   印出該目錄的絕對路徑，交給 sys_session_create(config_path=<那個路徑>)
 
@@ -67,22 +70,13 @@ SHELL_TOOLS = ["Bash", "Shell", "bash", "developer__shell", "shell", "sys_os_she
 # 參數：omnigent／pi 用 `path`，claude-native 用 `file_path`。
 WRITE_TOOLS = ["sys_os_write", "sys_os_edit", "Write", "Edit", "MultiEdit", "write", "edit"]
 
-# ── 快層 model 名單（P-model）────────────────────────────────────────────────
-# 🔴 **這裡是唯一來源**。model 名會隨 CLI／catalog 版本漂移；改這一處再重跑本腳本。
-#    當下真的可用的 model，在 session 內用 `sys_list_models` 查。
-# ⚠ claude-native 只吃 id 含 `claude` 的 model——裸別名 `opus`／`sonnet`／`haiku` 會在
-#    dispatch 當下 fail loud（實測 omnigent.model_override.model_family_mismatch）。
-#    被 P-model 管的三個角色都是 pi harness，pi 接受任何通過驗證的 gateway model id。
-FAST_MODELS = [
-    "claude-haiku-4-5",
-    "claude-haiku-4-5-20251001",
-    "databricks-claude-haiku-4-5",
-    "claude-sonnet-5",
-    "databricks-claude-sonnet-5",
-]
-
-# 被 P-model 強制「必須顯式指定快層 model」的角色（簡單查尋任務）。
-FAST_ONLY_ROLES = ["scout_pi", "tracker", "researcher"]
+# ── 快層 model ───────────────────────────────────────────────────────────────
+# scout／tracker／researcher 的 model 由 ROSTER 釘在快層（gpt-5.6-luna／terra）。
+# 舊的 P-model CEL 已於 2026-09-14 退役（見 README §已廢止的設計 第 5 條）：它的 agent  # legacy-ok
+# regex 只認 `<role>_via_(cc|pi)` 這種靜態 sub-agent 時代的名字，對 `_safe_name()` 產的
+# `explore_pi`／`tracker_pi`／`researcher_pi` 零命中，實際從未擋過任何事件；而且它的
+# 快層名單全是 claude 系，與 ROSTER 給這三個角色的 pi 預設互斥。⛔ 不要重新引入——要限制
+# model 就改 ROSTER 那一格。
 
 # ── woow-k3s namespace 白名單（P-kubectl）────────────────────────────────────
 # 🔴 這是白名單的**第五份副本**。權威三份由 repo-lint `kubectl-ns-whitelist-sync` 對帳：
@@ -209,16 +203,6 @@ CEL_BOARD = f"""event.type == "tool_call" && (
       && !(event.data.arguments.command.matches("{BOARD_READ_ONLY_RE}")
            && !event.data.arguments.command.matches("{SHELL_CHAIN_RE}")))
 ) ? {{"result": "DENY", "reason": "看板 .woow-issues/ 只有 woow-issue-leader 能寫。唯讀請用單一不串接的 cat / less / head / tail / grep / rg / ls / wc / diff / git diff / git show；要更新內容就寫進回報，由上層代寫。"}} : {{"result": "ALLOW"}}"""
-
-# ── P-model ──────────────────────────────────────────────────────────────────
-CEL_MODEL = f"""event.type == "tool_call"
-&& event.data.name == "sys_session_send"
-&& has(event.data.arguments.agent)
-&& event.data.arguments.agent.matches("^({"|".join(FAST_ONLY_ROLES)})_via_(cc|pi)$")
-&& !(has(event.data.arguments.args)
-     && has(event.data.arguments.args.model)
-     && event.data.arguments.args.model in {_cel_list(FAST_MODELS)})
-? {{"result": "DENY", "reason": "scout_pi / tracker / researcher 是簡單查尋任務：派工必須顯式帶 args.model，且必須落在 build-bundles.py 的 FAST_MODELS 名單內。"}} : {{"result": "ALLOW"}}"""
 
 # ── P-merge ──────────────────────────────────────────────────────────────────
 # 只擋四種真正的 merge 路徑：`<cli> pr|pulls|mr merge`（tea / gh / glab；含 `sh -c`、串接、
@@ -421,7 +405,6 @@ P_APPROVE = _cel_yaml("p_approve_no_agent_signoff", CEL_APPROVE)
 P_TAG = _cel_yaml("p_tag_no_agent_tag_push", CEL_TAG)
 P_ESCAPE = _cel_yaml("p_escape_obfuscated_command", CEL_ESCAPE)
 P_BOARD = _cel_yaml("p_board_read_only", CEL_BOARD)
-P_MODEL = _cel_yaml("p_model_fast_tier_only", CEL_MODEL)
 P_KUBECTL = _cel_yaml("p_kubectl_namespace_scope", CEL_KUBECTL)
 
 P_LEADER_ORCH = [
@@ -431,7 +414,7 @@ P_LEADER_ORCH = [
     _fn_policy("headless_subagent_purpose_guard",
                "omnigent.policies.builtins.orchestration.headless_subagent_purpose_guard",
                {"allowed_purposes": ["implement", "review", "explore", "search",
-                                     "deploy", "triage"]}),
+                                     "deploy", "triage", "researcher"]}),
 ]
 P_BLAST = _fn_policy("blast_radius", "omnigent.policies.builtins.orchestration.blast_radius",
                      {"gate_pushes": True}, on=["tool_call"])
@@ -446,23 +429,29 @@ P_WORKTREE = _fn_policy(
     {"allowed_root": "'<工單指定的 worktree>'"}, on=["tool_call"],
     note="allowed_root 只用在 deny 訊息；真正的規則是「絕對路徑或含 .. 的寫入路徑一律\n"
          "DENY」。它要成立，前提是 cwd 不會被搬走 → 見下面的 block_working_dir_changes。")
-# ⚠ allowed_dirs 只含該 issue 的 worktree ⇒ cd / git -C 只能進 worktree 本身或其子目錄，
-#   其餘（`..`、別的 repo、共同祖先）一律 DENY；git worktree add/move/remove 一律 DENY。
-#   worktree_guard 擋不住「先 cd 出去、再寫相對路徑」，兩條合起來才是完整的封閉。
-#   runner 的 cwd 是共同祖先（OMNIGENT_RUNNER_WORKSPACE），不是 worktree ⇒ implementer
-#   開工第一件事是 `cd <worktree>`；沒有 allowed_dirs 它連自己的 worktree 都進不去。
-#   代價是 implementer 完全不能跨 repo（連 git -C 都不行）——跨 repo 是 leader 的事。
-def _p_workdir(worktree: str | None) -> str:
-    """有 worktree ⇒ allowed_dirs 只含它；沒有 ⇒ 舊行為（cd 全 DENY，只給 self-check 用）。"""
-    args: dict[str, object] = {"block_cd": True, "block_worktree": True, "action": "deny"}
+# ⚠ worktree 由 implement worker **自己建**（2026-09-14 裁決）：repo_leader 只指定路徑，
+#   worker 開工第一件事是 `git -C <repo_root> worktree add <worktree> -b <branch> origin/<base>`。
+#   所以 allowed_dirs 要含 **repo_root 與 worktree 兩處**（`git -C <repo_root>` 才進得去），
+#   且 block_worktree 必須關掉（否則 worktree add 本身就被 DENY）。其餘（`..`、別的 repo、
+#   共同祖先）的 cd / git -C 仍一律 DENY。
+#   worktree_guard 擋不住「先 cd 出去、再寫相對路徑」；這條擋 cd 到 repo_root／worktree 以外。
+#   ⚠ 但它擋不住「cd 進 repo_root 主 checkout 後寫相對路徑」——那是紀律規則（prompt 明寫進
+#   repo_root 只為建 worktree、改檔只能在 worktree 裡），不是機器擋的。
+#   runner 的 cwd 是共同祖先（OMNIGENT_RUNNER_WORKSPACE），不是 worktree ⇒ 沒有 allowed_dirs
+#   它連自己的 worktree 都進不去。代價是 implementer 不能跨 repo——跨 repo 是 leader 的事。
+def _p_workdir(worktree: str | None, repo_root: str | None = None) -> str:
+    """有 worktree ⇒ allowed_dirs 含它（＋repo_root），並放行 git worktree 子命令；
+    沒有 ⇒ 舊行為（cd／worktree 全 DENY，只給 self-check 用）。"""
+    args: dict[str, object] = {"block_cd": True, "block_worktree": not worktree, "action": "deny"}
     if worktree:
-        args["allowed_dirs"] = [worktree]
+        args["allowed_dirs"] = [worktree] + ([repo_root] if repo_root else [])
     return _fn_policy(
         "block_working_dir_changes",
         "omnigent.policies.builtins.working_dir.block_working_dir_changes",
         args,
-        note="allowed_dirs 只含本 issue 的 worktree ⇒ cd / git -C 只能進 worktree 或其子目錄，\n"
-             "其餘一律 DENY；git worktree add/move/remove 一律 DENY。\n"
+        note="allowed_dirs 含本 issue 的 worktree 與其 repo root ⇒ cd / git -C 只能進這兩處或其子目錄，\n"
+             "其餘一律 DENY。block_worktree 關掉是刻意的：worktree 由 worker 自己 `git -C <repo root>\n"
+             "worktree add`，之後只能在 worktree 裡改（進 repo root 只為建 worktree，這是紀律規則）。\n"
              "這是 worktree_guard 的另一半：擋掉「先 cd 出去、再寫相對路徑」的逃逸。\n"
              "副作用（刻意）：implementer 不能跨 repo，跨 repo 唯讀是 leader 的職責。")
 
@@ -582,7 +571,8 @@ def resolve_purpose(purpose: str) -> str:
 # ── worker config 產生 ───────────────────────────────────────────────────────
 
 def _worker_config(purpose: str, harness: str, *, model: str, effort: str,
-                   description: str, worktree: str | None = None) -> str:
+                   description: str, worktree: str | None = None,
+                   repo_root: str | None = None) -> str:
     """組出 worker 的 config.yaml 內容。
 
     ⛔ **不要直接呼叫這支。** 它只負責「把欄位組成 YAML 字串」，**不做任何驗證**——
@@ -592,8 +582,6 @@ def _worker_config(purpose: str, harness: str, *, model: str, effort: str,
 
     ⇒ 一律走 `generate()`（或 CLI）。前綴 `_` 就是在說這件事。
     """
-    spec = ROSTER[purpose]
-    readonly = not spec["writes"]
     lines = [
         "# ⚠ 由 generate-worker.py 在**執行期**產生——⛔ 不要手改，改 generate-worker.py。",
         f"#   purpose={purpose} harness={harness} model={model} effort={effort}",
@@ -624,9 +612,12 @@ def _worker_config(purpose: str, harness: str, *, model: str, effort: str,
         "# ⛔ 一律固定 `all`，絕不可設 `none`——`none` 會發出 --setting-sources \"\"，",
         "#    壓掉 dispatcher 與所有 repo hooks（inner/bundle_skills.py）。防線 5。",
         "skills: all",
+        # ⚠ 唯讀 worker **一樣有** os_env（sys_os_* 會註冊）——唯讀保證只靠 read_only_os 一層
+        #   （比對工具名，A 類）。README 舊版寫「唯讀 worker 省略 os_env」是文件先於實作的
+        #   錯誤描述，2026-09-14 實跑本函式確認後裁決照實作改文件。
         OS_ENV_BLOCK.rstrip(),
         "",
-        _guardrails(purpose, harness, worktree=worktree),
+        _guardrails(purpose, harness, worktree=worktree, repo_root=repo_root),
     ]
     return "\n".join(lines) + "\n"
 
@@ -637,7 +628,8 @@ def _safe_name(purpose: str, harness: str) -> str:
     return f"{purpose.replace('-', '_')}_{via}"
 
 
-def _guardrails(purpose: str, harness: str, *, worktree: str | None = None) -> str:
+def _guardrails(purpose: str, harness: str, *, worktree: str | None = None,
+                repo_root: str | None = None) -> str:
     """worker 的完整 policy 集合。
 
     ⚠ child **不繼承** parent 的 `guardrails.policies`（實測：create body 只帶
@@ -654,7 +646,7 @@ def _guardrails(purpose: str, harness: str, *, worktree: str | None = None) -> s
     if readonly:
         body.append(P_READONLY)
     if purpose == "implement":
-        body += [P_WORKTREE, _p_workdir(worktree)]
+        body += [P_WORKTREE, _p_workdir(worktree, repo_root)]
     if purpose == "ops_k8s":
         body.append(P_KUBECTL)
     body += [P_BOARD, P_MERGE, P_APPROVE, P_TAG, P_ESCAPE]
@@ -753,7 +745,8 @@ def _verify_generated(out_dir: Path, *, expect_skills: int, expect_name: str) ->
 
 def generate(purpose: str, harness: str, out_dir: Path, *,
              model: str | None = None, effort: str | None = None,
-             repo: str | None = None, worktree: str | None = None) -> dict:
+             repo: str | None = None, worktree: str | None = None,
+             repo_root: str | None = None) -> dict:
     """產生一個 worker bundle 目錄並跑完五道防線。回傳自檢摘要。"""
     purpose = resolve_purpose(purpose)
     if purpose not in ROSTER:
@@ -791,7 +784,7 @@ def generate(purpose: str, harness: str, out_dir: Path, *,
         desc += f"，目標 repo {repo}"
     (out_dir / "config.yaml").write_text(
         _worker_config(purpose, harness, model=model, effort=effort, description=desc,
-                       worktree=worktree))
+                       worktree=worktree, repo_root=repo_root))
     # 防線 2：只寫**實體** AGENTS.md，不用 instructions 路徑、不用 symlink
     shutil.copy2(template_dir / "AGENTS.md", out_dir / "AGENTS.md")
     skills_dst = out_dir / "skills"
@@ -811,6 +804,8 @@ def generate(purpose: str, harness: str, out_dir: Path, *,
                  "hooks": (out_dir / "hooks" / "hooks.json").is_file()})
     if worktree:
         info["worktree"] = worktree
+    if repo_root:
+        info["repo_root"] = repo_root
     return info
 
 
@@ -870,8 +865,11 @@ def main() -> int:
     ap.add_argument("--effort", choices=["high", "xhigh"], help="覆寫對照表的 effort")
     ap.add_argument("--repo", help="目標 repo alias（寫進 description）")
     ap.add_argument("--worktree",
-                help="該 issue 的 worktree 絕對路徑（寫進 description；implement 另填進 "
-                     "block_working_dir_changes.allowed_dirs）")
+                    help="該 issue 的 worktree 絕對路徑（由 worker 自建；implement 填進 "
+                         "block_working_dir_changes.allowed_dirs）")
+    ap.add_argument("--repo-root",
+                    help="目標 repo 的絕對路徑（implement 必給：填進 allowed_dirs，worker 才能 "
+                         "`git -C <repo-root> worktree add`）")
     ap.add_argument("--out-dir", default=None,
                     help="worker 目錄的父層（預設 $OMNIGENT_RUNNER_WORKSPACE/.omnigent-runtime/workers）")
     ap.add_argument("--self-check", action="store_true", help="自檢所有組合，不留檔")
@@ -886,11 +884,16 @@ def main() -> int:
     if not args.purpose or not args.harness:
         ap.error("--purpose 與 --harness 必填（或用 --self-check）")
 
+    if resolve_purpose(args.purpose) == "implement" and not (args.worktree and args.repo_root):
+        ap.error("implement 必須同時給 --worktree 與 --repo-root（worktree 由 worker 自建，"
+                 "兩個路徑都要進 block_working_dir_changes.allowed_dirs）")
+
     parent = Path(args.out_dir) if args.out_dir else _default_out_parent()
     name = args.name or _safe_name(resolve_purpose(args.purpose), args.harness)
     try:
         info = generate(args.purpose, args.harness, parent / name, model=args.model,
-                        effort=args.effort, repo=args.repo, worktree=args.worktree)
+                        effort=args.effort, repo=args.repo, worktree=args.worktree,
+                        repo_root=args.repo_root)
     except GenerateFailure as exc:
         print(f"✗ 拒絕產生：{exc}", file=sys.stderr)
         print("⛔ 不要用 sys_session_create 派這個 worker。", file=sys.stderr)

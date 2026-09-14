@@ -11,7 +11,7 @@ description: issue 進來時的分流：值不值得做、拆成什麼工單、�
 
 ## 1. 先判斷值不值得做
 
-- 是不是既有 issue 的重複？先派 `tracker_*` 查重（記得帶快層 `args.model`）。
+- 是不是既有 issue 的重複？先派 `tracker_*` 查重。
 - 資訊夠不夠拆成可驗收的工單？不夠就先派 `scout_pi_*` 或 `researcher_*` 補齊，
   ⛔ 不要拿模糊需求直接派 `implement`。
 
@@ -38,6 +38,7 @@ description: issue 進來時的分流：值不值得做、拆成什麼工單、�
 | 改任何檔案（碼、測試、docs、config） | `implement` |
 | 審 diff | `review` |
 | 唯讀調查 | `explore` / `search` |
+| 上游 addon／Odoo 18 行為查證 | `researcher` |
 | 部署、叢集操作 | `deploy` |
 | 對帳、查重、開單 | `triage` |
 

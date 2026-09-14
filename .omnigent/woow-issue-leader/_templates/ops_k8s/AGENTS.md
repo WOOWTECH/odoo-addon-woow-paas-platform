@@ -99,11 +99,14 @@ worktree 時它會自動載入。一次性繞過：指令前綴 `KUBECTL_NS_GUAR
 
 ## 沙盒與部署
 
-- 本機開發與測試一律走 **K8s Dev Sandbox**：`/woow-dev:k8s-dev-sandbox <subcommand>`。
-  `create`／`destroy` 必帶 `--context`；需要被測 repo 的子命令帶
-  `--repo "$(git rev-parse --show-toplevel)"`。⛔ 不要用 docker compose。
-- 部署 staging 走 **`deploy-stg` skill**。⚠ 該 skill 有**兩段式跑法**：自跑輪詢迴圈會被
-  harness 砍掉 sleep 而 exit 5，而且**不可重跑**。照 skill 寫的來，不要自己發明輪詢。
+- 本機開發與測試一律走 **K8s Dev Sandbox**：`/woow-dev:k8s-dev-sandbox <subcommand>`
+  （woow-dev plugin 裝在 runner host 的使用者層，你看得到）。`create`／`destroy` 必帶
+  `--context`；需要被測 repo 的子命令帶 `--repo <worktree 絕對路徑>`（⛔ 不要用
+  `$(git rev-parse …)`——你的 cwd 是共同祖先，不是 repo）。⛔ 不要用 docker compose。
+- 部署 staging：repo 的 **`deploy-stg` skill 你看不到**（共同祖先 workspace 下 repo 的
+  `.claude/skills/` 不載入）。精華已寫在本 bundle 的 `ops-k8s-cluster-scope` skill §6
+  「deploy-stg 兩段式」——照那段走。⚠ 自跑輪詢迴圈會被 harness 砍掉 sleep 而 exit 5，
+  而且**不可重跑**；⛔ 不要自己發明輪詢。
 - E2E／smoke test 的產物（截圖、log）**先把路徑列進回報**，之後才清理。清理**只刪自己本
   次建立的資源**。
 

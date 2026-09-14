@@ -7,9 +7,12 @@
 
 ## 工作方式
 
-1. **待在工單給的 worktree 裡**。所有變更都用相對路徑寫；絕對路徑與 `..` 逃逸會被機器守
-   線 **`worktree_guard`** DENY。⛔ 不要 `cd` 出去、不要另開 worktree
-   （`block_working_dir_changes` 會擋）。
+1. **先建 worktree，再待在裡面**。worktree 是你自己建的：
+   `git -C <工單給的 repo root> worktree add <工單給的 worktree 路徑> -b <type>/<issue-id> origin/<整合分支>`
+   （已存在就直接用，⛔ 不要建第二個、不要換路徑）。之後所有變更都用相對路徑寫；絕對路徑
+   與 `..` 逃逸會被機器守線 **`worktree_guard`** DENY。⛔ 不要 `cd` 到 repo root／worktree
+   以外（`block_working_dir_changes` 會擋）、⛔ 不要在 repo root 的主 checkout 裡改檔——進
+   repo root **只為建 worktree**，這一條是紀律規則、機器擋不住。
 2. **只動工單與驗收契約點名的檔案／目錄**。
 3. 改完**跑到綠**：跑你動到的那部分的測試、lint、typecheck。
 4. commit message 用 **zh-tw**，前綴只能是十選一：`feat:` `fix:` `docs:` `style:`
@@ -57,8 +60,8 @@ diff 與契約，看不到你的 worktree。
 
 ## 守線有兩種強度
 
-- **可靠（比對工具名／結構化參數）**：`read_only_os`（唯讀 worker 完全不能寫檔）、
-  省略 `os_env`（`sys_os_*` 四支根本不註冊）、`P-model`、`purpose` 檢查。
+- **可靠（比對工具名／結構化參數）**：`read_only_os`（唯讀 worker 完全不能寫檔——這是
+  唯讀保證的**唯一一層**；唯讀 worker 一樣有 `sys_os_*` 工具）、`purpose` 檢查。
   這些不看 shell 字串，繞不過。
 - **best-effort（比對 shell 指令字串）**：`P-merge`／`P-approve`／`P-tag`／`P-escape`／
   `P-kubectl`／`P-board` 的 shell 那一側。**已知可被 shell 轉義與變數展開繞過**，
@@ -68,17 +71,19 @@ diff 與契約，看不到你的 worktree。
 
 ## ⛔ 不要離開你的 worktree
 
-`block_working_dir_changes`（`block_cd: true`、`allowed_dirs` 只含工單給的 worktree）會 **DENY
-所有進不到 worktree 或其子目錄的 `cd` / `pushd` / `popd` / `git -C <path>`，以及所有
-`git worktree add|move|remove`**。這是刻意的——
+`block_working_dir_changes`（`block_cd: true`、`allowed_dirs` 只含工單給的 **repo root 與
+worktree** 兩處）會 **DENY 所有進不到這兩處或其子目錄的 `cd` / `pushd` / `popd` /
+`git -C <path>`**；`git worktree` 子命令放行（你要自己 add）。這是刻意的——
 `worktree_guard` 只能擋「絕對路徑或 `..` 逃逸」的寫入，**它擋不住「先 `cd` 出去、再寫相對
-路徑」**。兩條守線只有在 cwd 從頭到尾不動的前提下才成立。
+路徑」**。兩條守線只有在 cwd 從頭到尾不動的前提下才成立。⚠ 它們也擋不住「`cd` 進 repo
+root 主 checkout 後寫相對路徑」——所以「只在 worktree 裡改檔」是紀律規則。
 
 實務上這代表：
 
 - runner 的 cwd 是六 repo 的共同祖先（`/home/elmo/woow-repos`），**不是**你的 worktree。
-  開工第一件事：`cd <工單給的 worktree 絕對路徑>`（⛔ 相對路徑的 `cd` 會被擋）。不確定
-  shell 是否保留 cwd 時，每條指令都以 `cd <worktree> && ` 開頭——多 cd 一次無害。
+  開工第一件事：建 worktree（上面第 1 步），再 `cd <工單給的 worktree 絕對路徑>`
+  （⛔ 相對路徑的 `cd` 會被擋）。不確定 shell 是否保留 cwd 時，每條指令都以
+  `cd <worktree> && ` 開頭——多 cd 一次無害。
 - 檔案讀寫工具的 `path` 一律相對、不含 `..`，基準是 harness 行程的 cwd（＝共同祖先），
   寫成 `paas/wt-<id>/src/x.py` 這種形式。
 - 要在子目錄跑測試就把路徑當參數傳（`python -m pytest src/tests/test_x.py`），
@@ -90,6 +95,8 @@ diff 與契約，看不到你的 worktree。
 
 一律回結構化結果，不要只回「做完了」：
 
+- **worktree 與 branch**：你建的 worktree 絕對路徑、branch 名、PR 連結——`repo_leader`
+  要靠這三項驗收與事後移除 worktree。
 - **做了什麼**：逐項附 `file:line`（相對路徑＋行號，方便用 IDE 定位）。
 - **怎麼驗的**：貼**真實指令**與**真實輸出**。提到數字時講清楚是 collected cases 還是
   test functions（pytest 的 ground truth 是 `python -m pytest --collect-only -q <同一組

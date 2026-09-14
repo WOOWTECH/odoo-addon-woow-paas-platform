@@ -127,7 +127,7 @@ fi
 # ⚠ 改 dispatcher **來源**的 case 末尾都要 `python3 build-bundles.py` 重產：否則副本沒跟著
 #   變，會連帶紅第 0（產物不同步）與第 16（兩份漂移）項，把焦點從「dispatcher 邏輯變弱」
 #   模糊掉。要驗「兩份漂移」本身，用專門的 case AB。
-#   （動態 worker 的部分會立刻反映，但 p_model／p_board 只掛在 leader 的靜態 config 上。）
+#   （動態 worker 的部分會立刻反映，但 p_board 只掛在 leader 的靜態 config 上。）
 
 run_mut A "把 repo-leader 的 skills 副本換成 symlink" "7,10" "" \
 'python3 - <<"PY"
@@ -186,17 +186,6 @@ p = pathlib.Path("woow-issue-leader/generate-worker.py")
 # 從 alternation 開頭一路換到 `v[0-9])` 結尾（整段砍成只剩 --tags）
 mutation_lib.edit_span(str(p), start="(--tags|--follow-tags|refs/tags/|",
                        through="v[0-9])", new="(--tags)")
-import subprocess; subprocess.run(["python3", "build-bundles.py"], check=True, capture_output=True)
-PY'
-
-run_mut H "P-model 拿掉 has() 護欄（缺欄位 → fail-OPEN）" "8" "p_model_fast_tier_only" \
-'python3 - <<"PY"
-import mutation_lib, pathlib
-p = pathlib.Path("woow-issue-leader/generate-worker.py")
-old = """&& !(has(event.data.arguments.args)
-     && has(event.data.arguments.args.model)
-     && event.data.arguments.args.model in"""
-mutation_lib.edit(str(p), old=old, new="&& !(event.data.arguments.args.model in")
 import subprocess; subprocess.run(["python3", "build-bundles.py"], check=True, capture_output=True)
 PY'
 

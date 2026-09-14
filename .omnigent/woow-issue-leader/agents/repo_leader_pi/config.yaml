@@ -52,7 +52,7 @@ guardrails:
       function:
         path: omnigent.policies.builtins.orchestration.headless_subagent_purpose_guard
         arguments:
-          allowed_purposes: [implement, review, explore, search, deploy, triage]
+          allowed_purposes: [implement, review, explore, search, deploy, triage, researcher]
     p_board_read_only:
       type: function
       on: [tool_call]
@@ -71,21 +71,6 @@ guardrails:
                   && !(event.data.arguments.command.matches("^\\s*(cat|less|head|tail|grep|rg|ls|wc|diff|git\\s+diff|git\\s+show)\\b")
                        && !event.data.arguments.command.matches("(&&|\\|\\||;|\\||`|\\$\\(|\\n)")))
             ) ? {"result": "DENY", "reason": "看板 .woow-issues/ 只有 woow-issue-leader 能寫。唯讀請用單一不串接的 cat / less / head / tail / grep / rg / ls / wc / diff / git diff / git show；要更新內容就寫進回報，由上層代寫。"} : {"result": "ALLOW"}
-    p_model_fast_tier_only:
-      type: function
-      on: [tool_call]
-      function:
-        path: omnigent.policies.builtins.cel.cel_policy
-        arguments:
-          expression: |-
-            event.type == "tool_call"
-            && event.data.name == "sys_session_send"
-            && has(event.data.arguments.agent)
-            && event.data.arguments.agent.matches("^(scout_pi|tracker|researcher)_via_(cc|pi)$")
-            && !(has(event.data.arguments.args)
-                 && has(event.data.arguments.args.model)
-                 && event.data.arguments.args.model in ["claude-haiku-4-5", "claude-haiku-4-5-20251001", "databricks-claude-haiku-4-5", "claude-sonnet-5", "databricks-claude-sonnet-5"])
-            ? {"result": "DENY", "reason": "scout_pi / tracker / researcher 是簡單查尋任務：派工必須顯式帶 args.model，且必須落在 build-bundles.py 的 FAST_MODELS 名單內。"} : {"result": "ALLOW"}
     p_merge_no_agent_merge:
       type: function
       on: [tool_call]
