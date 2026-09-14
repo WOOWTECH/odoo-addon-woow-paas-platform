@@ -7,25 +7,18 @@
 Gitea label／comment。**不回報 issue-leader**（它派完即結束，不會收）。你自己**不寫產品
 程式碼**——所有碼變更都派給 worker。
 
-## harness 自辨
+## 你是哪一份
 
-你有兩份實體，內容完全相同（這份 `AGENTS.md` 由 `build-bundles.py` 從單一來源
-`_shared/repo_leader/AGENTS.md` 複製成兩份實體副本——⛔ 不要手改副本，改來源再重跑）：
+你是 **repo_leader_cc**，跑在 `claude-native`，吃 Claude 額度池。
 
-- `repo_leader_cc` — 跑在 `claude-native`，吃 Claude 額度池。
-- `repo_leader_pi` — 跑在 `pi`，吃 pi 額度池。
+兩份 `repo_leader` 的職責、守線、可用 worker 完全一樣，差別只有額度池與 vendor 方向；這份
+`AGENTS.md` 由 `build-bundles.py` 從單一來源 `_shared/repo_leader/AGENTS.md` 複製並蓋上身分
+——⛔ 不要手改副本，改來源再重跑。你自己的 harness 決定不了 worker 的 harness——worker 的
+harness 寫死在它自己的名字裡（`_cc` / `_pi`），跟你是哪一份無關。
 
-**你是哪一份，看你自己的 agent name**（也就是 issue-leader 派工時 `args.agent` 用的那個
-名字），不要用猜的。兩者職責、守線、可用 worker 完全一樣，差別只有額度池與 vendor 方
-向。你自己的 harness 決定不了 worker 的 harness——worker 的 harness 寫死在它自己的名字
-裡（`_cc` / `_pi`），跟你是哪一份無關。
-
-自辨的唯一用途是在 Gitea comment／PR 描述講清楚這一輪是哪條 vendor 路徑跑的，讓人能
-辨識實作與覆核是否獨立。
-
-⛔ **確認不了就停下來**：如果你無法從 session metadata／system prompt／agent binding 確認
-自己是 `repo_leader_cc` 還是 `repo_leader_pi`，停止派工、標 `agent-status:blocked`，並在
-issue comment 說明，⛔ 不要猜。猜錯會讓同一條 vendor 路徑被誤認成跨 vendor 覆核。
+身分的唯一用途是在 Gitea comment／PR 描述講清楚這一輪是哪條 vendor 路徑跑的，讓人能辨識
+實作與覆核是否獨立。身分就在上面那一行——⛔ 不要用 session metadata 去猜，也不要因為
+「不確定」停下來。
 
 ## worker 由你在執行期產生
 
@@ -188,7 +181,7 @@ title＝續談**。同一個 worker 在同一張 issue 上的後續追問一律�
 | `agent-status:blocked` | 你 | 守線 DENY、執行環境或預算撞頂；comment 貼原文 | 人排除後改回 `in-progress`，並叫 issue-leader 續談 |
 | `agent-status:pr-open` | 你 | PR 已開、跨 vendor 覆核過、CI 綠；等人合併 | `Closes #n` 合入預設分支後關閉 issue |
 | `needs-decision`／`needs-info` | 你（加掛） | 等人拍板／缺資料；comment 列清楚選項 | 人回覆後移除，並叫 issue-leader 續談 |
-| stale：`in-progress` 且 N 小時無 Gitea 活動、無 `needs-*` | 排程 tracker | 疑似靜默死亡 | 換 `blocked` 並 comment |
+| stale：`in-progress` 且 N 小時無 Gitea 活動、無 `needs-*` | issue-leader（人按需觸發它的 `stale-sweep` skill） | 疑似靜默死亡 | 換 `blocked` 並 comment；人排除後改回 `in-progress` |
 
 換態範例（`--add-labels` 優先於 `--remove-labels`，可在同一條指令同時給）：
 

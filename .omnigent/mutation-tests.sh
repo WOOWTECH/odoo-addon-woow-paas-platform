@@ -532,6 +532,23 @@ mutation_lib.edit(str(p), old=old, new="|(?!x)x")
 subprocess.run(["python3", "build-bundles.py"], check=True, capture_output=True)
 PY'
 
+run_mut AJ "leader prompt 守線表宣稱 config 沒有的 policy（F5 那類漂移）" "18" "no_such_policy" \
+'python3 - <<"PY"
+import mutation_lib, pathlib
+p = pathlib.Path("woow-issue-leader/AGENTS.md")
+old = "| `spawn_bounds` | 每輪最多 6 次派工（`sys_session_send` ＋ `sys_session_create` 合計） |"
+mutation_lib.edit(str(p), old=old, new=old + "\n| `no_such_policy` | 假的 |")
+PY'
+
+run_mut AK "build-bundles.py 不再蓋 repo-leader 身分行（副本留佔位符）" "19" "佔位符" \
+'python3 - <<"PY"
+import mutation_lib, pathlib, subprocess
+p = pathlib.Path("build-bundles.py")
+mutation_lib.edit(str(p), old="    return src[:start] + IDENTITY_LINE[leader] + src[end:]",
+                  new="    return src")
+subprocess.run(["python3", "build-bundles.py"], check=True, capture_output=True)
+PY'
+
 echo
 if [ "$FAIL_N" -eq 0 ]; then
   echo "總計：$PASS_N 個 case 全部符合預期指紋"

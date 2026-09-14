@@ -1,45 +1,46 @@
 #!/usr/bin/env python3
-"""產生 woow multi-agent bundle 的 16 個 thin shell 與全部 config.yaml，並自檢。
+"""產生三份靜態 bundle config（issue-leader ＋ 兩份 repo-leader）並跑 21 項驗收。
 
 用法::
 
     python3 .omnigent/build-bundles.py           # 重產（generate）
     python3 .omnigent/build-bundles.py --check   # 只驗收，不寫檔（CI／PR 用）
 
-樹形：`woow-issue-leader` → 2 個 `repo_leader` → 各 8 個 worker thin shell。
-thin shell 的 `config.yaml`、`AGENTS.md` 與 `skills/` **全部都是實體檔**，由本 script 從
-`_workers/<worker>/` 的單一來源**複製**出來。⛔ 不要手改副本——改來源再重跑本 script。
+樹形：`woow-issue-leader`（claude-sdk）→ `agents/repo_leader_cc`／`repo_leader_pi`。
+worker **不在這裡產生**——它們在執行期由 `woow-issue-leader/generate-worker.py` 從
+`_templates/<role>/` 寫出（見該檔 docstring 與 README §worker 是執行期產生的）。
+本檔產出的全是**實體檔**：三份 `config.yaml`、repo-leader 的 `AGENTS.md`（從
+`_shared/repo_leader/AGENTS.md` 複製並蓋上身分行）、repo-leader 的 `skills/`（只複製
+REPO_LEADER_SKILLS 列的那幾個）、以及 claude-native 層的 `hooks/`。⛔ 不要手改副本——改來源
+再重跑本 script；drift 由 `--check` 第 0 項對帳。
 
-⚠ 本檔是全樹**所有** `config.yaml` 與所有 CEL 運算式的唯一來源。config.yaml 是產物，
-   ⛔ 不要手改；改這裡再重跑。
+⚠ CEL 運算式與 policy 片段住在 generate-worker.py（執行期拿得到的那一邊），本檔 import 過來
+   用，真相只有一份。
 
 ── 為什麼寫成這樣（每一條都是實測過的靜默失敗，不要「優化」掉）────────────────
 
 1. **prompt 只能用同目錄的 `AGENTS.md` 實體檔承載**。⛔ 禁止改寫成
    `instructions: <相對路徑>`：`spec/parser.py::_read_contained_file` 的 containment 檢查
    失敗時會回 None，接著**整條路徑字串被當成 system prompt**，而且不報錯。
-2. **每個 thin shell 的 `AGENTS.md` 與 `skills/` 都是實體副本，不是 symlink**。
-   `omnigent run <目錄>` 的打包器不解 symlink（symlink 目錄會被 `rglob` 跳過，整批 skills
-   **靜默**消失）⇒ 版控裡一條 symlink 都不能有。驗收第 7／12 項機器強制。
-3. **每個 thin shell 都必須列進上層 `tools.agents`**——這是第 2 條的安全網：
-   `tools.agents` 引用不存在的 sub-agent 會 **loud fail**（`spec/validator.py`），把靜默
-   消失變成明確錯誤。
-4. **`tools.agents` 列的是 YAML `name`，不是資料夾名**。`name` 省略時是 `None`、
-   **不會** fallback 成目錄名，那個 sub-agent 就永遠無法被引用。本檔一律讓
-   資料夾名 == `name`，把這個坑直接填掉。
-5. **agent `name` 全樹唯一**，正則 `^[a-zA-Z0-9_-]+$`。
-6. **skill frontmatter `name` 正則是 `^[a-z0-9-]+$`（不允許底線）**，與 agent name 規則
+2. **所有副本都是實體檔，不是 symlink**。`omnigent run <目錄>` 的打包器不解 symlink
+   （symlink 目錄會被 `rglob` 跳過，整批 skills **靜默**消失）⇒ 版控裡一條 symlink 都不能有。
+   驗收第 7／12 項機器強制。
+3. **agent `name` 全樹唯一**，正則 `^[a-zA-Z0-9_-]+$`；本檔一律讓資料夾名 == `name`。
+4. **skill frontmatter `name` 正則是 `^[a-z0-9-]+$`（不允許底線）**，與 agent name 規則
    不同。skill 名**一律取自 frontmatter，目錄名被忽略**。
-7. **來源池的 skill name 必須全域唯一**（所以一律加 worker 前綴）——
+5. **來源池的 skill name 必須全域唯一**（所以 worker skill 一律加角色前綴）——
    `discover_host_skills` 是 first-wins 去重，同名後者會被吃掉。
-8. **`skills:` 一律固定寫 `all`**。⛔ 禁止名單模式：claude-native 下形同 `all`、
+6. **`skills:` 一律固定寫 `all`**。⛔ 禁止名單模式：claude-native 下形同 `all`、
    **不強制**；pi 下卻會下 `--no-skills` **把 host skill 一併關掉**——跨 harness 行為相反。
-9. **child 不繼承 parent 的 `guardrails.policies`**（實測：create body 只帶
+7. **child 不繼承 parent 的 `guardrails.policies`**（實測：create body 只帶
    agent_id/parent_session_id/title/sub_agent_name）⇒ **每個 worker 自帶完整 policy**，
    不能靠 leader 罩下來。
-10. **`os_env.cwd` 不決定 harness process cwd**，它只是 server 模式的**邊界**與
-    `sys_os_*` / `config_path` containment 的錨點。唯讀 worker 完全**省略** os_env block
-    ——省略時 `sys_os_read/write/edit/shell` 四支一支都不註冊，唯讀幾乎免費。
+8. **`os_env.cwd` 不決定 harness process cwd**，它只是 server 模式的**邊界**與
+   `sys_os_*` / `config_path` containment 的錨點；一律寫 `.`（驗收第 11 項）。
+   ⚠ 唯讀 worker 一樣有 os_env 區塊——唯讀保證只靠 `read_only_os` 一層（2026-09-14 裁決）。
+9. **prompt 裡「你身上的機器守線」表宣稱的每條 policy 都必須真的掛在同層 config**——
+   散文與 policy 組成漂移不會有任何錯誤（review F5：頂層 prompt 曾宣稱 blast_radius，config
+   沒有）。驗收第 18 項機器強制。
 """
 
 from __future__ import annotations
@@ -48,6 +49,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -105,14 +107,39 @@ DEFAULT_SITE_PACKAGES = GEN.DEFAULT_SITE_PACKAGES
 
 
 
-# ── worker 名冊 ──────────────────────────────────────────────────────────────
-# key = `_workers/` 底下的來源目錄名；`short` = thin shell 名字的前半。
+# ── repo-leader 名冊 ─────────────────────────────────────────────────────────
 #: 兩份 repo-leader。職責相同，差別只有 harness／額度池／vendor 方向。
 #: model 與 effort 的真相在 generate-worker.py 的 ROSTER["repo-leader"]。
 LEADERS = {
     "repo_leader_cc": {"harness": "claude-native", "via": "cc", "permission_mode": "auto"},
     "repo_leader_pi": {"harness": "pi", "via": "pi", "permission_mode": None},
 }
+
+#: repo-leader 拿到的 skill（issue-leader `skills/` 的**子集**）。issue-triage、board-reconcile、
+#: stale-sweep 是 issue-leader 專屬（分流、寫看板、掃 stale）；複製給 repo-leader 只會讓它讀到
+#: 「派工後結束回合」「只有你能寫看板」這種對它錯的指令（review F9，2026-09-14 裁決：
+#: issue-leader 只分配 issue、不產生 worker；worker 一律由 repo-leader 產生）。
+#: ⚠ `skills/` 目錄本身必須存在——否則不發 --plugin-dir，hooks 就一起沒了。
+REPO_LEADER_SKILLS = ["dispatch-policy", "pr-merge-gate"]
+
+#: repo-leader 的身分行（review F7）：兩份副本由本檔從單一來源複製，複製時蓋上身分，
+#: 取代舊的「自己從 session metadata 猜是 cc 還是 pi、猜不到就標 blocked」。
+IDENTITY_START = "<!-- identity:start -->"
+IDENTITY_END = "<!-- identity:end -->"
+IDENTITY_LINE = {
+    "repo_leader_cc": "你是 **repo_leader_cc**，跑在 `claude-native`，吃 Claude 額度池。",
+    "repo_leader_pi": "你是 **repo_leader_pi**，跑在 `pi`，吃 pi 額度池。",
+}
+
+
+def repo_leader_prompt(leader: str) -> str:
+    """repo-leader 的 AGENTS.md：單一來源 ＋ 蓋上身分行。驗收第 19 項驗副本真的蓋到了。"""
+    src = (SHARED_DIR / "repo_leader" / "AGENTS.md").read_text()
+    start, end = src.find(IDENTITY_START), src.find(IDENTITY_END)
+    if start < 0 or end < start:
+        raise RuntimeError("_shared/repo_leader/AGENTS.md 缺 identity:start／identity:end 佔位符")
+    end += len(IDENTITY_END)
+    return src[:start] + IDENTITY_LINE[leader] + src[end:]
 
 
 def _executor(harness: str, permission_mode: str | None, *,
@@ -288,6 +315,25 @@ def _copy_tree(dest: Path, source: Path, *, check: bool, diffs: list[str]) -> No
         target.write_bytes(src_file.read_bytes())
 
 
+def _copy_skills(dest: Path, source: Path, names: list[str], *,
+                 check: bool, diffs: list[str]) -> None:
+    """只複製 `source` 底下 `names` 列的 skill 目錄；`dest` 裡多餘的 skill 目錄算 drift。"""
+    for name in names:
+        if not (source / name / "SKILL.md").is_file():
+            raise RuntimeError(f"REPO_LEADER_SKILLS 指到不存在的 skill：{source / name}")
+    if check:
+        have = {q.name for q in dest.iterdir() if q.is_dir()} if dest.is_dir() else set()
+        for extra in sorted(have - set(names)):
+            diffs.append(f"{(dest / extra).relative_to(OMNIGENT_DIR.parent)}"
+                         "（多餘 skill，不在 REPO_LEADER_SKILLS）")
+    elif dest.is_dir():
+        for extra in dest.iterdir():
+            if extra.is_dir() and extra.name not in names:
+                shutil.rmtree(extra)
+    for name in names:
+        _copy_tree(dest / name, source / name, check=check, diffs=diffs)
+
+
 def build(*, check: bool = False) -> list[str]:
     """產生三份 config 與 repo-leader 的 prompt／skills／hooks 副本。
 
@@ -299,12 +345,12 @@ def build(*, check: bool = False) -> list[str]:
     for leader in LEADERS:
         base = LEADER_DIR / "agents" / leader
         _write(base / "config.yaml", leader_config(leader), check=check, diffs=diffs)
-        _copy_file(base / "AGENTS.md", SHARED_DIR / "repo_leader" / "AGENTS.md",
-                   check=check, diffs=diffs)
+        _write(base / "AGENTS.md", repo_leader_prompt(leader), check=check, diffs=diffs)
         # repo-leader 自己也需要 skills/ ＋ hooks/：
         #   `skills/` 存在才會發 --plugin-dir，hooks/hooks.json 才會被 claude 讀到
-        #   （兩者缺一不可，見 inner/bundle_skills.py）。
-        _copy_tree(base / "skills", LEADER_DIR / "skills", check=check, diffs=diffs)
+        #   （兩者缺一不可，見 inner/bundle_skills.py）。只複製 REPO_LEADER_SKILLS。
+        _copy_skills(base / "skills", LEADER_DIR / "skills", REPO_LEADER_SKILLS,
+                     check=check, diffs=diffs)
         if LEADERS[leader]["harness"] == "claude-native":
             _copy_tree(base / "hooks", LEADER_DIR / "hooks", check=check, diffs=diffs)
     return diffs
@@ -799,6 +845,13 @@ def run_checks() -> int:
     # 17：UI picker 過濾——選不到就等於這個 agent 不存在，而且靜默。
     r.guard("17. 頂層 leader 的 harness 不得是 *-native（UI picker 會過濾掉）",
             lambda: _check_top_leader_harness_pickable(spec))
+    # 18：prompt 的「你身上的機器守線」表 ⊆ 同層 config——散文與 policy 組成漂移不會有任何
+    #     錯誤（review F5：頂層 prompt 宣稱 blast_radius，config 裡沒有）。
+    r.guard("18. leader prompt 的守線表宣稱的 policy 都掛在同層 config",
+            lambda: _check_prompt_guard_table(nodes))
+    # 19：repo-leader 副本必須蓋上身分行、不留佔位符（review F7）。
+    r.guard("19. repo-leader 副本已蓋身分行（無佔位符）",
+            lambda: _check_repo_leader_identity(nodes))
 
     print()
     print(f"總計：{r.failed} 項 FAIL" if r.failed else "總計：全部 PASS")
@@ -1087,11 +1140,14 @@ RETIRED_TERMS = ["symlink", "mode 120000", "run-leader", "--rewrite-cwd",  # leg
                  "thin shell", "thin_shell", "tools.agents",  # legacy-ok
                  # 2026-09-14 退役的 P-model 與它的名單／「省略 os_env」敘述（README §已廢止 第 5／6 條）
                  "P-model", "p_model_fast_tier_only", "FAST_MODELS", "快層名單",  # legacy-ok
-                 "省略 `os_env`", "省略 os_env"]  # legacy-ok
+                 "省略 `os_env`", "省略 os_env",  # legacy-ok
+                 # 2026-09-14 第二批：舊路徑／舊指針（F8）、自辨與排程 stale 掃描（F7／F14）
+                 "_workers/", "build-bundles.py` 的 `K8S_ALLOWED",  # legacy-ok
+                 "harness 自辨", "排程 tracker", "sys_scheduled_task_create"]  # legacy-ok
 #: 已移除的識別符：連實作碼裡都不該再出現（殘留＝指向不存在的東西）。
 REMOVED_IDENTIFIERS = ["run-leader", "run_leader", "--rewrite-cwd", "LAUNCHER",  # legacy-ok
                        "P_MODEL", "CEL_MODEL", "FAST_MODELS", "FAST_ONLY_ROLES",  # legacy-ok
-                       "p_model_fast_tier_only"]  # legacy-ok
+                       "p_model_fast_tier_only", "_workers/"]  # legacy-ok
 #: L2 的歷史區標記（整章節放行）。
 LEGACY_MARKER = "legacy-ok"
 LEGACY_HEADING = "已廢止"
@@ -1339,6 +1395,84 @@ def _check_hook_wiring() -> tuple[bool, str]:
             bad.append(f"{k}: pi harness 不該有 hooks/（pi 沒有 hook 機制）")
     notes.append("claude-native 層皆有 hooks/＋skills/，pi 層無 hooks/")
     return (not bad), ("；".join(notes) if not bad else "；".join(bad[:4]))
+
+
+GUARD_ALIASES = {
+    "P-board": "p_board_read_only", "P-merge": "p_merge_no_agent_merge",
+    "P-approve": "p_approve_no_agent_signoff", "P-tag": "p_tag_no_agent_tag_push",
+    "P-escape": "p_escape_obfuscated_command", "P-kubectl": "p_kubectl_namespace_scope",
+}
+GUARD_TABLE_HEADING = "## 你身上的機器守線"
+PROMPT_OF = {
+    "woow_issue_leader": LEADER_DIR / "AGENTS.md",
+    "repo_leader_cc": SHARED_DIR / "repo_leader" / "AGENTS.md",
+    "repo_leader_pi": SHARED_DIR / "repo_leader" / "AGENTS.md",
+}
+
+
+def _guard_table_rows(md: str) -> list[tuple[list[str], str]]:
+    """抽出「你身上的機器守線」表：每列 → (第一欄宣稱的 policy 名, 整列文字)。
+
+    第一欄的 `backtick` 名直接當 policy 名；`P-xxx` 別名經 GUARD_ALIASES 對回 CEL policy 名。
+    只看第一欄——第二欄的說明常提到別層才有的 policy（例：頂層說自己「沒有掛
+    max_tool_calls_per_session」）。
+    """
+    if GUARD_TABLE_HEADING not in md:
+        return []
+    body = md.split(GUARD_TABLE_HEADING, 1)[1].split("\n## ", 1)[0]
+    rows: list[tuple[list[str], str]] = []
+    for line in body.splitlines():
+        if not line.startswith("|") or set(line.strip("| ")) <= set("-| :"):
+            continue
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if not cells or cells[0] in ("守線", ""):
+            continue
+        names = re.findall(r"`([a-z_]+)`", cells[0])
+        names += [GUARD_ALIASES[a] for a in re.findall(r"P-[a-z]+", cells[0]) if a in GUARD_ALIASES]
+        rows.append((names, line))
+    return rows
+
+
+def _check_prompt_guard_table(nodes) -> tuple[bool, str]:
+    """第 18 項：leader prompt 宣稱的守線 ⊆ 同層 config。列文含「不掛」的自己聲明沒掛，跳過
+    （例：P-board 不掛在 issue-leader；cost_budget 僅 repo_leader_cc）。"""
+    bad: list[str] = []
+    seen = 0
+    by_name = {sp_.name: sp_ for sp_ in nodes.values()}
+    for agent, prompt in PROMPT_OF.items():
+        sp_ = by_name.get(agent)
+        if sp_ is None:
+            bad.append(f"{agent}: 樹上找不到這個 agent")
+            continue
+        have = {p.name for p in (sp_.guardrails.policies if sp_.guardrails else [])}
+        rows = _guard_table_rows(prompt.read_text())
+        if not rows:
+            bad.append(f"{agent}: prompt 沒有「{GUARD_TABLE_HEADING}」表")
+            continue
+        for names, line in rows:
+            seen += 1
+            if "不掛" in line:
+                continue
+            for n in names:
+                if n not in have:
+                    bad.append(f"{agent}: prompt 宣稱 `{n}`，config 沒有這條 policy")
+    return (not bad), (f"{len(PROMPT_OF)} 份 prompt／{seen} 列全部對得上 config" if not bad
+                       else f"{len(bad)} 處：" + "；".join(bad[:5]))
+
+
+def _check_repo_leader_identity(nodes) -> tuple[bool, str]:
+    """第 19 項：兩份 repo-leader 副本各含自己的身分行，且不留佔位符。"""
+    bad: list[str] = []
+    by_name = {sp_.name: sp_ for sp_ in nodes.values()}
+    for leader, line in IDENTITY_LINE.items():
+        sp_ = by_name.get(leader)
+        ins = (sp_.instructions or "") if sp_ is not None else ""
+        if line not in ins:
+            bad.append(f"{leader}: instructions 缺身分行「{line[:22]}…」")
+        if IDENTITY_START in ins or "佔位符" in ins:
+            bad.append(f"{leader}: instructions 仍含佔位符（build-bundles.py 沒蓋身分）")
+    return (not bad), ("2 份 repo-leader 副本各含自己的身分行、無佔位符" if not bad
+                       else "；".join(bad))
 
 
 def _check_top_leader_harness_pickable(spec) -> tuple[bool, str]:

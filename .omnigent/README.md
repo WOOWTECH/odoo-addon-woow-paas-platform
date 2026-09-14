@@ -12,7 +12,7 @@ woow-issue-leader/          claude-sdk／claude-fable-5-1／xhigh／spawn: true
 ├── AGENTS.md               手改
 ├── hooks/                  ⭐ dispatcher：把子 repo 的 hooks 拿回來（§dispatcher）
 ├── skills/                 ⚠ **必須存在**，否則不發 --plugin-dir、dispatcher 不生效
-│   ├── issue-triage/  pr-merge-gate/  board-reconcile/
+│   ├── issue-triage/  pr-merge-gate/  board-reconcile/  stale-sweep/（按需掃 stale）
 │   └── dispatch-policy/    對照表與 alias map 的使用規則
 ├── _templates/             ⭐ 產生器的模板來源（8 份 worker prompt ＋ skills）
 ├── generate-worker.py      ⭐ 執行期產生器（五道防線，§產生器）
@@ -80,7 +80,7 @@ DIR=$(python3 <paas-platform>/.omnigent/woow-issue-leader/generate-worker.py \
 
 ```bash
 python3 .omnigent/build-bundles.py           # 重產三份靜態 config ＋ repo-leader 的副本
-python3 .omnigent/build-bundles.py --check   # 驗收 19 項（含產生器自檢與 dispatcher 端到端）
+python3 .omnigent/build-bundles.py --check   # 驗收 21 項（含產生器自檢與 dispatcher 端到端）
 python3 .omnigent/woow-issue-leader/generate-worker.py --self-check   # 只驗產生器
 python3 .omnigent/test-dispatcher.py         # 只驗 dispatcher（fixture repo，零副作用）
 bash .omnigent/mutation-tests.sh [case 代號]  # 突變測試（每個 case 斷言「紅在哪」）
@@ -90,10 +90,10 @@ bash .omnigent/mutation-tests.sh [case 代號]  # 突變測試（每個 case 斷
 | --- | --- | --- |
 | `_templates/<role>/AGENTS.md` ＋ `skills/` | 8 份 worker prompt／skill（**產生器的來源**） | 手改 |
 | `_shared/repo_leader/AGENTS.md` | repo-leader 共用 prompt | 手改 |
-| `woow-issue-leader/AGENTS.md` ＋ `skills/` | issue-leader 的 prompt 與 4 個 skill | 手改 |
+| `woow-issue-leader/AGENTS.md` ＋ `skills/` | issue-leader 的 prompt 與 5 個 skill（repo-leader 只拿 `dispatch-policy`／`pr-merge-gate` 兩個副本，見 `REPO_LEADER_SKILLS`） | 手改 |
 | `generate-worker.py` | 執行期產生器 ＋ 對照表 ＋ **6 支 CEL 與所有 policy 片段** | 手改 |
 | `hooks/dispatch-hook.py` ＋ `hooks.json` | dispatcher | 手改 |
-| `build-bundles.py` | 三份靜態 config 的產生器 ＋ **19 項驗收** | 手改 |
+| `build-bundles.py` | 三份靜態 config 的產生器 ＋ **21 項驗收** ＋ repo-leader 身分行 | 手改 |
 | `test-dispatcher.py` | dispatcher 端到端（fixture、零副作用；51 情境） | 手改 |
 | `mutation-tests.sh` ＋ `mutation_lib.py` | 突變測試與它的套用函式庫——**套用前**斷言定位字串仍有效（見 §定位字串的唯一性）。⚠ `mutation_lib` 用底線命名因為它要被 `import` | 手改 |
 | **三份 `config.yaml`** ＋ repo-leader 的 `AGENTS.md`／`skills/`／`hooks/` | 產物 | ⛔ **勿手改**（drift 由第 0 項對帳） |
@@ -697,8 +697,8 @@ turn／tool call 都重建並重讀 store（`routes_hooks.py::_build_engine`）�
 `p_kubectl_namespace_scope` 的 namespace 白名單是**第五份副本**。權威三份由 repo-lint
 `kubectl-ns-whitelist-sync` 對帳（`CLAUDE.md` 表格、
 `docs/guides/deployment/shared-cluster-paas-scope-guard.md`、
-`.claude/hooks/kubectl-ns-guard.py`）；第四份在 `_workers/ops_k8s/AGENTS.md`，第五份在
-`build-bundles.py` 的 `K8S_ALLOWED_NAMESPACES`。**後兩份不在 repo-lint 對帳範圍內——改白
+`.claude/hooks/kubectl-ns-guard.py`）；第四份在 `_templates/ops_k8s/AGENTS.md`，第五份在
+`generate-worker.py` 的 `K8S_ALLOWED_NAMESPACES`。**後兩份不在 repo-lint 對帳範圍內——改白
 名單時五份都要一起改。**
 
 **權威守線是 repo 的 `.claude/hooks/kubectl-ns-guard.py`**（用 `shlex` 正確解析，且
@@ -710,7 +710,7 @@ shell 解析，認不出 `bash -c` 包一層或 script 檔裡的 kubectl，**已
 
 ## 驗收與突變測試的關係
 
-`--check` 有 19 項驗收。但**「全部 PASS」本身不代表驗收有效**——本 repo 已經抓到三次
+`--check` 有 21 項驗收。但**「全部 PASS」本身不代表驗收有效**——本 repo 已經抓到三次
 「檢查看起來在運作、其實沒驗到」的事故，三次都是同一個根因：**只看有沒有 `[FAIL]`，
 不看紅在哪**。
 
@@ -884,13 +884,34 @@ worker **最強**的 A 類保證，並以此為由之一否決 `enforce_sandbox`
 裁決：照實作改文件——唯讀保證只有 `read_only_os` 一層（比對工具名，仍是 A 類）。
 `RETIRED_TERMS` 已把「省略 `os_env`」列為廢止詞彙，prompt 層零容忍。
 
+### 7. repo_leader 的「harness 自辨」段（2026-09-14 改為 build 蓋身分行）
+
+舊 prompt 要 agent 從 session metadata 猜自己是 `repo_leader_cc` 還是 `repo_leader_pi`，猜不到
+就標 blocked。**廢止原因**：兩份副本本來就是 `build-bundles.py` 從單一來源複製的，複製時蓋一行
+身分成本為零，而「猜不到就停」是自己製造的失敗模式（review F7）。現在來源檔留
+`identity:start／end` 佔位符，`repo_leader_prompt()` 換成身分行，驗收第 19 項驗副本真的蓋到。
+
+### 8. 「排程 tracker 做 stale 掃描」（從未實作，2026-09-14 改為按需 skill）
+
+兩份 leader prompt 曾寫 stale 掃描「由小時級 fresh-session tracker 排程」執行，但 bundle 裡沒有
+任何東西會建那個 scheduled task、tracker prompt 也沒有 stale 判準（review F14）。裁決：不排程，
+改成 issue-leader 的 `stale-sweep` skill，人叫才跑（N 預設 6 小時），掃完換 `blocked`＋留言＋
+重建看板。
+
+### 9. issue-leader 直接派 tracker／scout／researcher（2026-09-14 裁決收回）
+
+`issue-triage` skill 曾叫 issue-leader 自己派 `tracker_*` 查重、`scout_pi_*` 補資訊，與頂層
+prompt「你只派工給兩個 repo_leader」互斥（review F9）。裁決：issue-leader 只分配 issue，
+**所有** worker 由 repo_leader 產生；同時 repo-leader 不再收到 issue-triage／board-reconcile／
+stale-sweep 的副本（`REPO_LEADER_SKILLS` 只列 dispatch-policy 與 pr-merge-gate）。
+
 ## 機器相關的值
 
 **產生出來的 bundle 裡沒有任何機器相關的絕對路徑**——`os_env.cwd` 一律是 `.`（理由見
 §`os_env.cwd`）。換機器不需要改 `build-bundles.py`。
 
 唯一與本機綁定的是 worker prompt 裡舉例用的跨 repo 唯讀路徑（`/home/elmo/woow-repos/<repo>/…`
-這種 `grep` 範例），那些在 `_workers/*/AGENTS.md` 的來源池裡，改了重跑產生器即可。
+這種 `grep` 範例），那些在 `_templates/*/AGENTS.md` 的來源池裡，改了重跑產生器即可。
 
 快層 model 同理，釘在 `generate-worker.py` 的 `ROSTER`（scout／tracker／researcher 那幾格）；
 model 名會隨 CLI／catalog 版本漂移，當下可用的用 `sys_list_models` 查。
