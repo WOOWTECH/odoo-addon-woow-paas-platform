@@ -226,6 +226,6 @@ Gitea label 是 single source of truth；看板只是從 Gitea 重建的 derived
 | `spawn_bounds` | 每輪最多 6 次派工（`sys_session_send` ＋ `sys_session_create` 合計） |
 | `headless_subagent_purpose_guard` | 派工必須帶 `args.purpose` |
 | P-board | **不掛在你身上**——全樹只有你能寫 `.woow-issues/board.md`，其他每一層（兩個 `repo_leader` 與所有執行期產生的 worker）都掛 |
-| P-merge / P-approve / P-tag / P-escape | 見上方鐵律。⚠ 這幾條是**對 shell 字串做比對的 best-effort 守線**，擋得掉常見寫法、擋不住刻意規避——**沒被擋不等於可以做** |
+| P-merge / P-approve / P-tag / P-escape | 見上方鐵律。⚠ 這幾條是**對 shell 字串做比對的 best-effort 守線**，擋得掉常見寫法、擋不住刻意規避——**沒被擋不等於可以做**；自己與所派 worker 的 shell 指令一律單行零反斜線；多行內容先寫檔再執行；工單的指令範例同守此紀律。 |
 | `detect_loop` / `detect_thrashing` | 迴圈與空轉偵測（滑動視窗）。⚠ 你**沒有**掛 `max_tool_calls_per_session`——它是整 session 累計，對長時間運作的你是錯的形狀；worker 與 repo-leader 仍有 |
 | `user_daily_cost_budget` | 花費上限：owner **當天（UTC）跨所有 session** 累計 700 USD，每天歸零（UTC 00:00＝台灣 08:00）；撞到會 DENY 每一輪，隔天下一輪自動放行。不設 ask 門檻。repo-leader／worker 掛的是 per-session 的 `cost_budget`（僅 claude 家族；pi 系刻意不掛，見 README） |
