@@ -13,49 +13,65 @@ description: 派工對照表與 repo alias map 的使用規則：怎麼選 harne
 
 ⚠ **`executor.config.harness` 是 bundle 屬性，派工當下換不掉**——`sys_session_send` 只能用
 `args.model` / `args.reasoning_effort` 覆寫。所以「同一個 purpose 要換 harness」只有一條路：
-**先寫出 config，再 `sys_session_create(config_path=…)`**。
+**先產生 config，再 `sys_session_create(config_path=…)`**。
 
-流程（repo-leader 做）：
+### 四步流程
 
 ```bash
-# 1. 產生（⛔ 一定要走這支，它有五道防線）
-DIR=$(python3 <paas-platform root>/.omnigent/woow-issue-leader/generate-worker.py \
+# 1. 依 §3 alias map 解析 repo 實際路徑（⛔ 不可字串拼接）
+#    paas-platform → /home/elmo/woow-repos/paas/woow_paas_platform
+
+# 2. 產生 worker config（⛔ 一定要走這支，它有下列五道防線）
+DIR=$(python3 /home/elmo/woow-repos/paas/woow_paas_platform/.omnigent/woow-issue-leader/generate-worker.py \
         --purpose implement --harness pi \
         --repo paas-platform --repo-root /home/elmo/woow-repos/paas/woow_paas_platform \
         --worktree /home/elmo/woow-repos/paas/wt-1032 \
         --name impl-1032-pi)
-# implement 必須同時給 --repo-root 與 --worktree：worktree 由 worker 自己
-# `git -C <repo-root> worktree add <worktree>`，兩個路徑都進 allowed_dirs；你只指定路徑。
-# --name 同時是 agent name 與目錄名（預設 <purpose>_<cc|pi>），建議 <purpose>-<issue>-<cc|pi>；
-# 同名不衝突（每次上傳都是新的 session-scoped agent），只用來在 UI／log 分辨是哪張 issue 的 worker。
-# 2. 建 session（⛔ 不帶工單）
+
+# 3. 建 session（⛔ 不帶工單）
 #    conversation_id = sys_session_create(config_path=$DIR) 回傳的 conversation_id
-# 3. 送工單——這是唯一的喚醒線
+# 4. 送工單——這是唯一的喚醒線
 #    sys_session_send(session_id=<conversation_id>, args.purpose="implement", args.input=<工單>)
 ```
 
-`sys_session_create` 一步起（帶 message）沒有 handle，worker 完成後無處投遞；只有上面的
-兩步起法會建立可靠的一跳喚醒線。
+`implement` 必須同時給 `--repo-root` 與 `--worktree`：worktree 由 worker **自己建**（你只指定
+路徑，⛔ 不要替它建），兩個路徑都會進 `block_working_dir_changes.allowed_dirs`。
 
-⛔ **不要自己手寫 worker 的 config.yaml**。五道防線擋的都是**靜默**失敗：harness×model 不
-相容（omnigent 在這條路徑完全不驗，會等 child 第一輪才爆成通用 `runner_error`）、
-`instructions:` 路徑變成 system prompt、檔名不是 `config.yaml`（錯誤訊息指向 omnigent 的
-臨時目錄，完全誤導）、`skills/` 有目錄無 `SKILL.md` 靜默為空、`skills_filter: none` 壓掉
-所有 hooks。
+`--name` 同時是 worker 的 agent name 與目錄名（預設 `<purpose>_<cc|pi>`）；寫成
+`<purpose>-<issue>-<cc|pi>`，讓 UI／log 分得出是哪張 issue。同名不衝突（每次上傳都是新的
+session-scoped agent）；會撞的是同一 parent 下的 `sys_session_send` title，依 AGENTS.md
+「一張 issue 一個 title」規則命名。
 
-產生器拒絕時**不要硬派**——它印的理由就是要修的東西。
+`sys_session_create` 一步起（帶 message）沒有 task handle；worker 完成後你永遠不會被叫醒
+（#1092 實測 0/1）。只有上面的兩步起法會建立可靠的一跳喚醒線。
+
+⛔ **不要自己手寫 worker 的 config.yaml**。五道防線擋的全是**靜默**失敗：
+
+| 防線 | 擋什麼 |
+| --- | --- |
+| 1 | harness × model 不相容。⚠ omnigent 在 create 這條路徑**完全不驗**，會等 child 第一輪才爆成通用 `runner_error`（訊息不會告訴你原因） |
+| 2 | `instructions:` 路徑失效 ⇒ **整條路徑字串變成 system prompt**，不報錯 |
+| 3 | 檔名不是 `config.yaml`（錯誤訊息指向 omnigent 的臨時目錄，完全誤導） |
+| 4 | `skills/` 有目錄但沒有 `SKILL.md` ⇒ 靜默為空 |
+| 5 | `skills_filter: none` ⇒ 發出 `--setting-sources ""`，**壓掉 dispatcher 與所有 repo hooks** |
+
+產生器拒絕時**不要硬派**——它印的理由就是要修的東西。修不掉就標
+`agent-status:blocked`，並在 issue comment 貼產生器原文。
 
 ## 2. 對照表（產生器的 `ROSTER` 是唯一真相，這裡是給人看的摘要）
 
-| purpose | harness | model | effort |
-|---|---|---|---|
-| `repo-leader` | claude-native／pi | `claude-fable-5-1`／`gpt-6-astra` | xhigh |
-| `implement` | **固定 pi** | `gpt-5.6-sol` | xhigh |
-| `review` | **固定 claude-native** | `claude-sonnet-5` | high |
-| `explore`（＝`search`） | pi | `gpt-5.6-luna` | high |
-| `tracker`（＝`triage`） | pi | `gpt-5.6-terra` | high |
-| `ops_k8s`（＝`deploy`） | **固定 claude-native** | `claude-sonnet-5` | xhigh |
-| `researcher` | pi | `gpt-5.6-luna` | high |
+| purpose | harness | model／effort | 定位 | 寫權 |
+|---|---|---|---|---|
+| `repo-leader` | claude-native／pi | `claude-fable-5-1`／`gpt-6-astra`；xhigh | issue 全程與派工 | ⛔ 不寫產品碼 |
+| `implement` | **固定 pi** | `gpt-5.6-sol`；xhigh | 多檔重構、寫測試 | ✅ |
+| `review` | **固定 claude-native** | `claude-sonnet-5`；high | 審 diff | ⛔ 唯讀 |
+| `explore`（＝`search`） | pi | `gpt-5.6-luna`；high | recon／lookup | ⛔ 唯讀 |
+| `tracker`（＝`triage`） | pi | `gpt-5.6-terra`；high | 六 repo `tea` 對帳、查重、開單 | ✅（只寫產物） |
+| `ops_k8s`（＝`deploy`） | **固定 claude-native** | `claude-sonnet-5`；xhigh | kubectl／deploy-stg／sandbox | ✅ |
+| `researcher` | pi | `gpt-5.6-luna`；high | 上游 addon／Odoo 18 行為查證 | ⛔ 唯讀 |
+
+model／effort 用對照表的預設；要覆寫就由 `generate-worker.py` 帶 `--model`／`--effort`，
+仍會過防線 1。
 
 硬規則：
 
@@ -99,5 +115,10 @@ cd /home/elmo/woow-repos && omnigent run <bundle> --server <url>
 跨 repo 統籌只有「同一棵樹」這個形狀成立。
 
 代價與補償：子 repo 的 `.claude/` 三項（hooks／CLAUDE.md／skills）在共同祖先下全失。
-**hooks 由 dispatcher 拿回來**（`hooks/dispatch-hook.py`）；CLAUDE.md 與 skills 拿不回來，
-所以關鍵守線知識已經寫進各 worker 的 prompt。詳見 `.omnigent/README.md` §workspace。
+**hooks 由 bundle 的 dispatcher 拿回來**（`hooks/dispatch-hook.py`，所以
+`kubectl-ns-guard`、`pattern-guard`、`repo-lint` 都還在）；CLAUDE.md 與 repo skills 拿不回來。
+詳見 `.omnigent/README.md` §workspace。
+
+因此工單要**自帶** worker 該知道的指令、指定 worktree 路徑與驗收條件，不得依賴 worker
+自動看到 CLAUDE.md／skills。⛔ 不要寫「照 repo 的 CLAUDE.md 做」或「用 deploy-stg skill」；
+worker 看不到那些。
