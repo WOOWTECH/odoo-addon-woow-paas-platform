@@ -2,14 +2,27 @@
 """產生 docs/index.md —— docs 的 progressive disclosure 入口。
 
 數字與目錄清單全部從 git 追蹤的檔案即時算出，不手寫，避免與實況漂移。
+產生器與 --check 共用列檔口徑時，--check 只能驗證兩者一致，無法發現列檔偏差；
+因此 docs/*.md 在 git add 前若未另行攔截，可能造成假綠。
 用法：python3 scripts/audit/gen-docs-index.py [--check]
-  --check 只比對現有 index.md 是否與實況相符（供 CI / repo-lint 用），不寫檔。
+  --check 驗證現有 index.md 是否與 git 追蹤實況相符（供 CI / repo-lint 用），不寫檔。
 """
 import subprocess, sys, collections
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 OUT = REPO / "docs/index.md"
+
+untracked_files = [f for f in subprocess.run(
+    ["git", "ls-files", "--others", "--exclude-standard", "docs/"],
+    cwd=REPO, capture_output=True, text=True
+).stdout.splitlines() if f.endswith(".md")]
+if untracked_files:
+    print("❌ 偵測到未追蹤的 docs Markdown 檔案：", file=sys.stderr)
+    for f in untracked_files:
+        print(f"  - {f}", file=sys.stderr)
+    print("請先 git add 再跑 gen-docs-index.py。", file=sys.stderr)
+    sys.exit(1)
 
 files = [f for f in subprocess.run(
     ["git", "ls-files", "docs/"], cwd=REPO, capture_output=True, text=True
