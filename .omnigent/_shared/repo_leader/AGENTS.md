@@ -25,77 +25,9 @@ harness 寫死在它自己的名字裡（`_cc` / `_pi`），跟你是哪一份�
 
 ## worker 由你在執行期產生
 
-⚠ 你**沒有**靜態的 sub-agent 清單。`executor.config.harness` 是 bundle 屬性、派工當下換不
-掉（`sys_session_send` 只能覆寫 `args.model` / `args.reasoning_effort`），所以 worker 必須
-**先產生 config、再用 `sys_session_create` 起來**。
-
-### 四步流程
-
-```bash
-# 1. 解析 repo alias →實際路徑（⛔ 不可字串拼接，見 dispatch-policy skill 的 alias map）
-#    paas-platform → /home/elmo/woow-repos/paas/woow_paas_platform
-
-# 2. 產生 worker config（⛔ 一定要走這支，它有五道防線）
-#    implement 必須同時給 --repo-root 與 --worktree：worktree 由 worker **自己建**
-#    （你只指定路徑，⛔ 不要替它建），兩個路徑都會進 block_working_dir_changes.allowed_dirs。
-DIR=$(python3 /home/elmo/woow-repos/paas/woow_paas_platform/.omnigent/woow-issue-leader/generate-worker.py \
-        --purpose implement --harness pi \
-        --repo paas-platform --repo-root /home/elmo/woow-repos/paas/woow_paas_platform \
-        --worktree /home/elmo/woow-repos/paas/wt-1032 \
-        --name impl-1032-pi)
-#    --name 同時是 worker 的 agent name 與目錄名（預設 <purpose>_<cc|pi>），寫成
-#    <purpose>-<issue>-<cc|pi> 讓 UI／log 分得出是哪張 issue 的 worker。同名不衝突（每次上傳都是
-#    新的 session-scoped agent）；會撞的是 sys_session_send 的 title——同一個 parent 底下 title
-#    要唯一，照「一張 issue 一個 title」的規則走就不會撞。
-
-# 3. 建 session（⛔ 不帶工單）
-#    conversation_id = sys_session_create(config_path=$DIR) 回傳的 conversation_id
-# 4. 送工單——這是唯一的喚醒線
-#    sys_session_send(session_id=<conversation_id>, args.purpose="implement", args.input=<工單>)
-```
-
-`sys_session_create` 一步起（帶 message）沒有 task handle；worker 完成後你永遠不會被叫醒
-（#1092 實測 0/1）。只有上面的兩步起法會建立可靠的一跳喚醒線。
-
-⛔ **不要自己手寫 worker 的 config.yaml。** 五道防線擋的全是**靜默**失敗：
-
-| 防線 | 擋什麼 |
-| --- | --- |
-| 1 | harness × model 不相容。⚠ omnigent 在 create 這條路徑**完全不驗**，會等 child 第一輪才爆成通用 `runner_error`（訊息不會告訴你原因） |
-| 2 | `instructions:` 路徑失效 ⇒ **整條路徑字串變成 system prompt**，不報錯 |
-| 3 | 檔名不是 `config.yaml`（錯誤訊息指向 omnigent 的臨時目錄，完全誤導） |
-| 4 | `skills/` 有目錄但沒有 `SKILL.md` ⇒ 靜默為空 |
-| 5 | `skills_filter: none` ⇒ 發出 `--setting-sources ""`，**壓掉 dispatcher 與所有 repo hooks** |
-
-產生器拒絕時**不要硬派**——它印的理由就是要修的東西。修不掉就標
-`agent-status:blocked`，並在 issue comment 貼產生器原文。
-
-### 可用的 purpose × harness
-
-| purpose | harness | 定位 | 寫權 |
-|---|---|---|---|
-| `implement` | **固定 pi** | 多檔重構、寫測試 | ✅ |
-| `review` | **固定 claude-native** | 審 diff | ⛔ 唯讀 |
-| `explore`（＝`search`） | pi | recon／lookup | ⛔ 唯讀 |
-| `tracker`（＝`triage`） | pi | 六 repo `tea` 對帳、查重、開單 | ✅（只寫產物） |
-| `ops_k8s`（＝`deploy`） | **固定 claude-native** | kubectl／deploy-stg／sandbox | ✅ |
-| `researcher` | pi | 上游 addon／Odoo 18 行為查證 | ⛔ 唯讀 |
-
-- **`implement` 固定 pi，`review` 固定 claude-native**：實作 pi ⇒ 覆核 claude-native，
-  跨 vendor 單向成立。產生器會拒絕 `implement + claude-native`：上游 `worktree_guard` 對
-  Claude 原生 Edit／Write 必帶的絕對 `file_path` 一律 DENY，implement_cc 實測不能改檔。
-- **`ops_k8s` 固定 claude-native**：pi 沒有 hook 機制，換了 dispatcher 就失效 ⇒ repo 的
-  `kubectl-ns-guard` 拿不回來。產生器會拒絕 `ops_k8s + pi`。
-- model／effort 用對照表的預設就好；要覆寫就帶 `--model` / `--effort`（仍會過防線 1）。
-
-### ⚠ worker 看不到 repo 的 CLAUDE.md 與 skills
-
-workspace 是六 repo 的共同祖先，子 repo 的 `.claude/` 三項在那裡全失。**hooks 由 bundle 的
-dispatcher 拿回來**（所以 `kubectl-ns-guard`、`pattern-guard`、`repo-lint` 都還在），但
-**CLAUDE.md 與 repo skills 拿不回來**。
-
-⇒ 工單要**自帶**該知道的事：要跑哪條指令、在哪個 worktree、驗收條件。⛔ 不要寫「照 repo 的
-CLAUDE.md 做」或「用 deploy-stg skill」——worker 看不到那些。
+**派工前必先載入 `dispatch-policy` skill**；它是 worker 產生流程、purpose／harness、
+五道防線、喚醒方式與工單自足要求的單一真相。明確指標：`implement` 固定 `pi`，
+`review` 與 `ops_k8s` 固定 `claude-native`。
 
 ## 一張 issue 一個 title
 
