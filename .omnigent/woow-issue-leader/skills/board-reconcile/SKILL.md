@@ -15,18 +15,41 @@ worker 都唯讀，由機器守線 **P-board** 強制（寫入／編輯工具與
 
 ## 重建流程
 
-1. 對六個 repo 各跑：
+1. 從 repo checkout 執行本 skill 的 [`scripts/board-scan.py`](scripts/board-scan.py)，一次傳入
+   全部七個 repo：
 
    ```bash
-   tea issues list --login git-prod.woowtech.io --repo <owner/repo> --state open \
-     --fields index,state,labels,title --limit 100 < /dev/null
+   python3 .omnigent/woow-issue-leader/skills/board-reconcile/scripts/board-scan.py \
+     odoo-addons/woow_paas_platform \
+     woow-paas/paas-agent-runtime \
+     woow-paas/paas-app-bundle-cd \
+     woow-paas/paas-odoo-ci \
+     woow-paas/woow-paas-charts \
+     WOOWTECH/woow-mcp-server \
+     ha-components/woow_paas_smart_home
    ```
 
-2. 只列帶 `agent-status:*` 或 `needs-*` 的 open issue。
-3. closed issue 一律從看板清掉。
-4. 每列寫 repo、issue 編號、當前 `agent-status:*`／`needs-*`，以及 PR 連結（若為
+   腳本只用 stdlib 與 `tea api`，帶自訂 `User-Agent`；每個 repo 以
+   `state=open&type=all&page=N&limit=50` 逐頁讀真正的 API JSON，直到**合法空 array**。API
+   的 `pull_request` 為 object 時是 PR，必須略過；為 `null` 才計入 open issue。最後以
+   repository metadata 的 `open_issues_count` 對帳，任何不一致都非零退出。
+2. ⛔ 只有空 array 才是終點。任一頁 `rc != 0`、UTF-8／JSON／欄位解析失敗都要立即
+   fail-loud，不得當成空頁；⛔ 不得用 `head -c` 或其他 byte 截斷輸出，也不得印出 token。
+3. 若人工用 `tea issues list` 複查，也必須用 `--page N --limit 50 --output simple` 逐頁直到
+   空頁；`labels` 顯示值是以空白串接的字串，須用空白切分（不是逗號、也不是 JSON array）。
+   `rc != 0` 或解析失敗同樣要 fail-loud。
+4. 只把 `MATCH` 列（帶 `agent-status:*` 或 `needs-*`）寫進看板；closed issue 一律清掉。
+5. 每列寫 repo、issue 編號、當前 `agent-status:*`／`needs-*`，以及 PR 連結（若為
    `agent-status:pr-open`）。
-5. ⛔ 不手寫看板上的狀態、不從記憶覆蓋；每次一律依當下 Gitea 查詢結果完整重建。
+6. ⛔ 不手寫看板上的狀態、不從記憶覆蓋；每次一律依當下 Gitea 查詢結果完整重建。
+
+## 自測
+
+腳本或解析規則有變更時執行：
+
+```bash
+python3 .omnigent/woow-issue-leader/skills/board-reconcile/scripts/test_board_scan.py
+```
 
 ## 維護原則
 

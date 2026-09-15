@@ -105,9 +105,13 @@ DB 掛掉時照它做會無限 refresh 而永遠不會好。先 healthz，再 2b
 
 **驗 PR 是否真存在，用最硬的信號 `git ls-remote origin 'refs/pull/<N>/*'`** —— Gitea 只在 PR 真的存在時才建 `refs/pull/N/head`，且不經 tea 的 API 層。次強信號是 `tea pr <N> --repo <repo>`（單筆查詢正常，只有 list 會假空）。同族陷阱：`tea actions runs list` 只列 completed（見 [[reference_tea_actions_runs_list_completed_only]]）——**通則：tea 的 list 類子命令會靜默漏列，任何「查不到＝不存在」的結論都要換信號複驗**，這正是 [[reference_dash_devtcp_false_negative]] 講的「單探測異常先疑方法」。
 
-**6b. `tea issues list` 不分頁會靜默截斷，而它正是查重的工具。**（2026-08-03 實測）同一個 repo：`--state open` 不分頁回 **30 筆**，`--page 1/2/3 --limit 50` 抓完 sort -u 是 **80 筆**。沒有任何警告或省略號。⇒ **「搜過既有 open issue、無重複」這個結論，若用不分頁的 list 得出，涵蓋的可能不到一半。**
+**6b. `tea issues list` 不分頁會靜默截斷，而它正是查重的工具。**（2026-08-03 實測）同一個 repo：`--state open` 不分頁回 **30 筆**，`--page 1/2/3 --limit 50` 抓完 sort -u 是 **80 筆**。沒有任何警告或省略號。2026-09-15 再量 paas：單頁 `--limit 100` 仍被 cap 在 **50 筆**；`--page 1..5 --limit 50` 依序是 **50／50／50／19／0**，合計 169，才與當時 API `open_issues_count=169` 相等。⇒ **「搜過既有 open issue、無重複」這個結論，若用不分頁的 list 得出，涵蓋的可能不到一半。**
 同日 dispatcher 用 `--limit 50` 查，**低編號被截掉、因此誤報 #29 已關閉**——同一個坑、同一天、兩個人各踩一次，而他當時剛立完「查無結論先問範圍是不是全集」那條規則。⇒ 這正是 [[feedback_absence_conclusion_scope_not_universe]]：**規則知道了不代表查法會自動變對，工具的預設值會替你決定範圍。**
 正解：一律逐頁抓到空頁為止再 `sort -u`，或直接走 Gitea API；並在回報查重結論時附上**抓到幾筆**，讓別人能看出範圍。
+
+**6c. 用 `head -c` 截短掃描輸出會製造「tea 回 invalid UTF-8」與「repo 是空的」兩層假象。**（2026-09-14／15 issue-leader reconcile 實踩。）流程先用 `head -c N` 依 **byte** 截斷 tea 輸出，切在中文等多位元組字元中間；UTF-8 decoder 因此丟例外，呼叫端又把解析例外吞成空結果，最後六個非 paas repo 都被判成空頁。
+
+事後不截 byte 重測六 repo：完整輸出全都能正常 UTF-8 decode，調整 `COLUMNS` 也不影響。⇒ 真因不是 `tea --output json` 產出壞 UTF-8，而是**消費端破壞完整 bytes，加上解析 fail-open**。合法空頁必須同時滿足：指令 `rc=0`、完整 stdout 通過 UTF-8 與格式解析、結果確實為空；任一步失敗都要 fail-loud。⛔ 不得用 `head -c` 或任何 byte 截斷來控輸出；要嘛以 `--page N --limit 50 --output simple` 逐頁讀完（其 `labels` 顯示字串以空白切分），要嘛用帶自訂 `User-Agent` 的 `tea api` 取得真正 JSON，直到合法空 array，再與 repository `open_issues_count` 對帳。
 
 **7. `tea comments list --output json` 的 `body` 欄位是被截斷的，會讓成功的長留言看起來像寫爛了。**（2026-07-25 #423 實踩）。貼了一則 18091 字的報告到 issue，`tea comments list --repo <r> <n> --output json` 回來的 `body` **只有 55 字元**（剛好第一行標題），且 `user`／`created_at` 皆為 `None`——看起來像「留言被截斷、只寫進標題」。**實際完全沒事**：改用 Gitea API `GET /api/v1/repos/<o>/<r>/issues/<n>/comments` 讀回，`len(body)` ＝ 18091、頭尾與所有段落齊全。
 
@@ -137,6 +141,10 @@ DB 掛掉時照它做會無限 refresh 而永遠不會好。先 healthz，再 2b
 ——後者只要沒把 stderr 併進來就看得見，前者看不見。**點名工具的另一個代價是連失效形態也一起漏掉。**
 🔑 **兩條疊起來的意思是：內文不可信（tea 自己截斷）、列數也不一定可信（你自己的 pipeline 截斷）——
 兩層都繞過才算真的驗到。**「換一種查法複驗」若換的是同一條 pipeline 的上游，等於沒換。
+
+**7b. `tea issues comment` 不是留言子命令，卻可能靜默回 `rc=0`。**（2026-09-15 #884 實踩。）`tea issues` 只有 `list`／`create`／`edit`／`reopen`／`close`；把 `comment` 當它的子命令時，tea 0.14.1 沒報「subcommand 不存在」，反而印出 issue 清單並成功退出，實際一則留言都沒建立。這種輸出加 exit code 的形狀會讓自動化誤認寫入成功。
+
+正確寫法是頂層 `tea comment --login <login> --repo <owner/repo> <n> "<body>"`。但正確動詞仍不等於寫入已落地：緊接著用 `tea issues <n> --comments --login <login> --repo <owner/repo>`（或 API）重讀目標本體；詳見下一條 §7c。若重讀沒有內容，必須 fail-loud，不得拿 write 的 `rc=0` 當成功證據。
 
 **7c. 截斷是 `comments list` 這個子命令的行為，與 `--output` 無關——六種格式全中。正解是換子命令 `tea issues <n> --comments`，不是換格式、也不是走 API。**
 （2026-08-03 #519 實測補完。）上面幾條逐次點名 table→json→yaml，讀起來像「還有沒中的格式可以試」。實際把 `simple / table / csv / tsv / yaml / json` **六種全跑過，body 一律截在第一行加 `…`** ⇒ 沒有任何 `--output` 值能取回全文，別再逐個試。

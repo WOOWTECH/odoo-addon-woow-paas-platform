@@ -16,16 +16,19 @@ description: 按需的 stale 掃描：找出 agent-status:in-progress 且 N 小�
 
 ## 步驟
 
-1. 對六個 repo 各跑（repo 清單與 `board-reconcile` 重建看板用的同一組；手上沒有清單就問人，
-   ⛔ 不要猜 owner/repo）：
+1. 依 `board-reconcile` skill 的七 repo 清單執行其
+   [`scripts/board-scan.py`](../board-reconcile/scripts/board-scan.py)。腳本輸出的 `MATCH` 列含
+   `updated_at`；從中取帶 `agent-status:in-progress` 的 issue，再排除任何 `needs-*`。
 
-   ```bash
-   tea issues list --login git-prod.woowtech.io --repo <owner/repo> --state open \
-     --labels agent-status:in-progress --fields index,updated,labels,title --limit 100 < /dev/null
-   ```
+   腳本以 Gitea API 真正 JSON 的 `--page N --limit 50` 等價查詢逐頁掃到合法空 array，並以
+   `open_issues_count` 對帳。任一頁 `rc != 0`、UTF-8／JSON／欄位解析失敗或總數不一致都必須
+   fail-loud，⛔ 不得當成空頁，也不得用 `head -c` 等 byte 截斷輸出。
 
-2. 逐列判定：`updated` 距現在 ≥ N 小時、且 `labels` 沒有任何 `needs-*` ⇒ stale。
-   ⚠ `updated` 的時區以 `tea` 印出的為準；回報時寫明你用的「現在」與時區，讓人能重算。
+   若人工改用 `tea issues list` 複查，必須加 `--page N --limit 50 --output simple` 並逐頁直到
+   空頁；其 `labels` 顯示值是空白串接字串，須以空白切分。`rc != 0` 或解析失敗仍須
+   fail-loud。
+2. 逐列判定：`updated_at` 距現在 ≥ N 小時、且 `labels` 沒有任何 `needs-*` ⇒ stale。
+   ⚠ 回報時寫明你用的「現在」與時區；API 的時間字串保留原值，讓人能重算。
 3. 每張 stale issue（`tea` 在非 TTY 可能等 stdin，兩條都要 `< /dev/null`）：
 
    ```bash
@@ -35,8 +38,10 @@ description: 按需的 stale 掃描：找出 agent-status:in-progress 且 N 小�
      --login git-prod.woowtech.io --repo <owner/repo> < /dev/null
    ```
 
-4. 掃完用 `board-reconcile` 重建看板（你是唯一能寫看板的人）。
-5. 回報：掃了哪幾個 repo、各幾張 in-progress、幾張判 stale（列 repo＋編號）、幾張因 `needs-*`
+4. 寫入後逐張用 `tea issues <n> --comments` 重讀，確認 label 與留言都已落地；不能只信 write
+   指令的 `rc=0`。
+5. 掃完用 `board-reconcile` 重建看板（你是唯一能寫看板的人）。
+6. 回報：掃了哪幾個 repo、各幾張 in-progress、幾張判 stale（列 repo＋編號）、幾張因 `needs-*`
    跳過、你用的 N 與「現在」。⛔ 不要只回「掃完了」。
 
 ## 邊界

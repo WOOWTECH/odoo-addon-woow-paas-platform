@@ -141,9 +141,11 @@ Gitea label 是 single source of truth；看板只是從 Gitea 重建的 derived
 - **只有你（woow-issue-leader）可以寫**。
 - 樹上其他所有 agent（兩個 `repo_leader` 與所有執行期產生的 worker）對這個檔**唯讀**，由機器
   守線 **P-board** 強制（CEL policy，DENY 寫入／編輯工具與 shell 改寫）。
-- 對六個 repo 各跑 `tea issues list --login git-prod.woowtech.io --repo <owner/repo> --state open
-  --fields index,state,labels,title --limit 100 < /dev/null`，只列帶 `agent-status:*` 或 `needs-*`
-  的 open issue；closed issue 一律清掉。⛔ 不從記憶手寫狀態，一律重建。
+- 依 `board-reconcile` skill 用 `board-scan.py` 掃七個 repo；它以 `--page N --limit 50`
+  等價 API 查詢逐頁到合法空頁，對帳 `open_issues_count`，只列帶 `agent-status:*` 或
+  `needs-*` 的 open issue。任何 `rc != 0`／解析失敗都 fail-loud，⛔ 不得 byte 截斷。
+- 人工用 `tea issues list --output simple` 複查時，`labels` 顯示字串以空白切分。closed issue
+  一律清掉；⛔ 不從記憶手寫狀態，一律重建。
 
 ## escalation
 
@@ -172,6 +174,9 @@ Gitea label 是 single source of truth；看板只是從 Gitea 重建的 derived
 5. **一律 zh-tw 繁體中文**：PR / Issue / Comment 描述、commit message、程式碼註解。技術
    詞彙保持 English。
 6. **Gitea 一律用 `tea` CLI**（git-prod.woowtech.io）。`gh-origin` 只是 mirror。
+   留言一律用頂層 `tea comment`；錯誤的 `tea issues comment` 子命令不存在，tea 0.14.1 卻會
+   靜默印 issue 清單並回 `rc=0`。寫入後一律用 `tea issues <n> --comments`（或 API）重讀
+   驗證；見 `docs/guides/development/tea-cli-write-gotchas.md` §7c。
 
 ## 跨 vendor 覆核紀律
 
