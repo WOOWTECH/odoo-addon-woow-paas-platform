@@ -19,15 +19,10 @@ worker 都唯讀，由機器守線 **P-board** 強制（寫入／編輯工具與
    全部七個 repo：
 
    ```bash
-   python3 .omnigent/woow-issue-leader/skills/board-reconcile/scripts/board-scan.py \
-     odoo-addons/woow_paas_platform \
-     woow-paas/paas-agent-runtime \
-     woow-paas/paas-app-bundle-cd \
-     woow-paas/paas-odoo-ci \
-     woow-paas/woow-paas-charts \
-     WOOWTECH/woow-mcp-server \
-     ha-components/woow_paas_smart_home
+   python3 .omnigent/woow-issue-leader/skills/board-reconcile/scripts/board-scan.py odoo-addons/woow_paas_platform woow-paas/paas-agent-runtime woow-paas/paas-app-bundle-cd woow-paas/paas-odoo-ci woow-paas/woow-paas-charts WOOWTECH/woow-mcp-server ha-components/woow_paas_smart_home
    ```
+
+   ⛔ 呼叫掃描腳本／tea 時指令不得含反斜線（續行、\n 皆不可）：路徑含 board 字根，P-escape 會把「反斜線＋敏感字根」一律 DENY。
 
    腳本只用 stdlib 與 `tea api`，帶自訂 `User-Agent`；每個 repo 以
    `state=open&type=all&page=N&limit=50` 逐頁讀真正的 API JSON，直到**合法空 array**。API

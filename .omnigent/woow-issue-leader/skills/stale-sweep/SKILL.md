@@ -20,6 +20,8 @@ description: 按需的 stale 掃描：找出 agent-status:in-progress 且 N 小�
    [`scripts/board-scan.py`](../board-reconcile/scripts/board-scan.py)。腳本輸出的 `MATCH` 列含
    `updated_at`；從中取帶 `agent-status:in-progress` 的 issue，再排除任何 `needs-*`。
 
+   ⛔ 呼叫掃描腳本／tea 時指令不得含反斜線（續行、\n 皆不可）：路徑含 board 字根，P-escape 會把「反斜線＋敏感字根」一律 DENY。
+
    腳本以 Gitea API 真正 JSON 的 `--page N --limit 50` 等價查詢逐頁掃到合法空 array，並以
    `open_issues_count` 對帳。任一頁 `rc != 0`、UTF-8／JSON／欄位解析失敗或總數不一致都必須
    fail-loud，⛔ 不得當成空頁，也不得用 `head -c` 等 byte 截斷輸出。
