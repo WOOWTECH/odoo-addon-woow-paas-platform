@@ -34,10 +34,8 @@ description: 按需的 stale 掃描：找出 agent-status:in-progress 且 N 小�
 3. 每張 stale issue（`tea` 在非 TTY 可能等 stdin，兩條都要 `< /dev/null`）：
 
    ```bash
-   tea issues edit <n> --add-labels agent-status:blocked --remove-labels agent-status:in-progress \
-     --login git-prod.woowtech.io --repo <owner/repo> < /dev/null
-   tea comment <n> "stale-sweep：<掃描時間> 起 <N> 小時無活動且無 needs-*，疑似 worker 靜默死亡，改 blocked。人排除後改回 in-progress，並叫 issue-leader 續談同 title 的 repo_leader。" \
-     --login git-prod.woowtech.io --repo <owner/repo> < /dev/null
+   tea issues edit <n> --add-labels agent-status:blocked --remove-labels agent-status:in-progress --login git-prod.woowtech.io --repo <owner/repo> < /dev/null
+   tea comment <n> "stale-sweep：<掃描時間> 起 <N> 小時無活動且無 needs-*，疑似 worker 靜默死亡，改 blocked。人排除後改回 in-progress，並叫 issue-leader 續談同 title 的 repo_leader。" --login git-prod.woowtech.io --repo <owner/repo> < /dev/null
    ```
 
 4. 寫入後逐張用 `tea issues <n> --comments` 重讀，確認 label 與留言都已落地；不能只信 write
