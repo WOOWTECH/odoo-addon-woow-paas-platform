@@ -12,9 +12,9 @@ woow-issue-leader/          claude-sdk／claude-fable-5-1／xhigh／spawn: true
 ├── AGENTS.md               手改
 ├── hooks/                  ⭐ dispatcher：把子 repo 的 hooks 拿回來（§dispatcher）
 ├── skills/                 ⚠ **必須存在**，否則不發 --plugin-dir、dispatcher 不生效
-│   ├── issue-triage/  pr-merge-gate/  board-reconcile/
+│   ├── issue-triage/  pr-merge-gate/  board-reconcile/  stale-sweep/（按需掃 stale）
 │   └── dispatch-policy/    對照表與 alias map 的使用規則
-├── _templates/             ⭐ 產生器的模板來源（8 份 worker prompt ＋ skills）
+├── _templates/             ⭐ 產生器的模板來源（8 份 worker prompt ＋ skills；`_shared/` 共用片段）
 ├── generate-worker.py      ⭐ 執行期產生器（五道防線，§產生器）
 └── agents/
     ├── repo_leader_cc/     claude-native／claude-fable-5-1／xhigh／spawn: true
@@ -50,10 +50,24 @@ woow-issue-leader/          claude-sdk／claude-fable-5-1／xhigh／spawn: true
 ```bash
 DIR=$(python3 <paas-platform>/.omnigent/woow-issue-leader/generate-worker.py \
         --purpose implement --harness pi --repo paas-platform \
+        --repo-root /home/elmo/woow-repos/paas/woow_paas_platform \
         --worktree /home/elmo/woow-repos/paas/wt-1032 --name impl-1032-pi)
+# --name 同時是 worker 的 agent name 與目錄名（預設 <purpose>_<cc|pi>；規則 ^[a-zA-Z0-9_-]+$）。
+# 同名不衝突：omnigent 每次 config_path 上傳都建一個新的 session-scoped agent row，name 只是
+# 給 UI／log 看的標籤（review F13 查證：server/routes/_sessions/orchestration.py
+# ::_create_session_from_bundle 明寫「Agent names are user-authored labels, not global content
+# identities」）。建議 <purpose>-<issue>-<cc|pi>，才分得出是哪張 issue 的 worker。
 # conversation_id = sys_session_create(config_path=$DIR) 回傳的 conversation_id（⛔ 不帶工單）
 # sys_session_send(session_id=<conversation_id>, args.purpose="implement", args.input=<工單>)
 ```
+
+⚠ **worktree 由 implement worker 自己建**（2026-09-14 裁決）：repo-leader 只指定路徑、不代建。
+`--repo-root` 與 `--worktree` 兩個路徑都進 worker 的 `block_working_dir_changes.allowed_dirs`
+（`git -C <repo-root> worktree add` 才進得去），該層的 `block_worktree` 因此關掉；「進 repo root
+只為建 worktree、改檔只能在 worktree 裡」是紀律規則，機器擋不住。worker 完成後把 worktree
+路徑、branch、PR 回報給 repo-leader；PR 開出且 CI 綠後由 repo-leader 移除。runner 只有一個、
+永遠在共同祖先啟動——⛔ 不要為某張 issue 另起「以 worktree 當 workspace」的 runner（dispatcher
+會找不到任何 sibling repo，全部 repo hooks 靜默消失）。
 
 ## 誰通知誰（喚醒只保證一跳）
 
@@ -71,7 +85,7 @@ DIR=$(python3 <paas-platform>/.omnigent/woow-issue-leader/generate-worker.py \
 
 ```bash
 python3 .omnigent/build-bundles.py           # 重產三份靜態 config ＋ repo-leader 的副本
-python3 .omnigent/build-bundles.py --check   # 驗收 19 項（含產生器自檢與 dispatcher 端到端）
+python3 .omnigent/build-bundles.py --check   # 驗收 22 項（含產生器自檢與 dispatcher 端到端）
 python3 .omnigent/woow-issue-leader/generate-worker.py --self-check   # 只驗產生器
 python3 .omnigent/test-dispatcher.py         # 只驗 dispatcher（fixture repo，零副作用）
 bash .omnigent/mutation-tests.sh [case 代號]  # 突變測試（每個 case 斷言「紅在哪」）
@@ -80,11 +94,12 @@ bash .omnigent/mutation-tests.sh [case 代號]  # 突變測試（每個 case 斷
 | 路徑 | 內容 | 誰維護 |
 | --- | --- | --- |
 | `_templates/<role>/AGENTS.md` ＋ `skills/` | 8 份 worker prompt／skill（**產生器的來源**） | 手改 |
+| `_templates/_shared/<片段>.md` | worker prompt 的共用片段（鐵律／守線強度／跨 repo 唯讀／回報／不要離開 worktree），模板用 `<!-- include: <片段> -->` 引用、產生器複製時展開（見該目錄 README） | 手改 |
 | `_shared/repo_leader/AGENTS.md` | repo-leader 共用 prompt | 手改 |
-| `woow-issue-leader/AGENTS.md` ＋ `skills/` | issue-leader 的 prompt 與 4 個 skill | 手改 |
+| `woow-issue-leader/AGENTS.md` ＋ `skills/` | issue-leader 的 prompt 與 5 個 skill（repo-leader 只拿 `dispatch-policy`／`pr-merge-gate` 兩個副本，見 `REPO_LEADER_SKILLS`） | 手改 |
 | `generate-worker.py` | 執行期產生器 ＋ 對照表 ＋ **7 支 CEL 與所有 policy 片段** | 手改 |
 | `hooks/dispatch-hook.py` ＋ `hooks.json` | dispatcher | 手改 |
-| `build-bundles.py` | 三份靜態 config 的產生器 ＋ **19 項驗收** | 手改 |
+| `build-bundles.py` | 三份靜態 config 的產生器 ＋ **22 項驗收** ＋ repo-leader 身分行 | 手改 |
 | `test-dispatcher.py` | dispatcher 端到端（fixture、零副作用；51 情境） | 手改 |
 | `mutation-tests.sh` ＋ `mutation_lib.py` | 突變測試與它的套用函式庫——**套用前**斷言定位字串仍有效（見 §定位字串的唯一性）。⚠ `mutation_lib` 用底線命名因為它要被 `import` | 手改 |
 | **三份 `config.yaml`** ＋ repo-leader 的 `AGENTS.md`／`skills/`／`hooks/` | 產物 | ⛔ **勿手改**（drift 由第 0 項對帳） |
@@ -200,28 +215,32 @@ tool call 是在 server 端的 `ProxyMcpManager` 用原始工具名（`sys_os_sh
 ### 🔴 「這一層掛幾道」≠「全樹有幾道」
 
 ⚠ 兩個數字很容易混：`generate-worker.py` 裡共有 **7 支** CEL 運算式（驗收第 8 項掃的就是這 7
-支／159 個事件，涵蓋全樹含執行期產生的 worker），但**沒有任何一層同時掛滿 7 支**。實查
-（`yaml.safe_load` 各層 config 的 `guardrails.policies`，數 `path` 結尾為 `cel.cel_policy` 的）：
+支，事件數以 `--check` 當下印出的為準，涵蓋全樹含執行期產生的 worker），但**沒有任何一層同時
+掛滿 7 支**——P-kubectl 只掛 ops_k8s、P-path 只掛 implement，兩支都只存在於動態 config。實查（`yaml.safe_load` 各層 config 的 `guardrails.policies`，數 `path` 結尾為
+`cel.cel_policy` 的；2026-09-14 那次退役後重數，見 §已廢止的設計 第 5 條）：
 
 **基本四支**＝P-merge／P-approve／P-tag／P-escape（對 shell 字串比對，每一層都掛）。各層在此
 之上的增減：
 
 | 層 | policies | CEL | ＝基本四支 ＋ | 沒掛的 |
 | --- | --- | --- | --- | --- |
-| `woow_issue_leader`（頂層） | 10 | **5** | P-model | **P-board**（刻意，見下）；`max_tool_calls_per_session`；花費改掛 `user_daily_cost_budget`（兩者見 §頂層 issue-leader 改掛） |
-| `repo_leader_cc` | 12 | 6 | P-model ＋ P-board | — |
-| `repo_leader_pi` | 11 | 6 | P-model ＋ P-board | `cost_budget`（非 CEL，見 §cost_budget） |
-| 執行期產生的 `ops_k8s` worker | 11 | 6 | P-board ＋ **P-kubectl**（第 7 支，只存在於動態 config） | P-model |
-| 執行期產生的 `implement_pi` worker | 11 | 5 | P-board | P-model、P-kubectl、`cost_budget` |
-| 執行期產生的 `review_cc` worker | 11 | 5 | P-board | P-model、P-kubectl |
+| `woow_issue_leader`（頂層） | 9 | **4** | — | **P-board**（刻意，見下）；`max_tool_calls_per_session`；花費改掛 `user_daily_cost_budget`（兩者見 §頂層 issue-leader 改掛） |
+| `repo_leader_cc` | 11 | 5 | P-board | — |
+| `repo_leader_pi` | 10 | 5 | P-board | `cost_budget`（非 CEL，見 §cost_budget） |
+| 執行期產生的 `ops_k8s` worker | 11 | 6 | P-board ＋ **P-kubectl**（只存在於動態 config） | P-path |
+| 執行期產生的 `implement_pi` worker | 12 | 6 | P-board ＋ **P-path**（只存在於動態 config；前綴每個 worker 不同，由派工當下的 worktree 算出） | P-kubectl、`cost_budget` |
+| 執行期產生的 `review_cc` worker | 11 | 5 | P-board | P-kubectl、P-path |
+| 執行期產生的 `explore_pi`／`researcher_pi` worker | 10 | 5 | P-board | P-kubectl、P-path、`cost_budget` |
+| 執行期產生的 `tracker_pi` worker | 9 | 5 | P-board | `read_only_os`（它要寫產物）、P-kubectl、P-path、`cost_budget` |
 
-⚠ **P-model 只掛在會派工的那幾層**（它管的是 `sys_session_send` 的 `args.model`）——worker 不
-派工，掛了也沒有事件會命中。
-
+<!-- retired-ok:start 下面這段是本節自己抓過的目視推導事故紀錄，必須點名當時那支 policy -->
 🔴 **這張表的每一格都必須用實跑產生器取得，⛔ 不可以目視推導。** 本節的第一版就是目視推導寫
 的，把動態 `ops_k8s` worker 標成「基本四支 ＋ P-model ＋ P-kubectl」——實跑
-`generate("ops_k8s", "claude-native", …)` 後才發現它**根本沒掛 P-model**（理由就是上一段）。
-這與本節要修的錯誤是同一類：**文件描述與實際 policy 組成不符，而且不會有任何 gate 報錯**。
+`generate("ops_k8s", "claude-native", …)` 後才發現它**根本沒掛 P-model**（P-model 只掛派工層，
+而且已於 2026-09-14 整支退役）。同一類事故第二次：README 曾把「唯讀 worker 省略 `os_env`」寫成
+A 類守線，實跑 `_worker_config()` 才發現唯讀 worker 一樣有 `os_env`（見 §已廢止的設計 第 6 條）。
+兩次都是：**文件描述與實際 policy 組成不符，而且不會有任何 gate 報錯**。
+<!-- retired-ok:end -->
 重跑指令（零副作用，寫進臨時目錄）：
 
 ```python
@@ -232,7 +251,8 @@ def counts(d):
     pol = d["guardrails"]["policies"]
     return len(pol), sorted(k for k, v in pol.items()
                             if v.get("function", {}).get("path", "").endswith("cel.cel_policy"))
-# 靜態三層讀 config.yaml；動態層先 gw.generate(purpose, harness, <tmpdir>) 再讀產出的 config.yaml
+# 靜態三層讀 config.yaml；動態層先 gw.generate(purpose, harness, <tmpdir>, **gw.sample_kwargs(purpose))
+# 再讀產出的 config.yaml（implement 沒帶 worktree 會被拒絕，sample_kwargs 補樣本路徑）
 ```
 
 ⛔ **頂層少的那一道是 `p_board_read_only`，這是刻意的，不是漏掛。** P-board 擋的是「對
@@ -411,7 +431,7 @@ dispatcher 在「命中了 repo、但沒有任何 hook 真的跑起來」時寫�
 | # | 防的東西 | 做法 |
 | --- | --- | --- |
 | 1 | `executor.model` 與 harness 不相容 | **寫檔前**呼叫 `model_override.model_family_mismatch()`。⚠ 實測這條路徑 omnigent **完全不驗**（家族檢查只掛在 `sys_session_send` 的 `args.model`），create 會成功，等 child 第一輪才爆成通用 `runner_error` |
-| 2 | `instructions:` 路徑失效 → **路徑字串變成 system prompt** | 只寫實體 `AGENTS.md`；寫完 `parse()` 驗 instructions 非空、含 marker、不像路徑字串 |
+| 2 | `instructions:` 路徑失效 → **路徑字串變成 system prompt**；共用片段沒串進去 | 只寫實體 `AGENTS.md`（模板的 `<!-- include: -->` 行換成 `_templates/_shared/<片段>.md` 全文）；寫完 `parse()` 驗 instructions 非空、含 marker、不像路徑字串、無殘留 include 標記 |
 | 3 | 檔名不是 `config.yaml` | 硬編檔名。⚠ 實測錯誤訊息是 `config.yaml not found in /tmp/tmpXXXX/agent`，完全誤導 |
 | 4 | `skills/` 有目錄無 `SKILL.md` → 靜默空 | 產生後驗 skills 數 == 模板預期數 |
 | 5 | ⛔ `skills_filter` 設 `none` | 它會發 `--setting-sources ""`，**壓掉 dispatcher 與所有 repo hooks** ⇒ 一律固定 `all` |
@@ -496,8 +516,10 @@ dispatcher 在「命中了 repo、但沒有任何 hook 真的跑起來」時寫�
 
 - **child 不繼承 parent 的 `guardrails.policies`** ⇒ 每個 worker 自帶完整 policy
   （產生器負責，驗收第 8 項對產生器輸出也跑 CEL 雙向測試）。
-- **唯讀 worker 完全省略 `os_env` block** ⇒ 四支 `sys_os_*` 一支都不註冊，這是 A 類 sound
-  的守線。
+- **唯讀 worker 的保證只有 `read_only_os` 一層**（比對工具名，A 類）。⚠ 唯讀 worker 的 config
+  **一樣有** `os_env` 區塊、`sys_os_*` 會註冊——本 README 舊版把「config 不寫 `os_env` ⇒ 不註冊」列為第二層 A 類守線，是
+  文件先於實作的錯誤描述，2026-09-14 實跑 `_worker_config()` 確認後裁決照實作改文件
+  （見 §已廢止的設計 第 6 條）。
 
 ## Guardrails
 
@@ -522,24 +544,32 @@ omnigent 的 venv，而且 `function.path` 打錯字會讓 worker 連 `Read` 都
 | 守線 | 掛在哪 | 擋什麼 |
 | --- | --- | --- |
 | `p_board_read_only` | 除 issue-leader 外**全部** | 任何提到 `.woow-issues/` 而**無法證明是唯讀**的指令（唯讀＝單一不串接、且以 `cat`/`less`/`head`/`tail`/`grep`/`rg`/`ls`/`wc`/`diff`/`git diff`/`git show` 開頭） |
-| `p_model_fast_tier_only` | 三層 leader | 對 `scout_pi` / `tracker` / `researcher` 派工未帶或帶了非快層 `args.model` |
 | `p_merge_no_agent_merge` | 全部 | forge CLI 的 `pr`／`pulls`／`mr merge` 子命令，或 `gh`／`glab` API、`curl` 直打 merge endpoint |
 | `p_approve_no_agent_signoff` | 全部 | 指令中**出現 `/approve` 字串**（不再限定工具名） |
 | `p_tag_no_agent_tag_push` | 全部 | `git push`＋tag 形態、`refs/tags/`、forge `release`、`git tag <name>` |
-| `p_kubectl_namespace_scope` | 僅 `ops_k8s_*` | 提到 `kubectl` 且：含串接／`-n` 出現多次／寫入 verb 但 ns 不在白名單／寫入 verb 但沒帶 `--context` |
+| `p_kubectl_namespace_scope` | 僅 `ops_k8s_*` | 提到 `kubectl` 且：含串接（`&&`／`\|\|`／`;`／`` ` ``／`$(`／換行；**pipe 只在第一段是唯讀 kubectl、且 pipe 之後沒有 kubectl 時放行**）／第一段 `-n` 出現多次／寫入 verb 但 ns 不在白名單／寫入 verb 但沒帶 `--context`。`--context docker-desktop` 整條免除，但**整條只能有一個 `kubectl`** |
+| `p_path_write_inside_worktree` | 僅 `implement_*` | 檔案工具（`sys_os_write`／`Edit`…）的 `path`／`file_path` 不以本 issue 的 worktree 為前綴（相對 workspace 或絕對形式）、或含 `..`。**比對結構化參數，A 類**；前綴由產生器在派工當下算出 |
 
 ### ⚠ 已知的刻意誤擋（fail loud，不放寬）
 
 | 被擋的合法操作 | 替代做法 | 為什麼不放寬 |
 | --- | --- | --- |
 | `grep -rn '/approve' docs/` | 搜尋字串去掉斜線：`grep -rn approve docs/` | 放寬就要回到「枚舉工具名」，那正是被繞過的原因 |
-| `kubectl ... get ... && echo done`（唯讀＋串接） | **拆成兩次 tool call** | 串接之後做什麼無法用 regex 證明 |
+| `kubectl ... get ... && echo done`（唯讀＋`&&` 串接） | **拆成兩次 tool call**（pipe 接 `grep`／`jq`／`tail` 已放行，不必拆） | 串接之後做什麼無法用 regex 證明 |
+| `kubectl exec … \| grep x`（exec 接 pipe） | 先單獨跑 `exec`，回報裡自己篩 | pipe 只放行第一段是**唯讀**動詞的；exec 是寫入類 |
+| `kubectl --context docker-desktop get … && kubectl --context docker-desktop logs …`（本機叢集、兩個 kubectl） | 拆成兩次 tool call | docker-desktop 例外只在整條一個 `kubectl` 時成立，否則 `… && kubectl --context woow-k3s delete …` 會整條滑過 |
+| `kubectl get pods \| grep -i delete` **放行**（不是誤擋，是刻意放） | — | pipe 之後不得再有 `kubectl`，所以後段的 `delete`／`-n` 只可能是 grep／jq 的參數，寫入動詞與 `-n` 重複的比對都只看第一段 |
 | `kubectl --context woow-k3s apply -f x.yaml` | 先 `--dry-run=server`；真要套用走 `deploy-stg` skill 或交給人 | manifest 內的 `metadata.namespace` 會覆蓋 `-n`，regex 看不到檔案內容 |
 | `git tag v1.0`（本機建 tag，未推） | 讀取用 `git tag -l` / `--list`；建 tag 交給人 | 建 tag 是發版動作的第一步 |
+| `git push origin 1032-v18-upgrade`／`git push origin HEAD:v2-x`（branch 名以 `<字>-v<數字>` 開頭、或 `HEAD:v…`） | branch 一律 `<type>/<issue-id>-…`（`chore/1032-v18-upgrade` 就過） | tag 形態是 `[\s:]["']?(<字>-)?v<數字>` 的字串比對；放寬 `v<數字>` 後面的邊界，每一種都會多一個真 tag 滑過的形狀（review F12，2026-09-14 裁決不放寬） |
+| `git fetch origin refs/tags/v1.7.6`（唯讀） | `git fetch origin --tags`／`git ls-remote --tags origin`／`git tag -l` | `refs/tags/` 出現即擋、不分讀寫——限定 push 語境就會漏掉 `git update-ref refs/tags/v1 HEAD` 這種不經 push、也不是 `git tag <name>` 的建 tag plumbing（forge 的 `gh api … git/refs` 另有一條分支擋，不受影響；突變 AS 驗這件事） |
 
 ⚠ `kubectl --context docker-desktop ...` **不再被擋**（FIX ROUND 2）：docker-desktop 是本
 機測試／開發用叢集，鐵律限定的是 woow-k3s 這個共用叢集。舊版不分 context，會毀掉
-`/woow-dev:k8s-dev-sandbox` 的 create／destroy／test 工作流。
+`/woow-dev:k8s-dev-sandbox` 的 create／destroy／test 工作流。2026-09-14（review F11）收緊：
+這個例外只在**整條只有一個 `kubectl`** 時成立——第二個 `kubectl` 不論帶什麼 context 都讓整條
+回到嚴格規則，否則 `--context docker-desktop … && kubectl --context woow-k3s delete …` 會滑過
+（`CEL_VECTORS` 有回歸向量）。
 
 ### 🔴 守線的強度分級（讀這段再決定要不要信任某條守線）
 
@@ -551,10 +581,9 @@ omnigent 的 venv，而且 `function.path` 打錯字會讓 worker 連 `Read` 都
 | 守線 | 為什麼可靠 |
 | --- | --- |
 | `read_only_os` | 比對**工具名**（`Write`/`Edit`/`sys_os_write`…），不看 shell 字串 |
-| **省略 `os_env`** | `sys_os_read/write/edit/shell` 四支**根本不註冊**——沒有這個工具就做不到 |
-| `p_model_fast_tier_only` | 讀的是 `sys_session_send` 的**結構化參數**，不是 shell 字串 |
 | `headless_subagent_purpose_guard` / `spawn_bounds` | 同上，結構化參數 |
 | `block_working_dir_changes` | 有自己的 shell 解析（非單一 regex），且只需判斷 `cd`/`git -C` 這種固定形狀 |
+| `p_path_write_inside_worktree`（僅 implement） | 比對檔案工具的 `path`／`file_path` **結構化參數**是否以 worktree 為前綴、是否含 `..`，不看 shell 字串。⚠ 它管的只是**檔案工具**那一側——shell 重導向寫檔（`echo x > …`、`sed -i`）沒有任何機器守線，見下方已知繞過向量 |
 | repo 的 `.claude/hooks/kubectl-ns-guard.py`（**被執行到之後**的判定） | 用 `shlex` 正確解析，剝 heredoc、認 `bash -c`、認 `--`；且 repo-lint 對帳白名單 |
 
 ⚠ **但它要先被執行到。** 在共同祖先 workspace 下，repo hook 只能透過 dispatcher 被呼叫，
@@ -585,6 +614,7 @@ shell 有太多等價寫法。它們擋得掉常見寫法，擋不住刻意規�
 | base64 解碼後由 stdin 送 body | `echo L2FwcHJvdmU= \| base64 -d \| tea comment 823 -F -` |
 | 檔案 body | `base64 -d /tmp/b.b64 > /tmp/b && tea comment 823 -F /tmp/b` |
 | `$'\x..'` hex 轉義 | `tea comment 823 $'\x2f\x61\x70\x70\x72\x6f\x76\x65'` |
+| shell 重導向寫檔（P-path 只看檔案工具的參數） | `echo x > WOOW/ecpay_odoo18/x.py`、`sed -i 's/a/b/' paas/woow_paas_platform/src/x.py` |
 
 `p_escape_obfuscated_command` 只便宜地攔掉**反斜線轉義**那一類（`kube\ctl`、`me\rge`、
 `pu\sh`）——因為那一招最常見且成本最低。其餘不追。
@@ -618,15 +648,15 @@ repo），而且完全不認 `tea`。所以 `p_tag_no_agent_tag_push` 自己對 
    Anthropic API，worker 直接不能跑。`enforce_sandbox` 的參數只有
    `sandbox_type / allow_network / write_paths / read_paths / env_passthrough`，
    **沒有** egress allowlist 可以替 LLM API 開洞。
-2. **會把「刻意省略 `os_env`」這個 sound 的守線反過來拆掉。** runner 套用 verdict 的
-   `_apply_sandbox_override_from_verdict` 會做 `if spec.os_env is None: spec.os_env =
-   OSEnvSpec()`——實測對 `researcher_via_pi` 套下去，`os_env` 從 `None` 變成一個完整的
-   `OSEnvSpec`。而「省略 `os_env` ⇒ 四支 `sys_os_*` 都不註冊」正是唯讀 worker 最強的那道
-   保證。等於為了加一層 best-effort，拆掉一層 sound 的。
+2. runner 套用 verdict 的 `_apply_sandbox_override_from_verdict` 會做
+   `if spec.os_env is None: spec.os_env = OSEnvSpec()`（實測對唯讀 researcher 套下去，`os_env`
+   變成一個完整的 `OSEnvSpec`）。⚠ 舊版 README 在此主張這會「拆掉唯讀 worker 不寫 `os_env`
+   的 sound 守線」——但實作上唯讀 worker 本來就有 `os_env`（2026-09-14 實跑確認，見 §已廢止的
+   設計 第 6 條），所以這一點**不再是否決理由**，留作紀錄。
 3. `sandbox: {type: none}` 搭 `allow_network: false` 會直接
    `ValueError: sandbox type 'none' cannot restrict network`。
 
-⇒ 唯讀 worker 的保證維持在 **A 類**：`read_only_os` ＋ **省略 `os_env`**。
+⇒ 唯讀 worker 的保證維持在 **A 類**：`read_only_os`（一層）。
 
 ### ⚠ `cost_budget` 只掛 claude 家族（claude-native／claude-sdk）
 
@@ -685,8 +715,8 @@ turn／tool call 都重建並重讀 store（`routes_hooks.py::_build_engine`）�
 `p_kubectl_namespace_scope` 的 namespace 白名單是**第五份副本**。權威三份由 repo-lint
 `kubectl-ns-whitelist-sync` 對帳（`CLAUDE.md` 表格、
 `docs/guides/deployment/shared-cluster-paas-scope-guard.md`、
-`.claude/hooks/kubectl-ns-guard.py`）；第四份在 `_workers/ops_k8s/AGENTS.md`，第五份在
-`build-bundles.py` 的 `K8S_ALLOWED_NAMESPACES`。**後兩份不在 repo-lint 對帳範圍內——改白
+`.claude/hooks/kubectl-ns-guard.py`）；第四份在 `_templates/ops_k8s/AGENTS.md`，第五份在
+`generate-worker.py` 的 `K8S_ALLOWED_NAMESPACES`。**後兩份不在 repo-lint 對帳範圍內——改白
 名單時五份都要一起改。**
 
 **權威守線是 repo 的 `.claude/hooks/kubectl-ns-guard.py`**（用 `shlex` 正確解析，且
@@ -698,7 +728,7 @@ shell 解析，認不出 `bash -c` 包一層或 script 檔裡的 kubectl，**已
 
 ## 驗收與突變測試的關係
 
-`--check` 有 19 項驗收。但**「全部 PASS」本身不代表驗收有效**——本 repo 已經抓到三次
+`--check` 有 22 項驗收。但**「全部 PASS」本身不代表驗收有效**——本 repo 已經抓到三次
 「檢查看起來在運作、其實沒驗到」的事故，三次都是同一個根因：**只看有沒有 `[FAIL]`，
 不看紅在哪**。
 
@@ -848,13 +878,85 @@ host filesystem（GHSA-p8rw-8qj3-hf33）。詳見 §`os_env.cwd`。
 
 ⛔ 不要重新引入 `anchor=` 或任何「縮範圍」參數。
 
+### 5. P-model CEL（`p_model_fast_tier_only`；FIX ROUND 1 起，2026-09-14 退役）
+
+原本掛在三層 leader 上，要求對 scout／tracker／researcher 派工必須顯式帶落在 `FAST_MODELS`
+名單內的 `args.model`。**廢止原因**（review 實跑）：它的 agent regex 只認
+`^(scout_pi|tracker|researcher)_via_(cc|pi)$`——那是靜態 sub-agent 時代的名字；worker 改成執行期
+產生後 `_safe_name()` 產的是 `explore_pi`／`tracker_pi`／`researcher_pi`，六個名字**零命中**，而
+兩步起法的 `sys_session_send(session_id=…)` 也未必帶 `agent` 欄位 ⇒ 這支 CEL **從未擋過任何事件**。
+驗收第 8 項的向量還在測 `scout_pi_via_cc` 這些舊名，所以雙向測試全綠——綠在一個沒人會送出的
+事件上。更矛盾的是 `FAST_MODELS` 全是 claude 系，而 ROSTER 給這三個角色的預設是
+`gpt-5.6-luna`／`terra`：若它真的活著，每次用預設派工都 DENY。
+
+裁決是退役而不是修：model 已由 `ROSTER` 在產生 config 時釘死，`args.model` 覆寫不是常規路徑，
+沒有第二層的必要。⛔ 不要重新引入——要限制 model 就改 `ROSTER` 那一格；驗收第 13 項的
+`RETIRED_TERMS` 已把 `P-model`／`FAST_MODELS`／`快層名單` 列為廢止詞彙。
+
+### 6. 「唯讀 worker 省略 `os_env`」敘述（FIX ROUND 0 起，2026-09-14 改正）
+
+README 與七份 worker 模板都曾把「唯讀 worker 省略 `os_env` ⇒ `sys_os_*` 四支不註冊」列為唯讀
+worker **最強**的 A 類保證，並以此為由之一否決 `enforce_sandbox`。**改正原因**：實跑
+`_worker_config("review"|"explore"|"researcher", …)`，三種唯讀 worker 的 config **都有** `os_env:`
+區塊（`_worker_config` 算了 `readonly` 卻沒用它）。這是文件先於實作、且沒有 gate 會紅的錯誤描述。
+裁決：照實作改文件——唯讀保證只有 `read_only_os` 一層（比對工具名，仍是 A 類）。
+`RETIRED_TERMS` 已把「省略 `os_env`」列為廢止詞彙，prompt 層零容忍。
+
+### 7. repo_leader 的「harness 自辨」段（2026-09-14 改為 build 蓋身分行）
+
+舊 prompt 要 agent 從 session metadata 猜自己是 `repo_leader_cc` 還是 `repo_leader_pi`，猜不到
+就標 blocked。**廢止原因**：兩份副本本來就是 `build-bundles.py` 從單一來源複製的，複製時蓋一行
+身分成本為零，而「猜不到就停」是自己製造的失敗模式（review F7）。現在來源檔留
+`identity:start／end` 佔位符，`repo_leader_prompt()` 換成身分行，驗收第 19 項驗副本真的蓋到。
+
+### 8. 「排程 tracker 做 stale 掃描」（從未實作，2026-09-14 改為按需 skill）
+
+兩份 leader prompt 曾寫 stale 掃描「由小時級 fresh-session tracker 排程」執行，但 bundle 裡沒有
+任何東西會建那個 scheduled task、tracker prompt 也沒有 stale 判準（review F14）。裁決：不排程，
+改成 issue-leader 的 `stale-sweep` skill，人叫才跑（N 預設 6 小時），掃完換 `blocked`＋留言＋
+重建看板。
+
+### 9. issue-leader 直接派 tracker／scout／researcher（2026-09-14 裁決收回）
+
+`issue-triage` skill 曾叫 issue-leader 自己派 `tracker_*` 查重、`scout_pi_*` 補資訊，與頂層
+prompt「你只派工給兩個 repo_leader」互斥（review F9）。裁決：issue-leader 只分配 issue，
+**所有** worker 由 repo_leader 產生；同時 repo-leader 不再收到 issue-triage／board-reconcile／
+stale-sweep 的副本（`REPO_LEADER_SKILLS` 只列 dispatch-policy 與 pr-merge-gate）。
+
+### 10. P-kubectl 把 pipe 當串接一律 DENY、`--context docker-desktop` 出現即整條放行（FIX ROUND 1／2 起，2026-09-14 改）
+
+舊版 `SHELL_CHAIN_RE` 含 `\|`，所以 `kubectl get pods -n paas-system -o json | jq …` 這種最常見的唯讀寫法
+一律被擋，ops_k8s prompt 只能教「拆成兩次 tool call」——但 `jq` 那一半根本沒有輸出可接（review F11）。
+同一支 CEL 又把「指令任一處出現 `--context docker-desktop`」當成整條放行，`… && kubectl --context
+woow-k3s delete …` 接在後面就滑過。改法：pipe 在「第一段是唯讀 kubectl、且 pipe 之後沒有 kubectl」時放行
+（寫入動詞／`-n` 重複／`-f` 的比對改成只看第一段），其餘串接不變；docker-desktop 例外改成「整條只有一個
+`kubectl`」才成立。⛔ `SHELL_CHAIN_RE`（含 pipe）仍是 P-board 用的，不要拿它回去給 kubectl。
+`RETIRED_TERMS` 把「、pipe、反引號」列為廢止詞彙（那是舊版 ops_k8s prompt 把 pipe 列進串接的寫法）。
+
+### 11. 八份 worker 模板各自手抄鐵律／守線強度／跨 repo／回報段（FIX ROUND 0 起，2026-09-14 改為 `_shared/` 片段）
+
+約 3.6 KB 逐字相同的段落在八份 `_templates/<role>/AGENTS.md` 各存一份，已經漂出變體（ops_k8s 的鐵律結構不同、
+唯讀角色的回報段講 pytest collected cases、每個角色的守線清單都列只掛在 ops_k8s 的 P-kubectl；review F10）。
+改法：片段抽到 `_templates/_shared/<片段>.md`，模板用 `<!-- include: <片段> -->` 引用，`generate-worker.py`
+複製 AGENTS.md 時展開；驗收第 20 項對所有模板（含暫停使用的兩份）解析 include 並抓孤兒片段。片段裡提到只掛在
+部分角色的 policy 要寫明「只掛在誰身上」。
+
+### 12. 「進 repo root 只為建 worktree、只在 worktree 裡改檔」純靠紀律（#1099 起，2026-09-14 補機器守線）
+
+#1099 把 worktree 改由 implement worker 自建，`block_working_dir_changes.allowed_dirs` 因此含 repo root，
+而 `worktree_guard` 的真規則只是「絕對路徑或含 `..` 一律 DENY」——相對路徑寫到 sibling repo
+（`WOOW/ecpay_odoo18/x.py`）或 repo root 的主 checkout（`paas/woow_paas_platform/src/x.py`）兩條都放行，
+prompt 只能誠實寫成紀律規則（review F6）。改法：產生器在派工當下用 worktree 相對 workspace 的路徑多掛一支
+`p_path_write_inside_worktree`（比對檔案工具的 `path`／`file_path`，A 類），implement 沒帶 worktree 直接拒絕產生。
+shell 重導向那一側仍是紀律（記在 `known_gap`）。`RETIRED_TERMS` 把「「只在 worktree 裡改檔」是紀律規則」列為廢止詞彙。
+
 ## 機器相關的值
 
 **產生出來的 bundle 裡沒有任何機器相關的絕對路徑**——`os_env.cwd` 一律是 `.`（理由見
 §`os_env.cwd`）。換機器不需要改 `build-bundles.py`。
 
 唯一與本機綁定的是 worker prompt 裡舉例用的跨 repo 唯讀路徑（`/home/elmo/woow-repos/<repo>/…`
-這種 `grep` 範例），那些在 `_workers/*/AGENTS.md` 的來源池裡，改了重跑產生器即可。
+這種 `grep` 範例），那些在 `_templates/*/AGENTS.md` 與 `_templates/_shared/*.md` 的來源池裡，改了重跑產生器即可。
 
-快層 model 名單同理，只有 `build-bundles.py` 的 `FAST_MODELS` 一處；model 名會隨 CLI／
-catalog 版本漂移，當下可用的用 `sys_list_models` 查。
+快層 model 同理，釘在 `generate-worker.py` 的 `ROSTER`（scout／tracker／researcher 那幾格）；
+model 名會隨 CLI／catalog 版本漂移，當下可用的用 `sys_list_models` 查。

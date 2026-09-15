@@ -1,45 +1,50 @@
 #!/usr/bin/env python3
-"""產生 woow multi-agent bundle 的 16 個 thin shell 與全部 config.yaml，並自檢。
+"""產生三份靜態 bundle config（issue-leader ＋ 兩份 repo-leader）並跑 22 項驗收。
 
 用法::
 
     python3 .omnigent/build-bundles.py           # 重產（generate）
     python3 .omnigent/build-bundles.py --check   # 只驗收，不寫檔（CI／PR 用）
 
-樹形：`woow-issue-leader` → 2 個 `repo_leader` → 各 8 個 worker thin shell。
-thin shell 的 `config.yaml`、`AGENTS.md` 與 `skills/` **全部都是實體檔**，由本 script 從
-`_workers/<worker>/` 的單一來源**複製**出來。⛔ 不要手改副本——改來源再重跑本 script。
+樹形：`woow-issue-leader`（claude-sdk）→ `agents/repo_leader_cc`／`repo_leader_pi`。
+worker **不在這裡產生**——它們在執行期由 `woow-issue-leader/generate-worker.py` 從
+`_templates/<role>/` 寫出（見該檔 docstring 與 README §worker 是執行期產生的）。
+本檔產出的全是**實體檔**：三份 `config.yaml`、repo-leader 的 `AGENTS.md`（從
+`_shared/repo_leader/AGENTS.md` 複製並蓋上身分行）、repo-leader 的 `skills/`（只複製
+REPO_LEADER_SKILLS 列的那幾個）、以及 claude-native 層的 `hooks/`。⛔ 不要手改副本——改來源
+再重跑本 script；drift 由 `--check` 第 0 項對帳。
 
-⚠ 本檔是全樹**所有** `config.yaml` 與所有 CEL 運算式的唯一來源。config.yaml 是產物，
-   ⛔ 不要手改；改這裡再重跑。
+⚠ CEL 運算式與 policy 片段住在 generate-worker.py（執行期拿得到的那一邊），本檔 import 過來
+   用，真相只有一份。
 
 ── 為什麼寫成這樣（每一條都是實測過的靜默失敗，不要「優化」掉）────────────────
 
 1. **prompt 只能用同目錄的 `AGENTS.md` 實體檔承載**。⛔ 禁止改寫成
    `instructions: <相對路徑>`：`spec/parser.py::_read_contained_file` 的 containment 檢查
    失敗時會回 None，接著**整條路徑字串被當成 system prompt**，而且不報錯。
-2. **每個 thin shell 的 `AGENTS.md` 與 `skills/` 都是實體副本，不是 symlink**。
-   `omnigent run <目錄>` 的打包器不解 symlink（symlink 目錄會被 `rglob` 跳過，整批 skills
-   **靜默**消失）⇒ 版控裡一條 symlink 都不能有。驗收第 7／12 項機器強制。
-3. **每個 thin shell 都必須列進上層 `tools.agents`**——這是第 2 條的安全網：
-   `tools.agents` 引用不存在的 sub-agent 會 **loud fail**（`spec/validator.py`），把靜默
-   消失變成明確錯誤。
-4. **`tools.agents` 列的是 YAML `name`，不是資料夾名**。`name` 省略時是 `None`、
-   **不會** fallback 成目錄名，那個 sub-agent 就永遠無法被引用。本檔一律讓
-   資料夾名 == `name`，把這個坑直接填掉。
-5. **agent `name` 全樹唯一**，正則 `^[a-zA-Z0-9_-]+$`。
-6. **skill frontmatter `name` 正則是 `^[a-z0-9-]+$`（不允許底線）**，與 agent name 規則
+2. **所有副本都是實體檔，不是 symlink**。`omnigent run <目錄>` 的打包器不解 symlink
+   （symlink 目錄會被 `rglob` 跳過，整批 skills **靜默**消失）⇒ 版控裡一條 symlink 都不能有。
+   驗收第 7／12 項機器強制。
+3. **agent `name` 全樹唯一**，正則 `^[a-zA-Z0-9_-]+$`；本檔一律讓資料夾名 == `name`。
+4. **skill frontmatter `name` 正則是 `^[a-z0-9-]+$`（不允許底線）**，與 agent name 規則
    不同。skill 名**一律取自 frontmatter，目錄名被忽略**。
-7. **來源池的 skill name 必須全域唯一**（所以一律加 worker 前綴）——
+5. **來源池的 skill name 必須全域唯一**（所以 worker skill 一律加角色前綴）——
    `discover_host_skills` 是 first-wins 去重，同名後者會被吃掉。
-8. **`skills:` 一律固定寫 `all`**。⛔ 禁止名單模式：claude-native 下形同 `all`、
+6. **`skills:` 一律固定寫 `all`**。⛔ 禁止名單模式：claude-native 下形同 `all`、
    **不強制**；pi 下卻會下 `--no-skills` **把 host skill 一併關掉**——跨 harness 行為相反。
-9. **child 不繼承 parent 的 `guardrails.policies`**（實測：create body 只帶
+7. **child 不繼承 parent 的 `guardrails.policies`**（實測：create body 只帶
    agent_id/parent_session_id/title/sub_agent_name）⇒ **每個 worker 自帶完整 policy**，
    不能靠 leader 罩下來。
-10. **`os_env.cwd` 不決定 harness process cwd**，它只是 server 模式的**邊界**與
-    `sys_os_*` / `config_path` containment 的錨點。唯讀 worker 完全**省略** os_env block
-    ——省略時 `sys_os_read/write/edit/shell` 四支一支都不註冊，唯讀幾乎免費。
+8. **`os_env.cwd` 不決定 harness process cwd**，它只是 server 模式的**邊界**與
+   `sys_os_*` / `config_path` containment 的錨點；一律寫 `.`（驗收第 11 項）。
+   ⚠ 唯讀 worker 一樣有 os_env 區塊——唯讀保證只靠 `read_only_os` 一層（2026-09-14 裁決）。
+9. **prompt 裡「你身上的機器守線」表宣稱的每條 policy 都必須真的掛在同層 config**——
+   散文與 policy 組成漂移不會有任何錯誤（review F5：頂層 prompt 曾宣稱 blast_radius，config
+   沒有）。驗收第 18 項機器強制。
+10. **worker 模板的共用片段由產生器展開**——八份 `_templates/<role>/AGENTS.md` 逐字相同的段落
+   住在 `_templates/_shared/<片段>.md`，模板用 `<!-- include: <片段> -->` 引用，
+   `generate-worker.py` 複製時展開（review F10）。驗收第 20 項對**所有**模板（含暫停使用的
+   implementer_cc／verifier_pi，產生器平常不會跑到它們）解析 include、抓孤兒片段。
 """
 
 from __future__ import annotations
@@ -48,6 +53,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -88,7 +94,6 @@ GEN = _load_generator()
 # 以下全部轉指向 generate-worker.py 的定義（⛔ 不要在本檔重新定義，那就是第二份真相）
 SHELL_TOOLS = GEN.SHELL_TOOLS
 WRITE_TOOLS = GEN.WRITE_TOOLS
-FAST_MODELS = GEN.FAST_MODELS
 K8S_ALLOWED_NAMESPACES = GEN.K8S_ALLOWED_NAMESPACES
 OS_ENV_BLOCK = GEN.OS_ENV_BLOCK
 ASK_TIMEOUT = GEN.ASK_TIMEOUT
@@ -96,7 +101,7 @@ ROSTER = GEN.ROSTER
 P_SAFETY, P_COST = GEN.P_SAFETY, GEN.P_COST
 P_SAFETY_LEADER, P_COST_DAILY = GEN.P_SAFETY_LEADER, GEN.P_COST_DAILY
 P_MERGE, P_APPROVE, P_TAG, P_ESCAPE = GEN.P_MERGE, GEN.P_APPROVE, GEN.P_TAG, GEN.P_ESCAPE
-P_BOARD, P_MODEL, P_KUBECTL = GEN.P_BOARD, GEN.P_MODEL, GEN.P_KUBECTL
+P_BOARD, P_KUBECTL = GEN.P_BOARD, GEN.P_KUBECTL
 P_LEADER_ORCH, P_BLAST, P_READONLY = GEN.P_LEADER_ORCH, GEN.P_BLAST, GEN.P_READONLY
 P_WORKTREE = GEN.P_WORKTREE
 # ⚠ 沒有 P_WORKDIR：#1092 起 block_working_dir_changes 改由 `GEN._p_workdir(worktree)` 在
@@ -106,14 +111,39 @@ DEFAULT_SITE_PACKAGES = GEN.DEFAULT_SITE_PACKAGES
 
 
 
-# ── worker 名冊 ──────────────────────────────────────────────────────────────
-# key = `_workers/` 底下的來源目錄名；`short` = thin shell 名字的前半。
+# ── repo-leader 名冊 ─────────────────────────────────────────────────────────
 #: 兩份 repo-leader。職責相同，差別只有 harness／額度池／vendor 方向。
 #: model 與 effort 的真相在 generate-worker.py 的 ROSTER["repo-leader"]。
 LEADERS = {
     "repo_leader_cc": {"harness": "claude-native", "via": "cc", "permission_mode": "auto"},
     "repo_leader_pi": {"harness": "pi", "via": "pi", "permission_mode": None},
 }
+
+#: repo-leader 拿到的 skill（issue-leader `skills/` 的**子集**）。issue-triage、board-reconcile、
+#: stale-sweep 是 issue-leader 專屬（分流、寫看板、掃 stale）；複製給 repo-leader 只會讓它讀到
+#: 「派工後結束回合」「只有你能寫看板」這種對它錯的指令（review F9，2026-09-14 裁決：
+#: issue-leader 只分配 issue、不產生 worker；worker 一律由 repo-leader 產生）。
+#: ⚠ `skills/` 目錄本身必須存在——否則不發 --plugin-dir，hooks 就一起沒了。
+REPO_LEADER_SKILLS = ["dispatch-policy", "pr-merge-gate"]
+
+#: repo-leader 的身分行（review F7）：兩份副本由本檔從單一來源複製，複製時蓋上身分，
+#: 取代舊的「自己從 session metadata 猜是 cc 還是 pi、猜不到就標 blocked」。
+IDENTITY_START = "<!-- identity:start -->"
+IDENTITY_END = "<!-- identity:end -->"
+IDENTITY_LINE = {
+    "repo_leader_cc": "你是 **repo_leader_cc**，跑在 `claude-native`，吃 Claude 額度池。",
+    "repo_leader_pi": "你是 **repo_leader_pi**，跑在 `pi`，吃 pi 額度池。",
+}
+
+
+def repo_leader_prompt(leader: str) -> str:
+    """repo-leader 的 AGENTS.md：單一來源 ＋ 蓋上身分行。驗收第 19 項驗副本真的蓋到了。"""
+    src = (SHARED_DIR / "repo_leader" / "AGENTS.md").read_text()
+    start, end = src.find(IDENTITY_START), src.find(IDENTITY_END)
+    if start < 0 or end < start:
+        raise RuntimeError("_shared/repo_leader/AGENTS.md 缺 identity:start／identity:end 佔位符")
+    end += len(IDENTITY_END)
+    return src[:start] + IDENTITY_LINE[leader] + src[end:]
 
 
 def _executor(harness: str, permission_mode: str | None, *,
@@ -158,7 +188,7 @@ def leader_config(leader: str) -> str:
     harness = str(cfg["harness"])
     model, effort = ROSTER["repo-leader"]["models"][harness]
     pol = ["guardrails:", f"  ask_timeout: {ASK_TIMEOUT}", "  policies:"]
-    body = P_LEADER_ORCH + [P_BOARD, P_MODEL, P_MERGE, P_APPROVE, P_TAG, P_ESCAPE] + P_SAFETY
+    body = P_LEADER_ORCH + [P_BOARD, P_MERGE, P_APPROVE, P_TAG, P_ESCAPE] + P_SAFETY
     if harness == "claude-native":
         body.append(P_COST)
     return "\n".join([
@@ -190,7 +220,7 @@ def issue_leader_config() -> str:
     # ⚠ 頂層是長時間運作的單一 session ⇒ 安全網用 P_SAFETY_LEADER（不含整 session 累計的
     #    max_tool_calls_per_session）、花費用 P_COST_DAILY（owner 當日總額，每天歸零），
     #    理由見 generate-worker.py 該兩個常數的註解。repo-leader／worker 仍用 per-session 版。
-    body = (P_LEADER_ORCH + [P_MODEL, P_MERGE, P_APPROVE, P_TAG, P_ESCAPE]
+    body = (P_LEADER_ORCH + [P_MERGE, P_APPROVE, P_TAG, P_ESCAPE]
             + P_SAFETY_LEADER + [P_COST_DAILY])
     # ⛔ 頂層 leader 的 harness 不可以是任何 `*-native`——Omnigent Web UI 的
     #    Agents → Custom agents 子選單會把它**整個過濾掉**（實測：同一組實驗只差
@@ -289,6 +319,25 @@ def _copy_tree(dest: Path, source: Path, *, check: bool, diffs: list[str]) -> No
         target.write_bytes(src_file.read_bytes())
 
 
+def _copy_skills(dest: Path, source: Path, names: list[str], *,
+                 check: bool, diffs: list[str]) -> None:
+    """只複製 `source` 底下 `names` 列的 skill 目錄；`dest` 裡多餘的 skill 目錄算 drift。"""
+    for name in names:
+        if not (source / name / "SKILL.md").is_file():
+            raise RuntimeError(f"REPO_LEADER_SKILLS 指到不存在的 skill：{source / name}")
+    if check:
+        have = {q.name for q in dest.iterdir() if q.is_dir()} if dest.is_dir() else set()
+        for extra in sorted(have - set(names)):
+            diffs.append(f"{(dest / extra).relative_to(OMNIGENT_DIR.parent)}"
+                         "（多餘 skill，不在 REPO_LEADER_SKILLS）")
+    elif dest.is_dir():
+        for extra in dest.iterdir():
+            if extra.is_dir() and extra.name not in names:
+                shutil.rmtree(extra)
+    for name in names:
+        _copy_tree(dest / name, source / name, check=check, diffs=diffs)
+
+
 def build(*, check: bool = False) -> list[str]:
     """產生三份 config 與 repo-leader 的 prompt／skills／hooks 副本。
 
@@ -300,12 +349,12 @@ def build(*, check: bool = False) -> list[str]:
     for leader in LEADERS:
         base = LEADER_DIR / "agents" / leader
         _write(base / "config.yaml", leader_config(leader), check=check, diffs=diffs)
-        _copy_file(base / "AGENTS.md", SHARED_DIR / "repo_leader" / "AGENTS.md",
-                   check=check, diffs=diffs)
+        _write(base / "AGENTS.md", repo_leader_prompt(leader), check=check, diffs=diffs)
         # repo-leader 自己也需要 skills/ ＋ hooks/：
         #   `skills/` 存在才會發 --plugin-dir，hooks/hooks.json 才會被 claude 讀到
-        #   （兩者缺一不可，見 inner/bundle_skills.py）。
-        _copy_tree(base / "skills", LEADER_DIR / "skills", check=check, diffs=diffs)
+        #   （兩者缺一不可，見 inner/bundle_skills.py）。只複製 REPO_LEADER_SKILLS。
+        _copy_skills(base / "skills", LEADER_DIR / "skills", REPO_LEADER_SKILLS,
+                     check=check, diffs=diffs)
         if LEADERS[leader]["harness"] == "claude-native":
             _copy_tree(base / "hooks", LEADER_DIR / "hooks", check=check, diffs=diffs)
     return diffs
@@ -361,14 +410,6 @@ def _write_ev(path: str, key: str = "file_path", name: str = "Edit") -> dict:
             "data": {"name": name, "arguments": {key: path}}}
 
 
-def _send(agent: str, args: dict | None = None) -> dict:
-    arguments: dict = {"agent": agent, "title": "t"}
-    if args is not None:
-        arguments["args"] = args
-    return {"type": "tool_call", "target": "sys_session_send",
-            "data": {"name": "sys_session_send", "arguments": arguments}}
-
-
 CEL_VECTORS: dict[str, dict[str, list]] = {
     # ⚠ 🔴 標記的向量＝FIX ROUND 1 覆核者**實跑證明可繞過**的 payload。它們現在是回歸
     #    測試：任何一條再度回到 ALLOW，第 8 項就會紅。
@@ -412,25 +453,6 @@ CEL_VECTORS: dict[str, dict[str, list]] = {
              "data": {"name": "Edit", "arguments": {}}},
             {"type": "tool_call", "target": "Read",
              "data": {"name": "Read", "arguments": {"file_path": ".woow-issues/board.md"}}},
-        ],
-    },
-    "p_model_fast_tier_only": {
-        "deny": [
-            _send("scout_pi_via_cc", {"purpose": "explore"}),          # 沒帶 model
-            _send("scout_pi_via_cc"),                                   # 連 args 都沒有
-            _send("tracker_via_pi", {"purpose": "triage"}),
-            _send("researcher_via_cc", {"purpose": "search", "model": "claude-opus-5"}),
-            _send("scout_pi_via_pi", {"purpose": "explore", "model": "opus"}),
-        ],
-        "allow": [
-            _send("scout_pi_via_cc", {"purpose": "explore", "model": "claude-haiku-4-5"}),
-            _send("tracker_via_pi", {"purpose": "triage", "model": "claude-sonnet-5"}),
-            _send("researcher_via_cc", {"purpose": "search",
-                                        "model": "databricks-claude-haiku-4-5"}),
-            _send("impl_cc_via_cc", {"purpose": "implement"}),
-            _send("ver_pi_via_cc", {"purpose": "review"}),
-            _send("ops_k8s_via_pi", {"purpose": "deploy"}),
-            _shell("echo hi"),
         ],
     },
     "p_merge_no_agent_merge": {
@@ -519,9 +541,22 @@ CEL_VECTORS: dict[str, dict[str, list]] = {
             _shell('git push origin "v1.7.6"'),
             _shell("git push origin 'v1.7.6'"),
             _shell('git push origin "operator-v2.0.1"'),
+            # ⚠ 刻意誤擋（review F12，2026-09-14 裁決不放寬）：branch 名長得像 tag、唯讀 fetch 帶
+            #    refs/tags/。列成 deny 向量是讓這個取捨**被測到**——哪天有人放寬 regex，這裡會講出來。
+            #    替代寫法在 deny 訊息與 README「已知的刻意誤擋」表。
+            _shell("git push origin 1032-v18-upgrade"),
+            _shell("git push origin HEAD:v2-x"),
+            _shell("git fetch origin refs/tags/v1.7.6"),
+            # `refs/tags/` 不分讀寫地擋，換來的是這條 plumbing 建 tag 也被擋（限定 push 語境就會漏）
+            _shell("git update-ref refs/tags/v1.7.6 HEAD"),
         ],
         "allow": [
             _shell("git push origin develop"),
+            # F12 的替代寫法必須放行：branch 用 <type>/<issue-id>-… 形式、讀 tag 不寫 refs/tags/
+            _shell("git push -u origin feat/1032-odoo18-v2-cutover"),
+            _shell("git push origin chore/1032-v18-upgrade"),
+            _shell("git fetch origin --tags"),
+            _shell("git ls-remote --tags origin"),
             _shell("git push -u origin feat/omnigent-agent-bundles"),
             _shell("git push origin fix/823-cp12"),
             _shell("git push origin release/v1.7.6"),   # 這是 branch，不是 tag
@@ -552,6 +587,51 @@ CEL_VECTORS: dict[str, dict[str, list]] = {
             _shell("sed -e 's/a\\tb/x/' f.txt"),
             _shell("kubectl --context woow-k3s get pods -n paas-system"),  # 有字根但無轉義
             _shell("git push origin develop"),
+        ],
+    },
+    "p_path_write_inside_worktree": {
+        # 只掛 implement；前綴用 generate-worker.py 的 SELF_CHECK_* 樣本——驗收第 8 項的
+        # implement worker 就是用那組路徑產生的（`_generated_worker_specs` → `sample_kwargs`）。
+        "deny": [
+            # 🔴 review F6 的向量：相對、無 `..`、別的 repo——舊的兩條守線（worktree_guard／
+            #    block_working_dir_changes）都放行
+            _write_ev("WOOW/ecpay_odoo18/x.py", key="path", name="sys_os_write"),
+            # repo root 的主 checkout（「進 repo root 只為建 worktree」原本只是紀律規則）
+            _write_ev("paas/woow_paas_platform/src/x.py", key="path", name="sys_os_write"),
+            _write_ev("paas/woow_paas_platform/src/x.py", key="path", name="sys_os_edit"),
+            # 前綴對了但用 `..` 逃出去
+            _write_ev("paas/wt-selfcheck/../woow_paas_platform/src/x.py", key="path", name="sys_os_write"),
+            # 前綴只是子字串、不是目錄邊界
+            _write_ev("paas/wt-selfcheck2/src/x.py", key="path", name="sys_os_write"),
+            _write_ev("paas/wt-selfcheck-old/x.py", key="path", name="write"),
+            # 以 worktree 自己為基準的寫法（基準其實是 workspace，這樣寫會落到 workspace 根）
+            _write_ev("src/x.py", key="path", name="sys_os_write"),
+            _write_ev("../x.py", key="path", name="edit"),
+            # 絕對路徑指到別處（claude-native 的 file_path 形式）
+            _write_ev("/home/elmo/woow-repos/paas/woow_paas_platform/src/x.py", key="file_path", name="Edit"),
+            _write_ev("/tmp/x", key="file_path", name="Write"),
+            _write_ev("/home/elmo/woow-repos/paas/wt-selfcheck/../woow_paas_platform/x.py",
+                      key="file_path", name="Edit"),
+        ],
+        "allow": [
+            _write_ev("paas/wt-selfcheck/src/x.py", key="path", name="sys_os_write"),
+            _write_ev("paas/wt-selfcheck/src/x.py", key="path", name="sys_os_edit"),
+            _write_ev("./paas/wt-selfcheck/docs/a.md", key="path", name="write"),
+            # 絕對形式的 worktree 前綴：本條放行（worktree_guard 另外會擋絕對路徑，兩條各自獨立）
+            _write_ev("/home/elmo/woow-repos/paas/wt-selfcheck/src/x.py", key="file_path", name="Edit"),
+            # 非寫入工具不管（唯讀跨 repo 是允許的）
+            {"type": "tool_call", "target": "Read",
+             "data": {"name": "Read", "arguments": {"file_path": "WOOW/ecpay_odoo18/x.py"}}},
+            _shell("cat WOOW/ecpay_odoo18/x.py"),
+            # 欄位缺席時不可 DENY（與 P-board 同款）
+            {"type": "tool_call", "target": "Edit",
+             "data": {"name": "Edit", "arguments": {}}},
+        ],
+        # ⚠ shell 重導向那一側**沒有機器守線**——P-path 只看工具的結構化參數。prompt 把「只在
+        #    worktree 裡改檔」在這一側寫成紀律規則。
+        "known_gap": [
+            _shell("echo x > WOOW/ecpay_odoo18/x.py"),
+            _shell("sed -i 's/a/b/' paas/woow_paas_platform/src/x.py"),
         ],
     },
     "p_kubectl_namespace_scope": {
@@ -589,7 +669,17 @@ CEL_VECTORS: dict[str, dict[str, list]] = {
             # 認不出來的 context 一律走嚴格分支（fail-closed，不是比對 woow-k3s 子字串）
             _shell("kubectl --context woow-k3s-prod delete pod x -n gitea"),
             _shell("kubectl --context some-unknown-cluster delete pod x -n gitea"),
-
+            # 🔴 review F11：pipe 放行之後**仍必須擋**的形狀
+            _shell("kubectl --context woow-k3s get pods -o name -n paas-system | xargs kubectl --context woow-k3s delete -n paas-system"),
+            _shell("kubectl --context woow-k3s get cm x -o yaml -n paas-system | kubectl --context woow-k3s apply -f -"),
+            _shell("kubectl --context woow-k3s exec pod -n paas-system -- cat /etc/x | grep y"),   # exec 是寫入類
+            _shell("echo x | kubectl --context woow-k3s get pods -A"),                            # 第一段不是 kubectl
+            _shell("kubectl --context woow-k3s delete pod x -n paas-system | grep -v get"),        # 第一段有寫入動詞
+            _shell("kubectl --context woow-k3s get pods -A || kubectl --context woow-k3s delete pod x -n gitea"),  # `||` 不是 pipe
+            # 🔴 review F11：docker-desktop 出現不再整條放行——第二個 kubectl 讓整條回到嚴格規則
+            _shell("kubectl --context docker-desktop get pods && kubectl --context woow-k3s delete pod x -n gitea"),
+            _shell("kubectl --context docker-desktop get pods; kubectl delete pod x -n gitea"),
+            _shell("kubectl --context docker-desktop get pods -o name | xargs kubectl --context woow-k3s delete -n gitea"),
         ],
         "allow": [
             _shell("kubectl --context woow-k3s get pods -A"),
@@ -611,6 +701,14 @@ CEL_VECTORS: dict[str, dict[str, list]] = {
             _shell("kubectl --context docker-desktop apply -f x.yaml -n dev-sandbox-abc"),
             _shell("kubectl --context woow-k3s logs pod -n gitea"),
             _shell("kubectl --context woow-k3s top pods -n longhorn-system"),
+            # 🔴 review F11：唯讀 kubectl 接 pipe 放行（第一段唯讀、pipe 之後沒有 kubectl）
+            _shell("kubectl --context woow-k3s get pods -n paas-system -o json | jq '.items[].metadata.name'"),
+            _shell("kubectl --context woow-k3s get pods -A | grep -i delete"),          # 後段的 delete 是 grep 參數
+            _shell("kubectl --context woow-k3s get pods -n paas-system | grep -n foo"),  # 後段的 -n 不算重複
+            _shell("kubectl --context woow-k3s logs deploy/x -n paas-stg-system --tail=200 | tail -50"),
+            _shell("kubectl --context woow-k3s describe pod x -n gitea | head -40"),     # 跨 ns 唯讀盤點照放
+            _shell("kubectl --context woow-k3s get events -n paas-system | grep -i exec | wc -l"),  # 多段 pipe
+            _shell("kubectl --context docker-desktop get pods -A | grep x"),
         ],
     },
 }
@@ -827,6 +925,17 @@ def run_checks() -> int:
     # 17：UI picker 過濾——選不到就等於這個 agent 不存在，而且靜默。
     r.guard("17. 頂層 leader 的 harness 不得是 *-native（UI picker 會過濾掉）",
             lambda: _check_top_leader_harness_pickable(spec))
+    # 18：prompt 的「你身上的機器守線」表 ⊆ 同層 config——散文與 policy 組成漂移不會有任何
+    #     錯誤（review F5：頂層 prompt 宣稱 blast_radius，config 裡沒有）。
+    r.guard("18. leader prompt 的守線表宣稱的 policy 都掛在同層 config",
+            lambda: _check_prompt_guard_table(nodes))
+    # 19：repo-leader 副本必須蓋上身分行、不留佔位符（review F7）。
+    r.guard("19. repo-leader 副本已蓋身分行（無佔位符）",
+            lambda: _check_repo_leader_identity(nodes))
+    # 20：模板的共用片段——產生器只會展開 ROSTER 用到的模板，暫停使用的兩份沒人驗；片段沒人引用
+    #     也不會有任何錯誤（review F10）。
+    r.guard("20. 模板 include 片段全部可解析、無殘留、無孤兒（含暫停使用的模板）",
+            _check_template_includes)
 
     print()
     print(f"總計：{r.failed} 項 FAIL" if r.failed else "總計：全部 PASS")
@@ -849,7 +958,8 @@ def _generated_worker_specs(spec_mod) -> list:
                 continue
             for harness in templates:
                 out = Path(td) / f"{purpose}-{harness}"
-                GEN.generate(purpose, harness, out)
+                # implement 沒有 worktree 會被產生器拒絕 ⇒ 用 SELF_CHECK_* 樣本（P-path 向量對著它寫）
+                GEN.generate(purpose, harness, out, **GEN.sample_kwargs(purpose))
                 specs.append(spec_mod.parse(out, expand_env=False))
     return specs
 
@@ -895,6 +1005,11 @@ def _check_cel(nodes) -> tuple[bool, str]:
     if missing:
         # ⛔ 沒有向量的 CEL policy 直接判 FAIL：守線 fail-OPEN，沒測等於不存在。
         bad.append(f"缺雙向測試向量: {missing}")
+    orphan = sorted(set(CEL_VECTORS) - set(exprs))
+    if orphan:
+        # ⛔ 反方向也要抓：有向量卻沒有 policy＝守線被拔掉或改名了。舊版只比「樹上有的 policy
+        #    有沒有向量」，把 P-kubectl 從 ops_k8s 拔掉時第 8 項照樣全綠（2026-09-14 補）。
+        bad.append(f"向量對應的 policy 不在任何一層（守線被拔掉或改名？）: {orphan}")
 
     for name, expr in sorted(exprs.items()):
         if name not in CEL_VECTORS:
@@ -1112,9 +1227,19 @@ def _check_upload_path() -> tuple[bool, str]:
 
 #: 已廢止的設計詞彙：出現在 L1／L2 非歷史區就是錯的現行敘述。
 RETIRED_TERMS = ["symlink", "mode 120000", "run-leader", "--rewrite-cwd",  # legacy-ok
-                 "thin shell", "thin_shell", "tools.agents"]  # legacy-ok
+                 "thin shell", "thin_shell", "tools.agents",  # legacy-ok
+                 # 2026-09-14 退役的 P-model 與它的名單／「省略 os_env」敘述（README §已廢止 第 5／6 條）
+                 "P-model", "p_model_fast_tier_only", "FAST_MODELS", "快層名單",  # legacy-ok
+                 "省略 `os_env`", "省略 os_env",  # legacy-ok
+                 # 2026-09-14 第二批：舊路徑／舊指針（F8）、自辨與排程 stale 掃描（F7／F14）
+                 "_workers/", "build-bundles.py` 的 `K8S_ALLOWED",  # legacy-ok
+                 "harness 自辨", "排程 tracker", "sys_scheduled_task_create",  # legacy-ok
+                 # 2026-09-14 第三批：P-path 落地前「寫進主 checkout只靠紀律」與 P-kubectl 把 pipe 當串接（F6／F11）
+                 "「只在 worktree 裡改檔」是紀律規則", "、pipe、反引號"]  # legacy-ok
 #: 已移除的識別符：連實作碼裡都不該再出現（殘留＝指向不存在的東西）。
-REMOVED_IDENTIFIERS = ["run-leader", "run_leader", "--rewrite-cwd", "LAUNCHER"]  # legacy-ok
+REMOVED_IDENTIFIERS = ["run-leader", "run_leader", "--rewrite-cwd", "LAUNCHER",  # legacy-ok
+                       "P_MODEL", "CEL_MODEL", "FAST_MODELS", "FAST_ONLY_ROLES",  # legacy-ok
+                       "p_model_fast_tier_only", "_workers/"]  # legacy-ok
 #: L2 的歷史區標記（整章節放行）。
 LEGACY_MARKER = "legacy-ok"
 LEGACY_HEADING = "已廢止"
@@ -1136,6 +1261,8 @@ def _prompt_files() -> list[Path]:
                     if "__pycache__" not in q.parts
                     # 產物（thin shell 的副本）與來源內容相同，掃來源就夠
                     and "/agents/" not in str(q.relative_to(OMNIGENT_DIR))]
+    # worker prompt 的共用片段會被展開進每一份 worker 的 AGENTS.md ⇒ 一樣零容忍
+    out += sorted(GEN.SHARED_FRAGMENTS_DIR.glob("*.md"))
     return sorted(set(out))
 
 
@@ -1362,6 +1489,108 @@ def _check_hook_wiring() -> tuple[bool, str]:
             bad.append(f"{k}: pi harness 不該有 hooks/（pi 沒有 hook 機制）")
     notes.append("claude-native 層皆有 hooks/＋skills/，pi 層無 hooks/")
     return (not bad), ("；".join(notes) if not bad else "；".join(bad[:4]))
+
+
+GUARD_ALIASES = {
+    "P-board": "p_board_read_only", "P-merge": "p_merge_no_agent_merge",
+    "P-approve": "p_approve_no_agent_signoff", "P-tag": "p_tag_no_agent_tag_push",
+    "P-escape": "p_escape_obfuscated_command", "P-kubectl": "p_kubectl_namespace_scope",
+    "P-path": "p_path_write_inside_worktree",
+}
+GUARD_TABLE_HEADING = "## 你身上的機器守線"
+PROMPT_OF = {
+    "woow_issue_leader": LEADER_DIR / "AGENTS.md",
+    "repo_leader_cc": SHARED_DIR / "repo_leader" / "AGENTS.md",
+    "repo_leader_pi": SHARED_DIR / "repo_leader" / "AGENTS.md",
+}
+
+
+def _guard_table_rows(md: str) -> list[tuple[list[str], str]]:
+    """抽出「你身上的機器守線」表：每列 → (第一欄宣稱的 policy 名, 整列文字)。
+
+    第一欄的 `backtick` 名直接當 policy 名；`P-xxx` 別名經 GUARD_ALIASES 對回 CEL policy 名。
+    只看第一欄——第二欄的說明常提到別層才有的 policy（例：頂層說自己「沒有掛
+    max_tool_calls_per_session」）。
+    """
+    if GUARD_TABLE_HEADING not in md:
+        return []
+    body = md.split(GUARD_TABLE_HEADING, 1)[1].split("\n## ", 1)[0]
+    rows: list[tuple[list[str], str]] = []
+    for line in body.splitlines():
+        if not line.startswith("|") or set(line.strip("| ")) <= set("-| :"):
+            continue
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if not cells or cells[0] in ("守線", ""):
+            continue
+        names = re.findall(r"`([a-z_]+)`", cells[0])
+        names += [GUARD_ALIASES[a] for a in re.findall(r"P-[a-z]+", cells[0]) if a in GUARD_ALIASES]
+        rows.append((names, line))
+    return rows
+
+
+def _check_prompt_guard_table(nodes) -> tuple[bool, str]:
+    """第 18 項：leader prompt 宣稱的守線 ⊆ 同層 config。列文含「不掛」的自己聲明沒掛，跳過
+    （例：P-board 不掛在 issue-leader；cost_budget 僅 repo_leader_cc）。"""
+    bad: list[str] = []
+    seen = 0
+    by_name = {sp_.name: sp_ for sp_ in nodes.values()}
+    for agent, prompt in PROMPT_OF.items():
+        sp_ = by_name.get(agent)
+        if sp_ is None:
+            bad.append(f"{agent}: 樹上找不到這個 agent")
+            continue
+        have = {p.name for p in (sp_.guardrails.policies if sp_.guardrails else [])}
+        rows = _guard_table_rows(prompt.read_text())
+        if not rows:
+            bad.append(f"{agent}: prompt 沒有「{GUARD_TABLE_HEADING}」表")
+            continue
+        for names, line in rows:
+            seen += 1
+            if "不掛" in line:
+                continue
+            for n in names:
+                if n not in have:
+                    bad.append(f"{agent}: prompt 宣稱 `{n}`，config 沒有這條 policy")
+    return (not bad), (f"{len(PROMPT_OF)} 份 prompt／{seen} 列全部對得上 config" if not bad
+                       else f"{len(bad)} 處：" + "；".join(bad[:5]))
+
+
+def _check_repo_leader_identity(nodes) -> tuple[bool, str]:
+    """第 19 項：兩份 repo-leader 副本各含自己的身分行，且不留佔位符。"""
+    bad: list[str] = []
+    by_name = {sp_.name: sp_ for sp_ in nodes.values()}
+    for leader, line in IDENTITY_LINE.items():
+        sp_ = by_name.get(leader)
+        ins = (sp_.instructions or "") if sp_ is not None else ""
+        if line not in ins:
+            bad.append(f"{leader}: instructions 缺身分行「{line[:22]}…」")
+        if IDENTITY_START in ins or "佔位符" in ins:
+            bad.append(f"{leader}: instructions 仍含佔位符（build-bundles.py 沒蓋身分）")
+    return (not bad), ("2 份 repo-leader 副本各含自己的身分行、無佔位符" if not bad
+                       else "；".join(bad))
+
+
+def _check_template_includes() -> tuple[bool, str]:
+    """第 20 項：每份模板（含暫停使用的）的 include 全部可解析、展開後仍含 marker；
+    `_shared/` 的每個片段至少被一份模板引用（孤兒片段＝沒人讀的文字，會靜默漂移）。"""
+    bad: list[str] = []
+    used: set[str] = set()
+    n = 0
+    for d in sorted(q for q in TEMPLATES_DIR.iterdir() if q.is_dir() and not q.name.startswith("_")):
+        n += 1
+        try:
+            out = GEN.render_prompt(d)
+        except Exception as exc:  # noqa: BLE001
+            bad.append(f"{d.name}: {exc}")
+            continue
+        used.update(GEN.INCLUDE_RE.findall((d / "AGENTS.md").read_text()))
+        if "omnigent-prompt-marker:" not in out:
+            bad.append(f"{d.name}: 展開後缺 marker")
+    orphan = sorted(set(GEN.fragment_names()) - used)
+    if orphan:
+        bad.append(f"沒有任何模板引用的孤兒片段: {orphan}")
+    return (not bad), (f"{n} 份模板的 include 全部展開，{len(used)} 個片段皆有模板引用" if not bad
+                       else "；".join(bad[:4]))
 
 
 def _check_top_leader_harness_pickable(spec) -> tuple[bool, str]:

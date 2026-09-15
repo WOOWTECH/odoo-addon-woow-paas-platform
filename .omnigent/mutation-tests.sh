@@ -127,9 +127,10 @@ fi
 # ⚠ 改 dispatcher **來源**的 case 末尾都要 `python3 build-bundles.py` 重產：否則副本沒跟著
 #   變，會連帶紅第 0（產物不同步）與第 16（兩份漂移）項，把焦點從「dispatcher 邏輯變弱」
 #   模糊掉。要驗「兩份漂移」本身，用專門的 case AB。
-#   （動態 worker 的部分會立刻反映，但 p_model／p_board 只掛在 leader 的靜態 config 上。）
+#   （動態 worker 的部分會立刻反映，但 p_board 只掛在 leader 的靜態 config 上。）
 
-run_mut A "把 repo-leader 的 skills 副本換成 symlink" "7,10" "" \
+# ⚠ 第 0 項也紅：symlink 指向 issue-leader 的整個 skills/，帶進 REPO_LEADER_SKILLS 以外的 skill（多餘 skill＝drift）。
+run_mut A "把 repo-leader 的 skills 副本換成 symlink" "0,7,10" "" \
 'python3 - <<"PY"
 import pathlib, shutil, os
 d = pathlib.Path("woow-issue-leader/agents/repo_leader_cc/skills")
@@ -155,7 +156,8 @@ mutation_lib.edit("woow-issue-leader/agents/repo_leader_cc/config.yaml",
                   new="\nspawn: true\ntools:\n  agents:\n    - implement_cc\n")
 PY'
 
-run_mut D "repo-leader 的 prompt 改成 instructions: <相對路徑>" "0,3" "" \
+# ⚠ 第 19 項也紅：instructions 變成路徑字串後，副本的 instructions 不再含身分行。
+run_mut D "repo-leader 的 prompt 改成 instructions: <相對路徑>" "0,3,19" "" \
 'python3 - <<"PY"
 import mutation_lib, pathlib
 d = pathlib.Path("woow-issue-leader/agents/repo_leader_cc")
@@ -189,17 +191,6 @@ mutation_lib.edit_span(str(p), start="(--tags|--follow-tags|refs/tags/|",
 import subprocess; subprocess.run(["python3", "build-bundles.py"], check=True, capture_output=True)
 PY'
 
-run_mut H "P-model 拿掉 has() 護欄（缺欄位 → fail-OPEN）" "8" "p_model_fast_tier_only" \
-'python3 - <<"PY"
-import mutation_lib, pathlib
-p = pathlib.Path("woow-issue-leader/generate-worker.py")
-old = """&& !(has(event.data.arguments.args)
-     && has(event.data.arguments.args.model)
-     && event.data.arguments.args.model in"""
-mutation_lib.edit(str(p), old=old, new="&& !(event.data.arguments.args.model in")
-import subprocess; subprocess.run(["python3", "build-bundles.py"], check=True, capture_output=True)
-PY'
-
 run_mut I "模板裡不同目錄、frontmatter 同名（first-wins 吞噬）" "5b" "" \
 'python3 - <<"PY"
 import pathlib
@@ -224,12 +215,16 @@ run_mut K "P-kubectl 拿掉串接偵測（精準定位該 policy block）" "8" "
 'python3 - <<"PY"
 import mutation_lib
 import pathlib, subprocess
-# ⚠ SHELL_CHAIN_RE 同時被 p_board_read_only 用到 ⇒ 不能改它的定義。
-#   kubectl 那一行是 `|| event…`，board 那一行是 `&& !event…` ⇒ 用前綴唯一定位。
+# ⚠ 2026-09-14 起 kubectl 的串接偵測用 SHELL_CHAIN_NOPIPE_RE（pipe 另有規則，見 AN）；
+#   board 那一行仍用 SHELL_CHAIN_RE ⇒ 定位字串自然唯一。
+# ⚠ never-match 一律寫 `$x`（結尾之後不可能再有字元）：CEL 的 regex 後端是 RE2，
+#   `(?!x)x` 這種 lookahead 會**編譯失敗**，而編譯失敗讓整條運算式回 None＝ALLOW——
+#   結果雖然也是紅在同一支 policy，但那是「整支守線死掉」而不是「這一條分支變弱」，
+#   突變就沒在驗它聲稱要驗的東西。
 p = pathlib.Path("woow-issue-leader/generate-worker.py")
 q = chr(34)
-needle = "|| event.data.arguments.command.matches(" + q + "{SHELL_CHAIN_RE}" + q + ")"
-repl = "|| event.data.arguments.command.matches(" + q + "(?!x)x" + q + ")"
+needle = "|| event.data.arguments.command.matches(" + q + "{SHELL_CHAIN_NOPIPE_RE}" + q + ")"
+repl = "|| event.data.arguments.command.matches(" + q + "$x" + q + ")"
 mutation_lib.edit(str(p), old=needle, new=repl)
 subprocess.run(["python3", "build-bundles.py"], check=True, capture_output=True)
 PY'
@@ -517,7 +512,7 @@ import mutation_lib, pathlib, subprocess
 p = pathlib.Path("woow-issue-leader/generate-worker.py")
 b = chr(92) * 4
 old = b + "b(tea|gh|glab)" + b + "s+(pulls?|pr|mr)" + b + "s+merge" + b + "b|"
-mutation_lib.edit(str(p), old=old, new="(?!x)x|")
+mutation_lib.edit(str(p), old=old, new="$x|")   # never-match 寫法見 K 的註解（RE2 無 lookahead）
 subprocess.run(["python3", "build-bundles.py"], check=True, capture_output=True)
 PY'
 
@@ -527,7 +522,7 @@ import mutation_lib, pathlib, subprocess
 p = pathlib.Path("woow-issue-leader/generate-worker.py")
 b = chr(92) * 4
 old = b + "b(gh|glab)" + b + "s+api" + b + "b[" + b + "s" + b + "S]*/merge" + b + "b|"
-mutation_lib.edit(str(p), old=old, new="(?!x)x|")
+mutation_lib.edit(str(p), old=old, new="$x|")
 subprocess.run(["python3", "build-bundles.py"], check=True, capture_output=True)
 PY'
 
@@ -539,8 +534,115 @@ b = chr(92) * 4
 # 新增路徑位於 regex 最後：保留前置 `|`，把該分支換成永不命中的 expression。
 old = "|" + b + "b(gh|glab|curl)" + b + "b[" + b + "s" + b + "S]*" \
       + b + "bgraphql" + b + "b[" + b + "s" + b + "S]*[Mm]erge"
-mutation_lib.edit(str(p), old=old, new="|(?!x)x")
+mutation_lib.edit(str(p), old=old, new="|$x")
 subprocess.run(["python3", "build-bundles.py"], check=True, capture_output=True)
+PY'
+
+run_mut AJ "leader prompt 守線表宣稱 config 沒有的 policy（F5 那類漂移）" "18" "no_such_policy" \
+'python3 - <<"PY"
+import mutation_lib, pathlib
+p = pathlib.Path("woow-issue-leader/AGENTS.md")
+old = "| `spawn_bounds` | 每輪最多 6 次派工（`sys_session_send` ＋ `sys_session_create` 合計） |"
+mutation_lib.edit(str(p), old=old, new=old + "\n| `no_such_policy` | 假的 |")
+PY'
+
+run_mut AK "build-bundles.py 不再蓋 repo-leader 身分行（副本留佔位符）" "19" "佔位符" \
+'python3 - <<"PY"
+import mutation_lib, pathlib, subprocess
+p = pathlib.Path("build-bundles.py")
+mutation_lib.edit(str(p), old="    return src[:start] + IDENTITY_LINE[leader] + src[end:]",
+                  new="    return src")
+subprocess.run(["python3", "build-bundles.py"], check=True, capture_output=True)
+PY'
+
+# ── 2026-09-14 第三批（review F6／F10／F11）───────────────────────────────────
+# ⚠ P-path 與 P-kubectl 只存在於動態產生的 worker config，第 8 項每次都現產 ⇒ 這幾個 case
+#   不必 `python3 build-bundles.py` 重產（靜態產物沒有它們，重產也不會變）。
+
+run_mut AL "P-path 拿掉 .. 段偵測（前綴對了就能逃出 worktree）" "8" "p_path_write_inside_worktree" \
+'python3 - <<"PY"
+import mutation_lib, pathlib
+p = pathlib.Path("woow-issue-leader/generate-worker.py")
+b = chr(92) * 2
+old = "DOTDOT_SEG_RE = r" + chr(34) + "(^|/)" + b + "." + b + ".(/|$)" + chr(34)
+mutation_lib.edit(str(p), old=old, new="DOTDOT_SEG_RE = r" + chr(34) + "$x" + chr(34))
+PY'
+
+# ⚠ 這個 case 驗的是第 8 項的「孤兒向量」方向：policy 被拔掉、向量還在 ⇒ 必須紅。
+#   2026-09-14 之前第 8 項只比「policy 有沒有向量」，這種拔法全綠。
+run_mut AM "產生器不再對 implement 掛 P-path（向量成孤兒）" "8" "p_path_write_inside_worktree" \
+'python3 - <<"PY"
+import mutation_lib, pathlib
+p = pathlib.Path("woow-issue-leader/generate-worker.py")
+mutation_lib.edit(str(p),
+    old="body += [P_WORKTREE, _p_workdir(worktree, repo_root), _p_path(worktree_rel, worktree)]",
+    new="body += [P_WORKTREE, _p_workdir(worktree, repo_root)]")
+PY'
+
+run_mut AN "P-kubectl 唯讀 pipe 退回一律 DENY（get … | jq 被擋）" "8" "p_kubectl_namespace_scope" \
+'python3 - <<"PY"
+import mutation_lib, pathlib
+p = pathlib.Path("woow-issue-leader/generate-worker.py")
+old = """      && !(event.data.arguments.command.matches("{K8S_PIPE_HEAD_SAFE_RE}")
+           && !event.data.arguments.command.matches("{K8S_WRITE_HEAD_RE}")
+           && !event.data.arguments.command.matches("{K8S_PIPE_TAIL_KUBECTL_RE}")))"""
+mutation_lib.edit(str(p), old=old, new="      && true)")
+PY'
+
+run_mut AO "P-kubectl 的 docker-desktop 例外退回整條放行（第二個 kubectl 滑過）" "8" "p_kubectl_namespace_scope" \
+'python3 - <<"PY"
+import mutation_lib, pathlib
+p = pathlib.Path("woow-issue-leader/generate-worker.py")
+old = """&& !(event.data.arguments.command.matches("{K8S_LOCAL_CONTEXT_RE}")
+     && !event.data.arguments.command.matches("{K8S_TWO_KUBECTL_RE}"))"""
+mutation_lib.edit(str(p), old=old,
+    new="""&& !event.data.arguments.command.matches("{K8S_LOCAL_CONTEXT_RE}")""")
+PY'
+
+# ⚠ 故意挑**暫停使用**的模板：產生器平常不會跑到它，只有第 20 項會掃到 ⇒ 紅點必須單獨落在 20。
+run_mut AP "暫停使用的模板引用不存在的片段" "20" "implementer_cc" \
+'python3 - <<"PY"
+import mutation_lib, pathlib
+mutation_lib.edit("woow-issue-leader/_templates/implementer_cc/AGENTS.md",
+                  old="<!-- include: stay-in-worktree -->", new="<!-- include: no-such-fragment -->")
+PY'
+
+# ⚠ 第 4（自檢）、8（產生 worker spec）、20 一起紅是對的：三條路都會撞到殘留的 include 標記。
+run_mut AQ "產生器不展開 include（標記殘留進 prompt）" "4,8,20" "include" \
+'python3 - <<"PY"
+import mutation_lib, pathlib
+mutation_lib.edit("woow-issue-leader/generate-worker.py",
+                  old="    out = INCLUDE_RE.sub(_sub, src)\n", new="    out = src\n")
+PY'
+
+run_mut AR "_shared/ 多一個沒人引用的孤兒片段" "20" "orphan" \
+'python3 - <<"PY"
+import pathlib
+pathlib.Path("woow-issue-leader/_templates/_shared/orphan.md").write_text("## 沒人引用的片段\n")
+PY'
+
+# ── 2026-09-14 第四批（review F12／F13）───────────────────────────────────────
+
+# ⚠ F12 的取捨要被測到：把 `refs/tags/` 那條限定成只在 push 語境成立，唯讀 fetch 就放行了——
+#   但 `git update-ref refs/tags/v1.0 HEAD` 這種不經 push、也不是 `git tag <name>` 的建 tag
+#   plumbing 也跟著滑過（forge 的 `gh api … git/refs` 另有一條分支擋，不受影響）。
+run_mut AS "P-tag 把 refs/tags/ 限定在 push 語境（F12 放寬）" "8" "p_tag_no_agent_tag_push" \
+'python3 - <<"PY"
+import mutation_lib, pathlib, subprocess
+p = pathlib.Path("woow-issue-leader/generate-worker.py")
+old = """  || event.data.arguments.command.matches("refs/tags/")
+"""
+mutation_lib.edit(str(p), old=old, new="""  || event.data.arguments.command.matches("push[^|]*refs/tags/")
+""")
+subprocess.run(["python3", "build-bundles.py"], check=True, capture_output=True)
+PY'
+
+run_mut AT "產生器忽略 --name（agent name 退回 purpose_harness）" "4" "impl-1032-cc" \
+'python3 - <<"PY"
+import mutation_lib, pathlib
+p = pathlib.Path("woow-issue-leader/generate-worker.py")
+mutation_lib.edit(str(p), old="    name = _agent_name(purpose, harness, name)\n",
+                  new="    name = _safe_name(purpose, harness)\n")
 PY'
 
 echo

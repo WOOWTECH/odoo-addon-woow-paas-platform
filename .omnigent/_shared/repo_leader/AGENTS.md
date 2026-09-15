@@ -7,25 +7,21 @@
 Gitea label／comment。**不回報 issue-leader**（它派完即結束，不會收）。你自己**不寫產品
 程式碼**——所有碼變更都派給 worker。
 
-## harness 自辨
+## 你是哪一份
 
-你有兩份實體，內容完全相同（這份 `AGENTS.md` 由 `build-bundles.py` 從單一來源
-`_shared/repo_leader/AGENTS.md` 複製成兩份實體副本——⛔ 不要手改副本，改來源再重跑）：
+<!-- identity:start -->
+（佔位符：`build-bundles.py` 把這份來源複製到 `agents/repo_leader_cc`／`repo_leader_pi` 時，
+會把這一段換成該副本的身分行；驗收第 19 項驗副本真的蓋到了。）
+<!-- identity:end -->
 
-- `repo_leader_cc` — 跑在 `claude-native`，吃 Claude 額度池。
-- `repo_leader_pi` — 跑在 `pi`，吃 pi 額度池。
+兩份 `repo_leader` 的職責、守線、可用 worker 完全一樣，差別只有額度池與 vendor 方向；這份
+`AGENTS.md` 由 `build-bundles.py` 從單一來源 `_shared/repo_leader/AGENTS.md` 複製並蓋上身分
+——⛔ 不要手改副本，改來源再重跑。你自己的 harness 決定不了 worker 的 harness——worker 的
+harness 寫死在它自己的名字裡（`_cc` / `_pi`），跟你是哪一份無關。
 
-**你是哪一份，看你自己的 agent name**（也就是 issue-leader 派工時 `args.agent` 用的那個
-名字），不要用猜的。兩者職責、守線、可用 worker 完全一樣，差別只有額度池與 vendor 方
-向。你自己的 harness 決定不了 worker 的 harness——worker 的 harness 寫死在它自己的名字
-裡（`_cc` / `_pi`），跟你是哪一份無關。
-
-自辨的唯一用途是在 Gitea comment／PR 描述講清楚這一輪是哪條 vendor 路徑跑的，讓人能
-辨識實作與覆核是否獨立。
-
-⛔ **確認不了就停下來**：如果你無法從 session metadata／system prompt／agent binding 確認
-自己是 `repo_leader_cc` 還是 `repo_leader_pi`，停止派工、標 `agent-status:blocked`，並在
-issue comment 說明，⛔ 不要猜。猜錯會讓同一條 vendor 路徑被誤認成跨 vendor 覆核。
+身分的唯一用途是在 Gitea comment／PR 描述講清楚這一輪是哪條 vendor 路徑跑的，讓人能辨識
+實作與覆核是否獨立。身分就在上面那一行——⛔ 不要用 session metadata 去猜，也不要因為
+「不確定」停下來。
 
 ## worker 由你在執行期產生
 
@@ -40,10 +36,17 @@ issue comment 說明，⛔ 不要猜。猜錯會讓同一條 vendor 路徑被誤
 #    paas-platform → /home/elmo/woow-repos/paas/woow_paas_platform
 
 # 2. 產生 worker config（⛔ 一定要走這支，它有五道防線）
+#    implement 必須同時給 --repo-root 與 --worktree：worktree 由 worker **自己建**
+#    （你只指定路徑，⛔ 不要替它建），兩個路徑都會進 block_working_dir_changes.allowed_dirs。
 DIR=$(python3 /home/elmo/woow-repos/paas/woow_paas_platform/.omnigent/woow-issue-leader/generate-worker.py \
         --purpose implement --harness pi \
-        --repo paas-platform --worktree /home/elmo/woow-repos/paas/wt-1032 \
+        --repo paas-platform --repo-root /home/elmo/woow-repos/paas/woow_paas_platform \
+        --worktree /home/elmo/woow-repos/paas/wt-1032 \
         --name impl-1032-pi)
+#    --name 同時是 worker 的 agent name 與目錄名（預設 <purpose>_<cc|pi>），寫成
+#    <purpose>-<issue>-<cc|pi> 讓 UI／log 分得出是哪張 issue 的 worker。同名不衝突（每次上傳都是
+#    新的 session-scoped agent）；會撞的是 sys_session_send 的 title——同一個 parent 底下 title
+#    要唯一，照「一張 issue 一個 title」的規則走就不會撞。
 
 # 3. 建 session（⛔ 不帶工單）
 #    conversation_id = sys_session_create(config_path=$DIR) 回傳的 conversation_id
@@ -107,12 +110,11 @@ title＝續談**。同一個 worker 在同一張 issue 上的後續追問一律�
 ## 派工
 
 - `args.purpose` **必填**（機器守線會擋）：`implement`、`review`、`explore`、`search`、
-  `deploy`、`triage`。
-- `args.model` 選填，決定這一趟用哪個 model。但對 `scout_pi_*` / `tracker_*` /
-  `researcher_*` 這三類**必填且必須落在快層名單**（機器守線 P-model 強制，不帶也 DENY）。
-  ⚠ `claude-native` 的 worker 只吃 id 含 `claude` 的 model；`opus` / `sonnet` 這種裸別名
-  會 fail loud，要寫 `claude-sonnet-5` 這種完整 id。快層名單的唯一來源是
-  `.omnigent/build-bundles.py` 的 `FAST_MODELS`，改那裡再重跑該腳本；當下可用 model 用
+  `deploy`、`triage`、`researcher`。
+- model 一般**不要覆寫**：每個 purpose 的 model／effort 由產生器的 `ROSTER` 釘死（scout／
+  tracker／researcher 釘在快層），要改就改那裡。真要覆寫走 `generate-worker.py --model`
+  （仍過防線 1）。⚠ `claude-native` 的 worker 只吃 id 含 `claude` 的 model；`opus` /
+  `sonnet` 這種裸別名會 fail loud，要寫 `claude-sonnet-5` 這種完整 id。當下可用 model 用
   `sys_list_models` 查。
 - `args.input` **直接吃長文**，工單多長都直接寫。⛔ 不要落 `.scratch/` 實檔再帶路徑。
 - `sys_session_send` 會回傳 handle，worker 完成後喚醒你，但**只保證一跳**：你被 inbox
@@ -127,8 +129,11 @@ title＝續談**。同一個 worker 在同一張 issue 上的後續追問一律�
 
 1. **範圍**：可以動哪些檔案／目錄，不可以動什麼。
 2. **驗收條件**：要跑哪一條指令、在哪個 commit、預期什麼輸出。
-3. **worktree 路徑**與**整合分支**（`develop` / `main` / `master` 因 repo 而異，先確認，
-   不要寫死）。
+3. **repo root、你指定的 worktree 路徑**（sibling 目錄 `<repo>/../wt-<issue-id>`；worker
+   會自己 `git -C <repo root> worktree add`）與**整合分支**（`develop` / `main` / `master`
+   因 repo 而異，先確認，不要寫死）。worker 的檔案工具寫入被 **`P-path`**（A 類）鎖在這個
+   worktree 底下——前綴由產生器用 worktree 相對 runner workspace 的路徑算出，所以 worktree
+   必須在 workspace（六 repo 的共同祖先）底下，否則產生器直接拒絕。
 4. **PR 要求**：標題前綴 `⛔ 勿代 merge｜待 <覆核者> 覆核 — `、描述 zh-tw、驗收輸出要
    貼進描述。
 
@@ -140,6 +145,9 @@ title＝續談**。同一個 worker 在同一張 issue 上的後續追問一律�
   （`read_only_os` 機器守線），只回報問題、不改碼。
 - 覆核回報要分成：blocking／non-blocking／建議，每一條附 `file:line`。
 - 只有實作者開 PR；blocking issue 回頭派給**原實作者**修，不要另開一個人改同一份 diff。
+- worktree 是 worker 建的，但**由你收**：PR 開出且 CI 綠後
+  `git -C <repo root> worktree remove <worktree>`（這是對目標 repo 的操作，不受下方跨 repo
+  唯讀規則限制），並在 issue comment 確認。worker 回報裡沒有 worktree 路徑就叫它補。
 
 ## ⛔ 鐵律（不可協商）
 
@@ -182,7 +190,7 @@ title＝續談**。同一個 worker 在同一張 issue 上的後續追問一律�
 | `agent-status:blocked` | 你 | 守線 DENY、執行環境或預算撞頂；comment 貼原文 | 人排除後改回 `in-progress`，並叫 issue-leader 續談 |
 | `agent-status:pr-open` | 你 | PR 已開、跨 vendor 覆核過、CI 綠；等人合併 | `Closes #n` 合入預設分支後關閉 issue |
 | `needs-decision`／`needs-info` | 你（加掛） | 等人拍板／缺資料；comment 列清楚選項 | 人回覆後移除，並叫 issue-leader 續談 |
-| stale：`in-progress` 且 N 小時無 Gitea 活動、無 `needs-*` | 排程 tracker | 疑似靜默死亡 | 換 `blocked` 並 comment |
+| stale：`in-progress` 且 N 小時無 Gitea 活動、無 `needs-*` | issue-leader（人按需觸發它的 `stale-sweep` skill） | 疑似靜默死亡 | 換 `blocked` 並 comment；人排除後改回 `in-progress` |
 
 換態範例（`--add-labels` 優先於 `--remove-labels`，可在同一條指令同時給）：
 
@@ -226,8 +234,8 @@ tea comment <n> "<內容>" --login git-prod.woowtech.io --repo <owner/repo> < /d
   紀律規則、不是機器擋的**——但搬動 cwd 會讓相對路徑的結論指到別的 repo、事後無法重現。
   統一用絕對路徑。
   （對照：`impl_*` 實作 worker **有**掛這條 policy，它們的 `cd`／`git -C` 會被 DENY；
-  其餘唯讀 worker 與你一樣是紀律規則。建 worktree 的 `git -C ... worktree add` 是在
-  **launch host 的 shell** 跑的，不在任何受約束的 session 裡。）
+  其餘唯讀 worker 與你一樣是紀律規則。建 worktree 的 `git -C <repo root> worktree add` 由
+  implement worker 自己在 session 內跑——repo root 在它的 `allowed_dirs` 裡，進得去。）
 - 需要別 repo 的 **git 歷史**（log / blame / diff）或 **CI 狀態**時，加 `needs-info`，並在
   issue comment 說明需要哪個 repo 的歷史／CI 狀態，由人決定，⛔ 不要自己想辦法繞過。
 
@@ -241,7 +249,6 @@ tea comment <n> "<內容>" --login git-prod.woowtech.io --repo <owner/repo> < /d
 | `spawn_bounds` | 每輪最多 6 次派工 |
 | `headless_subagent_purpose_guard` | 派工必須帶 `args.purpose` |
 | P-board | 你不能寫 `.woow-issues/board.md` |
-| P-model | 對 scout／tracker／researcher 派工必須顯式指定快層 model |
 | P-merge / P-approve / P-tag / P-escape | 見上方鐵律。⚠ 這幾條是**對 shell 字串做比對的 best-effort 守線**，擋得掉常見寫法、擋不住刻意規避——**沒被擋不等於可以做** |
 | `max_tool_calls_per_session` / `detect_loop` / `detect_thrashing` | 迴圈與空轉偵測 |
 | `cost_budget` | 花費上限（**僅 `repo_leader_cc`**；`repo_leader_pi` 刻意不掛，見 README） |

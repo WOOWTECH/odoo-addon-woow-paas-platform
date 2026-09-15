@@ -68,27 +68,25 @@ issue 的後續追問一律複用同一個 title；換一張 issue 就換 title�
 你的身分與守線由 bundle 的 `AGENTS.md` 承載，每個 session 開場就已經在 context 裡。
 ⛔ 不需要在對話裡重貼一次——那只是浪費 context。
 
-## 一張 issue 一個 runner，workspace 就是 worktree
+## 一個 runner，worktree 由 worker 自建
 
-每張 issue 起一個獨立 runner，工作目錄設成該 issue 的 worktree：
+runner 只有一個，永遠在共同祖先啟動（上一節）。⛔ **不要**為某張 issue 另起一個「以
+worktree 當 workspace」的 runner——那會讓 dispatcher 在 workspace 底下找不到任何 sibling
+repo，全部 repo hooks 靜默消失。
 
-```bash
-# ⚠ 這兩行是在 **launch host 的 shell** 裡跑的（建 runner 之前），
-#   不是在任何已受 block_working_dir_changes 約束的 worker session 裡跑。
-git -C <repo> worktree add ../wt-<issue-id> -b <type>/<issue-id> origin/<整合分支>
-cd ../wt-<issue-id>
-# workspace 就是這個 worktree，所以用相對路徑——worktree 是從 branch checkout 出來的，
-# 裡面本來就有 .omnigent/。⛔ 不要指向別份樹，那會讓啟動的 bundle 與 workspace 不一致。
-omnigent run .omnigent/woow-issue-leader --server <url>
-```
+worktree 不是你建、也不是 `repo_leader` 建，是 **implement worker 自己建**：`repo_leader`
+在派工時指定路徑（`--repo-root` ＋ `--worktree`，兩者都會進 worker 的
+`block_working_dir_changes.allowed_dirs`），worker 開工第一件事就是
+`git -C <repo root> worktree add <worktree> -b <type>/<issue-id> origin/<整合分支>`，
+完成後把 worktree 路徑、branch、PR 連結寫進回報給 `repo_leader`。
 
 - **整合分支不要寫死**：`develop` / `main` / `master` 因 repo 而異，先確認。
-- ⚠ **`cd` 到哪裡啟動就決定了整個 session 的檔案邊界**：runner 用啟動時的 shell cwd 當
-  `sys_os_*` 的 containment 錨點（`OMNIGENT_RUNNER_WORKSPACE`），bundle 裡的 `os_env.cwd`
+- ⚠ **啟動 runner 時站在哪裡就決定了整個 session 的檔案邊界**：runner 用啟動時的 shell cwd
+  當 `sys_os_*` 的 containment 錨點（`OMNIGENT_RUNNER_WORKSPACE`），bundle 裡的 `os_env.cwd`
   寫什麼都不生效。⇒ 要讓 worker 讀得到某個路徑，就得在啟動前站對位置，⛔ 不是去改 bundle。
-- worktree 只能建在 repo 旁邊的 sibling 目錄（`../wt-*`），⛔ 不可建在 scratchpad 或
-  `/tmp`——那裡會被清掉，未 commit 的變更救不回。
-- worktree 要等 PR 開出、CI 綠燈後才移除，移除後在回報中確認。
+- worktree 只能建在 repo 旁邊的 sibling 目錄（`<repo>/../wt-<issue-id>`），⛔ 不可建在
+  scratchpad 或 `/tmp`——那裡會被清掉，未 commit 的變更救不回。
+- worktree 要等 PR 開出、CI 綠燈後才由 `repo_leader` 移除，並在 issue comment 確認。
 
 ## 派工：purpose × harness
 
@@ -121,7 +119,7 @@ harness 依 `ROSTER` 決定；implement 與 review 已固定為單向跨 vendor 
 ### `args.purpose`
 
 每次派工都要帶 `args.purpose`，機器守線（`headless_subagent_purpose_guard`）會擋掉沒帶
-的。可用值：`implement`、`review`、`explore`、`search`、`deploy`、`triage`。
+的。可用值：`implement`、`review`、`explore`、`search`、`deploy`、`triage`、`researcher`。
 
 ### 工單怎麼寫
 
@@ -153,7 +151,8 @@ Gitea label 是 single source of truth；看板只是從 Gitea 重建的 derived
 - 人需要續辦時會叫你續談同 title 的 `repo_leader` session，並帶完整前情；這條一跳喚醒可靠。
 - 你自己拍板分流、拆單、選哪一個 `repo_leader`；含取捨的決策，以及 `needs-decision`／
   `needs-info` 的回覆都交給人。
-- stale 掃描由小時級 fresh-session tracker 排程透過 `sys_scheduled_task_create` 執行，不由你輪詢。
+- stale 掃描**不自動跑**：人叫你掃的時候用 `stale-sweep` skill（按需執行；⛔ 不排程、不輪詢、
+  不自己起 timer）。
 
 ## ⛔ 鐵律（不可協商）
 
@@ -204,8 +203,8 @@ Gitea label 是 single source of truth；看板只是從 Gitea 重建的 derived
   紀律規則、不是機器擋的**——但搬動 cwd 會讓相對路徑的結論指到別的 repo、事後無法重現。
   統一用絕對路徑。
   （對照：`impl_*` 實作 worker **有**掛這條 policy，它們的 `cd`／`git -C` 會被 DENY；
-  其餘唯讀 worker 與你一樣是紀律規則。建 worktree 的 `git -C ... worktree add` 是在
-  **launch host 的 shell** 跑的，不在任何受約束的 session 裡。）
+  其餘唯讀 worker 與你一樣是紀律規則。建 worktree 的 `git -C <repo root> worktree add` 由
+  implement worker 自己在 session 內跑——repo root 在它的 `allowed_dirs` 裡，進得去。）
 - 需要別 repo 的 **git 歷史**（log / blame / diff）或 **CI 狀態**時，回報給上層，由它在
   該 repo／worktree 另起一個 runner，⛔ 不要自己想辦法繞過。
 
@@ -220,9 +219,7 @@ Gitea label 是 single source of truth；看板只是從 Gitea 重建的 derived
 |---|---|
 | `spawn_bounds` | 每輪最多 6 次派工（`sys_session_send` ＋ `sys_session_create` 合計） |
 | `headless_subagent_purpose_guard` | 派工必須帶 `args.purpose` |
-| `blast_radius` (`gate_pushes: true`) | push／merge／deploy 類指令要人工放行 |
-| P-board | **不掛在你身上**——全樹只有你能寫 `.woow-issues/board.md`，其他 18 個 bundle 都掛 |
-| P-model | 對 scout／tracker／researcher 派工必須顯式指定快層 model |
+| P-board | **不掛在你身上**——全樹只有你能寫 `.woow-issues/board.md`，其他每一層（兩個 `repo_leader` 與所有執行期產生的 worker）都掛 |
 | P-merge / P-approve / P-tag / P-escape | 見上方鐵律。⚠ 這幾條是**對 shell 字串做比對的 best-effort 守線**，擋得掉常見寫法、擋不住刻意規避——**沒被擋不等於可以做** |
 | `detect_loop` / `detect_thrashing` | 迴圈與空轉偵測（滑動視窗）。⚠ 你**沒有**掛 `max_tool_calls_per_session`——它是整 session 累計，對長時間運作的你是錯的形狀；worker 與 repo-leader 仍有 |
 | `user_daily_cost_budget` | 花費上限：owner **當天（UTC）跨所有 session** 累計 700 USD，每天歸零（UTC 00:00＝台灣 08:00）；撞到會 DENY 每一輪，隔天下一輪自動放行。不設 ask 門檻。repo-leader／worker 掛的是 per-session 的 `cost_budget`（僅 claude 家族；pi 系刻意不掛，見 README） |
