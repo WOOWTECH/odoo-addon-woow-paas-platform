@@ -13,7 +13,8 @@ woow-issue-leader/          claude-sdk／claude-fable-5-1／xhigh／spawn: true
 ├── hooks/                  ⭐ dispatcher：把子 repo 的 hooks 拿回來（§dispatcher）
 ├── skills/                 ⚠ **必須存在**，否則不發 --plugin-dir、dispatcher 不生效
 │   ├── issue-triage/  pr-merge-gate/  board-reconcile/  stale-sweep/（按需掃 stale）
-│   └── dispatch-policy/    對照表與 alias map 的使用規則
+│   ├── dispatch-policy/    對照表與 alias map 的使用規則
+│   └── omni-msg/           opt-in 跨層 messaging（CLI／bridge 見 omni-msg/README.md）
 ├── _templates/             ⭐ 產生器的模板來源（8 份 worker prompt ＋ skills；`_shared/` 共用片段）
 ├── generate-worker.py      ⭐ 執行期產生器（五道防線，§產生器）
 └── agents/
@@ -81,6 +82,18 @@ DIR=$(python3 <paas-platform>/.omnigent/woow-issue-leader/generate-worker.py \
 因此狀態放 Gitea label，escalation 第一收件人是人；issue-leader 派完即結束，repo_leader
 擁有 issue 全程。
 
+### opt-in 跨層 messaging：`omni-msg`
+
+上面是一跳 completion 的既有路徑；主動往 parent／sibling 發訊息可另外走
+[`omni-msg` CLI／bridge](omni-msg/README.md)。它使用已授權的 session REST API，
+不是放寬 `sys_session_send`，也不建立新 session。`list / send / ask / reply / check`
+有 actor ACL、SQLite receipts 與 explicit reply correlation；`ask` 非同步、不 blocking。
+
+skill 的單一來源是 `woow-issue-leader/skills/omni-msg/`，build 複製到兩個 repo-leader，
+worker 產生器再複製到每個動態 worker。**skill 存在不等於已啟用**：需 operator 安裝 CLI、
+啟動 bridge、綁定真實 session IDs，分別交付每個 session 的 client config。未配置或 policy
+DENY 時維持原 Gitea 流程；不放寬唯讀、worktree、人工 merge／approval gate。
+
 ## 用法
 
 ```bash
@@ -96,7 +109,7 @@ bash .omnigent/mutation-tests.sh [case 代號]  # 突變測試（每個 case 斷
 | `_templates/<role>/AGENTS.md` ＋ `skills/` | 8 份 worker prompt／skill（**產生器的來源**） | 手改 |
 | `_templates/_shared/<片段>.md` | worker prompt 的共用片段（鐵律／守線強度／跨 repo 唯讀／回報／不要離開 worktree），模板用 `<!-- include: <片段> -->` 引用、產生器複製時展開（見該目錄 README） | 手改 |
 | `_shared/repo_leader/AGENTS.md` | repo-leader 共用 prompt | 手改 |
-| `woow-issue-leader/AGENTS.md` ＋ `skills/` | issue-leader 的 prompt 與 5 個 skill（repo-leader 只拿 `dispatch-policy`／`pr-merge-gate` 兩個副本，見 `REPO_LEADER_SKILLS`） | 手改 |
+| `woow-issue-leader/AGENTS.md` ＋ `skills/` | issue-leader 的 prompt 與 skills；repo-leader 的副本清單見 `REPO_LEADER_SKILLS`，`omni-msg` 另由產生器提供給所有 worker | 手改 |
 | `generate-worker.py` | 執行期產生器 ＋ 對照表 ＋ **7 支 CEL 與所有 policy 片段** | 手改 |
 | `hooks/dispatch-hook.py` ＋ `hooks.json` | dispatcher | 手改 |
 | `build-bundles.py` | 三份靜態 config 的產生器 ＋ **22 項驗收** ＋ repo-leader 身分行 | 手改 |
@@ -921,7 +934,8 @@ worker **最強**的 A 類保證，並以此為由之一否決 `enforce_sandbox`
 `issue-triage` skill 曾叫 issue-leader 自己派 `tracker_*` 查重、`scout_pi_*` 補資訊，與頂層
 prompt「你只派工給兩個 repo_leader」互斥（review F9）。裁決：issue-leader 只分配 issue，
 **所有** worker 由 repo_leader 產生；同時 repo-leader 不再收到 issue-triage／board-reconcile／
-stale-sweep 的副本（`REPO_LEADER_SKILLS` 只列 dispatch-policy 與 pr-merge-gate）。
+stale-sweep 的副本（`REPO_LEADER_SKILLS` 當時只列 dispatch-policy 與 pr-merge-gate；
+現在另加 opt-in 的 omni-msg，不改這項分工）。
 
 ### 10. P-kubectl 把 pipe 當串接一律 DENY、`--context docker-desktop` 出現即整條放行（FIX ROUND 1／2 起，2026-09-14 改）
 
