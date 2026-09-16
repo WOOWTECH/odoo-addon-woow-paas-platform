@@ -60,6 +60,7 @@ BUNDLE_DIR = Path(__file__).resolve().parent
 TEMPLATES_DIR = BUNDLE_DIR / "_templates"
 SHARED_FRAGMENTS_DIR = TEMPLATES_DIR / "_shared"   # worker prompt 的共用片段（見該目錄 README）
 HOOKS_DIR = BUNDLE_DIR / "hooks"
+MESSAGING_SKILL_DIR = BUNDLE_DIR / "skills" / "omni-msg"
 DEFAULT_SITE_PACKAGES = (
     "/home/elmo/.local/share/uv/tools/omnigent/lib/python3.12/site-packages"
 )
@@ -969,7 +970,11 @@ def generate(purpose: str, harness: str, out_dir: Path, *,
     template_dir = TEMPLATES_DIR / templates[harness]
     if not (template_dir / "AGENTS.md").is_file():
         raise GenerateFailure(f"模板不存在：{template_dir / 'AGENTS.md'}")
-    expect_skills = len(list((template_dir / "skills").glob("*/SKILL.md")))
+    if not (MESSAGING_SKILL_DIR / "SKILL.md").is_file():
+        raise GenerateFailure("共用 omni-msg skill 不存在，拒絕產生不完整 worker")
+    if (template_dir / "skills" / "omni-msg").exists():
+        raise GenerateFailure("omni-msg 只能由共用來源提供，模板不可另存副本")
+    expect_skills = len(list((template_dir / "skills").glob("*/SKILL.md"))) + 1
 
     name = _agent_name(purpose, harness, name)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -985,6 +990,8 @@ def generate(purpose: str, harness: str, out_dir: Path, *,
     if skills_dst.exists():
         shutil.rmtree(skills_dst)
     shutil.copytree(template_dir / "skills", skills_dst)
+    # 每個 session 都能讀到 skill；是否可發訊仍取決於 operator 配置與原有 policy。
+    shutil.copytree(MESSAGING_SKILL_DIR, skills_dst / "omni-msg")
     # dispatcher：claude-native worker 才有 hook 機制。⚠ `skills/` 必須存在才會發
     # --plugin-dir，hooks/ 才會被 claude 讀到——兩者缺一不可。
     if harness == "claude-native" and HOOKS_DIR.is_dir():

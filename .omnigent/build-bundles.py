@@ -124,7 +124,7 @@ LEADERS = {
 #: 「派工後結束回合」「只有你能寫看板」這種對它錯的指令（review F9，2026-09-14 裁決：
 #: issue-leader 只分配 issue、不產生 worker；worker 一律由 repo-leader 產生）。
 #: ⚠ `skills/` 目錄本身必須存在——否則不發 --plugin-dir，hooks 就一起沒了。
-REPO_LEADER_SKILLS = ["dispatch-policy", "pr-merge-gate"]
+REPO_LEADER_SKILLS = ["dispatch-policy", "pr-merge-gate", "omni-msg"]
 
 #: repo-leader 的身分行（review F7）：兩份副本由本檔從單一來源複製，複製時蓋上身分，
 #: 取代舊的「自己從 session metadata 猜是 cc 還是 pi、猜不到就標 blocked」。
