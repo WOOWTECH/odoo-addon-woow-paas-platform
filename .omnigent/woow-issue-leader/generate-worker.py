@@ -820,7 +820,17 @@ def _check_model_family(harness: str, model: str) -> None:
     通用 `runner_error`（訊息不會告訴你是 model 不相容）⇒ 必須自己先驗。
     """
     _omnigent_on_path()
-    from omnigent.model_override import model_family_mismatch  # noqa: PLC0415
+    try:
+        from omnigent.models.model_override import model_family_mismatch  # noqa: PLC0415
+    except ImportError as new_path_exc:
+        try:
+            from omnigent.model_override import model_family_mismatch  # noqa: PLC0415
+        except ImportError as old_path_exc:
+            raise GenerateFailure(
+                "防線 1：無法載入 omnigent model_override（已嘗試 "
+                "omnigent.models.model_override 與 omnigent.model_override）："
+                f"{new_path_exc}; {old_path_exc}"
+            ) from old_path_exc
 
     reason = model_family_mismatch(harness, model)
     if reason:
