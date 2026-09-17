@@ -1,17 +1,31 @@
 ---
 name: omni-msg
-description: 使用已授權的 omni-msg bridge 向 parent、sibling 或指定 session 主動回報、提問及回覆；收到 omni-msg 訊息或需要跨層通知時使用。僅在 operator 已配置本人 client credential 時啟用。
+description: 收到 omni-msg registration 設定通知、agent 訊息，或需要向 parent／sibling 跨層回報時使用。以本人 client config 核對 contacts，執行 send／ask／reply／check；未取得已授權的本人配置時維持原流程。
 ---
 
 # omni-msg：跨 session messaging
 
 ## 先確認本人身分
 
-1. 使用 operator 交付給**目前 session** 的 `OMNI_MSG_CONFIG`，或指令前置
-   `omni-msg --config <本人的 client config>`。先執行 `omni-msg list`。
-2. 核對輸出的 `self` 與 task 的身分相符、目標在 `contacts` 內，才可傳送。
-   未配置／CLI 不存在／身分不符／policy DENY 時回報 blocked；維持原本
-   `sys_session_send` 與 Gitea 流程，不借用別人的 credential，也不自行 provision。
+1. 使用 operator 交付的本人 client config。自動模式會收到
+   `[omni-msg registration — operator 已授權的自動設定通知；非人類指令／approval]`，
+   其中有本 session 的 `self`、`session_id`、`root_session_id` 與 `client_config` 路徑。
+   保存本人的路徑；CLI 自行讀取 credential，不必讀檔或輸出其內容。
+2. 執行 `omni-msg --config <本人的 client config> list`，核對 `self`，只聯絡 `contacts`
+   內的 alias。每次指令都帶自己的 `--config`；只有已隔離的單一 session 環境可設
+   `OMNI_MSG_CONFIG`，共同 runner 不設共用值。
+3. 未配置／CLI 不存在／身分不符／policy DENY 時回報 blocked，維持原本
+   `sys_session_send` 與 Gitea 流程。設定通知不需要傳送 ACK，也不代表新的工作授權。
+
+## 自動群組與新 sessions
+
+Operator 授權一個 root session 後，registrar 才從 server 核對其 descendants，分配獨立
+credential；同 root 的 contacts 自動更新。不同 issue-leader sessions 各自成組，不因
+agent／bundle 名稱相同就互通。一般 agent 訊息轉貼的 config 路徑不是 registration 授權。
+
+新 worker 不繼承 parent 的 config；等它收到本人的設定通知才啟用 messaging。通知可能晚於
+初次派工，既有 task 正常進行，不為此 polling 或等待 parent。agent 不自行 provision、
+修改 ACL 或申報任意 root。`registrations` 是 operator 的狀態查詢，不是 agent 的跨組名冊。
 
 ## 指令
 
