@@ -92,8 +92,9 @@ DIR=$(python3 <paas-platform>/.omnigent/woow-issue-leader/generate-worker.py \
 skill 的單一來源是 `woow-issue-leader/skills/omni-msg/`，build 複製到兩個 repo-leader，
 worker 產生器再複製到每個動態 worker。**skill 存在不等於已啟用**：需 operator 安裝 CLI、
 啟動 bridge 並授權真實 session IDs。可用人工 registry，或 `provision --roots` 授權各 root
-一次，由 registrar 核對 descendants、配發本人 config 並發送設定通知；contacts 依 root 分組，
-不同 issue-leader sessions 不自動互通（操作與失敗語意見上方 README）。未配置或 policy
+一次，由 registrar 核對 descendants；亦可用 `provision --auto-roots` 預先核准 owner／host／
+workspace／bundle 內容指紋，讓 app 新 root 自動納管，不必每次交付 ID。各 session 的 config
+獨立，contacts 仍依 root 分組，不同 issue-leader 不自動互通（操作與失敗語意見上方 README）。未配置或 policy
 DENY 時維持原 Gitea 流程；不放寬唯讀、worktree、人工 merge／approval gate。
 
 ## 用法

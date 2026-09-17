@@ -43,7 +43,74 @@ harness 已被喚醒**。上線前還要做下方 live smoke。
 參考 [programmatic docs](https://omnigent.ai/docs/programmatic) 與
 [v0.14.0 endpoint 驗權](https://github.com/omnigent-ai/omnigent/blob/v0.14.0/omnigent/server/routes/sessions/routes_events.py#L605-L609)。
 
-### 2. 自動模式：每個 root 授權一次
+### 2. App 新 root 也自動納管（opt-in）
+
+不想每開一個 root 就登記 ID，使用 `provision --auto-roots`。Operator 一次核准**精確 owner、
+host_id、runner workspace、agent_name 與 bundle 內容指紋**；符合規則的既有／新 top-level
+sessions 會自動取得獨立 config。這裡比的是 server 回傳的實際 owner，**不是** viewer 的
+`permission_level`（admin 看別人的 session 也可能是 4）。名稱只作搜尋與篩選，不能單獨授權。
+
+先取得已覆核的 agent bundle（SDK 打包，或已驗證 session 的
+`GET /v1/sessions/{id}/agent/contents`），在 operator 端計算指紋：
+
+```bash
+omni-msg fingerprint --bundle approved-agent.tar.gz
+```
+
+將輸出的完整 `omni-msg-bundle-v1:<64 hex>` 放入 `auto-roots.json`：
+
+```json
+{
+  "roots": {},
+  "rules": [{
+    "agent_name": "woow_issue_leader",
+    "owner": "eugene",
+    "host_id": "host_replace_with_real_id",
+    "workspace": "/home/elmo/woow-repos",
+    "bundle_fingerprint": "omni-msg-bundle-v1:replace_with_fingerprint_output"
+  }]
+}
+```
+
+`owner`、`host_id` 用 server metadata 的值，不是顯示名稱或 SSH alias。Fingerprint placeholder
+必須替換；缺欄位、不明欄位、重複規則或指紋格式錯誤都拒絕。
+
+```bash
+omni-msg provision \
+  --directory "$HOME/.config/omni-msg-app-roots" \
+  --auto-roots auto-roots.json \
+  --server-url https://your-omnigent.example \
+  --token-file "$HOME/.config/omni-msg-token"
+
+omni-msg serve \
+  --server-config "$HOME/.config/omni-msg-app-roots/server.json" \
+  --state-dir "$HOME/.local/state/omni-msg-app-roots"
+```
+
+- App 照原流程用既有 `agent_id` 建立新 session，選擇已核准的 host／workspace；registrar
+  不會 create、resume、stop runner 或修正 workspace。尚未 bind runner 或不符合規則時不發 credential。
+- Root 的 alias 為穩定的 `root-<session ID hash>`，不是共用 agent name。同 agent_id／bundle
+  的不同 sessions 仍然分組；各組與 descendants 都有自己的 tokens／contacts。
+- `roots` 可保留原有手動指定的 root，這些 explicit entries 優先；從 0.2 的 `--roots` 模式
+  轉來，即使改由規則納管，已登記 root 的 alias／credential／receipts 也不換。
+  從更早的純 `--registry` 模式遷移時，請在 `roots` 保留原 root alias，不推測歷史 actor 角色。
+- 規則也會檢查已存在的匹配 roots，啟用時可能投遞首次設定通知。不是全站自動授權，也不替
+  bridge 帳號取得 server 權限；專用帳號仍必須能發現並有權 edit 新 sessions。
+- 指紋涵蓋 sorted file paths、file contents、executable bits；忽略 gzip/tar 時間、uid/gid
+  等包裝差異。Symlink／hardlink／special files、重複或逃逸路徑、不明 PAX 執行 metadata
+  一律拒絕；不解壓到磁碟。輸入上限 compressed 8 MiB、unpacked 16 MiB、2048 entries。
+- Bundle 內容／執行屬性改版後，須 operator 重新覆核並更新規則；**不是每個 session 核准**。
+  指紋檢查每輪重做，同輪同 agent_id/version 可共用結果，不永久信任舊 cache。
+- `registrations` 額外提供 `root_admission.scanned / matched / rejected`；錯 owner／host／
+  workspace、同名但內容不同等會記錄安全的拒絕原因，不投遞通知。Archive、失去資格或從查詢
+  消失的 root 與其 branch 在下一輪撤權，舊 tokens 不再能 authenticate。
+- 每輪分頁掃描最多 256 candidates，與 explicit roots 合計最多 16 roots；API／分頁異常或
+  超限 fail closed。請封存不再使用的 roots，避免長期累積。
+- 這核對的是 **server 保存的 bundle**，不是正在執行的 instruction context attestation。
+  已啟動 Pi 的 AGENTS hot reload 限制仍在；新內容應以 fresh session 驗證。同 UID 的 OS
+  隔離限制亦未改變。不要只改名稱、workspace metadata 或放寬規則來掩蓋不符的 runtime。
+
+### 3. 自動 descendants：每個 root 授權一次
 
 適合動態 repo-leader／worker。Operator 準備 `roots.json`，值必須是真實的 **top-level**
 session ID；不是 agent name，也不是任意 agent 自稱的身分：
@@ -104,7 +171,7 @@ history 的 `registration_id`，必要時手動交付同一個 config 路徑。�
 - 這是 capability 與 contacts 的邏輯隔離，**不是 OS sandbox 隔離**；相同 UID 能讀到別人
   private file 時仍能持有其 capability。不要以此宣稱 process identity attestation。
 
-### 3. 人工模式：建立固定 registry
+### 4. 人工模式：建立固定 registry
 
 例如 `registry.json`（替換 `conv_*` 成已確認的真實 ID）：
 
@@ -140,7 +207,7 @@ omni-msg provision \
 輸出目錄是 `0700`，裡面有 `server.json`（credential digest／session ACL）與
 `clients/<alias>.json`（該 actor 的 bearer capability），檔案 `0600`。既有目錄拒絕覆寫。
 
-### 4. 人工模式啟動與 client config
+### 5. 人工模式啟動與 client config
 
 ```bash
 omni-msg serve \
@@ -166,13 +233,13 @@ omni-msg --config /private/implement-123.json send issue-leader "PR 已就緒"
 `OMNIGENT_SESSION_ID`／`--from` 等自稱身分，bridge 只按 credential 決定 sender。
 它驗證的是 **capability 持有人**，不是對 harness process 身分的遠端 attestation。
 
-兩種模式都不提供 agent 自助 registration。若仍採人工模式，新增 worker：先取得真 ID，operator 加入新的 alias、
+所有模式都不提供 agent 自助 registration。若仍採人工模式，新增 worker：先取得真 ID，operator 加入新的 alias、
 獨立 random token 的 SHA-256 與 allowlist，停 bridge 後更新 private server config，再啟動並
 交付對應 client config（格式見 provision 產物）。新 token 用 `secrets.token_urlsafe(32)`，
 不從 alias 推導；輪替只更新 digest／client token，session binding 不變。同一 ledger 的 alias
 不可改綁其他 session；換人使用新 alias，避免舊 receipts 被新身分讀到。
 
-### 5. Skill 配送與 live smoke
+### 6. Skill 配送與 live smoke
 
 單一來源：[`../woow-issue-leader/skills/omni-msg/SKILL.md`](../woow-issue-leader/skills/omni-msg/SKILL.md)。
 `build-bundles.py` 配送到 issue-leader／兩個 repo-leader；`generate-worker.py` 配送到各 worker。
@@ -192,6 +259,10 @@ CLI binary 與 credential **不**打包進 agent bundle。沒有配置或遇 pol
 自動模式另需兩組 dedicated roots／descendants 驗：不人工交付 client config 的原 session
 收到設定通知並能呼叫 CLI；新增 descendant 自動加入、同組雙向通訊、跨組兩向拒絕、第三個未
 allowlist root 不登記、封存撤權、重啟保留 credential 與通知狀態。不要為 smoke 修改正式 runner。
+
+App root admission 另需驗：使用同一 approved agent_id 的 JSON session-create 流程建立兩個
+新 roots，不把 IDs 加進 policy；驗首次自動通知、自行 list、同組通訊、跨組拒絕，以及同名但
+不同 bundle 的 root 無 credential／通知。Candidate 用獨立 port/config/ledger，不能碰正式 root。
 
 此 repo 的 fake endpoint 測試不能取代以上步驟；**未完成 live smoke 就不得聲稱可投入無人值守**。
 

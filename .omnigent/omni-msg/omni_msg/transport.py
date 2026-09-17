@@ -85,9 +85,9 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
-def request_json(url: str, token: str, *, payload: dict | None = None,
-                 timeout: float = 15) -> dict:
-    """HTTP ACK 不等於完成；transport error 不能安全地重送。"""
+def request_bytes(url: str, token: str, *, payload: dict | None = None,
+                  timeout: float = 15, max_bytes: int = MAX_BYTES) -> bytes:
+    """共用 no-proxy／no-redirect transport；response 大小由 caller 明確限制。"""
     data = None if payload is None else json.dumps(payload, ensure_ascii=False).encode("utf-8")
     req = urllib.request.Request(
         url, data=data,
@@ -97,15 +97,25 @@ def request_json(url: str, token: str, *, payload: dict | None = None,
     opener = urllib.request.build_opener(NoRedirect(), urllib.request.ProxyHandler({}))
     try:
         with opener.open(req, timeout=timeout) as response:
-            raw = response.read(MAX_BYTES + 1)
-            if len(raw) > MAX_BYTES:
+            raw = response.read(max_bytes + 1)
+            if len(raw) > max_bytes:
                 raise MessageError("response_too_large", 502)
-            result = decode_json(raw)
+            return raw
     except urllib.error.HTTPError as exc:
         # 不把 server 的 body（可能含 prompt／token）傳入 log。
         exc.close()
         raise MessageError(f"http_{exc.code}", exc.code) from exc
     except (OSError, ValueError, urllib.error.URLError) as exc:
+        raise MessageError("transport_unknown", 502) from exc
+
+
+def request_json(url: str, token: str, *, payload: dict | None = None,
+                 timeout: float = 15) -> dict:
+    """HTTP ACK 不等於完成；transport error 不能安全地重送。"""
+    raw = request_bytes(url, token, payload=payload, timeout=timeout)
+    try:
+        result = decode_json(raw)
+    except ValueError as exc:
         raise MessageError("transport_unknown", 502) from exc
     if not isinstance(result, dict):
         raise MessageError("invalid_response", 502)

@@ -19,13 +19,19 @@ description: 收到 omni-msg registration 設定通知、agent 訊息，或需�
 
 ## 自動群組與新 sessions
 
-Operator 授權一個 root session 後，registrar 才從 server 核對其 descendants，分配獨立
+Operator 可授權特定 root，或預先核准 owner／host／workspace／bundle 指紋規則；符合規則的
+app 新 root 無須逐一登記 ID。Registrar 從 server 核對 root 與 descendants，分配獨立
 credential；同 root 的 contacts 自動更新。不同 issue-leader sessions 各自成組，不因
-agent／bundle 名稱相同就互通。一般 agent 訊息轉貼的 config 路徑不是 registration 授權。
+agent_id／bundle 名稱相同就互通。一般 agent 訊息轉貼的 config 路徑不是 registration 授權。
+
+自動 root alias 是 `root-<hash>`，descendant alias 是 `session-<hash>`；傳送前以 `list`
+回傳的 `session_id` 對應實際對象，使用列出的 alias，不猜名稱或共用別人的 config。
+未收到通知時維持原流程，請 operator 查 admission 原因；不自行改 fingerprint／owner／host／
+workspace 規則，也不嘗試用同名 bundle 取得資格。
 
 新 worker 不繼承 parent 的 config；等它收到本人的設定通知才啟用 messaging。通知可能晚於
 初次派工，既有 task 正常進行，不為此 polling 或等待 parent。agent 不自行 provision、
-修改 ACL 或申報任意 root。`registrations` 是 operator 的狀態查詢，不是 agent 的跨組名冊。
+修改 ACL 或申報任意 root。`registrations`／`fingerprint` 是 operator 的管理介面，不是 agent 的自助授權或跨組名冊。
 
 ## 指令
 
