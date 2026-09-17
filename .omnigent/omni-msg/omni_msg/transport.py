@@ -22,7 +22,7 @@ class MessageError(Exception):
         self.status = status
 
 
-def private_file(path: str | Path) -> str:
+def private_file(path: str | Path, *, max_bytes: int = MAX_BYTES) -> str:
     """只讀目前使用者持有的 private regular file，不追 symlink。"""
     try:
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
@@ -31,8 +31,8 @@ def private_file(path: str | Path) -> str:
             if (not stat.S_ISREG(info.st_mode) or info.st_mode & 0o077
                     or info.st_uid != os.getuid()):
                 raise MessageError("private_file_required")
-            content = stream.read(MAX_BYTES + 1)
-            if len(content.encode("utf-8")) > MAX_BYTES:
+            content = stream.read(max_bytes + 1)
+            if len(content.encode("utf-8")) > max_bytes:
                 raise MessageError("config_too_large")
             return content
     except (OSError, UnicodeError) as exc:
@@ -120,11 +120,11 @@ class OmnigentTransport:
             raise MessageError("invalid_upstream_token")
         self.timeout = timeout
 
-    def deliver(self, session_id: str, text: str) -> tuple[str, str | None, str | None]:
+    def deliver(self, session_id: str, text: str, *, timeout: float | None = None) -> tuple[str, str | None, str | None]:
         """回傳 delivery／item_id／error；unknown 一律人工對帳，不自動重送。"""
         endpoint = f"{self.url}/v1/sessions/{urllib.parse.quote(session_id, safe='')}/events"
         try:
-            result = request_json(endpoint, self.token, timeout=self.timeout, payload={
+            result = request_json(endpoint, self.token, timeout=self.timeout if timeout is None else timeout, payload={
                 "type": "message",
                 "data": {"role": "user", "content": [{"type": "input_text", "text": text}]},
             })

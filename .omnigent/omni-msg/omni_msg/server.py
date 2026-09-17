@@ -41,11 +41,12 @@ class Handler(BaseHTTPRequestHandler):
             authorization = self.headers.get("Authorization", "")
             if not authorization.startswith("Bearer "):
                 raise MessageError("unauthorized", 401)
-            caller = self.server.bridge.authenticate(authorization[7:])
+            bridge = self.server.bridge.snapshot()
+            caller = bridge.authenticate(authorization[7:])
             if self.command == "GET" and self.path == "/v1/contacts":
-                result = self.server.bridge.contacts(caller)
+                result = bridge.contacts(caller)
             elif self.command == "GET" and self.path.startswith("/v1/messages/"):
-                result = self.server.bridge.check(caller, self.path.removeprefix("/v1/messages/"))
+                result = bridge.check(caller, self.path.removeprefix("/v1/messages/"))
             elif self.command == "POST" and self.path == "/v1/messages":
                 try:
                     size = int(self.headers.get("Content-Length", "0"))
@@ -60,7 +61,7 @@ class Handler(BaseHTTPRequestHandler):
                     payload = decode_json(raw)
                 except (ValueError, UnicodeError) as exc:
                     raise MessageError("invalid_json") from exc
-                result = self.server.bridge.send(caller, payload)
+                result = bridge.send(caller, payload)
             else:
                 raise MessageError("not_found", 404)
             self.respond(200, result)

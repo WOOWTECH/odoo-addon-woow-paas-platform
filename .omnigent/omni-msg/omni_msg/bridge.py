@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import fcntl
 import hashlib
 import hmac
@@ -31,9 +32,9 @@ def message_id(value: str) -> str:
     return value
 
 
-def validate_actors(actors: dict) -> dict:
+def validate_actors(actors: dict, *, allow_empty: bool = False) -> dict:
     """Alias、session 與 credential 都由 operator 固定；caller 不能指定 from。"""
-    if not isinstance(actors, dict) or not actors:
+    if not isinstance(actors, dict) or (not actors and not allow_empty):
         raise MessageError("invalid_actors")
     sessions, digests = set(), set()
     for name, actor in actors.items():
@@ -132,12 +133,29 @@ class Store:
 
 
 class Bridge:
-    def __init__(self, actors: dict, store: Store, transport):
-        self.actors = validate_actors(actors)
+    def __init__(self, actors: dict, store: Store, transport, *, automatic: bool = False):
+        self.actors = validate_actors(actors, allow_empty=automatic)
         self.store = store
         self.transport = transport
+        self.access_lock = threading.RLock()
+        self.automatic = automatic
+        self.valid_until = 0.0
+
+    def replace_actors(self, actors: dict, valid_until: float):
+        """Registrar 發布完整 snapshot；單一 HTTP request 不混用兩代 ACL。"""
+        validated = validate_actors(actors, allow_empty=True)
+        with self.access_lock:
+            self.actors = validated
+            self.valid_until = valid_until
+
+    def snapshot(self):
+        """固定本次 HTTP request 的 ACL，避免網路 I/O 阻塞 registrar。"""
+        with self.access_lock:
+            return copy.copy(self)
 
     def authenticate(self, token: str) -> str:
+        if self.automatic and time.monotonic() >= self.valid_until:
+            raise MessageError("registration_unavailable", 503)
         if not isinstance(token, str) or not token or len(token) > 256:
             raise MessageError("unauthorized", 401)
         digest = hashlib.sha256(token.encode()).hexdigest()

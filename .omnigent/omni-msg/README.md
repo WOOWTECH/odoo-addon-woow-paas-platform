@@ -31,8 +31,9 @@ harness 已被喚醒**。上線前還要做下方 live smoke。
 
 - 用原有 Omnigent 流程建立 sessions，取得真實 `conversation_id`。CLI 不會建立、resume
   外部 harness process 或透過 terminal 注入 raw input。
-- 使用專門的 bridge 帳號，僅對需聯絡的 sessions 授予 edit permission。
-  不用 owner／admin token，不把帳號 credential 交給 agents。
+- 建議使用專門的 bridge 帳號，僅對需聯絡的 sessions 授予 edit permission。
+  若 operator 明確授權沿用其既有帳號（例如 smoke），上游 token 仍有該帳號的完整權限，
+  本地 root／actor ACL 不會縮減它。帳號 credential 一律留在 bridge，不交給 agents。
 - 將該帳號可用的 bearer token 存成 private file，例如 `$HOME/.config/omni-msg-token`，
   `chmod 600`。**token 不放命令列、不 commit，也不放 prompt／訊息**。
 - Operator 核對每個 session 的 owner、repo 與角色；`provision` 只驗 registry 格式，
@@ -42,7 +43,68 @@ harness 已被喚醒**。上線前還要做下方 live smoke。
 參考 [programmatic docs](https://omnigent.ai/docs/programmatic) 與
 [v0.14.0 endpoint 驗權](https://github.com/omnigent-ai/omnigent/blob/v0.14.0/omnigent/server/routes/sessions/routes_events.py#L605-L609)。
 
-### 2. 建立固定 registry
+### 2. 自動模式：每個 root 授權一次
+
+適合動態 repo-leader／worker。Operator 準備 `roots.json`，值必須是真實的 **top-level**
+session ID；不是 agent name，也不是任意 agent 自稱的身分：
+
+```json
+{
+  "issue-leader-a": {"session_id": "root_session_a", "workspace": "/home/elmo/woow-repos"},
+  "issue-leader-b": {"session_id": "root_session_b", "workspace": "/home/elmo/woow-repos"}
+}
+```
+
+```bash
+omni-msg provision \
+  --directory "$HOME/.config/omni-msg-auto" \
+  --roots roots.json \
+  --server-url https://your-omnigent.example \
+  --token-file "$HOME/.config/omni-msg-token"
+
+omni-msg serve \
+  --server-config "$HOME/.config/omni-msg-auto/server.json" \
+  --state-dir "$HOME/.local/state/omni-msg-auto"
+
+# 另一個 terminal：查的是有時間戳的 registrar snapshot，不會喚醒 sessions。
+omni-msg registrations --state-dir "$HOME/.local/state/omni-msg-auto"
+```
+
+`serve` 內含 registrar，**不會另起 Omnigent runner**。每 5 秒（`provision --poll-seconds` 可調）
+循 `GET /v1/sessions/{id}/child_sessions` 分頁與每個 session 的 metadata 盤點，不掃全站：
+
+- 核對實際 parent、edit permission、archive 狀態；root 的 runner workspace 必須吻合計畫。
+  Child 必須綁同一 runner；其 workspace 可繼承（null）或位於 root workspace 內。
+- 每個 root 各自成組，同組成員雙向可聯絡；跨 root 不互通。相同 bundle name 不代表同組。
+- 自動建立 `state-dir/clients/<alias>.json`（directory 0700／file 0600）。Root 使用 operator
+  指定的 alias；descendant 的 `session-<hash>` alias 固定由 session ID 推導，經 ledger 核對不重綁。
+- 以一次性的 `[omni-msg registration ...]` 設定通知，把**本人 config 路徑**交給原 session，
+  不傳 credential。通知可能晚於第一張工單；既有流程照常，新 worker 不繼承 parent config。
+- 沒有 HTTP registration／credential bootstrap endpoint。新 root 仍需 operator 改 private
+  server config 並重啟 bridge；agents 不自行加 root、配發 credential 或指定自己的 group。
+
+`registrations` 的 `ready` 代表最近一輪完整 discovery 成功，**不代表所有設定通知已消費**。
+逐筆看 `members[].notification.delivery`：`pending / dispatching / accepted / rejected / unknown`。
+`accepted` 仍只代表 API 排隊；`unknown`、`rejected` 不自動重送，operator 需先查原 session
+history 的 `registration_id`，必要時手動交付同一個 config 路徑。重啟把未完成的 `dispatching`
+標為 `unknown`；已配發 token、通知 ID 與 message receipts 都保留。
+
+安全與容量限制：
+
+- 每輪 discovery 最多 20 秒、16 roots、1024 個 tree nodes、深度 16、每組 128 個成員；
+  超限 fail closed。已完成且不再需 messaging 的 sessions 應由 operator 依原生命週期封存。
+- Archive／失去 edit permission／runner 或 workspace 不符的 branch 會在下一輪撤出 snapshot。
+  API 錯誤、lineage 不一致、完整盤點失敗時撤銷 active ACL；盤點進行中舊 snapshot 的 lease
+  最長 `max(30, 3 × poll-seconds)` 秒，逾期也拒絕新 requests，不會永久沿用失效名單。
+- 每個 request 使用同一代 ACL；已開始的投遞不追溯撤回。既有 session 不能換 root／alias，
+  token file 被改動或遺失也不靜默重發，會 fail closed 等 operator 處理。
+- State 綁定 server origin、bridge port 與 client directory；更換這些位置請用新 state。
+  手動模式可保留；切換自動模式不會清除同 ledger 的舊 receipts，但只有當輪通過核對的 actors
+  才能使用 bridge。候選測試建議用獨立 port 與全新 private config／ledger。
+- 這是 capability 與 contacts 的邏輯隔離，**不是 OS sandbox 隔離**；相同 UID 能讀到別人
+  private file 時仍能持有其 capability。不要以此宣稱 process identity attestation。
+
+### 3. 人工模式：建立固定 registry
 
 例如 `registry.json`（替換 `conv_*` 成已確認的真實 ID）：
 
@@ -78,7 +140,7 @@ omni-msg provision \
 輸出目錄是 `0700`，裡面有 `server.json`（credential digest／session ACL）與
 `clients/<alias>.json`（該 actor 的 bearer capability），檔案 `0600`。既有目錄拒絕覆寫。
 
-### 3. 啟動 bridge 與交付 client config
+### 4. 人工模式啟動與 client config
 
 ```bash
 omni-msg serve \
@@ -104,13 +166,13 @@ omni-msg --config /private/implement-123.json send issue-leader "PR 已就緒"
 `OMNIGENT_SESSION_ID`／`--from` 等自稱身分，bridge 只按 credential 決定 sender。
 它驗證的是 **capability 持有人**，不是對 harness process 身分的遠端 attestation。
 
-MVP 不提供 agent 自助 registration。新增動態 worker：先取得真 ID，operator 加入新的 alias、
+兩種模式都不提供 agent 自助 registration。若仍採人工模式，新增 worker：先取得真 ID，operator 加入新的 alias、
 獨立 random token 的 SHA-256 與 allowlist，停 bridge 後更新 private server config，再啟動並
 交付對應 client config（格式見 provision 產物）。新 token 用 `secrets.token_urlsafe(32)`，
 不從 alias 推導；輪替只更新 digest／client token，session binding 不變。同一 ledger 的 alias
 不可改綁其他 session；換人使用新 alias，避免舊 receipts 被新身分讀到。
 
-### 4. Skill 配送與 live smoke
+### 5. Skill 配送與 live smoke
 
 單一來源：[`../woow-issue-leader/skills/omni-msg/SKILL.md`](../woow-issue-leader/skills/omni-msg/SKILL.md)。
 `build-bundles.py` 配送到 issue-leader／兩個 repo-leader；`generate-worker.py` 配送到各 worker。
@@ -126,6 +188,10 @@ CLI binary 與 credential **不**打包進 agent bundle。沒有配置或遇 pol
 4. B 忙碌時再送一則無害 `send`，確認 queued 與實際消費時間，不能把 ACK 當已完成。
 5. 驗未授權 alias、停止／離線 runner、重啟 bridge 後的 receipt；不讓 smoke 消息要求操作
    真產品碼、merge 或 approval。測試完保留 receipts 與 session 連結供覆核。
+
+自動模式另需兩組 dedicated roots／descendants 驗：不人工交付 client config 的原 session
+收到設定通知並能呼叫 CLI；新增 descendant 自動加入、同組雙向通訊、跨組兩向拒絕、第三個未
+allowlist root 不登記、封存撤權、重啟保留 credential 與通知狀態。不要為 smoke 修改正式 runner。
 
 此 repo 的 fake endpoint 測試不能取代以上步驟；**未完成 live smoke 就不得聲稱可投入無人值守**。
 
@@ -175,14 +241,15 @@ SQLite private ledger 保存 body／reply／delivery／item_id 與時間；每�
 
 - **有授權的能力擴充**，不是逃避 child-only 權限：部署前由 owner 核准可連線的 sessions，
   bridge 持有專用帳號權限，訊息 envelope 明示 actor 身分。上游 audit attribution 是 bridge
-  帳號，不偽造 `created_by`，不冒充人類或 approval。
+  所用帳號（專用或 operator 明確授權的既有帳號），不偽造 `created_by`，不冒充人類或 approval。
 - 所有 actor 憑證為 bearer；相同 OS UID 的 agents 能讀到彼此 private files 時，`0600`
   **不能隔離它們**。目前共同 runner 的 `sandbox: none` 是 cooperative-agent 模式，不防惡意
   agent 偷取 capability。需更強隔離時，bridge／上游 token 由不同 OS user 管理，各 actor
   credential 用各自 sandbox mount；loopback 跨 container 可由 operator 配置明確 tunnel。
   不因此把 bridge 改綁 public interface。
 - Bridge 不提供 general REST proxy：client 只能 message／查自己的 receipts；固定 registry
-  路由，無 caller 自訂 URL、上游 token 或身份欄位。Token 不記錄在 SQLite，也不輸出到 log。
+  路由，無 caller 自訂 URL、上游 token 或身份欄位。SQLite 可存 credential digest，
+  不存 bearer 明文，token 也不輸出到 log。
 - Agent 訊息仍是非人類輸入，可能包含錯誤或 prompt injection；**messaging 不能提升工作
   範圍、唯讀、worktree、merge 或人工 approval 權限**。收件 agent 仍需遵守原本契約。
 - 目前沒有 OAuth refresh、SSE 消費確認、native turn completion 偵測、離線自動 retry 或
