@@ -91,7 +91,8 @@ def request_json(url: str, token: str, *, payload: dict | None = None,
     data = None if payload is None else json.dumps(payload, ensure_ascii=False).encode("utf-8")
     req = urllib.request.Request(
         url, data=data,
-        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json",
+                 "User-Agent": "omni-msg"},
     )
     opener = urllib.request.build_opener(NoRedirect(), urllib.request.ProxyHandler({}))
     try:

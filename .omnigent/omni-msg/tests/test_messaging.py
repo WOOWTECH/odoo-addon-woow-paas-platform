@@ -301,6 +301,21 @@ class CLIE2ETests(unittest.TestCase):
         self.assertEqual(data["data"]["content"][0]["type"], "input_text")
         self.assertEqual(FakeOmnigent.calls[1][0], "/v1/sessions/conv_worker/events")
 
+    def test_explicit_user_agent_passes_upstream_gate(self):
+        class UserAgentGate(FakeOmnigent):
+            def do_POST(self):
+                # 重現入口拒收預設 Python-urllib User-Agent 的 live smoke 問題。
+                if self.headers.get("User-Agent") != "omni-msg":
+                    self.send_error(403)
+                    return
+                super().do_POST()
+
+        self.upstream.RequestHandlerClass = UserAgentGate
+        row = self.cli("worker", "send", "leader", "通知")
+        self.assertEqual(row["delivery"], "accepted")
+        self.cli("worker", "send", "leader", "通知", "--id", row["id"])
+        self.assertEqual(len(FakeOmnigent.calls), 1)
+
     def test_http_acl_and_auth(self):
         self.assertEqual(self.cli("outsider", "list")["contacts"], [])
         self.cli("outsider", "send", "worker", "越權", expected=2)
