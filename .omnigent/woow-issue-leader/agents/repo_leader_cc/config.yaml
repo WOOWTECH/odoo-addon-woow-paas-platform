@@ -112,12 +112,23 @@ guardrails:
                  (event.data.arguments.command.matches("\\bgit\\b[\\s\\S]*\\bpush\\b")
                   && event.data.arguments.command.matches("(--tags|--follow-tags|refs/tags/|[\\s:][\"\']?([A-Za-z0-9._-]+-)?v[0-9])"))
               || event.data.arguments.command.matches("refs/tags/")
-              || event.data.arguments.command.matches("\\b(tea|gh|glab)\\b[\\s\\S]*\\brelease")
+              || event.data.arguments.command.matches("\\b(tea\\s+(releases|release|r)|gh\\s+release|glab\\s+release)\\b")
+              || ((event.data.arguments.command.matches("\\b(tea|gh|glab)\\s+api\\b")
+                   || event.data.arguments.command.matches("\\bcurl\\b"))
+                  && event.data.arguments.command.matches("/releases(\\?[^\\s\"\']*)?[\"\']?(\\s|$)")
+                  && (event.data.arguments.command.matches("(^|\\s)(-X(=|\\s*)(POST|post)|--(method|request)(=|\\s+)(POST|post))(\\s|$)")
+                      || (event.data.arguments.command.matches("\\b(tea|gh|glab)\\s+api\\b")
+                          && event.data.arguments.command.matches("(^|\\s)((-f|-F|-d)([^\\s-]|\\s+)|--(field|Field|raw-field|form|input|data)(=|\\s+))")
+                          && !event.data.arguments.command.matches("(^|\\s)(-X(=|\\s*)[A-Za-z]+|--(method|request)(=|\\s+)[A-Za-z]+)(\\s|$)"))
+                      || (event.data.arguments.command.matches("\\bcurl\\b")
+                          && event.data.arguments.command.matches("(^|\\s)((-d|-F)([^\\s-]|\\s+)|--(data|data-ascii|data-binary|data-raw|data-urlencode|form|json)(=|\\s+))")
+                          && !event.data.arguments.command.matches("(^|\\s)(-X(=|\\s*)[A-Za-z]+|--(method|request)(=|\\s+)[A-Za-z]+)(\\s|$)")
+                          && !event.data.arguments.command.matches("(^|\\s)(-G|--get)(\\s|$)"))))
               || event.data.arguments.command.matches("\\bgh\\b[\\s\\S]*\\bapi\\b[\\s\\S]*git/refs")
               || event.data.arguments.command.matches("-X\\s+(POST|PATCH|PUT)[\\s\\S]*git/refs")
               || event.data.arguments.command.matches("\\bgit\\s+tag\\s+[^-\\s]")
             )
-            ? {"result": "DENY", "reason": "發版 tag 由人工推，agent 不推 tag、不建 release（v<版號> / --tags / refs/tags/ / git tag <name> / forge release 皆擋）。⚠ 刻意誤擋：branch 名以 <字>-v<數字> 開頭（如 1032-v18-upgrade）或 HEAD:v… 也會命中——branch 名改用 <type>/<issue-id>-… 形式；只是要讀 tag 用 git fetch --tags / git ls-remote --tags / git tag -l。"} : {"result": "ALLOW"}
+            ? {"result": "DENY", "reason": "發版 tag 由人工推，agent 不推 tag、不建 release（v<版號> / --tags / refs/tags/ / git tag <name> / forge release 子命令 / POST /releases 建立端點皆擋）。⚠ 刻意誤擋：branch 名以 <字>-v<數字> 開頭（如 1032-v18-upgrade）或 HEAD:v… 也會命中——branch 名改用 <type>/<issue-id>-… 形式；只是要讀 tag 用 git fetch --tags / git ls-remote --tags / git tag -l。"} : {"result": "ALLOW"}
     p_escape_obfuscated_command:
       type: function
       on: [tool_call]

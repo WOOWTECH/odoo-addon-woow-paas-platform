@@ -532,10 +532,23 @@ CEL_VECTORS: dict[str, dict[str, list]] = {
             _shell("git push origin HEAD:refs/tags/v9"),
             _shell("sh -c 'git push origin v1.7.6'"),
             _shell("echo ok && git push origin v1.7.6"),
-            # 不經 git push 的建 tag／建 release 路徑
+            # 不經 git push 的建 tag 路徑
             _shell("gh api repos/o/r/git/refs -f ref=refs/tags/v1.0"),
+            # forge 子命令：tea 的正式名稱與全部 alias，以及 gh／glab 的正式名稱
             _shell("tea releases create --tag v1.7.6"),
+            _shell("tea release create --tag v1.7.6"),
+            _shell("tea r create --tag v1.7.6"),
             _shell("gh release create v1.7.6"),
+            _shell("glab release create v1.7.6"),
+            # REST collection endpoint 建立動作：明示 POST、attached -X、--request 與隱含 POST
+            _shell("tea api -X POST repos/o/r/releases -f tag_name=v1.7.6"),
+            _shell("gh api repos/o/r/releases -f tag_name=v1.7.6"),
+            _shell("gh api --method POST 'repos/o/r/releases?draft=true' -f tag_name=v1.7.6"),
+            _shell("glab api -XPOST projects/1/releases -f tag_name=v1.7.6"),
+            _shell("curl -X POST https://api.github.com/repos/o/r/releases"),
+            _shell("curl -XPOST https://api.github.com/repos/o/r/releases"),
+            _shell("curl --request=POST https://api.github.com/repos/o/r/releases"),
+            _shell("curl --data '{\"tag_name\":\"v1.7.6\"}' https://api.github.com/repos/o/r/releases"),
             _shell("git tag v1.7.6"),
             # 🔴 FIX ROUND 3：tag 形態前面帶引號舊版滑過
             _shell('git push origin "v1.7.6"'),
@@ -562,6 +575,21 @@ CEL_VECTORS: dict[str, dict[str, list]] = {
             _shell("git push origin release/v1.7.6"),   # 這是 branch，不是 tag
             _shell('git push origin "develop"'),         # 引號 branch 不得誤擋
             _shell("git push origin 'feat/omnigent-agent-bundles'"),
+            # PR／comment 內文含 release 字首不得再被第 3 條誤擋
+            _shell("tea pulls create --title 'docs: 引用 prod-release-sop.md' --description '依文件辦理'"),
+            _shell("tea pulls create --title 'chore: 對帳' --description 'poll-release-facts-single-source 已通過'"),
+            _shell("tea comment 1110 '請參考 prod-release-sop.md 與 poll-release-facts-single-source'"),
+            _shell("gh pr create --title '更新紀錄' --body 'CHANGELOG 使用 released 用語'"),
+            # REST 讀取與 endpoint boundary：GET collection、明示 GET＋field、detail／相近路徑皆放行
+            _shell("tea api repos/o/r/releases"),
+            _shell("gh api repos/o/r/releases"),
+            _shell("gh api 'repos/o/r/releases?per_page=10'"),
+            _shell("glab api projects/1/releases"),
+            _shell("curl https://api.github.com/repos/o/r/releases"),
+            _shell("gh api -X GET repos/o/r/releases -f per_page=10"),
+            _shell("curl -G --data page=1 https://api.github.com/repos/o/r/releases"),
+            _shell("gh api -X POST repos/o/r/releases/latest -f draft=true"),
+            _shell("curl -X POST https://api.github.com/repos/o/r/releases-notes"),
             _shell("git tag -l"),                        # 讀取用法（flag 開頭）
             _shell("git tag --list 'v1.*'"),
             _shell("git log --oneline -1"),
@@ -569,6 +597,15 @@ CEL_VECTORS: dict[str, dict[str, list]] = {
         "known_gap": [
             _shell("V=v1.7.6; git push origin $V"),          # 版號存在變數裡
             _shell("git push origin \"$(cat /tmp/tagname)\""),
+            # #1110 裁決只認 CLI 後緊接子命令；全域 flag 是否納入交由 Eugene 決定
+            _shell("tea --debug releases create --tag v1.7.6"),
+            _shell("gh -R o/r release create v1.7.6"),
+            _shell("glab --repo o/r release create v1.7.6"),
+            # raw command 看不到使用者自訂 alias 的展開內容
+            _shell("gh ship v1.7.6"),
+            # REST method 或 endpoint 名稱放進變數後，best-effort regex 不追資料流
+            _shell("M=POST; gh api -X $M repos/o/r/releases"),
+            _shell("E=releases; curl -X POST https://api.github.com/repos/o/r/$E"),
         ],
     },
     "p_escape_obfuscated_command": {

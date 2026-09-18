@@ -10,7 +10,8 @@
 2. **不代簽 approval**——prod build 的 `/approve` 只能授權者本人送出，**即使人類當場明
    確授權、即使手上憑證就是授權者本人也不代簽**。`P-approve` 擋含 `/approve` 的指令。
 3. **不推 tag、不建 release**——`P-tag` 擋 `git push` 推 tag（`v<版號>` / `--tags` /
-   `refs/tags/`）、`git tag <name>`、以及 forge 的 release／`git/refs` 建立。⚠ 它是字串比對：
+   `refs/tags/`）、`git tag <name>`、forge release 子命令、POST `/releases` collection endpoint，
+   以及 `git/refs` 建立。⚠ 它是字串比對：
    branch 名以 `<字>-v<數字>` 開頭（`1032-v18-upgrade`）或 `HEAD:v…` 也會被擋——branch 一律
    `<type>/<issue-id>-…`；只是要讀 tag 用 `git fetch --tags`／`git ls-remote --tags`／`git tag -l`。
 4. **一律 zh-tw 繁體中文**：PR / Issue / Comment 描述、commit message、程式碼註解。技術
