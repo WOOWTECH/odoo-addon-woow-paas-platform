@@ -16,7 +16,8 @@ import uuid
 from pathlib import Path
 
 from .bridge import ALIAS, SESSION
-from .transport import MessageError, load_private_json, request_json
+from .root_admission import MAX_BUNDLE_BYTES, RootAdmission
+from .transport import MessageError, load_private_json, request_bytes, request_json
 
 MAX_SESSIONS = 1024
 MAX_GROUP_MEMBERS = 128
@@ -34,8 +35,8 @@ def poll_seconds(value) -> float:
     return number
 
 
-def validate_roots(roots):
-    if not isinstance(roots, dict) or not 1 <= len(roots) <= 16:
+def validate_roots(roots, *, allow_empty=False):
+    if not isinstance(roots, dict) or not (0 if allow_empty else 1) <= len(roots) <= 16:
         raise MessageError("invalid_roots")
     seen = set()
     for alias, root in roots.items():
@@ -84,8 +85,8 @@ def atomic_json(path, value, *, replace=True):
 class Registrar:
     """從 server lineage 建立完整 ACL snapshot；HTTP 不提供 registration endpoint。"""
 
-    def __init__(self, roots, interval, bridge, state_dir, port):
-        self.roots = validate_roots(roots)
+    def __init__(self, roots, interval, bridge, state_dir, port, *, rules=None):
+        self.roots = validate_roots(roots, allow_empty=rules is not None)
         self.interval = poll_seconds(interval)
         self.bridge = bridge
         self.store = bridge.store
@@ -96,6 +97,7 @@ class Registrar:
         self.bridge_url = f"http://127.0.0.1:{port}"
         self.stop = threading.Event()
         self.thread = None
+        self.admission = RootAdmission(rules, self._get, self._get_bundle) if rules is not None else None
         private_directory(self.directory)
         private_directory(self.clients)
         with self.store.lock, self.store.db:
@@ -128,6 +130,20 @@ class Registrar:
     def _get(self, path, deadline):
         return request_json(self.transport.url + path, self.transport.token, timeout=self._remaining(deadline))
 
+    def _get_bundle(self, path, deadline):
+        return request_bytes(self.transport.url + path, self.transport.token,
+                             timeout=self._remaining(deadline), max_bytes=MAX_BUNDLE_BYTES)
+
+    def _root_alias(self, sid):
+        # 自動模式沿用既有 root 的 identity，不因移除 explicit entry 而換 credential／receipt owner。
+        with self.store.lock:
+            row = self.store.db.execute("SELECT root_id, alias FROM registrations WHERE session_id=?", (sid,)).fetchone()
+        if row:
+            if row["root_id"] != sid or not ALIAS.fullmatch(row["alias"]) or row["alias"].startswith("session-"):
+                raise MessageError("registration_rebind_forbidden")
+            return row["alias"]
+        return "root-" + hashlib.sha256(sid.encode()).hexdigest()[:32]
+
     def _children(self, sid, deadline):
         cursor = None
         seen_cursors = set()
@@ -151,7 +167,15 @@ class Registrar:
 
     def _discover(self, deadline):
         members, seen = [], set()
-        for root_alias, plan in self.roots.items():
+        roots, proofs = dict(self.roots), {}
+        if self.admission:
+            proofs = self.admission.discover(deadline, explicit_ids={r["session_id"] for r in roots.values()})
+            for sid, proof in proofs.items():
+                alias = self._root_alias(sid)
+                if alias in roots or len(roots) >= 16:
+                    raise MessageError("duplicate_or_oversized_root_admission")
+                roots[alias] = {"session_id": sid, "workspace": proof["workspace"]}
+        for root_alias, plan in roots.items():
             root_id = plan["session_id"]
             queue = [(root_id, None, 0)]
             runner = None
@@ -176,6 +200,8 @@ class Registrar:
                 workspace = node.get("workspace")
                 if parent is None:
                     if workspace != plan["workspace"]:
+                        continue
+                    if sid in proofs and any(node.get(k) != v for k, v in proofs[sid].items()):
                         continue
                     runner = node["runner_id"]
                 elif (node["runner_id"] != runner or
@@ -230,8 +256,11 @@ class Registrar:
                                             "WHERE session_id=?", (member["session_id"],)).fetchone()
                 output.append({**member, "client_config": str(self.clients / f"{member['alias']}.json"),
                                "notification": dict(row)})
-        atomic_json(self.status_path, {"ready": error is None, "error": error, "members": output,
-                                     "checked_at": time.time(), "expires_at": expires})
+        status = {"ready": error is None, "error": error, "members": output,
+                  "checked_at": time.time(), "expires_at": expires}
+        if self.admission:
+            status["root_admission"] = self.admission.status
+        atomic_json(self.status_path, status)
 
     def _notify(self, members, deadline):
         by_id = {m["session_id"]: m for m in members}

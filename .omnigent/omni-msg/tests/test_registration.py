@@ -54,7 +54,7 @@ class SessionAPI(BaseHTTPRequestHandler):
         self.respond(202, self.server.ack)
 
 
-class RegistrationCLITests(unittest.TestCase):
+class RegistrationHarness(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
@@ -150,6 +150,8 @@ class RegistrationCLITests(unittest.TestCase):
         return self.wait_status(lambda s: s["ready"] and len(s["members"]) == 4
                                 and all(m["notification"]["delivery"] == "accepted" for m in s["members"]))
 
+
+class RegistrationCLITests(RegistrationHarness):
     def test_groups_receive_credentials_and_only_message_within_root(self):
         self.start()
         status = self.ready()
