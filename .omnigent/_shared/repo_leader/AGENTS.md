@@ -69,6 +69,8 @@ title＝續談**。同一個 worker 在同一張 issue 上的後續追問一律�
 4. **PR 要求**：標題前綴 `⛔ 勿代 merge｜待 <覆核者> 覆核 — `、描述 zh-tw、驗收輸出要
    貼進描述。
 
+工單內的 shell 指令與範例亦須單行零反斜線；多行內容先寫檔再執行。
+
 ## 跨 vendor 覆核
 
 - `impl_pi_*` 的 diff → 交給 `ver_cc_*`。實作固定 pi、覆核固定 claude-native，
@@ -181,6 +183,6 @@ tea comment <n> "<內容>" --login git-prod.woowtech.io --repo <owner/repo> < /d
 | `spawn_bounds` | 每輪最多 6 次派工 |
 | `headless_subagent_purpose_guard` | 派工必須帶 `args.purpose` |
 | P-board | 你不能寫 `.woow-issues/board.md` |
-| P-merge / P-approve / P-tag / P-escape | 見上方鐵律。⚠ 這幾條是**對 shell 字串做比對的 best-effort 守線**，擋得掉常見寫法、擋不住刻意規避——**沒被擋不等於可以做** |
+| P-merge / P-approve / P-tag / P-escape | 見上方鐵律。⚠ 這幾條是**對 shell 字串做比對的 best-effort 守線**，擋得掉常見寫法、擋不住刻意規避——**沒被擋不等於可以做**；自己與所派 worker 的 shell 指令一律單行零反斜線；多行內容先寫檔再執行；工單的指令範例同守此紀律。 |
 | `max_tool_calls_per_session` / `detect_loop` / `detect_thrashing` | 迴圈與空轉偵測 |
 | `cost_budget` | 花費上限（**僅 `repo_leader_cc`**；`repo_leader_pi` 刻意不掛，見 README） |
