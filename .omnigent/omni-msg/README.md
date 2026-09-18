@@ -100,6 +100,8 @@ omni-msg serve \
   等包裝差異。Symlink／hardlink／special files、重複或逃逸路徑、不明 PAX 執行 metadata
   一律拒絕；不解壓到磁碟。輸入上限 compressed 8 MiB、unpacked 16 MiB、2048 entries。
 - Bundle 內容／執行屬性改版後，須 operator 重新覆核並更新規則；**不是每個 session 核准**。
+  使用 project skill [woow-issue-leader-bundle-refresh](../../.agents/skills/woow-issue-leader-bundle-refresh/SKILL.md)
+  先做 plan，再經 owner 核准 apply（shared-agent 影響、bridge 暫停／更新、continuity／rollback）。
   指紋檢查每輪重做，同輪同 agent_id/version 可共用結果，不永久信任舊 cache。
 - `registrations` 額外提供 `root_admission.scanned / matched / rejected`；錯 owner／host／
   workspace、同名但內容不同等會記錄安全的拒絕原因，不投遞通知。Archive、失去資格或從查詢
