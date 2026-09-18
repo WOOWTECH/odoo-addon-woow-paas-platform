@@ -549,6 +549,14 @@ CEL_VECTORS: dict[str, dict[str, list]] = {
             _shell("curl -XPOST https://api.github.com/repos/o/r/releases"),
             _shell("curl --request=POST https://api.github.com/repos/o/r/releases"),
             _shell("curl --data '{\"tag_name\":\"v1.7.6\"}' https://api.github.com/repos/o/r/releases"),
+            # B-1：collection 後的 shell 分隔符與單一尾斜線仍須辨識；僅作 CEL 純字串事件
+            _shell("RID=$(gh api -X POST -f tag_name=v1.7.6 repos/o/r/releases)"),
+            _shell("curl -X POST -d '{...}' \"$API/repos/o/r/releases\"; echo"),
+            _shell("gh api -X POST -f tag_name=v1.7.6 repos/o/r/releases/"),
+            _shell("gh api -X POST -f tag_name=v1.7.6 'repos/o/r/releases?draft=true'& echo"),
+            _shell("gh api -X POST -f tag_name=v1.7.6 repos/o/r/releases| cat"),
+            _shell("gh api -X POST -f tag_name=v1.7.6 repos/o/r/releases> out"),
+            _shell("gh api -X POST -f tag_name=v1.7.6 repos/o/r/releases< in"),
             _shell("git tag v1.7.6"),
             # 🔴 FIX ROUND 3：tag 形態前面帶引號舊版滑過
             _shell('git push origin "v1.7.6"'),
@@ -590,6 +598,11 @@ CEL_VECTORS: dict[str, dict[str, list]] = {
             _shell("curl -G --data page=1 https://api.github.com/repos/o/r/releases"),
             _shell("gh api -X POST repos/o/r/releases/latest -f draft=true"),
             _shell("curl -X POST https://api.github.com/repos/o/r/releases-notes"),
+            # B-1 邊界反向：尾斜線 GET 仍可讀，detail／相近路徑接分隔符也不得誤認為 collection
+            _shell("gh api repos/o/r/releases/"),
+            _shell("gh api 'repos/o/r/releases/?per_page=10'"),
+            _shell("RID=$(gh api -X POST -f draft=true repos/o/r/releases/123)"),
+            _shell("curl -X POST https://api.github.com/repos/o/r/releases-notes> out"),
             _shell("git tag -l"),                        # 讀取用法（flag 開頭）
             _shell("git tag --list 'v1.*'"),
             _shell("git log --oneline -1"),

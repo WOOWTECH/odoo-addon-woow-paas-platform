@@ -265,7 +265,9 @@ TAG_SHAPE_RE = r"(--tags|--follow-tags|refs/tags/|[\\s:][\"\']?([A-Za-z0-9._-]+-
 #    不在這裡自行放寬。
 FORGE_RELEASE_SUBCOMMAND_RE = r"\\b(tea\\s+(releases|release|r)|gh\\s+release|glab\\s+release)\\b"
 FORGE_API_SUBCOMMAND_RE = r"\\b(tea|gh|glab)\\s+api\\b"
-RELEASES_ENDPOINT_RE = r"/releases(\\?[^\\s\"\']*)?[\"\']?(\\s|$)"
+# collection 可帶單一尾斜線／query；後方只接受引號、shell 分隔符、空白或字串尾，避免把
+# `/releases/latest`、`/releases/<id>`、`/releases-notes` 當成 collection。
+RELEASES_ENDPOINT_RE = r"/releases/?(\\?[^\\s\"\');&|><]*)?[\"\']?([\\s);&|><]|$)"
 # 三支 forge API 都以 -X／--method 指定 method；curl 另有 --request。`\\s*` 刻意涵蓋
 # `-XPOST` 無空白形態。POST 大小寫只涵蓋 CLI help 與常見人工輸入的兩種形態。
 REST_POST_METHOD_RE = r"(^|\\s)(-X(=|\\s*)(POST|post)|--(method|request)(=|\\s+)(POST|post))(\\s|$)"
@@ -299,7 +301,7 @@ CEL_TAG = f"""event.type == "tool_call"
   || event.data.arguments.command.matches("-X\\\\s+(POST|PATCH|PUT)[\\\\s\\\\S]*git/refs")
   || event.data.arguments.command.matches("\\\\bgit\\\\s+tag\\\\s+[^-\\\\s]")
 )
-? {{"result": "DENY", "reason": "發版 tag 由人工推，agent 不推 tag、不建 release（v<版號> / --tags / refs/tags/ / git tag <name> / forge release 子命令 / POST /releases 建立端點皆擋）。⚠ 刻意誤擋：branch 名以 <字>-v<數字> 開頭（如 1032-v18-upgrade）或 HEAD:v… 也會命中——branch 名改用 <type>/<issue-id>-… 形式；只是要讀 tag 用 git fetch --tags / git ls-remote --tags / git tag -l。"}} : {{"result": "ALLOW"}}"""
+? {{"result": "DENY", "reason": "發版 tag 由人工推，agent 不推 tag、不建 release（v<版號> / --tags / refs/tags/ / git tag <name> / forge release 子命令 / POST /releases collection 建立端點〔可帶尾斜線〕皆擋）。⚠ 刻意誤擋：branch 名以 <字>-v<數字> 開頭（如 1032-v18-upgrade）或 HEAD:v… 也會命中——branch 名改用 <type>/<issue-id>-… 形式；只是要讀 tag 用 git fetch --tags / git ls-remote --tags / git tag -l。"}} : {{"result": "ALLOW"}}"""
 
 # ── P-kubectl（僅 ops_k8s）──────────────────────────────────────────────────
 # ⚠ 這一層是 **defense-in-depth、best-effort**，**不是安全邊界**。權威守線是 repo 的
