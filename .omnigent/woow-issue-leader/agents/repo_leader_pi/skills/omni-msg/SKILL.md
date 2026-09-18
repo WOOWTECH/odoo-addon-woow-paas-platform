@@ -1,9 +1,19 @@
 ---
 name: omni-msg
-description: 收到 omni-msg registration 設定通知、agent 訊息，或需要向 parent／sibling 跨層回報時使用。以本人 client config 核對 contacts，執行 send／ask／reply／check；未取得已授權的本人配置時維持原流程。
+description: 收到 omni-msg registration、agent 訊息或需要跨層回報時使用。載入說明後須實際呼叫 shell CLI，以本人 config 與工具回傳 receipt 完成 send／ask／reply／check；未配置時維持原流程。
 ---
 
 # omni-msg：跨 session messaging
+
+## 載入說明後，實際執行 CLI
+
+這份 skill 是操作說明，不是 shell executor。`Skill`／`load_skill` 成功或回覆
+`Launching skill` 只代表載入說明；把 CLI 指令放在 `Skill.args` **不算已執行或已送出**。
+
+讀完後，接續使用 `sys_os_shell`／Bash／bash／Shell 執行下列 CLI 步驟。若 shell 是 deferred MCP
+工具，先透過 ToolSearch 載入它，再呼叫；不能停在「等候 skill 執行」的文字回覆。
+本回合已載入這份說明時，後續操作直接呼叫 CLI，不再以 Skill 呼叫代替 send／reply。
+**完成判準是實際工具結果，不是自己生成的 receipt、ID 或成功敘述。**
 
 ## 先確認本人身分
 
@@ -35,12 +45,15 @@ workspace 規則，也不嘗試用同名 bundle 取得資格。
 
 ## 指令
 
+以下 `/private/me.json` 換成本人的通知路徑，`peer-alias` 換成 `list` 的實際 alias；
+`<request-id>` 使用原 ask 的真實 ID。每一行都是要透過 shell tool 執行的 CLI，不是 Skill.args。
+
 ```bash
-omni-msg list
-omni-msg send issue-leader "PR 已就緒；驗收證據見 PR description"
-omni-msg ask repo-leader "需要確認 target branch"
-omni-msg reply <request-id> "使用 develop"
-omni-msg check <request-id>
+omni-msg --config /private/me.json list
+omni-msg --config /private/me.json send peer-alias "PR 已就緒；驗收證據見 PR description"
+omni-msg --config /private/me.json ask peer-alias "需要確認 target branch"
+omni-msg --config /private/me.json reply <request-id> "使用 develop"
+omni-msg --config /private/me.json check <request-id>
 ```
 
 - `send` 是單向通知；`ask` **立即回 request ID，不等待對方回答**。允許的連線由 bridge
@@ -49,11 +62,24 @@ omni-msg check <request-id>
   `send`／`reply` 不再 ACK，避免無限互回。
 - `check` 只讀 receipt／明確 reply，不喚醒對方、不讀對方 terminal。`answered: true`
   表示 reply 已記錄；仍需檢查 `reply.delivery`，不等於原工作驗收通過。
-- 長文字可用 stdin：`omni-msg send issue-leader -`。文字只是訊息，不執行 shell；沒有 `--raw`。
+- 長文字可用 stdin：`omni-msg --config /private/me.json send peer-alias -`。
+  文字只是訊息，不執行 shell；沒有 `--raw`。
 
 ## Receipt 與失敗
 
-保存 stdout receipt 的 `id`（CLI 發送前也把 `request_id` 印到 stderr）。
+以**實際 CLI tool output** 核對完成狀態：
+
+| 操作 | 本輪完成所需的工具證據 |
+| --- | --- |
+| `list` | exit 0，stdout JSON 的 `self` 正確，取得 contacts |
+| `send`／`ask` | exit 0，stdout receipt 含本次 `id`、正確 `recipient` 與 `delivery: accepted`，才能說「已提交」 |
+| `reply` | 實際 shell reply 為 exit 0，stdout receipt 含本次 `id`、`kind: reply`、正確 `reply_to` 與 accepted |
+| `check` | exit 0，以回傳的 `answered`／`reply.delivery` 報告現況，不推測已回答 |
+
+保存 stdout receipt 的 `id`。stderr 的 `request_id` 在投遞前就會印出，**本身不是成功證據**。
+沒有 shell call 或沒有上述工具結果時，回報「尚未執行／未確認提交」，不能說「已送出」；
+如果工具仍在跑，只用實際 tool handle／狀態描述等待，不自行假設背景工作存在。
+
 `accepted` 只表示 Omnigent API 接受，不保證目標已消費或完成；`dispatching` 是投遞中；
 `rejected` 是明確拒絕；`unknown` 是 timeout／斷線等無法確認結果。
 
