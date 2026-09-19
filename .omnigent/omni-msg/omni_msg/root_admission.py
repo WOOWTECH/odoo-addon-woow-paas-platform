@@ -12,13 +12,25 @@ import zlib
 from pathlib import Path, PurePosixPath
 
 from .bridge import SESSION
-from .transport import MAX_METADATA_BYTES, MessageError
+from .transport import MAX_METADATA_BYTES, MessageError, upstream_unavailable
 
 MAX_BUNDLE_BYTES = 8 * 1024 * 1024
 MAX_UNPACKED_BYTES = 16 * 1024 * 1024
 MAX_BUNDLE_FILES = 2048
 FINGERPRINT_PREFIX = "omni-msg-bundle-v1:"
 MAX_CANDIDATES = 256
+
+
+def phase_rejection(reason, phase, error):
+    # 只記程式內部 error code 與大小欄位；不記 response body、credential 或其 digest。
+    return {
+        "reason": reason,
+        "phase": phase,
+        "status": error.status,
+        "limit": error.limit,
+        "read_bytes": error.read_bytes,
+        "error": error.code,
+    }
 
 
 def bundle_fingerprint(raw: bytes) -> str:
@@ -97,6 +109,8 @@ class RootAdmission:
         self.get_json = get_json
         self.get_bundle = get_bundle
         self.status = {"scanned": 0, "matched": [], "rejected": []}
+        # 供 registrar 合併 upstream outage 判準；只看候選的 session_metadata phase。
+        self.detail_reachable, self.detail_outage = False, None
 
     def _candidates(self, deadline):
         seen = set()
@@ -133,6 +147,7 @@ class RootAdmission:
 
     def discover(self, deadline, *, explicit_ids=()):
         self.status = {"scanned": 0, "matched": [], "rejected": []}
+        self.detail_reachable, self.detail_outage = False, None
         matches, fingerprints = {}, {}
         for row in self._candidates(deadline):
             self.status["scanned"] += 1
@@ -148,14 +163,11 @@ class RootAdmission:
         return matches
 
     @staticmethod
-    def _phase_rejection(reason, phase, error):
-        return {
-            "reason": reason,
-            "phase": phase,
-            "status": error.status,
-            "limit": error.limit,
-            "read_bytes": error.read_bytes,
-        }
+    def _fetch_rejection(reason, phase, error):
+        # 任一 phase 的 403/404 維持 base 語意：無權存取該 root，而不是 metadata 異常。
+        if error.status in {403, 404}:
+            reason = "root_access_unavailable"
+        return phase_rejection(reason, phase, error)
 
     def _match(self, row, deadline, fingerprints, matches):
         sid = row["id"]
@@ -171,16 +183,16 @@ class RootAdmission:
         except MessageError as exc:
             if exc.code == "registration_scan_incomplete":
                 raise
-            reason = "root_access_unavailable" if exc.status in {403, 404} else "session_metadata_unverifiable"
-            return self._phase_rejection(reason, "session_metadata", exc)
-        if node.get("id") != sid:
-            return self._phase_rejection(
-                "session_metadata_unverifiable", "session_metadata",
-                MessageError(
-                    "root_identity_mismatch", 502,
-                    limit=MAX_METADATA_BYTES, read_bytes=None,
-                ),
+            if self.detail_outage is None and upstream_unavailable(exc):
+                self.detail_outage = exc
+            return self._fetch_rejection(
+                "session_metadata_unverifiable", "session_metadata", exc,
             )
+        # 這個 phase 取得可解析 detail 即代表 upstream 可用；之後 agent／bundle 失敗仍只局部化。
+        self.detail_reachable = True
+        # Identity 不一致可能是冒用或資料錯亂，維持整輪 fail closed。
+        if node.get("id") != sid:
+            raise MessageError("root_identity_mismatch")
         if "parent_session_id" not in node or node["parent_session_id"] is not None:
             return "not_top_level"
         if "owner" in node and node["owner"] != row["owner"]:
@@ -190,7 +202,7 @@ class RootAdmission:
         if (not isinstance(node.get("agent_id"), str)
                 or not SESSION.fullmatch(node["agent_id"])
                 or not isinstance(node.get("agent_name"), str)):
-            return self._phase_rejection(
+            return phase_rejection(
                 "session_metadata_unverifiable", "session_metadata",
                 MessageError(
                     "invalid_session_metadata", 502,
@@ -213,13 +225,13 @@ class RootAdmission:
         except MessageError as exc:
             if exc.code == "registration_scan_incomplete":
                 raise
-            return self._phase_rejection(
+            return self._fetch_rejection(
                 "agent_metadata_unverifiable", "agent_metadata", exc,
             )
         if (not isinstance(agent.get("id"), str) or not SESSION.fullmatch(agent["id"])
                 or agent["id"] != node["agent_id"] or agent.get("name") != node["agent_name"]
                 or type(agent.get("version")) is not int or agent["version"] < 1):
-            return self._phase_rejection(
+            return phase_rejection(
                 "agent_metadata_unverifiable", "agent_metadata",
                 MessageError(
                     "invalid_agent_metadata", 502,
@@ -233,7 +245,7 @@ class RootAdmission:
             except MessageError as exc:
                 if exc.code == "registration_scan_incomplete":
                     raise
-                return self._phase_rejection(
+                return self._fetch_rejection(
                     "bundle_unverifiable", "bundle", exc,
                 )
             try:
@@ -243,7 +255,7 @@ class RootAdmission:
                     exc.code, 502,
                     limit=MAX_BUNDLE_BYTES, read_bytes=len(raw),
                 )
-                return self._phase_rejection(
+                return phase_rejection(
                     "bundle_unverifiable", "bundle", error,
                 )
         if fingerprints[key] not in {r["bundle_fingerprint"] for r in scoped}:

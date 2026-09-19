@@ -31,6 +31,7 @@ from omni_msg.transport import (
     decode_json,
     private_file,
     request_json,
+    upstream_unavailable,
     validate_url,
 )
 
@@ -242,7 +243,11 @@ class ExactJSONResponse(BaseHTTPRequestHandler):
         pass
 
     def do_GET(self):
-        self.send_response(200)
+        if getattr(self.server, "drop", False):
+            # 不送任何 HTTP 回應就關閉連線，模擬 upstream 斷線。
+            self.close_connection = True
+            return
+        self.send_response(getattr(self.server, "status", 200))
         self.send_header("Content-Type", "application/json")
         self.end_headers()
         try:
@@ -488,6 +493,44 @@ class SafetyTests(unittest.TestCase):
             server.shutdown()
             server.server_close()
             thread.join()
+
+    def test_upstream_unavailable_marks_only_network_failures_and_5xx(self):
+        server = ThreadingHTTPServer(("127.0.0.1", 0), ExactJSONResponse)
+        thread = launch(server)
+        url = f"http://127.0.0.1:{server.server_port}/data"
+        try:
+            # code／status 維持既有值，只有 upstream_unavailable() 判斷不同。
+            for status, body, code, error_status, unavailable in [
+                (503, b"{}", "http_503", 503, True),
+                (502, b"{}", "http_502", 502, True),
+                (500, b"{}", "http_500", 500, True),
+                (404, b"{}", "http_404", 404, False),
+                (403, b"{}", "http_403", 403, False),
+                (200, b"not-json", "transport_unknown", 502, False),
+                (200, b"[]", "invalid_response", 502, False),
+                (200, exact_json_bytes(MAX_BYTES + 1), "response_too_large", 502, False),
+            ]:
+                with self.subTest(status=status, code=code):
+                    server.status, server.response_body = status, body
+                    with self.assertRaises(MessageError) as caught:
+                        request_json(url, "token")
+                    self.assertEqual((caught.exception.code, caught.exception.status), (code, error_status))
+                    self.assertIs(upstream_unavailable(caught.exception), unavailable)
+            server.drop = True
+            with self.assertRaises(MessageError) as caught:
+                request_json(url, "token")
+            self.assertEqual((caught.exception.code, caught.exception.status), ("transport_unknown", 502))
+            self.assertTrue(upstream_unavailable(caught.exception))
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join()
+        # 連線被拒（port 已關閉）也是網路層失敗。
+        with self.assertRaises(MessageError) as caught:
+            request_json(url, "token", timeout=2)
+        self.assertEqual((caught.exception.code, caught.exception.status), ("transport_unknown", 502))
+        self.assertTrue(upstream_unavailable(caught.exception))
+        self.assertFalse(upstream_unavailable(ValueError("not a MessageError")))
 
     def test_duplicate_json_keys_are_rejected(self):
         for raw in ['{"worker": {}, "worker": {}}', '{"queued": true, "queued": false}']:

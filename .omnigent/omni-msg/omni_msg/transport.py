@@ -19,12 +19,19 @@ class MessageError(Exception):
     """可安全回傳 CLI 的錯誤；不夾帶遠端 response body 或 credential。"""
 
     def __init__(self, code: str, status: int = 400, *, limit: int | None = None,
-                 read_bytes: int | None = None):
+                 read_bytes: int | None = None, unavailable: bool = False):
         super().__init__(code)
         self.code = code
         self.status = status
         self.limit = limit
         self.read_bytes = read_bytes
+        # 只標記 upstream 不可用；code／status 不變，CLI 與 deliver() 的既有輸出不受影響。
+        self.unavailable = unavailable
+
+
+def upstream_unavailable(exc: BaseException) -> bool:
+    """網路層失敗（沒有 HTTP 回應）或 HTTP 5xx 才算；server 有回應的大小／格式錯誤不算。"""
+    return isinstance(exc, MessageError) and exc.unavailable
 
 
 def private_file(path: str | Path, *, max_bytes: int = MAX_BYTES) -> str:
@@ -113,10 +120,13 @@ def request_bytes(url: str, token: str, *, payload: dict | None = None,
         exc.close()
         raise MessageError(
             f"http_{exc.code}", exc.code, limit=max_bytes, read_bytes=0,
+            unavailable=exc.code >= 500,
         ) from exc
     except (OSError, ValueError, urllib.error.URLError) as exc:
+        # 連線拒絕／reset／逾時等沒有拿到 HTTP 回應；與下方 JSON decode 失敗同 code 但語意不同。
         raise MessageError(
             "transport_unknown", 502, limit=max_bytes, read_bytes=0,
+            unavailable=True,
         ) from exc
 
 
