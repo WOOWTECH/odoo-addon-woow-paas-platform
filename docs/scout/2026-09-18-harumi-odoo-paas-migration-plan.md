@@ -3,7 +3,7 @@ title: harumi-odoo → PaaS odoo cloud_service 移植計畫（偵察與路線比
 category: scout
 status: draft
 created: 2026-09-18
-updated: 2026-09-18
+updated: 2026-09-19
 related:
   - docs/scout/2026-09-18-odoo-bitnami-coupling-inventory.md
   - docs/plans/2026-Q3/2026-09-03-woowtech-odoo-paas-migration-design.md
@@ -13,7 +13,7 @@ related:
 
 # harumi-odoo → PaaS odoo cloud_service 移植計畫（審查修訂版）
 
-> 狀態：draft（2026-09-15 調查並依三份審查修訂，2026-09-18 落檔），未經人工覆核；路線（Q1）待 Eugene 拍板。拍板後依 `docs/scout/README.md` promote 到 `plans/`（成案）或 `decisions/`（定案）。
+> 狀態：draft（2026-09-15 調查並依三份審查修訂，2026-09-18 落檔），路線（Q1）已定案（2026-09-19，見 §0）；其餘待決問題仍未經人工覆核。依 `docs/scout/README.md`，後續要 promote 到 `plans/`（成案）或 `decisions/`（定案）。
 > 依據：五份偵察報告（先例 [P]、平台 [PL]、image [I]、來源 IaC [S]、叢集 [C]）＋三份審查（db-filestore [R-db]、platform-lifecycle [R-pl]、ops-completeness [R-ops]）＋修訂時補做的兩項唯讀查證 [V]
 > 範圍：沒有開任何 issue；沒有對叢集做任何寫入。`harumi-odoo` 不在本 repo 的 kubectl 白名單，對它只做過 get／list／logs；修訂時的查證只對白名單 ns 做 `kubectl get`，外加讀取 GitHub 原始碼。
 > 敏感值：SMTP 帳號、Secret 值、MCP 私有 path 的隨機段（本文寫成 `private_<redacted>`）一律不寫入本文件。
@@ -25,11 +25,12 @@ related:
 
 本節記錄計畫完成後的討論結果；與下方章節衝突時以本節為準。
 
-1. **路線 C 建議升格**：叢集上 17 個 odoo-tenant 站（含 harumi）全部跑同一個官方 image digest（`odoo@sha256:4ea9b466…`，`18.0-20260810`），而平台租戶 odoo `cloud_service` 只有 stg 1 個、prod 0 個。因此建議不做「harumi 專屬隱藏 template」，改成**讓平台的 odoo template 本身換成官方 `odoo:18.0` lineage**，harumi 與其餘站共用同一套 template 與 runbook（仍待 Eugene 拍板，即 Q1）。改動範圍（約 61 處、27～47 人日）見[平台程式碼綁 Bitnami 的耦合盤點](2026-09-18-odoo-bitnami-coupling-inventory.md)。
+1. **路線 C 建議升格**：叢集上 17 個 odoo-tenant 站（含 harumi）全部跑同一個官方 image digest（`odoo@sha256:4ea9b466…`，`18.0-20260810`），而平台租戶 odoo `cloud_service` 只有 stg 1 個、prod 0 個。因此建議不做「harumi 專屬隱藏 template」，改成**讓平台的 odoo template 本身換成官方 `odoo:18.0` lineage**，harumi 與其餘站共用同一套 template 與 runbook。**已定案（2026-09-19，即 Q1）**。改動範圍（約 61 處、27～47 人日）見[平台程式碼綁 Bitnami 的耦合盤點](2026-09-18-odoo-bitnami-coupling-inventory.md)。
 2. **「只換 Bitnami 外殼內的 core」不採用**：技術上可行，但只解 A1（core 倒退），A2、A5、D3、D8 等卡點都還在。平台 image 停在 `bitnamilegacy/odoo:18.0.20250805` 的問題另外影響平台自身 `paas-odoo`，屬另案。
 3. **已裁決（2026-09-18）：新 odoo image 走 JCR**。`paas-odoo-ci` 以 `FROM odoo:18.0@sha256:<digest>` 建置、加入平台 addon 與 harumi 需要的 pip 後推到 `jcr-prod.woowtech.io`；不直接從 Docker Hub 拉（harumi 現在是直接拉，k3s 沒有 registry mirror）。1.3 的做法因此確定。目標 core 必須 ≥ harumi 現用的 `18.0-20260810`。
 4. **harumi image 來源（已查證）**：odoo、postgres（`pgvector/pgvector`）、nginx、busybox、cloudflared（`:latest` 浮動 tag）、pg-backup 的 image 都來自 Docker Hub；只有 `mcp-odoo` 來自 GHCR（`ghcr.io/woowtech/woow-odoo-mcp-server`，需要 pull secret）。
 5. **SMTP 補充（已查證）**：Odoo 18.0 把 odoo.conf 的 `smtp_ssl` 當成 **STARTTLS**（`odoo/addons/base/models/ir_mail_server.py:441-442`）。harumi 的 conf 是 `smtp_port=465`＋`smtp_ssl=True`，推論這條 conf 層設定連不上（465 是 implicit TLS），實際寄信可能走 DB 的 `ir_mail_server`。D12 與 Q18 要以指令區塊 B 的 `ir_mail_server` 查詢結果為準；新站若要用 465，只能建 `ir.mail_server` 記錄（`smtp_encryption='ssl'`）。
+6. **已開單（2026-09-19）**：chart → woow-paas/woow-paas-charts#81（藍本請求 woow-paas/woow-machines-operator#3）；cloud-odoo image → woow-paas/paas-odoo-ci#133；平台側 P0 → #1128（既存實例處置與 chart 換版守門）、#1129（operator odoo exec 路徑）、#1130（`cloud_app_odoo` template 切換）。P1、P2 尚未開單。
 
 ---
 
@@ -60,7 +61,7 @@ harumi-odoo 是一個**全天都有真實流量的 POS／掃碼點餐站**。
 **主要 blocker**：
 1. 客製 addon（`/mnt/extra-addons`）沒有任何 git 副本，唯一一份在一顆 Longhorn PVC 上。搬遷前必須先保全。
 2. 還沒盤點的項目：addon／pip 完整清單、是否用到 pgvector、nginx 與 SMTP 設定。來源 ns 不在白名單，要由 woow-machines-operator 代跑。
-3. 路線與目標形態還沒拍板，特別是「平台要不要接受第二條 Odoo image lineage」，由 Eugene 決定。
+3. ~~路線與目標形態還沒拍板~~：已定案（2026-09-19），平台 odoo template 改用官方 `odoo:18.0` lineage，見 §0。
 4. 必須保留 hostname。桌面 QR code 與 ECPay callback 都綁在 hostname 上（推論），但平台沒有自訂 hostname 機制。
 5. 租戶 cloud_service 沒有任何備份機制：程式碼與叢集都查無 [PL][R-pl]，也沒有專門追蹤的 issue（#512 是 odoo-tenant 站的同型旁證，範圍不同）。搬過來後會比現況（每日 dump）更差。
 6. 今天 08:18／13:49 有人對 harumi 做了 helm install／upgrade，完全不在 git 裡。搬遷前必須和執行者同步，並凍結變更。
@@ -203,7 +204,7 @@ harumi-odoo 是一個**全天都有真實流量的 POS／掃碼點餐站**。
 6. plan overlay 部分共用：`resources.*`、`persistence.size` 是純鍵名比對，新 chart 沿用鍵名就能共用。**workers 相關 overlay 會靜默失效**：它要靠 `customPostInitScripts` 存在才觸發（`src/models/cloud_service.py:4748-4796`），新 chart 不帶這個鍵時不會報錯，只是不生效 [R-pl]。所以 conf 以 chart values 為唯一權威，見 1.4、1.6 的驗收。
 7. 可複製：叢集上還有十餘家 `odoo-tenant` 站 [C][S]，C 可以直接複製成通用 runbook。
 
-**條件與替代**：如果 Eugene 裁決「平台只保留單一 Bitnami lineage」，改走 A，但 **Phase 2 必須以「倒退 core 的完整還原＋`-u all`＋A5 三套機制都處理＋POS 冒煙全數通過」作為 go/no-go gate**。B 不建議作為本案前置，但 C 做出的 chart 與 SOP 應回饋成 B 的需求。
+**條件與替代**（Q1 已定案採官方 lineage，本段僅留作紀錄）：如果 Eugene 裁決「平台只保留單一 Bitnami lineage」，改走 A，但 **Phase 2 必須以「倒退 core 的完整還原＋`-u all`＋A5 三套機制都處理＋POS 冒煙全數通過」作為 go/no-go gate**。B 不建議作為本案前置，但 C 做出的 chart 與 SOP 應回饋成 B 的需求。
 
 ---
 
@@ -291,7 +292,7 @@ $K get configmap mcp-admin-config mcp-odoo-policy -o json | jq '.items[] | {name
 - A2、C2 有結論。
 - hostname 與 tunnel 路由全表確認。
 - nginx 與 SMTP 設定已取得。
-- Q1（路線）由 Eugene 拍板。
+- ~~Q1（路線）由 Eugene 拍板~~：已定案（2026-09-19）。
 
 ### Phase 1：平台與 image 準備（路線 C）
 
@@ -419,7 +420,7 @@ $K get configmap mcp-admin-config mcp-odoo-policy -o json | jq '.items[] | {name
 
 | # | 問題 | 拍板者 |
 |---|---|---|
-| Q1 | 路線 C 或 A；平台是否接受第二條 Odoo image lineage（官方 `odoo:18.0`）與非 Bitnami 的 postgres（pgvector） | Eugene |
+| Q1 | 路線 C 或 A；平台是否接受第二條 Odoo image lineage（官方 `odoo:18.0`）與非 Bitnami 的 postgres（pgvector）。**已定案（2026-09-19）**：平台 odoo template 改用官方 `odoo:18.0` lineage，image 走 JCR；postgres 是否用 pgvector 待 Phase 0 盤點 | 已定案 |
 | Q2 | 是否保留 `harumi-odoo.woowtech.io`（建議保留）；長期是否補「cloud_service 附加 hostname」能力 | Eugene＋業主 |
 | Q3 | 今天 08:18／13:49 對 harumi 做 helm install／upgrade 的是誰、目的是什麼；搬遷前是否凍結變更 | elmo（向 WMO 或相關 session 確認） |
 | Q4 | harumi 客製 addon 的原始碼歸屬（業主或 woow）、要放哪個 Gitea repo | Eugene＋業主 |
@@ -457,8 +458,10 @@ $K get configmap mcp-admin-config mcp-odoo-policy -o json | jq '.items[] | {name
 | 11 | harumi 移植 Phase 3～4：prod 搬遷、DNS／tunnel 與 MCP 切換 runbook | woow_paas_platform | §5 Phase 3～4；rollback 截止點（Q12）；MCP（Q10） |
 | 12 | harumi 移植 Phase 5：觀察期與舊站下線（WMO 執行） | woow_paas_platform（追蹤）＋woow-machines-operator | 5.1～5.5 |
 | 13 | odoo-tenant 客戶站移植通用 runbook（以 #1032＋harumi 為基礎，先取得最新 `helm list -A` 盤點） | woow_paas_platform | Q13；兩次移植的差異沉澱 |
-| 14 | 〔僅在 Q1 裁決為 A 時〕cloud-odoo 候選加入 `payment_ecpay`、harumi addon 與 pip，並評估 addon 層級可見性 | paas-odoo-ci＋woow_paas_platform | C3、C4、C5 |
+| 14 | 〔僅在 Q1 裁決為 A 時；Q1 已定案為官方 lineage，本項不開〕cloud-odoo 候選加入 `payment_ecpay`、harumi addon 與 pip，並評估 addon 層級可見性 | paas-odoo-ci＋woow_paas_platform | C3、C4、C5 |
 | 15 | `cloud_app_odoo` template 沒設 `ODOO_SKIP_MODULES_UPDATE`：每次非首次開機都跑 `--update=all` 的影響評估 | woow_paas_platform | D7⑤；stg 實測重啟耗時；決定是否在 template 設 `yes`（與 paas-odoo 一致） |
+
+**已開單（2026-09-19）**：chart → woow-paas/woow-paas-charts#81（藍本請求 woow-paas/woow-machines-operator#3）；cloud-odoo image → woow-paas/paas-odoo-ci#133；平台側 P0 → #1128（既存實例處置與 chart 換版守門）、#1129（operator odoo exec 路徑）、#1130（`cloud_app_odoo` template 切換）。P1、P2 尚未開單。 上表 #4 對應 charts#81、#5 對應 paas-odoo-ci#133、#6 由平台側三張取代。
 
 ---
 

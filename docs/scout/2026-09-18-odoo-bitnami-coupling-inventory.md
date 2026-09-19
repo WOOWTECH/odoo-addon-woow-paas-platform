@@ -3,7 +3,7 @@ title: 平台程式碼綁 Bitnami odoo chart／image 的耦合盤點
 category: scout
 status: draft
 created: 2026-09-18
-updated: 2026-09-18
+updated: 2026-09-19
 related:
   - docs/scout/2026-09-18-harumi-odoo-paas-migration-plan.md
   - docs/reference/features/odoo-service-config.md
@@ -14,7 +14,7 @@ related:
 # 盤點報告：平台程式碼綁 Bitnami odoo 的地方
 
 > 盤點日期：2026-09-17（2026-09-18 落檔，補上 §0 與已查證項）
-> 決策方向：租戶 odoo `cloud_service` 從「Bitnami chart 28.2.10 ＋ cloud-odoo image（`FROM bitnamilegacy/odoo`）」改成「官方 `odoo:18.0` image ＋ 自家 chart（以 odoo-tenant-1.0.0 為藍本）」，待 Eugene 拍板。
+> 決策方向：租戶 odoo `cloud_service` 從「Bitnami chart 28.2.10 ＋ cloud-odoo image（`FROM bitnamilegacy/odoo`）」改成「官方 `odoo:18.0` image ＋ 自家 chart（以 odoo-tenant-1.0.0 為藍本）」，**已定案（2026-09-19）**。
 > 範圍：
 > - woow_paas_platform：`src/`、`extra/paas-operator/`、`scripts/`、`.gitea/`、`.claude/`、`docs/`
 > - 外部 repo：paas-odoo-ci、paas-app-bundle-cd、woow-paas-charts
@@ -29,7 +29,11 @@ related:
 - 平台租戶 odoo `cloud_service`：prod 0 個、stg 1 個（`paas-ws-stg-4bc02867/svc-42487178`）⇒ 換 lineage 對既有租戶的影響面幾乎為零。
 - 「保留 Bitnami 外殼、只換 core」技術上可行：Bitnami image 的 core 在 `/opt/bitnami/odoo/lib/odoo`、套件在 `/opt/bitnami/odoo/venv`（py3.12），而 odoo 18.0 的 `requirements.txt` 在 20250805→20260908（odoo/odoo `2b3ad02c`→`db131550`，其間 4547 commits）的差異只影響 py<3.12 或 ≥3.13。但它只解 core 倒退，不解 bootstrap、admin 覆寫、每次重啟 `--update=all`、入口層、pgvector，所以本盤點以「換成官方 lineage」為前提。
 
-**已裁決（2026-09-18）**：新的租戶 odoo image **走 JCR**——由 `paas-odoo-ci` 以 `FROM odoo:18.0@sha256:<digest>`（釘 digest）建置、加入平台 addon 後推到 `jcr-prod.woowtech.io`，不從 Docker Hub 直接拉。理由：避開 Docker Hub rate limit、不依賴上游 tag 的保留期，並與現行 `cloud-odoo` 的建置流程一致。本項回答 §6 第 8 點；「是否改用官方 lineage」本身仍待 Eugene 拍板。
+**已裁決（2026-09-18）**：新的租戶 odoo image **走 JCR**——由 `paas-odoo-ci` 以 `FROM odoo:18.0@sha256:<digest>`（釘 digest）建置、加入平台 addon 後推到 `jcr-prod.woowtech.io`，不從 Docker Hub 直接拉。理由：避開 Docker Hub rate limit、不依賴上游 tag 的保留期，並與現行 `cloud-odoo` 的建置流程一致。本項回答 §6 第 8 點。
+
+**已定案（2026-09-19）**：平台 odoo template 改用官方 `odoo:18.0` lineage（本盤點的前提，原待 Eugene 拍板）。
+
+**已開單（2026-09-19）**：chart → woow-paas/woow-paas-charts#81（藍本請求 woow-paas/woow-machines-operator#3）；cloud-odoo image → woow-paas/paas-odoo-ci#133；平台側 P0 → odoo-addons/woow_paas_platform#1128（既存實例處置與 chart 換版守門）、#1129（operator odoo exec 路徑）、#1130（`cloud_app_odoo` template 切換）。P1、P2 尚未開單。
 
 **標記說明**
 
