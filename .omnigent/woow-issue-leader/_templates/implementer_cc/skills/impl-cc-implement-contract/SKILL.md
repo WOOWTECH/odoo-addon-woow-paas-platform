@@ -28,6 +28,13 @@ description: claude-native 實作 worker 的工單執行流程：待在 worktree
 5. **commit**：zh-tw，前綴十選一（`feat:` `fix:` `docs:` `style:` `refactor:` `perf:`
    `test:` `chore:` `revert:` `release:`）。⛔ 不要加「Generated with …」字樣。
 6. **push branch**（⛔ 不是受保護分支、⛔ 不 force-push），用 `tea` 開 PR：
+   - PR 內文先寫進 worktree 內的檔案（⛔ 不要 commit 它），再於**同一個 shell 呼叫**裡先 cd
+     進 worktree 才開 PR：
+     `cd <worktree 絕對路徑> && tea pulls create --head <branch> --base <整合分支> --title "<標題>" --description "$(cat <PR 內文檔絕對路徑>)"`
+   - ⛔ 不帶 `--repo owner/repo`（會被當成本地路徑、回 `local repository required`；tea 從
+     worktree 的 origin remote 推斷 repo）。`--head`／`--base` 一律明寫。
+   - `--title` 裡 ⛔ 不用 ASCII `&`、`|`、`;`（`block_working_dir_changes` 切指令時不看引號，
+     會誤擋整條；全形 `｜` 沒事）。
    - 標題前綴 `⛔ 勿代 merge｜待 <覆核者> 覆核 — `
    - 描述全 zh-tw，**貼上第 4 步的真實指令與輸出**
    - 關聯**開單當下就寫**：`Closes #<n>`（會關閉）／`Refs #<n>`（只參照）
