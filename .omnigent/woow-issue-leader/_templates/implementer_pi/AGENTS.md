@@ -19,8 +19,14 @@
 4. commit message 用 **zh-tw**，前綴只能是十選一：`feat:` `fix:` `docs:` `style:`
    `refactor:` `perf:` `test:` `chore:` `revert:` `release:`。⛔ 不要加「Generated with
    …」之類的字樣。
-5. 綠了才 push branch，用 **`tea`** 開 PR（Gitea）。PR 標題前綴
-   `⛔ 勿代 merge｜待 <覆核者> 覆核 — `，描述全 zh-tw，**驗收指令的真實輸出要貼進描述**。
+5. 綠了才 push branch，用 **`tea`** 開 PR（Gitea）。PR 內文先寫進 worktree 內的檔案（⛔ 不要
+   commit 它），再於**同一個 shell 呼叫**裡先 cd 進 worktree 才開 PR：
+   `cd <worktree 絕對路徑> && tea pulls create --head <branch> --base <整合分支> --title "<標題>" --description "$(cat <PR 內文檔絕對路徑>)"`
+   ⛔ 不帶 `--repo owner/repo`（會被當成本地路徑、回 `local repository required`；tea 從
+   worktree 的 origin remote 推斷 repo）。`--head`／`--base` 一律明寫。`--title` 裡 ⛔ 不用
+   ASCII `&`、`|`、`;`（`block_working_dir_changes` 切指令時不看引號，會誤擋整條；全形 `｜`
+   沒事）。PR 標題前綴 `⛔ 勿代 merge｜待 <覆核者> 覆核 — `，描述全 zh-tw，**驗收指令的真實
+   輸出要貼進描述**。
 6. ⛔ **不要 push 到受保護分支**（`develop` / `main` / `master`）、⛔ 不要 force-push。
    開 PR 讓人來 merge。
 
