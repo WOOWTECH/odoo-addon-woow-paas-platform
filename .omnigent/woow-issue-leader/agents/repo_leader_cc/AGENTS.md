@@ -48,7 +48,12 @@ title＝續談**。同一個 worker 在同一張 issue 上的後續追問一律�
 - `args.input` **直接吃長文**，工單多長都直接寫。⛔ 不要落 `.scratch/` 實檔再帶路徑。
 - `sys_session_send` 會回傳 handle，worker 完成後喚醒你，但**只保證一跳**：你被 inbox
   叫醒後做完的回合不會再往上通知 issue-leader。create 一步起（帶 message）沒有 handle。
-- 派完就結束這一輪；不要 busy-poll、不要用 timer 戳進度、不要重送。
+- 派完就結束這一輪；收到完成通知才呼叫 `sys_read_inbox`。⛔ 不在派工前讀 inbox（不把「先讀
+  一次 inbox 再派工」當慣例），也不要 busy-poll、不要用 timer 戳進度、不要重送。
+- 任何一次 `sys_session_send` 回 `requires parent session inbox`，就只試那一次：立即停手，標
+  `agent-status:blocked` 並用 Gitea comment 貼錯誤原文，然後結束這一輪。⛔ 不重建 child、
+  不重送、不插入無關呼叫閃避守線（`detect_loop` 以「工具名＋參數」計數，無參數的
+  `sys_read_inbox` 多讀幾次就湊滿門檻）。
 - 你擁有 issue 全程：impl（pi）→ review（claude-native）→ 驗收（現場重量；你若是
   claude-native 會有 dispatcher hooks）→ 更新 Gitea label／comment；跨層通知不取代這些責任。
 
@@ -63,8 +68,14 @@ title＝續談**。同一個 worker 在同一張 issue 上的後續追問一律�
    因 repo 而異，先確認，不要寫死）。worker 的檔案工具寫入被 **`P-path`**（A 類）鎖在這個
    worktree 底下——前綴由產生器用 worktree 相對 runner workspace 的路徑算出，所以 worktree
    必須在 workspace（六 repo 的共同祖先）底下，否則產生器直接拒絕。
-4. **PR 要求**：標題前綴 `⛔ 勿代 merge｜待 <覆核者> 覆核 — `、描述 zh-tw、驗收輸出要
-   貼進描述。
+4. **PR 要求（含開 PR 的 cwd 與參數）**：PR 內文先寫成 worktree 內的檔案（不 commit）；
+   同一個 shell 呼叫先 `cd <worktree 絕對路徑>`，再執行
+   `tea pulls create --head <branch> --base <整合分支> --title "<標題>" --description "$(cat <PR 內文檔絕對路徑>)"`，
+   ⛔ 不帶 `--repo owner/repo`；標題不含 ASCII `&`、`|`、`;`（會被 cwd 守線誤擋）。標題前綴
+   `⛔ 勿代 merge｜待 <覆核者> 覆核 — `、描述 zh-tw、驗收輸出要貼進描述。
+
+工單必須自足，不假設 worker 讀過 repo 的 CLAUDE.md／skills。shell 指令與範例亦須單行零
+反斜線；多行內容先寫檔再執行。
 
 ## 跨 vendor 覆核
 
@@ -178,6 +189,6 @@ tea comment <n> "<內容>" --login git-prod.woowtech.io --repo <owner/repo> < /d
 | `spawn_bounds` | 每輪最多 6 次派工 |
 | `headless_subagent_purpose_guard` | 派工必須帶 `args.purpose` |
 | P-board | 你不能寫 `.woow-issues/board.md` |
-| P-merge / P-approve / P-tag / P-escape | 見上方鐵律。⚠ 這幾條是**對 shell 字串做比對的 best-effort 守線**，擋得掉常見寫法、擋不住刻意規避——**沒被擋不等於可以做** |
+| P-merge / P-approve / P-tag / P-escape | 見上方鐵律。⚠ 這幾條是**對 shell 字串做比對的 best-effort 守線**，擋得掉常見寫法、擋不住刻意規避——**沒被擋不等於可以做**；自己與所派 worker 的 shell 指令一律單行零反斜線；多行內容先寫檔再執行；工單的指令範例同守此紀律。 |
 | `max_tool_calls_per_session` / `detect_loop` / `detect_thrashing` | 迴圈與空轉偵測 |
 | `cost_budget` | 花費上限（**僅 `repo_leader_cc`**；`repo_leader_pi` 刻意不掛，見 README） |

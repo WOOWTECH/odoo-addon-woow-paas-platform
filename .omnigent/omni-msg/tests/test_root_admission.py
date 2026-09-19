@@ -13,6 +13,9 @@ from urllib.parse import parse_qs, urlsplit
 
 from test_registration import RegistrationHarness, SessionAPI
 
+from omni_msg.root_admission import MAX_BUNDLE_BYTES
+from omni_msg.transport import MAX_METADATA_BYTES
+
 PACKAGE = Path(__file__).resolve().parents[1]
 
 
@@ -142,6 +145,10 @@ class RootSessionAPI(SessionAPI):
                 node = self.server.graph.get(sid)
                 if node is None:
                     return self.respond(404, {})
+                phase = "bundle" if url.path.endswith("/contents") else "agent"
+                status = self.server.phase_statuses.get((sid, phase))
+                if status:
+                    return self.respond(status, {})
                 agent_id = node["agent_id"]
                 if url.path.endswith("/contents"):
                     self.send_response(200)
@@ -154,11 +161,12 @@ class RootSessionAPI(SessionAPI):
         if url.path.startswith("/v1/sessions/") and url.path.count("/") == 3:
             with self.server.graph_lock:
                 self.server.reads.append(self.path)
-                node = self.server.graph.get(url.path.rsplit("/", 1)[-1])
+                sid = url.path.rsplit("/", 1)[-1]
+                node = self.server.graph.get(sid)
                 if node is None:
                     return self.respond(404, {})
                 # 真實 detail endpoint 沒有 owner；owner 來自 authenticated list response。
-                return self.respond(200, {k: v for k, v in node.items() if k != "owner"})
+                return self.detail(sid, {k: v for k, v in node.items() if k != "owner"}, url.query)
         super().do_GET()
 
 
@@ -169,6 +177,7 @@ class RootAdmissionCLITests(RegistrationHarness):
         self.api.root_queries = []
         self.api.app_creates = 0
         self.api.page_size = 1
+        self.api.phase_statuses = {}
         self.api.bundles = {"trusted-agent": bundle_bytes(), "forged-agent": bundle_bytes(text="unapproved")}
         self.api.agent_versions = {"trusted-agent": 1, "forged-agent": 1}
         for sid, node in self.api.graph.items():
@@ -183,11 +192,11 @@ class RootAdmissionCLITests(RegistrationHarness):
                        "host_id": "host-one", "workspace": "/workspace", "bundle_fingerprint": fingerprint}]}
         self.policy_file.write_text(json.dumps(self.policy))
 
-    def start(self, provision=True):
+    def start(self, provision=True, poll_seconds="0.1"):
         if provision:
             self.cli("provision", "--directory", str(self.config), "--auto-roots", str(self.policy_file),
                      "--server-url", f"http://127.0.0.1:{self.api.server_port}", "--token-file", str(self.token),
-                     "--port", str(self.port), "--poll-seconds", "0.1")
+                     "--port", str(self.port), "--poll-seconds", poll_seconds)
         super().start(provision=False)
 
     def test_same_profile_new_roots_are_admitted_as_distinct_groups(self):
@@ -209,6 +218,245 @@ class RootAdmissionCLITests(RegistrationHarness):
                       status["root_admission"]["rejected"])
         self.assertTrue(any(q.get("after") for q in self.api.root_queries), "必須走完分頁")
         self.assertTrue(all(q.get("kind") == ["default"] for q in self.api.root_queries))
+
+    def test_detail_ignores_query_but_root_over_64k_is_still_admitted(self):
+        self.api.detail_item_bytes["root_a"] = 70 * 1024
+        self.api.detail_item_bytes["child_a"] = 70 * 1024
+        self.start(poll_seconds="60")
+        status = self.ready()
+        self.assertIn("root_a", status["root_admission"]["matched"])
+        detail_reads = [path for path in self.api.reads
+                        if urlsplit(path).path.count("/") == 3]
+        self.assertTrue(detail_reads)
+        self.assertTrue(all(parse_qs(urlsplit(path).query) == {"include_items": ["false"]}
+                            for path in detail_reads))
+
+    def test_session_agent_and_bundle_failures_have_distinct_reasons(self):
+        failures = {
+            "bad_session": "trusted-agent",
+            "bad_agent": "bad-agent",
+            "bad_bundle": "bad-bundle",
+        }
+        with self.api.graph_lock:
+            for sid, agent_id in failures.items():
+                node = self.node(sid, None)
+                node.update(owner="alice", host_id="host-one", agent_id=agent_id)
+                self.api.graph[sid] = node
+            self.api.detail_item_bytes["bad_session"] = MAX_METADATA_BYTES
+            self.api.agent_versions["bad-agent"] = 0
+            self.api.bundles["bad-agent"] = bundle_bytes()
+            self.api.agent_versions["bad-bundle"] = 1
+            self.api.bundles["bad-bundle"] = b"not-a-gzip-bundle"
+        self.start(poll_seconds="60")
+        status = self.ready()
+        rejected = {row["session_id"]: row for row in status["root_admission"]["rejected"]}
+        self.assertEqual(
+            (rejected["bad_session"]["reason"], rejected["bad_session"]["phase"]),
+            ("session_metadata_unverifiable", "session_metadata"),
+        )
+        self.assertEqual(rejected["bad_session"]["limit"], MAX_METADATA_BYTES)
+        self.assertEqual(rejected["bad_session"]["read_bytes"], MAX_METADATA_BYTES + 1)
+        self.assertEqual(rejected["bad_session"]["error"], "response_too_large")
+        self.assertEqual(
+            (rejected["bad_agent"]["reason"], rejected["bad_agent"]["phase"]),
+            ("agent_metadata_unverifiable", "agent_metadata"),
+        )
+        self.assertEqual(rejected["bad_agent"]["status"], 502)
+        self.assertEqual(rejected["bad_agent"]["limit"], MAX_METADATA_BYTES)
+        self.assertIsNone(rejected["bad_agent"]["read_bytes"])
+        self.assertEqual(rejected["bad_agent"]["error"], "invalid_agent_metadata")
+        self.assertEqual(
+            (rejected["bad_bundle"]["reason"], rejected["bad_bundle"]["phase"]),
+            ("bundle_unverifiable", "bundle"),
+        )
+        self.assertEqual(rejected["bad_bundle"]["status"], 502)
+        self.assertEqual(rejected["bad_bundle"]["limit"], MAX_BUNDLE_BYTES)
+        self.assertEqual(rejected["bad_bundle"]["read_bytes"], len(b"not-a-gzip-bundle"))
+        self.assertEqual(rejected["bad_bundle"]["error"], "invalid_bundle")
+
+    def add_candidate_root(self, sid, agent_id):
+        node = self.node(sid, None)
+        node.update(owner="alice", host_id="host-one", agent_id=agent_id)
+        self.api.graph[sid] = node
+        if agent_id not in self.api.agent_versions:
+            self.api.agent_versions[agent_id] = 1
+            self.api.bundles[agent_id] = self.api.bundles["trusted-agent"]
+
+    def test_access_denied_in_any_phase_is_root_access_unavailable(self):
+        limits = {"session_metadata": MAX_METADATA_BYTES, "agent_metadata": MAX_METADATA_BYTES,
+                  "bundle": MAX_BUNDLE_BYTES}
+        cases = {}
+        with self.api.graph_lock:
+            for phase in limits:
+                for code in [403, 404]:
+                    sid = f"{phase}_{code}"
+                    # 每個 case 用獨立 agent_id，避免同輪 fingerprint cache 跳過 bundle GET。
+                    self.add_candidate_root(sid, agent_id=f"agent-{sid}")
+                    if phase == "session_metadata":
+                        self.api.detail_statuses[sid] = code
+                    else:
+                        self.api.phase_statuses[(sid, "agent" if phase == "agent_metadata" else "bundle")] = code
+                    cases[sid] = (phase, code)
+        self.start(poll_seconds="60")
+        status = self.ready()
+        self.assertEqual(status["root_admission"]["matched"], ["root_a", "root_b"])
+        rejected = {row["session_id"]: row for row in status["root_admission"]["rejected"]}
+        for sid, (phase, code) in cases.items():
+            with self.subTest(phase=phase, code=code):
+                self.assertEqual(rejected[sid], {
+                    "session_id": sid, "reason": "root_access_unavailable", "phase": phase,
+                    "status": code, "limit": limits[phase], "read_bytes": 0, "error": f"http_{code}",
+                })
+        self.assertEqual(len(list((self.state / "clients").glob("*.json"))), 4)
+
+    def test_candidate_root_with_invalid_agent_id_is_session_metadata_unverifiable(self):
+        with self.api.graph_lock:
+            # list row 與 detail 的 agent_id 一致（不觸發 agent_identity_changed），但格式不合法。
+            self.add_candidate_root("bad_agent_id", agent_id="not a session id")
+        self.start(poll_seconds="60")
+        status = self.ready()
+        self.assertEqual(status["root_admission"]["matched"], ["root_a", "root_b"])
+        rejected = {row["session_id"]: row for row in status["root_admission"]["rejected"]}
+        self.assertEqual(rejected["bad_agent_id"], self.rejection(
+            "bad_agent_id", "session_metadata_unverifiable", 502, "invalid_session_metadata",
+            read_bytes=None,
+        ))
+        self.assertNotIn("/v1/sessions/bad_agent_id/agent", [urlsplit(path).path for path in self.api.reads])
+
+    def test_candidate_root_with_recent_items_over_1m_is_session_metadata_unverifiable(self):
+        with self.api.graph_lock:
+            # Server 忽略 include_items=false，最近 100 個 items 總量超過 1 MiB。
+            self.api.detail_recent_items["root_a"] = (100, 11 * 1024, False)
+        self.start(poll_seconds="60")
+        status = self.wait_status(
+            lambda value: value["ready"]
+            and {m["session_id"] for m in value["members"]} == {"root_b", "child_b"}
+            and all(m["notification"]["delivery"] == "accepted" for m in value["members"]),
+        )
+        self.assertEqual(status["root_admission"]["matched"], ["root_b"])
+        rejected = {row["session_id"]: row for row in status["root_admission"]["rejected"]}
+        self.assertEqual(rejected["root_a"], self.rejection(
+            "root_a", "session_metadata_unverifiable", 502, "response_too_large",
+            read_bytes=MAX_METADATA_BYTES + 1,
+        ))
+        self.assertEqual(len(list((self.state / "clients").glob("*.json"))), 2)
+
+    def test_candidate_root_identity_mismatch_fails_closed(self):
+        self.start()
+        members = self.ready()["members"]
+        with self.api.graph_lock:
+            # 候選 root 的 detail 自稱是另一個 session：可能是冒用，整輪撤權。
+            self.api.detail_overrides["root_a"] = {"id": "root_b"}
+        status = self.wait_status(lambda s: not s["ready"] and s["error"] == "root_identity_mismatch")
+        self.assertEqual(status["members"], [])
+        for member in members:
+            with self.subTest(sid=member["session_id"]):
+                self.assertEqual(
+                    self.cli("--config", member["client_config"], "list", expected=2)["error"], "http_503",
+                )
+        with self.api.graph_lock:
+            del self.api.detail_overrides["root_a"]
+        self.ready()
+        self.assertEqual(len(self.api.events), 4)
+
+    def test_all_candidate_details_unavailable_fails_closed_then_recovers(self):
+        self.start()
+        members = self.ready()["members"]
+        before = {m["session_id"]: Path(m["client_config"]).read_bytes() for m in members}
+        candidates = ["root_a", "root_b", "unapproved"]
+        with self.api.graph_lock:
+            # 候選清單正常，但每個候選的 detail 都 503（例如前方 proxy 故障）。
+            for sid in candidates:
+                self.api.detail_statuses[sid] = 503
+        status = self.wait_status(lambda s: not s["ready"] and s["error"] == "http_503")
+        self.assertEqual(status["members"], [])
+        self.assertEqual(status["root_admission"]["scanned"], 3, "候選清單本身必須可讀")
+        self.assertEqual(
+            {row["session_id"]: (row["reason"], row["error"]) for row in status["root_admission"]["rejected"]},
+            {sid: ("session_metadata_unverifiable", "http_503") for sid in candidates},
+        )
+        for member in members:
+            with self.subTest(sid=member["session_id"]):
+                self.assertEqual(self.client_error(member), "http_503")
+        with self.api.graph_lock:
+            for sid in candidates:
+                del self.api.detail_statuses[sid]
+        restored = self.ready()["members"]
+        self.assertEqual(before, {m["session_id"]: Path(m["client_config"]).read_bytes() for m in restored})
+        for member in members:
+            with self.subTest(sid=member["session_id"]):
+                self.assertEqual(self.cli("--config", member["client_config"], "list")["self"], member["alias"])
+        self.assertEqual(len(self.api.events), 4)
+
+    @staticmethod
+    def admission_rejected(status):
+        return {row["session_id"]: row for row in status.get("root_admission", {}).get("rejected", [])}
+
+    def test_one_readable_candidate_detail_keeps_other_503_isolated(self):
+        self.start()
+        members = {m["session_id"]: m for m in self.ready()["members"]}
+        with self.api.graph_lock:
+            self.api.detail_statuses["root_a"] = 503
+        # 等 admission 本身看到注入（避免注入落在同一輪中間、只由 registrar 跳過）。
+        status = self.wait_status(
+            lambda value: value["ready"] and self.member_ids(value) == {"root_b", "child_b"}
+            and "root_a" in self.admission_rejected(value),
+        )
+        rejected = self.admission_rejected(status)
+        self.assertEqual((rejected["root_a"]["reason"], rejected["root_a"]["error"]),
+                         ("session_metadata_unverifiable", "http_503"))
+        with self.api.graph_lock:
+            self.api.detail_statuses["root_b"] = 503
+        # 只剩 unapproved 的 detail 可讀；它之後因 bundle 不符被拒，仍證明 upstream 可用。
+        status = self.wait_status(
+            lambda value: value["ready"] and not value["members"]
+            and {"root_a", "root_b"} <= set(self.admission_rejected(value)),
+        )
+        rejected = self.admission_rejected(status)
+        self.assertEqual(rejected["unapproved"]["reason"], "bundle_fingerprint_mismatch")
+        for sid in ["root_a", "root_b"]:
+            with self.subTest(sid=sid):
+                self.assertEqual((rejected[sid]["reason"], rejected[sid]["error"]),
+                                 ("session_metadata_unverifiable", "http_503"))
+                self.assertEqual(self.client_error(members[sid]), "http_401")
+        self.assertEqual(len(self.api.events), 4)
+
+    def test_all_candidate_details_access_unavailable_is_revocation_not_outage(self):
+        self.start()
+        members = self.ready()["members"]
+        codes = {"root_a": 403, "root_b": 404, "unapproved": 403}
+        with self.api.graph_lock:
+            self.api.detail_statuses.update(codes)
+        status = self.wait_status(
+            lambda value: value["ready"] and not value["members"]
+            and set(codes) <= set(self.admission_rejected(value)),
+        )
+        self.assertEqual(
+            {sid: (row["reason"], row["error"]) for sid, row in self.admission_rejected(status).items()},
+            {sid: ("root_access_unavailable", f"http_{code}") for sid, code in codes.items()},
+        )
+        for member in members:
+            with self.subTest(sid=member["session_id"]):
+                self.assertEqual(self.client_error(member), "http_401")
+
+    def test_automatic_root_second_detail_failure_is_isolated(self):
+        self.api.detail_oversize_calls["root_a"] = {2}
+        self.start(poll_seconds="60")
+        status = self.wait_status(
+            lambda value: value["ready"]
+            and {m["session_id"] for m in value["members"]} == {"root_b", "child_b"},
+        )
+        self.assertIn("root_a", status["root_admission"]["matched"])
+        self.assertEqual(status["session_rejections"], [{
+            "session_id": "root_a",
+            "reason": "session_metadata_unverifiable",
+            "phase": "session_metadata",
+            "status": 502,
+            "limit": MAX_METADATA_BYTES,
+            "read_bytes": MAX_METADATA_BYTES + 1,
+            "error": "response_too_large",
+        }])
+        self.assertEqual(len(list((self.state / "clients").glob("*.json"))), 2)
 
     def test_app_json_created_root_joins_without_editing_policy(self):
         from urllib.request import Request, urlopen

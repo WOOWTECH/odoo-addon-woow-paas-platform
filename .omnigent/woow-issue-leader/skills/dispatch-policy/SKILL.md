@@ -43,7 +43,12 @@ session-scoped agent）；會撞的是同一 parent 下的 `sys_session_send` ti
 「一張 issue 一個 title」規則命名。
 
 `sys_session_create` 一步起（帶 message）沒有 task handle；worker 完成後你永遠不會被叫醒
-（#1092 實測 0/1）。只有上面的兩步起法會建立可靠的一跳喚醒線。
+（#1092 實測 0/1）。只有上面的兩步起法會建立可靠的一跳喚醒線。送完工就結束這一輪，收到
+完成通知才呼叫 `sys_read_inbox`；⛔ 不在派工前讀 inbox。
+
+任何一次 `sys_session_send` 回 `requires parent session inbox`，就只試那一次：立即停手，標
+`agent-status:blocked` 並用 Gitea comment 貼錯誤原文。⛔ 不重建 child、不重送、不插入無關
+呼叫閃避守線。
 
 ⛔ **不要自己手寫 worker 的 config.yaml**。五道防線擋的全是**靜默**失敗：
 

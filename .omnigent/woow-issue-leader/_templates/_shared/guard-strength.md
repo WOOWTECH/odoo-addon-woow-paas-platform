@@ -9,3 +9,9 @@
   變數展開繞過**，它們防的是**手滑**，不是刻意規避。
 
 守線是安全網，不是授權邊界——**規則本身才是**。
+
+## Shell
+
+- 須單行、零反斜線；反斜線接英數的跳脫序列（換行、tab）及續行禁。再含 kube/merge/approve/tag/push/board/woow-issues，P-escape DENY，無關動作(git merge-base、board-scan.py 路徑)。連要寫進文件的紀律文字也不要放進 shell 指令。
+- heredoc、Python 腳本、多行留言由編輯工具落檔再單行執行；多行輸出分次 echo。無寫權者依角色契約交有權者代寫，不增權。
+- 字串守線 DENY 即停；issue 留言附被擋指令原文與 DENY 訊息，依角色契約回報待人裁定；唯讀者依契約交 leader 代貼。禁改寫重試或拆字繞過；人判語法誤擋才單行零反斜線續作。

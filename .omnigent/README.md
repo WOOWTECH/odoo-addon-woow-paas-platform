@@ -97,6 +97,14 @@ workspace／bundle 內容指紋，讓 app 新 root 自動納管，不必每次�
 獨立，contacts 仍依 root 分組，不同 issue-leader 不自動互通（操作與失敗語意見上方 README）。未配置或 policy
 DENY 時維持原 Gitea 流程；不放寬唯讀、worktree、人工 merge／approval gate。
 
+### Bundle 改版後更新信任指紋
+
+修改 `woow-issue-leader/` 或會配送進去的 builder/shared 輸入後，用 project operator skill
+[`woow-issue-leader-bundle-refresh`](../.agents/skills/woow-issue-leader-bundle-refresh/SKILL.md)
+規劃 stored bundle 與 auto-root rule 更新。Pi：`/skill:woow-issue-leader-bundle-refresh plan`；
+Claude Code：`/woow-issue-leader-bundle-refresh plan`。預設只讀預覽，owner 核准具體計畫後才 apply；
+merge 不會自動信任新 fingerprint，也不順便重啟 runner。此 operator skill 不配送進 runtime bundle。
+
 ## 用法
 
 ```bash
