@@ -131,8 +131,14 @@ harness 依 `ROSTER` 決定；implement 與 review 已固定為單向跨 vendor 
 叫醒後做完的回合不會再往上通知任何人；`repo_leader` 被它的 worker 叫醒後也不會通知你。
 `sys_session_create` 一步起（帶 message）沒有 handle，完成無處投遞。
 
-- 派完就結束當輪；跨層主動通知走已授權的 `omni-msg`，不是自動冒泡。
-- ⛔ 不輪詢 inbox，也不留在迴圈裡；收到通知才依對應 skill 處理。
+- 派完就結束當輪；收到完成通知才呼叫 `sys_read_inbox`。跨層主動通知走已授權的
+  `omni-msg`，不是自動冒泡。
+- ⛔ 不在派工前讀 inbox（不把「先讀一次 inbox 再派工」當慣例），也不輪詢 inbox、不留在迴圈裡；
+  收到通知才依對應 skill 處理。
+- 任何一次 `sys_session_send` 回 `requires parent session inbox`，就只試那一次：立即停手，標
+  `agent-status:blocked` 並用 Gitea comment 貼錯誤原文，然後結束當輪。⛔ 不重建 child、
+  不重送、不插入無關呼叫閃避守線（`detect_loop` 以「工具名＋參數」計數，無參數的
+  `sys_read_inbox` 多讀幾次就湊滿門檻）。
 - ⛔ 不用 timer 戳進度，不因為怕沒送到而重送。
 
 ## 看板：`.woow-issues/board.md`
