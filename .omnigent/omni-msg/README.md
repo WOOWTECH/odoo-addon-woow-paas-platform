@@ -104,8 +104,11 @@ omni-msg serve \
   先做 plan，再經 owner 核准 apply（shared-agent 影響、bridge 暫停／更新、continuity／rollback）。
   指紋檢查每輪重做，同輪同 agent_id/version 可共用結果，不永久信任舊 cache。
 - `registrations` 額外提供 `root_admission.scanned / matched / rejected`；錯 owner／host／
-  workspace、同名但內容不同等會記錄安全的拒絕原因，不投遞通知。Archive、失去資格或從查詢
-  消失的 root 與其 branch 在下一輪撤權，舊 tokens 不再能 authenticate。
+  workspace、同名但內容不同等會記錄安全的拒絕原因，不投遞通知。Session metadata、agent
+  metadata、bundle 無法驗證時分別記為 `session_metadata_unverifiable`、
+  `agent_metadata_unverifiable`、`bundle_unverifiable`，並只附安全的 phase／status／大小
+  limit／已讀 bytes，不記 response body 或 credential。Archive、失去資格或從查詢消失的
+  root 與其 branch 在下一輪撤權，舊 tokens 不再能 authenticate。
 - 每輪分頁掃描最多 256 candidates，與 explicit roots 合計最多 16 roots；API／分頁異常或
   超限 fail closed。請封存不再使用的 roots，避免長期累積。
 - 這核對的是 **server 保存的 bundle**，不是正在執行的 instruction context attestation。
@@ -162,9 +165,14 @@ history 的 `registration_id`，必要時手動交付同一個 config 路徑。�
 
 - 每輪 discovery 最多 20 秒、16 roots、1024 個 tree nodes、深度 16、每組 128 個成員；
   超限 fail closed。已完成且不再需 messaging 的 sessions 應由 operator 依原生命週期封存。
+- Session detail 一律帶 `include_items=false`，JSON metadata response 上限為 1 MiB，與訊息 ACK
+  的 64 KiB 上限及 bundle 的 8 MiB 上限分開。若 server 忽略 query，1 MiB 仍會截斷並拒絕該
+  session；`registrations.session_rejections` 記錄安全欄位，不保存 response body。
 - Archive／失去 edit permission／runner 或 workspace 不符的 branch 會在下一輪撤出 snapshot。
-  API 錯誤、lineage 不一致、完整盤點失敗時撤銷 active ACL；盤點進行中舊 snapshot 的 lease
-  最長 `max(30, 3 × poll-seconds)` 秒，逾期也拒絕新 requests，不會永久沿用失效名單。
+  單一 session detail 異常只排除該 session 及未驗證的 descendants；全域 root inventory、
+  child inventory、分頁或 transport 無法形成可信完整 snapshot 時仍撤銷 active ACL。盤點進行中
+  舊 snapshot 的 lease 最長 `max(30, 3 × poll-seconds)` 秒，逾期也拒絕新 requests，不會永久
+  沿用失效名單。
 - 每個 request 使用同一代 ACL；已開始的投遞不追溯撤回。既有 session 不能換 root／alias，
   token file 被改動或遺失也不靜默重發，會 fail closed 等 operator 處理。
 - State 綁定 server origin、bridge port 與 client directory；更換這些位置請用新 state。

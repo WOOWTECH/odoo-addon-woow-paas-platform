@@ -11,15 +11,20 @@ import urllib.request
 from pathlib import Path
 
 MAX_BYTES = 64 * 1024
+# Metadata 正常不含 transcript；保留結構成長空間，同時限制 server 忽略 query 的最壞情況。
+MAX_METADATA_BYTES = 1024 * 1024
 
 
 class MessageError(Exception):
     """可安全回傳 CLI 的錯誤；不夾帶遠端 response body 或 credential。"""
 
-    def __init__(self, code: str, status: int = 400):
+    def __init__(self, code: str, status: int = 400, *, limit: int | None = None,
+                 read_bytes: int | None = None):
         super().__init__(code)
         self.code = code
         self.status = status
+        self.limit = limit
+        self.read_bytes = read_bytes
 
 
 def private_file(path: str | Path, *, max_bytes: int = MAX_BYTES) -> str:
@@ -99,26 +104,38 @@ def request_bytes(url: str, token: str, *, payload: dict | None = None,
         with opener.open(req, timeout=timeout) as response:
             raw = response.read(max_bytes + 1)
             if len(raw) > max_bytes:
-                raise MessageError("response_too_large", 502)
+                raise MessageError(
+                    "response_too_large", 502, limit=max_bytes, read_bytes=len(raw),
+                )
             return raw
     except urllib.error.HTTPError as exc:
         # 不把 server 的 body（可能含 prompt／token）傳入 log。
         exc.close()
-        raise MessageError(f"http_{exc.code}", exc.code) from exc
+        raise MessageError(
+            f"http_{exc.code}", exc.code, limit=max_bytes, read_bytes=0,
+        ) from exc
     except (OSError, ValueError, urllib.error.URLError) as exc:
-        raise MessageError("transport_unknown", 502) from exc
+        raise MessageError(
+            "transport_unknown", 502, limit=max_bytes, read_bytes=0,
+        ) from exc
 
 
 def request_json(url: str, token: str, *, payload: dict | None = None,
-                 timeout: float = 15) -> dict:
+                 timeout: float = 15, max_bytes: int = MAX_BYTES) -> dict:
     """HTTP ACK 不等於完成；transport error 不能安全地重送。"""
-    raw = request_bytes(url, token, payload=payload, timeout=timeout)
+    raw = request_bytes(
+        url, token, payload=payload, timeout=timeout, max_bytes=max_bytes,
+    )
     try:
         result = decode_json(raw)
     except ValueError as exc:
-        raise MessageError("transport_unknown", 502) from exc
+        raise MessageError(
+            "transport_unknown", 502, limit=max_bytes, read_bytes=len(raw),
+        ) from exc
     if not isinstance(result, dict):
-        raise MessageError("invalid_response", 502)
+        raise MessageError(
+            "invalid_response", 502, limit=max_bytes, read_bytes=len(raw),
+        )
     return result
 
 

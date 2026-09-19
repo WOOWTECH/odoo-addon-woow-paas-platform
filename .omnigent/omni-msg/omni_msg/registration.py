@@ -17,7 +17,13 @@ from pathlib import Path
 
 from .bridge import ALIAS, SESSION
 from .root_admission import MAX_BUNDLE_BYTES, RootAdmission
-from .transport import MessageError, load_private_json, request_bytes, request_json
+from .transport import (
+    MAX_METADATA_BYTES,
+    MessageError,
+    load_private_json,
+    request_bytes,
+    request_json,
+)
 
 MAX_SESSIONS = 1024
 MAX_GROUP_MEMBERS = 128
@@ -97,6 +103,7 @@ class Registrar:
         self.bridge_url = f"http://127.0.0.1:{port}"
         self.stop = threading.Event()
         self.thread = None
+        self.session_rejections = []
         self.admission = RootAdmission(rules, self._get, self._get_bundle) if rules is not None else None
         private_directory(self.directory)
         private_directory(self.clients)
@@ -128,7 +135,12 @@ class Registrar:
         return min(10, remaining)
 
     def _get(self, path, deadline):
-        return request_json(self.transport.url + path, self.transport.token, timeout=self._remaining(deadline))
+        return request_json(
+            self.transport.url + path,
+            self.transport.token,
+            timeout=self._remaining(deadline),
+            max_bytes=MAX_METADATA_BYTES,
+        )
 
     def _get_bundle(self, path, deadline):
         return request_bytes(self.transport.url + path, self.transport.token,
@@ -165,9 +177,20 @@ class Registrar:
                 raise MessageError("invalid_session_cursor")
             seen_cursors.add(cursor)
 
+    def _record_session_rejection(self, sid, error):
+        self.session_rejections.append({
+            "session_id": sid,
+            "reason": "session_metadata_unverifiable",
+            "phase": "session_metadata",
+            "status": error.status,
+            "limit": error.limit,
+            "read_bytes": error.read_bytes,
+        })
+
     def _discover(self, deadline):
         members, seen = [], set()
         roots, proofs = dict(self.roots), {}
+        self.session_rejections = []
         if self.admission:
             proofs = self.admission.discover(deadline, explicit_ids={r["session_id"] for r in roots.values()})
             for sid, proof in proofs.items():
@@ -186,13 +209,23 @@ class Registrar:
                     raise MessageError("invalid_or_oversized_session_tree")
                 seen.add(sid)
                 try:
-                    node = self._get(f"/v1/sessions/{sid}", deadline)
+                    node = self._get(
+                        f"/v1/sessions/{sid}?include_items=false", deadline,
+                    )
                 except MessageError as exc:
-                    if exc.status in {403, 404}:
-                        continue
-                    raise
-                if node.get("id") != sid or "parent_session_id" not in node or node["parent_session_id"] != parent:
-                    raise MessageError("session_lineage_mismatch")
+                    if exc.code == "registration_scan_incomplete":
+                        raise
+                    self._record_session_rejection(sid, exc)
+                    continue
+                if (node.get("id") != sid or "parent_session_id" not in node
+                        or node["parent_session_id"] != parent):
+                    self._record_session_rejection(
+                        sid, MessageError(
+                            "session_lineage_mismatch", 502,
+                            limit=MAX_METADATA_BYTES, read_bytes=None,
+                        ),
+                    )
+                    continue
                 level = node.get("permission_level")
                 if (node.get("archived") is not False or type(level) is not int or level < 2
                         or not isinstance(node.get("runner_id"), str) or not node["runner_id"]):
@@ -256,8 +289,14 @@ class Registrar:
                                             "WHERE session_id=?", (member["session_id"],)).fetchone()
                 output.append({**member, "client_config": str(self.clients / f"{member['alias']}.json"),
                                "notification": dict(row)})
-        status = {"ready": error is None, "error": error, "members": output,
-                  "checked_at": time.time(), "expires_at": expires}
+        status = {
+            "ready": error is None,
+            "error": error,
+            "members": output,
+            "session_rejections": list(self.session_rejections),
+            "checked_at": time.time(),
+            "expires_at": expires,
+        }
         if self.admission:
             status["root_admission"] = self.admission.status
         atomic_json(self.status_path, status)

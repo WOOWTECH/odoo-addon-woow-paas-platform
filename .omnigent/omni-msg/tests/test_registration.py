@@ -13,6 +13,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 PACKAGE = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PACKAGE))
+
+from omni_msg.transport import MAX_METADATA_BYTES
 
 
 class SessionAPI(BaseHTTPRequestHandler):
@@ -33,7 +36,7 @@ class SessionAPI(BaseHTTPRequestHandler):
         from urllib.parse import urlsplit
         path = urlsplit(self.path).path
         with self.server.graph_lock:
-            self.server.reads.append(path)
+            self.server.reads.append(self.path)
             if self.server.fail_reads:
                 return self.respond(503, {})
             sid = path.removeprefix("/v1/sessions/").split("/")[0]
@@ -41,10 +44,23 @@ class SessionAPI(BaseHTTPRequestHandler):
             if node is None:
                 return self.respond(404, {})
             if path.endswith("/child_sessions"):
+                if self.server.fail_child_reads:
+                    return self.respond(503, {})
                 children = [{"id": key} for key, row in self.server.graph.items()
                             if row["parent_session_id"] == sid]
                 return self.respond(200, {"data": children, "has_more": False})
-            return self.respond(200, node)
+            count = self.server.detail_counts.get(sid, 0) + 1
+            self.server.detail_counts[sid] = count
+            status = self.server.detail_statuses.get(sid)
+            if status:
+                return self.respond(status, {})
+            body = dict(node)
+            size = self.server.detail_item_bytes.get(sid)
+            if count in self.server.detail_oversize_calls.get(sid, set()):
+                size = MAX_METADATA_BYTES
+            if size:
+                body["items"] = ["x" * size]
+            return self.respond(200, body)
 
     def do_POST(self):
         data = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
@@ -66,6 +82,11 @@ class RegistrationHarness(unittest.TestCase):
         self.api.events = []
         self.api.reads = []
         self.api.fail_reads = False
+        self.api.fail_child_reads = False
+        self.api.detail_counts = {}
+        self.api.detail_statuses = {}
+        self.api.detail_item_bytes = {}
+        self.api.detail_oversize_calls = {}
         self.api.ack = {"queued": True, "item_id": "fake-item"}
         self.api.post_gate = threading.Event()
         self.api.post_gate.set()
@@ -175,6 +196,80 @@ class RegistrationCLITests(RegistrationHarness):
         self.cli("--config", a["client_config"], "send", b["alias"], "跨組", expected=2)
         self.cli("--config", b["client_config"], "send", a["alias"], "跨組", expected=2)
 
+    def test_detail_query_omits_items_and_uses_metadata_limit(self):
+        self.api.detail_item_bytes["root_a"] = 70 * 1024
+        self.api.detail_item_bytes["child_a"] = 70 * 1024
+        self.start()
+        status = self.ready()
+        self.assertEqual({m["session_id"] for m in status["members"]},
+                         {"root_a", "child_a", "root_b", "child_b"})
+        from urllib.parse import parse_qs, urlsplit
+        detail_reads = [path for path in self.api.reads
+                        if urlsplit(path).path.count("/") == 3]
+        self.assertTrue(detail_reads)
+        self.assertTrue(all(parse_qs(urlsplit(path).query) == {"include_items": ["false"]}
+                            for path in detail_reads))
+
+    def test_explicit_root_detail_failure_is_isolated_from_other_root(self):
+        self.start()
+        members = {m["session_id"]: m for m in self.ready()["members"]}
+        with self.api.graph_lock:
+            self.api.detail_statuses["root_a"] = 503
+        status = self.wait_status(
+            lambda value: value["ready"]
+            and {m["session_id"] for m in value["members"]} == {"root_b", "child_b"},
+        )
+        self.assertEqual(status["session_rejections"], [{
+            "session_id": "root_a",
+            "reason": "session_metadata_unverifiable",
+            "phase": "session_metadata",
+            "status": 503,
+            "limit": MAX_METADATA_BYTES,
+            "read_bytes": 0,
+        }])
+        self.assertEqual(
+            self.cli("--config", members["root_a"]["client_config"], "list", expected=2)["error"],
+            "http_401",
+        )
+        self.assertEqual(
+            self.cli("--config", members["child_a"]["client_config"], "list", expected=2)["error"],
+            "http_401",
+        )
+        self.assertEqual(
+            {row["session_id"] for row in self.cli(
+                "--config", members["root_b"]["client_config"], "list",
+            )["contacts"]},
+            {"child_b"},
+        )
+
+    def test_unverifiable_descendant_blocks_its_subtree_only(self):
+        with self.api.graph_lock:
+            self.api.graph["grandchild_a"] = self.node("grandchild_a", "child_a")
+        self.start()
+        status = self.wait_status(
+            lambda value: value["ready"] and len(value["members"]) == 5
+            and all(m["notification"]["delivery"] == "accepted" for m in value["members"]),
+        )
+        members = {m["session_id"]: m for m in status["members"]}
+        with self.api.graph_lock:
+            self.api.detail_statuses["child_a"] = 503
+        status = self.wait_status(
+            lambda value: value["ready"]
+            and {m["session_id"] for m in value["members"]} == {"root_a", "root_b", "child_b"},
+        )
+        self.assertEqual(
+            {row["session_id"] for row in status["session_rejections"]}, {"child_a"},
+        )
+        self.assertEqual(
+            self.cli("--config", members["root_a"]["client_config"], "list")["contacts"], [],
+        )
+        for sid in ["child_a", "grandchild_a"]:
+            with self.subTest(sid=sid):
+                self.assertEqual(
+                    self.cli("--config", members[sid]["client_config"], "list", expected=2)["error"],
+                    "http_401",
+                )
+
     def test_new_descendant_joins_and_archived_branch_loses_access(self):
         self.start()
         self.ready()
@@ -213,11 +308,11 @@ class RegistrationCLITests(RegistrationHarness):
     def test_failed_discovery_revokes_snapshot_then_recovers_without_renotifying(self):
         self.start()
         member = self.ready()["members"][0]
-        self.api.fail_reads = True
+        self.api.fail_child_reads = True
         self.wait_status(lambda s: not s["ready"] and s["error"] == "http_503")
         error = self.cli("--config", member["client_config"], "list", expected=2)
         self.assertEqual(error["error"], "http_503")
-        self.api.fail_reads = False
+        self.api.fail_child_reads = False
         self.ready()
         self.assertEqual(self.cli("--config", member["client_config"], "list")["self"], member["alias"])
         self.assertEqual(len(self.api.events), 4)

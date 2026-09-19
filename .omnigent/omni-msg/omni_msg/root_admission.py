@@ -12,7 +12,7 @@ import zlib
 from pathlib import Path, PurePosixPath
 
 from .bridge import SESSION
-from .transport import MessageError
+from .transport import MAX_METADATA_BYTES, MessageError
 
 MAX_BUNDLE_BYTES = 8 * 1024 * 1024
 MAX_UNPACKED_BYTES = 16 * 1024 * 1024
@@ -139,11 +139,23 @@ class RootAdmission:
             sid = row["id"]
             if sid in explicit_ids:
                 continue
-            reason = self._match(row, deadline, fingerprints, matches)
-            if reason:
-                self.status["rejected"].append({"session_id": sid, "reason": reason})
+            rejection = self._match(row, deadline, fingerprints, matches)
+            if rejection:
+                if isinstance(rejection, str):
+                    rejection = {"reason": rejection}
+                self.status["rejected"].append({"session_id": sid, **rejection})
         self.status["matched"] = sorted(matches)
         return matches
+
+    @staticmethod
+    def _phase_rejection(reason, phase, error):
+        return {
+            "reason": reason,
+            "phase": phase,
+            "status": error.status,
+            "limit": error.limit,
+            "read_bytes": error.read_bytes,
+        }
 
     def _match(self, row, deadline, fingerprints, matches):
         sid = row["id"]
@@ -153,44 +165,88 @@ class RootAdmission:
         if row.get("parent_session_id") is not None:
             return "not_top_level"
         try:
-            node = self.get_json(f"/v1/sessions/{sid}", deadline)
-            if node.get("id") != sid:
-                raise MessageError("root_identity_mismatch")
-            if "parent_session_id" not in node or node["parent_session_id"] is not None:
-                return "not_top_level"
-            if "owner" in node and node["owner"] != row["owner"]:
-                return "owner_changed"
-            if node.get("agent_id") != row.get("agent_id"):
-                return "agent_identity_changed"
-            current = {**node, "owner": row["owner"]}
-            scoped = [rule for rule in scoped if self._scope_reason(current, rule) is None]
-            if not scoped:
-                return "root_scope_changed"
-            if node.get("archived") is not False:
-                return "archived"
-            level = node.get("permission_level")
-            if type(level) is not int or level < 2:
-                return "edit_permission_required"
-            if not isinstance(node.get("runner_id"), str) or not node["runner_id"]:
-                return "runner_binding_required"
-            agent = self.get_json(f"/v1/sessions/{sid}/agent", deadline)
-            if (not isinstance(agent.get("id"), str) or not SESSION.fullmatch(agent["id"])
-                    or agent["id"] != node["agent_id"] or agent.get("name") != node["agent_name"]
-                    or type(agent.get("version")) is not int or agent["version"] < 1):
-                return "agent_metadata_unverifiable"
-            key = (agent["id"], agent["version"])
-            if key not in fingerprints:
-                raw = self.get_bundle(f"/v1/sessions/{sid}/agent/contents", deadline)
-                fingerprints[key] = bundle_fingerprint(raw)
-            if fingerprints[key] not in {r["bundle_fingerprint"] for r in scoped}:
-                return "bundle_fingerprint_mismatch"
-            matches[sid] = {k: node[k] for k in ["workspace", "host_id", "agent_id", "runner_id"]}
-            return None
+            node = self.get_json(
+                f"/v1/sessions/{sid}?include_items=false", deadline,
+            )
         except MessageError as exc:
-            if exc.status in {403, 404}:
-                return "root_access_unavailable"
-            if exc.code in {"bundle_too_large", "response_too_large", "unsafe_bundle_entry", "invalid_bundle",
-                            "duplicate_or_oversized_bundle", "unsupported_bundle_entry", "unsupported_bundle_metadata",
-                            "bundle_config_required"}:
-                return "bundle_unverifiable"
-            raise
+            if exc.code == "registration_scan_incomplete":
+                raise
+            reason = "root_access_unavailable" if exc.status in {403, 404} else "session_metadata_unverifiable"
+            return self._phase_rejection(reason, "session_metadata", exc)
+        if node.get("id") != sid:
+            return self._phase_rejection(
+                "session_metadata_unverifiable", "session_metadata",
+                MessageError(
+                    "root_identity_mismatch", 502,
+                    limit=MAX_METADATA_BYTES, read_bytes=None,
+                ),
+            )
+        if "parent_session_id" not in node or node["parent_session_id"] is not None:
+            return "not_top_level"
+        if "owner" in node and node["owner"] != row["owner"]:
+            return "owner_changed"
+        if node.get("agent_id") != row.get("agent_id"):
+            return "agent_identity_changed"
+        if (not isinstance(node.get("agent_id"), str)
+                or not SESSION.fullmatch(node["agent_id"])
+                or not isinstance(node.get("agent_name"), str)):
+            return self._phase_rejection(
+                "session_metadata_unverifiable", "session_metadata",
+                MessageError(
+                    "invalid_session_metadata", 502,
+                    limit=MAX_METADATA_BYTES, read_bytes=None,
+                ),
+            )
+        current = {**node, "owner": row["owner"]}
+        scoped = [rule for rule in scoped if self._scope_reason(current, rule) is None]
+        if not scoped:
+            return "root_scope_changed"
+        if node.get("archived") is not False:
+            return "archived"
+        level = node.get("permission_level")
+        if type(level) is not int or level < 2:
+            return "edit_permission_required"
+        if not isinstance(node.get("runner_id"), str) or not node["runner_id"]:
+            return "runner_binding_required"
+        try:
+            agent = self.get_json(f"/v1/sessions/{sid}/agent", deadline)
+        except MessageError as exc:
+            if exc.code == "registration_scan_incomplete":
+                raise
+            return self._phase_rejection(
+                "agent_metadata_unverifiable", "agent_metadata", exc,
+            )
+        if (not isinstance(agent.get("id"), str) or not SESSION.fullmatch(agent["id"])
+                or agent["id"] != node["agent_id"] or agent.get("name") != node["agent_name"]
+                or type(agent.get("version")) is not int or agent["version"] < 1):
+            return self._phase_rejection(
+                "agent_metadata_unverifiable", "agent_metadata",
+                MessageError(
+                    "invalid_agent_metadata", 502,
+                    limit=MAX_METADATA_BYTES, read_bytes=None,
+                ),
+            )
+        key = (agent["id"], agent["version"])
+        if key not in fingerprints:
+            try:
+                raw = self.get_bundle(f"/v1/sessions/{sid}/agent/contents", deadline)
+            except MessageError as exc:
+                if exc.code == "registration_scan_incomplete":
+                    raise
+                return self._phase_rejection(
+                    "bundle_unverifiable", "bundle", exc,
+                )
+            try:
+                fingerprints[key] = bundle_fingerprint(raw)
+            except MessageError as exc:
+                error = MessageError(
+                    exc.code, 502,
+                    limit=MAX_BUNDLE_BYTES, read_bytes=len(raw),
+                )
+                return self._phase_rejection(
+                    "bundle_unverifiable", "bundle", error,
+                )
+        if fingerprints[key] not in {r["bundle_fingerprint"] for r in scoped}:
+            return "bundle_fingerprint_mismatch"
+        matches[sid] = {k: node[k] for k in ["workspace", "host_id", "agent_id", "runner_id"]}
+        return None

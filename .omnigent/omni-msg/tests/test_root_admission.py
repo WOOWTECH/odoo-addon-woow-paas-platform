@@ -13,6 +13,9 @@ from urllib.parse import parse_qs, urlsplit
 
 from test_registration import RegistrationHarness, SessionAPI
 
+from omni_msg.root_admission import MAX_BUNDLE_BYTES
+from omni_msg.transport import MAX_METADATA_BYTES
+
 PACKAGE = Path(__file__).resolve().parents[1]
 
 
@@ -154,11 +157,23 @@ class RootSessionAPI(SessionAPI):
         if url.path.startswith("/v1/sessions/") and url.path.count("/") == 3:
             with self.server.graph_lock:
                 self.server.reads.append(self.path)
-                node = self.server.graph.get(url.path.rsplit("/", 1)[-1])
+                sid = url.path.rsplit("/", 1)[-1]
+                node = self.server.graph.get(sid)
                 if node is None:
                     return self.respond(404, {})
+                count = self.server.detail_counts.get(sid, 0) + 1
+                self.server.detail_counts[sid] = count
+                status = self.server.detail_statuses.get(sid)
+                if status:
+                    return self.respond(status, {})
                 # 真實 detail endpoint 沒有 owner；owner 來自 authenticated list response。
-                return self.respond(200, {k: v for k, v in node.items() if k != "owner"})
+                body = {k: v for k, v in node.items() if k != "owner"}
+                size = self.server.detail_item_bytes.get(sid)
+                if count in self.server.detail_oversize_calls.get(sid, set()):
+                    size = MAX_METADATA_BYTES
+                if size:
+                    body["items"] = ["x" * size]
+                return self.respond(200, body)
         super().do_GET()
 
 
@@ -183,11 +198,11 @@ class RootAdmissionCLITests(RegistrationHarness):
                        "host_id": "host-one", "workspace": "/workspace", "bundle_fingerprint": fingerprint}]}
         self.policy_file.write_text(json.dumps(self.policy))
 
-    def start(self, provision=True):
+    def start(self, provision=True, poll_seconds="0.1"):
         if provision:
             self.cli("provision", "--directory", str(self.config), "--auto-roots", str(self.policy_file),
                      "--server-url", f"http://127.0.0.1:{self.api.server_port}", "--token-file", str(self.token),
-                     "--port", str(self.port), "--poll-seconds", "0.1")
+                     "--port", str(self.port), "--poll-seconds", poll_seconds)
         super().start(provision=False)
 
     def test_same_profile_new_roots_are_admitted_as_distinct_groups(self):
@@ -209,6 +224,76 @@ class RootAdmissionCLITests(RegistrationHarness):
                       status["root_admission"]["rejected"])
         self.assertTrue(any(q.get("after") for q in self.api.root_queries), "必須走完分頁")
         self.assertTrue(all(q.get("kind") == ["default"] for q in self.api.root_queries))
+
+    def test_detail_ignores_query_but_root_over_64k_is_still_admitted(self):
+        self.api.detail_item_bytes["root_a"] = 70 * 1024
+        self.api.detail_item_bytes["child_a"] = 70 * 1024
+        self.start(poll_seconds="60")
+        status = self.ready()
+        self.assertIn("root_a", status["root_admission"]["matched"])
+        detail_reads = [path for path in self.api.reads
+                        if urlsplit(path).path.count("/") == 3]
+        self.assertTrue(detail_reads)
+        self.assertTrue(all(parse_qs(urlsplit(path).query) == {"include_items": ["false"]}
+                            for path in detail_reads))
+
+    def test_session_agent_and_bundle_failures_have_distinct_reasons(self):
+        failures = {
+            "bad_session": "trusted-agent",
+            "bad_agent": "bad-agent",
+            "bad_bundle": "bad-bundle",
+        }
+        with self.api.graph_lock:
+            for sid, agent_id in failures.items():
+                node = self.node(sid, None)
+                node.update(owner="alice", host_id="host-one", agent_id=agent_id)
+                self.api.graph[sid] = node
+            self.api.detail_item_bytes["bad_session"] = MAX_METADATA_BYTES
+            self.api.agent_versions["bad-agent"] = 0
+            self.api.bundles["bad-agent"] = bundle_bytes()
+            self.api.agent_versions["bad-bundle"] = 1
+            self.api.bundles["bad-bundle"] = b"not-a-gzip-bundle"
+        self.start(poll_seconds="60")
+        status = self.ready()
+        rejected = {row["session_id"]: row for row in status["root_admission"]["rejected"]}
+        self.assertEqual(
+            (rejected["bad_session"]["reason"], rejected["bad_session"]["phase"]),
+            ("session_metadata_unverifiable", "session_metadata"),
+        )
+        self.assertEqual(rejected["bad_session"]["limit"], MAX_METADATA_BYTES)
+        self.assertEqual(rejected["bad_session"]["read_bytes"], MAX_METADATA_BYTES + 1)
+        self.assertEqual(
+            (rejected["bad_agent"]["reason"], rejected["bad_agent"]["phase"]),
+            ("agent_metadata_unverifiable", "agent_metadata"),
+        )
+        self.assertEqual(rejected["bad_agent"]["status"], 502)
+        self.assertEqual(rejected["bad_agent"]["limit"], MAX_METADATA_BYTES)
+        self.assertIsNone(rejected["bad_agent"]["read_bytes"])
+        self.assertEqual(
+            (rejected["bad_bundle"]["reason"], rejected["bad_bundle"]["phase"]),
+            ("bundle_unverifiable", "bundle"),
+        )
+        self.assertEqual(rejected["bad_bundle"]["status"], 502)
+        self.assertEqual(rejected["bad_bundle"]["limit"], MAX_BUNDLE_BYTES)
+        self.assertEqual(rejected["bad_bundle"]["read_bytes"], len(b"not-a-gzip-bundle"))
+
+    def test_automatic_root_second_detail_failure_is_isolated(self):
+        self.api.detail_oversize_calls["root_a"] = {2}
+        self.start(poll_seconds="60")
+        status = self.wait_status(
+            lambda value: value["ready"]
+            and {m["session_id"] for m in value["members"]} == {"root_b", "child_b"},
+        )
+        self.assertIn("root_a", status["root_admission"]["matched"])
+        self.assertEqual(status["session_rejections"], [{
+            "session_id": "root_a",
+            "reason": "session_metadata_unverifiable",
+            "phase": "session_metadata",
+            "status": 502,
+            "limit": MAX_METADATA_BYTES,
+            "read_bytes": MAX_METADATA_BYTES + 1,
+        }])
+        self.assertEqual(len(list((self.state / "clients").glob("*.json"))), 2)
 
     def test_app_json_created_root_joins_without_editing_policy(self):
         from urllib.request import Request, urlopen
