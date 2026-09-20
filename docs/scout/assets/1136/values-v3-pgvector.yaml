@@ -1,0 +1,30 @@
+# 第三輪：Bitnami postgresql 子 chart 換成官方 lineage 的 pgvector image
+postgresql:
+  auth:
+    usePasswordFiles: false
+  image:
+    registry: docker.io
+    repository: pgvector/pgvector
+    tag: pg17
+  primary:
+    podSecurityContext:
+      enabled: true
+      fsGroup: 999
+    containerSecurityContext:
+      enabled: true
+      runAsUser: 999
+      runAsGroup: 999
+      runAsNonRoot: true
+      readOnlyRootFilesystem: false
+      allowPrivilegeEscalation: false
+      capabilities:
+        drop: ["ALL"]
+      seccompProfile:
+        type: "RuntimeDefault"
+    command: ["docker-entrypoint.sh"]
+    args: ["postgres"]
+    # usePasswordFiles=false 後 chart 自己就給了 POSTGRES_USER／POSTGRES_PASSWORD
+    # （名稱剛好和官方 image 相容）；只有 DB 名的鍵名不同（POSTGRES_DATABASE vs POSTGRES_DB）
+    extraEnvVars:
+      - name: POSTGRES_DB
+        value: bitnami_odoo
