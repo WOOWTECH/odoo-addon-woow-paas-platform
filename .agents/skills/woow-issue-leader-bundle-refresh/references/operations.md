@@ -8,6 +8,11 @@
 - Source snapshot 取固定、已合併 SHA 的 tracked files，包含 `.omnigent/_shared` 與 builder。
   檢查後只打包 `.omnigent/woow-issue-leader`；保證 bundle 內沒有 `__pycache__`、`.pyc`、
   未追蹤檔或本 operator skill。不要從有工作雜檔的 live repo 直接 `rglob` 打包。
+- **Snapshot 必須以 `umask 022` 解出。** 指紋把 `mode & 0o111` 當整數納入，涵蓋 owner／group／
+  other 三個 execute bit，所以**同樣的檔案內容在不同 umask 下會算出不同指紋**：executable 檔
+  在 `umask 022` 下是 `0755`（`0o111`），在 private 目錄慣用的 `umask 077` 下變成 `0700`（`0o100`）。
+  取到 0700 的 artifact 目錄時尤其容易誤用。打包後以 `git ls-tree -r <SHA>` 的 mode 對帳 executable
+  bit（`100755` ↔ 有 exec、`100644` ↔ 無），不一致就重做 snapshot，不要改 rule 去遷就。
 - Omnigent 0.14 的打包實作是 `omnigent.cli._bundle(Path)`；它是 private API，先核對安裝版本
   與 signature，若不同就停下調整 recipe。它可能展開 YAML 中的環境變數；最終 tar 的內容才
   是審核對象，任何未預期 env expansion／secret 都必須停止並隱去值。

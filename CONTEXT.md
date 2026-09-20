@@ -66,3 +66,9 @@ _Avoid_: 「使用者」「客戶」「會員」「portal user」（最後一個
 > 2026-09-01 prod 實測：唯一的 workspace（`name='HA PaaS'`）確實是第二條路建的——四個判準全中（名稱、`create_uid` ＝租戶自己、對應 `cloud_service` 的 `conceal_instances=t`、`ha:provision` token 早於 workspace 建立時間 19 分鐘）。**⇒ `/woow` 的 workspace 建立流程從未被任何真實租戶走過。** 談「租戶在前台能做什麼」時，這是必須先講出來的前提。
 
 > ⚠ **稽核欄不能用來分辨走了哪條路。** Odoo 的 `.sudo()` 不改 `env.uid`（`odoo/models.py:6291`），而 `create_uid` 取的就是 `env.uid`（`odoo/models.py:5130`）⇒ 兩條路的 `create_uid` 都會是租戶本人。能分辨的是「租戶自己執行」vs「他人代建」，不是「有沒有 sudo」。
+
+**Standalone Odoo 站**：直接部署在 woow-k3s 上、**不由平台 `cloud_service` 管理**的 Odoo 站，一站一個 namespace（例：`harumi-odoo`）。它不屬於任何 Workspace，也不是任何 Tenant 的服務；搬進平台後才成為某個 Workspace 裡的 odoo `cloud_service`。
+_Avoid_: 「客戶站」（「客戶」是 Tenant 的棄用同義詞）、「tenant 站」「odoo-tenant 站」（會和 **Tenant** 撞名；`odoo-tenant` 只是部署它的 helm chart 名稱）
+
+**平台 Odoo**：`paas-system` 裡的那一套 Odoo（`paas-odoo`），跑本 addon 與 `/woow`，也就是平台本身；#1032 之後同時承載公司 ERP 與官網。它和 Tenant 在 Workspace 裡部署的 odoo `cloud_service` 是兩回事，即使兩者可能共用同一個 chart 或 image。
+_Avoid_: 「主站」「paas odoo」（容易與租戶的 odoo `cloud_service` 混淆）

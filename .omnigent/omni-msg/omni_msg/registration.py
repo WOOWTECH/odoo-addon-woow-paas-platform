@@ -16,8 +16,15 @@ import uuid
 from pathlib import Path
 
 from .bridge import ALIAS, SESSION
-from .root_admission import MAX_BUNDLE_BYTES, RootAdmission
-from .transport import MessageError, load_private_json, request_bytes, request_json
+from .root_admission import MAX_BUNDLE_BYTES, RootAdmission, phase_rejection
+from .transport import (
+    MAX_METADATA_BYTES,
+    MessageError,
+    load_private_json,
+    request_bytes,
+    request_json,
+    upstream_unavailable,
+)
 
 MAX_SESSIONS = 1024
 MAX_GROUP_MEMBERS = 128
@@ -97,6 +104,7 @@ class Registrar:
         self.bridge_url = f"http://127.0.0.1:{port}"
         self.stop = threading.Event()
         self.thread = None
+        self.session_rejections = []
         self.admission = RootAdmission(rules, self._get, self._get_bundle) if rules is not None else None
         private_directory(self.directory)
         private_directory(self.clients)
@@ -128,7 +136,12 @@ class Registrar:
         return min(10, remaining)
 
     def _get(self, path, deadline):
-        return request_json(self.transport.url + path, self.transport.token, timeout=self._remaining(deadline))
+        return request_json(
+            self.transport.url + path,
+            self.transport.token,
+            timeout=self._remaining(deadline),
+            max_bytes=MAX_METADATA_BYTES,
+        )
 
     def _get_bundle(self, path, deadline):
         return request_bytes(self.transport.url + path, self.transport.token,
@@ -165,11 +178,24 @@ class Registrar:
                 raise MessageError("invalid_session_cursor")
             seen_cursors.add(cursor)
 
+    def _record_session_rejection(self, sid, error):
+        reason = ("session_access_unavailable" if error.status in {403, 404}
+                  else "session_metadata_unverifiable")
+        self.session_rejections.append({
+            "session_id": sid,
+            **phase_rejection(reason, "session_metadata", error),
+        })
+
     def _discover(self, deadline):
         members, seen = [], set()
         roots, proofs = dict(self.roots), {}
+        self.session_rejections = []
+        # 本輪至少一個 root 層 detail（admission 候選或 registrar root）可解析，
+        # 才能把其他 root 的失敗視為單一 session 異常。
+        root_reachable, root_outage = False, None
         if self.admission:
             proofs = self.admission.discover(deadline, explicit_ids={r["session_id"] for r in roots.values()})
+            root_reachable, root_outage = self.admission.detail_reachable, self.admission.detail_outage
             for sid, proof in proofs.items():
                 alias = self._root_alias(sid)
                 if alias in roots or len(roots) >= 16:
@@ -186,11 +212,19 @@ class Registrar:
                     raise MessageError("invalid_or_oversized_session_tree")
                 seen.add(sid)
                 try:
-                    node = self._get(f"/v1/sessions/{sid}", deadline)
+                    node = self._get(
+                        f"/v1/sessions/{sid}?include_items=false", deadline,
+                    )
                 except MessageError as exc:
-                    if exc.status in {403, 404}:
-                        continue
-                    raise
+                    if exc.code == "registration_scan_incomplete":
+                        raise
+                    if parent is None and root_outage is None and upstream_unavailable(exc):
+                        root_outage = exc
+                    self._record_session_rejection(sid, exc)
+                    continue
+                if parent is None:
+                    root_reachable = True
+                # Identity／lineage 不一致可能是冒用或資料錯亂，維持整輪 fail closed。
                 if node.get("id") != sid or "parent_session_id" not in node or node["parent_session_id"] != parent:
                     raise MessageError("session_lineage_mismatch")
                 level = node.get("permission_level")
@@ -218,6 +252,9 @@ class Registrar:
                     if len(queue) + len(seen) >= MAX_SESSIONS:
                         raise MessageError("invalid_or_oversized_session_tree")
                     queue.append((child, sid, depth + 1))
+        if root_outage is not None and not root_reachable:
+            # 連一個 root 層 detail 都取不到且原因是 upstream 不可用：不能發布空 snapshot 造成誤導性 401。
+            raise root_outage
         return members
 
     def _credential(self, member):
@@ -256,8 +293,14 @@ class Registrar:
                                             "WHERE session_id=?", (member["session_id"],)).fetchone()
                 output.append({**member, "client_config": str(self.clients / f"{member['alias']}.json"),
                                "notification": dict(row)})
-        status = {"ready": error is None, "error": error, "members": output,
-                  "checked_at": time.time(), "expires_at": expires}
+        status = {
+            "ready": error is None,
+            "error": error,
+            "members": output,
+            "session_rejections": list(self.session_rejections),
+            "checked_at": time.time(),
+            "expires_at": expires,
+        }
         if self.admission:
             status["root_admission"] = self.admission.status
         atomic_json(self.status_path, status)
