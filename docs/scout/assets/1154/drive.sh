@@ -27,7 +27,7 @@ rpc() { # rpc <path> <params-json>
     resp=$(curl -sS -m 200 -b "$JAR" -c "$JAR" -H 'Content-Type: application/json' \
         -d "{\"jsonrpc\":\"2.0\",\"method\":\"call\",\"params\":${params}}" "${BASE}${path}")
     t1=$(date +%s.%N)
-    python3 - "$path" "$params" "$resp" "$t0" "$t1" >> "$LOG" <<'PY'
+    python3 -W ignore - "$path" "$params" "$resp" "$t0" "$t1" >> "$LOG" <<'PY'
 import json, sys, datetime
 path, params, resp, t0, t1 = sys.argv[1:6]
 try: body = json.loads(resp)
@@ -57,7 +57,7 @@ case "$cmd" in
     watch)
         end=$(( $(date +%s) + ${3:-1800} ))
         while [ "$(date +%s)" -lt "$end" ]; do
-            rpc "/api/workspaces/$1/services/$2" '{"action":"get"}' | python3 -c '
+            rpc "/api/workspaces/$1/services/$2" '{"action":"get"}' | python3 -W ignore -c '
 import json,sys,datetime
 r=json.load(sys.stdin).get("result",{}); s=r.get("data",r) if isinstance(r,dict) else {}
 s=s.get("service",s) if isinstance(s,dict) else {}
