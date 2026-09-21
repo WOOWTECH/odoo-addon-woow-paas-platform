@@ -24,6 +24,10 @@ related:
 | template values | #1136 三個 values 檔合併 ＋ 候選 image（[`assets/1154/helm-default-values.json`](assets/1154/helm-default-values.json)），以 [`assets/1154/switch-template.py`](assets/1154/switch-template.py) 寫進沙盒 DB 的 `cloud_app_odoo` |
 | 驅動方式 | 平台 JSON-RPC API（[`assets/1154/drive.sh`](assets/1154/drive.sh)），逐次 request／response 留在 `assets/1154/run-log.jsonl` |
 
+### 0.0 結論的複核
+
+報告定稿前，對 9 條關鍵結論各派一支唯讀 agent 以「試著推翻」的立場逐條核對 develop 的程式碼與行號：6 條 confirmed（就緒誤判、兩條 init 路徑併發、換 plan 無 helm 動作、redeploy 讀服務自己的 values、operator 對同名重裝零防護、回收 CronJob 只看 label）；3 條「機制正確、推論過頭」，已依反證修正本文——addon 整鍵覆寫在今天的 template 下無害（§1.3 適用範圍）、租戶有 rollback 這條出路（§1.3，並補了實測）、reset 15 秒是條件式風險（§2.4）。
+
 ### 0.1 量測用的介入（不是修正）
 
 1. 服務 init 失敗轉 `error` 後，步驟 3／4／5 的入口全被擋 ⇒ 在沙盒 DB 把 `state` 撥回 `running`（`init_retries=0`），才量得到下游管線。
@@ -41,7 +45,7 @@ related:
 |---|---|---|---|
 | 1 | 建立 | ✅ 通過（有 3 個靜默失效） | 見 §1.1 |
 | 2 | post-deploy init | ❌ 必壞，10 分 45 秒後轉 `error` | 見 §1.2 |
-| 3 | 勾一顆 addon | ❌ **整站掛掉且租戶無法自救** | 見 §1.3 |
+| 3 | 勾一顆 addon | ❌ **整站掛掉**；取消勾選被擋，rollback 救得回來但下一次 reconfigure 又壞 | 見 §1.3 |
 | 4 | `_assess_addon_removal` 預檢 | ❌ 1 秒內 fail-closed，永遠 `can_assess=False` | 見 §1.4 |
 | 5 | reconfigure（只改 SMTP） | ⚠ helm 層面乾淨，但設定靜默無效 ＋ 停機約 30 秒 | 見 §1.5 |
 | 6 | 換 plan | ❌ **完全沒有 helm 動作**，付了錢拿不到資源 | 見 §1.6 |
@@ -81,7 +85,10 @@ related:
 - 根因：`_build_odoo_addon_helm_values` 對 `initContainers`（`src/models/cloud_service.py:1695`）與 `extraVolumeMounts`（`:1727`）是**整鍵覆寫**，不是 append。
 - 後果：`/var/lib/odoo` 變回 image 層 ⇒ 每個 request 都 `PermissionError: [Errno 13] Permission denied: '/var/lib/odoo/sessions'` ⇒ readiness probe 500 ⇒ pod 永遠 `0/1`。`updateStrategy: Recreate` 已先砍掉舊 pod ⇒ **整站中斷**。filestore 留在 PVC 的 `/bitnami/odoo/filestore`，Odoo 看不到。
 - **被蓋掉的值已寫回服務自己的 `helm_values`**（DB 實查：stored `initContainers=['addon-selector']`）⇒ template 的 bootstrap 與 filestore 掛載對這顆服務**永久遺失**；`_remove_addon_helm_values`（`:1744`）只按名稱拔除，取消勾選也救不回來。
-- **租戶無法自救**：取消勾選被拒（`Service must be running to check module states (current: upgrading)`）——移除預檢是 fail-closed，而站壞了就永遠到不了 `running`。
+- **取消勾選這條路走不通**：被拒（`Service must be running to check module states (current: upgrading)`）——移除預檢是 fail-closed，而站壞了就永遠到不了 `running`；`error` 狀態則連 `_update_service` 都進不去（`src/controllers/paas.py:3610`）。
+- **平台要 30 分鐘才發現**：pod 一直 `0/1`，08:13:46 送出 → 約 08:44 才被 age timeout 轉 `error`（`Deployment timed out after 30 minutes: pods not ready — pods are Running but never became ready`）。這 30 分鐘站是掛的、UI 顯示 upgrading。
+- **rollback 端點救得回來，但只是暫時的**（複核時補測）：`POST /api/workspaces/<ws>/services/<id>/rollback {"revision":1}` 在 `error`／`upgrading` 都放行（`src/controllers/paas.py:3912` 只擋 pending／deleting／suspended），helm rev 3，25 秒 Ready，bootstrap 與 `/var/lib/odoo` 都回來了。但 rollback 全程不碰 DB：`helm_values` 仍是壞的那份、`odoo_addon_ids` 仍勾著 `mcp_server`（UI 顯示已安裝、實際沒部署）。**接著只改一個 `smtpHost`，helm rev 4 又回到 `addon-selector`＋沒有 `/var/lib/odoo`，站再掛一次**。
+- 適用範圍：今天的 Bitnami template 在 `helm_default_values` 裡**沒有**用到 `initContainers`／`extraVolumes`／`extraVolumeMounts`，所以這個整鍵覆寫在現行 prod 形狀下無害（也是換選 addon 時的冪等語意）。它是在 template 自己需要這三個鍵的那一刻才變成致命的——而官方 lineage 在 Bitnami chart 上必然需要（bootstrap、`/var/lib/odoo`）。對自建 chart 的要求因此是：這三個鍵由 chart 自己擁有，平台只填 `addons.selected`。
 - addon 本身也沒生效：`addon-selector` 有把 `mcp_server` 複製進 emptyDir，但 conf 的 `sed`（`/bitnami/odoo/conf/odoo.conf`）與 `customPostInitScripts['00-addons-path.sh']` 在官方 image 下都是 no-op ⇒ 行程參數沒有 `--addons-path`，Odoo 看不到這顆 addon。
 
 ## 2. 四件要量的事
@@ -129,7 +136,7 @@ related:
 |---|---|---|
 | deploy timeout 30 分（`src/models/cloud_service.py:355`） | 首次建立 install→Ready 2 分 33 秒（`-i base` 91 秒）；冷啟動 62 秒；暖重建約 30 秒 | 綽綽有餘；harumi 的 121 模組還原站另計 |
 | `init_retries=5` | 5 次＝10 分 45 秒（兩條路徑併發，實際是時間預算不是次數） | 見 §1.2；#1152 的第 3 點成立 |
-| reset 路徑 `--atomic --timeout 15s`（`extra/paas-operator/src/api/releases.py:49`） | 這顆 chart 的 pod 最快也要約 30 秒才 Ready（Recreate ＋ initContainer ＋ readiness `initialDelaySeconds: 20`） | **15 秒必定逾時 ⇒ `--atomic` 必定 rollback**。今天 odoo 不走這條（`has_admin_gui=False`），但 #1141 裁決 3 要把 odoo 接上 #357 鏈 ⇒ 接上的那一刻 reset 就會 100% 失敗 |
+| reset 路徑 `--atomic --timeout 15s`（`extra/paas-operator/src/api/releases.py:49`） | 這顆 chart 只要 pod template 有變，重建到 Ready 最快約 30 秒（Recreate ＋ initContainer ＋ readiness `initialDelaySeconds: 20`） | **條件式風險，本次未實測**。15 秒的量測基礎是「只改 Secret、不動 pod template ⇒ `--wait` 立即通過」（`extra/paas-operator/src/services/helm.py:27-35`、`releases.py:873-882`）。今天 odoo 不走這條（`has_admin_gui=False`）；#1141 裁決 3 要把 odoo 接上 #357 鏈時，新 chart 必須保證「重設密碼不會改到 pod template」（例如不要有 `checksum/secret` annotation、密碼不進 env），否則 15 秒必逾時並被 `--atomic` rollback |
 
 ## 3. 其餘步驟的細節
 
@@ -163,7 +170,7 @@ helm 層面乾淨（見 §2.2），bootstrap 與掛載都完好，平台 state �
 
 | 對象 | 輸入 |
 |---|---|
-| odoo chart 的共用設計（#1141） | ① bootstrap 放 initContainer **不會**讓平台的就緒語意自動成立——`_is_container_ready` 看不到 `Pending` 的 pod（§1.1），要嘛改平台判準（看 workload 的期望 pod 數），要嘛 bootstrap 不放 initContainer。② chart 必須自己擁有 `initContainers`／`extraVolumeMounts`，addon 走單一 values 子樹（`addons.selected`），平台不得再整鍵覆寫（§1.3）。③ conf 要是一份含 DB 設定的真檔（§2.1）。④ reset 路徑的 15 秒預算對 odoo 不成立（§2.4）。⑤ plan overlay 要搬進每次 deploy／upgrade 都重算的那一層，並補上「換 plan → 觸發 upgrade」（§2.2）。⑥ 升級閘必要（§1.8） |
+| odoo chart 的共用設計（#1141） | ① bootstrap 放 initContainer **不會**讓平台的就緒語意自動成立——`_is_container_ready` 看不到 `Pending` 的 pod（§1.1），要嘛改平台判準（看 workload 的期望 pod 數），要嘛 bootstrap 不放 initContainer。② chart 必須自己擁有 `initContainers`／`extraVolumeMounts`，addon 走單一 values 子樹（`addons.selected`），平台不得再整鍵覆寫（§1.3）。③ conf 要是一份含 DB 設定的真檔（§2.1）。④ reset 路徑的 15 秒預算只在「重設密碼不動 pod template」時成立，chart 要守住這個前提（§2.4）。⑤ plan overlay 要搬進每次 deploy／upgrade 都重算的那一層，並補上「換 plan → 觸發 upgrade」（§2.2）。⑥ 升級閘必要（§1.8） |
 | #1129 operator odoo exec | 不是換三個常數：conf 沒有 DB 設定（§2.1）；`_wait_for_ready` 要分辨「exec 本身失敗」與「還沒 ready」（§1.2）；錯誤訊息要帶出 kubectl 的 stderr（§1.4） |
 | #1152 init 逾時 | 實錘；另有兩條 init 路徑併發、互搶 `init_retries`（§1.2） |
 | #1128 既存實例處置 | 同名重裝會靜默接回舊資料並留下孤兒標記（§2.3）；既存服務的 `helm_values` 不會跟著 template 走（§2.2） |
