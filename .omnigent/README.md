@@ -570,7 +570,7 @@ omnigent 的 venv，而且 `function.path` 打錯字會讓 worker 連 `Read` 都
 | `p_board_read_only` | 除 issue-leader 外**全部** | 任何提到 `.woow-issues/` 而**無法證明是唯讀**的指令（唯讀＝單一不串接、且以 `cat`/`less`/`head`/`tail`/`grep`/`rg`/`ls`/`wc`/`diff`/`git diff`/`git show` 開頭） |
 | `p_merge_no_agent_merge` | 全部 | forge CLI 的 `pr`／`pulls`／`mr merge` 子命令，或 `gh`／`glab` API、`curl` 直打 merge endpoint |
 | `p_approve_no_agent_signoff` | 全部 | 指令中**出現 `/approve` 字串**（不再限定工具名） |
-| `p_tag_no_agent_tag_push` | 全部 | `git push`＋tag 形態、`refs/tags/`、forge `release`、`git tag <name>` |
+| `p_tag_no_agent_tag_push` | 全部 | `git push`＋tag 形態、`refs/tags/`、forge release 子命令（tea `releases`／`release`／`r`、gh／glab `release`）、forge API 或 curl 對 `/releases` collection endpoint（可帶單一尾斜線／query）的 POST（含未明示 method 但帶 body 的隱含 POST）、`git tag <name>` |
 | `p_kubectl_namespace_scope` | 僅 `ops_k8s_*` | 提到 `kubectl` 且：含串接（`&&`／`\|\|`／`;`／`` ` ``／`$(`／換行；**pipe 只在第一段是唯讀 kubectl、且 pipe 之後沒有 kubectl 時放行**）／第一段 `-n` 出現多次／寫入 verb 但 ns 不在白名單／寫入 verb 但沒帶 `--context`。`--context docker-desktop` 整條免除，但**整條只能有一個 `kubectl`** |
 | `p_path_write_inside_worktree` | 僅 `implement_*` | 檔案工具（`sys_os_write`／`Edit`…）的 `path`／`file_path` 不以本 issue 的 worktree 為前綴（相對 workspace 或絕對形式）、或含 `..`。**比對結構化參數，A 類**；前綴由產生器在派工當下算出 |
 
@@ -587,6 +587,7 @@ omnigent 的 venv，而且 `function.path` 打錯字會讓 worker 連 `Read` 都
 | `git tag v1.0`（本機建 tag，未推） | 讀取用 `git tag -l` / `--list`；建 tag 交給人 | 建 tag 是發版動作的第一步 |
 | `git push origin 1032-v18-upgrade`／`git push origin HEAD:v2-x`（branch 名以 `<字>-v<數字>` 開頭、或 `HEAD:v…`） | branch 一律 `<type>/<issue-id>-…`（`chore/1032-v18-upgrade` 就過） | tag 形態是 `[\s:]["']?(<字>-)?v<數字>` 的字串比對；放寬 `v<數字>` 後面的邊界，每一種都會多一個真 tag 滑過的形狀（review F12，2026-09-14 裁決不放寬） |
 | `git fetch origin refs/tags/v1.7.6`（唯讀） | `git fetch origin --tags`／`git ls-remote --tags origin`／`git tag -l` | `refs/tags/` 出現即擋、不分讀寫——限定 push 語境就會漏掉 `git update-ref refs/tags/v1 HEAD` 這種不經 push、也不是 `git tag <name>` 的建 tag plumbing（forge 的 `gh api … git/refs` 另有一條分支擋，不受影響；突變 AS 驗這件事） |
+| PR／留言的 raw shell 文字完整引用 forge CLI 發版子命令（例如 `gh release create v1.7.6`） | 先把內文寫入檔案，再用 CLI 的 file flag 帶入 | P-tag 比對 raw command，不解析 shell AST；只保證單純的 release 字首案例放行，完整 CLI 子命令即使位於引號內仍可能命中 |
 
 ⚠ `kubectl --context docker-desktop ...` **不再被擋**（FIX ROUND 2）：docker-desktop 是本
 機測試／開發用叢集，鐵律限定的是 woow-k3s 這個共用叢集。舊版不分 context，會毀掉
@@ -632,13 +633,20 @@ shell 有太多等價寫法。它們擋得掉常見寫法，擋不住刻意規�
 
 | 形式 | 例子 |
 | --- | --- |
-| 變數展開 | `V=v1.7.6; git push origin $V` |
+| 變數展開 | `V=v1.7.6; git push origin $V`；REST method 或 endpoint 名稱放進變數（`M=POST; gh api -X $M repos/o/r/releases`、`E=releases; curl -X POST …/$E`） |
+| CLI 與子命令間夾全域 flag | `tea --debug releases create …`、`gh -R o/r release create …`、`glab --repo o/r release create …`；#1110 裁決是「CLI 名稱後緊接子命令」，是否擴張由 Eugene 另行決定 |
+| 使用者自訂 forge alias | 例如使用者先把 `gh ship` 設成 release 建立命令後再執行 `gh ship v1.7.6`；raw command 看不到 alias 展開內容 |
 | 命令替換 | `curl -X PUT "$API/pulls/1/$(printf 'me'; printf 'rge')"` |
 | 引號切斷 | `tea comment 823 '/appr''ove'` |
 | base64 解碼後由 stdin 送 body | `echo L2FwcHJvdmU= \| base64 -d \| tea comment 823 -F -` |
 | 檔案 body | `base64 -d /tmp/b.b64 > /tmp/b && tea comment 823 -F /tmp/b` |
 | `$'\x..'` hex 轉義 | `tea comment 823 $'\x2f\x61\x70\x70\x72\x6f\x76\x65'` |
 | shell 重導向寫檔（P-path 只看檔案工具的參數） | `echo x > WOOW/ecpay_odoo18/x.py`、`sed -i 's/a/b/' paas/woow_paas_platform/src/x.py` |
+
+P-tag 的 REST collection endpoint 另以 path boundary 限定：collection 可帶單一尾斜線／
+query，並可在引號後緊接 `)`／`;`／`&`／`|`／`>`／`<` shell 分隔符；GET 讀取、
+`/releases/<id>` 與 `/releases-notes` 不命中，明示 GET 搭配 field，以及 curl 的 `-G`／
+`--get` 搭配 body flag 也維持放行。
 
 `p_escape_obfuscated_command` 只便宜地攔掉**反斜線轉義**那一類（`kube\ctl`、`me\rge`、
 `pu\sh`）——因為那一招最常見且成本最低。其餘不追。

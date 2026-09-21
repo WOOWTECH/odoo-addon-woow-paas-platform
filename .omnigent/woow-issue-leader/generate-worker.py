@@ -247,7 +247,8 @@ CEL_APPROVE = f"""event.type == "tool_call"
 # 保守化四條，任一成立即 DENY：
 #   1. git push ＋ tag 形態（v<版號> / --tags / --follow-tags / refs/tags/）
 #   2. 指令裡出現 refs/tags/（任何工具寫 tag ref）
-#   3. forge CLI ＋ release（建 release 等於建 tag）
+#   3. forge release 子命令（CLI 後緊接正式名稱／alias），或 REST 對 `/releases` collection
+#      endpoint 的建立動作（明示 POST，或未明示 method 但帶 request body）
 #   4. `git tag <非 flag>`＝建立 tag（`git tag -l` / `--list` / `-n` 是讀，放行）
 # 🔴 FIX ROUND 3：`[\\s:]` 後面要容許一個引號——`git push origin "v1.7.6"` 舊版滑過。
 # ⚠ 刻意誤擋（review F12，2026-09-14 裁決不放寬）：branch 名以 `<字>-v<數字>` 開頭
@@ -257,6 +258,26 @@ CEL_APPROVE = f"""event.type == "tool_call"
 #    撞到，讀 tag 用 `git fetch --tags`／`git ls-remote --tags`／`git tag -l`。deny 訊息與 README
 #    「已知的刻意誤擋」表都有替代寫法；CEL_VECTORS 把這三條列為 deny 向量，讓取捨被測到。
 TAG_SHAPE_RE = r"(--tags|--follow-tags|refs/tags/|[\\s:][\"\']?([A-Za-z0-9._-]+-)?v[0-9])"
+# 第 3 條的 CLI 名稱／alias 依據：tea 0.14.1 頂層 help 列出 releases／release／r；
+# gh 2.45.0 頂層 help 只列 release；本機未安裝 glab，官方 gitlab-org/cli
+# f42a0784 的 internal/commands/release/release.go 使用 `release` 且未設定 Cobra Aliases。
+# ⛔ 依 #1110 裁決只認「CLI 後緊接子命令」；中間夾全域 flag 的形狀刻意列 known_gap，
+#    不在這裡自行放寬。
+FORGE_RELEASE_SUBCOMMAND_RE = r"\\b(tea\\s+(releases|release|r)|gh\\s+release|glab\\s+release)\\b"
+FORGE_API_SUBCOMMAND_RE = r"\\b(tea|gh|glab)\\s+api\\b"
+# collection 可帶單一尾斜線／query；後方只接受引號、shell 分隔符、空白或字串尾，避免把
+# `/releases/latest`、`/releases/<id>`、`/releases-notes` 當成 collection。
+RELEASES_ENDPOINT_RE = r"/releases/?(\\?[^\\s\"\');&|><]*)?[\"\']?([\\s);&|><]|$)"
+# 三支 forge API 都以 -X／--method 指定 method；curl 另有 --request。`\\s*` 刻意涵蓋
+# `-XPOST` 無空白形態。POST 大小寫只涵蓋 CLI help 與常見人工輸入的兩種形態。
+REST_POST_METHOD_RE = r"(^|\\s)(-X(=|\\s*)(POST|post)|--(method|request)(=|\\s+)(POST|post))(\\s|$)"
+REST_EXPLICIT_METHOD_RE = r"(^|\\s)(-X(=|\\s*)[A-Za-z]+|--(method|request)(=|\\s+)[A-Za-z]+)(\\s|$)"
+# tea／gh／glab 的 API help 都說：未明示 method 時，body flag 會把預設 GET 改成 POST。
+REST_API_BODY_RE = r"(^|\\s)((-f|-F|-d)([^\\s-]|\\s+)|--(field|Field|raw-field|form|input|data)(=|\\s+))"
+# curl 的 -d／-F／--data*／--form／--json 也會隱含 POST；-G／--get 則維持讀取。
+CURL_BODY_RE = r"(^|\\s)((-d|-F)([^\\s-]|\\s+)|--(data|data-ascii|data-binary|data-raw|data-urlencode|form|json)(=|\\s+))"
+CURL_GET_RE = r"(^|\\s)(-G|--get)(\\s|$)"
+
 CEL_TAG = f"""event.type == "tool_call"
 && event.data.name in {_cel_list(SHELL_TOOLS)}
 && has(event.data.arguments.command)
@@ -264,12 +285,23 @@ CEL_TAG = f"""event.type == "tool_call"
      (event.data.arguments.command.matches("\\\\bgit\\\\b[\\\\s\\\\S]*\\\\bpush\\\\b")
       && event.data.arguments.command.matches("{TAG_SHAPE_RE}"))
   || event.data.arguments.command.matches("refs/tags/")
-  || event.data.arguments.command.matches("\\\\b(tea|gh|glab)\\\\b[\\\\s\\\\S]*\\\\brelease")
+  || event.data.arguments.command.matches("{FORGE_RELEASE_SUBCOMMAND_RE}")
+  || ((event.data.arguments.command.matches("{FORGE_API_SUBCOMMAND_RE}")
+       || event.data.arguments.command.matches("\\\\bcurl\\\\b"))
+      && event.data.arguments.command.matches("{RELEASES_ENDPOINT_RE}")
+      && (event.data.arguments.command.matches("{REST_POST_METHOD_RE}")
+          || (event.data.arguments.command.matches("{FORGE_API_SUBCOMMAND_RE}")
+              && event.data.arguments.command.matches("{REST_API_BODY_RE}")
+              && !event.data.arguments.command.matches("{REST_EXPLICIT_METHOD_RE}"))
+          || (event.data.arguments.command.matches("\\\\bcurl\\\\b")
+              && event.data.arguments.command.matches("{CURL_BODY_RE}")
+              && !event.data.arguments.command.matches("{REST_EXPLICIT_METHOD_RE}")
+              && !event.data.arguments.command.matches("{CURL_GET_RE}"))))
   || event.data.arguments.command.matches("\\\\bgh\\\\b[\\\\s\\\\S]*\\\\bapi\\\\b[\\\\s\\\\S]*git/refs")
   || event.data.arguments.command.matches("-X\\\\s+(POST|PATCH|PUT)[\\\\s\\\\S]*git/refs")
   || event.data.arguments.command.matches("\\\\bgit\\\\s+tag\\\\s+[^-\\\\s]")
 )
-? {{"result": "DENY", "reason": "發版 tag 由人工推，agent 不推 tag、不建 release（v<版號> / --tags / refs/tags/ / git tag <name> / forge release 皆擋）。⚠ 刻意誤擋：branch 名以 <字>-v<數字> 開頭（如 1032-v18-upgrade）或 HEAD:v… 也會命中——branch 名改用 <type>/<issue-id>-… 形式；只是要讀 tag 用 git fetch --tags / git ls-remote --tags / git tag -l。"}} : {{"result": "ALLOW"}}"""
+? {{"result": "DENY", "reason": "發版 tag 由人工推，agent 不推 tag、不建 release（v<版號> / --tags / refs/tags/ / git tag <name> / forge release 子命令 / POST /releases collection 建立端點〔可帶尾斜線〕皆擋）。⚠ 刻意誤擋：branch 名以 <字>-v<數字> 開頭（如 1032-v18-upgrade）或 HEAD:v… 也會命中——branch 名改用 <type>/<issue-id>-… 形式；只是要讀 tag 用 git fetch --tags / git ls-remote --tags / git tag -l。"}} : {{"result": "ALLOW"}}"""
 
 # ── P-kubectl（僅 ops_k8s）──────────────────────────────────────────────────
 # ⚠ 這一層是 **defense-in-depth、best-effort**，**不是安全邊界**。權威守線是 repo 的
