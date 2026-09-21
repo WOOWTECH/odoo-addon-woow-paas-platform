@@ -72,3 +72,11 @@ _Avoid_: 「客戶站」（「客戶」是 Tenant 的棄用同義詞）、「ten
 
 **平台 Odoo**：`paas-system` 裡的那一套 Odoo（`paas-odoo`），跑本 addon 與 `/woow`，也就是平台本身；#1032 之後同時承載公司 ERP 與官網。它和 Tenant 在 Workspace 裡部署的 odoo `cloud_service` 是兩回事，即使兩者可能共用同一個 chart 或 image。
 _Avoid_: 「主站」「paas odoo」（容易與租戶的 odoo `cloud_service` 混淆）
+
+**Odoo 管理員帳密**：odoo `cloud_service` 的 DB 裡那個管理員使用者（`base.user_admin`）的 login 與密碼，Tenant 用它登入自己的 Odoo。login 是建立服務時填的 email；密碼由平台產生，可由平台重設。
+_Avoid_: 不加限定詞的「admin password」「管理員密碼」——這個詞在本專案有三個指涉（本條與下兩條），曾因此把一條只對 admin GUI 密碼成立的重設流程誤當成對 Odoo 也成立
+
+**master password**：Odoo 的資料庫管理密碼（`odoo.conf` 的 `admin_passwd`），管的是建立／備份／還原／刪除 DB，**不是登入密碼**。在 Tenant 的 odoo `cloud_service` 上由平台持有、不顯示給 Tenant；`list_db=False` 時 Odoo 沒有任何入口會收它。
+_Avoid_: 「admin 密碼」「管理員密碼」
+
+**admin GUI 密碼**：`has_admin_gui` 的 template（image 內建管理介面者）由平台供給的那一組 GUI 登入密碼；#357 的「重設管理員密碼」指的是它。它和上面兩條是三個不同的密鑰，供給與重設的通道也各不相同。
