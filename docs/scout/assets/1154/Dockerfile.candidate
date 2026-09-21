@@ -9,10 +9,20 @@ COPY --from=src /all-addons /all-addons
 # 與 paas-odoo-ci scripts/generate-requirements.sh 同邏輯：掃 manifest 的 external_dependencies.python。
 # 官方 image 走系統 python3（PEP 668）⇒ --break-system-packages（盤點 C068）。
 RUN python3 -c "import ast,glob; deps=set(); [deps.update(ast.literal_eval(open(m).read()).get('external_dependencies',{}).get('python',[])) for m in sorted(glob.glob('/all-addons/*/__manifest__.py'))]; print('\\n'.join(sorted(deps)))" > /tmp/requirements-cloud.txt
-RUN cat /tmp/requirements-cloud.txt && \
-    filtered=$(grep -v '^#' /tmp/requirements-cloud.txt | grep -v '^$' || true); \
-    if [ -n "$filtered" ]; then \
-        echo "$filtered" | xargs python3 -m pip install --break-system-packages --root-user-action=ignore; \
-    fi
+# 實測（2026-09-21）：官方 image 的部分 python 套件是 Debian 裝的（無 RECORD），pip 要升版時會
+# 「Cannot uninstall <pkg> … installed by debian」直接失敗（首撞 typing_extensions 4.10.0，由 openai 相依帶出）。
+# 這裡逐顆以 --ignore-installed 裝進 /usr/local 蓋過去再重試，並把撞到的套件名印出來當 paas-odoo-ci#133 的輸入。
+RUN cat /tmp/requirements-cloud.txt; \
+    reqs=$(grep -v '^#' /tmp/requirements-cloud.txt | grep -v '^$' || true); ok=1; \
+    if [ -n "$reqs" ]; then ok=0; \
+      for i in 1 2 3 4 5 6 7 8 9 10 11 12; do \
+        if python3 -m pip install --break-system-packages --root-user-action=ignore $reqs 2>/tmp/pip.err; then ok=1; echo "[pip] ok after $i round(s)"; break; fi; \
+        tail -5 /tmp/pip.err; \
+        pkg=$(sed -n 's/^ERROR: Cannot uninstall \([A-Za-z0-9_.-]*\) .*/\1/p' /tmp/pip.err | head -1); \
+        [ -n "$pkg" ] || exit 1; \
+        echo "[pip] DEBIAN-OWNED-CONFLICT: $pkg -> --ignore-installed"; \
+        python3 -m pip install --break-system-packages --root-user-action=ignore --ignore-installed "$pkg" || exit 1; \
+      done; \
+    fi; [ "$ok" = 1 ]
 RUN chown -R odoo:odoo /all-addons
 USER odoo
