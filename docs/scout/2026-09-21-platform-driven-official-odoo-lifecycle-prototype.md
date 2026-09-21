@@ -11,7 +11,6 @@ related:
 # 用平台自己的 UI／API 驅動官方 `odoo:18.0` lineage 的 release 走完整生命週期
 
 > Wayfinder 票 [#1154](https://git-prod.woowtech.io/odoo-addons/woow_paas_platform/issues/1154)（map [#1134](https://git-prod.woowtech.io/odoo-addons/woow_paas_platform/issues/1134)）的 prototype 產出。**只量測、不修。**
-> ⚠ 草稿：步驟 1～3 與第 1 件要量的事已完成，其餘進行中。
 
 ## 0. 環境
 
@@ -43,13 +42,13 @@ related:
 | 1 | 建立 | ✅ 通過（有 3 個靜默失效） | 見 §1.1 |
 | 2 | post-deploy init | ❌ 必壞，10 分 45 秒後轉 `error` | 見 §1.2 |
 | 3 | 勾一顆 addon | ❌ **整站掛掉且租戶無法自救** | 見 §1.3 |
-| 4 | `_assess_addon_removal` 預檢 | （進行中） | |
-| 5 | reconfigure（只改 SMTP） | （進行中） | |
-| 6 | 換 plan | （進行中） | |
-| 7 | 停權／復權 | （進行中） | |
-| 8 | 換 image tag 後 redeploy | （進行中） | |
-| 9 | uninstall | （進行中） | |
-| 10 | 同名重裝 | 平台路徑下不可達；改用 operator API 直打（進行中） | `src/controllers/paas.py:3335-3345` |
+| 4 | `_assess_addon_removal` 預檢 | ❌ 1 秒內 fail-closed，永遠 `can_assess=False` | 見 §1.4 |
+| 5 | reconfigure（只改 SMTP） | ⚠ helm 層面乾淨，但設定靜默無效 ＋ 停機約 30 秒 | 見 §1.5 |
+| 6 | 換 plan | ❌ **完全沒有 helm 動作**，付了錢拿不到資源 | 見 §1.6 |
+| 7 | 停權／復權 | ✅ 通過（冷啟動 62 秒） | 見 §2.4 |
+| 8 | 換 image tag 後 redeploy | ⚠ 租戶路徑不可達；後台路徑可行但不升模組、不重算 plan | 見 §1.8 |
+| 9 | uninstall | ✅ 通過 | 見 §1.9 |
+| 10 | 同名重裝 | 平台路徑下**不可達**；operator API 直打 ⇒ **靜默接回舊資料，且 PVC 帶著 7 天後會被刪的孤兒標記** | 見 §2.3 |
 
 ### 1.1 步驟 1：建立
 
@@ -101,6 +100,72 @@ related:
 
 結論：#1129 不是「換三個常數」就結束。要嘛 chart render 一份含 DB 設定的真 conf（建議，Secret 掛載），要嘛 operator 一律經 entrypoint 進去。另：官方 entrypoint 把 DB 密碼放在行程參數上（`--db_password …`），容器內 `/proc` 可見——改用 conf 檔可一併解掉。
 
-### 2.2～2.4
+### 2.2 三條 create-only 管線的實際行為
 
-（進行中）
+| 管線 | 靜態 | 執行期實測 |
+|---|---|---|
+| `helm_default_values` 只在 create 讀（`src/controllers/paas.py:3353`） | create 當下 merge 定案寫進服務自己的 `helm_values` | ✅ 成立。步驟 8 的 `action_redeploy` 讀的是服務自己的 `helm_values`（`src/models/cloud_service.py:945`）；template 之後怎麼改都不會回流到既有服務 ⇒ **新 chart 的任何 values 修正對既有服務都是 no-op**，只能逐顆改 DB |
+| `_apply_plan_spec_overlay` 只在 `src/controllers/paas.py:3419` 呼叫 | 唯一非測試呼叫點 | ✅ 成立，而且比預期更徹底：換 plan（11→13：2G／20G／workers 2 → 4G／30G／workers 3，月費 4500）之後**沒有任何 helm 動作**（operator log 零筆），pod 仍是 2Gi、`--workers=2`、PVC 20Gi；連帳面欄位 `allocated_vcpu／ram_gb／storage_gb` 都沒更新（仍是 2／2.0／20）。之後的 reconfigure、redeploy 也都不重算 ⇒ **目前沒有任何路徑能讓既有服務拿到新 plan 的規格** |
+| reconfigure 的 `upgrade_kwargs`（`src/controllers/paas.py:3762`）不送 `sensitive_values` | 六鍵，無 `sensitive_values` | ✅ 成立。operator 收到的是 `helm upgrade … --version 28.2.10 --reset-values --values <tmp>`，rev 1→2 的 values 差異只有 `+smtpHost`。本次 values 裡的密碼是寫在 `helm_values` 內（含明文 `odooPassword`），所以沒掉；一旦密碼改走 `sensitive_values`（#1141 裁決 2／3），`--reset-values` ＋ 不送 sensitive ⇒ 每次 reconfigure 都會把密碼洗掉 |
+
+### 2.3 post-renderer 蓋 `keep` 之後，uninstall → 同名重裝
+
+- **平台路徑下不可達**：release name＝`svc-<uuid4 前 8 碼>`（`src/controllers/paas.py:3335-3345`），每次 create 都是新的；同 workspace 會落回同一個 namespace，但 release 永遠不同名 ⇒ 舊 PVC 只會累積、不會被接回。
+- uninstall（步驟 9）：release、Deployment、StatefulSet、Service、Secret、Cloudflare route（含 `-mcp`）全清；兩顆 PVC 留著，都被打上 `paas.woowtech.io/orphaned-at=<epoch>`、`grace-period-days=7`、`release-name`。`keep` annotation 只在 chart 自己 render 的 `svc-*-odoo` 上；postgres 那顆來自 volumeClaimTemplate，本來就不會被 helm 刪。
+- **operator API 直打同 namespace＋同 release name**（`POST /api/releases`，無任何防護）：`Install complete`，零警告。
+  - 兩顆 PVC 是**同一顆舊的**（建立時間、volume 都沒變）：`svc-*-odoo` 因為還帶著 `meta.helm.sh/release-name` 被 helm 收編；postgres 那顆被新 StatefulSet 依名稱接回。
+  - bootstrap 印「DB 已 init，略過 `-i base`」；刪除前寫進 DB 的標記 `proto1154.marker=OLD-DATA-svc-e125ec98` 還在，`database.create_date` 是舊的 ⇒ **舊站原地復活**，新填的 admin 帳密完全不生效。密碼這次對得上純粹是因為 template 把 DB 密碼寫死；改成隨機產生就會變成連不上 DB。
+  - 🔴 **孤兒標記沒有被清掉**：重裝後兩顆 PVC 仍帶著 `orphaned-at`。而叢集上的回收 CronJob 是真的存在的（`paas-stg-system/paas-operator-stg-pvc-cleanup`，每日 02:00；prod 同款），它的邏輯只看 label 與到期時間，**不檢查 PVC 是否正被使用、release 是否存在** ⇒ 7 天後會對一個活著的站下 `kubectl delete pvc --wait=false`；pvc-protection 讓它先卡在 Terminating，下一次 pod 重建（任何 reconfigure 都是 Recreate）資料就沒了（`longhorn-delete`）。
+- 與 #1136 的差異：#1136 是手動 helm、沒有 post-renderer，觀察到的是 PVC 被刪、重裝時卡 Terminating；經過平台管線則是「留著、靜默接回、帶著定時炸彈」。
+- 對下游的意義：任何「還原舊站＝用同名重裝」的 SOP（harumi rollback、#1128 的既存實例處置）都必須先清 `paas.woowtech.io/*` 三個 label；operator 的 install 也該在看到帶孤兒標記的同名 PVC 時 fail-loud。
+
+### 2.4 停權／復權後，bootstrap 在冷 DB 上的耗時
+
+停權（`_do_suspend`，`src/models/cloud_service.py:4056`；沒有租戶 route，由每日 cron 觸發，本次從 odoo shell 直呼同一支 method）：operator 依 `app.kubernetes.io/instance` 一網打盡，`deployment/svc-*-odoo` 與 `statefulset/svc-*-postgresql` **一起** scale 到 0。
+
+復權（`_do_resume`，`:4109`）時間軸：+10 秒 scale API 回來（**平台此時就把 state 寫成 `running`**，pod 一顆都還沒起來）→ +38 秒 postgres Ready → bootstrap initContainer 17 秒（其中 16 秒是 8 次 `pg_isready` 等 DB）→ **+62 秒 odoo Ready**。復權不會觸發 post-deploy init。
+
+| 要校準的預算 | 實測 | 判讀 |
+|---|---|---|
+| deploy timeout 30 分（`src/models/cloud_service.py:355`） | 首次建立 install→Ready 2 分 33 秒（`-i base` 91 秒）；冷啟動 62 秒；暖重建約 30 秒 | 綽綽有餘；harumi 的 121 模組還原站另計 |
+| `init_retries=5` | 5 次＝10 分 45 秒（兩條路徑併發，實際是時間預算不是次數） | 見 §1.2；#1152 的第 3 點成立 |
+| reset 路徑 `--atomic --timeout 15s`（`extra/paas-operator/src/api/releases.py:49`） | 這顆 chart 的 pod 最快也要約 30 秒才 Ready（Recreate ＋ initContainer ＋ readiness `initialDelaySeconds: 20`） | **15 秒必定逾時 ⇒ `--atomic` 必定 rollback**。今天 odoo 不走這條（`has_admin_gui=False`），但 #1141 裁決 3 要把 odoo 接上 #357 鏈 ⇒ 接上的那一刻 reset 就會 100% 失敗 |
+
+## 3. 其餘步驟的細節
+
+### 1.4 步驟 4：移除預檢
+
+state 撥回 `running` 後呼叫 `check-addon-removal`：1 秒內回 `Cannot verify module states: [query_modules] Failed to execute module state query: kubectl exec failed: kubectl command failed with code 1`。根因同 §1.2（`extra/paas-operator/src/services/odoo_module.py:170` 的直譯器、`:138` 的 conf 路徑），這條沒有重試迴圈所以快，但訊息一樣沒帶出真因。fail-closed 的設計是對的；後果是**官方 image 下任何 addon 都勾得上、拿不掉**，再疊上 §1.3 就是勾了就壞、壞了拿不掉。
+
+### 1.5 步驟 5：reconfigure 只改 `smtpHost`
+
+helm 層面乾淨（見 §2.2），bootstrap 與掛載都完好，平台 state 回到 `running`、不會再觸發 init。但：
+- `updateStrategy: Recreate` ⇒ 改一個欄位就重建 pod，實測停機約 30 秒。
+- **設定靜默無效**：chart 把 `smtpHost` 轉成 `ODOO_SMTP_HOST` env，官方 image 不讀 ⇒ 行程參數沒有任何 `--smtp*`、`odoo.tools.config['smtp_server']` 仍是 `localhost`、`ir.mail_server` 0 筆（盤點 C014b 在執行期成立）。UI 顯示成功。
+
+### 1.6 步驟 6：換 plan
+
+見 §2.2。API 回 `success`、訂閱換成 plan 13、月費 4500，其他什麼都沒發生。
+
+### 1.8 步驟 8：換 image tag 後 redeploy
+
+- 租戶路徑：`Unauthorized configuration keys: image.tag`（`src/controllers/paas.py:3663`；`image.tag` 不在 `helm_value_specs` 白名單，create 時同樣被擋）。也沒有租戶可打的 redeploy route。
+- 後台路徑（`base.group_system` 直接改 `cloud_service.helm_values` → `action_redeploy`，`src/models/cloud_service.py:887`）：helm rev 3，image 換成 `:1154b`，約 30 秒後 Ready。
+  - **不會升模組**：bootstrap 只印「DB 已 init，略過」。Bitnami 每次重啟 `--update=all` 的語意消失（盤點 S2 在執行期成立）⇒ #1141 裁決 1 的升級閘是必要的。
+  - state 回到 `deploying` ⇒ 又走一次 post-deploy init ⇒ 又是 10 分鐘後 `error`。
+  - plan 13 的規格依然沒套上（2Gi／workers=2）。
+
+### 1.9 步驟 9：uninstall
+
+平台 API `delete` → operator uninstall，20 秒內乾淨（見 §2.3）。小瑕疵：平台對 operator 送了**兩次** `DELETE`，第二次 404（不影響結果）。per-workspace namespace 依設計保留。
+
+## 4. 給下游票的輸入
+
+| 對象 | 輸入 |
+|---|---|
+| odoo chart 的共用設計（#1141） | ① bootstrap 放 initContainer **不會**讓平台的就緒語意自動成立——`_is_container_ready` 看不到 `Pending` 的 pod（§1.1），要嘛改平台判準（看 workload 的期望 pod 數），要嘛 bootstrap 不放 initContainer。② chart 必須自己擁有 `initContainers`／`extraVolumeMounts`，addon 走單一 values 子樹（`addons.selected`），平台不得再整鍵覆寫（§1.3）。③ conf 要是一份含 DB 設定的真檔（§2.1）。④ reset 路徑的 15 秒預算對 odoo 不成立（§2.4）。⑤ plan overlay 要搬進每次 deploy／upgrade 都重算的那一層，並補上「換 plan → 觸發 upgrade」（§2.2）。⑥ 升級閘必要（§1.8） |
+| #1129 operator odoo exec | 不是換三個常數：conf 沒有 DB 設定（§2.1）；`_wait_for_ready` 要分辨「exec 本身失敗」與「還沒 ready」（§1.2）；錯誤訊息要帶出 kubectl 的 stderr（§1.4） |
+| #1152 init 逾時 | 實錘；另有兩條 init 路徑併發、互搶 `init_retries`（§1.2） |
+| #1128 既存實例處置 | 同名重裝會靜默接回舊資料並留下孤兒標記（§2.3）；既存服務的 `helm_values` 不會跟著 template 走（§2.2） |
+| #1130 template 切換 | `odooEmail`／`odooPassword`／`smtp*` 全部沒人消費（§1.1、§1.5）；`image.tag` 沒有租戶或正規的後台升版路徑（§1.8） |
+| paas-odoo-ci#133 | Debian 套件衝突（§0.2） |
