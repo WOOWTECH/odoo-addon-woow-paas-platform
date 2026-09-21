@@ -1,0 +1,18 @@
+# ⚠ PROTOTYPE（#1154）— 拋棄式薄候選 image，只供 dev sandbox 實測；不是 paas-odoo-ci#133 的正式產物。
+# 只做三件事：/all-addons（含 catalog.json）＋ pip 依賴 ＋ chown。不寫 entrypoint。
+# /all-addons 直接取自現行 cloud-odoo image，確保 catalog 與平台端一致（盤點 C010）。
+FROM jcr-prod.woowtech.io/woow-paas-docker-local/cloud-odoo:20260814.0737 AS src
+
+FROM odoo:18.0
+USER root
+COPY --from=src /all-addons /all-addons
+# 與 paas-odoo-ci scripts/generate-requirements.sh 同邏輯：掃 manifest 的 external_dependencies.python。
+# 官方 image 走系統 python3（PEP 668）⇒ --break-system-packages（盤點 C068）。
+RUN python3 -c "import ast,glob; deps=set(); [deps.update(ast.literal_eval(open(m).read()).get('external_dependencies',{}).get('python',[])) for m in sorted(glob.glob('/all-addons/*/__manifest__.py'))]; print('\\n'.join(sorted(deps)))" > /tmp/requirements-cloud.txt
+RUN cat /tmp/requirements-cloud.txt && \
+    filtered=$(grep -v '^#' /tmp/requirements-cloud.txt | grep -v '^$' || true); \
+    if [ -n "$filtered" ]; then \
+        echo "$filtered" | xargs python3 -m pip install --break-system-packages --root-user-action=ignore; \
+    fi
+RUN chown -R odoo:odoo /all-addons
+USER odoo
