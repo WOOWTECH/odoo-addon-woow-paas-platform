@@ -1,7 +1,7 @@
 # ⚠ PROTOTYPE（#1154）— 拋棄式薄候選 image，只供 dev sandbox 實測；不是 paas-odoo-ci#133 的正式產物。
 # 只做三件事：/all-addons（含 catalog.json）＋ pip 依賴 ＋ chown。不寫 entrypoint。
 # /all-addons 直接取自現行 cloud-odoo image，確保 catalog 與平台端一致（盤點 C010）。
-FROM jcr-prod.woowtech.io/woow-paas-docker-local/cloud-odoo:20260814.0737 AS src
+FROM artifactory-jcr-artifactory-nginx.jfrog.svc.cluster.local/woow-paas-docker-local/cloud-odoo:20260814.0737 AS src
 
 FROM odoo:18.0
 USER root
