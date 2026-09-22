@@ -2274,8 +2274,27 @@ class CloudService(models.Model):
     def _apply_helm_values(self, values, extra_vals=None):
         """寫回 helm_values（會套用與 ``create()`` 相同的敏感值剝除）。
 
-        ``extra_vals`` 裡的其他欄位**刻意不提權**、走呼叫者自己的身分寫入，
-        這樣 ir.rule 對它們照常生效——提權只落在 helm_values 這一格。
+        ``extra_vals`` 走 ``self.write``、不提權；提權只落在 ``helm_values``。
+        ir.rule／欄位 groups 只在呼叫者不是 superuser 時對 ``extra_vals``
+        生效。呼叫者是 superuser（``env.su``）時，Odoo 本來就不套 ir.rule；
+        本函式不會、也不打算改變這一點。
+
+        已知帶 ``extra_vals`` 的生產呼叫點與身分（#699）：
+
+        - ``src/controllers/paas.py:3730`` 的 ``_update_service``：由
+          ``api_workspace_service`` 的 ``auth="user"`` 入口（同檔 :1551）、
+          ``action='update'`` 的 owner/admin role gate（:1589-1590），以未
+          ``sudo`` 的 ``service``（:1582）呼叫，故規則生效；守線是
+          ``src/tests/test_helm_values_field_acl_559.py:189`` 的
+          ``test_extra_vals_are_written_with_the_callers_identity``（#559）。
+        - ``src/models/cloud_service.py:3601`` 的 ``_model_init_n8n``：由
+          ``_cron_check_deploying_services``（同檔 :2380、:2400）經
+          ``_poll_and_update_status``（:3405）進入；cron record
+          ``src/data/cloud_service_cron.xml:15-23`` 未設 ``user_id``，且 #699
+          實測其身分為 ``SUPERUSER_ID``，故 ir.rule 不生效；租戶不能取得該
+          cron 身分，因此不是攻擊面。
+
+        新增帶 ``extra_vals`` 的呼叫點時，須回來補上這份身分清單（#699）。
         """
         self.ensure_one()
         if extra_vals:
