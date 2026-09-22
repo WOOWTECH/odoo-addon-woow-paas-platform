@@ -26,6 +26,8 @@
 
 <!-- include: guard-strength -->
 
+<!-- include: grep-pattern-is-data -->
+
 <!-- include: cross-repo-readonly -->
 
 <!-- include: report-readonly -->

@@ -8,6 +8,7 @@
 | --- | --- |
 | `iron-rules.md` | 全部八份（ops_k8s 另保留它自己的「發版核可 gate」段） |
 | `guard-strength.md` | 全部八份 |
+| `grep-pattern-is-data.md` | implementer_pi／implementer_cc／verifier_cc／verifier_pi／scout_pi／tracker／researcher／ops_k8s |
 | `cross-repo-readonly.md` | researcher／scout_pi／tracker／verifier_cc／verifier_pi（唯讀角色；實作 worker 用 `stay-in-worktree`） |
 | `stay-in-worktree.md` | implementer_pi／implementer_cc |
 | `report-readonly.md` | researcher／scout_pi／tracker／verifier_cc／verifier_pi（實作與 ops_k8s 的回報段各有專屬內容，不共用） |

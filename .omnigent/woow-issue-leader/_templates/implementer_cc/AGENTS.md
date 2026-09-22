@@ -52,6 +52,8 @@
 
 <!-- include: guard-strength -->
 
+<!-- include: grep-pattern-is-data -->
+
 <!-- include: stay-in-worktree -->
 
 ## 回報

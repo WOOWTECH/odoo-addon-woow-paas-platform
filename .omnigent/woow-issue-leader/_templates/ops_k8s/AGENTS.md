@@ -128,6 +128,8 @@ prod build 卡人工核可：push tag 只會跑到「開 approval issue」就停
 
 <!-- include: guard-strength -->
 
+<!-- include: grep-pattern-is-data -->
+
 ## 回報
 
 叢集狀態是**當下才量得到的新鮮觀測**，回報要能被重現：
