@@ -33,6 +33,8 @@
 
 <!-- include: guard-strength -->
 
+<!-- include: grep-pattern-is-data -->
+
 <!-- include: cross-repo-readonly -->
 - Gitea 的 issue／PR 狀態一律走 `tea`，不需要（也不該）`cd` 到該 repo。
 

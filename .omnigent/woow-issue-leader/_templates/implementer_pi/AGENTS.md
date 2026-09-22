@@ -49,6 +49,8 @@ diff 與契約，看不到你的 worktree。
 
 <!-- include: guard-strength -->
 
+<!-- include: grep-pattern-is-data -->
+
 <!-- include: stay-in-worktree -->
 
 ## 回報

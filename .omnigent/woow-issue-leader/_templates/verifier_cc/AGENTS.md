@@ -38,6 +38,8 @@ parametrized function 會展開成很多 case。對不上再說對不上，不�
 
 <!-- include: guard-strength -->
 
+<!-- include: grep-pattern-is-data -->
+
 <!-- include: cross-repo-readonly -->
 
 <!-- include: report-readonly -->
