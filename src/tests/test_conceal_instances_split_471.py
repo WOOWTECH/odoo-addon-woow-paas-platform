@@ -99,10 +99,11 @@ class TestConcealInstancesSeed(TransactionCase):
         """
         Tpl = self.env['woow_paas_platform.cloud_app_template'].sudo()
         hidden = Tpl.with_context(active_test=False).search([('is_hidden', '=', True)])
+        # pi-agent：hidden-only 直到 image 首發並釘 digest（test_pi_agent_seed）。
         # ha-full-apporo：hidden-only（曝光層）——APPORO 品牌的 ha-full，目前只給
         # woowhademo 展示機遷移用，不上架但既有服務照常可見可操作（不 conceal）。
         self.assertEqual(
-            set(hidden.mapped('slug')), {'ha-paas', 'ha-full-apporo'},
+            set(hidden.mapped('slug')), {'ha-paas', 'ha-full-apporo', 'pi-agent'},
             '隱藏 template 盤點漂移；新增的請先判定屬曝光層還是實例層')
         concealed = hidden.filtered('conceal_instances')
         self.assertEqual(

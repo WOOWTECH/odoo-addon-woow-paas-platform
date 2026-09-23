@@ -1575,6 +1575,50 @@
             <field name="is_active" eval="True"/>
         </record>
 
+        <!-- pi Coding Agent（pi-web）—— 2026-09-23 上架 PaaS（elmo 定案）。
+             chart：woow-paas-charts charts/pi-agent（PR #83）；image：paas-odoo-ci pi-agent/（PR #134，
+             上游 ghcr.io/woowtech/woow-k3s-pi-agent 以 digest 消費 + uid 1000 + models-config key 遮罩）。
+             認證：chart 內 nginx sidecar Basic auth，密碼 = config.sensitive.admin_password
+             （has_admin_gui=True、admin_password_carrier=helm_secret，同 hermes-agent；chart Secret 是
+             權威來源、pod 啟動時讀，reset 走 helm upgrade + rollout restart）。
+             T1 = 2 vCPU / 4 Gi / 20 Gi，4500 pts/mo（plan_pi_agent_*）。租戶自帶模型 key（Models 頁）。
+             ⚠ is_hidden=True 直到 image 首發：image.tag 目前是佔位 00000000.0000（chart values 的佔位慣例，
+             chart 對空 tag 會 render 失敗而非拉不到），首發後填 tag@sha256 並翻 is_hidden=False —— 同一次
+             變更一起動（test_pi_agent_seed.test_image_pinned_before_listing 守這條）。
+             既有 5 台 pi-agent-woow（內部團隊，含 Omnigent 耦合）維持原部署，上架後再逐台搬。 -->
+        <record id="cloud_app_pi_agent" model="woow_paas_platform.cloud_app_template">
+            <field name="name">pi Coding Agent</field>
+            <field name="slug">pi-agent</field>
+            <field name="description">AI 程式協作代理工作站：對話介面 + 內建終端 TUI，讀寫檔案、執行指令、Skills 與套件；模型金鑰自備。2 vCPU／4 GB RAM／20 GB 磁碟</field>
+            <field name="full_description">pi Coding Agent 雲端工作站：pi-web 對話介面搭配 pi coding agent，可在你的
+                持久磁碟上讀取、編輯、建立檔案與執行 shell 指令（串流回傳），內建瀏覽器終端 TUI
+                可直接操作 `pi` 指令、安裝套件與管理 Skills（放一份 SKILL.md 即自動載入）。
+                **模型金鑰自備**：於 Models 頁面新增供應商並貼上 API Key（存於你的磁碟，平台
+                不代管、頁面回顯時遮罩）。**單一帳密登入**：開通後於服務頁取得管理密碼（可重設）。
+                本版不含影片製作工具鏈。欠費停權時服務停止（磁碟保留），恢復繳費後資料原樣還在；
+                刪除服務即全新開通，原磁碟依平台保留政策 7 天後回收。</field>
+            <field name="category">ai_llm</field>
+            <field name="tags">["pi-agent", "coding-agent", "ai", "agent"]</field>
+            <field name="documentation_url">https://github.com/WOOWTECH/Woow_k3s_pi_agent_package#readme</field>
+            <field name="helm_repo_url"></field>
+            <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/pi-agent</field>
+            <field name="helm_chart_version">0.1.0</field>
+            <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/pi-agent","tag":"00000000.0000"},"piWeb":{"resources":{"requests":{"cpu":"500m","memory":"1Gi"},"limits":{"cpu":"2","memory":"4Gi"}}},"persistence":{"size":"20Gi"},"service":{"port":8080,"targetPort":8080},"authProxy":{"port":8080}}</field>
+            <field name="helm_value_specs">{"required": [], "optional": []}</field>
+            <field name="default_port">8080</field>
+            <field name="ingress_enabled" eval="True"/>
+            <field name="min_vcpu">2</field>
+            <field name="min_ram_gb">4.0</field>
+            <field name="min_storage_gb">20</field>
+            <field name="mcp_enabled" eval="False"/>
+            <field name="has_admin_gui" eval="True"/>
+            <field name="admin_password_carrier">helm_secret</field>
+            <field name="post_deploy_init_type">none</field>
+            <field name="max_per_partner" eval="0"/>
+            <field name="is_hidden" eval="True"/>
+            <field name="is_active" eval="True"/>
+        </record>
+
 
         <!-- Healer: DBs first installed under the historical <data noupdate="1"> block
              carry a sticky ir.model.data.noupdate flag on these seeds, so the corrected
