@@ -98,6 +98,12 @@
                    eval="[(6, 0, [ref('plan_ha_full_monthly'),
                                   ref('plan_ha_full_yearly')])]"/>
         </record>
+        <!-- APPORO 線與 ha-full 共用同一組 plan（同價、同規格；卡片本身 is_hidden）。 -->
+        <record id="cloud_app_ha_full_apporo" model="woow_paas_platform.cloud_app_template">
+            <field name="subscription_plan_ids"
+                   eval="[(6, 0, [ref('plan_ha_full_monthly'),
+                                  ref('plan_ha_full_yearly')])]"/>
+        </record>
 
         <!-- #494：Hermes Agent 完整應用 template ↔ 兩 base plan（4500/36000）。
              #424① 上架時定價未拍板、刻意不掛 plan；拍板後比照 #431 解封（翻

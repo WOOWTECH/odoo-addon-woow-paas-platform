@@ -16,9 +16,8 @@
 #   條數：loader 篩子④ cls.__dict__ 的 def test*；帶 allow_inherited_tests_method
 #         （可繼承！）者改走整條 MRO 去重
 #
-# 這份清單已於 odoo-tests.yml run 4763（2026-08-22，develop push，head 16b5fc04）
-# 與真實執行清單雙向對帳：C2（vs 原始碼）與 C3（vs 實際執行清單）皆 PASS，
-# 當時兩側各 653 項、完全一致（653 是該 run 當下的條目數，不代表現況；見 issue #837）。
+# 這份清單目前是**靜態預測**，尚未與真實 CI 執行清單對帳過
+# （對帳排程：B+C 觸發策略落地後第一趟 develop push 全套，見 issue #546）。
 18	integration.test_auto_recredit_864.TestAutoRecreditPostgresCapability864
 2	test_ac_access_seat_enforcement_521.TestAcSeatBasePlanBlastRadius
 1	test_ac_access_seat_enforcement_521.TestAcSeatQuotaBff
@@ -277,6 +276,7 @@
 8	test_ha_api.TestHAApiData
 2	test_ha_api.TestHAApiIntegration
 10	test_ha_api_security_access.TestHaApiSecurityAccess
+6	test_ha_full_apporo_seed.TestHaFullApporoSeed
 6	test_ha_full_seed_661.TestHaFullPlansSeed
 3	test_ha_full_seed_661.TestHaFullQuotaLockstep
 15	test_ha_full_seed_661.TestHaFullSeed661
