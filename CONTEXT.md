@@ -74,9 +74,15 @@ _Avoid_: 「客戶站」（「客戶」是 Tenant 的棄用同義詞）、「ten
 _Avoid_: 「主站」「paas odoo」（容易與租戶的 odoo `cloud_service` 混淆）
 
 **Odoo 管理員帳密**：odoo `cloud_service` 的 DB 裡那個管理員使用者（`base.user_admin`）的 login 與密碼，Tenant 用它登入自己的 Odoo。login 是建立服務時填的 email；密碼由平台產生，可由平台重設。
-_Avoid_: 不加限定詞的「admin password」「管理員密碼」——這個詞在本專案有三個指涉（本條與下兩條），曾因此把一條只對 admin GUI 密碼成立的重設流程誤當成對 Odoo 也成立
+_Avoid_: 不加限定詞的「admin password」「管理員密碼」——這個詞在本專案有四個指涉（本條與下三條），曾因此把一條只對 admin GUI 密碼成立的重設流程誤當成對 Odoo 也成立
 
 **master password**：Odoo 的資料庫管理密碼（`odoo.conf` 的 `admin_passwd`），管的是建立／備份／還原／刪除 DB，**不是登入密碼**。在 Tenant 的 odoo `cloud_service` 上由平台持有、不顯示給 Tenant；`list_db=False` 時 Odoo 沒有任何入口會收它。
 _Avoid_: 「admin 密碼」「管理員密碼」
 
 **admin GUI 密碼**：`has_admin_gui` 的 template（image 內建管理介面者）由平台供給的那一組 GUI 登入密碼；#357 的「重設管理員密碼」指的是它。它和上面兩條是三個不同的密鑰，供給與重設的通道也各不相同。
+
+**DB superuser**：PostgreSQL 角色屬性 `rolsuper=true` 者，本專案的 odoo chart 內固定名為 `postgres`。管的是 `CREATE EXTENSION`／`CREATE DATABASE`／`CREATE ROLE` 這類叢集層操作；其密碼是與上面三條並列、但完全獨立的**第四把**密鑰，由平台持有，只給 chart 的 bootstrap 與還原 runbook 用，不給跑 Odoo 的那個 DB 角色（`odoo`，非 superuser）。
+_Avoid_: 不加限定詞的「superuser」「管理員密碼」；也不要把 Odoo group role 的 `base.group_system`（Odoo 框架層的群組，不是 PostgreSQL 角色）叫成「系統管理員」而與本條混用。
+
+**Odoo superuser**：Odoo ORM 層的 `SUPERUSER_ID`（值為 1），`sudo()` 切換到的身分，繞過所有 `ir.rule`／`ir.model.access` 檢查，**不是一個可登入的帳號**。與「Odoo 管理員帳密」（`base.user_admin`，一個真實可登入、屬於 `base.group_system` 的一般使用者）是兩個不同的 `res.users` 概念，不可互換；與「DB superuser」更是不同層（Odoo vs PostgreSQL）。
+_Avoid_: 「admin」「系統管理員」——描述 `sudo()` 行為時講「Odoo superuser」，不要與「Odoo 管理員帳密」或「DB superuser」混稱。
