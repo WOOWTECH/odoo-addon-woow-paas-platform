@@ -103,11 +103,12 @@ class TestHaFullSeed661(TransactionCase):
         首次真叢集安裝時每個租戶都卡 Init:CrashLoopBackOff 重啟 10 次，log 上一行還
         印著 image=28 pvc=28（sentinel 2 數 manifest，數對了也放行了——設計是對的）。
         0.1.1 改為 woow_cover_entity（第一方、v2-only、且已確認帶 manifest.json）。
+        0.1.2 = persistence.existingClaim（接管既有 /config PVC，展示機遷移用）；預設值不變。
         """
         tpl = self._tpl()
         self.assertEqual(tpl.helm_repo_url or '', '')
         self.assertEqual(tpl.helm_chart_name, HA_FULL_CHART)
-        self.assertEqual(tpl.helm_chart_version, '0.1.1')
+        self.assertEqual(tpl.helm_chart_version, '0.1.2')
         self.assertNotEqual(
             tpl.helm_chart_version, '0.1.0',
             '0.1.0 的 seed 錨點指向 woow_panel_frontend（非 component）→ '

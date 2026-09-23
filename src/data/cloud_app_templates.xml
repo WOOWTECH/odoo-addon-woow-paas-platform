@@ -1445,7 +1445,7 @@
             <!-- Helm Configuration（OCI；chart 由 woow-paas-charts 發佈）。 -->
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/home-assistant-full</field>
-            <field name="helm_chart_version">0.1.1</field>
+            <field name="helm_chart_version">0.1.2</field>
             <!-- 只放「平台 pin／覆寫」與「設錯就靜默失去性質」的鍵。逐鍵理由：
 
                  - image.repository/tag：平台 pin 慣例（雙釘 tag@sha256）。見上方原子變更鐵律。
@@ -1492,7 +1492,7 @@
                  - networkPolicy.allowAllEgress：chart 預設 true 且**必須維持**（HACS
                    要從 github.com 下載；DNS-only egress 會讓它變成裝不了東西的整合，
                    且沒有清楚錯誤）。平台沒有理由覆寫。 -->
-            <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/woowtech-ha-full","tag":"20260807.0054@sha256:90ffa1089be1f60585f6e26ef318d93a79a940075da9e3ec0ae513e54b3d0a6a"},"persistence":{"mountPath":"/config","size":"10Gi"},"service":{"port":8123,"targetPort":8123},"ingress":{"enabled":false,"host":"","className":""},"haProxy":{"seedConfiguration":true,"useXForwardedFor":true,"trustedProxies":["10.42.0.0/16"],"fragmentManaged":true},"resources":{"requests":{"cpu":"500m","memory":"1Gi"},"limits":{"cpu":"2","memory":"2Gi"}}}</field>
+            <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/woowtech-ha-full","tag":"20260923.0804@sha256:3eaf22a5396877b7742a410809709450fc6f925c7e552fbd1bf6977be07598af"},"persistence":{"mountPath":"/config","size":"10Gi"},"service":{"port":8123,"targetPort":8123},"ingress":{"enabled":false,"host":"","className":""},"haProxy":{"seedConfiguration":true,"useXForwardedFor":true,"trustedProxies":["10.42.0.0/16"],"fragmentManaged":true},"resources":{"requests":{"cpu":"500m","memory":"1Gi"},"limits":{"cpu":"2","memory":"2Gi"}}}</field>
             <!-- 租戶無需（也不該）填任何部署參數：HA 的所有設定都在開通後於它自己的
                  網頁介面完成。空 specs ＝ 前台不渲染任何自訂欄位。 -->
             <field name="helm_value_specs">{"required": [], "optional": []}</field>
@@ -1539,6 +1539,42 @@
                  conceal_instances 更糟：已付費租戶手上 state=running 的服務會整條被鎖住。
                  完整分工見 docs/decisions/patterns/hidden-template-presentation-chain.md。 -->
         </record>
+        <!-- ha-full 的 APPORO 品牌線：同 chart、同 values、同 plan，只有 image 換成
+             ha-rebrand pipelines/apporo-cloud 產的 apporo-ha-full（品牌色 #C49E53、APPORO
+             logo／文件連結；整合集、29→21 個內建元件與 woowtech 線完全相同，見
+             ha-rebrand ADR 0005）。
+             is_hidden=True（不上架、不進市集）但**不**設 conceal_instances：這張卡目前
+             只給 woowhademo 展示機遷移用（6 台 APPORO 品牌，由平台開成工作區服務），
+             既有服務要照常可見、可操作（#471 的兩層語意）。要對外賣再翻 is_hidden。
+             守線：src/tests/test_ha_full_apporo_seed.py 鎖「與 ha-full 除 image 外逐鍵
+             相同、chart 版號 lockstep、tag 雙釘、repo 含 -full 且含 apporo」。 -->
+        <record id="cloud_app_ha_full_apporo" model="woow_paas_platform.cloud_app_template">
+            <field name="name">Home Assistant 完整版（APPORO）</field>
+            <field name="slug">ha-full-apporo</field>
+            <field name="description">APPORO 品牌的容器版 Home Assistant 完整版：與「Home Assistant 完整版」同一套整合集與內建元件，僅品牌外觀不同。1 vCPU／1 GB RAM／10 GB 磁碟</field>
+            <field name="full_description">APPORO 品牌的 Home Assistant 完整版雲端服務。功能、整合集、內建元件、
+                限制（無 Add-on 商店、無內建備份、無一鍵更新）與資料保留政策皆與
+                「Home Assistant 完整版」完全相同，差別只在品牌外觀（APPORO 標誌、色彩與
+                文件連結）。對外僅曝露 Home Assistant 網頁介面（8123 埠）。</field>
+            <field name="category">container</field>
+            <field name="tags">["home-assistant", "smart-home", "container", "ha-full", "apporo"]</field>
+            <field name="documentation_url">https://www.apporo.ai/blog/help-center-3</field>
+            <field name="helm_repo_url"></field>
+            <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/home-assistant-full</field>
+            <field name="helm_chart_version">0.1.2</field>
+            <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/apporo-ha-full","tag":"20260923.0754@sha256:e49f27ed193fc84c4b2b4bc107c813fc7a1577d5e94f93a8ced3ea7e19524cca"},"persistence":{"mountPath":"/config","size":"10Gi"},"service":{"port":8123,"targetPort":8123},"ingress":{"enabled":false,"host":"","className":""},"haProxy":{"seedConfiguration":true,"useXForwardedFor":true,"trustedProxies":["10.42.0.0/16"],"fragmentManaged":true},"resources":{"requests":{"cpu":"500m","memory":"1Gi"},"limits":{"cpu":"2","memory":"2Gi"}}}</field>
+            <field name="helm_value_specs">{"required": [], "optional": []}</field>
+            <field name="default_port">8123</field>
+            <field name="ingress_enabled" eval="True"/>
+            <field name="min_vcpu">1</field>
+            <field name="min_ram_gb">1.0</field>
+            <field name="min_storage_gb">10</field>
+            <field name="has_admin_gui" eval="False"/>
+            <field name="post_deploy_init_type">none</field>
+            <field name="is_hidden" eval="True"/>
+            <field name="is_active" eval="True"/>
+        </record>
+
 
         <!-- Healer: DBs first installed under the historical <data noupdate="1"> block
              carry a sticky ir.model.data.noupdate flag on these seeds, so the corrected
