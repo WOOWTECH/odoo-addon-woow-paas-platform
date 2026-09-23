@@ -29,22 +29,42 @@ access_project_project_internal,project.project internal user,project.model_proj
 access_project_task_internal,project.task internal user,project.model_project_task,base.group_user,1,1,1,1
 ```
 
-#### 2. ir.rule：用 workspace.access_ids 把權限框回 member
+#### 2. ir.rule：讀取限 workspace member，管理限 owner/admin
+
+以下以 `src/security/ir_rules.xml` 現況為準；此段為 commit `6da4c24904846cdb3362ce2dfdeaab08c75338ba` 的快照。
+
+#676 已將 `cloud_service_rule_workspace_member` 退役（#676）：舊規則沒有 role 條件，讓 workspace 內所有成員都能完整 CRUD。現行規則讀寫分離，member 讀取與 owner/admin 管理各自由一條 rule 負責：
 
 ```xml
-<record id="cloud_service_rule_workspace_member" model="ir.rule">
-    <field name="name">CloudService: workspace member access only</field>
-    <field name="model_id" ref="model_woow_paas_platform_cloud_service"/>
-    <field name="domain_force">[('workspace_id.access_ids.user_id', '=', user.id)]</field>
-    <field name="groups" eval="[(4, ref('base.group_user'))]"/>
-    <field name="perm_read" eval="True"/>
-    <field name="perm_write" eval="True"/>
-    <field name="perm_create" eval="True"/>
-    <field name="perm_unlink" eval="True"/>
-</record>
+        <record id="cloud_service_rule_member_read" model="ir.rule">
+            <field name="name">CloudService: workspace member read</field>
+            <field name="model_id" ref="model_woow_paas_platform_cloud_service"/>
+            <!-- `any` 而非點鏈：這條今天只有一個條件、兩種寫法等價，但與下面那條寫成
+                 同一形態，(a) 讀者不會以為形態差異帶有語意，(b) 日後有人往這裡加第二個
+                 條件時不會落進跨列匹配的陷阱（#556 根因之一）。 -->
+            <field name="domain_force">[('workspace_id.access_ids', 'any', [('user_id', '=', user.id)])]</field>
+            <field name="groups" eval="[(4, ref('base.group_user'))]"/>
+            <field name="perm_read" eval="True"/>
+            <field name="perm_write" eval="False"/>
+            <field name="perm_create" eval="False"/>
+            <field name="perm_unlink" eval="False"/>
+        </record>
+
+        <record id="cloud_service_rule_owner_admin_manage" model="ir.rule">
+            <field name="name">CloudService: workspace owner/admin manage</field>
+            <field name="model_id" ref="model_woow_paas_platform_cloud_service"/>
+            <field name="domain_force">[('workspace_id.access_ids', 'any', [('user_id', '=', user.id), ('role', 'in', ['owner', 'admin'])])]</field>
+            <field name="groups" eval="[(4, ref('base.group_user'))]"/>
+            <field name="perm_read" eval="True"/>
+            <field name="perm_write" eval="True"/>
+            <field name="perm_create" eval="True"/>
+            <field name="perm_unlink" eval="True"/>
+        </record>
 ```
 
-**Domain 關鍵字**：`workspace_id.access_ids.user_id` — 走 `workspace → access_ids (one2many to workspace.access) → user_id`。本 addon 對 workspace member 的真實 source of truth 是 `workspace.access` model（見 `src/models/workspace_access.py`），不是 `workspace.message_partner_ids` 或 `workspace.create_uid`。
+Odoo 的 `perm_*` flag 決定該 rule 是否參與對應 operation 的 row-level domain 檢查：`True` 表示參與，`False` 表示不參與，**不等同全域拒絕**該 operation。實際授權仍由 `ir.model.access` 與適用的 `ir.rule` 一起決定。這裡 `member_read` 的 `perm_write=False` 不會自行禁止寫入；一般 workspace member 的寫入之所以受限，是因為 write/create/unlink 方向由帶有同列 owner/admin role 條件的 `owner_admin_manage` rule 框住。
+
+**Domain 關鍵字**：`workspace_id.access_ids` 搭配 `any` — 讓 `user_id` 與管理操作所需的 `role` 條件落在同一筆 `workspace.access`。本 addon 對 workspace member 的真實 source of truth 是 `workspace.access` model（見 `src/models/workspace_access.py`），不是 `workspace.message_partner_ids` 或 `workspace.create_uid`。
 
 #### 3.（若 model 是 Odoo std）對等 deactivate std rule
 
@@ -115,6 +135,6 @@ Plan §D8=A 的論證：當未來引入任何 M2M widget / view ref / 標準 Odo
 - 關鍵 code 樣板：
   - `src/security/ir.model.access.csv:26-27`（CSV row 對 Odoo std model）
   - `src/security/ir.model.access.csv:7`（CSV row 對自家 model）
-  - `src/security/ir_rules.xml:65-117`（3 條 scoped ir.rule 完整範例）
+  - `src/security/ir_rules.xml:84-96、103-112`（`member_read` 與 `owner_admin_manage` 兩條 scoped ir.rule 完整範例）
   - `src/tests/test_cloud_service_acl.py`（self-owned model regression）
   - `src/tests/test_cross_workspace_task_isolation.py`（std model regression）
