@@ -8,7 +8,7 @@
 2. **評估機械化**（`/retro` skill 的分流，按強度優先）：可 grep/parse 判定 → `scripts/audit/repo-lint.py` 加 check；綁特定路徑 → `.claude/hooks/pattern-guard-map.json` append；皆不可 → 狀態欄留 `—`。
 3. 教訓已被 code guard / gate 取代時，更新狀態欄並讓 doc 記錄 guard 位置（file:line）。
 
-## 索引（46 條）
+## 索引（47 條）
 
 | pitfall | 一行症狀 | 機械化狀態 |
 | --- | --- | --- |
@@ -33,9 +33,10 @@
 | [fleet-split-registry-values-merge-drift](fleet-split-registry-values-merge-drift.md) | Fleet secret drift 勿急套 split-merge 框架——本案真因是 chart 外殘留 key（✅ 2026-06-25 已解決＋根因更正） | — |
 | [floor-env-relative-path-empty-ext-addons](floor-env-relative-path-empty-ext-addons.md) | Floor `.env` 相對路徑恰好掛到存在但空的目錄騙過 create.sh → module 靜默裝不起來；Floor 一律絕對路徑 | — |
 | [httpcase-orm-flush-ordering-raw-sql](httpcase-orm-flush-ordering-raw-sql.md) | HttpCase 內 raw SQL 造的 drift sample 被 ORM buffered write flush 覆蓋 | — |
-| [legacy-endpoint-scope-blindness](legacy-endpoint-scope-blindness.md) | plan AC 只 cover 新 endpoint，legacy 同源 code path 漏裝同層 security helper | — |
+| [install-test-enable-measures-installing-state](install-test-enable-measures-installing-state.md) | `-i <module> --test-enable` 在安裝流程尚未完成時執行 test，與安裝完成後再 `-u` 的狀態不同 | — |
 | [kubectl-exec-stdout-tail-truncation-large-stream](kubectl-exec-stdout-tail-truncation-large-stream.md) | woow-k3s `kubectl exec … > file`／`kubectl cp` 從 pod 拉 >~20 MB 的 stdout 串流會**尾端截斷且 exit 0**（≤8 MB 完整；1.9 GB 跑 19 分才 reset）；`pg_restore -l` 照樣列完整 TOC、restore 卻「部分成功」；搬大檔改叢集內 pod-to-pod push（1.66 GB 58 s），驗完整性用 `pg_restore -f /dev/null`／`gzip -t` | — |
 | [kubectl-secret-write-primitive-argv-exposure](kubectl-secret-write-primitive-argv-exposure.md) | 寫 Secret 的兩支原語只有 `apply_manifest` 不把明文放上 kubectl argv（`patch_secret` 的 base64 payload 就在 `--patch=` 裡）；**兩支的 log 都被遮得一樣乾淨** ⇒ 選錯原語零訊號，遮蔽測試綠證明的是「log 讀不到」不是「沒人讀得到」 | pattern-guard（`paas-operator` class）。repo-lint gate 已評估**否決**：「值敏不敏感」是呼叫端語意、不是函式性質，靜態判準必然大量漏抓 ⇒ 假安全感比沒 gate 更糟 |
+| [legacy-endpoint-scope-blindness](legacy-endpoint-scope-blindness.md) | plan AC 只 cover 新 endpoint，legacy 同源 code path 漏裝同層 security helper | — |
 | [luxon-fromsql-rejects-t-and-invalid-is-truthy](luxon-fromsql-rejects-t-and-invalid-is-truthy.md) | Odoo 的 `deserializeDate*` 內部走 `DateTime.fromSQL`，那支**只吃 SQL 空格格式**、對 `.isoformat()` 的 `T` 版一律 invalid；而 luxon 的 invalid DateTime 是 **truthy**、`formatDate` 只在 `!value` 早退 ⇒ 畫面印出英文字串 `Invalid DateTime`（不是空白、不是崩潰），在中文介面裡長得像 i18n 漏網 | `src/tests/test_locale_formatting_guard_107.py`（LOC.0–LOC.3；守 call site 回流，**守不住 helper 內部被改壞**——本 repo 無可執行 JS 的測試基礎設施）|
 | [netpol-enforced-except-fresh-pod-startup-window-k3s-kube-router](netpol-enforced-except-fresh-pod-startup-window-k3s-kube-router.md) | NP 對新建 pod 有啟動編程空窗 → 用臨時 pod 測 NP 會系統性誤判「控制器全毀」 | — |
 | [odoo-assertraises-savepoint-rollback](odoo-assertraises-savepoint-rollback.md) | `assertRaises` 在進入 with 區塊前開 flushing savepoint，例外穿出時 `ROLLBACK TO SAVEPOINT` ＋ `cr.clear()`⇒ 區塊**之後**所有「例外之後 DB 長怎樣」的斷言，量到的是區塊**之前**的值。兩種相反症狀：回捲值恰好等於期望值 ⇒ **假綠**（RED 階段就綠、被寫成「守線已成立」）；修法自己寫進 DB 的 `state` / `error_message` 也在區塊內 ⇒ **永遠不可能綠**，訊息長得像「你的修法沒把值寫進去」而那是假的 | pattern-guard（`test-discipline` class）。repo-lint gate 已評估**否決**：判準要知道「這個值是不是在區塊內被寫的」＝動態資訊，靜態 AST 判不出 ⇒ 假陰性（窄判準抓不到 #822 那 5 條——`assertRaises` 巢在 `with patch(...)` 裡、斷言落在外層語句串）與假陽性（寬判準命中 123 個 method，含 A1 這種**正確**用法）兩個方向都必然錯；理由與實測數字見 doc 內「為什麼機械化狀態不是 repo-lint gate」 |
