@@ -599,11 +599,21 @@ class TestWorkspaceAttackVectors658(_Workspace658Fixture):
         歸因斷言（`workspace` 而不是 `cloud_service`）是刻意的：證明擋下來的是
         **workspace 的 ir.rule**，不是子模型碰巧也擋。
 
-        ⚠ 本 PR 只關掉 workspace 這條反向通道，**沒有**修 `cloud_service` 自己那條
-        規則——guest 直接對 `cloud_service` 下手的路徑仍然開著。那是不同的爆炸半徑
-        （工單 §9 明列不在本單範圍），另開 issue 處理。這裡刻意**不**寫一條斷言
-        「guest 直接寫 cloud_service 會成功」的測試：那等於把現存的洞寫死成契約，
-        修它的人會先撞到一條紅的測試。
+        歷史說明：上述段落寫於 #675。#676（PR #695，merge commit
+        ``5608beb0``）已替 `cloud_service` 的 ir.rule 補上 role 條件，關閉 guest
+        直接 write／create／unlink 的路徑。
+
+        現在的直接操作守線位於 ``src/tests/test_cloud_service_authz_676.py``：
+        ``test_A1_guest_cannot_write``（:373）與
+        ``test_A3_guest_cannot_unlink``（:411）斷言由 cloud_service 的 rule 擋下；
+        ``test_A2_guest_cannot_create``（:389）保留直接 create 覆蓋，但 #519 後改由
+        provision gate 擋下，不再把原因歸給 #676 的 rule。
+
+        X13 本身仍證明 workspace 的 rule 能獨立擋住反向通道（歸因斷言指向
+        workspace）；``test_A12_cloud_service_layer_blocks_o2m_even_without_workspace_rule``
+        （同檔 :505）則證明 cloud_service 層能獨立擋住。兩者合起來證明縱深防禦
+        的兩層各自成立。舊段落「刻意不寫 guest 直接寫入成功測試」的理由已成歷史，
+        現由上述 A 系列的拒絕契約取代（#676）。
         """
         template = self.env['woow_paas_platform.cloud_app_template'].sudo().create({
             'name': 'Tmpl 658', 'slug': 'tmpl-658-%s' % uuid.uuid4().hex[:6],
