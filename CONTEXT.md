@@ -86,3 +86,6 @@ _Avoid_: 不加限定詞的「superuser」「管理員密碼」；也不要把 O
 
 **Odoo superuser**：Odoo ORM 層的 `SUPERUSER_ID`（值為 1），`sudo()` 切換到的身分，繞過所有 `ir.rule`／`ir.model.access` 檢查，**不是一個可登入的帳號**。與「Odoo 管理員帳密」（`base.user_admin`，一個真實可登入、屬於 `base.group_system` 的一般使用者）是兩個不同的 `res.users` 概念，不可互換；與「DB superuser」更是不同層（Odoo vs PostgreSQL）。
 _Avoid_: 「admin」「系統管理員」——描述 `sudo()` 行為時講「Odoo superuser」，不要與「Odoo 管理員帳密」或「DB superuser」混稱。
+
+**憑證來源**：服務上任一帶身分入口的憑證，按「由誰決定」分成兩類——**租戶自設**（Tenant 自己填進去的第三方系統帳密，如 SMTP 帳密、`auth.*ApiKey`；平台替他保管並在每次重新部署時原樣送回）與**平台鑄造**（部署時由平台產生，如 DB 密碼、master password、初始 Odoo 管理員密碼、admin GUI 密碼、n8n owner 密碼）。鑄造的再分**不可見**（DB 密碼、master password）與**可見可重設**（admin GUI 密碼、n8n owner 密碼）。判準與 seed 上必須留下的痕跡以 `docs/decisions/patterns/default-credential-functional-test-blindspot.md` 為權威，本條只供查找。
+_Avoid_: 「租戶自填憑證」「平台產生密鑰」（同一條軸線另造的詞）、不加限定詞的「憑證」（分不出是哪一類）
