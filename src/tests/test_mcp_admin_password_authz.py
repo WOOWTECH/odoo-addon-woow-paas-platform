@@ -12,7 +12,7 @@ from odoo.service.model import get_public_method
 from odoo.tests.common import TransactionCase
 
 from odoo.addons.woow_paas_platform.controllers.paas import PaasController
-from odoo.addons.woow_paas_platform.models.workspace_access import ROLE_OWNER, ROLE_USER
+from odoo.addons.woow_paas_platform.models.workspace_access import ROLE_ADMIN, ROLE_USER
 from ..models.cloud_service import _internal_provision
 
 
@@ -394,20 +394,22 @@ class TestRedeployRpcGate(_McpServiceFixture):
     @patch(
         'odoo.addons.woow_paas_platform.services.paas_operator.get_paas_operator_client'
     )
-    def test_workspace_owner_is_denied_before_touching_the_operator(self, get_client):
-        """後台入口對 workspace owner 也擋，而且擋在任何 operator 呼叫之前。
+    def test_workspace_admin_is_denied_before_touching_the_operator(self, get_client):
+        """後台入口對 workspace admin 也擋，而且擋在任何 operator 呼叫之前。
 
-        用 owner（ir.rule 給 write 的最高租戶角色）而不是 user：要證明的是
-        「租戶側任何角色都不夠」，用被 ir.rule 擋掉的角色會為了錯的理由變綠。
-        ``get_paas_operator_client`` 必須 mock 成可用，否則 deny 可能只是
-        'PaaS Operator not configured' 的 UserError 假綠（同 C05 的教訓）。
+        用 admin（ir.rule ``cloud_service_rule_owner_admin_manage`` 給 write 的
+        角色；owner 已被 fixture 的 workspace 建立者佔走、一個 workspace 只能有一個）
+        而不是 user：要證明的是「租戶側有寫入權的角色也不夠」，用被 ir.rule 擋掉的
+        角色會為了錯的理由變綠。``get_paas_operator_client`` 必須 mock 成可用，
+        否則 deny 可能只是 'PaaS Operator not configured' 的 UserError 假綠
+        （同 C05 的教訓）。
         """
         client = MagicMock()
         get_client.return_value = client
-        owner = self._make_member('warden-1185-owner', ROLE_OWNER)
+        admin = self._make_member('warden-1185-admin', ROLE_ADMIN)
 
         with self.assertRaises(AccessError):
-            self.service.with_user(owner).action_redeploy()
+            self.service.with_user(admin).action_redeploy()
 
         client.get_release.assert_not_called()
         client.upgrade_release.assert_not_called()
