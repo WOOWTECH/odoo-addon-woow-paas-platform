@@ -1,0 +1,163 @@
+# Bitnami odoo chart 28.2.10 硬套官方 odoo:18.0 的最小可行覆寫（#1136 實測用）
+global:
+  security:
+    allowInsecureImages: true
+
+image:
+  registry: docker.io
+  repository: odoo
+  tag: "18.0"
+  pullPolicy: IfNotPresent
+
+# ENTRYPOINT 保留官方的 /entrypoint.sh，只換 CMD
+args:
+  - odoo
+  - -d
+  - bitnami_odoo
+
+service:
+  type: ClusterIP
+  ports:
+    http: 80
+
+# Bitnami 的 volumePermissions initContainer 會 chown /bitnami/odoo 給 1001，官方 image 用 101
+volumePermissions:
+  enabled: false
+
+podSecurityContext:
+  enabled: true
+  fsGroup: 101
+  fsGroupChangePolicy: OnRootMismatch
+
+containerSecurityContext:
+  enabled: true
+  runAsUser: 101
+  runAsGroup: 101
+  runAsNonRoot: true
+  privileged: false
+  readOnlyRootFilesystem: false
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop: ["ALL"]
+  seccompProfile:
+    type: "RuntimeDefault"
+
+livenessProbe:
+  enabled: true
+  path: /web/health
+  initialDelaySeconds: 120
+  periodSeconds: 30
+  timeoutSeconds: 5
+  failureThreshold: 6
+readinessProbe:
+  enabled: true
+  path: /web/health
+  initialDelaySeconds: 20
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 12
+
+resources:
+  requests:
+    cpu: 200m
+    memory: 512Mi
+  limits:
+    cpu: "2"
+    memory: 2Gi
+
+persistence:
+  enabled: true
+  storageClass: longhorn-delete
+  size: 5Gi
+
+updateStrategy:
+  type: Recreate
+
+# 官方 entrypoint.sh 讀 HOST／PORT／USER／PASSWORD，不認 ODOO_DATABASE_*
+extraEnvVars:
+  - name: HOST
+    value: '{{ .Release.Name }}-postgresql'
+  - name: PORT
+    value: "5432"
+  - name: USER
+    value: bn_odoo
+  - name: PASSWORD
+    valueFrom:
+      secretKeyRef:
+        name: '{{ .Release.Name }}-postgresql'
+        key: password
+  - name: ODOO_DB
+    value: bitnami_odoo
+
+# chart 把 PVC 寫死掛在 /bitnami/odoo；官方 image 的 data_dir 是 /var/lib/odoo。
+# 同一顆 volume 再掛一次到官方路徑（chart 沒有 mountPath 的 values 旋鈕）
+extraVolumeMounts:
+  - name: odoo-data
+    mountPath: /var/lib/odoo
+
+initContainers:
+  - name: bootstrap
+    image: docker.io/odoo:18.0
+    imagePullPolicy: IfNotPresent
+    securityContext:
+      runAsUser: 101
+      runAsGroup: 101
+      runAsNonRoot: true
+      allowPrivilegeEscalation: false
+      capabilities:
+        drop: ["ALL"]
+    command:
+      - /bin/bash
+      - -c
+      - |
+        set -euo pipefail
+        export PGPASSWORD="$PASSWORD"
+        echo "[bootstrap] 等待 DB 可連線"
+        for i in $(seq 1 60); do
+          pg_isready -h "$HOST" -p "$PORT" -U "$USER" -d "$ODOO_DB" && break
+          sleep 2
+        done
+        INITED=$(psql -h "$HOST" -p "$PORT" -U "$USER" -d "$ODOO_DB" -tAc "SELECT to_regclass('public.ir_module_module')" || echo "")
+        if [ -n "$INITED" ] && [ "$INITED" != "" ]; then
+          echo "[bootstrap] DB 已 init（ir_module_module 存在），略過"
+          exit 0
+        fi
+        echo "[bootstrap] 首次 init：odoo -d $ODOO_DB -i base"
+        odoo -d "$ODOO_DB" -i base --stop-after-init --no-http \
+          --db_host="$HOST" --db_port="$PORT" --db_user="$USER" --db_password="$PASSWORD" \
+          --data-dir=/var/lib/odoo --without-demo=all
+        echo "[bootstrap] init 完成"
+    env:
+      - name: HOST
+        value: '{{ .Release.Name }}-postgresql'
+      - name: PORT
+        value: "5432"
+      - name: USER
+        value: bn_odoo
+      - name: ODOO_DB
+        value: bitnami_odoo
+      - name: PASSWORD
+        valueFrom:
+          secretKeyRef:
+            name: '{{ .Release.Name }}-postgresql'
+            key: password
+    volumeMounts:
+      - name: odoo-data
+        mountPath: /var/lib/odoo
+
+postgresql:
+  enabled: true
+  architecture: standalone
+  auth:
+    username: bn_odoo
+    password: odoo1136pass
+    database: bitnami_odoo
+    postgresPassword: postgres1136pass
+  image:
+    registry: docker.io
+    repository: bitnamilegacy/postgresql
+    tag: 17.6.0-debian-12-r4
+  primary:
+    persistence:
+      storageClass: longhorn-delete
+      size: 8Gi
