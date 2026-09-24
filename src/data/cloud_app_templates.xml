@@ -1603,7 +1603,7 @@
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/pi-agent</field>
             <field name="helm_chart_version">0.1.0</field>
-            <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/pi-agent","tag":"00000000.0000"},"piWeb":{"resources":{"requests":{"cpu":"500m","memory":"1Gi"},"limits":{"cpu":"2","memory":"4Gi"}}},"persistence":{"size":"20Gi"},"service":{"port":8080,"targetPort":8080},"authProxy":{"port":8080}}</field>
+            <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/pi-agent","tag":"20260924.0235@sha256:723122778daaed23fb9bdec3fbac5faa0cb5fe63fe258e757a5c14259528d3b2"},"piWeb":{"resources":{"requests":{"cpu":"500m","memory":"1Gi"},"limits":{"cpu":"2","memory":"4Gi"}}},"persistence":{"size":"20Gi"},"service":{"port":8080,"targetPort":8080},"authProxy":{"port":8080}}</field>
             <field name="helm_value_specs">{"required": [], "optional": []}</field>
             <field name="default_port">8080</field>
             <field name="ingress_enabled" eval="True"/>
@@ -1615,7 +1615,7 @@
             <field name="admin_password_carrier">helm_secret</field>
             <field name="post_deploy_init_type">none</field>
             <field name="max_per_partner" eval="0"/>
-            <field name="is_hidden" eval="True"/>
+            <field name="is_hidden" eval="False"/>
             <field name="is_active" eval="True"/>
         </record>
 
