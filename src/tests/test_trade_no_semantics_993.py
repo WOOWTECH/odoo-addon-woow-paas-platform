@@ -428,11 +428,18 @@ class TestTradeNoSemantics993(TransactionCase):
         看它最後**要執行哪些檔**。
         """
         manifest_version = odoo.modules.module.get_manifest(_MODULE)['version']
-        self.assertEqual(
-            manifest_version, _MIGRATION_VERSION,
-            'migration 目錄名必須等於 manifest 版號：Odoo 的執行視窗是 '
-            '`installed < 目錄版本 <= manifest`，目錄版號比 manifest 大時'
-            '**靜默 no-op**（manifest-version-gate 規則 B 守的也是這個）')
+        # ⚠ 這裡要的是 `目錄版本 <= manifest`，**不是相等**：目錄版號比 manifest 大
+        # 才會靜默 no-op（manifest-version-gate 規則 B 守的也是這個）。寫成相等的話，
+        # 下一次發版把 manifest 升上去（release PR 只 bump 版號、不帶 migration）
+        # 這格就會紅——2026-09-24 的 18.0.1.0.178 就是這樣紅在 develop 上，
+        # 而 migration 本身完全正常（.177 <= .178，視窗內照跑）。
+        from odoo.tools.parse_version import parse_version
+
+        self.assertLessEqual(
+            parse_version(_MIGRATION_VERSION), parse_version(manifest_version),
+            'migration 目錄版號（%s）比 manifest（%s）大——Odoo 的執行視窗是 '
+            '`installed < 目錄版本 <= manifest`，超出的那一側**靜默 no-op**'
+            % (_MIGRATION_VERSION, manifest_version))
 
         pkg = SimpleNamespace(
             name=_MODULE,
