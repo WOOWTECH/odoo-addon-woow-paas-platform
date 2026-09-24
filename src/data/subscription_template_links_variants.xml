@@ -155,6 +155,16 @@
                           (4, ref('plan_ha_full_ac3_yearly'))]"/>
         </record>
 
+        <record id="cloud_app_ha_full_apporo" model="woow_paas_platform.cloud_app_template">
+            <field name="subscription_plan_ids"
+                   eval="[(4, ref('plan_ha_full_ac1_monthly')),
+                          (4, ref('plan_ha_full_ac1_yearly')),
+                          (4, ref('plan_ha_full_ac2_monthly')),
+                          (4, ref('plan_ha_full_ac2_yearly')),
+                          (4, ref('plan_ha_full_ac3_monthly')),
+                          (4, ref('plan_ha_full_ac3_yearly'))]"/>
+        </record>
+
         <record id="cloud_app_mcp_hermes" model="woow_paas_platform.cloud_app_template">
             <field name="subscription_plan_ids"
                    eval="[(4, ref('plan_mcp_hermes_ac1_monthly')),

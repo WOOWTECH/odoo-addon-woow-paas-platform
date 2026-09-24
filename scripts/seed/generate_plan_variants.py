@@ -207,7 +207,8 @@ _TEMPLATE_ORDER = [
     'cloud_app_mcp_k8s', 'cloud_app_mcp_vk', 'cloud_app_mcp_opendesign',
     'cloud_app_opendesign',
     # #765
-    'cloud_app_hermes_agent', 'cloud_app_ha_full', 'cloud_app_mcp_hermes',
+    'cloud_app_hermes_agent', 'cloud_app_ha_full', 'cloud_app_ha_full_apporo',
+    'cloud_app_mcp_hermes',
     'smart_home_home_assistant', 'security_access_default',
 ]
 
@@ -245,6 +246,16 @@ def _template_xmlid(v):
             'hermes_agent': 'cloud_app_hermes_agent',
             'ha_full': 'cloud_app_ha_full',
             'mcp_hermes': 'cloud_app_mcp_hermes'}[v.family]
+
+
+# 同一組變體要再掛一份到「同產品、不同品牌」的孿生卡片上。
+# ha-full 的 APPORO 線與 woowtech 線共用同一組 plan（同價、同規格，見
+# subscription_template_links.xml 的註解），base plan 那邊已經是共用的；變體漏了
+# 就會出現「base 一樣、加購變體只有其中一張卡有」的半套狀態——
+# test_ha_full_apporo_seed.test_same_plans_as_ha_full 就是守這件事。
+_MIRROR_TEMPLATES = {
+    'cloud_app_ha_full': ['cloud_app_ha_full_apporo'],
+}
 
 
 def _template_model(v):
@@ -363,7 +374,9 @@ def emit_links_xml(variants):
     groups = {}
     for v in variants:
         tpl = _template_xmlid(v)
-        groups.setdefault(tpl, (_template_model(v), []))[1].append(_plan_xmlid(v))
+        for target in (tpl, *_MIRROR_TEMPLATES.get(tpl, ())):
+            groups.setdefault(target, (_template_model(v), []))[1].append(
+                _plan_xmlid(v))
     _assert_templates_registered(groups)
     parts = [
         '<?xml version="1.0" encoding="UTF-8"?>',
