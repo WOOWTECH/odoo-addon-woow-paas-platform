@@ -786,7 +786,12 @@ class TestEndToEnd(unittest.TestCase):
             cwd=str(cwd or self.repo),
             capture_output=True,
             text=True,
-            env={**os.environ, **(env or {})},
+            # GITHUB_HEAD_REF 預設清掉：CI 在 release/* 的 PR 上會把它設成該分支名，
+            # 繼承進來的話**每個 fixture 都會被判成 release PR**，期望「非 release
+            # 行為」的格全數誤紅（2026-09-24：release/18.0.1.0.178 上 95 支倒 11 支，
+            # required check 掛在自測、根本沒跑到真正的判定 ⇒ 發版流程整條卡死）。
+            # fixture 要測 env 來源時自己在 env= 明寫，後面的展開會蓋過這個預設。
+            env={**os.environ, "GITHUB_HEAD_REF": "", **(env or {})},
         )
 
     def _advance_develop(self, version):
@@ -805,6 +810,28 @@ class TestEndToEnd(unittest.TestCase):
         _git(self.repo, "commit", "-m", "pr")
 
         r = self._run()
+        self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
+        self.assertIn("unchanged", r.stdout)
+
+    def test_ambient_github_head_ref_does_not_leak_into_fixtures(self):
+        """自測本身必須對 GITHUB_HEAD_REF 免疫——CI 跑在 release/* 的 PR 上時它是有值的。
+
+        沒有這一格，整個端到端區塊在發版 PR 上會集體誤紅（見 _run 的註解）。
+        """
+        _git(self.repo, "checkout", "-b", "pr")
+        self._write("src/models/foo.py", "x = 2\n")
+        _git(self.repo, "add", "-A")
+        _git(self.repo, "commit", "-m", "pr")
+
+        saved = os.environ.get("GITHUB_HEAD_REF")
+        os.environ["GITHUB_HEAD_REF"] = "release/18.0.1.0.999"
+        try:
+            r = self._run()
+        finally:
+            if saved is None:
+                os.environ.pop("GITHUB_HEAD_REF", None)
+            else:
+                os.environ["GITHUB_HEAD_REF"] = saved
         self.assertEqual(r.returncode, 0, msg=r.stdout + r.stderr)
         self.assertIn("unchanged", r.stdout)
 
