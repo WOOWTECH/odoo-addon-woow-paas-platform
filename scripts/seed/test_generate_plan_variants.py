@@ -141,7 +141,29 @@ class TestEmit(unittest.TestCase):
     def test_links_append_not_replace(self):
         links = g.emit_links_xml(self.variants)
         self.assertNotIn('(6, 0', links, 'M2M 必須 (4,) append，嚴禁 (6,0) 覆寫 base 集')
-        self.assertEqual(links.count('(4, ref('), len(self.variants))
+        # 掛在孿生卡片上的那一份也是 (4,) append，故 append 數 = 變體數 + 鏡射份數。
+        mirrored = sum(len(g._MIRROR_TEMPLATES.get(g._template_xmlid(v), ()))
+                       for v in self.variants)
+        self.assertEqual(links.count('(4, ref('), len(self.variants) + mirrored)
+
+    def test_mirror_templates_get_the_same_variant_set(self):
+        """孿生卡片（同產品不同品牌）必須拿到與本尊完全相同的變體集。
+
+        漏掉的形態是「base plan 一樣、加購變體只有其中一張卡有」——seed 全綠、
+        拓撲計數照長，只有前台少了加購選項。見 test_ha_full_apporo_seed。
+        """
+        links = g.emit_links_xml(self.variants)
+        for src, mirrors in g._MIRROR_TEMPLATES.items():
+            plans = {v for v in (g._plan_xmlid(x) for x in self.variants)
+                     if g._template_xmlid(
+                         next(x for x in self.variants if g._plan_xmlid(x) == v)) == src}
+            self.assertTrue(plans, src)
+            for mirror in mirrors:
+                blk = links.split('id="%s"' % mirror, 1)
+                self.assertEqual(len(blk), 2, '%s 沒出現在 links 裡' % mirror)
+                blk = blk[1].split('</record>', 1)[0]
+                for plan in plans:
+                    self.assertIn("ref('%s')" % plan, blk)
 
     def test_links_file_noupdate_zero(self):
         """鐵律：links 檔必 noupdate=0（升級時隨 base (6,0) 重設後重新 append）；
