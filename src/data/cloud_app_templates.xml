@@ -1445,7 +1445,7 @@
             <!-- Helm Configuration（OCI；chart 由 woow-paas-charts 發佈）。 -->
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/home-assistant-full</field>
-            <field name="helm_chart_version">0.1.2</field>
+            <field name="helm_chart_version">0.1.3</field>
             <!-- 只放「平台 pin／覆寫」與「設錯就靜默失去性質」的鍵。逐鍵理由：
 
                  - image.repository/tag：平台 pin 慣例（雙釘 tag@sha256）。見上方原子變更鐵律。
@@ -1561,7 +1561,7 @@
             <field name="documentation_url">https://www.apporo.ai/blog/help-center-3</field>
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/home-assistant-full</field>
-            <field name="helm_chart_version">0.1.2</field>
+            <field name="helm_chart_version">0.1.3</field>
             <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/apporo-ha-full","tag":"20260923.0754@sha256:e49f27ed193fc84c4b2b4bc107c813fc7a1577d5e94f93a8ced3ea7e19524cca"},"persistence":{"mountPath":"/config","size":"10Gi"},"service":{"port":8123,"targetPort":8123},"ingress":{"enabled":false,"host":"","className":""},"haProxy":{"seedConfiguration":true,"useXForwardedFor":true,"trustedProxies":["10.42.0.0/16"],"fragmentManaged":true},"resources":{"requests":{"cpu":"500m","memory":"1Gi"},"limits":{"cpu":"2","memory":"2Gi"}}}</field>
             <field name="helm_value_specs">{"required": [], "optional": []}</field>
             <field name="default_port">8123</field>
