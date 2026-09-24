@@ -1,0 +1,77 @@
+# 第二輪：workers>0、proxy_mode／list_db 走 CLI flag、admin 密碼由 bootstrap 用 ORM 覆寫
+args:
+  - odoo
+  - -d
+  - bitnami_odoo
+  - --proxy-mode
+  - --no-database-list
+  - --db-filter=^bitnami_odoo$
+  - --workers=2
+  - --max-cron-threads=1
+  - --limit-time-real=120
+
+extraContainerPorts:
+  - name: websocket
+    containerPort: 8072
+    protocol: TCP
+
+service:
+  extraPorts:
+    - name: websocket
+      port: 8072
+      targetPort: websocket
+      protocol: TCP
+
+initContainers:
+  - name: bootstrap
+    image: docker.io/odoo:18.0
+    imagePullPolicy: IfNotPresent
+    securityContext:
+      runAsUser: 101
+      runAsGroup: 101
+      runAsNonRoot: true
+      allowPrivilegeEscalation: false
+      capabilities:
+        drop: ["ALL"]
+    command:
+      - /bin/bash
+      - -c
+      - |
+        set -euo pipefail
+        export PGPASSWORD="$PASSWORD"
+        echo "[bootstrap] 等待 DB 可連線"
+        for i in $(seq 1 60); do
+          pg_isready -h "$HOST" -p "$PORT" -U "$USER" -d "$ODOO_DB" && break
+          sleep 2
+        done
+        INITED=$(psql -h "$HOST" -p "$PORT" -U "$USER" -d "$ODOO_DB" -tAc "SELECT to_regclass('public.ir_module_module')" || echo "")
+        DB_ARGS="--db_host=$HOST --db_port=$PORT --db_user=$USER --db_password=$PASSWORD --data-dir=/var/lib/odoo"
+        if [ -n "$INITED" ]; then
+          echo "[bootstrap] DB 已 init（ir_module_module 存在），略過 -i base"
+        else
+          echo "[bootstrap] 首次 init：odoo -d $ODOO_DB -i base"
+          odoo -d "$ODOO_DB" -i base --stop-after-init --no-http $DB_ARGS --without-demo=all
+          echo "[bootstrap] init 完成，用 ORM 設定 admin 密碼"
+          printf '%s\n' "env['res.users'].browse(2).write({'login': env['ir.config_parameter'].sudo().get_param('x') or 'admin', 'password': '$ADMIN_PASSWORD'})" "env.cr.commit()" \
+            | odoo shell -d "$ODOO_DB" --no-http $DB_ARGS
+          echo "[bootstrap] admin 密碼已設定"
+        fi
+    env:
+      - name: HOST
+        value: '{{ .Release.Name }}-postgresql'
+      - name: PORT
+        value: "5432"
+      - name: USER
+        value: bn_odoo
+      - name: ODOO_DB
+        value: bitnami_odoo
+      - name: ADMIN_PASSWORD
+        value: "Prototype1136!"
+      - name: PASSWORD
+        valueFrom:
+          secretKeyRef:
+            name: '{{ .Release.Name }}-postgresql'
+            key: password
+    volumeMounts:
+      - name: odoo-data
+        mountPath: /var/lib/odoo
