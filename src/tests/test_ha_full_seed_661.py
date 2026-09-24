@@ -103,15 +103,24 @@ class TestHaFullSeed661(TransactionCase):
         首次真叢集安裝時每個租戶都卡 Init:CrashLoopBackOff 重啟 10 次，log 上一行還
         印著 image=28 pvc=28（sentinel 2 數 manifest，數對了也放行了——設計是對的）。
         0.1.1 改為 woow_cover_entity（第一方、v2-only、且已確認帶 manifest.json）。
+        0.1.2 = persistence.existingClaim（接管既有 /config PVC，展示機遷移用）；預設值不變。
+        0.1.3 = seed copy 改真正的 per-file 走訪（charts PR #84）。0.1.2 以前迭代的是
+        /config 的頂層項目再 cp -rn，busybox 在目的目錄已存在時會整個跳過遞迴 ⇒ 全新
+        PVC 沒事，但**接管過既有 /config 的 PVC**（正是展示機遷移）一個檔都不會複製，
+        sentinel 2 判 dst<src 而 FATAL、pod 卡 Init:Error。
         """
         tpl = self._tpl()
         self.assertEqual(tpl.helm_repo_url or '', '')
         self.assertEqual(tpl.helm_chart_name, HA_FULL_CHART)
-        self.assertEqual(tpl.helm_chart_version, '0.1.1')
+        self.assertEqual(tpl.helm_chart_version, '0.1.3')
         self.assertNotEqual(
             tpl.helm_chart_version, '0.1.0',
             '0.1.0 的 seed 錨點指向 woow_panel_frontend（非 component）→ '
             '每個租戶卡 Init:CrashLoopBackOff')
+        self.assertNotEqual(
+            tpl.helm_chart_version, '0.1.2',
+            '0.1.2 的 seed copy 在已有 /config 的 PVC 上一個檔都不複製 → '
+            '展示機遷移必卡 Init:Error（charts PR #84）')
 
     # ── image pin ────────────────────────────────────────────────────────────
     def test_image_repository_is_woowtech_ha_full(self):

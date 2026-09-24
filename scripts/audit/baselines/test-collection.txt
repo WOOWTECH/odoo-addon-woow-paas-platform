@@ -276,6 +276,7 @@
 8	test_ha_api.TestHAApiData
 2	test_ha_api.TestHAApiIntegration
 10	test_ha_api_security_access.TestHaApiSecurityAccess
+6	test_ha_full_apporo_seed.TestHaFullApporoSeed
 6	test_ha_full_seed_661.TestHaFullPlansSeed
 3	test_ha_full_seed_661.TestHaFullQuotaLockstep
 15	test_ha_full_seed_661.TestHaFullSeed661
@@ -425,6 +426,7 @@
 2	test_payment_token_charge.TestPaymentTokenCharge
 1	test_payment_transaction_fields.TestPaymentTransactionFields
 4	test_payment_transaction_overrides.TestPaymentTransactionOverrides
+9	test_pi_agent_seed.TestPiAgentSeed
 1	test_plan_group_keys_368.TestDisplaySpecs368
 1	test_plan_group_keys_368.TestEndpointOrderUnchanged368
 1	test_plan_group_keys_368.TestGroupKeys368

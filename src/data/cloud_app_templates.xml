@@ -1445,7 +1445,7 @@
             <!-- Helm Configuration（OCI；chart 由 woow-paas-charts 發佈）。 -->
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/home-assistant-full</field>
-            <field name="helm_chart_version">0.1.1</field>
+            <field name="helm_chart_version">0.1.3</field>
             <!-- 只放「平台 pin／覆寫」與「設錯就靜默失去性質」的鍵。逐鍵理由：
 
                  - image.repository/tag：平台 pin 慣例（雙釘 tag@sha256）。見上方原子變更鐵律。
@@ -1492,7 +1492,7 @@
                  - networkPolicy.allowAllEgress：chart 預設 true 且**必須維持**（HACS
                    要從 github.com 下載；DNS-only egress 會讓它變成裝不了東西的整合，
                    且沒有清楚錯誤）。平台沒有理由覆寫。 -->
-            <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/woowtech-ha-full","tag":"20260807.0054@sha256:90ffa1089be1f60585f6e26ef318d93a79a940075da9e3ec0ae513e54b3d0a6a"},"persistence":{"mountPath":"/config","size":"10Gi"},"service":{"port":8123,"targetPort":8123},"ingress":{"enabled":false,"host":"","className":""},"haProxy":{"seedConfiguration":true,"useXForwardedFor":true,"trustedProxies":["10.42.0.0/16"],"fragmentManaged":true},"resources":{"requests":{"cpu":"500m","memory":"1Gi"},"limits":{"cpu":"2","memory":"2Gi"}}}</field>
+            <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/woowtech-ha-full","tag":"20260923.0804@sha256:3eaf22a5396877b7742a410809709450fc6f925c7e552fbd1bf6977be07598af"},"persistence":{"mountPath":"/config","size":"10Gi"},"service":{"port":8123,"targetPort":8123},"ingress":{"enabled":false,"host":"","className":""},"haProxy":{"seedConfiguration":true,"useXForwardedFor":true,"trustedProxies":["10.42.0.0/16"],"fragmentManaged":true},"resources":{"requests":{"cpu":"500m","memory":"1Gi"},"limits":{"cpu":"2","memory":"2Gi"}}}</field>
             <!-- 租戶無需（也不該）填任何部署參數：HA 的所有設定都在開通後於它自己的
                  網頁介面完成。空 specs ＝ 前台不渲染任何自訂欄位。 -->
             <field name="helm_value_specs">{"required": [], "optional": []}</field>
@@ -1539,6 +1539,86 @@
                  conceal_instances 更糟：已付費租戶手上 state=running 的服務會整條被鎖住。
                  完整分工見 docs/decisions/patterns/hidden-template-presentation-chain.md。 -->
         </record>
+        <!-- ha-full 的 APPORO 品牌線：同 chart、同 values、同 plan，只有 image 換成
+             ha-rebrand pipelines/apporo-cloud 產的 apporo-ha-full（品牌色 #C49E53、APPORO
+             logo／文件連結；整合集、29→21 個內建元件與 woowtech 線完全相同，見
+             ha-rebrand ADR 0005）。
+             is_hidden=True（不上架、不進市集）但**不**設 conceal_instances：這張卡目前
+             只給 woowhademo 展示機遷移用（6 台 APPORO 品牌，由平台開成工作區服務），
+             既有服務要照常可見、可操作（#471 的兩層語意）。要對外賣再翻 is_hidden。
+             守線：src/tests/test_ha_full_apporo_seed.py 鎖「與 ha-full 除 image 外逐鍵
+             相同、chart 版號 lockstep、tag 雙釘、repo 含 -full 且含 apporo」。 -->
+        <record id="cloud_app_ha_full_apporo" model="woow_paas_platform.cloud_app_template">
+            <field name="name">Home Assistant 完整版（APPORO）</field>
+            <field name="slug">ha-full-apporo</field>
+            <field name="description">APPORO 品牌的容器版 Home Assistant 完整版：與「Home Assistant 完整版」同一套整合集與內建元件，僅品牌外觀不同。1 vCPU／1 GB RAM／10 GB 磁碟</field>
+            <field name="full_description">APPORO 品牌的 Home Assistant 完整版雲端服務。功能、整合集、內建元件、
+                限制（無 Add-on 商店、無內建備份、無一鍵更新）與資料保留政策皆與
+                「Home Assistant 完整版」完全相同，差別只在品牌外觀（APPORO 標誌、色彩與
+                文件連結）。對外僅曝露 Home Assistant 網頁介面（8123 埠）。</field>
+            <field name="category">container</field>
+            <field name="tags">["home-assistant", "smart-home", "container", "ha-full", "apporo"]</field>
+            <field name="documentation_url">https://www.apporo.ai/blog/help-center-3</field>
+            <field name="helm_repo_url"></field>
+            <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/home-assistant-full</field>
+            <field name="helm_chart_version">0.1.3</field>
+            <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/apporo-ha-full","tag":"20260923.0754@sha256:e49f27ed193fc84c4b2b4bc107c813fc7a1577d5e94f93a8ced3ea7e19524cca"},"persistence":{"mountPath":"/config","size":"10Gi"},"service":{"port":8123,"targetPort":8123},"ingress":{"enabled":false,"host":"","className":""},"haProxy":{"seedConfiguration":true,"useXForwardedFor":true,"trustedProxies":["10.42.0.0/16"],"fragmentManaged":true},"resources":{"requests":{"cpu":"500m","memory":"1Gi"},"limits":{"cpu":"2","memory":"2Gi"}}}</field>
+            <field name="helm_value_specs">{"required": [], "optional": []}</field>
+            <field name="default_port">8123</field>
+            <field name="ingress_enabled" eval="True"/>
+            <field name="min_vcpu">1</field>
+            <field name="min_ram_gb">1.0</field>
+            <field name="min_storage_gb">10</field>
+            <field name="has_admin_gui" eval="False"/>
+            <field name="post_deploy_init_type">none</field>
+            <field name="is_hidden" eval="True"/>
+            <field name="is_active" eval="True"/>
+        </record>
+
+        <!-- pi Coding Agent（pi-web）—— 2026-09-23 上架 PaaS（elmo 定案）。
+             chart：woow-paas-charts charts/pi-agent（PR #83）；image：paas-odoo-ci pi-agent/（PR #134，
+             上游 ghcr.io/woowtech/woow-k3s-pi-agent 以 digest 消費 + uid 1000 + models-config key 遮罩）。
+             認證：chart 內 nginx sidecar Basic auth，密碼 = config.sensitive.admin_password
+             （has_admin_gui=True、admin_password_carrier=helm_secret，同 hermes-agent；chart Secret 是
+             權威來源、pod 啟動時讀，reset 走 helm upgrade + rollout restart）。
+             T1 = 2 vCPU / 4 Gi / 20 Gi，4500 pts/mo（plan_pi_agent_*）。租戶自帶模型 key（Models 頁）。
+             ⚠ is_hidden=True 直到 image 首發：image.tag 目前是佔位 00000000.0000（chart values 的佔位慣例，
+             chart 對空 tag 會 render 失敗而非拉不到），首發後填 tag@sha256 並翻 is_hidden=False —— 同一次
+             變更一起動（test_pi_agent_seed.test_image_pinned_before_listing 守這條）。
+             既有 5 台 pi-agent-woow（內部團隊，含 Omnigent 耦合）維持原部署，上架後再逐台搬。 -->
+        <record id="cloud_app_pi_agent" model="woow_paas_platform.cloud_app_template">
+            <field name="name">pi Coding Agent</field>
+            <field name="slug">pi-agent</field>
+            <field name="description">AI 程式協作代理工作站：對話介面 + 內建終端 TUI，讀寫檔案、執行指令、Skills 與套件；模型金鑰自備。2 vCPU／4 GB RAM／20 GB 磁碟</field>
+            <field name="full_description">pi Coding Agent 雲端工作站：pi-web 對話介面搭配 pi coding agent，可在你的
+                持久磁碟上讀取、編輯、建立檔案與執行 shell 指令（串流回傳），內建瀏覽器終端 TUI
+                可直接操作 `pi` 指令、安裝套件與管理 Skills（放一份 SKILL.md 即自動載入）。
+                **模型金鑰自備**：於 Models 頁面新增供應商並貼上 API Key（存於你的磁碟，平台
+                不代管、頁面回顯時遮罩）。**單一帳密登入**：開通後於服務頁取得管理密碼（可重設）。
+                本版不含影片製作工具鏈。欠費停權時服務停止（磁碟保留），恢復繳費後資料原樣還在；
+                刪除服務即全新開通，原磁碟依平台保留政策 7 天後回收。</field>
+            <field name="category">ai_llm</field>
+            <field name="tags">["pi-agent", "coding-agent", "ai", "agent"]</field>
+            <field name="documentation_url">https://github.com/WOOWTECH/Woow_k3s_pi_agent_package#readme</field>
+            <field name="helm_repo_url"></field>
+            <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/pi-agent</field>
+            <field name="helm_chart_version">0.1.0</field>
+            <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/pi-agent","tag":"20260924.0235@sha256:723122778daaed23fb9bdec3fbac5faa0cb5fe63fe258e757a5c14259528d3b2"},"piWeb":{"resources":{"requests":{"cpu":"500m","memory":"1Gi"},"limits":{"cpu":"2","memory":"4Gi"}}},"persistence":{"size":"20Gi"},"service":{"port":8080,"targetPort":8080},"authProxy":{"port":8080}}</field>
+            <field name="helm_value_specs">{"required": [], "optional": []}</field>
+            <field name="default_port">8080</field>
+            <field name="ingress_enabled" eval="True"/>
+            <field name="min_vcpu">2</field>
+            <field name="min_ram_gb">4.0</field>
+            <field name="min_storage_gb">20</field>
+            <field name="mcp_enabled" eval="False"/>
+            <field name="has_admin_gui" eval="True"/>
+            <field name="admin_password_carrier">helm_secret</field>
+            <field name="post_deploy_init_type">none</field>
+            <field name="max_per_partner" eval="0"/>
+            <field name="is_hidden" eval="False"/>
+            <field name="is_active" eval="True"/>
+        </record>
+
 
         <!-- Healer: DBs first installed under the historical <data noupdate="1"> block
              carry a sticky ir.model.data.noupdate flag on these seeds, so the corrected
