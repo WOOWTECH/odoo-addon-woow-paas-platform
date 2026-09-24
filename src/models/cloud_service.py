@@ -885,11 +885,40 @@ class CloudService(models.Model):
     # ------------------------------------------------------------------ #
 
     def action_redeploy(self):
+        """後台 button／RPC 的 redeploy 入口：只放行 ``base.group_system``。
+
+        #1185：本方法原本就是 public（後台兩顆 button 的 ``name``），而
+        ``cloud_service`` 對 ``base.group_user`` 的 ACL 全開、``ir.rule``
+        ``cloud_service_rule_owner_admin_manage`` 又給 workspace owner/admin
+        write ⇒ 租戶只要知道 service id，``POST /web/dataset/call_kw
+        {"method": "action_redeploy"}`` 就能繞過 ``/woow`` controller 的
+        ``_check_operation_allowed``（停權／欠費）直接觸發不可逆的 chart 跳版。
+        與 #357 C05（``_reset_admin_password``）同一種攻擊形狀，解法同款：
+        實作搬進 private 的 ``_redeploy``（``get_public_method`` 擋 RPC），
+        這裡只留一層 group gate 給後台 button。
+
+        gate 用 ``env.is_system()``（含 sudo 與 uid 1）而不是 sentinel：這不是
+        `su-env-exempt-guard-false-green` 那種「沒有任何合法改值路徑」的不變量，
+        redeploy 本來就是 ops 的合法動作，只是要 gated——屬該 doc 說「`env.su`
+        ＋ `has_group` 雙閘放行是對的」那一邊。deny 分支的測試要 ``with_user``
+        退出 su 才打得到（``test_mcp_admin_password_authz.py``）。
+        """
+        self.ensure_one()
+        if not self.env.is_system():
+            raise AccessError(
+                _("Only platform administrators can redeploy a service.")
+            )
+        return self._redeploy()
+
+    def _redeploy(self):
         """Re-deploy the service, preserving existing data.
 
         If the Helm release already exists, performs a helm upgrade
         (data-safe — PVCs are preserved). If no release exists yet
         (e.g. initial deploy failed), resets to pending for a fresh install.
+
+        ⛔ 不得改回 public：唯一合法入口是 ``action_redeploy`` 的 group gate
+        （#1185；守線測試 ``test_mcp_admin_password_authz.py``）。
         """
         self.ensure_one()
         from ..services.paas_operator import (
@@ -924,7 +953,8 @@ class CloudService(models.Model):
             # #552 層 4：redeploy 帶 `template.helm_chart_version` 做 helm upgrade，
             # 空值 ⇒ 不帶 `--version` ⇒ **升到 registry 當下的 latest**，而
             # `reset_values=True` 又讓 values 以新版 chart 的預設重新渲染。這條路
-            # 沒有 role gate（後台 button ＋ `call_kw`），一次誤按就是不可逆的跳版。
+            # 只有 `action_redeploy` 的 group_system gate（#1185；在那之前連
+            # 租戶都能經 `call_kw` 打到這裡），一次誤按就是不可逆的跳版。
             #
             # ⚠ 這裡用 `UserError` 而不是靜默略過或背景失敗：本方法是**同步**的，
             # 例外會直接回到呼叫端（後台 UI／RPC）。實查全 repo，`action_redeploy`

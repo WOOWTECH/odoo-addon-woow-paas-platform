@@ -12,7 +12,7 @@ from odoo.service.model import get_public_method
 from odoo.tests.common import TransactionCase
 
 from odoo.addons.woow_paas_platform.controllers.paas import PaasController
-from odoo.addons.woow_paas_platform.models.workspace_access import ROLE_USER
+from odoo.addons.woow_paas_platform.models.workspace_access import ROLE_OWNER, ROLE_USER
 from ..models.cloud_service import _internal_provision
 
 
@@ -368,3 +368,58 @@ class TestResetAdminPasswordSanitisation(_McpServiceFixture):
         self.assertNotEqual(pwd_a, pwd_b, '每個 service 的 admin_password 必須獨立生成')
         # token_urlsafe(24) → ~32 chars；過短代表有人把生成器換弱了。
         self.assertGreaterEqual(len(pwd_a), 32, '密碼強度不得低於 token_urlsafe(24)')
+
+
+class TestRedeployRpcGate(_McpServiceFixture):
+    """#1185：``action_redeploy`` 與 C05 同一種攻擊形狀——public 方法＋ACL 全開＋
+    owner/admin ir.rule ⇒ 租戶經 ``call_kw`` 直呼就能繞過 ``/woow`` 的
+    ``_check_operation_allowed`` 觸發不可逆跳版。修法同款：實作搬進 private
+    ``_redeploy``，public 入口只留 ``base.group_system`` gate。
+
+    deny 分支必須 ``with_user`` 退出 su 才打得到：``TransactionCase`` 是 su env，
+    ``env.is_system()`` 恆真（見 pattern doc ``su-env-exempt-guard-false-green``——
+    這裡是它「有合法 gated 路徑」的那一邊，不是不變量 guard）。
+    """
+
+    def test_redeploy_impl_is_not_remotely_callable(self):
+        """主守線：``_redeploy`` 不得可由 RPC 直呼（同 C05 的 ``get_public_method`` gate）。
+
+        鑑別力：把實作改回 public 名稱 → 這裡不再 raise → 紅。
+        """
+        with self.assertRaises(AccessError):
+            get_public_method(
+                self.env['woow_paas_platform.cloud_service'], '_redeploy',
+            )
+
+    @patch(
+        'odoo.addons.woow_paas_platform.services.paas_operator.get_paas_operator_client'
+    )
+    def test_workspace_owner_is_denied_before_touching_the_operator(self, get_client):
+        """後台入口對 workspace owner 也擋，而且擋在任何 operator 呼叫之前。
+
+        用 owner（ir.rule 給 write 的最高租戶角色）而不是 user：要證明的是
+        「租戶側任何角色都不夠」，用被 ir.rule 擋掉的角色會為了錯的理由變綠。
+        ``get_paas_operator_client`` 必須 mock 成可用，否則 deny 可能只是
+        'PaaS Operator not configured' 的 UserError 假綠（同 C05 的教訓）。
+        """
+        client = MagicMock()
+        get_client.return_value = client
+        owner = self._make_member('warden-1185-owner', ROLE_OWNER)
+
+        with self.assertRaises(AccessError):
+            self.service.with_user(owner).action_redeploy()
+
+        client.get_release.assert_not_called()
+        client.upgrade_release.assert_not_called()
+
+    def test_system_user_still_reaches_the_implementation(self):
+        """陽性對照：gate 對 system（含 su env）放行並委派給 ``_redeploy``。
+
+        沒有這條，一個「什麼都擋」的壞 gate 會讓上面兩條為了錯的理由變綠；
+        既有的 ``test_suspended_redeploy_state_482`` 等測試也依賴這條放行。
+        """
+        with patch.object(
+            type(self.service), '_redeploy', autospec=True,
+        ) as impl:
+            self.service.action_redeploy()
+        impl.assert_called_once()
