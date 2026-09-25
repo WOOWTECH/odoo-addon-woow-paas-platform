@@ -111,7 +111,9 @@
                         t-att-title="state.tunnelTokenVisible ? 'Hide' : 'Reveal'"
                         t-att-disabled="state.tunnelTokenLoading"
                         t-on-click="toggleTunnelToken">
-                  <WoowIcon t-att-name="state.tunnelTokenVisible ? 'visibility_off' : 'visibility'"
+                  <!-- 元件的 prop 本身就是運算式，不可以用 t-att（Owl 會直接拒收
+                       並把整個 root component 銷毀）。 -->
+                  <WoowIcon name="state.tunnelTokenVisible ? 'visibility_off' : 'visibility'"
                             size="18"/>
                 </button>
                 <button class="o_woow_sa_icon_btn" title="Copy token"
