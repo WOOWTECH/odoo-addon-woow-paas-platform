@@ -290,17 +290,42 @@ class TestSecurityAccessIdentityAnchors(TransactionCase):
                         **{_CTX_KEY: forged_ctx_value},
                     ).write({'access_app_id': 'attacker-app'})
 
-    def test_forged_context_does_not_open_the_prefix_hatch(self):
-        """The sibling immutability guard on the route's subdomain_prefix used
-        the same forgeable shape; it is sentinel-keyed now too."""
+    def test_prefix_is_no_longer_an_immutability_guard(self):
+        """#1196 起 subdomain_prefix 是可改的——這裡釘住「為什麼那不是退步」。
+
+        取代的是舊的 `test_forged_context_does_not_open_the_prefix_hatch`。那條
+        斷言租戶改名會被 UserError 擋下，而 #1196 把改名變成正式功能（使用者自行
+        改 subdomain，如同在 Cloudflare 平台上），前提消失。
+
+        關鍵是 prefix **本來就不是身分錨點**（見 model 檔頭 `_IDENTITY_ANCHOR_FIELDS`
+        的 NOT anchors 註記）：先前擋它的理由是**正確性**（hostname／DNS／ingress
+        全從它推導，改了值卻不搬 CF 就靜默分岔），不是授權。#1196 的解法是「放行
+        + 保證搬」，所以本檔真正該守的東西沒有變——**route 的兩根真錨點仍然不可
+        偽造**，那才是 #522 的標的。這條測試就守那個分界。
+        """
         route_as_alice = self.Route.with_user(self.alice).browse(self.route.id)
-        before = self._db_value(self.route, 'subdomain_prefix')
-        with self.assertRaises(UserError):
-            route_as_alice.with_context(
-                sa_internal_prefix_write=True,
-            ).write({'subdomain_prefix': 'hijacked-prefix-522'})
+
+        # 改名：現在是合法操作（值真的落地）。
+        route_as_alice.write({'subdomain_prefix': 'renamed-prefix-1196'})
         self.assertEqual(
-            self._db_value(self.route, 'subdomain_prefix'), before)
+            self._db_value(self.route, 'subdomain_prefix'),
+            'renamed-prefix-1196')
+
+        # 但格式仍然驗——放行不等於不檢查。
+        # ⚠ Odoo 覆寫過 assertRaises，**不吃例外 tuple**（會炸
+        # `issubclass() arg 1 must be a class`）。格式錯在 write() 的守衛就被
+        # 攔下，所以這裡是 UserError，走不到 @api.constrains 的 ValidationError。
+        with self.assertRaises(UserError):
+            route_as_alice.write({'subdomain_prefix': 'Bad Prefix!!'})
+
+        # 而真錨點沒有因此鬆動：偽造 context 一樣寫不進 route 的 CF 物件 id。
+        # （#522 的標的是這兩根，不是 prefix。）
+        for anchor, value in (('dns_record_id', 'attacker-dns'),
+                              ('access_app_id', 'attacker-app')):
+            with self.assertRaises(UserError):
+                route_as_alice.with_context(
+                    sa_internal_identity_write=True,
+                ).write({anchor: value})
 
     def test_forged_context_does_not_open_the_hatch_at_create(self):
         """Same for the create()-side strip — otherwise the squat is still

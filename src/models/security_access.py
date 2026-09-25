@@ -2093,25 +2093,33 @@ class SecurityAccessRoute(models.Model):
         # longer hands the ORM a forged app id.
         _reject_identity_anchor_writes(
             self.env, vals, _ROUTE_IDENTITY_ANCHOR_FIELDS)
-        # Hard invariant for everyone incl. superuser: hostname / DNS /
-        # ingress all derive from the prefix, and no internal path
-        # legitimately renames it (delete + recreate is the rename). The
-        # sentinel context is a deliberate escape hatch for future data-repair
-        # migrations only — an `env.su` exemption would silently skip this
-        # guard in TransactionCase (su env) and any sudo()'d controller path,
-        # and a plain truthy context value would be forgeable straight off the
-        # RPC payload (see _INTERNAL_IDENTITY_WRITE). Its own key, deliberately
-        # not the identity-anchor one: a data-repair migration that needs to
-        # rename a prefix should not thereby also be able to move tunnel ids.
-        if ('subdomain_prefix' in vals
-                and self.env.context.get('sa_internal_prefix_write')
-                is not _INTERNAL_IDENTITY_WRITE):
+        # #1196：rename 從「一律禁止」改成「必須同時搬 CF 那一側」。
+        #
+        # 這一根**不是身分錨點**（見檔頭 `_IDENTITY_ANCHOR_FIELDS` 的 NOT anchors
+        # 註記）——它是使用者選的值，先前擋住它的理由是**正確性**不是授權：
+        # hostname / DNS / ingress 全都從 prefix 推導，改了值卻沒搬 CF 就會靜默
+        # 分岔。所以解法不是放行，是「放行 + 保證搬」：底下的 sync 觸發清單納入
+        # `subdomain_prefix`，DNS 由宣告式全量同步收斂（舊 hostname 不在清單裡
+        # 就會被 operator 刪掉，與 unlink 走同一條路），Access app 則靠
+        # `existing_app_id` + 新 `primary_hostname` 就地改名。
+        #
+        # **刻意用原地改名，不是 delete + create**：route 上掛著
+        # `access_policy_ids` 與 `access_app_id`，砍掉重建會把整組 Access 設定
+        # 一起丟掉，而且 route id 會換——參照它的歷史與外部引用全斷。
+        #
+        # `sa_internal_prefix_write` 這把鑰匙**已退場**（registry 標 removed）：
+        # 它存在的理由是「改名不可行、但 data-repair 需要一條後門」，而改名成為
+        # 正式功能之後那個前提就沒了。「只改值不碰 CF」的需求由 `sa_skip_route_sync`
+        # 承接——那把鑰匙的語意正是如此，且它不會順帶讓人繞過格式驗證。
+        # ⛔ 不要為了重新擋改名而把它加回來：真要擋，該擋在有 CF 同步保證的那一層。
+        if 'subdomain_prefix' in vals:
+            new_prefix = vals['subdomain_prefix']
             for route in self:
-                if route.subdomain_prefix != vals['subdomain_prefix']:
-                    raise UserError(
-                        _("Subdomain prefix is immutable. Delete the route "
-                          "and create a new one to rename.")
-                    )
+                if route.subdomain_prefix == new_prefix:
+                    continue
+                err = self._subdomain_prefix_error(new_prefix)
+                if err:
+                    raise UserError(_("%s: %r") % (err, new_prefix or ''))
         # #1071：錨點搬移的**歸屬**守衛，對稱 policy 側 #848 與 rule 側 #941。
         # 位置在任何狀態變更之前——新錨點的授權要在 `super().write()` 之前成立。
         #
@@ -2134,7 +2142,17 @@ class SecurityAccessRoute(models.Model):
         # no-op, so there the lock-step is exact.
         with self.env.cr.savepoint():
             result = super().write(vals)
-            if any(k in vals for k in ('service_url', 'http_host_header')):
+            # #1196：`subdomain_prefix` 一併觸發——改名的整個「搬 CF」動作就靠
+            # 這一次宣告式全量推送：新 hostname 進 ingress、舊 hostname 因為不在
+            # 清單裡被 operator 刪掉 DNS（與 unlink 同一條收斂路徑），新 DNS 的
+            # record id 由回傳值寫回 `dns_record_id`（`_sync_routes_to_operator`
+            # 用**新的** prefix 去對，所以會自己蓋掉舊 id）。
+            #
+            # 資料修復用的 migration 開 `sa_skip_route_sync` 就能只改值不碰 CF；
+            # 那條路徑本來就要自己負責顯式 re-sync。
+            if (not _is_sync_control(self.env, _CTX_SKIP_ROUTE_SYNC)
+                    and any(k in vals for k in (
+                        'service_url', 'http_host_header', 'subdomain_prefix'))):
                 for sa in self.mapped('security_access_id'):
                     if sa.state in ('active', 'active_no_route', 'error') and sa.tunnel_id:
                         sa._sync_routes_to_operator()
@@ -2156,10 +2174,18 @@ class SecurityAccessRoute(models.Model):
             # active+live-tunnel SAs, defeating the deferral to Phase 5 — and an
             # unreachable operator during the upgrade window would re-raise the
             # savepoint and abort the whole migration.
+            #
+            # #1196：`subdomain_prefix` 也在列——一條 protected route 的 Access
+            # app 是**用 hostname 定義的**（payload 的 primary_hostname /
+            # protected_hostnames / app_name 全從 prefix 來）。改名不重推的話，
+            # CF 上那顆 app 仍然守著**舊** hostname：新網址變成無人看守的公開
+            # 入口，而 UI 讀 `is_protected` 還是顯示「已保護」——與 #794 同一類
+            # 的靜默 fail-open。payload 帶 `existing_app_id`，所以這是就地改名
+            # 不是新建一顆。
             if (not _is_sync_control(self.env, _CTX_SKIP_ROUTE_SYNC)
                     and any(k in vals for k in (
-                        'is_protected', 'login_google',
-                        'login_email_otp', 'session_duration'))):
+                        'is_protected', 'login_google', 'login_email_otp',
+                        'session_duration', 'subdomain_prefix'))):
                 for route in self:
                     route._sync_access_to_operator()
         return result

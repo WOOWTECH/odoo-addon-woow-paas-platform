@@ -444,7 +444,16 @@ class TestSecurityAccess(TransactionCase):
                         'subdomain_prefix': 'taken-prefix',
                     })
 
-    def test_route_prefix_immutable(self):
+    def test_route_prefix_renameable_but_validated(self):
+        """#1196：改名是正式功能了（原名 test_route_prefix_immutable）。
+
+        舊版斷言 `write({'subdomain_prefix': ...})` 一律 UserError。#1196 把改名
+        變成使用者可用的操作（自行編輯 subdomain，如同在 Cloudflare 平台上），
+        所以那個斷言的前提消失。改名的正確性改由「值變了 ⇒ CF 也跟著搬」保證，
+        守線在 `test_sa_route_rename_1196.py`。
+
+        這裡留下的是本檔該守的那一半：**放行不等於不檢查**——格式仍然擋。
+        """
         sa = self._make_active_sa()
         with patch(MOCK_GET_CLIENT) as mock_get_client:
             mock_get_client.return_value = MagicMock()
@@ -452,8 +461,12 @@ class TestSecurityAccess(TransactionCase):
                 'security_access_id': sa.id,
                 'subdomain_prefix': 'fixed-prefix',
             })
+            route.write({'subdomain_prefix': 'renamed-ok'})
+            self.assertEqual(route.subdomain_prefix, 'renamed-ok')
+            # 格式錯仍然擋（Odoo 的 assertRaises 不吃 tuple，只能給單一類別）
             with self.assertRaises(UserError):
-                route.write({'subdomain_prefix': 'renamed'})
+                route.write({'subdomain_prefix': 'Bad Prefix!!'})
+            self.assertEqual(route.subdomain_prefix, 'renamed-ok')
 
     def test_route_create_sync_failure_rolls_back_db_row(self):
         """create sync 失敗 → 整筆 route 不落 DB（無幽靈 route）。"""

@@ -745,6 +745,21 @@ class SecurityAccessController(Controller):
             vals["http_host_header"] = bool(kwargs["http_host_header"])
         if "is_protected" in kwargs:
             vals["is_protected"] = bool(kwargs["is_protected"])
+        # #1196：改名。DB 有 UNIQUE(subdomain_prefix) 擋得住平台內部撞名，但擋不住
+        # 「這個名字在 Cloudflare 上已經有一筆別的 DNS 記錄」——那種情況要等到
+        # operator 同步時才炸，而那時 savepoint 會把改名整個回捲、使用者只看到一句
+        # 看不懂的 operator 錯誤。所以在寫入前先問一次可用性，與 create 同一條
+        # `_check_route_prefix`（格式 + DB + Cloudflare 三層一次問完）。
+        new_prefix = kwargs.get("subdomain_prefix")
+        if new_prefix and new_prefix != route_rec.subdomain_prefix:
+            check = self._check_route_prefix(new_prefix)
+            if not check.get("success"):
+                return check
+            if not check["data"]["available"]:
+                return {"success": False,
+                        "error": _("Subdomain prefix is not available: %s")
+                                 % check["data"].get("reason", "taken")}
+            vals["subdomain_prefix"] = new_prefix
         try:
             if vals:
                 route_rec.write(vals)
