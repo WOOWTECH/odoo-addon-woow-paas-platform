@@ -112,6 +112,40 @@ export const securityAccessService = {
     }
   },
 
+  // #1196 第一層：後端的 _update_route 一直都接受 service_url /
+  // http_host_header，只是前端沒有對應方法，逼得使用者要改後端位址時只能
+  // 刪掉重建——那會放掉 subdomain 的保留、斷線、而且 route id 會換掉。
+  async updateRoute(workspaceId, saId, routeId, vals) {
+    try {
+      const result = await jsonRpc(
+        `/api/workspaces/${workspaceId}/security-accesses/${saId}/routes`,
+        { action: "update", route_id: routeId, ...vals },
+      );
+      return result.success
+        ? { success: true, data: result.data }
+        : { success: false, error: result.error };
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  },
+
+  // #1196 第二層：取得 tunnel token 讓使用者自行接線（Cloudflared Web GUI
+  // addon / docker run / 換一台機器接手）。後端已把權限收斂到 owner/admin，
+  // 見 controllers/security_access.py::api_security_access_tunnel_token。
+  async getTunnelToken(workspaceId, saId) {
+    try {
+      const result = await jsonRpc(
+        `/api/workspaces/${workspaceId}/security-accesses/${saId}/tunnel-token`,
+        {},
+      );
+      return result.success
+        ? { success: true, data: result.data }
+        : { success: false, error: result.error };
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  },
+
   async deleteRoute(workspaceId, saId, routeId) {
     try {
       const result = await jsonRpc(

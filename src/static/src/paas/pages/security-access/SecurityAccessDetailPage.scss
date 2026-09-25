@@ -228,3 +228,90 @@
   color: $woow-text-secondary;
   font-size: 0.8125rem;
 }
+
+/* #1196 — tunnel token 自助取用 + 連線指引。
+   token 等同密碼，所以預設遮蔽；值本身用等寬字並允許在任意字元換行，
+   否則 180 字元的 token 會把卡片撐破（同 route hostname 那條的老問題）。 */
+.o_woow_sa_token {
+  margin-top: 0.75rem;
+
+  label {
+    display: block;
+    font-size: 0.75rem;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: $woow-text-secondary;
+    margin-bottom: 0.375rem;
+  }
+
+  &__row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  &__value {
+    flex: 1 1 auto;
+    min-width: 0;
+    padding: 0.5rem 0.75rem;
+    border: 1px solid $woow-border-light;
+    border-radius: $woow-radius-default;
+    background: rgba(0, 0, 0, 0.02);
+    font-size: 0.8125rem;
+    /* token 沒有空白也沒有連字號，不強制斷行就會溢出整張卡。 */
+    overflow-wrap: anywhere;
+    word-break: break-all;
+  }
+
+  &__copied {
+    flex: 0 0 auto;
+    font-size: 0.8125rem;
+    font-weight: 600;
+    color: $woow-primary;
+  }
+
+  &__warn {
+    margin: 0.5rem 0 0;
+    font-size: 0.75rem;
+    color: $woow-text-secondary;
+  }
+}
+
+.o_woow_sa_connect {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid $woow-border-light;
+
+  &__item {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    font-size: 0.8125rem;
+
+    strong { color: $woow-text-primary; }
+    span { color: $woow-text-secondary; }
+  }
+
+  &__cmd {
+    margin: 0.25rem 0 0;
+    padding: 0.625rem 0.75rem;
+    border: 1px solid $woow-border-light;
+    border-radius: $woow-radius-default;
+    background: rgba(0, 0, 0, 0.02);
+    font-size: 0.75rem;
+    /* 指令要能整段看到，不要被截斷；窄畫面時自己捲。 */
+    overflow-x: auto;
+    white-space: pre;
+  }
+}
+
+/* route 就地編輯的輸入框：撐滿該欄，別讓表格因為輸入框而跳動。 */
+.o_woow_sa_routes_table__edit {
+  width: 100%;
+  min-width: 0;
+  font-size: 0.8125rem;
+}

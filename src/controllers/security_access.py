@@ -228,6 +228,58 @@ class SecurityAccessController(Controller):
     # ==================== Availability (platform-level) ====================
 
     @route(
+        "/api/workspaces/<int:workspace_id>/security-accesses/<int:sa_id>"
+        "/tunnel-token",
+        auth="user", methods=["POST"], type="json",
+    )
+    def api_security_access_tunnel_token(
+        self, workspace_id: int, sa_id: int, **kwargs: Any,
+    ) -> dict[str, Any]:
+        """把 tunnel token 交給租戶（#1196）。
+
+        為什麼需要這個端點：`security_access.tunnel_token` 的欄位定義帶
+        ``groups='base.group_system'``，租戶在 ORM 層就讀不到；而既有的
+        `/api/security-access/accesses/<id>/tunnel-token` 是 ``auth='none'`` +
+        OAuth scope，設計給 HA custom component 這類**機器**消費者呼叫的。
+        結果是想用 Cloudflared Web GUI addon／`docker run cloudflared` 自行接線
+        的使用者，平台沒有任何路徑把 token 交給他（實測時只能去讀資料庫）。
+
+        tunnel 可任意轉移是本產品刻意的定位（見 #1196），而「能複製 token」
+        是轉移的前提，所以這條路必須存在。
+
+        **刻意不放寬欄位的 groups**：那會讓 token 在所有 ORM 讀取路徑上對一般
+        使用者現形（含 to_dict、報表、export）。這裡只開一個出口，並且比照
+        route 的寫入權限收斂到 owner/admin——能改 route 的人本來就能刪掉整個
+        SA 重建拿到新 token，給他讀取權不擴大實際攻擊面。
+        """
+        workspace = self._get_workspace_or_error(workspace_id)
+        if not workspace:
+            return {"success": False,
+                    "error": _("Workspace not found or access denied")}
+        sa = self._get_sa_or_error(sa_id, workspace)
+        if not sa:
+            return {"success": False, "error": _("Security access not found")}
+
+        access = workspace.check_user_access(request.env.user)
+        if not access or access.role not in [ROLE_OWNER, ROLE_ADMIN]:
+            return {"success": False, "error": _("Insufficient permissions")}
+
+        # sudo() 只為了跨過欄位的 group 限制；上面三道閘門已經確認呼叫者
+        # 是這個 workspace 的 owner/admin 且這個 SA 屬於該 workspace。
+        token = sa.sudo().tunnel_token or ""
+        if not token:
+            return {"success": False,
+                    "error": _("Tunnel is not provisioned yet")}
+        return {
+            "success": True,
+            "data": {
+                "tunnel_token": token,
+                "tunnel_id": sa.sudo().tunnel_id or "",
+                "tunnel_name": sa.sudo().tunnel_name or "",
+            },
+        }
+
+    @route(
         "/api/security-access/routes/check",
         auth="user", methods=["POST"], type="json",
     )
