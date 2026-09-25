@@ -252,7 +252,13 @@ def _template_xmlid(v):
 # ha-full 的 APPORO 線與 woowtech 線共用同一組 plan（同價、同規格，見
 # subscription_template_links.xml 的註解），base plan 那邊已經是共用的；變體漏了
 # 就會出現「base 一樣、加購變體只有其中一張卡有」的半套狀態——
-# test_ha_full_apporo_seed.test_same_plans_as_ha_full 就是守這件事。
+# test_ha_full_apporo_seed 的 test_sealed_or_else_lockstep_with_ha_full 就是守
+# 這件事（2026-09-25 封存後改成「解封才生效」，見下）。
+# 2026-09-25：cloud_app_ha_full_apporo 已封存（is_active=False，見
+# data/cloud_app_templates.xml）。鏡射**刻意保留**——移除它只會讓產生的 XML 少掉
+# 那幾列，既有 DB 的 m2m 連結不會因此被刪（seed 移除列不等於刪資料），反而讓
+# seed 與 DB 說法不一致；卡片既已封存，這些連結對外沒有任何效力。要真的解封時，
+# 鏡射還在＝變體不會漏掉半套。
 _MIRROR_TEMPLATES = {
     'cloud_app_ha_full': ['cloud_app_ha_full_apporo'],
 }

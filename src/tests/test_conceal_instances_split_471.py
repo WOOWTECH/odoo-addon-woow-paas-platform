@@ -99,8 +99,11 @@ class TestConcealInstancesSeed(TransactionCase):
         """
         Tpl = self.env['woow_paas_platform.cloud_app_template'].sudo()
         hidden = Tpl.with_context(active_test=False).search([('is_hidden', '=', True)])
-        # ha-full-apporo：hidden-only（曝光層）——APPORO 品牌的 ha-full，目前只給
-        # woowhademo 展示機遷移用，不上架但既有服務照常可見可操作（不 conceal）。
+        # ha-full-apporo：hidden-only（曝光層）——APPORO 品牌的 ha-full。
+        # 2026-09-25 已連同 is_active=False 一起封存（APPORO 展示機不走 PaaS），但仍
+        # 留在本盤點裡：is_active 是普通 Boolean、不是 Odoo 的 magic `active`，所以
+        # 上面的 search 本來就撈得到它（`active_test=False` 在此為無效參數，留著是
+        # 為了與其他盤點測試同形）。封存守線在 test_ha_full_apporo_seed.py。
         # （pi-agent 2026-09-24 已上架＝不再 hidden，image 釘 20260924.0235@sha256。）
         self.assertEqual(
             set(hidden.mapped('slug')), {'ha-paas', 'ha-full-apporo'},

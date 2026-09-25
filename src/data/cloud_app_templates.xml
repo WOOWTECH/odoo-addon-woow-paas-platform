@@ -1543,11 +1543,24 @@
              ha-rebrand pipelines/apporo-cloud 產的 apporo-ha-full（品牌色 #C49E53、APPORO
              logo／文件連結；整合集、29→21 個內建元件與 woowtech 線完全相同，見
              ha-rebrand ADR 0005）。
-             is_hidden=True（不上架、不進市集）但**不**設 conceal_instances：這張卡目前
-             只給 woowhademo 展示機遷移用（6 台 APPORO 品牌，由平台開成工作區服務），
-             既有服務要照常可見、可操作（#471 的兩層語意）。要對外賣再翻 is_hidden。
-             守線：src/tests/test_ha_full_apporo_seed.py 鎖「與 ha-full 除 image 外逐鍵
-             相同、chart 版號 lockstep、tag 雙釘、repo 含 -full 且含 apporo」。 -->
+             🔒 2026-09-25 起封存（is_active=False）。這張卡當初只為一件事而建：把
+             woowhademo 的 6 台 APPORO 展示機（3/5/6/8/10/12）收進 PaaS 管理。使用者
+             2026-09-25 決定那 6 台**不走 PaaS**、改掛 apporo.ai 的 Cloudflare 部署並
+             稍後移機到別台伺服器 ⇒ 這張卡沒有了唯一的用途。
+             封存而非刪除：它從未開出任何服務（0 個 cloud_service），刪掉只是把
+             ir_model_data、plan 連結、CI workflow 一起連坐改一輪；留著記錄則是可逆的，
+             哪天 APPORO 線真的要上 PaaS，翻回 is_active=True 就接得回去。
+             is_active=False 的實效由 controller 承擔：市集列表 domain 直接濾掉
+             （paas.py `[('is_active','=',True),('is_hidden','=',False)]`），規格頁與
+             provision 端點三處各自再擋一次 ⇒ 前台看不到、後台也開不出來。
+             is_hidden 保持 True 不動：封存的是「這張卡」，不是把它降級成「已上架但
+             售罄」——兩層語意見 #471 與
+             docs/decisions/patterns/hidden-template-presentation-chain.md。
+             plan 連結（8 個，與 ha-full 共用同一批 plan 記錄）刻意留著不拆：卡片已封，
+             連結對外沒有任何效力；拆掉反而讓 seed 與既有 DB 的 m2m 不一致（移除 XML
+             列不會回頭刪 DB 列）。
+             守線：src/tests/test_ha_full_apporo_seed.py（改為封存守線：要解封必須先讓
+             那條測試紅，逼人重新推導與 ha-full 的 lockstep，而不是默默翻旗標）。 -->
         <record id="cloud_app_ha_full_apporo" model="woow_paas_platform.cloud_app_template">
             <field name="name">Home Assistant 完整版（APPORO）</field>
             <field name="slug">ha-full-apporo</field>
@@ -1572,7 +1585,7 @@
             <field name="has_admin_gui" eval="False"/>
             <field name="post_deploy_init_type">none</field>
             <field name="is_hidden" eval="True"/>
-            <field name="is_active" eval="True"/>
+            <field name="is_active" eval="False"/>  <!-- 🔒 封存：APPORO 展示機不走 PaaS（2026-09-25 決策），見本記錄上方註解。 -->
         </record>
 
         <!-- pi Coding Agent（pi-web）—— 2026-09-23 上架 PaaS（elmo 定案）。
