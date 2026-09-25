@@ -44,7 +44,7 @@ the legitimate in-process hatch must still work; and create() must still assign
 a canonical_name.
 """
 
-from odoo.exceptions import AccessError, UserError, ValidationError
+from odoo.exceptions import AccessError, UserError
 from odoo.tests.common import TransactionCase
 
 from odoo.addons.woow_paas_platform.models.security_access import (
@@ -312,7 +312,10 @@ class TestSecurityAccessIdentityAnchors(TransactionCase):
             'renamed-prefix-1196')
 
         # 但格式仍然驗——放行不等於不檢查。
-        with self.assertRaises((UserError, ValidationError)):
+        # ⚠ Odoo 覆寫過 assertRaises，**不吃例外 tuple**（會炸
+        # `issubclass() arg 1 must be a class`）。格式錯在 write() 的守衛就被
+        # 攔下，所以這裡是 UserError，走不到 @api.constrains 的 ValidationError。
+        with self.assertRaises(UserError):
             route_as_alice.write({'subdomain_prefix': 'Bad Prefix!!'})
 
         # 而真錨點沒有因此鬆動：偽造 context 一樣寫不進 route 的 CF 物件 id。
