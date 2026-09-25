@@ -95,3 +95,12 @@ _Avoid_: 單獨的「dump」（只是 DB 那一半）；「快照」「Longhorn 
 
 **升級前備份**：會改 odoo image digest 的 helm upgrade 之前，由平台另外觸發、獨立保留的一份備份；它是升級失敗時唯一的退路（升級只能 forward-fix）。每日排程的備份不算它。
 _Avoid_: 「發版前 snapshot」（那是平台 Odoo 舊 SOP 裡的 Longhorn snapshot，語意見上條）
+
+**prod clone**：平台 Odoo（或任一 odoo 站）的 DB＋filestore 副本，來源可以是 live `pg_dump` 或一份備份（見上條）；它帶著 prod 的全部憑證、排程與身分，**未經中和前不得啟動**。
+_Avoid_: 「正式副本」「prod 資料」（分不出是副本還是 prod 本身）
+
+**中和**：restore 之後、Odoo 程序起來之前，把 prod clone「對外行動」的能力拔掉的那一組動作——停排程、廢外連憑證與通道、改身分、換掉進入面的密鑰、抹掉平台 DB 裡存放的租戶 live 憑證；第一層是 Odoo 官方的 `odoo neutralize`（`database.is_neutralized`），平台只補差。**任何會再啟動 Odoo 程序的步驟之後都要再中和一次**。
+_Avoid_: 「去敏」「脫敏」（那是 PII 遮罩，中和的其中一小步、目的不同）；「neutralized」在 `src/models/sh_subscription_fix.py`（#324）另指「上游 buggy wallet cron 被 override 成 no-op」，與本條無關
+
+**彩排**：在拋棄式 dev sandbox 上，用中和過的 prod clone 把一次 cutover（例：平台 Odoo 換 chart）從頭走到尾，量出未知並留下可覆核的證據；與正式切換的差異（cron 全停、operator 黑洞、密鑰已換…）必須列成差異表，不能當成正式切換的替身。
+_Avoid_: 「排練」（`docs/plans/2026-Q3/2026-09-03-*` 對 #1032 Phase 2 的舊稱）、「演練」（issue #1162 標題與 harumi scout doc 的泛稱）
