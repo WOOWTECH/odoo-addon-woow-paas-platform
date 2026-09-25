@@ -315,3 +315,18 @@
   min-width: 0;
   font-size: 0.8125rem;
 }
+
+/* #1196：route 主機名稱就地改名。輸入框 + 固定後綴並排，
+   後綴不可編輯（那是平台網域，不是使用者的東西）。 */
+.o_woow_sa_routes_table__rename {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  min-width: 0;
+
+  input {
+    flex: 1 1 0;
+    min-width: 0;
+    font-size: 0.8125rem;
+  }
+}

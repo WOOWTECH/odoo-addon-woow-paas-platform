@@ -72,6 +72,7 @@ export class SecurityAccessDetailPage extends Component {
       // #1196 第一層：就地編輯既有 route 的後端位址。沒有這個，改一個打錯的
       // service_url 只能刪掉重建 —— 那會放掉 subdomain、斷線、換掉 route id。
       editingRouteId: null,
+      editRoutePrefix: "",
       editRouteServiceUrl: "",
       editRouteHostHeader: true,
       savingRoute: false,
@@ -277,14 +278,22 @@ export class SecurityAccessDetailPage extends Component {
 
   startEditRoute(route) {
     this.state.editingRouteId = route.id;
+    this.state.editRoutePrefix = route.subdomain_prefix || "";
     this.state.editRouteServiceUrl = route.service_url || "";
     this.state.editRouteHostHeader = route.http_host_header !== false;
   }
 
   cancelEditRoute() {
     this.state.editingRouteId = null;
+    this.state.editRoutePrefix = "";
     this.state.editRouteServiceUrl = "";
     this.state.savingRoute = false;
+  }
+
+  // #1196：改名。與新增那一格同樣的正規化（小寫、去空白），使用者貼上帶大寫的
+  // 值時不會被格式檢查擋下來卻不知道為什麼。
+  onEditRoutePrefix(ev) {
+    this.state.editRoutePrefix = ev.target.value.trim().toLowerCase();
   }
 
   onEditRouteServiceUrl(ev) {
@@ -299,13 +308,26 @@ export class SecurityAccessDetailPage extends Component {
     if (!this.state.editRouteServiceUrl) {
       return;
     }
+    const prefix = this.state.editRoutePrefix;
+    // 與新增那一格同一道前端閘（SUBDOMAIN_RE），純粹是為了即時回饋；真正的
+    // 判準在後端（格式 + DB + Cloudflare 三層），前端擋不住也不會放行錯的值。
+    if (prefix && prefix !== route.subdomain_prefix
+        && !SUBDOMAIN_RE.test(prefix)) {
+      this.state.error = SUBDOMAIN_HINT;
+      return;
+    }
     this.state.savingRoute = true;
+    const vals = {
+      service_url: this.state.editRouteServiceUrl,
+      http_host_header: this.state.editRouteHostHeader,
+    };
+    // 只有真的改了才送——沒改就不要讓後端跑一次 Cloudflare 可用性查詢
+    // （那會對自己現有的 DNS 記錄回「已被佔用」）。
+    if (prefix && prefix !== route.subdomain_prefix) {
+      vals.subdomain_prefix = prefix;
+    }
     const res = await securityAccessService.updateRoute(
-      this.props.workspaceId, this.props.saId, route.id,
-      {
-        service_url: this.state.editRouteServiceUrl,
-        http_host_header: this.state.editRouteHostHeader,
-      },
+      this.props.workspaceId, this.props.saId, route.id, vals,
     );
     this.state.savingRoute = false;
     if (res.success) {

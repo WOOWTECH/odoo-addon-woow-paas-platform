@@ -199,8 +199,20 @@
               <tbody>
                 <t t-foreach="state.sa.routes or []" t-as="route" t-key="route.id">
                   <tr>
+                    <!-- #1196：主機名稱可就地改。編輯時只讓改 prefix，後綴是
+                         平台網域、不是使用者的東西。 -->
                     <td class="o_woow_sa_routes_table__host">
-                      <span class="o_woow_sa_detail__mono"><t t-esc="route.hostname"/></span>
+                      <div t-if="state.editingRouteId === route.id"
+                           class="o_woow_sa_routes_table__rename">
+                        <input type="text" class="o_woow_input"
+                               placeholder="subdomain prefix"
+                               t-att-value="state.editRoutePrefix"
+                               t-on-input="onEditRoutePrefix"/>
+                        <span class="o_woow_sa_add_route__suffix">.<t t-esc="paasDomainSuffix"/></span>
+                      </div>
+                      <span t-else="" class="o_woow_sa_detail__mono">
+                        <t t-esc="route.hostname"/>
+                      </span>
                     </td>
                     <!-- #1196：就地編輯 service_url / Host header。subdomain 仍不可改
                          （平台是先到先得的扁平命名空間，改名＝刪除+重建）。 -->

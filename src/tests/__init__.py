@@ -878,3 +878,7 @@ from . import test_helm_values_addon_builder_1052  # #1052：addon helm values b
 # #1196：租戶自助取 tunnel token 的閘門。端點 sudo() 跨過欄位的 group 限制，
 # 所以它的三道閘門就是全部的安全性，每一階都要有紅綠。
 from . import test_sa_tunnel_token_portal_1196
+
+# #1196：route 改名。守的是「值變了 ⇒ CF 也跟著搬」，尤其 Access app 由 hostname
+# 定義——改名不重推會讓新網址變成免登入入口而 UI 仍顯示已保護。
+from . import test_sa_route_rename_1196
