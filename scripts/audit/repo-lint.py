@@ -4417,12 +4417,17 @@ INTERNAL_CTX_KEY_REGISTRY = {
                "18.0 上實測「裸 truthy 版」可由租戶 RPC 偽造成功。",
     },
     "sa_internal_prefix_write": {
-        "status": "enforced",
+        "status": "removed",
         "sentinel": "_INTERNAL_IDENTITY_WRITE",
         "defined_in": "src/models/security_access.py",
-        "issue": "#522",
-        "why": "subdomain_prefix 的 data-repair 豁免。刻意與身分錨點分成兩把鑰匙："
-               "改名的 migration 不該因此也能搬 tunnel id。",
+        "issue": "#1196",
+        "why": "#1196 把 route 改名變成正式功能（使用者可自行改 subdomain，如同在 "
+               "Cloudflare 平台上），`subdomain_prefix` 不再是「不可變 + 留一把 "
+               "data-repair 鑰匙」的形狀 ⇒ 這把鑰匙的判定點一併消失。留在 registry "
+               "上是為了讓 (iv) 守「不准回來」：真要再擋改名，該擋在有 CF 同步保證的"
+               "那一層，不是重新長出一把可繞過同步的內部鑰匙。"
+               "（原 #522：subdomain_prefix 的 data-repair 豁免，刻意與身分錨點分成"
+               "兩把鑰匙——改名的 migration 不該因此也能搬 tunnel id。）",
     },
     "sa_internal_policy_cf_write": {
         "status": "enforced",
