@@ -541,11 +541,25 @@ class SecurityAccessController(Controller):
         return access.workspace_id
 
     def _get_sa_or_error(self, sa_id: int, workspace):
+        """回傳屬於 `workspace` 的那個 SA，否則 None。
+
+        #1196：歸屬比對必須走 sudo。SA 的 ir.rule 錨在 workspace 成員關係上，
+        所以讀一個**別的 workspace** 的 SA 會直接拋 AccessError 而不是回空集合。
+        先前這裡用非 sudo 讀 `sa.workspace_id`，於是「自己是某 workspace 的成員、
+        卻傳入別人 workspace 的 sa_id」這條路徑會讓端點噴 500，而不是回結構化拒絕
+        ——本函式的契約（拿不到就回 None）在那個組合下是失效的。
+
+        既有的 cross-user 測試抓不到，是因為它們測的是「完全的非成員」：那種呼叫
+        在前一道 `_get_workspace_or_error` 就被擋下，永遠走不到這裡。
+
+        比對只讀 `workspace_id` 一個 id、且結果只用來決定放行與否，不外流任何內容；
+        回傳的是**非 sudo** 的記錄集，後續讀寫仍照常受 ir.rule 與 ACL 管轄。
+        """
         SecurityAccess = request.env["woow_paas_platform.security_access"]
-        sa = SecurityAccess.browse(sa_id).exists()
-        if not sa or sa.workspace_id.id != workspace.id:
+        sa_su = SecurityAccess.sudo().browse(sa_id).exists()
+        if not sa_su or sa_su.workspace_id.id != workspace.id:
             return None
-        return sa
+        return SecurityAccess.browse(sa_id)
 
     def _list_security_accesses(self, workspace) -> dict[str, Any]:
         SecurityAccess = request.env["woow_paas_platform.security_access"]
