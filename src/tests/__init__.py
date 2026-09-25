@@ -874,3 +874,7 @@ from . import test_lifecycle_is_halted_seam_1052
 from . import test_quota_len_o2m_reach_1054
 
 from . import test_helm_values_addon_builder_1052  # #1052：addon helm values builder characterization
+
+# #1196：租戶自助取 tunnel token 的閘門。端點 sudo() 跨過欄位的 group 限制，
+# 所以它的三道閘門就是全部的安全性，每一階都要有紅綠。
+from . import test_sa_tunnel_token_portal_1196

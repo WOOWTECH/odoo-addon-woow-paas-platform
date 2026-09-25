@@ -90,6 +90,61 @@
                 <label>Connector Opened</label><t t-esc="state.sa.tunnel_uptime"/></div>
             </div>
           </WoowCard>
+          <!-- #1196：連線指引 + tunnel token 自助取用。
+               tunnel 可任意轉移是刻意的定位，所以這裡要能複製 token 搬到別台。
+               HA 整合那條路不需要 token（它自己用 OAuth 領），故獨立列出。 -->
+          <WoowCard shadow="true" t-if="state.sa.tunnel_id">
+            <h3>Connect a machine</h3>
+            <p class="o_woow_sa_detail__hint">
+              Run one connector with this tunnel's token and the routes above go
+              live. Move the token to another machine to move the tunnel — the
+              public hostnames stay the same.
+            </p>
+            <div class="o_woow_sa_token">
+              <label>Tunnel token</label>
+              <div class="o_woow_sa_token__row">
+                <span class="o_woow_sa_detail__mono o_woow_sa_token__value">
+                  <t t-if="state.tunnelTokenVisible"><t t-esc="state.tunnelToken"/></t>
+                  <t t-else=""><t t-esc="maskedTunnelToken"/></t>
+                </span>
+                <button class="o_woow_sa_icon_btn"
+                        t-att-title="state.tunnelTokenVisible ? 'Hide' : 'Reveal'"
+                        t-att-disabled="state.tunnelTokenLoading"
+                        t-on-click="toggleTunnelToken">
+                  <!-- 元件的 prop 本身就是運算式，不可以用 t-att（Owl 會直接拒收
+                       並把整個 root component 銷毀）。 -->
+                  <WoowIcon name="state.tunnelTokenVisible ? 'visibility_off' : 'visibility'"
+                            size="18"/>
+                </button>
+                <button class="o_woow_sa_icon_btn" title="Copy token"
+                        t-on-click="copyTunnelToken">
+                  <WoowIcon name="'content_copy'" size="18"/>
+                </button>
+                <span t-if="state.tunnelTokenCopied"
+                      class="o_woow_sa_token__copied">Copied</span>
+              </div>
+              <p class="o_woow_sa_token__warn">
+                Treat this like a password — anyone holding it can run this
+                tunnel and serve your hostnames.
+              </p>
+            </div>
+            <div class="o_woow_sa_connect">
+              <div class="o_woow_sa_connect__item">
+                <strong>Home Assistant integration</strong>
+                <span>Add the Woow PaaS integration and pick this Security
+                      Access — it fetches the token for you, nothing to paste.</span>
+              </div>
+              <div class="o_woow_sa_connect__item">
+                <strong>Cloudflared Web GUI add-on</strong>
+                <span>Paste the token above into the add-on's
+                      <em>tunnel_token</em> option and start it.</span>
+              </div>
+              <div class="o_woow_sa_connect__item">
+                <strong>Docker</strong>
+                <pre class="o_woow_sa_detail__mono o_woow_sa_connect__cmd"><t t-esc="dockerRunCommand"/></pre>
+              </div>
+            </div>
+          </WoowCard>
           <WoowCard shadow="true" t-if="state.sa.subscription">
             <h3>Subscription</h3>
             <div class="o_woow_sa_detail__grid">
@@ -147,17 +202,47 @@
                     <td class="o_woow_sa_routes_table__host">
                       <span class="o_woow_sa_detail__mono"><t t-esc="route.hostname"/></span>
                     </td>
+                    <!-- #1196：就地編輯 service_url / Host header。subdomain 仍不可改
+                         （平台是先到先得的扁平命名空間，改名＝刪除+重建）。 -->
                     <td>
-                      <span class="o_woow_sa_detail__mono"><t t-esc="route.service_url"/></span>
+                      <input t-if="state.editingRouteId === route.id"
+                             type="text" class="o_woow_input o_woow_sa_routes_table__edit"
+                             placeholder="service URL"
+                             t-att-value="state.editRouteServiceUrl"
+                             t-on-input="onEditRouteServiceUrl"/>
+                      <span t-else="" class="o_woow_sa_detail__mono">
+                        <t t-esc="route.service_url"/>
+                      </span>
                     </td>
                     <td class="o_woow_sa_routes_table__hh">
-                      <t t-esc="route.http_host_header ? 'Yes' : 'No'"/>
+                      <input t-if="state.editingRouteId === route.id"
+                             type="checkbox"
+                             t-att-checked="state.editRouteHostHeader"
+                             t-on-change="onEditRouteHostHeader"/>
+                      <t t-else="" t-esc="route.http_host_header ? 'Yes' : 'No'"/>
                     </td>
                     <td class="o_woow_sa_routes_table__action">
-                      <button class="o_woow_sa_icon_btn" title="Delete route"
-                              t-on-click="() => this.removeRoute(route)">
-                        <WoowIcon name="'delete'" size="18"/>
-                      </button>
+                      <t t-if="state.editingRouteId === route.id">
+                        <button class="o_woow_sa_icon_btn" title="Save"
+                                t-att-disabled="state.savingRoute"
+                                t-on-click="() => this.saveRoute(route)">
+                          <WoowIcon name="'check'" size="18"/>
+                        </button>
+                        <button class="o_woow_sa_icon_btn" title="Cancel"
+                                t-on-click="cancelEditRoute">
+                          <WoowIcon name="'close'" size="18"/>
+                        </button>
+                      </t>
+                      <t t-else="">
+                        <button class="o_woow_sa_icon_btn" title="Edit route"
+                                t-on-click="() => this.startEditRoute(route)">
+                          <WoowIcon name="'edit'" size="18"/>
+                        </button>
+                        <button class="o_woow_sa_icon_btn" title="Delete route"
+                                t-on-click="() => this.removeRoute(route)">
+                          <WoowIcon name="'delete'" size="18"/>
+                        </button>
+                      </t>
                     </td>
                   </tr>
                 </t>

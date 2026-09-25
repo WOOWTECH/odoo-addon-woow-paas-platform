@@ -69,6 +69,18 @@ export class SecurityAccessDetailPage extends Component {
       newRouteServiceUrl: "",
       prefixCheck: null, // null | {available, reason}
       prefixChecking: false,
+      // #1196 第一層：就地編輯既有 route 的後端位址。沒有這個，改一個打錯的
+      // service_url 只能刪掉重建 —— 那會放掉 subdomain、斷線、換掉 route id。
+      editingRouteId: null,
+      editRouteServiceUrl: "",
+      editRouteHostHeader: true,
+      savingRoute: false,
+      // #1196 第二層：tunnel token 自助複製。預設遮蔽——它等同密碼，而這一頁
+      // 常常是開著給人看的。
+      tunnelToken: null,
+      tunnelTokenVisible: false,
+      tunnelTokenLoading: false,
+      tunnelTokenCopied: false,
       showSkipTrialModal: false,
       showChangePlanModal: false,
       showDeleteConfirm: false,
@@ -257,6 +269,110 @@ export class SecurityAccessDetailPage extends Component {
     } else {
       this.state.error = res.error;
     }
+  }
+
+  // ---- #1196 第一層：就地編輯 route ----
+  // subdomain 仍然不可改（平台是先到先得的扁平命名空間，改名＝刪除+重建），
+  // 這裡只開後端已經接受的 service_url / http_host_header。
+
+  startEditRoute(route) {
+    this.state.editingRouteId = route.id;
+    this.state.editRouteServiceUrl = route.service_url || "";
+    this.state.editRouteHostHeader = route.http_host_header !== false;
+  }
+
+  cancelEditRoute() {
+    this.state.editingRouteId = null;
+    this.state.editRouteServiceUrl = "";
+    this.state.savingRoute = false;
+  }
+
+  onEditRouteServiceUrl(ev) {
+    this.state.editRouteServiceUrl = ev.target.value.trim();
+  }
+
+  onEditRouteHostHeader(ev) {
+    this.state.editRouteHostHeader = ev.target.checked;
+  }
+
+  async saveRoute(route) {
+    if (!this.state.editRouteServiceUrl) {
+      return;
+    }
+    this.state.savingRoute = true;
+    const res = await securityAccessService.updateRoute(
+      this.props.workspaceId, this.props.saId, route.id,
+      {
+        service_url: this.state.editRouteServiceUrl,
+        http_host_header: this.state.editRouteHostHeader,
+      },
+    );
+    this.state.savingRoute = false;
+    if (res.success) {
+      this.cancelEditRoute();
+      await this.loadDetail();
+    } else {
+      this.state.error = res.error;
+    }
+  }
+
+  // ---- #1196 第二層：tunnel token 自助取用 ----
+  // tunnel 可任意轉移是刻意的定位，而「複製得到 token」是轉移的前提。
+
+  async toggleTunnelToken() {
+    if (this.state.tunnelTokenVisible) {
+      this.state.tunnelTokenVisible = false;
+      return;
+    }
+    if (!this.state.tunnelToken) {
+      this.state.tunnelTokenLoading = true;
+      const res = await securityAccessService.getTunnelToken(
+        this.props.workspaceId, this.props.saId);
+      this.state.tunnelTokenLoading = false;
+      if (!res.success) {
+        this.state.error = res.error;
+        return;
+      }
+      this.state.tunnelToken = res.data.tunnel_token;
+    }
+    this.state.tunnelTokenVisible = true;
+  }
+
+  async copyTunnelToken() {
+    if (!this.state.tunnelToken) {
+      const res = await securityAccessService.getTunnelToken(
+        this.props.workspaceId, this.props.saId);
+      if (!res.success) {
+        this.state.error = res.error;
+        return;
+      }
+      this.state.tunnelToken = res.data.tunnel_token;
+    }
+    try {
+      await navigator.clipboard.writeText(this.state.tunnelToken);
+      this.state.tunnelTokenCopied = true;
+      // 只是給個「有複製到」的回饋，兩秒後自己收掉。
+      setTimeout(() => { this.state.tunnelTokenCopied = false; }, 2000);
+    } catch (err) {
+      // 非 HTTPS／權限被拒時 clipboard API 會擋；此時至少把值顯示出來讓人手動選取。
+      this.state.tunnelTokenVisible = true;
+      this.state.error = err.message;
+    }
+  }
+
+  // 遮蔽顯示：頭尾各留幾碼方便比對是不是同一組，中間不出現。
+  get maskedTunnelToken() {
+    const t = this.state.tunnelToken;
+    if (!t) {
+      return "••••••••••••••••••••••••";
+    }
+    return t.length <= 16 ? "••••••••" : `${t.slice(0, 6)}${"•".repeat(24)}${t.slice(-4)}`;
+  }
+
+  // docker 那條指令要能整段複製貼上就能跑。
+  get dockerRunCommand() {
+    const t = this.state.tunnelToken || "<TUNNEL_TOKEN>";
+    return `docker run -d --restart unless-stopped --network host \\\n  cloudflare/cloudflared:latest tunnel --no-autoupdate run --token ${t}`;
   }
 
   // ---- Access tab (P2.5)：per-route Protected Applications ----
