@@ -1,9 +1,4 @@
-"""Cron: warn users before subscription renewal if wallet balance is low.
-
-TODO(phase-1 follow-up): add integration test that seeds an
-sh.subscription.subscription with sh_date_of_next_payment within
-WARNING_WINDOW_DAYS and asserts dedup via woow_last_low_balance_warned_for.
-"""
+"""Cron: warn users before subscription renewal if wallet balance is low."""
 import logging
 from datetime import timedelta
 

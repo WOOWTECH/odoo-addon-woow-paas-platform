@@ -28,15 +28,14 @@ exception）當下實際發生的事。dunning cron 每天都會重跑這條路�
 marker 從「我呼叫過通知函式」改成「**這個週期有一封還活著的通知**」：
 
 * 排入佇列失敗（無 template／例外）→ 不寫 marker → 明天再試。
-* 排入成功 → 寫 marker，並把 ``mail.mail`` 記成載體。
-* 載體停在 ``exception``（投遞失敗）→ 視為沒送到 → 重送。
-* 載體是 ``outgoing`` / ``sent`` → 不重送（去重仍然有效）。
-* 載體不存在（Odoo 對 ``auto_delete`` 的信在送出成功後會刪掉；舊資料同樣是空）
-  → 視為已送達 → 不重送。這條讓升級後的既有資料維持原本行為，不會在上線當天
-  對所有欠費租戶補發一輪。
-
-重送有天然上限：連續失敗到 ``max_consecutive_payment_failures``（預設 6）就
-auto-cancel，訂閱離開 ``in_progress`` 後 cron 不再撈它。
+* 排入成功 → 寫 marker，並把 ``mail.mail`` 記成載體；載體會顯式設為
+  ``auto_delete=False``，避免 Odoo 自動刪除後失去投遞下場。
+* 載體停在 ``exception``（投遞失敗）→ 視為沒送到 → 重送，但只在
+  ``_LOW_BALANCE_RETRY_WINDOW_DAYS``（目前 7 天）的視窗內追送。
+* 載體是 ``outgoing`` / ``sent`` / ``received`` → 不重送（去重仍然有效）。
+* 載體是 ``cancel`` → 明確不重送，並留下 warning 供維運追查。
+* 載體不存在 → 採保守 fallback，不重送。這條涵蓋升級前欄位為 NULL 的既有資料
+  與被人工清掉的信，避免上線當天對所有欠費租戶補發一輪；不代表信已送出成功。
 """
 from datetime import timedelta
 from unittest.mock import patch
@@ -259,11 +258,11 @@ class TestLowBalanceDedupRetry(TransactionCase):
         self.assertEqual(new_carrier.state, 'outgoing')
 
     def test_deleted_carrier_is_not_resent(self):
-        """載體不存在 → 視為已送達，不重送。
+        """載體不存在 → 採保守 fallback，不重送。
 
-        Odoo 對 ``auto_delete`` 的信在**送出成功後**會直接刪掉 mail.mail，所以
-        「查不到載體」的正常成因就是送成功了。升級前的既有資料（欄位為 NULL）
-        走同一條，於是上線當天不會對所有欠費租戶補發一輪。
+        低餘額通知載體已顯式設為 ``auto_delete=False``，因此查不到載體不代表
+        送出成功。這條 fallback 涵蓋升級前的既有資料（欄位為 NULL）與被人工
+        清掉的信，避免上線當天對所有欠費租戶補發一輪。
         """
         self._fail_once()
         self.subscription.woow_last_low_balance_mail_id.sudo().unlink()
@@ -272,7 +271,7 @@ class TestLowBalanceDedupRetry(TransactionCase):
         self._fail_once()
         self.assertFalse(
             self._queued_mails(),
-            "載體被刪＝送出成功，不該重送。")
+            "載體不存在時採保守 fallback，不該重送。")
 
     def test_cancelled_carrier_is_not_resent(self):
         """載體被取消（``cancel``）→ 不重送，但要留 warning（R1 review S4）。
