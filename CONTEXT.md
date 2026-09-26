@@ -87,19 +87,31 @@ _Avoid_: 不加限定詞的「superuser」「管理員密碼」；也不要把 O
 **Odoo superuser**：Odoo ORM 層的 `SUPERUSER_ID`（值為 1），`sudo()` 切換到的身分，繞過所有 `ir.rule`／`ir.model.access` 檢查，**不是一個可登入的帳號**。與「Odoo 管理員帳密」（`base.user_admin`，一個真實可登入、屬於 `base.group_system` 的一般使用者）是兩個不同的 `res.users` 概念，不可互換；與「DB superuser」更是不同層（Odoo vs PostgreSQL）。
 _Avoid_: 「admin」「系統管理員」——描述 `sudo()` 行為時講「Odoo superuser」，不要與「Odoo 管理員帳密」或「DB superuser」混稱。
 
-**憑證來源**：服務上任一帶身分入口的憑證，按「由誰決定」分成兩類——**租戶自設**（Tenant 自己填進去的第三方系統帳密，如 SMTP 帳密、`auth.*ApiKey`；平台替他保管並在每次重新部署時原樣送回）與**平台鑄造**（部署時由平台產生，如 DB 密碼、master password、初始 Odoo 管理員密碼、admin GUI 密碼、n8n owner 密碼）。鑄造的再分**不可見**（DB 密碼、master password）與**可見可重設**（admin GUI 密碼、n8n owner 密碼）。判準與 seed 上必須留下的痕跡以 `docs/decisions/patterns/default-credential-functional-test-blindspot.md` 為權威，本條只供查找。
+**憑證來源**：服務上任一帶身分入口的憑證，按「由誰決定」分成兩類——**租戶自設**（Tenant 自己填進去的第三方系統帳密，如 SMTP 帳密、`auth.*ApiKey`；平台替他保管並在每次重新部署時原樣送回）與**平台鑄造**（部署時由平台產生，如 DB 密碼、master password、初始 Odoo 管理員密碼、admin GUI 密碼、n8n owner 密碼）。鑄造的再分**不可見**（DB 密碼、master password）與**可見可重設**（admin GUI 密碼、n8n owner 密碼）。判準與 seed 上必須留下的痕跡以 `docs/decisions/patterns/default-credential-functional-test-blindspot.md` 為權威，本條只供查找。odoo image digest「由誰決定」與此同構：它屬平台鑄造一類，Tenant 不可自設、不可延後（見「跟版」；template 級屬性的判準見 `docs/decisions/patterns/template-vs-plan-property-boundary.md`）。
 _Avoid_: 「租戶自填憑證」「平台產生密鑰」（同一條軸線另造的詞）、不加限定詞的「憑證」（分不出是哪一類）
 
 **備份（一份備份）**：odoo `cloud_service` 在同一時刻產出、成對存放的三件東西——DB dump、filestore 快照、manifest；缺任何一件都不算一份備份。它住在該服務自己的 backup PVC，與資料本體不同 volume。
 _Avoid_: 單獨的「dump」（只是 DB 那一半）；「快照」「Longhorn snapshot」（與資料同一顆 volume、同滅，是還原錨點不是備份）；reset 密碼流程裡 `config.json` 的暫存副本（程式碼裡也叫 backup，但與本條無關，改稱「暫存副本」）
 
-**升級前備份**：會改 odoo image digest 的 helm upgrade 之前，由平台另外觸發、獨立保留的一份備份；它是**升級回退**（見下兩條）的資料來源——單獨還原它不構成退路，因為升級只能 forward-fix，還原後服務仍會用新 image 重跑同一批模組升級。每日排程的備份不算它。
+**升級**：對 odoo `cloud_service` 做的、會改 odoo 或 postgres image digest 的那一次 helm upgrade；odoo digest 改變時連帶一次模組升級（見下條）。期間服務處於「升級中」，所有會改動它的路徑都被擋住。只換 chart 版本、改設定或換 plan 的 helm upgrade 不是升級。
+_Avoid_: Odoo 官方文件的「upgrade」（跨大版本遷移，本平台不做）；「更新」（Odoo 官方 update＝換碼重啟，不涉及 digest）；單獨的「redeploy」（那是 ops 的動作，只有帶出 digest 變更時才算升級）
+
+**模組升級**：DB 記錄的 marker 與目前 odoo image digest 不一致時，由升級閘觸發的 `-u all` 連同其後的驗證。觸發它的可能是一次升級，也可能是一次還原（把較舊的備份還原到現行 image）；它追平的是 stable 系列裡不 bump 版號的修補（view、data、ACL、index…），不是升級的正確性前提。
+_Avoid_: 「schema 升級」「migration」（Odoo 的 migration script 只是它的一部分）；把它與「升級」互稱
+
+**跟版**：平台決定把 odoo template 的 image 追上某個較新的官方 digest，並把它推到既有 odoo `cloud_service` 的整個流程——決定、發版、波次、預告；由平台發起，Tenant 不能觸發也不能延後。節奏：core 跟版每月最多一次、每季至少一次；安全修補不受此限。
+_Avoid_: 單獨的「升級」（那是每一台服務上發生的那一次 helm upgrade）；「更新」
+
+**維護窗口**：跟版或其他升級發生前預告給 Tenant 的預期停機時段；租戶 odoo 的固定窗口是台北時間 22:00～01:00。
+_Avoid_: 「曝險窗」（平台 Odoo 發版 SOP 裡的失敗風險視窗，不是預告的停機時段）；「停機時間」（實際量到的長度，不是時段）
+
+**升級前備份**：一次升級（見上，會改 odoo 或 postgres image digest 的 helm upgrade）之前，由平台另外觸發、獨立保留的一份備份；它是**升級回退**（見下兩條）的資料來源——單獨還原它不構成退路，因為升級只能 forward-fix，還原後服務仍會用新 image 重跑同一批模組升級。每日排程的備份不算它。
 _Avoid_: 「發版前 snapshot」（那是平台 Odoo 舊 SOP 裡的 Longhorn snapshot，語意見上條）、「唯一的退路」（2026-09-26 前的舊定義，少了釘回版本那一半）
 
 **還原（一次還原）**：把某一份備份的 DB dump 與 filestore 快照寫回**同一個** odoo `cloud_service`（同 release、同 DB 名），讓服務回到那份備份的時點。先在旁路把整份還原好並驗證，再以改名瞬間切換；切換前的現況改名保留一段時間，是那次還原唯一的 undo。它作用在 prod 本身、不做中和；備份時點之後的資料一律丟失，而且外部世界（已寄出的信、金流與發票序號、POS 離線訂單）不會跟著回捲。由平台 ops 觸發，整段期間服務處於「還原中」，所有會喚醒或改動它的路徑都被擋住。同一機制只做前半段、不切換，稱「旁路取資料」，用來救單筆資料。
 _Avoid_: 「rollback」「回滾」「回退」（那是 helm revision 回退，只換 image 與 manifest、不動資料）；「還原錨點」（Longhorn snapshot，見「備份」條）；「中和」條裡的「restore」指 prod clone 進沙盒的那一步，不是本條
 
-**升級回退**：升級失敗時的單一 ops 動作——還原該次的升級前備份，**並且**把 odoo image 釘回那份備份所記錄的版本並鎖住（避免下一次重新部署又升回去）。兩件事按固定順序一起完成，只做其中一件都不構成退路。
+**升級回退**：升級失敗時、或升級成功後 24 小時內發現壞時的單一 ops 動作——還原該次的升級前備份，**並且**把 odoo（或 postgres）image 釘回那份備份所記錄的版本並鎖住（避免下一次重新部署又升回去）。兩件事按固定順序一起完成，只做其中一件都不構成退路。
 _Avoid_: 「rollback」（租戶可自行觸發的 helm revision 回退，不動資料，對 odoo 服務已被拒絕）；不加限定詞的「還原」（少了釘回版本那一半）
 
 **prod clone**：平台 Odoo（或任一 odoo 站）的 DB＋filestore 副本，來源可以是 live `pg_dump` 或一份備份（見上條）；它帶著 prod 的全部憑證、排程與身分，**未經中和前不得啟動**。
