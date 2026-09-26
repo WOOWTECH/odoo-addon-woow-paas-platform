@@ -15,3 +15,4 @@
 | [2026-07-02-ns-per-workspace-decision-matrix.md](2026-07-02-ns-per-workspace-decision-matrix.md) | 「每 workspace 一個 k8s namespace」架構調整衝擊分析 | draft |
 | [2026-09-18-harumi-odoo-paas-migration-plan.md](2026-09-18-harumi-odoo-paas-migration-plan.md) | harumi-odoo（叢集上的 odoo-tenant 站）搬進平台成為 odoo `cloud_service`：DB／filestore／addon 缺口、路線比較與分階段計畫 | draft |
 | [2026-09-18-odoo-bitnami-coupling-inventory.md](2026-09-18-odoo-bitnami-coupling-inventory.md) | 平台程式碼綁 Bitnami odoo chart／image 的耦合盤點：改用官方 `odoo:18.0` lineage 的改動範圍與分期 | draft |
+| [2026-09-22-ecpay-callback-retry-policy.md](2026-09-22-ecpay-callback-retry-policy.md) | ECPay server-to-server 回呼在停機窗口內的重送政策（官方原文）、補救途徑、vendored addon／Odoo core／平台端重複回呼冪等性；含可抄進切換／搬遷 runbook 的「停機期間金流」段（#1163） | draft |
