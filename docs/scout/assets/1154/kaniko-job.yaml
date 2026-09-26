@@ -1,0 +1,43 @@
+# ⚠ PROTOTYPE（#1154）— 在獨立的 dev-sandbox-odoo1154-build namespace 跑（沙盒本體 ns 有 default-deny netpol）。
+# 走叢集內 JCR 位址（與 paas-odoo-ci 的 JCR_INTERNAL 相同；避開 Cloudflare 對大 layer 上傳的限制）。
+# pod 端引用同一顆 image 時用對外名稱 jcr-prod.woowtech.io/woow-paas-docker-local/cloud-odoo-proto:1154。
+# 前置：同 ns 需有 secret `jcr-push`（docker-registry 型，--docker-server=artifactory-jcr-artifactory-nginx.jfrog.svc.cluster.local，具 push 權限）與
+#       configmap `candidate-dockerfile`（key=Dockerfile，內容為 Dockerfile.candidate）。
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: build-cloud-odoo-proto
+  namespace: dev-sandbox-odoo1154-build
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 86400
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: kaniko
+          image: gcr.io/kaniko-project/executor:v1.23.2
+          args:
+            - --dockerfile=/workspace/Dockerfile
+            - --context=dir:///workspace
+            - --destination=artifactory-jcr-artifactory-nginx.jfrog.svc.cluster.local/woow-paas-docker-local/cloud-odoo-proto:1154
+            - --insecure-registry=artifactory-jcr-artifactory-nginx.jfrog.svc.cluster.local
+            - --snapshot-mode=redo
+          volumeMounts:
+            - name: dockerfile
+              mountPath: /workspace
+            - name: docker-config
+              mountPath: /kaniko/.docker
+          resources:
+            requests: {cpu: "500m", memory: 1Gi}
+            limits: {cpu: "2", memory: 4Gi}
+      volumes:
+        - name: dockerfile
+          configMap:
+            name: candidate-dockerfile
+        - name: docker-config
+          secret:
+            secretName: jcr-push
+            items:
+              - key: .dockerconfigjson
+                path: config.json

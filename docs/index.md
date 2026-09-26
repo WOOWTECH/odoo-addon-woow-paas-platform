@@ -4,7 +4,7 @@
 > 分類的定義與寫新檔該放哪，見 [`README.md`](README.md)。
 > 本檔由 `scripts/audit/gen-docs-index.py` 產生，數字即時算出——**不要手改**。
 
-目前共 **685** 份文件（含 `archived/` 324 份）。
+目前共 **687** 份文件（含 `archived/` 324 份）。
 
 ## 我要照步驟做一件事
 
@@ -52,7 +52,7 @@
 | 去哪 | 內容 | 篇數 |
 |---|---|---|
 | [`archived/`](archived/) | 不再使用但保留考古（含 `archived/memory/`：已被其他載體取代的 memory） | 324 |
-| [`scout/`](scout/) | 決策前偵察，拍板後 promote 到 plans/ 或 decisions/ | 7 |
+| [`scout/`](scout/) | 決策前偵察，拍板後 promote 到 plans/ 或 decisions/ | 9 |
 | [`agents/`](agents/) | mattpocock-skills 工具自管理區 | 3 |
 | [`superpowers/`](superpowers/) | 已退役 obra/superpowers plugin 的舊產出區（只剩歷史） | 1 |
 
