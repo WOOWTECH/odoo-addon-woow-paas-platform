@@ -12,7 +12,7 @@ description: Session 收尾的教訓蒸餾。當 debug / incident / e2e 排錯 s
 3. **選落點（按強度優先，選最強可行者）**：
    - a. 可機械判定（grep / parse 可攔）→ `scripts/audit/repo-lint.py` 加 check + `--update-baseline`
    - b. 綁特定路徑的 read-first 知識 → `.claude/hooks/pattern-guard-map.json` append docs 行或新增 class
-   - c. 跨情境判斷類 → `/docs:new decisions <slug>`（pattern doc）+ 登錄 patterns/README.md 索引
+   - c. 跨情境判斷類 → `/docs:new decisions <slug>`（pattern doc）+ 登錄 patterns/README.md 索引（含頂部計數）；無路徑可綁時另登記 `scripts/audit/repo-lint.py` 的 `PATTERN_DOC_MAP_EXEMPT`（repo-lint `pattern-doc-registry` 三方雙射會紅）
    - d. 敘事對照類 → `/docs:new tracking <slug>`（pitfall doc）+ 登錄 pitfalls/README.md 索引
 4. **產出 diff 提案**給使用者核可後落檔；一個教訓可同時落 a+c（gate 攔 + doc 解釋為什麼）。
 5. **反向檢查**：這次的教訓是否讓某條既有散文守線變多餘（已被 code guard / gate 取代）？是 → 提案把該條從 CLAUDE.md / index 降級或刪除。CLAUDE.md 不因 retro 而變長是本 skill 的硬約束。

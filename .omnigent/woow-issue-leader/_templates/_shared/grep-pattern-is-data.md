@@ -2,8 +2,7 @@
 
 - `block_working_dir_changes` 只掛 implement worker，屬可靠型守線；它切 shell
   字串時不理會引號。多 pattern 的 grep 交替式若在 pattern 放入 `cd <x>`、`pushd` 或
-  `git -C <x>`，會被切成換目錄動作而 DENY。#1132 的 C1 已記錄單一 pattern 放行，
-  不代表所有單一 pattern 都必然誤擋。
+  `git -C <x>`，會被切成換目錄動作而 DENY；單一 pattern 通常放行，但不保證。
 - `P-tag`／`P-escape` 掛所有角色，屬 best-effort 字串比對。pattern 中的 `git push`、
   `refs/tags`、`--tags`、`v<版號>`，或反斜線加敏感字根 kube／merge／approve／tag／
   push／board／woow-issues，依紀律視為會遭 DENY。

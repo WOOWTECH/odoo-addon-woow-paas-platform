@@ -15,7 +15,7 @@ description: PR 收斂與人工 merge gate：覆核完成後該做什麼、以�
 DENY 所有 forge CLI 的 merge 路徑（含 `gh api -X PUT .../merge` 這種 REST 變形）。
 
 這跟 prod build 的 `/approve` 同級：**即使人類當場明確授權、即使手上憑證就是授權者本
-人，也不代簽**（2026-08-16 反面先例，裁決無例外）。
+人，也不代簽**——裁決無例外。
 
 ### 2. 「人類覆核者的拍板分級」——分類型
 

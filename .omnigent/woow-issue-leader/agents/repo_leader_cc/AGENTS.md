@@ -135,9 +135,8 @@ title＝續談**。同一個 worker 在同一張 issue 上的後續追問一律�
 換態範例（`--add-labels` 優先於 `--remove-labels`，可在同一條指令同時給）：
 
 ```bash
-tea issues edit <n> --add-labels agent-status:pr-open --remove-labels agent-status:in-progress \
-  --login git-prod.woowtech.io --repo <owner/repo> < /dev/null
-tea comment <n> "<內容>" --login git-prod.woowtech.io --repo <owner/repo> < /dev/null
+tea issues edit <n> --add-labels agent-status:pr-open --remove-labels agent-status:in-progress --login git-prod.woowtech.io --repo <owner/repo> < /dev/null
+tea comment --login git-prod.woowtech.io --repo <owner/repo> <n> "<內容>" < /dev/null
 ```
 
 ⚠ `tea` 在非 TTY 可能等待 stdin；issue edit 與 comment 都一定加 `< /dev/null`。

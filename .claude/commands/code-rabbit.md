@@ -1,5 +1,5 @@
 ---
-allowed-tools: Task, Read, Edit, MultiEdit, Write, LS, Grep
+allowed-tools: Agent, Read, Edit, Write, Grep
 ---
 
 # CodeRabbit Review Handler
@@ -15,18 +15,9 @@ Then paste one or more CodeRabbit comments.
 
 ## Instructions
 
-### 1. Initial Context
+### 1. Context
 
-Inform the user:
-```
-I'll review the CodeRabbit comments with discretion, as CodeRabbit doesn't have access to the entire codebase and may not understand the full context.
-
-For each comment, I'll:
-- Evaluate if it's valid given our codebase context
-- Accept suggestions that improve code quality
-- Ignore suggestions that don't apply to our architecture
-- Explain my reasoning for accept/ignore decisions
-```
+CodeRabbit sees the diff, not the whole codebase. Judge each comment against this repo's architecture and conventions, then accept or ignore it and say why in one line.
 
 ### 2. Process Comments
 
@@ -34,15 +25,15 @@ For each comment, I'll:
 If all comments relate to one file:
 - Read the file for context
 - Evaluate each suggestion
-- Apply accepted changes in batch using MultiEdit
+- Apply accepted changes with Edit
 - Report which suggestions were accepted/ignored and why
 
 #### Multiple File Comments
 If comments span multiple files:
 
-Launch parallel sub-agents using Task tool:
+Launch parallel sub-agents with the Agent tool:
 ```yaml
-Task:
+Agent:
   description: "CodeRabbit fixes for {filename}"
   subagent_type: "general-purpose"
   prompt: |
@@ -57,7 +48,7 @@ Task:
        - Evaluate validity given codebase patterns
        - Accept if it improves quality/correctness
        - Ignore if not applicable
-    3. Apply accepted changes using Edit/MultiEdit
+    3. Apply accepted changes using Edit
     4. Return summary:
        - Accepted: {list with reasons}
        - Ignored: {list with reasons}
@@ -110,11 +101,3 @@ For each suggestion, consider:
 4. **Is it safe?** - Could the change introduce problems?
 
 Only apply if all answers are "yes" or the benefit clearly outweighs risks.
-
-## Important Notes
-
-- CodeRabbit is helpful but lacks context
-- Trust your understanding of the codebase over generic suggestions
-- Explain decisions briefly to maintain audit trail
-- Batch related changes for efficiency
-- Use parallel agents for multi-file reviews to save time

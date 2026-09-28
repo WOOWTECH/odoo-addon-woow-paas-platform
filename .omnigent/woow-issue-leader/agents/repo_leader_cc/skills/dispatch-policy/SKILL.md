@@ -22,11 +22,7 @@ description: 派工對照表與 repo alias map 的使用規則：怎麼選 harne
 #    paas-platform → /home/elmo/woow-repos/paas/woow_paas_platform
 
 # 2. 產生 worker config（⛔ 一定要走這支，它有下列五道防線）
-DIR=$(python3 /home/elmo/woow-repos/paas/woow_paas_platform/.omnigent/woow-issue-leader/generate-worker.py \
-        --purpose implement --harness pi \
-        --repo paas-platform --repo-root /home/elmo/woow-repos/paas/woow_paas_platform \
-        --worktree /home/elmo/woow-repos/paas/wt-1032 \
-        --name impl-1032-pi)
+DIR=$(python3 /home/elmo/woow-repos/paas/woow_paas_platform/.omnigent/woow-issue-leader/generate-worker.py --purpose implement --harness pi --repo paas-platform --repo-root /home/elmo/woow-repos/paas/woow_paas_platform --worktree /home/elmo/woow-repos/paas/wt-1032 --name impl-1032-pi)
 
 # 3. 建 session（⛔ 不帶工單）
 #    conversation_id = sys_session_create(config_path=$DIR) 回傳的 conversation_id
@@ -42,8 +38,8 @@ DIR=$(python3 /home/elmo/woow-repos/paas/woow_paas_platform/.omnigent/woow-issue
 session-scoped agent）；會撞的是同一 parent 下的 `sys_session_send` title，依 AGENTS.md
 「一張 issue 一個 title」規則命名。
 
-`sys_session_create` 一步起（帶 message）沒有 task handle；worker 完成後你永遠不會被叫醒
-（#1092 實測 0/1）。只有上面的兩步起法會建立可靠的一跳喚醒線。送完工就結束這一輪，收到
+`sys_session_create` 一步起（帶 message）沒有 task handle；worker 完成後你永遠不會被叫醒。
+只有上面的兩步起法會建立可靠的一跳喚醒線。送完工就結束這一輪，收到
 完成通知才呼叫 `sys_read_inbox`；⛔ 不在派工前讀 inbox。
 
 任何一次 `sys_session_send` 回 `requires parent session inbox`，就只試那一次：立即停手，標

@@ -10,7 +10,7 @@
 - **讀 issue（含留言）**：`tea issues <n> --comments --repo odoo-addons/woow_paas_platform`。
 - **留言**：`tea comment --repo <repo> <n> "<body>"`——**flags 在前、body 最後**，否則會開 editor 掛住；多行 body 用 quoted heredoc 存變數再傳。
 - **關 issue**：`tea issues close <n> --repo <repo>`。合併 PR 時用 description 內 `Closes #<n>`（僅 target＝預設分支 `develop` 時自動生效）；僅參照用 `Refs #<n>`。
-- **label 慣例**：`pending`＝待拍板項，以 issue 為權威載體（列全：`tea issues list --labels pending`）。
+- **label 慣例**：work-state 六選一（見 `triage-labels.md`），待拍板＝`needs-decision`，以 issue 為權威載體（列全：`tea issues list --labels needs-decision`）。
 - **陷阱**：`tea actions runs list` 只列 completed，查 CI 狀態改用 Gitea API `/actions/runs`；tea config 的 token 是 OAuth2、不能拿去直打 REST API。
 
 ## PRs as a request surface
