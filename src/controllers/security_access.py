@@ -264,9 +264,12 @@ class SecurityAccessController(Controller):
         if not access or access.role not in [ROLE_OWNER, ROLE_ADMIN]:
             return {"success": False, "error": _("Insufficient permissions")}
 
-        # sudo() 只為了跨過欄位的 group 限制；上面三道閘門已經確認呼叫者
-        # 是這個 workspace 的 owner/admin 且這個 SA 屬於該 workspace。
-        token = sa.sudo().tunnel_token or ""
+        # sudo() 只為了跨過 `tunnel_token` 欄位的 `groups='base.group_system'`；
+        # 上面三道閘門已經確認呼叫者是這個 workspace 的 owner/admin 且這個 SA
+        # 屬於該 workspace。整個端點**只有這一個** sudo 呼叫點（repo-lint 的
+        # controller-sudo baseline 以此為準）。
+        sa_su = sa.sudo()
+        token = sa_su.tunnel_token or ""
         if not token:
             return {"success": False,
                     "error": _("Tunnel is not provisioned yet")}
@@ -274,8 +277,8 @@ class SecurityAccessController(Controller):
             "success": True,
             "data": {
                 "tunnel_token": token,
-                "tunnel_id": sa.sudo().tunnel_id or "",
-                "tunnel_name": sa.sudo().tunnel_name or "",
+                "tunnel_id": sa_su.tunnel_id or "",
+                "tunnel_name": sa_su.tunnel_name or "",
             },
         }
 
@@ -543,23 +546,28 @@ class SecurityAccessController(Controller):
     def _get_sa_or_error(self, sa_id: int, workspace):
         """回傳屬於 `workspace` 的那個 SA，否則 None。
 
-        #1196：歸屬比對必須走 sudo。SA 的 ir.rule 錨在 workspace 成員關係上，
-        所以讀一個**別的 workspace** 的 SA 會直接拋 AccessError 而不是回空集合。
-        先前這裡用非 sudo 讀 `sa.workspace_id`，於是「自己是某 workspace 的成員、
-        卻傳入別人 workspace 的 sa_id」這條路徑會讓端點噴 500，而不是回結構化拒絕
-        ——本函式的契約（拿不到就回 None）在那個組合下是失效的。
+        #1196：用帶 `workspace_id` 條件的 `search()` 做歸屬比對，**不用 sudo**。
 
-        既有的 cross-user 測試抓不到，是因為它們測的是「完全的非成員」：那種呼叫
-        在前一道 `_get_workspace_or_error` 就被擋下，永遠走不到這裡。
+        歷史：最早的寫法是 `browse(sa_id).exists()` 後讀 `sa.workspace_id` 比對。
+        SA 的 ir.rule 錨在 workspace 成員關係上，**讀取**別人 workspace 的 SA 欄位
+        會拋 AccessError，所以「自己是某 workspace 的成員、卻傳入別人 workspace 的
+        sa_id」會讓端點噴 500，而不是回結構化拒絕——本函式「拿不到就回 None」的
+        契約在那個組合下失效（`test_sa_tunnel_token_portal_1196` 的
+        `test_cross_workspace_sa_denied` 抓到的）。
 
-        比對只讀 `workspace_id` 一個 id、且結果只用來決定放行與否，不外流任何內容；
-        回傳的是**非 sudo** 的記錄集，後續讀寫仍照常受 ir.rule 與 ACL 管轄。
+        第一版修法改走 sudo 讀 workspace_id，但那多了一個 controller sudo 呼叫點
+        （repo-lint controller-sudo baseline 會擋）。其實不需要：ir.rule 對
+        **search** 是「靜默濾掉讀不到的列」而不是拋例外，所以把歸屬條件放進
+        domain，別人的 SA 自然回空集合 ⇒ None；自己 workspace 的 SA 本來就讀得到
+        （成員 read rule），行為與原本相同。這也符合本檔檔頭的原則：visibility
+        路徑不用 sudo。
         """
         SecurityAccess = request.env["woow_paas_platform.security_access"]
-        sa_su = SecurityAccess.sudo().browse(sa_id).exists()
-        if not sa_su or sa_su.workspace_id.id != workspace.id:
-            return None
-        return SecurityAccess.browse(sa_id)
+        sa = SecurityAccess.search([
+            ("id", "=", sa_id),
+            ("workspace_id", "=", workspace.id),
+        ], limit=1)
+        return sa or None
 
     def _list_security_accesses(self, workspace) -> dict[str, Any]:
         SecurityAccess = request.env["woow_paas_platform.security_access"]
