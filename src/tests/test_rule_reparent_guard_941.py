@@ -495,6 +495,12 @@ class TestRuleReparentRpc941(_RuleReparent941Fixture):
             seen.extend(records.ids)
             return original(records, *args, **kwargs)
 
+        # 還原要分兩種：註冊表 class 自己**本來就有**這個屬性才用指派還原，
+        # 否則要 `del`。`original` 是經 MRO 取到的（通常來自定義 class），直接
+        # 指派回去會把真函式永久寫進註冊表 class 的 `__dict__`，遮掉之後所有
+        # 對定義 class 的 patch——#1196 的改名測試就是在 CI 全套裡被這樣遮掉的
+        # （mock 沒被呼叫、真的 sync 跑去打 operator），本機單跑重現不了。
+        had_own = '_sync_access_to_operator' in RouteCls.__dict__
         RouteCls._sync_access_to_operator = _spy
         try:
             # 陽性對照：合法寫 rule_value 會觸發 route_a 的 sync（liveness gate
@@ -509,7 +515,10 @@ class TestRuleReparentRpc941(_RuleReparent941Fixture):
             status, result, landed = self._attempt_reparent(
                 self.rule_a.id, {'policy_id': self.pol_b_route.id}, 'A5')
         finally:
-            RouteCls._sync_access_to_operator = original
+            if had_own:
+                RouteCls._sync_access_to_operator = original
+            else:
+                del RouteCls._sync_access_to_operator
 
         _logger.info('[941][A5] RAW synced_route_ids=%r', seen)
         self._assert_blocked('A5', self.pol_b_route, status, result, landed)

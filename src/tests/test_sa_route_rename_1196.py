@@ -33,15 +33,31 @@ from odoo.addons.woow_paas_platform.models.security_access import (
     _internal_identity as _internal,
 )
 
-_SYNC_ROUTES = ('odoo.addons.woow_paas_platform.models.security_access'
-                '.SecurityAccess._sync_routes_to_operator')
-_SYNC_ACCESS = ('odoo.addons.woow_paas_platform.models.security_access'
-                '.SecurityAccessRoute._sync_access_to_operator')
+# ⚠ 兩個 sync 一律 patch **註冊表上的實際 class**（`type(self.env[model])`），
+# 不要用字串路徑 patch 定義 class（`...security_access.SecurityAccessRoute.xxx`）。
+#
+# 為什麼（CI 全套實際踩到，本機單跑這個 class 時重現不了）：定義 class 的 patch
+# 只有在註冊表 class 自己的 `__dict__` 裡**沒有**同名屬性時才看得到。而同一個
+# process 裡先跑的測試若用「指派」還原它們掛上去的 spy（`RouteCls.x = original`
+# 而不是 `del`），真的函式就會永久留在註冊表 class 的 `__dict__`，把之後所有對
+# 定義 class 的 patch 遮掉——mock 沒被呼叫、真的 sync 跑去打 operator。
+# 那兩處洩漏已一併修掉（#941／#1071 的 spy），但這裡仍用 `type(...)`，讓本檔
+# 不依賴「別的測試有沒有收拾乾淨」。repo 內既有慣例同此（test_cs_access_sync_745）。
+_SA_MODEL = 'woow_paas_platform.security_access'
+_ROUTE_MODEL = 'woow_paas_platform.security_access_route'
 
 
 @tagged('post_install', '-at_install')
 class TestSaRouteRename(TransactionCase):
     """#1196：改名是正式功能，且必須連動 CF。"""
+
+    def _patch_route_sync(self):
+        """DNS／ingress 那條（SecurityAccess._sync_routes_to_operator）。"""
+        return patch.object(type(self.env[_SA_MODEL]), '_sync_routes_to_operator')
+
+    def _patch_access_sync(self):
+        """Access app 那條（SecurityAccessRoute._sync_access_to_operator）。"""
+        return patch.object(type(self.env[_ROUTE_MODEL]), '_sync_access_to_operator')
 
     def setUp(self):
         super().setUp()
@@ -60,9 +76,8 @@ class TestSaRouteRename(TransactionCase):
             'tunnel_name': 'paas-sa-rename-test',
             'state': 'active',
         })
-        with patch(_SYNC_ROUTES), patch(_SYNC_ACCESS):
-            self.route = self.env[
-                'woow_paas_platform.security_access_route'].create({
+        with self._patch_route_sync(), self._patch_access_sync():
+            self.route = self.env[_ROUTE_MODEL].create({
                     'security_access_id': self.sa.id,
                     'subdomain_prefix': 'rename-before-%s' % suffix,
                     'service_url': 'http://localhost:8080',
@@ -76,7 +91,7 @@ class TestSaRouteRename(TransactionCase):
         route_id = self.route.id
         before = self.route.hostname
 
-        with patch(_SYNC_ROUTES), patch(_SYNC_ACCESS):
+        with self._patch_route_sync(), self._patch_access_sync():
             self.route.write({'subdomain_prefix': 'rename-after-%s' % self.suffix})
 
         self.assertEqual(self.route.id, route_id, "改名不該換掉 route id")
@@ -89,7 +104,7 @@ class TestSaRouteRename(TransactionCase):
 
     def test_rename_triggers_route_sync(self):
         """DNS／ingress 的搬移全靠這一次全量推送；沒觸發就等於改了名卻沒搬。"""
-        with patch(_SYNC_ACCESS), patch(_SYNC_ROUTES) as sync:
+        with self._patch_access_sync(), self._patch_route_sync() as sync:
             self.route.write({'subdomain_prefix': 'rename-sync-%s' % self.suffix})
         sync.assert_called()
 
@@ -99,7 +114,7 @@ class TestSaRouteRename(TransactionCase):
         不重推的後果不是「設定過時」，是新網址變成免登入的公開入口，而 UI 仍然
         顯示已保護（靜默 fail-open）。
         """
-        with patch(_SYNC_ROUTES), patch(_SYNC_ACCESS) as sync:
+        with self._patch_route_sync(), self._patch_access_sync() as sync:
             self.route.write({'subdomain_prefix': 'rename-acc-%s' % self.suffix})
         sync.assert_called()
 
@@ -110,7 +125,7 @@ class TestSaRouteRename(TransactionCase):
         舊的那顆變成守著舊 hostname 的孤兒。
         """
         _internal(self.route).write({'access_app_id': 'cf-app-existing'})
-        with patch(_SYNC_ROUTES), patch(_SYNC_ACCESS):
+        with self._patch_route_sync(), self._patch_access_sync():
             self.route.write({
                 'is_protected': True,
                 'subdomain_prefix': 'rename-payload-%s' % self.suffix,
@@ -140,15 +155,14 @@ class TestSaRouteRename(TransactionCase):
         before = self.route.subdomain_prefix
         for bad in ('Has Upper', 'has_underscore', '-leading', 'ab', 'x' * 64):
             with self.assertRaises(UserError, msg=bad):
-                with patch(_SYNC_ROUTES), patch(_SYNC_ACCESS):
+                with self._patch_route_sync(), self._patch_access_sync():
                     self.route.write({'subdomain_prefix': bad})
         self.assertEqual(self.route.subdomain_prefix, before)
 
     def test_duplicate_prefix_still_rejected(self):
         """平台是扁平命名空間、先到先得——改名不能拿來搶別人已占用的名字。"""
-        with patch(_SYNC_ROUTES), patch(_SYNC_ACCESS):
-            other = self.env[
-                'woow_paas_platform.security_access_route'].create({
+        with self._patch_route_sync(), self._patch_access_sync():
+            other = self.env[_ROUTE_MODEL].create({
                     'security_access_id': self.sa.id,
                     'subdomain_prefix': 'rename-taken-%s' % self.suffix,
                     'service_url': 'http://localhost:8080',
@@ -157,14 +171,14 @@ class TestSaRouteRename(TransactionCase):
         # UserError）。mute_logger 壓掉那句預期中的 bad query——留著會讓日誌看起來
         # 像有東西壞了。
         with self.assertRaises(IntegrityError), mute_logger('odoo.sql_db'):
-            with patch(_SYNC_ROUTES), patch(_SYNC_ACCESS):
+            with self._patch_route_sync(), self._patch_access_sync():
                 self.route.write({'subdomain_prefix': other.subdomain_prefix})
                 self.route.flush_recordset()
 
     def test_same_value_write_is_not_a_rename(self):
         """寫入相同值不算改名——不該因此對 operator 多打一輪同步。"""
         same = self.route.subdomain_prefix
-        with patch(_SYNC_ACCESS), patch(_SYNC_ROUTES) as sync:
+        with self._patch_access_sync(), self._patch_route_sync() as sync:
             self.route.write({'subdomain_prefix': same,
                               'service_url': 'http://localhost:8080'})
         # service_url 沒變、prefix 也沒變 ⇒ 這一次 write 沒有任何要搬的東西。
