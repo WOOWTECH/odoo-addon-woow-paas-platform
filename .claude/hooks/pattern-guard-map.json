@@ -112,7 +112,7 @@
       "docs": [
         "docs/tracking/pitfalls/operator-cf-access-delete-202-mock-contract.md — CF Access DELETE 回 202；mock 寫死 200 → live 才爆",
         "docs/decisions/patterns/two-stage-remote-provision-idempotency.md — 先建遠端資源再跑後續的 method 必須 stored-id guard",
-        "extra/paas-operator/tests/integration/README.md — 本地 integration tests 跑法（HELM_BINARY=$(which helm) pytest -m integration）",
+        "extra/paas-operator/tests/integration/README.md — 本地 integration tests 跑法（HELM_BINARY 必須指向 Dockerfile 釘的 helm 3.13.3，⛔ 不可 $(which helm)；細節見 paas-operator-dev skill）",
         "docs/decisions/patterns/ns-quota-hard-limits-limitrange-lockstep.md — 動 ResourceQuota hard map / 新 ns 類型時 LimitRange 必同 PR lock-step",
         "docs/decisions/patterns/spawn-install-values-missed-forward.md — 動上游資料→helm install values 組裝點時的系統性漏轉＋contract test",
         "docs/decisions/patterns/external-resource-env-token-naming.md — operator 側在共用外部系統（CF）產生資源的 env token 命名紀律",

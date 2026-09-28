@@ -1,14 +1,7 @@
 ---
 name: woow:deploy-stg
 description: Deploy a staging paas-odoo instance. Triggers CI to build a staging image, waits for completion, then deploys to a K8s dev sandbox.
-usage: |
-  Use when:
-  (1) User wants to deploy a staging/STG environment for paas-odoo
-  (2) User wants to trigger a CI build and deploy to sandbox
-  (3) User says "deploy stg", "staging", "部署 STG", "建 staging"
-
-  Invoke with: /woow:deploy-stg [addon_ref] [--slug <name>] [--skip-build] [--image <full-image>]
-  Keywords: deploy, stg, staging, CI, build, sandbox, 部署, 測試環境
+when_to_use: 使用者要部署／建置 staging paas-odoo（「deploy stg」「部署 STG」「建 staging」）。/woow:deploy-stg [addon_ref] [--slug <name>] [--skip-build] [--image <full-image>]
 ---
 
 # Deploy Staging (paas-odoo)
@@ -29,12 +22,9 @@ usage: |
 
 ### kubectl context 守衛（#32）
 
-兩件事跟以前不一樣：
-
-1. **本腳本不再改動你的全域 kubectl context**。切換走一份只含 `current-context` 的
-   私有 KUBECONFIG overlay，`~/.kube/config` 全程不動。以前跑完 deploy-stg，shell 的
-   default context 會停在腳本設的值 —— footgun 只是被推遲到下一條指令。
-2. **`--context` 的值受值域白名單管制**，不再只是「非 woow-k3s 就印個警告」。允許值
+1. **本腳本不改動全域 kubectl context**：切換走一份只含 `current-context` 的
+   私有 KUBECONFIG overlay，`~/.kube/config` 全程不動。
+2. **`--context` 的值受值域白名單管制**：允許值
    來自 repo 根 `.sandbox.yml` 的 `allowed_kube_contexts_stg`（目前 `[woow-k3s]`）。
    可用性檢查（存在於 kubeconfig、連得上）驗不出「這個 context 是不是這次任務該用的
    那一個」—— `docker-desktop` 全過，卻是 stg 部署最不該打的叢集（#722）。
@@ -116,52 +106,19 @@ fi
 
 ### Step 1.5: 本機 checkout vs 這次要部署的內容（#723）
 
-**已實作在 `deploy-stg.sh`**（Prerequisites 之後自動跑），不需要手動執行任何指令。
-
-以前這裡只是一段寫在文件裡、算「領先」的 snippet：
-
-```bash
-AHEAD=$(git rev-list --count @{upstream}..HEAD)   # ❌ 只回答一半
-```
-
-領先確實該報 —— 未 push 的 commit 不會被 CI clone 到、不會進 image。但單向的 `A..B`
-天生只算得到領先：**落後時 `AHEAD=0`、整道檢查全綠**。本機比 remote 舊時零訊號，
-部署者於是理所當然地以為「我看到的 code ＝ 部上去的 code」。
-
-2026-08-14 的實例：本機 develop 落後 origin/develop 22 個 commit（manifest `.132` vs
-`.136`），`AHEAD=0` 讓派工者把「develop 與 upstream 同步」寫進工單，再據此推出
-「DB 版號已等於 develop manifest ⇒ post-check 必然綠、綠燈沒有鑑別力」—— 兩句都錯，
-而且是靠 teammate 回報時提一句「git status 顯示 behind 22」才發現的。
-
-現在一次拿兩個方向：
-
-```bash
-git rev-list --left-right --count "@{upstream}...HEAD"   # 輸出 "<behind>\t<ahead>"
-```
-
-行為：
+`deploy-stg.sh` 在 Prerequisites 之後自動比對 `@{upstream}...HEAD` 的**兩個方向**
+（先 `git fetch --quiet origin`，再 `git rev-list --left-right --count`），不需手動執行：
 
 - **領先 > 0** → 警告未 push 的 commit 不會進 image（列最新 10 個；超過會明說截了幾個）
 - **落後 > 0** → 印落後數與**兩邊的 manifest 版號**。remote 版號一律走
-  `git show <upstream>:src/__manifest__.py`，**不讀 working tree** —— 拿本機檔案冒充
-  remote 的值，正是那個錯誤前提的來源
-- **落後不阻擋部署**。CI 本來就吃 remote，image 是對的，壞的只是部署者的預期。
-  這是資訊不是錯誤，做成 gate 只會被繞過
-- 比對前先 `git fetch --quiet origin`：基準若是過期的 remote-tracking ref，「同步」
-  就是假綠 —— 比沒有這道檢查更糟
+  `git show <upstream>:src/__manifest__.py`，**不讀 working tree**
+- **落後不阻擋部署**：CI 吃 remote，image 是對的，壞的只是部署者的預期——別拿本機版號
+  推論 post-check 會是什麼結果。這是資訊不是錯誤，做成 gate 只會被繞過
 - `--image` 覆寫時不比版號，改講「部署內容由那顆 image 決定，與本機 checkout 無關」
-- upstream 不是 `origin/develop` 時額外點出「stg build 一律烤 develop」，免得這段
-  新輸出自己變成下一個錯誤前提
+- upstream 不是 `origin/develop` 時額外點出「stg build 一律烤 develop」
 
-實際輸出（本機落後 27 個 commit）：
-
-```
-Checking local checkout vs remote...
-  ⚠️  本機 develop 落後 origin/develop 27 個 commit。
-      manifest 版號：本機 HEAD = 18.0.1.0.136 ／ origin/develop = 18.0.1.0.139
-      ⇒ 這次部署的內容來自 remote，不是你手上這份。落後**不阻擋部署**（CI 吃 remote，image 是對的）。
-      但別拿本機版號推論 post-check 會是什麼結果 —— 那正是 #723 的來源。
-```
+為什麼要兩個方向：單向的 `git rev-list --count @{upstream}..HEAD` 只算得到領先，本機比
+remote 舊時 `AHEAD=0`、整道檢查全綠、零訊號——部署者會以為「我看到的 code ＝ 部上去的 code」。
 
 ### Step 2: 解析參數
 
@@ -233,9 +190,9 @@ STATUSES=$(tea api -r "${CI_REPO}" "repos/{owner}/{repo}/actions/tasks?limit=10"
 # - (空)         → CI 尚未開始，繼續等待
 ```
 
-> ⚠️ **tag-push 觸發的 run 可能完全不出現在 runs / tasks API**（2026-07-23 實證兩次：
-> 輪詢 14 次皆空，build 實際已在 2 分鐘內完成並 push image）。**API 查無 ≠ 未觸發，
-> 嚴禁據此重推 tag**（會 triple build，2026-07-20 前科）。輪詢多次皆空時改看 ground truth：
+> ⚠️ **tag-push 觸發的 run 可能完全不出現在 runs / tasks API**（實證：輪詢多次皆空，
+> build 其實 2 分鐘內就完成並 push image）。**API 查無 ≠ 未觸發，嚴禁據此重推 tag**
+> （會 triple build）。輪詢多次皆空時改看 ground truth：
 >
 > ```bash
 > # runner 實跑什麼＋是否 Job succeeded（決定性信號）
@@ -248,8 +205,7 @@ STATUSES=$(tea api -r "${CI_REPO}" "repos/{owner}/{repo}/actions/tasks?limit=10"
 > 讓 stg build 長時間 queued（paas-odoo-ci#30）——同樣別重推，先看 runner log 在忙什麼。
 
 > 🔴 **agent harness 直接跑完整 `deploy-stg.sh`（不帶 `--image`，讓它自己建 tag ＋
-> 輪詢 CI）常在 `exit 5` 結束、且極難正確診斷**（2026-08-11 實測：08:12:13 開始，
-> 08:41:31 才發現卡死，白跑 29 分鐘）。三個誤診特徵缺一都會判錯：
+> 輪詢 CI）常在 `exit 5` 結束、且極難正確診斷**（實測白跑近半小時）。三個誤診特徵缺一都會判錯：
 >
 > 1. `deploy-stg.sh` 裡 **grep 不到任何 `exit 5`** ⇒ 不是 script 自己退的
 > 2. `POLL_TIMEOUT=900`（15 分）卻跑了 29 分鐘 ⇒ 也不是 script 自己 timeout（真
@@ -272,27 +228,12 @@ STATUSES=$(tea api -r "${CI_REPO}" "repos/{owner}/{repo}/actions/tasks?limit=10"
 > 變成 `nohup: setsid: No such file or directory` 且整個沒啟動。真 detach 改用
 > `python3 -c "import subprocess; subprocess.Popen([...], start_new_session=True)"`。
 >
-> 🔴 **那段「`condition met` 之後約 5 分鐘完全無輸出」不是在等新 pod，是在空等一顆
-> 永遠不會 Ready 的 pod**（#724，2026-08-15 已修，標的在 plugin repo `cc/woowprd`）。
->
-> `create.sh` 的第一個 `kubectl wait` 選 `app.kubernetes.io/instance=$SLUG` 的**所有**
-> pod，涵蓋 TTL CronJob 跑完留下的 `Succeeded` pod ——「`Succeeded` 的 pod 永遠不會有
-> `Ready=true`」⇒ **必然**跑滿 300s 才逾時，接著印一段長得像失敗的
-> `Pods did not become ready within 300s` / `may not be fully ready`，再由第二個
-> component-scoped 的 wait（只等 odoo）立刻收斂成功。整條路徑**從不失敗，只固定浪費
-> 300 秒**——這就是它兩個多月沒被當 bug 追的原因：它不產生錯誤，只產生延遲，形狀是
-> 「全新 sandbox 第一次順、之後每次都卡」，很容易被歸因成「環境變慢了」。
->
-> 修法：`create.sh` 的 selector 排除帶 Job 標記的 pod。實測對照（`dev-sandbox-stg`，
-> 現場有一顆 `Succeeded` 的 `*-ttl-*` pod）：舊 selector `5:01.25`、新 selector
-> `0.58s`，兩者都對三顆長駐 pod 回 `condition met`。
->
 > ⚠ **plugin PR 合併 ≠ 你本機生效**：`claude plugin update` 只比對 `plugin.json` 的
-> `version`，沒 bump 就冪等 skip（回報成功但 cache 一行沒動）。本機還看得到那 5 分鐘，
-> 就是還在跑舊版 —— 走 `uninstall` + `install`，並驗 `installed_plugins.json` 的
-> `gitCommitSha`。
+> `version`，沒 bump 就冪等 skip（回報成功但 cache 一行沒動）。症狀：create 階段仍固定
+> 卡約 5 分鐘（印 `Pods did not become ready within 300s` 之後才收斂）就是還在跑舊版——
+> 走 `uninstall` + `install`，並驗 `installed_plugins.json` 的 `gitCommitSha`。
 >
-> 仍然成立的部分：`condition met` 那幾行**可能是舊 pod** 的（deployment 策略是
+> 另注意：`condition met` 那幾行**可能是舊 pod** 的（deployment 策略是
 > `Recreate`，該時點舊 pod 還在服務）。要確認新 pod 起來了看 Step 8 的 post-check，
 > 別看這幾行。
 

@@ -1,14 +1,7 @@
 ---
 name: woow:build-operator
 description: Build and publish paas-operator image by creating an operator-v* git tag to trigger CI.
-usage: |
-  Use when:
-  (1) User wants to build/publish a new paas-operator image
-  (2) User wants to release a new version of paas-operator
-  (3) User says "build operator", "發佈 operator", "operator 發版"
-
-  Invoke with: /woow:build-operator [--skip-push] [--dry-run]
-  Keywords: operator, build, publish, release, 發佈, 發版, image
+when_to_use: 使用者要 build／publish／release paas-operator image（「build operator」「發佈 operator」「operator 發版」）。/woow:build-operator [--skip-push] [--dry-run]
 ---
 
 # Build & Publish paas-operator
@@ -102,9 +95,7 @@ CI workflow `.gitea/workflows/build-paas-operator.yml` 偵測到 `operator-v*` t
 **唯一有鑑別力的是 API 的 `path` 欄位。**
 
 ```bash
-TOKEN=$(python3 -c "import re;print(re.search(r'^\s*token:\s*(\S+)',open('$HOME/Library/Application Support/tea/config.yml').read(),re.M).group(1))")
-curl -sS -H "Authorization: bearer $TOKEN" \
-  "https://git-prod.woowtech.io/api/v1/repos/odoo-addons/woow_paas_platform/actions/runs?limit=50" \
+tea api -r odoo-addons/woow_paas_platform "repos/{owner}/{repo}/actions/runs?limit=50" \
 | python3 -c "
 import json,sys
 want = 'refs/tags/operator-v${VERSION}'
@@ -120,8 +111,7 @@ if not hits:
 `tea actions runs list` 的 STATUS 欄對失敗的 run 一樣顯示 `completed`）：
 
 ```bash
-curl -sS -H "Authorization: bearer $TOKEN" \
-  "https://git-prod.woowtech.io/api/v1/repos/odoo-addons/woow_paas_platform/actions/runs/<RUN_ID>/jobs"
+tea api -r odoo-addons/woow_paas_platform "repos/{owner}/{repo}/actions/runs/<RUN_ID>/jobs"
 # 逐 job 看 conclusion == success
 
 tea actions runs logs <RUN_ID> --repo odoo-addons/woow_paas_platform | grep 'digest:'
@@ -194,7 +184,7 @@ build log 每一層印 `#N CACHED`、push 時每一層印 `Layer already exists`
 
 ```bash
 tea actions workflows dispatch build-paas-operator.yml --repo odoo-addons/woow_paas_platform \
-  --login eugene --ref develop --input tag=<YYYYMMDD.HHMM>
+  --login <tea login 名稱> --ref develop --input tag=<YYYYMMDD.HHMM>
 ```
 
 `inputs.tag` 在 `Resolve image tag` 中優先於 git ref，冪等。要把 dispatch 釘在 tag 上時，`--ref`

@@ -26,4 +26,4 @@ Engineering skills 探索 codebase 前，先照本檔規則消費 domain 文件�
 
 ## 已知的 skill 硬編碼
 
-`/improve-codebase-architecture` 的 SKILL.md 把 ADR 位置寫死在 `docs/adr/`，看不到本 repo 的 `docs/decisions/`；用它時在 prompt 明講「ADR 在 `docs/decisions/`（含 `patterns/`、`refactor/`）」。
+`/improve-codebase-architecture` 與 `/domain-modeling`（含其 `ADR-FORMAT.md`）都把 ADR 位置寫死在 `docs/adr/`，後者還會 lazily 建目錄，看不到本 repo 的 `docs/decisions/`；用它們時在 prompt 明講「ADR 在 `docs/decisions/`（含 `patterns/`、`refactor/`），不要建 `docs/adr/`」。

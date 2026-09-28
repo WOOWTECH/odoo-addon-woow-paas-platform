@@ -5,8 +5,6 @@ description: PaaS Operator 本機開發與整合測試 recipe。改動 extra/paa
 
 # PaaS Operator 本機開發與整合測試
 
-（自 CLAUDE.md 遷移，內容不變）
-
 ## PaaS Operator Integration Tests (real K8s)
 
 Catch contract drift that unit-test mocks hide (BUG-7/8/9 class — workload-type, HTTP
@@ -16,24 +14,25 @@ contract, RBAC). **No CI runner** — these must run locally before merging chan
 ```bash
 cd extra/paas-operator
 
-# 首次：抓 operator Dockerfile 釘的同一顆 helm 3.13.3（⚠ 不要用系統 helm，見下表）
+# 首次：抓 operator Dockerfile 釘的同一顆 helm 3.13.3（⚠ 不要用系統 helm，見下表）；平台字串依本機推算
+HELM_PLATFORM="$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')"
 mkdir -p /tmp/helm3 && curl -fsSL \
-  https://get.helm.sh/helm-v3.13.3-darwin-arm64.tar.gz | tar xz -C /tmp/helm3
+  "https://get.helm.sh/helm-v3.13.3-${HELM_PLATFORM}.tar.gz" | tar xz -C /tmp/helm3
 
-# First time only: install deps（用 repo 內 .venv 的 python3.11，系統 3.9 會在 collection 期即炸）
+# First time only: install deps（Python 版本以 Dockerfile 的 python:3.11 為準，用 repo 內 .venv）
 .venv/bin/pip install -r requirements.txt
 
 # 用只含目標 context 的 kubeconfig，免動使用者當前 context
 kubectl config view --raw --minify --flatten --context=docker-desktop > /tmp/kubeconfig-dd.yaml
 
 # Run
-KUBECONFIG=/tmp/kubeconfig-dd.yaml HELM_BINARY=/tmp/helm3/darwin-arm64/helm \
+KUBECONFIG=/tmp/kubeconfig-dd.yaml HELM_BINARY="/tmp/helm3/${HELM_PLATFORM}/helm" \
     .venv/bin/pytest -m integration tests/integration/ -v
 ```
 
 | 變數                           | 為什麼                                                                                                                |
 | ------------------------------ | --------------------------------------------------------------------------------------------------------------------- |
-| `HELM_BINARY`                  | ⚠ **不可用 `$(which helm)`**：Homebrew 的 helm 已是 **v4**（2026-07-28 實測 v4.2.3），而 helm 4 的 `--post-renderer` **改吃 plugin 名、不再吃執行檔路徑**。本 repo 的 #317 PVC-keep post-renderer 傳的正是路徑，且 install/upgrade 兩條路都無條件帶上 → **整套會在第一步 install 就 500**（`Helm installation failed`），看起來像被測程式壞掉、其實是 helm 版本不相容。用 operator Dockerfile 釘的 **3.13.3**（`ARG HELM_VERSION=3.13.3`），不要為了跑測試把系統 helm 降版 |
+| `HELM_BINARY`                  | ⚠ **不可用 `$(which helm)`**：Homebrew 的 helm 已是 **v4**，而 helm 4 的 `--post-renderer` **改吃 plugin 名、不再吃執行檔路徑**。本 repo 的 #317 PVC-keep post-renderer 傳的正是路徑，且 install/upgrade 兩條路都無條件帶上 → **整套會在第一步 install 就 500**（`Helm installation failed`），看起來像被測程式壞掉、其實是 helm 版本不相容。用 operator Dockerfile 釘的 **3.13.3**（`ARG HELM_VERSION=3.13.3`），不要為了跑測試把系統 helm 降版 |
 | `API_KEY` / `NAMESPACE_PREFIX` | 不用設，`app_client` fixture 自動 set（`"integration-test-key"` + `"paas-ws-test-op-"`）                                                  |
 | `REQUIRE_KUBEVIRT`             | 設 `1` 時，KubeVirt/CDI 相關測試由「無 CRD 就 skip」升級為 **fail**。驗收 VM 型 workload（#423）時必設，否則 skip 會被誤讀成通過 |
 

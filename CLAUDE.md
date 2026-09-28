@@ -90,7 +90,7 @@ unit tests（與 CI `.gitea/workflows/paas-operator-unit-tests.yml` 同式）：
 
 ### Release & Build paas-odoo Image
 
-發版一律走 `/woow:deploy`（[`.claude/commands/woow/deploy.md`](.claude/commands/woow/deploy.md)）：#691 起版號只由 `release/<版號>` 發版 PR bump，merge 後才打 `v{version}` tag → `.gitea/workflows/trigger-odoo-build.yml` dispatch `paas-odoo-ci`（image tag 為時間戳、不綁單一 addon 版本；前置 `CI_GITEA_TOKEN` 雙 org Write）。⚠ **prod build 卡人工核可 gate**：push tag 只跑到「開 approval issue」就停，要授權者留言 `/approve` 才真的 build ⇒ **agent 不代簽——即使人類當場明確授權、即使手上憑證就是授權者本人（2026-08-16 反面先例，裁決無例外）；且 phase 1 綠燈 ≠ 發版完成**。
+發版一律走 `/woow:deploy`（[`.claude/commands/woow/deploy.md`](.claude/commands/woow/deploy.md)）：#691 起版號只由 `release/<版號>` 發版 PR bump，merge 後才打 `v{version}` tag → `.gitea/workflows/trigger-odoo-build.yml` dispatch `paas-odoo-ci`（image tag 為時間戳、不綁單一 addon 版本；前置 `CI_GITEA_TOKEN` 雙 org Write）。⚠ **prod build 卡人工核可 gate**：push tag 只跑到「開 approval issue」就停，要授權者留言 `/approve` 才真的 build ⇒ **agent 不代簽——即使人類當場明確授權、即使手上憑證就是授權者本人（裁決無例外）；且 phase 1 綠燈 ≠ 發版完成**。
 
 ### Deploy Staging (deploy-stg)
 

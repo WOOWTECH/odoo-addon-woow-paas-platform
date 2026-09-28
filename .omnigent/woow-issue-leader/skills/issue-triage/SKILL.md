@@ -15,7 +15,7 @@ description: issue 進來時的分流：值不值得做、拆成什麼工單、�
 - 資訊夠不夠拆成可驗收的工單？不夠就派 `repo_leader` 帶 `explore`／`researcher` 補齊，
   ⛔ 不要拿模糊需求直接派 `implement`。
 - ⛔ **你自己不產生任何 worker**（tracker／scout／researcher 也不例外）——worker 一律由
-  `repo_leader` 在執行期產生；你只分配 issue、標 label、結束回合（2026-09-14 裁決）。
+  `repo_leader` 在執行期產生；你只分配 issue、標 label、結束回合。
 
 ## 2. 拆成可驗收的工單
 
@@ -53,8 +53,7 @@ work-state label **六選一**，同一張 open issue 同時只掛一個。agent
 派工 `repo_leader_*` 之後，標 `agent-status:in-progress` ＋ `agent-context:*`：
 
 ```bash
-tea issues edit <n> --add-labels agent-status:in-progress,agent-context:<context> \
-  --login git-prod.woowtech.io --repo <owner/repo> < /dev/null
+tea issues edit <n> --add-labels agent-status:in-progress,agent-context:<context> --login git-prod.woowtech.io --repo <owner/repo> < /dev/null
 ```
 
 然後**結束回合**——責任結束，不等結果。之後的 `agent-status:blocked`／
