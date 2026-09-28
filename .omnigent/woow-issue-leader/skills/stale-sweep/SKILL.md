@@ -8,7 +8,7 @@ description: 按需的 stale 掃描：找出 agent-status:in-progress 且 N 小�
 ## 什麼時候用
 
 **只在人明確叫你掃的時候**（例如「掃一下 stale」「哪些 issue 卡住了」）。⛔ 不要排程、不要
-輪詢、不要自己起 timer——喚醒只保證一跳，掃描的觸發者永遠是人（2026-09-14 裁決）。
+輪詢、不要自己起 timer——喚醒只保證一跳，掃描的觸發者永遠是人。
 
 判準：掛 `agent-status:in-progress`、**N 小時**內沒有任何 Gitea 活動（issue 的 `updated`
 時間），而且沒掛 `needs-decision`／`needs-info`（那兩種是在等人，不是死了）。N 預設
@@ -35,7 +35,7 @@ description: 按需的 stale 掃描：找出 agent-status:in-progress 且 N 小�
 
    ```bash
    tea issues edit <n> --add-labels agent-status:blocked --remove-labels agent-status:in-progress --login git-prod.woowtech.io --repo <owner/repo> < /dev/null
-   tea comment <n> "stale-sweep：<掃描時間> 起 <N> 小時無活動且無 needs-*，疑似 worker 靜默死亡，改 blocked。人排除後改回 in-progress，並叫 issue-leader 續談同 title 的 repo_leader。" --login git-prod.woowtech.io --repo <owner/repo> < /dev/null
+   tea comment --login git-prod.woowtech.io --repo <owner/repo> <n> "stale-sweep：<掃描時間> 起 <N> 小時無活動且無 needs-*，疑似 worker 靜默死亡，改 blocked。人排除後改回 in-progress，並叫 issue-leader 續談同 title 的 repo_leader。" < /dev/null
    ```
 
 4. 寫入後逐張用 `tea issues <n> --comments` 重讀，確認 label 與留言都已落地；不能只信 write

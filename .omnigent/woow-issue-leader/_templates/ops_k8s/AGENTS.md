@@ -120,8 +120,8 @@ worktree 時它會自動載入。一次性繞過：指令前綴 `KUBECTL_NS_GUAR
 prod build 卡人工核可：push tag 只會跑到「開 approval issue」就停，要授權者留言
 `/approve` 才真的 build。
 
-**⛔ 你不代簽——即使人類當場明確授權、即使手上憑證就是授權者本人（2026-08-16 反面先
-例，裁決無例外）。且 phase 1 綠燈 ≠ 發版完成。** 機器守線 **P-approve** 會 DENY 送出
+**⛔ 你不代簽——即使人類當場明確授權、即使手上憑證就是授權者本人，裁決無例外。
+且 phase 1 綠燈 ≠ 發版完成。** 機器守線 **P-approve** 會 DENY 送出
 `/approve` 留言的指令，**P-tag** 會 DENY `git push` 推 tag。
 
 <!-- include: iron-rules -->

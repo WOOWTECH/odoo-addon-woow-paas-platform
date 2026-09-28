@@ -75,9 +75,7 @@ build。`--skip-build` 只是「tag 已在、只等 CI」的變體，一樣進�
    會佔住它，這時同樣**別重推**。
 3. **用 `--image` 收尾**（這條路徑不經過輪詢迴圈）：
    ```bash
-   bash <repo root>/.claude/skills/deploy-stg/scripts/deploy-stg.sh \
-     --image jcr-prod.woowtech.io/woow-paas-docker-local/paas-odoo-stg:<YYYYMMDD.HHMM> \
-     --slug <slug> --context woow-k3s
+   bash <repo root>/.claude/skills/deploy-stg/scripts/deploy-stg.sh --image jcr-prod.woowtech.io/woow-paas-docker-local/paas-odoo-stg:<YYYYMMDD.HHMM> --slug <slug> --context woow-k3s
    ```
    image tag ＝ git tag 去掉 `stg-` 前綴。部署到哪個 sandbox（`dev-sandbox-<slug>`）、
    addon 版號 post-check 的結果，連同你實際跑的三段指令與輸出一起寫進回報。

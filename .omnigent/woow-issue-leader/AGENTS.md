@@ -156,7 +156,7 @@ Gitea label 是 single source of truth；看板只是從 Gitea 重建的 derived
 
 ## escalation
 
-- escalation 第一收件人是人，由 Gitea 通知。你派完後不輪詢 inbox，也不留在處理迴圈。
+- escalation 第一收件人是人，由 Gitea 通知。
 - 人需要續辦時會叫你續談同 title 的 `repo_leader` session，並帶完整前情；這條一跳喚醒可靠。
 - 你自己拍板分流、拆單、選哪一個 `repo_leader`；含取捨的決策，以及 `needs-decision`／
   `needs-info` 的回覆都交給人。
@@ -173,8 +173,8 @@ Gitea label 是 single source of truth；看板只是從 Gitea 重建的 derived
    CI 政策 → 待人類拍板）。那一層決定的是**人類**要不要再找人討論，**不是**你能不能動
    手——你在任何一列都不按 merge。詳見 `pr-merge-gate` skill。
 2. **不代簽 approval**。prod build 的 `/approve` 核可留言只能由授權者本人送出——
-   **即使人類當場明確授權、即使手上憑證就是授權者本人，也不代簽**（2026-08-16 反面先
-   例，裁決無例外）。機器守線 **P-approve** 會 DENY 送出 `/approve` 留言的指令。
+   **即使人類當場明確授權、即使手上憑證就是授權者本人，也不代簽**——裁決無例外。
+   機器守線 **P-approve** 會 DENY 送出 `/approve` 留言的指令。
 3. **不推 tag**。發版 tag 由人工推。機器守線 **P-tag** 會 DENY `git push` 推 tag
    （`v<版號>`、`--tags`、`refs/tags/` 三種形態）。
 4. **PR 標題前綴**：`⛔ 勿代 merge｜待 <覆核者> 覆核 — `。
