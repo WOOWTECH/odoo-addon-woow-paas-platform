@@ -91,8 +91,8 @@ def test_status_keeps_pending_and_terminating_pod_metadata(
         ))
         assert pods["old-odoo"]["deletion_timestamp"] == live_old["metadata"]["deletionTimestamp"]
     finally:
-        # 只移除本測試加的 finalizer；以 UID／resourceVersion 避免改到替代 Pod，
-        # 並保留其他 controller 加的 finalizer，讓 namespace teardown 可安全收尾。
+        # 只移除本測試加的 finalizer；核對 UID 與清單以免改到替代 Pod／其他
+        # finalizer。不鎖整個 resourceVersion，避免 kubelet 終止更新讓清理誤失敗。
         if old_uid is not None:
             old = json.loads(_kubectl("get", "pod", "old-odoo", "-n", test_namespace, "-o", "json"))
             assert old["metadata"]["uid"] == old_uid
@@ -101,8 +101,7 @@ def test_status_keeps_pending_and_terminating_pod_metadata(
                 patch_file = tmp_path / "remove-finalizer.json"
                 patch_file.write_text(json.dumps([
                     {"op": "test", "path": "/metadata/uid", "value": old_uid},
-                    {"op": "test", "path": "/metadata/resourceVersion",
-                     "value": old["metadata"]["resourceVersion"]},
+                    {"op": "test", "path": "/metadata/finalizers", "value": finalizers},
                     {"op": "remove", "path": f"/metadata/finalizers/{finalizers.index(_FINALIZER)}"},
                 ]))
                 _kubectl("patch", "pod", "old-odoo", "-n", test_namespace,
