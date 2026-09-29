@@ -38,6 +38,7 @@ const ROUTE_HEALTH_LABELS = {
   not_routed: "Not live yet",
   dns_missing: "DNS not found",
   origin_error: "Origin error",
+  proxy_no_site: "Proxy has no site",
   timeout: "No response",
   unknown: "Unknown",
 };
@@ -50,6 +51,7 @@ const ROUTE_HEALTH_HINTS = {
   not_routed: "The hostname does not point to this tunnel yet. Right after creating or renaming a route this can take up to a minute — check again shortly.",
   dns_missing: "Public DNS has no record for this hostname yet. Wait a minute and check again.",
   origin_error: "The request reached your machine, but your reverse proxy or service returned an error. Check that the proxy has this hostname and the service is running.",
+  proxy_no_site: "The request reached your machine, but your reverse proxy answered with its default page — it has no site for this hostname. Add this hostname in your proxy (for example Nginx Proxy Manager). This is expected right after renaming a route.",
   timeout: "Your service did not answer in time. Check that it is running and not overloaded.",
   unknown: "The check could not complete. Try again in a moment.",
 };

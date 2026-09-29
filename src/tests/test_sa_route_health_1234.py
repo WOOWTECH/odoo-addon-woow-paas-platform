@@ -89,6 +89,17 @@ class TestRouteProbeClassify(TransactionCase):
         self.assertEqual(
             self._status(500, {'Server': 'nginx'}, 'error code: 1033'), 'origin_error')
 
+    def test_proxy_default_page_is_proxy_no_site(self):
+        """2026-09-29 實測：改名後 NPM 回「Default Site」200——路通了，服務沒被打到。"""
+        body = '<!DOCTYPE html><html><head><title>Default Site</title></head></html>'
+        self.assertEqual(self._status(200, {'Server': 'cloudflare'}, body), 'proxy_no_site')
+        self.assertEqual(self._status(200, {}, '<title>Welcome to nginx!</title>'), 'proxy_no_site')
+
+    def test_proxy_admin_ui_is_not_mistaken_for_default_page(self):
+        """NPM 自己的管理介面（woowsa-npm 實際標題）不是預設頁。"""
+        self.assertEqual(
+            self._status(200, {}, '<title>Nginx Proxy Manager</title>'), 'ok')
+
     def test_healthy_flag(self):
         self.assertTrue(route_probe.classify(200, {}, '', False)['healthy'])
         self.assertTrue(route_probe.classify(
@@ -124,6 +135,41 @@ class TestRouteProbeClassify(TransactionCase):
         self.assertEqual(res['t.woowtech.io']['status'], 'timeout')
         self.assertEqual(res['d.woowtech.io']['status'], 'dns_missing')
         self.assertEqual(res['x.woowtech.io']['status'], 'unknown')
+
+    # ---- DoH：繞過叢集 DNS 的否定快取 ------------------------------------- #
+
+    def _doh(self, payload):
+        resp = type('R', (), {'json': lambda self: payload})()
+        return patch.object(route_probe.requests, 'get', return_value=resp)
+
+    def test_doh_answer_returns_edge_ip(self):
+        with self._doh({'Status': 0, 'Answer': [
+                {'type': 5, 'data': 'x.cdn.'}, {'type': 1, 'data': '104.26.3.39'}]}):
+            self.assertEqual(route_probe._doh_resolve('a.woowtech.io'), '104.26.3.39')
+
+    def test_doh_nxdomain_is_authoritative_missing(self):
+        """剛改名、叢集 resolver 還快取著 NXDOMAIN 時，DoH 的答案才是準的。"""
+        for payload in ({'Status': 3}, {'Status': 0, 'Answer': []}):
+            with self._doh(payload), self.assertRaises(route_probe._DnsMissing):
+                route_probe._doh_resolve('a.woowtech.io')
+
+    def test_doh_failure_falls_back_to_system_dns(self):
+        with patch.object(route_probe.requests, 'get', side_effect=OSError('down')):
+            self.assertIsNone(route_probe._doh_resolve('a.woowtech.io'))
+
+    def test_fetch_connects_to_edge_ip_when_doh_answers(self):
+        with patch.object(route_probe, '_doh_resolve', return_value='104.26.3.39'), \
+                patch.object(route_probe, '_fetch_via_ip', return_value=(200, {}, '')) as via_ip, \
+                patch.object(route_probe.requests, 'get') as plain_get:
+            route_probe._fetch('a.woowtech.io')
+        via_ip.assert_called_once_with('a.woowtech.io', '104.26.3.39')
+        plain_get.assert_not_called()
+
+    def test_dns_missing_from_doh_is_classified(self):
+        with patch.object(route_probe, '_doh_resolve',
+                          side_effect=route_probe._DnsMissing('a.woowtech.io')):
+            res = route_probe.probe_routes([('a.woowtech.io', False)], force=True)
+        self.assertEqual(res['a.woowtech.io']['status'], 'dns_missing')
 
     def test_cache_and_force(self):
         with patch.object(route_probe, '_fetch', return_value=(200, {}, '')) as fetch:
