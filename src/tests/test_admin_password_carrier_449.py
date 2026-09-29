@@ -25,6 +25,9 @@ from odoo.tests.common import TransactionCase
 from ..models.cloud_service import _internal_provision
 
 MCP_SERVER_CHART_SUFFIX = '/mcp-server'
+# app 在第一次開機把平台給的密碼寫進自己的資料庫、之後自己保管（平台改 Secret 不改
+# 密碼）的 chart 家族 → app_managed（平台只給初始密碼、不能重設）。
+APP_MANAGED_CHART_SUFFIXES = ('/omnigent',)
 
 
 class TestAdminPasswordCarrierSeed(TransactionCase):
@@ -81,7 +84,7 @@ class TestAdminPasswordCarrierSeed(TransactionCase):
                 '%s 走 mcp-server chart，密碼落在 PVC 的 config.json' % xmlid)
 
     def test_carrier_matches_chart_family(self):
-        """結構不變式：``config_json`` ⟺ chart 是 mcp-server。
+        """結構不變式：``config_json`` ⟺ chart 是 mcp-server；``app_managed`` ⟺ app 自管密碼的 chart（omnigent）。
 
         刻意不硬編「幾筆 config_json、幾筆 helm_secret」——那種計數斷言在新增
         template 時只會被 bump 過去（seed-topology-invariants 的教訓）。這裡守的
@@ -90,9 +93,13 @@ class TestAdminPasswordCarrierSeed(TransactionCase):
         而單純多一筆 template 不會。
         """
         for template in self._templates_with_admin_gui():
-            is_mcp_server_chart = (template.helm_chart_name or '').endswith(
-                MCP_SERVER_CHART_SUFFIX)
-            expected = 'config_json' if is_mcp_server_chart else 'helm_secret'
+            chart = template.helm_chart_name or ''
+            if chart.endswith(MCP_SERVER_CHART_SUFFIX):
+                expected = 'config_json'
+            elif chart.endswith(APP_MANAGED_CHART_SUFFIXES):
+                expected = 'app_managed'
+            else:
+                expected = 'helm_secret'
             self.assertEqual(
                 template.admin_password_carrier, expected,
                 'template %s（chart=%s）的載體應為 %s。判準＝chart 有沒有把 '
@@ -104,7 +111,8 @@ class TestAdminPasswordCarrierSeed(TransactionCase):
         """required 欄位：載體不可空。空值＝operator 端分流失去判準。"""
         for template in self._templates_with_admin_gui():
             self.assertIn(
-                template.admin_password_carrier, ('config_json', 'helm_secret'),
+                template.admin_password_carrier,
+                ('config_json', 'helm_secret', 'app_managed'),
                 'template %s 沒有有效載體' % template.slug)
 
     def test_default_is_config_json(self):

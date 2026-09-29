@@ -1122,7 +1122,9 @@ class CloudService(models.Model):
         # 自己的資料庫。照 helm_secret 走 reset 會 helm upgrade 成功、密碼卻沒變
         # （假裝成功），所以在碰 operator 之前就拒絕。controller 的能力 gate 讀同一個
         # 欄位，這裡是第二道防線（本 method 還有別的 caller 時也守得住）。
-        if not self.template_id.admin_reset_supported:
+        # 只擋「有供給、但不能重設」：has_admin_gui=False 的授權一直由 controller
+        # 負責（model 端既有行為不變，縱深測試直接呼叫本 method 驗 state 守衛）。
+        if self.template_id.has_admin_gui and not self.template_id.admin_reset_supported:
             raise UserError(
                 _("This service manages its own admin password. "
                   "Change it inside the app.")
