@@ -62,7 +62,21 @@ export class OneTimeCredentialsModal extends Component {
  */
 export function buildOneTimeCredentials(data) {
     const credentials = [];
-    if (data && data.admin_password) {
+    // 帳號可由租戶自設的模板（後端 admin_username 非空，例 open-design）：帳號不一定是
+    // admin，連同帳號一起交付，並用那個模板的入口（app ＋ web console）說明。其餘模板
+    // 後端回 null，沿用下方原本的文案。
+    if (data && data.admin_password && data.admin_username) {
+        credentials.push({
+            label: _t("Username"),
+            value: data.admin_username,
+            hint: _t("Signs in to the app and the web console, together with the password below."),
+        });
+        credentials.push({
+            label: _t("Admin Password"),
+            value: data.admin_password,
+            hint: _t("You can change the username and password later from Admin Credentials on the service page."),
+        });
+    } else if (data && data.admin_password) {
         credentials.push({
             label: _t("Admin Password"),
             value: data.admin_password,

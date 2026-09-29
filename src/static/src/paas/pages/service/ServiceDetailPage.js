@@ -17,6 +17,7 @@ import { EditDomainModal } from "../../components/modal/EditDomainModal";
 import { ChangePlanModal } from "../../components/modal/ChangePlanModal";
 import { CreateProjectModal } from "../../components/modal/CreateProjectModal";
 import { OneTimeCredentialsModal, buildOneTimeCredentials } from "../../components/modal/OneTimeCredentialsModal";
+import { AdminCredentialsModal } from "../../components/modal/AdminCredentialsModal";
 import { cloudService } from "../../services/cloud_service";
 import { supportService } from "../../services/support_service";
 import { breadcrumbService } from "../../services/breadcrumb_service";
@@ -57,6 +58,7 @@ export class ServiceDetailPage extends Component {
         ChangePlanModal,
         CreateProjectModal,
         OneTimeCredentialsModal,
+        AdminCredentialsModal,
     };
     static props = {
         workspaceId: { type: Number },
@@ -82,6 +84,7 @@ export class ServiceDetailPage extends Component {
             // API Key ＋ 完整 gateway 位址）。null＝不開視窗。
             oneTimeCredentials: null,
             resetPasswordError: null,
+            showAdminCredentialsModal: false,
         });
         this.router = useState(router);
         this.pollingInterval = null;
@@ -205,6 +208,15 @@ export class ServiceDetailPage extends Component {
      */
     get hasGateway() {
         return this.service?.has_gateway === true;
+    }
+
+    /**
+     * 「租戶自設帳密」的顯示判準：鏡射 payload 的 template.admin_username_editable
+     * （＝後端 template.admin_username_helm_path，與 admin-credentials endpoint 的
+     * 能力 gate 同一個欄位）。fail-closed：欄位缺席一律 false，退回原本的 Reset 按鈕。
+     */
+    get canEditAdminCredentials() {
+        return this.service?.template?.admin_username_editable === true;
     }
 
     get isResetAdminPasswordLoading() {
@@ -395,6 +407,24 @@ export class ServiceDetailPage extends Component {
 
     closeCredentials() {
         this.state.oneTimeCredentials = null;
+    }
+
+    showAdminCredentials() {
+        this.state.resetPasswordError = null;
+        this.state.showAdminCredentialsModal = true;
+    }
+
+    hideAdminCredentials() {
+        this.state.showAdminCredentialsModal = false;
+    }
+
+    async onAdminCredentialsSaved(data) {
+        this.state.showAdminCredentialsModal = false;
+        // 平台產生的密碼（選「隨機產生」）才有明文要一次性交付；租戶自設的後端不回傳。
+        if (data && data.admin_password) {
+            this.state.oneTimeCredentials = buildOneTimeCredentials(data);
+        }
+        await this.loadService();
     }
 
     async handleConfigSave(values) {

@@ -1,6 +1,7 @@
 import contextlib
 import json
 import logging
+import re
 import secrets
 import uuid
 
@@ -32,6 +33,16 @@ _CF_REAP_MODEL = 'woow_paas_platform.cf_access_policy_reap'
 #: 那次 append 的結果。兩個 sed 的冪等判準是 `grep -q "selected-addons"`，所以路徑必須含
 #: `selected-addons` 這段（守衛：test_helm_values_addon_builder_1052）。
 ODOO_SELECTED_ADDONS_PATH = '/opt/bitnami/odoo/selected-addons'
+
+#: 租戶自設的 admin 帳號（template.admin_username_helm_path 有值的模板）。與 chart
+#: 端 `open-design.basicAuthUsername` 同一條規則：帳號被原樣寫進 htpasswd
+#: （`user:{PLAIN}pw`，nginx 以第一個 ':' 切分）與 ttyd 的 `-c user:pw`，含 ':' 或空白
+#: 會把帳密切成另一組。平台先擋，給租戶看得懂的訊息；chart 端 fail render 是第二道。
+TENANT_ADMIN_USERNAME_RE = re.compile(r'^[A-Za-z0-9._@-]{1,64}$')
+#: 租戶自設的 admin 密碼：12–128 個可見 ASCII（不含空白）。下限對齊平台鑄造密碼的
+#: 強度級距；排除空白與控制字元是因為密碼會進 htpasswd 單行與 ttyd argv，前後空白
+#: 在不同元件會被不同地 trim，換行會長出第二行 htpasswd。
+TENANT_ADMIN_PASSWORD_RE = re.compile(r'^[\x21-\x7e]{12,128}$')
 
 
 # ------------------------------------------------------------------------- #
@@ -1065,8 +1076,16 @@ class CloudService(models.Model):
     # #357 — admin_password 重置
     # ------------------------------------------------------------------ #
 
-    def _reset_admin_password(self):
+    def _reset_admin_password(self, new_password=None, new_username=None):
         """#357 外科式 reset mcp admin password（保留 GUI 自填 connection/tools）。
+
+        ``new_password`` / ``new_username``（租戶自設憑證）：只開放給
+        ``template.admin_username_helm_path`` 有值的模板（帳密是 chart Secret 管的
+        一組 basic-auth，例 open-design 的 nginx auth-proxy 與 ttyd）。兩者都不給
+        ＝原本的 Reset（平台鑄造新密碼）。給了密碼就用租戶的值、不鑄造；給了帳號就
+        寫進 values 的那個路徑。兩者走**同一條** helm upgrade ＋ rollout restart，
+        提交點與記帳語意完全不變（見下方 C11′ 與 #525 B3 註解）——帳號與密碼是同一
+        個事實（叢集生效的登入憑證），所以一起在「憑證落庫」那段 savepoint 落 DB。
 
         密碼只短暫存在記憶體與 ``cloud_service_secret``；不寫回 ``helm_values``。
         先用 current user 的存取規則驗證 service，再 sudo 讀寫該 service 的 secret。
@@ -1138,8 +1157,20 @@ class CloudService(models.Model):
         # 舊 secret 缺席（legacy 服務建立時平台尚未供給 admin_password）不是錯誤——
         # 這正是租戶要 reset 的情境。_set_admin_password_secret 會 create-or-write。
 
+        username_path = self.template_id.admin_username_helm_path
+        if (new_password is not None or new_username is not None) and not username_path:
+            raise UserError(
+                _("This service's admin credentials can only be reset, not set.")
+            )
+        if new_username is not None:
+            self._validate_tenant_admin_username(new_username)
+        if new_password is not None:
+            self._validate_tenant_admin_password(new_password)
+
         # C20: the single generation point — never inline token_urlsafe here.
-        new_password = self._generate_admin_password()
+        # A tenant-supplied password is used as-is (validated above).
+        if new_password is None:
+            new_password = self._generate_admin_password()
         # #530：Reset 一次換發兩把憑證。它是租戶唯一的換發入口，也是**存量服務取得
         # gateway key 的唯一路徑**（刻意不做從叢集回讀的 backfill——那會違反「憑證
         # 權威來源在平台端」的不變式，且要新增 operator 端點）。只換一把的話 UI 那句
@@ -1155,6 +1186,10 @@ class CloudService(models.Model):
         # chart 升版；改 reset_values 語意讓 chart 新增預設補位，不再以
         # --reuse-values 沿用舊 coalesced values（同一 bug class，見 #411）。
         values = self._assemble_deploy_values()['values']
+        if new_username is not None:
+            # 只改送給 operator 的這份；helm_values 等 2xx 之後才落庫（2xx 前失敗
+            # 叢集仍是舊帳號，DB 也必須還是舊帳號）。
+            self._set_values_path(values, username_path, new_username)
         operator_sensitive_values = self._build_mcp_sensitive_values(
             new_password, gateway_api_key=new_gateway_api_key,
         )
@@ -1279,6 +1314,12 @@ class CloudService(models.Model):
                 self._set_admin_password_secret(
                     new_password, gateway_api_key=new_gateway_api_key,
                 )
+                if new_username is not None:
+                    # 帳號與密碼同屬「叢集已生效的登入憑證」這個事實：同一個回捲
+                    # 單位。不落庫的話下一次 redeploy 會用舊帳號覆寫叢集。
+                    helm_values = self._helm_values_dict()
+                    self._set_values_path(helm_values, username_path, new_username)
+                    self._apply_helm_values(helm_values)
         except OperationalError:
             # #518：並發／連線類 DB 例外（SerializationFailure 40001 等）必須傳
             # 出去讓 Odoo 的 `retrying()` 看見；此刻交易已 aborted，吞掉只會讓
@@ -2069,6 +2110,70 @@ class CloudService(models.Model):
         兩種強度，而弱的那把不會有任何測試盯著）。
         """
         return secrets.token_urlsafe(24)
+
+    @staticmethod
+    def _validate_tenant_admin_username(username):
+        """租戶自設帳號的格式檢查（規則見 ``TENANT_ADMIN_USERNAME_RE``）。"""
+        if not isinstance(username, str) or not TENANT_ADMIN_USERNAME_RE.match(username):
+            raise ValidationError(
+                _("Username must be 1-64 characters: letters, digits, and . _ @ -")
+            )
+
+    @staticmethod
+    def _validate_tenant_admin_password(password):
+        """租戶自設密碼的格式檢查（規則見 ``TENANT_ADMIN_PASSWORD_RE``）。"""
+        if not isinstance(password, str) or not TENANT_ADMIN_PASSWORD_RE.match(password):
+            raise ValidationError(
+                _("Password must be 12-128 characters, using letters, digits and "
+                  "symbols only (no spaces).")
+            )
+
+    @staticmethod
+    def _set_values_path(values, path, value):
+        """把 ``value`` 寫進巢狀 dict 的點分式 ``path``（中間層不存在就建）。"""
+        keys = path.split('.')
+        node = values
+        for key in keys[:-1]:
+            child = node.get(key)
+            if not isinstance(child, dict):
+                child = node[key] = {}
+            node = child
+        node[keys[-1]] = value
+
+    @staticmethod
+    def _get_values_path(values, path):
+        """讀巢狀 dict 的點分式 ``path``；任一層缺席回 None。"""
+        node = values
+        for key in path.split('.'):
+            if not isinstance(node, dict) or key not in node:
+                return None
+            node = node[key]
+        return node
+
+    def _admin_username(self):
+        """目前生效的 admin 帳號；模板不開放改帳號（無 admin_username_helm_path）回 None。
+
+        讀序＝部署實際用的順序：服務自己的 helm_values（建立時已 merge template 預設、
+        之後租戶改過就是新值）→ template 預設。都沒有時回 None，不自己猜 chart 預設。
+        帳號不是敏感值（密碼才是），可以進 payload 給前端預填。
+        """
+        self.ensure_one()
+        path = self.template_id.admin_username_helm_path
+        if not path:
+            return None
+        # 本方法會被服務列表的序列化呼叫：一台服務的壞 JSON 不得拖垮整個列表，
+        # 讀不到就當沒有（前端只是少一個預填值）。
+        try:
+            value = self._get_values_path(self._helm_values_dict(), path)
+        except ValueError:
+            value = None
+        if not value:
+            try:
+                defaults = json.loads(self.template_id.helm_default_values or '{}')
+            except ValueError:
+                defaults = {}
+            value = self._get_values_path(defaults, path)
+        return value if isinstance(value, str) and value else None
 
     @staticmethod
     def _build_gateway_public_url(external_path, base_url):

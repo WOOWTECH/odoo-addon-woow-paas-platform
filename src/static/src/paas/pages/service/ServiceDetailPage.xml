@@ -89,13 +89,22 @@
                             Skip Trial
                         </WoowButton>
                         <WoowButton
-                            t-if="hasAdminGui"
+                            t-if="hasAdminGui and !canEditAdminCredentials"
                             variant="'secondary'"
                             size="'md'"
                             onClick.bind="resetAdminPassword"
                             disabled="!canPerformActions or isResetAdminPasswordLoading">
                             <WoowIcon name="'key'" size="18"/>
                             Reset Admin Password
+                        </WoowButton>
+                        <WoowButton
+                            t-if="hasAdminGui and canEditAdminCredentials"
+                            variant="'secondary'"
+                            size="'md'"
+                            onClick.bind="showAdminCredentials"
+                            disabled="!canPerformActions or isResetAdminPasswordLoading">
+                            <WoowIcon name="'key'" size="18"/>
+                            Admin Credentials
                         </WoowButton>
                         <WoowButton
                             variant="'secondary'"
@@ -282,6 +291,14 @@
                 cloudServiceName="service and service.name"
                 onClose.bind="hideCreateProject"
                 onCreated.bind="onProjectCreated"/>
+
+            <AdminCredentialsModal
+                t-if="state.showAdminCredentialsModal"
+                workspaceId="props.workspaceId"
+                serviceId="props.serviceId"
+                currentUsername="service and service.admin_username"
+                onClose.bind="hideAdminCredentials"
+                onSaved.bind="onAdminCredentialsSaved"/>
 
             <OneTimeCredentialsModal
                 t-if="state.oneTimeCredentials"
