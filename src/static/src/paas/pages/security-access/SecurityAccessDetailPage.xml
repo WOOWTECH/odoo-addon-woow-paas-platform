@@ -8,6 +8,15 @@
         <span t-esc="state.error"/>
       </div>
       <t t-elif="state.sa">
+        <!-- #1234：操作失敗留在頁內、可關閉，不再取代整頁。 -->
+        <div t-if="state.actionError" class="o_woow_error_message o_woow_sa_action_error">
+          <WoowIcon name="'error'" size="16"/>
+          <span t-esc="state.actionError"/>
+          <button class="o_woow_sa_icon_btn" title="Dismiss"
+                  t-on-click="dismissActionError">
+            <WoowIcon name="'close'" size="16"/>
+          </button>
+        </div>
         <!-- Header（mockup：icon + nickname + badge + hostname + delete） -->
         <div class="o_woow_sa_detail__header">
           <div class="o_woow_sa_detail__icon">
@@ -192,6 +201,19 @@
                 <p>Each route maps a public subdomain to your host. Traffic is
                    forwarded to the service URL with the Host header set.</p>
               </div>
+              <!-- #1234：額度與健康探測。 -->
+              <div class="o_woow_sa_card_head__aside">
+                <span t-if="state.sa.route_quota !== null and state.sa.route_quota !== undefined"
+                      t-att-class="'o_woow_sa_quota' + (atRouteQuota ? ' o_woow_sa_quota--full' : '')">
+                  <t t-esc="routeCount"/> / <t t-esc="state.sa.route_quota"/> routes
+                </span>
+                <button t-if="state.sa.routes and state.sa.routes.length"
+                        class="o_woow_sa_icon_btn" title="Check status now"
+                        t-att-disabled="state.healthLoading"
+                        t-on-click="() => this.loadRouteHealth(true)">
+                  <WoowIcon name="'refresh'" size="18"/>
+                </button>
+              </div>
             </div>
             <div t-if="!(state.sa.routes and state.sa.routes.length)"
                  class="o_woow_sa_detail__hint">
@@ -201,7 +223,7 @@
             <table t-if="state.sa.routes and state.sa.routes.length"
                    class="o_woow_sa_routes_table">
               <thead>
-                <tr><th>Hostname</th><th>Service</th><th>Host header</th><th></th></tr>
+                <tr><th>Hostname</th><th>Service</th><th>Host header</th><th>Status</th><th></th></tr>
               </thead>
               <tbody>
                 <t t-foreach="state.sa.routes or []" t-as="route" t-key="route.id">
@@ -239,6 +261,13 @@
                              t-on-change="onEditRouteHostHeader"/>
                       <t t-else="" t-esc="route.http_host_header ? 'Yes' : 'No'"/>
                     </td>
+                    <!-- #1234：公開網路探測結果；滑過看該做什麼。 -->
+                    <td class="o_woow_sa_routes_table__status">
+                      <span t-att-class="routeHealthClass(route)"
+                            t-att-title="routeHealthHint(route)">
+                        <t t-esc="routeHealthLabel(route)"/>
+                      </span>
+                    </td>
                     <td class="o_woow_sa_routes_table__action">
                       <t t-if="state.editingRouteId === route.id">
                         <button class="o_woow_sa_icon_btn" title="Save"
@@ -266,6 +295,9 @@
                 </t>
               </tbody>
             </table>
+            <div t-if="state.sa.routes and state.sa.routes.length" class="o_woow_sa_detail__hint">
+              Status is checked from the public internet. Hover a status to see what to do.
+            </div>
             <!-- #1196：改名的後果在按下儲存前講清楚。平台只負責 Cloudflare 那半，
                  使用者 origin 那半（依主機名分流的反向代理、allowed hosts）我們碰不到。 -->
             <div t-if="pendingRename"
@@ -295,7 +327,7 @@
                      placeholder="service URL (default from platform)"
                      t-model="state.newRouteServiceUrl"/>
               <WoowButton variant="'primary'" onClick.bind="addRoute"
-                          disabled="state.prefixCheck and !state.prefixCheck.available">
+                          disabled="atRouteQuota or (state.prefixCheck and !state.prefixCheck.available)">
                 <WoowIcon name="'add'" size="16"/>
                 <span>Add Route</span>
               </WoowButton>
@@ -304,6 +336,10 @@
               <WoowIcon name="'info'" size="14"/>
               <span>Subdomain may use
                 <strong>lowercase letters, numbers and hyphens</strong> only.</span>
+            </div>
+            <div t-if="atRouteQuota" class="o_woow_sa_detail__hint o_woow_sa_detail__hint--warn">
+              Route limit reached (<t t-esc="routeCount"/> / <t t-esc="state.sa.route_quota"/>).
+              Remove a route or change plan to add another.
             </div>
             <div t-if="state.prefixChecking" class="o_woow_sa_detail__hint">Checking availability...</div>
             <div t-elif="state.prefixCheck and state.prefixCheck.available"

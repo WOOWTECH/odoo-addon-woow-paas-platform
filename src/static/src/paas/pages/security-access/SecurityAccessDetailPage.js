@@ -28,6 +28,33 @@ const TABS = [
 // no leading/trailing hyphen. Front-end check gives immediate feedback; the
 // model constraint + availability endpoint enforce the same rule server-side.
 const SUBDOMAIN_RE = /^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/;
+// #1234：route 健康狀態的顯示文字。狀態語意見 services/route_probe.py 的 STATUSES。
+const ROUTE_HEALTH_LABELS = {
+  ok: "Reachable",
+  access_login: "Login required",
+  access_missing: "Not protected",
+  access_unexpected: "Blocked by Access",
+  tunnel_down: "Connector offline",
+  not_routed: "Not live yet",
+  dns_missing: "DNS not found",
+  origin_error: "Origin error",
+  timeout: "No response",
+  unknown: "Unknown",
+};
+const ROUTE_HEALTH_HINTS = {
+  ok: "Requests pass through Cloudflare and the tunnel, and your service answers.",
+  access_login: "Protected: visitors see the Cloudflare Access login first. This is expected.",
+  access_missing: "This route is set to protected, but no login page is in front of it. Toggle protection off and on in the Access tab, or contact support.",
+  access_unexpected: "This route is public here, but a Cloudflare Access application that this platform does not manage is blocking it. Contact support.",
+  tunnel_down: "No connector is running this tunnel. Check the machine that runs it, or start a connector with the tunnel token.",
+  not_routed: "The hostname does not point to this tunnel yet. Right after creating or renaming a route this can take up to a minute — check again shortly.",
+  dns_missing: "Public DNS has no record for this hostname yet. Wait a minute and check again.",
+  origin_error: "The request reached your machine, but your reverse proxy or service returned an error. Check that the proxy has this hostname and the service is running.",
+  timeout: "Your service did not answer in time. Check that it is running and not overloaded.",
+  unknown: "The check could not complete. Try again in a moment.",
+};
+// 黃色（使用者多半只要等一下）vs 紅色（要動手處理）。
+const WARN_HEALTH_STATUSES = ["not_routed", "dns_missing", "timeout", "unknown"];
 const SUBDOMAIN_HINT = _t("Use lowercase letters, digits and hyphens only (no dots or symbols); 3-63 chars, no leading/trailing hyphen.");
 
 /**
@@ -60,7 +87,14 @@ export class SecurityAccessDetailPage extends Component {
     this.state = useState({
       sa: null,
       loading: true,
+      // error＝整頁載不出來（取代整頁）；actionError＝某個操作失敗（頁內提示，
+      // 可關閉）。以前兩者共用 error，任何操作失敗（例如 route 額度已滿）都會把
+      // 整頁換成一行錯誤、而且之後不會自己恢復——#1234 實測時撞到。
       error: null,
+      actionError: null,
+      // #1234：route 健康探測。key 是 route id，值見 services/route_probe.py。
+      routeHealth: {},
+      healthLoading: false,
       activeTab: this.props.tab || "overview",
       editingName: false,
       nameDraft: "",
@@ -98,7 +132,12 @@ export class SecurityAccessDetailPage extends Component {
     });
     this.pollingInterval = null;
     this.prefixCheckTimer = null;
-    onWillStart(() => this.loadDetail());
+    onWillStart(async () => {
+      await this.loadDetail();
+      if (this.state.activeTab === "application") {
+        this.loadRouteHealth();
+      }
+    });
     onWillUnmount(() => {
       this.stopPolling();
       clearTimeout(this.prefixCheckTimer);
@@ -135,9 +174,73 @@ export class SecurityAccessDetailPage extends Component {
     }
   }
 
+  dismissActionError() {
+    this.state.actionError = null;
+  }
+
+  // ---- #1234：route 健康狀態 ----
+  // 從公開網路探每條 route，把「打不開」拆成使用者能行動的幾種原因。探測在
+  // 後端做（同一個 SA 多人同看有快取），這裡只負責何時問、怎麼顯示。
+
+  async loadRouteHealth(force = false) {
+    if (!this.state.sa || !(this.state.sa.routes || []).length) {
+      this.state.routeHealth = {};
+      return;
+    }
+    this.state.healthLoading = true;
+    const res = await securityAccessService.fetchRouteHealth(
+      this.props.workspaceId, this.props.saId, force);
+    this.state.healthLoading = false;
+    if (res.success) {
+      this.state.routeHealth = res.data || {};
+    }
+    // 探測失敗不打擾使用者：狀態欄維持「—」即可，不值得一個錯誤提示。
+  }
+
+  routeHealthOf(route) {
+    return this.state.routeHealth[route.id] || null;
+  }
+
+  routeHealthLabel(route) {
+    const h = this.routeHealthOf(route);
+    if (!h) {
+      return this.state.healthLoading ? "Checking…" : "—";
+    }
+    const code = h.http_code ? ` (${h.http_code})` : "";
+    return (ROUTE_HEALTH_LABELS[h.status] || ROUTE_HEALTH_LABELS.unknown) +
+      (h.status === "ok" || h.status === "origin_error" ? code : "");
+  }
+
+  routeHealthHint(route) {
+    const h = this.routeHealthOf(route);
+    return h ? (ROUTE_HEALTH_HINTS[h.status] || ROUTE_HEALTH_HINTS.unknown) : "";
+  }
+
+  routeHealthClass(route) {
+    const h = this.routeHealthOf(route);
+    if (!h) {
+      return "o_woow_sa_health";
+    }
+    return "o_woow_sa_health o_woow_sa_health--" + (h.healthy ? "ok"
+      : (WARN_HEALTH_STATUSES.includes(h.status) ? "warn" : "error"));
+  }
+
+  // ---- #1234：route 額度 ----
+  get routeCount() {
+    return ((this.state.sa && this.state.sa.routes) || []).length;
+  }
+
+  get atRouteQuota() {
+    const quota = this.state.sa && this.state.sa.route_quota;
+    return quota !== null && quota !== undefined && this.routeCount >= quota;
+  }
+
   // ---- tabs（tab 為路徑段，對齊 cloud service 規則） ----
   switchTab(tabKey) {
     this.state.activeTab = tabKey;
+    if (tabKey === "application") {
+      this.loadRouteHealth();
+    }
     this.router.navigate(
       `workspace/${this.props.workspaceId}` +
       `/security-access/${this.props.saId}/${tabKey}`);
@@ -166,7 +269,7 @@ export class SecurityAccessDetailPage extends Component {
       this.state.sa = res.data;
       this.state.editingName = false;
     } else {
-      this.state.error = res.error;
+      this.state.actionError = res.error;
     }
   }
 
@@ -176,7 +279,7 @@ export class SecurityAccessDetailPage extends Component {
     if (res.success) {
       this.router.navigate(`workspace/${this.props.workspaceId}`);
     } else {
-      this.state.error = res.error;
+      this.state.actionError = res.error;
       this.state.showDeleteConfirm = false;
     }
   }
@@ -188,7 +291,7 @@ export class SecurityAccessDetailPage extends Component {
       this.state.sa = res.data;
       this.startPollingIfNeeded();
     } else {
-      this.state.error = res.error;
+      this.state.actionError = res.error;
     }
   }
 
@@ -257,8 +360,9 @@ export class SecurityAccessDetailPage extends Component {
       this.state.newRouteServiceUrl = "";
       this.state.prefixCheck = null;
       await this.loadDetail();
+      this.loadRouteHealth(true);
     } else {
-      this.state.error = res.error;
+      this.state.actionError = res.error;
     }
   }
 
@@ -268,7 +372,7 @@ export class SecurityAccessDetailPage extends Component {
     if (res.success) {
       await this.loadDetail();
     } else {
-      this.state.error = res.error;
+      this.state.actionError = res.error;
     }
   }
 
@@ -330,7 +434,7 @@ export class SecurityAccessDetailPage extends Component {
     // 判準在後端（格式 + DB + Cloudflare 三層），前端擋不住也不會放行錯的值。
     if (prefix && prefix !== route.subdomain_prefix
         && !SUBDOMAIN_RE.test(prefix)) {
-      this.state.error = SUBDOMAIN_HINT;
+      this.state.actionError = SUBDOMAIN_HINT;
       return;
     }
     this.state.savingRoute = true;
@@ -350,8 +454,9 @@ export class SecurityAccessDetailPage extends Component {
     if (res.success) {
       this.cancelEditRoute();
       await this.loadDetail();
+      this.loadRouteHealth(true);
     } else {
-      this.state.error = res.error;
+      this.state.actionError = res.error;
     }
   }
 
@@ -369,7 +474,7 @@ export class SecurityAccessDetailPage extends Component {
         this.props.workspaceId, this.props.saId);
       this.state.tunnelTokenLoading = false;
       if (!res.success) {
-        this.state.error = res.error;
+        this.state.actionError = res.error;
         return;
       }
       this.state.tunnelToken = res.data.tunnel_token;
@@ -382,7 +487,7 @@ export class SecurityAccessDetailPage extends Component {
       const res = await securityAccessService.getTunnelToken(
         this.props.workspaceId, this.props.saId);
       if (!res.success) {
-        this.state.error = res.error;
+        this.state.actionError = res.error;
         return;
       }
       this.state.tunnelToken = res.data.tunnel_token;
@@ -395,7 +500,7 @@ export class SecurityAccessDetailPage extends Component {
     } catch (err) {
       // 非 HTTPS／權限被拒時 clipboard API 會擋；此時至少把值顯示出來讓人手動選取。
       this.state.tunnelTokenVisible = true;
-      this.state.error = err.message;
+      this.state.actionError = err.message;
     }
   }
 
@@ -438,7 +543,7 @@ export class SecurityAccessDetailPage extends Component {
     if (res.success) {
       await this.loadDetail();
     } else {
-      this.state.error = res.error;
+      this.state.actionError = res.error;
     }
   }
 
@@ -498,7 +603,7 @@ export class SecurityAccessDetailPage extends Component {
     if (res.success) {
       await this.loadDetail();
     } else {
-      this.state.error = res.error;
+      this.state.actionError = res.error;
     }
   }
 
@@ -526,7 +631,7 @@ export class SecurityAccessDetailPage extends Component {
       this.props.workspaceId, this.props.saId, ids);
     this.state.reorderingRouteId = null;
     if (!res.success) {
-      this.state.error = res.error;
+      this.state.actionError = res.error;
     }
     // 成功：確認伺服器順序＋更新後的 CF id；失敗：把樂觀順序還原。兩條都重載。
     await this.loadDetail();

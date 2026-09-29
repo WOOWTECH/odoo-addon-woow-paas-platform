@@ -146,6 +146,22 @@ export const securityAccessService = {
     }
   },
 
+  // #1234：每條 route 的對外健康狀態。後端從公開網路探測、行程內快取 30 秒；
+  // force=true 略過快取（使用者按「Check now」、或剛改完 route）。
+  async fetchRouteHealth(workspaceId, saId, force = false) {
+    try {
+      const result = await jsonRpc(
+        `/api/workspaces/${workspaceId}/security-accesses/${saId}/routes`,
+        { action: "health", force },
+      );
+      return result.success
+        ? { success: true, data: result.data }
+        : { success: false, error: result.error };
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  },
+
   async deleteRoute(workspaceId, saId, routeId) {
     try {
       const result = await jsonRpc(
