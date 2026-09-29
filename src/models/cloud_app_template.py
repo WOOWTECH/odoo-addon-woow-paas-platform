@@ -1,10 +1,14 @@
 import json
 import logging
+import re
 
 from odoo import _, api, fields, models
 from odoo.exceptions import ValidationError
 
 _logger = logging.getLogger(__name__)
+
+# `admin_username_helm_path` 的合法形態：點分式、每段是 values 鍵名。
+ADMIN_USERNAME_HELM_PATH_RE = re.compile(r'^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)*$')
 
 # #535：`helm_value_specs` 解析失敗的哨兵。與「template 本來就沒有 specs」必須分得開
 # ——後者是正常狀態（例 `cloud_app_ha_paas`），前者代表無從得知哪些鍵是租戶填的憑證，
@@ -289,6 +293,22 @@ class CloudAppTemplate(models.Model):
              'with has_admin_gui=True.',
     )
 
+    # 租戶可改的 admin 帳號：**帳號在 chart values 的哪個路徑**（點分式）。空值＝帳號由
+    # chart 固定、平台不開放修改（mcp-server 家族的 admin-core GUI 帳號不是 values
+    # 決定的）。本欄位同時是「能不能改帳號」的能力事實源（controller 判 400、payload
+    # 鏡射給前端，與 has_admin_gui 同一紀律，不得在任何一端自建 slug 名單），也是寫入
+    # 位置：改帳號＝把新值寫進 helm_values 的這個路徑，隨 reset 那條 helm upgrade ＋
+    # rollout restart 生效，之後 redeploy 也從 helm_values 帶出同一個值。
+    # 只對 admin_password_carrier=helm_secret 有意義：config_json 載體的帳號活在 PVC
+    # 的 config.json 裡，改 values 不會生效。
+    admin_username_helm_path = fields.Char(
+        string='Admin Username Values Path',
+        help='Dotted Helm values path of the admin login username when the '
+             'tenant may change it (e.g. authProxy.basicAuth.username). Empty '
+             'means the chart fixes the username and it cannot be changed. '
+             'Only meaningful with the Helm Secret password carrier.',
+    )
+
     # Post-Deploy Initialization
     post_deploy_init_type = fields.Selection(
         selection=[
@@ -428,6 +448,32 @@ class CloudAppTemplate(models.Model):
                       'a tenant buy a service they can neither see nor manage. '
                       'To list it, turn both switches off.')
                     % (record.name or record.slug or record.id)
+                )
+
+    @api.constrains('admin_username_helm_path', 'has_admin_gui',
+                    'admin_password_carrier')
+    def _check_admin_username_helm_path(self):
+        """可改帳號的前提：平台供給 admin 憑證、且憑證活在 chart Secret。
+
+        兩個誤用形態都是「假裝成功」：has_admin_gui=False 的模板根本沒有平台供給的
+        憑證可改；config_json 載體的帳號活在 PVC 的 config.json，改 values 後 helm
+        upgrade 照樣成功、帳號卻沒變。在寫入當下就炸，不留到租戶按下去才發現。
+        路徑格式同時擋掉空段與奇怪字元，免得寫進 helm_values 變成另一棵樹。
+        """
+        for record in self:
+            path = record.admin_username_helm_path
+            if not path:
+                continue
+            name = record.name or record.slug or record.id
+            if not record.has_admin_gui or record.admin_password_carrier != 'helm_secret':
+                raise ValidationError(
+                    _('"Admin Username Values Path" requires "Built-in Admin GUI" '
+                      'and the Helm Secret password carrier (template: %s).') % name
+                )
+            if not ADMIN_USERNAME_HELM_PATH_RE.match(path):
+                raise ValidationError(
+                    _('"Admin Username Values Path" must be a dotted path such as '
+                      'authProxy.basicAuth.username (template: %s).') % name
                 )
 
     # ------------------------------------------------------------------ #

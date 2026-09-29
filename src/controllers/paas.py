@@ -1706,6 +1706,41 @@ class PaasController(HiddenChainMixin, Controller):
             success=true 帶 data.admin_password 明文（一次性）
             success=false 帶 error
         """
+        return self._service_admin_credentials(workspace_id, service_id)
+
+    @route("/api/workspaces/<int:workspace_id>/services/<int:service_id>/admin-credentials", auth="user", methods=["POST"], type="json")
+    def api_service_set_admin_credentials(
+        self, workspace_id: int, service_id: int,
+        username: str | None = None, password: str | None = None, **kw: Any,
+    ) -> dict[str, Any]:
+        """租戶自設 admin 帳號／密碼（open-design 的 OpenDesign 與 ttyd 共用這組）。
+
+        只開放給 ``template.admin_username_helm_path`` 有值的模板；其餘回錯誤（它們
+        只能 Reset）。``password`` 空值＝平台鑄造新密碼並一次性回傳（同 Reset）；
+        給了就用租戶的值、**不回傳明文**（租戶自己知道）。``username`` 空值＝不改。
+        生效方式與 Reset 相同：helm upgrade ＋ rollout restart（服務重啟約一分鐘）。
+
+        Returns:
+            success=true 帶 data.admin_username（與鑄造時的 data.admin_password）
+            success=false 帶 error
+        """
+        return self._service_admin_credentials(
+            workspace_id, service_id,
+            new_password=password if password not in (None, '') else None,
+            new_username=username if username not in (None, '') else None,
+            tenant_set=True,
+        )
+
+    def _service_admin_credentials(
+        self, workspace_id: int, service_id: int,
+        new_password: str | None = None, new_username: str | None = None,
+        tenant_set: bool = False,
+    ) -> dict[str, Any]:
+        """Reset 與租戶自設憑證共用的授權、執行與回應組裝（兩個 route 的唯一實作）。
+
+        授權與 gate 順序完全沿用 #357／#471／#533／#553 的判準（見下方各註解）；
+        租戶自設只多一道能力 gate：``template.admin_username_helm_path``。
+        """
         Workspace = request.env['woow_paas_platform.workspace']
         CloudService = request.env['woow_paas_platform.cloud_service']
 
@@ -1739,6 +1774,13 @@ class PaasController(HiddenChainMixin, Controller):
                 'error': _('Reset admin password is only supported on templates '
                            'with a built-in admin GUI'),
             }
+        # 租戶自設憑證的能力判準：與 has_admin_gui 同一紀律，讀 template 欄位、不自建
+        # slug 名單；payload 的 template.admin_username_editable 鏡射同一個欄位。
+        if tenant_set and not service.template_id.admin_username_helm_path:
+            return {
+                'success': False,
+                'error': _("This service's admin credentials can only be reset, not set."),
+            }
 
         try:
             # #357 C05：model 端刻意是 private（_reset_admin_password）——它回傳明文
@@ -1749,7 +1791,12 @@ class PaasController(HiddenChainMixin, Controller):
             # 刻意「不」用 sudo()：method 內部對 secret 的讀寫已自行 sudo，外層保持
             # current-user env，ir.rule 才會繼續驗這位 admin 對該 service 的可及性
             # （sudo 會連這層一起關掉，等於把 workspace 邊界交給本 handler 獨力承擔）。
-            new_password = service._reset_admin_password()
+            if tenant_set:
+                applied_password = service._reset_admin_password(
+                    new_password=new_password, new_username=new_username,
+                )
+            else:
+                applied_password = service._reset_admin_password()
 
         except OperationalError:
             # #533：本站是**枚舉補到的**（issue 未點名），而且它比 issue 本體更
@@ -1837,6 +1884,14 @@ class PaasController(HiddenChainMixin, Controller):
             'Admin password reset. Save the new password now — '
             'it will not be shown again.'
         )
+        if tenant_set:
+            message = (
+                'Admin credentials updated. Save the new password now — '
+                'it will not be shown again. The service restarts to apply them.'
+                if new_password is None else
+                'Admin credentials updated. The service restarts to apply them '
+                '(about a minute).'
+            )
         # #672：判準是 payload 裡**真的有 gateway key**，不是 payload 非空——
         # 同一個 dict 現在也可能只帶 dashboard_url（兩個閘門各判各的）。用非空當
         # 判準的話，那種服務會收到一句「Gateway API Key 已重設」的假話，而租戶會
@@ -1847,15 +1902,26 @@ class PaasController(HiddenChainMixin, Controller):
                 'they will not be shown again. Update the Gateway API Key '
                 'wherever you configured it (e.g. your MCP server).'
             )
-        return {
-            'success': True,
-            'data': dict(
-                gateway,
-                service_id=service.id,
-                admin_password=new_password,
-                message=message,
-            ),
-        }
+        # 帳號不是敏感值；讀取失敗只是少一個顯示欄位，不得翻轉「已生效」的回應。
+        try:
+            admin_username = service._admin_username()
+        except Exception:
+            _logger.exception(
+                "admin username lookup failed for service %s after credentials "
+                "took effect", service.id,
+            )
+            admin_username = None
+        data = dict(
+            gateway,
+            service_id=service.id,
+            admin_username=admin_username,
+            message=message,
+        )
+        # 租戶自己填的密碼不回傳明文（他本來就知道，回傳只是多一處外洩面）；
+        # 平台鑄造的（Reset、或自設流程選「隨機產生」）照舊一次性交付。
+        if not (tenant_set and new_password is not None):
+            data['admin_password'] = applied_password
+        return {'success': True, 'data': data}
 
     @route("/api/workspaces/<int:workspace_id>/services/<int:service_id>/revisions", auth="user", methods=["POST"], type="json")
     def api_service_revisions(self, workspace_id: int, service_id: int, **kw: Any) -> dict[str, Any]:
@@ -4468,8 +4534,14 @@ class PaasController(HiddenChainMixin, Controller):
                 # service.template_id.has_admin_gui，#357 C01）收斂到同一欄位。
                 # 前端原本自建 slug 白名單，與這裡不一致 → 後端放行、按鈕卻不出現。
                 'has_admin_gui': bool(service.template_id.has_admin_gui),
+                # 「租戶能不能自設帳密」的前端判準（ServiceDetailPage 的
+                # canEditAdminCredentials）：直接鏡射模板欄位，與
+                # _service_admin_credentials 的能力 gate 讀同一個欄位。
+                'admin_username_editable': bool(service.template_id.admin_username_helm_path),
                 'helm_value_specs': service.template_id._parse_helm_value_specs(),
             },
+            # 目前生效的 admin 帳號（非敏感；不開放改帳號的模板為 None），供對話框預填。
+            'admin_username': service._admin_username(),
             'helm_revision': service.helm_revision,
             'created_date': service.create_date.isoformat() if service.create_date else None,
             'deployed_at': service.deployed_at.isoformat() if service.deployed_at else None,
