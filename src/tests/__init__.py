@@ -895,3 +895,8 @@ from . import test_sa_route_traffic_1234
 # SA 詳情頁 tunnel 狀態改用即時值（只讀疊加）。守「成員看得到即時值、這條路徑不寫 DB、
 # operator 拿不到時沿用 DB 值」。
 from . import test_sa_live_tunnel_status
+
+# SH 詳情頁 tunnel 狀態改用即時值（SA #1256 的同構修正）＋ HA status 端點改只讀。守
+# 「parser 與舊 refresh 判讀一致、成員看得到即時值、這條路徑不寫 DB、operator 拿不到
+# 時沿用 DB 值、HA status 不再 action_refresh_status 且回應 key 不變」。
+from . import test_sh_live_tunnel_status

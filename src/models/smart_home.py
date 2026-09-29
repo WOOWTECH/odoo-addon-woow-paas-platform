@@ -931,33 +931,7 @@ class SmartHome(models.Model):
 
         try:
             result = client.get_tunnel_status(self.tunnel_id)
-
-            # Parse connections
-            connections = result.get('connections', [])
-            if result.get('deleted_at'):
-                # Cloudflare 上已經沒有這條 tunnel 了 ⇒ 「等連線恢復」不會有結果，
-                # 要重建。連 connector 記帳一起清掉：留著上一輪的數字會變成
-                # 「Deleted ＋ Edge Connections: 4」這種看起來很正常的混合世代。
-                self.write({
-                    'tunnel_status': 'deleted',
-                    'connector_id': '',
-                    'connector_type': '',
-                })
-                return
-
-            update_vals = {
-                'tunnel_status': 'connected' if connections else 'disconnected',
-            }
-
-            if connections:
-                conn = connections[0]
-                update_vals['connector_id'] = conn.get('connector_id', '')
-                update_vals['connector_type'] = conn.get('type', '')
-                if conn.get('opened_at'):
-                    update_vals['tunnel_uptime'] = conn['opened_at']
-
-            self.write(update_vals)
-
+            self.write(self._tunnel_vals_from_status(result))
         except PaaSOperatorError as e:
             self.write({
                 'tunnel_status': 'error',
@@ -968,6 +942,83 @@ class SmartHome(models.Model):
                 "Failed to refresh tunnel status for Smart Home '%s': %s",
                 self.name, e.message,
             )
+
+    @api.model
+    def _tunnel_vals_from_status(self, result):
+        """operator ``GET /api/tunnels/{id}`` 的回應 → tunnel 相關欄位值。
+
+        ``action_refresh_status``（寫回 DB）與 ``_live_tunnel_status``（只讀疊在
+        詳情 API 回應上）共用這一份判讀，兩邊才不會各自演化出不同的「已連線」
+        定義——SA 在 #1256 抽的是同一刀（``SecurityAccess._tunnel_vals_from_status``）。
+        ``deleted_at`` 的語意見 ``action_refresh_status`` docstring（#833）。
+
+        ⚠ 與 SA 版**刻意不合併**：SH 沒有 ``edge_connection_count`` /
+        ``connector_version`` 欄位，而且抽出來必須與原本內嵌的判讀逐格相同
+        （例如 disconnected 時 SH 從來不清 connector_id）——行為改變不該藏在
+        一次重構裡。
+        """
+        connections = result.get('connections', [])
+        if result.get('deleted_at'):
+            # Cloudflare 上已經沒有這條 tunnel 了 ⇒ 「等連線恢復」不會有結果，
+            # 要重建。連 connector 記帳一起清掉：留著上一輪的數字會變成
+            # 「Deleted ＋ Edge Connections: 4」這種看起來很正常的混合世代。
+            return {
+                'tunnel_status': 'deleted',
+                'connector_id': '',
+                'connector_type': '',
+            }
+        vals = {
+            'tunnel_status': 'connected' if connections else 'disconnected',
+        }
+        if connections:
+            conn = connections[0]
+            vals['connector_id'] = conn.get('connector_id', '')
+            vals['connector_type'] = conn.get('type', '')
+            if conn.get('opened_at'):
+                vals['tunnel_uptime'] = conn['opened_at']
+        return vals
+
+    def _live_tunnel_status(self):
+        """詳情頁／HA status 端點用：即時向 operator 問 tunnel 狀態，**只讀、不寫 DB**。
+
+        為什麼需要：``action_refresh_status`` 只在 ``refresh_status`` action
+        （owner/admin）被呼叫時才寫回，詳情頁載入時從不呼叫、也沒有排程 ⇒
+        「Tunnel Information」停在上一次寫入的值——與 SA 在 #1256 修掉的是同一個
+        形狀（SA 概覽頁 tunnel 已 0 connector 數小時仍顯示「已連線」）。
+
+        只讀是刻意的：寫回要過 smart_home 的 write ir.rule（#524 起只發給
+        owner/admin），詳情頁卻是所有成員都能看；HA machine API 的 status 端點
+        （``controllers/ha_api.py``）也改走這裡，才不會讓只過 OAuth scope 的呼叫
+        端觸發 DB 寫入。
+
+        絕不拋例外：拿不到（沒有 tunnel／operator 未設定／逾時／錯誤／回應形狀
+        不對）就回 ``{}``，呼叫端沿用 DB 裡的值——那是退化成原本的行為，不是新的
+        錯誤，詳情頁不能因為 operator 抖一下整頁失敗。
+        """
+        self.ensure_one()
+        if not self.tunnel_id:
+            return {}
+        client = get_paas_operator_client(self.env)
+        if not client:
+            return {}
+        try:
+            result = client.get_tunnel_status(self.tunnel_id)
+        except PaaSOperatorError as e:
+            _logger.info("[SH] live tunnel status unavailable sh=%s: %s",
+                         self.id, e.message)
+            return {}
+        if not isinstance(result, dict):
+            # operator 回了非物件（空 body 以外的怪形狀）⇒ 判讀不了，當作拿不到。
+            _logger.info("[SH] live tunnel status unexpected payload sh=%s: %r",
+                         self.id, type(result).__name__)
+            return {}
+        vals = self._tunnel_vals_from_status(result)
+        if vals.get('tunnel_status') != 'connected':
+            # 斷線／已刪除時「Connector Opened」不該還掛著上一次連上的時間。
+            # （SH 沒有 edge_connection_count，改以判讀出的 tunnel_status 為準。）
+            vals['tunnel_uptime'] = ''
+        vals['tunnel_status_live'] = True
+        return vals
 
     def _get_mcp_integration(self):
         """Return the MCP integration string granted by the active plan, or ''.

@@ -188,6 +188,9 @@
                                     <t t-if="item.isUrl">
                                         <a t-att-href="routeUrl" target="_blank" t-esc="item.value"/>
                                     </t>
+                                    <t t-elif="item.isBadge">
+                                        <StatusBadge status="item.value" size="'sm'"/>
+                                    </t>
                                     <t t-else="">
                                         <span t-esc="item.value"/>
                                     </t>
