@@ -13,7 +13,11 @@
           </div>
           <div class="o_woow_sa_card_head__text">
             <h3>Protected Application</h3>
-            <p t-if="state.access.is_protected">
+            <p t-if="protectionLost">
+              Protection not in effect · this service's address can currently
+              be opened without logging in
+            </p>
+            <p t-elif="state.access.is_protected">
               Protected · <t t-esc="policyCount"/> <t t-esc="policyCount === 1 ? 'policy' : 'policies'"/> ·
               every visitor must pass Access before reaching this service
             </p>

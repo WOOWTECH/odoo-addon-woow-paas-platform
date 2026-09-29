@@ -14,14 +14,19 @@ import { breadcrumbService } from "../../services/breadcrumb_service";
 import { router } from "../../core/router";
 import { formatPoints } from "../../utils/billing_helpers";
 
+// `provisionError`（重試**請求本身**失敗的訊息）仍有意義的 state：pending／error
+// 時重試鈕還在，provisioning 時結果還沒出來。離開這三格＝那句訊息已經過期。
+const RETRY_CONTEXT_STATES = ["pending", "error", "provisioning"];
+
 /**
  * SmartHomeDetailPage Component
  *
  * Displays detailed information about a smart home instance including:
  * - Header with name and status badge
  * - Subscription info panel (trial badge, next bill date, plan name)
- * - Tunnel info panel (Tunnel ID, Connector Type/ID, Route URL, Status, Uptime)
+ * - Tunnel info panel (Tunnel ID, Connector Type/ID, Route URL, tunnel Status, Connector Opened)
  * - Skip Trial button (visible during trial)
+ * - Provision / Retry setup button (visible while state is pending / error)
  * - Delete button with confirmation
  * - Connection guide section
  *
@@ -62,6 +67,14 @@ export class SmartHomeDetailPage extends Component {
             // （`t-elif="state.error"` 會把整個內容區換掉），拿它報一次 refresh
             // 失敗等於把使用者踢出頁面，比原本的靜默還糟。
             refreshError: null,
+            // Smart Home 開通重試：按下 Provision／Retry setup 的請求進行中。
+            // 與 `refreshing` 分開——兩顆按鈕各自的 spinner 不能互相牽動。
+            provisioning: false,
+            // 重試**請求本身**失敗（權限、訂閱閘、網路／timeout）的專用通道，理由同
+            // `refreshError`：不得借用整頁的 `state.error`。後端**收斂**失敗不走這裡
+            // ——那時請求成功、記錄落 `error` ＋ `error_message`，由 header 下方的
+            // 常駐錯誤橫幅顯示（重新整理頁面後也還看得到）。
+            provisionError: null,
             showSkipTrialModal: false,
             showChangePlanModal: false,
             domain: "woowtech.io",
@@ -80,9 +93,18 @@ export class SmartHomeDetailPage extends Component {
         });
     }
 
-    async loadSmartHome() {
-        this.state.loading = true;
-        this.state.error = null;
+    /**
+     * @param {Object} [opts]
+     * @param {boolean} [opts.silent=false] 背景重載（polling／重試之後對帳）：不切到
+     *   整頁 loading、失敗也不把頁面換成 "Unable to load"。原本 polling 每 5 秒都走
+     *   整頁 loading，`provisioning` 期間整個內容區（含剛按下的按鈕與錯誤訊息）會
+     *   反覆消失再出現；開通重試會讓這個狀態變得常見，所以一併改掉。
+     */
+    async loadSmartHome({ silent = false } = {}) {
+        if (!silent) {
+            this.state.loading = true;
+            this.state.error = null;
+        }
 
         const result = await workspaceService.getSmartHome(
             this.props.workspaceId,
@@ -91,13 +113,24 @@ export class SmartHomeDetailPage extends Component {
 
         if (result.success) {
             this.state.home = result.data;
+            // 重試請求本身失敗（最常見是 client timeout）之後，後端可能仍把開通做完
+            // ——polling 會把 state 帶到 `active`，Retry 鈕隨 canRetrySetup 消失，但
+            // `provisionError` 若不清，就會有一句「逾時／失敗」永遠掛在一台 Active
+            // 的 Smart Home 旁邊、而且沒有任何方式關掉。判準是「這次載入看到的
+            // state 已經離開重試相關的三格」：pending／error（重試鈕還在，那句話仍
+            // 是使用者需要的上下文）與 provisioning（結果還沒出來）都保留。
+            if (!RETRY_CONTEXT_STATES.includes(result.data?.state)) {
+                this.state.provisionError = null;
+            }
             this._publishBreadcrumb();
             this.startPollingIfNeeded();
-        } else {
+        } else if (!silent) {
             this.state.error = result.error || _t("Failed to load smart home");
         }
 
-        this.state.loading = false;
+        if (!silent) {
+            this.state.loading = false;
+        }
     }
 
     /**
@@ -117,7 +150,8 @@ export class SmartHomeDetailPage extends Component {
         const pendingStates = ["provisioning", "deleting"];
         if (this.state.home && pendingStates.includes(this.state.home.state)) {
             this.stopPolling();
-            this.pollingInterval = setInterval(() => this.loadSmartHome(), 5000);
+            this.pollingInterval = setInterval(
+                () => this.loadSmartHome({ silent: true }), 5000);
         } else {
             this.stopPolling();
         }
@@ -154,6 +188,27 @@ export class SmartHomeDetailPage extends Component {
      * fail-closed（`?? 0`）：欄位缺席（舊快取、漏帶 subscription 的 payload）
      * 一律視同 0，寧可不顯示，也不要長出一個後端沒有對應設定的頁籤。
      */
+    /**
+     * Access 頁籤的 remount key。
+     *
+     * `SmartHomeAccessTab` 只在 setup 時從 `home.routes` seed 一次（它自己的寫入
+     * 回應才是權威，見該元件 docstring），而本頁有兩條路會在頁籤**仍掛著**時換掉
+     * `state.home`：header 的 Provision／Retry setup（`retrySetup`，按鈕在頁籤
+     * 外、切到 Access 時照樣按得到）與 provisioning／deleting 期間的背景
+     * polling（`loadSmartHome({ silent: true })` 不再切整頁 loading，所以也不再
+     * 順便卸載頁籤）。不 remount 的話，一台 pending 的 SH 開通成功後，Access
+     * 分頁仍停在「還沒有對外網址」直到使用者切走再切回來。
+     *
+     * 刻意只看「route 集合」與生命週期 `state`，不看 route 內容：頁籤自己的
+     * 寫入（開關保護、改 policy）只改內容、不改 id 集合與 state，所以不會因為
+     * 自己的寫入被重建、丟掉展開狀態；而開通／收斂一定伴隨 state 轉換或多出
+     * primary route。
+     */
+    get accessTabKey() {
+        const ids = (this.home?.routes || []).map((r) => r.id).join(",");
+        return `${this.home?.state || ""}|${ids}`;
+    }
+
     get hasAccessSeats() {
         return (this.home?.subscription?.ac_max_access_seats ?? 0) > 0;
     }
@@ -168,19 +223,54 @@ export class SmartHomeDetailPage extends Component {
         return `${this.home.subdomain}.${this.state.domain}`;
     }
 
+    /**
+     * Provision／Retry setup 鈕的顯示判準——與後端
+     * `smart_home._RETRYABLE_WITH_TUNNEL_STATES`（有 tunnel 時）及「沒有 tunnel 一律
+     * 可開通」對齊：`pending`（從未開通、或建立視窗串接的那一次沒送出去）與
+     * `error`（開通失敗，含 #484 `dns_failed` 留下的「tunnel 活著但 DNS 沒建成」）。
+     * `active`／`suspended` 後端一律拒絕，顯示按鈕只會換來一句錯誤。
+     */
+    get canRetrySetup() {
+        return ["pending", "error"].includes(this.home?.state);
+    }
+
     get canDelete() {
         return this.state.confirmName.trim() === (this.home?.name || "");
     }
 
+    /**
+     * Tunnel Information 面板。
+     *
+     * 兩個欄位原本是錯的（與 SA 詳情頁 #1256 同一次對齊）：
+     *   - Status 讀的是 `home.state`（生命週期：active／suspended…），不是
+     *     tunnel。生命週期已經在 header 的 StatusBadge 上，這裡重複一次只會讓
+     *     「Active」蓋掉「Connector 其實斷了」。改讀 `tunnel_status`，用同一顆
+     *     StatusBadge（connected／disconnected／deleted／error 都有定義，#833）。
+     *     沒有 tunnel（尚未 provision）時顯示 N/A，不假裝是 Disconnected。
+     *   - Uptime 讀的是 `home.uptime`，而 `SmartHome.to_dict()` 的 key 是
+     *     `tunnel_uptime` ⇒ 永遠 N/A。那個值是 connector 的 `opened_at` 時間戳、
+     *     不是時長，標籤改成與 SA 頁相同的「Connector Opened」。
+     *
+     * 這些值由 detail `get` 疊上 operator 即時值（`_live_tunnel_status`，只讀）；
+     * operator 拿不到時是 DB 裡上一次 Refresh 寫入的值。`retrySetup` 直接收的
+     * provision 回應也帶同一份疊加（`_provision_smarthome`），否則重試成功的
+     * 那一刻面板會倒退回舊值。
+     */
     get tunnelInfo() {
         if (!this.home) return [];
+        const hasTunnel = !!this.home.tunnel_id;
         return [
             { label: _t("Tunnel ID"), value: this.home.tunnel_id || _t("N/A"), icon: "vpn_key" },
             { label: _t("Connector Type"), value: this.home.connector_type || _t("N/A"), icon: "cable" },
             { label: _t("Connector ID"), value: this.home.connector_id || _t("N/A"), icon: "tag" },
             { label: _t("Route URL"), value: this.displayUrl || _t("Not configured"), icon: "link", isUrl: !!this.routeUrl },
-            { label: _t("Status"), value: this.home.state || _t("Unknown"), icon: "info" },
-            { label: _t("Uptime"), value: this.home.uptime || _t("N/A"), icon: "schedule" },
+            {
+                label: _t("Status"),
+                value: hasTunnel ? (this.home.tunnel_status || "disconnected") : _t("N/A"),
+                icon: "info",
+                isBadge: hasTunnel,
+            },
+            { label: _t("Connector Opened"), value: this.home.tunnel_uptime || _t("N/A"), icon: "schedule" },
         ];
     }
 
@@ -237,6 +327,35 @@ export class SmartHomeDetailPage extends Component {
                 result.error || _t("Failed to refresh smart home status");
         }
         this.state.refreshing = false;
+    }
+
+    // Provision / Retry setup
+    //
+    // 形狀抄 SecurityAccessDetailPage.provision：打既有的 provision action，拿回
+    // detail 形狀（含 routes）直接收。後端對「已有 tunnel」的 pending／error 走收斂
+    // （同一條 tunnel 補 ingress／DNS，不會再開一條），所以重按是安全的。
+    async retrySetup() {
+        if (this.state.provisioning) return;
+        this.state.provisioning = true;
+        this.state.provisionError = null;
+        const result = await workspaceService.provisionSmartHome(
+            this.props.workspaceId,
+            this.props.homeId
+        );
+        if (result.success) {
+            // 端點成功不代表開通成功：operator 失敗時後端把記錄落 `error` ＋
+            // `error_message` 並照樣回 success（controllers/smart_home.py
+            // `_provision_smarthome`）。那一格由常駐錯誤橫幅顯示，這裡只收資料。
+            this.state.home = result.data;
+            this.startPollingIfNeeded();
+        } else {
+            this.state.provisionError =
+                result.error || _t("Failed to start Smart Home setup");
+            // 請求失敗不等於伺服器沒做：client timeout（150 秒）時後端可能仍在跑，
+            // 記錄停在 `provisioning`。背景重載一次，讓畫面與 polling 跟上真實 state。
+            await this.loadSmartHome({ silent: true });
+        }
+        this.state.provisioning = false;
     }
 
     // Delete confirmation

@@ -39,7 +39,13 @@ const PROTECT_CONFIRM = {
  *
  * 種子只在 setup 取一次（不掛 onWillUpdateProps）：這顆頁籤是 `t-if` 掛載的，
  * 切走再切回來自然會重新 seed；而父層在本元件寫入時**不會**重載（寫入回應本身
- * 就夠用），所以「props 比本地新」的窗口不存在。CS 的 AccessTab 同一個作法。
+ * 就夠用）。CS 的 AccessTab 同一個作法。
+ * ⚠ 父層**會**在本頁籤掛著時換掉 `home`：header 的 Provision／Retry setup 與
+ * provisioning 期間的背景 polling（不再切整頁 loading）。那兩條會帶來新的
+ * route 集合或新的 state，由父層的 `t-key="accessTabKey"` 把本元件整顆重建
+ * （＝重新 seed），而不是在這裡掛 onWillUpdateProps 去合併——合併就得決定
+ * 「本地剛寫的」與「props 帶來的」誰贏，重建沒有這個問題。見
+ * `SmartHomeDetailPage.accessTabKey`。
  *
  * Props:
  *   - home (Object)：SH detail payload（`to_dict(include_details=True)`，帶 routes）
@@ -88,8 +94,11 @@ export class SmartHomeAccessTab extends Component {
   }
 
   // 卡頭副標 "N of M routes protected" 的 N（同 SA）。
+  // #794：`access_protection_lost` 的 route 不算——is_protected 只剩意圖，CF 上
+  // 的 app 已經被拆掉（判準與 SA 的 protectedRouteCount 逐字相同）。
   get protectedRouteCount() {
-    return this.state.routes.filter((r) => r.is_protected).length;
+    return this.state.routes.filter(
+      (r) => r.is_protected && !r.access_protection_lost).length;
   }
 
   // ---- 本地 route 狀態維護 ----
@@ -234,6 +243,8 @@ export class SmartHomeAccessTab extends Component {
   };
 
   async deletePolicy(route, policy) {
+    // 確認視窗在 AccessAppCard 裡（三個 surface 共用），走到這裡＝使用者已經
+    // 確認過了。
     // 刪除只認 policy id（route 只是為了呼叫端對稱／日後 per-route 消歧義；
     // 後端會在已 gate 過的 SH 底下自己解出這筆 policy）。
     this.state.error = null;

@@ -895,3 +895,17 @@ from . import test_sa_route_traffic_1234
 # SA 詳情頁 tunnel 狀態改用即時值（只讀疊加）。守「成員看得到即時值、這條路徑不寫 DB、
 # operator 拿不到時沿用 DB 值」。
 from . import test_sa_live_tunnel_status
+
+# SH 詳情頁 tunnel 狀態改用即時值（SA #1256 的同構修正）＋ HA status 端點改只讀。守
+# 「parser 與舊 refresh 判讀一致、成員看得到即時值、這條路徑不寫 DB、operator 拿不到
+# 時沿用 DB 值、HA status 不再 action_refresh_status 且回應 key 不變」。
+from . import test_sh_live_tunnel_status
+
+# Smart Home 開通重試：有 tunnel 的 error／pending 在同一條 tunnel 上收斂（不再呼叫
+# create_tunnel）；active／suspended 照舊拒絕；收斂失敗維持 error 並保留 tunnel。
+from . import test_sh_provision_retry
+
+# #794 前端接上：`access_protection_lost` 必須出現在三腿畫面實際讀的詳情 payload
+# （SA sa.to_dict routes／SH include_details routes／CS _access_to_dict）。key 缺席時
+# AccessAppCard 讀到 undefined，fail-open 警示會靜默消失。
+from . import test_access_protection_lost_ui_payload

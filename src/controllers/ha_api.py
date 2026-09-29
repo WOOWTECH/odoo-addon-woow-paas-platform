@@ -108,6 +108,87 @@ def _check_workspace_access(user: Any, workspace_id: int) -> Any | None:
     return access.workspace_id
 
 
+def _with_live_tunnel_status(record: Any) -> dict:
+    """``record.to_dict()`` 疊上即時 tunnel 值（只讀，不寫 DB）。
+
+    HA status 端點（SH／SA 各一支）原本呼叫 ``action_refresh_status()``——那是
+    DB 寫入，而這兩支只過 OAuth scope 檢查（``_authenticate``）＋ workspace
+    成員資格（``_check_workspace_access``），記錄又是 ``sudo()`` 取的 ⇒ 任何
+    持 read scope 的成員（含 role=user）都能觸發一次寫入；/woow 的同一個動作
+    （``refresh_status``）卻要 owner/admin（#524）。改成讀即時值後：每個有權限
+    的成員都拿得到新鮮狀態，而且這條路徑上完全沒有寫入，兩邊的角色閘自然一致。
+
+    回應形狀刻意與改動前**逐 key 相同**：只覆蓋 ``to_dict()`` 已經有的 key，
+    ``tunnel_status_live`` 這種新 key 不外流給 HA component（它是外部安裝的
+    client，舊版本會照舊的 key 集合解析）。拿不到即時值（operator 未設定／
+    錯誤）時 ``_live_tunnel_status`` 回 ``{}``，退化成 DB 值。
+
+    ⚠ 與舊行為的差別（兩格，不是一格）：
+      1. operator 失敗時不再把 ``tunnel_status='error'`` 與 ``error_message``
+         寫回 DB，而是回上一次寫入的值——與 /woow 詳情頁（#1256 / SH detail get）
+         的退化方式一致。
+      2. **成功時也不再寫回**。舊行為下，HA component 定期輪詢這兩支 status
+         端點，是 DB 裡 ``tunnel_status``／``connector_*`` 唯一的**自動**更新來源
+         （沒有任何 cron 呼叫 ``action_refresh_status``；其餘呼叫點只有 /woow 的
+         owner/admin Refresh 與後台表單按鈕）。改只讀之後，stored 值＝「上一次
+         有人手動 Refresh 的值」。所以凡是 HA 會讀到 tunnel 狀態的端點都要自己
+         疊即時值：兩支 status 與兩支 detail 端點（``get_home``／
+         ``sa_get_access``）走本函式，兩支 list 端點（``list_homes``／
+         ``sa_list_accesses``）走 ``_live_tunnel_status_by_id``——否則 HA 會永遠
+         停在上一次 Refresh（例如 tunnel 已 0 connector 數天仍回 ``connected``）。其他讀 stored 值的地方（/woow 清單卡片等）本來就不靠
+         HA 輪詢刷新，不在這條回歸的範圍內。
+    """
+    data = record.to_dict()
+    try:
+        live = record._live_tunnel_status()
+    except Exception:
+        # `_live_tunnel_status` 自己只吞 PaaSOperatorError；這裡保留舊端點
+        # 「refresh 失敗也回目前的值、不回 500」的保證（HA component 會定期輪詢，
+        # 一次意外的例外不該讓整個 sensor 變 unavailable）。
+        _logger.exception(
+            "Live tunnel status failed for %s id=%s", record._name, record.id)
+        live = {}
+    data.update({k: v for k, v in live.items() if k in data})
+    return data
+
+
+def _live_tunnel_status_by_id(records: Any) -> dict:
+    """HA list 端點用：``{record.id: tunnel_status}``，即時值優先、拿不到退回 DB 值。
+
+    為什麼 list 也要疊：見 ``_with_live_tunnel_status`` docstring 第 2 格——status
+    端點改只讀之後，stored ``tunnel_status`` 不再被 HA 輪詢自動刷新，list 若照舊
+    讀 stored 值就會永遠停在上一次手動 Refresh。
+
+    ⚠ /woow 的 SH／SA 清單刻意**不**疊（``controllers/smart_home.py`` detail
+    ``get`` 的註解：「list 每一台各打一次 operator 太貴」）。HA 這兩支不同：
+    範圍是單一 workspace、只回 ``tunnel_status`` 一格，而且改動前 HA 的輪詢本來
+    就是「每台一次 operator 呼叫」——這裡只是把那筆成本搬回來，不是新增一類。
+
+    有界：operator 第一次拿不到（未設定／逾時／錯誤，``_live_tunnel_status`` 回
+    ``{}``）就停止對剩下的列發請求，一律退回 DB 值——operator 掛掉時一次 list
+    請求最多只吃一次逾時，不是 N 次。沒有 ``tunnel_id`` 的列（尚未 provision）
+    不打 operator，也不觸發熔斷。只讀、不寫 DB（理由同上）。
+    """
+    out = {}
+    operator_down = False
+    for rec in records:
+        status = rec.tunnel_status or 'disconnected'
+        if rec.tunnel_id and not operator_down:
+            try:
+                live = rec._live_tunnel_status()
+            except Exception:
+                # 同 `_with_live_tunnel_status`：一次意外例外不該讓整個清單 500。
+                _logger.exception(
+                    "Live tunnel status failed for %s id=%s", rec._name, rec.id)
+                live = {}
+            if live.get('tunnel_status'):
+                status = live['tunnel_status']
+            else:
+                operator_down = True
+        out[rec.id] = status
+    return out
+
+
 class HAIntegrationController(Controller):
     """REST API endpoints for Home Assistant Custom Component.
 
@@ -175,13 +256,16 @@ class HAIntegrationController(Controller):
         homes = request.env['woow_paas_platform.smart_home'].sudo().search([
             ('workspace_id', '=', workspace.id),
         ])
+        # tunnel_status 疊即時值（只讀）：status 端點改只讀後 stored 值不再被
+        # HA 輪詢自動刷新，見 `_live_tunnel_status_by_id`。
+        tunnel_status = _live_tunnel_status_by_id(homes)
         data = [
             {
                 'id': h.id,
                 'name': h.name,
                 'state': h.state,
                 'subdomain': h.subdomain or '',
-                'tunnel_status': h.tunnel_status or 'disconnected',
+                'tunnel_status': tunnel_status[h.id],
             }
             for h in homes
         ]
@@ -213,7 +297,8 @@ class HAIntegrationController(Controller):
         if isinstance(home, Response):
             return home
 
-        return _json_response({'home': home.to_dict()})
+        # 疊即時 tunnel 值（只讀）：理由見 `_with_live_tunnel_status` 第 2 格。
+        return _json_response({'home': _with_live_tunnel_status(home)})
 
     # ==================== Tunnel Token ====================
 
@@ -252,22 +337,26 @@ class HAIntegrationController(Controller):
             'mcp': home._get_mcp_integration(),
         })
 
-    # ==================== Status Refresh ====================
+    # ==================== Live Status ====================
 
     @route(
         '/api/smarthome/homes/<int:smarthome_id>/status',
         type='http', auth='none', methods=['GET'], csrf=False,
     )
     def get_home_status(self, smarthome_id: int, **kwargs: Any) -> Response:
-        """Refresh and return the current tunnel status of a smart home.
+        """Return the live tunnel status of a smart home (read-only).
 
         Required scope: ``smarthome:read``
+
+        不再呼叫 ``action_refresh_status()``（DB 寫入）——理由見
+        ``_with_live_tunnel_status``。存取檢查不變：scope ＋ workspace 成員。
 
         Args:
             smarthome_id: Smart home database ID.
 
         Returns:
-            JSON with ``home`` object containing updated status fields.
+            JSON with ``home`` object (same keys as ``to_dict()``) whose
+            tunnel fields carry the operator's live values when available.
         """
         result = _authenticate(required_scopes=['smarthome:read'])
         if isinstance(result, Response):
@@ -278,16 +367,7 @@ class HAIntegrationController(Controller):
         if isinstance(home, Response):
             return home
 
-        try:
-            home.action_refresh_status()
-        except Exception:
-            _logger.exception(
-                "Failed to refresh status for Smart Home id=%s", smarthome_id,
-            )
-            # Return current state even if refresh fails; the model
-            # already updates tunnel_status to 'error' on failure.
-
-        return _json_response({'home': home.to_dict()})
+        return _json_response({'home': _with_live_tunnel_status(home)})
 
     # ==================== Security Access (mirror of smarthome) ========
 
@@ -328,6 +408,8 @@ class HAIntegrationController(Controller):
         records = request.env['woow_paas_platform.security_access'].sudo().search([
             ('workspace_id', '=', workspace.id),
         ])
+        # 同 list_homes：tunnel_status 疊即時值（只讀），見 `_live_tunnel_status_by_id`。
+        tunnel_status = _live_tunnel_status_by_id(records)
         data = []
         for sa in records:
             sub_info = sa._get_subscription_info()
@@ -336,7 +418,7 @@ class HAIntegrationController(Controller):
                 'name': sa.name,
                 'canonical_name': sa.canonical_name or '',
                 'state': sa.state,
-                'tunnel_status': sa.tunnel_status or 'disconnected',
+                'tunnel_status': tunnel_status[sa.id],
                 'plan_name': sub_info['plan_name'] if sub_info else None,
                 'next_payment': sub_info['next_payment'] if sub_info else None,
             })
@@ -355,7 +437,8 @@ class HAIntegrationController(Controller):
         sa = self._get_sa_with_access(user, sa_id)
         if isinstance(sa, Response):
             return sa
-        return _json_response({'access': sa.to_dict()})
+        # 疊即時 tunnel 值（只讀）：理由見 `_with_live_tunnel_status` 第 2 格。
+        return _json_response({'access': _with_live_tunnel_status(sa)})
 
     @route(
         '/api/security-access/accesses/<int:sa_id>/tunnel-token',
@@ -386,7 +469,12 @@ class HAIntegrationController(Controller):
         type='http', auth='none', methods=['GET'], csrf=False,
     )
     def sa_get_status(self, sa_id: int, **kwargs: Any) -> Response:
-        """Refresh + return connector status. Scope: security-access:read."""
+        """Live connector status (read-only). Scope: security-access:read.
+
+        鏡像 ``get_home_status``：改讀 ``SecurityAccess._live_tunnel_status``
+        （#1256），不再 ``action_refresh_status()`` 寫 DB。理由見
+        ``_with_live_tunnel_status``。
+        """
         result = _authenticate(required_scopes=['security-access:read'])
         if isinstance(result, Response):
             return result
@@ -394,12 +482,7 @@ class HAIntegrationController(Controller):
         sa = self._get_sa_with_access(user, sa_id)
         if isinstance(sa, Response):
             return sa
-        try:
-            sa.action_refresh_status()
-        except Exception:
-            _logger.exception(
-                "Failed to refresh status for Security Access id=%s", sa_id)
-        return _json_response({'access': sa.to_dict()})
+        return _json_response({'access': _with_live_tunnel_status(sa)})
 
     def _get_sa_with_access(self, user: Any, sa_id: int) -> Any | Response:
         """Look up a security access and verify workspace access."""

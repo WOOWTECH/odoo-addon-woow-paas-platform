@@ -155,8 +155,9 @@ class TestHaApiSecurityAccess(HttpCase):
     def test_outsider_cannot_get_foreign_sa_status(self):
         """sa_get_status 各自的 cross-user negative。
 
-        status 端點在低 scope 下會觸發 action_refresh_status()（寫 DB / 打
-        operator），外人必須在 resolver 就被擋（403），絕不進到 refresh。"""
+        status 端點在低 scope 下會打 operator 讀即時 tunnel 狀態（改動前還會
+        action_refresh_status() 寫 DB；現在只讀，見 test_sh_live_tunnel_status），
+        外人必須在 resolver 就被擋（403），絕不進到 operator 呼叫。"""
         token = self._make_token(self.outsider, 'security-access:read')
         resp = self._get(
             f'/api/security-access/accesses/{self.sa.id}/status', token)

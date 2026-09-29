@@ -24,6 +24,9 @@ const EMPTY_ACCESS = {
   login_google: false,
   login_email_otp: false,
   access_unresolved_idp_types: "",
+  // #794 fail-open 旗標：缺席當 false（舊快取沒有這個 key）。列在這裡是為了讓
+  // 「形狀＝`_access_to_dict()`」這件事在前端也看得到，不是為了改變行為。
+  access_protection_lost: false,
   hostname: "",
   access_policies: [],
 };
@@ -72,6 +75,12 @@ export class AccessTab extends Component {
   // 按了必然失敗的開關。
   get hasHostname() {
     return !!this.state.access.hostname;
+  }
+
+  // #794：宣稱受保護、但 Cloudflare 上的 app 已經被拆掉。卡頭副標不能再說
+  // 「every visitor must pass Access」（卡片本身另有紅色警示）。
+  get protectionLost() {
+    return !!this.state.access.access_protection_lost;
   }
 
   get policyCount() {
@@ -154,6 +163,8 @@ export class AccessTab extends Component {
   };
 
   async deletePolicy(policy) {
+    // 確認視窗在 AccessAppCard 裡（三個 surface 共用），走到這裡＝使用者已經
+    // 確認過了。
     this.state.error = null;
     const res = await cloudServiceAccessService.deletePolicy(
       this.props.workspaceId, this.serviceId, policy.id);

@@ -156,19 +156,27 @@ class TestDnsFailedIsFailClosed(_SmartHomeCase):
         修前：``action_provision`` 對 ``tunnel_id`` 沒有任何 guard，重試會再 POST 一條
         全新 tunnel（operator 的 ``create_tunnel`` 每次都帶新 ``tunnel_secret``，**不**
         同名冪等），第一條就此失去 DB 引用。
+
+        Smart Home 開通重試之後：guard 分支從 ``raise`` 改成**在同一條 tunnel 上收斂**
+        （``_converge_existing_tunnel`` → ``sync_tunnel_routes``）。本條守的核心不變
+        ——``create_tunnel`` 只能被呼叫一次、``tunnel_id`` 不得被改寫——只是重試現在
+        會成功而不是被拒。完整矩陣見 ``test_sh_provision_retry.py``。
         """
         client = self._client(dns_failed=True)
         self._provision(client)
         self.assertEqual(client.create_tunnel.call_count, 1)
 
-        with self.assertRaises(UserError):
-            self._provision(client)
+        self._provision(client)
 
         self.assertEqual(
             client.create_tunnel.call_count, 1,
             '重試又建了一條 tunnel＝第一條變成沒人看管的計費孤兒')
         self.assertEqual(
             self.sh.tunnel_id, 'tun-484', '重試不得改寫既有 tunnel_id')
+        self.assertEqual(
+            client.sync_tunnel_routes.call_count, 1,
+            '重試要在既有 tunnel 上補 ingress／DNS，而不是什麼都不做')
+        self.assertEqual(self.sh.state, 'active')
 
     def test_provision_on_an_active_smart_home_is_also_guarded(self):
         """同一道 guard 順帶關掉一個既存的孤兒洞。

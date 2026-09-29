@@ -105,8 +105,22 @@ class SmartHomeController(Controller):
             # 會為 workspace 的每一台 SH 各 walk 一次 `access_policy_ids`，而
             # Access 分頁只存在於詳情頁（CS 為同一個理由把 `access` 限定在
             # `include_details` 那一側）。
-            return {"success": True,
-                    "data": smarthome.to_dict(include_details=True)}
+            #
+            # tunnel 欄位改用即時值（只讀，見 `SmartHome._live_tunnel_status`）；
+            # 拿不到時沿用 DB 裡上一次寫入的值。與 SA 詳情頁（#1256）同一個作法：
+            # DB 值只有 owner/admin 按 Refresh 時才會更新，其他成員看到的是過期的
+            # 「Connected」。刻意只做在 detail、不做在 list——list 每一台各打一次
+            # operator 太貴，而 Tunnel Information 只存在於詳情頁。
+            data = smarthome.to_dict(include_details=True)
+            try:
+                data.update(smarthome._live_tunnel_status())
+            except Exception:
+                # 開通已經成功（上面那行的寫入已經在這個交易裡）；疊加失敗只退回
+                # DB 值，不得讓下面的 `except Exception` 把一次成功的開通回報成失敗。
+                _logger.exception(
+                    "Live tunnel status overlay failed after provision sh=%s",
+                    smarthome.id)
+            return {"success": True, "data": data}
 
         if action not in ("delete", "provision", "refresh_status"):
             return {"success": False, "error": _("Unknown action: %(action)s", action=action)}
@@ -1029,8 +1043,22 @@ class SmartHomeController(Controller):
             # #768：與 detail 端點同一個形狀。provision 成功當下才剛建出 primary
             # route，前端要拿它把 Access 分頁畫出來；回 detail 以外的形狀會讓
             # 呼叫端在「沒有 routes」與「routes 是空的」之間分不出來。
-            return {"success": True,
-                    "data": smarthome.to_dict(include_details=True)}
+            #
+            # 「同一個形狀」也包含 tunnel 欄位的即時疊加（只讀，同 detail `get`）：
+            # 詳情頁的 Retry setup 成功後直接 `state.home = result.data`，而收斂
+            # （`_converge_existing_tunnel`）只寫 state／error_message／deployed_at、
+            # 從不寫 tunnel_status／connector_* ⇒ 不疊的話 Tunnel Information 會從
+            # 即時值倒退回上一次 Refresh 寫入的舊值，直到整頁重載。
+            data = smarthome.to_dict(include_details=True)
+            try:
+                data.update(smarthome._live_tunnel_status())
+            except Exception:
+                # 開通已經成功（上面那行的寫入已經在這個交易裡）；疊加失敗只退回
+                # DB 值，不得讓下面的 `except Exception` 把一次成功的開通回報成失敗。
+                _logger.exception(
+                    "Live tunnel status overlay failed after provision sh=%s",
+                    smarthome.id)
+            return {"success": True, "data": data}
         except Exception as e:
             _logger.error("Failed to provision smart home: %s", e)
             return {"success": False, "error": str(e)}
