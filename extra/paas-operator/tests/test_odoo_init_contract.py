@@ -264,9 +264,13 @@ def _never_ready_k8s():
      "update_module_list", "unknown"),
     (lambda: _ready_k8s(KubectlException("exec failed", "exec", "")),
      "update_module_list", "unknown"),
+    # timeout 時就算帶著看似失敗的輸出也不可信（程序可能還在跑）⇒ 仍是 unknown。
+    (lambda: _ready_k8s(KubectlException("timed out", "exec", "", timed_out=True,
+                                         stdout='{"success": false}')),
+     "update_module_list", "unknown"),
     (lambda: _ready_k8s(""), "update_module_list", "unknown"),
     (lambda: _ready_k8s("not json"), "update_module_list", "unknown"),
-], ids=["find_pod", "wait_ready", "script-failed-exit0-defensive", "exec-timeout", "exec-failed",
+], ids=["find_pod", "wait_ready", "script-failed-exit0-defensive", "exec-timeout", "exec-failed", "exec-timeout-with-stdout",
         "empty-output", "invalid-json"])
 def test_init_odoo_failure_carries_error_step_and_kind(k8s_factory, step, kind):
     response = _post_init_odoo(k8s_factory())
