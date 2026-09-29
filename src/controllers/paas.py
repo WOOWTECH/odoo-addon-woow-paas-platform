@@ -1217,13 +1217,19 @@ class PaasController(HiddenChainMixin, Controller):
         # ⛔ 不得在這裡自己數席位，兩把尺漂開會產生「gate 放行但寫入被守衛擋」的死結。
         #
         # 升級天然通過（席數變大 ⇒ 用量 ≤ 席數），所以**不需要**先判斷這次是不是降級。
+        #
+        # #1261：同一支 gate 也擋「目標 0 席 ＋ 服務仍受 Access 保護」——CS 的 Access
+        # 頁籤同樣只給有席位的方案（#746 拍板 6），換過去之後保護關不掉。
+        # 判準收在 `_protection_gate_denial`，這裡不另寫。
         _denial = request.env['woow_paas_platform.security_access_access_policy']\
             ._seat_gate_denial(service, plan)
         if _denial:
+            # #1261：`data` 原樣轉發 error 以外的欄位（`code`／current_seats／
+            # target_seats，保護那種另帶 `protected_hostnames`）。不逐 key 挑：
+            # gate 多一種拒絕時三個端點各挑一次就是漂移的起點。
             return {'success': False,
                     'error': _denial['error'],
-                    'data': {'current_seats': _denial['current_seats'],
-                             'target_seats': _denial['target_seats']}}
+                    'data': {k: v for k, v in _denial.items() if k != 'error'}}
 
         refund = old_sub._compute_unused_refund()
 

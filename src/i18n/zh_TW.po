@@ -10161,6 +10161,13 @@ msgid "Protected ·"
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/AccessTab.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/smart-home/tabs/SmartHomeAccessTab.xml:0
+msgid "Protected · Access settings are not available on this plan"
+msgstr "已保護 · 此方案無法使用 Access 設定"
+
+#. module: woow_paas_platform
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_service__access_protection_lost
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_security_access_route__access_protection_lost
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_smart_home_route__access_protection_lost
@@ -10312,6 +10319,8 @@ msgstr ""
 #. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/access/AccessAppCard.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/AccessTab.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/smart-home/tabs/SmartHomeAccessTab.xml:0
 msgid "Public · anyone can reach it"
 msgstr ""
 
@@ -13275,6 +13284,24 @@ msgstr "此方案不含存取席位，但這台服務目前列了 %(used)s 個 e
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/smart-home/tabs/SmartHomeAccessTab.xml:0
+msgid "This plan includes no Access seats, so Access settings are not available on it. Protection is still on for the addresses below, and they stay locked behind Access until you turn it off. Turn protection off to make them reachable again, or change to a plan with Access seats to keep managing Access."
+msgstr "此方案不含存取席位，因此無法使用 Access 設定。下列網址的保護仍然開著，在你關閉之前都會被 Access 擋住。關閉保護即可恢復對外連線；若要繼續管理 Access，請改用含存取席位的方案。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/AccessTab.xml:0
+msgid "This plan includes no Access seats, so Access settings are not available on it. Protection is still on for this service's address, and it stays locked behind Access until you turn it off. Turn protection off to make it reachable again, or change to a plan with Access seats to keep managing Access."
+msgstr "此方案不含存取席位，因此無法使用 Access 設定。這台服務的網址保護仍然開著，在你關閉之前都會被 Access 擋住。關閉保護即可恢復對外連線；若要繼續管理 Access，請改用含存取席位的方案。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/security_access_access_policy.py:0
+msgid "This plan includes no Access seats, so the Access settings are not available on it, but Access protection is still on for %(hosts)s. Turn protection off in the Access tab first, then change the plan. Otherwise the address stays locked behind Access and nobody can reach it."
+msgstr "此方案不含存取席位，換過去之後就無法使用 Access 設定，但 %(hosts)s 的 Access 保護仍然開著。請先到「存取控管」分頁關閉保護，再換方案；否則該網址會一直被 Access 擋住，任何人都連不進去。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/services/topup_errors.js:0
 msgid "This plan is no longer available."
 msgstr "此方案已不再提供。"
@@ -13724,6 +13751,13 @@ msgstr "開啟保護"
 #: code:addons/woow_paas_platform/static/src/paas/pages/smart-home/tabs/SmartHomeAccessTab.js:0
 msgid "Turn on Access protection?"
 msgstr "開啟 Access 保護？"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/AccessTab.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/smart-home/tabs/SmartHomeAccessTab.xml:0
+msgid "Turn protection off"
+msgstr "關閉保護"
 
 #. module: woow_paas_platform
 #. odoo-javascript

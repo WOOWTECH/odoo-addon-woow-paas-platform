@@ -909,3 +909,8 @@ from . import test_sh_provision_retry
 # （SA sa.to_dict routes／SH include_details routes／CS _access_to_dict）。key 缺席時
 # AccessAppCard 讀到 undefined，fail-open 警示會靜默消失。
 from . import test_access_protection_lost_ui_payload
+
+# #1261：CS／SH 換到 0 席方案時，仍受 Access 保護就擋（0 席看不到 Access 頁籤，換過去
+# 保護關不掉、對外 403）。守「擋在退點／關舊訂閱之前、關保護後放行、卡死記錄在 0 席下
+# 仍關得掉、SA 刻意不適用」。
+from . import test_change_plan_protection_gate_1261

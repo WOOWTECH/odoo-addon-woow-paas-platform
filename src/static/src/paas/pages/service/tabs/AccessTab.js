@@ -5,6 +5,7 @@ import { _t } from "@web/core/l10n/translation";
 import { WoowCard } from "../../../components/card/WoowCard";
 import { WoowIcon } from "../../../components/icon/WoowIcon";
 import { AccessAppCard } from "../../../components/access/AccessAppCard";
+import { WoowButton } from "../../../components/button/WoowButton";
 import { AddPolicyModal } from "../../../components/modal/AddPolicyModal";
 import { cloudServiceAccessService } from "../../../services/cloud_service_access";
 
@@ -45,13 +46,20 @@ const EMPTY_ACCESS = {
  * Props:
  *   - service (Object)：CS detail payload（`_format_service(include_details=True)`）
  *   - workspaceId (number)
+ *   - seatless (boolean, optional)：#1261 復原模式——方案沒有 Access 席位、服務卻
+ *       仍開著保護。此時只給「Turn protection off」，不掛 AccessAppCard（開保護／
+ *       登入方式／policy／session 都是有席位方案才該做的設定）。理由與
+ *       SmartHomeAccessTab 的同名 prop 相同。
  */
 export class AccessTab extends Component {
   static template = "woow_paas_platform.ServiceAccessTab";
-  static components = { WoowCard, WoowIcon, AccessAppCard, AddPolicyModal };
+  static components = {
+    WoowCard, WoowIcon, WoowButton, AccessAppCard, AddPolicyModal,
+  };
   static props = {
     service: { type: Object },
     workspaceId: { type: Number },
+    seatless: { type: Boolean, optional: true },
   };
 
   setup() {
@@ -63,6 +71,8 @@ export class AccessTab extends Component {
       error: null,
       showPolicyModal: false,
       editingPolicy: null,
+      // #1261 復原模式：關保護的請求進行中（按鈕 disabled，防連點重推 CF）
+      unprotecting: false,
     });
   }
 
@@ -106,6 +116,19 @@ export class AccessTab extends Component {
       this.state.expanded = true;
     }
     this.saveConfig({ is_protected: checked });
+  }
+
+  // #1261 復原模式唯一的寫入：關保護。後端 `_update_service_access_config` 的
+  // 關閉方向不看席位、任何情況都關得掉；回應是整包 `_access_to_dict()`，收下後
+  // 畫面立刻變成 Public。
+  async turnOffProtection() {
+    if (this.state.unprotecting) return;
+    this.state.unprotecting = true;
+    try {
+      await this.saveConfig({ is_protected: false });
+    } finally {
+      this.state.unprotecting = false;
+    }
   }
 
   onLoginToggle(method) {
