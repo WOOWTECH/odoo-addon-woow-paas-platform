@@ -1,5 +1,6 @@
 """共用 integration 測試 namespace 前綴；不改 operator 的部署設定預設。"""
 
+import json
 import os
 import re
 
@@ -33,6 +34,6 @@ def integration_storage_class() -> dict:
 def integration_storage_class_yaml(indent: int = 2) -> str:
     """供既有 YAML 字串 fixture 插入；未設定時輸出空字串。"""
     return "".join(
-        f"{' ' * indent}{key}: {value}\n"
+        f"{' ' * indent}{key}: {json.dumps(value)}\n"
         for key, value in integration_storage_class().items()
     )

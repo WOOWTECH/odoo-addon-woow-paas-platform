@@ -8,7 +8,7 @@ from tests.integration import test_pvc_keep_before_uninstall as keep_fixtures
 from tests.integration import test_pvc_orphan_labeling as orphan_fixtures
 
 
-@pytest.mark.parametrize("override", [None, "longhorn-delete"])
+@pytest.mark.parametrize("override", [None, "longhorn-delete", "true", "123"])
 def test_storage_override_renders_pvc_without_changing_other_spec(monkeypatch, tmp_path, override):
     monkeypatch.delenv("OPERATOR_TEST_STORAGE_CLASS", raising=False)
     if override is not None:
