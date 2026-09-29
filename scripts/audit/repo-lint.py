@@ -6618,7 +6618,6 @@ def run_all(root):
                   + check_access_tab_gate_anchor(root)
                   + check_conceal_instances_gate(root)
                   + check_reset_budget_ladder(root)
-                  + check_init_odoo_budget_ladder(root)
                   + check_transition_anchor_utc(root)
                   + check_assertlogs_numeric_level(root)
                   + check_mixin_subscription_sudo(root)
@@ -6649,7 +6648,8 @@ def run_all(root):
                   + check_cron_wiring(root)
                   + check_indentation(root)
                   + check_bulk_grant_ruler_sync(root)
-                  + check_access_payload_shape_matches_operator_schema(root))
+                  + check_access_payload_shape_matches_operator_schema(root)
+                  + check_init_odoo_budget_ladder(root))
     if violations:
         print("repo-lint：%d 個違規" % len(violations))
         for v in violations:

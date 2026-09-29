@@ -61,6 +61,9 @@ def positive_int(node, label):
 
 
 def constant(tree, name):
+    # 後續 +=／函式內重綁也會改 runtime 值，不能只讀第一個 module literal。
+    one((n for n in ast.walk(tree) if isinstance(n, ast.Name)
+         and n.id == name and isinstance(n.ctx, ast.Store)), name + ' 唯一寫入')
     assignment = one((n for n in tree.body if isinstance(n, ast.Assign)
                       and any(isinstance(t, ast.Name) and t.id == name for t in n.targets)), name)
     if len(assignment.targets) != 1:

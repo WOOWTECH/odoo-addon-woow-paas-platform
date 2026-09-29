@@ -54,6 +54,7 @@ class InitOdooBudgetCLITests(unittest.TestCase):
                 reason = result.stdout
             else:
                 self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertTrue(result.stdout.strip(), 'guard 靜默放行 source mutation：' + new)
                 payload = json.loads(result.stdout)
                 self.assertEqual(payload['decision'], 'block')
                 reason = payload['reason']
@@ -120,6 +121,10 @@ class InitOdooBudgetCLITests(unittest.TestCase):
         for case in cases:
             with self.subTest(source=case[0], change=case[2]):
                 self.mutation(*case, '結構變動')
+
+    def test_reassigned_budget_cannot_keep_the_old_literal(self):
+        self.mutation(OPERATOR, 'MAX_READY_RETRIES = 30',
+                      'MAX_READY_RETRIES = 30\nMAX_READY_RETRIES += 70', '唯一寫入')
 
     def test_missing_or_unparseable_inputs_do_not_pass(self):
         self.mutation(OPERATOR, 'MAX_READY_RETRIES = 30', 'MAX_READY_RETRIES = unknown()', '正整數 literal')
