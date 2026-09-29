@@ -292,7 +292,7 @@
                           <WoowIcon name="'edit'" size="18"/>
                         </button>
                         <button class="o_woow_sa_icon_btn" title="Delete route"
-                                t-on-click="() => this.removeRoute(route)">
+                                t-on-click="() => this.requestRemoveRoute(route)">
                           <WoowIcon name="'delete'" size="18"/>
                         </button>
                       </t>
@@ -465,6 +465,36 @@
             savePolicy="savePolicy"
             onClose="() => state.showPolicyModal = false"
             onSaved.bind="onPolicySaved"/>
+
+        <!-- 刪除單一 route 前的確認。後果要在按下去之前講清楚：舊網址當場失
+             效（DNS 與 tunnel ingress 一起拆）、不轉址，這條 route 自己的 Access
+             app 與 policy 一併刪除，subdomain 被放掉。 -->
+        <div t-if="state.confirmDeleteRoute" class="o_woow_modal_backdrop">
+          <div class="o_woow_modal">
+            <div class="o_woow_modal_header"><h2>Delete this route?</h2></div>
+            <div class="o_woow_modal_body">
+              <p>
+                <strong class="o_woow_sa_detail__mono" t-esc="state.confirmDeleteRoute.hostname"/>
+                stops working immediately: its DNS record and tunnel route on
+                Cloudflare are removed, and there is no redirect to another
+                address.
+              </p>
+              <p>Access protection and policies on this route are deleted with
+                 it, and the subdomain is released. This cannot be undone.</p>
+            </div>
+            <div class="o_woow_modal_footer">
+              <WoowButton variant="'secondary'"
+                          disabled="state.deletingRoute"
+                          onClick.bind="cancelRemoveRoute">Cancel</WoowButton>
+              <WoowButton variant="'danger'"
+                          disabled="state.deletingRoute"
+                          onClick.bind="removeRoute">
+                <t t-if="state.deletingRoute">Deleting…</t>
+                <t t-else="">Delete route</t>
+              </WoowButton>
+            </div>
+          </div>
+        </div>
 
         <div t-if="state.showDeleteConfirm" class="o_woow_modal_backdrop">
           <div class="o_woow_modal">

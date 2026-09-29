@@ -35,8 +35,9 @@ const IDP_TYPE_LABELS = {
  *   - hostname (string)：這張卡的錨點主機名（顯示用）
  *   - config (Object)：access 設定現值——is_protected / login_google /
  *       login_email_otp / session_duration / access_unresolved_idp_types /
- *       access_policies（形狀＝後端 route.to_dict() 與 CS `_access_to_dict()`
- *       的交集，兩邊逐字相同）
+ *       access_protection_lost / access_policies（形狀＝後端三腿
+ *       SA `route.to_dict()`、SH `route.to_dict()` 與 CS `_access_to_dict()`
+ *       的交集，三邊逐字相同）
  *   - expanded (boolean)：展開狀態由呼叫端持有（SA 要記住每條 route 各自的）
  *   - reordering (boolean, optional)：排序寫入中（顯示 saving 遮罩）
  *   - protectDisabled (boolean, optional)：沒有可掛 Access app 的錨點時鎖開關
@@ -45,6 +46,12 @@ const IDP_TYPE_LABELS = {
  *       維持抽取前的即時行為；CS 端傳入以滿足拍板 5 的「明示後果」。
  *   - onToggleExpand / onProtectedChange / onLoginToggle / onSessionChange /
  *     onAddPolicy / onEditPolicy / onDeletePolicy / onReorderPolicies (Function)
+ *
+ * 刪 policy 的確認視窗**卡片自己持有、一律出現**（不像 protectConfirm 可選）：
+ * 刪掉一筆 policy 會立刻改寫 Cloudflare 上「誰進得來」的判決，而且沒有復原鍵
+ * ——三個呼叫端（SA / SH / CS）的後果完全相同，放在卡片裡一次解決，不必每個
+ * 呼叫端各做一份（遲早有一邊漏掉）。確認之後才往上拋 onDeletePolicy，卡片仍然
+ * 不認識任何 API。
  */
 export class AccessAppCard extends Component {
   static template = "woow_paas_platform.AccessAppCard";
@@ -76,6 +83,8 @@ export class AccessAppCard extends Component {
       draggingPolId: null,
       // 開啟保護的確認視窗（protectConfirm 有傳才會用到）
       confirmingProtect: false,
+      // 刪除 policy 的確認視窗：待刪的那一筆 policy（null＝沒在問）
+      confirmingDeletePolicy: null,
     });
     this.protectInputRef = useRef("protectInput");
     onWillUpdateProps((nextProps) => {
@@ -129,6 +138,18 @@ export class AccessAppCard extends Component {
     if (this.protectInputRef.el) {
       this.protectInputRef.el.checked = !!this.props.config.is_protected;
     }
+  }
+
+  // ---- #794 fail-open：保護沒有生效 ----
+
+  // `access_protection_lost` 由後端在「刪除交易回捲了、但 Cloudflare 那半已經
+  // 拆掉」時打開（`_access_mark_protection_lost`，三腿同名）。此時
+  // `is_protected` 只剩**意圖**：CF 上沒有任何東西在強制登入，hostname 照常由
+  // tunnel 服務。卡片在它為真時**不能**再畫「Protected」——那正是 #794 說的
+  // 「UI 顯示已保護、實際免登入即可存取」。旗標在下一次成功的 Access sync 清掉
+  // （#803 cron 會自動重推；租戶關掉再打開保護也會立刻重推一次）。
+  get protectionLost() {
+    return !!this.props.config.access_protection_lost;
   }
 
   // ---- 登入方式 ----
@@ -186,6 +207,58 @@ export class AccessAppCard extends Component {
     if ((pol.require || []).length) extra.push(_t("+%s require", pol.require.length));
     if ((pol.exclude || []).length) extra.push(_t("-%s exclude", pol.exclude.length));
     return extra.length ? `${inc} · ${extra.join(" · ")}` : inc;
+  }
+
+  // ---- 刪除 policy（先確認） ----
+
+  requestDeletePolicy(pol) {
+    this.state.confirmingDeletePolicy = pol;
+  }
+
+  cancelDeletePolicy() {
+    this.state.confirmingDeletePolicy = null;
+  }
+
+  confirmDeletePolicy() {
+    const pol = this.state.confirmingDeletePolicy;
+    // 先關視窗再往上拋：呼叫端的 callback 是 async（刪完還會 reload），等它回
+    // 來才關的話，這段時間裡確認鍵還按得到，連點會對同一筆 policy 送出第二次刪
+    // 除（第二次必然回 not found，把一個已經成功的刪除畫成錯誤）。
+    this.state.confirmingDeletePolicy = null;
+    if (pol) {
+      this.props.onDeletePolicy(pol);
+    }
+  }
+
+  /**
+   * 刪掉這筆 policy 之後「誰進得來」會怎麼變——依 decision 講具體後果。
+   *
+   * 只有「最後一筆 Allow」需要看整份清單：Access 沒有任何 Allow 規則時預設全擋
+   * （卡片空清單的提示同一句話），刪下去等於把包括自己在內的所有人擋在外面，這
+   * 一格一定要在按下去之前說出來。
+   */
+  deletePolicyConsequence(pol) {
+    if (pol.decision === "deny") {
+      return _t(
+        "Visitors this policy blocks will be judged by the remaining policies instead, so some of them may get in."
+      );
+    }
+    if (pol.decision === "bypass") {
+      return _t(
+        "Visitors this policy lets straight through will have to pass the remaining policies from now on."
+      );
+    }
+    const otherAllows = this.state.policies.filter(
+      (p) => p.id !== pol.id && p.decision !== "deny" && p.decision !== "bypass"
+    );
+    if (!otherAllows.length) {
+      return _t(
+        "This is the only Allow policy on this address. Without any Allow policy no visitor gets in, including you, until you add a new one."
+      );
+    }
+    return _t(
+      "Visitors who only match this policy will no longer get in."
+    );
   }
 
   onPolicyDragStart(pol, ev) {

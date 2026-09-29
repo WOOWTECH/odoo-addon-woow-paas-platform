@@ -88,8 +88,11 @@ export class SmartHomeAccessTab extends Component {
   }
 
   // 卡頭副標 "N of M routes protected" 的 N（同 SA）。
+  // #794：`access_protection_lost` 的 route 不算——is_protected 只剩意圖，CF 上
+  // 的 app 已經被拆掉（判準與 SA 的 protectedRouteCount 逐字相同）。
   get protectedRouteCount() {
-    return this.state.routes.filter((r) => r.is_protected).length;
+    return this.state.routes.filter(
+      (r) => r.is_protected && !r.access_protection_lost).length;
   }
 
   // ---- 本地 route 狀態維護 ----
@@ -234,6 +237,8 @@ export class SmartHomeAccessTab extends Component {
   };
 
   async deletePolicy(route, policy) {
+    // 確認視窗在 AccessAppCard 裡（三個 surface 共用），走到這裡＝使用者已經
+    // 確認過了。
     // 刪除只認 policy id（route 只是為了呼叫端對稱／日後 per-route 消歧義；
     // 後端會在已 gate 過的 SH 底下自己解出這筆 policy）。
     this.state.error = null;

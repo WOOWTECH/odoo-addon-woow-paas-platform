@@ -7,12 +7,19 @@
   <t t-name="woow_paas_platform.AccessAppCard">
     <div class="o_woow_sa_app">
       <div class="o_woow_sa_app__head">
-        <div t-att-class="'o_woow_sa_app__shield ' + (props.config.is_protected ? 'o_woow_sa_app__shield--on' : 'o_woow_sa_app__shield--off')">
-          <WoowIcon name="props.config.is_protected ? 'verified_user' : 'gpp_bad'" size="20"/>
+        <!-- #794：protectionLost 優先於 is_protected——後者只是意圖，前者才是
+             Cloudflare 上的事實。綠盾配「其實沒保護」就是那個看不出來的謊。 -->
+        <div t-att-class="'o_woow_sa_app__shield ' + (protectionLost ? 'o_woow_sa_app__shield--lost' : (props.config.is_protected ? 'o_woow_sa_app__shield--on' : 'o_woow_sa_app__shield--off'))">
+          <WoowIcon name="protectionLost ? 'gpp_maybe' : (props.config.is_protected ? 'verified_user' : 'gpp_bad')" size="20"/>
         </div>
         <div class="o_woow_sa_app__ident">
           <span class="o_woow_sa_detail__mono o_woow_sa_app__host" t-esc="props.hostname"/>
-          <div t-if="props.config.is_protected"
+          <div t-if="protectionLost"
+               class="o_woow_sa_app__status o_woow_sa_app__status--lost">
+            <span class="o_woow_sa_app__dot"/>
+            <span>Protection not in effect · anyone can reach it</span>
+          </div>
+          <div t-elif="props.config.is_protected"
                class="o_woow_sa_app__status o_woow_sa_app__status--on">
             <span class="o_woow_sa_app__dot"/>
             <!-- 數字與單位之間的空白必須在**同一行**：OWL 會把含換行的
@@ -37,6 +44,21 @@
                   t-on-click="() => this.props.onToggleExpand()">
             <WoowIcon name="props.expanded ? 'expand_less' : 'expand_more'" size="20"/>
           </button>
+        </div>
+      </div>
+      <!-- #794 fail-open 警告。刻意放在 body **外面**：卡片收起來（或保護開關
+           顯示為關）時也必須看得到——這是「對外完全開放」的事實，不是設定細節。 -->
+      <div t-if="protectionLost" class="o_woow_sa_app__lost" role="alert">
+        <WoowIcon name="'gpp_maybe'" size="18"/>
+        <div class="o_woow_sa_app__lost_text">
+          <strong>Access protection is not in effect.</strong>
+          <span>
+            Its Cloudflare Access application could not be applied, so this
+            address can be opened right now without logging in. The platform
+            keeps retrying automatically; to re-apply it immediately, turn
+            protection off and on again. If this warning does not go away,
+            contact support.
+          </span>
         </div>
       </div>
       <div t-if="props.config.is_protected and props.expanded"
@@ -116,7 +138,7 @@
                     <WoowIcon name="'edit'" size="16"/>
                   </button>
                   <button class="o_woow_sa_icon_btn" title="Delete policy"
-                          t-on-click="() => this.props.onDeletePolicy(pol)">
+                          t-on-click="() => this.requestDeletePolicy(pol)">
                     <WoowIcon name="'delete'" size="16"/>
                   </button>
                 </div>
@@ -159,6 +181,29 @@
             <WoowButton variant="'primary'" onClick.bind="confirmProtect">
               <t t-esc="props.protectConfirm.confirmLabel"/>
             </WoowButton>
+          </div>
+        </div>
+      </div>
+
+      <!-- 刪除 policy 前的確認（一律出現，三個呼叫端共用，理由見 AccessAppCard.js
+           檔頭）。後果依 decision 動態組句：刪 Allow 是「少一群人進得來」、刪
+           Block 是「多一群人可能進得來」，同一句話講不對兩者。 -->
+      <div t-if="state.confirmingDeletePolicy" class="o_woow_modal_backdrop">
+        <div class="o_woow_modal">
+          <div class="o_woow_modal_header">
+            <h2>Delete this policy?</h2>
+          </div>
+          <div class="o_woow_modal_body">
+            <p>
+              <strong t-esc="state.confirmingDeletePolicy.name"/> is removed from
+              the Access application of <strong t-esc="props.hostname"/> right
+              away. This cannot be undone.
+            </p>
+            <p t-esc="deletePolicyConsequence(state.confirmingDeletePolicy)"/>
+          </div>
+          <div class="o_woow_modal_footer">
+            <WoowButton variant="'secondary'" onClick.bind="cancelDeletePolicy">Cancel</WoowButton>
+            <WoowButton variant="'danger'" onClick.bind="confirmDeletePolicy">Delete policy</WoowButton>
           </div>
         </div>
       </div>

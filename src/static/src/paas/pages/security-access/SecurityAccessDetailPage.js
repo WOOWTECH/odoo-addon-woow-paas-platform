@@ -147,6 +147,11 @@ export class SecurityAccessDetailPage extends Component {
       showSkipTrialModal: false,
       showChangePlanModal: false,
       showDeleteConfirm: false,
+      // 刪除 route 前的確認：待刪的那條 route（null＝沒在問）。刪 route 會立刻
+      // 拿掉它在 Cloudflare 上的 DNS／ingress 與 Access app，舊網址當場失效、
+      // subdomain 被放掉，沒有復原鍵——以前按一下垃圾桶就直接送出。
+      confirmDeleteRoute: null,
+      deletingRoute: false,
       // Access tab (P2.5 per-route) — policy modal + which route it targets,
       // and which protected route cards are expanded (keyed by route id).
       showPolicyModal: false,
@@ -429,13 +434,38 @@ export class SecurityAccessDetailPage extends Component {
     }
   }
 
-  async removeRoute(route) {
-    const res = await securityAccessService.deleteRoute(
-      this.props.workspaceId, this.props.saId, route.id);
-    if (res.success) {
-      await this.loadDetail();
-    } else {
-      this.state.actionError = res.error;
+  requestRemoveRoute(route) {
+    this.state.confirmDeleteRoute = route;
+  }
+
+  cancelRemoveRoute() {
+    if (this.state.deletingRoute) {
+      return;
+    }
+    this.state.confirmDeleteRoute = null;
+  }
+
+  // 確認視窗的「Delete」。視窗在請求期間**保持開著、按鈕鎖住**，而不是先關再
+  // 送（AccessAppCard 刪 policy 那種）：刪 route 要同步 Cloudflare（DNS、
+  // ingress、Access app 都要拆），常常要好幾秒；先關的話這段時間畫面毫無動靜，
+  // 使用者會以為沒按到、再去點一次垃圾桶。與整個 SA 的刪除確認同一個作法。
+  async removeRoute() {
+    const route = this.state.confirmDeleteRoute;
+    if (!route || this.state.deletingRoute) {
+      return;
+    }
+    this.state.deletingRoute = true;
+    try {
+      const res = await securityAccessService.deleteRoute(
+        this.props.workspaceId, this.props.saId, route.id);
+      if (res.success) {
+        await this.loadDetail();
+      } else {
+        this.state.actionError = res.error;
+      }
+    } finally {
+      this.state.deletingRoute = false;
+      this.state.confirmDeleteRoute = null;
     }
   }
 
@@ -592,9 +622,14 @@ export class SecurityAccessDetailPage extends Component {
   // 狀態、route-pinned 的 API 呼叫，以及卡頭那句 "N of M routes protected"。
   //
   // 卡頭副標 "N of M routes protected" 的 N。
+  //
+  // #794：`access_protection_lost` 的 route **不算**。那一格的 is_protected 只
+  // 剩意圖——Cloudflare 上的 app 已經被拆掉、hostname 免登入就打得開；把它算
+  // 進「已保護」正是那個看不出來的謊（卡片本身另有紅色警示）。
   get protectedRouteCount() {
     const routes = (this.state.sa && this.state.sa.routes) || [];
-    return routes.filter((r) => r.is_protected).length;
+    return routes.filter(
+      (r) => r.is_protected && !r.access_protection_lost).length;
   }
 
   // Per-route Access config write → route-pinned BFF endpoint. Reloads the SA
@@ -658,6 +693,8 @@ export class SecurityAccessDetailPage extends Component {
   }
 
   async deletePolicy(route, policy) {
+    // 確認視窗在 AccessAppCard 裡（三個 surface 共用），走到這裡＝使用者已經
+    // 確認過了。
     // Policy delete is by policy id (route is passed only for call-site
     // symmetry / future per-route disambiguation; the backend resolves the
     // policy under the gated SA).

@@ -904,3 +904,8 @@ from . import test_sh_live_tunnel_status
 # Smart Home 開通重試：有 tunnel 的 error／pending 在同一條 tunnel 上收斂（不再呼叫
 # create_tunnel）；active／suspended 照舊拒絕；收斂失敗維持 error 並保留 tunnel。
 from . import test_sh_provision_retry
+
+# #794 前端接上：`access_protection_lost` 必須出現在三腿畫面實際讀的詳情 payload
+# （SA sa.to_dict routes／SH include_details routes／CS _access_to_dict）。key 缺席時
+# AccessAppCard 讀到 undefined，fail-open 警示會靜默消失。
+from . import test_access_protection_lost_ui_payload
