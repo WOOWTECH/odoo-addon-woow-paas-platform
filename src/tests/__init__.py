@@ -909,3 +909,8 @@ from . import test_sh_provision_retry
 # （SA sa.to_dict routes／SH include_details routes／CS _access_to_dict）。key 缺席時
 # AccessAppCard 讀到 undefined，fail-open 警示會靜默消失。
 from . import test_access_protection_lost_ui_payload
+
+# #1261 SA 換方案的 route 數降級 gate（#773 席位 gate 的同構）：3 條 route 從 3 組降到
+# 1 組必須在退點／關舊訂閱之前被擋、⛔ 不刪任何 route；0 組＝不准（不是 unlimited）；
+# route 數 ≤ 目標 cap 的降級與升級照常放行；AST 釘 gate 排在第一個寫入之前。
+from . import test_sa_change_plan_route_gate_1261

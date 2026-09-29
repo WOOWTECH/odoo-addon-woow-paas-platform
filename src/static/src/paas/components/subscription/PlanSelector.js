@@ -28,6 +28,9 @@ export class PlanSelector extends Component {
     // #773：這台服務目前已用的席位數。optional ⇒ 建立流程（還沒有服務、必然 0 用量）
     // 的呼叫端不必傳，行為與本 PR 之前完全相同。
     usedSeats: { type: Number, optional: true },
+    // #1261：這台服務目前的 route 數（只有 Security Access 會傳）。optional ⇒
+    // 建立流程與 CS／SH 不傳，卡片不標任何 route 警告，行為與本 PR 之前完全相同。
+    usedRoutes: { type: Number, optional: true },
   };
 
   setup() {
@@ -176,6 +179,36 @@ export class PlanSelector extends Component {
     return seats
       ? _t("Currently using %(used)s — delete some first", { used })
       : _t("Delete all %(used)s listed email address(es) first", { used });
+  }
+
+  /**
+   * #1261：這張方案卡的 route 上限裝不裝得下服務目前的 route 數？
+   *
+   * 與 `isSeatOverCurrentUsage`（#773）同一個決定：只做**視覺標註、不 disable**，
+   * 權威判定在後端 `_route_gate_denial`（換方案端點在退點之前擋）。前端若也決定
+   * 「可不可以選」就是第二個判定處，漂移時會出現「畫面說可以但送出被擋」或反過來。
+   *
+   * `max_routes` 只有 SA 的 plans API 會帶（`sa_max_routes`，**0 ＝一條都不准**，
+   * 不是 unlimited——與後端 gate 同一個 `>` 比較子）；CS／SH 的 plan 沒有這個 key、
+   * 或呼叫端沒傳 `usedRoutes` ⇒ 一律不標。
+   * 席數變體沿用 base 卡的判定：變體只加 Access 席位，route 上限跟著 base tier 走。
+   */
+  isPlanOverRouteUsage(plan) {
+    const used = this.props.usedRoutes;
+    const max = plan.max_routes;
+    return typeof used === "number" && typeof max === "number" && used > max;
+  }
+
+  /**
+   * #1261：route 裝不下時的那一句。整句在 JS 組好再 `t-esc`（理由同 `overUsageHint`：
+   * 數字夾在 XML 文字中間會把一句話切成殘缺 msgid）。
+   */
+  routeOverUsageHint(plan) {
+    const used = this.props.usedRoutes || 0;
+    const max = plan.max_routes;
+    return max
+      ? _t("Allows %(max)s route(s); you have %(used)s — delete some first", { max, used })
+      : _t("Delete all %(used)s route(s) first", { used });
   }
 
   formatSeatDelta(base, variant) {
