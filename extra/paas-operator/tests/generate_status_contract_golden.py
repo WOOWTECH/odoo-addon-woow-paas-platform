@@ -87,7 +87,7 @@ _WOOW_ODOO_PODS = [
     # postgres.yaml：component=postgresql，owner＝StatefulSet。
     _pod("svc-1263-postgresql-0", "postgresql", _owner("StatefulSet")),
     # backup-cronjob.yaml：component=db-backup＋woow.paas/task，owner＝Job。
-    _pod("svc-1263-backup-29000000-abcde", "db-backup", _owner("Job", controller=True),
+    _pod("svc-1263-backup-29000000-abcde", "db-backup", _owner("Job"),
          phase="Succeeded", ready=(0, 1), task="backup"),
 ]
 
