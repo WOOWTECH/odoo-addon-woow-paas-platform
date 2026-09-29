@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """repo-lint：把「假綠家族」pitfall 轉成機械 gate 的靜態檢查工具。
 
-四十四個 check 函式，歸為下列三十八條規則（其中四條各由多個函式實作：第 2 條
+四十五個 check 函式，歸為下列三十九條規則（其中四條各由多個函式實作：第 2 條
 owl-template 由兩個函式——語法陷阱／i18n 屬性；第 7 條
 capability-gate 由四個函式——slug 集合成員／admin-gui 錨點／gateway 文案錨點／
 Access 頁籤錨點；第 22 條
@@ -637,6 +637,11 @@ test-collectability 由兩個函式——收集面／執行面。這個一對多
                      執行環境，repo-lint 是唯一兩端都在的地方。陽性對照：schema class
                      找不到／builder 少於 3 個／return 形狀解不出來，一律當違規不當乾淨。
 
+39. init-odoo-budget-ladder  init_odoo 的專屬 (connect, read) 接線與同步子步 envelope。
+                     實作見 scripts/audit/init_odoo_budget.py；只接受已核對的呼叫結構，
+                     解析失敗／結構漂移 fail-loud，不把 retries×sleep 或固定805當硬上限。
+                     依據 #1152 A′ 技術裁定；外層 request／cron 缺口另列 #1257／#1159。
+
 用法：
 
   scripts/audit/repo-lint.py --all                # 全 repo 掃描（CI / merge 前手動）
@@ -1248,6 +1253,30 @@ def check_reset_budget_ladder(root):
             "；否則瀏覽器先 abort ⇒ 後端修好了租戶也看不到成功（#459 實測成功案例"
             "也要 49.9s／76.7s）" % (frontend_seconds, platform_budget))
     return violations
+
+
+INIT_ODOO_LADDER_FILES = (
+    'src/services/paas_operator.py',
+    'extra/paas-operator/src/services/odoo_init.py',
+    'extra/paas-operator/src/services/helm.py',
+    'extra/paas-operator/src/services/odoo_chart_contract.py',
+    'extra/paas-operator/src/api/init.py',
+    'scripts/audit/init_odoo_budget.py',
+    'scripts/audit/baselines/init-odoo-budget-structure.json',
+)
+
+
+def check_init_odoo_budget_ladder(root):
+    """#1152：唯一實作放 sibling script，載入／解析失敗不能變成零違規。"""
+    try:
+        spec = importlib.util.spec_from_file_location(
+            'woow_init_odoo_budget', os.path.join(SCRIPT_DIR, 'init_odoo_budget.py'))
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module.check(root)
+    except Exception as exc:
+        return ['init-odoo-budget-ladder：無法載入或執行守衛（%s：%s）；見 #1152'
+                % (type(exc).__name__, exc)]
 
 
 def _is_os_environ(node):
@@ -6019,6 +6048,7 @@ REPO_LINT_RULES = {
     "bulk-grant-ruler-sync": ("check_bulk_grant_ruler_sync",),
     "access-payload-shape-matches-operator-schema": (
         "check_access_payload_shape_matches_operator_schema",),
+    "init-odoo-budget-ladder": ("check_init_odoo_budget_ladder",),
 }
 
 # 刻意不掛 hook 分派的 check：{函式名: 理由}。現況是空的（每一條都掛得到 hook）。
@@ -6588,6 +6618,7 @@ def run_all(root):
                   + check_access_tab_gate_anchor(root)
                   + check_conceal_instances_gate(root)
                   + check_reset_budget_ladder(root)
+                  + check_init_odoo_budget_ladder(root)
                   + check_transition_anchor_utc(root)
                   + check_assertlogs_numeric_level(root)
                   + check_mixin_subscription_sudo(root)
@@ -6714,6 +6745,8 @@ def run_hook():
         # 一處），所以只要動到其中任一檔就整條重算，不做 only_file 切片。
         ladder = (check_reset_budget_ladder(root)
                   if rel in RESET_LADDER_FILES else [])
+        init_ladder = (check_init_odoo_budget_ladder(root)
+                       if rel in INIT_ODOO_LADDER_FILES else [])
         # #552／#596：availability reason 的涵蓋同樣是**跨檔**不變式（後端 judge ／
         # 前端 REASON_LABELS），壞掉的是另一個檔 ⇒ 一樣整條重算、不做 only_file 切片。
         availability = (check_availability_reason_labels(root)
@@ -6877,7 +6910,7 @@ def run_hook():
             # 白名單的兩份副本互為對方的判準：改哪一邊，壞掉的都是「兩份是否一致」這個
             # 跨檔不變式本身 ⇒ 不做 only_file 切片，動到任一份就整條重算。
             violations = check_kubectl_ns_whitelist_sync(root)
-        elif (ladder or availability or poll_facts or anchors or floor
+        elif (ladder or init_ladder or availability or poll_facts or anchors or floor
                 or security_rules or one_time_cred or provision or sh_sub_groups
                 or internal_ctx or tunnel_wire or route_golden or owl_imports
                 or js_i18n_template or cron_wiring or bulk_grant_sync or access_payload):
@@ -6890,6 +6923,7 @@ def run_hook():
         else:
             return 0
         violations += ladder
+        violations += init_ladder
         violations += availability
         violations += poll_facts
         violations += anchors
