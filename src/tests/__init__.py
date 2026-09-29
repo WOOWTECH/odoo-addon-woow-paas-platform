@@ -919,3 +919,8 @@ from . import test_change_plan_protection_gate_1261
 # 1 組必須在退點／關舊訂閱之前被擋、⛔ 不刪任何 route；0 組＝不准（不是 unlimited）；
 # route 數 ≤ 目標 cap 的降級與升級照常放行；AST 釘 gate 排在第一個寫入之前。
 from . import test_sa_change_plan_route_gate_1261
+
+# #1261：portal（share）帳號不能用 workspace。守「邀請 portal 被拒且不留列、同 email
+# 有 internal 時落到 internal、portal 打 workspace 端點拿結構化錯誤而非 AccessError
+# （含殘留舊成員列）、internal 行為不變」。
+from . import test_portal_user_workspace_1261
