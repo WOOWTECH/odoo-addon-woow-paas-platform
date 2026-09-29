@@ -1,6 +1,7 @@
 """#1129：從公開 initialize 入口驗證 woow-odoo 的 K8s exec 契約。"""
 
 import json
+import subprocess
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -250,7 +251,8 @@ def _never_ready_k8s():
     # readiness 探測本身唯讀 ⇒ 可以確定還沒動到租戶 DB。
     (_not_found_k8s, "find_pod", "not_executed"),
     (_never_ready_k8s, "wait_ready", "not_executed"),
-    # 腳本自己回報失敗 ⇒ 確定失敗。
+    # 防禦性：exit 0 卻回 success:false（現行腳本不會這樣，prod 路徑見下方
+    # subprocess 邊界那支）⇒ 仍是腳本明說的失敗。
     (lambda: _ready_k8s(json.dumps({"success": False, "error": "boom"})),
      "update_module_list", "failed"),
     # 以下都不能證明容器內的 ORM 程序沒跑或已停 ⇒ 結果未知。
@@ -260,7 +262,7 @@ def _never_ready_k8s():
      "update_module_list", "unknown"),
     (lambda: _ready_k8s(""), "update_module_list", "unknown"),
     (lambda: _ready_k8s("not json"), "update_module_list", "unknown"),
-], ids=["find_pod", "wait_ready", "script-failed", "exec-timeout", "exec-failed",
+], ids=["find_pod", "wait_ready", "script-failed-exit0-defensive", "exec-timeout", "exec-failed",
         "empty-output", "invalid-json"])
 def test_init_odoo_failure_carries_error_step_and_kind(k8s_factory, step, kind):
     response = _post_init_odoo(k8s_factory())
@@ -298,3 +300,32 @@ def test_init_odoo_unexpected_exception_is_500_with_structured_unknown():
     assert "kaboom" in detail["message"]
     # error_type 是例外類別名稱，與 error_kind 是兩個不同的維度。
     assert response.json()["error_type"] == "HTTPException"
+
+
+@pytest.mark.parametrize("update_exec, kind", [
+    # 腳本失敗時先印 JSON 再 exit 1（odoo_scripts/update_module_list.py main）
+    # ⇒ kubectl exec 非 0，但 stdout 是腳本明說的失敗 ⇒ failed。
+    (subprocess.CompletedProcess([], 1, stdout='log line\n{"success": false, "error": "boom"}\n',
+                                 stderr="command terminated with exit code 1"), "failed"),
+    # 被 OOM kill 等：沒有腳本的回報 ⇒ 分不出 ORM 跑到哪 ⇒ unknown。
+    (subprocess.CompletedProcess([], 137, stdout="", stderr="command terminated with exit code 137"),
+     "unknown"),
+    # 非 0 且最後一行是 success:true（不合理的組合）⇒ 不當成確定失敗。
+    (subprocess.CompletedProcess([], 1, stdout='{"success": true}', stderr=""), "unknown"),
+    (subprocess.TimeoutExpired(cmd=["kubectl", "exec"], timeout=120), "unknown"),
+], ids=["script-exit1-json-failed", "exit137-no-output", "exit1-success-true", "timeout"])
+def test_update_module_list_classification_at_subprocess_boundary(monkeypatch, update_exec, kind):
+    """走真的 KubernetesService：exit code 與 stdout 怎麼穿過 _run_command 才是 prod 行為。"""
+    monkeypatch.setattr(settings, "namespace_prefix", "dev-sandbox-1129")
+    run = MagicMock(side_effect=[
+        subprocess.CompletedProcess([], 0, stdout="web-0", stderr=""),
+        subprocess.CompletedProcess([], 0, stdout='{"ready": true}', stderr=""),
+        update_exec,
+    ])
+    monkeypatch.setattr("subprocess.run", run)
+
+    response = _post_init_odoo(KubernetesService())
+
+    body = response.json()
+    assert (body["error_step"], body["error_kind"]) == ("update_module_list", kind)
+    assert run.call_count == 3

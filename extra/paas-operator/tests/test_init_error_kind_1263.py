@@ -48,9 +48,24 @@ def test_exec_in_pod_rewrap_keeps_timeout_flag(mock_run, monkeypatch):
     assert excinfo.value.timed_out is True
 
 
-def test_kubectl_exception_legacy_constructor_defaults_to_not_timed_out():
+@patch("subprocess.run")
+def test_exec_in_pod_failure_keeps_stdout(mock_run, monkeypatch):
+    """腳本先印 JSON 再 exit 1 時，那行回報要穿過 _run_command 與 exec_in_pod 的重包。"""
+    monkeypatch.setattr("src.services.helm.validate_namespace", lambda ns: None)
+    mock_run.return_value = subprocess.CompletedProcess(
+        [], 1, stdout='{"success": false}\n', stderr="command terminated with exit code 1")
+
+    with pytest.raises(KubectlException) as excinfo:
+        KubernetesService().exec_in_pod("paas-ws-x", "p", "c", ["true"])
+
+    assert excinfo.value.stdout == '{"success": false}\n'
+    assert excinfo.value.timed_out is False
+
+
+def test_kubectl_exception_legacy_constructor_defaults():
     """既有呼叫端（含測試）以三個位置參數建構，不可因新屬性而壞。"""
-    assert KubectlException("m", "cmd", "err").timed_out is False
+    exc = KubectlException("m", "cmd", "err")
+    assert (exc.timed_out, exc.stdout) == (False, "")
 
 
 # ---- n8n：打真的 /init/n8n，只換掉 KubernetesService 邊界 -----------------------

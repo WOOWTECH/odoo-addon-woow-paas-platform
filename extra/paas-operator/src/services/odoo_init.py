@@ -42,6 +42,21 @@ UPDATE_MODULE_LIST_SCRIPT = (
 ).read_text(encoding="utf-8")
 
 
+def _last_json_object(output: str) -> dict | None:
+    """腳本輸出的最後一個非空行若是 JSON object 就回傳它，否則 None。
+
+    Odoo 的 logging 可能先印到 stdout，腳本的 JSON 回報固定是最後一行。
+    """
+    lines = [line for line in (output or "").splitlines() if line.strip()]
+    if not lines:
+        return None
+    try:
+        data = json.loads(lines[-1])
+    except json.JSONDecodeError:
+        return None
+    return data if isinstance(data, dict) else None
+
+
 class OdooInitError(Exception):
     """Raised when Odoo initialization fails.
 
@@ -303,6 +318,16 @@ class OdooInitService:
                 timeout=MODULE_UPDATE_TIMEOUT,
             )
         except KubectlException as e:
+            # 腳本失敗時先印 JSON 回報再 exit 1 ⇒ kubectl exec 非 0，但 stdout 最後一行
+            # 就是腳本明說的失敗 ⇒ failed。timeout 沒有可信輸出、其他 exec 失敗分不出
+            # 容器內 ORM 跑到哪 ⇒ 維持預設 unknown（#1263）。
+            reported = None if e.timed_out else _last_json_object(e.stdout)
+            if reported is not None and reported.get("success") is False:
+                raise OdooInitError(
+                    f"Module list update failed: {reported.get('error', 'unknown error')}",
+                    step="update_module_list",
+                    kind="failed",
+                ) from e
             raise OdooInitError(
                 f"Failed to execute module list update: {e}",
                 step="update_module_list",
