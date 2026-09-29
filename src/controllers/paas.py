@@ -123,6 +123,47 @@ def _show_projects(env) -> bool:
         SHOW_PROJECTS_FLAG) or '').strip().lower() in ('true', '1')
 
 
+# #1261：Portal（`res.users.share=True`，只掛 `base.group_portal`）帳號**不能**使用
+# workspace。不是產品裁決，是 ACL 的既成事實：`workspace_access` 的
+# ir.model.access 只發給 `base.group_user` 與 `base.group_system`（見
+# security/ir.model.access.csv），portal 一列都沒有。2026-09-29 正式站 E2E 實測
+# （folight2015@gmail.com）：邀請 portal 帳號「成功」、列真的建了，對方一打
+# `/api/workspaces` action=list 就在 `WorkspaceAccess.search` 丟 `AccessError`，
+# JSON-RPC 回應直接帶 Odoo 原文訊息與 traceback——使用者只看到平台壞了。
+#
+# 修法兩端都收（缺一都會回到同一個死結）：
+#   1. 入口（`_invite_member`）：拒絕 portal 帳號，並講清楚是**帳號類型**的問題。
+#      ⛔ 不自動改對方群組——把 portal 升成 internal 是授權決策（會連帶打開
+#      `base.group_user` 在全站的讀寫面），只能由平台管理員在後台明確做。
+#   2. 出口（本檔 workspace 端點 + `workspace.check_user_access`）：portal 呼叫者
+#      一律回結構化 `{success: False, code, error}`，不讓 ACL 原文冒出去。
+#
+# 判準用 `user.share` 而不是 `has_group('base.group_portal')`：與 ai_assistant.py 的
+# portal 分支同一把尺；`share` 就是 Odoo 自己的「非 internal」定義
+# （`not has_group('base.group_user')`），也涵蓋沒掛 portal 群組的其他外部帳號。
+ERR_PORTAL_ACCOUNT = 'portal_account'
+ERR_INVITEE_PORTAL_ACCOUNT = 'invitee_portal_account'
+
+
+def _portal_account_denial(env) -> dict[str, Any] | None:
+    """呼叫者是 portal/share 帳號時回結構化拒絕，否則 ``None``（#1261）。
+
+    收 ``env``（＝呼叫端的 ``request.env``）而非直接引用 module-level
+    ``request``——與 ``HiddenChainMixin`` 同理，讓依賴顯式、可單測。
+    讀的是呼叫者**自己**的 ``share``，res.users 對本人可讀，不需 sudo。
+    internal 使用者（``share=False``）一律 ``None`` ⇒ 既有行為完全不變。
+    """
+    if not env.user.share:
+        return None
+    return {
+        'success': False,
+        'code': ERR_PORTAL_ACCOUNT,
+        'error': _('Your account is a portal account and cannot use '
+                   'workspaces. Please contact the platform administrator '
+                   'to change your account type.'),
+    }
+
+
 def _validate_mcp_url(url: str, sidecar_backed: bool = False) -> str | None:
     """Minimal SSRF guard: reject non-http(s) schemes + cloud metadata IPs.
 
@@ -237,6 +278,11 @@ class PaasController(HiddenChainMixin, Controller):
                 - error (str): Error message (on failure)
                 - count (int): Item count (for list operations)
         """
+        # #1261：portal 帳號在 ACL 上碰不到 workspace_access，放行下去只會在 ORM 層
+        # 丟 AccessError（原文 + traceback 直達前端）。在分派前統一回結構化拒絕。
+        _denial = _portal_account_denial(request.env)
+        if _denial:
+            return _denial
         if action == 'list':
             return self._list_workspaces()
         elif action == 'create':
@@ -265,6 +311,10 @@ class PaasController(HiddenChainMixin, Controller):
                 - data (dict): Result data (on success)
                 - error (str): Error message (on failure)
         """
+        # #1261：同 `api_workspace`——portal 帳號先回結構化拒絕。
+        _denial = _portal_account_denial(request.env)
+        if _denial:
+            return _denial
         if action == 'get':
             return self._get_workspace(workspace_id)
         elif action == 'update':
@@ -592,6 +642,10 @@ class PaasController(HiddenChainMixin, Controller):
         Returns:
             dict: JSON response with success/error structure
         """
+        # #1261：同 `api_workspace`——portal 帳號先回結構化拒絕。
+        _denial = _portal_account_denial(request.env)
+        if _denial:
+            return _denial
         if action == 'list':
             return self._list_members(workspace_id)
         elif action == 'invite':
@@ -613,6 +667,10 @@ class PaasController(HiddenChainMixin, Controller):
         Returns:
             dict: JSON response with success/error structure
         """
+        # #1261：同 `api_workspace`——portal 帳號先回結構化拒絕。
+        _denial = _portal_account_denial(request.env)
+        if _denial:
+            return _denial
         if action == 'update_role':
             return self._update_member_role(workspace_id, access_id, role)
         elif action == 'remove':
@@ -678,7 +736,8 @@ class PaasController(HiddenChainMixin, Controller):
         Invite a new member to a workspace by email.
 
         Requires admin or owner role to invite. The target user must
-        already exist in the system (registered Odoo user).
+        already exist in the system (registered Odoo user) and be an
+        internal account — portal/share accounts are refused (#1261).
 
         Args:
             workspace_id (int): Target workspace ID
@@ -697,6 +756,8 @@ class PaasController(HiddenChainMixin, Controller):
             - 'Email is required' if email is empty
             - 'Invalid role' if role not in allowed values
             - 'No user found with email: {email}' if user doesn't exist
+            - '{email} is a portal account ...' (code 'invitee_portal_account')
+              if every account with that email is portal/share (#1261)
             - 'User is already a member of this workspace' if duplicate
         """
         user = request.env.user
@@ -721,10 +782,31 @@ class PaasController(HiddenChainMixin, Controller):
 
         # Find user by email
         ResUsers = request.env['res.users'].sudo()
-        target_user = ResUsers.search([('email', '=ilike', email)], limit=1)
+        # #1261：先取出**所有**同 email 的帳號，再挑第一個 internal（`share=False`）。
+        # 舊寫法 `limit=1` 依 res.users 預設排序（name, login）撿一個——同一個 email
+        # 同時有 internal 與 portal 帳號時，撿到哪個全看名字排序，可能把 internal
+        # 使用者的邀請錯落到他的 portal 分身上。internal 之間的相對順序沿用預設排序，
+        # 與舊行為一致。
+        candidates = ResUsers.search([('email', '=ilike', email)])
 
-        if not target_user:
+        if not candidates:
+            # 完全沒有帳號：維持既有行為與文案（不自動建帳號、不發邀請信）。
             return {'success': False, 'error': _('No user found with email: %(email)s', email=email)}
+
+        target_user = candidates.filtered(lambda u: not u.share)[:1]
+        if not target_user:
+            # #1261：帳號存在但全是 portal/share。以前這裡照樣建 workspace_access，
+            # 邀請「成功」，對方一進 /woow 就撞 AccessError（見 ERR_PORTAL_ACCOUNT
+            # 註解）。改成明確拒絕並說出原因——是**帳號類型**不行，不是 email 打錯，
+            # 讓邀請者知道該找平台管理員，而不是反覆重試。⛔ 不自動改群組。
+            return {
+                'success': False,
+                'code': ERR_INVITEE_PORTAL_ACCOUNT,
+                'error': _('%(email)s is a portal account, which cannot join a '
+                           'workspace. Only regular user accounts can be '
+                           'invited; ask the platform administrator to change '
+                           'the account type first.', email=email),
+            }
 
         # Check if already a member
         existing = WorkspaceAccess.search([

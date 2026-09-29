@@ -909,3 +909,8 @@ from . import test_sh_provision_retry
 # （SA sa.to_dict routes／SH include_details routes／CS _access_to_dict）。key 缺席時
 # AccessAppCard 讀到 undefined，fail-open 警示會靜默消失。
 from . import test_access_protection_lost_ui_payload
+
+# #1261：portal（share）帳號不能用 workspace。守「邀請 portal 被拒且不留列、同 email
+# 有 internal 時落到 internal、portal 打 workspace 端點拿結構化錯誤而非 AccessError
+# （含殘留舊成員列）、internal 行為不變」。
+from . import test_portal_user_workspace_1261

@@ -435,6 +435,18 @@ class Workspace(models.Model):
             return False
         self.ensure_one()
         user = user or self.env.user
+        # #1261：portal/share 帳號一律不算成員（fail-closed），擺在 search **之前**。
+        # 兩個理由：
+        #   1. 非 sudo 呼叫（SA／SH／CS 各端點都是 `workspace.check_user_access(
+        #      request.env.user)`）時，portal 身分對 `workspace_access` 沒有 ACL，
+        #      search 會直接丟 AccessError、原文冒到前端；先回 False 讓各端點走
+        #      既有的「Workspace not found or access denied」結構化分支。
+        #   2. sudo 呼叫（如 `cloud_service._assert_binding_authorized`）時 search
+        #      會找到 #1261 之前邀請殘留的 portal 成員列並放行——但 portal 本來就
+        #      用不了 workspace，這種列不該再授予任何東西。
+        # internal 使用者（`share=False`）不經過這條，行為完全不變。
+        if user.share:
+            return False
         access = self.env['woow_paas_platform.workspace_access'].search([
             ('workspace_id', '=', self.id),
             ('user_id', '=', user.id),

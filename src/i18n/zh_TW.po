@@ -220,6 +220,17 @@ msgstr "%(duration)s %(unit)s 免費試用"
 
 #. module: woow_paas_platform
 #. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid ""
+"%(email)s is a portal account, which cannot join a workspace. Only regular "
+"user accounts can be invited; ask the platform administrator to change the "
+"account type first."
+msgstr ""
+"%(email)s 是入口網站（Portal）帳號，無法加入工作區。只能邀請一般使用者帳號；"
+"請先請平台管理員變更這個帳號的類型。"
+
+#. module: woow_paas_platform
+#. odoo-python
 #: code:addons/woow_paas_platform/models/sh_subscription_fix.py:0
 msgid ""
 "%(n)s in_progress subscription(s) are more than %(days)s days past due and "
@@ -14878,6 +14889,16 @@ msgid ""
 "Your Cloudflare Tunnel has been created. Add application routes to expose "
 "your services."
 msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid ""
+"Your account is a portal account and cannot use workspaces. Please contact "
+"the platform administrator to change your account type."
+msgstr ""
+"您的帳號是入口網站（Portal）帳號，無法使用工作區。請聯絡平台管理員變更帳號"
+"類型。"
 
 #. module: woow_paas_platform
 #. odoo-javascript
