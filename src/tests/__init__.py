@@ -895,3 +895,7 @@ from . import test_sa_route_traffic_1234
 # SA 詳情頁 tunnel 狀態改用即時值（只讀疊加）。守「成員看得到即時值、這條路徑不寫 DB、
 # operator 拿不到時沿用 DB 值」。
 from . import test_sa_live_tunnel_status
+
+# Smart Home 開通重試：有 tunnel 的 error／pending 在同一條 tunnel 上收斂（不再呼叫
+# create_tunnel）；active／suspended 照舊拒絕；收斂失敗維持 error 並保留 tunnel。
+from . import test_sh_provision_retry

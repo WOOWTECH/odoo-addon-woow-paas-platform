@@ -265,6 +265,12 @@ def _reject_identity_anchor_writes(env, vals):
             )
 
 
+#: 已有 tunnel 時仍允許「重試開通」的 state（見 `action_provision` 的 guard 段）。
+#: 刻意是白名單：新加的 state 預設**不能**重推 ingress，要有人想過才加進來——
+#: 例如 `suspended` 若誤入這份清單，重試會把 503 的 ingress 推回 localhost（繞過停權）。
+_RETRYABLE_WITH_TUNNEL_STATES = ('pending', 'error')
+
+
 class SmartHome(models.Model):
     _name = 'woow_paas_platform.smart_home'
     _inherit = ['woow_paas_platform.subscription_lifecycle_mixin']
@@ -545,12 +551,31 @@ class SmartHome(models.Model):
         是它的單段性換來的，不是天生的；一旦加第二段，這份安全就得用 guard 重新買回
         來」——所以下面的 stored-id guard 是這個修法的必要組成，不是附帶重構。
 
-        **與 SecurityAccess 的 guard 有一處刻意不同**：SA 的 guard 分支可以只重跑第二段
-        （declarative route sync）並收斂回 ``active``；SmartHome 沒有這個選項——operator
-        只有 ``create_tunnel`` 與 routes sync 兩處會建 DNS record，前者會建**新** tunnel，
-        後者需要 SmartHome 尚未建模的 route payload。既然平台無法修好 DNS，就不能假裝
-        可以：guard 分支 fail-loud，把「已經有一條 tunnel、重跑會多漏一條」講清楚，並指出
-        兩條安全出路（人工補 DNS，或刪掉重建——``action_delete`` 會連 tunnel 一起拆）。
+        **guard 分支從 fail-loud 改成收斂（Smart Home 開通重試）**：這道 guard 原本在
+        ``tunnel_id`` 已存在時一律 ``raise``，理由是「operator 只有 ``create_tunnel`` 與
+        routes sync 兩處會建 DNS record，前者會建**新** tunnel，後者需要 SmartHome 尚未
+        建模的 route payload」。後半句的前提其實不需要 route 模型就成立：SmartHome 的
+        desired state 恰好**一條** hostname，而它的每一格都已經在 DB 上——``subdomain``
+        與 tunnel 同一次 write 落地（``dns_failed`` 分支也一樣），``service_url`` 是
+        ``http://localhost:<ha_port>``（與 ``_do_resume`` 同一個來源）。所以
+        ``sync_tunnel_routes`` 帶一條 route 就能把 ingress ＋ DNS 宣告式推回去，與 SA
+        guard 分支（``_sync_routes_to_operator``）同一個形狀。修前的實際後果是：租戶在
+        ``error`` 卡住之後**沒有任何自助出路**（詳情頁沒有重試鈕、後端重打只會被拒），
+        只能刪掉重建或等人工補 DNS。
+
+        ⇒ 現在 guard 分三格（判準仍是 stored ``tunnel_id``，不是 ``state``）：
+        - 沒有 ``tunnel_id`` ⇒ 原本的完整開通（``create_tunnel``）。
+        - 有 ``tunnel_id`` 且 ``state`` ∈ ``_RETRYABLE_WITH_TUNNEL_STATES`` ⇒
+          ``_converge_existing_tunnel()``：**絕不**再呼叫 ``create_tunnel``，只重推既有
+          tunnel 的 ingress／DNS、補 primary route，成功落 ``active``，失敗維持
+          ``error`` ＋ ``error_message``（tunnel 錨點原封不動，下一次重試照樣走這格）。
+          訂閱不在 ``in_progress`` 時這格也拒絕（理由見該方法：``_do_suspend`` 失敗會
+          留下「error ＋ 訂閱已停」）。
+        - 有 ``tunnel_id`` 但其他 state（``active``／``provisioning``／``suspended``／
+          ``deleting``）⇒ 維持 fail-loud。``active`` 沒有東西要修；``provisioning`` 是
+          另一個請求正在跑（雙擊／兩個分頁），兩邊同時推 ingress 沒有意義；
+          ``suspended`` 的 ingress 刻意是 ``http_status:503``，在這裡推回
+          ``localhost`` 等於繞過停權——那條路歸 ``_do_resume``。
 
         順帶：``/api/smart-homes`` 的 ``action='provision'`` **沒有 state 閘**（只驗
         OWNER/ADMIN ＋ 訂閱），所以對一個已經 ``active`` 的 Smart Home 再打一次
@@ -559,17 +584,19 @@ class SmartHome(models.Model):
         self.ensure_one()
 
         # stored-id guard —— 必須在任何 write 之前（含 state='provisioning'），
-        # 否則失敗的重試會把記錄推離 error 卻什麼也沒做成。
+        # 否則被拒的重試會把記錄推離原本的 state 卻什麼也沒做成。
         if self.tunnel_id:
+            if self.state in _RETRYABLE_WITH_TUNNEL_STATES:
+                # 已有 tunnel ⇒ 收斂，不重建（見 docstring「guard 分支」段）。
+                return self._converge_existing_tunnel()
             raise UserError(
-                _("This Smart Home already has a Cloudflare tunnel (%s). "
-                  "Re-provisioning would create a second, separately billed tunnel "
-                  "and leave this one orphaned with no record pointing at it. "
-                  "If its DNS record is missing, ask an administrator to create it "
-                  "for %s; otherwise delete this Smart Home (which tears the tunnel "
-                  "down) and create it again.")
-                % (self.tunnel_id,
-                   self.tunnel_route or self.subdomain or 'the configured hostname')
+                _("This Smart Home already has a Cloudflare tunnel (%(tunnel)s) "
+                  "and is in state '%(state)s', so it cannot be provisioned "
+                  "again. Re-provisioning would create a second, separately "
+                  "billed tunnel and leave this one orphaned with no record "
+                  "pointing at it. Setup can only be retried while the Smart "
+                  "Home is pending or in error.",
+                  tunnel=self.tunnel_id, state=self.state)
             )
 
         client = self._get_operator_client()
@@ -615,7 +642,9 @@ class SmartHome(models.Model):
                 # 注意 operator 註解假設「rely entirely on a later re-sync to
                 # self-heal」——那個假設對 SmartHome 不成立：src/data/ 底下沒有任何
                 # smart-home cron，沒有東西會回來補這筆 DNS。所以這裡必須留下
-                # 人看得懂、修得動的訊息，而不是一句籠統的失敗。
+                # 人看得懂、修得動的訊息，而不是一句籠統的失敗；「修得動」的那條
+                # 路現在是詳情頁的 Retry setup ⇒ 再打一次 action_provision 會走
+                # `_converge_existing_tunnel()` 在**同一條** tunnel 上補 DNS。
                 anchored.write(dict(
                     tunnel_vals,
                     state='error',
@@ -623,8 +652,9 @@ class SmartHome(models.Model):
                         "Tunnel created but its DNS record could not be "
                         "created, so %(hostname)s will not resolve. The "
                         "tunnel (%(tunnel_id)s) is kept so it is not "
-                        "orphaned — an administrator must create the DNS "
-                        "record, or delete and re-create this Smart Home.",
+                        "orphaned — use Retry setup to re-create the DNS "
+                        "record on the same tunnel, or delete and re-create "
+                        "this Smart Home.",
                         hostname=hostname,
                         tunnel_id=result.get('tunnel_id'),
                     ),
@@ -669,6 +699,138 @@ class SmartHome(models.Model):
                     "Tunnel creation failed: %(detail)s", detail=e.message),
             })
             _logger.error("Smart Home provision error: %s", e.message)
+
+    def _converge_existing_tunnel(self):
+        """重試開通、而 tunnel 已經存在：在**同一條** tunnel 上把 ingress／DNS 推回去。
+
+        只由 `action_provision` 的 guard 分支呼叫（state 已驗過在
+        `_RETRYABLE_WITH_TUNNEL_STATES` 內）。形狀抄 SA 的 retry 分支
+        （`SecurityAccess.action_provision` 的 `if self.tunnel_id:`）：先
+        `provisioning`、推宣告式 route sync、補 Access、收斂回 `active`；任何失敗都
+        落 `error` ＋ `error_message`，**tunnel 錨點一格都不動**——下一次重試照樣走
+        這條路，不會變成「再開一條」。
+
+        為什麼是 `sync_tunnel_routes` 而不是 `configure_tunnel`：後者只換 ingress、
+        **不碰 DNS**（operator `PUT /tunnels/{id}/config`），而 `dns_failed` 留下的
+        缺口正好是 DNS；前者是 ingress 覆寫 ＋ `reconcile_tunnel_dns`（缺的補建、
+        指向本 tunnel 但不在清單上的刪掉）。payload 刻意逐格重現 `create_tunnel`
+        當初烙進去的那條 ingress：同一個 hostname、同一個
+        `http://localhost:<ha_port>`、`http_host_header=False`（`create_tunnel` 走的
+        `configure_tunnel` 不帶 `originRequest`）⇒ 對一條本來就好的 ingress 是
+        no-op，只有 DNS 缺的那一半會真的變動。
+
+        ⚠ operator 端 hostname 是 `f"{subdomain}.{cloudflare_domain}"`，平台這側的
+        `tunnel_route` 用 `paas_domain`。兩者不一致時 `create_tunnel` 的 DNS 分支本來
+        就建在 operator 的 domain 上（它從 hostname 抽 subdomain），所以這裡沒有引入
+        新前提——與 `create_tunnel` 同一個「兩邊 domain 相同」的部署假設。
+
+        身分錨點：本方法**不寫** `tunnel_id`／`tunnel_name`／`tunnel_token` 任何一格
+        （只寫 `state`／`error_message`／`deployed_at`），所以刻意**不**開
+        `_internal_identity` 閘——逃生口的表面積只留在真正存 CF id 的那幾次寫入。
+
+        #531：`tunnel_name` 是歸屬主張（operator 拿它比對 CF 上的實際名字，對不上就
+        拒）。`comment` 是 DNS record 上只寫不讀的 traceability stamp，這裡剛好給同一
+        個值（SH 的 tunnel 名本身帶 env token，正是反查需要的那個字串），但兩個參數
+        的語意仍是分開的，見 `PaaSOperatorClient.sync_tunnel_routes` 的註解。
+        """
+        self.ensure_one()
+        # 前置檢查全部在任何 write 之前：被拒的呼叫不得把記錄推離原本的 state。
+        client = self._get_operator_client()
+        if not self.subdomain:
+            # tunnel 與 subdomain 是同一次 write 落地的（含 dns_failed 分支），走到
+            # 這裡代表資料被外力改過——沒有 hostname 就沒有 desired state 可推，
+            # 猜一個（例如重新 `_generate_subdomain()`）等於替租戶換網址。
+            raise UserError(
+                _("This Smart Home has a Cloudflare tunnel (%(tunnel)s) but no "
+                  "stored hostname, so its setup cannot be retried "
+                  "automatically. Delete this Smart Home (which tears the "
+                  "tunnel down) and create it again.",
+                  tunnel=self.tunnel_id)
+            )
+
+        if not self._is_subscription_active():
+            # 這條路會把 ingress 推回 `http://localhost:<ha_port>`。`_do_suspend` 推
+            # 503 失敗時會把記錄落 `error` 而**不是** `suspended`（見該方法），所以
+            # 「error ＋ 訂閱已停」是真的會出現的組合——放行就等於租戶按一下重試鈕
+            # 繞過停權。controller 的 `_check_operation_allowed` 擋得到大部分，但它
+            # 對 admin 一律放行、對「非 in_progress 但不在寬限期判準內」的訂閱也放行，
+            # 所以 model 自己再守一次（無訂閱＝legacy／admin 建的記錄，照舊允許）。
+            # 復權的正路是 `_do_resume`。
+            raise UserError(
+                _("This Smart Home's subscription is not active, so its setup "
+                  "cannot be retried. Restore the subscription first.")
+            )
+
+        self.write({'state': 'provisioning', 'error_message': False})
+        hostname = f"{self.subdomain}.{self._get_paas_domain()}"
+        try:
+            client.sync_tunnel_routes(
+                self.tunnel_id,
+                routes=[{
+                    'subdomain': self.subdomain,
+                    'service_url': f"http://localhost:{self.ha_port}",
+                    'http_host_header': False,
+                }],
+                comment=self.tunnel_name or None,
+                tunnel_name=self.tunnel_name,  # #531 歸屬主張
+            )
+            # #768：`dns_failed` 分支本來就會建 primary route，但冪等補一次不花錢，
+            # 而且涵蓋「那一次 `_ensure_primary_route()` 本身沒成功」的舊列。
+            self._ensure_primary_route()
+            # 與 `_do_resume` 同一個收斂點：state 此刻是 `provisioning`，route 的
+            # liveness gate 會擋掉非 forced 的推送 ⇒ 要帶 forced 旗標。未保護且沒有
+            # app id 的 route 是 no-op（`_access_sync_skip_reason`）。
+            for route in self.route_ids:
+                _sm_forced_access_sync(route)._sync_access_to_operator()
+            vals = {'state': 'active', 'error_message': False}
+            if not self.deployed_at:
+                vals['deployed_at'] = fields.Datetime.now()
+            self.write(vals)
+            _logger.info(
+                "[SH] provision retry converged sh=%s tunnel=%s hostname=%s",
+                self.id, self.tunnel_id, hostname,
+            )
+        except PaaSOperatorConnectionError as e:
+            self.write({
+                'state': 'error',
+                'error_message': _(
+                    "Cannot connect to PaaS Operator: %(detail)s",
+                    detail=e.message),
+            })
+            _logger.error(
+                "[SH] provision retry connection error sh=%s: %s",
+                self.id, e.message,
+            )
+        except PaaSOperatorError as e:
+            self.write({
+                'state': 'error',
+                'error_message': _(
+                    "Retrying setup for %(hostname)s failed: %(detail)s. The "
+                    "tunnel (%(tunnel_id)s) is kept; you can retry again.",
+                    hostname=hostname, detail=e.message,
+                    tunnel_id=self.tunnel_id),
+            })
+            _logger.error(
+                "[SH] provision retry error sh=%s tunnel=%s: %s",
+                self.id, self.tunnel_id, e.message,
+            )
+        except AccessError:
+            # 權限拒絕必須傳到呼叫端，不得降級成看起來無害的 state='error'
+            # （two-stage-remote-provision-idempotency §守則 2；與 SA retry 分支對稱）。
+            raise
+        except Exception as e:
+            # 非 operator 類失敗（route 建立的 ValidationError、DB 錯誤…）同樣要
+            # fail-loud 落 `error`：controller 的 `except Exception` 會把例外收成
+            # 200，若不在這裡落帳，記錄會停在 `provisioning`，而詳情頁的重試鈕只在
+            # pending／error 出現 ⇒ 租戶又回到沒有出路的狀態。
+            self.write({
+                'state': 'error',
+                'error_message': _(
+                    "Retrying setup failed: %(error)s", error=e),
+            })
+            _logger.exception(
+                "[SH] provision retry unexpected error sh=%s", self.id,
+            )
 
     def _assert_unlink_authorized(self):
         """#740：授權前置檢查 —— 送出第一個外部副作用**之前**，把這次刪除會用到的

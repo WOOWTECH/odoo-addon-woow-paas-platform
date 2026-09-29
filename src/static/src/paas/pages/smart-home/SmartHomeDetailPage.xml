@@ -50,6 +50,32 @@
                         </div>
                     </div>
                     <div class="o_woow_smart_home_detail_actions">
+                        <!-- Smart Home 開通重試：pending／error 才出現（判準見
+                             canRetrySetup）。後端對已有 tunnel 的記錄走收斂、不重建，
+                             所以重按安全；active 仍由後端 guard 拒絕。 -->
+                        <WoowButton
+                            t-if="canRetrySetup"
+                            variant="'primary'"
+                            size="'md'"
+                            onClick.bind="retrySetup"
+                            disabled="state.provisioning">
+                            <t t-if="state.provisioning">
+                                <WoowIcon name="'sync'" size="18" class="'o_woow_spin'"/>
+                                Setting up...
+                            </t>
+                            <t t-elif="home.state === 'pending'">
+                                <WoowIcon name="'play_arrow'" size="18"/>
+                                Provision
+                            </t>
+                            <t t-else="">
+                                <WoowIcon name="'restart_alt'" size="18"/>
+                                Retry setup
+                            </t>
+                        </WoowButton>
+                        <div t-if="state.provisionError" class="o_woow_error_message">
+                            <WoowIcon name="'error'" size="16"/>
+                            <span t-esc="state.provisionError"/>
+                        </div>
                         <WoowButton
                             t-if="isTrialActive"
                             variant="'secondary'"
@@ -93,6 +119,15 @@
                             Delete
                         </WoowButton>
                     </div>
+                </div>
+
+                <!-- 開通失敗的原因（error_message）。原本這一頁完全不顯示它：記錄落在
+                     error 時租戶只看得到紅色 badge，不知道缺的是 DNS 還是 operator
+                     連不上，也不知道可以重試。樣式沿用 ServiceDetailPage 的同名橫幅。 -->
+                <div t-if="home.state === 'error' and home.error_message"
+                     class="o_woow_service_error_banner">
+                    <WoowIcon name="'error'" size="20"/>
+                    <span t-esc="home.error_message"/>
                 </div>
 
                 <!-- Tab Navigation（#768）
