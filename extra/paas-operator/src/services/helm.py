@@ -1180,6 +1180,7 @@ class KubernetesService:
                     ready=ready_str,
                     restarts=restarts,
                     age=age,
+                    deletion_timestamp=metadata.get("deletionTimestamp"),
                 )
             )
 
