@@ -490,12 +490,17 @@ class HelmException(Exception):
 
 
 class KubectlException(Exception):
-    """Exception raised when kubectl command fails."""
+    """Exception raised when kubectl command fails.
 
-    def __init__(self, message: str, command: str, stderr: str):
+    ``timed_out``（#1263）：本地 subprocess timeout 時為 True。timeout 不證明遠端
+    exec 已停止，呼叫端靠它把結果歸成「未知」，不要 parse ``message`` 字串。
+    """
+
+    def __init__(self, message: str, command: str, stderr: str, timed_out: bool = False):
         self.message = message
         self.command = command
         self.stderr = stderr
+        self.timed_out = timed_out
         super().__init__(self.message)
 
 
@@ -1120,6 +1125,7 @@ class KubernetesService:
                 message=f"kubectl command timed out after {timeout}s",
                 command=safe_cmd,
                 stderr=f"Command '{safe_cmd}' timed out after {timeout} seconds",
+                timed_out=True,
             )
         except FileNotFoundError:
             raise KubectlException(
@@ -2732,6 +2738,7 @@ class KubernetesService:
                 message=f"kubectl exec failed: {e.message}",
                 command=e.command,
                 stderr=e.stderr,
+                timed_out=e.timed_out,
             ) from e
 
     def patch_secret(
