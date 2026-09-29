@@ -14,9 +14,9 @@ def test_initialize_targets_web_pod_and_uses_image_python_launcher():
     """同 release 的 PG／cron／Job 不得取代 server；兩次 exec 都走共同 launcher。"""
     k8s = MagicMock()
     pods = [
-        ("pg-0", {"app.kubernetes.io/instance": "tenant", "app.kubernetes.io/name": "postgres", "app.kubernetes.io/component": "postgres"}),
+        ("pg-0", {"app.kubernetes.io/instance": "tenant", "app.kubernetes.io/name": "odoo", "app.kubernetes.io/component": "postgresql"}),
         ("cron-0", {"app.kubernetes.io/instance": "tenant", "app.kubernetes.io/name": "odoo", "app.kubernetes.io/component": "cron"}),
-        ("backup-job", {"app.kubernetes.io/instance": "tenant", "app.kubernetes.io/name": "odoo", "app.kubernetes.io/component": "backup"}),
+        ("backup-job", {"app.kubernetes.io/instance": "tenant", "app.kubernetes.io/name": "odoo", "app.kubernetes.io/component": "db-backup"}),
         ("web-0", {"app.kubernetes.io/instance": "tenant", "app.kubernetes.io/name": "odoo", "app.kubernetes.io/component": "server"}),
     ]
 
