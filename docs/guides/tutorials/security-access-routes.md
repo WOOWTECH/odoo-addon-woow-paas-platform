@@ -30,13 +30,13 @@ related:
 |---|---|
 | 新網址通常 **20 秒～1 分鐘**內可用 | 儲存後等一下再開；狀態欄顯示「Not live yet」是正常的 |
 | 舊網址**立刻失效、不會轉址** | 先通知使用者、更新書籤與連結 |
-| 若該 route 有勾 **Host header**，送到你機器的 Host 會變成新網址 | 你的反向代理（例如 Nginx Proxy Manager）或只接受已知 host 的服務，**先加新網址再改名**，否則會連不到 |
+| 若該 route 有勾 **Host header**，送到你機器的 Host 會變成新網址 | 你的反向代理（例如 Nginx Proxy Manager）或只接受已知 host 的服務，**先加新網址再改名**，否則會連不到——實測 NPM 會回它的「Default Site」預設頁，狀態欄顯示「Proxy has no site」 |
 
 ## 3. 把 tunnel 搬到另一台機器（token 轉移）
 
 tunnel 可以任意轉移：在「Connect a machine」卡片複製 tunnel token，在新機器用它跑 connector，公開網址完全不變。
 
-- ⚠ **一次只在一台跑**。同一把 token 同時在兩台跑，Cloudflare 會把流量分給兩邊——新的起來就停掉舊的。
+- ⚠ **一次只在一台跑**。同一把 token 同時在兩台跑，Cloudflare **不保證平均分配**，訪客可能一直被送到其中一台（2026-09-29 實測：40 個請求全部留在原本那台）——新的起來就停掉舊的，否則會以為搬好了、訪客其實還在打舊機器。
 - ⚠ token 等同密碼：拿到它的人可以接走你的網址。
 - 新機器上 route 的 service URL（例如 `http://a0d7b954-nginxproxymanager:80`）必須在**新機器上**解析得到。
 
@@ -52,6 +52,7 @@ tunnel 可以任意轉移：在「Connect a machine」卡片複製 tunnel token�
 | Not live yet | 網址還沒指到這條 tunnel | 剛建立或剛改名時等一分鐘再按重新整理 |
 | DNS not found | 公開 DNS 查不到這個網址 | 同上；持續如此請聯絡客服 |
 | Origin error (5xx) | 請求**有到**你的機器，但反向代理或服務回錯誤 | 檢查反向代理有沒有這個網址、後端服務有沒有在跑 |
+| Proxy has no site | 請求**有到**你的機器，但反向代理回的是自己的預設頁（例如 NPM 的「Default Site」） | 在反向代理新增這個網址的站台；剛改名時一定會這樣 |
 | No response | 時間內沒有回應 | 檢查服務是否過載或卡住 |
 | Not protected | 設為保護，但實際沒有登入頁擋著 | 到「存取控管」把保護關掉再打開；持續如此請聯絡客服 |
 | Blocked by Access | 設為公開，但 Cloudflare 上有平台未管理的 Access 擋著 | 聯絡客服（見 #1239） |

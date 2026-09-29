@@ -109,12 +109,13 @@
               live. Move the token to another machine to move the tunnel — the
               public hostnames stay the same.
             </p>
-            <!-- #1196：同一把 token 同時跑在兩台，Cloudflare 會把流量分給兩邊
-                 （2026-09-29 正式站實測），搬家時最常踩的就是這個。 -->
+            <!-- #1196：同一把 token 同時跑在兩台，Cloudflare 不保證平均分配——2026-09-29
+                 正式站實測 40/40 個請求都留在原本那台。搬家時最常踩的是「以為搬好了，
+                 訪客其實還在打舊機器」。 -->
             <p class="o_woow_sa_detail__hint">
               Run the token on one machine at a time. If two connectors run it,
-              traffic is split between them — stop the old connector as soon as
-              the new one is up.
+              Cloudflare may keep sending visitors to either one (often the old
+              machine) — stop the old connector as soon as the new one is up.
             </p>
             <div class="o_woow_sa_token">
               <label>Tunnel token</label>
@@ -308,8 +309,9 @@
             <div t-if="pendingRename"
                  class="o_woow_sa_detail__hint o_woow_sa_detail__hint--warn o_woow_sa_rename_notice">
               <p>
-                Renaming <span class="o_woow_sa_detail__mono"><t t-esc="pendingRename.from"/></span>
-                to <span class="o_woow_sa_detail__mono"><t t-esc="pendingRename.to"/></span>.
+                <!-- 不用單獨的 "to"：Odoo 會把它當成一個可翻譯字串換成「至」。 -->
+                <span class="o_woow_sa_detail__mono"><t t-esc="pendingRename.from"/></span>
+                → <span class="o_woow_sa_detail__mono"><t t-esc="pendingRename.to"/></span>.
                 The new address is usually live within a minute. The old address
                 stops working right away and is not redirected — update any links
                 or bookmarks that point to it.

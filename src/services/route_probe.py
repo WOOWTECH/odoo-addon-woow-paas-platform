@@ -21,6 +21,21 @@ hostname 發一個 GET，把回應分類成使用者能據以行動的狀態。
 整批共用一個總截止時間；逾時的那幾條回 ``timeout``，不拖住整頁。executor 的
 fork 安全處理照抄 ``dns_probe._executor``（那邊的 docstring 有實測紀錄）。
 
+## 為什麼不走叢集 DNS（2026-09-29 正式站實測後改）
+
+改名或新增 route 之後，叢集內的 resolver 會把「查無此名」快取住——Cloudflare
+zone 的 SOA 否定快取最長 30 分鐘。實測：改名後外部已經 200，本探針卻一直回
+``dns_missing``。所以先用 Cloudflare 的 DNS-over-HTTPS 問（這些 hostname 都在
+Cloudflare 託管的 zone，答案即時），拿到 edge IP 後**直接連那個 IP、以 SNI 帶
+hostname**（憑證照常驗 hostname）。DoH 不可用時才退回系統 DNS。
+
+## 反向代理的預設頁
+
+route 常指到使用者自己的反向代理（Nginx Proxy Manager 等）。代理沒有這個
+hostname 的站台時會回自己的預設頁、HTTP 200——整條路都通，但使用者的服務並沒有
+被打到。實測改名後正是這樣（NPM 回「Default Site」）。所以 2xx 也讀 body 的
+``<title>``，認得的預設頁歸為 ``proxy_no_site``。
+
 ## 快取
 
 結果在行程內快取 ``_CACHE_TTL_SECONDS``。詳情頁開著、使用者連按「重新檢查」、
@@ -34,7 +49,9 @@ from concurrent.futures import ThreadPoolExecutor, wait as _wait
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 
+import certifi
 import requests
+import urllib3
 
 _logger = logging.getLogger(__name__)
 
@@ -60,6 +77,7 @@ STATUSES = (
     'not_routed',         # 名字還沒指到這條 tunnel（DNS／ingress 尚未生效）
     'dns_missing',        # 公開 DNS 查不到這個名字
     'origin_error',       # 請求有到使用者機器，但反向代理或後端回 5xx
+    'proxy_no_site',      # 請求有到使用者機器，但反向代理回的是自己的預設頁
     'timeout',            # 在截止時間內沒回應
     'unknown',            # 其他無法歸類的失敗
 )
@@ -76,6 +94,16 @@ _CF_CODE_STATUS = {
 }
 _CF_CODE_RE = re.compile(
     r'(?:error\s*code[:\s]*|errorCode:\s*)(\d{3,4})', re.IGNORECASE)
+_TITLE_RE = re.compile(r'<title>\s*([^<]{0,200}?)\s*</title>', re.IGNORECASE)
+#: 反向代理「沒有這個站台」時的預設頁標題（小寫比對）。只收**確定是預設頁**的
+#: 字串——NPM 自己的管理介面標題是「Nginx Proxy Manager」，不能被誤判。
+_PROXY_DEFAULT_TITLES = (
+    'default site',                     # Nginx Proxy Manager 2.x 預設站台
+    'welcome to nginx!',                # nginx 套件預設頁
+    "congratulations! you've successfully started the nginx proxy manager.",
+)
+_DOH_URL = 'https://cloudflare-dns.com/dns-query'
+_DOH_TIMEOUT = 3.0
 _HOSTNAME_RE = re.compile(r'^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$')
 
 _cache = {}   # hostname -> (monotonic_ts, is_protected, result)
@@ -152,20 +180,72 @@ def classify(status_code, headers, body_head, is_protected):
     if is_protected:
         # 設了保護卻直接拿到 origin 的回應 ⇒ 前面沒有登入頁。
         return _result('access_missing', status_code)
+    if 200 <= status_code < 300:
+        m = _TITLE_RE.search(body_head or '')
+        if m and m.group(1).strip().lower() in _PROXY_DEFAULT_TITLES:
+            return _result('proxy_no_site', status_code)
     return _result('ok', status_code)
+
+
+class _DnsMissing(Exception):
+    """權威 DNS 說這個名字沒有 A 記錄。"""
+
+
+def _doh_resolve(hostname):
+    """Cloudflare DoH 查 A 記錄 → edge IP；NXDOMAIN／無 A → raise ``_DnsMissing``；
+    DoH 本身不可用 → ``None``（呼叫端退回系統 DNS）。"""
+    try:
+        data = requests.get(
+            _DOH_URL, params={'name': hostname, 'type': 'A'},
+            headers={'Accept': 'application/dns-json'}, timeout=_DOH_TIMEOUT,
+        ).json()
+    except Exception as exc:             # noqa: BLE001 —— 退回系統 DNS
+        _logger.info("route probe DoH unavailable for %s: %s", hostname, exc)
+        return None
+    ips = [a.get('data') for a in data.get('Answer') or [] if a.get('type') == 1]
+    if ips:
+        return ips[0]
+    if data.get('Status') in (0, 3):     # NOERROR 無 A／NXDOMAIN：權威地說「沒有」
+        raise _DnsMissing(hostname)
+    return None
+
+
+def _headers():
+    return {'User-Agent': _USER_AGENT, 'Accept': 'text/html,*/*'}
+
+
+def _fetch_via_ip(hostname, ip):
+    """連 edge IP、SNI 與 Host 帶 hostname；憑證照常驗 hostname。"""
+    pool = urllib3.HTTPSConnectionPool(
+        ip, 443, server_hostname=hostname, assert_hostname=hostname,
+        cert_reqs='CERT_REQUIRED', ca_certs=certifi.where(), retries=False,
+        timeout=urllib3.Timeout(connect=_CONNECT_TIMEOUT, read=_READ_TIMEOUT))
+    try:
+        resp = pool.request('GET', '/', headers=dict(_headers(), Host=hostname),
+                            redirect=False, preload_content=False)
+        try:
+            chunk = resp.read(_BODY_PEEK_BYTES)
+        finally:
+            resp.release_conn()
+        return resp.status, dict(resp.headers), chunk.decode('utf-8', 'replace')
+    finally:
+        pool.close()
 
 
 def _fetch(hostname):
     """單一 hostname 的 GET；回 ``(status_code, headers, body_head)`` 或 raise。"""
+    ip = _doh_resolve(hostname)
+    if ip:
+        return _fetch_via_ip(hostname, ip)
     resp = requests.get(
         'https://%s/' % hostname,
         timeout=(_CONNECT_TIMEOUT, _READ_TIMEOUT),
         allow_redirects=False,
         stream=True,
-        headers={'User-Agent': _USER_AGENT, 'Accept': 'text/html,*/*'},
+        headers=_headers(),
     )
     try:
-        chunk = next(resp.iter_content(_BODY_PEEK_BYTES), b'') if resp.status_code >= 400 else b''
+        chunk = next(resp.iter_content(_BODY_PEEK_BYTES), b'')
     finally:
         resp.close()
     return resp.status_code, dict(resp.headers), chunk.decode('utf-8', 'replace')
@@ -174,7 +254,9 @@ def _fetch(hostname):
 def _probe_one(hostname, is_protected):
     try:
         status_code, headers, body_head = _fetch(hostname)
-    except requests.exceptions.Timeout:
+    except _DnsMissing:
+        return _result('dns_missing')
+    except (requests.exceptions.Timeout, urllib3.exceptions.TimeoutError):
         return _result('timeout')
     except requests.exceptions.ConnectionError as exc:
         text = str(exc)
