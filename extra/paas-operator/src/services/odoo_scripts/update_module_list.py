@@ -35,7 +35,7 @@ import sys
 # 平台側 woow_paas_platform `src/models/cloud_service.py` 的 `ODOO_SELECTED_ADDONS_PATH`
 # 會被 sed append 進這份 odoo.conf 的 addons_path（initContainer 與 post-init script 各一段）；
 # 本腳本讀到的 addons_path 就是那次 append 的結果。改任一邊的路徑先看另一邊（#1052）。
-ODOO_CONF_PATH = "/opt/bitnami/odoo/conf/odoo.conf"
+ODOO_CONF_PATH = "/etc/odoo/odoo.conf"
 
 # 自管 addon 全集的來源。cloud-odoo image 由 CI 掃 candidate addon 的
 # __manifest__.py 產生這份 catalog，key 就是我們自己上架的 addon 技術名；

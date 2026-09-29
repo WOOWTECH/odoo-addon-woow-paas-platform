@@ -192,7 +192,8 @@ def _fake_odoo_modules(table, cursor, addons_path, db_name, expose_get_modules=T
 
 
 class ScriptRun:
-    def __init__(self, payload, table, cursor, exit_code, stdout):
+    def __init__(self, payload, table, cursor, exit_code, stdout, config):
+        self.config = config
         self.payload = payload
         self.table = table
         self.cursor = cursor
@@ -252,7 +253,10 @@ def run_script(
     # 與 odoo_init._update_module_list 同一套解析：取最後一個非空行的 JSON
     lines = [line for line in stdout.getvalue().splitlines() if line.strip()]
     payload = json.loads(lines[-1]) if lines else None
-    return ScriptRun(payload, table, cursor, exit_code, stdout.getvalue())
+    return ScriptRun(
+        payload, table, cursor, exit_code, stdout.getvalue(),
+        fake_modules["odoo.tools"].config,
+    )
 
 
 @pytest.fixture
@@ -495,6 +499,14 @@ def test_added_and_updated_follow_odoo_return_order(catalog, selected_addons_dir
     assert run.payload["updated"] == 0
 
 
+def test_injected_script_parses_secret_mounted_odoo_conf():
+    """原始 script bytes 必須讀 chart 的整份 Secret conf，不 import operator。"""
+    run = run_script(as_main=True)
+
+    assert run.payload["success"] is True
+    assert run.config.parsed_args == [["-c", "/etc/odoo/odoo.conf", "--no-http"]]
+
+
 def test_missing_db_name_fails_loudly(catalog, selected_addons_dir):
     catalog_path, _ = catalog
 
@@ -540,7 +552,7 @@ def test_shipped_command_carries_the_script_under_test():
     service._update_module_list("ns", "pod", "container")
 
     command = service.k8s.exec_in_pod.call_args.kwargs["command"]
-    assert command[:2] == ["/opt/bitnami/odoo/venv/bin/python3", "-c"]
+    assert command[:2] == ["python3", "-c"]
     assert command[2] == SCRIPT
 
 

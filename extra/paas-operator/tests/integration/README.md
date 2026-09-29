@@ -175,6 +175,21 @@ kubeconfig 再指過去，比 `kubectl config use-context` 少一個「忘了切
 
 ## Test isolation
 
+### 在授權的 dev sandbox 範圍執行（#1129）
+
+- `OPERATOR_TEST_NAMESPACE_PREFIX`：未設定仍用 `paas-ws-test-op-`；可指定具名的
+  `dev-sandbox-*` 前綴（例如 `dev-sandbox-1129-`）。必須以 `-` 結尾、最多 44 字元，
+  保留最長的 `pa-` + 16 hex suffix；空值／非法值會 fail-loud。共用 namespace fixture、
+  agent-runtime fixture 與 operator 測試設定使用同一前綴。
+- `OPERATOR_TEST_STORAGE_CLASS`：未設定不改既有行為；設定時只覆寫測試 PVC／
+  volumeClaimTemplate／DataVolume 的 `storageClassName`。在共用叢集應先唯讀確認選定
+  StorageClass 的 `reclaimPolicy=Delete`（例如 `longhorn-delete`），不可修改 cluster
+  預設／PV 來配合測試。這些案例驗 Helm keep／orphan label／CDI contract，不驗 SC default。
+
+前綴 override **不等於叢集操作授權**。執行前仍須盤點全部寫入，使用隔離 kubeconfig
+與明確 context，將 kubectl／Helm 限制於本輪核准的 namespace；清理前核對本輪建立的
+owner／UID，不可掃前綴刪其他 session 的資源。原始 suite 不自動提供這層執行期 guard。
+
 Each test gets its own namespace (`paas-ws-test-op-{uuid8}`) created and torn
 down by the `test_namespace` fixture. Failed cleanup never bleeds across
 tests because namespaces are always uniquely named.

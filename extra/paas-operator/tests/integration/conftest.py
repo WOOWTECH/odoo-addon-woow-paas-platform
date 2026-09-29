@@ -26,6 +26,8 @@ import uuid
 import pytest
 from fastapi.testclient import TestClient
 
+from tests.namespace_scope import integration_namespace_prefix
+
 
 # All tests in this directory are integration tests.
 pytestmark = pytest.mark.integration
@@ -107,7 +109,8 @@ def app_client():
     """
     api_key = os.environ.get("API_KEY") or "integration-test-key"
     os.environ["API_KEY"] = api_key
-    os.environ.setdefault("NAMESPACE_PREFIX", "paas-ws-test-op-")
+    test_prefix = integration_namespace_prefix()
+    os.environ["NAMESPACE_PREFIX"] = test_prefix
     # #279 F6 env guard: an unset PAAS_ENV aborts boot on the shared prod/stg
     # cluster (cross-env label collision). Integration tests run against a
     # single-env dev/local cluster (docker-desktop), so opt into the documented
@@ -119,6 +122,7 @@ def app_client():
     from src.config import settings
     from src.main import app
     settings.api_key = api_key
+    settings.namespace_prefix = test_prefix
     settings.allow_unset_paas_env = True
     with TestClient(app, headers={"X-API-Key": api_key}) as client:
         yield client
@@ -127,7 +131,7 @@ def app_client():
 @pytest.fixture
 def test_namespace():
     """Isolated namespace per test, deleted (async) on teardown."""
-    name = f"paas-ws-test-op-{uuid.uuid4().hex[:8]}"
+    name = f"{integration_namespace_prefix()}{uuid.uuid4().hex[:8]}"
     subprocess.run(
         ["kubectl", "create", "namespace", name],
         check=True, capture_output=True,

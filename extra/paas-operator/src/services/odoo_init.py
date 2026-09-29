@@ -16,6 +16,12 @@ import time
 from pathlib import Path
 
 from src.services.helm import KubectlException, KubernetesService
+from src.services.odoo_chart_contract import (
+    ODOO_CONTAINER_NAME,
+    ODOO_PYTHON,
+    odoo_pod_selectors,
+    validate_fallback_pod,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -77,7 +83,7 @@ class OdooInitService:
 
         # Step 1: Find the Odoo pod
         pod_name = self._get_odoo_pod(namespace, release_name)
-        container = f"{release_name}-odoo"
+        container = ODOO_CONTAINER_NAME
         logger.info(
             "Found Odoo pod: %s (container: %s)", pod_name, container
         )
@@ -109,8 +115,8 @@ class OdooInitService:
     def _get_odoo_pod(self, namespace: str, release_name: str) -> str:
         """Find the Odoo pod name by label selectors.
 
-        Tries a specific selector first (instance + name=odoo), then
-        falls back to instance-only selector for non-standard charts.
+        Tries a specific selector first (instance + component=server), then
+        falls back to instance-only discovery with metadata validation.
 
         Args:
             namespace: Kubernetes namespace.
@@ -122,23 +128,29 @@ class OdooInitService:
         Raises:
             OdooInitError: If no matching pod is found.
         """
-        selectors = [
-            f"app.kubernetes.io/instance={release_name},app.kubernetes.io/name=odoo",
-            f"app.kubernetes.io/instance={release_name}",
-        ]
+        selectors = odoo_pod_selectors(release_name)
 
-        for selector in selectors:
+        for index, selector in enumerate(selectors):
             try:
                 pod_name = self.k8s.get_pod_name(namespace, selector)
-                logger.debug(
-                    "Found pod '%s' with selector '%s'", pod_name, selector
-                )
-                return pod_name
             except KubectlException:
                 logger.debug(
                     "No pod found with selector '%s', trying next", selector
                 )
                 continue
+
+            if index == 1:
+                # 只驗 fallback 的首個候選，不擴成跨 workload 的搜尋框架。
+                try:
+                    pod = self.k8s.get_pod(namespace, pod_name)
+                    validate_fallback_pod(pod, namespace, release_name, pod_name)
+                except (KubectlException, ValueError) as exc:
+                    raise OdooInitError(
+                        f"Cannot verify fallback Odoo pod {pod_name}: {exc}",
+                        step="find_pod",
+                    ) from exc
+            logger.debug("Found pod '%s' with selector '%s'", pod_name, selector)
+            return pod_name
 
         raise OdooInitError(
             f"Cannot find Odoo pod for release {release_name} in {namespace}",
@@ -175,7 +187,7 @@ class OdooInitService:
             "    sys.exit(1)\n"
         )
 
-        command = ["/opt/bitnami/odoo/venv/bin/python3", "-c", check_script]
+        command = [ODOO_PYTHON, "-c", check_script]
 
         for attempt in range(MAX_READY_RETRIES):
             try:
@@ -268,7 +280,7 @@ class OdooInitService:
         logger.info("Updating Odoo module list via direct ORM access...")
 
         command = [
-            "/opt/bitnami/odoo/venv/bin/python3",
+            ODOO_PYTHON,
             "-c",
             UPDATE_MODULE_LIST_SCRIPT,
         ]

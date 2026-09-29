@@ -18,6 +18,7 @@ import pytest
 
 from src.api.releases import build_orphan_pvc_labels
 from src.services.helm import KubernetesService, validate_label_value
+from tests.namespace_scope import integration_storage_class_yaml
 
 pytestmark = pytest.mark.integration
 
@@ -34,7 +35,7 @@ metadata:
   name: {name}
   namespace: {namespace}
 spec:
-  accessModes: [ReadWriteOnce]
+{integration_storage_class_yaml()}  accessModes: [ReadWriteOnce]
   resources:
     requests:
       storage: 8Mi
