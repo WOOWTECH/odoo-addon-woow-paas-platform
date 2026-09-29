@@ -83,6 +83,23 @@ function relativeTime(iso) {
 const WARN_HEALTH_STATUSES = ["not_routed", "dns_missing", "timeout", "unknown"];
 const SUBDOMAIN_HINT = _t("Use lowercase letters, digits and hyphens only (no dots or symbols); 3-63 chars, no leading/trailing hyphen.");
 
+// #1261：開啟 route 保護前的「明示後果」。CS（`pages/service/tabs/AccessTab.js`）
+// 與 SH（`pages/smart-home/tabs/SmartHomeAccessTab.js`）都有傳 protectConfirm 給
+// AccessAppCard，只有 SA 漏了——2026-09-29 正式站 E2E 實測：勾下去就直接生效，
+// 沒有任何提示。SA 的 route 背後常常是 API／webhook／腳本／手機 App 直連這類
+// **不會跳出瀏覽器登入頁**的用戶端（它們是 SA 最典型的用途之一），開保護等於
+// 直接把它們擋在外面；這句必須在按下去之前出現，不是事後看流量歸零才發現。
+// 語境是「這條 route 的網址」（SA 是 per-route 多錨點，保護的單位是一條 route），
+// 不是 CS 的「這個服務」。標題沿用既有 msgid（已有中文），確認鍵用 SH 那條
+// "Turn protection on"（同樣已有中文），不新增同義 msgid。
+const PROTECT_CONFIRM = {
+  title: _t("Turn on Access protection?"),
+  message: _t(
+    "Once protection is on, every visitor to this route's address has to pass Access verification first, including you. Only identities matching an Access policy below get in; clients that cannot show a browser login page (API clients, webhooks, scripts or apps connecting directly) will be blocked."
+  ),
+  confirmLabel: _t("Turn protection on"),
+};
+
 /**
  * SecurityAccessDetailPage Component
  *
@@ -109,6 +126,8 @@ export class SecurityAccessDetailPage extends Component {
 
   setup() {
     this.tabs = TABS;
+    // #1261：Access 分頁每張 AccessAppCard 共用同一份開保護確認文案（見檔頭）。
+    this.protectConfirm = PROTECT_CONFIRM;
     this.router = useState(router);
     this.state = useState({
       sa: null,

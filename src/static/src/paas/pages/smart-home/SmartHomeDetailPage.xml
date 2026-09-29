@@ -152,9 +152,12 @@
                         **字面** `setTab('access')`，所以這裡不可改寫成迴圈式的
                         switchTab(tab.key)——那樣寫 lint 會找不到頁籤而 fail-open，
                         能力 gate 漏掉時零訊號。
+                        #1261：`or accessRecoveryMode`＝0 席但仍有 route 受保護時
+                        照樣給頁籤（只能關保護，見該 getter）。hasAccessSeats 必須
+                        留在表達式裡——lint 靠它追到 ac_max_access_seats。
                     -->
                     <button
-                        t-if="hasAccessSeats"
+                        t-if="hasAccessSeats or accessRecoveryMode"
                         t-att-class="{'o_woow_tab': true, 'active': currentTab === 'access'}"
                         t-on-click="() => this.setTab('access')">
                         <WoowIcon name="'shield'" size="18"/>
@@ -273,10 +276,13 @@
                      只做了一半）。 -->
                 <!-- t-key：開通／polling 在頁籤掛著時換掉 home ⇒ route 集合或
                      state 變了就重建頁籤，理由見 accessTabKey。 -->
+                <!-- #1261：復原模式（0 席＋仍有 route 受保護）也掛內容，否則
+                     /access 深連結一樣是空的；`seatless` 讓頁籤只剩「關保護」。 -->
                 <SmartHomeAccessTab
-                    t-if="currentTab === 'access' and hasAccessSeats"
+                    t-if="currentTab === 'access' and (hasAccessSeats or accessRecoveryMode)"
                     t-key="accessTabKey"
                     home="home"
+                    seatless="!hasAccessSeats"
                     workspaceId="props.workspaceId"/>
                 </div>
             </t>

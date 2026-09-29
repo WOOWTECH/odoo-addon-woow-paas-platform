@@ -269,13 +269,19 @@ class SmartHomeController(Controller):
         # ⛔ 不得在這裡自己數席位，兩把尺漂開會產生「gate 放行但寫入被守衛擋」的死結。
         #
         # 升級天然通過（席數變大 ⇒ 用量 ≤ 席數），所以**不需要**先判斷這次是不是降級。
+        #
+        # #1261：同一支 gate 也擋「目標 0 席 ＋ 仍有 route 受保護」——0 席方案看不到
+        # Access 頁籤，換過去之後保護關不掉、對外 403（prod 2026-09-29 重現）。
+        # 判準收在 `_protection_gate_denial`，這裡不另寫。
         _denial = request.env['woow_paas_platform.security_access_access_policy']\
             ._seat_gate_denial(smarthome, plan)
         if _denial:
+            # #1261：`data` 原樣轉發 error 以外的欄位（`code`／current_seats／
+            # target_seats，保護那種另帶 `protected_hostnames`）。不逐 key 挑：
+            # gate 多一種拒絕時三個端點各挑一次就是漂移的起點。
             return {'success': False,
                     'error': _denial['error'],
-                    'data': {'current_seats': _denial['current_seats'],
-                             'target_seats': _denial['target_seats']}}
+                    'data': {k: v for k, v in _denial.items() if k != 'error'}}
 
         refund = old_sub._compute_unused_refund()
 
@@ -812,6 +818,12 @@ class SmartHomeController(Controller):
     def _get_workspace_or_error(self, workspace_id: int):
         """Verify user has access to workspace and return it."""
         user = request.env.user
+        # #1261：同 security_access.py 的 `_get_workspace_or_error`——portal/share
+        # 帳號在非 sudo search 之前就回 None，否則 search 丟 AccessError、原文與
+        # traceback 冒到前端；殘留的 portal 成員列也不再放行。
+        # Portal callers are refused before the non-sudo search (#1261).
+        if user.share:
+            return None
         WorkspaceAccess = request.env["woow_paas_platform.workspace_access"]
 
         access = WorkspaceAccess.search([

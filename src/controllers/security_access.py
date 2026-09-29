@@ -508,13 +508,32 @@ class SecurityAccessController(Controller):
         # ⛔ 不得在這裡自己數席位，兩把尺漂開會產生「gate 放行但寫入被守衛擋」的死結。
         #
         # 升級天然通過（席數變大 ⇒ 用量 ≤ 席數），所以**不需要**先判斷這次是不是降級。
+        #
+        # #1261 的「0 席 ＋ 仍受保護」那一種拒絕**不適用** SA（SA 的 Access 分頁不看
+        # 席位、永遠關得掉保護），由 `_SEAT_GATED_PROTECTION_ANCHORS` 排除，不是漏接。
         _denial = request.env['woow_paas_platform.security_access_access_policy']\
             ._seat_gate_denial(sa, plan)
         if _denial:
+            # #1261：`data` 原樣轉發 error 以外的欄位（`code`／current_seats／
+            # target_seats，保護那種另帶 `protected_hostnames`）。不逐 key 挑：
+            # gate 多一種拒絕時三個端點各挑一次就是漂移的起點。
             return {'success': False,
                     'error': _denial['error'],
-                    'data': {'current_seats': _denial['current_seats'],
-                             'target_seats': _denial['target_seats']}}
+                    'data': {k: v for k, v in _denial.items() if k != 'error'}}
+
+        # #1261 route 數降級 gate：與上面 #773 席位 gate 同構、同位置（第一個寫入
+        # ——退點——之前）。prod E2E 實撞：3 條 route 從「3 組」降到「1 組」成功，
+        # 記錄永久卡在「3 / 1 routes」——route 配額守衛是 route 寫入時才跑的
+        # constraint，換方案不寫 route ⇒ 從來沒被叫醒。⛔ 系統不自動刪 route
+        # （同 #773 裁決），只擋住並回報要刪到幾條；判準／0＝不准的語意見
+        # `_route_gate_denial` docstring。排在席位 gate 之後只是維持既有錯誤優先序，
+        # 兩者都不寫 DB，順序不影響正確性。
+        _route_denial = sa._route_gate_denial(plan)
+        if _route_denial:
+            return {'success': False,
+                    'error': _route_denial['error'],
+                    'data': {'current_routes': _route_denial['current_routes'],
+                             'target_routes': _route_denial['target_routes']}}
 
         refund = old_sub._compute_unused_refund()
         partner = old_sub.sh_partner_id
@@ -547,6 +566,15 @@ class SecurityAccessController(Controller):
 
     def _get_workspace_or_error(self, workspace_id: int):
         user = request.env.user
+        # #1261：portal/share 帳號擋在 search **之前**。下面這支 search 不是 sudo，
+        # portal 對 `workspace_access` 沒有 ACL（ir.model.access 只給 group_user /
+        # group_system）⇒ 不先擋就在這裡丟 AccessError，JSON-RPC 回 `error`（ACL
+        # 原文＋traceback）而不是各端點既有的「Workspace not found or access
+        # denied」。回 None 也順便讓 #1261 之前邀請殘留的 portal 成員列不再授予
+        # 任何東西——與 `workspace.check_user_access` 的 share 判準同一把尺。
+        # Portal callers are refused before the non-sudo search (#1261).
+        if user.share:
+            return None
         WorkspaceAccess = request.env["woow_paas_platform.workspace_access"]
         access = WorkspaceAccess.search([
             ("user_id", "=", user.id),

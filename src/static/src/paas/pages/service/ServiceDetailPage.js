@@ -242,6 +242,22 @@ export class ServiceDetailPage extends Component {
         return (this.service?.subscription?.ac_max_access_seats ?? 0) > 0;
     }
 
+    /**
+     * #1261 復原模式：方案沒有 Access 席位，但服務仍開著 Access 保護。
+     *
+     * 與 SmartHomeDetailPage 的同名 getter 同一件事（prod 2026-09-29 在 SH 實測
+     * 重現，CS 的頁籤 gate 同形）：有席位時開了保護，換到 0 席方案後保護原樣留在
+     * Cloudflare ⇒ 對外 403，而 hasAccessSeats 為假 ⇒ 頁籤不見 ⇒ 關不掉。後端
+     * #1261 已擋住新的這種換方案，這裡處理已經卡住的記錄。
+     *
+     * ⚠ 不是第二個能力判準：復原模式只放「關保護」這一個**收回**動作（AccessTab
+     * 以 `seatless` 掛載），開保護／policy／登入方式一律不給。能力判準仍只有
+     * hasAccessSeats。讀 detail payload 的 `access.is_protected`（`_access_to_dict()`）。
+     */
+    get accessRecoveryMode() {
+        return !this.hasAccessSeats && !!this.service?.access?.is_protected;
+    }
+
     // Support Project
     async loadSupportProject() {
         this.state.supportProjectLoading = true;

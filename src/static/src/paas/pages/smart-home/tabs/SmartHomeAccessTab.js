@@ -5,6 +5,7 @@ import { _t } from "@web/core/l10n/translation";
 import { WoowCard } from "../../../components/card/WoowCard";
 import { WoowIcon } from "../../../components/icon/WoowIcon";
 import { AccessAppCard } from "../../../components/access/AccessAppCard";
+import { WoowButton } from "../../../components/button/WoowButton";
 import { AddPolicyModal } from "../../../components/modal/AddPolicyModal";
 import { smartHomeAccessService } from "../../../services/smart_home_access";
 
@@ -50,13 +51,22 @@ const PROTECT_CONFIRM = {
  * Props:
  *   - home (Object)：SH detail payload（`to_dict(include_details=True)`，帶 routes）
  *   - workspaceId (number)
+ *   - seatless (boolean, optional)：#1261 復原模式——方案沒有 Access 席位、但仍有
+ *       route 開著保護（換到 0 席方案前沒關保護的卡死記錄）。此時頁籤**只給關保護**：
+ *       不掛 AccessAppCard（它的開保護／登入方式／Add Policy／session 全是需要
+ *       席位方案才該做的設定），改畫一列一顆「Turn protection off」，並常駐說明
+ *       為什麼只剩這個動作。刻意在本元件分支而不是加旗標改 AccessAppCard：
+ *       那張卡是 SA／CS／SH 三處共用，而這是 SH（與 CS）才有的席位語意。
  */
 export class SmartHomeAccessTab extends Component {
   static template = "woow_paas_platform.SmartHomeAccessTab";
-  static components = { WoowCard, WoowIcon, AccessAppCard, AddPolicyModal };
+  static components = {
+    WoowCard, WoowIcon, WoowButton, AccessAppCard, AddPolicyModal,
+  };
   static props = {
     home: { type: Object },
     workspaceId: { type: Number },
+    seatless: { type: Boolean, optional: true },
   };
 
   setup() {
@@ -82,6 +92,8 @@ export class SmartHomeAccessTab extends Component {
       showPolicyModal: false,
       editingPolicy: null,
       policyModalRoute: null,
+      // #1261 復原模式：正在關保護的那條 route（按鈕 disabled，防連點重推 CF）
+      unprotectingRouteId: null,
     });
   }
 
@@ -99,6 +111,18 @@ export class SmartHomeAccessTab extends Component {
   get protectedRouteCount() {
     return this.state.routes.filter(
       (r) => r.is_protected && !r.access_protection_lost).length;
+  }
+
+  // #1261 review：復原模式常駐說明的兩個判準，讀 state.routes 現值（本頁的
+  // 「Turn protection off」只更新 state.routes，props.seatless 不會跟著變）。
+  // 「生效中」與 protectedRouteCount 同一個判準（排除 #794 lost）；「意圖」則
+  // 連 lost 也算——那種 route 仍掛著關閉按鈕，需要一句不說「被 Access 擋住」的說明。
+  get seatlessHasProtectionInEffect() {
+    return this.protectedRouteCount > 0;
+  }
+
+  get seatlessHasProtectionIntent() {
+    return this.state.routes.some((r) => r.is_protected);
   }
 
   // ---- 本地 route 狀態維護 ----
@@ -150,6 +174,19 @@ export class SmartHomeAccessTab extends Component {
       this.state.expandedRoutes[route.id] = true;
     }
     this.saveRouteAccess(route, { is_protected: checked });
+  }
+
+  // #1261 復原模式唯一的寫入：關保護。走同一支 config 端點（`is_protected: false`
+  // 在後端不看席位、任何情況都必須關得掉，見 `_update_sh_route_access_config`），
+  // 回應由 `_replaceRoute` 收下 ⇒ 該列立刻變成 Public，不必重載整頁。
+  async turnOffProtection(route) {
+    if (this.state.unprotectingRouteId) return;
+    this.state.unprotectingRouteId = route.id;
+    try {
+      await this.saveRouteAccess(route, { is_protected: false });
+    } finally {
+      this.state.unprotectingRouteId = null;
+    }
   }
 
   // Login methods 以 toggle pill 呈現；pill 點擊讀目前 route[method] 取反。
