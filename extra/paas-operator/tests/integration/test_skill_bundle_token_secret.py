@@ -43,9 +43,9 @@ import uuid
 
 import pytest
 
-pytestmark = pytest.mark.integration
+from tests.namespace_scope import integration_namespace_prefix
 
-_TEST_PREFIX = "paas-ws-test-op-"
+pytestmark = pytest.mark.integration
 _TEST_AUTH_SECRET = "integration-skill-bundle-hs256-key"
 _ENV_KEY = "SKILL_BUNDLE_TOKEN"
 
@@ -258,6 +258,7 @@ def agent_runtime_env(app_client, tmp_path):
     import os
     from src.config import settings
 
+    test_prefix = integration_namespace_prefix()
     project_hash = uuid.uuid4().hex[:16]
     real_chart = os.environ.get(_REAL_CHART_ENV)
     if real_chart:
@@ -291,7 +292,7 @@ def agent_runtime_env(app_client, tmp_path):
     settings.agent_runtime_chart_version = chart_version
     settings.agent_runtime_repo_username = ""
     settings.agent_runtime_repo_password = ""
-    settings.namespace_prefix = _TEST_PREFIX
+    settings.namespace_prefix = test_prefix
     settings.odoo_base_url = os.environ.get("AGENT_RUNTIME_TEST_ODOO_BASE_URL", "")
     if real_chart:
         # 真 chart 要拉私有 image，且 OCI chart 本身要 `helm registry login`
@@ -310,7 +311,7 @@ def agent_runtime_env(app_client, tmp_path):
     except (ValueError, AttributeError):  # pre-#955 tree: the flag does not exist yet
         flag_present = False
 
-    namespace = f"{_TEST_PREFIX}pa-{project_hash}"
+    namespace = f"{test_prefix}pa-{project_hash}"
     release = f"agent-pa-{project_hash}"
     # 印出 chart 來源：這行是「這一跑到底打的是 stub 還是真 chart」的唯一憑據，
     # 綠燈本身分不出來（兩種模式的斷言完全一樣，那正是設計意圖）。

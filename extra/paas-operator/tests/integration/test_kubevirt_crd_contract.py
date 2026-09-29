@@ -22,6 +22,7 @@ import subprocess
 import pytest
 
 from src.services.helm import KubectlException, KubernetesService
+from tests.namespace_scope import integration_storage_class
 
 # Every module in this directory must carry the marker itself — conftest's
 # module-level pytestmark does NOT propagate, and pytest.ini defaults to
@@ -326,6 +327,7 @@ class TestDataVolumeOrphanLabeling:
             "spec": {
                 "source": {"blank": {}},
                 "storage": {
+                    **integration_storage_class(),
                     "accessModes": ["ReadWriteOnce"],
                     "resources": {"requests": {"storage": "1Gi"}},
                 },

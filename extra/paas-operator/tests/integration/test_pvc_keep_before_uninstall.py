@@ -22,6 +22,8 @@ import subprocess
 
 import pytest
 
+from tests.namespace_scope import integration_storage_class_yaml
+
 pytestmark = pytest.mark.integration
 
 _ORPHAN_AT = "paas.woowtech.io/orphaned-at"
@@ -45,6 +47,7 @@ def _write_chart_owned_pvc_chart(chart_dir) -> str:
         "  labels:\n"
         "    app.kubernetes.io/instance: {{ .Release.Name }}\n"
         "spec:\n"
+        f"{integration_storage_class_yaml()}"
         "  accessModes: [ReadWriteOnce]\n"
         "  resources:\n"
         "    requests:\n"
@@ -155,6 +158,7 @@ def test_statefulset_volumeclaimtemplate_pvc_not_regressed(
         "      labels:\n"
         "        app.kubernetes.io/instance: {{ .Release.Name }}\n"
         "    spec:\n"
+        f"{integration_storage_class_yaml(indent=6)}"
         "      accessModes: [ReadWriteOnce]\n"
         "      resources:\n"
         "        requests:\n"

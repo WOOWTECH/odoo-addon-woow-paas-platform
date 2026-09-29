@@ -2557,6 +2557,17 @@ class KubernetesService:
         self._run_command(["label", "ns", namespace, "--overwrite"] + label_args)
         return labels
 
+    def get_pod(self, namespace: str, pod_name: str) -> Dict[str, Any]:
+        """讀取單一 Pod 原始 metadata/spec，供 exec 候選驗證使用。"""
+        validate_namespace(namespace)
+        # 沿用既有 lowercase DNS subdomain 規則，不讓名稱變成 kubectl flag/resource。
+        if len(pod_name) > 253 or not _K8S_LABEL_PREFIX_RE.fullmatch(pod_name):
+            raise ValueError(f"Invalid Pod name: {pod_name!r}")
+        result = self._run_command([
+            "get", "pod", pod_name, "--namespace", namespace, "--output", "json",
+        ])
+        return json.loads(result.stdout)
+
     def get_pod_name(self, namespace: str, label_selector: str) -> str:
         """Get the first pod name matching a label selector.
 
