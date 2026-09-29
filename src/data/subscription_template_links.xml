@@ -124,6 +124,10 @@
             <field name="subscription_plan_ids"
                    eval="[(6, 0, [ref('plan_pi_agent_monthly'), ref('plan_pi_agent_yearly')])]"/>
         </record>
+        <record id="cloud_app_omnigent" model="woow_paas_platform.cloud_app_template">
+            <field name="subscription_plan_ids"
+                   eval="[(6, 0, [ref('plan_omnigent_monthly'), ref('plan_omnigent_yearly')])]"/>
+        </record>
 
         <!-- #341（Wave A）撞車收斂：HA PaaS plan（plan_ha_paas_monthly）刻意 orphan——
              不掛任何 template M2M（Wave A test_orphan_no_template_links 斷言 M2M=0，且

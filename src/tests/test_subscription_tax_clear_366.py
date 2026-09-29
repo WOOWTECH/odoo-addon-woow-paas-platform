@@ -68,7 +68,7 @@ class TestSeedProductCorpusIntact(TransactionCase):
     # 271 → 273：#661 新增 Home Assistant 完整版兩顆 base product（月/年，無加購變體）。
     # 273 → 319：#765 補 AC 席數變體 46 顆 product（Hermes Agent 1 席、HA 完整版
     #            1-3 席、Hermes MCP Server T1/T2/T3 各 1-3／1-6／1-10 席，皆 ×月/年）。
-    _MIN_SEEDED_PRODUCTS = 321
+    _MIN_SEEDED_PRODUCTS = 323
 
     def test_no_seed_product_is_silently_dropped(self):
         imd = self.env['ir.model.data'].sudo().search([

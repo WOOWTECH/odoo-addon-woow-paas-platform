@@ -1118,6 +1118,16 @@ class CloudService(models.Model):
             PaaSOperatorTimeoutError,
         )
 
+        # app_managed（omnigent）：app 只在第一次開機讀平台給的密碼，之後密碼活在 app
+        # 自己的資料庫。照 helm_secret 走 reset 會 helm upgrade 成功、密碼卻沒變
+        # （假裝成功），所以在碰 operator 之前就拒絕。controller 的能力 gate 讀同一個
+        # 欄位，這裡是第二道防線（本 method 還有別的 caller 時也守得住）。
+        if not self.template_id.admin_reset_supported:
+            raise UserError(
+                _("This service manages its own admin password. "
+                  "Change it inside the app.")
+            )
+
         # Hold a row lock across the operator saga.  A second reset waits for
         # the first request to commit, then observes state='upgrading' below
         # instead of interleaving Secret/config rollback with a newer reset.
@@ -1971,6 +1981,9 @@ class CloudService(models.Model):
         """
         path_map = {
             'open-design': [('config', 'allowedOrigins')],
+            # omnigent：accounts 模式的 OMNIGENT_ACCOUNTS_BASE_URL（https ⇒ cookie 用
+            # __Host- 前綴；WebSocket 也以它比對 Origin）。chart 同樣學不到 tenant host。
+            'omnigent': [('server', 'baseUrl')],
         }
         paths = path_map.get(template_slug)
         if not paths:
