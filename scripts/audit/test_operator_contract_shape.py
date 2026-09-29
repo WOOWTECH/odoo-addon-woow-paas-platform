@@ -123,6 +123,15 @@ class TestOperatorContractShape(unittest.TestCase):
         for pod in pods:
             self.assertEqual(set(pod), set(self.contract.pod_info()), pod["name"])
 
+    def test_absent_builds_the_legacy_operator_shape(self):
+        """舊 operator 是**缺 key**，不是 False——factory 必須建得出那個形狀，否則
+        ``.get('pod_identity_included', True)`` 這種寫錯的預設會在測試裡全綠。"""
+        body = self.contract.status_response(
+            pod_identity_included=self.contract.ABSENT)
+        self.assertNotIn("pod_identity_included", body)
+        self.assertEqual(set(body), set(self.contract.RELEASE_STATUS_KEYS)
+                         - {"pod_identity_included"})
+
     def test_overrides_and_pods_are_honoured(self):
         """factory 的兩個把手真的有作用（不然遷移過去的 fixture 會靜默改語意）。"""
         pod = {"name": "p", "phase": "Running", "ready": "1/1"}

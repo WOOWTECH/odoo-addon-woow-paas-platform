@@ -43,6 +43,13 @@ RELEASE_STATUS_KEYS = (
 )
 
 
+#: 傳給 ``status_response()`` 的某個 key 時，把那個 key **拿掉**，用來建舊 operator 的
+#: 真實形狀：#1263 之前的 operator 根本不送 ``pod_identity_included``（缺 key，不是
+#: False）。fail-closed 測試兩種都要覆蓋——只測 False 抓不到
+#: ``.get('pod_identity_included', True)`` 這種寫錯的預設。
+ABSENT = object()
+
+
 def pod_info(**overrides):
     """組一顆 operator ``PodInfo`` 形狀的 Pod（#1263）。
 
@@ -77,8 +84,10 @@ def status_response(release_status='deployed', pods=None, **overrides):
 
     預設模擬「未帶 include_vm」——operator 此時回 ``vm_included: False`` 與 ``vmis: None``
     （不是 ``[]``），這個區別正是 fail-closed 的依據。``pod_identity_included`` 預設
-    True（#1263 起的 operator 一律回 True）；模擬舊 operator 時由呼叫端覆寫成 False
-    或把 key 拿掉。``release`` 子物件刻意只給
+    True（#1263 起的 operator 一律回 True）；模擬舊 operator 用
+    ``pod_identity_included=ABSENT``（缺 key），``False`` 只是 schema 預設、wire 上不會出現。
+    ⚠ woow-odoo 情境的 ``pods`` 一律用 ``pod_info()`` 組：沒有身分 key 的手寫 Pod 配上
+    預設 True，是真 operator 不會送出的組合。``release`` 子物件刻意只給
     ``status``／``revision``（``ReleaseInfo`` 的**子集**，與四份既有 fixture 相同；對帳
     對這一層只驗「是子集」）；需要別的欄位（``chart_version`` 等）由呼叫端 ``overrides``。
     ``pods`` 預設空清單；要一顆健康 pod 的呼叫端自己傳（``test_public_url_dns_gate_648``
@@ -96,7 +105,7 @@ def status_response(release_status='deployed', pods=None, **overrides):
         'datavolume_retrieval_error': None,
     }
     body.update(overrides)
-    return body
+    return {key: value for key, value in body.items() if value is not ABSENT}
 
 
 def operator_client(**method_return_values):
