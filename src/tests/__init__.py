@@ -885,3 +885,7 @@ from . import test_sa_route_rename_1196
 
 # #1234：route 健康探測。分類樣本取自正式站實測；端點守「探測目標只來自 DB」。
 from . import test_sa_route_health_1234
+
+# #1234 第二步：route 流量。各種拿不到的原因（缺 CF analytics 權限、operator 太舊）
+# 都要是可解釋的值，不是錯誤。
+from . import test_sa_route_traffic_1234

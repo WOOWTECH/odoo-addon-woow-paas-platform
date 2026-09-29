@@ -1881,6 +1881,36 @@ class SecurityAccess(models.Model):
             [(r.hostname, r.is_protected) for r in routes], force=force)
         return {r.id: by_host.get(r.hostname) for r in routes}
 
+    def _route_traffic(self, window_hours=24):
+        """#1234：各 route 的請求數／最後請求時間，資料來自 operator 的 Cloudflare
+        analytics。回 ``{available, reason, window_hours, routes: {route_id: ...}}``。
+
+        永不 raise：流量是輔助資訊，拿不到時前端顯示原因即可。``reason``：
+        ``permission``（operator 的 CF token 缺 Zone Analytics Read）／
+        ``operator_outdated``（operator 還沒有這個端點）／``disabled``／``error``。
+        """
+        self.ensure_one()
+        routes = self.route_ids
+        if not routes:
+            return {'available': True, 'reason': '', 'window_hours': window_hours,
+                    'routes': {}}
+        client = get_paas_operator_client(self.env)
+        if not client:
+            return {'available': False, 'reason': 'disabled', 'routes': {}}
+        try:
+            res = client.get_hostname_traffic(routes.mapped('hostname'), window_hours)
+        except PaaSOperatorError as e:
+            reason = 'operator_outdated' if getattr(e, 'status_code', None) == 404 else 'error'
+            _logger.info("route traffic unavailable for SA %s: %s (%s)", self.id, reason, e)
+            return {'available': False, 'reason': reason, 'routes': {}}
+        hosts = res.get('hosts') or {}
+        return {
+            'available': bool(res.get('available')),
+            'reason': res.get('reason') or '',
+            'window_hours': res.get('window_hours', window_hours),
+            'routes': {r.id: hosts.get(r.hostname) for r in routes},
+        }
+
 
 class SecurityAccessRoute(models.Model):
     _name = 'woow_paas_platform.security_access_route'

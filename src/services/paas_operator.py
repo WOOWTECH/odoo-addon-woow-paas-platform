@@ -825,6 +825,18 @@ class PaaSOperatorClient:
         """
         return self._request('GET', f'/api/tunnels/{tunnel_id}')
 
+    def get_hostname_traffic(self, hostnames, window_hours: int = 24) -> Dict[str, Any]:
+        """#1234：各 hostname 的請求數與最後請求時間（Cloudflare zone analytics）。
+
+        operator 一律回 200 + ``available``／``reason``（缺權限是設定狀態、不是
+        錯誤）；較舊的 operator 沒有這個端點會回 404，由呼叫端處理。
+        """
+        return self._request(
+            'POST', '/api/analytics/traffic',
+            data={'hostnames': list(hostnames), 'window_hours': window_hours},
+            timeout=25,
+        )
+
     def get_tunnel_token(self, tunnel_id: str) -> Dict[str, Any]:
         """Get tunnel token for cloudflared.
 

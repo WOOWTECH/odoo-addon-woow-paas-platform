@@ -223,7 +223,7 @@
             <table t-if="state.sa.routes and state.sa.routes.length"
                    class="o_woow_sa_routes_table">
               <thead>
-                <tr><th>Hostname</th><th>Service</th><th>Host header</th><th>Status</th><th></th></tr>
+                <tr><th>Hostname</th><th>Service</th><th>Host header</th><th>Status</th><th>Traffic (24h)</th><th></th></tr>
               </thead>
               <tbody>
                 <t t-foreach="state.sa.routes or []" t-as="route" t-key="route.id">
@@ -267,6 +267,11 @@
                             t-att-title="routeHealthHint(route)">
                         <t t-esc="routeHealthLabel(route)"/>
                       </span>
+                    </td>
+                    <!-- #1234：Cloudflare analytics 的請求數 · 最後請求。 -->
+                    <td class="o_woow_sa_routes_table__traffic"
+                        t-att-title="routeTrafficHint(route)">
+                      <t t-esc="routeTrafficLabel(route)"/>
                     </td>
                     <td class="o_woow_sa_routes_table__action">
                       <t t-if="state.editingRouteId === route.id">
