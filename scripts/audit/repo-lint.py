@@ -6621,18 +6621,22 @@ def check_route_contract_golden(root):
 #  40. status-contract-golden（#1263）                                          #
 # --------------------------------------------------------------------------- #
 
+#: route 與 status 兩份 golden 共用同一個 schema 檔與指紋鍵；取中性別名，免得讀的人
+#: 以為 status gate 誤用了 route 專屬的值。
+_OPERATOR_SCHEMA = _ROUTE_CONTRACT_SCHEMA
+_CONTRACT_FINGERPRINT_KEY = _ROUTE_CONTRACT_FINGERPRINT_KEY
 _STATUS_CONTRACT_GOLDEN = "src/tests/fixtures/status_contract_golden.json"
 #: golden 的 body 由這幾個 class 決定（Pod 身分在 PodInfo、能力旗標在
 #: ReleaseStatusResponse、release 子物件在 ReleaseInfo）。順序有意義，同 route。
 #: ⚠ 刻意不含 VmiInfo／DataVolumeInfo：golden 只有 include_vm=false 的情形。
 _STATUS_CONTRACT_CLASSES = ("PodPhase", "PodInfo", "ReleaseStatus", "ReleaseInfo",
                             "ReleaseStatusResponse")
-STATUS_CONTRACT_FILES = (_ROUTE_CONTRACT_SCHEMA, _STATUS_CONTRACT_GOLDEN)
+STATUS_CONTRACT_FILES = (_OPERATOR_SCHEMA, _STATUS_CONTRACT_GOLDEN)
 
 
 def status_contract_fingerprint(root):
     """``GET …/status`` 回應形狀的指紋；gate 與產生腳本共用（同 route 的理由）。"""
-    return _schema_classes_fingerprint(root, _ROUTE_CONTRACT_SCHEMA,
+    return _schema_classes_fingerprint(root, _OPERATOR_SCHEMA,
                                        _STATUS_CONTRACT_CLASSES)
 
 
@@ -6656,7 +6660,7 @@ def check_status_contract_golden(root):
         return [err + "——status 契約指紋無從計算，本 gate 失去鑑別力（#1263）"]
     try:
         with open(os.path.join(root, _STATUS_CONTRACT_GOLDEN), encoding="utf-8") as f:
-            recorded = json.load(f).get(_ROUTE_CONTRACT_FINGERPRINT_KEY)
+            recorded = json.load(f).get(_CONTRACT_FINGERPRINT_KEY)
     except (OSError, ValueError, AttributeError) as exc:
         return ["%s：讀不到或不是合法 JSON object（%s）（#1263）"
                 % (_STATUS_CONTRACT_GOLDEN, exc)]
@@ -6665,12 +6669,12 @@ def check_status_contract_golden(root):
     if not recorded:
         return ["%s 缺少 `%s`——golden 必須由產生腳本打真的端點產生，手寫的 golden "
                 "這道 gate 對它零鑑別力。%s"
-                % (_STATUS_CONTRACT_GOLDEN, _ROUTE_CONTRACT_FINGERPRINT_KEY, regen)]
+                % (_STATUS_CONTRACT_GOLDEN, _CONTRACT_FINGERPRINT_KEY, regen)]
     if recorded != fingerprint:
         return ["%s 的 `%s` 是 %s，但 %s 現在的 %s 算出來是 %s——operator 的 status "
                 "wire 形狀改了、golden 沒重產，平台端讀的是舊形狀而且照樣全綠。%s"
-                % (_STATUS_CONTRACT_GOLDEN, _ROUTE_CONTRACT_FINGERPRINT_KEY,
-                   recorded[:12], _ROUTE_CONTRACT_SCHEMA,
+                % (_STATUS_CONTRACT_GOLDEN, _CONTRACT_FINGERPRINT_KEY,
+                   recorded[:12], _OPERATOR_SCHEMA,
                    "／".join(_STATUS_CONTRACT_CLASSES), fingerprint[:12], regen)]
     return []
 

@@ -127,6 +127,7 @@ def test_initialize_rejects_unverified_fallback_without_exec(case):
         OdooInitService(k8s).initialize("dev-sandbox-1129", "tenant")
 
     assert error.value.step == "find_pod"
+    assert error.value.kind == "not_executed"
     k8s.exec_in_pod.assert_not_called()
 
 
@@ -180,6 +181,7 @@ def test_fallback_rejects_invalid_pod_name_before_metadata_get(monkeypatch, pod_
         OdooInitService(k8s).initialize("dev-sandbox-1129", "tenant")
 
     assert error.value.step == "find_pod"
+    assert error.value.kind == "not_executed"
     run.assert_not_called()
 
 
@@ -196,6 +198,7 @@ def test_fallback_getter_revalidates_namespace_before_get(monkeypatch):
         OdooInitService(k8s).initialize("foreign-ns", "tenant")
 
     assert error.value.step == "find_pod"
+    assert error.value.kind == "not_executed"
     run.assert_not_called()
 
 
@@ -207,6 +210,7 @@ def test_initialize_without_any_pod_does_not_exec():
         OdooInitService(k8s).initialize("dev-sandbox-1129", "tenant")
 
     assert error.value.step == "find_pod"
+    assert error.value.kind == "not_executed"
     k8s.exec_in_pod.assert_not_called()
 
 

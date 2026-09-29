@@ -15,6 +15,7 @@ import logging
 import time
 from pathlib import Path
 
+from src.models.schemas import InitErrorKind
 from src.services.helm import KubectlException, KubernetesService
 from src.services.odoo_chart_contract import (
     ODOO_CONTAINER_NAME,
@@ -64,7 +65,7 @@ class OdooInitError(Exception):
     ——新增的 raise 點沒想清楚副作用時，寧可讓平台保守處理，也不要誤報成可重送。
     """
 
-    def __init__(self, message: str, step: str = "", kind: str = "unknown"):
+    def __init__(self, message: str, step: str = "", kind: InitErrorKind = "unknown"):
         self.step = step
         self.kind = kind
         super().__init__(message)

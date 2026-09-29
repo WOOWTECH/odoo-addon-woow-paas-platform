@@ -11,6 +11,7 @@ import logging
 import time
 from typing import Dict, Optional
 
+from src.models.schemas import InitErrorKind
 from src.services.helm import KubectlException, KubernetesService
 
 logger = logging.getLogger(__name__)
@@ -28,7 +29,7 @@ class N8nInitError(Exception):
     n8n 端沒有產生副作用。
     """
 
-    def __init__(self, message: str, step: str = "", kind: str = "unknown"):
+    def __init__(self, message: str, step: str = "", kind: InitErrorKind = "unknown"):
         self.step = step
         self.kind = kind
         super().__init__(message)
@@ -403,7 +404,6 @@ class N8nInitService:
             return cookie
 
         except KubectlException as e:
-            # timeout 或其他 exec 失敗都分不出請求有沒有送達 n8n ⇒ unknown。
             raise N8nInitError(
                 f"Failed to login: {e.stderr}",
                 step="login",
@@ -484,7 +484,6 @@ class N8nInitService:
             return api_key
 
         except KubectlException as e:
-            # timeout 或其他 exec 失敗都分不出請求有沒有送達 n8n ⇒ unknown。
             raise N8nInitError(
                 f"Failed to create API key: {e.stderr}",
                 step="create_api_key",
