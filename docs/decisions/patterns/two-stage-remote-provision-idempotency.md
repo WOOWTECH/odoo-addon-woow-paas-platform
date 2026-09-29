@@ -50,7 +50,7 @@ retry 路徑無法靠 `state` 區分這兩種，因為它們都叫 `error`。能
 1. **遠端建立必須被 stored-id guard 包住**。method 開頭先判「remote id 是否已存在」：
    - 已存在 → **絕不重建**（`security_access.py:413` `if self.tunnel_id:` 分支）。
    - 不存在 → 才走建立段。
-   - ⚠ **guard 分支要 self-heal 還是 fail-loud，取決於「有沒有一段可重跑、且真能修好遠端的後續步驟」，不可照抄。** SA 有（`:419 _sync_routes_to_operator()` → `:426 _sync_all_routes_access()` → `:427-429` 收斂回 `active` / `active_no_route`）；SmartHome 沒有（沒有 route payload、`src/data/` 底下也沒有任何 smart-home cron 會回來補 DNS），所以它的 guard 分支選擇 **fail-loud** 並在 `UserError` 訊息裡指出兩條安全出路（請管理員補 DNS／刪掉整個 Smart Home 連帶拆 tunnel）。
+   - ⚠ **guard 分支要 self-heal 還是 fail-loud，取決於「有沒有一段可重跑、且真能修好遠端的後續步驟」，不可照抄。** SA 有（`:419 _sync_routes_to_operator()` → `:426 _sync_all_routes_access()` → `:427-429` 收斂回 `active` / `active_no_route`）；SmartHome 起初判定自己沒有（「沒有 route payload」），guard 分支選了 **fail-loud**；Smart Home 開通重試修正了這個判斷——它的 desired state 恰好一條 hostname，每一格（`subdomain`、`ha_port`）都已在 DB，所以 `error`／`pending` ＋ 既有 tunnel 現在走 `_converge_existing_tunnel()`（`sync_tunnel_routes` 一條 route → 補 primary route → 收斂回 `active`），其他 state（`active`／`suspended`／`provisioning`）仍 fail-loud。教訓：「沒有可重跑的後續步驟」要逐格核對 desired state 是否真的缺資料，不要因為「沒有 route 模型」就下結論——那個結論讓卡在 `error` 的租戶沒有任何自助出路。
 2. **每個 `except` 分支都要問兩個問題**：「此刻遠端是什麼狀態？」「retry 會發生什麼？」並據此分類：
    - operator / 連線錯誤 → `state='error'` fail-loud，但**保留 stored id**，讓下一次 retry 走 guard 分支收尾（guard 分支 `security_access.py:430`／`:440`；first-provision 分支 `:526`／`:532`）。
    - `AccessError`（field-group 拒絕之類的**安全訊號**）→ **propagate，不可降級**吞成 `state='error'`——降級會把安全拒絕偽裝成良性 provisioning 失敗（`security_access.py:449` 註解 +`:457` `raise`、`:538` 註解 +`:550` `raise`，兩處對稱）。
@@ -75,12 +75,12 @@ retry 路徑無法靠 `state` 區分這兩種，因為它們都叫 `error`。能
 - **guard 分支**：`src/models/security_access.py:413`（`if self.tunnel_id:` → 只 re-sync 不重建）。
 - **失敗路徑分類**：`security_access.py:430`／`:440`（連線／operator 錯 → error，guard 分支）、`:526`／`:532`（同上，first-provision 分支）、`:449`+`:457` / `:538`+`:550`（`AccessError` → re-raise 不降級）、`:458-466` / `:551-565`（broad → error 但保留 `tunnel_id`）。
 - **後續步驟冪等的現行實例**：`security_access.py:687`（route DNS anchor 就地 restamp）。
-- **第二支 guard（#484 之後）**：`src/models/smart_home.py:165` `action_provision` → `:194` `if self.tunnel_id:` fail-loud；commit `d9f49a6e`。**它曾是本 doc 的「單段免 guard」對照組，現已不是。**
+- **第二支 guard（#484 之後）**：`src/models/smart_home.py:165` `action_provision` → `:194` `if self.tunnel_id:` fail-loud；commit `d9f49a6e`。**它曾是本 doc 的「單段免 guard」對照組，現已不是。** 後來 guard 分支再改成「`pending`／`error` 收斂、其他 state fail-loud」（`SmartHome._converge_existing_tunnel`，測試 `src/tests/test_sh_provision_retry.py`）。
 - **UI retry 按鈕條件**：`src/views/security_access_views.xml:13` `invisible="state not in ('pending', 'error')"`。
 
 ## 偵測 / 測試建議
 
-- **負向測試（核心）**：mock 讓 stage 2 失敗 → assert `state='error'` 且 `tunnel_id` 已 set；接著**再呼叫一次** `action_provision` → assert `create_tunnel` **只被呼叫一次**（spy call_count == 1）、record 收斂到 `active`、無第二條 tunnel。這條直接鎖死孤兒不再生。覆蓋見 `src/tests/test_security_access.py:210` `test_provision_retry_after_tunnel_exists_does_not_recreate`（`:228` `create_tunnel.call_count == 1`、`:236` `create_tunnel.assert_not_called()`）與 `:241` `test_provision_resync_failure_keeps_tunnel_for_retry`；SmartHome 側見 `src/tests/test_named_failure_fields_484.py` 的 `test_retry_after_dns_failure_does_not_create_a_second_tunnel` / `test_provision_on_an_active_smart_home_is_also_guarded`。
+- **負向測試（核心）**：mock 讓 stage 2 失敗 → assert `state='error'` 且 `tunnel_id` 已 set；接著**再呼叫一次** `action_provision` → assert `create_tunnel` **只被呼叫一次**（spy call_count == 1）、record 收斂到 `active`、無第二條 tunnel。這條直接鎖死孤兒不再生。覆蓋見 `src/tests/test_security_access.py:210` `test_provision_retry_after_tunnel_exists_does_not_recreate`（`:228` `create_tunnel.call_count == 1`、`:236` `create_tunnel.assert_not_called()`）與 `:241` `test_provision_resync_failure_keeps_tunnel_for_retry`；SmartHome 側見 `src/tests/test_named_failure_fields_484.py` 的 `test_retry_after_dns_failure_does_not_create_a_second_tunnel` / `test_provision_on_an_active_smart_home_is_also_guarded`，以及 `src/tests/test_sh_provision_retry.py`（收斂／拒絕／失敗保留 error 的完整矩陣）。
   （原文寫「覆蓋見 `test_security_access_lifecycle.py`、`test_security_access_subscription_flow.py`」——兩檔都存在但**都不含 `create_tunnel`**，前者是 cron 測試檔（`:26 class TestSecurityAccessCron`，全部 test method 都是 `test_cron_*`）。2026-08 更正。）
 - **`AccessError` 不降級測試**：`with_user(非 system)` 觸發 provision → assert raise `AccessError`（**不是**靜默 `state='error'`），守住安全拒絕不被吞。
 - **grep 巡檢**：對任何呼叫 `create_*` / `provision` / 外部 SDK 建立 API 的 model method，檢查 method 開頭是否有 stored-id guard。判準是 **任一條路徑會在遠端留下資源而不回寫 id → 紅旗**（分段只是最好認的一種來源；另一種是遠端把部分失敗回成 HTTP 200 ＋具名旗標，例如 `dns_failed`——呼叫端沒讀就等於沒看見）。可順手比對 SmartHome（`smart_home.py:194`）與 SA（`security_access.py:413`）**兩支 guard 的分支差異**，決定你的 guard 分支該 self-heal 還是 fail-loud——**不要**再把 SmartHome 當「單段免 guard」的對照組，它已經不是了。

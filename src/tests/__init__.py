@@ -900,3 +900,7 @@ from . import test_sa_live_tunnel_status
 # 「parser 與舊 refresh 判讀一致、成員看得到即時值、這條路徑不寫 DB、operator 拿不到
 # 時沿用 DB 值、HA status 不再 action_refresh_status 且回應 key 不變」。
 from . import test_sh_live_tunnel_status
+
+# Smart Home 開通重試：有 tunnel 的 error／pending 在同一條 tunnel 上收斂（不再呼叫
+# create_tunnel）；active／suspended 照舊拒絕；收斂失敗維持 error 並保留 tunnel。
+from . import test_sh_provision_retry
