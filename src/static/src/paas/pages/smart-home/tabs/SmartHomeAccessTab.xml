@@ -16,11 +16,27 @@
 
       <!-- #1261 復原模式的常駐說明：為什麼頁籤只剩「關保護」。放在卡片外、
            error 下方——它描述的是方案狀態，不是某一次操作的結果，不能被下一次
-           操作清掉。 -->
-      <div t-if="props.seatless" class="o_woow_error_message" role="alert">
-        <WoowIcon name="'warning'" size="20"/>
-        <span>This plan includes no Access seats, so Access settings are not available on it. Protection is still on for the addresses below, and they stay locked behind Access until you turn it off. Turn protection off to make them reachable again, or change to a plan with Access seats to keep managing Access.</span>
-      </div>
+           操作清掉。
+           但文案裡的保護狀態要跟著 routes 現值走（#1261 review）：本頁的
+           「Turn protection off」只更新 state.routes、不重建頁籤，props.seatless
+           會一直是 true；而且列出來的 route 本來就可能有的已經 Public。所以：
+             1. 還有生效中的保護 → 警告只針對「仍受保護的那幾條」，混合狀態也成立；
+             2. 只剩 #794 lost 的 route（意圖開著、CF 上沒生效）→ 不說「被擋住」；
+             3. 全部關掉 → 中性說明，不再用 alert。 -->
+      <t t-if="props.seatless">
+        <div t-if="seatlessHasProtectionInEffect" class="o_woow_error_message" role="alert">
+          <WoowIcon name="'warning'" size="20"/>
+          <span>This plan includes no Access seats, so Access settings are not available on it. Addresses below that are still protected stay locked behind Access until you turn their protection off. Turn protection off to make them reachable again, or change to a plan with Access seats to keep managing Access.</span>
+        </div>
+        <div t-elif="seatlessHasProtectionIntent" class="o_woow_error_message" role="alert">
+          <WoowIcon name="'warning'" size="20"/>
+          <span>This plan includes no Access seats, so Access settings are not available on it. Protection is still switched on for some addresses below but is not in effect right now. Turn protection off to clear it, or change to a plan with Access seats to keep managing Access.</span>
+        </div>
+        <div t-else="" class="o_woow_error_message">
+          <WoowIcon name="'info'" size="20"/>
+          <span>Protection is off. Access settings need a plan with Access seats.</span>
+        </div>
+      </t>
 
       <WoowCard shadow="true">
         <div class="o_woow_sa_card_head">
@@ -29,7 +45,13 @@
           </div>
           <div class="o_woow_sa_card_head__text">
             <h3>Protected Applications</h3>
-            <p t-if="routes.length">
+            <!-- #1261 review：復原模式下 policy／登入方式都管不到，副標不能再說
+                 「each route carries its own policies and login methods」。 -->
+            <p t-if="routes.length and props.seatless">
+              <t t-esc="protectedRouteCount"/> of <t t-esc="routes.length"/>
+              routes protected · Access settings are not available on this plan
+            </p>
+            <p t-elif="routes.length">
               <t t-esc="protectedRouteCount"/> of <t t-esc="routes.length"/>
               routes protected · each route carries its own policies and login methods
             </p>
@@ -62,13 +84,21 @@
           <t t-foreach="routes" t-as="route" t-key="route.id">
             <div class="o_woow_sa_app">
               <div class="o_woow_sa_app__head">
-                <div t-att-class="'o_woow_sa_app__shield ' + (route.is_protected ? 'o_woow_sa_app__shield--on' : 'o_woow_sa_app__shield--off')">
-                  <WoowIcon name="route.is_protected ? 'verified_user' : 'gpp_bad'" size="20"/>
+                <!-- #794 / #1261 review：access_protection_lost 優先於 is_protected，
+                     與 AccessAppCard 同一個判準（綠盾配「其實沒保護」就是那個謊）。
+                     關閉按鈕照留（t-if 看 is_protected）：lost 的意圖仍要能清掉。 -->
+                <div t-att-class="'o_woow_sa_app__shield ' + (route.access_protection_lost ? 'o_woow_sa_app__shield--lost' : (route.is_protected ? 'o_woow_sa_app__shield--on' : 'o_woow_sa_app__shield--off'))">
+                  <WoowIcon name="route.access_protection_lost ? 'gpp_maybe' : (route.is_protected ? 'verified_user' : 'gpp_bad')" size="20"/>
                 </div>
                 <div class="o_woow_sa_app__ident">
                   <span class="o_woow_sa_detail__mono o_woow_sa_app__host"
                         t-esc="route.hostname or props.home.name"/>
-                  <div t-if="route.is_protected"
+                  <div t-if="route.access_protection_lost"
+                       class="o_woow_sa_app__status o_woow_sa_app__status--lost">
+                    <span class="o_woow_sa_app__dot"/>
+                    <span>Protection not in effect · anyone can reach it</span>
+                  </div>
+                  <div t-elif="route.is_protected"
                        class="o_woow_sa_app__status o_woow_sa_app__status--on">
                     <span class="o_woow_sa_app__dot"/>
                     <span>Protected · Access settings are not available on this plan</span>

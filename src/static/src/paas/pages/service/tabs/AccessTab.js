@@ -93,6 +93,14 @@ export class AccessTab extends Component {
     return !!this.state.access.access_protection_lost;
   }
 
+  // #1261 review：復原模式常駐警告的「保護仍開著、網址被 Access 擋住」只在
+  // 意圖開著**且**真的生效時成立；關掉之後（本頁自己的按鈕就做得到）或 #794
+  // lost 時換別的文案。讀 state.access 現值，不讀 props（父層刻意不重載）。
+  get seatlessProtectedInEffect() {
+    return !!this.props.seatless
+      && !!this.state.access.is_protected && !this.protectionLost;
+  }
+
   get policyCount() {
     return (this.state.access.access_policies || []).length;
   }

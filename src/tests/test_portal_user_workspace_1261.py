@@ -31,7 +31,9 @@
 """
 import json
 import uuid
+from datetime import timedelta
 
+from odoo import fields
 from odoo.tests.common import HttpCase, tagged
 
 from odoo.addons.woow_paas_platform.controllers.paas import (
@@ -239,6 +241,76 @@ class TestPortalUserWorkspace1261(HttpCase):
         # 「Workspace not found or access denied」結構化分支，而不是 AccessError。
         result = self._post('/api/workspaces/%s/services' % ws, {'action': 'list'})
         self.assertFalse(result.get('success'), result)
+
+        # SA／SH 的 `_get_workspace_or_error` 在 `check_user_access` 之前就自己做
+        # **非 sudo** 的 workspace_access search——修正前這兩支正是 portal 會拿到
+        # AccessError 原文＋traceback 的地方（review 追加）。`_post` 內的
+        # `assertIn('result', ...)` 就是回歸斷言；另外要求不得放行（殘留列不授權）。
+        for url in ('/api/workspaces/%s/security-accesses' % ws,
+                    '/api/workspaces/%s/smarthomes' % ws):
+            with self.subTest(url=url):
+                result = self._post(url, {'action': 'list'})
+                self.assertFalse(result.get('success'), result)
+                self.assertNotIn('data', result, '殘留的 portal 成員列不得讓列表放行')
+                self.assertNotIn('AccessError', result.get('error') or '')
+                self.assertNotIn('workspace_access', result.get('error') or '',
+                                 '不得把 ACL 原文（model 名）丟給使用者')
+
+        # ai_assistant 的 `_check_workspace_access` 是 sudo search_count：不會丟
+        # AccessError，但修正前會算到殘留列而放行。帶 workspace_id 的列表分支
+        # 在 portal 分支之外，正是會漏的那條。
+        result = self._post('/api/support/projects',
+                            {'action': 'list', 'workspace_id': ws})
+        self.assertFalse(result.get('success'), result)
+        self.assertEqual(result.get('error'), 'Access denied', result)
+
+    def test_portal_user_with_legacy_membership_ha_api_denied(self):
+        """HA 串接 API（OAuth bearer，`auth='none'`）的 sudo 成員查詢同樣不認殘留列。
+
+        `ha_api._get_user_workspaces` / `_check_workspace_access` 都是 sudo
+        search，修正前 portal 帳號憑 #1261 之前的殘留成員列就能列 workspace、
+        讀 smart home 清單。
+        """
+        self.WorkspaceAccess.create({
+            'workspace_id': self.workspace.id,
+            'user_id': self.portal_user.id,
+            'role': 'user',
+            'invited_by_id': self.owner.id,
+        })
+        client = self.env.ref('woow_paas_platform.oauth_client_ha_smart_home')
+        Token = self.env['woow_paas_platform.oauth_token'].sudo()
+
+        def make_token(user):
+            return Token.create({
+                'access_token': f'tok-1261-{user.id}-{self.suffix}',
+                'scope': 'workspace:read smarthome:read',
+                'expires_at': fields.Datetime.now() + timedelta(hours=1),
+                'refresh_expires_at': fields.Datetime.now() + timedelta(days=30),
+                'client_id': client.id,
+                'user_id': user.id,
+            })
+
+        def get(url, token):
+            return self.url_open(
+                url, headers={'Authorization': f'Bearer {token.access_token}'})
+
+        ws = self.workspace.id
+        # 陽性對照：同一組端點對 internal owner 照常放行——少了它，「一律
+        # 403／空清單」的壞修法（例如 token 本身失效）也會讓下面的陰性斷言全綠。
+        owner_token = make_token(self.owner)
+        resp = get('/api/smarthome/workspaces', owner_token)
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn(ws, [w['id'] for w in resp.json()['workspaces']])
+        resp = get('/api/smarthome/workspaces/%s/homes' % ws, owner_token)
+        self.assertEqual(resp.status_code, 200)
+
+        portal_token = make_token(self.portal_user)
+        resp = get('/api/smarthome/workspaces', portal_token)
+        self.assertEqual(resp.status_code, 200)
+        self.assertNotIn(ws, [w['id'] for w in resp.json()['workspaces']],
+                         '殘留的 portal 成員列不得讓 workspace 出現在清單')
+        resp = get('/api/smarthome/workspaces/%s/homes' % ws, portal_token)
+        self.assertEqual(resp.status_code, 403)
 
     # ================================================================
     #  internal 不變（陽性對照）

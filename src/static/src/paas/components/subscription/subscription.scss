@@ -124,7 +124,11 @@
   // #1261：這張方案卡的 route 上限裝不下服務目前的 route 數。
   // 與 #773 席位選項同一個決定：**不是** disabled 樣式（不 dim、不 not-allowed），
   // 卡片仍可點，權威攔截在後端 route gate；這裡只讓人在按確認之前就看到要先刪。
-  &--over_usage {
+  // 只在**未選取**時換琥珀框（#1261 review）：`--selected` 與本 modifier 同為
+  // 0,1,0，後寫者贏 ⇒ 選中的超額卡原本會被琥珀框蓋掉主色框，剛好是最需要看清
+  // 「選的就是這張」的那張。選中後改由下方 `__over_usage` 文字承擔警示。
+  // （`:hover` 是 0,2,0，本來就不受影響。）
+  &--over_usage:not(.o_woow_plan_card--selected) {
     border-color: var(--woow-warning, #f59e0b);
   }
 
@@ -162,7 +166,10 @@
   // #773：這個席位選項裝不下服務目前已列出的位址數。
   // 刻意**不是** disabled 樣式（不 dim、不 not-allowed）：選項仍然可點，
   // 權威攔截在後端 gate；這裡只負責讓人在按確認之前就看到要先去刪。
-  &--over_usage {
+  // #1261 review：與上方 `.o_woow_plan_card--over_usage` 同一個修正——只在
+  // **未選取**時換琥珀框，否則選中的超額選項看不出主色選取框（同為 0,1,0、
+  // 後寫者贏）。選中後的警示由選項內的超額文字承擔。
+  &--over_usage:not(.o_woow_plan_seat--selected) {
     border-color: var(--woow-warning, #f59e0b);
   }
 

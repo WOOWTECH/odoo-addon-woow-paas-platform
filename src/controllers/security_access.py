@@ -566,6 +566,15 @@ class SecurityAccessController(Controller):
 
     def _get_workspace_or_error(self, workspace_id: int):
         user = request.env.user
+        # #1261：portal/share 帳號擋在 search **之前**。下面這支 search 不是 sudo，
+        # portal 對 `workspace_access` 沒有 ACL（ir.model.access 只給 group_user /
+        # group_system）⇒ 不先擋就在這裡丟 AccessError，JSON-RPC 回 `error`（ACL
+        # 原文＋traceback）而不是各端點既有的「Workspace not found or access
+        # denied」。回 None 也順便讓 #1261 之前邀請殘留的 portal 成員列不再授予
+        # 任何東西——與 `workspace.check_user_access` 的 share 判準同一把尺。
+        # Portal callers are refused before the non-sudo search (#1261).
+        if user.share:
+            return None
         WorkspaceAccess = request.env["woow_paas_platform.workspace_access"]
         access = WorkspaceAccess.search([
             ("user_id", "=", user.id),

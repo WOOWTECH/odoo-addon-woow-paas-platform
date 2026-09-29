@@ -113,6 +113,18 @@ export class SmartHomeAccessTab extends Component {
       (r) => r.is_protected && !r.access_protection_lost).length;
   }
 
+  // #1261 review：復原模式常駐說明的兩個判準，讀 state.routes 現值（本頁的
+  // 「Turn protection off」只更新 state.routes，props.seatless 不會跟著變）。
+  // 「生效中」與 protectedRouteCount 同一個判準（排除 #794 lost）；「意圖」則
+  // 連 lost 也算——那種 route 仍掛著關閉按鈕，需要一句不說「被 Access 擋住」的說明。
+  get seatlessHasProtectionInEffect() {
+    return this.protectedRouteCount > 0;
+  }
+
+  get seatlessHasProtectionIntent() {
+    return this.state.routes.some((r) => r.is_protected);
+  }
+
   // ---- 本地 route 狀態維護 ----
 
   /**

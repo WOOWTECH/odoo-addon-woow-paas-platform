@@ -9,7 +9,10 @@ constraint，換方案不寫 route ⇒ 從來沒被叫醒。#773 的席位 gate 
 
 1. **拒絕必須斷言「副作用都沒發生」**：舊訂閱仍 in_progress、方案沒換、錢包沒動、
    route 一條都沒被刪。只看 ``success is False`` 會被「gate 插在退點之後、整包回捲」
-   或「擋住且順手刪 route」滿足。
+   或「擋住且順手刪 route」滿足。「錢包沒動」要有鑑別力，前提是這次換方案**真的會
+   退點**：fixture 因此照 SH 的 ``test_change_plan_protection_gate_1261`` 補一筆
+   ``done`` 的 ``deduct``、方案 ``sh_trial=False``，並在拒絕那條先斷言
+   ``_compute_unused_refund() > 0``（#324：沒成功扣款就退 0，錢包斷言恆綠）。
 2. **拒絕必須是 route gate 擋的**：斷言 marker ＋ ``data.current_routes`` /
    ``target_routes``。fixture 刻意**沒有任何 access policy** ⇒ #773 席位 gate
    （用量 0）一定放行，紅綠不會被它混淆。
@@ -106,11 +109,24 @@ class _RouteGateFixture:
         self.old_sub = self.sa.sudo().subscription_id
         self.assertEqual(self.old_sub.state, 'in_progress')
         self.assertEqual(self.old_sub.sh_subscription_plan_id, self.plan_3)
+        # 鑑別力前提（#1261 review）：新 owner 錢包是 0、付不出 300，確認訂閱時
+        # 不會寫 done deduct ⇒ `_has_paid_current_cycle()` 為 False ⇒ 退點恆 0，
+        # 「gate 擋在退點之前」的錢包斷言就證明不了任何事。照 SH 版 fixture
+        # 補一筆本訂閱的成功扣款，讓換方案時真的會 `refund_wallet_points`。
+        self.WalletTx = self.env['wallet.transaction']
+        self.WalletTx.create({
+            'partner_id': self.partner.id, 'transaction_type': 'deduct',
+            'amount': -self.old_sub.sh_plan_price,
+            'subscription_id': self.old_sub.id, 'state': 'done',
+        })
 
     def _plan(self, name, price, max_routes):
         plan = self.env['sh.subscription.plan'].create({
             'name': name, 'sh_duration': 1, 'sh_unit': 'month',
             'sh_plan_price': price, 'sh_no_of_billing_cycle': -1,
+            # sh_trial=False：試用期內 `_prorata_unused_refund` 退 0（start 在
+            # 未來），錢包斷言同樣失去鑑別力——與 SH 版 fixture 一致。
+            'sh_trial': False,
             'sa_max_routes': max_routes, 'service_type': 'security_access',
         })
         self.env['product.product'].create({
@@ -142,6 +158,12 @@ class _RouteGateFixture:
     def _balance(self):
         self.partner.sudo().invalidate_recordset(['wallet_balance'])
         return self.partner.sudo().wallet_balance
+
+    def _refund_count(self):
+        return self.WalletTx.search_count([
+            ('partner_id', '=', self.partner.id),
+            ('transaction_type', '=', 'refund'),
+        ])
 
 
 class TestSaRouteGateRuler(_RouteGateFixture, TransactionCase):
@@ -215,7 +237,12 @@ class TestSaChangePlanRouteGateEndpoint(_RouteGateFixture, TransactionCase):
     def test_downgrade_3_routes_to_1_route_plan_refused_before_side_effects(self):
         """prod 重現：3 條 route、3 組 → 1 組 ⇒ 結構化拒絕，且**什麼都沒發生**。"""
         self._add_routes(3)
+        # 前提：這次換方案若放行**會**退點 ⇒ 下面的錢包／退點斷言才分得出
+        # 「gate 在退點之前」與「gate 在退點之後（或沒 gate）」。
+        self.assertGreater(self.old_sub._compute_unused_refund(), 0,
+                           'fixture 前提：舊訂閱要有可退點數，否則錢包斷言恆綠')
         balance_before = self._balance()
+        refunds_before = self._refund_count()
         routes_before = self.sa.sudo().route_ids.ids
 
         res = self._change_plan(self.plan_1)
@@ -235,6 +262,8 @@ class TestSaChangePlanRouteGateEndpoint(_RouteGateFixture, TransactionCase):
         self.assertEqual(
             self.sa.sudo().subscription_id.sh_subscription_plan_id, self.plan_3)
         self.assertEqual(self._balance(), balance_before, 'gate 應擋在退點之前')
+        self.assertEqual(self._refund_count(), refunds_before,
+                         'gate 應擋在退點之前：不得寫出 refund 交易')
         self.assertEqual(self.sa.sudo().route_ids.ids, routes_before,
                          'gate ⛔ 不得刪除任何 route')
 
@@ -255,12 +284,18 @@ class TestSaChangePlanRouteGateEndpoint(_RouteGateFixture, TransactionCase):
         ⚠ 沒有這條，「SA change-plan 一律拒絕」也會讓上面兩條綠。
         """
         self._add_routes(1)
+        refunds_before = self._refund_count()
         res = self._change_plan(self.plan_1)
         self.assertTrue(res['success'], res.get('error'))
         self.sa.invalidate_recordset(['subscription_id'])
         self.assertEqual(
             self.sa.sudo().subscription_id.sh_subscription_plan_id, self.plan_1)
         self.assertEqual(len(self.sa.sudo().route_ids), 1, 'route 不得被動到')
+        # 陽性對照（#1261 review）：放行路徑確實退點 ⇒ fixture 的退點前提是活的，
+        # 拒絕那條的「沒有 refund」才有意義。
+        self.assertGreater(res['data']['refund_amount'], 0, res)
+        self.assertEqual(self._refund_count(), refunds_before + 1,
+                         '放行的換方案應寫出一筆 refund 交易')
 
     def test_upgrade_passes_without_downgrade_classification(self):
         """升級天然通過（3 條、3 組 → 5 組）⇒ 實作不需要先判「是不是降級」。"""

@@ -81,6 +81,12 @@ def _get_user_workspaces(user: Any) -> Any:
     Returns:
         Recordset of ``woow_paas_platform.workspace``.
     """
+    # #1261：portal/share 帳號不算任何 workspace 的成員（與
+    # `workspace.check_user_access` 同一把尺）。這裡是 sudo search，不會丟
+    # AccessError，但會撈到 #1261 之前邀請殘留的 portal 成員列並放行——
+    # portal 本來就用不了 workspace，那種列不該再授予任何東西。
+    if user.share:
+        return request.env['woow_paas_platform.workspace']
     access_records = request.env['woow_paas_platform.workspace_access'].sudo().search([
         ('user_id', '=', user.id),
         ('workspace_id.state', '=', 'active'),
@@ -98,6 +104,9 @@ def _check_workspace_access(user: Any, workspace_id: int) -> Any | None:
     Returns:
         Workspace browse record if accessible, ``None`` otherwise.
     """
+    # #1261：同 `_get_user_workspaces`——殘留的 portal 成員列不再放行（sudo search）。
+    if user.share:
+        return None
     access = request.env['woow_paas_platform.workspace_access'].sudo().search([
         ('user_id', '=', user.id),
         ('workspace_id', '=', workspace_id),

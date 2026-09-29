@@ -106,7 +106,16 @@ class AiAssistantController(Controller):
         """Verify the current user is a member of the workspace.
 
         Returns True if an access record exists for the current user.
+
+        #1261：portal/share 帳號一律 False（與 `workspace.check_user_access` 同一把
+        尺）。sudo search_count 不會丟 AccessError，但會算到 #1261 之前邀請殘留的
+        portal 成員列。project/task 路徑在呼叫本方法前已先走 portal 分支
+        （`_check_project_access` / `_check_task_access`），不受影響；真正會漏的是
+        `api_support_projects` / `api_support_tasks` 帶 workspace_id /
+        cloud_service_id 的分支。
         """
+        if request.env.user.share:
+            return False
         return request.env['woow_paas_platform.workspace_access'].sudo().search_count([
             ('workspace_id', '=', workspace.id),
             ('user_id', '=', request.env.user.id),

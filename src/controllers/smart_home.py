@@ -818,6 +818,12 @@ class SmartHomeController(Controller):
     def _get_workspace_or_error(self, workspace_id: int):
         """Verify user has access to workspace and return it."""
         user = request.env.user
+        # #1261：同 security_access.py 的 `_get_workspace_or_error`——portal/share
+        # 帳號在非 sudo search 之前就回 None，否則 search 丟 AccessError、原文與
+        # traceback 冒到前端；殘留的 portal 成員列也不再放行。
+        # Portal callers are refused before the non-sudo search (#1261).
+        if user.share:
+            return None
         WorkspaceAccess = request.env["woow_paas_platform.workspace_access"]
 
         access = WorkspaceAccess.search([
