@@ -432,7 +432,7 @@
 2	test_payment_token_charge.TestPaymentTokenCharge
 1	test_payment_transaction_fields.TestPaymentTransactionFields
 4	test_payment_transaction_overrides.TestPaymentTransactionOverrides
-9	test_pi_agent_seed.TestPiAgentSeed
+10	test_pi_agent_seed.TestPiAgentSeed
 1	test_plan_group_keys_368.TestDisplaySpecs368
 1	test_plan_group_keys_368.TestEndpointOrderUnchanged368
 1	test_plan_group_keys_368.TestGroupKeys368
