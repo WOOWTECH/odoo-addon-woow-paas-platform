@@ -119,6 +119,18 @@ def test_identity_flag_is_set_even_when_pod_retrieval_fails():
     assert body["pod_identity_included"] is True
 
 
+def test_status_exposes_raw_pod_creation_timestamp():
+    """#1222 提早收斂：平台要證明 server Pod 建立於 ``last_upgraded_at`` 之後；
+    ``age`` 是人讀字串、會隨時間變，不能拿來比。"""
+    created = _pod("svc-1263-abc", _INSTANCE, [_owner("ReplicaSet")])
+    created["metadata"]["creationTimestamp"] = "2026-09-29T01:02:03Z"
+    body = _get_status([created, _pod("no-ts", _INSTANCE)])
+
+    stamps = {p["name"]: p["creation_timestamp"] for p in body["pods"]}
+    assert stamps == {"svc-1263-abc": "2026-09-29T01:02:03Z", "no-ts": None}
+
+
 def test_legacy_pod_info_needs_no_identity_fields():
     pod = PodInfo(name="odoo", phase="Running", ready="1/1", restarts=0, age="1m")
-    assert (pod.component, pod.task, pod.owner_kind) == (None, None, None)
+    assert (pod.component, pod.task, pod.owner_kind, pod.creation_timestamp) == (
+        None, None, None, None)

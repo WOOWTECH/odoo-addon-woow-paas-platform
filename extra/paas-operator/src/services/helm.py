@@ -1203,6 +1203,7 @@ class KubernetesService:
                     component=labels.get("app.kubernetes.io/component"),
                     task=labels.get("woow.paas/task"),
                     owner_kind=_controller_owner_kind(metadata),
+                    creation_timestamp=created or None,
                 )
             )
 

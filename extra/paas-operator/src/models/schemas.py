@@ -273,6 +273,9 @@ class PodInfo(BaseModel):
     component: Optional[str] = None  # label app.kubernetes.io/component
     task: Optional[str] = None  # label woow.paas/task
     owner_kind: Optional[str] = None  # controller=true 那筆 ownerReference 的 kind
+    # #1222 升級提早收斂：metadata.creationTimestamp 原值（RFC 3339 UTC）。``age`` 是
+    # 人讀字串且隨時間變，不能拿來判斷「Pod 建立於某時刻之後」。
+    creation_timestamp: Optional[str] = None
 
 
 class VmiInfo(BaseModel):
@@ -424,6 +427,7 @@ class ReleaseStatusResponse(BaseModel):
     # 舊 operator 沒有這個 key；平台缺旗標就 fail-closed。它宣告的是「本 operator
     # 會填 PodInfo 的身分欄位」，與這次抓 Pod 成不成功無關（那由
     # ``pod_retrieval_error`` 表達）——否則暫時性的讀取失敗會被平台誤判成 HARD。
+    # 同一版起 ``PodInfo.creation_timestamp`` 也一定會填（#1222），同樣以本旗標判斷。
     pod_identity_included: bool = Field(
         default=False,
         description=(
