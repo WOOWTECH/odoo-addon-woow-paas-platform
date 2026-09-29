@@ -1306,35 +1306,7 @@ class SecurityAccess(models.Model):
         client = self._get_operator_client()
         try:
             result = client.get_tunnel_status(self.tunnel_id)
-            connections = result.get('connections', [])
-            if result.get('deleted_at'):
-                # 見 docstring。連 connector 記帳一起清：留著上一輪的數字會變成
-                # 「Deleted ＋ Edge Connections: 4」這種看起來很正常的混合世代。
-                self.write({
-                    'tunnel_status': 'deleted',
-                    'edge_connection_count': 0,
-                    'connector_id': '',
-                    'connector_type': '',
-                    'connector_version': '',
-                })
-                return
-            update_vals = {
-                'tunnel_status': 'connected' if connections else 'disconnected',
-                'edge_connection_count': len(connections),
-            }
-            if connections:
-                conn = connections[0]
-                update_vals['connector_id'] = conn.get('connector_id', '')
-                update_vals['connector_type'] = conn.get('type', '')
-                # cloudflared client version (key varies by operator/CF payload)
-                update_vals['connector_version'] = (
-                    conn.get('client_version')
-                    or conn.get('version') or '')
-                if conn.get('opened_at'):
-                    update_vals['tunnel_uptime'] = conn['opened_at']
-            else:
-                update_vals['connector_version'] = ''
-            self.write(update_vals)
+            self.write(self._tunnel_vals_from_status(result))
         except PaaSOperatorError as e:
             self.write({
                 'tunnel_status': 'error',
@@ -1344,6 +1316,74 @@ class SecurityAccess(models.Model):
             _logger.warning(
                 "[SA] status refresh failed sa=%s: %s", self.id, e.message,
             )
+
+    @api.model
+    def _tunnel_vals_from_status(self, result):
+        """operator ``GET /api/tunnels/{id}`` 的回應 → tunnel 相關欄位值。
+
+        ``action_refresh_status``（寫回 DB）與 ``_live_tunnel_status``（只讀疊在
+        API 回應上）共用這一份判讀，兩邊才不會各自演化出不同的「已連線」定義。
+        ``deleted_at`` 的語意見 ``action_refresh_status`` docstring（#833）。
+        """
+        connections = result.get('connections', [])
+        if result.get('deleted_at'):
+            # 連 connector 記帳一起清：留著上一輪的數字會變成
+            # 「Deleted ＋ Edge Connections: 4」這種看起來很正常的混合世代。
+            return {
+                'tunnel_status': 'deleted',
+                'edge_connection_count': 0,
+                'connector_id': '',
+                'connector_type': '',
+                'connector_version': '',
+            }
+        vals = {
+            'tunnel_status': 'connected' if connections else 'disconnected',
+            'edge_connection_count': len(connections),
+        }
+        if connections:
+            conn = connections[0]
+            vals['connector_id'] = conn.get('connector_id', '')
+            vals['connector_type'] = conn.get('type', '')
+            # cloudflared client version (key varies by operator/CF payload)
+            vals['connector_version'] = (
+                conn.get('client_version') or conn.get('version') or '')
+            if conn.get('opened_at'):
+                vals['tunnel_uptime'] = conn['opened_at']
+        else:
+            vals['connector_version'] = ''
+        return vals
+
+    def _live_tunnel_status(self):
+        """詳情頁用：即時向 operator 問 tunnel 狀態，**只讀、不寫 DB**。
+
+        為什麼需要：``action_refresh_status`` 只在 ``refresh_status`` action 被
+        呼叫時才寫回，而 SA 詳情頁從來沒呼叫它、也沒有排程 ⇒ 概覽頁的
+        「Connector 已連線／Edge 4」會停在上一次寫入的值。2026-09-29 正式站實測：
+        tunnel 已 0 connector 數小時，概覽頁仍顯示 09-25 的「已連線、Edge 4」，
+        與 #1234 的 route 狀態欄（Connector offline）互相矛盾。
+
+        只讀是刻意的：寫回要過 SA 的 write ir.rule（只發給 owner/admin），
+        詳情頁卻是所有成員都能看。拿不到（operator 未設定／逾時／錯誤）就回
+        ``{}``，呼叫端沿用 DB 裡的值——那是退化成原本的行為，不是新的錯誤。
+        """
+        self.ensure_one()
+        if not self.tunnel_id:
+            return {}
+        client = get_paas_operator_client(self.env)
+        if not client:
+            return {}
+        try:
+            vals = self._tunnel_vals_from_status(
+                client.get_tunnel_status(self.tunnel_id))
+        except PaaSOperatorError as e:
+            _logger.info("[SA] live tunnel status unavailable sa=%s: %s",
+                         self.id, e.message)
+            return {}
+        if not vals.get('edge_connection_count'):
+            # 斷線時「Connector Opened」不該還掛著上一次連上的時間。
+            vals['tunnel_uptime'] = ''
+        vals['tunnel_status_live'] = True
+        return vals
 
     def action_delete(self):
         """User-initiated delete: full Cloudflare teardown then unlink.

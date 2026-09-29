@@ -891,3 +891,7 @@ from . import test_sa_route_health_1234
 # #1234 第二步：route 流量。各種拿不到的原因（缺 CF analytics 權限、operator 太舊）
 # 都要是可解釋的值，不是錯誤。
 from . import test_sa_route_traffic_1234
+
+# SA 詳情頁 tunnel 狀態改用即時值（只讀疊加）。守「成員看得到即時值、這條路徑不寫 DB、
+# operator 拿不到時沿用 DB 值」。
+from . import test_sa_live_tunnel_status
