@@ -2055,11 +2055,18 @@ class SecurityAccessRoute(models.Model):
         help='Backend target. Default assumes the user runs a reverse '
              'proxy (NPM) on localhost:80 that splits by Host header.',
     )
+    # #1261：help 原本寫得像「不勾就不會帶 Host」。實際語意是 cloudflared 的
+    # `originRequest.httpHostHeader`（operator `cloudflare.py` 只在勾選時寫入）：
+    # **強制**把 Host 設成公開網址。沒設時 cloudflared 本來就原樣轉送訪客的 Host，
+    # 常見情況下也是同一個公開網址（2026-09-29 正式站實測勾／不勾 origin 收到的
+    # Host 相同）。只改說明文字，行為與預設值不變。
     http_host_header = fields.Boolean(
         string='Send HTTP Host Header',
         default=True,
-        help='Send the public hostname as the HTTP Host header to the '
-             'origin so the user-side reverse proxy can route by Host.',
+        help='Force the HTTP Host header sent to the origin to the public '
+             'hostname (cloudflared httpHostHeader). Without it cloudflared '
+             'still forwards the visitor\'s original Host, which is normally '
+             'the same public hostname.',
     )
     is_protected = fields.Boolean(
         string='Protected',

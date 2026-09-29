@@ -43,6 +43,8 @@ import { PlanTotalBar } from "../subscription/PlanTotalBar";
  *     （含 refund_amount / new_plan，供父頁選用）；父頁負責關 modal + reload 服務。
  *   - usedRoutes (Number, optional): #1261，服務目前的 route 數（SA 才傳）。只用於
  *     方案卡的警告標註；降級被 route gate 擋時，後端錯誤訊息照常顯示在 `state.error`。
+ *   - resourcesNotResized (Boolean, optional): true 時多顯示「已部署服務的運算
+ *     資源不會因換方案而調整」（#1261／#342；僅 CS 父頁傳）。
  */
 export class ChangePlanModal extends Component {
   static template = "woow_paas_platform.ChangePlanModal";
@@ -57,6 +59,9 @@ export class ChangePlanModal extends Component {
     // #1261：服務目前的 route 數，原樣轉給 PlanSelector 標註「裝不下」的方案卡。
     // 由父頁注入（只有 SA 詳情頁傳），modal 自身仍不 branch service type。
     usedRoutes: { type: Number, optional: true },
+    // #1261／#342：只有 Cloud Service 父頁傳 true——CS 的 vCPU／RAM／儲存空間只在
+    // 建立時套用、change-plan 不會 redeploy，modal 要多講這一句（見 xml 同名那格）。
+    resourcesNotResized: { type: Boolean, optional: true },
   };
 
   setup() {

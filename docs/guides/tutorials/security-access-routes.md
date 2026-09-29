@@ -30,7 +30,10 @@ related:
 |---|---|
 | 新網址通常 **20 秒～1 分鐘**內可用 | 儲存後等一下再開；狀態欄顯示「Not live yet」是正常的 |
 | 舊網址**立刻失效、不會轉址** | 先通知使用者、更新書籤與連結 |
-| 若該 route 有勾 **Host header**，送到你機器的 Host 會變成新網址 | 你的反向代理（例如 Nginx Proxy Manager）或只接受已知 host 的服務，**先加新網址再改名**，否則會連不到——實測 NPM 會回它的「Default Site」預設頁，狀態欄顯示「Proxy has no site」 |
+| 送到你機器的 Host 會變成新網址——**通常不論有沒有勾 Host header**（見下方說明） | 你的反向代理（例如 Nginx Proxy Manager）或只接受已知 host 的服務，**先加新網址再改名**，否則會連不到——實測 NPM 會回它的「Default Site」預設頁，狀態欄顯示「Proxy has no site」 |
+
+> **Host header 選項實際做什麼**（#1261）：勾選＝**強制**把送到你服務的 Host 設成公開網址（cloudflared 的 `httpHostHeader`）。
+> 不勾時 cloudflared 本來就會原樣轉送訪客的 Host，通常就是同一個公開網址——所以取消勾選一般**不會**改變你的服務收到的值（2026-09-29 正式站實測勾／不勾結果相同），也**不會**讓後端改收 service URL 的主機名。
 
 ## 3. 把 tunnel 搬到另一台機器（token 轉移）
 

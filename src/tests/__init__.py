@@ -924,3 +924,7 @@ from . import test_sa_change_plan_route_gate_1261
 # 有 internal 時落到 internal、portal 打 workspace 端點拿結構化錯誤而非 AccessError
 # （含殘留舊成員列）、internal 行為不變」。
 from . import test_portal_user_workspace_1261
+
+# #1261 (d)：skip-trial 後 sh_trial_end_date＝昨天是「試用最後一天（含）、start＝
+# trial_end + 1」的日期慣例，不是 off-by-one；釘住它，免得被「順手修正」成今天。
+from . import test_skip_trial_dates_1261
