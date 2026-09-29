@@ -71,6 +71,8 @@ def init_n8n(
             secret_patched=result.get("secret_patched", False),
             pod_restarted=result.get("pod_restarted", False),
             message="n8n initialization complete" if is_success else "n8n API key created but K8s Secret update failed",
+            error_step=result.get("error_step"),
+            error_kind=result.get("error_kind"),
         )
 
     except N8nInitError as e:
@@ -79,14 +81,13 @@ def init_n8n(
             success=False,
             error=f"[{e.step}] {str(e)}",
             message=f"n8n initialization failed at step: {e.step}",
+            error_step=e.step,
+            error_kind=e.kind,
         )
 
     except Exception as e:
         logger.exception("Unexpected error during n8n initialization")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"n8n initialization failed: {str(e)}",
-        )
+        raise _unexpected_init_failure(f"n8n initialization failed: {str(e)}")
 
 
 @router.post(
