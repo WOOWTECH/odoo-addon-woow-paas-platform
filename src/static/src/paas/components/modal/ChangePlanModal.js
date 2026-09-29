@@ -41,6 +41,8 @@ import { PlanTotalBar } from "../subscription/PlanTotalBar";
  *   - onClose (Function): 取消／關閉時呼叫。
  *   - onChanged (Function): confirmChange 成功後呼叫，帶後端回傳 data
  *     （含 refund_amount / new_plan，供父頁選用）；父頁負責關 modal + reload 服務。
+ *   - resourcesNotResized (Boolean, optional): true 時多顯示「已部署服務的運算
+ *     資源不會因換方案而調整」（#1261／#342；僅 CS 父頁傳）。
  */
 export class ChangePlanModal extends Component {
   static template = "woow_paas_platform.ChangePlanModal";
@@ -52,6 +54,9 @@ export class ChangePlanModal extends Component {
     confirmChange: { type: Function },
     onClose: { type: Function },
     onChanged: { type: Function },
+    // #1261／#342：只有 Cloud Service 父頁傳 true——CS 的 vCPU／RAM／儲存空間只在
+    // 建立時套用、change-plan 不會 redeploy，modal 要多講這一句（見 xml 同名那格）。
+    resourcesNotResized: { type: Boolean, optional: true },
   };
 
   setup() {

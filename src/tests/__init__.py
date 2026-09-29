@@ -909,3 +909,7 @@ from . import test_sh_provision_retry
 # （SA sa.to_dict routes／SH include_details routes／CS _access_to_dict）。key 缺席時
 # AccessAppCard 讀到 undefined，fail-open 警示會靜默消失。
 from . import test_access_protection_lost_ui_payload
+
+# #1261 (d)：skip-trial 後 sh_trial_end_date＝昨天是「試用最後一天（含）、start＝
+# trial_end + 1」的日期慣例，不是 off-by-one；釘住它，免得被「順手修正」成今天。
+from . import test_skip_trial_dates_1261

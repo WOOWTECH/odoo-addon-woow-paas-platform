@@ -3105,6 +3105,14 @@ msgid "Completion"
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/ChangePlanModal.xml:0
+msgid ""
+"Compute resources (vCPU, RAM, storage) of an already deployed service are "
+"not resized by a plan change yet."
+msgstr "已部署服務的運算資源（vCPU、RAM、儲存空間）目前不會因變更方案而調整。"
+
+#. module: woow_paas_platform
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_app_template__conceal_instances
 msgid "Conceal Existing Instances"
 msgstr "隱藏既有實例"
@@ -4612,7 +4620,7 @@ msgstr ""
 #: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.xml:0
 msgid ""
 "Each route maps a public subdomain to your host. Traffic is\n"
-"                   forwarded to the service URL with the Host header set."
+"                   forwarded to the service URL with the public hostname as the Host header."
 msgstr ""
 
 #. module: woow_paas_platform
@@ -5494,6 +5502,14 @@ msgstr ""
 msgid ""
 "For top-up rows: the bonus credits added on top of base. Always 0 when no "
 "bonus applies or for non-topup types."
+msgstr ""
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_security_access_route__http_host_header
+msgid ""
+"Force the HTTP Host header sent to the origin to the public hostname "
+"(cloudflared httpHostHeader). Without it cloudflared still forwards the "
+"visitor's original Host, which is normally the same public hostname."
 msgstr ""
 
 #. module: woow_paas_platform
@@ -9054,6 +9070,19 @@ msgstr ""
 "覽的人。只有符合下方 Access policy 的身分才進得來。"
 
 #. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.js:0
+msgid ""
+"Once protection is on, every visitor to this route's address has to pass "
+"Access verification first, including you. Only identities matching an Access"
+" policy below get in; clients that cannot show a browser login page (API "
+"clients, webhooks, scripts or apps connecting directly) will be blocked."
+msgstr ""
+"開啟後所有訪客都需先通過 Access 驗證才能開啟這條 route 的網址，包含你自己。"
+"只有符合下方 Access policy 的身分才進得來；無法顯示瀏覽器登入頁的用戶端（API "
+"用戶端、webhook、腳本或直連的 App）會被擋在外面。"
+
+#. module: woow_paas_platform
 #: model:ir.model.constraint,message:woow_paas_platform.constraint_woow_paas_platform_agent_session_unique_project
 msgid "One agent session per project (per-project pod model)."
 msgstr ""
@@ -10816,12 +10845,6 @@ msgstr "資源 UID"
 
 #. module: woow_paas_platform
 #. odoo-javascript
-#: code:addons/woow_paas_platform/static/src/paas/components/modal/ChangePlanModal.xml:0
-msgid "Resource changes take effect in the next billing cycle."
-msgstr "資源將於下個計費週期生效。"
-
-#. module: woow_paas_platform
-#. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/OverviewTab.xml:0
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_cloud_app_template_form
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_cloud_service_form
@@ -11396,13 +11419,6 @@ msgstr ""
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/ai-chat/AiChat.xml:0
 msgid "Send message"
-msgstr ""
-
-#. module: woow_paas_platform
-#: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_security_access_route__http_host_header
-msgid ""
-"Send the public hostname as the HTTP Host header to the origin so the user-"
-"side reverse proxy can route by Host."
 msgstr ""
 
 #. module: woow_paas_platform
@@ -12867,6 +12883,17 @@ msgstr "已超過卡片額度上限。"
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/ChangePlanModal.xml:0
+msgid ""
+"The change takes effect immediately: the new plan and its limits apply as "
+"soon as you confirm and are billed from today. The unused part of the "
+"current period is refunded as described above."
+msgstr ""
+"變更立即生效：確認後立刻套用新方案與其額度，並自今日起計費；本期未使用的部分"
+"依上方說明退點。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/task-detail/TaskDetailPage.xml:0
 msgid "The chat channel will be created when the first message is sent."
 msgstr ""
@@ -13425,6 +13452,12 @@ msgid "Token Type"
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.xml:0
+msgid "Token copied"
+msgstr "已複製"
+
+#. module: woow_paas_platform
 #. odoo-python
 #: code:addons/woow_paas_platform/controllers/billing.py:0
 msgid "Token not found"
@@ -13720,6 +13753,7 @@ msgstr "開啟保護"
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.js:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/AccessTab.js:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/smart-home/tabs/SmartHomeAccessTab.js:0
 msgid "Turn on Access protection?"
@@ -13727,6 +13761,7 @@ msgstr "開啟 Access 保護？"
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.js:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/smart-home/tabs/SmartHomeAccessTab.js:0
 msgid "Turn protection on"
 msgstr "開啟保護"
