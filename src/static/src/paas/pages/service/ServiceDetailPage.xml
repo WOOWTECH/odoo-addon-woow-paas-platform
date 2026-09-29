@@ -203,9 +203,12 @@
                         payload 的 subscription.ac_max_access_seats——能力判準
                         收斂到後端單一欄位（capability-gate-single-source-field），
                         前端不得自己算一份（slug／category／模板名單）。
+                        #1261：`or accessRecoveryMode`＝0 席但仍受保護時照樣給頁籤
+                        （只能關保護，見該 getter）。hasAccessSeats 必須留在表達式
+                        裡——lint 靠它追到 ac_max_access_seats。
                     -->
                     <button
-                        t-if="hasAccessSeats"
+                        t-if="hasAccessSeats or accessRecoveryMode"
                         t-att-class="{'o_woow_tab': true, 'active': currentTab === 'access'}"
                         t-on-click="() => this.setTab('access')">
                         <WoowIcon name="'shield'" size="18"/>
@@ -235,9 +238,12 @@
                     <!-- 內容側同樣掛 hasAccessSeats：直接把 URL 打成
                          .../access 的人不該因此拿到一個方案沒買的頁面
                          （頁籤不見了、內容還在＝gate 只做了一半）。 -->
+                    <!-- #1261：復原模式也掛內容（否則 /access 深連結是空的），
+                         `seatless` 讓頁籤只剩「關保護」。 -->
                     <AccessTab
-                        t-if="currentTab === 'access' and hasAccessSeats"
+                        t-if="currentTab === 'access' and (hasAccessSeats or accessRecoveryMode)"
                         service="service"
+                        seatless="!hasAccessSeats"
                         workspaceId="props.workspaceId"/>
                 </div>
             </t>

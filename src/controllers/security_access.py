@@ -508,13 +508,18 @@ class SecurityAccessController(Controller):
         # ⛔ 不得在這裡自己數席位，兩把尺漂開會產生「gate 放行但寫入被守衛擋」的死結。
         #
         # 升級天然通過（席數變大 ⇒ 用量 ≤ 席數），所以**不需要**先判斷這次是不是降級。
+        #
+        # #1261 的「0 席 ＋ 仍受保護」那一種拒絕**不適用** SA（SA 的 Access 分頁不看
+        # 席位、永遠關得掉保護），由 `_SEAT_GATED_PROTECTION_ANCHORS` 排除，不是漏接。
         _denial = request.env['woow_paas_platform.security_access_access_policy']\
             ._seat_gate_denial(sa, plan)
         if _denial:
+            # #1261：`data` 原樣轉發 error 以外的欄位（`code`／current_seats／
+            # target_seats，保護那種另帶 `protected_hostnames`）。不逐 key 挑：
+            # gate 多一種拒絕時三個端點各挑一次就是漂移的起點。
             return {'success': False,
                     'error': _denial['error'],
-                    'data': {'current_seats': _denial['current_seats'],
-                             'target_seats': _denial['target_seats']}}
+                    'data': {k: v for k, v in _denial.items() if k != 'error'}}
 
         refund = old_sub._compute_unused_refund()
         partner = old_sub.sh_partner_id

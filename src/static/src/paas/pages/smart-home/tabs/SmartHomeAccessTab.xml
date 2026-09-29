@@ -14,6 +14,14 @@
         <span t-esc="state.orphanWarning"/>
       </div>
 
+      <!-- #1261 復原模式的常駐說明：為什麼頁籤只剩「關保護」。放在卡片外、
+           error 下方——它描述的是方案狀態，不是某一次操作的結果，不能被下一次
+           操作清掉。 -->
+      <div t-if="props.seatless" class="o_woow_error_message" role="alert">
+        <WoowIcon name="'warning'" size="20"/>
+        <span>This plan includes no Access seats, so Access settings are not available on it. Protection is still on for the addresses below, and they stay locked behind Access until you turn it off. Turn protection off to make them reachable again, or change to a plan with Access seats to keep managing Access.</span>
+      </div>
+
       <WoowCard shadow="true">
         <div class="o_woow_sa_card_head">
           <div class="o_woow_sa_card_head__icon">
@@ -45,6 +53,45 @@
              這裡只餵它「這條 route 的設定現值」與 callback，SH 自己持有展開／
              排序中等 per-route 的 UI 狀態。**不要改 AccessAppCard**：它不認識
              任何 API，全部往上拋。 -->
+        <!-- #1261 復原模式：每條 route 一列，只有狀態與「Turn protection off」。
+             版面沿用 AccessAppCard 的 o_woow_sa_app 殼（同一套 class，不另寫
+             樣式），但**不掛那張卡**——它的開保護／登入方式／Add Policy／session
+             都是 0 席方案不該再做的設定。已經關掉的 route 就只剩 Public 狀態、
+             沒有按鈕：0 席方案不能再把保護打開。 -->
+        <t t-if="props.seatless">
+          <t t-foreach="routes" t-as="route" t-key="route.id">
+            <div class="o_woow_sa_app">
+              <div class="o_woow_sa_app__head">
+                <div t-att-class="'o_woow_sa_app__shield ' + (route.is_protected ? 'o_woow_sa_app__shield--on' : 'o_woow_sa_app__shield--off')">
+                  <WoowIcon name="route.is_protected ? 'verified_user' : 'gpp_bad'" size="20"/>
+                </div>
+                <div class="o_woow_sa_app__ident">
+                  <span class="o_woow_sa_detail__mono o_woow_sa_app__host"
+                        t-esc="route.hostname or props.home.name"/>
+                  <div t-if="route.is_protected"
+                       class="o_woow_sa_app__status o_woow_sa_app__status--on">
+                    <span class="o_woow_sa_app__dot"/>
+                    <span>Protected · Access settings are not available on this plan</span>
+                  </div>
+                  <div t-else="" class="o_woow_sa_app__status o_woow_sa_app__status--off">
+                    <span class="o_woow_sa_app__dot"/>
+                    <span>Public · anyone can reach it</span>
+                  </div>
+                </div>
+                <div class="o_woow_sa_app__controls">
+                  <WoowButton t-if="route.is_protected"
+                              variant="'secondary'" size="'sm'"
+                              disabled="state.unprotectingRouteId === route.id"
+                              onClick="() => this.turnOffProtection(route)">
+                    <WoowIcon name="'lock_open'" size="14"/>
+                    <span>Turn protection off</span>
+                  </WoowButton>
+                </div>
+              </div>
+            </div>
+          </t>
+        </t>
+        <t t-else="">
         <t t-foreach="routes" t-as="route" t-key="route.id">
           <AccessAppCard
               hostname="route.hostname or props.home.name"
@@ -62,9 +109,12 @@
               onDeletePolicy="(pol) => this.deletePolicy(route, pol)"
               onReorderPolicies="(ids) => this.commitPolicyOrder(route, ids)"/>
         </t>
+        </t>
       </WoowCard>
 
-      <WoowCard shadow="true" t-if="routes.length">
+      <!-- 「沒有 Allow policy 就沒人進得來，去加 policy」在 #1261 復原模式下是
+           一句做不到的指示（0 席方案不能加 policy），所以只在正常模式出現。 -->
+      <WoowCard shadow="true" t-if="routes.length and !props.seatless">
         <div class="o_woow_sa_info_note">
           <div class="o_woow_sa_info_note__icon">
             <WoowIcon name="'info'" size="18"/>

@@ -213,6 +213,33 @@ export class SmartHomeDetailPage extends Component {
         return (this.home?.subscription?.ac_max_access_seats ?? 0) > 0;
     }
 
+    /**
+     * #1261 復原模式：方案沒有 Access 席位，但仍有 route 開著保護。
+     *
+     * 這一格是 prod 2026-09-29 實測出來的卡死狀態：有席位時開了保護（只留一條
+     * Block policy），換到 0 席方案之後 route 仍 `is_protected`、Cloudflare Access
+     * app 原樣留著 ⇒ 對外 403；而 `hasAccessSeats` 為假 ⇒ 頁籤與 `/access` 內容
+     * 全部不顯示 ⇒ 租戶**關不掉保護**。後端 #1261 已在換方案時擋住新的這種記錄，
+     * 本 getter 負責**已經卡住的那些**。
+     *
+     * ⚠ 這**不是** hasAccessSeats docstring 禁止的「第二能力判準」：那條禁的是
+     * 用 template／state／route 去**放寬能力**（讓沒買席位的人設定 Access）。
+     * 復原模式只放一個**收回**動作——頁籤以 `seatless` 掛載，只能把保護關掉，
+     * 加 policy／改登入方式／開保護一律不給（見 SmartHomeAccessTab）。方向是
+     * 「後端早已存在的設定，租戶至少拆得掉」，正好是那條規則要避免的「修復不可達」
+     * 的反面。能力判準本身仍只有 `hasAccessSeats` 一個。
+     *
+     * 讀的是 detail payload 的 `routes[].is_protected`（`route.to_dict()`）。
+     * `access_protection_lost` 的 route 照算：is_protected 仍是意圖，#803 cron
+     * 會把 Access app 推回去。
+     */
+    get accessRecoveryMode() {
+        return (
+            !this.hasAccessSeats &&
+            (this.home?.routes || []).some((r) => r.is_protected)
+        );
+    }
+
     get routeUrl() {
         if (!this.home?.subdomain) return null;
         return `https://${this.home.subdomain}.${this.state.domain}`;
