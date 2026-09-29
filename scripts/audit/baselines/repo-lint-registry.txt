@@ -40,6 +40,7 @@
 1	fn:check_seed_topology
 1	fn:check_sh_subscription_group_isolation
 1	fn:check_slug_capability_gate
+1	fn:check_status_contract_golden
 1	fn:check_test_class_execution
 1	fn:check_test_env_restore
 1	fn:check_test_module_collection
@@ -80,6 +81,7 @@
 1	rule:security-rule-lifecycle
 1	rule:seed-topology
 1	rule:sh-subscription-group-isolation
+1	rule:status-contract-golden
 1	rule:test-collectability
 1	rule:test-env-restore
 1	rule:transition-anchor-utc
