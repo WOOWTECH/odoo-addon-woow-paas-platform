@@ -17,7 +17,7 @@ import json
 from odoo.exceptions import UserError
 from odoo.tests.common import TransactionCase, tagged
 
-OMNI_IMAGE = 'jcr-prod.woowtech.io/woow-paas-docker-local/omnigent-server'
+OMNI_IMAGE = 'jcr-prod.woowtech.io/woow-paas-docker-local/omnigent-server-kubernetes'
 OMNI_HOST_IMAGE = 'jcr-prod.woowtech.io/woow-paas-docker-local/omnigent-host'
 OMNI_CHART = 'oci://jcr-prod.woowtech.io/woow-paas-docker-local/omnigent'
 PINNED_TAG_RE = r'^\d{8}\.\d{4}@sha256:[0-9a-f]{64}$'

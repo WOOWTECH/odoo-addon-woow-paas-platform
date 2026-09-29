@@ -1650,7 +1650,7 @@
         <!-- Omnigent —— 2026-09-29 上架 PaaS（elmo 定案：SQLite、上游 omnigent-host runner、
              v0.16.0、平台只給初始密碼、無 nginx）。
              chart：woow-paas-charts charts/omnigent 0.1.0；image：paas-odoo-ci mirror-image.yml 原樣鏡像
-             （#160 omnigent-server ← ghcr.io/omnigent-ai/omnigent-server-kubernetes:v0.16.0、
+             （omnigent-server-kubernetes ← ghcr.io/omnigent-ai/omnigent-server-kubernetes:v0.16.0、
              #159 omnigent-host ← ghcr.io/omnigent-ai/omnigent-host:v0.16.0，digest 保留）。
              認證：omnigent 內建 accounts 登入，沒有 auth-proxy。平台供給的 admin_password 只在第一次
              開機（空資料庫）時由 OMNIGENT_ACCOUNTS_INIT_ADMIN_* 建立 admin——開機即建，公開網址上
@@ -1681,7 +1681,7 @@
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/omnigent</field>
             <field name="helm_chart_version">0.1.0</field>
-            <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/omnigent-server","tag":"20260929.1400@sha256:ba384bba57cb1f80b28e3cbfab7c58d6ad94f5cd99c3773a86a1987ffe3bf902"},"runner":{"image":"jcr-prod.woowtech.io/woow-paas-docker-local/omnigent-host:20260929.1400@sha256:558fce8ab8fe4b577787b523ebffccf970f56d2f99da7bfa9af9959a50ea04f9"},"persistence":{"size":"10Gi"},"service":{"port":8000,"targetPort":8000},"admin":{"username":"admin"}}</field>
+            <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/omnigent-server-kubernetes","tag":"20260929.1400@sha256:ba384bba57cb1f80b28e3cbfab7c58d6ad94f5cd99c3773a86a1987ffe3bf902"},"runner":{"image":"jcr-prod.woowtech.io/woow-paas-docker-local/omnigent-host:20260929.1400@sha256:558fce8ab8fe4b577787b523ebffccf970f56d2f99da7bfa9af9959a50ea04f9"},"persistence":{"size":"10Gi"},"service":{"port":8000,"targetPort":8000},"admin":{"username":"admin"}}</field>
             <field name="helm_value_specs">{"required": [], "optional": []}</field>
             <field name="default_port">8000</field>
             <field name="ingress_enabled" eval="True"/>
