@@ -457,10 +457,11 @@ class PaaSOperatorClient:
           checksum/secret annotation，不重啟＝新密碼靜默不生效）。#449 之前這條路
           被當成 config_json 處理，對不存在的檔 exec patch → 必 500。
 
-        #411: ``reuse_values`` 預設由 True 翻成 False。reset password 路徑帶
-        ``template.helm_chart_version``，會夾帶 chart 升版 —— --reuse-values 同
-        樣讓 chart 新預設漏掉（與 ``upgrade_release`` 同一 bug class）。平台呼叫端
-        傳全量 values ＋ ``reset_values=True``。
+        #411: ``reuse_values`` 預設由 True 翻成 False（--reuse-values 會讓 chart 預設
+        漏掉，與 ``upgrade_release`` 同一 bug class）。平台呼叫端傳全量 values ＋
+        ``reset_values=True``。chart 版本＝**服務現在跑的版本**（F-461-2，2026-09-29）：
+        reset 不再夾帶 template 的新 chart——升版會改 pod template，operator 的
+        15 秒 ``--atomic`` 等不到新 pod 必定回退。升版由 deploy／redeploy 負責。
 
         ``reset_values`` 已於 #449 在 operator 端接通（``ReleaseResetConfigRequest``
         有此 field，handler 轉給 ``helm_service.upgrade``），送過去會渲染成顯式
