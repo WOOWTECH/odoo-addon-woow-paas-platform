@@ -58,13 +58,16 @@ class TestOpendesignTemplateSeed(TransactionCase):
         不重播 /etc/skel，故全新 instance 沒有 ~/.bashrc（console 的 web terminal
         是 interactive non-login shell，~/.bashrc 是唯一有效客製落點）。0.1.4 每次
         pod 啟動逐檔「缺才補」預設 dotfiles、永不覆蓋租戶改過的檔（charts#57，
-        Refs #407）。homeSeed 預設 enabled 且沿用 daemon image，seed 無需覆寫。"""
+        Refs #407）。homeSeed 預設 enabled 且沿用 daemon image，seed 無需覆寫。
+        0.2.0＝OpenDesign 0.24.1 image（上游預建 base ＋ Claude Code／OpenCode）；
+        authProxy.basicAuth.username 開放租戶自設並於 render 時驗證；選填
+        auth.openrouterApiKey（charts#89）。"""
         tpl = self._tpl()
         self.assertEqual(tpl.helm_repo_url or '', '')
         self.assertEqual(
             tpl.helm_chart_name,
             'oci://jcr-prod.woowtech.io/woow-paas-docker-local/open-design')
-        self.assertEqual(tpl.helm_chart_version, '0.1.4')
+        self.assertEqual(tpl.helm_chart_version, '0.2.0')
 
     def test_image_repository(self):
         """image repository＝獨立 open-design（≠ MCP 的 opendesign-mcp-admin）。"""
@@ -174,13 +177,14 @@ class TestOpendesignTemplateSeed(TransactionCase):
         self.assertIn('auth.anthropicApiKey', keys)
 
     def test_description_basic_auth_and_ecosystem(self):
-        """description／full_description：basic-auth 登入（帳號 admin）／上游 v0.15.1／
-        與 mcp-opendesign 的 od_api_base 生態閉環（daemon 埠 7457）。"""
+        """description／full_description：帳號密碼登入（預設帳號 admin、可自行修改）／
+        上游 v0.24.1／與 mcp-opendesign 的 od_api_base 生態閉環（daemon 埠 7457）。"""
         tpl = self._tpl()
         text = (tpl.description or '') + (tpl.full_description or '')
         self.assertIn('basic-auth', text)
         self.assertIn('admin', text)
-        self.assertIn('v0.15.1', text)
+        self.assertIn('自行修改', text)
+        self.assertIn('v0.24.1', text)
         self.assertIn('od_api_base', text)
         self.assertIn('7457', text)
 

@@ -77,6 +77,11 @@
                                      reset 走 config.json saga 還是 helm Secret 路）。 -->
                                 <field name="admin_password_carrier"
                                        invisible="not has_admin_gui"/>
+                                <!-- 租戶可改帳號的 values 路徑；只對 helm_secret 載體有意義
+                                     （constraint _check_admin_username_helm_path 把關）。 -->
+                                <field name="admin_username_helm_path"
+                                       invisible="not has_admin_gui or admin_password_carrier != 'helm_secret'"
+                                       placeholder="authProxy.basicAuth.username"/>
                             </group>
                             <group invisible="not mcp_enabled">
                                 <group string="Sidecar Image">
