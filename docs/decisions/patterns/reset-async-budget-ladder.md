@@ -110,7 +110,7 @@ related:
 - reset 從「唯一在 request 內等 rollout 的動作」回歸既有 upgrade 管線，少一條特例路徑。
 - 順手修掉既有的 `2n > subprocess` 缺陷（非 reset 路徑仍有，記在 follow-up **F-461-3**）。
 - 繼承既有管線的已知 fail-open：`_is_container_ready` 在 `pods` 為空時回 True（F-423-1）⇒ 極短窗口內 state 可能提前翻回 `running`。顯示層誤導，非資料損毀；`redeploy`／`reconfigure` 早已同樣暴露。
-- `upgrading` 停滯沒有上限（F-461-1）；chart 版號漂移時「重按」不會收斂（F-461-2，只加了 log）。
+- `upgrading` 停滯沒有上限（F-461-1）。~~chart 版號漂移時「重按」不會收斂（F-461-2）~~ ✅ 2026-09-29 修：reset 改為釘住服務現在跑的 chart 版本（與 reconfigure 同一條 fallback），不再夾帶升版；15 秒預算只須容納「Secret 變、pod template 不變」的 upgrade。
 - 測試上多了一條紀律：**「不等」與「等兩次」都只能在真叢集量到**。unit 測試 mock 掉 kubectl 後「有沒有等」只剩「有沒有呼叫某方法」，量不到牆鐘；`--atomic` 的 rollback 更是 helm 自己的行為，mock 裡不存在。故本 pattern 的兩條核心行為各有一支 integration test ＋ 各有紅燈對照。
 
 ## 術語

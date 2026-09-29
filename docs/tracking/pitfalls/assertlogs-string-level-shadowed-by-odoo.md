@@ -66,4 +66,4 @@ with self.assertLogs('odoo.addons.woow_paas_platform.models.cloud_service',
 ## 相關
 
 - 同家族（綠不代表對 / 紅不代表壞）：[tag-scoped-test-misses-full-u-failures](tag-scoped-test-misses-full-u-failures.md)、[sudo-getter-acl-cache-priming-false-green](sudo-getter-acl-cache-priming-false-green.md)、[sandbox-module-test-false-green](sandbox-module-test-false-green.md)
-- 被守的行為本身（reset 夾帶 chart 升版的可診斷性）：`src/models/cloud_service.py:581`、F-461-2
+- 被守的行為本身（reset 時服務 chart 落後的可診斷性；F-461-2 已於 2026-09-29 改為釘版，log 改為「keeps chart … redeploy to upgrade」）：`src/models/cloud_service.py` `_reset_admin_password`

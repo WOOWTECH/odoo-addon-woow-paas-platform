@@ -1182,9 +1182,9 @@ class CloudService(models.Model):
             self._generate_admin_password() if self._chart_has_gateway() else None
         )
         # #411: values 走全量組裝 helper（與 deploy/redeploy/reconfigure 同一條
-        # 管線）。此路徑帶 template.helm_chart_version，reset password 會夾帶
-        # chart 升版；改 reset_values 語意讓 chart 新增預設補位，不再以
-        # --reuse-values 沿用舊 coalesced values（同一 bug class，見 #411）。
+        # 管線）。reset_values 語意讓 chart 自身預設補位，不再以 --reuse-values
+        # 沿用舊 coalesced values（同一 bug class，見 #411）。chart 版本見下方
+        # `pinned_chart_version`：reset **不**升版。
         values = self._assemble_deploy_values()['values']
         if new_username is not None:
             # 只改送給 operator 的這份；helm_values 等 2xx 之後才落庫（2xx 前失敗
@@ -1194,18 +1194,29 @@ class CloudService(models.Model):
             new_password, gateway_api_key=new_gateway_api_key,
         )
 
-        # #461 可診斷性：reset 夾帶 chart 升版時，operator 的 helm upgrade 會真的
-        # 等新 pod（pod template 變了），可能撞上 --timeout 15s 而 fail-safe 失敗。
-        # 這種情境下「重按」**不會**收斂（每次都夾帶同一次升版），正解是先 redeploy
-        # 讓 chart 升版落地。租戶側引導記在 F-461-2；這行是維運判讀的線索。
+        # F-461-2（2026-09-29 修）：reset／改帳密**釘住這台服務現在跑的 chart 版本**，
+        # 不夾帶升版——與 reconfigure（controllers/paas.py `_update_service` 的
+        # `resolved_version`）同一條 fallback：service 已知版本優先，legacy 服務沒有
+        # 紀錄才退到 template 的 pin（#552：送出去的 version 不得為空）。
+        #
+        # 為什麼不能夾帶：operator 的 reset 是 `helm upgrade --atomic --timeout 15s`
+        # （隱含 --wait）。升 chart 會改 pod template ⇒ helm 要等新 pod ready，而
+        # pod 實際要 30–70 秒 ⇒ 必定逾時回退；Recreate 的 Deployment 在回退時還會
+        # 斷線約 1 分鐘。原本只加 log，租戶按「重試」只會重複斷線、永不收斂
+        # （2026-09-29 prod 實測）。chart 升版屬於 deploy／redeploy 的職責，那兩條
+        # 路的等待預算才蓋得住 pod 重建。
+        pinned_chart_version = (
+            self.helm_chart_version or self.template_id.helm_chart_version
+        )
         target_chart_version = self.template_id.helm_chart_version
-        # 兩邊都要有值才算「漂移」：helm_chart_version 為空代表平台**不知道**線上是
-        # 哪一版（legacy 服務），印「False -> 0.1.5」是誤導而非線索。
+        # 兩邊都要有值才算「落後」：helm_chart_version 為空代表平台**不知道**線上是
+        # 哪一版（legacy 服務）。落後本身不擋 reset（釘版後照樣收斂），只留給維運
+        # 一條線索：這台服務要靠 redeploy 才會升上 template 的新 chart。
         if (target_chart_version and self.helm_chart_version
                 and target_chart_version != self.helm_chart_version):
             _logger.info(
-                "reset-admin-password for service %s (id=%s) also carries a chart "
-                "upgrade %s -> %s; if it fails on timeout, redeploy first (F-461-2)",
+                "reset-admin-password for service %s (id=%s) keeps chart %s "
+                "(template pins %s; redeploy to upgrade)",
                 self.name, self.id, self.helm_chart_version, target_chart_version,
             )
 
@@ -1221,7 +1232,7 @@ class CloudService(models.Model):
                 namespace=self.helm_namespace,
                 release_name=self.helm_release_name,
                 chart=self.template_id.helm_chart_name,
-                version=self.template_id.helm_chart_version,
+                version=pinned_chart_version,
                 values=values,
                 sensitive_values=operator_sensitive_values or None,
                 reset_values=True,
@@ -1350,10 +1361,11 @@ class CloudService(models.Model):
                 self.write({
                     'state': 'suspended' if halted else 'upgrading',
                     'error_message': False,
-                    # #552: reset carries `template.helm_chart_version` into helm
-                    # upgrade (see the F-461-2 drift log above — this path really
-                    # does change the chart), so it is one of the four places the
-                    # ledger must be refreshed. `or self.helm_chart_version` =
+                    # #552: reset sends `pinned_chart_version` (the service's own
+                    # chart; it no longer rides a template upgrade — F-461-2), but
+                    # it is still a helm upgrade, so it stays one of the four places
+                    # the ledger is refreshed from what helm actually resolved.
+                    # `or self.helm_chart_version` =
                     # backward compatibility with an operator whose reset response
                     # has no `chart_version` yet.
                     # Per-service field only — never `template.helm_chart_version`.

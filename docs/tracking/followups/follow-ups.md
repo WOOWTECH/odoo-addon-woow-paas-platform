@@ -40,7 +40,7 @@
 | #449 密碼載體分流 | F-449-2 | **發版順序硬約束＝operator 先發、平台後發**（medium；PR #455 橫跨兩條發版線，發版單須按目錄分流。stg 已按此順序完成，prod 待辦）|
 | #449 密碼載體分流 | F-449-3 | ~~reset 的 **120s 預算對 Recreate＋RWO PVC＋大 image 是邊際的**~~ **✅ RESOLVED（2026-07-30，#461）** — rollout 等待移出 request ＋ 宣告預算階梯（90/75/65）＋ repo-lint 機械 gate；衍生 F-461-1／F-461-2／F-461-3 |
 | #461 reset 非同步 | F-461-1 | `upgrading` 停滯**沒有上限**（medium；rollout 永遠不成功時 state 一直停在 upgrading，cron 只 log not-ready。既有行為，deploy 路徑同型）|
-| #461 reset 非同步 | F-461-2 | chart 版號漂移時「重按 Reset」**不會收斂**（medium；每次都夾帶同一次升版、每次都在 helm `--timeout` 逾時。本 PR 只加 log，租戶側引導待做）|
+| #461 reset 非同步 | F-461-2 | ~~chart 版號漂移時「重按 Reset」**不會收斂**~~ **✅ RESOLVED（2026-09-29）** — reset／改帳密改為釘住服務現在跑的 chart 版本（`pinned_chart_version`，與 reconfigure 同一條 fallback），不再夾帶升版；升版只走 deploy／redeploy。prod 實測另發現同源缺陷：帳號以字面值寫在 pod 設定，改帳號也會改 pod template ⇒ 同樣必定逾時回退且斷線約 1 分鐘，已於 charts open-design 0.2.1／pi-agent 0.1.2 修（帳號改放 Secret） |
 | #461 reset 非同步 | F-461-3 | **非 reset 路徑**的 `--atomic` 仍有 `2n > subprocess` 缺陷（medium；#461 只修 reset 路徑，其餘帶 atomic 的呼叫點沿用 helm 5m 預設 vs subprocess 300s）|
 | #449 密碼載體分流 | F-449-4 | 🔴 **前台 Reset 按鈕的 slug 白名單未同步 `has_admin_gui`**（high；`has_admin_gui=True` 的 8 個 template 有 5 個按不到按鈕，含 #449 剛修好的兩個＝修復對租戶不可達）|
 | #423 HAOS×KubeVirt | F-423-1 | 就緒判定 container 分支的 fail-open 待評估（medium；v1 刻意不修，已用 characterization test 釘住現行行為）|

@@ -318,16 +318,19 @@ class TestMcpAdminPassword(TransactionCase):
     @patch(
         'odoo.addons.woow_paas_platform.services.paas_operator.get_paas_operator_client'
     )
-    def test_chart_version_drift_is_logged(self, get_client):
-        """版號漂移要留線索：這種 reset 夾帶 chart 升版，逾時失敗後**重按不會收斂**。
+    def test_reset_pins_the_running_chart_version(self, get_client):
+        """F-461-2：reset／改帳密**釘住服務現在跑的 chart**，不夾帶 template 的新版。
 
-        （每次都夾帶同一次升版、每次都在 helm --timeout 逾時；正解是先 redeploy。
-        租戶側引導是 F-461-2，本 PR 只保證維運判讀得出來。）
+        夾帶升版會改 pod template，operator 的 `helm upgrade --atomic --timeout
+        15s`（隱含 --wait）等不到新 pod（實際 30–70 秒）必定逾時回退，Recreate
+        還會斷線約 1 分鐘；租戶按「重試」只會重複斷線、永不收斂（2026-09-29 prod
+        實測）。chart 升版改由 deploy／redeploy 負責。釘版後仍留一條 log 讓維運
+        知道這台服務落後、要靠 redeploy 才會升上去。
         """
         client = MagicMock()
         client.reset_release_config.return_value = {'rollout_awaited': False}
         get_client.return_value = client
-        # 已部署 0.1.4，template 已升到 0.1.5 ⇒ 這次 reset 會夾帶升版。
+        # 已部署 0.1.4，template 已升到 0.1.5。
         self.service.helm_chart_version = '0.1.4'
 
         # ⚠️ level 必須傳 **數值** logging.INFO，不能傳字串 'INFO'（#492）：
@@ -345,11 +348,30 @@ class TestMcpAdminPassword(TransactionCase):
         ) as logs:
             self.service._reset_admin_password()
 
+        self.assertEqual(
+            client.reset_release_config.call_args.kwargs['version'], '0.1.4',
+            'reset 夾帶了 template 的新 chart ⇒ pod template 改變 ⇒ 15 秒內等不到新 '
+            'pod，必定逾時回退且斷線（F-461-2）')
         self.assertTrue(
-            any('carries a chart upgrade 0.1.4 -> 0.1.5' in line for line in logs.output),
-            'chart 版號漂移沒有留下 log ⇒ 逾時時無法分辨「基礎設施慢」與'
-            '「這次 reset 其實在升版」',
+            any('keeps chart 0.1.4 (template pins 0.1.5' in line for line in logs.output),
+            '落後沒有留 log ⇒ 維運不知道這台服務要 redeploy 才會升上新 chart',
         )
+
+    @patch(
+        'odoo.addons.woow_paas_platform.services.paas_operator.get_paas_operator_client'
+    )
+    def test_reset_without_version_record_falls_back_to_template(self, get_client):
+        """legacy 服務沒有 helm_chart_version 紀錄：退到 template 的 pin（#552 不得送空值）。"""
+        client = MagicMock()
+        client.reset_release_config.return_value = {'rollout_awaited': False}
+        get_client.return_value = client
+        self.service.helm_chart_version = False
+
+        self.service._reset_admin_password()
+
+        self.assertEqual(
+            client.reset_release_config.call_args.kwargs['version'],
+            self.service.template_id.helm_chart_version)
 
     # ------------------------------------------------------------------
     # #357 C01/C03：admin_password 供給鏈（create → secret → helm sensitive）
