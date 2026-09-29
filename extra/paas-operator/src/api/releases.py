@@ -652,6 +652,8 @@ def get_release_status(
             release=release,
             pods=pods,
             pod_retrieval_error=pod_retrieval_error,
+            # #1263：get_pods 一律填身分欄位；與這次抓 Pod 成敗無關（見 schema 註解）。
+            pod_identity_included=True,
             vm_included=include_vm,
             vmis=vmis,
             datavolumes=datavolumes,

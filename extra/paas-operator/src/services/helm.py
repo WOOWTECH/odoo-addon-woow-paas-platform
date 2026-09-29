@@ -1066,6 +1066,18 @@ def _sensitive_env_key_marker(key: str) -> Optional[str]:
     return None
 
 
+def _controller_owner_kind(metadata: Dict[str, Any]) -> Optional[str]:
+    """Pod 直接 owner（``controller: true`` 那筆 ownerReference）的 kind（#1263）。
+
+    只認 controller=true：被收養或附掛的非 controller owner 不是建立它的 workload。
+    沒有 controller owner（bare Pod、缺旗標）回 None，不猜。
+    """
+    for ref in metadata.get("ownerReferences") or []:
+        if isinstance(ref, dict) and ref.get("controller") is True:
+            return ref.get("kind")
+    return None
+
+
 class KubernetesService:
     """Service for Kubernetes operations (via kubectl)."""
 
@@ -1179,6 +1191,7 @@ class KubernetesService:
             created = metadata.get("creationTimestamp", "")
             age = self._calculate_age(created)
 
+            labels = metadata.get("labels") or {}
             pods.append(
                 PodInfo(
                     name=metadata.get("name", ""),
@@ -1187,6 +1200,9 @@ class KubernetesService:
                     restarts=restarts,
                     age=age,
                     deletion_timestamp=metadata.get("deletionTimestamp"),
+                    component=labels.get("app.kubernetes.io/component"),
+                    task=labels.get("woow.paas/task"),
+                    owner_kind=_controller_owner_kind(metadata),
                 )
             )
 
