@@ -1910,6 +1910,70 @@ class SecurityAccess(models.Model):
             return None
         return sub.sh_subscription_plan_id.sa_max_routes
 
+    def _route_gate_denial(self, plan):
+        """換方案的 route 數前置合規 gate（#1261）：合規回 ``None``，超額回**已組好的拒絕內容**。
+
+        ## 為什麼需要
+
+        2026-09-29 production 瀏覽器 E2E 實撞：SA 在「3 組」方案（``sa_max_routes=3``）
+        下開了 3 條 route，降級到「1 組」（``sa_max_routes=1``）**成功** ⇒ 記錄永久停在
+        「3 / 1 routes」。route 的配額守衛（``_check_route_quota`` 是 ``@api.constrains
+        ('security_access_id')``）只在**寫 route** 時跑，換方案不寫 route ⇒ 守衛永遠不醒；
+        UI 只剩一行超額提示，沒有任何東西逼租戶收斂。#773 的席位 gate 只管 Access 席數，
+        route 數這一格從來沒人擋。
+
+        ## 形狀刻意鏡像 #773 ``_seat_gate_denial``
+
+        - **只回報、⛔ 不刪任何 route**——與 #773 Eugene 裁決（留言 10716）同一原則：
+          降級由租戶自己刪到合規，系統只偵測。刪 route 會連帶拆 DNS／Access app，
+          絕不能由換方案順手做。
+        - **``plan`` 是呼叫端給的目標方案**，⛔ 不走 ``_route_quota()``——那讀的是錨點
+          **當下**（舊）方案的 cap，降級時拿舊 cap 比對會永遠放行（#773 同一個陷阱）。
+        - **不判「是不是降級」**：判準是「現有 route 數 ≤ 目標 cap 才放行」，升級天然通過。
+        - 回傳 ``{'error', 'current_routes', 'target_routes'}``，controller 原樣轉成
+          ``data``，與 seat gate 的 ``current_seats`` / ``target_seats`` 同構。
+
+        ## 語意：``sa_max_routes == 0`` ＝**一條都不准**，⛔ 不是 unlimited
+
+        與欄位 help（``sh_subscription_plan_sa_quota.py``：「0 = none allowed」）及
+        ``_check_route_quota`` 的 ``count > quota`` 同一個比較子。⚠ 相鄰的
+        ``sa_max_access_policies`` / ``sa_max_emails_per_policy`` 的 0 **是** unlimited
+        （#743），兩種語意刻意相反（見 ``security_access_access_policy.py`` 的說明）
+        ⛔ 不要在這裡補 ``if not quota: return None`` 順手「對齊」。
+        「不限」只存在於**沒有訂閱／方案**的 admin／legacy SA（``_route_quota()`` 回
+        ``None``），而換方案一定有目標 plan ⇒ 本 gate 沒有 unlimited 分支。
+
+        ## 計數用 sudo
+
+        席位尺同理（``_seat_usage_for_anchor``）：route 數是**平台成本**，不是「這位使用者
+        看得到幾條」。池以 ``self`` 的 o2m 收斂 ⇒ sudo 只放寬可見度、不會把別的 SA 算進來。
+        失效方向是 fail-closed：萬一哪天 route 的 ir.rule 收窄（#1054 守的那條外部性質），
+        sudo 版只會**多算**（擋得比守衛嚴），不會少算讓降級溜過去。
+
+        :param plan: 目標 ``sh.subscription.plan``
+        :return: ``None``，或 ``{'error': str, 'current_routes': int, 'target_routes': int}``
+        """
+        self.ensure_one()
+        used = len(self.sudo().route_ids)
+        allowed = plan.sa_max_routes
+        if used <= allowed:
+            return None
+        if allowed:
+            message = _(
+                "This plan allows %(allowed)s route(s), but this Security Access "
+                "currently has %(used)s. Delete routes until at most "
+                "%(allowed)s remain, then change the plan."
+            ) % {'allowed': allowed, 'used': used}
+        else:
+            # 0 條的目標態走一句讀得順的文案，不要落到「allows 0 route(s)」（#773 同理）。
+            message = _(
+                "This plan allows no routes, but this Security Access currently "
+                "has %(used)s. Delete every route before changing to this plan."
+            ) % {'used': used}
+        return {'error': message,
+                'current_routes': used,
+                'target_routes': allowed}
+
     def _probe_route_health(self, force=False):
         """#1234：從公開網路探每條 route，回 ``{route_id: result}``。
 
@@ -1991,11 +2055,18 @@ class SecurityAccessRoute(models.Model):
         help='Backend target. Default assumes the user runs a reverse '
              'proxy (NPM) on localhost:80 that splits by Host header.',
     )
+    # #1261：help 原本寫得像「不勾就不會帶 Host」。實際語意是 cloudflared 的
+    # `originRequest.httpHostHeader`（operator `cloudflare.py` 只在勾選時寫入）：
+    # **強制**把 Host 設成公開網址。沒設時 cloudflared 本來就原樣轉送訪客的 Host，
+    # 常見情況下也是同一個公開網址（2026-09-29 正式站實測勾／不勾 origin 收到的
+    # Host 相同）。只改說明文字，行為與預設值不變。
     http_host_header = fields.Boolean(
         string='Send HTTP Host Header',
         default=True,
-        help='Send the public hostname as the HTTP Host header to the '
-             'origin so the user-side reverse proxy can route by Host.',
+        help='Force the HTTP Host header sent to the origin to the public '
+             'hostname (cloudflared httpHostHeader). Without it cloudflared '
+             'still forwards the visitor\'s original Host, which is normally '
+             'the same public hostname.',
     )
     is_protected = fields.Boolean(
         string='Protected',

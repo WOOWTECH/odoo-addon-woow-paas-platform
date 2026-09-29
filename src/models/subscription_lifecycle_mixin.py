@@ -517,6 +517,21 @@ class SubscriptionLifecycleMixin(models.AbstractModel):
             today = fields.Date.today()
 
             # End trial and set billing to start today
+            #
+            # #1261：`sh_trial_end_date = 昨天` 是**刻意的**，不是 off-by-one。
+            # 本模組的日期慣例是「sh_trial_end_date＝試用的**最後一天（含）**、
+            # sh_start_date＝第一個計費日＝trial_end + 1」——建立時的
+            # `_force_trial_dates_from_plan` 就是 `start_date = trial_end + 1`，
+            # test_subscription_lifecycle／test_trial_reset_guard_367 也釘著
+            # `sh_start_date == trial_end + 1`。skip 當天就是第一個計費日（今天
+            # 付今天的錢），所以最後一個試用日是昨天；若寫成今天，今天會同時算
+            # 試用與計費，與上面的慣例矛盾。
+            # 本 repo 內讀它的只有序列化（`_get_subscription_info`、billing.py
+            # 的訂閱 dict → trial_end_date），前端只在 `is_trial` 時才顯示（skip
+            # 後 sh_trial=False 就不再出現）；續扣、到期、退點
+            # （`_prorata_unused_refund`）都看 sh_date_of_next_payment／
+            # sh_start_date，不讀 sh_trial_end_date。
+            # 正式站 E2E 看到「9/29 skip → trial_end 9/28」即此慣例，不要改成今天。
             sub.write({
                 'sh_trial': False,
                 'sh_trial_end_date': today - relativedelta(days=1),

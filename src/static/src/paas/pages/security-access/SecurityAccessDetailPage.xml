@@ -137,8 +137,13 @@
                         t-on-click="copyTunnelToken">
                   <WoowIcon name="'content_copy'" size="18"/>
                 </button>
+                <!-- #1261：字面值刻意不用裸 "Copied"。那條 msgid 被 Odoo web 模組
+                     佔用、譯成動詞「複製」，而前端 translatedTerms 是跨模組攤平的
+                     flat map（見 i18n/zh_TW.po 檔頭）——在本模組填「已複製」會與
+                     web 的譯文隨機互蓋、還會連帶改到 Odoo 自己的複製按鈕。換成本
+                     模組獨佔的 msgid 才可靠。 -->
                 <span t-if="state.tunnelTokenCopied"
-                      class="o_woow_sa_token__copied">Copied</span>
+                      class="o_woow_sa_token__copied">Token copied</span>
               </div>
               <p class="o_woow_sa_token__warn">
                 Treat this like a password — anyone holding it can run this
@@ -199,8 +204,12 @@
               </div>
               <div class="o_woow_sa_card_head__text">
                 <h3>Application Routes</h3>
+                <!-- #1261：原句「with the Host header set」讀起來像「靠那個勾選框
+                     才會帶 Host」。實際上 cloudflared 沒設 httpHostHeader 時本來就原樣
+                     轉送訪客的 Host（＝公開網址），勾不勾在常見情況下 origin 收到的
+                     都一樣（2026-09-29 正式站實測）。 -->
                 <p>Each route maps a public subdomain to your host. Traffic is
-                   forwarded to the service URL with the Host header set.</p>
+                   forwarded to the service URL with the public hostname as the Host header.</p>
               </div>
               <!-- #1234：額度與健康探測。 -->
               <div class="o_woow_sa_card_head__aside">
@@ -224,7 +233,13 @@
             <table t-if="state.sa.routes and state.sa.routes.length"
                    class="o_woow_sa_routes_table">
               <thead>
-                <tr><th>Hostname</th><th>Service</th><th>Host header</th><th>Status</th><th>Traffic (24h)</th><th></th></tr>
+                <!-- #1261：Host header 欄的說明放在 title（滑過可見），講清楚這個選項
+                     實際做什麼：**強制**把 Host 設成公開網址（cloudflared
+                     httpHostHeader）。沒勾時 cloudflared 也會原樣轉送訪客的 Host，
+                     通常就是同一個公開網址——所以取消勾選一般不會改變 origin 收到的值，
+                     不要讓租戶以為取消勾選就能讓後端收到 service URL 的主機名。
+                     只改文案、不改行為（勾選照樣推 httpHostHeader）。 -->
+                <tr><th>Hostname</th><th>Service</th><th title="Forces the Host header sent to your service to the public hostname. cloudflared normally forwards the visitor's original Host (the same public hostname) anyway, so turning this off usually changes nothing.">Host header</th><th>Status</th><th>Traffic (24h)</th><th></th></tr>
               </thead>
               <tbody>
                 <t t-foreach="state.sa.routes or []" t-as="route" t-key="route.id">
@@ -258,6 +273,7 @@
                     <td class="o_woow_sa_routes_table__hh">
                       <input t-if="state.editingRouteId === route.id"
                              type="checkbox"
+                             title="Forces the Host header sent to your service to the public hostname. cloudflared normally forwards the visitor's original Host (the same public hostname) anyway, so turning this off usually changes nothing."
                              t-att-checked="state.editRouteHostHeader"
                              t-on-change="onEditRouteHostHeader"/>
                       <t t-else="" t-esc="route.http_host_header ? 'Yes' : 'No'"/>
@@ -316,10 +332,15 @@
                 stops working right away and is not redirected — update any links
                 or bookmarks that point to it.
               </p>
-              <p t-if="state.editRouteHostHeader">
-                The Host header will carry the new name. If your service routes by
-                hostname (e.g. Nginx Proxy Manager) or only accepts known hosts, add
-                the new hostname there before saving.
+              <!-- #1261：這段原本只在勾了 Host header 時出現，句子也寫成「Host 會帶新
+                   名字」好像是那個勾選造成的。實際上沒勾時 cloudflared 也原樣轉送訪客
+                   的 Host（＝新網址），反向代理一樣會找不到站台（正式站實測 NPM 回
+                   Default Site）——所以一律顯示、改成陳述事實。只動提示，不動行為。 -->
+              <p>
+                Your service will normally receive the new name as the Host header,
+                even with the Host header option off. If your service routes by hostname
+                (e.g. Nginx Proxy Manager) or only accepts known hosts, add the new
+                hostname there before saving.
               </p>
             </div>
             <div class="o_woow_sa_add_route">
@@ -409,6 +430,7 @@
                   reordering="state.reorderingRouteId === route.id"
                   onToggleExpand="() => this.toggleRouteExpand(route)"
                   onProtectedChange="(checked) => this.onRouteProtectedToggle(route, checked)"
+                  protectConfirm="protectConfirm"
                   onLoginToggle="(method) => this.toggleRouteLogin(route, method)"
                   onSessionChange="(value) => this.onRouteSessionChange(route, value)"
                   onAddPolicy="() => this.openAddPolicy(route)"
@@ -455,6 +477,7 @@
         <ChangePlanModal t-if="state.showChangePlanModal"
             service="state.sa"
             currentPlanId="state.sa.subscription?.plan_id ?? undefined"
+            usedRoutes="routeCount"
             loadPlans="loadSaPlans"
             confirmChange="confirmSaChangePlan"
             onClose="() => state.showChangePlanModal = false"

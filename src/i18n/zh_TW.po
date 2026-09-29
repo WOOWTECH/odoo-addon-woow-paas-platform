@@ -220,6 +220,17 @@ msgstr "%(duration)s %(unit)s 免費試用"
 
 #. module: woow_paas_platform
 #. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid ""
+"%(email)s is a portal account, which cannot join a workspace. Only regular "
+"user accounts can be invited; ask the platform administrator to change the "
+"account type first."
+msgstr ""
+"%(email)s 是入口網站（Portal）帳號，無法加入工作區。只能邀請一般使用者帳號；"
+"請先請平台管理員變更這個帳號的類型。"
+
+#. module: woow_paas_platform
+#. odoo-python
 #: code:addons/woow_paas_platform/models/sh_subscription_fix.py:0
 msgid ""
 "%(n)s in_progress subscription(s) are more than %(days)s days past due and "
@@ -1433,6 +1444,12 @@ msgstr ""
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_oauth_client__scopes
 msgid "Allowed Scopes"
 msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/subscription/PlanSelector.js:0
+msgid "Allows %(max)s route(s); you have %(used)s — delete some first"
+msgstr "此方案可用 %(max)s 條路由，目前有 %(used)s 條，請先刪除一些"
 
 #. module: woow_paas_platform
 #: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_oauth_client__redirect_uris
@@ -3105,6 +3122,14 @@ msgid "Completion"
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/ChangePlanModal.xml:0
+msgid ""
+"Compute resources (vCPU, RAM, storage) of an already deployed service are "
+"not resized by a plan change yet."
+msgstr "已部署服務的運算資源（vCPU、RAM、儲存空間）目前不會因變更方案而調整。"
+
+#. module: woow_paas_platform
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_app_template__conceal_instances
 msgid "Conceal Existing Instances"
 msgstr "隱藏既有實例"
@@ -4067,6 +4092,12 @@ msgstr "請先刪除已列出的全部 %(used)s 個 email 位址"
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/subscription/PlanSelector.js:0
+msgid "Delete all %(used)s route(s) first"
+msgstr "請先刪除全部 %(used)s 條路由"
+
+#. module: woow_paas_platform
+#. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/settings/PaymentMethodsListPage.js:0
 msgid "Delete failed"
 msgstr "刪除失敗"
@@ -4612,7 +4643,7 @@ msgstr ""
 #: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.xml:0
 msgid ""
 "Each route maps a public subdomain to your host. Traffic is\n"
-"                   forwarded to the service URL with the Host header set."
+"                   forwarded to the service URL with the public hostname as the Host header."
 msgstr ""
 
 #. module: woow_paas_platform
@@ -5494,6 +5525,14 @@ msgstr ""
 msgid ""
 "For top-up rows: the bonus credits added on top of base. Always 0 when no "
 "bonus applies or for non-topup types."
+msgstr ""
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_security_access_route__http_host_header
+msgid ""
+"Force the HTTP Host header sent to the origin to the public hostname "
+"(cloudflared httpHostHeader). Without it cloudflared still forwards the "
+"visitor's original Host, which is normally the same public hostname."
 msgstr ""
 
 #. module: woow_paas_platform
@@ -9054,6 +9093,19 @@ msgstr ""
 "覽的人。只有符合下方 Access policy 的身分才進得來。"
 
 #. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.js:0
+msgid ""
+"Once protection is on, every visitor to this route's address has to pass "
+"Access verification first, including you. Only identities matching an Access"
+" policy below get in; clients that cannot show a browser login page (API "
+"clients, webhooks, scripts or apps connecting directly) will be blocked."
+msgstr ""
+"開啟後所有訪客都需先通過 Access 驗證才能開啟這條 route 的網址，包含你自己。"
+"只有符合下方 Access policy 的身分才進得來；無法顯示瀏覽器登入頁的用戶端（API "
+"用戶端、webhook、腳本或直連的 App）會被擋在外面。"
+
+#. module: woow_paas_platform
 #: model:ir.model.constraint,message:woow_paas_platform.constraint_woow_paas_platform_agent_session_unique_project
 msgid "One agent session per project (per-project pod model)."
 msgstr ""
@@ -10161,6 +10213,13 @@ msgid "Protected ·"
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/AccessTab.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/smart-home/tabs/SmartHomeAccessTab.xml:0
+msgid "Protected · Access settings are not available on this plan"
+msgstr "已保護 · 此方案無法使用 Access 設定"
+
+#. module: woow_paas_platform
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_service__access_protection_lost
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_security_access_route__access_protection_lost
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_smart_home_route__access_protection_lost
@@ -10173,6 +10232,21 @@ msgstr "保護未生效"
 #: code:addons/woow_paas_platform/static/src/paas/pages/smart-home/tabs/SmartHomeAccessTab.xml:0
 msgid "Protection covers the"
 msgstr "保護的粒度是"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/AccessTab.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/smart-home/tabs/SmartHomeAccessTab.xml:0
+msgid "Protection is off. Access settings need a plan with Access seats."
+msgstr "保護已關閉。Access 設定需要含存取席位的方案。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/access/AccessAppCard.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/AccessTab.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/smart-home/tabs/SmartHomeAccessTab.xml:0
+msgid "Protection not in effect · anyone can reach it"
+msgstr "保護未生效 · 任何人都能連上"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -10311,7 +10385,15 @@ msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/AccessTab.xml:0
+msgid "Public · Access settings are not available on this plan"
+msgstr "公開 · 此方案無法使用 Access 設定"
+
+#. module: woow_paas_platform
+#. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/access/AccessAppCard.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/AccessTab.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/smart-home/tabs/SmartHomeAccessTab.xml:0
 msgid "Public · anyone can reach it"
 msgstr ""
 
@@ -10813,12 +10895,6 @@ msgstr "資源名稱"
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_reconcile_report__resource_uid
 msgid "Resource UID"
 msgstr "資源 UID"
-
-#. module: woow_paas_platform
-#. odoo-javascript
-#: code:addons/woow_paas_platform/static/src/paas/components/modal/ChangePlanModal.xml:0
-msgid "Resource changes take effect in the next billing cycle."
-msgstr "資源將於下個計費週期生效。"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -11396,13 +11472,6 @@ msgstr ""
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/ai-chat/AiChat.xml:0
 msgid "Send message"
-msgstr ""
-
-#. module: woow_paas_platform
-#: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_security_access_route__http_host_header
-msgid ""
-"Send the public hostname as the HTTP Host header to the origin so the user-"
-"side reverse proxy can route by Host."
 msgstr ""
 
 #. module: woow_paas_platform
@@ -12867,6 +12936,17 @@ msgstr "已超過卡片額度上限。"
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/ChangePlanModal.xml:0
+msgid ""
+"The change takes effect immediately: the new plan and its limits apply as "
+"soon as you confirm and are billed from today. The unused part of the "
+"current period is refunded as described above."
+msgstr ""
+"變更立即生效：確認後立刻套用新方案與其額度，並自今日起計費；本期未使用的部分"
+"依上方說明退點。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/task-detail/TaskDetailPage.xml:0
 msgid "The chat channel will be created when the first message is sent."
 msgstr ""
@@ -13263,6 +13343,18 @@ msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-python
+#: code:addons/woow_paas_platform/models/security_access.py:0
+msgid "This plan allows %(allowed)s route(s), but this Security Access currently has %(used)s. Delete routes until at most %(allowed)s remain, then change the plan."
+msgstr "此方案只允許 %(allowed)s 條路由，但這個 Security Access 目前有 %(used)s 條。請先刪除路由，把數量降到 %(allowed)s 條以內，才能換到此方案。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/security_access.py:0
+msgid "This plan allows no routes, but this Security Access currently has %(used)s. Delete every route before changing to this plan."
+msgstr "此方案不含任何路由，但這個 Security Access 目前有 %(used)s 條。請先刪除所有路由，才能換到此方案。"
+
+#. module: woow_paas_platform
+#. odoo-python
 #: code:addons/woow_paas_platform/models/security_access_access_policy.py:0
 msgid "This plan includes %(seats)s Access seat(s), but this service currently lists %(used)s email address(es). Delete access rules or policies until at most %(seats)s address(es) remain, then change the plan."
 msgstr "此方案含 %(seats)s 個存取席位，但這台服務目前列了 %(used)s 個 email 位址。請先刪除存取規則或政策，把位址數降到 %(seats)s 個以內，才能換到此方案。"
@@ -13272,6 +13364,36 @@ msgstr "此方案含 %(seats)s 個存取席位，但這台服務目前列了 %(u
 #: code:addons/woow_paas_platform/models/security_access_access_policy.py:0
 msgid "This plan includes no Access seats, but this service currently lists %(used)s email address(es). Delete every email allow-list rule before changing to this plan."
 msgstr "此方案不含存取席位，但這台服務目前列了 %(used)s 個 email 位址。請先刪除所有 email 白名單規則，才能換到此方案。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/smart-home/tabs/SmartHomeAccessTab.xml:0
+msgid "This plan includes no Access seats, so Access settings are not available on it. Addresses below that are still protected stay locked behind Access until you turn their protection off. Turn protection off to make them reachable again, or change to a plan with Access seats to keep managing Access."
+msgstr "此方案不含存取席位，因此無法使用 Access 設定。下列仍受保護的網址，在你關閉其保護之前都會被 Access 擋住。關閉保護即可恢復對外連線；若要繼續管理 Access，請改用含存取席位的方案。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/AccessTab.xml:0
+msgid "This plan includes no Access seats, so Access settings are not available on it. Protection is still on for this service's address, and it stays locked behind Access until you turn it off. Turn protection off to make it reachable again, or change to a plan with Access seats to keep managing Access."
+msgstr "此方案不含存取席位，因此無法使用 Access 設定。這台服務的網址保護仍然開著，在你關閉之前都會被 Access 擋住。關閉保護即可恢復對外連線；若要繼續管理 Access，請改用含存取席位的方案。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/smart-home/tabs/SmartHomeAccessTab.xml:0
+msgid "This plan includes no Access seats, so Access settings are not available on it. Protection is still switched on for some addresses below but is not in effect right now. Turn protection off to clear it, or change to a plan with Access seats to keep managing Access."
+msgstr "此方案不含存取席位，因此無法使用 Access 設定。下列部分網址的保護開關仍然開著，但目前並未生效。關閉保護即可清除這個狀態；若要繼續管理 Access，請改用含存取席位的方案。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/AccessTab.xml:0
+msgid "This plan includes no Access seats, so Access settings are not available on it. Protection is still switched on for this service's address but is not in effect right now. Turn protection off to clear it, or change to a plan with Access seats to keep managing Access."
+msgstr "此方案不含存取席位，因此無法使用 Access 設定。這台服務網址的保護開關仍然開著，但目前並未生效。關閉保護即可清除這個狀態；若要繼續管理 Access，請改用含存取席位的方案。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/security_access_access_policy.py:0
+msgid "This plan includes no Access seats, so the Access settings are not available on it, but Access protection is still on for %(hosts)s. Turn protection off in the Access tab first, then change the plan. Otherwise the address stays locked behind Access and nobody can reach it."
+msgstr "此方案不含存取席位，換過去之後就無法使用 Access 設定，但 %(hosts)s 的 Access 保護仍然開著。請先到「存取控管」分頁關閉保護，再換方案；否則該網址會一直被 Access 擋住，任何人都連不進去。"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -13423,6 +13545,12 @@ msgstr ""
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_oauth_token__token_type
 msgid "Token Type"
 msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.xml:0
+msgid "Token copied"
+msgstr "已複製"
 
 #. module: woow_paas_platform
 #. odoo-python
@@ -13720,6 +13848,7 @@ msgstr "開啟保護"
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.js:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/AccessTab.js:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/smart-home/tabs/SmartHomeAccessTab.js:0
 msgid "Turn on Access protection?"
@@ -13727,6 +13856,14 @@ msgstr "開啟 Access 保護？"
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/AccessTab.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/smart-home/tabs/SmartHomeAccessTab.xml:0
+msgid "Turn protection off"
+msgstr "關閉保護"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.js:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/smart-home/tabs/SmartHomeAccessTab.js:0
 msgid "Turn protection on"
 msgstr "開啟保護"
@@ -14880,6 +15017,16 @@ msgid ""
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+msgid ""
+"Your account is a portal account and cannot use workspaces. Please contact "
+"the platform administrator to change your account type."
+msgstr ""
+"您的帳號是入口網站（Portal）帳號，無法使用工作區。請聯絡平台管理員變更帳號"
+"類型。"
+
+#. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/ChangePlanModal.xml:0
 msgid "Your current trial has not ended yet. Confirming the plan change will:"
@@ -15724,6 +15871,12 @@ msgstr ""
 #: code:addons/woow_paas_platform/static/src/paas/pages/workspace/WorkspaceDetailPage.xml:0
 msgid "routes"
 msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/smart-home/tabs/SmartHomeAccessTab.xml:0
+msgid "routes protected · Access settings are not available on this plan"
+msgstr "網址已保護 · 此方案無法使用 Access 設定"
 
 #. module: woow_paas_platform
 #. odoo-javascript

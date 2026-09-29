@@ -405,6 +405,22 @@ class SecurityAccessAccessPolicy(models.Model):
         'woow_paas_platform.smart_home': 'smart_home_id',
     }
 
+    #: #1261：**Access 能力由方案席位決定能不能用**的錨點——前端 Access 頁籤只在
+    #: ``subscription.ac_max_access_seats > 0`` 時出現（CS #746 設計拍板 6、SH #768
+    #: 逐字沿用）。這兩類錨點一旦換到 0 席方案、而 route 仍 ``is_protected``，
+    #: Cloudflare 上的 Access app 會原樣留著（通常只剩 Block policy ⇒ 對外 403），
+    #: 而租戶**看不到頁籤、關不掉保護**＝修復不可達（2026-09-29 prod 實測重現）。
+    #:
+    #: ⛔ **刻意不含 security_access**：SA 的 Access 分頁不看席位、永遠在
+    #: （``SecurityAccessDetailPage.js`` 的 TABS 常數，無 seat 判準），0 席 SA 掛
+    #: Bypass-IP／Block policy 是 UI 做得出來、也關得掉的正常狀態（SA 的產品本體
+    #: 就是 Access；席位只管 email 白名單）。把 SA 加進來會擋掉合法的 SA 降級。
+    #: 若日後 SA 也改成席位 gate 頁籤，才需要把它加進這張表。
+    _SEAT_GATED_PROTECTION_ANCHORS = frozenset({
+        'woow_paas_platform.cloud_service',
+        'woow_paas_platform.smart_home',
+    })
+
     def _anchor(self):
         """這一列的錨點記錄：cloud_service（#744）／route 的 SA／SH（#768）。
 
@@ -934,11 +950,25 @@ class SecurityAccessAccessPolicy(models.Model):
         它們在 ``deny`` / ``bypass`` 政策、以及 ``require`` / ``exclude`` 群組
         裡都還寫得出來，而本尺**不分 decision、不分 group**。
 
-        :return: ``None``，或 ``{'error': str, 'current_seats': int, 'target_seats': int}``
+        ## #1261：第二種拒絕——0 席目標 ＋ 仍有受保護的 route
+
+        席位尺合規（email 位址數 ≤ 目標席數）之後，還要問 ``_protection_gate_denial``：
+        （四條換方案路徑——CS／SA／SH 端點與後台 wizard——都經過本方法，所以
+        wizard 不必另外接線；SA 由 ``_SEAT_GATED_PROTECTION_ANCHORS`` 排除。）
+        Access 頁籤受席位 gate 的錨點（CS／SH）換到 0 席方案時，只要還有任何
+        route ``is_protected``，就一樣**擋住換方案**，請租戶先關保護。
+        順序刻意是「席位先、保護後」：兩者都不合規時，先處理 email 白名單
+        （那一格關掉保護也收斂不了），處理完再換方案會看到第二句。
+
+        ``code`` 讓前端／呼叫端不必比對文案就分得出是哪一種：
+        ``access_seats_exceeded``（席位）／``access_protection_active``（#1261）。
+
+        :return: ``None``，或 ``{'error': str, 'code': str, 'current_seats': int,
+            'target_seats': int}``（#1261 那種另帶 ``protected_hostnames``）
         """
         violation = self._seat_quota_violation(anchor, plan)
         if not violation:
-            return None
+            return self._protection_gate_denial(anchor, plan)
         used, seats = violation
         if seats:
             message = _(
@@ -956,8 +986,85 @@ class SecurityAccessAccessPolicy(models.Model):
                 "rule before changing to this plan."
             ) % {'used': used}
         return {'error': message,
+                'code': 'access_seats_exceeded',
                 'current_seats': used,
                 'target_seats': seats}
+
+    @api.model
+    def _protected_hostnames_for_anchor(self, anchor):
+        """該錨點底下 ``is_protected`` 的 hostname 清單（#1261 gate 用）。
+
+        🔴 ``sudo()`` 與 ``_seat_usage_for_anchor`` 同一個理由、方向更要緊：
+        這裡少算＝「以為沒保護 ⇒ 放行降級」＝重演 #1261 的卡死，而少算與
+        「真的沒保護」在輸出上不可區分。範圍仍由錨點 id 收斂，不會看到別的租戶。
+
+        ⚠ ``access_protection_lost`` 的 route **照算**：``is_protected`` 仍是意圖，
+        #803 的 resync cron 會把 Access app 推回去 ⇒ 換到 0 席之後一樣卡住。
+
+        未登記的錨點 model 直接 raise（與 ``_ANCHOR_POOL_FIELD`` 同款 fail-loud）：
+        ``_SEAT_GATED_PROTECTION_ANCHORS`` 多加一類卻忘了在這裡教它怎麼讀，
+        靜默回 ``[]`` 的症狀是 gate 對那一類完全失效，而那與「沒有 route 受保護」
+        輸出相同。
+        """
+        anchor = anchor.sudo()
+        if anchor._name == 'woow_paas_platform.smart_home':
+            return [r.hostname or anchor.name
+                    for r in anchor.route_ids.filtered('is_protected')]
+        if anchor._name == 'woow_paas_platform.cloud_service':
+            # CS 是整站粒度（拍板 5）：錨點自己就是那一個 Access app。
+            return ([anchor._access_hostname() or anchor.name]
+                    if anchor.is_protected else [])
+        raise ValidationError(
+            "Anchor model %s is listed in _SEAT_GATED_PROTECTION_ANCHORS but "
+            "_protected_hostnames_for_anchor does not know how to read its "
+            "protected routes — the #1261 downgrade gate would fail open."
+            % anchor._name)
+
+    @api.model
+    def _protection_gate_denial(self, anchor, plan):
+        """#1261 降級 gate：0 席目標方案 ＋ 仍有受保護 route ⇒ 擋住換方案。
+
+        2026-09-29 prod 實測：SH 在 '+1access 月繳' 開保護、只留一條 Block
+        （country）policy，換到 'Connect Monthly 不加購'（0 席）**成功**；route
+        仍 ``is_protected``、CF Access app 原樣留著 ⇒ 對外 403，而 0 席方案的
+        Access 頁籤（與 ``/access`` 深連結的內容）整個不顯示 ⇒ 租戶關不掉保護。
+
+        為什麼是「擋」而不是換方案時系統自動關保護：與 #773 同一條裁決
+        （Eugene，#773 留言 10716）——降級由租戶自己收斂、**系統不自動拆任何
+        存取設定**。自動關保護＝在租戶不知情下把他的 Home Assistant 直接公開，
+        方向比 403 更糟。本方法只回報，⛔ 不寫任何東西。
+
+        ## 判準
+
+        - 只看 ``_SEAT_GATED_PROTECTION_ANCHORS``（CS／SH；SA 不適用，理由見該常數）。
+        - 只在目標方案 ``ac_max_access_seats == 0`` 時擋：席位 > 0 的方案頁籤照樣
+          出現，保護留著租戶仍管得到。沿用 #521 的「0 ＝一席都沒有」語意。
+        - 升級天然通過（目標席位 > 0），⇒ 同樣不需要先判斷是不是降級。
+
+        :return: ``None``，或 ``{'error', 'code': 'access_protection_active',
+            'current_seats', 'target_seats': 0, 'protected_hostnames'}``
+        """
+        if anchor._name not in self._SEAT_GATED_PROTECTION_ANCHORS:
+            return None
+        if plan.ac_max_access_seats > 0:
+            return None
+        hostnames = self._protected_hostnames_for_anchor(anchor)
+        if not hostnames:
+            return None
+        message = _(
+            "This plan includes no Access seats, so the Access settings are "
+            "not available on it, but Access protection is still on for "
+            "%(hosts)s. Turn protection off in the Access tab first, then "
+            "change the plan. Otherwise the address stays locked behind "
+            "Access and nobody can reach it."
+        ) % {'hosts': ', '.join(hostnames)}
+        return {'error': message,
+                'code': 'access_protection_active',
+                # 與席位那種拒絕同形（三個端點原樣轉發 `data`）：這一格用量本身
+                # 是合規的（否則前面的席位尺已先擋），帶出來只為形狀一致。
+                'current_seats': len(self._seat_usage_for_anchor(anchor)),
+                'target_seats': plan.ac_max_access_seats,
+                'protected_hostnames': hostnames}
 
     def _listed_seat_addresses(self):
         """這批 policy 的 ``email_list`` 位址集合（正規化後去重）。

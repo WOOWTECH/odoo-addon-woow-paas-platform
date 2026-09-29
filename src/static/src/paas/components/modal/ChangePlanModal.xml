@@ -68,6 +68,7 @@
                   selectedPlanId="state.selectedPlanId"
                   currentPlanId="props.currentPlanId"
                   usedSeats="usedSeats"
+                  usedRoutes="props.usedRoutes"
                   onSelect.bind="onSelectPlan"/>
               </div>
 
@@ -100,12 +101,29 @@
                 </span>
               </div>
 
-              <!-- #342 未落地前的誠實處置：改方案後的規格（vCPU/RAM/席數）於下個
-                   計費週期才 re-apply、非即時。TODO(Refs #342)：#342 生效 re-apply
-                   落地後移除此提示（見 docs/tracking/followups/follow-ups.md）。 -->
+              <!-- #1261：原本這格寫「資源將於下個計費週期生效」，與後端實際行為相反。
+                   三條 change-plan 端點（paas.py api_service_change_plan／
+                   security_access.py api_sa_change_plan／smart_home.py change-plan）
+                   都是**同一次呼叫內**退點→關舊訂閱→建新訂閱並開首期帳單；席數等
+                   額度直接讀新訂閱的 plan（#773 seat gate 同一把尺），所以是**立即**
+                   生效。2026-09-29 正式站 E2E 實測：確認後席數當場變成新方案、帳單
+                   當場開出——舊文案讓租戶以為還能用舊額度到週期結束。
+                   退點細節（按比例、本期未扣款則無可退）由上方 advisory 負責，這裡
+                   只指回去、不重述，免得兩處說法漂開。 -->
               <div class="o_woow_change_plan__notice">
-                <WoowIcon name="'schedule'" size="14"/>
-                <span>Resource changes take effect in the next billing cycle.</span>
+                <WoowIcon name="'bolt'" size="14"/>
+                <span>The change takes effect immediately: the new plan and its limits apply as soon as you confirm and are billed from today. The unused part of the current period is refunded as described above.</span>
+              </div>
+              <!-- #1261／#342：唯一**不是**立即生效的是 Cloud Service 的運算規格。
+                   plan 的 cs_vcpu／cs_ram_gb／cs_storage_gb 只在建立服務時由
+                   `_apply_plan_spec_overlay` 疊進 helm values，change-plan 不觸發
+                   redeploy（#342 查證定案）——不是「下個週期」，是目前根本不會調。
+                   只有 CS 父頁會傳 resourcesNotResized；SA／SH 的方案沒有運算規格。
+                   TODO(Refs #342)：change-plan 生效 re-apply 落地後移除這格
+                   （見 docs/tracking/followups/follow-ups.md F-368-1）。 -->
+              <div t-if="props.resourcesNotResized" class="o_woow_change_plan__notice">
+                <WoowIcon name="'info'" size="14"/>
+                <span>Compute resources (vCPU, RAM, storage) of an already deployed service are not resized by a plan change yet.</span>
               </div>
             </t>
           </t>

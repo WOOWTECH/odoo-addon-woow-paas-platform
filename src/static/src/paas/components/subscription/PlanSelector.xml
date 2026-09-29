@@ -15,7 +15,9 @@
       <!-- 方案卡片：當前 cycle 每 tier 一張（R2：單 tier 自然一張，無需特判） -->
       <div class="o_woow_plan_selector__cards">
         <t t-foreach="visibleGroups" t-as="base" t-key="base.id">
-          <div t-attf-class="o_woow_plan_card {{ isSelected(base) ? 'o_woow_plan_card--selected' : '' }}"
+          <!-- #1261：route 上限裝不下目前 route 數的卡片標一行警告（只標註、不 disable；
+               權威攔截在後端 route gate，見 PlanSelector.js::isPlanOverRouteUsage）。 -->
+          <div t-attf-class="o_woow_plan_card {{ isSelected(base) ? 'o_woow_plan_card--selected' : '' }} {{ isPlanOverRouteUsage(base) ? 'o_woow_plan_card--over_usage' : '' }}"
                t-on-click="() => this.onPlanClick(base)">
             <div class="o_woow_plan_card__name" t-esc="base.name"/>
             <div class="o_woow_plan_card__price" t-esc="formatPrice(base)"/>
@@ -26,6 +28,8 @@
                 <span class="o_woow_plan_card__spec" t-esc="spec.label"/>
               </t>
             </div>
+            <div t-if="isPlanOverRouteUsage(base)" class="o_woow_plan_card__over_usage"
+                 t-esc="routeOverUsageHint(base)"/>
           </div>
         </t>
       </div>

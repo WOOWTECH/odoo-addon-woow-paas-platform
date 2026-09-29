@@ -909,3 +909,22 @@ from . import test_sh_provision_retry
 # （SA sa.to_dict routes／SH include_details routes／CS _access_to_dict）。key 缺席時
 # AccessAppCard 讀到 undefined，fail-open 警示會靜默消失。
 from . import test_access_protection_lost_ui_payload
+
+# #1261：CS／SH 換到 0 席方案時，仍受 Access 保護就擋（0 席看不到 Access 頁籤，換過去
+# 保護關不掉、對外 403）。守「擋在退點／關舊訂閱之前、關保護後放行、卡死記錄在 0 席下
+# 仍關得掉、SA 刻意不適用」。
+from . import test_change_plan_protection_gate_1261
+
+# #1261 SA 換方案的 route 數降級 gate（#773 席位 gate 的同構）：3 條 route 從 3 組降到
+# 1 組必須在退點／關舊訂閱之前被擋、⛔ 不刪任何 route；0 組＝不准（不是 unlimited）；
+# route 數 ≤ 目標 cap 的降級與升級照常放行；AST 釘 gate 排在第一個寫入之前。
+from . import test_sa_change_plan_route_gate_1261
+
+# #1261：portal（share）帳號不能用 workspace。守「邀請 portal 被拒且不留列、同 email
+# 有 internal 時落到 internal、portal 打 workspace 端點拿結構化錯誤而非 AccessError
+# （含殘留舊成員列）、internal 行為不變」。
+from . import test_portal_user_workspace_1261
+
+# #1261 (d)：skip-trial 後 sh_trial_end_date＝昨天是「試用最後一天（含）、start＝
+# trial_end + 1」的日期慣例，不是 off-by-one；釘住它，免得被「順手修正」成今天。
+from . import test_skip_trial_dates_1261
