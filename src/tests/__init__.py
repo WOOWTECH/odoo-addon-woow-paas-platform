@@ -895,3 +895,8 @@ from . import test_sa_route_traffic_1234
 # SA 詳情頁 tunnel 狀態改用即時值（只讀疊加）。守「成員看得到即時值、這條路徑不寫 DB、
 # operator 拿不到時沿用 DB 值」。
 from . import test_sa_live_tunnel_status
+
+# #794 前端接上：`access_protection_lost` 必須出現在三腿畫面實際讀的詳情 payload
+# （SA sa.to_dict routes／SH include_details routes／CS _access_to_dict）。key 缺席時
+# AccessAppCard 讀到 undefined，fail-open 警示會靜默消失。
+from . import test_access_protection_lost_ui_payload
