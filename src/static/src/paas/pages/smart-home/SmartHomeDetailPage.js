@@ -20,7 +20,7 @@ import { formatPoints } from "../../utils/billing_helpers";
  * Displays detailed information about a smart home instance including:
  * - Header with name and status badge
  * - Subscription info panel (trial badge, next bill date, plan name)
- * - Tunnel info panel (Tunnel ID, Connector Type/ID, Route URL, Status, Uptime)
+ * - Tunnel info panel (Tunnel ID, Connector Type/ID, Route URL, tunnel Status, Connector Opened)
  * - Skip Trial button (visible during trial)
  * - Delete button with confirmation
  * - Connection guide section
@@ -172,15 +172,37 @@ export class SmartHomeDetailPage extends Component {
         return this.state.confirmName.trim() === (this.home?.name || "");
     }
 
+    /**
+     * Tunnel Information 面板。
+     *
+     * 兩個欄位原本是錯的（與 SA 詳情頁 #1256 同一次對齊）：
+     *   - Status 讀的是 `home.state`（生命週期：active／suspended…），不是
+     *     tunnel。生命週期已經在 header 的 StatusBadge 上，這裡重複一次只會讓
+     *     「Active」蓋掉「Connector 其實斷了」。改讀 `tunnel_status`，用同一顆
+     *     StatusBadge（connected／disconnected／deleted／error 都有定義，#833）。
+     *     沒有 tunnel（尚未 provision）時顯示 N/A，不假裝是 Disconnected。
+     *   - Uptime 讀的是 `home.uptime`，而 `SmartHome.to_dict()` 的 key 是
+     *     `tunnel_uptime` ⇒ 永遠 N/A。那個值是 connector 的 `opened_at` 時間戳、
+     *     不是時長，標籤改成與 SA 頁相同的「Connector Opened」。
+     *
+     * 這些值由 detail `get` 疊上 operator 即時值（`_live_tunnel_status`，只讀）；
+     * operator 拿不到時是 DB 裡上一次 Refresh 寫入的值。
+     */
     get tunnelInfo() {
         if (!this.home) return [];
+        const hasTunnel = !!this.home.tunnel_id;
         return [
             { label: _t("Tunnel ID"), value: this.home.tunnel_id || _t("N/A"), icon: "vpn_key" },
             { label: _t("Connector Type"), value: this.home.connector_type || _t("N/A"), icon: "cable" },
             { label: _t("Connector ID"), value: this.home.connector_id || _t("N/A"), icon: "tag" },
             { label: _t("Route URL"), value: this.displayUrl || _t("Not configured"), icon: "link", isUrl: !!this.routeUrl },
-            { label: _t("Status"), value: this.home.state || _t("Unknown"), icon: "info" },
-            { label: _t("Uptime"), value: this.home.uptime || _t("N/A"), icon: "schedule" },
+            {
+                label: _t("Status"),
+                value: hasTunnel ? (this.home.tunnel_status || "disconnected") : _t("N/A"),
+                icon: "info",
+                isBadge: hasTunnel,
+            },
+            { label: _t("Connector Opened"), value: this.home.tunnel_uptime || _t("N/A"), icon: "schedule" },
         ];
     }
 

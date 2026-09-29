@@ -105,8 +105,15 @@ class SmartHomeController(Controller):
             # 會為 workspace 的每一台 SH 各 walk 一次 `access_policy_ids`，而
             # Access 分頁只存在於詳情頁（CS 為同一個理由把 `access` 限定在
             # `include_details` 那一側）。
-            return {"success": True,
-                    "data": smarthome.to_dict(include_details=True)}
+            #
+            # tunnel 欄位改用即時值（只讀，見 `SmartHome._live_tunnel_status`）；
+            # 拿不到時沿用 DB 裡上一次寫入的值。與 SA 詳情頁（#1256）同一個作法：
+            # DB 值只有 owner/admin 按 Refresh 時才會更新，其他成員看到的是過期的
+            # 「Connected」。刻意只做在 detail、不做在 list——list 每一台各打一次
+            # operator 太貴，而 Tunnel Information 只存在於詳情頁。
+            data = smarthome.to_dict(include_details=True)
+            data.update(smarthome._live_tunnel_status())
+            return {"success": True, "data": data}
 
         if action not in ("delete", "provision", "refresh_status"):
             return {"success": False, "error": _("Unknown action: %(action)s", action=action)}
