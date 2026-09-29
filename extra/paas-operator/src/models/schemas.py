@@ -264,6 +264,8 @@ class PodInfo(BaseModel):
     ready: str  # e.g., "1/1"
     restarts: int
     age: str
+    # 舊呼叫端不必供值；讓平台辨識 phase 仍為 Running 的收尾 Pod。
+    deletion_timestamp: Optional[str] = None
 
 
 class VmiInfo(BaseModel):

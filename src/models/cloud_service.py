@@ -2812,8 +2812,10 @@ class CloudService(models.Model):
     def _is_container_ready(status):
         """容器型就緒判定。
 
-        **fail-closed**：沒有看到「至少一顆 Running 且容器全 ready 的 pod」，就不算
-        就緒。``pods`` 為空的兩個成因處置相同，只在理由字串上區分：
+        **fail-closed**：排除 Succeeded／Failed／帶 deletion_timestamp 的收尾 Pod 後，
+        至少要有一顆有效 Pod，且每顆都必須 Running、容器全 ready。Pending（含
+        initContainer 執行中）不能被其他已 Ready 的 Pod 遮蔽（#1156）。
+        ``pods`` 為空的兩個成因處置相同，只在理由字串上區分：
 
         1. **查詢本身失敗** —— ``pod_retrieval_error`` 有值（RBAC 掉了、API server
            抖動…）。operator 此時仍回 **HTTP 200**、``pods`` 保持空陣列
@@ -2835,8 +2837,8 @@ class CloudService(models.Model):
           init 那層巧合的網都沒有。#456 就是實錄：兩筆 hermes-agent 永久壞掉，
           DB 與 UI 卻都顯示 Running/ONLINE。
 
-        ⚠ 注意這裡**只**對「空陣列」改判。``pods`` 非空但沒有 Running 的（例如排程
-        失敗卡 Pending、或 maxPods 滿）本來就回 False，那條路沒有改動。
+        上述 F-423-1 只改「空陣列」；#1156 另補混合 phase：Running 的 PG 與
+        Pending 的 Odoo 同時存在時，仍須維持未就緒。
 
         殘餘風險與封頂：若某 chart 的 pod 不帶 ``app.kubernetes.io/instance``
         （operator 的 selector），服務會從「假就緒」變成「永久卡 deploying」。合併前
@@ -2852,8 +2854,12 @@ class CloudService(models.Model):
             )
 
         pods = status.get('pods') or []
-        # Only Running-phase pods — terminators would block readiness forever
-        active_pods = [p for p in pods if p.get('phase') == 'Running']
+        # Pending（含 initContainer 執行中）仍須參與判定，不能被 Ready 的 PG 遮蔽。
+        active_pods = [
+            p for p in pods
+            if p.get('phase') not in ('Succeeded', 'Failed')
+            and not p.get('deletion_timestamp')
+        ]
         if not pods:
             # 查得到、但一顆 pod 都沒有。可能是合法的建立中窗口，也可能是永久的
             # （quota 擋住 Pod 物件建立）。兩者在這一層**分不出來**，所以 HARD——
@@ -2862,7 +2868,8 @@ class CloudService(models.Model):
         if not active_pods:
             return False, 'no active pods'
         ready = all(
-            '/' in pod.get('ready', '0/0')
+            pod.get('phase') == 'Running'
+            and '/' in pod.get('ready', '0/0')
             and pod.get('ready', '0/0').split('/')[0] == pod.get('ready', '0/0').split('/')[1]
             for pod in active_pods
         )
