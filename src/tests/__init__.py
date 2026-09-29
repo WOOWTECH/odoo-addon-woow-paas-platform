@@ -883,3 +883,6 @@ from . import test_sa_tunnel_token_portal_1196
 # #1196：route 改名。守的是「值變了 ⇒ CF 也跟著搬」，尤其 Access app 由 hostname
 # 定義——改名不重推會讓新網址變成免登入入口而 UI 仍顯示已保護。
 from . import test_sa_route_rename_1196
+
+# #1234：route 健康探測。分類樣本取自正式站實測；端點守「探測目標只來自 DB」。
+from . import test_sa_route_health_1234

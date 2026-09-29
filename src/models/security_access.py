@@ -5,6 +5,7 @@ import uuid
 from odoo import _, api, fields, models
 from odoo.exceptions import AccessError, UserError, ValidationError
 
+from ..services import route_probe
 from ..services.naming import make_security_access_subdomain
 
 from ..services.paas_operator import (
@@ -1852,8 +1853,33 @@ class SecurityAccess(models.Model):
             # / fail-open signal. The SA layer no longer exposes service-wide
             # Access fields.
             'routes': [r.to_dict() for r in self.route_ids],
+            # #1234：讓前端在按下「Add Route」之前就知道額度（原本只有撞到才知道）。
+            'route_quota': self._route_quota(),
             'subscription': self._get_subscription_info(),
         }
+
+    def _route_quota(self):
+        """方案允許的 route 數；沒有訂閱或方案（admin／legacy）回 ``None``＝不限。
+
+        口徑與 ``_check_route_quota`` / controller ``_create_route`` 相同（同一個
+        ``sa_max_routes``），只是這裡只讀、不擋。
+        """
+        self.ensure_one()
+        sub = self.sudo().subscription_id
+        if not sub or not sub.sh_subscription_plan_id:
+            return None
+        return sub.sh_subscription_plan_id.sa_max_routes
+
+    def _probe_route_health(self, force=False):
+        """#1234：從公開網路探每條 route，回 ``{route_id: result}``。
+
+        結果語意見 ``services/route_probe.py``。探測失敗永不 raise。
+        """
+        self.ensure_one()
+        routes = self.route_ids
+        by_host = route_probe.probe_routes(
+            [(r.hostname, r.is_protected) for r in routes], force=force)
+        return {r.id: by_host.get(r.hostname) for r in routes}
 
 
 class SecurityAccessRoute(models.Model):

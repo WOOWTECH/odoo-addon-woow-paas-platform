@@ -121,6 +121,8 @@
   &__text { flex: 1; min-width: 0;
     h3 { font-family: $woow-font-display; margin: 0 0 0.25rem; }
     p { margin: 0; color: $woow-text-secondary; font-size: 0.875rem; } }
+  /* #1234：卡頭右側的額度與「立即檢查」。 */
+  &__aside { flex: 0 0 auto; display: flex; align-items: center; gap: 0.5rem; }
 }
 // 共用小按鈕：本頁的 routes table、AddPolicyModal 與抽出去的 AccessAppCard
 // 都用它。刻意留在這裡（bundle 是全域的，三處都吃得到），搬家會變成「這顆通用
@@ -339,4 +341,38 @@
   gap: 0.25rem;
 
   p { margin: 0; }
+}
+
+/* #1234：操作失敗的頁內提示；關閉鈕靠右。 */
+.o_woow_sa_action_error {
+  margin: 0 0 1rem;
+
+  > span { flex: 1; }
+}
+
+/* #1234：route 額度。滿了轉警示色。 */
+.o_woow_sa_quota {
+  font-size: 0.8125rem;
+  color: $woow-text-secondary;
+  white-space: nowrap;
+
+  &--full { color: #b45309; font-weight: 600; }
+}
+
+/* #1234：route 健康狀態 badge。 */
+.o_woow_sa_routes_table__status { white-space: nowrap; }
+
+.o_woow_sa_health {
+  display: inline-block;
+  padding: 0.125rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: $woow-text-secondary;
+  background: rgba(0, 0, 0, 0.04);
+  cursor: help;
+
+  &--ok { color: #15803d; background: rgba(22, 163, 74, 0.1); }
+  &--warn { color: #b45309; background: rgba(217, 119, 6, 0.1); }
+  &--error { color: #b91c1c; background: rgba(220, 38, 38, 0.1); }
 }

@@ -19,7 +19,7 @@
 | [`development/`](development/oauth2-architecture.md) | 開發者技術細節（[OAuth2 架構](development/oauth2-architecture.md)、[/woow AI Chat（agent-runtime）資料流與 Secret 關係](development/agent-runtime-chat-architecture.md)、[merge train 每一節的驗收清單](development/merge-train-acceptance.md) 等） |
 | [`deployment/`](deployment/k8s-setup.md) | **[發佈到 Production SOP](deployment/prod-release-sop.md)**（Fleet GitOps 全流程 + 版本矩陣，給人類與自動化 agent）；K8s setup、運維、troubleshooting、admin roles；runbook（[agent-runtime image 升版 SOP](deployment/agent-runtime-image-upgrade-sop.md)、[agent-runtime pilot flip-gate](deployment/agent-runtime-pilot-flip-gate-runbook.md)） |
 | [`testing/`](testing/TESTING.md) | Odoo test、PaaS operator test、E2E test guide |
-| [`tutorials/`](tutorials/cloud-odoo-addon-management.md) | 完整逐步指引（cloud odoo addon management） |
+| [`tutorials/`](tutorials/cloud-odoo-addon-management.md) | 完整逐步指引（cloud odoo addon management、[Security Access route 管理與狀態判讀](tutorials/security-access-routes.md)） |
 | [`../archived/guides/frameworks/`](../archived/guides/frameworks/) | 已退役框架（superpowers、SuperClaude）的舊指南；現行 mattpocock/skills 見 [`../agents/`](../agents/issue-tracker.md) |
 | [`paas-skill-system/`](paas-skill-system/) | PaaS Skill 系統（agent-runtime-pod）onboarding 知識庫（含端到端流程、對話/串流、Pod 內部、安全模型、術語表等；篇數見該目錄 README） |
 | [`maintenance/`](maintenance/plan-catalog-update.md) | 維運 SOP：[plan catalog 改價](maintenance/plan-catalog-update.md)、[stg 清理（#324）](maintenance/2026-07-10-324-stg-cleanup-sop.md) |

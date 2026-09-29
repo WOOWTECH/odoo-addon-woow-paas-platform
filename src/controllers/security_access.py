@@ -204,6 +204,12 @@ class SecurityAccessController(Controller):
             return {"success": True,
                     "data": [r.to_dict() for r in sa.route_ids]}
 
+        if action == "health":
+            # #1234：唯讀，與 list 同權限（workspace 成員即可）。探測目標只取自
+            # DB 裡的 route.hostname，不接受任何呼叫端給的網址。
+            return {"success": True,
+                    "data": sa._probe_route_health(force=bool(kwargs.get("force")))}
+
         access = workspace.check_user_access(request.env.user)
         if not access or access.role not in [ROLE_OWNER, ROLE_ADMIN]:
             return {"success": False, "error": _("Insufficient permissions")}
