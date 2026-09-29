@@ -160,18 +160,24 @@ def test_init_n8n_failure_carries_error_step_and_kind(k8s_factory, step, kind):
     assert body["error"].startswith(f"[{step}] ")
 
 
-@pytest.mark.parametrize("overrides", [
+@pytest.mark.parametrize("overrides, step", [
     # 沒拿到 HTTP 回應（node 端 request error）≠ 明確的錯誤回應。
-    {("POST", "/rest/api-keys"): _http(0, "socket hang up")},
-    # 200 但 body 不含 key：key 可能已經建出來了。
-    {("POST", "/rest/api-keys"): _http(200, json.dumps({"data": {}}))},
+    ({("POST", "/rest/api-keys"): _http(0, "socket hang up")}, "create_api_key"),
+    # 200 但 body 不合預期：n8n 已接受請求，副作用可能已發生。
+    ({("POST", "/rest/api-keys"): _http(200, json.dumps({"data": {}}))}, "create_api_key"),
+    ({("POST", "/rest/owner/setup"): _http(200, json.dumps({"data": {}}))}, "setup_owner"),
+    ({("POST", "/rest/login"): _http(200, "{}", {})}, "login"),
+    ({("POST", "/rest/login"): _http(200, "{}", {"set-cookie": ["; Path=/"]})}, "login"),
     # 非 timeout 的 exec 失敗：分不出請求有沒有送達。
-    {("POST", "/rest/api-keys"): KubectlException("kubectl exec failed", "exec", "")},
-], ids=["no-http-response", "200-without-key", "exec-failed"])
-def test_init_n8n_ambiguous_outcome_is_unknown(overrides):
+    ({("POST", "/rest/api-keys"): KubectlException("kubectl exec failed", "exec", "")},
+     "create_api_key"),
+], ids=["no-http-response", "200-without-key", "200-without-owner-id",
+        "login-without-set-cookie", "login-empty-cookie", "exec-failed"])
+def test_init_n8n_ambiguous_outcome_is_unknown(overrides, step):
     body = _post_init_n8n(_n8n_k8s(overrides)).json()
 
-    assert body["error_step"] == "create_api_key"
+    assert body["success"] is False
+    assert body["error_step"] == step
     assert body["error_kind"] == "unknown"
 
 
