@@ -1616,7 +1616,8 @@
                 持久磁碟上讀取、編輯、建立檔案與執行 shell 指令（串流回傳），內建瀏覽器終端 TUI
                 可直接操作 `pi` 指令、安裝套件與管理 Skills（放一份 SKILL.md 即自動載入）。
                 **模型金鑰自備**：於 Models 頁面新增供應商並貼上 API Key（存於你的磁碟，平台
-                不代管、頁面回顯時遮罩）。**單一帳密登入**：開通後於服務頁取得管理密碼（可重設）。
+                不代管、頁面回顯時遮罩）。**帳號密碼登入**：預設帳號 admin，密碼於開通時一次性顯示；帳號與密碼都可在服務頁「Admin Credentials」
+                自行修改，修改後服務重啟約一分鐘生效。
                 本版不含影片製作工具鏈。欠費停權時服務停止（磁碟保留），恢復繳費後資料原樣還在；
                 刪除服務即全新開通，原磁碟依平台保留政策 7 天後回收。</field>
             <field name="category">ai_llm</field>
@@ -1624,8 +1625,8 @@
             <field name="documentation_url">https://github.com/WOOWTECH/Woow_k3s_pi_agent_package#readme</field>
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/pi-agent</field>
-            <field name="helm_chart_version">0.1.0</field>
-            <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/pi-agent","tag":"20260924.0235@sha256:723122778daaed23fb9bdec3fbac5faa0cb5fe63fe258e757a5c14259528d3b2"},"piWeb":{"resources":{"requests":{"cpu":"500m","memory":"1Gi"},"limits":{"cpu":"2","memory":"4Gi"}}},"persistence":{"size":"20Gi"},"service":{"port":8080,"targetPort":8080},"authProxy":{"port":8080}}</field>
+            <field name="helm_chart_version">0.1.1</field>
+            <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/pi-agent","tag":"20260924.0235@sha256:723122778daaed23fb9bdec3fbac5faa0cb5fe63fe258e757a5c14259528d3b2"},"piWeb":{"resources":{"requests":{"cpu":"500m","memory":"1Gi"},"limits":{"cpu":"2","memory":"4Gi"}}},"persistence":{"size":"20Gi"},"service":{"port":8080,"targetPort":8080},"authProxy": {"port": 8080, "basicAuthUsername": "admin"}}</field>
             <field name="helm_value_specs">{"required": [], "optional": []}</field>
             <field name="default_port">8080</field>
             <field name="ingress_enabled" eval="True"/>
@@ -1635,6 +1636,11 @@
             <field name="mcp_enabled" eval="False"/>
             <field name="has_admin_gui" eval="True"/>
             <field name="admin_password_carrier">helm_secret</field>
+            <!-- 租戶可自設帳號密碼（與 open-design 同一機制）：帳號在 chart 的
+                 authProxy.basicAuthUsername（0.1.1 起 chart 端 pi-agent.basicAuthUsername 驗證格式），
+                 nginx auth-proxy 的 htpasswd 由它與 admin_password 產生。修改走 reset 同一條
+                 helm upgrade ＋ rollout restart。 -->
+            <field name="admin_username_helm_path">authProxy.basicAuthUsername</field>
             <field name="post_deploy_init_type">none</field>
             <field name="max_per_partner" eval="0"/>
             <field name="is_hidden" eval="False"/>

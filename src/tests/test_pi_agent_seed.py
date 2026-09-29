@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """pi Coding Agent（pi-agent）上架 seed 的守線斷言。
-契約來源：woow-paas-charts charts/pi-agent 0.1.0（nginx basic-auth sidecar :8080 是唯一入口、
+契約來源：woow-paas-charts charts/pi-agent 0.1.1（nginx basic-auth sidecar :8080 是唯一入口、
 pi-web 綁 loopback、非 root）、paas-odoo-ci pi-agent/（image）。核心守線只有一條：
 **上架（is_hidden=False）之前 image.tag 必須雙釘 tag@sha256**——隱藏期允許佔位 tag，
 翻 is_hidden 的那次變更必須同時把 tag 釘死，兩件事不能分開合。
@@ -34,7 +34,7 @@ class TestPiAgentSeed(TransactionCase):
         tpl = self._tpl()
         self.assertEqual(tpl.helm_repo_url or '', '')
         self.assertEqual(tpl.helm_chart_name, PI_CHART)
-        self.assertEqual(tpl.helm_chart_version, '0.1.0')
+        self.assertEqual(tpl.helm_chart_version, '0.1.1')
 
     def test_admin_gui_supply_chain(self):
         """has_admin_gui + helm_secret：平台供給 config.sensitive.admin_password 給 chart Secret，
@@ -43,6 +43,16 @@ class TestPiAgentSeed(TransactionCase):
         self.assertTrue(tpl.has_admin_gui)
         self.assertEqual(tpl.admin_password_carrier, 'helm_secret')
         self.assertFalse(tpl.mcp_enabled, 'MCP sidecar 機制是 n8n 專用，pi-agent 不用')
+
+    def test_tenant_can_set_credentials(self):
+        """帳號路徑＝chart 0.1.1 的 authProxy.basicAuthUsername（注意不是 open-design 的
+        authProxy.basicAuth.username）。路徑寫錯時 helm upgrade 照樣成功、htpasswd 卻還是舊
+        帳號——租戶改完登不進去，而平台以為已生效。"""
+        tpl = self._tpl()
+        self.assertEqual(tpl.admin_username_helm_path, 'authProxy.basicAuthUsername')
+        self.assertEqual(
+            self._values()['authProxy']['basicAuthUsername'], 'admin',
+            'template 預設帳號必須就在 admin_username_helm_path 指的位置，對話框才預填得到')
 
     def test_image_repository(self):
         repo = self._values()['image']['repository']

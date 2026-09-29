@@ -69,7 +69,7 @@ export function buildOneTimeCredentials(data) {
         credentials.push({
             label: _t("Username"),
             value: data.admin_username,
-            hint: _t("Signs in to the app and the web console, together with the password below."),
+            hint: _t("Signs in to this service (and its web console, if it has one), together with the password below."),
         });
         credentials.push({
             label: _t("Admin Password"),
