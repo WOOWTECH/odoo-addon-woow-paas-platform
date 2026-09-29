@@ -1435,6 +1435,12 @@ msgid "Allowed Scopes"
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/subscription/PlanSelector.js:0
+msgid "Allows %(max)s route(s); you have %(used)s — delete some first"
+msgstr "此方案可用 %(max)s 條路由，目前有 %(used)s 條，請先刪除一些"
+
+#. module: woow_paas_platform
 #: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_oauth_client__redirect_uris
 msgid ""
 "Allowed redirect URIs, one per line. Must match exactly during authorization "
@@ -4064,6 +4070,12 @@ msgstr ""
 #: code:addons/woow_paas_platform/static/src/paas/components/subscription/PlanSelector.js:0
 msgid "Delete all %(used)s listed email address(es) first"
 msgstr "請先刪除已列出的全部 %(used)s 個 email 位址"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/subscription/PlanSelector.js:0
+msgid "Delete all %(used)s route(s) first"
+msgstr "請先刪除全部 %(used)s 條路由"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -13269,6 +13281,18 @@ msgid ""
 "                 and DNS records on Cloudflare. Your connector will be\n"
 "                 disconnected immediately. This cannot be undone."
 msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/security_access.py:0
+msgid "This plan allows %(allowed)s route(s), but this Security Access currently has %(used)s. Delete routes until at most %(allowed)s remain, then change the plan."
+msgstr "此方案只允許 %(allowed)s 條路由，但這個 Security Access 目前有 %(used)s 條。請先刪除路由，把數量降到 %(allowed)s 條以內，才能換到此方案。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/security_access.py:0
+msgid "This plan allows no routes, but this Security Access currently has %(used)s. Delete every route before changing to this plan."
+msgstr "此方案不含任何路由，但這個 Security Access 目前有 %(used)s 條。請先刪除所有路由，才能換到此方案。"
 
 #. module: woow_paas_platform
 #. odoo-python

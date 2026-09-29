@@ -120,6 +120,21 @@
     font-weight: 600;
     color: var(--woow-primary, #6366f1);
   }
+
+  // #1261：這張方案卡的 route 上限裝不下服務目前的 route 數。
+  // 與 #773 席位選項同一個決定：**不是** disabled 樣式（不 dim、不 not-allowed），
+  // 卡片仍可點，權威攔截在後端 route gate；這裡只讓人在按確認之前就看到要先刪。
+  &--over_usage {
+    border-color: var(--woow-warning, #f59e0b);
+  }
+
+  &__over_usage {
+    margin-top: 6px;
+    font-size: 11px;
+    line-height: 1.3;
+    font-weight: 600;
+    color: var(--woow-warning, #f59e0b);
+  }
 }
 
 // Wave C：AC 席數 chip（比照 .o_woow_plan_card 為獨立區塊）

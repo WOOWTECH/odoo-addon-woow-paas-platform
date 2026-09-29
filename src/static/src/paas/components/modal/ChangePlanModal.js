@@ -41,6 +41,8 @@ import { PlanTotalBar } from "../subscription/PlanTotalBar";
  *   - onClose (Function): 取消／關閉時呼叫。
  *   - onChanged (Function): confirmChange 成功後呼叫，帶後端回傳 data
  *     （含 refund_amount / new_plan，供父頁選用）；父頁負責關 modal + reload 服務。
+ *   - usedRoutes (Number, optional): #1261，服務目前的 route 數（SA 才傳）。只用於
+ *     方案卡的警告標註；降級被 route gate 擋時，後端錯誤訊息照常顯示在 `state.error`。
  */
 export class ChangePlanModal extends Component {
   static template = "woow_paas_platform.ChangePlanModal";
@@ -52,6 +54,9 @@ export class ChangePlanModal extends Component {
     confirmChange: { type: Function },
     onClose: { type: Function },
     onChanged: { type: Function },
+    // #1261：服務目前的 route 數，原樣轉給 PlanSelector 標註「裝不下」的方案卡。
+    // 由父頁注入（只有 SA 詳情頁傳），modal 自身仍不 branch service type。
+    usedRoutes: { type: Number, optional: true },
   };
 
   setup() {

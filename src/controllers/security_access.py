@@ -521,6 +521,20 @@ class SecurityAccessController(Controller):
                     'error': _denial['error'],
                     'data': {k: v for k, v in _denial.items() if k != 'error'}}
 
+        # #1261 route 數降級 gate：與上面 #773 席位 gate 同構、同位置（第一個寫入
+        # ——退點——之前）。prod E2E 實撞：3 條 route 從「3 組」降到「1 組」成功，
+        # 記錄永久卡在「3 / 1 routes」——route 配額守衛是 route 寫入時才跑的
+        # constraint，換方案不寫 route ⇒ 從來沒被叫醒。⛔ 系統不自動刪 route
+        # （同 #773 裁決），只擋住並回報要刪到幾條；判準／0＝不准的語意見
+        # `_route_gate_denial` docstring。排在席位 gate 之後只是維持既有錯誤優先序，
+        # 兩者都不寫 DB，順序不影響正確性。
+        _route_denial = sa._route_gate_denial(plan)
+        if _route_denial:
+            return {'success': False,
+                    'error': _route_denial['error'],
+                    'data': {'current_routes': _route_denial['current_routes'],
+                             'target_routes': _route_denial['target_routes']}}
+
         refund = old_sub._compute_unused_refund()
         partner = old_sub.sh_partner_id
         if refund > 0:

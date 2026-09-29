@@ -914,3 +914,8 @@ from . import test_access_protection_lost_ui_payload
 # 保護關不掉、對外 403）。守「擋在退點／關舊訂閱之前、關保護後放行、卡死記錄在 0 席下
 # 仍關得掉、SA 刻意不適用」。
 from . import test_change_plan_protection_gate_1261
+
+# #1261 SA 換方案的 route 數降級 gate（#773 席位 gate 的同構）：3 條 route 從 3 組降到
+# 1 組必須在退點／關舊訂閱之前被擋、⛔ 不刪任何 route；0 組＝不准（不是 unlimited）；
+# route 數 ≤ 目標 cap 的降級與升級照常放行；AST 釘 gate 排在第一個寫入之前。
+from . import test_sa_change_plan_route_gate_1261

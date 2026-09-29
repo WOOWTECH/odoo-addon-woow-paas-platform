@@ -68,6 +68,7 @@
                   selectedPlanId="state.selectedPlanId"
                   currentPlanId="props.currentPlanId"
                   usedSeats="usedSeats"
+                  usedRoutes="props.usedRoutes"
                   onSelect.bind="onSelectPlan"/>
               </div>
 
