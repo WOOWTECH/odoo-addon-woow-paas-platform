@@ -104,6 +104,7 @@
 
     &--ok { color: #16a34a; }
     &--error { color: #dc2626; }
+    &--warn { color: #b45309; }
   }
 
   &__coming_soon {
@@ -329,4 +330,13 @@
     min-width: 0;
     font-size: 0.8125rem;
   }
+}
+
+/* #1196：改名提醒。兩段說明疊在表格下方，段距收緊。 */
+.o_woow_sa_rename_notice {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+
+  p { margin: 0; }
 }

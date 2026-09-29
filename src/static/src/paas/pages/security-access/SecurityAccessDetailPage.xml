@@ -100,6 +100,13 @@
               live. Move the token to another machine to move the tunnel — the
               public hostnames stay the same.
             </p>
+            <!-- #1196：同一把 token 同時跑在兩台，Cloudflare 會把流量分給兩邊
+                 （2026-09-29 正式站實測），搬家時最常踩的就是這個。 -->
+            <p class="o_woow_sa_detail__hint">
+              Run the token on one machine at a time. If two connectors run it,
+              traffic is split between them — stop the old connector as soon as
+              the new one is up.
+            </p>
             <div class="o_woow_sa_token">
               <label>Tunnel token</label>
               <div class="o_woow_sa_token__row">
@@ -214,8 +221,7 @@
                         <t t-esc="route.hostname"/>
                       </span>
                     </td>
-                    <!-- #1196：就地編輯 service_url / Host header。subdomain 仍不可改
-                         （平台是先到先得的扁平命名空間，改名＝刪除+重建）。 -->
+                    <!-- #1196：就地編輯 service_url / Host header。 -->
                     <td>
                       <input t-if="state.editingRouteId === route.id"
                              type="text" class="o_woow_input o_woow_sa_routes_table__edit"
@@ -260,6 +266,23 @@
                 </t>
               </tbody>
             </table>
+            <!-- #1196：改名的後果在按下儲存前講清楚。平台只負責 Cloudflare 那半，
+                 使用者 origin 那半（依主機名分流的反向代理、allowed hosts）我們碰不到。 -->
+            <div t-if="pendingRename"
+                 class="o_woow_sa_detail__hint o_woow_sa_detail__hint--warn o_woow_sa_rename_notice">
+              <p>
+                Renaming <span class="o_woow_sa_detail__mono"><t t-esc="pendingRename.from"/></span>
+                to <span class="o_woow_sa_detail__mono"><t t-esc="pendingRename.to"/></span>.
+                The new address is usually live within a minute. The old address
+                stops working right away and is not redirected — update any links
+                or bookmarks that point to it.
+              </p>
+              <p t-if="state.editRouteHostHeader">
+                The Host header will carry the new name. If your service routes by
+                hostname (e.g. Nginx Proxy Manager) or only accepts known hosts, add
+                the new hostname there before saving.
+              </p>
+            </div>
             <div class="o_woow_sa_add_route">
               <div class="o_woow_sa_add_route__prefix">
                 <input type="text" class="o_woow_input o_woow_sa_add_route__prefix_input"
