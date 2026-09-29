@@ -5,7 +5,7 @@ FastAPI service that manages Helm releases in Kubernetes.
 """
 import json
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import requests
 from requests.exceptions import ConnectionError, RequestException, Timeout
@@ -16,6 +16,13 @@ _logger = logging.getLogger(__name__)
 DEFAULT_TIMEOUT = 30
 # Longer timeout for helm operations that may take time
 HELM_OPERATION_TIMEOUT = 120
+# #1152：init 專屬 connect/read inactivity 預算，不連帶放大其他操作或 connect 等待。
+# operator 宣告子步 envelope：discovery 90 + readiness (30×15 + 29×5) + update 120
+# = 805s；read 留 95s 餘裕。repo-lint init-odoo-budget-ladder 核對實際來源與接線。
+# 這不是 server／整體 HTTP 的硬 deadline：排隊、process 收尾與遠端 exec 取消不保證。
+# controller 仍同步、前端仍 30s abort；worker 占用與外層預算由 #1257／#1159 承接。
+INIT_ODOO_CONNECT_TIMEOUT = 120
+INIT_ODOO_READ_TIMEOUT = 900
 # #461：reset-admin-password 專屬預算。**刻意不共用** HELM_OPERATION_TIMEOUT——
 # 那個 120s 是「helm 操作大概要多久」的猜測，與 operator 端真正的上限沒有關係，
 # 而 reset 是唯一會撞到那個落差的路徑（#459 stg 實測：operator 最壞 ≈560s，
@@ -103,7 +110,7 @@ class PaaSOperatorClient:
         endpoint: str,
         data: Optional[Dict[str, Any]] = None,
         params: Optional[Dict[str, Any]] = None,
-        timeout: int = DEFAULT_TIMEOUT,
+        timeout: Union[int, Tuple[int, int]] = DEFAULT_TIMEOUT,
     ) -> Dict[str, Any]:
         """Make an HTTP request to the PaaS Operator API.
 
@@ -112,7 +119,8 @@ class PaaSOperatorClient:
             endpoint: API endpoint (e.g., '/api/releases')
             data: Request body data (for POST, PATCH)
             params: URL query string parameters
-            timeout: Request timeout in seconds
+            timeout: 秒數；scalar 同時套用 connect/read，tuple 為 (connect, read)。
+                requests 的 read timeout 是 inactivity 預算，不是整體 wall-clock 上限。
 
         Returns:
             Parsed JSON response
@@ -711,7 +719,7 @@ class PaaSOperatorClient:
         return self._request(
             'POST',
             f'/api/releases/{namespace}/{release_name}/init/odoo',
-            timeout=HELM_OPERATION_TIMEOUT,
+            timeout=(INIT_ODOO_CONNECT_TIMEOUT, INIT_ODOO_READ_TIMEOUT),
         )
 
     def get_odoo_module_states(

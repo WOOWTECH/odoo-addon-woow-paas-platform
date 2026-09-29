@@ -2,7 +2,32 @@
 import json
 from unittest.mock import MagicMock, patch
 
+import requests
+
 from odoo.tests.common import TransactionCase
+
+
+class SimulatedHTTPTransport:
+    """只模擬 HTTP boundary 的 connect/read inactivity，不耗真實牆鐘時間。"""
+
+    def __init__(self, connect_seconds=0, read_seconds=0, payload=None):
+        self.connect_seconds = connect_seconds
+        self.read_seconds = read_seconds
+        self.payload = payload if payload is not None else {'success': True}
+        self.calls = []
+
+    def __call__(self, **kwargs):
+        self.calls.append(kwargs)
+        timeout = kwargs['timeout']
+        connect, read = timeout if isinstance(timeout, tuple) else (timeout, timeout)
+        if self.connect_seconds > connect:
+            raise requests.exceptions.ConnectTimeout('simulated connect inactivity')
+        if self.read_seconds > read:
+            raise requests.exceptions.ReadTimeout('simulated read inactivity')
+        response = requests.Response()
+        response.status_code = 200
+        response._content = json.dumps(self.payload).encode()
+        return response
 
 
 class TestPaaSOperatorClient(TransactionCase):
@@ -31,6 +56,59 @@ class TestPaaSOperatorClient(TransactionCase):
             base_url=self.base_url,
             api_key=self.api_key,
         )
+
+    def test_init_odoo_accepts_slow_response_with_dedicated_read_budget(self):
+        """#1152：800s contract simulation，舊 HELM 120s wiring 必須逾時。"""
+        transport = SimulatedHTTPTransport(read_seconds=800)
+        with patch('requests.Session.request', side_effect=transport):
+            result = self.client.init_odoo('paas-ws-a1b2c3d4', 'test-odoo')
+        self.assertTrue(result['success'])
+        self.assertEqual(len(transport.calls), 1)
+        self.assertEqual(transport.calls[0]['timeout'], (120, 900))
+        self.assertEqual(transport.calls[0]['method'], 'POST')
+        self.assertEqual(
+            transport.calls[0]['url'],
+            self.base_url + '/api/releases/paas-ws-a1b2c3d4/test-odoo/init/odoo',
+        )
+
+    def test_init_odoo_connect_timeout_is_not_extended(self):
+        """read 可等 900s，但連線失敗仍沿用 120s，且不自動 retry。"""
+        transport = SimulatedHTTPTransport(connect_seconds=121)
+        # ConnectTimeout 同時繼承 ConnectionError；保留既有 except 順序與分類。
+        with patch('requests.Session.request', side_effect=transport):
+            with self.assertRaises(self.PaaSOperatorConnectionError) as caught:
+                self.client.init_odoo('paas-ws-a1b2c3d4', 'test-odoo')
+        self.assertEqual(caught.exception.detail, 'simulated connect inactivity')
+        self.assertEqual(len(transport.calls), 1)
+
+    def test_init_odoo_read_timeout_still_propagates_without_retry(self):
+        """超出 read inactivity 預算仍傳遞既有 timeout 例外，不代表遠端取消。"""
+        transport = SimulatedHTTPTransport(read_seconds=901)
+        with patch('requests.Session.request', side_effect=transport):
+            with self.assertRaises(self.PaaSOperatorTimeoutError) as caught:
+                self.client.init_odoo('paas-ws-a1b2c3d4', 'test-odoo')
+        self.assertEqual(caught.exception.detail, 'simulated read inactivity')
+        self.assertEqual(len(transport.calls), 1)
+
+    def test_init_odoo_not_ready_response_is_not_reclassified(self):
+        """operator 的 wait_ready 失敗 payload 原樣交回，不新增 retry 或分類。"""
+        payload = {'success': False, 'error': '[wait_ready] Odoo not ready'}
+        transport = SimulatedHTTPTransport(read_seconds=680, payload=payload)
+        with patch('requests.Session.request', side_effect=transport):
+            result = self.client.init_odoo('paas-ws-a1b2c3d4', 'test-odoo')
+        self.assertEqual(result, payload)
+        self.assertEqual(len(transport.calls), 1)
+
+    def test_other_operations_keep_scalar_timeouts(self):
+        """init 的 tuple 不得連帶改變 HELM／reset／一般讀取的 scalar 預算。"""
+        transport = SimulatedHTTPTransport()
+        with patch('requests.Session.request', side_effect=transport):
+            self.client.uninstall_release('paas-ws-a1b2c3d4', 'test-odoo')
+            self.client.init_n8n('paas-ws-a1b2c3d4', 'test-n8n', 'test@example.invalid', 'test-only')
+            self.client.get_release('paas-ws-a1b2c3d4', 'test-odoo')
+            self.client.health_check()
+            self.client.reset_release_config('paas-ws-a1b2c3d4', 'test-odoo')
+        self.assertEqual([call['timeout'] for call in transport.calls], [120, 120, 30, 10, 75])
 
     def test_client_initialization(self):
         """Test client initializes with correct headers."""
