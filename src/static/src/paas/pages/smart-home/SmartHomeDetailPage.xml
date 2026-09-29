@@ -271,8 +271,11 @@
                      內容側同樣掛 hasAccessSeats：直接把 URL 打成 .../access 的人
                      不該因此拿到一個方案沒買的頁面（頁籤不見了、內容還在＝gate
                      只做了一半）。 -->
+                <!-- t-key：開通／polling 在頁籤掛著時換掉 home ⇒ route 集合或
+                     state 變了就重建頁籤，理由見 accessTabKey。 -->
                 <SmartHomeAccessTab
                     t-if="currentTab === 'access' and hasAccessSeats"
+                    t-key="accessTabKey"
                     home="home"
                     workspaceId="props.workspaceId"/>
                 </div>

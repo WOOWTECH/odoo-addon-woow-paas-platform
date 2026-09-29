@@ -39,7 +39,13 @@ const PROTECT_CONFIRM = {
  *
  * 種子只在 setup 取一次（不掛 onWillUpdateProps）：這顆頁籤是 `t-if` 掛載的，
  * 切走再切回來自然會重新 seed；而父層在本元件寫入時**不會**重載（寫入回應本身
- * 就夠用），所以「props 比本地新」的窗口不存在。CS 的 AccessTab 同一個作法。
+ * 就夠用）。CS 的 AccessTab 同一個作法。
+ * ⚠ 父層**會**在本頁籤掛著時換掉 `home`：header 的 Provision／Retry setup 與
+ * provisioning 期間的背景 polling（不再切整頁 loading）。那兩條會帶來新的
+ * route 集合或新的 state，由父層的 `t-key="accessTabKey"` 把本元件整顆重建
+ * （＝重新 seed），而不是在這裡掛 onWillUpdateProps 去合併——合併就得決定
+ * 「本地剛寫的」與「props 帶來的」誰贏，重建沒有這個問題。見
+ * `SmartHomeDetailPage.accessTabKey`。
  *
  * Props:
  *   - home (Object)：SH detail payload（`to_dict(include_details=True)`，帶 routes）

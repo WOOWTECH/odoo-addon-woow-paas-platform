@@ -1,4 +1,5 @@
 import logging
+import re
 import uuid
 
 from odoo import _, api, fields, models
@@ -167,6 +168,13 @@ class SmartHomeOrderGateError(AccessError):
 #     **自己**那條 tunnel（且 `subdomain` 有 DB UNIQUE，搶不走別人的）；
 #     `reference_id` 是它的 hash 種子，同理。兩者屬**非跨租戶**的次級問題，
 #     未在本單實測，依工單紀律不順手改——已回報 leader4 另評。
+#     ⚠ 上面那句「只能重指自己那條 tunnel」的前提是「stored `subdomain` 只進
+#     `configure_tunnel`（只換 ingress、不碰 DNS）」。開通重試
+#     （`_converge_existing_tunnel`）把它送進 `sync_tunnel_routes`，而 operator 的
+#     `reconcile_tunnel_dns` 會替清單上**每一個**名字在平台共用 zone 上建 CNAME
+#     ⇒ 前提在那條路上不成立。那條路因此不信任 stored 值，送出前先過
+#     `_platform_subdomain_error`（平台命名形狀＋本 workspace 的 ws_hash 段），
+#     見該函式。
 _IDENTITY_ANCHOR_FIELDS = (
     'tunnel_id',      # WHICH Cloudflare tunnel this row drives (#524)
     'tunnel_name',    # its CF-side name, mirrored back from create_tunnel
@@ -263,6 +271,45 @@ def _reject_identity_anchor_writes(env, vals):
             raise UserError(
                 _("Field '%s' is immutable after creation.") % field
             )
+
+
+def _platform_subdomain_error(subdomain, ws_hash):
+    """stored `subdomain` 是不是**平台自己產生的那種**名字；不是就回錯誤字串，是回 None。
+
+    為什麼需要（開通重試的 HIGH）：`subdomain` 對租戶可寫——ACL
+    `access_smart_home_user` 給 `base.group_user` write=1、
+    `smart_home_rule_owner_admin_manage` 讓 owner/admin 寫自己那一列，`write()`
+    只擋 `_IDENTITY_ANCHOR_FIELDS`，欄位本身也沒有任何格式 constraint。修前 stored
+    值只會進 `configure_tunnel`（只換 ingress），所以那是「只能重指自己」的次級
+    問題；`_converge_existing_tunnel` 把它送進 `sync_tunnel_routes` 之後，operator
+    會替它在**平台共用 zone** 上建 proxied CNAME（`reconcile_tunnel_dns` 對清單上
+    缺 record 的名字一律 `create_dns_record_for_tunnel`；#824 只擋「重指到仍活著的
+    tunnel」，沒有 record 的名字直接建）。修前實際可達：owner 寫
+    `{'subdomain': 'login', 'state': 'error'}` 再按 Retry setup ⇒ `login.<zone>`
+    （或 `*`、多 label 的名字）指到一條由租戶自己跑 cloudflared 的 tunnel，拿到
+    任意未註冊的平台 hostname 與上層網域的 cookie。
+
+    判準刻意是「平台命名形狀」而不只是「合法的單一 DNS label」：單一 label 仍然
+    擋不住 `login`／`admin`／`paas-cs-<別人的 ws_hash>-…`。要求
+    `paas-sm-<本 workspace 的 ws_hash>-<8 hex>`（`naming.make_smarthome_subdomain`
+    產出的形狀）之後，租戶能送出的名字只剩**自己 workspace 命名空間**裡的 SH
+    名字——`ws_hash` 是伺服器產生、DB `UNIQUE`（#677），別人的命名空間與 CS／SA
+    的 `paas-cs-`／`paas-sa-` 前綴都進不來。
+
+    * 不拿 `_generate_subdomain()` 重算來逐字比對：`name` 可改，重算值會跟著變，
+      而既有網址不可變（docstring 見 `_converge_existing_tunnel` 的 subdomain 段）。
+    * 公開 subdomain 依 DP2 不帶 env token；`stg-` 段仍放行，只為不在形狀上
+      誤殺早期的 stg 列——它依然被釘在同一個 ws_hash 命名空間裡，放寬不跨租戶。
+    * 既有列（#677 以前產生的）的 ws_hash 段 = 回填的 `md5(slug)[:8]`，與
+      stored `ws_hash` 逐字相同（18.0.1.0.131 migration Step 3），所以合法舊列
+      過得去；過不去的列一律 fail-closed（拒絕重試、請刪除重建），不猜、不重算。
+    """
+    if not isinstance(ws_hash, str) or not re.fullmatch(r'[0-9a-f]{8}', ws_hash):
+        return 'workspace has no valid ws_hash'
+    pattern = r'paas-(?:stg-)?sm-%s-[0-9a-f]{8}' % re.escape(ws_hash)
+    if not isinstance(subdomain, str) or not re.fullmatch(pattern, subdomain):
+        return 'stored subdomain %r is not a platform-issued name' % (subdomain,)
+    return None
 
 
 #: 已有 tunnel 時仍允許「重試開通」的 state（見 `action_provision` 的 guard 段）。
@@ -728,6 +775,13 @@ class SmartHome(models.Model):
         （只寫 `state`／`error_message`／`deployed_at`），所以刻意**不**開
         `_internal_identity` 閘——逃生口的表面積只留在真正存 CF id 的那幾次寫入。
 
+        ⛔ stored `subdomain` **不可信**：它對租戶可寫，而本方法會把它變成平台共用
+        zone 上的 DNS record（`create_tunnel` 的首次開通用的是伺服器現算的名字，
+        沒有這個問題）⇒ 送出前一律過 `_platform_subdomain_error`。`state` 同樣對
+        租戶可寫（可以自己把一台 `active` 改成 `error` 來走到這裡）；名字驗過之後，
+        這樣做最多只是把**自己**那條已驗證的 hostname 再推一次（宣告式，對好的
+        ingress 是 no-op），停權則另有下面的訂閱檢查守著，所以不另外鎖 `state`。
+
         #531：`tunnel_name` 是歸屬主張（operator 拿它比對 CF 上的實際名字，對不上就
         拒）。`comment` 是 DNS record 上只寫不讀的 traceability stamp，這裡剛好給同一
         個值（SH 的 tunnel 名本身帶 env token，正是反查需要的那個字串），但兩個參數
@@ -746,6 +800,24 @@ class SmartHome(models.Model):
                   "automatically. Delete this Smart Home (which tears the "
                   "tunnel down) and create it again.",
                   tunnel=self.tunnel_id)
+            )
+
+        naming_error = _platform_subdomain_error(
+            self.subdomain, self._naming_ws_hash())
+        if naming_error:
+            # stored `subdomain` 對租戶可寫，而這條路會把它變成平台共用 zone 上的
+            # DNS record ⇒ 送出前先驗是平台自己發的名字（理由見
+            # `_platform_subdomain_error`）。fail-closed：不猜、不重算（重算＝替
+            # 租戶換網址），也不寫任何欄位——被拒的呼叫不得把記錄推離原本的 state。
+            _logger.warning(
+                "[SH] provision retry refused sh=%s tunnel=%s: %s",
+                self.id, self.tunnel_id, naming_error)
+            raise UserError(
+                _("This Smart Home's stored hostname (%(subdomain)s) is not one "
+                  "the platform issued, so its setup cannot be retried "
+                  "automatically. Delete this Smart Home (which tears the "
+                  "tunnel down) and create it again.",
+                  subdomain=self.subdomain)
             )
 
         if not self._is_subscription_active():

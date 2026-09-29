@@ -14,6 +14,10 @@ import { breadcrumbService } from "../../services/breadcrumb_service";
 import { router } from "../../core/router";
 import { formatPoints } from "../../utils/billing_helpers";
 
+// `provisionError`（重試**請求本身**失敗的訊息）仍有意義的 state：pending／error
+// 時重試鈕還在，provisioning 時結果還沒出來。離開這三格＝那句訊息已經過期。
+const RETRY_CONTEXT_STATES = ["pending", "error", "provisioning"];
+
 /**
  * SmartHomeDetailPage Component
  *
@@ -109,6 +113,15 @@ export class SmartHomeDetailPage extends Component {
 
         if (result.success) {
             this.state.home = result.data;
+            // 重試請求本身失敗（最常見是 client timeout）之後，後端可能仍把開通做完
+            // ——polling 會把 state 帶到 `active`，Retry 鈕隨 canRetrySetup 消失，但
+            // `provisionError` 若不清，就會有一句「逾時／失敗」永遠掛在一台 Active
+            // 的 Smart Home 旁邊、而且沒有任何方式關掉。判準是「這次載入看到的
+            // state 已經離開重試相關的三格」：pending／error（重試鈕還在，那句話仍
+            // 是使用者需要的上下文）與 provisioning（結果還沒出來）都保留。
+            if (!RETRY_CONTEXT_STATES.includes(result.data?.state)) {
+                this.state.provisionError = null;
+            }
             this._publishBreadcrumb();
             this.startPollingIfNeeded();
         } else if (!silent) {
@@ -175,6 +188,27 @@ export class SmartHomeDetailPage extends Component {
      * fail-closed（`?? 0`）：欄位缺席（舊快取、漏帶 subscription 的 payload）
      * 一律視同 0，寧可不顯示，也不要長出一個後端沒有對應設定的頁籤。
      */
+    /**
+     * Access 頁籤的 remount key。
+     *
+     * `SmartHomeAccessTab` 只在 setup 時從 `home.routes` seed 一次（它自己的寫入
+     * 回應才是權威，見該元件 docstring），而本頁有兩條路會在頁籤**仍掛著**時換掉
+     * `state.home`：header 的 Provision／Retry setup（`retrySetup`，按鈕在頁籤
+     * 外、切到 Access 時照樣按得到）與 provisioning／deleting 期間的背景
+     * polling（`loadSmartHome({ silent: true })` 不再切整頁 loading，所以也不再
+     * 順便卸載頁籤）。不 remount 的話，一台 pending 的 SH 開通成功後，Access
+     * 分頁仍停在「還沒有對外網址」直到使用者切走再切回來。
+     *
+     * 刻意只看「route 集合」與生命週期 `state`，不看 route 內容：頁籤自己的
+     * 寫入（開關保護、改 policy）只改內容、不改 id 集合與 state，所以不會因為
+     * 自己的寫入被重建、丟掉展開狀態；而開通／收斂一定伴隨 state 轉換或多出
+     * primary route。
+     */
+    get accessTabKey() {
+        const ids = (this.home?.routes || []).map((r) => r.id).join(",");
+        return `${this.home?.state || ""}|${ids}`;
+    }
+
     get hasAccessSeats() {
         return (this.home?.subscription?.ac_max_access_seats ?? 0) > 0;
     }
@@ -218,7 +252,9 @@ export class SmartHomeDetailPage extends Component {
      *     不是時長，標籤改成與 SA 頁相同的「Connector Opened」。
      *
      * 這些值由 detail `get` 疊上 operator 即時值（`_live_tunnel_status`，只讀）；
-     * operator 拿不到時是 DB 裡上一次 Refresh 寫入的值。
+     * operator 拿不到時是 DB 裡上一次 Refresh 寫入的值。`retrySetup` 直接收的
+     * provision 回應也帶同一份疊加（`_provision_smarthome`），否則重試成功的
+     * 那一刻面板會倒退回舊值。
      */
     get tunnelInfo() {
         if (!this.home) return [];

@@ -14,7 +14,10 @@ Provision／Retry 鈕 ⇒ 租戶卡在 ``error`` 之後沒有任何自助出路�
   operator——``suspended`` 若被放行，重試會把 503 的 ingress 推回 localhost；
   同一個理由，訂閱不在 ``in_progress`` 時 ``error`` 也不得收斂；
 * 收斂失敗 ⇒ 維持 ``error`` ＋ ``error_message``，tunnel 錨點原封不動（下一次
-  重試還走得到這一格）。
+  重試還走得到這一格）；
+* stored ``subdomain`` 對租戶可寫，而收斂會把它變成平台共用 zone 上的 DNS
+  record ⇒ 不是平台命名形狀（``paas-sm-<本 workspace ws_hash>-<8 hex>``）的
+  一律在打 operator、寫任何欄位之前拒絕（``_platform_subdomain_error``）。
 """
 from unittest.mock import MagicMock, patch
 
@@ -53,20 +56,25 @@ class _RetryCase(TransactionCase):
         self.workspace = self.env['woow_paas_platform.workspace'].create({
             'name': 'WS SH retry'})
 
+    def _platform_subdomain(self, sm_hash='0a1b2c3d'):
+        """平台發的形狀（`naming.make_smarthome_subdomain`）：收斂路徑只收這種名字。"""
+        return 'paas-sm-%s-%s' % (self.workspace.ws_hash, sm_hash)
+
     def _home(self, **vals):
         """一台已經「開通到一半」的 SH：tunnel 與 subdomain 都在，state 由呼叫端給。
 
         tunnel 欄位是身分錨點，fixture 走 `sh_model`（連身分閘一起開）才擺得進去，
         否則 `_strip_identity_anchors` 會靜默把它們寫成空，測試跑在錯的前提上。
         """
+        subdomain = self._platform_subdomain()
         base = {
             'name': 'SH retry',
             'workspace_id': self.workspace.id,
             'tunnel_id': 'tun-retry',
             'tunnel_name': 'paas-prod-sm-retry',
             'tunnel_token': 'tok-retry',
-            'subdomain': 'paas-sm-retry',
-            'tunnel_route': 'https://paas-sm-retry.woowtech.io',
+            'subdomain': subdomain,
+            'tunnel_route': 'https://%s.woowtech.io' % subdomain,
             'state': 'error',
             'error_message': 'Tunnel created but its DNS record could not be created',
         }
@@ -286,3 +294,72 @@ class TestShProvisionRetryFailureKeepsError(_RetryCase):
         self.assertEqual(home.state, 'error')
         self.assertIn('boom', home.error_message)
         self.assertEqual(home.tunnel_id, 'tun-retry')
+
+
+@tagged('post_install', '-at_install')
+class TestShProvisionRetryRefusesForeignSubdomain(_RetryCase):
+    """開通重試的 HIGH：stored `subdomain` 對租戶可寫（ACL write=1 ＋ owner/admin
+    manage rule；`write()` 只擋 tunnel_id／tunnel_name／tunnel_token），收斂卻把它
+    送進 `sync_tunnel_routes` ⇒ operator 的 `reconcile_tunnel_dns` 替它在平台共用
+    zone 上建 CNAME。修前：owner 寫 `{'subdomain': 'login', 'state': 'error'}` 再按
+    Retry setup，就拿到 `login.<zone>` 指向自己跑的 cloudflared。
+    """
+
+    def _assert_refused_before_anything(self, subdomain):
+        # 每格各一條 tunnel：只是避免 subTest 之間看起來共用同一個錨點（DB 只對
+        # subdomain 有 UNIQUE，對 tunnel_id 沒有）。
+        home = self._home(subdomain=subdomain, tunnel_id='tun-refuse-%s' % subdomain)
+        client = _client()
+        with self.assertRaises(UserError) as cm:
+            self._provision(home, client)
+        self.assertIn('not one the platform issued', str(cm.exception))
+        client.sync_tunnel_routes.assert_not_called()
+        client.create_tunnel.assert_not_called()
+        self.assertEqual(home.state, 'error', '被拒的呼叫不得把記錄推離原本的 state')
+        self.assertEqual(home.subdomain, subdomain, '不猜、不重算：網址不替租戶換')
+        return home
+
+    def test_arbitrary_platform_hostnames_are_refused(self):
+        for subdomain in ('login', 'admin', '*', 'www.evil', 'a.b.c',
+                          'paas-sm-retry', 'PAAS-SM-%s-0a1b2c3d' % self.workspace.ws_hash):
+            with self.subTest(subdomain=subdomain):
+                self._assert_refused_before_anything(subdomain)
+
+    def test_other_workspace_namespace_is_refused(self):
+        """單一 DNS label 不夠：`paas-sm-<別人的 ws_hash>-…` 是合法 label，但不是你的。"""
+        other = self.env['woow_paas_platform.workspace'].create(
+            {'name': 'WS SH retry other'})
+        self.assertNotEqual(other.ws_hash, self.workspace.ws_hash)
+        self._assert_refused_before_anything(
+            'paas-sm-%s-0a1b2c3d' % other.ws_hash)
+
+    def test_other_resource_kind_prefix_is_refused(self):
+        """同一個 ws_hash 段、但是 CS／SA 的前綴——那是別種資源的命名空間。"""
+        self._assert_refused_before_anything(
+            'paas-cs-%s-0a1b2c3d' % self.workspace.ws_hash)
+
+    def test_tenant_rewrite_then_retry_is_refused(self):
+        """真實攻擊形狀：先有一台合法的 SH，事後被改寫成任意名字再重試。"""
+        home = self._home()
+        home.write({'subdomain': 'login', 'state': 'error'})
+        client = _client()
+        with self.assertRaises(UserError):
+            self._provision(home, client)
+        client.sync_tunnel_routes.assert_not_called()
+
+    def test_platform_issued_names_still_converge(self):
+        """反過度修復錨：`_generate_subdomain()` 的產出與早期帶 `stg-` 的形狀都要照舊收斂。"""
+        generated = sh_model(self.env).create({
+            'name': 'SH gen', 'workspace_id': self.workspace.id})
+        for subdomain in (generated._generate_subdomain(),
+                          'paas-stg-sm-%s-0f0f0f0f' % self.workspace.ws_hash):
+            with self.subTest(subdomain=subdomain):
+                home = self._home(subdomain=subdomain,
+                                  tunnel_id='tun-%s' % subdomain[-8:])
+                client = _client()
+                self._provision(home, client)
+                client.sync_tunnel_routes.assert_called_once()
+                self.assertEqual(
+                    client.sync_tunnel_routes.call_args.kwargs['routes'][0]['subdomain'],
+                    subdomain)
+                self.assertEqual(home.state, 'active')

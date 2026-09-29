@@ -14,7 +14,9 @@ machine API 的 status 端點（``/api/smarthome/homes/<id>/status`` 與
 * detail ``get`` 的 tunnel 欄位是 operator 即時值，所有成員（含 role=user）都拿得到；
 * 這條路徑**不寫 DB**；operator 拿不到時沿用 DB 值，不會讓整頁失敗；
 * HA status 端點不再呼叫 ``action_refresh_status``、回即時值、key 集合與
-  ``to_dict()`` 相同（不外流 ``tunnel_status_live``）。
+  ``to_dict()`` 相同（不外流 ``tunnel_status_live``）；
+* status 改只讀之後 stored 值不再被 HA 輪詢自動刷新 ⇒ HA 的 list／detail 端點也
+  疊即時值（list 有熔斷：operator 第一次拿不到就停，最多吃一次逾時）。
 """
 import json
 import uuid
@@ -132,7 +134,7 @@ class TestShDetailLiveTunnelStatus(HttpCase):
     def setUp(self):
         super().setUp()
         suffix = uuid.uuid4().hex[:6]
-        owner = _new_user(self.env, f'sh_live_owner_{suffix}')
+        self.owner = owner = _new_user(self.env, f'sh_live_owner_{suffix}')
         self.member = _new_user(self.env, f'sh_live_user_{suffix}')
         Workspace = self.env['woow_paas_platform.workspace'].sudo()
         Access = self.env['woow_paas_platform.workspace_access'].sudo()
@@ -145,14 +147,40 @@ class TestShDetailLiveTunnelStatus(HttpCase):
             state='active', tunnel_id='tun-sh-live',
             subdomain=f'paas-sm-live{suffix}-01020304'))
 
-    def _get(self):
+    def _get(self, home=None, action='get'):
+        home = home or self.home
         resp = self.url_open(
-            '/api/workspaces/%s/smarthomes/%s' % (self.workspace.id, self.home.id),
+            '/api/workspaces/%s/smarthomes/%s' % (self.workspace.id, home.id),
             data=json.dumps({'jsonrpc': '2.0', 'method': 'call',
-                             'params': {'action': 'get'}}),
+                             'params': {'action': action}}),
             headers={'Content-Type': 'application/json'})
         self._last_body = resp.json()
         return self._last_body.get('result') or {}
+
+    def test_provision_response_carries_live_overlay(self):
+        """Retry setup 成功後前端直接收 provision 的回應（`state.home = result.data`），
+        所以它也要疊即時值——否則 Tunnel Information 會從即時值倒退回 DB 的舊值，
+        而收斂（`_converge_existing_tunnel`）本身從不寫 tunnel_status／connector_*。"""
+        home = sh_model(self.env).sudo().create(dict(
+            _STALE, name='Live retry', workspace_id=self.workspace.id,
+            state='error', tunnel_id='tun-sh-live-retry',
+            tunnel_name='paas-prod-sm-live-retry',
+            subdomain='paas-sm-%s-0a1b2c3d' % self.workspace.ws_hash))
+        self.authenticate(self.owner.login, self.owner.login)
+        client = _client(return_value=_DOWN)
+        with patch(_SH_CLIENT_FACTORY, return_value=client):
+            res = self._get(home, action='provision')
+        self.assertTrue(res.get('success'), self._last_body)
+        client.sync_tunnel_routes.assert_called_once()
+        data = res['data']
+        self.assertEqual(data['state'], 'active')
+        self.assertEqual((data['tunnel_status'], data['tunnel_uptime']),
+                         ('disconnected', ''))
+        self.assertTrue(data['tunnel_status_live'])
+        self.assertIn('routes', data, 'provision 仍回 detail 形狀（#768）')
+        home.invalidate_recordset()
+        self.assertEqual(home.sudo().tunnel_status, 'connected',
+                         'the overlay is read-only')
 
     def test_member_sees_live_disconnected_over_stale_db(self):
         self.authenticate(self.member.login, self.member.login)
@@ -321,3 +349,87 @@ class TestHaApiStatusLive(HttpCase):
             f'/api/smarthome/homes/{self.home.id}/status',
             headers={'Authorization': f'Bearer {token.access_token}'})
         self.assertEqual(resp.status_code, 403)
+
+    # ---- list／detail 端點：status 改只讀後，stored 值不再被 HA 輪詢刷新 ----
+
+    def test_list_homes_overlays_live_status_without_writing(self):
+        with self._no_refresh(_SH_MODEL), \
+                patch(_SH_CLIENT_FACTORY, return_value=_client(return_value=_DOWN)):
+            resp = self._get(
+                f'/api/smarthome/workspaces/{self.workspace.id}/homes',
+                'smarthome:read')
+        self.assertEqual(resp.status_code, 200, resp.text)
+        homes = {h['id']: h for h in resp.json()['homes']}
+        self.assertEqual(homes[self.home.id]['tunnel_status'], 'disconnected',
+                         'stale stored "connected" must not leak to the HA list')
+        self.assertEqual(set(homes[self.home.id]),
+                         {'id', 'name', 'state', 'subdomain', 'tunnel_status'})
+        self.home.invalidate_recordset()
+        self.assertEqual(self.home.sudo().tunnel_status, 'connected',
+                         'list endpoint must not write the DB')
+
+    def test_list_homes_operator_failure_trips_breaker_and_falls_back(self):
+        """operator 掛掉時：第一台拿不到就停，剩下的不再各吃一次逾時；全部退回 DB 值。"""
+        second = sh_model(self.env).sudo().create(dict(
+            _STALE, name='HA Live Home 2', workspace_id=self.workspace.id,
+            state='active', tunnel_id='tun-ha-live-2',
+            subdomain=f'paas-sm-halive2{uuid.uuid4().hex[:6]}-01020304'))
+        client = _client(side_effect=PaaSOperatorAPIError('boom', status_code=502))
+        with patch(_SH_CLIENT_FACTORY, return_value=client):
+            resp = self._get(
+                f'/api/smarthome/workspaces/{self.workspace.id}/homes',
+                'smarthome:read')
+        self.assertEqual(resp.status_code, 200, resp.text)
+        self.assertEqual(client.get_tunnel_status.call_count, 1)
+        statuses = {h['id']: h['tunnel_status'] for h in resp.json()['homes']}
+        self.assertEqual(statuses[self.home.id], 'connected')
+        self.assertEqual(statuses[second.id], 'connected')
+
+    def test_list_homes_skips_operator_for_unprovisioned_home(self):
+        """沒有 tunnel 的列不打 operator、也不觸發熔斷（否則會擋掉後面有 tunnel 的列）。"""
+        pending = sh_model(self.env).sudo().create({
+            'name': 'HA Pending', 'workspace_id': self.workspace.id})
+        client = _client(return_value=_DOWN)
+        with patch(_SH_CLIENT_FACTORY, return_value=client):
+            resp = self._get(
+                f'/api/smarthome/workspaces/{self.workspace.id}/homes',
+                'smarthome:read')
+        self.assertEqual(resp.status_code, 200, resp.text)
+        self.assertEqual(client.get_tunnel_status.call_count, 1)
+        statuses = {h['id']: h['tunnel_status'] for h in resp.json()['homes']}
+        self.assertEqual(statuses[self.home.id], 'disconnected')
+        self.assertEqual(statuses[pending.id], 'disconnected')
+
+    def test_get_home_detail_overlays_live_status(self):
+        with patch(_SH_CLIENT_FACTORY, return_value=_client(return_value=_DOWN)):
+            resp = self._get(
+                f'/api/smarthome/homes/{self.home.id}', 'smarthome:read')
+        self.assertEqual(resp.status_code, 200, resp.text)
+        home = resp.json()['home']
+        self.assertEqual((home['tunnel_status'], home['tunnel_uptime']),
+                         ('disconnected', ''))
+        self.assertEqual(set(home), set(self.home.sudo().to_dict()))
+
+    def test_sa_list_overlays_live_status(self):
+        with self._no_refresh(_SA_MODEL), \
+                patch(_SA_CLIENT_FACTORY, return_value=_client(return_value=_DOWN)):
+            resp = self._get(
+                f'/api/security-access/workspaces/{self.workspace.id}/accesses',
+                'security-access:read')
+        self.assertEqual(resp.status_code, 200, resp.text)
+        accesses = {a['id']: a for a in resp.json()['accesses']}
+        self.assertEqual(accesses[self.sa.id]['tunnel_status'], 'disconnected')
+        self.sa.invalidate_recordset()
+        self.assertEqual(self.sa.sudo().tunnel_status, 'connected',
+                         'list endpoint must not write the DB')
+
+    def test_sa_detail_overlays_live_status(self):
+        with patch(_SA_CLIENT_FACTORY, return_value=_client(return_value=_DOWN)):
+            resp = self._get(
+                f'/api/security-access/accesses/{self.sa.id}',
+                'security-access:read')
+        self.assertEqual(resp.status_code, 200, resp.text)
+        access = resp.json()['access']
+        self.assertEqual((access['tunnel_status'], access['edge_connection_count']),
+                         ('disconnected', 0))
+        self.assertNotIn('tunnel_status_live', access)
