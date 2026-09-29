@@ -75,7 +75,11 @@ class SecurityAccessController(Controller):
             return {"success": False, "error": _("Security access not found")}
 
         if action == "get":
-            return {"success": True, "data": sa.to_dict()}
+            # 概覽頁的 tunnel 欄位改用即時值（只讀，見 _live_tunnel_status）；
+            # 拿不到時沿用 DB 裡上一次寫入的值。
+            data = sa.to_dict()
+            data.update(sa._live_tunnel_status())
+            return {"success": True, "data": data}
 
         # mutations below require owner/admin. refresh_status is grouped here
         # (not with read 'get'): when tunnel_id is set, action_refresh_status
