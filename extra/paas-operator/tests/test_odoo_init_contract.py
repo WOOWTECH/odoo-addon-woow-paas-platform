@@ -1,11 +1,13 @@
 """#1129：從公開 initialize 入口驗證 woow-odoo 的 K8s exec 契約。"""
 
 import json
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
+from fastapi.testclient import TestClient
 
 from src.config import settings
+from src.main import app
 from src.services.helm import KubectlException, KubernetesService
 from src.services.odoo_init import OdooInitError, OdooInitService
 
@@ -205,3 +207,94 @@ def test_initialize_without_any_pod_does_not_exec():
 
     assert error.value.step == "find_pod"
     k8s.exec_in_pod.assert_not_called()
+
+
+# ---- #1263：init 回應的 error_step／error_kind（#1257 Q11）------------------------
+
+def _post_init_odoo(k8s):
+    """打真的 /init/odoo；只換掉 KubernetesService 邊界與 readiness 的 sleep。"""
+    with patch("src.main.settings.api_key", "test-1263"), \
+            patch("src.api.init.odoo_init_service.k8s", k8s), \
+            patch("src.services.odoo_init.time.sleep"):
+        return TestClient(app, headers={"X-API-Key": "test-1263"}).post(
+            "/api/releases/dev-sandbox-1129/tenant/init/odoo",
+        )
+
+
+def _ready_k8s(update_result):
+    """server Pod 找得到、readiness 通過；update_module_list 的結果由呼叫端決定。"""
+    k8s = MagicMock()
+    k8s.get_pod_name.return_value = "web-0"
+    ready = MagicMock(stdout=json.dumps({"ready": True, "version": "18.0"}))
+    if isinstance(update_result, Exception):
+        k8s.exec_in_pod.side_effect = [ready, update_result]
+    else:
+        k8s.exec_in_pod.side_effect = [ready, MagicMock(stdout=update_result)]
+    return k8s
+
+
+def _not_found_k8s():
+    k8s = MagicMock()
+    k8s.get_pod_name.side_effect = KubectlException("No pods", "get pods", "")
+    return k8s
+
+
+def _never_ready_k8s():
+    k8s = MagicMock()
+    k8s.get_pod_name.return_value = "web-0"
+    k8s.exec_in_pod.return_value = MagicMock(stdout=json.dumps({"ready": False}))
+    return k8s
+
+
+@pytest.mark.parametrize("k8s_factory, step, kind", [
+    # readiness 探測本身唯讀 ⇒ 可以確定還沒動到租戶 DB。
+    (_not_found_k8s, "find_pod", "not_executed"),
+    (_never_ready_k8s, "wait_ready", "not_executed"),
+    # 腳本自己回報失敗 ⇒ 確定失敗。
+    (lambda: _ready_k8s(json.dumps({"success": False, "error": "boom"})),
+     "update_module_list", "failed"),
+    # 以下都不能證明容器內的 ORM 程序沒跑或已停 ⇒ 結果未知。
+    (lambda: _ready_k8s(KubectlException("timed out", "exec", "", timed_out=True)),
+     "update_module_list", "unknown"),
+    (lambda: _ready_k8s(KubectlException("exec failed", "exec", "")),
+     "update_module_list", "unknown"),
+    (lambda: _ready_k8s(""), "update_module_list", "unknown"),
+    (lambda: _ready_k8s("not json"), "update_module_list", "unknown"),
+], ids=["find_pod", "wait_ready", "script-failed", "exec-timeout", "exec-failed",
+        "empty-output", "invalid-json"])
+def test_init_odoo_failure_carries_error_step_and_kind(k8s_factory, step, kind):
+    response = _post_init_odoo(k8s_factory())
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is False
+    assert body["error_step"] == step
+    assert body["error_kind"] == kind
+    # 舊平台 parse 的字串前綴維持不變。
+    assert body["error"].startswith(f"[{step}] ")
+
+
+def test_init_odoo_success_has_no_error_classification():
+    response = _post_init_odoo(_ready_k8s(json.dumps({"success": True, "added": 1})))
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is True
+    assert body["error_step"] is None
+    assert body["error_kind"] is None
+
+
+def test_init_odoo_unexpected_exception_is_500_with_structured_unknown():
+    k8s = MagicMock()
+    k8s.get_pod_name.side_effect = RuntimeError("kaboom")
+
+    response = _post_init_odoo(k8s)
+
+    assert response.status_code == 500
+    detail = response.json()["detail"]
+    assert isinstance(detail, dict)
+    assert detail["error_kind"] == "unknown"
+    assert detail["error_step"] is None
+    assert "kaboom" in detail["message"]
+    # error_type 是例外類別名稱，與 error_kind 是兩個不同的維度。
+    assert response.json()["error_type"] == "HTTPException"

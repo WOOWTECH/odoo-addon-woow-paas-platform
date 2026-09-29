@@ -628,6 +628,13 @@ class N8nInitRequest(BaseModel):
     )
 
 
+#: init 失敗分類（#1263／#1257 Q11），依「遠端副作用是否可能已發生」：
+#: not_executed＝只跑過唯讀探測；failed＝收到明確的錯誤回應；partial＝n8n 已拿到
+#: api_key 但 Secret 沒寫成；unknown＝timeout／exec 失敗／輸出不可解析／非預期例外。
+#: ⚠ 與 ``ErrorResponse.error_type``（例外類別名稱）是不同維度，不要混用。
+InitErrorKind = Literal["not_executed", "failed", "partial", "unknown"]
+
+
 class N8nInitResponse(BaseModel):
     """Response from n8n initialization."""
 
@@ -638,6 +645,9 @@ class N8nInitResponse(BaseModel):
     pod_restarted: bool = Field(default=False, description="Whether the deployment was restarted to pick up the new API key")
     message: Optional[str] = None
     error: Optional[str] = None
+    # #1263：成功時兩者皆為 None；舊平台忽略未知欄位。
+    error_step: Optional[str] = None
+    error_kind: Optional[InitErrorKind] = None
 
 
 class OdooInitResponse(BaseModel):
@@ -648,6 +658,9 @@ class OdooInitResponse(BaseModel):
     modules_updated: int = Field(default=0, description="Number of existing modules updated")
     message: Optional[str] = None
     error: Optional[str] = None
+    # #1263：成功時兩者皆為 None；舊平台忽略未知欄位。
+    error_step: Optional[str] = None
+    error_kind: Optional[InitErrorKind] = None
 
 
 # --- Odoo Module Management ---

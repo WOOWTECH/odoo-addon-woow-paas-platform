@@ -43,10 +43,15 @@ UPDATE_MODULE_LIST_SCRIPT = (
 
 
 class OdooInitError(Exception):
-    """Raised when Odoo initialization fails."""
+    """Raised when Odoo initialization fails.
 
-    def __init__(self, message: str, step: str = ""):
+    ``kind``（#1263）：失敗分類，值域見 ``schemas.InitErrorKind``。預設 ``unknown``
+    ——新增的 raise 點沒想清楚副作用時，寧可讓平台保守處理，也不要誤報成可重送。
+    """
+
+    def __init__(self, message: str, step: str = "", kind: str = "unknown"):
         self.step = step
+        self.kind = kind
         super().__init__(message)
 
 
@@ -148,6 +153,7 @@ class OdooInitService:
                     raise OdooInitError(
                         f"Cannot verify fallback Odoo pod {pod_name}: {exc}",
                         step="find_pod",
+                        kind="not_executed",
                     ) from exc
             logger.debug("Found pod '%s' with selector '%s'", pod_name, selector)
             return pod_name
@@ -155,6 +161,7 @@ class OdooInitService:
         raise OdooInitError(
             f"Cannot find Odoo pod for release {release_name} in {namespace}",
             step="find_pod",
+            kind="not_executed",
         )
 
     def _wait_for_ready(
@@ -235,9 +242,11 @@ class OdooInitService:
                 )
                 time.sleep(READY_RETRY_DELAY)
 
+        # readiness 探測只打 XML-RPC version，唯讀 ⇒ 還沒動到租戶 DB。
         raise OdooInitError(
             f"Odoo not ready after {MAX_READY_RETRIES * READY_RETRY_DELAY}s",
             step="wait_ready",
+            kind="not_executed",
         )
 
     def _update_module_list(
@@ -319,10 +328,13 @@ class OdooInitService:
                 step="update_module_list",
             ) from e
 
+        # 上面的 exec 失敗（含 timeout）／空輸出／JSON 無效都不能證明容器內的 ORM
+        # 程序沒跑或已停，維持預設 unknown；只有腳本自己回報失敗才是確定失敗。
         if not data.get("success"):
             raise OdooInitError(
                 f"Module list update failed: {data.get('error', 'unknown error')}",
                 step="update_module_list",
+                kind="failed",
             )
 
         logger.info(
