@@ -361,6 +361,12 @@
 
 /* #1234：route 健康狀態 badge。 */
 .o_woow_sa_routes_table__status { white-space: nowrap; }
+.o_woow_sa_routes_table__traffic {
+  white-space: nowrap;
+  font-size: 0.8125rem;
+  color: $woow-text-secondary;
+  cursor: help;
+}
 
 .o_woow_sa_health {
   display: inline-block;

@@ -162,6 +162,22 @@ export const securityAccessService = {
     }
   },
 
+  // #1234：各 route 的請求數與最後請求時間（operator 讀 Cloudflare analytics）。
+  // 拿不到時 data.available=false、data.reason 說明原因。
+  async fetchRouteTraffic(workspaceId, saId) {
+    try {
+      const result = await jsonRpc(
+        `/api/workspaces/${workspaceId}/security-accesses/${saId}/routes`,
+        { action: "traffic" },
+      );
+      return result.success
+        ? { success: true, data: result.data }
+        : { success: false, error: result.error };
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  },
+
   async deleteRoute(workspaceId, saId, routeId) {
     try {
       const result = await jsonRpc(

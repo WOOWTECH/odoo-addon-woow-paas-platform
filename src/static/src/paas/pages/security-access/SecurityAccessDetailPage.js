@@ -53,6 +53,30 @@ const ROUTE_HEALTH_HINTS = {
   timeout: "Your service did not answer in time. Check that it is running and not overloaded.",
   unknown: "The check could not complete. Try again in a moment.",
 };
+// #1234：流量拿不到時的說明（reason 由後端 _route_traffic 給）。
+const TRAFFIC_UNAVAILABLE_HINTS = {
+  permission: "Traffic data is not available yet: the platform's Cloudflare token lacks analytics access.",
+  operator_outdated: "Traffic data is not available yet: the platform service needs an update.",
+  disabled: "Traffic data is not available on this platform.",
+  error: "Traffic data could not be loaded. Try again later.",
+};
+
+// 「3 min ago」式的相對時間。刻意不用 Intl／toLocale*（見 locale guard #107）。
+function relativeTime(iso) {
+  if (!iso) {
+    return "";
+  }
+  const minutes = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 60000));
+  if (minutes < 1) {
+    return "just now";
+  }
+  if (minutes < 60) {
+    return `${minutes} min ago`;
+  }
+  const hours = Math.round(minutes / 60);
+  return hours < 48 ? `${hours} h ago` : `${Math.round(hours / 24)} d ago`;
+}
+
 // 黃色（使用者多半只要等一下）vs 紅色（要動手處理）。
 const WARN_HEALTH_STATUSES = ["not_routed", "dns_missing", "timeout", "unknown"];
 const SUBDOMAIN_HINT = _t("Use lowercase letters, digits and hyphens only (no dots or symbols); 3-63 chars, no leading/trailing hyphen.");
@@ -95,6 +119,8 @@ export class SecurityAccessDetailPage extends Component {
       // #1234：route 健康探測。key 是 route id，值見 services/route_probe.py。
       routeHealth: {},
       healthLoading: false,
+      // #1234：route 流量（null＝還沒問過）。
+      routeTraffic: null,
       activeTab: this.props.tab || "overview",
       editingName: false,
       nameDraft: "",
@@ -195,6 +221,41 @@ export class SecurityAccessDetailPage extends Component {
       this.state.routeHealth = res.data || {};
     }
     // 探測失敗不打擾使用者：狀態欄維持「—」即可，不值得一個錯誤提示。
+    this.loadRouteTraffic();
+  }
+
+  async loadRouteTraffic() {
+    const res = await securityAccessService.fetchRouteTraffic(
+      this.props.workspaceId, this.props.saId);
+    this.state.routeTraffic = res.success ? res.data : { available: false, reason: "error" };
+  }
+
+  routeTrafficLabel(route) {
+    const t = this.state.routeTraffic;
+    if (!t || !t.available) {
+      return "—";
+    }
+    const r = (t.routes || {})[route.id];
+    if (!r || !r.requests) {
+      return "No traffic";
+    }
+    return `${r.requests} · ${relativeTime(r.last_request_at)}`;
+  }
+
+  routeTrafficHint(route) {
+    const t = this.state.routeTraffic;
+    if (!t) {
+      return "";
+    }
+    if (!t.available) {
+      return TRAFFIC_UNAVAILABLE_HINTS[t.reason] || TRAFFIC_UNAVAILABLE_HINTS.error;
+    }
+    const r = (t.routes || {})[route.id];
+    if (!r || !r.requests) {
+      return `No requests reached this hostname in the last ${t.window_hours || 24} hours.`;
+    }
+    return `Last ${t.window_hours || 24} h: ${r.status_2xx} ok (2xx), ${r.status_3xx} redirect, ` +
+      `${r.status_4xx} client error (4xx), ${r.status_5xx} server error (5xx).`;
   }
 
   routeHealthOf(route) {

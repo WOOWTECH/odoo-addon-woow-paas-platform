@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse
 from src.api import (
     access,
     agent_runtimes,
+    analytics,
     init,
     namespaces,
     odoo_modules,
@@ -184,6 +185,7 @@ app.include_router(odoo_modules.router)
 app.include_router(agent_runtimes.router)
 app.include_router(access.router)
 app.include_router(reconcile.router)
+app.include_router(analytics.router)
 
 
 # Root endpoint

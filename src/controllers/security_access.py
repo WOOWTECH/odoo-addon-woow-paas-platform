@@ -210,6 +210,10 @@ class SecurityAccessController(Controller):
             return {"success": True,
                     "data": sa._probe_route_health(force=bool(kwargs.get("force")))}
 
+        if action == "traffic":
+            # #1234：唯讀，同 list／health 的權限。
+            return {"success": True, "data": sa._route_traffic()}
+
         access = workspace.check_user_access(request.env.user)
         if not access or access.role not in [ROLE_OWNER, ROLE_ADMIN]:
             return {"success": False, "error": _("Insufficient permissions")}
