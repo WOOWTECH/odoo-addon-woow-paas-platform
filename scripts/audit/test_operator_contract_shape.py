@@ -12,7 +12,9 @@
   (ii) ``status_response()['release']`` 的 key 集合 ⊆ ``ReleaseInfo`` 的欄位集合
        （fixture 刻意只給子集，所以這層是子集不是等值）；
   (iii) ``RELEASE_STATUS_KEYS`` 常數與 (i) 同步（它是給測試檔 import 用的宣告）。
-陽性對照：兩個 pydantic class 都必須找得到、欄位數都必須 >= 2——否則「對帳通過」與
+  (iv) ``pod_info()`` 的 key 集合 == ``PodInfo`` 的欄位集合（#1263：Pod 身分欄位是
+       #1251 readiness 判定的依據，factory 少一欄＝平台測試在錯的形狀上全綠）。
+陽性對照：三個 pydantic class 都必須找得到、欄位數都必須 >= 2——否則「對帳通過」與
 「什麼都沒比」輸出相同。
 
 契約（同 CI 那步的宣告）：無外部相依——不碰 ~/.claude、網路、Odoo、特定 cwd。
@@ -67,7 +69,7 @@ class TestOperatorContractShape(unittest.TestCase):
         cls.contract = _load_contract()
 
     def test_positive_control_schema_classes_present(self):
-        for name in ("ReleaseStatusResponse", "ReleaseInfo"):
+        for name in ("ReleaseStatusResponse", "ReleaseInfo", "PodInfo"):
             self.assertIn(name, self.models,
                           "%s 找不到 class %s(BaseModel)——對帳沒有對象" % (_SCHEMAS, name))
             self.assertGreaterEqual(len(self.models[name]), 2, name)
@@ -89,6 +91,19 @@ class TestOperatorContractShape(unittest.TestCase):
     def test_declared_constant_matches_factory(self):
         self.assertEqual(set(self.contract.RELEASE_STATUS_KEYS),
                          set(self.contract.status_response()))
+
+    def test_pod_info_keys_match_pod_info_schema(self):
+        self.assertEqual(
+            set(self.contract.pod_info()), self.models["PodInfo"],
+            "pod_info() 的 key 與 operator PodInfo 不一致——operator 改了欄位就改 "
+            "src/tests/operator_contract.py 的 pod_info()")
+
+    def test_pod_info_overrides_are_honoured_and_typos_rejected(self):
+        pod = self.contract.pod_info(component="server", owner_kind="ReplicaSet")
+        self.assertEqual((pod["component"], pod["owner_kind"]), ("server", "ReplicaSet"))
+        # 拼錯的 key 若被靜默加進去，測試會以為自己設了身分、其實 component 仍是 None。
+        with self.assertRaises(TypeError):
+            self.contract.pod_info(compnent="server")
 
     def test_overrides_and_pods_are_honoured(self):
         """factory 的兩個把手真的有作用（不然遷移過去的 fixture 會靜默改語意）。"""
