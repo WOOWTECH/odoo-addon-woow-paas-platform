@@ -379,6 +379,34 @@ export const cloudService = reactive({
     },
 
     /**
+     * 租戶自設 admin 帳號／密碼（template.admin_username_editable 的服務）。
+     * `password` 為 null ＝ 平台隨機產生（回應帶一次性 admin_password）；
+     * 省略 `username` ＝ 不改帳號。後端走與 Reset 相同的 helm upgrade ＋ restart，
+     * 所以沿用同一個 loading 旗標與最寬的逾時階梯。
+     *
+     * @param {number} workspaceId
+     * @param {number} serviceId
+     * @param {{username?: string, password: string|null}} credentials
+     */
+    async setAdminCredentials(workspaceId, serviceId, credentials) {
+        this.operationLoading.resetAdminPassword = true;
+        try {
+            const result = await jsonRpc(
+                `/api/workspaces/${workspaceId}/services/${serviceId}/admin-credentials`,
+                credentials,
+                RESET_REQUEST_TIMEOUT_MS
+            );
+            return result.success
+                ? { success: true, data: result.data }
+                : { success: false, error: result.error };
+        } catch (err) {
+            return { success: false, error: err.message };
+        } finally {
+            this.operationLoading.resetAdminPassword = false;
+        }
+    },
+
+    /**
      * Update/upgrade a service
      * @param {number} workspaceId - Workspace ID
      * @param {number} serviceId - Service ID

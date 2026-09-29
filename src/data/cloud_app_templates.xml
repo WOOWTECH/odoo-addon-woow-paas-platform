@@ -792,12 +792,13 @@
         <record id="cloud_app_opendesign" model="woow_paas_platform.cloud_app_template">
             <field name="name">Open Design</field>
             <field name="slug">open-design</field>
-            <field name="description">AI 設計協作應用（daemon + console，內建 Claude Code／OpenCode），basic-auth 憑證登入</field>
+            <field name="description">AI 設計協作應用（daemon + console，內建 Claude Code／OpenCode），帳號密碼登入、可自行修改</field>
             <field name="full_description">Open Design 完整雲端應用（上游 nexu-io/open-design
-                v0.15.1）：daemon（設計稿 API 服務，對外埠 7457）＋ console（ttyd web terminal
-                + Flask dashboard）。存取以 HTTP basic-auth 憑證登入（帳號 admin、密碼由平台
-                建立服務時產生並一次性顯示、可重置）：nginx auth-proxy 閘同時罩住 daemon UI／API
-                與 console，瀏覽器原生登入、免改上游。console 可互動執行 claude login 完成
+                v0.24.1，內建 Claude Code 與 OpenCode）：daemon（設計稿 API 服務，對外埠 7457）＋
+                console（ttyd web terminal + Flask dashboard）。存取以帳號密碼登入（預設帳號
+                admin、密碼由平台建立服務時產生並一次性顯示）；帳號與密碼都可在服務頁自行修改，
+                OpenDesign 與 console 共用同一組，修改後服務會重啟約一分鐘生效。nginx auth-proxy
+                閘同時罩住 daemon UI／API 與 console，瀏覽器原生登入、免改上游。console 可互動執行 claude login 完成
                 Claude 登入（登入態與 opencode 設定存 od-home PVC、跨 Pod 重啟保留），亦可於
                 部署時自帶 ANTHROPIC_API_KEY。與 Open Design MCP（mcp-opendesign）形成生態
                 閉環：MCP 的必填欄 od_api_base 可指向本服務於同一 workspace 的內部位址
@@ -827,11 +828,13 @@
                  requests+limits（paas ws ResourceQuota 要求），故本 seed 不需覆寫任何鍵。 -->
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/open-design</field>
-            <field name="helm_chart_version">0.1.4</field>
+            <field name="helm_chart_version">0.2.0</field>
             <field name="helm_default_values">{"image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/open-design", "tag": "20260720.2255@sha256:ccfa52c4ae87be10c09b0f27813c3cd086658697a285a41c63c7f71d9e7db87a"}, "service": {"port": 7457}, "persistence": {"data": {"size": "8Gi", "mountPath": "/app/.od"}, "home": {"size": "2Gi", "mountPath": "/home/opendesign"}}, "resources": {"requests": {"cpu": "1", "memory": "2Gi"}, "limits": {"cpu": "4", "memory": "8Gi"}}, "authProxy": {"enabled": true, "basicAuth": {"enabled": true, "username": "admin"}}, "console": {"enabled": true, "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/open-design-console", "tag": "20260720.0332@sha256:2b91c4ad4a6a94d1735c8aa7a6c18ec05491d9db31fa455f5e5da1cbb52b0f92"}}}</field>
             <field name="helm_value_specs">{"required": [], "optional": [
                 {"key": "auth.anthropicApiKey", "label": "Anthropic API Key", "type": "password",
-                "description": "自帶 Claude API Key（選填）；留空則於 console TUI 互動執行 claude login（登入態存 od-home）"}
+                "description": "自帶 Claude API Key（選填）；留空則於 console TUI 互動執行 claude login（登入態存 od-home）"},
+                {"key": "auth.openrouterApiKey", "label": "OpenRouter API Key", "type": "password",
+                "description": "容器內 OpenCode 使用的伺服器端 OpenRouter Key（選填）；網頁介面自行輸入的 BYOK Key 不受影響"}
                 ]}</field>
 
             <!-- Service Configuration -->
@@ -864,6 +867,12 @@
                  共用同一個 instance label，operator 端用複數版探索一次滾完）；沿用
                  預設 config_json 會對不存在的檔做 exec patch → 必 500。 -->
             <field name="admin_password_carrier">helm_secret</field>
+            <!-- 租戶可自設帳號密碼：帳號在 chart 的 authProxy.basicAuth.username（0.2.0 起
+                 chart 端 open-design.basicAuthUsername 會驗證格式）。nginx auth-proxy 的
+                 htpasswd 與 console（ttyd／dashboard）都從這個值與 admin_password 取帳密，
+                 所以 OpenDesign 與 ttyd 永遠同一組。修改走 reset 同一條 helm upgrade ＋
+                 rollout restart（daemon 與 console 都重啟）。 -->
+            <field name="admin_username_helm_path">authProxy.basicAuth.username</field>
             <field name="post_deploy_init_type">none</field>
 
             <field name="is_active" eval="True"/>
