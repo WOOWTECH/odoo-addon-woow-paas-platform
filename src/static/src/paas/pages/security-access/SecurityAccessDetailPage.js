@@ -272,9 +272,26 @@ export class SecurityAccessDetailPage extends Component {
     }
   }
 
-  // ---- #1196 第一層：就地編輯 route ----
-  // subdomain 仍然不可改（平台是先到先得的扁平命名空間，改名＝刪除+重建），
-  // 這裡只開後端已經接受的 service_url / http_host_header。
+  // ---- #1196：就地編輯 route（service_url / http_host_header / subdomain 改名） ----
+
+  // 正在改名的那一條：只有編輯中、且 prefix 真的跟現值不同才算。用來在表格下方
+  // 提醒改名的後果——舊網址立刻失效、不轉址；後端若依主機名分流要先加新名字。
+  // 這些都是平台做不到的事（我們碰不到使用者的 origin），只能在按下儲存前講清楚。
+  get pendingRename() {
+    const id = this.state.editingRouteId;
+    const prefix = this.state.editRoutePrefix;
+    if (!id || !prefix) {
+      return null;
+    }
+    const route = (this.state.sa.routes || []).find((r) => r.id === id);
+    if (!route || prefix === route.subdomain_prefix) {
+      return null;
+    }
+    return {
+      from: route.hostname,
+      to: `${prefix}.${this.paasDomainSuffix}`,
+    };
+  }
 
   startEditRoute(route) {
     this.state.editingRouteId = route.id;
