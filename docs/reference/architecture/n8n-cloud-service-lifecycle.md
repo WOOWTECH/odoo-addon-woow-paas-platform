@@ -587,7 +587,7 @@ graph LR
 - 原始狀態 = `deploying`
 - Template 有 `post_deploy_init_type = 'n8n'`
 
-系統將 state 切換為 `initializing` 並呼叫 `_model_run_post_deploy_init()`（`src/models/cloud_service.py:862`，cron 路徑；request 路徑為 controller 的 `_run_post_deploy_init()`，`src/controllers/paas.py:2536`）。
+系統將 state 切換為 `initializing`。init 只由 cron 經 model 的單一入口 `_run_post_deploy_init()`（`src/models/cloud_service.py:4308`）執行——#1257 起前端 list/get 只推進 state、不 dispatch init；claim／lease／失敗分類見 [post-deploy init 執行模型 ADR](../../decisions/refactor/post-deploy-init-execution-model.md)。
 
 ### 8.2 n8n Init 完整流程
 
@@ -657,10 +657,11 @@ n8n container 內建 Node.js runtime 但沒有 `curl`。`wget` 在處理 n8n bod
 
 ### 8.4 失敗重試機制
 
-- 每次輪詢時，若 init 失敗，`init_retries` +1（見 `_record_init_failure()`，`src/models/cloud_service.py:940`）
-- 最多重試 5 次
-- 超過 5 次後 state 轉為 `error`
-- 重試由 `ir_cron_check_deploying_services` 每分鐘輪詢驅動（`initializing` 仍屬 transitional 狀態，會持續被 `_cron_check_deploying_services()` 撈出重跑 init）；前端 get 端點亦會觸發同邏輯
+#1257 起依「遠端副作用是否可能已發生」分類（完整表見 [ADR](../../decisions/refactor/post-deploy-init-execution-model.md) §3）：
+- 確定失敗（operator `error_kind=failed`）：`init_retries` +1，每一代第 5 次轉 `error`。
+- 結果未知／部分成功（exec timeout、HTTP 500、read timeout、帶回 `api_key` 的失敗……）：`init_unknown_count` +1，每一代第 2 次轉 `error`；重送前要等 lease 到期（n8n 900s）。部分成功時 `api_key` 先存。
+- 等待（`find_pod`／`wait_ready`、connect 失敗）：不耗額度，受等待時限（預設 30 分）約束。
+- 重試由 `ir_cron_check_deploying_services` 每分鐘輪詢驅動；前端 get 端點**不再**觸發 init。
 
 ---
 
@@ -933,8 +934,7 @@ sequenceDiagram
 | `src/models/cloud_service.py:771` | `_poll_and_update_status()` - 單筆服務狀態轉換（model context） |
 | `src/models/cloud_service.py:673` | `_build_mcp_sidecar_config()` - Sidecar 配置（已從 controller 移至 model） |
 | `src/controllers/paas.py:2414` | `_update_service_status()` - 狀態輪詢（request 路徑，與 cron 同邏輯） |
-| `src/controllers/paas.py:2536` | `_run_post_deploy_init()` - Post-deploy init（request 路徑） |
-| `src/models/cloud_service.py:862` | `_model_run_post_deploy_init()` - Post-deploy init（cron 路徑） |
+| `src/models/cloud_service.py:4308` | `_run_post_deploy_init()` - Post-deploy init 的單一入口（cron 路徑；#1257 起 controller 不再有 init 流程） |
 | `src/controllers/paas.py:2695` | `_compute_sidecar_url_hint()` - MCP URL 建構（原 `_build_mcp_endpoint_url`，UI 預填 helper） |
 | `src/models/cloud_service.py:965` | `_model_build_mcp_endpoint_url()` - MCP URL 建構 twin（cron / 非 request caller） |
 | `src/services/naming.py:19` | `make_service_subdomain()` / `make_namespace()` - subdomain 與 namespace 命名 |

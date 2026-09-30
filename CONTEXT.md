@@ -105,7 +105,7 @@ _Avoid_: 「init 就是升級模組」；「post-deploy hook」（它不是 helm
 **欠初始化／初始化代數**：服務「還欠一次初始化」的持久標記（`init_pending`），以及它每次被重新要求時遞增的「代」（`init_generation`）。開新一代的事件：建立、改 addon、人工 redeploy、rollback、從額度用完的 error 出發的 reconfigure；resume、reset、不改 addon 的 reconfigure 不開新一代。失敗額度按代計算，只有初始化成功會清掉標記——停權與 resume 都不會。
 _Avoid_: 用 `addon_update_pending` 代稱它（那只記「上次 addon 變更還沒處理」）；「重試次數」（額度按代歸零，不是全服務累計）
 
-**結果未知**：一次初始化送出之後，平台無法判定遠端副作用有沒有發生的結果（outcome `unknown`）：exec timeout、空輸出、回應不是合法 JSON、HTTP 500、read timeout、連線中途斷、lease 到期都算。它與「確定失敗」（operator 明確回報腳本失敗）和「等待」（request 確定沒被執行，例如 pod 還沒 ready）分開計：重送前必須等 lease 到期，每代額度 2 次（n8n 帶回 key 的「部分成功」共用這個額度）。
+**結果未知**：一次初始化送出之後，平台無法判定遠端副作用有沒有發生的結果（outcome `unknown`）：exec timeout、空輸出、回應不是合法 JSON、HTTP 500、read timeout、連線中途斷、lease 到期都算。它與「確定失敗」（operator 明確回報腳本失敗）和「等待」（request 確定沒被執行，例如 pod 還沒 ready）分開計：重送前必須等 lease 到期，每一代另有一份獨立額度（n8n 帶回 key 的「部分成功」共用它；值見 ADR `post-deploy-init-execution-model`）。
 _Avoid_: 把它當成失敗重試（它可能其實成功了）；只看 `success` 布林判斷
 
 **跟版**：平台決定把 odoo template 的 image 追上某個較新的官方 digest，並把它推到既有 odoo `cloud_service` 的整個流程——決定、發版、波次、預告；由平台發起，Tenant 不能觸發也不能延後。節奏：core 跟版每月最多一次、每季至少一次；安全修補不受此限。

@@ -108,7 +108,14 @@ process 在途的 remote exec 由合成 lease 擋住。
 
 ## 與 #1159 的分工與暫時狀態
 
-本票（交付順序 3）與 #1159（交付順序 4）可以分兩個 PR 依序 merge，但**必須同一次 release 上線**。
+本票（交付順序 3）與 #1159（交付順序 4）可以分兩個 PR 依序 merge，但**必須同一次 release 上線**，且
+woow-paas/paas-app-bundle-cd#154（prod `limit_time_real_cron=1800`）要先上 prod。resolution 原本的理由（兩條
+路徑互相擋）在 list/get 不再 dispatch init 之後已不成立，理由換成：只上本票時
+
+- init 只剩每分鐘一次的 `_cron_check_deploying_services` 序列執行，list/get 也不 trigger：就緒到 init 開始延遲
+  0–60 秒再加同一輪排隊；一台 Odoo init 最壞 1020 秒，會堵住同一輪其他服務的 init 與短 poll。
+- #154 上線前 prod 的 cron 硬上限（`limit_time_real`=1200）剛好等於 Odoo lease，沒有餘裕。
+- n8n owner 可被搶註的窗口從約 5 秒（前端輪詢）拉長到分鐘級，而且沒有 #1159 Q28(a)「n8n 優先」的緩解。
 
 - 從 #1159 **提前**到本票的兩件事（#1257 實作期裁定）：list/get 不再 dispatch init；等待時限（錨點＋30 分＋到期轉
   error）。#1159 只剩 #1192 fast-fail 短路與「平台容量排隊不計時」。
@@ -121,6 +128,9 @@ process 在途的 remote exec 由合成 lease 擋住。
 - 停權期間已被舊 code 吃掉的 init 沒有資料可推回來，只能靠 migration log 人工抽查。
 - init 失敗的出口多了一個「等待逾時」：pod 30 分鐘都沒 ready 的 initializing 服務會轉 error（以前會永遠停在
   initializing）。
+- operator 回 401／403／422（例如平台的 operator API key 設錯）會被歸成 unknown（Q11：平台端只有 connect 階段
+  失敗算 not_executed）⇒ 所有 initializing 的服務兩輪之後都會轉 error。這是保守分類的已知代價，靠 #1159 Q38
+  的監控（unknown 次數）及早發現。
 - n8n client 預算改為專屬 `(120, 600)`，由 repo-lint `init-n8n-budget-ladder` 從 operator 原始碼的 AST 算 envelope
   （目前 531s）守住「read > envelope」；Odoo 維持 `(120, 900)`（`init-odoo-budget-ladder`，envelope 805s）。
 

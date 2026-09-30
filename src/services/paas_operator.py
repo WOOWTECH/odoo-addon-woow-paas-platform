@@ -20,7 +20,9 @@ HELM_OPERATION_TIMEOUT = 120
 # operator 宣告子步 envelope：discovery 90 + readiness (30×15 + 29×5) + update 120
 # = 805s；read 留 95s 餘裕。repo-lint init-odoo-budget-ladder 核對實際來源與接線。
 # 這不是 server／整體 HTTP 的硬 deadline：排隊、process 收尾與遠端 exec 取消不保證。
-# controller 仍同步、前端仍 30s abort；worker 占用與外層預算由 #1257／#1159 承接。
+# #1257 起 init 只由 cron 經 model 的單一入口執行（list/get 不再同步呼叫），外層
+# 預算是由這組常數推導的 lease（src/models/cloud_service_init_attempt.py）；init
+# cron 的每 tick 預算見 #1159。
 INIT_ODOO_CONNECT_TIMEOUT = 120
 INIT_ODOO_READ_TIMEOUT = 900
 # #1257 Q31：n8n init 專屬 connect/read 預算，不再共用 HELM_OPERATION_TIMEOUT=120
