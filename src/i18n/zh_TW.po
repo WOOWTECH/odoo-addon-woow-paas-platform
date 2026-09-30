@@ -11172,9 +11172,9 @@ msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-javascript
-#: code:addons/woow_paas_platform/static/src/paas/components/modal/OneTimeCredentialsModal.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/OneTimeCredentialsModal.js:0
 msgid "Save your credentials"
-msgstr ""
+msgstr "請保存您的登入資訊"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -13093,12 +13093,15 @@ msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-javascript
-#: code:addons/woow_paas_platform/static/src/paas/components/modal/OneTimeCredentialsModal.xml:0
-msgid ""
-"The service is restarting to apply them (usually 1–3 minutes) and may be\n"
-"                        briefly unreachable. The status will return to "
-"Running when it is ready."
-msgstr ""
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/OneTimeCredentialsModal.js:0
+msgid "The service is restarting to apply them (usually 1–3 minutes) and may be briefly unreachable. The status will return to Running when it is ready."
+msgstr "服務正在重新啟動以套用新的登入資訊（通常需要 1–3 分鐘），期間可能短暫無法連線。準備好後狀態會回到「執行中」。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/OneTimeCredentialsModal.js:0
+msgid "The service is starting for the first time (usually 1–3 minutes). Sign in with these values once its status shows Running."
+msgstr "服務正在首次啟動（通常需要 1–3 分鐘）。狀態顯示「執行中」後，即可用以上資訊登入。"
 
 #. module: woow_paas_platform
 #. odoo-python
@@ -13162,9 +13165,9 @@ msgstr "下列登入方式在 Cloudflare 找不到對應的身分提供者，已
 
 #. module: woow_paas_platform
 #. odoo-javascript
-#: code:addons/woow_paas_platform/static/src/paas/components/modal/OneTimeCredentialsModal.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/OneTimeCredentialsModal.js:0
 msgid "These values are shown only once. Save them before closing this dialog."
-msgstr ""
+msgstr "以下資訊只會顯示這一次，關閉視窗前請先保存。"
 
 #. module: woow_paas_platform
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_cloud_odoo_addon__source_type__third_party

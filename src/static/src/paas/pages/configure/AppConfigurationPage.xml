@@ -271,6 +271,7 @@
                 <OneTimeCredentialsModal
                     t-if="state.oneTimeCredentials"
                     credentials="state.oneTimeCredentials"
+                    mode="'provision'"
                     onClose.bind="onCredentialsClose"/>
             </t>
         </div>
