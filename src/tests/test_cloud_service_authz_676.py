@@ -564,7 +564,7 @@ class TestInitControlFieldsWriteAuthz1257(_CloudService676Fixture):
                              ('init_wait_spent_seconds', 0),
                              ('init_wait_started_at', False),
                              ('init_retry_eligible_at', False),
-                             ('init_queue_turn', False)):
+                             ('init_queue_turn', False), ('init_capacity_wait_since', False)):
             with self.subTest(field=field):
                 result = self._call_kw(
                     'woow_paas_platform.cloud_service', 'write',
@@ -575,6 +575,29 @@ class TestInitControlFieldsWriteAuthz1257(_CloudService676Fixture):
         svc.invalidate_recordset()
         self.assertFalse(svc.sudo().init_redeploy_requested)
         self.assertFalse(svc.sudo().init_exit)
+
+    def test_capacity_clock_rejects_owner_context_forgery_but_allows_platform_rpc(self):
+        """真 call_kw 的 authority 正負對照，不以 readonly UI 或 workspace rule 代守。"""
+        stamp = fields.Datetime.now()
+        fake = fields.Datetime.to_string(stamp)
+        self.svc.sudo().write({'init_capacity_wait_since': stamp})
+        self.authenticate(self.alice_login, self.alice_login)
+        self._assert_ok(self._call_kw('woow_paas_platform.cloud_service', 'write',
+            [[self.svc.id], {'name': 'capacity legitimate owner write'}]), 'owner 一般 write 可達')
+        result = self._call_kw('woow_paas_platform.cloud_service', 'write',
+            [[self.svc.id], {'init_capacity_wait_since': False}],
+            {'context': {'lang': 'en_US', 'su': True, 'uid': 1,
+                         'default_init_capacity_wait_since': fake}})
+        self.assertIn('error', result)
+        self.assertIn('managed by the platform', self._error_text(result))
+        self.assertEqual(self.svc.sudo().init_capacity_wait_since, stamp, '偽造 context 不得清時計')
+        platform, login = _new_group_user(self.env, 'capacity-platform1159')
+        platform.sudo().write({'groups_id': [(4, self.env.ref('base.group_system').id)]})
+        self.authenticate(login, login)
+        result = self._call_kw('woow_paas_platform.cloud_service', 'write',
+                              [[self.svc.id], {'init_capacity_wait_since': False}])
+        self._assert_ok(result, '平台 system user 的同一 RPC 必須可合法寫入')
+        self.assertFalse(self.svc.sudo().init_capacity_wait_since)
 
     def test_owner_cannot_write_observation_fields_over_rpc(self):
         """OBS guard 也須跨真 call_kw 成立，不能靠 workspace rule 假綠。"""

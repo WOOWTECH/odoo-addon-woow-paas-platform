@@ -153,6 +153,17 @@ woow-paas/paas-app-bundle-cd#154（prod `limit_time_real_cron=1800`）要先上 
   freshness clock（pending episode 或真 `observed_at`，> 15 分）、24h 內 unknown／partial；init cron 查短 poll（`lastcall`
   > 10 分）；等待逾時／fast-fail 與 n8n
   ready→owner（> 5 分，Q28b）是事件型，追加一行。
+- **容量等待告警（後續定案）**：短 poll-monitor 觀測持續 eligible-unclaimed 達固定 **30 分鐘**時，只通知
+  `base.group_system`，不改租戶 state、不耗 failed／unknown 額度，也不計入 D2-R operator wait 預算。
+  `init_capacity_wait_since` 是 nullable、platform-managed 的新時計，不回充 first-ready／queue turn 的歷史，
+  不新增 config_parameter、migration 或版號。eligibility 對齊 runner／claim：initializing＋欠 init＋支援的 init
+  類型＋Ready，且無 redeploy 意圖、lease（含過期但未 settle）或尚未到期的 cooldown，額度與 operator wait 預算仍可 dispatch。
+  ORM lifecycle 的中斷立即清時計（包含 monitor tick 之間撤 Ready 再恢復、退出 state 再進入及新 generation）；
+  原子 claim 在同交易清掉它，避免短暫取得 lease 後繼承舊 episode。同值 state／Ready refresh／無關 write 不重開。
+  create 明寫 False 中和 raw vals／context／ir.default，後續沿 init-control guard 只允許平台寫入。
+  容量是持續條件：同 summary 未完成前不重建、不重複 append，全部完成後條件仍存在才可再開。
+  通知只在 monitor 使用 queued-mail context；活動投影失敗由該 check 的 savepoint 回捲，OperationalError 外拋。
+  既有 unknown／partial attempt identity ledger 與 per-user event projection 不變；不承諾 SMTP 投遞或跨 cron exactly-once。
 - **租戶出口**（Q30）：initializing 可刪除（確認框註明已送出的 init 仍可能完成）；error 停用 Reset；init 失敗顯示
   固定文案＋attempt 序號＋support 入口；只有額度出口的 error 開放改設定。
 

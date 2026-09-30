@@ -616,6 +616,121 @@ class TestInitCron1159(_RealCursorCase):
         for sid in (odoo_recent, odoo_oldest, n8n_newest):
             self.assertEqual(self._read(sid, 'state'), 'running')
 
+    def test_capacity_monitor_forty_minute_wait_remains_dispatchable_and_claim_restarts_episode(self):
+        """真 PG 的 claim／not_executed lifecycle：容量 40 分不耗 D2 預算。"""
+        sid = self._add('odoo')
+        client = operator_client(get_status=status_response(pods=_READY_PODS))
+        claimed = []
+
+        def observe_claim(**kwargs):
+            # 外部 operator 邊界讀另一條真 cursor：claim 必須已 commit 且時計已清。
+            with self.registry.cursor() as observer_cr:
+                observed = self._env(observer_cr)[SVC].browse(sid)
+                claimed.append((observed._init_lease_active(), observed.init_capacity_wait_since))
+            return {'success': False, 'error_kind': 'not_executed'}
+
+        client.init_odoo.side_effect = observe_claim
+        with self.registry.cursor() as cr:
+            env = self._env(cr)
+            svc = env[SVC].browse(sid)
+            svc._poll_and_update_status(client)
+            now = svc._init_db_now()
+            monitor = env['woow_paas_platform.platform_monitor']
+            domain = [('res_model', '=', monitor._name), ('summary', '=', monitor.SUMMARY_CAPACITY)]
+            self.assertFalse(env['mail.activity'].search(domain), '自有 DB 無舊容量 activity')
+            with patch.object(type(svc), '_init_db_now', return_value=now - timedelta(minutes=40)):
+                monitor._run_poll_cron_checks()
+            monitor._run_poll_cron_checks()
+            self.assertTrue(env['mail.activity'].search(domain), '純容量等待 40 分必須可觀測')
+            self.assertEqual((svc.state, svc.init_retries, svc.init_unknown_count,
+                              svc.init_wait_spent_seconds), ('initializing', 0, 0, 0))
+            queue_turn = svc.init_queue_turn
+            env['mail.activity'].search(domain).action_feedback(feedback='capacity checked')
+            self.assertTrue(svc._run_post_deploy_init(client), '40 分容量等待後仍可原子 claim')
+            client.init_odoo.assert_called_once()
+            self.assertEqual(len(claimed), 1)
+            self.assertTrue(claimed[0][0], '外部呼叫發生時另一 cursor 真能看到 committed lease')
+            self.assertFalse(claimed[0][1], '成功 claim 的同一交易必須立即結束舊 episode')
+            svc.invalidate_recordset()
+            self.assertFalse(svc.init_capacity_wait_since, '結果完成後也不可復活舊 episode')
+            self.assertEqual((svc.state, svc.init_retries, svc.init_unknown_count),
+                             ('initializing', 0, 0))
+            self.assertLess(svc.init_wait_spent_seconds, 5, '只計本次 request，不扣前面 40 分容量')
+            self.assertGreaterEqual(svc.init_queue_turn, queue_turn)
+            finished = svc.init_wait_started_at
+            eligible = svc.init_retry_eligible_at
+            self.assertEqual(eligible - finished, timedelta(seconds=60), 'D2 完整 cooldown 不變')
+            with patch.object(type(svc), '_init_db_now', return_value=finished + timedelta(seconds=30)) as clock:
+                monitor._run_poll_cron_checks()
+                self.assertFalse(svc.init_capacity_wait_since, 'cooldown 尚未 eligible，不是容量等待')
+                clock.return_value = eligible
+                monitor._run_poll_cron_checks()
+                self.assertEqual(svc.init_capacity_wait_since, eligible)
+                clock.return_value = eligible + timedelta(minutes=30) - timedelta(seconds=1)
+                monitor._run_poll_cron_checks()
+                self.assertFalse(env['mail.activity'].search(domain))
+                clock.return_value = eligible + timedelta(minutes=30)
+                monitor._run_poll_cron_checks()
+                self.assertTrue(env['mail.activity'].search(domain), '新 episode 完整 30 分才重告警')
+
+    def test_capacity_monitor_excludes_active_and_expired_unsettled_leases(self):
+        sid = self._add('odoo')
+        client = operator_client(get_status=status_response(pods=_READY_PODS))
+        with self.registry.cursor() as cr:
+            env = self._env(cr)
+            svc = env[SVC].browse(sid)
+            svc._poll_and_update_status(client)
+            monitor = env['woow_paas_platform.platform_monitor']
+            now = svc._init_db_now()
+            monitor._run_poll_cron_checks()
+            attempt = svc._init_claim('odoo')
+            self.assertTrue(attempt, '建立真 attempt／lease，而非 mock 監控判準')
+            domain = [('res_model', '=', monitor._name), ('summary', '=', monitor.SUMMARY_CAPACITY)]
+            with patch.object(type(svc), '_init_db_now', return_value=now + timedelta(minutes=40)) as clock:
+                monitor._run_poll_cron_checks()
+                self.assertFalse(svc.init_capacity_wait_since)
+                self.assertFalse(env['mail.activity'].search(domain), 'active lease 不算容量等待')
+                svc.write({'init_lease_until': now - timedelta(seconds=1)})
+                self.assertFalse(svc._init_lease_active())
+                self.assertTrue(svc.init_attempt_id, '過期但尚未 settle 的真 lease pointer 仍在')
+                monitor._run_poll_cron_checks()
+                self.assertFalse(svc.init_capacity_wait_since, '未 settle 的過期 lease 不能當空槽')
+                self.assertEqual(svc.init_unknown_count, 0, 'monitor 不自行收 lease／扣 quota')
+            svc._init_settle_expired_lease()
+            self.assertFalse(svc.init_attempt_id)
+            self.assertFalse(svc.init_lease_until)
+            self.assertEqual(svc.init_unknown_count, 1, '只有既有 settle 入口扣一次 unknown')
+            with patch.object(type(svc), '_init_db_now', return_value=now + timedelta(minutes=40)) as clock:
+                monitor._run_poll_cron_checks()
+                self.assertEqual(svc.init_capacity_wait_since, now + timedelta(minutes=40))
+                self.assertFalse(env['mail.activity'].search(domain))
+                clock.return_value = now + timedelta(minutes=70)
+                monitor._run_poll_cron_checks()
+                self.assertTrue(env['mail.activity'].search(domain))
+                self.assertEqual(svc.init_unknown_count, 1, '新容量 episode 不再扣 quota')
+
+    def test_capacity_monitor_does_not_continue_after_real_success(self):
+        sid = self._add('odoo')
+        client = operator_client(get_status=status_response(pods=_READY_PODS),
+                                 init_odoo={'success': True})
+        with self.registry.cursor() as cr:
+            env = self._env(cr)
+            svc = env[SVC].browse(sid)
+            svc._poll_and_update_status(client)
+            monitor = env['woow_paas_platform.platform_monitor']
+            now = svc._init_db_now()
+            monitor._run_poll_cron_checks()
+            self.assertTrue(svc.init_capacity_wait_since)
+            self.assertTrue(svc._run_post_deploy_init(client))
+            svc.invalidate_recordset()
+            self.assertEqual(svc.state, 'running')
+            self.assertFalse(svc.init_pending)
+            with patch.object(type(svc), '_init_db_now', return_value=now + timedelta(hours=1)):
+                monitor._run_poll_cron_checks()
+            self.assertFalse(svc.init_capacity_wait_since)
+            self.assertFalse(env['mail.activity'].search([
+                ('res_model', '=', monitor._name), ('summary', '=', monitor.SUMMARY_CAPACITY)]))
+
     def test_missing_queue_turn_falls_back_to_first_ready_anchor(self):
         """D2-R 相容列沒有 queue_turn 時仍按既有 first-ready 排，不可在新流量下飢餓。"""
         legacy = self._add('odoo')
@@ -1013,6 +1128,277 @@ class TestPlatformMonitor1159(_ServiceCase):
             'finished_at': finished_at,
             'outcome': outcome,
         })
+
+    def test_capacity_wait_alerts_system_users_at_thirty_minutes_without_spending_quota(self):
+        """容量時計只看持續可 dispatch 的平台觀測，不回充舊 first-ready。"""
+        svc = self._service('odoo', state='initializing')
+        self._poll(svc)
+        started = svc._init_db_now()
+        svc.sudo().write({'init_ready_since': started - timedelta(hours=2)})
+        summary = 'PaaS monitor: eligible initialization is waiting for capacity'
+        before = svc.read(['state', 'init_pending', 'init_retries', 'init_unknown_count',
+                           'init_wait_spent_seconds', 'init_wait_started_at',
+                           'init_retry_eligible_at', 'init_queue_turn'])[0]
+        with patch.object(type(svc), '_init_db_now', return_value=started) as clock:
+            self.Monitor._run_poll_cron_checks()
+            self.assertFalse(self._activities(summary), 'legacy 時計不得回充 first-ready 歷史')
+            clock.return_value = started + timedelta(minutes=30) - timedelta(seconds=1)
+            self.Monitor._run_poll_cron_checks()
+            self.assertFalse(self._activities(summary), '門檻前不得告警')
+            clock.return_value = started + timedelta(minutes=30)
+            self.Monitor._run_poll_cron_checks()
+            activities = self._activities(summary)
+            self.assertTrue(activities, '持續 eligible-unclaimed 達 30 分鐘必須通知平台')
+            self.assertEqual(set(activities.mapped('user_id')), set(self.admins))
+            self.assertIn(svc.name, activities[:1].note or '')
+            original_notes = activities.mapped('note')
+            clock.return_value = started + timedelta(minutes=40)
+            self.Monitor._run_poll_cron_checks()
+            self.assertEqual(self._activities(summary), activities, '持續條件不另建 activity')
+            self.assertEqual(activities.mapped('note'), original_notes, '重複 tick 不重複 append')
+        self.assertEqual(svc.read(list(before.keys() - {'id'}))[0], before,
+                         '告警不得改 state、quota、operator-wait 預算或排序')
+
+    def test_capacity_ready_revocation_between_monitor_ticks_restarts_the_episode(self):
+        svc = self._service('odoo', state='initializing')
+        self._poll(svc)
+        started = svc._init_db_now()
+        summary = self.Monitor.SUMMARY_CAPACITY
+        with patch.object(type(svc), '_init_db_now', return_value=started) as clock:
+            self.Monitor._run_poll_cron_checks()
+            clock.return_value = started + timedelta(minutes=20)
+            self._poll(svc, pods=_NOT_READY_PODS)
+            self.assertFalse(svc.init_ready_observed, 'Ready 真被背景撤回')
+            self._poll(svc)
+            self.assertTrue(svc.init_ready_observed, '同一 monitor tick 前又恢復 Ready')
+            self.Monitor._run_poll_cron_checks()
+            clock.return_value = started + timedelta(minutes=30)
+            self.Monitor._run_poll_cron_checks()
+            self.assertFalse(self._activities(summary), '中斷後不能沿用舊容量 episode')
+            clock.return_value = started + timedelta(minutes=50)
+            self.Monitor._run_poll_cron_checks()
+            self.assertIn(svc.name, self._activities(summary)[:1].note or '')
+
+    def test_capacity_dispatch_blockers_do_not_start_a_clock_or_change_service_state(self):
+        started = self.env[SVC]._init_db_now()
+        blockers = {
+            'redeploy': {'init_redeploy_requested': True},
+            'cooldown': {'init_wait_started_at': started,
+                         'init_retry_eligible_at': started + timedelta(hours=4)},
+            'failed_quota': {'init_retries': 5},
+            'unknown_quota': {'init_unknown_count': 2},
+            'operator_budget': {'init_wait_spent_seconds': 1800},
+            'operator_interval_budget': {'init_wait_spent_seconds': 1790,
+                'init_wait_started_at': started - timedelta(seconds=60),
+                'init_retry_eligible_at': started - timedelta(seconds=1)},
+            'not_owed': {'init_pending': False},
+            'not_ready': {'init_ready_observed': False},
+            'state_exit': {'state': 'suspended'},
+        }
+        with patch.object(type(self.env[SVC]), '_init_db_now', return_value=started) as clock:
+            for reason, controls in blockers.items():
+                with self.subTest(reason=reason):
+                    svc = self._service('odoo', state='initializing')
+                    self._poll(svc)
+                    self.Monitor._run_poll_cron_checks()
+                    self.assertTrue(svc.init_capacity_wait_since, '前提：先建立真 eligible episode')
+                    svc.sudo().write(controls)
+                    before = svc.read(['state', 'init_pending', 'init_retries', 'init_unknown_count',
+                                       'init_wait_spent_seconds', 'init_wait_started_at',
+                                       'init_retry_eligible_at'])[0]
+                    clock.return_value = started + timedelta(minutes=40)
+                    self.Monitor._run_poll_cron_checks()
+                    self.assertFalse(svc.init_capacity_wait_since, '%s 不是真容量等待' % reason)
+                    self.assertFalse(self._activities(self.Monitor.SUMMARY_CAPACITY))
+                    self.assertEqual(svc.read(list(before.keys() - {'id'}))[0], before,
+                                     '監控不能將 exhausted／timeout 自行變成 error')
+                    clock.return_value = started
+            none = self._service('none', state='initializing')
+            none.sudo().write({'init_ready_observed': True})
+            self.Monitor._run_poll_cron_checks()
+            self.assertFalse(none.init_capacity_wait_since, 'legacy none 類型不 dispatch')
+
+    def test_capacity_lifecycle_interruptions_between_ticks_start_new_episodes(self):
+        started = self.env[SVC]._init_db_now()
+        for boundary in ('generation', 'state_exit', 'not_owed', 'redeploy', 'cooldown'):
+            with self.subTest(boundary=boundary):
+                svc = self._service('odoo', state='initializing')
+                with patch.object(type(svc), '_init_db_now', return_value=started) as clock:
+                    self._poll(svc)
+                    self.Monitor._run_poll_cron_checks()
+                    clock.return_value = started + timedelta(minutes=20)
+                    if boundary == 'generation':
+                        svc._open_init_generation()
+                    elif boundary == 'state_exit':
+                        svc.sudo().write({'state': 'suspended'})
+                        svc.sudo().write({'state': 'initializing'})
+                        self._poll(svc)
+                    elif boundary == 'not_owed':
+                        svc.sudo().write({'init_pending': False})
+                        svc._open_init_generation()
+                    elif boundary == 'redeploy':
+                        svc.sudo().write({'init_redeploy_requested': True})
+                        svc.sudo().write({'init_redeploy_requested': False})
+                    else:
+                        svc.sudo().write({'init_wait_started_at': clock.return_value,
+                            'init_retry_eligible_at': clock.return_value + timedelta(seconds=60)})
+                        # 已有 real not_executed cooldown 回歸；此處只釘 tick 之間的中斷。
+                        svc.sudo().write({'init_wait_started_at': False, 'init_retry_eligible_at': False})
+                    self.Monitor._run_poll_cron_checks()
+                    self.assertEqual(svc.init_capacity_wait_since, clock.return_value)
+                    clock.return_value = started + timedelta(minutes=30)
+                    self.Monitor._run_poll_cron_checks()
+                    self.assertFalse(self._activities(self.Monitor.SUMMARY_CAPACITY))
+                    clock.return_value = started + timedelta(minutes=50)
+                    self.Monitor._run_poll_cron_checks()
+                    self.assertIn(svc.name, self._activities(self.Monitor.SUMMARY_CAPACITY)[:1].note or '')
+                    self._activities(self.Monitor.SUMMARY_CAPACITY).action_feedback(feedback='handled')
+                    svc.sudo().write({'state': 'running', 'init_pending': False})
+
+    def test_capacity_same_state_and_ready_refresh_do_not_restart_waiting(self):
+        svc = self._service('n8n', state='initializing')
+        self._poll(svc)
+        started = svc._init_db_now()
+        with patch.object(type(svc), '_init_db_now', return_value=started) as clock:
+            self.Monitor._run_poll_cron_checks()
+            clock.return_value = started + timedelta(minutes=20)
+            svc.sudo().write({'state': 'initializing', 'name': '同 state 無關更新'})
+            self._poll(svc)
+            self.assertEqual(svc.init_capacity_wait_since, started)
+            clock.return_value = started + timedelta(minutes=30)
+            self.Monitor._run_poll_cron_checks()
+            activities = self._activities(self.Monitor.SUMMARY_CAPACITY)
+            self.assertTrue(activities)
+            activities.action_feedback(feedback='condition checked')
+            self.Monitor._run_poll_cron_checks()
+            self.assertTrue(self._activities(self.Monitor.SUMMARY_CAPACITY),
+                            '條件告警全部完成後仍持續，沿慣例可再開；不是 attempt event ledger')
+
+    def test_capacity_clock_platform_authority_and_create_default_injection(self):
+        user = self.env['res.users'].with_context(no_reset_password=True).create({
+            'name': '1159 capacity workspace admin', 'login': f'1159-capacity-{self.tag}',
+            'groups_id': [(6, 0, [self.env.ref('base.group_user').id])],
+        })
+        self.env['woow_paas_platform.workspace_access'].create({
+            'workspace_id': self.workspace.id, 'user_id': user.id, 'role': 'admin'})
+        svc = self._service('odoo', state='initializing')
+        managed = svc.with_user(user).with_context(lang='en_US')
+        managed.write({'name': '合法容量一般欄位更新'})
+        self.assertEqual(managed.name, '合法容量一般欄位更新')
+        stamp = fields.Datetime.now()
+        try:
+            managed.write({'init_capacity_wait_since': stamp})
+        except AccessError as exc:
+            self.assertIn('managed by the platform', str(exc))
+        else:
+            self.fail('workspace admin 不得偽造容量時計')
+        platform = svc.with_user(self.admins.filtered(lambda admin: admin.id != SUPERUSER_ID)[0])
+        self.assertFalse(platform.env.su, '陽性對照必須是真 system user，不是 su-env 假綠')
+        platform.write({'init_capacity_wait_since': stamp})
+        self.assertEqual(platform.init_capacity_wait_since, stamp)
+        future = stamp + timedelta(days=3)
+        fake = fields.Datetime.to_string(future)
+        creator = _internal_provision(self.env[SVC].with_user(user).sudo())
+        self.assertEqual(creator.env.uid, user.id, 'sudo 仍會讀使用者 ir.default')
+        for carrier in ('values', 'context', 'ir.default'):
+            for init_type in ('none', 'odoo'):
+                with self.subTest(carrier=carrier, init_type=init_type):
+                    model = creator
+                    vals = {'name': f'capacity {carrier} {init_type}',
+                            'workspace_id': self.workspace.id, 'template_id': self.templates[init_type].id,
+                            'state': 'initializing'}
+                    if carrier == 'values':
+                        vals['init_capacity_wait_since'] = fake
+                    elif carrier == 'context':
+                        model = model.with_context(default_init_capacity_wait_since=fake)
+                    else:
+                        self.env['ir.default'].with_user(user).set(
+                            SVC, 'init_capacity_wait_since', fake, user_id=user.id)
+                    if carrier != 'values':
+                        defaults = model.default_get(['init_capacity_wait_since'])
+                        self.assertEqual(fields.Datetime.to_datetime(defaults['init_capacity_wait_since']),
+                                         future, '前提：default 注入真的抵達 framework')
+                    created = model.create(vals)
+                    self.assertFalse(created.init_capacity_wait_since,
+                                     '新時計不得吃 caller 的 raw／context／ir.default')
+                    created.sudo().write({'init_capacity_wait_since': stamp})
+                    self.assertEqual(created.init_capacity_wait_since, stamp, '平台後續合法寫入仍成功')
+
+    def test_capacity_delivery_rolls_back_partial_mail_and_propagates_database_conflicts(self):
+        Mail = self.env['mail.mail'].sudo()
+        self.env['res.users'].with_context(no_reset_password=True).create([
+            {'name': f'1159 capacity recipient {suffix}', 'login': f'1159-cap-mail-{suffix}-{self.tag}',
+             'email': f'1159-cap-mail-{suffix}-{self.tag}@example.invalid', 'notification_type': 'email',
+             'groups_id': [(6, 0, [self.env.ref('base.group_system').id])]}
+            for suffix in ('a', 'b')])
+        recipients = self.env.ref('base.group_system').users.filtered(
+            lambda user: user.active and not user.share)
+        recipients[:1].write({'email': f'1159-cap-first-{self.tag}@example.invalid',
+                             'notification_type': 'email'})
+        runner = self.Monitor.with_user(recipients[-1]).sudo()
+        self.assertNotEqual(recipients[0], runner.env.user)
+        svc = self._service('odoo', state='initializing')
+        self._poll(svc)
+        started = svc._init_db_now()
+        with patch.object(type(svc), '_init_db_now', return_value=started):
+            runner._run_poll_cron_checks()
+        mail_domain = [('model', '=', MONITOR), ('res_id', '=', self.singleton.id)]
+        original_schedule = type(self.singleton).activity_schedule
+        for database_error in (False, True):
+            with self.subTest(database_error=database_error):
+                before_mails = set(Mail.search(mail_domain).ids)
+                calls, first_activities, first_mails = [], [], []
+
+                def fail_second(records, *args, **kwargs):
+                    if kwargs.get('summary') != self.Monitor.SUMMARY_CAPACITY:
+                        return original_schedule(records, *args, **kwargs)
+                    calls.append(kwargs['user_id'])
+                    if len(calls) == 2:
+                        if database_error:
+                            records.env.cr.execute("""
+                                DO $$ BEGIN
+                                    RAISE EXCEPTION '1159 capacity monitor conflict'
+                                        USING ERRCODE = '40001';
+                                END $$
+                            """)
+                        raise RuntimeError('1159 second capacity recipient failed')
+                    activity = original_schedule(records, *args, **kwargs)
+                    records.env.flush_all()
+                    first_activities.extend(activity.ids)
+                    first_mails.extend(set(Mail.search(mail_domain).ids) - before_mails)
+                    return activity
+
+                with patch.object(type(svc), '_init_db_now', return_value=started + timedelta(minutes=30)), \
+                        patch.object(type(Mail), 'send', autospec=True) as send, \
+                        patch.object(type(Mail), 'send_after_commit', autospec=True) as send_after_commit:
+                    caught = None
+                    with patch.object(type(self.singleton), 'activity_schedule', autospec=True,
+                                      side_effect=fail_second):
+                        try:
+                            runner._run_poll_cron_checks()
+                        except OperationalError as exc:
+                            caught = exc
+                    self.assertEqual(calls, recipients[:2].ids)
+                    self.assertTrue(first_activities, '故障前真建立 activity，不是 mock 假綠')
+                    self.assertTrue(first_mails, '故障前真排入 mail queue')
+                    if database_error:
+                        self.assertIsNotNone(caught, 'OperationalError 必須交回真正 transaction 邊界')
+                        self.assertEqual(caught.pgcode, '40001')
+                    else:
+                        self.assertIsNone(caught)
+                    self.assertFalse(self._activities(self.Monitor.SUMMARY_CAPACITY))
+                    self.assertEqual(set(Mail.search(mail_domain).ids), before_mails)
+                    self.assertFalse(Mail.browse(first_mails).exists())
+                    self.assertEqual(svc.init_capacity_wait_since, started, '回捲不能抹掉先前 episode')
+                    self.env.cr.execute('SELECT 1')
+                    self.assertEqual(self.env.cr.fetchone(), (1,), '產品 savepoint 真復原 aborted cursor')
+                    runner._run_poll_cron_checks()
+                    self.assertEqual(set(self._activities(self.Monitor.SUMMARY_CAPACITY).mapped('user_id')),
+                                     set(recipients), '失敗後重試仍交付完整 system user 名單')
+                    send.assert_not_called()
+                    send_after_commit.assert_not_called()
+                self._activities(self.Monitor.SUMMARY_CAPACITY).with_context(
+                    mail_notify_force_send=False).action_feedback(feedback='capacity verified')
 
     def test_singleton_is_the_data_record(self):
         self.assertEqual(self.singleton, self.env.ref('woow_paas_platform.platform_monitor_singleton'))

@@ -264,7 +264,7 @@ _INIT_CONTROL_FIELDS = frozenset({
     'init_attempt_seq', 'init_attempt_id', 'init_lease_until', 'init_wait_since',
     'init_wait_spent_seconds', 'init_wait_started_at', 'init_retry_eligible_at',
     'init_queue_turn', 'init_redeploy_requested', 'init_exit', 'init_error',
-    'init_ready_observed', 'init_ready_since',
+    'init_ready_observed', 'init_ready_since', 'init_capacity_wait_since',
 })
 
 
@@ -847,6 +847,13 @@ class CloudService(models.Model):
         string='Init Queue Turn',
         copy=False,
         help='Same-init-type fair queue position; successful claims move themselves to the tail.',
+    )
+    init_capacity_wait_since = fields.Datetime(
+        string='Init Capacity Waiting Since',
+        copy=False,
+        readonly=True,
+        help='Start of continuously observed eligible-unclaimed capacity waiting. '
+             'Never backfilled from first-ready or queue order.',
     )
     # Q27：redeploy 撞到在途 lease 時登記的意圖；背景看到就停止自動重送，lease
     # 結束後先執行 redeploy。
@@ -4628,6 +4635,24 @@ class CloudService(models.Model):
             svc._init_check_exhausted()
         cr.commit()
 
+    def _init_capacity_wait_eligible(self, now):
+        """容量監控的純讀判準，對齊 runner 與原子 claim 的 dispatch 閘門。
+
+        過期但未 settle 的 lease 仍不是可 claim 的空槽；不呼叫會改 state 的
+        exhausted／timeout helper，也不將 UI phase 或 first-ready 當充分條件。
+        """
+        self.ensure_one()
+        return bool(
+            self.state == 'initializing' and self.init_pending
+            and self._init_type() != 'none' and self.init_ready_observed
+            and not self.sudo().init_redeploy_requested and not self.init_lease_until
+            and self.init_retries < INIT_FAILED_LIMIT
+            and self.init_unknown_count < self._init_unknown_limit()
+            and (not self.init_retry_eligible_at or self.init_retry_eligible_at <= now)
+            and (self.init_wait_spent_seconds or 0) + self._init_operator_wait_elapsed(now)
+                < self._init_wait_timeout_minutes() * 60
+        )
+
     def _init_ready_to_claim(self):
         """claim 之前的前置條件（在 settle 之後的新交易裡讀）。
 
@@ -4668,7 +4693,8 @@ class CloudService(models.Model):
                                             (statement_timestamp() AT TIME ZONE 'UTC')))
                                    - init_wait_started_at))) END,
                        init_wait_started_at = NULL,
-                       init_retry_eligible_at = NULL
+                       init_retry_eligible_at = NULL,
+                       init_capacity_wait_since = NULL
                  WHERE id = %s
                    AND state = 'initializing'
                    AND init_pending
@@ -4707,7 +4733,7 @@ class CloudService(models.Model):
         self.invalidate_recordset([
             'init_lease_until', 'init_attempt_seq', 'init_attempt_id',
             'init_wait_spent_seconds', 'init_wait_started_at', 'init_retry_eligible_at',
-            'init_queue_turn'])
+            'init_queue_turn', 'init_capacity_wait_since'])
         cr.commit()
         return attempt
 
@@ -6151,6 +6177,12 @@ class CloudService(models.Model):
         entering_init = self.browse()
         if vals.get('state') == 'initializing' and 'init_wait_since' not in vals:
             entering_init = self.filtered(lambda r: r.state != 'initializing')
+        # episode 必須看到 tick 之間的 lifecycle 中斷；只靠 monitor 再查一次會漏掉
+        # Ready 撤回又恢復、state 退出又進入或開新 generation。無關／同值 write 不重開。
+        new_capacity_episode = self.filtered(lambda service: (
+            ('state' in vals and service.state != vals['state'])
+            or ('init_generation' in vals and service.init_generation != vals['init_generation'])
+        ))
         # 同值 state 或無關記帳不給新 grace；在 super() 前挑出真正進入者，
         # mixed recordset 也只替該 subset 建立新的等待 episode。
         entering_observation_episode = self.browse()
@@ -6202,6 +6234,17 @@ class CloudService(models.Model):
                     if key not in vals:
                         entering_vals[key] = False
                 super(CloudService, entering_init).write(entering_vals)
+            capacity_fields = (_INIT_CONTROL_FIELDS - {'init_capacity_wait_since'}) | {
+                'state', 'template_id'}
+            if capacity_fields.intersection(vals):
+                tracked_capacity = self.filtered('init_capacity_wait_since')
+                if tracked_capacity:
+                    now = self._init_db_now()
+                    reset_capacity = tracked_capacity.filtered(
+                        lambda service: service in new_capacity_episode
+                        or not service._init_capacity_wait_eligible(now))
+                    if reset_capacity:
+                        super(CloudService, reset_capacity).write({'init_capacity_wait_since': False})
             if leaving_init_exit:
                 super(CloudService, leaving_init_exit).write({'init_exit': False})
             if rebinding:
@@ -6532,6 +6575,8 @@ class CloudService(models.Model):
             # 新服務尚無 operator 觀測；明寫 False 才能同時中和 raw vals、context 與
             # ir.default。僅 pop 會在 super().create() 展開 default 時再被注入。
             normalized['observed_at'] = False
+            # capacity 時計只能由背景觀測開始，開通不能注入 raw／context／ir.default。
+            normalized['init_capacity_wait_since'] = False
             defaulted = self._add_missing_default_values(normalized)
             normalized['observation_episode_started_at'] = (
                 observation_started if defaulted.get('state') in OBSERVATION_TRANSITION_STATES

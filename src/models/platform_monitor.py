@@ -17,6 +17,7 @@ partner（ERP 共用）或 workspace（租戶讀得到）。查找一律以 xmli
 | 短 poll cron 停擺 | init cron | ``lastcall`` 距今 > 10 分 |
 | 全平台最舊的 observed_at | 短 poll cron | 轉移狀態（非 pending）最舊觀測 > 15 分 |
 | 結果未知／等待放棄 | 短 poll cron＋事件 | 24h 內 unknown／partial ≥ 1；wait_timeout／fast_fail 發生即追加 |
+| eligible-unclaimed 容量等待 | 短 poll cron | 持續可 dispatch、未獲 claim ≥ 30 分；不扣額度或 D2 預算 |
 | n8n ready→owner 建立 | 事件（n8n init 成功） | > 5 分，每台追加一行 |
 
 init cron 看 ``active`` 與 ``lastcall``、不看 ``failure_count``：core 停用 cron 時會把
@@ -43,6 +44,7 @@ INIT_CRON_STALE_MINUTES = 40
 POLL_CRON_STALE_MINUTES = 10
 OBSERVED_STALE_MINUTES = 15
 UNKNOWN_WINDOW_HOURS = 24
+CAPACITY_WAIT_MINUTES = 30
 N8N_OWNER_WINDOW_MINUTES = 5
 
 
@@ -67,6 +69,7 @@ class PlatformMonitor(models.Model):
     SUMMARY_POLL_CRON = 'PaaS monitor: service status poll cron is not running'
     SUMMARY_OBSERVED = 'PaaS monitor: service observations are stale'
     SUMMARY_GAVE_UP = 'PaaS monitor: init results unknown or readiness gave up'
+    SUMMARY_CAPACITY = 'PaaS monitor: eligible initialization is waiting for capacity'
     SUMMARY_N8N_OWNER = 'PaaS monitor: n8n owner created late after the app became public'
 
     @api.model
@@ -205,6 +208,35 @@ class PlatformMonitor(models.Model):
             'status poll cron.', minutes=int(age.total_seconds() // 60), name=service.name,
             id=service.id, state=service.state))
 
+    @api.model
+    def _check_init_capacity_wait(self):
+        """只觀測持續 eligible-unclaimed 的 episode，不動租戶 state／執行預算。
+
+        legacy 新時計從本次背景 pass 起算；中斷時清空，再 eligible 才重開。
+        這是持續條件，不是 attempt 事件：沿同 summary 未完成前不重建的慣例，
+        不反覆 append 同一服務；全部完成後若條件仍存在，下一趟可以再告警。
+        """
+        Service = self.env['woow_paas_platform.cloud_service'].sudo()
+        now = Service._init_db_now()
+        services = Service.search([
+            '|', ('state', '=', 'initializing'), ('init_capacity_wait_since', '!=', False)])
+        waiting = Service.browse()
+        for service in services:
+            if not service._init_capacity_wait_eligible(now):
+                if service.init_capacity_wait_since:
+                    service.write({'init_capacity_wait_since': False})
+                continue
+            if not service.init_capacity_wait_since:
+                service.write({'init_capacity_wait_since': now})
+            if now - service.init_capacity_wait_since >= timedelta(minutes=CAPACITY_WAIT_MINUTES):
+                waiting |= service
+        if waiting:
+            self.with_context(mail_notify_force_send=False)._alert(self.SUMMARY_CAPACITY, _(
+                'Initialization has continuously been eligible but unclaimed for at least '
+                '30 minutes. Check platform capacity: %(services)s',
+                services=', '.join('%s (id=%s)' % (service.name, service.id)
+                                   for service in waiting)))
+
     def _unknown_attempt_line(self, attempt):
         return _('%(name)s (id=%(id)s), attempt %(attempt)s: %(outcome)s',
                  name=attempt.service_id.name, id=attempt.service_id.id,
@@ -282,7 +314,7 @@ class PlatformMonitor(models.Model):
     def _run_poll_cron_checks(self):
         """短 poll cron 每一趟結束時跑：init cron 的狀態＋全域監控項。"""
         for check in (self._check_init_cron_health, self._check_oldest_observation,
-                      self._check_unknown_results):
+                      self._check_unknown_results, self._check_init_capacity_wait):
             try:
                 with self.env.cr.savepoint():
                     check()
