@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Code Server 上架 seed 與「只有密碼、可自設」憑證形態的守線斷言。
 
-契約來源：woow-paas-charts charts/code-server 0.1.0（code-server :8080 是唯一入口、自己的
+契約來源：woow-paas-charts charts/code-server 0.1.1（code-server :8080 是唯一入口、自己的
 密碼登入、沒有帳號也沒有 auth-proxy；PASSWORD 來自 chart Secret 的 admin_password；
 改密碼不動 pod template；選填 auth.anthropicApiKey／openrouterApiKey／gitToken；
 codeServer.publicUrl 的 host 當 --trusted-origins），paas-odoo-ci code-server/ image。
@@ -9,7 +9,7 @@ codeServer.publicUrl 的 host 當 --trusted-origins），paas-odoo-ci code-serve
 核心守線：
 1. 只有密碼：admin_password_settable=True、沒有 admin_username_helm_path ⇒
    admin_credentials_settable=True（可 Reset 也可自設）但不能改帳號。
-2. 上架（is_hidden=False）⟹ image 雙釘 tag@sha256（2026-09-30 已釘 20260930.1503 並公開）。
+2. 上架（is_hidden=False）⟹ image 雙釘 tag@sha256（2026-09-30 釘 20260930.1503 公開；10-01 換 20260930.2345＋chart 0.1.1）。
 3. T1 = 2 vCPU / 4 Gi / 25 Gi：min_*、plan cs_*、兩顆 PVC 加總三處一致。
 """
 import json
@@ -52,7 +52,7 @@ class TestCodeServerSeed(TransactionCase):
         tpl = self._tpl()
         self.assertEqual(tpl.helm_repo_url or '', '')
         self.assertEqual(tpl.helm_chart_name, CS_CHART)
-        self.assertEqual(tpl.helm_chart_version, '0.1.0')
+        self.assertEqual(tpl.helm_chart_version, '0.1.1')
 
     def test_password_only_and_settable(self):
         tpl = self._tpl()
