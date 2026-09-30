@@ -23,6 +23,14 @@ HELM_OPERATION_TIMEOUT = 120
 # controller 仍同步、前端仍 30s abort；worker 占用與外層預算由 #1257／#1159 承接。
 INIT_ODOO_CONNECT_TIMEOUT = 120
 INIT_ODOO_READ_TIMEOUT = 900
+# #1257 Q31：n8n init 專屬 connect/read 預算，不再共用 HELM_OPERATION_TIMEOUT=120
+# （那個 120s 比 operator 端的子步 envelope 短，client 會先斷線、server 照跑）。
+# envelope 由 repo-lint init-n8n-budget-ladder 從 operator 原始碼的 AST 算出（目前
+# 531s：find_pod 60＋readiness 206＋node request 5×15＋secret／patch／deployment
+# 3×30＋restart 100）；read 600 留約 70s 餘裕。同樣不是 server／整體 HTTP 的硬
+# deadline，lease 由這組常數推導（src/models/cloud_service_init_attempt.py）。
+INIT_N8N_CONNECT_TIMEOUT = 120
+INIT_N8N_READ_TIMEOUT = 600
 # #461：reset-admin-password 專屬預算。**刻意不共用** HELM_OPERATION_TIMEOUT——
 # 那個 120s 是「helm 操作大概要多久」的猜測，與 operator 端真正的上限沒有關係，
 # 而 reset 是唯一會撞到那個落差的路徑（#459 stg 實測：operator 最壞 ≈560s，
@@ -693,7 +701,7 @@ class PaaSOperatorClient:
                 'owner_email': owner_email,
                 'owner_password': owner_password,
             },
-            timeout=HELM_OPERATION_TIMEOUT,
+            timeout=(INIT_N8N_CONNECT_TIMEOUT, INIT_N8N_READ_TIMEOUT),
         )
 
     def init_odoo(
