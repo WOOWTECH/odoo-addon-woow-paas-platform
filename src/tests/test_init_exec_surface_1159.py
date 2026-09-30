@@ -478,14 +478,6 @@ class TestInitCron1159(_RealCursorCase):
         second = self._add('odoo', ready_minutes_ago=10)
         calls = []
         client = operator_client()
-        client.init_odoo.side_effect = [
-            {'success': False, 'error_kind': 'not_executed'},
-            {'success': True},
-        ]
-        client.init_odoo.side_effect = lambda **kwargs: (
-            calls.append(kwargs['release_name']) or (
-                {'success': False, 'error_kind': 'not_executed'} if len(calls) == 1
-                else {'success': True}))
         clock = {'now': 0}
         with patch(f'{_MODEL_MODULE}._init_cron_clock', side_effect=lambda: clock['now']):
             def first_call(**kwargs):

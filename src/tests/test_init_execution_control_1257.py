@@ -753,6 +753,26 @@ class TestInitLeaseRealCursor1257(TransactionCase):
         self.assertTrue(applied_at)
         self.assertNotIn(_JWT, attempt_error)
 
+    def test_not_executed_apply_crash_recovers_call_time_and_cooldown_once(self):
+        """E6：not_executed 結果已 commit 後套用炸掉，補套不重送且帶回可辨識 7 秒 call time。"""
+        client = operator_client(init_odoo={
+            'success': False, 'error_step': 'wait_ready', 'error_kind': 'not_executed'})
+        model = type(self.env[SVC])
+        with patch.object(model, '_init_apply_outcome', side_effect=RuntimeError('apply crash')):
+            self._entry(client)
+        attempt_id = self._read()['attempt']
+        self._sql("UPDATE woow_paas_platform_cloud_service_init_attempt SET "
+                  "claimed_at = finished_at - interval '7 seconds' WHERE id = %s", (attempt_id,))
+        self._entry(client)
+        state = self._read()
+        self.assertEqual(client.init_odoo.call_count, 1)
+        self.assertAlmostEqual(state['wait_spent'], 7, delta=.1)
+        self.assertAlmostEqual((state['retry_eligible_at'] - state['wait_started_at']).total_seconds(),
+                               60, delta=.1)
+        self._entry(client)
+        self.assertEqual(client.init_odoo.call_count, 1)
+        self.assertAlmostEqual(self._read()['wait_spent'], 7, delta=.1)
+
     def test_two_cursors_recover_recorded_unknown_only_once(self):
         """兩條 recovery 都先見 marker 空時，列鎖後重讀 marker 仍只能計 unknown 一次。"""
         self._set_lease(seconds_from_now=600)
