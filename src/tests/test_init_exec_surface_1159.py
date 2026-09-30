@@ -591,7 +591,7 @@ class TestInitCron1159(_RealCursorCase):
 
     def test_operator_wait_expiry_converges_without_a_client_or_ready_pod(self):
         """D2-R：計時收尾在 queue/client 分支之前，不能被純容量排隊遮蔽。"""
-        service_id = self._add('odoo')  # no Ready observation: init cron cannot claim it
+        service_id = self._add('odoo')  # 尚無 Ready 觀測，init cron 不能 claim
         with self.registry.cursor() as cr:
             svc = self._env(cr)[SVC].browse(service_id)
             now = svc._init_db_now()

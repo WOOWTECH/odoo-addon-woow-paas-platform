@@ -4520,7 +4520,7 @@ class CloudService(models.Model):
 
     @api.model
     def _init_settle_operator_wait_timeouts(self):
-        """Cron-wide expiry sweep: a missing client or Ready observation cannot hide expiry."""
+        """cron 全域到期掃描：缺 client 或 Ready 觀測不能遮蔽已耗盡的時計。"""
         services = self.sudo().search([
             ('state', '=', 'initializing'),
             '|', ('init_wait_started_at', '!=', False), ('init_wait_spent_seconds', '>', 0),
@@ -4559,8 +4559,7 @@ class CloudService(models.Model):
         """
         self.ensure_one()
         cr = self.env.cr
-        # Recover a result that committed before its worker crashed before lease expiry
-        # can release it; this is the durable half of D2-R accounting.
+        # lease 到期清理前先補套已 commit 的結果，保住 worker crash 後的 D2-R 記帳。
         if self._init_recover_recorded_attempt():
             cr.commit()
             return
@@ -4728,7 +4727,9 @@ class CloudService(models.Model):
         if not attempt or not attempt.finished_at or not attempt.outcome:
             return False
         api_key = None
-        if attempt.init_type == 'n8n' and attempt.outcome == OUTCOME_SUCCESS:
+        if (attempt.init_type == 'n8n' and attempt.outcome == OUTCOME_SUCCESS
+                and attempt.n8n_key_persisted):
+            # service 可能還留上一把 key；只有本 attempt 的持久化證據才可用於重播。
             api_key = self.sudo().n8n_api_key
         outcome = InitOutcome(
             attempt.outcome,
@@ -4785,21 +4786,23 @@ class CloudService(models.Model):
         """Q8：n8n 拿到的 API key 先存（success 與 partial 都是），不進 attempt 記錄。
 
         存放處沿用既有的 ``n8n_api_key``（``groups='base.group_system'``）——單一來源，
-        MCP helm values 也從這裡取（#1257 r2 裁定 g(i)）。success 的 CAS 套用會在列鎖
-        下再寫一次，這一步是給 partial 與「CAS 沒套上」的情形保底。
+        MCP helm values 也從這裡取（#1257 r2 裁定 g(i)）。回傳是否確實寫入；呼叫端將
+        非敏感 marker 與 key 同交易 commit。success 的 CAS 仍可用活 worker 持有的 wire
+        key 補寫，但 crash recovery 不可拿 service 的舊 key 假裝本次已保存。
         """
         self.ensure_one()
         rows = self._init_guarded(
             f"SELECT 1 FROM {self._table} WHERE id = %s FOR NO KEY UPDATE", (self.id,))
-        if rows is None:
-            # 拿不到列鎖就寫不進去：success 仍會在 CAS 那步寫；partial 的 key 則變成
-            # 孤兒（下一次重送再建一把），只能告警。
+        if not rows:
+            # 保存失敗不代表遠端失敗；留告警，由 marker 擋住不具 key 證據的成功補套。
             _logger.error(
-                "[#1257] could not store the n8n API key of service %s (row busy)",
+                "[#1257] could not store the n8n API key of service %s (row busy or missing)",
                 self.id,
             )
-            return
+            return False
         self.sudo().write({'n8n_api_key': api_key})
+        self.flush_recordset(['n8n_api_key'])
+        return True
 
     def _init_release_unapplied(self, attempt_id, reason, outcome=None):
         """結果沒套上服務時釋放 lease（不耗額度）；只放自己持有的那一個。
@@ -4854,8 +4857,8 @@ class CloudService(models.Model):
                 'error_kind': outcome.error_kind or False,
                 'error': masked,
             })
-            if outcome.api_key:
-                self._init_store_n8n_api_key(outcome.api_key)
+            if outcome.api_key and self._init_store_n8n_api_key(outcome.api_key):
+                attempt.write({'n8n_key_persisted': True})
             cr.commit()
         except Exception:
             cr.rollback()
@@ -4872,9 +4875,8 @@ class CloudService(models.Model):
             cr.commit()
         except Exception:
             cr.rollback()
-            # The result record already committed. Keep its lease pointer so the next
-            # cron transaction can recover the narrow apply half; releasing it here
-            # would discard the only idempotency anchor and silently lose D2-R time.
+            # 結果已 commit，保留 lease pointer 讓下一趟只補套記帳；此時清掉會遺失
+            # 唯一的冪等 anchor，連帶丟掉 D2-R 已耗時間。
             _logger.exception(
                 "[#1257] local bookkeeping error applying init attempt %s of service "
                 "%s (outcome=%s); keeping it for recovery", attempt.id, self.id,
@@ -4948,6 +4950,15 @@ class CloudService(models.Model):
         kind = outcome.outcome
         release = {'init_lease_until': False, 'init_attempt_id': False}
         if kind == OUTCOME_SUCCESS:
+            if attempt.init_type == 'n8n' and not outcome.api_key:
+                # 活 worker 可以用 wire key 補寫；冷重播缺持久化證據時，不能套舊 key。
+                # 保留 active lease／pointer，待既有到期收尾後才可建立新 attempt。
+                _logger.error(
+                    "[#1257] recorded n8n success for service %s attempt %s lacks a "
+                    "persisted key; keeping lease and pending initialization",
+                    self.id, attempt.id,
+                )
+                return False
             vals = dict(release, **{
                 'state': 'running',
                 'init_pending': False,
@@ -4982,6 +4993,9 @@ class CloudService(models.Model):
                 svc._apply_helm_values(merged_helm_values, extra_vals=vals)
             else:
                 svc.write(vals)
+            if attempt.init_type == 'n8n':
+                # 即時 CAS 可能補上先前未保存的 wire key，與 service 更新同交易成立。
+                attempt.write({'n8n_key_persisted': True})
             _logger.info(
                 "[#1257] %s init succeeded for service %s (attempt #%s)",
                 attempt.init_type, svc.name, attempt.sequence)
@@ -4998,9 +5012,8 @@ class CloudService(models.Model):
             }))
             svc._init_check_exhausted()
         elif kind in (OUTCOME_UNKNOWN, OUTCOME_PARTIAL):
-            # Q8：重送前必須等 lease 到期——lease 刻意留著，由 settle 釋放。D2-R2
-            # distinguishes the two outcomes: partial proved execution and resets wait;
-            # unknown preserves the previous operator readiness budget.
+            # Q8：重送前必須等 lease 到期，由 settle 釋放。D2-R2：partial 已證明執行，
+            # 重置 operator 等待；unknown 保留既有預算，兩者都不提前釋放 lease。
             vals = {
                 'init_unknown_count': (svc.init_unknown_count or 0) + 1,
                 'init_error': masked_error,

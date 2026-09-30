@@ -222,6 +222,13 @@ class CloudServiceInitAttempt(models.Model):
         help='已持久化結果套用到 service 計數／狀態的時間；使結果記錄 → 套用的 '
              'crash recovery 保持冪等。',
     )
+    n8n_key_persisted = fields.Boolean(
+        string='n8n Key Persisted',
+        default=False,
+        copy=False,
+        help='本 attempt 的 n8n API key 已與此 marker 同交易寫入 service 受保護欄位；'
+             '此欄僅記錄持久化證據，不存放 secret。',
+    )
     outcome = fields.Selection(
         selection=[
             (OUTCOME_SUCCESS, 'Success'),

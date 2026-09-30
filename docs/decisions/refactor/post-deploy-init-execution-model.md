@@ -64,7 +64,7 @@ commit（poll 剛寫的 state 先落地）
 → claim：單一條件式 UPDATE（lease 為空才取得）＋ 插 attempt → commit
 → 呼叫 operator
 → 先寫 attempt 結果（n8n 拿到的 key 同時存下）→ commit
-→ CAS：attempt 仍持有 lease 且服務仍在 initializing 才套用 → commit
+→ CAS：attempt 仍持有 lease、服務仍在 initializing，且 generation 相同才套用 → commit
 ```
 
 - 撞到 40001 或 `lock_timeout` 視為「沒拿到」，不算失敗。時鐘一律用 DB（`statement_timestamp()`；`now()` 是交易開始
@@ -72,6 +72,10 @@ commit（poll 剛寫的 state 先落地）
 - lease 長度＝client 預算（connect＋read）＋180s，直接引用同一組常數：**Odoo 1200s、n8n 900s**。上界要小於承載它的
   runtime 的 cron 硬上限（prod `limit_time_real_cron=1800`，woow-paas/paas-app-bundle-cd#154；遷移後 platform profile
   ≥1800，woow-paas/woow-paas-charts#81）。
+- 跨代結果在 service 列鎖下拒絕，不能用舊 success 清掉新代的欠 init；有效 lease 不提前釋放，過期後由既有 settle 清 pointer。
+- n8n 的 `n8n_key_persisted` 僅記錄「本 attempt 的 key 已存於 service」的非敏感證據，與受保護 key 同交易成立，attempt 不存 key。
+  活 worker 仍有 wire key 時可在成功 CAS 補寫；crash recovery 缺此證據（或 key 為空）時不套 success、不猜舊 key，保留
+  lease／pointer，到期後沿既有收尾與重新 claim 路徑處理。遠端 success 沒被改稱 failed，也不額外扣 failed／unknown 次數。
 - **不承諾 exactly-once**：lease 擋「同一時間兩條連線各送一次」與 worker 被殺之後的立即重跑；「結果未知之後的重送」
   由 unknown 額度封頂。operator 不新增 operation API、不改 init 執行語意，只加 additive 回應欄位（#1263）。
 
@@ -130,7 +134,7 @@ woow-paas/paas-app-bundle-cd#154（prod `limit_time_real_cron=1800`）要先上 
   transition 完成、init 分派（`init_ready_observed`／`init_ready_since`，由 not ready 轉 ready 時 trigger init
   cron）、deleting 404→unlink（#1159 起第一次啟用）。每台服務一個回捲單位。拿到 status 就 stamp `observed_at`。
 - **init cron**（`ir_cron_run_post_deploy_inits`，每分鐘＋自我 `_trigger()`）：開頭執行 redeploy 意圖（Q27）；
-  依 n8n 優先（Q28a）、其次最早觀測到 ready 的順序 claim；每 tick wall 預算 B＝1100s（已用時間＋該類最壞 attempt：
+  依 n8n 優先（Q28a）、其次同類 queue turn 的順序 claim（首次使用 first-ready，每次 claim 移尾）；每 tick wall 預算 B＝1100s（已用時間＋該類最壞 attempt：
   Odoo 1020／n8n 720）與軟上限 10 筆；回報 `_notify_progress(remaining=0)`，有積壓就自我 `_trigger()`——不回報
   `remaining>0`（core 會在同一趟、同一個 watchdog 內續跑最多 10 批）。init 最多佔 1 個 cron worker（SKIP LOCKED
   單例），不與短 poll 同 job、同交易（Q4）。
@@ -148,7 +152,9 @@ woow-paas/paas-app-bundle-cd#154（prod `limit_time_real_cron=1800`）要先上 
 
 ## Consequences
 
-- n8n 每次重送一定再建一把 API key：最壞殘留 2 把孤兒 key＋2 次 restart（孤兒 key 能否撤銷未驗）。
+- n8n 重送會再建 API key；每代 unknown／partial 的兩次額度限制這條重送路徑，但不涵蓋另開新代或平台記帳失敗的重試。
+  key 未能持久化且原 worker 已失去 wire key 時，不能從舊值還原它；保守等待 lease 到期後重試仍可能留下孤兒 key。
+  孤兒 key 能否撤銷未驗，不宣稱所有故障下全服務生命週期都最多兩把。
 - 停權期間已被舊 code 吃掉的 init 沒有資料可推回來，只能靠 migration log 人工抽查。
 - init 失敗的出口多了一個「等待逾時」：pod 30 分鐘都沒 ready 的 initializing 服務會轉 error（以前會永遠停在
   initializing）。

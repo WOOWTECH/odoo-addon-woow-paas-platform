@@ -843,6 +843,80 @@ class TestInitLeaseRealCursor1257(TransactionCase):
         self.assertTrue(applied_at)
         self.assertNotIn(_JWT, attempt_error)
 
+    def _assert_n8n_recovery_rejects_an_unpersisted_key(self, previous_key):
+        """真鎖同時阻止key保底與即時CAS，下一個caller不能拿空／舊key冒充本次成功。"""
+        service_id = self.service_ids['n8n']
+        self._sql('UPDATE woow_paas_platform_cloud_service SET n8n_api_key = %s, helm_values = %s '
+                  'WHERE id = %s', (previous_key or None, '{}', service_id))
+        self._sql('UPDATE woow_paas_platform_cloud_app_template SET mcp_api_key_helm_path = %s '
+                  'WHERE id = %s', ('config.mcpApiKey', self.template_ids['n8n']))
+        client = operator_client()
+        with self.registry.cursor() as holder:
+            def return_remote_success(**kwargs):
+                # claim已commit，才從另一條真連線持有service列鎖。
+                holder.execute('SELECT id FROM woow_paas_platform_cloud_service '
+                               'WHERE id = %s FOR NO KEY UPDATE', (service_id,))
+                return {'success': True, 'api_key': _JWT}
+
+            client.init_n8n.side_effect = return_remote_success
+            try:
+                with patch(f'{_MODEL_MODULE}._INIT_CLAIM_LOCK_TIMEOUT', '50ms'):
+                    self._entry(client, 'n8n')
+            finally:
+                holder.rollback()
+        client.init_n8n.side_effect = None
+        client.init_n8n.return_value = {'success': True, 'api_key': _JWT}
+        before = self._read('n8n')
+        self.assertEqual(before['attempts'], [(1, 'success', True)])
+        self.assertEqual(before['n8n_api_key'], previous_key or False)
+        self.assertNotEqual(before['n8n_api_key'], _JWT, '前置：遠端新key確實未落到service')
+        self._entry(client, 'n8n')
+        blocked = self._read('n8n')
+        self.assertEqual(blocked['state'], 'initializing', '缺本attempt的key證據不得假成功')
+        self.assertTrue(blocked['init_pending'])
+        self.assertEqual((blocked['attempt'], blocked['lease']), (before['attempt'], before['lease']))
+        self.assertEqual(client.init_n8n.call_count, 1, 'active lease期間不可自動重送')
+        self.assertEqual((blocked['init_retries'], blocked['init_unknown_count']), (0, 0))
+        self.assertEqual(self._run(lambda svc: json.loads(svc.helm_values), 'n8n'), {})
+        self.assertFalse(self._run(lambda svc: svc.init_attempt_id.n8n_key_persisted, 'n8n'))
+        self.assertFalse(self._run(lambda svc: bool(svc.init_attempt_id.applied_at), 'n8n'))
+        # 原有lease到期收尾之後，正常的新attempt可以存key與mirror；不重播舊key。
+        old_attempt = before['attempt']
+        self._sql('UPDATE woow_paas_platform_cloud_service SET init_lease_until = '
+                  "(statement_timestamp() AT TIME ZONE 'UTC') - interval '1 second' WHERE id = %s",
+                  (service_id,))
+        self._entry(client, 'n8n')
+        completed = self._read('n8n')
+        self.assertEqual(client.init_n8n.call_count, 2)
+        self.assertEqual(completed['state'], 'running')
+        self.assertEqual(completed['n8n_api_key'], _JWT)
+        self.assertEqual(self._run(lambda svc: json.loads(svc.helm_values), 'n8n'),
+                         {'config': {'mcpApiKey': _JWT}})
+        history = self._run(lambda svc: [(a.id, a.n8n_key_persisted, bool(a.applied_at), a.error or '')
+            for a in svc.env[ATTEMPT].search([('service_id', '=', svc.id)], order='sequence')], 'n8n')
+        self.assertEqual(history[0][:3], (old_attempt, False, False))
+        self.assertEqual(history[1][1:3], (True, True))
+        self.assertTrue(all(_JWT not in row[3] for row in history))
+
+    def test_n8n_recorded_success_does_not_replay_a_previous_key(self):
+        self._assert_n8n_recovery_rejects_an_unpersisted_key('previous-test-key')
+
+    def test_n8n_recorded_success_does_not_replay_without_a_key(self):
+        self._assert_n8n_recovery_rejects_an_unpersisted_key(False)
+
+    def test_live_n8n_success_can_persist_the_wire_key_after_initial_store_misses(self):
+        """原worker仍握有wire key時，成功CAS可補寫；不能把cold-replay閘套到這條正向路徑。"""
+        model = type(self.env[SVC])
+        client = operator_client(init_n8n={'success': True, 'api_key': _JWT})
+        with patch.object(model, '_init_store_n8n_api_key', return_value=False) as missed:
+            self._entry(client, 'n8n')
+        missed.assert_called_once()
+        state = self._read('n8n')
+        self.assertEqual((state['state'], state['n8n_api_key']), ('running', _JWT))
+        persisted = self._run(lambda svc: svc.env[ATTEMPT].search(
+            [('service_id', '=', svc.id)]).n8n_key_persisted, 'n8n')
+        self.assertTrue(persisted)
+
     def test_recorded_old_generation_success_cannot_complete_the_new_generation(self):
         """P1-1：過期舊代 success 尚未套用時開新代，entry 必須丟舊 pointer 並真的送新 init。"""
         self._set_lease(seconds_from_now=-1)
@@ -859,9 +933,25 @@ class TestInitLeaseRealCursor1257(TransactionCase):
         self.assertEqual(client.init_odoo.call_count, 1)
         self.assertEqual((state['state'], state['init_pending'], state['init_retries'],
                           state['init_unknown_count']), ('running', False, 0, 0))
-        attempts = self._run(lambda svc: svc.env[ATTEMPT].search(
-            [('service_id', '=', svc.id)], order='sequence'))
-        self.assertFalse(attempts.filtered(lambda a: a.id == attempt_id).applied_at)
+        old_applied = self._run(lambda svc: bool(svc.env[ATTEMPT].browse(attempt_id).applied_at))
+        self.assertFalse(old_applied)
+
+    def test_old_generation_result_does_not_release_an_active_lease(self):
+        """跨代結果即使已結束，也不能讓仍在有效期內的 lease 被提前解除。"""
+        self._set_lease(seconds_from_now=600, outcome='success')
+        before = self._read()
+        self._sql('UPDATE woow_paas_platform_cloud_service_init_attempt '
+                  "SET finished_at = (statement_timestamp() AT TIME ZONE 'UTC') WHERE id = %s",
+                  (before['attempt'],))
+        self._run(lambda svc: svc._open_init_generation())
+        client = operator_client(init_odoo={'success': True})
+        self._entry(client)
+        after = self._read()
+        client.init_odoo.assert_not_called()
+        self.assertEqual(after['state'], 'initializing')
+        self.assertTrue(after['init_pending'])
+        self.assertEqual((after['attempt'], after['lease']), (before['attempt'], before['lease']))
+        self.assertEqual((after['init_retries'], after['init_unknown_count']), (0, 0))
 
     def test_not_executed_apply_crash_recovers_call_time_and_cooldown_once(self):
         """E6：not_executed 結果已 commit 後套用炸掉，補套不重送且帶回可辨識 7 秒 call time。"""
@@ -902,7 +992,7 @@ class TestInitLeaseRealCursor1257(TransactionCase):
 
         def ordered_guard(records, query, params):
             name = threading.current_thread().name
-            is_apply = ('SELECT 1 FROM' in query and 'init_attempt_id = %s' in query
+            is_apply = ('init_attempt_id = %s' in query and "state = 'initializing'" in query
                         and 'FOR NO KEY UPDATE' in query)
             if is_apply and name in calls:
                 calls[name] += 1
@@ -971,7 +1061,7 @@ class TestInitLeaseRealCursor1257(TransactionCase):
 
         def count_real_conflicts(records, query, params):
             result = original_guard(records, query, params)
-            if ('SELECT 1 FROM' in query and 'init_attempt_id = %s' in query
+            if ('init_attempt_id = %s' in query and "state = 'initializing'" in query
                     and threading.current_thread().name == 'blocked-recovery'):
                 conflicts.append(result)
             return result
