@@ -2810,16 +2810,13 @@ class CloudService(models.Model):
         services = self.search([
             ('state', 'in', ['deploying', 'upgrading', 'initializing', 'deleting']),
         ])
-        if not services:
-            return
+        client = None
+        if services:
+            from ..services.paas_operator import get_paas_operator_client
 
-        from ..services.paas_operator import get_paas_operator_client
+            client = get_paas_operator_client(self.env)
 
-        client = get_paas_operator_client(self.env)
-        if not client:
-            return
-
-        for service in services:
+        for service in (services if client else self.browse()):
             service_label = (service.name, service.id)
             try:
                 service._poll_and_update_status(client)
@@ -2835,6 +2832,9 @@ class CloudService(models.Model):
                 self.env.cr.rollback()
                 _logger.exception(
                     "Error checking status for service %s (id=%s)", *service_label)
+        # Q38：init cron 的狀態＋全域監控項（與 init cron 互查 lastcall）。沒有轉移中的
+        # 服務、或 operator 沒設定時也要跑——那正是監控要看得到的情形。
+        self.env['woow_paas_platform.platform_monitor']._run_poll_cron_checks()
 
     # ------------------------------------------------------------------ #
     #  Cron：post-deploy init（#1159 Q4／Q33）                            #
@@ -2916,6 +2916,8 @@ class CloudService(models.Model):
         self.env['ir.cron']._notify_progress(done=sent, remaining=0)
         if backlog:
             self.env.ref(_INIT_CRON_XMLID)._trigger()
+        # Q38：反過來檢查短 poll cron 的 lastcall。
+        self.env['woow_paas_platform.platform_monitor']._run_init_cron_checks()
 
     def _cron_reconcile_release_facts(self):
         """#627 (i)：抓「非由 Odoo 發起」的 chart 變動——**唯一會看 running 的路徑**。
@@ -4325,11 +4327,15 @@ class CloudService(models.Model):
             'init_exit': exit_kind,
             'error_message': message,
         })
-        # 平台告警（Q8「用完轉 error 並告警平台」；mail.activity 通路屬 #1159 Q38）。
+        # 平台告警（Q8「用完轉 error 並告警平台」）：log ＋ #1159 Q38 的 mail.activity。
+        # unknown 額度用完由監控的「24h unknown 次數」涵蓋；這裡追加等待類的放棄。
         _logger.error(
             "[#1257] post-deploy init gave up for service %s (id=%s, generation=%s): "
             "exit=%s", self.name, self.id, self.init_generation, exit_kind,
         )
+        if exit_kind in ('wait_timeout', 'fast_fail'):
+            self.env['woow_paas_platform.platform_monitor']._report_gave_up(
+                self, exit_kind, message)
 
     def _init_check_exhausted(self):
         """額度已用完（例如 unknown 在停權期間才被收斂計數）⇒ 轉 error。"""
@@ -4733,7 +4739,7 @@ class CloudService(models.Model):
             cr.commit()
             return
         try:
-            self._init_apply_outcome(attempt, outcome, masked)
+            applied = self._init_apply_outcome(attempt, outcome, masked)
             cr.commit()
         except Exception:
             cr.rollback()
@@ -4742,6 +4748,12 @@ class CloudService(models.Model):
                 "%s (outcome=%s)", attempt.id, self.id, outcome.outcome,
             )
             self._init_release_unapplied(attempt.id, 'apply failed')
+            cr.commit()
+            return
+        if applied and outcome.outcome == OUTCOME_SUCCESS and attempt.init_type == 'n8n':
+            # #1159 Q28b：n8n 從 ready（公開可達）到 owner 建立的時間。
+            self.env['woow_paas_platform.platform_monitor']._report_n8n_owner_window(
+                self.sudo(), self.sudo().init_ready_since, attempt.finished_at)
             cr.commit()
 
     _INIT_CAS_TRIES = 3

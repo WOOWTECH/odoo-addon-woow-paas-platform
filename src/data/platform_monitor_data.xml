@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- #1159 Q38／D3：背景健康監控 mail.activity 的唯一掛點（mail.thread 單例）。
+         查找一律以本 xmlid 為準（PlatformMonitor._singleton）；ACL 只給 base.group_system。 -->
+    <data noupdate="1">
+        <record id="platform_monitor_singleton" model="woow_paas_platform.platform_monitor">
+            <field name="name">PaaS Platform Monitor</field>
+        </record>
+    </data>
+</odoo>

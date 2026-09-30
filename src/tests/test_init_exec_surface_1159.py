@@ -359,6 +359,11 @@ class _RealCursorCase(TransactionCase):
                            ('woow_paas_platform.workspace', self.workspace_id))
             cr.execute('DELETE FROM woow_paas_platform_workspace WHERE id = %s',
                        (self.workspace_id,))
+            # 兩個 cron 結尾都跑監控（Q38）：真 cursor 下 activity／通知訊息會落地。
+            for table, column in (('mail_activity', 'res_model'), ('mail_message', 'model'),
+                                  ('mail_followers', 'res_model')):
+                cr.execute(f"DELETE FROM {table} WHERE {column} = "
+                           "'woow_paas_platform.platform_monitor'")
             cr.execute("DELETE FROM ir_cron_trigger WHERE cron_id IN "
                        "(SELECT res_id FROM ir_model_data WHERE module = 'woow_paas_platform' "
                        "AND name IN ('ir_cron_run_post_deploy_inits', "
@@ -502,6 +507,24 @@ class TestInitCron1159(_RealCursorCase):
         self._run_cron('_cron_run_post_deploy_inits', client)
         self.assertEqual(self._triggers(), triggers)
 
+    def test_slow_n8n_owner_creation_is_reported(self):
+        """Q28b：n8n 從 ready（公開可達）到 owner 建立超過 5 分就告警（每台一行）。"""
+        slow = self._add('n8n', ready_minutes_ago=6)
+        fast = self._add('n8n', ready_minutes_ago=1)
+        client, _calls = self._recording_client()
+        self._run_cron('_cron_run_post_deploy_inits', client)
+        with self.registry.cursor() as cr:
+            env = self._env(cr)
+            monitor = env['woow_paas_platform.platform_monitor']
+            notes = ' '.join(env['mail.activity'].search([
+                ('res_model', '=', 'woow_paas_platform.platform_monitor'),
+                ('summary', '=', monitor.SUMMARY_N8N_OWNER)]).mapped(
+                    lambda a: str(a.note or '')))
+            slow_name = env[SVC].browse(slow).name
+            fast_name = env[SVC].browse(fast).name
+        self.assertIn(slow_name, notes)
+        self.assertNotIn(fast_name, notes)
+
     def test_requested_redeploys_run_in_the_init_cron(self):
         """Q27／#1257 f：redeploy 意圖由 init cron（掌管 lease 的那一個）執行。"""
         client, _calls = self._recording_client()
@@ -630,3 +653,130 @@ class TestDnsReprobeCron1159(_RealCursorCase):
             cron = self._env(cr).ref('woow_paas_platform.ir_cron_reprobe_public_url_dns')
             self.assertEqual((cron.interval_number, cron.interval_type, cron.active),
                              (15, 'minutes', True))
+
+
+# ====================================================================== #
+#  驗收 6：背景健康監控（Q38／D3，掛點＝mail.thread 單例 platform_monitor）   #
+# ====================================================================== #
+
+MONITOR = 'woow_paas_platform.platform_monitor'
+POLL_CRON = 'woow_paas_platform.ir_cron_check_deploying_services'
+
+
+@tagged('post_install', '-at_install')
+class TestPlatformMonitor1159(_ServiceCase):
+
+    def setUp(self):
+        super().setUp()
+        self.Monitor = self.env[MONITOR]
+        self.singleton = self.Monitor._singleton()
+        self.env['mail.activity'].search([
+            ('res_model', '=', MONITOR)]).unlink()  # 本交易內，結束時回捲
+        self.admins = self.env.ref('base.group_system').users.filtered(
+            lambda u: u.active and not u.share)
+        # 兩個 cron 都「剛跑過」＝健康的基準線；個別測試再把它弄舊。
+        for xmlid in (INIT_CRON, POLL_CRON):
+            self.env.ref(xmlid).sudo().write({'active': True, 'lastcall': fields.Datetime.now()})
+
+    def _activities(self, summary=None):
+        domain = [('res_model', '=', MONITOR), ('res_id', '=', self.singleton.id)]
+        if summary:
+            domain.append(('summary', '=', summary))
+        return self.env['mail.activity'].sudo().search(domain)
+
+    def test_singleton_is_the_data_record(self):
+        self.assertEqual(self.singleton, self.env.ref('woow_paas_platform.platform_monitor_singleton'))
+        self.assertEqual(self.Monitor._singleton(), self.singleton, '查找以 xmlid 為準，不重建')
+
+    def test_alert_goes_to_every_system_user_and_dedupes_per_summary(self):
+        self.assertTrue(self.admins)
+        self.assertTrue(self.Monitor._alert('1159 test A', 'first'))
+        self.assertEqual(set(self._activities('1159 test A').mapped('user_id')), set(self.admins))
+        self.assertFalse(self.Monitor._alert('1159 test A', 'second'), '同 summary 未處理前不重建')
+        self.assertEqual(len(self._activities('1159 test A')), len(self.admins))
+        self.assertTrue(self.Monitor._alert('1159 test B', 'other'), '不同監控項各自去重')
+
+    def test_non_system_user_cannot_read_the_monitor_or_its_activities(self):
+        self.Monitor._alert('1159 test secret', 'platform only')
+        user = self.env['res.users'].create({
+            'name': '1159 plain user', 'login': f'u1159-{self.tag}',
+            'groups_id': [(6, 0, [self.env.ref('base.group_user').id])]})
+        from odoo.exceptions import AccessError
+        with self.assertRaises(AccessError):
+            self.Monitor.with_user(user).search([])
+        self.assertFalse(self.env['mail.activity'].with_user(user).search([
+            ('res_model', '=', MONITOR)]))
+
+    def test_init_cron_health_is_checked_by_the_short_poll(self):
+        cron = self.env.ref(INIT_CRON).sudo()
+        summary = self.Monitor.SUMMARY_INIT_CRON
+        self.Monitor._check_init_cron_health()
+        self.assertFalse(self._activities(summary), '健康時不告警')
+        cron.write({'lastcall': fields.Datetime.now() - timedelta(minutes=41)})
+        self.Monitor._check_init_cron_health()
+        self.assertTrue(self._activities(summary))
+        self._activities(summary).unlink()
+        cron.write({'lastcall': fields.Datetime.now(), 'active': False})
+        self.Monitor._check_init_cron_health()
+        self.assertTrue(self._activities(summary), 'init cron 被停用也要告警')
+
+    def test_short_poll_health_is_checked_by_the_init_cron(self):
+        summary = self.Monitor.SUMMARY_POLL_CRON
+        self.Monitor._check_poll_cron_health()
+        self.assertFalse(self._activities(summary))
+        self.env.ref(POLL_CRON).sudo().write(
+            {'lastcall': fields.Datetime.now() - timedelta(minutes=11)})
+        self.Monitor._check_poll_cron_health()
+        self.assertTrue(self._activities(summary))
+
+    def test_each_cron_runs_its_side_of_the_mutual_check(self):
+        model = type(self.Monitor)
+        with patch.object(model, '_run_poll_cron_checks', autospec=True) as poll_side, \
+                patch.object(model, '_run_init_cron_checks', autospec=True) as init_side, \
+                patch(f'{_OPERATOR_MODULE}.get_paas_operator_client', return_value=None):
+            self.env[SVC]._cron_check_deploying_services()
+            poll_side.assert_called_once()
+            init_side.assert_not_called()
+            poll_side.reset_mock()
+            self.env[SVC]._cron_run_post_deploy_inits()
+            init_side.assert_called_once()
+            poll_side.assert_not_called()
+
+    def test_oldest_observation(self):
+        summary = self.Monitor.SUMMARY_OBSERVED
+        svc = self._service('none', state='deploying')
+        svc.sudo().write({'observed_at': fields.Datetime.now() - timedelta(minutes=10)})
+        pending = self._service('none', state='pending')
+        pending.sudo().write({'observed_at': fields.Datetime.now() - timedelta(hours=5)})
+        self.Monitor._check_oldest_observation()
+        self.assertFalse(self._activities(summary), 'pending 不在範圍；10 分未超過門檻')
+        svc.sudo().write({'observed_at': fields.Datetime.now() - timedelta(minutes=16)})
+        self.Monitor._check_oldest_observation()
+        self.assertIn(svc.name, self._activities(summary)[:1].note or '')
+
+    def test_unknown_results_in_the_last_day(self):
+        summary = self.Monitor.SUMMARY_GAVE_UP
+        svc = self._service('odoo', state='initializing')
+        self.Monitor._check_unknown_results()
+        self.assertFalse(self._activities(summary))
+        self.env[ATTEMPT].sudo().create({
+            'service_id': svc.id, 'generation': 1, 'sequence': 1, 'init_type': 'odoo',
+            'claimed_at': fields.Datetime.now() - timedelta(hours=1),
+            'lease_until': fields.Datetime.now(),
+            'finished_at': fields.Datetime.now() - timedelta(minutes=30),
+            'outcome': 'unknown'})
+        self.Monitor._check_unknown_results()
+        self.assertTrue(self._activities(summary))
+
+    def test_readiness_give_ups_are_reported(self):
+        summary = self.Monitor.SUMMARY_GAVE_UP
+        svc = self._service('odoo', state='initializing')
+        svc.sudo().write({'init_wait_since': fields.Datetime.now() - timedelta(minutes=31)})
+        self._poll(svc, pods=_NOT_READY_PODS)
+        self.assertEqual(svc.init_exit, 'wait_timeout')
+        self.assertIn(svc.name, self._activities(summary)[:1].note or '')
+        other = self._service('odoo', state='initializing')
+        self._poll(other, pods=[{'name': 'x-0', 'phase': 'Running', 'ready': '0/1', 'restarts': 4}])
+        self.assertEqual(other.init_exit, 'fast_fail')
+        self.assertIn(other.name, self._activities(summary)[:1].note or '',
+                      '同一張未處理的 activity 追加一行，不另開')

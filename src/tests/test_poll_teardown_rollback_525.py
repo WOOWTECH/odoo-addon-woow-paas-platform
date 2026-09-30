@@ -175,6 +175,11 @@ class TestCronReapLeavesNoHalfDeletedService(TransactionCase):
                        (ids['workspace'],))
             cr.execute('DELETE FROM woow_paas_platform_workspace WHERE id = %s',
                        (ids['workspace'],))
+            # #1159 Q38：cron 結尾的監控在真 cursor 下會留下 activity／通知訊息。
+            for table, column in (('mail_activity', 'res_model'), ('mail_message', 'model'),
+                                  ('mail_followers', 'res_model')):
+                cr.execute(f"DELETE FROM {table} WHERE {column} = "
+                           "'woow_paas_platform.platform_monitor'")
             cr.commit()
 
     def _probe(self):

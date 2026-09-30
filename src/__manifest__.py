@@ -38,6 +38,8 @@
         "data/ai_assistant_data.xml",
         "data/mcp_server_cron.xml",
         "data/cloud_service_cron.xml",
+        # #1159 Q38：背景健康監控的 mail.activity 掛點（mail.thread 單例）
+        "data/platform_monitor_data.xml",
         # #778 配套 3：計費靜默死亡監控 cron
         "data/billing_silence_cron.xml",
         "views/project_task_views.xml",
