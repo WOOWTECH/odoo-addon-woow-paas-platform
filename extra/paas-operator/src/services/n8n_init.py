@@ -11,6 +11,7 @@ import logging
 import time
 from typing import Dict, Optional
 
+from src.models.schemas import InitErrorKind
 from src.services.helm import KubectlException, KubernetesService
 
 logger = logging.getLogger(__name__)
@@ -21,11 +22,28 @@ READY_RETRY_DELAY = 4  # seconds
 
 
 class N8nInitError(Exception):
-    """Raised when n8n initialization fails."""
+    """Raised when n8n initialization fails.
 
-    def __init__(self, message: str, step: str = ""):
+    ``kind``（#1263）：失敗分類，值域見 ``schemas.InitErrorKind``。預設 ``unknown``
+    ——exec 失敗（含 timeout）、輸出不可解析、200 但 body 不合預期，都不能證明
+    n8n 端沒有產生副作用。
+    """
+
+    def __init__(self, message: str, step: str = "", kind: InitErrorKind = "unknown"):
         self.step = step
+        self.kind = kind
         super().__init__(message)
+
+
+def _http_error_kind(resp: dict) -> str:
+    """非 200 的 node 回應 → 分類（#1263）。
+
+    拿到 n8n 真正的 HTTP 狀態碼＝明確的錯誤回應 ⇒ failed。``status`` 為 0 是
+    node 端 request error（連線被拒、socket hang up）——沒有回應，不知道請求
+    有沒有送達 ⇒ unknown。
+    """
+    status = resp.get("status")
+    return "failed" if isinstance(status, int) and status > 0 else "unknown"
 
 
 def _build_node_http_script(
@@ -170,6 +188,9 @@ class N8nInitService:
                     "owner_email": owner_email,
                     "secret_patched": False,
                     "pod_restarted": False,
+                    # key 已在 n8n 端建立並隨回應帶回，只差 Secret ⇒ partial。
+                    "error_step": "patch_secret",
+                    "error_kind": "partial",
                 }
         else:
             logger.error("No secret found for release %s, cannot update API key", release_name)
@@ -179,6 +200,8 @@ class N8nInitService:
                 "owner_email": owner_email,
                 "secret_patched": False,
                 "pod_restarted": False,
+                "error_step": "find_secret",
+                "error_kind": "partial",
             }
 
         # Step 6: Rollout restart to pick up real API key from Secret
@@ -232,6 +255,7 @@ class N8nInitService:
         raise N8nInitError(
             f"Cannot find n8n pod for release {release_name} in {namespace}",
             step="find_pod",
+            kind="not_executed",
         )
 
     def _wait_for_ready(self, namespace: str, pod_name: str, container: str) -> None:
@@ -255,9 +279,11 @@ class N8nInitService:
                 logger.debug("n8n not ready yet, retrying in %ds...", READY_RETRY_DELAY)
                 time.sleep(READY_RETRY_DELAY)
 
+        # readiness 只打 GET /rest/settings，唯讀 ⇒ 還沒動到 n8n 狀態。
         raise N8nInitError(
             f"n8n API not ready after {MAX_READY_RETRIES * READY_RETRY_DELAY}s",
             step="wait_ready",
+            kind="not_executed",
         )
 
     def _is_owner_setup_done(self, namespace: str, pod_name: str, container: str) -> bool:
@@ -303,6 +329,7 @@ class N8nInitService:
                 raise N8nInitError(
                     f"Owner setup returned HTTP {resp.get('status')}: {resp.get('body', '')[:200]}",
                     step="setup_owner",
+                    kind=_http_error_kind(resp),
                 )
 
             response = json.loads(resp["body"])
@@ -316,9 +343,11 @@ class N8nInitService:
             logger.info("Owner user created successfully")
 
         except KubectlException as e:
+            # timeout 或其他 exec 失敗都分不出請求有沒有送達 n8n ⇒ unknown。
             raise N8nInitError(
                 f"Failed to setup owner: {e.stderr}",
                 step="setup_owner",
+                kind="unknown",
             )
 
     def _login(
@@ -344,6 +373,7 @@ class N8nInitService:
                 raise N8nInitError(
                     f"Login returned HTTP {resp.get('status')}: {resp.get('body', '')[:200]}",
                     step="login",
+                    kind=_http_error_kind(resp),
                 )
 
             # Parse headers to find set-cookie
@@ -377,6 +407,7 @@ class N8nInitService:
             raise N8nInitError(
                 f"Failed to login: {e.stderr}",
                 step="login",
+                kind="unknown",
             )
 
     def _get_api_key_scopes(
@@ -435,6 +466,7 @@ class N8nInitService:
                 raise N8nInitError(
                     f"API key creation returned HTTP {resp.get('status')}: {resp.get('body', '')[:200]}",
                     step="create_api_key",
+                    kind=_http_error_kind(resp),
                 )
 
             response = json.loads(resp["body"])
@@ -455,6 +487,7 @@ class N8nInitService:
             raise N8nInitError(
                 f"Failed to create API key: {e.stderr}",
                 step="create_api_key",
+                kind="unknown",
             )
 
     def _find_secret(self, namespace: str, release_name: str) -> Optional[str]:

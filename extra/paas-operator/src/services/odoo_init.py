@@ -15,6 +15,7 @@ import logging
 import time
 from pathlib import Path
 
+from src.models.schemas import InitErrorKind
 from src.services.helm import KubectlException, KubernetesService
 from src.services.odoo_chart_contract import (
     ODOO_CONTAINER_NAME,
@@ -42,11 +43,31 @@ UPDATE_MODULE_LIST_SCRIPT = (
 ).read_text(encoding="utf-8")
 
 
-class OdooInitError(Exception):
-    """Raised when Odoo initialization fails."""
+def _last_json_object(output: str) -> dict | None:
+    """腳本輸出的最後一個非空行若是 JSON object 就回傳它，否則 None。
 
-    def __init__(self, message: str, step: str = ""):
+    Odoo 的 logging 可能先印到 stdout，腳本的 JSON 回報固定是最後一行。
+    """
+    lines = [line for line in (output or "").splitlines() if line.strip()]
+    if not lines:
+        return None
+    try:
+        data = json.loads(lines[-1])
+    except json.JSONDecodeError:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+class OdooInitError(Exception):
+    """Raised when Odoo initialization fails.
+
+    ``kind``（#1263）：失敗分類，值域見 ``schemas.InitErrorKind``。預設 ``unknown``
+    ——新增的 raise 點沒想清楚副作用時，寧可讓平台保守處理，也不要誤報成可重送。
+    """
+
+    def __init__(self, message: str, step: str = "", kind: InitErrorKind = "unknown"):
         self.step = step
+        self.kind = kind
         super().__init__(message)
 
 
@@ -148,6 +169,7 @@ class OdooInitService:
                     raise OdooInitError(
                         f"Cannot verify fallback Odoo pod {pod_name}: {exc}",
                         step="find_pod",
+                        kind="not_executed",
                     ) from exc
             logger.debug("Found pod '%s' with selector '%s'", pod_name, selector)
             return pod_name
@@ -155,6 +177,7 @@ class OdooInitService:
         raise OdooInitError(
             f"Cannot find Odoo pod for release {release_name} in {namespace}",
             step="find_pod",
+            kind="not_executed",
         )
 
     def _wait_for_ready(
@@ -235,9 +258,11 @@ class OdooInitService:
                 )
                 time.sleep(READY_RETRY_DELAY)
 
+        # readiness 探測只打 XML-RPC version，唯讀 ⇒ 還沒動到租戶 DB。
         raise OdooInitError(
             f"Odoo not ready after {MAX_READY_RETRIES * READY_RETRY_DELAY}s",
             step="wait_ready",
+            kind="not_executed",
         )
 
     def _update_module_list(
@@ -294,6 +319,16 @@ class OdooInitService:
                 timeout=MODULE_UPDATE_TIMEOUT,
             )
         except KubectlException as e:
+            # 腳本失敗時先印 JSON 回報再 exit 1 ⇒ kubectl exec 非 0，但 stdout 最後一行
+            # 就是腳本明說的失敗 ⇒ failed。timeout 沒有可信輸出、其他 exec 失敗分不出
+            # 容器內 ORM 跑到哪 ⇒ 維持預設 unknown（#1263）。
+            reported = None if e.timed_out else _last_json_object(e.stdout)
+            if reported is not None and reported.get("success") is False:
+                raise OdooInitError(
+                    f"Module list update failed: {reported.get('error', 'unknown error')}",
+                    step="update_module_list",
+                    kind="failed",
+                ) from e
             raise OdooInitError(
                 f"Failed to execute module list update: {e}",
                 step="update_module_list",
@@ -319,10 +354,13 @@ class OdooInitService:
                 step="update_module_list",
             ) from e
 
+        # 上面的 exec 失敗（含 timeout）／空輸出／JSON 無效都不能證明容器內的 ORM
+        # 程序沒跑或已停，維持預設 unknown；只有腳本自己回報失敗才是確定失敗。
         if not data.get("success"):
             raise OdooInitError(
                 f"Module list update failed: {data.get('error', 'unknown error')}",
                 step="update_module_list",
+                kind="failed",
             )
 
         logger.info(

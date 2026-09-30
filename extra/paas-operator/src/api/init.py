@@ -16,6 +16,18 @@ n8n_init_service = N8nInitService(k8s_service=k8s_service)
 odoo_init_service = OdooInitService(k8s_service=k8s_service)
 
 
+def _unexpected_init_failure(message: str) -> HTTPException:
+    """非預期例外的 500（#1263）：``detail`` 帶結構化分類，一律 unknown。
+
+    ``error_step`` 為 None——例外不是從已知步驟丟出來的，不能假裝知道卡在哪。
+    ``ErrorResponse.error_type`` 另由 exception handler 填例外類別名稱，兩者不同維度。
+    """
+    return HTTPException(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        detail={"message": message, "error_step": None, "error_kind": "unknown"},
+    )
+
+
 @router.post(
     "/{namespace}/{release_name}/init/n8n",
     response_model=N8nInitResponse,
@@ -59,6 +71,8 @@ def init_n8n(
             secret_patched=result.get("secret_patched", False),
             pod_restarted=result.get("pod_restarted", False),
             message="n8n initialization complete" if is_success else "n8n API key created but K8s Secret update failed",
+            error_step=result.get("error_step"),
+            error_kind=result.get("error_kind"),
         )
 
     except N8nInitError as e:
@@ -67,14 +81,13 @@ def init_n8n(
             success=False,
             error=f"[{e.step}] {str(e)}",
             message=f"n8n initialization failed at step: {e.step}",
+            error_step=e.step,
+            error_kind=e.kind,
         )
 
     except Exception as e:
         logger.exception("Unexpected error during n8n initialization")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"n8n initialization failed: {str(e)}",
-        )
+        raise _unexpected_init_failure(f"n8n initialization failed: {str(e)}")
 
 
 @router.post(
@@ -117,11 +130,10 @@ def init_odoo(namespace: str, release_name: str):
             success=False,
             error=f"[{e.step}] {str(e)}",
             message=f"Odoo initialization failed at step: {e.step}",
+            error_step=e.step,
+            error_kind=e.kind,
         )
 
     except Exception as e:
         logger.exception("Unexpected error during Odoo initialization")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Odoo initialization failed: {str(e)}",
-        )
+        raise _unexpected_init_failure(f"Odoo initialization failed: {str(e)}")

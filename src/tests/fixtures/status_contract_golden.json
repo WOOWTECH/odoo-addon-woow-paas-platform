@@ -1,0 +1,110 @@
+{
+  "_contract_fingerprint": "6dc56c715de05ffb94ac1b3c7388e6164be45b0a5a74100c2f618bb69ef42657",
+  "pod_retrieval_failed": {
+    "datavolume_retrieval_error": null,
+    "datavolumes": null,
+    "pod_identity_included": true,
+    "pod_retrieval_error": "kubectl command failed with code 1",
+    "pods": [],
+    "release": {
+      "app_version": "18.0",
+      "chart": "woow-odoo",
+      "chart_version": "0.2.2",
+      "description": null,
+      "name": "svc-1263",
+      "namespace": "paas-ws-test-1263",
+      "revision": 3,
+      "route": null,
+      "status": "deployed",
+      "updated": "2026-09-29T01:00:00Z",
+      "values": null
+    },
+    "vm_included": false,
+    "vmi_retrieval_error": null,
+    "vmis": null
+  },
+  "woow_odoo_chart": {
+    "datavolume_retrieval_error": null,
+    "datavolumes": null,
+    "pod_identity_included": true,
+    "pod_retrieval_error": null,
+    "pods": [
+      {
+        "age": "5m",
+        "component": "server",
+        "creation_timestamp": "2026-09-29T01:00:00Z",
+        "deletion_timestamp": null,
+        "name": "svc-1263-6d8f7c9b5-server",
+        "owner_kind": "ReplicaSet",
+        "phase": "Running",
+        "ready": "2/2",
+        "restarts": 0,
+        "task": null
+      },
+      {
+        "age": "5m",
+        "component": "server",
+        "creation_timestamp": "2026-09-29T01:00:00Z",
+        "deletion_timestamp": "2026-09-29T01:05:00Z",
+        "name": "svc-1263-5c7e6b8a4-old",
+        "owner_kind": "ReplicaSet",
+        "phase": "Running",
+        "ready": "0/2",
+        "restarts": 0,
+        "task": null
+      },
+      {
+        "age": "5m",
+        "component": "cron",
+        "creation_timestamp": "2026-09-29T01:00:00Z",
+        "deletion_timestamp": null,
+        "name": "svc-1263-cron-7f9d8c6b5-x",
+        "owner_kind": "ReplicaSet",
+        "phase": "Running",
+        "ready": "1/1",
+        "restarts": 0,
+        "task": null
+      },
+      {
+        "age": "5m",
+        "component": "postgresql",
+        "creation_timestamp": "2026-09-29T01:00:00Z",
+        "deletion_timestamp": null,
+        "name": "svc-1263-postgresql-0",
+        "owner_kind": "StatefulSet",
+        "phase": "Running",
+        "ready": "1/1",
+        "restarts": 0,
+        "task": null
+      },
+      {
+        "age": "5m",
+        "component": "db-backup",
+        "creation_timestamp": "2026-09-29T01:00:00Z",
+        "deletion_timestamp": null,
+        "name": "svc-1263-backup-29000000-abcde",
+        "owner_kind": "Job",
+        "phase": "Succeeded",
+        "ready": "0/1",
+        "restarts": 0,
+        "task": "backup"
+      }
+    ],
+    "release": {
+      "app_version": "18.0",
+      "chart": "woow-odoo",
+      "chart_version": "0.2.2",
+      "description": null,
+      "name": "svc-1263",
+      "namespace": "paas-ws-test-1263",
+      "revision": 3,
+      "route": null,
+      "status": "deployed",
+      "updated": "2026-09-29T01:00:00Z",
+      "values": null
+    },
+    "vm_included": false,
+    "vmi_retrieval_error": null,
+    "vmis": null
+  }
+}

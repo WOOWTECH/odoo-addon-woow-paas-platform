@@ -490,12 +490,25 @@ class HelmException(Exception):
 
 
 class KubectlException(Exception):
-    """Exception raised when kubectl command fails."""
+    """Exception raised when kubectl command fails.
 
-    def __init__(self, message: str, command: str, stderr: str):
+    #1263 的兩個 additive 屬性，讓呼叫端不必 parse ``message`` 字串：
+
+    - ``timed_out``：本地 subprocess timeout 時為 True。timeout 不證明遠端 exec 已停止，
+      也就沒有可信的輸出 ⇒ 呼叫端一律歸成「結果未知」。
+    - ``stdout``：非 0 結束時命令已印出的 stdout。``kubectl exec`` 沿用容器內的
+      exit code，腳本「先印 JSON 回報、再 exit 1」時，失敗的明確回報就在這裡。
+    """
+
+    def __init__(
+        self, message: str, command: str, stderr: str,
+        timed_out: bool = False, stdout: str = "",
+    ):
         self.message = message
         self.command = command
         self.stderr = stderr
+        self.timed_out = timed_out
+        self.stdout = stdout
         super().__init__(self.message)
 
 
@@ -1061,6 +1074,18 @@ def _sensitive_env_key_marker(key: str) -> Optional[str]:
     return None
 
 
+def _controller_owner_kind(metadata: Dict[str, Any]) -> Optional[str]:
+    """Pod 直接 owner（``controller: true`` 那筆 ownerReference）的 kind（#1263）。
+
+    只認 controller=true：被收養或附掛的非 controller owner 不是建立它的 workload。
+    沒有 controller owner（bare Pod、缺旗標）回 None，不猜。
+    """
+    for ref in metadata.get("ownerReferences") or []:
+        if isinstance(ref, dict) and ref.get("controller") is True:
+            return ref.get("kind")
+    return None
+
+
 class KubernetesService:
     """Service for Kubernetes operations (via kubectl)."""
 
@@ -1107,6 +1132,7 @@ class KubernetesService:
                     message=f"kubectl command failed with code {result.returncode}",
                     command=safe_cmd,
                     stderr=result.stderr,
+                    stdout=result.stdout or "",
                 )
 
             return result
@@ -1120,6 +1146,7 @@ class KubernetesService:
                 message=f"kubectl command timed out after {timeout}s",
                 command=safe_cmd,
                 stderr=f"Command '{safe_cmd}' timed out after {timeout} seconds",
+                timed_out=True,
             )
         except FileNotFoundError:
             raise KubectlException(
@@ -1173,6 +1200,7 @@ class KubernetesService:
             created = metadata.get("creationTimestamp", "")
             age = self._calculate_age(created)
 
+            labels = metadata.get("labels") or {}
             pods.append(
                 PodInfo(
                     name=metadata.get("name", ""),
@@ -1181,6 +1209,10 @@ class KubernetesService:
                     restarts=restarts,
                     age=age,
                     deletion_timestamp=metadata.get("deletionTimestamp"),
+                    component=labels.get("app.kubernetes.io/component"),
+                    task=labels.get("woow.paas/task"),
+                    owner_kind=_controller_owner_kind(metadata),
+                    creation_timestamp=created or None,
                 )
             )
 
@@ -2732,6 +2764,8 @@ class KubernetesService:
                 message=f"kubectl exec failed: {e.message}",
                 command=e.command,
                 stderr=e.stderr,
+                timed_out=e.timed_out,
+                stdout=e.stdout,
             ) from e
 
     def patch_secret(

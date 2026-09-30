@@ -266,6 +266,16 @@ class PodInfo(BaseModel):
     age: str
     # 舊呼叫端不必供值；讓平台辨識 phase 仍為 Running 的收尾 Pod。
     deletion_timestamp: Optional[str] = None
+    # ---- #1263／#1251 Q19：Pod 身分證據（label＋直接 owner）---------------------
+    # 語意沿用 #1129 ``validate_fallback_pod``，不追到 Deployment UID。None＝該
+    # label／controller owner 不存在；「operator 有沒有提供」看 status 回應的
+    # ``pod_identity_included``，不要從 None 推斷。
+    component: Optional[str] = None  # label app.kubernetes.io/component
+    task: Optional[str] = None  # label woow.paas/task
+    owner_kind: Optional[str] = None  # controller=true 那筆 ownerReference 的 kind
+    # #1222 升級提早收斂：metadata.creationTimestamp 原值（RFC 3339 UTC）。``age`` 是
+    # 人讀字串且隨時間變，不能拿來判斷「Pod 建立於某時刻之後」。
+    creation_timestamp: Optional[str] = None
 
 
 class VmiInfo(BaseModel):
@@ -412,6 +422,18 @@ class ReleaseStatusResponse(BaseModel):
     pods: List[PodInfo]
     pod_retrieval_error: Optional[str] = Field(
         None, description="Error message if pod retrieval failed"
+    )
+    # ---- #1263／#1251 Q44：Pod 身分欄位的能力旗標（比照 ``vm_included``）----------
+    # 舊 operator 沒有這個 key；平台缺旗標就 fail-closed。它宣告的是「本 operator
+    # 會填 PodInfo 的身分欄位」，與這次抓 Pod 成不成功無關（那由
+    # ``pod_retrieval_error`` 表達）——否則暫時性的讀取失敗會被平台誤判成 HARD。
+    # 同一版起 ``PodInfo.creation_timestamp`` 也一定會填（#1222），同樣以本旗標判斷。
+    pod_identity_included: bool = Field(
+        default=False,
+        description=(
+            "True when this operator populates PodInfo.component/task/owner_kind. "
+            "Absent/False means identity is unknown — do NOT read None as 'no label'."
+        ),
     )
     # ---- #423 W4.2: VM-type workloads (opt-in via ?include_vm=true) --------
     # ``None`` means NOT QUERIED; ``[]`` means queried and genuinely empty.
@@ -628,6 +650,13 @@ class N8nInitRequest(BaseModel):
     )
 
 
+#: init 失敗分類（#1263／#1257 Q11），依「遠端副作用是否可能已發生」：
+#: not_executed＝只跑過唯讀探測；failed＝收到明確的錯誤回應；partial＝n8n 已拿到
+#: api_key 但 Secret 沒寫成；unknown＝timeout／exec 失敗／輸出不可解析／非預期例外。
+#: ⚠ 與 ``ErrorResponse.error_type``（例外類別名稱）是不同維度，不要混用。
+InitErrorKind = Literal["not_executed", "failed", "partial", "unknown"]
+
+
 class N8nInitResponse(BaseModel):
     """Response from n8n initialization."""
 
@@ -638,6 +667,9 @@ class N8nInitResponse(BaseModel):
     pod_restarted: bool = Field(default=False, description="Whether the deployment was restarted to pick up the new API key")
     message: Optional[str] = None
     error: Optional[str] = None
+    # #1263：成功時兩者皆為 None；舊平台忽略未知欄位。
+    error_step: Optional[str] = None
+    error_kind: Optional[InitErrorKind] = None
 
 
 class OdooInitResponse(BaseModel):
@@ -648,6 +680,9 @@ class OdooInitResponse(BaseModel):
     modules_updated: int = Field(default=0, description="Number of existing modules updated")
     message: Optional[str] = None
     error: Optional[str] = None
+    # #1263：成功時兩者皆為 None；舊平台忽略未知欄位。
+    error_step: Optional[str] = None
+    error_kind: Optional[InitErrorKind] = None
 
 
 # --- Odoo Module Management ---

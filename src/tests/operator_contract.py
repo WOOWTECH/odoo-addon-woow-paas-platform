@@ -19,7 +19,8 @@ autospec）；``get_status()`` 的回應形狀被手抄成 4 份 ``_status()``�
 層斷言），只補兩格：
 
 1. ``status_response()``：``get_status()`` 回應形狀的**唯一定義處**，頂層 key 集合由
-   scripts/audit 對帳到 ``ReleaseStatusResponse``；
+   scripts/audit 對帳到 ``ReleaseStatusResponse``；``pods`` 的元素用 ``pod_info()``
+   組（#1263），key 集合對帳到 ``PodInfo``；
 2. ``operator_client()``：``create_autospec(PaaSOperatorClient, instance=True)``——測試配了
    一個 client 上不存在的 method 時，是 ``AttributeError`` 而不是 MagicMock 真值假裝通過。
 
@@ -36,16 +37,57 @@ from unittest.mock import create_autospec
 #: ⚠ 真值來源是 operator 的 pydantic 宣告，不是本 tuple；
 #: ``scripts/audit/test_operator_contract_shape.py`` 對帳兩者，漂了就紅。
 RELEASE_STATUS_KEYS = (
-    'release', 'pods', 'pod_retrieval_error', 'vm_included', 'vmis',
-    'datavolumes', 'vmi_retrieval_error', 'datavolume_retrieval_error',
+    'release', 'pods', 'pod_retrieval_error', 'pod_identity_included',
+    'vm_included', 'vmis', 'datavolumes', 'vmi_retrieval_error',
+    'datavolume_retrieval_error',
 )
+
+
+#: 傳給 ``status_response()`` 的某個 key 時，把那個 key **拿掉**，用來建舊 operator 的
+#: 真實形狀：#1263 之前的 operator 根本不送 ``pod_identity_included``（缺 key，不是
+#: False）。fail-closed 測試兩種都要覆蓋——只測 False 抓不到
+#: ``.get('pod_identity_included', True)`` 這種寫錯的預設。
+ABSENT = object()
+
+
+def pod_info(**overrides):
+    """組一顆 operator ``PodInfo`` 形狀的 Pod（#1263）。
+
+    預設是一顆健康、**沒有身分 label／controller owner** 的 Pod（``component``／
+    ``task``／``owner_kind`` 皆 None）——#1251 的 readiness 判定要 server／PG 身分時，
+    由呼叫端明寫（例：``pod_info(component='server', owner_kind='ReplicaSet')``），
+    不在預設裡偷塞「剛好是 server」。
+    ⚠ 不認得的 key 直接 ``TypeError``：拼錯的 ``compnent=`` 若被靜默加進去，測試會以為
+    自己設了身分、實際 ``component`` 仍是 None。
+    """
+    pod = {
+        'name': 'svc-odoo-0',
+        'phase': 'Running',
+        'ready': '1/1',
+        'restarts': 0,
+        'age': '5m',
+        'deletion_timestamp': None,
+        'component': None,
+        'task': None,
+        'owner_kind': None,
+        'creation_timestamp': None,
+    }
+    unknown = set(overrides) - set(pod)
+    if unknown:
+        raise TypeError('pod_info() 不認得的欄位：%s' % sorted(unknown))
+    pod.update(overrides)
+    return pod
 
 
 def status_response(release_status='deployed', pods=None, **overrides):
     """組一份 operator ``get_status`` 形狀的回應。
 
     預設模擬「未帶 include_vm」——operator 此時回 ``vm_included: False`` 與 ``vmis: None``
-    （不是 ``[]``），這個區別正是 fail-closed 的依據。``release`` 子物件刻意只給
+    （不是 ``[]``），這個區別正是 fail-closed 的依據。``pod_identity_included`` 預設
+    True（#1263 起的 operator 一律回 True）；模擬舊 operator 用
+    ``pod_identity_included=ABSENT``（缺 key），``False`` 只是 schema 預設、wire 上不會出現。
+    ⚠ woow-odoo 情境的 ``pods`` 一律用 ``pod_info()`` 組：沒有身分 key 的手寫 Pod 配上
+    預設 True，是真 operator 不會送出的組合。``release`` 子物件刻意只給
     ``status``／``revision``（``ReleaseInfo`` 的**子集**，與四份既有 fixture 相同；對帳
     對這一層只驗「是子集」）；需要別的欄位（``chart_version`` 等）由呼叫端 ``overrides``。
     ``pods`` 預設空清單；要一顆健康 pod 的呼叫端自己傳（``test_public_url_dns_gate_648``
@@ -55,6 +97,7 @@ def status_response(release_status='deployed', pods=None, **overrides):
         'release': {'status': release_status, 'revision': 1},
         'pods': pods if pods is not None else [],
         'pod_retrieval_error': None,
+        'pod_identity_included': True,
         'vm_included': False,
         'vmis': None,
         'datavolumes': None,
@@ -62,7 +105,7 @@ def status_response(release_status='deployed', pods=None, **overrides):
         'datavolume_retrieval_error': None,
     }
     body.update(overrides)
-    return body
+    return {key: value for key, value in body.items() if value is not ABSENT}
 
 
 def operator_client(**method_return_values):
