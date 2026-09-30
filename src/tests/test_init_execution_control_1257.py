@@ -333,7 +333,10 @@ class TestInitLeaseRealCursor1257(TransactionCase):
     def _run(self, fn, init_type='odoo'):
         """在新的一條真連線上對服務執行 ``fn(service)``，結束時 commit。"""
         with self.registry.cursor() as cr:
-            return fn(self._env(cr)[SVC].browse(self.service_ids[init_type]))
+            # 持有 env／recordset 到 cursor 退場，避免 WeakSet 提早失去待 flush 的 env。
+            env = self._env(cr)
+            service = env[SVC].browse(self.service_ids[init_type])
+            return fn(service)
 
     def _entry(self, client, init_type='odoo'):
         self._run(lambda svc: svc._run_post_deploy_init(client), init_type)
@@ -635,14 +638,93 @@ class TestInitLeaseRealCursor1257(TransactionCase):
     def test_entry_does_not_time_out_a_queued_service(self):
         """#1159 D2：入口只判額度。排隊等 init cron 屬平台容量排隊、不計時；等待時限
         改由短 poll 在觀測到 not ready 時判（``test_init_exec_surface_1159``）。"""
-        self._sql("UPDATE woow_paas_platform_cloud_service SET init_wait_since = "
-                  "(statement_timestamp() AT TIME ZONE 'UTC') - interval '31 minutes' "
+        self._sql("UPDATE woow_paas_platform_cloud_service SET "
+                  "init_wait_since = (statement_timestamp() AT TIME ZONE 'UTC') - interval '40 minutes', "
+                  "init_ready_since = (statement_timestamp() AT TIME ZONE 'UTC') - interval '40 minutes', "
+                  "init_queue_turn = (statement_timestamp() AT TIME ZONE 'UTC') - interval '40 minutes' "
                   "WHERE id = %s", (self.service_ids['odoo'],))
         client = operator_client(init_odoo={'success': True})
         self._entry(client)
         client.init_odoo.assert_called_once()
         state = self._read()
         self.assertEqual((state['state'], state['init_exit']), ('running', False))
+        self.assertEqual(state['wait_spent'], 0, '首次純容量排隊不算 operator 未就緒等待')
+
+    def test_new_generation_resets_operator_wait_but_same_state_write_does_not(self):
+        """E7：開代才清本代額度；同值 state 寫入不可被當成重新進入 initializing。"""
+        self._run(lambda svc: svc.write({
+            'init_retries': 2, 'init_unknown_count': 1,
+            'init_wait_spent_seconds': 120,
+            'init_wait_started_at': fields.Datetime.now(),
+            'init_retry_eligible_at': fields.Datetime.now() + timedelta(seconds=60),
+        }))
+        old_generation = self._run(lambda svc: svc.init_generation)
+        self._run(lambda svc: svc.write({'state': 'initializing'}))
+        unchanged = self._read()
+        self.assertEqual((unchanged['wait_spent'], unchanged['init_retries'],
+                          unchanged['init_unknown_count']), (120, 2, 1))
+        self._run(lambda svc: svc._open_init_generation())
+        state = self._read()
+        self.assertEqual(self._run(lambda svc: svc.init_generation), old_generation + 1)
+        self.assertEqual((state['wait_spent'], state['init_retries'], state['init_unknown_count']), (0, 0, 0))
+        self.assertFalse(state['wait_started_at'])
+        self.assertFalse(state['retry_eligible_at'])
+
+    def test_operator_wait_reset_matrix_keeps_the_pod_clock_and_quotas_separate(self):
+        """E7：真正送出五類結果，分別驗 operator 時計、Pod 錨點與每代額度。"""
+        cases = (
+            ('success', 'odoo', {'success': True}, (0, 0), True),
+            ('failed', 'odoo', {'success': False, 'error_kind': 'failed'}, (3, 0), True),
+            ('unknown', 'odoo', {'success': False, 'error_kind': 'unknown'}, (2, 1), False),
+            ('partial', 'n8n', {'success': False, 'api_key': _JWT, 'error_kind': 'partial'}, (2, 1), True),
+            ('not_executed', 'odoo', {'success': False, 'error_kind': 'not_executed'}, (2, 0), False),
+        )
+        for outcome, init_type, response, counters, resets in cases:
+            with self.subTest(outcome=outcome):
+                key = f'outcome-{outcome}'
+                with self.registry.cursor() as cr:
+                    env = self._env(cr)
+                    svc = _make_service(
+                        env, env['woow_paas_platform.workspace'].browse(self.workspace_id),
+                        env['woow_paas_platform.cloud_app_template'].browse(self.template_ids[init_type]),
+                        f'{key}-{self.tag}', state='initializing')
+                    self.service_ids[key] = svc.id
+                    now = svc._init_db_now()
+                    svc.write({
+                        'init_ready_observed': True, 'init_ready_since': now, 'init_queue_turn': now,
+                        'init_wait_since': now - timedelta(minutes=40),
+                        'init_wait_spent_seconds': 120, 'init_retries': 2,
+                        'n8n_owner_email': f'owner-{self.tag}@example.invalid',
+                        'n8n_owner_password': f'pw-{self.tag}',
+                    })
+                pod_anchor = self._read(key)['pod_wait_since']
+                client = operator_client(**{f'init_{init_type}': response})
+                self._entry(client, key)
+                getattr(client, f'init_{init_type}').assert_called_once()
+                state = self._read(key)
+                self.assertEqual((state['init_retries'], state['init_unknown_count']), counters)
+                if resets:
+                    self.assertEqual(state['wait_spent'], 0)
+                    self.assertFalse(state['wait_started_at'])
+                    self.assertFalse(state['retry_eligible_at'])
+                elif outcome == 'unknown':
+                    self.assertEqual(state['wait_spent'], 120)
+                    self.assertFalse(state['wait_started_at'])
+                    self.assertFalse(state['retry_eligible_at'])
+                else:
+                    self.assertGreaterEqual(state['wait_spent'], 120)
+                    self.assertEqual((state['retry_eligible_at'] - state['wait_started_at']).total_seconds(), 60)
+                if outcome in ('failed', 'unknown', 'partial'):
+                    finished = self._run(lambda s: s.env[ATTEMPT].search(
+                        [('service_id', '=', s.id)], order='sequence desc', limit=1).finished_at, key)
+                    self.assertNotEqual(state['pod_wait_since'], pod_anchor)
+                    self.assertEqual(state['pod_wait_since'], finished)
+                elif outcome == 'not_executed':
+                    self.assertEqual(state['pod_wait_since'], pod_anchor)
+                if outcome in ('unknown', 'partial'):
+                    self.assertTrue(state['lease'])
+                else:
+                    self.assertFalse(state['lease'])
 
     def test_n8n_partial_stores_the_key_and_counts_as_unknown(self):
         # D2-R2：partial 已帶回 key，證明 request 執行過；等待時計必重置，
@@ -1282,10 +1364,20 @@ class TestSuspendResumeOwedInit1266(_ServiceCase):
             with self.subTest(state=state):
                 svc = self._service('n8n', state=state, **extra)
                 generation = svc.init_generation
+                svc.write({
+                    'init_retries': 2, 'init_unknown_count': 1,
+                    'init_wait_spent_seconds': 120,
+                    'init_wait_started_at': fields.Datetime.now(),
+                    'init_retry_eligible_at': fields.Datetime.now() + timedelta(seconds=60),
+                })
                 self._cycle(svc)
                 self.assertEqual(svc.state, 'initializing')
                 self.assertTrue(svc.init_pending)
                 self.assertEqual(svc.init_generation, generation, 'resume 不開新一代')
+                self.assertEqual((svc.init_retries, svc.init_unknown_count), (2, 1), '復權不清額度')
+                self.assertEqual(svc.init_wait_spent_seconds, 0, '重新進 initializing 才重置等待時計')
+                self.assertFalse(svc.init_wait_started_at)
+                self.assertFalse(svc.init_retry_eligible_at)
                 _client, entry = self._poll_cron(svc)
                 self.assertTrue(svc.init_ready_observed, '欠的 init 排進 init cron 的佇列（#1159）')
                 entry.assert_not_called()
