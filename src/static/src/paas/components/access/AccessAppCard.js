@@ -237,6 +237,13 @@ export class AccessAppCard extends Component {
    * （卡片空清單的提示同一句話），刪下去等於把包括自己在內的所有人擋在外面，這
    * 一格一定要在按下去之前說出來。
    */
+  // #1261：「已保護 · N 條政策」的數量＋單位。原本在樣板裡用 'policy'／'policies'
+  // 字面值，不會被翻譯。
+  policyCountLabel() {
+    const n = this.state.policies.length;
+    return n === 1 ? _t("1 policy") : _t("%s policies", n);
+  }
+
   deletePolicyConsequence(pol) {
     if (pol.decision === "deny") {
       return _t(

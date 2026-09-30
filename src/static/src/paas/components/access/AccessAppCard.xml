@@ -25,7 +25,9 @@
             <!-- 數字與單位之間的空白必須在**同一行**：OWL 會把含換行的
                  whitespace-only 文字節點整個丟掉，抽取前的原始碼把兩個 t-esc
                  拆兩行，租戶看到的一直是「3policies」。 -->
-            <span>Protected · <t t-esc="state.policies.length"/> <t t-esc="state.policies.length === 1 ? 'policy' : 'policies'"/></span>
+            <!-- #1261：數量與單位合成一個可翻譯字串（policyCountLabel），樣板運算式
+                 裡的 'policy'／'policies' 不會被抽成翻譯。 -->
+            <span>Protected · <t t-esc="policyCountLabel()"/></span>
           </div>
           <div t-else="" class="o_woow_sa_app__status o_woow_sa_app__status--off">
             <span class="o_woow_sa_app__dot"/>
