@@ -29,7 +29,7 @@ from .transport import (
 MAX_SESSIONS = 1024
 MAX_GROUP_MEMBERS = 128
 MAX_DEPTH = 16
-SCAN_SECONDS = 20
+DEFAULT_SCAN_SECONDS = 60
 
 
 def poll_seconds(value) -> float:
@@ -40,6 +40,16 @@ def poll_seconds(value) -> float:
     if not math.isfinite(number) or not 0.1 <= number <= 60:
         raise ValueError("poll-seconds 必須介於 0.1..60")
     return number
+
+
+def scan_seconds(value) -> float:
+    """整輪 discovery budget 保持有限，避免串行 GET 被舊 20 秒上限截斷。"""
+    if isinstance(value, bool):
+        raise ValueError("scan-seconds 必須介於 1..120")
+    value = float(value)
+    if not math.isfinite(value) or not 1 <= value <= 120:
+        raise ValueError("scan-seconds 必須介於 1..120")
+    return value
 
 
 def validate_roots(roots, *, allow_empty=False):
@@ -92,9 +102,11 @@ def atomic_json(path, value, *, replace=True):
 class Registrar:
     """從 server lineage 建立完整 ACL snapshot；HTTP 不提供 registration endpoint。"""
 
-    def __init__(self, roots, interval, bridge, state_dir, port, *, rules=None):
+    def __init__(self, roots, interval, bridge, state_dir, port, *, rules=None,
+                 scan_budget=DEFAULT_SCAN_SECONDS):
         self.roots = validate_roots(roots, allow_empty=rules is not None)
         self.interval = poll_seconds(interval)
+        self.scan_budget = scan_seconds(scan_budget)
         self.bridge = bridge
         self.store = bridge.store
         self.transport = bridge.transport
@@ -342,14 +354,17 @@ class Registrar:
 
     def refresh(self):
         """一個 bounded reconciliation；snapshot 不完整時 fail closed。"""
-        deadline = time.monotonic() + SCAN_SECONDS
+        deadline = time.monotonic() + self.scan_budget
         try:
             members = self._discover(deadline)
             actors = {m["alias"]: self._credential(m) for m in members}
             for member in members:
                 actors[member["alias"]]["allow"] = [m["alias"] for m in members
                     if m["root_id"] == member["root_id"] and m["alias"] != member["alias"]]
-            lease = max(30, self.interval * 3)
+            # lease 涵蓋本輪剩餘通知時間、下一輪等待與 discovery；失敗仍立即撤權。
+            notice_budget = max(0, deadline - time.monotonic())
+            lease = max(30, self.interval * 3,
+                        notice_budget + self.scan_budget + self.interval)
             self.bridge.replace_actors(actors, time.monotonic() + lease)
             expires = time.time() + lease
             self._status(members, expires=expires)
