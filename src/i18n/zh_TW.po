@@ -18265,7 +18265,7 @@ msgstr "初始化中・重試中"
 
 #. module: woow_paas_platform
 #. odoo-javascript
-#: code:addons/woow_paas_platform/static/src/paas/pages/service/ServiceDetailPage.js:0
+#: code:addons/woow_paas_platform/static/src/paas/utils/service_presentation.js:0
 msgid ""
 "Initialization did not complete (attempt #%s). You can change the "
 "configuration to try again, or contact support."
@@ -18273,15 +18273,29 @@ msgstr "初始化未完成（第 %s 次嘗試）。您可以修改設定後重�
 
 #. module: woow_paas_platform
 #. odoo-javascript
-#: code:addons/woow_paas_platform/static/src/paas/pages/service/ServiceDetailPage.js:0
+#: code:addons/woow_paas_platform/static/src/paas/utils/service_presentation.js:0
+msgid ""
+"Initialization did not complete. You can change the configuration to try "
+"again, or contact support."
+msgstr "初始化未完成。您可以修改設定後重試，或聯絡客服。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/service_presentation.js:0
 msgid "Initialization did not complete (attempt #%s). Please contact support."
 msgstr "初始化未完成（第 %s 次嘗試）。請聯絡客服。"
 
 #. module: woow_paas_platform
 #. odoo-javascript
-#: code:addons/woow_paas_platform/static/src/paas/pages/service/ServiceDetailPage.js:0
+#: code:addons/woow_paas_platform/static/src/paas/utils/service_presentation.js:0
 msgid "Last updated %s min ago"
 msgstr "最後更新於 %s 分鐘前"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/utils/service_presentation.js:0
+msgid "Waiting for status update %s min"
+msgstr "等待狀態更新 %s 分鐘"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -18299,6 +18313,6 @@ msgstr "已送出的初始化請求仍可能在叢集內完成。"
 
 #. module: woow_paas_platform
 #. odoo-javascript
-#: code:addons/woow_paas_platform/static/src/paas/pages/service/ServiceDetailPage.js:0
+#: code:addons/woow_paas_platform/static/src/paas/utils/service_presentation.js:0
 msgid "Initialization did not complete. Please contact support."
 msgstr "初始化未完成。請聯絡客服。"

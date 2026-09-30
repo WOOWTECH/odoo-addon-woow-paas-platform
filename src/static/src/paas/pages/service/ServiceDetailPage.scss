@@ -106,6 +106,21 @@ $woow-radius-lg: 1.25rem;
     }
 }
 
+// #1159：Projects 關閉時的 support fallback 沿用 billing 的 mailto，不建立隱藏 project。
+.o_woow_service_support_email {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.375rem;
+    color: $woow-primary;
+    font-size: 0.875rem;
+    font-weight: 500;
+    text-decoration: none;
+
+    &:hover {
+        text-decoration: underline;
+    }
+}
+
 // =============================================================================
 // Error Banner
 // =============================================================================
@@ -122,8 +137,9 @@ $woow-radius-lg: 1.25rem;
     font-size: 0.875rem;
     margin-bottom: 1.5rem;
 
-    // #1159 Q30：init 失敗 banner 的 Contact Support 按鈕靠右。
-    .o_woow_btn {
+    // #1159：Projects 開關的兩種 support 入口都靠右。
+    .o_woow_btn,
+    .o_woow_service_support_email {
         margin-left: auto;
     }
 }

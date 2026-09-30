@@ -23,10 +23,12 @@ import { supportService } from "../../services/support_service";
 import { breadcrumbService } from "../../services/breadcrumb_service";
 import { router } from "../../core/router";
 import { showProjects } from "../../core/platform_config";
-
-// #1159 Q40：這些狀態由背景 poll 推進；最近一次觀測超過此秒數才顯示「最後更新 X 前」。
-const TRANSITIONAL_STATES = ["deploying", "initializing", "upgrading", "deleting"];
-const STALE_OBSERVATION_SECONDS = 180;
+import {
+    getInitFailureText,
+    getStaleObservation,
+    getStaleObservationLabel,
+    getSupportProjectAction,
+} from "../../utils/service_presentation";
 
 /**
  * ServiceDetailPage Component
@@ -95,7 +97,10 @@ export class ServiceDetailPage extends Component {
 
         onMounted(() => {
             this.loadService();
-            this.loadSupportProject();
+            // #275：Projects 關閉時沒有 project 入口，不讀取更不建立隱藏 project。
+            if (this.projectsVisible) {
+                this.loadSupportProject();
+            }
         });
 
         onWillUnmount(() => {
@@ -196,56 +201,44 @@ export class ServiceDetailPage extends Component {
     }
 
     /**
-     * #1159 Q30：init 失敗（任何出口）轉成的 error。固定文案＋attempt 序號；是否
-     * 能用「改設定」重試讀後端的 `init_reconfigure_allowed`（與 reconfigure 守衛
-     * 同一判準，前端不自建）。
+     * #1159：init 失敗由共用 presentation helper 固定呈現，不得把含 Pod 名稱或
+     * operator 細節的 error_message 帶到租戶畫面。
      */
-    get initFailed() {
-        return this.service?.state === "error" && !!this.service.init_exit;
-    }
-
     get initFailureText() {
-        const seq = this.service.init_attempt_seq || 0;
-        if (this.service.init_reconfigure_allowed) {
-            return _t(
-                "Initialization did not complete (attempt #%s). You can change the configuration to try again, or contact support.",
-                seq,
-            );
-        }
-        if (!seq) {
-            // fast-fail／等待逾時可能發生在任何一次 init 送出之前：不顯示「#0」。
-            return _t("Initialization did not complete. Please contact support.");
-        }
-        return _t("Initialization did not complete (attempt #%s). Please contact support.", seq);
+        return getInitFailureText(this.service);
     }
 
-    contactSupport() {
-        if (this.state.supportProject) {
-            this.openSupportProject();
-        } else {
-            this.showCreateProject();
-        }
+    get initFailed() {
+        return !!this.initFailureText;
     }
 
     /**
-     * #1159 Q40：list/get 只回背景 poll 的最近觀測。轉移中且最近一次觀測超過 3 分鐘
-     * 才揭露「最後更新 X 前」。秒數由後端算（`observed_age_seconds`）：observed_at
-     * 是 naive UTC，本 app 的日期層目前把不帶 offset 的字串當本地時間讀（#914）。
+     * #1159 Q40：list/get 只回背景 poll 的最近觀測。轉移中且 age 超過 3 分鐘才顯示。
+     * observation_pending 時的 age 是本次 episode 等待時間，不能稱為最後真觀測。
      */
-    get staleObservationMinutes() {
-        const service = this.service;
-        if (!service || !TRANSITIONAL_STATES.includes(service.state)) {
-            return null;
-        }
-        const age = service.observed_age_seconds;
-        if (typeof age !== "number" || age <= STALE_OBSERVATION_SECONDS) {
-            return null;
-        }
-        return Math.floor(age / 60);
+    get staleObservation() {
+        return getStaleObservation(this.service);
     }
 
     get staleObservationLabel() {
-        return _t("Last updated %s min ago", this.staleObservationMinutes);
+        return getStaleObservationLabel(this.staleObservation);
+    }
+
+    get supportProjectAction() {
+        return getSupportProjectAction({
+            projectsVisible: this.projectsVisible,
+            supportProject: this.state.supportProject,
+            supportProjectLoading: this.state.supportProjectLoading,
+            createModalOpen: this.state.showCreateProjectModal,
+        });
+    }
+
+    contactSupport() {
+        if (this.supportProjectAction === "open") {
+            this.openSupportProject();
+        } else if (this.supportProjectAction === "create") {
+            this.showCreateProject();
+        }
     }
 
     get isOdooService() {
@@ -353,12 +346,16 @@ export class ServiceDetailPage extends Component {
     }
 
     openSupportProject() {
-        if (this.state.supportProject) {
-            this.router.navigate(`ai-assistant/projects/${this.state.supportProject.id}`);
+        if (this.supportProjectAction !== "open") {
+            return;
         }
+        this.router.navigate(`ai-assistant/projects/${this.state.supportProject.id}`);
     }
 
     showCreateProject() {
+        if (this.supportProjectAction !== "create") {
+            return;
+        }
         this.state.showCreateProjectModal = true;
     }
 
