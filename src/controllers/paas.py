@@ -4127,10 +4127,16 @@ class PaasController(HiddenChainMixin, Controller):
                 'error_message': False,
                 'last_upgraded_at': fields.Datetime.now(),
             })
-            # #1257 Q23／#1267：rollback 開新的一代——保留欠 init，下一輪導回
-            # initializing。之前只寫 upgrading、不設 `addon_update_pending`，首次部署
-            # init 失敗、已轉 error 的服務 rollback 後會被 poll 直接寫成 running。
-            service._open_init_generation()
+            # #1257 Q23／#1267：還欠 init 的服務（含 init 額度用完的 error）rollback
+            # 開新的一代——保留欠 init、計數歸零，下一輪導回 initializing。之前只寫
+            # upgrading、不設 `addon_update_pending`，首次部署 init 失敗、已轉 error 的
+            # 服務 rollback 後會被 poll 直接寫成 running。
+            # init 已完成的服務**不**開新一代（M2 裁定 (A)，修訂 Q24 字面，守住 #1267
+            # 驗收 5）：否則 n8n 每次 rollback 都多建一把 API key 並重啟，租戶改過 owner
+            # 密碼時還會 login 失敗到額度用完、沒有出口。代價：Odoo rollback 到 addon
+            # 組合不同的 revision 不會自動 update_list——與 #1257 以前的行為一致。
+            if service.init_pending:
+                service._open_init_generation()
 
             return {'success': True, 'message': _('Rollback to revision %(revision)s initiated', revision=revision)}
 

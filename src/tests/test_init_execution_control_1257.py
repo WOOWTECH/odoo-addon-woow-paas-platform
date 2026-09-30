@@ -888,6 +888,33 @@ class TestReconfigureRollbackOwedInit1267(_ServiceCase):
         self._poll_http(svc)
         self.assertEqual(svc.state, 'initializing', 'rollback 之後被直接寫成 running')
 
+    def test_rollback_of_owed_init_opens_a_new_generation(self):
+        svc = self._service('odoo', state='initializing')
+        svc.sudo().write({'init_retries': 3, 'init_unknown_count': 1})
+        generation = svc.init_generation
+        self.assertTrue(self._rollback(svc)['success'])
+        self.assertEqual((svc.init_generation, svc.init_retries, svc.init_unknown_count),
+                         (generation + 1, 0, 0))
+        _client, entry = self._poll_cron(svc)
+        self.assertEqual(svc.state, 'initializing')
+        entry.assert_called_once()
+
+    def test_rollback_of_completed_init_does_not_reinit(self):
+        """M2 裁定 (A)／#1267 驗收 5：init 已完成的服務 rollback 不開代、不呼叫 init。"""
+        for init_type in ('odoo', 'n8n'):
+            with self.subTest(init_type=init_type):
+                svc = self._service(init_type, state='running')
+                svc.sudo().write({'init_pending': False})
+                generation = svc.init_generation
+                self.assertTrue(self._rollback(svc)['success'])
+                self.assertEqual(svc.state, 'upgrading')
+                self.assertEqual((svc.init_generation, svc.init_pending), (generation, False))
+                client, entry = self._poll_cron(svc)
+                self.assertEqual(svc.state, 'running')
+                entry.assert_not_called()
+                client.init_odoo.assert_not_called()
+                client.init_n8n.assert_not_called()
+
     def test_services_without_owed_init_are_unchanged(self):
         none_svc = self._service('none', state='running')
         self.assertFalse(none_svc.init_pending)

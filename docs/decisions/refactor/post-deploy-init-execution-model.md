@@ -43,7 +43,12 @@ init：Odoo 刷新模組清單、n8n 建 owner 與 API key。#1257 之前：
 
 | 會開新一代 | 不開新一代 |
 |---|---|
-| create（init 類型不是 none）、addon 變更、人工 redeploy、rollback、從**額度出口**的 error 出發的 reconfigure（#1159 Q30）、#1222 的 digest 升級 | resume、reset、不改 addon 的 reconfigure、restore finalize（待 #1213 確認） |
+| create（init 類型不是 none）、addon 變更、人工 redeploy、**還欠 init 時的** rollback（含額度用完的 error）、從**額度出口**的 error 出發的 reconfigure（#1159 Q30）、#1222 的 digest 升級 | resume、reset、不改 addon 的 reconfigure、**init 已完成服務的** rollback、restore finalize（待 #1213 確認） |
+
+rollback 的條件是實作期裁定（#1257 review r1 M2 (A)），修訂 Q23／Q24 的字面「rollback 開新一代」：init 已完成的
+服務 rollback 不重跑 init（守住 #1267 驗收 5）。否則 n8n 每次 rollback 都多建一把 API key 並重啟，租戶改過 owner
+密碼時還會 login 失敗到額度用完、沒有出口。代價：Odoo rollback 到 addon 組合不同的 revision 不會自動
+`update_list`——與 #1257 以前的行為一致。
 
 - 只有 init 成功會清 `init_pending`；停權、resume、不改 addon 的 reconfigure 都保留它。
 
@@ -91,7 +96,7 @@ commit（poll 剛寫的 state 先落地）
 ### 4. 各入口的守衛（Q9／Q23／Q25／Q27／#1159 Q30）
 
 - **list/get**：只推進 state（deploying／upgrading → initializing），**不 dispatch init**。
-- **reconfigure／rollback**：lease 持有期間拒絕（可讀錯誤）。reconfigure 不覆寫欠 init；rollback 開新一代。
+- **reconfigure／rollback**：lease 持有期間拒絕（可讀錯誤）。reconfigure 不覆寫欠 init；還欠 init 的 rollback 開新一代。
 - **error 的 reconfigure**：只有額度出口（`init_exit` 為 `failed`／`unknown`）放行並一律開新一代；helm 失敗、等待逾時
   照擋。addon 讓 pod 起不來屬 upgrading 逾時轉 error，租戶出口是 rollback（後端允許從 error rollback）。
 - **redeploy（admin 後台）**：lease 在途時不 raise，登記 `init_redeploy_requested` 並回 notification；背景看到意圖就

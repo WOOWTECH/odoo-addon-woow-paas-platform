@@ -4045,9 +4045,10 @@ class CloudService(models.Model):
         """Q24：開新的一代——**唯一**開代入口。
 
         會開新一代：create（init 類型不是 none）、addon 變更、人工 redeploy、
-        rollback、從額度出口的 error 出發的 reconfigure（#1159 Q30），以及 #1222 的
-        digest 升級（將來直接呼叫本方法）。**不**開：resume、reset、不改 addon 的
-        reconfigure、restore finalize（待 #1213 確認）。
+        **還欠 init 時的** rollback（M2 裁定 (A)）、從額度出口的 error 出發的
+        reconfigure（#1159 Q30），以及 #1222 的 digest 升級（將來直接呼叫本方法）。
+        **不**開：resume、reset、不改 addon 的 reconfigure、init 已完成服務的
+        rollback、restore finalize（待 #1213 確認）。
         init 類型為 none 的服務不欠 init ⇒ no-op。
         """
         for svc in self:
