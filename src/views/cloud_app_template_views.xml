@@ -82,6 +82,10 @@
                                 <field name="admin_username_helm_path"
                                        invisible="not has_admin_gui or admin_password_carrier != 'helm_secret'"
                                        placeholder="authProxy.basicAuth.username"/>
+                                <!-- 只有密碼、沒有帳號的服務（code-server）開放租戶自設密碼
+                                     （constraint _check_admin_password_settable 把關）。 -->
+                                <field name="admin_password_settable"
+                                       invisible="not has_admin_gui or admin_password_carrier != 'helm_secret'"/>
                             </group>
                             <group invisible="not mcp_enabled">
                                 <group string="Sidecar Image">

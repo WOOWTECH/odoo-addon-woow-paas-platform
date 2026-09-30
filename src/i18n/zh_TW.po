@@ -18496,3 +18496,34 @@ msgstr "否"
 #: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.js:0
 msgid "Checking…"
 msgstr "檢查中…"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid "This service has no username; only its password can be set."
+msgstr "此服務沒有帳號，只能設定密碼。"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_app_template__admin_password_settable
+msgid "Tenant Can Set Own Password"
+msgstr "租戶可自設密碼"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_app_template__admin_credentials_settable
+msgid "Tenant Can Set Admin Credentials"
+msgstr "租戶可自設管理員憑證"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/OneTimeCredentialsModal.js:0
+msgid "Password"
+msgstr "密碼"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/OneTimeCredentialsModal.js:0
+msgid ""
+"Signs in to this service (there is no username). You can reset it or set "
+"your own later from Admin Credentials on the service page."
+msgstr "登入此服務用（沒有帳號）。之後可在服務頁「Admin Credentials」重設或改成自己的密碼。"

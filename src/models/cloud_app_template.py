@@ -337,6 +337,45 @@ class CloudAppTemplate(models.Model):
              'Only meaningful with the Helm Secret password carrier.',
     )
 
+    # 租戶可自設**密碼**、但沒有帳號（code-server：只有一組密碼、沒有使用者名稱）。
+    # admin_username_helm_path 有值的模板本來就能自設密碼（連同帳號）；本欄位補上
+    # 「沒有帳號可改、只有密碼」的形態。與 admin_username_helm_path 同一條前提：
+    # 平台供給憑證（has_admin_gui）且密碼活在 chart Secret（helm_secret）——
+    # config_json 載體的密碼在 PVC 的 config.json 裡，走的是另一條 saga。
+    # 刻意是顯式 seed 旗標、不是由 carrier 推導：hermes-agent 同為 helm_secret，
+    # 但它的密碼同時是 MCP 端要填的憑證，是否開放自設是那個模板自己的決定。
+    admin_password_settable = fields.Boolean(
+        string='Tenant Can Set Own Password',
+        default=False,
+        help='Password-only services (no username): the tenant may set their '
+             'own password from the service page, besides resetting it. '
+             'Templates with an Admin Username Values Path can already set '
+             'both. Requires "Built-in Admin GUI" and the Helm Secret carrier.',
+    )
+
+    # 「租戶能不能自設憑證（Admin Credentials 對話框）」的唯一事實源：controller 的
+    # admin-credentials endpoint 能力 gate、model 端 _reset_admin_password 的防線、
+    # payload template.admin_credentials_settable（前端 canEditAdminCredentials）
+    # 三處都讀它（#357 C01／capability-gate-single-source-field 同一紀律）。
+    # 能不能**改帳號**仍只看 admin_username_helm_path（payload admin_username_editable）。
+    admin_credentials_settable = fields.Boolean(
+        string='Tenant Can Set Admin Credentials',
+        compute='_compute_admin_credentials_settable',
+        help='True when the tenant may set their own admin credentials: the '
+             'platform can reset them AND the template either exposes the '
+             'username path or allows a password-only change.',
+    )
+
+    @api.depends('admin_reset_supported', 'admin_username_helm_path',
+                 'admin_password_settable')
+    def _compute_admin_credentials_settable(self):
+        for record in self:
+            record.admin_credentials_settable = bool(
+                record.admin_reset_supported
+                and (record.admin_username_helm_path
+                     or record.admin_password_settable)
+            )
+
     # Post-Deploy Initialization
     post_deploy_init_type = fields.Selection(
         selection=[
@@ -502,6 +541,24 @@ class CloudAppTemplate(models.Model):
                 raise ValidationError(
                     _('"Admin Username Values Path" must be a dotted path such as '
                       'authProxy.basicAuth.username (template: %s).') % name
+                )
+
+    @api.constrains('admin_password_settable', 'has_admin_gui',
+                    'admin_password_carrier')
+    def _check_admin_password_settable(self):
+        """自設密碼的前提同 _check_admin_username_helm_path：平台供給、密碼在 chart Secret。
+
+        誤標在 config_json／app_managed 上都是「假裝成功」：helm upgrade 成功、租戶
+        登入用的密碼卻沒變。寫入當下就炸。
+        """
+        for record in self:
+            if not record.admin_password_settable:
+                continue
+            if not record.has_admin_gui or record.admin_password_carrier != 'helm_secret':
+                raise ValidationError(
+                    _('"Tenant Can Set Own Password" requires "Built-in Admin GUI" '
+                      'and the Helm Secret password carrier (template: %s).')
+                    % (record.name or record.slug or record.id)
                 )
 
     # ------------------------------------------------------------------ #

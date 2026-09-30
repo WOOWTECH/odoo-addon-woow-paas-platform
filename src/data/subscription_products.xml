@@ -2052,6 +2052,72 @@
             <field name="taxes_id" eval="[(6, 0, [])]"/>
         </record>
 
+        <!-- Code Server T1（2 vCPU／4 Gi／25 Gi：workspace 20Gi ＋ pi-data 5Gi）：cs_* 顯式寫，與
+             template min_* 一致（cloud_service._assemble… 取 plan.cs_vcpu or template.min_vcpu）。
+             年繳 = 10 個月。 -->
+        <record id="plan_code_server_monthly" model="sh.subscription.plan">
+            <field name="name">Code Server 雲端訂閱服務 月繳</field>
+            <field name="sh_duration">1</field>
+            <field name="sh_unit">month</field>
+            <field name="sh_plan_price">4500</field>
+            <field name="sh_override_product" eval="True"/>
+            <field name="sh_no_of_billing_cycle">-1</field>
+            <field name="sh_never_expire" eval="True"/>
+            <field name="sh_trial" eval="True"/>
+            <field name="sh_trial_duration">7</field>
+            <field name="sh_trial_unit">day</field>
+            <field name="sh_start_immediately" eval="False"/>
+            <field name="sh_is_close_by_customer" eval="True"/>
+            <field name="sh_reminder"
+                   eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
+            <field name="service_type">cloud_service</field>
+            <field name="cs_vcpu">2</field>
+            <field name="cs_ram_gb">4.0</field>
+            <field name="cs_storage_gb">25</field>
+            <field name="cs_odoo_workers">0</field>
+        </record>
+        <record id="plan_code_server_yearly" model="sh.subscription.plan">
+            <field name="name">Code Server 雲端訂閱服務 年繳</field>
+            <field name="sh_duration">1</field>
+            <field name="sh_unit">year</field>
+            <field name="sh_plan_price">45000</field>
+            <field name="sh_override_product" eval="True"/>
+            <field name="sh_no_of_billing_cycle">-1</field>
+            <field name="sh_never_expire" eval="True"/>
+            <field name="sh_trial" eval="True"/>
+            <field name="sh_trial_duration">7</field>
+            <field name="sh_trial_unit">day</field>
+            <field name="sh_start_immediately" eval="False"/>
+            <field name="sh_is_close_by_customer" eval="True"/>
+            <field name="sh_reminder"
+                   eval="[(4, ref('reminder_3days_before')), (4, ref('reminder_1day_before'))]"/>
+            <field name="service_type">cloud_service</field>
+            <field name="cs_vcpu">2</field>
+            <field name="cs_ram_gb">4.0</field>
+            <field name="cs_storage_gb">25</field>
+            <field name="cs_odoo_workers">0</field>
+        </record>
+        <record id="product_code_server_monthly" model="product.product">
+            <field name="name">Code Server 雲端訂閱服務 月繳 Subscription</field>
+            <field name="type">service</field>
+            <field name="list_price">4500</field>
+            <field name="sale_ok" eval="True"/>
+            <field name="purchase_ok" eval="False"/>
+            <field name="sh_product_subscribe" eval="True"/>
+            <field name="sh_subscription_plan_id" ref="plan_code_server_monthly"/>
+            <field name="taxes_id" eval="[(6, 0, [])]"/>
+        </record>
+        <record id="product_code_server_yearly" model="product.product">
+            <field name="name">Code Server 雲端訂閱服務 年繳 Subscription</field>
+            <field name="type">service</field>
+            <field name="list_price">45000</field>
+            <field name="sale_ok" eval="True"/>
+            <field name="purchase_ok" eval="False"/>
+            <field name="sh_product_subscribe" eval="True"/>
+            <field name="sh_subscription_plan_id" ref="plan_code_server_yearly"/>
+            <field name="taxes_id" eval="[(6, 0, [])]"/>
+        </record>
+
         <!-- #341（Wave A）撞車收斂：HA PaaS 0 元 plan/product 沿用 Wave A 已在 develop
              的 plan_ha_paas_monthly / product_ha_paas_monthly（自帶 storefront_hidden=True），
              本 PR 原有的 plan_ha_paas / product_ha_paas 已移除避免重複 0 元 HA seed。
