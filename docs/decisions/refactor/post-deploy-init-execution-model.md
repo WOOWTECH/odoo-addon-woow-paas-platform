@@ -143,7 +143,9 @@ woow-paas/paas-app-bundle-cd#154（prod `limit_time_real_cron=1800`）要先上 
   都建立 `observation_episode_started_at`；它是「本次等待第一次真觀測」的時計，**不是** operator observation。
   `observed_at` 仍只在短 poll 真拿到 status 時更新。formatter 與 monitor 同時使用：若 `observed_at` 早於 episode，
   payload 回 `observation_pending=true` 且 `observed_age_seconds` 自 episode 起算；否則從 `observed_at` 起算。這讓 consumer
-  可說「等待更新」而不把命令提交偽裝成「最後觀測」。同 state write／無關 write 不重置 episode。舊列在 monitor 首趟
+  可說「等待更新」而不把命令提交偽裝成「最後觀測」。同 state write／無關 write 不重置 episode。
+  新服務 create 明寫 `observed_at=False`，非轉移 state 也明寫 episode=False，中和 raw vals、context default 與 ir.default；
+  後續僅平台可寫觀測欄位，既有授權 owner 的普通 write 仍可成功（ORM／call_kw 對照）。舊列在 monitor 首趟
   背景 pass 只初始化一次 episode，得到有界 grace；不以每次 `write_date` 延後時限。
 - **DNS 旗標**（Q16／D4）：`public_url_dns_unverified` 改由 `ir_cron_reprobe_public_url_dns`（每 15 分）重探後清除。
 - **監控**（Q38／D3）：`mail.activity` 給 `base.group_system`，每個監控項用不同 summary 各自去重，全部掛在

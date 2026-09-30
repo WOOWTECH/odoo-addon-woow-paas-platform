@@ -26,6 +26,7 @@ from datetime import timedelta
 from unittest.mock import MagicMock, patch
 
 from odoo import SUPERUSER_ID, api, fields
+from odoo.exceptions import AccessError
 from odoo.tests.common import TransactionCase, tagged
 
 from ..controllers.paas import PaasController
@@ -352,20 +353,69 @@ class TestObservationFreshness1159(_ServiceCase):
         self.assertFalse(payload['observation_pending'])
         self.assertTrue(0 <= payload['observed_age_seconds'] < 60)
 
-    def test_tenant_cannot_forge_an_observation_or_reset_the_episode(self):
-        svc = self._service('none', state='deploying')
+    def _workspace_admin(self):
         user = self.env['res.users'].create({
-            'name': f'1159 observation tenant {self.tag}',
+            'name': f'1159 observation admin {self.tag}',
             'login': f'1159-observation-{self.tag}',
+            'lang': 'en_US',
             'groups_id': [(6, 0, [self.env.ref('base.group_user').id])],
         })
-        from odoo.exceptions import AccessError
-        with self.assertRaises(AccessError):
-            svc.with_user(user).write({'observed_at': fields.Datetime.now()})
-        with self.assertRaises(AccessError):
-            svc.with_user(user).write({
-                'observation_episode_started_at': fields.Datetime.now(),
-            })
+        self.env['woow_paas_platform.workspace_access'].create({
+            'workspace_id': self.workspace.id, 'user_id': user.id, 'role': 'admin',
+        })
+        return user
+
+    def test_workspace_admin_cannot_forge_an_observation_or_reset_the_episode(self):
+        svc = self._service('none', state='deploying')
+        user = self._workspace_admin()
+        managed = svc.with_user(user).with_context(lang='en_US')
+        managed.write({'name': '合法的一般欄位更新'})
+        self.assertEqual(managed.name, '合法的一般欄位更新', '先證明這個使用者真的可寫該record')
+        for key in ('observed_at', 'observation_episode_started_at'):
+            with self.subTest(field=key):
+                try:
+                    managed.write({key: fields.Datetime.now()})
+                except AccessError as exc:
+                    self.assertIn('observation fields are managed by the platform', str(exc))
+                else:
+                    self.fail('platform observation guard 未拒絕偽造欄位')
+
+    def test_provisioning_neutralizes_observation_vals_and_default_carriers(self):
+        """合法開通仍不可把 raw vals、context 或使用者 ir.default 變成假的觀測證據。"""
+        user = self._workspace_admin()
+        future = fields.Datetime.now() + timedelta(days=3)
+        fake = fields.Datetime.to_string(future)
+        creator = _internal_provision(self.env[SVC].with_user(user).sudo())
+        # sudo 不改 uid：這正是合法 server-side provisioning 仍會吃到使用者default的風險。
+        self.assertEqual(creator.env.uid, user.id)
+        for carrier in ('values', 'context', 'ir.default'):
+            for state in ('pending', 'deploying'):
+                with self.subTest(carrier=carrier, state=state):
+                    model = creator
+                    vals = {'name': f'觀測載體 {carrier} {state}', 'workspace_id': self.workspace.id,
+                            'template_id': self.templates['none'].id, 'state': state}
+                    if carrier == 'values':
+                        vals.update(observed_at=fake, observation_episode_started_at=fake)
+                    elif carrier == 'context':
+                        model = model.with_context(default_observed_at=fake,
+                            default_observation_episode_started_at=fake)
+                    else:
+                        defaults = self.env['ir.default'].with_user(user)
+                        for key in ('observed_at', 'observation_episode_started_at'):
+                            defaults.set(SVC, key, fake, user_id=user.id)
+                    if carrier != 'values':
+                        values = model.default_get(['observed_at', 'observation_episode_started_at'])
+                        self.assertEqual(fields.Datetime.to_datetime(values['observed_at']), future,
+                                         '前置：偽造default必須真的抵達框架')
+                    svc = model.create(vals)
+                    self.assertFalse(svc.observed_at, '新服務尚未被operator觀測，不可沿用caller證據')
+                    if state == 'pending':
+                        self.assertFalse(svc.observation_episode_started_at)
+                    else:
+                        self.assertLess(svc.observation_episode_started_at, future)
+                    svc.sudo().write({'state': 'deploying'})
+                    svc.sudo().write({'observed_at': fields.Datetime.now()})
+                    self.assertFalse(svc._observation_freshness()[0], '真正的後續平台觀測仍必須可寫入')
 
     def test_monitor_initializes_legacy_episode_once_then_alerts_after_grace(self):
         svc = self._service('none', state='deploying')
@@ -989,21 +1039,33 @@ class TestPlatformMonitor1159(_ServiceCase):
 
     def test_each_cron_runs_its_side_of_the_mutual_check(self):
         model = type(self.Monitor)
+        service_model = type(self.env[SVC])
+        # 此處只驗 monitor 接線；服務處理另有真 cursor 回歸，不在這條測試修改全庫服務。
+        # cron 會 commit，不能再把它送進 TransactionCase 的禁 commit cursor。
         with patch.object(model, '_run_poll_cron_checks', autospec=True) as poll_side, \
                 patch.object(model, '_run_init_cron_checks', autospec=True) as init_side, \
+                patch.object(service_model, '_cron_run_requested_redeploys', autospec=True), \
+                patch.object(service_model, '_init_settle_operator_wait_timeouts', autospec=True), \
+                patch.object(service_model, '_init_cron_queue', autospec=True,
+                             side_effect=lambda records: records.browse()), \
                 patch(f'{_OPERATOR_MODULE}.get_paas_operator_client', return_value=None):
-            self.env[SVC]._cron_check_deploying_services()
-            poll_side.assert_called_once()
-            init_side.assert_not_called()
-            poll_side.reset_mock()
-            self.env[SVC]._cron_run_post_deploy_inits()
-            init_side.assert_called_once()
-            poll_side.assert_not_called()
+            with self.registry.cursor() as cr:
+                env = api.Environment(cr, SUPERUSER_ID, {})
+                env[SVC]._cron_check_deploying_services()
+                poll_side.assert_called_once()
+                init_side.assert_not_called()
+                poll_side.reset_mock()
+                env[SVC]._cron_run_post_deploy_inits()
+                init_side.assert_called_once()
+                poll_side.assert_not_called()
 
     def test_oldest_observation(self):
         summary = self.Monitor.SUMMARY_OBSERVED
         svc = self._service('none', state='deploying')
-        svc.sudo().write({'observed_at': fields.Datetime.now() - timedelta(minutes=10)})
+        svc.sudo().write({
+            'observation_episode_started_at': fields.Datetime.now() - timedelta(minutes=20),
+            'observed_at': fields.Datetime.now() - timedelta(minutes=10),
+        })
         pending = self._service('none', state='pending')
         pending.sudo().write({'observed_at': fields.Datetime.now() - timedelta(hours=5)})
         self.Monitor._check_oldest_observation()

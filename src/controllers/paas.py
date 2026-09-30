@@ -4195,9 +4195,8 @@ class PaasController(HiddenChainMixin, Controller):
         # state used by the cron as a pick-up lock; users should see 'deploying'.
         ui_state = 'deploying' if service.state == 'pending' else service.state
 
-        # #1159 observation-freshness: a new transition waits for a real poll
-        # response.  The model owns the comparison so formatter and monitor do
-        # not invent different clocks; this read-only call never polls or writes.
+        # #1159：新轉移等待真 poll；比較規則由 model 定義，formatter／monitor 不另猜時計。
+        # 此呼叫只讀已存值，不探測、不寫入。
         observation_pending, observation_freshness_at = service._observation_freshness()
         observation_age_seconds = (
             max(0, int((fields.Datetime.now() - observation_freshness_at).total_seconds()))
@@ -4224,12 +4223,9 @@ class PaasController(HiddenChainMixin, Controller):
             # 而且 ServiceDetailPage 的 `t-if="service.error_message"` 不判 state
             # ⇒ 一台健康的服務會冒出紅底錯誤。
             'public_url_dns_unverified': service.public_url_dns_unverified,
-            # `observed_at` stays literal evidence from the status poll.  During
-            # a new episode `observed_age_seconds` instead measures the pending
-            # wait boundary, so old evidence cannot immediately be reported as
-            # a fresh transfer's stale observation.  Consumers use the additive
-            # flag to phrase that case as "waiting for an update", not "last
-            # updated"; list/get still only read stored values.
+            # observed_at 保留真 poll 證據；新 episode 的 age 從等待邊界起算，
+            # 不把舊證據立刻報成新轉移的 stale。consumer 依 pending 旗標分別呈現
+            # 「等待更新」與「最後更新」，list/get 仍只讀已存值。
             'observed_at': service.observed_at.isoformat() if service.observed_at else None,
             'observation_pending': observation_pending,
             'observed_age_seconds': observation_age_seconds,

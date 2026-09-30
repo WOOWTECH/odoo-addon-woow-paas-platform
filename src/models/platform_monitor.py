@@ -152,20 +152,15 @@ class PlatformMonitor(models.Model):
 
     @api.model
     def _check_oldest_observation(self):
-        """Alert on the oldest shared observation-freshness clock.
+        """依與 API 相同的觀測時計，對最舊的等待／真觀測告警。
 
-        A transition starts an episode, not an observation: while its real
-        ``observed_at`` predates that episode, both this monitor and the API use
-        the episode boundary.  Pre-field rows receive one background-only grace
-        boundary exactly once.  It is intentionally not ``write_date``: unrelated
-        writes must not perpetually defer the 15 minute alert.
+        真 observed_at 早於 episode 時用等待邊界；舊列只在背景補一次 grace。
+        不以 write_date 計時，避免無關寫入不斷延後 15 分鐘告警。
         """
         Service = self.env['woow_paas_platform.cloud_service'].sudo()
         Service.flush_model(['state', 'observed_at', 'observation_episode_started_at'])
-        # No migration is needed for the nullable additive field.  On the first
-        # monitor pass after rollout, legacy transitional rows get one bounded
-        # grace period.  This is a short local UPDATE after polling, never an
-        # external call or a row lock held across operator I/O.
+        # nullable 新欄位不需 migration；legacy 轉移列在首趟 monitor 取得一次 grace。
+        # 這是 poll 後的本地短 UPDATE，不跨 operator I/O 持有列鎖。
         self.env.cr.execute(
             f"""UPDATE {Service._table}
                    SET observation_episode_started_at =

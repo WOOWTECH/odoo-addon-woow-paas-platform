@@ -576,6 +576,20 @@ class TestInitControlFieldsWriteAuthz1257(_CloudService676Fixture):
         self.assertFalse(svc.sudo().init_redeploy_requested)
         self.assertFalse(svc.sudo().init_exit)
 
+    def test_owner_cannot_write_observation_fields_over_rpc(self):
+        """OBS guard 也須跨真 call_kw 成立，不能靠 workspace rule 假綠。"""
+        svc = self._service(self.template, self.w1, 'Observation 1159', state='upgrading')
+        self.authenticate(self.alice_login, self.alice_login)
+        renamed = self._call_kw(
+            'woow_paas_platform.cloud_service', 'write', [[svc.id], {'name': 'Observation renamed'}])
+        self._assert_ok(renamed, '陽性對照：owner 可寫一般欄位')
+        for field in ('observed_at', 'observation_episode_started_at'):
+            with self.subTest(field=field):
+                result = self._call_kw(
+                    'woow_paas_platform.cloud_service', 'write', [[svc.id], {field: False}])
+                self.assertIn('error', result)
+                self.assertIn('observation fields are managed by the platform', self._error_text(result))
+
 
 @tagged('post_install', '-at_install')
 class TestReadEndpointsStayPureForGuests(_CloudService676Fixture):
