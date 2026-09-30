@@ -60,6 +60,7 @@ SVC = 'woow_paas_platform.cloud_service'
 ATTEMPT = 'woow_paas_platform.cloud_service_init_attempt'
 _OPERATOR_MODULE = 'odoo.addons.woow_paas_platform.services.paas_operator'
 _CONTROLLER_MODULE = 'odoo.addons.woow_paas_platform.controllers.paas'
+_MODEL_MODULE = 'odoo.addons.woow_paas_platform.models.cloud_service'
 _READY_PODS = [{'name': 'app', 'phase': 'Running', 'ready': '1/1'}]
 _JWT = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ0ZXN0LTEyNTcifQ.c2lnbmF0dXJlLTEyNTc'
 # lease 的上界：承載 init 的 runtime 的 cron 硬上限（prod `limit_time_real_cron=1800`，
@@ -774,36 +775,140 @@ class TestInitLeaseRealCursor1257(TransactionCase):
         self.assertAlmostEqual(self._read()['wait_spent'], 7, delta=.1)
 
     def test_two_cursors_recover_recorded_unknown_only_once(self):
-        """兩條 recovery 都先見 marker 空時，列鎖後重讀 marker 仍只能計 unknown 一次。"""
+        """E6：兩條舊 snapshot 都到 CAS 前，第一條 commit 後第二條必經 40001 再重讀 marker。"""
         self._set_lease(seconds_from_now=600)
-        attempt_id = self._read()['attempt']
+        before = self._read()
         self._sql("UPDATE woow_paas_platform_cloud_service_init_attempt SET "
+                  "claimed_at = (statement_timestamp() AT TIME ZONE 'UTC') - interval '600 seconds', "
                   "finished_at = (statement_timestamp() AT TIME ZONE 'UTC'), "
                   "outcome = 'unknown', error = 'recorded before crash' WHERE id = %s",
-                  (attempt_id,))
-        start = threading.Barrier(2)
-        errors = []
+                  (before['attempt'],))
+        at_first_lock = threading.Barrier(2)
+        first_committed = threading.Event()
+        errors, conflicts = [], []
+        calls = {'first': 0, 'second': 0}
+        outcomes = {}
+        model = type(self.env[SVC])
+        original_guard = model._init_guarded
+
+        def ordered_guard(records, query, params):
+            name = threading.current_thread().name
+            is_apply = ('SELECT 1 FROM' in query and 'init_attempt_id = %s' in query
+                        and 'FOR NO KEY UPDATE' in query)
+            if is_apply and name in calls:
+                calls[name] += 1
+                if calls[name] == 1:
+                    # 兩者已讀 attempt、建立 RR snapshot；舊實作的鎖外 marker 檢查也已通過。
+                    at_first_lock.wait(20)
+                    if name == 'second' and not first_committed.wait(20):
+                        raise AssertionError('第一條 recovery 未完成 commit')
+                result = original_guard(records, query, params)
+                if result is None:
+                    conflicts.append(name)
+                return result
+            return original_guard(records, query, params)
+
+        def recover(name):
+            try:
+                with self.registry.cursor() as cr:
+                    svc = self._env(cr)[SVC].browse(self.service_ids['odoo'])
+                    outcomes[name] = svc._init_recover_recorded_attempt()
+                    cr.commit()
+            except Exception as exc:
+                errors.append(exc)
+            finally:
+                if name == 'first':
+                    first_committed.set()
+
+        threads = [threading.Thread(target=recover, args=(name,), name=name)
+                   for name in calls]
+        with patch.object(model, '_init_guarded', ordered_guard):
+            try:
+                for thread in threads:
+                    thread.start()
+                for thread in threads:
+                    thread.join(30)
+            finally:
+                first_committed.set()
+                at_first_lock.abort()
+                for thread in threads:
+                    thread.join(10)
+        for thread in threads:
+            self.assertFalse(thread.is_alive(), _thread_stacks(thread))
+        self.assertFalse(errors, errors)
+        self.assertEqual(conflicts, ['second'], '必須實際走過舊 snapshot 的 serialization retry')
+        self.assertEqual(calls, {'first': 1, 'second': 2})
+        state = self._read()
+        self.assertEqual(state['init_unknown_count'], 1)
+        self.assertEqual(state['state'], 'initializing')
+        self.assertEqual(state['lease'], before['lease'], 'unknown 的原 lease 必須保持不變')
+        self.assertEqual(outcomes, {'first': True, 'second': False})
+        self.assertTrue(self._run(lambda svc: bool(svc.init_attempt_id.applied_at)))
+
+    def test_recorded_not_executed_survives_three_real_row_lock_conflicts(self):
+        """E6：真鎖三次失敗也不能丟復原 pointer；釋鎖後補套七秒，不再呼叫 operator。"""
+        client = operator_client(init_odoo={'success': False, 'error_kind': 'not_executed'})
+        model = type(self.env[SVC])
+        with patch.object(model, '_init_apply_outcome', side_effect=RuntimeError('apply crash')):
+            self._entry(client)
+        before = self._read()
+        self._sql("UPDATE woow_paas_platform_cloud_service_init_attempt SET "
+                  "claimed_at = finished_at - interval '7 seconds' WHERE id = %s",
+                  (before['attempt'],))
+        original_guard = model._init_guarded
+        finished = threading.Event()
+        conflicts, errors = [], []
+        results = []
+
+        def count_real_conflicts(records, query, params):
+            result = original_guard(records, query, params)
+            if ('SELECT 1 FROM' in query and 'init_attempt_id = %s' in query
+                    and threading.current_thread().name == 'blocked-recovery'):
+                conflicts.append(result)
+            return result
 
         def recover():
             try:
                 with self.registry.cursor() as cr:
                     svc = self._env(cr)[SVC].browse(self.service_ids['odoo'])
-                    start.wait(20)
-                    svc._init_recover_recorded_attempt()
+                    results.append(svc._init_recover_recorded_attempt())
                     cr.commit()
             except Exception as exc:
                 errors.append(exc)
+            finally:
+                finished.set()
 
-        threads = [threading.Thread(target=recover) for _ in range(2)]
-        for thread in threads:
-            thread.start()
-        for thread in threads:
-            thread.join(30)
+        thread = threading.Thread(target=recover, name='blocked-recovery')
+        # 僅縮短 DB 等鎖時間（production 為 5 秒），仍由 PostgreSQL 真的拋三次鎖衝突。
+        with patch.object(model, '_init_guarded', count_real_conflicts), \
+                patch(f'{_MODEL_MODULE}._INIT_CLAIM_LOCK_TIMEOUT', '50ms'):
+            with self.registry.cursor() as holder:
+                holder.execute('SELECT id FROM woow_paas_platform_cloud_service '
+                               'WHERE id = %s FOR NO KEY UPDATE', (self.service_ids['odoo'],))
+                try:
+                    thread.start()
+                    returned_while_locked = finished.wait(5)
+                finally:
+                    holder.rollback()
+                    thread.join(20)
+        self.assertFalse(thread.is_alive(), _thread_stacks(thread))
         self.assertFalse(errors, errors)
-        state = self._read()
-        self.assertEqual(state['init_unknown_count'], 1)
-        self.assertTrue(state['lease'], 'unknown 的原 lease 不得因補套提早釋放')
-        self.assertEqual(self._run(lambda svc: svc.init_attempt_id.applied_at is not False), True)
+        self.assertTrue(returned_while_locked, '撞鎖應有界返回，不能改成無期限等鎖的清理 UPDATE')
+        self.assertEqual(conflicts, [None, None, None])
+        self.assertEqual(results, [False])
+        busy = self._read()
+        self.assertEqual((busy['attempt'], busy['lease']), (before['attempt'], before['lease']))
+        self.assertEqual((busy['wait_spent'], busy['init_retries'], busy['init_unknown_count']), (0, 0, 0))
+        self._entry(client)
+        applied = self._read()
+        self.assertEqual(client.init_odoo.call_count, 1)
+        self.assertEqual(applied['wait_spent'], 7)
+        self.assertFalse(applied['attempt'])
+        self.assertFalse(applied['lease'])
+        self.assertEqual((applied['retry_eligible_at'] - applied['wait_started_at']).total_seconds(), 60)
+        self._entry(client)
+        self.assertEqual(client.init_odoo.call_count, 1)
+        self.assertEqual(self._read()['wait_spent'], 7)
 
     def test_local_bookkeeping_error_recovers_without_double_counting(self):
         """D2-R2：結果已落帳但套用炸掉時，保留 marker 給下一趟補套，恰好一次。"""
