@@ -41,8 +41,12 @@
             </div>
           </div>
           <div class="o_woow_sa_detail__actions">
-            <WoowButton t-if="state.sa.state === 'pending' or state.sa.state === 'error'"
+            <!-- #1261：錯誤狀態按下去是「沿用既有 tunnel 就地收斂」，不是重建一條新的
+                 （同 Smart Home），文字要講清楚。 -->
+            <WoowButton t-if="state.sa.state === 'pending'"
                         variant="'primary'" onClick.bind="provision">Provision</WoowButton>
+            <WoowButton t-if="state.sa.state === 'error'"
+                        variant="'primary'" onClick.bind="provision">Retry setup</WoowButton>
             <WoowButton variant="'secondary'"
                         onClick="() => state.showChangePlanModal = true">
               <WoowIcon name="'swap_horiz'" size="16"/>
@@ -276,7 +280,7 @@
                              title="Forces the Host header sent to your service to the public hostname. cloudflared normally forwards the visitor's original Host (the same public hostname) anyway, so turning this off usually changes nothing."
                              t-att-checked="state.editRouteHostHeader"
                              t-on-change="onEditRouteHostHeader"/>
-                      <t t-else="" t-esc="route.http_host_header ? 'Yes' : 'No'"/>
+                      <t t-else="" t-esc="hostHeaderLabel(route)"/>
                     </td>
                     <!-- #1234：公開網路探測結果；滑過看該做什麼。 -->
                     <td class="o_woow_sa_routes_table__status">
