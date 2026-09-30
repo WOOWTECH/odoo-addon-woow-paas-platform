@@ -542,7 +542,7 @@ run_mut AJ "leader prompt 守線表宣稱 config 沒有的 policy（F5 那類漂
 'python3 - <<"PY"
 import mutation_lib, pathlib
 p = pathlib.Path("woow-issue-leader/AGENTS.md")
-old = "| `spawn_bounds` | 每輪最多 6 次派工（`sys_session_send` ＋ `sys_session_create` 合計） |"
+old = "| `spawn_bounds` | 每輪最多 12 次 `sys_session_create`；`sys_session_send` 不計數 |"
 mutation_lib.edit(str(p), old=old, new=old + "\n| `no_such_policy` | 假的 |")
 PY'
 

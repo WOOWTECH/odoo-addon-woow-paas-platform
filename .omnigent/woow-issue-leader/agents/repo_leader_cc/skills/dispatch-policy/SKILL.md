@@ -15,6 +15,9 @@ description: 派工對照表與 repo alias map 的使用規則：怎麼選 harne
 `args.model` / `args.reasoning_effort` 覆寫。所以「同一個 purpose 要換 harness」只有一條路：
 **先產生 config，再 `sys_session_create(config_path=…)`**。
 
+`spawn_bounds` 每輪最多計 12 次 `sys_session_create`；`sys_session_send` 初次送工單與續談不計數。
+此上限限制 session 建立，不代表同時運行的 worker 上限；收到新 request（含 wake notice）會重設。
+
 ### 四步流程
 
 ```bash
@@ -63,13 +66,13 @@ session-scoped agent）；會撞的是同一 parent 下的 `sys_session_send` ti
 
 | purpose | harness | model／effort | 定位 | 寫權 |
 |---|---|---|---|---|
-| `repo-leader` | claude-native／pi | `claude-fable-5-1`／`gpt-6-astra`；xhigh | issue 全程與派工 | ⛔ 不寫產品碼 |
-| `implement` | **固定 pi** | `gpt-5.6-sol`；xhigh | 多檔重構、寫測試 | ✅ |
-| `review` | **固定 claude-native** | `claude-sonnet-5`；high | 審 diff | ⛔ 唯讀 |
-| `explore`（＝`search`） | pi | `gpt-5.6-luna`；high | recon／lookup | ⛔ 唯讀 |
+| `repo-leader` | claude-native／pi | `claude-fable-5-1[1m]`／`gpt-6-astra`；xhigh | issue 全程與派工 | ⛔ 不寫產品碼 |
+| `implement` | **固定 pi** | `gpt-6.1-sol`；xhigh | 多檔重構、寫測試 | ✅ |
+| `review` | **固定 claude-native** | `claude-sonnet-5-5[1m]`；high | 審 diff | ⛔ 唯讀 |
+| `explore`（＝`search`） | pi | `gpt-6-luna`；high | recon／lookup | ⛔ 唯讀 |
 | `tracker`（＝`triage`） | pi | `gpt-5.6-terra`；high | 六 repo `tea` 對帳、查重、開單 | ✅（只寫產物） |
-| `ops_k8s`（＝`deploy`） | **固定 claude-native** | `claude-sonnet-5`；xhigh | kubectl／deploy-stg／sandbox | ✅ |
-| `researcher` | pi | `gpt-5.6-luna`；high | 上游 addon／Odoo 18 行為查證 | ⛔ 唯讀 |
+| `ops_k8s`（＝`deploy`） | **固定 claude-native** | `claude-sonnet-5-5[1m]`；xhigh | kubectl／deploy-stg／sandbox | ✅ |
+| `researcher` | pi | `gpt-6-luna`；high | 上游 addon／Odoo 18 行為查證 | ⛔ 唯讀 |
 
 model／effort 用對照表的預設；要覆寫就由 `generate-worker.py` 帶 `--model`／`--effort`，
 仍會過防線 1。
