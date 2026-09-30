@@ -51,6 +51,15 @@ class PlatformMonitor(models.Model):
     _inherit = ['mail.thread', 'mail.activity.mixin']
 
     name = fields.Char(required=True)
+    notified_unknown_attempt_ids = fields.Many2many(
+        comodel_name='woow_paas_platform.cloud_service_init_attempt',
+        relation='woow_paas_platform_monitor_unknown_attempt_rel',
+        column1='monitor_id',
+        column2='attempt_id',
+        string='Notified Unknown Init Attempts',
+        copy=False,
+        help='Unknown or partial init attempts delivered while still in the monitor window.',
+    )
 
     # 每個監控項一個 summary ＝ 各自的去重鍵。
     SUMMARY_INIT_CRON = 'PaaS monitor: post-deploy init cron is not running'
@@ -195,20 +204,78 @@ class PlatformMonitor(models.Model):
             'status poll cron.', minutes=int(age.total_seconds() // 60), name=service.name,
             id=service.id, state=service.state))
 
+    def _unknown_attempt_line(self, attempt):
+        return _('%(name)s (id=%(id)s), attempt %(attempt)s: %(outcome)s',
+                 name=attempt.service_id.name, id=attempt.service_id.id,
+                 attempt=attempt.id, outcome=attempt.outcome)
+
+    def _deliver_unknown_attempts(self, monitor, attempts):
+        """Deliver newly finished unknown attempts to each current system user.
+
+        A user with an active card gets the new lines appended; a user who completed
+        their previous card gets a new one.  The caller records attempt identities
+        only after this method has delivered them to the complete current roster.
+        """
+        todo = self.env.ref('mail.mail_activity_data_todo', raise_if_not_found=False)
+        users = self.env.ref('base.group_system').users.filtered(
+            lambda user: user.active and not user.share)
+        if not (todo and users):
+            _logger.warning("[#1159] cannot raise monitor alert %r (todo=%s users=%s)",
+                            self.SUMMARY_GAVE_UP, bool(todo), len(users))
+            return False
+        Activity = self.env['mail.activity'].sudo()
+        activities = Activity.search([
+            ('res_model', '=', self._name), ('res_id', '=', monitor.id),
+            ('summary', '=', self.SUMMARY_GAVE_UP)])
+        lines = [self._unknown_attempt_line(attempt) for attempt in attempts]
+        body = Markup('<p>%s</p>') % _(
+            'Post-deploy initialization ended with an unknown or partial result:')
+        for line in lines:
+            body += Markup('<p>%s</p>') % line
+        for user in users:
+            user_activities = activities.filtered(lambda activity: activity.user_id == user)
+            if user_activities:
+                for activity in user_activities:
+                    for line in lines:
+                        activity.note = (activity.note or Markup()) + Markup('<p>%s</p>') % line
+                continue
+            # Keep this monitor-local notification in the mail queue.  Odoo 18's
+            # mail.thread supports this context key; it also keeps a later roster
+            # delivery failure inside the savepoint below from sending a partial email.
+            monitor.with_context(mail_notify_force_send=False).activity_schedule(
+                activity_type_id=todo.id, summary=self.SUMMARY_GAVE_UP, note=body,
+                user_id=user.id)
+        _logger.warning("[#1159] monitor alert raised: %s — %s", self.SUMMARY_GAVE_UP,
+                        ', '.join(lines))
+        return True
+
     @api.model
     def _check_unknown_results(self):
+        """Project each current unknown/partial attempt once onto per-user activities."""
         Attempt = self.env['woow_paas_platform.cloud_service_init_attempt'].sudo()
         since = fields.Datetime.now() - timedelta(hours=UNKNOWN_WINDOW_HOURS)
-        attempts = Attempt.search([
-            ('outcome', 'in', ('unknown', 'partial')), ('finished_at', '>=', since)])
-        if not attempts:
-            return
-        self._alert(self.SUMMARY_GAVE_UP, _(
-            '%(count)s post-deploy init attempt(s) ended with an unknown or partial result in '
-            'the last %(hours)s hours (services: %(names)s). Check the operator (a wrong '
-            'operator API key is classified as unknown).',
-            count=len(attempts), hours=UNKNOWN_WINDOW_HOURS,
-            names=', '.join(sorted(set(attempts.mapped('service_id.name'))))))
+        monitor = self._singleton()
+        try:
+            # The activity projection and identity ledger are atomic: a missing
+            # recipient or scheduling failure leaves every attempt eligible to retry.
+            with self.env.cr.savepoint():
+                expired = monitor.notified_unknown_attempt_ids.filtered(
+                    lambda attempt: not attempt.finished_at or attempt.finished_at < since)
+                if expired:
+                    monitor.write({'notified_unknown_attempt_ids': [
+                        (3, attempt.id) for attempt in expired]})
+                attempts = Attempt.search([
+                    ('outcome', 'in', ('unknown', 'partial')),
+                    ('finished_at', '>=', since)], order='id')
+                new_attempts = attempts - monitor.notified_unknown_attempt_ids
+                if not new_attempts:
+                    return
+                if not self._deliver_unknown_attempts(monitor, new_attempts):
+                    return
+                monitor.write({'notified_unknown_attempt_ids': [
+                    (4, attempt.id) for attempt in new_attempts]})
+        except Exception:
+            _logger.exception("[#1159] unknown init-attempt monitor delivery failed")
 
     @api.model
     def _run_poll_cron_checks(self):

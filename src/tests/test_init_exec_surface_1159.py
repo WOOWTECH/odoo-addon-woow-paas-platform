@@ -1000,6 +1000,18 @@ class TestPlatformMonitor1159(_ServiceCase):
             domain.append(('summary', '=', summary))
         return self.env['mail.activity'].sudo().search(domain)
 
+    def _unknown_attempt(self, service, sequence, finished_at=None, outcome='unknown'):
+        return self.env[ATTEMPT].sudo().create({
+            'service_id': service.id,
+            'generation': 1,
+            'sequence': sequence,
+            'init_type': 'odoo',
+            'claimed_at': fields.Datetime.now() - timedelta(hours=1),
+            'lease_until': fields.Datetime.now(),
+            'finished_at': finished_at,
+            'outcome': outcome,
+        })
+
     def test_singleton_is_the_data_record(self):
         self.assertEqual(self.singleton, self.env.ref('woow_paas_platform.platform_monitor_singleton'))
         self.assertEqual(self.Monitor._singleton(), self.singleton, '查找以 xmlid 為準，不重建')
@@ -1087,14 +1099,105 @@ class TestPlatformMonitor1159(_ServiceCase):
         svc = self._service('odoo', state='initializing')
         self.Monitor._check_unknown_results()
         self.assertFalse(self._activities(summary))
-        self.env[ATTEMPT].sudo().create({
-            'service_id': svc.id, 'generation': 1, 'sequence': 1, 'init_type': 'odoo',
-            'claimed_at': fields.Datetime.now() - timedelta(hours=1),
-            'lease_until': fields.Datetime.now(),
-            'finished_at': fields.Datetime.now() - timedelta(minutes=30),
-            'outcome': 'unknown'})
+        attempt = self._unknown_attempt(
+            svc, 1, finished_at=fields.Datetime.now() - timedelta(minutes=30))
         self.Monitor._check_unknown_results()
         self.assertTrue(self._activities(summary))
+        self.assertIn(attempt, self.singleton.notified_unknown_attempt_ids)
+
+    def test_unknown_attempt_does_not_reopen_after_all_recipients_finish(self):
+        summary = self.Monitor.SUMMARY_GAVE_UP
+        attempt = self._unknown_attempt(
+            self._service('odoo', state='initializing'), 1, fields.Datetime.now())
+        self.Monitor._check_unknown_results()
+        self.assertEqual(len(self._activities(summary)), len(self.admins))
+        self._activities(summary).action_feedback(feedback='handled')
+        self.assertFalse(self._activities(summary))
+
+        self.Monitor._check_unknown_results()
+        self.assertFalse(self._activities(summary), '同一 attempt 在 24h 內不得重開')
+        self.assertIn(attempt, self.singleton.notified_unknown_attempt_ids)
+
+    def test_notified_unknown_attempt_identity_expires_with_the_monitor_window(self):
+        attempt = self._unknown_attempt(
+            self._service('odoo', state='initializing'), 1, fields.Datetime.now())
+        self.Monitor._check_unknown_results()
+        self.assertIn(attempt, self.singleton.notified_unknown_attempt_ids)
+
+        attempt.write({'finished_at': fields.Datetime.now() - timedelta(hours=25)})
+        self.Monitor._check_unknown_results()
+        self.assertNotIn(attempt, self.singleton.notified_unknown_attempt_ids)
+
+    def test_late_finished_lower_id_unknown_attempt_is_delivered(self):
+        summary = self.Monitor.SUMMARY_GAVE_UP
+        early_service = self._service('odoo', state='initializing')
+        late_service = self._service('odoo', state='initializing')
+        early = self._unknown_attempt(early_service, 1)
+        later = self._unknown_attempt(late_service, 1, fields.Datetime.now(), 'partial')
+        self.Monitor._check_unknown_results()
+        self.assertIn(later, self.singleton.notified_unknown_attempt_ids)
+        self.assertNotIn(early, self.singleton.notified_unknown_attempt_ids)
+
+        early.write({'finished_at': fields.Datetime.now()})
+        self.Monitor._check_unknown_results()
+        self.assertIn(early, self.singleton.notified_unknown_attempt_ids)
+        self.assertIn(early_service.name, self._activities(summary)[:1].note or '')
+
+    def test_new_unknown_attempt_reopens_done_recipient_and_appends_active_recipient(self):
+        summary = self.Monitor.SUMMARY_GAVE_UP
+        extra = self.env['res.users'].with_context(no_reset_password=True).create({
+            'name': '1159 extra system user',
+            'login': f'1159-extra-{self.tag}',
+            'groups_id': [(6, 0, [self.env.ref('base.group_system').id])],
+        })
+        recipients = self.env.ref('base.group_system').users.filtered(
+            lambda user: user.active and not user.share)
+        self.assertIn(extra, recipients)
+        first = recipients[0]
+        still_active = extra if extra != first else recipients[1]
+        old = self._unknown_attempt(
+            self._service('odoo', state='initializing'), 1, fields.Datetime.now())
+        self.Monitor._check_unknown_results()
+        old_activity = self._activities(summary).filtered(lambda activity: activity.user_id == first)
+        active_activity = self._activities(summary).filtered(
+            lambda activity: activity.user_id == still_active)
+        active_activity_id = active_activity.id
+        old_activity.with_user(first).action_feedback(feedback='handled only by this user')
+
+        new_service = self._service('odoo', state='initializing')
+        new = self._unknown_attempt(new_service, 1, fields.Datetime.now(), 'partial')
+        self.Monitor._check_unknown_results()
+        activities = self._activities(summary)
+        reopened = activities.filtered(lambda activity: activity.user_id == first)
+        appended = activities.filtered(lambda activity: activity.user_id == still_active)
+        self.assertTrue(reopened)
+        self.assertEqual(appended.id, active_activity_id)
+        self.assertIn(new_service.name, reopened.note or '')
+        self.assertIn(new_service.name, appended.note or '')
+        self.assertIn(old, self.singleton.notified_unknown_attempt_ids)
+        self.assertIn(new, self.singleton.notified_unknown_attempt_ids)
+
+    def test_unknown_attempt_is_not_marked_when_no_recipient_or_delivery_fails(self):
+        summary = self.Monitor.SUMMARY_GAVE_UP
+        no_recipient = self._unknown_attempt(
+            self._service('odoo', state='initializing'), 1, fields.Datetime.now())
+        self.admins.write({'active': False})
+        self.Monitor._check_unknown_results()
+        self.assertFalse(self._activities(summary))
+        self.assertNotIn(no_recipient, self.singleton.notified_unknown_attempt_ids)
+        self.admins.write({'active': True})
+        self.Monitor._check_unknown_results()
+        self.assertIn(no_recipient, self.singleton.notified_unknown_attempt_ids)
+        self._activities(summary).action_feedback(feedback='handled before failure test')
+
+        delivery_failure = self._unknown_attempt(
+            self._service('odoo', state='initializing'), 1, fields.Datetime.now())
+        with patch.object(type(self.singleton), 'activity_schedule', autospec=True,
+                          side_effect=RuntimeError('mail activity delivery failed')):
+            self.Monitor._check_unknown_results()
+        self.assertNotIn(delivery_failure, self.singleton.notified_unknown_attempt_ids)
+        self.Monitor._check_unknown_results()
+        self.assertIn(delivery_failure, self.singleton.notified_unknown_attempt_ids)
 
     def test_readiness_give_ups_are_reported(self):
         summary = self.Monitor.SUMMARY_GAVE_UP
