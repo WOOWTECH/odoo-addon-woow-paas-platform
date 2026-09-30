@@ -415,8 +415,8 @@ _TIMEOUT_GOVERNED_STATES = ('deploying', 'upgrading')
 # `TestTimeoutDiagnosis` 會紅——這個耦合是刻意用測試守住的，而不是靠註解。
 # 未命中時不附 hint（fail-soft：訊息仍有前綴與 detail，只是少了方向）。
 _TIMEOUT_HINTS = (
-    # #1251 Q45：woow-odoo 判定的兩種「不會自己好」的 HARD。刻意排在最前面
-    # （至少要在 'pods not ready' 之前）：先比中先用，別讓通用 hint 把方向帶偏。
+    # #1251 Q45：woow-odoo 判定專屬的 hint。刻意排在最前面（至少要在 'pods not ready'
+    # 之前）：先比中先用，別讓通用 hint 把方向帶偏。
     # detail 字串的撞名規則見 docs/decisions/patterns/woow-odoo-readiness-identity.md
     ('chart mismatch',
      'the release runs a different chart than the template expects — an '
@@ -425,6 +425,17 @@ _TIMEOUT_HINTS = (
     ('operator lacks pod identity',
      'the operator does not report Pod identity (component/owner) — upgrade '
      'paas-operator first (#1263), woow-odoo readiness fails closed without it'),
+    # #1251 review S2（使用者裁定，超出 Q45 字面的兩筆）：woow-odoo 最常卡住的兩種
+    # 情形。前者只擋 server 的 FailedCreate 不產 Pod，'no pods found' 蓋不到；後者若落到
+    # 'pods not ready' 會被帶去看 container log，方向錯。
+    ('required component missing',
+     "the chart's server/postgresql Pod was never created (or is not owned by "
+     'its ReplicaSet/StatefulSet) — check the ReplicaSet/StatefulSet events for '
+     'FailedCreate (namespace ResourceQuota, admission)'),
+    ('required pods not running',
+     'a required Pod exists but never reached Running — check its pod events '
+     '(scheduling, Multi-Attach, image pull); an exempt backup Job listed in '
+     'the detail may still hold the RWO data PVC'),
     ('pod lookup failed',
      'the operator could not list pods — check its RBAC and the API server'),
     ('no pods found',

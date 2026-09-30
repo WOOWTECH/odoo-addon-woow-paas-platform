@@ -3,7 +3,7 @@ title: "woow-odoo readiness 依 Pod 身分判定（必要組＋例行 Job 豁免
 category: decisions
 status: active
 created: 2026-09-30T02:05:31Z
-updated: 2026-09-30T02:05:31Z
+updated: 2026-09-30T02:45:00Z
 related:
   - docs/decisions/patterns/capability-gate-single-source-field.md
 ---
@@ -93,12 +93,25 @@ RWO。
 `error_message`，附 `_TIMEOUT_HINTS` 的方向。⚠ `initializing` 不受 #489 管轄（既有行為，非本票引入）：
 woow-odoo 在 `initializing` 期間遇到 HARD 只會一直印 warning，上限由 #1257／#1159 的等待時限（Q10）補上。
 
-- `chart mismatch` → fresh install（#1128）；`operator lacks pod identity` → 先升級 operator。
-  兩筆**排在 `_TIMEOUT_HINTS` 最前面**（子字串比對、先比中先用）。
-- 新 detail 的字串刻意分兩類：HARD 用不撞名的前綴（`required component missing:`、
-  `unexpected pod outside the woow-odoo contract:`）；「Pod 在、只是還沒 ready」的
-  `required pods not ready: …` **刻意**含 `pods not ready`，沿用查 container log／probe 的 hint；
-  一顆 Pod 都沒有時沿用通用的 `HARD: no pods found for this release`，接 quota 的 hint。
+woow-odoo 專屬的 hint 有四筆，全部**排在 `_TIMEOUT_HINTS` 最前面**（子字串比對、先比中先用，
+至少要在通用的 `pods not ready` 之前）：
+
+| detail 前綴 | 方向 | 來源 |
+|---|---|---|
+| `HARD: chart mismatch` | fresh install（#1128） | Q45 |
+| `HARD: operator lacks pod identity` | 先升級 operator（#1263） | Q45 |
+| `HARD: required component missing:` | 查 ReplicaSet／StatefulSet events 的 FailedCreate（ResourceQuota、admission）——只擋 server 時仍有 PG Pod，`no pods found` 蓋不到 | 實作期 S2 裁定 |
+| `required pods not running:` | 查 pod events（排程、Multi-Attach、image pull）；detail 列出的豁免備份 Job 可能佔著 RWO PVC | 實作期 S2 裁定 |
+
+Q45 字面只定前兩筆；後兩筆是 review 發現「woow-odoo 最常卡住的兩種情形」原本沒有 hint 或被通用 hint
+帶去看 container log，由使用者裁定補上（2026-09-30 實作期裁決，理由記在本票 PR 描述）。其餘 detail：
+
+- `unexpected pod outside the woow-odoo contract:` 刻意不附 hint（detail 已點名是哪顆 Pod）。
+- 「Pod 在、Running 但未 ready」的 `required pods not ready: …` **刻意**含 `pods not ready`，
+  沿用查 container log／probe 的通用 hint。
+- 一顆 Pod 都沒有時沿用通用的 `HARD: no pods found for this release`，接 quota 的 hint。
+- 新增 detail 前綴時，`TestWoowOdooContractPredicate.test_each_new_detail_is_matched_by_its_own_hint_first`
+  用判定本身產生的 detail 驗「先比中的是自己那筆」——不要手抄字串進測試。
 
 ## 分流點只有一個
 

@@ -18,10 +18,11 @@ from odoo import fields
 from odoo.tests.common import BaseCase, TransactionCase, tagged
 
 from ..controllers.paas import PaasController
-from ..models.cloud_service import _internal_provision
+from ..models.cloud_service import _TIMEOUT_HINTS, _internal_provision
 from ..services.woow_odoo_readiness import (
     CONTRACT_MANAGED,
     CONTRACT_MISMATCH,
+    chart_mismatch_detail,
     chart_name_of,
     woow_odoo_contract,
     woow_odoo_ready,
@@ -335,6 +336,17 @@ class TestWoowOdooReadinessIdentity(TransactionCase):
             ),
             # 一顆 Pod 都沒有（quota 擋住 Pod 建立）：沿用通用 detail，接得上 quota 的 hint。
             'no pods found': (self._status([]), ('ResourceQuota',)),
+            # PG 起來了、server 的 ReplicaSet 被 quota／admission 擋住（FailedCreate 不產 Pod）。
+            'required component missing': (
+                self._status([_postgres()]), ('FailedCreate', 'ResourceQuota'),
+            ),
+            # server 在但沒 Running（排程、Multi-Attach、image pull）：看 pod events，
+            # 不是 container log；旁邊的備份 Job 可能佔著 RWO PVC。
+            'required pods not running': (
+                self._status([_server(phase='Pending', ready='0/1'), _postgres(),
+                              _db_job('backup', phase='Running', ready='1/1')]),
+                ('pod events', 'Multi-Attach', 'svc-1251-woow-odoo-backup-'),
+            ),
             'pod lookup failed': (
                 self._status([], pod_retrieval_error='pods is forbidden'),
                 ('RBAC',),
@@ -389,6 +401,41 @@ class TestWoowOdooContractPredicate(BaseCase):
         self.assertEqual(
             chart_name_of('oci://registry-1.docker.io/bitnamicharts/odoo'), 'odoo',
         )
+
+    def test_each_new_detail_is_matched_by_its_own_hint_first(self):
+        """S2 裁定：`_TIMEOUT_HINTS` 是子字串比對、先比中先用。每種 woow-odoo detail
+        必須先比中自己的那筆，且新 key 排在通用的 'pods not ready' 之前。detail 由判定
+        本身產生（不手抄字串），字串改了這裡會紅。"""
+        needles = [needle for needle, _hint in _TIMEOUT_HINTS]
+        release = {'status': 'deployed', 'revision': 1, 'chart': 'woow-odoo'}
+
+        def ready_detail(pods, **overrides):
+            status = status_response(pods=pods, release=release, **overrides)
+            ready, detail = woow_odoo_ready(status)
+            self.assertFalse(ready)
+            return detail
+
+        backup = _db_job('backup', phase='Running', ready='1/1')
+        cases = {
+            'chart mismatch': chart_mismatch_detail(status_response(
+                release={'status': 'deployed', 'revision': 1, 'chart': 'odoo'})),
+            'operator lacks pod identity': ready_detail(
+                [_server(), _postgres()], pod_identity_included=ABSENT),
+            'required component missing': ready_detail([_postgres(), backup]),
+            'required pods not running': ready_detail(
+                [_server(phase='Pending', ready='0/1'), _postgres(), backup]),
+            # Running 但未 ready：刻意沿用通用 hint（看 container log／probe）。
+            'pods not ready': ready_detail([_server(ready='0/1'), _postgres(), backup]),
+            'no pods found': ready_detail([]),
+        }
+        for expected, detail in cases.items():
+            with self.subTest(detail=detail):
+                first = next(n for n in needles if n in detail)
+                self.assertEqual(first, expected)
+        for own in ('chart mismatch', 'operator lacks pod identity',
+                    'required component missing', 'required pods not running'):
+            with self.subTest(order=own):
+                self.assertLess(needles.index(own), needles.index('pods not ready'))
 
     def test_contract_follows_the_deployed_chart(self):
         woow = 'oci://jcr-prod.woowtech.io/woow-paas-docker-local/woow-odoo'

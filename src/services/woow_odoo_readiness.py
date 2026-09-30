@@ -159,17 +159,27 @@ def woow_odoo_ready(status):
     if unexpected:
         hard.append('unexpected pod outside the woow-odoo contract: '
                     + ', '.join(map(_describe, unexpected)))
+    required_pods = [pod for group in required.values() for pod in group]
+    # 必要 Pod 在、但還沒就緒，分兩種給不同的 hint（S2 裁定）。都不是 HARD：Pod 在，
+    # 是正常的建立／重啟窗口，分辨要靠時間（#489）。
+    # - 沒 Running（排程、Multi-Attach、image pull）⇒ 該看 pod events；
+    # - Running 未 ready ⇒ 刻意含 'pods not ready'，沿用查 container log／probe 的 hint。
+    not_running = [pod for pod in required_pods if pod.get('phase') != 'Running']
     not_ready = [
-        pod for group in required.values() for pod in group if not _is_pod_ready(pod)
+        pod for pod in required_pods
+        if pod.get('phase') == 'Running' and not _is_pod_ready(pod)
     ]
+    waiting = []
+    if not_running:
+        waiting.append(
+            'required pods not running: ' + ', '.join(map(_describe, not_running)))
+    if not_ready:
+        waiting.append(
+            'required pods not ready: ' + ', '.join(map(_describe, not_ready)))
     if hard:
         ready, detail = False, 'HARD: ' + '; '.join(hard)
-    elif not_ready:
-        # 刻意含 'pods not ready'：沿用 `_TIMEOUT_HINTS` 查 container log／probe 的方向。
-        # 不是 HARD——Pod 在、只是還沒 ready，是正常的建立／重啟窗口。
-        ready, detail = False, (
-            'required pods not ready: ' + ', '.join(map(_describe, not_ready))
-        )
+    elif waiting:
+        ready, detail = False, '; '.join(waiting)
     else:
         ready, detail = True, 'woow-odoo required components ready'
     if exempt:
