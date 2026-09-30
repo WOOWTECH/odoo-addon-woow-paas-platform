@@ -585,15 +585,31 @@ class TestInitLeaseRealCursor1257(TransactionCase):
         self.assertTrue(self._read()['lease'], '結果未知＝遠端可能仍在跑，lease 留到到期')
 
     def test_n8n_success_stores_the_key_even_if_the_row_changed_during_the_call(self):
-        """r1 S1：operator 呼叫期間不得開著交易；回來後的寫入不能撞舊 snapshot。"""
+        """r1 S1：operator 呼叫期間不得開著交易；回來後的寫入不能撞舊 snapshot。
+
+        交易邊界直接釘：呼叫期間去 ``pg_stat_activity`` 看入口那條連線的狀態，必須是
+        ``idle``（不是 ``idle in transaction``）——光看結果不夠，CAS 那步也會寫 key。
+        """
+        seen = {}
+
         def init_n8n(**kwargs):
+            with self.registry.cursor() as cr:
+                cr.execute('SELECT state FROM pg_stat_activity WHERE pid = %s',
+                           (seen['pid'],))
+                seen['state'] = cr.fetchone()[0]
             self._sql("UPDATE woow_paas_platform_cloud_service SET name = name || ' *' "
                       "WHERE id = %s", (self.service_ids['n8n'],))
             return {'success': True, 'api_key': _JWT}
 
         client = operator_client()
         client.init_n8n.side_effect = init_n8n
-        self._entry(client, 'n8n')
+
+        def run(svc):
+            seen['pid'] = svc.env.cr._cnx.get_backend_pid()
+            svc._run_post_deploy_init(client)
+        self._run(run, 'n8n')
+        self.assertEqual(seen['state'], 'idle',
+                         'operator 呼叫期間入口的連線不得停在交易中（idle in transaction）')
         client.init_n8n.assert_called_once_with(
             namespace=f'dev-sandbox-1257-n8n-{self.tag}', release_name=f'svc-n8n-{self.tag}',
             owner_email=f'owner-{self.tag}@example.invalid', owner_password=f'pw-{self.tag}')
@@ -612,6 +628,18 @@ class TestInitLeaseRealCursor1257(TransactionCase):
         self.assertEqual((state['init_retries'], state['init_unknown_count']), (0, 0))
         self.assertFalse(state['lease'])
         self.assertEqual(state['state'], 'initializing')
+
+    def test_attempt_record_failure_still_closes_the_attempt(self):
+        """r2 nit：attempt 記錄那一段失敗 ⇒ lease 釋放時 attempt 一併補成已結束。"""
+        client = operator_client(init_odoo={'success': False, 'error_kind': 'failed'})
+        model = type(self.env[SVC])
+        with patch.object(model, '_init_store_n8n_api_key'), \
+                patch.object(type(self.env[ATTEMPT]), 'write', side_effect=RuntimeError('boom')):
+            self._entry(client)
+        state = self._read()
+        self.assertEqual(state['attempts'], [(1, 'failed', True)])
+        self.assertEqual(state['init_retries'], 0, '記帳錯誤不耗額度')
+        self.assertFalse(state['lease'])
 
     def test_claim_against_a_stale_snapshot_is_not_acquired(self):
         """Q2：40001（REPEATABLE READ 下別人剛改過這列）＝沒拿到，不是失敗。"""

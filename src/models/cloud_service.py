@@ -3898,7 +3898,10 @@ class CloudService(models.Model):
                 # 不到 status，只剩等待時限能收尾。operator 連不上等其他錯誤是平台
                 # 故障，不計時（#1159 Q10「平台容量排隊不計時」同理），交給監控。
                 _logger.warning("Error polling status for %s: %s", self.name, e)
-                self._init_check_wait_timeout()
+                # 與 not-ready 分支一致：先收斂在途 attempt 的過期 lease，再判時限。
+                self._init_settle_expired_lease()
+                if self.state == 'initializing':
+                    self._init_check_wait_timeout()
             else:
                 _logger.warning("Error polling status for %s: %s", self.name, e)
             return
@@ -4360,8 +4363,22 @@ class CloudService(models.Model):
             return
         self.sudo().write({'n8n_api_key': api_key})
 
-    def _init_release_unapplied(self, attempt_id, reason):
-        """結果沒套上服務時釋放 lease（不耗額度）；只放自己持有的那一個。"""
+    def _init_release_unapplied(self, attempt_id, reason, outcome=None):
+        """結果沒套上服務時釋放 lease（不耗額度）；只放自己持有的那一個。
+
+        ``outcome`` 有給時（attempt 記錄那一段本身失敗、已被 rollback），同一步把
+        attempt 補成「已結束」：lease 一放，之後再也不會有 settle 來收它，不補的話
+        它會永遠像還在跑，而且當代的 attempt 不會被 purge。
+        """
+        if outcome is not None:
+            self.env.cr.execute(
+                "UPDATE woow_paas_platform_cloud_service_init_attempt "
+                "SET finished_at = (statement_timestamp() AT TIME ZONE 'UTC'), "
+                "    outcome = COALESCE(outcome, %s), "
+                "    error = COALESCE(error, %s) "
+                "WHERE id = %s AND finished_at IS NULL",
+                (outcome, 'local bookkeeping error: %s' % reason, attempt_id),
+            )
         self.env.cr.execute(
             f"UPDATE {self._table} SET init_lease_until = NULL, init_attempt_id = NULL "
             f"WHERE id = %s AND init_attempt_id = %s",
@@ -4408,7 +4425,8 @@ class CloudService(models.Model):
                 "[#1257] local bookkeeping error recording init attempt %s of service "
                 "%s (outcome=%s)", attempt.id, self.id, outcome.outcome,
             )
-            self._init_release_unapplied(attempt.id, 'attempt record failed')
+            self._init_release_unapplied(
+                attempt.id, 'attempt record failed', outcome=outcome.outcome)
             cr.commit()
             return
         try:
