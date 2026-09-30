@@ -10,7 +10,7 @@ kubernetes managed sandbox），paas-odoo-ci mirror-image.yml #159/#160（上游
    自己的資料庫。照 helm_secret 走 reset 會 helm upgrade 成功、密碼卻沒變（假裝成功），
    所以 controller gate、model 防線、前端按鈕三處都必須擋下。
 2. 開通時照樣供給（has_admin_gui=True），一次性顯示初始密碼。
-3. 上架前 image／runner image 都必須雙釘 tag@sha256。
+3. 上架（is_hidden=False）的 image／runner image 都必須雙釘 tag@sha256。
 """
 import json
 
@@ -98,11 +98,12 @@ class TestOmnigentSeed(TransactionCase):
             self.assertTrue(p.sh_product_subscribe, xmlid)
             self.assertFalse(p.taxes_id, '%s 免稅（同其他 cloud service 產品）' % xmlid)
 
-    def test_hidden_until_verified(self):
-        """未上架（is_hidden）但不 conceal：待正式環境實測後才公開。"""
+    def test_listed(self):
+        """2026-09-30 公開上架（is_hidden=False）；不 conceal、既有實例照常可見。
+        上架的前提（image 雙釘 digest）由 test_images_mirrored_and_pinned 守。"""
         tpl = self._tpl()
         self.assertTrue(tpl.is_active)
-        self.assertTrue(tpl.is_hidden)
+        self.assertFalse(tpl.is_hidden)
         self.assertFalse(tpl.conceal_instances)
 
     def test_public_origin_injected_into_base_url(self):

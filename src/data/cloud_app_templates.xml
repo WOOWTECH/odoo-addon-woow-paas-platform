@@ -1662,7 +1662,10 @@
              （非 root、一次性 launch token，不碰 admin 密碼），計入 workspace ResourceQuota。
              T1 = 4 vCPU / 8 Gi / 10 Gi：server 1 CPU/1 Gi ＋ 兩個 runner（各 1.5 CPU/3 Gi）。
              4500 pts/mo（plan_omnigent_*）。
-             ⚠ is_hidden=True：待正式環境實測（雲端 runner 上線、pi-agent 連結）後再公開。 -->
+             上架：2026-09-30 elmo 決定隨 18.0.1.0.188 直接公開。已在 paas-ws-7948b087 以 chart 0.1.0
+             實測：開機建 admin（外人 POST /auth/setup → 409）、雲端 runner 上線與回收、同工作區 pi-agent
+             以 refresh token 接成機器。區網方式（使用者在 pi-agent 內自己 omnigent login）待上線後以瀏覽器
+             建立的服務實測。 -->
         <record id="cloud_app_omnigent" model="woow_paas_platform.cloud_app_template">
             <field name="name">Omnigent</field>
             <field name="slug">omnigent</field>
@@ -1693,7 +1696,7 @@
             <field name="admin_password_carrier">app_managed</field>
             <field name="post_deploy_init_type">none</field>
             <field name="max_per_partner" eval="0"/>
-            <field name="is_hidden" eval="True"/>
+            <field name="is_hidden" eval="False"/>
             <field name="is_active" eval="True"/>
         </record>
 
