@@ -3489,6 +3489,9 @@ _PURE_READ_ENDPOINTS = (
     (POLL_CONTROLLER_FILE, "_list_services"),
     (POLL_CONTROLLER_FILE, "_get_service"),
 )
+#: 判準 6b（#1257 留給 #1159 評估）：整個 controller 檔都不得呼叫 init 入口或 poll——init
+#: 只由 init cron 執行、狀態轉移只由短 poll cron 寫。
+_CONTROLLER_FORBIDDEN_CALLS = ("_run_post_deploy_init", "_poll_and_update_status")
 #: 判準 6 的禁用呼叫：取 operator client、任何 poll／探測、任何寫入。
 _PURE_READ_FORBIDDEN_CALLS = (
     "get_paas_operator_client", "get_status", "_poll_and_update_status",
@@ -3541,6 +3544,9 @@ def check_poll_release_facts_single_source(root):
        write／create／unlink／sudo）。它們回的是背景 poll 的最近觀測；在 request 裡
        poll 就是長回第二份 poll（#627 的形態），在 request 裡寫入則讓每個開著服務頁的
        分頁都成為狀態機的寫入者。只看本體（helper 內的呼叫看不見，同判準 3 的邊界）。
+       另外**整個 controller 檔**不得呼叫 `_CONTROLLER_FORBIDDEN_CALLS`（init 入口與
+       poll）：init 的 claim 會 commit 呼叫端的 cursor，在 request 中途 commit 會把同一個
+       request 先前的寫入一起提交（#1257）。
 
     ## 例外機制：**刻意不提供**
 
@@ -3682,6 +3688,16 @@ def check_poll_release_facts_single_source(root):
                     " poll 的最近觀測（state＋observed_at），不呼叫 operator、不寫入、不探"
                     " DNS。狀態轉移只由 `_cron_check_deploying_services` 寫，DNS 旗標由背景"
                     "重探清除" % (rel, func_name, getattr(node, "lineno", -1), name))
+
+    tree = trees.get(POLL_CONTROLLER_FILE)
+    if tree is not None:
+        for node in ast.walk(tree):
+            if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                    and node.func.attr in _CONTROLLER_FORBIDDEN_CALLS):
+                violations.append(
+                    "%s 第 %d 行呼叫了 `%s`——controller 不得執行 init 或 poll（#1257／#1159）："
+                    "init 只由 init cron 經單一入口執行，狀態轉移只由短 poll cron 寫"
+                    % (POLL_CONTROLLER_FILE, getattr(node, "lineno", -1), node.func.attr))
 
     # 判準 5：對帳 cron 不得推狀態機
     rel, func_name = _RECONCILE_IMPLEMENTATION
