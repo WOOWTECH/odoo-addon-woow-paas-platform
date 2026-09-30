@@ -159,6 +159,19 @@ omni-msg registrations --state-dir "$HOME/.local/state/omni-msg-auto"
 - 沒有 HTTP registration／credential bootstrap endpoint。新 root 仍需 operator 改 private
   server config 並重啟 bridge；agents 不自行加 root、配發 credential 或指定自己的 group。
 
+### Discovery budget 設定與升級
+
+串行掃描多個 roots／descendants 可能超過舊版固定 20 秒（本次量測 85 次 GET 需約 29 秒）。
+`provision --scan-seconds 60` 可在首次配置時指定；既有 deployment 不重新 provision，改用
+active `server.json` 的 `registration.scan_seconds`。省略該欄位採 60 秒，舊 config 相容；
+未知欄位、非有限數值、bool 或超出 1..120 秒均拒絕。單次 GET 仍為
+`min(10, 整輪剩餘秒數)`，整輪 deadline 仍有限，大小／分頁／lineage 守線不變。
+
+升級 installed CLI 與 graceful restart 是 operator rollout，不因 repo merge 自動執行。
+沿用原 config／state／port／clients，先保全 receipts 與 notification IDs，排空 dispatching；
+部署計畫須核對既有 runner 狀態及新納管通知的副作用。提高 budget 也會延長成功 snapshot
+的有限 lease，代表 upstream 尚未完成下一輪驗證時的 stale ACL 視窗較長，不能視為即時撤權。
+
 `registrations` 的 `ready` 代表最近一輪完整 discovery 成功，**不代表所有設定通知已消費**。
 逐筆看 `members[].notification.delivery`：`pending / dispatching / accepted / rejected / unknown`。
 `accepted` 仍只代表 API 排隊；`unknown`、`rejected` 不自動重送，operator 需先查原 session
@@ -167,7 +180,8 @@ history 的 `registration_id`，必要時手動交付同一個 config 路徑。�
 
 安全與容量限制：
 
-- 每輪 discovery 最多 20 秒、16 roots、1024 個 tree nodes、深度 16、每組 128 個成員；
+- 每輪 discovery 預設最多 60 秒（`registration.scan_seconds` 可設 1..120 秒）、16 roots、
+  1024 個 tree nodes、深度 16、每組 128 個成員；
   超限 fail closed。已完成且不再需 messaging 的 sessions 應由 operator 依原生命週期封存。
 - Session detail 一律帶 `include_items=false`，JSON metadata response 上限為 1 MiB，與訊息 ACK
   的 64 KiB 上限及 bundle 的 8 MiB 上限分開。若 server 忽略 query，超過 1 MiB 仍會截斷並拒絕
@@ -183,8 +197,11 @@ history 的 `registration_id`，必要時手動交付同一個 config 路徑。�
   分頁、tree 上限、scan 逾時，以及本輪連一個 root 層 detail 都取不到且原因是 upstream 不可用
   （連線失敗／逾時或 HTTP 5xx）。Root 層 detail 同時涵蓋 root admission 的候選 detail 與 registrar
   的 root detail，任一邊取得可解析 detail（即使之後因 bundle、owner、archive 等被拒）就只局部化；
-  agent／bundle phase 與 descendants 的失敗不列入。盤點進行中舊 snapshot 的 lease 最長
-  `max(30, 3 × poll-seconds)` 秒，逾期也拒絕新 requests，不會永久沿用失效名單。
+  agent／bundle phase 與 descendants 的失敗不列入。成功發布 snapshot 時，lease 為
+  `max(30, 3 × poll_seconds, 本輪剩餘通知時間 + scan_seconds + poll_seconds)` 秒，
+  涵蓋本輪通知、下輪等待及 scan；本輪剩餘通知時間不超過 `scan_seconds`，所以 lease
+  上限為 `max(30, 3 × poll_seconds, 2 × scan_seconds + poll_seconds)`（目前參數界線下最多
+  300 秒）。掃描失敗仍立即撤權；lease 逾期也拒絕 requests，不會永久沿用失效名單。
 - 每個 request 使用同一代 ACL；已開始的投遞不追溯撤回。既有 session 不能換 root／alias，
   token file 被改動或遺失也不靜默重發，會 fail closed 等 operator 處理。
 - State 綁定 server origin、bridge port 與 client directory；更換這些位置請用新 state。
