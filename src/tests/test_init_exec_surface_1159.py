@@ -607,45 +607,56 @@ class TestInitCron1159(_RealCursorCase):
         self.assertEqual(self._read(service_id, 'state'), 'error')
 
     def test_spent_operator_wait_expires_without_active_interval_for_ready_and_client_variants(self):
-        """E8：已折入 spent 的時計沒有 active interval 仍要由 cron 收斂，不能永久卡住。"""
-        ready_with_client = self._add('odoo', ready_minutes_ago=2)
-        not_ready_with_client = self._add('odoo')
-        ready_without_client = self._add('odoo', ready_minutes_ago=2)
-        not_ready_without_client = self._add('odoo')
+        """E8：四個組合各自建立後執行，不能讓第一輪 sweep 偷先處理第二輪的服務。"""
+        key = 'woow_paas_platform.init_wait_timeout_minutes'
         with self.registry.cursor() as cr:
-            env = self._env(cr)
-            param = env['ir.config_parameter'].sudo()
-            old = param.get_param('woow_paas_platform.init_wait_timeout_minutes')
-            param.set_param('woow_paas_platform.init_wait_timeout_minutes', '1')
-            for service_id in (ready_with_client, not_ready_with_client,
-                               ready_without_client, not_ready_without_client):
-                env[SVC].browse(service_id).write({
-                    'init_wait_spent_seconds': 120,
-                    'init_wait_started_at': False,
-                    'init_retry_eligible_at': False,
-                    'init_lease_until': False,
-                })
+            cr.execute('SELECT value FROM ir_config_parameter WHERE key = %s', (key,))
+            old = cr.fetchone()
+
         def restore_param():
             with self.registry.cursor() as cleanup_cr:
                 cleanup_env = self._env(cleanup_cr)
-                cleanup_param = cleanup_env['ir.config_parameter'].sudo()
+                parameter = cleanup_env['ir.config_parameter'].sudo()
                 if old is None:
-                    cleanup_param.search([
-                        ('key', '=', 'woow_paas_platform.init_wait_timeout_minutes')]).unlink()
+                    parameter.search([('key', '=', key)]).unlink()
                 else:
-                    cleanup_param.set_param('woow_paas_platform.init_wait_timeout_minutes', old)
+                    parameter.set_param(key, old[0])
+                cleanup_cr.commit()
+                cleanup_cr.execute('SELECT value FROM ir_config_parameter WHERE key = %s', (key,))
+                self.assertEqual(cleanup_cr.fetchone(), old, '跨 cursor 設定必須原樣恢復')
+
+        # 在更動前登記；也以 raw DB 值捕捉「不存在」，不依賴 get_param 的 cache／default。
         self.addCleanup(restore_param)
-        client, calls = self._recording_client()
-        self._run_cron('_cron_run_post_deploy_inits', client)
-        self.assertEqual(calls, [])
-        with patch(f'{_OPERATOR_MODULE}.get_paas_operator_client', return_value=None):
-            with self.registry.cursor() as cr:
-                self._env(cr)[SVC]._cron_run_post_deploy_inits()
-        for service_id in (ready_with_client, not_ready_with_client,
-                           ready_without_client, not_ready_without_client):
-            state, retries, unknown = self._read(service_id, 'state', 'init_retries',
-                                                  'init_unknown_count')
-            self.assertEqual((state, retries, unknown), ('error', 0, 0))
+        with self.registry.cursor() as cr:
+            env = self._env(cr)
+            env['ir.config_parameter'].sudo().set_param(key, '1')
+            cr.commit()
+        for has_client in (False, True):
+            with self.subTest(has_client=has_client):
+                service_ids = [self._add('odoo', ready_minutes_ago=2), self._add('odoo')]
+                with self.registry.cursor() as cr:
+                    env = self._env(cr)
+                    env[SVC].browse(service_ids).write({
+                        'init_wait_spent_seconds': 120,
+                        'init_wait_started_at': False,
+                        'init_retry_eligible_at': False,
+                        'init_lease_until': False,
+                    })
+                self.assertTrue(all(self._read(sid, 'state') == 'initializing' for sid in service_ids))
+                client, calls = self._recording_client()
+                if has_client:
+                    self._run_cron('_cron_run_post_deploy_inits', client)
+                else:
+                    with patch(f'{_OPERATOR_MODULE}.get_paas_operator_client', return_value=None):
+                        with self.registry.cursor() as cr:
+                            env = self._env(cr)
+                            env[SVC]._cron_run_post_deploy_inits()
+                            cr.commit()
+                self.assertEqual(calls, [])
+                for service_id in service_ids:
+                    state, retries, unknown = self._read(
+                        service_id, 'state', 'init_retries', 'init_unknown_count')
+                    self.assertEqual((state, retries, unknown), ('error', 0, 0))
 
     def test_no_backlog_no_trigger(self):
         self._add('odoo', ready_minutes_ago=1)

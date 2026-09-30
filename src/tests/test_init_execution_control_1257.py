@@ -537,10 +537,17 @@ class TestInitLeaseRealCursor1257(TransactionCase):
         self.assertTrue(state['pod_wait_since'], 'unknown 不得順手移除既有 Pod 等待錨點')
 
     def test_active_lease_blocks_the_claim(self):
+        """E8：即使等待額度已超過目前門檻，在途 lease 仍不能被當成等待逾時或重送。"""
         self._set_lease(seconds_from_now=600)
+        self._run(lambda svc: svc.write({'init_wait_spent_seconds': 1801}))
+        before = self._read()
         client = operator_client(init_odoo={'success': True})
         self._entry(client)
         client.init_odoo.assert_not_called()
+        after = self._read()
+        self.assertEqual(after['state'], 'initializing')
+        self.assertEqual((after['attempt'], after['lease']), (before['attempt'], before['lease']))
+        self.assertEqual((after['init_retries'], after['init_unknown_count']), (0, 0))
 
     def test_definite_failures_error_on_the_fifth(self):
         client = operator_client(init_odoo={
