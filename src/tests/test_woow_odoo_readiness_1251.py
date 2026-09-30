@@ -127,3 +127,31 @@ class TestWoowOdooReadinessIdentity(TransactionCase):
         for pods in ([backup], [_postgres(), backup], [_postgres()]):
             with self.subTest(pods=[p['name'] for p in pods]):
                 self._assert_poll_keeps(self._status(pods))
+
+    # ------------------------------------------------------------------ #
+    #  其他 active Pod：照 #1156 fail-closed（Q5／Q19）                    #
+    # ------------------------------------------------------------------ #
+
+    def test_pods_outside_the_contract_fail_closed(self):
+        """server／PG 健康，但多出契約外的 Pod ⇒ 未就緒，detail 為 HARD 並點名該 Pod。"""
+        outsiders = {
+            # restore 只該在 `restoring` 出現（#1213），在轉移狀態看到就是違約。
+            'db-restore': pod_info(name='svc-1251-restore-9f2k', component='db-restore',
+                                   owner_kind='Job'),
+            'unknown component': pod_info(name='svc-1251-cron-5d8', component='cron',
+                                          owner_kind='ReplicaSet'),
+            'missing label': pod_info(name='svc-1251-mystery', owner_kind='ReplicaSet'),
+            # db-backup 只豁免白名單內的 task。
+            'db-backup other task': _db_job('restore'),
+            'db-backup no task': _db_job(None, name='svc-1251-db-backup-adhoc'),
+            # label 是 server，但 Job 擁有 ⇒ 不是 chart 的 web Pod（#1129 語意）。
+            'server label on a Job': _server(name='svc-1251-server-job', owner_kind='Job'),
+        }
+        for case, outsider in outsiders.items():
+            with self.subTest(case=case):
+                status = self._status([_server(), _postgres(), outsider])
+                self._assert_poll_keeps(status)
+                ready, detail = self.service._is_release_ready(status)
+                self.assertFalse(ready)
+                self.assertTrue(detail.startswith('HARD: '), detail)
+                self.assertIn(outsider['name'], detail)

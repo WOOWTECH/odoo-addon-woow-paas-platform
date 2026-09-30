@@ -82,6 +82,14 @@ def _required_component(pod):
     return None
 
 
+def _describe(pod):
+    """detail 用的 Pod 摘要：名字＋身分證據＋狀態，讓維運不進叢集也看得出是誰。"""
+    return '%s[component=%s task=%s owner=%s %s %s]' % (
+        pod.get('name'), pod.get('component'), pod.get('task'),
+        pod.get('owner_kind'), pod.get('phase'), pod.get('ready'),
+    )
+
+
 def woow_odoo_ready(status):
     """woow-odoo release 的就緒判定。
 
@@ -89,14 +97,23 @@ def woow_odoo_ready(status):
         ``(ready: bool, detail: str)``。
     """
     required = {component: [] for component, _ in _REQUIRED_COMPONENTS}
+    unexpected = []
     for pod in filter(_is_active, status.get('pods') or []):
         component = _required_component(pod)
         if component:
             required[component].append(pod)
+        else:
+            unexpected.append(pod)
 
     missing = [component for component, pods in required.items() if not pods]
+    hard = []
     if missing:
-        return False, 'HARD: required component missing: ' + ', '.join(missing)
+        hard.append('required component missing: ' + ', '.join(missing))
+    if unexpected:
+        hard.append('unexpected pod outside the woow-odoo contract: '
+                    + ', '.join(map(_describe, unexpected)))
+    if hard:
+        return False, 'HARD: ' + '; '.join(hard)
     if not all(_is_pod_ready(pod) for pods in required.values() for pod in pods):
         return False, 'required pods not ready'
     return True, 'woow-odoo required components ready'
