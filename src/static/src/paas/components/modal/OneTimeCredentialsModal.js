@@ -65,7 +65,22 @@ export function buildOneTimeCredentials(data) {
     // 帳號可由租戶自設的模板（後端 admin_username 非空，例 open-design）：帳號不一定是
     // admin，連同帳號一起交付，並用那個模板的入口（app ＋ web console）說明。其餘模板
     // 後端回 null，沿用下方原本的文案。
-    if (data && data.admin_password && data.admin_username) {
+    // app_managed 的模板（omnigent，template.admin_reset_supported === false）：平台只
+    // 供給初始密碼，之後密碼由 app 自己保管、平台重設不了——文案不能指向 Admin
+    // Credentials，也不能套下方 hermes 的 MCP 說明。帳號由 chart 固定（admin）。
+    if (data && data.admin_password && data.template
+            && data.template.admin_reset_supported === false) {
+        credentials.push({
+            label: _t("Username"),
+            value: data.admin_username || "admin",
+            hint: _t("Signs in to this service, together with the password below."),
+        });
+        credentials.push({
+            label: _t("Initial Password"),
+            value: data.admin_password,
+            hint: _t("Change it inside the app after you sign in. The platform cannot reset it later."),
+        });
+    } else if (data && data.admin_password && data.admin_username) {
         credentials.push({
             label: _t("Username"),
             value: data.admin_username,

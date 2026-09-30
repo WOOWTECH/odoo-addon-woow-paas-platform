@@ -1862,6 +1862,14 @@ class PaasController(HiddenChainMixin, Controller):
                 'error': _('Reset admin password is only supported on templates '
                            'with a built-in admin GUI'),
             }
+        # app_managed（omnigent）：平台只給初始密碼、之後由 app 自己保管，平台無從
+        # 重設。讀 template.admin_reset_supported（與前端按鈕、model 防線同一欄位）。
+        if not service.template_id.admin_reset_supported:
+            return {
+                'success': False,
+                'error': _("This service manages its own admin password. "
+                           "Change it inside the app."),
+            }
         # 租戶自設憑證的能力判準：與 has_admin_gui 同一紀律，讀 template 欄位、不自建
         # slug 名單；payload 的 template.admin_username_editable 鏡射同一個欄位。
         if tenant_set and not service.template_id.admin_username_helm_path:
@@ -4622,6 +4630,12 @@ class PaasController(HiddenChainMixin, Controller):
                 # service.template_id.has_admin_gui，#357 C01）收斂到同一欄位。
                 # 前端原本自建 slug 白名單，與這裡不一致 → 後端放行、按鈕卻不出現。
                 'has_admin_gui': bool(service.template_id.has_admin_gui),
+                # 「Admin Credentials」按鈕的顯示判準（ServiceDetailPage 的
+                # adminResetSupported getter）：鏡射模板的 admin_reset_supported，
+                # 與上方 reset endpoint 的能力 gate 讀同一欄位。app_managed 的模板
+                # （omnigent）has_admin_gui=True（開通時照樣供給、一次性顯示初始密碼）
+                # 但平台不能重設，按鈕不該出現。
+                'admin_reset_supported': bool(service.template_id.admin_reset_supported),
                 # 「租戶能不能自設帳密」的前端判準（ServiceDetailPage 的
                 # canEditAdminCredentials）：直接鏡射模板欄位，與
                 # _service_admin_credentials 的能力 gate 讀同一個欄位。

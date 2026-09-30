@@ -1647,6 +1647,56 @@
             <field name="is_active" eval="True"/>
         </record>
 
+        <!-- Omnigent —— 2026-09-29 上架 PaaS（elmo 定案：SQLite、上游 omnigent-host runner、
+             v0.16.0、平台只給初始密碼、無 nginx）。
+             chart：woow-paas-charts charts/omnigent 0.1.0；image：paas-odoo-ci mirror-image.yml 原樣鏡像
+             （omnigent-server-kubernetes ← ghcr.io/omnigent-ai/omnigent-server-kubernetes:v0.16.0、
+             #159 omnigent-host ← ghcr.io/omnigent-ai/omnigent-host:v0.16.0，digest 保留）。
+             認證：omnigent 內建 accounts 登入，沒有 auth-proxy。平台供給的 admin_password 只在第一次
+             開機（空資料庫）時由 OMNIGENT_ACCOUNTS_INIT_ADMIN_* 建立 admin——開機即建，公開網址上
+             不存在未認證的 /auth/setup 空窗；之後密碼活在 omnigent 自己的資料庫，租戶在 omnigent 內
+             修改，平台重設不了 ⇒ admin_password_carrier=app_managed（admin_reset_supported=False，
+             服務頁不出現 Admin Credentials 按鈕）。帳號固定 admin（omnigent 沒有改名 API）。
+             對外網址：平台以 _inject_allowed_origins 注入 server.baseUrl（https ⇒ __Host- cookie）。
+             runner：上游 kubernetes managed sandbox——每個 session 由 server 在同一 namespace 開 Job
+             （非 root、一次性 launch token，不碰 admin 密碼），計入 workspace ResourceQuota。
+             T1 = 4 vCPU / 8 Gi / 10 Gi：server 1 CPU/1 Gi ＋ 兩個 runner（各 1.5 CPU/3 Gi）。
+             4500 pts/mo（plan_omnigent_*）。
+             ⚠ is_hidden=True：待正式環境實測（雲端 runner 上線、pi-agent 連結）後再公開。 -->
+        <record id="cloud_app_omnigent" model="woow_paas_platform.cloud_app_template">
+            <field name="name">Omnigent</field>
+            <field name="slug">omnigent</field>
+            <field name="description">AI 代理指揮中心：在一個網頁上開 Claude Code、Codex、pi 等多種代理的工作階段，雲端工作機隨開隨用，也能接上自己的機器。4 vCPU／8 GB RAM／10 GB 磁碟</field>
+            <field name="full_description">Omnigent 雲端指揮中心：一個網頁管理多種 AI 代理（Claude Code、Codex、pi 等）
+                的工作階段，對話紀錄、設定與上傳檔案保存在你的持久磁碟上。**雲端工作機**：每開一個
+                工作階段，平台自動開一台隔離的工作機，閒置 24 小時自動收回（同時最多約兩台；工作機
+                內的暫存檔會隨之清除，程式碼請放在 git）。**接上自己的機器**：在任何電腦執行
+                `omnigent host` 即可把它接成工作機，檔案留在那台機器上。
+                **模型金鑰自備**。**帳號密碼登入**：帳號 admin，初始密碼於開通時一次性顯示；登入後請
+                在 Omnigent 內修改密碼，並可邀請同事加入。欠費停權時服務停止（磁碟保留），恢復繳費後
+                資料原樣還在；刪除服務即全新開通，原磁碟依平台保留政策 7 天後回收。</field>
+            <field name="category">ai_llm</field>
+            <field name="tags">["omnigent", "coding-agent", "ai", "agent"]</field>
+            <field name="documentation_url">https://github.com/WOOWTECH/Woow_omnigent_tutorial_site#readme</field>
+            <field name="helm_repo_url"></field>
+            <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/omnigent</field>
+            <field name="helm_chart_version">0.1.0</field>
+            <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/omnigent-server-kubernetes","tag":"20260929.1400@sha256:ba384bba57cb1f80b28e3cbfab7c58d6ad94f5cd99c3773a86a1987ffe3bf902"},"runner":{"image":"jcr-prod.woowtech.io/woow-paas-docker-local/omnigent-host:20260929.1400@sha256:558fce8ab8fe4b577787b523ebffccf970f56d2f99da7bfa9af9959a50ea04f9"},"persistence":{"size":"10Gi"},"service":{"port":8000,"targetPort":8000},"admin":{"username":"admin"}}</field>
+            <field name="helm_value_specs">{"required": [], "optional": []}</field>
+            <field name="default_port">8000</field>
+            <field name="ingress_enabled" eval="True"/>
+            <field name="min_vcpu">4</field>
+            <field name="min_ram_gb">8.0</field>
+            <field name="min_storage_gb">10</field>
+            <field name="mcp_enabled" eval="False"/>
+            <field name="has_admin_gui" eval="True"/>
+            <field name="admin_password_carrier">app_managed</field>
+            <field name="post_deploy_init_type">none</field>
+            <field name="max_per_partner" eval="0"/>
+            <field name="is_hidden" eval="True"/>
+            <field name="is_active" eval="True"/>
+        </record>
+
 
         <!-- Healer: DBs first installed under the historical <data noupdate="1"> block
              carry a sticky ir.model.data.noupdate flag on these seeds, so the corrected

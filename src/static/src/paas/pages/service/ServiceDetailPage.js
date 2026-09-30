@@ -182,18 +182,20 @@ export class ServiceDetailPage extends Component {
     /**
      * Reset 密碼按鈕的顯示判準。
      *
-     * 讀模板的 has_admin_gui 欄位——與後端 reset endpoint 的授權判準
-     * （controllers/paas.py 的 `service.template_id.has_admin_gui`，#357 C01）
-     * 收斂到同一個欄位。原本這裡是硬編碼的三筆 slug 白名單
+     * 讀模板的 admin_reset_supported 欄位——與後端 reset endpoint 的能力 gate
+     * （controllers/paas.py 的 `service.template_id.admin_reset_supported`）收斂到
+     * 同一個欄位。原本這裡是硬編碼的三筆 slug 白名單
      * （mcp-odoo／mcp-odoo-manage／mcp-n8n），與後端不一致：8 個
      * has_admin_gui=True 的模板有 5 個後端放行、前端卻按不到按鈕，修復對租戶
      * 不可達（#460 / F-449-4）。**不得再退回 slug 判準**。
+     * 不直接讀 has_admin_gui：app_managed 的模板（omnigent）開通時照樣供給初始
+     * 密碼，但之後密碼由 app 自己保管，平台重設不了——按鈕不該出現。
      *
      * 缺欄位（舊快取、尚未更新的 payload）一律視同 False——fail-closed：寧可
      * 不顯示，也不要長出一顆按了必然失敗的按鈕。
      */
-    get hasAdminGui() {
-        return this.service?.template?.has_admin_gui === true;
+    get adminResetSupported() {
+        return this.service?.template?.admin_reset_supported === true;
     }
 
     /**
