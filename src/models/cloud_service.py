@@ -46,6 +46,11 @@ from .workspace_access import ROLE_ADMIN
 
 _logger = logging.getLogger(__name__)
 
+# #1159 observation-freshness contract: each entry into one of these states starts
+# a new wait for a real operator status.  `platform_monitor` consumes this exact
+# set; list/get only report the stored episode and never start one themselves.
+OBSERVATION_TRANSITION_STATES = ('deploying', 'upgrading', 'initializing', 'deleting')
+
 #: #528 的待回收 CF Access policy 帳本（三腿共用）。
 _CF_REAP_MODEL = 'woow_paas_platform.cf_access_policy_reap'
 
@@ -273,6 +278,25 @@ def _reject_init_control_writes(env, vals):
         raise AccessError(_(
             'Post-deploy initialization fields are managed by the platform: '
             '%(fields)s', fields=', '.join(touched)))
+
+
+# `observed_at` is evidence from the operator, while the episode anchor is the
+# platform's command-side wait boundary.  Neither is tenant input: allowing a
+# tenant to alter either would hide a stale poll or forge a fresh observation.
+_OBSERVATION_CONTROL_FIELDS = frozenset({
+    'observed_at', 'observation_episode_started_at',
+})
+
+
+def _reject_observation_control_writes(env, vals):
+    """write() 側：觀測證據與等待 episode 只能由平台寫入。"""
+    if env.is_system():
+        return
+    touched = sorted(_OBSERVATION_CONTROL_FIELDS.intersection(vals))
+    if touched:
+        raise AccessError(_(
+            'Service observation fields are managed by the platform: %(fields)s',
+            fields=', '.join(touched)))
 
 
 # ------------------------------------------------------------------------- #
@@ -860,6 +884,13 @@ class CloudService(models.Model):
         readonly=True,
         help='Last time the background poll got a status from the operator '
              '(#1159 Q1); list/get only report this, they never poll',
+    )
+    observation_episode_started_at = fields.Datetime(
+        string='Observation Episode Started At',
+        copy=False,
+        readonly=True,
+        help='Platform timestamp for entry into the current transitional state. '
+             'It is a wait boundary, never an operator observation.',
     )
     # Q4／Q33：短 poll 觀測到 initializing 的 pods ready ＝ 排進 init cron 的佇列。
     # init cron 只 claim 這些服務；not ready 時清掉（等待期間由時限約束）。
@@ -4137,6 +4168,9 @@ class CloudService(models.Model):
 
         # #1159 Q1／Q40：list/get 只回這個「最近觀測」。拿到 status 就 stamp，不論
         # 這一輪有沒有推進 state（沒推進正是「最後更新 X 前」要揭露的情形）。
+        # `observation_episode_started_at` stays as the command-side boundary;
+        # consumers compare it to this real observation instead of overwriting
+        # evidence with a command submission time.
         service.write({'observed_at': fields.Datetime.now()})
         if original_state == 'deleting':
             # #1159 Q1：deleting 只由上面的 404 收尾。release 還在時什麼都不推——
@@ -4234,6 +4268,23 @@ class CloudService(models.Model):
     # 設計權威：docs/decisions/refactor/post-deploy-init-execution-model.md。
     # 本段是 Odoo／n8n 共用的**唯一**執行入口與它的守衛；各自的 init 內容（operator
     # 端點、憑證規則）仍分開。controller 自 #1257 起不再有 init 流程。
+
+    def _observation_freshness(self):
+        """Return ``(pending, started_at)`` for the shared observation clock.
+
+        ``observed_at`` is never reinterpreted: it is only current when it is
+        at or after this transitional episode's command-side boundary.  Rows
+        created before this field existed fall back to their stored evidence
+        until the background monitor gives them one bounded initial episode.
+        This method is read-only so list/get remain pure reads.
+        """
+        self.ensure_one()
+        episode = self.observation_episode_started_at
+        observed = self.observed_at
+        pending = bool(episode and (not observed or observed < episode))
+        if pending:
+            return True, episode
+        return False, observed or episode or self.write_date
 
     def _init_type(self):
         """本服務的 post-deploy init 類型；不認得的值一律當 ``none``。"""
@@ -6038,6 +6089,7 @@ class CloudService(models.Model):
         # ——後面每一段都有副作用或成本，被拒絕的呼叫不該碰到其中任何一段。
         _reject_cs_access_identity_anchor_writes(self.env, vals)
         _reject_init_control_writes(self.env, vals)
+        _reject_observation_control_writes(self.env, vals)
         # #698 反向端：前置檢查（見 `_assert_reverse_binding_authorized` 的
         # docstring——這一端的判準會被寫入本身改掉，事後檢查無效）。
         self._assert_reverse_binding_authorized(vals)
@@ -6121,6 +6173,13 @@ class CloudService(models.Model):
         entering_init = self.browse()
         if vals.get('state') == 'initializing' and 'init_wait_since' not in vals:
             entering_init = self.filtered(lambda r: r.state != 'initializing')
+        # A same-state write and unrelated bookkeeping do not get a new grace
+        # window.  This subset is computed before `super()` so mixed recordsets
+        # stamp only the records which actually enter a new wait episode.
+        entering_observation_episode = self.browse()
+        if vals.get('state') in OBSERVATION_TRANSITION_STATES:
+            entering_observation_episode = self.filtered(
+                lambda r: r.state != vals['state'])
         # #1159 Q30 的 reconfigure 放行只認「init 額度出口」造成的 error：服務一離開
         # error（刪除、redeploy……）`init_exit` 就不再描述現況，之後刪除失敗等路徑寫回
         # 的 error 不得沿用它。停權（error → suspended → error）不算離開：Q25 要求停權
@@ -6148,6 +6207,12 @@ class CloudService(models.Model):
             if access_sync:
                 stack.enter_context(self.env.cr.savepoint())
             res = super().write(vals)
+            if entering_observation_episode:
+                # Deliberately use a command-side timestamp only as the episode
+                # boundary.  `observed_at` remains the status poll's evidence.
+                super(CloudService, entering_observation_episode).write({
+                    'observation_episode_started_at': fields.Datetime.now(),
+                })
             if entering_init:
                 entering_vals = {
                     'init_wait_since': self._init_db_now(),
@@ -6485,8 +6550,18 @@ class CloudService(models.Model):
             self._assert_reverse_binding_authorized(
                 self._add_missing_default_values(vals))
         normalized_vals_list = []
+        observation_started = fields.Datetime.now()
         for vals in vals_list:
             normalized = dict(vals)
+            # A service can be born directly in deploying/initializing (or be
+            # restored into another transitional state).  Establish the same
+            # wait boundary as `write()`; caller-provided values cannot claim a
+            # pre-existing observation episode.
+            defaulted = self._add_missing_default_values(normalized)
+            if defaulted.get('state') in OBSERVATION_TRANSITION_STATES:
+                normalized['observation_episode_started_at'] = observation_started
+            else:
+                normalized.pop('observation_episode_started_at', None)
             raw_values = normalized.get('helm_values')
             if raw_values:
                 try:

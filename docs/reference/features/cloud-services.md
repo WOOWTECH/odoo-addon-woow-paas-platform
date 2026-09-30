@@ -218,7 +218,9 @@ Example: paas-ws-123-anythingllm-01
 
 > #1159：由觀測推進的狀態轉移（transition 完成、init 分派、deleting 404→unlink）**只由背景
 > 短 poll cron 寫**；list/get 端點純讀，回 DB 的最近觀測（`state`＋`observed_at`＋
-> `init_phase`），前端 5 秒輪詢只是讀 DB。post-deploy init 在獨立的 init cron 執行。設計見
+> `observation_pending`＋`init_phase`），前端 5 秒輪詢只是讀 DB。新的轉移以持久化 episode
+> 等待第一次真 status，並不覆寫 `observed_at`；payload 與 monitor 共用這個 freshness clock。
+> post-deploy init 在獨立的 init cron 執行。設計見
 > [post-deploy init 執行模型 ADR](../../decisions/refactor/post-deploy-init-execution-model.md)。
 
 ### Supported Operations

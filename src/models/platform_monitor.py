@@ -30,6 +30,8 @@ from markupsafe import Markup
 
 from odoo import _, api, fields, models
 
+from .cloud_service import OBSERVATION_TRANSITION_STATES
+
 _logger = logging.getLogger(__name__)
 
 _SINGLETON_XMLID = 'woow_paas_platform.platform_monitor_singleton'
@@ -150,17 +152,41 @@ class PlatformMonitor(models.Model):
 
     @api.model
     def _check_oldest_observation(self):
-        """轉移狀態（非 pending）的服務裡，最久沒有被背景觀測到的那一台。
+        """Alert on the oldest shared observation-freshness clock.
 
-        從沒觀測過的（observed_at 空）以 write_date 代替：剛進轉移狀態的服務不會誤報。
+        A transition starts an episode, not an observation: while its real
+        ``observed_at`` predates that episode, both this monitor and the API use
+        the episode boundary.  Pre-field rows receive one background-only grace
+        boundary exactly once.  It is intentionally not ``write_date``: unrelated
+        writes must not perpetually defer the 15 minute alert.
         """
         Service = self.env['woow_paas_platform.cloud_service'].sudo()
-        Service.flush_model(['state', 'observed_at'])
+        Service.flush_model(['state', 'observed_at', 'observation_episode_started_at'])
+        # No migration is needed for the nullable additive field.  On the first
+        # monitor pass after rollout, legacy transitional rows get one bounded
+        # grace period.  This is a short local UPDATE after polling, never an
+        # external call or a row lock held across operator I/O.
         self.env.cr.execute(
-            f"""SELECT id, COALESCE(observed_at, write_date) AS seen
+            f"""UPDATE {Service._table}
+                   SET observation_episode_started_at =
+                       (statement_timestamp() AT TIME ZONE 'UTC')
+                 WHERE state IN %s
+                   AND observation_episode_started_at IS NULL""",
+            (OBSERVATION_TRANSITION_STATES,))
+        Service.invalidate_model(['observation_episode_started_at'])
+        self.env.cr.execute(
+            f"""SELECT id,
+                       CASE
+                           WHEN observation_episode_started_at IS NOT NULL
+                            AND (observed_at IS NULL
+                                 OR observed_at < observation_episode_started_at)
+                           THEN observation_episode_started_at
+                           ELSE COALESCE(observed_at, observation_episode_started_at, write_date)
+                       END AS seen
                   FROM {Service._table}
-                 WHERE state IN ('deploying', 'upgrading', 'initializing', 'deleting')
-                 ORDER BY seen ASC NULLS FIRST LIMIT 1""")
+                 WHERE state IN %s
+                 ORDER BY seen ASC NULLS FIRST LIMIT 1""",
+            (OBSERVATION_TRANSITION_STATES,))
         row = self.env.cr.fetchone()
         if not row or not row[1]:
             return

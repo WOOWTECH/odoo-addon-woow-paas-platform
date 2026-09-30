@@ -4195,6 +4195,14 @@ class PaasController(HiddenChainMixin, Controller):
         # state used by the cron as a pick-up lock; users should see 'deploying'.
         ui_state = 'deploying' if service.state == 'pending' else service.state
 
+        # #1159 observation-freshness: a new transition waits for a real poll
+        # response.  The model owns the comparison so formatter and monitor do
+        # not invent different clocks; this read-only call never polls or writes.
+        observation_pending, observation_freshness_at = service._observation_freshness()
+        observation_age_seconds = (
+            max(0, int((fields.Datetime.now() - observation_freshness_at).total_seconds()))
+            if observation_freshness_at else None)
+
         data = {
             'id': service.id,
             'name': service.name,
@@ -4216,15 +4224,15 @@ class PaasController(HiddenChainMixin, Controller):
             # 而且 ServiceDetailPage 的 `t-if="service.error_message"` 不判 state
             # ⇒ 一台健康的服務會冒出紅底錯誤。
             'public_url_dns_unverified': service.public_url_dns_unverified,
-            # #1159 Q1／Q40：list/get 只回 DB 的最近觀測。`observed_at`＝背景 poll 最近
-            # 一次拿到 operator status 的時間（UTC），前端在轉移中停太久時顯示「最後
-            # 更新 X 前」；`init_phase` 細分 initializing（不新增 state 值）。
+            # `observed_at` stays literal evidence from the status poll.  During
+            # a new episode `observed_age_seconds` instead measures the pending
+            # wait boundary, so old evidence cannot immediately be reported as
+            # a fresh transfer's stale observation.  Consumers use the additive
+            # flag to phrase that case as "waiting for an update", not "last
+            # updated"; list/get still only read stored values.
             'observed_at': service.observed_at.isoformat() if service.observed_at else None,
-            # 距今秒數由伺服器算：observed_at 是 naive UTC，前端日期層目前把不帶 offset 的
-            # 字串當本地時間讀（datetime_helpers.js，#914 未切換），自己算會差一個時區。
-            'observed_age_seconds': (
-                int((fields.Datetime.now() - service.observed_at).total_seconds())
-                if service.observed_at else None),
+            'observation_pending': observation_pending,
+            'observed_age_seconds': observation_age_seconds,
             'init_phase': service._init_phase() or None,
             # Q30：init 的出口與 attempt 序號（租戶看固定文案＋序號，operator 原始錯誤只在
             # attempt 記錄）；`init_reconfigure_allowed` 與 `_update_service` 的守衛同一判準。

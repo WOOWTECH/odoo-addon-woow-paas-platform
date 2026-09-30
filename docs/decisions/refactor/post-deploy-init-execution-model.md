@@ -139,13 +139,18 @@ woow-paas/paas-app-bundle-cd#154（prod `limit_time_real_cron=1800`）要先上 
   `remaining>0`（core 會在同一趟、同一個 watchdog 內續跑最多 10 批）。init 最多佔 1 個 cron worker（SKIP LOCKED
   單例），不與短 poll 同 job、同交易（Q4）。
 - **list/get 純讀**（Q1）；前端 5 秒輪詢照舊、只讀 DB。`init_phase`：running（lease 在途、attempt 未結束）／
-  waiting_ready／retrying（本代有 failed 或 unknown）／queued。前端只在轉移中且最近觀測超過 3 分鐘時顯示「最後更新
-  X 前」（秒數由後端算：`observed_at` 是 naive UTC，前端日期層目前把不帶 offset 的字串當本地時間讀，#914）。
+  waiting_ready／retrying（本代有 failed 或 unknown）／queued。每次實際進入 deploying／upgrading／initializing／deleting
+  都建立 `observation_episode_started_at`；它是「本次等待第一次真觀測」的時計，**不是** operator observation。
+  `observed_at` 仍只在短 poll 真拿到 status 時更新。formatter 與 monitor 同時使用：若 `observed_at` 早於 episode，
+  payload 回 `observation_pending=true` 且 `observed_age_seconds` 自 episode 起算；否則從 `observed_at` 起算。這讓 consumer
+  可說「等待更新」而不把命令提交偽裝成「最後觀測」。同 state write／無關 write 不重置 episode。舊列在 monitor 首趟
+  背景 pass 只初始化一次 episode，得到有界 grace；不以每次 `write_date` 延後時限。
 - **DNS 旗標**（Q16／D4）：`public_url_dns_unverified` 改由 `ir_cron_reprobe_public_url_dns`（每 15 分）重探後清除。
 - **監控**（Q38／D3）：`mail.activity` 給 `base.group_system`，每個監控項用不同 summary 各自去重，全部掛在
   mail.thread 單例 `woow_paas_platform.platform_monitor`（`ir.cron`／`cloud_service` 都不是 mail.thread，
-  activity 建立時會呼叫 `message_subscribe`）。短 poll 查 init cron（停用或 `lastcall` > 40 分）、最舊 `observed_at`
-  （> 15 分）、24h 內 unknown／partial；init cron 查短 poll（`lastcall` > 10 分）；等待逾時／fast-fail 與 n8n
+  activity 建立時會呼叫 `message_subscribe`）。短 poll 查 init cron（停用或 `lastcall` > 40 分）、最舊 observation
+  freshness clock（pending episode 或真 `observed_at`，> 15 分）、24h 內 unknown／partial；init cron 查短 poll（`lastcall`
+  > 10 分）；等待逾時／fast-fail 與 n8n
   ready→owner（> 5 分，Q28b）是事件型，追加一行。
 - **租戶出口**（Q30）：initializing 可刪除（確認框註明已送出的 init 仍可能完成）；error 停用 Reset；init 失敗顯示
   固定文案＋attempt 序號＋support 入口；只有額度出口的 error 開放改設定。

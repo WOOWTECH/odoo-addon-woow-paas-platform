@@ -28,6 +28,7 @@ from unittest.mock import MagicMock, patch
 from odoo import SUPERUSER_ID, api, fields
 from odoo.tests.common import TransactionCase, tagged
 
+from ..controllers.paas import PaasController
 from ..models.cloud_service import _internal_provision
 from ..services.paas_operator import PaaSOperatorError
 from .operator_contract import operator_client, status_response
@@ -262,7 +263,11 @@ class TestListGetPureRead1159(_ServiceCase):
         running.sudo().write({'public_url_dns_unverified': True})
         services.append(running)
         for svc in services:
-            svc.sudo().write({'observed_at': observed})
+            # 這是已在同一輪轉移裡收到的真觀測，不是剛開的新等待 episode。
+            svc.sudo().write({
+                'observed_at': observed,
+                'observation_episode_started_at': observed - timedelta(seconds=1),
+            })
         return services, observed
 
     def test_list_does_not_poll_or_write(self):
@@ -288,6 +293,101 @@ class TestListGetPureRead1159(_ServiceCase):
                 self.assertTrue(result['success'])
                 self.assertEqual(result['data']['observed_at'], observed.isoformat())
                 self.assertEqual(result['data']['state'], svc.state)
+
+
+@tagged('post_install', '-at_install')
+class TestObservationFreshness1159(_ServiceCase):
+    """新轉移等待新的真觀測；同一個 episode 的時鐘供 payload 與監控共用。"""
+
+    def test_new_transition_preserves_the_last_real_observation_and_starts_pending_episode(self):
+        svc = self._service('none', state='running')
+        observed = fields.Datetime.now() - timedelta(days=3)
+        svc.sudo().write({'observed_at': observed})
+
+        svc.sudo().write({'state': 'upgrading'})
+
+        self.assertEqual(svc.observed_at, observed, '命令時間不得偽裝成 operator 觀測')
+        self.assertTrue(svc.observation_episode_started_at)
+        self.assertGreater(svc.observation_episode_started_at,
+                           fields.Datetime.now() - timedelta(minutes=1))
+        payload = PaasController()._format_service(svc)
+        self.assertTrue(payload['observation_pending'])
+        self.assertTrue(0 <= payload['observed_age_seconds'] < 60,
+                        '新等待必須從這次轉移起算，不能立刻沿用三天前的 observed_at')
+
+    def test_same_state_and_unrelated_writes_do_not_reset_pending_episode(self):
+        svc = self._service('none', state='upgrading')
+        started = fields.Datetime.now() - timedelta(minutes=3)
+        svc.sudo().write({'observation_episode_started_at': started})
+
+        svc.sudo().write({'state': 'upgrading'})
+        svc.sudo().write({'error_message': 'unrelated bookkeeping'})
+
+        self.assertEqual(svc.observation_episode_started_at, started)
+        payload = PaasController()._format_service(svc)
+        self.assertTrue(payload['observation_pending'])
+        self.assertTrue(170 <= payload['observed_age_seconds'] <= 190,
+                        'three minutes without a real poll remains a pending wait')
+
+    def test_mixed_recordset_stamps_only_records_entering_the_transition(self):
+        entering = self._service('none', state='running')
+        already_deleting = self._service('none', state='deleting')
+        old_episode = fields.Datetime.now() - timedelta(minutes=3)
+        already_deleting.sudo().write({'observation_episode_started_at': old_episode})
+
+        (entering | already_deleting).sudo().write({'state': 'deleting'})
+
+        self.assertGreater(entering.observation_episode_started_at,
+                           fields.Datetime.now() - timedelta(minutes=1))
+        self.assertEqual(already_deleting.observation_episode_started_at, old_episode)
+
+    def test_real_poll_converges_pending_payload_without_changing_episode_on_reads(self):
+        svc = self._service('none', state='upgrading')
+        before = svc.observation_episode_started_at
+        self._poll(svc)
+        payload = PaasController()._format_service(svc)
+
+        self.assertTrue(svc.observed_at)
+        self.assertGreaterEqual(svc.observed_at, before)
+        self.assertFalse(payload['observation_pending'])
+        self.assertTrue(0 <= payload['observed_age_seconds'] < 60)
+
+    def test_tenant_cannot_forge_an_observation_or_reset_the_episode(self):
+        svc = self._service('none', state='deploying')
+        user = self.env['res.users'].create({
+            'name': f'1159 observation tenant {self.tag}',
+            'login': f'1159-observation-{self.tag}',
+            'groups_id': [(6, 0, [self.env.ref('base.group_user').id])],
+        })
+        from odoo.exceptions import AccessError
+        with self.assertRaises(AccessError):
+            svc.with_user(user).write({'observed_at': fields.Datetime.now()})
+        with self.assertRaises(AccessError):
+            svc.with_user(user).write({
+                'observation_episode_started_at': fields.Datetime.now(),
+            })
+
+    def test_monitor_initializes_legacy_episode_once_then_alerts_after_grace(self):
+        svc = self._service('none', state='deploying')
+        stale_observation = fields.Datetime.now() - timedelta(days=3)
+        svc.sudo().write({
+            'observed_at': stale_observation,
+            'observation_episode_started_at': False,
+        })
+        monitor = self.env[MONITOR]
+        summary = monitor.SUMMARY_OBSERVED
+
+        monitor._check_oldest_observation()
+        self.assertTrue(svc.observation_episode_started_at)
+        self.assertFalse(self.env['mail.activity'].sudo().search([
+            ('res_model', '=', MONITOR), ('summary', '=', summary)]),
+            'legacy row gets exactly one grace window instead of immediate stale alert')
+        svc.sudo().write({
+            'observation_episode_started_at': fields.Datetime.now() - timedelta(minutes=16),
+        })
+        monitor._check_oldest_observation()
+        self.assertTrue(self.env['mail.activity'].sudo().search([
+            ('res_model', '=', MONITOR), ('summary', '=', summary)]))
 
 
 @tagged('post_install', '-at_install')
