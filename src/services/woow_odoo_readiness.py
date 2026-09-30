@@ -23,6 +23,13 @@ _REQUIRED_COMPONENTS = (
     ('postgresql', 'StatefulSet'),
 )
 
+#: 例行 Job 豁免白名單（Q6）：chart 的兩支 CronJob 共用 component=db-backup、以
+#: ``woow.paas/task`` 區分。**不論 phase** 都不參與判定——它們綁 server 的 podAffinity，
+#: server 有問題時必要組會獨立抓到；Job 自己 Pending 是維護問題，不是服務沒起來。
+#: ``db-restore`` 刻意不在內（只該出現在 `restoring`，#1213）。
+_EXEMPT_COMPONENT = 'db-backup'
+_EXEMPT_TASKS = frozenset({'backup', 'housekeeping'})
+
 
 def chart_name_of(chart_ref):
     """template 的 ``helm_chart_name`` → chart 名。
@@ -82,6 +89,13 @@ def _required_component(pod):
     return None
 
 
+def _is_exempt(pod):
+    return (
+        pod.get('component') == _EXEMPT_COMPONENT
+        and pod.get('task') in _EXEMPT_TASKS
+    )
+
+
 def _describe(pod):
     """detail 用的 Pod 摘要：名字＋身分證據＋狀態，讓維運不進叢集也看得出是誰。"""
     return '%s[component=%s task=%s owner=%s %s %s]' % (
@@ -97,11 +111,13 @@ def woow_odoo_ready(status):
         ``(ready: bool, detail: str)``。
     """
     required = {component: [] for component, _ in _REQUIRED_COMPONENTS}
-    unexpected = []
+    exempt, unexpected = [], []
     for pod in filter(_is_active, status.get('pods') or []):
         component = _required_component(pod)
         if component:
             required[component].append(pod)
+        elif _is_exempt(pod):
+            exempt.append(pod)
         else:
             unexpected.append(pod)
 
@@ -113,7 +129,11 @@ def woow_odoo_ready(status):
         hard.append('unexpected pod outside the woow-odoo contract: '
                     + ', '.join(map(_describe, unexpected)))
     if hard:
-        return False, 'HARD: ' + '; '.join(hard)
-    if not all(_is_pod_ready(pod) for pods in required.values() for pod in pods):
-        return False, 'required pods not ready'
-    return True, 'woow-odoo required components ready'
+        ready, detail = False, 'HARD: ' + '; '.join(hard)
+    elif not all(_is_pod_ready(pod) for pods in required.values() for pod in pods):
+        ready, detail = False, 'required pods not ready'
+    else:
+        ready, detail = True, 'woow-odoo required components ready'
+    if exempt:
+        detail += ' (exempt routine jobs: %s)' % ', '.join(map(_describe, exempt))
+    return ready, detail

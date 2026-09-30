@@ -17,6 +17,7 @@ from odoo.tests.common import TransactionCase, tagged
 
 from ..controllers.paas import PaasController
 from ..models.cloud_service import _internal_provision
+from ..services.woow_odoo_readiness import woow_odoo_ready
 from .operator_contract import operator_client, pod_info, status_response
 
 _ENTRIES = ('cron', 'controller')
@@ -155,3 +156,40 @@ class TestWoowOdooReadinessIdentity(TransactionCase):
                 self.assertFalse(ready)
                 self.assertTrue(detail.startswith('HARD: '), detail)
                 self.assertIn(outsider['name'], detail)
+
+    # ------------------------------------------------------------------ #
+    #  負例 2：例行 Job 豁免白名單（Q6）                                    #
+    # ------------------------------------------------------------------ #
+
+    def test_routine_db_jobs_do_not_block_a_healthy_service(self):
+        """票面負例 2：server／PG 健康時，backup／housekeeping Job 不論 phase 都不擋。"""
+        for task in ('backup', 'housekeeping'):
+            for phase, ready in (('Pending', '0/1'), ('Running', '0/1'),
+                                 ('Running', '1/1'), ('Unknown', '0/1')):
+                with self.subTest(task=task, phase=phase, ready=ready):
+                    job = _db_job(task, phase=phase, ready=ready)
+                    self._assert_poll_reaches_running(
+                        self._status([_server(), _postgres(), job]),
+                    )
+
+    def test_exempt_pods_are_listed_in_the_detail(self):
+        """被豁免的 Pod 要出現在 detail：server 卡住時，看得出旁邊正跑著備份
+        （例：Recreate 期間備份 Job 佔著 RWO PVC）。"""
+        backup = _db_job('backup', phase='Running', ready='1/1')
+        cases = {
+            'server not ready': [_server(phase='Pending', ready='0/1'), _postgres(), backup],
+            'server missing': [_postgres(), backup],
+        }
+        for case, pods in cases.items():
+            with self.subTest(case=case):
+                ready, detail = self.service._is_release_ready(self._status(pods))
+                self.assertFalse(ready)
+                self.assertIn(backup['name'], detail)
+                self.assertIn('exempt', detail)
+
+        # 就緒時 `_is_release_ready` 回的是其後 DNS 閘的 detail；豁免清單由共用判定
+        # 本身帶出（#1213 finalize 直接用它）。
+        ready, detail = woow_odoo_ready(self._status([_server(), _postgres(), backup]))
+        self.assertTrue(ready)
+        self.assertIn(backup['name'], detail)
+        self.assertIn('exempt', detail)
