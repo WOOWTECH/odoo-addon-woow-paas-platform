@@ -570,9 +570,8 @@ class TestPollRecordsOutOfBandChartVersion(_Base):
         fake_request = MagicMock()
         fake_request.env = self.env
         with patch(f'{_CONTROLLER}.get_paas_operator_client', return_value=client), \
-                patch(f'{_CONTROLLER}.request', new=fake_request), \
-                patch(f'{_CONTROLLER}.PaasController._run_post_deploy_init',
-                      return_value=None):
+                patch(f'{_CONTROLLER}.request', new=fake_request):
+            # #1257：controller 的 poll 只推進 state、不 dispatch init，不必再 patch。
             PaasController()._update_service_status(service)
         service.invalidate_recordset()
 

@@ -622,14 +622,11 @@ class TestPollPathNotBrokenByAuthz676(_CloudService676Fixture):
             '沒人會發現')
 
     def test_B3_guest_get_triggers_post_deploy_init_writes(self):
-        """涵蓋 `_run_post_deploy_init` 的寫入（`_update_service_status` 的下游）。
+        """涵蓋「需要 init」分支的寫入（`_update_service_status` 寫 `initializing`）。
 
-        用 `post_deploy_init_type='odoo'` 分支：它不讀 `n8n_owner_password`
-        （該欄位有 `groups='base.group_system'`，租戶身分讀它今天就已經
-        AccessError——那是既有缺陷，不在本單範圍，故刻意避開該分支）。
-
-        走到的兩個寫入點：`_update_service_status` 寫 `state='initializing'`，
-        接著 `_run_post_deploy_init` 寫 `state='running'`。
+        #1257 起 list/get **不再** dispatch init（改由 cron 經 model 的單一入口
+        `_run_post_deploy_init` 執行），所以這條路徑剩下的寫入點只有
+        `state='initializing'` 那一次——它同樣必須走系統身分。
         """
         template = self._template('tmpl-676-init', post_deploy_init_type='odoo')
         svc = self._service(template, self.w1, 'Init 676', state='deploying')
@@ -644,11 +641,11 @@ class TestPollPathNotBrokenByAuthz676(_CloudService676Fixture):
                 {'action': 'get'})
 
         self._assert_ok(result, 'guest 打開需要 init 的部署中服務不得失敗')
-        self.assertTrue(
+        self.assertFalse(
             client.init_odoo.called,
-            '前提：必須真的走到 post-deploy init 分支'
-            '（沒走到的話下面的 state 斷言零鑑別力）')
+            '#1257：list/get 不得同步呼叫 operator 的 init')
         svc.sudo().invalidate_recordset()
         self.assertEqual(
-            svc.sudo().state, 'running',
-            '`_run_post_deploy_init` 的寫入也必須走系統身分')
+            svc.sudo().state, 'initializing',
+            '「需要 init」分支的 state 寫入也必須走系統身分'
+            '（寫入被 rule 擋下時會停在 deploying）')

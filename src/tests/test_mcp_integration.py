@@ -8,10 +8,13 @@ All external calls (PaaS Operator, MCP tool discovery) are mocked.
 """
 import json
 import uuid
+from datetime import timedelta
 from unittest.mock import patch, MagicMock, AsyncMock
 
+from odoo import fields
 from odoo.tests.common import TransactionCase, tagged
 from ..models.cloud_service import _internal_provision
+from ..models.cloud_service_init_attempt import InitOutcome
 
 
 @tagged('post_install', '-at_install')
@@ -1311,6 +1314,24 @@ class TestMcpProjectScopeConstraints(TransactionCase):
 
 
 
+def _apply_init_success(service, api_key=None):
+    """#1257：以一筆持有 lease 的 attempt 驅動 init 成功的套用（不 commit）。"""
+    now = fields.Datetime.now()
+    attempt = service.env['woow_paas_platform.cloud_service_init_attempt'].sudo().create({
+        'service_id': service.id, 'generation': service.init_generation,
+        'sequence': 1, 'init_type': service._init_type(),
+        'claimed_at': now, 'lease_until': now + timedelta(minutes=10),
+    })
+    service.sudo().write({
+        'state': 'initializing', 'init_attempt_id': attempt.id,
+        'init_lease_until': now + timedelta(minutes=10),
+    })
+    applied = service._init_apply_outcome(
+        attempt, InitOutcome('success', api_key=api_key), False)
+    assert applied, '前提：CAS 必須成立，否則下面的斷言零鑑別力'
+    assert service.state == 'running'
+
+
 # ====================================================================== #
 # TDD red phase — Group C: auto-create teardown verification              #
 #                                                                         #
@@ -1318,8 +1339,8 @@ class TestMcpProjectScopeConstraints(TransactionCase):
 #   AC #7:  cloud_service.py:_model_auto_create_mcp_server 整段刪除      #
 #   AC #8:  cloud_service.py 內 3 個 call sites 全部刪除                  #
 #             - line 849 (_poll_and_update_status → state='running')      #
-#             - line 914 (_model_init_n8n 成功後)                         #
-#             - line 940 (_model_init_odoo 成功後)                        #
+#             - line 914 (n8n init 成功後；#1257 起在 _init_apply_outcome) #
+#             - line 940 (Odoo init 成功後；同上)                         #
 #   AC #9:  controllers/paas.py:_auto_create_mcp_server 整段刪除          #
 #   AC #10: controllers/paas.py 內 3 個 call sites 全部刪除               #
 #   AC #11: cloud service 轉 running **不會** 產生新的 mcp_server row     #
@@ -1484,10 +1505,9 @@ class TestAutoCreateTeardown(TransactionCase):
         """AC #8 (line 914) / #12: n8n post-deploy init success path
         must NOT auto-create MCP row.
 
-        Exercises ``service._model_init_n8n(client)`` directly with
-        ``client.init_n8n`` returning ``{'success': True, 'api_key':
-        '...'}``. Production path runs at line 914 today —
-        ``self._model_auto_create_mcp_server()`` inside ``try / except``.
+        #1257 起成功路徑的服務端寫入收斂在 ``_init_apply_outcome``（單一 init
+        入口 ``_run_post_deploy_init`` 的 CAS 那一步；入口本身會 commit，所以這裡
+        直接驅動套用那一步）。
 
         **Red today**：line 914 fires → count==1.
         """
@@ -1496,12 +1516,7 @@ class TestAutoCreateTeardown(TransactionCase):
         )
         self.assertEqual(self._count_mcp_for_service(service), 0)
 
-        fake_client = MagicMock()
-        fake_client.init_n8n.return_value = {
-            'success': True, 'api_key': 'fake-n8n-key-c2',
-        }
-
-        service._model_init_n8n(fake_client)
+        _apply_init_success(service, api_key='fake-n8n-key-c2')
 
         self.assertEqual(
             self._count_mcp_for_service(service), 0,
@@ -1517,7 +1532,7 @@ class TestAutoCreateTeardown(TransactionCase):
         """AC #8 (line 940) / #12: Odoo post-deploy init success path
         must NOT auto-create MCP row.
 
-        Same pattern as n8n test but exercises ``_model_init_odoo``.
+        Same pattern as n8n test (success applied through ``_init_apply_outcome``).
 
         **Red today**：line 940 fires → count==1.
         """
@@ -1526,10 +1541,7 @@ class TestAutoCreateTeardown(TransactionCase):
         )
         self.assertEqual(self._count_mcp_for_service(service), 0)
 
-        fake_client = MagicMock()
-        fake_client.init_odoo.return_value = {'success': True}
-
-        service._model_init_odoo(fake_client)
+        _apply_init_success(service)
 
         self.assertEqual(
             self._count_mcp_for_service(service), 0,

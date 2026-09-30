@@ -26,6 +26,8 @@ from . import project_access
 from . import cloud_service_binding_guard
 from . import cloud_app_template
 from . import cloud_service_secret
+# #1257：post-deploy init 的 attempt 記錄（cloud_service 以 Many2one 指向它）。
+from . import cloud_service_init_attempt
 # fix: #528 待回收 CF Access policy 帳本 —— 三腿（SA route／cloud_service／
 # smart_home_route）共用，無相依，位置只要在使用它的 model 之前都可以。
 from . import cf_access_policy_reap
