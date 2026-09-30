@@ -843,6 +843,26 @@ class TestInitLeaseRealCursor1257(TransactionCase):
         self.assertTrue(applied_at)
         self.assertNotIn(_JWT, attempt_error)
 
+    def test_recorded_old_generation_success_cannot_complete_the_new_generation(self):
+        """P1-1：過期舊代 success 尚未套用時開新代，entry 必須丟舊 pointer 並真的送新 init。"""
+        self._set_lease(seconds_from_now=-1)
+        attempt_id = self._read()['attempt']
+        self._sql("UPDATE woow_paas_platform_cloud_service_init_attempt SET "
+                  "finished_at = (statement_timestamp() AT TIME ZONE 'UTC'), outcome = 'success' "
+                  "WHERE id = %s", (attempt_id,))
+        old_generation = self._run(lambda svc: svc.init_generation)
+        self._run(lambda svc: svc._open_init_generation())
+        self.assertEqual(self._run(lambda svc: svc.init_generation), old_generation + 1)
+        client = operator_client(init_odoo={'success': True})
+        self._entry(client)
+        state = self._read()
+        self.assertEqual(client.init_odoo.call_count, 1)
+        self.assertEqual((state['state'], state['init_pending'], state['init_retries'],
+                          state['init_unknown_count']), ('running', False, 0, 0))
+        attempts = self._run(lambda svc: svc.env[ATTEMPT].search(
+            [('service_id', '=', svc.id)], order='sequence'))
+        self.assertFalse(attempts.filtered(lambda a: a.id == attempt_id).applied_at)
+
     def test_not_executed_apply_crash_recovers_call_time_and_cooldown_once(self):
         """E6：not_executed 結果已 commit 後套用炸掉，補套不重送且帶回可辨識 7 秒 call time。"""
         client = operator_client(init_odoo={

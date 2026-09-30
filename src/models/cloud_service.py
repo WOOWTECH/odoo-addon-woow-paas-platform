@@ -4904,7 +4904,7 @@ class CloudService(models.Model):
         rows = None
         for _try in range(self._INIT_CAS_TRIES):
             rows = self._init_guarded(
-                f"""SELECT 1 FROM {self._table}
+                f"""SELECT COALESCE(init_generation, 0) FROM {self._table}
                      WHERE id = %s AND init_attempt_id = %s AND state = 'initializing'
                        FOR NO KEY UPDATE""",
                 (self.id, attempt.id),
@@ -4920,6 +4920,13 @@ class CloudService(models.Model):
             )
             return False
         if rows:
+            if attempt.generation != rows[0][0]:
+                # 舊代結果不得套入新代；過期 lease 交 settle 清 pointer，新代照常 claim。
+                _logger.info(
+                    "[#1257] init attempt %s generation %s is stale for service %s generation %s",
+                    attempt.id, attempt.generation, self.id, rows[0][0],
+                )
+                return False
             # 必須在 service 列鎖後讀 marker：兩個 recovery caller 都曾看見 marker 空時，
             # 後到者經 40001 重試會在新 snapshot 看見前者的 applied_at，不能再計一次。
             cr.execute(
