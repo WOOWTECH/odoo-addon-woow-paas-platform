@@ -161,7 +161,16 @@ omni-msg registrations --state-dir "$HOME/.local/state/omni-msg-auto"
 
 ### Discovery budget 設定與升級
 
-串行掃描多個 roots／descendants 可能超過舊版固定 20 秒（本次量測 85 次 GET 需約 29 秒）。
+串行掃描多個 roots／descendants 可能超過舊版固定 20 秒；metadata latency 波動時，
+60 秒也曾逾時。因此 root admission 與 tree traversal 的 metadata GET 改為每批最多 4 個
+並行，整批 join 後才進行授權判斷／children 分頁；agent metadata、bundle、credential
+與通知不平行化。Root admission 與 tree traversal 仍各自重新讀取 root metadata，保留
+二次 scope／runner／identity 查核，不跨 phase 或跨輪 cache。每批最多排 4 個工作，所有
+讀取沿用同一 deadline；錯誤仍按原有 subtree rejection／全輪 fail-closed 分流。
+
+唯讀實境 probe 同為 85 次 GET：candidate 兩輪約 28.1／28.6 秒，member／admission 結果相同；
+串行對照約 39.6 秒，另一輪已重現 60 秒逾時。這是間歇性 latency 下的效能證據，不保證
+所有未來 scan 都能完成，也不代表 notification 消費或 live rollout 已驗證。
 `provision --scan-seconds 60` 可在首次配置時指定；既有 deployment 不重新 provision，改用
 active `server.json` 的 `registration.scan_seconds`。省略該欄位採 60 秒，舊 config 相容；
 未知欄位、非有限數值、bool 或超出 1..120 秒均拒絕。單次 GET 仍為
