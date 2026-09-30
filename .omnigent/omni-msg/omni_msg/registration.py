@@ -14,8 +14,10 @@ import time
 import urllib.parse
 import uuid
 from pathlib import Path
+from collections import deque
 
 from .bridge import ALIAS, SESSION
+from .discovery_reads import MAX_PARALLEL_READS, read_batch
 from .root_admission import MAX_BUNDLE_BYTES, RootAdmission, phase_rejection
 from .transport import (
     MAX_METADATA_BYTES,
@@ -198,6 +200,9 @@ class Registrar:
             **phase_rejection(reason, "session_metadata", error),
         })
 
+    def _read_tree_detail(self, entry, deadline):
+        return self._get(f"/v1/sessions/{entry[0]}?include_items=false", deadline)
+
     def _discover(self, deadline):
         members, seen = [], set()
         roots, proofs = dict(self.roots), {}
@@ -213,20 +218,25 @@ class Registrar:
                 if alias in roots or len(roots) >= 16:
                     raise MessageError("duplicate_or_oversized_root_admission")
                 roots[alias] = {"session_id": sid, "workspace": proof["workspace"]}
-        for root_alias, plan in roots.items():
-            root_id = plan["session_id"]
-            queue = [(root_id, None, 0)]
-            runner = None
-            group_count = 0
-            while queue:
-                sid, parent, depth = queue.pop()
+        # 全scope按批次讀metadata；授權、children分頁與寫入仍由主執行緒處理。
+        queue = deque((plan["session_id"], None, 0, alias, plan)
+                      for alias, plan in roots.items())
+        runners, group_counts = {}, {}
+        while queue:
+            batch = []
+            while queue and len(batch) < MAX_PARALLEL_READS:
+                entry = queue.popleft()
+                sid, parent, depth, root_alias, plan = entry
                 if sid in seen or len(seen) >= MAX_SESSIONS or depth > MAX_DEPTH:
                     raise MessageError("invalid_or_oversized_session_tree")
                 seen.add(sid)
+                batch.append(entry)
+            for entry, node, error in read_batch(batch, self._read_tree_detail, deadline):
+                sid, parent, depth, root_alias, plan = entry
+                root_id = plan["session_id"]
                 try:
-                    node = self._get(
-                        f"/v1/sessions/{sid}?include_items=false", deadline,
-                    )
+                    if error is not None:
+                        raise error
                 except MessageError as exc:
                     if exc.code == "registration_scan_incomplete":
                         raise
@@ -249,21 +259,21 @@ class Registrar:
                         continue
                     if sid in proofs and any(node.get(k) != v for k, v in proofs[sid].items()):
                         continue
-                    runner = node["runner_id"]
-                elif (node["runner_id"] != runner or
+                    runners[root_id] = node["runner_id"]
+                elif (node["runner_id"] != runners[root_id] or
                       (workspace is not None and (not isinstance(workspace, str)
                        or not Path(workspace).is_absolute() or ".." in Path(workspace).parts
                        or not Path(workspace).is_relative_to(plan["workspace"])))):
                     continue
                 alias = root_alias if parent is None else "session-" + hashlib.sha256(sid.encode()).hexdigest()[:32]
-                group_count += 1
-                if group_count > MAX_GROUP_MEMBERS:
+                group_counts[root_id] = group_counts.get(root_id, 0) + 1
+                if group_counts[root_id] > MAX_GROUP_MEMBERS:
                     raise MessageError("registration_group_limit")
                 members.append({"session_id": sid, "root_id": root_id, "alias": alias, "parent_id": parent})
                 for child in self._children(sid, deadline):
                     if len(queue) + len(seen) >= MAX_SESSIONS:
                         raise MessageError("invalid_or_oversized_session_tree")
-                    queue.append((child, sid, depth + 1))
+                    queue.append((child, sid, depth + 1, root_alias, plan))
         if root_outage is not None and not root_reachable:
             # 連一個 root 層 detail 都取不到且原因是 upstream 不可用：不能發布空 snapshot 造成誤導性 401。
             raise root_outage

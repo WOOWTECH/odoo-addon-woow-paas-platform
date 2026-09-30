@@ -12,6 +12,7 @@ import zlib
 from pathlib import Path, PurePosixPath
 
 from .bridge import SESSION
+from .discovery_reads import MAX_PARALLEL_READS, read_batch
 from .transport import MAX_METADATA_BYTES, MessageError, upstream_unavailable
 
 MAX_BUNDLE_BYTES = 8 * 1024 * 1024
@@ -149,16 +150,18 @@ class RootAdmission:
         self.status = {"scanned": 0, "matched": [], "rejected": []}
         self.detail_reachable, self.detail_outage = False, None
         matches, fingerprints = {}, {}
-        for row in self._candidates(deadline):
-            self.status["scanned"] += 1
-            sid = row["id"]
-            if sid in explicit_ids:
-                continue
-            rejection = self._match(row, deadline, fingerprints, matches)
-            if rejection:
-                if isinstance(rejection, str):
-                    rejection = {"reason": rejection}
-                self.status["rejected"].append({"session_id": sid, **rejection})
+        rows = list(self._candidates(deadline))
+        self.status["scanned"] = len(rows)
+        candidates = [row for row in rows if row["id"] not in explicit_ids]
+        for start in range(0, len(candidates), MAX_PARALLEL_READS):
+            batch = candidates[start:start + MAX_PARALLEL_READS]
+            for row, node, error in read_batch(batch, self._read_detail, deadline):
+                rejection = self._match(row, deadline, fingerprints, matches,
+                                        detail_read=(node, error))
+                if rejection:
+                    if isinstance(rejection, str):
+                        rejection = {"reason": rejection}
+                    self.status["rejected"].append({"session_id": row["id"], **rejection})
         self.status["matched"] = sorted(matches)
         return matches
 
@@ -169,7 +172,14 @@ class RootAdmission:
             reason = "root_access_unavailable"
         return phase_rejection(reason, phase, error)
 
-    def _match(self, row, deadline, fingerprints, matches):
+    def _read_detail(self, row, deadline):
+        # 與 _match 的前置scope判斷一致；不對不符合rule／非root的candidate多讀metadata。
+        if (row.get("parent_session_id") is not None
+                or not any(self._scope_reason(row, rule) is None for rule in self.rules)):
+            return None
+        return self.get_json(f"/v1/sessions/{row['id']}?include_items=false", deadline)
+
+    def _match(self, row, deadline, fingerprints, matches, *, detail_read=None):
         sid = row["id"]
         scoped = [rule for rule in self.rules if self._scope_reason(row, rule) is None]
         if not scoped:
@@ -177,9 +187,12 @@ class RootAdmission:
         if row.get("parent_session_id") is not None:
             return "not_top_level"
         try:
-            node = self.get_json(
-                f"/v1/sessions/{sid}?include_items=false", deadline,
-            )
+            if detail_read is None:
+                node = self.get_json(f"/v1/sessions/{sid}?include_items=false", deadline)
+            else:
+                node, error = detail_read
+                if error is not None:
+                    raise error
         except MessageError as exc:
             if exc.code == "registration_scan_incomplete":
                 raise
