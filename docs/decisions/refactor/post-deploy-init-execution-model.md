@@ -86,10 +86,13 @@ commit（poll 剛寫的 state 先落地）
 | not_executed（等待） | operator `error_kind=not_executed`（`find_pod`／`wait_ready`）；平台端只有 connect 階段失敗（`ConnectTimeout`、`NewConnectionError`） | 不耗 | 釋放 |
 | （本地記帳錯誤） | 套用結果時平台自己的例外 | 不耗、`_logger.exception` 告警 | 釋放 |
 
-- **分工**：時間只管等待，次數只管結果。等待的錨點 `init_wait_since`＝「進入 initializing」、「上次實際執行的
-  attempt 結束」與「最近一次觀測到 pods ready」三者最晚者（進入的那一刻由 `write()` 集中 stamp；第三項是 #1159
-  實作期裁定 D2 對 Q10 的擴充：排在 init cron 佇列裡等候屬「平台容量排隊」，不計時），時限預設 30 分；只在短 poll
-  觀測到 not ready 時判，到期轉 error、不耗額度。init cron claim 前只判額度。
+- **分工**：時間只管等待，次數只管結果。Pod readiness 的既有 `init_wait_since` 仍由短 poll 在 not-ready 時判；
+  D2-R 另設 operator `not_executed` 的 30 分累計時計：只計 request wall time 與其後完整 60 秒 cooldown，不受後續
+  Pod Ready 刷新。cooldown 到期後尚未獲原子 claim 的同類容量排隊停止計時；剩餘不足 60 秒照完整 cooldown 走到
+  預算耗盡而非縮短重送。claim 的單一條件式 UPDATE 必同時重驗最新 ready、eligible 與剩餘預算；queue 仍 n8n
+  優先，且每次成功 claim 在同類移尾。新 generation、同代重新進 initializing、明確 failed 或 partial 重置此時計；
+  not_executed 與 unknown 保留，成功結束。結果先持久化、再套用的 crash 縫以 attempt accounting marker 冪等補套，
+  不重複計時／額度。
 - #1192 的 fast-fail 短路（#1159 D1）：not ready 且任一非 Job 擁有的 Pod 自身未 ready、`restarts ≥ 3` ⇒ 轉 error
   （`init_exit='fast_fail'`，不耗額度）。#1192 上線後把 CrashLoopBackOff／initContainer 訊號接進同一判定
   （`_init_fast_fail_pod`）。

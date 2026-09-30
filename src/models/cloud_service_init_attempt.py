@@ -218,6 +218,10 @@ class CloudServiceInitAttempt(models.Model):
     claimed_at = fields.Datetime(required=True, help='DB now() (UTC) when the lease was taken')
     lease_until = fields.Datetime(required=True, help='DB clock (UTC); see INIT_LEASE_SECONDS')
     finished_at = fields.Datetime(help='Empty while in flight')
+    applied_at = fields.Datetime(
+        help='When the persisted result was applied to service-side counters/state. '
+             'Makes result-record → apply crash recovery idempotent.',
+    )
     outcome = fields.Selection(
         selection=[
             (OUTCOME_SUCCESS, 'Success'),

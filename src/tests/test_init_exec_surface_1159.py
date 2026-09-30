@@ -389,8 +389,10 @@ class _RealCursorCase(TransactionCase):
                 control = {'init_pending': True}
                 if ready_minutes_ago is not None:
                     now = service._init_db_now()
+                    queue_turn = now - timedelta(minutes=ready_minutes_ago)
                     control.update(init_ready_observed=True,
-                                   init_ready_since=now - timedelta(minutes=ready_minutes_ago))
+                                   init_ready_since=queue_turn,
+                                   init_queue_turn=queue_turn)
                 if init_type == 'n8n':
                     control.update(n8n_owner_email=f'o-{self.tag}@example.invalid',
                                    n8n_owner_password=f'pw-{self.tag}')
@@ -499,6 +501,22 @@ class TestInitCron1159(_RealCursorCase):
             done, remaining = cr.fetchone()
             cr.execute('DELETE FROM ir_cron_progress WHERE id = %s', (progress_id,))
         self.assertEqual((done, remaining), (10, 0))
+
+    def test_operator_wait_expiry_converges_without_a_client_or_ready_pod(self):
+        """D2-R：計時收尾在 queue/client 分支之前，不能被純容量排隊遮蔽。"""
+        service_id = self._add('odoo')  # no Ready observation: init cron cannot claim it
+        with self.registry.cursor() as cr:
+            svc = self._env(cr)[SVC].browse(service_id)
+            now = svc._init_db_now()
+            svc.write({
+                'init_wait_spent_seconds': 1800,
+                'init_wait_started_at': now - timedelta(seconds=60),
+                'init_retry_eligible_at': now + timedelta(seconds=60),
+            })
+        client, calls = self._recording_client()
+        self._run_cron('_cron_run_post_deploy_inits', client)
+        self.assertEqual(calls, [])
+        self.assertEqual(self._read(service_id, 'state'), 'error')
 
     def test_no_backlog_no_trigger(self):
         self._add('odoo', ready_minutes_ago=1)

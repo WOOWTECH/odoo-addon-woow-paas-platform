@@ -25,6 +25,7 @@ from ..services.woow_odoo_readiness import (
 )
 from .cloud_app_template import SupplyGateError
 from .cloud_service_init_attempt import (
+    InitOutcome,
     INIT_ATTEMPT_WORST_SECONDS,
     INIT_LEASE_SECONDS,
     LEGACY_LEASE_SECONDS,
@@ -257,7 +258,8 @@ def _reject_cs_access_identity_anchor_writes(env, vals):
 _INIT_CONTROL_FIELDS = frozenset({
     'init_pending', 'init_generation', 'init_retries', 'init_unknown_count',
     'init_attempt_seq', 'init_attempt_id', 'init_lease_until', 'init_wait_since',
-    'init_redeploy_requested', 'init_exit', 'init_error',
+    'init_wait_spent_seconds', 'init_wait_started_at', 'init_retry_eligible_at',
+    'init_queue_turn', 'init_redeploy_requested', 'init_exit', 'init_error',
     'init_ready_observed', 'init_ready_since',
 })
 
@@ -477,6 +479,8 @@ _INIT_UNKNOWN_LIMIT_PARAM = 'woow_paas_platform.init_unknown_limit'
 # Q10／Q35／Q37：等待時限，對齊 #489 容器型的 30 分；可用 param 覆寫。
 INIT_WAIT_TIMEOUT_MINUTES_DEFAULT = 30
 _INIT_WAIT_TIMEOUT_PARAM = 'woow_paas_platform.init_wait_timeout_minutes'
+# D2-R1：operator 明確回報 not_executed 後的冷卻；常數，不另開 config_parameter。
+INIT_NOT_EXECUTED_COOLDOWN_SECONDS = 60
 # Q25：停權前若在這些狀態，resume 時依欠 init 標記導回 initializing。
 _INIT_TRANSITIONAL_STATES = ('deploying', 'upgrading', 'initializing')
 # Q2：claim 撞到別人的 row lock 時不要等（等到的也只是「沒拿到」）。
@@ -800,6 +804,29 @@ class CloudService(models.Model):
         copy=False,
         help='Later of "entered initializing" and "last actually executed attempt '
              'finished"; the readiness wait timeout counts from here (#1257 Q10)',
+    )
+    # D2-R：operator readiness 的獨立累計時計。只計 not_executed 的 request wall time
+    # 與其後完整 60 秒冷卻；eligible 之後未獲 claim 的純容量排隊停止計時。
+    init_wait_spent_seconds = fields.Float(
+        string='Init Operator Wait Spent Seconds',
+        default=0,
+        copy=False,
+        help='Accumulated operator not_executed wait budget; never backfilled from history.',
+    )
+    init_wait_started_at = fields.Datetime(
+        string='Init Operator Wait Started At',
+        copy=False,
+        help='Start of the active not_executed cooldown interval (UTC).',
+    )
+    init_retry_eligible_at = fields.Datetime(
+        string='Init Retry Eligible At',
+        copy=False,
+        help='The full not_executed cooldown deadline; capacity queueing after it is free.',
+    )
+    init_queue_turn = fields.Datetime(
+        string='Init Queue Turn',
+        copy=False,
+        help='Same-init-type fair queue position; successful claims move themselves to the tail.',
     )
     # Q27：redeploy 撞到在途 lease 時登記的意圖；背景看到就停止自動重送，lease
     # 結束後先執行 redeploy。
@@ -2844,9 +2871,9 @@ class CloudService(models.Model):
     def _init_cron_queue(self):
         """init cron 的候選，依 Q33 排序：n8n 優先（Q28a），其次等待最久者。
 
-        「等待最久」＝最早觀測到 ready（``init_ready_since``），不用 model 預設的
-        ``create_date desc``（Q4：否則最舊的服務一直排在後面）。只收短 poll 觀測到
-        ready 的服務；lease 還在的不收（過期的收，入口會先收斂它）。
+        n8n 優先不變；同類依 ``init_queue_turn`` 輪替。首次 ready 以
+        ``init_ready_since`` 設第一輪位置；每次成功 claim 原子移到同類尾端，避免最早
+        ready 的服務永久佔隊首。``init_ready_since`` 本身不改，仍是 n8n owner 監控錨點。
         """
         self.flush_model()
         template_table = self.env['woow_paas_platform.cloud_app_template']._table
@@ -2862,7 +2889,7 @@ class CloudService(models.Model):
                    AND (s.init_lease_until IS NULL
                         OR s.init_lease_until <= (statement_timestamp() AT TIME ZONE 'UTC'))
                  ORDER BY (t.post_deploy_init_type = 'n8n') DESC,
-                          s.init_ready_since ASC NULLS LAST, s.id""",
+                          s.init_queue_turn ASC NULLS LAST, s.id""",
             (tuple(INIT_LEASE_SECONDS),),
         )
         return self.browse([row[0] for row in self.env.cr.fetchall()])
@@ -2884,6 +2911,9 @@ class CloudService(models.Model):
         """
         started = _init_cron_clock()
         self._cron_run_requested_redeploys()
+        # D2-R：先收 operator not_executed 時計；無 client／未 Ready 也不能逃過到期。
+        self._init_settle_operator_wait_timeouts()
+        self.env.cr.commit()
         queue = self._init_cron_queue()
         sent = 0
         backlog = False
@@ -4266,6 +4296,10 @@ class CloudService(models.Model):
                 'init_unknown_count': 0,
                 'init_exit': False,
                 'init_error': False,
+                'init_wait_spent_seconds': 0,
+                'init_wait_started_at': False,
+                'init_retry_eligible_at': False,
+                'init_queue_turn': False,
             })
 
     def _init_lease_active(self):
@@ -4406,6 +4440,8 @@ class CloudService(models.Model):
         vals = {'init_ready_observed': True, 'init_wait_since': now}
         if not self.init_ready_since:
             vals['init_ready_since'] = now
+        if not self.init_queue_turn:
+            vals['init_queue_turn'] = now
         self.sudo().write(vals)
         if newly_ready:
             # Q28a：n8n 在 owner 建立前公開可達，不讓它多等一個 cron 週期。
@@ -4459,6 +4495,40 @@ class CloudService(models.Model):
             pod=pod, count=restarts))
         return True
 
+    def _init_operator_wait_elapsed(self, now=None):
+        """D2-R：目前這段 not_executed cooldown 已累計的秒數（不含容量排隊）。"""
+        self.ensure_one()
+        if not self.init_wait_started_at:
+            return 0
+        now = now or self._init_db_now()
+        until = self.init_retry_eligible_at or now
+        return max(0, (min(now, until) - self.init_wait_started_at).total_seconds())
+
+    def _init_check_operator_wait_timeout(self):
+        """D2-R：不依賴 client／Ready 的 operator readiness 預算收尾。"""
+        self.ensure_one()
+        if (self.state != 'initializing' or self._init_lease_active()
+                or not self.init_wait_started_at):
+            return False
+        spent = (self.init_wait_spent_seconds or 0) + self._init_operator_wait_elapsed()
+        if spent < self._init_wait_timeout_minutes() * 60:
+            return False
+        self._init_to_error('wait_timeout', _(
+            'The operator kept reporting that initialization was not executed for '
+            '%(minutes)s minutes.', minutes=self._init_wait_timeout_minutes()))
+        return True
+
+    @api.model
+    def _init_settle_operator_wait_timeouts(self):
+        """Cron-wide expiry sweep: a missing client or Ready observation cannot hide expiry."""
+        services = self.sudo().search([
+            ('state', '=', 'initializing'),
+            ('init_wait_started_at', '!=', False),
+            ('init_lease_until', '=', False),
+        ])
+        for service in services:
+            service._init_check_operator_wait_timeout()
+
     def _init_check_wait_timeout(self):
         """Q10：等待時限到期 → error，**不耗額度**。回傳是否已轉 error。
 
@@ -4489,6 +4559,11 @@ class CloudService(models.Model):
         """
         self.ensure_one()
         cr = self.env.cr
+        # Recover a result that committed before its worker crashed before lease expiry
+        # can release it; this is the durable half of D2-R accounting.
+        if self._init_recover_recorded_attempt():
+            cr.commit()
+            return
         rows = self._init_guarded(
             f"""SELECT init_attempt_id, COALESCE(init_generation, 0)
                   FROM {self._table}
@@ -4547,19 +4622,44 @@ class CloudService(models.Model):
         """Q2：單一條件式 UPDATE 取得 lease，插入 attempt，**在呼叫 operator 之前 commit**。"""
         self.ensure_one()
         cr = self.env.cr
+        wait_budget_seconds = self._init_wait_timeout_minutes() * 60
+        # The WHERE is the authoritative claim decision. It re-checks the current Ready
+        # observation, cooldown eligibility, and the accumulated budget in the same UPDATE
+        # that takes the lease, so a stale queue snapshot cannot dispatch after a concurrent
+        # not-ready observation or timeout.
         rows = self._init_guarded(
             f"""UPDATE {self._table}
                    SET init_lease_until = (statement_timestamp() AT TIME ZONE 'UTC')
                                           + make_interval(secs => %s),
-                       init_attempt_seq = COALESCE(init_attempt_seq, 0) + 1
+                       init_attempt_seq = COALESCE(init_attempt_seq, 0) + 1,
+                       init_queue_turn = (statement_timestamp() AT TIME ZONE 'UTC'),
+                       init_wait_spent_seconds = COALESCE(init_wait_spent_seconds, 0)
+                           + CASE WHEN init_wait_started_at IS NULL THEN 0 ELSE GREATEST(0,
+                               EXTRACT(EPOCH FROM (LEAST(
+                                   (statement_timestamp() AT TIME ZONE 'UTC'),
+                                   COALESCE(init_retry_eligible_at,
+                                            (statement_timestamp() AT TIME ZONE 'UTC')))
+                                   - init_wait_started_at))) END,
+                       init_wait_started_at = NULL,
+                       init_retry_eligible_at = NULL
                  WHERE id = %s
                    AND state = 'initializing'
                    AND init_pending
+                   AND init_ready_observed
                    AND NOT COALESCE(init_redeploy_requested, FALSE)
                    AND init_lease_until IS NULL
+                   AND (init_retry_eligible_at IS NULL
+                        OR init_retry_eligible_at <= (statement_timestamp() AT TIME ZONE 'UTC'))
+                   AND COALESCE(init_wait_spent_seconds, 0)
+                       + CASE WHEN init_wait_started_at IS NULL THEN 0 ELSE GREATEST(0,
+                           EXTRACT(EPOCH FROM (LEAST(
+                               (statement_timestamp() AT TIME ZONE 'UTC'),
+                               COALESCE(init_retry_eligible_at,
+                                        (statement_timestamp() AT TIME ZONE 'UTC')))
+                               - init_wait_started_at))) END < %s
              RETURNING init_attempt_seq, COALESCE(init_generation, 0), init_lease_until,
                        (statement_timestamp() AT TIME ZONE 'UTC')""",
-            (INIT_LEASE_SECONDS[init_type], self.id),
+            (INIT_LEASE_SECONDS[init_type], self.id, wait_budget_seconds),
         )
         if not rows:
             return None
@@ -4578,7 +4678,9 @@ class CloudService(models.Model):
             (attempt.id, self.id),
         )
         self.invalidate_recordset([
-            'init_lease_until', 'init_attempt_seq', 'init_attempt_id'])
+            'init_lease_until', 'init_attempt_seq', 'init_attempt_id',
+            'init_wait_spent_seconds', 'init_wait_started_at', 'init_retry_eligible_at',
+            'init_queue_turn'])
         cr.commit()
         return attempt
 
@@ -4615,6 +4717,25 @@ class CloudService(models.Model):
         except Exception as exc:  # 交給分類（Q3）
             return None, exc
 
+    def _init_recover_recorded_attempt(self):
+        """Finish a result-recorded attempt exactly once after a worker crash.
+
+        The attempt result commits before service accounting. ``applied_at`` is written in
+        the same transaction as the accounting, so a restart can safely replay this narrow
+        second half without re-sending the operator request or double-counting time/quota.
+        """
+        self.ensure_one()
+        attempt = self.sudo().init_attempt_id.sudo()
+        if not attempt or not attempt.finished_at or not attempt.outcome or attempt.applied_at:
+            return False
+        outcome = InitOutcome(
+            attempt.outcome,
+            error_step=attempt.error_step or None,
+            error_kind=attempt.error_kind or None,
+            message=attempt.error or None,
+        )
+        return self._init_apply_outcome(attempt, outcome, attempt.error or False)
+
     def _run_post_deploy_init(self, client):
         """post-deploy init 的**唯一**執行入口（#1257）：收斂 lease → claim → operator
         → 先寫 attempt → CAS 套到服務。
@@ -4636,7 +4757,12 @@ class CloudService(models.Model):
         cr = self.env.cr
         # 呼叫端先前的寫入先落地，claim 在新的 snapshot 上做。
         cr.commit()
+        # D2-R：先補套已持久化但尚未套用的結果；不可再送 remote init。
+        if self._init_recover_recorded_attempt():
+            cr.commit()
+            return False
         self._init_settle_expired_lease()
+        self._init_check_operator_wait_timeout()
         if not self._init_ready_to_claim():
             cr.commit()
             return False
@@ -4743,11 +4869,14 @@ class CloudService(models.Model):
             cr.commit()
         except Exception:
             cr.rollback()
+            # The result record already committed. Keep its lease pointer so the next
+            # cron transaction can recover the narrow apply half; releasing it here
+            # would discard the only idempotency anchor and silently lose D2-R time.
             _logger.exception(
                 "[#1257] local bookkeeping error applying init attempt %s of service "
-                "%s (outcome=%s)", attempt.id, self.id, outcome.outcome,
+                "%s (outcome=%s); keeping it for recovery", attempt.id, self.id,
+                outcome.outcome,
             )
-            self._init_release_unapplied(attempt.id, 'apply failed')
             cr.commit()
             return
         if applied and outcome.outcome == OUTCOME_SUCCESS and attempt.init_type == 'n8n':
@@ -4768,6 +4897,8 @@ class CloudService(models.Model):
           可能仍在跑，lease 留到到期。
         """
         self.ensure_one()
+        if attempt.applied_at:
+            return False
         cr = self.env.cr
         rows = None
         for _try in range(self._INIT_CAS_TRIES):
@@ -4804,6 +4935,10 @@ class CloudService(models.Model):
                 'init_unknown_count': 0,
                 'init_exit': False,
                 'init_error': False,
+                'init_wait_spent_seconds': 0,
+                'init_wait_started_at': False,
+                'init_retry_eligible_at': False,
+                'init_queue_turn': False,
             })
             if outcome.api_key:
                 # 在列鎖下再寫一次：前一步的保底寫入若撞鎖失敗，這裡仍會落地。
@@ -4830,22 +4965,46 @@ class CloudService(models.Model):
                 "[#1257] %s init succeeded for service %s (attempt #%s)",
                 attempt.init_type, svc.name, attempt.sequence)
         elif kind == OUTCOME_FAILED:
+            # D2-R2：明確 failed 已證明 request 執行，重置 operator readiness wait；
+            # failed quota itself still increments in this generation.
             svc.write(dict(release, **{
                 'init_retries': (svc.init_retries or 0) + 1,
                 'init_error': masked_error,
                 'init_wait_since': attempt.finished_at,
+                'init_wait_spent_seconds': 0,
+                'init_wait_started_at': False,
+                'init_retry_eligible_at': False,
             }))
             svc._init_check_exhausted()
         elif kind in (OUTCOME_UNKNOWN, OUTCOME_PARTIAL):
-            # Q8：重送前必須等 lease 到期——lease 刻意留著，由 settle 釋放。
-            svc.write({
+            # Q8：重送前必須等 lease 到期——lease 刻意留著，由 settle 釋放。D2-R2
+            # distinguishes the two outcomes: partial proved execution and resets wait;
+            # unknown preserves the previous operator readiness budget.
+            vals = {
                 'init_unknown_count': (svc.init_unknown_count or 0) + 1,
                 'init_error': masked_error,
-                'init_wait_since': attempt.finished_at,
-            })
+            }
+            if kind == OUTCOME_PARTIAL:
+                vals.update(
+                    init_wait_spent_seconds=0,
+                    init_wait_started_at=False,
+                    init_retry_eligible_at=False,
+                )
+            svc.write(vals)
             svc._init_check_exhausted()
-        else:  # not_executed：等待，不耗額度、不動錨點
-            svc.write(dict(release, init_error=masked_error))
+        else:  # not_executed：call wall time + full cooldown，額度不動。
+            call_seconds = max(0, (attempt.finished_at - attempt.claimed_at).total_seconds())
+            svc.write(dict(release, **{
+                'init_error': masked_error,
+                'init_wait_spent_seconds': (svc.init_wait_spent_seconds or 0) + call_seconds,
+                'init_wait_started_at': attempt.finished_at,
+                'init_retry_eligible_at': attempt.finished_at + timedelta(
+                    seconds=INIT_NOT_EXECUTED_COOLDOWN_SECONDS),
+            }))
+            svc._init_check_operator_wait_timeout()
+        # Result application and this marker commit together; recovery sees either neither
+        # or both, so no outcome (especially not_executed time) can be applied twice.
+        attempt.write({'applied_at': self._init_db_now()})
         if kind != OUTCOME_SUCCESS:
             _logger.warning(
                 "[#1257] init attempt #%s for service %s: %s (step=%s)",
@@ -5954,7 +6113,14 @@ class CloudService(models.Model):
                 stack.enter_context(self.env.cr.savepoint())
             res = super().write(vals)
             if entering_init:
-                entering_vals = {'init_wait_since': self._init_db_now()}
+                entering_vals = {
+                    'init_wait_since': self._init_db_now(),
+                    # D2-R2：同代重新進 initializing（含 resume）是 operator wait 的重置邊界。
+                    'init_wait_spent_seconds': 0,
+                    'init_wait_started_at': False,
+                    'init_retry_eligible_at': False,
+                    'init_queue_turn': False,
+                }
                 for key in ('init_ready_observed', 'init_ready_since'):
                     if key not in vals:
                         entering_vals[key] = False

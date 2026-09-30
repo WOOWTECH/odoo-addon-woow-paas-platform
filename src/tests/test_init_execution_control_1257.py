@@ -285,7 +285,13 @@ class TestInitLeaseRealCursor1257(TransactionCase):
                 service = _make_service(
                     env, workspace, template, f'{init_type}-{self.tag}',
                     state='initializing')
-                service.write({'init_wait_since': service._init_db_now()})
+                now = service._init_db_now()
+                service.write({
+                    'init_wait_since': now,
+                    'init_ready_observed': True,
+                    'init_ready_since': now,
+                    'init_queue_turn': now,
+                })
                 if init_type == 'n8n':
                     service.write({'n8n_owner_email': f'owner-{self.tag}@example.invalid',
                                    'n8n_owner_password': f'pw-{self.tag}'})
@@ -340,6 +346,10 @@ class TestInitLeaseRealCursor1257(TransactionCase):
                 'init_unknown_count': svc.init_unknown_count,
                 'init_exit': svc.init_exit,
                 'lease': svc.init_lease_until,
+                'wait_spent': svc.init_wait_spent_seconds,
+                'wait_started_at': svc.init_wait_started_at,
+                'retry_eligible_at': svc.init_retry_eligible_at,
+                'queue_turn': svc.init_queue_turn,
                 'attempt': svc.init_attempt_id.id,
                 'n8n_api_key': svc.n8n_api_key,
                 'redeploy_requested': svc.init_redeploy_requested,
@@ -520,14 +530,35 @@ class TestInitLeaseRealCursor1257(TransactionCase):
         self.assertEqual((state['state'], state['init_exit']), ('error', 'failed'))
 
     def test_not_executed_consumes_no_quota(self):
+        """D2-R1：not_executed 不耗次數，但每一輪必先等完整 60 秒 cooldown。"""
         client = operator_client(init_odoo={
             'success': False, 'error_step': 'wait_ready', 'error_kind': 'not_executed'})
         for _ in range(INIT_FAILED_LIMIT + 2):
             self._entry(client)
+            self._sql("UPDATE woow_paas_platform_cloud_service SET "
+                      "init_retry_eligible_at = (statement_timestamp() AT TIME ZONE 'UTC') "
+                      "- interval '1 second' WHERE id = %s", (self.service_ids['odoo'],))
         state = self._read()
         self.assertEqual(client.init_odoo.call_count, INIT_FAILED_LIMIT + 2)
         self.assertEqual((state['state'], state['init_retries'], state['init_unknown_count']),
                          ('initializing', 0, 0))
+
+    def test_not_executed_cooldown_blocks_resend_but_capacity_queue_does_not_spend(self):
+        client = operator_client(init_odoo={
+            'success': False, 'error_step': 'wait_ready', 'error_kind': 'not_executed'})
+        self._entry(client)
+        first = self._read()
+        self.assertEqual(client.init_odoo.call_count, 1)
+        self._entry(client)
+        self.assertEqual(client.init_odoo.call_count, 1, 'full 60-second cooldown must block resend')
+        self._sql("UPDATE woow_paas_platform_cloud_service SET "
+                  "init_retry_eligible_at = (statement_timestamp() AT TIME ZONE 'UTC') "
+                  "- interval '1 second' WHERE id = %s", (self.service_ids['odoo'],))
+        before = self._read()
+        self.assertAlmostEqual(first['wait_spent'], before['wait_spent'], places=3,
+                               msg='time after eligibility is platform capacity queueing, not tenant wait')
+        self._entry(client)
+        self.assertEqual(client.init_odoo.call_count, 2)
 
     def test_entry_does_not_time_out_a_queued_service(self):
         """#1159 D2：入口只判額度。排隊等 init cron 屬平台容量排隊、不計時；等待時限
@@ -542,6 +573,13 @@ class TestInitLeaseRealCursor1257(TransactionCase):
         self.assertEqual((state['state'], state['init_exit']), ('running', False))
 
     def test_n8n_partial_stores_the_key_and_counts_as_unknown(self):
+        # D2-R2：partial 已帶回 key，證明 request 執行過；等待時計必重置，
+        # 但它仍與 unknown 共用 2 次額度與 lease 語意。
+        self._run(lambda svc: svc.write({
+            'init_wait_spent_seconds': 123,
+            'init_wait_started_at': fields.Datetime.now() - timedelta(seconds=10),
+            'init_retry_eligible_at': fields.Datetime.now() - timedelta(seconds=1),
+        }), 'n8n')
         client = operator_client(init_n8n={
             'success': False, 'api_key': _JWT, 'error_step': 'patch_secret',
             'error_kind': 'partial', 'error': f'secret patch failed for {_JWT}'})
@@ -551,6 +589,9 @@ class TestInitLeaseRealCursor1257(TransactionCase):
         self.assertEqual(state['init_unknown_count'], 1)
         self.assertEqual(state['attempts'], [(1, 'partial', True)])
         self.assertTrue(state['lease'])
+        self.assertEqual(state['wait_spent'], 0)
+        self.assertFalse(state['wait_started_at'])
+        self.assertFalse(state['retry_eligible_at'])
 
         def attempt_error(svc):
             return svc.env[ATTEMPT].search([('service_id', '=', svc.id)]).error or ''
@@ -618,8 +659,8 @@ class TestInitLeaseRealCursor1257(TransactionCase):
         self.assertEqual(state['state'], 'running')
         self.assertEqual(state['n8n_api_key'], _JWT)
 
-    def test_local_bookkeeping_error_consumes_no_quota(self):
-        """Q3：套用結果時平台自己的例外 ⇒ attempt 有結果、lease 釋放、額度不動。"""
+    def test_local_bookkeeping_error_recovers_without_double_counting(self):
+        """D2-R2：結果已落帳但套用炸掉時，保留 marker 給下一趟補套，恰好一次。"""
         client = operator_client(init_odoo={'success': False, 'error_kind': 'failed'})
         model = type(self.env[SVC])
         with patch.object(model, '_init_apply_outcome', side_effect=RuntimeError('boom')):
@@ -627,6 +668,11 @@ class TestInitLeaseRealCursor1257(TransactionCase):
         state = self._read()
         self.assertEqual(state['attempts'], [(1, 'failed', True)])
         self.assertEqual((state['init_retries'], state['init_unknown_count']), (0, 0))
+        self.assertTrue(state['lease'], 'result marker must survive for recovery')
+        self._entry(client)
+        state = self._read()
+        self.assertEqual(client.init_odoo.call_count, 1, 'recovery must not re-send remote init')
+        self.assertEqual((state['init_retries'], state['init_unknown_count']), (1, 0))
         self.assertFalse(state['lease'])
         self.assertEqual(state['state'], 'initializing')
 
@@ -641,6 +687,25 @@ class TestInitLeaseRealCursor1257(TransactionCase):
         self.assertEqual(state['attempts'], [(1, 'failed', True)])
         self.assertEqual(state['init_retries'], 0, '記帳錯誤不耗額度')
         self.assertFalse(state['lease'])
+
+    def test_claim_rechecks_current_ready_observation(self):
+        """D2-R：queue snapshot 已過時（另一 cursor 撤 Ready）時不得 dispatch。"""
+        self._sql("UPDATE woow_paas_platform_cloud_service SET init_ready_observed = FALSE "
+                  "WHERE id = %s", (self.service_ids['odoo'],))
+        client = operator_client(init_odoo={'success': True})
+        self._entry(client)
+        client.init_odoo.assert_not_called()
+        self.assertEqual(self._read()['attempts'], [])
+
+    def test_successful_claim_moves_its_same_type_queue_turn_without_rewriting_ready_anchor(self):
+        """D2-R：claim 原子移尾；n8n ready→owner 的 init_ready_since 監控錨點不變。"""
+        before = self._read()
+        attempt = self._run(lambda svc: svc._init_claim('odoo'))
+        self.assertTrue(attempt)
+        after = self._read()
+        self.assertGreater(after['queue_turn'], before['queue_turn'])
+        self.assertEqual(self._run(lambda svc: svc.init_ready_since),
+                         before['queue_turn'])
 
     def test_claim_against_a_stale_snapshot_is_not_acquired(self):
         """Q2：40001（REPEATABLE READ 下別人剛改過這列）＝沒拿到，不是失敗。"""
