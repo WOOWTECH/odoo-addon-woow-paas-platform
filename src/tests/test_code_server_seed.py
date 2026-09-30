@@ -9,7 +9,7 @@ codeServer.publicUrl 的 host 當 --trusted-origins），paas-odoo-ci code-serve
 核心守線：
 1. 只有密碼：admin_password_settable=True、沒有 admin_username_helm_path ⇒
    admin_credentials_settable=True（可 Reset 也可自設）但不能改帳號。
-2. 上架（is_hidden=False）⟹ image 雙釘 tag@sha256（目前是佔位 tag、隱藏中）。
+2. 上架（is_hidden=False）⟹ image 雙釘 tag@sha256（2026-09-30 已釘 20260930.1503 並公開）。
 3. T1 = 2 vCPU / 4 Gi / 25 Gi：min_*、plan cs_*、兩顆 PVC 加總三處一致。
 """
 import json

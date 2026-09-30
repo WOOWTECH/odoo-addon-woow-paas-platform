@@ -106,10 +106,9 @@ class TestConcealInstancesSeed(TransactionCase):
         # 為了與其他盤點測試同形）。封存守線在 test_ha_full_apporo_seed.py。
         # （pi-agent 2026-09-24 已上架＝不再 hidden，image 釘 20260924.0235@sha256。）
         # （omnigent 2026-09-29 以隱藏卡片進 seed，2026-09-30 隨 .188 公開上架＝不再 hidden。）
-        # code-server：hidden-only（曝光層）——image digest 待 paas-odoo-ci build 核可後釘上
-        # 才公開（test_code_server_seed 守「上架 ⟹ 雙釘」）；既有實例不 conceal。
+        # （code-server 2026-09-30 image 釘上 20260930.1503@sha256 後公開上架＝不再 hidden。）
         self.assertEqual(
-            set(hidden.mapped('slug')), {'ha-paas', 'ha-full-apporo', 'code-server'},
+            set(hidden.mapped('slug')), {'ha-paas', 'ha-full-apporo'},
             '隱藏 template 盤點漂移；新增的請先判定屬曝光層還是實例層')
         concealed = hidden.filtered('conceal_instances')
         self.assertEqual(
