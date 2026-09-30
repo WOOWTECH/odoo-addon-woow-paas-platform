@@ -55,16 +55,25 @@ slug allowlist），前端沒跟上。2026-07-29 stg live DB 實查的 5 個受�
 ## The pattern（三段一線）
 
 ```
-CloudAppTemplate.has_admin_gui          ← ① 能力的唯一事實源（model 欄位 + seed）
-        │
-        ├── controllers/paas.py:1293    ← ② 授權：if not service.template_id.has_admin_gui → 400
-        │
+CloudAppTemplate.admin_reset_supported  ← ① 能力的唯一事實源（compute：has_admin_gui
+        │                                  且 admin_password_carrier != app_managed；
+        │                                  推導只在 model 這一處）
+        ├── controllers/paas.py（reset endpoint）
+        │                               ← ② 授權：if not service.template_id.admin_reset_supported → 400
+        ├── cloud_service._reset_admin_password
+        │                               ← ②′ model 防線（同一欄位）
         └── _format_service() 的 template 子物件
-              'has_admin_gui': bool(...)  ← ③ payload 鏡射，**直接搬、不做任何推導**
+              'admin_reset_supported': bool(...)  ← ③ payload 鏡射，**直接搬、不做任何推導**
                      │
-                     └── ServiceDetailPage.hasAdminGui
-                           return this.service?.template?.has_admin_gui === true;   ← ④ 前端讀
+                     └── ServiceDetailPage.adminResetSupported
+                           return this.service?.template?.admin_reset_supported === true;   ← ④ 前端讀
 ```
+
+> 2026-09-29 omnigent：原本 ① 是 `has_admin_gui`。omnigent 開通時照樣供給初始密碼
+> （has_admin_gui=True），但之後密碼活在 app 自己的資料庫、平台重設不了
+> （`admin_password_carrier=app_managed`）。若按鈕仍讀 has_admin_gui，租戶按下去
+> helm upgrade 會成功、密碼卻沒變＝假裝成功。能力拆成「供給」（has_admin_gui）與
+> 「可重設」（admin_reset_supported），按鈕與授權讀後者。
 
 四個要點：
 

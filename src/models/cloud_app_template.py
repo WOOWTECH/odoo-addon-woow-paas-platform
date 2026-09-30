@@ -281,6 +281,8 @@ class CloudAppTemplate(models.Model):
              'config.json (config file inside the PVC, mcp-server family)'),
             ('helm_secret',
              'Helm Secret (managed by the chart, hermes-agent / open-design)'),
+            ('app_managed',
+             'Initial only (the app owns the password after first boot, omnigent)'),
         ],
         string='Password Carrier',
         default='config_json',
@@ -289,9 +291,35 @@ class CloudAppTemplate(models.Model):
              'decides the operator path a reset takes: config.json = a surgical '
              'read-modify-write of the config file on the PVC (preserving the '
              'connection/tools the tenant filled in); Helm Secret = a plain '
-             'helm upgrade plus rollout restart. Only meaningful on templates '
-             'with has_admin_gui=True.',
+             'helm upgrade plus rollout restart. Initial only = the platform '
+             'supplies the first password and shows it once; the app stores it '
+             'in its own database afterwards, so the platform cannot reset it '
+             '(the tenant changes it inside the app). Only meaningful on '
+             'templates with has_admin_gui=True.',
     )
+
+    # 「平台能不能重設／改這台服務的 admin 憑證」的唯一事實源：reset endpoint 的能力
+    # gate（controllers/paas.py）、model 端 _reset_admin_password 的防線、以及前端
+    # 「Admin Credentials」按鈕（payload template.admin_reset_supported 鏡射）三處都
+    # 讀它，不得各自由 has_admin_gui／carrier 重新推導（#357 C01 同一紀律）。
+    # app_managed（omnigent）：chart 只在第一次開機把 Secret 的密碼寫進 app 自己的
+    # 資料庫，之後改 Secret 不改密碼——若照 helm_secret 走 reset，helm upgrade 會成功、
+    # 密碼卻沒變＝「假裝成功」，比失敗更糟（同 config_json 誤標 helm_secret 的教訓）。
+    admin_reset_supported = fields.Boolean(
+        string='Platform Can Reset Admin Credentials',
+        compute='_compute_admin_reset_supported',
+        help='True when the platform supplies the admin credential AND stays '
+             'its authority (config.json / Helm Secret carriers). False for '
+             'apps that own the password after first boot (Initial only).',
+    )
+
+    @api.depends('has_admin_gui', 'admin_password_carrier')
+    def _compute_admin_reset_supported(self):
+        for record in self:
+            record.admin_reset_supported = bool(
+                record.has_admin_gui
+                and record.admin_password_carrier != 'app_managed'
+            )
 
     # 租戶可改的 admin 帳號：**帳號在 chart values 的哪個路徑**（點分式）。空值＝帳號由
     # chart 固定、平台不開放修改（mcp-server 家族的 admin-core GUI 帳號不是 values

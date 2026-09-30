@@ -727,7 +727,11 @@ OWL_TRANSLATED_ATTRS = {
 _OWL_LITERAL_STR_RE = re.compile(r"""\A\s*(['"])(.*)\1\s*\Z""", re.S)
 
 # 前端能力 gate 的唯一判準欄位（後端 payload 直接鏡射 template 欄位，#460 S1）。
-ADMIN_GUI_FIELD = "has_admin_gui"
+# 原本是 has_admin_gui；omnigent（admin_password_carrier=app_managed）起改成
+# admin_reset_supported：has_admin_gui 只代表「開通時供給初始密碼」，app_managed 的
+# 模板供給了卻不能重設。後端 reset gate、model 防線、前端按鈕三處都讀這個 compute
+# 欄位（它自己由 has_admin_gui ＋ carrier 推導，推導只在 model 一處）。
+ADMIN_GUI_FIELD = "admin_reset_supported"
 # 「哪顆按鈕」的 XML 端錨點：handler 名比 t-if 的 getter 名穩定（getter 可以更名，
 # 但按鈕綁的 action 更名就是改功能本身）。
 ADMIN_GUI_BUTTON_HANDLER = "resetAdminPassword"
@@ -1954,11 +1958,11 @@ def _first_line_matching(path, pattern):
 
 
 def check_admin_gui_gate_anchor(root):
-    """Reset 密碼按鈕的顯示 gate 必須（直接或經 getter）追得到 has_admin_gui。
+    """Reset 密碼按鈕的顯示 gate 必須（直接或經 getter）追得到 admin_reset_supported。
 
     check_slug_capability_gate 擋的是「已知的壞形態」；這條反過來鎖「唯一的對形態」
     ——不論 getter 叫什麼名字、判準寫成哪種樣子，只要按鈕的 t-if 鏈追不到
-    has_admin_gui 就 fail。第三個判準（category / mcp_enabled / 任何新名單）因此在
+    admin_reset_supported（ADMIN_GUI_FIELD）就 fail。第三個判準（category / mcp_enabled / 任何新名單）因此在
     review 之前就被機器攔下（#460 S2）。
 
     Fail-open：找不到按鈕（功能下架 / handler 更名）不擋——形態守線由上一條負責。

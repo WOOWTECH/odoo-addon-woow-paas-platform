@@ -350,6 +350,7 @@ from . import test_workspace_access_authz_556
 from . import test_ha_full_seed_661
 from . import test_ha_full_apporo_seed
 from . import test_pi_agent_seed
+from . import test_omnigent_seed
 # fix: #657 project_access 授權補洞 —— identity anchor 缺失 / role 缺省整道
 # 守衛被跳過 / 無 owner 列保護，與 #556 同構但刻意不在該 PR 內順手修
 # （HttpCase，group_user-only）
