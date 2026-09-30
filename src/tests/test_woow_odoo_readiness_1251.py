@@ -10,9 +10,11 @@
 ``pod_info()`` 組（#1263 交接：沒有身分 key 的手寫 Pod 配 ``pod_identity_included``
 預設 True，是真 operator 不會送出的組合）。
 """
+from datetime import timedelta
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from odoo import fields
 from odoo.tests.common import TransactionCase, tagged
 
 from ..controllers.paas import PaasController
@@ -282,3 +284,50 @@ class TestWoowOdooReadinessIdentity(TransactionCase):
         pending = [pod_info(name='svc-1251-odoo-7f9-abc', phase='Pending', ready='0/1'),
                    pod_info(name='svc-1251-postgresql-0')]
         self._assert_poll_keeps(self._status(pending, chart='odoo'))
+
+    # ------------------------------------------------------------------ #
+    #  Q45：逾時訊息的 hint                                                #
+    # ------------------------------------------------------------------ #
+
+    def _timeout_message(self, status):
+        """把錨推到 #489 門檻（容器 30 分）之外再 poll 一次，回逾時訊息。"""
+        self.service.write({
+            'state': 'deploying',
+            'deployed_at': fields.Datetime.now() - timedelta(minutes=31),
+        })
+        self._poll('cron', status)
+        self.assertEqual(self.service.state, 'error', '前置：這一輪應該逾時')
+        return self.service.error_message
+
+    def test_timeout_hints_point_at_the_actual_cause(self):
+        """新 HARD detail 各有自己的 hint，且不被 `'pods not ready'` 的通用 hint 先比中。"""
+        pods_hint = 'readiness probe'   # `'pods not ready'` 那筆 hint 的特徵字
+        cases = {
+            'chart mismatch': (
+                status_response(pods=[pod_info()],
+                                release={'status': 'deployed', 'revision': 2,
+                                         'chart': 'odoo'}),
+                ('fresh install', '#1128'),
+            ),
+            'operator lacks pod identity': (
+                self._status([_server(), _postgres()],
+                             pod_identity_included=ABSENT),
+                ('upgrade', 'paas-operator'),
+            ),
+            'required pods not ready': (
+                self._status([_server(ready='0/1'), _postgres()]),
+                (pods_hint,),
+            ),
+            'pod lookup failed': (
+                self._status([], pod_retrieval_error='pods is forbidden'),
+                ('RBAC',),
+            ),
+        }
+        for case, (status, expected) in cases.items():
+            with self.subTest(case=case):
+                msg = self._timeout_message(status)
+                self.assertIn(case, msg)
+                for needle in expected:
+                    self.assertIn(needle, msg)
+                if pods_hint not in expected:
+                    self.assertNotIn(pods_hint, msg)

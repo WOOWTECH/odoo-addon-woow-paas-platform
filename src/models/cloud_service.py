@@ -415,6 +415,15 @@ _TIMEOUT_GOVERNED_STATES = ('deploying', 'upgrading')
 # `TestTimeoutDiagnosis` 會紅——這個耦合是刻意用測試守住的，而不是靠註解。
 # 未命中時不附 hint（fail-soft：訊息仍有前綴與 detail，只是少了方向）。
 _TIMEOUT_HINTS = (
+    # #1251 Q45：woow-odoo 判定的兩種「不會自己好」的 HARD。刻意排在最前面
+    # （至少要在 'pods not ready' 之前）：先比中先用，別讓通用 hint 把方向帶偏。
+    ('chart mismatch',
+     'the release runs a different chart than the template expects — an '
+     'in-place upgrade cannot switch charts; a fresh install is required (see '
+     '#1128)'),
+    ('operator lacks pod identity',
+     'the operator does not report Pod identity (component/owner) — upgrade '
+     'paas-operator first (#1263), woow-odoo readiness fails closed without it'),
     ('pod lookup failed',
      'the operator could not list pods — check its RBAC and the API server'),
     ('no pods found',
