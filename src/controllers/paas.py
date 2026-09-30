@@ -3348,30 +3348,15 @@ class PaasController(HiddenChainMixin, Controller):
         return kept
 
     def _list_services(self, workspace: Any) -> dict[str, Any]:
-        """List all services in a workspace."""
+        """List all services in a workspace.
+
+        #1159 Q1：**純讀**——不呼叫 operator、不寫 cloud_service（含 DNS 旗標）。回的是
+        背景 poll 的最近觀測（``state``＋``observed_at``）；由觀測推進的狀態轉移只由
+        ``CloudService._cron_check_deploying_services`` 寫，DNS 旗標由背景低頻重探清除
+        （Q16）。前端 5 秒輪詢照舊，只是讀 DB。
+        """
         CloudService = request.env['woow_paas_platform.cloud_service']
 
-        services = CloudService.search([
-            ('workspace_id', '=', workspace.id),
-            ('template_id', 'not in', self._hidden_template_ids(request.env)),
-        ])
-
-        # Update status for services in transitional states
-        transitional_states = ('deploying', 'initializing', 'upgrading', 'deleting')
-        for svc in services:
-            if svc.state in transitional_states:
-                try:
-                    self._update_service_status(svc)
-                except Exception as e:
-                    _logger.warning("Failed to update status for service %s: %s", svc.name, e)
-            else:
-                # #648 (b)：見 `_get_service` 的同一段註解。走 `else` 是因為
-                # 轉移中的服務這一輪已經由 `_update_service_status` 探過 DNS 了，
-                # 再探一次是白花的阻塞。helper 自己會擋掉沒帶旗標的服務，所以
-                # 這個迴圈的成本仍然綁在「出問題的那幾台」上。
-                svc._refresh_public_url_dns_flag()
-
-        # Re-read after status updates
         services = CloudService.search([
             ('workspace_id', '=', workspace.id),
             ('template_id', 'not in', self._hidden_template_ids(request.env)),
@@ -3750,18 +3735,10 @@ class PaasController(HiddenChainMixin, Controller):
     # ConnectionPool lock contention in Odoo 18 workers=0 mode.
 
     def _get_service(self, service: Any) -> dict[str, Any]:
-        """Get service details, updating status from operator if needed."""
-        # Check if we need to poll operator for status
-        if service.state in ['deploying', 'upgrading', 'initializing']:
-            self._update_service_status(service)
+        """Get service details.
 
-        # #648 (b)：`running` **不在任何 poll 的 domain 裡**（上面那個條件、cron 的
-        # domain、前端兩個 poller 的 pendingStates 都不含它）⇒ 放行時寫下的
-        # 「Public URL 未驗證」旗標沒有任何東西會回來清掉，會變成永久噪音。
-        # 清除掛在租戶自己查看服務的這條路上；helper 只對「旗標已經是 True 的
-        # running 服務」動作，清掉之後就不再探（自我了結），而且 fail-soft。
-        service._refresh_public_url_dns_flag()
-
+        #1159 Q1：**純讀**，同 ``_list_services``。
+        """
         return {
             'success': True,
             'data': self._format_service(service, include_details=True),
@@ -3773,8 +3750,7 @@ class PaasController(HiddenChainMixin, Controller):
         # （確定失敗／結果未知）而轉 error 時放行 reconfigure，並一律開新的一代
         # ——v1 沒有 retry-init 按鈕，這是租戶唯一的出口。helm 失敗、等待逾時等
         # 其他 error 照擋（addon 讓 pod 起不來屬 upgrading 逾時，出口是 rollback）。
-        init_exhausted_error = (
-            service.state == 'error' and service.init_exit in ('failed', 'unknown'))
+        init_exhausted_error = service._init_reconfigure_exit()
         if service.state in ['pending', 'deleting'] or (
                 service.state == 'error' and not init_exhausted_error):
             return {'success': False, 'error': _('Cannot update service in %(state)s state', state=service.state)}
@@ -4172,218 +4148,6 @@ class PaasController(HiddenChainMixin, Controller):
                 return {'success': True, 'data': []}
             return {'success': False, 'error': _('Failed to get revisions: %(reason)s', reason=e.detail or e.message)}
 
-    def _update_service_status(self, service: Any) -> None:
-        """Poll operator for service status and update record.
-
-        Uses optimistic locking to prevent race conditions:
-        - Re-fetches service before updating to get latest state
-        - Only updates if service is still in expected state
-        - Skips update if state changed (another process already updated)
-        """
-        client = get_paas_operator_client(request.env)
-        if not client:
-            return
-
-        original_state = service.state
-        service_id = service.id
-
-        try:
-            status = client.get_status(
-                namespace=service.helm_namespace,
-                release_name=service.helm_release_name,
-                # #423 W5a：VM 型必須帶 include_vm。operator 未查詢時回
-                # vmis: None，而 VM 的就緒判定是 fail-closed → 漏帶會讓服務
-                # 永遠停在 deploying。
-                include_vm=service._needs_vm_status(),
-            )
-
-            release = status.get('release', {})
-
-            release_status = release.get('status', '')
-
-            # Re-fetch service to get latest state (optimistic locking)
-            CloudService = request.env['woow_paas_platform.cloud_service']
-            service = CloudService.browse(service_id)
-
-            if not service.exists():
-                _logger.debug("Service %s no longer exists, skipping status update", service_id)
-                return
-
-            # #676：poll 的**寫入**走系統身分，讀取仍走呼叫者身分。
-            #
-            # 為什麼需要：`cloud_service` 的 ir.rule 已把 write/create/unlink 收窄到
-            # workspace 的 owner/admin（`security/ir_rules.xml`）。但本函式的唯一兩個
-            # 呼叫端是 `_list_services` 與 `_get_service`，而它們所在的
-            # `action='list'` / `action='get'` 分支**沒有 role gate**（只有
-            # `workspace.check_user_access(user)`，gate 掛在 create/update/delete 分支
-            # 上）⇒ 任何成員（含 guest）都會走到這裡。
-            #
-            # 這裡寫的是 operator 回報的**叢集事實**（state / release facts /
-            # error_message），不是呼叫者的寫入意圖，所以提權不擴大使用者的控制面：
-            # 值全部來自 `client.get_status()`，呼叫者無法指定。cron 走的孿生實作
-            # `CloudService._poll_and_update_status` 本來就跑在排程身分下，本改動是
-            # 讓兩份實作在「用什麼身分寫」這件事上對齊。
-            #
-            # 🔴 不提權的話**不會有任何錯誤浮出來**：整個 try 區塊（`:3558` 起）被下面
-            # 的 `except Exception` 接住並降級成 warning log ⇒ 端點照樣回 success，
-            # 服務狀態卻永遠停在 deploying/upgrading/initializing，前台一直轉圈。
-            # 守線是 `tests/test_cloud_service_authz_676.py` 的 B 系列（斷言必須落在
-            # 「狀態有沒有推進」，落在「端點有沒有回 error」上會恆綠）。
-            #
-            # ⚠ 邊界刻意顯式且最小：只有 `sys_service` 這個名字底下的寫入被提權，
-            # 讀取（`service.state` / `service.template_id` / `service._is_release_ready`）
-            # 一律維持呼叫者身分。**不要**把下面的 `service` 全部換成 `sys_service`
-            # 圖省事——那會讓提權隱式流過整個子樹，下一個人看不出邊界在哪，也會順帶
-            # 蓋掉 `n8n_owner_password`（`groups='base.group_system'`）這類欄位級 ACL
-            # 今天實際擋著的東西。
-            sys_service = service.sudo()
-
-            # Only proceed if state hasn't changed since we started
-            if service.state != original_state:
-                _logger.debug(
-                    "Service %s state changed from %s to %s, skipping update",
-                    service_id, original_state, service.state
-                )
-                return
-
-            # #552 (a)：poll 是**唯一**抓得到「非由 Odoo 發起的 chart 變動」的路徑。
-            # 另外四條回寫都掛在平台自己觸發的操作上（首裝／redeploy／reset／
-            # reconfigure）；有人直接對叢集下 `helm upgrade`（維運手動、CD、其他
-            # 系統）時它們一條都不會跑。#552 內文「已排除的錯誤因果」記的 stg
-            # `svc-bd9d6ed3` 就是這個形態：Odoo 帳本 rev2/0.1.0、叢集 rev3/0.1.1，
-            # 而 Odoo 的 write_date 停在前一天 ⇒ 那次 upgrade 不是平台發起的。
-            #
-            # 綁成 dict 一起走，是為了讓下面**四個** write 分支不可能各自漏掉一個
-            # 欄位——新增第五個分支時也會自動跟上。
-            #
-            # #627：欄位集合本身已收斂到 model 的 `_release_facts`（**兩份 poll
-            # 實作的單一來源**）。原本這裡是一份 inline dict，而 cron 走的
-            # `CloudService._poll_and_update_status` 是另一份 —— 那一份只寫了
-            # `helm_revision`，於是「四個分支不會各漏」這件事在**本函式內**成立，
-            # 跨到另一份實作就整份漏掉。**不要把欄位寫回這裡。**
-            # #648 (b)：DNS 現況**一輪只探一次**，同時餵給就緒判定與 `_release_facts`
-            # （旗標也走那個咽喉，理由與其他 release 欄位一樣——逐 write 分支各列一次
-            # 正是 #627 的成因）。只在 release 已 `deployed` 時才探：還沒 deploy 的服務
-            # 探了也不會影響任何判定，而每次探測在 resolver 不可用時都是一段阻塞，
-            # 而平台 Odoo 是 `workers = 0` ＋ `max_cron_threads = 1`、cron 逐台序列跑。
-            dns_state = (
-                service._public_url_dns_state() if release_status == 'deployed' else None
-            )
-
-            release_facts = service._release_facts(release, dns_state=dns_state)
-
-            # Determine new state based on release status.
-            #
-            # #423 W5a：就緒判定已收斂為單一事實源
-            # ``CloudService._is_release_ready``（model 層），container 與 VM
-            # 兩種 workload 的分支都在那裡。這裡曾有一份與 model 完全同型的
-            # 複製品，導致「只修 model 層」時前台一 poll 就把還在 import 的
-            # VM 標成 running。**不要把判定邏輯搬回來。**
-            # #1251：woow-odoo 的身分判定也分流在那裡，同樣不在這裡另寫
-            # （docs/decisions/patterns/woow-odoo-readiness-identity.md）。
-            # 進度先落地（與就緒判定無關，且未就緒時才是最有用的時候）。
-            service._store_import_progress(status)
-
-            # #489：「這一輪 poll 沒能讓服務離開轉移狀態」的理由，供 age
-            # timeout 組診斷訊息（語意與判定同 model 層，見
-            # ``CloudService._check_transition_timeout``）。**兩層都要接**：
-            # 就緒判定是單一事實源，但寫 error 的動作在各自的 poll 裡——只接
-            # model 層的話，租戶打開服務詳情頁（每 5 秒一次）就會把逾時判定
-            # 蓋回 deploying。
-            stuck_detail = None
-
-            if release_status == 'deployed':
-                all_ready, detail = service._is_release_ready(status, dns_state=dns_state)
-                if not all_ready:
-                    service._log_not_ready(detail)
-                    stuck_detail = detail
-
-                if all_ready:
-                    # #1267：去向只由欠 init 標記決定，判準與 cron 那份共用
-                    # （`CloudService._next_state_when_ready`）。
-                    #
-                    # #1257（#1159 Q1 的一部分提前落地）：這條 list/get 路徑**只推進
-                    # state**、不 dispatch init。init 一律由 cron 經 model 的單一入口
-                    # `_run_post_deploy_init` 執行——claim 必須在呼叫 operator 之前
-                    # commit，而在 request 中途 commit 會把同一個 request 先前的寫入
-                    # 一起提交出去。前端 30s abort 也曾讓同步 init 長佔 request worker。
-                    next_state = service._next_state_when_ready()
-                    if next_state != original_state:
-                        # 進 initializing 時的等待錨點由 model 的 write() 集中 stamp。
-                        sys_service.write({
-                            'state': next_state,
-                            **release_facts,
-                            'error_message': False,
-                        })
-                # else: still deploying/waiting for pods
-
-            elif release_status == 'failed':
-                sys_service.write({
-                    'state': 'error',
-                    **release_facts,
-                    'error_message': release.get(
-                        'description', _('Deployment failed')),
-                })
-
-            elif service._is_timeout_governed():
-                # `pending-install` / `pending-upgrade` / `pending-rollback` /
-                # `unknown` — 狀態不動（仍在進行中），但它們同樣會永久卡：被
-                # SIGKILL 腰斬的 rollback 會把 release 留在 `pending-rollback`
-                # 而沒人再推它。納入封頂讓 age timeout 有話可說。
-                # 不加 `HARD:` 前綴的理由同 model 層：正常首裝就會撞到
-                # pending-install，升 warning 會稀釋 HARD 的語意。
-                stuck_detail = f"helm release status is {release_status or 'unknown'}"
-                service._log_not_ready(stuck_detail)
-
-            if stuck_detail:
-                # #676：`_check_transition_timeout` 逾時會 `write({'state': 'error', …})`
-                # （`models/cloud_service.py`），所以它也要走系統身分——判定用的
-                # `last_upgraded_at` 仍是從呼叫者身分讀到的同一筆記錄。
-                sys_service._check_transition_timeout(stuck_detail)
-
-        except PaaSOperatorError as e:
-            if e.status_code == 404:
-                # Release not found - might have been deleted
-                # Re-fetch to check current state
-                CloudService = request.env['woow_paas_platform.cloud_service']
-                service = CloudService.browse(service_id)
-                if service.exists() and service.state == 'deleting':
-                    # #525 B5：`CloudService.unlink()` 是多步驟 teardown（sidecar
-                    # MCP 刪除 → `super().unlink()` → 訂閱結算＋按比例退點），中途
-                    # 拋錯就留下刪一半的狀態。而這一行在 `except` handler **內**：
-                    # Python 不讓同層 sibling 的 `except Exception`（本函式末尾）
-                    # 接到它，例外直接逸出本函式，落到呼叫端
-                    # `_list_services` 的 catch-all 被吞掉 → request 正常結束 →
-                    # Odoo 照常 commit 那半套刪除，端點還回 `success: True`。
-                    #
-                    # 📌 #676 更正：呼叫端**不只** `_list_services`，還有
-                    # `_get_service`（detail 端點的 `action='get'`），而那一條
-                    # **沒有** catch-all ⇒ 同一個例外在 detail 端點上不是被吞掉、
-                    # 是直接變成 JSON-RPC error。原文寫「唯一可達的呼叫端」是漏數。
-                    # 兩個呼叫端都不帶 role gate，見下方 `sys_service` 的說明。
-                    #
-                    # 用 savepoint 而非 `cr.rollback()`：走到這裡之前，
-                    # `_list_services` 的輪詢迴圈可能已對**其他**服務寫下
-                    # `state='running'`，整個 rollback 會把它們一起撤掉（判準見
-                    # #525 留言「try 之前是否有要保留的寫入」→ 有 ⇒ 必須
-                    # savepoint）。savepoint 只回捲這一次 teardown，例外照常往外
-                    # 傳、服務留在 `deleting`，下一輪 poll 再重試。
-                    #
-                    # #676：teardown 走系統身分（同本函式主幹的 `sys_service`）。
-                    # 這裡的判定條件 `state == 'deleting'` 是**平台自己**先寫下的
-                    # （`_delete_service` 在 owner/admin gate 之後寫的），而觸發條件是
-                    # operator 回 404 ＝ release 已經不在叢集上——兩者呼叫者都影響不到，
-                    # 所以 guest 打 list 只能讓這件「cron 遲早也會做」的事早一點發生，
-                    # 不構成新的刪除通道。
-                    sys_service = service.sudo()
-                    with request.env.cr.savepoint():
-                        sys_service.unlink()
-            else:
-                _logger.warning("Error polling service status: %s", str(e))
-
-        except Exception as e:
-            _logger.warning("Error polling service status: %s", str(e))
-
     def _compute_sidecar_url_hint(self, service: Any) -> str:
         """Compute the MCP endpoint URL for a service's sidecar.
 
@@ -4452,6 +4216,16 @@ class PaasController(HiddenChainMixin, Controller):
             # 而且 ServiceDetailPage 的 `t-if="service.error_message"` 不判 state
             # ⇒ 一台健康的服務會冒出紅底錯誤。
             'public_url_dns_unverified': service.public_url_dns_unverified,
+            # #1159 Q1／Q40：list/get 只回 DB 的最近觀測。`observed_at`＝背景 poll 最近
+            # 一次拿到 operator status 的時間（UTC），前端在轉移中停太久時顯示「最後
+            # 更新 X 前」；`init_phase` 細分 initializing（不新增 state 值）。
+            'observed_at': service.observed_at.isoformat() if service.observed_at else None,
+            'init_phase': service._init_phase() or None,
+            # Q30：init 的出口與 attempt 序號（租戶看固定文案＋序號，operator 原始錯誤只在
+            # attempt 記錄）；`init_reconfigure_allowed` 與 `_update_service` 的守衛同一判準。
+            'init_exit': service.init_exit or None,
+            'init_attempt_seq': service.init_attempt_seq,
+            'init_reconfigure_allowed': service._init_reconfigure_exit(),
             'has_project': bool(service.project_ids),
             # #530：前端「Reset 會一併換發 Gateway API Key」那句文案的唯一資料入口
             # （ServiceDetailPage 的 hasGateway getter）。值＝**交付判準本體**

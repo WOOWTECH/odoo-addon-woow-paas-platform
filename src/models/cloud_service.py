@@ -3138,6 +3138,7 @@ class CloudService(models.Model):
         #423 設計審查抓到：只修其中一份，租戶只要打開前台服務詳情頁，
         controller 那份就會把還在 import 的 VM 標成 ``running``——cron 修好的
         東西被前台查詢覆寫回去。故抽成單一事實源，兩層都呼叫這裡。
+        #1159 起 list/get 純讀、controller 那份 poll 已刪除，呼叫端只剩 model 的 poll。
 
         （post-deploy-init 兩層仍各自實作，那是既存且有實質差異的另一件事，
         不在本次收斂範圍。）
@@ -3602,31 +3603,50 @@ class CloudService(models.Model):
         )
 
     def _refresh_public_url_dns_flag(self):
-        """已標記「未驗證」的 running 服務被查看時，重探一次並清旗標（#648 (b)）。
+        """已標記「未驗證」的 running 服務重探一次，DNS 落地就清旗標（#648 (b)）。
 
-        為什麼需要這條：`running` **不在任何 poll 的 domain 裡**（cron 撈
-        deploying/upgrading/initializing，前端兩個 poller 的 pendingStates 也不含
-        running）⇒ 放行時寫下的旗標沒有任何東西會回來清掉，會變成永久噪音——那比
-        不警告更糟。
+        為什麼需要這條：`running` **不在任何 poll 的 domain 裡** ⇒ 放行時寫下的旗標
+        沒有任何東西會回來清掉，會變成永久噪音——那比不警告更糟。
 
-        自我了結：只對「旗標已經是 True 的 running 服務」動作，清掉之後就不會再
-        探。所以成本被綁在**出問題的那幾台**上，不是每台每次。
+        #1159 Q16：原本掛在 list/get 的讀取路徑上（同步 DNS 外呼＋寫入），與 Q1 純讀
+        互斥 ⇒ 改由背景 ``_cron_reprobe_public_url_dns`` 低頻呼叫。
 
-        **fail-soft**：清旗標失敗只 log，絕不讓列表／詳情頁掛掉——為了清一個警告
-        而讓整頁 500 是本末倒置。
+        自我了結：只對「旗標已經是 True 的 running 服務」動作，清掉之後就不會再探。
+        只有探到 ``ok`` 才清；``unknown``（resolver 自己不可用）不動。
+
+        **fail-soft**：清旗標失敗只 log。
         """
         self.ensure_one()
         if not self.public_url_dns_unverified or self.state != 'running':
             return
         try:
             if self._public_url_dns_state() == 'ok':
-                # 系統身分：這發生在**租戶的讀取路徑**上，用租戶身分寫技術欄位
-                # 會撞 ACL（同 #676 controller 那條 `sys_service` 的理由）。
                 self.sudo().write({'public_url_dns_unverified': False})
         except Exception as exc:          # noqa: BLE001 —— 見 docstring
             _logger.warning(
                 "Could not refresh the public-URL DNS flag for service %s "
                 "(id=%s): %s", self.name, self.id, exc)
+
+    @api.model
+    def _cron_reprobe_public_url_dns(self):
+        """#1159 Q16／D4：背景低頻重探「Public URL 未驗證」的 running 服務，每台 commit。
+
+        頻率（每 15 分）寫在 ``cloud_service_cron.xml``。旗標只是軟提示（租戶服務
+        已 running），偵測延遲 15 分可接受；每台一個回捲單位，一台失敗不影響其他台。
+        """
+        services = self.search([
+            ('state', '=', 'running'),
+            ('public_url_dns_unverified', '=', True),
+        ])
+        for service in services:
+            service_label = (service.name, service.id)
+            try:
+                service._refresh_public_url_dns_flag()
+                self.env.cr.commit()
+            except Exception:
+                self.env.cr.rollback()
+                _logger.exception(
+                    "[#1159] DNS re-probe failed for service %s (id=%s)", *service_label)
 
     def _timeout_diagnosis(self, detail):
         """把就緒判定的 ``detail`` 翻成「維運該往哪查」的一句話。
@@ -3970,8 +3990,9 @@ class CloudService(models.Model):
             self.sudo().write({'import_progress': progress or False})
 
     def _release_facts(self, release, dns_state=None):
-        """operator 回報的 release 事實 → 帳本回寫欄位。**兩份 poll 的單一來源。**
+        """operator 回報的 release 事實 → 帳本回寫欄位。**所有寫入者的單一來源。**
 
+        （#1159 起 list/get 純讀、controller 那份 poll 已刪除；以下是 #627 當時的背景。）
         #627：poll 有**兩份實作** —— `PaasController._update_service_status`
         （租戶打 list／detail 端點時走）與本模組的 `_poll_and_update_status`
         （**cron** 走）。原本兩份各自組自己的 write vals，結果 controller 那份
@@ -4331,6 +4352,38 @@ class CloudService(models.Model):
             'The initialization result could not be confirmed %(count)s times '
             '(attempt #%(seq)s). Please contact support.',
             count=self.init_unknown_count, seq=self.init_attempt_seq)
+
+    def _init_phase(self):
+        """Q40：initializing 的細分（不新增 state 值）；非 initializing 回 False。
+
+        - ``running``：lease 在途且那次 attempt 還沒結束（含 migration 的合成 legacy）。
+        - ``waiting_ready``：背景還沒觀測到 pods ready。
+        - ``retrying``：本代已有確定失敗或結果未知（含 unknown 之後刻意留到到期的 lease）。
+        - ``queued``：pods ready，排在 init cron 的佇列裡。
+
+        只讀：list/get 呼叫它（#1159 Q1 純讀）。
+        """
+        self.ensure_one()
+        if self.state != 'initializing':
+            return False
+        if self._init_lease_active():
+            attempt = self.sudo().init_attempt_id
+            if attempt and not attempt.finished_at:
+                return 'running'
+        if not self.init_ready_observed:
+            return 'waiting_ready'
+        if self.init_retries or self.init_unknown_count:
+            return 'retrying'
+        return 'queued'
+
+    def _init_reconfigure_exit(self):
+        """#1159 Q30：這個 error 是不是 init 的**額度出口**（租戶唯一的出口是 reconfigure）。
+
+        只有確定失敗／結果未知的額度用完才是；helm 失敗、等待逾時、fast-fail（D1）都不是。
+        controller 的 reconfigure 守衛與前端按鈕讀同一個判準。
+        """
+        self.ensure_one()
+        return self.state == 'error' and self.init_exit in ('failed', 'unknown')
 
     def _init_mark_ready_observed(self):
         """短 poll 觀測到 initializing 的 pods ready ⇒ 排進 init cron 的佇列（#1159 Q1）。

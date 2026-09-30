@@ -228,6 +228,95 @@ class TestShortPollObservation1159(_ServiceCase):
 
 
 # ====================================================================== #
+#  驗收 1：list/get 純讀                                                    #
+# ====================================================================== #
+
+_CONTROLLER_MODULE = 'odoo.addons.woow_paas_platform.controllers.paas'
+
+
+@tagged('post_install', '-at_install')
+class TestListGetPureRead1159(_ServiceCase):
+    """Q1：list/get 只回 DB 的最近觀測；不呼叫 operator、不寫 cloud_service（含 DNS 旗標）。"""
+
+    def _call(self, fn):
+        from types import SimpleNamespace
+        from ..controllers.paas import PaasController
+        model = type(self.env[SVC])
+        with patch(f'{_CONTROLLER_MODULE}.get_paas_operator_client') as factory, \
+                patch(f'{_CONTROLLER_MODULE}.request', new=SimpleNamespace(env=self.env)), \
+                patch.object(model, 'write', autospec=True,
+                             side_effect=AssertionError('list/get 不得寫入 cloud_service')) as write, \
+                patch('odoo.addons.woow_paas_platform.services.dns_probe.resolve_state',
+                      side_effect=AssertionError('list/get 不得探 DNS')):
+            result = fn(PaasController())
+        factory.assert_not_called()
+        write.assert_not_called()
+        return result
+
+    def _fleet(self):
+        observed = fields.Datetime.now() - timedelta(minutes=4)
+        services = [self._service('none', state=state) for state in (
+            'deploying', 'upgrading', 'deleting')]
+        services.append(self._service('odoo', state='initializing'))
+        running = self._service('none', state='running', subdomain=f'dns-{self.tag}')
+        running.sudo().write({'public_url_dns_unverified': True})
+        services.append(running)
+        for svc in services:
+            svc.sudo().write({'observed_at': observed})
+        return services, observed
+
+    def test_list_does_not_poll_or_write(self):
+        services, observed = self._fleet()
+        result = self._call(lambda ctrl: ctrl._list_services(self.workspace))
+        self.assertTrue(result['success'])
+        by_id = {row['id']: row for row in result['data']}
+        for svc in services:
+            self.assertEqual(by_id[svc.id]['observed_at'], observed.isoformat())
+            self.assertIn('init_phase', by_id[svc.id])
+        self.assertTrue(by_id[services[-1].id]['public_url_dns_unverified'],
+                        'DNS 旗標只由背景重探清除（Q16）')
+
+    def test_get_does_not_poll_or_write(self):
+        services, observed = self._fleet()
+        for svc in services:
+            with self.subTest(state=svc.state):
+                result = self._call(lambda ctrl: ctrl._get_service(svc))
+                self.assertTrue(result['success'])
+                self.assertEqual(result['data']['observed_at'], observed.isoformat())
+                self.assertEqual(result['data']['state'], svc.state)
+
+
+@tagged('post_install', '-at_install')
+class TestInitPhase1159(_ServiceCase):
+    """Q40：不新增 state 值；initializing 依 ``init_phase`` 細分。"""
+
+    def test_phases(self):
+        svc = self._service('odoo', state='initializing')
+        self.assertEqual(svc._init_phase(), 'waiting_ready', '還沒觀測到 ready')
+        svc.sudo().write({'init_ready_observed': True})
+        self.assertEqual(svc._init_phase(), 'queued')
+        svc.sudo().write({'init_retries': 1})
+        self.assertEqual(svc._init_phase(), 'retrying')
+        attempt = self.env[ATTEMPT].sudo().create({
+            'service_id': svc.id, 'generation': svc.init_generation, 'sequence': 2,
+            'init_type': 'odoo', 'claimed_at': fields.Datetime.now(),
+            'lease_until': fields.Datetime.now() + timedelta(minutes=20)})
+        svc.sudo().write({'init_attempt_id': attempt.id,
+                          'init_lease_until': fields.Datetime.now() + timedelta(minutes=20)})
+        self.assertEqual(svc._init_phase(), 'running')
+        attempt.write({'outcome': 'unknown', 'finished_at': fields.Datetime.now()})
+        self.assertEqual(svc._init_phase(), 'retrying',
+                         'unknown 之後 lease 刻意留到到期，租戶看到的是「重試中」')
+        svc.sudo().write({'init_ready_observed': False, 'init_lease_until': False})
+        self.assertEqual(svc._init_phase(), 'waiting_ready')
+
+    def test_no_phase_outside_initializing(self):
+        for state in ('deploying', 'running', 'error'):
+            with self.subTest(state=state):
+                self.assertFalse(self._service('odoo', state=state)._init_phase())
+
+
+# ====================================================================== #
 #  真 cursor：init cron 與短 poll（兩者都 commit）                          #
 # ====================================================================== #
 
@@ -494,3 +583,46 @@ class TestExecSurfaceRealCursor1159(_RealCursorCase):
         self.assertEqual(self._read(broken, 'state'), 'deleting', '失敗的那台留在 deleting')
         self.assertIsNone(self._read(gone, 'state'), 'release 已不在的 deleting 被 unlink')
         self.assertEqual(self._read(upgrading, 'state'), 'running')
+
+
+@tagged('post_install', '-at_install')
+class TestDnsReprobeCron1159(_RealCursorCase):
+    """Q16／D4：`public_url_dns_unverified` 改由背景低頻重探清除（list/get 純讀）。"""
+
+    def _running(self, subdomain, flagged=True):
+        sid = self._add('none', state='running', subdomain=subdomain)
+        with self.registry.cursor() as cr:
+            svc = self._env(cr)[SVC].browse(sid)
+            svc.write({'public_url_dns_unverified': flagged})
+        return sid
+
+    def test_flag_is_cleared_once_dns_resolves_and_kept_otherwise(self):
+        landed = self._running(f'landed-{self.tag}')
+        missing = self._running(f'missing-{self.tag}')
+        resolver_down = self._running(f'down-{self.tag}')
+        healthy = self._running(f'healthy-{self.tag}', flagged=False)
+        probed = []
+
+        def resolve(hostname, *args, **kwargs):
+            probed.append(hostname)
+            if hostname.startswith(f'landed-{self.tag}'):
+                return 'ok'
+            if hostname.startswith(f'down-{self.tag}'):
+                return 'unknown'
+            return 'missing'
+
+        with patch('odoo.addons.woow_paas_platform.services.dns_probe.resolve_state',
+                   side_effect=resolve):
+            self._run_cron('_cron_reprobe_public_url_dns', operator_client())
+        self.assertFalse(self._read(landed, 'public_url_dns_unverified'))
+        self.assertTrue(self._read(missing, 'public_url_dns_unverified'))
+        self.assertTrue(self._read(resolver_down, 'public_url_dns_unverified'),
+                        'resolver 不可用是平台故障，不清也不改')
+        self.assertFalse(any(h.startswith(f'healthy-{self.tag}') for h in probed),
+                         '沒帶旗標的服務不探（成本綁在出問題的那幾台）')
+
+    def test_cron_record_runs_every_fifteen_minutes(self):
+        with self.registry.cursor() as cr:
+            cron = self._env(cr).ref('woow_paas_platform.ir_cron_reprobe_public_url_dns')
+            self.assertEqual((cron.interval_number, cron.interval_type, cron.active),
+                             (15, 'minutes', True))

@@ -43,6 +43,19 @@
             <field name="interval_type">minutes</field>
             <field name="active" eval="True"/>
         </record>
+        <!-- Cron: Public URL 未驗證旗標的背景重探（#1159 Q16／D4）
+
+             list/get 純讀之後，放行時寫下的 public_url_dns_unverified 改由這裡清。
+             只探帶旗標的 running 服務；每 15 分一次（軟提示，延遲可接受）。 -->
+        <record id="ir_cron_reprobe_public_url_dns" model="ir.cron">
+            <field name="name">Cloud Service: Re-probe Public URL DNS</field>
+            <field name="model_id" ref="model_woow_paas_platform_cloud_service"/>
+            <field name="state">code</field>
+            <field name="code">model._cron_reprobe_public_url_dns()</field>
+            <field name="interval_number">15</field>
+            <field name="interval_type">minutes</field>
+            <field name="active" eval="True"/>
+        </record>
         <!-- Cron: 對帳 running 服務的 release 事實（#627 (i)）
 
              上面那條 cron 只掃轉移狀態，抓不到「非由 Odoo 發起的 chart 變動」——

@@ -150,20 +150,20 @@ test-collectability 由兩個函式——收集面／執行面。這個一對多
                      ⚠ 只比對三份副本是否相等，**不驗證清單本身完整**（漏列一個實際
                      在用的 namespace 需要對照叢集實況，屬於人的工作）。
                      依據 docs/guides/deployment/shared-cluster-paas-scope-guard.md
-19. poll-release-facts-single-source  poll 有**兩份實作**（cron 走
-                     src/models/cloud_service.py 的 `_poll_and_update_status`、租戶打
-                     端點走 src/controllers/paas.py 的 `_update_service_status`），
-                     帳本回寫的欄位集合必須來自同一個 producer `_release_facts`：兩份
-                     都要呼叫它，且兩份內都不得再把 helm_revision／helm_chart_version
-                     當 dict 字面鍵列出。#627 的形態：兩份各自組 write vals，controller
-                     那份寫了 chart_version、cron 那份沒寫，而唯一斷言「release_facts
-                     必須到得了每個 write 分支」的測試**整份只驅動 controller** ⇒ cron
-                     那份整份沒回寫也全綠，#552 層① 的第五條回寫路徑在無人值守時失效，
-                     stg 實地漂移 3 天零告警。**同一功能有兩份實作時，覆蓋率要問的是
-                     「每一份都被驅動了嗎」。**
-                     ⚠ 只守**結構**（單一 producer 沒被繞過），不驗證兩份跑出來的值
-                     相同——那由 src/tests/test_poll_mirror_release_facts_627.py 的
-                     `TestBothPollImplementationsWriteTheSameFields` 實跑兩份比對。
+19. poll-release-facts-single-source  release 事實（helm_revision／
+                     helm_chart_version／last_release_sync_at）的寫入者——背景 poll
+                     src/models/cloud_service.py 的 `_poll_and_update_status` 與每日對帳
+                     cron——必須經由同一個 producer `_release_facts`，且不得把那些欄位
+                     當 dict 字面鍵列出。#627 的形態：poll 曾有兩份實作（另一份是
+                     controller 的 `_update_service_status`）各自組 write vals，
+                     controller 那份寫了 chart_version、cron 那份沒寫，而唯一的測試
+                     **整份只驅動 controller** ⇒ cron 那份整份沒回寫也全綠，stg 實地漂移
+                     3 天零告警。**同一功能有兩份實作時，覆蓋率要問的是「每一份都被驅動
+                     了嗎」。** #1159 起 list/get 純讀、controller 那份已刪除；判準 6
+                     機械守住 `_list_services`／`_get_service` 不再呼叫 operator、不寫
+                     入、不探 DNS——第二份 poll 不得長回來。
+                     ⚠ 只守**結構**（單一 producer 沒被繞過），不驗證回寫的值對不對——
+                     那由 src/tests/test_poll_mirror_release_facts_627.py 實跑驗證。
                      形態層擋「結構已退化但還沒漂」，行為層擋「改個寫法繞過形態判準」。
                      依據 docs/tracking/pitfalls/reaped-since-single-path-stamp-gc-immunity.md
 20. doc-symbol-anchor  docs/decisions/patterns/** 與 docs/tracking/pitfalls/**
@@ -3475,14 +3475,25 @@ def _registry_diff(violations, actual, registered, what, fix, extra="", reverse=
             % (rel, what, PATTERN_DOC_DIR, PATTERN_REGISTRY_DOC))
 
 
-#: #627：poll 有兩份實作，帳本回寫的欄位集合必須來自同一個 producer。
+#: #627：帳本回寫的欄位集合必須來自同一個 producer。#1159 起 poll 只剩 model 一份；
+#: controller 仍在監看範圍內，由判準 6 守 list/get 純讀。
 POLL_MODEL_FILE = "src/models/cloud_service.py"
 POLL_CONTROLLER_FILE = "src/controllers/paas.py"
 POLL_RELEASE_FACTS_FILES = (POLL_MODEL_FILE, POLL_CONTROLLER_FILE)
-#: (檔案, 函式名)：兩份 **poll** 實作的進入點——它們會做狀態轉移，故受判準 3／4 管。
+#: (檔案, 函式名)：**poll** 實作的進入點——它會做狀態轉移，故受判準 3／4 管。
 _POLL_IMPLEMENTATIONS = (
     (POLL_MODEL_FILE, "_poll_and_update_status"),
-    (POLL_CONTROLLER_FILE, "_update_service_status"),
+)
+#: #1159 判準 6：這兩個 controller 讀端點必須純讀（Q1）。
+_PURE_READ_ENDPOINTS = (
+    (POLL_CONTROLLER_FILE, "_list_services"),
+    (POLL_CONTROLLER_FILE, "_get_service"),
+)
+#: 判準 6 的禁用呼叫：取 operator client、任何 poll／探測、任何寫入。
+_PURE_READ_FORBIDDEN_CALLS = (
+    "get_paas_operator_client", "get_status", "_poll_and_update_status",
+    "_update_service_status", "_refresh_public_url_dns_flag",
+    "_public_url_dns_state", "write", "create", "unlink", "sudo",
 )
 #: #627 (i)：對帳 cron 是**第三個** release 事實寫入者。它受判準 1／2 管（必須經由
 #: producer、不得列字面鍵），另外受**判準 5** 管：它絕不可以寫 `state`。
@@ -3499,16 +3510,17 @@ _RELEASE_FACTS_PRODUCER = "_release_facts"
 def check_poll_release_facts_single_source(root):
     """release 事實的寫入必須經由單一 producer，且逐分支帶到（#627）。
 
-    #627 的形態：poll 有**兩份實作** —— `PaasController._update_service_status`
+    #627 的形態：poll 曾有**兩份實作** —— `PaasController._update_service_status`
     （租戶打端點時走）與 `CloudService._poll_and_update_status`（**cron** 走）。
     兩份各自組自己的 write vals，於是 controller 那份寫了 `helm_chart_version`、
     cron 那份只寫 `helm_revision`。而唯一斷言「`release_facts` 必須到得了每個 write
     分支」的測試**整份只驅動 controller** ⇒ cron 那份整份沒回寫也全綠，#552 層① 的
-    第五條回寫路徑在無人值守時失效，stg 實地漂移 3 天無告警。
+    第五條回寫路徑在無人值守時失效，stg 實地漂移 3 天無告警。#1159 起 list/get 純讀，
+    controller 那份刪除，poll 只剩 model 一份（判準 6 守它不長回來）。
 
-    ## 五條判準
+    ## 六條判準
 
-    1. **每個寫入者都要呼叫 `_release_facts`**（兩份 poll ＋ #627 (i) 的對帳 cron）。
+    1. **每個寫入者都要呼叫 `_release_facts`**（poll ＋ #627 (i) 的對帳 cron）。
        沒呼叫＝自己組 vals，收斂被繞過。
     2. **任何寫入者內都不得出現 release 事實欄位當 dict 字面鍵**。出現＝逐路徑列欄位
        的寫法回來了，正是 #627 的成因。
@@ -3524,6 +3536,11 @@ def check_poll_release_facts_single_source(root):
     5. **對帳 cron 不得寫 `state`。** 那條 cron 的核心安全性質就是「只對帳、不推狀態
        機」——對 running 服務跑狀態轉移，叢集一時不健康就會把租戶服務打成 `error`，
        而 error 沒有任何路徑會自己 poll 回來。這條把那個性質變成機械強制。
+    6. **list/get 純讀（#1159 Q1）。** `PaasController._list_services`／`_get_service`
+       本體內不得呼叫 `_PURE_READ_FORBIDDEN_CALLS`（取 operator client、poll、DNS 探測、
+       write／create／unlink／sudo）。它們回的是背景 poll 的最近觀測；在 request 裡
+       poll 就是長回第二份 poll（#627 的形態），在 request 裡寫入則讓每個開著服務頁的
+       分頁都成為狀態機的寫入者。只看本體（helper 內的呼叫看不見，同判準 3 的邊界）。
 
     ## 例外機制：**刻意不提供**
 
@@ -3542,7 +3559,7 @@ def check_poll_release_facts_single_source(root):
     - 只守**結構**，不驗證 `_release_facts` 回傳的內容對不對、也不驗證各實作跑出來的
       值相同——那是行為層的事，由
       `src/tests/test_poll_mirror_release_facts_627.py` 的
-      `TestBothPollImplementationsWriteTheSameFields` 實跑比對。
+      `TestPollWritesEveryReleaseFact` 實跑驗證（#1159 前是兩份實作的比對）。
       形態層擋「結構已退化但還沒漂」，行為層擋「改個寫法繞過形態判準」。
 
     🔴 fail-loud：檔案讀不到、parse 不了、找不到目標函式，一律當違規。靜默
@@ -3552,7 +3569,7 @@ def check_poll_release_facts_single_source(root):
     producer_seen = False
     trees = {}
 
-    for rel in dict.fromkeys(f for f, _ in _RELEASE_FACT_WRITERS):
+    for rel in dict.fromkeys(f for f, _ in _RELEASE_FACT_WRITERS + _PURE_READ_ENDPOINTS):
         try:
             with open(os.path.join(root, rel), encoding="utf-8") as f:
                 trees[rel] = ast.parse(f.read())
@@ -3644,6 +3661,27 @@ def check_poll_release_facts_single_source(root):
                     "否則那條分支就是下一個 #627（v1 的判準只看函式層，刪掉單一分支的"
                     "展開不會紅，實測確認過）"
                     % (rel, func_name, getattr(dict_node, "lineno", -1)))
+
+    # 判準 6：list/get 純讀（#1159 Q1）
+    for rel, func_name in _PURE_READ_ENDPOINTS:
+        target = _find(rel, func_name)
+        if target is None:
+            violations.append(
+                "%s：找不到 list/get 端點 `%s`——判準 6 失去目標與「沒有違規」的輸出一樣"
+                " ⇒ 當違規處理。改名請一併更新 `_PURE_READ_ENDPOINTS`（#1159）"
+                % (rel, func_name))
+            continue
+        for node in ast.walk(target):
+            if not isinstance(node, ast.Call):
+                continue
+            name = (node.func.attr if isinstance(node.func, ast.Attribute)
+                    else node.func.id if isinstance(node.func, ast.Name) else None)
+            if name in _PURE_READ_FORBIDDEN_CALLS:
+                violations.append(
+                    "%s::%s 第 %d 行呼叫了 `%s`——list/get 必須純讀（#1159 Q1）：只回背景"
+                    " poll 的最近觀測（state＋observed_at），不呼叫 operator、不寫入、不探"
+                    " DNS。狀態轉移只由 `_cron_check_deploying_services` 寫，DNS 旗標由背景"
+                    "重探清除" % (rel, func_name, getattr(node, "lineno", -1), name))
 
     # 判準 5：對帳 cron 不得推狀態機
     rel, func_name = _RECONCILE_IMPLEMENTATION

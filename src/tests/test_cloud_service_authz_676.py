@@ -39,32 +39,17 @@ fixture 的 W1 刻意掛滿 owner/admin/user/guest 四列，少了 admin 那一�
 gate（`paas.py:1410` / `:1456` / `:1464`）今天都已經是 owner/admin，全 repo 沒有
 任何端點給 role=user 對 cloud_service 的寫入權 ⇒ 放寬 ORM 層會讓它比 UI 更鬆。
 
-## B 系列在守什麼（沒有它們，這個修復會靜默打壞讀取端點）
+## B 系列在守什麼
 
-`_update_service_status` 的 `write` 與 `unlink`（#1257 起它只推進 state、不再
-dispatch init，下游的 init 寫入已移到 cron），**只被兩個讀取端點呼叫**：`_list_services`（list）
-與 `_get_service`（get）。兩者的分支都只有 `check_user_access(user)`、**無
-required_role**（gate 只掛在 create/update/delete 分支上），recordset 也非 sudo。
-⇒ 只收窄 rule、不動 poll 的話，**兩條路徑都是靜默失敗**：
+#676 當時：`_list_services`／`_get_service`（無 role gate，guest 也走得到）會在
+request 裡 poll operator 並寫入 state，收窄 ir.rule 之後那些寫入必須改系統身分，否則
+端點照回 success、狀態永遠停在轉移中（靜默失敗）。B1/B2/B3 守的是那條修法。
 
-`_update_service_status` 自己最外層就有 `except Exception`（`paas.py`，try 從
-`client.get_status()` 起、涵蓋每一處寫入），AccessError 在那裡就被降級成 warning log
-⇒ **端點照樣回 success**，服務狀態卻永遠停在 deploying / upgrading / initializing。
-沒有 500、沒有錯誤訊息、前台只是一直轉圈。
-
-📌 這一段在中間狀態的實測中被修正過：原本以為 `_get_service` 沒有自己的
-try/except ⇒ AccessError 會逸出成 JSON-RPC error，所以兩條路徑「一條炸、一條靜默」。
-實測 B1 的失敗是 `'deploying' != 'running'`——`_assert_ok` **先通過了**。上游那個
-catch-all 讓 detail 端點也是靜默的。⇒ 斷言一律落在「狀態有沒有推進」；落在「端點有沒有
-回 error」上的話，B1 與 B2 兩條都會恆綠。
-
-B1 與 B2 因此測的是同一種**失敗模式**，但驅動的是**不同呼叫鏈**（`_get_service` 單筆
-／`_list_services` 迴圈），兩條都要留——同一功能有兩份呼叫路徑時，覆蓋率要問的是
-「每一條都被驅動了嗎」（#627 的教訓）。
-
-修法是 poll 的**寫入**改系統身分（`sys_service`，見 `paas.py` 的 `#676` 註解）。
-B1/B2/B3 是那條修法的守線：它們必須在「只收窄 rule、還沒改 sudo」的中間狀態下
-**是紅的**，那是唯一能證明這條回歸真的被守住的方法。
+#1159 起 list/get **純讀**（Q1）：request 裡不再 poll、不再寫入，由觀測推進的狀態轉移
+只由背景 cron 以排程身分寫。原本的回歸（「guest 讀取時寫入被 rule 擋下」）在結構上已
+不可能發生，B 系列改守新的不變式：guest 打 list/get 仍然成功、**不呼叫 operator**、
+**不推進 state**，回應帶背景的最近觀測 `observed_at`。走真 HTTP RPC，確保是實際端點
+（不是直呼 method）沒有寫入。
 
 ## TDD 紀律（照抄 #556 / #658）
 
@@ -82,8 +67,10 @@ B1/B2/B3 是那條修法的守線：它們必須在「只收窄 rule、還沒改
 """
 import json
 import uuid
+from datetime import timedelta
 from unittest.mock import MagicMock, patch
 
+from odoo import fields
 from odoo.tests import HttpCase, tagged
 
 from odoo.addons.woow_paas_platform.models.workspace_access import (
@@ -587,99 +574,46 @@ class TestInitControlFieldsWriteAuthz1257(_CloudService676Fixture):
 
 
 @tagged('post_install', '-at_install')
-class TestPollPathNotBrokenByAuthz676(_CloudService676Fixture):
-    """B 系列：收窄 rule 不得打壞讀取端點的 poll 路徑。
+class TestReadEndpointsStayPureForGuests(_CloudService676Fixture):
+    """B 系列（#1159 改寫）：guest 打 list/get 成功，但不 poll、不寫入。"""
 
-    🔴 這三條必須在「只收窄 rule、還沒把 poll 改成系統身分」的中間狀態下是**紅的**。
-    它們守的不是新功能，而是本次收窄引入的回歸。
-    """
+    def _guest_read(self, url, payload, svc):
+        self.authenticate(self.gary_login, self.gary_login)
+        with patch(f'{_CONTROLLER}.get_paas_operator_client') as factory:
+            result = self._post_json(url, payload)
+        self._assert_ok(result, 'guest 讀取服務不得失敗')
+        factory.assert_not_called()
+        svc.sudo().invalidate_recordset()
+        self.assertTrue(result['result'].get('success'), result)
+        return result['result']
 
-    def test_B1_guest_get_transitional_service_still_polls(self):
-        """guest 打 detail 端點（`action='get'`）poll 一個部署中的服務。
-
-        驅動 `_get_service` → `_update_service_status` 這條**單筆**呼叫鏈
-        （B2 驅動 `_list_services` 的迴圈那條）。
-
-        ⚠ 斷言落在「狀態有沒有推進」而不是「端點有沒有回 error」：
-        `_update_service_status` 的 catch-all 會把 AccessError 降級成 warning，
-        端點照樣回 success。中間狀態實測確認過這一點（`_assert_ok` 通過、
-        state 斷言才紅）。
-        """
+    def test_B1_guest_get_transitional_service_does_not_poll(self):
         svc = self._service(self.template, self.w1, 'Deploying 676',
                             state='deploying')
-        self.assertEqual(svc.sudo().state, 'deploying', '前提：服務必須在轉移態')
-        self.assertEqual(
-            self.template.post_deploy_init_type, 'none',
-            '前提：本條走「不需 init → running」那個 write 分支')
+        observed = fields.Datetime.now() - timedelta(minutes=2)
+        svc.sudo().write({'observed_at': observed})
+        result = self._guest_read(
+            '/api/workspaces/%d/services/%d' % (self.w1.id, svc.id),
+            {'action': 'get'}, svc)
+        self.assertEqual(svc.sudo().state, 'deploying',
+                         'get 不得推進 state（#1159 Q1：只由背景 poll 寫）')
+        self.assertEqual(result['data']['observed_at'], observed.isoformat())
 
-        self.authenticate(self.gary_login, self.gary_login)
-        with patch(f'{_CONTROLLER}.get_paas_operator_client',
-                   return_value=self._operator_client()):
-            result = self._post_json(
-                '/api/workspaces/%d/services/%d' % (self.w1.id, svc.id),
-                {'action': 'get'})
-
-        self._assert_ok(
-            result,
-            'guest 打開部署中服務的詳情頁不得失敗'
-            '（收窄 cloud_service 的寫入權之後，poll 的寫入必須走系統身分）')
-        svc.sudo().invalidate_recordset()
-        self.assertEqual(
-            svc.sudo().state, 'running',
-            'poll 必須真的把狀態推進到 running'
-            '（端點回 success 但狀態沒動＝寫入被吞掉了）')
-
-    def test_B2_guest_list_transitional_service_still_updates_state(self):
-        """guest 打 list 端點——這條守的是**靜默**失敗模式。
-
-        `_list_services` 的輪詢迴圈把 `_update_service_status` 包在
-        `except Exception` 裡並降級成 warning log ⇒ 寫入被 rule 擋下時
-        **端點照樣回 success**、只是狀態永遠不更新。斷言必須落在「狀態有沒有
-        推進」，落在「端點有沒有回 error」上會恆綠。
-        """
+    def test_B2_guest_list_transitional_service_does_not_poll(self):
         svc = self._service(self.template, self.w1, 'Deploying list 676',
                             state='deploying')
-        self.assertEqual(svc.sudo().state, 'deploying', '前提：服務必須在轉移態')
+        result = self._guest_read(
+            '/api/workspaces/%d/services' % self.w1.id, {'action': 'list'}, svc)
+        self.assertEqual(svc.sudo().state, 'deploying')
+        row = next(r for r in result['data'] if r['id'] == svc.id)
+        self.assertIn('observed_at', row)
 
-        self.authenticate(self.gary_login, self.gary_login)
-        with patch(f'{_CONTROLLER}.get_paas_operator_client',
-                   return_value=self._operator_client()):
-            result = self._post_json(
-                '/api/workspaces/%d/services' % self.w1.id, {'action': 'list'})
-
-        self._assert_ok(result, 'list 端點本來就不會因為 poll 失敗而回 error')
-        svc.sudo().invalidate_recordset()
-        self.assertEqual(
-            svc.sudo().state, 'running',
-            'poll 的寫入被擋下時 `_list_services` 會吞掉 AccessError ⇒ 端點仍回'
-            ' success、狀態卻永遠停在 deploying。這種只吞不炸的回歸沒有測試就'
-            '沒人會發現')
-
-    def test_B3_guest_get_advances_to_initializing_via_system_identity(self):
-        """涵蓋「需要 init」分支的寫入（`_update_service_status` 寫 `initializing`）。
-
-        #1257 起 list/get **不再** dispatch init（改由 cron 經 model 的單一入口
-        `_run_post_deploy_init` 執行），所以這條路徑剩下的寫入點只有
-        `state='initializing'` 那一次——它同樣必須走系統身分。
-        """
+    def test_B3_guest_get_initializing_service_reports_phase(self):
         template = self._template('tmpl-676-init', post_deploy_init_type='odoo')
-        svc = self._service(template, self.w1, 'Init 676', state='deploying')
-        self.assertEqual(svc.sudo().state, 'deploying', '前提：服務必須在轉移態')
-
-        self.authenticate(self.gary_login, self.gary_login)
-        client = self._operator_client()
-        with patch(f'{_CONTROLLER}.get_paas_operator_client',
-                   return_value=client):
-            result = self._post_json(
-                '/api/workspaces/%d/services/%d' % (self.w1.id, svc.id),
-                {'action': 'get'})
-
-        self._assert_ok(result, 'guest 打開需要 init 的部署中服務不得失敗')
-        self.assertFalse(
-            client.init_odoo.called,
-            '#1257：list/get 不得同步呼叫 operator 的 init')
-        svc.sudo().invalidate_recordset()
-        self.assertEqual(
-            svc.sudo().state, 'initializing',
-            '「需要 init」分支的 state 寫入也必須走系統身分'
-            '（寫入被 rule 擋下時會停在 deploying）')
+        svc = self._service(template, self.w1, 'Init 676', state='initializing')
+        svc.sudo().write({'init_pending': True, 'init_ready_observed': True})
+        result = self._guest_read(
+            '/api/workspaces/%d/services/%d' % (self.w1.id, svc.id),
+            {'action': 'get'}, svc)
+        self.assertEqual(svc.sudo().state, 'initializing')
+        self.assertEqual(result['data']['init_phase'], 'queued')

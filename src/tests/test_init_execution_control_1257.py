@@ -705,7 +705,7 @@ class TestInitLeaseRealCursor1257(TransactionCase):
 
 
 # ====================================================================== #
-#  驗收 6（HTTP 那半）與 list/get 不再 dispatch init                        #
+#  驗收 6（HTTP 那半）；list/get 純讀見 test_init_exec_surface_1159       #
 # ====================================================================== #
 
 class _ServiceCase(TransactionCase):
@@ -723,13 +723,6 @@ class _ServiceCase(TransactionCase):
     def _service(self, init_type='odoo', **vals):
         return _make_service(self.env, self.workspace, self.templates[init_type],
                              f'{init_type}-{uuid.uuid4().hex[:6]}', **vals)
-
-    def _poll_http(self, service, pods=None):
-        client = operator_client(get_status=status_response(pods=pods or _READY_PODS))
-        with patch(f'{_CONTROLLER_MODULE}.get_paas_operator_client', return_value=client), \
-                patch(f'{_CONTROLLER_MODULE}.request', new=SimpleNamespace(env=self.env)):
-            PaasController()._update_service_status(service)
-        return client
 
     def _poll_cron(self, service, pods=None):
         client = operator_client(get_status=status_response(pods=pods or _READY_PODS))
@@ -759,21 +752,6 @@ class _ServiceCase(TransactionCase):
 
 @tagged('post_install', '-at_install')
 class TestInitLeaseGuards1257(_ServiceCase):
-
-    def test_list_get_poll_only_advances_state(self):
-        """#1257 d：HTTP poll 推進 deploying→initializing，但不呼叫 init_odoo／init_n8n。"""
-        for init_type in ('odoo', 'n8n'):
-            with self.subTest(init_type=init_type):
-                svc = self._service(init_type)
-                client = self._poll_http(svc)
-                self.assertEqual(svc.state, 'initializing')
-                self.assertTrue(svc.init_wait_since)
-                client.init_odoo.assert_not_called()
-                client.init_n8n.assert_not_called()
-                client = self._poll_http(svc)
-                self.assertEqual(svc.state, 'initializing')
-                client.init_odoo.assert_not_called()
-                client.init_n8n.assert_not_called()
 
     def test_cron_poll_queues_for_the_init_cron(self):
         """#1159 Q4：短 poll 不執行 init，只排進獨立 init cron 的佇列。"""
@@ -899,7 +877,7 @@ class TestReconfigureRollbackOwedInit1267(_ServiceCase):
         self.assertTrue(self._reconfigure(svc, odoo_addon_ids=[addon.id])['success'])
         self.assertEqual((svc.init_pending, svc.init_generation, svc.addon_update_pending),
                          (True, generation + 1, True), '改 addon 開新一代')
-        self._poll_http(svc)
+        self._poll_cron(svc)
         self.assertEqual(svc.state, 'initializing')
         self.assertTrue(self._reconfigure(svc, odoo_addon_ids=[addon.id])['success'])
         self.assertEqual(svc.init_generation, generation + 1, '沒改 addon 不開新一代')
@@ -918,7 +896,7 @@ class TestReconfigureRollbackOwedInit1267(_ServiceCase):
         self.assertEqual(svc.state, 'upgrading')
         self.assertEqual(svc.init_generation, generation + 1)
         self.assertEqual((svc.init_retries, svc.init_unknown_count), (0, 0))
-        self._poll_http(svc)
+        self._poll_cron(svc)
         self.assertEqual(svc.state, 'initializing', 'rollback 之後被直接寫成 running')
 
     def test_rollback_of_owed_init_opens_a_new_generation(self):
@@ -957,10 +935,10 @@ class TestReconfigureRollbackOwedInit1267(_ServiceCase):
         for svc in (none_svc, done_svc):
             with self.subTest(template=svc.template_id.post_deploy_init_type):
                 self.assertTrue(self._reconfigure(svc)['success'])
-                self._poll_http(svc)
+                self._poll_cron(svc)
                 self.assertEqual(svc.state, 'running')
         self.assertTrue(self._rollback(none_svc)['success'])
-        self._poll_http(none_svc)
+        self._poll_cron(none_svc)
         self.assertEqual(none_svc.state, 'running')
 
 

@@ -14,16 +14,17 @@
 狀態覆寫回 running。所以下面 model 與 controller 兩層都測。
 
 W5a 的收斂做法是把判定抽成單一事實源 ``CloudService._is_release_ready``，
-兩層都呼叫它。#1–#6 直接測該判定，#7–#10 測兩個 controller 呼叫點確實走到
-同一條路（＝重構的驗收）。
+兩層都呼叫它。#1–#6 直接測該判定。#7–#10 原本測兩個 controller 呼叫點確實走到
+同一條路；#1159 起 list/get 純讀、controller 那份 poll 已刪除，那組測試隨之移除
+（第二份 poll 不得長回來由 repo-lint ``poll-release-facts-single-source`` 判準 6 守）。
 
 **2026-07-31 更新（F-423-1 Step 1）**：上面「容器型邏輯在 pods 為空時回 True」那句
 描述的是 W5a 當時的狀態；容器分支已經一併改成 fail-closed（#456 實錄兩筆「壞掉卻
 顯示 Running」）。連帶地，W5a 對「純 VM 的 pods 是空的」這個假設也被實測推翻——見
 下面 ``_VIRT_LAUNCHER`` 的說明。本檔因此有三類測試：VM fail-closed（W5a 原有）、
-container fail-closed（Step 1 新語意）、以及兩層 poll 的端到端鎖。
+container fail-closed（Step 1 新語意）、以及 poll 的端到端鎖。
 """
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 from odoo.tests.common import TransactionCase
 from ..models.cloud_service import _internal_provision
@@ -362,99 +363,3 @@ class TestModelPollTransitions(_Base):
         svc._poll_and_update_status(client)
 
         self.assertFalse(svc.import_progress)
-
-
-class TestControllerLayerUsesSharedDecision(_Base):
-    """#7–#10：controller 的兩個呼叫點必須走同一條判定。
-
-    這四條同時是「controller 委派 model」重構的驗收：只要有人把判定邏輯抄回
-    controller，VM 分支就會漏掉，而這些測試會紅。
-    """
-
-    def _controller(self):
-        from odoo.addons.woow_paas_platform.controllers.paas import PaasController
-        return PaasController()
-
-    def _run_update(self, svc, status_body):
-        """跑 controller 的 _update_service_status（mock 掉 operator client）。"""
-        ctrl = self._controller()
-        client = MagicMock()
-        client.get_status.return_value = status_body
-
-        module = 'odoo.addons.woow_paas_platform.controllers.paas'
-        # ⚠ 不能用 patch(f'{module}.request')：odoo 的 request 是 werkzeug
-        # LocalProxy，mock 在 __enter__ 期就會存取它而觸發
-        # "RuntimeError: object is not bound"。改用 new= 直接塞替身，
-        # 讓 mock 不去 introspect 原物件。
-        fake_request = MagicMock()
-        fake_request.env = self.env
-        with patch(f'{module}.get_paas_operator_client', return_value=client), \
-                patch(f'{module}.request', new=fake_request):
-            ctrl._update_service_status(svc)
-        return client
-
-    def test_7_controller_vm_without_vmis_stays_deploying(self):
-        """🔴 M4 守線：只修 model 層時，前台一 poll 就把 import 中的 VM
-        標成 running。這條測試就是那個回歸的探針。"""
-        svc = self._make_service('vm')
-
-        self._run_update(svc, _status(vm_included=True, vmis=[]))
-
-        self.assertEqual(svc.state, 'deploying')
-
-    def test_8_controller_sends_include_vm(self):
-        """第二個呼叫點（workspace 服務清單）與詳情頁走同一個方法——
-        旗標沒帶到的話 #7 會假綠，故直接對旗標斷言。"""
-        svc = self._make_service('vm')
-
-        client = self._run_update(svc, _status(vm_included=True, vmis=[]))
-
-        self.assertTrue(client.get_status.call_args.kwargs['include_vm'])
-
-    def test_9_controller_container_no_pods_stays_deploying(self):
-        """容器型 + 無 pod 在 **controller 層**也必須擋住（F-423-1 Step 1）。
-
-        本條原本斷言 `running`（characterization）。與 #7 同樣的理由必須在這一層
-        獨立鎖一次：只修 model 層不夠——租戶打開前台服務詳情頁，controller 那條
-        poll（每 5 秒）就會把狀態覆寫回去。#456 的誤報就是從這兩條路之一寫進
-        `running` 的。
-        """
-        svc = self._make_service('container')
-
-        self._run_update(svc, _status(pods=[]))
-
-        self.assertEqual(svc.state, 'deploying', svc.state)
-
-    def test_10_controller_vm_ready_becomes_running(self):
-        svc = self._make_service('vm')
-
-        self._run_update(svc, _status(
-            vm_included=True,
-            vmis=[{'name': 'svc-test', 'phase': 'Running', 'ready': True}],
-            pods=_VIRT_LAUNCHER,
-        ))
-
-        self.assertEqual(svc.state, 'running')
-
-    def test_controller_and_model_agree(self):
-        """兩層對同一份 status 必須給出同一個答案——單一事實源的直接斷言。"""
-        cases = [
-            _status(vm_included=True, vmis=[]),
-            _status(vm_included=True,
-                    vmis=[{'name': 'v', 'phase': 'Running', 'ready': True}]),
-            _status(vm_included=True,
-                    vmis=[{'name': 'v', 'phase': 'Running', 'ready': False}]),
-            _status(),
-        ]
-        for body in cases:
-            svc_model = self._make_service('vm')
-            svc_ctrl = self._make_service('vm')
-
-            model_ready, _ = svc_model._is_release_ready(body)
-            self._run_update(svc_ctrl, body)
-            ctrl_ready = svc_ctrl.state == 'running'
-
-            self.assertEqual(
-                model_ready, ctrl_ready,
-                f"兩層對同一份 status 判定不一致：{body}",
-            )

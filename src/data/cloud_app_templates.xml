@@ -1142,8 +1142,8 @@
 
              ⚠ **workload_type=vm**（#423 W5a Q3 拍板：顯式欄位、不從 chart 嗅探）。
              這個值一改就同時改掉三條路徑：就緒判定讀 VMI phase／Ready 而非 pod
-             （model `_poll_and_update_status` ＋ controller `_update_service_status`
-             兩層皆 fail-closed，vmis 為空**不翻 running**）、啟停走
+             （poll `_poll_and_update_status` fail-closed，vmis 為空**不翻 running**；
+             #1159 起 list/get 純讀，controller 那份 poll 已刪除）、啟停走
              `vm.runStrategy` patch 而非 replicas、以及 helm values 組裝時由
              `cloud_service.py` 依 state 注入 runStrategy。改成 container 不會報錯，
              只會讓 VM 服務在 import 途中被誤判成 running ——**靜默**。
