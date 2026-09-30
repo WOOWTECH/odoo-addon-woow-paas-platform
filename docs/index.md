@@ -4,7 +4,7 @@
 > 分類的定義與寫新檔該放哪，見 [`README.md`](README.md)。
 > 本檔由 `scripts/audit/gen-docs-index.py` 產生，數字即時算出——**不要手改**。
 
-目前共 **688** 份文件（含 `archived/` 324 份）。
+目前共 **689** 份文件（含 `archived/` 324 份）。
 
 ## 我要照步驟做一件事
 
@@ -27,7 +27,7 @@
 
 | 去哪 | 內容 | 篇數 |
 |---|---|---|
-| [`decisions/patterns/`](decisions/patterns/) | 可複用的設計 pattern（有 hook 強制閱讀） | 36 |
+| [`decisions/patterns/`](decisions/patterns/) | 可複用的設計 pattern（有 hook 強制閱讀） | 37 |
 | [`decisions/philosophy/`](decisions/philosophy/) | 整體取向 | 1 |
 | [`decisions/refactor/`](decisions/refactor/) | 重構決策 | 6 |
 | [`decisions/reviews/`](decisions/reviews/) | PR review 裁決 | 8 |

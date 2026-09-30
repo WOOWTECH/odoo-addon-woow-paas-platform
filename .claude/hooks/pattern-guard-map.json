@@ -162,6 +162,14 @@
         "docs/tracking/followups/follow-ups.md — F-DT-4 那列：同一結論 2026-06-02 就定案過，卻因為整列掛 ❌ RETRACTED 被跳過 70 天。**RETRACTED 條目記的往往正是「這件事查過了，結論跟你以為的相反」**，查重時最該讀、也最容易漏",
         ".claude/skills/deploy-stg/SKILL.md — Step 8：#665 post-check gate 驗的是**終態收斂**（版號 + `state=installed`），不是「有沒有被升」；紅燈時的處置順序是「先等並重跑 → 查 pod log 的 post-migrate → 確認 depends 傳播鏈 → 最後才跑手動 Job」"
       ]
+    },
+    {
+      "class": "woow-odoo-readiness-identity",
+      "pattern": "^src/(services/woow_odoo_readiness|tests/test_woow_odoo_readiness_[0-9]+)\\.py$",
+      "why": "woow-odoo 的就緒判定是 #1251 定案的契約（必要組 server＋PG、例行 Job 豁免白名單、其他 fail-closed、舊 operator／chart mismatch HARD），也是 #1222 D11 與 #1213 finalize 共用的判定；分流只在 `CloudService._is_release_ready`，⛔ 不在 cron／controller 另寫，⛔ 不用 template slug 分流",
+      "docs": [
+        "docs/decisions/patterns/woow-odoo-readiness-identity.md — 規則、刻意不做的事（提早收斂轉 #1222、halted 例外轉 #1213、備份新鮮度轉 #1265）、HARD detail 與 `_TIMEOUT_HINTS` 的撞名規則"
+      ]
     }
   ]
 }

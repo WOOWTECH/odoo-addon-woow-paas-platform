@@ -12,6 +12,13 @@ from odoo.exceptions import AccessError, UserError, ValidationError
 
 from ..services import dns_probe
 from ..services.naming import make_cs_access_canonical_name
+from ..services.woow_odoo_readiness import (
+    CONTRACT_MANAGED,
+    CONTRACT_MISMATCH,
+    chart_mismatch_detail,
+    woow_odoo_contract,
+    woow_odoo_ready,
+)
 from .cloud_app_template import SupplyGateError
 # #798：policy 列上 `cf_policy_id` 的唯一寫入豁免。sentinel／opener 住在 SA 那支，
 # 因為 `security_access` 在 `models/__init__.py` 早於本檔載入、且它不 import 任何
@@ -408,6 +415,27 @@ _TIMEOUT_GOVERNED_STATES = ('deploying', 'upgrading')
 # `TestTimeoutDiagnosis` 會紅——這個耦合是刻意用測試守住的，而不是靠註解。
 # 未命中時不附 hint（fail-soft：訊息仍有前綴與 detail，只是少了方向）。
 _TIMEOUT_HINTS = (
+    # #1251 Q45：woow-odoo 判定專屬的 hint。刻意排在最前面（至少要在 'pods not ready'
+    # 之前）：先比中先用，別讓通用 hint 把方向帶偏。
+    # detail 字串的撞名規則見 docs/decisions/patterns/woow-odoo-readiness-identity.md
+    ('chart mismatch',
+     'the release runs a different chart than the template expects — an '
+     'in-place upgrade cannot switch charts; a fresh install is required (see '
+     '#1128)'),
+    ('operator lacks pod identity',
+     'the operator does not report Pod identity (component/owner) — upgrade '
+     'paas-operator first (#1263), woow-odoo readiness fails closed without it'),
+    # #1251 review S2（使用者裁定，超出 Q45 字面的兩筆）：woow-odoo 最常卡住的兩種
+    # 情形。前者只擋 server 的 FailedCreate 不產 Pod，'no pods found' 蓋不到；後者若落到
+    # 'pods not ready' 會被帶去看 container log，方向錯。
+    ('required component missing',
+     "the chart's server/postgresql Pod was never created (or is not owned by "
+     'its ReplicaSet/StatefulSet) — check the ReplicaSet/StatefulSet events for '
+     'FailedCreate (namespace ResourceQuota, admission)'),
+    ('required pods not running',
+     'a required Pod exists but never reached Running — check its pod events '
+     '(scheduling, Multi-Attach, image pull); an exempt backup Job listed in '
+     'the detail may still hold the RWO data PVC'),
     ('pod lookup failed',
      'the operator could not list pods — check its RBAC and the API server'),
     ('no pods found',
@@ -2803,7 +2831,16 @@ class CloudService(models.Model):
         """
         self.ensure_one()
 
-        if self._needs_vm_status():
+        # #1251：受 woow-odoo 契約管理的 release（依實際 `release.chart`，Q17）改用
+        # Pod 身分判定取代 #1156 的通用規則；分流只在這裡，不在 cron／controller 任一邊。
+        # ⛔ 不用 template slug 分流。規則見
+        # docs/decisions/patterns/woow-odoo-readiness-identity.md
+        contract = woow_odoo_contract(status, self.template_id.helm_chart_name)
+        if contract == CONTRACT_MISMATCH:
+            return False, chart_mismatch_detail(status)
+        if contract == CONTRACT_MANAGED:
+            ready, detail = woow_odoo_ready(status)
+        elif self._needs_vm_status():
             vm_ready, detail = self._is_vm_ready(status)
             if not vm_ready:
                 return vm_ready, detail
@@ -2866,6 +2903,10 @@ class CloudService(models.Model):
 
         上述 F-423-1 只改「空陣列」；#1156 另補混合 phase：Running 的 PG 與
         Pending 的 Odoo 同時存在時，仍須維持未就緒。
+
+        woow-odoo release **不走這裡**：`_is_release_ready` 把它分流到
+        `services/woow_odoo_readiness.py`（#1251：必要組＋例行 Job 豁免＋其他
+        fail-closed），本規則對其他 chart 不變。
 
         殘餘風險與封頂：若某 chart 的 pod 不帶 ``app.kubernetes.io/instance``
         （operator 的 selector），服務會從「假就緒」變成「永久卡 deploying」。合併前

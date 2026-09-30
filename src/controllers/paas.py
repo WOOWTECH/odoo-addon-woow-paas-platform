@@ -4235,6 +4235,8 @@ class PaasController(HiddenChainMixin, Controller):
             # 兩種 workload 的分支都在那裡。這裡曾有一份與 model 完全同型的
             # 複製品，導致「只修 model 層」時前台一 poll 就把還在 import 的
             # VM 標成 running。**不要把判定邏輯搬回來。**
+            # #1251：woow-odoo 的身分判定也分流在那裡，同樣不在這裡另寫
+            # （docs/decisions/patterns/woow-odoo-readiness-identity.md）。
             # 進度先落地（與就緒判定無關，且未就緒時才是最有用的時候）。
             service._store_import_progress(status)
 
