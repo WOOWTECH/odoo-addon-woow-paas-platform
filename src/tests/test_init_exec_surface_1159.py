@@ -164,6 +164,51 @@ class TestShortPollObservation1159(_ServiceCase):
         self.assertFalse(svc.init_ready_observed)
         self.assertFalse(svc.init_ready_since)
 
+    # -- D1：#1192 fast-fail 短路 ------------------------------------------- #
+
+    def _crashing_pods(self, restarts, ready='0/1', phase='Running'):
+        return [{'name': 'app-0', 'phase': phase, 'ready': ready, 'restarts': restarts}]
+
+    def test_crash_looping_pod_short_circuits_the_wait(self):
+        svc = self._service('odoo', state='initializing')
+        self._poll(svc, pods=self._crashing_pods(3))
+        self.assertEqual((svc.state, svc.init_exit, svc.init_retries, svc.init_unknown_count),
+                         ('error', 'fast_fail', 0, 0), '短路不耗額度')
+        self.assertIn('app-0', svc.error_message)
+        self.assertTrue(svc.init_pending, '仍欠 init')
+
+    def test_fewer_restarts_keep_waiting(self):
+        svc = self._service('odoo', state='initializing')
+        self._poll(svc, pods=self._crashing_pods(2))
+        self.assertEqual(svc.state, 'initializing')
+
+    def test_restarts_on_a_ready_pod_do_not_short_circuit(self):
+        svc = self._service('odoo', state='initializing')
+        self._poll(svc, pods=self._crashing_pods(7, ready='1/1'))
+        self.assertEqual(svc.state, 'initializing')
+        self.assertTrue(svc.init_ready_observed)
+
+    def test_no_short_circuit_while_an_attempt_holds_the_lease(self):
+        svc = self._service('odoo', state='initializing')
+        svc.sudo().write({'init_lease_until': fields.Datetime.now() + timedelta(minutes=10)})
+        self._poll(svc, pods=self._crashing_pods(5))
+        self.assertEqual(svc.state, 'initializing', 'lease 在途由 lease／額度收尾')
+
+    def test_fast_fail_error_is_not_a_reconfigure_exit(self):
+        """Q30 裁定 i／D1：與 wait_timeout 同類——pods 起不來，reconfigure 照擋。"""
+        svc = self._service('odoo', state='initializing')
+        self._poll(svc, pods=self._crashing_pods(3))
+        from ..controllers.paas import PaasController
+        from types import SimpleNamespace
+        client = MagicMock()
+        with patch('odoo.addons.woow_paas_platform.controllers.paas.get_paas_operator_client',
+                   return_value=client), \
+                patch('odoo.addons.woow_paas_platform.controllers.paas.request',
+                      new=SimpleNamespace(env=self.env)):
+            result = PaasController()._update_service(svc, values={}, version=None)
+        self.assertFalse(result['success'])
+        client.upgrade_release.assert_not_called()
+
     # -- deleting 收尾（驗收 2 的單筆那半）------------------------------------ #
 
     def test_deleting_service_is_unlinked_once_the_release_is_gone(self):
