@@ -99,6 +99,15 @@ _Avoid_: Odoo 官方文件的「upgrade」（跨大版本遷移，本平台不�
 **模組升級**：DB 記錄的 marker 與目前 odoo image digest 不一致時，由升級閘觸發的 `-u all` 連同其後的驗證。觸發它的可能是一次升級，也可能是一次還原（把較舊的備份還原到現行 image）；它追平的是 stable 系列裡不 bump 版號的修補（view、data、ACL、index…），不是升級的正確性前提。
 _Avoid_: 「schema 升級」「migration」（Odoo 的 migration script 只是它的一部分）；把它與「升級」互稱
 
+**初始化**：`cloud_service` 的 pods 第一次（或在新的一代裡）就緒後，由平台背景送給 operator 的那一次 post-deploy 動作——odoo 刷新模組清單（`update_list`）、n8n 建 owner 與 API key；類型由 template 的 `post_deploy_init_type` 決定，`none` 的服務沒有初始化。它**不是**模組升級：不跑 `-u`、不看 image digest，也不由升級閘觸發。期間服務處於 `initializing`。
+_Avoid_: 「init 就是升級模組」；「post-deploy hook」（它不是 helm hook，是平台送出的 HTTP 呼叫）
+
+**欠初始化／初始化代數**：服務「還欠一次初始化」的持久標記（`init_pending`），以及它每次被重新要求時遞增的「代」（`init_generation`）。開新一代的事件：建立、改 addon、人工 redeploy、rollback、從額度用完的 error 出發的 reconfigure；resume、reset、不改 addon 的 reconfigure 不開新一代。失敗額度按代計算，只有初始化成功會清掉標記——停權與 resume 都不會。
+_Avoid_: 用 `addon_update_pending` 代稱它（那只記「上次 addon 變更還沒處理」）；「重試次數」（額度按代歸零，不是全服務累計）
+
+**結果未知**：一次初始化送出之後，平台無法判定遠端副作用有沒有發生的結果（outcome `unknown`）：exec timeout、空輸出、回應不是合法 JSON、HTTP 500、read timeout、連線中途斷、lease 到期都算。它與「確定失敗」（operator 明確回報腳本失敗）和「等待」（request 確定沒被執行，例如 pod 還沒 ready）分開計：重送前必須等 lease 到期，每代額度 2 次（n8n 帶回 key 的「部分成功」共用這個額度）。
+_Avoid_: 把它當成失敗重試（它可能其實成功了）；只看 `success` 布林判斷
+
 **跟版**：平台決定把 odoo template 的 image 追上某個較新的官方 digest，並把它推到既有 odoo `cloud_service` 的整個流程——決定、發版、波次、預告；由平台發起，Tenant 不能觸發也不能延後。節奏：core 跟版每月最多一次、每季至少一次；安全修補不受此限。
 _Avoid_: 單獨的「升級」（那是每一台服務上發生的那一次 helm upgrade）；「更新」
 
