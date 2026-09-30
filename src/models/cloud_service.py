@@ -12,6 +12,11 @@ from odoo.exceptions import AccessError, UserError, ValidationError
 
 from ..services import dns_probe
 from ..services.naming import make_cs_access_canonical_name
+from ..services.woow_odoo_readiness import (
+    CONTRACT_MANAGED,
+    woow_odoo_contract,
+    woow_odoo_ready,
+)
 from .cloud_app_template import SupplyGateError
 # #798：policy 列上 `cf_policy_id` 的唯一寫入豁免。sentinel／opener 住在 SA 那支，
 # 因為 `security_access` 在 `models/__init__.py` 早於本檔載入、且它不 import 任何
@@ -2803,7 +2808,12 @@ class CloudService(models.Model):
         """
         self.ensure_one()
 
-        if self._needs_vm_status():
+        # #1251：受 woow-odoo 契約管理的 release（依實際 `release.chart`，Q17）改用
+        # Pod 身分判定取代 #1156 的通用規則；分流只在這裡，不在 cron／controller 任一邊。
+        contract = woow_odoo_contract(status, self.template_id.helm_chart_name)
+        if contract == CONTRACT_MANAGED:
+            ready, detail = woow_odoo_ready(status)
+        elif self._needs_vm_status():
             vm_ready, detail = self._is_vm_ready(status)
             if not vm_ready:
                 return vm_ready, detail
