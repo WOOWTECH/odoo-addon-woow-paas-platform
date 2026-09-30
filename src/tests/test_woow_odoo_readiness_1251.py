@@ -15,7 +15,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from odoo import fields
-from odoo.tests.common import TransactionCase, tagged
+from odoo.tests.common import BaseCase, TransactionCase, tagged
 
 from ..controllers.paas import PaasController
 from ..models.cloud_service import _internal_provision
@@ -158,6 +158,12 @@ class TestWoowOdooReadinessIdentity(TransactionCase):
             'db-backup no task': _db_job(None, name='svc-1251-db-backup-adhoc'),
             # label 是 server，但 Job 擁有 ⇒ 不是 chart 的 web Pod（#1129 語意）。
             'server label on a Job': _server(name='svc-1251-server-job', owner_kind='Job'),
+            # 豁免同樣要身分證據對得上（Q19）：帶 backup label、卻不是 Job 擁有的 Pod
+            # 不是 chart 的 CronJob 產物，不能被靜默豁免。
+            'backup label on a ReplicaSet': _db_job(
+                'backup', name='svc-1251-fake-backup', owner_kind='ReplicaSet'),
+            'backup label on a bare Pod': _db_job(
+                'housekeeping', name='svc-1251-bare-housekeeping', owner_kind=None),
         }
         for case, outsider in outsiders.items():
             with self.subTest(case=case):
@@ -361,12 +367,18 @@ class TestWoowOdooReadinessIdentity(TransactionCase):
             self.env['woow_paas_platform.cloud_service']._cron_check_deploying_services()
 
         polled = [c.kwargs.get('release_name') for c in client.get_status.call_args_list]
-        self.assertEqual(polled, [deploying.helm_release_name])
+        # 不斷言「只 poll 了這一筆」：DB 裡可能還有別的轉移中服務（例：stg clone）。
+        self.assertIn(deploying.helm_release_name, polled)
+        self.assertNotIn(self.service.helm_release_name, polled)
         self.assertEqual(self.service.state, 'suspended')
 
 
-class TestWoowOdooContractPredicate(TransactionCase):
-    """Q17 共用判定本身（#1222 D11 分流、#1213 finalize 會直接呼叫）。"""
+@tagged('post_install', '-at_install')
+class TestWoowOdooContractPredicate(BaseCase):
+    """Q17 共用判定本身（#1222 D11 分流、#1213 finalize 會直接呼叫）。
+
+    純函式測試，基底用 ``BaseCase``（理由同 ``test_naming.py`` 檔頭，#544）。
+    """
 
     def test_chart_name_of_accepts_every_template_ref_shape(self):
         for ref in ('oci://jcr-prod.woowtech.io/woow-paas-docker-local/woow-odoo',

@@ -24,11 +24,14 @@ _REQUIRED_COMPONENTS = (
 )
 
 #: 例行 Job 豁免白名單（Q6）：chart 的兩支 CronJob 共用 component=db-backup、以
-#: ``woow.paas/task`` 區分。**不論 phase** 都不參與判定——它們綁 server 的 podAffinity，
-#: server 有問題時必要組會獨立抓到；Job 自己 Pending 是維護問題，不是服務沒起來。
-#: ``db-restore`` 刻意不在內（只該出現在 `restoring`，#1213）。
+#: ``woow.paas/task`` 區分。active 的豁免 Pod **不論 phase** 都不參與判定——它們綁
+#: server 的 podAffinity，server 有問題時必要組會獨立抓到；Job 自己 Pending 是維護問題，
+#: 不是服務沒起來。身分證據與必要組同標準（Q19）：還要是 Job 直接擁有，帶同一組 label
+#: 的 ReplicaSet／bare Pod 不是 CronJob 產物，不豁免。``db-restore`` 刻意不在內（只該
+#: 出現在 `restoring`，#1213）。
 _EXEMPT_COMPONENT = 'db-backup'
 _EXEMPT_TASKS = frozenset({'backup', 'housekeeping'})
+_EXEMPT_OWNER_KIND = 'Job'
 
 
 def chart_name_of(chart_ref):
@@ -101,6 +104,7 @@ def _is_exempt(pod):
     return (
         pod.get('component') == _EXEMPT_COMPONENT
         and pod.get('task') in _EXEMPT_TASKS
+        and pod.get('owner_kind') == _EXEMPT_OWNER_KIND
     )
 
 

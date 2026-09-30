@@ -60,9 +60,12 @@ Recreate、PG 寫死 1 副本且不可關閉，所以嚴格定義不會卡死。
 
 ### 3. 例行 Job 豁免白名單（Q6）
 
-`component=db-backup` 且 `woow.paas/task ∈ {backup, housekeeping}`：**不論 phase** 都不參與判定，
-但一律列進 detail（`exempt routine jobs: …`），讓「server Pending、旁邊正跑著備份 Job 佔著 RWO
-PVC」這類根因看得出來。
+`component=db-backup` 且 `woow.paas/task ∈ {backup, housekeeping}`，且直接 owner 是 `Job`（與必要組
+同一套身分證據，Q19；帶同一組 label 的 ReplicaSet／bare Pod 不是 CronJob 產物，照 §4 fail-closed）。
+active 的豁免 Pod **不論 phase**（Pending／Running／Unknown）都不參與判定，但列進 detail
+（`exempt routine jobs: …`），讓「server Pending、旁邊正跑著備份 Job 佔著 RWO PVC」這類根因看得出來。
+收尾中的 Pod（Succeeded／Failed／帶 deletion_timestamp）照 #1156 一開始就濾掉，不參與也不列——它們不佔
+RWO。
 
 - 豁免是安全的：兩支 Job 都用 required podAffinity 綁 server，server 缺席／不可排程／NotReady 時
   必要組會獨立抓到。
@@ -87,7 +90,8 @@ PVC」這類根因看得出來。
 ### 6. HARD 的可見性（Q45）
 
 不持久化。每輪 poll 印 warning；`deploying`／`upgrading` 超過 #489 門檻（容器 30 分）後寫進
-`error_message`，附 `_TIMEOUT_HINTS` 的方向：
+`error_message`，附 `_TIMEOUT_HINTS` 的方向。⚠ `initializing` 不受 #489 管轄（既有行為，非本票引入）：
+woow-odoo 在 `initializing` 期間遇到 HARD 只會一直印 warning，上限由 #1257／#1159 的等待時限（Q10）補上。
 
 - `chart mismatch` → fresh install（#1128）；`operator lacks pod identity` → 先升級 operator。
   兩筆**排在 `_TIMEOUT_HINTS` 最前面**（子字串比對、先比中先用）。
