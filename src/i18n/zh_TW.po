@@ -390,7 +390,7 @@ msgstr "-%s 條 exclude"
 msgid ""
 ".\n"
 "                            Skipping will:"
-msgstr ""
+msgstr "結束。略過後將會："
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -401,7 +401,7 @@ msgid ""
 "              methods. Add the matching identity provider in your\n"
 "              Cloudflare Zero Trust account, then re-save to re-apply\n"
 "              the restriction."
-msgstr ""
+msgstr "。Access 可能已改為允許所有可用的登入方式。請在你的 Cloudflare Zero Trust 帳號新增對應的身分提供者，再重新儲存以套用限制。"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -416,7 +416,7 @@ msgstr ""
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_security_access_route__session_duration__1h
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_smart_home_route__session_duration__1h
 msgid "1 hour"
-msgstr ""
+msgstr "1 小時"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -425,7 +425,7 @@ msgstr ""
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_security_access_route__session_duration__24h
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_smart_home_route__session_duration__24h
 msgid "24 hours"
-msgstr ""
+msgstr "24 小時"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -440,7 +440,7 @@ msgstr ""
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_security_access_route__session_duration__30m
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_smart_home_route__session_duration__30m
 msgid "30 minutes"
-msgstr ""
+msgstr "30 分鐘"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -449,7 +449,7 @@ msgstr ""
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_security_access_route__session_duration__168h
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_smart_home_route__session_duration__168h
 msgid "7 days"
-msgstr ""
+msgstr "7 天"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -458,7 +458,7 @@ msgstr ""
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_security_access_route__session_duration__8h
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_smart_home_route__session_duration__8h
 msgid "8 hours"
-msgstr ""
+msgstr "8 小時"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -850,7 +850,7 @@ msgstr "Access 已保護"
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/smart-home/SmartHomeDetailPage.xml:0
 msgid "Access Remotely"
-msgstr ""
+msgstr "遠端存取"
 
 #. module: woow_paas_platform
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_service__session_duration
@@ -943,7 +943,7 @@ msgstr ""
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/AddPolicyModal.xml:0
 msgid "Action"
-msgstr ""
+msgstr "動作"
 
 #. module: woow_paas_platform
 #: model:mail.template,subject:woow_paas_platform.mail_template_low_balance
@@ -1007,7 +1007,7 @@ msgstr "啟用中 · 尚無路由"
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/AddPolicyModal.xml:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/settings/AddPaymentMethodPage.xml:0
 msgid "Add"
-msgstr ""
+msgstr "新增"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -1041,13 +1041,13 @@ msgstr "新增付款方式"
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/access/AccessAppCard.xml:0
 msgid "Add Policy"
-msgstr ""
+msgstr "新增政策"
 
 #. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.xml:0
 msgid "Add Route"
-msgstr ""
+msgstr "新增路由"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -1072,7 +1072,7 @@ msgstr ""
 #: code:addons/woow_paas_platform/static/src/paas/components/smart-home/CreateSmartHomeModal.xml:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/workspace/WorkspaceDetailPage.xml:0
 msgid "Add Smart Home"
-msgstr ""
+msgstr "新增 Smart Home"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -1616,7 +1616,7 @@ msgstr ""
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_smart_home__route_ids
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_security_access_form
 msgid "Application Routes"
-msgstr ""
+msgstr "應用程式路由"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -1683,7 +1683,7 @@ msgstr ""
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/DeleteServiceModal.xml:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/smart-home/SmartHomeDetailPage.xml:0
 msgid "Are you sure you want to delete"
-msgstr ""
+msgstr "確定要刪除"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -1902,7 +1902,7 @@ msgstr ""
 #: code:addons/woow_paas_platform/static/src/paas/pages/smart-home/SmartHomeDetailPage.xml:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/workspace/WorkspaceTeamPage.xml:0
 msgid "Back to Workspace"
-msgstr ""
+msgstr "返回工作區"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -2163,7 +2163,7 @@ msgstr ""
 msgid ""
 "Bypass skips authentication entirely — identity selectors (email)\n"
 "              are not available; use IP range, country or everyone."
-msgstr ""
+msgstr "略過（Bypass）會完全跳過身分驗證——無法使用身分類條件（email）；請改用 IP 範圍、國家或所有人。"
 
 #. module: woow_paas_platform
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_service__access_app_id
@@ -2543,7 +2543,7 @@ msgstr ""
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.xml:0
 msgid "Canonical name"
-msgstr ""
+msgstr "標準名稱"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -2709,7 +2709,7 @@ msgstr "此任務尚未啟用聊天功能，請先點擊「啟用聊天」。"
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.xml:0
 msgid "Checking availability..."
-msgstr ""
+msgstr "正在檢查是否可用..."
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -3070,7 +3070,7 @@ msgstr ""
 #: code:addons/woow_paas_platform/static/src/paas/pages/empty/EmptyState.xml:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.xml:0
 msgid "Coming Soon"
-msgstr ""
+msgstr "即將推出"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -3208,7 +3208,7 @@ msgstr ""
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/smart-home/SmartHomeDetailPage.xml:0
 msgid "Configure the Tunnel"
-msgstr ""
+msgstr "設定 Tunnel"
 
 #. module: woow_paas_platform
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.res_config_settings_view_form
@@ -3282,7 +3282,7 @@ msgstr ""
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/smart-home/SmartHomeDetailPage.xml:0
 msgid "Connection Guide"
-msgstr ""
+msgstr "連線指南"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -3300,7 +3300,7 @@ msgstr "連線測試失敗：%(reason)s"
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.xml:0
 msgid "Connector"
-msgstr ""
+msgstr "連接器"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -3336,7 +3336,7 @@ msgstr "連接器類型"
 #: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.xml:0
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_security_access__connector_version
 msgid "Connector Version"
-msgstr ""
+msgstr "連接器版本"
 
 #. module: woow_paas_platform
 #: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_security_access__tunnel_uptime
@@ -3476,7 +3476,7 @@ msgstr ""
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/CreateSecurityAccessModal.xml:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/project-detail/sections/McpServersSection.xml:0
 msgid "Create"
-msgstr ""
+msgstr "建立"
 
 #. module: woow_paas_platform
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_project_form_inherit_mcp_skill
@@ -3512,13 +3512,13 @@ msgstr ""
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/CreateSecurityAccessModal.xml:0
 msgid "Create Security Access"
-msgstr ""
+msgstr "建立安全存取"
 
 #. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/smart-home/CreateSmartHomeModal.xml:0
 msgid "Create Smart Home"
-msgstr ""
+msgstr "建立 Smart Home"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -3602,7 +3602,7 @@ msgstr ""
 #: code:addons/woow_paas_platform/static/src/paas/pages/workspace/WorkspaceDetailPage.xml:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/workspace/WorkspaceListPage.xml:0
 msgid "Created"
-msgstr ""
+msgstr "建立時間"
 
 #. module: woow_paas_platform
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_agent_template__created_at
@@ -3694,13 +3694,13 @@ msgstr ""
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/CreateSecurityAccessModal.xml:0
 msgid "Creating the Cloudflare Tunnel. This may take a moment."
-msgstr ""
+msgstr "正在建立 Cloudflare Tunnel，請稍候。"
 
 #. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/smart-home/CreateSmartHomeModal.xml:0
 msgid "Creating tunnel and configuring secure access. This may take a moment."
-msgstr ""
+msgstr "正在建立 tunnel 並設定安全連線，請稍候。"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -3710,7 +3710,7 @@ msgstr ""
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/CreateWorkspaceModal.xml:0
 #: code:addons/woow_paas_platform/static/src/paas/components/smart-home/CreateSmartHomeModal.xml:0
 msgid "Creating..."
-msgstr ""
+msgstr "建立中..."
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -4064,13 +4064,13 @@ msgstr ""
 #: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.xml:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/smart-home/SmartHomeDetailPage.xml:0
 msgid "Delete"
-msgstr ""
+msgstr "刪除"
 
 #. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.xml:0
 msgid "Delete Security Access?"
-msgstr ""
+msgstr "刪除安全存取？"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -4082,7 +4082,7 @@ msgstr ""
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/smart-home/SmartHomeDetailPage.xml:0
 msgid "Delete Smart Home"
-msgstr ""
+msgstr "刪除 Smart Home"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -4136,7 +4136,7 @@ msgstr "刪除中"
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/DeleteServiceModal.xml:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/smart-home/SmartHomeDetailPage.xml:0
 msgid "Deleting..."
-msgstr ""
+msgstr "刪除中..."
 
 #. module: woow_paas_platform
 #. odoo-python
@@ -4155,13 +4155,13 @@ msgstr ""
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.device_consent
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.oauth2_authorize
 msgid "Deny"
-msgstr ""
+msgstr "拒絕"
 
 #. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/AddPolicyModal.xml:0
 msgid "Deny access to matches"
-msgstr ""
+msgstr "拒絕符合條件的對象"
 
 #. module: woow_paas_platform
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_odoo_addon__depends_on
@@ -4514,7 +4514,7 @@ msgstr ""
 #: code:addons/woow_paas_platform/static/src/paas/components/smart-home/CreateSmartHomeModal.xml:0
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_wallet_topup__state__done
 msgid "Done"
-msgstr ""
+msgstr "完成"
 
 #. module: woow_paas_platform
 #: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_cloud_app_template__mcp_api_key_helm_path
@@ -4536,7 +4536,7 @@ msgstr ""
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/smart-home/SmartHomeDetailPage.xml:0
 msgid "Download and install the Woow Connector on your Home Assistant device."
-msgstr ""
+msgstr "在你的 Home Assistant 裝置上下載並安裝 Woow Connector。"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -4563,7 +4563,7 @@ msgstr "拖曳操作失敗，請重新整理頁面後再試。"
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/access/AccessAppCard.xml:0
 msgid "Drag to reorder"
-msgstr ""
+msgstr "拖曳以調整順序"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -4631,7 +4631,7 @@ msgstr "ECPay 拒絕綁定"
 msgid ""
 "Each Application Route is its own Access application with its\n"
 "                  own policies and login methods."
-msgstr ""
+msgstr "每條應用程式路由都是自己的 Access 應用程式，有自己的政策與登入方式。"
 
 #. module: woow_paas_platform
 #: model:ir.model.constraint,message:woow_paas_platform.constraint_woow_paas_platform_cloud_service_secret_unique_cloud_service_secret_service
@@ -4644,14 +4644,14 @@ msgstr ""
 msgid ""
 "Each route maps a public subdomain to your host. Traffic is\n"
 "                   forwarded to the service URL with the public hostname as the Host header."
-msgstr ""
+msgstr "每條路由把一個公開子網域對應到你的主機。流量會轉送到服務網址，並以公開網址作為 Host header。"
 
 #. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.xml:0
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_security_access__edge_connection_count
 msgid "Edge Connections"
-msgstr ""
+msgstr "Edge 連線數"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -4675,7 +4675,7 @@ msgstr ""
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/access/AccessAppCard.xml:0
 msgid "Edit policy"
-msgstr ""
+msgstr "編輯政策"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -4837,7 +4837,7 @@ msgstr "立刻結束目前的試用"
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/SkipTrialModal.xml:0
 msgid "End your free trial immediately"
-msgstr ""
+msgstr "立即結束免費試用"
 
 #. module: woow_paas_platform
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_mcp_server__url
@@ -4872,7 +4872,7 @@ msgstr ""
 #: code:addons/woow_paas_platform/static/src/paas/pages/smart-home/SmartHomeDetailPage.xml:0
 msgid ""
 "Enter the Tunnel ID and credentials from above into the connector settings."
-msgstr ""
+msgstr "把上方的 Tunnel ID 與憑證填入連接器設定。"
 
 #. module: woow_paas_platform
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.device_verify
@@ -5002,7 +5002,7 @@ msgstr ""
 msgid ""
 "Every route forwards to your own reverse proxy. Because the\n"
 "                 original"
-msgstr ""
+msgstr "每條路由都會轉送到你自己的反向代理。因為原本的"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -5601,7 +5601,7 @@ msgstr "產生首期帳單"
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/SkipTrialModal.xml:0
 msgid "Generate your first invoice now"
-msgstr ""
+msgstr "現在產生第一張帳單"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -5671,7 +5671,7 @@ msgstr ""
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/AddPolicyModal.xml:0
 msgid "Grant access to matches"
-msgstr ""
+msgstr "允許符合條件的對象"
 
 #. module: woow_paas_platform
 #. odoo-python
@@ -6305,7 +6305,7 @@ msgstr ""
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_security_access_form
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_skill_form
 msgid "Identity"
-msgstr ""
+msgstr "識別資訊"
 
 #. module: woow_paas_platform
 #: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_oauth_client__require_pkce
@@ -6338,7 +6338,7 @@ msgstr "進行中"
 msgid ""
 "In this model, protection is scoped to a single Application\n"
 "                 Route — the same way a Cloudflare Access"
-msgstr ""
+msgstr "在這個模式下，保護的範圍是單一應用程式路由——就像 Cloudflare Access 的"
 
 #. module: woow_paas_platform
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_oauth_client_form
@@ -6433,7 +6433,7 @@ msgstr ""
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/smart-home/SmartHomeDetailPage.xml:0
 msgid "Install the Connector"
-msgstr ""
+msgstr "安裝連接器"
 
 #. module: woow_paas_platform
 #: model:ir.ui.menu,name:woow_paas_platform.menu_security_access_instances
@@ -6446,7 +6446,7 @@ msgstr ""
 msgid ""
 "Insufficient balance.\n"
 "                                        You need"
-msgstr ""
+msgstr "餘額不足，還需要"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -7222,7 +7222,7 @@ msgstr "圖表載入中..."
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/SkipTrialModal.xml:0
 msgid "Loading invoice breakdown..."
-msgstr ""
+msgstr "正在載入帳單明細..."
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -7323,7 +7323,7 @@ msgstr ""
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/smart-home/SmartHomeDetailPage.xml:0
 msgid "Loading smart home..."
-msgstr ""
+msgstr "正在載入 Smart Home..."
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -7360,7 +7360,7 @@ msgstr ""
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/smart-home/CreateSmartHomeModal.xml:0
 msgid "Loading templates..."
-msgstr ""
+msgstr "正在載入範本..."
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -7405,7 +7405,7 @@ msgstr ""
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/access/AccessAppCard.xml:0
 msgid "Login Methods"
-msgstr ""
+msgstr "登入方式"
 
 #. module: woow_paas_platform
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_security_access_route__login_email_otp
@@ -7892,7 +7892,7 @@ msgstr ""
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_topup_plan__name
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_workspace__name
 msgid "Name"
-msgstr ""
+msgstr "名稱"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -8053,7 +8053,7 @@ msgstr "下期帳單"
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/smart-home/SmartHomeDetailPage.xml:0
 msgid "Next Payment"
-msgstr ""
+msgstr "下次付款"
 
 #. module: woow_paas_platform
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_service__subscription_next_payment
@@ -8067,7 +8067,7 @@ msgstr ""
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.xml:0
 msgid "Next payment"
-msgstr ""
+msgstr "下次付款"
 
 #. module: woow_paas_platform
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_security_access_form
@@ -8161,7 +8161,7 @@ msgid ""
 "under\n"
 "                                    Settings → Woow PaaS → Smart Home → "
 "Templates."
-msgstr ""
+msgstr "尚未設定可用的 Smart Home 範本。請聯絡管理員到「設定 → Woow PaaS → Smart Home → 範本」建立範本。"
 
 #. module: woow_paas_platform
 #. odoo-python
@@ -8242,7 +8242,7 @@ msgstr "目前還沒有可以設定的 application route"
 msgid ""
 "No application routes yet. Add a route in the Application tab,\n"
 "              then protect it here."
-msgstr ""
+msgstr "尚無應用程式路由。請先在「應用程式」分頁新增路由，再到這裡設定保護。"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -8250,7 +8250,7 @@ msgstr ""
 msgid ""
 "No application routes yet. Add your first route below to expose a\n"
 "              service — until then the tunnel is ready but answers 404."
-msgstr ""
+msgstr "尚無應用程式路由。請在下方新增第一條路由來對外開放服務——在那之前 tunnel 已就緒，但會回應 404。"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -8409,13 +8409,13 @@ msgstr ""
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/subscription/PlanSelector.xml:0
 msgid "No plans available"
-msgstr ""
+msgstr "目前沒有可用的方案"
 
 #. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/access/AccessAppCard.xml:0
 msgid "No policies yet — without any allow rule, no visitor passes."
-msgstr ""
+msgstr "尚無政策——沒有任何允許規則時，所有訪客都進不來。"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -9065,7 +9065,7 @@ msgstr ""
 msgid ""
 "Once connected, access your Home Assistant from anywhere via the route URL "
 "above."
-msgstr ""
+msgstr "連線後，就能透過上方的路由網址從任何地方存取你的 Home Assistant。"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -9749,7 +9749,7 @@ msgstr ""
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_subscription_lifecycle_mixin__subscription_plan_name
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_wallet_topup__plan_id
 msgid "Plan"
-msgstr ""
+msgstr "方案"
 
 #. module: woow_paas_platform
 #. odoo-python
@@ -9898,7 +9898,7 @@ msgstr "已刪除 policy"
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/AddPolicyModal.xml:0
 msgid "Policy name"
-msgstr ""
+msgstr "政策名稱"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -10203,14 +10203,14 @@ msgstr ""
 #: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.xml:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/smart-home/tabs/SmartHomeAccessTab.xml:0
 msgid "Protected Applications"
-msgstr ""
+msgstr "受保護的應用程式"
 
 #. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/access/AccessAppCard.xml:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/AccessTab.xml:0
 msgid "Protected ·"
-msgstr ""
+msgstr "已保護 ·"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -10308,7 +10308,7 @@ msgstr "佈建失敗：%(error)s"
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/CreateSecurityAccessModal.xml:0
 #: code:addons/woow_paas_platform/static/src/paas/components/smart-home/CreateSmartHomeModal.xml:0
 msgid "Provisioning..."
-msgstr ""
+msgstr "開通中..."
 
 #. module: woow_paas_platform
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_oauth_client__client_type__public
@@ -10395,7 +10395,7 @@ msgstr "公開 · 此方案無法使用 Access 設定"
 #: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/AccessTab.xml:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/smart-home/tabs/SmartHomeAccessTab.xml:0
 msgid "Public · anyone can reach it"
-msgstr ""
+msgstr "公開 · 任何人都能連入"
 
 #. module: woow_paas_platform
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_skill_form
@@ -10703,7 +10703,7 @@ msgstr ""
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/AddPolicyModal.xml:0
 msgid "Remove rule"
-msgstr ""
+msgstr "移除規則"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -11049,7 +11049,7 @@ msgstr "路由同步失敗：%(detail)s"
 #: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.xml:0
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_security_access__route_count
 msgid "Routes"
-msgstr ""
+msgstr "路由"
 
 #. module: woow_paas_platform
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_security_access_access_policy_rule__rule_type
@@ -11160,7 +11160,7 @@ msgstr "暫停販售"
 #: code:addons/woow_paas_platform/static/src/paas/pages/project-detail/sections/BasicInfoSection.xml:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/settings/ProfilePage.xml:0
 msgid "Save"
-msgstr ""
+msgstr "儲存"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -11180,7 +11180,7 @@ msgstr ""
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/access/AccessAppCard.xml:0
 msgid "Saving order…"
-msgstr ""
+msgstr "正在儲存順序…"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -11191,7 +11191,7 @@ msgstr ""
 #: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/AddonsTab.xml:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/ConfigurationTab.xml:0
 msgid "Saving..."
-msgstr ""
+msgstr "儲存中..."
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -11275,7 +11275,7 @@ msgstr ""
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/CreateSecurityAccessModal.xml:0
 msgid "Security Access Ready"
-msgstr ""
+msgstr "安全存取已就緒"
 
 #. module: woow_paas_platform
 #: model:ir.model,name:woow_paas_platform.model_woow_paas_platform_security_access_template
@@ -11525,7 +11525,7 @@ msgstr ""
 #: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.xml:0
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_service_secret__service_id
 msgid "Service"
-msgstr ""
+msgstr "服務"
 
 #. module: woow_paas_platform
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_cloud_app_template_form
@@ -11733,13 +11733,13 @@ msgstr ""
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/CreateSecurityAccessModal.xml:0
 msgid "Setting up your Security Access..."
-msgstr ""
+msgstr "正在設定你的安全存取..."
 
 #. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/smart-home/CreateSmartHomeModal.xml:0
 msgid "Setting up your Smart Home..."
-msgstr ""
+msgstr "正在設定你的 Smart Home..."
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -11761,7 +11761,7 @@ msgstr "設定"
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/CreateSecurityAccessModal.xml:0
 #: code:addons/woow_paas_platform/static/src/paas/components/smart-home/CreateSmartHomeModal.xml:0
 msgid "Setup Complete"
-msgstr ""
+msgstr "設定完成"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -11955,31 +11955,31 @@ msgstr ""
 #: code:addons/woow_paas_platform/static/src/paas/pages/service/ServiceDetailPage.xml:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/smart-home/SmartHomeDetailPage.xml:0
 msgid "Skip Trial"
-msgstr ""
+msgstr "略過試用"
 
 #. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/SkipTrialModal.xml:0
 msgid "Skip Trial & Start Billing"
-msgstr ""
+msgstr "略過試用並開始計費"
 
 #. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/SkipTrialModal.xml:0
 msgid "Skip Trial Period"
-msgstr ""
+msgstr "略過試用期"
 
 #. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/AddPolicyModal.xml:0
 msgid "Skip auth for matches"
-msgstr ""
+msgstr "符合條件者略過驗證"
 
 #. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/SkipTrialModal.xml:0
 msgid "Skip the free trial for"
-msgstr ""
+msgstr "略過免費試用："
 
 #. module: woow_paas_platform
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_app_template__slug
@@ -12077,7 +12077,7 @@ msgstr ""
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/smart-home/CreateSmartHomeModal.xml:0
 msgid "Smart Home Ready"
-msgstr ""
+msgstr "Smart Home 已就緒"
 
 #. module: woow_paas_platform
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_security_access_access_policy__smart_home_route_id
@@ -12090,7 +12090,7 @@ msgstr ""
 #: model:ir.model,name:woow_paas_platform.model_woow_paas_platform_smart_home_template
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_smart_home_template_form
 msgid "Smart Home Template"
-msgstr ""
+msgstr "Smart Home 範本"
 
 #. module: woow_paas_platform
 #: model:ir.actions.act_window,name:woow_paas_platform.action_smart_home_template
@@ -12235,7 +12235,7 @@ msgstr ""
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/SkipTrialModal.xml:0
 msgid "Start regular monthly billing today"
-msgstr ""
+msgstr "從今天開始按月計費"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -12380,7 +12380,7 @@ msgstr ""
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.xml:0
 msgid "Subdomain may use"
-msgstr ""
+msgstr "子網域只能使用"
 
 #. module: woow_paas_platform
 #: model:ir.model.constraint,message:woow_paas_platform.constraint_woow_paas_platform_cloud_service_unique_subdomain
@@ -12422,7 +12422,7 @@ msgstr ""
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_cloud_odoo_addon__category__subscription
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_security_access_form
 msgid "Subscription"
-msgstr ""
+msgstr "訂閱"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -12567,7 +12567,7 @@ msgstr "訂閱"
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/SkipTrialModal.xml:0
 msgid "Subtotal"
-msgstr ""
+msgstr "小計"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -12733,7 +12733,7 @@ msgstr "任務"
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/SkipTrialModal.xml:0
 msgid "Tax ("
-msgstr ""
+msgstr "稅金 ("
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -13158,7 +13158,7 @@ msgstr ""
 msgid ""
 "These login methods have no matching Cloudflare identity\n"
 "              provider and were ignored:"
-msgstr ""
+msgstr "下列登入方式在 Cloudflare 找不到對應的身分提供者，已被略過："
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -13294,7 +13294,7 @@ msgstr ""
 msgid ""
 "This feature is on the roadmap and will be enabled in an\n"
 "                 upcoming release."
-msgstr ""
+msgstr "這項功能已列入規劃，會在之後的版本開放。"
 
 #. module: woow_paas_platform
 #. odoo-python
@@ -13339,7 +13339,7 @@ msgid ""
 "This permanently deletes the tunnel, all application routes\n"
 "                 and DNS records on Cloudflare. Your connector will be\n"
 "                 disconnected immediately. This cannot be undone."
-msgstr ""
+msgstr "這會永久刪除 Cloudflare 上的 tunnel、所有應用程式路由與 DNS 記錄，你的連接器也會立即斷線。此操作無法復原。"
 
 #. module: woow_paas_platform
 #. odoo-python
@@ -13502,7 +13502,7 @@ msgstr ""
 msgid ""
 "This will remove the tunnel configuration and all associated data.\n"
 "                                    This action cannot be undone."
-msgstr ""
+msgstr "這會移除 tunnel 設定與所有相關資料。此操作無法復原。"
 
 #. module: woow_paas_platform
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_cloud_service_form
@@ -13607,7 +13607,7 @@ msgstr ""
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/SkipTrialModal.xml:0
 msgid "Top up your wallet"
-msgstr ""
+msgstr "為錢包儲值"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -13715,13 +13715,13 @@ msgstr ""
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/smart-home/SmartHomeDetailPage.xml:0
 msgid "Trial Ends"
-msgstr ""
+msgstr "試用結束"
 
 #. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.xml:0
 msgid "Trial ends"
-msgstr ""
+msgstr "試用結束"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -13793,7 +13793,7 @@ msgstr "Tunnel ID"
 #: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.xml:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/smart-home/SmartHomeDetailPage.xml:0
 msgid "Tunnel Information"
-msgstr ""
+msgstr "Tunnel 資訊"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -13801,7 +13801,7 @@ msgstr ""
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_security_access__tunnel_name
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_smart_home__tunnel_name
 msgid "Tunnel Name"
-msgstr ""
+msgstr "Tunnel 名稱"
 
 #. module: woow_paas_platform
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_smart_home__tunnel_route
@@ -13966,7 +13966,7 @@ msgstr ""
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/smart-home/SmartHomeDetailPage.xml:0
 msgid "Unable to load smart home"
-msgstr ""
+msgstr "無法載入 Smart Home"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -14536,7 +14536,7 @@ msgstr "等待付款"
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/PayInvoiceModal.xml:0
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/SkipTrialModal.xml:0
 msgid "Wallet Balance"
-msgstr ""
+msgstr "錢包餘額"
 
 #. module: woow_paas_platform
 #: model:ir.model,name:woow_paas_platform.model_woow_wallet_topup
@@ -15014,7 +15014,7 @@ msgstr ""
 msgid ""
 "Your Cloudflare Tunnel has been created. Add application routes to expose "
 "your services."
-msgstr ""
+msgstr "Cloudflare Tunnel 已建立。請新增應用程式路由來對外開放你的服務。"
 
 #. module: woow_paas_platform
 #. odoo-python
@@ -15054,7 +15054,7 @@ msgstr ""
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/smart-home/CreateSmartHomeModal.xml:0
 msgid "Your smart home tunnel has been configured successfully."
-msgstr ""
+msgstr "已成功設定你的 Smart Home tunnel。"
 
 #. module: woow_paas_platform
 #. odoo-python
@@ -15076,7 +15076,7 @@ msgstr "你的訂閱已到期。目前處於續約寬限期，這段期間無法
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/SkipTrialModal.xml:0
 msgid "Your trial ends on"
-msgstr ""
+msgstr "試用期將於"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -15259,7 +15259,7 @@ msgstr ""
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/AddPolicyModal.xml:0
 msgid "e.g. Internal staff"
-msgstr ""
+msgstr "例如：內部員工"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -15283,7 +15283,7 @@ msgstr ""
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/smart-home/CreateSmartHomeModal.xml:0
 msgid "e.g., My Home Assistant"
-msgstr ""
+msgstr "例如：我的 Home Assistant"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -15295,7 +15295,7 @@ msgstr ""
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/CreateSecurityAccessModal.xml:0
 msgid "e.g., secure-gateway"
-msgstr ""
+msgstr "例如：secure-gateway"
 
 #. module: woow_paas_platform
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_cloud_odoo_addon__category__ecommerce
@@ -15386,7 +15386,7 @@ msgstr ""
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.xml:0
 msgid "in the"
-msgstr ""
+msgstr "設定，位於"
 
 #. module: woow_paas_platform
 #: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_reconcile_report__resource_uid
@@ -15409,7 +15409,7 @@ msgid ""
 "                 hostname and carries its own policies. Routes you leave "
 "public\n"
 "                 are reachable by anyone."
-msgstr ""
+msgstr "是由一個網址定義、並帶有自己的政策一樣。保持公開的路由任何人都能連入。"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -15421,7 +15421,7 @@ msgid ""
 "                 matching local service you have already started. "
 "Authentication\n"
 "                 is set"
-msgstr ""
+msgstr "會被保留，你的反向代理會讀取進來的子網域，把每個請求轉給你已經啟動的對應本機服務。驗證是"
 
 #. module: woow_paas_platform
 #. odoo-python
@@ -15439,7 +15439,7 @@ msgstr "kind 與 resource_uid 為必填"
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.xml:0
 msgid "lowercase letters, numbers and hyphens"
-msgstr ""
+msgstr "小寫英文字母、數字與連字號"
 
 #. module: woow_paas_platform
 #: model:ir.model.fields,help:woow_paas_platform.field_woow_wallet_topup__source
@@ -15474,7 +15474,7 @@ msgstr "月"
 msgid ""
 "more\n"
 "                                        to skip the trial."
-msgstr ""
+msgstr "才能略過試用。"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -15761,7 +15761,7 @@ msgstr "name 為必填"
 #: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.xml:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/smart-home/tabs/SmartHomeAccessTab.xml:0
 msgid "of"
-msgstr ""
+msgstr "／"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -15773,7 +15773,7 @@ msgstr ""
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.xml:0
 msgid "only."
-msgstr ""
+msgstr "。"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -15805,7 +15805,7 @@ msgstr ""
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.xml:0
 msgid "per route"
-msgstr ""
+msgstr "按路由"
 
 #. module: woow_paas_platform
 #. odoo-python
@@ -15870,7 +15870,7 @@ msgstr ""
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/workspace/WorkspaceDetailPage.xml:0
 msgid "routes"
-msgstr ""
+msgstr "條路由"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -15882,7 +15882,7 @@ msgstr "網址已保護 · 此方案無法使用 Access 設定"
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.xml:0
 msgid "routes protected · each route carries its own policies"
-msgstr ""
+msgstr "條路由已受保護 · 每條路由各有自己的政策"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -15895,7 +15895,7 @@ msgstr "網址已保護 · 每一條網址各自帶自己的 policy 與登入方
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/AddPolicyModal.xml:0
 msgid "rule"
-msgstr ""
+msgstr "規則"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -15913,7 +15913,7 @@ msgstr ""
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.xml:0
 msgid "self-hosted application"
-msgstr ""
+msgstr "自架應用程式"
 
 #. module: woow_paas_platform
 #. odoo-python
@@ -15925,7 +15925,7 @@ msgstr "server_id 為必填"
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.xml:0
 msgid "service URL (default from platform)"
-msgstr ""
+msgstr "服務網址（預設由平台提供）"
 
 #. module: woow_paas_platform
 #: model:ir.model.fields,help:woow_paas_platform.field_project_project__resolved_template_skill_ids
@@ -15944,7 +15944,7 @@ msgstr ""
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.xml:0
 msgid "subdomain prefix"
-msgstr ""
+msgstr "子網域前綴"
 
 #. module: woow_paas_platform
 #. odoo-python
@@ -15978,7 +15978,7 @@ msgstr ""
 msgid ""
 "tab, where each route is its own Access application with its own\n"
 "                 policies."
-msgstr ""
+msgstr "分頁，每條路由都是自己的 Access 應用程式，有自己的政策。"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -16213,13 +16213,13 @@ msgstr "⚠️ AI 助理回覆失敗：%(reason)s 請稍後再試。"
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.xml:0
 msgid "✓ Available"
-msgstr ""
+msgstr "✓ 可以使用"
 
 #. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.xml:0
 msgid "✗ Not available:"
-msgstr ""
+msgstr "✗ 無法使用："
 
 #. module: woow_paas_platform
 #: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_cloud_service__access_unresolved_idp_types
@@ -18045,3 +18045,202 @@ msgstr ""
 "Tunnel 已建立，但 DNS 記錄建立失敗，因此 %(hostname)s "
 "目前無法解析。tunnel（%(tunnel_id)s）已保留以免變成孤兒——請按「重試開通」在同一條 tunnel 上重建 DNS "
 "記錄，或刪除後重新建立這個 Smart Home。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/access/AccessAppCard.xml:0
+msgid "Access protection is not in effect."
+msgstr "Access 保護目前沒有生效。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/access/AccessAppCard.xml:0
+msgid ""
+"Its Cloudflare Access application could not be applied, so this\n"
+"            address can be opened right now without logging in. The platform\n"
+"            keeps retrying automatically; to re-apply it immediately, turn\n"
+"            protection off and on again. If this warning does not go away,\n"
+"            contact support."
+msgstr ""
+"它的 Cloudflare Access "
+"應用程式沒能套用，所以這個網址現在不用登入就能開啟。平台會自動持續重試；若要立刻重新套用，請把保護關掉再打開。如果這個警示一直沒有消失，請聯絡客服。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/AddPolicyModal.xml:0
+msgid ""
+"Allow grants access per person: Include rules must name who gets\n"
+"              in, so whole-domain, \"everyone\", IP range and country rules are\n"
+"              not offered there (they admit an uncounted crowd while still\n"
+"              consuming Cloudflare Access seats from the pool shared by the\n"
+"              whole platform). You can still use them in Require / Exclude\n"
+"              rules to narrow access."
+msgstr ""
+"允許（Allow）是按人授權：包含（Include）規則必須點名誰能進入，所以不提供整個網域、「所有人」、IP "
+"範圍與國家這類規則（它們會放進一群無法計數的人，卻仍占用全平台共用的 Cloudflare Access "
+"席位）。這些規則仍可用在必須（Require）／排除（Exclude）規則裡來縮小範圍。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.xml:0
+msgid "Dismiss"
+msgstr "關閉"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.xml:0
+msgid "Connect a machine"
+msgstr "連接一台機器"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.xml:0
+msgid ""
+"Run one connector with this tunnel's token and the routes above go\n"
+"              live. Move the token to another machine to move the tunnel — the\n"
+"              public hostnames stay the same."
+msgstr ""
+"用這條 tunnel 的 token 執行一個連接器，上方的路由就會上線。把 token 搬到另一台機器，就等於搬移這條 "
+"tunnel——對外網址不會改變。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.xml:0
+msgid ""
+"Run the token on one machine at a time. If two connectors run it,\n"
+"              Cloudflare may keep sending visitors to either one (often the old\n"
+"              machine) — stop the old connector as soon as the new one is up."
+msgstr ""
+"同一把 token 一次只在一台機器上執行。兩個連接器同時執行時，Cloudflare "
+"可能一直把訪客送到其中一台（常是舊的那台）——新的連上後請立刻停掉舊的連接器。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.xml:0
+msgid "Tunnel token"
+msgstr "Tunnel token"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.xml:0
+msgid "Copy token"
+msgstr "複製 token"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.xml:0
+msgid ""
+"Treat this like a password — anyone holding it can run this\n"
+"                tunnel and serve your hostnames."
+msgstr "請把它當成密碼保管——拿到它的人就能執行這條 tunnel、接走你的網址。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.xml:0
+msgid "Home Assistant integration"
+msgstr "Home Assistant 整合"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.xml:0
+msgid ""
+"Add the Woow PaaS integration and pick this Security\n"
+"                      Access — it fetches the token for you, nothing to paste."
+msgstr "新增 Woow PaaS 整合並選擇這個安全存取——整合會自動取得 token，不需要貼上。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.xml:0
+msgid "Cloudflared Web GUI add-on"
+msgstr "Cloudflared Web GUI 附加元件"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.xml:0
+msgid "Paste the token above into the add-on's"
+msgstr "把上方的 token 貼到附加元件的"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.xml:0
+msgid "option and start it."
+msgstr "選項，然後啟動它。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.xml:0
+msgid "Check status now"
+msgstr "立即檢查狀態"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.xml:0
+msgid ""
+"Forces the Host header sent to your service to the public hostname. "
+"cloudflared normally forwards the visitor's original Host (the same public "
+"hostname) anyway, so turning this off usually changes nothing."
+msgstr ""
+"強制把送到你服務的 Host header 設成公開網址。cloudflared 本來就會轉送訪客原本的 "
+"Host（同一個公開網址），所以關掉這個選項通常不會有任何差別。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.xml:0
+msgid "Traffic (24h)"
+msgstr "流量（24 小時）"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.xml:0
+msgid "service URL"
+msgstr "服務網址"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.xml:0
+msgid "Edit route"
+msgstr "編輯路由"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.xml:0
+msgid ""
+"Status is checked from the public internet. Hover a status to see what to "
+"do."
+msgstr "狀態是從公開網路實際檢查的結果。滑鼠移到狀態上可以看到處理建議。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.xml:0
+msgid ""
+".\n"
+"                The new address is usually live within a minute. The old address\n"
+"                stops working right away and is not redirected — update any links\n"
+"                or bookmarks that point to it."
+msgstr "。新網址通常一分鐘內就能使用。舊網址會立刻失效、不會轉址——請更新所有指向它的連結或書籤。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.xml:0
+msgid ""
+"Your service will normally receive the new name as the Host header,\n"
+"                even with the Host header option off. If your service routes by hostname\n"
+"                (e.g. Nginx Proxy Manager) or only accepts known hosts, add the new\n"
+"                hostname there before saving."
+msgstr ""
+"即使沒有勾選 Host header，你的服務通常也會以新網址作為 Host header。如果你的服務依網址分流（例如 Nginx Proxy "
+"Manager）或只接受已知的主機名稱，請在儲存前先把新網址加進去。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.xml:0
+msgid "Route limit reached ("
+msgstr "已達路由上限（"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.xml:0
+msgid ""
+").\n"
+"              Remove a route or change plan to add another."
+msgstr "）。請刪除一條路由或變更方案後再新增。"
