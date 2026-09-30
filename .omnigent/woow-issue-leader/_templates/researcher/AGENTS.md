@@ -29,7 +29,7 @@
 
 ## 你跑在快層 model
 
-你的 model 由產生器的 `ROSTER` 釘在快層（`gpt-5.6-luna`）。查證是讀原始碼的工作；真的難到
+你的 model 由產生器的 `ROSTER` 釘在快層（`gpt-6-luna`）。查證是讀原始碼的工作；真的難到
 需要升級，回報請上層改派。
 
 <!-- include: iron-rules -->

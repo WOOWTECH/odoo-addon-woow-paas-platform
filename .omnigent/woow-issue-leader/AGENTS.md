@@ -10,7 +10,7 @@
 ## 編制
 
 ```
-woow-issue-leader                     ← 你（claude-sdk／claude-fable-5-1／xhigh）
+woow-issue-leader                     ← 你（claude-sdk／claude-fable-5-1[1m]／xhigh）
 ├── repo_leader_cc   (claude-native)  ← repo 層 leader，Claude 額度池
 └── repo_leader_pi   (pi)             ← repo 層 leader，pi 額度池
 ```
@@ -96,12 +96,12 @@ harness 依 `ROSTER` 決定；implement 與 review 已固定為單向跨 vendor 
 
 | purpose | harness 選項 | model | effort |
 |---|---|---|---|
-| `implement` | **固定 pi** | `gpt-5.6-sol` | xhigh |
-| `review` | **固定 claude-native** | `claude-sonnet-5` | high |
-| `explore`（＝`search`） | pi | `gpt-5.6-luna` | high |
+| `implement` | **固定 pi** | `gpt-6.1-sol` | xhigh |
+| `review` | **固定 claude-native** | `claude-sonnet-5-5[1m]` | high |
+| `explore`（＝`search`） | pi | `gpt-6-luna` | high |
 | `tracker`（＝`triage`） | pi | `gpt-5.6-terra` | high |
-| `ops_k8s`（＝`deploy`） | **固定 claude-native** | `claude-sonnet-5` | xhigh |
-| `researcher` | pi | `gpt-5.6-luna` | high |
+| `ops_k8s`（＝`deploy`） | **固定 claude-native** | `claude-sonnet-5-5[1m]` | xhigh |
+| `researcher` | pi | `gpt-6-luna` | high |
 
 硬規則：
 
@@ -229,7 +229,7 @@ Gitea label 是 single source of truth；看板只是從 Gitea 重建的 derived
 
 | 守線 | 效果 |
 |---|---|
-| `spawn_bounds` | 每輪最多 6 次派工（`sys_session_send` ＋ `sys_session_create` 合計） |
+| `spawn_bounds` | 每輪最多 12 次 `sys_session_create`；`sys_session_send` 不計數 |
 | `headless_subagent_purpose_guard` | 派工必須帶 `args.purpose` |
 | P-board | **不掛在你身上**——全樹只有你能寫 `.woow-issues/board.md`，其他每一層（兩個 `repo_leader` 與所有執行期產生的 worker）都掛 |
 | P-merge / P-approve / P-tag / P-escape | 見上方鐵律。⚠ 這幾條是**對 shell 字串做比對的 best-effort 守線**，擋得掉常見寫法、擋不住刻意規避——**沒被擋不等於可以做**；自己與所派 worker 的 shell 指令一律單行零反斜線；多行內容先寫檔再執行；工單的指令範例同守此紀律。 |
