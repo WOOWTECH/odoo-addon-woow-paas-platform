@@ -11,6 +11,10 @@ resolution Q2／Q3／Q8／Q11／Q32／Q39）。本檔只放三樣東西：
 """
 import logging
 import re
+
+import requests
+from urllib3.exceptions import NewConnectionError
+
 from odoo import api, fields, models
 
 from ..services.paas_operator import (
@@ -43,8 +47,6 @@ INIT_LEASE_SECONDS = {
 # Q15：migration 替既有 `initializing` 列寫入的合成 lease。舊 process 可能還有在途
 # 的 remote exec（舊 code 的 read 是 900s），取 Odoo 的 1200 一律套用。
 LEGACY_LEASE_SECONDS = 1200
-# 本 PR 假設的 cron 硬上限（只供測試對帳上界，runtime 實值由部署設定決定）。
-INIT_CRON_HARD_LIMIT_SECONDS = 1800
 
 # ------------------------------------------------------------------------- #
 #  Q3／Q11：失敗分類                                                          #
@@ -61,14 +63,22 @@ OUTCOME_LEGACY = 'legacy'
 _WIRE_KINDS = (OUTCOME_NOT_EXECUTED, OUTCOME_FAILED, OUTCOME_PARTIAL, OUTCOME_UNKNOWN)
 
 _ERROR_MAX_CHARS = 2000
-# JWT（n8n API key 的形狀）與常見的 key=value 密鑰；attempt 記錄不得留下可用憑證。
+# attempt 記錄不得留下可用憑證：JWT（n8n API key 的形狀）、Bearer token、以及
+# key=value／key: "value"／URL-encoded（`%3D`）形式的密鑰；引號內含空白也整段遮。
 _JWT_RE = re.compile(r'eyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}')
+_BEARER_RE = re.compile(r'(?i)(bearer\s+)[A-Za-z0-9._~+/=-]+')
 _SECRET_KV_RE = re.compile(
-    r'(?i)(password|passwd|api[_-]?key|token|secret)(["\']?\s*[:=]\s*["\']?)([^\s"\',}]+)')
+    r'(?i)(password|passwd|api[_-]?key|token|secret)'
+    r'(["\']?\s*(?::|=|%3D)\s*)'
+    r'("[^"]*"|\'[^\']*\'|[^\s"\',}&]+)')
 
 
 class InitOutcome:
-    """分類結果：outcome 之外帶上 operator 回報的步驟與（n8n）拿到的 api_key。"""
+    """分類結果：outcome 之外帶上 operator 回報的步驟與（n8n）拿到的 api_key。
+
+    ``error_kind`` 只放 operator **wire 上回報**的值（#1263）；平台自己推論出來的
+    分類（connect 階段失敗、read timeout……）只在 ``outcome``，``error_kind`` 留空。
+    """
 
     __slots__ = ('outcome', 'error_step', 'error_kind', 'message', 'api_key')
 
@@ -94,9 +104,6 @@ def _is_connect_phase(exc):
     平台端只有 connect 階段失敗算 not_executed）。原始例外由 ``raise`` 在
     ``except`` 區塊內自動掛在 ``__context__``。
     """
-    import requests
-    from urllib3.exceptions import NewConnectionError
-
     cause = exc.__cause__ or exc.__context__
     if isinstance(cause, requests.exceptions.ConnectTimeout):
         return True
@@ -124,7 +131,7 @@ def classify_init_result(init_type, result=None, exc=None):
         message = getattr(exc, 'detail', None) or str(exc)
         if isinstance(exc, PaaSOperatorConnectionError):
             outcome = OUTCOME_NOT_EXECUTED if _is_connect_phase(exc) else OUTCOME_UNKNOWN
-            return InitOutcome(outcome, error_kind=outcome, message=str(message))
+            return InitOutcome(outcome, message=str(message))
         if isinstance(exc, PaaSOperatorAPIError) and isinstance(exc.detail, dict):
             kind = _wire_kind(exc.detail.get('error_kind'))
             if kind == OUTCOME_PARTIAL:
@@ -167,6 +174,7 @@ def mask_init_error(text, secrets=()):
         if secret:
             text = text.replace(secret, '***')
     text = _JWT_RE.sub('***', text)
+    text = _BEARER_RE.sub(lambda m: m.group(1) + '***', text)
     text = _SECRET_KV_RE.sub(lambda m: m.group(1) + m.group(2) + '***', text)
     if len(text) > _ERROR_MAX_CHARS:
         text = text[:_ERROR_MAX_CHARS] + '…[truncated]'

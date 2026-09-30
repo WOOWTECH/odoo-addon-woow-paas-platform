@@ -41,8 +41,8 @@ gate（`paas.py:1410` / `:1456` / `:1464`）今天都已經是 owner/admin，全
 
 ## B 系列在守什麼（沒有它們，這個修復會靜默打壞讀取端點）
 
-`_update_service_status`（`paas.py:3543`）與其下游 `_run_post_deploy_init` 合計
-11 處 `write` ＋ 1 處 `unlink`，**只被兩個讀取端點呼叫**：`_list_services`（list）
+`_update_service_status` 的 `write` 與 `unlink`（#1257 起它只推進 state、不再
+dispatch init，下游的 init 寫入已移到 cron），**只被兩個讀取端點呼叫**：`_list_services`（list）
 與 `_get_service`（get）。兩者的分支都只有 `check_user_access(user)`、**無
 required_role**（gate 只掛在 create/update/delete 分支上），recordset 也非 sudo。
 ⇒ 只收窄 rule、不動 poll 的話，**兩條路徑都是靜默失敗**：
@@ -553,6 +553,40 @@ class TestCloudServiceWriteAuthz676(_CloudService676Fixture):
 
 
 @tagged('post_install', '-at_install')
+class TestInitControlFieldsWriteAuthz1257(_CloudService676Fixture):
+    """#1257 r1 M1：init 執行管控欄位只有平台寫得進去（走真 `/web/dataset/call_kw`）。
+
+    沒有這道閘時 owner 可以寫 `init_redeploy_requested=True`，下一分鐘 cron 就以
+    superuser 對它跑 `_redeploy()`——繞過 #1185 的 group gate 與停權／欠費檢查；寫
+    `init_exit='failed'` 則讓 helm 失敗的 error 也通過 #1159 Q30 的 reconfigure 放行。
+    """
+
+    def test_owner_cannot_write_init_control_fields_over_rpc(self):
+        template = self._template('tmpl-1257-m1', post_deploy_init_type='odoo')
+        svc = self._service(template, self.w1, 'M1 1257', state='error')
+        self.authenticate(self.alice_login, self.alice_login)
+
+        renamed = self._call_kw(
+            'woow_paas_platform.cloud_service', 'write',
+            [[svc.id], {'name': 'M1 renamed'}])
+        self._assert_ok(renamed, '陽性對照：owner 本來就寫得進一般欄位')
+
+        for field, value in (('init_redeploy_requested', True), ('init_exit', 'failed'),
+                             ('init_retries', 0), ('init_unknown_count', 0),
+                             ('init_pending', False), ('init_lease_until', False)):
+            with self.subTest(field=field):
+                result = self._call_kw(
+                    'woow_paas_platform.cloud_service', 'write',
+                    [[svc.id], {field: value}])
+                self.assertIn('error', result, '%s 不得讓租戶寫入（回 %r）' % (field, result))
+                self.assertIn('managed by the platform', self._error_text(result),
+                              '歸因：必須是 init 管控欄位的閘（回 %r）' % result)
+        svc.invalidate_recordset()
+        self.assertFalse(svc.sudo().init_redeploy_requested)
+        self.assertFalse(svc.sudo().init_exit)
+
+
+@tagged('post_install', '-at_install')
 class TestPollPathNotBrokenByAuthz676(_CloudService676Fixture):
     """B 系列：收窄 rule 不得打壞讀取端點的 poll 路徑。
 
@@ -621,7 +655,7 @@ class TestPollPathNotBrokenByAuthz676(_CloudService676Fixture):
             ' success、狀態卻永遠停在 deploying。這種只吞不炸的回歸沒有測試就'
             '沒人會發現')
 
-    def test_B3_guest_get_triggers_post_deploy_init_writes(self):
+    def test_B3_guest_get_advances_to_initializing_via_system_identity(self):
         """涵蓋「需要 init」分支的寫入（`_update_service_status` 寫 `initializing`）。
 
         #1257 起 list/get **不再** dispatch init（改由 cron 經 model 的單一入口

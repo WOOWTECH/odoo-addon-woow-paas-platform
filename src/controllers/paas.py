@@ -4027,10 +4027,14 @@ class PaasController(HiddenChainMixin, Controller):
 
     @staticmethod
     def _init_in_flight_error(service: Any) -> str:
-        """#1257：lease 期間拒絕 reconfigure／rollback 的可讀錯誤（#1267 驗收 4）。"""
+        """#1257：lease 期間拒絕 reconfigure／rollback 的可讀錯誤（#1267 驗收 4）。
+
+        措辭不說「初始化進行中」：結果未知的 attempt 轉 error 之後 lease 仍刻意留到
+        到期（遠端 exec 可能還在跑，Q8），那時畫面上的服務已經是 error。
+        """
         return _(
-            'Initialization of this service is in progress. Please try again after '
-            'it finishes (at the latest %(until)s UTC).',
+            'An initialization request for this service may still be running in the '
+            'cluster. Please try again after %(until)s UTC.',
             until=fields.Datetime.to_string(service.init_lease_until),
         )
 

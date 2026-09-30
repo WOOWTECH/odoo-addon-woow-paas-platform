@@ -1328,8 +1328,10 @@ def _apply_init_success(service, api_key=None):
     })
     applied = service._init_apply_outcome(
         attempt, InitOutcome('success', api_key=api_key), False)
-    assert applied, '前提：CAS 必須成立，否則下面的斷言零鑑別力'
-    assert service.state == 'running'
+    if not applied or service.state != 'running':
+        raise AssertionError(
+            '前提：CAS 必須成立、服務必須轉 running，否則呼叫端的斷言零鑑別力'
+            '（applied=%r, state=%r）' % (applied, service.state))
 
 
 # ====================================================================== #
