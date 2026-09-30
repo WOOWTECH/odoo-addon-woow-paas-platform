@@ -18244,3 +18244,255 @@ msgid ""
 ").\n"
 "              Remove a route or change plan to add another."
 msgstr "）。請刪除一條路由或變更方案後再新增。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/access/AccessAppCard.js:0
+msgid "1 policy"
+msgstr "1 條政策"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/access/AccessAppCard.js:0
+msgid "%s policies"
+msgstr "%s 條政策"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.js:0
+msgid "Reachable"
+msgstr "可連線"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.js:0
+msgid "Login required"
+msgstr "需要登入"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.js:0
+msgid "Not protected"
+msgstr "未受保護"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.js:0
+msgid "Blocked by Access"
+msgstr "被 Access 擋住"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.js:0
+msgid "Connector offline"
+msgstr "連接器離線"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.js:0
+msgid "Not live yet"
+msgstr "尚未生效"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.js:0
+msgid "DNS not found"
+msgstr "查無 DNS"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.js:0
+msgid "Origin error"
+msgstr "源站錯誤"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.js:0
+msgid "Proxy has no site"
+msgstr "代理沒有這個網站"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.js:0
+msgid "No response"
+msgstr "沒有回應"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.js:0
+msgid ""
+"Requests pass through Cloudflare and the tunnel, and your service answers."
+msgstr "請求能穿過 Cloudflare 與 tunnel，你的服務也有回應。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.js:0
+msgid ""
+"Protected: visitors see the Cloudflare Access login first. This is expected."
+msgstr "已保護：訪客會先看到 Cloudflare Access 登入頁，這是正常的。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.js:0
+msgid ""
+"This route is set to protected, but no login page is in front of it. Toggle "
+"protection off and on in the Access tab, or contact support."
+msgstr "這條路由設為受保護，但前面沒有登入頁。請到「存取控管」分頁把保護關掉再打開，或聯絡客服。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.js:0
+msgid ""
+"This route is public here, but a Cloudflare Access application that this "
+"platform does not manage is blocking it. Contact support."
+msgstr "這條路由在這裡是公開的，但有一個不是本平台管理的 Cloudflare Access 應用程式擋住了它。請聯絡客服。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.js:0
+msgid ""
+"No connector is running this tunnel. Check the machine that runs it, or "
+"start a connector with the tunnel token."
+msgstr "沒有任何連接器在執行這條 tunnel。請檢查執行它的那台機器，或用 tunnel token 啟動一個連接器。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.js:0
+msgid ""
+"The hostname does not point to this tunnel yet. Right after creating or "
+"renaming a route this can take up to a minute — check again shortly."
+msgstr "這個網址還沒指到這條 tunnel。剛建立或剛改名的路由最多需要一分鐘——請稍後再檢查。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.js:0
+msgid ""
+"Public DNS has no record for this hostname yet. Wait a minute and check "
+"again."
+msgstr "公開 DNS 還查不到這個網址。請等一分鐘再檢查。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.js:0
+msgid ""
+"The request reached your machine, but your reverse proxy or service returned"
+" an error. Check that the proxy has this hostname and the service is "
+"running."
+msgstr "請求已經到達你的機器，但你的反向代理或服務回傳錯誤。請確認反向代理有這個網址、服務也在執行。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.js:0
+msgid ""
+"The request reached your machine, but your reverse proxy answered with its "
+"default page — it has no site for this hostname. Add this hostname in your "
+"proxy (for example Nginx Proxy Manager). This is expected right after "
+"renaming a route."
+msgstr ""
+"請求已經到達你的機器，但你的反向代理回的是它自己的預設頁——它沒有這個網址的站台。請在反向代理（例如 Nginx Proxy "
+"Manager）新增這個網址。剛改名後出現這個狀態是正常的。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.js:0
+msgid ""
+"Your service did not answer in time. Check that it is running and not "
+"overloaded."
+msgstr "你的服務沒有在時限內回應。請確認它有在執行、沒有過載。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.js:0
+msgid "The check could not complete. Try again in a moment."
+msgstr "檢查沒有完成，請稍後再試。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.js:0
+msgid ""
+"Traffic data is not available yet: the platform's Cloudflare token lacks "
+"analytics access."
+msgstr "目前還無法取得流量資料：平台的 Cloudflare token 缺少分析權限。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.js:0
+msgid ""
+"Traffic data is not available yet: the platform service needs an update."
+msgstr "目前還無法取得流量資料：平台服務需要更新。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.js:0
+msgid "Traffic data is not available on this platform."
+msgstr "這個平台無法取得流量資料。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.js:0
+msgid "Traffic data could not be loaded. Try again later."
+msgstr "無法載入流量資料，請稍後再試。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.js:0
+msgid "just now"
+msgstr "剛剛"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.js:0
+msgid "%s min ago"
+msgstr "%s 分鐘前"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.js:0
+msgid "%s h ago"
+msgstr "%s 小時前"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.js:0
+msgid "%s d ago"
+msgstr "%s 天前"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.js:0
+msgid "No traffic"
+msgstr "沒有流量"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.js:0
+msgid "No requests reached this hostname in the last %s hours."
+msgstr "過去 %s 小時內沒有任何請求到達這個網址。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.js:0
+msgid ""
+"Last %(hours)s h: %(ok)s ok (2xx), %(redirect)s redirect, %(client)s client "
+"error (4xx), %(server)s server error (5xx)."
+msgstr ""
+"過去 %(hours)s 小時：%(ok)s 次成功（2xx）、%(redirect)s 次轉址、%(client)s "
+"次用戶端錯誤（4xx）、%(server)s 次伺服器錯誤（5xx）。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.js:0
+msgid "Yes"
+msgstr "是"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.js:0
+msgid "No"
+msgstr "否"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.js:0
+msgid "Checking…"
+msgstr "檢查中…"
