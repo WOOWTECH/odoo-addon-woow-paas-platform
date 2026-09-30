@@ -19,7 +19,13 @@ from odoo.tests.common import TransactionCase, tagged
 
 from ..controllers.paas import PaasController
 from ..models.cloud_service import _internal_provision
-from ..services.woow_odoo_readiness import woow_odoo_ready
+from ..services.woow_odoo_readiness import (
+    CONTRACT_MANAGED,
+    CONTRACT_MISMATCH,
+    chart_name_of,
+    woow_odoo_contract,
+    woow_odoo_ready,
+)
 from .operator_contract import ABSENT, operator_client, pod_info, status_response
 
 _ENTRIES = ('cron', 'controller')
@@ -77,15 +83,18 @@ class TestWoowOdooReadinessIdentity(TransactionCase):
             'post_deploy_init_type': 'none',
             'mcp_enabled': False,
         })
-        self.service = _internal_provision(
+        self.service = self._make_service('1251 Service', 'svc-1251')
+
+    def _make_service(self, name, release_name, state='deploying'):
+        return _internal_provision(
             self.env['woow_paas_platform.cloud_service'],
         ).create({
-            'name': '1251 Service',
+            'name': name,
             'workspace_id': self.workspace.id,
             'template_id': self.template.id,
-            'state': 'deploying',
+            'state': state,
             'helm_namespace': 'dev-sandbox-1251',
-            'helm_release_name': 'svc-1251',
+            'helm_release_name': release_name,
         })
 
     @staticmethod
@@ -331,3 +340,59 @@ class TestWoowOdooReadinessIdentity(TransactionCase):
                     self.assertIn(needle, msg)
                 if pods_hint not in expected:
                     self.assertNotIn(pods_hint, msg)
+
+    # ------------------------------------------------------------------ #
+    #  halted（server=0）不經這條 poll                                     #
+    # ------------------------------------------------------------------ #
+
+    def test_halted_service_never_reaches_the_readiness_check(self):
+        """停權中的 woow-odoo 服務 server 被刻意關成 0——必要組判定對它永遠不成立，
+        所以它根本不能進 poll：停權中的 upgrade 維持 `suspended`，而 cron 只撈轉移狀態。"""
+        self.service.write({'state': 'suspended', 'pre_suspend_state': 'running'})
+        deploying = self._make_service('1251 Deploying', 'svc-1251-deploying')
+        client = operator_client(get_status=self._status([_server(), _postgres()]))
+        with patch(
+            'odoo.addons.woow_paas_platform.services.paas_operator'
+            '.get_paas_operator_client',
+            return_value=client,
+        ):
+            self.env['woow_paas_platform.cloud_service']._cron_check_deploying_services()
+
+        polled = [c.kwargs.get('release_name') for c in client.get_status.call_args_list]
+        self.assertEqual(polled, [deploying.helm_release_name])
+        self.assertEqual(self.service.state, 'suspended')
+
+
+class TestWoowOdooContractPredicate(TransactionCase):
+    """Q17 共用判定本身（#1222 D11 分流、#1213 finalize 會直接呼叫）。"""
+
+    def test_chart_name_of_accepts_every_template_ref_shape(self):
+        for ref in ('oci://jcr-prod.woowtech.io/woow-paas-docker-local/woow-odoo',
+                    'woow-paas/woow-odoo', 'woow-odoo', 'oci://registry/woow-odoo/'):
+            with self.subTest(ref=ref):
+                self.assertEqual(chart_name_of(ref), 'woow-odoo')
+        self.assertIsNone(chart_name_of(False))
+        self.assertEqual(
+            chart_name_of('oci://registry-1.docker.io/bitnamicharts/odoo'), 'odoo',
+        )
+
+    def test_contract_follows_the_deployed_chart(self):
+        woow = 'oci://jcr-prod.woowtech.io/woow-paas-docker-local/woow-odoo'
+        bitnami = 'oci://registry-1.docker.io/bitnamicharts/odoo'
+        cases = [
+            # (release.chart, template helm_chart_name, 期望)
+            ('woow-odoo', woow, CONTRACT_MANAGED),
+            ('woow-odoo', bitnami, CONTRACT_MANAGED),     # 實際值為準
+            ('odoo', woow, CONTRACT_MISMATCH),            # #1128
+            (None, woow, CONTRACT_MISMATCH),              # 實際值未知
+            ('odoo', bitnami, None),
+            ('n8n', 'oci://8gears.container-registry.com/library/n8n', None),
+            (None, None, None),
+        ]
+        for chart, expected_ref, expected in cases:
+            with self.subTest(chart=chart, expected_ref=expected_ref):
+                release = {'status': 'deployed', 'revision': 1}
+                if chart is not None:
+                    release['chart'] = chart
+                status = status_response(release=release)
+                self.assertEqual(woow_odoo_contract(status, expected_ref), expected)
