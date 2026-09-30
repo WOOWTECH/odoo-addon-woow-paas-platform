@@ -12,7 +12,7 @@
    upgrading→running 仍在短 poll 落地（真 cursor）→ ``TestExecSurfaceRealCursor1159``。
 4. 每 tick 遵守 B＝1100s 與軟上限 10 筆；積壓時自我 ``_trigger()``、回報
    ``remaining=0``；n8n 優先、其次等待最久 → ``TestInitCron1159``。
-5. 等待時限（#1257 已做）＋ fast-fail 短路（D1）＋容量排隊不計時（D2）
+5. 等待時限（#1257 已做）＋正式 fast-fail 接入位置（D1-R 暫停代用規則）＋容量排隊不計時（D2）
    → ``TestShortPollObservation1159``。
 
 🔴 會走到 init 入口或 cron 迴圈（兩者都會 ``commit``）的測試用真 cursor＋真 commit＋
@@ -171,13 +171,19 @@ class TestShortPollObservation1159(_ServiceCase):
     def _crashing_pods(self, restarts, ready='0/1', phase='Running'):
         return [{'name': 'app-0', 'phase': phase, 'ready': ready, 'restarts': restarts}]
 
-    def test_crash_looping_pod_short_circuits_the_wait(self):
-        svc = self._service('odoo', state='initializing')
-        self._poll(svc, pods=self._crashing_pods(3))
-        self.assertEqual((svc.state, svc.init_exit, svc.init_retries, svc.init_unknown_count),
-                         ('error', 'fast_fail', 0, 0), '短路不耗額度')
-        self.assertIn('app-0', svc.error_message)
-        self.assertTrue(svc.init_pending, '仍欠 init')
+    def test_historical_pod_restarts_do_not_short_circuit_the_wait(self):
+        """D1-R：終生累計3或100次都不是本次失敗證據，但正常等待時限仍有效。"""
+        for restarts in (3, 100):
+            with self.subTest(restarts=restarts):
+                svc = self._service('odoo', state='initializing')
+                self._poll(svc, pods=self._crashing_pods(restarts))
+                self.assertEqual((svc.state, svc.init_exit, svc.init_retries, svc.init_unknown_count),
+                                 ('initializing', False, 0, 0))
+                self.assertTrue(svc.init_pending)
+                svc.sudo().write({'init_wait_since': fields.Datetime.now() - timedelta(minutes=31)})
+                self._poll(svc, pods=self._crashing_pods(restarts))
+                self.assertEqual((svc.state, svc.init_exit, svc.init_retries, svc.init_unknown_count),
+                                 ('error', 'wait_timeout', 0, 0))
 
     def test_fewer_restarts_keep_waiting(self):
         svc = self._service('odoo', state='initializing')
@@ -197,9 +203,9 @@ class TestShortPollObservation1159(_ServiceCase):
         self.assertEqual(svc.state, 'initializing', 'lease 在途由 lease／額度收尾')
 
     def test_fast_fail_error_is_not_a_reconfigure_exit(self):
-        """Q30 裁定 i／D1：與 wait_timeout 同類——pods 起不來，reconfigure 照擋。"""
-        svc = self._service('odoo', state='initializing')
-        self._poll(svc, pods=self._crashing_pods(3))
+        """歷史 fast_fail 記錄仍不是額度出口；D1-R 不會因此放寬 reconfigure。"""
+        svc = self._service('odoo', state='error')
+        svc.sudo().write({'init_exit': 'fast_fail'})
         from ..controllers.paas import PaasController
         from types import SimpleNamespace
         client = MagicMock()
@@ -406,7 +412,9 @@ class TestObservationFreshness1159(_ServiceCase):
                     if carrier != 'values':
                         values = model.default_get(['observed_at', 'observation_episode_started_at'])
                         self.assertEqual(fields.Datetime.to_datetime(values['observed_at']), future,
-                                         '前置：偽造default必須真的抵達框架')
+                                         '前置：偽造觀測default必須真的抵達框架')
+                        self.assertEqual(fields.Datetime.to_datetime(values['observation_episode_started_at']),
+                                         future, '前置：episode default也必須真的抵達框架')
                     svc = model.create(vals)
                     self.assertFalse(svc.observed_at, '新服務尚未被operator觀測，不可沿用caller證據')
                     if state == 'pending':
@@ -1096,7 +1104,8 @@ class TestPlatformMonitor1159(_ServiceCase):
         self.assertEqual(svc.init_exit, 'wait_timeout')
         self.assertIn(svc.name, self._activities(summary)[:1].note or '')
         other = self._service('odoo', state='initializing')
-        self._poll(other, pods=[{'name': 'x-0', 'phase': 'Running', 'ready': '0/1', 'restarts': 4}])
+        # 歷史／未來正式訊號的事件介面仍可報告；本版不再由 Pod 累計 restarts 產生它。
+        other._init_to_error('fast_fail', '已記錄的正式 fast-fail 事件')
         self.assertEqual(other.init_exit, 'fast_fail')
         self.assertIn(other.name, self._activities(summary)[:1].note or '',
                       '同一張未處理的 activity 追加一行，不另開')

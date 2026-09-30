@@ -97,10 +97,9 @@ commit（poll 剛寫的 state 先落地）
   優先，且每次成功 claim 在同類移尾。新 generation、同代重新進 initializing、明確 failed 或 partial 重置此時計；
   not_executed 與 unknown 保留，成功結束。結果先持久化、再套用的 crash 縫以 attempt accounting marker 冪等補套，
   不重複計時／額度。
-- #1192 的 fast-fail 短路（#1159 D1）：not ready 且任一非 Job 擁有的 Pod 自身未 ready、`restarts ≥ 3` ⇒ 轉 error
-  （`init_exit='fast_fail'`，不耗額度）。#1192 上線後把 CrashLoopBackOff／initContainer 訊號接進同一判定
-  （`_init_fast_fail_pod`）。
-- `initializing` 一定會結束，出口四個，都轉 error 並記 `init_exit`：`failed`、`unknown`、`wait_timeout`、`fast_fail`。
+- **D1-R（使用者後續裁決）**：停用 `restarts ≥ 3` 的代用 fast-fail；它是 Pod 終生累計，不代表本次失敗。
+  `_init_fast_fail_pod` 保留為 #1192 正式訊號接入位置，在該票完成前不觸發，仍走既定等待時限。
+- 自動收斂的 error 出口為 `failed`、`unknown`、`wait_timeout`；`fast_fail` 值與消費端保留供歷史記錄及正式訊號使用。
 - 可調的只有兩個 `ir.config_parameter`：`woow_paas_platform.init_unknown_limit`（預設 2）與
   `woow_paas_platform.init_wait_timeout_minutes`（預設 30）；lease 長度與 failed 上限是常數。
 - attempt 記錄（`cloud_service_init_attempt`）只給 `base.group_system`，存截斷並遮罩後的錯誤，**不存 api_key**；保留
@@ -169,8 +168,8 @@ woow-paas/paas-app-bundle-cd#154（prod `limit_time_real_cron=1800`）要先上 
   失敗算 not_executed）⇒ 所有 initializing 的服務兩輪之後都會轉 error。這是保守分類的已知代價，靠 #1159 Q38
   的監控（24h unknown 次數）及早發現。
 - 由觀測推進的轉移最多延遲一個短 poll 週期（約 60 秒）；前端輪詢不再加速收斂。
-- fast-fail 以 `restarts ≥ 3` 判斷，已知誤判面：Pod 早期重啟過 3 次、之後只是短暫 not ready 也會命中（租戶出口是
-  rollback）。#1192 上線後以 CrashLoopBackOff／initContainer 訊號取代。
+- D1-R 選擇等待正式 #1192 訊號，避免舊 Pod／PG／sidecar 的歷史重啟導致誤判；代價是確實故障的服務可能等到
+  既定 readiness 等待上限，才以 wait_timeout 收斂，而不是用不可靠訊號提早終止。
 - deleting 但 release 一直存在（uninstall 沒送成功）時沒有任何路徑會重送 uninstall（#1279）。
 - 監控 activity 建立時 core 會寄通知信給被指派者（`action_notify`）。
 - n8n client 預算改為專屬 `(120, 600)`，由 repo-lint `init-n8n-budget-ladder` 從 operator 原始碼的 AST 算 envelope

@@ -516,8 +516,6 @@ INIT_CRON_SOFT_CAP = 10
 _INIT_CRON_XMLID = 'woow_paas_platform.ir_cron_run_post_deploy_inits'
 # init cron 的 wall 時鐘（模組層級，測試可替換）。
 _init_cron_clock = time.monotonic
-# #1159 D1：等待 readiness 的 fast-fail 門檻，沿用 #1192 裁決的 restartCount ≥ 3。
-INIT_FAST_FAIL_RESTARTS = 3
 
 # 逾時訊息的分型提示：把 `_is_release_ready` 的 detail 對應到「維運該往哪查」。
 # 目的是讓人不必進叢集就知道方向——detail 說「卡在哪」，hint 說「去查什麼」。
@@ -4253,7 +4251,7 @@ class CloudService(models.Model):
             service._init_settle_expired_lease()
             if service.state == 'initializing':
                 # Q10：等 readiness 受時限約束（#489 age timeout 不管 initializing）；
-                # #1159 D1：Pod 反覆重啟的 fast-fail 訊號可以提早短路。
+                # #1159 D1-R：正式 fast-fail 接入位置；#1192 未接入前不使用累計重啟代判。
                 if not service._init_check_fast_fail(status):
                     service._init_check_wait_timeout()
 
@@ -4500,25 +4498,12 @@ class CloudService(models.Model):
 
     @staticmethod
     def _init_fast_fail_pod(status):
-        """#1159 D1：等待 readiness 時可以短路的訊號；回傳 ``(pod 名, restarts)`` 或 None。
+        """#1159 D1-R：保留 #1192 正式訊號的接入位置，本版不以累計 restarts 代判。
 
-        #1192 仍 open：operator 還沒帶出 initContainer 狀態與 ``waiting.reason``，目前只有
-        PodInfo 的 ``restarts``（該 Pod 主 container 的 restartCount 加總）。判準＝該 Pod
-        本身未 ready 且 ``restarts ≥ INIT_FAST_FAIL_RESTARTS``。#1192 上線後把
-        CrashLoopBackOff／initContainer 訊號接進這裡（同一個判定函式）。
-        已知誤判面：Pod 早期重啟過 3 次、之後只是短暫 not ready 也會命中；租戶出口是
-        rollback（Q30 裁定 i，與 wait_timeout 同類）。Job 擁有的 Pod（例行備份等）不看。
+        PodInfo.restarts 是整個 Pod 的歷史累計，不能證明本次初始化失敗。
+        正式 initContainer／CrashLoopBackOff 契約尚未接入前不短路，仍走既定等待時限；
+        fast_fail 出口與消費端保留，供歷史記錄與 #1192 後續使用。
         """
-        for pod in status.get('pods') or []:
-            if (pod.get('phase') in ('Succeeded', 'Failed') or pod.get('deletion_timestamp')
-                    or pod.get('owner_kind') == 'Job'):
-                continue
-            ready = pod.get('ready', '0/0')
-            pod_ready = (pod.get('phase') == 'Running' and '/' in ready
-                         and ready.split('/')[0] == ready.split('/')[1])
-            restarts = pod.get('restarts') or 0
-            if not pod_ready and restarts >= INIT_FAST_FAIL_RESTARTS:
-                return pod.get('name') or '?', restarts
         return None
 
     def _init_check_fast_fail(self, status):
