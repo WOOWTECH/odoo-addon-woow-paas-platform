@@ -365,6 +365,23 @@ class TestInitLeaseRealCursor1257(TransactionCase):
         with self.registry.cursor() as cr:
             cr.execute(query, params)
 
+    def _complete_operator_cooldown(self, spent=None, init_type='odoo', seconds_ago=60):
+        """把同一段 cooldown 等距平移到 DB 現在之前，保留 start < eligible 的真實 60 秒。"""
+        sets = [
+            "init_wait_started_at = (statement_timestamp() AT TIME ZONE 'UTC') - "
+            "make_interval(secs => %s)",
+            "init_retry_eligible_at = (statement_timestamp() AT TIME ZONE 'UTC')",
+        ]
+        params = [seconds_ago]
+        if spent is not None:
+            sets.append('init_wait_spent_seconds = %s')
+            params.append(spent)
+        params.append(self.service_ids[init_type])
+        self._sql(
+            "UPDATE woow_paas_platform_cloud_service SET %s WHERE id = %%s" % ', '.join(sets),
+            tuple(params),
+        )
+
     def _set_lease(self, init_type='odoo', seconds_from_now=-1, outcome=None, legacy=False):
         """模擬「上一次 claim 之後 worker 死掉」：寫一筆在途 attempt 與 lease。"""
         def claim(svc):
@@ -562,6 +579,57 @@ class TestInitLeaseRealCursor1257(TransactionCase):
                                msg='time after eligibility is platform capacity queueing, not tenant wait')
         self._entry(client)
         self.assertEqual(client.init_odoo.call_count, 2)
+
+    def test_not_executed_ready_observations_accumulate_to_the_operator_timeout(self):
+        """E2：每輪 Ready 都不能清掉 operator clock；30 段完整 cooldown 後應收斂且停止 dispatch。"""
+        client = operator_client(init_odoo={
+            'success': False, 'error_step': 'wait_ready', 'error_kind': 'not_executed'})
+        self._entry(client)
+        for _round in range(30):
+            # 模擬下一輪短 poll 又看到 Ready；它只能刷新 Pod 軸，不能歸零 operator 軸。
+            self._sql("UPDATE woow_paas_platform_cloud_service SET init_ready_observed = FALSE "
+                      "WHERE id = %s", (self.service_ids['odoo'],))
+            self._run(lambda svc: svc._init_mark_ready_observed())
+            self._complete_operator_cooldown()
+            self._entry(client)
+        state = self._read()
+        self.assertEqual(client.init_odoo.call_count, 30)
+        self.assertEqual((state['state'], state['init_exit']), ('error', 'wait_timeout'))
+        self.assertEqual((state['init_retries'], state['init_unknown_count']), (0, 0))
+        self._entry(client)
+        self.assertEqual(client.init_odoo.call_count, 30, '到期後不得再 dispatch')
+
+    def test_full_cooldown_is_counted_once_and_capacity_pause_is_free(self):
+        """E3：完整 cooldown 累計，eligible 後的 20 分容量排隊不再增加；下一 claim 正確續計。"""
+        client = operator_client()
+        client.init_odoo.side_effect = [
+            {'success': False, 'error_kind': 'not_executed'},
+            {'success': False, 'error_kind': 'not_executed'},
+            {'success': False, 'error_kind': 'unknown'},
+        ]
+        self._entry(client)
+        self._complete_operator_cooldown()
+        self._entry(client)
+        self.assertAlmostEqual(self._read()['wait_spent'], 60, delta=1)
+        # 第二次 not_executed 的 cooldown 已完成後，再等 20 分容量；start/eligible 保持 60 秒。
+        self._sql("UPDATE woow_paas_platform_cloud_service SET "
+                  "init_wait_started_at = (statement_timestamp() AT TIME ZONE 'UTC') - interval '21 minutes', "
+                  "init_retry_eligible_at = (statement_timestamp() AT TIME ZONE 'UTC') - interval '20 minutes' "
+                  "WHERE id = %s", (self.service_ids['odoo'],))
+        self._entry(client)
+        state = self._read()
+        self.assertAlmostEqual(state['wait_spent'], 120, delta=1)
+        self.assertEqual(state['init_unknown_count'], 1)
+        self.assertEqual(client.init_odoo.call_count, 3)
+
+    def test_remaining_budget_shorter_than_cooldown_expires_before_resend(self):
+        """E3：剩餘不足 60 秒時仍走完整 cooldown，預算到期直接 error，不截短重送。"""
+        self._complete_operator_cooldown(spent=1740.1)
+        client = operator_client(init_odoo={'success': True})
+        self._entry(client)
+        state = self._read()
+        client.init_odoo.assert_not_called()
+        self.assertEqual((state['state'], state['init_exit']), ('error', 'wait_timeout'))
 
     def test_entry_does_not_time_out_a_queued_service(self):
         """#1159 D2：入口只判額度。排隊等 init cron 屬平台容量排隊、不計時；等待時限
