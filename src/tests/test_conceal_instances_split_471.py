@@ -105,10 +105,9 @@ class TestConcealInstancesSeed(TransactionCase):
         # 上面的 search 本來就撈得到它（`active_test=False` 在此為無效參數，留著是
         # 為了與其他盤點測試同形）。封存守線在 test_ha_full_apporo_seed.py。
         # （pi-agent 2026-09-24 已上架＝不再 hidden，image 釘 20260924.0235@sha256。）
-        # omnigent：hidden-only（曝光層）——2026-09-29 以隱藏卡片上線，待正式環境實測
-        # （雲端 runner、pi-agent 連結）後公開；既有實例不 conceal。
+        # （omnigent 2026-09-29 以隱藏卡片進 seed，2026-09-30 隨 .188 公開上架＝不再 hidden。）
         self.assertEqual(
-            set(hidden.mapped('slug')), {'ha-paas', 'ha-full-apporo', 'omnigent'},
+            set(hidden.mapped('slug')), {'ha-paas', 'ha-full-apporo'},
             '隱藏 template 盤點漂移；新增的請先判定屬曝光層還是實例層')
         concealed = hidden.filtered('conceal_instances')
         self.assertEqual(
