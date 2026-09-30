@@ -472,6 +472,85 @@ class TestInitCron1159(_RealCursorCase):
         self._run_cron('_cron_run_post_deploy_inits', client)
         self.assertEqual(calls, [self._release(legacy), self._release(fresh)])
 
+    def test_budget_cutoff_then_same_type_retry_rotates_to_the_second_service(self):
+        """E4：A 第一次 not_executed 後移尾；下一 tick 即使 A 已 eligible，B 仍先取得機會。"""
+        first = self._add('odoo', ready_minutes_ago=20)
+        second = self._add('odoo', ready_minutes_ago=10)
+        calls = []
+        client = operator_client()
+        client.init_odoo.side_effect = [
+            {'success': False, 'error_kind': 'not_executed'},
+            {'success': True},
+        ]
+        client.init_odoo.side_effect = lambda **kwargs: (
+            calls.append(kwargs['release_name']) or (
+                {'success': False, 'error_kind': 'not_executed'} if len(calls) == 1
+                else {'success': True}))
+        clock = {'now': 0}
+        with patch(f'{_MODEL_MODULE}._init_cron_clock', side_effect=lambda: clock['now']):
+            def first_call(**kwargs):
+                calls.append(kwargs['release_name'])
+                clock['now'] = 81
+                return {'success': False, 'error_kind': 'not_executed'}
+            client.init_odoo.side_effect = first_call
+            self._run_cron('_cron_run_post_deploy_inits', client)
+        self.assertEqual(calls, [self._release(first)])
+        self.assertEqual(self._read(second, 'state'), 'initializing')
+        with self.registry.cursor() as cr:
+            svc = self._env(cr)[SVC].browse(first)
+            now = svc._init_db_now()
+            svc.write({
+                'init_wait_started_at': now - timedelta(seconds=60),
+                'init_retry_eligible_at': now,
+            })
+        calls.clear()
+        client.init_odoo.side_effect = lambda **kwargs: calls.append(kwargs['release_name']) or {'success': True}
+        with patch(f'{_MODEL_MODULE}._init_cron_clock', return_value=0):
+            self._run_cron('_cron_run_post_deploy_inits', client)
+        self.assertEqual(calls[0], self._release(second))
+
+    def test_ready_revoked_after_cron_queue_snapshot_is_not_dispatched(self):
+        """E5：cron 已取 queue 後另一真 cursor 撤 Ready，舊 queue recordset 也不得送出。"""
+        service_id = self._add('odoo', ready_minutes_ago=5)
+        queued, revoke_done, release = threading.Event(), threading.Event(), threading.Event()
+        calls, errors = [], []
+        client = operator_client()
+        client.init_odoo.side_effect = lambda **kwargs: calls.append(kwargs) or {'success': True}
+        model = type(self.env[SVC])
+        original = model._init_cron_queue
+
+        def queue_then_pause(records):
+            result = original(records)
+            queued.set()
+            release.wait(20)
+            return result
+
+        def run_cron():
+            try:
+                self._run_cron('_cron_run_post_deploy_inits', client)
+            except Exception as exc:
+                errors.append(exc)
+
+        monitor = type(self.env['woow_paas_platform.platform_monitor'])
+        with patch.object(model, '_init_cron_queue', autospec=True, side_effect=queue_then_pause), \
+                patch.object(monitor, '_run_init_cron_checks', autospec=True):
+            thread = threading.Thread(target=run_cron)
+            thread.start()
+            try:
+                self.assertTrue(queued.wait(20), _thread_stacks(thread))
+                with self.registry.cursor() as cr:
+                    cr.execute("UPDATE woow_paas_platform_cloud_service SET init_ready_observed = FALSE "
+                               "WHERE id = %s", (service_id,))
+                revoke_done.set()
+            finally:
+                release.set()
+                thread.join(30)
+        self.assertTrue(revoke_done.is_set())
+        self.assertFalse(thread.is_alive(), _thread_stacks(thread))
+        self.assertFalse(errors, errors)
+        self.assertEqual(calls, [])
+        self.assertEqual(self._read(service_id, 'state'), 'initializing')
+
     def test_services_not_observed_ready_are_not_claimed(self):
         waiting = self._add('odoo')  # 還沒被短 poll 觀測到 ready
         client, calls = self._recording_client()
