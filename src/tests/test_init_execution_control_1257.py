@@ -350,6 +350,7 @@ class TestInitLeaseRealCursor1257(TransactionCase):
                 'wait_started_at': svc.init_wait_started_at,
                 'retry_eligible_at': svc.init_retry_eligible_at,
                 'queue_turn': svc.init_queue_turn,
+                'pod_wait_since': svc.init_wait_since,
                 'attempt': svc.init_attempt_id.id,
                 'n8n_api_key': svc.n8n_api_key,
                 'redeploy_requested': svc.init_redeploy_requested,
@@ -510,7 +511,9 @@ class TestInitLeaseRealCursor1257(TransactionCase):
         self._entry(client)
         self._entry(client)
         self.assertEqual(client.init_odoo.call_count, 1, 'lease 未到期前不得重送')
-        self.assertEqual(self._read()['init_unknown_count'], 1)
+        state = self._read()
+        self.assertEqual(state['init_unknown_count'], 1)
+        self.assertTrue(state['pod_wait_since'], 'unknown 不得順手移除既有 Pod 等待錨點')
 
     def test_active_lease_blocks_the_claim(self):
         self._set_lease(seconds_from_now=600)
@@ -658,6 +661,61 @@ class TestInitLeaseRealCursor1257(TransactionCase):
         state = self._read('n8n')
         self.assertEqual(state['state'], 'running')
         self.assertEqual(state['n8n_api_key'], _JWT)
+
+    def test_n8n_success_recovery_keeps_secret_context_for_helm_mirror(self):
+        """結果已記錄、套用前 crash 後，重播仍須用 service 受保護 key 寫 Helm mirror。"""
+        self._sql("UPDATE woow_paas_platform_cloud_app_template SET mcp_api_key_helm_path = %s "
+                  "WHERE id = %s", ('config.mcpApiKey', self.template_ids['n8n']))
+        self._sql("UPDATE woow_paas_platform_cloud_service SET helm_values = %s WHERE id = %s",
+                  ('{}', self.service_ids['n8n']))
+        client = operator_client(init_n8n={'success': True, 'api_key': _JWT})
+        model = type(self.env[SVC])
+        with patch.object(model, '_init_apply_outcome', side_effect=RuntimeError('crash after result')):
+            self._entry(client, 'n8n')
+        self.assertEqual(self._read('n8n')['n8n_api_key'], _JWT)
+        self._entry(client, 'n8n')
+        self.assertEqual(client.init_n8n.call_count, 1, '補套不得重送 operator')
+
+        def recovered(svc):
+            attempt = svc.env[ATTEMPT].search([('service_id', '=', svc.id)])
+            return svc.state, json.loads(svc.helm_values), attempt.applied_at, attempt.error or ''
+        state, helm_values, applied_at, attempt_error = self._run(recovered, 'n8n')
+        self.assertEqual(state, 'running')
+        self.assertEqual(helm_values['config']['mcpApiKey'], _JWT)
+        self.assertTrue(applied_at)
+        self.assertNotIn(_JWT, attempt_error)
+
+    def test_two_cursors_recover_recorded_unknown_only_once(self):
+        """兩條 recovery 都先見 marker 空時，列鎖後重讀 marker 仍只能計 unknown 一次。"""
+        self._set_lease(seconds_from_now=600)
+        attempt_id = self._read()['attempt']
+        self._sql("UPDATE woow_paas_platform_cloud_service_init_attempt SET "
+                  "finished_at = (statement_timestamp() AT TIME ZONE 'UTC'), "
+                  "outcome = 'unknown', error = 'recorded before crash' WHERE id = %s",
+                  (attempt_id,))
+        start = threading.Barrier(2)
+        errors = []
+
+        def recover():
+            try:
+                with self.registry.cursor() as cr:
+                    svc = self._env(cr)[SVC].browse(self.service_ids['odoo'])
+                    start.wait(20)
+                    svc._init_recover_recorded_attempt()
+                    cr.commit()
+            except Exception as exc:
+                errors.append(exc)
+
+        threads = [threading.Thread(target=recover) for _ in range(2)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(30)
+        self.assertFalse(errors, errors)
+        state = self._read()
+        self.assertEqual(state['init_unknown_count'], 1)
+        self.assertTrue(state['lease'], 'unknown 的原 lease 不得因補套提早釋放')
+        self.assertEqual(self._run(lambda svc: svc.init_attempt_id.applied_at is not False), True)
 
     def test_local_bookkeeping_error_recovers_without_double_counting(self):
         """D2-R2：結果已落帳但套用炸掉時，保留 marker 給下一趟補套，恰好一次。"""

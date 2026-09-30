@@ -84,7 +84,7 @@ commit（poll 剛寫的 state 先落地）
 | partial（部分成功） | n8n `success=false` 但帶 `api_key`；key 先存 | 與 unknown 共用每代 2 次 | **留到到期** |
 | unknown（結果未知） | exec timeout、空輸出、JSON 無效、HTTP 500、read timeout、連線中途斷、lease 到期、**缺 `error_kind` 的舊 operator** | 與 partial 共用每代 2 次，第 2 次轉 error | **留到到期**（重送前必須等） |
 | not_executed（等待） | operator `error_kind=not_executed`（`find_pod`／`wait_ready`）；平台端只有 connect 階段失敗（`ConnectTimeout`、`NewConnectionError`） | 不耗 | 釋放 |
-| （本地記帳錯誤） | 套用結果時平台自己的例外 | 不耗、`_logger.exception` 告警 | 釋放 |
+| （本地記帳錯誤） | 結果記錄段或套用段的平台例外 | 不耗、`_logger.exception` 告警；記錄段無結果可補才釋放，已持久化結果的套用段保留 pointer／lease，下一趟冪等補套 | 依已持久化結果的 lease 語意保留；記錄段失敗才釋放 |
 
 - **分工**：時間只管等待，次數只管結果。Pod readiness 的既有 `init_wait_since` 仍由短 poll 在 not-ready 時判；
   D2-R 另設 operator `not_executed` 的 30 分累計時計：只計 request wall time 與其後完整 60 秒 cooldown，不受後續

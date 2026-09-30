@@ -2889,7 +2889,8 @@ class CloudService(models.Model):
                    AND (s.init_lease_until IS NULL
                         OR s.init_lease_until <= (statement_timestamp() AT TIME ZONE 'UTC'))
                  ORDER BY (t.post_deploy_init_type = 'n8n') DESC,
-                          s.init_queue_turn ASC NULLS LAST, s.id""",
+                          COALESCE(s.init_queue_turn, s.init_ready_since) ASC NULLS LAST,
+                          s.id""",
             (tuple(INIT_LEASE_SECONDS),),
         )
         return self.browse([row[0] for row in self.env.cr.fetchall()])
@@ -4623,10 +4624,9 @@ class CloudService(models.Model):
         self.ensure_one()
         cr = self.env.cr
         wait_budget_seconds = self._init_wait_timeout_minutes() * 60
-        # The WHERE is the authoritative claim decision. It re-checks the current Ready
-        # observation, cooldown eligibility, and the accumulated budget in the same UPDATE
-        # that takes the lease, so a stale queue snapshot cannot dispatch after a concurrent
-        # not-ready observation or timeout.
+        # WHERE 是唯一的 claim 裁決點：它在取得 lease 的同一個 UPDATE 重驗最新
+        # Ready、cooldown eligibility 與已累計預算，避免過時 queue snapshot 在並發
+        # not-ready 觀測或逾時後仍 dispatch。
         rows = self._init_guarded(
             f"""UPDATE {self._table}
                    SET init_lease_until = (statement_timestamp() AT TIME ZONE 'UTC')
@@ -4718,21 +4718,25 @@ class CloudService(models.Model):
             return None, exc
 
     def _init_recover_recorded_attempt(self):
-        """Finish a result-recorded attempt exactly once after a worker crash.
+        """worker crash 後對已持久化結果補套恰好一次，不重送 operator。
 
-        The attempt result commits before service accounting. ``applied_at`` is written in
-        the same transaction as the accounting, so a restart can safely replay this narrow
-        second half without re-sending the operator request or double-counting time/quota.
+        結果先 commit、服務端記帳與 ``applied_at`` marker 同交易 commit。是否已套用只能
+        在下游 CAS 取得 service 列鎖後判斷，不能在此處以舊 snapshot 提前判斷。n8n
+        success 的 key 不存 attempt；重播時從同一 service 受保護欄位重建 context。
         """
         self.ensure_one()
         attempt = self.sudo().init_attempt_id.sudo()
-        if not attempt or not attempt.finished_at or not attempt.outcome or attempt.applied_at:
+        if not attempt or not attempt.finished_at or not attempt.outcome:
             return False
+        api_key = None
+        if attempt.init_type == 'n8n' and attempt.outcome == OUTCOME_SUCCESS:
+            api_key = self.sudo().n8n_api_key
         outcome = InitOutcome(
             attempt.outcome,
             error_step=attempt.error_step or None,
             error_kind=attempt.error_kind or None,
             message=attempt.error or None,
+            api_key=api_key,
         )
         return self._init_apply_outcome(attempt, outcome, attempt.error or False)
 
@@ -4828,10 +4832,10 @@ class CloudService(models.Model):
     def _init_finish(self, attempt, outcome, secrets_to_mask=()):
         """Q2：結果先寫 attempt 記錄（commit），再用 CAS 套到服務（commit）。
 
-        兩段各自是一個回捲單位（`post-commit-bookkeeping-rollback-unit`）：attempt
-        記錄與 n8n key 是「遠端已發生的事實」在平台這側的副本，不能因為套用失敗而被
-        一起回捲。任何一段失敗都是**本地記帳錯誤**（Q3）：不耗額度、釋放 lease、
-        `_logger.exception` 告警。
+        結果記錄與 n8n key 是「遠端已發生的事實」在平台這側的副本，先各自 commit；
+        後段 CAS 服務記帳與 ``applied_at`` 同交易 commit。記錄段失敗沒有可恢復結果，
+        才釋放 lease 且不耗額度；已記錄結果的套用段失敗保留 pointer／lease，交下一趟
+        冪等補套，並以 `_logger.exception` 告警。
 
         ⚠ #1052 標記（非裁定）：這裡的 ``except Exception`` 連 ``OperationalError``
         一併收掉並 ``rollback``，與該 doc 規則一（OperationalError 必須外拋）分歧——
@@ -4897,8 +4901,6 @@ class CloudService(models.Model):
           可能仍在跑，lease 留到到期。
         """
         self.ensure_one()
-        if attempt.applied_at:
-            return False
         cr = self.env.cr
         rows = None
         for _try in range(self._INIT_CAS_TRIES):
@@ -4912,8 +4914,21 @@ class CloudService(models.Model):
                 break
             cr.rollback()  # 丟掉舊 snapshot，下一次在新交易重試
         if rows is None:
-            self._init_release_unapplied(attempt.id, 'service row busy')
+            # 結果已持久化時不可清掉復原 anchor；下一輪仍能以同一 attempt 補套。
+            _logger.warning(
+                "[#1257] init attempt %s of service %s row busy; keeping recovery pointer",
+                attempt.id, self.id,
+            )
             return False
+        if rows:
+            # 必須在 service 列鎖後讀 marker：兩個 recovery caller 都曾看見 marker 空時，
+            # 後到者經 40001 重試會在新 snapshot 看見前者的 applied_at，不能再計一次。
+            cr.execute(
+                "SELECT applied_at FROM woow_paas_platform_cloud_service_init_attempt "
+                "WHERE id = %s", (attempt.id,))
+            marker = cr.fetchone()
+            if not marker or marker[0]:
+                return False
         if not rows:
             if outcome.outcome in (OUTCOME_SUCCESS, OUTCOME_FAILED, OUTCOME_NOT_EXECUTED):
                 self._init_release_unapplied(attempt.id, 'service moved on')
@@ -4983,6 +4998,8 @@ class CloudService(models.Model):
             vals = {
                 'init_unknown_count': (svc.init_unknown_count or 0) + 1,
                 'init_error': masked_error,
+                # Pod readiness 等待錨點是既有另一軸；D2-R 只裁 operator clock。
+                'init_wait_since': attempt.finished_at,
             }
             if kind == OUTCOME_PARTIAL:
                 vals.update(
@@ -5002,8 +5019,8 @@ class CloudService(models.Model):
                     seconds=INIT_NOT_EXECUTED_COOLDOWN_SECONDS),
             }))
             svc._init_check_operator_wait_timeout()
-        # Result application and this marker commit together; recovery sees either neither
-        # or both, so no outcome (especially not_executed time) can be applied twice.
+        # 結果套用與 marker 同交易 commit，重播只會看到「都沒有」或「都已有」，
+        # 因此任何 outcome（尤其 not_executed 時計）都不會重複套用。
         attempt.write({'applied_at': self._init_db_now()})
         if kind != OUTCOME_SUCCESS:
             _logger.warning(

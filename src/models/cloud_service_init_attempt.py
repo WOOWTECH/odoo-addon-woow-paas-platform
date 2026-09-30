@@ -219,8 +219,8 @@ class CloudServiceInitAttempt(models.Model):
     lease_until = fields.Datetime(required=True, help='DB clock (UTC); see INIT_LEASE_SECONDS')
     finished_at = fields.Datetime(help='Empty while in flight')
     applied_at = fields.Datetime(
-        help='When the persisted result was applied to service-side counters/state. '
-             'Makes result-record → apply crash recovery idempotent.',
+        help='已持久化結果套用到 service 計數／狀態的時間；使結果記錄 → 套用的 '
+             'crash recovery 保持冪等。',
     )
     outcome = fields.Selection(
         selection=[

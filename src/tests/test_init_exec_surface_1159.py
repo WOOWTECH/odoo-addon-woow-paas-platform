@@ -456,6 +456,22 @@ class TestInitCron1159(_RealCursorCase):
         for sid in (odoo_recent, odoo_oldest, n8n_newest):
             self.assertEqual(self._read(sid, 'state'), 'running')
 
+    def test_missing_queue_turn_falls_back_to_first_ready_anchor(self):
+        """D2-R 相容列沒有 queue_turn 時仍按既有 first-ready 排，不可在新流量下飢餓。"""
+        legacy = self._add('odoo')
+        fresh = self._add('odoo', ready_minutes_ago=5)
+        with self.registry.cursor() as cr:
+            svc = self._env(cr)[SVC].browse(legacy)
+            now = svc._init_db_now()
+            svc.write({
+                'init_ready_observed': True,
+                'init_ready_since': now - timedelta(minutes=20),
+                'init_queue_turn': False,
+            })
+        client, calls = self._recording_client()
+        self._run_cron('_cron_run_post_deploy_inits', client)
+        self.assertEqual(calls, [self._release(legacy), self._release(fresh)])
+
     def test_services_not_observed_ready_are_not_claimed(self):
         waiting = self._add('odoo')  # 還沒被短 poll 觀測到 ready
         client, calls = self._recording_client()
@@ -513,9 +529,10 @@ class TestInitCron1159(_RealCursorCase):
                 'init_wait_started_at': now - timedelta(seconds=60),
                 'init_retry_eligible_at': now + timedelta(seconds=60),
             })
-        client, calls = self._recording_client()
-        self._run_cron('_cron_run_post_deploy_inits', client)
-        self.assertEqual(calls, [])
+        # operator client 缺席時 cron 仍必先收時計；這裡故意不建立 recording client。
+        with patch(f'{_OPERATOR_MODULE}.get_paas_operator_client', return_value=None):
+            with self.registry.cursor() as cr:
+                self._env(cr)[SVC]._cron_run_post_deploy_inits()
         self.assertEqual(self._read(service_id, 'state'), 'error')
 
     def test_no_backlog_no_trigger(self):
