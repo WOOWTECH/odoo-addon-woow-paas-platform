@@ -325,8 +325,10 @@ class TestWoowOdooReadinessIdentity(TransactionCase):
             ),
             'required pods not ready': (
                 self._status([_server(ready='0/1'), _postgres()]),
-                (pods_hint,),
+                (pods_hint, 'svc-1251-woow-odoo-6c9d7-x2k4p'),
             ),
+            # 一顆 Pod 都沒有（quota 擋住 Pod 建立）：沿用通用 detail，接得上 quota 的 hint。
+            'no pods found': (self._status([]), ('ResourceQuota',)),
             'pod lookup failed': (
                 self._status([], pod_retrieval_error='pods is forbidden'),
                 ('RBAC',),

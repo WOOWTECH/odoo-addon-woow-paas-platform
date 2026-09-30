@@ -131,9 +131,15 @@ def woow_odoo_ready(status):
             'component/owner evidence'
         )
 
+    pods = status.get('pods') or []
+    if not pods:
+        # 一顆 Pod 物件都沒有（例：ResourceQuota 擋住建立）：與通用判定同字串，
+        # 接得上 `_TIMEOUT_HINTS` 的 quota 方向。
+        return False, 'HARD: no pods found for this release'
+
     required = {component: [] for component, _ in _REQUIRED_COMPONENTS}
     exempt, unexpected = [], []
-    for pod in filter(_is_active, status.get('pods') or []):
+    for pod in filter(_is_active, pods):
         component = _required_component(pod)
         if component:
             required[component].append(pod)
@@ -149,10 +155,17 @@ def woow_odoo_ready(status):
     if unexpected:
         hard.append('unexpected pod outside the woow-odoo contract: '
                     + ', '.join(map(_describe, unexpected)))
+    not_ready = [
+        pod for group in required.values() for pod in group if not _is_pod_ready(pod)
+    ]
     if hard:
         ready, detail = False, 'HARD: ' + '; '.join(hard)
-    elif not all(_is_pod_ready(pod) for pods in required.values() for pod in pods):
-        ready, detail = False, 'required pods not ready'
+    elif not_ready:
+        # 刻意含 'pods not ready'：沿用 `_TIMEOUT_HINTS` 查 container log／probe 的方向。
+        # 不是 HARD——Pod 在、只是還沒 ready，是正常的建立／重啟窗口。
+        ready, detail = False, (
+            'required pods not ready: ' + ', '.join(map(_describe, not_ready))
+        )
     else:
         ready, detail = True, 'woow-odoo required components ready'
     if exempt:

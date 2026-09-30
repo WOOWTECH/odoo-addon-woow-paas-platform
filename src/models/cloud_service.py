@@ -2890,6 +2890,10 @@ class CloudService(models.Model):
         上述 F-423-1 只改「空陣列」；#1156 另補混合 phase：Running 的 PG 與
         Pending 的 Odoo 同時存在時，仍須維持未就緒。
 
+        woow-odoo release **不走這裡**：`_is_release_ready` 把它分流到
+        `services/woow_odoo_readiness.py`（#1251：必要組＋例行 Job 豁免＋其他
+        fail-closed），本規則對其他 chart 不變。
+
         殘餘風險與封頂：若某 chart 的 pod 不帶 ``app.kubernetes.io/instance``
         （operator 的 selector），服務會從「假就緒」變成「永久卡 deploying」。合併前
         已逐一實證現行 15 個 template 涵蓋的 9 支 chart 都帶該標籤；長期由 #489 的
