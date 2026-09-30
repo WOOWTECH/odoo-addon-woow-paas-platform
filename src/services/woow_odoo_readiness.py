@@ -110,6 +110,19 @@ def woow_odoo_ready(status):
     Returns:
         ``(ready: bool, detail: str)``。
     """
+    if status.get('pod_retrieval_error'):
+        # 與 `_is_container_ready` 同字串：沿用 `_TIMEOUT_HINTS` 的 RBAC 方向。
+        return False, f"HARD: pod lookup failed: {status['pod_retrieval_error']}"
+    # Q18：舊 operator 不回 component／owner_kind。**以 echo 旗標為準、`is True` 比對**——
+    # 缺 key（#1263 前的真實形狀）與 False 都擋；不從 Pod 欄位是否為 None 推斷。
+    # 不退回通用判定：那會讓負例 1（只剩 Job 卻判綠）回來。
+    if status.get('pod_identity_included') is not True:
+        return False, (
+            'HARD: operator lacks pod identity (pod_identity_included missing or '
+            'false) — refusing to judge woow-odoo readiness without '
+            'component/owner evidence'
+        )
+
     required = {component: [] for component, _ in _REQUIRED_COMPONENTS}
     exempt, unexpected = [], []
     for pod in filter(_is_active, status.get('pods') or []):

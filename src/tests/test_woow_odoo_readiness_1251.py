@@ -18,7 +18,7 @@ from odoo.tests.common import TransactionCase, tagged
 from ..controllers.paas import PaasController
 from ..models.cloud_service import _internal_provision
 from ..services.woow_odoo_readiness import woow_odoo_ready
-from .operator_contract import operator_client, pod_info, status_response
+from .operator_contract import ABSENT, operator_client, pod_info, status_response
 
 _ENTRIES = ('cron', 'controller')
 
@@ -193,3 +193,56 @@ class TestWoowOdooReadinessIdentity(TransactionCase):
         self.assertTrue(ready)
         self.assertIn(backup['name'], detail)
         self.assertIn('exempt', detail)
+
+    # ------------------------------------------------------------------ #
+    #  必要組未就緒／收尾中的 Pod                                          #
+    # ------------------------------------------------------------------ #
+
+    def test_required_component_must_be_running_and_fully_ready(self):
+        cases = {
+            'server Running 0/1': [_server(ready='0/1'), _postgres()],
+            'server Pending': [_server(phase='Pending', ready='0/1'), _postgres()],
+            'server no container status': [_server(ready='0/0'), _postgres()],
+            'postgres Running 0/1': [_server(), _postgres(ready='0/1')],
+            'one of two servers not ready': [
+                _server(), _server(name='svc-1251-woow-odoo-6c9d7-b7m2q', ready='0/1'),
+                _postgres(),
+            ],
+        }
+        for case, pods in cases.items():
+            with self.subTest(case=case):
+                self._assert_poll_keeps(self._status(pods))
+
+    def test_finished_and_terminating_pods_are_ignored(self):
+        """Recreate 換 Pod：舊 server 帶 deletion_timestamp、上一輪 Job 已 Failed／Succeeded。"""
+        pods = [
+            _server(name='svc-1251-old', ready='0/1',
+                    deletion_timestamp='2026-09-30T01:00:00Z'),
+            _server(),
+            _postgres(),
+            pod_info(name='svc-1251-restore-old', component='db-restore',
+                     owner_kind='Job', phase='Succeeded', ready='0/1'),
+            _db_job('backup', phase='Failed', ready='0/1'),
+        ]
+        self._assert_poll_reaches_running(self._status(pods), state='upgrading')
+
+    # ------------------------------------------------------------------ #
+    #  Q18：operator 沒回 Pod 身分 ⇒ fail-closed                           #
+    # ------------------------------------------------------------------ #
+
+    def test_operator_without_pod_identity_fails_closed(self):
+        """缺 key（#1263 前的 operator 真實形狀）與 False 兩種都要擋。
+
+        Pod 刻意帶齊身分：判準必須是 echo 旗標，不能從 Pod 欄位推斷
+        （``.get('pod_identity_included', True)`` 這種寫錯的預設只測 False 抓不到）。
+        """
+        pods = [_server(), _postgres()]
+        for flag in (ABSENT, False, None):
+            with self.subTest(pod_identity_included=flag):
+                status = self._status(pods, pod_identity_included=flag)
+                self._assert_poll_keeps(status)
+                ready, detail = self.service._is_release_ready(status)
+                self.assertFalse(ready)
+                self.assertTrue(
+                    detail.startswith('HARD: operator lacks pod identity'), detail,
+                )
