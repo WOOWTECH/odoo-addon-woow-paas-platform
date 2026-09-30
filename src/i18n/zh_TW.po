@@ -18244,3 +18244,61 @@ msgid ""
 ").\n"
 "              Remove a route or change plan to add another."
 msgstr "）。請刪除一條路由或變更方案後再新增。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/common/StatusBadge.js:0
+msgid "Initializing · Queued"
+msgstr "初始化中・排隊中"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/common/StatusBadge.js:0
+msgid "Initializing · Waiting for app"
+msgstr "初始化中・等待應用程式就緒"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/common/StatusBadge.js:0
+msgid "Initializing · Retrying"
+msgstr "初始化中・重試中"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/ServiceDetailPage.js:0
+msgid ""
+"Initialization did not complete (attempt #%s). You can change the "
+"configuration to try again, or contact support."
+msgstr "初始化未完成（第 %s 次嘗試）。您可以修改設定後重試，或聯絡客服。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/ServiceDetailPage.js:0
+msgid "Initialization did not complete (attempt #%s). Please contact support."
+msgstr "初始化未完成（第 %s 次嘗試）。請聯絡客服。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/ServiceDetailPage.js:0
+msgid "Last updated %s min ago"
+msgstr "最後更新於 %s 分鐘前"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/ServiceDetailPage.xml:0
+msgid "Contact Support"
+msgstr "聯絡客服"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/DeleteServiceModal.xml:0
+msgid ""
+"An initialization request that was already sent may still complete inside "
+"the cluster."
+msgstr "已送出的初始化請求仍可能在叢集內完成。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/ServiceDetailPage.js:0
+msgid "Initialization did not complete. Please contact support."
+msgstr "初始化未完成。請聯絡客服。"

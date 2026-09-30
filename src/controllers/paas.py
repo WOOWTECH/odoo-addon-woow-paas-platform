@@ -4220,6 +4220,11 @@ class PaasController(HiddenChainMixin, Controller):
             # 一次拿到 operator status 的時間（UTC），前端在轉移中停太久時顯示「最後
             # 更新 X 前」；`init_phase` 細分 initializing（不新增 state 值）。
             'observed_at': service.observed_at.isoformat() if service.observed_at else None,
+            # 距今秒數由伺服器算：observed_at 是 naive UTC，前端日期層目前把不帶 offset 的
+            # 字串當本地時間讀（datetime_helpers.js，#914 未切換），自己算會差一個時區。
+            'observed_age_seconds': (
+                int((fields.Datetime.now() - service.observed_at).total_seconds())
+                if service.observed_at else None),
             'init_phase': service._init_phase() or None,
             # Q30：init 的出口與 attempt 序號（租戶看固定文案＋序號，operator 原始錯誤只在
             # attempt 記錄）；`init_reconfigure_allowed` 與 `_update_service` 的守衛同一判準。

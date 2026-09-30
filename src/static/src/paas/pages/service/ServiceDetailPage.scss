@@ -76,6 +76,12 @@ $woow-radius-lg: 1.25rem;
     }
 }
 
+// #1159 Q40：轉移中且背景最近一次觀測超過 3 分鐘時的「最後更新 X 前」。
+.o_woow_service_observed_hint {
+    font-size: 0.8125rem;
+    color: $woow-text-secondary;
+}
+
 .o_woow_service_header_meta {
     display: flex;
     gap: 1.5rem;
@@ -115,6 +121,11 @@ $woow-radius-lg: 1.25rem;
     color: #ef4444;
     font-size: 0.875rem;
     margin-bottom: 1.5rem;
+
+    // #1159 Q30：init 失敗 banner 的 Contact Support 按鈕靠右。
+    .o_woow_btn {
+        margin-left: auto;
+    }
 }
 
 // =============================================================================

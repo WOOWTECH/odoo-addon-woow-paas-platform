@@ -36,7 +36,10 @@
                         <div class="o_woow_service_header_text">
                             <div class="o_woow_service_header_title">
                                 <h1 t-esc="service.name"/>
-                                <StatusBadge status="service.state"/>
+                                <StatusBadge status="service.state" phase="service.init_phase or ''"/>
+                                <span t-if="staleObservationMinutes" class="o_woow_service_observed_hint">
+                                    <t t-esc="staleObservationLabel"/>
+                                </span>
                             </div>
                             <div class="o_woow_service_header_meta">
                                 <span class="o_woow_service_template">
@@ -93,7 +96,7 @@
                             variant="'secondary'"
                             size="'md'"
                             onClick.bind="resetAdminPassword"
-                            disabled="!canPerformActions or isResetAdminPasswordLoading">
+                            disabled="!canResetAdminCredentials or isResetAdminPasswordLoading">
                             <WoowIcon name="'key'" size="18"/>
                             Reset Admin Password
                         </WoowButton>
@@ -102,7 +105,7 @@
                             variant="'secondary'"
                             size="'md'"
                             onClick.bind="showAdminCredentials"
-                            disabled="!canPerformActions or isResetAdminPasswordLoading">
+                            disabled="!canResetAdminCredentials or isResetAdminPasswordLoading">
                             <WoowIcon name="'key'" size="18"/>
                             Admin Credentials
                         </WoowButton>
@@ -134,7 +137,7 @@
                             variant="'ghost'"
                             size="'md'"
                             onClick.bind="showDelete"
-                            disabled="!canPerformActions">
+                            disabled="!canDelete">
                             <WoowIcon name="'delete'" size="18"/>
                         </WoowButton>
                     </div>
@@ -160,7 +163,21 @@
                 </p>
 
                 <!-- Error Message Banner -->
-                <div t-if="service.error_message" class="o_woow_service_error_banner">
+                <!-- #1159 Q30：init 失敗時顯示固定文案＋attempt 序號並導向 support 入口；
+                     operator 的原始錯誤只在後台的 attempt 記錄（租戶看不到）。 -->
+                <div t-if="initFailed" class="o_woow_service_error_banner">
+                    <WoowIcon name="'error'" size="20"/>
+                    <span t-esc="initFailureText"/>
+                    <WoowButton
+                        t-if="projectsVisible"
+                        variant="'secondary'"
+                        size="'sm'"
+                        onClick.bind="contactSupport">
+                        <WoowIcon name="'support_agent'" size="16"/>
+                        Contact Support
+                    </WoowButton>
+                </div>
+                <div t-elif="service.error_message" class="o_woow_service_error_banner">
                     <WoowIcon name="'error'" size="20"/>
                     <span t-esc="service.error_message"/>
                 </div>

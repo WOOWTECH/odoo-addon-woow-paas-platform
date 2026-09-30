@@ -273,6 +273,10 @@ class TestListGetPureRead1159(_ServiceCase):
         for svc in services:
             self.assertEqual(by_id[svc.id]['observed_at'], observed.isoformat())
             self.assertIn('init_phase', by_id[svc.id])
+            # 前端「最後更新 X 前」用伺服器算好的秒數：observed_at 是 naive UTC，前端的
+            # 日期層目前把不帶 offset 的字串當本地時間讀（#914 未切換）。
+            self.assertTrue(230 <= by_id[svc.id]['observed_age_seconds'] <= 300,
+                            by_id[svc.id]['observed_age_seconds'])
         self.assertTrue(by_id[services[-1].id]['public_url_dns_unverified'],
                         'DNS 旗標只由背景重探清除（Q16）')
 

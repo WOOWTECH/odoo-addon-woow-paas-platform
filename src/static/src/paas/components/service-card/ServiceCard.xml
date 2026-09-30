@@ -7,7 +7,7 @@
                 <div class="o_woow_cloud_service_icon">
                     <WoowIcon name="templateIcon" size="28"/>
                 </div>
-                <StatusBadge status="props.service.state" size="'sm'"/>
+                <StatusBadge status="props.service.state" phase="props.service.init_phase or ''" size="'sm'"/>
                 <SubscriptionBadge subscription="props.service.subscription"/>
             </div>
 

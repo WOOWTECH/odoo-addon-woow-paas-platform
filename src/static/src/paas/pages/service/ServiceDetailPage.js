@@ -24,6 +24,10 @@ import { breadcrumbService } from "../../services/breadcrumb_service";
 import { router } from "../../core/router";
 import { showProjects } from "../../core/platform_config";
 
+// #1159 Q40：這些狀態由背景 poll 推進；最近一次觀測超過此秒數才顯示「最後更新 X 前」。
+const TRANSITIONAL_STATES = ["deploying", "initializing", "upgrading", "deleting"];
+const STALE_OBSERVATION_SECONDS = 180;
+
 /**
  * ServiceDetailPage Component
  *
@@ -173,6 +177,75 @@ export class ServiceDetailPage extends Component {
         // Disable actions when service is in transitional state
         const disabledStates = ["deploying", "initializing", "upgrading", "deleting", "pending"];
         return this.service && !disabledStates.includes(this.service.state);
+    }
+
+    /**
+     * #1159 Q30：initializing 期間也可以刪除（後端本來就允許）；確認框會註明
+     * 「已送出的初始化可能仍在叢集內完成」（DeleteServiceModal）。
+     */
+    get canDelete() {
+        return this.canPerformActions || this.service?.state === "initializing";
+    }
+
+    /**
+     * #1159 Q30：error 時停用 Reset／Admin Credentials——後端只接受 running
+     * （`_reset_admin_password`），在 error 上按下只會換來一個失敗訊息。
+     */
+    get canResetAdminCredentials() {
+        return this.canPerformActions && this.service.state !== "error";
+    }
+
+    /**
+     * #1159 Q30：init 失敗（任何出口）轉成的 error。固定文案＋attempt 序號；是否
+     * 能用「改設定」重試讀後端的 `init_reconfigure_allowed`（與 reconfigure 守衛
+     * 同一判準，前端不自建）。
+     */
+    get initFailed() {
+        return this.service?.state === "error" && !!this.service.init_exit;
+    }
+
+    get initFailureText() {
+        const seq = this.service.init_attempt_seq || 0;
+        if (this.service.init_reconfigure_allowed) {
+            return _t(
+                "Initialization did not complete (attempt #%s). You can change the configuration to try again, or contact support.",
+                seq,
+            );
+        }
+        if (!seq) {
+            // fast-fail／等待逾時可能發生在任何一次 init 送出之前：不顯示「#0」。
+            return _t("Initialization did not complete. Please contact support.");
+        }
+        return _t("Initialization did not complete (attempt #%s). Please contact support.", seq);
+    }
+
+    contactSupport() {
+        if (this.state.supportProject) {
+            this.openSupportProject();
+        } else {
+            this.showCreateProject();
+        }
+    }
+
+    /**
+     * #1159 Q40：list/get 只回背景 poll 的最近觀測。轉移中且最近一次觀測超過 3 分鐘
+     * 才揭露「最後更新 X 前」。秒數由後端算（`observed_age_seconds`）：observed_at
+     * 是 naive UTC，本 app 的日期層目前把不帶 offset 的字串當本地時間讀（#914）。
+     */
+    get staleObservationMinutes() {
+        const service = this.service;
+        if (!service || !TRANSITIONAL_STATES.includes(service.state)) {
+            return null;
+        }
+        const age = service.observed_age_seconds;
+        if (typeof age !== "number" || age <= STALE_OBSERVATION_SECONDS) {
+            return null;
+        }
+        return Math.floor(age / 60);
+    }
+
+    get staleObservationLabel() {
+        return _t("Last updated %s min ago", this.staleObservationMinutes);
     }
 
     get isOdooService() {
