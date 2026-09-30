@@ -288,6 +288,7 @@
 8	test_ha_api.TestHAApiData
 2	test_ha_api.TestHAApiIntegration
 10	test_ha_api_security_access.TestHaApiSecurityAccess
+6	test_ha_api_tunnel_token_role.TestHaApiTunnelTokenRole
 4	test_ha_full_apporo_seed.TestHaFullApporoSeed
 6	test_ha_full_seed_661.TestHaFullPlansSeed
 3	test_ha_full_seed_661.TestHaFullQuotaLockstep

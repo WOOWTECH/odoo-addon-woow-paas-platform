@@ -12,6 +12,7 @@ from typing import Any
 from odoo.http import Controller, Response, request, route
 
 from .oauth2 import verify_oauth_token
+from ..models.workspace_access import ROLE_ADMIN, ROLE_OWNER
 from odoo import _
 
 _logger = logging.getLogger(__name__)
@@ -115,6 +116,37 @@ def _check_workspace_access(user: Any, workspace_id: int) -> Any | None:
     if not access:
         return None
     return access.workspace_id
+
+
+def _require_manage_role(user: Any, workspace: Any) -> Response | None:
+    """tunnel-token 端點的角色閘：只有該 workspace 的 owner／admin。
+
+    其他 HA 端點（列表、詳情、狀態）只過 ``_check_workspace_access``——任何成員
+    都能看。tunnel token 不同：拿到的人可以自己跑一個 connector 加入這條 tunnel、
+    分走流量，屬於「設定」等級，role=user／guest 只能用瀏覽類功能。/woow 的
+    SA token 出口（``security_access.api_security_access_tunnel_token``）本來就
+    收斂到 owner/admin；2026-09-30 正式站實測 role=user 成員在 /woow 被擋、改走
+    HA OAuth 卻拿得到完整 token（SH 與 SA 都是），這裡補上同一把尺。
+
+    回 403 並帶獨立的 ``error='insufficient_role'``：HA component 靠它和「scope
+    不足」「不是成員」（同樣 403）區分——重新授權修不好角色，component 要改提示
+    「請 owner／admin 設定」而不是叫使用者 reauth。
+
+    Returns:
+        ``None`` 表示放行；否則為 403 JSON ``Response``。
+    """
+    allowed = request.env['woow_paas_platform.workspace_access'].sudo().search_count([
+        ('user_id', '=', user.id),
+        ('workspace_id', '=', workspace.id),
+        ('role', 'in', [ROLE_OWNER, ROLE_ADMIN]),
+    ])
+    if allowed:
+        return None
+    return _json_error(
+        'insufficient_role',
+        _('Only workspace owners and admins can get the tunnel token.'),
+        403,
+    )
 
 
 def _with_live_tunnel_status(record: Any) -> dict:
@@ -318,7 +350,8 @@ class HAIntegrationController(Controller):
     def get_tunnel_token(self, smarthome_id: int, **kwargs: Any) -> Response:
         """Get tunnel credentials for a smart home.
 
-        Required scope: ``smarthome:tunnel``
+        Required scope: ``smarthome:tunnel``；呼叫者須為該 workspace 的
+        owner／admin（``_require_manage_role``）。
 
         Args:
             smarthome_id: Smart home database ID.
@@ -334,6 +367,9 @@ class HAIntegrationController(Controller):
         home = self._get_home_with_access(user, smarthome_id)
         if isinstance(home, Response):
             return home
+        denied = _require_manage_role(user, home.workspace_id)
+        if denied:
+            return denied
 
         domain = home._get_paas_domain()
         subdomain = home.subdomain or ''
@@ -454,7 +490,10 @@ class HAIntegrationController(Controller):
         type='http', auth='none', methods=['GET'], csrf=False,
     )
     def sa_get_tunnel_token(self, sa_id: int, **kwargs: Any) -> Response:
-        """Tunnel credentials. Scope: security-access:tunnel (elevated)."""
+        """Tunnel credentials. Scope: security-access:tunnel (elevated).
+
+        呼叫者須為該 workspace 的 owner／admin（``_require_manage_role``）。
+        """
         result = _authenticate(required_scopes=['security-access:tunnel'])
         if isinstance(result, Response):
             return result
@@ -462,6 +501,9 @@ class HAIntegrationController(Controller):
         sa = self._get_sa_with_access(user, sa_id)
         if isinstance(sa, Response):
             return sa
+        denied = _require_manage_role(user, sa.workspace_id)
+        if denied:
+            return denied
         # Asymmetry with smart home's tunnel-token (which returns a single
         # `subdomain` FQDN) is intentional: a Security Access is a Cloudflare
         # Tunnel with N application routes and no single hostname, so there is

@@ -21,6 +21,8 @@ from . import test_oauth2
 from . import test_oauth2_device_flow
 from . import test_ha_api
 from . import test_ha_api_security_access
+# HA API tunnel-token 只給 owner／admin（role=user／guest 回 insufficient_role）。
+from . import test_ha_api_tunnel_token_role
 from . import test_naming
 # feat: L4 reconciler 左集蒐集（SA 2 層 walk + CS MCP 重建 + SM）
 from . import test_reconciler_left_set
