@@ -751,6 +751,63 @@ class TestReconfigureRollbackOwedInit1267(_ServiceCase):
 
 
 # ====================================================================== #
+#  驗收 5：#1266 suspend 吃掉 init                                          #
+# ====================================================================== #
+
+@tagged('post_install', '-at_install')
+class TestSuspendResumeOwedInit1266(_ServiceCase):
+
+    def _cycle(self, svc):
+        client = MagicMock()
+        with patch(f'{_OPERATOR_MODULE}.get_paas_operator_client', return_value=client):
+            svc._do_suspend()
+            self.assertEqual(svc.state, 'suspended')
+            svc._do_resume()
+
+    def test_transitional_services_owing_init_resume_to_initializing(self):
+        cases = (
+            ('initializing', {}),
+            ('deploying', {}),
+            ('upgrading', {'addon_update_pending': True}),
+        )
+        for state, extra in cases:
+            with self.subTest(state=state):
+                svc = self._service('n8n', state=state, **extra)
+                generation = svc.init_generation
+                self._cycle(svc)
+                self.assertEqual(svc.state, 'initializing')
+                self.assertTrue(svc.init_pending)
+                self.assertEqual(svc.init_generation, generation, 'resume 不開新一代')
+
+    def test_error_stays_error_and_keeps_its_counters(self):
+        svc = self._service('odoo', state='error')
+        svc.write({'init_exit': 'failed', 'init_retries': INIT_FAILED_LIMIT,
+                   'init_unknown_count': 1})
+        self._cycle(svc)
+        self.assertEqual(svc.state, 'error')
+        self.assertEqual((svc.init_retries, svc.init_unknown_count), (INIT_FAILED_LIMIT, 1))
+
+    def test_running_service_is_unchanged(self):
+        for init_type in ('odoo', 'none'):
+            with self.subTest(init_type=init_type):
+                svc = self._service(init_type, state='running')
+                svc.write({'init_pending': False})
+                self._cycle(svc)
+                self.assertEqual(svc.state, 'running')
+
+    def test_running_but_owing_init_after_suspension_resumes_to_initializing(self):
+        """r2 裁定 h(i)：停權期間開了新一代（改 addon／redeploy）也要補 init。"""
+        svc = self._service('odoo', state='running')
+        svc.write({'init_pending': False})
+        client = MagicMock()
+        with patch(f'{_OPERATOR_MODULE}.get_paas_operator_client', return_value=client):
+            svc._do_suspend()
+            svc._open_init_generation()
+            svc._do_resume()
+        self.assertEqual(svc.state, 'initializing')
+
+
+# ====================================================================== #
 #  驗收 7：migration                                                        #
 # ====================================================================== #
 

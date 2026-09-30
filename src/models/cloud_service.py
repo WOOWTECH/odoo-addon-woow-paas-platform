@@ -4887,8 +4887,12 @@ class CloudService(models.Model):
             # state，而卡死 row 的當下 state 是 age timeout 寫的 'error' —— 覆寫後
             # 租戶付款復權會拿回一台顯示 error 的服務（癒後帶傷）。首次停權（旗標為
             # 空）仍如實記下當下狀態。
+            # #1266：轉移狀態也如實記下（原本一律記成 running），resume 才分得出
+            # 「停權前 init 還沒做完」。欠 init 標記刻意不動（Q9：停權不清標記）。
             'pre_suspend_state': self.pre_suspend_state or (
-                self.state if self.state in ('running', 'error') else 'running'
+                self.state
+                if self.state in ('running', 'error') + _INIT_TRANSITIONAL_STATES
+                else 'running'
             ),
             'state': 'suspended',
         })
@@ -4941,10 +4945,22 @@ class CloudService(models.Model):
         # 容器型的 resume 成本低、窗口短，故沿用同一路徑；VM 型是否改成回
         # deploying 交給 poll 收斂，列為 v1.1 評估（design §7.2）。
         restore_state = self.pre_suspend_state or 'running'
-        self.write({
-            'state': restore_state,
-            'pre_suspend_state': False,
-        })
+        vals = {'pre_suspend_state': False}
+        if restore_state == 'error':
+            # #1266／Q25：原本是 error 的維持 error，額度也不重置——否則「欠費→繳費」
+            # 就能重置失敗額度。
+            pass
+        elif self._init_type() != 'none' and self.init_pending:
+            # #1266／Q9：欠 init 就導回 initializing，交給背景 init（不開新一代、不動
+            # 計數）。含 pre_suspend_state='running' 但停權期間開了新一代的情形（改
+            # addon 的 reconfigure／redeploy 在 halted 路徑上只寫 suspended）——#1257
+            # r2 裁定 h(i)。
+            restore_state = 'initializing'
+        elif restore_state in _INIT_TRANSITIONAL_STATES:
+            # 不欠 init 的轉移狀態：沿用 #1266 以前的行為（記錄值原本就是 running）。
+            restore_state = 'running'
+        vals['state'] = restore_state
+        self.write(vals)
         _logger.info(
             "[CLOUD_SVC] _do_resume done service=%s new_state=%s",
             self.id, restore_state,
