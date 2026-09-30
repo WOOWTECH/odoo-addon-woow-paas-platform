@@ -27,6 +27,7 @@ import logging
 from datetime import timedelta
 
 from markupsafe import Markup
+from psycopg2 import OperationalError
 
 from odoo import _, api, fields, models
 
@@ -210,11 +211,10 @@ class PlatformMonitor(models.Model):
                  attempt=attempt.id, outcome=attempt.outcome)
 
     def _deliver_unknown_attempts(self, monitor, attempts):
-        """Deliver newly finished unknown attempts to each current system user.
+        """將新完成的 unknown／partial attempts 交付目前每位 system user。
 
-        A user with an active card gets the new lines appended; a user who completed
-        their previous card gets a new one.  The caller records attempt identities
-        only after this method has delivered them to the complete current roster.
+        active 卡追加新事件，已完成舊卡者則新建；只有完整收件名單都成功投影後，
+        呼叫端才能記錄 attempt identity。
         """
         todo = self.env.ref('mail.mail_activity_data_todo', raise_if_not_found=False)
         users = self.env.ref('base.group_system').users.filtered(
@@ -239,9 +239,8 @@ class PlatformMonitor(models.Model):
                     for line in lines:
                         activity.note = (activity.note or Markup()) + Markup('<p>%s</p>') % line
                 continue
-            # Keep this monitor-local notification in the mail queue.  Odoo 18's
-            # mail.thread supports this context key; it also keeps a later roster
-            # delivery failure inside the savepoint below from sending a partial email.
+            # Odoo 18 mail.thread 支援此 context key，只將本 monitor 通知排入 mail queue。
+            # 後續 recipient 失敗時，savepoint 可回捲整批，不會留下已同步寄出的部分通知。
             monitor.with_context(mail_notify_force_send=False).activity_schedule(
                 activity_type_id=todo.id, summary=self.SUMMARY_GAVE_UP, note=body,
                 user_id=user.id)
@@ -251,13 +250,12 @@ class PlatformMonitor(models.Model):
 
     @api.model
     def _check_unknown_results(self):
-        """Project each current unknown/partial attempt once onto per-user activities."""
+        """以 attempt identity 將目前的 unknown／partial 事件投影至各使用者活動。"""
         Attempt = self.env['woow_paas_platform.cloud_service_init_attempt'].sudo()
         since = fields.Datetime.now() - timedelta(hours=UNKNOWN_WINDOW_HOURS)
         monitor = self._singleton()
         try:
-            # The activity projection and identity ledger are atomic: a missing
-            # recipient or scheduling failure leaves every attempt eligible to retry.
+            # 活動投影與 identity ledger 必須一起成立；無收件者或排程失敗時仍可重試。
             with self.env.cr.savepoint():
                 expired = monitor.notified_unknown_attempt_ids.filtered(
                     lambda attempt: not attempt.finished_at or attempt.finished_at < since)
@@ -274,6 +272,9 @@ class PlatformMonitor(models.Model):
                     return
                 monitor.write({'notified_unknown_attempt_ids': [
                     (4, attempt.id) for attempt in new_attempts]})
+        except OperationalError:
+            # DB 故障交回交易邊界，不能偽裝成這輪 monitor 已正常完成。
+            raise
         except Exception:
             _logger.exception("[#1159] unknown init-attempt monitor delivery failed")
 
@@ -285,6 +286,8 @@ class PlatformMonitor(models.Model):
             try:
                 with self.env.cr.savepoint():
                     check()
+            except OperationalError:
+                raise
             except Exception:
                 _logger.exception("[#1159] monitor check %s failed", check.__name__)
 

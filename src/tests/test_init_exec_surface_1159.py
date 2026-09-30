@@ -25,6 +25,8 @@ import uuid
 from datetime import timedelta
 from unittest.mock import MagicMock, patch
 
+from psycopg2 import OperationalError
+
 from odoo import SUPERUSER_ID, api, fields
 from odoo.exceptions import AccessError
 from odoo.tests.common import TransactionCase, tagged
@@ -1198,6 +1200,98 @@ class TestPlatformMonitor1159(_ServiceCase):
         self.assertNotIn(delivery_failure, self.singleton.notified_unknown_attempt_ids)
         self.Monitor._check_unknown_results()
         self.assertIn(delivery_failure, self.singleton.notified_unknown_attempt_ids)
+
+    def test_unknown_second_recipient_failure_rolls_back_all_delivery(self):
+        Mail = self.env['mail.mail'].sudo()
+        with patch.object(type(Mail), 'send', autospec=True) as send, \
+                patch.object(type(Mail), 'send_after_commit', autospec=True) as send_after_commit:
+            self.env['res.users'].with_context(no_reset_password=True).create([
+                {'name': f'1159 mail recipient {suffix}',
+                 'login': f'1159-mail-{suffix}-{self.tag}',
+                 'email': f'1159-mail-{suffix}-{self.tag}@example.invalid',
+                 'notification_type': 'email',
+                 'groups_id': [(6, 0, [self.env.ref('base.group_system').id])]}
+                for suffix in ('a', 'b')])
+            recipients = self.env.ref('base.group_system').users.filtered(
+                lambda user: user.active and not user.share)
+            self.assertGreaterEqual(len(recipients), 2)
+            # 只在會回捲的 TransactionCase 調整首位收件者，以真 mail queue 作為前提。
+            recipients[:1].write({
+                'email': f'1159-first-{self.tag}@example.invalid', 'notification_type': 'email'})
+            runner = self.Monitor.with_user(recipients[-1]).sudo()
+            self.assertNotEqual(recipients[0], runner.env.user, '排程者不可就是首位收件者')
+            attempt = self._unknown_attempt(
+                self._service('odoo', state='initializing'), 1, fields.Datetime.now())
+            mail_domain = [('model', '=', MONITOR), ('res_id', '=', self.singleton.id)]
+            before_mail_ids = set(Mail.search(mail_domain).ids)
+            created_activity_ids = []
+            created_mail_ids = []
+            original_schedule = type(self.singleton).activity_schedule
+            calls = []
+
+            def fail_second_recipient(records, *args, **kwargs):
+                calls.append(kwargs['user_id'])
+                if len(calls) == 2:
+                    raise RuntimeError('1159 second recipient delivery failed')
+                activity = original_schedule(records, *args, **kwargs)
+                records.env.flush_all()
+                created_activity_ids.extend(activity.ids)
+                created_mail_ids.extend(set(Mail.search(mail_domain).ids) - before_mail_ids)
+                return activity
+
+            with patch.object(type(self.singleton), 'activity_schedule', autospec=True,
+                              side_effect=fail_second_recipient):
+                runner._check_unknown_results()
+            self.assertEqual(calls, recipients[:2].ids, '必須先投影首位，再於第二位失敗')
+            self.assertTrue(created_activity_ids, '故障前確實建立過 activity')
+            self.assertTrue(created_mail_ids, '故障前確實排入過 mail queue，不是純 mock')
+            self.assertFalse(self._activities(self.Monitor.SUMMARY_GAVE_UP))
+            self.assertEqual(set(Mail.search(mail_domain).ids), before_mail_ids)
+            self.assertFalse(Mail.browse(created_mail_ids).exists())
+            self.assertNotIn(attempt, self.singleton.notified_unknown_attempt_ids)
+
+            runner._check_unknown_results()
+            self.assertEqual(set(self._activities(self.Monitor.SUMMARY_GAVE_UP).mapped('user_id')),
+                             set(recipients), '回捲後重試仍須交付完整名單')
+            self.assertIn(attempt, self.singleton.notified_unknown_attempt_ids)
+            self.assertTrue(set(Mail.search(mail_domain).ids) - before_mail_ids)
+            send.assert_not_called()
+            send_after_commit.assert_not_called()
+
+    def test_unknown_database_failure_reaches_the_monitor_job_boundary(self):
+        attempt = self._unknown_attempt(
+            self._service('odoo', state='initializing'), 1, fields.Datetime.now())
+        original_schedule = type(self.singleton).activity_schedule
+        for entry in ('_check_unknown_results', '_run_poll_cron_checks'):
+            with self.subTest(entry=entry):
+                failures = []
+
+                def fail_unknown_delivery(records, *args, **kwargs):
+                    if kwargs.get('summary') != self.Monitor.SUMMARY_GAVE_UP:
+                        return original_schedule(records, *args, **kwargs)
+                    failures.append(True)
+                    # 真 PG 40001；由產品 savepoint 復原 cursor，不靠 assertRaises 代為回捲。
+                    records.env.cr.execute("""
+                        DO $$ BEGIN
+                            RAISE EXCEPTION '1159 monitor database conflict'
+                                USING ERRCODE = '40001';
+                        END $$
+                    """)
+
+                caught = None
+                with patch.object(type(self.singleton), 'activity_schedule', autospec=True,
+                                  side_effect=fail_unknown_delivery):
+                    try:
+                        getattr(self.Monitor, entry)()
+                    except OperationalError as error:
+                        caught = error
+                self.assertEqual(len(failures), 1, '必須到達 unknown event 的 DB 故障注入點')
+                self.assertIsNotNone(caught, 'DB 故障不得被內層或 cron monitor 邊界吞掉')
+                self.assertEqual(caught.pgcode, '40001')
+                self.assertNotIn(attempt, self.singleton.notified_unknown_attempt_ids)
+                self.assertFalse(self._activities(self.Monitor.SUMMARY_GAVE_UP))
+                self.env.cr.execute('SELECT 1')
+                self.assertEqual(self.env.cr.fetchone(), (1,), 'savepoint 必須解除 SQL aborted 狀態')
 
     def test_readiness_give_ups_are_reported(self):
         summary = self.Monitor.SUMMARY_GAVE_UP
