@@ -27,7 +27,7 @@
 
 | 去哪 | 內容 | 篇數 |
 |---|---|---|
-| [`decisions/patterns/`](decisions/patterns/) | 可複用的設計 pattern（有 hook 強制閱讀） | 36 |
+| [`decisions/patterns/`](decisions/patterns/) | 可複用的設計 pattern（有 hook 強制閱讀） | 37 |
 | [`decisions/philosophy/`](decisions/philosophy/) | 整體取向 | 1 |
 | [`decisions/refactor/`](decisions/refactor/) | 重構決策 | 7 |
 | [`decisions/reviews/`](decisions/reviews/) | PR review 裁決 | 8 |
