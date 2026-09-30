@@ -304,6 +304,7 @@
                 workspaceId="props.workspaceId"
                 serviceId="props.serviceId"
                 currentUsername="service and service.admin_username"
+                usernameEditable="canEditAdminUsername"
                 onClose.bind="hideAdminCredentials"
                 onSaved.bind="onAdminCredentialsSaved"/>
 

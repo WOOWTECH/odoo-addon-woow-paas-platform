@@ -1108,8 +1108,10 @@ class CloudService(models.Model):
         """#357 外科式 reset mcp admin password（保留 GUI 自填 connection/tools）。
 
         ``new_password`` / ``new_username``（租戶自設憑證）：只開放給
-        ``template.admin_username_helm_path`` 有值的模板（帳密是 chart Secret 管的
-        一組 basic-auth，例 open-design 的 nginx auth-proxy 與 ttyd）。兩者都不給
+        ``template.admin_credentials_settable`` 的模板——``admin_username_helm_path``
+        有值（帳密是 chart Secret 管的一組 basic-auth，例 open-design 的 nginx
+        auth-proxy 與 ttyd），或 ``admin_password_settable``（只有密碼、沒有帳號，
+        例 code-server；此時只收 ``new_password``）。兩者都不給
         ＝原本的 Reset（平台鑄造新密碼）。給了密碼就用租戶的值、不鑄造；給了帳號就
         寫進 values 的那個路徑。兩者走**同一條** helm upgrade ＋ rollout restart，
         提交點與記帳語意完全不變（見下方 C11′ 與 #525 B3 註解）——帳號與密碼是同一
@@ -1198,9 +1200,16 @@ class CloudService(models.Model):
         # 這正是租戶要 reset 的情境。_set_admin_password_secret 會 create-or-write。
 
         username_path = self.template_id.admin_username_helm_path
-        if (new_password is not None or new_username is not None) and not username_path:
+        # 能力事實源＝template.admin_credentials_settable（帳號路徑，或只有密碼的
+        # admin_password_settable）；改帳號另外要有帳號路徑。
+        if ((new_password is not None or new_username is not None)
+                and not self.template_id.admin_credentials_settable):
             raise UserError(
                 _("This service's admin credentials can only be reset, not set.")
+            )
+        if new_username is not None and not username_path:
+            raise UserError(
+                _("This service has no username; only its password can be set.")
             )
         if new_username is not None:
             self._validate_tenant_admin_username(new_username)
@@ -2011,6 +2020,9 @@ class CloudService(models.Model):
         """
         path_map = {
             'open-design': [('config', 'allowedOrigins')],
+            # code-server：公開網址的 host 成為 --trusted-origins（瀏覽器經 tunnel 送來的
+            # Origin 才會被接受）；chart 從 codeServer.publicUrl 取 host。
+            'code-server': [('codeServer', 'publicUrl')],
             # omnigent：accounts 模式的 OMNIGENT_ACCOUNTS_BASE_URL（https ⇒ cookie 用
             # __Host- 前綴；WebSocket 也以它比對 Origin）。chart 同樣學不到 tenant host。
             'omnigent': [('server', 'baseUrl')],

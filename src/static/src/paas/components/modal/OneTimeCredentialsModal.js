@@ -91,6 +91,15 @@ export function buildOneTimeCredentials(data) {
             value: data.admin_password,
             hint: _t("You can change the username and password later from Admin Credentials on the service page."),
         });
+    } else if (data && data.admin_password && data.template
+            && data.template.admin_credentials_settable === true) {
+        // 只有密碼、沒有帳號的服務（code-server）：可 Reset 也可自設。不能落到下方
+        // hermes 的 MCP 說明（username: admin 在這裡是錯的）。
+        credentials.push({
+            label: _t("Password"),
+            value: data.admin_password,
+            hint: _t("Signs in to this service (there is no username). You can reset it or set your own later from Admin Credentials on the service page."),
+        });
     } else if (data && data.admin_password) {
         credentials.push({
             label: _t("Admin Password"),

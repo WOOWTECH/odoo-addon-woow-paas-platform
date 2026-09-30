@@ -1803,8 +1803,8 @@ class PaasController(HiddenChainMixin, Controller):
     ) -> dict[str, Any]:
         """租戶自設 admin 帳號／密碼（open-design 的 OpenDesign 與 ttyd 共用這組）。
 
-        只開放給 ``template.admin_username_helm_path`` 有值的模板；其餘回錯誤（它們
-        只能 Reset）。``password`` 空值＝平台鑄造新密碼並一次性回傳（同 Reset）；
+        只開放給 ``template.admin_credentials_settable`` 的模板；其餘回錯誤（它們
+        只能 Reset）。只有密碼的模板（code-server）不收 ``username``。``password`` 空值＝平台鑄造新密碼並一次性回傳（同 Reset）；
         給了就用租戶的值、**不回傳明文**（租戶自己知道）。``username`` 空值＝不改。
         生效方式與 Reset 相同：helm upgrade ＋ rollout restart（服務重啟約一分鐘）。
 
@@ -1871,11 +1871,18 @@ class PaasController(HiddenChainMixin, Controller):
                            "Change it inside the app."),
             }
         # 租戶自設憑證的能力判準：與 has_admin_gui 同一紀律，讀 template 欄位、不自建
-        # slug 名單；payload 的 template.admin_username_editable 鏡射同一個欄位。
-        if tenant_set and not service.template_id.admin_username_helm_path:
+        # slug 名單；payload 的 template.admin_credentials_settable 鏡射同一個欄位。
+        # 只有密碼的模板（admin_password_settable，code-server）不收帳號。
+        if tenant_set and not service.template_id.admin_credentials_settable:
             return {
                 'success': False,
                 'error': _("This service's admin credentials can only be reset, not set."),
+            }
+        if (tenant_set and new_username is not None
+                and not service.template_id.admin_username_helm_path):
+            return {
+                'success': False,
+                'error': _("This service has no username; only its password can be set."),
             }
 
         try:
@@ -2007,11 +2014,30 @@ class PaasController(HiddenChainMixin, Controller):
                 "took effect", service.id,
             )
             admin_username = None
+        # 一次性憑證視窗（buildOneTimeCredentials）挑文案用：只有密碼的服務
+        # （admin_credentials_settable 且無帳號）不能落到 hermes 的 MCP 說明。
+        # 與 _format_service 的 template 子物件同名同值。同上：只是顯示用，讀取失敗
+        # 不得翻轉「已生效」的回應（前端缺欄位時退回通用文案）。
+        try:
+            template_flags = {
+                'admin_reset_supported': bool(service.template_id.admin_reset_supported),
+                'admin_credentials_settable': bool(
+                    service.template_id.admin_credentials_settable),
+                'admin_username_editable': bool(
+                    service.template_id.admin_username_helm_path),
+            }
+        except Exception:
+            _logger.exception(
+                "template capability lookup failed for service %s after credentials "
+                "took effect", service.id,
+            )
+            template_flags = {}
         data = dict(
             gateway,
             service_id=service.id,
             admin_username=admin_username,
             message=message,
+            template=template_flags,
         )
         # 租戶自己填的密碼不回傳明文（他本來就知道，回傳只是多一處外洩面）；
         # 平台鑄造的（Reset、或自設流程選「隨機產生」）照舊一次性交付。
@@ -4642,6 +4668,12 @@ class PaasController(HiddenChainMixin, Controller):
                 # canEditAdminCredentials）：直接鏡射模板欄位，與
                 # _service_admin_credentials 的能力 gate 讀同一個欄位。
                 'admin_username_editable': bool(service.template_id.admin_username_helm_path),
+                # 「Admin Credentials」對話框（自設憑證）的顯示判準：鏡射模板的
+                # admin_credentials_settable，與 admin-credentials endpoint 的能力 gate
+                # 讀同一欄位。只有密碼的模板（code-server）為 True、但
+                # admin_username_editable 為 False（對話框不出現帳號欄）。
+                'admin_credentials_settable': bool(
+                    service.template_id.admin_credentials_settable),
                 'helm_value_specs': service.template_id._parse_helm_value_specs(),
             },
             # 目前生效的 admin 帳號（非敏感；不開放改帳號的模板為 None），供對話框預填。
