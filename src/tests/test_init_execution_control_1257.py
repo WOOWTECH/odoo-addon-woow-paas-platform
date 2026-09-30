@@ -1046,7 +1046,7 @@ class TestInitLeaseRealCursor1257(TransactionCase):
             env = self._env(cr)
             svc = env[SVC].browse(self.service_ids['odoo'])
             cr.execute('SELECT 1')  # 先拿 snapshot
-            self._sql("UPDATE woow_paas_platform_cloud_service SET name = name || ' *' "
+            self._sql("UPDATE woow_paas_platform_cloud_service SET init_ready_observed = FALSE "
                       "WHERE id = %s", (self.service_ids['odoo'],))
             self.assertIsNone(svc._init_claim('odoo'))
         self.assertEqual(self._read()['attempts'], [])

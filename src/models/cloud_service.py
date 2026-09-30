@@ -4508,8 +4508,7 @@ class CloudService(models.Model):
     def _init_check_operator_wait_timeout(self):
         """D2-R：不依賴 client／Ready 的 operator readiness 預算收尾。"""
         self.ensure_one()
-        if (self.state != 'initializing' or self._init_lease_active()
-                or not self.init_wait_started_at):
+        if self.state != 'initializing' or self._init_lease_active():
             return False
         spent = (self.init_wait_spent_seconds or 0) + self._init_operator_wait_elapsed()
         if spent < self._init_wait_timeout_minutes() * 60:
@@ -4524,7 +4523,7 @@ class CloudService(models.Model):
         """Cron-wide expiry sweep: a missing client or Ready observation cannot hide expiry."""
         services = self.sudo().search([
             ('state', '=', 'initializing'),
-            ('init_wait_started_at', '!=', False),
+            '|', ('init_wait_started_at', '!=', False), ('init_wait_spent_seconds', '>', 0),
             ('init_lease_until', '=', False),
         ])
         for service in services:
