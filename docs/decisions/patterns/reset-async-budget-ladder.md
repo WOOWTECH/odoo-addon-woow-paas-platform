@@ -35,7 +35,7 @@ related:
 
 - 2xx ⇒ 新密碼已是叢集權威載體（chart Secret／`config.json`）的值，且**不再有任何自動回退**。
 - 2xx **之前**的任何失敗都保證叢集仍是舊密碼（`helm --atomic` 自己 rollback；config.json patch 失敗還原備份）⇒ 呼叫端「不落庫」永遠正確。
-- rollout 成功與否不再影響密碼真相，只影響「服務何時恢復」——交給既有狀態機（stamp `upgrading` → cron 1min ／前端 5s 輪詢 → `running`），與 deploy／reconfigure 同形。
+- rollout 成功與否不再影響密碼真相，只影響「服務何時恢復」——交給既有狀態機（stamp `upgrading` → 背景短 poll cron 每分鐘推進 → `running`），與 deploy／reconfigure 同形。#1159 起前端 5s 輪詢只讀 DB 的最近觀測，**不再**推動收斂（list/get 純讀）。
 
 被取代的舊不變式是「DB 裡的密碼一定**生效過**」，它的成立條件是「operator 會在 rollout 失敗時把 Secret 換回去」。移除等待就等於移除那個 rollback，因此不變式必須改寫而不是沿用：**DB ≡ 叢集**在成功與失敗兩側都成立，代價是放棄「已生效」這層保證（rollout 仍可能失敗，但那時密碼記錄是對的、服務另有問題）。
 

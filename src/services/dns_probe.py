@@ -11,10 +11,11 @@ patch target）；(2) 這裡的失效模式與 Odoo model 無關，獨立測比�
 ## 為什麼要自己包 timeout
 
 ``socket.getaddrinfo`` **沒有** timeout 參數，逾時完全由 ``/etc/resolv.conf`` 的
-``options timeout:N attempts:M`` 決定（未設時 glibc 預設 5 秒 × 2 次）。平台 Odoo
-跑在 ``workers = 0``（threaded）＋ ``max_cron_threads = 1``，而
-``_cron_check_deploying_services`` 是**逐台序列**跑的 —— resolver 一掛，單一 cron
-thread 會被每一台服務各拖住十秒級。所以這裡用一個 module-level executor 把呼叫丟出
+``options timeout:N attempts:M`` 決定（未設時 glibc 預設 5 秒 × 2 次）。背景的
+``_cron_check_deploying_services``（DNS 閘）與 ``_cron_reprobe_public_url_dns``（旗標
+重探）都是**逐台序列**跑的，而一個 cron job 同時只佔一個 cron worker（prod 是 prefork
+``workers=6``＋``max_cron_threads=2``，#1159 Q12 複核）—— resolver 一掛，那條 cron 會
+被每一台服務各拖住十秒級。所以這裡用一個 module-level executor 把呼叫丟出
 去，只等 ``_DEFAULT_TIMEOUT`` 秒，逾時就回 ``'unknown'``（呼叫端據此放行）。
 
 ⚠ **刻意不用 ``with ThreadPoolExecutor(...)``**：context manager 離開時會
@@ -62,9 +63,9 @@ _DEFAULT_TIMEOUT = 2.0
 #:
 #: 為什麼需要：``'unknown'`` 這一態的處置是「放行、而且**連旗標都不動**」——也就是
 #: 說，resolver 掛掉時每一次探測都是「付滿 ``_DEFAULT_TIMEOUT``、拿回零資訊」。而
-#: 平台 Odoo 是 ``workers = 0`` ＋ ``max_cron_threads = 1``、
-#: ``_cron_check_deploying_services`` 逐台序列跑，``limit_time_real = 120``
-#: ⇒ 轉移中的服務一多，那條 cron 會被純粹的等待吃光。上閂之後，每個行程每
+#: ``_cron_check_deploying_services`` 逐台序列跑、受 cron 硬上限約束（prod
+#: ``limit_time_real_cron``，#1159 Q34）⇒ 轉移中的服務一多，那條 cron 會被純粹的
+#: 等待吃光。上閂之後，每個行程每
 #: ``_RESOLVER_BACKOFF_SECONDS`` 最多付一次滿額 timeout。
 #:
 #: 🔴 **只對 resolver 級的失效上閂**（逾時、``EAI_AGAIN``），**不對逐主機名的例外
@@ -140,9 +141,9 @@ def _executor():
     🔴 **為什麼這件事值得多寫這幾行**：壞掉的表現是 ``result(timeout=...)`` 逾時
     ⇒ 本模組回 ``'unknown'`` ⇒ 呼叫端**放行** ⇒ DNS 閘永遠不擋。而「閘永遠不擋」
     與「DNS 一直都很正常」在所有可觀測訊號上完全一樣：沒有 error、測試全綠、服務
-    照樣翻 running。那正好讓這個 feature 存在的唯一理由靜靜地失效。今天 prod 是
-    ``workers = 0``（不 fork）所以碰不到——但那是**設定值不是不變式**，改設定的人
-    不會知道要來看這裡。
+    照樣翻 running。那正好讓這個 feature 存在的唯一理由靜靜地失效。prod 是 prefork
+    （``workers=6``，#1159 Q12 複核 paas-app-bundle-cd values-prod.yaml）⇒ 這條 fork
+    安全處理**今天就在路徑上**，不是預防將來改設定。
 
     以 pid 為準重建，而**刻意不加 module-level lock**：fork 時若剛好有別的 thread
     持著那把鎖，子行程會繼承一把永遠不會被釋放的鎖——那正是我們要移除的那類靜默

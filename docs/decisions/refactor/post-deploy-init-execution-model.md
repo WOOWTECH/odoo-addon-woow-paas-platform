@@ -14,7 +14,7 @@ related:
 
 **Date**: 2026-09-30
 **Status**: accepted（設計定案：[#1257 resolution c15293](https://git-prod.woowtech.io/odoo-addons/woow_paas_platform/issues/1257#issuecomment-15293)、[#1159 resolution c15307](https://git-prod.woowtech.io/odoo-addons/woow_paas_platform/issues/1159#issuecomment-15307)；實作 #1257，執行面 #1159）
-**Components**: `woow_paas_platform.cloud_service`（欠 init／lease 欄位、`_run_post_deploy_init`）、`woow_paas_platform.cloud_service_init_attempt`、`controllers/paas.py`（poll、reconfigure、rollback）、`services/paas_operator.py`（init 預算）、`src/migrations/18.0.1.0.190/`
+**Components**: `woow_paas_platform.cloud_service`（欠 init／lease 欄位、`_run_post_deploy_init`、短 poll 與 init cron）、`woow_paas_platform.cloud_service_init_attempt`、`woow_paas_platform.platform_monitor`（#1159 監控掛點）、`controllers/paas.py`（list/get 純讀、reconfigure、rollback）、`services/paas_operator.py`（init 預算）、`data/cloud_service_cron.xml`、`src/migrations/18.0.1.0.190/`
 
 名詞：**初始化**、**欠初始化／初始化代數**、**結果未知**見 [`CONTEXT.md`](../../../CONTEXT.md)。
 
@@ -38,7 +38,8 @@ init：Odoo 刷新模組清單、n8n 建 owner 與 API key。#1257 之前：
 ### 1. 欠 init 是持久標記，按「代」計額度（Q9／Q24）
 
 - `init_pending`（欠 init）是**唯一**判準：pods ready 之後欠 init 就去 `initializing`，否則 `running`
-  （`CloudService._next_state_when_ready`，cron 與 list/get 兩份 poll 共用）。`addon_update_pending` 不再決定去向。
+  （`CloudService._next_state_when_ready`，背景 poll 使用；#1159 起 list/get 純讀、不再 poll）。
+  `addon_update_pending` 不再決定去向。
 - 每次需要 init 算一代：`_open_init_generation()` 是唯一開代入口，歸零本代計數。
 
 | 會開新一代 | 不開新一代 |
@@ -54,7 +55,7 @@ rollback 的條件是實作期裁定（#1257 review r1 M2 (A)），修訂 Q23／
 
 ### 2. attempt＋lease：claim 在呼叫 operator 之前 commit（Q2／Q32／Q36）
 
-單一入口 `CloudService._run_post_deploy_init(client)`，只由背景（cron）呼叫：
+單一入口 `CloudService._run_post_deploy_init(client)`，只由 init cron（`_cron_run_post_deploy_inits`，#1159）呼叫：
 
 ```
 commit（poll 剛寫的 state 先落地）
@@ -85,9 +86,14 @@ commit（poll 剛寫的 state 先落地）
 | not_executed（等待） | operator `error_kind=not_executed`（`find_pod`／`wait_ready`）；平台端只有 connect 階段失敗（`ConnectTimeout`、`NewConnectionError`） | 不耗 | 釋放 |
 | （本地記帳錯誤） | 套用結果時平台自己的例外 | 不耗、`_logger.exception` 告警 | 釋放 |
 
-- **分工**：時間只管等待，次數只管結果。等待的錨點 `init_wait_since`＝「進入 initializing」與「上次實際執行的
-  attempt 結束」兩者較晚者（進入的那一刻由 `write()` 集中 stamp），時限預設 30 分；到期轉 error、不耗額度。
-- `initializing` 一定會結束，出口三個，都轉 error 並記 `init_exit`：`failed`、`unknown`、`wait_timeout`。
+- **分工**：時間只管等待，次數只管結果。等待的錨點 `init_wait_since`＝「進入 initializing」、「上次實際執行的
+  attempt 結束」與「最近一次觀測到 pods ready」三者最晚者（進入的那一刻由 `write()` 集中 stamp；第三項是 #1159
+  實作期裁定 D2 對 Q10 的擴充：排在 init cron 佇列裡等候屬「平台容量排隊」，不計時），時限預設 30 分；只在短 poll
+  觀測到 not ready 時判，到期轉 error、不耗額度。init cron claim 前只判額度。
+- #1192 的 fast-fail 短路（#1159 D1）：not ready 且任一非 Job 擁有的 Pod 自身未 ready、`restarts ≥ 3` ⇒ 轉 error
+  （`init_exit='fast_fail'`，不耗額度）。#1192 上線後把 CrashLoopBackOff／initContainer 訊號接進同一判定
+  （`_init_fast_fail_pod`）。
+- `initializing` 一定會結束，出口四個，都轉 error 並記 `init_exit`：`failed`、`unknown`、`wait_timeout`、`fast_fail`。
 - 可調的只有兩個 `ir.config_parameter`：`woow_paas_platform.init_unknown_limit`（預設 2）與
   `woow_paas_platform.init_wait_timeout_minutes`（預設 30）；lease 長度與 failed 上限是常數。
 - attempt 記錄（`cloud_service_init_attempt`）只給 `base.group_system`，存截斷並遮罩後的錯誤，**不存 api_key**；保留
@@ -95,9 +101,9 @@ commit（poll 剛寫的 state 先落地）
 
 ### 4. 各入口的守衛（Q9／Q23／Q25／Q27／#1159 Q30）
 
-- **list/get**：只推進 state（deploying／upgrading → initializing），**不 dispatch init**。
+- **list/get**：**純讀**（#1159 Q1）——不呼叫 operator、不寫入（含 DNS 旗標），回 `observed_at`／`init_phase`。
 - **reconfigure／rollback**：lease 持有期間拒絕（可讀錯誤）。reconfigure 不覆寫欠 init；還欠 init 的 rollback 開新一代。
-- **error 的 reconfigure**：只有額度出口（`init_exit` 為 `failed`／`unknown`）放行並一律開新一代；helm 失敗、等待逾時
+- **error 的 reconfigure**：只有額度出口（`init_exit` 為 `failed`／`unknown`，`_init_reconfigure_exit`）放行並一律開新一代；helm 失敗、等待逾時、fast-fail
   照擋。addon 讓 pod 起不來屬 upgrading 逾時轉 error，租戶出口是 rollback（後端允許從 error rollback）。
 - **redeploy（admin 後台）**：lease 在途時不 raise，登記 `init_redeploy_requested` 並回 notification；背景看到意圖就
   停止自動重送，lease 結束後 cron 先執行 redeploy。v1 不做強制撤銷。
@@ -111,21 +117,31 @@ commit（poll 剛寫的 state 先落地）
 歸 0；`error` 不動；log 列出 init 類型不是 none 的停權服務交人工抽查。新舊 code 並存由 Recreate＋cron-wait 擋住，舊
 process 在途的 remote exec 由合成 lease 擋住。
 
-## 與 #1159 的分工與暫時狀態
+## 執行面（#1159）
 
-本票（交付順序 3）與 #1159（交付順序 4）可以分兩個 PR 依序 merge，但**必須同一次 release 上線**，且
-woow-paas/paas-app-bundle-cd#154（prod `limit_time_real_cron=1800`）要先上 prod。resolution 原本的理由（兩條
-路徑互相擋）在 list/get 不再 dispatch init 之後已不成立，理由換成：只上本票時
+#1257（交付順序 3）與 #1159（交付順序 4）分兩個 PR 依序 merge，但**必須同一次 release 上線**，且
+woow-paas/paas-app-bundle-cd#154（prod `limit_time_real_cron=1800`）要先上 prod：沒有它，init cron 在 prod 的強制
+終止時限是 `limit_time_real`=1200，容不下 wall 預算 1100s＋sleep＋同趟其他 job。
 
-- init 只剩每分鐘一次的 `_cron_check_deploying_services` 序列執行，list/get 也不 trigger：就緒到 init 開始延遲
-  0–60 秒再加同一輪排隊；一台 Odoo init 最壞 1020 秒，會堵住同一輪其他服務的 init 與短 poll。
-- #154 上線前 prod 的 cron 硬上限（`limit_time_real`=1200）剛好等於 Odoo lease，沒有餘裕。
-- n8n owner 可被搶註的窗口從約 5 秒（前端輪詢）拉長到分鐘級，而且沒有 #1159 Q28(a)「n8n 優先」的緩解。
-
-- 從 #1159 **提前**到本票的兩件事（#1257 實作期裁定）：list/get 不再 dispatch init；等待時限（錨點＋30 分＋到期轉
-  error）。#1159 只剩 #1192 fast-fail 短路與「平台容量排隊不計時」。
-- 暫時狀態（#1159 上線後消失）：init 仍由既有的 `_cron_check_deploying_services` 在 poll 之後呼叫入口；redeploy 意圖
-  也由它在開頭執行。#1159 拆出獨立 init ir.cron（每 tick 預算 1100s、n8n 優先、自我 `_trigger()`）後都移過去。
+- **短 poll**（`ir_cron_check_deploying_services`，每分鐘）：「由觀測推進、離開轉移狀態」的**唯一**寫入者——
+  transition 完成、init 分派（`init_ready_observed`／`init_ready_since`，由 not ready 轉 ready 時 trigger init
+  cron）、deleting 404→unlink（#1159 起第一次啟用）。每台服務一個回捲單位。拿到 status 就 stamp `observed_at`。
+- **init cron**（`ir_cron_run_post_deploy_inits`，每分鐘＋自我 `_trigger()`）：開頭執行 redeploy 意圖（Q27）；
+  依 n8n 優先（Q28a）、其次最早觀測到 ready 的順序 claim；每 tick wall 預算 B＝1100s（已用時間＋該類最壞 attempt：
+  Odoo 1020／n8n 720）與軟上限 10 筆；回報 `_notify_progress(remaining=0)`，有積壓就自我 `_trigger()`——不回報
+  `remaining>0`（core 會在同一趟、同一個 watchdog 內續跑最多 10 批）。init 最多佔 1 個 cron worker（SKIP LOCKED
+  單例），不與短 poll 同 job、同交易（Q4）。
+- **list/get 純讀**（Q1）；前端 5 秒輪詢照舊、只讀 DB。`init_phase`：running（lease 在途、attempt 未結束）／
+  waiting_ready／retrying（本代有 failed 或 unknown）／queued。前端只在轉移中且最近觀測超過 3 分鐘時顯示「最後更新
+  X 前」（秒數由後端算：`observed_at` 是 naive UTC，前端日期層目前把不帶 offset 的字串當本地時間讀，#914）。
+- **DNS 旗標**（Q16／D4）：`public_url_dns_unverified` 改由 `ir_cron_reprobe_public_url_dns`（每 15 分）重探後清除。
+- **監控**（Q38／D3）：`mail.activity` 給 `base.group_system`，每個監控項用不同 summary 各自去重，全部掛在
+  mail.thread 單例 `woow_paas_platform.platform_monitor`（`ir.cron`／`cloud_service` 都不是 mail.thread，
+  activity 建立時會呼叫 `message_subscribe`）。短 poll 查 init cron（停用或 `lastcall` > 40 分）、最舊 `observed_at`
+  （> 15 分）、24h 內 unknown／partial；init cron 查短 poll（`lastcall` > 10 分）；等待逾時／fast-fail 與 n8n
+  ready→owner（> 5 分，Q28b）是事件型，追加一行。
+- **租戶出口**（Q30）：initializing 可刪除（確認框註明已送出的 init 仍可能完成）；error 停用 Reset；init 失敗顯示
+  固定文案＋attempt 序號＋support 入口；只有額度出口的 error 開放改設定。
 
 ## Consequences
 
@@ -135,7 +151,12 @@ woow-paas/paas-app-bundle-cd#154（prod `limit_time_real_cron=1800`）要先上 
   initializing）。
 - operator 回 401／403／422（例如平台的 operator API key 設錯）會被歸成 unknown（Q11：平台端只有 connect 階段
   失敗算 not_executed）⇒ 所有 initializing 的服務兩輪之後都會轉 error。這是保守分類的已知代價，靠 #1159 Q38
-  的監控（unknown 次數）及早發現。
+  的監控（24h unknown 次數）及早發現。
+- 由觀測推進的轉移最多延遲一個短 poll 週期（約 60 秒）；前端輪詢不再加速收斂。
+- fast-fail 以 `restarts ≥ 3` 判斷，已知誤判面：Pod 早期重啟過 3 次、之後只是短暫 not ready 也會命中（租戶出口是
+  rollback）。#1192 上線後以 CrashLoopBackOff／initContainer 訊號取代。
+- deleting 但 release 一直存在（uninstall 沒送成功）時沒有任何路徑會重送 uninstall（#1279）。
+- 監控 activity 建立時 core 會寄通知信給被指派者（`action_notify`）。
 - n8n client 預算改為專屬 `(120, 600)`，由 repo-lint `init-n8n-budget-ladder` 從 operator 原始碼的 AST 算 envelope
   （目前 531s）守住「read > envelope」；Odoo 維持 `(120, 900)`（`init-odoo-budget-ladder`，envelope 805s）。
 

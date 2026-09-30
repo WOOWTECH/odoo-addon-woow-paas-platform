@@ -3541,8 +3541,8 @@ class CloudService(models.Model):
             return 'skip'
         # 結尾點＝FQDN，讓 resolver 跳過 search list。這不只是省時間：平台 pod 是
         # `ndots:5` ＋ 4 個 search domain，resolver 不可用時相對名最壞是 5 次查詢
-        # ×（5s × 2 attempts）＝ 50 秒，FQDN 是 10 秒。而 Odoo 跑 `workers = 0`
-        # ＋ `max_cron_threads = 1`、cron 逐台序列跑。有測試釘住這個性質。
+        # ×（5s × 2 attempts）＝ 50 秒，FQDN 是 10 秒。而背景 cron 逐台序列跑、受
+        # cron 硬上限約束（#1159 Q34）。有測試釘住這個性質。
         return dns_probe.resolve_state(hostname + '.')
 
     def _is_public_url_ready(self, dns_state=None):

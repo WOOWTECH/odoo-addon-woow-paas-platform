@@ -16,8 +16,8 @@ hostname 發一個 GET，把回應分類成使用者能據以行動的狀態。
 
 ## 為什麼自己包 timeout 與 executor
 
-與 ``dns_probe`` 同一個理由：平台 Odoo 是 ``workers = 0``（threaded），一條請求
-卡住就是一條 HTTP thread 卡住。這裡把每個 hostname 丟進 module-level executor，
+與 ``dns_probe`` 同一個理由：一條請求卡住就是一個 worker 卡住（prod 是 prefork
+``workers=6``，#1159 Q12 複核）。這裡把每個 hostname 丟進 module-level executor，
 整批共用一個總截止時間；逾時的那幾條回 ``timeout``，不拖住整頁。executor 的
 fork 安全處理照抄 ``dns_probe._executor``（那邊的 docstring 有實測紀錄）。
 

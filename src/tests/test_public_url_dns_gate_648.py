@@ -195,8 +195,8 @@ class TestPublicUrlDnsGateVerdict(_DnsGateCase):
         而 ``paas-cs-x-y.woowtech.io`` 只有 2 個點 ⇒ 相對名會**先跑完 4 個 search
         domain 才問絕對名**。實測（prod paas-odoo pod）：miss 相對名約 100–216ms、
         FQDN 約 1–9ms；更要緊的是 resolver 不可用時，relative 最壞是
-        5 次查詢 × (timeout 5s × 2 attempts) ＝ **50 秒**，FQDN 是 10 秒。而平台
-        Odoo 是 ``workers = 0`` / ``max_cron_threads = 1``，cron 逐台序列跑。
+        5 次查詢 × (timeout 5s × 2 attempts) ＝ **50 秒**，FQDN 是 10 秒。而背景
+        cron 逐台序列跑、受 cron 硬上限約束（#1159 Q34）。
         這條把那個性質釘住，否則日後會被無聲改掉。
         """
         with patch(_RESOLVE, return_value='ok') as m:
@@ -438,8 +438,8 @@ class TestDnsProbeExecutorIsForkSafe(TransactionCase):
     訊號上完全一樣（沒有 error、測試全綠、服務照樣翻 running）——這個 feature 存在
     的唯一理由會靜靜地失效。
 
-    今天 prod 是 ``workers = 0``（不 fork）所以碰不到，但那是**設定值不是不變式**，
-    改設定的人不會知道要來看這裡。所以用測試釘住。
+    prod 是 prefork（``workers=6``，#1159 Q12 複核）⇒ 這條 fork 安全處理今天就在
+    路徑上。所以用測試釘住。
     """
 
     def test_executor_is_rebuilt_when_the_process_changes(self):
@@ -526,8 +526,8 @@ class TestDnsProbeResolverBackoff(TransactionCase):
     """resolver 整個不可用時要退避，但**不得**被單一壞主機名癱瘓。
 
     ``'unknown'`` 的處置是「放行、連旗標都不動」⇒ resolver 掛掉時每次探測都是「付滿
-    timeout、拿零資訊」。而平台 Odoo 是 ``workers = 0`` ＋ ``max_cron_threads = 1``、
-    ``_cron_check_deploying_services`` 逐台序列跑、``limit_time_real = 120`` ⇒ 轉移中
+    timeout、拿零資訊」。而 ``_cron_check_deploying_services`` 逐台序列跑、受 cron
+    硬上限約束（#1159 Q34）⇒ 轉移中
     的服務一多，那條 cron 會被純粹的等待吃光。
 
     ⚠ 這道閂與 ``_is_public_url_ready`` 開頭那個「窗口外提前 return」**不是同一件事**
