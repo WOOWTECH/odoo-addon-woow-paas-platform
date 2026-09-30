@@ -1,0 +1,451 @@
+# -*- coding: utf-8 -*-
+"""#1159：post-deploy init 的執行面（list/get 純讀、背景 poll、init cron、監控、UI 資料）。
+
+驗收對照（#1159 resolution c15307「本票實作範圍與驗收」；#1257 c15462 的分工調整；
+實作期裁決 D1–D4 見 PR 描述）：
+
+1. list/get 不呼叫 operator、不寫入 cloud_service（含 DNS 旗標）；回應含 ``observed_at``
+   與 ``init_phase`` → ``TestListGetPureRead1159``。
+2. deleting 由背景在 operator 回 404 後 unlink；一台失敗不影響同一 tick 其他台
+   → ``TestShortPollObservation1159``、``TestExecSurfaceRealCursor1159``。
+3. init 在獨立 ir.cron、與短 poll 不同 job／交易；慢 init 進行中另一台的
+   upgrading→running 仍在短 poll 落地（真 cursor）→ ``TestExecSurfaceRealCursor1159``。
+4. 每 tick 遵守 B＝1100s 與軟上限 10 筆；積壓時自我 ``_trigger()``、回報
+   ``remaining=0``；n8n 優先、其次等待最久 → ``TestInitCron1159``。
+5. 等待時限（#1257 已做）＋ fast-fail 短路（D1）＋容量排隊不計時（D2）
+   → ``TestShortPollObservation1159``。
+
+🔴 會走到 init 入口或 cron 迴圈（兩者都會 ``commit``）的測試用真 cursor＋真 commit＋
+事後清理（樣板 ``test_billing_incident_864.py``、``test_init_execution_control_1257.py``）。
+"""
+import sys
+import threading
+import traceback
+import uuid
+from datetime import timedelta
+from unittest.mock import MagicMock, patch
+
+from odoo import SUPERUSER_ID, api, fields
+from odoo.tests.common import TransactionCase, tagged
+
+from ..models.cloud_service import _internal_provision
+from ..services.paas_operator import PaaSOperatorError
+from .operator_contract import operator_client, status_response
+
+SVC = 'woow_paas_platform.cloud_service'
+ATTEMPT = 'woow_paas_platform.cloud_service_init_attempt'
+_OPERATOR_MODULE = 'odoo.addons.woow_paas_platform.services.paas_operator'
+_MODEL_MODULE = 'odoo.addons.woow_paas_platform.models.cloud_service'
+INIT_CRON = 'woow_paas_platform.ir_cron_run_post_deploy_inits'
+_READY_PODS = [{'name': 'app', 'phase': 'Running', 'ready': '1/1'}]
+_NOT_READY_PODS = [{'name': 'app', 'phase': 'Running', 'ready': '0/1'}]
+
+
+def _template_vals(tag, init_type):
+    return {
+        'name': f'1159 {init_type} {tag}',
+        'slug': f'init-1159-{init_type}-{tag}',
+        'helm_repo_url': 'https://charts.example.com',
+        'helm_chart_name': 'chart',
+        'helm_chart_version': '1.0.0',
+        'workload_type': 'container',
+        'post_deploy_init_type': init_type,
+        'mcp_enabled': False,
+    }
+
+
+def _make_service(env, workspace, template, tag, **vals):
+    return _internal_provision(env[SVC]).create(dict({
+        'name': f'1159 Service {tag}',
+        'workspace_id': workspace.id,
+        'template_id': template.id,
+        'state': 'deploying',
+        'helm_namespace': f'dev-sandbox-1159-{tag}',
+        'helm_release_name': f'svc-{tag}',
+    }, **vals))
+
+
+def _thread_stacks(thread):
+    frame = sys._current_frames().get(thread.ident)
+    return ''.join(traceback.format_stack(frame)) if frame else '(thread already finished)'
+
+
+class _ServiceCase(TransactionCase):
+    def setUp(self):
+        super().setUp()
+        self.tag = uuid.uuid4().hex[:8]
+        self.workspace = self.env['woow_paas_platform.workspace'].create({
+            'name': f'1159 WS {self.tag}'})
+        self.templates = {
+            init_type: self.env['woow_paas_platform.cloud_app_template'].create(
+                _template_vals(self.tag, init_type))
+            for init_type in ('odoo', 'n8n', 'none')
+        }
+
+    def _service(self, init_type='odoo', **vals):
+        service = _make_service(self.env, self.workspace, self.templates[init_type],
+                                f'{init_type}-{uuid.uuid4().hex[:6]}', **vals)
+        if vals.get('state') == 'initializing':
+            service.sudo().write({'init_pending': True})
+        return service
+
+    def _poll(self, service, pods=None, **status):
+        client = operator_client(get_status=status_response(
+            pods=_READY_PODS if pods is None else pods, **status))
+        service._poll_and_update_status(client)
+        return client
+
+    def _init_cron_triggers(self):
+        cron = self.env.ref(INIT_CRON)
+        return self.env['ir.cron.trigger'].sudo().search_count([('cron_id', '=', cron.id)])
+
+
+# ====================================================================== #
+#  短 poll：只觀測、不執行 init                                             #
+# ====================================================================== #
+
+@tagged('post_install', '-at_install')
+class TestShortPollObservation1159(_ServiceCase):
+
+    def test_ready_initializing_service_is_queued_for_the_init_cron(self):
+        """Q1／Q4：短 poll 只記「pods ready」並分派給 init cron，不呼叫 operator 的 init。"""
+        for init_type in ('odoo', 'n8n'):
+            with self.subTest(init_type=init_type):
+                svc = self._service(init_type)
+                triggers = self._init_cron_triggers()
+                client = self._poll(svc)
+                self.assertEqual(svc.state, 'initializing')
+                self.assertTrue(svc.init_ready_observed)
+                self.assertTrue(svc.init_ready_since)
+                self.assertTrue(svc.observed_at)
+                client.init_odoo.assert_not_called()
+                client.init_n8n.assert_not_called()
+                self.assertGreater(self._init_cron_triggers(), triggers,
+                                   '觀測到 ready 應 trigger init cron（n8n 搶註窗口，Q28a）')
+                # 已在 initializing 的下一輪也一樣不 dispatch。
+                client = self._poll(svc)
+                client.init_odoo.assert_not_called()
+                client.init_n8n.assert_not_called()
+
+    def test_not_ready_observation_leaves_the_init_queue(self):
+        svc = self._service('odoo')
+        self._poll(svc)
+        self.assertTrue(svc.init_ready_observed)
+        self._poll(svc, pods=_NOT_READY_PODS)
+        self.assertEqual(svc.state, 'initializing')
+        self.assertFalse(svc.init_ready_observed, 'not ready 時 init cron 不得 claim')
+        self.assertTrue(svc.init_ready_since, '第一次 ready 的時間保留（排序與 n8n 窗口）')
+
+    def test_queue_time_does_not_count_towards_the_wait_timeout(self):
+        """D2：排隊等 init cron（已觀測到 ready）不計時；錨點前推到最近一次 ready 觀測。"""
+        svc = self._service('odoo', state='initializing')
+        svc.sudo().write({'init_wait_since': fields.Datetime.now() - timedelta(minutes=45)})
+        self._poll(svc)
+        self.assertEqual(svc.state, 'initializing', '在佇列裡等 init cron 不得逾時')
+        self.assertGreater(svc.init_wait_since,
+                           fields.Datetime.now() - timedelta(minutes=1))
+        # 之後 pods 掉了：從最近一次 ready 觀測起算，不是從 45 分前。
+        self._poll(svc, pods=_NOT_READY_PODS)
+        self.assertEqual(svc.state, 'initializing')
+
+    def test_waiting_for_readiness_still_times_out(self):
+        svc = self._service('odoo', state='initializing')
+        svc.sudo().write({'init_wait_since': fields.Datetime.now() - timedelta(minutes=31)})
+        self._poll(svc, pods=_NOT_READY_PODS)
+        self.assertEqual((svc.state, svc.init_exit, svc.init_retries),
+                         ('error', 'wait_timeout', 0))
+
+    def test_entering_initializing_resets_the_ready_observation(self):
+        svc = self._service('odoo', state='initializing')
+        svc.sudo().write({'init_ready_observed': True,
+                          'init_ready_since': fields.Datetime.now() - timedelta(hours=1)})
+        svc.sudo().write({'state': 'upgrading'})
+        svc.sudo().write({'state': 'initializing'})
+        self.assertFalse(svc.init_ready_observed)
+        self.assertFalse(svc.init_ready_since)
+
+    # -- deleting 收尾（驗收 2 的單筆那半）------------------------------------ #
+
+    def test_deleting_service_is_unlinked_once_the_release_is_gone(self):
+        svc = self._service('none', state='deleting')
+        client = operator_client()
+        client.get_status.side_effect = PaaSOperatorError('gone', status_code=404)
+        with patch.object(type(svc), 'unlink', autospec=True) as unlink:
+            svc._poll_and_update_status(client)
+        unlink.assert_called_once()
+
+    def test_deleting_service_with_a_live_release_is_not_resurrected(self):
+        """#1159 以前 controller 的 list poll 會把它寫回 running。"""
+        svc = self._service('odoo', state='deleting')
+        self._poll(svc)
+        self.assertEqual(svc.state, 'deleting')
+        self.assertTrue(svc.observed_at)
+
+
+# ====================================================================== #
+#  真 cursor：init cron 與短 poll（兩者都 commit）                          #
+# ====================================================================== #
+
+class _RealCursorCase(TransactionCase):
+    """fixture 真的 commit、事後以 SQL 清掉（樣板同 #1257 ``TestInitLeaseRealCursor1257``）。"""
+
+    def setUp(self):
+        super().setUp()
+        self.tag = uuid.uuid4().hex[:10]
+        self.service_ids = []
+        self.addCleanup(self._purge)
+        with self.registry.cursor() as cr:
+            env = self._env(cr)
+            self.workspace_id = env['woow_paas_platform.workspace'].create({
+                'name': f'1159 Workspace {self.tag}'}).id
+            self.template_ids = {
+                init_type: env['woow_paas_platform.cloud_app_template'].create(
+                    _template_vals(self.tag, init_type)).id
+                for init_type in ('odoo', 'n8n', 'none')
+            }
+
+    def _purge(self):
+        with self.registry.cursor() as cr:
+            ids = self.service_ids
+            cr.execute('DELETE FROM woow_paas_platform_cloud_service_init_attempt '
+                       'WHERE service_id = ANY(%s)', (ids,))
+            cr.execute('DELETE FROM woow_paas_platform_cloud_service_secret '
+                       'WHERE service_id = ANY(%s)', (ids,))
+            cr.execute('DELETE FROM woow_paas_platform_cloud_service WHERE id = ANY(%s)', (ids,))
+            cr.execute('DELETE FROM woow_paas_platform_cloud_app_template WHERE id = ANY(%s)',
+                       (list(self.template_ids.values()),))
+            cr.execute('DELETE FROM woow_paas_platform_workspace_access WHERE workspace_id = %s',
+                       (self.workspace_id,))
+            for table, column in (('mail_followers', 'res_model'), ('mail_message', 'model')):
+                cr.execute(f'DELETE FROM {table} WHERE {column} = %s AND res_id = %s',
+                           ('woow_paas_platform.workspace', self.workspace_id))
+            cr.execute('DELETE FROM woow_paas_platform_workspace WHERE id = %s',
+                       (self.workspace_id,))
+            cr.execute("DELETE FROM ir_cron_trigger WHERE cron_id IN "
+                       "(SELECT res_id FROM ir_model_data WHERE module = 'woow_paas_platform' "
+                       "AND name IN ('ir_cron_run_post_deploy_inits', "
+                       "'ir_cron_check_deploying_services'))")
+            cr.commit()
+
+    def _env(self, cr):
+        """真 cursor 的 superuser env；worker thread 也能用（見 #1257 同名 helper）。"""
+        if cr.transaction is None:
+            cr.transaction = api.Transaction(self.registry)
+        return api.Environment(cr, SUPERUSER_ID, {})
+
+    def _add(self, init_type, state='initializing', ready_minutes_ago=None, **vals):
+        """建一台服務並 commit；``ready_minutes_ago`` 給值＝已在 init cron 佇列裡。"""
+        with self.registry.cursor() as cr:
+            env = self._env(cr)
+            service = _make_service(
+                env, env['woow_paas_platform.workspace'].browse(self.workspace_id),
+                env['woow_paas_platform.cloud_app_template'].browse(
+                    self.template_ids[init_type]),
+                f'{init_type}-{uuid.uuid4().hex[:6]}-{self.tag}', state=state, **vals)
+            if state == 'initializing':
+                control = {'init_pending': True}
+                if ready_minutes_ago is not None:
+                    now = service._init_db_now()
+                    control.update(init_ready_observed=True,
+                                   init_ready_since=now - timedelta(minutes=ready_minutes_ago))
+                if init_type == 'n8n':
+                    control.update(n8n_owner_email=f'o-{self.tag}@example.invalid',
+                                   n8n_owner_password=f'pw-{self.tag}')
+                service.write(control)
+            self.service_ids.append(service.id)
+            return service.id
+
+    def _read(self, service_id, *fnames):
+        with self.registry.cursor() as cr:
+            svc = self._env(cr)[SVC].browse(service_id)
+            if not svc.exists():
+                return None
+            return tuple(svc[f] for f in fnames) if len(fnames) > 1 else svc[fnames[0]]
+
+    def _run_cron(self, method, client, context=None):
+        with patch(f'{_OPERATOR_MODULE}.get_paas_operator_client', return_value=client):
+            with self.registry.cursor() as cr:
+                env = self._env(cr)
+                getattr(env[SVC].with_context(**(context or {})), method)()
+
+    def _triggers(self, xmlid=INIT_CRON):
+        with self.registry.cursor() as cr:
+            cron = self._env(cr).ref(xmlid)
+            cr.execute('SELECT count(*) FROM ir_cron_trigger WHERE cron_id = %s', (cron.id,))
+            return cr.fetchone()[0]
+
+
+@tagged('post_install', '-at_install')
+class TestInitCron1159(_RealCursorCase):
+    """Q4／Q33：獨立的 init ir.cron。"""
+
+    def _recording_client(self, clock=None, seconds_per_init=0):
+        """記下 init 的呼叫順序；``clock`` 給值時每次 init 讓假時鐘前進。"""
+        calls = []
+        client = operator_client()
+
+        def record(kind):
+            def init(**kwargs):
+                calls.append(kwargs['release_name'])
+                if clock is not None:
+                    clock['now'] += seconds_per_init
+                if kind == 'n8n':
+                    return {'success': True, 'api_key': 'eyJhbGciOi.eyJzdWIiOi.c2lnbmF0'}
+                return {'success': True}
+            return init
+        client.init_odoo.side_effect = record('odoo')
+        client.init_n8n.side_effect = record('n8n')
+        return client, calls
+
+    def _release(self, service_id):
+        return self._read(service_id, 'helm_release_name')
+
+    def test_n8n_first_then_the_longest_waiting(self):
+        odoo_recent = self._add('odoo', ready_minutes_ago=5)
+        odoo_oldest = self._add('odoo', ready_minutes_ago=20)
+        n8n_newest = self._add('n8n', ready_minutes_ago=1)
+        client, calls = self._recording_client()
+        self._run_cron('_cron_run_post_deploy_inits', client)
+        self.assertEqual(calls, [self._release(n8n_newest), self._release(odoo_oldest),
+                                 self._release(odoo_recent)])
+        for sid in (odoo_recent, odoo_oldest, n8n_newest):
+            self.assertEqual(self._read(sid, 'state'), 'running')
+
+    def test_services_not_observed_ready_are_not_claimed(self):
+        waiting = self._add('odoo')  # 還沒被短 poll 觀測到 ready
+        client, calls = self._recording_client()
+        self._run_cron('_cron_run_post_deploy_inits', client)
+        self.assertEqual(calls, [])
+        self.assertEqual(self._read(waiting, 'state'), 'initializing')
+
+    def test_wall_budget_stops_claiming_and_self_triggers(self):
+        """B＝1100s：已用時間＋該類最壞 attempt（Odoo 1020）超過 B 就不再 claim。"""
+        first = self._add('odoo', ready_minutes_ago=10)
+        second = self._add('odoo', ready_minutes_ago=5)
+        clock = {'now': 1000.0}
+        client, calls = self._recording_client(clock=clock, seconds_per_init=100)
+        triggers = self._triggers()
+        with patch(f'{_MODEL_MODULE}._init_cron_clock', side_effect=lambda: clock['now']):
+            self._run_cron('_cron_run_post_deploy_inits', client)
+        self.assertEqual(calls, [self._release(first)],
+                         '已用 100s＋Odoo 最壞 1020s > 1100s，第二台必須留到下一趟')
+        self.assertEqual(self._read(second, 'state'), 'initializing')
+        self.assertGreater(self._triggers(), triggers, '有積壓要自我 _trigger()')
+
+    def test_soft_cap_of_ten_per_tick(self):
+        ids = [self._add('n8n', ready_minutes_ago=30 - i) for i in range(12)]
+        client, calls = self._recording_client()
+        triggers = self._triggers()
+        self._run_cron('_cron_run_post_deploy_inits', client)
+        self.assertEqual(calls, [self._release(sid) for sid in ids[:10]])
+        self.assertGreater(self._triggers(), triggers)
+
+    def test_progress_is_reported_as_fully_done(self):
+        """不回報 remaining>0：core 會在同一趟、同一個 watchdog 內續跑最多 10 批。"""
+        for _i in range(12):
+            self._add('n8n', ready_minutes_ago=3)
+        with self.registry.cursor() as cr:
+            _cron, progress = self._env(cr).ref(INIT_CRON)._add_progress()
+            progress_id = progress.id
+        client, _calls = self._recording_client()
+        self._run_cron('_cron_run_post_deploy_inits', client,
+                       context={'ir_cron_progress_id': progress_id})
+        with self.registry.cursor() as cr:
+            cr.execute('SELECT done, remaining FROM ir_cron_progress WHERE id = %s',
+                       (progress_id,))
+            done, remaining = cr.fetchone()
+            cr.execute('DELETE FROM ir_cron_progress WHERE id = %s', (progress_id,))
+        self.assertEqual((done, remaining), (10, 0))
+
+    def test_no_backlog_no_trigger(self):
+        self._add('odoo', ready_minutes_ago=1)
+        client, _calls = self._recording_client()
+        triggers = self._triggers()
+        self._run_cron('_cron_run_post_deploy_inits', client)
+        self.assertEqual(self._triggers(), triggers)
+
+    def test_requested_redeploys_run_in_the_init_cron(self):
+        """Q27／#1257 f：redeploy 意圖由 init cron（掌管 lease 的那一個）執行。"""
+        client, _calls = self._recording_client()
+        with patch.object(type(self.env[SVC]), '_cron_run_requested_redeploys',
+                          autospec=True) as run:
+            self._run_cron('_cron_run_post_deploy_inits', client)
+            run.assert_called_once()
+            run.reset_mock()
+            self._run_cron('_cron_check_deploying_services', client)
+            run.assert_not_called()
+
+
+@tagged('post_install', '-at_install')
+class TestExecSurfaceRealCursor1159(_RealCursorCase):
+    """驗收 2／3：短 poll 的 per-service commit，與 init cron 分屬不同 job／交易。"""
+
+    def test_slow_init_does_not_hold_back_the_short_poll(self):
+        """一筆慢 init 進行中，另一台的 upgrading→running 在短 poll 落地且別的連線看得到。"""
+        slow = self._add('odoo', ready_minutes_ago=2)
+        upgrading = self._add('none', state='upgrading')
+        in_flight, release = threading.Event(), threading.Event()
+
+        def slow_init(**kwargs):
+            in_flight.set()
+            release.wait(30)
+            return {'success': True}
+
+        init_client = operator_client()
+        init_client.init_odoo.side_effect = slow_init
+        errors = []
+
+        def run_init_cron():
+            try:
+                with self.registry.cursor() as cr:
+                    self._env(cr)[SVC].browse(slow)._run_post_deploy_init(init_client)
+            except Exception as exc:  # 讓主執行緒看得到
+                errors.append(exc)
+
+        thread = threading.Thread(target=run_init_cron)
+        thread.start()
+        try:
+            self.assertTrue(in_flight.wait(20), '%s\n%s' % (errors, _thread_stacks(thread)))
+            poll_client = operator_client(get_status=status_response(pods=_READY_PODS))
+            with self.registry.cursor() as cr:
+                # 保留 env 參照到 cursor 結束：`Transaction.envs` 是 WeakSet，env 被回收
+                # 之後 exit 的 commit 找不到 env 可 flush，pending 寫入會被丟掉。
+                svc = self._env(cr)[SVC].browse(upgrading)
+                svc._poll_and_update_status(poll_client)
+            self.assertEqual(self._read(upgrading, 'state'), 'running',
+                             '另一條連線必須看得到短 poll 的結果（init 仍在途）')
+            self.assertEqual(self._read(slow, 'state'), 'initializing')
+        finally:
+            release.set()
+            thread.join(60)
+        self.assertFalse(errors, errors)
+        self.assertEqual(self._read(slow, 'state'), 'running')
+
+    def test_short_poll_commits_each_service_and_one_failure_does_not_stop_the_tick(self):
+        """驗收 2：deleting 由背景在 404 後 unlink；一台 teardown 失敗，其他台照常收尾。"""
+        broken = self._add('none', state='deleting')
+        gone = self._add('none', state='deleting')
+        upgrading = self._add('none', state='upgrading')
+        releases = {self._read(sid, 'helm_release_name'): sid
+                    for sid in (broken, gone, upgrading)}
+
+        def get_status(namespace, release_name, include_vm=False):
+            if releases[release_name] == upgrading:
+                return status_response(pods=_READY_PODS)
+            raise PaaSOperatorError('release not found', status_code=404)
+
+        client = operator_client()
+        client.get_status.side_effect = get_status
+        model = type(self.env[SVC])
+        original_unlink = model.unlink
+
+        def unlink(records):
+            if broken in records.ids:
+                raise RuntimeError('teardown boom')
+            return original_unlink(records)
+
+        with patch.object(model, 'unlink', unlink):
+            self._run_cron('_cron_check_deploying_services', client)
+        self.assertEqual(self._read(broken, 'state'), 'deleting', '失敗的那台留在 deleting')
+        self.assertIsNone(self._read(gone, 'state'), 'release 已不在的 deleting 被 unlink')
+        self.assertEqual(self._read(upgrading, 'state'), 'running')

@@ -139,9 +139,9 @@ class TestPendingPodReadiness(TransactionCase):
     def test_post_deploy_init_waits_until_pending_pod_is_ready(self):
         """pod 還沒 ready 不得進 init；ready 後進 ``initializing``。
 
-        #1257：init 只由 cron 經 model 的單一入口 ``_run_post_deploy_init`` 執行
-        （它會 commit，真 cursor 行為在 ``test_init_execution_control_1257``）；
-        controller 的 poll 只推進 state、不呼叫 operator 的 init。
+        #1159：兩份 poll 都不執行 init——init 只由獨立的 init cron 經單一入口
+        ``_run_post_deploy_init`` 執行（真 cursor 行為在 ``test_init_execution_control_1257``
+        與 ``test_init_exec_surface_1159``）；短 poll 觀測到 ready 時只把服務排進佇列。
         """
         self.template.post_deploy_init_type = 'odoo'
         self.service._open_init_generation()
@@ -161,4 +161,6 @@ class TestPendingPodReadiness(TransactionCase):
                 self.assertEqual(self.service.state, 'initializing')
                 pending_client.init_odoo.assert_not_called()
                 ready_client.init_odoo.assert_not_called()
-                self.assertEqual(run_init.call_count, 1 if entry == 'cron' else 0)
+                run_init.assert_not_called()
+                if entry == 'cron':
+                    self.assertTrue(self.service.init_ready_observed, '排進 init cron 的佇列')

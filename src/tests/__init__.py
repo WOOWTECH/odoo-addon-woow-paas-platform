@@ -938,3 +938,8 @@ from . import test_skip_trial_dates_1261
 # migration），含 #1266（suspend 吃掉 init）與 #1267（reconfigure／rollback 繞過
 # init）的重現。會走到 init 入口的測試用真 cursor＋真 commit＋事後清理。
 from . import test_init_execution_control_1257
+
+# #1159：post-deploy init 的執行面（list/get 純讀、背景 poll 與 deleting 收尾、獨立
+# init cron、等待短路、監控、DNS 背景重探、租戶 UI 的資料）。會走到 cron 迴圈或 init
+# 入口的測試用真 cursor＋真 commit＋事後清理。
+from . import test_init_exec_surface_1159

@@ -529,16 +529,17 @@ class TestInitLeaseRealCursor1257(TransactionCase):
         self.assertEqual((state['state'], state['init_retries'], state['init_unknown_count']),
                          ('initializing', 0, 0))
 
-    def test_wait_timeout_errors_without_consuming_quota(self):
+    def test_entry_does_not_time_out_a_queued_service(self):
+        """#1159 D2：入口只判額度。排隊等 init cron 屬平台容量排隊、不計時；等待時限
+        改由短 poll 在觀測到 not ready 時判（``test_init_exec_surface_1159``）。"""
         self._sql("UPDATE woow_paas_platform_cloud_service SET init_wait_since = "
                   "(statement_timestamp() AT TIME ZONE 'UTC') - interval '31 minutes' "
                   "WHERE id = %s", (self.service_ids['odoo'],))
         client = operator_client(init_odoo={'success': True})
         self._entry(client)
-        client.init_odoo.assert_not_called()
+        client.init_odoo.assert_called_once()
         state = self._read()
-        self.assertEqual((state['state'], state['init_exit'], state['init_retries']),
-                         ('error', 'wait_timeout', 0))
+        self.assertEqual((state['state'], state['init_exit']), ('running', False))
 
     def test_n8n_partial_stores_the_key_and_counts_as_unknown(self):
         client = operator_client(init_n8n={
@@ -774,11 +775,13 @@ class TestInitLeaseGuards1257(_ServiceCase):
                 client.init_odoo.assert_not_called()
                 client.init_n8n.assert_not_called()
 
-    def test_cron_poll_dispatches_the_single_entry(self):
+    def test_cron_poll_queues_for_the_init_cron(self):
+        """#1159 Q4：短 poll 不執行 init，只排進獨立 init cron 的佇列。"""
         svc = self._service('odoo')
         _client, entry = self._poll_cron(svc)
         self.assertEqual(svc.state, 'initializing')
-        entry.assert_called_once()
+        self.assertTrue(svc.init_ready_observed)
+        entry.assert_not_called()
 
     def test_reconfigure_and_rollback_are_refused_while_the_lease_is_held(self):
         svc = self._service('odoo', state='initializing')
@@ -877,7 +880,8 @@ class TestReconfigureRollbackOwedInit1267(_ServiceCase):
         self.assertEqual(svc.init_generation, generation, '不改 addon 的 reconfigure 不開新一代')
         _client, entry = self._poll_cron(svc)
         self.assertEqual(svc.state, 'initializing', '欠的 init 被跳過、直接 running')
-        entry.assert_called_once()
+        self.assertTrue(svc.init_ready_observed, '欠的 init 排進 init cron 的佇列（#1159）')
+        entry.assert_not_called()
 
     def test_addon_change_then_plain_reconfigure_still_inits(self):
         """#1267 驗收 2：先改 addon（走 controller 真的 addon 分支），init 完成前再做一次
@@ -902,7 +906,8 @@ class TestReconfigureRollbackOwedInit1267(_ServiceCase):
         self.assertTrue(svc.init_pending)
         _client, entry = self._poll_cron(svc)
         self.assertEqual(svc.state, 'initializing')
-        entry.assert_called_once()
+        self.assertTrue(svc.init_ready_observed, '欠的 init 排進 init cron 的佇列（#1159）')
+        entry.assert_not_called()
 
     def test_rollback_from_init_error_opens_a_new_generation(self):
         svc = self._service('odoo', state='error')
@@ -925,7 +930,8 @@ class TestReconfigureRollbackOwedInit1267(_ServiceCase):
                          (generation + 1, 0, 0))
         _client, entry = self._poll_cron(svc)
         self.assertEqual(svc.state, 'initializing')
-        entry.assert_called_once()
+        self.assertTrue(svc.init_ready_observed, '欠的 init 排進 init cron 的佇列（#1159）')
+        entry.assert_not_called()
 
     def test_rollback_of_completed_init_does_not_reinit(self):
         """M2 裁定 (A)／#1267 驗收 5：init 已完成的服務 rollback 不開代、不呼叫 init。"""
@@ -987,7 +993,8 @@ class TestSuspendResumeOwedInit1266(_ServiceCase):
                 self.assertTrue(svc.init_pending)
                 self.assertEqual(svc.init_generation, generation, 'resume 不開新一代')
                 _client, entry = self._poll_cron(svc)
-                entry.assert_called_once()
+                self.assertTrue(svc.init_ready_observed, '欠的 init 排進 init cron 的佇列（#1159）')
+                entry.assert_not_called()
 
     def test_error_stays_error_and_keeps_its_counters(self):
         svc = self._service('odoo', state='error')

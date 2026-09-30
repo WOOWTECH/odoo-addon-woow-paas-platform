@@ -44,6 +44,12 @@ INIT_LEASE_SECONDS = {
     'odoo': INIT_ODOO_CONNECT_TIMEOUT + INIT_ODOO_READ_TIMEOUT + _INIT_LEASE_MARGIN_SECONDS,
     'n8n': INIT_N8N_CONNECT_TIMEOUT + INIT_N8N_READ_TIMEOUT + _INIT_LEASE_MARGIN_SECONDS,
 }
+# #1159 Q33：init cron 每 tick 判斷「還放不放得下下一筆」用的單次 attempt 最壞耗時＝
+# client 預算（connect＋read），同一組常數：Odoo 1020、n8n 720。
+INIT_ATTEMPT_WORST_SECONDS = {
+    'odoo': INIT_ODOO_CONNECT_TIMEOUT + INIT_ODOO_READ_TIMEOUT,
+    'n8n': INIT_N8N_CONNECT_TIMEOUT + INIT_N8N_READ_TIMEOUT,
+}
 # Q15：migration 替既有 `initializing` 列寫入的合成 lease。舊 process 可能還有在途
 # 的 remote exec（舊 code 的 read 是 900s），取 Odoo 的 1200 一律套用。
 LEGACY_LEASE_SECONDS = 1200

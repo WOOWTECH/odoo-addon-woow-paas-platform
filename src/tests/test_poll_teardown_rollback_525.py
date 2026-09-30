@@ -85,8 +85,9 @@ import json
 from datetime import date, timedelta
 from unittest.mock import MagicMock, patch
 
+from odoo import SUPERUSER_ID, api
 from odoo.exceptions import UserError
-from odoo.tests.common import HttpCase, tagged
+from odoo.tests.common import HttpCase, TransactionCase, tagged
 
 from odoo.addons.woow_paas_platform.models.sh_subscription_fix import (
     ShSubscriptionFix,
@@ -379,40 +380,159 @@ class TestPollTeardownLeavesNoHalfDeletedService(HttpCase):
         # 在有修與沒修都綠的斷言，讀者會誤以為它守住了回捲。回捲由上面那批走
         # 真實端點的測試守（拿掉 savepoint 時 5 紅）。
 
-    # ================================================================
-    #  model 層同形處（cron 路徑）——今天不可達，守的是結構
-    # ================================================================
-    # ── model 層同形處（cron 路徑）：刻意沒有殘留測試 ──────────────────
-    #
-    # `_poll_and_update_status` 的 404 分支（`cloud_service.py`）與 controller
-    # 完全同形，PR 也補了同樣的 savepoint，但**這裡沒有配一條「沒有殘留」的
-    # 測試，是刻意的**：
-    #
-    # 1. 它今天不可達——唯一的生產呼叫端 `_cron_check_deploying_services` 的
-    #    domain 不含 `deleting`（由下面那條 tripwire 釘住）。
-    # 2. 用直呼 `svc._poll_and_update_status(client)` 也造不出有鑑別力的 RED：
-    #    實測把 model 側 savepoint 拿掉、注入同一個結算失敗，探針顯示注入當下
-    #    列已刪（`seen=[False]`）但呼叫返回後列又在（`row_after=True`）——直呼
-    #    路徑下刪除仍被回捲，與 controller/HTTP 路徑的實測相反，原因未查明。
-    #
-    # 寫一條在「有修」與「沒修」都綠的測試，比沒有更糟：它會讓人以為那一側
-    # 已經守住。故只留下面的 tripwire——cron domain 一納入 `deleting`，那一側
-    # 就變成可達，屆時要回來補真正走 cron 的端到端測試。（先例：#525 A2 移除
-    # 假注入的測試、保留 narrowing 並註明原因。）
 
-    def test_cron_domain_still_excludes_deleting(self):
-        """上一條的可達性論述綁在 cron 的 domain 上，把它釘成斷言。
+@tagged('post_install', '-at_install')
+class TestCronReapLeavesNoHalfDeletedService(TransactionCase):
+    """#1159 Q1：deleting 的收尾由背景短 poll（``_cron_check_deploying_services``）做。
 
-        domain 一旦納入 `deleting`，上一條的「今天不可達」就過期了——那正是
-        savepoint 從結構防護變成擋住線上事故的時刻，測試要在那一刻說話。
-        """
-        import inspect
+    #1159 以前這條分支不可達（cron 的 domain 不含 deleting，本檔原本只留一條 tripwire
+    釘住它）；#1159 把 deleting 納入 domain、並讓 list/get 純讀之後，這裡是**唯一**的
+    收尾路徑，所以補上走 cron 的端到端測試。
 
-        from odoo.addons.woow_paas_platform.models.cloud_service import CloudService
+    「沒有殘留」今天由**三層**回捲單位疊著守，最內層就足以單獨成立：
 
-        src = inspect.getsource(CloudService._cron_check_deploying_services)
-        self.assertNotIn(
-            "'deleting'", src,
-            'cron domain 已納入 deleting ⇒ model 層 404-unlink 分支變成可達，'
-            '請把本檔 model 層那段註記的「今天不可達」更新，'
-            '並補一條走 `_cron_check_deploying_services` 的端到端測試')
+    1. ``unlink()`` 自己的 savepoint（#794 加的，涵蓋 ``super().unlink()``＋訂閱結算）。
+       本檔前面「直呼路徑下刪除仍被回捲、原因未查明」的原因就是它。
+    2. ``_poll_and_update_status`` 404 分支的 savepoint（#525 B5）。
+    3. cron 迴圈的「每台服務 commit／rollback」（#1159 Q36）。
+
+    #1159 實測（mutation）：拿掉 2、把 3 改成例外時照樣 commit、兩者同時做，本檔都仍綠
+    ⇒ 本檔守的是**端到端結果**（有沒有殘留、服務是否留在 deleting 等下一輪），不是
+    其中任何一層；要讓它轉紅得連 1 一起拿掉。
+
+    cron 會 commit ⇒ 真 cursor＋真 commit＋事後清理（樣板 ``test_billing_incident_864``）。
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.addCleanup(self._purge)
+        self.ids_ = {}
+        with self.registry.cursor() as cr:
+            env = self._env(cr)
+            admin = env.ref('base.user_admin')
+            company = env.company.sudo()
+            workspace = env['woow_paas_platform.workspace'].create({
+                'name': 'WS 525 cron', 'owner_id': admin.id})
+            plan = env['sh.subscription.plan'].sudo().create({
+                'name': 'Plan 525 cron', 'sh_duration': 1, 'sh_unit': 'month',
+                'sh_plan_price': 300.0, 'sh_no_of_billing_cycle': -1})
+            product_tmpl = env['product.template'].sudo().create({
+                'name': 'Product 525 cron', 'type': 'service', 'list_price': 300.0,
+                'sh_product_subscribe': True, 'sh_subscription_plan_id': plan.id,
+                'taxes_id': [(6, 0, [])]})
+            today = date.today()
+            sub = env['sh.subscription.subscription'].sudo().create({
+                'sh_partner_id': admin.partner_id.id,
+                'sh_company_id': company.id,
+                'product_id': product_tmpl.product_variant_id.id,
+                'sh_subscription_plan_id': plan.id,
+                'sh_plan_price': 300.0, 'sh_qty': 1, 'sh_recurrency': 1,
+                'sh_unit': 'month',
+                'sh_start_date': today - timedelta(days=10),
+                'sh_date_of_next_payment': today + timedelta(days=20),
+                'sh_taxes_ids': [(6, 0, [])],
+                'state': 'in_progress'})
+            template = env['woow_paas_platform.cloud_app_template'].sudo().create({
+                'name': 'App 525 cron', 'slug': 'app-525-cron',
+                'helm_repo_url': '',
+                'helm_chart_name': 'oci://example.invalid/app-525-cron',
+                'helm_chart_version': '0.0.0',
+                'post_deploy_init_type': 'none',
+                'is_active': True, 'is_hidden': False})
+            service = _internal_provision(env['woow_paas_platform.cloud_service'].sudo()).create({
+                'name': 'Svc 525 cron',
+                'workspace_id': workspace.id,
+                'template_id': template.id,
+                'subscription_id': sub.id,
+                'state': 'deleting',
+                'helm_namespace': 'paas-ws-525cron',
+                'helm_release_name': 'svc-525-cron'})
+            self.ids_ = {
+                'workspace': workspace.id, 'plan': plan.id,
+                'product_tmpl': product_tmpl.id, 'sub': sub.id,
+                'template': template.id, 'service': service.id,
+            }
+
+    def _env(self, cr):
+        if cr.transaction is None:
+            cr.transaction = api.Transaction(self.registry)
+        return api.Environment(cr, SUPERUSER_ID, {})
+
+    def _purge(self):
+        ids = self.ids_
+        if not ids:
+            return
+        with self.registry.cursor() as cr:
+            cr.execute('DELETE FROM woow_paas_platform_cloud_service WHERE id = %s',
+                       (ids['service'],))
+            cr.execute('DELETE FROM woow_paas_platform_cloud_app_template WHERE id = %s',
+                       (ids['template'],))
+            for model, res_id in (('sh.subscription.subscription', ids['sub']),
+                                  ('woow_paas_platform.workspace', ids['workspace'])):
+                for table, column in (('mail_followers', 'res_model'),
+                                      ('mail_message', 'model')):
+                    cr.execute(f'DELETE FROM {table} WHERE {column} = %s AND res_id = %s',
+                               (model, res_id))
+            cr.execute('DELETE FROM sh_subscription_subscription WHERE id = %s', (ids['sub'],))
+            cr.execute('DELETE FROM product_template WHERE id = %s', (ids['product_tmpl'],))
+            cr.execute('DELETE FROM sh_subscription_plan WHERE id = %s', (ids['plan'],))
+            cr.execute('DELETE FROM woow_paas_platform_workspace_access WHERE workspace_id = %s',
+                       (ids['workspace'],))
+            cr.execute('DELETE FROM woow_paas_platform_workspace WHERE id = %s',
+                       (ids['workspace'],))
+            cr.commit()
+
+    def _probe(self):
+        with self.registry.cursor() as cr:
+            cr.execute('SELECT state FROM woow_paas_platform_cloud_service WHERE id = %s',
+                       (self.ids_['service'],))
+            row = cr.fetchone()
+            cr.execute('SELECT state FROM sh_subscription_subscription WHERE id = %s',
+                       (self.ids_['sub'],))
+            return (row[0] if row else None), cr.fetchone()[0]
+
+    def _run_cron(self, injection=None):
+        client = MagicMock()
+        client.get_status.side_effect = PaaSOperatorError(
+            'release not found', status_code=404)
+        patches = [patch(f'{_SVC}.get_paas_operator_client', return_value=client)]
+        if injection is not None:
+            patches.append(injection)
+        for p in patches:
+            p.start()
+        try:
+            with self.registry.cursor() as cr:
+                model = self._env(cr)['woow_paas_platform.cloud_service']
+                model._cron_check_deploying_services()
+        finally:
+            for p in reversed(patches):
+                p.stop()
+
+    def _fail_settlement(self, recorder):
+        service_id = self.ids_['service']
+
+        def boom(sub_self, reason='Service deleted'):
+            sub_self.env.cr.execute(
+                'SELECT 1 FROM woow_paas_platform_cloud_service WHERE id = %s', (service_id,))
+            recorder.append(bool(sub_self.env.cr.fetchone()))
+            raise UserError('injected: subscription settlement failed')
+
+        return patch.object(ShSubscriptionFix, '_settle_on_entity_delete', boom)
+
+    def test_cron_reaps_a_deleting_service_when_the_release_is_gone(self):
+        """陽性對照：沒注入時 cron 真的會收屍（否則下面「沒有殘留」零鑑別力）。"""
+        self._run_cron()
+        service_state, sub_state = self._probe()
+        self.assertIsNone(service_state, 'operator 回 404 的 deleting 服務要被 unlink')
+        self.assertNotEqual(sub_state, 'in_progress', '收屍要一併結算訂閱（#318）')
+
+    def test_teardown_failure_leaves_no_half_deleted_service(self):
+        seen = []
+        self._run_cron(injection=self._fail_settlement(seen))
+        self.assertEqual(seen, [False],
+                         '前提：注入觸發時服務列已被 super().unlink() 刪掉（實際 %r）' % (seen,))
+        service_state, sub_state = self._probe()
+        self.assertEqual(
+            (service_state, sub_state), ('deleting', 'in_progress'),
+            'teardown 中途失敗：已刪掉的那一半必須回捲、服務留在 deleting 等下一輪；'
+            '服務消失而訂閱仍 in_progress ＝ 孤兒訂閱（#318）')

@@ -443,7 +443,10 @@ class TestTimeoutDoesNotOverreach(_Base):
         client.get_status.return_value = _status(pods=[])
 
         module = 'odoo.addons.woow_paas_platform.services.paas_operator'
-        with patch(f'{module}.get_paas_operator_client', return_value=client):
+        # #1159 Q36：cron 每台服務各 commit 一次；本測試只看它 poll 了哪些服務，
+        # TransactionCase 禁 commit ⇒ 換成 no-op。
+        with patch(f'{module}.get_paas_operator_client', return_value=client), \
+                patch.object(self.env.cr, 'commit', lambda: None):
             self.Service._cron_check_deploying_services()
 
         polled = [

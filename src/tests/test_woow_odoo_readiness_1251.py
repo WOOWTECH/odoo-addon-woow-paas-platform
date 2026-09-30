@@ -371,11 +371,13 @@ class TestWoowOdooReadinessIdentity(TransactionCase):
         self.service.write({'state': 'suspended', 'pre_suspend_state': 'running'})
         deploying = self._make_service('1251 Deploying', 'svc-1251-deploying')
         client = operator_client(get_status=self._status([_server(), _postgres()]))
+        # #1159 Q36：cron 每台服務各 commit 一次；本測試只看它 poll 了哪些服務，
+        # TransactionCase 禁 commit ⇒ 換成 no-op。
         with patch(
             'odoo.addons.woow_paas_platform.services.paas_operator'
             '.get_paas_operator_client',
             return_value=client,
-        ):
+        ), patch.object(self.env.cr, 'commit', lambda: None):
             self.env['woow_paas_platform.cloud_service']._cron_check_deploying_services()
 
         polled = [c.kwargs.get('release_name') for c in client.get_status.call_args_list]
