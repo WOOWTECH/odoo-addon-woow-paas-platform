@@ -2014,21 +2014,30 @@ class PaasController(HiddenChainMixin, Controller):
                 "took effect", service.id,
             )
             admin_username = None
-        data = dict(
-            gateway,
-            service_id=service.id,
-            admin_username=admin_username,
-            message=message,
-            # 一次性憑證視窗（buildOneTimeCredentials）挑文案用：只有密碼的服務
-            # （admin_credentials_settable 且無帳號）不能落到 hermes 的 MCP 說明。
-            # 與 _format_service 的 template 子物件同名同值。
-            template={
+        # 一次性憑證視窗（buildOneTimeCredentials）挑文案用：只有密碼的服務
+        # （admin_credentials_settable 且無帳號）不能落到 hermes 的 MCP 說明。
+        # 與 _format_service 的 template 子物件同名同值。同上：只是顯示用，讀取失敗
+        # 不得翻轉「已生效」的回應（前端缺欄位時退回通用文案）。
+        try:
+            template_flags = {
                 'admin_reset_supported': bool(service.template_id.admin_reset_supported),
                 'admin_credentials_settable': bool(
                     service.template_id.admin_credentials_settable),
                 'admin_username_editable': bool(
                     service.template_id.admin_username_helm_path),
-            },
+            }
+        except Exception:
+            _logger.exception(
+                "template capability lookup failed for service %s after credentials "
+                "took effect", service.id,
+            )
+            template_flags = {}
+        data = dict(
+            gateway,
+            service_id=service.id,
+            admin_username=admin_username,
+            message=message,
+            template=template_flags,
         )
         # 租戶自己填的密碼不回傳明文（他本來就知道，回傳只是多一處外洩面）；
         # 平台鑄造的（Reset、或自設流程選「隨機產生」）照舊一次性交付。
