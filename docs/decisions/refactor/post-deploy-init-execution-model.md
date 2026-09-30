@@ -14,7 +14,7 @@ related:
 
 **Date**: 2026-09-30
 **Status**: accepted（設計定案：[#1257 resolution c15293](https://git-prod.woowtech.io/odoo-addons/woow_paas_platform/issues/1257#issuecomment-15293)、[#1159 resolution c15307](https://git-prod.woowtech.io/odoo-addons/woow_paas_platform/issues/1159#issuecomment-15307)；實作 #1257，執行面 #1159）
-**Components**: `woow_paas_platform.cloud_service`（欠 init／lease 欄位、`_run_post_deploy_init`）、`woow_paas_platform.cloud_service_init_attempt`、`controllers/paas.py`（poll、reconfigure、rollback）、`services/paas_operator.py`（init 預算）、`src/migrations/18.0.1.0.189/`
+**Components**: `woow_paas_platform.cloud_service`（欠 init／lease 欄位、`_run_post_deploy_init`）、`woow_paas_platform.cloud_service_init_attempt`、`controllers/paas.py`（poll、reconfigure、rollback）、`services/paas_operator.py`（init 預算）、`src/migrations/18.0.1.0.190/`
 
 名詞：**初始化**、**欠初始化／初始化代數**、**結果未知**見 [`CONTEXT.md`](../../../CONTEXT.md)。
 
@@ -106,7 +106,7 @@ commit（poll 剛寫的 state 先落地）
 
 ### 5. 上線過渡（Q15／Q26）
 
-`18.0.1.0.189` 的 post-migrate：回填欠 init（`upgrading`＋`addon_update_pending`、`pending`／`deploying` 且 init 類型
+`18.0.1.0.190` 的 post-migrate：回填欠 init（`upgrading`＋`addon_update_pending`、`pending`／`deploying` 且 init 類型
 不是 none、`initializing`）；每台 `initializing` 寫一筆 outcome=legacy 的合成 attempt 與 1200s lease、`init_retries`
 歸 0；`error` 不動；log 列出 init 類型不是 none 的停權服務交人工抽查。新舊 code 並存由 Recreate＋cron-wait 擋住，舊
 process 在途的 remote exec 由合成 lease 擋住。

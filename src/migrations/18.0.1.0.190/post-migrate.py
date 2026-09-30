@@ -9,7 +9,7 @@
   可推回來）。
 
 ⚠ 目錄版號必須**大於**升級前的 `__manifest__.py` 版號，否則整支靜默 no-op。本檔配
-manifest 由 `18.0.1.0.188` bump 到 `18.0.1.0.189`（`scripts/ci/manifest-version-gate.py`
+manifest 由 `18.0.1.0.189` bump 到 `18.0.1.0.190`（`scripts/ci/manifest-version-gate.py`
 規則 B）；若 develop 先有別的 migration／release 用掉這個號，要一起改名。
 
 邏輯放 model（delegate-to-model 慣例），本檔只負責呼叫，單元測試直接驗那個 method
