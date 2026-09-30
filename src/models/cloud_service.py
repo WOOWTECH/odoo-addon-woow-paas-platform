@@ -14,6 +14,8 @@ from ..services import dns_probe
 from ..services.naming import make_cs_access_canonical_name
 from ..services.woow_odoo_readiness import (
     CONTRACT_MANAGED,
+    CONTRACT_MISMATCH,
+    chart_mismatch_detail,
     woow_odoo_contract,
     woow_odoo_ready,
 )
@@ -2811,6 +2813,8 @@ class CloudService(models.Model):
         # #1251：受 woow-odoo 契約管理的 release（依實際 `release.chart`，Q17）改用
         # Pod 身分判定取代 #1156 的通用規則；分流只在這裡，不在 cron／controller 任一邊。
         contract = woow_odoo_contract(status, self.template_id.helm_chart_name)
+        if contract == CONTRACT_MISMATCH:
+            return False, chart_mismatch_detail(status)
         if contract == CONTRACT_MANAGED:
             ready, detail = woow_odoo_ready(status)
         elif self._needs_vm_status():

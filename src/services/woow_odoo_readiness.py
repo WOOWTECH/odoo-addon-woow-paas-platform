@@ -63,6 +63,14 @@ def woow_odoo_contract(status, expected_chart_ref=None):
     return None
 
 
+def chart_mismatch_detail(status):
+    """:data:`CONTRACT_MISMATCH` 的 HARD detail（``_TIMEOUT_HINTS`` 以 ``chart mismatch`` 比對）。"""
+    actual = (status.get('release') or {}).get('chart') or 'unknown'
+    return 'HARD: chart mismatch: template expects %s, release runs %s' % (
+        WOOW_ODOO_CHART, actual,
+    )
+
+
 def _is_active(pod):
     """與 #1156 同：收尾中的 Pod（Succeeded／Failed／帶 deletion_timestamp）不參與。"""
     return (

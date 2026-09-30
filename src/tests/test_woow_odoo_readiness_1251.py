@@ -246,3 +246,39 @@ class TestWoowOdooReadinessIdentity(TransactionCase):
                 self.assertTrue(
                     detail.startswith('HARD: operator lacks pod identity'), detail,
                 )
+
+    # ------------------------------------------------------------------ #
+    #  Q5／Q17：依實際 release.chart 分流                                  #
+    # ------------------------------------------------------------------ #
+
+    def test_template_expects_woow_odoo_but_release_runs_another_chart(self):
+        """#1128：in-place upgrade 換不了 chart ⇒ HARD，不能拿通用規則放行。"""
+        healthy_generic = [pod_info(name='svc-1251-odoo-7f9-abc')]
+        for case, release in {
+            'Bitnami odoo': {'status': 'deployed', 'revision': 3, 'chart': 'odoo'},
+            'chart unknown': {'status': 'deployed', 'revision': 3},
+        }.items():
+            with self.subTest(case=case):
+                status = status_response(pods=healthy_generic, release=release)
+                self._assert_poll_keeps(status, state='upgrading')
+                ready, detail = self.service._is_release_ready(status)
+                self.assertFalse(ready)
+                self.assertTrue(detail.startswith('HARD: chart mismatch'), detail)
+
+    def test_actual_chart_governs_even_when_template_says_otherwise(self):
+        """template 仍是 Bitnami（cutover 窗口），叢集上實際跑 woow-odoo ⇒ 照 woow-odoo 判。"""
+        self.template.helm_chart_name = 'oci://registry-1.docker.io/bitnamicharts/odoo'
+        backup = _db_job('backup', phase='Running', ready='1/1')
+        self._assert_poll_keeps(self._status([_postgres(), backup]))
+
+    def test_other_charts_keep_the_generic_rule(self):
+        """Bitnami odoo 與其他 chart 不受影響：無身分 Pod 照 #1156 判、舊 operator 不擋。"""
+        self.template.helm_chart_name = 'oci://registry-1.docker.io/bitnamicharts/odoo'
+        generic = [pod_info(name='svc-1251-odoo-7f9-abc'),
+                   pod_info(name='svc-1251-postgresql-0')]
+        self._assert_poll_reaches_running(
+            self._status(generic, chart='odoo', pod_identity_included=ABSENT),
+        )
+        pending = [pod_info(name='svc-1251-odoo-7f9-abc', phase='Pending', ready='0/1'),
+                   pod_info(name='svc-1251-postgresql-0')]
+        self._assert_poll_keeps(self._status(pending, chart='odoo'))
