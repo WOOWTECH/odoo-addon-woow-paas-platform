@@ -417,6 +417,7 @@ _TIMEOUT_GOVERNED_STATES = ('deploying', 'upgrading')
 _TIMEOUT_HINTS = (
     # #1251 Q45：woow-odoo 判定的兩種「不會自己好」的 HARD。刻意排在最前面
     # （至少要在 'pods not ready' 之前）：先比中先用，別讓通用 hint 把方向帶偏。
+    # detail 字串的撞名規則見 docs/decisions/patterns/woow-odoo-readiness-identity.md
     ('chart mismatch',
      'the release runs a different chart than the template expects — an '
      'in-place upgrade cannot switch charts; a fresh install is required (see '
@@ -2821,6 +2822,8 @@ class CloudService(models.Model):
 
         # #1251：受 woow-odoo 契約管理的 release（依實際 `release.chart`，Q17）改用
         # Pod 身分判定取代 #1156 的通用規則；分流只在這裡，不在 cron／controller 任一邊。
+        # ⛔ 不用 template slug 分流。規則見
+        # docs/decisions/patterns/woow-odoo-readiness-identity.md
         contract = woow_odoo_contract(status, self.template_id.helm_chart_name)
         if contract == CONTRACT_MISMATCH:
             return False, chart_mismatch_detail(status)
