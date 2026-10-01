@@ -7,7 +7,7 @@ from odoo.exceptions import AccessError, UserError, ValidationError
 import re
 import secrets
 
-from .workspace_access import ROLE_OWNER, ROLE_HIERARCHY
+from .workspace_access import ROLE_ADMIN, ROLE_OWNER, ROLE_HIERARCHY
 
 # #1295：封存工作區被「底下還有未刪除服務」擋下時的結構化錯誤碼（controller 原樣
 # 回給前端，前端據此列出要先刪除的服務）。
@@ -355,21 +355,19 @@ class Workspace(models.Model):
         再由 slug 推導）：它是對外露出的識別字，且 `UNIQUE(slug)` 讓改寫可以踩掉
         別人的重試路徑（#525 A2）。歷史脈絡見 `_check_tenant_create_anchors`。
 
-        `name` / `description` / `state` 刻意**不**錨：那三個 owner/admin 本來就
-        該能改，交給 ir.rule 那一層（`paas.py::_update_workspace` 已要求
+        `name` / `description` / `state` 刻意**不**錨（不是身分錨點）：前兩個
+        owner/admin 本來就該能改，`state` 另有 owner-only 的角色守衛（見
+        `_check_state_change_by_owner`），交給 ir.rule 那一層（`paas.py::_update_workspace` 已要求
         `required_role=ROLE_ADMIN`，ORM 層則由
         `workspace_rule_owner_admin_manage` 收到同一組角色）。
         ⚠ 兩層的**角色門檻**相同，但**射程**不同，不要讀成「完全等價」：
         `_update_workspace` 只寫得到 `name` / `description`（它自己組
         `update_vals`），ORM 這一層放行的是 owner/admin 對本 model 的**任何**
-        非錨定欄位，包含 `state`（＝ archive）與 `member_count`。也就是說
-        **admin 可以走 ORM archive 一個 workspace**，而產品面的
-        `_delete_workspace` 是 owner-only、且沒有對應的 unarchive 端點
-        （`action_restore()` 沒有任何 controller 呼叫它）。這是本 PR **沒有**
-        改變的既有行為（develop 上 guest 都做得到，現在收到 owner/admin），
-        但收窄之後它就成了 admin 相對於產品意圖
-        （`get_role_permissions()` 說 `ROLE_ADMIN.can_delete=False`）的落差
-        ⇒ 已記在 PR 內文的「沒有做的事」與 follow-up issue，不在本單射程。
+        非錨定欄位，包含 `state`（＝ archive）與 `member_count`。其中 `state`
+        對 admin 的那格落差（產品面 `_delete_workspace` 是 owner-only、
+        `get_role_permissions()` 說 `ROLE_ADMIN.can_delete=False`、沒有還原端點）
+        後來由 `_check_state_change_by_owner` 收掉：admin 經 ORM 封存／還原一律
+        拒絕，owner 照舊。
 
         `member_count` 也**不**錨：它是 stored compute 且無 inverse（＝公開
         `write()` 寫得進去、值會落地，實測 owner 身分可寫入 9999），但全 repo
@@ -407,6 +405,7 @@ class Workspace(models.Model):
                           "the Kubernetes namespace and public subdomain of every "
                           "service already deployed there.") % rec.id
                     )
+                self._check_state_change_by_owner(rec, vals)
         if vals.get('state') == 'archived':
             self._check_archivable()
         return super().write(vals)
@@ -473,6 +472,36 @@ class Workspace(models.Model):
                           s['name'] or '#%s' % s['id'] for s in services)),
                     services,
                 )
+
+    def _check_state_change_by_owner(self, rec, vals: dict[str, Any]) -> None:
+        """`state`（封存／還原）只有 owner 能改——補上面 docstring 記的那格落差。
+
+        ir.rule `workspace_rule_owner_admin_manage` 讓 **admin** 也寫得了 `state`，
+        而產品面封存（`paas.py::_delete_workspace`）是 owner-only、
+        `get_role_permissions()` 寫 `ROLE_ADMIN.can_delete=False`，且沒有任何
+        還原端點。經 `/web/dataset/call_kw` 的實際後果：admin 把 owner 的整個
+        workspace 封存（`/api/workspaces` 清單、SA／SH／HA 端點都以
+        `workspace_id.state = 'active'` 過濾 ⇒ 所有成員連 owner 都看不到、用不了），
+        owner 沒有任何 UI 能還原；`action_archive()`／`action_restore()` 是 public
+        method，同樣只是 `write({'state': …})`，一併由這裡擋。
+
+        只攔 **admin**：role=user／guest／非成員交給 ir.rule 拒絕（歸因不被本守衛
+        搶走，`test_workspace_authz_658.py` 的 X2 斷言的正是 ir.rule 那一層）。
+        owner 刻意放行——封存走的是 owner 的產品端點；owner 經 RPC 還原自己封存的
+        workspace 沒有跨租戶或計費後果（封存本身不停任何訂閱），是否禁止屬產品
+        決策，不在本守衛射程。
+
+        ⚠ 只加角色判準，不碰 `action_archive()` 的業務邏輯（「有服務時拒絕封存」
+        由 #1295 另案處理）。
+        """
+        if 'state' not in vals or vals['state'] == rec.state:
+            return
+        access = rec.sudo().check_user_access(self.env.user)
+        if access and access.role == ROLE_ADMIN:
+            raise AccessError(
+                _("Only the workspace owner can archive or restore workspace %s.")
+                % rec.id
+            )
 
     def action_archive(self) -> None:
         """Archive the workspace.

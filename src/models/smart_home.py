@@ -437,11 +437,23 @@ class SmartHome(models.Model):
                 'ordering flow instead of writing to this model directly.',
                 model=self._name))
         _strip_identity_anchors(self.env, vals_list)
-        return super().create(vals_list)
+        records = super().create(vals_list)
+        # 落地值的 `subscription_id`（`ir.default`／context default 注入）也要過
+        # 綁定判準——見 mixin 的 `_guard_tenant_lifecycle_create`。
+        records._guard_tenant_lifecycle_create()
+        return records
 
     def write(self, vals):
-        """#524：身分錨點的 write 側 —— 見模組頂端 `_IDENTITY_ANCHOR_FIELDS`。"""
+        """#524：身分錨點的 write 側 —— 見模組頂端 `_IDENTITY_ANCHOR_FIELDS`。
+
+        另加租戶直打 ORM 的生命週期守衛（停權逃逸、`subscription_id` 改綁／
+        清空）：owner 把 `subscription_id` 清空再改 state 為 `error`，就能經
+        `call_kw` 的 `action_provision` → `_converge_existing_tunnel` 把 ingress
+        推回 localhost（那裡的訂閱檢查對「沒有訂閱」放行），而 cron 從此摸不到
+        這一台。理由與豁免見 `subscription_lifecycle_mixin` 模組頂端。
+        """
         _reject_identity_anchor_writes(self.env, vals)
+        self._guard_tenant_lifecycle_write(vals)
         return super().write(vals)
 
     def _get_operator_client(self):
@@ -640,6 +652,15 @@ class SmartHome(models.Model):
             )
 
         client = self._get_operator_client()
+
+        # 首次開通一定會寫 `tunnel_token`（`groups='base.group_system'`）。非平台
+        # 身分（`/web/dataset/call_kw` 直打本 public method，不經 controller 的
+        # sudo）在那次寫入必然 AccessError——但那時 `create_tunnel` 已經在
+        # Cloudflare 開好一條 tunnel，而這一支沒有 SA 那樣的 #822 補償：例外外拋、
+        # 交易回捲、DB 沒有任何東西指向它 ⇒ 每打一次就多一條在計費的孤兒。
+        # 這裡用 Odoo 自己的欄位遮罩判準把同一個拒絕**提前到任何外部副作用之前**
+        # （su 照舊放行，controller 的平台身分路徑與後台按鈕不受影響）。
+        self.check_field_access_rights('write', ['tunnel_token'])
 
         self.write({'state': 'provisioning', 'error_message': False})
 

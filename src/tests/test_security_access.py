@@ -9,6 +9,9 @@ from odoo.tests.common import TransactionCase
 # fixtures simulate exactly that. See models/security_access.py.
 from odoo.addons.woow_paas_platform.models.security_access import (
     _internal_identity as _internal,
+    # 建立閘（豁免 su／group_system）：非 su 的 `with_user(...).create` fixture
+    # 要測的是錨點剝除，不是建立閘本身 ⇒ 經下單流程的同一把開閘 helper。
+    _sa_platform_order,
 )
 
 MOCK_GET_CLIENT = (
@@ -902,8 +905,8 @@ class TestSecurityAccessAcl(TransactionCase):
         """非 su/system user 直接 ORM create 注入的 canonical_name 必須被忽略
         （改用自動生成值），不得搶註受害者命名空間。"""
         injected = 'paas-sa-victimwshash-deadbeef'
-        sa = self.env['woow_paas_platform.security_access'].with_user(
-            self.alice).create({
+        sa = _sa_platform_order(self.env['woow_paas_platform.security_access'].with_user(
+            self.alice)).create({
                 'name': 'Injected Gateway',
                 'workspace_id': self.workspace.id,
                 'canonical_name': injected,
@@ -913,8 +916,8 @@ class TestSecurityAccessAcl(TransactionCase):
 
     def test_reference_id_injection_stripped_on_create(self):
         """注入的 reference_id 也必須被剝離，改用 uuid4 default。"""
-        sa = self.env['woow_paas_platform.security_access'].with_user(
-            self.alice).create({
+        sa = _sa_platform_order(self.env['woow_paas_platform.security_access'].with_user(
+            self.alice)).create({
                 'name': 'Injected Ref Gateway',
                 'workspace_id': self.workspace.id,
                 'reference_id': 'attacker-controlled-ref',
