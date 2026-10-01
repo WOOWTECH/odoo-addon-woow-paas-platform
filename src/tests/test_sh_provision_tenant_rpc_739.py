@@ -415,31 +415,22 @@ class TestSh739ChecksThatMustSurvive(_Sh739Fixture):
     def test_B3_cross_workspace_pair_is_still_refused(self):
         """自己 workspace 的 id ＋ 別人那台 SH 的 id。
 
-        🔴 **實測擋點與直覺不同，這裡記下量到的形狀**：不是走 controller 的
-        `"Smart home not found"` 那句，而是更早——`_get_smarthome_or_error`
-        的 `smarthome.workspace_id` 這一次**讀**就撞上 ir.rule
-        `smart_home_rule_member_read`，丟裸 `AccessError` 冒出 controller
-        （那一段沒有 try/except）⇒ 端點回的是 JSON-RPC error 而不是
-        `{"success": false, ...}` 的信封。
-
-        對 #739 的意義：這道閘在 `_provision_smarthome` **之前**，完全在修法
-        改用平台身分的作用範圍之外 ⇒ 修法前後必須逐字相同。本條在 base 碼與
-        修法後各跑一次，兩次都要綠。
-
-        （附帶：裸 AccessError 會把 model 技術名洩漏給租戶，與 #524 註解裡
-        `str(e)` 那條同型。那是既有行為，不在本票範圍，已在報告點名。）
+        #739 當時的 browse→讀 workspace_id 會先撞 ir.rule，回裸 JSON-RPC
+        AccessError。Portal capability 修復改成 id＋workspace_id 的 scoped
+        search；internal 分支仍使用呼叫者 ORM/rules，但不可見列變成空集合。
+        因此現在明確要求結構化拒絕，不再把洩露技術 model 名的舊錯誤形狀
+        當作不變式。真正的不變式不變：不得開通、不得碰 operator 或改受害列。
         """
         victim = self._order_smart_home(self.bob_login, self.w2, 'tenant B SH')
         client = self._operator_client()
         res = self._provision(self.alice_login, self.w1.id, victim.id, client)
 
-        self.assertIn('error', res,
-                      '跨 workspace 必須被擋（實回 %r）' % res)
-        text = self._error_text(res)
-        self.assertIn('AccessError', text,
-                      '歸因：必須是 smart_home 那層的 rule（實回 %r）' % text)
-        self.assertIn('woow_paas_platform.smart_home', text,
-                      '歸因：擋下來的必須是 smart_home 這一層（實回 %r）' % text)
+        self.assertNotIn('error', res, '產品 API 不應暴露原始 ORM 錯誤')
+        self.assertIs(res['result'].get('success'), False, res)
+        self.assertEqual(res['result'].get('error'), 'Smart home not found')
+        self.assertFalse(res['result'].get('data'), res)
+        self.assertNotIn('woow_paas_platform.smart_home', str(res))
+        self.assertNotIn('Traceback', str(res))
         self.assertFalse(
             client.create_tunnel.called,
             '被擋下就不該走到 operator（走到了＝擋在更後面）')

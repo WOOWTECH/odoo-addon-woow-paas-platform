@@ -2,8 +2,9 @@
 
 JSON-RPC endpoints for Security Access CRUD within a workspace context.
 Mirrors controllers/smart_home.py gating: _get_workspace_or_error for
-visibility, owner/admin role check for mutations, NO .sudo() on
-list/get paths (orm-vs-endpoint-acl-test-coverage pattern).
+visibility and owner/admin role checks for mutations. Internal callers retain
+ORM rules; Portal uses the private, context-cleaned PaaS capability boundary.
+All results remain explicit DTOs, not raw ORM reads.
 """
 from __future__ import annotations
 
@@ -13,6 +14,7 @@ from typing import Any
 from odoo.http import request, route, Controller
 
 from ..models.workspace_access import ROLE_OWNER, ROLE_ADMIN
+from ..services.paas_capability import _PaaSCapability
 # #536：sync-control 的兩個逃生門只認模組私有 sentinel（`call_kw` 把呼叫端
 # context 整包換進 env，只判 truthy 的 key 租戶自己就打得開）。
 from ..models.security_access import _rule_replace, _skip_route_sync
@@ -44,7 +46,7 @@ class SecurityAccessController(Controller):
         if action == "list":
             return self._list_security_accesses(workspace)
         elif action == "create":
-            access = workspace.check_user_access(request.env.user)
+            access = _PaaSCapability(request.env).access(workspace)
             if not access or access.role not in [ROLE_OWNER, ROLE_ADMIN]:
                 return {"success": False, "error": _("Insufficient permissions")}
             return self._create_security_access(
@@ -89,7 +91,7 @@ class SecurityAccessController(Controller):
         # str(e) would then leak (model technical name / rule name) and make
         # behaviour state-dependent (succeeds while unprovisioned, fails once
         # provisioned). Gate it consistently with the other mutations.
-        access = workspace.check_user_access(request.env.user)
+        access = _PaaSCapability(request.env).access(workspace)
         if not access or access.role not in [ROLE_OWNER, ROLE_ADMIN]:
             return {"success": False, "error": _("Insufficient permissions")}
 
@@ -218,7 +220,7 @@ class SecurityAccessController(Controller):
             # #1234：唯讀，同 list／health 的權限。
             return {"success": True, "data": sa._route_traffic()}
 
-        access = workspace.check_user_access(request.env.user)
+        access = _PaaSCapability(request.env).access(workspace)
         if not access or access.role not in [ROLE_OWNER, ROLE_ADMIN]:
             return {"success": False, "error": _("Insufficient permissions")}
         try:
@@ -274,7 +276,7 @@ class SecurityAccessController(Controller):
         if not sa:
             return {"success": False, "error": _("Security access not found")}
 
-        access = workspace.check_user_access(request.env.user)
+        access = _PaaSCapability(request.env).access(workspace)
         if not access or access.role not in [ROLE_OWNER, ROLE_ADMIN]:
             return {"success": False, "error": _("Insufficient permissions")}
 
@@ -315,7 +317,7 @@ class SecurityAccessController(Controller):
     def api_sa_templates(self, **kwargs: Any) -> dict[str, Any]:
         """Catalog data — sudo justified (mirrors smart_home templates)."""
         Template = request.env[
-            "woow_paas_platform.security_access_template"].sudo()
+            "woow_paas_platform.security_access_template"].with_context({}).sudo()
         templates = Template.search([("is_active", "=", True)])
         return {"success": True, "data": [
             {"id": t.id, "name": t.name, "slug": t.slug,
@@ -331,7 +333,7 @@ class SecurityAccessController(Controller):
                               **kwargs: Any) -> dict[str, Any]:
         # sudo: catalog data, portal users lack plan ACL (mirrors smart_home)
         Template = request.env[
-            "woow_paas_platform.security_access_template"].sudo()
+            "woow_paas_platform.security_access_template"].with_context({}).sudo()
         template = Template.browse(template_id)
         if not template.exists() or not template.is_active:
             return {"success": False,
@@ -377,7 +379,7 @@ class SecurityAccessController(Controller):
         if not workspace:
             return {"success": False,
                     "error": _("Workspace not found or access denied")}
-        access = workspace.check_user_access(request.env.user)
+        access = _PaaSCapability(request.env).access(workspace)
         if not access or access.role not in [ROLE_OWNER, ROLE_ADMIN]:
             return {"success": False, "error": _("Insufficient permissions")}
         sa = self._get_sa_or_error(sa_id, workspace)
@@ -398,7 +400,7 @@ class SecurityAccessController(Controller):
         if not workspace:
             return {"success": False,
                     "error": _("Workspace not found or access denied")}
-        access = workspace.check_user_access(request.env.user)
+        access = _PaaSCapability(request.env).access(workspace)
         if not access or access.role not in [ROLE_OWNER, ROLE_ADMIN]:
             return {"success": False, "error": _("Insufficient permissions")}
         sa = self._get_sa_or_error(sa_id, workspace)
@@ -431,7 +433,7 @@ class SecurityAccessController(Controller):
         sa = self._get_sa_or_error(sa_id, workspace)
         if not sa:
             return {"success": False, "error": _("Security access not found")}
-        access = workspace.check_user_access(request.env.user)
+        access = _PaaSCapability(request.env).access(workspace)
         if not access or access.role not in [ROLE_OWNER, ROLE_ADMIN]:
             return {"success": False, "error": _("Insufficient permissions")}
 
@@ -439,7 +441,7 @@ class SecurityAccessController(Controller):
         # and the workspace+role check above already gates who can change a
         # security access, so this widening is narrow and intentional
         # (mirrors smart_home.api_smarthome_change_plan).
-        Plan = request.env["sh.subscription.plan"].sudo()
+        Plan = request.env["sh.subscription.plan"].with_context({}).sudo()
         plan = Plan.browse(plan_id)
         if not plan.exists():
             return {"success": False, "error": _("Plan not found")}
@@ -565,54 +567,17 @@ class SecurityAccessController(Controller):
     # ==================== Private Helpers ====================
 
     def _get_workspace_or_error(self, workspace_id: int):
-        user = request.env.user
-        # #1261：portal/share 帳號擋在 search **之前**。下面這支 search 不是 sudo，
-        # portal 對 `workspace_access` 沒有 ACL（ir.model.access 只給 group_user /
-        # group_system）⇒ 不先擋就在這裡丟 AccessError，JSON-RPC 回 `error`（ACL
-        # 原文＋traceback）而不是各端點既有的「Workspace not found or access
-        # denied」。回 None 也順便讓 #1261 之前邀請殘留的 portal 成員列不再授予
-        # 任何東西——與 `workspace.check_user_access` 的 share 判準同一把尺。
-        # Portal callers are refused before the non-sudo search (#1261).
-        if user.share:
-            return None
-        WorkspaceAccess = request.env["woow_paas_platform.workspace_access"]
-        access = WorkspaceAccess.search([
-            ("user_id", "=", user.id),
-            ("workspace_id", "=", workspace_id),
-            ("workspace_id.state", "=", "active"),
-        ], limit=1)
-        if not access:
-            return None
-        return access.workspace_id
+        workspace = _PaaSCapability(request.env).workspace(workspace_id)
+        return workspace if workspace and workspace.state == 'active' else None
 
     def _get_sa_or_error(self, sa_id: int, workspace):
-        """回傳屬於 `workspace` 的那個 SA，否則 None。
-
-        #1196：用帶 `workspace_id` 條件的 `search()` 做歸屬比對，**不用 sudo**。
-
-        歷史：最早的寫法是 `browse(sa_id).exists()` 後讀 `sa.workspace_id` 比對。
-        SA 的 ir.rule 錨在 workspace 成員關係上，**讀取**別人 workspace 的 SA 欄位
-        會拋 AccessError，所以「自己是某 workspace 的成員、卻傳入別人 workspace 的
-        sa_id」會讓端點噴 500，而不是回結構化拒絕——本函式「拿不到就回 None」的
-        契約在那個組合下失效（`test_sa_tunnel_token_portal_1196` 的
-        `test_cross_workspace_sa_denied` 抓到的）。
-
-        第一版修法改走 sudo 讀 workspace_id，但那多了一個 controller sudo 呼叫點
-        （repo-lint controller-sudo baseline 會擋）。其實不需要：ir.rule 對
-        **search** 是「靜默濾掉讀不到的列」而不是拋例外，所以把歸屬條件放進
-        domain，別人的 SA 自然回空集合 ⇒ None；自己 workspace 的 SA 本來就讀得到
-        （成員 read rule），行為與原本相同。這也符合本檔檔頭的原則：visibility
-        路徑不用 sudo。
+        """Typed SA lookup pinned to a verified workspace.
+        Internal callers retain ORM rules; Portal uses the private capability.
         """
-        SecurityAccess = request.env["woow_paas_platform.security_access"]
-        sa = SecurityAccess.search([
-            ("id", "=", sa_id),
-            ("workspace_id", "=", workspace.id),
-        ], limit=1)
-        return sa or None
+        return _PaaSCapability(request.env).security_access(workspace, sa_id)
 
     def _list_security_accesses(self, workspace) -> dict[str, Any]:
-        SecurityAccess = request.env["woow_paas_platform.security_access"]
+        SecurityAccess = workspace.env["woow_paas_platform.security_access"]
         records = SecurityAccess.search([
             ("workspace_id", "=", workspace.id),
         ])
@@ -635,7 +600,7 @@ class SecurityAccessController(Controller):
                     "error": _("Subscription plan is required")}
 
         Template = request.env[
-            "woow_paas_platform.security_access_template"].sudo()
+            "woow_paas_platform.security_access_template"].with_context({}).sudo()
         template = Template.browse(template_id)
         if not template.exists() or not template.is_active:
             return {"success": False,
@@ -645,7 +610,7 @@ class SecurityAccessController(Controller):
                     "error": _("Template has no subscription plans configured")}
 
         # sudo: catalog data, portal users lack plan ACL (mirrors smart_home)
-        Plan = request.env["sh.subscription.plan"].sudo()
+        Plan = request.env["sh.subscription.plan"].with_context({}).sudo()
         plan = Plan.browse(plan_id)
         if not plan.exists():
             return {"success": False, "error": _("Subscription plan not found")}
@@ -653,7 +618,7 @@ class SecurityAccessController(Controller):
             return {"success": False,
                     "error": _("Selected plan is not available for this template")}
 
-        SecurityAccess = request.env["woow_paas_platform.security_access"]
+        SecurityAccess = workspace.env["woow_paas_platform.security_access"]
         try:
             sa = SecurityAccess.create({
                 "name": name,
@@ -675,7 +640,7 @@ class SecurityAccessController(Controller):
     def _check_route_prefix(self, prefix: str) -> dict[str, Any]:
         """Format check first, then two-layer availability: Odoo DB, Cloudflare DNS."""
         Route = request.env[
-            "woow_paas_platform.security_access_route"].sudo()
+            "woow_paas_platform.security_access_route"].with_context({}).sudo()
         # Fail-fast on format using the SAME validator the create/write
         # constraint uses (single source of truth) so availability never
         # reports a prefix as "Available" that create would then reject.
@@ -769,7 +734,7 @@ class SecurityAccessController(Controller):
                     "error": _("Subdomain prefix is not available: %s")
                              % check["data"].get("reason", "taken")}
 
-        Route = request.env["woow_paas_platform.security_access_route"]
+        Route = sa.env["woow_paas_platform.security_access_route"]
         vals = {
             "security_access_id": sa.id,
             "subdomain_prefix": subdomain_prefix,
@@ -842,7 +807,7 @@ class SecurityAccessController(Controller):
         sa = self._get_sa_or_error(sa_id, workspace)
         if not sa:
             return {"success": False, "error": _("Security access not found")}
-        access = workspace.check_user_access(request.env.user)
+        access = _PaaSCapability(request.env).access(workspace)
         if not access or access.role not in [ROLE_OWNER, ROLE_ADMIN]:
             return {"success": False, "error": _("Insufficient permissions")}
         try:
@@ -867,10 +832,9 @@ class SecurityAccessController(Controller):
             return {"success": False, "error": _("Security access not found")}
 
         if action == "list":
-            # No .sudo(): ir.rule filters policies to workspace members
-            # (orm-vs-endpoint-acl-test-coverage pattern). A non-member never
-            # reaches here (_get_workspace_or_error gates first), and a member
-            # sees only their own SA's policies via the row-level rule.
+            # The resolved SA supplies the environment: internal ORM rules,
+            # or Portal's context-cleaned capability. Always pin to this SA;
+            # never query an unrestricted sudo policy pool.
             #
             # P2.5 per-route: policies bind to routes. List every policy across
             # the SA's routes via the stored related security_access_id. An
@@ -883,13 +847,13 @@ class SecurityAccessController(Controller):
                 if not route:
                     return {"success": True, "data": []}
                 domain = [("route_id", "=", route.id)]
-            policies = request.env[
+            policies = sa.env[
                 "woow_paas_platform.security_access_access_policy"].search(
                     domain)
             return {"success": True,
                     "data": [p.to_dict() for p in policies]}
 
-        access = workspace.check_user_access(request.env.user)
+        access = _PaaSCapability(request.env).access(workspace)
         if not access or access.role not in [ROLE_OWNER, ROLE_ADMIN]:
             return {"success": False, "error": _("Insufficient permissions")}
         try:
@@ -928,7 +892,7 @@ class SecurityAccessController(Controller):
         sa = self._get_sa_or_error(sa_id, workspace)
         if not sa:
             return {"success": False, "error": _("Security access not found")}
-        access = workspace.check_user_access(request.env.user)
+        access = _PaaSCapability(request.env).access(workspace)
         if not access or access.role not in [ROLE_OWNER, ROLE_ADMIN]:
             return {"success": False, "error": _("Insufficient permissions")}
         try:
@@ -976,7 +940,7 @@ class SecurityAccessController(Controller):
             rid = int(route_id)
         except (TypeError, ValueError):
             return sa.route_ids.browse()
-        return sa.route_ids.filtered(lambda r: r.id == rid)[:1]
+        return _PaaSCapability(request.env).security_access_route(sa, rid)
 
     def _update_access_config(self, sa, kwargs) -> dict[str, Any]:
         # Whitelist only: never pass raw kwargs to write() — access_app_id and
@@ -1059,9 +1023,9 @@ class SecurityAccessController(Controller):
         # 成本**，不是「這位呼叫者看得到多少」——`ir.rule` 只讓呼叫者看到池中
         # 一部分 policy 時，裸 `search_count` 會少算，而少算的症狀是「配額安靜
         # 地變寬」，與「方案的政策數上限很大」在輸出上完全不可區分。
-        # ⛔ sudo 只包**這一次計數**：`sa` 本身仍由 `_gated_sa()` 以呼叫者的
-        # env 把關，Policy.create() 以下也一律留在呼叫者 env（本前置只是快速
-        # 失敗，真正的守線是 model 那條 constraint）。
+        # Internal calls keep their ORM environment. Portal creation uses
+        # the resolved SA capability only after the dispatcher role gate;
+        # model quota constraints still run in both environments.
         # （domain 以 `security_access_id` 收斂 ⇒ sudo 只放寬可見度，不會把別
         # 的 SA／租戶的 policy 算進來。）
         #
@@ -1073,7 +1037,7 @@ class SecurityAccessController(Controller):
         # (This is only about sa_max_access_policies — the route pre-check above
         # keeps sa_max_routes at 0 = none allowed.)
         sub = sa.sudo().subscription_id
-        Policy = request.env[
+        Policy = sa.env[
             "woow_paas_platform.security_access_access_policy"]
         if sub and sub.sh_subscription_plan_id:
             quota = sub.sh_subscription_plan_id.sa_max_access_policies
@@ -1149,7 +1113,7 @@ class SecurityAccessController(Controller):
         if not isinstance(policy_ids, list):
             return {"success": False, "error": _("policy_ids must be a list")}
         reordered = []
-        routes = request.env["woow_paas_platform.security_access_route"]
+        routes = sa.env["woow_paas_platform.security_access_route"]
         try:
             seq = 0
             for pid in policy_ids:
@@ -1172,10 +1136,7 @@ class SecurityAccessController(Controller):
     def _sa_policy(self, sa, policy_id):
         """A policy under this SA (any of its routes), looked up via the stored
         related security_access_id so it cannot reach across SAs."""
-        return request.env[
-            "woow_paas_platform.security_access_access_policy"].search(
-                [("id", "=", policy_id),
-                 ("security_access_id", "=", sa.id)], limit=1)
+        return _PaaSCapability(request.env).security_access_policy(sa, policy_id)
 
     def _update_policy(self, sa, policy_id, kwargs) -> dict[str, Any]:
         pol = self._sa_policy(sa, policy_id)

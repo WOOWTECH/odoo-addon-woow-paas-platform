@@ -13,9 +13,11 @@ _Avoid_: 「使用者權限」「Odoo 角色」「群組角色」
 >
 > 本 repo 有**可執行的斷言**在守這件事：`src/tests/test_acl_p9.py` 的 `assertNotIn(base.group_user, groups, "…would grant every new /web/signup user internal access")`。改動 signup 相關設定前先跑它。
 >
-> ⚠ **而本 addon 的 security 層完全沒有 portal 的位置**：`ir.model.access.csv` 與 `ir_rules.xml` 的每一列／每一條都只授權給 `base.group_user` 或 `base.group_system`，**`base.group_portal` 零命中**。意思是**租戶身分無法直接用 ORM 存取本 addon 的任何 model**。`src/controllers/ha_paas.py` 有一段註解逐字記載這個事實與它的因應。
+> **Portal 沒有 PaaS 原始 ORM CRUD 權限**：`ir.model.access.csv`／`ir_rules.xml` 未對 `base.group_portal` 新增授權；對外功能由受控 API 提供，不等於可呼叫任意 model/method。
 >
-> ⚠ **但「所以 controller 都以 `.sudo()` 代為執行」是錯的，別這樣接下去推**（2026-09-01 更正）。實況是**逐 controller 而異**：`ha_paas.py` 那條路確實全程 sudo，而 `/api/workspaces` 的 `_list_workspaces`／`_create_workspace`（`src/controllers/paas.py:290`／`:374`）用的是**裸 `request.env`**——於是那兩支對 `base.group_portal` 直接 AccessError。**描述任何 endpoint 的授權時，去讀那一支自己有沒有 sudo，不要套用通則。**
+> **2026-10-01 的產品契約**：新舊已登入、active、非 public 的外部帳號可使用對外 PaaS。`src/services/paas_capability.py` 固定真實 uid、驗證 workspace 成員／角色和資源歸屬，再提供窄範圍 Portal recordset；內部帳號仍走原有 ORM/rules。付款、配額、欄位白名單由既有 BFF 留守，request.env 不全域提權，群組不升級。Project/AI 分享與 HA machine/OAuth 不因此開放。修改這條邊界時讀 [Portal 存取設計](docs/plans/2026-Q4/2026-10-01-portal-paas-access-design.md)。
+>
+> 歷史：2026-09-01 的裸 `request.env` 讓 Portal workspace API 拋 AccessError，#1261 後改為明確拒絕外部帳號。本次受控 API 取代的是該產品端點拒絕，不是所有 controller／model 的授權通則；部署狀態須另驗。
 >
 > ⇒ 由此推論安全性時要小心：**「我們加了 record rule」不等於「租戶受到該規則約束」**——規則綁在 `group_user` 上，而租戶不在那個群組裡。反過來，任何**確實持有 `base.group_user`** 的帳號（內部員工、維運、被手動升級者）才是那些規則的實際受眾。
 
@@ -23,7 +25,7 @@ _Avoid_: 「使用者權限」「Odoo 角色」「群組角色」
 >
 > ⇒ 因此 `src/models/subscription_lifecycle_mixin.py:115` 的「典型租戶（只有 `base.group_user` 的內部使用者）」是**設計時的想像，不是實況**。它與 `src/tests/test_subscription_mixin_cascade_sudo_29.py:103`／`:381`／`:486` 的 fixture 同源。⚠ 這個身分前提不只在那一支：`src/tests/` 275 支裡有 89 支釘 `base.group_user`、只有 7 支用 `base.group_portal`——**改動這條敘述前先想清楚波及面**。
 >
-> ⚠ **仍開著的一格**：`docs/guides/deployment/admin-roles.md:13` 的「Portal user ✅ 完整功能」射程未定（是「看 subscription」還是「整個 `/woow`」）。這格要問當初寫的人，**不要據此推論**。
+> **「Portal 可用 PaaS」的射程**已由 2026-10-01 使用者需求確認為對外產品流程，不含 ERP 後台、原始 PaaS ORM、未分享專案或機器 OAuth 的額外權限；以本文上方的受控 API 邊界為準。
 
 > ⚠ **`res_users.share` 不是第二個訊號。** 它是 stored computed，唯一依據就是 `groups_id` 裡有沒有 `base.group_user`（`odoo/addons/base/models/res_users.py:386` 欄位定義、`:531-534` 的 `_compute_share`）。**「`share=True`」與「非 `base.group_user`」是同一個事實的兩種讀法**，並列出現時不構成互相佐證——拿它們當兩把尺互證是零證據。
 
@@ -39,7 +41,7 @@ _Avoid_: 「專案」「租戶」（租戶是**人**，workspace 是**容器**�
 
 > ⚠ **Workspace 不是計費單位。** 訂閱掛在**每一個服務**上（`subscription_id` 來自 `src/models/subscription_lifecycle_mixin.py`，由 CloudService／SmartHome／SecurityAccess 三個 model 各自持有），workspace 本體沒有 `subscription_id` 欄位。所以「這個 workspace 的訂閱狀態」不是一個有定義的問題——要問的是「這個 workspace 裡的哪個服務」。
 
-> ⚠ **建立 workspace 有兩條路，而租戶只走得通其中一條**——見下方 **Tenant（租戶）** 的說明，那裡有 2026-09-01 的 prod 量測。
+> 建立 workspace 的網站與 HA provision 是不同入口。下方 **Tenant（租戶）** 保留 2026-09-01 的歷史量測；現在網站入口使用受控能力層，不能再從舊量測推論 Portal 必須改成 internal。
 
 **Workspace role**：租戶在**單一 workspace 內**的角色，一個 workspace 成員一筆，存於 `woow_paas_platform.workspace_access` 的 `role` 欄位（`required=True`、`default='user'`）。階層由低到高 `guest < user < admin < owner`（見 `src/models/workspace_access.py` 的 `ROLE_HIERARCHY`）。**同一個人在不同 workspace 可以是不同 role**；每個 workspace 恰有一個 `owner`（由 model 層 `_check_owner_count` 強制），轉移要走 `transfer_ownership`。
 _Avoid_: 「群組」「權限等級」「帳號角色」
@@ -56,12 +58,14 @@ _Avoid_: 「群組」「權限等級」「帳號角色」
 >
 > 要在 `domain` 驗軸二，必須用 `any` operator 把 `user_id` 與 `role` 綁在**同一列** access——否則 `role='user'` 的成員會靠 owner 那一列的 `role` 值 cross-tuple 矇混通過。現成正確寫法見 `ir_rules.xml` 的 `security_access_rule_owner_admin_manage`。
 
-**Tenant（租戶）**：使用本平台的外部客戶身分。其 Odoo group role 恆為 `base.group_portal`（見上），Workspace role 則視 workspace 而定。**它不是「有 workspace 的人」的同義詞，也不是「註冊過的人」的同義詞**——三者在 prod 上是三個不同的集合。
+**Tenant（租戶）**：使用本平台的外部客戶身分。一般註冊帳號的 Odoo group role 是 `base.group_portal`；受控 PaaS API 也接受 active、非 public、非 internal 的既有外部帳號，不靠手動群組回填。Workspace role 則視 workspace 而定。**它不是「有 workspace 的人」的同義詞，也不是「註冊過的人」的同義詞**——三者在 prod 上是三個不同的集合。
 _Avoid_: 「使用者」「客戶」「會員」「portal user」（最後一個指的是 Odoo group role 這一軸，不是這個角色）
 
 > ⚠ **「租戶」先前從未被定義，這正是身分矛盾的成因。** 不同作者各指一件事：實作 `/woow` 前台的人指「會登入 `/woow` 用 workspace 的人」，寫 `subscription_lifecycle_mixin` 的人指「持有訂閱的內部帳號」，寫 `admin-roles.md` 的人指「`/web/signup` 註冊進來的外部人」。三個指涉在 code 裡碰不到頭，於是各自的敘述都「對」，合起來卻互相矛盾。**新增任何以「租戶」為主詞的敘述前，先指明你講的是哪一個集合。**
 
-> 🔴 **成為 workspace owner 有兩條路，而租戶只走得通其中一條。** `src/controllers/paas.py:374`（`/api/workspaces` action=create）**不走 sudo**，而 `src/security/ir.model.access.csv:2`／`:3` 只授權 `base.group_user`／`base.group_system` ⇒ **`base.group_portal` 身分打不通這條**。另一條是 `src/controllers/ha_paas.py:268` 的 provision，走 `.sudo()` 且 `_guard_partner()`（`ha_paas.py:114-126`）只排除 public／root partner、**不檢查任何 Odoo group** ⇒ 租戶只要持有 `ha:provision` scope 的 token 就走得通。owner 的 access 列一律由 `src/models/workspace.py:219-223` 無條件 sudo 寫入、`user_id` 取自 `workspace.owner_id` 而非 `env.user`。
+> **網站建立 workspace**：`/api/workspaces` action=create 經 `_PaaSCapability.create_workspace`，owner 固定為原始呼叫者 uid；Portal 群組保持不變。`Workspace.create` 仍由 workspace.owner_id 建立 owner access 列，不依賴 sudo 的 user 推斷來源。
+>
+> **歷史（2026-09-01）**：當時網站建立走裸 ORM，Portal 無 ACL 而失敗；可用的是 `ha_paas.py` 的獨立 provision 入口。這份舊站量測解釋缺陷來源，不代表修復版網站與 HA API 共享授權。
 >
 > 2026-09-01 prod 實測：唯一的 workspace（`name='HA PaaS'`）確實是第二條路建的——四個判準全中（名稱、`create_uid` ＝租戶自己、對應 `cloud_service` 的 `conceal_instances=t`、`ha:provision` token 早於 workspace 建立時間 19 分鐘）。**⇒ `/woow` 的 workspace 建立流程從未被任何真實租戶走過。** 談「租戶在前台能做什麼」時，這是必須先講出來的前提。
 

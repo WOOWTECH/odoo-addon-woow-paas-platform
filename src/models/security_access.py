@@ -1037,6 +1037,9 @@ class SecurityAccess(models.Model):
         denial（那個分支的契約是「拒絕必須傳到呼叫端」）。
         """
         self.ensure_one()
+        # This public method is also reachable through raw ORM/RPC. Refuse an
+        # unauthorized caller before constructing the privileged operator client.
+        self.check_access('write')
         client = self._get_operator_client()
 
         # Already has a live tunnel (e.g. retry after a stage-2 sync failure):

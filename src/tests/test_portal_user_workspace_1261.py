@@ -1,33 +1,10 @@
 # -*- coding: utf-8 -*-
-"""#1261：Portal 帳號被邀進 workspace「成功」，之後整個平台卻用不了。
+"""#1261 regression: structured product responses without ERP promotion.
 
-## 正式站實測（2026-09-29 瀏覽器 E2E，folight2015@gmail.com）
-
-1. owner 對一個只掛 `User types / Portal` 的帳號（`res.users.share=True`）打
-   `POST /api/workspaces/<ws>/members` action=invite → `success: True`，
-   `workspace_access` 列真的建了。
-2. 該帳號登入 `/woow`，前端第一支 `POST /api/workspaces` action=list 就在
-   `WorkspaceAccess.search` 丟 `odoo.exceptions.AccessError`——
-   `workspace_access` 的 ir.model.access 只給 `base.group_user` /
-   `base.group_system`，portal 一列都沒有——JSON-RPC 回應是 `error`（帶原文
-   訊息與 traceback）而不是 `result`。
-
-## 本檔守的三件事
-
-- **入口**：邀請 portal 帳號要被拒絕，回結構化 `code`，**且不得留下授權列**
-  （只看回應不看 DB 會漏掉「API 說失敗、列卻在」——#525 A3 的教訓）。
-- **出口**：portal 呼叫者打 workspace 端點一律拿到 `result`（結構化
-  `success: False`），不是 JSON-RPC `error`。含 #1261 之前邀請殘留的舊成員列
-  ——那種列今天正式站上就有一筆。
-- **internal 不變**：同一組端點對 internal 使用者的回應與修正前一致（陽性對照；
-  少了它，「一律拒絕」的壞修法也會讓陰性斷言全綠）。
-
-## 為什麼走真 HTTP（HttpCase）而不是直呼 controller
-
-缺陷的形狀就是「ORM 例外穿過 controller 變成 JSON-RPC `error`」。直呼 controller
-方法時例外會直接在測試裡拋出，看不到框架怎麼序列化它，也驗不到
-`auth="user"` 對 portal session 的實際行為（ORM 綠 ≠ endpoint secure）。
-`_post` 裡的 `assertIn('result', parsed)` 就是本案的回歸斷言本體。
+2026-10-01 supersedes the temporary Portal product denial: invitations and
+existing memberships now work via /woow's private capability seam. Preserve
+internal-first duplicate-email selection, no group changes, model-helper deny,
+and HA/OAuth's historical deny. Real HTTP still catches raw ACL traceback leaks.
 """
 import json
 import uuid
@@ -35,11 +12,6 @@ from datetime import timedelta
 
 from odoo import fields
 from odoo.tests.common import HttpCase, tagged
-
-from odoo.addons.woow_paas_platform.controllers.paas import (
-    ERR_INVITEE_PORTAL_ACCOUNT,
-    ERR_PORTAL_ACCOUNT,
-)
 
 PASSWORD = 'Portal1261!pw'
 
@@ -122,20 +94,19 @@ class TestPortalUserWorkspace1261(HttpCase):
     # ================================================================
     #  入口：邀請
     # ================================================================
-    def test_invite_portal_user_is_refused_without_access_row(self):
+    def test_invite_portal_user_succeeds_without_group_changes(self):
         self._as(self.owner)
         result = self._invite(self.portal_email)
 
-        self.assertFalse(result.get('success'), result)
-        self.assertEqual(result.get('code'), ERR_INVITEE_PORTAL_ACCOUNT, result)
-        self.assertIn(self.portal_email, result.get('error') or '',
-                      '拒絕訊息要指出是哪個帳號，邀請者才知道要找誰處理')
-        self.assertFalse(
-            self._access_row(self.portal_user),
-            '拒絕邀請就不得留下 workspace_access 列（否則又回到「說失敗、列卻在」）')
-        # ⛔ 不自動改群組：拒絕之後對方仍是 portal。
+        self.assertTrue(result.get('success'), result)
+        self.assertEqual(result['data']['user_id'], self.portal_user.id)
+        self.assertEqual(self._access_row(self.portal_user).role, 'user')
         self.env.invalidate_all()
         self.assertTrue(self.portal_user.share, '邀請流程不得自動把 portal 升成 internal')
+        self._as(self.portal_user)
+        listed = self._post('/api/workspaces', {'action': 'list'})
+        self.assertTrue(listed['success'], listed)
+        self.assertIn(self.workspace.id, [row['id'] for row in listed['data']])
 
     def test_invite_email_shared_by_portal_and_internal_picks_internal(self):
         """同一個 email 同時有 portal 與 internal 帳號時，邀請落到 internal 那個。
@@ -187,34 +158,23 @@ class TestPortalUserWorkspace1261(HttpCase):
     # ================================================================
     #  出口：portal 呼叫者
     # ================================================================
-    def test_portal_user_workspace_list_is_structured_error(self):
+    def test_portal_user_workspace_list_is_structured_success(self):
         self._as(self.portal_user)
         result = self._post('/api/workspaces', {'action': 'list'})
+        self.assertTrue(result.get('success'), result)
+        self.assertEqual(result['data'], [])
 
-        self.assertFalse(result.get('success'), result)
-        self.assertEqual(result.get('code'), ERR_PORTAL_ACCOUNT, result)
-        self.assertTrue(result.get('error'))
-        self.assertNotIn('AccessError', result.get('error'),
-                         '不得把 ACL 原文丟給使用者')
-
-    def test_portal_user_workspace_create_is_structured_error(self):
+    def test_portal_user_workspace_create_is_structured_success(self):
         self._as(self.portal_user)
-        Workspace = self.env['woow_paas_platform.workspace']
-        before = Workspace.search_count([])
         result = self._post('/api/workspaces',
                             {'action': 'create', 'name': f'P WS {self.suffix}'})
+        self.assertTrue(result.get('success'), result)
+        workspace = self.env['woow_paas_platform.workspace'].browse(result['data']['id'])
+        self.assertEqual(workspace.owner_id, self.portal_user)
+        self.assertTrue(self.portal_user.share)
 
-        self.assertFalse(result.get('success'), result)
-        self.assertEqual(result.get('code'), ERR_PORTAL_ACCOUNT, result)
-        self.env.invalidate_all()
-        self.assertEqual(Workspace.search_count([]), before)
-
-    def test_portal_user_with_legacy_membership_gets_structured_errors(self):
-        """#1261 之前邀請殘留的 portal 成員列（正式站上就有一筆）。
-
-        列在，但 portal 用不了 workspace：各端點都要結構化拒絕，而且
-        `check_user_access` 不得再憑那一列放行（含 sudo 呼叫端）。
-        """
+    def test_portal_user_with_legacy_membership_can_use_product_bff(self):
+        """Existing membership now works in /woow, not model/HA helpers."""
         self.WorkspaceAccess.create({
             'workspace_id': self.workspace.id,
             'user_id': self.portal_user.id,
@@ -234,24 +194,18 @@ class TestPortalUserWorkspace1261(HttpCase):
         ):
             with self.subTest(url=url):
                 result = self._post(url, params)
-                self.assertFalse(result.get('success'), result)
-                self.assertEqual(result.get('code'), ERR_PORTAL_ACCOUNT, result)
+                self.assertTrue(result.get('success'), result)
 
-        # 不在本檔 gate 的 workspace 子端點走 `check_user_access` → 既有的
-        # 「Workspace not found or access denied」結構化分支，而不是 AccessError。
         result = self._post('/api/workspaces/%s/services' % ws, {'action': 'list'})
-        self.assertFalse(result.get('success'), result)
+        self.assertTrue(result.get('success'), result)
 
-        # SA／SH 的 `_get_workspace_or_error` 在 `check_user_access` 之前就自己做
-        # **非 sudo** 的 workspace_access search——修正前這兩支正是 portal 會拿到
-        # AccessError 原文＋traceback 的地方（review 追加）。`_post` 內的
-        # `assertIn('result', ...)` 就是回歸斷言；另外要求不得放行（殘留列不授權）。
+        # Product lists must work with the existing Portal membership.
         for url in ('/api/workspaces/%s/security-accesses' % ws,
                     '/api/workspaces/%s/smarthomes' % ws):
             with self.subTest(url=url):
                 result = self._post(url, {'action': 'list'})
-                self.assertFalse(result.get('success'), result)
-                self.assertNotIn('data', result, '殘留的 portal 成員列不得讓列表放行')
+                self.assertTrue(result.get('success'), result)
+                self.assertEqual(result['data'], [])
                 self.assertNotIn('AccessError', result.get('error') or '')
                 self.assertNotIn('workspace_access', result.get('error') or '',
                                  '不得把 ACL 原文（model 名）丟給使用者')

@@ -94,7 +94,16 @@
             # 'woow_paas_platform/static/src/services/**/*',
         ],
         "woow_paas_platform.assets_paas": [
-            ("include", "web.assets_backend"),
+            # Odoo 18 standalone OWL stack: no ERP/website startup services.
+            # Keep this SCSS order: helpers -> variables -> Bootstrap -> core.
+            ("include", "web._assets_helpers"),
+            "web/static/src/scss/pre_variables.scss",
+            "web/static/lib/bootstrap/scss/_variables.scss",
+            # Bootstrap 5.3 utilities consume theme-colors-rgb from _maps.
+            "web/static/lib/bootstrap/scss/_variables-dark.scss",
+            "web/static/lib/bootstrap/scss/_maps.scss",
+            ("include", "web._assets_bootstrap"),
+            ("include", "web._assets_core"),
             # SCSS - explicit load order to ensure variables are loaded first
             "woow_paas_platform/static/src/paas/styles/00_variables.scss",
             "woow_paas_platform/static/src/paas/styles/10_base.scss",

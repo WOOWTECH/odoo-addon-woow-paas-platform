@@ -72,6 +72,9 @@ from . import test_ecpay_invoice_retry
 from . import test_ecpay_invoice_subscription
 from . import test_subscription_invoice_state
 from . import test_acl_p9
+from . import test_portal_paas_workspace_journey
+from . import test_portal_paas_bootstrap_20261001
+from . import test_portal_paas_capability_20261001
 # refactor: decouple CloudService ↔ Project (red phase)
 from . import test_project_decouple
 # fix/decuple-project: frontend + controller 收尾 (D1=A + D2=A — TDD red)
