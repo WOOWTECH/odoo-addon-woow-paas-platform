@@ -72,8 +72,9 @@ export class AppCard extends Component {
      * - 起價 0 → Free（真 0 元才叫 Free）
      * - 多個價位 → 「750 pts/mo 起」；單一價位不加「起」
      *
-     * 單位縮寫沿用 PlanSelector 的 `_unitLabel` 慣例（mo／yr），讓卡片與下一頁
-     * 的 plan 選卡區、總計列字樣一致。
+     * 單位縮寫與金額格式走 `billing_helpers.formatPointsPerUnit`（mo／yr，#1310
+     * 起與 PlanSelector／PlanTotalBar 共用同一份），讓卡片與下一頁的 plan 選卡區、
+     * 總計列字樣一致。
      * @returns {string}
      */
     get formattedPrice() {

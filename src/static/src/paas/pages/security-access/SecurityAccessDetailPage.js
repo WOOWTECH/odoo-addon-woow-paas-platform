@@ -14,6 +14,7 @@ import { securityAccessService } from "../../services/security_access";
 import { router } from "../../core/router";
 import { breadcrumbService } from "../../services/breadcrumb_service";
 import { workspaceService } from "../../services/workspace_service";
+import { formatUserDate, formatUserDateTime } from "../../utils/datetime_helpers";
 
 const TABS = [
   { key: "overview", label: _t("Overview"), icon: "info" },
@@ -341,6 +342,15 @@ export class SecurityAccessDetailPage extends Component {
     }
     return "o_woow_sa_health o_woow_sa_health--" + (h.healthy ? "ok"
       : (WARN_HEALTH_STATUSES.includes(h.status) ? "warn" : "error"));
+  }
+
+  /** #1310：訂閱／建立日期依 Odoo 使用者語系顯示（原本直接吐 ISO 字串）。 */
+  formatDate(value) {
+    return formatUserDate(value, "-");
+  }
+
+  formatDateTime(value) {
+    return formatUserDateTime(value, { showSeconds: false }, "-");
   }
 
   // ---- #1234：route 額度 ----

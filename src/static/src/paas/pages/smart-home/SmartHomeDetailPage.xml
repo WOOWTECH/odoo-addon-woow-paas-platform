@@ -194,7 +194,7 @@
                                 <span>Trial Ends</span>
                             </div>
                             <div class="o_woow_tunnel_info_value">
-                                <span t-esc="subscription.trial_end_date or 'N/A'"/>
+                                <span t-esc="formatDate(subscription.trial_end_date)"/>
                             </div>
                         </div>
                         <div class="o_woow_tunnel_info_item">
@@ -203,7 +203,7 @@
                                 <span>Next Payment</span>
                             </div>
                             <div class="o_woow_tunnel_info_value">
-                                <span t-esc="subscription.next_payment or 'N/A'"/>
+                                <span t-esc="formatDate(subscription.next_payment)"/>
                             </div>
                         </div>
                     </div>

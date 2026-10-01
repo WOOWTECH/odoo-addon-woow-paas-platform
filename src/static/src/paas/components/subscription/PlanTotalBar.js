@@ -1,7 +1,7 @@
 /** @odoo-module **/
 import { Component } from "@odoo/owl";
-import { _t } from "@web/core/l10n/translation";
 import { resolveSelected } from "./plan_selector_utils";
+import { formatPointsPerUnit } from "../../utils/billing_helpers";
 
 /**
  * PlanTotalBar — 展示型共用元件，顯示目前選擇的絕對總價。
@@ -21,11 +21,13 @@ export class PlanTotalBar extends Component {
     mode: { type: String, optional: true },
   };
 
-  _unitLabel(unit) {
-    return unit === "month" ? _t("mo") : unit === "year" ? _t("yr") : unit;
-  }
-
   get selected() {
     return resolveSelected(this.props.plans, this.props.selectedPlanId);
+  }
+
+  /** #1310：與 PlanSelector 卡片同一個格式化來源（千分位、點／月 字樣）。 */
+  get totalLabel() {
+    const sel = this.selected;
+    return sel ? formatPointsPerUnit(sel.price, sel.unit) : "";
   }
 }

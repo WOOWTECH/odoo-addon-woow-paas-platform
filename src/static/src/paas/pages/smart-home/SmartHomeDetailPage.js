@@ -13,6 +13,7 @@ import { getDomain } from "../../services/cloud_service";
 import { breadcrumbService } from "../../services/breadcrumb_service";
 import { router } from "../../core/router";
 import { formatPoints } from "../../utils/billing_helpers";
+import { formatUserDate } from "../../utils/datetime_helpers";
 
 // `provisionError`（重試**請求本身**失敗的訊息）仍有意義的 state：pending／error
 // 時重試鈕還在，provisioning 時結果還沒出來。離開這三格＝那句訊息已經過期。
@@ -204,6 +205,11 @@ export class SmartHomeDetailPage extends Component {
      * 自己的寫入被重建、丟掉展開狀態；而開通／收斂一定伴隨 state 轉換或多出
      * primary route。
      */
+    /** #1310：訂閱日期依 Odoo 使用者語系顯示（原本直接吐 ISO 字串）。 */
+    formatDate(value) {
+        return formatUserDate(value, _t("N/A"));
+    }
+
     get accessTabKey() {
         const ids = (this.home?.routes || []).map((r) => r.id).join(",");
         return `${this.home?.state || ""}|${ids}`;

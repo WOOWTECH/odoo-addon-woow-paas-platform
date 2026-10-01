@@ -1,7 +1,6 @@
 /** @odoo-module **/
 import { Component, useState, onMounted, onWillUnmount, onWillStart } from "@odoo/owl";
 import { _t } from "@web/core/l10n/translation";
-import { formatPoints } from "../../utils/billing_helpers";
 import { WoowCard } from "../../components/card/WoowCard";
 import { WoowIcon } from "../../components/icon/WoowIcon";
 import { WoowButton } from "../../components/button/WoowButton";
@@ -18,6 +17,7 @@ import { cloudService, getDomain } from "../../services/cloud_service";
 import { breadcrumbService } from "../../services/breadcrumb_service";
 import { router } from "../../core/router";
 import { getRoleBadgeClass, formatDate } from "../../services/utils";
+import { formatPointsPerUnit } from "../../utils/billing_helpers";
 
 export class WorkspaceDetailPage extends Component {
     static template = "woow_paas_platform.WorkspaceDetailPage";
@@ -305,7 +305,7 @@ export class WorkspaceDetailPage extends Component {
             if (!sub || sub.state !== "in_progress") return sum;
             return sum + (Number(sub.monthly_estimate) || 0);
         }, 0);
-        return _t("%(amount)s / month", { amount: formatPoints(total) });
+        return formatPointsPerUnit(total, "month");
     }
 
     get computedStats() {
