@@ -564,7 +564,8 @@ class TestInitControlFieldsWriteAuthz1257(_CloudService676Fixture):
                              ('init_wait_spent_seconds', 0),
                              ('init_wait_started_at', False),
                              ('init_retry_eligible_at', False),
-                             ('init_queue_turn', False), ('init_capacity_wait_since', False)):
+                             ('init_queue_turn', False), ('init_capacity_wait_since', False),
+                             ('n8n_owner_alerted_at', False)):
             with self.subTest(field=field):
                 result = self._call_kw(
                     'woow_paas_platform.cloud_service', 'write',

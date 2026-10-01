@@ -18,7 +18,7 @@ partner（ERP 共用）或 workspace（租戶讀得到）。查找一律以 xmli
 | 全平台最舊的 observed_at | 短 poll cron | 轉移狀態（非 pending）最舊觀測 > 15 分 |
 | 結果未知／等待放棄 | 短 poll cron＋事件 | 24h 內 unknown／partial ≥ 1；wait_timeout／fast_fail 發生即追加 |
 | eligible-unclaimed 容量等待 | 短 poll cron | 持續可 dispatch、未獲 claim ≥ 30 分；不扣額度或 D2 預算 |
-| n8n ready→owner 建立 | 事件（n8n init 成功） | > 5 分，每台追加一行 |
+| n8n owner 未確認 | 短 poll cron | 首次觀測 ready 後 5 分內沒有可信確認；每 episode 一行 |
 
 init cron 看 ``active`` 與 ``lastcall``、不看 ``failure_count``：core 停用 cron 時會把
 ``failure_count`` 歸 0，``lastcall`` 也只在正常結束或 FAILED 時更新（被 SIGKILL 的那一趟
@@ -46,6 +46,8 @@ OBSERVED_STALE_MINUTES = 15
 UNKNOWN_WINDOW_HOURS = 24
 CAPACITY_WAIT_MINUTES = 30
 N8N_OWNER_WINDOW_MINUTES = 5
+# D-3：等待、失敗（含 wait_timeout）、running（冷補套／晚到的確認）、停權都掃；deleting 不掃。
+N8N_OWNER_SCAN_STATES = ('initializing', 'error', 'running', 'suspended')
 
 
 class PlatformMonitor(models.Model):
@@ -70,7 +72,7 @@ class PlatformMonitor(models.Model):
     SUMMARY_OBSERVED = 'PaaS monitor: service observations are stale'
     SUMMARY_GAVE_UP = 'PaaS monitor: init results unknown or readiness gave up'
     SUMMARY_CAPACITY = 'PaaS monitor: eligible initialization is waiting for capacity'
-    SUMMARY_N8N_OWNER = 'PaaS monitor: n8n owner created late after the app became public'
+    SUMMARY_N8N_OWNER = 'PaaS monitor: n8n owner not yet confirmed by the platform'
 
     @api.model
     def _singleton(self):
@@ -245,6 +247,65 @@ class PlatformMonitor(models.Model):
                 services=', '.join('%s (id=%s)' % (service.name, service.id)
                                    for service in waiting)))
 
+    def _n8n_owner_confirmed_services(self, services):
+        """D-1＝C／A1：回傳在各自期限內已取得可信 owner 確認的服務。
+
+        確認＝本代、本 episode（finished_at ≥ 首次 ready）、期限內收到的 n8n ``success``，
+        且本 attempt 的 key 已落庫。operator 先以平台帳密 login 才建得出 API key，所以語意是
+        「平台帳密能登入的 owner 已存在」。login／create_api_key 的 failed／unknown 不算：
+        那正是 owner 被他人先註冊的症狀。``finished_at`` 是平台收到結果的時間，不是 owner
+        建立時間。
+        """
+        window = timedelta(minutes=N8N_OWNER_WINDOW_MINUTES)
+        attempts = self.env['woow_paas_platform.cloud_service_init_attempt'].sudo().search([
+            ('service_id', 'in', services.ids), ('init_type', '=', 'n8n'),
+            ('outcome', '=', 'success'), ('n8n_key_persisted', '=', True),
+            ('finished_at', '!=', False)])
+        confirmed = services.browse()
+        for attempt in attempts:
+            service = attempt.service_id
+            if (attempt.generation == (service.init_generation or 0)
+                    and service.init_ready_since <= attempt.finished_at
+                    <= service.init_ready_since + window):
+                confirmed |= service
+        return confirmed
+
+    @api.model
+    def _check_n8n_owner_unconfirmed(self):
+        """Q28b／S1：首次觀測 ready 後 5 分內平台仍未確認 n8n owner，就每 episode 告警一行。
+
+        依「確認時間 ≤ 首次 ready＋5 分」判斷，與掃描時點無關；晚到的確認仍是 5 分內
+        未確認。缺證據＝未確認，不代表 owner 不存在。marker 與告警同一個 check savepoint，
+        通知失敗時一起回捲，下一趟可重試；不改 state、額度或等待預算。
+        """
+        Service = self.env['woow_paas_platform.cloud_service'].sudo()
+        now = Service._init_db_now()
+        window = timedelta(minutes=N8N_OWNER_WINDOW_MINUTES)
+        candidates = Service.search([
+            ('template_id.post_deploy_init_type', '=', 'n8n'),
+            ('state', 'in', N8N_OWNER_SCAN_STATES),
+            ('init_ready_since', '!=', False),
+            ('init_ready_since', '<', now - window),
+            ('n8n_owner_alerted_at', '=', False),
+        ], order='init_ready_since, id')
+        unconfirmed = candidates - self._n8n_owner_confirmed_services(candidates)
+        if not unconfirmed:
+            return
+        unconfirmed.write({'n8n_owner_alerted_at': now})
+        note = _(
+            'The platform has not yet confirmed that the n8n owner exists within %(minutes)s '
+            'minutes after it first observed the service ready. The owner may already be set up; '
+            'only a successful init whose API key was stored confirms it. Until confirmed, anyone '
+            'who can reach the URL might register the owner (#1159 Q28; route protection is #1264):',
+            minutes=N8N_OWNER_WINDOW_MINUTES)
+        alerting = self.with_context(mail_notify_force_send=False)
+        for service in unconfirmed:
+            alerting._alert(self.SUMMARY_N8N_OWNER, note, append_line=_(
+                '%(name)s (id=%(id)s, state=%(state)s): ready first observed at %(ready)s UTC, '
+                'owner not yet confirmed by %(deadline)s UTC',
+                name=service.name, id=service.id, state=service.state,
+                ready=service.init_ready_since, deadline=service.init_ready_since + window))
+
     def _unknown_attempt_line(self, attempt):
         return _('%(name)s (id=%(id)s), attempt %(attempt)s: %(outcome)s',
                  name=attempt.service_id.name, id=attempt.service_id.id,
@@ -322,7 +383,8 @@ class PlatformMonitor(models.Model):
     def _run_poll_cron_checks(self):
         """短 poll cron 每一趟結束時跑：init cron 的狀態＋全域監控項。"""
         for check in (self._check_init_cron_health, self._check_oldest_observation,
-                      self._check_unknown_results, self._check_init_capacity_wait):
+                      self._check_unknown_results, self._check_init_capacity_wait,
+                      self._check_n8n_owner_unconfirmed):
             try:
                 with self.env.cr.savepoint():
                     check()
@@ -359,20 +421,3 @@ class PlatformMonitor(models.Model):
         self._safe_alert(self.SUMMARY_GAVE_UP, _(
             'Post-deploy initialization gave up on the following service(s):'),
             append_line=line)
-
-    @api.model
-    def _report_n8n_owner_window(self, service, ready_since, finished_at):
-        """Q28b：n8n 從 ready（公開可達）到 owner 建立的時間，超過門檻就追加一行。"""
-        if not (ready_since and finished_at):
-            return
-        delay = finished_at - ready_since
-        if delay <= timedelta(minutes=N8N_OWNER_WINDOW_MINUTES):
-            return
-        line = _('%(name)s (id=%(id)s): owner created %(minutes)s minutes after the app '
-                 'became ready', name=service.name, id=service.id,
-                 minutes=int(delay.total_seconds() // 60))
-        self._safe_alert(self.SUMMARY_N8N_OWNER, _(
-            'Until the n8n owner exists anyone who can reach the URL can register it '
-            '(#1159 Q28). These services stayed open longer than %(minutes)s minutes:',
-            minutes=N8N_OWNER_WINDOW_MINUTES), append_line=line)
-

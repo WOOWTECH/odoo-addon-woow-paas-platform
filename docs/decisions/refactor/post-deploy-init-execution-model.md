@@ -151,8 +151,17 @@ woow-paas/paas-app-bundle-cd#154（prod `limit_time_real_cron=1800`）要先上 
   mail.thread 單例 `woow_paas_platform.platform_monitor`（`ir.cron`／`cloud_service` 都不是 mail.thread，
   activity 建立時會呼叫 `message_subscribe`）。短 poll 查 init cron（停用或 `lastcall` > 40 分）、最舊 observation
   freshness clock（pending episode 或真 `observed_at`，> 15 分）、24h 內 unknown／partial；init cron 查短 poll（`lastcall`
-  > 10 分）；等待逾時／fast-fail 與 n8n
-  ready→owner（> 5 分，Q28b）是事件型，追加一行。
+  > 10 分）；等待逾時／fast-fail 是事件型，追加一行。n8n owner 未確認（Q28b）見下一項。
+- **n8n owner 未確認告警（S1，D-1＝C／A1）**：短 poll-monitor 掃 n8n 服務（state ∈ initializing／error（含
+  wait_timeout）／running／suspended，排除 deleting），本 episode 首次觀測 ready（`init_ready_since`）後 5 分內
+  平台未取得可信確認就告警（常數，不開 config_parameter）。確認＝本代、本 episode、`finished_at ≤ init_ready_since＋5 分`
+  的 n8n `success` attempt 且 `n8n_key_persisted=True`。operator 先以平台帳密 login 才建得出 API key，所以語意是
+  「平台帳密能登入的 owner 已存在」；login／create_api_key 的 failed／unknown 與 partial 都不算確認——login 失敗
+  正是 owner 被他人先註冊的症狀。缺證據＝「平台尚未確認」，不代表 owner 不存在；`finished_at` 是平台收到結果的時間，
+  不是 owner 建立時間，文案不推論兩者。判斷用「確認時間 ≤ 期限」而非掃描當下有無證據，與掃描時點無關；涵蓋 live、
+  冷補套、等待與失敗（舊版只在 live success 事件量測）。去重 marker `n8n_owner_alerted_at`（nullable、platform-managed、
+  create 中和、重新進 initializing 時與 `init_ready_since` 一起清）每 episode 一行，與告警同一 check savepoint，
+  OperationalError 外拋、通知失敗一起回捲可重試。operator 專用 `owner_evidence` 欄位是衍生票，真正 route 防搶註屬 #1264。
 - **容量等待告警（後續定案）**：短 poll-monitor 觀測持續 eligible-unclaimed 達固定 **30 分鐘**時，只通知
   `base.group_system`，不改租戶 state、不耗 failed／unknown 額度，也不計入 D2-R operator wait 預算。
   `init_capacity_wait_since` 是 nullable、platform-managed 的新時計，不回充 first-ready／queue turn 的歷史，
@@ -170,8 +179,9 @@ woow-paas/paas-app-bundle-cd#154（prod `limit_time_real_cron=1800`）要先上 
   兩站僅對自己的 monitor 通知使用 `mail_notify_force_send=False`，避免後排失敗留下已同步寄出的部分信，
   不改全域 Todo／company／SMTP／outbox，也不改已 accepted 的 unknown／capacity 通知路徑。
   give-up 的 poll 寫入由 Q36 回捲當台並繼續後排；已記錄 outcome 的 CAS 記帳失敗保留 lease／pointer，
-  下一趟只補套、accounting marker 不重算；n8n success 的 state／key／marker／applied_at 已 commit，
-  post-apply 告警故障不可抹掉該事實或重送 operator。init-side health 在 service commits 之後執行，
+  下一趟只補套、accounting marker 不重算。n8n owner 告警（S1）已從 `_init_finish` 的 post-apply 事件移到短 poll
+  掃描：其 OperationalError 在 poll job 邊界外拋，不回捲已 commit 的 success／key／applied_at，也不回捲同 tick
+  先前逐台 commit 的 poll 結果，且不重送 operator。init-side health 在 service commits 之後執行，
   DB 故障外拋不會回捲先前成功服務。此窄邊界不承諾事件重投、SMTP delivery、exactly-once
   或已親測 core scheduler 的 lastcall/failure_count；不將 local monitor 記帳故障改成 remote unknown 額度。
 - **租戶出口**（Q30）：initializing 可刪除（確認框註明已送出的 init 仍可能完成）；error 停用 Reset；init 失敗顯示

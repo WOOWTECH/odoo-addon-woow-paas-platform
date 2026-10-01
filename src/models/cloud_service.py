@@ -265,6 +265,7 @@ _INIT_CONTROL_FIELDS = frozenset({
     'init_wait_spent_seconds', 'init_wait_started_at', 'init_retry_eligible_at',
     'init_queue_turn', 'init_redeploy_requested', 'init_exit', 'init_error',
     'init_ready_observed', 'init_ready_since', 'init_capacity_wait_since',
+    'n8n_owner_alerted_at',
 })
 
 
@@ -905,12 +906,21 @@ class CloudService(models.Model):
              'service is queued for the init cron (#1159 Q1／Q4)',
     )
     # Q33／Q28b：本次 initializing 第一次觀測到 ready 的時間（UTC）。init cron 依它
-    # 排「等待最久者」；n8n 從 ready（公開可達）到 owner 建立的時間也從這裡量。
+    # 排「等待最久者」；n8n owner 是否在 5 分內被平台確認也從這裡量（不是 owner 建立時間）。
     init_ready_since = fields.Datetime(
         string='Init Ready Since',
         copy=False,
         help='First time the pods were seen ready during this initializing stretch '
-             '(#1159 Q33 queue order, Q28b n8n owner window)',
+             '(#1159 Q33 queue order, Q28b n8n owner confirmation window)',
+    )
+    # Q28b／S1：本 episode 已發出「平台尚未確認 n8n owner」告警的時間；每 episode 一行，
+    # 重新進 initializing 時與 init_ready_since 一起清掉。只有平台寫得進去。
+    n8n_owner_alerted_at = fields.Datetime(
+        string='n8n Owner Alerted At',
+        copy=False,
+        readonly=True,
+        help='When the platform monitor reported that the n8n owner was not confirmed '
+             'within the window of this initializing episode (#1159 Q28b)',
     )
 
     # Network
@@ -4494,7 +4504,7 @@ class CloudService(models.Model):
             vals['init_queue_turn'] = now
         self.sudo().write(vals)
         if newly_ready:
-            # Q28a：n8n 在 owner 建立前公開可達，不讓它多等一個 cron 週期。
+            # Q28a：n8n 在 owner 確認前公開可達，不讓它多等一個 cron 週期。
             self.env.ref(_INIT_CRON_XMLID)._trigger()
 
     def _init_mark_not_ready(self):
@@ -4926,7 +4936,8 @@ class CloudService(models.Model):
             cr.commit()
             return
         try:
-            applied = self._init_apply_outcome(attempt, outcome, masked)
+            # n8n owner 監控不在此觸發：短 poll 掃描同時涵蓋 live、冷補套與等待／失敗（S1）。
+            self._init_apply_outcome(attempt, outcome, masked)
             cr.commit()
         except Exception:
             cr.rollback()
@@ -4939,11 +4950,6 @@ class CloudService(models.Model):
             )
             cr.commit()
             return
-        if applied and outcome.outcome == OUTCOME_SUCCESS and attempt.init_type == 'n8n':
-            # #1159 Q28b：n8n 從 ready（公開可達）到 owner 建立的時間。
-            self.env['woow_paas_platform.platform_monitor']._report_n8n_owner_window(
-                self.sudo(), self.sudo().init_ready_since, attempt.finished_at)
-            cr.commit()
 
     _INIT_CAS_TRIES = 3
 
@@ -6230,11 +6236,12 @@ class CloudService(models.Model):
                     'init_retry_eligible_at': False,
                     'init_queue_turn': False,
                 }
-                for key in ('init_ready_observed', 'init_ready_since'):
+                for key in ('init_ready_observed', 'init_ready_since', 'n8n_owner_alerted_at'):
                     if key not in vals:
                         entering_vals[key] = False
                 super(CloudService, entering_init).write(entering_vals)
-            capacity_fields = (_INIT_CONTROL_FIELDS - {'init_capacity_wait_since'}) | {
+            capacity_fields = (_INIT_CONTROL_FIELDS - {
+                'init_capacity_wait_since', 'n8n_owner_alerted_at'}) | {
                 'state', 'template_id'}
             if capacity_fields.intersection(vals):
                 tracked_capacity = self.filtered('init_capacity_wait_since')
@@ -6577,6 +6584,8 @@ class CloudService(models.Model):
             normalized['observed_at'] = False
             # capacity 時計只能由背景觀測開始，開通不能注入 raw／context／ir.default。
             normalized['init_capacity_wait_since'] = False
+            # owner 告警 marker 同理：只由背景 monitor 寫，開通不能預先壓掉告警。
+            normalized['n8n_owner_alerted_at'] = False
             defaulted = self._add_missing_default_values(normalized)
             normalized['observation_episode_started_at'] = (
                 observation_started if defaulted.get('state') in OBSERVATION_TRANSITION_STATES
