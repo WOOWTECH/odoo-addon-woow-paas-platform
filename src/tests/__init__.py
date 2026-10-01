@@ -954,3 +954,8 @@ from . import test_workspace_archive_guard_1295
 # 被租戶帶回服務狀態（含 SA re-sync）、SH 直打 provision 不得先開 tunnel 再炸、工作區
 # 封存／還原 owner-only（admin 擋）。一律 HttpCase＋真租戶 session，每格配陽性對照。
 from . import test_tenant_orm_lifecycle_guards
+# #1310：/api/notifications（header 鈴鐺通知中心）——試用將結束、續約點數不足（含稅）、
+# error 服務（未封存、可存取工作區）、錢包異動資訊類、Portal 隔離。
+from . import test_notifications_1310
+# #1310：工作區預估月費——訂閱資訊 monthly_estimate（含稅、年繳 ÷12）。
+from . import test_monthly_estimate_1310

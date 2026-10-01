@@ -12,6 +12,8 @@ import { AddPolicyModal } from "../../components/modal/AddPolicyModal";
 import { AccessAppCard } from "../../components/access/AccessAppCard";
 import { securityAccessService } from "../../services/security_access";
 import { router } from "../../core/router";
+import { breadcrumbService } from "../../services/breadcrumb_service";
+import { workspaceService } from "../../services/workspace_service";
 
 const TABS = [
   { key: "overview", label: _t("Overview"), icon: "info" },
@@ -127,7 +129,9 @@ export class SecurityAccessDetailPage extends Component {
   };
 
   setup() {
-    this.tabs = TABS;
+    // #1310：Email／Domains 尚未實作，點進去只有「Coming Soon」卡，頁籤上的圓點
+    // 還像未讀標記。實作前不顯示這兩個頁籤（深連結仍落到原本的 Coming Soon 卡）。
+    this.tabs = TABS.filter((tab) => !tab.comingSoon);
     // #1261：Access 分頁每張 AccessAppCard 共用同一份開保護確認文案（見檔頭）。
     this.protectConfirm = PROTECT_CONFIRM;
     this.router = useState(router);
@@ -204,10 +208,24 @@ export class SecurityAccessDetailPage extends Component {
     this.state.loading = false;
     if (res.success) {
       this.state.sa = res.data;
+      this._publishBreadcrumb();
       this.startPollingIfNeeded();
     } else {
       this.state.error = res.error;
     }
+  }
+
+  /**
+   * #1310：此頁原本沒發布麵包屑，header 只剩「Home > Security Access Detail」，
+   * 桌機手機都回不到所屬工作區。比照 SmartHomeDetailPage 的軌跡。
+   */
+  _publishBreadcrumb() {
+    const ws = workspaceService.workspaces.find(w => w.id === this.props.workspaceId);
+    breadcrumbService.set("security-access-detail", [
+      { label: _t("Workspaces"), path: "workspaces" },
+      { label: ws?.name || _t("Workspace"), path: `workspace/${this.props.workspaceId}` },
+      { label: this.state.sa?.name || _t("Security Access"), path: null },
+    ]);
   }
 
   // ---- polling（鏡像 SmartHomeDetailPage） ----

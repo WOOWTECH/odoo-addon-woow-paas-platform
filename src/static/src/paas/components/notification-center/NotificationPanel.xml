@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+  <t t-name="woow_paas_platform.NotificationPanel">
+    <div class="o_woow_notification_backdrop" t-on-click="() => this.service.close()"/>
+    <div class="o_woow_notification_panel" role="dialog" aria-modal="false"
+         aria-label="Notifications" tabindex="-1" t-ref="panel">
+      <div class="o_woow_notification_panel__header">
+        <h2>Notifications</h2>
+        <button type="button" class="o_woow_notification_panel__close"
+                aria-label="Close" t-on-click="() => this.service.close()">
+          <span class="material-symbols-outlined" t-translation="off">close</span>
+        </button>
+      </div>
+      <div class="o_woow_notification_panel__body">
+        <t t-if="service.loading and !service.loaded">
+          <p class="o_woow_notification_panel__state">Loading...</p>
+        </t>
+        <t t-elif="service.error and !service.items.length">
+          <div class="o_woow_notification_panel__state">
+            <p t-esc="service.error"/>
+            <button type="button" class="o_woow_notification_panel__retry" t-on-click="onRetry">Retry</button>
+          </div>
+        </t>
+        <t t-elif="!service.items.length">
+          <div class="o_woow_notification_panel__state">
+            <span class="material-symbols-outlined" t-translation="off">notifications_off</span>
+            <p t-esc="emptyText"/>
+          </div>
+        </t>
+        <ul t-else="" class="o_woow_notification_list">
+          <li t-foreach="service.items" t-as="item" t-key="item.id">
+            <button type="button"
+                    t-attf-class="o_woow_notification_item o_woow_notification_item--{{ item.severity }} {{ service.isUnseen(item) ? 'o_woow_notification_item--unseen' : '' }}"
+                    t-on-click="() => this.onItemClick(item)">
+              <span class="o_woow_notification_item__icon material-symbols-outlined" t-translation="off" t-esc="icon(item)"/>
+              <span class="o_woow_notification_item__text">
+                <span class="o_woow_notification_item__title" t-esc="item.title"/>
+                <span class="o_woow_notification_item__message" t-esc="item.message"/>
+                <span class="o_woow_notification_item__time" t-esc="when(item)"/>
+              </span>
+            </button>
+          </li>
+        </ul>
+      </div>
+    </div>
+  </t>
+</templates>

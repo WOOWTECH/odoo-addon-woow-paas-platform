@@ -121,4 +121,14 @@ export class AppCard extends Component {
             this.props.onAdd(this.props.template);
         }
     }
+
+    /**
+     * #1310：整張卡片原本有 hover 浮起效果卻不能點，唯一入口是 hover 才出現的「+」。
+     * 可購買時點卡片任一處等同按「+」；售罄／停售不動作。
+     */
+    onCardClick() {
+        if (this.isPurchasable && this.props.onAdd) {
+            this.props.onAdd(this.props.template);
+        }
+    }
 }

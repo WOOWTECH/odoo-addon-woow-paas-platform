@@ -190,7 +190,10 @@
                         <WoowIcon name="'inventory_2'" size="18"/>
                         Addons
                     </button>
+                    <!-- #1310：專案功能關閉時，此頁籤唯一的「Go to Project Settings」按鈕也被隱藏，
+                         點進去是死路；與其他 project 交叉入口一致，跟著 projectsVisible 隱藏。 -->
                     <button
+                        t-if="projectsVisible"
                         t-att-class="{'o_woow_tab': true, 'active': currentTab === 'mcp-servers'}"
                         t-on-click="() => this.setTab('mcp-servers')">
                         <WoowIcon name="'extension'" size="18"/>

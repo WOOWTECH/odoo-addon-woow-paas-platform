@@ -127,12 +127,17 @@ export class BillingOverviewPage extends Component {
     return `o_woow_sub_status_${this.getSubStateInfo(sub).color}`;
   }
 
+  /**
+   * #1310：原本不論卡別一律寫死「Visa」；未綁卡時顯示「尚未綁定信用卡」，
+   * 但訂閱其實是從點數扣款，容易讓人以為一定要綁卡。改用實際發卡行
+   * （同 AddFundsModal.cardDisplay），未綁卡時標示以點數支付。
+   */
   getPaymentMethodLabel() {
     const w = this.billing.wallet;
     if (w.cardBound && w.cardLast4) {
-      return _t("Visa •••• %s", w.cardLast4);
+      return _t("%(card)s •••• %(last4)s", { card: w.cardBank || _t("Card"), last4: w.cardLast4 });
     }
-    return _t("No card bound");
+    return _t("Paid with points");
   }
 
   get hasLowBalanceWarning() {

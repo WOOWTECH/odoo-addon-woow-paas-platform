@@ -58,7 +58,7 @@
                             <WoowIcon name="'group'" size="18"/>
                             Team
                         </WoowButton>
-                        <WoowButton variant="'secondary'" size="'md'" onClick.bind="goToSettings">
+                        <WoowButton t-if="canManageWorkspace" variant="'secondary'" size="'md'" onClick.bind="goToSettings">
                             <WoowIcon name="'settings'" size="18"/>
                             Settings
                         </WoowButton>
@@ -129,7 +129,6 @@
                             <t t-foreach="state.services" t-as="service" t-key="service.id">
                                 <ServiceCard
                                     service="service"
-                                    onOpen="() => this.openService(service.id)"
                                     onSettings="() => this.goToService(service.id)"/>
                             </t>
                         </div>
@@ -263,6 +262,11 @@
                     onCreated.bind="onSecurityAccessCreated"/>
 
                 <!-- Delete Workspace Modal（#1295） -->
+                <CreateWorkspaceModal
+                    t-if="state.showWorkspaceSettings"
+                    workspace="state.workspace"
+                    onClose.bind="closeWorkspaceSettings"
+                    onSaved.bind="onWorkspaceSaved"/>
                 <DeleteWorkspaceModal
                     t-if="state.showDeleteWorkspaceModal"
                     workspace="workspace"
@@ -281,26 +285,27 @@
 
                     <div class="o_woow_service_grid">
                         <t t-foreach="serviceTypes" t-as="service" t-key="service.name">
-                            <div t-att-class="'o_woow_service_card o_woow_service_card_' + service.color">
+                            <div t-att-class="'o_woow_service_card o_woow_service_card_' + service.color"
+                                 t-on-click="() => this.onServiceTypeClick(service)">
                                 <div class="o_woow_service_icon">
                                     <WoowIcon name="service.icon" size="32"/>
                                 </div>
                                 <h3><t t-esc="service.name"/></h3>
                                 <p><t t-esc="service.description"/></p>
                                 <t t-if="service.action === 'smarthome'">
-                                    <WoowButton variant="'primary'" size="'sm'" onClick.bind="openCreateSmartHomeModal">
+                                    <WoowButton variant="'primary'" size="'sm'">
                                         Get Started
                                         <WoowIcon name="'arrow_forward'" size="16"/>
                                     </WoowButton>
                                 </t>
                                 <t t-elif="service.action === 'security-access'">
-                                    <WoowButton variant="'primary'" size="'sm'" onClick.bind="openCreateSecurityAccessModal">
+                                    <WoowButton variant="'primary'" size="'sm'">
                                         Get Started
                                         <WoowIcon name="'arrow_forward'" size="16"/>
                                     </WoowButton>
                                 </t>
                                 <t t-else="">
-                                    <WoowButton variant="'primary'" size="'sm'" onClick.bind="goToMarketplace">
+                                    <WoowButton variant="'primary'" size="'sm'">
                                         Get Started
                                         <WoowIcon name="'arrow_forward'" size="16"/>
                                     </WoowButton>

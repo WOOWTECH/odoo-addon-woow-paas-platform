@@ -10,16 +10,23 @@ export class CreateWorkspaceModal extends Component {
     static components = { WoowButton, WoowIcon };
     static props = {
         onClose: { type: Function },
-        onCreated: { type: Function },
+        onCreated: { type: Function, optional: true },
+        // #1310：帶入 workspace 即為「工作區設定」編輯模式（名稱／描述）。
+        workspace: { type: Object, optional: true },
+        onSaved: { type: Function, optional: true },
     };
 
     setup() {
         this.state = useState({
-            name: "",
-            description: "",
+            name: this.props.workspace?.name || "",
+            description: this.props.workspace?.description || "",
             loading: false,
             error: null,
         });
+    }
+
+    get isEdit() {
+        return !!this.props.workspace;
     }
 
     onNameInput(ev) {
@@ -47,15 +54,24 @@ export class CreateWorkspaceModal extends Component {
         this.state.loading = true;
         this.state.error = null;
 
-        const result = await workspaceService.createWorkspace({
-            name,
-            description: this.state.description.trim(),
-        });
+        const payload = { name, description: this.state.description.trim() };
+        if (this.isEdit) {
+            const result = await workspaceService.updateWorkspace(this.props.workspace.id, payload);
+            this.state.loading = false;
+            if (result.success) {
+                this.props.onSaved?.(result.data);
+            } else {
+                this.state.error = result.error || _t("Failed to update workspace");
+            }
+            return;
+        }
+
+        const result = await workspaceService.createWorkspace(payload);
 
         this.state.loading = false;
 
         if (result.success) {
-            this.props.onCreated(result.data);
+            this.props.onCreated?.(result.data);
         } else {
             this.state.error = result.error || _t("Failed to create workspace");
         }

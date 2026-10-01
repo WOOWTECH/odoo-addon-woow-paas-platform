@@ -79,7 +79,10 @@
 
                     <div class="o_woow_service_grid">
                         <t t-foreach="serviceTypes" t-as="service" t-key="service.name">
-                            <div t-att-class="'o_woow_service_card o_woow_service_card_' + service.color">
+                            <div t-att-class="'o_woow_service_card o_woow_service_card_' + service.color"
+                                 role="button" tabindex="0"
+                                 t-on-click="openCreateModal"
+                                 t-on-keydown="(ev) => (ev.key === 'Enter' or ev.key === ' ') and this.openCreateModal()">
                                 <div class="o_woow_service_icon">
                                     <WoowIcon name="service.icon" size="32"/>
                                 </div>

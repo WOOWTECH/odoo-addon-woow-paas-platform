@@ -2810,7 +2810,7 @@ msgstr "client 驗證失敗。"
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/SubscribedServicesModal.xml:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/billing/SubscriptionListPage.xml:0
 msgid "Close"
-msgstr ""
+msgstr "關閉"
 
 #. module: woow_paas_platform
 #: model:ir.ui.menu,name:woow_paas_platform.menu_cloud
@@ -5889,7 +5889,7 @@ msgstr ""
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/layout/sidebar/Sidebar.xml:0
 msgid "Help & Support"
-msgstr ""
+msgstr "說明與支援"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -7437,7 +7437,7 @@ msgstr ""
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/layout/sidebar/Sidebar.xml:0
 msgid "Log Out"
-msgstr ""
+msgstr "登出"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -11206,7 +11206,7 @@ msgstr "儲存"
 #: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/AddonsTab.xml:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/ConfigurationTab.xml:0
 msgid "Save Changes"
-msgstr ""
+msgstr "儲存變更"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -18621,3 +18621,174 @@ msgstr "使用 Woow PaaS 需要啟用 JavaScript。請啟用後再試一次。"
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.paas_app
 msgid "Try again"
 msgstr "再試一次"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/notifications.py:0
+#: code:addons/woow_paas_platform/static/src/paas/services/notification_service.js:0
+msgid "Failed to load notifications. Please try again."
+msgstr "載入通知失敗，請再試一次。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/notifications.py:0
+msgid "Trial ending soon"
+msgstr "試用即將結束"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/notifications.py:0
+msgid "%(plan)s trial ends on %(date)s. %(amount)s points will be charged after that."
+msgstr "「%(plan)s」試用將於 %(date)s 結束，之後將扣除 %(amount)s 點。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/notifications.py:0
+msgid "Not enough points for renewal"
+msgstr "續約點數不足"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/notifications.py:0
+msgid "%(plan)s renews on %(date)s and needs %(amount)s points; your balance is %(balance)s points."
+msgstr "「%(plan)s」將於 %(date)s 續約，需要 %(amount)s 點，目前餘額 %(balance)s 點。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/notifications.py:0
+msgid "Service needs attention"
+msgstr "服務需要處理"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/notifications.py:0
+msgid "%(name)s in workspace %(workspace)s is in an error state."
+msgstr "工作區「%(workspace)s」中的「%(name)s」發生錯誤。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/notifications.py:0
+msgid "Unpaid invoice"
+msgstr "未付款發票"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/notifications.py:0
+msgid "Invoice %(name)s has %(amount)s outstanding."
+msgstr "發票 %(name)s 尚有 %(amount)s 未付。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/notifications.py:0
+msgid "Points added"
+msgstr "點數已入帳"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/notifications.py:0
+msgid "%(amount)s points were added to your wallet."
+msgstr "已將 %(amount)s 點加入錢包。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/notifications.py:0
+msgid "Points used"
+msgstr "點數已扣除"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/notifications.py:0
+msgid "%(amount)s points were deducted from your wallet."
+msgstr "已從錢包扣除 %(amount)s 點。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/notification-center/NotificationPanel.js:0
+msgid "You're all caught up."
+msgstr "目前沒有新通知。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/notification-center/NotificationPanel.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/layout/header/Header.js:0
+msgid "Notifications"
+msgstr "通知"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/layout/header/Header.js:0
+msgid "Notifications (%(count)s new)"
+msgstr "通知（%(count)s 則未讀）"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/account-menu/AccountMenu.xml:0
+msgid "Account"
+msgstr "帳號"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/account-menu/AccountMenu.xml:0
+msgid "Top up"
+msgstr "儲值"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/layout/header/Header.js:0
+msgid "Back to %(page)s"
+msgstr "返回%(page)s"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/CreateWorkspaceModal.xml:0
+msgid "Workspace Settings"
+msgstr "工作區設定"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/CreateWorkspaceModal.js:0
+msgid "Failed to update workspace"
+msgstr "更新工作區失敗"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/billing/BillingOverviewPage.js:0
+msgid "%(card)s •••• %(last4)s"
+msgstr "%(card)s •••• %(last4)s"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/billing/BillingOverviewPage.js:0
+msgid "Paid with points"
+msgstr "以點數支付"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/subscription/PlanSelector.js:0
+msgid "Yearly"
+msgstr "年繳"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/subscription/PlanSelector.js:0
+msgid "Yearly · Save %(pct)s"
+msgstr "年繳 · 省 %(pct)s"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/subscription/PlanSelector.js:0
+msgid "Yearly · Save up to %(pct)s"
+msgstr "年繳 · 最多省 %(pct)s"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/project-kanban/ProjectKanbanPage.xml:0
+msgid "No AI provider is set up for this project yet. Please contact your administrator to enable conversations."
+msgstr "此專案尚未設定 AI 供應商，請聯絡管理員以啟用對話。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/workspace/WorkspaceDetailPage.js:0
+msgid "%(amount)s / month"
+msgstr "%(amount)s／月"
