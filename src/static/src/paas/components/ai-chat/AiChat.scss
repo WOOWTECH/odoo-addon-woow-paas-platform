@@ -252,6 +252,9 @@
         font-size: 0.875rem;
         line-height: 1.5;
         word-break: break-word;
+        // #1310：flex 子項預設 min-width:auto 會被 <pre>／表格的內容寬撐開，
+        // 超出訊息的 85% 上限；歸零後 pre 的 overflow-x 才會生效
+        min-width: 0;
 
         &--streaming {
             border: 1px dashed $woow-border-light;
@@ -354,6 +357,13 @@
             border-collapse: collapse;
             margin: 0.5rem 0;
             font-size: 0.8125rem;
+
+            // #1310：markdown 表格由 marked 產生、無法在模板外包容器——
+            // 手機上讓表格本身成為橫向捲動區塊（同 .o_woow_td_subtask_table）
+            @media (max-width: $woow-bp-md) {
+                display: block;
+                overflow-x: auto;
+            }
         }
 
         th, td {

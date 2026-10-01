@@ -18,10 +18,12 @@
     align-items: flex-start;
     margin-bottom: 1.5rem;
     gap: 1rem;
+    flex-wrap: wrap; // #1310
 }
 
 .o_woow_td_header_left {
-    flex: 1;
+    flex: 1 1 14rem; // #1310：14rem 基準讓右側操作在窄畫面換行
+    min-width: 0;
 
     h1 {
         font-size: 1.75rem;
@@ -29,6 +31,7 @@
         color: $woow-text-primary;
         margin-bottom: 0.5rem;
         line-height: 1.3;
+        overflow-wrap: anywhere; // #1310
     }
 }
 
@@ -431,6 +434,10 @@
 
     .o_woow_td_tabs {
         overflow-x: auto;
+        // #1310：overflow 會裁掉分頁的 margin-bottom:-1px，active 底線被吃掉一半；
+        // 底線改畫在容器內（inset box-shadow），分頁不再往下凸
+        border-bottom: none;
+        box-shadow: inset 0 -1px 0 $woow-border-light;
 
         &::-webkit-scrollbar {
             display: none;
@@ -439,9 +446,18 @@
 
     .o_woow_td_tab {
         white-space: nowrap;
+        flex-shrink: 0; // #1310
+        margin-bottom: 0;
     }
 
     .o_woow_td_subtask_table {
+        display: block;
+        overflow-x: auto;
+    }
+
+    // #1310：描述的 markdown 表格由 marked 產生、模板無法外包容器——
+    // 比照上面的 subtask table，讓表格本身成為橫向捲動區塊
+    .o_woow_td_description_body table {
         display: block;
         overflow-x: auto;
     }

@@ -87,6 +87,8 @@
     font-weight: 600;
     color: $woow-text-primary;
     margin: 0;
+    min-width: 0; // #1310
+    overflow-wrap: anywhere;
 }
 
 .o_woow_smart_home_url {
@@ -97,6 +99,8 @@
     color: $woow-primary;
     text-decoration: none;
     margin-top: 0.25rem;
+    max-width: 100%; // #1310：網址任意字元換行
+    overflow-wrap: anywhere;
 
     &:hover {
         text-decoration: underline;
@@ -148,6 +152,8 @@
     justify-content: space-between;
     align-items: center;
     margin-bottom: 1.5rem;
+    flex-wrap: wrap; // #1310
+    gap: 0.75rem;
 
     h2 {
         margin: 0;
@@ -163,7 +169,8 @@
     gap: 1rem;
 
     @media (max-width: 640px) {
-        grid-template-columns: 1fr;
+        // #1310：minmax(0, …) 讓欄寬不被長名稱／網址撐開（SA 卡片也用這個 grid）
+        grid-template-columns: minmax(0, 1fr);
     }
 }
 
@@ -218,6 +225,13 @@
 .o_woow_smart_home_detail_info {
     display: flex;
     gap: 1rem;
+    min-width: 0;
+
+    // #1310：右側文字區（模板內無 class）允許收縮，長名稱／網址換行
+    > div:not(.o_woow_smart_home_detail_icon) {
+        flex: 1;
+        min-width: 0;
+    }
 }
 
 .o_woow_smart_home_detail_icon {
@@ -235,6 +249,7 @@
 .o_woow_smart_home_detail_title {
     display: flex;
     align-items: center;
+    flex-wrap: wrap; // #1310
     gap: 0.75rem;
     margin-bottom: 0.25rem;
 
@@ -243,6 +258,7 @@
         font-weight: 700;
         color: $woow-text-primary;
         margin: 0;
+        overflow-wrap: anywhere; // #1310
     }
 }
 
@@ -254,6 +270,8 @@
     color: $woow-primary;
     text-decoration: none;
     margin-top: 0.25rem;
+    max-width: 100%; // #1310
+    overflow-wrap: anywhere;
 
     &:hover {
         text-decoration: underline;
@@ -262,7 +280,9 @@
 
 .o_woow_smart_home_detail_actions {
     display: flex;
+    flex-wrap: wrap; // #1310：按鈕放不下時換行而非被裁掉
     gap: 0.75rem;
+    max-width: 100%;
 }
 
 // -----------------------------------------------------------------------------

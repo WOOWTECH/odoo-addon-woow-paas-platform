@@ -375,6 +375,14 @@
     @media (max-width: 640px) {
         flex-direction: column-reverse;
 
+        // #1310：#368 把按鈕包進 __actions（橫排）後，下面的 width:100% 讓兩顆
+        // 按鈕在同一列互搶寬度，「取消」被擠成一行一個字。actions 也改直排並撐滿，
+        // 回到 #368 之前「按鈕各占一整列、主按鈕在上」的手機版型。
+        .o_woow_configure_footer__actions {
+            flex-direction: column-reverse;
+            width: 100%;
+        }
+
         .o_woow_btn {
             width: 100%;
         }
