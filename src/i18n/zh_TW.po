@@ -16629,8 +16629,10 @@ msgstr ""
 
 #. module: woow_paas_platform
 #: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_cloud_service_init_attempt__applied_at
-msgid "已持久化結果套用到 service 計數／狀態的時間；使結果記錄 → 套用的 crash recovery 保持冪等。"
-msgstr ""
+msgid ""
+"When the persisted result was applied to the service counters/state; keeps "
+"record-then-apply crash recovery idempotent."
+msgstr "已持久化的結果套用到服務計數／狀態的時間；讓「先記錄結果、再套用」的 crash recovery 保持冪等。"
 
 #. module: woow_paas_platform
 #: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_smart_home_route__hostname
@@ -16898,9 +16900,10 @@ msgstr ""
 #. module: woow_paas_platform
 #: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_cloud_service_init_attempt__n8n_key_persisted
 msgid ""
-"本 attempt 的 n8n API key 已與此 marker 同交易寫入 service 受保護欄位；此欄僅記錄持久化證據，不存放 "
-"secret。"
-msgstr ""
+"This attempt's n8n API key was written to the service's protected field in "
+"the same transaction as this marker; it records the evidence only, never the "
+"secret."
+msgstr "本 attempt 的 n8n API key 已與此 marker 同一交易寫入服務的受保護欄位；此欄只記錄持久化證據，不存放 secret。"
 
 #. module: woow_paas_platform
 #: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_cloud_app_template__is_hidden

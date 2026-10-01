@@ -1020,6 +1020,60 @@ class TestInitCron1159(_RealCursorCase):
         self.assertEqual(self._read(normal, 'state'), 'running')
         self.assertEqual(self._read(switched, 'state'), 'initializing', '略過的那台不被改寫')
 
+    def test_operator_wait_settle_isolates_each_service_and_the_tick_continues(self):
+        """D2-R 全域收尾逐台隔離（Q36）：第 2 台轉 error 時告警撞真 PG 40001，
+        只回捲那一台；第 1、3 台的 wait_timeout 已 commit，同一趟的佇列照常送 init。
+        """
+        first = self._add('odoo')
+        broken = self._add('odoo')
+        last = self._add('odoo')
+        queued = self._add('odoo', ready_minutes_ago=2)
+        order = [first, broken, last]
+        with self.registry.cursor() as cr:
+            anchor = fields.Datetime.now() - timedelta(hours=1)
+            for index, sid in enumerate(order):
+                # 收尾掃描沿用 create_date desc：釘住 first → broken → last 的處理順序；
+                # operator wait 預算已耗盡（create 開代會歸零，所以事後以 SQL 設定）。
+                cr.execute('UPDATE woow_paas_platform_cloud_service SET create_date = %s, '
+                           'init_wait_spent_seconds = 1800 WHERE id = %s',
+                           (anchor - timedelta(seconds=index), sid))
+        monitor_model = type(self.env[MONITOR])
+        original_report = monitor_model._report_gave_up
+        visits, pgcodes = [], []
+
+        def report(records, service, exit_kind, message):
+            visits.append(service.id)
+            if service.id == broken:
+                try:
+                    records.env.cr.execute("""
+                        DO $$ BEGIN
+                            RAISE EXCEPTION '1159 settle conflict' USING ERRCODE = '40001';
+                        END $$
+                    """)
+                except OperationalError as error:
+                    pgcodes.append(error.pgcode)
+                    raise
+            return original_report(records, service, exit_kind, message)
+
+        client, calls = self._recording_client()
+        caught = None
+        with patch.object(monitor_model, '_report_gave_up', report):
+            try:
+                self._run_cron('_cron_run_post_deploy_inits', client)
+            except Exception as exc:  # 舊碼：DB 故障中斷整趟 init tick
+                caught = exc
+        self.assertEqual(pgcodes, ['40001'], '前提：第 2 台真的撞到 PG 40001')
+        self.assertIsNone(caught, '單台收尾的 DB 故障不得中斷整趟 init tick（%r）' % (caught,))
+        self.assertEqual(visits, order, '故障後仍繼續收尾後排')
+        self.assertEqual((self._read(first, 'state'), self._read(first, 'init_exit')),
+                         ('error', 'wait_timeout'), '前一台的收尾已 commit，不被回捲')
+        self.assertEqual((self._read(broken, 'state'), self._read(broken, 'init_exit')),
+                         ('initializing', False), '故障那台整台回捲，下一趟再判')
+        self.assertEqual((self._read(last, 'state'), self._read(last, 'init_exit')),
+                         ('error', 'wait_timeout'))
+        self.assertEqual(calls, [self._release(queued)], '同一趟的佇列照常送 init')
+        self.assertEqual(self._read(queued, 'state'), 'running')
+
     def test_requested_redeploys_run_in_the_init_cron(self):
         """Q27／#1257 f：redeploy 意圖由 init cron（掌管 lease 的那一個）執行。"""
         client, _calls = self._recording_client()
@@ -1648,6 +1702,106 @@ class TestExecSurfaceRealCursor1159(_RealCursorCase):
         self.assertFalse(errors, errors)
         self.assertEqual(self._read(slow, 'state'), 'running')
         client.init_odoo.assert_called_once()
+
+    def _recorded_unapplied_attempt(self):
+        """initializing、Ready 中、指向一筆已記錄 outcome 但尚未套用的 attempt（冷補套前提）。"""
+        sid = self._add('odoo', ready_minutes_ago=2)
+        with self.registry.cursor() as cr:
+            env = self._env(cr)
+            svc = env[SVC].browse(sid)
+            now = svc._init_db_now()
+            attempt = env[ATTEMPT].create({
+                'service_id': sid, 'generation': svc.init_generation, 'sequence': 1,
+                'init_type': 'odoo', 'claimed_at': now - timedelta(seconds=30),
+                'lease_until': now + timedelta(minutes=10), 'finished_at': now - timedelta(seconds=20),
+                'outcome': 'not_executed', 'error_step': 'wait_ready', 'error_kind': 'not_executed'})
+            svc.write({'init_attempt_id': attempt.id, 'init_attempt_seq': 1,
+                       'init_lease_until': now + timedelta(minutes=10)})
+        return sid, attempt.id
+
+    def _poll_not_ready_while_row_is_locked(self, sid, holder_commits):
+        """另一連線先持有該列 ``FOR NO KEY UPDATE``，短 poll（not ready）同時冷補套。
+
+        回傳 (poll 拋出的例外, CAS 每次 ``_init_guarded`` 的結果)。
+        """
+        locked, release = threading.Event(), threading.Event()
+        errors = []
+
+        def holder():
+            try:
+                with self.registry.cursor() as cr:
+                    cr.execute('SELECT id FROM woow_paas_platform_cloud_service WHERE id = %s '
+                               'FOR NO KEY UPDATE', (sid,))
+                    if holder_commits:
+                        cr.execute('UPDATE woow_paas_platform_cloud_service '
+                                   'SET write_date = write_date WHERE id = %s', (sid,))
+                    locked.set()
+                    release.wait(30)
+                    if not holder_commits:
+                        cr.rollback()
+            except Exception as exc:  # 讓主執行緒看得到
+                errors.append(exc)
+                locked.set()
+
+        model = type(self.env[SVC])
+        original_guarded = model._init_guarded
+        cas_results = []
+
+        def guarded(records, query, params):
+            rows = original_guarded(records, query, params)
+            if 'init_attempt_id = %s AND state' in query:
+                cas_results.append(rows)
+            return rows
+
+        thread = threading.Thread(target=holder)
+        thread.start()
+        caught = None
+        try:
+            self.assertTrue(locked.wait(20))
+            timer = threading.Timer(2, release.set)
+            timer.start()
+            client = operator_client(get_status=status_response(pods=_NOT_READY_PODS))
+            with patch.object(model, '_init_guarded', guarded):
+                try:
+                    with self.registry.cursor() as cr:
+                        env = self._env(cr)
+                        env[SVC].browse(sid)._poll_and_update_status(self.scope.operator(client))
+                except OperationalError as error:
+                    caught = error
+        finally:
+            release.set()
+            thread.join(60)
+        self.assertFalse(thread.is_alive())
+        self.assertFalse(errors, errors)
+        return caught, cas_results
+
+    def test_poll_cold_recovery_waits_for_a_released_row_lock_and_keeps_the_observation(self):
+        """P2-2 實證（持鎖者只鎖、隨後放手）：poll 的觀測先 flush 時等鎖，之後拿到列鎖，
+        CAS 不會「忙」，觀測與冷補套都落地——「CAS 忙 → rollback 吞掉同台觀測」到不了。
+        """
+        sid, attempt_id = self._recorded_unapplied_attempt()
+        caught, cas_results = self._poll_not_ready_while_row_is_locked(sid, holder_commits=False)
+        self.assertIsNone(caught)
+        self.assertTrue(cas_results, '前提：poll 真的走到冷補套的 CAS')
+        self.assertNotIn(None, cas_results, 'CAS 對自己已鎖住的列不會回「忙」')
+        self.assertFalse(self._read(sid, 'init_ready_observed'), 'not ready 觀測已持久化')
+        self.assertTrue(self._read(sid, 'observed_at'), 'observed_at 已持久化')
+        with self.registry.cursor() as cr:
+            self.assertTrue(self._env(cr)[ATTEMPT].browse(attempt_id).applied_at, '冷補套已套用')
+
+    def test_poll_cold_recovery_under_a_concurrent_update_fails_at_flush_not_at_cas(self):
+        """P2-2 實證（持鎖者改了該列並 commit）：REPEATABLE READ 下 poll 在 flush 觀測時就撞
+        40001 並外拋給呼叫端的逐台邊界（Q36），根本走不到 CAS；不是 CAS 忙後 rollback。
+        """
+        sid, attempt_id = self._recorded_unapplied_attempt()
+        caught, cas_results = self._poll_not_ready_while_row_is_locked(sid, holder_commits=True)
+        self.assertIsNotNone(caught, '併發更新必須在 flush 以 DB 故障外拋')
+        self.assertEqual(caught.pgcode, '40001')
+        self.assertEqual(cas_results, [], '故障發生在 flush，沒有走到 CAS')
+        with self.registry.cursor() as cr:
+            self.assertFalse(self._env(cr)[ATTEMPT].browse(attempt_id).applied_at,
+                             '整台回捲，recovery pointer 保留給下一趟')
+        self.assertEqual(self._read(sid, 'init_attempt_id'), attempt_id)
 
     def test_short_poll_commits_each_service_and_one_failure_does_not_stop_the_tick(self):
         """驗收 2：deleting 由背景在 404 後 unlink；一台 teardown 失敗，其他台照常收尾。"""

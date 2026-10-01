@@ -127,6 +127,21 @@ kubectl --context "$CTX" exec -n "$NS" "deploy/${ODOO}" -- \
 tail -f odoo.log | grep -E '(TEST|ERROR|FAIL)'
 ```
 
+## Running Frontend Unit Tests（Node，`tests/ui/`）
+
+`tests/ui/*.mjs` 用 Node 內建 test runner 直接驗 `/woow` 前端的純邏輯與元件行為
+（例如 `service_presentation.js`、`AddonsTab` 的能力矩陣）：以 source rewrite 把
+`@odoo/owl`／`_t`／service import 換成 stub 後載入真實檔案，不起 Odoo、不起瀏覽器。
+
+```bash
+# repo 根目錄；Node 18+（內建 node:test）
+node --test tests/ui/*.mjs
+```
+
+⚠ 要用 glob 指定檔案：`node --test tests/ui`（目錄）在 Node 22 不會自動收集 `.mjs`。
+⚠ 這組測試**沒有接進任何 CI workflow**：改到 `src/static/src/paas/` 的 PR 請在本機跑過，
+並把結果寫進 PR 描述。它不能取代 headed browser 的 UX／視覺驗收。
+
 ## Test Coverage
 
 覆蓋面隨 cycle 持續擴張，**不逐檔列舉**（同 Test Structure 原則）。各檔內以 docstring / class 名描述其涵蓋範圍，請直接看原始碼。下方按代表性分組說明高層涵蓋意圖：

@@ -3227,13 +3227,13 @@ class CloudService(models.Model):
             return False
 
     def _is_release_ready(self, status, dns_state=None):
-        """判定「這個 release 就緒了嗎」——**model 與 controller 兩層共用**。
+        """判定「這個 release 就緒了嗎」——單一事實源（#1159 起只剩背景 poll 呼叫）。
 
         這段邏輯原本在 model（``_poll_and_update_status``）與 controller
         （``PaasController._update_service_status``）各有一份完全同型的複製品。
         #423 設計審查抓到：只修其中一份，租戶只要打開前台服務詳情頁，
         controller 那份就會把還在 import 的 VM 標成 ``running``——cron 修好的
-        東西被前台查詢覆寫回去。故抽成單一事實源，兩層都呼叫這裡。
+        東西被前台查詢覆寫回去。故抽成單一事實源，當時兩層都呼叫這裡。
         #1159 起 list/get 純讀、controller 那份 poll 已刪除，呼叫端只剩 model 的 poll。
 
         （post-deploy-init 兩層仍各自實作，那是既存且有實質差異的另一件事，
@@ -4601,14 +4601,30 @@ class CloudService(models.Model):
 
     @api.model
     def _init_settle_operator_wait_timeouts(self):
-        """cron 全域到期掃描：缺 client 或 Ready 觀測不能遮蔽已耗盡的時計。"""
+        """cron 全域到期掃描：缺 client 或 Ready 觀測不能遮蔽已耗盡的時計。
+
+        只由 init cron 呼叫（會 commit）。Q36：每台一個回捲單位——一台轉 error 或告警時
+        撞到 DB 故障，只回捲那一台，前面已收尾的服務保留、後面照常收尾，整趟 init tick
+        也不因此中斷（之後的佇列照常處理）。
+        """
         services = self.sudo().search([
             ('state', '=', 'initializing'),
             '|', ('init_wait_started_at', '!=', False), ('init_wait_spent_seconds', '>', 0),
             ('init_lease_until', '=', False),
         ])
         for service in services:
-            service._init_check_operator_wait_timeout()
+            service_label = (service.name, service.id)
+            try:
+                service._init_check_operator_wait_timeout()
+                self.env.cr.commit()
+            except Exception:
+                # Q36：回捲這一台未 commit 的收尾，下一趟再判；後排照常處理。
+                # ⚠ #1052 標記（非裁定）：這是逐筆 batch isolation，OperationalError 也在此
+                # 收掉，與 post-commit-bookkeeping-rollback-unit.md 規則一分歧（同短 poll 的站點）。
+                self.env.cr.rollback()
+                _logger.exception(
+                    "[#1159] init wait-timeout settle failed for service %s (id=%s)",
+                    *service_label)
 
     def _init_check_wait_timeout(self):
         """Q10：等待時限到期 → error，**不耗額度**。回傳是否已轉 error。
@@ -6621,6 +6637,12 @@ class CloudService(models.Model):
             normalized['init_capacity_wait_since'] = False
             # owner 告警 marker 同理：只由背景 monitor 寫，開通不能預先壓掉告警。
             normalized['n8n_owner_alerted_at'] = False
+            # 其他 init 管控欄位（init_ready_observed／init_ready_since／init_queue_turn／
+            # init_wait_*）刻意不在此中和：create 結尾的 `_open_init_generation()` 會重設
+            # wait／queue 時計，進入 initializing 的 write() 會重設 ready／wait／queue；而
+            # queue／claim／phase／capacity 都只在 state='initializing' 時讀它們，租戶的開通
+            # 路徑（`_internal_provision`＋controller 白名單）也不會直接建出 initializing。
+            # capacity 時計與 owner marker 不同：它們由背景 monitor 首次寫入、沒有上述重設點。
             defaulted = self._add_missing_default_values(normalized)
             normalized['observation_episode_started_at'] = (
                 observation_started if defaulted.get('state') in OBSERVATION_TRANSITION_STATES

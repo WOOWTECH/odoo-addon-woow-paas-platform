@@ -219,15 +219,18 @@ class CloudServiceInitAttempt(models.Model):
     lease_until = fields.Datetime(required=True, help='DB clock (UTC); see INIT_LEASE_SECONDS')
     finished_at = fields.Datetime(help='Empty while in flight')
     applied_at = fields.Datetime(
-        help='已持久化結果套用到 service 計數／狀態的時間；使結果記錄 → 套用的 '
-             'crash recovery 保持冪等。',
+        string='Applied At',
+        copy=False,
+        help='When the persisted result was applied to the service counters/state; '
+             'keeps record-then-apply crash recovery idempotent.',
     )
     n8n_key_persisted = fields.Boolean(
         string='n8n Key Persisted',
         default=False,
         copy=False,
-        help='本 attempt 的 n8n API key 已與此 marker 同交易寫入 service 受保護欄位；'
-             '此欄僅記錄持久化證據，不存放 secret。',
+        help='This attempt\'s n8n API key was written to the service\'s protected field '
+             'in the same transaction as this marker; it records the evidence only, '
+             'never the secret.',
     )
     outcome = fields.Selection(
         selection=[

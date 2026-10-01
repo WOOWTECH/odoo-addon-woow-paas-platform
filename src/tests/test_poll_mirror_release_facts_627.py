@@ -16,7 +16,7 @@ list/get 純讀，controller 那份已刪除，只剩 cron 那份）：
 
 ## 為什麼這一份測試必須驅動 model 而不是 controller
 
-`test_chart_pin_fail_closed_552.py` 已經有一支叫
+（歷史）`test_chart_pin_fail_closed_552.py` 當時已經有一支叫
 `test_failed_release_branch_also_records_it` 的測試，docstring 寫「`release_facts`
 必須到得了**每個** write 分支」——但**整份檔案驅動的都是 controller**
 （`PaasController()._update_service_status`）。
@@ -24,9 +24,9 @@ list/get 純讀，controller 那份已刪除，只剩 cron 那份）：
 ⇒ models 鏡像整份沒有回寫，那些測試照樣全綠。**同一個功能有兩份實作時，覆蓋率
 要問的是「每一份都被驅動了嗎」，不是「這一份的每個分支都被驅動了嗎」。**
 
-本檔只驅動 `CloudService._poll_and_update_status`，**刻意不碰 controller**——
-controller 那份由 `test_chart_pin_fail_closed_552.py` 守，兩份各有各的守衛才不會
-再退化成「守住一份、以為守住全部」。
+#1159 起 list/get 純讀、controller 那份 poll 已刪除，`_poll_and_update_status` 是唯一
+的 poll 實作；`test_chart_pin_fail_closed_552.py` 也已改為驅動它。本檔仍逐一驅動
+model poll 的每個 write 分支。
 
 ## 四個 write 分支
 

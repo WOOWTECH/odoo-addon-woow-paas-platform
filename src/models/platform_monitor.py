@@ -172,7 +172,8 @@ class PlatformMonitor(models.Model):
     def _check_init_cron_health(self):
         problem = self._cron_stale(_INIT_CRON_XMLID, INIT_CRON_STALE_MINUTES)
         if problem:
-            self._alert(self.SUMMARY_INIT_CRON, problem)
+            # 與其他 monitor 通知一致只排 queue：外層交易回捲時不留下已同步寄出的信。
+            self.with_context(mail_notify_force_send=False)._alert(self.SUMMARY_INIT_CRON, problem)
 
     @api.model
     def _check_poll_cron_health(self):
@@ -223,7 +224,7 @@ class PlatformMonitor(models.Model):
         if age <= timedelta(minutes=OBSERVED_STALE_MINUTES):
             return
         service = Service.browse(row[0])
-        self._alert(self.SUMMARY_OBSERVED, _(
+        self.with_context(mail_notify_force_send=False)._alert(self.SUMMARY_OBSERVED, _(
             'The oldest background observation of a transitional service is %(minutes)s '
             'minutes old: %(name)s (id=%(id)s, state=%(state)s). Check the operator and the '
             'status poll cron.', minutes=int(age.total_seconds() // 60), name=service.name,

@@ -930,8 +930,8 @@ sequenceDiagram
 | `src/controllers/paas.py:1969` | `_create_service()` - 服務建立入口（建 pending + 觸發 deploy cron） |
 | `src/models/cloud_service.py:342` | `_cron_process_pending_deploys()` - deploy cron 入口（撈 pending） |
 | `src/models/cloud_service.py:369` | `_execute_deploy()` - 實際部署（namespace + helm install + sidecar patch） |
-| `src/models/cloud_service.py:744` | `_cron_check_deploying_services()` - 輪詢 transitional 狀態 cron 入口 |
-| `src/models/cloud_service.py:771` | `_poll_and_update_status()` - 單筆服務狀態轉換（model context） |
+| `src/models/cloud_service.py` | `_cron_check_deploying_services()` - 輪詢 transitional 狀態 cron 入口 |
+| `src/models/cloud_service.py` | `_poll_and_update_status()` - 單筆服務狀態轉換（model context） |
 | `src/models/cloud_service.py:673` | `_build_mcp_sidecar_config()` - Sidecar 配置（已從 controller 移至 model） |
 | `src/models/cloud_service.py` | `_cron_run_post_deploy_inits()` - 獨立 init cron（#1159；n8n 優先、wall 預算 1100s、自我 `_trigger()`） |
 | `src/models/cloud_service.py` | `_run_post_deploy_init()` - Post-deploy init 的單一入口（只由 init cron 呼叫） |

@@ -531,7 +531,7 @@ class TestDnsProbeResolverBackoff(TransactionCase):
     的服務一多，那條 cron 會被純粹的等待吃光。
 
     ⚠ 這道閂與 ``_is_public_url_ready`` 開頭那個「窗口外提前 return」**不是同一件事**
-    ——後者在 production 熱路徑上省不到探測（兩份 poll 在更早就探完了）。熱路徑上有效
+    ——後者在 production 熱路徑上省不到探測（背景 poll 在更早就探完了）。熱路徑上有效
     的是這一條。
     """
 

@@ -149,6 +149,8 @@ woow-paas/paas-app-bundle-cd#154（prod `limit_time_real_cron=1800`）要先上 
 - **DNS 旗標**（Q16／D4）：`public_url_dns_unverified` 改由 `ir_cron_reprobe_public_url_dns`（每 15 分）重探後清除。
   helper 對非 DB 例外 fail-soft，`OperationalError` 交給 cron 的逐台邊界回捲該台後繼續後排（Q36）；
   init cron 迴圈遇到佇列 snapshot 之後 template 改成不需 init 的那台時略過，不讓整趟失敗。
+  init cron 開頭的 D2-R 全域收尾（`_init_settle_operator_wait_timeouts`）也逐台 commit／rollback：
+  一台轉 error 或告警撞到 DB 故障只回捲那一台，前後已收尾的服務保留，同一趟的佇列照常處理（Q36）。
 - **監控**（Q38／D3）：`mail.activity` 給 `base.group_system`，每個監控項用不同 summary 各自去重，全部掛在
   mail.thread 單例 `woow_paas_platform.platform_monitor`（`ir.cron`／`cloud_service` 都不是 mail.thread，
   activity 建立時會呼叫 `message_subscribe`）。短 poll 查 init cron（停用或 `lastcall` > 40 分）、最舊 observation
