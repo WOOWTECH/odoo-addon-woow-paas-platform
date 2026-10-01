@@ -58,3 +58,12 @@ $woow-shadow-card: 0 0 0 1px rgba(0, 0, 0, 0.03), 0 2px 8px rgba(0, 0, 0, 0.04);
 $woow-sidebar-width: 260px;
 $woow-header-height: 80px;
 $woow-bottom-nav-height: 64px;
+
+// -----------------------------------------------------------------------------
+// Breakpoints (max-width queries; #1310)
+// 新規則請用這三個變數；既有寫死 640px／768px／1024px 的 media query 不回頭改。
+// -----------------------------------------------------------------------------
+
+$woow-bp-sm: 640px;
+$woow-bp-md: 768px;
+$woow-bp-lg: 1024px;

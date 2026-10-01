@@ -2,6 +2,7 @@
 import { Component, useState, onWillUpdateProps } from "@odoo/owl";
 import { _t } from "@web/core/l10n/translation";
 import { groupPlansByCycle } from "./plan_selector_utils";
+import { formatPointsPerUnit } from "../../utils/billing_helpers";
 
 /**
  * PlanSelector（#368 重設計）
@@ -61,6 +62,28 @@ export class PlanSelector extends Component {
   get cycles() {
     return [...new Set(this.props.plans.map((p) => p.unit))];
   }
+  /**
+   * #1310：年繳折扣原本寫死「Save 33%」，但各方案不同（Odoo 1,500／12,000＝33%，
+   * pi Agent 4,500／45,000＝17%）。依同 group_key 的月／年價實算；
+   * 各組折扣不同時顯示「最多省 N%」，算不出來就只顯示「Yearly」。
+   */
+  get yearlySavingsLabel() {
+    const savings = [];
+    for (const yearly of this.props.plans.filter((p) => p.unit === "year" && p.group_key)) {
+      const monthly = this.props.plans.find(
+        (p) => p.group_key === yearly.group_key && p.unit === "month");
+      if (monthly && monthly.price > 0 && yearly.price > 0) {
+        const pct = Math.round((1 - yearly.price / (monthly.price * 12)) * 100);
+        if (pct > 0) savings.push(pct);
+      }
+    }
+    if (!savings.length) return _t("Yearly");
+    const max = Math.max(...savings);
+    return Math.min(...savings) === max
+      ? _t("Yearly · Save %(pct)s", { pct: `${max}%` })
+      : _t("Yearly · Save up to %(pct)s", { pct: `${max}%` });
+  }
+
   get showCycleToggle() {
     return this.cycles.length > 1; // R1：單一 cycle 不渲染 toggle
   }
@@ -130,14 +153,10 @@ export class PlanSelector extends Component {
     return this.props.selectedPlanId === target;
   }
 
-  _unitLabel(unit) {
-    return unit === "month" ? _t("mo") : unit === "year" ? _t("yr") : unit;
-  }
+  // #1310：價格／單位字樣統一走 billing_helpers.formatPointsPerUnit（千分位跟隨語系、
+  // 單位縮寫與 PlanTotalBar／marketplace 卡片同一份）。
   formatPrice(plan) {
-    return _t("%(amount)s pts/%(unit)s", {
-      amount: plan.price,
-      unit: this._unitLabel(plan.unit),
-    });
+    return formatPointsPerUnit(plan.price, plan.unit);
   }
   formatTrial(plan) {
     if (!plan.has_trial) return "";
@@ -213,10 +232,7 @@ export class PlanSelector extends Component {
 
   formatSeatDelta(base, variant) {
     const delta = variant.price - base.price;
-    return _t("+%(amount)s pts/%(unit)s", {
-      amount: delta,
-      unit: this._unitLabel(base.unit),
-    });
+    return formatPointsPerUnit(delta, base.unit, { signed: true });
   }
 
   onPlanClick(base) {

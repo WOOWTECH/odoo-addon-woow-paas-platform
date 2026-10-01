@@ -419,6 +419,7 @@
 8	test_mcp_sync_failure_visibility_554.TestMcpSyncFailureVisibility
 3	test_mcp_sync_failure_visibility_554.TestMcpSyncPartialWriteReachability
 2	test_migration_delegate_liveness.TestMigrationDelegateLiveness
+4	test_monthly_estimate_1310.TestMonthlyEstimate1310
 3	test_named_failure_fields_484.TestContainerReadinessAnchors
 5	test_named_failure_fields_484.TestDnsFailedIsFailClosed
 2	test_named_failure_fields_484.TestHealthyProvisionUnchanged
@@ -429,6 +430,7 @@
 5	test_naming.TestParsePaasName
 4	test_naming.TestReconstructMcpSubdomain
 4	test_naming.TestSecurityAccessNaming
+8	test_notifications_1310.TestNotificationsEndpoint1310
 3	test_oauth2.TestAuthorizeEndpointPkce
 2	test_oauth2.TestHaRedirectModeHealer
 16	test_oauth2.TestOAuthClient

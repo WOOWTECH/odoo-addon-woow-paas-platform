@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <templates xml:space="preserve">
     <t t-name="woow_paas_platform.AppCard">
-        <div class="o_woow_app_card">
+        <div t-att-class="'o_woow_app_card' + (isPurchasable ? ' o_woow_app_card--clickable' : '')"
+             t-on-click="onCardClick">
             <div class="o_woow_app_card_header">
                 <div t-att-class="'o_woow_app_card_icon o_woow_app_card_icon_' + categoryColor">
                     <WoowIcon name="categoryIcon" size="28"/>

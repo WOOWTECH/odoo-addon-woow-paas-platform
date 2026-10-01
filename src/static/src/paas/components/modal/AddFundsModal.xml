@@ -29,11 +29,9 @@
                         <div class="o_woow_addfunds_row">
                             <span class="o_woow_addfunds_label">Credits</span>
                             <span class="o_woow_addfunds_value">
-                                <t t-esc="formattedTotalCredits"/> pts
+                                <t t-esc="formattedTotalCredits"/>
                                 <t t-if="plan.bonus > 0">
-                                    <span class="o_woow_addfunds_bonus_note">
-                                        (incl. <t t-esc="plan.bonus"/> bonus)
-                                    </span>
+                                    <span class="o_woow_addfunds_bonus_note" t-esc="bonusNote"/>
                                 </t>
                             </span>
                         </div>

@@ -175,10 +175,10 @@
             <h3>Subscription</h3>
             <div class="o_woow_sa_detail__grid">
               <div><label>Plan</label><t t-esc="state.sa.subscription.plan_name"/></div>
-              <div><label>Next payment</label><t t-esc="state.sa.subscription.next_payment"/></div>
+              <div><label>Next payment</label><t t-esc="formatDate(state.sa.subscription.next_payment)"/></div>
               <div t-if="state.sa.subscription.is_trial">
                 <label>Trial ends</label>
-                <t t-esc="state.sa.subscription.trial_end_date"/>
+                <t t-esc="formatDate(state.sa.subscription.trial_end_date)"/>
                 <WoowButton variant="'primary'" size="'sm'"
                             onClick="() => state.showSkipTrialModal = true">
                   Skip Trial
@@ -194,7 +194,7 @@
             <h3>Identity</h3>
             <div class="o_woow_sa_detail__grid">
               <div><label>Canonical name</label><t t-esc="state.sa.canonical_name"/></div>
-              <div><label>Created</label><t t-esc="state.sa.created_at"/></div>
+              <div><label>Created</label><t t-esc="formatDateTime(state.sa.created_at)"/></div>
             </div>
           </WoowCard>
         </div>
@@ -234,93 +234,96 @@
               No application routes yet. Add your first route below to expose a
               service — until then the tunnel is ready but answers 404.
             </div>
-            <table t-if="state.sa.routes and state.sa.routes.length"
-                   class="o_woow_sa_routes_table">
-              <thead>
-                <!-- #1261：Host header 欄的說明放在 title（滑過可見），講清楚這個選項
-                     實際做什麼：**強制**把 Host 設成公開網址（cloudflared
-                     httpHostHeader）。沒勾時 cloudflared 也會原樣轉送訪客的 Host，
-                     通常就是同一個公開網址——所以取消勾選一般不會改變 origin 收到的值，
-                     不要讓租戶以為取消勾選就能讓後端收到 service URL 的主機名。
-                     只改文案、不改行為（勾選照樣推 httpHostHeader）。 -->
-                <tr><th>Hostname</th><th>Service</th><th title="Forces the Host header sent to your service to the public hostname. cloudflared normally forwards the visitor's original Host (the same public hostname) anyway, so turning this off usually changes nothing.">Host header</th><th>Status</th><th>Traffic (24h)</th><th></th></tr>
-              </thead>
-              <tbody>
-                <t t-foreach="state.sa.routes or []" t-as="route" t-key="route.id">
-                  <tr>
-                    <!-- #1196：主機名稱可就地改。編輯時只讓改 prefix，後綴是
-                         平台網域、不是使用者的東西。 -->
-                    <td class="o_woow_sa_routes_table__host">
-                      <div t-if="state.editingRouteId === route.id"
-                           class="o_woow_sa_routes_table__rename">
-                        <input type="text" class="o_woow_input"
-                               placeholder="subdomain prefix"
-                               t-att-value="state.editRoutePrefix"
-                               t-on-input="onEditRoutePrefix"/>
-                        <span class="o_woow_sa_add_route__suffix">.<t t-esc="paasDomainSuffix"/></span>
-                      </div>
-                      <span t-else="" class="o_woow_sa_detail__mono">
-                        <t t-esc="route.hostname"/>
-                      </span>
-                    </td>
-                    <!-- #1196：就地編輯 service_url / Host header。 -->
-                    <td>
-                      <input t-if="state.editingRouteId === route.id"
-                             type="text" class="o_woow_input o_woow_sa_routes_table__edit"
-                             placeholder="service URL"
-                             t-att-value="state.editRouteServiceUrl"
-                             t-on-input="onEditRouteServiceUrl"/>
-                      <span t-else="" class="o_woow_sa_detail__mono">
-                        <t t-esc="route.service_url"/>
-                      </span>
-                    </td>
-                    <td class="o_woow_sa_routes_table__hh">
-                      <input t-if="state.editingRouteId === route.id"
-                             type="checkbox"
-                             title="Forces the Host header sent to your service to the public hostname. cloudflared normally forwards the visitor's original Host (the same public hostname) anyway, so turning this off usually changes nothing."
-                             t-att-checked="state.editRouteHostHeader"
-                             t-on-change="onEditRouteHostHeader"/>
-                      <t t-else="" t-esc="hostHeaderLabel(route)"/>
-                    </td>
-                    <!-- #1234：公開網路探測結果；滑過看該做什麼。 -->
-                    <td class="o_woow_sa_routes_table__status">
-                      <span t-att-class="routeHealthClass(route)"
-                            t-att-title="routeHealthHint(route)">
-                        <t t-esc="routeHealthLabel(route)"/>
-                      </span>
-                    </td>
-                    <!-- #1234：Cloudflare analytics 的請求數 · 最後請求。 -->
-                    <td class="o_woow_sa_routes_table__traffic"
-                        t-att-title="routeTrafficHint(route)">
-                      <t t-esc="routeTrafficLabel(route)"/>
-                    </td>
-                    <td class="o_woow_sa_routes_table__action">
-                      <t t-if="state.editingRouteId === route.id">
-                        <button class="o_woow_sa_icon_btn" title="Save"
-                                t-att-disabled="state.savingRoute"
-                                t-on-click="() => this.saveRoute(route)">
-                          <WoowIcon name="'check'" size="18"/>
-                        </button>
-                        <button class="o_woow_sa_icon_btn" title="Cancel"
-                                t-on-click="cancelEditRoute">
-                          <WoowIcon name="'close'" size="18"/>
-                        </button>
-                      </t>
-                      <t t-else="">
-                        <button class="o_woow_sa_icon_btn" title="Edit route"
-                                t-on-click="() => this.startEditRoute(route)">
-                          <WoowIcon name="'edit'" size="18"/>
-                        </button>
-                        <button class="o_woow_sa_icon_btn" title="Delete route"
-                                t-on-click="() => this.requestRemoveRoute(route)">
-                          <WoowIcon name="'delete'" size="18"/>
-                        </button>
-                      </t>
-                    </td>
-                  </tr>
-                </t>
-              </tbody>
-            </table>
+            <!-- #1310：6 欄表格在手機上放不下，外包橫向捲動容器（只加容器、不動表格內容）。 -->
+            <div t-if="state.sa.routes and state.sa.routes.length"
+                 class="o_woow_sa_routes_table_scroll">
+              <table class="o_woow_sa_routes_table">
+                <thead>
+                  <!-- #1261：Host header 欄的說明放在 title（滑過可見），講清楚這個選項
+                       實際做什麼：**強制**把 Host 設成公開網址（cloudflared
+                       httpHostHeader）。沒勾時 cloudflared 也會原樣轉送訪客的 Host，
+                       通常就是同一個公開網址——所以取消勾選一般不會改變 origin 收到的值，
+                       不要讓租戶以為取消勾選就能讓後端收到 service URL 的主機名。
+                       只改文案、不改行為（勾選照樣推 httpHostHeader）。 -->
+                  <tr><th>Hostname</th><th>Service</th><th title="Forces the Host header sent to your service to the public hostname. cloudflared normally forwards the visitor's original Host (the same public hostname) anyway, so turning this off usually changes nothing.">Host header</th><th>Status</th><th>Traffic (24h)</th><th></th></tr>
+                </thead>
+                <tbody>
+                  <t t-foreach="state.sa.routes or []" t-as="route" t-key="route.id">
+                    <tr>
+                      <!-- #1196：主機名稱可就地改。編輯時只讓改 prefix，後綴是
+                           平台網域、不是使用者的東西。 -->
+                      <td class="o_woow_sa_routes_table__host">
+                        <div t-if="state.editingRouteId === route.id"
+                             class="o_woow_sa_routes_table__rename">
+                          <input type="text" class="o_woow_input"
+                                 placeholder="subdomain prefix"
+                                 t-att-value="state.editRoutePrefix"
+                                 t-on-input="onEditRoutePrefix"/>
+                          <span class="o_woow_sa_add_route__suffix">.<t t-esc="paasDomainSuffix"/></span>
+                        </div>
+                        <span t-else="" class="o_woow_sa_detail__mono">
+                          <t t-esc="route.hostname"/>
+                        </span>
+                      </td>
+                      <!-- #1196：就地編輯 service_url / Host header。 -->
+                      <td>
+                        <input t-if="state.editingRouteId === route.id"
+                               type="text" class="o_woow_input o_woow_sa_routes_table__edit"
+                               placeholder="service URL"
+                               t-att-value="state.editRouteServiceUrl"
+                               t-on-input="onEditRouteServiceUrl"/>
+                        <span t-else="" class="o_woow_sa_detail__mono">
+                          <t t-esc="route.service_url"/>
+                        </span>
+                      </td>
+                      <td class="o_woow_sa_routes_table__hh">
+                        <input t-if="state.editingRouteId === route.id"
+                               type="checkbox"
+                               title="Forces the Host header sent to your service to the public hostname. cloudflared normally forwards the visitor's original Host (the same public hostname) anyway, so turning this off usually changes nothing."
+                               t-att-checked="state.editRouteHostHeader"
+                               t-on-change="onEditRouteHostHeader"/>
+                        <t t-else="" t-esc="hostHeaderLabel(route)"/>
+                      </td>
+                      <!-- #1234：公開網路探測結果；滑過看該做什麼。 -->
+                      <td class="o_woow_sa_routes_table__status">
+                        <span t-att-class="routeHealthClass(route)"
+                              t-att-title="routeHealthHint(route)">
+                          <t t-esc="routeHealthLabel(route)"/>
+                        </span>
+                      </td>
+                      <!-- #1234：Cloudflare analytics 的請求數 · 最後請求。 -->
+                      <td class="o_woow_sa_routes_table__traffic"
+                          t-att-title="routeTrafficHint(route)">
+                        <t t-esc="routeTrafficLabel(route)"/>
+                      </td>
+                      <td class="o_woow_sa_routes_table__action">
+                        <t t-if="state.editingRouteId === route.id">
+                          <button class="o_woow_sa_icon_btn" title="Save"
+                                  t-att-disabled="state.savingRoute"
+                                  t-on-click="() => this.saveRoute(route)">
+                            <WoowIcon name="'check'" size="18"/>
+                          </button>
+                          <button class="o_woow_sa_icon_btn" title="Cancel"
+                                  t-on-click="cancelEditRoute">
+                            <WoowIcon name="'close'" size="18"/>
+                          </button>
+                        </t>
+                        <t t-else="">
+                          <button class="o_woow_sa_icon_btn" title="Edit route"
+                                  t-on-click="() => this.startEditRoute(route)">
+                            <WoowIcon name="'edit'" size="18"/>
+                          </button>
+                          <button class="o_woow_sa_icon_btn" title="Delete route"
+                                  t-on-click="() => this.requestRemoveRoute(route)">
+                            <WoowIcon name="'delete'" size="18"/>
+                          </button>
+                        </t>
+                      </td>
+                    </tr>
+                  </t>
+                </tbody>
+              </table>
+            </div>
             <div t-if="state.sa.routes and state.sa.routes.length" class="o_woow_sa_detail__hint">
               Status is checked from the public internet. Hover a status to see what to do.
             </div>

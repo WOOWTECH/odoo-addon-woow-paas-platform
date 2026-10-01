@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+  <t t-name="woow_paas_platform.AccountMenu">
+    <div class="o_woow_menu_backdrop" t-on-click="() => props.onClose()"/>
+    <div class="o_woow_account_menu" role="menu" tabindex="-1" t-ref="menu" aria-label="Account">
+      <div class="o_woow_account_menu__identity">
+        <span class="o_woow_account_menu__name" t-esc="partner.name"/>
+        <span t-if="partner.email" class="o_woow_account_menu__email" t-esc="partner.email"/>
+      </div>
+      <button type="button" role="menuitem" class="o_woow_account_menu__credits" t-on-click="() => this.go('billing/topup')">
+        <span class="material-symbols-outlined" t-translation="off">payments</span>
+        <span class="o_woow_account_menu__label">Credits</span>
+        <span class="o_woow_account_menu__value" t-esc="balance"/>
+        <span class="o_woow_account_menu__hint">Top up</span>
+      </button>
+      <button type="button" role="menuitem" class="o_woow_account_menu__item" t-on-click="() => this.go('settings/profile')">
+        <span class="material-symbols-outlined" t-translation="off">person</span>
+        <span>Profile</span>
+      </button>
+      <button type="button" role="menuitem" class="o_woow_account_menu__item" t-on-click="() => this.go('billing/invoices')">
+        <span class="material-symbols-outlined" t-translation="off">receipt_long</span>
+        <span>Invoices</span>
+      </button>
+      <button t-if="isAdmin" type="button" role="menuitem" class="o_woow_account_menu__item" t-on-click="() => this.go('settings/reconcile-report')">
+        <span class="material-symbols-outlined" t-translation="off">cleaning_services</span>
+        <span>Orphan Reconciliation</span>
+      </button>
+      <button type="button" role="menuitem" class="o_woow_account_menu__item" t-on-click="openHelp">
+        <span class="material-symbols-outlined" t-translation="off">help</span>
+        <span>Help &amp; Support</span>
+      </button>
+      <button type="button" role="menuitem" class="o_woow_account_menu__item o_woow_account_menu__item--danger" t-on-click="logout">
+        <span class="material-symbols-outlined" t-translation="off">logout</span>
+        <span>Log Out</span>
+      </button>
+    </div>
+  </t>
+</templates>

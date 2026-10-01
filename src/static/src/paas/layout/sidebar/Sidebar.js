@@ -3,6 +3,18 @@ import { Component, useState, onMounted } from "@odoo/owl";
 import { _t } from "@web/core/l10n/translation";
 import { profileService } from "../../services/profile_service";
 import { showProjects } from "../../core/platform_config";
+import { sidebarSection } from "../../core/nav_sections";
+
+const SIDEBAR_SECTION = {
+    dashboard: "dashboard",
+    workspaces: "workspaces",
+    projects: "projects",
+    billing: "billing",
+    "billing/invoices": "invoices",
+    "billing/topup": "topup",
+    settings: "settings",
+    "settings/reconcile-report": "reconcile",
+};
 
 export class Sidebar extends Component {
     static template = "woow_paas_platform.Sidebar";
@@ -40,42 +52,9 @@ export class Sidebar extends Component {
             && (!item.requiresProjects || showProjects());
     }
 
-    /**
-     * Check if a nav item is active.
-     * For projects, all support sub-routes (ai-projects, ai-tasks, etc.) should highlight this item.
-     * @param {Object} item - Navigation item
-     * @returns {boolean}
-     */
+    /** #1310：判準集中在 core/nav_sections.js，涵蓋所有子頁。 */
     isActive(item) {
-        const current = this.props.router.current;
-        if (item.path === "projects") {
-            return current === "ai-projects"
-                || current === "ai-project-kanban"
-                || current === "ai-tasks"
-                || current === "ai-task-detail"
-                || current === "ai-chat";
-        }
-        if (item.path === "billing") {
-            return current === "billing"
-                || current === "billing-subscriptions"
-                || current === "billing-transactions";
-        }
-        if (item.path === "billing/invoices") {
-            return current === "billing-invoices"
-                || current === "billing-invoice-detail";
-        }
-        if (item.path === "billing/topup") {
-            return current === "billing-topup";
-        }
-        if (item.path === "settings") {
-            return current === "settings"
-                || current === "settings-payment-methods"
-                || current === "settings-payment-methods-add";
-        }
-        if (item.path === "settings/reconcile-report") {
-            return current === "reconcile-report";
-        }
-        return current === item.path;
+        return sidebarSection(this.props.router.current) === SIDEBAR_SECTION[item.path];
     }
 
     isSection(item) {

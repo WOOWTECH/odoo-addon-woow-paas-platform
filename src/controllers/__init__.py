@@ -8,6 +8,7 @@ from . import ha_api
 from . import ha_paas
 from . import profile
 from . import dashboard
+from . import notifications
 from . import agent_runtime_skill
 from . import agent_runtime_webhook
 from . import portal

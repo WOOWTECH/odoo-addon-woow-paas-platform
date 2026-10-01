@@ -84,6 +84,17 @@ export function formatDateTimeShort(dateStr) {
  * @returns {string}
  */
 export function formatPoints(value, { signed = false, precision = 2 } = {}) {
+  return _t("%(amount)s pts", { amount: _pointsNumber(value, { signed, precision }) });
+}
+
+/**
+ * 點數數字本體（含正負號、不含單位）。formatPoints／formatPointsPerUnit 共用。
+ *
+ * @param {number|null|undefined} value
+ * @param {{signed?: boolean, precision?: number}} [opts]
+ * @returns {string}
+ */
+function _pointsNumber(value, { signed = false, precision = 2 } = {}) {
   const n = Number(value ?? 0);
   const abs = Math.abs(n);
   // #107：改走 Odoo 的 formatFloat ⇒ 千分位與小數點跟隨 res.lang
@@ -93,7 +104,46 @@ export function formatPoints(value, { signed = false, precision = 2 } = {}) {
   let prefix = "";
   if (signed && n > 0) prefix = "+";
   else if (n < 0) prefix = "-";
-  return _t("%(amount)s pts", { amount: `${prefix}${body}` });
+  return `${prefix}${body}`;
+}
+
+/**
+ * 方案計費週期單位的縮寫（#1310：從 PlanSelector／PlanTotalBar 各自一份的
+ * `_unitLabel` 收斂到這裡）。month → `mo`（月）、year → `yr`（年），
+ * 其餘（day／week 等實務上沒有 seed 的週期）原字串顯示。
+ *
+ * @param {string|null|undefined} unit `sh.subscription.plan` 的 `sh_unit`
+ * @returns {string}
+ */
+export function planUnitLabel(unit) {
+  if (unit === "month") return _t("mo");
+  if (unit === "year") return _t("yr");
+  return unit || "";
+}
+
+/**
+ * 方案價格「點數／週期」的單一格式化來源（#1310）。
+ *
+ * 方案價是整數點時不顯示小數（`1,500 pts/mo`、`1,500 點/月`），有小數才顯示兩位
+ * ——與 formatPoints 共用千分位與正負號規則。
+ *
+ * Examples:
+ *   formatPointsPerUnit(1500, "month")                   → "1,500 pts/mo"
+ *   formatPointsPerUnit(99.5, "year")                    → "99.50 pts/yr"
+ *   formatPointsPerUnit(300, "month", { signed: true })  → "+300 pts/mo"
+ *
+ * @param {number|null|undefined} value
+ * @param {string|null|undefined} unit
+ * @param {{signed?: boolean}} [opts]
+ * @returns {string}
+ */
+export function formatPointsPerUnit(value, unit, { signed = false } = {}) {
+  const n = Number(value ?? 0);
+  const precision = Number.isInteger(n) ? 0 : 2;
+  return _t("%(amount)s pts/%(unit)s", {
+    amount: _pointsNumber(n, { signed, precision }),
+    unit: planUnitLabel(unit),
+  });
 }
 
 /**

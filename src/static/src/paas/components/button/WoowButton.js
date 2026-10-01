@@ -9,7 +9,14 @@ export class WoowButton extends Component {
         onClick: { type: Function, optional: true },
         disabled: { type: Boolean, optional: true },
         slots: { type: Object, optional: true },
+        // #1310：TopupStorePage／InvoiceDetailPage 一直有傳 class，但從未宣告也從未套用。
+        class: { type: String, optional: true },
     };
+
+    get buttonClass() {
+        const base = 'o_woow_btn o_woow_btn_' + (this.props.variant || 'primary') + ' o_woow_btn_' + (this.props.size || 'md');
+        return this.props.class ? base + ' ' + this.props.class : base;
+    }
 
     handleClick(ev) {
         if (this.props.disabled) return;

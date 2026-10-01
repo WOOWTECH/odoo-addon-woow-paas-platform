@@ -332,7 +332,7 @@ export class AppConfigurationPage extends Component {
     }
 
     onCancel() {
-        this.router.navigate(`workspace/${this.props.workspaceId}/marketplace`);
+        this.router.navigate(`workspace/${this.props.workspaceId}/services/marketplace`);
     }
 
     /**
@@ -381,7 +381,7 @@ export class AppConfigurationPage extends Component {
      * Navigate back to workspaces
      */
     goBack() {
-        this.router.navigate(`workspace/${this.props.workspaceId}/marketplace`);
+        this.router.navigate(`workspace/${this.props.workspaceId}/services/marketplace`);
     }
 
     onCredentialsClose() {

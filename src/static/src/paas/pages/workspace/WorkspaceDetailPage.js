@@ -9,6 +9,7 @@ import { SmartHomeCard } from "../../components/smart-home/SmartHomeCard";
 import { CreateSmartHomeModal } from "../../components/smart-home/CreateSmartHomeModal";
 import { CreateSecurityAccessModal } from "../../components/modal/CreateSecurityAccessModal";
 import { DeleteWorkspaceModal } from "../../components/modal/DeleteWorkspaceModal";
+import { CreateWorkspaceModal } from "../../components/modal/CreateWorkspaceModal";
 import { StatusBadge } from "../../components/common/StatusBadge";
 import { workspaceService } from "../../services/workspace_service";
 import { securityAccessService } from "../../services/security_access";
@@ -16,10 +17,11 @@ import { cloudService, getDomain } from "../../services/cloud_service";
 import { breadcrumbService } from "../../services/breadcrumb_service";
 import { router } from "../../core/router";
 import { getRoleBadgeClass, formatDate } from "../../services/utils";
+import { formatPointsPerUnit } from "../../utils/billing_helpers";
 
 export class WorkspaceDetailPage extends Component {
     static template = "woow_paas_platform.WorkspaceDetailPage";
-    static components = { WoowCard, WoowIcon, WoowButton, ServiceCard, SmartHomeCard, CreateSmartHomeModal, CreateSecurityAccessModal, DeleteWorkspaceModal, StatusBadge };
+    static components = { WoowCard, WoowIcon, WoowButton, ServiceCard, SmartHomeCard, CreateSmartHomeModal, CreateSecurityAccessModal, DeleteWorkspaceModal, CreateWorkspaceModal, StatusBadge };
     static props = {
         workspaceId: { type: Number },
     };
@@ -42,6 +44,7 @@ export class WorkspaceDetailPage extends Component {
             securityAccessesError: null,
             showCreateSecurityAccessModal: false,
             showDeleteWorkspaceModal: false,
+            showWorkspaceSettings: false,
         });
         this.router = useState(router);
         this.servicesPollingInterval = null;
@@ -287,13 +290,31 @@ export class WorkspaceDetailPage extends Component {
         return this.state.services && this.state.services.length > 0;
     }
 
+    /**
+     * #1310：原本寫死「$0/month」。加總工作區內所有進行中訂閱（雲端服務、智慧家庭、
+     * 遠端安全連結）的含稅月費估算（年繳已由後端換算成每月）；單位一律是點數。
+     */
+    get estimatedMonthlyCost() {
+        const rows = [
+            ...(this.state.services || []),
+            ...(this.state.smartHomes || []),
+            ...(this.state.securityAccesses || []),
+        ];
+        const total = rows.reduce((sum, row) => {
+            const sub = row.subscription;
+            if (!sub || sub.state !== "in_progress") return sum;
+            return sum + (Number(sub.monthly_estimate) || 0);
+        }, 0);
+        return formatPointsPerUnit(total, "month");
+    }
+
     get computedStats() {
         const services = this.state.services || [];
         const runningCount = services.filter(s => s.state === "running").length;
         const errorCount = services.filter(s => s.state === "error").length;
 
         return [
-            { label: _t("Estimated Cost"), value: _t("$0/month"), icon: "payments", color: "purple" },
+            { label: _t("Estimated Cost"), value: this.estimatedMonthlyCost, icon: "payments", color: "purple" },
             { label: _t("Total Apps"), value: String(services.length), icon: "apps", color: "blue" },
             { label: _t("Healthy"), value: String(runningCount), icon: "check_circle", color: "green" },
             { label: _t("Alerts"), value: String(errorCount), icon: "warning", color: "orange" },
@@ -308,8 +329,24 @@ export class WorkspaceDetailPage extends Component {
         this.router.navigate(`workspace/${this.props.workspaceId}/team`);
     }
 
+    // #1310：原本只有 TODO，按了沒反應。改開「工作區設定」（名稱／描述），
+    // 後端 `_update_workspace` 限 owner／admin，按鈕也只對這兩種角色顯示。
+    get canManageWorkspace() {
+        return ["owner", "admin"].includes(this.state.workspace?.role);
+    }
+
     goToSettings() {
-        // TODO: Implement workspace settings
+        this.state.showWorkspaceSettings = true;
+    }
+
+    closeWorkspaceSettings() {
+        this.state.showWorkspaceSettings = false;
+    }
+
+    onWorkspaceSaved(data) {
+        this.state.showWorkspaceSettings = false;
+        this.state.workspace = { ...this.state.workspace, ...data };
+        this.loadData();
     }
 
     // #1295：刪除（封存）工作區——只有 owner 看得到按鈕（後端 `_delete_workspace`
@@ -327,6 +364,20 @@ export class WorkspaceDetailPage extends Component {
         this.router.navigate("workspaces");
     }
 
+    /**
+     * #1310：服務類型卡片原本有 hover 浮起但只有內部按鈕能點；整張卡片統一處理，
+     * 內部「Get Started」按鈕不再自綁 handler（點擊冒泡到卡片，避免重複觸發）。
+     */
+    onServiceTypeClick(service) {
+        if (service.action === "smarthome") {
+            this.openCreateSmartHomeModal();
+        } else if (service.action === "security-access") {
+            this.openCreateSecurityAccessModal();
+        } else {
+            this.goToMarketplace();
+        }
+    }
+
     goToMarketplace() {
         this.router.navigate(`workspace/${this.props.workspaceId}/services/marketplace`);
     }
@@ -335,13 +386,6 @@ export class WorkspaceDetailPage extends Component {
         this.router.navigate(`workspace/${this.props.workspaceId}/services/${serviceId}`);
     }
 
-    openService(serviceId) {
-        // Open service web UI - ServiceCard handles this internally
-        const service = this.state.services.find(s => s.id === serviceId);
-        if (service && service.subdomain && service.state === "running") {
-            window.open(`https://${service.subdomain}.${this.state.domain}`, "_blank");
-        }
-    }
 
     getRoleBadgeClass(role) {
         return getRoleBadgeClass(role);

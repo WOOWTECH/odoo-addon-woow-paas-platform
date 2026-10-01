@@ -2,6 +2,7 @@
 import { Component } from "@odoo/owl";
 import { _t } from "@web/core/l10n/translation";
 import { showProjects } from "../../core/platform_config";
+import { bottomNavSection } from "../../core/nav_sections";
 
 export class BottomNav extends Component {
     static template = "woow_paas_platform.BottomNav";
@@ -19,23 +20,8 @@ export class BottomNav extends Component {
         return !item.requiresProjects || showProjects();
     }
 
+    /** #1310：判準集中在 core/nav_sections.js，財務子頁一律亮「Billing」。 */
     isActive(item) {
-        const current = this.props.router.current;
-        if (item.path === "projects") {
-            return current === "ai-projects"
-                || current === "ai-tasks"
-                || current === "ai-task-detail"
-                || current === "ai-chat"
-                || current === "ai-project-kanban";
-        }
-        if (item.path === "workspaces") {
-            return current === "workspaces"
-                || current === "workspace-detail"
-                || current === "workspace-team"
-                || current === "marketplace"
-                || current === "configure"
-                || current === "service-detail";
-        }
-        return current === item.path;
+        return bottomNavSection(this.props.router.current) === item.path;
     }
 }

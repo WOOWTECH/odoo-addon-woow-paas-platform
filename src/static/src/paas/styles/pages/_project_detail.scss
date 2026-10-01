@@ -1,10 +1,18 @@
 .o_woow_project_detail {
     padding: 24px;
 
+    // #1310：手機上 .o_woow_content 已有 1rem 內距，避免雙重左右內距
+    @media (max-width: $woow-bp-md) {
+        padding-left: 0;
+        padding-right: 0;
+    }
+
     &__header {
         display: flex;
         justify-content: space-between;
         align-items: center;
+        flex-wrap: wrap; // #1310
+        gap: 12px;
         margin-bottom: 24px;
     }
 
@@ -12,16 +20,19 @@
         display: flex;
         align-items: center;
         gap: 12px;
+        min-width: 0; // #1310
 
         h1 {
             margin: 0;
             font-size: 24px;
             font-weight: 600;
+            overflow-wrap: anywhere; // #1310
         }
     }
 
     &__header_actions {
         display: flex;
+        flex-wrap: wrap; // #1310
         gap: 8px;
     }
 
@@ -51,6 +62,7 @@
 
     &__section_actions {
         display: flex;
+        flex-wrap: wrap; // #1310
         gap: 8px;
     }
 

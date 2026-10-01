@@ -3,11 +3,13 @@
   &__header {
     display: flex;
     align-items: flex-start;
+    flex-wrap: wrap; // #1310：窄畫面時操作按鈕換到下一行
     gap: 1rem;
     margin-bottom: 1.5rem;
   }
 
   &__icon {
+    flex-shrink: 0;
     width: 56px;
     height: 56px;
     border-radius: $woow-radius-default;
@@ -19,11 +21,14 @@
   }
 
   &__title {
-    flex: 1;
+    // #1310：12rem 基準——剩餘寬度不足時讓 __actions 換行，而不是把標題擠扁
+    flex: 1 1 12rem;
+    min-width: 0;
     h1 {
       font-family: $woow-font-display;
       margin: 0 0 0.25rem;
       cursor: pointer;
+      overflow-wrap: anywhere;
     }
   }
 
@@ -43,6 +48,7 @@
 
   &__actions {
     display: flex;
+    flex-wrap: wrap; // #1310
     gap: 0.5rem;
   }
 
@@ -117,12 +123,13 @@
 // 對齊素材的共用 / Application / Access 樣式
 .o_woow_sa_card_head {
   display: flex; align-items: flex-start; gap: 0.75rem; margin-bottom: 1rem;
+  flex-wrap: wrap; // #1310：額度＋「立即檢查」放不下時換到下一行靠右
   &__icon { flex: 0 0 auto; width: 36px; height: 36px; border-radius: $woow-radius-default; background: rgba($woow-primary, 0.1); color: $woow-primary; display: flex; align-items: center; justify-content: center; }
-  &__text { flex: 1; min-width: 0;
+  &__text { flex: 1 1 12rem; min-width: 0;
     h3 { font-family: $woow-font-display; margin: 0 0 0.25rem; }
     p { margin: 0; color: $woow-text-secondary; font-size: 0.875rem; } }
   /* #1234：卡頭右側的額度與「立即檢查」。 */
-  &__aside { flex: 0 0 auto; display: flex; align-items: center; gap: 0.5rem; }
+  &__aside { flex: 0 0 auto; display: flex; align-items: center; gap: 0.5rem; margin-left: auto; }
 }
 // 共用小按鈕：本頁的 routes table、AddPolicyModal 與抽出去的 AccessAppCard
 // 都用它。刻意留在這裡（bundle 是全域的，三處都吃得到），搬家會變成「這顆通用
@@ -138,6 +145,16 @@
   &__icon { flex: 0 0 auto; width: 32px; height: 32px; border-radius: $woow-radius-default; background: rgba($woow-primary, 0.1); color: $woow-primary; display: flex; align-items: center; justify-content: center; }
   p { margin: 0; color: $woow-text-secondary; font-size: 0.875rem; line-height: 1.55; }
 }
+/* #1310：routes 表有 6 欄，手機上放不下——外包一層橫向捲動容器，
+   並給表格最小寬度，避免 hostname（break-all）被擠成一欄一兩個字。 */
+.o_woow_sa_routes_table_scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+
+  @media (max-width: $woow-bp-md) {
+    .o_woow_sa_routes_table { min-width: 36rem; }
+  }
+}
 .o_woow_sa_routes_table {
   width: 100%; border-collapse: collapse;
   thead th { text-align: left; padding: 0.5rem 0.5rem; border-bottom: 1px solid $woow-border-light; text-transform: uppercase; letter-spacing: 0.04em; font-size: 0.6875rem; font-weight: 600; color: $woow-text-secondary; }
@@ -152,13 +169,24 @@
   &__suffix { display: flex; align-items: center; padding: 0 0.75rem; background: rgba(0,0,0,0.03); color: $woow-text-secondary; font-family: 'Monaco','Menlo',monospace; font-size: 0.8125rem; white-space: nowrap; }
   &__svc { flex: 1 1 200px; min-width: 160px; }
   &__rule { display: flex; align-items: center; gap: 0.375rem; margin-top: 0.625rem; color: $woow-text-secondary; font-size: 0.8125rem; strong { color: $woow-text-primary; font-weight: 600; } }
+
+  /* #1310：手機上 prefix 欄與 service URL 各占一整列；min-width 180px/160px
+     在 320px 寬會把列撐出卡片。平台網域後綴允許在任意字元換行。 */
+  @media (max-width: $woow-bp-sm) {
+    &__prefix,
+    &__svc { flex-basis: 100%; min-width: 0; }
+    &__prefix_input { min-width: 5rem; }
+    .o_woow_sa_add_route__prefix .o_woow_sa_add_route__suffix { white-space: normal; overflow-wrap: anywhere; }
+  }
 }
 // AccessAppCard（.o_woow_sa_app / _switch / _login_pill* / _policy* /
 // _spinner / .o_woow_sa_access）的樣式已於 #746 隨元件搬到
 // components/access/AccessAppCard.scss——SA 與 Cloud Service 兩個 surface
 // 共用同一張卡，樣式跟著元件走。
 .o_woow_sa_policy_modal {
-  .o_woow_sa_action_seg { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0.75rem; }
+  .o_woow_sa_action_seg { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0.75rem;
+    // #1310：手機上三張 Allow／Deny／Bypass 卡改單欄
+    @media (max-width: $woow-bp-sm) { grid-template-columns: minmax(0, 1fr); } }
   .o_woow_sa_action_card {
     display: flex; flex-direction: column; gap: 0.25rem; padding: 0.875rem 1rem; border: 1.5px solid $woow-border-light; border-radius: $woow-radius-default; background: $woow-card-light; cursor: pointer; text-align: left; transition: all 0.15s ease;
     &:hover { border-color: rgba(0,0,0,0.12); }
@@ -176,6 +204,11 @@
     display: flex; align-items: center; gap: 0.5rem; margin-top: 0.5rem;
     &__type { flex: 0 0 200px; }
     &__value { flex: 1; min-width: 0; }
+    // #1310：手機上規則類型選單獨占一列，值＋移除鈕在下一列
+    @media (max-width: $woow-bp-sm) {
+      flex-wrap: wrap;
+      &__type { flex-basis: 100%; }
+    }
   }
   .o_woow_sa_add_rule_btn {
     display: inline-flex; align-items: center; gap: 0.25rem; margin-top: 0.5rem; padding: 0.375rem 0.625rem; border: 1px dashed $woow-border-light; border-radius: $woow-radius-default; background: transparent; color: $woow-text-secondary; cursor: pointer; font-size: 0.8125rem;
@@ -208,6 +241,8 @@
   font-family: $woow-font-display;
   font-weight: 600;
   color: $woow-text-primary;
+  min-width: 0; // #1310：長名稱換行
+  overflow-wrap: anywhere;
 }
 
 .o_woow_security_access_card_host {

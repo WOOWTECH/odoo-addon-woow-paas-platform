@@ -1,6 +1,7 @@
 /** @odoo-module **/
 import { Component, useState, onMounted } from "@odoo/owl";
 import { _t } from "@web/core/l10n/translation";
+import { workspaceService } from "../../services/workspace_service";
 import { WoowCard } from "../../components/card/WoowCard";
 import { WoowIcon } from "../../components/icon/WoowIcon";
 import { WoowButton } from "../../components/button/WoowButton";
@@ -140,8 +141,20 @@ export class SubscriptionListPage extends Component {
     this.loadSubscriptions();
   }
 
-  goToMarketplace() {
-    this.router.navigate("workspaces");
+  /**
+   * #1310：原本一律導到工作區清單，與「New Subscription」字面不符。
+   * 只有一個工作區時直接進它的應用市集；多個工作區才讓使用者先選工作區。
+   */
+  async goToMarketplace() {
+    if (!workspaceService.workspaces.length) {
+      await workspaceService.fetchWorkspaces();
+    }
+    const active = workspaceService.workspaces;
+    if (active.length === 1) {
+      this.router.navigate(`workspace/${active[0].id}/services/marketplace`);
+    } else {
+      this.router.navigate("workspaces");
+    }
   }
 
   goBack() {
