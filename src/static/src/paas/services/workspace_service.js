@@ -172,8 +172,12 @@ export const workspaceService = reactive({
 
     /**
      * Delete (archive) a workspace
+     *
+     * #1295：工作區底下還有未刪除的服務時後端拒絕封存，回
+     * `code: "workspace_has_services"` 與 `data.services`（`[{type, id, name, state}]`），
+     * 這裡原樣帶出 `code` / `services` 讓呼叫端列出要先刪除的服務。
      * @param {number} workspaceId - Target workspace ID
-     * @returns {Promise<ApiResponse<void>>}
+     * @returns {Promise<{success: boolean, error?: string, code?: string, services?: Array<Object>}>}
      */
     async deleteWorkspace(workspaceId) {
         this.operationLoading.delete = true;
@@ -186,7 +190,12 @@ export const workspaceService = reactive({
                 this.workspaces = this.workspaces.filter(w => w.id !== workspaceId);
                 return { success: true };
             } else {
-                return { success: false, error: result.error };
+                return {
+                    success: false,
+                    error: result.error,
+                    code: result.code || null,
+                    services: (result.data && result.data.services) || [],
+                };
             }
         } catch (err) {
             return { success: false, error: err.message };

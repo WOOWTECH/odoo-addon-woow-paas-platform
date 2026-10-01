@@ -1,0 +1,95 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+  <t t-name="woow_paas_platform.DeleteWorkspaceModal">
+    <div class="o_woow_modal_backdrop" t-on-click="onBackdropClick">
+      <div class="o_woow_modal o_woow_modal_sm o_woow_delete_workspace_modal" t-on-click.stop="">
+        <div class="o_woow_modal_header">
+          <h2>Delete Workspace</h2>
+          <button
+            class="o_woow_modal_close"
+            t-on-click="props.onClose"
+            t-att-disabled="state.deleting">
+            <WoowIcon name="'close'" size="20"/>
+          </button>
+        </div>
+
+        <div class="o_woow_modal_body">
+          <!-- #1295：後端拒絕封存——列出要先刪除的服務 -->
+          <t t-if="hasBlockingServices">
+            <div class="o_woow_delete_workspace_blocked">
+              <WoowIcon name="'block'" size="40"/>
+              <p class="o_woow_delete_workspace_blocked_title">This workspace still has services that have not been deleted.</p>
+              <p class="o_woow_delete_hint">Delete the following services first, then delete the workspace.</p>
+            </div>
+            <ul class="o_woow_delete_workspace_services">
+              <li t-foreach="state.blockingServices" t-as="service" t-key="service.type + '-' + service.id">
+                <button type="button"
+                        class="o_woow_delete_workspace_service"
+                        t-on-click="() => this.goToService(service)">
+                  <span class="o_woow_delete_workspace_service_type" t-esc="serviceTypeLabel(service.type)"/>
+                  <span class="o_woow_delete_workspace_service_name" t-esc="service.name"/>
+                  <WoowIcon name="'chevron_right'" size="18"/>
+                </button>
+              </li>
+            </ul>
+          </t>
+
+          <t t-else="">
+            <div class="o_woow_delete_warning">
+              <WoowIcon name="'warning'" size="48"/>
+              <p>Are you sure you want to delete this workspace?</p>
+              <p class="o_woow_delete_hint">The workspace will be archived and removed from your workspace list. This cannot be undone from the workspace pages.</p>
+              <p class="o_woow_delete_hint">A workspace can only be deleted after every service in it has been deleted.</p>
+            </div>
+
+            <div class="o_woow_form_group o_woow_confirm_input">
+              <label for="confirm_workspace_name">Enter the workspace name to confirm</label>
+              <p class="o_woow_delete_workspace_name" t-esc="props.workspace.name"/>
+              <input
+                type="text"
+                id="confirm_workspace_name"
+                class="o_woow_input"
+                t-att-placeholder="props.workspace.name"
+                t-att-value="state.confirmName"
+                t-on-input="onConfirmNameInput"
+                t-att-disabled="state.deleting"
+                autocomplete="off"
+              />
+            </div>
+
+            <div t-if="state.error" class="o_woow_error_message">
+              <WoowIcon name="'error'" size="16"/>
+              <span t-esc="state.error"/>
+            </div>
+          </t>
+        </div>
+
+        <div class="o_woow_modal_footer">
+          <WoowButton
+            variant="'secondary'"
+            size="'md'"
+            onClick="props.onClose"
+            disabled="state.deleting">
+            <t t-if="hasBlockingServices">Close</t>
+            <t t-else="">Cancel</t>
+          </WoowButton>
+          <WoowButton
+            t-if="!hasBlockingServices"
+            variant="'danger'"
+            size="'md'"
+            onClick.bind="onDelete"
+            disabled="!canDelete or state.deleting">
+            <t t-if="state.deleting">
+              <WoowIcon name="'sync'" size="18" class="'o_woow_spin'"/>
+              Deleting...
+            </t>
+            <t t-else="">
+              <WoowIcon name="'delete'" size="18"/>
+              Delete Workspace
+            </t>
+          </WoowButton>
+        </div>
+      </div>
+    </div>
+  </t>
+</templates>

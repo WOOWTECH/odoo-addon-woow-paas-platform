@@ -1,0 +1,77 @@
+// =============================================================================
+// Delete Workspace Modal Styles（#1295）
+// 確認區沿用 DeleteServiceModal 的 .o_woow_delete_warning / .o_woow_confirm_input
+// =============================================================================
+
+.o_woow_delete_workspace_modal {
+  .o_woow_delete_workspace_name {
+    margin: 0 0 0.5rem;
+    color: #ef4444;
+    font-family: 'Monaco', 'Menlo', monospace;
+    font-size: 0.9em;
+    word-break: break-all;
+  }
+
+  .o_woow_delete_workspace_blocked {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    gap: 0.5rem;
+    color: #f59e0b;
+
+    p {
+      margin: 0;
+    }
+  }
+
+  .o_woow_delete_workspace_blocked_title {
+    color: $woow-text-primary;
+    font-weight: 600;
+  }
+
+  .o_woow_delete_workspace_services {
+    list-style: none;
+    margin: 1.25rem 0 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .o_woow_delete_workspace_service {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.75rem 1rem;
+    border: 1px solid rgba(148, 163, 184, 0.35);
+    border-radius: 8px;
+    background: transparent;
+    color: $woow-text-primary;
+    text-align: left;
+    cursor: pointer;
+
+    &:hover {
+      border-color: #ef4444;
+      background: rgba(239, 68, 68, 0.05);
+    }
+  }
+
+  .o_woow_delete_workspace_service_type {
+    flex-shrink: 0;
+    font-size: 0.8em;
+    padding: 0.125rem 0.5rem;
+    border-radius: 999px;
+    background: rgba(148, 163, 184, 0.2);
+  }
+
+  .o_woow_delete_workspace_service_name {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-weight: 500;
+  }
+}
