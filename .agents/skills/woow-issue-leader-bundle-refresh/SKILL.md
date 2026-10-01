@@ -67,9 +67,12 @@ unsafe archive 即 `BLOCKED`，不刪條目／放寬 validator 來湊相同 hash
 首次通知及 shared-agent collateral impact。Explicit roots 也要列入 bundle 影響，雖然它們
 優先於 auto rule。預覽方法與 runtime gates 見 reference。
 
-**完成判據**：沒有未分類的受影響 session，scope 與前後 groups 都清楚；busy、pending、
-dispatching、offline／需恢復 runner 或非預期 match 一律 `BLOCKED`，不自行改 metadata
-或喚醒。回報具體 IDs，讓 owner 另案決定；處理完需重做本計畫。
+**完成判據**：所有 shared bindings（含 archived／非 admission）與受影響 descendants 都已
+依 [runtime gates](references/runtime-gates.md) 分類並附新鮮證據、scope／前後 groups 與切換安排。
+`active`／`unknown` 一律 `BLOCKED`；`idle-online` 需具體 cold-cut 方案；符合全部證據的
+`dormant-offline` 可規劃 stored-only 更新，保持 offline，不需為過 gate 喚醒或封存。
+分類不是 apply 授權；Step 4 必須核准具體 IDs、方案與 plan digest。需 recovery、封存或停
+REPL 時，另案授權並完成後重做 plan；未預期 match／collateral 仍停止，不自行改 metadata。
 
 ## 4. 交付 plan，停在 owner gate
 
@@ -87,7 +90,8 @@ dispatching、offline／需恢復 runner 或非預期 match 一律 `BLOCKED`，�
 ## 5. Apply 與驗收
 
 只有 owner 核准後才讀取並執行 [apply／rollback recipe](references/operations.md#apply)。
-先重驗 plan digest 與 before 條件；任一內容、scope、版本、binding 或 config 有變就重新規劃。
+先重驗 plan digest 與 before 條件，依 runtime gates 重做分類與 evidence／冷切換前置查核；
+任一內容、scope、版本、binding、活動分類或 config 有變就重新規劃。
 先排空並停指定 bridge，再 PUT／核對 stored bundle、精準更新 rule、恢復同一 bridge，避免
 仍運作的 registrar 在 bundle／policy 過渡不一致期間先撤權。不得用換 ledger 來通過檢查。
 
@@ -98,6 +102,10 @@ notification IDs 保留，沒有重播，未核准 roots 沒有新增 capability
 回報 `DEPLOYED`、`NO-OP`、`BLOCKED` 或 `PARTIAL/UNKNOWN`，附 source／agent version、指紋、
 active config／backup／evidence 路徑、before/after PID、admission delta 及消費結果。後者未證實
 就寫「未證實」，不補發控制訊息湊 PASS。保留 artifacts／candidates，清理另案。
+
+Stored-only 驗收必須分列 stored bundle／admission continuity 與尚未驗證的 runtime 載入。
+Dormant sessions 保持 offline；下次使用前重驗 agent version、harness、model override 與載入
+契約。Fresh-session／model／pricing 驗證仍另案授權，不因 gate 修訂而自動解除。
 
 Stored bundle 驗證不是 live context attestation；本 skill 不修 hot reload、OAuth refresh、
 同 UID 的 OS 隔離或開機常駐，也不保證 LLM 永遠依約執行。

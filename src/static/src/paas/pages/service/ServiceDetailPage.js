@@ -279,11 +279,19 @@ export class ServiceDetailPage extends Component {
     }
 
     /**
-     * 「租戶自設帳密」的顯示判準：鏡射 payload 的 template.admin_username_editable
-     * （＝後端 template.admin_username_helm_path，與 admin-credentials endpoint 的
+     * 「租戶自設帳密」的顯示判準：鏡射 payload 的 template.admin_credentials_settable
+     * （＝後端 template.admin_credentials_settable，與 admin-credentials endpoint 的
      * 能力 gate 同一個欄位）。fail-closed：欄位缺席一律 false，退回原本的 Reset 按鈕。
      */
     get canEditAdminCredentials() {
+        return this.service?.template?.admin_credentials_settable === true;
+    }
+
+    /**
+     * 對話框要不要出現帳號欄：鏡射 template.admin_username_editable（＝後端
+     * admin_username_helm_path）。只有密碼的服務（code-server）為 false。
+     */
+    get canEditAdminUsername() {
         return this.service?.template?.admin_username_editable === true;
     }
 

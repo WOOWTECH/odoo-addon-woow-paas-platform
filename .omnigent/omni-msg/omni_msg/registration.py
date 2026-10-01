@@ -14,8 +14,10 @@ import time
 import urllib.parse
 import uuid
 from pathlib import Path
+from collections import deque
 
 from .bridge import ALIAS, SESSION
+from .discovery_reads import MAX_PARALLEL_READS, read_batch
 from .root_admission import MAX_BUNDLE_BYTES, RootAdmission, phase_rejection
 from .transport import (
     MAX_METADATA_BYTES,
@@ -29,7 +31,7 @@ from .transport import (
 MAX_SESSIONS = 1024
 MAX_GROUP_MEMBERS = 128
 MAX_DEPTH = 16
-SCAN_SECONDS = 20
+DEFAULT_SCAN_SECONDS = 60
 
 
 def poll_seconds(value) -> float:
@@ -40,6 +42,16 @@ def poll_seconds(value) -> float:
     if not math.isfinite(number) or not 0.1 <= number <= 60:
         raise ValueError("poll-seconds 必須介於 0.1..60")
     return number
+
+
+def scan_seconds(value) -> float:
+    """整輪 discovery budget 保持有限，避免串行 GET 被舊 20 秒上限截斷。"""
+    if isinstance(value, bool):
+        raise ValueError("scan-seconds 必須介於 1..120")
+    value = float(value)
+    if not math.isfinite(value) or not 1 <= value <= 120:
+        raise ValueError("scan-seconds 必須介於 1..120")
+    return value
 
 
 def validate_roots(roots, *, allow_empty=False):
@@ -92,9 +104,11 @@ def atomic_json(path, value, *, replace=True):
 class Registrar:
     """從 server lineage 建立完整 ACL snapshot；HTTP 不提供 registration endpoint。"""
 
-    def __init__(self, roots, interval, bridge, state_dir, port, *, rules=None):
+    def __init__(self, roots, interval, bridge, state_dir, port, *, rules=None,
+                 scan_budget=DEFAULT_SCAN_SECONDS):
         self.roots = validate_roots(roots, allow_empty=rules is not None)
         self.interval = poll_seconds(interval)
+        self.scan_budget = scan_seconds(scan_budget)
         self.bridge = bridge
         self.store = bridge.store
         self.transport = bridge.transport
@@ -186,6 +200,9 @@ class Registrar:
             **phase_rejection(reason, "session_metadata", error),
         })
 
+    def _read_tree_detail(self, entry, deadline):
+        return self._get(f"/v1/sessions/{entry[0]}?include_items=false", deadline)
+
     def _discover(self, deadline):
         members, seen = [], set()
         roots, proofs = dict(self.roots), {}
@@ -201,20 +218,25 @@ class Registrar:
                 if alias in roots or len(roots) >= 16:
                     raise MessageError("duplicate_or_oversized_root_admission")
                 roots[alias] = {"session_id": sid, "workspace": proof["workspace"]}
-        for root_alias, plan in roots.items():
-            root_id = plan["session_id"]
-            queue = [(root_id, None, 0)]
-            runner = None
-            group_count = 0
-            while queue:
-                sid, parent, depth = queue.pop()
+        # 全scope按批次讀metadata；授權、children分頁與寫入仍由主執行緒處理。
+        queue = deque((plan["session_id"], None, 0, alias, plan)
+                      for alias, plan in roots.items())
+        runners, group_counts = {}, {}
+        while queue:
+            batch = []
+            while queue and len(batch) < MAX_PARALLEL_READS:
+                entry = queue.popleft()
+                sid, parent, depth, root_alias, plan = entry
                 if sid in seen or len(seen) >= MAX_SESSIONS or depth > MAX_DEPTH:
                     raise MessageError("invalid_or_oversized_session_tree")
                 seen.add(sid)
+                batch.append(entry)
+            for entry, node, error in read_batch(batch, self._read_tree_detail, deadline):
+                sid, parent, depth, root_alias, plan = entry
+                root_id = plan["session_id"]
                 try:
-                    node = self._get(
-                        f"/v1/sessions/{sid}?include_items=false", deadline,
-                    )
+                    if error is not None:
+                        raise error
                 except MessageError as exc:
                     if exc.code == "registration_scan_incomplete":
                         raise
@@ -237,21 +259,21 @@ class Registrar:
                         continue
                     if sid in proofs and any(node.get(k) != v for k, v in proofs[sid].items()):
                         continue
-                    runner = node["runner_id"]
-                elif (node["runner_id"] != runner or
+                    runners[root_id] = node["runner_id"]
+                elif (node["runner_id"] != runners[root_id] or
                       (workspace is not None and (not isinstance(workspace, str)
                        or not Path(workspace).is_absolute() or ".." in Path(workspace).parts
                        or not Path(workspace).is_relative_to(plan["workspace"])))):
                     continue
                 alias = root_alias if parent is None else "session-" + hashlib.sha256(sid.encode()).hexdigest()[:32]
-                group_count += 1
-                if group_count > MAX_GROUP_MEMBERS:
+                group_counts[root_id] = group_counts.get(root_id, 0) + 1
+                if group_counts[root_id] > MAX_GROUP_MEMBERS:
                     raise MessageError("registration_group_limit")
                 members.append({"session_id": sid, "root_id": root_id, "alias": alias, "parent_id": parent})
                 for child in self._children(sid, deadline):
                     if len(queue) + len(seen) >= MAX_SESSIONS:
                         raise MessageError("invalid_or_oversized_session_tree")
-                    queue.append((child, sid, depth + 1))
+                    queue.append((child, sid, depth + 1, root_alias, plan))
         if root_outage is not None and not root_reachable:
             # 連一個 root 層 detail 都取不到且原因是 upstream 不可用：不能發布空 snapshot 造成誤導性 401。
             raise root_outage
@@ -342,14 +364,17 @@ class Registrar:
 
     def refresh(self):
         """一個 bounded reconciliation；snapshot 不完整時 fail closed。"""
-        deadline = time.monotonic() + SCAN_SECONDS
+        deadline = time.monotonic() + self.scan_budget
         try:
             members = self._discover(deadline)
             actors = {m["alias"]: self._credential(m) for m in members}
             for member in members:
                 actors[member["alias"]]["allow"] = [m["alias"] for m in members
                     if m["root_id"] == member["root_id"] and m["alias"] != member["alias"]]
-            lease = max(30, self.interval * 3)
+            # lease 涵蓋本輪剩餘通知時間、下一輪等待與 discovery；失敗仍立即撤權。
+            notice_budget = max(0, deadline - time.monotonic())
+            lease = max(30, self.interval * 3,
+                        notice_budget + self.scan_budget + self.interval)
             self.bridge.replace_actors(actors, time.monotonic() + lease)
             expires = time.time() + lease
             self._status(members, expires=expires)

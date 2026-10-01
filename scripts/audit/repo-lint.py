@@ -4673,6 +4673,16 @@ INTERNAL_CTX_KEY_REGISTRY = {
         "issue": "#524",
         "why": "smart_home 只能從平台開通流程建立的閘。",
     },
+    "woow_security_access_platform_order": {
+        "status": "enforced",
+        "sentinel": "_PLATFORM_SA_ORDER",
+        "defined_in": "src/models/security_access.py",
+        "reader": "_is_sa_platform_order",
+        "issue": "tenant-orm-guards",
+        "why": "security_access 只能從平台下單流程（或 su／group_system）建立的閘；"
+               "缺它時租戶經 call_kw 裸建一筆無訂閱的 SA，再打 /woow provision "
+               "就開出免費的 Cloudflare tunnel（#524 在 smart_home 實測過同一條鏈）。",
+    },
     "woow_smart_home_internal_identity_write": {
         "status": "enforced",
         "sentinel": "_INTERNAL_IDENTITY_WRITE",

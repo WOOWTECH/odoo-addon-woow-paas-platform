@@ -29,38 +29,40 @@ const TABS = [
 // model constraint + availability endpoint enforce the same rule server-side.
 const SUBDOMAIN_RE = /^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/;
 // #1234：route 健康狀態的顯示文字。狀態語意見 services/route_probe.py 的 STATUSES。
+// #1261：三張表原本是裸字串，不會被翻譯（187 正式站實測中文介面仍顯示
+// 「Reachable (200)」「Blocked by Access」）——一律包 _t。
 const ROUTE_HEALTH_LABELS = {
-  ok: "Reachable",
-  access_login: "Login required",
-  access_missing: "Not protected",
-  access_unexpected: "Blocked by Access",
-  tunnel_down: "Connector offline",
-  not_routed: "Not live yet",
-  dns_missing: "DNS not found",
-  origin_error: "Origin error",
-  proxy_no_site: "Proxy has no site",
-  timeout: "No response",
-  unknown: "Unknown",
+  ok: _t("Reachable"),
+  access_login: _t("Login required"),
+  access_missing: _t("Not protected"),
+  access_unexpected: _t("Blocked by Access"),
+  tunnel_down: _t("Connector offline"),
+  not_routed: _t("Not live yet"),
+  dns_missing: _t("DNS not found"),
+  origin_error: _t("Origin error"),
+  proxy_no_site: _t("Proxy has no site"),
+  timeout: _t("No response"),
+  unknown: _t("Unknown"),
 };
 const ROUTE_HEALTH_HINTS = {
-  ok: "Requests pass through Cloudflare and the tunnel, and your service answers.",
-  access_login: "Protected: visitors see the Cloudflare Access login first. This is expected.",
-  access_missing: "This route is set to protected, but no login page is in front of it. Toggle protection off and on in the Access tab, or contact support.",
-  access_unexpected: "This route is public here, but a Cloudflare Access application that this platform does not manage is blocking it. Contact support.",
-  tunnel_down: "No connector is running this tunnel. Check the machine that runs it, or start a connector with the tunnel token.",
-  not_routed: "The hostname does not point to this tunnel yet. Right after creating or renaming a route this can take up to a minute — check again shortly.",
-  dns_missing: "Public DNS has no record for this hostname yet. Wait a minute and check again.",
-  origin_error: "The request reached your machine, but your reverse proxy or service returned an error. Check that the proxy has this hostname and the service is running.",
-  proxy_no_site: "The request reached your machine, but your reverse proxy answered with its default page — it has no site for this hostname. Add this hostname in your proxy (for example Nginx Proxy Manager). This is expected right after renaming a route.",
-  timeout: "Your service did not answer in time. Check that it is running and not overloaded.",
-  unknown: "The check could not complete. Try again in a moment.",
+  ok: _t("Requests pass through Cloudflare and the tunnel, and your service answers."),
+  access_login: _t("Protected: visitors see the Cloudflare Access login first. This is expected."),
+  access_missing: _t("This route is set to protected, but no login page is in front of it. Toggle protection off and on in the Access tab, or contact support."),
+  access_unexpected: _t("This route is public here, but a Cloudflare Access application that this platform does not manage is blocking it. Contact support."),
+  tunnel_down: _t("No connector is running this tunnel. Check the machine that runs it, or start a connector with the tunnel token."),
+  not_routed: _t("The hostname does not point to this tunnel yet. Right after creating or renaming a route this can take up to a minute — check again shortly."),
+  dns_missing: _t("Public DNS has no record for this hostname yet. Wait a minute and check again."),
+  origin_error: _t("The request reached your machine, but your reverse proxy or service returned an error. Check that the proxy has this hostname and the service is running."),
+  proxy_no_site: _t("The request reached your machine, but your reverse proxy answered with its default page — it has no site for this hostname. Add this hostname in your proxy (for example Nginx Proxy Manager). This is expected right after renaming a route."),
+  timeout: _t("Your service did not answer in time. Check that it is running and not overloaded."),
+  unknown: _t("The check could not complete. Try again in a moment."),
 };
 // #1234：流量拿不到時的說明（reason 由後端 _route_traffic 給）。
 const TRAFFIC_UNAVAILABLE_HINTS = {
-  permission: "Traffic data is not available yet: the platform's Cloudflare token lacks analytics access.",
-  operator_outdated: "Traffic data is not available yet: the platform service needs an update.",
-  disabled: "Traffic data is not available on this platform.",
-  error: "Traffic data could not be loaded. Try again later.",
+  permission: _t("Traffic data is not available yet: the platform's Cloudflare token lacks analytics access."),
+  operator_outdated: _t("Traffic data is not available yet: the platform service needs an update."),
+  disabled: _t("Traffic data is not available on this platform."),
+  error: _t("Traffic data could not be loaded. Try again later."),
 };
 
 // 「3 min ago」式的相對時間。刻意不用 Intl／toLocale*（見 locale guard #107）。
@@ -70,13 +72,13 @@ function relativeTime(iso) {
   }
   const minutes = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 60000));
   if (minutes < 1) {
-    return "just now";
+    return _t("just now");
   }
   if (minutes < 60) {
-    return `${minutes} min ago`;
+    return _t("%s min ago", minutes);
   }
   const hours = Math.round(minutes / 60);
-  return hours < 48 ? `${hours} h ago` : `${Math.round(hours / 24)} d ago`;
+  return hours < 48 ? _t("%s h ago", hours) : _t("%s d ago", Math.round(hours / 24));
 }
 
 // 黃色（使用者多半只要等一下）vs 紅色（要動手處理）。
@@ -263,7 +265,7 @@ export class SecurityAccessDetailPage extends Component {
     }
     const r = (t.routes || {})[route.id];
     if (!r || !r.requests) {
-      return "No traffic";
+      return _t("No traffic");
     }
     return `${r.requests} · ${relativeTime(r.last_request_at)}`;
   }
@@ -278,10 +280,21 @@ export class SecurityAccessDetailPage extends Component {
     }
     const r = (t.routes || {})[route.id];
     if (!r || !r.requests) {
-      return `No requests reached this hostname in the last ${t.window_hours || 24} hours.`;
+      return _t("No requests reached this hostname in the last %s hours.", t.window_hours || 24);
     }
-    return `Last ${t.window_hours || 24} h: ${r.status_2xx} ok (2xx), ${r.status_3xx} redirect, ` +
-      `${r.status_4xx} client error (4xx), ${r.status_5xx} server error (5xx).`;
+    return _t(
+      "Last %(hours)s h: %(ok)s ok (2xx), %(redirect)s redirect, %(client)s client error (4xx), %(server)s server error (5xx).",
+      {
+        hours: t.window_hours || 24, ok: r.status_2xx, redirect: r.status_3xx,
+        client: r.status_4xx, server: r.status_5xx,
+      }
+    );
+  }
+
+  // #1261：Host header 欄原本在樣板裡寫 `'Yes' : 'No'`，樣板運算式裡的字串
+  // 不會被抽成翻譯。
+  hostHeaderLabel(route) {
+    return route.http_host_header ? _t("Yes") : _t("No");
   }
 
   routeHealthOf(route) {
@@ -291,7 +304,7 @@ export class SecurityAccessDetailPage extends Component {
   routeHealthLabel(route) {
     const h = this.routeHealthOf(route);
     if (!h) {
-      return this.state.healthLoading ? "Checking…" : "—";
+      return this.state.healthLoading ? _t("Checking…") : "—";
     }
     const code = h.http_code ? ` (${h.http_code})` : "";
     return (ROUTE_HEALTH_LABELS[h.status] || ROUTE_HEALTH_LABELS.unknown) +
@@ -336,6 +349,7 @@ export class SecurityAccessDetailPage extends Component {
   // ---- header actions ----
   startEditName() {
     this.state.nameDraft = this.state.sa.name;
+    this.nameEditCancelled = false;
     this.state.editingName = true;
   }
 
@@ -345,13 +359,27 @@ export class SecurityAccessDetailPage extends Component {
     // so there is exactly one save path.
     if (ev.key === "Enter") {
       ev.target.blur();
+    } else if (ev.key === "Escape") {
+      // #1261：原本只處理 Enter——按 Esc 輸入框還開著，之後任何 blur 都會把
+      // 打錯的名稱存進去（2026-09-30 正式站實測）。先立旗標再關編輯：輸入框
+      // 被移除時瀏覽器可能仍送出 blur，saveName 看到旗標就不送出。
+      this.nameEditCancelled = true;
+      this.state.nameDraft = this.state.sa.name;
+      this.state.editingName = false;
     }
   }
 
   async saveName() {
+    const name = (this.state.nameDraft || "").trim();
+    if (this.nameEditCancelled || !name || name === this.state.sa.name) {
+      // 取消、空白或沒改：不打 API，直接收起編輯。
+      this.nameEditCancelled = false;
+      this.state.editingName = false;
+      return;
+    }
     const res = await securityAccessService.update(
       this.props.workspaceId, this.props.saId,
-      { name: this.state.nameDraft.trim() });
+      { name });
     if (res.success) {
       this.state.sa = res.data;
       this.state.editingName = false;

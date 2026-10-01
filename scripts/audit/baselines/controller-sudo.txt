@@ -7,7 +7,7 @@
 27	src/controllers/billing.py
 7	src/controllers/dashboard.py
 2	src/controllers/ecpg_callback.py
-6	src/controllers/ha_api.py
+7	src/controllers/ha_api.py
 12	src/controllers/ha_paas.py
 15	src/controllers/oauth2.py
 30	src/controllers/paas.py

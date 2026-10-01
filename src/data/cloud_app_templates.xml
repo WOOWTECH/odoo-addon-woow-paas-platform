@@ -1700,6 +1700,77 @@
             <field name="is_active" eval="True"/>
         </record>
 
+        <!-- code-server —— 2026-09-30 上架 PaaS（elmo 定案：架構比照 omnigent 自帶權限、保留內建
+             pi、比照 open-design 內附 Claude Code；2 vCPU／4 GB／25 GB，4500 pts/mo）。
+             chart：woow-paas-charts charts/code-server 0.1.0；image：paas-odoo-ci code-server/
+             （以 digest 消費 WOOWTECH/Woow_podman_code_server_package 的 woow-code-server-amd64，
+             PARITY_CONTRACT 1.1：code-server 4.139.1、pi 0.99.1＋pi-acp、Claude Code 2.1.285＋
+             claude-agent-acp；PaaS 層加內建擴充、繁中語言包、omnigent CLI）。
+             image 釘 20260930.2345@sha256:e8fc6079…（paas-odoo-ci #181，核可 #180：ACP 側欄只列 pi／claude、
+             刪掉內建 Copilot Chat）＋ chart 0.1.1（woow-paas-charts #97：必要設定加 chat.disableAIFeatures）；
+             前一版 20260930.1503@sha256:cd7590ba…＋chart 0.1.0（#175／#176，核可 #177）。
+             test_code_server_seed.test_listed_only_when_pinned 守線：上架 ⟹ 雙釘。
+             上架：2026-09-30 在 dev-sandbox 以 chart 0.1.0＋此 image 實測（密碼登入／錯密碼拒絕、
+             繁中介面、換密碼不動 pod template、選填金鑰與 OpenRouter 路由、git token 只給
+             github.com、重啟後自裝擴充與設定保留、pi 與 claude 兩個 ACP agent）後公開。
+             認證：code-server 自己的密碼登入（沒有帳號、沒有 auth-proxy；內建登入限流）。密碼就是
+             平台供給的 config.sensitive.admin_password（helm_secret 載體），chart 以 env PASSWORD
+             帶入；code-server 沒有 app 內改密碼，平台是唯一權威 ⇒ Reset 與「自設密碼」都走
+             helm upgrade ＋ rollout restart（chart 刻意讓密碼變更不改 pod template）。只有密碼、
+             沒有帳號 ⇒ admin_password_settable=True、不設 admin_username_helm_path。
+             選填金鑰（helm_value_specs）：auth.anthropicApiKey（Claude Code）、
+             auth.openrouterApiKey（pi；未填 Anthropic 時 Claude Code 也走 OpenRouter）、
+             auth.gitToken（git credential helper，預設只給 github.com）。都進 chart Secret、
+             改了會重啟 pod。
+             對外網址：_inject_allowed_origins 注入 codeServer.publicUrl（chart 取 host 當
+             code-server 的 trusted-origins 參數）。
+             T1 = 2 vCPU / 4 Gi / 25 Gi：workspace 20Gi（/workspace）＋ pi-data 5Gi（pi／Claude
+             Code 登入、sessions、IDE 設定、租戶自裝擴充）。容器 limits 2 CPU／4 Gi（＋ pi-seed
+             init 0.5／256Mi，只在啟動時跑）＜ quota 3×。 -->
+        <record id="cloud_app_code_server" model="woow_paas_platform.cloud_app_template">
+            <field name="name">Code Server</field>
+            <field name="slug">code-server</field>
+            <field name="description">瀏覽器版 VS Code 雲端開發環境：內建 pi 與 Claude Code 兩個 AI 助手、繁體中文介面，程式碼存在你的持久磁碟。2 vCPU／4 GB RAM／25 GB 磁碟</field>
+            <field name="full_description">Code Server 雲端開發環境：在瀏覽器裡使用完整的 VS Code（code-server），
+                程式碼與設定保存在你的持久磁碟上（工作區 20 GB＋AI 助手資料 5 GB），介面預設繁體中文。
+                **內建 AI 助手**：側欄聊天可選 pi 或 Claude Code，終端機也可直接執行 `pi`、`claude`；
+                另附 Claude Code 官方擴充。Claude Code 可用訂閱帳號在終端機 `claude` 登入，或於服務設定
+                填入 Anthropic API Key；也可填 OpenRouter API Key（pi 使用，未填 Anthropic 時 Claude Code
+                也改走 OpenRouter）。可選填 Git Token，推送 GitHub 免再輸入帳密。另內建 omnigent 指令，
+                可把這台接成同工作區 Omnigent 的工作機。**密碼登入**：沒有帳號，密碼於開通時一次性顯示；
+                可在服務頁「Admin Credentials」重設或改成自己的密碼，修改後服務重啟約一分鐘生效。
+                自行安裝的擴充會保留在磁碟上。欠費停權時服務停止（磁碟保留），恢復繳費後資料原樣還在；
+                刪除服務即全新開通，原磁碟依平台保留政策 7 天後回收。</field>
+            <field name="category">ai_llm</field>
+            <field name="tags">["code-server", "vscode", "ide", "pi-agent", "claude-code", "ai"]</field>
+            <field name="documentation_url">https://github.com/WOOWTECH/Woow_k3s_code_server_package#readme</field>
+            <field name="helm_repo_url"></field>
+            <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/code-server</field>
+            <field name="helm_chart_version">0.1.1</field>
+            <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/code-server","tag":"20260930.2345@sha256:e8fc60795a8c0e73e66e2a73b650c4b9f7b0f452b3d0b6ec04ded60981438ee2"},"codeServer":{"locale":"zh-tw","resources":{"requests":{"cpu":"500m","memory":"1Gi"},"limits":{"cpu":"2","memory":"4Gi"}}},"persistence":{"workspace":{"size":"20Gi"},"piData":{"size":"5Gi"}},"service":{"port":8080,"targetPort":8080}}</field>
+            <field name="helm_value_specs">{"required": [], "optional": [
+                {"key": "auth.anthropicApiKey", "label": "Anthropic API Key", "type": "password",
+                "description": "Claude Code 使用的 API Key（選填）；留空則在終端機執行 claude 以訂閱帳號登入（登入狀態存在磁碟）"},
+                {"key": "auth.openrouterApiKey", "label": "OpenRouter API Key", "type": "password",
+                "description": "pi 使用的 OpenRouter Key（選填）；未填 Anthropic API Key 時，Claude Code 也改經 OpenRouter 連線"},
+                {"key": "auth.gitToken", "label": "Git Token", "type": "password",
+                "description": "GitHub 個人存取權杖（選填）；git 推送／拉取 github.com 時自動帶入，不寫入磁碟"}
+                ]}</field>
+            <field name="default_port">8080</field>
+            <field name="ingress_enabled" eval="True"/>
+            <field name="min_vcpu">2</field>
+            <field name="min_ram_gb">4.0</field>
+            <field name="min_storage_gb">25</field>
+            <field name="mcp_enabled" eval="False"/>
+            <field name="has_admin_gui" eval="True"/>
+            <field name="admin_password_carrier">helm_secret</field>
+            <field name="admin_password_settable" eval="True"/>
+            <field name="post_deploy_init_type">none</field>
+            <field name="max_per_partner" eval="0"/>
+            <field name="is_hidden" eval="False"/>
+            <field name="is_active" eval="True"/>
+        </record>
+
 
         <!-- Healer: DBs first installed under the historical <data noupdate="1"> block
              carry a sticky ir.model.data.noupdate flag on these seeds, so the corrected

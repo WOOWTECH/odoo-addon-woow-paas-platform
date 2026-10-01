@@ -81,7 +81,7 @@ SHELL_TOOLS = ["Bash", "Shell", "bash", "developer__shell", "shell", "sys_os_she
 WRITE_TOOLS = ["sys_os_write", "sys_os_edit", "Write", "Edit", "MultiEdit", "write", "edit"]
 
 # ── 快層 model ───────────────────────────────────────────────────────────────
-# scout／tracker／researcher 的 model 由 ROSTER 釘在快層（gpt-5.6-luna／terra）。
+# scout／tracker／researcher 的 model 由 ROSTER 釘在快層（gpt-6-luna／gpt-5.6-terra）。
 # 舊的 P-model CEL 已於 2026-09-14 退役（見 README §已廢止的設計 第 5 條）：它的 agent  # legacy-ok
 # regex 只認 `<role>_via_(cc|pi)` 這種靜態 sub-agent 時代的名字，對 `_safe_name()` 產的
 # `explore_pi`／`tracker_pi`／`researcher_pi` 零命中，實際從未擋過任何事件；而且它的
@@ -533,10 +533,12 @@ P_ESCAPE = _cel_yaml("p_escape_obfuscated_command", CEL_ESCAPE)
 P_BOARD = _cel_yaml("p_board_read_only", CEL_BOARD)
 P_KUBECTL = _cel_yaml("p_kubectl_namespace_scope", CEL_KUBECTL)
 
+# #1277：只限制每輪 session 建立；sys_session_send 送工單與續談不消耗配額。
+# 這不是 active worker 上限；request（含 wake notice）會重設內建 policy 的計數。
 P_LEADER_ORCH = [
     _fn_policy("spawn_bounds", "omnigent.policies.builtins.orchestration.spawn_bounds",
-               {"max_dispatches_per_turn": 6,
-                "dispatch_tools": ["sys_session_send", "sys_session_create"]}),
+               {"max_dispatches_per_turn": 12,
+                "dispatch_tools": ["sys_session_create"]}),
     _fn_policy("headless_subagent_purpose_guard",
                "omnigent.policies.builtins.orchestration.headless_subagent_purpose_guard",
                {"allowed_purposes": ["implement", "review", "explore", "search",
@@ -633,17 +635,18 @@ ASK_TIMEOUT = 900
 #   - `ops_k8s` **固定 claude-native**：pi 沒有 hook 機制（`pi --help | grep -ci hook` = 0），
 #     換成 pi 會讓 dispatcher 失效 ⇒ repo 的 kubectl-ns-guard 拿不回來。
 #
-#: 實際可用的 model（`sys_list_models` 實測）。改這裡就是改全樹。
+#: 可用 model 清單（#1277 owner 提供；本次未逐一實跑）。改這裡就是改全樹。
 # `gpt-5.4-mini` 不列：Codex 以 ChatGPT 帳號拒絕 mini（2026-09-11 probe 1 實證）。
-PI_MODELS = ["gpt-5.3-codex-spark", "gpt-5.4", "gpt-5.5", "gpt-5.6-luna",
-             "gpt-5.6-sol", "gpt-5.6-terra", "gpt-6-astra"]
-CC_MODELS = ["claude-opus-5", "claude-fable-5-1", "claude-sonnet-5", "claude-fable-5-1[1m]"]
+PI_MODELS = ["gpt-6.1-sol", "gpt-6-astra", "gpt-6-luna", "gpt-6-sol",
+             "gpt-5.6-luna", "gpt-5.6-sol", "gpt-5.6-terra"]
+CC_MODELS = ["claude-opus-5-5[1m]", "claude-fable-5-1[1m]", "claude-sonnet-5-5[1m]",
+             "claude-opus-5-5", "claude-fable-5-1", "claude-sonnet-5-5"]
 
 #: purpose → {harness 選項: (model, effort)}；`template` 指向 `_templates/` 的來源目錄。
 ROSTER: dict[str, dict[str, object]] = {
     "repo-leader": {
         "template": None,          # repo_leader 的 prompt 來自 _shared/，不由本檔產生
-        "models": {"claude-native": ("claude-fable-5-1", "xhigh"),
+        "models": {"claude-native": ("claude-fable-5-1[1m]", "xhigh"),
                    "pi": ("gpt-6-astra", "xhigh")},
         "writes": True,
     },
@@ -652,18 +655,18 @@ ROSTER: dict[str, dict[str, object]] = {
         # `file_path` 一律 DENY（`policies/builtins/orchestration.py:590`），implement_cc
         # 實測不能改檔（#1096）。`_templates/implementer_cc/` 保留、暫停使用。
         "template": {"pi": "implementer_pi"},
-        "models": {"pi": ("gpt-5.6-sol", "xhigh")},
+        "models": {"pi": ("gpt-6.1-sol", "xhigh")},
         "writes": True,
     },
     "review": {
         # ⚠ 覆核固定 claude-native：實作固定 pi ⇒ 跨 vendor 自動成立（單向）。
         "template": {"claude-native": "verifier_cc"},
-        "models": {"claude-native": ("claude-sonnet-5", "high")},
+        "models": {"claude-native": ("claude-sonnet-5-5[1m]", "high")},
         "writes": False,
     },
     "explore": {
         "template": {"pi": "scout_pi"},
-        "models": {"pi": ("gpt-5.6-luna", "high")},
+        "models": {"pi": ("gpt-6-luna", "high")},
         "writes": False,
     },
     "tracker": {
@@ -674,12 +677,12 @@ ROSTER: dict[str, dict[str, object]] = {
     },
     "ops_k8s": {
         "template": {"claude-native": "ops_k8s"},   # ⛔ 固定 claude-native，見上方硬規則
-        "models": {"claude-native": ("claude-sonnet-5", "xhigh")},
+        "models": {"claude-native": ("claude-sonnet-5-5[1m]", "xhigh")},
         "writes": True,
     },
     "researcher": {
         "template": {"pi": "researcher"},
-        "models": {"pi": ("gpt-5.6-luna", "high")},
+        "models": {"pi": ("gpt-6-luna", "high")},
         "writes": False,
     },
 }

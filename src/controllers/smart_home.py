@@ -1,7 +1,8 @@
 """Smart Home API controller.
 
 Provides JSON-RPC endpoints for Smart Home CRUD operations
-within a workspace context.
+within a workspace context. Internal callers retain ORM rules; Portal uses
+only the private context-cleaned capability, never a replacement request.env.
 """
 from __future__ import annotations
 
@@ -15,6 +16,7 @@ from odoo.exceptions import (
 from psycopg2 import OperationalError
 
 from ..models.smart_home import _platform_order
+from ..services.paas_capability import _PaaSCapability
 from ..models.workspace_access import ROLE_OWNER, ROLE_ADMIN
 # #536：sync-control 的兩個逃生門只認模組私有 sentinel（`call_kw` 把呼叫端
 # context 整包換進 env，只判 truthy 的 key 租戶自己就打得開）。
@@ -63,7 +65,7 @@ class SmartHomeController(Controller):
         if action == "list":
             return self._list_smarthomes(workspace)
         elif action == "create":
-            access = workspace.check_user_access(request.env.user)
+            access = _PaaSCapability(request.env).access(workspace)
             if not access or access.role not in [ROLE_OWNER, ROLE_ADMIN]:
                 return {"success": False, "error": _("Insufficient permissions")}
             plan_id = kwargs.get("plan_id")
@@ -135,7 +137,7 @@ class SmartHomeController(Controller):
         # rule 名洩漏給租戶，而且行為變成 state-dependent（`tunnel_id` 還沒設時
         # 提早 return 所以成功、provision 之後才失敗）。
         # 這是 two-layer-acl-lockstep 的要求，不是附帶重構。
-        access = workspace.check_user_access(request.env.user)
+        access = _PaaSCapability(request.env).access(workspace)
         if not access or access.role not in [ROLE_OWNER, ROLE_ADMIN]:
             return {"success": False, "error": _("Insufficient permissions")}
 
@@ -194,14 +196,14 @@ class SmartHomeController(Controller):
         if not smarthome:
             return {"success": False, "error": _("Smart home not found")}
 
-        access = workspace.check_user_access(request.env.user)
+        access = _PaaSCapability(request.env).access(workspace)
         if not access or access.role not in [ROLE_OWNER, ROLE_ADMIN]:
             return {"success": False, "error": _("Insufficient permissions")}
 
         # sudo: portal users lack ACL on sh.subscription.plan; the records are
         # catalog data and the workspace-access check above already gates who
         # can change a smart home, so widening here is narrow and intentional.
-        Plan = request.env["sh.subscription.plan"].sudo()
+        Plan = request.env["sh.subscription.plan"].with_context({}).sudo()
         plan = Plan.browse(plan_id)
         if not plan.exists():
             return {"success": False, "error": _("Plan not found")}
@@ -220,7 +222,7 @@ class SmartHomeController(Controller):
         # template FK**（grep 零命中），所以走「屬於任一 active SH template」。
         SmartHomeTemplate = request.env[
             "woow_paas_platform.smart_home_template"
-        ].sudo()
+        ].with_context({}).sudo()
         if not SmartHomeTemplate.search_count([
             ("is_active", "=", True),
             ("subscription_plan_ids", "in", plan.ids),
@@ -345,7 +347,7 @@ class SmartHomeController(Controller):
         """
         SmartHomeTemplate = request.env[
             "woow_paas_platform.smart_home_template"
-        ].sudo()
+        ].with_context({}).sudo()
         templates = SmartHomeTemplate.search([("is_active", "=", True)])
         data = []
         for tmpl in templates:
@@ -380,7 +382,7 @@ class SmartHomeController(Controller):
         """
         SmartHomeTemplate = request.env[
             "woow_paas_platform.smart_home_template"
-        ].sudo()
+        ].with_context({}).sudo()
         template = SmartHomeTemplate.browse(template_id)
         if not template.exists() or not template.is_active:
             return {
@@ -444,7 +446,7 @@ class SmartHomeController(Controller):
                 "error": _("Workspace not found or access denied"),
             }
 
-        access = workspace.check_user_access(request.env.user)
+        access = _PaaSCapability(request.env).access(workspace)
         if not access or access.role not in [ROLE_OWNER, ROLE_ADMIN]:
             return {"success": False, "error": _("Insufficient permissions")}
 
@@ -482,7 +484,7 @@ class SmartHomeController(Controller):
                 "error": _("Workspace not found or access denied"),
             }
 
-        access = workspace.check_user_access(request.env.user)
+        access = _PaaSCapability(request.env).access(workspace)
         if not access or access.role not in [ROLE_OWNER, ROLE_ADMIN]:
             return {"success": False, "error": _("Insufficient permissions")}
 
@@ -547,13 +549,13 @@ class SmartHomeController(Controller):
     ) -> dict[str, Any]:
         """本 Smart Home 的 Access policy CRUD ＋ reorder。"""
         if action == "list":
-            # 讀：workspace 成員即可，且**不 sudo**——ir.rule 才是守線
-            # （orm-vs-endpoint-acl-test-coverage）。非成員在上一步已被擋掉。
+            # Internal ORM rules or Portal capability, pinned to this home.
+            # Non-members are denied before reaching the policy query.
             smarthome, error = self._get_workspace_smarthome_or_error(
                 workspace_id, smarthome_id, require_manage=False)
             if error:
                 return error
-            policies = request.env[_POLICY_MODEL].search(
+            policies = smarthome.env[_POLICY_MODEL].search(
                 [("smart_home_id", "=", smarthome.id)])
             return {"success": True, "data": [p.to_dict() for p in policies]}
 
@@ -596,7 +598,7 @@ class SmartHomeController(Controller):
             return None, {"success": False, "error": _("Smart home not found")}
         if not require_manage:
             return smarthome, None
-        access = workspace.check_user_access(request.env.user)
+        access = _PaaSCapability(request.env).access(workspace)
         if not access or access.role not in [ROLE_OWNER, ROLE_ADMIN]:
             return None, {"success": False,
                           "error": _("Insufficient permissions")}
@@ -613,9 +615,7 @@ class SmartHomeController(Controller):
         兩者等價，但 search 走 ir.rule 過濾後的可見集合，語意上「找不到」與
         「看不到」收斂成同一個回應。
         """
-        return request.env[_ROUTE_MODEL].search(
-            [("id", "=", route_id),
-             ("smart_home_id", "=", smarthome.id)], limit=1)
+        return _PaaSCapability(request.env).smart_home_route(smarthome, route_id)
 
     def _update_sh_route_access_config(self, sh_route, kwargs):
         """白名單寫入。
@@ -657,9 +657,7 @@ class SmartHomeController(Controller):
 
     def _sh_policy(self, smarthome, policy_id):
         """釘在這台 SH 上的 policy——跨 SH／未知 id 一律回空集。"""
-        return request.env[_POLICY_MODEL].search(
-            [("id", "=", policy_id),
-             ("smart_home_id", "=", smarthome.id)], limit=1)
+        return _PaaSCapability(request.env).smart_home_policy(smarthome, policy_id)
 
     def _create_sh_access_policy(self, smarthome, kwargs):
         if not kwargs.get("name"):
@@ -678,15 +676,14 @@ class SmartHomeController(Controller):
         # **平台成本**，不是「這位呼叫者看得到多少」——`ir.rule` 只讓呼叫者看到
         # 池中一部分 policy 時，裸 `search_count` 會少算，而少算的症狀是「配額安
         # 靜地變寬」，與「方案的政策數上限很大」在輸出上完全不可區分。
-        # ⛔ sudo 只包**這一次計數**：`smarthome` 仍由
-        # `_get_workspace_smarthome_or_error` 以呼叫者的 env 把關（非成員在到達
-        # 這裡前就被擋掉），`Policy.create()` 以下也一律留在呼叫者 env——本前置
-        # 只是快速失敗，真正的守線是 model 那條 constraint。
+        # Internal calls retain ORM rules; Portal uses the already-scoped
+        # home capability after the dispatcher role gate. The same quota
+        # constraint runs for both; this preflight only supplies a clean error.
         # （domain 以 `smart_home_id` 收斂 ⇒ sudo 只放寬可見度，不會把別的 SH／
         # 租戶的 policy 算進來。⚠ 這裡用 `smart_home_id` 而非 create_vals 的
         # `smart_home_route_id`：前者是 SH 級的池，與 model 端 quota 的池同一
         # 根，後者只是這一條 policy 掛在哪條 route。）
-        Policy = request.env[_POLICY_MODEL]
+        Policy = smarthome.env[_POLICY_MODEL]
         sub = smarthome.sudo().subscription_id
         if sub and sub.sh_subscription_plan_id:
             quota = sub.sh_subscription_plan_id.sa_max_access_policies
@@ -793,7 +790,7 @@ class SmartHomeController(Controller):
         if not isinstance(policy_ids, list):
             return {"success": False, "error": _("policy_ids must be a list")}
         reordered = []
-        touched_routes = request.env[_ROUTE_MODEL]
+        touched_routes = smarthome.env[_ROUTE_MODEL]
         try:
             seq = 0
             for pid in policy_ids:
@@ -816,37 +813,17 @@ class SmartHomeController(Controller):
     # ==================== Private Helpers ====================
 
     def _get_workspace_or_error(self, workspace_id: int):
-        """Verify user has access to workspace and return it."""
-        user = request.env.user
-        # #1261：同 security_access.py 的 `_get_workspace_or_error`——portal/share
-        # 帳號在非 sudo search 之前就回 None，否則 search 丟 AccessError、原文與
-        # traceback 冒到前端；殘留的 portal 成員列也不再放行。
-        # Portal callers are refused before the non-sudo search (#1261).
-        if user.share:
-            return None
-        WorkspaceAccess = request.env["woow_paas_platform.workspace_access"]
-
-        access = WorkspaceAccess.search([
-            ("user_id", "=", user.id),
-            ("workspace_id", "=", workspace_id),
-            ("workspace_id.state", "=", "active"),
-        ], limit=1)
-
-        if not access:
-            return None
-        return access.workspace_id
+        """Resolve product membership without granting Portal ORM access."""
+        workspace = _PaaSCapability(request.env).workspace(workspace_id)
+        return workspace if workspace and workspace.state == 'active' else None
 
     def _get_smarthome_or_error(self, smarthome_id: int, workspace):
         """Get smart home belonging to workspace."""
-        SmartHome = request.env["woow_paas_platform.smart_home"]
-        smarthome = SmartHome.browse(smarthome_id).exists()
-        if not smarthome or smarthome.workspace_id.id != workspace.id:
-            return None
-        return smarthome
+        return _PaaSCapability(request.env).smart_home(workspace, smarthome_id)
 
     def _list_smarthomes(self, workspace) -> dict[str, Any]:
         """List all smart homes in a workspace."""
-        SmartHome = request.env["woow_paas_platform.smart_home"]
+        SmartHome = workspace.env["woow_paas_platform.smart_home"]
         homes = SmartHome.search([
             ("workspace_id", "=", workspace.id),
         ])
@@ -875,7 +852,7 @@ class SmartHomeController(Controller):
         # Validate template
         SmartHomeTemplate = request.env[
             "woow_paas_platform.smart_home_template"
-        ].sudo()
+        ].with_context({}).sudo()
         template = SmartHomeTemplate.browse(template_id)
         if not template.exists() or not template.is_active:
             return {
@@ -897,7 +874,7 @@ class SmartHomeController(Controller):
             }
 
         # Validate plan and its membership in the template's plan list
-        Plan = request.env["sh.subscription.plan"].sudo()
+        Plan = request.env["sh.subscription.plan"].with_context({}).sudo()
         plan = Plan.browse(plan_id)
         if not plan.exists():
             return {"success": False, "error": _("Subscription plan not found")}
@@ -907,7 +884,7 @@ class SmartHomeController(Controller):
                 "error": _("Selected plan is not available for this template"),
             }
 
-        SmartHome = request.env["woow_paas_platform.smart_home"]
+        SmartHome = workspace.env["woow_paas_platform.smart_home"]
         vals = {
             "name": name,
             "workspace_id": workspace.id,

@@ -10,10 +10,12 @@
 | 角色 | 透過 `/woow` PaaS 入口 | 透過 `/web` 後台直接看 subscription | 透過 RPC (`/web/dataset/call_kw`) 看 subscription |
 |------|----------------------|----------------------------------|------------------------------------------------|
 | Public（未登入） | ❌ `/woow` 強制登入 | ❌ | ❌ |
-| Portal user（一般客戶/租戶） | ✅ 完整功能 | ❌ portal 不能進後台 | ✅ 只看自己的（上游 record rule 隔離） |
+| Portal user（一般客戶/租戶） | ✅ 對外 PaaS 流程，依 workspace 角色／訂閱判斷 | ❌ portal 不能進後台 | ✅ 只看自己的（上游 record rule 隔離） |
 | Internal user 未加 sh_subscription role | ✅ 完整功能（controller `.sudo()`） | ❌ menu 隱藏（無 ACL） | ❌ AccessError |
 | Internal user + `sh_subscription.group_user_sh_subscription` | ✅ 完整功能 | ✅ 看後台 menu | ⚠️ **看得到同 company 內所有人 subscription** |
 | Internal user + `sh_subscription.group_manager_sh_subscription` | ✅ 完整功能 | ✅ 看後台 menu | ⚠️ 同上，且可 unlink |
+
+`/woow` 的 Portal 存取由私有 capability/BFF 驗證；不授予原始 PaaS model CRUD、ERP 或系統群組。Project/AI 分享及 HA machine/OAuth 不因網站入口開放而擴權。部署與實測範圍見 [Portal 修復驗證](../../plans/2026-Q4/2026-10-01-portal-paas-access-verification.md)。
 
 ## 設計原則
 
@@ -73,13 +75,13 @@ EOF
 
 Odoo 18 預設，`/web/signup` 註冊的新 user：
 
-- 透過 `auth_signup_template_user_id`（預設指向 `base.template_portal_user_id`）複製 group
+- 透過 config parameter `base.template_portal_user_id`（值為 Portal 樣板使用者的 record ID）複製 group
 - 該 template user 只擁有 `base.group_portal`
 - → 新註冊的 user **只是 portal user**，符合 PaaS 多租戶設計
 
 ### admin 改 template 的影響
 
-`auth_signup_template_user_id` 是 admin 可改的 config_parameter。
+`base.template_portal_user_id` 是 admin 可改的 config_parameter。
 若 admin 把它改指向某個 internal user，未來 `/web/signup` 註冊的人會
 拿到 internal user 權限。**這是 admin 的責任**，PaaS 不對此做防呆
 （admin 是 trusted role）。

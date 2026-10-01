@@ -85,14 +85,16 @@ Fingerprint validator 拒絕 unsafe archive 時停止。比對 archive 只在 bo
 明確標為預測，不偽造 server 證據。單純拿新 hash 查現在的舊 bundle，不是 after 預覽。
 Explicit IDs 傳入 `explicit_ids` 保持 precedence；另行盤點它們的 bundle 影響與 descendants。
 
-每個受影響 root 列：實際 owner、host、workspace、agent ID/version、parent/archive、edit
-permission、runner binding/online、工作/pending 狀態、before/after group、通知／撤權原因。
-狀態缺欄位或 API 不完整不能當 idle。若現有 run 會受 stored instructions 改變影響，先請 owner
-決定冷切換安排；stored content 相同不證明 active context 已載入。
+每個受影響 session（不只 root）列：實際 owner、host、workspace、agent ID/version、
+parent/archive、edit permission、runner binding/online、工作/pending 狀態、before/after group、
+通知／撤權原因；shared query 必須含 children／archived，不能略過非 admission bindings。
+依 [runtime gates](runtime-gates.md) 分類與核對必要 API／process／工作證據、freshness、
+owner 的 stored-only／cold-cut 範圍；這份 reference 是 runtime 分類的唯一權威。
 
 - `ready=true` 不表示 runner online；host online 也不表示其 sessions 可執行。
-- Busy/pending、dispatching、offline、未預期納管／撤權或第三方共享影響：停在 plan。
-  不為了過 gate 改 archive／workspace／harness／model／guardrails。
+- `active`／`unknown`、未預期納管／撤權或未核准的 shared collateral：`BLOCKED`。
+  有完整證據的 `dormant-offline` 可規劃保持 offline 的 stored-only 更新；`idle-online` 需
+  具體 cold-cut 方案。Owner 核准 plan digest 前均不 apply，不為過 gate 改 metadata 或喚醒。
 - 啟用新規則可能讓既有但未登記 roots 收到首次設定通知；這會產生 model turn，必須列入
   owner 核准範圍。不能宣稱「只換 fingerprint，完全不會喚醒任何 session」。
 - Runtime recovery 要另案授權具體 IDs 與副作用，結束後重做 plan；不從 history 的舊 PID
@@ -108,9 +110,9 @@ permission、runner binding/online、工作/pending 狀態、before/after group�
 | Target | server origin、SSH host、anchor session、shared agent ID/version、scope 四欄 |
 | Artifacts | before/candidate tar 絕對路徑與 raw SHA256、old/new canonical fingerprint、config before SHA256 |
 | Policy | 完整 old/new rule、精準替換位置、explicit roots／其他 rules 保持的驗證 |
-| Runtime | active config/state/client directory/port、supervisor 與精準 bridge stop/start 方法、PID/binding snapshot |
-| Impact | 全部受影響 IDs、before/after admission、撤權／新增能力／首次通知及 scope 拒絕原因 |
-| Gates | 無 busy/pending/offline/dispatching、完整分頁、scope 無歧義、owner 核准此 plan digest |
+| Runtime | active config/state/client directory/port、supervisor 與精準 bridge stop/start 方法、PID/binding snapshot；每個 session 的分類、API/process/工作 evidence 路徑與時間、telemetry 限制及有效時間窗 |
+| Impact | 全部 shared bindings（含 archived／非 admission）及 descendants 的 IDs、before/after admission、撤權／新增能力／首次通知、scope 拒絕原因與 collateral |
+| Gates | 完整分頁與分類，無 active/unknown/dispatching；每個 dormant 的 stored-only／future-use 策略、每個 online 的 cold-cut/freeze 前置條件與負責者；owner 核准完整 IDs、範圍與此 plan digest |
 | Recovery | backup 位置、允許的停機時間與 rollback 範圍、unknown 時的對帳方式、驗收與停止條件 |
 
 Plan 與 artifacts 在 private、持久目錄保存，不能放會自動清除的 `/tmp`，不能把 live active
@@ -123,7 +125,9 @@ config 誤認成可清理的 backup。Human-readable report 不包含 token／cl
 
 1. 重讀 plan 與 artifacts，驗 digest／raw SHA／canonical fingerprint。重新 GET metadata／
    bundle，讀 active config 與完整 shared/admission snapshot；與 before 比對 agent version／
-   內容、rule/config SHA、scope、binding、工作狀態。發生 drift 就重做 plan，舊核准失效。
+   內容、rule/config SHA、完整 scope、binding、model override、工作／通知狀態；依 runtime
+   gates 重做 session 分類、process／工作證據與 cold-cut/freeze 查核。證據過期或任何方案
+   前提 drift 即重做 plan，舊核准失效；缺 freeze 證據不能繼續，不能靠 owner 核准補缺。
 2. 0700 backup 目錄保存 before bundle/config/client files、SQLite consistent backup（SQLite
    backup API，不直接複製正在 WAL 寫入的單一 db 檔）、registration/receipt IDs 與安全 hashes、
    supervisor 啟動資料。保留原 token-file；備份不是重配 credential。
@@ -141,10 +145,15 @@ config 誤認成可清理的 backup。Human-readable report 不包含 token／cl
    members/groups 與核准 projection 一致；DB integrity ok、無 dispatching。所有 before
    message/registration rows 與原 client hashes 保留；新增資料另列，不能只比較 row count。
    核對舊 notification IDs 沒重播，新 root config 各自 0600、無跨 group capability。
+   對 dormant 確認保持 offline、沒有未核准 turn；重新核對活動／bindings。意外喚醒或切換
+   前提改變時保存 evidence 並停止，僅在原 rollback 授權內處理，不擅自 stop runner。
 7. 若需驗 client `list`，只在 owner 核准的本機查詢範圍做；它不證明 agent 已執行。觀察已核准
    的新 registration 原通知，須有實際 shell call、exit0/stdout self/contacts 才記 consumed；
    `accepted`、Skill.args、assistant 聲稱都不算。無新通知也不為了測試建立 root／發 turn。
-   沒有授權的 fresh-session 驗證就回報該缺口，不聲稱新 instructions 已對全部 sessions 生效。
+   Stored-only 的成功只代表 stored bundle／admission continuity；逐 ID 分列 runtime
+   adoption 的證據或「本次未驗證」。Dormant 下次使用前的 agent version／harness／override
+   與載入 gate 由 plan 指定負責者接手；沒有授權的 fresh-session 驗證就回報缺口，不為了
+   驗收而喚醒舊 sessions，也不聲稱新 instructions 已對全部 sessions 生效。
 
 ## Unknown／rollback
 

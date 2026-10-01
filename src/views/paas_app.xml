@@ -5,6 +5,8 @@
             <head>
                 <meta charset="utf-8"/>
                 <meta name="viewport" content="width=device-width, initial-scale=1"/>
+                <meta name="theme-color" content="#6183FC"/>
+                <link rel="icon" type="image/png" href="/woow_paas_platform/static/description/icon.png"/>
                 <title>Woow PaaS Platform</title>
                 <!-- Google Fonts: Manrope & Outfit -->
                 <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@200..800&amp;family=Outfit:wght@300..700&amp;display=swap" rel="stylesheet"/>
@@ -19,7 +21,21 @@
                 </script>
                 <t t-call-assets="woow_paas_platform.assets_paas"/>
             </head>
-            <body/>
+            <body>
+                <!-- This remains usable even if the asset bundle never executes. -->
+                <section id="woow-paas-boot" class="o_woow_app p-4" role="status"
+                         aria-live="polite" aria-busy="true">
+                    <h1>Woow PaaS</h1>
+                    <p data-boot-message="">Loading your workspace…</p>
+                    <p data-boot-failure="" hidden="hidden">We couldn't start Woow PaaS. Please try again.</p>
+                    <p>If loading takes too long, you can reload this page.</p>
+                    <noscript>
+                        <p>JavaScript is required to use Woow PaaS. Enable JavaScript, then try again.</p>
+                    </noscript>
+                    <a href="/woow" class="o_woow_btn o_woow_btn_primary o_woow_btn_md">Try again</a>
+                </section>
+                <div id="woow-paas-root" data-boot-state="loading"/>
+            </body>
         </html>
     </template>
 </odoo>

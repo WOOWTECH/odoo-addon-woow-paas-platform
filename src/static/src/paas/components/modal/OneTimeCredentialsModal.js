@@ -20,12 +20,39 @@ export class OneTimeCredentialsModal extends Component {
         // [{ label, value, hint? }]；順序即顯示順序
         credentials: { type: Array, element: Object },
         onClose: { type: Function },
+        // "provision"（開通頁：服務第一次啟動）或 "reset"（服務頁：Reset／自設憑證後重啟）。
+        // 兩者的狀態說明不同——開通時對租戶說「重啟中」是錯的（服務從沒跑過），
+        // 反之亦然。預設 "reset" 以保持既有呼叫端行為。
+        mode: { type: String, optional: true, validate: (m) => ["provision", "reset"].includes(m) },
     };
+    static defaultProps = { mode: "reset" };
 
     setup() {
         // 每列各自記錄「已複製」——共用一個布林的話，按下第一顆之後所有列都顯示
         // Copied，租戶會以為兩個值都複製過了而只貼上其中一個。
         this.state = useState({ copiedIndex: null });
+    }
+
+    // 文案放在 JS（_t 單行字串）而不是模板的多行文字節點：模板文字的 msgid 會連同換行
+    // 與縮排一起抽出，排版一動翻譯就對不上（這段 zh_TW 就是這樣一直是空的）。
+    get title() {
+        return _t("Save your credentials");
+    }
+
+    get intro() {
+        return _t("These values are shown only once. Save them before closing this dialog.");
+    }
+
+    /**
+     * #461：這段狀態說明是正確性的一部分，不是裝飾——「成功」＝憑證已是叢集權威值，
+     * 但服務要（重新）啟動才會吃到它。少了這句，租戶會拿著正確的憑證撞一個還沒起來
+     * 的服務，並回報成「密碼不對」。
+     */
+    get statusHint() {
+        if (this.props.mode === "provision") {
+            return _t("The service is starting for the first time (usually 1–3 minutes). Sign in with these values once its status shows Running.");
+        }
+        return _t("The service is restarting to apply them (usually 1–3 minutes) and may be briefly unreachable. The status will return to Running when it is ready.");
     }
 
     async copyValue(index) {
@@ -90,6 +117,15 @@ export function buildOneTimeCredentials(data) {
             label: _t("Admin Password"),
             value: data.admin_password,
             hint: _t("You can change the username and password later from Admin Credentials on the service page."),
+        });
+    } else if (data && data.admin_password && data.template
+            && data.template.admin_credentials_settable === true) {
+        // 只有密碼、沒有帳號的服務（code-server）：可 Reset 也可自設。不能落到下方
+        // hermes 的 MCP 說明（username: admin 在這裡是錯的）。
+        credentials.push({
+            label: _t("Password"),
+            value: data.admin_password,
+            hint: _t("Signs in to this service (there is no username). You can reset it or set your own later from Admin Credentials on the service page."),
         });
     } else if (data && data.admin_password) {
         credentials.push({
