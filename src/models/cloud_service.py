@@ -2975,7 +2975,11 @@ class CloudService(models.Model):
                 if sent >= INIT_CRON_SOFT_CAP:
                     backlog = True
                     break
-                worst = INIT_ATTEMPT_WORST_SECONDS[service._init_type()]
+                worst = INIT_ATTEMPT_WORST_SECONDS.get(service._init_type())
+                if worst is None:
+                    # 佇列是 tick 開頭的 snapshot；之後 template 改成不需 init 的那台，入口本來
+                    # 就會略過（`_run_post_deploy_init` 對 none 回 False），這裡不能 KeyError 中斷整趟。
+                    continue
                 if _init_cron_clock() - started + worst > INIT_CRON_BUDGET_SECONDS:
                     backlog = True
                     break
@@ -2985,6 +2989,9 @@ class CloudService(models.Model):
                         sent += 1
                 except Exception:
                     # 入口的每一段都各自 commit／rollback；走到這裡的只剩入口之外的意外。
+                    # Q36：回捲這一台、繼續後排；已 commit 的 claim／attempt 與其他服務不回捲。
+                    # ⚠ #1052 標記（非裁定）：OperationalError 也在此收掉，與
+                    # post-commit-bookkeeping-rollback-unit.md 規則一分歧（同短 poll 的站點）。
                     self.env.cr.rollback()
                     _logger.exception(
                         "[#1159] init cron: service %s (id=%s) failed", *service_label)
@@ -3691,7 +3698,9 @@ class CloudService(models.Model):
         自我了結：只對「旗標已經是 True 的 running 服務」動作，清掉之後就不會再探。
         只有探到 ``ok`` 才清；``unknown``（resolver 自己不可用）不動。
 
-        **fail-soft**：清旗標失敗只 log。
+        **fail-soft**：清旗標失敗只 log。DB 錯誤（``OperationalError``，如 40001）除外：
+        它代表當台交易已不可用，交給呼叫端 ``_cron_reprobe_public_url_dns`` 的逐台邊界
+        回捲後繼續後排（Q36／D4），不在這裡降成 warning。
         """
         self.ensure_one()
         if not self.public_url_dns_unverified or self.state != 'running':
@@ -3699,6 +3708,8 @@ class CloudService(models.Model):
         try:
             if self._public_url_dns_state() == 'ok':
                 self.sudo().write({'public_url_dns_unverified': False})
+        except OperationalError:
+            raise
         except Exception as exc:          # noqa: BLE001 —— 見 docstring
             _logger.warning(
                 "Could not refresh the public-URL DNS flag for service %s "
@@ -3721,6 +3732,9 @@ class CloudService(models.Model):
                 service._refresh_public_url_dns_flag()
                 self.env.cr.commit()
             except Exception:
+                # Q36／D4：每台一個回捲單位，回捲掉的只有這一台未 commit 的寫入，後排照常重探。
+                # ⚠ #1052 標記（非裁定）：這是逐筆 batch isolation，OperationalError 也在此收掉，
+                # 與 post-commit-bookkeeping-rollback-unit.md 規則一分歧（同短 poll 的站點）。
                 self.env.cr.rollback()
                 _logger.exception(
                     "[#1159] DNS re-probe failed for service %s (id=%s)", *service_label)

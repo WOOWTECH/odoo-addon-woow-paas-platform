@@ -147,6 +147,8 @@ woow-paas/paas-app-bundle-cd#154（prod `limit_time_real_cron=1800`）要先上 
   後續僅平台可寫觀測欄位，既有授權 owner 的普通 write 仍可成功（ORM／call_kw 對照）。舊列在 monitor 首趟
   背景 pass 只初始化一次 episode，得到有界 grace；不以每次 `write_date` 延後時限。
 - **DNS 旗標**（Q16／D4）：`public_url_dns_unverified` 改由 `ir_cron_reprobe_public_url_dns`（每 15 分）重探後清除。
+  helper 對非 DB 例外 fail-soft，`OperationalError` 交給 cron 的逐台邊界回捲該台後繼續後排（Q36）；
+  init cron 迴圈遇到佇列 snapshot 之後 template 改成不需 init 的那台時略過，不讓整趟失敗。
 - **監控**（Q38／D3）：`mail.activity` 給 `base.group_system`，每個監控項用不同 summary 各自去重，全部掛在
   mail.thread 單例 `woow_paas_platform.platform_monitor`（`ir.cron`／`cloud_service` 都不是 mail.thread，
   activity 建立時會呼叫 `message_subscribe`）。短 poll 查 init cron（停用或 `lastcall` > 40 分）、最舊 observation

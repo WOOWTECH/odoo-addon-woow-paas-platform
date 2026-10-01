@@ -994,6 +994,32 @@ class TestInitCron1159(_RealCursorCase):
         self.assertTrue(self._read(slow, 'n8n_owner_alerted_at'))
         self.assertFalse(self._read(fast, 'n8n_owner_alerted_at'))
 
+    def test_template_switched_to_none_after_the_queue_snapshot_does_not_abort_the_tick(self):
+        """佇列 snapshot 之後 template 改成不需 init：該台略過，同一趟後排照常送 init。
+
+        以 ``_init_type`` 回 none 模擬「snapshot 後另一條連線改了 template」：佇列是
+        raw SQL 的舊 snapshot，迴圈逐台讀到的才是新值。
+        """
+        switched = self._add('odoo', ready_minutes_ago=10)
+        normal = self._add('odoo', ready_minutes_ago=5)
+        model = type(self.env[SVC])
+        original_init_type = model._init_type
+
+        def init_type(records):
+            return 'none' if records.id == switched else original_init_type(records)
+
+        client, calls = self._recording_client()
+        caught = None
+        with patch.object(model, '_init_type', init_type):
+            try:
+                self._run_cron('_cron_run_post_deploy_inits', client)
+            except Exception as exc:  # 舊碼 KeyError 會中斷整趟
+                caught = exc
+        self.assertIsNone(caught, '單台 template 改變不得讓整趟 init cron 失敗（%r）' % (caught,))
+        self.assertEqual(calls, [self._release(normal)], '後排服務照常送 init')
+        self.assertEqual(self._read(normal, 'state'), 'running')
+        self.assertEqual(self._read(switched, 'state'), 'initializing', '略過的那台不被改寫')
+
     def test_requested_redeploys_run_in_the_init_cron(self):
         """Q27／#1257 f：redeploy 意圖由 init cron（掌管 lease 的那一個）執行。"""
         client, _calls = self._recording_client()
@@ -1688,6 +1714,64 @@ class TestDnsReprobeCron1159(_RealCursorCase):
                         'resolver 不可用是平台故障，不清也不改')
         self.assertFalse(any(h.startswith(f'healthy-{self.tag}') for h in probed),
                          '沒帶旗標的服務不探（成本綁在出問題的那幾台）')
+
+    def _dns_fault(self, faults, visits=None):
+        """``faults``：{service_id: '40001'|'runtime'}；其餘回 ok。真 PG 錯誤，不 fake 結果。"""
+        model = type(self.env[SVC])
+
+        def state(records):
+            if visits is not None:
+                visits.append(records.id)
+            fault = faults.get(records.id)
+            if fault == '40001':
+                records.env.cr.execute("""
+                    DO $$ BEGIN
+                        RAISE EXCEPTION '1159 dns reprobe conflict' USING ERRCODE = '40001';
+                    END $$
+                """)
+            if fault == 'runtime':
+                raise RuntimeError('1159 resolver adapter failed')
+            return 'ok'
+        return patch.object(model, '_public_url_dns_state', state)
+
+    def test_dns_helper_hands_database_errors_to_the_per_service_boundary(self):
+        """helper 只對非 DB 例外 fail-soft；PG 40001 必須交給呼叫端的逐台邊界。"""
+        db_fault = self._running(f'dbfault-{self.tag}')
+        soft_fault = self._running(f'softfault-{self.tag}')
+        caught = None
+        with self._dns_fault({db_fault: '40001', soft_fault: 'runtime'}), \
+                self.registry.cursor() as cr:
+            env = self._env(cr)
+            try:
+                env[SVC].browse(db_fault)._refresh_public_url_dns_flag()
+            except OperationalError as error:
+                caught = error
+            cr.rollback()
+            self.assertIsNone(env[SVC].browse(soft_fault)._refresh_public_url_dns_flag(),
+                              '非 DB 例外維持原 log／fail-soft 語意')
+        self.assertIsNotNone(caught, 'DB 錯誤不得在 helper 層被吞成 warning')
+        self.assertEqual(caught.pgcode, '40001')
+        self.assertTrue(self._read(db_fault, 'public_url_dns_unverified'))
+        self.assertTrue(self._read(soft_fault, 'public_url_dns_unverified'))
+
+    def test_dns_cron_rolls_back_only_the_faulting_service_and_continues(self):
+        """Q36／D4：一台 DB 故障只回捲該台，前一台已 commit、後一台照常處理。"""
+        first = self._running(f'first-{self.tag}')
+        broken = self._running(f'broken-{self.tag}')
+        last = self._running(f'last-{self.tag}')
+        order = [first, broken, last]
+        with self.registry.cursor() as cr:
+            anchor = fields.Datetime.now() - timedelta(hours=1)
+            for index, sid in enumerate(order):
+                cr.execute('UPDATE woow_paas_platform_cloud_service SET create_date = %s WHERE id = %s',
+                           (anchor - timedelta(seconds=index), sid))
+        visits = []
+        with self._dns_fault({broken: '40001'}, visits):
+            self._run_cron('_cron_reprobe_public_url_dns', operator_client())
+        self.assertEqual(visits, order, '故障後必須繼續處理後排')
+        self.assertFalse(self._read(first, 'public_url_dns_unverified'))
+        self.assertTrue(self._read(broken, 'public_url_dns_unverified'), '故障那台回捲、旗標保留')
+        self.assertFalse(self._read(last, 'public_url_dns_unverified'))
 
     def test_cron_record_runs_every_fifteen_minutes(self):
         with self.registry.cursor() as cr:
