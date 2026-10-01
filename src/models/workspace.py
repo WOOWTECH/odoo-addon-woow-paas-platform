@@ -3,11 +3,58 @@ from __future__ import annotations
 from typing import Any, Union
 
 from odoo import _, api, fields, models
-from odoo.exceptions import AccessError, ValidationError
+from odoo.exceptions import AccessError, UserError, ValidationError
 import re
 import secrets
 
 from .workspace_access import ROLE_OWNER, ROLE_HIERARCHY
+
+# #1295：封存工作區被「底下還有未刪除服務」擋下時的結構化錯誤碼（controller 原樣
+# 回給前端，前端據此列出要先刪除的服務）。
+ERR_WORKSPACE_HAS_SERVICES = 'workspace_has_services'
+
+# #1295：封存守衛要檢查的子服務 model，以及各自代表「已刪除」的 state。
+#
+# 三個 model 的使用者刪除都走**真 unlink**（record 離場）；值集裡沒有 deleted／
+# terminated。唯一留下記錄的「已刪除」形態是 `state='deleting'`：
+# - SA／SH：cron `_do_cleanup()`（訂閱到期）只有在 Cloudflare 資源確定拆乾淨之後
+#   才寫 `deleting`；拆不乾淨會落 `error`（＝仍有活資源 ⇒ 這裡算「未刪除」）。
+#   `action_delete()` 在 savepoint 內先寫 `deleting` 再 unlink，失敗整段回捲。
+# - cloud_service：與 `cloud_service.TERMINAL_STATES`（＝`('deleting',)`，配額計數
+#   的既有判準）同值——刪除端點先寫 `deleting`、背景 helm uninstall 完再 unlink。
+#   ⚠ 刻意抄值而不 import：從 workspace.py import cloud_service 會把整串 model
+#   class 的定義順序提前（`models/__init__.py` 的 workspace 排在前面），兩者相等
+#   由 `test_workspace_archive_guard_1295.py` 的測試鎖住。
+# 其他所有 state（pending／provisioning／active／error／suspended…）都還可能
+# 掛著 tunnel／helm release／訂閱，一律算「未刪除」。
+# ⚠ 已知殘留窗口：cloud_service 的 `deleting` 也可能是「刪除端點剛寫下、背景 helm
+# uninstall 還在跑」的過渡態，uninstall 失敗會寫回 `error`。若租戶剛好在那幾十秒內
+# 封存工作區，失敗的那台會留在已封存的工作區裡。不把 `deleting` 算未刪除是因為
+# cron `_do_cleanup`（訂閱到期）拆完之後也停在 `deleting`、記錄不離場——那種列
+# 租戶刪不掉（端點回「already being deleted」），算未刪除會讓工作區永遠封存不了。
+#
+# (type key, model, 代表已刪除的 state)；順序即錯誤清單的排列順序。三個 model
+# 都有必填的 `name` 欄位，錯誤清單直接用它。
+_ARCHIVE_GUARD_SERVICE_MODELS = (
+    ('security_access', 'woow_paas_platform.security_access', ('deleting',)),
+    ('smart_home', 'woow_paas_platform.smart_home', ('deleting',)),
+    ('cloud_service', 'woow_paas_platform.cloud_service', ('deleting',)),
+)
+
+
+class WorkspaceHasServicesError(UserError):
+    """#1295：工作區底下還有未刪除的服務，拒絕封存。
+
+    獨立型別讓 controller 能把它轉成結構化回應（`code` ＋ 服務清單），也讓測試
+    斷言例外**型別**而非文案片段。`services` 是 `[{type, id, name, state}, ...]`。
+    """
+
+    code = ERR_WORKSPACE_HAS_SERVICES
+
+    def __init__(self, message: str, services: list[dict[str, Any]] | None = None):
+        super().__init__(message)
+        self.services = services or []
+
 
 # `ws_hash` 的位元組數。4 bytes → 8 個小寫 hex，與舊 `md5(slug)[:8]` **同字集同長度**
 # ⇒ K8s namespace（DNS-1123）與 operator 的 `namespace.replace('paas-ws-','')` 契約
@@ -360,10 +407,79 @@ class Workspace(models.Model):
                           "the Kubernetes namespace and public subdomain of every "
                           "service already deployed there.") % rec.id
                     )
+        if vals.get('state') == 'archived':
+            self._check_archivable()
         return super().write(vals)
 
+    # ------------------------------------------------------------------ #
+    # Archive guard (#1295)                                               #
+    # ------------------------------------------------------------------ #
+    def _get_undeleted_services(self) -> list[dict[str, Any]]:
+        """本 workspace 底下所有「未刪除」的服務（判準見 `_ARCHIVE_GUARD_SERVICE_MODELS`）。
+
+        用 `sudo()` 搜：這是資料不變式（「封存的工作區底下不得有活服務」），不能
+        取決於呼叫者看得到哪些列——呼叫者看不到的服務一樣在計費。呼叫端
+        （`_check_archivable`）已先過 `check_access('write')`，只有能封存這個
+        workspace 的人（owner／admin，或 superuser）才走得到這裡。
+        """
+        self.ensure_one()
+        services = []
+        for type_key, model, deleted_states in _ARCHIVE_GUARD_SERVICE_MODELS:
+            records = self.env[model].sudo().search([
+                ('workspace_id', '=', self.id),
+                ('state', 'not in', list(deleted_states)),
+            ], order='id')
+            services.extend(
+                {'type': type_key, 'id': rec.id, 'name': rec.name or '',
+                 'state': rec.state or ''}
+                for rec in records
+            )
+        return services
+
+    def _check_archivable(self) -> None:
+        """#1295：工作區底下還有未刪除的服務時拒絕封存。
+
+        封存只是 `state='archived'`，不會拆任何子資源；而封存之後所有租戶端點都
+        要求 workspace `state='active'`，也沒有還原端點 ⇒ 放行的話，服務、
+        Cloudflare tunnel／DNS／Access app、helm release 與訂閱全部留著繼續扣點，
+        租戶卻再也看不到也刪不掉它們。
+
+        掛在 `write()` 而不是只掛 `action_archive()`：租戶（owner／admin）可以經
+        `/web/dataset/call_kw` 直接 `write({'state': 'archived'})`，只守
+        `action_archive()` 的話那條通道整道繞過（invariant 收斂到 write hook，同
+        `docs/decisions/patterns/invariant-recompute-on-orm-write-hook.md`）。
+
+        **不**豁免 superuser／`base.group_system`（同
+        `docs/decisions/patterns/su-env-exempt-guard-false-green.md`）：這不是授權
+        判準，是資料不變式——sudo 封存一個還掛著活服務的工作區，孤兒化的後果
+        一模一樣。真的要連服務一起清掉的路徑是 `unlink()`（會先走各子 model 的
+        teardown）。也刻意不提供 context 逃生門（裸 context key 可偽造，#536／#783）。
+
+        先 `check_access('write')`：沒有寫入權的人（guest／user／非成員）照舊拿到
+        ir.rule 的 AccessError，不會因為這道守衛先跑而改拿到服務清單（歸因不變，
+        也不對沒權限的人列出服務名稱）。
+        """
+        self.check_access('write')
+        for workspace in self:
+            if workspace.state == 'archived':
+                continue  # 已封存 ⇒ no-op write，不重複判
+            services = workspace._get_undeleted_services()
+            if services:
+                raise WorkspaceHasServicesError(
+                    _("This workspace still has services that have not been "
+                      "deleted: %(services)s. Delete these services first, "
+                      "then delete the workspace.",
+                      services=', '.join(
+                          s['name'] or '#%s' % s['id'] for s in services)),
+                    services,
+                )
+
     def action_archive(self) -> None:
-        """Archive the workspace"""
+        """Archive the workspace.
+
+        #1295：底下還有未刪除的服務時 `write()` 會丟 `WorkspaceHasServicesError`
+        （守衛住在 `write()`，見 `_check_archivable`）。
+        """
         self.write({'state': 'archived'})
 
     def action_restore(self) -> None:

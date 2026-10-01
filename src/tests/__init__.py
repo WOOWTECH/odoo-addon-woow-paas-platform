@@ -941,3 +941,7 @@ from . import test_skip_trial_dates_1261
 # 連 route 子表一起驗）。守 owner/admin 經真 HTTP 刪得掉、user/guest／跨工作區仍被拒、
 # Cloudflare 清理失敗時記錄保住、route 仍沒有單獨刪除入口。
 from . import test_sh_tenant_delete_1294
+
+# #1295：工作區底下還有未刪除的 SA／SH／cloud_service 時拒絕封存（租戶的「刪除工作區」）；
+# 守衛在 model 層 write()，走真 HTTP 驗產品端點與 ORM 直呼兩條路徑。
+from . import test_workspace_archive_guard_1295

@@ -62,6 +62,10 @@
                             <WoowIcon name="'settings'" size="18"/>
                             Settings
                         </WoowButton>
+                        <WoowButton t-if="workspace.is_owner" variant="'danger'" size="'md'" onClick.bind="openDeleteWorkspaceModal">
+                            <WoowIcon name="'delete'" size="18"/>
+                            Delete Workspace
+                        </WoowButton>
                     </div>
                 </div>
 
@@ -257,6 +261,13 @@
                     workspaceId="props.workspaceId"
                     onClose.bind="closeCreateSecurityAccessModal"
                     onCreated.bind="onSecurityAccessCreated"/>
+
+                <!-- Delete Workspace Modal（#1295） -->
+                <DeleteWorkspaceModal
+                    t-if="state.showDeleteWorkspaceModal"
+                    workspace="workspace"
+                    onClose.bind="closeDeleteWorkspaceModal"
+                    onDeleted.bind="onWorkspaceDeleted"/>
 
                 <!-- Get Started Section (Service Types) -->
                 <WoowCard shadow="true" class="'o_woow_get_started'">
