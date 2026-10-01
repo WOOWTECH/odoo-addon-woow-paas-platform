@@ -7,6 +7,7 @@ import { billingService } from "../../services/billing_service";
 import { translateTopupError } from "../../services/topup_errors";
 import { router } from "../../core/router";
 import { formatFloat } from "@web/core/utils/numbers";
+import { formatPoints } from "../../utils/billing_helpers";
 
 /**
  * AddFundsModal Component
@@ -55,8 +56,15 @@ export class AddFundsModal extends Component {
     return (this.plan.credits ?? 0) + (this.plan.bonus ?? 0);
   }
 
+  // #1310：點數一律走 formatPoints（原本 XML 自己接 " pts"、bonus 是未格式化的原始數字）。
   get formattedTotalCredits() {
-    return formatFloat(this.totalCredits, { digits: [16, 0] });
+    return formatPoints(this.totalCredits, { precision: 0 });
+  }
+
+  get bonusNote() {
+    return _t("(incl. %(bonus)s bonus)", {
+      bonus: formatPoints(this.plan.bonus ?? 0, { precision: 0 }),
+    });
   }
 
   get hasCard() {

@@ -1,5 +1,6 @@
 /** @odoo-module **/
 import { _t } from "@web/core/l10n/translation";
+import { formatPointsPerUnit } from "./billing_helpers";
 
 /**
  * Template 價格標籤的單一格式化來源（#478）。
@@ -31,11 +32,10 @@ export function formatTemplatePrice(pricing) {
     // 才看到付費階。這種商品目前 seed 觸及不到，但規則先立好。
     return isFrom ? _t("Free and up") : _t("Free");
   }
-  // 單位縮寫沿用 PlanSelector._unitLabel 的三態慣例（mo／yr／原樣），讓卡片、
-  // header 與下一頁的 plan 選卡區、總計列字樣一致；day/week 之類的週期照原字串
-  // 顯示，而不是被誤標成 mo。
-  const unit =
-    pricing.unit === "month" ? "mo" : pricing.unit === "year" ? "yr" : pricing.unit;
-  const price = _t("%(amount)s pts/%(unit)s", { amount: pricing.min_price, unit });
+  // 單位縮寫與金額格式走 billing_helpers.formatPointsPerUnit（#1310：原本這裡自己
+  // 寫一份沒包 `_t` 的 mo／yr 三態＋未加千分位的 min_price），讓卡片、header 與
+  // 下一頁的 plan 選卡區、總計列字樣一致；day/week 之類的週期照原字串顯示，
+  // 而不是被誤標成 mo。
+  const price = formatPointsPerUnit(pricing.min_price, pricing.unit);
   return isFrom ? _t("%s and up", price) : price;
 }

@@ -4,6 +4,7 @@ import { _t } from "@web/core/l10n/translation";
 import { WoowButton } from "../button/WoowButton";
 import { WoowIcon } from "../icon/WoowIcon";
 import { formatPoints } from "../../utils/billing_helpers";
+import { formatUserDate } from "../../utils/datetime_helpers";
 
 /**
  * SkipTrialModal Component
@@ -72,8 +73,9 @@ export class SkipTrialModal extends Component {
         return formatPoints(amount);
     }
 
+    // #1310：依 Odoo 使用者語系顯示（原本直接回傳 ISO 字串）。
     get trialEndDate() {
-        return this.props.service.subscription?.trial_end_date || "";
+        return formatUserDate(this.props.service.subscription?.trial_end_date, "");
     }
 
     get canConfirm() {

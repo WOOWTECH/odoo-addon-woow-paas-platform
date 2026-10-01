@@ -847,16 +847,24 @@ class BillingController(HiddenChainMixin, Controller):
 
     def _serialize_subscription(self, sub):
         """Return a compact dict for subscription list items."""
-        # Recurrency label
+        # Recurrency label（#1310：原本是英文字面＋f-string 拼複數，zh_TW 下仍顯示英文）。
+        # 每個單位各一條完整句型，而不是 "Every %s %ss" 拼字尾——複數與語序都交給翻譯。
         unit_labels = {
-            'day': 'Daily',
-            'week': 'Weekly',
-            'month': 'Monthly',
-            'year': 'Yearly',
+            'day': _('Daily'),
+            'week': _('Weekly'),
+            'month': _('Monthly'),
+            'year': _('Yearly'),
         }
         recurrency_label = unit_labels.get(sub.sh_unit, '')
         if sub.sh_recurrency and sub.sh_recurrency > 1:
-            recurrency_label = f"Every {sub.sh_recurrency} {sub.sh_unit}s"
+            count = sub.sh_recurrency
+            every_labels = {
+                'day': _('Every %(count)s days', count=count),
+                'week': _('Every %(count)s weeks', count=count),
+                'month': _('Every %(count)s months', count=count),
+                'year': _('Every %(count)s years', count=count),
+            }
+            recurrency_label = every_labels.get(sub.sh_unit, recurrency_label)
 
         # Linked cloud service name (if any)
         CloudService = request.env['woow_paas_platform.cloud_service'].sudo()
@@ -875,6 +883,9 @@ class BillingController(HiddenChainMixin, Controller):
             'is_trial': sub.sh_trial,
             'trial_end_date': sub.sh_trial_end_date.isoformat() if sub.sh_trial_end_date else None,
             'recurrency_label': recurrency_label,
+            # #1310：SubscribedServicesModal 的價格週期（原本寫死 "/ month"，年繳也顯示月）。
+            'unit': sub.sh_unit or '',
+            'recurrency': sub.sh_recurrency or 1,
             'service_name': service_name,
         }
 

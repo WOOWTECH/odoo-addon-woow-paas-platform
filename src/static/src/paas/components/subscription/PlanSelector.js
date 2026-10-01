@@ -2,6 +2,7 @@
 import { Component, useState, onWillUpdateProps } from "@odoo/owl";
 import { _t } from "@web/core/l10n/translation";
 import { groupPlansByCycle } from "./plan_selector_utils";
+import { formatPointsPerUnit } from "../../utils/billing_helpers";
 
 /**
  * PlanSelector（#368 重設計）
@@ -152,14 +153,10 @@ export class PlanSelector extends Component {
     return this.props.selectedPlanId === target;
   }
 
-  _unitLabel(unit) {
-    return unit === "month" ? _t("mo") : unit === "year" ? _t("yr") : unit;
-  }
+  // #1310：價格／單位字樣統一走 billing_helpers.formatPointsPerUnit（千分位跟隨語系、
+  // 單位縮寫與 PlanTotalBar／marketplace 卡片同一份）。
   formatPrice(plan) {
-    return _t("%(amount)s pts/%(unit)s", {
-      amount: plan.price,
-      unit: this._unitLabel(plan.unit),
-    });
+    return formatPointsPerUnit(plan.price, plan.unit);
   }
   formatTrial(plan) {
     if (!plan.has_trial) return "";
@@ -235,10 +232,7 @@ export class PlanSelector extends Component {
 
   formatSeatDelta(base, variant) {
     const delta = variant.price - base.price;
-    return _t("+%(amount)s pts/%(unit)s", {
-      amount: delta,
-      unit: this._unitLabel(base.unit),
-    });
+    return formatPointsPerUnit(delta, base.unit, { signed: true });
   }
 
   onPlanClick(base) {

@@ -4,7 +4,7 @@ import { _t } from "@web/core/l10n/translation";
 import { WoowButton } from "../button/WoowButton";
 import { WoowIcon } from "../icon/WoowIcon";
 import { billingService } from "../../services/billing_service";
-import { formatPoints } from "../../utils/billing_helpers";
+import { formatPoints, planUnitLabel } from "../../utils/billing_helpers";
 import { formatUserDate } from "../../utils/datetime_helpers";
 
 const TEMPLATE_ICONS = {
@@ -22,7 +22,7 @@ const TEMPLATE_ICONS = {
  * Shows the services associated with a subscription.
  *
  * Props:
- *   - subscription (Object): Subscription data { id, plan_name, plan_price, recurrency_label }
+ *   - subscription (Object): Subscription data { id, plan_name, plan_price, recurrency_label, unit, recurrency }
  *   - onClose (Function): Called when modal is closed
  */
 export class SubscribedServicesModal extends Component {
@@ -58,6 +58,22 @@ export class SubscribedServicesModal extends Component {
   get planPrice() {
     const price = this.state.detail?.plan_price ?? this.props.subscription.plan_price ?? 0;
     return formatPoints(price);
+  }
+
+  /**
+   * #1310：價格後面的週期（原本寫死 "/ month"，年繳方案也顯示月）。
+   *
+   * 每 N 個週期才收一次（recurrency > 1）時，左側的 recurrencyLabel 已經寫了
+   * 「每 3 個月」，價格就是那一期的金額 ⇒ 不再加單位，避免讀成「每月」。
+   * 後端沒帶 unit（舊 payload）時也不顯示，而不是猜一個「月」。
+   */
+  get pricePeriod() {
+    const src = this.state.detail || this.props.subscription;
+    const unit = src?.unit;
+    if (!unit || (src.recurrency || 1) > 1) {
+      return "";
+    }
+    return _t("/ %(unit)s", { unit: planUnitLabel(unit) });
   }
 
   get recurrencyLabel() {

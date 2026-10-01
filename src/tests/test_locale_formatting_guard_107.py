@@ -97,13 +97,9 @@ _LOCALE_LITERAL_EXEMPT = {
 #
 # 🔴 任何**新的**裸 `t-esc` 都不在這份 dict 裡 ⇒ 直接紅。
 # 修掉一格就把對應的 entry 刪掉——entry 留著而缺陷已修，不會紅，但會誤導下一個人。
+# #1310 已把 SecurityAccessDetailPage 的三處（next_payment／trial_end_date／
+# created_at）改走 formatUserDate／formatUserDateTime，自清單移除。
 _BARE_DATE_TESC_EXEMPT = {
-    ('paas/pages/security-access/SecurityAccessDetailPage.xml',
-     'state.sa.subscription.next_payment'): '#918',
-    ('paas/pages/security-access/SecurityAccessDetailPage.xml',
-     'state.sa.subscription.trial_end_date'): '#918',
-    ('paas/pages/security-access/SecurityAccessDetailPage.xml',
-     'state.sa.created_at'): '#918',
     ('paas/pages/project-detail/sections/McpServersSection.xml',
      'server.last_sync'): '#918',
 }

@@ -89,16 +89,13 @@
 
                                 <!-- Credits -->
                                 <div class="o_woow_topup_plan_credits">
-                                    <span class="o_woow_topup_plan_credits_value" t-esc="formatAmount(plan.credits)"/>
-                                    <span class="o_woow_topup_plan_credits_label">Credits</span>
+                                    <span class="o_woow_topup_plan_credits_value" t-esc="formatPlanPoints(plan.credits)"/>
                                 </div>
 
                                 <!-- Bonus Tag -->
                                 <div class="o_woow_topup_plan_bonus">
                                     <t t-if="plan.bonus > 0">
-                                        <span class="o_woow_topup_plan_bonus_tag">
-                                            +<t t-esc="formatAmount(plan.bonus)"/> Bonus Points
-                                        </span>
+                                        <span class="o_woow_topup_plan_bonus_tag" t-esc="formatBonus(plan.bonus)"/>
                                     </t>
                                     <t t-else="">
                                         <span class="o_woow_topup_plan_bonus_tag o_woow_topup_plan_bonus_neutral">
@@ -109,7 +106,7 @@
 
                                 <!-- Price -->
                                 <div class="o_woow_topup_plan_price">
-                                    NT$<t t-esc="formatAmount(plan.amount)"/>
+                                    NT$<t t-esc="formatPrice(plan.amount)"/>
                                 </div>
 
                                 <!-- Purchase Button -->

@@ -175,10 +175,10 @@
             <h3>Subscription</h3>
             <div class="o_woow_sa_detail__grid">
               <div><label>Plan</label><t t-esc="state.sa.subscription.plan_name"/></div>
-              <div><label>Next payment</label><t t-esc="state.sa.subscription.next_payment"/></div>
+              <div><label>Next payment</label><t t-esc="formatDate(state.sa.subscription.next_payment)"/></div>
               <div t-if="state.sa.subscription.is_trial">
                 <label>Trial ends</label>
-                <t t-esc="state.sa.subscription.trial_end_date"/>
+                <t t-esc="formatDate(state.sa.subscription.trial_end_date)"/>
                 <WoowButton variant="'primary'" size="'sm'"
                             onClick="() => state.showSkipTrialModal = true">
                   Skip Trial
@@ -194,7 +194,7 @@
             <h3>Identity</h3>
             <div class="o_woow_sa_detail__grid">
               <div><label>Canonical name</label><t t-esc="state.sa.canonical_name"/></div>
-              <div><label>Created</label><t t-esc="state.sa.created_at"/></div>
+              <div><label>Created</label><t t-esc="formatDateTime(state.sa.created_at)"/></div>
             </div>
           </WoowCard>
         </div>
