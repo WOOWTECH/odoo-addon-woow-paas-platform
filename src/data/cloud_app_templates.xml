@@ -1706,7 +1706,9 @@
              （以 digest 消費 WOOWTECH/Woow_podman_code_server_package 的 woow-code-server-amd64，
              PARITY_CONTRACT 1.1：code-server 4.139.1、pi 0.99.1＋pi-acp、Claude Code 2.1.285＋
              claude-agent-acp；PaaS 層加內建擴充、繁中語言包、omnigent CLI）。
-             image 釘 20260930.1503@sha256:cd7590ba…（paas-odoo-ci #175／#176，核可 #177）；
+             image 釘 20260930.2345@sha256:e8fc6079…（paas-odoo-ci #181，核可 #180：ACP 側欄只列 pi／claude、
+             刪掉內建 Copilot Chat）＋ chart 0.1.1（woow-paas-charts #97：必要設定加 chat.disableAIFeatures）；
+             前一版 20260930.1503@sha256:cd7590ba…＋chart 0.1.0（#175／#176，核可 #177）。
              test_code_server_seed.test_listed_only_when_pinned 守線：上架 ⟹ 雙釘。
              上架：2026-09-30 在 dev-sandbox 以 chart 0.1.0＋此 image 實測（密碼登入／錯密碼拒絕、
              繁中介面、換密碼不動 pod template、選填金鑰與 OpenRouter 路由、git token 只給
@@ -1744,8 +1746,8 @@
             <field name="documentation_url">https://github.com/WOOWTECH/Woow_k3s_code_server_package#readme</field>
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/code-server</field>
-            <field name="helm_chart_version">0.1.0</field>
-            <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/code-server","tag":"20260930.1503@sha256:cd7590ba24eb6516ea8e1b375a807694f451684a17fe5ecb34608c2d53440376"},"codeServer":{"locale":"zh-tw","resources":{"requests":{"cpu":"500m","memory":"1Gi"},"limits":{"cpu":"2","memory":"4Gi"}}},"persistence":{"workspace":{"size":"20Gi"},"piData":{"size":"5Gi"}},"service":{"port":8080,"targetPort":8080}}</field>
+            <field name="helm_chart_version">0.1.1</field>
+            <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/code-server","tag":"20260930.2345@sha256:e8fc60795a8c0e73e66e2a73b650c4b9f7b0f452b3d0b6ec04ded60981438ee2"},"codeServer":{"locale":"zh-tw","resources":{"requests":{"cpu":"500m","memory":"1Gi"},"limits":{"cpu":"2","memory":"4Gi"}}},"persistence":{"workspace":{"size":"20Gi"},"piData":{"size":"5Gi"}},"service":{"port":8080,"targetPort":8080}}</field>
             <field name="helm_value_specs">{"required": [], "optional": [
                 {"key": "auth.anthropicApiKey", "label": "Anthropic API Key", "type": "password",
                 "description": "Claude Code 使用的 API Key（選填）；留空則在終端機執行 claude 以訂閱帳號登入（登入狀態存在磁碟）"},
