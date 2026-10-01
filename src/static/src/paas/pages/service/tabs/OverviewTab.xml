@@ -87,7 +87,7 @@
                     <div class="o_woow_info_row">
                         <span class="o_woow_info_label">Helm Release</span>
                         <span class="o_woow_info_value">
-                            <code t-esc="props.service.helm_release_name"/>
+                            <code t-esc="props.service.helm_release_name || '—'"/>
                         </span>
                     </div>
 
