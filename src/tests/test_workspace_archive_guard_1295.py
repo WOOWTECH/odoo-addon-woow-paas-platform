@@ -233,19 +233,29 @@ class TestWorkspaceArchiveGuard1295(HttpCase):
         self.assertEqual(self.ws.sudo().state, 'active')
 
     def test_G8_admin_orm_write_state_blocked(self):
-        """admin 經 ORM `write({'state': 'archived'})`——ir.rule 放行 admin 寫入
-        （#658 P 系列），所以只守 `action_archive()` 的話這條會整道繞過。"""
+        """admin 經 ORM `write({'state': 'archived'})` 被擋。
+
+        #1298 之後封存／還原是 owner-only（`_check_state_change_by_owner`），admin
+        在封存守衛之前就被角色守衛擋下——拿到的是「只有 owner」的 AccessError，
+        **不是**服務清單（admin 本來就不該能封存，也不該從這裡探到服務）。"""
         self._make_cs('running')
         body = self._call_kw(self.dave_login, 'write',
                              [[self.ws.id], {'state': 'archived'}])
         self.assertIn('error', body, '必須被擋：%r' % body)
-        self.assertIn(GUARD_ERROR_NEEDLE, self._error_text(body), body)
+        err = self._error_text(body)
+        self.assertIn('Only the workspace owner', err, body)
+        self.assertNotIn(GUARD_ERROR_NEEDLE, err, body)
         self.assertEqual(self.ws.sudo().state, 'active')
 
-    def test_G9_admin_orm_write_state_allowed_on_empty_workspace(self):
-        """🟢 G8 的陽性對照：空工作區時同一條 ORM write 成功（證明 G8 擋的是本守衛，
-        不是 admin 本來就寫不了）。"""
+    def test_G9_owner_orm_write_state_allowed_on_empty_workspace(self):
+        """🟢 封存守衛的陽性對照：空工作區時 owner 走同一條 ORM write 成功（證明
+        G7／G8 擋的是守衛，不是寫入本身不通）；admin 對空工作區仍被角色守衛擋。"""
         body = self._call_kw(self.dave_login, 'write',
+                             [[self.ws.id], {'state': 'archived'}])
+        self.assertIn('error', body, 'admin 不得封存：%r' % body)
+        self.assertIn('Only the workspace owner', self._error_text(body), body)
+        self.assertEqual(self.ws.sudo().state, 'active')
+        body = self._call_kw(self.alice_login, 'write',
                              [[self.ws.id], {'state': 'archived'}])
         self.assertNotIn('error', body, body)
         self.assertEqual(self.ws.sudo().state, 'archived')
