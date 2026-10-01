@@ -5,6 +5,8 @@ import { billingService } from "../../services/billing_service";
 import { profileService } from "../../services/profile_service";
 import { breadcrumbService } from "../../services/breadcrumb_service";
 import { formatPoints } from "../../utils/billing_helpers";
+import { notificationService } from "../../services/notification_service";
+import { NotificationPanel } from "../../components/notification-center/NotificationPanel";
 
 const WORKSPACE_ROUTES = [
     "workspace-detail", "workspace-team", "marketplace", "configure", "service-detail",
@@ -22,16 +24,26 @@ const SUPPORT_SUB_ROUTES = [
 export class Header extends Component {
     static template = "woow_paas_platform.Header";
     static props = { router: Object };
+    static components = { NotificationPanel };
 
     setup() {
         this.billingService = billingService;
         this.profileService = useState(profileService);
         // 訂閱 breadcrumb store，詳情頁 publish 軌跡時 Header 才會重新渲染。
         this.breadcrumbService = useState(breadcrumbService);
+        this.notifications = useState(notificationService);
         onMounted(() => {
             billingService.fetchWallet();
             profileService.fetch();
+            notificationService.start();
         });
+    }
+
+    get notificationLabel() {
+        const count = this.notifications.unseenActionableCount;
+        return count
+            ? _t("Notifications (%(count)s new)", { count })
+            : _t("Notifications");
     }
 
     get walletBalance() {

@@ -412,6 +412,7 @@
 5	test_naming.TestParsePaasName
 4	test_naming.TestReconstructMcpSubdomain
 4	test_naming.TestSecurityAccessNaming
+8	test_notifications_1310.TestNotificationsEndpoint1310
 3	test_oauth2.TestAuthorizeEndpointPkce
 2	test_oauth2.TestHaRedirectModeHealer
 16	test_oauth2.TestOAuthClient

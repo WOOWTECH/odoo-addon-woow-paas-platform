@@ -35,11 +35,18 @@
                     </button>
                 </div>
 
-                <!-- 通知 -->
-                <button class="o_woow_notification_btn">
-                    <span class="material-symbols-outlined" t-translation="off">notifications</span>
-                    <span class="o_woow_notification_badge"/>
-                </button>
+                <!-- 通知（#1310：原本無 handler、紅點寫死） -->
+                <div class="o_woow_notification_anchor">
+                    <button type="button" class="o_woow_notification_btn"
+                            t-att-aria-expanded="notifications.open ? 'true' : 'false'"
+                            aria-haspopup="dialog"
+                            t-att-aria-label="notificationLabel"
+                            t-on-click="() => this.notifications.toggle()">
+                        <span class="material-symbols-outlined" t-translation="off">notifications</span>
+                        <span t-if="notifications.unseenActionableCount" class="o_woow_notification_badge"/>
+                    </button>
+                    <NotificationPanel t-if="notifications.open" router="props.router"/>
+                </div>
 
                 <!-- 使用者資訊 -->
                 <div class="o_woow_user_header">
