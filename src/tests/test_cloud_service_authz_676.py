@@ -568,7 +568,9 @@ class TestInitControlFieldsWriteAuthz1257(_CloudService676Fixture):
             and (name.startswith('init_') or name == 'n8n_owner_alerted_at'))
         self.assertGreaterEqual(len(managed), 19, '前提：init 管控欄位真的被列舉到')
         for field in managed:
-            value = sample[svc._fields[field].type]
+            field_type = svc._fields[field].type
+            self.assertIn(field_type, sample, '%s 是新型別 %r：請在 sample 補一個可寫值' % (field, field_type))
+            value = sample[field_type]
             with self.subTest(field=field):
                 result = self._call_kw(
                     'woow_paas_platform.cloud_service', 'write',

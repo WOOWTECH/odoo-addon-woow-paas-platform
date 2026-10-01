@@ -603,26 +603,31 @@ class TestInitCron1159(_RealCursorCase):
         return self._read(service_id, 'helm_release_name')
 
     def test_n8n_first_then_the_longest_waiting(self):
-        """首輪排序：n8n 優先，其次等待最久；建立順序刻意與等待順序相反並釘住。
+        """首輪排序：n8n 優先，其次等待最久；排序結果與建立順序無關。
 
-        create_date／id 若被誤當排序鍵（例如退回 ``_order`` 的 create_date desc），
-        會得到 recent → oldest，這條必須紅。
+        兩組資料：建立順序與等待順序相同、以及相反，create_date 以 SQL 釘住。
+        把排序鍵退回 create_date／id（不論 ASC 或 DESC）都至少讓其中一組紅。
         """
-        odoo_oldest = self._add('odoo', ready_minutes_ago=20)
-        odoo_recent = self._add('odoo', ready_minutes_ago=5)
-        n8n_newest = self._add('n8n', ready_minutes_ago=1)
-        with self.registry.cursor() as cr:
-            anchor = fields.Datetime.now() - timedelta(hours=1)
-            for offset, sid in enumerate((odoo_oldest, odoo_recent, n8n_newest)):
-                cr.execute('UPDATE woow_paas_platform_cloud_service SET create_date = %s WHERE id = %s',
-                           (anchor + timedelta(seconds=offset), sid))
-        self.assertLess(odoo_oldest, odoo_recent, '前提：較晚建立的是等待較短者')
-        client, calls = self._recording_client()
-        self._run_cron('_cron_run_post_deploy_inits', client)
-        self.assertEqual(calls, [self._release(n8n_newest), self._release(odoo_oldest),
-                                 self._release(odoo_recent)])
-        for sid in (odoo_recent, odoo_oldest, n8n_newest):
-            self.assertEqual(self._read(sid, 'state'), 'running')
+        minutes = {'oldest': 20, 'recent': 5, 'n8n': 1}
+        for label, create_order in (('created-in-wait-order', ('oldest', 'recent', 'n8n')),
+                                    ('created-against-wait-order', ('recent', 'oldest', 'n8n'))):
+            with self.subTest(case=label):
+                ids = {key: self._add('n8n' if key == 'n8n' else 'odoo',
+                                      ready_minutes_ago=minutes[key])
+                       for key in create_order}
+                with self.registry.cursor() as cr:
+                    anchor = fields.Datetime.now() - timedelta(hours=1)
+                    for offset, key in enumerate(create_order):
+                        cr.execute('UPDATE woow_paas_platform_cloud_service SET create_date = %s '
+                                   'WHERE id = %s', (anchor + timedelta(seconds=offset), ids[key]))
+                self.assertEqual([ids[key] for key in create_order],
+                                 sorted(ids.values()), '前提：id 順序跟著建立順序')
+                client, calls = self._recording_client()
+                self._run_cron('_cron_run_post_deploy_inits', client)
+                self.assertEqual(calls, [self._release(ids['n8n']), self._release(ids['oldest']),
+                                         self._release(ids['recent'])])
+                for sid in ids.values():
+                    self.assertEqual(self._read(sid, 'state'), 'running')
 
     def test_capacity_monitor_forty_minute_wait_remains_dispatchable_and_claim_restarts_episode(self):
         """真 PG 的 claim／not_executed lifecycle：容量 40 分不耗 D2 預算。"""
@@ -1600,12 +1605,11 @@ class TestExecSurfaceRealCursor1159(_RealCursorCase):
                 self.assertTrue(in_flight.wait(20), '%s\n%s' % (errors, _thread_stacks(thread)))
                 with self.registry.cursor() as cr:
                     # 測試連線專用的等鎖上限：若 init 交易握著列鎖，poll 等不到就該失敗，不能卡死。
+                    # 不在此 RESET：aborted 交易下會拋錯蓋掉原例外；pool 借出連線時 cnx.reset()
+                    # （psycopg2 RESET ALL）本來就會還原 session 設定。
                     cr.execute("SET lock_timeout = '3s'")
-                    try:
-                        env = self._env(cr)
-                        env[SVC]._cron_check_deploying_services()
-                    finally:
-                        cr.execute('RESET lock_timeout')
+                    env = self._env(cr)
+                    env[SVC]._cron_check_deploying_services()
                 self.assertEqual(self._read(upgrading, 'state'), 'running',
                                  '第三條連線看得到短 poll cron 的 commit')
                 self.assertTrue(self._read(slow, 'observed_at'),
@@ -1614,6 +1618,7 @@ class TestExecSurfaceRealCursor1159(_RealCursorCase):
             finally:
                 release.set()
                 thread.join(60)
+        self.assertFalse(thread.is_alive(), 'init cron thread 必須在放行後結束')
         self.assertFalse(errors, errors)
         self.assertEqual(self._read(slow, 'state'), 'running')
         client.init_odoo.assert_called_once()

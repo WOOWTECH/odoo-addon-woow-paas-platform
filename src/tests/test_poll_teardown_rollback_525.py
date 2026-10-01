@@ -60,7 +60,7 @@ list/get 純讀（#1159 Q1），`_list_services` 不再 poll、不再收屍；co
 import json
 import uuid
 from datetime import date, timedelta
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 from odoo import SUPERUSER_ID, api
 from odoo.exceptions import UserError
@@ -201,8 +201,12 @@ class TestCronReapLeavesNoHalfDeletedService(TransactionCase):
                 p.stop()
         return client
 
-    def _add_quota_survivor(self):
-        """同 workspace／namespace 的存活服務＋待收屍服務的配額；全部本組自有、事後精確清掉。"""
+    def _add_quota_survivor(self, deleting_sibling=False):
+        """同 workspace／namespace 的存活服務＋待收屍服務的配額；全部本組自有、事後精確清掉。
+
+        ``deleting_sibling``：再加一台同 workspace、仍在 deleting 的兄弟，逐台收屍時
+        先收的那一台重算 quota 必須排除仍在 deleting 的另一台。
+        """
         with self.scope.track(), self.registry.cursor() as cr:
             env = self._env(cr)
             Svc = env['woow_paas_platform.cloud_service'].sudo()
@@ -216,6 +220,16 @@ class TestCronReapLeavesNoHalfDeletedService(TransactionCase):
                 'helm_namespace': 'paas-ws-525cron',
                 'helm_release_name': 'svc-525-survivor',
                 'allocated_vcpu': 4, 'allocated_ram_gb': 4.0, 'allocated_storage_gb': 50})
+            if deleting_sibling:
+                sibling = _internal_provision(Svc).create({
+                    'name': 'Svc 525 deleting sibling',
+                    'workspace_id': self.ids_['workspace'],
+                    'template_id': self.ids_['template'],
+                    'state': 'deleting',
+                    'helm_namespace': 'paas-ws-525cron',
+                    'helm_release_name': 'svc-525-sibling',
+                    'allocated_vcpu': 3, 'allocated_ram_gb': 3.0, 'allocated_storage_gb': 30})
+                self.ids_['sibling'] = sibling.id
 
     def _fail_settlement(self, recorder):
         service_id = self.ids_['service']
@@ -263,13 +277,18 @@ class TestCronReapLeavesNoHalfDeletedService(TransactionCase):
             '服務消失而訂閱仍 in_progress ＝ 孤兒訂閱（#318）')
 
     def test_cron_reap_pushes_quota_recomputed_from_surviving_services(self):
-        """收屍成功後以存活服務重算並推一次 namespace quota（已刪那台不計入）。"""
-        self._add_quota_survivor()
+        """逐台收屍，每台各推一次 quota，只計存活服務；仍在 deleting 的兄弟不計入。"""
+        self._add_quota_survivor(deleting_sibling=True)
         client = self._run_cron()
         self.assertIsNone(self._probe()[0], '前提：deleting 服務真的被收屍')
-        # 存活 4 vCPU／4 GB／50 GB ×3；若誤把收屍那台算入會是 18／18Gi／210Gi。
-        client.update_namespace_quota.assert_called_once_with(
-            'paas-ws-525cron', '12', '12Gi', '150Gi')
+        with self.registry.cursor() as cr:
+            cr.execute('SELECT 1 FROM woow_paas_platform_cloud_service WHERE id = %s',
+                       (self.ids_['sibling'],))
+            self.assertIsNone(cr.fetchone(), '前提：兄弟也在同一 tick 被收屍')
+        # 存活 4 vCPU／4 GB／50 GB ×3＝12／12Gi／150Gi。先收的那台重算時另一台仍在 deleting，
+        # 若被計入會是 18 或 21 vCPU。
+        self.assertEqual(client.update_namespace_quota.call_args_list,
+                         [call('paas-ws-525cron', '12', '12Gi', '150Gi')] * 2)
 
     def test_teardown_failure_does_not_push_quota_for_a_half_deleted_service(self):
         """teardown 中途失敗、整台回捲留在 deleting 時，不得以半刪狀態推 quota。"""
