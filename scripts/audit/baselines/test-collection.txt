@@ -419,7 +419,7 @@
 9	test_oauth2.TestOAuthToken
 11	test_oauth2.TestPkceOnlyTokenFlow
 8	test_oauth2.TestPublicClientConstraints
-13	test_oauth2_device_flow.TestDeviceCodeEndpoints
+14	test_oauth2_device_flow.TestDeviceCodeEndpoints
 3	test_oauth2_device_flow.TestDeviceGrantHealer
 7	test_oauth2_device_flow.TestOAuthDeviceCodeModel
 4	test_omnigent_seed.TestAppManagedCarrier
