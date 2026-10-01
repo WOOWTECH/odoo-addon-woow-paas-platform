@@ -18669,6 +18669,8 @@ msgstr "已送出的初始化請求仍可能在叢集內完成。"
 msgid "Initialization did not complete. Please contact support."
 msgstr "初始化未完成。請聯絡客服。"
 
+#. module: woow_paas_platform
+#. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/access/AccessAppCard.js:0
 msgid "1 policy"
 msgstr "1 條政策"
