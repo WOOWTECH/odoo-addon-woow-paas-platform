@@ -122,10 +122,18 @@ class PlatformMonitor(models.Model):
 
     @api.model
     def _safe_alert(self, summary, note, append_line=None):
-        """事件型監控項從業務交易裡呼叫：告警失敗只 log，不得連累呼叫端的寫入。"""
+        """事件通知以 savepoint 隔離；OperationalError 交 caller，其餘例外 log／False。
+
+        此 helper 只復原通知段，不替 caller 決定回捲範圍；已 commit 的結果／key
+        不得因通知失敗被抹掉，未 commit 的業務寫入仍由原 caller 邊界處理。
+        """
         try:
             with self.env.cr.savepoint():
-                return self._alert(summary, note, append_line=append_line)
+                # 只限本次 monitor 通知排 queue，避免後續 recipient 失敗留下同步寄出的部分信。
+                return self.with_context(mail_notify_force_send=False)._alert(
+                    summary, note, append_line=append_line)
+        except OperationalError:
+            raise
         except Exception:
             _logger.exception("[#1159] monitor alert %r could not be recorded", summary)
             return False
@@ -325,10 +333,17 @@ class PlatformMonitor(models.Model):
 
     @api.model
     def _run_init_cron_checks(self):
-        """init cron 每一趟結束時跑：短 poll cron 的狀態。"""
+        """init loop 的 commits 之後查短 poll 健康；OperationalError 外拋至 job 邊界。
+
+        savepoint 只復原這次健康通知；先前已 commit 的 services／attempts 不回捲。
+        其餘例外（如非 DB RuntimeError）維持 log／原 return 語意，不改租戶 init outcome。
+        """
         try:
             with self.env.cr.savepoint():
-                self._check_poll_cron_health()
+                # 局部 queued-mail，與本 savepoint 的通知原子性一致，不改全域 outbox／SMTP。
+                self.with_context(mail_notify_force_send=False)._check_poll_cron_health()
+        except OperationalError:
+            raise
         except Exception:
             _logger.exception("[#1159] monitor check _check_poll_cron_health failed")
 

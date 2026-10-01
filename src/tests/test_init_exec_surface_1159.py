@@ -18,6 +18,7 @@
 🔴 會走到 init 入口或 cron 迴圈（兩者都會 ``commit``）的測試用真 cursor＋真 commit＋
 事後清理（樣板 ``test_billing_incident_864.py``、``test_init_execution_control_1257.py``）。
 """
+import hashlib
 import json
 import sys
 import threading
@@ -37,6 +38,9 @@ from ..models.cloud_service import _internal_provision
 from ..services.paas_operator import PaaSOperatorError
 from .operator_contract import operator_client, status_response
 from .committed_cron_scope import CommittedCronScope
+from .monitor_boundary_probe import (
+    assert_notification_rollback, notification_fault, poll_health_time, prepare_system_recipients,
+)
 
 SVC = 'woow_paas_platform.cloud_service'
 ATTEMPT = 'woow_paas_platform.cloud_service_init_attempt'
@@ -1202,6 +1206,237 @@ class TestExecSurfaceRealCursor1159(_RealCursorCase):
     def test_q36_without_fault_commits_all_three_services(self):
         self._q36_poll_probe(None)
 
+    def _boundary_recipients(self):
+        with self.registry.cursor() as cr:
+            env = self._env(cr)
+            prepare_system_recipients(self, env)
+
+    def _give_up_notification_boundary(self, fault):
+        self._boundary_recipients()
+        foreign = CommittedCronScope(self)
+        self.addCleanup(foreign.purge)
+        with self.scope.paused():
+            sentinel_before = foreign.make_sentinels(self.tag)
+        last = self._add('none', state='upgrading')
+        first = self._add('none', state='upgrading')
+        broken = self._add('odoo')
+        order = [first, broken, last]
+        with self.registry.cursor() as cr:
+            env = self._env(cr)
+            anchor = fields.Datetime.now() - timedelta(hours=1)
+            for index, sid in enumerate(order):
+                cr.execute('UPDATE woow_paas_platform_cloud_service SET create_date = %s WHERE id = %s',
+                           (anchor - timedelta(seconds=index), sid))
+            env[SVC].browse(broken).write({'init_wait_since': fields.Datetime.now() - timedelta(minutes=31)})
+            self.assertEqual(env[SVC].search([
+                ('state', 'in', ['deploying', 'upgrading', 'initializing', 'deleting'])]).ids, order)
+        releases = {self._release_name(sid): sid for sid in order}
+        visited, pre_error = [], []
+        client = operator_client()
+
+        def status(namespace, release_name, include_vm=False):
+            sid = releases[release_name]
+            visited.append(sid)
+            return status_response(pods=_NOT_READY_PODS if sid == broken else _READY_PODS)
+
+        def observed_before_fault(records):
+            records.env.cr.execute('SELECT state, observed_at FROM woow_paas_platform_cloud_service '
+                                   'WHERE id = %s', (broken,))
+            current = records.env.cr.fetchone()
+            with self.registry.cursor() as observer:
+                observer.execute('SELECT state, observed_at FROM woow_paas_platform_cloud_service '
+                                 'WHERE id = %s', (first,))
+                committed = observer.fetchone()
+            pre_error.append({'current': current, 'first_committed': committed})
+
+        client.get_status.side_effect = status
+        summary = self.env[MONITOR].SUMMARY_GAVE_UP
+        with notification_fault(self, summary, fault=fault, before_fault=observed_before_fault) as evidence:
+            self._run_cron('_cron_check_deploying_services', client)
+            with self.registry.cursor() as cr:
+                env = self._env(cr)
+                assert_notification_rollback(self, env, evidence)
+                rows = env[SVC].browse(order).read(['state', 'observed_at', 'init_exit',
+                                                  'init_retries', 'init_unknown_count'])
+            self.assertEqual(visited, order, 'helper DB 故障必須交 Q36 當台 rollback 後繼續後排')
+            self.assertEqual(pre_error[0]['current'][0], 'error', '給 up 的本台未 commit 寫入真已發生')
+            self.assertTrue(pre_error[0]['current'][1])
+            self.assertEqual(pre_error[0]['first_committed'][0], 'running')
+            self.assertTrue(pre_error[0]['first_committed'][1], '故障當下另一 cursor 真看到先者 commit')
+            by_id = {row['id']: row for row in rows}
+            self.assertEqual((by_id[first]['state'], by_id[last]['state']), ('running', 'running'))
+            self.assertTrue(by_id[first]['observed_at'])
+            self.assertTrue(by_id[last]['observed_at'])
+            if fault == '40001':
+                self.assertEqual(evidence.pgcodes, ['40001'])
+                self.assertEqual((by_id[broken]['state'], by_id[broken]['observed_at'],
+                                  by_id[broken]['init_exit']), ('initializing', False, False))
+            else:
+                self.assertFalse(evidence.pgcodes)
+                self.assertEqual((by_id[broken]['state'], by_id[broken]['init_exit']), ('error', 'wait_timeout'))
+                self.assertTrue(by_id[broken]['observed_at'], '非 DB fail-soft 不否決 caller 原已允許 state')
+            self.assertEqual((by_id[broken]['init_retries'], by_id[broken]['init_unknown_count']), (0, 0))
+            evidence.send.assert_not_called()
+            evidence.send_after_commit.assert_not_called()
+        self._purge()
+        sentinel_after = foreign.snapshot()
+        self.assertEqual(sentinel_after, sentinel_before)
+        self.assertFalse(any(self.scope.snapshot().values()))
+        print('1159_BOUNDARY_GIVE_UP=' + json.dumps({'fault': fault, 'order': order, 'visits': visited,
+            'pre_error': pre_error, 'rows': rows, 'sentinel_before': sentinel_before,
+            'sentinel_after': sentinel_after, 'sentinels_unchanged': sentinel_after == sentinel_before,
+            'own_cleaned': True}, default=str, sort_keys=True), flush=True)
+
+    def _release_name(self, sid):
+        return self._read(sid, 'helm_release_name')
+
+    def test_give_up_database_notification_failure_rolls_back_only_current_poll_service(self):
+        self._give_up_notification_boundary('40001')
+
+    def test_give_up_non_database_notification_failure_keeps_allowed_state(self):
+        self._give_up_notification_boundary('runtime')
+
+    def test_recorded_outcome_monitor_failure_keeps_recovery_pointer_and_accounts_once(self):
+        self._boundary_recipients()
+        sid = self._add('odoo', ready_minutes_ago=1)
+        with self.registry.cursor() as cr:
+            env = self._env(cr)
+            env[SVC].browse(sid).write({'init_wait_spent_seconds': 1799})
+        client = operator_client()
+        model = type(self.env[SVC])
+        with patch.object(model, '_init_db_now', return_value=fields.Datetime.now()) as clock:
+            def not_executed(namespace, release_name):
+                with self.registry.cursor() as observer:
+                    observer.execute('SELECT claimed_at FROM woow_paas_platform_cloud_service_init_attempt '
+                                     'WHERE service_id = %s ORDER BY sequence DESC LIMIT 1', (sid,))
+                    clock.return_value = observer.fetchone()[0] + timedelta(seconds=2)
+                return {'success': False, 'error_kind': 'not_executed'}
+            client.init_odoo.side_effect = not_executed
+            with notification_fault(self, self.env[MONITOR].SUMMARY_GAVE_UP) as evidence:
+                with self.registry.cursor() as cr:
+                    env = self._env(cr)
+                    self.assertTrue(env[SVC].browse(sid)._run_post_deploy_init(self.scope.operator(client)))
+                before = self._recorded_boundary_facts(sid)
+                self.assertEqual(evidence.pgcodes, ['40001'])
+                with self.registry.cursor() as cr:
+                    assert_notification_rollback(self, self._env(cr), evidence)
+                self.assertEqual((before['state'], before['spent'], before['retries'], before['unknown']),
+                                 ('initializing', 1799, 0, 0))
+                self.assertTrue(before['pointer'] and before['lease'])
+                self.assertEqual(before['outcome'], 'not_executed')
+                self.assertTrue(before['finished'])
+                self.assertFalse(before['applied'], 'DB fault 不得讓 accounting marker 假成立')
+                evidence.send.assert_not_called()
+                evidence.send_after_commit.assert_not_called()
+            with self.registry.cursor() as cr:
+                env = self._env(cr)
+                self.assertFalse(env[SVC].browse(sid)._run_post_deploy_init(self.scope.operator(client)),
+                                 '冷 recovery 只補套已記錄 outcome，不重送 operator')
+            after = self._recorded_boundary_facts(sid)
+            self.assertEqual((after['state'], after['exit'], after['spent'], after['retries'], after['unknown']),
+                             ('error', 'wait_timeout', 1801, 0, 0))
+            self.assertFalse(after['pointer'] or after['lease'])
+            self.assertTrue(after['applied'])
+            with self.registry.cursor() as cr:
+                env = self._env(cr)
+                self.assertFalse(env[SVC].browse(sid)._run_post_deploy_init(self.scope.operator(client)))
+            self.assertEqual(self._recorded_boundary_facts(sid), after, '第二趟不重扣 quota／累計／marker')
+            client.init_odoo.assert_called_once()
+        print('1159_BOUNDARY_RECOVERY=' + json.dumps({'before': before, 'after': after,
+            'operator_calls': client.init_odoo.call_count}, default=str, sort_keys=True), flush=True)
+
+    def _recorded_boundary_facts(self, sid):
+        with self.registry.cursor() as cr:
+            env = self._env(cr)
+            svc = env[SVC].browse(sid).sudo()
+            attempt = env[ATTEMPT].search([('service_id', '=', sid)], order='sequence desc', limit=1)
+            return {'state': svc.state, 'exit': svc.init_exit, 'spent': svc.init_wait_spent_seconds,
+                'retries': svc.init_retries, 'unknown': svc.init_unknown_count,
+                'pending': svc.init_pending, 'pointer': svc.init_attempt_id.id,
+                'lease': bool(svc.init_lease_until), 'attempt': attempt.id,
+                'outcome': attempt.outcome, 'finished': bool(attempt.finished_at),
+                'applied': attempt.applied_at, 'key_persisted': attempt.n8n_key_persisted,
+                'key_present': bool(svc.n8n_api_key),
+                'key_hash': hashlib.sha256(svc.n8n_api_key.encode()).hexdigest() if svc.n8n_api_key else None}
+
+    def test_n8n_post_apply_monitor_database_failure_preserves_committed_success_and_key(self):
+        self._boundary_recipients()
+        sid = self._add('n8n', ready_minutes_ago=6)
+        fake_key = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJib3VuZGFyeSJ9.c2lnbmF0dXJl'
+        client = operator_client(init_n8n={'success': True, 'api_key': fake_key})
+        with notification_fault(self, self.env[MONITOR].SUMMARY_N8N_OWNER) as evidence:
+            self._run_cron('_cron_run_post_deploy_inits', client)
+            facts = self._recorded_boundary_facts(sid)
+            self.assertEqual(evidence.pgcodes, ['40001'])
+            with self.registry.cursor() as cr:
+                assert_notification_rollback(self, self._env(cr), evidence)
+            self.assertEqual((facts['state'], facts['outcome'], facts['pending'], facts['retries'], facts['unknown']),
+                             ('running', 'success', False, 0, 0))
+            self.assertTrue(facts['finished'] and facts['applied'] and facts['key_persisted'] and facts['key_present'])
+            self.assertEqual(facts['key_hash'], hashlib.sha256(fake_key.encode()).hexdigest(), '只比 hash，不印 key')
+            self.assertFalse(facts['pointer'] or facts['lease'])
+            evidence.send.assert_not_called()
+            evidence.send_after_commit.assert_not_called()
+        self._run_cron('_cron_run_post_deploy_inits', client)
+        self.assertEqual(self._recorded_boundary_facts(sid), facts, '通知故障後不能重送／改 remote outcome')
+        client.init_n8n.assert_called_once()
+        print('1159_BOUNDARY_N8N_SUCCESS=' + json.dumps({'facts': facts,
+            'operator_calls': client.init_n8n.call_count}, default=str, sort_keys=True), flush=True)
+
+    def test_init_job_health_failure_does_not_undo_previously_committed_attempts(self):
+        self._boundary_recipients()
+        sid = self._add('odoo', ready_minutes_ago=1)
+        client = operator_client(init_odoo={'success': True})
+        caught = None
+        with self.scope.monitoring(), poll_health_time(self, 11), \
+                notification_fault(self, self.env[MONITOR].SUMMARY_POLL_CRON) as evidence:
+            try:
+                self._run_cron('_cron_run_post_deploy_inits', client)
+            except OperationalError as error:
+                caught = error
+            facts = self._recorded_boundary_facts(sid)
+            with self.registry.cursor() as cr:
+                assert_notification_rollback(self, self._env(cr), evidence)
+            self.assertEqual(evidence.pgcodes, ['40001'])
+            self.assertIsNotNone(caught, 'health fault 必須穿過真 cron 入口，而不是正常完成')
+            self.assertEqual(caught.pgcode, '40001')
+            self.assertEqual((facts['state'], facts['outcome'], facts['retries'], facts['unknown']),
+                             ('running', 'success', 0, 0))
+            self.assertTrue(facts['finished'] and facts['applied'])
+            self.assertFalse(facts['pointer'] or facts['lease'])
+            evidence.send.assert_not_called()
+            evidence.send_after_commit.assert_not_called()
+        with self.scope.monitoring(), poll_health_time(self, 5):
+            self._run_cron('_cron_run_post_deploy_inits', client)
+        self.assertEqual(self._recorded_boundary_facts(sid), facts, '健康對照不重送已完成 service')
+        client.init_odoo.assert_called_once()
+        print('1159_BOUNDARY_INIT_HEALTH=' + json.dumps({'facts': facts, 'pgcode': caught.pgcode,
+            'operator_calls': client.init_odoo.call_count}, default=str, sort_keys=True), flush=True)
+
+    def test_init_job_non_database_health_failure_is_soft_after_committed_success(self):
+        self._boundary_recipients()
+        sid = self._add('odoo', ready_minutes_ago=1)
+        client = operator_client(init_odoo={'success': True})
+        with self.scope.monitoring(), poll_health_time(self, 11), \
+                notification_fault(self, self.env[MONITOR].SUMMARY_POLL_CRON, fault='runtime') as evidence:
+            self._run_cron('_cron_run_post_deploy_inits', client)
+            facts = self._recorded_boundary_facts(sid)
+            with self.registry.cursor() as cr:
+                assert_notification_rollback(self, self._env(cr), evidence)
+            self.assertFalse(evidence.pgcodes)
+            self.assertEqual((facts['state'], facts['outcome'], facts['retries'], facts['unknown']),
+                             ('running', 'success', 0, 0))
+            self.assertTrue(facts['finished'] and facts['applied'])
+            self.assertFalse(facts['pointer'] or facts['lease'])
+            evidence.send.assert_not_called()
+            evidence.send_after_commit.assert_not_called()
+        with self.scope.monitoring(), poll_health_time(self, 5):
+            self._run_cron('_cron_run_post_deploy_inits', client)
+        self.assertEqual(self._recorded_boundary_facts(sid), facts)
+        client.init_odoo.assert_called_once()
+        print('1159_BOUNDARY_INIT_HEALTH_SOFT=' + json.dumps({'facts': facts,
+            'operator_calls': client.init_odoo.call_count}, default=str, sort_keys=True), flush=True)
+
     def test_slow_init_does_not_hold_back_the_short_poll(self):
         """一筆慢 init 進行中，另一台的 upgrading→running 在短 poll 落地且別的連線看得到。"""
         slow = self._add('odoo', ready_minutes_ago=2)
@@ -1355,6 +1590,66 @@ class TestPlatformMonitor1159(_ServiceCase):
             'finished_at': finished_at,
             'outcome': outcome,
         })
+
+    def test_safe_alert_database_failure_reaches_the_caller_with_a_usable_cursor(self):
+        runner = prepare_system_recipients(self, self.env)
+        summary = '1159 boundary safe alert'
+        caught = None
+        with notification_fault(self, summary) as evidence:
+            try:
+                runner._safe_alert(summary, 'own monitor boundary notification')
+            except OperationalError as error:
+                caught = error
+            assert_notification_rollback(self, self.env, evidence)
+            self.assertEqual(evidence.pgcodes, ['40001'], '真 PG40001 必須到達')
+            self.assertIsNotNone(caught, 'DB failure 不得在 helper 層降成 False')
+            self.assertEqual(caught.pgcode, '40001')
+            evidence.send.assert_not_called()
+            evidence.send_after_commit.assert_not_called()
+
+    def test_init_side_health_database_failure_reaches_the_job_boundary(self):
+        runner = prepare_system_recipients(self, self.env)
+        # 本 test 不 commit；真 cron metadata 由 TransactionCase 原樣回捲，不改共享 runtime。
+        self.env.ref(POLL_CRON).sudo().write({
+            'lastcall': fields.Datetime.now() - timedelta(minutes=11)})
+        caught = None
+        with notification_fault(self, self.Monitor.SUMMARY_POLL_CRON) as evidence:
+            try:
+                runner._run_init_cron_checks()
+            except OperationalError as error:
+                caught = error
+            assert_notification_rollback(self, self.env, evidence)
+            self.assertEqual(evidence.pgcodes, ['40001'])
+            self.assertIsNotNone(caught, 'init-side health DB failure 不得正常 return')
+            self.assertEqual(caught.pgcode, '40001')
+            evidence.send.assert_not_called()
+            evidence.send_after_commit.assert_not_called()
+
+    def test_safe_alert_non_database_failure_is_soft_and_preserves_caller_state(self):
+        runner = prepare_system_recipients(self, self.env)
+        svc = self._service('none', state='error', error_message='own allowed caller state')
+        summary = '1159 boundary non database alert'
+        with notification_fault(self, summary, fault='runtime') as evidence:
+            result = runner._safe_alert(summary, 'own non database notification')
+            self.assertIs(result, False, 'RuntimeError 維持原 fail-soft return')
+            assert_notification_rollback(self, self.env, evidence)
+            self.assertFalse(evidence.pgcodes)
+            self.assertEqual((svc.state, svc.error_message), ('error', 'own allowed caller state'))
+            evidence.send.assert_not_called()
+            evidence.send_after_commit.assert_not_called()
+
+    def test_init_side_health_non_database_failure_is_soft_and_healthy_check_is_real(self):
+        runner = prepare_system_recipients(self, self.env)
+        self.assertIsNone(runner._run_init_cron_checks())
+        self.assertFalse(self._activities(self.Monitor.SUMMARY_POLL_CRON), '真 healthy metadata 不告警')
+        self.env.ref(POLL_CRON).sudo().write({
+            'lastcall': fields.Datetime.now() - timedelta(minutes=11)})
+        with notification_fault(self, self.Monitor.SUMMARY_POLL_CRON, fault='runtime') as evidence:
+            self.assertIsNone(runner._run_init_cron_checks(), '非 DB 失敗維持原 return 語意')
+            assert_notification_rollback(self, self.env, evidence)
+            self.assertFalse(evidence.pgcodes)
+            evidence.send.assert_not_called()
+            evidence.send_after_commit.assert_not_called()
 
     def test_capacity_wait_alerts_system_users_at_thirty_minutes_without_spending_quota(self):
         """容量時計只看持續可 dispatch 的平台觀測，不回充舊 first-ready。"""

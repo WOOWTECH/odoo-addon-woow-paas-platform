@@ -164,6 +164,16 @@ woow-paas/paas-app-bundle-cd#154（prod `limit_time_real_cron=1800`）要先上 
   容量是持續條件：同 summary 未完成前不重建、不重複 append，全部完成後條件仍存在才可再開。
   通知只在 monitor 使用 queued-mail context；活動投影失敗由該 check 的 savepoint 回捲，OperationalError 外拋。
   既有 unknown／partial attempt identity ledger 與 per-user event projection 不變；不承諾 SMTP 投遞或跨 cron exactly-once。
+- **monitor DB exception boundary（D05／D06）**：事件 `_safe_alert` 與 init-side health
+  `_run_init_cron_checks` 在 notification savepoint 復原後，將 `OperationalError`（含 PG40001）
+  交回真正 caller／job 邊界；其餘例外如 RuntimeError 維持原 log／False 或 return 語意。
+  兩站僅對自己的 monitor 通知使用 `mail_notify_force_send=False`，避免後排失敗留下已同步寄出的部分信，
+  不改全域 Todo／company／SMTP／outbox，也不改已 accepted 的 unknown／capacity 通知路徑。
+  give-up 的 poll 寫入由 Q36 回捲當台並繼續後排；已記錄 outcome 的 CAS 記帳失敗保留 lease／pointer，
+  下一趟只補套、accounting marker 不重算；n8n success 的 state／key／marker／applied_at 已 commit，
+  post-apply 告警故障不可抹掉該事實或重送 operator。init-side health 在 service commits 之後執行，
+  DB 故障外拋不會回捲先前成功服務。此窄邊界不承諾事件重投、SMTP delivery、exactly-once
+  或已親測 core scheduler 的 lastcall/failure_count；不將 local monitor 記帳故障改成 remote unknown 額度。
 - **租戶出口**（Q30）：initializing 可刪除（確認框註明已送出的 init 仍可能完成）；error 停用 Reset；init 失敗顯示
   固定文案＋attempt 序號＋support 入口；只有額度出口的 error 開放改設定。
 
