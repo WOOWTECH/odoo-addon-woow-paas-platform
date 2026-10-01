@@ -1115,6 +1115,10 @@ class SecurityAccess(models.Model):
         denial（那個分支的契約是「拒絕必須傳到呼叫端」）。
         """
         self.ensure_one()
+        # This public method is also reachable through raw ORM/RPC. Refuse an
+        # unauthorized caller before reading state or constructing the operator
+        # client; authorized callers still pass the upstream lifecycle gates.
+        self.check_access('write')
         # 停權／刪除中一律拒絕，在任何 write 與 operator 呼叫之前（形狀同
         # smart_home.action_provision 的 stored-id guard）。re-sync 分支會把每條
         # route 的真 service_url 推回去 ⇒ 對 `suspended` 放行＝繞過停權的 503

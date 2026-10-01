@@ -530,9 +530,11 @@ class Workspace(models.Model):
         cf-ns-orphan-no-account-gc, F-ENV-5).
 
         Children are resolved by search (no explicit One2many to SA/SmartHome on
-        Workspace) and unlinked with ``sudo()`` so cleanup completes regardless
-        of the caller's row-level ACL (caller authorisation is enforced upstream
-        at the controller). A child whose tunnel cleanup fails raises UserError;
+        Workspace) and unlinked with ``sudo()`` so cleanup is complete. The
+        caller's unlink ACL and record rules MUST be checked here first:
+        raw ORM/RPC calls do not pass through a product controller, and a late
+        super().unlink() denial cannot undo external child teardown.
+        A child whose tunnel cleanup fails raises UserError;
         we deliberately let it PROPAGATE so the whole workspace deletion rolls
         back and the child + its tunnel survive for a retry — never swallow it.
 
@@ -550,6 +552,8 @@ class Workspace(models.Model):
         keeps is non-sidecar so ``CloudService.unlink``'s sidecar-MCP cleanup
         leaves it intact — routing does not regress it.)
         """
+        if self:
+            self.check_access('unlink')
         for workspace in self:
             self.env['woow_paas_platform.security_access'].sudo().search(
                 [('workspace_id', '=', workspace.id)]

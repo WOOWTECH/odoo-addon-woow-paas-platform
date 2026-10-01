@@ -164,19 +164,18 @@ class SubscriptionLifecycleMixin(models.AbstractModel):
         read ACL 只發給 ``group_manager_sh_subscription`` /
         ``group_user_sh_subscription`` / ``base.group_portal``。workspace 擁有權是
         **平台側**概念，不會連帶給到那三個 Odoo 群組——所以 mixin 內部只要直接
-        traversal（``self.subscription_id.state`` 之類），典型租戶（只有
-        ``base.group_user`` 的內部使用者）就會在 env cache 落空時撞 AccessError，
+        traversal（``self.subscription_id.state`` 之類），僅有
+        ``base.group_user`` 的內部呼叫者就會在 env cache 落空時撞 AccessError，
         endpoint 回 "You are not allowed to access sh.subscription.subscription"
         （#29；#27 的 controller 端已於 PR #28 修過同一個 class 的缺陷）。
 
         「cache 命中所以看起來沒事」不是健全性——production 每個 HTTP request 都
         從空 cache 開始，所以這條路是必現而非偶發。
 
-        sudo 不是權限放大：mixin 是 CloudService / SmartHome / SecurityAccess 三
-        個 controller 共用的**內部** helper，走到這裡之前 controller 已經做完
-        workspace 歸屬 + [OWNER, ADMIN] role 兩道閘——誰能驅動這些方法早就決定
-        好了。與 ``controllers/paas.py`` / ``controllers/smart_home.py`` 既有的
-        cascade-sudo 是同一個 pattern。
+        這不是「租戶都是 internal」的定義：一般註冊租戶是 Portal；對外 PaaS
+        由 private capability 驗證真實 uid／workspace／角色，不升級其群組。
+        本 helper 只提權讀取已授權實例所綁訂閱。呼叫端仍須保留自己的讀取或
+        異動守衛；readonly 成員路徑與 owner/admin 異動路徑不能混為一談。
 
         新增任何要讀訂閱的 mixin 方法都走這裡，不要再寫 ``self.subscription_id``
         ——``scripts/audit/repo-lint.py`` 的 ``check_mixin_subscription_sudo``

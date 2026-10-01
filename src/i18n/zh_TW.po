@@ -18596,3 +18596,28 @@ msgstr "登入此服務用（沒有帳號）。之後可在服務頁「Admin Cre
 #: code:addons/woow_paas_platform/controllers/ha_api.py:0
 msgid "Only workspace owners and admins can get the tunnel token."
 msgstr "只有工作區的擁有者或管理員可以取得 tunnel token。"
+
+#. module: woow_paas_platform
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.paas_app
+msgid "Loading your workspace…"
+msgstr "正在載入你的工作區…"
+
+#. module: woow_paas_platform
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.paas_app
+msgid "We couldn't start Woow PaaS. Please try again."
+msgstr "無法啟動 Woow PaaS，請再試一次。"
+
+#. module: woow_paas_platform
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.paas_app
+msgid "If loading takes too long, you can reload this page."
+msgstr "如果載入時間過長，你可以重新整理此頁。"
+
+#. module: woow_paas_platform
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.paas_app
+msgid "JavaScript is required to use Woow PaaS. Enable JavaScript, then try again."
+msgstr "使用 Woow PaaS 需要啟用 JavaScript。請啟用後再試一次。"
+
+#. module: woow_paas_platform
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.paas_app
+msgid "Try again"
+msgstr "再試一次"

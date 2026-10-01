@@ -6,7 +6,6 @@ import logging
 import threading
 import traceback
 import uuid
-from datetime import datetime
 from typing import Any
 from urllib.parse import urlparse
 
@@ -16,6 +15,7 @@ from odoo.exceptions import (
 )
 from psycopg2 import OperationalError
 from odoo.http import request, route, Controller
+from odoo.tools import escape_psql
 
 from .ha_paas import HiddenChainMixin
 from .billing import _invoice_payability_fields
@@ -23,6 +23,7 @@ from ..models.workspace_access import (
     ROLE_OWNER, ROLE_ADMIN, ROLE_USER,
     ASSIGNABLE_ROLES,
 )
+from ..services.paas_capability import _PaaSCapability
 from ..services.paas_operator import (
     get_paas_operator_client,
     PaaSOperatorError,
@@ -124,45 +125,15 @@ def _show_projects(env) -> bool:
         SHOW_PROJECTS_FLAG) or '').strip().lower() in ('true', '1')
 
 
-# #1261：Portal（`res.users.share=True`，只掛 `base.group_portal`）帳號**不能**使用
-# workspace。不是產品裁決，是 ACL 的既成事實：`workspace_access` 的
-# ir.model.access 只發給 `base.group_user` 與 `base.group_system`（見
-# security/ir.model.access.csv），portal 一列都沒有。2026-09-29 正式站 E2E 實測
-# （folight2015@gmail.com）：邀請 portal 帳號「成功」、列真的建了，對方一打
-# `/api/workspaces` action=list 就在 `WorkspaceAccess.search` 丟 `AccessError`，
-# JSON-RPC 回應直接帶 Odoo 原文訊息與 traceback——使用者只看到平台壞了。
-#
-# 修法兩端都收（缺一都會回到同一個死結）：
-#   1. 入口（`_invite_member`）：拒絕 portal 帳號，並講清楚是**帳號類型**的問題。
-#      ⛔ 不自動改對方群組——把 portal 升成 internal 是授權決策（會連帶打開
-#      `base.group_user` 在全站的讀寫面），只能由平台管理員在後台明確做。
-#   2. 出口（本檔 workspace 端點 + `workspace.check_user_access`）：portal 呼叫者
-#      一律回結構化 `{success: False, code, error}`，不讓 ACL 原文冒出去。
-#
-# 判準用 `user.share` 而不是 `has_group('base.group_portal')`：與 ai_assistant.py 的
-# portal 分支同一把尺；`share` 就是 Odoo 自己的「非 internal」定義
-# （`not has_group('base.group_user')`），也涵蓋沒掛 portal 群組的其他外部帳號。
-ERR_PORTAL_ACCOUNT = 'portal_account'
-ERR_INVITEE_PORTAL_ACCOUNT = 'invitee_portal_account'
+def _account_denial(env) -> dict[str, Any] | None:
+    """Product access is independent of Odoo's internal/Portal identity.
 
-
-def _portal_account_denial(env) -> dict[str, Any] | None:
-    """呼叫者是 portal/share 帳號時回結構化拒絕，否則 ``None``（#1261）。
-
-    收 ``env``（＝呼叫端的 ``request.env``）而非直接引用 module-level
-    ``request``——與 ``HiddenChainMixin`` 同理，讓依賴顯式、可單測。
-    讀的是呼叫者**自己**的 ``share``，res.users 對本人可讀，不需 sudo。
-    internal 使用者（``share=False``）一律 ``None`` ⇒ 既有行為完全不變。
+    #1261's structured refusal remains for public/inactive accounts only.
+    The private capability seam grants no ORM ACL or ERP group membership.
     """
-    if not env.user.share:
+    if _PaaSCapability(env).authenticated:
         return None
-    return {
-        'success': False,
-        'code': ERR_PORTAL_ACCOUNT,
-        'error': _('Your account is a portal account and cannot use '
-                   'workspaces. Please contact the platform administrator '
-                   'to change your account type.'),
-    }
+    return {'success': False, 'error': _('Authentication required')}
 
 
 def _validate_mcp_url(url: str, sidecar_backed: bool = False) -> str | None:
@@ -247,7 +218,7 @@ class PaasController(HiddenChainMixin, Controller):
                 - data (dict): Configuration values
                     - domain: Base domain for deployed services (e.g., woowtech.io)
         """
-        IrConfigParameter = request.env['ir.config_parameter'].sudo()
+        IrConfigParameter = request.env['ir.config_parameter'].with_context({}).sudo()
         domain = IrConfigParameter.get_param('woow_paas_platform.paas_domain', 'woowtech.io')
 
         return {
@@ -279,9 +250,8 @@ class PaasController(HiddenChainMixin, Controller):
                 - error (str): Error message (on failure)
                 - count (int): Item count (for list operations)
         """
-        # #1261：portal 帳號在 ACL 上碰不到 workspace_access，放行下去只會在 ORM 層
-        # 丟 AccessError（原文 + traceback 直達前端）。在分派前統一回結構化拒絕。
-        _denial = _portal_account_denial(request.env)
+        # Portal gets product capabilities, never raw ORM permissions.
+        _denial = _account_denial(request.env)
         if _denial:
             return _denial
         if action == 'list':
@@ -312,8 +282,8 @@ class PaasController(HiddenChainMixin, Controller):
                 - data (dict): Result data (on success)
                 - error (str): Error message (on failure)
         """
-        # #1261：同 `api_workspace`——portal 帳號先回結構化拒絕。
-        _denial = _portal_account_denial(request.env)
+        # Public/inactive accounts are refused; Portal uses scoped capabilities.
+        _denial = _account_denial(request.env)
         if _denial:
             return _denial
         if action == 'get':
@@ -344,13 +314,7 @@ class PaasController(HiddenChainMixin, Controller):
                 - count (int): Number of workspaces
         """
         user = request.env.user
-        WorkspaceAccess = request.env['woow_paas_platform.workspace_access']
-
-        # Find all workspaces where user has access
-        access_records = WorkspaceAccess.search([
-            ('user_id', '=', user.id),
-            ('workspace_id.state', '=', 'active'),
-        ])
+        access_records = _PaaSCapability(request.env).memberships()
 
         # Prefetch related workspace data to avoid N+1 queries
         access_records.mapped('workspace_id')
@@ -402,8 +366,6 @@ class PaasController(HiddenChainMixin, Controller):
         if not name:
             return {'success': False, 'error': _('Workspace name is required')}
 
-        Workspace = request.env['woow_paas_platform.workspace']
-
         # #525 A2：`Workspace.create()` 在 model 層被拆成**兩段非原子寫入**
         # （`workspace.py` 的 `create`：先 `super().create()` INSERT 主表列，再建
         # owner 的 `workspace_access`）。第二段拋例外時主表列已經進去了，而例外被
@@ -428,10 +390,8 @@ class PaasController(HiddenChainMixin, Controller):
         # `ROLLBACK TO SAVEPOINT`，ORM cache 一併清乾淨。
         try:
             with request.env.cr.savepoint():
-                workspace = Workspace.create({
-                    'name': name,
-                    'description': description,
-                })
+                workspace = _PaaSCapability(request.env).create_workspace(
+                    name, description)
         except Exception as e:
             _logger.error("Error creating workspace: %s\n%s", str(e), traceback.format_exc())
             return {'success': False, 'error': _('An error occurred while creating the workspace. Please try again.')}
@@ -492,12 +452,11 @@ class PaasController(HiddenChainMixin, Controller):
             return {'success': False, 'error': _('Workspace not found or access denied')}
 
         user = request.env.user
-        Workspace = request.env['woow_paas_platform.workspace']
 
-        workspace = Workspace.browse(workspace_id)
+        workspace = _PaaSCapability(request.env).workspace(workspace_id)
 
         # Combine existence and access check to prevent information leakage
-        access = workspace.check_user_access(user) if workspace.exists() else False
+        access = _PaaSCapability(request.env).access(workspace) if workspace.exists() else False
         if not access:
             return {'success': False, 'error': _('Workspace not found or access denied')}
 
@@ -553,13 +512,10 @@ class PaasController(HiddenChainMixin, Controller):
         except (TypeError, ValueError):
             return {'success': False, 'error': _('Workspace not found or access denied')}
 
-        user = request.env.user
-        Workspace = request.env['woow_paas_platform.workspace']
-
-        workspace = Workspace.browse(workspace_id)
+        workspace = _PaaSCapability(request.env).workspace(workspace_id)
 
         # Combine existence and access check to prevent information leakage
-        access = workspace.check_user_access(user, required_role=ROLE_ADMIN) if workspace.exists() else False
+        access = _PaaSCapability(request.env).access(workspace, required_role=ROLE_ADMIN) if workspace.exists() else False
         if not access:
             return {'success': False, 'error': _('Workspace not found or access denied')}
 
@@ -619,9 +575,8 @@ class PaasController(HiddenChainMixin, Controller):
             return {'success': False, 'error': _('Workspace not found or access denied')}
 
         user = request.env.user
-        Workspace = request.env['woow_paas_platform.workspace']
 
-        workspace = Workspace.browse(workspace_id)
+        workspace = _PaaSCapability(request.env).workspace(workspace_id)
 
         # Combine existence and ownership check to prevent information leakage
         if not workspace.exists() or workspace.owner_id.id != user.id:
@@ -656,8 +611,8 @@ class PaasController(HiddenChainMixin, Controller):
         Returns:
             dict: JSON response with success/error structure
         """
-        # #1261：同 `api_workspace`——portal 帳號先回結構化拒絕。
-        _denial = _portal_account_denial(request.env)
+        # Public/inactive accounts are refused; Portal uses scoped capabilities.
+        _denial = _account_denial(request.env)
         if _denial:
             return _denial
         if action == 'list':
@@ -681,8 +636,8 @@ class PaasController(HiddenChainMixin, Controller):
         Returns:
             dict: JSON response with success/error structure
         """
-        # #1261：同 `api_workspace`——portal 帳號先回結構化拒絕。
-        _denial = _portal_account_denial(request.env)
+        # Public/inactive accounts are refused; Portal uses scoped capabilities.
+        _denial = _account_denial(request.env)
         if _denial:
             return _denial
         if action == 'update_role':
@@ -717,13 +672,10 @@ class PaasController(HiddenChainMixin, Controller):
         Errors:
             - 'Workspace not found or access denied' if ID doesn't exist or no access
         """
-        user = request.env.user
-        Workspace = request.env['woow_paas_platform.workspace']
-
-        workspace = Workspace.browse(workspace_id)
+        workspace = _PaaSCapability(request.env).workspace(workspace_id)
 
         # Combine existence and access check to prevent information leakage
-        access = workspace.check_user_access(user) if workspace.exists() else False
+        access = _PaaSCapability(request.env).access(workspace) if workspace.exists() else False
         if not access:
             return {'success': False, 'error': _('Workspace not found or access denied')}
 
@@ -750,8 +702,7 @@ class PaasController(HiddenChainMixin, Controller):
         Invite a new member to a workspace by email.
 
         Requires admin or owner role to invite. The target user must
-        already exist in the system (registered Odoo user) and be an
-        internal account — portal/share accounts are refused (#1261).
+        already exist as an active authenticated account (including Portal).
 
         Args:
             workspace_id (int): Target workspace ID
@@ -770,18 +721,14 @@ class PaasController(HiddenChainMixin, Controller):
             - 'Email is required' if email is empty
             - 'Invalid role' if role not in allowed values
             - 'No user found with email: {email}' if user doesn't exist
-            - '{email} is a portal account ...' (code 'invitee_portal_account')
-              if every account with that email is portal/share (#1261)
             - 'User is already a member of this workspace' if duplicate
         """
         user = request.env.user
-        Workspace = request.env['woow_paas_platform.workspace']
-        WorkspaceAccess = request.env['woow_paas_platform.workspace_access']
 
-        workspace = Workspace.browse(workspace_id)
+        workspace = _PaaSCapability(request.env).workspace(workspace_id)
 
         # Combine existence and access check to prevent information leakage
-        access = workspace.check_user_access(user, required_role=ROLE_ADMIN) if workspace.exists() else False
+        access = _PaaSCapability(request.env).access(workspace, required_role=ROLE_ADMIN) if workspace.exists() else False
         if not access:
             return {'success': False, 'error': _('Workspace not found or access denied')}
 
@@ -795,33 +742,27 @@ class PaasController(HiddenChainMixin, Controller):
             return {'success': False, 'error': _('Invalid role')}
 
         # Find user by email
-        ResUsers = request.env['res.users'].sudo()
+        ResUsers = request.env['res.users'].with_context({}).sudo()
         # #1261：先取出**所有**同 email 的帳號，再挑第一個 internal（`share=False`）。
         # 舊寫法 `limit=1` 依 res.users 預設排序（name, login）撿一個——同一個 email
         # 同時有 internal 與 portal 帳號時，撿到哪個全看名字排序，可能把 internal
         # 使用者的邀請錯落到他的 portal 分身上。internal 之間的相對順序沿用預設排序，
         # 與舊行為一致。
-        candidates = ResUsers.search([('email', '=ilike', email)])
+        # =ilike still interprets SQL %/_ wildcards. Bind the literal email:
+        # an underscore must never silently invite a different account.
+        candidates = ResUsers.with_context({}).search([
+            ('email', '=ilike', escape_psql(email)), ('active', '=', True),
+        ]).filtered(lambda u: not u._is_public())
 
         if not candidates:
             # 完全沒有帳號：維持既有行為與文案（不自動建帳號、不發邀請信）。
             return {'success': False, 'error': _('No user found with email: %(email)s', email=email)}
 
-        target_user = candidates.filtered(lambda u: not u.share)[:1]
-        if not target_user:
-            # #1261：帳號存在但全是 portal/share。以前這裡照樣建 workspace_access，
-            # 邀請「成功」，對方一進 /woow 就撞 AccessError（見 ERR_PORTAL_ACCOUNT
-            # 註解）。改成明確拒絕並說出原因——是**帳號類型**不行，不是 email 打錯，
-            # 讓邀請者知道該找平台管理員，而不是反覆重試。⛔ 不自動改群組。
-            return {
-                'success': False,
-                'code': ERR_INVITEE_PORTAL_ACCOUNT,
-                'error': _('%(email)s is a portal account, which cannot join a '
-                           'workspace. Only regular user accounts can be '
-                           'invited; ask the platform administrator to change '
-                           'the account type first.', email=email),
-            }
+        # Preserve internal-first selection for duplicate emails. Existing
+        # active Portal members are valid invitees; never change their groups.
+        target_user = candidates.filtered(lambda u: not u.share)[:1] or candidates[:1]
 
+        WorkspaceAccess = workspace.env['woow_paas_platform.workspace_access']
         # Check if already a member
         existing = WorkspaceAccess.search([
             ('workspace_id', '=', workspace_id),
@@ -899,21 +840,17 @@ class PaasController(HiddenChainMixin, Controller):
             - 'Invalid role' if role not in allowed values
             - 'Cannot change owner role...' if trying to modify owner
         """
-        user = request.env.user
-        Workspace = request.env['woow_paas_platform.workspace']
-        WorkspaceAccess = request.env['woow_paas_platform.workspace_access']
-
-        workspace = Workspace.browse(workspace_id)
+        workspace = _PaaSCapability(request.env).workspace(workspace_id)
 
         # Combine existence and access check to prevent information leakage
-        access = workspace.check_user_access(user, required_role=ROLE_ADMIN) if workspace.exists() else False
+        access = _PaaSCapability(request.env).access(workspace, required_role=ROLE_ADMIN) if workspace.exists() else False
         if not access:
             return {'success': False, 'error': _('Workspace not found or access denied')}
 
         if not access_id:
             return {'success': False, 'error': _('Access ID is required')}
 
-        target_access = WorkspaceAccess.browse(access_id)
+        target_access = _PaaSCapability(request.env).member(workspace, access_id)
         if not target_access.exists() or target_access.workspace_id.id != workspace_id:
             return {'success': False, 'error': _('Member not found')}
 
@@ -959,18 +896,14 @@ class PaasController(HiddenChainMixin, Controller):
         if not access_id:
             return {'success': False, 'error': _('Access ID is required')}
 
-        user = request.env.user
-        Workspace = request.env['woow_paas_platform.workspace']
-        WorkspaceAccess = request.env['woow_paas_platform.workspace_access']
-
-        workspace = Workspace.browse(workspace_id)
+        workspace = _PaaSCapability(request.env).workspace(workspace_id)
 
         # Combine existence and access check to prevent information leakage
-        access = workspace.check_user_access(user, required_role=ROLE_ADMIN) if workspace.exists() else False
+        access = _PaaSCapability(request.env).access(workspace, required_role=ROLE_ADMIN) if workspace.exists() else False
         if not access:
             return {'success': False, 'error': _('Workspace not found or access denied')}
 
-        target_access = WorkspaceAccess.browse(access_id)
+        target_access = _PaaSCapability(request.env).member(workspace, access_id)
         if not target_access.exists() or target_access.workspace_id.id != workspace_id:
             return {'success': False, 'error': _('Member not found')}
 
@@ -998,7 +931,7 @@ class PaasController(HiddenChainMixin, Controller):
                 - data (list): List of template objects
                 - count (int): Number of templates
         """
-        CloudAppTemplate = request.env['woow_paas_platform.cloud_app_template']
+        CloudAppTemplate = _PaaSCapability(request.env).cloud_templates()
 
         # #336：排除 hidden template（HA PaaS）不出現在 marketplace
         # #471 B 組：曝光層判準**留 is_hidden**（不經 HiddenChainMixin）。這裡改成
@@ -1040,7 +973,7 @@ class PaasController(HiddenChainMixin, Controller):
                 - data (dict): Template details
                 - error (str): Error message (on failure)
         """
-        CloudAppTemplate = request.env['woow_paas_platform.cloud_app_template']
+        CloudAppTemplate = _PaaSCapability(request.env).cloud_templates()
 
         template = CloudAppTemplate.browse(template_id)
         # #471 B 組：曝光層 by-id 判準留 is_hidden（未上架商品的規格頁不可讀）。
@@ -1078,11 +1011,36 @@ class PaasController(HiddenChainMixin, Controller):
         if include_values:
             data['helm_chart_name'] = template.helm_chart_name
             data['helm_chart_version'] = template.helm_chart_version
-            data['helm_default_values'] = self._safe_json_load(
+            defaults = self._safe_json_load(
                 template.helm_default_values, {}, 'helm_default_values', template.name)
+            # Portal sees tenant-configurable settings, not platform Helm defaults.
+            if request.env.user.share:
+                defaults = self._portal_config_values(defaults, template)
+            data['helm_default_values'] = defaults
             data['helm_value_specs'] = template._parse_helm_value_specs()
             data['full_description'] = template.full_description or ''
         return data
+
+    @classmethod
+    def _portal_config_values(cls, values, template):
+        """DTO of declared scalar settings only, never a raw Helm tree.
+
+        The write filter has a legacy allow-all fallback for missing specs;
+        that is not an acceptable disclosure policy for privileged reads.
+        """
+        specs = template._parse_helm_value_specs()
+        if not isinstance(specs, dict):
+            return {}
+        selected = {}
+        for spec in specs.get('required', []) + specs.get('optional', []):
+            key = spec.get('key') if isinstance(spec, dict) else spec
+            if not isinstance(key, str) or not key:
+                continue
+            value = _lookup_helm_value(values, key)
+            if value is _HELM_VALUE_MISSING or not isinstance(value, (str, int, float, bool, type(None))):
+                continue
+            selected[key] = value
+        return cls._sanitize_helm_values(cls._unflatten_dotpath_keys(selected), template)
 
     def _template_pricing(self, template: Any) -> dict[str, Any]:
         """marketplace 卡片／configure header 的價格摘要（#478）。
@@ -1155,7 +1113,7 @@ class PaasController(HiddenChainMixin, Controller):
     @route("/api/cloud/odoo-addons", auth="user", methods=["POST"], type="json")
     def api_odoo_addons(self, template_id: int | None = None, category: str | None = None, **kw: Any) -> dict[str, Any]:
         """List available Odoo addons, optionally filtered by template or category."""
-        CloudOdooAddon = request.env['woow_paas_platform.cloud_odoo_addon']
+        CloudOdooAddon = _PaaSCapability(request.env).odoo_addons()
 
         domain = [('active', '=', True)]
         if template_id:
@@ -1194,7 +1152,7 @@ class PaasController(HiddenChainMixin, Controller):
     @route("/api/cloud-services/templates/<int:template_id>/plans", auth="user", methods=["POST"], type="json")
     def api_template_plans(self, template_id: int, **kw: Any) -> dict[str, Any]:
         """Get available subscription plans for a template."""
-        CloudAppTemplate = request.env['woow_paas_platform.cloud_app_template']
+        CloudAppTemplate = _PaaSCapability(request.env).cloud_templates()
         template = CloudAppTemplate.browse(template_id)
         # #471 B 組：曝光層 by-id 判準留 is_hidden（未上架商品的規格頁不可讀）。
         # 注意這擋的是 **template**，不是既有 service——後者判 conceal_instances。
@@ -1234,17 +1192,16 @@ class PaasController(HiddenChainMixin, Controller):
         if not plan_id:
             return {'success': False, 'error': _('plan_id is required')}
 
-        CloudService = request.env['woow_paas_platform.cloud_service']
-        service = CloudService.browse(service_id)
+        service = _PaaSCapability(request.env).cloud_service(service_id)
         if not service.exists() or service.template_id.conceal_instances:
             return {'success': False, 'error': _('Service not found')}
 
         workspace = service.workspace_id
-        access = workspace.check_user_access(request.env.user)
+        access = _PaaSCapability(request.env).access(workspace)
         if not access or access.role not in [ROLE_OWNER, ROLE_ADMIN]:
             return {'success': False, 'error': _('Admin access required')}
 
-        Plan = request.env['sh.subscription.plan'].sudo()
+        Plan = request.env['sh.subscription.plan'].with_context({}).sudo()
         plan = Plan.browse(plan_id)
         if not plan.exists():
             return {'success': False, 'error': _('Plan not found')}
@@ -1387,7 +1344,7 @@ class PaasController(HiddenChainMixin, Controller):
         # 再用 sudo 建 transient move，避免租戶因 account.journal read ACL 在
         # `_compute_company_id` 爆 AccessError，也避免誤吃 request env company。
         invoice_vals['company_id'] = sub.sh_company_id.id
-        invoice = request.env['account.move'].sudo().new(invoice_vals)
+        invoice = request.env['account.move'].with_context({}).sudo().new(invoice_vals)
         return _invoice_payability_fields(invoice)
 
     def _ensure_skip_trial_invoice_payable(self, service, sub):
@@ -1413,13 +1370,12 @@ class PaasController(HiddenChainMixin, Controller):
         confirm modal so the displayed total and guard match what
         `api_service_skip_trial` will charge.
         """
-        CloudService = request.env['woow_paas_platform.cloud_service']
-        service = CloudService.browse(service_id)
+        service = _PaaSCapability(request.env).cloud_service(service_id)
         if not service.exists() or service.template_id.conceal_instances:
             return {'success': False, 'error': _('Service not found')}
 
         workspace = service.workspace_id
-        access = workspace.check_user_access(request.env.user)
+        access = _PaaSCapability(request.env).access(workspace)
         if not access or access.role not in [ROLE_OWNER, ROLE_ADMIN]:
             return {'success': False, 'error': _('Admin access required')}
 
@@ -1494,13 +1450,12 @@ class PaasController(HiddenChainMixin, Controller):
     @route("/api/cloud-services/services/<int:service_id>/skip-trial", auth="user", methods=["POST"], type="json")
     def api_service_skip_trial(self, service_id: int, **kw: Any) -> dict[str, Any]:
         """Skip trial period and start paid billing immediately."""
-        CloudService = request.env['woow_paas_platform.cloud_service']
-        service = CloudService.browse(service_id)
+        service = _PaaSCapability(request.env).cloud_service(service_id)
         if not service.exists() or service.template_id.conceal_instances:
             return {'success': False, 'error': _('Service not found')}
 
         workspace = service.workspace_id
-        access = workspace.check_user_access(request.env.user)
+        access = _PaaSCapability(request.env).access(workspace)
         if not access or access.role not in [ROLE_OWNER, ROLE_ADMIN]:
             return {'success': False, 'error': _('Admin access required')}
 
@@ -1628,14 +1583,11 @@ class PaasController(HiddenChainMixin, Controller):
                 - error (str): Error message (on failure)
         """
         # Validate workspace access
-        user = request.env.user
-        Workspace = request.env['woow_paas_platform.workspace']
-
-        workspace = Workspace.browse(workspace_id)
+        workspace = _PaaSCapability(request.env).workspace(workspace_id)
         if not workspace.exists():
             return {'success': False, 'error': _('Workspace not found or access denied')}
 
-        access = workspace.check_user_access(user)
+        access = _PaaSCapability(request.env).access(workspace)
         if not access:
             return {'success': False, 'error': _('Workspace not found or access denied')}
 
@@ -1669,19 +1621,15 @@ class PaasController(HiddenChainMixin, Controller):
                 - error (str): Error message (on failure)
         """
         # Validate workspace and service access
-        user = request.env.user
-        Workspace = request.env['woow_paas_platform.workspace']
-        CloudService = request.env['woow_paas_platform.cloud_service']
-
-        workspace = Workspace.browse(workspace_id)
+        workspace = _PaaSCapability(request.env).workspace(workspace_id)
         if not workspace.exists():
             return {'success': False, 'error': _('Workspace not found or access denied')}
 
-        access = workspace.check_user_access(user)
+        access = _PaaSCapability(request.env).access(workspace)
         if not access:
             return {'success': False, 'error': _('Workspace not found or access denied')}
 
-        service = CloudService.browse(service_id)
+        service = _PaaSCapability(request.env).cloud_service(service_id, workspace_id)
         if (not service.exists() or service.workspace_id.id != workspace_id
                 or service.template_id.conceal_instances):
             return {'success': False, 'error': _('Service not found')}
@@ -1754,19 +1702,15 @@ class PaasController(HiddenChainMixin, Controller):
                 return {'success': False, 'error': _('Invalid revision number')}
 
         # Validate workspace and service access
-        user = request.env.user
-        Workspace = request.env['woow_paas_platform.workspace']
-        CloudService = request.env['woow_paas_platform.cloud_service']
-
-        workspace = Workspace.browse(workspace_id)
+        workspace = _PaaSCapability(request.env).workspace(workspace_id)
         if not workspace.exists():
             return {'success': False, 'error': _('Workspace not found or access denied')}
 
-        access = workspace.check_user_access(user, required_role=ROLE_ADMIN)
+        access = _PaaSCapability(request.env).access(workspace, required_role=ROLE_ADMIN)
         if not access:
             return {'success': False, 'error': _('Workspace not found or access denied')}
 
-        service = CloudService.browse(service_id)
+        service = _PaaSCapability(request.env).cloud_service(service_id, workspace_id)
         if (not service.exists() or service.workspace_id.id != workspace_id
                 or service.template_id.conceal_instances):
             return {'success': False, 'error': _('Service not found')}
@@ -1843,20 +1787,16 @@ class PaasController(HiddenChainMixin, Controller):
         授權與 gate 順序完全沿用 #357／#471／#533／#553 的判準（見下方各註解）；
         租戶自設只多一道能力 gate：``template.admin_username_helm_path``。
         """
-        Workspace = request.env['woow_paas_platform.workspace']
-        CloudService = request.env['woow_paas_platform.cloud_service']
 
-        workspace = Workspace.browse(workspace_id)
+        workspace = _PaaSCapability(request.env).workspace(workspace_id)
         if not workspace.exists():
             return {'success': False, 'error': _('Workspace not found or access denied')}
 
-        access = workspace.check_user_access(
-            request.env.user, required_role=ROLE_ADMIN,
-        )
+        access = _PaaSCapability(request.env).access(workspace, required_role=ROLE_ADMIN)
         if not access:
             return {'success': False, 'error': _('Workspace not found or access denied')}
 
-        service = CloudService.browse(service_id)
+        service = _PaaSCapability(request.env).cloud_service(service_id, workspace_id)
         # #471 C 組：補上 conceal_instances gate，與其他既有服務操作端點同判準。
         # 修前這裡**完全沒有**隱藏 gate，於是同一個服務「API 重設得了密碼，但唯一的
         # UI 入口（詳情頁）打不開」——正是 #460／#464 反覆撞到的場景。gate 刻意放在
@@ -1905,9 +1845,9 @@ class PaasController(HiddenChainMixin, Controller):
             # 成員經 /web/dataset/call_kw 繞過本 gate 直接拿密碼，見 model 端 docstring。
             # 本 endpoint 是該 method 的唯一 entry（grep action_reset/_reset_admin_password
             # 全 repo 確認：無其他 controller、無 XML view button）。
-            # 刻意「不」用 sudo()：method 內部對 secret 的讀寫已自行 sudo，外層保持
-            # current-user env，ir.rule 才會繼續驗這位 admin 對該 service 的可及性
-            # （sudo 會連這層一起關掉，等於把 workspace 邊界交給本 handler 獨力承擔）。
+            # Internal callers retain their ORM rules. Portal uses only the
+            # resolved service capability, after membership + admin checks;
+            # credential/lifecycle gates in the private model method remain.
             if tenant_set:
                 applied_password = service._reset_admin_password(
                     new_password=new_password, new_username=new_username,
@@ -2075,19 +2015,15 @@ class PaasController(HiddenChainMixin, Controller):
                 - error (str): Error message (on failure)
         """
         # Validate workspace and service access
-        user = request.env.user
-        Workspace = request.env['woow_paas_platform.workspace']
-        CloudService = request.env['woow_paas_platform.cloud_service']
-
-        workspace = Workspace.browse(workspace_id)
+        workspace = _PaaSCapability(request.env).workspace(workspace_id)
         if not workspace.exists():
             return {'success': False, 'error': _('Workspace not found or access denied')}
 
-        access = workspace.check_user_access(user)
+        access = _PaaSCapability(request.env).access(workspace)
         if not access:
             return {'success': False, 'error': _('Workspace not found or access denied')}
 
-        service = CloudService.browse(service_id)
+        service = _PaaSCapability(request.env).cloud_service(service_id, workspace_id)
         if (not service.exists() or service.workspace_id.id != workspace_id
                 or service.template_id.conceal_instances):
             return {'success': False, 'error': _('Service not found')}
@@ -2119,18 +2055,15 @@ class PaasController(HiddenChainMixin, Controller):
         「Service not found」而不是別人的資料；`conceal_instances` 的模板一併
         當作不存在，與同檔其他 service 端點同款。
         """
-        user = request.env.user
-        workspace = request.env['woow_paas_platform.workspace'].browse(
-            workspace_id)
+        workspace = _PaaSCapability(request.env).workspace(workspace_id)
         if not workspace.exists():
             return None, {'success': False,
                           'error': _('Workspace not found or access denied')}
-        access = workspace.check_user_access(user)
+        access = _PaaSCapability(request.env).access(workspace)
         if not access:
             return None, {'success': False,
                           'error': _('Workspace not found or access denied')}
-        service = request.env['woow_paas_platform.cloud_service'].browse(
-            service_id)
+        service = _PaaSCapability(request.env).cloud_service(service_id, workspace_id)
         if (not service.exists() or service.workspace_id.id != workspace_id
                 or service.template_id.conceal_instances):
             return None, {'success': False, 'error': _('Service not found')}
@@ -2177,13 +2110,13 @@ class PaasController(HiddenChainMixin, Controller):
                                     **kwargs: Any) -> dict[str, Any]:
         """本服務的 Access policy CRUD ＋ reorder。"""
         if action == 'list':
-            # 讀：workspace 成員即可，且**不 sudo**——ir.rule 才是守線
-            # （orm-vs-endpoint-acl-test-coverage）。非成員在上一步就被擋掉。
+            # Internal ORM rules or Portal capability, pinned to this service.
+            # Non-members are denied before reaching the policy query.
             service, error = self._get_workspace_service_or_error(
                 workspace_id, service_id, require_manage=False)
             if error:
                 return error
-            policies = request.env[
+            policies = service.env[
                 'woow_paas_platform.security_access_access_policy'].search(
                     [('cloud_service_id', '=', service.id)])
             return {'success': True, 'data': [p.to_dict() for p in policies]}
@@ -2252,10 +2185,7 @@ class PaasController(HiddenChainMixin, Controller):
         `service.access_policy_ids`：兩者等價，但 search 走的是 ir.rule 過濾後
         的可見集合，語意上「找不到」與「看不到」收斂成同一個回應。
         """
-        return request.env[
-            'woow_paas_platform.security_access_access_policy'].search(
-                [('id', '=', policy_id),
-                 ('cloud_service_id', '=', service.id)], limit=1)
+        return _PaaSCapability(request.env).cloud_policy(service, policy_id)
 
     def _create_service_access_policy(self, service, kwargs) -> dict[str, Any]:
         if not kwargs.get('name'):
@@ -2277,7 +2207,7 @@ class PaasController(HiddenChainMixin, Controller):
         # 條 constraint。
         # （domain 以 `cloud_service_id` 收斂 ⇒ sudo 只放寬可見度，不會把別的
         # service／租戶的 policy 算進來。）
-        Policy = request.env[
+        Policy = service.env[
             'woow_paas_platform.security_access_access_policy']
         sub = service.sudo().subscription_id
         if sub and sub.sh_subscription_plan_id:
@@ -2464,7 +2394,7 @@ class PaasController(HiddenChainMixin, Controller):
         if not client:
             return cannot(_('PaaS Operator not configured'))
 
-        CloudOdooAddon = request.env['woow_paas_platform.cloud_odoo_addon']
+        CloudOdooAddon = _PaaSCapability(request.env).odoo_addons()
         addons = CloudOdooAddon.browse(removed_addon_ids).exists()
         if not addons:
             return nothing_to_remove
@@ -2558,12 +2488,12 @@ class PaasController(HiddenChainMixin, Controller):
         if not removed_addon_ids:
             return {'success': True, 'modules': {}}
 
-        service = request.env['woow_paas_platform.cloud_service'].browse(service_id)
+        service = _PaaSCapability(request.env).cloud_service(service_id)
         if not service.exists() or service.template_id.conceal_instances:
             return {'success': False, 'error': _('Service not found')}
 
         workspace = service.workspace_id
-        access = workspace.check_user_access(request.env.user)
+        access = _PaaSCapability(request.env).access(workspace)
         if not access:
             return {'success': False, 'error': _('Access denied')}
 
@@ -2592,20 +2522,21 @@ class PaasController(HiddenChainMixin, Controller):
         action: str = 'list',
         **kw: Any,
     ) -> dict[str, Any]:
-        """CRUD operations for user-scope MCP servers on a cloud service."""
-        user = request.env.user
-        Workspace = request.env['woow_paas_platform.workspace']
-        CloudService = request.env['woow_paas_platform.cloud_service']
-
-        workspace = Workspace.browse(workspace_id)
+        """CRUD operations for project-scoped MCP servers on a cloud service."""
+        # These records belong to support projects, not to the cloud service.
+        # Product workspace access must not widen the existing project/AI
+        # sharing boundary, including through this legacy service URL.
+        if request.env.user.share:
+            return {'success': False, 'error': _('Permission denied')}
+        workspace = _PaaSCapability(request.env).workspace(workspace_id)
         if not workspace.exists():
             return {'success': False, 'error': _('Workspace not found or access denied')}
 
-        access = workspace.check_user_access(user)
+        access = _PaaSCapability(request.env).access(workspace)
         if not access:
             return {'success': False, 'error': _('Workspace not found or access denied')}
 
-        service = CloudService.browse(service_id)
+        service = _PaaSCapability(request.env).cloud_service(service_id, workspace_id)
         if (not service.exists() or service.workspace_id.id != workspace_id
                 or service.template_id.conceal_instances):
             return {'success': False, 'error': _('Service not found')}
@@ -2674,7 +2605,7 @@ class PaasController(HiddenChainMixin, Controller):
                 'error': _('No support project bound to this service.'),
             }
 
-        McpServer = request.env['woow_paas_platform.mcp_server'].sudo()
+        McpServer = request.env['woow_paas_platform.mcp_server'].with_context({}).sudo()
         server = McpServer.create({
             'name': name,
             'url': url,
@@ -2692,7 +2623,7 @@ class PaasController(HiddenChainMixin, Controller):
         if not server_id:
             return {'success': False, 'error': _('server_id is required')}
 
-        McpServer = request.env['woow_paas_platform.mcp_server'].sudo()
+        McpServer = request.env['woow_paas_platform.mcp_server'].with_context({}).sudo()
         server = McpServer.browse(int(server_id))
         if not server.exists() or server.project_id.cloud_service_id.id != service.id:
             return {'success': False, 'error': _('MCP Server not found')}
@@ -2718,7 +2649,7 @@ class PaasController(HiddenChainMixin, Controller):
         if not server_id:
             return {'success': False, 'error': _('server_id is required')}
 
-        McpServer = request.env['woow_paas_platform.mcp_server'].sudo()
+        McpServer = request.env['woow_paas_platform.mcp_server'].with_context({}).sudo()
         server = McpServer.browse(int(server_id))
         if not server.exists() or server.project_id.cloud_service_id.id != service.id:
             return {'success': False, 'error': _('MCP Server not found')}
@@ -2731,7 +2662,7 @@ class PaasController(HiddenChainMixin, Controller):
         if not server_id:
             return {'success': False, 'error': _('server_id is required')}
 
-        McpServer = request.env['woow_paas_platform.mcp_server'].sudo()
+        McpServer = request.env['woow_paas_platform.mcp_server'].with_context({}).sudo()
         server = McpServer.browse(int(server_id))
         if not server.exists() or server.project_id.cloud_service_id.id != service.id:
             return {'success': False, 'error': _('MCP Server not found')}
@@ -2757,7 +2688,7 @@ class PaasController(HiddenChainMixin, Controller):
         if not server_id:
             return {'success': False, 'error': _('server_id is required')}
 
-        McpServer = request.env['woow_paas_platform.mcp_server'].sudo()
+        McpServer = request.env['woow_paas_platform.mcp_server'].with_context({}).sudo()
         server = McpServer.browse(int(server_id))
         if not server.exists() or server.project_id.cloud_service_id.id != service.id:
             return {'success': False, 'error': _('MCP Server not found')}
@@ -2833,16 +2764,21 @@ class PaasController(HiddenChainMixin, Controller):
         current user to be in ``project.message_partner_ids`` (follower
         carve-out, in lock-step with ``ai_assistant.py``).
         """
-        Project = request.env['project.project'].sudo()
+        Project = request.env['project.project'].with_context({}).sudo()
         project = Project.browse(project_id)
         if not project.exists():
             return None, None
-        workspace = project.cloud_service_id.workspace_id
+        service = project.cloud_service_id
+        if service and service.template_id.conceal_instances:
+            return None, None
+        workspace = service.workspace_id
         if not workspace:
             user_partner = request.env.user.partner_id
             if user_partner in project.message_partner_ids:
                 return project, self._SyntheticAccess(role=ROLE_OWNER)
             return None, None
+        # Preserve the existing bound-project authorization contract. The
+        # product capability grants PaaS resources, not private ERP projects.
         access = workspace.check_user_access(request.env.user)
         if not access:
             return None, None
@@ -2922,7 +2858,7 @@ class PaasController(HiddenChainMixin, Controller):
         if 'cloud_service_id' in params:
             target_raw = params.get('cloud_service_id')
             if target_raw:
-                CloudService = request.env['woow_paas_platform.cloud_service'].sudo()
+                CloudService = request.env['woow_paas_platform.cloud_service'].with_context({}).sudo()
                 target = CloudService.browse(int(target_raw))
                 if not target.exists():
                     return {'success': False, 'error': _('Cloud Service not found')}
@@ -3028,7 +2964,7 @@ class PaasController(HiddenChainMixin, Controller):
         if url_error:
             return {'success': False, 'error': url_error}
 
-        McpServer = request.env['woow_paas_platform.mcp_server'].sudo()
+        McpServer = request.env['woow_paas_platform.mcp_server'].with_context({}).sudo()
         # #525 B4：與 `_update_project_mcp_server` 同理**刻意不包 try**——對齊
         # service-centric 的 `_create_mcp_server`（那支的 `McpServer.create(...)`
         # 同樣裸露、直接 return）。只改 update 會把「update 包／不包不一致」
@@ -3053,7 +2989,7 @@ class PaasController(HiddenChainMixin, Controller):
         server_id = params.get('server_id')
         if not server_id:
             return None, {'success': False, 'error': _('server_id is required')}
-        McpServer = request.env['woow_paas_platform.mcp_server'].sudo()
+        McpServer = request.env['woow_paas_platform.mcp_server'].with_context({}).sudo()
         server = McpServer.browse(int(server_id))
         if not server.exists() or server.project_id.id != project.id:
             return None, {'success': False, 'error': _('MCP Server not found')}
@@ -3389,7 +3325,7 @@ class PaasController(HiddenChainMixin, Controller):
 
     def _list_services(self, workspace: Any) -> dict[str, Any]:
         """List all services in a workspace."""
-        CloudService = request.env['woow_paas_platform.cloud_service']
+        CloudService = workspace.env['woow_paas_platform.cloud_service']
 
         services = CloudService.search([
             ('workspace_id', '=', workspace.id),
@@ -3508,8 +3444,8 @@ class PaasController(HiddenChainMixin, Controller):
         if not name:
             return {'success': False, 'error': _('Service name is required')}
 
-        CloudAppTemplate = request.env['woow_paas_platform.cloud_app_template']
-        CloudService = request.env['woow_paas_platform.cloud_service']
+        CloudAppTemplate = _PaaSCapability(request.env).cloud_templates()
+        CloudService = workspace.env['woow_paas_platform.cloud_service']
 
         template = CloudAppTemplate.browse(template_id)
         # #336：generic create 拒絕 hidden template（hidden 只能經 provision 端點建）
@@ -3521,7 +3457,7 @@ class PaasController(HiddenChainMixin, Controller):
                     'error': _('This template cannot be deployed directly.')}
 
         # Validate subscription plan
-        Plan = request.env['sh.subscription.plan'].sudo()
+        Plan = request.env['sh.subscription.plan'].with_context({}).sudo()
         plan = Plan.browse(plan_id)
         if not plan.exists():
             return {'success': False, 'error': _('Subscription plan not found')}
@@ -3537,7 +3473,7 @@ class PaasController(HiddenChainMixin, Controller):
         reference_id = str(uuid.uuid4())
         # Generate hash-based names for cross-sandbox uniqueness
         from ..services.naming import make_namespace, make_service_subdomain
-        ns_prefix = request.env['ir.config_parameter'].sudo().get_param(
+        ns_prefix = request.env['ir.config_parameter'].with_context({}).sudo().get_param(
             'woow_paas_platform.namespace_prefix', 'paas-ws-'
         )
         # #677：namespace／subdomain 吃 workspace 的 **stored** `ws_hash`，不是
@@ -3636,8 +3572,9 @@ class PaasController(HiddenChainMixin, Controller):
                 # #559：helm_values 有 groups=，放在 create vals 裡會讓租戶身分的
                 # create 直接 AccessError。改在 create 之後以提權入口寫入
                 # （`_apply_helm_values` 套用與 create() 相同的敏感值剝除）。
-                # **刻意不 sudo 整個 create** —— 那會連 ir.rule 的 create 檢查
-                # 一起繞掉，那是 #519 的範圍，不在本單。
+                # Internal create still enforces ir.rule. Portal create uses
+                # the verified workspace capability after the admin gate;
+                # request context cannot supply any defaults/anchors.
                 'helm_chart_version': template.helm_chart_version,
                 # #332：allocated_* 改讀選定 plan 規格、0 值 fallback template.min_*
                 **CloudService._allocated_vals_from(template, plan),
@@ -3650,7 +3587,7 @@ class PaasController(HiddenChainMixin, Controller):
             # Resolve Odoo addon selection (with dependency expansion)
             resolved_addon_ids = []
             if odoo_addon_ids and template.slug == 'odoo':
-                CloudOdooAddon = request.env['woow_paas_platform.cloud_odoo_addon']
+                CloudOdooAddon = _PaaSCapability(request.env).odoo_addons()
                 selected = CloudOdooAddon.browse(odoo_addon_ids).filtered('active')
                 # Expand dependencies recursively
                 all_addons = selected
@@ -3702,7 +3639,7 @@ class PaasController(HiddenChainMixin, Controller):
             service._create_and_confirm_subscription(partner, plan)
 
             # Trigger the deploy cron to pick up this service ASAP
-            cron = request.env.ref(
+            cron = service.env.ref(
                 'woow_paas_platform.ir_cron_deploy_cloud_services',
                 raise_if_not_found=False,
             )
@@ -3821,7 +3758,7 @@ class PaasController(HiddenChainMixin, Controller):
             addon_changed = False
             if odoo_addon_ids is not None and service.template_id.slug == 'odoo':
                 old_addon_ids = set(service.odoo_addon_ids.ids)
-                CloudOdooAddon = request.env['woow_paas_platform.cloud_odoo_addon']
+                CloudOdooAddon = _PaaSCapability(request.env).odoo_addons()
                 selected = CloudOdooAddon.browse(odoo_addon_ids).filtered('active')
                 # Expand dependencies
                 all_addons = selected
@@ -4198,8 +4135,7 @@ class PaasController(HiddenChainMixin, Controller):
             release_status = release.get('status', '')
 
             # Re-fetch service to get latest state (optimistic locking)
-            CloudService = request.env['woow_paas_platform.cloud_service']
-            service = CloudService.browse(service_id)
+            service = _PaaSCapability(request.env).cloud_service(service_id)
 
             if not service.exists():
                 _logger.debug("Service %s no longer exists, skipping status update", service_id)
@@ -4211,7 +4147,7 @@ class PaasController(HiddenChainMixin, Controller):
             # workspace 的 owner/admin（`security/ir_rules.xml`）。但本函式的唯一兩個
             # 呼叫端是 `_list_services` 與 `_get_service`，而它們所在的
             # `action='list'` / `action='get'` 分支**沒有 role gate**（只有
-            # `workspace.check_user_access(user)`，gate 掛在 create/update/delete 分支
+            # `_PaaSCapability(request.env).access(workspace)`，gate 掛在 create/update/delete 分支
             # 上）⇒ 任何成員（含 guest）都會走到這裡。
             #
             # 這裡寫的是 operator 回報的**叢集事實**（state / release facts /
@@ -4362,8 +4298,7 @@ class PaasController(HiddenChainMixin, Controller):
             if e.status_code == 404:
                 # Release not found - might have been deleted
                 # Re-fetch to check current state
-                CloudService = request.env['woow_paas_platform.cloud_service']
-                service = CloudService.browse(service_id)
+                service = _PaaSCapability(request.env).cloud_service(service_id)
                 if service.exists() and service.state == 'deleting':
                     # #525 B5：`CloudService.unlink()` 是多步驟 teardown（sidecar
                     # MCP 刪除 → `super().unlink()` → 訂閱結算＋按比例退點），中途
@@ -4616,7 +4551,7 @@ class PaasController(HiddenChainMixin, Controller):
 
         # Fallback: construct from subdomain (user can update later)
         if service.subdomain:
-            IrConfigParameter = request.env['ir.config_parameter'].sudo()
+            IrConfigParameter = request.env['ir.config_parameter'].with_context({}).sudo()
             paas_domain = IrConfigParameter.get_param(
                 'woow_paas_platform.paas_domain', 'woowtech.io',
             )
@@ -4721,8 +4656,10 @@ class PaasController(HiddenChainMixin, Controller):
                 # #559：helm_values 有 groups='base.group_system'，屬性直讀會
                 # AccessError。走 model 的唯一入口——租戶看得到的仍是遮罩後的值
                 # （#535），只是 ORM 直讀那條側門被關上了。
-                'helm_values': self._sanitize_helm_values(
-                    service._helm_values_dict(), service.template_id,
+                'helm_values': (
+                    self._portal_config_values(service._helm_values_dict(), service.template_id)
+                    if request.env.user.share else self._sanitize_helm_values(
+                        service._helm_values_dict(), service.template_id)
                 ),
                 # #745：Access 設定（拍板 10 的欄位組）。只掛在 detail 那一側
                 # ——Access 頁籤只存在於 detail 頁，而 list 端點會為一個
