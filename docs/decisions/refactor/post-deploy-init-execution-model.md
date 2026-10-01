@@ -151,6 +151,9 @@ woow-paas/paas-app-bundle-cd#154（prod `limit_time_real_cron=1800`）要先上 
   init cron 迴圈遇到佇列 snapshot 之後 template 改成不需 init 的那台時略過，不讓整趟失敗。
   init cron 開頭的 D2-R 全域收尾（`_init_settle_operator_wait_timeouts`）也逐台 commit／rollback：
   一台轉 error 或告警撞到 DB 故障只回捲那一台，前後已收尾的服務保留，同一趟的佇列照常處理（Q36）。
+  短 poll 的 not-ready 分支會順手冷補套已記錄的 attempt。`_init_guarded` 在取鎖前先 flush 同台的觀測寫入，
+  所以不會出現「CAS 列鎖忙 → rollback 吞掉同台觀測」：持鎖者放手時這筆交易自己拿到列鎖，CAS 不會忙；
+  持鎖者並發更新時 flush 即撞 40001 外拋，由 poll 的逐台邊界回捲、recovery pointer 保留給下一趟（真兩連線測試實證）。
 - **監控**（Q38／D3）：`mail.activity` 給 `base.group_system`，每個監控項用不同 summary 各自去重，全部掛在
   mail.thread 單例 `woow_paas_platform.platform_monitor`（`ir.cron`／`cloud_service` 都不是 mail.thread，
   activity 建立時會呼叫 `message_subscribe`）。短 poll 查 init cron（停用或 `lastcall` > 40 分）、最舊 observation

@@ -1801,7 +1801,7 @@ class TestExecSurfaceRealCursor1159(_RealCursorCase):
         with self.registry.cursor() as cr:
             self.assertFalse(self._env(cr)[ATTEMPT].browse(attempt_id).applied_at,
                              '整台回捲，recovery pointer 保留給下一趟')
-        self.assertEqual(self._read(sid, 'init_attempt_id'), attempt_id)
+        self.assertEqual(self._read(sid, 'init_attempt_id').id, attempt_id)
 
     def test_short_poll_commits_each_service_and_one_failure_does_not_stop_the_tick(self):
         """驗收 2：deleting 由背景在 404 後 unlink；一台 teardown 失敗，其他台照常收尾。"""
