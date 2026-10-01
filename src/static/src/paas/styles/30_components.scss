@@ -203,6 +203,18 @@
         opacity: 0.5;
         cursor: not-allowed;
     }
+
+    // #1310：按鈕被擠窄時，CJK 標籤會被拆成一行一個字（「取」「消」）。
+    // keep-all 讓 CJK 字串不在字與字之間斷行（等同不斷行），英文標籤仍可在
+    // 空白處換行，不會像 nowrap 那樣整串溢出容器。
+    word-break: keep-all;
+
+    @media (max-width: $woow-bp-sm) {
+        &.o_woow_btn_md {
+            padding-left: 1rem;
+            padding-right: 1rem;
+        }
+    }
 }
 
 // -----------------------------------------------------------------------------
@@ -318,6 +330,16 @@
     // #368：常駐貼底，不隨 body 捲走；不改 justify-content——PlanTotalBar
     // 靠自身 margin-right:auto 靠左，避免動到其他無 PlanTotalBar 的 modal 佈局
     flex-shrink: 0;
+
+    // #1310：窄畫面按鈕放不下時換行，而不是把按鈕擠扁或推出 modal
+    flex-wrap: wrap;
+
+    @media (max-width: $woow-bp-sm) {
+        // 總價獨占一行，按鈕排到下一行（仍靠右）
+        .o_woow_plan_total {
+            flex-basis: 100%;
+        }
+    }
 }
 
 // -----------------------------------------------------------------------------
@@ -501,6 +523,7 @@
     font-weight: 600;
     color: $woow-text-primary;
     margin: 0;
+    overflow-wrap: anywhere; // #1310：長名稱不撐破卡片
 }
 
 .o_woow_cloud_service_template {
@@ -516,6 +539,10 @@
     color: $woow-primary;
     text-decoration: none;
     margin-top: 0.25rem;
+    // #1310：網址沒有空白可斷，窄卡片時在任意字元換行
+    max-width: 100%;
+    min-width: 0;
+    overflow-wrap: anywhere;
 
     &:hover {
         text-decoration: underline;

@@ -10,14 +10,20 @@
     justify-content: space-between;
     align-items: flex-start;
     margin-bottom: 2rem;
+    // #1310：窄畫面時標題與主按鈕換行，不互相擠壓
+    flex-wrap: wrap;
+    gap: 1rem;
 }
 
 .o_woow_workspace_title {
+    min-width: 0;
+
     h1 {
         font-size: 1.75rem;
         font-weight: 700;
         margin-bottom: 0.5rem;
         color: $woow-text-primary;
+        overflow-wrap: anywhere;
     }
 
     p {
@@ -175,6 +181,7 @@
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
+        min-width: 0; // #1310：讓 ellipsis 真的生效，badge 不被推出卡片
     }
 }
 
@@ -189,7 +196,8 @@
 
 .o_woow_workspace_item_meta {
     display: flex;
-    gap: 1.5rem;
+    flex-wrap: wrap; // #1310
+    gap: 0.25rem 1.5rem;
     font-size: 0.75rem;
     color: $woow-text-secondary;
 
@@ -276,6 +284,14 @@
 .o_woow_workspace_detail_info {
     display: flex;
     gap: 1rem;
+    min-width: 0;
+
+    // #1310：右側文字區（模板內無 class）吃掉剩餘寬度並允許收縮，
+    // 長名稱換行而不是把整個 header 撐出畫面
+    > div:not(.o_woow_workspace_detail_icon) {
+        flex: 1;
+        min-width: 0;
+    }
 }
 
 .o_woow_workspace_detail_icon {
@@ -293,6 +309,7 @@
 .o_woow_workspace_detail_title {
     display: flex;
     align-items: center;
+    flex-wrap: wrap; // #1310
     gap: 0.75rem;
     margin-bottom: 0.25rem;
 
@@ -301,6 +318,7 @@
         font-weight: 700;
         color: $woow-text-primary;
         margin: 0;
+        overflow-wrap: anywhere; // #1310
     }
 }
 
@@ -308,11 +326,13 @@
     font-size: 0.875rem;
     color: $woow-text-secondary;
     margin: 0 0 0.5rem;
+    overflow-wrap: anywhere; // #1310
 }
 
 .o_woow_workspace_detail_meta {
     display: flex;
-    gap: 1.5rem;
+    flex-wrap: wrap; // #1310
+    gap: 0.25rem 1.5rem;
     font-size: 0.75rem;
     color: $woow-text-secondary;
 
@@ -326,6 +346,9 @@
 .o_woow_workspace_detail_actions {
     display: flex;
     gap: 0.75rem;
+    // #1310：360px 時「Delete Workspace」被裁掉——按鈕放不下就換行
+    flex-wrap: wrap;
+    max-width: 100%;
 }
 
 // Stats Grid
@@ -454,6 +477,20 @@
     &:hover {
         background: rgba(0, 0, 0, 0.02);
     }
+
+    // #1310：手機上角色選單＋移除鈕換到第二行，與文字對齊（頭像 40px + gap）
+    @media (max-width: $woow-bp-sm) {
+        flex-wrap: wrap;
+        padding: 1rem;
+
+        .o_woow_member_info {
+            flex: 1 1 10rem;
+        }
+
+        .o_woow_member_actions {
+            margin-left: calc(40px + 1rem);
+        }
+    }
 }
 
 .o_woow_member_avatar {
@@ -478,6 +515,7 @@
 .o_woow_member_name {
     display: flex;
     align-items: center;
+    flex-wrap: wrap; // #1310
     gap: 0.5rem;
     margin-bottom: 0.125rem;
 
@@ -490,6 +528,7 @@
 .o_woow_member_email {
     font-size: 0.875rem;
     color: $woow-text-secondary;
+    overflow-wrap: anywhere; // #1310：長 email 不撐破列
 }
 
 .o_woow_member_meta {
@@ -607,6 +646,8 @@
     justify-content: space-between;
     align-items: center;
     margin-bottom: 1.5rem;
+    flex-wrap: wrap; // #1310
+    gap: 0.75rem;
 
     h2 {
         margin: 0;
@@ -663,6 +704,7 @@
     gap: 1rem;
 
     @media (max-width: 640px) {
-        grid-template-columns: 1fr;
+        // #1310：minmax(0, …) 讓欄寬不被長網址／名稱的 min-content 撐開
+        grid-template-columns: minmax(0, 1fr);
     }
 }

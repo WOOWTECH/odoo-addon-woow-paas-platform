@@ -3,6 +3,12 @@
     max-width: 60rem;
     margin: 0 auto;
 
+    // #1310：手機上 .o_woow_content 已有 1rem 內距，再加 2rem 會雙重縮排
+    @media (max-width: $woow-bp-md) {
+        padding-left: 0;
+        padding-right: 0;
+    }
+
     .o_woow_page_header {
         margin-bottom: 1.5rem;
 
@@ -104,6 +110,7 @@
     .o_woow_card_body {
         display: flex;
         align-items: center;
+        flex-wrap: wrap; // #1310：設為預設／移除按鈕放不下時換到下一行
         gap: 1rem;
         padding: 1rem 1.25rem;
     }
@@ -111,7 +118,8 @@
         display: flex;
         align-items: center;
         gap: 0.75rem;
-        flex: 1;
+        flex: 1 1 12rem; // #1310
+        min-width: 0;
     }
     .o_woow_card_meta {
         display: flex;
@@ -126,6 +134,7 @@
     }
     .o_woow_card_details {
         display: flex;
+        flex-wrap: wrap; // #1310
         gap: 0.5rem;
         font-size: 0.8125rem;
         color: $woow-text-secondary;
@@ -140,6 +149,7 @@
     }
     .o_woow_card_actions {
         display: flex;
+        flex-wrap: wrap; // #1310
         gap: 0.5rem;
     }
 }

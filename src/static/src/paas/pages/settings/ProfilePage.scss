@@ -3,6 +3,12 @@
     max-width: 40rem;
     margin: 0 auto;
 
+    // #1310：手機上 .o_woow_content 已有 1rem 內距，再加 2rem 會雙重縮排
+    @media (max-width: $woow-bp-md) {
+        padding-left: 0;
+        padding-right: 0;
+    }
+
     .o_woow_page_header {
         margin-bottom: 1.5rem;
 
@@ -102,6 +108,7 @@
 
 .o_woow_profile_actions {
     display: flex;
+    flex-wrap: wrap; // #1310
     gap: 0.5rem;
     justify-content: flex-end;
     margin-top: 0.5rem;
