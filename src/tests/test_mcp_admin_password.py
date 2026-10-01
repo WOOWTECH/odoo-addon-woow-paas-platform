@@ -599,6 +599,11 @@ class TestMcpAdminPassword(TransactionCase):
         owner／admin（`api_workspace_services` create 限 owner／admin、reset 限
         ROLE_ADMIN），所以 harness 以一位 internal admin 成員的身分呼叫——只換
         `request.env` 的身分，受測 recordset、斷言與 production 都不變。
+
+        ⚠ 範圍：只有 capability 閘與序列化看到的是這位成員；傳進 `_create_service`
+        的 `workspace` 仍是 setUp 以 superuser 建的 recordset，所以 ORM 的
+        create／write 仍以 superuser 執行、欄位 groups 不生效。internal 非系統
+        管理員實際寫 `deploy_params` 會被拒，已在沙盒實測並開 #1317，本測試不涵蓋。
         """
         if not getattr(self, '_member', None):
             self._member = self.env['res.users'].with_context(no_reset_password=True).create({
