@@ -718,15 +718,30 @@ class _ServiceCase(TransactionCase):
                 _template_vals(self.tag, init_type))
             for init_type in ('odoo', 'n8n', 'none')
         }
+        # #991：controller 經 `_PaaSCapability` 要求已認證的 workspace 成員；superuser
+        # （`__system__`，active=False）不算。真實會打 update／rollback 的是 workspace
+        # owner／admin，所以 harness 以一位 internal admin 成員的身分呼叫 controller。
+        # 只換 `request.env` 的身分：受測 service recordset 與斷言都不變，production 不放寬。
+        self.member = self.env['res.users'].with_context(no_reset_password=True).create({
+            'name': f'1257 workspace admin {self.tag}',
+            'login': f'1257-admin-{self.tag}',
+            'groups_id': [(6, 0, [self.env.ref('base.group_user').id])],
+        })
+        self.env['woow_paas_platform.workspace_access'].create({
+            'workspace_id': self.workspace.id, 'user_id': self.member.id, 'role': 'admin'})
 
     def _service(self, init_type='odoo', **vals):
         return _make_service(self.env, self.workspace, self.templates[init_type],
                              f'{init_type}-{uuid.uuid4().hex[:6]}', **vals)
 
+    def _controller_request(self):
+        """controller 看到的 request：已認證的 workspace admin 成員（見 setUp）。"""
+        return SimpleNamespace(env=self.env(user=self.member))
+
     def _poll_http(self, service, pods=None):
         client = operator_client(get_status=status_response(pods=pods or _READY_PODS))
         with patch(f'{_CONTROLLER_MODULE}.get_paas_operator_client', return_value=client), \
-                patch(f'{_CONTROLLER_MODULE}.request', new=SimpleNamespace(env=self.env)):
+                patch(f'{_CONTROLLER_MODULE}.request', new=self._controller_request()):
             PaasController()._update_service_status(service)
         return client
 
@@ -741,7 +756,7 @@ class _ServiceCase(TransactionCase):
         # （base_url／_session），autospec 的 class spec 沒有它們。
         client = MagicMock()
         with patch(f'{_CONTROLLER_MODULE}.get_paas_operator_client', return_value=client), \
-                patch(f'{_CONTROLLER_MODULE}.request', new=SimpleNamespace(env=self.env)), \
+                patch(f'{_CONTROLLER_MODULE}.request', new=self._controller_request()), \
                 patch(f'{_CONTROLLER_MODULE}.threading.Thread', _NoThread):
             return PaasController()._update_service(
                 service, values={}, version=None, odoo_addon_ids=odoo_addon_ids)
@@ -749,7 +764,7 @@ class _ServiceCase(TransactionCase):
     def _rollback(self, service):
         client = MagicMock()
         with patch(f'{_CONTROLLER_MODULE}.get_paas_operator_client', return_value=client), \
-                patch(f'{_CONTROLLER_MODULE}.request', new=SimpleNamespace(env=self.env)):
+                patch(f'{_CONTROLLER_MODULE}.request', new=self._controller_request()):
             return PaasController()._rollback_service(service, revision=1)
 
     def _hold_lease(self, service):
