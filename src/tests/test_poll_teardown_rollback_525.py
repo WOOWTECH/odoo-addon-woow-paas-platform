@@ -57,6 +57,8 @@ list/get 純讀（#1159 Q1），`_list_services` 不再 poll、不再收屍；co
 探針一律用 raw SQL 打 `woow_paas_platform_cloud_service`，不經 ORM cache。
 """
 
+import json
+import uuid
 from datetime import date, timedelta
 from unittest.mock import MagicMock, patch
 
@@ -71,6 +73,7 @@ from odoo.addons.woow_paas_platform.services.paas_operator import (
     PaaSOperatorError,
 )
 from ..models.cloud_service import _internal_provision
+from .committed_cron_scope import CommittedCronScope
 
 _CTRL = 'odoo.addons.woow_paas_platform.controllers.paas'
 _SVC = 'odoo.addons.woow_paas_platform.services.paas_operator'
@@ -100,11 +103,18 @@ class TestCronReapLeavesNoHalfDeletedService(TransactionCase):
 
     def setUp(self):
         super().setUp()
-        self.addCleanup(self._purge)
         self.ids_ = {}
-        with self.registry.cursor() as cr:
+        self.tag = uuid.uuid4().hex[:10]
+        self.scope = CommittedCronScope(self)
+        self.addCleanup(self._purge)  # 在所有 committing fixtures 建立前登記。
+        with self.scope.track(), self.registry.cursor() as cr:
             env = self._env(cr)
-            admin = env.ref('base.user_admin')
+            self.scope.monitor_id = env['woow_paas_platform.platform_monitor'].create({
+                'name': f'525 own monitor {self.tag}'}).id
+            # 訂閱／wallet 只使用自有合成 subscriber，不動既有 admin 的帳本。
+            admin = env['res.users'].with_context(no_reset_password=True).create({
+                'name': f'525 subscriber {self.tag}', 'login': f'525-subscriber-{self.tag}',
+                'groups_id': [(6, 0, [env.ref('base.group_user').id])]})
             company = env.company.sudo()
             workspace = env['woow_paas_platform.workspace'].create({
                 'name': 'WS 525 cron', 'owner_id': admin.id})
@@ -128,7 +138,7 @@ class TestCronReapLeavesNoHalfDeletedService(TransactionCase):
                 'sh_taxes_ids': [(6, 0, [])],
                 'state': 'in_progress'})
             template = env['woow_paas_platform.cloud_app_template'].sudo().create({
-                'name': 'App 525 cron', 'slug': 'app-525-cron',
+                'name': 'App 525 cron', 'slug': f'app-525-cron-{self.tag}',
                 'helm_repo_url': '',
                 'helm_chart_name': 'oci://example.invalid/app-525-cron',
                 'helm_chart_version': '0.0.0',
@@ -147,6 +157,14 @@ class TestCronReapLeavesNoHalfDeletedService(TransactionCase):
                 'product_tmpl': product_tmpl.id, 'sub': sub.id,
                 'template': template.id, 'service': service.id,
             }
+        # 本檔驗 teardown 的真三層機關，不驗 monitor health hooks。
+        self.enterContext(self.scope.isolated())
+
+    def tearDown(self):
+        try:
+            self.assertFalse(self.scope.foreign_calls, 'catch-all 後仍核 operator 無 foreign calls')
+        finally:
+            super().tearDown()
 
     def _env(self, cr):
         if cr.transaction is None:
@@ -154,33 +172,7 @@ class TestCronReapLeavesNoHalfDeletedService(TransactionCase):
         return api.Environment(cr, SUPERUSER_ID, {})
 
     def _purge(self):
-        ids = self.ids_
-        if not ids:
-            return
-        with self.registry.cursor() as cr:
-            cr.execute('DELETE FROM woow_paas_platform_cloud_service WHERE id = %s',
-                       (ids['service'],))
-            cr.execute('DELETE FROM woow_paas_platform_cloud_app_template WHERE id = %s',
-                       (ids['template'],))
-            for model, res_id in (('sh.subscription.subscription', ids['sub']),
-                                  ('woow_paas_platform.workspace', ids['workspace'])):
-                for table, column in (('mail_followers', 'res_model'),
-                                      ('mail_message', 'model')):
-                    cr.execute(f'DELETE FROM {table} WHERE {column} = %s AND res_id = %s',
-                               (model, res_id))
-            cr.execute('DELETE FROM sh_subscription_subscription WHERE id = %s', (ids['sub'],))
-            cr.execute('DELETE FROM product_template WHERE id = %s', (ids['product_tmpl'],))
-            cr.execute('DELETE FROM sh_subscription_plan WHERE id = %s', (ids['plan'],))
-            cr.execute('DELETE FROM woow_paas_platform_workspace_access WHERE workspace_id = %s',
-                       (ids['workspace'],))
-            cr.execute('DELETE FROM woow_paas_platform_workspace WHERE id = %s',
-                       (ids['workspace'],))
-            # #1159 Q38：cron 結尾的監控在真 cursor 下會留下 activity／通知訊息。
-            for table, column in (('mail_activity', 'res_model'), ('mail_message', 'model'),
-                                  ('mail_followers', 'res_model')):
-                cr.execute(f"DELETE FROM {table} WHERE {column} = "
-                           "'woow_paas_platform.platform_monitor'")
-            cr.commit()
+        self.scope.purge()
 
     def _probe(self):
         with self.registry.cursor() as cr:
@@ -195,7 +187,7 @@ class TestCronReapLeavesNoHalfDeletedService(TransactionCase):
         client = MagicMock()
         client.get_status.side_effect = PaaSOperatorError(
             'release not found', status_code=404)
-        patches = [patch(f'{_SVC}.get_paas_operator_client', return_value=client)]
+        patches = [patch(f'{_SVC}.get_paas_operator_client', return_value=self.scope.operator(client))]
         if injection is not None:
             patches.append(injection)
         for p in patches:
@@ -225,6 +217,22 @@ class TestCronReapLeavesNoHalfDeletedService(TransactionCase):
         service_state, sub_state = self._probe()
         self.assertIsNone(service_state, 'operator 回 404 的 deleting 服務要被 unlink')
         self.assertNotEqual(sub_state, 'in_progress', '收屍要一併結算訂閱（#318）')
+
+    def test_cron_and_cleanup_do_not_reap_or_purge_foreign_sentinels(self):
+        foreign = CommittedCronScope(self)
+        self.addCleanup(foreign.purge)
+        with self.scope.paused():
+            before = foreign.make_sentinels(self.tag)
+        self._run_cron()
+        self.assertIsNone(self._probe()[0], '自身 deleting fixture 仍走真 cron 收屍')
+        self._purge()
+        after = foreign.snapshot()
+        own_after = self.scope.snapshot()
+        print('525_SCOPE_SENTINELS=' + json.dumps({'before': before, 'after': after,
+            'own_after': own_after, 'foreign_calls': self.scope.foreign_calls}, sort_keys=True), flush=True)
+        self.assertEqual(after, before, '外組 service／mail／ledger／兩 cron trigger 逐項保持不變')
+        self.assertFalse(any(own_after.values()), '本組 subscription/product/mail 等確實精確刪除')
+        self.assertFalse(self.scope.foreign_calls, '404 client 不得處理 unrelated release')
 
     def test_teardown_failure_leaves_no_half_deleted_service(self):
         seen = []

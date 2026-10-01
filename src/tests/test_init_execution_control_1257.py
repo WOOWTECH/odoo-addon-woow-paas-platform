@@ -55,6 +55,7 @@ from ..services.paas_operator import (
     PaaSOperatorTimeoutError,
 )
 from .operator_contract import operator_client, status_response
+from .committed_cron_scope import CommittedCronScope
 
 SVC = 'woow_paas_platform.cloud_service'
 ATTEMPT = 'woow_paas_platform.cloud_service_init_attempt'
@@ -271,9 +272,12 @@ class TestInitLeaseRealCursor1257(TransactionCase):
     def setUp(self):
         super().setUp()
         self.tag = uuid.uuid4().hex[:10]
+        self.scope = CommittedCronScope(self)
         self.addCleanup(self._purge)
-        with self.registry.cursor() as cr:
+        with self.scope.track(), self.registry.cursor() as cr:
             env = api.Environment(cr, SUPERUSER_ID, {})
+            self.scope.monitor_id = env['woow_paas_platform.platform_monitor'].create({
+                'name': f'1257 own monitor {self.tag}'}).id
             self.workspace_id = env['woow_paas_platform.workspace'].create({
                 'name': f'1257 Workspace {self.tag}'}).id
             workspace = env['woow_paas_platform.workspace'].browse(self.workspace_id)
@@ -297,25 +301,17 @@ class TestInitLeaseRealCursor1257(TransactionCase):
                     service.write({'n8n_owner_email': f'owner-{self.tag}@example.invalid',
                                    'n8n_owner_password': f'pw-{self.tag}'})
                 self.service_ids[init_type] = service.id
+        # 本 class 驗 lease/CAS/recovery；health hooks 不是其驗收項，候選 sweep 只限 own IDs。
+        self.enterContext(self.scope.isolated())
+
+    def tearDown(self):
+        try:
+            self.assertFalse(self.scope.foreign_calls, 'lease/redeploy test 不得呼叫 foreign release')
+        finally:
+            super().tearDown()
 
     def _purge(self):
-        with self.registry.cursor() as cr:
-            ids = list(self.service_ids.values())
-            cr.execute(f'DELETE FROM woow_paas_platform_cloud_service_init_attempt '
-                       f'WHERE service_id = ANY(%s)', (ids,))
-            cr.execute('DELETE FROM woow_paas_platform_cloud_service_secret '
-                       'WHERE service_id = ANY(%s)', (ids,))
-            cr.execute('DELETE FROM woow_paas_platform_cloud_service WHERE id = ANY(%s)', (ids,))
-            cr.execute('DELETE FROM woow_paas_platform_cloud_app_template WHERE id = ANY(%s)',
-                       (list(self.template_ids.values()),))
-            cr.execute('DELETE FROM woow_paas_platform_workspace_access WHERE workspace_id = %s',
-                       (self.workspace_id,))
-            for table, column in (('mail_followers', 'res_model'), ('mail_message', 'model')):
-                cr.execute(f'DELETE FROM {table} WHERE {column} = %s AND res_id = %s',
-                           ('woow_paas_platform.workspace', self.workspace_id))
-            cr.execute('DELETE FROM woow_paas_platform_workspace WHERE id = %s',
-                       (self.workspace_id,))
-            cr.commit()
+        self.scope.purge()
 
     # -- helpers ---------------------------------------------------------- #
 
@@ -339,7 +335,7 @@ class TestInitLeaseRealCursor1257(TransactionCase):
             return fn(service)
 
     def _entry(self, client, init_type='odoo'):
-        self._run(lambda svc: svc._run_post_deploy_init(client), init_type)
+        self._run(lambda svc: svc._run_post_deploy_init(self.scope.operator(client)), init_type)
 
     def _read(self, init_type='odoo'):
         def read(svc):
@@ -809,7 +805,7 @@ class TestInitLeaseRealCursor1257(TransactionCase):
 
         def run(svc):
             seen['pid'] = svc.env.cr._cnx.get_backend_pid()
-            svc._run_post_deploy_init(client)
+            svc._run_post_deploy_init(self.scope.operator(client))
         self._run(run, 'n8n')
         self.assertEqual(seen['state'], 'idle',
                          'operator 呼叫期間入口的連線不得停在交易中（idle in transaction）')
@@ -1190,7 +1186,7 @@ class TestInitLeaseRealCursor1257(TransactionCase):
 
         redeploy_client = MagicMock()
         redeploy_client.upgrade_release.return_value = {'revision': 2}
-        with patch(f'{_OPERATOR_MODULE}.get_paas_operator_client', return_value=redeploy_client):
+        with patch(f'{_OPERATOR_MODULE}.get_paas_operator_client', return_value=self.scope.operator(redeploy_client)):
             with self.registry.cursor() as cr:
                 env = api.Environment(cr, SUPERUSER_ID, {})
                 env[SVC].search([('id', '=', self.service_ids['odoo'])]) \
@@ -1210,7 +1206,7 @@ class TestInitLeaseRealCursor1257(TransactionCase):
                   "(statement_timestamp() AT TIME ZONE 'UTC') - interval '1 second' "
                   "WHERE id = %s", (self.service_ids['odoo'],))
         redeploy_client = MagicMock()
-        with patch(f'{_OPERATOR_MODULE}.get_paas_operator_client', return_value=redeploy_client):
+        with patch(f'{_OPERATOR_MODULE}.get_paas_operator_client', return_value=self.scope.operator(redeploy_client)):
             with self.registry.cursor() as cr:
                 self._env(cr)[SVC]._cron_run_requested_redeploys()
         redeploy_client.upgrade_release.assert_not_called()

@@ -18,6 +18,7 @@
 🔴 會走到 init 入口或 cron 迴圈（兩者都會 ``commit``）的測試用真 cursor＋真 commit＋
 事後清理（樣板 ``test_billing_incident_864.py``、``test_init_execution_control_1257.py``）。
 """
+import json
 import sys
 import threading
 import traceback
@@ -25,7 +26,7 @@ import uuid
 from datetime import timedelta
 from unittest.mock import MagicMock, patch
 
-from psycopg2 import OperationalError
+from psycopg2 import Error as PostgreSQLError, OperationalError
 
 from odoo import SUPERUSER_ID, api, fields
 from odoo.exceptions import AccessError
@@ -35,6 +36,7 @@ from ..controllers.paas import PaasController
 from ..models.cloud_service import _internal_provision
 from ..services.paas_operator import PaaSOperatorError
 from .operator_contract import operator_client, status_response
+from .committed_cron_scope import CommittedCronScope
 
 SVC = 'woow_paas_platform.cloud_service'
 ATTEMPT = 'woow_paas_platform.cloud_service_init_attempt'
@@ -78,13 +80,17 @@ class _ServiceCase(TransactionCase):
     def setUp(self):
         super().setUp()
         self.tag = uuid.uuid4().hex[:8]
-        self.workspace = self.env['woow_paas_platform.workspace'].create({
-            'name': f'1159 WS {self.tag}'})
-        self.templates = {
-            init_type: self.env['woow_paas_platform.cloud_app_template'].create(
-                _template_vals(self.tag, init_type))
-            for init_type in ('odoo', 'n8n', 'none')
-        }
+        self.scope = CommittedCronScope(self)
+        with self.scope.track():
+            self.scope.monitor_id = self.env[MONITOR].create({'name': f'1159 monitor {self.tag}'}).id
+            self.workspace = self.env['woow_paas_platform.workspace'].create({
+                'name': f'1159 WS {self.tag}'})
+            self.templates = {
+                init_type: self.env['woow_paas_platform.cloud_app_template'].create(
+                    _template_vals(self.tag, init_type))
+                for init_type in ('odoo', 'n8n', 'none')
+            }
+        self.enterContext(self.scope.isolated(real_monitor=True))
 
     def _service(self, init_type='odoo', **vals):
         service = _make_service(self.env, self.workspace, self.templates[init_type],
@@ -96,7 +102,7 @@ class _ServiceCase(TransactionCase):
     def _poll(self, service, pods=None, **status):
         client = operator_client(get_status=status_response(
             pods=_READY_PODS if pods is None else pods, **status))
-        service._poll_and_update_status(client)
+        service._poll_and_update_status(self.scope.operator(client))
         return client
 
     def _init_cron_triggers(self):
@@ -491,9 +497,11 @@ class _RealCursorCase(TransactionCase):
         super().setUp()
         self.tag = uuid.uuid4().hex[:10]
         self.service_ids = []
-        self.addCleanup(self._purge)
-        with self.registry.cursor() as cr:
+        self.scope = CommittedCronScope(self)
+        self.addCleanup(self._purge)  # 在任何會 commit 的 fixture 建立前登記。
+        with self.scope.track(), self.registry.cursor() as cr:
             env = self._env(cr)
+            self.scope.monitor_id = env[MONITOR].create({'name': f'1159 test monitor {self.tag}'}).id
             self.workspace_id = env['woow_paas_platform.workspace'].create({
                 'name': f'1159 Workspace {self.tag}'}).id
             self.template_ids = {
@@ -501,34 +509,17 @@ class _RealCursorCase(TransactionCase):
                     _template_vals(self.tag, init_type)).id
                 for init_type in ('odoo', 'n8n', 'none')
             }
+        # 一般 cron cases 不驗 health hooks；容量 cases 用 monitoring() 跑真 monitor。
+        self.enterContext(self.scope.isolated())
+
+    def tearDown(self):
+        try:
+            self.assertFalse(self.scope.foreign_calls, 'catch-all 後仍必須核 operator 無 foreign calls')
+        finally:
+            super().tearDown()
 
     def _purge(self):
-        with self.registry.cursor() as cr:
-            ids = self.service_ids
-            cr.execute('DELETE FROM woow_paas_platform_cloud_service_init_attempt '
-                       'WHERE service_id = ANY(%s)', (ids,))
-            cr.execute('DELETE FROM woow_paas_platform_cloud_service_secret '
-                       'WHERE service_id = ANY(%s)', (ids,))
-            cr.execute('DELETE FROM woow_paas_platform_cloud_service WHERE id = ANY(%s)', (ids,))
-            cr.execute('DELETE FROM woow_paas_platform_cloud_app_template WHERE id = ANY(%s)',
-                       (list(self.template_ids.values()),))
-            cr.execute('DELETE FROM woow_paas_platform_workspace_access WHERE workspace_id = %s',
-                       (self.workspace_id,))
-            for table, column in (('mail_followers', 'res_model'), ('mail_message', 'model')):
-                cr.execute(f'DELETE FROM {table} WHERE {column} = %s AND res_id = %s',
-                           ('woow_paas_platform.workspace', self.workspace_id))
-            cr.execute('DELETE FROM woow_paas_platform_workspace WHERE id = %s',
-                       (self.workspace_id,))
-            # 兩個 cron 結尾都跑監控（Q38）：真 cursor 下 activity／通知訊息會落地。
-            for table, column in (('mail_activity', 'res_model'), ('mail_message', 'model'),
-                                  ('mail_followers', 'res_model')):
-                cr.execute(f"DELETE FROM {table} WHERE {column} = "
-                           "'woow_paas_platform.platform_monitor'")
-            cr.execute("DELETE FROM ir_cron_trigger WHERE cron_id IN "
-                       "(SELECT res_id FROM ir_model_data WHERE module = 'woow_paas_platform' "
-                       "AND name IN ('ir_cron_run_post_deploy_inits', "
-                       "'ir_cron_check_deploying_services'))")
-            cr.commit()
+        self.scope.purge()
 
     def _env(self, cr):
         """真 cursor 的 superuser env；worker thread 也能用（見 #1257 同名 helper）。"""
@@ -568,7 +559,7 @@ class _RealCursorCase(TransactionCase):
             return tuple(svc[f] for f in fnames) if len(fnames) > 1 else svc[fnames[0]]
 
     def _run_cron(self, method, client, context=None):
-        with patch(f'{_OPERATOR_MODULE}.get_paas_operator_client', return_value=client):
+        with patch(f'{_OPERATOR_MODULE}.get_paas_operator_client', return_value=self.scope.operator(client)):
             with self.registry.cursor() as cr:
                 env = self._env(cr)
                 getattr(env[SVC].with_context(**(context or {})), method)()
@@ -576,7 +567,8 @@ class _RealCursorCase(TransactionCase):
     def _triggers(self, xmlid=INIT_CRON):
         with self.registry.cursor() as cr:
             cron = self._env(cr).ref(xmlid)
-            cr.execute('SELECT count(*) FROM ir_cron_trigger WHERE cron_id = %s', (cron.id,))
+            cr.execute('SELECT count(*) FROM ir_cron_trigger WHERE cron_id = %s AND id = ANY(%s)',
+                       (cron.id, sorted(self.scope.ids['ir.cron.trigger'])))
             return cr.fetchone()[0]
 
 
@@ -630,14 +622,15 @@ class TestInitCron1159(_RealCursorCase):
             return {'success': False, 'error_kind': 'not_executed'}
 
         client.init_odoo.side_effect = observe_claim
-        with self.registry.cursor() as cr:
+        with self.scope.monitoring(), self.registry.cursor() as cr:
             env = self._env(cr)
             svc = env[SVC].browse(sid)
-            svc._poll_and_update_status(client)
+            svc._poll_and_update_status(self.scope.operator(client))
             now = svc._init_db_now()
             monitor = env['woow_paas_platform.platform_monitor']
-            domain = [('res_model', '=', monitor._name), ('summary', '=', monitor.SUMMARY_CAPACITY)]
-            self.assertFalse(env['mail.activity'].search(domain), '自有 DB 無舊容量 activity')
+            domain = [('res_model', '=', monitor._name), ('res_id', '=', self.scope.monitor_id),
+                      ('summary', '=', monitor.SUMMARY_CAPACITY)]
+            self.assertFalse(env['mail.activity'].search(domain), '本組 target 無舊容量 activity')
             with patch.object(type(svc), '_init_db_now', return_value=now - timedelta(minutes=40)):
                 monitor._run_poll_cron_checks()
             monitor._run_poll_cron_checks()
@@ -646,7 +639,8 @@ class TestInitCron1159(_RealCursorCase):
                               svc.init_wait_spent_seconds), ('initializing', 0, 0, 0))
             queue_turn = svc.init_queue_turn
             env['mail.activity'].search(domain).action_feedback(feedback='capacity checked')
-            self.assertTrue(svc._run_post_deploy_init(client), '40 分容量等待後仍可原子 claim')
+            self.assertTrue(svc._run_post_deploy_init(self.scope.operator(client)),
+                            '40 分容量等待後仍可原子 claim')
             client.init_odoo.assert_called_once()
             self.assertEqual(len(claimed), 1)
             self.assertTrue(claimed[0][0], '外部呼叫發生時另一 cursor 真能看到 committed lease')
@@ -676,16 +670,17 @@ class TestInitCron1159(_RealCursorCase):
     def test_capacity_monitor_excludes_active_and_expired_unsettled_leases(self):
         sid = self._add('odoo')
         client = operator_client(get_status=status_response(pods=_READY_PODS))
-        with self.registry.cursor() as cr:
+        with self.scope.monitoring(), self.registry.cursor() as cr:
             env = self._env(cr)
             svc = env[SVC].browse(sid)
-            svc._poll_and_update_status(client)
+            svc._poll_and_update_status(self.scope.operator(client))
             monitor = env['woow_paas_platform.platform_monitor']
             now = svc._init_db_now()
             monitor._run_poll_cron_checks()
             attempt = svc._init_claim('odoo')
             self.assertTrue(attempt, '建立真 attempt／lease，而非 mock 監控判準')
-            domain = [('res_model', '=', monitor._name), ('summary', '=', monitor.SUMMARY_CAPACITY)]
+            domain = [('res_model', '=', monitor._name), ('res_id', '=', self.scope.monitor_id),
+                      ('summary', '=', monitor.SUMMARY_CAPACITY)]
             with patch.object(type(svc), '_init_db_now', return_value=now + timedelta(minutes=40)) as clock:
                 monitor._run_poll_cron_checks()
                 self.assertFalse(svc.init_capacity_wait_since)
@@ -713,15 +708,15 @@ class TestInitCron1159(_RealCursorCase):
         sid = self._add('odoo')
         client = operator_client(get_status=status_response(pods=_READY_PODS),
                                  init_odoo={'success': True})
-        with self.registry.cursor() as cr:
+        with self.scope.monitoring(), self.registry.cursor() as cr:
             env = self._env(cr)
             svc = env[SVC].browse(sid)
-            svc._poll_and_update_status(client)
+            svc._poll_and_update_status(self.scope.operator(client))
             monitor = env['woow_paas_platform.platform_monitor']
             now = svc._init_db_now()
             monitor._run_poll_cron_checks()
             self.assertTrue(svc.init_capacity_wait_since)
-            self.assertTrue(svc._run_post_deploy_init(client))
+            self.assertTrue(svc._run_post_deploy_init(self.scope.operator(client)))
             svc.invalidate_recordset()
             self.assertEqual(svc.state, 'running')
             self.assertFalse(svc.init_pending)
@@ -729,7 +724,8 @@ class TestInitCron1159(_RealCursorCase):
                 monitor._run_poll_cron_checks()
             self.assertFalse(svc.init_capacity_wait_since)
             self.assertFalse(env['mail.activity'].search([
-                ('res_model', '=', monitor._name), ('summary', '=', monitor.SUMMARY_CAPACITY)]))
+                ('res_model', '=', monitor._name), ('res_id', '=', self.scope.monitor_id),
+                ('summary', '=', monitor.SUMMARY_CAPACITY)]))
 
     def test_missing_queue_turn_falls_back_to_first_ready_anchor(self):
         """D2-R 相容列沒有 queue_turn 時仍按既有 first-ready 排，不可在新流量下飢餓。"""
@@ -951,6 +947,7 @@ class TestInitCron1159(_RealCursorCase):
             monitor = env['woow_paas_platform.platform_monitor']
             notes = ' '.join(env['mail.activity'].search([
                 ('res_model', '=', 'woow_paas_platform.platform_monitor'),
+                ('res_id', '=', self.scope.monitor_id),
                 ('summary', '=', monitor.SUMMARY_N8N_OWNER)]).mapped(
                     lambda a: str(a.note or '')))
             slow_name = env[SVC].browse(slow).name
@@ -974,6 +971,237 @@ class TestInitCron1159(_RealCursorCase):
 class TestExecSurfaceRealCursor1159(_RealCursorCase):
     """驗收 2／3：短 poll 的 per-service commit，與 init cron 分屬不同 job／交易。"""
 
+    def test_committing_cron_and_cleanup_preserve_unrelated_owned_sentinels(self):
+        foreign = CommittedCronScope(self)
+        self.addCleanup(foreign.purge)  # 所有 sentinel 建立之前登記，失敗也精確清理。
+        with self.scope.paused():
+            before = foreign.make_sentinels(self.tag)
+        own = self._add('none', state='upgrading')
+        own_release = self._read(own, 'helm_release_name')
+        foreign_calls = []
+        client = operator_client()
+
+        def own_status(namespace, release_name, include_vm=False):
+            if release_name != own_release:
+                foreign_calls.append((namespace, release_name))
+                raise AssertionError('test operator received a foreign release')
+            return status_response(pods=_READY_PODS)
+
+        client.get_status.side_effect = own_status
+        self._run_cron('_cron_check_deploying_services', client)
+        own_state = self._read(own, 'state')
+        self._purge()
+        after = foreign.snapshot()
+        own_exists = self._read(own, 'state')
+        print('1159_SCOPE_SENTINELS=' + json.dumps({
+            'before': before, 'after': after, 'foreign_calls': foreign_calls,
+            'own_state_after_cron': own_state, 'own_service_after_purge': own_exists}, sort_keys=True), flush=True)
+        self.assertFalse(foreign_calls, '產品 catch-all 可吞 AssertionError，必須另核 foreign calls')
+        self.assertEqual(own_state, 'running', '自己的真 poll 必須發生且 commit')
+        self.assertEqual(after, before, '非 operation/cleanup scope 的身份與內容全部保持不變')
+        self.assertIsNone(own_exists, '本組 service 確實清理，不能以 purge no-op 假綠')
+
+    def test_real_monitor_and_all_cron_sweeps_keep_foreign_sentinels_unchanged(self):
+        foreign = CommittedCronScope(self)
+        self.addCleanup(foreign.purge)
+        with self.scope.paused():
+            before = foreign.make_sentinels(self.tag)
+        queued = self._add('odoo')
+        spent = self._add('odoo')
+        redeploy = self._add('none', state='running')
+        dns = self._add('none', state='running', subdomain=f'own-dns-{self.tag}')
+        with self.registry.cursor() as cr:
+            env = self._env(cr)
+            env[SVC].browse(spent).write({'init_wait_spent_seconds': 1800})
+            env[SVC].browse(redeploy).write({'init_redeploy_requested': True})
+            env[SVC].browse(dns).write({'public_url_dns_unverified': True})
+        client = operator_client(get_status=status_response(pods=_READY_PODS), init_odoo={'success': True})
+        client.upgrade_release.return_value = {'revision': 2}
+        with self.scope.monitoring():
+            self._run_cron('_cron_check_deploying_services', client)
+            with self.registry.cursor() as cr:
+                env = self._env(cr)
+                monitor = env[MONITOR]
+                now = env[SVC]._init_db_now()
+                # 真 check/clock/savepoint/mail，只改 system-boundary 時間；外組不在候選範圍。
+                env[SVC].browse(queued).write({'init_capacity_wait_since': False})
+                with patch.object(type(env[SVC]), '_init_db_now', return_value=now - timedelta(minutes=40)):
+                    monitor._run_poll_cron_checks()
+                monitor._run_poll_cron_checks()
+                activities = env['mail.activity'].search([
+                    ('res_model', '=', MONITOR), ('res_id', '=', self.scope.monitor_id),
+                    ('summary', '=', monitor.SUMMARY_CAPACITY)])
+                self.assertIn(env[SVC].browse(queued).name, activities[:1].note or '')
+                self.assertNotIn('Sentinel', activities[:1].note or '', '不能把 foreign service 投影進 own 卡片')
+                self.assertFalse(monitor._singleton().notified_unknown_attempt_ids,
+                                 'foreign unknown attempt 不能進 own ledger')
+            self._run_cron('_cron_run_post_deploy_inits', client)
+        self.assertEqual(self._read(queued, 'state'), 'running', '真 queue/claim/outcome 不能被 adapter fake')
+        self.assertEqual(self._read(spent, 'state'), 'error', 'own timeout sweep 確實執行')
+        self.assertFalse(self._read(redeploy, 'init_redeploy_requested'), 'own redeploy sweep 確實執行')
+        dns_calls, foreign_dns_calls = [], []
+
+        def resolve(hostname, *args, **kwargs):
+            if not hostname.startswith(f'own-dns-{self.tag}'):
+                foreign_dns_calls.append(hostname)
+                raise AssertionError('test resolver received a foreign hostname')
+            dns_calls.append(hostname)
+            return 'ok'
+
+        with patch('odoo.addons.woow_paas_platform.services.dns_probe.resolve_state', side_effect=resolve):
+            self._run_cron('_cron_reprobe_public_url_dns', client)
+        self.assertTrue(dns_calls, 'own DNS probe 必須真的執行')
+        self.assertFalse(foreign_dns_calls, 'helper catch-all 後仍另外核 foreign DNS calls')
+        self.assertFalse(self._read(dns, 'public_url_dns_unverified'))
+        self._purge()
+        after = foreign.snapshot()
+        own_after = self.scope.snapshot()
+        print('1159_ALL_SWEEPS_SENTINELS=' + json.dumps({'before': before, 'after': after,
+            'own_after': own_after, 'foreign_calls': self.scope.foreign_calls}, sort_keys=True), flush=True)
+        self.assertEqual(after, before, '原 singleton/外組 notes、ledger、clock、trigger 全部不變')
+        self.assertFalse(any(own_after.values()), 'own records 與 mail/trigger IDs 確實清理')
+        self.assertFalse(self.scope.foreign_calls)
+
+    def test_partial_fixture_failure_cleanup_preserves_other_group_records(self):
+        foreign = CommittedCronScope(self)
+        partial = CommittedCronScope(self)
+        self.addCleanup(foreign.purge)
+        self.addCleanup(partial.purge)  # 必須在 partial allocation／commit／失敗之前登記。
+        with self.scope.paused():
+            before = foreign.make_sentinels(self.tag)
+            caught = None
+            try:
+                with partial.track(), self.registry.cursor() as cr:
+                    env = partial.env(cr)
+                    env['woow_paas_platform.workspace'].create({'name': f'partial WS {self.tag}'})
+                    env[MONITOR].create({'name': f'partial monitor {self.tag}'})
+                    cr.commit()
+                    raise RuntimeError('test fixture failed after a partial commit')
+            except RuntimeError as error:
+                caught = str(error)
+        self.assertEqual(caught, 'test fixture failed after a partial commit')
+        allocated = partial.snapshot()
+        self.assertTrue(allocated['woow_paas_platform.workspace'], '失敗前確實有 committed allocation')
+        self.assertTrue(allocated[MONITOR])
+        partial.purge()
+        own_after = partial.snapshot()
+        after = foreign.snapshot()
+        print('1159_PARTIAL_FIXTURE_CLEANUP=' + json.dumps({'before': before, 'after': after,
+            'allocated': allocated, 'own_after': own_after}, sort_keys=True), flush=True)
+        self.assertFalse(any(own_after.values()), 'partial failure 的 own records 必須精確清掉')
+        self.assertEqual(after, before, '失敗也不可清理外組 monitor/mail/trigger')
+
+    def _q36_poll_probe(self, fault_code):
+        # 建立順序故意與 search 順序不同；create_date 全部不同，沒有未定義的 ties。
+        last = self._add('none', state='upgrading')
+        first = self._add('none', state='upgrading')
+        broken = self._add('none', state='upgrading', error_message='q36 original error')
+        expected = [first, broken, last]
+        anchor = fields.Datetime.now() - timedelta(hours=1)
+        stamps = {first: anchor + timedelta(seconds=30), broken: anchor + timedelta(seconds=20),
+                  last: anchor + timedelta(seconds=10)}
+        with self.registry.cursor() as cr:
+            env = self._env(cr)
+            for sid, stamp in stamps.items():
+                cr.execute('UPDATE woow_paas_platform_cloud_service SET create_date = %s WHERE id = %s',
+                           (stamp, sid))
+            actual = env[SVC].search([
+                ('state', 'in', ['deploying', 'upgrading', 'initializing', 'deleting'])]).ids
+            cr.execute('SELECT id, create_date FROM woow_paas_platform_cloud_service WHERE id = ANY(%s)',
+                       (expected,))
+            self.assertEqual(dict(cr.fetchall()), stamps, '真 create_date 與 IDs 必須證明 fixture 順序')
+            self.assertEqual(actual, expected, '真 search 順序必須為先成功、broken、後成功')
+        releases = {self._read(sid, 'helm_release_name'): sid for sid in expected}
+        visits, injected, pre_error, first_committed = [], [], [], []
+        client = operator_client()
+
+        def status(namespace, release_name, include_vm=False):
+            visits.append(releases[release_name])
+            return status_response(pods=_READY_PODS)
+
+        client.get_status.side_effect = status
+        model = type(self.env[SVC])
+        original_progress = model._store_import_progress
+
+        def progress(service, response):
+            result = original_progress(service, response)
+            if service.id == broken and fault_code:
+                # 正常 get_status 已返回；這裡在 deleting/savepoint 之外，先有真本台寫入。
+                service.write({'error_message': 'q36 dirty before SQL error'})
+                service.flush_recordset(['error_message', 'observed_at'])
+                service.env.cr.execute('SELECT error_message, observed_at FROM '
+                                       'woow_paas_platform_cloud_service WHERE id = %s', (broken,))
+                pre_error.append(service.env.cr.fetchone())
+                with self.registry.cursor() as observer:
+                    observer.execute('SELECT state, observed_at FROM woow_paas_platform_cloud_service '
+                                     'WHERE id = %s', (first,))
+                    first_committed.append(observer.fetchone())
+                try:
+                    if fault_code == '22012':
+                        service.env.cr.execute('SELECT 1 / 0')
+                    else:
+                        service.env.cr.execute("""
+                            DO $$ BEGIN
+                                RAISE EXCEPTION 'q36 true PostgreSQL conflict' USING ERRCODE = '40001';
+                            END $$
+                        """)
+                except PostgreSQLError as error:
+                    injected.append(error.pgcode)
+                    raise
+            return result
+
+        job_error, usable = None, False
+        with patch.object(model, '_store_import_progress', progress), \
+                patch(f'{_OPERATOR_MODULE}.get_paas_operator_client', return_value=self.scope.operator(client)):
+            with self.registry.cursor() as cr:
+                env = self._env(cr)
+                try:
+                    env[SVC]._cron_check_deploying_services()
+                    cr.execute('SELECT 1')
+                    usable = cr.fetchone() == (1,)
+                except PostgreSQLError as error:
+                    # 突出的 DB error 是 observable 結果；清理 cursor 後由外面的 assertion 判 RED。
+                    # 不把 InFailedSqlTransaction runner ERROR／assertRaises 自動回捲當保護。
+                    job_error = (type(error).__name__, error.pgcode)
+                    cr.rollback()
+        with self.registry.cursor() as observer:
+            observer.execute('SELECT id, state, observed_at, error_message FROM '
+                             'woow_paas_platform_cloud_service WHERE id = ANY(%s)', (expected,))
+            rows = {row[0]: row[1:] for row in observer.fetchall()}
+        print('1159_Q36_SQL=' + json.dumps({'fault': fault_code, 'expected': expected, 'visits': visits,
+            'stamps': stamps, 'injected': injected, 'pre_error': pre_error,
+            'first_committed_at_failure': first_committed, 'job_error': job_error,
+            'cursor_usable': usable, 'rows': rows}, default=str, sort_keys=True), flush=True)
+        self.assertIsNone(job_error, 'Q36 job/cursor 未恢復；不能以 runner SQL ERROR 充數')
+        self.assertTrue(usable, 'job boundary 之後 cursor 必須可查')
+        self.assertEqual(rows[last][0], 'running', '中間故障後的後排仍須成功 commit，不能 except break')
+        self.assertEqual(visits, expected, '真 loop 必須照已釘 search 順序訪問全部 own records')
+        self.assertEqual(rows[first][0], 'running')
+        self.assertTrue(rows[first][1], '先者真 observation 已 commit')
+        self.assertTrue(rows[last][1], '後者真 observation 已 commit')
+        if fault_code:
+            self.assertEqual(injected, [fault_code], '真 PG fault 必須到達，不是 Python exception')
+            self.assertEqual(pre_error[0][0], 'q36 dirty before SQL error')
+            self.assertTrue(pre_error[0][1], 'SQL 失敗前本台 observation 真已 flush')
+            self.assertEqual(first_committed[0][0], 'running', '故障發生時另一 cursor 已看到先者 commit')
+            self.assertTrue(first_committed[0][1])
+            self.assertEqual(rows[broken], ('upgrading', None, 'q36 original error'),
+                             '只回捲 broken 的未 commit state/observation/error 寫入')
+        else:
+            self.assertFalse(injected)
+            self.assertEqual(rows[broken][0], 'running', '無故障陽性對照必須處理中間台')
+            self.assertTrue(rows[broken][1])
+        self.assertFalse(self.scope.foreign_calls)
+
+    def test_q36_real_sql_abort_rolls_back_only_the_current_service(self):
+        self._q36_poll_probe('22012')
+
+    def test_q36_real_serialization_failure_keeps_committed_neighbors(self):
+        self._q36_poll_probe('40001')
+
+    def test_q36_without_fault_commits_all_three_services(self):
+        self._q36_poll_probe(None)
+
     def test_slow_init_does_not_hold_back_the_short_poll(self):
         """一筆慢 init 進行中，另一台的 upgrading→running 在短 poll 落地且別的連線看得到。"""
         slow = self._add('odoo', ready_minutes_ago=2)
@@ -992,7 +1220,7 @@ class TestExecSurfaceRealCursor1159(_RealCursorCase):
         def run_init_cron():
             try:
                 with self.registry.cursor() as cr:
-                    self._env(cr)[SVC].browse(slow)._run_post_deploy_init(init_client)
+                    self._env(cr)[SVC].browse(slow)._run_post_deploy_init(self.scope.operator(init_client))
             except Exception as exc:  # 讓主執行緒看得到
                 errors.append(exc)
 
@@ -1005,7 +1233,7 @@ class TestExecSurfaceRealCursor1159(_RealCursorCase):
                 # 保留 env 參照到 cursor 結束：`Transaction.envs` 是 WeakSet，env 被回收
                 # 之後 exit 的 commit 找不到 env 可 flush，pending 寫入會被丟掉。
                 svc = self._env(cr)[SVC].browse(upgrading)
-                svc._poll_and_update_status(poll_client)
+                svc._poll_and_update_status(self.scope.operator(poll_client))
             self.assertEqual(self._read(upgrading, 'state'), 'running',
                              '另一條連線必須看得到短 poll 的結果（init 仍在途）')
             self.assertEqual(self._read(slow, 'state'), 'initializing')
@@ -1103,8 +1331,7 @@ class TestPlatformMonitor1159(_ServiceCase):
         super().setUp()
         self.Monitor = self.env[MONITOR]
         self.singleton = self.Monitor._singleton()
-        self.env['mail.activity'].search([
-            ('res_model', '=', MONITOR)]).unlink()  # 本交易內，結束時回捲
+        self.assertEqual(self.singleton.id, self.scope.monitor_id, '每個 monitor case 有自有 target')
         self.admins = self.env.ref('base.group_system').users.filtered(
             lambda u: u.active and not u.share)
         # 兩個 cron 都「剛跑過」＝健康的基準線；個別測試再把它弄舊。
@@ -1401,8 +1628,12 @@ class TestPlatformMonitor1159(_ServiceCase):
                     mail_notify_force_send=False).action_feedback(feedback='capacity verified')
 
     def test_singleton_is_the_data_record(self):
-        self.assertEqual(self.singleton, self.env.ref('woow_paas_platform.platform_monitor_singleton'))
-        self.assertEqual(self.Monitor._singleton(), self.singleton, '查找以 xmlid 為準，不重建')
+        with self.scope.paused():
+            original = self.Monitor._singleton()
+            self.assertEqual(original, self.env.ref('woow_paas_platform.platform_monitor_singleton'))
+            self.assertEqual(self.Monitor._singleton(), original, '原查找仍以 xmlid 為準，不重建')
+        self.assertNotEqual(self.singleton, original, 'test-owned target 不改全域 xmlid')
+        self.assertEqual(self.Monitor._singleton(), self.singleton)
 
     def test_alert_goes_to_every_system_user_and_dedupes_per_summary(self):
         self.assertTrue(self.admins)
