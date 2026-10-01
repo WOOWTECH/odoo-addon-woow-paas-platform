@@ -13,16 +13,10 @@
                     <h2 class="o_woow_topup_success_title">Pre-payment Successful</h2>
 
                     <!-- Message -->
-                    <p class="o_woow_topup_success_message">
-                        Your pre-payment has been processed, and
-                        <strong><t t-esc="formattedTotal"/> credits</strong>
-                        have been added to your account.
-                    </p>
+                    <p class="o_woow_topup_success_message" t-esc="successMessage"/>
 
                     <t t-if="hasBonus">
-                        <p class="o_woow_topup_success_bonus">
-                            Includes <strong><t t-esc="bonus"/> bonus points</strong> — enjoy!
-                        </p>
+                        <p class="o_woow_topup_success_bonus" t-esc="bonusMessage"/>
                     </t>
 
                     <!-- New Balance -->

@@ -6,9 +6,7 @@
         <t t-if="props.mode === 'change'">New Plan Total</t>
         <t t-else="">Total</t>
       </span>
-      <span t-if="selected" class="o_woow_plan_total__value">
-        <t t-esc="selected.price"/> pts/<t t-esc="_unitLabel(selected.unit)"/>
-      </span>
+      <span t-if="selected" class="o_woow_plan_total__value" t-esc="totalLabel"/>
       <span t-else="" class="o_woow_plan_total__value o_woow_plan_total__value--empty">—</span>
     </div>
   </t>

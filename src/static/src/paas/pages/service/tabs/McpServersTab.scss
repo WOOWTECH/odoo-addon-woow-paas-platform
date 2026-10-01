@@ -7,6 +7,8 @@
         display: flex;
         justify-content: space-between;
         align-items: flex-start;
+        flex-wrap: wrap; // #1310
+        gap: 0.75rem;
 
         h3 {
             margin: 0 0 0.25rem 0;
@@ -63,6 +65,7 @@
         flex-direction: column;
         gap: 0.25rem;
         flex: 1;
+        min-width: 0; // #1310：輸入框不撐破 __row
 
         label {
             font-size: 0.8rem;
@@ -93,11 +96,17 @@
     &__row {
         display: flex;
         gap: 0.75rem;
+
+        // #1310：手機上並排欄位改直排
+        @media (max-width: $woow-bp-sm) {
+            flex-direction: column;
+        }
     }
 
     &__actions {
         display: flex;
         justify-content: flex-end;
+        flex-wrap: wrap; // #1310
         gap: 0.5rem;
         padding-top: 0.25rem;
     }
@@ -140,14 +149,20 @@
     align-items: flex-start;
     gap: 1rem;
 
+    // #1310：手機上操作鈕放不下時換到資訊下方
+    @media (max-width: $woow-bp-sm) {
+        flex-wrap: wrap;
+    }
+
     &__info {
-        flex: 1;
+        flex: 1 1 12rem; // #1310：12rem 基準讓 __actions 在窄畫面換行
         min-width: 0;
     }
 
     &__name_row {
         display: flex;
         align-items: center;
+        flex-wrap: wrap; // #1310
         gap: 0.5rem;
         margin-bottom: 0.25rem;
     }
@@ -155,6 +170,8 @@
     &__name {
         font-weight: 600;
         font-size: 0.95rem;
+        min-width: 0; // #1310
+        overflow-wrap: anywhere;
     }
 
     &__url {
@@ -173,7 +190,8 @@
     &__meta {
         display: flex;
         align-items: center;
-        gap: 1rem;
+        flex-wrap: wrap; // #1310
+        gap: 0.25rem 1rem;
         margin-top: 0.5rem;
         font-size: 0.8rem;
         color: $woow-text-secondary;
@@ -210,6 +228,7 @@
 
     &__actions {
         display: flex;
+        flex-wrap: wrap; // #1310
         gap: 0.25rem;
         flex-shrink: 0;
     }

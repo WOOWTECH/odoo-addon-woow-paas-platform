@@ -3,6 +3,8 @@
     display: flex;
     justify-content: space-between;
     align-items: center;
+    flex-wrap: wrap; // #1310
+    gap: 4px 8px;
     margin-bottom: 12px;
 
     h4 {
@@ -19,12 +21,14 @@
 
   &__filters {
     display: flex;
+    flex-wrap: wrap; // #1310：搜尋框與分類選單在窄畫面換行，不溢出卡片
     gap: 8px;
     margin-bottom: 12px;
   }
 
   &__search {
-    flex: 1;
+    flex: 1 1 12rem;
+    min-width: 0;
     padding: 6px 10px;
     border: 1px solid var(--woow-border, #ddd);
     border-radius: 6px;
@@ -37,11 +41,18 @@
   }
 
   &__category {
+    min-width: 0; // #1310：長分類名不撐破列
+    max-width: 100%;
     padding: 6px 10px;
     border: 1px solid var(--woow-border, #ddd);
     border-radius: 6px;
     font-size: 13px;
     outline: none;
+
+    // 手機上換到搜尋框下一行時撐滿；桌機維持內容寬，不跟搜尋框平分
+    @media (max-width: $woow-bp-sm) {
+      flex: 1 1 10rem;
+    }
   }
 
   &__list {
@@ -90,8 +101,10 @@
   &__name {
     display: flex;
     align-items: center;
+    flex-wrap: wrap; // #1310：名稱與 badge 換行
     gap: 6px;
     font-size: 14px;
+    overflow-wrap: anywhere;
   }
 
   &__icon {
@@ -123,7 +136,9 @@
 
   &__meta {
     display: flex;
-    gap: 8px;
+    flex-wrap: wrap; // #1310：technical_name 很長時換行
+    gap: 2px 8px;
+    overflow-wrap: anywhere;
     margin-top: 4px;
     font-size: 11px;
     color: var(--woow-text-muted, #aaa);

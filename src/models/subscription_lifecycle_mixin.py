@@ -61,6 +61,17 @@ class LifecycleHaltEscapeError(AccessError):
     """租戶把停權中／刪除中的 SA／SH 改回會對外服務的 state。"""
 
 
+# #1310：每個計費週期換算成「月」的倍數，供工作區月費估算。
+_MONTHS_PER_UNIT = {'day': 12 / 365, 'week': 12 / 52, 'month': 1.0, 'year': 12.0}
+
+
+def _monthly_estimate(sub):
+    """Tax-included cost of one billing cycle normalised to a month (rounded to 2dp)."""
+    total = _subscription_total_with_tax(sub)[3]
+    months = _MONTHS_PER_UNIT.get(sub.sh_unit or 'month', 1.0) * (sub.sh_recurrency or 1)
+    return round(total / months, 2) if months else 0.0
+
+
 def _subscription_total_with_tax(sub):
     """Compute (untaxed, tax_rate, tax_amount, total) for a subscription.
 
@@ -771,6 +782,9 @@ class SubscriptionLifecycleMixin(models.AbstractModel):
             'plan_id': sub.sh_subscription_plan_id.id if sub.sh_subscription_plan_id else None,
             'plan_name': sub.sh_subscription_plan_id.name if sub.sh_subscription_plan_id else None,
             'plan_price': sub.sh_plan_price,
+            # #1310：工作區頁「預估費用」原本寫死 $0/month。含稅總額依計費週期
+            # 換算成每月（年繳 ÷12、週繳 ×52/12…），前端加總即為工作區月費估算。
+            'monthly_estimate': _monthly_estimate(sub),
             # #745：Access 頁籤的顯示條件（設計拍板 6：只有 `> 0` 才出現）。
             #
             # 欄位名逐字保留 `ac_` 前綴，不學 plans 端點剝掉：那邊剝得掉是因為

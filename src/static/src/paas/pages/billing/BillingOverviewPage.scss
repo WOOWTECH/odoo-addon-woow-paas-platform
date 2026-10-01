@@ -171,6 +171,8 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
+  flex-wrap: wrap; // #1310
+  gap: 0.5rem;
   margin-bottom: 1rem;
 
   .o_woow_card_header {
@@ -188,6 +190,8 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
+  flex-wrap: wrap; // #1310：方案名太長時狀態／付款方式換到下一行
+  gap: 0.5rem 0.75rem;
   padding: 0.75rem 0.5rem;
   border-top: 1px solid $woow-border-light;
   cursor: pointer;
@@ -206,6 +210,8 @@
   display: flex;
   flex-direction: column;
   gap: 0.25rem;
+  flex: 1 1 12rem; // #1310
+  min-width: 0;
 }
 
 .o_woow_billing_sub_name {
@@ -219,6 +225,8 @@
   display: flex;
   flex-direction: column;
   gap: 0.125rem;
+  min-width: 0; // #1310
+  overflow-wrap: anywhere;
 }
 
 .o_woow_billing_sub_id {
@@ -239,6 +247,7 @@
   align-items: center;
   gap: 0.75rem;
   flex-shrink: 0;
+  flex-wrap: wrap; // #1310
 }
 
 .o_woow_billing_sub_payment {
@@ -300,6 +309,8 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
+  flex-wrap: wrap; // #1310
+  gap: 0.5rem;
   margin-bottom: 1rem;
 
   .o_woow_card_header {
@@ -351,6 +362,8 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
+  flex-wrap: wrap; // #1310：發票號太長時金額／狀態換到下一行
+  gap: 0.5rem 0.75rem;
   padding: 0.75rem 0.5rem;
   border-top: 1px solid $woow-border-light;
   cursor: pointer;
@@ -369,6 +382,9 @@
   display: flex;
   flex-direction: column;
   gap: 0.25rem;
+  flex: 1 1 10rem; // #1310
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .o_woow_billing_recent_invoice_name {
@@ -391,6 +407,7 @@
   align-items: center;
   gap: 0.75rem;
   flex-shrink: 0;
+  flex-wrap: wrap; // #1310
 }
 
 .o_woow_billing_recent_invoice_amount {
@@ -456,6 +473,7 @@
   .o_woow_low_balance_content {
     display: flex;
     align-items: center;
+    flex-wrap: wrap; // #1310：「立即儲值」按鈕放不下時換到文字下方
     gap: 1rem;
     padding: 1rem;
 
@@ -466,7 +484,8 @@
   }
 
   .o_woow_low_balance_text {
-    flex: 1;
+    flex: 1 1 12rem; // #1310：12rem 基準才會觸發換行
+    min-width: 0;
 
     h3 {
       margin: 0 0 0.25rem 0;

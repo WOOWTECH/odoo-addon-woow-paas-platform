@@ -9,7 +9,8 @@ import { TopupSuccessModal } from "../../components/modal/TopupSuccessModal";
 import { billingService } from "../../services/billing_service";
 import { translateTopupError } from "../../services/topup_errors";
 import { router } from "../../core/router";
-import { formatAmount, formatPoints } from "../../utils/billing_helpers";
+import { formatPoints } from "../../utils/billing_helpers";
+import { formatFloat } from "@web/core/utils/numbers";
 
 const CATEGORY_TABS = [
   { key: null, label: _t("All Packs") },
@@ -99,8 +100,18 @@ export class TopupStorePage extends Component {
     return this.state.activeCategory === categoryKey;
   }
 
-  formatAmount(amount) {
-    return formatAmount(amount);
+  // #1310：點數走 formatPoints（原本走已 deprecated 的 formatAmount＋寫死的
+  // "Credits"／"Bonus Points" 字樣）；NT$ 售價是真實金額，不是點數，維持 NT$ 前綴。
+  formatPlanPoints(credits) {
+    return formatPoints(credits, { precision: 0 });
+  }
+
+  formatBonus(bonus) {
+    return _t("+%(points)s bonus", { points: formatPoints(bonus, { precision: 0 }) });
+  }
+
+  formatPrice(amount) {
+    return formatFloat(Number(amount ?? 0), { digits: [16, 0] });
   }
 
   onPurchaseClick(plan) {

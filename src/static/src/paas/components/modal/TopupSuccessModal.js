@@ -1,10 +1,10 @@
 /** @odoo-module **/
 import { Component } from "@odoo/owl";
+import { _t } from "@web/core/l10n/translation";
 import { WoowButton } from "../button/WoowButton";
 import { WoowIcon } from "../icon/WoowIcon";
 import { billingService } from "../../services/billing_service";
 import { formatPoints } from "../../utils/billing_helpers";
-import { formatFloat } from "@web/core/utils/numbers";
 
 /**
  * TopupSuccessModal Component
@@ -39,12 +39,18 @@ export class TopupSuccessModal extends Component {
     return this.props.data.new_balance ?? 0;
   }
 
-  get formattedCredits() {
-    return formatFloat(this.creditsAdded, { digits: [16, 0] });
+  // #1310：原本訊息混用 "credits"／"bonus points"／"pts" 三種說法、且句子被
+  // <strong> 切成三段 msgid（無法依中文語序翻譯）⇒ 整句在 JS 組好，點數一律走 formatPoints。
+  get successMessage() {
+    return _t("Your pre-payment has been processed, and %(points)s have been added to your account.", {
+      points: formatPoints(this.totalAdded, { precision: 0 }),
+    });
   }
 
-  get formattedTotal() {
-    return formatFloat(this.totalAdded, { digits: [16, 0] });
+  get bonusMessage() {
+    return _t("Includes a %(points)s bonus — enjoy!", {
+      points: formatPoints(this.bonus, { precision: 0 }),
+    });
   }
 
   get formattedBalance() {

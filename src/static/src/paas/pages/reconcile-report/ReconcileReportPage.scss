@@ -5,12 +5,24 @@
   max-width: 960px;
   margin: 0 auto;
 
+  // #1310：手機上 .o_woow_content 已有 1rem 內距，避免雙重左右內距
+  @media (max-width: $woow-bp-md) {
+    padding-left: 0;
+    padding-right: 0;
+  }
+
   &_header {
     display: flex;
     align-items: flex-start;
     justify-content: space-between;
+    flex-wrap: wrap; // #1310
     gap: 1rem;
     margin-bottom: 1.5rem;
+  }
+
+  &_header_text {
+    min-width: 0; // #1310
+    overflow-wrap: anywhere;
   }
 
   &_back {

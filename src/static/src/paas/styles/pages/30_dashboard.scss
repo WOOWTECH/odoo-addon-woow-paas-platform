@@ -129,6 +129,10 @@
 
 .o_woow_activity_content {
     font-size: 0.875rem;
+    // #1310：時間（60px）＋頭像之後剩下的寬度給內容，長目標名稱換行而非溢出
+    flex: 1;
+    min-width: 0;
+    overflow-wrap: anywhere;
 }
 
 .o_woow_activity_user {

@@ -30,7 +30,7 @@
                                 <span class="o_woow_svc_modal_price">
                                     <t t-esc="planPrice"/>
                                 </span>
-                                <span class="o_woow_svc_modal_price_period">/ month</span>
+                                <span t-if="pricePeriod" class="o_woow_svc_modal_price_period" t-esc="pricePeriod"/>
                             </div>
                         </div>
 

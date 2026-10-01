@@ -65,9 +65,20 @@
   display: flex;
   gap: 0.375rem;
   padding: 0.25rem;
-  background: rgba($woow-border-light, 0.5);
+  // #1310：原本 rgba($woow-border-light, 0.5)——$woow-border-light 本身是
+  // rgba(0,0,0,.06)，Sass 的 rgba() 會把 alpha 直接換成 0.5，變成 50% 黑底，
+  // 未選取分頁的灰字對比不到 2:1。改回淺灰底（灰字對比 ≥4.5:1）。
+  background: rgba(0, 0, 0, 0.04);
   border-radius: $woow-radius-full;
   width: fit-content;
+  // #1310：分頁放不下時橫向捲動，不超出畫面
+  max-width: 100%;
+  overflow-x: auto;
+  scrollbar-width: none;
+
+  &::-webkit-scrollbar {
+    display: none;
+  }
 }
 
 .o_woow_sub_tab {
@@ -80,6 +91,8 @@
   font-weight: 500;
   cursor: pointer;
   transition: all 0.15s ease;
+  white-space: nowrap; // #1310
+  flex-shrink: 0;
 
   &:hover {
     color: $woow-text-primary;
@@ -117,7 +130,9 @@
 
   @media (max-width: 768px) {
     flex-direction: column;
-    align-items: flex-start;
+    // #1310：flex-start 讓子區塊縮成內容寬，左欄撐不到卡片寬、ellipsis 失效；
+    // 改 stretch 讓每一列都等於卡片寬
+    align-items: stretch;
     gap: 0.75rem;
   }
 }
@@ -146,6 +161,7 @@
   display: flex;
   flex-direction: column;
   gap: 0.125rem;
+  flex: 1; // #1310：吃掉 icon 以外寬度，方案名 ellipsis 才有上限
   min-width: 0;
 }
 
@@ -171,6 +187,8 @@
   gap: 0.25rem;
   font-size: 0.75rem;
   color: $woow-text-secondary;
+  max-width: 100%; // #1310：長服務名換行
+  overflow-wrap: anywhere;
 }
 
 .o_woow_sub_card_middle {
@@ -182,6 +200,7 @@
 
   @media (max-width: 768px) {
     flex-direction: row;
+    flex-wrap: wrap; // #1310
     gap: 0.5rem;
     align-items: center;
   }
@@ -209,12 +228,14 @@
   @media (max-width: 768px) {
     width: 100%;
     justify-content: space-between;
+    flex-wrap: wrap; // #1310
   }
 }
 
 .o_woow_sub_card_actions {
   display: flex;
   align-items: center;
+  flex-wrap: wrap; // #1310
   gap: 0.375rem;
 }
 

@@ -6,6 +6,12 @@
   padding: 24px 32px;
   max-width: 960px;
   margin: 0 auto;
+
+  // #1310：手機上 .o_woow_content 已有 1rem 內距，再加 32px 會雙重縮排
+  @media (max-width: $woow-bp-md) {
+    padding-left: 0;
+    padding-right: 0;
+  }
 }
 
 .o_woow_settings_header {
@@ -53,6 +59,7 @@
 
   &_text {
     flex: 1;
+    min-width: 0; // #1310
 
     h3 {
       margin: 0;
@@ -71,6 +78,7 @@
   &_title_row {
     display: flex;
     align-items: center;
+    flex-wrap: wrap; // #1310
     gap: 8px;
   }
 
