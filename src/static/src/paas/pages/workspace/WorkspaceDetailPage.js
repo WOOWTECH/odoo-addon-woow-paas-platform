@@ -8,6 +8,7 @@ import { ServiceCard } from "../../components/service-card/ServiceCard";
 import { SmartHomeCard } from "../../components/smart-home/SmartHomeCard";
 import { CreateSmartHomeModal } from "../../components/smart-home/CreateSmartHomeModal";
 import { CreateSecurityAccessModal } from "../../components/modal/CreateSecurityAccessModal";
+import { DeleteWorkspaceModal } from "../../components/modal/DeleteWorkspaceModal";
 import { StatusBadge } from "../../components/common/StatusBadge";
 import { workspaceService } from "../../services/workspace_service";
 import { securityAccessService } from "../../services/security_access";
@@ -18,7 +19,7 @@ import { getRoleBadgeClass, formatDate } from "../../services/utils";
 
 export class WorkspaceDetailPage extends Component {
     static template = "woow_paas_platform.WorkspaceDetailPage";
-    static components = { WoowCard, WoowIcon, WoowButton, ServiceCard, SmartHomeCard, CreateSmartHomeModal, CreateSecurityAccessModal, StatusBadge };
+    static components = { WoowCard, WoowIcon, WoowButton, ServiceCard, SmartHomeCard, CreateSmartHomeModal, CreateSecurityAccessModal, DeleteWorkspaceModal, StatusBadge };
     static props = {
         workspaceId: { type: Number },
     };
@@ -40,6 +41,7 @@ export class WorkspaceDetailPage extends Component {
             loadingSecurityAccesses: true,
             securityAccessesError: null,
             showCreateSecurityAccessModal: false,
+            showDeleteWorkspaceModal: false,
         });
         this.router = useState(router);
         this.servicesPollingInterval = null;
@@ -308,6 +310,21 @@ export class WorkspaceDetailPage extends Component {
 
     goToSettings() {
         // TODO: Implement workspace settings
+    }
+
+    // #1295：刪除（封存）工作區——只有 owner 看得到按鈕（後端 `_delete_workspace`
+    // 也是 owner-only）；底下還有未刪除的服務時由 modal 列出清單，不會封存。
+    openDeleteWorkspaceModal() {
+        this.state.showDeleteWorkspaceModal = true;
+    }
+
+    closeDeleteWorkspaceModal() {
+        this.state.showDeleteWorkspaceModal = false;
+    }
+
+    onWorkspaceDeleted() {
+        this.state.showDeleteWorkspaceModal = false;
+        this.router.navigate("workspaces");
     }
 
     goToMarketplace() {

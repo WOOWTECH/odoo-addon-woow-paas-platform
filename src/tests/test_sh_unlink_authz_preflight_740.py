@@ -35,8 +35,31 @@ tunnel 已經沒了**。每一次重試都重複同一句假話（operator 對 4
 「看不到 ⇒ 不用檢查」變成 fail-open）、**檢查用呼叫者身分**。形狀取自本 repo 既有
 的前置檢查前例 `cloud_service._assert_reverse_binding_authorized()`（#698）。
 
-⚠ **本 PR 不改授權姿態**：ACL 表、record rule、端點身分一律不動 ⇒ **修完之後租戶
-刪除仍然會失敗**。本檔守的是「它失敗得乾淨」，不是「它會成功」。
+⚠ #740 當時**不改授權姿態**（租戶刪除仍然失敗），本檔守的是「它失敗得乾淨」，
+不是「它會成功」。
+
+## #1294 之後的重新錨定（被拒的身分換人、驅動面換成 RPC）
+
+#1294 把 `access_smart_home_user` 改成 `unlink=1`：租戶 **owner/admin 刪得掉自己
+工作區的 SH**（成功路徑的回歸測試在 `test_sh_tenant_delete_1294.py`）。本檔原本的
+被拒身分是 alice（W1 owner）走刪除端點——修完之後她**應該成功**，那條路就不再是
+「被拒」的樣本。而端點層對其他身分（user／guest／跨工作區）在呼叫 `action_delete()`
+**之前**就以 role gate／workspace 歸屬擋掉，走不到前置檢查。
+
+⇒ 被拒身分換成 **carol（W1 的 role=user 成員）**：她讀得到這台 SH（member_read
+rule），所以被拒的理由**只會是** unlink 授權（`smart_home_rule_owner_admin_manage`
+是唯一 `perm_unlink=True` 的 rule），不是「看不到」。驅動面換成真 HTTP 的
+`/web/dataset/call_kw`——那正是前置檢查唯一還是**最後一道**守線的入口
+（D 系列把它拿掉之後，外部副作用照樣送出）：
+
+- A1-A4、B1-B3、D1-D2：`call_kw unlink`。
+- A5：`call_kw action_delete`——前置檢查必須擋在 `state='deleting'` 那次 write
+  **之前**（歸因：被拒的操作是 unlink，不是 write）。
+- F 系列：`with_user(carol).unlink()`（model 層）。
+
+另外兩件 #1294 改掉的事：route 的連帶刪除改以平台身分執行（route ACL 刻意維持
+`unlink=0`），所以前置檢查只剩主表那一張；`_cleanup_tunnel` 清錨點改以平台身分寫
+（#859 的可達格）。
 
 ## 這裡的斷言與 `test_smart_home_authz_524.py::test_C5` 不同，兩者不可互相頂替
 
@@ -52,7 +75,8 @@ C5 問的是「有沒有把**別的租戶**的 id 送出去」（`assertNotIn(b_
   預設 env 寫的「守住了」**測不到守衛**（`docs/decisions/patterns/su-env-exempt-guard-false-green.md`）。
 - **每一格「沒有發生」都配同形態的陽性對照**（C 系列）：同一個 fixture 形態改用提權
   身分跑同一條路徑，外部呼叫必須照常送出、記錄必須照常被刪。少了它，「守住了」與
-  「這條路徑在本測試環境根本不作用」不可區分。
+  「這條路徑在本測試環境根本不作用」不可區分。租戶 owner/admin 身分的陽性對照
+  （#1294）在 `test_sh_tenant_delete_1294.py`。
 - **注入紅燈**（D 系列）：把前置檢查換成 no-op，修復前的行為必須整個回來。
 - **DB 一律裸 SQL 重讀**（`_db()`）：先 `invalidate_all(flush=False)` 丟掉 ORM 欄位
   快取（`flush=False` ⇒ 不會把快取裡的舊值反寫回 DB），再對 PostgreSQL 下 SELECT。
@@ -62,7 +86,7 @@ C5 問的是「有沒有把**別的租戶**的 id 送出去」（`assertNotIn(b_
   時 tag 不會跟著消失。⚠ 順帶記著同一族的第三種失效機制（#533）：**寫在
   mixin／基底類別裡的 `test_*` 一條都不會被收集**（Odoo loader 取 class `__dict__`，
   不含繼承來的方法），而輸出與全綠不可區分 ⇒ `_Sh740Fixture` 只放 helper，
-  17 條 `test_*` 全部住在具體類別自己的 body。
+  18 條 `test_*` 全部住在具體類別自己的 body。
 """
 import json
 import logging
@@ -72,7 +96,6 @@ from unittest.mock import MagicMock, patch
 from odoo.exceptions import AccessError, UserError
 from odoo.tests import tagged
 
-from ..controllers import smart_home as _sh_controller
 from .test_smart_home_authz_524 import _SmartHome524Fixture
 
 _logger = logging.getLogger(__name__)
@@ -80,49 +103,14 @@ _MARK = '740'
 _MODEL = 'woow_paas_platform.smart_home'
 _ROUTE_MODEL = 'woow_paas_platform.smart_home_route'
 
-#: 這條路徑會真的消耗到 unlink 權限的 model（**列名，不寫「所有相關 model」**）。
-#: 推導方式＝讀 `SmartHome.unlink()` 本體，找出每一個會走到 Odoo
-#: `check_access('unlink')` 的位置：route 的顯式 `unlink()`，以及 `super().unlink()`。
-_UNLINK_PERMISSION_MODELS = (_MODEL, _ROUTE_MODEL)
-
 #: 這條路徑上**所有**會打到 Cloudflare 的 operator method（逐一列名——「呼叫數為零」
 #: 這種斷言必須說得出零的是哪幾個，否則換一個新 method 進來時它還是綠的）。
 _EXTERNAL_METHODS = ('sync_access_app', 'delete_tunnel', 'create_tunnel',
                      'get_tunnel_status')
 
-#: 刪除端點寫「授權被拒」那行 log 的 logger（`src/controllers/smart_home.py`）。
-#: **不是猜的字串常數**：直接取被測模組自己的 `_logger.name`
-#: （目前值＝`odoo.addons.woow_paas_platform.controllers.smart_home`）。
-#: 理由是失效形態——`assertLogs` 綁錯 logger 名時的失敗訊息是
-#: 「no logs of level ERROR or higher triggered on <name>」，與「controller 真的
-#: 沒寫這行 log」**不可區分**；套件路徑一旦漂掉（改目錄／換 addon 名），A1／A2／A3
-#: 會一起紅在錯誤的歸因上，而那兩種紅的修法完全不同。
-LOG_SH_CTRL = _sh_controller._logger.name
-
-#: 那一行的訊息前綴 —— `src/controllers/smart_home.py:905`，
-#: `_delete_smarthome()` 的 `except (AccessDenied, AccessError, MissingError)`。
-#:
-#: 🔴 **這個前綴是量出來的，不是讀出來的。** 同一支 controller 上還有一支長得
-#: 幾乎一樣的 `_logger.exception("Access error checking smart home deletion: %s", e)`
-#: （:137-139），包住的是 `smarthome._check_operation_allowed(operation='write')`。
-#: 那支**對本條路徑是死碼**：`_check_operation_allowed()`
-#: （`models/subscription_lifecycle_mixin.py:371`）的 docstring 與實作都只
-#: `raise UserError`（訂閱過期／寬限期），一條也不會丟 AccessError。
-#: 本題的 unlink 前置檢查是在 `action_delete()` 裡丟的
-#: （`models/smart_home.py:767` → `_assert_unlink_authorized()` → `check_access('unlink')`），
-#: 而 `action_delete()` 是由 `_delete_smarthome()` 呼叫的 ⇒ 例外被 :905 那支接住。
-#: 實測（CI run 6697 的 job log，A1／A2／A3 各一筆、共 3 筆）：
-#:   `... controllers.smart_home: Access error deleting smart home: You are not`
-#:   `allowed to delete 'Smart Home Instance' (woow_paas_platform.smart_home) records.`
-#: 而 `Access error checking smart home deletion` 在同一份 log 裡是 **0 筆**。
-#: ⇒ 兩支只差幾個字、都在同一支 logger、都是 AccessError 分支，**光讀碼會選錯**。
-#:
-#: 錨在前綴、而不是「該 logger 的任何一筆 ERROR」：同一個 method 裡的泛用
-#: `except Exception` 分支寫的是 ``Failed to delete smart home: ...``（:913）
-#: ⇒ 不區分的話，哪天擋下來的例外型別漂成別的，判準照樣綠，
-#: 而「擋下來的是**授權檢查**」這個歸因就沒人守了。
-#: 兩個前綴互不為對方的前綴，`startswith` 分得開。
-_CTRL_DENY_PREFIX = 'Access error deleting smart home:'
+#: 被拒身分要能**讀到**這台 SH（否則被拒的理由會是「看不到」而不是 unlink 授權）
+#: ⇒ W1 的 role=user 成員 carol（見檔頭 #1294 重新錨定）。
+_DENIED_ROLE_LABEL = 'carol（W1 role=user）'
 
 
 class _Sh740Fixture(_SmartHome524Fixture):
@@ -259,90 +247,51 @@ class _Sh740Fixture(_SmartHome524Fixture):
     # ------------------------------------------------------------------ #
     #  驅動                                                               #
     # ------------------------------------------------------------------ #
-    def _tenant_delete(self, home, tag):
-        """租戶（alice，只掛 `base.group_user`、W1 owner）走真 HTTP 刪除端點。"""
+    def _denied_rpc(self, home, tag, method='unlink'):
+        """被拒身分（carol，只掛 `base.group_user`、W1 role=user）走真 HTTP
+        `/web/dataset/call_kw` 對這台 SH 呼叫 ``method``（#1294 重新錨定）。"""
         client = self._client()
         before = self._db(home.id)
-        self.authenticate(self.alice_login, self.alice_login)
+        self.authenticate(self.carol_login, self.carol_login)
         with self._patched_operator(client):
-            res = self._post_json(
-                '/api/workspaces/%d/smarthomes/%d' % (self.w1.id, home.id),
-                {'action': 'delete'})
-        payload = res.get('result', res)
+            res = self._call_kw(_MODEL, method, [[home.id]])
         after = self._db(home.id)
-        self._report('TENANT %s' % tag, {
-            'endpoint': payload,
+        self._report('DENIED %s %s' % (method, tag), {
+            'rpc': res,
             'external_calls_in_order': self._external_calls(client),
             'all_mock_calls_in_order': self._calls(client),
             'db_before': before, 'db_after': after,
             'reap_ledger': self._reap_rows(),
         })
-        return client, payload, before, after
+        return client, res, before, after
 
     # ------------------------------------------------------------------ #
     #  斷言 helper                                                        #
     # ------------------------------------------------------------------ #
-    def _assert_endpoint_denied(self, payload, tag):
-        """端點必須回失敗——否則「零外部呼叫」可能只是請求根本沒打到這條路徑。"""
-        self.assertIsInstance(payload, dict,
-                              '%s：端點沒有回 JSON 物件（回 %r）' % (tag, payload))
-        self.assertFalse(
-            payload.get('success'),
-            '%s：租戶刪除**必須**失敗（本 PR 不改授權姿態）。回 %r'
-            % (tag, payload))
-        return payload.get('error') or ''
+    def _assert_rpc_denied(self, result, tag):
+        """RPC 必須回 `AccessError`，而且擋下來的是**主表** `smart_home`。
 
-    def _assert_denied_by_the_preflight(self, captured, tag):
-        """歸因：擋下來的必須是**主表** `smart_home` 的 unlink 權，也就是前置檢查。
+        回 error 之外還要歸因：「零外部呼叫」可能只是請求根本沒打到這條路徑
+        （例如 method 名打錯回的是別種 error）。
 
-        ⚠ **錨點在 server log，不在端點回給租戶的字串**——這是 **#947**（＝**#860**
-        落地）之後的重新錨定：那張 PR 把刪除端點的技術訊息換成通用句
-        （`Failed to delete smart home. Please try again.`），舊判準讀的那段字串
-        整個消失了（#956：A1／A2／A3 三條一起紅）。原始例外仍然留在
-        `src/controllers/smart_home.py:905` 的
-        `_logger.exception("Access error deleting smart home: %s", e)`
-        ⇒ 判準搬到那裡。**兩個方向逐字保留、沒有改弱**，換的只是觀測管道。
-        ⚠ 那一支不是包住 `_check_operation_allowed` 的 :137-139——選錯的理由與
-        實測見 `_CTRL_DENY_PREFIX` 上方註解。
-
-        ⚠ 舊 docstring 說的「不用 `assertLogs`、因為要綁 `ir_model` 的內部 logger、
-        跨 Odoo 版本脆」在這裡**不適用**：現在綁的是**本 addon 自己的 controller**
-        的 logger 與訊息格式，不是 Odoo 核心的。
-
-        🔴 判別式刻意用**帶右括號**的 `(woow_paas_platform.smart_home)`：
+        判別式刻意同時要求「點名主表」與「**不**點名 route 子表」：
         `woow_paas_platform.smart_home_route` 這個字串包含
-        `woow_paas_platform.smart_home` ⇒ 不帶右括號的比對對 route 那條訊息**也會
-        通過**，那正是修復前 B／C 兩形態實際回的訊息 ⇒ 判準會零鑑別力。
-        另外再明確排除 route 那條，兩個方向都釘住。
-
-        🔴 而這個字串**不是程式裡的字面文字**：它是 Odoo 核心 `check_access()` 丟的
-        `AccessError` 的 `str(e)`，經 `%s` 帶進那行 log 的**動態內容**。
-        ⇒ 想驗這條斷言有沒有鑑別力，要動的是「什麼東西進了那行 log」（例如把
-        `%s`／`e` 換成固定字串），在原始碼裡 grep 是找不到可改的字面字串的。
-
-        ⚠ 讀的是 `captured.records` 的 `getMessage()`，**不是**本 repo 其他測試慣用的
-        `captured.output`：`_logger.exception()` 帶 `exc_info` ⇒ `output` 會把整段
-        traceback（檔名、原始碼行）一起格式化進去，替下面的 `assertNotIn` 製造
-        一整片與被測行為無關的命中面。這裡只要那一行 log 的訊息本體。
+        `woow_paas_platform.smart_home` ⇒ 只驗前者的話 route 那條訊息也會通過，
+        而那正是 #740 修復前 B／C 兩形態被擋在 teardown **之後**的形狀。
         """
-        messages = [r.getMessage() for r in captured.records]
-        denied = [m for m in messages if m.startswith(_CTRL_DENY_PREFIX)]
-        self.assertTrue(
-            denied,
-            '%s：controller 沒寫出「授權被拒」那行 log（前綴 %r，'
-            '`controllers/smart_home.py:905`）。同一個 method 的泛用 '
-            '`except Exception` 分支寫的是 "Failed to delete smart home: ..."（:913）'
-            '⇒ 只收到那一支代表擋下來的不是 AccessError，歸因不成立。實收 %r'
-            % (tag, _CTRL_DENY_PREFIX, messages))
-        blob = '\n'.join(denied)
-        self.assertIn(
-            '(woow_paas_platform.smart_home)', blob,
-            '%s：歸因失敗——擋下來的必須是主表的 unlink 權（前置檢查），'
-            'log 收到 %r' % (tag, denied))
-        self.assertNotIn(
-            'smart_home_route', blob,
-            '%s：歸因失敗——修復前 B／C 是被 route 那張 ACL 擋在 teardown '
-            '**之後**，那正是本題要消滅的形狀。log 收到 %r' % (tag, denied))
+        self.assertIn('error', result,
+                      '%s：%s 的 RPC 刪除**必須**被拒（回 %r）'
+                      % (tag, _DENIED_ROLE_LABEL, result))
+        text = self._error_text(result)
+        self.assertIn('AccessError', text,
+                      '%s：被拒的原因必須是授權（AccessError），回 %r' % (tag, text))
+        self.assertIn('woow_paas_platform.smart_home', text,
+                      '%s：歸因——擋下來的必須是主表的 unlink 權，回 %r'
+                      % (tag, text))
+        self.assertNotIn('smart_home_route', text,
+                         '%s：歸因——不得是 route 子表（那是 #740 修前被擋在 '
+                         'teardown 之後的形狀），回 %r' % (tag, text))
+        return text
 
     def _assert_no_external_call(self, client, tag):
         """列名：逐一斷言每一個 method 都沒被呼叫（不是只比總數）。"""
@@ -371,64 +320,31 @@ class _Sh740Fixture(_SmartHome524Fixture):
 # ---------------------------------------------------------------------- #
 @tagged('post_install', '-at_install')
 class TestSh740NoExternalCallWhenDenied(_Sh740Fixture):
-    """修復前紅在：A1（`delete_tunnel` 被送出）、A3（`sync_access_app` 被送出）。
+    """被拒身分（#1294 起＝carol，W1 role=user）的 RPC 刪除：零外部呼叫。
 
-    A2 修復前就是零呼叫（形態 B 在 teardown 之前就被 route 的 ACL 擋住）——它**不是**
-    本題的 RED，它是形狀對照：本修法不得讓 B 形態開始送出任何東西，而且它的歸因
-    斷言（擋在主表而不是 route）修復前是紅的。
+    #740 修復前紅在：A1（`delete_tunnel` 被送出）、A3（`sync_access_app` 被送出）。
+    鑑別力來源是 D 系列：同一個身分、同一條 RPC，拿掉前置檢查之後外部呼叫照樣送出。
     """
 
     def test_A1_no_route_denied_delete_sends_nothing(self):
         home = self._mk_no_route('740 A1')
-        # ⚠ `with` 必須包住 `_tenant_delete()`：那行 log 是 HTTP 請求**處理當下**寫出的，
-        #   早於下面的斷言 helper 被呼叫 —— 只把 helper 包起來會一筆都捕不到。
-        with self.assertLogs(LOG_SH_CTRL, level=logging.ERROR) as captured:
-            client, payload, _b, _a = self._tenant_delete(home, 'A1/no-route')
-        self._assert_endpoint_denied(payload, 'A1')
+        client, res, _b, _a = self._denied_rpc(home, 'A1/no-route')
+        self._assert_rpc_denied(res, 'A1')
         self._assert_no_external_call(client, 'A1')
-        self._assert_denied_by_the_preflight(captured, 'A1')
 
     def test_A2_with_route_denied_delete_sends_nothing(self):
-        """⚠ **這條的歸因判準已經重新錨定過一次**，把來龍去脈留在這裡。
-
-        舊判準讀的是**端點回給租戶的字串**，而上一版 docstring 自己預言過那段字串
-        會被改掉（**#860**：刪除端點把 Odoo 例外原文整段回租戶＝外洩面）。
-        它在 **#947** 真的落地了：端點改回通用句
-        `Failed to delete smart home. Please try again.`，錨點整個消失
-        ⇒ A1／A2／A3 三條一起紅（**#956**）。
-
-        照上一版留下的指示辦：**重新錨定到新的可觀測訊號、不把斷言改弱**。
-        新錨點是 server log —— 原始例外仍然被 `controllers/smart_home.py` 的
-        `_logger.exception()` 寫出來，「擋在主表而不是 route」這條守線因此還在。
-        兩個方向的斷言逐字保留，見 `_assert_denied_by_the_preflight`。
-
-        ⚠ 上一版寫的「為什麼不用 `assertLogs`」是針對 **Odoo 核心**
-        `odoo.addons.base.models.ir_model` 的內部 logger（跨版本脆）——現在綁的是
-        **本 addon 自己的 controller** 的 logger 與訊息格式，不是同一件事，
-        那段勸退不適用。至於「租戶看得到的那句話」那一半產品面契約，#947 之後
-        歸該 PR 自己的測試管，本檔不再兼管（本檔守的是歸因，不是文案）。
-
-        結構性的那一半（「停在 savepoint 之前」）仍由 A4 與 F 系列的 spy 承擔，
-        不靠字串。
-        """
+        """形態 B：route 上沒有 Access app。#740 修復前這一格是被 route 的 ACL 擋在
+        teardown 之後；#1294 起 route 改以平台身分連帶刪除，擋點只剩前置檢查。"""
         home = self._mk_with_route('740 A2', protected=False)
-        # ⚠ `with` 必須包住 `_tenant_delete()`：那行 log 是 HTTP 請求**處理當下**寫出的，
-        #   早於下面的斷言 helper 被呼叫 —— 只把 helper 包起來會一筆都捕不到。
-        with self.assertLogs(LOG_SH_CTRL, level=logging.ERROR) as captured:
-            client, payload, _b, _a = self._tenant_delete(home, 'A2/route-plain')
-        self._assert_endpoint_denied(payload, 'A2')
+        client, res, _b, _a = self._denied_rpc(home, 'A2/route-plain')
+        self._assert_rpc_denied(res, 'A2')
         self._assert_no_external_call(client, 'A2')
-        self._assert_denied_by_the_preflight(captured, 'A2')
 
     def test_A3_access_teardown_is_not_pushed_when_denied(self):
         home = self._mk_with_route('740 A3', protected=True)
-        # ⚠ `with` 必須包住 `_tenant_delete()`：那行 log 是 HTTP 請求**處理當下**寫出的，
-        #   早於下面的斷言 helper 被呼叫 —— 只把 helper 包起來會一筆都捕不到。
-        with self.assertLogs(LOG_SH_CTRL, level=logging.ERROR) as captured:
-            client, payload, _b, _a = self._tenant_delete(home, 'A3/route-access')
-        self._assert_endpoint_denied(payload, 'A3')
+        client, res, _b, _a = self._denied_rpc(home, 'A3/route-access')
+        self._assert_rpc_denied(res, 'A3')
         self._assert_no_external_call(client, 'A3')
-        self._assert_denied_by_the_preflight(captured, 'A3')
 
     def test_A4_denied_delete_never_enters_the_teardown_savepoint(self):
         """前置檢查必須在 `try:`／savepoint **之外**：被拒時整條補償路徑不得被進入。
@@ -447,8 +363,8 @@ class TestSh740NoExternalCallWhenDenied(_Sh740Fixture):
             return original(record, torn_down=torn_down)
 
         with patch.object(registry_cls, '_teardown_routes_access', _spy):
-            client, payload, _b, _a = self._tenant_delete(home, 'A4/savepoint')
-        self._assert_endpoint_denied(payload, 'A4')
+            client, res, _b, _a = self._denied_rpc(home, 'A4/savepoint')
+        self._assert_rpc_denied(res, 'A4')
         self.assertEqual(
             seen, [],
             'A4：授權被拒時不得進入 savepoint —— `_teardown_routes_access()` '
@@ -459,38 +375,60 @@ class TestSh740NoExternalCallWhenDenied(_Sh740Fixture):
             % (self._reap_rows(),))
         self._assert_no_external_call(client, 'A4')
 
+    def test_A5_action_delete_is_stopped_before_its_state_write(self):
+        """`action_delete()` 那一層：前置檢查必須擋在 `state='deleting'` 之前。
+
+        歸因用**被拒的操作名**：carol 對這台 SH 既沒有 write 也沒有 unlink 權
+        （兩者都只有 owner/admin）⇒ 少了 `action_delete()` 第一行的前置檢查，她會
+        先撞 `state` 那次 write 的 rule（操作名 write）——結果一樣是被拒、一樣零
+        呼叫，但守住的不是同一件事。這裡要求擋下來的是 unlink、而且不是 write。
+        """
+        home = self._mk_with_route('740 A5', protected=True)
+        client, res, before, after = self._denied_rpc(
+            home, 'A5/action_delete', method='action_delete')
+        text = self._assert_rpc_denied(res, 'A5')
+        self.assertTrue(
+            'unlink' in text or 'delete' in text.lower(),
+            'A5：擋下來的必須是 unlink 授權（前置檢查），回 %r' % (text,))
+        self.assertNotIn(
+            "'write'", text,
+            'A5：被 write 擋下＝前置檢查不在 `action_delete()` 的 state write '
+            '之前，回 %r' % (text,))
+        self._assert_no_external_call(client, 'A5')
+        self._assert_row_untouched(before, after, 'A5')
+
 
 # ---------------------------------------------------------------------- #
 #  B 系列：授權被拒 ⇒ 零持久欄位變更                                       #
 # ---------------------------------------------------------------------- #
 @tagged('post_install', '-at_install')
 class TestSh740NoFieldChangeWhenDenied(_Sh740Fixture):
-    """修復前三條全紅，但**紅的欄位不同**，所以三條都要有：
+    """被拒的 RPC 刪除：零持久欄位變更（裸 SQL 前後逐欄比對）。
 
-    - B1／B2：`state` 被 `action_delete()` 在 unlink 的 savepoint **之外**寫成
-      `'deleting'`（`_FlushingSavepoint.__init__` 是先 `cr.flush()` 再 `SAVEPOINT`
-      ⇒ 那個 UPDATE 落在 savepoint 之外，回捲不到），跟著請求一起 commit。
-    - B3：除了 `state`，route 的 `access_app_id` 被清空、`access_protection_lost`
-      被打開——那兩筆是 `#794` 的補償在**獨立交易**寫的，回捲不掉。
+    #740 修復前（當時經刪除端點）三條全紅，紅的欄位不同：B1／B2 的 `state` 被
+    `action_delete()` 在 savepoint **之外**寫成 `'deleting'`；B3 另外有 route 的
+    `access_app_id` 被清空、`access_protection_lost` 被打開（#794 補償在**獨立交易**
+    寫的，回捲不掉）。#1294 起驅動面是 `call_kw unlink`（見檔頭），`state` 那一格
+    改由 A5 守；B3 那兩個欄位在拿掉前置檢查之後照樣會被打開（D2）。
     """
 
     def test_B1_no_route_denied_delete_lands_no_field_change(self):
         home = self._mk_no_route('740 B1')
-        _c, payload, before, after = self._tenant_delete(home, 'B1/no-route')
-        self._assert_endpoint_denied(payload, 'B1')
+        _c, res, before, after = self._denied_rpc(home, 'B1/no-route')
+        self._assert_rpc_denied(res, 'B1')
         self._assert_row_untouched(before, after, 'B1')
 
     def test_B2_with_route_denied_delete_lands_no_field_change(self):
         home = self._mk_with_route('740 B2', protected=False)
-        _c, payload, before, after = self._tenant_delete(home, 'B2/route-plain')
-        self._assert_endpoint_denied(payload, 'B2')
+        _c, res, before, after = self._denied_rpc(home, 'B2/route-plain')
+        self._assert_rpc_denied(res, 'B2')
         self._assert_row_untouched(before, after, 'B2')
 
     def test_B3_access_protection_is_not_lost_when_denied(self):
         """🔴 本題最嚴重的一格：被**拒絕**的刪除不得把這個 hostname 的登入強制關掉。"""
         home = self._mk_with_route('740 B3', protected=True)
-        _c, payload, before, after = self._tenant_delete(home, 'B3/route-access')
-        self._assert_endpoint_denied(payload, 'B3')
+        _c, res, before, after = self._denied_rpc(home, 'B3/route-access')
+        self._assert_rpc_denied(res, 'B3')
         # 先逐欄點名那兩個欄位（失敗訊息要說得出是哪一格），再整包比對。
         self.assertEqual(
             [r['access_app_id'] for r in after['routes']],
@@ -588,18 +526,17 @@ class TestSh740AuthorizedPathStillWorks(_Sh740Fixture):
 # ---------------------------------------------------------------------- #
 @tagged('post_install', '-at_install')
 class TestSh740GuardIsWhatStopsIt(_Sh740Fixture):
-    """把前置檢查換成 no-op，修復前的行為必須整個回來。
+    """把前置檢查換成 no-op，外部副作用必須整個回來。
 
-    ⚠ 修復**前**這兩條紅在 `AttributeError`（`_assert_unlink_authorized` 還不存在），
-    不是紅在斷言——這是預期的，記在案：它們鎖的是「守衛存在且它就是擋下來的原因」。
+    #1294 重新錨定：同一個被拒身分（carol）、同一條 `call_kw unlink`。拿掉前置
+    檢查之後，她一路走進 savepoint、對 CF 送出 teardown／delete，最後才在
+    `super().unlink()` 被 record rule 擋下——**授權照樣被拒，副作用已經發生**，
+    那正是 #740 的缺陷形狀。⇒ A／B 兩系列的鑑別力來源就是這兩條，**不要改弱、
+    更不要刪**（少了它們，A／B 全綠也可能只是「這條路徑在本環境不作用」）。
 
-    ⚠ **這兩條把「修復前那個有缺陷的行為」釘成期望值**（拿掉守衛之後 `delete_tunnel`
-    必須又被送出、`state` 必須又變 `deleting`、`access_protection_lost` 必須又變
-    `True`）。那些行為本身已經開單要改：**#859**（tunnel 已被刪時 fail-loud 那句話
-    是假的）與 **#860**（端點外洩例外原文）。
-    **這兩條紅了先確認是不是 #859／#860 落地**；若是，把「拿掉守衛之後應該看到什麼」
-    重新錨定到那張單落地後的新行為，**不要改弱、更不要刪**——它們是 A／B 兩系列
-    唯一的鑑別力來源（少了它們，A／B 全綠也可能只是「這條路徑在本環境不作用」）。
+    ⚠ 舊版（經刪除端點、alice）還釘了 `state='deleting'` 與 #859／#860 的行為。
+    #860 已落地；#859 的可達格（清錨點撞 `tunnel_token` 欄位 ACL）由 #1294 改成
+    平台身分寫；`state` 那一格改由 A5 守。
     """
 
     def _without_the_preflight(self):
@@ -609,27 +546,37 @@ class TestSh740GuardIsWhatStopsIt(_Sh740Fixture):
     def test_D1_without_the_preflight_the_tunnel_is_deleted_again(self):
         home = self._mk_no_route('740 D1')
         with self._without_the_preflight():
-            client, payload, _b, after = self._tenant_delete(home, 'D1')
-        self._assert_endpoint_denied(payload, 'D1')
+            client, res, _b, _after = self._denied_rpc(home, 'D1')
+        self.assertIn('error', res,
+                      'D1：拿掉前置檢查之後授權仍然要被拒（擋在 super().unlink()），'
+                      '回 %r' % (res,))
         self.assertTrue(
             client.delete_tunnel.called,
             'D1：拿掉前置檢查之後 `delete_tunnel` 必須又被送出——沒有的話，'
             '「守住了」的功勞不在這道守衛身上，本檔的 A 系列零鑑別力')
-        self.assertEqual(
-            [r['state'] for r in after['smart_home']], ['deleting'],
-            'D1：拿掉前置檢查之後 `state` 必須又被寫成 deleting')
 
     def test_D2_without_the_preflight_the_access_app_is_torn_down_again(self):
+        """判準是「teardown 真的送出去了、拆的是這一列的 app」。
+
+        ⚠ 舊版另外斷言 `access_protection_lost=True`（#794 補償的 DB 痕跡）。#1294
+        之後被拒的位置移到 tunnel 刪除之後的 `super().unlink()`，補償接著跑的
+        `_resync_after_fail_open()` 對 mock operator 會重推成功、把旗標自己清掉
+        （CI run 12142 實測為 False）——那是補償機制的收斂行為，不是本題的訊號，
+        所以改錨在外部呼叫本身。
+        """
         home = self._mk_with_route('740 D2', protected=True)
+        app_id = home.sudo().route_ids.access_app_id
+        self.assertTrue(app_id, 'D2 前提：route 上要有 app id')
         with self._without_the_preflight():
-            client, payload, _b, after = self._tenant_delete(home, 'D2')
-        self._assert_endpoint_denied(payload, 'D2')
+            client, res, _b, _after = self._denied_rpc(home, 'D2')
+        self.assertIn('error', res,
+                      'D2：拿掉前置檢查之後授權仍然要被拒，回 %r' % (res,))
+        teardowns = [c.args[0] for c in client.sync_access_app.call_args_list
+                     if c.args and c.args[0].get('enabled') is False]
         self.assertTrue(
-            client.sync_access_app.called,
-            'D2：拿掉前置檢查之後 Access teardown 必須又被送出')
-        self.assertEqual(
-            [r['access_protection_lost'] for r in after['routes']], [True],
-            'D2：拿掉前置檢查之後 #794 的補償必須又跑（＝保護真的沒了）')
+            any(p.get('existing_app_id') == app_id for p in teardowns),
+            'D2：拿掉前置檢查之後，這一列的 Access app 必須又被拆掉'
+            '（實送 teardown %r）' % (teardowns,))
 
 
 # ---------------------------------------------------------------------- #
@@ -717,7 +664,7 @@ class TestSh740UnlinkIsWhereTheInvariantLives(_Sh740Fixture):
             seen.append(record.ids)
             return original(record, torn_down=torn_down)
 
-        as_tenant = home.with_user(self.alice)
+        as_tenant = home.with_user(self.carol)
         self.assertFalse(
             as_tenant.env.su,
             '%s fixture 前提：驅動身分必須是非提權的，否則守衛整條被跳過' % tag)
@@ -729,8 +676,8 @@ class TestSh740UnlinkIsWhereTheInvariantLives(_Sh740Fixture):
             except Exception as e:  # noqa: BLE001 —— 型別在下面斷言
                 raised = e
             else:
-                self.fail('%s：租戶直接 `unlink()` 必須被拒'
-                          '（本 PR 不改授權姿態）' % tag)
+                self.fail('%s：%s 直接 `unlink()` 必須被拒（只有 owner/admin '
+                          '刪得掉，#1294）' % (tag, _DENIED_ROLE_LABEL))
         after = self._db(home.id)
         self._report('TENANT-UNLINK %s' % tag, {
             'raised': '%s: %s' % (type(raised).__name__, raised),

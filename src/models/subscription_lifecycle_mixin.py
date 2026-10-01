@@ -5,9 +5,60 @@ from datetime import date, timedelta
 from dateutil.relativedelta import relativedelta
 
 from odoo import _, api, fields, models
-from odoo.exceptions import UserError
+from odoo.exceptions import AccessError, UserError
 
 _logger = logging.getLogger(__name__)
+
+
+# ------------------------------------------------------------------------- #
+#  租戶直打 ORM（`/web/dataset/call_kw`）的生命週期守衛                       #
+# ------------------------------------------------------------------------- #
+#
+# SA／SH 的 owner／admin 對自己的記錄有合法的 write（ir.rule
+# `*_rule_owner_admin_manage`），而 `/web/dataset/call_kw` 不經過 /woow
+# controller 的 `_check_operation_allowed`（訂閱閘）。下面兩組守衛補的是
+# 「controller 有擋、ORM 沒擋」而且**後果是繞過計費**的那兩格：
+#
+# 1. `subscription_id` 綁定（#519 提案 B 在 cloud_service 上的同一個不變式，
+#    該決策文件「明確不在本輪範圍」段點名 SA／SH 同款洞仍開著）：
+#    - 清空：`_cron_enforce_subscription_lifecycle` 的 domain 是
+#      `subscription_id != False` ⇒ 清空＝永久脫離停權／結算；而
+#      `_is_subscription_active()` 對「沒有訂閱」回 True ⇒ 之後 controller 的
+#      訂閱閘也一律放行。
+#    - 改指：Many2one 寫入不查 comodel ACL ⇒ 任何存在的訂閱 id 都寫得進去。
+# 2. 停權逃逸：把 `suspended`／`deleting` 改回會對外服務的 state。SA 的 route
+#    同步只在 `active`／`active_no_route`／`error` 推送真 service_url，所以
+#    「state 改回 active ＋ 隨便改一條 route」就把 503 凍結推掉。
+#
+# 豁免＝superuser／sudo 或 `base.group_system`（與 `workspace.py`
+# `_is_privileged_writer`（#658）同一個判準）。這兩組屬於
+# scope-flip-write-guard 家族——有合法的變更路徑（下單／change-plan 的綁定、
+# cron 的續約鏈與 `_do_resume`），只是要設閘——不是「根本沒有合法路徑」的
+# su-env-exempt-guard 家族。⚠ 正因為豁免 su，守線測試必須走 HttpCase＋真租戶
+# 帳號（`TransactionCase` 是 su env，deny 分支在那裡結構上不可達）。
+#
+# ⚠ 刻意**不**改 cloud_service：它有自己對所有人（含 su）生效的 #519 版本
+# （`CloudService._assert_subscription_binding` ＋ partial unique index）。
+_LIFECYCLE_ENTITY_MODELS = (
+    'woow_paas_platform.cloud_service',
+    'woow_paas_platform.security_access',
+    'woow_paas_platform.smart_home',
+)
+
+#: 停權／刪除中——離開這兩格回到其他 state 只能由平台（`_do_resume` 等）做。
+_HALTED_STATES = ('suspended', 'deleting')
+
+
+class EntitySubscriptionBindingError(AccessError):
+    """SA／SH 的 `subscription_id` 綁定不合法（租戶直打 ORM）。
+
+    獨立型別讓測試斷言**型別**而非文案，並能與 ACL／ir.rule 的 AccessError
+    分開（同 `cloud_service.SubscriptionBindingError` 的理由）。
+    """
+
+
+class LifecycleHaltEscapeError(AccessError):
+    """租戶把停權中／刪除中的 SA／SH 改回會對外服務的 state。"""
 
 
 def _subscription_total_with_tax(sub):
@@ -113,19 +164,18 @@ class SubscriptionLifecycleMixin(models.AbstractModel):
         read ACL 只發給 ``group_manager_sh_subscription`` /
         ``group_user_sh_subscription`` / ``base.group_portal``。workspace 擁有權是
         **平台側**概念，不會連帶給到那三個 Odoo 群組——所以 mixin 內部只要直接
-        traversal（``self.subscription_id.state`` 之類），典型租戶（只有
-        ``base.group_user`` 的內部使用者）就會在 env cache 落空時撞 AccessError，
+        traversal（``self.subscription_id.state`` 之類），僅有
+        ``base.group_user`` 的內部呼叫者就會在 env cache 落空時撞 AccessError，
         endpoint 回 "You are not allowed to access sh.subscription.subscription"
         （#29；#27 的 controller 端已於 PR #28 修過同一個 class 的缺陷）。
 
         「cache 命中所以看起來沒事」不是健全性——production 每個 HTTP request 都
         從空 cache 開始，所以這條路是必現而非偶發。
 
-        sudo 不是權限放大：mixin 是 CloudService / SmartHome / SecurityAccess 三
-        個 controller 共用的**內部** helper，走到這裡之前 controller 已經做完
-        workspace 歸屬 + [OWNER, ADMIN] role 兩道閘——誰能驅動這些方法早就決定
-        好了。與 ``controllers/paas.py`` / ``controllers/smart_home.py`` 既有的
-        cascade-sudo 是同一個 pattern。
+        這不是「租戶都是 internal」的定義：一般註冊租戶是 Portal；對外 PaaS
+        由 private capability 驗證真實 uid／workspace／角色，不升級其群組。
+        本 helper 只提權讀取已授權實例所綁訂閱。呼叫端仍須保留自己的讀取或
+        異動守衛；readonly 成員路徑與 owner/admin 異動路徑不能混為一談。
 
         新增任何要讀訂閱的 mixin 方法都走這裡，不要再寫 ``self.subscription_id``
         ——``scripts/audit/repo-lint.py`` 的 ``check_mixin_subscription_sudo``
@@ -572,6 +622,104 @@ class SubscriptionLifecycleMixin(models.AbstractModel):
                 'invoice_id': invoice.id,
                 'amount': invoice.amount_total,
             }
+
+    # ----------------------------------------------------------------
+    # Tenant-direct ORM guards（SA／SH 的 create／write 呼叫；見模組頂端）
+    # ----------------------------------------------------------------
+
+    def _is_platform_lifecycle_writer(self):
+        """豁免判準：superuser／sudo 或 `base.group_system`。
+
+        與 `workspace.py::_is_privileged_writer`（#658）同形。豁免的兩種身分都
+        不是租戶經 RPC 取得得了的身分（`call_kw` 換得掉 context、換不掉 uid／su）。
+        """
+        return (self.env.is_superuser()
+                or self.env.user.has_group('base.group_system'))
+
+    def _guard_tenant_lifecycle_write(self, vals):
+        """write() 前置守衛：停權逃逸 ＋ `subscription_id` 改綁／清空。
+
+        先 `check_access('write')`：讓「本來就不能寫這一列的人」（role=user／
+        guest／非成員）照舊由 ir.rule 拒絕，歸因不被本守衛搶走；走得過 ir.rule
+        的人（owner／admin）才進入下面兩格。兩格都比對「新值 != 現值」，整批送出
+        未修改欄位的 no-op write 不會被誤擋。
+        """
+        if self._is_platform_lifecycle_writer() or not self:
+            return
+        if not ({'state', 'subscription_id'} & set(vals)):
+            return
+        self.check_access('write')
+        if 'state' in vals:
+            for rec in self:
+                if (rec.state in _HALTED_STATES
+                        and vals['state'] != rec.state
+                        and vals['state'] not in _HALTED_STATES):
+                    raise LifecycleHaltEscapeError(_(
+                        '%(model)s #%(id)s is %(state)s; only the platform can '
+                        'bring it back into service (renew the subscription '
+                        'instead).',
+                        model=rec._description, id=rec.id, state=rec.state))
+        if 'subscription_id' in vals:
+            new_sub_id = vals['subscription_id'] or False
+            for rec in self:
+                if (rec._sub().id or False) == new_sub_id:
+                    continue
+                if not new_sub_id:
+                    raise EntitySubscriptionBindingError(_(
+                        'A service cannot be unbound from its subscription.'))
+                rec._assert_entity_subscription_binding(
+                    self.env['sh.subscription.subscription'].sudo().browse(
+                        new_sub_id))
+
+    def _guard_tenant_lifecycle_create(self):
+        """create() 事後守衛：讀**落地值**（`default_subscription_id` 與租戶可寫的
+        `ir.default` 都在 `BaseModel.create` 內部才展開，看 raw vals 會漏）。
+
+        呼叫端是 super().create() 之後的 recordset；擋下來時 raise 會讓整筆交易
+        回捲。
+        """
+        if self._is_platform_lifecycle_writer():
+            return
+        for rec in self:
+            sub = rec._sub()
+            if sub:
+                rec._assert_entity_subscription_binding(sub)
+
+    def _assert_entity_subscription_binding(self, sub):
+        """綁定當下判準（形狀同 #519 提案 B 的 `CloudService._assert_subscription_binding`）。
+
+        - 歸屬：`sub.sh_partner_id == workspace_id.owner_id.partner_id`；
+        - 狀態：`in_progress`——第三方 `/renew-subscription` 讓租戶鑄得出屬於自己
+          的訂閱，但停在 draft（#519／#725）；只驗歸屬會被無限鑄幣打穿；
+        - 唯一：同一筆訂閱不得已綁在任何其他 CS／SA／SH 上（#335 裁決：一服務＝
+          一訂閱）。⚠ 這是 Python 層 check-then-act，擋得住同一租戶的循序改綁，
+          不保證並發；CS 側的 DB partial unique index 不延伸到這兩個 model。
+
+        全程 sudo：這是授權判斷，不可被呼叫者自己的讀取權限縮窄（租戶對訂閱
+        model 零 ACL）。只在綁定**改變**時呼叫——訂閱到期後仍合法地綁著（停權
+        流程靠它），不是常駐不變式。
+        """
+        self.ensure_one()
+        sub = sub.sudo().exists()
+        if not sub:
+            raise EntitySubscriptionBindingError(_(
+                'The subscription does not exist.'))
+        owner_partner = self.sudo().workspace_id.owner_id.partner_id
+        if not owner_partner or sub.sh_partner_id != owner_partner:
+            raise EntitySubscriptionBindingError(_(
+                "This subscription does not belong to the owner of this "
+                "service's workspace and cannot be bound."))
+        if sub.state != 'in_progress':
+            raise EntitySubscriptionBindingError(_(
+                'Only an active (in_progress) subscription can be bound. '
+                'Current state: %(state)s.', state=sub.state or 'unset'))
+        for model_name in _LIFECYCLE_ENTITY_MODELS:
+            domain = [('subscription_id', '=', sub.id)]
+            if model_name == self._name:
+                domain.append(('id', '!=', self.id))
+            if self.env[model_name].sudo().search_count(domain):
+                raise EntitySubscriptionBindingError(_(
+                    'This subscription is already bound to another service.'))
 
     # ----------------------------------------------------------------
     # Suspend / Resume / Cleanup (abstract — implemented by subclass)

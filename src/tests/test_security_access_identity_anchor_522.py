@@ -51,6 +51,9 @@ from odoo.addons.woow_paas_platform.models.security_access import (
     _IDENTITY_ANCHOR_FIELDS,
     _INTERNAL_IDENTITY_WRITE,
     _ROUTE_IDENTITY_ANCHOR_FIELDS,
+    # 建立閘（豁免 su／group_system）：下面兩條以非 su 租戶 create，測的是錨點，
+    # 不是建立閘 ⇒ 用下單流程同一把開閘 helper（只開建立閘、不開錨點閘）。
+    _sa_platform_order,
 )
 
 # Floors, NOT a mirror of the model tuples. Adding an anchor to the model needs
@@ -330,9 +333,9 @@ class TestSecurityAccessIdentityAnchors(TransactionCase):
     def test_forged_context_does_not_open_the_hatch_at_create(self):
         """Same for the create()-side strip — otherwise the squat is still
         available, just with one extra key in the payload."""
-        sa = self.SA.with_user(self.alice).with_context(
+        sa = _sa_platform_order(self.SA.with_user(self.alice).with_context(
             **{_CTX_KEY: True},
-        ).create({
+        )).create({
             'name': 'Forged Create GW',
             'workspace_id': self.workspace.id,
             'tunnel_id': 'victim-tunnel-uuid',
@@ -378,7 +381,7 @@ class TestSecurityAccessIdentityAnchors(TransactionCase):
         stamp canonical_name through the very hatch this change narrowed. If
         the sentinel were wrong the row would be born nameless — and every
         "the tenant could not inject one" assertion would still pass."""
-        sa = self.SA.with_user(self.alice).create({
+        sa = _sa_platform_order(self.SA.with_user(self.alice)).create({
             'name': 'Fresh Gateway', 'workspace_id': self.workspace.id,
         })
         stored = self._db_value(sa, 'canonical_name')
@@ -400,7 +403,7 @@ class TestSecurityAccessIdentityAnchors(TransactionCase):
             field_name: 'attacker-%s' % field_name.replace('_', '-')
             for field_name in self._sa_anchors()
         }
-        sa = self.SA.with_user(self.alice).create(dict(
+        sa = _sa_platform_order(self.SA.with_user(self.alice)).create(dict(
             forged, name='Injected Gateway', workspace_id=self.workspace.id))
         for field_name, forged_value in forged.items():
             with self.subTest(field=field_name):

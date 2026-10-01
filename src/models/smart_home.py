@@ -31,13 +31,6 @@ _logger = logging.getLogger(__name__)
 #: #528 的待回收 CF Access 物件帳本（三腿共用；本檔只用它的 #794 補償入口）。
 _CF_REAP_MODEL = 'woow_paas_platform.cf_access_policy_reap'
 
-#: #740：`unlink()` 這條路徑真的會消耗到 unlink 權限的**第二張**表。
-#: 推導方式（不要照抄結論，改 `unlink()` 時重推一次）：讀 `unlink()` 本體，找出每一
-#: 個會走到 Odoo `check_access('unlink')` 的位置——只有兩個，route 那次顯式的
-#: `_sm_route_cascade_unlink(record.route_ids).unlink()`，以及本 model 的
-#: `super().unlink()`。
-_SM_ROUTE_MODEL = 'woow_paas_platform.smart_home_route'
-
 
 # ------------------------------------------------------------------------- #
 #  #524 第 1 節：smart_home 的建立閘（private sentinel）                      #
@@ -444,11 +437,23 @@ class SmartHome(models.Model):
                 'ordering flow instead of writing to this model directly.',
                 model=self._name))
         _strip_identity_anchors(self.env, vals_list)
-        return super().create(vals_list)
+        records = super().create(vals_list)
+        # 落地值的 `subscription_id`（`ir.default`／context default 注入）也要過
+        # 綁定判準——見 mixin 的 `_guard_tenant_lifecycle_create`。
+        records._guard_tenant_lifecycle_create()
+        return records
 
     def write(self, vals):
-        """#524：身分錨點的 write 側 —— 見模組頂端 `_IDENTITY_ANCHOR_FIELDS`。"""
+        """#524：身分錨點的 write 側 —— 見模組頂端 `_IDENTITY_ANCHOR_FIELDS`。
+
+        另加租戶直打 ORM 的生命週期守衛（停權逃逸、`subscription_id` 改綁／
+        清空）：owner 把 `subscription_id` 清空再改 state 為 `error`，就能經
+        `call_kw` 的 `action_provision` → `_converge_existing_tunnel` 把 ingress
+        推回 localhost（那裡的訂閱檢查對「沒有訂閱」放行），而 cron 從此摸不到
+        這一台。理由與豁免見 `subscription_lifecycle_mixin` 模組頂端。
+        """
         _reject_identity_anchor_writes(self.env, vals)
+        self._guard_tenant_lifecycle_write(vals)
         return super().write(vals)
 
     def _get_operator_client(self):
@@ -647,6 +652,15 @@ class SmartHome(models.Model):
             )
 
         client = self._get_operator_client()
+
+        # 首次開通一定會寫 `tunnel_token`（`groups='base.group_system'`）。非平台
+        # 身分（`/web/dataset/call_kw` 直打本 public method，不經 controller 的
+        # sudo）在那次寫入必然 AccessError——但那時 `create_tunnel` 已經在
+        # Cloudflare 開好一條 tunnel，而這一支沒有 SA 那樣的 #822 補償：例外外拋、
+        # 交易回捲、DB 沒有任何東西指向它 ⇒ 每打一次就多一條在計費的孤兒。
+        # 這裡用 Odoo 自己的欄位遮罩判準把同一個拒絕**提前到任何外部副作用之前**
+        # （su 照舊放行，controller 的平台身分路徑與後台按鈕不受影響）。
+        self.check_field_access_rights('write', ['tunnel_token'])
 
         self.write({'state': 'provisioning', 'error_message': False})
 
@@ -919,24 +933,26 @@ class SmartHome(models.Model):
         ⇒ 「外部副作用排在授權檢查前面」是這兩個約束的結構性後果，不是寫錯順序。
         既然順序不能換，就只能把授權檢查**提前**到副作用之前再做一次。
 
-        ## 枚舉用提權身分，檢查用呼叫者身分（兩件事，刻意分開）
+        ## 檢查用呼叫者身分
 
-        * **枚舉**（`self.sudo().route_ids`）：teardown 迴圈走的就是提權後的集合
-          （`_teardown_routes_access()` 迴圈的是 `self.sudo().route_ids`）。改用呼叫者
-          看得見的集合，被 record rule 濾掉的那幾條就變成「看不到 ⇒ 不用檢查」，
-          那是 fail-open，方向與本 issue 相同。
-        * **檢查**（`self.env[...]`，非 sudo）：判準必須是**呼叫者**有沒有權限。
-          形狀取自本 repo 既有的前置檢查前例
-          `cloud_service._assert_reverse_binding_authorized()`（#698）：同樣是
-          「sudo 收集要檢查的那一批 → 用呼叫者身分 `check_access`」。
+        判準必須是**呼叫者**有沒有權限（`self.check_access`，非 sudo）。形狀取自本
+        repo 既有的前置檢查前例 `cloud_service._assert_reverse_binding_authorized()`
+        （#698）。#740 原本還有「sudo 枚舉 route → 呼叫者身分驗 route」那一半，
+        #1294 拿掉，理由見下一節。
 
-        這兩件事必須分開的**機制理由**（不是風格）：`_check_access()` 的
-        `ir.rule` 那一半只對真實 id 生效（`if any(self._ids):`）⇒ 送進去的 id 集合
-        決定 record rule 會不會被評估。用呼叫者看得見的 `route_ids`，被 rule 濾掉的
-        那幾條就根本不會被檢查，而 teardown 迴圈照樣會走到它們。
+        ## 檢查範圍：只有本 model 這一張（#1294 起）
 
-        ## 檢查範圍就是 `_SM_ROUTE_MODEL` 上方註解推導出來的那兩張，逐一列名
+        推導方式（不要照抄結論，改 `unlink()` 時重推一次）：讀 `unlink()` 本體，找出
+        每一個以**呼叫者身分**走到 Odoo `check_access('unlink')` 的位置。#1294 之後只剩
+        本 model 的 `super().unlink()` 一處——route 那次顯式刪除
+        （`_sm_route_cascade_unlink(record.sudo().route_ids).unlink()`）改走平台身分。
 
+        **不含** `woow_paas_platform.smart_home_route`（#1294 改動，原本有）：#740 當時
+        route 是以呼叫者身分刪的，所以要先驗；但 route 對 `base.group_user` 的 ACL 是
+        `unlink=0`（本階段沒有 route CRUD，`test_sh_access_acl_768.py` R7 釘住），
+        只要以呼叫者身分刪 route，租戶 owner/admin 就永遠刪不掉自己的 SH。改成：
+        「能不能刪這台 SH」由下面那一行驗完，route 只是它的附屬列，隨 SH 以平台身分
+        一起走——route 的單獨刪除入口因此維持關閉，不必為了刪 SH 放寬 route ACL。
         **不含** `woow_paas_platform.security_access_access_policy`：policy 列是被
         route 的 `ondelete='cascade'` 在 **DB 層**帶走的，Python `unlink()` 根本不會
         被呼叫（`unlink()` 裡那段 ForeignKeyViolation 的註解記著同一件事）⇒ 這條
@@ -952,34 +968,26 @@ class SmartHome(models.Model):
         `check_access()` 的第一行是 `if not self.env.su`（Odoo 18 `odoo/models.py`）
         ⇒ 平台自己驅動的刪除（`workspace.unlink()` 那條 `sudo().unlink()`）與 cron
         一律不受影響。下面第一行的 `if self.env.su: return` 因此**不改變語意**——它
-        省掉的只是提權之下沒必要的那次 `route_ids` 讀取，並把豁免寫在看得見的地方。
+        只是把豁免寫在看得見的地方。
         🔴 連帶：本守衛在 `TransactionCase` 的預設 env（su）底下是 no-op ⇒ 用預設
         env 寫的「守住了」測試**測不到它**
         （`docs/decisions/patterns/su-env-exempt-guard-false-green.md` 的形狀）。
         租戶那一側的回歸測試因此一律走真 HTTP，見
         `tests/test_sh_unlink_authz_preflight_740.py`。
 
-        ⚠ 本方法**不改變授權姿態**：ACL 表、record rule、端點身分一律沒動 ⇒ 租戶的
-        刪除仍然會失敗。它保證的是「失敗得乾淨」（零外部呼叫、零持久欄位變更），
-        不是「會成功」。租戶到底該不該刪得掉是 #739 家族的題目。
+        ⚠ 授權姿態（#1294）：#740 落地時本方法**不改變**授權姿態，租戶刪除仍然
+        失敗、它只保證「失敗得乾淨」（零外部呼叫、零持久欄位變更）。#1294 起
+        `access_smart_home_user` 改成 `unlink=1`，租戶 owner/admin 經
+        `smart_home_rule_owner_admin_manage` 刪得掉自己工作區的 SH；同工作區的
+        user/guest 與跨工作區的身分仍在這裡被拒（那條 rule 是唯一 `perm_unlink=True`
+        的 rule），而且仍然「失敗得乾淨」。
         """
         if self.env.su:
             return
-        # 主表先驗：被拒時的訊息才會點名租戶真正在刪的那個東西，而不是它從沒聽過
-        # 的 route 子表（修前 B／C 兩形態回的就是後者）。
+        # 唯一一張以呼叫者身分消耗 unlink 權的表（推導見 docstring「檢查範圍」）。
+        # ⚠ 不要把 route 的檢查加回來：route ACL 對 `base.group_user` 刻意是
+        # `unlink=0`，加回來 ⇒ 租戶 owner/admin 又刪不掉自己的 SH（#1294 的原狀）。
         self.check_access('unlink')
-        # 🔴 **刻意沒有 `if route_ids:` 這個分支**，兩個理由：
-        #  1. `_check_access()` 的模型級 `ir.model.access` 檢查是**無條件**跑的，
-        #     只有 `ir.rule` 那一半被 `if any(self._ids):` 擋掉（Odoo 18
-        #     `odoo/models.py::_check_access`）⇒ 空 recordset 仍然會問「你到底有沒有
-        #     刪 route 的權限」。那正是我們要問的問題，與這一筆有沒有 route 無關。
-        #     **這一行對「沒有 route 的記錄」不是死碼**，不要順手把它包進條件式。
-        #  2. 加上分支就多一個 fail-open 面：`route_ids` 只要因為任何理由靜默變空
-        #     （`active_test` 之類，#716 ② 在 CS 那腿實際發生過），檢查就整段被跳過。
-        #     今天兩種寫法對所有身分的判定結果相同（唯一有 unlink 的群組兩張表都有），
-        #     所以這裡選 fail-closed 的那個。
-        self.env[_SM_ROUTE_MODEL].browse(
-            self.sudo().route_ids.ids).check_access('unlink')
 
     def action_delete(self):
         """Delete the smart home and its Cloudflare Tunnel.
@@ -1040,7 +1048,17 @@ class SmartHome(models.Model):
             # 刪除前的最後一個值（通常是 connected 的綠燈）。
             # ⚠ 只在 delete 成功之後寫：失敗時 tunnel 還活在 CF 上，標成 deleted
             # 會把「待重試」謊報成「已刪除」，比原本的 bug 更糟。
-            _internal_identity(self).write(dict(
+            #
+            # #1294（＝#859 的可達格）：這筆是**平台自己的帳**（記下「我們剛刪掉了那顆
+            # tunnel」），以平台身分寫（`sudo()`）。`tunnel_token` 帶
+            # `groups='base.group_system'`，以租戶身分寫會撞欄位 ACL、被下面的
+            # `except Exception` 吞成「保留待重試」⇒ `tunnel_id` 留著 ⇒ `unlink()`
+            # 的 fail-loud 對一顆**已經刪掉**的 tunnel 宣稱「still live and billed」。
+            # #1294 讓租戶 owner/admin 有了 unlink 權，那一格就從不可達變成每次都中。
+            # sudo 打不開身分錨點守衛（無 su 豁免），開閘的仍是 `_internal_identity`；
+            # 授權由呼叫鏈上的 `_assert_unlink_authorized()` 負責，本方法是私有方法
+            # （RPC 叫不到）。
+            _internal_identity(self.sudo()).write(dict(
                 {field: False for field in _IDENTITY_ANCHOR_FIELDS},
                 tunnel_status='deleted',
             ))
@@ -1124,7 +1142,14 @@ class SmartHome(models.Model):
                     # 這一步不會重複打 operator：上面的 `_teardown_routes_access()` 成功
                     # 後已經把 `access_app_id` 與每條 policy 的 `cf_policy_id` 清空，
                     # route 的 `_capture_access_teardown()` 因此回 None。
-                    _sm_route_cascade_unlink(record.route_ids).unlink()
+                    #
+                    # #1294：route 以**平台身分**刪（`sudo()`）。授權判準是「呼叫者
+                    # 能不能刪這台 SH」，已由第一行的 `_assert_unlink_authorized()`
+                    # 驗完；route 對 `base.group_user` 的 ACL 刻意是 `unlink=0`（沒有
+                    # route CRUD），用呼叫者身分刪 ⇒ 租戶 owner/admin 永遠刪不掉自己的
+                    # SH。枚舉同樣用 sudo 的集合，與 `_teardown_routes_access()` 一致
+                    # （不讓 record rule 決定哪些 route 走得到上面那段 FK 處理）。
+                    _sm_route_cascade_unlink(record.sudo().route_ids).unlink()
                     if record.tunnel_id:
                         record._cleanup_tunnel()
                     if record.tunnel_id:

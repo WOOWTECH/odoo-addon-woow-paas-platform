@@ -11,7 +11,9 @@ const USERNAME_RE = /^[A-Za-z0-9._@-]{1,64}$/;
 const PASSWORD_RE = /^[\x21-\x7e]{12,128}$/;
 
 /**
- * 租戶自設 admin 帳號／密碼（template.admin_username_editable 為 true 的服務）。
+ * 租戶自設 admin 帳號／密碼（template.admin_credentials_settable 為 true 的服務）。
+ * usernameEditable=false（template.admin_username_editable 為 false，例 code-server
+ * 只有密碼、沒有帳號）時不顯示帳號欄、也不送 username。
  *
  * 密碼兩種模式：平台隨機產生（預設，成功後由 OneTimeCredentialsModal 一次性顯示）
  * 或自行設定（後端不回傳明文）。儲存走 helm upgrade ＋ rollout restart，服務會重啟。
@@ -23,6 +25,7 @@ export class AdminCredentialsModal extends Component {
     workspaceId: { type: Number },
     serviceId: { type: Number },
     currentUsername: { type: [String, { value: null }], optional: true },
+    usernameEditable: { type: Boolean, optional: true },
     onClose: { type: Function },
     onSaved: { type: Function },
   };
@@ -67,9 +70,14 @@ export class AdminCredentialsModal extends Component {
     }
   }
 
+  get showUsername() {
+    // 預設 true：沿用既有呼叫端（沒傳這個 prop）的行為。
+    return this.props.usernameEditable !== false;
+  }
+
   async onSubmit() {
     const username = this.state.username.trim();
-    if (!USERNAME_RE.test(username)) {
+    if (this.showUsername && !USERNAME_RE.test(username)) {
       this.state.error = _t("Username must be 1-64 characters: letters, digits, and . _ @ -");
       return;
     }
@@ -91,7 +99,7 @@ export class AdminCredentialsModal extends Component {
     this.state.error = null;
     // 帳號沒變就不送，避免一次無意義的 values 寫入。
     const payload = { password };
-    if (username !== (this.props.currentUsername || "")) {
+    if (this.showUsername && username !== (this.props.currentUsername || "")) {
       payload.username = username;
     }
     const result = await cloudService.setAdminCredentials(

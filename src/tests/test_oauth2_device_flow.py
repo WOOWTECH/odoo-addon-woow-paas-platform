@@ -204,6 +204,18 @@ class TestDeviceCodeEndpoints(TransactionCase):
         dc.invalidate_recordset(['status'])
         self.assertEqual(dc.status, 'denied')
 
+    def test_device_result_title_matches_outcome(self):
+        """拒絕頁的分頁標題曾寫死成「Device Authorized」（2026-10-01 正式站實測），
+        與內文「Request Denied」相反。標題要跟著結果走。"""
+        qweb = self.env['ir.qweb']
+        denied = str(qweb._render('woow_paas_platform.device_result',
+                                  {'approved': False, 'message': None}))
+        self.assertIn('<title>Request Denied - Woow PaaS</title>', denied)
+        self.assertNotIn('Device Authorized', denied)
+        approved = str(qweb._render('woow_paas_platform.device_result',
+                                    {'approved': True}))
+        self.assertIn('<title>Device Connected - Woow PaaS</title>', approved)
+
     def test_device_verify_invalid_code_increments_session(self):
         session = {}
         self._call('device_verify_post', _session=session,

@@ -13,7 +13,7 @@ import uuid
 from pathlib import Path
 
 from .bridge import Bridge, Store, validate_actors
-from .registration import Registrar, poll_seconds, validate_roots
+from .registration import DEFAULT_SCAN_SECONDS, Registrar, poll_seconds, scan_seconds, validate_roots
 from .root_admission import MAX_BUNDLE_BYTES, bundle_fingerprint, validate_rules
 from .server import BridgeServer
 from .transport import (
@@ -52,7 +52,7 @@ def provision(args):
     token_path = Path(args.token_file).absolute()
     private_file(token_path)
     if args.roots or args.auto_roots:
-        options = {"poll_seconds": args.poll_seconds}
+        options = {"poll_seconds": args.poll_seconds, "scan_seconds": args.scan_seconds}
         if args.auto_roots:
             policy = decode_json(Path(args.auto_roots).read_text(encoding="utf-8"))
             if not isinstance(policy, dict) or set(policy) != {"roots", "rules"}:
@@ -110,12 +110,14 @@ def serve(args):
     automatic = set(config) == {"server_url", "token_file", "registration"}
     if automatic:
         options = config["registration"]
-        if not isinstance(options, dict) or set(options) not in (
-                {"roots", "poll_seconds"}, {"roots", "poll_seconds", "auto_roots"}):
+        if (not isinstance(options, dict)
+                or not {"roots", "poll_seconds"} <= set(options)
+                or set(options) - {"roots", "poll_seconds", "auto_roots", "scan_seconds"}):
             raise MessageError("invalid_registration_config")
         rules = validate_rules(options["auto_roots"]) if "auto_roots" in options else None
         validate_roots(options["roots"], allow_empty=rules is not None)
         poll_seconds(options["poll_seconds"])
+        budget = scan_seconds(options.get("scan_seconds", DEFAULT_SCAN_SECONDS))
         actors = {}
     elif set(config) == {"server_url", "token_file", "actors"}:
         actors = validate_actors(config["actors"])
@@ -127,7 +129,8 @@ def serve(args):
     try:
         bridge = Bridge(actors, store, transport, automatic=automatic)
         if automatic:
-            registrar = Registrar(options["roots"], options["poll_seconds"], bridge, args.state_dir, args.port, rules=rules)
+            registrar = Registrar(options["roots"], options["poll_seconds"], bridge, args.state_dir,
+                                  args.port, rules=rules, scan_budget=budget)
         with BridgeServer(("127.0.0.1", args.port), bridge) as server:
             dump({"listening": f"http://127.0.0.1:{args.port}"}, stream=sys.stderr)
             if registrar:
@@ -202,6 +205,8 @@ def main(argv: list[str] | None = None) -> int:
     source.add_argument("--roots", help="自動模式：root alias → session_id／workspace 的 operator allowlist")
     source.add_argument("--auto-roots", help="自動 root admission：含 roots 與 rules 的 operator policy JSON")
     setup.add_argument("--poll-seconds", type=poll_seconds, default=5, help="自動 discovery 間隔（0.1..60，預設 5 秒）")
+    setup.add_argument("--scan-seconds", type=scan_seconds, default=DEFAULT_SCAN_SECONDS,
+                       help="自動 discovery 整輪上限（1..120，預設 60 秒）")
     setup.add_argument("--server-url", required=True, help="Omnigent server origin，不含 /v1")
     setup.add_argument("--token-file", required=True, help="上游專用帳號 bearer token（0600）")
     setup.add_argument("--port", type=port_number, default=6778)

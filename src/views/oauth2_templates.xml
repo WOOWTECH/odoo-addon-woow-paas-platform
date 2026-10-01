@@ -337,7 +337,8 @@
             <head>
                 <meta charset="utf-8"/>
                 <meta name="viewport" content="width=device-width, initial-scale=1"/>
-                <title>Device Authorized - Woow PaaS</title>
+                <title t-if="approved">Device Connected - Woow PaaS</title>
+                <title t-else="">Request Denied - Woow PaaS</title>
                 <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&amp;display=swap" rel="stylesheet"/>
                 <style>
                     * { margin: 0; padding: 0; box-sizing: border-box; }

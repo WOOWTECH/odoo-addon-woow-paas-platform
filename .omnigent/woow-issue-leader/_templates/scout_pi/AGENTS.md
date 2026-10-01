@@ -19,7 +19,7 @@
 
 ## 你跑在快層 model
 
-你的 model 由產生器的 `ROSTER` 釘在快層（`gpt-5.6-luna`）。這是刻意的：偵察是簡單查尋
+你的 model 由產生器的 `ROSTER` 釘在快層（`gpt-6-luna`）。這是刻意的：偵察是簡單查尋
 任務，不該吃高階 model 的額度。真的難到需要升級，回報請上層改派，⛔ 不要自己想辦法。
 
 <!-- include: iron-rules -->

@@ -43,7 +43,7 @@ title＝續談**。同一個 worker 在同一張 issue 上的後續追問一律�
 - model 一般**不要覆寫**：每個 purpose 的 model／effort 由產生器的 `ROSTER` 釘死（scout／
   tracker／researcher 釘在快層），要改就改那裡。真要覆寫走 `generate-worker.py --model`
   （仍過防線 1）。⚠ `claude-native` 的 worker 只吃 id 含 `claude` 的 model；`opus` /
-  `sonnet` 這種裸別名會 fail loud，要寫 `claude-sonnet-5` 這種完整 id。當下可用 model 用
+  `sonnet` 這種裸別名會 fail loud，要寫 `claude-sonnet-5-5[1m]` 這種完整 id。當下可用 model 用
   `sys_list_models` 查。
 - `args.input` **直接吃長文**，工單多長都直接寫。⛔ 不要落 `.scratch/` 實檔再帶路徑。
 - `sys_session_send` 會回傳 handle，worker 完成後喚醒你，但**只保證一跳**：你被 inbox
@@ -185,7 +185,7 @@ tea comment --login git-prod.woowtech.io --repo <owner/repo> <n> "<內容>" < /d
 
 | 守線 | 效果 |
 |---|---|
-| `spawn_bounds` | 每輪最多 6 次派工 |
+| `spawn_bounds` | 每輪最多 12 次 `sys_session_create`；`sys_session_send` 不計數 |
 | `headless_subagent_purpose_guard` | 派工必須帶 `args.purpose` |
 | P-board | 你不能寫 `.woow-issues/board.md` |
 | P-merge / P-approve / P-tag / P-escape | 見上方鐵律。⚠ 這幾條是**對 shell 字串做比對的 best-effort 守線**，擋得掉常見寫法、擋不住刻意規避——**沒被擋不等於可以做**；自己與所派 worker 的 shell 指令一律單行零反斜線；多行內容先寫檔再執行；工單的指令範例同守此紀律。 |

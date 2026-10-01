@@ -21,6 +21,8 @@ from . import test_oauth2
 from . import test_oauth2_device_flow
 from . import test_ha_api
 from . import test_ha_api_security_access
+# HA API tunnel-token 只給 owner／admin（role=user／guest 回 insufficient_role）。
+from . import test_ha_api_tunnel_token_role
 from . import test_naming
 # feat: L4 reconciler 左集蒐集（SA 2 層 walk + CS MCP 重建 + SM）
 from . import test_reconciler_left_set
@@ -70,6 +72,9 @@ from . import test_ecpay_invoice_retry
 from . import test_ecpay_invoice_subscription
 from . import test_subscription_invoice_state
 from . import test_acl_p9
+from . import test_portal_paas_workspace_journey
+from . import test_portal_paas_bootstrap_20261001
+from . import test_portal_paas_capability_20261001
 # refactor: decouple CloudService ↔ Project (red phase)
 from . import test_project_decouple
 # fix/decuple-project: frontend + controller 收尾 (D1=A + D2=A — TDD red)
@@ -355,6 +360,7 @@ from . import test_ha_full_seed_661
 from . import test_ha_full_apporo_seed
 from . import test_pi_agent_seed
 from . import test_omnigent_seed
+from . import test_code_server_seed
 # fix: #657 project_access 授權補洞 —— identity anchor 缺失 / role 缺省整道
 # 守衛被跳過 / 無 owner 列保護，與 #556 同構但刻意不在該 PR 內順手修
 # （HttpCase，group_user-only）
@@ -938,3 +944,18 @@ from . import test_skip_trial_dates_1261
 # migration），含 #1266（suspend 吃掉 init）與 #1267（reconfigure／rollback 繞過
 # init）的重現。會走到 init 入口的測試用真 cursor＋真 commit＋事後清理。
 from . import test_init_execution_control_1257
+
+# #1294：非系統管理員的工作區 owner/admin 刪不掉自己的 SH（ACL unlink=0 ＋ 前置檢查
+# 連 route 子表一起驗）。守 owner/admin 經真 HTTP 刪得掉、user/guest／跨工作區仍被拒、
+# Cloudflare 清理失敗時記錄保住、route 仍沒有單獨刪除入口。
+from . import test_sh_tenant_delete_1294
+
+# #1295：工作區底下還有未刪除的 SA／SH／cloud_service 時拒絕封存（租戶的「刪除工作區」）；
+# 守衛在 model 層 write()，走真 HTTP 驗產品端點與 ORM 直呼兩條路徑。
+from . import test_workspace_archive_guard_1295
+
+# 租戶經 `/web/dataset/call_kw` 直打 SA／SH／工作區 model 的 ORM 層守衛：SA 建立閘
+# （無訂閱裸建＝免費 tunnel）、SA／SH `subscription_id` 不得清空／改指、停權中不得
+# 被租戶帶回服務狀態（含 SA re-sync）、SH 直打 provision 不得先開 tunnel 再炸、工作區
+# 封存／還原 owner-only（admin 擋）。一律 HttpCase＋真租戶 session，每格配陽性對照。
+from . import test_tenant_orm_lifecycle_guards

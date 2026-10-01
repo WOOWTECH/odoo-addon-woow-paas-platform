@@ -265,6 +265,67 @@ def _is_sync_control(env, key):
     return False
 
 
+# ------------------------------------------------------------------------- #
+#  security_access 的建立閘（smart_home #524／cloud_service #519 的同型缺口）  #
+# ------------------------------------------------------------------------- #
+#
+# 缺陷：`security_access_rule_owner_admin_manage` 給 owner／admin create，而
+# owner 資格可自我滿足（任何 base.group_user 免費自建 workspace 即為 owner）
+# ⇒ 經 `/web/dataset/call_kw` 裸 `create({'name':…, 'workspace_id':…})` 得到
+# 一筆 `subscription_id` 為空的 SA。`_is_subscription_active()` 對「沒有訂閱」
+# 回 True ⇒ controller 的 `_check_operation_allowed` 放行 ⇒ 再打 /woow 的
+# `action='provision'` 就以平台身分開出一條真的、在計費的 Cloudflare tunnel，
+# 平台側零訂閱零扣款（smart_home 的 #524 實測過完全相同的鏈；`models/smart_home.py`
+# 頂端那段註解）。
+#
+# 判準：context 裡那個值的**物件身分**（`is`）——`call_kw` 換得掉整包 context，
+# JSON 表達不出模組私有物件（#522）。
+#
+# ⚠ 與 #524（smart_home）刻意不同的一格：本閘**豁免** superuser／sudo 與
+# `base.group_system`（同 `workspace.py::_is_privileged_writer`，#658）。
+# 理由：(1) 威脅模型是租戶 RPC，租戶取得不了 su／group_system；(2) 全 repo 沒有
+# 任何 sudo 路徑會拿租戶輸入建 SA（唯一的建立點是下面這支 controller，它走租戶
+# 身分 ＋ 本開閘 helper）；(3) 不豁免要遷移約 90 處 TransactionCase fixture（#524
+# 當年遷了 130 處），那是另一個爆炸半徑。代價是 `TransactionCase`（su env）對本閘
+# 沒有鑑別力——守線測試因此一律走 HttpCase＋真租戶帳號
+# （`tests/test_tenant_orm_lifecycle_guards.py`）。
+# key 刻意與 smart_home／cloud_service 的不同名：各 model 的閘互不授權。
+class _PlatformSaOrder:
+    """平台伺服器端建立 security_access 的 marker type —— 見上方註解。"""
+
+    __slots__ = ()
+
+    def __repr__(self):
+        return '<platform security-access order>'
+
+
+_PLATFORM_SA_ORDER = _PlatformSaOrder()
+
+#: 唯一的逃生口 context key。key 本身不是判準，判準是它的**值身分**。
+_PLATFORM_SA_ORDER_CTX_KEY = 'woow_security_access_platform_order'
+
+
+def _sa_platform_order(records):
+    """回傳唯一被允許（以租戶身分）建立 security_access 的 context 底下的 ``records``。
+
+    開閘掛在會讓記錄落地的那一次呼叫上；唯讀 handle 一律不帶。
+    """
+    return records.with_context(
+        **{_PLATFORM_SA_ORDER_CTX_KEY: _PLATFORM_SA_ORDER})
+
+
+def _is_sa_platform_order(env):
+    """判準：**只**比對 context 裡那個值的物件身分（`is`）。"""
+    return env.context.get(_PLATFORM_SA_ORDER_CTX_KEY) is _PLATFORM_SA_ORDER
+
+
+class SecurityAccessOrderGateError(AccessError):
+    """這一筆 security_access 不是從平台的下單流程來的。
+
+    獨立型別讓測試斷言例外型別，而不是與 ACL／ir.rule 的 AccessError 混為一談。
+    """
+
+
 def _server_owned_anchor_value(model, field_name):
     """一個身分錨點在 create 當下該落地的**伺服器端值**。
 
@@ -828,11 +889,24 @@ class SecurityAccess(models.Model):
         # canonical_name is computed once below; reference_id falls back to its
         # uuid4 default. Closes the create+write immutable chain.
         #
+        # 建立閘排在最前面：被拒絕的呼叫不該碰到任何後續成本（見模組層
+        # `_PLATFORM_SA_ORDER` 的註解）。
+        if not (_is_sa_platform_order(self.env)
+                or self._is_platform_lifecycle_writer()):
+            raise SecurityAccessOrderGateError(_(
+                'Security Access instances can only be created by the platform '
+                'ordering flow (%(model)s). Please order from the Security '
+                'Access page instead of writing to this model directly.',
+                model=self._name))
+        #
         # #753：傳的是 `self` 而不是 `self.env`——守衛要讀 `_fields` 才知道哪個
         # 錨點有伺服器端 default（`reference_id` 的 uuid4）該壓進去，而不是一律
         # 壓 False 把 required 炸掉。
         _strip_identity_anchors(self, vals_list, _IDENTITY_ANCHOR_FIELDS)
         records = super().create(vals_list)
+        # 落地值的 `subscription_id`（`ir.default`／context default 注入）也要過
+        # 綁定判準——見 mixin 的 `_guard_tenant_lifecycle_create`。
+        records._guard_tenant_lifecycle_create()
         for record in records:
             if not record.canonical_name:
                 # compute ONCE and store; never recompute (name is mutable).
@@ -858,6 +932,10 @@ class SecurityAccess(models.Model):
         # server-owned provisioning/sync code can set it.
         _reject_identity_anchor_writes(
             self.env, vals, _IDENTITY_ANCHOR_FIELDS)
+        # 租戶直打 ORM 的生命週期守衛：停權逃逸（suspended／deleting → 對外服務
+        # 的 state）與 `subscription_id` 改綁／清空。理由與豁免見
+        # `subscription_lifecycle_mixin` 模組頂端。
+        self._guard_tenant_lifecycle_write(vals)
         # P2.5: the SA layer no longer carries any service-wide Access config —
         # Access is per-route now, so a route's create/write/unlink fires its
         # OWN _sync_access_to_operator. There is no SA-level access write trigger
@@ -1037,11 +1115,34 @@ class SecurityAccess(models.Model):
         denial（那個分支的契約是「拒絕必須傳到呼叫端」）。
         """
         self.ensure_one()
+        # This public method is also reachable through raw ORM/RPC. Refuse an
+        # unauthorized caller before reading state or constructing the operator
+        # client; authorized callers still pass the upstream lifecycle gates.
+        self.check_access('write')
+        # 停權／刪除中一律拒絕，在任何 write 與 operator 呼叫之前（形狀同
+        # smart_home.action_provision 的 stored-id guard）。re-sync 分支會把每條
+        # route 的真 service_url 推回去 ⇒ 對 `suspended` 放行＝繞過停權的 503
+        # 凍結；而本方法是 public（`/web/dataset/call_kw` 到得了，不經 controller
+        # 的 `_check_operation_allowed`）。復權的正路是 `_do_resume`。
+        if self.state in ('suspended', 'deleting'):
+            raise UserError(_(
+                "This Security Access is %(state)s and cannot be provisioned. "
+                "Renew the subscription to restore service.",
+                state=self.state))
         client = self._get_operator_client()
 
         # Already has a live tunnel (e.g. retry after a stage-2 sync failure):
         # never recreate it, just finish the route sync.
         if self.tunnel_id:
+            # 訂閱不在 in_progress 時拒絕重推（同 smart_home
+            # `_converge_existing_tunnel`）：`_do_suspend` 推 503 失敗會落
+            # `error` 而不是 `suspended`，「error ＋ 訂閱已停」是真的會出現的組合，
+            # 放行就是租戶按一下重試（或直接 call_kw）繞過停權。無訂閱＝legacy／
+            # admin 建的記錄，照舊允許（清空綁定已由 mixin 守衛擋住）。
+            if not self._is_subscription_active():
+                raise UserError(_(
+                    "This Security Access's subscription is not active, so its "
+                    "routes cannot be re-synced. Restore the subscription first."))
             self.write({'state': 'provisioning', 'error_message': False})
             try:
                 # 軸2: bare tunnel — no primary route to self-heal. Just re-run

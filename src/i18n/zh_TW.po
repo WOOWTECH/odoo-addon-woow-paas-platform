@@ -606,6 +606,13 @@ msgid "A user can only have one access record per workspace."
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/DeleteWorkspaceModal.xml:0
+msgid ""
+"A workspace can only be deleted after every service in it has been deleted."
+msgstr "工作區內的所有服務都刪除之後，才能刪除工作區。"
+
+#. module: woow_paas_platform
 #. odoo-python
 #: code:addons/woow_paas_platform/models/workspace_access.py:0
 msgid ""
@@ -1684,6 +1691,12 @@ msgstr ""
 #: code:addons/woow_paas_platform/static/src/paas/pages/smart-home/SmartHomeDetailPage.xml:0
 msgid "Are you sure you want to delete"
 msgstr "確定要刪除"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/DeleteWorkspaceModal.xml:0
+msgid "Are you sure you want to delete this workspace?"
+msgstr "確定要刪除這個工作區嗎？"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -4086,6 +4099,13 @@ msgstr "刪除 Smart Home"
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/DeleteWorkspaceModal.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/workspace/WorkspaceDetailPage.xml:0
+msgid "Delete Workspace"
+msgstr "刪除工作區"
+
+#. module: woow_paas_platform
+#. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/subscription/PlanSelector.js:0
 msgid "Delete all %(used)s listed email address(es) first"
 msgstr "請先刪除已列出的全部 %(used)s 個 email 位址"
@@ -4113,6 +4133,12 @@ msgstr "刪除政策"
 #: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.xml:0
 msgid "Delete route"
 msgstr "刪除路由"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/DeleteWorkspaceModal.xml:0
+msgid "Delete the following services first, then delete the workspace."
+msgstr "請先刪除以下服務，再刪除工作區。"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -4888,6 +4914,12 @@ msgstr "請輸入"
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/DeleteWorkspaceModal.xml:0
+msgid "Enter the workspace name to confirm"
+msgstr "請輸入工作區名稱以確認"
+
+#. module: woow_paas_platform
+#. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/OneTimeCredentialsModal.js:0
 msgid ""
 "Enter this in the Dashboard REST API section of the MCP connection settings "
@@ -5177,6 +5209,12 @@ msgstr "刪除服務失敗"
 #: code:addons/woow_paas_platform/static/src/paas/pages/smart-home/SmartHomeDetailPage.js:0
 msgid "Failed to delete smart home"
 msgstr "無法刪除 Smart Home"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/DeleteWorkspaceModal.js:0
+msgid "Failed to delete workspace"
+msgstr "刪除工作區失敗"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -11172,9 +11210,9 @@ msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-javascript
-#: code:addons/woow_paas_platform/static/src/paas/components/modal/OneTimeCredentialsModal.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/OneTimeCredentialsModal.js:0
 msgid "Save your credentials"
-msgstr ""
+msgstr "請保存您的登入資訊"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -13093,12 +13131,15 @@ msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-javascript
-#: code:addons/woow_paas_platform/static/src/paas/components/modal/OneTimeCredentialsModal.xml:0
-msgid ""
-"The service is restarting to apply them (usually 1–3 minutes) and may be\n"
-"                        briefly unreachable. The status will return to "
-"Running when it is ready."
-msgstr ""
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/OneTimeCredentialsModal.js:0
+msgid "The service is restarting to apply them (usually 1–3 minutes) and may be briefly unreachable. The status will return to Running when it is ready."
+msgstr "服務正在重新啟動以套用新的登入資訊（通常需要 1–3 分鐘），期間可能短暫無法連線。準備好後狀態會回到「執行中」。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/OneTimeCredentialsModal.js:0
+msgid "The service is starting for the first time (usually 1–3 minutes). Sign in with these values once its status shows Running."
+msgstr "服務正在首次啟動（通常需要 1–3 分鐘）。狀態顯示「執行中」後，即可用以上資訊登入。"
 
 #. module: woow_paas_platform
 #. odoo-python
@@ -13146,6 +13187,14 @@ msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/DeleteWorkspaceModal.xml:0
+msgid ""
+"The workspace will be archived and removed from your workspace list. This "
+"cannot be undone from the workspace pages."
+msgstr "工作區會被封存並從您的工作區清單中移除，無法從工作區頁面復原。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/support-projects/SupportProjectsPage.xml:0
 msgid ""
 "There are no support projects available yet. Create your first project to "
@@ -13162,9 +13211,9 @@ msgstr "下列登入方式在 Cloudflare 找不到對應的身分提供者，已
 
 #. module: woow_paas_platform
 #. odoo-javascript
-#: code:addons/woow_paas_platform/static/src/paas/components/modal/OneTimeCredentialsModal.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/OneTimeCredentialsModal.js:0
 msgid "These values are shown only once. Save them before closing this dialog."
-msgstr ""
+msgstr "以下資訊只會顯示這一次，關閉視窗前請先保存。"
 
 #. module: woow_paas_platform
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_cloud_odoo_addon__source_type__third_party
@@ -13510,6 +13559,20 @@ msgstr "這會移除 tunnel 設定與所有相關資料。此操作無法復原�
 msgid ""
 "This will uninstall the existing release and deploy from scratch. Continue?"
 msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/DeleteWorkspaceModal.xml:0
+msgid "This workspace still has services that have not been deleted."
+msgstr "此工作區還有尚未刪除的服務。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/workspace.py:0
+msgid ""
+"This workspace still has services that have not been deleted: %(services)s. "
+"Delete these services first, then delete the workspace."
+msgstr "此工作區還有尚未刪除的服務：%(services)s。請先刪除這些服務，再刪除工作區。"
 
 #. module: woow_paas_platform
 #: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_agent_session__last_state_event_ts
@@ -18244,3 +18307,317 @@ msgid ""
 ").\n"
 "              Remove a route or change plan to add another."
 msgstr "）。請刪除一條路由或變更方案後再新增。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/access/AccessAppCard.js:0
+msgid "1 policy"
+msgstr "1 條政策"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/access/AccessAppCard.js:0
+msgid "%s policies"
+msgstr "%s 條政策"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.js:0
+msgid "Reachable"
+msgstr "可連線"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.js:0
+msgid "Login required"
+msgstr "需要登入"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.js:0
+msgid "Not protected"
+msgstr "未受保護"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.js:0
+msgid "Blocked by Access"
+msgstr "被 Access 擋住"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.js:0
+msgid "Connector offline"
+msgstr "連接器離線"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.js:0
+msgid "Not live yet"
+msgstr "尚未生效"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.js:0
+msgid "DNS not found"
+msgstr "查無 DNS"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.js:0
+msgid "Origin error"
+msgstr "源站錯誤"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.js:0
+msgid "Proxy has no site"
+msgstr "代理沒有這個網站"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.js:0
+msgid "No response"
+msgstr "沒有回應"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.js:0
+msgid ""
+"Requests pass through Cloudflare and the tunnel, and your service answers."
+msgstr "請求能穿過 Cloudflare 與 tunnel，你的服務也有回應。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.js:0
+msgid ""
+"Protected: visitors see the Cloudflare Access login first. This is expected."
+msgstr "已保護：訪客會先看到 Cloudflare Access 登入頁，這是正常的。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.js:0
+msgid ""
+"This route is set to protected, but no login page is in front of it. Toggle "
+"protection off and on in the Access tab, or contact support."
+msgstr "這條路由設為受保護，但前面沒有登入頁。請到「存取控管」分頁把保護關掉再打開，或聯絡客服。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.js:0
+msgid ""
+"This route is public here, but a Cloudflare Access application that this "
+"platform does not manage is blocking it. Contact support."
+msgstr "這條路由在這裡是公開的，但有一個不是本平台管理的 Cloudflare Access 應用程式擋住了它。請聯絡客服。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.js:0
+msgid ""
+"No connector is running this tunnel. Check the machine that runs it, or "
+"start a connector with the tunnel token."
+msgstr "沒有任何連接器在執行這條 tunnel。請檢查執行它的那台機器，或用 tunnel token 啟動一個連接器。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.js:0
+msgid ""
+"The hostname does not point to this tunnel yet. Right after creating or "
+"renaming a route this can take up to a minute — check again shortly."
+msgstr "這個網址還沒指到這條 tunnel。剛建立或剛改名的路由最多需要一分鐘——請稍後再檢查。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.js:0
+msgid ""
+"Public DNS has no record for this hostname yet. Wait a minute and check "
+"again."
+msgstr "公開 DNS 還查不到這個網址。請等一分鐘再檢查。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.js:0
+msgid ""
+"The request reached your machine, but your reverse proxy or service returned"
+" an error. Check that the proxy has this hostname and the service is "
+"running."
+msgstr "請求已經到達你的機器，但你的反向代理或服務回傳錯誤。請確認反向代理有這個網址、服務也在執行。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.js:0
+msgid ""
+"The request reached your machine, but your reverse proxy answered with its "
+"default page — it has no site for this hostname. Add this hostname in your "
+"proxy (for example Nginx Proxy Manager). This is expected right after "
+"renaming a route."
+msgstr ""
+"請求已經到達你的機器，但你的反向代理回的是它自己的預設頁——它沒有這個網址的站台。請在反向代理（例如 Nginx Proxy "
+"Manager）新增這個網址。剛改名後出現這個狀態是正常的。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.js:0
+msgid ""
+"Your service did not answer in time. Check that it is running and not "
+"overloaded."
+msgstr "你的服務沒有在時限內回應。請確認它有在執行、沒有過載。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.js:0
+msgid "The check could not complete. Try again in a moment."
+msgstr "檢查沒有完成，請稍後再試。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.js:0
+msgid ""
+"Traffic data is not available yet: the platform's Cloudflare token lacks "
+"analytics access."
+msgstr "目前還無法取得流量資料：平台的 Cloudflare token 缺少分析權限。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.js:0
+msgid ""
+"Traffic data is not available yet: the platform service needs an update."
+msgstr "目前還無法取得流量資料：平台服務需要更新。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.js:0
+msgid "Traffic data is not available on this platform."
+msgstr "這個平台無法取得流量資料。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.js:0
+msgid "Traffic data could not be loaded. Try again later."
+msgstr "無法載入流量資料，請稍後再試。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.js:0
+msgid "just now"
+msgstr "剛剛"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.js:0
+msgid "%s min ago"
+msgstr "%s 分鐘前"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.js:0
+msgid "%s h ago"
+msgstr "%s 小時前"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.js:0
+msgid "%s d ago"
+msgstr "%s 天前"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.js:0
+msgid "No traffic"
+msgstr "沒有流量"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.js:0
+msgid "No requests reached this hostname in the last %s hours."
+msgstr "過去 %s 小時內沒有任何請求到達這個網址。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.js:0
+msgid ""
+"Last %(hours)s h: %(ok)s ok (2xx), %(redirect)s redirect, %(client)s client "
+"error (4xx), %(server)s server error (5xx)."
+msgstr ""
+"過去 %(hours)s 小時：%(ok)s 次成功（2xx）、%(redirect)s 次轉址、%(client)s "
+"次用戶端錯誤（4xx）、%(server)s 次伺服器錯誤（5xx）。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.js:0
+msgid "Yes"
+msgstr "是"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.js:0
+msgid "No"
+msgstr "否"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.js:0
+msgid "Checking…"
+msgstr "檢查中…"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/paas.py:0
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid "This service has no username; only its password can be set."
+msgstr "此服務沒有帳號，只能設定密碼。"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_app_template__admin_password_settable
+msgid "Tenant Can Set Own Password"
+msgstr "租戶可自設密碼"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_app_template__admin_credentials_settable
+msgid "Tenant Can Set Admin Credentials"
+msgstr "租戶可自設管理員憑證"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/OneTimeCredentialsModal.js:0
+msgid "Password"
+msgstr "密碼"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/OneTimeCredentialsModal.js:0
+msgid ""
+"Signs in to this service (there is no username). You can reset it or set "
+"your own later from Admin Credentials on the service page."
+msgstr "登入此服務用（沒有帳號）。之後可在服務頁「Admin Credentials」重設或改成自己的密碼。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/controllers/ha_api.py:0
+msgid "Only workspace owners and admins can get the tunnel token."
+msgstr "只有工作區的擁有者或管理員可以取得 tunnel token。"
+
+#. module: woow_paas_platform
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.paas_app
+msgid "Loading your workspace…"
+msgstr "正在載入你的工作區…"
+
+#. module: woow_paas_platform
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.paas_app
+msgid "We couldn't start Woow PaaS. Please try again."
+msgstr "無法啟動 Woow PaaS，請再試一次。"
+
+#. module: woow_paas_platform
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.paas_app
+msgid "If loading takes too long, you can reload this page."
+msgstr "如果載入時間過長，你可以重新整理此頁。"
+
+#. module: woow_paas_platform
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.paas_app
+msgid "JavaScript is required to use Woow PaaS. Enable JavaScript, then try again."
+msgstr "使用 Woow PaaS 需要啟用 JavaScript。請啟用後再試一次。"
+
+#. module: woow_paas_platform
+#: model_terms:ir.ui.view,arch_db:woow_paas_platform.paas_app
+msgid "Try again"
+msgstr "再試一次"

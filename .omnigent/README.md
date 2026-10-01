@@ -6,7 +6,7 @@ woow 六個 repo 的 issue／實作編制。**本檔是給維護者看的**，�
 cd /home/elmo/woow-repos && omnigent run .omnigent/woow-issue-leader --server <url>
    ↑ workspace = 六 repo 的共同祖先（不是任何單一 repo——理由見 §workspace）
 
-woow-issue-leader/          claude-sdk／claude-fable-5-1／xhigh／spawn: true
+woow-issue-leader/          claude-sdk／claude-fable-5-1[1m]／xhigh／spawn: true
    ⚠ 頂層一定是 claude-sdk，⛔ 不可以是 *-native（UI picker 會過濾掉，見 §UI picker）
 ├── config.yaml             產物
 ├── AGENTS.md               手改
@@ -18,7 +18,7 @@ woow-issue-leader/          claude-sdk／claude-fable-5-1／xhigh／spawn: true
 ├── _templates/             ⭐ 產生器的模板來源（8 份 worker prompt ＋ skills；`_shared/` 共用片段）
 ├── generate-worker.py      ⭐ 執行期產生器（五道防線，§產生器）
 └── agents/
-    ├── repo_leader_cc/     claude-native／claude-fable-5-1／xhigh／spawn: true
+    ├── repo_leader_cc/     claude-native／claude-fable-5-1[1m]／xhigh／spawn: true
     └── repo_leader_pi/     pi／gpt-6-astra／xhigh／spawn: true
         ← 擁有 issue 全程（impl→review→驗收→PR→Gitea label）；issue-leader 派完即結束
         （⚠ 底下**沒有** agents/——worker 在執行期產生）
@@ -70,6 +70,14 @@ DIR=$(python3 <paas-platform>/.omnigent/woow-issue-leader/generate-worker.py \
 永遠在共同祖先啟動——⛔ 不要為某張 issue 另起「以 worktree 當 workspace」的 runner（dispatcher
 會找不到任何 sibling repo，全部 repo hooks 靜默消失）。
 
+### Session 建立配額（#1277）
+
+`spawn_bounds` 每輪最多計 12 次 `sys_session_create`；`sys_session_send` 初次送工單與續談
+不計數，讓長時間運行的 agent 可持續對話。這是每輪建立配額，不是同時運行的 worker 上限；
+每個 inbound request（含 subagent wake notice）重設計數。policy 來源為產生器的
+`P_LEADER_ORCH`，三份 leader config 由 build 同步。先前疑似 server／runner 雙倍計數仍未
+取得 log 證據；本次不宣稱已修正或已證實。
+
 ## 誰通知誰（喚醒只保證一跳）
 
 1. 每一段「誰呼叫 `sys_session_send` → 誰被喚醒」都可靠；完成結果會投遞給該次 send 的
@@ -112,6 +120,7 @@ python3 .omnigent/build-bundles.py           # 重產三份靜態 config ＋ rep
 python3 .omnigent/build-bundles.py --check   # 驗收 22 項（含產生器自檢與 dispatcher 端到端）
 python3 .omnigent/woow-issue-leader/generate-worker.py --self-check   # 只驗產生器
 python3 .omnigent/test-dispatcher.py         # 只驗 dispatcher（fixture repo，零副作用）
+python3 .omnigent/test-spawn-bounds.py       # create-only 配額／續談／request 重設（非 live gate）
 bash .omnigent/mutation-tests.sh [case 代號]  # 突變測試（每個 case 斷言「紅在哪」）
 ```
 
@@ -702,9 +711,12 @@ pi 是 subscription 且無 catalog pricing，掛上去會走 `_UNPRICED_ASK`，*
 | `claude-sdk` | 回報 token 用量＋model，server 端查 MLflow catalog 定價（`_sessions/orchestration.py` 的 `has_tokens` 分支） | 估算值 |
 
 ✅ **已驗證（2026-09-10，雙人各自實跑 `fetch_model_pricing('claude-fable-5-1')`）**：頂層 leader
-現用的 `claude-fable-5-1` **在 catalog 內**，per-million `input 10.0 / output 50.0`
+當時使用的 `claude-fable-5-1` **在 catalog 內**，per-million `input 10.0 / output 50.0`
 （`cache_read 0.25 / cache_write 12.5`）⇒ `claude-sdk` 這條估算路徑查得到價，
 `cost_budget` 正常計價，**不會**走 `_UNPRICED_ASK`。
+
+⚠ #1277 將 leader 改為 `claude-fable-5-1[1m]`；上述歷史 pricing 證據不代表新 ID
+已計價，stored bundle 發布前須重驗。
 
 ⚠ **這是有前提的事實，前提是 model。** 若日後把頂層 leader 換成別的 model，**必須重驗那個
 model 在不在 catalog**：查不到時 `_usage_is_unpriced()` 會讓 `cost_budget` 回
