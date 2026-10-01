@@ -49,8 +49,17 @@ values = svc.helm_values            # template 預設 + user config（create 時
          ├─ + image_pull_secrets     injector（私有 registry）
          ├─ + allowed_origins        injector（open-design 瀏覽器 Origin 白名單，#380）
          ├─ + apiserver_cidrs        injector（open-design console egress，#404）
+         ├─ + omnigent_server_url    injector（code-server／pi-agent／open-design 的
+         │                            omnigent-host sidecar：同工作區 running Omnigent
+         │                            的叢集內網址，只有網址、不帶 token）
          └─ + odoo addon selection   （initContainer + addons_path）
 ```
+
+`omnigent_server_url` 是唯一**讀別的服務**的 injector：同工作區（且同 namespace）、
+`state='running'` 的 Omnigent，多個時取 `create_date`／`id` 最小者並記 log；沒有就
+no-op（chart 預設 `""`）。它和其他 injector 一樣是部署當下的快照——Omnigent 晚於
+本服務開通時，網址在本服務下一次 redeploy／升級才會帶進去（sidecar 只拿它當登入
+提示，host 實際連的是租戶自己 `omnigent login` 的 server，所以晚到不影響運作）。
 
 - **純唯讀、不寫 DB、不呼叫 operator** —— 盤點腳本可安全 dry-run 呼叫，取 `['values']`
   比對 `helm get values <rel>`（stored、非敏感）。這是「盤點 gate 與部署路徑共用同一
@@ -183,7 +192,7 @@ chart↔載體結構不變式（mcp-server chart ⟺ config_json）。
 - **無-flag 預設**：helm upgrade 不帶 `--reset-values` / `--reuse-values` 時的行為
   ——用 chart values.yaml + 這次傳入的 override，不保留舊 release override（≈ reset）。
 - **injector**：把平台側值（storageClass / imagePullSecrets / allowedOrigins /
-  apiServerCidrs）寫進 helm values 的冪等函式。
+  apiServerCidrs / omnigentHost.serverUrl）寫進 helm values 的冪等函式。
 - **組裝點（統一管線）**：`_assemble_deploy_values()`，install / upgrade / reset 前
   把所有非敏感 values 合併的單一位置，兼作盤點 gate 的真相源。
 - **stored-only values**：只存在於 helm stored release values、不在平台 helper 產出的
