@@ -44,6 +44,12 @@ INIT_LEASE_SECONDS = {
     'odoo': INIT_ODOO_CONNECT_TIMEOUT + INIT_ODOO_READ_TIMEOUT + _INIT_LEASE_MARGIN_SECONDS,
     'n8n': INIT_N8N_CONNECT_TIMEOUT + INIT_N8N_READ_TIMEOUT + _INIT_LEASE_MARGIN_SECONDS,
 }
+# #1159 Q33：init cron 每 tick 判斷「還放不放得下下一筆」用的單次 attempt 最壞耗時＝
+# client 預算（connect＋read），同一組常數：Odoo 1020、n8n 720。
+INIT_ATTEMPT_WORST_SECONDS = {
+    'odoo': INIT_ODOO_CONNECT_TIMEOUT + INIT_ODOO_READ_TIMEOUT,
+    'n8n': INIT_N8N_CONNECT_TIMEOUT + INIT_N8N_READ_TIMEOUT,
+}
 # Q15：migration 替既有 `initializing` 列寫入的合成 lease。舊 process 可能還有在途
 # 的 remote exec（舊 code 的 read 是 900s），取 Odoo 的 1200 一律套用。
 LEGACY_LEASE_SECONDS = 1200
@@ -212,6 +218,20 @@ class CloudServiceInitAttempt(models.Model):
     claimed_at = fields.Datetime(required=True, help='DB now() (UTC) when the lease was taken')
     lease_until = fields.Datetime(required=True, help='DB clock (UTC); see INIT_LEASE_SECONDS')
     finished_at = fields.Datetime(help='Empty while in flight')
+    applied_at = fields.Datetime(
+        string='Applied At',
+        copy=False,
+        help='When the persisted result was applied to the service counters/state; '
+             'keeps record-then-apply crash recovery idempotent.',
+    )
+    n8n_key_persisted = fields.Boolean(
+        string='n8n Key Persisted',
+        default=False,
+        copy=False,
+        help='This attempt\'s n8n API key was written to the service\'s protected field '
+             'in the same transaction as this marker; it records the evidence only, '
+             'never the secret.',
+    )
     outcome = fields.Selection(
         selection=[
             (OUTCOME_SUCCESS, 'Success'),

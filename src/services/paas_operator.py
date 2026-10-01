@@ -505,7 +505,7 @@ class PaaSOperatorClient:
         ``rollout_awaited: False``）。所以 2xx 的語意由「密碼已生效」收斂成
         「密碼已是叢集權威值、且不再自動回退」——這正是 C11′ 的提交點，見
         ``models/cloud_service.py::_reset_admin_password``。服務何時恢復由狀態機
-        表達（成功後 stamp ``upgrading`` → cron／前端輪詢 → ``running``）。
+        表達（成功後 stamp ``upgrading`` → 背景 poll cron → ``running``；前端輪詢只讀 DB）。
 
         Returns:
             Operator 回應 dict（含 helm_revision、config_json_patched、helm_upgraded、

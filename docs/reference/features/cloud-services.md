@@ -209,11 +209,19 @@ Example: paas-ws-123-anythingllm-01
 5. PaaS Operator executes: helm install {release} {chart} -n {namespace}
            │
            ▼
-6. Odoo polls PaaS Operator API: GET /api/releases/{ns}/{name}/status
+6. Background poll cron（每分鐘）calls PaaS Operator API: GET /api/releases/{ns}/{name}/status
            │
            ▼
-7. When ready, Odoo updates CloudService record (state=running)
+7. When ready, the poll updates CloudService (state=running; or state=initializing
+   when a post-deploy init is owed → the separate init cron runs it → running)
 ```
+
+> #1159：由觀測推進的狀態轉移（transition 完成、init 分派、deleting 404→unlink）**只由背景
+> 短 poll cron 寫**；list/get 端點純讀，回 DB 的最近觀測（`state`＋`observed_at`＋
+> `observation_pending`＋`init_phase`），前端 5 秒輪詢只是讀 DB。新的轉移以持久化 episode
+> 等待第一次真 status，並不覆寫 `observed_at`；payload 與 monitor 共用這個 freshness clock。
+> post-deploy init 在獨立的 init cron 執行。設計見
+> [post-deploy init 執行模型 ADR](../../decisions/refactor/post-deploy-init-execution-model.md)。
 
 ### Supported Operations
 
@@ -467,7 +475,9 @@ Workspace Dashboard → Service Card → Service Detail Page → [Overview | Con
 **Header Section**:
 
 - App Icon + Name (e.g., "AnythingLLM_221")
-- Status Badge (Running, Error, Deploying, Upgrading)
+- Status Badge (Running, Error, Deploying, Upgrading, Initializing)
+  - Initializing 依 `init_phase` 細分：Queued／Waiting for app／Retrying（#1159 Q40）
+  - 轉移中且背景最近一次觀測超過 3 分鐘時顯示「Last updated X min ago」
 - Deployment ID
 - Quick Actions:
   - "Open Web UI" button
@@ -517,6 +527,8 @@ Workspace Dashboard → Service Card → Service Detail Page → [Overview | Con
 
 **4.1 Upgrade Service**
 
+- `error` 狀態只有 init 額度出口（`init_reconfigure_allowed`）可以改設定並重新 init；
+  helm 失敗、等待逾時、fast-fail 的 error 不開放（#1159 Q30）
 - 更新 Helm values（環境變數、資源配置等）
 - 升級 Chart 版本
 - 自動建立新的 Helm revision
@@ -524,6 +536,7 @@ Workspace Dashboard → Service Card → Service Detail Page → [Overview | Con
 **4.2 Delete Service**
 
 - Confirmation modal required
+- `initializing` 期間也可刪除；確認框註明已送出的初始化仍可能在叢集內完成（#1159 Q30）
 - Option to keep/delete backups (PVCs)
 - Cleanup: `helm uninstall`, 移除 Ingress rules
 

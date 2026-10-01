@@ -75,12 +75,11 @@
              ——controller 的 create/update/delete 三個 gate（`paas.py`）今天都已經是
              owner/admin，放寬 ORM 層會讓它比 UI 更鬆。
 
-             🔴 收窄這一條會連帶影響**讀取**端點：poll（`_update_service_status`；#1257 起
-             它只推進 state、不再 dispatch init）只被 `_list_services` / `_get_service` 呼叫，而那兩個
-             分支沒有 role gate ⇒ 那條路徑的寫入已改走系統身分，見 `paas.py` 的 #676 註解。
-             刪掉那邊的 `sys_service`，租戶的服務會**永遠停在轉移態**——而且不會有任何
-             錯誤浮出來：`_update_service_status` 的 catch-all 把 AccessError 降級成
-             warning log，端點照樣回 success（中間狀態實測）。 -->
+             收窄這一條當時（#676）會連帶影響**讀取**端點：list/get 會在 request 裡 poll
+             並寫入 state，所以那條路徑的寫入改走了系統身分。#1159 起 list/get **純讀**
+             （不 poll、不寫入；由觀測推進的狀態轉移只由背景 cron 寫），讀取端點不再受
+             這條 rule 的寫入權影響；`test_cloud_service_authz_676.py` 的 B 系列改守「guest
+             讀取不 poll、不寫入」。 -->
         <record id="cloud_service_rule_member_read" model="ir.rule">
             <field name="name">CloudService: workspace member read</field>
             <field name="model_id" ref="model_woow_paas_platform_cloud_service"/>

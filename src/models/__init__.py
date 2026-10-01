@@ -72,3 +72,6 @@ from . import access_resync_cron
 
 # feat: #107 啟用 zh_TW（`.po` 自檢 ＋ `_activate_lang`；三個呼叫點共用這一份）
 from . import res_lang
+
+# feat: #1159 Q38 post-deploy init 執行面的背景健康監控（mail.thread 單例掛點）
+from . import platform_monitor

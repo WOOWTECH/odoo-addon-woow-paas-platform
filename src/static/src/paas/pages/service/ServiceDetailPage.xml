@@ -36,7 +36,10 @@
                         <div class="o_woow_service_header_text">
                             <div class="o_woow_service_header_title">
                                 <h1 t-esc="service.name"/>
-                                <StatusBadge status="service.state"/>
+                                <StatusBadge status="service.state" phase="service.init_phase or ''"/>
+                                <span t-if="staleObservation" class="o_woow_service_observed_hint">
+                                    <t t-esc="staleObservationLabel"/>
+                                </span>
                             </div>
                             <div class="o_woow_service_header_meta">
                                 <span class="o_woow_service_template">
@@ -51,26 +54,32 @@
                         </div>
                     </div>
                     <div class="o_woow_service_header_actions">
-                        <!-- Support Project 按鈕組 — #275：flag OFF 整組隱藏
-                             （避免 dead-end 回 dashboard + prod 建出隱藏 project） -->
+                        <!-- #275：Projects 關閉時不可建立隱藏 project，改用既有 billing
+                             頁的 mailto；開啟時載入中的按鈕與 handler 都不允許重入。 -->
                         <t t-if="projectsVisible">
                             <WoowButton
                                 t-if="state.supportProject"
                                 variant="'secondary'"
                                 size="'md'"
-                                onClick.bind="openSupportProject">
+                                onClick.bind="openSupportProject"
+                                disabled="state.supportProjectLoading">
                                 <WoowIcon name="'support_agent'" size="18"/>
                                 Support Project
                             </WoowButton>
                             <WoowButton
-                                t-elif="!state.supportProjectLoading"
+                                t-else=""
                                 variant="'secondary'"
                                 size="'md'"
-                                onClick.bind="showCreateProject">
+                                onClick.bind="showCreateProject"
+                                disabled="supportProjectAction !== 'create'">
                                 <WoowIcon name="'add_circle'" size="18"/>
                                 Create Support Project
                             </WoowButton>
                         </t>
+                        <a t-else="" href="mailto:support@woowtech.io" class="o_woow_service_support_email">
+                            <WoowIcon name="'support_agent'" size="18"/>
+                            support@woowtech.io
+                        </a>
                         <WoowButton
                             t-if="service.state === 'running'"
                             variant="'primary'"
@@ -93,7 +102,7 @@
                             variant="'secondary'"
                             size="'md'"
                             onClick.bind="resetAdminPassword"
-                            disabled="!canPerformActions or isResetAdminPasswordLoading">
+                            disabled="!canResetAdminCredentials or isResetAdminPasswordLoading">
                             <WoowIcon name="'key'" size="18"/>
                             Reset Admin Password
                         </WoowButton>
@@ -102,7 +111,7 @@
                             variant="'secondary'"
                             size="'md'"
                             onClick.bind="showAdminCredentials"
-                            disabled="!canPerformActions or isResetAdminPasswordLoading">
+                            disabled="!canResetAdminCredentials or isResetAdminPasswordLoading">
                             <WoowIcon name="'key'" size="18"/>
                             Admin Credentials
                         </WoowButton>
@@ -134,7 +143,7 @@
                             variant="'ghost'"
                             size="'md'"
                             onClick.bind="showDelete"
-                            disabled="!canPerformActions">
+                            disabled="!canDelete">
                             <WoowIcon name="'delete'" size="18"/>
                         </WoowButton>
                     </div>
@@ -160,7 +169,25 @@
                 </p>
 
                 <!-- Error Message Banner -->
-                <div t-if="service.error_message" class="o_woow_service_error_banner">
+                <!-- #1159 Q30：init 失敗時顯示固定文案＋attempt 序號並導向 support 入口；
+                     operator 的原始錯誤只在後台的 attempt 記錄（租戶看不到）。 -->
+                <div t-if="initFailed" class="o_woow_service_error_banner">
+                    <WoowIcon name="'error'" size="20"/>
+                    <span t-esc="initFailureText"/>
+                    <WoowButton
+                        t-if="projectsVisible"
+                        variant="'secondary'"
+                        size="'sm'"
+                        onClick.bind="contactSupport"
+                        disabled="!supportProjectAction">
+                        <WoowIcon name="'support_agent'" size="16"/>
+                        Contact Support
+                    </WoowButton>
+                    <a t-else="" href="mailto:support@woowtech.io" class="o_woow_service_support_email">
+                        support@woowtech.io
+                    </a>
+                </div>
+                <div t-elif="service.error_message" class="o_woow_service_error_banner">
                     <WoowIcon name="'error'" size="20"/>
                     <span t-esc="service.error_message"/>
                 </div>

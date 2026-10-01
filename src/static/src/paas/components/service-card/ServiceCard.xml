@@ -7,7 +7,7 @@
                 <div class="o_woow_cloud_service_icon">
                     <WoowIcon name="templateIcon" size="28"/>
                 </div>
-                <StatusBadge status="props.service.state" size="'sm'"/>
+                <StatusBadge status="props.service.state" phase="props.service.init_phase or ''" size="'sm'"/>
                 <SubscriptionBadge subscription="props.service.subscription"/>
             </div>
 
@@ -38,7 +38,15 @@
                         <span>Public URL is not yet verified as resolvable — it may still be propagating</span>
                     </div>
                 </t>
-                <t t-if="props.service.state === 'error' and props.service.error_message">
+                <!-- #1159：init 失敗用與詳情頁相同的固定文案；原始 operator 錯誤
+                     可能含 Pod 名稱或內部細節，只有非 init error 保留原行為。 -->
+                <t t-if="initFailureText">
+                    <div class="o_woow_cloud_service_error">
+                        <WoowIcon name="'error'" size="14"/>
+                        <span t-esc="initFailureText"/>
+                    </div>
+                </t>
+                <t t-elif="props.service.state === 'error' and props.service.error_message">
                     <div class="o_woow_cloud_service_error">
                         <WoowIcon name="'error'" size="14"/>
                         <span t-esc="props.service.error_message"/>

@@ -3,6 +3,7 @@ import json
 import logging
 import re
 import secrets
+import time
 import uuid
 from datetime import timedelta
 
@@ -24,6 +25,8 @@ from ..services.woow_odoo_readiness import (
 )
 from .cloud_app_template import SupplyGateError
 from .cloud_service_init_attempt import (
+    InitOutcome,
+    INIT_ATTEMPT_WORST_SECONDS,
     INIT_LEASE_SECONDS,
     LEGACY_LEASE_SECONDS,
     OUTCOME_FAILED,
@@ -42,6 +45,10 @@ from .security_access import _internal_policy_cf_write
 from .workspace_access import ROLE_ADMIN
 
 _logger = logging.getLogger(__name__)
+
+# #1159：每次進入這些狀態都開始等待新的真實 operator status；platform_monitor
+# 共用此集合，list/get 只回報已存的 episode，不自行建立。
+OBSERVATION_TRANSITION_STATES = ('deploying', 'upgrading', 'initializing', 'deleting')
 
 #: #528 的待回收 CF Access policy 帳本（三腿共用）。
 _CF_REAP_MODEL = 'woow_paas_platform.cf_access_policy_reap'
@@ -255,7 +262,10 @@ def _reject_cs_access_identity_anchor_writes(env, vals):
 _INIT_CONTROL_FIELDS = frozenset({
     'init_pending', 'init_generation', 'init_retries', 'init_unknown_count',
     'init_attempt_seq', 'init_attempt_id', 'init_lease_until', 'init_wait_since',
-    'init_redeploy_requested', 'init_exit', 'init_error',
+    'init_wait_spent_seconds', 'init_wait_started_at', 'init_retry_eligible_at',
+    'init_queue_turn', 'init_redeploy_requested', 'init_exit', 'init_error',
+    'init_ready_observed', 'init_ready_since', 'init_capacity_wait_since',
+    'n8n_owner_alerted_at',
 })
 
 
@@ -268,6 +278,24 @@ def _reject_init_control_writes(env, vals):
         raise AccessError(_(
             'Post-deploy initialization fields are managed by the platform: '
             '%(fields)s', fields=', '.join(touched)))
+
+
+# observed_at 是 operator 觀測證據，episode 是平台命令建立的等待邊界。
+# 兩者都不是呼叫者輸入，否則可以隱藏 stale poll 或偽造新觀測。
+_OBSERVATION_CONTROL_FIELDS = frozenset({
+    'observed_at', 'observation_episode_started_at',
+})
+
+
+def _reject_observation_control_writes(env, vals):
+    """write() 側：觀測證據與等待 episode 只能由平台寫入。"""
+    if env.is_system():
+        return
+    touched = sorted(_OBSERVATION_CONTROL_FIELDS.intersection(vals))
+    if touched:
+        raise AccessError(_(
+            'Service observation fields are managed by the platform: %(fields)s',
+            fields=', '.join(touched)))
 
 
 # ------------------------------------------------------------------------- #
@@ -474,10 +502,21 @@ _INIT_UNKNOWN_LIMIT_PARAM = 'woow_paas_platform.init_unknown_limit'
 # Q10／Q35／Q37：等待時限，對齊 #489 容器型的 30 分；可用 param 覆寫。
 INIT_WAIT_TIMEOUT_MINUTES_DEFAULT = 30
 _INIT_WAIT_TIMEOUT_PARAM = 'woow_paas_platform.init_wait_timeout_minutes'
+# D2-R1：operator 明確回報 not_executed 後的冷卻；常數，不另開 config_parameter。
+INIT_NOT_EXECUTED_COOLDOWN_SECONDS = 60
 # Q25：停權前若在這些狀態，resume 時依欠 init 標記導回 initializing。
 _INIT_TRANSITIONAL_STATES = ('deploying', 'upgrading', 'initializing')
 # Q2：claim 撞到別人的 row lock 時不要等（等到的也只是「沒拿到」）。
 _INIT_CLAIM_LOCK_TIMEOUT = '5s'
+# #1159 Q33：init cron 每 tick 的 wall 預算。claim 條件是「已用時間＋該類最壞 attempt
+# （`INIT_ATTEMPT_WORST_SECONDS`）≤ B」；1100 ＋ sleep 70 ＋ 同趟其他 job 預留 600 仍 ≤
+# `limit_time_real_cron=1800`（Q34）。成功路徑實測約 5s，一 tick 通常能做多筆。
+INIT_CRON_BUDGET_SECONDS = 1100
+# Q33 的軟上限：一 tick 最多送出幾次 init；有積壓就自我 `_trigger()` 開新的一趟。
+INIT_CRON_SOFT_CAP = 10
+_INIT_CRON_XMLID = 'woow_paas_platform.ir_cron_run_post_deploy_inits'
+# init cron 的 wall 時鐘（模組層級，測試可替換）。
+_init_cron_clock = time.monotonic
 
 # 逾時訊息的分型提示：把 `_is_release_ready` 的 detail 對應到「維運該往哪查」。
 # 目的是讓人不必進叢集就知道方向——detail 說「卡在哪」，hint 說「去查什麼」。
@@ -787,6 +826,36 @@ class CloudService(models.Model):
         help='Later of "entered initializing" and "last actually executed attempt '
              'finished"; the readiness wait timeout counts from here (#1257 Q10)',
     )
+    # D2-R：operator readiness 的獨立累計時計。只計 not_executed 的 request wall time
+    # 與其後完整 60 秒冷卻；eligible 之後未獲 claim 的純容量排隊停止計時。
+    init_wait_spent_seconds = fields.Float(
+        string='Init Operator Wait Spent Seconds',
+        default=0,
+        copy=False,
+        help='Accumulated operator not_executed wait budget; never backfilled from history.',
+    )
+    init_wait_started_at = fields.Datetime(
+        string='Init Operator Wait Started At',
+        copy=False,
+        help='Start of the active not_executed cooldown interval (UTC).',
+    )
+    init_retry_eligible_at = fields.Datetime(
+        string='Init Retry Eligible At',
+        copy=False,
+        help='The full not_executed cooldown deadline; capacity queueing after it is free.',
+    )
+    init_queue_turn = fields.Datetime(
+        string='Init Queue Turn',
+        copy=False,
+        help='Same-init-type fair queue position; successful claims move themselves to the tail.',
+    )
+    init_capacity_wait_since = fields.Datetime(
+        string='Init Capacity Waiting Since',
+        copy=False,
+        readonly=True,
+        help='Start of continuously observed eligible-unclaimed capacity waiting. '
+             'Never backfilled from first-ready or queue order.',
+    )
     # Q27：redeploy 撞到在途 lease 時登記的意圖；背景看到就停止自動重送，lease
     # 結束後先執行 redeploy。
     init_redeploy_requested = fields.Boolean(
@@ -802,9 +871,56 @@ class CloudService(models.Model):
             ('failed', 'Definite failures exhausted'),
             ('unknown', 'Unknown results exhausted'),
             ('wait_timeout', 'Readiness wait timed out'),
+            # #1159 D1：等待被 fast-fail 訊號短路（Pod 反覆重啟且未就緒）。與
+            # wait_timeout 同類——pods 起不來不是 init 的額度出口，reconfigure 照擋。
+            ('fast_fail', 'Readiness wait short-circuited (crash loop)'),
         ],
         string='Init Exit',
         copy=False,
+    )
+    # ---- #1159 執行面（背景觀測；list/get 只讀這些值，不自己探）----
+    # Q1／Q40：背景 poll 最近一次成功向 operator 取得 status 的時間（UTC）。list/get
+    # 只回這個「最近觀測」，前端據此在轉移中停太久時顯示「最後更新 X 前」；監控看全平台
+    # 最舊的一筆（Q38）。
+    observed_at = fields.Datetime(
+        string='Last Observed',
+        copy=False,
+        readonly=True,
+        help='Last time the background poll got a status from the operator '
+             '(#1159 Q1); list/get only report this, they never poll',
+    )
+    observation_episode_started_at = fields.Datetime(
+        string='Observation Episode Started At',
+        copy=False,
+        readonly=True,
+        help='Platform timestamp for entry into the current transitional state. '
+             'It is a wait boundary, never an operator observation.',
+    )
+    # Q4／Q33：短 poll 觀測到 initializing 的 pods ready ＝ 排進 init cron 的佇列。
+    # init cron 只 claim 這些服務；not ready 時清掉（等待期間由時限約束）。
+    init_ready_observed = fields.Boolean(
+        string='Init Ready Observed',
+        default=False,
+        copy=False,
+        help='The last background poll saw the pods ready while initializing: the '
+             'service is queued for the init cron (#1159 Q1／Q4)',
+    )
+    # Q33／Q28b：本次 initializing 第一次觀測到 ready 的時間（UTC）。init cron 依它
+    # 排「等待最久者」；n8n owner 是否在 5 分內被平台確認也從這裡量（不是 owner 建立時間）。
+    init_ready_since = fields.Datetime(
+        string='Init Ready Since',
+        copy=False,
+        help='First time the pods were seen ready during this initializing stretch '
+             '(#1159 Q33 queue order, Q28b n8n owner confirmation window)',
+    )
+    # Q28b：本 episode 已發出「平台尚未確認 n8n owner」告警的時間；每 episode 一行，
+    # 開新一代或重新進 initializing 時與 init_ready_since 一起清掉。只有平台寫得進去。
+    n8n_owner_alerted_at = fields.Datetime(
+        string='n8n Owner Alerted At',
+        copy=False,
+        readonly=True,
+        help='When the platform monitor reported that the n8n owner was not confirmed '
+             'within the window of this initializing episode (#1159 Q28b)',
     )
 
     # Network
@@ -831,11 +947,11 @@ class CloudService(models.Model):
             "service raise a red failure banner — while `ServiceCard.xml` "
             "additionally checks `state === 'error'`, so the two already behave "
             "differently.\n\n"
-            "⚠ `running` is in no poll domain (the cron picks up deploying/"
-            "upgrading/initializing, and the front-end pendingStates does not "
-            "include running either), so **nothing ever comes back to clear "
-            "this flag** — it is cleared by the re-probe that runs when the "
-            "tenant views the service (see `_refresh_public_url_dns_flag`)."
+            "⚠ `running` is in no status-poll domain (the status cron picks up "
+            "deploying/upgrading/initializing/deleting), so the flag is cleared "
+            "by the dedicated background re-probe cron "
+            "`_cron_reprobe_public_url_dns` (every 15 minutes, #1159 Q16/D4; "
+            "see `_refresh_public_url_dns_flag`). Service list/get only read it."
         ),
     )
     internal_port = fields.Integer(
@@ -2765,47 +2881,137 @@ class CloudService(models.Model):
 
     @api.model
     def _cron_check_deploying_services(self):
-        """Poll operator for services in transitional states.
+        """背景短 poll：轉移狀態（含 deleting）的服務各向 operator 取一次 status。
 
-        This cron ensures deploying → running transitions happen even without
-        frontend polling (e.g. when redeploy is triggered from backend views).
+        #1159 Q1：list/get 純讀之後，「由觀測推進、離開轉移狀態」只由這裡寫——
+        transition 完成、init 分派（排進 init cron 的佇列）、deleting 404→unlink。
+        它**不執行 init**：init 在獨立的 ``_cron_run_post_deploy_inits``（Q4），一筆慢
+        init 不會堵住這裡的 upgrading→running。
 
-        #1257：它同時是 post-deploy init **唯一**的執行者（list/get 只推進 state）；
-        每台服務的 init 在 ``_run_post_deploy_init`` 內各自 commit。#1159 會把 init
-        拆到獨立的 ir.cron（Q4／Q33），本方法屆時只剩短 poll。
+        Q36：每台服務一個回捲單位（commit／rollback），一台失敗不影響同一 tick 的其他台。
         """
-        # Q27：lease 結束後先執行登記過的 redeploy，再輪到自動重送。
-        self._cron_run_requested_redeploys()
-
         services = self.search([
-            ('state', 'in', ['deploying', 'upgrading', 'initializing']),
+            ('state', 'in', ['deploying', 'upgrading', 'initializing', 'deleting']),
         ])
-        if not services:
-            return
+        client = None
+        if services:
+            from ..services.paas_operator import get_paas_operator_client
 
-        from ..services.paas_operator import get_paas_operator_client
+            client = get_paas_operator_client(self.env)
 
-        client = get_paas_operator_client(self.env)
-        if not client:
-            return
-
-        for service in services:
+        for service in (services if client else self.browse()):
+            service_label = (service.name, service.id)
             try:
                 service._poll_and_update_status(client)
+                self.env.cr.commit()
             except Exception:
-                # #1257：init 入口會在迴圈裡 commit，例外之後交易可能已 aborted（例如
-                # 入口第一行 commit 的 flush 撞 40001）——不 rollback 的話同一 tick 後面
-                # 的服務全部 InFailedSqlTransaction。回捲掉的只有「這一台還沒 commit 的
-                # poll 寫入」：poll 本身不對叢集下變更，下一輪會重算；入口的 attempt／
-                # 結果在它自己的回捲單位裡已經 commit 過。
+                # 回捲掉的只有「這一台還沒 commit 的 poll 寫入」：poll 本身不對叢集下
+                # 變更，下一輪會重算；deleting 的 teardown 有自己的 savepoint，服務留在
+                # deleting、下一輪再試。不 rollback 的話交易已 aborted 時同一 tick 後面
+                # 的服務全部 InFailedSqlTransaction。
                 # ⚠ #1052 標記（非裁定）：這是逐筆 batch isolation，OperationalError 一併
                 # 收掉，與 post-commit-bookkeeping-rollback-unit.md 規則一分歧（同
                 # `_cron_reconcile_release_facts` 的站點）。
                 self.env.cr.rollback()
                 _logger.exception(
-                    "Error checking status for service %s (id=%s)",
-                    service.name, service.id,
-                )
+                    "Error checking status for service %s (id=%s)", *service_label)
+        # Q38：init cron 的狀態＋全域監控項（與 init cron 互查 lastcall）。沒有轉移中的
+        # 服務、或 operator 沒設定時也要跑——那正是監控要看得到的情形。
+        self.env['woow_paas_platform.platform_monitor']._run_poll_cron_checks()
+
+    # ------------------------------------------------------------------ #
+    #  Cron：post-deploy init（#1159 Q4／Q33）                            #
+    # ------------------------------------------------------------------ #
+
+    @api.model
+    def _init_cron_queue(self):
+        """init cron 的候選，依 Q33 排序：n8n 優先（Q28a），其次等待最久者。
+
+        n8n 優先不變；同類依 ``init_queue_turn`` 輪替。首次 ready 以
+        ``init_ready_since`` 設第一輪位置；每次成功 claim 原子移到同類尾端，避免最早
+        ready 的服務永久佔隊首。``init_ready_since`` 本身不改，仍是 n8n owner 監控錨點。
+        """
+        self.flush_model()
+        template_table = self.env['woow_paas_platform.cloud_app_template']._table
+        self.env.cr.execute(
+            f"""SELECT s.id
+                  FROM {self._table} s
+                  JOIN {template_table} t ON t.id = s.template_id
+                 WHERE s.state = 'initializing'
+                   AND s.init_pending
+                   AND s.init_ready_observed
+                   AND NOT COALESCE(s.init_redeploy_requested, FALSE)
+                   AND t.post_deploy_init_type IN %s
+                   AND (s.init_lease_until IS NULL
+                        OR s.init_lease_until <= (statement_timestamp() AT TIME ZONE 'UTC'))
+                 ORDER BY (t.post_deploy_init_type = 'n8n') DESC,
+                          COALESCE(s.init_queue_turn, s.init_ready_since) ASC NULLS LAST,
+                          s.id""",
+            (tuple(INIT_LEASE_SECONDS),),
+        )
+        return self.browse([row[0] for row in self.env.cr.fetchall()])
+
+    @api.model
+    def _cron_run_post_deploy_inits(self):
+        """post-deploy init 的背景執行者（#1159 Q4／Q33）；獨立 ir.cron，與短 poll 不同
+        job、不同交易。
+
+        - 開頭先執行登記過的 redeploy（Q27；#1257 f：本 cron 掌管 lease 的生命週期）。
+        - 依 ``_init_cron_queue`` 的順序逐台呼叫單一入口 ``_run_post_deploy_init``
+          （入口自己 per-service commit）。
+        - 每 tick wall 預算 B（``INIT_CRON_BUDGET_SECONDS``）：已用時間＋該類最壞 attempt
+          超過 B 就停；另有軟上限 ``INIT_CRON_SOFT_CAP``。
+        - 結束時回報 ``remaining=0``，有積壓就自我 ``_trigger()``。**不要**回報
+          ``remaining>0``：core 會在同一趟 pass、同一個 watchdog 內連跑最多
+          ``MAX_BATCH_PER_CRON_JOB`` 批、中間不 ping，最壞必被 SIGKILL；自我 trigger 則
+          開新的一趟、watchdog 重新計時。
+        """
+        started = _init_cron_clock()
+        self._cron_run_requested_redeploys()
+        # D2-R：先收 operator not_executed 時計；無 client／未 Ready 也不能逃過到期。
+        self._init_settle_operator_wait_timeouts()
+        self.env.cr.commit()
+        queue = self._init_cron_queue()
+        sent = 0
+        backlog = False
+        if queue:
+            from ..services.paas_operator import get_paas_operator_client
+
+            client = get_paas_operator_client(self.env)
+            if not client:
+                _logger.warning(
+                    "[#1159] init cron: operator client 未設定，%d 台服務等待 init",
+                    len(queue))
+                queue = self.browse()
+            for service in queue:
+                if sent >= INIT_CRON_SOFT_CAP:
+                    backlog = True
+                    break
+                worst = INIT_ATTEMPT_WORST_SECONDS.get(service._init_type())
+                if worst is None:
+                    # 佇列是 tick 開頭的 snapshot；之後 template 改成不需 init 的那台，入口本來
+                    # 就會略過（`_run_post_deploy_init` 對 none 回 False），這裡不能 KeyError 中斷整趟。
+                    continue
+                if _init_cron_clock() - started + worst > INIT_CRON_BUDGET_SECONDS:
+                    backlog = True
+                    break
+                service_label = (service.name, service.id)
+                try:
+                    if service._run_post_deploy_init(client):
+                        sent += 1
+                except Exception:
+                    # 入口的每一段都各自 commit／rollback；走到這裡的只剩入口之外的意外。
+                    # Q36：回捲這一台、繼續後排；已 commit 的 claim／attempt 與其他服務不回捲。
+                    # ⚠ #1052 標記（非裁定）：OperationalError 也在此收掉，與
+                    # post-commit-bookkeeping-rollback-unit.md 規則一分歧（同短 poll 的站點）。
+                    self.env.cr.rollback()
+                    _logger.exception(
+                        "[#1159] init cron: service %s (id=%s) failed", *service_label)
+        self.env['ir.cron']._notify_progress(done=sent, remaining=0)
+        if backlog:
+            self.env.ref(_INIT_CRON_XMLID)._trigger()
+        # Q38：反過來檢查短 poll cron 的 lastcall。
+        self.env['woow_paas_platform.platform_monitor']._run_init_cron_checks()
 
     def _cron_reconcile_release_facts(self):
         """#627 (i)：抓「非由 Odoo 發起」的 chart 變動——**唯一會看 running 的路徑**。
@@ -3021,13 +3227,14 @@ class CloudService(models.Model):
             return False
 
     def _is_release_ready(self, status, dns_state=None):
-        """判定「這個 release 就緒了嗎」——**model 與 controller 兩層共用**。
+        """判定「這個 release 就緒了嗎」——單一事實源（#1159 起只剩背景 poll 呼叫）。
 
         這段邏輯原本在 model（``_poll_and_update_status``）與 controller
         （``PaasController._update_service_status``）各有一份完全同型的複製品。
         #423 設計審查抓到：只修其中一份，租戶只要打開前台服務詳情頁，
         controller 那份就會把還在 import 的 VM 標成 ``running``——cron 修好的
-        東西被前台查詢覆寫回去。故抽成單一事實源，兩層都呼叫這裡。
+        東西被前台查詢覆寫回去。故抽成單一事實源，當時兩層都呼叫這裡。
+        #1159 起 list/get 純讀、controller 那份 poll 已刪除，呼叫端只剩 model 的 poll。
 
         （post-deploy-init 兩層仍各自實作，那是既存且有實質差異的另一件事，
         不在本次收斂範圍。）
@@ -3035,7 +3242,7 @@ class CloudService(models.Model):
         Args:
             status: operator ``get_status`` 的回應 dict
             dns_state: 已經探過的 DNS 現況（`_public_url_dns_state()` 的回傳）。
-                兩份 poll 會先探一次再把結果同時餵給本方法與 `_release_facts`，
+                背景 poll（#1159 起唯一一份）會先探一次再把結果同時餵給本方法與 `_release_facts`，
                 避免同一輪 poll 對同一個 hostname 探兩次（resolver 不可用時那是
                 兩倍的阻塞）。``None`` ＝ 本方法自己探，讓單獨呼叫仍然自足。
 
@@ -3428,8 +3635,8 @@ class CloudService(models.Model):
             return 'skip'
         # 結尾點＝FQDN，讓 resolver 跳過 search list。這不只是省時間：平台 pod 是
         # `ndots:5` ＋ 4 個 search domain，resolver 不可用時相對名最壞是 5 次查詢
-        # ×（5s × 2 attempts）＝ 50 秒，FQDN 是 10 秒。而 Odoo 跑 `workers = 0`
-        # ＋ `max_cron_threads = 1`、cron 逐台序列跑。有測試釘住這個性質。
+        # ×（5s × 2 attempts）＝ 50 秒，FQDN 是 10 秒。而背景 cron 逐台序列跑、受
+        # cron 硬上限約束（#1159 Q34）。有測試釘住這個性質。
         return dns_probe.resolve_state(hostname + '.')
 
     def _is_public_url_ready(self, dns_state=None):
@@ -3452,8 +3659,8 @@ class CloudService(models.Model):
         # 便宜的判斷先做，探測擺在它後面：窗口外恆放行，那時不必再問。
         #
         # ⚠ **這在 production 熱路徑上省不到任何一次探測**，不要以為它是保護。
-        # 兩份 poll 都在呼叫本方法**之前**就無條件探好了（`release_status ==
-        # 'deployed'` 時各探一次，結果同時餵給本方法與 `_release_facts` 落旗標），
+        # 背景 poll（#1159 起唯一一份）在呼叫本方法**之前**就無條件探好了（`release_status ==
+        # 'deployed'` 時探一次，結果同時餵給本方法與 `_release_facts` 落旗標），
         # 所以走到這裡時 `dns_state` 已經有值、提前 return 只是少走幾行。
         # 真正受惠的是 `dns_state=None` 的**直接呼叫者**（測試，或日後某個沒先
         # 算的呼叫端）——順序這樣排是因為「便宜的條件先判」本來就對，不是因為
@@ -3492,31 +3699,57 @@ class CloudService(models.Model):
         )
 
     def _refresh_public_url_dns_flag(self):
-        """已標記「未驗證」的 running 服務被查看時，重探一次並清旗標（#648 (b)）。
+        """已標記「未驗證」的 running 服務重探一次，DNS 落地就清旗標（#648 (b)）。
 
-        為什麼需要這條：`running` **不在任何 poll 的 domain 裡**（cron 撈
-        deploying/upgrading/initializing，前端兩個 poller 的 pendingStates 也不含
-        running）⇒ 放行時寫下的旗標沒有任何東西會回來清掉，會變成永久噪音——那比
-        不警告更糟。
+        為什麼需要這條：`running` **不在任何 poll 的 domain 裡** ⇒ 放行時寫下的旗標
+        沒有任何東西會回來清掉，會變成永久噪音——那比不警告更糟。
 
-        自我了結：只對「旗標已經是 True 的 running 服務」動作，清掉之後就不會再
-        探。所以成本被綁在**出問題的那幾台**上，不是每台每次。
+        #1159 Q16：原本掛在 list/get 的讀取路徑上（同步 DNS 外呼＋寫入），與 Q1 純讀
+        互斥 ⇒ 改由背景 ``_cron_reprobe_public_url_dns`` 低頻呼叫。
 
-        **fail-soft**：清旗標失敗只 log，絕不讓列表／詳情頁掛掉——為了清一個警告
-        而讓整頁 500 是本末倒置。
+        自我了結：只對「旗標已經是 True 的 running 服務」動作，清掉之後就不會再探。
+        只有探到 ``ok`` 才清；``unknown``（resolver 自己不可用）不動。
+
+        **fail-soft**：清旗標失敗只 log。DB 錯誤（``OperationalError``，如 40001）除外：
+        它代表當台交易已不可用，交給呼叫端 ``_cron_reprobe_public_url_dns`` 的逐台邊界
+        回捲後繼續後排（Q36／D4），不在這裡降成 warning。
         """
         self.ensure_one()
         if not self.public_url_dns_unverified or self.state != 'running':
             return
         try:
             if self._public_url_dns_state() == 'ok':
-                # 系統身分：這發生在**租戶的讀取路徑**上，用租戶身分寫技術欄位
-                # 會撞 ACL（同 #676 controller 那條 `sys_service` 的理由）。
                 self.sudo().write({'public_url_dns_unverified': False})
+        except OperationalError:
+            raise
         except Exception as exc:          # noqa: BLE001 —— 見 docstring
             _logger.warning(
                 "Could not refresh the public-URL DNS flag for service %s "
                 "(id=%s): %s", self.name, self.id, exc)
+
+    @api.model
+    def _cron_reprobe_public_url_dns(self):
+        """#1159 Q16／D4：背景低頻重探「Public URL 未驗證」的 running 服務，每台 commit。
+
+        頻率（每 15 分）寫在 ``cloud_service_cron.xml``。旗標只是軟提示（租戶服務
+        已 running），偵測延遲 15 分可接受；每台一個回捲單位，一台失敗不影響其他台。
+        """
+        services = self.search([
+            ('state', '=', 'running'),
+            ('public_url_dns_unverified', '=', True),
+        ])
+        for service in services:
+            service_label = (service.name, service.id)
+            try:
+                service._refresh_public_url_dns_flag()
+                self.env.cr.commit()
+            except Exception:
+                # Q36／D4：每台一個回捲單位，回捲掉的只有這一台未 commit 的寫入，後排照常重探。
+                # ⚠ #1052 標記（非裁定）：這是逐筆 batch isolation，OperationalError 也在此收掉，
+                # 與 post-commit-bookkeeping-rollback-unit.md 規則一分歧（同短 poll 的站點）。
+                self.env.cr.rollback()
+                _logger.exception(
+                    "[#1159] DNS re-probe failed for service %s (id=%s)", *service_label)
 
     def _timeout_diagnosis(self, detail):
         """把就緒判定的 ``detail`` 翻成「維運該往哪查」的一句話。
@@ -3860,8 +4093,9 @@ class CloudService(models.Model):
             self.sudo().write({'import_progress': progress or False})
 
     def _release_facts(self, release, dns_state=None):
-        """operator 回報的 release 事實 → 帳本回寫欄位。**兩份 poll 的單一來源。**
+        """operator 回報的 release 事實 → 帳本回寫欄位。**所有寫入者的單一來源。**
 
+        （#1159 起 list/get 純讀、controller 那份 poll 已刪除；以下是 #627 當時的背景。）
         #627：poll 有**兩份實作** —— `PaasController._update_service_status`
         （租戶打 list／detail 端點時走）與本模組的 `_poll_and_update_status`
         （**cron** 走）。原本兩份各自組自己的 write vals，結果 controller 那份
@@ -3888,7 +4122,8 @@ class CloudService(models.Model):
                 release.get('chart_version') or self.helm_chart_version
             ),
             # #627 (i)：`last_release_sync_at` 也走這個咽喉 ⇒ **三個寫入者**
-            # （兩份 poll ＋ reconciliation cron）自動全部 stamp，不必逐路徑補。
+            # （#1159 前是兩份 poll ＋ reconciliation cron；之後是背景 poll ＋ reconciliation cron）
+            # 自動全部 stamp，不必逐路徑補。
             # 這正是本方法存在的理由，也避免這個新欄位重演 #627。
             #
             # ⚠ 語意是「最後一次**問過** operator」，不是「最後一次值有變」——
@@ -3909,10 +4144,15 @@ class CloudService(models.Model):
         return vals
 
     def _poll_and_update_status(self, client):
-        """Poll operator and transition state for a single service.
+        """背景短 poll：向 operator 取一次 status，推進單一服務的轉移狀態。
 
-        Mirrors the logic in PaasController._update_service_status but works
-        in model context (usable from cron without HTTP request).
+        #1159 Q1：這是「由觀測推進、離開轉移狀態」的**唯一**寫入者——transition 完成、
+        init 分派、deleting 404→unlink 都只在這裡寫；list/get 自 #1159 起純讀。唯一的
+        生產呼叫端是 ``_cron_check_deploying_services``（per-service commit）。
+
+        它**不執行 init**（Q4：init 不與短 poll 同 job、同交易）：觀測到 initializing
+        的 pods ready 時只記下來、trigger init cron；init 由 ``_cron_run_post_deploy_inits``
+        經單一入口 ``_run_post_deploy_init`` 執行。
         """
         self.ensure_one()
         from ..services.paas_operator import PaaSOperatorError
@@ -3929,19 +4169,14 @@ class CloudService(models.Model):
             )
         except PaaSOperatorError as e:
             if e.status_code == 404 and self.state == 'deleting':
-                # #525 B5：與 controller 的 `_update_service_status` 同形，缺陷
-                # 也同形——`unlink()` 中途拋錯 → 例外逸出這個 except handler
-                # （同層 sibling 的 `except Exception` 接不到）→ 被唯一呼叫端
-                # `_cron_check_deploying_services` 迴圈的 catch-all 吞掉 → cron
-                # 照常 commit 刪一半的狀態。
+                # #1159 Q1：deleting 的收尾（release 已不在叢集 → unlink，含訂閱結算與
+                # quota 回推）自本票起只在這裡做。#1159 以前這條分支不可達（cron 的
+                # domain 不含 deleting，只有 controller 的 list poll 會收），本票把
+                # deleting 納入 cron domain、第一次啟用它。
                 #
-                # ⚠ **今天這條分支不可達**：唯一的生產呼叫端 cron 的 domain 是
-                # `state in ('deploying','upgrading','initializing')`（本檔
-                # `_cron_check_deploying_services`），不含 `deleting`，所以
-                # `self.state == 'deleting'` 在被呼叫到時恆為 False。這裡的
-                # savepoint 是**結構防護**：domain 一旦補上 `deleting`（controller
-                # 側的 `_list_services` 就是這樣列的），殘留立刻可達，而那時不會
-                # 有人記得回來補這一行。形態同
+                # #525 B5：`unlink()` 是多步驟 teardown，中途拋錯就留下刪一半的狀態。
+                # savepoint 只回捲這一次 teardown、例外照常外拋：呼叫端 cron 迴圈會
+                # rollback 這一台、繼續下一台，服務留在 deleting、下一輪再試。形態同
                 # `subscription_lifecycle_cron._cron_enforce_subscription_lifecycle`
                 # 的 per-item savepoint。
                 with self.env.cr.savepoint():
@@ -3951,7 +4186,9 @@ class CloudService(models.Model):
                 # 不到 status，只剩等待時限能收尾。operator 連不上等其他錯誤是平台
                 # 故障，不計時（#1159 Q10「平台容量排隊不計時」同理），交給監控。
                 _logger.warning("Error polling status for %s: %s", self.name, e)
-                # 與 not-ready 分支一致：先收斂在途 attempt 的過期 lease，再判時限。
+                # 與 not-ready 分支一致：release 不在 ⇒ 不是 ready，退出 init cron 的
+                # 佇列；先收斂在途 attempt 的過期 lease，再判時限。
+                self._init_mark_not_ready()
                 self._init_settle_expired_lease()
                 if self.state == 'initializing':
                     self._init_check_wait_timeout()
@@ -3969,14 +4206,24 @@ class CloudService(models.Model):
         if not service.exists() or service.state != original_state:
             return
 
-        # #627：欄位集合來自 `_release_facts`（與 controller 那份同一個來源），
-        # **不要**在下面的 write 分支裡各自列欄位——那正是 cron 這份漏掉
-        # `helm_chart_version` 的方式。
+        # #1159 Q1／Q40：list/get 只回這個「最近觀測」。拿到 status 就 stamp，不論
+        # 這一輪有沒有推進 state（沒推進正是「最後更新 X 前」要揭露的情形）。
+        # episode 保持命令側等待邊界；consumer 比較它與本次真觀測，不以命令時間偽造證據。
+        service.write({'observed_at': fields.Datetime.now()})
+        if original_state == 'deleting':
+            # #1159 Q1：deleting 只由上面的 404 收尾。release 還在時什麼都不推——
+            # #1159 以前 controller 的 list poll 會讓它走下面的就緒判定、被寫回
+            # running（刪除中的服務「復活」）。uninstall 一直沒生效的情形由 #1279 追。
+            return
+
+        # #627：欄位集合來自 `_release_facts`（#1159 起本方法是唯一的 poll 實作），
+        # **不要**在下面的 write 分支裡各自列欄位——#627 就是兩份 poll 各列一次、
+        # 其中一份漏掉 `helm_chart_version`。
         # #648 (b)：DNS 現況**一輪只探一次**，同時餵給就緒判定與 `_release_facts`
         # （旗標也走那個咽喉，理由與其他 release 欄位一樣——逐 write 分支各列一次
         # 正是 #627 的成因）。只在 release 已 `deployed` 時才探：還沒 deploy 的服務
         # 探了也不會影響任何判定，而每次探測在 resolver 不可用時都是一段阻塞，
-        # 而平台 Odoo 是 `workers = 0` ＋ `max_cron_threads = 1`、cron 逐台序列跑。
+        # cron 逐台序列跑（prod `max_cron_threads=2`，一條 thread 同時只跑一個 job）。
         dns_state = (
             service._public_url_dns_state() if release_status == 'deployed' else None
         )
@@ -3989,7 +4236,7 @@ class CloudService(models.Model):
         # #489：「這一輪 poll 沒能讓服務離開轉移狀態」的理由，供 age timeout
         # 組診斷訊息。None ＝ 這一輪有進展（就緒或明確失敗），不必判逾時。
         stuck_detail = None
-        init_dispatched = False
+        ready_for_init = False
 
         if release_status == 'deployed':
             all_ready, detail = service._is_release_ready(status, dns_state=dns_state)
@@ -4008,10 +4255,9 @@ class CloudService(models.Model):
                         'error_message': False,
                     })
                 if next_state == 'initializing':
-                    # #1257：init 只由背景經單一 model 入口執行（本方法唯一的生產
-                    # 呼叫端是 cron；入口會 per-service commit）。
-                    init_dispatched = True
-                    service._run_post_deploy_init(client)
+                    # #1159 Q1「init 分派」：只排進 init cron 的佇列，不在這裡執行。
+                    ready_for_init = True
+                    service._init_mark_ready_observed()
 
         elif release_status == 'failed':
             service.write({
@@ -4040,14 +4286,18 @@ class CloudService(models.Model):
         if stuck_detail:
             service._check_transition_timeout(stuck_detail)
 
-        if (original_state == 'initializing' and not init_dispatched
+        if (original_state == 'initializing' and not ready_for_init
                 and service.state == 'initializing'):
-            # pods 沒 ready 時入口不會跑：在途 attempt 的過期 lease 也要在這裡收斂，
-            # 否則之後的逾時會被記成 wait_timeout（實際上是 unknown），擋住 Q30 出口。
+            service._init_mark_not_ready()
+            # pods 沒 ready 時 init cron 不會 claim：在途 attempt 的過期 lease 也要在
+            # 這裡收斂，否則之後的逾時會被記成 wait_timeout（實際上是 unknown），擋住
+            # Q30 出口。
             service._init_settle_expired_lease()
             if service.state == 'initializing':
-                # Q10：等 readiness 也受時限約束（#489 age timeout 不管 initializing）。
-                service._init_check_wait_timeout()
+                # Q10：等 readiness 受時限約束（#489 age timeout 不管 initializing）；
+                # #1159 D1-R：正式 fast-fail 接入位置；#1192 未接入前不使用累計重啟代判。
+                if not service._init_check_fast_fail(status):
+                    service._init_check_wait_timeout()
 
     # ------------------------------------------------------------------ #
     #  #1257：post-deploy init 的執行管控                                  #
@@ -4056,6 +4306,20 @@ class CloudService(models.Model):
     # 設計權威：docs/decisions/refactor/post-deploy-init-execution-model.md。
     # 本段是 Odoo／n8n 共用的**唯一**執行入口與它的守衛；各自的 init 內容（operator
     # 端點、憑證規則）仍分開。controller 自 #1257 起不再有 init 流程。
+
+    def _observation_freshness(self):
+        """回傳觀測時計的 ``(pending, started_at)``，供 payload 與 monitor 對帳。
+
+        observed_at 必須不早於本次 episode 才是目前觀測；舊列先用既存證據，直到
+        背景 monitor 補上一個有界初始 episode。本方法純讀，list/get 不因此寫入。
+        """
+        self.ensure_one()
+        episode = self.observation_episode_started_at
+        observed = self.observed_at
+        pending = bool(episode and (not observed or observed < episode))
+        if pending:
+            return True, episode
+        return False, observed or episode or self.write_date
 
     def _init_type(self):
         """本服務的 post-deploy init 類型；不認得的值一律當 ``none``。"""
@@ -4119,6 +4383,18 @@ class CloudService(models.Model):
                 'init_unknown_count': 0,
                 'init_exit': False,
                 'init_error': False,
+                'init_wait_spent_seconds': 0,
+                'init_wait_started_at': False,
+                'init_retry_eligible_at': False,
+                'init_queue_turn': False,
+                # 新一代的 n8n owner 確認窗口重新起算：停權中 redeploy 或開代後在部署階段
+                # 失敗時不會再「進入 initializing」，若不在此清，owner 監控會拿前一代的舊
+                # 錨點對新一代誤報。init_ready_since 空著時由下一次短 poll 觀測寫回（排序以
+                # init_queue_turn 為先，claim／capacity 不讀它）。init_ready_observed 刻意不清：
+                # 它的讀者都限定 state='initializing'，而在 initializing 中開代（P1-1）時
+                # 仍需立即可 claim；離開後再進 initializing 由 write() 清掉。
+                'init_ready_since': False,
+                'n8n_owner_alerted_at': False,
             })
 
     def _init_lease_active(self):
@@ -4137,7 +4413,7 @@ class CloudService(models.Model):
         return bool(row and row[0])
 
     def _next_state_when_ready(self):
-        """pods ready 之後服務該去哪——兩份 poll（cron／list/get）共用的唯一判準。
+        """pods ready 之後服務該去哪——背景 poll 的唯一判準（#1159 起 list/get 純讀，不再 poll）。
 
         #1267：需要 init 與否**只**看欠 init 標記，不再看 ``addon_update_pending``。
         reconfigure 不改 addon 時會把後者覆寫成 False、rollback 根本不設它，兩條路都
@@ -4180,11 +4456,15 @@ class CloudService(models.Model):
             'init_exit': exit_kind,
             'error_message': message,
         })
-        # 平台告警（Q8「用完轉 error 並告警平台」；mail.activity 通路屬 #1159 Q38）。
+        # 平台告警（Q8「用完轉 error 並告警平台」）：log ＋ #1159 Q38 的 mail.activity。
+        # unknown 額度用完由監控的「24h unknown 次數」涵蓋；這裡追加等待類的放棄。
         _logger.error(
             "[#1257] post-deploy init gave up for service %s (id=%s, generation=%s): "
             "exit=%s", self.name, self.id, self.init_generation, exit_kind,
         )
+        if exit_kind in ('wait_timeout', 'fast_fail'):
+            self.env['woow_paas_platform.platform_monitor']._report_gave_up(
+                self, exit_kind, message)
 
     def _init_check_exhausted(self):
         """額度已用完（例如 unknown 在停權期間才被收斂計數）⇒ 轉 error。"""
@@ -4207,6 +4487,144 @@ class CloudService(models.Model):
             'The initialization result could not be confirmed %(count)s times '
             '(attempt #%(seq)s). Please contact support.',
             count=self.init_unknown_count, seq=self.init_attempt_seq)
+
+    def _init_phase(self):
+        """Q40：initializing 的細分（不新增 state 值）；非 initializing 回 False。
+
+        - ``running``：lease 在途且那次 attempt 還沒結束（含 migration 的合成 legacy）。
+        - ``waiting_ready``：背景還沒觀測到 pods ready。
+        - ``retrying``：本代已有確定失敗或結果未知（含 unknown 之後刻意留到到期的 lease）。
+        - ``queued``：pods ready，排在 init cron 的佇列裡。
+
+        只讀：list/get 呼叫它（#1159 Q1 純讀）。
+        """
+        self.ensure_one()
+        if self.state != 'initializing':
+            return False
+        if self._init_lease_active():
+            attempt = self.sudo().init_attempt_id
+            if attempt and not attempt.finished_at:
+                return 'running'
+        if not self.init_ready_observed:
+            return 'waiting_ready'
+        if self.init_retries or self.init_unknown_count:
+            return 'retrying'
+        return 'queued'
+
+    def _init_reconfigure_exit(self):
+        """#1159 Q30：這個 error 是不是 init 的**額度出口**（租戶唯一的出口是 reconfigure）。
+
+        只有確定失敗／結果未知的額度用完才是；helm 失敗、等待逾時、fast-fail（D1）都不是。
+        controller 的 reconfigure 守衛與前端按鈕讀同一個判準。
+        """
+        self.ensure_one()
+        return self.state == 'error' and self.init_exit in ('failed', 'unknown')
+
+    def _init_mark_ready_observed(self):
+        """短 poll 觀測到 initializing 的 pods ready ⇒ 排進 init cron 的佇列（#1159 Q1）。
+
+        D2（#1159 實作期裁定，擴充 Q10 錨點字面）：排隊等 init cron 屬「平台容量排隊」，
+        **不計時** ⇒ 等待錨點前推到這次觀測（錨點＝max(進入 initializing, 上次實際執行的
+        attempt 結束, 最近一次觀測到 ready)）。只有「由 not ready 轉成 ready」這一刻才
+        trigger init cron：每分鐘都 trigger 只會堆 ``ir.cron.trigger``，積壓由 init cron
+        自己 ``_trigger()``。
+        """
+        self.ensure_one()
+        newly_ready = not self.init_ready_observed
+        now = self._init_db_now()
+        vals = {'init_ready_observed': True, 'init_wait_since': now}
+        if not self.init_ready_since:
+            vals['init_ready_since'] = now
+        if not self.init_queue_turn:
+            vals['init_queue_turn'] = now
+        self.sudo().write(vals)
+        if newly_ready:
+            # Q28a：n8n 在 owner 確認前公開可達，不讓它多等一個 cron 週期。
+            self.env.ref(_INIT_CRON_XMLID)._trigger()
+
+    def _init_mark_not_ready(self):
+        """短 poll 觀測到 initializing 的 pods 不 ready ⇒ 退出 init cron 的佇列。"""
+        self.ensure_one()
+        if self.init_ready_observed:
+            self.sudo().write({'init_ready_observed': False})
+
+    @staticmethod
+    def _init_fast_fail_pod(status):
+        """#1159 D1-R：保留 #1192 正式訊號的接入位置，本版不以累計 restarts 代判。
+
+        PodInfo.restarts 是整個 Pod 的歷史累計，不能證明本次初始化失敗。
+        正式 initContainer／CrashLoopBackOff 契約尚未接入前不短路，仍走既定等待時限；
+        fast_fail 出口與消費端保留，供歷史記錄與 #1192 後續使用。
+        """
+        return None
+
+    def _init_check_fast_fail(self, status):
+        """#1159 D1：fast-fail 訊號短路等待 → error（``init_exit='fast_fail'``，不耗額度）。
+
+        lease 在途時不判（同 ``_init_check_wait_timeout``：那段時間由 lease／額度收尾）。
+        回傳是否已轉 error。
+        """
+        self.ensure_one()
+        if self.state != 'initializing' or self._init_lease_active():
+            return False
+        hit = self._init_fast_fail_pod(status)
+        if not hit:
+            return False
+        pod, restarts = hit
+        self._init_to_error('fast_fail', _(
+            'Pod %(pod)s restarted %(count)s times without becoming ready, so '
+            'initialization stopped waiting. Please contact support.',
+            pod=pod, count=restarts))
+        return True
+
+    def _init_operator_wait_elapsed(self, now=None):
+        """D2-R：目前這段 not_executed cooldown 已累計的秒數（不含容量排隊）。"""
+        self.ensure_one()
+        if not self.init_wait_started_at:
+            return 0
+        now = now or self._init_db_now()
+        until = self.init_retry_eligible_at or now
+        return max(0, (min(now, until) - self.init_wait_started_at).total_seconds())
+
+    def _init_check_operator_wait_timeout(self):
+        """D2-R：不依賴 client／Ready 的 operator readiness 預算收尾。"""
+        self.ensure_one()
+        if self.state != 'initializing' or self._init_lease_active():
+            return False
+        spent = (self.init_wait_spent_seconds or 0) + self._init_operator_wait_elapsed()
+        if spent < self._init_wait_timeout_minutes() * 60:
+            return False
+        self._init_to_error('wait_timeout', _(
+            'The operator kept reporting that initialization was not executed for '
+            '%(minutes)s minutes.', minutes=self._init_wait_timeout_minutes()))
+        return True
+
+    @api.model
+    def _init_settle_operator_wait_timeouts(self):
+        """cron 全域到期掃描：缺 client 或 Ready 觀測不能遮蔽已耗盡的時計。
+
+        只由 init cron 呼叫（會 commit）。Q36：每台一個回捲單位——一台轉 error 或告警時
+        撞到 DB 故障，只回捲那一台，前面已收尾的服務保留、後面照常收尾，整趟 init tick
+        也不因此中斷（之後的佇列照常處理）。
+        """
+        services = self.sudo().search([
+            ('state', '=', 'initializing'),
+            '|', ('init_wait_started_at', '!=', False), ('init_wait_spent_seconds', '>', 0),
+            ('init_lease_until', '=', False),
+        ])
+        for service in services:
+            service_label = (service.name, service.id)
+            try:
+                service._init_check_operator_wait_timeout()
+                self.env.cr.commit()
+            except Exception:
+                # Q36：回捲這一台未 commit 的收尾，下一趟再判；後排照常處理。
+                # ⚠ #1052 標記（非裁定）：這是逐筆 batch isolation，OperationalError 也在此
+                # 收掉，與 post-commit-bookkeeping-rollback-unit.md 規則一分歧（同短 poll 的站點）。
+                self.env.cr.rollback()
+                _logger.exception(
+                    "[#1159] init wait-timeout settle failed for service %s (id=%s)",
+                    *service_label)
 
     def _init_check_wait_timeout(self):
         """Q10：等待時限到期 → error，**不耗額度**。回傳是否已轉 error。
@@ -4238,6 +4656,10 @@ class CloudService(models.Model):
         """
         self.ensure_one()
         cr = self.env.cr
+        # lease 到期清理前先補套已 commit 的結果，保住 worker crash 後的 D2-R 記帳。
+        if self._init_recover_recorded_attempt():
+            cr.commit()
+            return
         rows = self._init_guarded(
             f"""SELECT init_attempt_id, COALESCE(init_generation, 0)
                   FROM {self._table}
@@ -4274,10 +4696,28 @@ class CloudService(models.Model):
             svc._init_check_exhausted()
         cr.commit()
 
+    def _init_capacity_wait_eligible(self, now):
+        """容量監控的純讀判準，對齊 runner 與原子 claim 的 dispatch 閘門。
+
+        過期但未 settle 的 lease 仍不是可 claim 的空槽；不呼叫會改 state 的
+        exhausted／timeout helper，也不將 UI phase 或 first-ready 當充分條件。
+        """
+        self.ensure_one()
+        return bool(
+            self.state == 'initializing' and self.init_pending
+            and self._init_type() != 'none' and self.init_ready_observed
+            and not self.sudo().init_redeploy_requested and not self.init_lease_until
+            and self.init_retries < INIT_FAILED_LIMIT
+            and self.init_unknown_count < self._init_unknown_limit()
+            and (not self.init_retry_eligible_at or self.init_retry_eligible_at <= now)
+            and (self.init_wait_spent_seconds or 0) + self._init_operator_wait_elapsed(now)
+                < self._init_wait_timeout_minutes() * 60
+        )
+
     def _init_ready_to_claim(self):
         """claim 之前的前置條件（在 settle 之後的新交易裡讀）。
 
-        不欠 init 的 initializing 不 claim：兩份 poll 經 ``_next_state_when_ready``
+        不欠 init 的 initializing 不 claim：背景 poll 經 ``_next_state_when_ready``
         遇到它會直接寫 running，這裡與它一致，不另立收斂方向。
         """
         self.ensure_one()
@@ -4286,7 +4726,9 @@ class CloudService(models.Model):
         if self.sudo().init_redeploy_requested:
             # Q27：背景看到 redeploy 意圖就停止自動重送；lease 結束後 cron 先執行 redeploy。
             return False
-        if self._init_check_exhausted() or self._init_check_wait_timeout():
+        # #1159 D2：只判額度。等待時限只在短 poll 觀測到 not ready 時判——排隊等 init
+        # cron 屬平台容量排隊，不計時。
+        if self._init_check_exhausted():
             return False
         return True
 
@@ -4294,19 +4736,44 @@ class CloudService(models.Model):
         """Q2：單一條件式 UPDATE 取得 lease，插入 attempt，**在呼叫 operator 之前 commit**。"""
         self.ensure_one()
         cr = self.env.cr
+        wait_budget_seconds = self._init_wait_timeout_minutes() * 60
+        # WHERE 是唯一的 claim 裁決點：它在取得 lease 的同一個 UPDATE 重驗最新
+        # Ready、cooldown eligibility 與已累計預算，避免過時 queue snapshot 在並發
+        # not-ready 觀測或逾時後仍 dispatch。
         rows = self._init_guarded(
             f"""UPDATE {self._table}
                    SET init_lease_until = (statement_timestamp() AT TIME ZONE 'UTC')
                                           + make_interval(secs => %s),
-                       init_attempt_seq = COALESCE(init_attempt_seq, 0) + 1
+                       init_attempt_seq = COALESCE(init_attempt_seq, 0) + 1,
+                       init_queue_turn = (statement_timestamp() AT TIME ZONE 'UTC'),
+                       init_wait_spent_seconds = COALESCE(init_wait_spent_seconds, 0)
+                           + CASE WHEN init_wait_started_at IS NULL THEN 0 ELSE GREATEST(0,
+                               EXTRACT(EPOCH FROM (LEAST(
+                                   (statement_timestamp() AT TIME ZONE 'UTC'),
+                                   COALESCE(init_retry_eligible_at,
+                                            (statement_timestamp() AT TIME ZONE 'UTC')))
+                                   - init_wait_started_at))) END,
+                       init_wait_started_at = NULL,
+                       init_retry_eligible_at = NULL,
+                       init_capacity_wait_since = NULL
                  WHERE id = %s
                    AND state = 'initializing'
                    AND init_pending
+                   AND init_ready_observed
                    AND NOT COALESCE(init_redeploy_requested, FALSE)
                    AND init_lease_until IS NULL
+                   AND (init_retry_eligible_at IS NULL
+                        OR init_retry_eligible_at <= (statement_timestamp() AT TIME ZONE 'UTC'))
+                   AND COALESCE(init_wait_spent_seconds, 0)
+                       + CASE WHEN init_wait_started_at IS NULL THEN 0 ELSE GREATEST(0,
+                           EXTRACT(EPOCH FROM (LEAST(
+                               (statement_timestamp() AT TIME ZONE 'UTC'),
+                               COALESCE(init_retry_eligible_at,
+                                        (statement_timestamp() AT TIME ZONE 'UTC')))
+                               - init_wait_started_at))) END < %s
              RETURNING init_attempt_seq, COALESCE(init_generation, 0), init_lease_until,
                        (statement_timestamp() AT TIME ZONE 'UTC')""",
-            (INIT_LEASE_SECONDS[init_type], self.id),
+            (INIT_LEASE_SECONDS[init_type], self.id, wait_budget_seconds),
         )
         if not rows:
             return None
@@ -4325,7 +4792,9 @@ class CloudService(models.Model):
             (attempt.id, self.id),
         )
         self.invalidate_recordset([
-            'init_lease_until', 'init_attempt_seq', 'init_attempt_id'])
+            'init_lease_until', 'init_attempt_seq', 'init_attempt_id',
+            'init_wait_spent_seconds', 'init_wait_started_at', 'init_retry_eligible_at',
+            'init_queue_turn', 'init_capacity_wait_since'])
         cr.commit()
         return attempt
 
@@ -4362,14 +4831,41 @@ class CloudService(models.Model):
         except Exception as exc:  # 交給分類（Q3）
             return None, exc
 
+    def _init_recover_recorded_attempt(self):
+        """worker crash 後對已持久化結果補套恰好一次，不重送 operator。
+
+        結果先 commit、服務端記帳與 ``applied_at`` marker 同交易 commit。是否已套用只能
+        在下游 CAS 取得 service 列鎖後判斷，不能在此處以舊 snapshot 提前判斷。n8n
+        success 的 key 不存 attempt；重播時從同一 service 受保護欄位重建 context。
+        """
+        self.ensure_one()
+        attempt = self.sudo().init_attempt_id.sudo()
+        if not attempt or not attempt.finished_at or not attempt.outcome:
+            return False
+        api_key = None
+        if (attempt.init_type == 'n8n' and attempt.outcome == OUTCOME_SUCCESS
+                and attempt.n8n_key_persisted):
+            # service 可能還留上一把 key；只有本 attempt 的持久化證據才可用於重播。
+            api_key = self.sudo().n8n_api_key
+        outcome = InitOutcome(
+            attempt.outcome,
+            error_step=attempt.error_step or None,
+            error_kind=attempt.error_kind or None,
+            message=attempt.error or None,
+            api_key=api_key,
+        )
+        return self._init_apply_outcome(attempt, outcome, attempt.error or False)
+
     def _run_post_deploy_init(self, client):
         """post-deploy init 的**唯一**執行入口（#1257）：收斂 lease → claim → operator
         → 先寫 attempt → CAS 套到服務。
 
         ⚠ 只能從背景（cron）呼叫：它會 ``commit`` 呼叫端的 cursor——Q2 要求 claim
         在呼叫 operator 之前 commit，另一條連線才看得到 lease；Q36 要求背景 per-service
-        commit。自 #1257 起 list/get 只推進 state、不 dispatch init（#1159 Q1 的一部分
-        提前落地），所以本方法唯一的生產呼叫端是 ``_poll_and_update_status``（cron）。
+        commit。本方法唯一的生產呼叫端是 init cron ``_cron_run_post_deploy_inits``
+        （#1159 Q4）；短 poll 只把服務排進它的佇列，list/get 純讀。
+
+        回傳是否真的送出了一次 init（init cron 的軟上限只數這個）。
 
         不承諾 exactly-once（Q2）：lease 擋的是「同一時間兩條連線各送一次」與 worker
         被殺之後的立即重跑，不擋「結果未知之後的重送」（那由 unknown 額度封頂）。
@@ -4377,44 +4873,52 @@ class CloudService(models.Model):
         self.ensure_one()
         init_type = self._init_type()
         if init_type == 'none':
-            return
+            return False
         cr = self.env.cr
-        # poll 剛寫下的 initializing／release facts 先落地，claim 在新的 snapshot 上做。
+        # 呼叫端先前的寫入先落地，claim 在新的 snapshot 上做。
         cr.commit()
+        # D2-R：先補套已持久化但尚未套用的結果；不可再送 remote init。
+        if self._init_recover_recorded_attempt():
+            cr.commit()
+            return False
         self._init_settle_expired_lease()
+        self._init_check_operator_wait_timeout()
         if not self._init_ready_to_claim():
             cr.commit()
-            return
+            return False
         params = self._init_call_params(init_type)
         attempt = self._init_claim(init_type)
         if not attempt:
-            return
+            return False
         attempt_id = attempt.id  # commit 之後只帶 id，operator 呼叫期間不碰 ORM
         result, exc = self._init_send(client, init_type, params)
         outcome = classify_init_result(init_type, result=result, exc=exc)
         self._init_finish(
             self.env['woow_paas_platform.cloud_service_init_attempt'].sudo().browse(attempt_id),
             outcome, (params.get('owner_password'),))
+        return True
 
     def _init_store_n8n_api_key(self, api_key):
         """Q8：n8n 拿到的 API key 先存（success 與 partial 都是），不進 attempt 記錄。
 
         存放處沿用既有的 ``n8n_api_key``（``groups='base.group_system'``）——單一來源，
-        MCP helm values 也從這裡取（#1257 r2 裁定 g(i)）。success 的 CAS 套用會在列鎖
-        下再寫一次，這一步是給 partial 與「CAS 沒套上」的情形保底。
+        MCP helm values 也從這裡取（#1257 r2 裁定 g(i)）。回傳是否確實寫入；呼叫端將
+        非敏感 marker 與 key 同交易 commit。success 的 CAS 仍可用活 worker 持有的 wire
+        key 補寫，但 crash recovery 不可拿 service 的舊 key 假裝本次已保存。
         """
         self.ensure_one()
         rows = self._init_guarded(
             f"SELECT 1 FROM {self._table} WHERE id = %s FOR NO KEY UPDATE", (self.id,))
-        if rows is None:
-            # 拿不到列鎖就寫不進去：success 仍會在 CAS 那步寫；partial 的 key 則變成
-            # 孤兒（下一次重送再建一把），只能告警。
+        if not rows:
+            # 保存失敗不代表遠端失敗；留告警，由 marker 擋住不具 key 證據的成功補套。
             _logger.error(
-                "[#1257] could not store the n8n API key of service %s (row busy)",
+                "[#1257] could not store the n8n API key of service %s (row busy or missing)",
                 self.id,
             )
-            return
+            return False
         self.sudo().write({'n8n_api_key': api_key})
+        self.flush_recordset(['n8n_api_key'])
+        return True
 
     def _init_release_unapplied(self, attempt_id, reason, outcome=None):
         """結果沒套上服務時釋放 lease（不耗額度）；只放自己持有的那一個。
@@ -4446,10 +4950,10 @@ class CloudService(models.Model):
     def _init_finish(self, attempt, outcome, secrets_to_mask=()):
         """Q2：結果先寫 attempt 記錄（commit），再用 CAS 套到服務（commit）。
 
-        兩段各自是一個回捲單位（`post-commit-bookkeeping-rollback-unit`）：attempt
-        記錄與 n8n key 是「遠端已發生的事實」在平台這側的副本，不能因為套用失敗而被
-        一起回捲。任何一段失敗都是**本地記帳錯誤**（Q3）：不耗額度、釋放 lease、
-        `_logger.exception` 告警。
+        結果記錄與 n8n key 是「遠端已發生的事實」在平台這側的副本，先各自 commit；
+        後段 CAS 服務記帳與 ``applied_at`` 同交易 commit。記錄段失敗沒有可恢復結果，
+        才釋放 lease 且不耗額度；已記錄結果的套用段失敗保留 pointer／lease，交下一趟
+        冪等補套，並以 `_logger.exception` 告警。
 
         ⚠ #1052 標記（非裁定）：這裡的 ``except Exception`` 連 ``OperationalError``
         一併收掉並 ``rollback``，與該 doc 規則一（OperationalError 必須外拋）分歧——
@@ -4469,8 +4973,8 @@ class CloudService(models.Model):
                 'error_kind': outcome.error_kind or False,
                 'error': masked,
             })
-            if outcome.api_key:
-                self._init_store_n8n_api_key(outcome.api_key)
+            if outcome.api_key and self._init_store_n8n_api_key(outcome.api_key):
+                attempt.write({'n8n_key_persisted': True})
             cr.commit()
         except Exception:
             cr.rollback()
@@ -4483,16 +4987,20 @@ class CloudService(models.Model):
             cr.commit()
             return
         try:
+            # n8n owner 監控不在此觸發：短 poll 掃描同時涵蓋 live、冷補套與等待／失敗。
             self._init_apply_outcome(attempt, outcome, masked)
             cr.commit()
         except Exception:
             cr.rollback()
+            # 結果已 commit，保留 lease pointer 讓下一趟只補套記帳；此時清掉會遺失
+            # 唯一的冪等 anchor，連帶丟掉 D2-R 已耗時間。
             _logger.exception(
                 "[#1257] local bookkeeping error applying init attempt %s of service "
-                "%s (outcome=%s)", attempt.id, self.id, outcome.outcome,
+                "%s (outcome=%s); keeping it for recovery", attempt.id, self.id,
+                outcome.outcome,
             )
-            self._init_release_unapplied(attempt.id, 'apply failed')
             cr.commit()
+            return
 
     _INIT_CAS_TRIES = 3
 
@@ -4510,7 +5018,7 @@ class CloudService(models.Model):
         rows = None
         for _try in range(self._INIT_CAS_TRIES):
             rows = self._init_guarded(
-                f"""SELECT 1 FROM {self._table}
+                f"""SELECT COALESCE(init_generation, 0) FROM {self._table}
                      WHERE id = %s AND init_attempt_id = %s AND state = 'initializing'
                        FOR NO KEY UPDATE""",
                 (self.id, attempt.id),
@@ -4519,8 +5027,28 @@ class CloudService(models.Model):
                 break
             cr.rollback()  # 丟掉舊 snapshot，下一次在新交易重試
         if rows is None:
-            self._init_release_unapplied(attempt.id, 'service row busy')
+            # 結果已持久化時不可清掉復原 anchor；下一輪仍能以同一 attempt 補套。
+            _logger.warning(
+                "[#1257] init attempt %s of service %s row busy; keeping recovery pointer",
+                attempt.id, self.id,
+            )
             return False
+        if rows:
+            if attempt.generation != rows[0][0]:
+                # 舊代結果不得套入新代；過期 lease 交 settle 清 pointer，新代照常 claim。
+                _logger.info(
+                    "[#1257] init attempt %s generation %s is stale for service %s generation %s",
+                    attempt.id, attempt.generation, self.id, rows[0][0],
+                )
+                return False
+            # 必須在 service 列鎖後讀 marker：兩個 recovery caller 都曾看見 marker 空時，
+            # 後到者經 40001 重試會在新 snapshot 看見前者的 applied_at，不能再計一次。
+            cr.execute(
+                "SELECT applied_at FROM woow_paas_platform_cloud_service_init_attempt "
+                "WHERE id = %s", (attempt.id,))
+            marker = cr.fetchone()
+            if not marker or marker[0]:
+                return False
         if not rows:
             if outcome.outcome in (OUTCOME_SUCCESS, OUTCOME_FAILED, OUTCOME_NOT_EXECUTED):
                 self._init_release_unapplied(attempt.id, 'service moved on')
@@ -4534,6 +5062,15 @@ class CloudService(models.Model):
         kind = outcome.outcome
         release = {'init_lease_until': False, 'init_attempt_id': False}
         if kind == OUTCOME_SUCCESS:
+            if attempt.init_type == 'n8n' and not outcome.api_key:
+                # 活 worker 可以用 wire key 補寫；冷重播缺持久化證據時，不能套舊 key。
+                # 保留 active lease／pointer，待既有到期收尾後才可建立新 attempt。
+                _logger.error(
+                    "[#1257] recorded n8n success for service %s attempt %s lacks a "
+                    "persisted key; keeping lease and pending initialization",
+                    self.id, attempt.id,
+                )
+                return False
             vals = dict(release, **{
                 'state': 'running',
                 'init_pending': False,
@@ -4542,6 +5079,10 @@ class CloudService(models.Model):
                 'init_unknown_count': 0,
                 'init_exit': False,
                 'init_error': False,
+                'init_wait_spent_seconds': 0,
+                'init_wait_started_at': False,
+                'init_retry_eligible_at': False,
+                'init_queue_turn': False,
             })
             if outcome.api_key:
                 # 在列鎖下再寫一次：前一步的保底寫入若撞鎖失敗，這裡仍會落地。
@@ -4564,26 +5105,54 @@ class CloudService(models.Model):
                 svc._apply_helm_values(merged_helm_values, extra_vals=vals)
             else:
                 svc.write(vals)
+            if attempt.init_type == 'n8n':
+                # 即時 CAS 可能補上先前未保存的 wire key，與 service 更新同交易成立。
+                attempt.write({'n8n_key_persisted': True})
             _logger.info(
                 "[#1257] %s init succeeded for service %s (attempt #%s)",
                 attempt.init_type, svc.name, attempt.sequence)
         elif kind == OUTCOME_FAILED:
+            # D2-R2：明確 failed 已證明 request 執行，重置 operator readiness wait；
+            # failed quota itself still increments in this generation.
             svc.write(dict(release, **{
                 'init_retries': (svc.init_retries or 0) + 1,
                 'init_error': masked_error,
                 'init_wait_since': attempt.finished_at,
+                'init_wait_spent_seconds': 0,
+                'init_wait_started_at': False,
+                'init_retry_eligible_at': False,
             }))
             svc._init_check_exhausted()
         elif kind in (OUTCOME_UNKNOWN, OUTCOME_PARTIAL):
-            # Q8：重送前必須等 lease 到期——lease 刻意留著，由 settle 釋放。
-            svc.write({
+            # Q8：重送前必須等 lease 到期，由 settle 釋放。D2-R2：partial 已證明執行，
+            # 重置 operator 等待；unknown 保留既有預算，兩者都不提前釋放 lease。
+            vals = {
                 'init_unknown_count': (svc.init_unknown_count or 0) + 1,
                 'init_error': masked_error,
+                # Pod readiness 等待錨點是既有另一軸；D2-R 只裁 operator clock。
                 'init_wait_since': attempt.finished_at,
-            })
+            }
+            if kind == OUTCOME_PARTIAL:
+                vals.update(
+                    init_wait_spent_seconds=0,
+                    init_wait_started_at=False,
+                    init_retry_eligible_at=False,
+                )
+            svc.write(vals)
             svc._init_check_exhausted()
-        else:  # not_executed：等待，不耗額度、不動錨點
-            svc.write(dict(release, init_error=masked_error))
+        else:  # not_executed：call wall time + full cooldown，額度不動。
+            call_seconds = max(0, (attempt.finished_at - attempt.claimed_at).total_seconds())
+            svc.write(dict(release, **{
+                'init_error': masked_error,
+                'init_wait_spent_seconds': (svc.init_wait_spent_seconds or 0) + call_seconds,
+                'init_wait_started_at': attempt.finished_at,
+                'init_retry_eligible_at': attempt.finished_at + timedelta(
+                    seconds=INIT_NOT_EXECUTED_COOLDOWN_SECONDS),
+            }))
+            svc._init_check_operator_wait_timeout()
+        # 結果套用與 marker 同交易 commit，重播只會看到「都沒有」或「都已有」，
+        # 因此任何 outcome（尤其 not_executed 時計）都不會重複套用。
+        attempt.write({'applied_at': self._init_db_now()})
         if kind != OUTCOME_SUCCESS:
             _logger.warning(
                 "[#1257] init attempt #%s for service %s: %s (step=%s)",
@@ -4598,8 +5167,8 @@ class CloudService(models.Model):
     def _cron_run_requested_redeploys(self):
         """lease 結束後先執行登記過的 redeploy（Q27）。
 
-        本 PR 由 ``_cron_check_deploying_services`` 開頭呼叫；#1159 拆出獨立 init cron
-        後移過去（它掌管 lease 的生命週期）。意圖在執行前就清掉：redeploy 失敗時不每
+        由 init cron ``_cron_run_post_deploy_inits`` 開頭呼叫（#1257 f／#1159：它掌管
+        lease 的生命週期，意圖要在它下一次自動重送之前執行）。意圖在執行前就清掉：redeploy 失敗時不每
         分鐘重撞同一個錯誤，而是把原因寫進 ``error_message``（admin 在後台與租戶在
         服務頁都看得到），不讓「Redeploy queued」之後靜默消失（Crosswind r1 S3）。
 
@@ -5581,6 +6150,7 @@ class CloudService(models.Model):
         # ——後面每一段都有副作用或成本，被拒絕的呼叫不該碰到其中任何一段。
         _reject_cs_access_identity_anchor_writes(self.env, vals)
         _reject_init_control_writes(self.env, vals)
+        _reject_observation_control_writes(self.env, vals)
         # #698 反向端：前置檢查（見 `_assert_reverse_binding_authorized` 的
         # docstring——這一端的判準會被寫入本身改掉，事後檢查無效）。
         self._assert_reverse_binding_authorized(vals)
@@ -5656,12 +6226,26 @@ class CloudService(models.Model):
         projects = self.mapped('project_ids') if tracked else self.browse()
         old = {p.id: set(p.workspace_ids.ids) for p in projects}
         # #1257 Q10：等待錨點在每次**進入** initializing 時重新計時。集中在這裡而不是
-        # 逐路徑 stamp（兩份 poll、resume……；pitfall
+        # 逐路徑 stamp（背景 poll、resume……；pitfall
         # reaped-since-single-path-stamp-gc-immunity）：新路徑寫進 initializing 時
         # 自動跟上。明寫 `init_wait_since` 的呼叫端（migration）優先。
+        # #1159：同一個咽喉順帶清掉上一段 initializing 的 ready 觀測——剛進來的服務在
+        # 背景 poll 看過之前一律算「還沒觀測到 ready」，不沿用舊值排進 init cron。
         entering_init = self.browse()
         if vals.get('state') == 'initializing' and 'init_wait_since' not in vals:
             entering_init = self.filtered(lambda r: r.state != 'initializing')
+        # episode 必須看到 tick 之間的 lifecycle 中斷；只靠 monitor 再查一次會漏掉
+        # Ready 撤回又恢復、state 退出又進入或開新 generation。無關／同值 write 不重開。
+        new_capacity_episode = self.filtered(lambda service: (
+            ('state' in vals and service.state != vals['state'])
+            or ('init_generation' in vals and service.init_generation != vals['init_generation'])
+        ))
+        # 同值 state 或無關記帳不給新 grace；在 super() 前挑出真正進入者，
+        # mixed recordset 也只替該 subset 建立新的等待 episode。
+        entering_observation_episode = self.browse()
+        if vals.get('state') in OBSERVATION_TRANSITION_STATES:
+            entering_observation_episode = self.filtered(
+                lambda r: r.state != vals['state'])
         # #1159 Q30 的 reconfigure 放行只認「init 額度出口」造成的 error：服務一離開
         # error（刪除、redeploy……）`init_exit` 就不再描述現況，之後刪除失敗等路徑寫回
         # 的 error 不得沿用它。停權（error → suspended → error）不算離開：Q25 要求停權
@@ -5689,9 +6273,36 @@ class CloudService(models.Model):
             if access_sync:
                 stack.enter_context(self.env.cr.savepoint())
             res = super().write(vals)
+            if entering_observation_episode:
+                # 命令時間只作 episode 邊界；observed_at 仍保留真實 status poll 證據。
+                super(CloudService, entering_observation_episode).write({
+                    'observation_episode_started_at': fields.Datetime.now(),
+                })
             if entering_init:
-                super(CloudService, entering_init).write(
-                    {'init_wait_since': self._init_db_now()})
+                entering_vals = {
+                    'init_wait_since': self._init_db_now(),
+                    # D2-R2：同代重新進 initializing（含 resume）是 operator wait 的重置邊界。
+                    'init_wait_spent_seconds': 0,
+                    'init_wait_started_at': False,
+                    'init_retry_eligible_at': False,
+                    'init_queue_turn': False,
+                }
+                for key in ('init_ready_observed', 'init_ready_since', 'n8n_owner_alerted_at'):
+                    if key not in vals:
+                        entering_vals[key] = False
+                super(CloudService, entering_init).write(entering_vals)
+            capacity_fields = (_INIT_CONTROL_FIELDS - {
+                'init_capacity_wait_since', 'n8n_owner_alerted_at'}) | {
+                'state', 'template_id'}
+            if capacity_fields.intersection(vals):
+                tracked_capacity = self.filtered('init_capacity_wait_since')
+                if tracked_capacity:
+                    now = self._init_db_now()
+                    reset_capacity = tracked_capacity.filtered(
+                        lambda service: service in new_capacity_episode
+                        or not service._init_capacity_wait_eligible(now))
+                    if reset_capacity:
+                        super(CloudService, reset_capacity).write({'init_capacity_wait_since': False})
             if leaving_init_exit:
                 super(CloudService, leaving_init_exit).write({'init_exit': False})
             if rebinding:
@@ -6016,8 +6627,27 @@ class CloudService(models.Model):
             self._assert_reverse_binding_authorized(
                 self._add_missing_default_values(vals))
         normalized_vals_list = []
+        observation_started = fields.Datetime.now()
         for vals in vals_list:
             normalized = dict(vals)
+            # 新服務尚無 operator 觀測；明寫 False 才能同時中和 raw vals、context 與
+            # ir.default。僅 pop 會在 super().create() 展開 default 時再被注入。
+            normalized['observed_at'] = False
+            # capacity 時計只能由背景觀測開始，開通不能注入 raw／context／ir.default。
+            normalized['init_capacity_wait_since'] = False
+            # owner 告警 marker 同理：只由背景 monitor 寫，開通不能預先壓掉告警。
+            normalized['n8n_owner_alerted_at'] = False
+            # 其他 init 管控欄位（init_ready_observed／init_ready_since／init_queue_turn／
+            # init_wait_*）刻意不在此中和：create 結尾的 `_open_init_generation()` 會重設
+            # wait／queue 時計，進入 initializing 的 write() 會重設 ready／wait／queue；而
+            # queue／claim／phase／capacity 都只在 state='initializing' 時讀它們，租戶的開通
+            # 路徑（`_internal_provision`＋controller 白名單）也不會直接建出 initializing。
+            # capacity 時計與 owner marker 不同：它們由背景 monitor 首次寫入、沒有上述重設點。
+            defaulted = self._add_missing_default_values(normalized)
+            normalized['observation_episode_started_at'] = (
+                observation_started if defaulted.get('state') in OBSERVATION_TRANSITION_STATES
+                else False
+            )
             raw_values = normalized.get('helm_values')
             if raw_values:
                 try:

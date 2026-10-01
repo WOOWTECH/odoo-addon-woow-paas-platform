@@ -3,7 +3,8 @@
 
 ## 缺陷
 
-`#552` 層① 的第五條帳本回寫路徑是 poll。但 poll **有兩份實作**：
+`#552` 層① 的第五條帳本回寫路徑是 poll。但 poll 當時**有兩份實作**（#1159 起
+list/get 純讀，controller 那份已刪除，只剩 cron 那份）：
 
 | 實作 | 呼叫者 | 原本有沒有回寫 chart_version |
 | --- | --- | --- |
@@ -15,7 +16,7 @@
 
 ## 為什麼這一份測試必須驅動 model 而不是 controller
 
-`test_chart_pin_fail_closed_552.py` 已經有一支叫
+（歷史）`test_chart_pin_fail_closed_552.py` 當時已經有一支叫
 `test_failed_release_branch_also_records_it` 的測試，docstring 寫「`release_facts`
 必須到得了**每個** write 分支」——但**整份檔案驅動的都是 controller**
 （`PaasController()._update_service_status`）。
@@ -23,9 +24,9 @@
 ⇒ models 鏡像整份沒有回寫，那些測試照樣全綠。**同一個功能有兩份實作時，覆蓋率
 要問的是「每一份都被驅動了嗎」，不是「這一份的每個分支都被驅動了嗎」。**
 
-本檔只驅動 `CloudService._poll_and_update_status`，**刻意不碰 controller**——
-controller 那份由 `test_chart_pin_fail_closed_552.py` 守，兩份各有各的守衛才不會
-再退化成「守住一份、以為守住全部」。
+#1159 起 list/get 純讀、controller 那份 poll 已刪除，`_poll_and_update_status` 是唯一
+的 poll 實作；`test_chart_pin_fail_closed_552.py` 也已改為驅動它。本檔仍逐一驅動
+model poll 的每個 write 分支。
 
 ## 四個 write 分支
 
@@ -46,10 +47,10 @@ post-deploy init，故不在本表——它沒有可回寫的位置，不是漏�
 
 `_release_facts` 的 `last_release_sync_at` 是無條件 `fields.Datetime.now()`（不像
 `helm_revision`／`helm_chart_version` 有 `release.get(...)` 的 fallback），但上面
-四支分支測試與下面的雙實作比對測試原本都只斷言另外兩個欄位——保護它的只剩
+四支分支測試與下面的欄位完整性測試原本都只斷言另外兩個欄位——保護它的只剩
 repo-lint 的 AST 形態判準（`_RELEASE_FACT_KEYS` 有列到，但那只守「有沒有經由
 producer」，不守「值真的被蓋章了」）。四支分支測試現在各自把 baseline 設成前一天
-的時間戳，斷言 poll 後有**前進**；雙實作比對測試改用「有沒有前進」而不是「兩份
+的時間戳，斷言 poll 後有**前進**；欄位完整性測試同樣用「有沒有前進」而不是「兩份
 相等」——兩次呼叫 `fields.Datetime.now()` 落在不同秒是常態，硬要求相等會種下
 flaky。
 """
@@ -278,115 +279,57 @@ class TestCronPollMirrorBackwardCompat(_Base):
         self.assertEqual(service.helm_chart_version, '0.1.0')
 
 
-class TestBothPollImplementationsWriteTheSameFields(_Base):
+class TestPollWritesEveryReleaseFact(_Base):
     """🔑 #627 的根因不是「漏了一個欄位」，是「兩份實作各寫一次」。
 
-    上面四支測試守住「models 鏡像今天有回寫」。這一支守的是**結構**：兩份實作
-    寫進帳本的 release 事實欄位集合必須相同。日後任何一份加了第三個欄位而另一份
-    沒加，這支就紅——那正是 #627 當初沒有人發現的那一步。
+    #1159 起 list/get 純讀、controller 那份 poll 已刪除（第二份不得長回來由 repo-lint
+    ``poll-release-facts-single-source`` 判準 6 守）。原本這裡比對兩份實作寫進帳本的
+    欄位是否相同；現在只剩一份，改守「這一份把 producer 的**每一個**欄位都寫了」。
 
-    ⚠ 這是行為層斷言（實際跑兩份實作、比對寫進去的值），不是 AST／字串比對：
-    形態層的判準會被「改了寫法但語意不變」誤殺，也會被「換個名字繞過」漏放。
+    ⚠ 行為層斷言（實際跑 poll、看寫進去的值），不是 AST／字串比對。
 
-    #642 §4.1 ④：欄位集合**不再手抄**成 `_RELEASE_FACT_FIELDS`。原本那份硬編
-    清單只有兩個欄位，`_release_facts` 新增 `last_release_sync_at`（#627 (i)）
-    時沒有人同步更新它，於是這支測試對第三個欄位零鑑別力——docstring 寫的
-    「新增欄位時把它加進來」本身就是會漂的手抄步驟（同一個 commit 10fe7cdc 有
-    同步更新 `repo-lint.py` 的 `_RELEASE_FACT_KEYS`，卻漏了這裡：兩份手抄清單，
-    更新了一份、漏了一份）。現在欄位集合直接呼叫 producer 取得；per-field 比較
-    器則依欄位的 Odoo 型別結構性選擇（datetime 比「有沒有前進」，其餘比「兩份
-    是否相等」），不是逐名手動分類。
+    #642 §4.1 ④：欄位集合**不手抄**，直接呼叫 producer 取得；per-field 比較器依欄位
+    的 Odoo 型別結構性選擇（datetime 比「有沒有前進」，其餘比「是否等於 operator 回報
+    的值」）。
 
-    ⚠ 但「從 producer 推導」單獨做，會換一個方向相反的洞：推導只認得「新增」，
-    對「有人把某欄位從 `_release_facts` 拿掉」是**零鑑別力**——推導出的集合會
-    自動縮回去，跟著縮的還有 repo-lint 判準 2（release 事實欄位不得當字面鍵
-    出現），因為刪掉之後根本沒人再寫那個鍵。本質上：從被測物推導期望值，等於
-    讓被測物自己定義及格線。`_REQUIRED_RELEASE_FACT_FIELDS` 就是擋這個反方向
-    的 floor——具名而非數量下限，因為數量下限在正當重構（例如兩個欄位合併成
-    一個）時會誤殺，也不表達「不能少的是哪一個」。
+    ⚠ 但「從 producer 推導」單獨做，對「有人把某欄位從 `_release_facts` 拿掉」是**零
+    鑑別力**——推導出的集合會自動縮回去。`_REQUIRED_RELEASE_FACT_FIELDS` 就是擋這個
+    反方向的具名 floor。
     """
 
-    #: 三個寫入者（兩份 poll ＋ #627 (i) 對帳 cron）共同契約的下限。stamp 是
-    #: 這個契約的核心，不是可選欄位——一旦被拿掉，這條 floor 必須紅。
+    #: 寫入者（poll ＋ #627 (i) 對帳 cron）共同契約的下限。stamp 是這個契約的核心，
+    #: 不是可選欄位——一旦被拿掉，這條 floor 必須紅。
     _REQUIRED_RELEASE_FACT_FIELDS = frozenset({
         'helm_revision', 'helm_chart_version', 'last_release_sync_at',
     })
 
-    def _drive_controller(self, service, status_payload):
-        from odoo.addons.woow_paas_platform.controllers.paas import PaasController
-
-        client = MagicMock()
-        client.get_status.return_value = status_payload
-        fake_request = MagicMock()
-        fake_request.env = self.env
-        ctrl_path = 'odoo.addons.woow_paas_platform.controllers.paas'
-        with patch(f'{ctrl_path}.get_paas_operator_client', return_value=client), \
-                patch(f'{ctrl_path}.request', new=fake_request):
-            # #1257：controller 的 poll 只推進 state、不 dispatch init，不必再 patch。
-            PaasController()._update_service_status(service)
-        service.invalidate_recordset()
-
-    def test_two_implementations_agree_on_every_release_fact(self):
+    def test_poll_writes_every_release_fact(self):
         stale_sync_at = _stale_sync_at()
         stale = {
             'helm_chart_version': '0.1.0',
             'helm_revision': 2,
             'last_release_sync_at': stale_sync_at,
         }
+        service = self._service(self._template('facts-627'), state='deploying')
+        service.write(dict(stale))
+        self._poll(service, self._status())
+        self.assertEqual(service.state, 'running', '前提：poll 真的走完了')
 
-        tpl_model = self._template('parity-model-627')
-        svc_model = self._service(tpl_model, state='deploying')
-        svc_model.write(dict(stale))
-        self._poll(svc_model, self._status())
-
-        tpl_ctrl = self._template('parity-ctrl-627')
-        svc_ctrl = self._service(tpl_ctrl, state='deploying')
-        svc_ctrl.write(dict(stale))
-        self._drive_controller(svc_ctrl, self._status())
-
-        self.assertEqual(
-            svc_model.state, 'running', '前提：models 鏡像真的走完了')
-        self.assertEqual(
-            svc_ctrl.state, 'running', '前提：controller 那份真的走完了')
-
-        # 欄位集合從 producer 推導，不維護第二份硬編清單——這正是 #642 §4.1 ④
-        # 要收斂的洞：手抄清單漂掉時這支測試對新欄位零鑑別力。
-        release_fact_fields = set(svc_model._release_facts({}).keys())
-
-        # floor 折進迴圈之前先擋反方向的洞：純推導對「欄位被拿掉」零鑑別力
-        # （集合會自動縮回去，逐名相等／前進迴圈也跟著只剩縮小後的範圍）。
+        release_fact_fields = set(service._release_facts({}).keys())
         self.assertGreaterEqual(
             release_fact_fields, self._REQUIRED_RELEASE_FACT_FIELDS,
-            '推導出的欄位集合掉到必要 floor 之下——這正是三個寫入者共同契約'
-            '被整個拿掉時最該抓到的回歸；只靠推導等於讓被測物自己定義及格線')
+            '推導出的欄位集合掉到必要 floor 之下——只靠推導等於讓被測物自己定義及格線')
 
+        # operator 回報的值（見 `_Base._status`），與被測物無關的獨立來源。
+        reported = {'helm_revision': 3, 'helm_chart_version': '0.1.1'}
         for field in sorted(release_fact_fields):
-            if svc_model._fields[field].type == 'datetime':
-                # 時間戳不比「兩份是否相等」：各自呼叫 fields.Datetime.now()
-                # 落在不同秒是常態，硬要求相等會種下 flaky。真正的判準是兩份
-                # 都必須把值從基準線往前推。
-                #
-                # ⚠ 這個型別分派假設「日後任何新增的 datetime 型 release 事實
-                # 欄位都是同一種 stamp 語意」（基準線設在 stale_sync_at 之前）。
-                # 若未來加的是別種 datetime 欄位（不是「最後一次問過」語意），
-                # `stale` 字典沒有幫它種對應基準線，這裡會用 stale_sync_at 去比
-                # 一個從未被種過基準線的欄位——大概率 TypeError（None 與
-                # datetime 比較）而不是靜默通過。方向正確（fail-loud 好過靜默
-                # 放行），但踩到時看這裡：需要幫新欄位也種一份對應基準線，或把
-                # 判準從「型別」細化成「欄位名單」。
+            if service._fields[field].type == 'datetime':
                 self.assertGreater(
-                    svc_model[field], stale_sync_at,
-                    'models 鏡像沒有把 `%s` 從基準線前進' % field)
-                self.assertGreater(
-                    svc_ctrl[field], stale_sync_at,
-                    'controller 那份沒有把 `%s` 從基準線前進' % field)
+                    service[field], stale_sync_at,
+                    'poll 沒有把 `%s` 從基準線前進' % field)
             else:
-                self.assertEqual(
-                    svc_model[field], svc_ctrl[field],
-                    '兩份 poll 實作對 `%s` 的回寫結果不一致——#627 就是這樣發生'
-                    '的：controller 那份寫了、cron 那份沒寫，而只驅動'
-                    ' controller 的測試全綠' % field)
-
-        self.assertNotEqual(
-            svc_model['helm_chart_version'], stale['helm_chart_version'],
-            '陽性對照：若兩份都沒回寫，上面的相等斷言會恆真而零鑑別力')
+                self.assertIn(field, reported,
+                              '新的 release 事實欄位 `%s`：請在本測試補上 operator 回報值'
+                              % field)
+                self.assertEqual(service[field], reported[field],
+                                 'poll 沒有把 `%s` 寫成 operator 回報的值' % field)

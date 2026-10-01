@@ -9,10 +9,9 @@ cron 每分鐘、前台每 5 秒都只是「再問一次 operator」，沒有一
 
 ## 為什麼「寧鬆勿緊」是硬約束而不是偏好
 
-翻 ``error`` **不可自癒**：兩層 poll 都只在 ``deploying`` / ``upgrading`` /
-``initializing`` 才呼叫（``cloud_service.py`` 的 cron domain、``paas.py:2312``
-與 ``:2562``），所以一旦寫進 ``error``，就再也沒有任何路徑會把它 poll 回
-``running``——即使叢集裡的服務其實在門檻之後就緒了。誤殺的代價是「本來會好的服務
+翻 ``error`` **不可自癒**：poll 只看轉移狀態（``cloud_service.py`` 的 cron domain；
+#1159 起 list/get 純讀、不再 poll），所以一旦寫進 ``error``，就再也沒有任何路徑會把
+它 poll 回 ``running``——即使叢集裡的服務其實在門檻之後就緒了。誤殺的代價是「本來會好的服務
 被打成 error，租戶得重新下單」，晚報的代價只是「維運晚 N 分鐘知道」。兩者不對稱，
 故門檻一律取寬。這也是下面 #4（錨取較晚者）與 #6（VM 獨立門檻）存在的理由：它們
 各自堵住一種會**提早**觸發的錯算。
@@ -132,22 +131,6 @@ class _Base(TransactionCase):
         client = MagicMock()
         client.get_status.return_value = status_body
         svc._poll_and_update_status(client)
-        return client
-
-    def _poll_controller(self, svc, status_body):
-        """跑 controller 層 poll（與 W5a 測試同一套 request 替身手法）。"""
-        from odoo.addons.woow_paas_platform.controllers.paas import PaasController
-
-        ctrl = PaasController()
-        client = MagicMock()
-        client.get_status.return_value = status_body
-
-        module = 'odoo.addons.woow_paas_platform.controllers.paas'
-        fake_request = MagicMock()
-        fake_request.env = self.env
-        with patch(f'{module}.get_paas_operator_client', return_value=client), \
-                patch(f'{module}.request', new=fake_request):
-            ctrl._update_service_status(svc)
         return client
 
 
@@ -443,7 +426,10 @@ class TestTimeoutDoesNotOverreach(_Base):
         client.get_status.return_value = _status(pods=[])
 
         module = 'odoo.addons.woow_paas_platform.services.paas_operator'
-        with patch(f'{module}.get_paas_operator_client', return_value=client):
+        # #1159 Q36：cron 每台服務各 commit 一次；本測試只看它 poll 了哪些服務，
+        # TransactionCase 禁 commit ⇒ 換成 no-op。
+        with patch(f'{module}.get_paas_operator_client', return_value=client), \
+                patch.object(self.env.cr, 'commit', lambda: None):
             self.Service._cron_check_deploying_services()
 
         polled = [
@@ -722,60 +708,3 @@ class TestMigrationReAnchor489(_Base):
             f'migration 目錄 18.0.1.0.84 高於 manifest 版號 {manifest_version}'
             ' ⇒ 這個目錄永遠不會被執行（F4 陷阱）',
         )
-
-
-class TestControllerLayerTimeout(_Base):
-    """controller 層（前台每 5 秒那條）必須有同樣的上界。
-
-    就緒判定已經是單一事實源，但**寫 error 的動作在兩層各自的 poll 裡**——
-    只接 model 層的話，前台一 poll 就把服務從 error 蓋回 deploying。
-    """
-
-    def test_controller_times_out_container(self):
-        svc = self._make_service('container',
-                                 anchor_minutes_ago=_CONTAINER_DEFAULT + 1)
-
-        self._poll_controller(svc, _status(pods=[]))
-
-        self.assertEqual(svc.state, 'error')
-        self.assertIn('timed out', svc.error_message)
-
-    def test_controller_below_threshold_stays_deploying(self):
-        svc = self._make_service('container',
-                                 anchor_minutes_ago=_CONTAINER_DEFAULT - 1)
-
-        self._poll_controller(svc, _status(pods=[]))
-
-        self.assertEqual(svc.state, 'deploying')
-
-    def test_controller_times_out_vm(self):
-        svc = self._make_service('vm', anchor_minutes_ago=_VM_DEFAULT + 1)
-
-        self._poll_controller(svc, _vm_stuck_status())
-
-        self.assertEqual(svc.state, 'error')
-
-    def test_controller_vm_uses_vm_threshold(self):
-        svc = self._make_service('vm', anchor_minutes_ago=_CONTAINER_DEFAULT + 10)
-
-        self._poll_controller(svc, _status(vm_included=True, vmis=[]))
-
-        self.assertEqual(svc.state, 'deploying')
-
-    def test_both_layers_agree(self):
-        """兩層對同一份 (status, age) 必須給出同一個答案。"""
-        cases = [
-            (_CONTAINER_DEFAULT + 1, _status(pods=[]), 'error'),
-            (_CONTAINER_DEFAULT - 1, _status(pods=[]), 'deploying'),
-            (_CONTAINER_DEFAULT + 1, _status(pods=_READY_POD), 'running'),
-        ]
-        for age, body, expected in cases:
-            with self.subTest(age=age):
-                svc_model = self._make_service('container', anchor_minutes_ago=age)
-                svc_ctrl = self._make_service('container', anchor_minutes_ago=age)
-
-                self._poll(svc_model, body)
-                self._poll_controller(svc_ctrl, body)
-
-                self.assertEqual(svc_model.state, expected)
-                self.assertEqual(svc_ctrl.state, expected)

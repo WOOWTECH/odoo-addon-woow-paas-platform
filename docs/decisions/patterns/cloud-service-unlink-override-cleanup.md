@@ -218,16 +218,17 @@ Canonical lifecycle method（這裡是 `_do_cleanup`）的調用樹是**社會�
 | 位置（符號名為主鍵） | 做什麼 | 可達性 |
 |---|---|---|
 | `controllers/paas.py` `_delete_service` | delete endpoint，自己拆完 helm 後 `service.unlink()`；`PaaSOperatorError` 404 分支同形（同一支裡兩處） | 可達 |
-| `controllers/paas.py` `_update_service_status` | status poll 撞 404 且 `state == 'deleting'` → 收屍 | **可達** — 它有兩個生產呼叫端，`_list_services` 的 `transitional_states` **含** `'deleting'`（走得到）、`_get_service` 的 gate **不含**（走不到）。一個入口帶得進來就算可達 |
-| `models/cloud_service.py` `_poll_and_update_status` | 與上一列同形：輪詢撞 404 且 `state == 'deleting'` → `self.unlink()` | **今天走不到** — 唯一的生產呼叫端 `_cron_check_deploying_services` 的 search domain **不含** `'deleting'` |
+| `models/cloud_service.py` `_poll_and_update_status` | 背景短 poll 撞 404 且 `state == 'deleting'` → `self.unlink()`（savepoint 包住） | **可達**（#1159 起）— 唯一的生產呼叫端 `_cron_check_deploying_services` 的 domain 納入 `'deleting'`；list/get 純讀之後這是 deleting 的**唯一**收尾路徑 |
 | `models/workspace.py` `Workspace.unlink` | workspace teardown：`service_ids.sudo().unlink()` | 可達 |
 | `models/cloud_service.py` 的 `workspace_id` 欄位 `ondelete='cascade'` | **DB 層 cascade，繞過 Python `unlink()`** ⇒ 這條**不會**觸發本 pattern 的 child cleanup，`grep '.unlink()'` 也永遠抓不到它 | 只在 `Workspace.unlink` 被繞過時（raw SQL / 上游 cascade chain）才走到 |
 
 ⚠ **判可達性要自己追上游 selector 的 state 集合，不要讀 in-code 註解**（註解一樣會過期）。
-`_update_service_status` 與 `_poll_and_update_status` 這兩列就是對照組：兩支 code 結構完全同形
-（404 ＋ `state == 'deleting'` → unlink），差別只在誰把 `'deleting'` 放進了自己的 selector。
-⚠ 而且要追**每一個**呼叫端，不是第一個：`_update_service_status` 的兩個呼叫端裡只有 `_list_services`
-帶得進 `'deleting'`，只看 `_get_service` 會得出與事實相反的結論。
+#1159 以前的對照組：controller 的 `_update_service_status` 與 model 的 `_poll_and_update_status`
+結構完全同形（404 ＋ `state == 'deleting'` → unlink），差別只在誰把 `'deleting'` 放進了自己的
+selector——前者經 `_list_services` 可達、後者因 cron domain 不含 deleting 走不到。#1159 刪掉前者
+（list/get 純讀）並把 deleting 納入 cron domain，兩者的可達性因此對調成「只剩後者、而且可達」。
+⚠ 而且要追**每一個**呼叫端，不是第一個：當時 `_update_service_status` 的兩個呼叫端裡只有
+`_list_services` 帶得進 `'deleting'`，只看 `_get_service` 會得出與事實相反的結論。
 ⚠ 也不要把 `grep '.unlink()'` 的命中數當分母 — 最後一列根本不經 Python `unlink()`。
 
 這些 caller 都選擇「自己拆 helm + `service.unlink()`」而非「`service._do_cleanup()` 接管整套」—

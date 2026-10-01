@@ -115,9 +115,9 @@ Q45 字面只定前兩筆；後兩筆是 review 發現「woow-odoo 最常卡住�
 
 ## 分流點只有一個
 
-判定分流在 `CloudService._is_release_ready`——model poll（`_poll_and_update_status`）與 controller
-（`PaasController._update_service_status`）共用的單一入口（#423 的教訓：只修一邊，租戶打開服務頁
-就會用另一邊把狀態蓋回去）。⛔ 不要在 cron 或 controller 任一邊另寫 woow-odoo 判定。
+判定分流在 `CloudService._is_release_ready`——poll（`_poll_and_update_status`）的單一入口
+（#423 的教訓：當時 controller 另有一份 poll，只修一邊，租戶打開服務頁就會用另一邊把狀態蓋回去；
+#1159 起 list/get 純讀、controller 那份已刪除）。⛔ 不要在 poll 之外另寫 woow-odoo 判定。
 mismatch 直接回傳、不跑其後的 DNS 閘；managed 與通用判定就緒後都照舊接 DNS 閘（#648）。
 
 ## 刻意不在這裡處理

@@ -23,6 +23,12 @@ import { supportService } from "../../services/support_service";
 import { breadcrumbService } from "../../services/breadcrumb_service";
 import { router } from "../../core/router";
 import { showProjects } from "../../core/platform_config";
+import {
+    getInitFailureText,
+    getStaleObservation,
+    getStaleObservationLabel,
+    getSupportProjectAction,
+} from "../../utils/service_presentation";
 
 /**
  * ServiceDetailPage Component
@@ -91,7 +97,10 @@ export class ServiceDetailPage extends Component {
 
         onMounted(() => {
             this.loadService();
-            this.loadSupportProject();
+            // #275：Projects 關閉時沒有 project 入口，不讀取更不建立隱藏 project。
+            if (this.projectsVisible) {
+                this.loadSupportProject();
+            }
         });
 
         onWillUnmount(() => {
@@ -173,6 +182,63 @@ export class ServiceDetailPage extends Component {
         // Disable actions when service is in transitional state
         const disabledStates = ["deploying", "initializing", "upgrading", "deleting", "pending"];
         return this.service && !disabledStates.includes(this.service.state);
+    }
+
+    /**
+     * #1159 Q30：initializing 期間也可以刪除（後端本來就允許）；確認框會註明
+     * 「已送出的初始化可能仍在叢集內完成」（DeleteServiceModal）。
+     */
+    get canDelete() {
+        return this.canPerformActions || this.service?.state === "initializing";
+    }
+
+    /**
+     * #1159 Q30：error 時停用 Reset／Admin Credentials——後端只接受 running
+     * （`_reset_admin_password`），在 error 上按下只會換來一個失敗訊息。
+     */
+    get canResetAdminCredentials() {
+        return this.canPerformActions && this.service.state !== "error";
+    }
+
+    /**
+     * #1159：init 失敗由共用 presentation helper 固定呈現，不得把含 Pod 名稱或
+     * operator 細節的 error_message 帶到租戶畫面。
+     */
+    get initFailureText() {
+        return getInitFailureText(this.service);
+    }
+
+    get initFailed() {
+        return !!this.initFailureText;
+    }
+
+    /**
+     * #1159 Q40：list/get 只回背景 poll 的最近觀測。轉移中且 age 超過 3 分鐘才顯示。
+     * observation_pending 時的 age 是本次 episode 等待時間，不能稱為最後真觀測。
+     */
+    get staleObservation() {
+        return getStaleObservation(this.service);
+    }
+
+    get staleObservationLabel() {
+        return getStaleObservationLabel(this.staleObservation);
+    }
+
+    get supportProjectAction() {
+        return getSupportProjectAction({
+            projectsVisible: this.projectsVisible,
+            supportProject: this.state.supportProject,
+            supportProjectLoading: this.state.supportProjectLoading,
+            createModalOpen: this.state.showCreateProjectModal,
+        });
+    }
+
+    contactSupport() {
+        if (this.supportProjectAction === "open") {
+            this.openSupportProject();
+        } else if (this.supportProjectAction === "create") {
+            this.showCreateProject();
+        }
     }
 
     get isOdooService() {
@@ -288,12 +354,16 @@ export class ServiceDetailPage extends Component {
     }
 
     openSupportProject() {
-        if (this.state.supportProject) {
-            this.router.navigate(`ai-assistant/projects/${this.state.supportProject.id}`);
+        if (this.supportProjectAction !== "open") {
+            return;
         }
+        this.router.navigate(`ai-assistant/projects/${this.state.supportProject.id}`);
     }
 
     showCreateProject() {
+        if (this.supportProjectAction !== "create") {
+            return;
+        }
         this.state.showCreateProjectModal = true;
     }
 

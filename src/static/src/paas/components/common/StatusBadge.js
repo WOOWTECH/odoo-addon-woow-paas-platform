@@ -15,12 +15,16 @@ import { _t } from "@web/core/l10n/translation";
  * Props:
  *   - status (string): Service state - running, deploying, upgrading, pending, error, deleting, active, suspended
  *   - size (string, optional): Badge size - 'sm', 'md' (default), 'lg'
+ *   - phase (string, optional): #1159 Q40 — 不新增 state 值，只細分 `initializing`：
+ *     queued / running / waiting_ready / retrying（取自服務 payload 的 `init_phase`）。
+ *     其他 status 一律忽略。
  */
 export class StatusBadge extends Component {
     static template = "woow_paas_platform.StatusBadge";
     static props = {
         status: { type: String },
         size: { type: String, optional: true },
+        phase: { type: String, optional: true },
     };
 
     get statusConfig() {
@@ -127,8 +131,21 @@ export class StatusBadge extends Component {
         return `o_woow_status_badge o_woow_status_badge_${size} ${config.colorClass}`;
     }
 
+    get phaseLabel() {
+        if (this.props.status !== "initializing") {
+            return null;
+        }
+        const labels = {
+            queued: _t("Initializing · Queued"),
+            running: _t("Initializing"),
+            waiting_ready: _t("Initializing · Waiting for app"),
+            retrying: _t("Initializing · Retrying"),
+        };
+        return labels[this.props.phase] || null;
+    }
+
     get label() {
-        return this.statusConfig.label;
+        return this.phaseLabel || this.statusConfig.label;
     }
 
     get showSpinner() {

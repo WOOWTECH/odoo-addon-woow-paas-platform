@@ -16,8 +16,9 @@ ready 一滿足就寫 ``state='running'``，租戶看到綠燈、點進去拿 ``
 
 ## 為什麼閘放在 ``_is_release_ready`` 而不是「寫 running 的那幾個分支」
 
-``_is_release_ready`` 是 #423 W5a 刻意收斂的**單一事實源**（model 的
-``_poll_and_update_status`` 與 controller 的 ``_update_service_status`` 共用）。把閘移到
+``_is_release_ready`` 是 #423 W5a 刻意收斂的**單一事實源**（當時 model 的
+``_poll_and_update_status`` 與 controller 的 ``_update_service_status`` 共用；#1159 起
+list/get 純讀，poll 只剩 model 一份）。把閘移到
 running 的 write 分支要改 6 個點，等於再造一次 #627 的形狀。另外
 ``elif needs_init and original_state == 'initializing'`` 分支**每輪都會重跑**
 ``_run_post_deploy_init``（#1257 起的單一 init 入口）——閘放 write 上，服務會停在 ``initializing`` 反覆進 init
@@ -154,22 +155,6 @@ class _DnsGateCase(TransactionCase):
             service._poll_and_update_status(client)
         return m
 
-    def _poll_controller(self, service=None, resolve='missing'):
-        from odoo.addons.woow_paas_platform.controllers.paas import PaasController
-        service = service or self.svc
-        client = MagicMock()
-        client.get_status.return_value = _status()
-        # ⚠ 不能 patch(...request)：odoo 的 request 是 werkzeug LocalProxy，mock 在
-        # __enter__ 期就會 introspect 它而炸。用 new= 塞替身（同 #484 測試）。
-        fake_request = MagicMock()
-        fake_request.env = self.env
-        with patch(_RESOLVE, return_value=resolve) as m, \
-                patch('%s.get_paas_operator_client' % _CTRL_MODULE,
-                      return_value=client), \
-                patch('%s.request' % _CTRL_MODULE, new=fake_request):
-            PaasController()._update_service_status(service)
-        return m
-
 
 # ====================================================================== #
 #  判定層                                                                 #
@@ -210,8 +195,8 @@ class TestPublicUrlDnsGateVerdict(_DnsGateCase):
         而 ``paas-cs-x-y.woowtech.io`` 只有 2 個點 ⇒ 相對名會**先跑完 4 個 search
         domain 才問絕對名**。實測（prod paas-odoo pod）：miss 相對名約 100–216ms、
         FQDN 約 1–9ms；更要緊的是 resolver 不可用時，relative 最壞是
-        5 次查詢 × (timeout 5s × 2 attempts) ＝ **50 秒**，FQDN 是 10 秒。而平台
-        Odoo 是 ``workers = 0`` / ``max_cron_threads = 1``，cron 逐台序列跑。
+        5 次查詢 × (timeout 5s × 2 attempts) ＝ **50 秒**，FQDN 是 10 秒。而背景
+        cron 逐台序列跑、受 cron 硬上限約束（#1159 Q34）。
         這條把那個性質釘住，否則日後會被無聲改掉。
         """
         with patch(_RESOLVE, return_value='ok') as m:
@@ -292,11 +277,11 @@ class TestPublicUrlDnsGateVerdict(_DnsGateCase):
 
 
 # ====================================================================== #
-#  兩層 poll（#423 W5a：只改一層會被另一層覆寫回去）                        #
+#  poll 端到端（#1159 起只剩 model 一份）                                   #
 # ====================================================================== #
 
 @tagged('post_install', '-at_install')
-class TestPublicUrlDnsGateBothPolls(_DnsGateCase):
+class TestPublicUrlDnsGatePoll(_DnsGateCase):
 
     def test_model_poll_keeps_service_deploying(self):
         """🔴 model（cron）層：DNS 未落地不得翻 running。"""
@@ -307,26 +292,9 @@ class TestPublicUrlDnsGateBothPolls(_DnsGateCase):
             self.svc.state, 'deploying',
             'DNS 還沒落地卻翻 %r' % self.svc.state)
 
-    def test_controller_poll_keeps_service_deploying(self):
-        """🔴 controller（前台每 5 秒）層：同一個單一事實源要同時生效。
-
-        只修 model 層不夠——租戶打開服務詳情頁，controller 那條 poll 會把 cron
-        判好的狀態覆寫回 running（#423 M4 的教訓）。
-        """
-        m = self._poll_controller(resolve='missing')
-
-        self.assertTrue(m.called)
-        self.assertEqual(self.svc.state, 'deploying', self.svc.state)
-
     def test_model_poll_flips_running_when_dns_resolves(self):
         """characterization：DNS 落地 ⇒ 照常翻 running、不留旗標。"""
         self._poll(resolve='ok')
-
-        self.assertEqual(self.svc.state, 'running')
-        self.assertFalse(self.svc.public_url_dns_unverified)
-
-    def test_controller_poll_flips_running_when_dns_resolves(self):
-        self._poll_controller(resolve='ok')
 
         self.assertEqual(self.svc.state, 'running')
         self.assertFalse(self.svc.public_url_dns_unverified)
@@ -356,14 +324,6 @@ class TestPublicUrlDnsGateReleasesWithNotice(_DnsGateCase):
             svc.error_message,
             '不得寫進 error_message——ServiceDetailPage.xml 的 '
             't-if="service.error_message" 不判 state，會直接冒紅色故障 banner')
-
-    def test_expired_window_flags_at_controller_layer_too(self):
-        svc = self._make_service(anchor_seconds_ago=10_000)
-
-        self._poll_controller(svc, resolve='missing')
-
-        self.assertEqual(svc.state, 'running', svc.state)
-        self.assertTrue(svc.public_url_dns_unverified)
 
     def test_flag_is_cleared_once_dns_lands(self):
         """旗標必須清得掉，否則變成永久噪音（running 不在任何 poll 的 domain 裡）。"""
@@ -478,8 +438,8 @@ class TestDnsProbeExecutorIsForkSafe(TransactionCase):
     訊號上完全一樣（沒有 error、測試全綠、服務照樣翻 running）——這個 feature 存在
     的唯一理由會靜靜地失效。
 
-    今天 prod 是 ``workers = 0``（不 fork）所以碰不到，但那是**設定值不是不變式**，
-    改設定的人不會知道要來看這裡。所以用測試釘住。
+    prod 是 prefork（``workers=6``，#1159 Q12 複核）⇒ 這條 fork 安全處理今天就在
+    路徑上。所以用測試釘住。
     """
 
     def test_executor_is_rebuilt_when_the_process_changes(self):
@@ -566,12 +526,12 @@ class TestDnsProbeResolverBackoff(TransactionCase):
     """resolver 整個不可用時要退避，但**不得**被單一壞主機名癱瘓。
 
     ``'unknown'`` 的處置是「放行、連旗標都不動」⇒ resolver 掛掉時每次探測都是「付滿
-    timeout、拿零資訊」。而平台 Odoo 是 ``workers = 0`` ＋ ``max_cron_threads = 1``、
-    ``_cron_check_deploying_services`` 逐台序列跑、``limit_time_real = 120`` ⇒ 轉移中
+    timeout、拿零資訊」。而 ``_cron_check_deploying_services`` 逐台序列跑、受 cron
+    硬上限約束（#1159 Q34）⇒ 轉移中
     的服務一多，那條 cron 會被純粹的等待吃光。
 
     ⚠ 這道閂與 ``_is_public_url_ready`` 開頭那個「窗口外提前 return」**不是同一件事**
-    ——後者在 production 熱路徑上省不到探測（兩份 poll 在更早就探完了）。熱路徑上有效
+    ——後者在 production 熱路徑上省不到探測（背景 poll 在更早就探完了）。熱路徑上有效
     的是這一條。
     """
 

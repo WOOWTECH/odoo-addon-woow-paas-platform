@@ -4,20 +4,18 @@
 - 負例 1：server 不存在、只剩 Running 的 backup Job（或 PG）時，通用規則回就緒；
 - 負例 2：server／PG 健康、housekeeping Job Pending 時，通用規則回未就緒。
 
-透過 cron（``_poll_and_update_status``）與 controller（``_update_service_status``）
-兩個 poll 入口觀察服務狀態——兩者共用 ``_is_release_ready``（#423 的教訓），只測一邊
-會漏掉另一邊被繞過。只替換 operator boundary 與 request env；Pod 一律用
+透過 poll（``_poll_and_update_status``）觀察服務狀態；判定在共用的
+``_is_release_ready``（#423 的教訓）。#1159 起 list/get 純讀，controller 那份 poll
+已刪除，只剩這一個入口。只替換 operator boundary；Pod 一律用
 ``pod_info()`` 組（#1263 交接：沒有身分 key 的手寫 Pod 配 ``pod_identity_included``
 預設 True，是真 operator 不會送出的組合）。
 """
 from datetime import timedelta
-from types import SimpleNamespace
 from unittest.mock import patch
 
 from odoo import fields
 from odoo.tests.common import BaseCase, TransactionCase, tagged
 
-from ..controllers.paas import PaasController
 from ..models.cloud_service import _TIMEOUT_HINTS, _internal_provision
 from ..services.woow_odoo_readiness import (
     CONTRACT_MANAGED,
@@ -28,8 +26,6 @@ from ..services.woow_odoo_readiness import (
     woow_odoo_ready,
 )
 from .operator_contract import ABSENT, operator_client, pod_info, status_response
-
-_ENTRIES = ('cron', 'controller')
 
 
 def _server(**overrides):
@@ -104,31 +100,21 @@ class TestWoowOdooReadinessIdentity(TransactionCase):
         release = {'status': 'deployed', 'revision': 1, 'chart': chart}
         return status_response(pods=pods, release=release, **overrides)
 
-    def _poll(self, entry, status):
+    def _poll(self, status):
         client = operator_client(get_status=status)
-        if entry == 'cron':
-            self.service._poll_and_update_status(client)
-        else:
-            module = 'odoo.addons.woow_paas_platform.controllers.paas'
-            with patch(f'{module}.get_paas_operator_client', return_value=client), \
-                    patch(f'{module}.request', new=SimpleNamespace(env=self.env)):
-                PaasController()._update_service_status(self.service)
+        self.service._poll_and_update_status(client)
         client.get_status.assert_called_once()
 
     def _assert_poll_keeps(self, status, state='deploying'):
-        """兩個入口各 poll 一次，服務都必須留在轉移狀態。"""
-        for entry in _ENTRIES:
-            with self.subTest(entry=entry):
-                self.service.write({'state': state})
-                self._poll(entry, status)
-                self.assertEqual(self.service.state, state)
+        """poll 一次，服務必須留在轉移狀態。"""
+        self.service.write({'state': state})
+        self._poll(status)
+        self.assertEqual(self.service.state, state)
 
     def _assert_poll_reaches_running(self, status, state='deploying'):
-        for entry in _ENTRIES:
-            with self.subTest(entry=entry):
-                self.service.write({'state': state})
-                self._poll(entry, status)
-                self.assertEqual(self.service.state, 'running')
+        self.service.write({'state': state})
+        self._poll(status)
+        self.assertEqual(self.service.state, 'running')
 
     # ------------------------------------------------------------------ #
     #  負例 1：Job／PG 不能冒充 server（Q5）                               #
@@ -311,7 +297,7 @@ class TestWoowOdooReadinessIdentity(TransactionCase):
             'state': 'deploying',
             'deployed_at': fields.Datetime.now() - timedelta(minutes=31),
         })
-        self._poll('cron', status)
+        self._poll(status)
         self.assertEqual(self.service.state, 'error', '前置：這一輪應該逾時')
         return self.service.error_message
 
@@ -371,11 +357,13 @@ class TestWoowOdooReadinessIdentity(TransactionCase):
         self.service.write({'state': 'suspended', 'pre_suspend_state': 'running'})
         deploying = self._make_service('1251 Deploying', 'svc-1251-deploying')
         client = operator_client(get_status=self._status([_server(), _postgres()]))
+        # #1159 Q36：cron 每台服務各 commit 一次；本測試只看它 poll 了哪些服務，
+        # TransactionCase 禁 commit ⇒ 換成 no-op。
         with patch(
             'odoo.addons.woow_paas_platform.services.paas_operator'
             '.get_paas_operator_client',
             return_value=client,
-        ):
+        ), patch.object(self.env.cr, 'commit', lambda: None):
             self.env['woow_paas_platform.cloud_service']._cron_check_deploying_services()
 
         polled = [c.kwargs.get('release_name') for c in client.get_status.call_args_list]

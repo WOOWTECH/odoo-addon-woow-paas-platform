@@ -455,23 +455,17 @@ class TestPollRecordsOutOfBandChartVersion(_Base):
     """(a) 第五條回寫路徑：poll 是唯一抓得到「非平台發起的變動」的地方。
 
     #642 §4.1 ④：running／error／initializing×2 這四支各補上
-    `last_release_sync_at` 的基準線＋前進斷言——與姊妹檔
-    `test_poll_mirror_release_facts_627.py` 對 model 那份 poll 的覆蓋同形，這裡
-    補的是 controller 那份。`_stale_sync_at()` 從那個檔案匯入，不在本檔手抄
-    第二份：這正是 #627 的教訓（兩份實作、只驅動一份的測試全綠）在測試 helper
-    層級的同構版本。
+    `last_release_sync_at` 的基準線＋前進斷言。`_stale_sync_at()` 從
+    `test_poll_mirror_release_facts_627.py` 匯入，不在本檔手抄第二份（#627 的教訓在
+    測試 helper 層級的同構版本）。
+    #1159：本類原本驅動 controller 那份 poll；list/get 純讀之後 poll 只剩 model 一份
+    （`CloudService._poll_and_update_status`），改驅動它，逐分支的回寫斷言不變。
     """
 
     def _poll(self, service, status_payload):
-        from odoo.addons.woow_paas_platform.controllers.paas import PaasController
-
         client = MagicMock()
         client.get_status.return_value = status_payload
-        fake_request = MagicMock()
-        fake_request.env = self.env
-        with patch(f'{_CONTROLLER}.get_paas_operator_client', return_value=client), \
-                patch(f'{_CONTROLLER}.request', new=fake_request):
-            PaasController()._update_service_status(service)
+        service._poll_and_update_status(client)
         service.invalidate_recordset()
 
     def _status(self, **release_overrides):
@@ -554,26 +548,12 @@ class TestPollRecordsOutOfBandChartVersion(_Base):
     #                                                                     #
     #  ⇒ 「守錯層」只是表層問題（models 鏡像整份沒被驅動，見                #
     #     test_poll_mirror_release_facts_627.py）；底下還有一層是          #
-    #     **在守對的那一層也沒守全**。以下兩支把 controller 補齊。          #
+    #     **在守對的那一層也沒守全**。以下兩支把 initializing 分支補齊。    #
     # ------------------------------------------------------------------ #
 
     def _poll_with_init_stubbed(self, service, status_payload):
-        """驅動 poll，但把 post-deploy init 擋掉。
-
-        兩條 `initializing` 分支寫完 `release_facts` 之後會呼叫真正的 init（會去打
-        operator 的 init 端點）。本檔要驗的是回寫，不是 init。
-        """
-        from odoo.addons.woow_paas_platform.controllers.paas import PaasController
-
-        client = MagicMock()
-        client.get_status.return_value = status_payload
-        fake_request = MagicMock()
-        fake_request.env = self.env
-        with patch(f'{_CONTROLLER}.get_paas_operator_client', return_value=client), \
-                patch(f'{_CONTROLLER}.request', new=fake_request):
-            # #1257：controller 的 poll 只推進 state、不 dispatch init，不必再 patch。
-            PaasController()._update_service_status(service)
-        service.invalidate_recordset()
+        """驅動 poll（#1159 起 poll 不執行 init，只排進 init cron 的佇列）。"""
+        self._poll(service, status_payload)
 
     def test_initializing_branch_from_deploying_records_it(self):
         """→ `initializing`（首裝：需要 init ＋ 原狀態 `deploying`）。"""

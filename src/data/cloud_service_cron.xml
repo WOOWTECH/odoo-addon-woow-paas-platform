@@ -11,13 +11,48 @@
             <field name="interval_type">minutes</field>
             <field name="active" eval="True"/>
         </record>
-        <!-- Cron: Check deploying/upgrading/initializing services -->
+        <!-- Cron: 背景短 poll（deploying／upgrading／initializing／deleting）
+
+             #1159 Q1：「由觀測推進、離開轉移狀態」的唯一寫入者（list/get 純讀）。
+             它不執行 init，init 在下面那筆獨立的 cron。 -->
         <record id="ir_cron_check_deploying_services" model="ir.cron">
             <field name="name">Cloud Service: Check Deploying</field>
             <field name="model_id" ref="model_woow_paas_platform_cloud_service"/>
             <field name="state">code</field>
             <field name="code">model._cron_check_deploying_services()</field>
             <field name="interval_number">1</field>
+            <field name="interval_type">minutes</field>
+            <field name="active" eval="True"/>
+        </record>
+        <!-- Cron: post-deploy init（#1159 Q4／Q33）
+
+             與上面的短 poll 刻意分成兩筆 ir.cron：core 以 SKIP LOCKED 保證同一筆 cron
+             單例 ⇒ init 最多佔 1 個 cron worker，且不與短 poll 同 job、同交易——一筆
+             Odoo init 最壞 1020s，不能堵住其他服務的 upgrading→running。
+             每 tick 的 wall 預算、n8n 優先、自我 _trigger() 見
+             `CloudService._cron_run_post_deploy_inits`。
+             ⚠ 承載它的 runtime 必須明設 limit_time_real_cron ≥ 1800（Q12／Q34；prod 見
+                woow-paas/paas-app-bundle-cd#154）。
+             ⚠ 本檔是 noupdate：新 record 在升級時會建立，日後改 interval 不會生效。 -->
+        <record id="ir_cron_run_post_deploy_inits" model="ir.cron">
+            <field name="name">Cloud Service: Run Post-deploy Init</field>
+            <field name="model_id" ref="model_woow_paas_platform_cloud_service"/>
+            <field name="state">code</field>
+            <field name="code">model._cron_run_post_deploy_inits()</field>
+            <field name="interval_number">1</field>
+            <field name="interval_type">minutes</field>
+            <field name="active" eval="True"/>
+        </record>
+        <!-- Cron: Public URL 未驗證旗標的背景重探（#1159 Q16／D4）
+
+             list/get 純讀之後，放行時寫下的 public_url_dns_unverified 改由這裡清。
+             只探帶旗標的 running 服務；每 15 分一次（軟提示，延遲可接受）。 -->
+        <record id="ir_cron_reprobe_public_url_dns" model="ir.cron">
+            <field name="name">Cloud Service: Re-probe Public URL DNS</field>
+            <field name="model_id" ref="model_woow_paas_platform_cloud_service"/>
+            <field name="state">code</field>
+            <field name="code">model._cron_reprobe_public_url_dns()</field>
+            <field name="interval_number">15</field>
             <field name="interval_type">minutes</field>
             <field name="active" eval="True"/>
         </record>

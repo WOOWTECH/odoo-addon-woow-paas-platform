@@ -325,10 +325,8 @@ from . import test_smarthome_delete_error_taxonomy_860
 # fix: #525 B3 reset-admin-password 在提交點之後失敗被回報成「重設失敗」→
 # 已生效的一次性明文密碼永久遺失（此處**不得**補 rollback，理由見該檔開頭）
 from . import test_reset_admin_password_post_commit_525b3
-# fix: #525 B5 輪詢器收屍（`_update_service_status` 404 分支）的 `unlink()` 中途
-# 失敗 → 例外逸出 except handler → 被 `_list_services` 的 catch-all 接住，而
-# catch-all 自己 log `svc.name` 撞 MissingError 再逸出 ⇒ 今天是整支清單端點 500；
-# 那道保護只有一個 token 寬（實測：log 改成不會拋 ⇒ 殘留立刻落地）
+# fix: #525 B5 輪詢器收屍（404 分支）的 `unlink()` 中途失敗不得留下刪一半的服務。
+# #1159 起收屍只由背景短 poll 做（list/get 純讀），本檔改走 cron 的端到端測試。
 from . import test_poll_teardown_rollback_525
 # fix: #525 B4 _update_project_mcp_server 吞 ValidationError → 欄位已改、API 說失敗
 # （結構缺陷，目前潛伏；含「不包 try 的對照組真的不留殘留」實測）
@@ -944,6 +942,11 @@ from . import test_skip_trial_dates_1261
 # migration），含 #1266（suspend 吃掉 init）與 #1267（reconfigure／rollback 繞過
 # init）的重現。會走到 init 入口的測試用真 cursor＋真 commit＋事後清理。
 from . import test_init_execution_control_1257
+
+# #1159：post-deploy init 的執行面（list/get 純讀、背景 poll 與 deleting 收尾、獨立
+# init cron、等待短路、監控、DNS 背景重探、租戶 UI 的資料）。會走到 cron 迴圈或 init
+# 入口的測試用真 cursor＋真 commit＋事後清理。
+from . import test_init_exec_surface_1159
 
 # #1294：非系統管理員的工作區 owner/admin 刪不掉自己的 SH（ACL unlink=0 ＋ 前置檢查
 # 連 route 子表一起驗）。守 owner/admin 經真 HTTP 刪得掉、user/guest／跨工作區仍被拒、

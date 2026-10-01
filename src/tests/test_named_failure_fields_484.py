@@ -294,28 +294,6 @@ class TestPodRetrievalErrorIsFailClosed(_ReadinessCase):
             self.svc.state, 'deploying',
             '查不到 pod 卻翻 %r' % self.svc.state)
 
-    def test_pod_retrieval_error_fail_closed_at_controller_layer_too(self):
-        """controller 呼叫點走同一個單一事實源（W5a 收斂的驗收）。
-
-        只修 model 層不夠：租戶打開前台服務詳情頁，controller 那條 poll 會把狀態
-        覆寫回 running（#423 M4 的教訓）。
-        """
-        from odoo.addons.woow_paas_platform.controllers.paas import PaasController
-
-        client = MagicMock()
-        client.get_status.return_value = _status(
-            pods=[], pod_retrieval_error='Forbidden')
-        # ⚠ 不能 patch(...request)：odoo 的 request 是 werkzeug LocalProxy，mock 在
-        # __enter__ 期就會 introspect 它而炸 "object is not bound"。用 new= 塞替身。
-        fake_request = MagicMock()
-        fake_request.env = self.env
-        module = 'odoo.addons.woow_paas_platform.controllers.paas'
-        with patch(f'{module}.get_paas_operator_client', return_value=client), \
-                patch(f'{module}.request', new=fake_request):
-            PaasController()._update_service_status(self.svc)
-
-        self.assertEqual(self.svc.state, 'deploying', self.svc.state)
-
 
 @tagged('post_install', '-at_install')
 class TestContainerReadinessAnchors(_ReadinessCase):

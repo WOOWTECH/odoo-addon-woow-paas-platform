@@ -5,6 +5,7 @@ import { SubscriptionBadge } from "../subscription/SubscriptionBadge";
 import { WoowIcon } from "../icon/WoowIcon";
 import { WoowButton } from "../button/WoowButton";
 import { getDomain } from "../../services/cloud_service";
+import { getInitFailureText } from "../../utils/service_presentation";
 
 /**
  * ServiceCard Component
@@ -82,6 +83,11 @@ export class ServiceCard extends Component {
             cls += " o_woow_cloud_service_card_error";
         }
         return cls;
+    }
+
+    /** #1159：與詳情頁共用固定 init 失敗文案，不能露出 operator 原始錯誤。 */
+    get initFailureText() {
+        return getInitFailureText(this.props.service);
     }
 
     onClick(ev) {

@@ -272,6 +272,33 @@ class TestInitializingRemovalRejected(_NonRunningRemovalCase):
 
 
 @tagged('post_install', '-at_install')
+class TestInitExhaustedErrorRemovalRejected(_NonRunningRemovalCase):
+    """#1159 Q30：init 額度出口的 error 可 reconfigure（UI 可編輯），但 removal 仍只限 running。
+
+    Q30 的 reconfigure 放行在 removal 裁決之前，所以這一格要真的走到 ``must be running``；
+    被拒時 addon 選擇還原、不開新一代、不送 helm upgrade。
+    """
+
+    service_state = 'error'
+
+    def setUp(self):
+        super().setUp()
+        self.svc.sudo().write({'init_exit': 'failed'})
+        self.assertTrue(self.svc._init_reconfigure_exit(), '前提：這是 init 額度出口的 error')
+
+    def test_non_running_service_removal_is_rejected(self):
+        generation = self.svc.init_generation
+        client = self._client(
+            modules={_TECH_NAME: {'state': 'uninstalled', 'dependents': []}})
+        self._assert_both_paths_reject(client, 'must be running')
+        client.get_odoo_module_states.assert_not_called()
+        client.upgrade_release.assert_not_called()
+        self.svc.invalidate_recordset()
+        self.assertEqual((self.svc.state, self.svc.init_generation), ('error', generation),
+                         '被拒的 removal 不得開新一代或進入升級')
+
+
+@tagged('post_install', '-at_install')
 class TestAdjudicationIsSharedNotDuplicated(_AddonRemovalCase):
     """裁決點單一化後，兩條路徑對「模組實際狀態」的處置也必須成對可預測。
 
