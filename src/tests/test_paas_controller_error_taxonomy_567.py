@@ -190,9 +190,16 @@ class TestPaaSCreateAndSkipErrorTaxonomy567(HttpCase):
         })
 
     def test_create_operational_error_is_reraised(self):
+        # #991（PR #1300）：私有 `_create_service()` 現在也經
+        # `_PaaSCapability(request.env).cloud_templates()` 要求已認證的主體；
+        # `self.env`（SUPERUSER `__system__`，active=False）會在注入點之前就
+        # `AccessError('Authentication required')`。真實會打 create 的是 workspace
+        # owner，所以與隔壁 skip-trial 那支一樣改用 owner 的 env；受測 workspace
+        # recordset、注入點與斷言都不變。
         controller = PaasController()
         downstream = MagicMock()
-        with patch(_REQUEST, new=MagicMock(env=self.env)), patch.object(
+        owner_env = self.env(user=self.workspace.owner_id)
+        with patch(_REQUEST, new=MagicMock(env=owner_env)), patch.object(
             SubscriptionLifecycleMixin,
             '_create_and_confirm_subscription',
             side_effect=OperationalError('create-retry-567'),
@@ -210,9 +217,10 @@ class TestPaaSCreateAndSkipErrorTaxonomy567(HttpCase):
     def test_skip_trial_operational_error_is_reraised(self):
         """🔴 `request.env` 必須是 **workspace owner** 的 env，不能是 `self.env`。
 
-        隔壁 `test_create_operational_error_is_reraised` 用 `self.env` 是對的——它
-        呼叫的是**私有**的 `_create_service()`，前面沒有任何閘。本條呼叫的是**公開
-        端點** `api_service_skip_trial()`，而它在 try 之前有兩道會 return 的閘
+        （#991／PR #1300 起，隔壁 `test_create_operational_error_is_reraised` 呼叫的
+        私有 `_create_service()` 也經 capability 要求已認證主體，同樣改用 owner env。）
+        本條呼叫的是**公開端點** `api_service_skip_trial()`，而它在 try 之前有兩道會
+        return 的閘
         （`src/controllers/paas.py:1357` 的 Service not found、`:1361` 的
         Admin access required）。
 

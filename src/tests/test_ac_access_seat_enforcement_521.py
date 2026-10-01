@@ -465,12 +465,32 @@ class TestAcSeatQuotaBff(_SeatFixture, TransactionCase):
 
     allow_inherited_tests_method = True
 
+    def setUp(self):
+        super().setUp()
+        # #991／#1300：`_create_policy` 帶 route_id 時經 `_PaaSCapability` 把
+        # route 釘在 SA 底下，要求「已認證」的 workspace 成員；test superuser
+        # （`__system__`，active=False）不算，會在 `Policy.create` 之前就回
+        # 「Route not found」——席位 constraint 根本走不到。真實會建 policy 的是
+        # workspace owner／admin，所以 harness 以一位 internal admin 成員的身分
+        # 當 `request.env`。只換呼叫者：受測 SA recordset、斷言與 production
+        # 皆不變，不放寬 capability。（工作區成員不是席位，席位只算 policy 裡的
+        # email——加這位成員不影響被測的席位計數。）
+        self.member = self.env['res.users'].with_context(
+            no_reset_password=True).create({
+                'name': 'Seat WS Admin', 'login': 'seat_bff_ws_admin',
+                'groups_id': [(6, 0, [self.env.ref('base.group_user').id])],
+            })
+        self.env['woow_paas_platform.workspace_access'].create({
+            'workspace_id': self.workspace.id,
+            'user_id': self.member.id, 'role': 'admin',
+        })
+
     def test_bff_create_policy_surfaces_the_seat_quota_error(self):
         """**預期 RED（實作前）**：回的是 ``success: True``。"""
         self._subscribe(seats=1)
         self._policy(self.r1, 'p1', 'a@x.com')
         controller = SecurityAccessController()
-        with _patch_sa_request(self.env):
+        with _patch_sa_request(self.env(user=self.member)):
             result = controller._create_policy(self.sa, {
                 'name': 'bff-over', 'route_id': self.r2.id,
                 'decision': 'allow',

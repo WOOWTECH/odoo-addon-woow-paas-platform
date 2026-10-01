@@ -1,5 +1,6 @@
 """Tests for Cloud API endpoints."""
 import json
+from types import SimpleNamespace
 from unittest.mock import patch, MagicMock
 
 from odoo.tests.common import HttpCase, TransactionCase
@@ -491,7 +492,18 @@ class TestSeedTemplateHelmValueSpecs(TransactionCase):
 
         # Endpoint-level guard: the payload the frontend actually receives must carry a
         # non-empty required list, otherwise the Application Settings card is hidden.
-        formatted = controller._format_template(n8n, include_values=True)
+        # #991（#1300）：`_format_template(include_values=True)` 依呼叫者
+        # `request.env.user.share` 分流 portal／internal，未綁 request 會
+        # RuntimeError。configure 頁的真實呼叫者是已登入的 internal 使用者——harness
+        # 只補上這個身分；被測 template recordset 與斷言都不變。
+        viewer = self.env['res.users'].with_context(no_reset_password=True).create({
+            'name': 'Seed specs configure viewer',
+            'login': 'seed-specs-configure-viewer',
+            'groups_id': [(6, 0, [self.env.ref('base.group_user').id])],
+        })
+        with patch('odoo.addons.woow_paas_platform.controllers.paas.request',
+                   new=SimpleNamespace(env=self.env(user=viewer))):
+            formatted = controller._format_template(n8n, include_values=True)
         self.assertTrue(
             formatted['helm_value_specs'].get('required'),
             "n8n template must expose required helm_value_specs to the configure page",

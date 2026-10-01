@@ -520,7 +520,14 @@ class TestSkipTrialPreviewContract980(TransactionCase):
         controller = paas_controller_module.PaasController()
         request_mock = MagicMock()
         request_mock.env.company.id = 7
-        Move = request_mock.env.__getitem__.return_value
+        # #991（PR #1300）：controller 的 sudo recordset 一律先 `with_context({})`，
+        # 不繼承 request 上可偽造的 `default_*`／身分 context（設計見
+        # docs/plans/2026-Q4/2026-10-01-portal-paas-access-design.md）。preview 的
+        # 鏈因此是 `env['account.move'].with_context({}).sudo().new(vals)`；
+        # 下面「釘 subscription company → sudo().new」的斷言原樣套在清掉 context
+        # 之後的那個 model 上，另加一條釘住 context 確實被清空。
+        RawMove = request_mock.env.__getitem__.return_value
+        Move = RawMove.with_context.return_value
         preview = Move.sudo.return_value.new.return_value
         vals = {'journal_id': 99}
         sub = MagicMock()
@@ -545,6 +552,8 @@ class TestSkipTrialPreviewContract980(TransactionCase):
             vals['company_id'], 42,
             'preview 必須釘 subscription company，不得誤吃 request env company',
         )
+        RawMove.with_context.assert_called_once_with({})
+        RawMove.sudo.assert_not_called()
         Move.sudo.assert_called_once_with()
         Move.sudo.return_value.new.assert_called_once_with(vals)
         payability.assert_called_once_with(preview)

@@ -6,12 +6,18 @@ errors and uncaught exceptions remain fatal, including during page startup.
 
 Registered in tests/__init__.py. These browser cases are not executed by the
 host-side static/JavaScript checks.
+
+Opt-out of the standard run (`-standard`, tag `portal_browser_1300`): every
+method drives `HttpCase.browser_js`, and the paas-odoo image used by CI has no
+Chromium and no `websocket-client`, so in CI they can only SkipTest (C4 then
+rejects the unlisted skip) or pass vacuously inside subTests. Run them where a
+browser exists with `--test-tags portal_browser_1300`.
 """
 from odoo.tests import HttpCase, tagged
 from odoo.tests.common import new_test_user
 
 
-@tagged("post_install", "-at_install")
+@tagged("-standard", "post_install", "-at_install", "portal_browser_1300")
 class TestPortalPaaSBootstrap20261001(HttpCase):
     @classmethod
     def setUpClass(cls):

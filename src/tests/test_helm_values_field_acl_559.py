@@ -19,6 +19,8 @@ helper，對「租戶身分」這條路徑零覆蓋。所以本檔每一條會�
 的世界照樣全綠。
 """
 import json
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from odoo.exceptions import AccessError
 from odoo.tests.common import TransactionCase
@@ -158,8 +160,15 @@ class TestTenantFacingPathsStillWork(_TenantServiceFixture):
         ⇒ 這條以 ``AccessError`` 變紅。這正是加 groups= 當下真實 API 的症狀，
         而修復前的全套測試對它零覆蓋。
         """
-        payload = self.controller._format_service(
-            self._as_tenant(), include_details=True)
+        # #991（#1300）：detail 分支依**呼叫者** `request.env.user.share` 決定
+        # helm_values 的 DTO（portal → 宣告過的設定；internal → `_sanitize_helm_values`）。
+        # 本 class 的租戶是 internal（base.group_user）guest 成員，所以 controller 看到的
+        # request 也必須是同一位租戶——否則 request 未綁會 RuntimeError，或以 superuser
+        # 身分量到的就不是租戶那條路徑。
+        with patch('odoo.addons.woow_paas_platform.controllers.paas.request',
+                   new=SimpleNamespace(env=self.env(user=self.tenant))):
+            payload = self.controller._format_service(
+                self._as_tenant(), include_details=True)
 
         self.assertIn('helm_values', payload,
                       '租戶必須仍看得到自己的設定（只是遮罩過）')

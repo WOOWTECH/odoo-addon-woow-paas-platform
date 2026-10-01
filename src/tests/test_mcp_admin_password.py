@@ -84,7 +84,10 @@ class TestMcpAdminPassword(TransactionCase):
                 },
             }),
         })
-        payload = self.controller._format_service(self.service, include_details=True)
+        # #991（#1300）：detail 分支依呼叫者 `request.env.user.share` 決定 helm_values
+        # 的 DTO——以 internal workspace admin 的身分開詳情頁（見 `_controller_member`）。
+        with self._patch_paas_request():
+            payload = self.controller._format_service(self.service, include_details=True)
         self.assertNotIn('must-not-leak', json.dumps(payload))
         self.assertEqual(
             payload['helm_values']['config']['nonSensitive']['connection'],
@@ -587,10 +590,33 @@ class TestMcpAdminPassword(TransactionCase):
     # 測不出差異。下面兩支分別鎖死漂移的兩個方向。
     # ------------------------------------------------------------------
 
+    def _controller_member(self):
+        """controller 看到的呼叫者：本 workspace 的 internal admin 成員（lazily 建一次）。
+
+        #991（#1300）：controller 經 `_PaaSCapability` 要求已認證的 workspace 成員，
+        superuser（`__system__`，active=False）不算；detail 序列化也改讀
+        `request.env.user.share`。真實會建服務／按 Reset／開詳情頁的是 workspace
+        owner／admin（`api_workspace_services` create 限 owner／admin、reset 限
+        ROLE_ADMIN），所以 harness 以一位 internal admin 成員的身分呼叫——只換
+        `request.env` 的身分，受測 recordset、斷言與 production 都不變。
+        """
+        if not getattr(self, '_member', None):
+            self._member = self.env['res.users'].with_context(no_reset_password=True).create({
+                'name': 'MCP password workspace admin',
+                'login': 'mcp-password-workspace-admin',
+                'groups_id': [(6, 0, [self.env.ref('base.group_user').id])],
+            })
+            self.env['woow_paas_platform.workspace_access'].create({
+                'workspace_id': self.workspace.id,
+                'user_id': self._member.id,
+                'role': 'admin',
+            })
+        return self._member
+
     def _patch_paas_request(self):
         return patch(
             'odoo.addons.woow_paas_platform.controllers.paas.request',
-            new=MagicMock(env=self.env),
+            new=MagicMock(env=self.env(user=self._controller_member())),
         )
 
     def test_controller_create_uses_has_admin_gui_not_slug_allowlist(self):

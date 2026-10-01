@@ -481,10 +481,30 @@ class TestAllowPolicyBulkGrantEndpoint(_BulkGrantFixture, TransactionCase):
                 'workspace_id': self.workspace.id,
                 'user_id': self.env.user.id, 'role': 'owner',
             })
+        # #991／#1300：endpoint 經 `_PaaSCapability` 解析 workspace／SA／route／
+        # policy，要求「已認證」的 workspace 成員；test superuser（`__system__`，
+        # active=False）不算，會在任何守衛之前就回「Workspace not found or access
+        # denied」。真實會建／改 policy 的是 workspace owner／admin，所以 harness
+        # 以一位 internal admin 成員的身分當 `request.env`。只換呼叫者：受測
+        # endpoint、斷言與 production 皆不變，不放寬 capability。
+        self.member = self.env['res.users'].with_context(
+            no_reset_password=True).create({
+                'name': 'Bulk Grant WS Admin',
+                'login': 'bulk-grant-admin-%s' % uuid.uuid4().hex[:8],
+                'groups_id': [(6, 0, [self.env.ref('base.group_user').id])],
+            })
+        Access.create({
+            'workspace_id': self.workspace.id,
+            'user_id': self.member.id, 'role': 'admin',
+        })
+
+    def _member_request(self):
+        """controller 看到的 request：已認證的 workspace admin 成員（見 setUp）。"""
+        return _patch_sa_request(self.env(user=self.member))
 
     def _create_via_api(self, name, include, decision='allow'):
         with patch(MOCK_GET_CLIENT), patch(MOCK_GET_CLIENT_MODEL), \
-                _patch_sa_request(self.env):
+                self._member_request():
             return self.controller.api_sa_access_policies(
                 workspace_id=self.workspace.id, sa_id=self.sa.id,
                 action='create', name=name, decision=decision,
@@ -554,7 +574,7 @@ class TestAllowPolicyBulkGrantEndpoint(_BulkGrantFixture, TransactionCase):
         self.assertTrue(ok['success'], ok.get('error'))
         policy_id = ok['data']['id']
         with patch(MOCK_GET_CLIENT), patch(MOCK_GET_CLIENT_MODEL), \
-                _patch_sa_request(self.env):
+                self._member_request():
             res = self.controller.api_sa_access_policies(
                 workspace_id=self.workspace.id, sa_id=self.sa.id,
                 action='update', policy_id=policy_id,
