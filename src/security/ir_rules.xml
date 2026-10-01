@@ -204,8 +204,15 @@
              role=owner 的 access），所以 owner 資格是**可自我滿足**的，rule 擋不住
              「繞過下單流程自建」（#519 對 cloud_service 的裁決，這裡同構）。
              第 3 軸的閘在 `SmartHome.create()` 第一行（sentinel）。
-             `perm_unlink` 同理只是形態一致——ACL 的 `access_smart_home_user` 本來
-             就是 `unlink=0`，租戶刪不掉。 -->
+
+             `perm_unlink`：#1294 起 ACL `access_smart_home_user` 改成 `unlink=1`
+             （租戶 owner/admin 要能刪自己的 SH，與 SA 一致），**這條 rule 就是
+             租戶 unlink 的唯一範圍限制**：unlink 時 Odoo 只取 `perm_unlink=True`
+             的 rule，上面 member_read 那條是 False ⇒ 不參與、不會把刪除放寬到
+             user/guest；本 model 也沒有 `*_rule_admin_full` 永真腿 ⇒ 跨工作區
+             （或同工作區的 user/guest）unlink 一律 AccessError。controller 的
+             owner/admin gate（`controllers/smart_home.py`）與這條同條件
+             （two-layer-acl-lockstep）。 -->
         <record id="smart_home_rule_owner_admin_manage" model="ir.rule">
             <field name="name">SmartHome: workspace owner/admin manage</field>
             <field name="model_id" ref="model_woow_paas_platform_smart_home"/>
@@ -232,7 +239,12 @@
              `read=1,write=1,create=0,unlink=0`——租戶改得動自己那條 route 的
              Access 設定，但建不出、也刪不掉 route（本階段沒有 route CRUD）。
              `perm_create` / `perm_unlink` 在下面這條 rule 裡是 True 只是形態
-             一致，真正擋住的是 ACL 那層。 -->
+             一致，真正擋住的是 ACL 那層。
+
+             #1294：租戶刪除**整台 SH** 時，route 由 `SmartHome.unlink()` 以平台
+             身分（sudo）跟著刪——授權判準是「呼叫者能不能刪這台 SH」（前置檢查
+             `_assert_unlink_authorized` 驗的就是那一張），route 的 ACL 刻意維持
+             `unlink=0`，不因此開出 route 的單獨刪除入口。 -->
         <record id="smart_home_route_rule_member_read" model="ir.rule">
             <field name="name">SmartHomeRoute: workspace member read</field>
             <field name="model_id" ref="model_woow_paas_platform_smart_home_route"/>

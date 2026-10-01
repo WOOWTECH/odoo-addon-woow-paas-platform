@@ -18,6 +18,8 @@ from ..services.paas_capability import _PaaSCapability
 # #536：sync-control 的兩個逃生門只認模組私有 sentinel（`call_kw` 把呼叫端
 # context 整包換進 env，只判 truthy 的 key 租戶自己就打得開）。
 from ..models.security_access import _rule_replace, _skip_route_sync
+# 建立閘（同 smart_home #524）：本檔是 security_access 唯一的租戶側建立點。
+from ..models.security_access import _sa_platform_order
 from odoo import _
 
 _logger = logging.getLogger(__name__)
@@ -620,11 +622,17 @@ class SecurityAccessController(Controller):
 
         SecurityAccess = workspace.env["woow_paas_platform.security_access"]
         try:
-            sa = SecurityAccess.create({
+            # 建立閘只開在這一次 create 上（模型層 `_PLATFORM_SA_ORDER`）；
+            # 之後的操作改用不帶開閘 context 的 handle，逃生口的表面積只留在
+            # 真正的落地點。internal 沿用呼叫者 ORM/rules；Portal 的窄範圍
+            # recordset 已由 capability＋本端點驗過 workspace／owner-admin，
+            # 保留原 uid，但不可把其 sudo 誤稱為仍由 ir.rule 授權。
+            created = _sa_platform_order(SecurityAccess).create({
                 "name": name,
                 "workspace_id": workspace.id,
                 "template_id": template.id,
             })
+            sa = SecurityAccess.browse(created.id)
             partner = workspace.owner_id.partner_id
             _logger.info(
                 "[SA] create sa=%s workspace=%s partner=%s plan=%s",

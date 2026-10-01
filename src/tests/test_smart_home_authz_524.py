@@ -552,7 +552,8 @@ class TestSmartHomeTunnelAnchor524(_SmartHome524Fixture):
     #    （回歸測試 `test_sh_provision_tenant_rpc_739.py`）。C6／C7 走 `.sudo()`
     #    的理由**不受影響**：它們要對準的本來就是「伺服器端合法寫入點穿得過
     #    錨點閘」，那與租戶端點通不通是兩件事。`action='delete'` 撞 ACL
-    #    `unlink=0` 那半句 **#739 沒有動**，仍然成立。
+    #    `unlink=0` 那半句 #739 沒有動，**#1294 已修**（owner/admin 刪得掉，
+    #    回歸測試 `test_sh_tenant_delete_1294.py`）。
     #
     #    但錨點閘要證明的是「**伺服器端合法寫入點穿得過去**」，那條路徑正是
     #    `action_provision` / `_cleanup_tunnel` 內部的 write，所以在這裡以

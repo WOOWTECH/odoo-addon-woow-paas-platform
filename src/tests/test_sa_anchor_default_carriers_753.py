@@ -49,6 +49,7 @@ from odoo.tests import HttpCase, tagged
 
 from odoo.addons.woow_paas_platform.models.security_access import (
     _INTERNAL_IDENTITY_WRITE,
+    _sa_platform_order,
 )
 
 _SA = 'woow_paas_platform.security_access'
@@ -138,6 +139,23 @@ class _SaAnchor753Fixture(HttpCase):
         self.env.invalidate_all()
         return resp.json()
 
+    def _tenant_create_sa(self, vals, context=None):
+        """以**租戶身分**建 SA（#1298 起 SA 有建立閘）。
+
+        #1298 之後租戶經 `/web/dataset/call_kw` 裸 create SA 一律被建立閘擋下
+        （`SecurityAccessOrderGateError`）⇒ 「`default_<anchor>` context 經 call_kw
+        送進來」這條路在 SA 上已結構性關閉。錨點剝除仍是唯一合法建立點（/woow
+        下單，租戶身分＋開閘）的守線，所以 A／D 系列改成 in-process：以同一個
+        租戶 env、帶同一份 context（`call_kw` 本來就是把 context 整包換進 env，
+        兩者對 `create()` 而言等價），只多開建立閘、**不**開錨點閘。
+        """
+        handle = self.SA.with_user(self.alice)
+        if context:
+            handle = handle.with_context(**context)
+        sa = _sa_platform_order(handle).create(vals)
+        self.env.invalidate_all()
+        return sa.id
+
     def _error_text(self, result):
         data = result.get('error', {}).get('data', {}) or {}
         return '%s %s' % (data.get('name', ''), data.get('message', ''))
@@ -204,17 +222,15 @@ class TestSaAnchorDefaultCarriers753(_SaAnchor753Fixture):
         且被 `_IDENTITY_ANCHOR_FIELDS` 上方的註解明列為「NOT 錨點」。它必須被
         注入成功，否則下面每一條「沒被注入」都可能只是 context 根本沒到。
         """
-        self.authenticate(self.alice_login, self.alice_login)
-        sa_id = self._assert_ok(self._call_kw(
-            _SA, 'create',
-            [{'name': 'ctx default injection', 'workspace_id': self.w1.id}],
-            {'context': {
+        sa_id = self._tenant_create_sa(
+            {'name': 'ctx default injection', 'workspace_id': self.w1.id},
+            {
                 'default_tunnel_id': self.victim_tunnel,
                 'default_tunnel_name': 'stolen-tunnel-name',
                 'default_tunnel_token': 'stolen-token',
                 'default_canonical_name': 'paas-sa-victim-squat',
                 'default_tunnel_status': 'connected',
-            }}), 'create 不該回 JSON-RPC error')
+            })
 
         self.assertEqual(
             self._db(_SA, sa_id, 'tunnel_status'), 'connected',
@@ -241,14 +257,12 @@ class TestSaAnchorDefaultCarriers753(_SaAnchor753Fixture):
         「不處理它」（那就是本 issue 的洞），也不能壓 False（那會炸掉 required，
         見 D1）——落地值必須是**伺服器產生的 uuid4**。
         """
-        self.authenticate(self.alice_login, self.alice_login)
-        sa_id = self._assert_ok(self._call_kw(
-            _SA, 'create',
-            [{'name': 'ctx ref injection', 'workspace_id': self.w1.id}],
-            {'context': {
+        sa_id = self._tenant_create_sa(
+            {'name': 'ctx ref injection', 'workspace_id': self.w1.id},
+            {
                 'default_reference_id': self.victim_ref,
                 'default_tunnel_status': 'connected',
-            }}), 'create 不該回 JSON-RPC error')
+            })
 
         self.assertEqual(
             self._db(_SA, sa_id, 'tunnel_status'), 'connected',
@@ -288,10 +302,8 @@ class TestSaAnchorDefaultCarriers753(_SaAnchor753Fixture):
             self._set_ir_default(_SA, 'tunnel_status', 'connected'),
             'ir.default.set（對照欄位）必須成功')
 
-        sa_id = self._assert_ok(self._call_kw(
-            _SA, 'create',
-            [{'name': 'ir.default injection', 'workspace_id': self.w1.id}]),
-            'create 不該回 JSON-RPC error')
+        sa_id = self._tenant_create_sa(
+            {'name': 'ir.default injection', 'workspace_id': self.w1.id})
 
         self.assertEqual(
             self._db(_SA, sa_id, 'tunnel_status'), 'connected',
@@ -382,11 +394,8 @@ class TestSaAnchorGuardDoesNotBreakLegitCreate753(_SaAnchor753Fixture):
     """
 
     def test_D1_ordinary_tenant_create_still_gets_a_server_uuid(self):
-        self.authenticate(self.alice_login, self.alice_login)
-        sa_id = self._assert_ok(self._call_kw(
-            _SA, 'create',
-            [{'name': 'plain create', 'workspace_id': self.w1.id}]),
-            '一般合法 create 不得失敗——壓 False 會在此炸 required')
+        sa_id = self._tenant_create_sa(
+            {'name': 'plain create', 'workspace_id': self.w1.id})
         landed = self._db(_SA, sa_id, 'reference_id')
         self.assertTrue(
             landed,

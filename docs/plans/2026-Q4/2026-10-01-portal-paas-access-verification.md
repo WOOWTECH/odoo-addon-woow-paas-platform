@@ -15,6 +15,16 @@ updated: 2026-10-01
 - 修復前正式環境：Odoo DB `woow_prod`，模組 `18.0.1.0.193`。
 - 只在 `woow-k3s/dev-sandbox-portal-access-20261001` 修改測試資源；沒有修改 prod 使用者、群組、設定、程式或 deployment。
 
+## 與最新 develop 的整合複驗（#1300 合併阻塞修復）
+
+後續 develop 已前進至 `c2705c4f`，包含 #1294/#1295/#1298 的刪除、封存與 ORM 安全守衛，並由 #1302 升為 `18.0.1.0.194`。#1300 原 head 與 `SecurityAccess.action_provision` 發生內容衝突，且 develop 禁止合併落後分支；舊 head CI 綠燈不能解除此阻塞。
+
+更新只合入修復 feature 分支，未代合併 protected develop。衝突保留兩側檢查：先 write ACL，再驗停權／刪除中狀態及訂閱，最後才能進 operator；Workspace unlink 的副作用前權限檢查也保留。版本沿用最新 develop 的 `.194`，不在一般修復 PR 任意 bump。
+
+整合回歸：**223 tests、0 failed、0 errors（31 classes）**，包含前述169項、新增上游守衛及 Portal 不得封存仍有服務的工作區。未放寬新 guard：歷史「已封存但仍掛服務」狀態只在測試 fixture 用 SQL 重建，正式程式沒有 escape hatch；raw SA create 斷言對齊新的 `SecurityAccessOrderGateError`。Portal 下單 fixture 明確建立日誌簿前提，隔離環境亦補齊 sale journal，避免依賴曾經升級過的資料庫。
+
+整合後亦重跑實際 Chromium：Portal/internal、minified/debug-assets、UI 建立／重載／跨帳號隔離、故障重試、320/360px 均通過，沒有非預期 console/page/HTTP error。整合 log：`research/woow-portal-blank-20261001/merge-c2705c4-tests-green.log`。過期的預備 release PR #1301 已關閉；它不能再拿來發布，也不代表 Portal 修復已進正式映像。
+
 ## 隔離
 
 使用者批准建立專屬沙盒。使用全新 `portal_access` DB；沒有 prod DB clone、filestore 或 runtime 憑證注入。應用 DB role 不可建立資料庫／角色，也不是 PostgreSQL superuser。

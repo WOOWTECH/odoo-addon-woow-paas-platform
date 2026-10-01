@@ -939,3 +939,18 @@ from . import test_portal_user_workspace_1261
 # #1261 (d)：skip-trial 後 sh_trial_end_date＝昨天是「試用最後一天（含）、start＝
 # trial_end + 1」的日期慣例，不是 off-by-one；釘住它，免得被「順手修正」成今天。
 from . import test_skip_trial_dates_1261
+
+# #1294：非系統管理員的工作區 owner/admin 刪不掉自己的 SH（ACL unlink=0 ＋ 前置檢查
+# 連 route 子表一起驗）。守 owner/admin 經真 HTTP 刪得掉、user/guest／跨工作區仍被拒、
+# Cloudflare 清理失敗時記錄保住、route 仍沒有單獨刪除入口。
+from . import test_sh_tenant_delete_1294
+
+# #1295：工作區底下還有未刪除的 SA／SH／cloud_service 時拒絕封存（租戶的「刪除工作區」）；
+# 守衛在 model 層 write()，走真 HTTP 驗產品端點與 ORM 直呼兩條路徑。
+from . import test_workspace_archive_guard_1295
+
+# 租戶經 `/web/dataset/call_kw` 直打 SA／SH／工作區 model 的 ORM 層守衛：SA 建立閘
+# （無訂閱裸建＝免費 tunnel）、SA／SH `subscription_id` 不得清空／改指、停權中不得
+# 被租戶帶回服務狀態（含 SA re-sync）、SH 直打 provision 不得先開 tunnel 再炸、工作區
+# 封存／還原 owner-only（admin 擋）。一律 HttpCase＋真租戶 session，每格配陽性對照。
+from . import test_tenant_orm_lifecycle_guards

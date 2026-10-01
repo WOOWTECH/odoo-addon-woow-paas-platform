@@ -29,6 +29,19 @@ class TestPortalPaasCapability20261001(HttpCase):
     def setUp(self):
         super().setUp()
         self.suffix = uuid.uuid4().hex[:10]
+        # Fresh-install tests must not depend on an upgrade or another test
+        # having populated the subscription journal configuration.
+        if not self.env.company.sh_journal_id:
+            journal = self.env['account.journal'].search([
+                ('company_id', '=', self.env.company.id), ('type', '=', 'sale'),
+            ], limit=1)
+            if not journal:
+                journal = self.env['account.journal'].create({
+                    'name': 'Portal test sales', 'type': 'sale',
+                    'code': 'PC' + self.suffix[:3].upper(),
+                    'company_id': self.env.company.id,
+                })
+            self.env.company.sh_journal_id = journal
         self.users = {}
         for label in ('owner', 'admin', 'user', 'guest', 'other', 'invitee'):
             login = 'cap-%s-%s@example.invalid' % (label, self.suffix)
@@ -273,11 +286,12 @@ class TestPortalPaasCapability20261001(HttpCase):
                         'args': [values], 'kwargs': {'context': {'sudo': True, 'uid': 1}},
                     })
                     self.assertIn('error', result, result)
-                    # These two models deliberately reject raw creation via
+                    # These models deliberately reject raw creation via
                     # their dedicated platform-order gates before ORM ACLs.
                     expected_error = {
                         'cloud_service': _PREFIX + 'models.cloud_service.ProvisionGateError',
                         'smart_home': _PREFIX + 'models.smart_home.SmartHomeOrderGateError',
+                        'security_access': _PREFIX + 'models.security_access.SecurityAccessOrderGateError',
                     }.get(model, 'odoo.exceptions.AccessError')
                     self.assertEqual(result['error']['data']['name'], expected_error, result)
             for operator in operators:
@@ -464,6 +478,32 @@ class TestPortalPaasCapability20261001(HttpCase):
             self.assertEqual(body['error']['data']['name'], 'odoo.exceptions.AccessError', body)
             teardown.assert_not_called()
 
+    def _mark_legacy_workspace_archived(self):
+        # #1295 deliberately forbids creating this state even under sudo.
+        # Seed only the historical DB shape for the read-side denial probe;
+        # do not add a production escape hatch or weaken the new guard.
+        self.env.flush_all()
+        self.env.cr.execute(
+            "UPDATE woow_paas_platform_workspace SET state='archived' WHERE id=%s",
+            (self.ws.id,),
+        )
+        self.env.invalidate_all()
+
+    def test_portal_owner_cannot_archive_a_workspace_with_live_resources(self):
+        self._login('owner')
+        with ExitStack() as stack:
+            operators = self._no_operator(stack)
+            body = self._raw('/api/workspaces/%s' % self.ws.id, {'action': 'delete'})
+            self.assertNotIn('error', body, body)
+            result = body['result']
+            self.assertIs(result.get('success'), False)
+            self.assertEqual(result.get('code'), 'workspace_has_services')
+            self.assertEqual(self.ws.state, 'active')
+            self.assertEqual({row['name'] for row in result['data']['services']},
+                             {'own service', 'own home', 'own access'})
+            for operator in operators:
+                operator.assert_not_called()
+
     def test_public_inactive_archived_and_revoked_membership_fail_closed(self):
         public = self.env.ref('base.public_user')
         self.assertFalse(_PaaSCapability(self.env(user=public.id)).workspace(self.ws.id))
@@ -475,8 +515,7 @@ class TestPortalPaasCapability20261001(HttpCase):
         membership.unlink()
         self.env.flush_all()
         self._rpc(self._url('services'), {'action': 'list'}, success=False)
-        self.ws.state = 'archived'
-        self.env.flush_all()
+        self._mark_legacy_workspace_archived()
         self._login('owner')
         self._rpc(self._url('services'), {'action': 'list'}, success=False)
         self._rpc('/api/workspaces/%s' % self.ws.id, {'action': 'get'}, success=False)
@@ -554,8 +593,7 @@ class TestPortalPaasCapability20261001(HttpCase):
         self.authenticate(login, login)
         for family in ('smarthomes', 'security-accesses'):
             self._rpc(self._url(family), {'action': 'list'})
-        self.ws.state = 'archived'
-        self.env.flush_all()
+        self._mark_legacy_workspace_archived()
         for family in ('smarthomes', 'security-accesses'):
             with self.subTest(family=family):
                 self._rpc(self._url(family), {'action': 'list'}, success=False)

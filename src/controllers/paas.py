@@ -34,6 +34,7 @@ from ..models.cloud_service import _internal_provision
 # #536：sync-control 的兩個逃生門只認模組私有 sentinel（`call_kw` 把呼叫端
 # context 整包換進 env，只判 truthy 的 key 租戶自己就打得開）。
 from ..models.security_access import _rule_replace, _skip_route_sync
+from ..models.workspace import WorkspaceHasServicesError
 
 _logger = logging.getLogger(__name__)
 
@@ -560,6 +561,9 @@ class PaasController(HiddenChainMixin, Controller):
         Errors:
             - 'Workspace ID is required' if workspace_id is None
             - 'Workspace not found or access denied' if ID doesn't exist or not owner
+            - code 'workspace_has_services'（#1295）：工作區底下還有未刪除的服務，
+              拒絕封存；`data.services` 為 `[{type, id, name, state}, ...]`，
+              `type` ∈ security_access / smart_home / cloud_service。
         """
         if not workspace_id:
             return {'success': False, 'error': _('Workspace ID is required')}
@@ -578,7 +582,17 @@ class PaasController(HiddenChainMixin, Controller):
         if not workspace.exists() or workspace.owner_id.id != user.id:
             return {'success': False, 'error': _('Workspace not found or access denied')}
 
-        workspace.action_archive()
+        # #1295：守衛在 model 層（`Workspace.write()` → `_check_archivable`），
+        # 這裡只把它轉成結構化回應，前端據 `code` 列出要先刪除的服務。
+        try:
+            workspace.action_archive()
+        except WorkspaceHasServicesError as e:
+            return {
+                'success': False,
+                'code': e.code,
+                'error': e.args[0],
+                'data': {'services': e.services},
+            }
         return {'success': True, 'message': _('Workspace archived')}
 
     # ==================== Workspace Members API ====================

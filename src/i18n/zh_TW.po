@@ -606,6 +606,13 @@ msgid "A user can only have one access record per workspace."
 msgstr ""
 
 #. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/DeleteWorkspaceModal.xml:0
+msgid ""
+"A workspace can only be deleted after every service in it has been deleted."
+msgstr "工作區內的所有服務都刪除之後，才能刪除工作區。"
+
+#. module: woow_paas_platform
 #. odoo-python
 #: code:addons/woow_paas_platform/models/workspace_access.py:0
 msgid ""
@@ -1684,6 +1691,12 @@ msgstr ""
 #: code:addons/woow_paas_platform/static/src/paas/pages/smart-home/SmartHomeDetailPage.xml:0
 msgid "Are you sure you want to delete"
 msgstr "確定要刪除"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/DeleteWorkspaceModal.xml:0
+msgid "Are you sure you want to delete this workspace?"
+msgstr "確定要刪除這個工作區嗎？"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -4086,6 +4099,13 @@ msgstr "刪除 Smart Home"
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/DeleteWorkspaceModal.xml:0
+#: code:addons/woow_paas_platform/static/src/paas/pages/workspace/WorkspaceDetailPage.xml:0
+msgid "Delete Workspace"
+msgstr "刪除工作區"
+
+#. module: woow_paas_platform
+#. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/subscription/PlanSelector.js:0
 msgid "Delete all %(used)s listed email address(es) first"
 msgstr "請先刪除已列出的全部 %(used)s 個 email 位址"
@@ -4113,6 +4133,12 @@ msgstr "刪除政策"
 #: code:addons/woow_paas_platform/static/src/paas/pages/security-access/SecurityAccessDetailPage.xml:0
 msgid "Delete route"
 msgstr "刪除路由"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/DeleteWorkspaceModal.xml:0
+msgid "Delete the following services first, then delete the workspace."
+msgstr "請先刪除以下服務，再刪除工作區。"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -4888,6 +4914,12 @@ msgstr "請輸入"
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/DeleteWorkspaceModal.xml:0
+msgid "Enter the workspace name to confirm"
+msgstr "請輸入工作區名稱以確認"
+
+#. module: woow_paas_platform
+#. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/OneTimeCredentialsModal.js:0
 msgid ""
 "Enter this in the Dashboard REST API section of the MCP connection settings "
@@ -5177,6 +5209,12 @@ msgstr "刪除服務失敗"
 #: code:addons/woow_paas_platform/static/src/paas/pages/smart-home/SmartHomeDetailPage.js:0
 msgid "Failed to delete smart home"
 msgstr "無法刪除 Smart Home"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/DeleteWorkspaceModal.js:0
+msgid "Failed to delete workspace"
+msgstr "刪除工作區失敗"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -13149,6 +13187,14 @@ msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/DeleteWorkspaceModal.xml:0
+msgid ""
+"The workspace will be archived and removed from your workspace list. This "
+"cannot be undone from the workspace pages."
+msgstr "工作區會被封存並從您的工作區清單中移除，無法從工作區頁面復原。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/pages/support-projects/SupportProjectsPage.xml:0
 msgid ""
 "There are no support projects available yet. Create your first project to "
@@ -13513,6 +13559,20 @@ msgstr "這會移除 tunnel 設定與所有相關資料。此操作無法復原�
 msgid ""
 "This will uninstall the existing release and deploy from scratch. Continue?"
 msgstr ""
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/DeleteWorkspaceModal.xml:0
+msgid "This workspace still has services that have not been deleted."
+msgstr "此工作區還有尚未刪除的服務。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/workspace.py:0
+msgid ""
+"This workspace still has services that have not been deleted: %(services)s. "
+"Delete these services first, then delete the workspace."
+msgstr "此工作區還有尚未刪除的服務：%(services)s。請先刪除這些服務，再刪除工作區。"
 
 #. module: woow_paas_platform
 #: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_agent_session__last_state_event_ts
