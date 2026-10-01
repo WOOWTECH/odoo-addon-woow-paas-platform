@@ -556,17 +556,27 @@ class TestSh740GuardIsWhatStopsIt(_Sh740Fixture):
             '「守住了」的功勞不在這道守衛身上，本檔的 A 系列零鑑別力')
 
     def test_D2_without_the_preflight_the_access_app_is_torn_down_again(self):
+        """判準是「teardown 真的送出去了、拆的是這一列的 app」。
+
+        ⚠ 舊版另外斷言 `access_protection_lost=True`（#794 補償的 DB 痕跡）。#1294
+        之後被拒的位置移到 tunnel 刪除之後的 `super().unlink()`，補償接著跑的
+        `_resync_after_fail_open()` 對 mock operator 會重推成功、把旗標自己清掉
+        （CI run 12142 實測為 False）——那是補償機制的收斂行為，不是本題的訊號，
+        所以改錨在外部呼叫本身。
+        """
         home = self._mk_with_route('740 D2', protected=True)
+        app_id = home.sudo().route_ids.access_app_id
+        self.assertTrue(app_id, 'D2 前提：route 上要有 app id')
         with self._without_the_preflight():
-            client, res, _b, after = self._denied_rpc(home, 'D2')
+            client, res, _b, _after = self._denied_rpc(home, 'D2')
         self.assertIn('error', res,
                       'D2：拿掉前置檢查之後授權仍然要被拒，回 %r' % (res,))
+        teardowns = [c.args[0] for c in client.sync_access_app.call_args_list
+                     if c.args and c.args[0].get('enabled') is False]
         self.assertTrue(
-            client.sync_access_app.called,
-            'D2：拿掉前置檢查之後 Access teardown 必須又被送出')
-        self.assertEqual(
-            [r['access_protection_lost'] for r in after['routes']], [True],
-            'D2：拿掉前置檢查之後 #794 的補償必須又跑（＝保護真的沒了）')
+            any(p.get('existing_app_id') == app_id for p in teardowns),
+            'D2：拿掉前置檢查之後，這一列的 Access app 必須又被拆掉'
+            '（實送 teardown %r）' % (teardowns,))
 
 
 # ---------------------------------------------------------------------- #
