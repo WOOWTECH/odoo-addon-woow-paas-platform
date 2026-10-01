@@ -913,8 +913,8 @@ class CloudService(models.Model):
         help='First time the pods were seen ready during this initializing stretch '
              '(#1159 Q33 queue order, Q28b n8n owner confirmation window)',
     )
-    # Q28b／S1：本 episode 已發出「平台尚未確認 n8n owner」告警的時間；每 episode 一行，
-    # 重新進 initializing 時與 init_ready_since 一起清掉。只有平台寫得進去。
+    # Q28b：本 episode 已發出「平台尚未確認 n8n owner」告警的時間；每 episode 一行，
+    # 開新一代或重新進 initializing 時與 init_ready_since 一起清掉。只有平台寫得進去。
     n8n_owner_alerted_at = fields.Datetime(
         string='n8n Owner Alerted At',
         copy=False,
@@ -4360,6 +4360,14 @@ class CloudService(models.Model):
                 'init_wait_started_at': False,
                 'init_retry_eligible_at': False,
                 'init_queue_turn': False,
+                # 新一代的 n8n owner 確認窗口重新起算：停權中 redeploy 或開代後在部署階段
+                # 失敗時不會再「進入 initializing」，若不在此清，owner 監控會拿前一代的舊
+                # 錨點對新一代誤報。init_ready_since 空著時由下一次短 poll 觀測寫回（排序以
+                # init_queue_turn 為先，claim／capacity 不讀它）。init_ready_observed 刻意不清：
+                # 它的讀者都限定 state='initializing'，而在 initializing 中開代（P1-1）時
+                # 仍需立即可 claim；離開後再進 initializing 由 write() 清掉。
+                'init_ready_since': False,
+                'n8n_owner_alerted_at': False,
             })
 
     def _init_lease_active(self):
@@ -4936,7 +4944,7 @@ class CloudService(models.Model):
             cr.commit()
             return
         try:
-            # n8n owner 監控不在此觸發：短 poll 掃描同時涵蓋 live、冷補套與等待／失敗（S1）。
+            # n8n owner 監控不在此觸發：短 poll 掃描同時涵蓋 live、冷補套與等待／失敗。
             self._init_apply_outcome(attempt, outcome, masked)
             cr.commit()
         except Exception:

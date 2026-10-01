@@ -46,7 +46,8 @@ OBSERVED_STALE_MINUTES = 15
 UNKNOWN_WINDOW_HOURS = 24
 CAPACITY_WAIT_MINUTES = 30
 N8N_OWNER_WINDOW_MINUTES = 5
-# D-3：等待、失敗（含 wait_timeout）、running（冷補套／晚到的確認）、停權都掃；deleting 不掃。
+# 掃描範圍（#1159 owner 裁決 2026-10-01）：等待、失敗（含 wait_timeout）、running（冷補套／
+# 晚到的確認）、停權都掃；deleting 不掃。
 N8N_OWNER_SCAN_STATES = ('initializing', 'error', 'running', 'suspended')
 
 
@@ -106,9 +107,7 @@ class PlatformMonitor(models.Model):
                 for activity in existing:
                     activity.note = (activity.note or Markup()) + Markup('<p>%s</p>') % append_line
             return False
-        todo = self.env.ref('mail.mail_activity_data_todo', raise_if_not_found=False)
-        users = self.env.ref('base.group_system').users.filtered(
-            lambda u: u.active and not u.share)
+        todo, users = self._alert_recipients()
         if not (todo and users):
             _logger.warning("[#1159] cannot raise monitor alert %r (todo=%s users=%s)",
                             summary, bool(todo), len(users))
@@ -121,6 +120,14 @@ class PlatformMonitor(models.Model):
                 activity_type_id=todo.id, summary=summary, note=body, user_id=user.id)
         _logger.warning("[#1159] monitor alert raised: %s — %s", summary, note)
         return True
+
+    @api.model
+    def _alert_recipients(self):
+        """告警的 activity type 與收件者（active、非 share 的 ``base.group_system``）。"""
+        todo = self.env.ref('mail.mail_activity_data_todo', raise_if_not_found=False)
+        users = self.env.ref('base.group_system').users.filtered(
+            lambda u: u.active and not u.share)
+        return todo, users
 
     @api.model
     def _safe_alert(self, summary, note, append_line=None):
@@ -248,7 +255,7 @@ class PlatformMonitor(models.Model):
                                    for service in waiting)))
 
     def _n8n_owner_confirmed_services(self, services):
-        """D-1＝C／A1：回傳在各自期限內已取得可信 owner 確認的服務。
+        """回傳在各自期限內已取得可信 owner 確認的服務（#1159 owner 裁決 2026-10-01）。
 
         確認＝本代、本 episode（finished_at ≥ 首次 ready）、期限內收到的 n8n ``success``，
         且本 attempt 的 key 已落庫。operator 先以平台帳密 login 才建得出 API key，所以語意是
@@ -272,11 +279,12 @@ class PlatformMonitor(models.Model):
 
     @api.model
     def _check_n8n_owner_unconfirmed(self):
-        """Q28b／S1：首次觀測 ready 後 5 分內平台仍未確認 n8n owner，就每 episode 告警一行。
+        """Q28b：首次觀測 ready 後 5 分內平台仍未確認 n8n owner，就每 episode 告警一行。
 
         依「確認時間 ≤ 首次 ready＋5 分」判斷，與掃描時點無關；晚到的確認仍是 5 分內
         未確認。缺證據＝未確認，不代表 owner 不存在。marker 與告警同一個 check savepoint，
-        通知失敗時一起回捲，下一趟可重試；不改 state、額度或等待預算。
+        通知失敗時一起回捲；沒有可收件者時不寫 marker，下一趟可重試。不改 state、額度或
+        等待預算。
         """
         Service = self.env['woow_paas_platform.cloud_service'].sudo()
         now = Service._init_db_now()
@@ -291,7 +299,13 @@ class PlatformMonitor(models.Model):
         unconfirmed = candidates - self._n8n_owner_confirmed_services(candidates)
         if not unconfirmed:
             return
-        unconfirmed.write({'n8n_owner_alerted_at': now})
+        todo, users = self._alert_recipients()
+        if not (todo and users):
+            # 告警送不出去就不記 marker，否則本 episode 的告警會永久消失。
+            _logger.warning("[#1159] cannot raise monitor alert %r for %d service(s) "
+                            "(todo=%s users=%s); will retry", self.SUMMARY_N8N_OWNER,
+                            len(unconfirmed), bool(todo), len(users))
+            return
         note = _(
             'The platform has not yet confirmed that the n8n owner exists within %(minutes)s '
             'minutes after it first observed the service ready. The owner may already be set up; '
@@ -305,6 +319,7 @@ class PlatformMonitor(models.Model):
                 'owner not yet confirmed by %(deadline)s UTC',
                 name=service.name, id=service.id, state=service.state,
                 ready=service.init_ready_since, deadline=service.init_ready_since + window))
+        unconfirmed.write({'n8n_owner_alerted_at': now})
 
     def _unknown_attempt_line(self, attempt):
         return _('%(name)s (id=%(id)s), attempt %(attempt)s: %(outcome)s',

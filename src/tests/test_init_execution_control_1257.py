@@ -1144,7 +1144,7 @@ class TestInitLeaseRealCursor1257(TransactionCase):
         self.assertEqual(self._read()['attempts'], [])
 
     def test_successful_claim_moves_its_same_type_queue_turn_without_rewriting_ready_anchor(self):
-        """D2-R：claim 原子移尾；n8n ready→owner 的 init_ready_since 監控錨點不變。"""
+        """D2-R：claim 原子移尾；n8n owner 確認窗口的 init_ready_since 錨點不變。"""
         before = self._read()
         attempt = self._run(lambda svc: svc._init_claim('odoo'))
         self.assertTrue(attempt)

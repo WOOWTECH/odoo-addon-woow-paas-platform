@@ -20,6 +20,7 @@
 """
 import hashlib
 import json
+import re
 import sys
 import threading
 import traceback
@@ -941,15 +942,28 @@ class TestInitCron1159(_RealCursorCase):
         self.assertEqual(self._triggers(), triggers)
 
     def test_init_cron_success_confirms_the_owner_only_within_the_window(self):
-        """Q28b／S1：init cron 的 success＋key 只有在首次 ready 後 5 分內收到才算確認。"""
+        """Q28b：真 init cron 寫出的 success＋key 只有在首次 ready 後 5 分內收到才算確認。
+
+        掃描時間推到兩台都已逾期（ready＋6 分以上），fast 才真的進候選；
+        它的確認證據完全來自真 init 路徑寫出的 attempt，不是測試手寫。
+        """
         slow = self._add('n8n', ready_minutes_ago=6)
         fast = self._add('n8n', ready_minutes_ago=1)
         client, _calls = self._recording_client()
         self._run_cron('_cron_run_post_deploy_inits', client)
-        with self.scope.monitoring(), self.registry.cursor() as cr:
+        with self.registry.cursor() as cr:
+            env = self._env(cr)
+            fast_attempt = env[ATTEMPT].search([('service_id', '=', fast)], limit=1)
+            self.assertEqual((fast_attempt.outcome, fast_attempt.n8n_key_persisted), ('success', True),
+                             '前提：fast 的確認證據來自真 init 路徑')
+            scan_at = env[SVC]._init_db_now() + timedelta(minutes=6)
+        with self.scope.monitoring(), self.registry.cursor() as cr, \
+                patch.object(type(self.env[SVC]), '_init_db_now', return_value=scan_at):
             env = self._env(cr)
             monitor = env['woow_paas_platform.platform_monitor']
-            # 以 fast 期限之前的時間掃描：slow 已逾期、fast 尚未逾期但已確認。
+            candidates = env[SVC].search([('id', 'in', [slow, fast]),
+                                          ('init_ready_since', '<', scan_at - timedelta(minutes=5))])
+            self.assertEqual(set(candidates.ids), {slow, fast}, '兩台都必須真的進入逾期候選')
             monitor._run_poll_cron_checks()
             notes = ' '.join(env['mail.activity'].search([
                 ('res_model', '=', 'woow_paas_platform.platform_monitor'),
@@ -960,7 +974,9 @@ class TestInitCron1159(_RealCursorCase):
             fast_name = env[SVC].browse(fast).name
         self.assertEqual(self._read(slow, 'state'), 'running')
         self.assertIn(slow_name, notes, '第 6 分才收到 success：5 分內未確認')
-        self.assertNotIn(fast_name, notes)
+        self.assertNotIn(fast_name, notes, '5 分內收到真 success＋key：已確認')
+        self.assertTrue(self._read(slow, 'n8n_owner_alerted_at'))
+        self.assertFalse(self._read(fast, 'n8n_owner_alerted_at'))
 
     def test_requested_redeploys_run_in_the_init_cron(self):
         """Q27／#1257 f：redeploy 意圖由 init cron（掌管 lease 的那一個）執行。"""
@@ -1363,7 +1379,7 @@ class TestExecSurfaceRealCursor1159(_RealCursorCase):
                 'key_hash': hashlib.sha256(svc.n8n_api_key.encode()).hexdigest() if svc.n8n_api_key else None}
 
     def test_n8n_owner_alert_database_failure_reaches_the_poll_job_boundary(self):
-        """D-5：owner 告警的 DB 故障到短 poll job 邊界；先前已 commit 的結果不回捲。"""
+        """owner 告警的 DB 故障到短 poll job 邊界；先前已 commit 的結果不回捲。"""
         self._boundary_recipients()
         sid = self._add('n8n', ready_minutes_ago=6)
         upgrading = self._add('none', state='upgrading')
@@ -1404,7 +1420,7 @@ class TestExecSurfaceRealCursor1159(_RealCursorCase):
             'operator_calls': init_client.init_n8n.call_count}, default=str, sort_keys=True), flush=True)
 
     def test_cold_recovered_n8n_success_is_still_monitored(self):
-        """T7：live 套用失敗、下一趟冷補套 success，owner 監控照樣看得到（舊事件路徑看不到）。"""
+        """live 套用失敗、下一趟冷補套 success，owner 監控照樣看得到（舊事件路徑看不到）。"""
         self._boundary_recipients()
         sid = self._add('n8n', ready_minutes_ago=7)
         fake_key = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJjb2xkIn0.c2lnbmF0dXJl'
@@ -2281,7 +2297,7 @@ class TestPlatformMonitor1159(_ServiceCase):
 
 @tagged('post_install', '-at_install')
 class TestN8nOwnerMonitor1159(_ServiceCase):
-    """S1（D-1＝C／A1）：n8n 首次觀測 ready 後 5 分內，平台未確認 owner 就告警。
+    """#1159 Q28b（owner 裁決 2026-10-01）：n8n 首次觀測 ready 後 5 分內，平台未確認 owner 就告警。
 
     確認＝本代、本 episode、期限內 ``success`` 且本 attempt 的 key 已落庫；
     login／create_api_key 的 failed／unknown 不算確認（那正是 owner 被他人先註冊的症狀）。
@@ -2339,7 +2355,7 @@ class TestN8nOwnerMonitor1159(_ServiceCase):
         return ' '.join(str(activity.note or '') for activity in self._owner_activities())
 
     def test_unconfirmed_owner_is_reported_while_waiting_failing_or_suspended(self):
-        """T1–T4／D-3：還在等待、失敗、額度出口、wait_timeout、停權都要告警。"""
+        """還在等待、失敗、額度出口、wait_timeout、停權都要告警。"""
         queued = self._ready_n8n(6)
         login_failed = self._ready_n8n(6)
         self._attempt(login_failed, 1, outcome='failed', key=False, step='login', kind='failed')
@@ -2379,7 +2395,7 @@ class TestN8nOwnerMonitor1159(_ServiceCase):
         self.assertNotIn(odoo.name, notes, '只監控 n8n')
 
     def test_success_with_stored_key_within_the_window_confirms_the_owner(self):
-        """T5／A1：只有 success＋本 attempt key 已落庫才算確認。"""
+        """只有 success＋本 attempt key 已落庫才算確認。"""
         confirmed = self._ready_n8n(6, state='running')
         self._attempt(confirmed, 1)
         keyless = self._ready_n8n(6)
@@ -2390,18 +2406,21 @@ class TestN8nOwnerMonitor1159(_ServiceCase):
         self.assertIn(keyless.name, notes, 'success 但 key 未落庫不是可信確認')
 
     def test_late_confirmation_is_reported_without_claiming_an_owner_creation_time(self):
-        """T6／D-2：第 7 分才確認仍是 5 分內未確認；文案不得斷言 owner 建立時間或不存在。"""
+        """第 7 分才確認仍是 5 分內未確認；文案不得斷言 owner 建立時間或不存在。"""
         late = self._ready_n8n(7, state='running')
         self._attempt(late, 7)
         self._scan()
         notes = self._notes()
         self.assertIn(late.name, notes)
-        self.assertIn('not yet confirmed', notes)
-        for claim in ('created', 'late', 'does not exist'):
-            self.assertNotIn(claim, notes.lower(), '只報「平台未確認」，不推 owner 建立時間或不存在')
+        self.assertIn('The platform has not yet confirmed that the n8n owner exists within 5 minutes '
+                      'after it first observed the service ready.', notes)
+        self.assertIn('owner not yet confirmed by', notes)
+        forbidden = re.compile(r"\b(created|creation|late|later|delayed|does not exist|doesn't exist|"
+                               r"not exist|no owner|owner is missing)\b", re.IGNORECASE)
+        self.assertFalse(forbidden.findall(notes), '只報「平台未確認」，不推 owner 建立時間或不存在')
 
     def test_window_boundary_is_strict_and_independent_of_scan_timing(self):
-        """T8：剛好 5:00 不告警；5:00 確認算數；過 5:00 後才掃描仍按期限判斷。"""
+        """邊界：剛好 5:00 不告警；5:00 確認算數；過 5:00 後才掃描仍按期限判斷。"""
         at_boundary = self._ready_n8n(5)
         confirmed_at_deadline = self._ready_n8n(6, state='running')
         self._attempt(confirmed_at_deadline, 5)
@@ -2413,7 +2432,7 @@ class TestN8nOwnerMonitor1159(_ServiceCase):
         self.assertIn(at_boundary.name, self._notes())
 
     def test_other_generation_or_previous_episode_success_does_not_confirm(self):
-        """T10／T11：舊代、舊 episode 的 success 不能確認本代本 episode。"""
+        """舊代、舊 episode 的 success 不能確認本代本 episode。"""
         old_generation = self._ready_n8n(6)
         old_generation.sudo().write({'init_generation': 2})
         self._attempt(old_generation, 1, generation=1)
@@ -2425,7 +2444,7 @@ class TestN8nOwnerMonitor1159(_ServiceCase):
         self.assertIn(previous_episode.name, notes)
 
     def test_each_episode_reports_one_line_and_a_new_episode_can_report_again(self):
-        """T9／T10／D-4：同 episode 只一行；重新進 initializing 清 marker，可再告警。"""
+        """同 episode 只一行；重新進 initializing 清 marker，可再告警。"""
         svc = self._ready_n8n(6)
         self._scan()
         self.assertEqual(self._notes().count(svc.name), 1)
@@ -2444,7 +2463,7 @@ class TestN8nOwnerMonitor1159(_ServiceCase):
                          '舊 episode 的 success 不確認新 episode，新 episode 再告警一行')
 
     def test_database_failure_reaches_the_monitor_job_boundary(self):
-        """T13：真 PG 40001 交回 job 邊界；marker 與 activity 一起回捲，cursor 可用。"""
+        """真 PG 40001 交回 job 邊界；marker 與 activity 一起回捲，cursor 可用。"""
         svc = self._ready_n8n(6)
         original_schedule = type(self.singleton).activity_schedule
         failures = []
@@ -2478,7 +2497,7 @@ class TestN8nOwnerMonitor1159(_ServiceCase):
         self.assertIn(svc.name, self._notes(), '故障後下一趟可重新交付')
 
     def test_alert_marker_is_platform_managed_and_not_injectable_at_create(self):
-        """T14：marker 是平台管控欄位；租戶寫入被擋、create 的 raw／context／ir.default 被中和。"""
+        """marker 是平台管控欄位；租戶寫入被擋、create 的 raw／context／ir.default 被中和。"""
         user = self.env['res.users'].with_context(no_reset_password=True).create({
             'name': '1159 owner monitor workspace admin', 'login': f'1159-owner-mon-{self.tag}',
             'groups_id': [(6, 0, [self.env.ref('base.group_user').id])],
@@ -2513,3 +2532,70 @@ class TestN8nOwnerMonitor1159(_ServiceCase):
                 self.assertFalse(created.n8n_owner_alerted_at, '新服務不得帶入告警 marker')
         svc.sudo().write({'n8n_owner_alerted_at': stamp})
         self.assertEqual(svc.n8n_owner_alerted_at, stamp, '平台寫入仍成功')
+
+    def test_confirmation_at_the_ready_instant_and_among_failed_attempts(self):
+        """邊界：finished_at 等於首次 ready 也算；同服務先 failed 後 success 仍以 success 確認。"""
+        instant = self._ready_n8n(6, state='running')
+        self._attempt(instant, 0)
+        mixed = self._ready_n8n(6, state='running')
+        self._attempt(mixed, 1, outcome='failed', key=False, step='create_api_key', kind='failed')
+        self._attempt(mixed, 3)
+        self._scan()
+        notes = self._notes()
+        self.assertNotIn(instant.name, notes)
+        self.assertNotIn(mixed.name, notes)
+
+    def test_new_generation_outside_initializing_does_not_reuse_the_old_episode_anchor(self):
+        """開新一代就清 ready 錨點與告警 marker，不能沿用前一代已確認 episode 的舊時間。
+
+        停權中 redeploy（state 維持 suspended）與開代後在部署階段失敗（從未回到
+        initializing）都不能拿舊錨點對新一代誤報。
+        """
+        for name, before_state, after_state in (('suspended-redeploy', 'suspended', 'suspended'),
+                                                ('deploy-failed', 'upgrading', 'error')):
+            with self.subTest(case=name):
+                svc = self._ready_n8n(6, state='running')
+                self._attempt(svc, 1)
+                self._scan()
+                self.assertNotIn(svc.name, self._notes(), '前提：前一代 episode 已確認')
+                svc.sudo().write({'state': before_state})
+                generation = svc.init_generation
+                svc._open_init_generation()
+                self.assertEqual(svc.init_generation, generation + 1)
+                svc.sudo().write({'state': after_state})
+                self._scan(at=self.now + timedelta(minutes=10))
+                self.assertNotIn(svc.name, self._notes(), '新一代不能用舊錨點誤報')
+                self.assertFalse(svc.init_ready_since, '開代即清 ready 錨點')
+                self.assertFalse(svc.n8n_owner_alerted_at)
+
+    def test_new_generation_while_initializing_keeps_dispatch_and_restarts_the_anchor(self):
+        """在 initializing 中開代：仍可 claim（ready 旗標不清）；錨點與 marker 重來，新一代可再告警。"""
+        svc = self._ready_n8n(6)
+        self._scan()
+        self.assertEqual(self._notes().count(svc.name), 1, '前提：前一代已告警')
+        svc._open_init_generation()
+        self.assertTrue(svc.init_ready_observed, 'initializing 中開代仍留在 init 佇列')
+        self.assertFalse(svc.init_ready_since)
+        self.assertFalse(svc.n8n_owner_alerted_at, '新一代不沿用前一代的告警 marker')
+        self._scan(at=self.now + timedelta(minutes=10))
+        self.assertEqual(self._notes().count(svc.name), 1, '錨點空著時不用前一代時間告警')
+        self._poll(svc)
+        anchor = svc.init_ready_since
+        self.assertTrue(anchor, '下一次短 poll 觀測寫回新一代的錨點')
+        self._scan(at=anchor + timedelta(minutes=6))
+        self.assertEqual(self._notes().count(svc.name), 2, '新一代 5 分內未確認，再告警一行')
+
+    def test_undeliverable_alert_keeps_the_marker_unset_for_retry(self):
+        """沒有可收件的 system user 時不寫 marker；之後有收件者，下一趟補告警。"""
+        svc = self._ready_n8n(6)
+        recipients = self.env.ref('base.group_system').users.filtered(
+            lambda user: user.active and not user.share)
+        self.assertTrue(recipients)
+        recipients.write({'active': False})
+        self._scan()
+        self.assertFalse(self._owner_activities(), '前提：真的沒有收件者')
+        self.assertFalse(svc.n8n_owner_alerted_at, '告警沒送出就不能把本 episode 記成已告警')
+        recipients.write({'active': True})
+        self._scan(at=self.now + timedelta(minutes=1))
+        self.assertIn(svc.name, self._notes())
+        self.assertEqual(svc.n8n_owner_alerted_at, self.now + timedelta(minutes=1))
