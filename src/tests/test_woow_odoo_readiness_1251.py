@@ -27,8 +27,6 @@ from ..services.woow_odoo_readiness import (
 )
 from .operator_contract import ABSENT, operator_client, pod_info, status_response
 
-_ENTRIES = ('cron',)
-
 
 def _server(**overrides):
     """chart 的 web Pod：Deployment → ReplicaSet 直接擁有。"""
@@ -102,25 +100,21 @@ class TestWoowOdooReadinessIdentity(TransactionCase):
         release = {'status': 'deployed', 'revision': 1, 'chart': chart}
         return status_response(pods=pods, release=release, **overrides)
 
-    def _poll(self, entry, status):
+    def _poll(self, status):
         client = operator_client(get_status=status)
         self.service._poll_and_update_status(client)
         client.get_status.assert_called_once()
 
     def _assert_poll_keeps(self, status, state='deploying'):
         """poll 一次，服務必須留在轉移狀態。"""
-        for entry in _ENTRIES:
-            with self.subTest(entry=entry):
-                self.service.write({'state': state})
-                self._poll(entry, status)
-                self.assertEqual(self.service.state, state)
+        self.service.write({'state': state})
+        self._poll(status)
+        self.assertEqual(self.service.state, state)
 
     def _assert_poll_reaches_running(self, status, state='deploying'):
-        for entry in _ENTRIES:
-            with self.subTest(entry=entry):
-                self.service.write({'state': state})
-                self._poll(entry, status)
-                self.assertEqual(self.service.state, 'running')
+        self.service.write({'state': state})
+        self._poll(status)
+        self.assertEqual(self.service.state, 'running')
 
     # ------------------------------------------------------------------ #
     #  負例 1：Job／PG 不能冒充 server（Q5）                               #
@@ -303,7 +297,7 @@ class TestWoowOdooReadinessIdentity(TransactionCase):
             'state': 'deploying',
             'deployed_at': fields.Datetime.now() - timedelta(minutes=31),
         })
-        self._poll('cron', status)
+        self._poll(status)
         self.assertEqual(self.service.state, 'error', '前置：這一輪應該逾時')
         return self.service.error_message
 

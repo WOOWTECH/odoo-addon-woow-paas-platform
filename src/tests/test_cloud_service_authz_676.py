@@ -558,14 +558,17 @@ class TestInitControlFieldsWriteAuthz1257(_CloudService676Fixture):
             [[svc.id], {'name': 'M1 renamed'}])
         self._assert_ok(renamed, '陽性對照：owner 本來就寫得進一般欄位')
 
-        for field, value in (('init_redeploy_requested', True), ('init_exit', 'failed'),
-                             ('init_retries', 0), ('init_unknown_count', 0),
-                             ('init_pending', False), ('init_lease_until', False),
-                             ('init_wait_spent_seconds', 0),
-                             ('init_wait_started_at', False),
-                             ('init_retry_eligible_at', False),
-                             ('init_queue_turn', False), ('init_capacity_wait_since', False),
-                             ('n8n_owner_alerted_at', False)):
+        # 受管控集合由 model 反推（所有 stored、非 compute 的 init_* 欄位＋owner 告警 marker），
+        # 不迭代 guard 自己的 frozenset：從 guard 拿掉一個成員或新增欄位忘了登記都必須紅。
+        sample = {'boolean': True, 'integer': 0, 'float': 0.0, 'datetime': False,
+                  'many2one': False, 'selection': 'failed', 'text': 'x', 'char': 'x'}
+        managed = sorted(
+            name for name, field in svc._fields.items()
+            if field.store and not field.compute
+            and (name.startswith('init_') or name == 'n8n_owner_alerted_at'))
+        self.assertGreaterEqual(len(managed), 19, '前提：init 管控欄位真的被列舉到')
+        for field in managed:
+            value = sample[svc._fields[field].type]
             with self.subTest(field=field):
                 result = self._call_kw(
                     'woow_paas_platform.cloud_service', 'write',

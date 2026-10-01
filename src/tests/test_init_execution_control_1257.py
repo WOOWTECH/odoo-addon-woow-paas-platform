@@ -1269,7 +1269,8 @@ class TestInitLeaseGuards1257(_ServiceCase):
         svc = self._service('odoo')
         _client, entry = self._poll_cron(svc)
         self.assertEqual(svc.state, 'initializing')
-        self.assertTrue(svc.init_ready_observed)
+        self.assertIn(svc, svc._init_cron_queue(),
+                      '短 poll 觀測 ready 後必須真的排進 init cron 會 claim 的佇列')
         entry.assert_not_called()
 
     def test_reconfigure_and_rollback_are_refused_while_the_lease_is_held(self):
@@ -1369,7 +1370,7 @@ class TestReconfigureRollbackOwedInit1267(_ServiceCase):
         self.assertEqual(svc.init_generation, generation, '不改 addon 的 reconfigure 不開新一代')
         _client, entry = self._poll_cron(svc)
         self.assertEqual(svc.state, 'initializing', '欠的 init 被跳過、直接 running')
-        self.assertTrue(svc.init_ready_observed, '欠的 init 排進 init cron 的佇列（#1159）')
+        self.assertIn(svc, svc._init_cron_queue(), '欠的 init 排進 init cron 會 claim 的佇列（#1159）')
         entry.assert_not_called()
 
     def test_addon_change_then_plain_reconfigure_still_inits(self):
@@ -1395,7 +1396,7 @@ class TestReconfigureRollbackOwedInit1267(_ServiceCase):
         self.assertTrue(svc.init_pending)
         _client, entry = self._poll_cron(svc)
         self.assertEqual(svc.state, 'initializing')
-        self.assertTrue(svc.init_ready_observed, '欠的 init 排進 init cron 的佇列（#1159）')
+        self.assertIn(svc, svc._init_cron_queue(), '欠的 init 排進 init cron 會 claim 的佇列（#1159）')
         entry.assert_not_called()
 
     def test_rollback_from_init_error_opens_a_new_generation(self):
@@ -1419,7 +1420,7 @@ class TestReconfigureRollbackOwedInit1267(_ServiceCase):
                          (generation + 1, 0, 0))
         _client, entry = self._poll_cron(svc)
         self.assertEqual(svc.state, 'initializing')
-        self.assertTrue(svc.init_ready_observed, '欠的 init 排進 init cron 的佇列（#1159）')
+        self.assertIn(svc, svc._init_cron_queue(), '欠的 init 排進 init cron 會 claim 的佇列（#1159）')
         entry.assert_not_called()
 
     def test_rollback_of_completed_init_does_not_reinit(self):
@@ -1492,7 +1493,7 @@ class TestSuspendResumeOwedInit1266(_ServiceCase):
                 self.assertFalse(svc.init_wait_started_at)
                 self.assertFalse(svc.init_retry_eligible_at)
                 _client, entry = self._poll_cron(svc)
-                self.assertTrue(svc.init_ready_observed, '欠的 init 排進 init cron 的佇列（#1159）')
+                self.assertIn(svc, svc._init_cron_queue(), '欠的 init 排進 init cron 會 claim 的佇列（#1159）')
                 entry.assert_not_called()
 
     def test_error_stays_error_and_keeps_its_counters(self):

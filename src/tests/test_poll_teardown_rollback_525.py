@@ -199,6 +199,23 @@ class TestCronReapLeavesNoHalfDeletedService(TransactionCase):
         finally:
             for p in reversed(patches):
                 p.stop()
+        return client
+
+    def _add_quota_survivor(self):
+        """同 workspace／namespace 的存活服務＋待收屍服務的配額；全部本組自有、事後精確清掉。"""
+        with self.scope.track(), self.registry.cursor() as cr:
+            env = self._env(cr)
+            Svc = env['woow_paas_platform.cloud_service'].sudo()
+            Svc.browse(self.ids_['service']).write({
+                'allocated_vcpu': 2, 'allocated_ram_gb': 2.0, 'allocated_storage_gb': 20})
+            _internal_provision(Svc).create({
+                'name': 'Svc 525 survivor',
+                'workspace_id': self.ids_['workspace'],
+                'template_id': self.ids_['template'],
+                'state': 'running',
+                'helm_namespace': 'paas-ws-525cron',
+                'helm_release_name': 'svc-525-survivor',
+                'allocated_vcpu': 4, 'allocated_ram_gb': 4.0, 'allocated_storage_gb': 50})
 
     def _fail_settlement(self, recorder):
         service_id = self.ids_['service']
@@ -244,3 +261,21 @@ class TestCronReapLeavesNoHalfDeletedService(TransactionCase):
             (service_state, sub_state), ('deleting', 'in_progress'),
             'teardown 中途失敗：已刪掉的那一半必須回捲、服務留在 deleting 等下一輪；'
             '服務消失而訂閱仍 in_progress ＝ 孤兒訂閱（#318）')
+
+    def test_cron_reap_pushes_quota_recomputed_from_surviving_services(self):
+        """收屍成功後以存活服務重算並推一次 namespace quota（已刪那台不計入）。"""
+        self._add_quota_survivor()
+        client = self._run_cron()
+        self.assertIsNone(self._probe()[0], '前提：deleting 服務真的被收屍')
+        # 存活 4 vCPU／4 GB／50 GB ×3；若誤把收屍那台算入會是 18／18Gi／210Gi。
+        client.update_namespace_quota.assert_called_once_with(
+            'paas-ws-525cron', '12', '12Gi', '150Gi')
+
+    def test_teardown_failure_does_not_push_quota_for_a_half_deleted_service(self):
+        """teardown 中途失敗、整台回捲留在 deleting 時，不得以半刪狀態推 quota。"""
+        self._add_quota_survivor()
+        seen = []
+        client = self._run_cron(injection=self._fail_settlement(seen))
+        self.assertEqual(seen, [False], '前提：注入點在 super().unlink() 之後')
+        self.assertEqual(self._probe()[0], 'deleting')
+        client.update_namespace_quota.assert_not_called()

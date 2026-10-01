@@ -603,9 +603,20 @@ class TestInitCron1159(_RealCursorCase):
         return self._read(service_id, 'helm_release_name')
 
     def test_n8n_first_then_the_longest_waiting(self):
-        odoo_recent = self._add('odoo', ready_minutes_ago=5)
+        """首輪排序：n8n 優先，其次等待最久；建立順序刻意與等待順序相反並釘住。
+
+        create_date／id 若被誤當排序鍵（例如退回 ``_order`` 的 create_date desc），
+        會得到 recent → oldest，這條必須紅。
+        """
         odoo_oldest = self._add('odoo', ready_minutes_ago=20)
+        odoo_recent = self._add('odoo', ready_minutes_ago=5)
         n8n_newest = self._add('n8n', ready_minutes_ago=1)
+        with self.registry.cursor() as cr:
+            anchor = fields.Datetime.now() - timedelta(hours=1)
+            for offset, sid in enumerate((odoo_oldest, odoo_recent, n8n_newest)):
+                cr.execute('UPDATE woow_paas_platform_cloud_service SET create_date = %s WHERE id = %s',
+                           (anchor + timedelta(seconds=offset), sid))
+        self.assertLess(odoo_oldest, odoo_recent, '前提：較晚建立的是等待較短者')
         client, calls = self._recording_client()
         self._run_cron('_cron_run_post_deploy_inits', client)
         self.assertEqual(calls, [self._release(n8n_newest), self._release(odoo_oldest),
@@ -1553,6 +1564,60 @@ class TestExecSurfaceRealCursor1159(_RealCursorCase):
         self.assertFalse(errors, errors)
         self.assertEqual(self._read(slow, 'state'), 'running')
 
+    def test_init_and_poll_cron_entry_points_run_concurrently(self):
+        """驗收 3：兩個真 cron 入口分屬不同交易；init 卡在 remote 時短 poll 仍逐台 commit。
+
+        init cron 在 remote double 處卡住（claim 已在 remote 前 commit），短 poll cron 另開
+        cursor 跑完：upgrading→running，連在途 init 的那一台也被觀測並 commit，第三條
+        連線看得到。只證明兩個 cron method 的交易隔離，不宣稱 core scheduler 實測。
+        """
+        slow = self._add('odoo', ready_minutes_ago=2)
+        upgrading = self._add('none', state='upgrading')
+        self.assertFalse(self._read(slow, 'observed_at'), '前提：在途那台尚無觀測')
+        in_flight, release = threading.Event(), threading.Event()
+
+        def slow_init(**kwargs):
+            in_flight.set()
+            release.wait(30)
+            return {'success': True}
+
+        client = operator_client(get_status=status_response(pods=_READY_PODS))
+        client.init_odoo.side_effect = slow_init
+        errors = []
+
+        def run_init_cron():
+            try:
+                with self.registry.cursor() as cr:
+                    self._env(cr)[SVC]._cron_run_post_deploy_inits()
+            except Exception as exc:  # 讓主執行緒看得到
+                errors.append(exc)
+
+        with patch(f'{_OPERATOR_MODULE}.get_paas_operator_client',
+                   return_value=self.scope.operator(client)):
+            thread = threading.Thread(target=run_init_cron)
+            thread.start()
+            try:
+                self.assertTrue(in_flight.wait(20), '%s\n%s' % (errors, _thread_stacks(thread)))
+                with self.registry.cursor() as cr:
+                    # 測試連線專用的等鎖上限：若 init 交易握著列鎖，poll 等不到就該失敗，不能卡死。
+                    cr.execute("SET lock_timeout = '3s'")
+                    try:
+                        env = self._env(cr)
+                        env[SVC]._cron_check_deploying_services()
+                    finally:
+                        cr.execute('RESET lock_timeout')
+                self.assertEqual(self._read(upgrading, 'state'), 'running',
+                                 '第三條連線看得到短 poll cron 的 commit')
+                self.assertTrue(self._read(slow, 'observed_at'),
+                                '在途 init 的那一台也被短 poll 觀測並 commit（沒被 init 交易鎖住）')
+                self.assertEqual(self._read(slow, 'state'), 'initializing')
+            finally:
+                release.set()
+                thread.join(60)
+        self.assertFalse(errors, errors)
+        self.assertEqual(self._read(slow, 'state'), 'running')
+        client.init_odoo.assert_called_once()
+
     def test_short_poll_commits_each_service_and_one_failure_does_not_stop_the_tick(self):
         """驗收 2：deleting 由背景在 404 後 unlink；一台 teardown 失敗，其他台照常收尾。"""
         broken = self._add('none', state='deleting')
@@ -1631,6 +1696,7 @@ class TestDnsReprobeCron1159(_RealCursorCase):
 # ====================================================================== #
 
 MONITOR = 'woow_paas_platform.platform_monitor'
+_MONITOR_XMLID = 'woow_paas_platform.platform_monitor_singleton'
 POLL_CRON = 'woow_paas_platform.ir_cron_check_deploying_services'
 
 
@@ -2004,6 +2070,59 @@ class TestPlatformMonitor1159(_ServiceCase):
             self.assertEqual(self.Monitor._singleton(), original, '原查找仍以 xmlid 為準，不重建')
         self.assertNotEqual(self.singleton, original, 'test-owned target 不改全域 xmlid')
         self.assertEqual(self.Monitor._singleton(), self.singleton)
+
+    def test_singleton_fallback_recreates_and_rebinds_the_xmlid(self):
+        """xmlid 掛點遺失時自建一筆並綁回，第二次取同一筆；live 原記錄不刪（交易結束回捲）。"""
+        with self.scope.paused():
+            original = self.env.ref(_MONITOR_XMLID)
+            self.env['ir.model.data'].search([
+                ('module', '=', 'woow_paas_platform'),
+                ('name', '=', 'platform_monitor_singleton')]).unlink()
+            self.assertFalse(self.env.ref(_MONITOR_XMLID, raise_if_not_found=False), '前提：掛點真的遺失')
+            rebuilt = self.Monitor._singleton()
+            self.assertNotEqual(rebuilt, original)
+            self.assertEqual(self.env.ref(_MONITOR_XMLID, raise_if_not_found=False), rebuilt,
+                             'xmlid 綁回新建的那一筆')
+            self.assertEqual(self.Monitor._singleton(), rebuilt, '第二次查找不再重建')
+            binding = self.env['ir.model.data'].search([
+                ('module', '=', 'woow_paas_platform'), ('name', '=', 'platform_monitor_singleton')])
+            self.assertEqual((binding.model, binding.res_id, binding.noupdate), (MONITOR, rebuilt.id, True))
+            self.assertTrue(original.exists(), '不刪 live singleton')
+
+    def test_singleton_fallback_database_failure_leaves_no_half_built_monitor(self):
+        """綁 xmlid 時真 PG 40001：外拋到 caller 邊界，monitor 記錄與 xmlid 一起不成立。"""
+        with self.scope.paused():
+            self.env['ir.model.data'].search([
+                ('module', '=', 'woow_paas_platform'),
+                ('name', '=', 'platform_monitor_singleton')]).unlink()
+            monitors_before = self.Monitor.sudo().search_count([])
+            imd_model = type(self.env['ir.model.data'])
+            original_create = imd_model.create
+
+            def fail_binding(records, vals_list):
+                values = vals_list if isinstance(vals_list, list) else [vals_list]
+                if any(vals.get('name') == 'platform_monitor_singleton' for vals in values):
+                    records.env.cr.execute("""
+                        DO $$ BEGIN
+                            RAISE EXCEPTION '1159 singleton binding conflict' USING ERRCODE = '40001';
+                        END $$
+                    """)
+                return original_create(records, vals_list)
+
+            caught = None
+            with patch.object(imd_model, 'create', fail_binding):
+                try:
+                    self.Monitor._safe_alert('1159 singleton fallback', 'own fallback probe')
+                except OperationalError as error:
+                    caught = error
+            self.assertIsNotNone(caught, '綁定失敗不得在 helper 層降成 False')
+            self.assertEqual(caught.pgcode, '40001')
+            self.env.cr.execute('SELECT 1')
+            self.assertEqual(self.env.cr.fetchone(), (1,), 'caller savepoint 復原 cursor')
+            self.assertEqual(self.Monitor.sudo().search_count([]), monitors_before,
+                             '沒有綁上 xmlid 的半成品 monitor 記錄')
+            self.assertFalse(self.env.ref(_MONITOR_XMLID, raise_if_not_found=False))
+            self.assertTrue(self.Monitor._singleton(), '故障排除後下一次可正常重建')
 
     def test_alert_goes_to_every_system_user_and_dedupes_per_summary(self):
         self.assertTrue(self.admins)

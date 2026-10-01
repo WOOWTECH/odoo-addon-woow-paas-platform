@@ -42,7 +42,7 @@ class TestPendingPodReadiness(TransactionCase):
             'helm_release_name': 'svc-1156',
         })
 
-    def _poll(self, entry, pods, **status_overrides):
+    def _poll(self, pods, **status_overrides):
         client = operator_client(
             get_status=status_response(pods=pods, **status_overrides),
             init_odoo={'success': True, 'modules_added': 0, 'modules_updated': 0},
@@ -52,51 +52,46 @@ class TestPendingPodReadiness(TransactionCase):
         return client
 
     def test_postgres_ready_does_not_hide_pending_odoo(self):
-        for entry in ('cron',):
-            # initContainer 執行時 containerStatuses 可能尚不存在（0/0），
-            # 也可能已回報尚未 ready 的主容器（0/1）。
-            for ready in ('0/0', '0/1'):
-                with self.subTest(entry=entry, ready=ready):
-                    self.service.write({'state': 'deploying'})
-                    self._poll(entry, [
-                        {'name': 'postgres', 'phase': 'Running', 'ready': '1/1'},
-                        {'name': 'odoo', 'phase': 'Pending', 'ready': ready},
-                    ])
-                    self.assertEqual(self.service.state, 'deploying')
+        # initContainer 執行時 containerStatuses 可能尚不存在（0/0），
+        # 也可能已回報尚未 ready 的主容器（0/1）。
+        for ready in ('0/0', '0/1'):
+            with self.subTest(ready=ready):
+                self.service.write({'state': 'deploying'})
+                self._poll([
+                    {'name': 'postgres', 'phase': 'Running', 'ready': '1/1'},
+                    {'name': 'odoo', 'phase': 'Pending', 'ready': ready},
+                ])
+                self.assertEqual(self.service.state, 'deploying')
 
     def test_terminating_old_pod_does_not_block_ready_replacement(self):
-        for entry in ('cron',):
-            for phase in ('Running', 'Pending'):
-                with self.subTest(entry=entry, phase=phase):
-                    self.service.write({'state': 'upgrading'})
-                    self._poll(entry, [
-                        {'name': 'old-odoo', 'phase': phase, 'ready': '0/1',
-                         'deletion_timestamp': '2026-09-29T00:00:00Z'},
-                        {'name': 'odoo', 'phase': 'Running', 'ready': '1/1'},
-                    ])
-                    self.assertEqual(self.service.state, 'running')
-
-    def test_all_ready_pods_allow_running_with_legacy_or_null_timestamp(self):
-        for entry in ('cron',):
-            with self.subTest(entry=entry):
-                self.service.write({'state': 'deploying'})
-                self._poll(entry, [
-                    {'name': 'postgres', 'phase': 'Running', 'ready': '1/1'},
-                    {'name': 'odoo', 'phase': 'Running', 'ready': '2/2',
-                     'deletion_timestamp': None},
+        for phase in ('Running', 'Pending'):
+            with self.subTest(phase=phase):
+                self.service.write({'state': 'upgrading'})
+                self._poll([
+                    {'name': 'old-odoo', 'phase': phase, 'ready': '0/1',
+                     'deletion_timestamp': '2026-09-29T00:00:00Z'},
+                    {'name': 'odoo', 'phase': 'Running', 'ready': '1/1'},
                 ])
                 self.assertEqual(self.service.state, 'running')
 
+    def test_all_ready_pods_allow_running_with_legacy_or_null_timestamp(self):
+        self.service.write({'state': 'deploying'})
+        self._poll([
+            {'name': 'postgres', 'phase': 'Running', 'ready': '1/1'},
+            {'name': 'odoo', 'phase': 'Running', 'ready': '2/2',
+             'deletion_timestamp': None},
+        ])
+        self.assertEqual(self.service.state, 'running')
+
     def test_terminal_old_pods_do_not_block_ready_replacement(self):
-        for entry in ('cron',):
-            for phase in ('Succeeded', 'Failed'):
-                with self.subTest(entry=entry, phase=phase):
-                    self.service.write({'state': 'upgrading'})
-                    self._poll(entry, [
-                        {'name': 'old-odoo', 'phase': phase, 'ready': '0/1'},
-                        {'name': 'odoo', 'phase': 'Running', 'ready': '1/1'},
-                    ])
-                    self.assertEqual(self.service.state, 'running')
+        for phase in ('Succeeded', 'Failed'):
+            with self.subTest(phase=phase):
+                self.service.write({'state': 'upgrading'})
+                self._poll([
+                    {'name': 'old-odoo', 'phase': phase, 'ready': '0/1'},
+                    {'name': 'odoo', 'phase': 'Running', 'ready': '1/1'},
+                ])
+                self.assertEqual(self.service.state, 'running')
 
     def test_no_active_pods_cannot_mark_service_running(self):
         cases = [[],
@@ -104,30 +99,26 @@ class TestPendingPodReadiness(TransactionCase):
                  [{'name': 'old', 'phase': 'Failed', 'ready': '0/1'}],
                  [{'name': 'old', 'phase': 'Running', 'ready': '1/1',
                    'deletion_timestamp': '2026-09-29T00:00:00Z'}]]
-        for entry in ('cron',):
-            for pods in cases:
-                with self.subTest(entry=entry, pods=pods):
-                    self.service.write({'state': 'deploying'})
-                    self._poll(entry, pods)
-                    self.assertEqual(self.service.state, 'deploying')
+        for pods in cases:
+            with self.subTest(pods=pods):
+                self.service.write({'state': 'deploying'})
+                self._poll(pods)
+                self.assertEqual(self.service.state, 'deploying')
 
     def test_non_ready_or_unknown_pod_blocks_ready_postgres(self):
-        for entry in ('cron',):
-            for phase, ready in (('Running', '0/1'), ('Unknown', '0/0')):
-                with self.subTest(entry=entry, phase=phase):
-                    self.service.write({'state': 'deploying'})
-                    self._poll(entry, [
-                        {'name': 'postgres', 'phase': 'Running', 'ready': '1/1'},
-                        {'name': 'odoo', 'phase': phase, 'ready': ready},
-                    ])
-                    self.assertEqual(self.service.state, 'deploying')
+        for phase, ready in (('Running', '0/1'), ('Unknown', '0/0')):
+            with self.subTest(phase=phase):
+                self.service.write({'state': 'deploying'})
+                self._poll([
+                    {'name': 'postgres', 'phase': 'Running', 'ready': '1/1'},
+                    {'name': 'odoo', 'phase': phase, 'ready': ready},
+                ])
+                self.assertEqual(self.service.state, 'deploying')
 
     def test_pod_lookup_failure_still_blocks_running(self):
-        for entry in ('cron',):
-            with self.subTest(entry=entry):
-                self.service.write({'state': 'deploying'})
-                self._poll(entry, [], pod_retrieval_error='Forbidden')
-                self.assertEqual(self.service.state, 'deploying')
+        self.service.write({'state': 'deploying'})
+        self._poll([], pod_retrieval_error='Forbidden')
+        self.assertEqual(self.service.state, 'deploying')
 
     def test_post_deploy_init_waits_until_pending_pod_is_ready(self):
         """pod 還沒 ready 不得進 init；ready 後進 ``initializing``。
@@ -138,21 +129,19 @@ class TestPendingPodReadiness(TransactionCase):
         """
         self.template.post_deploy_init_type = 'odoo'
         self.service._open_init_generation()
-        for entry in ('cron',):
-            with self.subTest(entry=entry):
-                self.service.write({'state': 'deploying'})
-                pods = [
-                    {'name': 'postgres', 'phase': 'Running', 'ready': '1/1'},
-                    {'name': 'odoo', 'phase': 'Pending', 'ready': '0/0'},
-                ]
-                with patch.object(type(self.service), '_run_post_deploy_init') as run_init:
-                    pending_client = self._poll(entry, pods)
-                    self.assertEqual(self.service.state, 'deploying')
-                    run_init.assert_not_called()
-                    pods[1] = {'name': 'odoo', 'phase': 'Running', 'ready': '1/1'}
-                    ready_client = self._poll(entry, pods)
-                self.assertEqual(self.service.state, 'initializing')
-                pending_client.init_odoo.assert_not_called()
-                ready_client.init_odoo.assert_not_called()
-                run_init.assert_not_called()
-                self.assertTrue(self.service.init_ready_observed, '排進 init cron 的佇列')
+        self.service.write({'state': 'deploying'})
+        pods = [
+            {'name': 'postgres', 'phase': 'Running', 'ready': '1/1'},
+            {'name': 'odoo', 'phase': 'Pending', 'ready': '0/0'},
+        ]
+        with patch.object(type(self.service), '_run_post_deploy_init') as run_init:
+            pending_client = self._poll(pods)
+            self.assertEqual(self.service.state, 'deploying')
+            run_init.assert_not_called()
+            pods[1] = {'name': 'odoo', 'phase': 'Running', 'ready': '1/1'}
+            ready_client = self._poll(pods)
+        self.assertEqual(self.service.state, 'initializing')
+        pending_client.init_odoo.assert_not_called()
+        ready_client.init_odoo.assert_not_called()
+        run_init.assert_not_called()
+        self.assertTrue(self.service.init_ready_observed, '排進 init cron 的佇列')
