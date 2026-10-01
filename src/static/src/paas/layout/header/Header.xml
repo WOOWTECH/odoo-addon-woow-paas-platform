@@ -3,6 +3,11 @@
     <t t-name="woow_paas_platform.Header">
         <header class="o_woow_header">
             <div class="o_woow_header_left">
+                <button t-if="parentCrumb" type="button" class="o_woow_mobile_back"
+                        t-att-aria-label="backLabel"
+                        t-on-click="() => this.onBreadcrumbClick(parentCrumb.path)">
+                    <span class="material-symbols-outlined" t-translation="off">arrow_back</span>
+                </button>
                 <div class="o_woow_mobile_logo">
                     <span class="material-symbols-outlined" t-translation="off">deployed_code</span>
                     <span>WoowTech</span>
@@ -41,22 +46,29 @@
                             t-att-aria-expanded="notifications.open ? 'true' : 'false'"
                             aria-haspopup="dialog"
                             t-att-aria-label="notificationLabel"
-                            t-on-click="() => this.notifications.toggle()">
+                            t-on-click="toggleNotifications">
                         <span class="material-symbols-outlined" t-translation="off">notifications</span>
                         <span t-if="notifications.unseenActionableCount" class="o_woow_notification_badge"/>
                     </button>
                     <NotificationPanel t-if="notifications.open" router="props.router"/>
                 </div>
 
-                <!-- 使用者資訊 -->
-                <div class="o_woow_user_header">
-                    <div class="o_woow_user_text">
-                        <span class="o_woow_user_name" t-esc="partnerName"/>
-                    </div>
-                    <div class="o_woow_avatar_header">
-                        <img t-if="avatarUrl" t-att-src="avatarUrl" alt=""/>
-                        <t t-else="" t-esc="initials"/>
-                    </div>
+                <!-- 使用者資訊（#1310：改為帳號選單，手機也看得到） -->
+                <div class="o_woow_account_anchor">
+                    <button type="button" class="o_woow_user_header"
+                            aria-haspopup="menu"
+                            t-att-aria-expanded="state.accountOpen ? 'true' : 'false'"
+                            aria-label="Account"
+                            t-on-click="toggleAccount">
+                        <div class="o_woow_user_text">
+                            <span class="o_woow_user_name" t-esc="partnerName"/>
+                        </div>
+                        <div class="o_woow_avatar_header">
+                            <img t-if="avatarUrl" t-att-src="avatarUrl" alt=""/>
+                            <t t-else="" t-esc="initials"/>
+                        </div>
+                    </button>
+                    <AccountMenu t-if="state.accountOpen" router="props.router" onClose.bind="closeAccount"/>
                 </div>
             </div>
         </header>

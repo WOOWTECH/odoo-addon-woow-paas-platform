@@ -61,6 +61,28 @@ export class PlanSelector extends Component {
   get cycles() {
     return [...new Set(this.props.plans.map((p) => p.unit))];
   }
+  /**
+   * #1310：年繳折扣原本寫死「Save 33%」，但各方案不同（Odoo 1,500／12,000＝33%，
+   * pi Agent 4,500／45,000＝17%）。依同 group_key 的月／年價實算；
+   * 各組折扣不同時顯示「最多省 N%」，算不出來就只顯示「Yearly」。
+   */
+  get yearlySavingsLabel() {
+    const savings = [];
+    for (const yearly of this.props.plans.filter((p) => p.unit === "year" && p.group_key)) {
+      const monthly = this.props.plans.find(
+        (p) => p.group_key === yearly.group_key && p.unit === "month");
+      if (monthly && monthly.price > 0 && yearly.price > 0) {
+        const pct = Math.round((1 - yearly.price / (monthly.price * 12)) * 100);
+        if (pct > 0) savings.push(pct);
+      }
+    }
+    if (!savings.length) return _t("Yearly");
+    const max = Math.max(...savings);
+    return Math.min(...savings) === max
+      ? _t("Yearly · Save %(pct)s", { pct: `${max}%` })
+      : _t("Yearly · Save up to %(pct)s", { pct: `${max}%` });
+  }
+
   get showCycleToggle() {
     return this.cycles.length > 1; // R1：單一 cycle 不渲染 toggle
   }

@@ -1,0 +1,27 @@
+// #1310：hover 才出現的控制項在觸控裝置上等於隱形。
+// 「沒有 hover 能力」或鍵盤聚焦到卡片內時，一律直接顯示。
+// 選擇器刻意多一層祖先，確保蓋過原本的 opacity: 0（不依賴檔案載入順序）。
+
+@media (hover: none) {
+  .o_woow_app_card .o_woow_app_card_add_btn,
+  .o_woow_sp_card .o_woow_sp_settings_btn,
+  .o_woow_mermaid .o_woow_mermaid__toolbar {
+    opacity: 1;
+  }
+}
+
+.o_woow_app_card:focus-within .o_woow_app_card_add_btn,
+.o_woow_sp_card:focus-within .o_woow_sp_settings_btn,
+.o_woow_mermaid:focus-within .o_woow_mermaid__toolbar {
+  opacity: 1;
+}
+
+.o_woow_app_card--clickable {
+  cursor: pointer;
+}
+
+// #1310：載入中骨架卡片繼承了 .o_woow_sp_card 的手指游標與浮起效果。
+.o_woow_sp_card.o_woow_sp_card_skeleton {
+  cursor: default;
+  pointer-events: none;
+}

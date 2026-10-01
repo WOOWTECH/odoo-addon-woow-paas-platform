@@ -1,0 +1,167 @@
+// #1310 Account menu (header avatar) — Help / Log Out / credits reachable on phones.
+.o_woow_account_anchor {
+  position: relative;
+}
+
+.o_woow_user_header {
+  border: none;
+  background: transparent;
+  padding: 4px;
+  border-radius: $woow-radius-full;
+  cursor: pointer;
+
+  &:hover,
+  &:focus-visible {
+    background: rgba(0, 0, 0, 0.04);
+  }
+}
+
+.o_woow_menu_backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1090;
+}
+
+.o_woow_account_menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 1100;
+  width: 280px;
+  display: flex;
+  flex-direction: column;
+  padding: 0.5rem;
+  background: white;
+  border: 1px solid $woow-border-light;
+  border-radius: 16px;
+  box-shadow: 0 12px 32px rgba(15, 23, 42, 0.16);
+  outline: none;
+
+  &__identity {
+    display: flex;
+    flex-direction: column;
+    padding: 0.5rem 0.75rem 0.75rem;
+    border-bottom: 1px solid $woow-border-light;
+    margin-bottom: 0.25rem;
+    min-width: 0;
+  }
+
+  &__name {
+    font-weight: 600;
+    color: $woow-text-primary;
+    overflow-wrap: anywhere;
+  }
+
+  &__email {
+    font-size: 0.8125rem;
+    color: $woow-text-secondary;
+    overflow-wrap: anywhere;
+  }
+
+  &__item,
+  &__credits {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    width: 100%;
+    padding: 0.625rem 0.75rem;
+    border: none;
+    border-radius: 10px;
+    background: transparent;
+    color: $woow-text-primary;
+    text-align: left;
+    cursor: pointer;
+
+    .material-symbols-outlined {
+      font-size: 20px;
+      color: $woow-text-secondary;
+    }
+
+    &:hover,
+    &:focus-visible {
+      background: rgba(95, 129, 252, 0.08);
+      outline: none;
+    }
+  }
+
+  &__credits {
+    flex-wrap: wrap;
+
+    .material-symbols-outlined {
+      color: $woow-primary;
+    }
+  }
+
+  &__value {
+    margin-left: auto;
+    font-weight: 600;
+    color: $woow-primary;
+  }
+
+  &__hint {
+    flex-basis: 100%;
+    padding-left: calc(20px + 0.75rem);
+    font-size: 0.75rem;
+    color: $woow-text-secondary;
+  }
+
+  &__item--danger:hover,
+  &__item--danger:focus-visible {
+    color: #dc2626;
+    background: rgba(239, 68, 68, 0.08);
+
+    .material-symbols-outlined {
+      color: #dc2626;
+    }
+  }
+}
+
+.o_woow_mobile_back {
+  display: none;
+}
+
+@media (max-width: 768px) {
+  .o_woow_header .o_woow_user_header {
+    display: flex;
+
+    .o_woow_user_text {
+      display: none;
+    }
+
+    .o_woow_avatar_header {
+      width: 36px;
+      height: 36px;
+    }
+  }
+
+  .o_woow_account_anchor {
+    position: static;
+  }
+
+  .o_woow_account_menu {
+    position: fixed;
+    top: calc(56px + 8px);
+    right: 12px;
+    width: min(300px, calc(100vw - 24px));
+  }
+
+  .o_woow_mobile_back {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    width: 40px;
+    height: 40px;
+    margin-left: -0.5rem;
+    border: none;
+    border-radius: 50%;
+    background: transparent;
+    color: $woow-text-primary;
+    cursor: pointer;
+
+    &:hover,
+    &:focus-visible {
+      background: rgba(0, 0, 0, 0.05);
+    }
+  }
+}

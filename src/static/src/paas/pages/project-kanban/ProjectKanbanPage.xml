@@ -41,7 +41,7 @@
                                         <div class="o_woow_status_row"><span class="o_woow_status_k">Model</span><span class="o_woow_status_v" t-esc="connection.model_name"/></div>
                                     </t>
                                     <t t-else="">
-                                        <p class="o_woow_status_hint">Configure an AI provider in Settings to enable conversations.</p>
+                                        <p class="o_woow_status_hint">No AI provider is set up for this project yet. Please contact your administrator to enable conversations.</p>
                                     </t>
                                 </div>
                             </t>

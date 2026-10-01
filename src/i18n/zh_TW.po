@@ -5889,7 +5889,7 @@ msgstr ""
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/layout/sidebar/Sidebar.xml:0
 msgid "Help & Support"
-msgstr ""
+msgstr "說明與支援"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -7437,7 +7437,7 @@ msgstr ""
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/layout/sidebar/Sidebar.xml:0
 msgid "Log Out"
-msgstr ""
+msgstr "登出"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -11206,7 +11206,7 @@ msgstr "儲存"
 #: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/AddonsTab.xml:0
 #: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/ConfigurationTab.xml:0
 msgid "Save Changes"
-msgstr ""
+msgstr "儲存變更"
 
 #. module: woow_paas_platform
 #. odoo-javascript
@@ -18720,3 +18720,75 @@ msgstr "通知"
 #: code:addons/woow_paas_platform/static/src/paas/layout/header/Header.js:0
 msgid "Notifications (%(count)s new)"
 msgstr "通知（%(count)s 則未讀）"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/account-menu/AccountMenu.xml:0
+msgid "Account"
+msgstr "帳號"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/account-menu/AccountMenu.xml:0
+msgid "Top up"
+msgstr "儲值"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/layout/header/Header.js:0
+msgid "Back to %(page)s"
+msgstr "返回%(page)s"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/CreateWorkspaceModal.xml:0
+msgid "Workspace Settings"
+msgstr "工作區設定"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/modal/CreateWorkspaceModal.js:0
+msgid "Failed to update workspace"
+msgstr "更新工作區失敗"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/billing/BillingOverviewPage.js:0
+msgid "%(card)s •••• %(last4)s"
+msgstr "%(card)s •••• %(last4)s"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/billing/BillingOverviewPage.js:0
+msgid "Paid with points"
+msgstr "以點數支付"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/subscription/PlanSelector.js:0
+msgid "Yearly"
+msgstr "年繳"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/subscription/PlanSelector.js:0
+msgid "Yearly · Save %(pct)s"
+msgstr "年繳 · 省 %(pct)s"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/components/subscription/PlanSelector.js:0
+msgid "Yearly · Save up to %(pct)s"
+msgstr "年繳 · 最多省 %(pct)s"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/project-kanban/ProjectKanbanPage.xml:0
+msgid "No AI provider is set up for this project yet. Please contact your administrator to enable conversations."
+msgstr "此專案尚未設定 AI 供應商，請聯絡管理員以啟用對話。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/workspace/WorkspaceDetailPage.js:0
+msgid "%(amount)s / month"
+msgstr "%(amount)s／月"

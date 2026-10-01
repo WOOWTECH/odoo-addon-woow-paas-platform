@@ -9,7 +9,7 @@
                 t-on-click="() => this.onCycleToggle('month')">Monthly</button>
         <button type="button"
                 t-attf-class="o_woow_plan_cycle_toggle__opt {{ state.cycle === 'year' ? 'o_woow_plan_cycle_toggle__opt--active' : '' }}"
-                t-on-click="() => this.onCycleToggle('year')">Yearly · Save 33%</button>
+                t-on-click="() => this.onCycleToggle('year')" t-esc="yearlySavingsLabel"/>
       </div>
 
       <!-- 方案卡片：當前 cycle 每 tier 一張（R2：單 tier 自然一張，無需特判） -->

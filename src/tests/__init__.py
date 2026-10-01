@@ -957,3 +957,5 @@ from . import test_tenant_orm_lifecycle_guards
 # #1310：/api/notifications（header 鈴鐺通知中心）——試用將結束、續約點數不足（含稅）、
 # error 服務（未封存、可存取工作區）、錢包異動資訊類、Portal 隔離。
 from . import test_notifications_1310
+# #1310：工作區預估月費——訂閱資訊 monthly_estimate（含稅、年繳 ÷12）。
+from . import test_monthly_estimate_1310

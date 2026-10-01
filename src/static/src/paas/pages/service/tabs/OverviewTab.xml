@@ -27,8 +27,8 @@
                                 <t t-esc="publicUrl"/>
                                 <WoowIcon name="'open_in_new'" size="14"/>
                             </a>
-                            <button class="o_woow_copy_btn" t-on-click="() => this.copyToClipboard(publicUrl)" title="Copy URL">
-                                <WoowIcon name="'content_copy'" size="16"/>
+                            <button class="o_woow_copy_btn" t-on-click="() => this.copyToClipboard(publicUrl, 'url')" title="Copy URL">
+                                <WoowIcon name="copyIcon('url')" size="16"/>
                             </button>
                             <!-- #648 (b)：服務已就緒、但寬限期內都沒能解析到這個
                                  網址的 DNS record ⇒ 帶著保留放行。用與上面
@@ -60,8 +60,8 @@
                                 <t t-esc="props.service.custom_domain"/>
                                 <WoowIcon name="'open_in_new'" size="14"/>
                             </a>
-                            <button class="o_woow_copy_btn" t-on-click="() => this.copyToClipboard(props.service.custom_domain)" title="Copy domain">
-                                <WoowIcon name="'content_copy'" size="16"/>
+                            <button class="o_woow_copy_btn" t-on-click="() => this.copyToClipboard(props.service.custom_domain, 'domain')" title="Copy domain">
+                                <WoowIcon name="copyIcon('domain')" size="16"/>
                             </button>
                         </span>
                     </div>

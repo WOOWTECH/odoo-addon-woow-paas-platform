@@ -4,7 +4,8 @@
         <div class="o_woow_modal_backdrop" t-on-click="onBackdropClick">
             <div class="o_woow_modal">
                 <div class="o_woow_modal_header">
-                    <h2>Create Workspace</h2>
+                    <h2 t-if="isEdit">Workspace Settings</h2>
+                    <h2 t-else="">Create Workspace</h2>
                     <button class="o_woow_modal_close" t-on-click="props.onClose">
                         <WoowIcon name="'close'" size="20"/>
                     </button>
@@ -50,8 +51,10 @@
                     <WoowButton variant="'primary'" size="'md'" onClick.bind="onSubmit" disabled="state.loading">
                         <t t-if="state.loading">
                             <WoowIcon name="'sync'" size="16" class="'o_woow_spin'"/>
-                            Creating...
+                            <t t-if="isEdit">Saving...</t>
+                            <t t-else="">Creating...</t>
                         </t>
+                        <t t-elif="isEdit">Save Changes</t>
                         <t t-else="">
                             Create Workspace
                         </t>
