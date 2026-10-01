@@ -15,9 +15,9 @@ import { _t } from "@web/core/l10n/translation";
  * Props:
  *   - status (string): Service state - running, deploying, upgrading, pending, error, deleting, active, suspended
  *   - size (string, optional): Badge size - 'sm', 'md' (default), 'lg'
- *   - phase (string, optional): #1159 Q40 — refines `initializing` without adding
- *     a state value: queued / running / waiting_ready / retrying (the service
- *     payload's `init_phase`). Ignored for every other status.
+ *   - phase (string, optional): #1159 Q40 — 不新增 state 值，只細分 `initializing`：
+ *     queued / running / waiting_ready / retrying（取自服務 payload 的 `init_phase`）。
+ *     其他 status 一律忽略。
  */
 export class StatusBadge extends Component {
     static template = "woow_paas_platform.StatusBadge";

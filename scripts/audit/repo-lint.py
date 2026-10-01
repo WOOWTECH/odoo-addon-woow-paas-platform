@@ -3501,7 +3501,7 @@ _PURE_READ_FORBIDDEN_CALLS = (
 #: #627 (i)：對帳 cron 是**第三個** release 事實寫入者。它受判準 1／2 管（必須經由
 #: producer、不得列字面鍵），另外受**判準 5** 管：它絕不可以寫 `state`。
 _RECONCILE_IMPLEMENTATION = (POLL_MODEL_FILE, "_cron_reconcile_release_facts")
-#: 判準 1／2 的適用範圍＝所有 release 事實寫入者（兩份 poll ＋ 對帳 cron）。
+#: 判準 1／2 的適用範圍＝所有 release 事實寫入者（背景 poll ＋ 對帳 cron；#1159 前 poll 有兩份）。
 #: #627 的教訓就是「N 份實作各寫一次」，所以新增寫入者必須加進這裡。
 _RELEASE_FACT_WRITERS = _POLL_IMPLEMENTATIONS + (_RECONCILE_IMPLEMENTATION,)
 #: 這些欄位只能由 `_release_facts` 產出，不得在任何寫入者內逐條列出。
@@ -3527,7 +3527,7 @@ def check_poll_release_facts_single_source(root):
        沒呼叫＝自己組 vals，收斂被繞過。
     2. **任何寫入者內都不得出現 release 事實欄位當 dict 字面鍵**。出現＝逐路徑列欄位
        的寫法回來了，正是 #627 的成因。
-    3. **兩份 poll 內每一個設定 `'state'` 的 `.write({...})` 都必須帶
+    3. **poll 實作（`_POLL_IMPLEMENTATIONS`，#1159 起只剩 model 一份）內每一個設定 `'state'` 的 `.write({...})` 都必須帶
        `**release_facts` 展開。** ⚠ 這條是 v2 補的：v1 只驗判準 1／2，而**刪掉單一
        分支的展開時兩者都不會紅**（`calls_producer` 仍為 True、也沒新增字面鍵）——
        實測確認過。v1 的 docstring 卻宣稱「守單一 producer 沒被繞過」，那句話在分支層
@@ -3550,7 +3550,7 @@ def check_poll_release_facts_single_source(root):
 
     ## 例外機制：**刻意不提供**
 
-    今天的誤報數是 0（實測：兩份 poll 各 4 條 write 全部設 `'state'` 且全部已帶展開；
+    當時的誤報數是 0（#1159 前實測：兩份 poll 各 4 條 write 全部設 `'state'` 且全部已帶展開；
     404／`deleting` 分支是 `unlink()` 不是 `write()`，天生不在判準 3 範圍內）。
 
     日後若真的出現正當例外，本 gate **不提供程式碼端豁免**（沒有 `# noqa` 之類的
@@ -3645,7 +3645,7 @@ def check_poll_release_facts_single_source(root):
                         % (rel, func_name, getattr(key, "lineno", -1),
                            key.value, _RELEASE_FACTS_PRODUCER))
 
-    # 判準 3／4：兩份 poll 的每一條 state-write 都要帶展開，且至少要有一條
+    # 判準 3／4：每一份 poll 實作的每一條 state-write 都要帶展開，且至少要有一條
     for rel, func_name in _POLL_IMPLEMENTATIONS:
         target = _find(rel, func_name)
         if target is None:

@@ -191,6 +191,8 @@ woow-paas/paas-app-bundle-cd#154（prod `limit_time_real_cron=1800`）要先上 
   或已親測 core scheduler 的 lastcall/failure_count；不將 local monitor 記帳故障改成 remote unknown 額度。
 - **租戶出口**（Q30）：initializing 可刪除（確認框註明已送出的 init 仍可能完成）；error 停用 Reset；init 失敗顯示
   固定文案＋attempt 序號＋support 入口；只有額度出口的 error 開放改設定。
+  Admin Credentials 按鈕在 error 時也停用：Q30 只要求停用 Reset，這是刻意保留（owner 裁決 2026-10-01），
+  因為後端 `_reset_admin_password` 本來就只接受 running，前端停用與後端一致，不是新的限制。
 
 ## Consequences
 
@@ -208,6 +210,12 @@ woow-paas/paas-app-bundle-cd#154（prod `limit_time_real_cron=1800`）要先上 
   既定 readiness 等待上限，才以 wait_timeout 收斂，而不是用不可靠訊號提早終止。
 - deleting 但 release 一直存在（uninstall 沒送成功）時沒有任何路徑會重送 uninstall（#1279）。
 - 監控 activity 建立時 core 會寄通知信給被指派者（`action_notify`）。
+- 監控的已知限制（不另加機制）：
+  - 兩個 cron 互查 `lastcall`，兩個同時停擺時沒有任何一方會告警，只剩 core 的 `_notify_admin` 備援。
+  - 沒有 active、非 share 的 `base.group_system` 使用者時只寫 warning log，不建 activity；n8n owner 未確認告警
+    此時不寫 marker，等有收件者後下一趟補發，其他監控項沿各自既有行為。
+  - 兩個 cron 幾乎同時對同一 summary 呼叫 `_alert` 時，各自看不到對方未 commit 的 activity，可能各建一張或重複追加
+    一行；同 summary 去重只保證在已 commit 的狀態上成立。
 - n8n client 預算改為專屬 `(120, 600)`，由 repo-lint `init-n8n-budget-ladder` 從 operator 原始碼的 AST 算 envelope
   （目前 531s）守住「read > envelope」；Odoo 維持 `(120, 900)`（`init-odoo-budget-ladder`，envelope 805s）。
 

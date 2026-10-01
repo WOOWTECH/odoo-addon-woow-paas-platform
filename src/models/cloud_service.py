@@ -947,11 +947,11 @@ class CloudService(models.Model):
             "service raise a red failure banner — while `ServiceCard.xml` "
             "additionally checks `state === 'error'`, so the two already behave "
             "differently.\n\n"
-            "⚠ `running` is in no poll domain (the cron picks up deploying/"
-            "upgrading/initializing, and the front-end pendingStates does not "
-            "include running either), so **nothing ever comes back to clear "
-            "this flag** — it is cleared by the re-probe that runs when the "
-            "tenant views the service (see `_refresh_public_url_dns_flag`)."
+            "⚠ `running` is in no status-poll domain (the status cron picks up "
+            "deploying/upgrading/initializing/deleting), so the flag is cleared "
+            "by the dedicated background re-probe cron "
+            "`_cron_reprobe_public_url_dns` (every 15 minutes, #1159 Q16/D4; "
+            "see `_refresh_public_url_dns_flag`). Service list/get only read it."
         ),
     )
     internal_port = fields.Integer(
@@ -3230,7 +3230,7 @@ class CloudService(models.Model):
         Args:
             status: operator ``get_status`` 的回應 dict
             dns_state: 已經探過的 DNS 現況（`_public_url_dns_state()` 的回傳）。
-                兩份 poll 會先探一次再把結果同時餵給本方法與 `_release_facts`，
+                背景 poll（#1159 起唯一一份）會先探一次再把結果同時餵給本方法與 `_release_facts`，
                 避免同一輪 poll 對同一個 hostname 探兩次（resolver 不可用時那是
                 兩倍的阻塞）。``None`` ＝ 本方法自己探，讓單獨呼叫仍然自足。
 
@@ -3647,8 +3647,8 @@ class CloudService(models.Model):
         # 便宜的判斷先做，探測擺在它後面：窗口外恆放行，那時不必再問。
         #
         # ⚠ **這在 production 熱路徑上省不到任何一次探測**，不要以為它是保護。
-        # 兩份 poll 都在呼叫本方法**之前**就無條件探好了（`release_status ==
-        # 'deployed'` 時各探一次，結果同時餵給本方法與 `_release_facts` 落旗標），
+        # 背景 poll（#1159 起唯一一份）在呼叫本方法**之前**就無條件探好了（`release_status ==
+        # 'deployed'` 時探一次，結果同時餵給本方法與 `_release_facts` 落旗標），
         # 所以走到這裡時 `dns_state` 已經有值、提前 return 只是少走幾行。
         # 真正受惠的是 `dns_state=None` 的**直接呼叫者**（測試，或日後某個沒先
         # 算的呼叫端）——順序這樣排是因為「便宜的條件先判」本來就對，不是因為
@@ -4110,7 +4110,8 @@ class CloudService(models.Model):
                 release.get('chart_version') or self.helm_chart_version
             ),
             # #627 (i)：`last_release_sync_at` 也走這個咽喉 ⇒ **三個寫入者**
-            # （兩份 poll ＋ reconciliation cron）自動全部 stamp，不必逐路徑補。
+            # （#1159 前是兩份 poll ＋ reconciliation cron；之後是背景 poll ＋ reconciliation cron）
+            # 自動全部 stamp，不必逐路徑補。
             # 這正是本方法存在的理由，也避免這個新欄位重演 #627。
             #
             # ⚠ 語意是「最後一次**問過** operator」，不是「最後一次值有變」——
@@ -4400,7 +4401,7 @@ class CloudService(models.Model):
         return bool(row and row[0])
 
     def _next_state_when_ready(self):
-        """pods ready 之後服務該去哪——兩份 poll（cron／list/get）共用的唯一判準。
+        """pods ready 之後服務該去哪——背景 poll 的唯一判準（#1159 起 list/get 純讀，不再 poll）。
 
         #1267：需要 init 與否**只**看欠 init 標記，不再看 ``addon_update_pending``。
         reconfigure 不改 addon 時會把後者覆寫成 False、rollback 根本不設它，兩條路都
@@ -4688,7 +4689,7 @@ class CloudService(models.Model):
     def _init_ready_to_claim(self):
         """claim 之前的前置條件（在 settle 之後的新交易裡讀）。
 
-        不欠 init 的 initializing 不 claim：兩份 poll 經 ``_next_state_when_ready``
+        不欠 init 的 initializing 不 claim：背景 poll 經 ``_next_state_when_ready``
         遇到它會直接寫 running，這裡與它一致，不另立收斂方向。
         """
         self.ensure_one()
@@ -6197,7 +6198,7 @@ class CloudService(models.Model):
         projects = self.mapped('project_ids') if tracked else self.browse()
         old = {p.id: set(p.workspace_ids.ids) for p in projects}
         # #1257 Q10：等待錨點在每次**進入** initializing 時重新計時。集中在這裡而不是
-        # 逐路徑 stamp（兩份 poll、resume……；pitfall
+        # 逐路徑 stamp（背景 poll、resume……；pitfall
         # reaped-since-single-path-stamp-gc-immunity）：新路徑寫進 initializing 時
         # 自動跟上。明寫 `init_wait_since` 的呼叫端（migration）優先。
         # #1159：同一個咽喉順帶清掉上一段 initializing 的 ready 觀測——剛進來的服務在

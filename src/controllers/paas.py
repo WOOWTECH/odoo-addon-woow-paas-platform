@@ -2413,7 +2413,8 @@ class PaasController(HiddenChainMixin, Controller):
 
         # 非 running 就讀不到租戶 Odoo 的模組狀態——那是**拒絕**的理由，不是「跳過檢查」
         # 的理由（#477 縫 (b)）。上游沒有別的閘擋得住：`_update_service` 的前置閘只擋
-        # pending / deleting / error，`_check_operation_allowed` 是訂閱閘（判 active /
+        # pending / deleting，以及非 init 額度出口的 error（#1159 Q30 放行額度出口的 error
+        # 做 reconfigure，所以 error 也可能走到這裡），`_check_operation_allowed` 是訂閱閘（判 active /
         # grace / past-grace，且 base.group_system 直接 bypass），與 service state 正交。
         if service.state != 'running':
             return cannot(_(
@@ -3732,7 +3733,8 @@ class PaasController(HiddenChainMixin, Controller):
 
     # _deploy_service_background removed — deployment is now handled by
     # ir.cron (CloudService._cron_process_pending_deploys) to avoid
-    # ConnectionPool lock contention in Odoo 18 workers=0 mode.
+    # ConnectionPool lock contention seen when the platform ran Odoo 18 with workers=0
+    # (prod is now prefork workers=6 + max_cron_threads=2, #1159 Q12).
 
     def _get_service(self, service: Any) -> dict[str, Any]:
         """Get service details.

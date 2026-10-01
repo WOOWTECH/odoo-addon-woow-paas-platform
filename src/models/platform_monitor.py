@@ -56,7 +56,11 @@ class PlatformMonitor(models.Model):
     _description = 'PaaS Platform Monitor'
     _inherit = ['mail.thread', 'mail.activity.mixin']
 
-    name = fields.Char(required=True)
+    name = fields.Char(
+        string='Name',
+        required=True,
+        help='Label of the platform monitor record that system alerts are attached to.',
+    )
     notified_unknown_attempt_ids = fields.Many2many(
         comodel_name='woow_paas_platform.cloud_service_init_attempt',
         relation='woow_paas_platform_monitor_unknown_attempt_rel',
