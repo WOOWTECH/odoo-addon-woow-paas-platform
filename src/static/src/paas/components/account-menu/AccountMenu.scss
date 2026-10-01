@@ -142,7 +142,8 @@
     position: fixed;
     top: calc(56px + 8px);
     right: 12px;
-    width: min(300px, calc(100vw - 24px));
+    width: 300px;
+    max-width: calc(100vw - 24px);
   }
 
   .o_woow_mobile_back {
