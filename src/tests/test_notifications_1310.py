@@ -156,7 +156,13 @@ class TestNotificationsEndpoint1310(HttpCase):
 
     def test_service_error_in_archived_workspace_is_hidden(self):
         workspace, _service = self._workspace_with_service(self.admin_user, 'error', 'Archived')
-        workspace.write({'state': 'archived'})
+        # #1297 now refuses to archive a workspace that still has services, so
+        # this state only exists as legacy data (archived before the guard).
+        # Reproduce that row shape directly instead of going through write().
+        self.env.cr.execute(
+            "UPDATE woow_paas_platform_workspace SET state = 'archived' WHERE id = %s",
+            (workspace.id,))
+        workspace.invalidate_recordset(['state'])
         data = self._notifications()
         self.assertNotIn('service_error', self._types(data))
 
