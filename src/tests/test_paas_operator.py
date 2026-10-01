@@ -104,11 +104,17 @@ class TestPaaSOperatorClient(TransactionCase):
         transport = SimulatedHTTPTransport()
         with patch('requests.Session.request', side_effect=transport):
             self.client.uninstall_release('paas-ws-a1b2c3d4', 'test-odoo')
-            self.client.init_n8n('paas-ws-a1b2c3d4', 'test-n8n', 'test@example.invalid', 'test-only')
             self.client.get_release('paas-ws-a1b2c3d4', 'test-odoo')
             self.client.health_check()
             self.client.reset_release_config('paas-ws-a1b2c3d4', 'test-odoo')
-        self.assertEqual([call['timeout'] for call in transport.calls], [120, 120, 30, 10, 75])
+        self.assertEqual([call['timeout'] for call in transport.calls], [120, 30, 10, 75])
+
+    def test_init_n8n_uses_dedicated_connect_read_budget(self):
+        """#1257 Q31：n8n init 不再共用 HELM 120，改用專屬 (connect 120, read 600)。"""
+        transport = SimulatedHTTPTransport()
+        with patch('requests.Session.request', side_effect=transport):
+            self.client.init_n8n('paas-ws-a1b2c3d4', 'test-n8n', 'test@example.invalid', 'test-only')
+        self.assertEqual([call['timeout'] for call in transport.calls], [(120, 600)])
 
     def test_client_initialization(self):
         """Test client initializes with correct headers."""

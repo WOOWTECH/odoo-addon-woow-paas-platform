@@ -19,6 +19,7 @@
 1	fn:check_gateway_copy_gate_anchor
 1	fn:check_hermes_agent_013_seed
 1	fn:check_indentation
+1	fn:check_init_n8n_budget_ladder
 1	fn:check_init_odoo_budget_ladder
 1	fn:check_internal_ctx_key_registry
 1	fn:check_js_i18n_template_literal
@@ -63,6 +64,7 @@
 1	rule:duplicate-class-methods
 1	rule:hermes-agent-013-seed
 1	rule:indentation
+1	rule:init-n8n-budget-ladder
 1	rule:init-odoo-budget-ladder
 1	rule:internal-ctx-key-registry
 1	rule:js-i18n-template-literal

@@ -412,9 +412,11 @@ class TestTimeoutDoesNotOverreach(_Base):
         self.assertEqual(svc.state, 'running')
 
     def test_initializing_is_not_touched(self):
-        """``initializing`` 已經有 ``init_retries`` 的上界，不該被兩套機制夾擊。
+        """``initializing`` 不歸 age timeout 管，不該被兩套機制夾擊。
 
-        （#489 明列：age timeout 只管 ``deploying`` / ``upgrading``。）
+        （#489 明列：age timeout 只管 ``deploying`` / ``upgrading``。#1257 起
+        ``initializing`` 有自己的上界：等待時限錨在 ``init_wait_since``，次數看
+        ``init_retries``／``init_unknown_count``——都與這裡的部署錨無關。）
         """
         svc = self._make_service('container', state='initializing',
                                  anchor_minutes_ago=_CONTAINER_DEFAULT + 999)

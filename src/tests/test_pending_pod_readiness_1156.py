@@ -137,7 +137,14 @@ class TestPendingPodReadiness(TransactionCase):
                 self.assertEqual(self.service.state, 'deploying')
 
     def test_post_deploy_init_waits_until_pending_pod_is_ready(self):
+        """pod 還沒 ready 不得進 init；ready 後進 ``initializing``。
+
+        #1257：init 只由 cron 經 model 的單一入口 ``_run_post_deploy_init`` 執行
+        （它會 commit，真 cursor 行為在 ``test_init_execution_control_1257``）；
+        controller 的 poll 只推進 state、不呼叫 operator 的 init。
+        """
         self.template.post_deploy_init_type = 'odoo'
+        self.service._open_init_generation()
         for entry in ('cron', 'controller'):
             with self.subTest(entry=entry):
                 self.service.write({'state': 'deploying'})
@@ -145,13 +152,13 @@ class TestPendingPodReadiness(TransactionCase):
                     {'name': 'postgres', 'phase': 'Running', 'ready': '1/1'},
                     {'name': 'odoo', 'phase': 'Pending', 'ready': '0/0'},
                 ]
-                pending_client = self._poll(entry, pods)
-                self.assertEqual(self.service.state, 'deploying')
+                with patch.object(type(self.service), '_run_post_deploy_init') as run_init:
+                    pending_client = self._poll(entry, pods)
+                    self.assertEqual(self.service.state, 'deploying')
+                    run_init.assert_not_called()
+                    pods[1] = {'name': 'odoo', 'phase': 'Running', 'ready': '1/1'}
+                    ready_client = self._poll(entry, pods)
+                self.assertEqual(self.service.state, 'initializing')
                 pending_client.init_odoo.assert_not_called()
-                pods[1] = {'name': 'odoo', 'phase': 'Running', 'ready': '1/1'}
-                ready_client = self._poll(entry, pods)
-                ready_client.init_odoo.assert_called_once_with(
-                    namespace=self.service.helm_namespace,
-                    release_name=self.service.helm_release_name,
-                )
-                self.assertEqual(self.service.state, 'running')
+                ready_client.init_odoo.assert_not_called()
+                self.assertEqual(run_init.call_count, 1 if entry == 'cron' else 0)

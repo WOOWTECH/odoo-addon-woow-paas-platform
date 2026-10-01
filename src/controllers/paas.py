@@ -3746,8 +3746,19 @@ class PaasController(HiddenChainMixin, Controller):
 
     def _update_service(self, service: Any, values: dict[str, Any] | None, version: str | None, odoo_addon_ids: list[int] | None = None) -> dict[str, Any]:
         """Update/upgrade a service."""
-        if service.state in ['pending', 'deleting', 'error']:
+        # #1159 Q30（後端守衛在 #1257）：error 按原因拆開。init 的**額度**用完
+        # （確定失敗／結果未知）而轉 error 時放行 reconfigure，並一律開新的一代
+        # ——v1 沒有 retry-init 按鈕，這是租戶唯一的出口。helm 失敗、等待逾時等
+        # 其他 error 照擋（addon 讓 pod 起不來屬 upgrading 逾時，出口是 rollback）。
+        init_exhausted_error = (
+            service.state == 'error' and service.init_exit in ('failed', 'unknown'))
+        if service.state in ['pending', 'deleting'] or (
+                service.state == 'error' and not init_exhausted_error):
             return {'success': False, 'error': _('Cannot update service in %(state)s state', state=service.state)}
+        # #1257 Q9：lease 持有期間可能有一次 init 正在叢集內執行，reconfigure 的
+        # helm upgrade 會與它互踩（也會改掉 CAS 要比對的 state）。
+        if service._init_lease_active():
+            return {'success': False, 'error': self._init_in_flight_error(service)}
 
         client = get_paas_operator_client(request.env)
         if not client:
@@ -3882,8 +3893,15 @@ class PaasController(HiddenChainMixin, Controller):
                 # 讓 age 虛增（誤殺）。repo-lint `transition-anchor-utc` 機械攔。
                 'last_upgraded_at': fields.Datetime.now(),
                 'error_message': False,
-                'addon_update_pending': addon_changed,
             })
+            # #1267：**不再**把 `addon_update_pending` 覆寫成「這次有沒有改 addon」
+            # ——那會把前一次 addon 變更留下的待辦、以及首次部署還欠的 init 一起蓋掉。
+            # 要不要 init 由欠 init 標記決定：改 addon 或從額度出口的 error 出發才開
+            # 新一代（Q24／#1159 Q30），否則沿用既有的欠 init（不開新一代）。
+            if addon_changed or init_exhausted_error:
+                service._open_init_generation()
+            if addon_changed:
+                service.write({'addon_update_pending': True})
             response_data = self._format_service(service)
 
             # Capture values for the background thread (no ORM access).
@@ -3984,6 +4002,19 @@ class PaasController(HiddenChainMixin, Controller):
         except PaaSOperatorConnectionError:
             return {'success': False, 'error': _('Unable to connect to deployment service')}
 
+    @staticmethod
+    def _init_in_flight_error(service: Any) -> str:
+        """#1257：lease 期間拒絕 reconfigure／rollback 的可讀錯誤（#1267 驗收 4）。
+
+        措辭不說「初始化進行中」：結果未知的 attempt 轉 error 之後 lease 仍刻意留到
+        到期（遠端 exec 可能還在跑，Q8），那時畫面上的服務已經是 error。
+        """
+        return _(
+            'An initialization request for this service may still be running in the '
+            'cluster. Please try again after %(until)s UTC.',
+            until=fields.Datetime.to_string(service.init_lease_until),
+        )
+
     def _delete_service(self, service: Any) -> dict[str, Any]:
         """Delete/uninstall a service."""
         if service.state == 'deleting':
@@ -4050,6 +4081,9 @@ class PaasController(HiddenChainMixin, Controller):
         # 結果就是欠費停權的 VM 被喚醒並繼續計費。
         if service.state in ['pending', 'deleting', 'suspended']:
             return {'success': False, 'error': _('Cannot rollback service in %(state)s state', state=service.state)}
+        # #1257 Q23：lease 持有期間拒絕（同 reconfigure 的理由）。
+        if service._init_lease_active():
+            return {'success': False, 'error': self._init_in_flight_error(service)}
 
         client = get_paas_operator_client(request.env)
         if not client:
@@ -4070,6 +4104,16 @@ class PaasController(HiddenChainMixin, Controller):
                 'error_message': False,
                 'last_upgraded_at': fields.Datetime.now(),
             })
+            # #1257 Q23／#1267：還欠 init 的服務（含 init 額度用完的 error）rollback
+            # 開新的一代——保留欠 init、計數歸零，下一輪導回 initializing。之前只寫
+            # upgrading、不設 `addon_update_pending`，首次部署 init 失敗、已轉 error 的
+            # 服務 rollback 後會被 poll 直接寫成 running。
+            # init 已完成的服務**不**開新一代（M2 裁定 (A)，修訂 Q24 字面，守住 #1267
+            # 驗收 5）：否則 n8n 每次 rollback 都多建一把 API key 並重啟，租戶改過 owner
+            # 密碼時還會 login 失敗到額度用完、沒有出口。代價：Odoo rollback 到 addon
+            # 組合不同的 revision 不會自動 update_list——與 #1257 以前的行為一致。
+            if service.init_pending:
+                service._open_init_generation()
 
             return {'success': True, 'message': _('Rollback to revision %(revision)s initiated', revision=revision)}
 
@@ -4231,40 +4275,19 @@ class PaasController(HiddenChainMixin, Controller):
                     stuck_detail = detail
 
                 if all_ready:
-                    template = service.template_id
-                    needs_init = (
-                        template.post_deploy_init_type
-                        and template.post_deploy_init_type != 'none'
-                    )
-
-                    if needs_init and original_state == 'deploying':
-                        # Pods ready but need post-deploy init → transition to initializing
+                    # #1267：去向只由欠 init 標記決定，判準與 cron 那份共用
+                    # （`CloudService._next_state_when_ready`）。
+                    #
+                    # #1257（#1159 Q1 的一部分提前落地）：這條 list/get 路徑**只推進
+                    # state**、不 dispatch init。init 一律由 cron 經 model 的單一入口
+                    # `_run_post_deploy_init` 執行——claim 必須在呼叫 operator 之前
+                    # commit，而在 request 中途 commit 會把同一個 request 先前的寫入
+                    # 一起提交出去。前端 30s abort 也曾讓同步 init 長佔 request worker。
+                    next_state = service._next_state_when_ready()
+                    if next_state != original_state:
+                        # 進 initializing 時的等待錨點由 model 的 write() 集中 stamp。
                         sys_service.write({
-                            'state': 'initializing',
-                            **release_facts,
-                            'error_message': False,
-                        })
-                        self._run_post_deploy_init(service)
-
-                    elif needs_init and original_state == 'initializing':
-                        # Already initializing, retry if needed
-                        self._run_post_deploy_init(service)
-
-                    elif needs_init and original_state == 'upgrading' and service.addon_update_pending:
-                        # Addon selection changed during upgrade → need module list refresh
-                        sys_service.write({
-                            'state': 'initializing',
-                            **release_facts,
-                            'error_message': False,
-                            'init_retries': 0,
-                            'init_error': False,
-                        })
-                        self._run_post_deploy_init(service)
-
-                    else:
-                        # No init needed or already done → running.
-                        sys_service.write({
-                            'state': 'running',
+                            'state': next_state,
                             **release_facts,
                             'error_message': False,
                         })
@@ -4335,189 +4358,6 @@ class PaasController(HiddenChainMixin, Controller):
 
         except Exception as e:
             _logger.warning("Error polling service status: %s", str(e))
-
-    def _run_post_deploy_init(self, service: Any) -> None:
-        """Execute post-deploy initialization for a service.
-
-        Called when pods are ready but the application needs initialization
-        (e.g., n8n owner setup + API key generation).
-
-        On success: transitions to 'running' and auto-creates MCP server.
-        On failure: increments retry counter; after 5 retries → 'error' state.
-
-        #676：狀態回寫走 `sys_service`（系統身分），理由與 `_update_service_status`
-        的 `sys_service` 同一條——本函式只從那裡被呼叫，而那條路徑的兩個端點
-        （list / get）沒有 role gate。同樣**只提權寫入**：`template` 與
-        `service.n8n_owner_*` 等讀取維持呼叫者身分。
-        """
-        # 邊界在這一行；下面每一處寫入都掛在這個名字上，讀取一律用 `service`。
-        sys_service = service.sudo()
-        template = service.template_id
-
-        if template.post_deploy_init_type == 'n8n':
-            client = get_paas_operator_client(request.env)
-            if not client:
-                _logger.warning("PaaS Operator not configured, cannot initialize n8n")
-                return
-
-            owner_email = service.n8n_owner_email or template.post_deploy_init_email or 'admin@woowtech.io'
-            owner_password = service.n8n_owner_password
-            if not owner_password:
-                # Fallback for services created before this feature
-                owner_password = 'W' + str(uuid.uuid4()).upper()
-
-            try:
-                result = client.init_n8n(
-                    namespace=service.helm_namespace,
-                    release_name=service.helm_release_name,
-                    owner_email=owner_email,
-                    owner_password=owner_password,
-                )
-
-                if result.get('success'):
-                    real_api_key = result['api_key']
-
-                    # Check if sidecar was properly restarted
-                    if not result.get('pod_restarted'):
-                        _logger.warning(
-                            "n8n init for service %s: API key updated in Secret but pod was NOT restarted. "
-                            "MCP sidecar may still use the old placeholder key until next pod restart.",
-                            service.name,
-                        )
-
-                    # Update helm_values to replace the UUID placeholder with the real API key
-                    update_vals = {
-                        'n8n_api_key': real_api_key,
-                        'state': 'running',
-                        'init_retries': 0,
-                        'init_error': False,
-                    }
-                    merged_helm_values = None
-                    if template.mcp_api_key_helm_path:
-                        try:
-                            # #559：走 model 的唯一入口（欄位有 groups=）
-                            current_values = service._helm_values_dict()
-                            api_key_nested = self._unflatten_dotpath_keys(
-                                {template.mcp_api_key_helm_path: real_api_key}
-                            )
-                            merged_helm_values = self._deep_merge(current_values, api_key_nested)
-                        except (json.JSONDecodeError, TypeError):
-                            _logger.warning("Failed to update helm_values with real API key for service %s", service.name)
-                    # #676：原本是
-                    # `service._apply_helm_values(merged, extra_vals=update_vals)`。
-                    # 拆開的理由不是風格：`_apply_helm_values` 的 docstring 明寫
-                    # 「extra_vals 裡的其他欄位**刻意不提權**、走呼叫者自己的身分寫入，
-                    # 這樣 ir.rule 對它們照常生效——提權只落在 helm_values 這一格」。
-                    # 把系統身分的 recordset 餵進去，那句話在這條路徑上就變成假的，
-                    # 而它讀起來像全域保證。拆成「狀態回寫掛 sys_service、helm_values
-                    # 仍由 `_apply_helm_values` 自己提權」之後，那句宣稱維持全域為真，
-                    # 提權邊界也直接顯示在呼叫點上，不必到被呼叫函式裡才看得出來。
-                    # 順序與原本一致（先 extra_vals 再 helm_values）。
-                    sys_service.write(update_vals)
-                    if merged_helm_values is not None:
-                        service._apply_helm_values(merged_helm_values)
-                    _logger.info(
-                        "n8n init succeeded for service %s, API key and helm_values updated",
-                        service.name,
-                    )
-                else:
-                    retries = (service.init_retries or 0) + 1
-                    error_msg = result.get('error', 'Unknown error')
-                    vals = {
-                        'init_retries': retries,
-                        'init_error': error_msg,
-                    }
-                    if retries >= 5:
-                        vals.update({
-                            'state': 'error',
-                            'error_message': _('n8n initialization failed after '
-                                               '%(retries)s retries: %(reason)s',
-                                               retries=retries, reason=error_msg),
-                        })
-                    sys_service.write(vals)
-                    _logger.warning(
-                        "n8n init attempt %d failed for service %s: %s",
-                        retries, service.name, error_msg,
-                    )
-
-            except Exception as e:
-                retries = (service.init_retries or 0) + 1
-                vals = {
-                    'init_retries': retries,
-                    'init_error': str(e),
-                }
-                if retries >= 5:
-                    vals.update({
-                        'state': 'error',
-                        'error_message': _('n8n initialization failed: %(reason)s', reason=str(e)),
-                    })
-                sys_service.write(vals)
-                _logger.warning(
-                    "n8n init exception (attempt %d) for service %s: %s",
-                    retries, service.name, e,
-                )
-
-        elif template.post_deploy_init_type == 'odoo':
-            client = get_paas_operator_client(request.env)
-            if not client:
-                _logger.warning("PaaS Operator not configured, cannot initialize Odoo module list")
-                return
-
-            try:
-                result = client.init_odoo(
-                    namespace=service.helm_namespace,
-                    release_name=service.helm_release_name,
-                )
-
-                if result.get('success'):
-                    sys_service.write({
-                        'state': 'running',
-                        'init_retries': 0,
-                        'init_error': False,
-                        'addon_update_pending': False,
-                    })
-                    _logger.info(
-                        "Odoo init succeeded for service %s: added=%d, updated=%d",
-                        service.name,
-                        result.get('modules_added', 0),
-                        result.get('modules_updated', 0),
-                    )
-                else:
-                    retries = (service.init_retries or 0) + 1
-                    error_msg = result.get('error', 'Unknown error')
-                    vals = {
-                        'init_retries': retries,
-                        'init_error': error_msg,
-                    }
-                    if retries >= 5:
-                        vals.update({
-                            'state': 'error',
-                            'error_message': _('Odoo initialization failed after '
-                                               '%(retries)s retries: %(reason)s',
-                                               retries=retries, reason=error_msg),
-                        })
-                    sys_service.write(vals)
-                    _logger.warning(
-                        "Odoo init attempt %d failed for service %s: %s",
-                        retries, service.name, error_msg,
-                    )
-
-            except Exception as e:
-                retries = (service.init_retries or 0) + 1
-                vals = {
-                    'init_retries': retries,
-                    'init_error': str(e),
-                }
-                if retries >= 5:
-                    vals.update({
-                        'state': 'error',
-                        'error_message': _('Odoo initialization failed: %(reason)s', reason=str(e)),
-                    })
-                sys_service.write(vals)
-                _logger.warning(
-                    "Odoo init exception (attempt %d) for service %s: %s",
-                    retries, service.name, e,
-                )
 
     def _compute_sidecar_url_hint(self, service: Any) -> str:
         """Compute the MCP endpoint URL for a service's sidecar.

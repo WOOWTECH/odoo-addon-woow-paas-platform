@@ -169,6 +169,11 @@ _CONFIG_PARAMETERS = [
     # `test_public_url_dns_gate_648.py::TestNewConfigParametersAreRegisteredForUninstall`。
     'woow_paas_platform.dns_grace_seconds',
     'woow_paas_platform.dns_gate_enabled',
+    # #1257 Q37：post-deploy init 的 unknown／partial 額度與等待時限（「模組常數＋
+    # get_param()」寫法，lint 掃不到 ⇒ 補在
+    # `test_init_execution_control_1257.py::TestInitConfigParametersRegisteredForUninstall`）。
+    'woow_paas_platform.init_unknown_limit',
+    'woow_paas_platform.init_wait_timeout_minutes',
     # #501：限量商品的供給閘門（缺值時走 cloud_app_template.py 的內建預設）。
     # key 由 slug 推導，新增限量商品時這裡要跟著補兩個
     # （守線＝repo-lint 的 config-parameter-uninstall）。

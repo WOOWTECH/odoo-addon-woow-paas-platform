@@ -940,6 +940,11 @@ from . import test_portal_user_workspace_1261
 # trial_end + 1」的日期慣例，不是 off-by-one；釘住它，免得被「順手修正」成今天。
 from . import test_skip_trial_dates_1261
 
+# #1257：post-deploy init 的執行管控（欠 init、attempt、lease、CAS、失敗分類、
+# migration），含 #1266（suspend 吃掉 init）與 #1267（reconfigure／rollback 繞過
+# init）的重現。會走到 init 入口的測試用真 cursor＋真 commit＋事後清理。
+from . import test_init_execution_control_1257
+
 # #1294：非系統管理員的工作區 owner/admin 刪不掉自己的 SH（ACL unlink=0 ＋ 前置檢查
 # 連 route 子表一起驗）。守 owner/admin 經真 HTTP 刪得掉、user/guest／跨工作區仍被拒、
 # Cloudflare 清理失敗時記錄保住、route 仍沒有單獨刪除入口。

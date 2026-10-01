@@ -142,7 +142,7 @@ class _Base(TransactionCase):
         """
         client = MagicMock()
         client.get_status.return_value = status_payload
-        with patch(f'{_MODEL_PATH}._model_run_post_deploy_init', return_value=None):
+        with patch(f'{_MODEL_PATH}._run_post_deploy_init', return_value=None):
             service._poll_and_update_status(client)
         service.invalidate_recordset()
 
@@ -321,9 +321,8 @@ class TestBothPollImplementationsWriteTheSameFields(_Base):
         fake_request.env = self.env
         ctrl_path = 'odoo.addons.woow_paas_platform.controllers.paas'
         with patch(f'{ctrl_path}.get_paas_operator_client', return_value=client), \
-                patch(f'{ctrl_path}.request', new=fake_request), \
-                patch(f'{ctrl_path}.PaasController._run_post_deploy_init',
-                      return_value=None):
+                patch(f'{ctrl_path}.request', new=fake_request):
+            # #1257：controller 的 poll 只推進 state、不 dispatch init，不必再 patch。
             PaasController()._update_service_status(service)
         service.invalidate_recordset()
 

@@ -20,7 +20,7 @@ ready 一滿足就寫 ``state='running'``，租戶看到綠燈、點進去拿 ``
 ``_poll_and_update_status`` 與 controller 的 ``_update_service_status`` 共用）。把閘移到
 running 的 write 分支要改 6 個點，等於再造一次 #627 的形狀。另外
 ``elif needs_init and original_state == 'initializing'`` 分支**每輪都會重跑**
-``_model_run_post_deploy_init``——閘放 write 上，服務會停在 ``initializing`` 反覆進 init
+``_run_post_deploy_init``（#1257 起的單一 init 入口）——閘放 write 上，服務會停在 ``initializing`` 反覆進 init
 去撞 ``init_retries`` 上界（5 次翻 error），繞回同一個「健康服務被標 error」的結果。
 
 ## 🔴 為什麼窗口必須綁在 ``_transition_anchor()`` 上（本檔最重要的不變式）

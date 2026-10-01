@@ -40,5 +40,18 @@
             <field name="interval_type">days</field>
             <field name="active" eval="True"/>
         </record>
+        <!-- Cron: 清理 post-deploy init 的 attempt 記錄（#1257 Q39）
+
+             保留每服務最近 20 筆＋目前這一代的全部；超過 90 天者清掉（當代除外）。
+             20／90 是保守值，沒有量測依據。 -->
+        <record id="ir_cron_purge_init_attempts" model="ir.cron">
+            <field name="name">Cloud Service: Purge Init Attempts</field>
+            <field name="model_id" ref="model_woow_paas_platform_cloud_service_init_attempt"/>
+            <field name="state">code</field>
+            <field name="code">model._cron_purge_init_attempts()</field>
+            <field name="interval_number">1</field>
+            <field name="interval_type">days</field>
+            <field name="active" eval="True"/>
+        </record>
     </data>
 </odoo>

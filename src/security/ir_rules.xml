@@ -75,8 +75,8 @@
              ——controller 的 create/update/delete 三個 gate（`paas.py`）今天都已經是
              owner/admin，放寬 ORM 層會讓它比 UI 更鬆。
 
-             🔴 收窄這一條會連帶影響**讀取**端點：poll（`_update_service_status` 與其下游
-             `_run_post_deploy_init`）只被 `_list_services` / `_get_service` 呼叫，而那兩個
+             🔴 收窄這一條會連帶影響**讀取**端點：poll（`_update_service_status`；#1257 起
+             它只推進 state、不再 dispatch init）只被 `_list_services` / `_get_service` 呼叫，而那兩個
              分支沒有 role gate ⇒ 那條路徑的寫入已改走系統身分，見 `paas.py` 的 #676 註解。
              刪掉那邊的 `sys_service`，租戶的服務會**永遠停在轉移態**——而且不會有任何
              錯誤浮出來：`_update_service_status` 的 catch-all 把 AccessError 降級成
