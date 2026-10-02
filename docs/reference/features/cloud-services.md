@@ -124,6 +124,7 @@ rules:
 | POST   | `/api/releases/{namespace}/{name}/rollback`  | helm rollback               |
 | GET    | `/api/releases/{namespace}/{name}/revisions` | helm history                |
 | GET    | `/api/releases/{namespace}/{name}/status`    | Get pod/deployment status   |
+| GET    | `/api/releases/{namespace}/{name}/mqtt-address` | 對外 MQTT 位址回讀（charts/emqx） |
 | POST   | `/api/namespaces`                            | Create namespace with quota |
 
 **Request/Response Example**：

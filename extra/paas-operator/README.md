@@ -51,6 +51,7 @@ The PaaS Operator Service is a secure, high-performance API that wraps Helm CLI 
 - `POST /api/releases/{namespace}/{name}/rollback` - Rollback release
 - `GET /api/releases/{namespace}/{name}/revisions` - Get revision history
 - `GET /api/releases/{namespace}/{name}/status` - Get release and pod status
+- `GET /api/releases/{namespace}/{name}/mqtt-address` - Get the public MQTT address the release's tunnel agent advertises on its container log (charts/emqx). `public_url: null` is a normal state (not enabled / agent not connected yet), not an error.
 
 ### Namespaces
 

@@ -259,6 +259,32 @@ class CloudAppTemplate(models.Model):
              'has_admin_gui=True.',
     )
 
+    # 對外 MQTT 位址（charts/emqx 0.1.0）——「這個商品有沒有一個平台要回讀並顯示
+    # 給租戶的對外位址」的**唯一事實源**。
+    #
+    # 為什麼是 template 欄位而不是在哪裡判 `slug == 'emqx'`：capability gate 一律
+    # 收斂成單一欄位（docs/decisions/patterns/capability-gate-single-source-field.md，
+    # repo-lint 第 7 條機械守著前端不得用 slug 做集合成員判斷）。model 的
+    # `CloudService._chart_has_public_mqtt_address`、poll 的探測閘門、service payload
+    # 與前端文案四處都讀它。
+    #
+    # 位址怎麼來：平台的 Cloudflare 通道只載 HTTP/WS，原生 MQTT 走租戶自己的 ngrok
+    # agent（chart 的 sidecar）。租戶若填了 ngrok 保留位址，那個值本來就在 helm values
+    # 裡、平台早就知道；本旗標要解的是**隨機指派**那一種——agent 每次連線拿到的位址只有
+    # 它自己知道，它每 60 秒把當前位址印到自己的 container log，operator 的
+    # `GET /api/releases/{ns}/{release}/mqtt-address` 從那裡讀回來。
+    #
+    # ⚠ 旗標開著不代表一定有位址：租戶沒開對外 MQTT、agent 還沒連上、pod 還在起來，
+    # 都是正常的「沒有位址」狀態（`cloud_service.mqtt_public_url` 為空），不是錯誤。
+    has_public_mqtt_address = fields.Boolean(
+        string='Advertises a public MQTT address',
+        default=False,
+        help='The chart runs a tunnel agent that advertises the service\'s public '
+             'MQTT address on its own container log, and the platform reads it back '
+             'and shows it on the service page. Empty address is a normal state '
+             '(the tenant has not enabled it, or the agent has not connected yet).',
+    )
+
     # #449 密碼載體：**只影響 reset 路徑，不影響供給路徑**。
     # 供給側（建立服務時把 admin_password 經 sensitive_values 送進 chart）兩種載體
     # 完全相同——都是 config.sensitive.admin_password，由 has_admin_gui 這條供給鏈

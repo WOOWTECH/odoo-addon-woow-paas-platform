@@ -1155,6 +1155,100 @@ class KubernetesService:
                 stderr="",
             )
 
+    # ── EMQX 的對外 MQTT 位址（charts/emqx 0.1.0 契約）────────────────────────
+    #
+    # chart 的 ngrok sidecar 把當前的公開位址每 60 秒印一次到自己的 stdout
+    # （`WOOW_MQTT_PUBLIC_URL=tcp://…`）。平台從 container log 讀它，而不是
+    #   * 開一個 :4040 的 Service —— agent 的本機 API 能**建立**隧道，開成 Service
+    #     等於讓同一個租戶 namespace 內的其他服務操作它；
+    #   * 讓 sidecar 寫 ConfigMap —— 那需要掛 SA token ＋ RBAC（chart 目前
+    #     automountToken=false）。
+    # log 這條路零 RBAC、零額外埠、零額外 image，而「每 60 秒重印」正是讓
+    # log rotation 永遠轉不掉唯一一筆位址的原因。
+    #
+    # 刻意**不**回傳任何原始 log 內容：只回傳比對成功的那個位址。容器 log 是
+    # 第三方（ngrok agent）的輸出，整段轉出去等於把一個不受控的字串管道接到
+    # Odoo 的 HTTP 回應上。
+    NGROK_CONTAINER_NAME = "ngrok"
+    NGROK_ADDRESS_MARKER = "WOOW_MQTT_PUBLIC_URL="
+    NGROK_LOG_TAIL_LINES = 200
+    NGROK_LOG_TIMEOUT_SECONDS = 15
+    # ngrok TCP endpoint 的形狀。fail-closed：對不上就當沒有，不把來源字串轉出去。
+    _NGROK_ADDRESS_RE = re.compile(r"^tcp://[A-Za-z0-9][A-Za-z0-9.-]{0,252}:[0-9]{1,5}$")
+
+    def get_advertised_mqtt_address(self, namespace: str, release: str) -> Optional[str]:
+        """Read the public MQTT address the release's ngrok sidecar advertises.
+
+        Args:
+            namespace: Release namespace
+            release: Helm release name (``app.kubernetes.io/instance``)
+
+        Returns:
+            The advertised ``tcp://host:port``, or None when there is nothing to
+            report — no pod, no ngrok sidecar (the tenant left it off), the agent
+            has not connected yet, or the line did not match the expected shape.
+            All of those are ordinary states, NOT errors: the caller must not
+            treat None as a failure.
+        """
+        validate_namespace(namespace)
+
+        pods = self.get_pods(
+            namespace, label_selector=f"app.kubernetes.io/instance={release}"
+        )
+        for pod in pods:
+            if pod.deletion_timestamp:
+                continue
+            try:
+                result = self._run_command(
+                    [
+                        "logs",
+                        pod.name,
+                        "--namespace",
+                        namespace,
+                        "--container",
+                        self.NGROK_CONTAINER_NAME,
+                        f"--tail={self.NGROK_LOG_TAIL_LINES}",
+                    ],
+                    timeout=self.NGROK_LOG_TIMEOUT_SECONDS,
+                )
+            except KubectlException as e:
+                # The usual case: this pod has no `ngrok` container because the
+                # tenant has not enabled public MQTT. Also covers a pod that is
+                # still initialising. Debug-level on purpose — it is not a fault.
+                logger.debug(
+                    "No ngrok log for %s/%s: %s", namespace, pod.name, e.message
+                )
+                continue
+
+            address = None
+            for line in (result.stdout or "").splitlines():
+                marker_at = line.find(self.NGROK_ADDRESS_MARKER)
+                if marker_at == -1:
+                    continue
+                candidate = line[marker_at + len(self.NGROK_ADDRESS_MARKER):].strip()
+                if self._NGROK_ADDRESS_RE.match(candidate):
+                    # Keep scanning: the sidecar re-prints on an interval, so the
+                    # LAST match is the address the agent currently holds.
+                    address = candidate
+                elif not candidate:
+                    # An EMPTY announcement is a retraction: the sidecar prints it
+                    # whenever the agent exits (bad token, expired account…)
+                    # before backing off and retrying. Without honouring it the
+                    # platform would keep showing the last address the dead agent
+                    # held, and the tenant would configure devices against a
+                    # tunnel that no longer exists.
+                    address = None
+                else:
+                    logger.warning(
+                        "Discarding malformed advertised address from %s/%s",
+                        namespace,
+                        pod.name,
+                    )
+            if address:
+                return address
+
+        return None
+
     def get_pods(self, namespace: str, label_selector: Optional[str] = None) -> List[PodInfo]:
         """Get pods in a namespace.
 

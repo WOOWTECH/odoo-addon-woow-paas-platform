@@ -27,7 +27,11 @@ from ..models.cloud_service import _internal_provision
 MCP_SERVER_CHART_SUFFIX = '/mcp-server'
 # app 在第一次開機把平台給的密碼寫進自己的資料庫、之後自己保管（平台改 Secret 不改
 # 密碼）的 chart 家族 → app_managed（平台只給初始密碼、不能重設）。
-APP_MANAGED_CHART_SUFFIXES = ('/omnigent',)
+# - emqx：EMQX_DASHBOARD__DEFAULT_PASSWORD 只在第一次開機生效，之後存 EMQX 內建 DB
+#   （woow-paas-charts charts/emqx statefulset.yaml／NOTES.txt「ON FIRST BOOT ONLY」）
+# - nextcloud：NEXTCLOUD_ADMIN_PASSWORD 只在安裝時用，之後由 Nextcloud 自己的 DB 保管
+#   （charts/nextcloud values.yaml「INSTALL-TIME password only」）
+APP_MANAGED_CHART_SUFFIXES = ('/omnigent', '/emqx', '/nextcloud')
 
 
 class TestAdminPasswordCarrierSeed(TransactionCase):
@@ -84,7 +88,7 @@ class TestAdminPasswordCarrierSeed(TransactionCase):
                 '%s 走 mcp-server chart，密碼落在 PVC 的 config.json' % xmlid)
 
     def test_carrier_matches_chart_family(self):
-        """結構不變式：``config_json`` ⟺ chart 是 mcp-server；``app_managed`` ⟺ app 自管密碼的 chart（omnigent）。
+        """結構不變式：``config_json`` ⟺ chart 是 mcp-server；``app_managed`` ⟺ app 自管密碼的 chart（omnigent／emqx／nextcloud）。
 
         刻意不硬編「幾筆 config_json、幾筆 helm_secret」——那種計數斷言在新增
         template 時只會被 bump 過去（seed-topology-invariants 的教訓）。這裡守的
