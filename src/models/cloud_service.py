@@ -5684,8 +5684,18 @@ class CloudService(models.Model):
                     self.id, attempt.id,
                 )
                 return False
+            # #1333：n8n init 成功時 operator 會 rollout restart（sidecar 要從 Secret
+            # 讀到真的 API key，Recreate 策略＝先砍舊 Pod 再建新 Pod），所以「init 成功」
+            # 的當下 n8n 其實正在重啟——直接寫 running，租戶點網址就是 502（10-02 正式站
+            # 兩種帳號都重現）。改成留在 initializing、清掉欠 init 標記：init cron 不會
+            # 再 claim（它只撈 init_pending），短 poll 等重啟後的 Pod 全部 ready 時經
+            # `_next_state_when_ready` 轉 running；等待受 `_init_check_wait_timeout`
+            # 封頂（錨點在這裡重設成現在）。舊 Pod 帶 deletion_timestamp，已被
+            # `_is_container_ready` 排除，不會被誤認為就緒。
+            # Odoo init 不重啟 Pod，維持直接 running。
+            restarts_pods = attempt.init_type == 'n8n'
             vals = dict(release, **{
-                'state': 'running',
+                'state': 'initializing' if restarts_pods else 'running',
                 'init_pending': False,
                 'addon_update_pending': False,
                 'init_retries': 0,
@@ -5697,6 +5707,11 @@ class CloudService(models.Model):
                 'init_retry_eligible_at': False,
                 'init_queue_turn': False,
             })
+            if restarts_pods:
+                vals.update({
+                    'init_ready_observed': False,
+                    'init_wait_since': self._init_db_now(),
+                })
             if outcome.api_key:
                 # 在列鎖下再寫一次：前一步的保底寫入若撞鎖失敗，這裡仍會落地。
                 vals['n8n_api_key'] = outcome.api_key
