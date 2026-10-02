@@ -2,7 +2,7 @@
 """Omnigent BYO host：部署時注入同工作區 Omnigent 的叢集內網址。
 
 code-server／pi-agent／open-design 的 chart 在主容器裡跑 omnigent host（woow-paas-charts
-``shared/omnigent-host`` 共用套件，沒有 sidecar），標準 values 區塊是
+``shared/omnigent-host`` 共用套件，host 跑在同一個主容器裡），標準 values 區塊是
 ``omnigentHost.serverUrl``。平台在 ``_assemble_deploy_values`` 裡把「同工作區、running、
 最早建立的 Omnigent」的叢集內網址填進去（和 ``_inject_allowed_origins`` 同一 family）：
 
@@ -55,7 +55,8 @@ class TestInjectOmnigentServerUrl(TransactionCase):
             self.assertEqual(out, {'omnigentHost': {'serverUrl': self.URL}}, slug)
 
     def test_noop_for_other_slugs(self):
-        """Omnigent 自己、hermes-agent（open-design 派生但沒有 sidecar）、n8n 都不得長出鍵。"""
+        """Omnigent 自己、hermes-agent（open-design 派生但沒有內建 omnigent host）、n8n
+        都不得長出鍵。"""
         for slug in ('omnigent', 'hermes-agent', 'n8n', 'odoo'):
             out = self.CloudService._inject_omnigent_server_url(
                 {'existing': 1}, slug, self.URL)
@@ -204,7 +205,7 @@ class TestWorkspaceOmnigentUrlInjection(TransactionCase):
         self._omni(namespace='paas-ws-elsewher')
         self.assertIsNone(self._injected(self.cs))
 
-    def test_noop_for_chart_without_sidecar(self):
+    def test_noop_for_chart_without_omnigent_host(self):
         self._omni()
         n8n = self._svc(self.tpl_n8n, 'svc-n8n00001')
         self.assertNotIn('omnigentHost', n8n._assemble_deploy_values()['values'])
@@ -250,15 +251,37 @@ class TestWorkspaceOmnigentUrlInjection(TransactionCase):
 
     # ---- Service name / port mirror charts/omnigent _helpers.tpl -----------
 
+    def _assert_od_selector_warning(self, expected_url):
+        """照常注入，但記「open-design 的 omnigentEgress selector 對不上」warning。"""
+        with self.assertLogs(_LOGGER, level=logging.WARNING) as logs:
+            got = self._injected(self.cs)
+        self.assertEqual(got, expected_url)
+        self.assertTrue(
+            any('omnigentEgress' in line and 'pod selector' in line
+                for line in logs.output), logs.output)
+
     def test_release_name_containing_chart_name_is_used_verbatim(self):
+        """Service 名＝release 名原樣（chart ``contains`` 規則）。OD 會把
+        ``my-omnigent`` 釘成 instance=my，但 pod 的 instance 是 my-omnigent ⇒ warning。"""
         self._omni(release='my-omnigent')
-        self.assertEqual(self._injected(self.cs), _url('my-omnigent'))
+        self._assert_od_selector_warning(_url('my-omnigent'))
+
+    def test_standard_name_matches_od_selector_without_warning(self):
+        """正式站形態（svc-xxxxxxxx、沒有 override）：OD selector 對得上，不記 warning。"""
+        self._omni()
+        with self.assertNoLogs(_LOGGER, level=logging.WARNING):
+            got = self._injected(self.cs)
+        self.assertEqual(got, _url('svc-om000001-omnigent'))
 
     def test_fullname_override_and_name_override(self):
         omni = self._omni(helm_values={'fullnameOverride': 'og-entry'})
-        self.assertEqual(self._injected(self.cs), _url('og-entry'))
+        # 不是 <X>-omnigent 形態：OD 不釘 instance，name 標籤仍是 omnigent ⇒ 對得上
+        with self.assertNoLogs(_LOGGER, level=logging.WARNING):
+            self.assertEqual(self._injected(self.cs), _url('og-entry'))
+        omni.write({'helm_values': json.dumps({'fullnameOverride': 'other-omnigent'})})
+        self._assert_od_selector_warning(_url('other-omnigent'))
         omni.write({'helm_values': json.dumps({'nameOverride': 'og'})})
-        self.assertEqual(self._injected(self.cs), _url('svc-om000001-og'))
+        self._assert_od_selector_warning(_url('svc-om000001-og'))
 
     def test_service_port_override(self):
         self._omni(helm_values={'service': {'port': 18000}})
@@ -386,7 +409,11 @@ class TestWorkspaceOmnigentUrlInjection(TransactionCase):
 
     def test_tenant_members_get_the_same_url(self):
         """部署可能由租戶身分觸發（owner／admin 的「儲存設定」走未 sudo 的 service）：
-        注入結果不得因觸發者是誰而不同。"""
+        四種非系統管理員角色觸發的注入結果都和 superuser 一樣。
+
+        這支釘的是「成員觸發的路徑通」，**不**證明 sudo 必要：今天的讀取 rule 讓
+        成員讀得到同工作區每一筆服務，拿掉 sudo 它照樣綠。sudo 由下一支
+        ``test_trigger_that_cannot_read_the_omnigent_still_gets_the_url`` 釘。"""
         users = {
             role: new_test_user(self.env, login='omni-url-%s' % role,
                                 groups='base.group_user')
@@ -410,3 +437,42 @@ class TestWorkspaceOmnigentUrlInjection(TransactionCase):
         for role in ('owner', 'admin'):
             values = cs.with_user(users[role])._assemble_deploy_values()['values']
             self.assertEqual(values['omnigentHost']['serverUrl'], expected, role)
+
+    def test_trigger_that_cannot_read_the_omnigent_still_gets_the_url(self):
+        """``_workspace_omnigent_url`` 以 sudo 查詢的理由：注入結果不能由「誰觸發部署」
+        決定。
+
+        今天**不存在**這種觸發者：cloud_service 的讀取 rule 對同工作區的每一筆一樣
+        （成員全看得到）、系統管理員全開、cron 是 superuser。所以這裡用一條**測試
+        專用**的 global rule（遮住 Omnigent 服務）造出「讀得到本筆、讀不到同工作區
+        Omnigent」的 owner，模擬日後加了依服務／依角色的可見性 rule。拿掉 sudo，這支
+        會紅（沒注入網址）。"""
+        owner = new_test_user(self.env, login='omni-url-hidden-owner',
+                              groups='base.group_user')
+        self.assertFalse(owner.has_group('base.group_system'), '前提：非系統管理員')
+        ws = self.env['woow_paas_platform.workspace'].create({
+            'name': 'Omnigent URL hidden WS', 'owner_id': owner.id})
+        cs = self._svc(self.tpl_cs, 'svc-cshidden', ws=ws)
+        omni = self._omni(release='svc-omhidden', ws=ws)
+        expected = _url('svc-omhidden-omnigent')
+
+        Service = self.env['woow_paas_platform.cloud_service'].with_user(owner)
+        self.assertEqual(Service.search([('id', '=', omni.id)]).ids, [omni.id],
+                         '前提：沒有測試 rule 時 owner 讀得到 Omnigent（今天的狀態）')
+        # 沒有 groups 的 ir.rule＝global rule，和其他 rule 取 AND，系統管理員以外都受限；
+        # sudo（superuser）不受 ir.rule 約束。
+        self.env['ir.rule'].create({
+            'name': 'test-only: hide Omnigent services from their workspace members',
+            'model_id': self.env['ir.model']._get_id('woow_paas_platform.cloud_service'),
+            'domain_force': "[('template_id.slug', '!=', 'omnigent')]",
+            'perm_read': True, 'perm_write': True,
+            'perm_create': True, 'perm_unlink': True,
+        })
+        self.assertFalse(Service.search([('id', '=', omni.id)]),
+                         '前提：觸發者讀不到同工作區的 Omnigent')
+        self.assertEqual(Service.search([('id', '=', cs.id)]).ids, [cs.id],
+                         '前提：觸發者讀得到要部署的那台')
+
+        self.assertEqual(cs.with_user(owner)._workspace_omnigent_url(), expected)
+        values = cs.with_user(owner)._assemble_deploy_values()['values']
+        self.assertEqual(values['omnigentHost']['serverUrl'], expected)

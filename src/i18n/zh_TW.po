@@ -19571,14 +19571,26 @@ msgstr "Git Token 適用主機：「%(entry)s」不是有效的主機名稱（�
 #. module: woow_paas_platform
 #. odoo-python
 #: code:addons/woow_paas_platform/models/cloud_app_template.py:0
+msgid "Git token hosts: \"%(entry)s\" contains a space or line break; separate hosts with commas (example: github.com, gitlab.com)."
+msgstr "Git Token 適用主機：「%(entry)s」中間有空白或換行；多個主機請用逗號分隔（例：github.com, gitlab.com）。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_app_template.py:0
+msgid "Git token hosts: \"%(entry)s\" is not a full host name; use a dotted name such as github.com or git.example.com."
+msgstr "Git Token 適用主機：「%(entry)s」不是完整的主機名稱，請填含網域的名稱（例：github.com 或 git.example.com）。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_app_template.py:0
 msgid "Git token hosts: at most %(max)s hosts."
 msgstr "Git Token 適用主機最多 %(max)s 個。"
 
 #. module: woow_paas_platform
 #. odoo-python
 #: code:addons/woow_paas_platform/models/cloud_app_template.py:0
-msgid "Git author name must be one line of at most %(max)s characters, without \" \\ ; # < >."
-msgstr "Git 作者名稱只能是一行、最多 %(max)s 個字，且不能含有 \" \\ ; # < >。"
+msgid "Git author name must be one line of at most %(max)s characters, without \" \\ ; # < > or invisible control characters."
+msgstr "Git 作者名稱只能是一行、最多 %(max)s 個字，且不能含有 \" \\ ; # < > 或看不見的控制字元（例如換行、文字方向控制字元）。"
 
 #. module: woow_paas_platform
 #. odoo-python

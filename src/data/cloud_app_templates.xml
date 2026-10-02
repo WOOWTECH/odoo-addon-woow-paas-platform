@@ -1711,7 +1711,8 @@
              改了會重啟 pod。
              git 設定（QA CS-02／CS-03，純文字、非憑證）：git.userName／git.userEmail（commit
              作者身分）、git.tokenHosts（Git Token 交給哪些主機；租戶填逗號清單、預設
-             github.com）。chart 把三者原樣寫進 /etc/gitconfig（改了會重啟 pod），所以 spec 帶
+             github.com；只認逗號分隔、主機名要含點，見 parse_git_hosts）。chart 把三者原樣寫進
+             /etc/gitconfig（改了會重啟 pod），所以 spec 帶
              ``format``：存檔時 `cloud_app_template._validate_spec_formats` 擋下會弄壞
              gitconfig 的值，部署組裝時 `_apply_spec_formats` 把逗號清單轉成 chart 要的
              https URL list（helm_values 保留租戶原文）。
@@ -1751,7 +1752,7 @@
                 "description": "Git 個人存取權杖（選填，GitHub／GitLab／Gitea 皆可）；git 推送／拉取「Git Token 適用主機」時自動帶入，不寫入磁碟"},
                 {"key": "git.tokenHosts", "label": "Git Token 適用主機", "type": "text", "format": "git_hosts",
                 "default": "github.com", "placeholder": "github.com, git.example.com",
-                "description": "Git Token 只會交給這些主機（只限 https，逗號分隔，最多 10 個，可帶 :port）；留空＝只有 github.com。修改後服務重啟約一分鐘"},
+                "description": "Git Token 只會交給這些主機（只限 https；多個請用逗號分隔、不能用空白；要填含網域的完整主機名，例 git.example.com；最多 10 個，可帶 :port）；留空＝只有 github.com。修改後服務重啟約一分鐘"},
                 {"key": "git.userName", "label": "Git 作者名稱", "type": "text", "format": "git_name",
                 "placeholder": "王小明",
                 "description": "git commit 的作者名稱（選填）；留空則第一次 commit 前要在終端機自己設定 git config user.name。修改後服務重啟約一分鐘"},

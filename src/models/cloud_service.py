@@ -647,7 +647,7 @@ _DASHBOARD_PUBLIC_URL_VALUE_PATHS = {
 
 
 # Omnigent BYO host：哪些 chart 在主容器裡內建 omnigent host（woow-paas-charts
-# ``shared/omnigent-host`` 共用套件；沒有 sidecar，host 和產品跑在同一個容器），
+# ``shared/omnigent-host`` 共用套件；host 和產品跑在同一個主容器裡），
 # 要把「同工作區 Omnigent 的叢集內網址」寫進哪個 value path（套件標準 values 區塊
 # ``omnigentHost.serverUrl``）。
 #
@@ -682,6 +682,14 @@ _OMNIGENT_DEFAULT_SERVICE_PORT = 8000
 # （NetworkPolicy 比對的是 pod 的 containerPort＝Service 的 targetPort，不是
 # service.port）。Omnigent 的 targetPort 被改掉時，OD 會連不到注入的網址。
 _OMNIGENT_EGRESS_PINNED_TARGET_PORT = 8000
+# 同一條 OD egress 規則的 pod selector（woow-paas-charts charts/open-design
+# ``open-design.omnigentEgress``）：預設 ``app.kubernetes.io/name=omnigent``＋
+# ``component=server``；注入的網址主機是 ``<X>-omnigent[.<ns>…]`` 時再釘
+# ``app.kubernetes.io/instance=<X>``（X＝主機名去掉 ``-omnigent``）。Omnigent chart
+# 的 pod 標籤是 name＝``nameOverride``（預設 chart 名）、instance＝release 名，所以
+# 只有「Service 名＝``<release>-omnigent``、沒有 nameOverride」時兩邊才對得上。
+_OMNIGENT_EGRESS_SELECTOR_NAME = 'omnigent'
+_OMNIGENT_EGRESS_HOST_SUFFIX = '-omnigent'
 # k8s DNS label（RFC 1123）：release 名、namespace、Service 名都必須符合，
 # 否則不組網址（防止奇怪的 helm_values 把任意字串拼進 URL）。
 _DNS_LABEL_RE = re.compile(r'^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$')
@@ -2698,7 +2706,7 @@ class CloudService(models.Model):
         """把同工作區 Omnigent 的叢集內網址注入 ``omnigentHost.serverUrl``。
 
         code-server／pi-agent／open-design 的 chart 都在主容器裡跑 omnigent host
-        （woow-paas-charts ``shared/omnigent-host`` 共用套件，沒有 sidecar），它把
+        （woow-paas-charts ``shared/omnigent-host`` 共用套件，跑在同一個主容器裡），它把
         這個網址用在登入提示（``omnigent login <url>``）、狀態訊息，以及租戶還沒
         登入過時的備援；chart 自己學不到同工作區有沒有 Omnigent、release 叫什麼，
         所以和 ``_inject_allowed_origins`` 同一 family，由平台補上。
@@ -2769,9 +2777,23 @@ class CloudService(models.Model):
         namespace 的 baseline NetworkPolicy（``paas-baseline-allow-same-ns``）只管
         **Ingress**。code-server 靠 ``networkPolicy.sameNamespaceEgress``（或
         ``allowAllEgress``）、pi-agent 靠 ``allowAllEgress``；open-design 的 internet
-        egress 排除 10.0.0.0/8，要靠 ``networkPolicy.omnigentEgress`` 對 Omnigent pod
-        的 targetPort 8000 開洞——Omnigent 的 ``service.targetPort`` 不是 8000 時
-        OD 會連不到（記 warning），只能改用公開網址。
+        egress 排除 10.0.0.0/8，要靠 ``networkPolicy.omnigentEgress`` 開洞，而那條
+        規則同時取決於 **port 與 pod selector**：
+
+        - port：只開 Omnigent pod 的 targetPort 8000——``service.targetPort`` 不是
+          8000 時 OD 連不到；
+        - selector：``app.kubernetes.io/name=omnigent``＋``component=server``，網址
+          主機是 ``<X>-omnigent`` 形態時再釘 ``app.kubernetes.io/instance=<X>``。
+          Omnigent pod 的 instance 是 release 名、name 是 ``nameOverride``（預設
+          ``omnigent``），所以 release 名本來就含 ``omnigent``（例 ``my-omnigent``，
+          Service 名照 chart 用 release 名原樣 ⇒ OD 釘成 instance=``my``）、
+          ``fullnameOverride`` 成 ``<X>-omnigent`` 而 X 不是 release 名、或設了
+          ``nameOverride`` 時，selector 對不上 pod，OD 一樣連不到
+          （``_omnigent_matches_od_egress_selector``）。
+
+        兩種情形平台都照常注入（code-server／pi-agent 不受影響），只記 warning；
+        OD 那台只能改用公開網址登入，或由 chart 端放寬 selector。正式站的 release
+        都是 ``svc-xxxxxxxx``、沒有 override，兩條都不會觸發。
         """
         self.ensure_one()
         release = self.helm_release_name or ''
@@ -2831,9 +2853,38 @@ class CloudService(models.Model):
                 self.id, target_port, _OMNIGENT_EGRESS_PINNED_TARGET_PORT,
                 _OMNIGENT_EGRESS_PINNED_TARGET_PORT,
             )
+        if not self._omnigent_matches_od_egress_selector(
+                release, service_name, values):
+            _logger.warning(
+                "Omnigent service id=%s: service name / nameOverride does not "
+                "match open-design networkPolicy.omnigentEgress's pod selector "
+                "(app.kubernetes.io/name=%s, instance=<host minus %s>); "
+                "open-design cannot reach the injected URL",
+                self.id, _OMNIGENT_EGRESS_SELECTOR_NAME,
+                _OMNIGENT_EGRESS_HOST_SUFFIX,
+            )
         return 'http://%s.%s.svc.cluster.local:%d' % (
             service_name, namespace, port,
         )
+
+    @staticmethod
+    def _omnigent_matches_od_egress_selector(release, service_name, values):
+        """open-design 的 omnigentEgress selector 會不會選到這個 Omnigent 的 pod。
+
+        鏡射 charts/open-design ``open-design.omnigentEgress``（見
+        ``_OMNIGENT_EGRESS_SELECTOR_NAME`` 的說明）：pod 的 name 標籤必須是
+        ``omnigent``（沒有別的 ``nameOverride``）；Service 名是 ``<X>-omnigent``
+        時 OD 另釘 instance=X，X 必須＝release 名（pod 的 instance 標籤）。
+        """
+        name_override = values.get('nameOverride') if isinstance(values, dict) else None
+        if isinstance(name_override, str) and name_override \
+                and name_override != _OMNIGENT_EGRESS_SELECTOR_NAME:
+            return False
+        if service_name.endswith(_OMNIGENT_EGRESS_HOST_SUFFIX) \
+                and len(service_name) > len(_OMNIGENT_EGRESS_HOST_SUFFIX):
+            pinned = service_name[:-len(_OMNIGENT_EGRESS_HOST_SUFFIX)]
+            return pinned == release
+        return True
 
     def _workspace_omnigent_url(self):
         """同工作區 running Omnigent 的叢集內網址（給主容器內的 omnigent host）。
@@ -2856,9 +2907,17 @@ class CloudService(models.Model):
         決定性），並記一行 info log 列出被略過的。
 
         唯讀、不寫 DB、不呼叫 operator（``_assemble_deploy_values`` 的契約）。
-        以 sudo 查詢：部署可能由租戶身分觸發，而 record rule 不該讓注入結果
-        因觸發者不同而不同；讀到的只有 release 名／namespace／helm_values 裡的
-        名稱與 port，不讀任何敏感欄位。
+
+        以 sudo 查詢＝**防禦性**：注入結果只該由工作區內有哪些 Omnigent 決定，不該
+        由觸發部署的是誰決定。**今天**不存在「讀得到本筆、卻讀不到同工作區
+        Omnigent」的非系統使用者——cloud_service 的讀取 rule（``ir_rules.xml``
+        ``cloud_service_rule_member_read``）對同一工作區的每一筆都一樣（成員＝全看
+        得到），系統管理員有 ``cloud_service_rule_admin_full``，cron 是 superuser。
+        sudo 守的是**日後**：只要哪天多一條會遮住部分服務的 record rule（例如依服務
+        或依角色的可見性），未 sudo 的查詢就會讓「誰按了儲存設定」決定網址有沒有
+        注入。``test_omnigent_server_url_injection`` 以一條測試專用 rule 重現這種
+        情形釘住它。讀到的只有 release 名／namespace／helm_values 裡的名稱與 port，
+        不讀任何敏感欄位。
         """
         self.ensure_one()
         if self.template_id.slug not in _OMNIGENT_SERVER_URL_VALUE_PATHS:

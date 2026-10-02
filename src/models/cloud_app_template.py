@@ -1,6 +1,7 @@
 import json
 import logging
 import re
+import unicodedata
 
 from odoo import _, api, fields, models
 from odoo.exceptions import ValidationError
@@ -44,6 +45,27 @@ _GIT_HOST_RE = re.compile(
 # gitconfig 未加引號的值：控制字元（含換行）、引號、反斜線會改變解析；``;``／``#``
 # 開始註解（後面整段被吃掉）；``<``／``>`` git 自己會從作者身分裡剝掉。
 _GIT_VALUE_FORBIDDEN_RE = re.compile(r'[\x00-\x1f\x7f"\\;#<>]')
+# 上面那組只擋 ASCII。chart 把值 render 進 YAML literal block（``name = {{ . }}``），
+# 而 YAML 1.1 解析器（helm／kubectl 用的 goyaml.v2、PyYAML）把 U+0085（NEL）、
+# U+2028／U+2029 也當**換行**——``x<NEL>[core]`` 一樣會長出一段新的 gitconfig
+# section（round-3 review 實測）。所以另外依 Unicode 類別擋掉所有不可見的字元：
+# Cc（C0／C1 控制字元，含 NEL）、Cf（格式字元，含 bidi 控制 U+202A–202E／
+# U+2066–2069、U+200E／200F、零寬字元、BOM）、Zl／Zp（行／段落分隔）、Cs（代理
+# 對）、Co（私用區）、Cn（未指派，含 U+FFFE／FFFF）。一般空白（Zs，例全形空白）
+# 照收——名字裡本來就可能有空白，YAML 也不把它當換行。
+_GIT_VALUE_FORBIDDEN_CATEGORIES = frozenset(('Cc', 'Cf', 'Zl', 'Zp', 'Cs', 'Co', 'Cn'))
+
+
+def _git_value_has_forbidden_char(value):
+    """gitconfig 未加引號的值裡有會改變解析、或看不見的字元 → True。"""
+    return bool(_GIT_VALUE_FORBIDDEN_RE.search(value)) or any(
+        unicodedata.category(ch) in _GIT_VALUE_FORBIDDEN_CATEGORIES for ch in value)
+
+
+# Git Token 適用主機的分隔符：只認逗號（含全形「，」）。空白**不是**分隔符——
+# ``git example.com`` 這種打錯會被當成兩台主機（``https://git``＝pod DNS search
+# path 上叫 git 的任何東西），Git Token 就交出去了（round-3 review）。
+_GIT_HOSTS_SEPARATOR_RE = re.compile(r'[,\uff0c]')
 _EMAIL_RE = re.compile(
     r'^[A-Za-z0-9.!$%&\'*+/=?^_`{|}~-]+@'
     r'[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?'
@@ -51,12 +73,22 @@ _EMAIL_RE = re.compile(
 
 
 def parse_git_hosts(raw):
-    """``git.tokenHosts``：逗號（或空白）分隔的主機 → chart 要的 https URL list。
+    """``git.tokenHosts``：**逗號**分隔的主機 → chart 要的 https URL list。
 
     ``github.com, git.example.com:3000`` → ``['https://github.com',
     'https://git.example.com:3000']``。可帶 ``https://`` 前綴、結尾 ``/``；大小寫
     不分、重複的去掉、順序保留。只收 https——Git Token 是租戶的憑證，不送明文
     http。空字串／None → ``(None, None)``＝不設，chart 預設（github.com）補位。
+
+    Git Token 交給誰由這份清單決定，所以寧可擋下也不猜：
+
+    - 只認逗號（含全形「，」）當分隔符；一個項目中間有空白／換行
+      （``git example.com``、``github.com gitlab.com``）→ ``hosts_whitespace``，
+      不會被拆成兩台主機；
+    - 主機名至少要有一個點（``github.com``、``git.example.com``、IP）；單一
+      label（``gitea``、``git:3000``、``localhost``）→ ``hosts_single_label``——
+      它會經 pod 的 DNS search path 解析到 namespace 裡同名的 Service 之類，
+      等於把 Token 交給不知道是誰的東西。
 
     Returns:
         (list | None, (error code, params) | None)——錯誤訊息由
@@ -66,7 +98,7 @@ def parse_git_hosts(raw):
     if raw is None:
         return None, None
     if isinstance(raw, str):
-        items = re.split(r'[,\s]+', raw)
+        items = _GIT_HOSTS_SEPARATOR_RE.split(raw)
     elif isinstance(raw, (list, tuple)):
         items = list(raw)
     else:
@@ -78,6 +110,8 @@ def parse_git_hosts(raw):
         entry = item.strip()
         if not entry:
             continue
+        if any(ch.isspace() for ch in entry):
+            return None, ('hosts_whitespace', {'entry': entry})
         low = entry.lower()
         if low.startswith('https://'):
             low = low[len('https://'):]
@@ -89,6 +123,8 @@ def parse_git_hosts(raw):
         if (not match or len(match.group('host')) > 253
                 or (port is not None and not 0 < int(port) < 65536)):
             return None, ('hosts_invalid', {'entry': entry})
+        if '.' not in match.group('host'):
+            return None, ('hosts_single_label', {'entry': entry})
         url = 'https://%s' % low
         if url not in hosts:
             hosts.append(url)
@@ -98,7 +134,12 @@ def parse_git_hosts(raw):
 
 
 def parse_git_name(raw):
-    """``git.userName``：一行、≤ 100 字、沒有會弄壞 gitconfig 的字元。空 → 不設。"""
+    """``git.userName``：一行、≤ 100 字、沒有會弄壞 gitconfig 的字元。空 → 不設。
+
+    擋 ``" \\ ; # < >``、ASCII 控制字元，以及 YAML 會當換行的 U+0085／U+2028／
+    U+2029 與其他看不見的字元（bidi 控制、零寬字元等，見
+    ``_GIT_VALUE_FORBIDDEN_CATEGORIES``）。
+    """
     if raw is None:
         return None, None
     if not isinstance(raw, str):
@@ -106,7 +147,7 @@ def parse_git_name(raw):
     name = raw.strip()
     if not name:
         return None, None
-    if len(name) > _GIT_NAME_MAX or _GIT_VALUE_FORBIDDEN_RE.search(name):
+    if len(name) > _GIT_NAME_MAX or _git_value_has_forbidden_char(name):
         return None, ('name_invalid', {'max': _GIT_NAME_MAX})
     return name, None
 
@@ -120,7 +161,8 @@ def parse_email(raw):
     email = raw.strip()
     if not email:
         return None, None
-    if len(email) > _EMAIL_MAX or not _EMAIL_RE.match(email):
+    if (len(email) > _EMAIL_MAX or not _EMAIL_RE.match(email)
+            or _git_value_has_forbidden_char(email)):
         return None, ('email_invalid', {})
     return email, None
 
@@ -1068,11 +1110,18 @@ class CloudAppTemplate(models.Model):
         if code == 'hosts_invalid':
             return _('Git token hosts: "%(entry)s" is not a valid host name '
                      '(example: github.com or git.example.com:3000).', **params)
+        if code == 'hosts_whitespace':
+            return _('Git token hosts: "%(entry)s" contains a space or line break; '
+                     'separate hosts with commas (example: github.com, gitlab.com).',
+                     **params)
+        if code == 'hosts_single_label':
+            return _('Git token hosts: "%(entry)s" is not a full host name; use a dotted '
+                     'name such as github.com or git.example.com.', **params)
         if code == 'hosts_too_many':
             return _('Git token hosts: at most %(max)s hosts.', **params)
         if code == 'name_invalid':
             return _('Git author name must be one line of at most %(max)s characters, '
-                     'without " \\ ; # < >.', **params)
+                     'without " \\ ; # < > or invisible control characters.', **params)
         if code == 'email_invalid':
             return _('Git author email is not a valid email address.')
         return _('Invalid setting value.')

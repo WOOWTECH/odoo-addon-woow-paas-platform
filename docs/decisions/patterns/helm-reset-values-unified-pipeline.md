@@ -77,8 +77,14 @@ annotation；supervisor 與 `omnigent-host-status` 執行期讀檔。所以 Omni
 連不連得到由各 chart 的 egress 規則決定（租戶 baseline NetworkPolicy
 `paas-baseline-allow-same-ns` 只管 Ingress）：code-server 靠
 `networkPolicy.sameNamespaceEgress`／`allowAllEgress`、pi-agent 靠 `allowAllEgress`、
-open-design 靠 `networkPolicy.omnigentEgress`（只對 Omnigent pod 的 targetPort 8000
-開洞；Omnigent 的 `service.targetPort` 不是 8000 時平台記 warning，OD 只能改用公開網址）。
+open-design 靠 `networkPolicy.omnigentEgress`，而那條規則同時取決於 port 與 pod
+selector：只對 Omnigent pod 的 targetPort 8000 開洞，selector 是
+`app.kubernetes.io/name=omnigent`＋`component=server`，網址主機是 `<X>-omnigent` 形態時
+再釘 `app.kubernetes.io/instance=<X>`。所以 Omnigent 的 `service.targetPort` 不是 8000、
+release 名本來就含 `omnigent`（例 `my-omnigent` ⇒ OD 釘 instance=`my`，pod 卻是
+`my-omnigent`）、`fullnameOverride` 成別人的 `<X>-omnigent`、或設了 `nameOverride` 時，
+OD 都連不到；平台照常注入、只記 warning（`_omnigent_matches_od_egress_selector`），OD
+那台只能改用公開網址登入。正式站 release 都是 `svc-xxxxxxxx`、沒有 override，不會觸發。
 
 `audit_411_reset_values.py` 把 `omnigentHost.serverUrl` 與其他整條路徑的 injector 鍵
 登記在 `_INJECTOR_VALUE_PATHS`（(a) 自癒類；例如 Omnigent 刪除後 stored release 殘留

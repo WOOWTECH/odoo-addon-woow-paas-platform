@@ -48,7 +48,9 @@ class TestGitSpecParsers(TransactionCase):
                 'https://github.com', 'https://git.example.com:3000'],
             ' GitHub.com ,https://Git-Prod.WoowTech.io/ ,, ': [
                 'https://github.com', 'https://git-prod.woowtech.io'],
-            'github.com github.com\ngitlab.com': ['https://github.com', 'https://gitlab.com'],
+            # 全形逗號也是分隔符（中文輸入法常打出來）；重複的去掉
+            'github.com，gitlab.com,github.com': ['https://github.com', 'https://gitlab.com'],
+            '10.0.0.5:3000': ['https://10.0.0.5:3000'],
         }
         for raw, expected in cases.items():
             self.assertEqual(parse_git_hosts(raw), (expected, None), repr(raw))
@@ -70,8 +72,22 @@ class TestGitSpecParsers(TransactionCase):
             'github.com:70000': 'hosts_invalid',
             '-bad.example.com': 'hosts_invalid',
             'gith"ub.com': 'hosts_invalid',
-            'github.com]\n[core]': 'hosts_invalid',
             'a_b.example.com': 'hosts_invalid',
+            'git\u202e.example.com': 'hosts_invalid',
+            # 空白／換行不是分隔符：打錯的「git example.com」不能變成兩台主機
+            # （https://git 會經 pod 的 DNS search path 解析到 namespace 裡的東西）
+            'git example.com': 'hosts_whitespace',
+            'github.com gitlab.com': 'hosts_whitespace',
+            'github.com github.com\ngitlab.com': 'hosts_whitespace',
+            'github.com]\n[core]': 'hosts_whitespace',
+            'github.com\tgitlab.com': 'hosts_whitespace',
+            'a\u2028b.example.com': 'hosts_whitespace',
+            'github.com, git lab.com': 'hosts_whitespace',
+            # 單一 label：Git Token 不交給 DNS search path 上的同名東西
+            'gitea': 'hosts_single_label',
+            'git:3000': 'hosts_single_label',
+            'https://localhost/': 'hosts_single_label',
+            'github.com, gitea': 'hosts_single_label',
             ','.join('h%d.example.com' % i for i in range(11)): 'hosts_too_many',
         }
         for raw, code in cases.items():
@@ -80,6 +96,9 @@ class TestGitSpecParsers(TransactionCase):
             self.assertEqual(error and error[0], code, repr(raw))
         self.assertEqual(parse_git_hosts(42)[1][0], 'not_text')
         self.assertEqual(parse_git_hosts(['github.com', 3])[1][0], 'not_text')
+        # 管理員直接寫 list 也走同一套規則
+        self.assertEqual(parse_git_hosts(['github.com', 'gitea'])[1][0], 'hosts_single_label')
+        self.assertEqual(parse_git_hosts(['git example.com'])[1][0], 'hosts_whitespace')
 
     def test_ten_hosts_is_the_limit(self):
         raw = ','.join('h%d.example.com' % i for i in range(10))
@@ -92,7 +111,18 @@ class TestGitSpecParsers(TransactionCase):
         self.assertEqual(parse_git_name('Mary-Jane O\'Neil'), ("Mary-Jane O'Neil", None))
         for blank in (None, '', '   '):
             self.assertEqual(parse_git_name(blank), (None, None))
+        # 非 ASCII 的一般空白（全形空白）照收：它是可見的空白，YAML 也不當換行
+        self.assertEqual(parse_git_name('王\u3000小明'), ('王\u3000小明', None))
         for bad in ('a\nb', 'a"b', 'a\\b', 'a;b', 'a#b', '<a>', 'x' * 101, '\x00'):
+            self.assertEqual(parse_git_name(bad)[1][0], 'name_invalid', repr(bad))
+        # YAML 1.1（goyaml.v2／PyYAML）把 NEL、U+2028、U+2029 當換行：chart 的
+        # ``name = {{ . }}`` 會長出新的 gitconfig section（round-3 review 實測）
+        for bad in ('x\u0085[core]', 'a\u0085b', 'a\u2028b', 'a\u2029b',
+                    'x\u2028    [core]\u2028    pager = evil',
+                    # 其他看不見的字元：C1 控制、bidi 控制、零寬字元、BOM、私用區、未指派
+                    'a\x9bb', 'a\u202eb', 'a\u202ab', 'a\u2066b', 'a\u2069b',
+                    'a\u200eb', 'a\u200fb', 'a\u200bb', 'a\ufeffb', 'a\ue000b',
+                    'a\uffffb'):
             self.assertEqual(parse_git_name(bad)[1][0], 'name_invalid', repr(bad))
         self.assertEqual(parse_git_name(1)[1][0], 'not_text')
 
@@ -103,6 +133,7 @@ class TestGitSpecParsers(TransactionCase):
         for blank in (None, '', ' '):
             self.assertEqual(parse_email(blank), (None, None))
         for bad in ('no-at.example.com', 'a@b', 'a@@b.com', 'a b@c.com', 'a@b.com\n[core]',
+                    'a@b.com\u0085[core]', 'a\u2028b@c.com', 'a\u202e@c.com',
                     'a"b@c.com', 'a;b@c.com', 'a@-b.com', 'x' * 250 + '@e.com'):
             self.assertEqual(parse_email(bad)[1][0], 'email_invalid', repr(bad))
 
@@ -191,6 +222,17 @@ class TestCodeServerGitSettingsDeploy(TransactionCase):
             'tokenHosts': '', 'userName': '', 'userEmail': '  '}})
         self.assertEqual(self._git(), {})
 
+    def test_unicode_line_separator_in_stored_name_is_dropped(self):
+        """NEL／U+2028 在 YAML 裡是換行：存值帶它也不能進 deploy values。"""
+        self.svc._apply_helm_values({'git': {
+            'tokenHosts': 'git example.com',
+            'userName': 'x\u0085    [core]\u0085    pager = evil',
+            'userEmail': 'ok@example.com',
+        }})
+        with self.assertLogs(_TEMPLATE_LOGGER, level=logging.WARNING):
+            git = self._git()
+        self.assertEqual(git, {'userEmail': 'ok@example.com'})
+
     def test_invalid_stored_values_are_dropped_with_a_warning(self):
         """繞過存檔驗證（例如管理員直接改 helm_values）也不能把 gitconfig 寫壞。"""
         self.svc._apply_helm_values({'git': {
@@ -226,8 +268,10 @@ class TestCodeServerGitSettingsDeploy(TransactionCase):
         self.assertIsNone(self.tpl._validate_spec_formats({}))
         for flat, needle in (
                 ({'git.tokenHosts': 'http://gitea.local'}, 'https'),
-                # 空白也是分隔符（'a b' 是兩台主機），所以用底線這種真的不合法的名字
                 ({'git.tokenHosts': 'bad_host.example.com'}, 'host'),
+                ({'git.tokenHosts': 'git example.com'}, 'comma'),
+                ({'git.tokenHosts': 'gitea'}, 'github.com'),
+                ({'git.userName': 'a\u2028b'}, '100'),
                 ({'git.userName': 'a;b'}, '100'),
                 ({'git.userEmail': 'nope'}, 'email'),
         ):
@@ -240,6 +284,12 @@ class TestCodeServerGitSettingsDeploy(TransactionCase):
         tpl = self.tpl.with_context(lang='zh_TW')
         msg = tpl._validate_spec_formats({'git.tokenHosts': 'http://gitea.local'})
         self.assertIn('只接受 https', msg)
+        msg = tpl._validate_spec_formats({'git.tokenHosts': 'git example.com'})
+        self.assertIn('逗號分隔', msg)
+        msg = tpl._validate_spec_formats({'git.tokenHosts': 'gitea'})
+        self.assertIn('完整的主機名稱', msg)
+        msg = tpl._validate_spec_formats({'git.userName': 'a\u202eb'})
+        self.assertIn('控制字元', msg)
 
     def _update(self, values):
         client = MagicMock()
@@ -250,10 +300,15 @@ class TestCodeServerGitSettingsDeploy(TransactionCase):
 
     def test_reconfigure_rejects_invalid_git_settings_before_any_write(self):
         before = self.svc._helm_values_dict()
-        result, client = self._update({'git.tokenHosts': 'http://gitea.local'})
-        self.assertFalse(result.get('success'), result)
-        self.assertIn('https', result.get('error', ''))
-        client.upgrade_release.assert_not_called()
-        self.svc.invalidate_recordset()
-        self.assertEqual(self.svc._helm_values_dict(), before)
-        self.assertEqual(self.svc.state, 'running')
+        for values, needle in (
+                ({'git.tokenHosts': 'http://gitea.local'}, 'https'),
+                ({'git.tokenHosts': 'git example.com'}, 'comma'),
+                ({'git.userName': 'x\u2028[core]'}, 'control'),
+        ):
+            result, client = self._update(values)
+            self.assertFalse(result.get('success'), (values, result))
+            self.assertIn(needle, result.get('error', ''), values)
+            client.upgrade_release.assert_not_called()
+            self.svc.invalidate_recordset()
+            self.assertEqual(self.svc._helm_values_dict(), before, values)
+            self.assertEqual(self.svc.state, 'running', values)
