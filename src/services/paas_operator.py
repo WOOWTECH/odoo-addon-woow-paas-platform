@@ -792,6 +792,30 @@ class PaaSOperatorClient:
         )
 
 
+    def get_mqtt_address(self, namespace: str, release_name: str) -> Dict[str, Any]:
+        """本服務對外 MQTT 位址（由 chart 的 tunnel agent 廣告的那一個）。
+
+        只有 `cloud_app_template.has_public_mqtt_address` 的商品需要問；呼叫端的
+        閘門是 `CloudService._chart_has_public_mqtt_address`，不要在這裡自建判準。
+
+        Args:
+            namespace: Release namespace
+            release_name: Release name
+
+        Returns:
+            ``{'public_url': 'tcp://host:port'}``，或 ``{'public_url': None}``
+            —— 後者是**正常狀態**（租戶沒開、agent 還沒連上、pod 還沒起來），
+            不是失敗，呼叫端不得把它當錯誤處理。
+
+        Raises:
+            PaaSOperatorError: operator 本身失敗（kubectl 掛了、namespace 越界）
+        """
+        return self._request(
+            'GET',
+            f'/api/releases/{namespace}/{release_name}/mqtt-address',
+        )
+
+
     # ==================== Tunnel Operations ====================
 
     def create_tunnel(

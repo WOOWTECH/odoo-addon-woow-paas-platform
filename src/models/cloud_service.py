@@ -924,6 +924,18 @@ class CloudService(models.Model):
     )
 
     # Network
+    # 對外 MQTT 位址（charts/emqx 的 tunnel agent 廣告的那一個）。由背景 poll 經
+    # `_release_facts` 回寫——**唯讀帳本欄位**，不是設定：租戶要改位址是去改
+    # helm values 的 ngrok 設定，不是改這裡。
+    # 空值是正常狀態（商品沒這個能力、租戶沒開對外 MQTT、agent 還沒連上）。
+    mqtt_public_url = fields.Char(
+        string='Public MQTT Address',
+        readonly=True,
+        copy=False,
+        help='The tcp://host:port the chart\'s tunnel agent currently advertises, '
+             'read back from its container log by the background poll. Empty when '
+             'the product has no such address or the agent has not connected.',
+    )
     subdomain = fields.Char(
         string='Subdomain',
         help='Subdomain for accessing this service (combined with PaaS domain, e.g., myapp.woowtech.io)',
@@ -2327,6 +2339,12 @@ class CloudService(models.Model):
             # omnigent：accounts 模式的 OMNIGENT_ACCOUNTS_BASE_URL（https ⇒ cookie 用
             # __Host- 前綴；WebSocket 也以它比對 Origin）。chart 同樣學不到 tenant host。
             'omnigent': [('server', 'baseUrl')],
+            # nextcloud：Nextcloud 以 trusted_domains 比對 Host，**不在清單內的網域整站
+            # 拒絕服務**（回「Access through untrusted domain」），而 chart 只知道
+            # localhost（探針用）。chart 從 nextcloud.publicUrl 衍生
+            # NEXTCLOUD_TRUSTED_DOMAINS／OVERWRITEHOST／OVERWRITECLIURL；少了這一條，
+            # 服務開得起來但租戶一打開網址就是錯誤頁。
+            'nextcloud': [('nextcloud', 'publicUrl')],
         }
         paths = path_map.get(template_slug)
         if not paths:
@@ -2603,6 +2621,47 @@ class CloudService(models.Model):
         self.ensure_one()
         return bool(self.template_id._gateway_external_path())
 
+    def _chart_has_public_mqtt_address(self):
+        """本服務的 chart 有沒有一個要回讀給租戶看的對外 MQTT 位址。
+
+        唯一事實源是 `cloud_app_template.has_public_mqtt_address`（能力 gate 一律
+        收斂成單一欄位，見該欄位註解與
+        docs/decisions/patterns/capability-gate-single-source-field.md）。
+        poll 的探測閘門、service payload 與前端文案都必須讀本方法／本欄位，
+        **不得**任何一端自建 slug 名單。
+        """
+        self.ensure_one()
+        return bool(self.template_id.has_public_mqtt_address)
+
+    def _probe_mqtt_address(self, client):
+        """問 operator 一次：agent 現在廣告的對外 MQTT 位址是什麼。
+
+        回傳值的三態**刻意**與 `_release_facts` 的「只有探過才寫」對齊：
+
+        * ``None``  ——「這一輪沒探」：商品沒這個能力，或 operator 掛了。帳本原值不動。
+        * ``''``    ——「探過，現在沒有位址」：租戶關掉對外 MQTT、agent 還沒連上、
+                      隧道斷了。這是**有結論**的觀測，要把帳本清掉，否則租戶會一直
+                      看到一個已經連不上的舊位址（比空值更糟）。
+        * 位址字串 ——「探過，就是這個」。
+
+        operator 失敗一律降級成 ``None`` 並 log：對外位址是服務頁上的一個附帶資訊，
+        讓它把整輪 poll 打斷（state 回寫、就緒判定都在同一輪）是完全不成比例的。
+        """
+        self.ensure_one()
+        if not self._chart_has_public_mqtt_address():
+            return None
+        try:
+            payload = client.get_mqtt_address(
+                self.helm_namespace, self.helm_release_name
+            )
+        except Exception as e:  # noqa: BLE001 — 見 docstring：附帶資訊不得打斷 poll
+            _logger.warning(
+                'Could not read the advertised MQTT address for %s: %s',
+                self.name, e,
+            )
+            return None
+        return payload.get('public_url') or ''
+
     def _gateway_public_url(self):
         """本服務的 gateway 完整網址（chart 無 gateway 或服務無 subdomain 時回 ''）。
 
@@ -2804,6 +2863,24 @@ class CloudService(models.Model):
             self.write(extra_vals)
         stripped = self._strip_mcp_sensitive_values(values)
         self.sudo().write({'helm_values': json.dumps(stripped)})
+
+    def _set_deploy_params(self, params):
+        """以平台身分寫入 ``deploy_params``（#1317）。
+
+        ``deploy_params`` 帶 ``groups='base.group_system'``，而 ``/woow`` 開通流程
+        （``controllers/paas.py`` 的 ``_create_service``）拿的是**租戶身分**的
+        recordset：Portal 會員經 ``_PaaSCapability`` 拿到 sudo recordset 所以沒事，
+        但只掛 ``base.group_user`` 的 workspace owner／admin 寫這個欄位必定
+        ``AccessError``，整筆開通 rollback，畫面只剩「建立服務時發生錯誤」
+        （2026-10-02 正式站 uid 41 實際撞到）。
+
+        提權是對的層次，因為值**不是租戶給的**：``expose_config`` 是伺服器算出的
+        subdomain，``mcp_api_key`` 是伺服器鑄造的 uuid。比照 #739 的原則，
+        ``.sudo()`` 只包這一次寫入；呼叫端的 role／訂閱／workspace 閘全部留在
+        sudo 之外，本函式也不讀回任何值給呼叫端。
+        """
+        self.ensure_one()
+        self.sudo().write({'deploy_params': json.dumps(params)})
 
     def _has_mcp_admin_secret(self):
         self.ensure_one()
@@ -3094,7 +3171,15 @@ class CloudService(models.Model):
                         release_name=service.helm_release_name,
                         include_vm=service._needs_vm_status(),
                     )
-                    facts = service._release_facts(status.get('release', {}))
+                    # 對外 MQTT 位址也在這裡對帳：本 cron 是**唯一會看 running 的
+                    # 路徑**，而 ngrok 免費方案每次 agent 重連就換位址——那種變動
+                    # 發生時服務正是 running（poll 的 domain 只收轉移狀態）。
+                    # 無此能力的商品 `_probe_mqtt_address` 直接回 None、不打 operator，
+                    # 所以這行對其餘商品零成本。
+                    facts = service._release_facts(
+                        status.get('release', {}),
+                        mqtt_address=service._probe_mqtt_address(client),
+                    )
                     # 舊值必須**在寫入之前**收起來：寫完之後 `service[field]` already
                     # 是新值，log 就只印得出「現在是什麼」而不是「從什麼變成什麼」，
                     # 而後者才是判斷漂移頻率與幅度的那份母體資料。
@@ -4092,7 +4177,7 @@ class CloudService(models.Model):
         if (self.import_progress or None) != progress:
             self.sudo().write({'import_progress': progress or False})
 
-    def _release_facts(self, release, dns_state=None):
+    def _release_facts(self, release, dns_state=None, mqtt_address=None):
         """operator 回報的 release 事實 → 帳本回寫欄位。**所有寫入者的單一來源。**
 
         （#1159 起 list/get 純讀、controller 那份 poll 已刪除；以下是 #627 當時的背景。）
@@ -4141,6 +4226,11 @@ class CloudService(models.Model):
         # 不該留下任何痕跡。
         if dns_state in ('ok', 'missing'):
             vals['public_url_dns_unverified'] = dns_state == 'missing'
+        # 對外 MQTT 位址同樣走這個咽喉（理由同上：逐 write 分支各列一次正是 #627）。
+        # `None` ＝ 這一輪沒探（商品沒這能力／operator 掛了）⇒ 帳本原值不動；
+        # `''` ＝ 探過而且現在沒有位址 ⇒ 清掉（留著一個連不上的舊位址比空值更糟）。
+        if mqtt_address is not None:
+            vals['mqtt_public_url'] = mqtt_address or False
         return vals
 
     def _poll_and_update_status(self, client):
@@ -4228,7 +4318,15 @@ class CloudService(models.Model):
             service._public_url_dns_state() if release_status == 'deployed' else None
         )
 
-        release_facts = service._release_facts(release, dns_state=dns_state)
+        # 與 DNS 同一條紀律：**一輪只探一次**，結果餵進 `_release_facts`。
+        # 只在 release 已 deployed 時探——還沒 deploy 的服務裡根本還沒有 agent。
+        mqtt_address = (
+            service._probe_mqtt_address(client) if release_status == 'deployed' else None
+        )
+
+        release_facts = service._release_facts(
+            release, dns_state=dns_state, mqtt_address=mqtt_address
+        )
 
         # 進度先落地（與就緒判定無關，且未就緒時才是最有用的時候）。
         service._store_import_progress(status)
