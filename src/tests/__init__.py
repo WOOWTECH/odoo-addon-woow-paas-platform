@@ -967,3 +967,6 @@ from . import test_tenant_orm_lifecycle_guards
 from . import test_notifications_1310
 # #1310：工作區預估月費——訂閱資訊 monthly_estimate（含稅、年繳 ÷12）。
 from . import test_monthly_estimate_1310
+# #1317：只掛 base.group_user 的 owner／admin 經 /woow 開通——deploy_params 改由平台
+# 身分窄寫入；role／workspace 閘與欄位讀取遮蔽不變。
+from . import test_member_create_service_1317

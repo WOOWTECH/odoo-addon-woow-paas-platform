@@ -2805,6 +2805,24 @@ class CloudService(models.Model):
         stripped = self._strip_mcp_sensitive_values(values)
         self.sudo().write({'helm_values': json.dumps(stripped)})
 
+    def _set_deploy_params(self, params):
+        """以平台身分寫入 ``deploy_params``（#1317）。
+
+        ``deploy_params`` 帶 ``groups='base.group_system'``，而 ``/woow`` 開通流程
+        （``controllers/paas.py`` 的 ``_create_service``）拿的是**租戶身分**的
+        recordset：Portal 會員經 ``_PaaSCapability`` 拿到 sudo recordset 所以沒事，
+        但只掛 ``base.group_user`` 的 workspace owner／admin 寫這個欄位必定
+        ``AccessError``，整筆開通 rollback，畫面只剩「建立服務時發生錯誤」
+        （2026-10-02 正式站 uid 41 實際撞到）。
+
+        提權是對的層次，因為值**不是租戶給的**：``expose_config`` 是伺服器算出的
+        subdomain，``mcp_api_key`` 是伺服器鑄造的 uuid。比照 #739 的原則，
+        ``.sudo()`` 只包這一次寫入；呼叫端的 role／訂閱／workspace 閘全部留在
+        sudo 之外，本函式也不讀回任何值給呼叫端。
+        """
+        self.ensure_one()
+        self.sudo().write({'deploy_params': json.dumps(params)})
+
     def _has_mcp_admin_secret(self):
         self.ensure_one()
         return bool(self.template_id.has_admin_gui and self._get_secret_record())

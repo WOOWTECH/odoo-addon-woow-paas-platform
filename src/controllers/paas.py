@@ -3614,7 +3614,9 @@ class PaasController(HiddenChainMixin, Controller):
             if mcp_api_key:
                 deploy_params['mcp_api_key'] = mcp_api_key
             if deploy_params:
-                service.write({'deploy_params': json.dumps(deploy_params)})
+                # #1317：deploy_params 限 group_system，租戶身分寫不進去；
+                # 值全由伺服器產生，改走 model 的平台身分窄寫入。
+                service._set_deploy_params(deploy_params)
 
             # Create subscription（此後不再有可失敗的落庫步驟）
             partner = workspace.owner_id.partner_id
