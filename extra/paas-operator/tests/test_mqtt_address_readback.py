@@ -12,7 +12,8 @@ RBAC，而 chart 是 ``automountToken=false``。
 1. **只回位址、永不回 log 內容**：來源是第三方（ngrok agent）的輸出，整段轉出去
    等於把不受控字串接到 Odoo 的 HTTP 回應上。形狀對不上就當沒有（fail-closed）。
 2. **取最後一筆**：sidecar 會重印，最後一筆才是 agent 當前持有的位址
-   （舊的那些是上一次 session 的，連過去會失敗）。
+   （舊的那些是上一次 session 的，連過去會失敗）。agent 死掉時 sidecar 印一行
+   **空值**撤回，最後一筆是空值就回 None。
 3. **「沒有位址」不是錯誤**：租戶沒開對外 MQTT（pod 裡沒有 ngrok 容器 ⇒ kubectl
    logs 失敗）、agent 還沒連上、pod 還在起來——三者都回 ``public_url: null``。
    把這些當 5xx 會讓服務詳情頁在完全正常的狀態下顯示錯誤。
@@ -81,6 +82,24 @@ class TestAddressExtraction:
         """形狀對不上就當沒有——不得把來源字串原樣轉出去。"""
         svc = _svc_with_log(line)
         assert svc.get_advertised_mqtt_address("paas-ws-x", "svc-aaaa1111") is None
+
+    def test_an_empty_announcement_retracts_the_address(self):
+        """agent 死掉時 sidecar 印空值撤回；之後的最後一筆才算數。"""
+        svc = _svc_with_log("\n".join([
+            f"{MARKER}tcp://6.tcp.ngrok.io:22222",
+            f"{MARKER}",
+            "ngrok agent exited; retrying in 10s (check the authtoken …)",
+        ]))
+        assert svc.get_advertised_mqtt_address("paas-ws-x", "svc-aaaa1111") is None
+
+    def test_an_address_after_a_retraction_wins(self):
+        svc = _svc_with_log("\n".join([
+            f"{MARKER}",
+            f"{MARKER}tcp://4.tcp.ngrok.io:44444",
+        ]))
+        assert svc.get_advertised_mqtt_address("paas-ws-x", "svc-aaaa1111") == (
+            "tcp://4.tcp.ngrok.io:44444"
+        )
 
     def test_log_content_is_never_returned(self):
         secret_ish = "t=... lvl=info msg=\"authtoken 2abc…\" sess=xyz"

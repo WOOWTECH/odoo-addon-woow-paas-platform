@@ -1230,7 +1230,15 @@ class KubernetesService:
                     # Keep scanning: the sidecar re-prints on an interval, so the
                     # LAST match is the address the agent currently holds.
                     address = candidate
-                elif candidate:
+                elif not candidate:
+                    # An EMPTY announcement is a retraction: the sidecar prints it
+                    # whenever the agent exits (bad token, expired account…)
+                    # before backing off and retrying. Without honouring it the
+                    # platform would keep showing the last address the dead agent
+                    # held, and the tenant would configure devices against a
+                    # tunnel that no longer exists.
+                    address = None
+                else:
                     logger.warning(
                         "Discarding malformed advertised address from %s/%s",
                         namespace,
