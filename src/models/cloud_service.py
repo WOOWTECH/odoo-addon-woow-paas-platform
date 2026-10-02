@@ -75,6 +75,12 @@ WOOW_ODOO_SERVICE_PORT = 80
 #: `PaasController._sanitize_helm_values`。
 WOOW_ODOO_ADMIN_PASSWORD_PATH = ('conf', 'adminPassword')
 
+#: #1130：Bitnami odoo 時代 seed 寫進每台服務 helm_values 的頂層鍵（woow-odoo tenant schema
+#: 全部拒收）。`_woow_odoo_legacy_release_error` 用它辨識 #1128 範圍的存量服務。
+BITNAMI_ODOO_VALUE_KEYS = frozenset({
+    'odooEmail', 'odooPassword', 'odooSkipInstall', 'postgresql', 'customPostInitScripts',
+})
+
 #: #1130：woow-odoo 管理員 login（＝租戶填的 email，`conf.adminEmail`）的格式檢查，
 #: create／reconfigure 共用（#1160）。只擋明顯不是 email 的值；254＝RFC 5321 路徑上限。
 WOOW_ODOO_ADMIN_EMAIL_RE = re.compile(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
@@ -1272,6 +1278,11 @@ class CloudService(models.Model):
             PaaSOperatorError,
         )
 
+        # #1130：Bitnami 存量（template 已換 woow-odoo）先擋，不登記意圖、不碰 operator。
+        legacy_error = self._woow_odoo_legacy_release_error()
+        if legacy_error:
+            raise UserError(legacy_error)
+
         # #1257 Q27（修訂 Q14）：lease 在途時擋下並**登記意圖**，而不是只提示到期
         # 時間——否則 lease 一到期背景馬上重送、再拿一個 lease，admin 的出口可能一直
         # 被搶走。背景看到意圖就停止自動重送，lease 結束後 cron 先執行 redeploy。
@@ -2145,6 +2156,27 @@ class CloudService(models.Model):
                 config['service_port'] = WOOW_ODOO_SERVICE_PORT
             return config
         return None
+
+    def _woow_odoo_legacy_release_error(self):
+        """#1130 過渡守門：template 已換成 woow-odoo，但這台服務存的 values 還是 Bitnami 形。
+
+        這類服務（2026-10：prod svc-f11b1cbb、stg svc-42487178）的 release 是 Bitnami odoo；
+        拿舊 values 對新 chart 做 helm upgrade 一定被 tenant schema 擋（叢集不動），但
+        reconfigure 會先把狀態寫成 upgrading、背景失敗後翻成 error——租戶按一次「儲存設定」
+        或改 addon，跑得好好的服務在平台上就變成 error。這裡在任何寫入之前擋下，回可讀
+        訊息、狀態不動。判準是存的 values 帶著舊 seed 的 Bitnami 頂層鍵
+        （``BITNAMI_ODOO_VALUE_KEYS``，woow-odoo schema 全部拒收），不是 chart 名比對——
+        正式的「chart 換版拒絕 in-place upgrade」守門與實例處置屬 #1128，那邊落地後本守門
+        可移除。回 ``None`` 表示放行。
+        """
+        self.ensure_one()
+        if not self.template_id._is_woow_odoo_chart():
+            return None
+        if not BITNAMI_ODOO_VALUE_KEYS & set(self._helm_values_dict() or {}):
+            return None
+        return _(
+            'This Odoo service still runs on the previous Odoo deployment and cannot be '
+            'changed or redeployed in place. Please contact support to migrate it.')
 
     @api.model
     def _woow_odoo_admin_email_error(self, template, values):

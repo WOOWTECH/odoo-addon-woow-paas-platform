@@ -3750,6 +3750,10 @@ class PaasController(HiddenChainMixin, Controller):
         # （確定失敗／結果未知）而轉 error 時放行 reconfigure，並一律開新的一代
         # ——v1 沒有 retry-init 按鈕，這是租戶唯一的出口。helm 失敗、等待逾時等
         # 其他 error 照擋（addon 讓 pod 起不來屬 upgrading 逾時，出口是 rollback）。
+        # #1130：template 已換 woow-odoo、服務仍是 Bitnami 存量 ⇒ 在任何寫入前擋下（狀態不動）。
+        legacy_error = service._woow_odoo_legacy_release_error()
+        if legacy_error:
+            return {'success': False, 'error': legacy_error}
         init_exhausted_error = service._init_reconfigure_exit()
         if service.state in ['pending', 'deleting'] or (
                 service.state == 'error' and not init_exhausted_error):

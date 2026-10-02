@@ -399,6 +399,77 @@ class TestWoowOdooAdminPassword1130(TransactionCase):
 
 
 @tagged('post_install', '-at_install')
+class TestBitnamiLegacyServiceGuard1130(TransactionCase):
+    """#1130 過渡守門：template 換成 woow-odoo 後，Bitnami 存量服務（2026-10：prod
+    svc-f11b1cbb、stg svc-42487178）的 redeploy／reconfigure 在任何寫入前擋下、狀態不動。
+
+    沒有這道，租戶按一次「儲存設定」或改 addon：狀態先寫 upgrading → 背景 helm upgrade
+    被 woow-odoo schema 擋 → 服務翻成 error（Odoo 本身照跑）。正式守門屬 #1128。
+    """
+
+    # 舊 seed（Bitnami odoo 28.2.10）建立時存進 helm_values 的形狀（節錄）
+    LEGACY_VALUES = {
+        'global': {'security': {'allowInsecureImages': True}},
+        'image': {'registry': 'jcr-prod.woowtech.io',
+                  'repository': 'woow-paas-docker-local/cloud-odoo', 'tag': '20260814.0737'},
+        'odooEmail': 'legacy@example.com', 'odooPassword': 'legacy-pw',
+        'postgresql': {'enabled': True},
+        'customPostInitScripts': {'odoo-conf-system.sh': '#!/bin/bash'},
+    }
+
+    def setUp(self):
+        super().setUp()
+        admin = self.env.ref('base.user_admin')
+        self.tpl = self.env.ref(_odoo_seed())
+        self.ws = self.env['woow_paas_platform.workspace'].create({
+            'name': 'WS 1130 legacy', 'owner_id': admin.id})
+        self.svc = _internal_provision(self.env['woow_paas_platform.cloud_service']).create({
+            'workspace_id': self.ws.id, 'template_id': self.tpl.id,
+            'name': 'svc-1130-legacy', 'reference_id': 'test-1130-legacy-svc',
+            'state': 'running', 'subdomain': 'svc-1130-legacy',
+            'helm_namespace': 'paas-ws-test-1130', 'helm_release_name': 'svc-1130lgcy',
+        })
+        self.svc.sudo().write({'helm_values': json.dumps(self.LEGACY_VALUES)})
+
+    def test_reconfigure_is_refused_before_any_write(self):
+        from odoo.addons.woow_paas_platform.controllers.paas import PaasController
+
+        client = MagicMock()
+        fake_request = MagicMock()
+        fake_request.env = self.env
+        with patch(f'{_CONTROLLER}.get_paas_operator_client', return_value=client), \
+                patch(f'{_CONTROLLER}.request', new=fake_request):
+            result = PaasController()._update_service(
+                self.svc, values={'loadDemoData': True}, version=None)
+
+        self.assertFalse(result['success'])
+        self.assertIn('previous Odoo deployment', result['error'])
+        self.assertEqual(self.svc.state, 'running', '狀態不得被改成 upgrading／error')
+        self.assertEqual(self.svc.sudo()._helm_values_dict(), self.LEGACY_VALUES,
+                         '被擋的 reconfigure 不得改動存的 values')
+        client.upgrade_release.assert_not_called()
+
+    def test_redeploy_is_refused_without_touching_the_operator(self):
+        from odoo.exceptions import UserError
+
+        client = MagicMock()
+        with patch(_CLIENT_PATH, return_value=client):
+            with self.assertRaises(UserError):
+                self.svc.action_redeploy()
+        client.get_release.assert_not_called()
+        client.upgrade_release.assert_not_called()
+        self.assertEqual(self.svc.state, 'running')
+        self.assertFalse(self.svc.init_redeploy_requested)
+
+    def test_woow_odoo_shaped_service_is_not_caught(self):
+        """陽性對照：新形狀（含空 values 的 fixture）不是存量，放行。"""
+        self.svc.sudo().write({'helm_values': self.tpl.helm_default_values})
+        self.assertIsNone(self.svc._woow_odoo_legacy_release_error())
+        self.svc.sudo().write({'helm_values': False})
+        self.assertIsNone(self.svc._woow_odoo_legacy_release_error())
+
+
+@tagged('post_install', '-at_install')
 class TestWoowOdooCreateFlow1130(HttpCase):
     """走使用者唯一入口（``/api/workspaces/<id>/services`` 的 ``action='create'``）。"""
 
