@@ -359,6 +359,11 @@ from . import test_ha_full_apporo_seed
 from . import test_pi_agent_seed
 from . import test_omnigent_seed
 from . import test_code_server_seed
+# feat: Nextcloud／EMQX 上架 seed —— app_managed 憑證形態（平台不得宣稱可重設）、
+# image 雙釘與鏡像落地前保持隱藏、規格三處對帳、可調參數只開應用層旋鈕；
+# Nextcloud 另含 publicUrl 注入（缺了它服務會開起來但整站回「不信任的網域」）
+from . import test_emqx_seed
+from . import test_nextcloud_seed
 # fix: #657 project_access 授權補洞 —— identity anchor 缺失 / role 缺省整道
 # 守衛被跳過 / 無 owner 列保護，與 #556 同構但刻意不在該 PR 內順手修
 # （HttpCase，group_user-only）
