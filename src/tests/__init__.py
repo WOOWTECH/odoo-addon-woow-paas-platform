@@ -905,6 +905,11 @@ from . import test_sa_route_rename_1196
 # #1234：route 健康探測。分類樣本取自正式站實測；端點守「探測目標只來自 DB」。
 from . import test_sa_route_health_1234
 
+# #1234 補測：正式站尚未實測的五種健康結果（access_missing／access_unexpected／
+# not_routed／timeout／unknown）——每種一條正向＋一條不誤判的對照，含經過端點、
+# is_protected 取自 DB 那一層；另以靜態讀檔守「後端每種狀態前端都有標籤與建議文字」。
+from . import test_sa_route_health_states_1234
+
 # #1234 第二步：route 流量。各種拿不到的原因（缺 CF analytics 權限、operator 太舊）
 # 都要是可解釋的值，不是錯誤。
 from . import test_sa_route_traffic_1234
@@ -926,6 +931,11 @@ from . import test_sh_provision_retry
 # （SA sa.to_dict routes／SH include_details routes／CS _access_to_dict）。key 缺席時
 # AccessAppCard 讀到 undefined，fail-open 警示會靜默消失。
 from . import test_access_protection_lost_ui_payload
+
+# Access 分頁兩個警告（SA 腿）：「保護未生效」（access_protection_lost）一般 sync 不誤設、
+# HTTP 回 JSON 布林、白名單端點清不掉、關掉再打開保護會清、健康檢查報 access_missing；
+# 「登入方式缺 IdP」（access_unresolved_idp_types）持久化格式、清除與 gate／失敗時沿用。
+from . import test_sa_route_access_warnings
 
 # #1261：CS／SH 換到 0 席方案時，仍受 Access 保護就擋（0 席看不到 Access 頁籤，換過去
 # 保護關不掉、對外 403）。守「擋在退點／關舊訂閱之前、關保護後放行、卡死記錄在 0 席下
