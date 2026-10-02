@@ -8,10 +8,22 @@
                 <meta name="theme-color" content="#6183FC"/>
                 <link rel="icon" type="image/png" href="/woow_paas_platform/static/description/icon.png"/>
                 <title>Woow PaaS Platform</title>
+                <link rel="preconnect" href="https://fonts.googleapis.com"/>
+                <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin=""/>
                 <!-- Google Fonts: Manrope & Outfit -->
                 <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@200..800&amp;family=Outfit:wght@300..700&amp;display=swap" rel="stylesheet"/>
-                <!-- Material Symbols Outlined -->
-                <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+                <!-- Material Symbols Outlined: display=block, not swap. With swap the
+                     ligature names ("notifications", "dashboard"…) render as plain text
+                     until the font arrives, which is what a cold-cache visit sees. -->
+                <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=block" rel="stylesheet"/>
+                <!-- Inline so it applies even if the asset bundle never loads: keep the
+                     boot panel hidden for normal loads, show it if loading is slow, and
+                     show it at once when bootPaaS() marks it as a failure (role=alert). -->
+                <style>
+                    #woow-paas-boot { visibility: hidden; animation: woow-boot-reveal 0s linear 1.5s forwards; }
+                    #woow-paas-boot[role="alert"] { visibility: visible; animation: none; }
+                    @keyframes woow-boot-reveal { to { visibility: visible; } }
+                </style>
                 <script type="text/javascript">
                     var odoo = {
                         csrf_token: "<t t-esc="request.csrf_token(None)"/>",

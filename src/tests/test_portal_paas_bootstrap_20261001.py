@@ -77,6 +77,18 @@ class TestPortalPaaSBootstrap20261001(HttpCase):
                     assert(response.ok, "PaaS stylesheet did not load");
                     assert(!/A css error/i.test(await response.text()), "SCSS fallback served stale CSS");
                 }
+                // Cold-cache flash: with display=swap the icon ligature names
+                // ("notifications", "dashboard"…) render as text until the font
+                // arrives. Keep the icon font on block and every icon one glyph wide.
+                const iconFont = document.querySelector('link[href*="Material+Symbols+Outlined"]');
+                assert(iconFont && iconFont.href.includes("display=block"), "Icon font must not swap in ligature text");
+                const probe = document.createElement("span");
+                probe.className = "material-symbols-outlined";
+                probe.style.fontSize = "24px";
+                probe.textContent = "account_balance_wallet";
+                document.body.append(probe);
+                assert(Math.round(probe.getBoundingClientRect().width) === 24, "Icon box wider than one glyph");
+                probe.remove();
                 for (const element of [document.body, document.documentElement]) {
                     for (const pseudo of ['::before', '::after']) {
                         assert(!/css error/i.test(getComputedStyle(element, pseudo).content),
@@ -132,6 +144,9 @@ class TestPortalPaaSBootstrap20261001(HttpCase):
                     const fallback = page.getElementById("woow-paas-boot");
                     const target = document.createElement("div");
                     document.body.append(fallback, target);
+                    // Normal loads must not flash the recovery panel (it is only
+                    // revealed after a delay, by the template's inline style).
+                    assert(getComputedStyle(fallback).visibility === "hidden", "Recovery panel flashes on normal load");
                     const safeMessage = fallback.querySelector("[data-boot-failure]").textContent;
                     let reachedWillStart = false;
                     class BrokenBoot extends Component {
@@ -157,6 +172,7 @@ class TestPortalPaaSBootstrap20261001(HttpCase):
                     assert(target.childElementCount === 0, "Partial app survived failure");
                     assert(fallback.isConnected, "Failure left no recovery panel");
                     assert(fallback.getBoundingClientRect().height > 0, "Recovery panel invisible");
+                    assert(getComputedStyle(fallback).visibility === "visible", "Failure panel hidden by reveal delay");
                     assert(fallback.getAttribute("role") === "alert", "Failure not announced");
                     assert(fallback.querySelector("[data-boot-message]").textContent === safeMessage,
                         "Failure did not use safe local copy");
