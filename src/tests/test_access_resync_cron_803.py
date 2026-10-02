@@ -248,6 +248,39 @@ class TestSaRouteAccessResync(TransactionCase, _ResyncMixin):
                 self._lost(b),
                 'gate 擋掉的列旗標必須留著——保護確實沒生效，那是實話')
 
+    def test_A6_unprotecting_after_loss_clears_flag_without_push(self):
+        """#794 補洞：保護失效（app 已被拆、旗標打開）之後租戶直接把保護關掉
+        ⇒ 列不再宣稱保護、CF 上也沒有 app，兩邊一致 ⇒ 不外呼、旗標就地清掉。
+
+        兩條路都要清：租戶寫 `is_protected=False`（write hook 觸發 sync），以及
+        已經處在「公開＋沒有 app＋旗標」的列被本 cron 掃到。對照：仍宣稱保護、
+        只是被停權擋住的旗標列，旗標必須留著（與 A5 同一句話）。
+        """
+        # 路徑 1：租戶把保護關掉
+        self.route._access_mark_protection_lost()
+        self.assertTrue(self._lost(self.route), '前提：標記後旗標打開')
+        self.assertFalse(self.route.access_app_id, '前提：標記清掉了 app id')
+        self.client.sync_access_app.reset_mock()
+        with patch(self.MOCK_CLIENT, return_value=self.client):
+            self.route.write({'is_protected': False})
+        self.client.sync_access_app.assert_not_called()
+        self.assertFalse(
+            self._lost(self.route),
+            '改成公開 ⇒ 列不再宣稱保護 ⇒ 「保護未生效」必須清掉')
+
+        # 路徑 2：cron 掃到已經是「公開＋沒有 app」的旗標列
+        stale = self._route(self.sa, lost=True)
+        _skip_route_sync(stale).write({'is_protected': False})
+        gated = self._route(self._sa('suspended'), lost=True)
+        self.client.sync_access_app.reset_mock()
+        self._run_cron()
+        self.client.sync_access_app.assert_not_called()
+        self.assertFalse(
+            self._lost(stale), 'cron 掃到公開且沒有 app 的旗標列也必須清掉')
+        self.assertTrue(
+            self._lost(gated),
+            '仍宣稱保護、只是被停權擋住的列旗標必須留著——保護確實沒生效')
+
 
 # ====================================================================== #
 #  B 系列：Smart Home route 腿                                            #
@@ -333,6 +366,27 @@ class TestShRouteAccessResync(TransactionCase, _ResyncMixin):
         self.assertFalse(self._lost(target))
         for b in blockers:
             self.assertTrue(self._lost(b))
+
+    def test_B6_unprotecting_after_loss_clears_flag_without_push(self):
+        """同 A6（SH 腿）。對照列＝停權 SH 底下仍宣稱保護的旗標列。"""
+        self.route._access_mark_protection_lost()
+        self.assertTrue(self._lost(self.route), '前提：標記後旗標打開')
+        self.assertFalse(self.route.access_app_id, '前提：標記清掉了 app id')
+        self.client.sync_access_app.reset_mock()
+        with patch(self.MOCK_CLIENT, return_value=self.client):
+            self.route.write({'is_protected': False})
+        self.client.sync_access_app.assert_not_called()
+        self.assertFalse(self._lost(self.route))
+
+        stale = self._sh_with_route('active', lost=True)[1]
+        _internal_sm_route_identity(stale).access_app_id = False
+        _sm_skip_access_sync(stale).write({'is_protected': False})
+        gated = self._sh_with_route('suspended', lost=True)[1]
+        self.client.sync_access_app.reset_mock()
+        self._run_cron()
+        self.client.sync_access_app.assert_not_called()
+        self.assertFalse(self._lost(stale))
+        self.assertTrue(self._lost(gated))
 
 
 # ====================================================================== #
@@ -426,6 +480,27 @@ class TestCsAccessResync(TransactionCase, _ResyncMixin):
         self.assertFalse(self._lost(target))
         for b in blockers:
             self.assertTrue(self._lost(b))
+
+    def test_C6_unprotecting_after_loss_clears_flag_without_push(self):
+        """同 A6（CS 腿）。對照列＝沒有 subdomain、仍宣稱保護的旗標列。"""
+        self.svc._access_mark_protection_lost()
+        self.assertTrue(self._lost(self.svc), '前提：標記後旗標打開')
+        self.assertFalse(self.svc.access_app_id, '前提：標記清掉了 app id')
+        self.client.sync_access_app.reset_mock()
+        with patch(self.MOCK_CLIENT, return_value=self.client):
+            self.svc.write({'is_protected': False})
+        self.client.sync_access_app.assert_not_called()
+        self.assertFalse(self._lost(self.svc))
+
+        stale = self._service(with_subdomain=True, lost=True)
+        _internal_cs_access_identity(stale).access_app_id = False
+        _cs_skip_access_sync(stale).write({'is_protected': False})
+        gated = self._service(with_subdomain=False, lost=True)
+        self.client.sync_access_app.reset_mock()
+        self._run_cron()
+        self.client.sync_access_app.assert_not_called()
+        self.assertFalse(self._lost(stale))
+        self.assertTrue(self._lost(gated))
 
 
 # ====================================================================== #
