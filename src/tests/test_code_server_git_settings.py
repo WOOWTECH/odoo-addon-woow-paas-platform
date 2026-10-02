@@ -226,7 +226,8 @@ class TestCodeServerGitSettingsDeploy(TransactionCase):
         self.assertIsNone(self.tpl._validate_spec_formats({}))
         for flat, needle in (
                 ({'git.tokenHosts': 'http://gitea.local'}, 'https'),
-                ({'git.tokenHosts': 'bad host'}, 'host'),
+                # 空白也是分隔符（'a b' 是兩台主機），所以用底線這種真的不合法的名字
+                ({'git.tokenHosts': 'bad_host.example.com'}, 'host'),
                 ({'git.userName': 'a;b'}, '100'),
                 ({'git.userEmail': 'nope'}, 'email'),
         ):
