@@ -69,13 +69,26 @@ class TestSkipTrialEstimateErrorLeak553(TransactionCase):
             'workspace_id': self.workspace.id,
             'template_id': self.template.id,
         })
+        # #991（PR #1300）：controller 經 `_PaaSCapability` 要求已認證的 workspace
+        # 成員；superuser（`__system__`，active=False）不算，會在 `cloud_service()`
+        # 就 `AccessError('Authentication required')`、走不到 try 裡的注入點。真實
+        # 會打 estimate 的是 workspace owner／admin（端點的角色閘），所以 harness 以
+        # 一位 internal admin 成員的身分呼叫。只換 `request.env` 的身分：受測
+        # service、注入點與斷言都不變，production 不放寬。
+        self.member = self.env['res.users'].with_context(no_reset_password=True).create({
+            'name': '553 workspace admin',
+            'login': '553-workspace-admin',
+            'groups_id': [(6, 0, [self.env.ref('base.group_user').id])],
+        })
+        self.env['woow_paas_platform.workspace_access'].create({
+            'workspace_id': self.workspace.id, 'user_id': self.member.id, 'role': 'admin'})
 
     def _patch_paas_request(self):
         """controller 直呼所需的 `request` 替身（沿用 test_mcp_admin_password 的慣例）。"""
         from unittest.mock import MagicMock
         return patch(
             'odoo.addons.woow_paas_platform.controllers.paas.request',
-            new=MagicMock(env=self.env),
+            new=MagicMock(env=self.env(user=self.member)),
         )
 
     def _estimate(self):

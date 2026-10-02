@@ -16,6 +16,8 @@
 兩支同時綠，才能證明 payload 讀的是欄位而不是名單。
 """
 import json
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from odoo.tests.common import TransactionCase
 
@@ -116,8 +118,20 @@ class TestServicePayloadHasAdminGui462(TransactionCase):
         """詳情頁走 include_details=True 這條路徑（服務詳情 API）——按鈕就長在這頁，
         這條路徑漏欄位等於 fix 不可達。"""
         service = self._make_service(self._make_template('mcp-k8s', True))
+        # #991（#1300）：detail 分支依呼叫者 `request.env.user.share` 決定 helm_values
+        # 的 DTO，未綁 request 會 RuntimeError。真實會在詳情頁按 Reset 的是 workspace
+        # admin——harness 以一位 internal admin 成員的身分呼叫；受測 service 與斷言不變。
+        member = self.env['res.users'].with_context(no_reset_password=True).create({
+            'name': '462 detail viewer',
+            'login': 'admin-gui-462-detail-viewer',
+            'groups_id': [(6, 0, [self.env.ref('base.group_user').id])],
+        })
+        self.env['woow_paas_platform.workspace_access'].create({
+            'workspace_id': self.workspace.id, 'user_id': member.id, 'role': 'admin'})
 
-        payload = self.controller._format_service(service, include_details=True)
+        with patch('odoo.addons.woow_paas_platform.controllers.paas.request',
+                   new=SimpleNamespace(env=self.env(user=member))):
+            payload = self.controller._format_service(service, include_details=True)
 
         self.assertTrue(
             payload['template'].get('has_admin_gui'),

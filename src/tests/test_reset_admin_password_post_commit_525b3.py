@@ -87,6 +87,19 @@ class TestResetAdminPasswordPostCommit525B3(TransactionCase):
             self._secret().admin_password, _OLD_PASSWORD,
             'fixture 前提：服務起始就帶一把舊密碼，否則「密碼有沒有被換掉／被回捲」'
             '整組斷言都無從比較')
+        # #991（PR #1300）：controller 經 `_PaaSCapability` 要求已認證的 workspace
+        # 成員；superuser（`__system__`，active=False）不算，會在 workspace 閘就回
+        # 「Workspace not found or access denied」、根本走不到注入點。真實會打
+        # reset 的是 workspace admin（ROLE_ADMIN 閘），所以 harness 以一位 internal
+        # admin 成員的身分呼叫 controller。只換 `request.env` 的身分：受測 service、
+        # 注入點與斷言都不變，production 不放寬。
+        self.member = self.env['res.users'].with_context(no_reset_password=True).create({
+            'name': '525B3 workspace admin',
+            'login': '525b3-workspace-admin',
+            'groups_id': [(6, 0, [self.env.ref('base.group_user').id])],
+        })
+        self.env['woow_paas_platform.workspace_access'].create({
+            'workspace_id': self.workspace.id, 'user_id': self.member.id, 'role': 'admin'})
 
     # ------------------------------------------------------------------
     #  helpers
@@ -99,7 +112,7 @@ class TestResetAdminPasswordPostCommit525B3(TransactionCase):
     def _patch_paas_request(self):
         return patch(
             'odoo.addons.woow_paas_platform.controllers.paas.request',
-            new=MagicMock(env=self.env),
+            new=MagicMock(env=self.env(user=self.member)),
         )
 
     def _reset(self):

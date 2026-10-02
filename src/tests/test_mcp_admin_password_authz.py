@@ -214,7 +214,11 @@ class TestResetAdminPasswordSanitisation(_McpServiceFixture):
         鑑別力：讓 ``_format_service`` 帶上 ``_get_secret_record().admin_password``
         → 這裡紅。
         """
-        payload = self.controller._format_service(self.service, include_details=True)
+        # #991（#1300）：detail 分支依呼叫者 `request.env.user.share` 決定 helm_values
+        # 的 DTO，未綁 request 會 RuntimeError。以租戶裡權限最高、會按 Reset 的 internal
+        # workspace admin 開詳情頁——外洩面以最有權限的租戶量；受測 service 與斷言不變。
+        with self._patch_request_as(self._make_member('c20-detail-admin', ROLE_ADMIN)):
+            payload = self.controller._format_service(self.service, include_details=True)
 
         # 先證明 payload 真的產出了（否則「密碼不在空 dict 裡」是 vacuous）。
         self.assertEqual(payload['id'], self.service.id)
@@ -279,7 +283,9 @@ class TestResetAdminPasswordSanitisation(_McpServiceFixture):
             '前置：fixture 服務應鑄出 gateway key —— 沒有這行，下面的 assertNotIn '
             '在「key 從未被鑄造」的世界也是綠的')
 
-        payload = self.controller._format_service(self.service, include_details=True)
+        # #991（#1300）：同上一支 C20——以 internal workspace admin 的身分開詳情頁。
+        with self._patch_request_as(self._make_member('530-detail-admin', ROLE_ADMIN)):
+            payload = self.controller._format_service(self.service, include_details=True)
 
         self.assertEqual(payload['id'], self.service.id)
         self.assertNotIn(

@@ -763,6 +763,26 @@ class TestSecurityAccessAccessControl(TransactionCase):
                               ('user_id', '=', self.env.user.id)]):
             Access.create({'workspace_id': self.workspace.id,
                            'user_id': self.env.user.id, 'role': 'owner'})
+        # #991／#1300：controller 經 `_PaaSCapability` 解析 workspace → SA →
+        # route／policy，要求「已認證」的 workspace 成員；test superuser
+        # （`__system__`，active=False）不算，會一律 Route／Policy not found。
+        # 真實會打 access-config／access-policies 的是 workspace owner／admin，
+        # 所以 harness 以一位 internal admin 成員的身分當 `request.env`。
+        # 只換呼叫者：受測 SA recordset、斷言與 production 皆不變，不放寬
+        # capability。（cross-SA 拒絕的那幾格也因此不再是「capability 對誰都
+        # 拒」的假綠，而是真的量到 route 釘在 SA 底下。）
+        self.member = self.env['res.users'].with_context(
+            no_reset_password=True).create({
+                'name': 'AC Ctrl WS Admin', 'login': 'sa_ac_ctrl_admin',
+                'email': 'sa_ac_ctrl_admin@test.example',
+                'groups_id': [(6, 0, [self.env.ref('base.group_user').id])],
+            })
+        Access.create({'workspace_id': self.workspace.id,
+                       'user_id': self.member.id, 'role': 'admin'})
+
+    def _member_request(self):
+        """controller 看到的 request：已認證的 workspace admin 成員（見 setUp）。"""
+        return _patch_request(self.env(user=self.member))
 
     def _active_sa(self, mc):
         with patch(MOCK_GET_CLIENT, return_value=mc), \
@@ -788,7 +808,7 @@ class TestSecurityAccessAccessControl(TransactionCase):
         is_protected / login / session (not an SA-level field)."""
         mc = self._mock()
         sa = self._active_sa(mc)
-        with _patch_request(self.env), \
+        with self._member_request(), \
                 patch(MOCK_GET_CLIENT, return_value=mc), \
                 patch(MOCK_GET_CLIENT_MODEL, return_value=mc):
             res = self.controller._update_access_config(sa, {
@@ -822,7 +842,7 @@ class TestSecurityAccessAccessControl(TransactionCase):
         # whitelist must drop them ALL → vals ends empty → no route write() → no
         # operator sync. The positive path is covered by test_update_access_config.
         mc.sync_access_app.reset_mock()
-        with _patch_request(self.env), \
+        with self._member_request(), \
                 patch(MOCK_GET_CLIENT, return_value=mc), \
                 patch(MOCK_GET_CLIENT_MODEL, return_value=mc):
             res = self.controller._update_access_config(sa, {
@@ -853,7 +873,7 @@ class TestSecurityAccessAccessControl(TransactionCase):
         mc = self._mock()
         sa = self._active_sa(mc)
         route = sa.route_ids[:1]
-        with _patch_request(self.env), \
+        with self._member_request(), \
                 patch(MOCK_GET_CLIENT, return_value=mc), \
                 patch(MOCK_GET_CLIENT_MODEL, return_value=mc):
             route.write({'is_protected': True})
@@ -895,7 +915,7 @@ class TestSecurityAccessAccessControl(TransactionCase):
             'state': 'in_progress'})
         sub.sh_subscription_plan_id = plan.id
         sa.subscription_id = sub.id
-        with _patch_request(self.env), \
+        with self._member_request(), \
                 patch(MOCK_GET_CLIENT, return_value=mc), \
                 patch(MOCK_GET_CLIENT_MODEL, return_value=mc):
             r1 = self.controller._create_policy(sa, {
@@ -940,7 +960,7 @@ class TestSecurityAccessAccessControl(TransactionCase):
         # 釘死「預檢有跑到 quota 那一行」——沒 sub / 沒 plan 會整段跳過，
         # 那時 create 成功與「0 豁免生效」輸出相同。
         self.assertTrue(sa.sudo().subscription_id.sh_subscription_plan_id)
-        with _patch_request(self.env), \
+        with self._member_request(), \
                 patch(MOCK_GET_CLIENT, return_value=mc), \
                 patch(MOCK_GET_CLIENT_MODEL, return_value=mc):
             for idx in (1, 2):
@@ -976,7 +996,7 @@ class TestSecurityAccessAccessControl(TransactionCase):
             'state': 'in_progress'})
         sub.sh_subscription_plan_id = plan.id
         sa.subscription_id = sub.id
-        with _patch_request(self.env), \
+        with self._member_request(), \
                 patch(MOCK_GET_CLIENT, return_value=mc), \
                 patch(MOCK_GET_CLIENT_MODEL, return_value=mc):
             for idx in (1, 2):
@@ -995,7 +1015,7 @@ class TestSecurityAccessAccessControl(TransactionCase):
     def test_create_policy_invalid_rule_rejected(self):
         mc = self._mock()
         sa = self._active_sa(mc)
-        with _patch_request(self.env), \
+        with self._member_request(), \
                 patch(MOCK_GET_CLIENT, return_value=mc), \
                 patch(MOCK_GET_CLIENT_MODEL, return_value=mc):
             # #521 P-J：decision 用 deny——allow + include + ip_range 現在會先撞
@@ -1013,7 +1033,7 @@ class TestSecurityAccessAccessControl(TransactionCase):
         mc = self._mock()
         sa = self._active_sa(mc)
         route = sa.route_ids[:1]
-        with _patch_request(self.env), \
+        with self._member_request(), \
                 patch(MOCK_GET_CLIENT, return_value=mc), \
                 patch(MOCK_GET_CLIENT_MODEL, return_value=mc):
             pol = self.env[
@@ -1052,7 +1072,7 @@ class TestSecurityAccessAccessControl(TransactionCase):
             'woow_paas_platform.security_access_route'].create({
                 'security_access_id': other_sa.id,
                 'subdomain_prefix': 'other-route'})
-        with _patch_request(self.env), \
+        with self._member_request(), \
                 patch(MOCK_GET_CLIENT, return_value=mc), \
                 patch(MOCK_GET_CLIENT_MODEL, return_value=mc):
             # (1) cross-SA route_id → deny, nothing created on either SA.
@@ -1087,7 +1107,7 @@ class TestSecurityAccessAccessControl(TransactionCase):
         mc = self._mock()
         sa = self._active_sa(mc)
         route = sa.route_ids[:1]
-        with _patch_request(self.env), \
+        with self._member_request(), \
                 patch(MOCK_GET_CLIENT, return_value=mc), \
                 patch(MOCK_GET_CLIENT_MODEL, return_value=mc):
             pol = self.env[
@@ -1117,7 +1137,7 @@ class TestSecurityAccessAccessControl(TransactionCase):
         mc = self._mock()
         sa = self._active_sa(mc)
         second = self._second_route(sa, mc)
-        with _patch_request(self.env), \
+        with self._member_request(), \
                 patch(MOCK_GET_CLIENT, return_value=mc), \
                 patch(MOCK_GET_CLIENT_MODEL, return_value=mc):
             res = self.controller._create_policy(sa, {
@@ -1142,7 +1162,7 @@ class TestSecurityAccessAccessControl(TransactionCase):
             'woow_paas_platform.security_access_route'].create({
                 'security_access_id': other_sa.id,
                 'subdomain_prefix': 'cross-sa-route'})
-        with _patch_request(self.env), \
+        with self._member_request(), \
                 patch(MOCK_GET_CLIENT, return_value=mc), \
                 patch(MOCK_GET_CLIENT_MODEL, return_value=mc):
             res = self.controller._create_policy(sa, {
@@ -1167,7 +1187,7 @@ class TestSecurityAccessAccessControl(TransactionCase):
         with patch(MOCK_GET_CLIENT, return_value=mc), \
                 patch(MOCK_GET_CLIENT_MODEL, return_value=mc):
             second.write({'is_protected': False})
-        with _patch_request(self.env), \
+        with self._member_request(), \
                 patch(MOCK_GET_CLIENT, return_value=mc), \
                 patch(MOCK_GET_CLIENT_MODEL, return_value=mc):
             res = self.controller._update_route_access(sa, second.id, {
@@ -1194,7 +1214,7 @@ class TestSecurityAccessAccessControl(TransactionCase):
         orig_app_id = route.access_app_id
         orig_unresolved = route.access_unresolved_idp_types
         mc.sync_access_app.reset_mock()
-        with _patch_request(self.env), \
+        with self._member_request(), \
                 patch(MOCK_GET_CLIENT, return_value=mc), \
                 patch(MOCK_GET_CLIENT_MODEL, return_value=mc):
             res = self.controller._update_route_access(sa, route.id, {
@@ -1222,7 +1242,7 @@ class TestSecurityAccessAccessControl(TransactionCase):
             'woow_paas_platform.security_access_route'].create({
                 'security_access_id': other_sa.id,
                 'subdomain_prefix': 'cross-sa-cfg', 'is_protected': False})
-        with _patch_request(self.env), \
+        with self._member_request(), \
                 patch(MOCK_GET_CLIENT, return_value=mc), \
                 patch(MOCK_GET_CLIENT_MODEL, return_value=mc):
             res = self.controller._update_route_access(sa, other_route.id, {
@@ -1249,7 +1269,7 @@ class TestSecurityAccessAccessControl(TransactionCase):
                     {'route_id': second.id, 'name': 'on-2nd',
                      'decision': 'allow', 'rule_type': 'email_list',
                      'rule_value': 'user@s.com'}])
-        with _patch_request(self.env(user=self.env.user)), \
+        with self._member_request(), \
                 patch(MOCK_GET_CLIENT, return_value=mc), \
                 patch(MOCK_GET_CLIENT_MODEL, return_value=mc):
             scoped = self.controller.api_sa_access_policies(

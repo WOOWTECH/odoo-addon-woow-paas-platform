@@ -29,6 +29,8 @@
 A 與 B 必須同時綠，才證明判準既不是 slug 也不是 has_admin_gui。
 """
 import json
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from odoo.tests.common import TransactionCase
 
@@ -200,9 +202,21 @@ class TestGatewayCapabilityPayload530(TransactionCase):
     def test_detail_payload_also_carries_field(self):
         """詳情頁走 include_details=True——文案就長在這頁，這條漏欄位等於 fix 不可達。"""
         service = self._make_service(self._make_template('mcp-k8s'))
+        # #991（#1300）：detail 分支依呼叫者 `request.env.user.share` 決定 helm_values
+        # 的 DTO，未綁 request 會 RuntimeError。真實會開詳情頁的是 workspace 成員——
+        # harness 以一位 internal admin 成員的身分呼叫；受測 service 與斷言都不變。
+        member = self.env['res.users'].with_context(no_reset_password=True).create({
+            'name': '530 detail viewer',
+            'login': 'gw-530-detail-viewer',
+            'groups_id': [(6, 0, [self.env.ref('base.group_user').id])],
+        })
+        self.env['woow_paas_platform.workspace_access'].create({
+            'workspace_id': self.workspace.id, 'user_id': member.id, 'role': 'admin'})
+        with patch('odoo.addons.woow_paas_platform.controllers.paas.request',
+                   new=SimpleNamespace(env=self.env(user=member))):
+            payload = self.controller._format_service(service, include_details=True)
         self.assertTrue(
-            self.controller._format_service(service, include_details=True)
-            .get('has_gateway'),
+            payload.get('has_gateway'),
             '服務詳情 payload（include_details=True）同樣必須帶 has_gateway')
 
     # ── 前端 gate ⟺ 後端實際交付 ────────────────────────────────────────────
