@@ -256,6 +256,12 @@ def _probe_one(hostname, is_protected):
         status_code, headers, body_head = _fetch(hostname)
     except _DnsMissing:
         return _result('dns_missing')
+    except urllib3.exceptions.NewConnectionError:
+        # 連 edge IP 被拒／無路由。urllib3（1.26 與 2.x）把它定義成
+        # ``ConnectTimeoutError`` 的子類，不先攔就會被下一行吃成 timeout
+        # （前端顯示「服務沒有及時回應」）。與 requests 路徑對齊：非 DNS 的
+        # 連線失敗一律 unknown。
+        return _result('unknown')
     except (requests.exceptions.Timeout, urllib3.exceptions.TimeoutError):
         return _result('timeout')
     except requests.exceptions.ConnectionError as exc:

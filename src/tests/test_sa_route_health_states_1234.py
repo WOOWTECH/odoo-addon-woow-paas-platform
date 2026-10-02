@@ -19,7 +19,8 @@ origin_error／proxy_no_site。本檔補另外五種，每一種都是**一個�
                          ``urllib3.exceptions.TimeoutError``（含子類），或整批超過
                          ``_BATCH_DEADLINE`` 還沒回來
 ``unknown``              探測本身失敗且不屬於上面任一種：非 DNS 的
-                         ``ConnectionError``、其他任何例外、hostname 不合格式、
+                         ``ConnectionError``、edge IP 拒絕連線（``NewConnectionError``）、
+                         其他任何例外、hostname 不合格式、
                          executor 排不進去。⚠ ``classify`` 對**任何 HTTP 回應**
                          都不會回 ``unknown``（本檔 ``test_classify_never_yields_
                          unknown`` 鎖住）
@@ -283,22 +284,24 @@ class TestRouteHealthUncoveredStates(TransactionCase):
                     self._classify(code, _CF, 'error code: 524')['status'],
                     'origin_error')
 
-    def test_edge_ip_connection_refused_is_currently_timeout(self):
-        """⚠ 現況鎖定（PR 描述已列為疑似誤判，待覆核者裁決）。
+    def test_edge_ip_connection_refused_is_unknown_not_timeout(self):
+        """``urllib3.exceptions.NewConnectionError`` 是 ``ConnectTimeoutError`` 的
+        子類（urllib3 1.26 與 2.x 皆然）。DoH 路徑上「edge IP 拒絕連線」曾被
+        ``except (requests.Timeout, urllib3.TimeoutError)`` 吃成 timeout；同一件事
+        走 requests 路徑是 unknown（見上一條）。兩條路徑必須一致。
 
-        ``urllib3.exceptions.NewConnectionError`` 是 ``ConnectTimeoutError`` 的
-        子類（urllib3 1.26 與 2.x 皆然），所以 DoH 路徑上「edge IP 拒絕連線」
-        會被 ``except (requests.Timeout, urllib3.TimeoutError)`` 吃成 timeout，
-        前端顯示「No response／服務沒有及時回應」。同一件事走 requests 路徑時
-        是 unknown（見上一條）。
+        對照：真正的連線逾時（``ConnectTimeoutError`` 本身）仍是 timeout。
         """
         self.assertTrue(issubclass(urllib3.exceptions.NewConnectionError,
                                    urllib3.exceptions.TimeoutError),
-                        '前提：urllib3 的類別階層')
+                        '前提：urllib3 的類別階層（不成立時本條失去鑑別力）')
         exc = urllib3.exceptions.NewConnectionError(
             None, 'Failed to establish a new connection: [Errno 111] '
                   'Connection refused')
-        self.assertEqual(self._probe(exc=exc)['status'], 'timeout')
+        self.assertEqual(self._probe(exc=exc)['status'], 'unknown')
+        self.assertEqual(
+            self._probe(exc=urllib3.exceptions.ConnectTimeoutError(
+                None, 'connect timed out'))['status'], 'timeout')
 
     # ================================================================== #
     #  5. unknown                                                         #
