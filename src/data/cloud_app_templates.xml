@@ -1780,12 +1780,16 @@
              初始密碼並顯示一次，**不能**重設（admin_password_settable=False）。
              同理 MQTT 使用者是 chart 以 built_in_database bootstrap_file 種進空節點的。
              ⚠ min_storage_gb=12 ＝ data 10Gi（mnesia）＋ log 2Gi；方案的 cs_storage_gb=10
-             只決定 data 那顆（#332 overlay 落在 persistence.size）。 -->
+             只決定 data 那顆（#332 overlay 落在 persistence.size）。
+             ⛔ 授權：EMQX 只能釘 5.8.x（Apache-2.0）。5.9.0 起為 BSL 1.1，明文禁止當託管 MQTT
+             服務提供給第三方——平台正是這個用途。image 標籤可佐證：5.8.9＝Apache-2.0／Opensource、
+             5.10.5＝BSL-1.1／Enterprise。#1321 曾誤釘 5.10.5（範本當時隱藏、無租戶開過），
+             本 PR 改回 5.8.9；test_emqx_seed 以 digest 白名單守住。 -->
         <record id="cloud_app_emqx" model="woow_paas_platform.cloud_app_template">
             <field name="name">EMQX</field>
             <field name="slug">emqx</field>
             <field name="description">開源 MQTT 訊息中介（broker）：物聯網裝置的連線與訊息轉送，附網頁管理後台。對外連線透過你自己的 ngrok 帳號。1 vCPU／2 GB RAM／12 GB 磁碟</field>
-            <field name="full_description">EMQX 開源版 5.x 雲端 MQTT broker：裝置以 MQTT 連進來、訊息由 broker 轉給其他訂閱者，
+            <field name="full_description">EMQX 開源版（5.8，Apache-2.0）雲端 MQTT broker：裝置以 MQTT 連進來、訊息由 broker 轉給其他訂閱者，
                 適合環控、感測器、自動化場景。內含網頁管理後台（連線中的裝置、主題、規則、流量）。
                 **帳密**：後台管理員與第一組 MQTT 連線帳密由平台在開通時產生並顯示一次，
                 之後由你在後台自行管理——EMQX 的設計是這兩組密碼只在首次開機寫入它自己的資料庫，
@@ -1800,8 +1804,8 @@
             <field name="documentation_url">https://github.com/WOOWTECH/Woow_k3s_emqx#readme</field>
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/emqx</field>
-            <field name="helm_chart_version">0.1.0</field>
-            <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/emqx","tag":"20261002.0258@sha256:03970774f34c75c95a2ed4218c29826aa488b39a03a3280c0e1aa1e3568fbc23"},"ngrok":{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/ngrok","tag":"20261002.0258@sha256:4147f33ead67712d642fde29af4a9e258d7a937ef97be146397b7e2a2e8e8dd1"}},"emqx":{"resources":{"requests":{"cpu":"250m","memory":"512Mi"},"limits":{"cpu":"1","memory":"2Gi"}}},"persistence":{"data":{"size":"10Gi"},"log":{"size":"2Gi"}},"service":{"port":18083,"targetPort":18083}}</field>
+            <field name="helm_chart_version">0.1.1</field>
+            <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/emqx","tag":"20261002.0528@sha256:8b92a101d1a1642a191507b9133c46aad095bb64300dba1770108a2c7261b11a"},"ngrok":{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/ngrok","tag":"20261002.0258@sha256:4147f33ead67712d642fde29af4a9e258d7a937ef97be146397b7e2a2e8e8dd1"}},"emqx":{"resources":{"requests":{"cpu":"250m","memory":"512Mi"},"limits":{"cpu":"1","memory":"2Gi"}}},"persistence":{"data":{"size":"10Gi"},"log":{"size":"2Gi"}},"service":{"port":18083,"targetPort":18083}}</field>
             <field name="helm_value_specs">{"required": [], "optional": [{"key": "ngrok.enabled", "label": "對外開放 MQTT（ngrok）", "type": "boolean", "default": false, "description": "平台的 Cloudflare 通道只載 HTTP/WS，原生 MQTT 1883 要對外必須透過你自己的 ngrok 帳號；未開啟時 broker 只能在平台內部連線"}, {"key": "config.sensitive.ngrok_authtoken", "label": "ngrok Authtoken", "type": "password", "description": "你 ngrok 帳號的 authtoken（ngrok 後台可取）。開啟對外 MQTT 時必填，沒填會在儲存設定時直接回錯"}, {"key": "ngrok.remoteAddr", "label": "ngrok 保留位址（選填）", "type": "text", "placeholder": "1.tcp.ngrok.io:12345", "description": "填了就固定用這個位址（ngrok 付費的保留 TCP 位址）；留空則每次重啟由 ngrok 隨機指派，服務頁會顯示目前位址"}, {"key": "emqx.listeners.ws.enabled", "label": "MQTT over WebSocket（8083）", "type": "boolean", "default": true, "description": "給瀏覽器端或只能走 WebSocket 的用戶端；關掉只留原生 TCP"}]}</field>
             <field name="default_port">18083</field>
             <field name="ingress_enabled" eval="True"/>
@@ -1836,6 +1840,9 @@
                 隨附專屬的 PostgreSQL（含 pgvector）與 Redis，背景工作由內建 cron 處理。
                 **帳密**：管理員帳號與密碼於開通時顯示一次，之後由你在 Nextcloud 內自行變更——
                 Nextcloud 在首次安裝時就把密碼寫進自己的資料庫，平台事後無法代為重設，請務必保存。
+                **大檔上傳**：平台入口每個請求上限 100 MB。網頁上傳會自動分段（每段 50 MB），不受影響；
+                桌面同步程式若遇大檔上傳失敗，在其設定檔 nextcloud.cfg 加上 maxChunkSize=50000000 即可；
+                一次送整個檔案的 WebDAV 用戶端（例如 Windows 網路磁碟機）超過 100 MB 的檔案會失敗。
                 **大版本升級**：Nextcloud 只支援逐版升級，平台會按版次安排，不會跨版跳升。
                 欠費停權時服務停止（磁碟保留），恢復繳費後資料原樣還在；刪除服務即全新開通，
                 原磁碟依平台保留政策 7 天後回收。</field>
@@ -1844,7 +1851,7 @@
             <field name="documentation_url">https://github.com/WOOWTECH/Woow_k3s_nextcloud#readme</field>
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/nextcloud</field>
-            <field name="helm_chart_version">0.1.0</field>
+            <field name="helm_chart_version">0.1.1</field>
             <field name="helm_default_values">{"nextcloud":{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/nextcloud","tag":"20261002.0258@sha256:fc04168b172e09d9b9bc7665476a77898634fe2833f0a320366fb9eb0db491db"},"resources":{"requests":{"cpu":"200m","memory":"512Mi"},"limits":{"cpu":"2","memory":"4Gi"}}},"redis":{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/redis","tag":"20261002.0258@sha256:ca0acbb137c1dc3339c8b147a58fd6f42775d4599327b50e7b116c23de501af2"},"persistence":{"size":"1Gi"}},"postgresql":{"persistence":{"size":"10Gi"}},"persistence":{"html":{"size":"5Gi"},"data":{"size":"80Gi"}},"service":{"port":80,"targetPort":80}}</field>
             <field name="helm_value_specs">{"required": [], "optional": [{"key": "nextcloud.phpUploadLimit", "label": "單檔上傳上限", "type": "select", "default": "16G", "options": ["512M", "2G", "8G", "16G", "64G"], "description": "超過這個大小的檔案會被擋下。改完服務會重啟約一分鐘"}, {"key": "nextcloud.phpMemoryLimit", "label": "PHP 記憶體上限", "type": "select", "default": "512M", "options": ["512M", "1G", "2G"], "description": "大量縮圖或線上文件編輯時可調高；不得超過方案的記憶體規格"}]}</field>
             <field name="default_port">80</field>
