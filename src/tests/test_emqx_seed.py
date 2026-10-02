@@ -10,7 +10,8 @@ ngrok sidecar 對外轉 1883），以及 paas-odoo-ci mirror-image.yml 鏡像進
    之後變更一律忽略」，首次登入還會強制改密碼 ⇒ 平台只供給初始值、**不得**宣稱可重設。
    carrier 選錯的代價不對稱（helm_secret 誤標＝helm upgrade 成功但密碼沒變＝假裝成功），
    所以這條用三個欄位一起釘：carrier / settable / reset_supported。
-2. **上架前提**：image 雙釘 ``tag@sha256``（emqx 與 ngrok 兩顆都要），且鏡像落地前保持隱藏。
+2. **上架前提**：image 雙釘 ``tag@sha256``（emqx 與 ngrok 兩顆都要）。2026-10-02 鏡像落地後已公開上架，
+   ``test_hidden_until_mirror_lands`` 從此是實際生效的守線（``is_hidden=False`` ⟹ 兩顆都要釘）。
 3. **規格對帳**：1 vCPU / 2 Gi / 12 Gi ——template min_*、plan cs_*、chart 兩顆 PVC 加總三處一致。
    ⚠ plan 的 ``cs_storage_gb`` 只對應 data（#332 overlay 寫 ``persistence.size``），
    log 是固定 overhead，故 min_storage_gb = cs_storage_gb + log。

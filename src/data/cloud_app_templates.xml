@@ -1776,9 +1776,14 @@
         </record>
 
 
-        <!-- EMQX（開源版 5.x）cloud service。chart woow-paas-charts charts/emqx 0.1.0。
-             ⚠ is_hidden=True：image 鏡像（paas-odoo-ci mirror-image.yml，待人工 /approve）
-             與 stg e2e 完成前不上貨架。鏡像落地且 e2e 綠燈後才翻 False。
+        <!-- EMQX（開源版 5.8，Apache-2.0）cloud service。chart woow-paas-charts charts/emqx 0.1.1。
+             上架（is_hidden=False，2026-10-02）：四顆 image 已鏡像進 JCR 並對帳
+             （emqx 5.8.9＝paas-odoo-ci #198、ngrok＝#201；skopeo 保留 digest，本檔釘的 amd64
+             子 manifest 都在鏡像的 index 內）；chart 0.1.1 已發佈；operator 0652（mqtt-address
+             端點）已上 prod。dev-sandbox 實測（同 ns 兩台）：匿名／錯誤密碼被拒、平台產生的帳號可
+             收發、兩台帳號互不通用、dashboard 平台密碼 200／預設 public 401、ngrok token 錯誤時
+             broker 不受影響（sidecar 退避重試）。正式站以測試帳號開通驗收在本 PR 上線後進行。
+             test_emqx_seed.test_hidden_until_mirror_lands 守線：上架 ⟹ 兩顆 image 雙釘。
              ⚠ 憑證形態 app_managed：EMQX 的 dashboard.default_password 依官方文件
              「只在第一次開機生效、之後變更一律忽略」，且首次登入強制改密碼 ⇒ 平台只供給
              初始密碼並顯示一次，**不能**重設（admin_password_settable=False）。
@@ -1823,12 +1828,16 @@
             <field name="has_public_mqtt_address" eval="True"/>
             <field name="post_deploy_init_type">none</field>
             <field name="max_per_partner" eval="0"/>
-            <field name="is_hidden" eval="True"/>
+            <field name="is_hidden" eval="False"/>
             <field name="is_active" eval="True"/>
         </record>
 
         <!-- Nextcloud cloud service。chart woow-paas-charts charts/nextcloud 0.1.0。
-             ⚠ is_hidden=True：同 EMQX，鏡像與 stg e2e 完成前不上貨架。
+             上架（is_hidden=False，2026-10-02）：nextcloud（#195）／redis（#200）鏡像已對帳、
+             chart 0.1.1 已發佈。dev-sandbox 實測（同 ns 兩台）：before-starting hook 生效
+             （chunk 50 MiB、bulkupload 關、background:cron）、trusted_proxies＝pod CIDR、
+             overwritehost＝注入的公開網址、db／redis 指向各自 release，跨實例 DB 被
+             NetworkPolicy 擋下。test_nextcloud_seed.test_hidden_until_mirror_lands 守線同 EMQX。
              ⚠ 憑證形態 app_managed：NEXTCLOUD_ADMIN_* 只在首次 occ maintenance:install
              時被吃掉，之後密碼活在 Nextcloud 自己的資料庫。
              ⚠ min_storage_gb=96 ＝ data 80 ＋ html 5 ＋ postgres 10 ＋ redis 1；
@@ -1869,7 +1878,7 @@
             <field name="admin_password_settable" eval="False"/>
             <field name="post_deploy_init_type">none</field>
             <field name="max_per_partner" eval="0"/>
-            <field name="is_hidden" eval="True"/>
+            <field name="is_hidden" eval="False"/>
             <field name="is_active" eval="True"/>
         </record>
 
