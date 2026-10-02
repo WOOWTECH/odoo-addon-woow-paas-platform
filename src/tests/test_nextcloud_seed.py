@@ -87,6 +87,7 @@ class TestNextcloudSeed(TransactionCase):
         self.assertNotIn('docker.io', json.dumps(v))
 
     def test_hidden_until_mirror_lands(self):
+        """上架 ⟹ nextcloud 與 redis 兩顆 image 雙釘（2026-10-02 鏡像落地後已公開上架）。"""
         tpl = self._tpl()
         self.assertTrue(tpl.is_active)
         if not tpl.is_hidden:
