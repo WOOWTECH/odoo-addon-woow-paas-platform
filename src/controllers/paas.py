@@ -4294,6 +4294,13 @@ class PaasController(HiddenChainMixin, Controller):
                 # 顯示條件本身（`ac_max_access_seats > 0`）走 `subscription`，
                 # 那個 key 兩側都有，所以精簡版不會因此少掉判斷依據。
                 'access': service._access_to_dict(),
+                # 對外 MQTT 位址（charts/emqx）。能力旗標與值分開給：旗標決定前端
+                # 要不要畫這一格（空位址時顯示「尚未取得」而不是整格消失——那會讓
+                # 租戶以為自己沒開成功），值是背景 poll 回讀到的最後一筆。
+                # ⚠ 前端的 gate 必須讀 `has_public_mqtt_address`，不得用 slug 判
+                # （repo-lint 第 7 條；見 cloud_app_template 同名欄位註解）。
+                'has_public_mqtt_address': service._chart_has_public_mqtt_address(),
+                'mqtt_public_url': service.mqtt_public_url or None,
                 'internal_port': service.internal_port,
                 'allocated_vcpu': service.allocated_vcpu,
                 'allocated_ram_gb': service.allocated_ram_gb,
