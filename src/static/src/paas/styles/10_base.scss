@@ -46,6 +46,15 @@
 
 .material-symbols-outlined {
     font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+    // One glyph box before the font loads too: the (invisible, display=block)
+    // ligature text would otherwise be word-wide and shift the layout when the
+    // font swaps in. flex-shrink: 0 because overflow: hidden drops a flex item's
+    // min-width to 0, which would squeeze icons in tight buttons below 1em.
+    display: inline-block;
+    width: 1em;
+    overflow: hidden;
+    white-space: nowrap;
+    flex-shrink: 0;
 
     // Filled variant
     &.filled {
