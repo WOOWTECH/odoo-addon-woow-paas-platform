@@ -275,6 +275,7 @@
 5	test_ecpay_invoice_subscription.TestEcpayInvoiceSubscription
 5	test_ecpay_invoice_topup.TestEcpayInvoiceTopup
 11	test_ecpg_callback_inbox_864.TestEcpgCallbackInbox864
+9	test_emqx_seed.TestEmqxSeed
 11	test_gateway_capability_payload_530.TestGatewayCapabilityPayload530
 4	test_gift_grant_wizard.TestGiftGrantWizard
 10	test_gift_redeem.TestGiftRedeem
@@ -430,6 +431,7 @@
 5	test_naming.TestParsePaasName
 4	test_naming.TestReconstructMcpSubdomain
 4	test_naming.TestSecurityAccessNaming
+10	test_nextcloud_seed.TestNextcloudSeed
 8	test_notifications_1310.TestNotificationsEndpoint1310
 3	test_oauth2.TestAuthorizeEndpointPkce
 2	test_oauth2.TestHaRedirectModeHealer
