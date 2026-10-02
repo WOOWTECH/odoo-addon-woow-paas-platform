@@ -3490,13 +3490,19 @@ _PURE_READ_ENDPOINTS = (
     (POLL_CONTROLLER_FILE, "_get_service"),
 )
 #: 判準 6b（#1257 留給 #1159 評估）：整個 controller 檔都不得呼叫 init 入口或 poll——init
-#: 只由 init cron 執行、狀態轉移只由短 poll cron 寫。
-_CONTROLLER_FORBIDDEN_CALLS = ("_run_post_deploy_init", "_poll_and_update_status")
-#: 判準 6 的禁用呼叫：取 operator client、任何 poll／探測、任何寫入。
+#: 只由 init cron 執行、狀態轉移只由短 poll cron 寫。`commit`（#1304）：request 中途
+#: commit 會把同一個 request 先前的寫入一起提交，與 init claim 的風險同型；加入時
+#: 本檔零命中（逐台 commit 都在 model 的 cron 裡，不在本檔）。
+_CONTROLLER_FORBIDDEN_CALLS = ("_run_post_deploy_init", "_poll_and_update_status",
+                               "commit")
+#: 判準 6 的禁用呼叫：取 operator client、任何 poll／探測、任何寫入。`execute`（#1304）：
+#: raw SQL 是繞過 write／create／unlink 的寫入出口，AST 分不出 SELECT 與 UPDATE ⇒ 本體內
+#: 一律不准（加入時零命中）。`flush*` 刻意不列：flush 只送出已經 pending 的 ORM 寫入，
+#: 那些寫入本身已被 write／create 擋下，且 `search()` 會隱式 flush，列了只增誤報不增鑑別力。
 _PURE_READ_FORBIDDEN_CALLS = (
     "get_paas_operator_client", "get_status", "_poll_and_update_status",
     "_update_service_status", "_refresh_public_url_dns_flag",
-    "_public_url_dns_state", "write", "create", "unlink", "sudo",
+    "_public_url_dns_state", "write", "create", "unlink", "sudo", "execute",
 )
 #: #627 (i)：對帳 cron 是**第三個** release 事實寫入者。它受判準 1／2 管（必須經由
 #: producer、不得列字面鍵），另外受**判準 5** 管：它絕不可以寫 `state`。
@@ -3541,12 +3547,14 @@ def check_poll_release_facts_single_source(root):
        而 error 沒有任何路徑會自己 poll 回來。這條把那個性質變成機械強制。
     6. **list/get 純讀（#1159 Q1）。** `PaasController._list_services`／`_get_service`
        本體內不得呼叫 `_PURE_READ_FORBIDDEN_CALLS`（取 operator client、poll、DNS 探測、
-       write／create／unlink／sudo）。它們回的是背景 poll 的最近觀測；在 request 裡
+       write／create／unlink／sudo／raw SQL `execute`）。它們回的是背景 poll 的最近觀測；在 request 裡
        poll 就是長回第二份 poll（#627 的形態），在 request 裡寫入則讓每個開著服務頁的
        分頁都成為狀態機的寫入者。只看本體（helper 內的呼叫看不見，同判準 3 的邊界）。
-       另外**整個 controller 檔**不得呼叫 `_CONTROLLER_FORBIDDEN_CALLS`（init 入口與
-       poll）：init 的 claim 會 commit 呼叫端的 cursor，在 request 中途 commit 會把同一個
-       request 先前的寫入一起提交（#1257）。
+       另外**整個 controller 檔**不得呼叫 `_CONTROLLER_FORBIDDEN_CALLS`（init 入口、
+       poll 與 `commit`）：init 的 claim 會 commit 呼叫端的 cursor，在 request 中途 commit
+       會把同一個 request 先前的寫入一起提交（#1257）；直接呼叫 `commit` 是同一個風險
+       （#1304）。判準 6／6b 的鑑別力由 `scripts/audit/test_repo_lint_pure_read_controller.py`
+       守（#1304）。
 
     ## 例外機制：**刻意不提供**
 
@@ -3695,8 +3703,9 @@ def check_poll_release_facts_single_source(root):
             if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
                     and node.func.attr in _CONTROLLER_FORBIDDEN_CALLS):
                 violations.append(
-                    "%s 第 %d 行呼叫了 `%s`——controller 不得執行 init 或 poll（#1257／#1159）："
-                    "init 只由 init cron 經單一入口執行，狀態轉移只由短 poll cron 寫"
+                    "%s 第 %d 行呼叫了 `%s`——controller 不得執行 init、poll 或 commit"
+                    "（#1257／#1159／#1304）：init 只由 init cron 經單一入口執行，狀態轉移只由"
+                    "短 poll cron 寫；request 中途 commit 會把同一個 request 先前的寫入一起提交"
                     % (POLL_CONTROLLER_FILE, getattr(node, "lineno", -1), node.func.attr))
 
     # 判準 5：對帳 cron 不得推狀態機
