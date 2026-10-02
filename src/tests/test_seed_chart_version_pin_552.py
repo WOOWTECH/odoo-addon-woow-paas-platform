@@ -40,12 +40,18 @@ from odoo.tests.common import TransactionCase, tagged
 SEED_TEMPLATE_FLOOR = 15
 
 #: #552 本次補上的四個釘版契約（xmlid -> 版本）。
+#: #1130：cloud_app_odoo 從 Bitnami odoo 28.2.10 換成自家 woow-odoo chart 0.2.3
+#: （woow-paas/woow-paas-charts#81；0.2.3 只加 platform 下限，tenant 與 0.2.2 相同）。
 EXPECTED_PINS = {
     'cloud_app_postgresql': '18.8.5',
     'cloud_app_n8n': '2.0.1',
     'cloud_app_redis': '27.0.18',
-    'cloud_app_odoo': '28.2.10',
+    'cloud_app_odoo': '0.2.3',
 }
+
+#: 仍在第三方 registry 的那幾個（「版本決定權在上游」的釘版理由只適用它們）。
+#: #1130 起 cloud_app_odoo 搬到自家 jcr-prod，移出本集合。
+THIRD_PARTY_PINS = ('cloud_app_postgresql', 'cloud_app_n8n', 'cloud_app_redis')
 
 
 @tagged('post_install', '-at_install')
@@ -107,13 +113,15 @@ class TestSeedChartVersionPin552(TransactionCase):
             '請同一次 commit 更新本表並在 PR 說明依據（實測指令＋日期）')
 
     def test_third_party_charts_are_the_ones_being_pinned(self):
-        """前提斷言：這四個確實是第三方 registry 的 chart。
+        """前提斷言：這三個確實是第三方 registry 的 chart。
 
-        本單的嚴重性來自「版本決定權在上游」。若哪天這四個搬到自家 jcr-prod，
-        上面的釘版理由就換了一套，應該回來重讀而不是照抄。
+        本單的嚴重性來自「版本決定權在上游」。若哪天它們搬到自家 jcr-prod，
+        上面的釘版理由就換了一套，應該回來重讀而不是照抄（cloud_app_odoo 已於 #1130
+        搬走，見下一條）。
         """
         seeded = self._seeded_templates()
-        for name in EXPECTED_PINS:
+        self.assertLessEqual(set(THIRD_PARTY_PINS), set(EXPECTED_PINS))
+        for name in THIRD_PARTY_PINS:
             chart = seeded[name].helm_chart_name or ''
             self.assertNotIn(
                 'jcr-prod.woowtech.io', chart,
@@ -121,3 +129,16 @@ class TestSeedChartVersionPin552(TransactionCase):
             self.assertTrue(
                 chart.startswith('oci://'),
                 f'{name} 的 helm_chart_name 不是 OCI ref：{chart!r}')
+
+    def test_odoo_moved_to_the_in_house_woow_odoo_chart(self):
+        """#1130：cloud_app_odoo 釘的是自家 woow-odoo chart，不再是 Bitnami。
+
+        換 chart 而沒換版號（或反過來）會讓 helm 拿 Bitnami 的版號去拉 woow-odoo、
+        或用 woow-odoo 版號去拉 Bitnami——兩者都在 install 當下才炸。座標與版號鎖在同
+        一條。
+        """
+        odoo = self._seeded_templates()['cloud_app_odoo']
+        self.assertEqual(
+            odoo.helm_chart_name,
+            'oci://jcr-prod.woowtech.io/woow-paas-docker-local/woow-odoo')
+        self.assertTrue(odoo._is_woow_odoo_chart())

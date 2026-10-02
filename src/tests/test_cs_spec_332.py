@@ -139,14 +139,32 @@ class TestPlanSpecOverlay(TransactionCase):
         self.assertEqual(out['persistence']['size'], '40Gi')
 
     def test_overlay_workers_substitution(self):
+        """#1130：woow-odoo 的 workers／memory 寫 typed `conf.*`（公式同 Bitnami 版）。"""
         Svc = self.env['woow_paas_platform.cloud_service']
         tpl = self.env.ref('woow_paas_platform.cloud_app_odoo')
         plan = self.env.ref('woow_paas_platform.plan_odoo_t3_monthly')
-        out = Svc._apply_plan_spec_overlay(self._base_values(), tpl, plan)
-        scripts = json.dumps(out.get('customPostInitScripts', {}))
-        self.assertIn('workers = 4', scripts)
-        self.assertNotIn('workers = 0', scripts)
-        self.assertNotIn('limit_memory_hard = 0', scripts)
+        base = self._base_values()
+        self.assertEqual(base['conf']['workers'], 0, '前提：seed 是 threaded 預設')
+        out = Svc._apply_plan_spec_overlay(base, tpl, plan)
+        ram_bytes = int(4.0 * 1024 ** 3)
+        self.assertEqual(out['conf']['workers'], 4)
+        self.assertEqual(out['conf']['limitMemoryHard'], int(ram_bytes * 0.85 / 4))
+        self.assertEqual(out['conf']['limitMemorySoft'], int(ram_bytes * 0.70 / 4))
+        self.assertNotIn('customPostInitScripts', out,
+                         'woow-odoo tenant schema 拒收 Bitnami 的 customPostInitScripts')
+
+    def test_overlay_workers_without_conf_fails_loud(self):
+        """#1130：woow-odoo template 的 values 沒有 `conf` ⇒ raise，不靜默退回 chart 預設。
+
+        chart 預設 workers 2、每 worker 2GiB，配 plan 的 pod 記憶體上限會 OOM——靜默
+        no-op 比 fail-loud 糟。"""
+        Svc = self.env['woow_paas_platform.cloud_service']
+        tpl = self.env.ref('woow_paas_platform.cloud_app_odoo')
+        plan = self.env.ref('woow_paas_platform.plan_odoo_t3_monthly')
+        base = self._base_values()
+        base.pop('conf')
+        with self.assertRaises(ValueError):
+            Svc._apply_plan_spec_overlay(base, tpl, plan)
 
     def test_zero_spec_plan_is_noop(self):
         """cs_* 全 0 → overlay 輸出必須與輸入完全相同（現狀零變保證）。"""

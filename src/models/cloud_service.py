@@ -63,6 +63,28 @@ _CF_REAP_MODEL = 'woow_paas_platform.cf_access_policy_reap'
 #: `selected-addons` 這段（守衛：test_helm_values_addon_builder_1052）。
 ODOO_SELECTED_ADDONS_PATH = '/opt/bitnami/odoo/selected-addons'
 
+#: #1130：woow-odoo chart 的 Service port。Service 名＝release 名，80 與 8072 都 targetPort
+#: nginx sidecar 的 8080（chart values.yaml 檔頭〈固定契約〉）。`_build_expose_config` 明帶它，
+#: 不交給 operator 的「第一個非 headless Service」自動偵測（同 ns 還有 `<release>-postgresql`）。
+WOOW_ODOO_SERVICE_PORT = 80
+
+#: #1130：woow-odoo 初始管理員密碼的 sensitive 路徑（charts#81 R2-Q2 定名 `conf.adminPassword`，
+#: 不改名）。值由平台鑄造、存 `cloud_service_secret.admin_password`，經 operator 的 sensitive
+#: 通道送入；chart 只在首次 `-i base` 套用（#1174：redeploy／reconfigure 重送同值是 no-op）。
+#: 不得落 `helm_values`（`_strip_mcp_sensitive_values`）；詳情 API 的第二道遮罩見
+#: `PaasController._sanitize_helm_values`。
+WOOW_ODOO_ADMIN_PASSWORD_PATH = ('conf', 'adminPassword')
+
+#: #1130：Bitnami odoo 時代 seed 寫進每台服務 helm_values 的頂層鍵（woow-odoo tenant schema
+#: 全部拒收）。`_woow_odoo_legacy_release_error` 用它辨識 #1128 範圍的存量服務。
+BITNAMI_ODOO_VALUE_KEYS = frozenset({
+    'odooEmail', 'odooPassword', 'odooSkipInstall', 'postgresql', 'customPostInitScripts',
+})
+
+#: #1130：woow-odoo 管理員 login（＝租戶填的 email，`conf.adminEmail`）的格式檢查，
+#: create／reconfigure 共用（#1160）。只擋明顯不是 email 的值；254＝RFC 5321 路徑上限。
+WOOW_ODOO_ADMIN_EMAIL_RE = re.compile(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
+
 #: 租戶自設的 admin 帳號（template.admin_username_helm_path 有值的模板）。與 chart
 #: 端 `open-design.basicAuthUsername` 同一條規則：帳號被原樣寫進 htpasswd
 #: （`user:{PLAIN}pw`，nginx 以第一個 ':' 切分）與 ttyd 的 `-c user:pw`，含 ':' 或空白
@@ -1268,6 +1290,11 @@ class CloudService(models.Model):
             PaaSOperatorError,
         )
 
+        # #1130：Bitnami 存量（template 已換 woow-odoo）先擋，不登記意圖、不碰 operator。
+        legacy_error = self._woow_odoo_legacy_release_error()
+        if legacy_error:
+            raise UserError(legacy_error)
+
         # #1257 Q27（修訂 Q14）：lease 在途時擋下並**登記意圖**，而不是只提示到期
         # 時間——否則 lease 一到期背景馬上重送、再拿一個 lease，admin 的出口可能一直
         # 被搶走。背景看到意圖就停止自動重送，lease 結束後 cron 先執行 redeploy。
@@ -1324,7 +1351,8 @@ class CloudService(models.Model):
             # 的 group_system gate（#1185；在那之前連租戶都能經 `call_kw` 打到這裡）。
             self._redeploy_require_pinned_version()
             values = self._assemble_deploy_values()['values']
-            sensitive_values = self._build_mcp_sensitive_values()
+            # #1130：woow-odoo 的 conf.adminPassword 與 MCP 家族平行（各自的 helper）。
+            sensitive_values = self._build_deploy_sensitive_values()
             try:
                 release_info = client.upgrade_release(
                     namespace=self.helm_namespace,
@@ -1826,7 +1854,8 @@ class CloudService(models.Model):
 
         # sensitive_values 與 mcp_api_key 屬本 install 路徑專屬（非部署 values），
         # 另外組。mcp_api_key 首裝 patch sidecar 用，仍自 deploy_params 取。
-        sensitive_values = self._build_mcp_sensitive_values()
+        # #1130：woow-odoo 的 conf.adminPassword 與 MCP 家族平行（各自的 helper）。
+        sensitive_values = self._build_deploy_sensitive_values()
         params = json.loads(self.deploy_params) if self.deploy_params else {}
         mcp_api_key = params.get('mcp_api_key')
 
@@ -2038,6 +2067,9 @@ class CloudService(models.Model):
         if registry_secret:
             values = self._inject_image_pull_secrets(
                 values, registry_secret,
+                # #1130：woow-odoo schema 只收 `[{name: ...}]`（字串清單在 install 當下
+                # 直接被 schema 擋）；Bitnami 系 chart 兩種都收，維持原本的字串形。
+                as_objects=template._is_woow_odoo_chart(),
             )
 
         # Inject the service's own public origin for charts that gate on the
@@ -2080,8 +2112,24 @@ class CloudService(models.Model):
                 'Halted' if self._is_halted() else 'Always'
             )
 
-        # Inject Odoo addon selection (initContainer + addons_path)
-        if self.odoo_addon_ids and template.slug == 'odoo':
+        if template._is_woow_odoo_chart():
+            # #1130：woow-odoo chart 自己擁有 addon initContainer（每次開機從 image
+            # `/all-addons` 複製到 emptyDir），平台只給名稱清單——下面那段 Bitnami 形的
+            # initContainers／extraVolumes／customPostInitScripts 在 tenant schema
+            # （additionalProperties: false）會讓 install 當場失敗。每次組裝都從
+            # `odoo_addon_ids` 重算**完整**清單（含空 list），取消勾選不必另外清 values。
+            # 語意與舊 builder 相同：只有 third_party／custom 需要複製（其餘本來就在
+            # image 的 addons_path 內）；勾選不自動 -i、移除不代為 uninstall。
+            # 完整的 addon P1（UI 深連結、builder 清理、文件）在 #1187。
+            values['addons'] = {'selected': self._woow_odoo_selected_addons()}
+            # 身分值進 backup manifest、還原時比對（woow-odoo `identity.*`；#1213 消費）。
+            # 用 DB id：與服務列一對一、跨 redeploy 不變；namespace／release 另有比對。
+            values['identity'] = {
+                'cloudServiceId': str(self.id),
+                'workspaceId': str(self.workspace_id.id),
+            }
+        # Inject Odoo addon selection (initContainer + addons_path) — Bitnami 形
+        elif self.odoo_addon_ids and template.slug == 'odoo':
             image_vals = values.get('image', {})
             registry = image_vals.get('registry', 'docker.io')
             repo = image_vals.get('repository', '')
@@ -2110,8 +2158,68 @@ class CloudService(models.Model):
         """
         self.ensure_one()
         if self.template_id.ingress_enabled and self.subdomain:
-            return {'enabled': True, 'subdomain': self.subdomain}
+            config = {'enabled': True, 'subdomain': self.subdomain}
+            if self.template_id._is_woow_odoo_chart():
+                # #1130：明帶 nginx Service（＝release 名）＋80。operator 的自動偵測挑
+                # 「第一個非 headless Service」（extra/paas-operator/src/api/releases.py），
+                # woow-odoo 同 ns 還有 `<release>-postgresql`，挑錯就是一條指向 DB 的
+                # 公開 route（#1141 裁決 4 連帶必做）。
+                config['service_name'] = self.helm_release_name
+                config['service_port'] = WOOW_ODOO_SERVICE_PORT
+            return config
         return None
+
+    def _woow_odoo_legacy_release_error(self):
+        """#1130 過渡守門：template 已換成 woow-odoo，但這台服務存的 values 還是 Bitnami 形。
+
+        這類服務（2026-10：prod svc-f11b1cbb、stg svc-42487178）的 release 是 Bitnami odoo；
+        拿舊 values 對新 chart 做 helm upgrade 一定被 tenant schema 擋（叢集不動），但
+        reconfigure 會先把狀態寫成 upgrading、背景失敗後翻成 error——租戶按一次「儲存設定」
+        或改 addon，跑得好好的服務在平台上就變成 error。這裡在任何寫入之前擋下，回可讀
+        訊息、狀態不動。判準是存的 values 帶著舊 seed 的 Bitnami 頂層鍵
+        （``BITNAMI_ODOO_VALUE_KEYS``，woow-odoo schema 全部拒收），不是 chart 名比對——
+        正式的「chart 換版拒絕 in-place upgrade」守門與實例處置屬 #1128，那邊落地後本守門
+        可移除。回 ``None`` 表示放行。
+        """
+        self.ensure_one()
+        if not self.template_id._is_woow_odoo_chart():
+            return None
+        if not BITNAMI_ODOO_VALUE_KEYS & set(self._helm_values_dict() or {}):
+            return None
+        return _(
+            'This Odoo service still runs on the previous Odoo deployment and cannot be '
+            'changed or redeployed in place. Please contact support to migrate it.')
+
+    @api.model
+    def _woow_odoo_admin_email_error(self, template, values):
+        """#1130：woow-odoo 的 `conf.adminEmail` 檢查；回錯誤訊息，合格回 ``None``。
+
+        檢查的是**合併後**的 values（template 預設＋租戶輸入），create 與 reconfigure
+        同一個判準（#1160）。非 woow-odoo template 一律 ``None``。
+        """
+        if not template._is_woow_odoo_chart():
+            return None
+        conf = values.get('conf') if isinstance(values, dict) else None
+        email = conf.get('adminEmail') if isinstance(conf, dict) else None
+        if (not isinstance(email, str) or len(email) > 254
+                or not WOOW_ODOO_ADMIN_EMAIL_RE.match(email)):
+            return _('Administrator email must be a valid email address')
+        return None
+
+    def _woow_odoo_selected_addons(self):
+        """#1130：woow-odoo `addons.selected`——要從 image `/all-addons` 複製的 addon 名稱。
+
+        與 Bitnami 形 builder（``_build_odoo_addon_helm_values``）同一條篩選：只有
+        ``third_party``／``custom`` 需要複製。名稱在 image 內不存在時 chart 以
+        ``Init:Error`` fail-loud（woow-odoo values.yaml〈addons〉）。排序固定，讓同一組
+        勾選每次 render 出位元相同的 values（不白白觸發 Recreate）。
+        """
+        self.ensure_one()
+        return sorted(
+            addon.technical_name
+            for addon in self.odoo_addon_ids
+            if addon.source_type in ('third_party', 'custom')
+        )
 
     def _build_odoo_addon_helm_values(self, image_ref):
         """Build Helm values for Odoo addon selection via initContainer.
@@ -2227,9 +2335,13 @@ class CloudService(models.Model):
         """
         # Mapping of template slug to storageClass value paths
         path_map = {
+            # #1130：woow-odoo（woow-paas-charts#81）每份部署 3 顆 PVC——data、獨立
+            # postgres StatefulSet、backup——三個 storageClass 空值都 fail-loud，平台三個
+            # 都要注入；不再是 Bitnami 子 chart 的 postgresql.primary.persistence。
             'odoo': [
                 ('persistence', 'storageClass'),
-                ('postgresql', 'primary', 'persistence', 'storageClass'),
+                ('postgres', 'persistence', 'storageClass'),
+                ('backup', 'persistence', 'storageClass'),
             ],
             'postgresql': [
                 ('primary', 'persistence', 'storageClass'),
@@ -2289,7 +2401,7 @@ class CloudService(models.Model):
         return values
 
     @staticmethod
-    def _inject_image_pull_secrets(values, secret_name):
+    def _inject_image_pull_secrets(values, secret_name, as_objects=False):
         """Inject imagePullSecrets into helm values for private registry access.
 
         Uses global.imagePullSecrets which is supported by all Bitnami charts
@@ -2298,13 +2410,26 @@ class CloudService(models.Model):
         Args:
             values: Helm values dict (modified in-place and returned)
             secret_name: Name of the dockerconfigjson K8s Secret
+            as_objects: #1130：以 ``{'name': ...}`` 物件形寫入（woow-odoo schema 只收
+                這一形；字串會在 install 當下被 schema 擋）。預設 False＝原本的字串形。
 
         Returns:
             Modified values dict
         """
         values.setdefault('global', {})
         existing = values['global'].get('imagePullSecrets', [])
-        if secret_name not in existing:
+        if as_objects:
+            names = {
+                item.get('name') if isinstance(item, dict) else item
+                for item in existing
+            }
+            existing = [
+                item if isinstance(item, dict) else {'name': item}
+                for item in existing
+            ]
+            if secret_name not in names:
+                existing.append({'name': secret_name})
+        elif secret_name not in existing:
             existing.append(secret_name)
         values['global']['imagePullSecrets'] = existing
         return values
@@ -2774,6 +2899,40 @@ class CloudService(models.Model):
             values['auth'] = {'apiServerKey': gateway_api_key}
         return values
 
+    def _build_odoo_sensitive_values(self):
+        """#1130：woow-odoo 的初始管理員密碼 sensitive value（odoo 專屬 helper）。
+
+        ⛔ 刻意**不經** ``has_admin_gui``／``admin_password_carrier``／
+        ``_build_mcp_sensitive_values``：那條送 ``config.sensitive.admin_password``，
+        woow-odoo tenant schema（``additionalProperties: false``）直接擋（#1141 ⛔ 條款）。
+        也不塞進 ``_assemble_deploy_values``——那是唯讀、不含敏感值的稽核真相源。
+        ``_execute_deploy``／``_redeploy``／reconfigure 三個呼叫點各自平行呼叫（#1160）。
+
+        每次都送全量（operator 只 merge 這次呼叫傳進來的 sensitive，``reset_values``
+        之下不送就變空值）。chart 只在首次 ``-i base`` 套用，既有 DB 重送同值是 no-op
+        （#1174 c14185）。secret 缺席（不該發生：create 時一定鑄造）回 ``{}``——首裝時
+        chart bootstrap 會以 exit 4 fail-loud，而不是平台在這裡亂生一把沒人知道的密碼。
+        """
+        self.ensure_one()
+        if not self.template_id._is_woow_odoo_chart():
+            return {}
+        secret = self._get_secret_record()
+        if not (secret and secret.admin_password):
+            return {}
+        section, key = WOOW_ODOO_ADMIN_PASSWORD_PATH
+        return {section: {key: secret.admin_password}}
+
+    def _build_deploy_sensitive_values(self):
+        """三個部署呼叫點共用：MCP 家族與 woow-odoo 的 sensitive values 疊在一起。
+
+        兩者的閘門互斥（``has_admin_gui`` 與 woow-odoo chart），鍵也不重疊
+        （``config``／``auth`` 對 ``conf``），淺合併即可。
+        """
+        self.ensure_one()
+        values = dict(self._build_mcp_sensitive_values())
+        values.update(self._build_odoo_sensitive_values())
+        return values
+
     @staticmethod
     def _strip_mcp_sensitive_values(values):
         """剝掉不得落庫（helm_values）的敏感子樹。
@@ -2795,6 +2954,12 @@ class CloudService(models.Model):
         auth = result.get('auth')
         if isinstance(auth, dict):
             auth.pop('apiServerKey', None)
+        # #1130 woow-odoo 初始管理員密碼。同樣只 pop 這一格：同層 `conf.*` 是 typed
+        # odoo.conf 鍵（adminEmail、workers…），不是憑證。
+        section, key = WOOW_ODOO_ADMIN_PASSWORD_PATH
+        conf = result.get(section)
+        if isinstance(conf, dict):
+            conf.pop(key, None)
         return result
 
     # ------------------------------------------------------------------
@@ -6518,6 +6683,9 @@ class CloudService(models.Model):
         為 `echo 'workers = 0'`（非裸行），故 body.replace + 逐 marker「全 script
         合計恰 1 處」的 count 斷言 fail-loud——base 漂移（0 或多處）即 raise、
         不得靜默 no-op。
+
+        #1130：woow-odoo chart 的 template 改寫 typed `conf.workers`／
+        `conf.limitMemory{Hard,Soft}`（同一組公式）；上面的字串替換只剩 Bitnami 形。
         """
         if plan.cs_vcpu:
             res = values.setdefault('resources', {})
@@ -6532,6 +6700,24 @@ class CloudService(models.Model):
                 res.setdefault(key, {})['memory'] = mem
         if plan.cs_storage_gb:
             values.setdefault('persistence', {})['size'] = f'{plan.cs_storage_gb}Gi'
+        conf = values.get('conf')
+        if plan.cs_odoo_workers and template._is_woow_odoo_chart():
+            # #1130：woow-odoo 的 odoo.conf 是 chart render 的 Secret，plan 只能寫 typed
+            # `conf.*` 鍵（#1160 plan overlay 答案；公式沿用下方 Bitnami 版：hard 0.85／
+            # soft 0.70 per worker）。seed 沒有 `conf` 區塊＝寫不進去 ⇒ fail-loud，
+            # 不靜默退回 chart 預設（workers 2、每 worker 2GiB，會被 plan 的 pod 記憶體
+            # 上限 OOM）。何時對既有服務重算屬 #1158，這裡只是 create 當下的同一條 overlay。
+            if not isinstance(conf, dict):
+                raise ValueError(
+                    "woow-odoo template 的 helm values 缺 conf 區塊，"
+                    "cs_odoo_workers 無處可寫（fail-loud，不靜默 no-op）")
+            n = plan.cs_odoo_workers
+            conf['workers'] = n
+            if plan.cs_ram_gb:
+                ram_bytes = int(plan.cs_ram_gb * 1024 ** 3)
+                conf['limitMemoryHard'] = int(ram_bytes * 0.85 / n)
+                conf['limitMemorySoft'] = int(ram_bytes * 0.70 / n)
+            return values
         scripts = values.get('customPostInitScripts')
         if plan.cs_odoo_workers and scripts:
             n = plan.cs_odoo_workers
@@ -6798,7 +6984,12 @@ class CloudService(models.Model):
                         tpl=rec.template_id.name, limit=limit))
         # #1257 Q24：create 開第一代（init 類型不是 none 才會真的開）。
         records._open_init_generation()
-        for rec in records.filtered(lambda r: r.template_id.has_admin_gui):
+        # #1130：woow-odoo 的初始 Odoo 管理員密碼同樣在這裡鑄造、存 cloud_service_secret
+        # （#1160：平台鑄造＋create response 一次性顯示）。閘門是 chart，不是 has_admin_gui
+        # ——後者會把 odoo 接上 MCP 的 config.sensitive／reset 鏈（#1141 ⛔ 條款）。
+        for rec in records.filtered(
+                lambda r: r.template_id.has_admin_gui
+                or r.template_id._is_woow_odoo_chart()):
             if not rec._get_secret_record():
                 secret_password = self.env.context.get('mcp_admin_password')
                 if not secret_password:

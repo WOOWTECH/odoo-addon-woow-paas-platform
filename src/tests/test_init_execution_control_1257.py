@@ -54,7 +54,7 @@ from ..services.paas_operator import (
     PaaSOperatorError,
     PaaSOperatorTimeoutError,
 )
-from .operator_contract import operator_client, status_response
+from .operator_contract import operator_client, pod_info, status_response
 from .committed_cron_scope import CommittedCronScope
 
 SVC = 'woow_paas_platform.cloud_service'
@@ -63,6 +63,14 @@ _OPERATOR_MODULE = 'odoo.addons.woow_paas_platform.services.paas_operator'
 _CONTROLLER_MODULE = 'odoo.addons.woow_paas_platform.controllers.paas'
 _MODEL_MODULE = 'odoo.addons.woow_paas_platform.models.cloud_service'
 _READY_PODS = [{'name': 'app', 'phase': 'Running', 'ready': '1/1'}]
+# #1130：seed 的 cloud_app_odoo 換成 woow-odoo chart 後，就緒判定走 #1251 的契約——要有
+# server／postgresql 身分 Pod，release.chart 也要是 woow-odoo；通用 Pod 不再算就緒。
+_WOOW_ODOO_READY = {
+    'pods': [pod_info(name='svc-x-7f9-abc', component='server', owner_kind='ReplicaSet'),
+             pod_info(name='svc-x-postgresql-0', component='postgresql',
+                      owner_kind='StatefulSet')],
+    'release': {'status': 'deployed', 'revision': 1, 'chart': 'woow-odoo'},
+}
 _JWT = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ0ZXN0LTEyNTcifQ.c2lnbmF0dXJlLTEyNTc'
 # lease 的上界：承載 init 的 runtime 的 cron 硬上限（prod `limit_time_real_cron=1800`，
 # woow-paas/paas-app-bundle-cd#154）。runtime 實值由部署設定決定，這裡只對帳常數。
@@ -1250,8 +1258,9 @@ class _ServiceCase(TransactionCase):
         """controller 看到的 request：已認證的 workspace admin 成員（見 setUp）。"""
         return SimpleNamespace(env=self.env(user=self.member))
 
-    def _poll_cron(self, service, pods=None):
-        client = operator_client(get_status=status_response(pods=pods or _READY_PODS))
+    def _poll_cron(self, service, pods=None, **status):
+        client = operator_client(
+            get_status=status_response(pods=pods or _READY_PODS, **status))
         with patch.object(type(service), '_run_post_deploy_init') as entry:
             service._poll_and_update_status(client)
         return client, entry
@@ -1404,12 +1413,12 @@ class TestReconfigureRollbackOwedInit1267(_ServiceCase):
         self.assertTrue(self._reconfigure(svc, odoo_addon_ids=[addon.id])['success'])
         self.assertEqual((svc.init_pending, svc.init_generation, svc.addon_update_pending),
                          (True, generation + 1, True), '改 addon 開新一代')
-        self._poll_cron(svc)
+        self._poll_cron(svc, **_WOOW_ODOO_READY)
         self.assertEqual(svc.state, 'initializing')
         self.assertTrue(self._reconfigure(svc, odoo_addon_ids=[addon.id])['success'])
         self.assertEqual(svc.init_generation, generation + 1, '沒改 addon 不開新一代')
         self.assertTrue(svc.init_pending)
-        _client, entry = self._poll_cron(svc)
+        _client, entry = self._poll_cron(svc, **_WOOW_ODOO_READY)
         self.assertEqual(svc.state, 'initializing')
         self.assertIn(svc, svc._init_cron_queue(), '欠的 init 排進 init cron 會 claim 的佇列（#1159）')
         entry.assert_not_called()
