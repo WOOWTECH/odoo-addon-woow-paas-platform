@@ -502,11 +502,17 @@
                  StreamableHTTP, internal port 3000). The sensitive AUTH_TOKEN is NOT here:
                  mandatory for n8n-mcp http mode, the chart self-generates it and
                  deep-merges the same value into mcp_server.env.AUTH_TOKEN +
-                 proxy.bearer_token (Secret-only). -->
+                 proxy.bearer_token (Secret-only).
+                 #1273（2026-10-02）：原釘的 ed098b60@sha256:618ac675 在 09-30 JCR 清理時
+                 被刪、layer 已 GC，新開通一律 ImagePullBackOff。改釘 woow-mcp-server
+                 614ae663（main，與 odoo-manage-mcp-admin 同一批）：apps/n8n 與 ed098b60
+                 只差 config router／前端 2 檔、launcher 未動。正式站以 paas-registry
+                 實拉驗證：imageID digest 與本欄逐字一致、launcher n8n-mcp-http 存在（吃 port 參數）、
+                 `npm root -g` 下有 n8n-mcp。 -->
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/mcp-server</field>
             <field name="helm_chart_version">0.1.5</field>
-            <field name="helm_default_values">{"app": "n8n", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/n8n-mcp-admin", "tag": "ed098b6070cde0c74ed0bccb47a33d6fdf40d9c6@sha256:618ac675b85501f5e204b51286284d4b52d487de1b6593d6dcc1e6db8525dcc7"}, "service": {"port": 8080}, "envPrefix": "", "persistence": {"enabled": true, "size": "5Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "128Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}, "nonSensitive": {"mcp_server": {"command": "n8n-mcp-http", "args": ["--port", "3000"], "port": 3000, "env_prefix": ""}, "proxy": {"timeout": 86400}}}}</field>
+            <field name="helm_default_values">{"app": "n8n", "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/n8n-mcp-admin", "tag": "614ae663fadd91c76972f60017a76d2627bea87e@sha256:b87566b99205158e69ddf3a90d7bde33836c41a3f759090951445fa508db03bc"}, "service": {"port": 8080}, "envPrefix": "", "persistence": {"enabled": true, "size": "5Gi"}, "updateStrategy": {"type": "Recreate"}, "resources": {"requests": {"cpu": "100m", "memory": "128Mi"}, "limits": {"cpu": "1", "memory": "1Gi"}}, "config": {"requireFields": true, "requiredFields": ["admin_password"], "sensitive": {}, "nonSensitive": {"mcp_server": {"command": "n8n-mcp-http", "args": ["--port", "3000"], "port": 3000, "env_prefix": ""}, "proxy": {"timeout": 86400}}}}</field>
             <field name="helm_value_specs">{"required": [], "optional": []}</field>
 
             <!-- Service Configuration -->

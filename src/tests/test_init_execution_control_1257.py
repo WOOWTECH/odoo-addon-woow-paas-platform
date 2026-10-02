@@ -821,7 +821,7 @@ class TestInitLeaseRealCursor1257(TransactionCase):
             namespace=f'dev-sandbox-1257-n8n-{self.tag}', release_name=f'svc-n8n-{self.tag}',
             owner_email=f'owner-{self.tag}@example.invalid', owner_password=f'pw-{self.tag}')
         state = self._read('n8n')
-        self.assertEqual(state['state'], 'running')
+        self.assertEqual(state['state'], 'initializing')  # #1333：等重啟後的 Pod ready
         self.assertEqual(state['n8n_api_key'], _JWT)
 
     def test_n8n_success_recovery_keeps_secret_context_for_helm_mirror(self):
@@ -842,7 +842,7 @@ class TestInitLeaseRealCursor1257(TransactionCase):
             attempt = svc.env[ATTEMPT].search([('service_id', '=', svc.id)])
             return svc.state, json.loads(svc.helm_values), attempt.applied_at, attempt.error or ''
         state, helm_values, applied_at, attempt_error = self._run(recovered, 'n8n')
-        self.assertEqual(state, 'running')
+        self.assertEqual(state, 'initializing')  # #1333：等重啟後的 Pod ready
         self.assertEqual(helm_values['config']['mcpApiKey'], _JWT)
         self.assertTrue(applied_at)
         self.assertNotIn(_JWT, attempt_error)
@@ -892,7 +892,7 @@ class TestInitLeaseRealCursor1257(TransactionCase):
         self._entry(client, 'n8n')
         completed = self._read('n8n')
         self.assertEqual(client.init_n8n.call_count, 2)
-        self.assertEqual(completed['state'], 'running')
+        self.assertEqual(completed['state'], 'initializing')  # #1333：等重啟後的 Pod ready
         self.assertEqual(completed['n8n_api_key'], _JWT)
         self.assertEqual(self._run(lambda svc: json.loads(svc.helm_values), 'n8n'),
                          {'config': {'mcpApiKey': _JWT}})
@@ -901,6 +901,25 @@ class TestInitLeaseRealCursor1257(TransactionCase):
         self.assertEqual(history[0][:3], (old_attempt, False, False))
         self.assertEqual(history[1][1:3], (True, True))
         self.assertTrue(all(_JWT not in row[3] for row in history))
+
+    def test_n8n_success_stays_initializing_until_restarted_pods_ready(self):
+        """#1333：n8n init 成功＝operator 正在 rollout restart，不可直接寫 running。
+
+        結果套用後：不欠 init、lease 釋放、API key 已存，但狀態留在 initializing、
+        就緒觀測歸零並重設等待錨點，交給短 poll 等重啟後的 Pod ready 才轉 running。
+        Odoo init 不重啟 Pod，照舊直接 running（對照組）。
+        """
+        before = self._run(lambda svc: svc.init_wait_since, 'n8n')
+        client = operator_client(init_n8n={'success': True, 'api_key': _JWT},
+                                 init_odoo={'success': True})
+        self._entry(client, 'n8n')
+        state = self._read('n8n')
+        self.assertEqual((state['state'], state['init_pending'], state['lease'],
+                          state['n8n_api_key']), ('initializing', False, False, _JWT))
+        self.assertFalse(self._run(lambda svc: svc.init_ready_observed, 'n8n'))
+        self.assertGreaterEqual(state['pod_wait_since'], before, '等待錨點重設成 init 成功當下')
+        self._entry(client)
+        self.assertEqual(self._read()['state'], 'running')
 
     def test_n8n_recorded_success_does_not_replay_a_previous_key(self):
         self._assert_n8n_recovery_rejects_an_unpersisted_key('previous-test-key')
@@ -916,7 +935,7 @@ class TestInitLeaseRealCursor1257(TransactionCase):
             self._entry(client, 'n8n')
         missed.assert_called_once()
         state = self._read('n8n')
-        self.assertEqual((state['state'], state['n8n_api_key']), ('running', _JWT))
+        self.assertEqual((state['state'], state['n8n_api_key']), ('initializing', _JWT))  # #1333
         persisted = self._run(lambda svc: svc.env[ATTEMPT].search(
             [('service_id', '=', svc.id)]).n8n_key_persisted, 'n8n')
         self.assertTrue(persisted)
@@ -1476,6 +1495,26 @@ class TestReconfigureRollbackOwedInit1267(_ServiceCase):
         self.assertTrue(self._rollback(none_svc)['success'])
         self._poll_cron(none_svc)
         self.assertEqual(none_svc.state, 'running')
+
+    def test_n8n_after_init_waits_for_restarted_pods_before_running(self):
+        """#1333：n8n init 成功後 operator rollout restart，服務留在 initializing、不欠 init。
+
+        短 poll 只有在重啟後的 Pod 全部 ready 時才轉 running；Pod 還在建立（正式站實測
+        ContainerCreating／not ready，租戶點網址 502）時維持 initializing。全程不得再
+        送 init（init cron 只撈 init_pending）。
+        """
+        svc = self._service('n8n', state='initializing')
+        svc.sudo().write({'init_pending': False, 'init_wait_since': fields.Datetime.now()})
+        restarting = [{'name': 'app', 'phase': 'Pending', 'ready': '0/2'}]
+        client, entry = self._poll_cron(svc, pods=restarting)
+        self.assertEqual(svc.state, 'initializing', '重啟中的 Pod 不得被標成 running')
+        self.assertNotIn(svc, svc._init_cron_queue(), '不欠 init 的 initializing 不排 init cron')
+        entry.assert_not_called()
+        client.init_n8n.assert_not_called()
+        client, entry = self._poll_cron(svc)
+        self.assertEqual(svc.state, 'running')
+        entry.assert_not_called()
+        client.init_n8n.assert_not_called()
 
 
 # ====================================================================== #

@@ -626,8 +626,12 @@ class TestInitCron1159(_RealCursorCase):
                 self._run_cron('_cron_run_post_deploy_inits', client)
                 self.assertEqual(calls, [self._release(ids['n8n']), self._release(ids['oldest']),
                                          self._release(ids['recent'])])
-                for sid in ids.values():
-                    self.assertEqual(self._read(sid, 'state'), 'running')
+                # #1333：n8n init 成功後 operator 重啟 Pod，留在 initializing（不欠 init）
+                # 等短 poll 看到重啟後的 Pod ready；Odoo 不重啟，直接 running。
+                for key, sid in ids.items():
+                    self.assertEqual(self._read(sid, 'state'),
+                                     'initializing' if key == 'n8n' else 'running')
+                    self.assertFalse(self._read(sid, 'init_pending'))
 
     def test_capacity_monitor_forty_minute_wait_remains_dispatchable_and_claim_restarts_episode(self):
         """真 PG 的 claim／not_executed lifecycle：容量 40 分不耗 D2 預算。"""
@@ -988,7 +992,8 @@ class TestInitCron1159(_RealCursorCase):
                     lambda a: str(a.note or '')))
             slow_name = env[SVC].browse(slow).name
             fast_name = env[SVC].browse(fast).name
-        self.assertEqual(self._read(slow, 'state'), 'running')
+        # #1333：n8n 成功後留在 initializing 等重啟；owner 監控本就掃 initializing。
+        self.assertEqual(self._read(slow, 'state'), 'initializing')
         self.assertIn(slow_name, notes, '第 6 分才收到 success：5 分內未確認')
         self.assertNotIn(fast_name, notes, '5 分內收到真 success＋key：已確認')
         self.assertTrue(self._read(slow, 'n8n_owner_alerted_at'))
@@ -1483,7 +1488,8 @@ class TestExecSurfaceRealCursor1159(_RealCursorCase):
         init_client = operator_client(init_n8n={'success': True, 'api_key': fake_key})
         self._run_cron('_cron_run_post_deploy_inits', init_client)
         committed = self._recorded_boundary_facts(sid)
-        self.assertEqual((committed['state'], committed['outcome']), ('running', 'success'))
+        # #1333：n8n 成功後留在 initializing（不欠 init），等重啟後的 Pod ready。
+        self.assertEqual((committed['state'], committed['outcome']), ('initializing', 'success'))
         self.assertTrue(committed['applied'] and committed['key_persisted'] and committed['key_present'])
         poll_client = operator_client(get_status=status_response(pods=_READY_PODS))
         caught = None
@@ -1500,7 +1506,9 @@ class TestExecSurfaceRealCursor1159(_RealCursorCase):
                 assert_notification_rollback(self, self._env(cr), evidence)
             self.assertEqual(self._read(upgrading, 'state'), 'running',
                              '同一 tick 先前逐台 commit 的 poll 結果不回捲')
-            self.assertEqual(self._recorded_boundary_facts(sid), committed,
+            # #1333：同一趟短 poll 看到 Pod ready，把 init 後留在 initializing 的 n8n
+            # 轉成 running 並逐台 commit；除了這一格，success／key／quota 都不得變。
+            self.assertEqual(self._recorded_boundary_facts(sid), dict(committed, state='running'),
                              '已 commit 的 success／key／quota 不因告警故障改變')
             self.assertFalse(self._read(sid, 'n8n_owner_alerted_at'), 'marker 隨告警一起回捲，可重試')
             # 真 poll cron 也跑其他既有 checks（sandbox 的 init cron 健康告警會同步寄出）；
@@ -1541,7 +1549,9 @@ class TestExecSurfaceRealCursor1159(_RealCursorCase):
             with self.registry.cursor() as cr:
                 self._env(cr)[SVC].browse(sid)._run_post_deploy_init(self.scope.operator(client))
         recovered = self._recorded_boundary_facts(sid)
-        self.assertEqual(recovered['state'], 'running')
+        # #1333：補套成功後同樣留在 initializing、不欠 init（等重啟後的 Pod ready）。
+        self.assertEqual(recovered['state'], 'initializing')
+        self.assertFalse(self._read(sid, 'init_pending'))
         self.assertTrue(recovered['applied'])
         client.init_n8n.assert_called_once()
         with self.scope.monitoring(), self.registry.cursor() as cr:

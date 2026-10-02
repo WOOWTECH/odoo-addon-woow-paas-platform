@@ -1328,9 +1328,12 @@ def _apply_init_success(service, api_key=None):
     })
     applied = service._init_apply_outcome(
         attempt, InitOutcome('success', api_key=api_key), False)
-    if not applied or service.state != 'running':
+    # #1333：n8n init 成功後 operator 會重啟 Pod，服務留在 initializing（不欠 init），
+    # 由短 poll 等重啟後的 Pod ready 才轉 running；Odoo 直接 running。
+    expected = 'initializing' if service._init_type() == 'n8n' else 'running'
+    if not applied or service.state != expected or service.init_pending:
         raise AssertionError(
-            '前提：CAS 必須成立、服務必須轉 running，否則呼叫端的斷言零鑑別力'
+            '前提：CAS 必須成立、服務必須轉 ' + expected + '，否則呼叫端的斷言零鑑別力'
             '（applied=%r, state=%r）' % (applied, service.state))
 
 
