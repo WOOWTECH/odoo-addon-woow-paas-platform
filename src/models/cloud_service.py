@@ -2327,6 +2327,12 @@ class CloudService(models.Model):
             # omnigent：accounts 模式的 OMNIGENT_ACCOUNTS_BASE_URL（https ⇒ cookie 用
             # __Host- 前綴；WebSocket 也以它比對 Origin）。chart 同樣學不到 tenant host。
             'omnigent': [('server', 'baseUrl')],
+            # nextcloud：Nextcloud 以 trusted_domains 比對 Host，**不在清單內的網域整站
+            # 拒絕服務**（回「Access through untrusted domain」），而 chart 只知道
+            # localhost（探針用）。chart 從 nextcloud.publicUrl 衍生
+            # NEXTCLOUD_TRUSTED_DOMAINS／OVERWRITEHOST／OVERWRITECLIURL；少了這一條，
+            # 服務開得起來但租戶一打開網址就是錯誤頁。
+            'nextcloud': [('nextcloud', 'publicUrl')],
         }
         paths = path_map.get(template_slug)
         if not paths:
