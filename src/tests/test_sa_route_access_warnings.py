@@ -171,21 +171,20 @@ class TestSaRouteProtectionLostLifecycle(TransactionCase, _SaRouteFixture):
         self.assertTrue(self.route.is_protected)
         self.assertTrue(self.route.to_dict()['access_protection_lost'])
 
-    def test_P2_turning_protection_off_after_loss_currently_keeps_flag(self):
-        """⚠ 現況鎖定（PR 描述列為疑似缺陷，待覆核者裁決）。
+    def test_P2_turning_protection_off_after_loss_clears_flag(self):
+        """保護失效後租戶只把保護**關掉**：旗標必須清掉，且不外呼。
 
-        `_access_mark_protection_lost()` 會清掉 `access_app_id`。之後租戶只把
-        保護**關掉**：`is_protected=False` 且 `access_app_id` 為空 ⇒
-        `_access_sync_skip_reason()` 判成「unprotected and never had an Access
-        app」⇒ 不推、`_sync_access_to_operator()` 回 False ⇒ 永遠走不到清旗標
-        那一行。結果：租戶刻意設為公開的 route 仍掛著紅色「Access protection
-        is not in effect」，#803 cron 每輪把它算進 gated、永遠清不掉。
-
-        `_sync_access_to_operator` 裡的註解寫的是「`enabled=False` 那一趟同樣
-        清——那時列自己也不再宣稱保護」，與實際行為不符。
+        `_access_mark_protection_lost()` 會清掉 `access_app_id`；之後
+        `is_protected=False` 且沒有 app id ⇒ `_access_sync_skip_reason()` 判成
+        「unprotected and never had an Access app」⇒ 不推。修前旗標因此永遠
+        留著：租戶刻意設為公開的 route 仍掛紅色「Access protection is not in
+        effect」，#803 cron 每輪把它算進 gated。修後 sync 在略過時就地清旗標——
+        列不再宣稱保護，CF 上也沒有 app，兩邊一致（三腿同修，另見
+        `test_access_resync_cron_803` 的 A6／B6／C6）。
         """
         self.route._access_mark_protection_lost()
         self.assertFalse(self.route.access_app_id, '前提：標記清掉了 app id')
+        self.assertTrue(self.route.access_protection_lost, '前提：旗標打開')
         client = _client(_sync_result(app_id=None))
         with patch(MOCK_SA_CLIENT, return_value=client), mute_logger(LOG_SA, LOG_REAP):
             self.route.write({'is_protected': False})
@@ -195,9 +194,9 @@ class TestSaRouteProtectionLostLifecycle(TransactionCase, _SaRouteFixture):
             self.route._access_sync_skip_reason(),
             'the route is unprotected and never had an Access app')
         self.assertFalse(self.route.is_protected)
-        self.assertTrue(
+        self.assertFalse(
             self.route.access_protection_lost,
-            '現況：只關掉保護時旗標留著（若此條轉紅，代表缺陷已修，請改斷言）')
+            '改成公開 ⇒ 列不再宣稱保護 ⇒ 「保護未生效」必須清掉')
 
     def test_P3_teardown_sync_clears_flag_while_app_id_is_still_held(self):
         """對照 P2：只要列上還握著 app id，`enabled=False` 那一趟就會真的推出去，
