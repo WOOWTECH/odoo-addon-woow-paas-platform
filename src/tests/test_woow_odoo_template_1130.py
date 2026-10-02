@@ -351,6 +351,34 @@ class TestWoowOdooAdminPassword1130(TransactionCase):
         self.assertEqual(kwargs['values']['conf']['adminEmail'], 'new-owner@example.com')
         self.assertNotIn('adminPassword', json.dumps(svc.sudo()._helm_values_dict()))
 
+    def test_reconfigure_without_email_is_not_blocked_by_stored_values(self):
+        """只改其他設定的 reconfigure：既有 values 沒有 conf.adminEmail（舊資料）也不得被擋。"""
+        svc = self._service()
+        svc.sudo().write({'helm_values': json.dumps({'loadDemoData': False})})
+        from odoo.addons.woow_paas_platform.controllers.paas import PaasController
+
+        client = MagicMock()
+        client.upgrade_release.return_value = {'revision': 2}
+        fake_request = MagicMock()
+        fake_request.env = self.env
+
+        class _SyncThread:
+            def __init__(self, target=None, daemon=None):
+                self._target = target
+
+            def start(self):
+                self._target()
+
+        client_path = (
+            'odoo.addons.woow_paas_platform.services.paas_operator.PaaSOperatorClient')
+        with patch(f'{_CONTROLLER}.get_paas_operator_client', return_value=client), \
+                patch(f'{_CONTROLLER}.request', new=fake_request), \
+                patch(client_path, return_value=client), \
+                patch(f'{_CONTROLLER}.threading.Thread', _SyncThread):
+            result = PaasController()._update_service(
+                svc, values={'loadDemoData': True}, version=None)
+        self.assertTrue(result['success'], result)
+
     def test_reconfigure_rejects_a_malformed_email(self):
         svc = self._service()
         from odoo.addons.woow_paas_platform.controllers.paas import PaasController

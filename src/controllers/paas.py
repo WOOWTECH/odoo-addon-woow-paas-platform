@@ -3825,11 +3825,14 @@ class PaasController(HiddenChainMixin, Controller):
             nested_user_values = self._unflatten_dotpath_keys(filtered_user_values)
             merged_values = self._deep_merge(existing_values, nested_user_values)
 
-            # #1130：woow-odoo 的 conf.adminEmail 與 create 同一個檢查。
-            email_error = service._woow_odoo_admin_email_error(
-                service.template_id, merged_values)
-            if email_error:
-                return {'success': False, 'error': email_error}
+            # #1130：woow-odoo 的 conf.adminEmail 與 create 同一個檢查——只在本次真的送了
+            # 這一格時檢查。只改 addon／其他設定的 reconfigure 不得因為舊資料（例：#1128
+            # 的 Bitnami 存量、或測試 fixture）沒有 conf.adminEmail 就被擋。
+            if 'adminEmail' in (nested_user_values.get('conf') or {}):
+                email_error = service._woow_odoo_admin_email_error(
+                    service.template_id, merged_values)
+                if email_error:
+                    return {'success': False, 'error': email_error}
 
             # Rebuild or remove addon initContainer helm values when addon selection changed
             # #1130：woow-odoo 的 addons.selected 由 `_assemble_deploy_values` 每次從

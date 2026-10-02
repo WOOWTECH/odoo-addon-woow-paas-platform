@@ -2089,7 +2089,7 @@ class CloudService(models.Model):
                 'Halted' if self._is_halted() else 'Always'
             )
 
-        if template.slug == 'odoo' and template._is_woow_odoo_chart():
+        if template._is_woow_odoo_chart():
             # #1130：woow-odoo chart 自己擁有 addon initContainer（每次開機從 image
             # `/all-addons` 複製到 emptyDir），平台只給名稱清單——下面那段 Bitnami 形的
             # initContainers／extraVolumes／customPostInitScripts 在 tenant schema
