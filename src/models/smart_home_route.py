@@ -667,6 +667,15 @@ class SmartHomeRoute(models.Model):
         self.ensure_one()
         skip = self._access_sync_skip_reason()
         if skip:
+            # #794 補洞：列已經不宣稱保護、也沒有 app ⇒ CF 上「沒有 app」正是
+            # 這一列要的狀態，旗標的前提（宣稱受保護、app 卻已被拆掉）不成立。
+            # 這一格推不出去也不必推（沒有東西可拆），所以在略過時就地清掉——否則
+            # 「保護失效後直接改成公開」會永遠掛著「保護未生效」，#803 cron 也每輪
+            # 把它算成 gated。只看列自己的意圖與 app id，與 liveness gate 無關：
+            # 停權中的列改成公開，同樣不再「宣稱保護」。
+            if (self.access_protection_lost and not self.is_protected
+                    and not self.access_app_id):
+                self.access_protection_lost = False
             self.env[_CF_REAP_MODEL]._warn_if_deferred(
                 self, _logger,
                 '[SH] route %s (sh=%s)' % (self.id, self.smart_home_id.id),

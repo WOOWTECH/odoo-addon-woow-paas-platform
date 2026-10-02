@@ -236,6 +236,8 @@ class AccessResyncCron(models.AbstractModel):
         # `_sync_access_to_operator()` 回 False ＝ 被 liveness gate 擋掉，一次外呼
         # 都沒發生（#528 把三道 gate 收斂成 `_access_sync_skip_reason()` 一個裁決
         # 處，並讓「被擋掉」與「推了而且成功」在回傳值上分得開）。旗標留著是對的
-        # ——保護確實沒生效，那是實話，見本類方法的 docstring。
+        # ——保護確實沒生效，那是實話，見本類方法的 docstring。唯一例外：列已改成
+        # 公開且沒有 app，sync 在略過時就地清旗標（那時列不再宣稱保護），這一列
+        # 下一輪就不會再被掃到。
         counts['gated'] += 1
         return False
