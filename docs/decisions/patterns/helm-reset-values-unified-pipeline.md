@@ -49,8 +49,47 @@ values = svc.helm_values            # template 預設 + user config（create 時
          ├─ + image_pull_secrets     injector（私有 registry）
          ├─ + allowed_origins        injector（open-design 瀏覽器 Origin 白名單，#380）
          ├─ + apiserver_cidrs        injector（open-design console egress，#404）
+         ├─ + omnigent_server_url    injector（code-server／pi-agent／open-design 主容器內的
+         │                            omnigent host：同工作區 running Omnigent 的叢集內
+         │                            網址，只有網址、不帶 token；runtime-config-only）
          └─ + odoo addon selection   （initContainer + addons_path）
 ```
+
+`omnigent_server_url` 是唯一**讀別的服務**的 injector：同工作區（且同 namespace）、
+`state='running'` 的 Omnigent，多個時取 `create_date`／`id` 最小者並記 log；沒有就
+no-op（chart 預設 `""`）。`helm_values` 裡已有非空的 `omnigentHost.serverUrl`（管理員
+刻意設的，例如公開 https 網址）時尊重它、不覆寫（記 info log，不記網址）。
+
+**它是執行期設定，不是 pod template 的一部分**——這是它能和其他 injector 一樣在
+**每一條**路徑（含 reset 密碼那條 `helm upgrade --atomic --timeout 15s`）重算的前提：
+woow-paas-charts `shared/omnigent-host` 套件把 `omnigentHost.serverUrl` 只 render 進
+`<name>-runtime` ConfigMap（key `server-url`），以目錄掛載、**不入** checksum
+annotation；supervisor 與 `omnigent-host-status` 執行期讀檔。所以 Omnigent 晚於本服務
+開通、被刪、或正在 upgrading 時，網址在下一次 deploy／reconfigure／reset 跟著出現或消失，
+**pod 不重啟**，不會踩 F-461-2（reset 夾帶 pod template 變動 → 15 秒等不到新 pod →
+回退斷線；見 `reset-async-budget-ladder.md`）。chart 側由套件的
+`kit_assert_runtime_server_url` 守線；平台側 `test_reset_after_late_omnigent_carries_the_url`
+釘住 reset 與 deploy 走同一條組裝。**日後任何 chart 若把這個值放進 env 或 checksum，
+就會讓 reset 路徑重新變成 F-461-2**——那是 chart 的 bug，不要在平台這邊繞。
+
+網址只是登入提示與「還沒登入過」的備援：host 實際連的永遠是租戶最後一次
+`omnigent login` 的 server（WOOW 預設以 Omnigent 的 admin 帳號登入三台 host）。
+連不連得到由各 chart 的 egress 規則決定（租戶 baseline NetworkPolicy
+`paas-baseline-allow-same-ns` 只管 Ingress）：code-server 靠
+`networkPolicy.sameNamespaceEgress`／`allowAllEgress`、pi-agent 靠 `allowAllEgress`、
+open-design 靠 `networkPolicy.omnigentEgress`，而那條規則同時取決於 port 與 pod
+selector：只對 Omnigent pod 的 targetPort 8000 開洞，selector 是
+`app.kubernetes.io/name=omnigent`＋`component=server`，網址主機是 `<X>-omnigent` 形態時
+再釘 `app.kubernetes.io/instance=<X>`。所以 Omnigent 的 `service.targetPort` 不是 8000、
+release 名本來就含 `omnigent`（例 `my-omnigent` ⇒ OD 釘 instance=`my`，pod 卻是
+`my-omnigent`）、`fullnameOverride` 成別人的 `<X>-omnigent`、或設了 `nameOverride` 時，
+OD 都連不到；平台照常注入、只記 warning（`_omnigent_matches_od_egress_selector`），OD
+那台只能改用公開網址登入。正式站 release 都是 `svc-xxxxxxxx`、沒有 override，不會觸發。
+
+`audit_411_reset_values.py` 把 `omnigentHost.serverUrl` 與其他整條路徑的 injector 鍵
+登記在 `_INJECTOR_VALUE_PATHS`（(a) 自癒類；例如 Omnigent 刪除後 stored release 殘留
+舊網址不該被叫去 backfill），`test_audit_411_classifier.TestInjectorPathsLockstep`
+以 AST 讀 `cloud_service.py` 的 value-path 表對帳，新增 injector 沒登記會紅。
 
 - **純唯讀、不寫 DB、不呼叫 operator** —— 盤點腳本可安全 dry-run 呼叫，取 `['values']`
   比對 `helm get values <rel>`（stored、非敏感）。這是「盤點 gate 與部署路徑共用同一
@@ -183,7 +222,7 @@ chart↔載體結構不變式（mcp-server chart ⟺ config_json）。
 - **無-flag 預設**：helm upgrade 不帶 `--reset-values` / `--reuse-values` 時的行為
   ——用 chart values.yaml + 這次傳入的 override，不保留舊 release override（≈ reset）。
 - **injector**：把平台側值（storageClass / imagePullSecrets / allowedOrigins /
-  apiServerCidrs）寫進 helm values 的冪等函式。
+  apiServerCidrs / omnigentHost.serverUrl）寫進 helm values 的冪等函式。
 - **組裝點（統一管線）**：`_assemble_deploy_values()`，install / upgrade / reset 前
   把所有非敏感 values 合併的單一位置，兼作盤點 gate 的真相源。
 - **stored-only values**：只存在於 helm stored release values、不在平台 helper 產出的

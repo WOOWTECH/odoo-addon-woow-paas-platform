@@ -646,6 +646,55 @@ _DASHBOARD_PUBLIC_URL_VALUE_PATHS = {
 }
 
 
+# Omnigent BYO host：哪些 chart 在主容器裡內建 omnigent host（woow-paas-charts
+# ``shared/omnigent-host`` 共用套件；host 和產品跑在同一個主容器裡），
+# 要把「同工作區 Omnigent 的叢集內網址」寫進哪個 value path（套件標準 values 區塊
+# ``omnigentHost.serverUrl``）。
+#
+# 這個值**只是網址**，而且是**執行期設定**：chart 只把它 render 進一個小
+# ConfigMap（``<name>-runtime``，key ``server-url``），以目錄掛進容器、**不在**
+# pod template 的 checksum annotation 裡 ⇒ 網址出現、改變或消失都**不會**讓 pod
+# 重啟，kubelet 約一分鐘內就地換檔，supervisor 與 ``omnigent-host-status`` 每次
+# 用到時重讀（套件 README「Environment contract」）。所以每條部署路徑（含 reset
+# 密碼那條 ``helm upgrade --atomic --timeout 15s``）都可以照常重算它，不會重演
+# F-461-2（pod template 變動 → 15 秒等不到新 pod → 回退斷線）。
+#
+# supervisor 拿它印 ``omnigent login <url>`` 提示，並在租戶還沒登入過時當備援；
+# host 實際連的永遠是租戶最後一次 ``omnigent login`` 的那個 server。平台**絕不**
+# 注入任何 token／密碼——登入是租戶在自己的終端機裡做的事，host 歸屬也由那次登入
+# 決定（WOOW 預設用 Omnigent 的 admin 帳號登入三台 host）。
+#
+# 工作區沒有 running 的 Omnigent ⇒ 不注入（chart 預設 ""＝租戶可登入任何網址）。
+# helm_values 裡已經有非空的 ``omnigentHost.serverUrl``（管理員刻意設的，例如
+# 外部或公開網址）⇒ 尊重它、不覆寫。
+_OMNIGENT_SERVER_URL_VALUE_PATHS = {
+    'code-server': [('omnigentHost', 'serverUrl')],
+    'pi-agent': [('omnigentHost', 'serverUrl')],
+    'open-design': [('omnigentHost', 'serverUrl')],
+}
+# Omnigent 服務本身的 template slug 與 chart 名（chart 的 fullname helper 用
+# chart 名判斷 release 名是否已含 chart 名）。Service port 預設＝chart
+# values.yaml 的 ``service.port``。三者都對齊 woow-paas-charts charts/omnigent。
+_OMNIGENT_TEMPLATE_SLUG = 'omnigent'
+_OMNIGENT_CHART_NAME = 'omnigent'
+_OMNIGENT_DEFAULT_SERVICE_PORT = 8000
+# open-design 的 ``networkPolicy.omnigentEgress`` 只對 Omnigent pod 的這個 port 開洞
+# （NetworkPolicy 比對的是 pod 的 containerPort＝Service 的 targetPort，不是
+# service.port）。Omnigent 的 targetPort 被改掉時，OD 會連不到注入的網址。
+_OMNIGENT_EGRESS_PINNED_TARGET_PORT = 8000
+# 同一條 OD egress 規則的 pod selector（woow-paas-charts charts/open-design
+# ``open-design.omnigentEgress``）：預設 ``app.kubernetes.io/name=omnigent``＋
+# ``component=server``；注入的網址主機是 ``<X>-omnigent[.<ns>…]`` 時再釘
+# ``app.kubernetes.io/instance=<X>``（X＝主機名去掉 ``-omnigent``）。Omnigent chart
+# 的 pod 標籤是 name＝``nameOverride``（預設 chart 名）、instance＝release 名，所以
+# 只有「Service 名＝``<release>-omnigent``、沒有 nameOverride」時兩邊才對得上。
+_OMNIGENT_EGRESS_SELECTOR_NAME = 'omnigent'
+_OMNIGENT_EGRESS_HOST_SUFFIX = '-omnigent'
+# k8s DNS label（RFC 1123）：release 名、namespace、Service 名都必須符合，
+# 否則不組網址（防止奇怪的 helm_values 把任意字串拼進 URL）。
+_DNS_LABEL_RE = re.compile(r'^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$')
+
+
 def _unflatten_dotpath_keys(flat_dict):
     """Convert flat dot-path keys to nested dict.
 
@@ -2025,13 +2074,18 @@ class CloudService(models.Model):
         1. ``svc.helm_values`` —— template 預設（``template.helm_default_values``）
            ＋ user config ＋ MCP api key ＋ plan overlay，於 service create 時已
            merge 定案（controllers/paas.py ``_deploy_service``）。此處先剝掉
-           ``config.sensitive`` 子樹（``_strip_mcp_sensitive_values``）。
+           ``config.sensitive`` 子樹（``_strip_mcp_sensitive_values``），再把
+           helm_value_specs 帶 ``format`` 的租戶文字欄位轉成 chart 形態
+           （``template._apply_spec_formats``，例 code-server git.tokenHosts）。
         2. storage_class injector（PVC 生命週期）
         3. image_pull_secrets injector（私有 registry）
         4. allowed_origins injector（open-design 瀏覽器 Origin 白名單，#380）
         5. dashboard_public_url injector（hermes-agent MCP OAuth 回呼，#424①）
         6. apiserver_cidrs injector（open-design／hermes-agent console egress，#404）
-        7. odoo addon selection（initContainer + addons_path）
+        7. omnigent_server_url injector（code-server／pi-agent／open-design 主容器內的
+           omnigent host：同工作區 running Omnigent 的叢集內網址，只有網址；chart 放進
+           不入 checksum 的 runtime ConfigMap，不會讓 pod 重啟；已有明確值就不覆寫）
+        8. odoo addon selection（initContainer + addons_path）
 
         **純唯讀、不寫 DB、不呼叫 operator** —— 盤點腳本可安全 dry-run 呼叫，
         取 ``['values']`` 去比對 ``helm get values <rel>``（stored、非敏感）。
@@ -2050,6 +2104,10 @@ class CloudService(models.Model):
         template = self.template_id
         # #559：helm_values 有 groups=，屬性直讀會 AccessError。走唯一入口。
         values = self._strip_mcp_sensitive_values(self._helm_values_dict()) or {}
+        # helm_value_specs 帶 ``format`` 的租戶文字欄位 → chart 形態（例 code-server
+        # 的 git.tokenHosts「github.com, git.example.com」→ https URL list）。
+        # helm_values 保留租戶原文；不合法的值丟掉、chart 預設補位。
+        values = template._apply_spec_formats(values)
 
         # Inject StorageClass for PVC lifecycle management
         storage_class = self.env['ir.config_parameter'].sudo().get_param(
@@ -2098,6 +2156,27 @@ class CloudService(models.Model):
             values = self._inject_apiserver_cidrs(
                 values, template.slug, apiserver_cidrs,
             )
+
+        # Inject the same-workspace Omnigent's in-cluster URL for charts that
+        # run the omnigent host inside their main container (code-server /
+        # pi-agent / open-design). URL only — never a token. Runtime config
+        # only: the charts put it in a ConfigMap outside the pod checksum, so a
+        # new/changed/removed URL never restarts the pod (safe on the 15 s
+        # reset path too). An explicit non-empty value in helm_values wins.
+        # No-op when the workspace has no running Omnigent or the chart has no
+        # such value path.
+        if template.slug in _OMNIGENT_SERVER_URL_VALUE_PATHS:
+            if self._explicit_omnigent_server_url(values, template.slug):
+                _logger.info(
+                    "Service id=%s keeps its explicit omnigentHost.serverUrl; "
+                    "skip same-workspace Omnigent URL injection", self.id,
+                )
+            else:
+                omnigent_url = self._workspace_omnigent_url()
+                if omnigent_url:
+                    values = self._inject_omnigent_server_url(
+                        values, template.slug, omnigent_url,
+                    )
 
         # #423 W5a：VM 型的 runStrategy 必須與服務狀態同源。
         #
@@ -2602,6 +2681,277 @@ class CloudService(models.Model):
                 d = d.setdefault(key, {})
             d[path[-1]] = list(cidrs)
         return values
+
+    @staticmethod
+    def _explicit_omnigent_server_url(values, template_slug):
+        """helm_values 裡已經有的非空 ``omnigentHost.serverUrl``（沒有回 ''）。
+
+        這個值只可能是**刻意**設的：注入結果只存在於組裝出的 values、從不寫回
+        ``helm_values``（``_assemble_deploy_values`` 唯讀），設定頁也沒有這個欄位。
+        所以非空＝管理員、seed，或（helm_value_specs 為空清單、白名單退回 allow-all
+        的 template，例 pi-agent）租戶自己經 API 明確指定（例如外部／公開 https
+        網址），平台不覆寫；空字串視同沒設。它只影響那台服務自己的登入提示與
+        備援，不會讓別的服務或別的工作區受影響。
+        """
+        for path in _OMNIGENT_SERVER_URL_VALUE_PATHS.get(template_slug) or ():
+            d = values
+            for key in path:
+                d = d.get(key) if isinstance(d, dict) else None
+            if isinstance(d, str) and d.strip():
+                return d
+        return ''
+
+    @staticmethod
+    def _inject_omnigent_server_url(values, template_slug, server_url):
+        """把同工作區 Omnigent 的叢集內網址注入 ``omnigentHost.serverUrl``。
+
+        code-server／pi-agent／open-design 的 chart 都在主容器裡跑 omnigent host
+        （woow-paas-charts ``shared/omnigent-host`` 共用套件，跑在同一個主容器裡），它把
+        這個網址用在登入提示（``omnigent login <url>``）、狀態訊息，以及租戶還沒
+        登入過時的備援；chart 自己學不到同工作區有沒有 Omnigent、release 叫什麼，
+        所以和 ``_inject_allowed_origins`` 同一 family，由平台補上。
+
+        **執行期設定**：chart 只把它放進不入 checksum 的 runtime ConfigMap，網址
+        變動不會讓 pod 重啟（見 ``_OMNIGENT_SERVER_URL_VALUE_PATHS`` 的說明）。
+
+        ⚠ 只注入網址，**絕不**注入 token／密碼：Omnigent 是 accounts 模式，host 的
+        擁有者＝在終端機裡 ``omnigent login`` 的那個帳號，平台不代登入。
+
+        無此 value path 的 chart、網址為空、或已有明確（非空）值一律 no-op。
+
+        Args:
+            values: Helm values dict（就地修改並回傳）
+            template_slug: Template identifier（例 'code-server'）
+            server_url: 例 "http://svc-xxxx-omnigent.paas-ws-xxxx.svc.cluster.local:8000"
+
+        Returns:
+            Modified values dict
+        """
+        paths = _OMNIGENT_SERVER_URL_VALUE_PATHS.get(template_slug)
+        if not paths or not server_url:
+            return values
+        if CloudService._explicit_omnigent_server_url(values, template_slug):
+            return values
+        for path in paths:
+            d = values
+            for key in path[:-1]:
+                nxt = d.get(key)
+                if not isinstance(nxt, dict):
+                    # ``omnigentHost: null``（或被誤設成非 dict）時不能
+                    # setdefault —— 換成新 dict，免得 TypeError 讓整個部署失敗。
+                    nxt = {}
+                    d[key] = nxt
+                d = nxt
+            d[path[-1]] = server_url
+        return values
+
+    @staticmethod
+    def _helm_trunc63(name):
+        """Helm ``trunc 63 | trimSuffix "-"``（trimSuffix 只去掉一個 '-'）。"""
+        name = (name or '')[:63]
+        if name.endswith('-'):
+            name = name[:-1]
+        return name
+
+    def _omnigent_internal_url(self):
+        """本筆（Omnigent 服務）在叢集內的網址；組不出來回 ''。
+
+        鏡射 woow-paas-charts ``charts/omnigent/templates/_helpers.tpl`` 的
+        ``omnigent.fullname``（入口 Service 名）：
+
+        - ``fullnameOverride`` 有值 → 用它；
+        - 否則 name＝``nameOverride`` 或 chart 名 ``omnigent``；release 名已含
+          name → 用 release 名，不然 ``<release>-<name>``；
+        - 都經 ``trunc 63 | trimSuffix "-"``。
+
+        Port＝``service.port``（chart 預設 8000）。值都讀自本筆的 helm_values
+        （template 預設＋user config，create 時已 merge），所以 seed 若覆寫了
+        名稱或 port，這裡會跟著變。
+
+        網址形如 ``http://<service>.<namespace>.svc.cluster.local:<port>``，叢集內
+        走 http（流量留在 pod 網路裡，但跨節點時以明文經 flannel／vxlan，租戶的
+        Omnigent 帳密在 ``omnigent login`` 時也走這條；想避開可改用公開 https 網址
+        登入，host 會照租戶登入的網址連）。
+
+        ⚠ **連不連得到由各 chart 自己的 egress 規則決定，平台不保證**：租戶
+        namespace 的 baseline NetworkPolicy（``paas-baseline-allow-same-ns``）只管
+        **Ingress**。code-server 靠 ``networkPolicy.sameNamespaceEgress``（或
+        ``allowAllEgress``）、pi-agent 靠 ``allowAllEgress``；open-design 的 internet
+        egress 排除 10.0.0.0/8，要靠 ``networkPolicy.omnigentEgress`` 開洞，而那條
+        規則同時取決於 **port 與 pod selector**：
+
+        - port：只開 Omnigent pod 的 targetPort 8000——``service.targetPort`` 不是
+          8000 時 OD 連不到；
+        - selector：``app.kubernetes.io/name=omnigent``＋``component=server``，網址
+          主機是 ``<X>-omnigent`` 形態時再釘 ``app.kubernetes.io/instance=<X>``。
+          Omnigent pod 的 instance 是 release 名、name 是 ``nameOverride``（預設
+          ``omnigent``），所以 release 名本來就含 ``omnigent``（例 ``my-omnigent``，
+          Service 名照 chart 用 release 名原樣 ⇒ OD 釘成 instance=``my``）、
+          ``fullnameOverride`` 成 ``<X>-omnigent`` 而 X 不是 release 名、或設了
+          ``nameOverride`` 時，selector 對不上 pod，OD 一樣連不到
+          （``_omnigent_matches_od_egress_selector``）。
+
+        兩種情形平台都照常注入（code-server／pi-agent 不受影響），只記 warning；
+        OD 那台只能改用公開網址登入，或由 chart 端放寬 selector。正式站的 release
+        都是 ``svc-xxxxxxxx``、沒有 override，兩條都不會觸發。
+        """
+        self.ensure_one()
+        release = self.helm_release_name or ''
+        namespace = self.helm_namespace or ''
+        if not release or not namespace:
+            return ''
+        try:
+            values = self._helm_values_dict()
+        except ValueError:
+            _logger.warning(
+                "Omnigent service id=%s has unparsable helm_values; "
+                "skip omnigentHost.serverUrl injection", self.id,
+            )
+            return ''
+        if not isinstance(values, dict):
+            values = {}
+        fullname_override = values.get('fullnameOverride')
+        if isinstance(fullname_override, str) and fullname_override:
+            service_name = self._helm_trunc63(fullname_override)
+        else:
+            name_override = values.get('nameOverride')
+            name = (
+                name_override
+                if isinstance(name_override, str) and name_override
+                else _OMNIGENT_CHART_NAME
+            )
+            if name in release:
+                service_name = self._helm_trunc63(release)
+            else:
+                service_name = self._helm_trunc63('%s-%s' % (release, name))
+        svc_values = values.get('service')
+        port = _OMNIGENT_DEFAULT_SERVICE_PORT
+        if isinstance(svc_values, dict) and svc_values.get('port') is not None:
+            port = svc_values.get('port')
+        if isinstance(port, bool) or not isinstance(port, int) \
+                or not 0 < port < 65536:
+            _logger.warning(
+                "Omnigent service id=%s has invalid service.port %r; "
+                "skip omnigentHost.serverUrl injection", self.id, port,
+            )
+            return ''
+        if not (_DNS_LABEL_RE.match(service_name)
+                and _DNS_LABEL_RE.match(namespace)):
+            _logger.warning(
+                "Omnigent service id=%s has a non-DNS-label service/namespace "
+                "name; skip omnigentHost.serverUrl injection", self.id,
+            )
+            return ''
+        target_port = (svc_values.get('targetPort')
+                       if isinstance(svc_values, dict) else None)
+        if target_port is not None \
+                and target_port != _OMNIGENT_EGRESS_PINNED_TARGET_PORT:
+            _logger.warning(
+                "Omnigent service id=%s has service.targetPort %r (not %d): "
+                "charts whose egress rule pins port %d (open-design "
+                "networkPolicy.omnigentEgress) cannot reach the injected URL",
+                self.id, target_port, _OMNIGENT_EGRESS_PINNED_TARGET_PORT,
+                _OMNIGENT_EGRESS_PINNED_TARGET_PORT,
+            )
+        if not self._omnigent_matches_od_egress_selector(
+                release, service_name, values):
+            _logger.warning(
+                "Omnigent service id=%s: service name / nameOverride does not "
+                "match open-design networkPolicy.omnigentEgress's pod selector "
+                "(app.kubernetes.io/name=%s, instance=<host minus %s>); "
+                "open-design cannot reach the injected URL",
+                self.id, _OMNIGENT_EGRESS_SELECTOR_NAME,
+                _OMNIGENT_EGRESS_HOST_SUFFIX,
+            )
+        return 'http://%s.%s.svc.cluster.local:%d' % (
+            service_name, namespace, port,
+        )
+
+    @staticmethod
+    def _omnigent_matches_od_egress_selector(release, service_name, values):
+        """open-design 的 omnigentEgress selector 會不會選到這個 Omnigent 的 pod。
+
+        鏡射 charts/open-design ``open-design.omnigentEgress``（見
+        ``_OMNIGENT_EGRESS_SELECTOR_NAME`` 的說明）：pod 的 name 標籤必須是
+        ``omnigent``（沒有別的 ``nameOverride``）；Service 名是 ``<X>-omnigent``
+        時 OD 另釘 instance=X，X 必須＝release 名（pod 的 instance 標籤）。
+        """
+        name_override = values.get('nameOverride') if isinstance(values, dict) else None
+        if isinstance(name_override, str) and name_override \
+                and name_override != _OMNIGENT_EGRESS_SELECTOR_NAME:
+            return False
+        if service_name.endswith(_OMNIGENT_EGRESS_HOST_SUFFIX) \
+                and len(service_name) > len(_OMNIGENT_EGRESS_HOST_SUFFIX):
+            pinned = service_name[:-len(_OMNIGENT_EGRESS_HOST_SUFFIX)]
+            return pinned == release
+        return True
+
+    def _workspace_omnigent_url(self):
+        """同工作區 running Omnigent 的叢集內網址（給主容器內的 omnigent host）。
+
+        只對 ``_OMNIGENT_SERVER_URL_VALUE_PATHS`` 裡的 chart 查詢；其他 chart、
+        沒有工作區、或工作區沒有 running 的 Omnigent → ''（不注入，chart 預設
+        ``""``＝租戶自己 ``omnigent login`` 任何網址）。
+
+        條件：同 ``workspace_id``、template slug＝``omnigent``、``state='running'``、
+        已有 release 名與 namespace；本筆有 namespace 時另要求同一 namespace
+        （各 chart 開給 Omnigent 的 egress 都只涵蓋自己的 namespace——code-server
+        的 sameNamespaceEgress、open-design 的 omnigentEgress；跨 namespace 的網址
+        給了多半連不上。實際連不連得到見 ``_omnigent_internal_url`` 的說明）。
+
+        只認 ``running``：Omnigent 正在 upgrading／suspended／error 時這次組裝不帶
+        網址。因為網址只進 runtime ConfigMap，這只會讓登入提示暫時少了網址，
+        已登入的 host 不受影響，下一次部署／重設就補回來。
+
+        多個 Omnigent 時取**最早建立**的那個（``create_date``、``id`` 由小到大，
+        決定性），並記一行 info log 列出被略過的。
+
+        唯讀、不寫 DB、不呼叫 operator（``_assemble_deploy_values`` 的契約）。
+
+        以 sudo 查詢＝**防禦性**：注入結果只該由工作區內有哪些 Omnigent 決定，不該
+        由觸發部署的是誰決定。**今天**不存在「讀得到本筆、卻讀不到同工作區
+        Omnigent」的非系統使用者——cloud_service 的讀取 rule（``ir_rules.xml``
+        ``cloud_service_rule_member_read``）對同一工作區的每一筆都一樣（成員＝全看
+        得到），系統管理員有 ``cloud_service_rule_admin_full``，cron 是 superuser。
+        sudo 守的是**日後**：只要哪天多一條會遮住部分服務的 record rule（例如依服務
+        或依角色的可見性），未 sudo 的查詢就會讓「誰按了儲存設定」決定網址有沒有
+        注入。``test_omnigent_server_url_injection`` 以一條測試專用 rule 重現這種
+        情形釘住它。讀到的只有 release 名／namespace／helm_values 裡的名稱與 port，
+        不讀任何敏感欄位。
+        """
+        self.ensure_one()
+        if self.template_id.slug not in _OMNIGENT_SERVER_URL_VALUE_PATHS:
+            return ''
+        if not self.workspace_id:
+            return ''
+        domain = [
+            ('workspace_id', '=', self.workspace_id.id),
+            ('template_id.slug', '=', _OMNIGENT_TEMPLATE_SLUG),
+            ('state', '=', 'running'),
+            ('helm_release_name', '!=', False),
+            ('helm_namespace', '!=', False),
+        ]
+        if self.id:
+            domain.append(('id', '!=', self.id))
+        if self.helm_namespace:
+            domain.append(('helm_namespace', '=', self.helm_namespace))
+        candidates = self.sudo().search(domain, order='create_date asc, id asc')
+        for chosen in candidates:
+            url = chosen._omnigent_internal_url()
+            if not url:
+                # 組不出網址（壞掉的 helm_values 等，已 log）→ 照同一順序試下一個。
+                continue
+            if len(candidates) > 1:
+                _logger.info(
+                    "Workspace %s has %d running Omnigent services; injecting "
+                    "the oldest usable one (id=%s, release=%s) into service "
+                    "id=%s, other ids=%s",
+                    self.workspace_id.id, len(candidates), chosen.id,
+                    chosen.helm_release_name, self.id,
+                    (candidates - chosen).ids,
+                )
+            return url
+        return ''
 
     @staticmethod
     def _generate_admin_password():

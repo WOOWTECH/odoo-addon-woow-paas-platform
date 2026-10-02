@@ -10,6 +10,7 @@
     python3 scripts/audit/test_audit_411_classifier.py
     # 或 python3 -m pytest scripts/audit/test_audit_411_classifier.py
 """
+import ast
 import importlib.util
 import pathlib
 import tempfile
@@ -51,8 +52,19 @@ class TestInjectorAndSensitivePaths(unittest.TestCase):
             ("imagePullSecrets",),
             ("config", "allowedOrigins"),
             ("networkPolicy", "apiServerCidrs"),
+            ("codeServer", "publicUrl"),
+            ("server", "baseUrl"),
+            ("nextcloud", "publicUrl"),
+            ("config", "dashboardPublicUrl"),
+            ("omnigentHost", "serverUrl"),
         ]:
             self.assertTrue(audit._is_injector_path(p), p)
+
+    def test_partial_or_deeper_paths_are_not_injector(self):
+        # 整條路徑比對：同前綴但不同葉子的租戶鍵不得被誤判成自癒
+        for p in [("omnigentHost", "hostName"), ("omnigentHost",),
+                  ("omnigentHost", "serverUrl", "x"), ("config", "allowedOriginsX")]:
+            self.assertFalse(audit._is_injector_path(p), p)
 
     def test_non_injector_paths(self):
         for p in [("image", "tag"), ("config", "nonSensitive", "x"), ()]:
@@ -61,6 +73,85 @@ class TestInjectorAndSensitivePaths(unittest.TestCase):
     def test_config_sensitive(self):
         self.assertTrue(audit._is_config_sensitive(("config", "sensitive", "admin_password")))
         self.assertFalse(audit._is_config_sensitive(("config", "nonSensitive", "x")))
+
+
+_CLOUD_SERVICE_PY = (
+    pathlib.Path(__file__).resolve().parents[2] / "src" / "models" / "cloud_service.py"
+)
+
+
+def _tuple_of_str(node):
+    if isinstance(node, ast.Tuple) and node.elts and all(
+            isinstance(e, ast.Constant) and isinstance(e.value, str) for e in node.elts):
+        return tuple(e.value for e in node.elts)
+    return None
+
+
+def _paths_in_dict(node):
+    """{slug: [(k1, k2), ...]} 字面量裡的所有 tuple path。"""
+    out = set()
+    if not isinstance(node, ast.Dict):
+        return out
+    for value in node.values:
+        if isinstance(value, ast.List):
+            for elt in value.elts:
+                path = _tuple_of_str(elt)
+                if path:
+                    out.add(path)
+    return out
+
+
+def platform_injector_paths(source):
+    """以 AST 讀 cloud_service.py：module 層 ``_*_VALUE_PATHS`` 表，加上每個
+    ``_inject_*`` 函式裡的 ``path_map`` 字面量。回 {(table name, path), ...}。"""
+    tree = ast.parse(source)
+    found = set()
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and len(node.targets) == 1 \
+                and isinstance(node.targets[0], ast.Name) \
+                and node.targets[0].id.endswith("_VALUE_PATHS"):
+            for path in _paths_in_dict(node.value):
+                found.add((node.targets[0].id, path))
+    for fn in ast.walk(tree):
+        if isinstance(fn, ast.FunctionDef) and fn.name.startswith("_inject_"):
+            for node in ast.walk(fn):
+                if isinstance(node, ast.Assign) and any(
+                        isinstance(t, ast.Name) and t.id == "path_map"
+                        for t in node.targets):
+                    for path in _paths_in_dict(node.value):
+                        found.add((fn.name, path))
+    return found
+
+
+class TestInjectorPathsLockstep(unittest.TestCase):
+    """audit 的 injector 清單是 cloud_service.py 的複本：那邊多一條 injector path、
+    這邊沒登記 ⇒ 紅（否則該鍵的 stored／computed 差異會被誤分成 backfill／裁決）。"""
+
+    def test_every_platform_injector_path_is_registered(self):
+        found = platform_injector_paths(_CLOUD_SERVICE_PY.read_text(encoding="utf-8"))
+        # floor：解析器若壞掉（找不到任何表）這支測試就變成空跑，所以釘住幾條已知的
+        paths = {path for _table, path in found}
+        for must in [("omnigentHost", "serverUrl"), ("config", "dashboardPublicUrl"),
+                     ("config", "allowedOrigins"), ("persistence", "storageClass")]:
+            self.assertIn(must, paths)
+        missing = sorted(
+            "%s: %s" % (table, ".".join(path))
+            for table, path in found if not audit._is_injector_path(path)
+        )
+        self.assertEqual(missing, [], "injector path 沒登記到 audit_411 _INJECTOR_VALUE_PATHS")
+
+    def test_lockstep_check_detects_an_unregistered_path(self):
+        # 陽性對照：同一個抽取器對「多一條沒登記的 injector path」必須抓得到
+        source = (
+            "_NEW_THING_VALUE_PATHS = {'x': [('brandNew', 'url')]}\n"
+            "def _inject_other(values):\n"
+            "    path_map = {'y': [('another', 'path')]}\n"
+        )
+        found = platform_injector_paths(source)
+        self.assertEqual(
+            {path for _t, path in found}, {("brandNew", "url"), ("another", "path")})
+        self.assertTrue(
+            all(not audit._is_injector_path(path) for _t, path in found))
 
 
 class TestClassifyDiff(unittest.TestCase):
@@ -86,6 +177,16 @@ class TestClassifyDiff(unittest.TestCase):
         # injector 鍵 stored 有 computed 無 → a（仍自癒）
         d = audit.classify_diff({"global": {"imagePullSecrets": ["x"]}}, {})
         self.assertEqual(d["counts"], {"a": 1, "b": 0, "c": 0, "info": 0})
+
+    def test_a_omnigent_url_left_behind_after_omnigent_deleted(self):
+        # Omnigent 被刪：stored release 還有舊網址、computed 沒有 → a，不得叫人 backfill
+        d = audit.classify_diff(
+            {"omnigentHost": {"serverUrl": "http://svc-x-omnigent.ns.svc.cluster.local:8000",
+                              "enabled": True}},
+            {"omnigentHost": {"enabled": True}},
+        )
+        self.assertEqual(d["counts"], {"a": 1, "b": 0, "c": 0, "info": 0})
+        self.assertEqual(d["items"][0]["path"], ["omnigentHost", "serverUrl"])
 
     def test_a_config_sensitive_stored_only(self):
         # config.sensitive stored-only → a（sensitive_values 另帶，不 backfill）；值遮罩
