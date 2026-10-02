@@ -107,8 +107,11 @@ class TestConcealInstancesSeed(TransactionCase):
         # （pi-agent 2026-09-24 已上架＝不再 hidden，image 釘 20260924.0235@sha256。）
         # （omnigent 2026-09-29 以隱藏卡片進 seed，2026-09-30 隨 .188 公開上架＝不再 hidden。）
         # （code-server 2026-09-30 image 釘上 20260930.1503@sha256 後公開上架＝不再 hidden。）
+        # emqx／nextcloud：hidden-only（曝光層）——#1321 先以隱藏卡片進 seed，chart 映像
+        # 鏡像完成後另開 PR 公開上架（work/paas-listing-nextcloud-emqx/HANDOFF.md）；
+        # 實例層不設，上架時只翻 is_hidden（同 hermes-agent／omnigent 的解封方式）。
         self.assertEqual(
-            set(hidden.mapped('slug')), {'ha-paas', 'ha-full-apporo'},
+            set(hidden.mapped('slug')), {'ha-paas', 'ha-full-apporo', 'emqx', 'nextcloud'},
             '隱藏 template 盤點漂移；新增的請先判定屬曝光層還是實例層')
         concealed = hidden.filtered('conceal_instances')
         self.assertEqual(
