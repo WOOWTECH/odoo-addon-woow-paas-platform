@@ -1268,9 +1268,9 @@ msgstr ""
 
 #. module: woow_paas_platform
 #. odoo-python
-#: code:addons/woow_paas_platform/controllers/paas.py:0
-msgid "Administrator password must be at least 8 characters"
-msgstr "管理員密碼至少需要 8 個字元"
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid "Administrator email must be a valid email address"
+msgstr "管理員 Email 格式不正確"
 
 #. module: woow_paas_platform
 #. odoo-javascript

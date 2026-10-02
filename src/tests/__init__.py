@@ -967,3 +967,7 @@ from . import test_tenant_orm_lifecycle_guards
 from . import test_notifications_1310
 # #1310：工作區預估月費——訂閱資訊 monthly_estimate（含稅、年繳 ÷12）。
 from . import test_monthly_estimate_1310
+# #1130：cloud_app_odoo 切換到自家 woow-odoo chart——seed 與 tenant schema 對齊、三顆 PVC
+# storageClass／物件形 pull secret／expose 目標／addons.selected／identity 注入、初始管理員
+# 密碼鑄造＋sensitive conf.adminPassword（三個部署呼叫點）、建立流程一次性顯示。
+from . import test_woow_odoo_template_1130

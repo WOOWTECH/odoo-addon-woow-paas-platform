@@ -32,7 +32,8 @@
                  ⚠ 重新上架前必須先處理 image：18.8.5 的預設 image 是
                  registry-1.docker.io/bitnami/postgresql:latest（Bitnami 2025-08 搬遷後公開
                  tag 只剩 latest），而本 seed 的 helm_default_values 既無 image override 也無
-                 global.security.allowInsecureImages——對照 cloud_app_odoo 已改用 bitnamilegacy/。
+                 global.security.allowInsecureImages（cloud_app_odoo 當時改用 bitnamilegacy/ 規避；#1130 起
+                 odoo 已換自家 woow-odoo chart，不再是可對照的前例）。
                  修 image 屬 helm_default_values 變更，不在本 PR 範圍。 -->
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://registry-1.docker.io/bitnamicharts/postgresql</field>
@@ -210,60 +211,46 @@
 
             <field name="documentation_url">https://www.odoo.com/documentation/</field>
 
-            <!-- Helm Configuration (OCI registry format) -->
-            <!-- #552：本欄位原為空字串 ⇒ 不帶 helm 的 version 旗標、抓 registry 當下 latest
-                 （機制見 cloud_app_postgresql 上方註解）。本 template is_active=True，是四個
-                 空值中風險最高的兩個之一。
-                 釘值＝2026-08-03 實測的 latest：
-                   helm show chart oci://registry-1.docker.io/bitnamicharts/odoo
-                   → version 28.2.10 / appVersion 18.0.20250805
-                 （helm 3.13.3 與 4.2.3 同值。）
-                 租戶側無既存服務（prod 0 顆 cloud service、stg 四個 paas-ws-* namespace 無
-                 odoo release）⇒ 無降版標的，釘當下 latest 對現行行為零改變。
-                 交叉佐證（為何 28.2.10 吃得下下面的 helm_default_values）：
-                 - 平台自身的 paas-odoo（paas-system，helm rev 78）跑的正是 odoo-28.2.10，
-                   且同樣以 global.security.allowInsecureImages ＋ customPostInitScripts ＋
-                   自家 image 覆寫的形制在線上運作；
-                 - 逐鍵實查 28.2.10 的 helm show values：odooEmail / odooPassword /
-                   odooSkipInstall / loadDemoData / customPostInitScripts / smtpHost /
-                   updateStrategy / persistence / postgresql 全部存在。
-                 ⚠ 下方 helm_default_values 的 image.* 與 postgresql.image.* 是既有的平台
-                 覆寫（cloud-odoo 自家 image ＋ bitnamilegacy/postgresql，因應 Bitnami
-                 2025-08 公開 image 搬遷），本 PR 未動；日後升 chart 版本時要一併複驗
-                 這兩組覆寫是否仍與新版 chart 相容。 -->
+            <!-- Helm Configuration：自家 woow-odoo chart（#1130；woow-paas/woow-paas-charts#81）。
+                 取代 Bitnami odoo 28.2.10（#1121 耦合盤點）。chart 名 2026-09-27 定案 woow-odoo；
+                 版號 0.2.3（0.2.3 只加 platform profile 下限，tenant 與 0.2.2 相同）。
+                 ⚠ chart version 不可帶 pre-release 後綴：operator 以 rsplit("-", 1) 拆 helm list
+                 的 chart 欄位。
+                 values 鍵集合由 chart values.schema.json 鎖死（additionalProperties: false），
+                 殘留 Bitnami 鍵（odooEmail／odooPassword／postgresql.*／customPostInitScripts…）
+                 install 當下直接失敗。
+                 helm_default_values：
+                 - image：cloud-odoo 正式 build（paas-odoo-ci#154，官方 odoo:18.0 lineage，
+                   paas-odoo-ci#133 c14968），image.{registry,repository,tag,digest}，tenant 的
+                   digest 為 schema 必填（#1194 c14349）。換 digest 會觸發 chart 升級閘 -u all。
+                 - conf.workers 0 ＝ 與 Bitnami 版相同的 threaded 預設；odoo plan 一律帶
+                   cs_odoo_workers，由 _apply_plan_spec_overlay 寫 conf.workers／limitMemory*。
+                 - conf.maxCronThreads 2：tenant 在 web pod 內跑 cron（charts#81 R2-Q3）。
+                 - postgres.database odoo：只進這裡（#1160 13942；R2-Q4）。
+                 - 不帶 tenant schema 拒收的鍵（conf.emailFrom、cron、ingress、extraEnv、
+                   networkPolicy、postgres.extensions、credentials.*）。
+                 平台每次部署注入（_assemble_deploy_values）：三顆 PVC 的 storageClass、
+                 global.imagePullSecrets（物件形）、addons.selected、identity.*；
+                 初始管理員密碼走 sensitive conf.adminPassword（_build_odoo_sensitive_values）。
+                 helm_value_specs：初始密碼由平台鑄造、一次性顯示（#1160），表單只剩 login email
+                 與 loadDemoData。SMTP 欄位暫時拿掉：Bitnami 的 smtpHost 等鍵在新 chart 會被
+                 schema 擋，dot-path smtp.* 的版本由 #1193 補回。 -->
             <field name="helm_repo_url"></field>
-            <field name="helm_chart_name">oci://registry-1.docker.io/bitnamicharts/odoo</field>
-            <field name="helm_chart_version">28.2.10</field>
-            <!-- helm_default_values: customPostInitScripts for:
-                 1) fix-admin-credentials.sh - hash password with pbkdf2_sha512
-                    (Bitnami writes plaintext; login stays as email per user choice)
-                 2) odoo-conf-system.sh - inject system odoo.conf settings:
-                    proxy_mode, list_db, workers, limit_memory_*, limit_time_* -->
-            <field name="helm_default_values">{"global": {"security": {"allowInsecureImages": true}}, "image": {"registry": "jcr-prod.woowtech.io", "repository": "woow-paas-docker-local/cloud-odoo", "tag": "20260814.0737"}, "odooEmail": "user@example.com", "odooSkipInstall": false, "loadDemoData": false, "service": {"type": "ClusterIP"}, "resources": {"requests": {"cpu": "200m", "memory": "512Mi"}, "limits": {"cpu": "2000m", "memory": "2Gi"}}, "postgresql": {"enabled": true, "architecture": "standalone", "auth": {"username": "bn_odoo", "database": "bitnami_odoo"}, "image": {"registry": "docker.io", "repository": "bitnamilegacy/postgresql", "tag": "17.6.0-debian-12-r4"}}, "persistence": {"enabled": true, "size": "10Gi"}, "updateStrategy": {"type": "Recreate"}, "customPostInitScripts": {"fix-admin-credentials.sh": "#!/bin/bash\nset -eo pipefail\necho '[fix-admin-credentials] Hashing Odoo admin password with pbkdf2_sha512'\n[ -z \"${ODOO_PASSWORD:-}\" ] \u0026\u0026 echo 'WARN: ODOO_PASSWORD not set, skipping' \u0026\u0026 exit 0\n/opt/bitnami/odoo/venv/bin/python3 -c \"\nimport os, sys\ntry:\n from passlib.context import CryptContext\n import psycopg2\n ctx = CryptContext(schemes=['pbkdf2_sha512'])\n hashed = ctx.hash(os.environ['ODOO_PASSWORD'])\n conn = psycopg2.connect(\n  host=os.environ['ODOO_DATABASE_HOST'],\n  port=int(os.environ.get('ODOO_DATABASE_PORT_NUMBER', '5432')),\n  user=os.environ['ODOO_DATABASE_USER'],\n  password=os.environ['ODOO_DATABASE_PASSWORD'],\n  dbname=os.environ['ODOO_DATABASE_NAME'])\n cur = conn.cursor()\n cur.execute('UPDATE res_users SET password=%s WHERE id=2', (hashed,))\n conn.commit()\n cur.close()\n conn.close()\n print('[fix-admin-credentials] Password hashed successfully')\nexcept Exception as e:\n print(f'[fix-admin-credentials] ERROR: {e}', file=sys.stderr)\n sys.exit(1)\n\"\n", "odoo-conf-system.sh": "#!/bin/bash\nset -eo pipefail\nCONF=/opt/bitnami/odoo/conf/odoo.conf\necho '[odoo-conf-system] Injecting system-level odoo.conf settings'\n[ ! -f \"$CONF\" ] \u0026\u0026 echo \"WARN: $CONF not found, skipping\" \u0026\u0026 exit 0\ngrep -q '^proxy_mode' \"$CONF\" || echo 'proxy_mode = True' >> \"$CONF\"\ngrep -q '^list_db' \"$CONF\" || echo 'list_db = False' >> \"$CONF\"\nsed -i '/^workers/d' \"$CONF\"\nsed -i '/limit_memory_hard/d' \"$CONF\"\nsed -i '/limit_memory_soft/d' \"$CONF\"\nsed -i '/limit_time_cpu/d' \"$CONF\"\nsed -i '/limit_time_real/d' \"$CONF\"\necho 'workers = 0' >> \"$CONF\"\necho 'limit_memory_hard = 0' >> \"$CONF\"\necho 'limit_memory_soft = 0' >> \"$CONF\"\necho 'limit_time_cpu = 60' >> \"$CONF\"\necho 'limit_time_real = 120' >> \"$CONF\"\necho '[odoo-conf-system] Settings injected'\n"}}</field>
+            <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/woow-odoo</field>
+            <field name="helm_chart_version">0.2.3</field>
+            <field name="helm_default_values">{"profile": "tenant", "image": {"registry": "jcr-prod.woowtech.io", "repository": "woow-paas-docker-local/cloud-odoo", "tag": "20260929.0134", "digest": "sha256:8f984434b810c0ebeeea54c460167b8f487ece5ff87286f334c4fd47f43e5cd3"}, "resources": {"requests": {"cpu": "200m", "memory": "512Mi"}, "limits": {"cpu": "2000m", "memory": "2Gi"}}, "persistence": {"size": "10Gi"}, "loadDemoData": false, "conf": {"adminEmail": "user@example.com", "workers": 0, "maxCronThreads": 2}, "postgres": {"database": "odoo"}}</field>
             <field name="helm_value_specs">{"required": [
-                {"key": "odooEmail", "label": "Administrator Email", "type": "text",
+                {"key": "conf.adminEmail", "label": "Administrator Email", "type": "text",
                 "default": "user@example.com",
-                "description": "Login email for Odoo administrator"},
-                {"key": "odooPassword", "label": "Administrator Password", "type": "password",
-                "description": "Minimum 8 characters"}
+                "description": "Login email for the Odoo administrator. The initial password is generated by the platform and shown once after creation."}
                 ], "optional": [
                 {"key": "loadDemoData", "label": "Load Demo Data", "type": "boolean",
-                "default": false},
-                {"key": "smtpHost", "label": "SMTP Server", "type": "text",
-                "placeholder": "smtp.gmail.com",
-                "description": "SMTP mail server hostname"},
-                {"key": "smtpPort", "label": "SMTP Port", "type": "text",
-                "default": "587"},
-                {"key": "smtpUser", "label": "SMTP Username", "type": "text",
-                "placeholder": "user@gmail.com"},
-                {"key": "smtpPassword", "label": "SMTP Password", "type": "password"},
-                {"key": "smtpProtocol", "label": "SMTP Protocol", "type": "select",
-                "options": ["starttls", "ssl", "none"], "default": "starttls",
-                "description": "Email encryption protocol"}
+                "default": false}
                 ]}</field>
 
-            <!-- Service Configuration -->
-            <field name="default_port">8069</field>
+            <!-- Service Configuration：woow-odoo 的 Service（＝release 名）port 80，
+                 80／8072 都 targetPort nginx sidecar 8080 -->
+            <field name="default_port">80</field>
             <field name="ingress_enabled" eval="True" />
 
             <!-- Resource Requirements -->

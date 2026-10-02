@@ -5,6 +5,8 @@ import re
 from odoo import _, api, fields, models
 from odoo.exceptions import ValidationError
 
+from ..services.woow_odoo_readiness import WOOW_ODOO_CHART, chart_name_of
+
 _logger = logging.getLogger(__name__)
 
 # `admin_username_helm_path` 的合法形態：點分式、每段是 values 鍵名。
@@ -821,6 +823,20 @@ class CloudAppTemplate(models.Model):
             except (json.JSONDecodeError, TypeError):
                 _logger.error("Invalid helm_value_specs for template %s", self.name)
                 return SPECS_UNPARSEABLE
+
+    def _is_woow_odoo_chart(self) -> bool:
+        """#1130：本 template 是否消費自家 ``woow-odoo`` chart（woow-paas-charts#81）。
+
+        判準是 ``helm_chart_name`` 的 chart 名，不是 slug：cutover 期間 slug ``odoo`` 的
+        既有服務仍跑 Bitnami release（#1128），而 woow-odoo 專屬的 values 形狀（pull
+        secret 物件形、``addons.selected``、``identity``、``conf.*``）、sensitive 路徑
+        ``conf.adminPassword`` 與 expose 目標都綁 chart 契約。與 #1251 就緒判定共用
+        ``chart_name_of``，兩邊不會各自長出一套 chart 名解析。
+        """
+        if not self:
+            return False
+        self.ensure_one()
+        return chart_name_of(self.helm_chart_name) == WOOW_ODOO_CHART
 
     def _parse_helm_value_specs(self) -> dict[str, list]:
         """Parse this template's helm_value_specs JSON.

@@ -698,16 +698,18 @@ class CloudService(models.Model):
 - `cs_vcpu` → `resources.{requests,limits}.cpu`
 - `cs_ram_gb` → `resources.{requests,limits}.memory`（整數 GB 用 `Gi`、否則換算 `Mi`）
 - `cs_storage_gb` → `persistence.size`
-- `cs_odoo_workers` → 改寫 `customPostInitScripts` 內的 `workers = 0`，
-  並依 `cs_ram_gb` 換算 `limit_memory_hard`（0.85／worker）與
-  `limit_memory_soft`（0.70／worker）
+- `cs_odoo_workers` → woow-odoo chart 的 template（#1130 起的 `cloud_app_odoo`）
+  寫 typed `conf.workers`，並依 `cs_ram_gb` 換算 `conf.limitMemoryHard`
+  （0.85／worker）與 `conf.limitMemorySoft`（0.70／worker）；values 沒有 `conf`
+  區塊時 raise（fail-loud）。Bitnami 形的 template 仍改寫 `customPostInitScripts`
+  內的 `workers = 0`（同一組公式）
 
 **行為邊界**：
 
 - **cs_\* 為 0 的維度一律不碰**＝與 template 預設 bit-for-bit 相同；
   刻意不改 template seed（避開 sticky noupdate），見
   `src/models/cloud_service.py:1550` docstring。
-- **workers 替換是精確字串 replace、非正則**：逐 marker 斷言全部 script
+- **（Bitnami 形）workers 替換是精確字串 replace、非正則**：逐 marker 斷言全部 script
   合計恰 1 處，count != 1 直接 raise（fail-loud，不靜默 no-op），見
   `src/models/cloud_service.py:1585-1591`。
 - **上方 `allocated_*` 欄位改讀選定 plan 規格**，template `min_*` 退為
