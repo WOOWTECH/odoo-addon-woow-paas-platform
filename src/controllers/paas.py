@@ -30,7 +30,7 @@ from ..services.paas_operator import (
     PaaSOperatorConnectionError,
 )
 from ..models.cloud_app_template import SPECS_UNPARSEABLE  # #1052：哨兵隨 parser 搬到 template model
-from ..models.cloud_service import _internal_provision
+from ..models.cloud_service import WOOW_ODOO_ADMIN_PASSWORD_PATH, _internal_provision
 # #536：sync-control 的兩個逃生門只認模組私有 sentinel（`call_kw` 把呼叫端
 # context 整包換進 env，只判 truthy 的 key 租戶自己就打得開）。
 from ..models.security_access import _rule_replace, _skip_route_sync
@@ -3261,6 +3261,11 @@ class PaasController(HiddenChainMixin, Controller):
                     # #357 C19：這條分支用 _mask_value_fully（無前綴）——不同於上面
                     # legacy 'secret' 分支刻意保留的 8 字元前綴。
                     result[key] = _mask_secret_tree(val, _mask_value_fully)
+                elif child_path[-2:] == WOOW_ODOO_ADMIN_PASSWORD_PATH:
+                    # #1130 woow-odoo 初始管理員密碼：平台鑄造、不在 specs 裡，
+                    # spec-driven 涵蓋不到；正常路徑已被 _strip_mcp_sensitive_values
+                    # 擋在落庫之前，這裡是第二道。只遮這一格（同層 conf.* 是設定）。
+                    result[key] = _mask_value_fully(val)
                 elif child_path[-2:] == ('auth', 'apiServerKey'):
                     # #530 hermes gateway key：葉節點（字串），不在 config.sensitive
                     # 底下。刻意只遮這一格而非整個 auth 子樹——同層還有非憑證欄位
@@ -3478,7 +3483,14 @@ class PaasController(HiddenChainMixin, Controller):
         except (json.JSONDecodeError, TypeError):
             _logger.error("Invalid helm_default_values for template %s; blocking create", template.name)
             return {'success': False, 'error': _('Template misconfigured (invalid default values). Please contact support.')}
-        filtered_user_values, _rejected = template._filter_allowed_helm_values(values)
+        filtered_user_values, rejected = template._filter_allowed_helm_values(values)
+        if rejected:
+            # #1160：create 對 spec 以外的鍵靜默丟棄（前端可能夾帶舊表單的鍵，例如
+            # #1130 移除的 odooPassword），只留 log；reconfigure 則 fail-loud。
+            _logger.warning(
+                "Dropped helm value keys not declared by template %s on create: %s",
+                template.name, sorted(rejected),
+            )
 
         # Extract _init.* keys (not Helm values, used for post-deploy init)
         init_params = {}
@@ -3501,14 +3513,14 @@ class PaasController(HiddenChainMixin, Controller):
             if not any(c.isdigit() for c in pwd):
                 return {'success': False, 'error': _('Password must contain at least one number')}
 
-        # Validate Odoo administrator password
-        if template.slug == 'odoo':
-            pwd = helm_only_values.get('odooPassword', '')
-            if not pwd or len(pwd) < 8:
-                return {'success': False, 'error': _('Administrator password must be at least 8 characters')}
-
         nested_user_values = self._unflatten_dotpath_keys(helm_only_values)
         merged_values = self._deep_merge(default_values, nested_user_values)
+
+        # #1130：woow-odoo 的管理員密碼由平台鑄造（下方），租戶表單只剩 login email
+        # ——舊的 odooPassword 長度檢查整段移除（#1160）。email 檢查與 reconfigure 共用。
+        email_error = CloudService._woow_odoo_admin_email_error(template, merged_values)
+        if email_error:
+            return {'success': False, 'error': email_error}
         _logger.info(
             "Merged helm values keys for service '%s' (template: %s): %s",
             name,
@@ -3530,8 +3542,11 @@ class PaasController(HiddenChainMixin, Controller):
         # cloud_service_secret + 一次性 response，不寫回 helm_values。
         # C01：判別器＝template.has_admin_gui（與 model 端 create() 供給閘門同源），
         # 不用 slug allowlist——否則新增 template 要兩處各補一次、且與 model 端會漂移。
+        # #1130：woow-odoo 的初始 Odoo 管理員密碼同樣在這裡鑄造、一次性顯示（#1160）；
+        # 閘門是 chart 不是 has_admin_gui（後者會接上 MCP 的 config.sensitive／reset 鏈）。
+        # 送進 chart 的路徑是 conf.adminPassword（`_build_odoo_sensitive_values`）。
         admin_password = None
-        if template.has_admin_gui:
+        if template.has_admin_gui or template._is_woow_odoo_chart():
             admin_password = self._generate_admin_password()
             _logger.info(
                 "[#357] generated admin_password for service '%s' (template=%s)",
@@ -3639,6 +3654,12 @@ class PaasController(HiddenChainMixin, Controller):
             # 不提供回取 API。
             if admin_password:
                 resp_data['admin_password'] = admin_password
+                if template._is_woow_odoo_chart():
+                    # #1130：Odoo 的登入帳號就是租戶填的 email，一起交付；
+                    # OneTimeCredentialsModal 依 admin_reset_supported=False 顯示
+                    # 「Initial Password」文案（重設流程在 #1186）。
+                    resp_data['admin_username'] = (
+                        merged_values.get('conf') or {}).get('adminEmail')
             # #530/#672: gateway API key ＋ 完整網址、dashboard REST API 的根網址，
             # 同樣是一次性。兩組各有自己的閘門，只有具備該能力的 chart 才交付
             # （見 _gateway_credentials）。
@@ -3731,6 +3752,10 @@ class PaasController(HiddenChainMixin, Controller):
         # （確定失敗／結果未知）而轉 error 時放行 reconfigure，並一律開新的一代
         # ——v1 沒有 retry-init 按鈕，這是租戶唯一的出口。helm 失敗、等待逾時等
         # 其他 error 照擋（addon 讓 pod 起不來屬 upgrading 逾時，出口是 rollback）。
+        # #1130：template 已換 woow-odoo、服務仍是 Bitnami 存量 ⇒ 在任何寫入前擋下（狀態不動）。
+        legacy_error = service._woow_odoo_legacy_release_error()
+        if legacy_error:
+            return {'success': False, 'error': legacy_error}
         init_exhausted_error = service._init_reconfigure_exit()
         if service.state in ['pending', 'deleting'] or (
                 service.state == 'error' and not init_exhausted_error):
@@ -3806,8 +3831,19 @@ class PaasController(HiddenChainMixin, Controller):
             nested_user_values = self._unflatten_dotpath_keys(filtered_user_values)
             merged_values = self._deep_merge(existing_values, nested_user_values)
 
+            # #1130：woow-odoo 的 conf.adminEmail 與 create 同一個檢查——只在本次真的送了
+            # 這一格時檢查。只改 addon／其他設定的 reconfigure 不得因為舊資料（例：#1128
+            # 的 Bitnami 存量、或測試 fixture）沒有 conf.adminEmail 就被擋。
+            if 'adminEmail' in (nested_user_values.get('conf') or {}):
+                email_error = service._woow_odoo_admin_email_error(
+                    service.template_id, merged_values)
+                if email_error:
+                    return {'success': False, 'error': email_error}
+
             # Rebuild or remove addon initContainer helm values when addon selection changed
-            if addon_changed:
+            # #1130：woow-odoo 的 addons.selected 由 `_assemble_deploy_values` 每次從
+            # odoo_addon_ids 重算，不落 helm_values（Bitnami 形的鍵在 tenant schema 會擋）。
+            if addon_changed and not service.template_id._is_woow_odoo_chart():
                 if service.odoo_addon_ids:
                     image_vals = merged_values.get('image', {})
                     registry = image_vals.get('registry', '')
@@ -3895,6 +3931,10 @@ class PaasController(HiddenChainMixin, Controller):
             # （背景執行緒無 ORM，不能碰 service / env / ir.config_parameter）：
             # svc.helm_values 已於上方 write 更新，helper 讀到的即最新 user config。
             assembled_values = service._assemble_deploy_values()['values']
+            # #1130：woow-odoo 的 conf.adminPassword 每次全量送（reset_values 下不送就
+            # 變空值；chart 對既有 DB 是 no-op）。只補 odoo 這一支——MCP 家族在
+            # reconfigure 缺 sensitive 的既有行為不在本票範圍。
+            odoo_sensitive = service._build_odoo_sensitive_values()
             upgrade_kwargs = dict(
                 namespace=service.helm_namespace,
                 release_name=service.helm_release_name,
@@ -3905,6 +3945,8 @@ class PaasController(HiddenChainMixin, Controller):
                 version=resolved_version,
                 reset_values=True,
             )
+            if odoo_sensitive:
+                upgrade_kwargs['sensitive_values'] = odoo_sensitive
             operator_url = client.base_url
             operator_api_key = client._session.headers.get('X-API-Key', '')
 

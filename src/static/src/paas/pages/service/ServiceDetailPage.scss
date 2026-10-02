@@ -154,6 +154,26 @@ $woow-radius-lg: 1.25rem;
     .o_woow_service_support_email {
         margin-left: auto;
     }
+
+    // #1315：手機上 support 入口與文字同列時，文字被擠成窄欄、mailto 溢出右緣；
+    // 比照 #1310 的列表手法，讓文字佔滿第一列、support 入口換到下一列靠右。
+    @media (max-width: $woow-bp-sm) {
+        flex-wrap: wrap;
+
+        .o_woow_btn,
+        .o_woow_service_support_email {
+            flex-shrink: 0;
+            white-space: nowrap;
+        }
+    }
+
+    &__text {
+        @media (max-width: $woow-bp-sm) {
+            flex: 1 1 12rem;
+            min-width: 0;
+            overflow-wrap: anywhere;
+        }
+    }
 }
 
 // =============================================================================

@@ -30,8 +30,14 @@ from odoo.addons.woow_paas_platform.controllers.paas import PaasController
 # **推導機制的存活訊號**：本 issue 點名「odooPassword 是租戶 Odoo 實例的管理員密碼，
 # 敏感度最高」，它從 seed 裡消失是重大變更、本來就該讓人重新看一次這裡。
 # 反過來，新增 password 欄位**不需要**動這份 anchor——那正是宣告式的意義。
+#
+# #1130（#1160 Q1）：odooPassword 不是改鍵名而是**整個移除**——woow-odoo 的初始管理員
+# 密碼改由平台鑄造、走 sensitive `conf.adminPassword`（不在 specs，見
+# test_existing_hardcoded_paths_still_masked）；smtpPassword 隨 SMTP 欄位暫時移除、
+# 由 #1193 以 dot-path `smtp.password` 補回。anchor 改錨在仍有租戶自填憑證的 template。
 _ANCHOR_PASSWORD_SPECS = {
-    'odoo': {'odooPassword', 'smtpPassword'},
+    'open-design': {'auth.anthropicApiKey', 'auth.openrouterApiKey'},
+    'code-server': {'auth.gitToken'},
 }
 
 
@@ -208,6 +214,24 @@ class TestPasswordSpecsAreMaskedDeclaratively(TransactionCase):
         self.assertNotIn('GATEWAY_KEY_DO_NOT_LEAK', dumped,
                          'auth.apiServerKey（#530）這條既有路徑不得失守')
 
+    def test_woow_odoo_admin_password_is_masked_without_its_siblings(self):
+        """#1130：woow-odoo 的 ``conf.adminPassword`` 是平台注入的第四條固定路徑。
+
+        它不在 ``helm_value_specs``（平台鑄造、租戶不填），spec-driven 涵蓋不到；正常
+        路徑已被 ``_strip_mcp_sensitive_values`` 擋在落庫前，這裡鎖第二道。同層
+        ``conf.adminEmail``／``conf.workers`` 是設定，不得被連坐。
+        """
+        template = self.env.ref('woow_paas_platform.cloud_app_odoo')
+        sanitized = PaasController._sanitize_helm_values({
+            'conf': {'adminPassword': 'ODOO_ADMIN_PW_DO_NOT_LEAK',
+                     'adminEmail': 'owner@example.com', 'workers': 2},
+        }, template)
+
+        self.assertNotIn('ODOO_ADMIN_PW_DO_NOT_LEAK', json.dumps(sanitized))
+        self.assertEqual(sanitized['conf']['adminPassword'], '***')
+        self.assertEqual(sanitized['conf']['adminEmail'], 'owner@example.com')
+        self.assertEqual(sanitized['conf']['workers'], 2)
+
     def test_legacy_secret_subtree_keeps_its_eight_char_prefix(self):
         """#535 的明確裁決：legacy ``secret`` 子樹的 8 字元前綴契約**維持不變**。
 
@@ -237,7 +261,7 @@ class TestMaskFailsClosed(TransactionCase):
         連「傳錯 template」都沒有任何測試會紅。
         """
         sanitized = PaasController._sanitize_helm_values(
-            {'odooPassword': 'PLAINTEXT_DO_NOT_LEAK',
+            {'somePassword': 'PLAINTEXT_DO_NOT_LEAK',
              'nested': {'token': 'ALSO_PLAINTEXT_DO_NOT_LEAK'}}, None)
 
         dumped = json.dumps(sanitized)
@@ -324,29 +348,34 @@ class TestReconfigureDoesNotWriteTheMaskBack(TransactionCase):
 
     def setUp(self):
         super().setUp()
-        self.template = self.env.ref('woow_paas_platform.cloud_app_odoo')
+        # #1130：原 fixture 是 odoo 的 odooPassword／smtpHost；odoo 表單已不收任何密碼
+        # （#1160），改用仍有租戶自填憑證的 open-design。鍵以扁平 spec key 送、巢狀落庫，
+        # 與真實前端／helm_values 的形態相同。
+        self.template = self.env.ref('woow_paas_platform.cloud_app_opendesign')
         self.existing = {
-            'odooEmail': 'user@example.com',
-            'odooPassword': 'REAL_PASSWORD_DO_NOT_OVERWRITE',
-            'smtpHost': 'smtp.example.com',
+            'auth': {
+                'anthropicApiKey': 'REAL_PASSWORD_DO_NOT_OVERWRITE',
+                'username': 'woow',
+            },
         }
 
     def test_echoed_mask_is_dropped_so_the_credential_survives(self):
         """送回來的值 == 剛才顯示給他看的遮罩值 ⇒ 這格沒有變更。"""
         # 前提斷言：先證明 API 真的會把它顯示成遮罩值，否則下面的「送回遮罩值」
         # 只是憑空造的字串，這條測試會在「遮罩根本沒生效」的世界照樣綠。
-        shown = PaasController._sanitize_helm_values(dict(self.existing), self.template)
-        self.assertEqual(shown['odooPassword'], '***',
-                         '前提：service detail API 會把 odooPassword 顯示成 ***')
+        shown = PaasController._sanitize_helm_values(
+            json.loads(json.dumps(self.existing)), self.template)
+        self.assertEqual(shown['auth']['anthropicApiKey'], '***',
+                         '前提：service detail API 會把 auth.anthropicApiKey 顯示成 ***')
 
         kept = PaasController._drop_masked_echo_values(
-            {'odooEmail': 'user@example.com', 'odooPassword': '***'},
+            {'auth.username': 'woow', 'auth.anthropicApiKey': '***'},
             self.existing, self.template)
 
         self.assertNotIn(
-            'odooPassword', kept,
+            'auth.anthropicApiKey', kept,
             '原封送回的遮罩值必須被丟棄——留著它會經 _deep_merge 把真憑證覆蓋成 ***')
-        self.assertEqual(kept['odooEmail'], 'user@example.com',
+        self.assertEqual(kept['auth.username'], 'woow',
                          '非憑證欄位照常通過')
 
     def test_a_real_new_password_is_kept(self):
@@ -355,20 +384,20 @@ class TestReconfigureDoesNotWriteTheMaskBack(TransactionCase):
         少了這條，「密碼再也改不了」這個 regression 會被上面那條測試當成成功。
         """
         kept = PaasController._drop_masked_echo_values(
-            {'odooPassword': 'A_BRAND_NEW_PASSWORD'}, self.existing, self.template)
+            {'auth.anthropicApiKey': 'A_BRAND_NEW_PASSWORD'}, self.existing, self.template)
 
-        self.assertEqual(kept['odooPassword'], 'A_BRAND_NEW_PASSWORD')
+        self.assertEqual(kept['auth.anthropicApiKey'], 'A_BRAND_NEW_PASSWORD')
 
     def test_non_credential_field_may_legitimately_equal_the_mask_literal(self):
         """不連坐：規則是「等於顯示值**且**與實值不同」，不是「等於 ``'***'``」。
 
-        沒被遮罩的欄位顯示值就是實值，條件恆假 ⇒ 租戶要把 smtpHost 設成 ``'***'``
-        照樣可以。只比對字面 ``'***'`` 的實作會擋掉它 ⇒ 這條紅。
+        沒被遮罩的欄位顯示值就是實值，條件恆假 ⇒ 租戶要把 auth.username 設成
+        ``'***'`` 照樣可以。只比對字面 ``'***'`` 的實作會擋掉它 ⇒ 這條紅。
         """
         kept = PaasController._drop_masked_echo_values(
-            {'smtpHost': '***'}, self.existing, self.template)
+            {'auth.username': '***'}, self.existing, self.template)
 
-        self.assertEqual(kept['smtpHost'], '***',
+        self.assertEqual(kept['auth.username'], '***',
                          '非憑證欄位設成 *** 是合法的，不得被兜底規則連坐')
 
     def test_missing_key_preserves_the_existing_value(self):
@@ -378,11 +407,11 @@ class TestReconfigureDoesNotWriteTheMaskBack(TransactionCase):
         """
         merged = PaasController._deep_merge(
             self.existing,
-            PaasController._unflatten_dotpath_keys({'smtpHost': 'smtp2.example.com'}))
+            PaasController._unflatten_dotpath_keys({'auth.username': 'woow2'}))
 
-        self.assertEqual(merged['odooPassword'], 'REAL_PASSWORD_DO_NOT_OVERWRITE',
+        self.assertEqual(merged['auth']['anthropicApiKey'], 'REAL_PASSWORD_DO_NOT_OVERWRITE',
                          '沒有送出的欄位必須保留既有值')
-        self.assertEqual(merged['smtpHost'], 'smtp2.example.com')
+        self.assertEqual(merged['auth']['username'], 'woow2')
 
     def test_dotpath_credentials_are_dropped_too(self):
         """dot-path 形態（``auth.anthropicApiKey``）也要走同一條兜底。

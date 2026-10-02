@@ -67,10 +67,14 @@ class _TenantServiceFixture(TransactionCase):
             'helm_namespace': 'paas-ws-t559',
             'helm_release_name': 't559',
         })
-        self.service._apply_helm_values({
-            'odooEmail': 'user@example.com',
-            'odooPassword': self.PLAINTEXT,
-        })
+        # #1130：woow-odoo 的租戶表單不再收密碼（#1160）；唯一會出現在 odoo
+        # helm_values 的管理員密碼是 sensitive 的 `conf.adminPassword`。正常寫入路徑
+        # （`_apply_helm_values`）會把它剝掉，所以這裡**繞過剝除**直接寫 raw JSON——
+        # 模擬「剝除失效／舊資料」的狀態，也正是欄位 ACL 這道側門防線要擋的東西。
+        self.service.sudo().write({'helm_values': json.dumps({
+            'conf': {'adminEmail': 'user@example.com',
+                     'adminPassword': self.PLAINTEXT},
+        })})
         self.service.sudo().write({'n8n_owner_password': self.N8N_PLAINTEXT})
 
     def _as_tenant(self):
@@ -172,7 +176,9 @@ class TestTenantFacingPathsStillWork(_TenantServiceFixture):
 
         self.assertIn('helm_values', payload,
                       '租戶必須仍看得到自己的設定（只是遮罩過）')
-        self.assertEqual(payload['helm_values'].get('odooPassword'), '***')
+        self.assertEqual(payload['helm_values']['conf'].get('adminPassword'), '***')
+        self.assertEqual(payload['helm_values']['conf'].get('adminEmail'),
+                         'user@example.com', '同層的非憑證設定照常顯示')
         self.assertNotIn(
             self.PLAINTEXT, json.dumps(payload),
             'controller 的正常路徑不得回明文（#535 的遮罩仍須生效）')
@@ -181,15 +187,16 @@ class TestTenantFacingPathsStillWork(_TenantServiceFixture):
         """model 的唯一讀取入口在租戶身分下必須可用（它是 controller 的依賴）。"""
         values = self._as_tenant()._helm_values_dict()
 
-        self.assertEqual(values.get('odooPassword'), self.PLAINTEXT)
+        self.assertEqual(values['conf'].get('adminPassword'), self.PLAINTEXT)
 
     def test_apply_helm_values_works_under_tenant_identity(self):
         """reconfigure 走的寫入路徑在租戶身分下必須可用。"""
-        self._as_tenant()._apply_helm_values({'odooPassword': 'NEW_PW_559'})
+        self._as_tenant()._apply_helm_values(
+            {'conf': {'adminEmail': 'new-owner@example.com'}})
 
         self.assertEqual(
-            self.service.sudo()._helm_values_dict().get('odooPassword'),
-            'NEW_PW_559')
+            self.service.sudo()._helm_values_dict()['conf'].get('adminEmail'),
+            'new-owner@example.com')
 
 
 class TestApplyHelmValuesSemantics(_TenantServiceFixture):
@@ -204,7 +211,7 @@ class TestApplyHelmValuesSemantics(_TenantServiceFixture):
         """
         with self.assertRaises(AccessError):
             self._as_tenant()._apply_helm_values(
-                {'odooPassword': 'X'},
+                {'conf': {'adminEmail': 'x@example.com'}},
                 extra_vals={'n8n_owner_password': 'SHOULD_NOT_BE_WRITABLE'})
 
         self.assertEqual(
@@ -218,17 +225,23 @@ class TestApplyHelmValuesSemantics(_TenantServiceFixture):
         的分離通道）。修復前 reconfigure 的寫入**沒有**經過這層，本入口把它統一了。
         """
         self.service._apply_helm_values({
-            'odooPassword': 'KEEP_ME_559',
+            'loadDemoData': 'KEEP_ME_559',
             'config': {'sensitive': {'admin_password': 'MUST_NOT_PERSIST_559'}},
             'auth': {'apiServerKey': 'MUST_NOT_PERSIST_GATEWAY_559',
                      'username': 'woow'},
+            # #1130：woow-odoo 的初始管理員密碼（sensitive conf.adminPassword）。
+            'conf': {'adminPassword': 'MUST_NOT_PERSIST_ODOO_559',
+                     'adminEmail': 'user@example.com'},
         })
 
         stored = self.service.sudo()._helm_values_dict()
         dumped = json.dumps(stored)
 
-        self.assertEqual(stored['odooPassword'], 'KEEP_ME_559', '非剝除路徑要保留')
+        self.assertEqual(stored['loadDemoData'], 'KEEP_ME_559', '非剝除路徑要保留')
         self.assertEqual(stored['auth']['username'], 'woow',
                          '同層非憑證欄位不得被連坐剝掉')
+        self.assertEqual(stored['conf']['adminEmail'], 'user@example.com',
+                         'conf.adminPassword 的同層設定不得被連坐剝掉')
         self.assertNotIn('MUST_NOT_PERSIST_559', dumped)
         self.assertNotIn('MUST_NOT_PERSIST_GATEWAY_559', dumped)
+        self.assertNotIn('MUST_NOT_PERSIST_ODOO_559', dumped)

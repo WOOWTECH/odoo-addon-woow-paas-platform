@@ -173,7 +173,7 @@
                      operator 的原始錯誤只在後台的 attempt 記錄（租戶看不到）。 -->
                 <div t-if="initFailed" class="o_woow_service_error_banner">
                     <WoowIcon name="'error'" size="20"/>
-                    <span t-esc="initFailureText"/>
+                    <span class="o_woow_service_error_banner__text" t-esc="initFailureText"/>
                     <WoowButton
                         t-if="projectsVisible"
                         variant="'secondary'"
@@ -189,11 +189,11 @@
                 </div>
                 <div t-elif="service.error_message" class="o_woow_service_error_banner">
                     <WoowIcon name="'error'" size="20"/>
-                    <span t-esc="service.error_message"/>
+                    <span class="o_woow_service_error_banner__text" t-esc="service.error_message"/>
                 </div>
                 <div t-if="state.resetPasswordError" class="o_woow_service_error_banner">
                     <WoowIcon name="'error'" size="20"/>
-                    <span t-esc="state.resetPasswordError"/>
+                    <span class="o_woow_service_error_banner__text" t-esc="state.resetPasswordError"/>
                 </div>
 
                 <!-- Tab Navigation -->
