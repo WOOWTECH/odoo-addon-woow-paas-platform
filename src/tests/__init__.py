@@ -995,3 +995,6 @@ from . import test_member_create_service_1317
 # Omnigent BYO host：部署 code-server／pi-agent／open-design 時把同工作區 running
 # Omnigent 的叢集內網址注入 omnigentHost.serverUrl（只有網址，不帶 token）。
 from . import test_omnigent_server_url_injection
+# QA CS-02／CS-03：code-server 的 git 作者身分與 Git Token 適用主機（helm_value_specs
+# 的 ``format``：存檔驗證＋部署時轉成 chart 形態）。
+from . import test_code_server_git_settings

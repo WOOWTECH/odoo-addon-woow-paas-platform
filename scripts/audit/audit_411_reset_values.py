@@ -202,6 +202,26 @@ def _flatten(node: Any, path: tuple = ()) -> dict:
     return out
 
 
+# 平台 injector 寫入的「整條路徑」鍵（`CloudService._assemble_deploy_values` 的
+# value-path 表）。這裡是**複本**（本腳本不能 import Odoo），由
+# `test_audit_411_classifier.TestInjectorPathsLockstep` 以 AST 讀
+# src/models/cloud_service.py 對帳：那邊新增 injector path 卻沒登記到這裡會紅。
+#
+# 為什麼一定要登記：沒登記的 injector path 在 stored／computed 不同時會被分到 (b)
+# backfill 或 (c) 逐筆裁決——例如 Omnigent 被刪後 stored release 還留著舊的
+# omnigentHost.serverUrl、computed 已經沒有，(b) 會叫維運把死掉的網址寫回
+# svc.helm_values，從此永遠釘住。injector 值每次部署都重算，差異一律自癒 (a)。
+_INJECTOR_VALUE_PATHS = frozenset({
+    ("config", "allowedOrigins"),         # allowed_origins injector（open-design，#399）
+    ("codeServer", "publicUrl"),          # allowed_origins injector（code-server）
+    ("server", "baseUrl"),                # allowed_origins injector（omnigent）
+    ("nextcloud", "publicUrl"),           # allowed_origins injector（nextcloud）
+    ("config", "dashboardPublicUrl"),     # dashboard_public_url injector（hermes-agent，#424①）
+    ("networkPolicy", "apiServerCidrs"),  # apiserver_cidrs injector（#404）
+    ("omnigentHost", "serverUrl"),        # omnigent_server_url injector（同工作區 Omnigent）
+})
+
+
 def _is_injector_path(path: tuple) -> bool:
     """injector 類鍵：平台管線每次重算會注入，reset 後自癒、不需人工 backfill。"""
     if not path:
@@ -210,11 +230,7 @@ def _is_injector_path(path: tuple) -> bool:
         return True
     if "imagePullSecrets" in path:                   # image_pull_secrets injector
         return True
-    if path == ("config", "allowedOrigins"):         # allowed_origins injector（#399）
-        return True
-    if path == ("networkPolicy", "apiServerCidrs"):  # apiserver_cidrs injector（#404）
-        return True
-    return False
+    return tuple(path) in _INJECTOR_VALUE_PATHS
 
 
 def _is_config_sensitive(path: tuple) -> bool:
@@ -371,7 +387,10 @@ def render_report(records: list[dict], meta: dict) -> str:
     lines.append("")
     lines.append(
         "- **(a) injector 類會自癒**：storageClass / imagePullSecrets / config.allowedOrigins"
-        "（#399）/ networkPolicy.apiServerCidrs（#404）等平台管線每次重算的鍵，reset 後自動補回，無須動作。"
+        "（#399）/ codeServer.publicUrl / server.baseUrl / nextcloud.publicUrl / "
+        "config.dashboardPublicUrl（#424①）/ networkPolicy.apiServerCidrs（#404）/ "
+        "omnigentHost.serverUrl（同工作區 Omnigent，Omnigent 刪除後 stored 殘留舊網址也屬此類，"
+        "**不要** backfill）等平台管線每次重算的鍵，reset 後自動補回，無須動作。"
     )
     lines.append(
         "- **(b) backfill**：stored 有、平台 computed 無、且非 injector —— reset 後會從 rendered "

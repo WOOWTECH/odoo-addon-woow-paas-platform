@@ -3513,6 +3513,12 @@ class PaasController(HiddenChainMixin, Controller):
             if not any(c.isdigit() for c in pwd):
                 return {'success': False, 'error': _('Password must contain at least one number')}
 
+        # helm_value_specs 帶 ``format`` 的文字欄位（例 code-server 的 git 設定）：
+        # 不合法就在收錢前擋下，別讓一行字串到部署時才把 chart／gitconfig 弄壞。
+        format_error = template._validate_spec_formats(helm_only_values)
+        if format_error:
+            return {'success': False, 'error': format_error}
+
         nested_user_values = self._unflatten_dotpath_keys(helm_only_values)
         merged_values = self._deep_merge(default_values, nested_user_values)
 
@@ -3828,6 +3834,10 @@ class PaasController(HiddenChainMixin, Controller):
             filtered_user_values = self._drop_masked_echo_values(
                 filtered_user_values, existing_values, service.template_id,
             )
+            # helm_value_specs 帶 ``format`` 的文字欄位（例 code-server 的 git 設定）。
+            format_error = service.template_id._validate_spec_formats(filtered_user_values)
+            if format_error:
+                return {'success': False, 'error': format_error}
             nested_user_values = self._unflatten_dotpath_keys(filtered_user_values)
             merged_values = self._deep_merge(existing_values, nested_user_values)
 

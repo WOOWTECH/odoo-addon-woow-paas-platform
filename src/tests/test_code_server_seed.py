@@ -100,13 +100,18 @@ class TestCodeServerSeed(TransactionCase):
         self.assertEqual(v['service']['targetPort'], 8080)
 
     def test_optional_keys_are_password_fields_under_auth(self):
+        """憑證（auth.*）一律 password；git 設定（QA CS-02／CS-03）是純文字、不是憑證，
+        細節由 test_code_server_git_settings 守。"""
         specs = self._tpl()._parse_helm_value_specs()
         self.assertEqual(specs.get('required'), [])
         optional = {s['key']: s for s in specs.get('optional', [])}
-        self.assertEqual(
-            set(optional), {'auth.anthropicApiKey', 'auth.openrouterApiKey', 'auth.gitToken'})
-        for key, spec in optional.items():
-            self.assertEqual(spec['type'], 'password', key)
+        credentials = {'auth.anthropicApiKey', 'auth.openrouterApiKey', 'auth.gitToken'}
+        git_settings = {'git.tokenHosts', 'git.userName', 'git.userEmail'}
+        self.assertEqual(set(optional), credentials | git_settings)
+        for key in credentials:
+            self.assertEqual(optional[key]['type'], 'password', key)
+        for key in git_settings:
+            self.assertEqual(optional[key]['type'], 'text', key)
 
     def test_plans_linked_and_priced(self):
         plans = self._tpl().sudo().subscription_plan_ids

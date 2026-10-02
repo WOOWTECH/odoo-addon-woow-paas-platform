@@ -1,20 +1,24 @@
 # -*- coding: utf-8 -*-
 """Omnigent BYO host：部署時注入同工作區 Omnigent 的叢集內網址。
 
-code-server／pi-agent／open-design 的 chart 帶 omnigent-host sidecar（woow-paas-charts
-``shared/omnigent-host`` 共用套件），標準 values 區塊是 ``omnigentHost.serverUrl``。
-平台在 ``_assemble_deploy_values`` 裡把「同工作區、running、最早建立的 Omnigent」
-的叢集內網址填進去（和 ``_inject_allowed_origins`` 同一 family）：
+code-server／pi-agent／open-design 的 chart 在主容器裡跑 omnigent host（woow-paas-charts
+``shared/omnigent-host`` 共用套件，沒有 sidecar），標準 values 區塊是
+``omnigentHost.serverUrl``。平台在 ``_assemble_deploy_values`` 裡把「同工作區、running、
+最早建立的 Omnigent」的叢集內網址填進去（和 ``_inject_allowed_origins`` 同一 family）：
 
 - 只有網址，絕不帶 token／密碼（accounts 模式由租戶自己 ``omnigent login``）
+- 執行期設定：chart 只把它放進不入 checksum 的 runtime ConfigMap，網址變動不重啟 pod，
+  所以 reset 密碼（``helm upgrade --atomic --timeout 15s``）也照常重算它
 - 工作區沒有 running Omnigent ⇒ no-op（chart 預設 ""）
+- helm_values 已有非空的 serverUrl ⇒ 尊重、不覆寫
 - 多個 ⇒ 決定性地取最早建立的，記 log
 - Service 名鏡射 charts/omnigent ``omnigent.fullname``；port＝``service.port``（預設 8000）
 """
 import json
 import logging
+from unittest.mock import MagicMock, patch
 
-from odoo.tests.common import TransactionCase, tagged
+from odoo.tests.common import TransactionCase, new_test_user, tagged
 
 from ..models.cloud_service import (
     _OMNIGENT_CHART_NAME,
@@ -25,6 +29,10 @@ from ..models.cloud_service import (
 )
 
 _NS = 'paas-ws-omni0001'
+_LOGGER = 'odoo.addons.woow_paas_platform.models.cloud_service'
+_OPERATOR_CLIENT = (
+    'odoo.addons.woow_paas_platform.services.paas_operator.get_paas_operator_client'
+)
 
 
 def _url(release_service, namespace=_NS, port=8000):
@@ -33,7 +41,7 @@ def _url(release_service, namespace=_NS, port=8000):
 
 @tagged('post_install', '-at_install')
 class TestInjectOmnigentServerUrl(TransactionCase):
-    """static injector：只對帶 omnigent-host sidecar 的 chart 寫 omnigentHost.serverUrl。"""
+    """static injector：只對主容器內建 omnigent host 的 chart 寫 omnigentHost.serverUrl。"""
 
     URL = 'http://svc-a-omnigent.paas-ws-x.svc.cluster.local:8000'
 
@@ -63,6 +71,19 @@ class TestInjectOmnigentServerUrl(TransactionCase):
             'pi-agent', self.URL)
         self.assertEqual(out['omnigentHost'], {
             'enabled': True, 'hostName': 'x', 'serverUrl': self.URL})
+
+    def test_explicit_value_is_not_overwritten(self):
+        """管理員明確設的網址（例如公開 https 網址）優先，平台不覆寫。"""
+        explicit = 'https://omnigent.example.com'
+        out = self.CloudService._inject_omnigent_server_url(
+            {'omnigentHost': {'serverUrl': explicit}}, 'code-server', self.URL)
+        self.assertEqual(out['omnigentHost']['serverUrl'], explicit)
+
+    def test_empty_or_blank_value_counts_as_unset(self):
+        for blank in ('', '   ', None):
+            out = self.CloudService._inject_omnigent_server_url(
+                {'omnigentHost': {'serverUrl': blank}}, 'open-design', self.URL)
+            self.assertEqual(out['omnigentHost']['serverUrl'], self.URL, repr(blank))
 
     def test_null_block_does_not_crash(self):
         """``omnigentHost: null`` 不能讓 setdefault 拋 TypeError 打掛整個部署。"""
@@ -179,7 +200,7 @@ class TestWorkspaceOmnigentUrlInjection(TransactionCase):
         self.assertIsNone(self._injected(self.cs))
 
     def test_noop_for_omnigent_in_other_namespace(self):
-        """baseline NetworkPolicy 只放行同 namespace；跨 namespace 的網址給了也連不上。"""
+        """各 chart 開給 Omnigent 的 egress 只涵蓋自己的 namespace，跨 ns 的網址多半連不上。"""
         self._omni(namespace='paas-ws-elsewher')
         self.assertIsNone(self._injected(self.cs))
 
@@ -201,9 +222,7 @@ class TestWorkspaceOmnigentUrlInjection(TransactionCase):
         older = self._omni(release='svc-omolder1')
         self._set_create_date(newer, '2026-09-30 12:00:00')
         self._set_create_date(older, '2026-09-01 12:00:00')
-        with self.assertLogs(
-                'odoo.addons.woow_paas_platform.models.cloud_service',
-                level=logging.INFO) as logs:
+        with self.assertLogs(_LOGGER, level=logging.INFO) as logs:
             got = self._injected(self.cs)
         self.assertEqual(got, _url('svc-omolder1-omnigent'))
         self.assertTrue(
@@ -275,3 +294,119 @@ class TestWorkspaceOmnigentUrlInjection(TransactionCase):
         self.assertEqual(
             omni_tpl.helm_chart_name.rsplit('/', 1)[-1], _OMNIGENT_CHART_NAME)
         self.assertEqual(omni_tpl.default_port, _OMNIGENT_DEFAULT_SERVICE_PORT)
+        # 真正拿來組網址的是 helm_values 的 service.port（template 預設 merge 進來的），
+        # 不是 default_port——seed 改了 service.port 而這裡沒跟上必須紅。
+        seed_service = json.loads(omni_tpl.helm_default_values).get('service', {})
+        self.assertEqual(
+            seed_service.get('port', _OMNIGENT_DEFAULT_SERVICE_PORT),
+            _OMNIGENT_DEFAULT_SERVICE_PORT)
+        self.assertEqual(
+            seed_service.get('targetPort', _OMNIGENT_DEFAULT_SERVICE_PORT),
+            _OMNIGENT_DEFAULT_SERVICE_PORT,
+            'open-design 的 omnigentEgress 只對 Omnigent pod 的 8000 開洞')
+
+    # ---- explicit value / reachability warning ----------------------------
+
+    def test_explicit_value_in_helm_values_wins_and_is_logged(self):
+        self._omni()
+        explicit = 'https://omnigent.example.com'
+        self.cs.write({'helm_values': json.dumps(
+            {'omnigentHost': {'serverUrl': explicit}})})
+        with self.assertLogs(_LOGGER, level=logging.INFO) as logs:
+            got = self._injected(self.cs)
+        self.assertEqual(got, explicit)
+        self.assertTrue(
+            any('keeps its explicit omnigentHost.serverUrl' in line
+                and str(self.cs.id) in line for line in logs.output),
+            logs.output)
+        self.assertFalse(any(explicit in line for line in logs.output),
+                         '網址不進 log（管理員可能帶了 userinfo）')
+
+    def test_explicit_blank_value_is_replaced(self):
+        self._omni()
+        self.cs.write({'helm_values': json.dumps({'omnigentHost': {'serverUrl': ''}})})
+        self.assertEqual(self._injected(self.cs), _url('svc-om000001-omnigent'))
+
+    def test_target_port_mismatch_warns_but_still_injects(self):
+        self._omni(helm_values={'service': {'port': 8000, 'targetPort': 9000}})
+        with self.assertLogs(_LOGGER, level=logging.WARNING) as logs:
+            got = self._injected(self.cs)
+        self.assertEqual(got, _url('svc-om000001-omnigent'))
+        self.assertTrue(
+            any('targetPort 9000' in line and 'omnigentEgress' in line
+                for line in logs.output), logs.output)
+
+    # ---- reset path: the URL is runtime config (no pod restart) ------------
+
+    def _reset_values(self, svc):
+        client = MagicMock()
+        client.reset_release_config.return_value = {'chart_version': '1.0.0'}
+        svc.write({'state': 'running'})  # reset 完會轉 upgrading；下一次 reset 要 running
+        with patch(_OPERATOR_CLIENT, return_value=client):
+            svc._reset_admin_password()
+        self.assertTrue(client.reset_release_config.called, '前提：reset 真的送出了')
+        return client.reset_release_config.call_args.kwargs['values']
+
+    def test_reset_after_late_omnigent_carries_the_url(self):
+        """review major（F-461-2 同型）：code-server 先開、Omnigent 後買，接著重設密碼。
+
+        reset 走 ``helm upgrade --atomic --timeout 15s``，前提是 pod template 不變。
+        網址只進 chart 的 runtime ConfigMap（不入 checksum，套件測試
+        kit_assert_runtime_server_url 守線），所以 reset 照常重算、把新網址帶上去是
+        **安全且想要的**：ConfigMap 就地更新，supervisor 下次讀檔就看到。這裡釘住
+        平台這一側——reset 與 deploy 走同一條組裝，不另走一套。
+        """
+        tpl = self.env['woow_paas_platform.cloud_app_template'].create({
+            'name': 'T code-server reset', 'slug': 'code-server',
+            'helm_repo_url': '', 'helm_chart_name': 'oci://example/code-server',
+            'helm_chart_version': '1.0.0', 'mcp_enabled': False,
+            'has_admin_gui': True, 'admin_password_carrier': 'helm_secret',
+            'admin_password_settable': True,
+            'min_vcpu': 1, 'min_ram_gb': 1.0, 'min_storage_gb': 1,
+        })
+        cs = _internal_provision(self.env['woow_paas_platform.cloud_service'].with_context(
+            mcp_admin_password='old-password-0000',
+        )).create({
+            'name': 'svc-csreset1', 'workspace_id': self.ws.id,
+            'template_id': tpl.id, 'state': 'running',
+            'helm_release_name': 'svc-csreset1', 'helm_namespace': _NS,
+            'helm_values': json.dumps({'omnigentHost': {'enabled': True}}),
+        })
+        before = self._reset_values(cs)
+        self.assertNotIn('serverUrl', before.get('omnigentHost', {}))
+
+        self._omni()
+        after = self._reset_values(cs)
+        self.assertEqual(after['omnigentHost'],
+                         {'enabled': True, 'serverUrl': _url('svc-om000001-omnigent')})
+        self.assertEqual(after, cs._assemble_deploy_values()['values'],
+                         'reset 與 deploy 同一條組裝')
+
+    # ---- non-superuser triggers (sudo lookup) ------------------------------
+
+    def test_tenant_members_get_the_same_url(self):
+        """部署可能由租戶身分觸發（owner／admin 的「儲存設定」走未 sudo 的 service）：
+        注入結果不得因觸發者是誰而不同。"""
+        users = {
+            role: new_test_user(self.env, login='omni-url-%s' % role,
+                                groups='base.group_user')
+            for role in ('owner', 'admin', 'user', 'guest')
+        }
+        for user in users.values():
+            self.assertFalse(user.has_group('base.group_system'), '前提：非系統管理員')
+        ws = self.env['woow_paas_platform.workspace'].create({
+            'name': 'Omnigent URL tenant WS', 'owner_id': users['owner'].id})
+        Access = self.env['woow_paas_platform.workspace_access']
+        for role in ('admin', 'user', 'guest'):
+            Access.create({'workspace_id': ws.id, 'user_id': users[role].id, 'role': role})
+        cs = self._svc(self.tpl_cs, 'svc-cstenant', ws=ws)
+        self._omni(release='svc-omtenant', ws=ws)
+        expected = _url('svc-omtenant-omnigent')
+
+        self.assertEqual(cs._workspace_omnigent_url(), expected, 'superuser 基準')
+        for role, user in users.items():
+            self.assertEqual(
+                cs.with_user(user)._workspace_omnigent_url(), expected, role)
+        for role in ('owner', 'admin'):
+            values = cs.with_user(users[role])._assemble_deploy_values()['values']
+            self.assertEqual(values['omnigentHost']['serverUrl'], expected, role)

@@ -19555,3 +19555,39 @@ msgstr "年繳 · 最多省 %(pct)s"
 #: code:addons/woow_paas_platform/static/src/paas/pages/project-kanban/ProjectKanbanPage.xml:0
 msgid "No AI provider is set up for this project yet. Please contact your administrator to enable conversations."
 msgstr "此專案尚未設定 AI 供應商，請聯絡管理員以啟用對話。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_app_template.py:0
+msgid "Git token hosts only accept https; \"%(entry)s\" is not allowed."
+msgstr "Git Token 適用主機只接受 https；「%(entry)s」不能使用。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_app_template.py:0
+msgid "Git token hosts: \"%(entry)s\" is not a valid host name (example: github.com or git.example.com:3000)."
+msgstr "Git Token 適用主機：「%(entry)s」不是有效的主機名稱（例：github.com 或 git.example.com:3000）。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_app_template.py:0
+msgid "Git token hosts: at most %(max)s hosts."
+msgstr "Git Token 適用主機最多 %(max)s 個。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_app_template.py:0
+msgid "Git author name must be one line of at most %(max)s characters, without \" \\ ; # < >."
+msgstr "Git 作者名稱只能是一行、最多 %(max)s 個字，且不能含有 \" \\ ; # < >。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_app_template.py:0
+msgid "Git author email is not a valid email address."
+msgstr "Git 作者 Email 格式不正確。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_app_template.py:0
+msgid "Invalid setting value."
+msgstr "設定值格式不正確。"

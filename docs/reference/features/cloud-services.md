@@ -422,6 +422,8 @@ Workspace Dashboard → Service Card → Service Detail Page → [Overview | Con
 - help_text: string?
 - required: boolean
 - options: string[]? # For select type
+- format: enum? # git_hosts, git_name, email — 純文字欄位的形態驗證（存檔時擋下）＋部署組裝時轉成 chart 形態
+                #（git_hosts：逗號清單 → https URL list）；helm_values 保留租戶原文。見 cloud_app_template.SPEC_FORMAT_PARSERS
 ```
 
 **ResourceSpec**:

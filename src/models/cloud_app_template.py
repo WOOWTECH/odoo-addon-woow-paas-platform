@@ -17,6 +17,120 @@ ADMIN_USERNAME_HELM_PATH_RE = re.compile(r'^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Z
 # 遮罩層只能 fail-closed 全遮。用哨兵而不是 None／{}，是因為那兩個值都可能是合法結果。
 SPECS_UNPARSEABLE = object()
 
+# ---------------------------------------------------------------------------
+# helm_value_specs 的 ``format``：租戶在服務設定裡填的是一行純文字（HelmValueForm
+# 只有 text／password／number／boolean／select），但 chart 要的形態更嚴格。
+#
+# - 存檔（create／reconfigure）時 ``_validate_spec_formats`` 擋下不合法的值，回
+#   租戶看得懂的錯誤訊息；
+# - 部署組裝（``CloudService._assemble_deploy_values``）時 ``_apply_spec_formats``
+#   把存在 helm_values 裡的那行文字轉成 chart 形態（例：逗號清單 → list）。
+#   helm_values 本身保留租戶打的原文，設定頁顯示與再存檔都不會變形。
+#
+# 第一批用在 code-server 的 git 設定（QA CS-02／CS-03）：chart 把這三個值**原樣**
+# 寫進 /etc/gitconfig（``name = {{ . }}``、``[credential "{{ . }}"]``），所以換行、
+# 引號、反斜線、``;``／``#``（gitconfig 註解）都會把整份 gitconfig 弄壞，git 從此
+# 每個指令都報錯——這裡就是那道閘。
+SPEC_FORMAT_GIT_HOSTS = 'git_hosts'
+SPEC_FORMAT_GIT_NAME = 'git_name'
+SPEC_FORMAT_EMAIL = 'email'
+
+_GIT_HOSTS_MAX = 10
+_GIT_NAME_MAX = 100
+_EMAIL_MAX = 254
+_HOST_LABEL = r'[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?'
+_GIT_HOST_RE = re.compile(
+    r'^(?P<host>%s(?:\.%s)*)(?::(?P<port>[0-9]{1,5}))?\Z' % (_HOST_LABEL, _HOST_LABEL))
+# gitconfig 未加引號的值：控制字元（含換行）、引號、反斜線會改變解析；``;``／``#``
+# 開始註解（後面整段被吃掉）；``<``／``>`` git 自己會從作者身分裡剝掉。
+_GIT_VALUE_FORBIDDEN_RE = re.compile(r'[\x00-\x1f\x7f"\\;#<>]')
+_EMAIL_RE = re.compile(
+    r'^[A-Za-z0-9.!$%&\'*+/=?^_`{|}~-]+@'
+    r'[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?'
+    r'(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+\Z')
+
+
+def parse_git_hosts(raw):
+    """``git.tokenHosts``：逗號（或空白）分隔的主機 → chart 要的 https URL list。
+
+    ``github.com, git.example.com:3000`` → ``['https://github.com',
+    'https://git.example.com:3000']``。可帶 ``https://`` 前綴、結尾 ``/``；大小寫
+    不分、重複的去掉、順序保留。只收 https——Git Token 是租戶的憑證，不送明文
+    http。空字串／None → ``(None, None)``＝不設，chart 預設（github.com）補位。
+
+    Returns:
+        (list | None, (error code, params) | None)——錯誤訊息由
+        ``CloudAppTemplate._spec_format_message`` 翻成租戶語言（``_()`` 要在有
+        ``self.env`` 的 frame 裡呼叫才找得到語言）。
+    """
+    if raw is None:
+        return None, None
+    if isinstance(raw, str):
+        items = re.split(r'[,\s]+', raw)
+    elif isinstance(raw, (list, tuple)):
+        items = list(raw)
+    else:
+        return None, ('not_text', {})
+    hosts = []
+    for item in items:
+        if not isinstance(item, str):
+            return None, ('not_text', {})
+        entry = item.strip()
+        if not entry:
+            continue
+        low = entry.lower()
+        if low.startswith('https://'):
+            low = low[len('https://'):]
+        elif '://' in low:
+            return None, ('hosts_not_https', {'entry': entry})
+        low = low.rstrip('/')
+        match = _GIT_HOST_RE.match(low)
+        port = match and match.group('port')
+        if (not match or len(match.group('host')) > 253
+                or (port is not None and not 0 < int(port) < 65536)):
+            return None, ('hosts_invalid', {'entry': entry})
+        url = 'https://%s' % low
+        if url not in hosts:
+            hosts.append(url)
+    if len(hosts) > _GIT_HOSTS_MAX:
+        return None, ('hosts_too_many', {'max': _GIT_HOSTS_MAX})
+    return (hosts or None), None
+
+
+def parse_git_name(raw):
+    """``git.userName``：一行、≤ 100 字、沒有會弄壞 gitconfig 的字元。空 → 不設。"""
+    if raw is None:
+        return None, None
+    if not isinstance(raw, str):
+        return None, ('not_text', {})
+    name = raw.strip()
+    if not name:
+        return None, None
+    if len(name) > _GIT_NAME_MAX or _GIT_VALUE_FORBIDDEN_RE.search(name):
+        return None, ('name_invalid', {'max': _GIT_NAME_MAX})
+    return name, None
+
+
+def parse_email(raw):
+    """``git.userEmail``：一般 email 形態（≤ 254 字、網域至少一個點）。空 → 不設。"""
+    if raw is None:
+        return None, None
+    if not isinstance(raw, str):
+        return None, ('not_text', {})
+    email = raw.strip()
+    if not email:
+        return None, None
+    if len(email) > _EMAIL_MAX or not _EMAIL_RE.match(email):
+        return None, ('email_invalid', {})
+    return email, None
+
+
+SPEC_FORMAT_PARSERS = {
+    SPEC_FORMAT_GIT_HOSTS: parse_git_hosts,
+    SPEC_FORMAT_GIT_NAME: parse_git_name,
+    SPEC_FORMAT_EMAIL: parse_email,
+}
+
 # #501：限量商品的**內建**全域實例上限（slug → 台數）。
 #
 # 這是**安全網不是設定值**——`ir.config_parameter` 有值就覆寫它（營運可不發版調整，
@@ -927,6 +1041,97 @@ class CloudAppTemplate(models.Model):
             )
 
         return filtered, rejected
+
+    def _formatted_value_specs(self):
+        """這個 template 帶 ``format`` 的 spec：``{key: format}``（未知 format 略過）。"""
+        specs = self._parse_helm_value_specs()
+        if not isinstance(specs, dict):
+            return {}
+        out = {}
+        for section in ('required', 'optional'):
+            fields_list = specs.get(section)
+            if not isinstance(fields_list, list):
+                continue
+            for field in fields_list:
+                if not isinstance(field, dict):
+                    continue
+                key, fmt = field.get('key'), field.get('format')
+                if isinstance(key, str) and key and fmt in SPEC_FORMAT_PARSERS:
+                    out[key] = fmt
+        return out
+
+    def _spec_format_message(self, code, params):
+        """把 ``parse_*`` 的錯誤碼翻成租戶語言（``_()`` 需要這個 frame 的 ``self.env``）。"""
+        if code == 'hosts_not_https':
+            return _('Git token hosts only accept https; "%(entry)s" is not allowed.',
+                     **params)
+        if code == 'hosts_invalid':
+            return _('Git token hosts: "%(entry)s" is not a valid host name '
+                     '(example: github.com or git.example.com:3000).', **params)
+        if code == 'hosts_too_many':
+            return _('Git token hosts: at most %(max)s hosts.', **params)
+        if code == 'name_invalid':
+            return _('Git author name must be one line of at most %(max)s characters, '
+                     'without " \\ ; # < >.', **params)
+        if code == 'email_invalid':
+            return _('Git author email is not a valid email address.')
+        return _('Invalid setting value.')
+
+    def _validate_spec_formats(self, flat_values):
+        """存檔前（create／reconfigure）：帶 ``format`` 的鍵不合法就回錯誤訊息。
+
+        Args:
+            flat_values: 已過白名單的 dot-path 扁平 dict（controller 送進來的形態）
+
+        Returns:
+            str | None: 第一個錯誤的租戶語言訊息；全部合法回 None
+        """
+        if not flat_values:
+            return None
+        for key, fmt in self._formatted_value_specs().items():
+            if key not in flat_values:
+                continue
+            _value, error = SPEC_FORMAT_PARSERS[fmt](flat_values[key])
+            if error:
+                return self._spec_format_message(*error)
+        return None
+
+    def _apply_spec_formats(self, values):
+        """部署組裝：把 helm_values 裡帶 ``format`` 的鍵轉成 chart 要的形態（就地）。
+
+        合法 → 正規化後的值（例 git.tokenHosts 逗號清單 → https URL list）；
+        空 → 移除該鍵，chart 預設補位；不合法（繞過存檔驗證、例如管理員直接改了
+        helm_values）→ 同樣移除並記 warning（不記值），寧可少一個設定也不讓一行字串
+        把 chart render 打掛或寫壞 gitconfig。
+
+        Args:
+            values: 巢狀 helm values dict
+
+        Returns:
+            同一個 dict
+        """
+        if not isinstance(values, dict):
+            return values
+        for key, fmt in self._formatted_value_specs().items():
+            parts = key.split('.')
+            parent = values
+            for part in parts[:-1]:
+                parent = parent.get(part) if isinstance(parent, dict) else None
+            if not isinstance(parent, dict) or parts[-1] not in parent:
+                continue
+            normalized, error = SPEC_FORMAT_PARSERS[fmt](parent[parts[-1]])
+            if error:
+                _logger.warning(
+                    "Template %s: stored value for %s is invalid (%s); dropped from "
+                    "the deploy values so the chart default applies",
+                    self.slug, key, error[0],
+                )
+                del parent[parts[-1]]
+            elif normalized is None:
+                del parent[parts[-1]]
+            else:
+                parent[parts[-1]] = normalized
+        return values
 
     @api.model
     def _heal_sticky_helm_value_specs(self):
