@@ -364,6 +364,9 @@ from . import test_code_server_seed
 # Nextcloud 另含 publicUrl 注入（缺了它服務會開起來但整站回「不信任的網域」）
 from . import test_emqx_seed
 from . import test_nextcloud_seed
+# feat: EMQX 對外 MQTT 位址回讀 —— 能力 gate 單一事實源（slug 反直覺 fixture）、
+# 探測三態與 _release_facts 的「只有探過才寫」、operator 掛掉降級成沒探、detail payload
+from . import test_mqtt_address_readback
 # fix: #657 project_access 授權補洞 —— identity anchor 缺失 / role 缺省整道
 # 守衛被跳過 / 無 owner 列保護，與 #556 同構但刻意不在該 PR 內順手修
 # （HttpCase，group_user-only）

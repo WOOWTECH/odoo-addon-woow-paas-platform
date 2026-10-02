@@ -11,6 +11,7 @@ from fastapi import APIRouter, HTTPException, Query, status
 
 from src.config import settings
 from src.models.schemas import (
+    MqttAddressResponse,
     ReleaseCreateRequest,
     ReleaseInfo,
     ReleaseResetConfigRequest,
@@ -562,6 +563,54 @@ def get_release_revisions(namespace: str, name: str):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to get release history. Check operator logs for details.",
+        )
+
+
+@router.get(
+    "/{namespace}/{name}/mqtt-address",
+    response_model=MqttAddressResponse,
+    summary="Get the public MQTT address advertised by the release's ngrok sidecar",
+)
+def get_mqtt_address(namespace: str, name: str):
+    """對外 MQTT 位址（charts/emqx）。
+
+    平台的 Cloudflare 通道只載 HTTP/WS，所以原生 MQTT 走租戶自己的 ngrok agent
+    （chart 的 sidecar）。固定位址（ngrok 保留位址）平台本來就知道——它是租戶填進
+    helm values 的；本端點要解的是**隨機指派**那一種：agent 每次連線拿到的位址只有
+    agent 自己知道，它每 60 秒把當前位址印到自己的 stdout，平台從那裡讀回來。
+
+    回 200 ＋ ``public_url: null`` 是正常狀態（租戶沒開、agent 還沒連上、pod 還沒起來），
+    **不是**錯誤；只有 kubectl 本身失敗才會是 5xx。
+
+    Args:
+        namespace: Release namespace
+        name: Release name
+
+    Returns:
+        The advertised address, or ``public_url: null`` when there is none.
+
+    Raises:
+        HTTPException: 403 namespace 越界、500 kubectl 失敗
+    """
+    try:
+        return MqttAddressResponse(
+            public_url=k8s_service.get_advertised_mqtt_address(namespace, name)
+        )
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=str(e),
+        )
+    except KubectlException as e:
+        logger.error(
+            "Failed to read the advertised MQTT address for %s/%s: %s",
+            namespace,
+            name,
+            e.message,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to read the advertised MQTT address. Check operator logs.",
         )
 
 
