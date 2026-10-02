@@ -924,6 +924,11 @@ from . import test_sh_provision_retry
 # AccessAppCard 讀到 undefined，fail-open 警示會靜默消失。
 from . import test_access_protection_lost_ui_payload
 
+# Access 分頁兩個警告（SA 腿）：「保護未生效」（access_protection_lost）一般 sync 不誤設、
+# HTTP 回 JSON 布林、白名單端點清不掉、關掉再打開保護會清、健康檢查報 access_missing；
+# 「登入方式缺 IdP」（access_unresolved_idp_types）持久化格式、清除與 gate／失敗時沿用。
+from . import test_sa_route_access_warnings
+
 # #1261：CS／SH 換到 0 席方案時，仍受 Access 保護就擋（0 席看不到 Access 頁籤，換過去
 # 保護關不掉、對外 403）。守「擋在退點／關舊訂閱之前、關保護後放行、卡死記錄在 0 席下
 # 仍關得掉、SA 刻意不適用」。
