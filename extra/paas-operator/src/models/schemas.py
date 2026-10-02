@@ -711,6 +711,21 @@ class OdooModuleStatesResponse(BaseModel):
 
 
 
+class MqttAddressResponse(BaseModel):
+    """對外 MQTT 位址（charts/emqx 的 ngrok sidecar 所廣告的那一個）。
+
+    ``public_url`` 為 None 不代表錯誤：租戶沒開對外 MQTT、agent 還沒連上、
+    pod 還在起來，都會落在這裡。呼叫端不得把 None 當失敗。
+    """
+
+    public_url: Optional[str] = Field(
+        default=None,
+        description=(
+            "ngrok agent 當前持有的 tcp://host:port；沒有可報告的位址時為 None"
+        ),
+    )
+
+
 class ErrorResponse(BaseModel):
     """Error response.
 

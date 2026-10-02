@@ -359,6 +359,14 @@ from . import test_ha_full_apporo_seed
 from . import test_pi_agent_seed
 from . import test_omnigent_seed
 from . import test_code_server_seed
+# feat: Nextcloud／EMQX 上架 seed —— app_managed 憑證形態（平台不得宣稱可重設）、
+# image 雙釘與鏡像落地前保持隱藏、規格三處對帳、可調參數只開應用層旋鈕；
+# Nextcloud 另含 publicUrl 注入（缺了它服務會開起來但整站回「不信任的網域」）
+from . import test_emqx_seed
+from . import test_nextcloud_seed
+# feat: EMQX 對外 MQTT 位址回讀 —— 能力 gate 單一事實源（slug 反直覺 fixture）、
+# 探測三態與 _release_facts 的「只有探過才寫」、operator 掛掉降級成沒探、detail payload
+from . import test_mqtt_address_readback
 # fix: #657 project_access 授權補洞 —— identity anchor 缺失 / role 缺省整道
 # 守衛被跳過 / 無 owner 列保護，與 #556 同構但刻意不在該 PR 內順手修
 # （HttpCase，group_user-only）
@@ -967,3 +975,6 @@ from . import test_tenant_orm_lifecycle_guards
 from . import test_notifications_1310
 # #1310：工作區預估月費——訂閱資訊 monthly_estimate（含稅、年繳 ÷12）。
 from . import test_monthly_estimate_1310
+# #1317：只掛 base.group_user 的 owner／admin 經 /woow 開通——deploy_params 改由平台
+# 身分窄寫入；role／workspace 閘與欄位讀取遮蔽不變。
+from . import test_member_create_service_1317
