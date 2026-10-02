@@ -976,3 +976,6 @@ from . import test_monthly_estimate_1310
 # storageClass／物件形 pull secret／expose 目標／addons.selected／identity 注入、初始管理員
 # 密碼鑄造＋sensitive conf.adminPassword（三個部署呼叫點）、建立流程一次性顯示。
 from . import test_woow_odoo_template_1130
+# #1317：只掛 base.group_user 的 owner／admin 經 /woow 開通——deploy_params 改由平台
+# 身分窄寫入；role／workspace 閘與欄位讀取遮蔽不變。
+from . import test_member_create_service_1317
