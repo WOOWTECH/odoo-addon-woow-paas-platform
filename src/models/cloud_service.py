@@ -84,6 +84,12 @@ BITNAMI_ODOO_VALUE_KEYS = frozenset({
 #: #1130：woow-odoo 管理員 login（＝租戶填的 email，`conf.adminEmail`）的格式檢查，
 #: create／reconfigure 共用（#1160）。只擋明顯不是 email 的值；254＝RFC 5321 路徑上限。
 WOOW_ODOO_ADMIN_EMAIL_RE = re.compile(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
+#: #1335：保留給文件／測試、永遠收不到信的網域（RFC 2606 §3 的 example.com／.net／.org
+#: 與其子網域，RFC 2606 §2／RFC 6761 的保留 TLD）。舊版 seed 預填 user@example.com，
+#: 租戶沒改就成了收不到密碼重設信的 Odoo 管理員。只在 create 擋（見
+#: ``_woow_odoo_admin_email_error`` 的 ``reject_reserved``）。
+RESERVED_EMAIL_DOMAINS = frozenset({'example.com', 'example.net', 'example.org'})
+RESERVED_EMAIL_TLDS = frozenset({'example', 'invalid', 'test', 'localhost'})
 
 #: 租戶自設的 admin 帳號（template.admin_username_helm_path 有值的模板）。與 chart
 #: 端 `open-design.basicAuthUsername` 同一條規則：帳號被原樣寫進 htpasswd
@@ -2301,12 +2307,24 @@ class CloudService(models.Model):
             'This Odoo service still runs on the previous Odoo deployment and cannot be '
             'changed or redeployed in place. Please contact support to migrate it.')
 
+    @staticmethod
+    def _is_reserved_email_domain(email):
+        """#1335：email 的網域是否屬於永遠收不到信的保留網域（大小寫、結尾點不計）。"""
+        domain = email.rsplit('@', 1)[-1].strip().rstrip('.').lower()
+        if domain.rsplit('.', 1)[-1] in RESERVED_EMAIL_TLDS:
+            return True
+        return any(domain == d or domain.endswith('.' + d) for d in RESERVED_EMAIL_DOMAINS)
+
     @api.model
-    def _woow_odoo_admin_email_error(self, template, values):
+    def _woow_odoo_admin_email_error(self, template, values, reject_reserved=False):
         """#1130：woow-odoo 的 `conf.adminEmail` 檢查；回錯誤訊息，合格回 ``None``。
 
         檢查的是**合併後**的 values（template 預設＋租戶輸入），create 與 reconfigure
         同一個判準（#1160）。非 woow-odoo template 一律 ``None``。
+
+        ``reject_reserved``（#1335）：另擋 example.com 這類保留網域。只有 create 開
+        ——reconfigure 若也擋，舊預設 user@example.com 的存量服務改任何設定都會被
+        連坐卡住，而 bootstrap 的 set-admin 只在首裝套用 login，改了也不會生效。
         """
         if not template._is_woow_odoo_chart():
             return None
@@ -2315,6 +2333,11 @@ class CloudService(models.Model):
         if (not isinstance(email, str) or len(email) > 254
                 or not WOOW_ODOO_ADMIN_EMAIL_RE.match(email)):
             return _('Administrator email must be a valid email address')
+        if reject_reserved and self._is_reserved_email_domain(email):
+            return _('Administrator email must be a mailbox you can receive mail at '
+                     '(%(domain)s is a reserved example domain, so password reset '
+                     'emails would never arrive)',
+                     domain=email.rsplit('@', 1)[-1])
         return None
 
     def _woow_odoo_selected_addons(self):
