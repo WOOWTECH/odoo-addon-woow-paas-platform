@@ -1973,7 +1973,14 @@ class PaasController(HiddenChainMixin, Controller):
                 'they will not be shown again. Update the Gateway API Key '
                 'wherever you configured it (e.g. your MCP server).'
             )
-        if app_reset_kind != 'none':
+        if app_reset_kind == 'omnigent_exec':
+            # Omnigent：與上游 Members → Reset 相同——不重啟、立刻生效，但不登出既有 session。
+            message = (
+                'Admin password reset. Save the new password now — it will not be '
+                'shown again. It works right away; devices that are already signed in '
+                'stay signed in.'
+            )
+        elif app_reset_kind != 'none':
             # #1370：不重啟、立刻生效；舊 session 失效、兩步驟驗證已關。
             message = (
                 'Admin password reset. Save the new password now — it will not be '

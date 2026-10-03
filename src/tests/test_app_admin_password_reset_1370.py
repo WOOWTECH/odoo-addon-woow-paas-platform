@@ -118,11 +118,11 @@ class TestAppAdminResetCapability1370(_AppAdminResetFixture):
         self.assertEqual(odoo.app_admin_reset_kind, 'odoo_exec')
         self.assertEqual(n8n.app_admin_reset_kind, 'n8n_exec')
         self.assertTrue(odoo.admin_reset_supported and n8n.admin_reset_supported)
-        # omnigent（app_managed）仍不能重設：本票不改它（#1370 留言另評估）。
+        # omnigent（app_managed）：#1370 後續改走 omnigent_exec。
         omnigent = self.env.ref('woow_paas_platform.cloud_app_omnigent', raise_if_not_found=False)
         if omnigent:
-            self.assertEqual(omnigent.app_admin_reset_kind, 'none')
-            self.assertFalse(omnigent.admin_reset_supported)
+            self.assertEqual(omnigent.app_admin_reset_kind, 'omnigent_exec')
+            self.assertTrue(omnigent.admin_reset_supported)
 
     def test_payload_mirrors_kind(self):
         with self._as(self.admin):
@@ -250,3 +250,85 @@ class TestAppAdminResetFlow1370(_AppAdminResetFixture):
         self.assertFalse(result['success'])
         self.assertIn('only be reset', result['error'])
         get_client.return_value.reset_odoo_admin_password.assert_not_called()
+
+
+class TestOmnigentAdminReset1370(_AppAdminResetFixture):
+    """#1370 後續：Omnigent 的 Reset 走 operator exec（omnigent_exec）。
+
+    omnigent 的初始密碼照舊由 has_admin_gui 供給（app_managed），所以它是唯一允許
+    app_admin_reset_kind 與 has_admin_gui 並存的組合；helm 那條 reset 仍必須擋。
+    """
+
+    def setUp(self):
+        super().setUp()
+        Template = self.env['woow_paas_platform.cloud_app_template']
+        self.omni_template = Template.create({
+            'name': 'Omnigent 1370', 'slug': 'omnigent-1370', 'category': 'web',
+            'helm_repo_url': '', 'helm_chart_version': '1.0.0',
+            'helm_chart_name': 'oci://example/omnigent-1370',
+            'has_admin_gui': True, 'admin_password_carrier': 'app_managed',
+            'app_admin_reset_kind': 'omnigent_exec',
+        })
+        Service = _internal_provision(self.env['woow_paas_platform.cloud_service'])
+        self.omni_service = Service.create({
+            'name': 'Omnigent 1370', 'workspace_id': self.workspace.id,
+            'template_id': self.omni_template.id, 'state': 'running',
+            'helm_namespace': 'paas-ws-test-1370', 'helm_release_name': 'omni-1370',
+        })
+
+    def test_capability(self):
+        self.assertTrue(self.omni_template.admin_reset_supported)
+        self.assertFalse(self.omni_template.admin_credentials_settable)
+
+    def test_exception_is_limited_to_app_managed(self):
+        for vals in ({'admin_password_carrier': 'helm_secret'},
+                     {'admin_password_carrier': 'config_json'}):
+            with self.assertRaises(ValidationError, msg=repr(vals)):
+                with self.env.cr.savepoint():
+                    self.omni_template.write(vals)
+        # 其他 kind 仍與 has_admin_gui 互斥，即使是 app_managed。
+        with self.assertRaises(ValidationError):
+            with self.env.cr.savepoint():
+                self.omni_template.write({'app_admin_reset_kind': 'n8n_exec'})
+
+    def test_helm_reset_path_still_refused(self):
+        """model 第二道防線：app_managed 走 helm reset＝假裝成功，照擋。"""
+        from odoo.exceptions import UserError
+        with self.assertRaisesRegex(UserError, 'manages its own admin password'):
+            self.omni_service._reset_admin_password()
+
+    @patch(CLIENT_PATH)
+    def test_reset_calls_omnigent_endpoint_and_stores_password(self, get_client):
+        client = get_client.return_value
+        client.reset_omnigent_admin_password.return_value = {
+            'success': True, 'login': 'admin', 'second_factor_cleared': False}
+
+        result = self._reset(self.omni_service)
+
+        self.assertTrue(result['success'], result)
+        data = result['data']
+        kwargs = client.reset_omnigent_admin_password.call_args.kwargs
+        self.assertEqual(kwargs['release_name'], 'omni-1370')
+        self.assertEqual(data['admin_password'], kwargs['new_password'])
+        self.assertEqual(self._secret(self.omni_service).admin_password, kwargs['new_password'])
+        self.assertEqual(data['admin_username'], 'admin')
+        self.assertEqual(data['template']['app_admin_reset_kind'], 'omnigent_exec')
+        # 與上游 Members → Reset 一致：不登出既有 session、沒有 2FA——文案不能說會登出。
+        self.assertIn('stay signed in', data['message'])
+        self.assertNotIn('two-factor', data['message'])
+        client.reset_release_config.assert_not_called()
+        client.reset_odoo_admin_password.assert_not_called()
+        client.reset_n8n_owner_password.assert_not_called()
+        self.assertEqual(self.omni_service.state, 'running')
+
+    @patch(CLIENT_PATH)
+    def test_refusal_stores_nothing(self, get_client):
+        get_client.return_value.reset_omnigent_admin_password.return_value = {
+            'success': False, 'error_kind': 'failed', 'error_code': 'admin_missing'}
+        before = self._secret(self.omni_service).admin_password
+
+        result = self._reset(self.omni_service)
+
+        self.assertFalse(result['success'])
+        self.assertIn('could not be found', result['error'])
+        self.assertEqual(self._secret(self.omni_service).admin_password, before)

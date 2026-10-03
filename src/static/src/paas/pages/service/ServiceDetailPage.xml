@@ -164,7 +164,11 @@
                     check_gateway_copy_gate_anchor ＋ test_gateway_capability_payload_530。
                 -->
                 <!-- #1370：Odoo／n8n 的 Reset 直接改 app DB——先講清楚後果再讓租戶按。 -->
-                <p t-if="adminResetSupported and isAppAdminReset" class="o_woow_hint">
+                <p t-if="adminResetSupported and isAppAdminReset and appResetKeepsSessions" class="o_woow_hint">
+                    Reset Admin Password issues a new password that works right away.
+                    Devices that are already signed in stay signed in.
+                </p>
+                <p t-if="adminResetSupported and isAppAdminReset and !appResetKeepsSessions" class="o_woow_hint">
                     Reset Admin Password issues a new password that works right away: devices
                     signed in with the old password are signed out, and two-factor sign-in
                     is turned off.
@@ -348,6 +352,7 @@
                 t-if="state.oneTimeCredentials"
                 credentials="state.oneTimeCredentials"
                 mode="credentialsModalMode"
+                appResetKind="service?.template?.app_admin_reset_kind or undefined"
                 onClose.bind="closeCredentials"/>
         </div>
     </t>

@@ -490,13 +490,18 @@ class CloudAppTemplate(models.Model):
     #   - 不擴充 admin_password_carrier：那條的前提是「一定 helm upgrade」，而這兩個
     #     app 的密碼權威在 app DB，helm upgrade 換不到（woow-odoo 的 conf.adminPassword
     #     只在首次 -i base 套用；n8n 的 owner 由 post-deploy init 建在 n8n DB）。
-    # 值決定 operator 走哪支 exec 腳本（odoo/admin-password 或 n8n/owner-password）。
-    # 只做 Reset（平台鑄造、一次性顯示），不開放租戶自設。
+    # 值決定 operator 走哪支 exec 腳本（odoo/admin-password、n8n/owner-password 或
+    # omnigent/admin-password）。只做 Reset（平台鑄造、一次性顯示），不開放租戶自設。
+    # omnigent_exec（#1370 後續）：omnigent 的初始密碼仍走 has_admin_gui 供給鏈
+    # （admin_password_carrier=app_managed，chart 只在首次開機建 admin），之後的 Reset 由
+    # operator exec 改 omnigent 自己的 DB——所以它是唯一允許與 has_admin_gui 並存的 kind，
+    # 且只限 app_managed（見 _check_app_admin_reset_kind）。
     app_admin_reset_kind = fields.Selection(
         selection=[
             ('none', 'None'),
             ('odoo_exec', 'Odoo administrator (operator exec)'),
             ('n8n_exec', 'n8n owner (operator exec)'),
+            ('omnigent_exec', 'Omnigent administrator (operator exec)'),
         ],
         string='App Admin Password Reset',
         default='none',
@@ -504,8 +509,9 @@ class CloudAppTemplate(models.Model):
         help='The app keeps the administrator password in its own database, and the '
              'platform can still reset it by running a script inside the app container '
              '(no helm upgrade, no restart): Odoo resets base.user_admin and clears its '
-             'TOTP; n8n resets the owner account and turns off its MFA. Mutually '
-             'exclusive with "Built-in Admin GUI".',
+             'TOTP; n8n resets the owner account and turns off its MFA; Omnigent resets '
+             'its admin account (signed-in sessions are kept). Mutually exclusive with '
+             '"Built-in Admin GUI", except Omnigent with the "Initial only" carrier.',
     )
 
     # 「平台能不能重設／改這台服務的 admin 憑證」的唯一事實源：reset endpoint 的能力
@@ -729,15 +735,23 @@ class CloudAppTemplate(models.Model):
                     % (record.name or record.slug or record.id)
                 )
 
-    @api.constrains('app_admin_reset_kind', 'has_admin_gui')
+    @api.constrains('app_admin_reset_kind', 'has_admin_gui', 'admin_password_carrier')
     def _check_app_admin_reset_kind(self):
         """#1370：exec 重設與 admin GUI 供給鏈互斥。
 
         兩者同時開著時 controller 只會走其中一條，另一條的承諾（例如 config.json
         的外科式 reset）就靜默失效——寧可在 seed／後台存檔時就擋下。
+
+        唯一例外：omnigent_exec ＋ admin_password_carrier=app_managed。app_managed 的
+        has_admin_gui 只負責**初始**密碼供給、本來就沒有 reset 路可以被遮蔽；Reset 只有
+        exec 這一條。
         """
         for record in self:
-            if (record.app_admin_reset_kind or 'none') != 'none' and record.has_admin_gui:
+            kind = record.app_admin_reset_kind or 'none'
+            if (kind == 'omnigent_exec' and record.has_admin_gui
+                    and record.admin_password_carrier == 'app_managed'):
+                continue
+            if kind != 'none' and record.has_admin_gui:
                 raise ValidationError(_(
                     'Template "%(name)s": "App Admin Password Reset" cannot be combined '
                     'with "Built-in Admin GUI".', name=record.name))

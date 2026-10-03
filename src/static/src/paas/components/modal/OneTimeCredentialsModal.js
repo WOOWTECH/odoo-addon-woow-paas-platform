@@ -25,6 +25,9 @@ export class OneTimeCredentialsModal extends Component {
         // 反之亦然。預設 "reset" 以保持既有呼叫端行為。
         // "in_place"（#1370：Odoo／n8n 的 Reset 直接改 app DB，不重啟、立刻生效）。
         mode: { type: String, optional: true, validate: (m) => ["provision", "reset", "in_place"].includes(m) },
+        // in_place 的後果依 app 而異（鏡射 template.app_admin_reset_kind）：Odoo／n8n 會登出
+        // 舊 session 並關 2FA；Omnigent（omnigent_exec）與上游 Members → Reset 一樣，不登出。
+        appResetKind: { type: String, optional: true },
     };
     static defaultProps = { mode: "reset" };
 
@@ -50,6 +53,9 @@ export class OneTimeCredentialsModal extends Component {
      * 的服務，並回報成「密碼不對」。
      */
     get statusHint() {
+        if (this.props.mode === "in_place" && this.props.appResetKind === "omnigent_exec") {
+            return _t("The new password works right away; the service does not restart. Devices that are already signed in stay signed in.");
+        }
         if (this.props.mode === "in_place") {
             return _t("The new password works right away; the service does not restart. Devices signed in with the old password are signed out, and two-factor sign-in has been turned off — turn it on again after you sign in.");
         }
@@ -101,10 +107,13 @@ export function buildOneTimeCredentials(data) {
     if (data && data.admin_password && data.template
             && data.template.app_admin_reset_kind
             && data.template.app_admin_reset_kind !== "none") {
-        if (data.admin_username) {
+        // Omnigent 的帳號由 chart 固定（admin）；後端沒帶時沿用 app_managed 分支的同一個預設。
+        const username = data.admin_username
+            || (data.template.app_admin_reset_kind === "omnigent_exec" ? "admin" : null);
+        if (username) {
             credentials.push({
                 label: _t("Username"),
-                value: data.admin_username,
+                value: username,
                 hint: _t("Signs in to this service, together with the password below."),
             });
         }

@@ -1733,6 +1733,10 @@
             <field name="mcp_enabled" eval="False"/>
             <field name="has_admin_gui" eval="True"/>
             <field name="admin_password_carrier">app_managed</field>
+            <!-- #1370 後續：初始密碼照舊由 has_admin_gui 供給（chart 只在首次開機建 admin）；
+                 忘記密碼時服務頁 Reset 由 operator exec 進 server 容器、用 omnigent 自己的
+                 AccountStore 改密碼（不重啟；與上游一樣不登出既有 session）。 -->
+            <field name="app_admin_reset_kind">omnigent_exec</field>
             <field name="post_deploy_init_type">none</field>
             <field name="max_per_partner" eval="0"/>
             <field name="is_hidden" eval="False"/>

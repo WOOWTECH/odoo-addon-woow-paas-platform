@@ -780,6 +780,25 @@ class PaaSOperatorClient:
             timeout=APP_ADMIN_RESET_TIMEOUT,
         )
 
+    def reset_omnigent_admin_password(
+        self,
+        namespace: str,
+        release_name: str,
+        new_password: str,
+    ) -> Dict[str, Any]:
+        """#1370 後續：重設租戶 Omnigent 的 admin 密碼（帳號不變）。
+
+        operator exec 進 omnigent server 容器，用 omnigent 自己的 AccountStore 寫入（與 app
+        內 Members → Reset 同一條）；不重啟。與上游一致：已登入的 session、已配對的 host
+        都不受影響。語意與錯誤分類同 ``reset_odoo_admin_password``。
+        """
+        return self._request(
+            'POST',
+            f'/api/releases/{namespace}/{release_name}/omnigent/admin-password',
+            data={'new_password': new_password},
+            timeout=APP_ADMIN_RESET_TIMEOUT,
+        )
+
     def get_odoo_module_states(
         self,
         namespace: str,
