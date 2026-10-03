@@ -33,6 +33,12 @@ READY_RETRY_DELAY = 5  # seconds (total wait: 150s)
 # Timeout for the module list update operation
 MODULE_UPDATE_TIMEOUT = 120  # seconds
 
+# #1355：台灣在地化（裝 zh_TW 翻譯＋管理員語言／時區＋公司國家／幣別）的 exec 上限。
+# 這一步排在 module list 之後，計入平台 client read timeout 的同步 envelope
+# （scripts/audit/init_odoo_budget.py；read 900s 必須 > envelope，加入後 865s）。
+# 沙盒實測（Odoo 18、只裝 base＋auto_install 的新 DB）整段約 6 秒，主要是載入翻譯。
+LOCALIZE_TIMEOUT = 60  # seconds
+
 # 容器內執行的 module list 更新腳本。原始碼放在獨立檔案（而非本檔的字串常數）
 # 有兩個理由：一是它就是普通 Python、看得懂也 lint 得到；二是測試可以拿到
 # 「與 kubectl exec 送進去的完全同一份 bytes」在假 odoo 環境下執行。
@@ -40,6 +46,11 @@ MODULE_UPDATE_TIMEOUT = 120  # seconds
 # 部署到一半才發現。
 UPDATE_MODULE_LIST_SCRIPT = (
     Path(__file__).resolve().parent / "odoo_scripts" / "update_module_list.py"
+).read_text(encoding="utf-8")
+
+# #1355：新開租戶 Odoo 的台灣在地化預設；同上，import 時讀進來。
+LOCALIZE_TENANT_SCRIPT = (
+    Path(__file__).resolve().parent / "odoo_scripts" / "localize_tenant.py"
 ).read_text(encoding="utf-8")
 
 
@@ -115,6 +126,9 @@ class OdooInitService:
         # Step 3: Update module list
         result = self._update_module_list(namespace, pod_name, container)
 
+        # Step 4 (#1355): 台灣在地化預設——只對尚未使用的新 DB 生效一次；失敗不讓 init 失敗。
+        localization = self._localize(namespace, pod_name, container)
+
         logger.info(
             "Odoo module list initialization complete for %s/%s: "
             "added=%d, updated=%d, stale_cleaned=%d",
@@ -131,6 +145,7 @@ class OdooInitService:
             "modules_updated": result.get("updated", 0),
             "modules_cleaned": result.get("cleaned", 0),
             "message": "Module list updated successfully",
+            "localization": localization,
         }
 
     def _get_odoo_pod(self, namespace: str, release_name: str) -> str:
@@ -383,3 +398,63 @@ class OdooInitService:
             )
 
         return data
+
+    def _localize(self, namespace: str, pod_name: str, container: str) -> dict:
+        """#1355：套用台灣在地化預設（zh_TW、Asia/Taipei、公司國家 TW、幣別 TWD）。
+
+        腳本本體與「只改出廠值、只跑一次、已使用中的 DB 不動」的規則見
+        ``src/services/odoo_scripts/localize_tenant.py``。
+
+        **不會讓 init 失敗**：在地化是便利性預設，不是服務可用的前提——Odoo 在
+        這一步之前已經 ready、module list 也更新完了。任何失敗（exec 逾時、腳本
+        回報失敗、輸出看不懂）都只記 warning 並回 ``{"success": False, ...}``，
+        由回應的 ``localization`` 欄位帶給平台；下一次 init（redeploy／改 addon）
+        會因為沒有完成標記而再試一次。
+
+        Returns:
+            腳本的 JSON 回報（``success``、``changes``／``skipped``／``error``）。
+        """
+        logger.info("Applying tenant localization defaults for %s/%s", namespace, pod_name)
+        try:
+            exec_result = self.k8s.exec_in_pod(
+                namespace=namespace,
+                pod_name=pod_name,
+                container=container,
+                command=[ODOO_PYTHON, "-c", LOCALIZE_TENANT_SCRIPT],
+                timeout=LOCALIZE_TIMEOUT,
+            )
+            output = exec_result.stdout
+        except KubectlException as e:
+            reported = None if e.timed_out else _last_json_object(e.stdout)
+            if reported is None:
+                reported = {"success": False, "error": f"exec failed: {e}"}
+            logger.warning(
+                "Tenant localization failed for %s/%s: %s",
+                namespace, pod_name, reported.get("error"),
+            )
+            return reported
+        except Exception as e:  # noqa: BLE001 — 在地化失敗不得讓 init 失敗（見 docstring）
+            logger.warning(
+                "Tenant localization failed unexpectedly for %s/%s: %s",
+                namespace, pod_name, e,
+            )
+            return {"success": False, "error": f"unexpected error: {e}"}
+
+        reported = _last_json_object(output)
+        if reported is None:
+            logger.warning(
+                "Tenant localization for %s/%s returned no JSON: %s",
+                namespace, pod_name, (output or "")[-200:],
+            )
+            return {"success": False, "error": "localization returned no JSON"}
+        if reported.get("success"):
+            logger.info(
+                "Tenant localization for %s/%s: changes=%s skipped=%s",
+                namespace, pod_name, reported.get("changes"), reported.get("skipped"),
+            )
+        else:
+            logger.warning(
+                "Tenant localization failed for %s/%s: %s",
+                namespace, pod_name, reported.get("error"),
+            )
+        return reported

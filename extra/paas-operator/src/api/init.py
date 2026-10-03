@@ -122,6 +122,7 @@ def init_odoo(namespace: str, release_name: str):
             modules_added=result.get("modules_added", 0),
             modules_updated=result.get("modules_updated", 0),
             message=result.get("message", "Odoo module list updated"),
+            localization=result.get("localization"),
         )
 
     except OdooInitError as e:
