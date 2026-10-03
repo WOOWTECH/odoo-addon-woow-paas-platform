@@ -1001,3 +1001,5 @@ from . import test_code_server_git_settings
 # #1334：n8n storageClass 改在首裝時釘進 helm_values（PVC 不可變）＋公開網址注入；
 # 範本說明的孤兒磁碟保留天數與正式站 operator 一致。
 from . import test_n8n_storage_class_public_url_1334
+# #1370／#1186：Odoo／n8n 管理員密碼重設（app_admin_reset_kind、operator exec、不 helm upgrade）。
+from . import test_app_admin_password_reset_1370

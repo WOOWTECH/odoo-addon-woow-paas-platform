@@ -3,7 +3,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List, Literal, Optional, Union
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, SecretStr, field_validator, model_validator
 
 
 class ReleaseStatus(str, Enum):
@@ -686,6 +686,43 @@ class OdooInitResponse(BaseModel):
     # #1355：台灣在地化預設的結果（success／changes／skipped／error）。失敗不影響
     # ``success``——在地化不是服務可用的前提；舊平台忽略未知欄位。
     localization: Optional[Dict[str, Any]] = None
+
+
+# --- App 自管管理員密碼重設（#1370／#1186）---
+
+# 腳本回報的原因碼（``success: false`` 時）。平台據此轉成租戶看得懂的可行動訊息。
+AppAdminResetCode = Literal[
+    "admin_missing",      # Odoo：找不到 base.user_admin／n8n：沒有 owner 或 owner 從未 setup
+    "admin_inactive",     # Odoo：base.user_admin 已封存
+    "owner_ambiguous",    # n8n：owner 不只一列，或 UPDATE 影響列數 != 1
+    "hash_unavailable",   # n8n：n8n 安裝目錄裡找不到 bcryptjs／DB driver
+    "db_unsupported",     # n8n：DB_TYPE／schema 不在支援範圍
+    "invalid_password",   # 新密碼長度不在 12–128
+]
+
+
+class AppAdminPasswordResetRequest(BaseModel):
+    """新密碼只在 request body；operator 以 stdin 交給容器，不進 argv／log。
+
+    刻意**不在 schema 上設長度限制**：FastAPI 的 422 回應會把 ``input`` 原文帶回
+    （pydantic v2 對 SecretStr 的長度錯誤同樣先驗內層 str）。長度由 endpoint 自己
+    檢查、回不含原文的錯誤。
+    """
+
+    new_password: SecretStr = Field(..., description="New admin password (12-128 chars)")
+
+
+class AppAdminPasswordResetResponse(BaseModel):
+    success: bool
+    login: Optional[str] = Field(None, description="Odoo login / n8n owner email whose password was reset")
+    second_factor_cleared: bool = Field(
+        default=False, description="Odoo TOTP / n8n MFA was enabled and has been turned off",
+    )
+    message: Optional[str] = None
+    error: Optional[str] = None
+    error_step: Optional[str] = None
+    error_code: Optional[AppAdminResetCode] = None
+    error_kind: Optional[InitErrorKind] = None
 
 
 # --- Odoo Module Management ---

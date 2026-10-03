@@ -49,6 +49,16 @@ INIT_N8N_READ_TIMEOUT = 600
 # rollout 等待後，request 內只剩 helm upgrade（實測 4–12s），把外層預算收到
 # operator 硬上限之上一點，逾時才能重新變成「異常訊號」而不是常態。
 RESET_CONFIG_TIMEOUT = 75
+# #1370：Odoo／n8n 管理員密碼重設（operator exec 腳本直接改 app DB）專屬預算。與
+# reset-config 共用同一條前端 route（RESET_REQUEST_TIMEOUT_MS），所以階梯是
+#
+#     前端 RESET_REQUEST_TIMEOUT_MS(90_000)
+#       > 本常數(75s)
+#         > operator 的 exec 逾時＋找 pod 餘裕（Odoo 45＋15、n8n 30＋15，
+#           見 extra/paas-operator/src/services/app_admin_password.py）
+#
+# 由 scripts/audit/repo-lint.py 的 check_app_admin_reset_budget_ladder 驗算。
+APP_ADMIN_RESET_TIMEOUT = 75
 
 
 class PaaSOperatorError(Exception):
@@ -730,6 +740,44 @@ class PaaSOperatorClient:
             'POST',
             f'/api/releases/{namespace}/{release_name}/init/odoo',
             timeout=(INIT_ODOO_CONNECT_TIMEOUT, INIT_ODOO_READ_TIMEOUT),
+        )
+
+    def reset_odoo_admin_password(
+        self,
+        namespace: str,
+        release_name: str,
+        new_password: str,
+    ) -> Dict[str, Any]:
+        """#1370：重設租戶 Odoo 的 base.user_admin 密碼（login 不變）並清掉 2FA。
+
+        operator 把新密碼經 stdin 交給容器內的 ORM 腳本，直接改租戶 DB；不 helm
+        upgrade、不重啟。業務失敗回 200＋``success: false``（``error_kind``／
+        ``error_code`` 見 operator 的 ``AppAdminPasswordResetResponse``）。
+
+        ⛔ ``new_password`` 只在 request body；本 client 的 log 只記 method／endpoint。
+        """
+        return self._request(
+            'POST',
+            f'/api/releases/{namespace}/{release_name}/odoo/admin-password',
+            data={'new_password': new_password},
+            timeout=APP_ADMIN_RESET_TIMEOUT,
+        )
+
+    def reset_n8n_owner_password(
+        self,
+        namespace: str,
+        release_name: str,
+        new_password: str,
+    ) -> Dict[str, Any]:
+        """#1370：重設租戶 n8n 的 owner 密碼（email 不變）並關掉 MFA。
+
+        語意同 ``reset_odoo_admin_password``；n8n 的 API key 與 MCP sidecar 不受影響。
+        """
+        return self._request(
+            'POST',
+            f'/api/releases/{namespace}/{release_name}/n8n/owner-password',
+            data={'new_password': new_password},
+            timeout=APP_ADMIN_RESET_TIMEOUT,
         )
 
     def get_odoo_module_states(

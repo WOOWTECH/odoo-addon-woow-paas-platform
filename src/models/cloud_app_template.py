@@ -482,6 +482,32 @@ class CloudAppTemplate(models.Model):
              'templates with has_admin_gui=True.',
     )
 
+    # #1370／#1186：app 自管密碼、但平台能 exec 進容器直接改 app DB 的模板（Odoo 的
+    # base.user_admin、n8n 的 owner）。與 has_admin_gui／admin_password_carrier 是**兩條
+    # 不同的契約**，刻意不共用：
+    #   - 不重用 has_admin_gui：那會觸發 config.sensitive.admin_password 的供給鏈，
+    #     woow-odoo tenant schema（additionalProperties:false）直接擋。
+    #   - 不擴充 admin_password_carrier：那條的前提是「一定 helm upgrade」，而這兩個
+    #     app 的密碼權威在 app DB，helm upgrade 換不到（woow-odoo 的 conf.adminPassword
+    #     只在首次 -i base 套用；n8n 的 owner 由 post-deploy init 建在 n8n DB）。
+    # 值決定 operator 走哪支 exec 腳本（odoo/admin-password 或 n8n/owner-password）。
+    # 只做 Reset（平台鑄造、一次性顯示），不開放租戶自設。
+    app_admin_reset_kind = fields.Selection(
+        selection=[
+            ('none', 'None'),
+            ('odoo_exec', 'Odoo administrator (operator exec)'),
+            ('n8n_exec', 'n8n owner (operator exec)'),
+        ],
+        string='App Admin Password Reset',
+        default='none',
+        required=True,
+        help='The app keeps the administrator password in its own database, and the '
+             'platform can still reset it by running a script inside the app container '
+             '(no helm upgrade, no restart): Odoo resets base.user_admin and clears its '
+             'TOTP; n8n resets the owner account and turns off its MFA. Mutually '
+             'exclusive with "Built-in Admin GUI".',
+    )
+
     # 「平台能不能重設／改這台服務的 admin 憑證」的唯一事實源：reset endpoint 的能力
     # gate（controllers/paas.py）、model 端 _reset_admin_password 的防線、以及前端
     # 「Admin Credentials」按鈕（payload template.admin_reset_supported 鏡射）三處都
@@ -497,12 +523,14 @@ class CloudAppTemplate(models.Model):
              'apps that own the password after first boot (Initial only).',
     )
 
-    @api.depends('has_admin_gui', 'admin_password_carrier')
+    @api.depends('has_admin_gui', 'admin_password_carrier', 'app_admin_reset_kind')
     def _compute_admin_reset_supported(self):
         for record in self:
             record.admin_reset_supported = bool(
-                record.has_admin_gui
-                and record.admin_password_carrier != 'app_managed'
+                (record.has_admin_gui
+                 and record.admin_password_carrier != 'app_managed')
+                # #1370：app DB 由 operator exec 重設（Odoo／n8n）。
+                or (record.app_admin_reset_kind or 'none') != 'none'
             )
 
     # 租戶可改的 admin 帳號：**帳號在 chart values 的哪個路徑**（點分式）。空值＝帳號由
@@ -700,6 +728,19 @@ class CloudAppTemplate(models.Model):
                       'To list it, turn both switches off.')
                     % (record.name or record.slug or record.id)
                 )
+
+    @api.constrains('app_admin_reset_kind', 'has_admin_gui')
+    def _check_app_admin_reset_kind(self):
+        """#1370：exec 重設與 admin GUI 供給鏈互斥。
+
+        兩者同時開著時 controller 只會走其中一條，另一條的承諾（例如 config.json
+        的外科式 reset）就靜默失效——寧可在 seed／後台存檔時就擋下。
+        """
+        for record in self:
+            if (record.app_admin_reset_kind or 'none') != 'none' and record.has_admin_gui:
+                raise ValidationError(_(
+                    'Template "%(name)s": "App Admin Password Reset" cannot be combined '
+                    'with "Built-in Admin GUI".', name=record.name))
 
     @api.constrains('admin_username_helm_path', 'has_admin_gui',
                     'admin_password_carrier')

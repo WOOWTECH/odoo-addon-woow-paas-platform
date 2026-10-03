@@ -3,7 +3,17 @@ import logging
 
 from fastapi import APIRouter, HTTPException, status
 
-from src.models.schemas import N8nInitRequest, N8nInitResponse, OdooInitResponse
+from src.models.schemas import (
+    AppAdminPasswordResetRequest,
+    AppAdminPasswordResetResponse,
+    N8nInitRequest,
+    N8nInitResponse,
+    OdooInitResponse,
+)
+from src.services.app_admin_password import (
+    AppAdminPasswordService,
+    AppAdminResetError,
+)
 from src.services.helm import KubernetesService
 from src.services.n8n_init import N8nInitError, N8nInitService
 from src.services.odoo_init import OdooInitError, OdooInitService
@@ -14,6 +24,7 @@ router = APIRouter(prefix="/api/releases", tags=["init"])
 k8s_service = KubernetesService()
 n8n_init_service = N8nInitService(k8s_service=k8s_service)
 odoo_init_service = OdooInitService(k8s_service=k8s_service)
+app_admin_password_service = AppAdminPasswordService(k8s_service=k8s_service)
 
 
 def _unexpected_init_failure(message: str) -> HTTPException:
@@ -138,3 +149,78 @@ def init_odoo(namespace: str, release_name: str):
     except Exception as e:
         logger.exception("Unexpected error during Odoo initialization")
         raise _unexpected_init_failure(f"Odoo initialization failed: {str(e)}")
+
+
+# --- App 自管管理員密碼重設（#1370／#1186）----------------------------------
+#
+# 與 reset-config（helm upgrade／exec patch config.json）分開：Odoo／n8n 的密碼權威
+# 在 app 自己的 DB，chart 動不到。業務失敗回 200＋success=false（與 init/* 一致，平台
+# 照 error_kind 分類）；非預期例外回 500＋detail.error_kind=unknown。
+# ⛔ 新密碼不得出現在任何回應、log、例外訊息裡。
+
+_MIN_APP_ADMIN_PASSWORD = 12
+_MAX_APP_ADMIN_PASSWORD = 128
+
+
+def _app_admin_reset(app: str, namespace: str, release_name: str,
+                     request: AppAdminPasswordResetRequest, reset) -> AppAdminPasswordResetResponse:
+    new_password = request.new_password.get_secret_value()
+    if not (_MIN_APP_ADMIN_PASSWORD <= len(new_password) <= _MAX_APP_ADMIN_PASSWORD):
+        # 什麼都還沒碰 ⇒ not_executed；訊息不回顯密碼。
+        return AppAdminPasswordResetResponse(
+            success=False,
+            error="new_password must be 12-128 characters",
+            message=f"{app} admin password reset rejected",
+            error_step="validate",
+            error_code="invalid_password",
+            error_kind="not_executed",
+        )
+    try:
+        result = reset(namespace=namespace, release_name=release_name, new_password=new_password)
+    except AppAdminResetError as e:
+        logger.error("%s admin password reset failed at step '%s' (%s): %s", app, e.step, e.kind, str(e))
+        return AppAdminPasswordResetResponse(
+            success=False,
+            error=f"[{e.step}] {str(e)}",
+            message=f"{app} admin password reset failed at step: {e.step}",
+            error_step=e.step,
+            error_code=e.code,
+            error_kind=e.kind,
+        )
+    except Exception as e:
+        # 只記例外類別：traceback／訊息可能夾帶呼叫參數（含新密碼）。
+        logger.error("Unexpected %s during %s admin password reset in %s/%s",
+                     type(e).__name__, app, namespace, release_name)
+        raise _unexpected_init_failure(f"{app} admin password reset failed: {type(e).__name__}")
+    return AppAdminPasswordResetResponse(
+        success=True,
+        login=result.get("login"),
+        second_factor_cleared=bool(result.get("second_factor_cleared")),
+        message=f"{app} admin password reset",
+    )
+
+
+@router.post(
+    "/{namespace}/{release_name}/odoo/admin-password",
+    response_model=AppAdminPasswordResetResponse,
+    summary="Reset the Odoo administrator password",
+    description="Set a new password on base.user_admin (login unchanged) and clear its TOTP, "
+                "directly in the tenant database. No helm upgrade, no restart.",
+)
+def reset_odoo_admin_password(namespace: str, release_name: str,
+                              request: AppAdminPasswordResetRequest):
+    return _app_admin_reset("Odoo", namespace, release_name, request,
+                            app_admin_password_service.reset_odoo_admin)
+
+
+@router.post(
+    "/{namespace}/{release_name}/n8n/owner-password",
+    response_model=AppAdminPasswordResetResponse,
+    summary="Reset the n8n owner password",
+    description="Set a new password on the n8n owner account (email unchanged) and turn off its MFA, "
+                "directly in the n8n database. No helm upgrade, no restart; the API key is untouched.",
+)
+def reset_n8n_owner_password(namespace: str, release_name: str,
+                             request: AppAdminPasswordResetRequest):
+    return _app_admin_reset("n8n", namespace, release_name, request,
+                            app_admin_password_service.reset_n8n_owner)

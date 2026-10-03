@@ -1,7 +1,7 @@
 ---
 title: Odoo／n8n 管理員密碼重設——方案偵察與介面草稿（#1370）
 category: scout
-status: draft
+status: implemented
 created: 2026-10-03
 updated: 2026-10-03
 related: [docs/reference/features/cloud-services.md]
@@ -9,10 +9,9 @@ related: [docs/reference/features/cloud-services.md]
 
 # Odoo／n8n 管理員密碼重設——方案偵察與介面草稿（#1370）
 
-> 本文是**決策前偵察**：回答「平台要替 Odoo 與 n8n 重設管理員密碼，該怎麼做、風險在哪」。
-> 拍板後 Odoo 部分 promote 到 [#1186](https://git-prod.woowtech.io/odoo-addons/woow_paas_platform/issues/1186)
-> 的實作 PR，n8n 部分另開票；本文屆時標 `superseded`。
-> 文中的程式碼區塊全是**草稿**，不是 repo 內會被執行或被 CI 收集的檔案。
+> 本文原為**決策前偵察**：回答「平台要替 Odoo 與 n8n 重設管理員密碼，該怎麼做、風險在哪」。
+> 已在同一支 PR（#1376）實作 Odoo 與 n8n 兩半，實際做法與草稿的差異見 **§10**；
+> §1–§9 保留為決策紀錄。文中的程式碼區塊是**草稿**，以 repo 內實作為準。
 
 ## 1. 問題
 
@@ -293,3 +292,17 @@ route 不新增：沿用 `POST /api/workspaces/<ws>/services/<id>/reset-admin-pa
 兩支 PR 都只動 operator 與 `src/`，不需要 migration（新欄位由 `-u` 建欄，seed 是 `noupdate=0`）；
 operator 需重建 image 並與 Odoo 發版協調先後（operator 先上，平台後上；反過來時平台會打到不存在的端點，
 應回 `not_executed`）。
+
+## 10. 實作結果（2026-10-03，PR #1376）
+
+| 項目 | 草稿 | 實作 |
+|---|---|---|
+| PR 拆法（§9） | Odoo、n8n 兩支 PR | 一支 PR 兩半一起做（共用能力欄位、端點形狀、測試骨架） |
+| 能力欄位（Q1） | `app_admin_reset_kind` 或 #1186 的 Boolean | `cloud_app_template.app_admin_reset_kind`（`none`／`odoo_exec`／`n8n_exec`），與 `has_admin_gui` 互斥（constraint）；seed 的 odoo／n8n 開啟 |
+| n8n MFA（§5.1 B′） | `n8n mfa:disable` CLI | 同一個 UPDATE 清成與 `mfa:disable` 相同的值（`mfaEnabled=false`、`mfaSecret=NULL`、`mfaRecoveryCodes=''`）——同交易、不再開第二個 n8n 程序（容器只有 1Gi） |
+| n8n owner 判定 | `role = 'global:owner'` | 1.122.4 實際欄位是 `roleSlug`；腳本依 schema 自動選 `roleSlug`／`role`，影響列數必須恰為 1 |
+| n8n DB（Q3） | sqlite／postgres | 兩者都支援（環境變數與 `_FILE` 讀法同 `@n8n/config`、套 `DB_TABLE_PREFIX`） |
+| n8n 憑證同步（§5.3） | 寫回 `n8n_owner_password` | 另外把 `n8n_owner_email` 對齊到實際 owner email（租戶在 n8n 改過 email 的漂移一併修正） |
+| Bitnami 存量（Q4） | 依序嘗試 conf 路徑或只開放 woow-odoo | 沿用 `_woow_odoo_legacy_release_error`：存量服務直接回「請聯絡客服遷移」 |
+| 逾時階梯（§4.2） | 15＜20＜35＜45 | 與 reset-config 共用前端 route ⇒ 前端 90s ＞ 平台 `APP_ADMIN_RESET_TIMEOUT` 75s ＞ operator exec（Odoo 45／n8n 30）＋找 pod 15s；repo-lint `reset-budget-ladder` 驗算。沙盒實測 Odoo 3.6s、n8n 1.8s |
+| 寄信／omnigent | 另開票 | 維持不在本 PR（見 PR 描述） |
