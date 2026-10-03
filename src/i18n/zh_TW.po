@@ -14174,8 +14174,12 @@ msgstr "這會移除 tunnel 設定與所有相關資料。此操作無法復原�
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_cloud_service_form
 #: model_terms:ir.ui.view,arch_db:woow_paas_platform.view_cloud_service_list
 msgid ""
-"This will uninstall the existing release and deploy from scratch. Continue?"
+"Re-apply this product's current chart version to the service (in-place helm "
+"upgrade; data volumes are kept). If the release no longer exists, the service "
+"is installed again. Continue?"
 msgstr ""
+"將此商品目前釘選的 chart 版本重新套用到這個服務（原地 helm upgrade，資料磁碟會保留）。"
+"若 release 已不存在，則重新安裝。確定要繼續？"
 
 #. module: woow_paas_platform
 #. odoo-javascript
