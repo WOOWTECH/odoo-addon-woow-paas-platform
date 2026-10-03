@@ -33,6 +33,12 @@ from src.services.helm import (
     KubernetesService,
 )
 from src.services.helm import _sanitize_release_values
+from src.services.storage_quota import (
+    build_quota_error_detail,
+    exhausted_resources,
+    is_storage_quota_rejection,
+    summarize,
+)
 
 
 # ── #461：reset-config 的時間預算（階梯的最內層，＝單一權威）───────────────
@@ -151,6 +157,50 @@ def _ensure_image_pull_secrets(
     return merged
 
 
+def _storage_quota_summary(namespace: str) -> Optional[Dict[str, Any]]:
+    """#1348：讀 namespace 的儲存配額摘要；讀不到回 None（fail-open，見呼叫端）。"""
+    try:
+        snapshot = k8s_service.get_storage_quota_snapshot(namespace)
+    except (KubectlException, ValueError, json.JSONDecodeError) as exc:
+        logger.warning(
+            "Storage quota pre-check skipped for %s: %s", namespace,
+            getattr(exc, "stderr", None) or exc,
+        )
+        return None
+    return summarize(snapshot["quotas"], snapshot["pvcs"])
+
+
+def _storage_quota_conflict(
+    namespace: str, summary: Optional[Dict[str, Any]], resources: List[str]
+) -> HTTPException:
+    """#1348：儲存配額不足的 409，``detail`` 帶固定 ``error_code`` 供平台轉成租戶訊息。"""
+    detail = build_quota_error_detail(namespace, summary, resources)
+    logger.warning(
+        "Storage quota exhausted in %s: %s (orphaned PVCs: %s)",
+        namespace, detail["usage"], detail.get("orphaned_pvc_count"),
+    )
+    return HTTPException(status_code=status.HTTP_409_CONFLICT, detail=detail)
+
+
+def _precheck_storage_quota(namespace: str) -> None:
+    """#1348：helm install 前確認 PVC 數量／requests.storage 配額沒有用滿。
+
+    只擋「已經滿了」（used ≥ hard）：此時任何會建 PVC 的 chart 都必定在 admission
+    被拒，留下半套 release 與泛用的「Helm installation failed」。剩餘額度不夠本次
+    chart 用（例 odoo 一次 3 顆）的情況事前看不到 chart 要幾顆，交給 install 失敗後
+    的 :func:`is_storage_quota_rejection` 轉成同一個錯誤碼。
+
+    讀不到配額（kubectl 失敗、權限、ns 尚未建立）一律放行——這是給租戶看得懂的
+    說明，不是新的閘門；放行後的行為與本檢查加入前完全相同。
+    """
+    summary = _storage_quota_summary(namespace)
+    if summary is None:
+        return
+    resources = exhausted_resources(summary)
+    if resources:
+        raise _storage_quota_conflict(namespace, summary, resources)
+
+
 @router.post(
     "",
     response_model=ReleaseInfo,
@@ -167,9 +217,11 @@ async def create_release(request: ReleaseCreateRequest):
         Information about the created release
 
     Raises:
-        HTTPException: If installation fails
+        HTTPException: If installation fails（儲存配額不足回 409，#1348）
     """
     try:
+        # #1348：在任何叢集寫入（SA patch／helm install）之前先檢查儲存配額。
+        _precheck_storage_quota(request.namespace)
         # 注入預設 imagePullSecrets（values + ns default SA 兩層，理由見
         # _ensure_image_pull_secrets docstring）。
         values = _ensure_image_pull_secrets(request.namespace, request.values)
@@ -206,6 +258,13 @@ async def create_release(request: ReleaseCreateRequest):
         )
     except HelmException as e:
         logger.error(f"Helm install failed: {e.message}\nStderr: {e.stderr}")
+        # #1348：PVC admission 被儲存配額拒絕（剩餘額度不夠本次 chart 用）——
+        # 轉成與事前檢查同一個錯誤碼，不再只回泛用訊息。
+        rejected = is_storage_quota_rejection(e.stderr)
+        if rejected:
+            raise _storage_quota_conflict(
+                request.namespace, _storage_quota_summary(request.namespace), rejected,
+            )
         # Sanitize error message - don't expose internal details
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

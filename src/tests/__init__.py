@@ -998,3 +998,5 @@ from . import test_omnigent_server_url_injection
 # QA CS-02／CS-03：code-server 的 git 作者身分與 Git Token 適用主機（helm_value_specs
 # 的 ``format``：存檔驗證＋部署時轉成 chart 形態）。
 from . import test_code_server_git_settings
+# #1348：operator 回儲存配額已滿（孤兒 PVC 仍計入配額）時，租戶看到的說明訊息。
+from . import test_storage_quota_message_1348

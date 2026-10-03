@@ -35,6 +35,25 @@ def sa_pull_secret_convergence(request):
         yield mock_ensure
 
 
+@pytest.fixture(autouse=True)
+def storage_quota_snapshot(request):
+    """#1348：``create_release`` 開通前會讀 namespace 的 ResourceQuota／PVC——那也是真 kubectl。
+
+    與上面 ``sa_pull_secret_convergence`` 同一個理由擋掉：預設回「沒有 quota、沒有 PVC」
+    （＝檢查放行，行為與加入檢查前相同）。要測配額已滿的測試把本 fixture 收進參數、
+    改 ``return_value`` 即可。
+    """
+    if request.node.get_closest_marker("integration"):
+        yield None
+        return
+
+    with patch(
+        "src.api.releases.k8s_service.get_storage_quota_snapshot",
+        return_value={"quotas": [], "pvcs": []},
+    ) as mock_snapshot:
+        yield mock_snapshot
+
+
 # ==================== #841 真實 outbound 攔截 ====================
 
 #: 唯一的例外條件。用 **marker** 而不是路徑判斷是有理由的，見
