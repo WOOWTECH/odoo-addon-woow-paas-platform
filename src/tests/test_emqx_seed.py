@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """EMQX 上架 seed 與「平台無法重設憑證」形態的守線斷言。
 
-契約來源：woow-paas-charts charts/emqx 0.1.1（dashboard :18083 是唯一入口、ClusterIP-only、
+契約來源：woow-paas-charts charts/emqx 0.1.2（dashboard :18083 是唯一入口、ClusterIP-only、
 release 前綴命名、built_in_database authenticator ＋ bootstrap_file 種第一組 MQTT 帳密、
 ngrok sidecar 對外轉 1883），以及 paas-odoo-ci mirror-image.yml 鏡像進 JCR 的 image。
 
@@ -67,7 +67,7 @@ class TestEmqxSeed(TransactionCase):
         tpl = self._tpl()
         self.assertEqual(tpl.helm_repo_url or '', '')
         self.assertEqual(tpl.helm_chart_name, EMQX_CHART)
-        self.assertEqual(tpl.helm_chart_version, '0.1.1',
+        self.assertEqual(tpl.helm_chart_version, '0.1.2',
                          'helm_chart_version 留空會被供給閘門靜默擋在購買前（#552）')
 
     def test_platform_cannot_reset_credentials(self):
@@ -152,12 +152,13 @@ class TestEmqxSeed(TransactionCase):
         keys = [s['key'] for s in specs['optional']]
         self.assertEqual(sorted(keys), sorted([
             'ngrok.enabled',
-            'config.sensitive.ngrok_authtoken',
+            'ngrok.authtoken',
             'ngrok.remoteAddr',
             'emqx.listeners.ws.enabled',
         ]))
         by_key = {s['key']: s for s in specs['optional']}
-        self.assertEqual(by_key['config.sensitive.ngrok_authtoken']['type'], 'password')
+        self.assertEqual(by_key['ngrok.authtoken']['type'], 'password',
+                         'password 型才會被平台在所有 API 回應中遮罩')
         self.assertEqual(by_key['ngrok.enabled']['type'], 'boolean')
         self.assertEqual(by_key['emqx.listeners.ws.enabled']['type'], 'boolean')
         for key in keys:
