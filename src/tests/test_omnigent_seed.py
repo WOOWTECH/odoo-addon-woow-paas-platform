@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Omnigent 上架 seed 與 app_managed 密碼載體的守線斷言。
 
-契約來源：woow-paas-charts charts/omnigent 0.1.0（server :8000 是唯一入口、無 auth-proxy；
+契約來源：woow-paas-charts charts/omnigent 0.1.0 起（0.1.2 加租戶 LLM 金鑰，#1379；server :8000 是唯一入口、無 auth-proxy；
 admin 由 OMNIGENT_ACCOUNTS_INIT_ADMIN_* 在第一次開機建立；SQLite；runner 走上游
 kubernetes managed sandbox），paas-odoo-ci mirror-image.yml #159/#160（上游 image 原樣鏡像）。
 
@@ -45,7 +45,8 @@ class TestOmnigentSeed(TransactionCase):
         tpl = self._tpl()
         self.assertEqual(tpl.helm_repo_url or '', '')
         self.assertEqual(tpl.helm_chart_name, OMNI_CHART)
-        self.assertEqual(tpl.helm_chart_version, '0.1.0')
+        self.assertEqual(tpl.helm_chart_version, '0.1.2',
+                         '0.1.2：#1379 租戶 LLM 金鑰＋host_config、#1358 PaaS 登入文案')
 
     def test_initial_password_only(self):
         """has_admin_gui（開通時供給、一次性顯示）＋ app_managed（之後平台不能重設）。"""
@@ -97,6 +98,22 @@ class TestOmnigentSeed(TransactionCase):
             p = self.env.ref('woow_paas_platform.%s' % xmlid)
             self.assertTrue(p.sh_product_subscribe, xmlid)
             self.assertFalse(p.taxes_id, '%s 免稅（同其他 cloud service 產品）' % xmlid)
+
+    def test_llm_key_specs(self):
+        """#1379：受管 session 要有模型可用，租戶只能經這兩個 password 欄位帶金鑰。
+
+        chart 0.1.2 只把 auth.openrouterApiKey／auth.anthropicApiKey 寫進 runner env Secret，
+        並據此產生 sandbox.host_config；欄位必須是 password（服務詳情 API 遮罩、#535），
+        不能是 required（沒有金鑰也能只用自己的機器）。
+        """
+        specs = json.loads(self._tpl().helm_value_specs)
+        self.assertEqual(specs['required'], [])
+        by_key = {s['key']: s for s in specs['optional']}
+        self.assertEqual(set(by_key), {'auth.openrouterApiKey', 'auth.anthropicApiKey'})
+        for key, spec in by_key.items():
+            self.assertEqual(spec['type'], 'password', key)
+            self.assertNotIn('default', spec, '%s 不能有預設值' % key)
+        self.assertNotIn('auth', self._values(), '金鑰不得寫進 helm_default_values')
 
     def test_listed(self):
         """2026-09-30 公開上架（is_hidden=False）；不 conceal、既有實例照常可見。
