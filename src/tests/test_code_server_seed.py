@@ -52,7 +52,7 @@ class TestCodeServerSeed(TransactionCase):
         tpl = self._tpl()
         self.assertEqual(tpl.helm_repo_url or '', '')
         self.assertEqual(tpl.helm_chart_name, CS_CHART)
-        self.assertEqual(tpl.helm_chart_version, '0.1.2')
+        self.assertEqual(tpl.helm_chart_version, '0.1.3')
 
     def test_password_only_and_settable(self):
         tpl = self._tpl()
