@@ -799,7 +799,7 @@
                 v0.24.1，內建 Claude Code 與 OpenCode）：daemon（設計稿 API 服務，對外埠 7457）＋
                 console（ttyd web terminal + Flask dashboard）。存取以帳號密碼登入（預設帳號
                 admin、密碼由平台建立服務時產生並一次性顯示）；帳號與密碼都可在服務頁自行修改，
-                OpenDesign 與 console 共用同一組，修改後服務會重啟約一分鐘生效。nginx auth-proxy
+                OpenDesign 與 console 共用同一組，修改後約一至兩分鐘生效（OpenDesign 本身不重啟）。nginx auth-proxy
                 閘同時罩住 daemon UI／API 與 console，瀏覽器原生登入、免改上游。console 可互動執行 claude login 完成
                 Claude 登入（登入態與 opencode 設定存 od-home PVC、跨 Pod 重啟保留），亦可於
                 部署時自帶 ANTHROPIC_API_KEY。與 Open Design MCP（mcp-opendesign）形成生態
@@ -833,10 +833,18 @@
                  改了不重啟；租戶在 /console/ 執行 omnigent login）＋ daemon image
                  20261002.2302@sha256:f5f35737…（paas-odoo-ci #216，核可 #220：內建釘版 omnigent CLI、
                  tini、列印 CSS／baseHref／繁中修正）。console image 不變。前一版 daemon
-                 20260929.0018@sha256:5d97a9de…＋chart 0.2.1。 -->
+                 20260929.0018@sha256:5d97a9de…＋chart 0.2.1。
+                 2026-10-03 換 chart 0.3.0（woow-paas-charts #114，Refs #1360）：daemon 改
+                 StatefulSet（pod 固定 <fullname>-0），console Role 的 pods／pods/exec／pods/log
+                 全部以 resourceNames 綁這一個 pod——console 不能再 exec 進同工作區其他服務。
+                 auth-proxy htpasswd 改為 chart Secret 的 Secret volume：平台重設密碼仍只
+                 rollout restart Deployment（現在只有 console），daemon 不重啟、約 1–2 分鐘內
+                 由 kubelet 同步生效（沙盒實測 97 秒）。既有服務 Redeploy 時 Deployment→
+                 StatefulSet 換一次（約 1 分鐘，PVC 名稱不變、資料保留；podAntiAffinity
+                 確保新舊 daemon 不會同時掛同一組 PVC）。helm_default_values 不需改。 -->
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/open-design</field>
-            <field name="helm_chart_version">0.2.2</field>
+            <field name="helm_chart_version">0.3.0</field>
             <field name="helm_default_values">{"image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/open-design", "tag": "20261002.2302@sha256:f5f357373a9651f7d8ca3db3fefe9c041d9d9fab29c595524f9502c72ba80b84"}, "service": {"port": 7457}, "persistence": {"data": {"size": "8Gi", "mountPath": "/app/.od"}, "home": {"size": "2Gi", "mountPath": "/home/opendesign"}}, "resources": {"requests": {"cpu": "1", "memory": "2Gi"}, "limits": {"cpu": "4", "memory": "8Gi"}}, "authProxy": {"enabled": true, "basicAuth": {"enabled": true, "username": "admin"}}, "console": {"enabled": true, "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/open-design-console", "tag": "20260720.0332@sha256:2b91c4ad4a6a94d1735c8aa7a6c18ec05491d9db31fa455f5e5da1cbb52b0f92"}}}</field>
             <field name="helm_value_specs">{"required": [], "optional": [
                 {"key": "auth.anthropicApiKey", "label": "Anthropic API Key", "type": "password",
