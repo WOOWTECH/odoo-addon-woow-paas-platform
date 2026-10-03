@@ -15,11 +15,11 @@ implementation_status: implemented
 ## Overview
 
 OpenDesign 是一個「完整應用」型 cloud service（`slug=open-design`，template `cloud_app_opendesign`）。
-一個部署由**兩個 Deployment / 三個容器**組成：
+一個部署由**一個 StatefulSet（daemon，chart 0.3.0 起）＋一個 Deployment（console）/ 三個容器**組成：
 
 | 元件 | Pod | Port | 角色 |
 | --- | --- | --- | --- |
-| **daemon** | `<release>-open-design` | 7457（loopback）| OpenDesign 本體。跑 AI agent CLI（`claude` 等）。綁 loopback，不對外。 |
+| **daemon** | `<release>-open-design-0`（StatefulSet，名稱固定）| 7457（loopback）| OpenDesign 本體。跑 AI agent CLI（`claude` 等）。綁 loopback，不對外。 |
 | **authproxy**（sidecar）| 同 daemon pod | 8080 | nginx basic-auth 閘 + 反向代理。對外流量的唯一入口。 |
 | **console** | `<release>-open-design-console` | 7681 / 18790 | ttyd 網頁終端（7681）+ Flask 管理儀表板（18790）。 |
 
@@ -78,48 +78,46 @@ console pod 之所以能 `kubectl exec`，是因為掛了一張 **ServiceAccount
 **token 本身不帶任何權限**——它只證明「我是這個 SA」。能做什麼完全由 RoleBinding 綁的 Role 決定。
 所以「危險的」不是 token，是這個 SA 被授予的 Role。
 
-### Role 的權限（namespace 範圍）
+### Role 的權限（每條規則都綁名稱，chart 0.3.0 起，#1360）
 
 console SA 的 Role（chart 定義，per-release）：
 
-| 資源 | verbs | resourceNames | 範圍 |
-| --- | --- | --- | --- |
-| `pods` | get, list | *(無)* | **整個 workspace namespace** |
-| `pods/exec` | create, get | *(無)* | **整個 workspace namespace** |
-| `pods/log` | get | *(無)* | 整個 namespace |
-| `deployments` (apps) | get, patch | `<release>-open-design` | 只有自己那個 |
-| `secrets` | get, patch, update | `<release>-open-design-secrets` | 只有自己那個 |
+| 資源 | verbs | resourceNames |
+| --- | --- | --- |
+| `pods` | get | `<release>-open-design-0` |
+| `pods/exec` | create, get | `<release>-open-design-0` |
+| `pods/log` | get | `<release>-open-design-0` |
+| `statefulsets` (apps) | get, patch | `<release>-open-design` |
+| `secrets` | get, patch, update | `<release>-open-design-secrets` |
 
-綁定用 **`RoleBinding` → `Role`**（namespace scope），**指向此 SA 的 `ClusterRoleBinding` = 0 筆**。
-這是「blast radius 限於一個 workspace」的技術根源：
+沒有任何 list／watch。綁定用 **`RoleBinding` → `Role`**（namespace scope），**指向此 SA 的
+`ClusterRoleBinding` = 0 筆**。
 
-- ✅ 只能在自己的 workspace namespace 內動作
-- ❌ 碰不到其他 namespace / 其他租戶 / 叢集節點 / kube-system；不能建 ClusterRoleBinding
+### 為什麼 daemon 是 StatefulSet（#1360）
 
-### blast radius：workspace 內是「全部 pod」
+RBAC 不能用 label 選 pod，`resourceNames` 只能寫完整名稱。chart 0.2.x 的 daemon 是 Deployment，pod 名
+`<rs>-<random>` 無法預先寫進 Role，所以 `pods`／`pods/exec`／`pods/log` 只能開整個 namespace——
+**console SA 可以 exec 進同工作區所有服務的 pod**（Odoo＋PostgreSQL、n8n、其他服務的 token）。沙盒以
+0.2.2 實測可從 console 讀到同 ns 另一個 pod 的檔案。0.3.0 把 daemon 改成 StatefulSet（pod 固定
+`<fullname>-0`），每條規則都綁名稱；同樣的操作回 `Forbidden`。
 
-注意 `pods` / `pods/exec` **沒有 `resourceNames` 限制**——原因是 Kubernetes RBAC 的 `resourceNames`
-**對 `list` 動作無效**，而且 pod 名帶 deployment hash（每次部署都變）無法預先綁死。因此：
+連帶影響：
 
-> **console SA 的 token 可以 `kubectl exec` 進同 workspace 內的任何 pod**（含租戶在同 workspace 的其他
-> 服務，如 n8n）。secrets / deployments 有 `resourceNames` 綁死只能碰自己的，但 **pods/exec 是
-> namespace-wide**。
+- **重設密碼**：operator 的 `_reset_via_helm_secret` 只 `rollout restart` Deployment（現在只有 console）。
+  daemon 的 auth-proxy htpasswd 改成 chart Secret 的 `htpasswd` key、以 Secret volume 掛載（nginx 每個
+  請求重讀），kubelet 同步後生效（約 1–2 分鐘，沙盒實測 97 秒），OpenDesign 本身不重啟。
+- **Redeploy 0.2.x → 0.3.0**：Deployment 換成 StatefulSet 一次（約 1 分鐘），PVC 名稱不變、資料保留；
+  daemon 的 podAntiAffinity 讓新 pod 不會跟舊 Deployment pod 同 node，RWO PVC 等舊 pod 結束才掛得上，
+  兩個 daemon 不會同時寫 `/app/.od`。
+- operator 的 `patch_sidecar`（自動取 `deployments[0]`）對 OpenDesign 會選到 console，不要對 OpenDesign 用。
+- hermes-agent chart 的 console Role 仍是同型的 namespace 範圍 exec（另案處理）。
 
-### 但這個能力「不易被觸及」——三道結構性防線
-
-raw RBAC 看起來很寬，但實際可達性被三件事壓低：
+### 其他結構性防線（仍然有效）
 
 1. **console pod 沒有互動入口**：唯一的外部入口 ttyd 永遠 `kubectl exec` **進 daemon**，
-   使用者從頭到尾拿不到 console pod 自己的 shell → 拿不到那張 token 去用。
-2. **daemon pod 是「無憑證」的**：daemon（跑任意 agent 程式碼、最可能被塞入 untrusted code 的 pod）
-   `automountServiceAccountToken: false`、容器內**沒有 kubectl**。就算 daemon 被打下來，也沒有 k8s 憑證可用。
-3. **NetworkPolicy 隔開 daemon↔console 的危險面**：daemon → console:7681（ttyd）通（反代需要），
-   但 daemon → console:18790（Flask，會直接呼叫 kubectl 的那半）**被 NP 擋**。所以就算 daemon 被打下來，
-   也碰不到 console 的 kubectl 端點。
-
-**淨結論**：能力很大的 token 坐在一個**沒有互動入口、且與唯一 untrusted pod 之間有 NP 隔離**的 pod 裡。
-raw RBAC 的名目風險 ≫ 實際可觸及風險。要留意的長期風險是「有人日後把 Flask 儀表板接出去而沒配好認證」——
-那會把 kubectl 端點暴露成 HTTP surface。
+   使用者從頭到尾拿不到 console pod 自己的 shell。
+2. **daemon pod 是「無憑證」的**：`automountServiceAccountToken: false`、容器內**沒有 kubectl**。
+3. **NetworkPolicy**：daemon → console:7681（ttyd）通，daemon → console:18790（Flask）被 NP 擋。
 
 > ⚠️ 診斷方法論教訓：驗證 pod 間連通性用 `python3 socket.connect()`（拿乾淨的
 > `ConnectionRefusedError`）比 `kubectl --server=<ip>` 可靠——後者無憑證時會印「Please enter Username」，

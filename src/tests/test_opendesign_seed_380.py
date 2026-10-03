@@ -62,13 +62,16 @@ class TestOpendesignTemplateSeed(TransactionCase):
         0.2.0＝OpenDesign 0.24.1 image（上游預建 base ＋ Claude Code／OpenCode）；
         authProxy.basicAuth.username 開放租戶自設並於 render 時驗證；選填
         auth.openrouterApiKey（charts#89）。0.2.1＝帳號改放 chart Secret（admin_username），
-        改帳號不再改動 pod 設定（charts#91；原本必定撞 reset 的 15 秒上限而回退）。"""
+        改帳號不再改動 pod 設定（charts#91；原本必定撞 reset 的 15 秒上限而回退）。
+        0.3.0＝daemon 改 StatefulSet，console RBAC 全部以 resourceNames 綁 daemon pod
+        （charts#114，Refs #1360：舊版 console SA 可 exec 進同工作區所有 pod）；
+        htpasswd 改 Secret volume，改密碼不重啟 daemon。"""
         tpl = self._tpl()
         self.assertEqual(tpl.helm_repo_url or '', '')
         self.assertEqual(
             tpl.helm_chart_name,
             'oci://jcr-prod.woowtech.io/woow-paas-docker-local/open-design')
-        self.assertEqual(tpl.helm_chart_version, '0.2.2')
+        self.assertEqual(tpl.helm_chart_version, '0.3.0')
 
     def test_image_repository(self):
         """image repository＝獨立 open-design（≠ MCP 的 opendesign-mcp-admin）。"""
