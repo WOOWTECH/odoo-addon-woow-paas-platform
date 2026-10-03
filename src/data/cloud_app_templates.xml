@@ -1467,10 +1467,13 @@
 
             <field name="documentation_url">https://www.home-assistant.io/installation/</field>
 
+            <!-- 2026-10-03 換 chart 0.1.5（woow-paas-charts #115＋#118）：0.1.4 新實例預設座標台北
+                 （.storage/core.config，缺才寫，#1374）；0.1.5 平台注入的公開網址寫入
+                 core.config external_url（_inject_allowed_origins，#1388）。helm_default_values 不需改。 -->
             <!-- Helm Configuration（OCI；chart 由 woow-paas-charts 發佈）。 -->
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/home-assistant-full</field>
-            <field name="helm_chart_version">0.1.3</field>
+            <field name="helm_chart_version">0.1.5</field>
             <!-- 只放「平台 pin／覆寫」與「設錯就靜默失去性質」的鍵。逐鍵理由：
 
                  - image.repository/tag：平台 pin 慣例（雙釘 tag@sha256）。見上方原子變更鐵律。

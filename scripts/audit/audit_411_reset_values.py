@@ -216,6 +216,7 @@ _INJECTOR_VALUE_PATHS = frozenset({
     ("codeServer", "publicUrl"),          # allowed_origins injector（code-server）
     ("server", "baseUrl"),                # allowed_origins injector（omnigent）
     ("nextcloud", "publicUrl"),           # allowed_origins injector（nextcloud）
+    ("seed", "coreConfig", "externalUrl"),  # allowed_origins injector（ha-full，#1388）
     ("config", "dashboardPublicUrl"),     # dashboard_public_url injector（hermes-agent，#424①）
     ("networkPolicy", "apiServerCidrs"),  # apiserver_cidrs injector（#404）
     ("omnigentHost", "serverUrl"),        # omnigent_server_url injector（同工作區 Omnigent）
@@ -388,6 +389,7 @@ def render_report(records: list[dict], meta: dict) -> str:
     lines.append(
         "- **(a) injector 類會自癒**：storageClass / imagePullSecrets / config.allowedOrigins"
         "（#399）/ codeServer.publicUrl / server.baseUrl / nextcloud.publicUrl / "
+        "seed.coreConfig.externalUrl（ha-full，#1388）/ "
         "config.dashboardPublicUrl（#424①）/ networkPolicy.apiServerCidrs（#404）/ "
         "omnigentHost.serverUrl（同工作區 Omnigent，Omnigent 刪除後 stored 殘留舊網址也屬此類，"
         "**不要** backfill）等平台管線每次重算的鍵，reset 後自動補回，無須動作。"

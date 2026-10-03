@@ -2870,6 +2870,12 @@ class CloudService(models.Model):
             # NEXTCLOUD_TRUSTED_DOMAINS／OVERWRITEHOST／OVERWRITECLIURL；少了這一條，
             # 服務開得起來但租戶一打開網址就是錯誤頁。
             'nextcloud': [('nextcloud', 'publicUrl')],
+            # ha-full：寫進 HA core.config 的 external_url（chart 0.1.5 seed STEP 7，
+            # #1388）。少了它 Companion App／需要公開網址的整合都拿不到位址，而 image 的
+            # `homeassistant:` YAML 讓 config_source=yaml、租戶在 UI 也改不了。
+            # chart 只在原值為空或仍是上次平台寫的值時才覆寫。
+            'ha-full': [('seed', 'coreConfig', 'externalUrl')],
+            'ha-full-apporo': [('seed', 'coreConfig', 'externalUrl')],
         }
         paths = path_map.get(template_slug)
         if not paths:

@@ -108,11 +108,13 @@ class TestHaFullSeed661(TransactionCase):
         /config 的頂層項目再 cp -rn，busybox 在目的目錄已存在時會整個跳過遞迴 ⇒ 全新
         PVC 沒事，但**接管過既有 /config 的 PVC**（正是展示機遷移）一個檔都不會複製，
         sentinel 2 判 dst<src 而 FATAL、pod 卡 Init:Error。
+        0.1.4 = 新實例預設座標台北（.storage/core.config，缺才寫；charts #115，#1374）。
+        0.1.5 = 平台注入的公開網址寫入 core.config external_url（charts #118，#1388）。
         """
         tpl = self._tpl()
         self.assertEqual(tpl.helm_repo_url or '', '')
         self.assertEqual(tpl.helm_chart_name, HA_FULL_CHART)
-        self.assertEqual(tpl.helm_chart_version, '0.1.3')
+        self.assertEqual(tpl.helm_chart_version, '0.1.5')
         self.assertNotEqual(
             tpl.helm_chart_version, '0.1.0',
             '0.1.0 的 seed 錨點指向 woow_panel_frontend（非 component）→ '
