@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Nextcloud 上架 seed、公開網址注入、與「平台無法重設憑證」形態的守線斷言。
 
-契約來源：woow-paas-charts charts/nextcloud 0.1.1（app :80 是唯一入口、ClusterIP-only、
+契約來源：woow-paas-charts charts/nextcloud 0.1.2（app :80 是唯一入口、ClusterIP-only、
 release 前綴命名、自帶 postgresql(pgvector)＋redis、cron 走 sidecar、
 NEXTCLOUD_TRUSTED_DOMAINS／OVERWRITEHOST 由 nextcloud.publicUrl 衍生）。
 
@@ -52,8 +52,9 @@ class TestNextcloudSeed(TransactionCase):
         self.assertEqual(tpl.helm_repo_url or '', '')
         self.assertEqual(tpl.helm_chart_name, NC_CHART)
         self.assertEqual(
-            tpl.helm_chart_version, '0.1.1',
-            '0.1.1 起 chart 以 before-starting hook 把上傳 chunk 設 50 MiB、關 bulk upload'
+            tpl.helm_chart_version, '0.1.2',
+            '0.1.2 起 chart 以 before-starting hook 把上傳 chunk（系統鍵 '
+            'files.chunked_upload.max_size）設 50 MiB、關 bulk upload'
             '（Cloudflare 每請求 100 MB 上限）並把背景工作改 cron')
 
     def test_public_url_is_injected_into_the_chart(self):

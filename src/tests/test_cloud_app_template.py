@@ -175,3 +175,31 @@ class TestCloudAppTemplate(TransactionCase):
         active_templates = self.Template.search([('is_active', '=', True)])
         self.assertGreaterEqual(len(active_templates), 1)
         self.assertTrue(all(t.is_active for t in active_templates))
+
+    def test_no_seeded_spec_targets_the_platform_stripped_subtree(self):
+        """租戶可填欄位的 key 不得落在 ``config.sensitive`` 底下。
+
+        平台把 ``config.sensitive`` 整棵當成自己的憑證通道：存檔與部署前，
+        ``CloudService._strip_mcp_sensitive_values`` 會從租戶送來的 values 剝掉
+        這棵，再只回填平台自己供給的值（admin_password）。放在這裡的 spec 欄位
+        ⇒ 租戶填的值**永遠到不了 chart**，而且沒有任何錯誤提示。
+
+        2026-10-03 正式站實例：EMQX 的 ngrok token 用 ``config.sensitive.ngrok_authtoken``
+        ⇒ chart 收不到 token、helm upgrade 失敗、租戶服務進 error（已改 ``ngrok.authtoken``）。
+        掃全部 seed template（含隱藏／封存），新商品上架時一起受守。
+        """
+        templates = self.Template.with_context(active_test=False).search([])
+        offenders = []
+        for tpl in templates:
+            specs = tpl._parse_helm_value_specs() or {}
+            for group in ('required', 'optional'):
+                for spec in specs.get(group) or []:
+                    key = spec.get('key') if isinstance(spec, dict) else spec
+                    if isinstance(key, str) and (
+                            key == 'config.sensitive'
+                            or key.startswith('config.sensitive.')):
+                        offenders.append('%s: %s' % (tpl.slug, key))
+        self.assertFalse(
+            offenders,
+            'spec key 落在平台會剝掉的 config.sensitive 底下（租戶值到不了 chart）：%s'
+            % ', '.join(offenders))
