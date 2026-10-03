@@ -535,6 +535,11 @@ def _dry_run_manifest(release_data: Dict[str, Any]) -> str:
     return "\n---\n".join(p for p in parts if p)
 
 
+# Opt-in label a chart puts on a StatefulSet whose pods consume the admin credential
+# at start, so the helm_secret reset rolls it too (hermes-agent >= 0.3.0).
+CREDENTIAL_RESET_RESTART_LABEL = "paas.woowtech.io/restart-on-credential-reset"
+
+
 class HelmException(Exception):
     """Exception raised when Helm command fails."""
 
@@ -3176,6 +3181,33 @@ class KubernetesService:
             )
         return names
 
+    def get_credential_reset_statefulset_names(
+        self, namespace: str, label_selector: str
+    ) -> List[str]:
+        """StatefulSets of a release that opted in to a restart on credential reset.
+
+        hermes-agent 0.3.0 runs its agent as a StatefulSet (fixed pod name so the
+        console Role can pin pods/exec with resourceNames — platform #1360 follow-up)
+        and reads admin_password from env at start, so a helm_secret reset must roll
+        it like the Deployments. Only StatefulSets labelled
+        ``CREDENTIAL_RESET_RESTART_LABEL=true`` are returned: open-design 0.3.0's daemon
+        StatefulSet hot-reloads its htpasswd and must NOT be restarted, and a bundled
+        database StatefulSet has nothing to do with the admin password.
+
+        Returns an empty list when nothing matches (unlike ``get_deployment_names``):
+        the caller decides whether "no workload at all" is an error.
+        """
+        validate_namespace(namespace)
+
+        args = [
+            "get", "statefulsets",
+            "--namespace", namespace,
+            "--selector", f"{label_selector},{CREDENTIAL_RESET_RESTART_LABEL}=true",
+            "--output", "jsonpath={.items[*].metadata.name}",
+        ]
+        result = self._run_command(args)
+        return result.stdout.split()
+
     def get_deployment_name(self, namespace: str, label_selector: str) -> str:
         """Resolve **exactly one** Deployment name from a label selector.
 
@@ -3435,6 +3467,19 @@ class KubernetesService:
         self._run_command([
             "rollout", "restart",
             f"deployment/{deployment_name}",
+            "--namespace", namespace,
+        ])
+
+    def rollout_restart_statefulset(
+        self,
+        namespace: str,
+        statefulset_name: str,
+    ) -> None:
+        """``kubectl rollout restart statefulset/<name>`` (pod template annotation bump)."""
+        validate_namespace(namespace)
+        self._run_command([
+            "rollout", "restart",
+            f"statefulset/{statefulset_name}",
             "--namespace", namespace,
         ])
 
