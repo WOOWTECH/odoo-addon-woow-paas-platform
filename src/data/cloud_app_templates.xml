@@ -818,11 +818,17 @@
                  且 fail soft（磁碟不可寫只印 WARN、exit 0，不讓 instance CrashLoop）。
                  語意有別於 home assistant 0.2.x 的首裝限定 seed：本項每次啟動都補。
                  homeSeed 預設 enabled=true、image 留空即沿用 daemon image、resources 已含
-                 requests+limits（paas ws ResourceQuota 要求），故本 seed 不需覆寫任何鍵。 -->
+                 requests+limits（paas ws ResourceQuota 要求），故本 seed 不需覆寫任何鍵。
+                 2026-10-03 換 chart 0.2.2（woow-paas-charts #107 共用 kit＋#110：daemon 容器內建
+                 Omnigent host，不加 sidecar、資源維持 4／8Gi；omnigentHost.serverUrl 由平台注入、
+                 改了不重啟；租戶在 /console/ 執行 omnigent login）＋ daemon image
+                 20261002.2302@sha256:f5f35737…（paas-odoo-ci #216，核可 #220：內建釘版 omnigent CLI、
+                 tini、列印 CSS／baseHref／繁中修正）。console image 不變。前一版 daemon
+                 20260929.0018@sha256:5d97a9de…＋chart 0.2.1。 -->
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/open-design</field>
-            <field name="helm_chart_version">0.2.1</field>
-            <field name="helm_default_values">{"image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/open-design", "tag": "20260929.0018@sha256:5d97a9de33f8a31f826a2c7008cf5d2b6be0675b8461c33720fb4815909e2cd0"}, "service": {"port": 7457}, "persistence": {"data": {"size": "8Gi", "mountPath": "/app/.od"}, "home": {"size": "2Gi", "mountPath": "/home/opendesign"}}, "resources": {"requests": {"cpu": "1", "memory": "2Gi"}, "limits": {"cpu": "4", "memory": "8Gi"}}, "authProxy": {"enabled": true, "basicAuth": {"enabled": true, "username": "admin"}}, "console": {"enabled": true, "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/open-design-console", "tag": "20260720.0332@sha256:2b91c4ad4a6a94d1735c8aa7a6c18ec05491d9db31fa455f5e5da1cbb52b0f92"}}}</field>
+            <field name="helm_chart_version">0.2.2</field>
+            <field name="helm_default_values">{"image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/open-design", "tag": "20261002.2302@sha256:f5f357373a9651f7d8ca3db3fefe9c041d9d9fab29c595524f9502c72ba80b84"}, "service": {"port": 7457}, "persistence": {"data": {"size": "8Gi", "mountPath": "/app/.od"}, "home": {"size": "2Gi", "mountPath": "/home/opendesign"}}, "resources": {"requests": {"cpu": "1", "memory": "2Gi"}, "limits": {"cpu": "4", "memory": "8Gi"}}, "authProxy": {"enabled": true, "basicAuth": {"enabled": true, "username": "admin"}}, "console": {"enabled": true, "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/open-design-console", "tag": "20260720.0332@sha256:2b91c4ad4a6a94d1735c8aa7a6c18ec05491d9db31fa455f5e5da1cbb52b0f92"}}}</field>
             <field name="helm_value_specs">{"required": [], "optional": [
                 {"key": "auth.anthropicApiKey", "label": "Anthropic API Key", "type": "password",
                 "description": "自帶 Claude API Key（選填）；留空則於 console TUI 互動執行 claude login（登入態存 od-home）"},
@@ -1600,7 +1606,13 @@
              ⚠ is_hidden=True 直到 image 首發：image.tag 目前是佔位 00000000.0000（chart values 的佔位慣例，
              chart 對空 tag 會 render 失敗而非拉不到），首發後填 tag@sha256 並翻 is_hidden=False —— 同一次
              變更一起動（test_pi_agent_seed.test_image_pinned_before_listing 守這條）。
-             既有 5 台 pi-agent-woow（內部團隊，含 Omnigent 耦合）維持原部署，上架後再逐台搬。 -->
+             既有 5 台 pi-agent-woow（內部團隊，含 Omnigent 耦合）維持原部署，上架後再逐台搬。
+             2026-10-03 換 chart 0.1.4（woow-paas-charts #107 共用 kit＋#109：pi-web 容器內建 Omnigent
+             host，不加 sidecar、不切資源；omnigentHost.serverUrl 由平台注入、改了不重啟）＋ image
+             20261002.2302@sha256:0f33784e…（paas-odoo-ci #215，核可 #219：內建釘版 omnigent CLI、tini、
+             繁中 PDF 字型、文件工具）。前一版 20260924.0235@sha256:72312277…＋chart 0.1.2。
+             換版後租戶若曾自行 `uv tool install omnigent`，要移除 ~/.local 的那份並清掉 ~/.profile／
+             ~/.bashrc 的 `. "$HOME/.local/bin/env"`，否則 `command omnigent host stop` 會繞過 guard。 -->
         <record id="cloud_app_pi_agent" model="woow_paas_platform.cloud_app_template">
             <field name="name">pi Coding Agent</field>
             <field name="slug">pi-agent</field>
@@ -1618,8 +1630,8 @@
             <field name="documentation_url">https://github.com/WOOWTECH/Woow_k3s_pi_agent_package#readme</field>
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/pi-agent</field>
-            <field name="helm_chart_version">0.1.2</field>
-            <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/pi-agent","tag":"20260924.0235@sha256:723122778daaed23fb9bdec3fbac5faa0cb5fe63fe258e757a5c14259528d3b2"},"piWeb":{"resources":{"requests":{"cpu":"500m","memory":"1Gi"},"limits":{"cpu":"2","memory":"4Gi"}}},"persistence":{"size":"20Gi"},"service":{"port":8080,"targetPort":8080},"authProxy": {"port": 8080, "basicAuthUsername": "admin"}}</field>
+            <field name="helm_chart_version">0.1.4</field>
+            <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/pi-agent","tag":"20261002.2302@sha256:0f33784e2e296f40776b36dd7b27293aa2ca1d76cb718e4e24a971585785023c"},"piWeb":{"resources":{"requests":{"cpu":"500m","memory":"1Gi"},"limits":{"cpu":"2","memory":"4Gi"}}},"persistence":{"size":"20Gi"},"service":{"port":8080,"targetPort":8080},"authProxy": {"port": 8080, "basicAuthUsername": "admin"}}</field>
             <field name="helm_value_specs">{"required": [], "optional": []}</field>
             <field name="default_port">8080</field>
             <field name="ingress_enabled" eval="True"/>
@@ -1699,9 +1711,13 @@
              （以 digest 消費 WOOWTECH/Woow_podman_code_server_package 的 woow-code-server-amd64，
              PARITY_CONTRACT 1.1：code-server 4.139.1、pi 0.99.1＋pi-acp、Claude Code 2.1.285＋
              claude-agent-acp；PaaS 層加內建擴充、繁中語言包、omnigent CLI）。
-             image 釘 20260930.2345@sha256:e8fc6079…（paas-odoo-ci #181，核可 #180：ACP 側欄只列 pi／claude、
-             刪掉內建 Copilot Chat）＋ chart 0.1.1（woow-paas-charts #97：必要設定加 chat.disableAIFeatures）；
-             前一版 20260930.1503@sha256:cd7590ba…＋chart 0.1.0（#175／#176，核可 #177）。
+             image 釘 20261002.2302@sha256:b2e0e2a6…（paas-odoo-ci #214，核可 #217：IDE 容器內建 Omnigent
+             host、租戶 ~/.local/bin 排在系統路徑後、刪 base image 帶固定密碼的 config.yaml）＋ chart 0.1.2
+             （woow-paas-charts #107 共用 kit＋#108：CODE_SERVER_CONFIG 唯讀掛載只允許 auth: password、
+             HOME 放 pi volume、omnigentHost.serverUrl 由平台注入且改了不重啟）；此 digest 即
+             round 3b 在 dev-sandbox-cs-omni4 端到端實測的同一顆。
+             前一版 20260930.2345@sha256:e8fc6079…＋chart 0.1.1（#181／核可 #180、charts #97）；
+             再前一版 20260930.1503@sha256:cd7590ba…＋chart 0.1.0（#175／#176，核可 #177）。
              test_code_server_seed.test_listed_only_when_pinned 守線：上架 ⟹ 雙釘。
              上架：2026-09-30 在 dev-sandbox 以 chart 0.1.0＋此 image 實測（密碼登入／錯密碼拒絕、
              繁中介面、換密碼不動 pod template、選填金鑰與 OpenRouter 路由、git token 只給
@@ -1747,8 +1763,8 @@
             <field name="documentation_url">https://github.com/WOOWTECH/Woow_k3s_code_server_package#readme</field>
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/code-server</field>
-            <field name="helm_chart_version">0.1.1</field>
-            <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/code-server","tag":"20260930.2345@sha256:e8fc60795a8c0e73e66e2a73b650c4b9f7b0f452b3d0b6ec04ded60981438ee2"},"codeServer":{"locale":"zh-tw","resources":{"requests":{"cpu":"500m","memory":"1Gi"},"limits":{"cpu":"2","memory":"4Gi"}}},"persistence":{"workspace":{"size":"20Gi"},"piData":{"size":"5Gi"}},"service":{"port":8080,"targetPort":8080}}</field>
+            <field name="helm_chart_version">0.1.2</field>
+            <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/code-server","tag":"20261002.2302@sha256:b2e0e2a6c30ed5ac8a6a9d2e47c2a49a1cfa8f2276864c66c370575607a5a201"},"codeServer":{"locale":"zh-tw","resources":{"requests":{"cpu":"500m","memory":"1Gi"},"limits":{"cpu":"2","memory":"4Gi"}}},"persistence":{"workspace":{"size":"20Gi"},"piData":{"size":"5Gi"}},"service":{"port":8080,"targetPort":8080}}</field>
             <field name="helm_value_specs">{"required": [], "optional": [
                 {"key": "auth.anthropicApiKey", "label": "Anthropic API Key", "type": "password",
                 "description": "Claude Code 使用的 API Key（選填）；留空則在終端機執行 claude 以訂閱帳號登入（登入狀態存在磁碟）"},

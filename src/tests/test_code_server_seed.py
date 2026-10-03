@@ -9,7 +9,7 @@ codeServer.publicUrl 的 host 當 --trusted-origins），paas-odoo-ci code-serve
 核心守線：
 1. 只有密碼：admin_password_settable=True、沒有 admin_username_helm_path ⇒
    admin_credentials_settable=True（可 Reset 也可自設）但不能改帳號。
-2. 上架（is_hidden=False）⟹ image 雙釘 tag@sha256（2026-09-30 釘 20260930.1503 公開；10-01 換 20260930.2345＋chart 0.1.1）。
+2. 上架（is_hidden=False）⟹ image 雙釘 tag@sha256（2026-09-30 釘 20260930.1503 公開；10-01 換 20260930.2345＋chart 0.1.1；10-03 換 20261002.2302＋chart 0.1.2）。
 3. T1 = 2 vCPU / 4 Gi / 25 Gi：min_*、plan cs_*、兩顆 PVC 加總三處一致。
 """
 import json
@@ -52,7 +52,7 @@ class TestCodeServerSeed(TransactionCase):
         tpl = self._tpl()
         self.assertEqual(tpl.helm_repo_url or '', '')
         self.assertEqual(tpl.helm_chart_name, CS_CHART)
-        self.assertEqual(tpl.helm_chart_version, '0.1.1')
+        self.assertEqual(tpl.helm_chart_version, '0.1.2')
 
     def test_password_only_and_settable(self):
         tpl = self._tpl()
