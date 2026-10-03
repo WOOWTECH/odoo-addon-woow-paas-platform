@@ -10,7 +10,7 @@
                 <header>
                     <button name="action_redeploy" type="object"
                             string="Redeploy" icon="fa-refresh"
-                            confirm="This will uninstall the existing release and deploy from scratch. Continue?"
+                            confirm="Re-apply this product's current chart version to the service (in-place helm upgrade; data volumes are kept). If the release no longer exists, the service is installed again. Continue?"
                             class="oe_highlight"
                             invisible="state in ('pending', 'deploying', 'deleting')"/>
                     <field name="state" widget="statusbar"
@@ -105,7 +105,7 @@
                 <field name="deployed_at"/>
                 <button name="action_redeploy" type="object"
                         string="Redeploy" icon="fa-refresh"
-                        confirm="This will uninstall the existing release and deploy from scratch. Continue?"/>
+                        confirm="Re-apply this product's current chart version to the service (in-place helm upgrade; data volumes are kept). If the release no longer exists, the service is installed again. Continue?"/>
             </list>
         </field>
     </record>
