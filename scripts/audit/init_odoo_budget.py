@@ -30,6 +30,8 @@ STRUCTURES = {
         'OdooInitService.__init__', 'OdooInitService.initialize',
         'OdooInitService._get_odoo_pod', 'OdooInitService._wait_for_ready',
         'OdooInitService._update_module_list',
+        # #1355：module list 之後的台灣在地化 exec（一次、專屬 LOCALIZE_TIMEOUT）。
+        'OdooInitService._localize',
     ),
     KUBECTL: (
         'KubernetesService._run_command', 'KubernetesService.get_pod_name',
@@ -168,11 +170,22 @@ def check(root):
             raise ValueError('sleep 條件不是可解析的比較／減法')
         omitted_sleeps = positive_int(condition.comparators[0].right, '最後省略的 sleep')
         update = constant(trees[OPERATOR], 'MODULE_UPDATE_TIMEOUT')
-        envelope = discovery + retries * exec_seconds + (retries - omitted_sleeps) * delay + update
+        # #1355：在地化是 initialize 裡唯一一次額外 exec，timeout 必須接專屬常數
+        # （結構鎖保證 initialize 只呼叫一次 _localize、_localize 只 exec 一次）。
+        localize_fn = definition(trees[OPERATOR], 'OdooInitService._localize')
+        localize_timeout = keyword(one(calls(localize_fn, 'exec_in_pod'), 'localize exec'), 'timeout')
+        if ast.dump(localize_timeout) != ast.dump(ast.Name(id='LOCALIZE_TIMEOUT', ctx=ast.Load())):
+            raise ValueError('_localize 的 exec timeout 必須接 LOCALIZE_TIMEOUT')
+        one(calls(definition(trees[OPERATOR], 'OdooInitService.initialize'), '_localize'),
+            'initialize 呼叫 _localize')
+        localize = constant(trees[OPERATOR], 'LOCALIZE_TIMEOUT')
+        envelope = (discovery + retries * exec_seconds + (retries - omitted_sleeps) * delay
+                    + update + localize)
         if read <= envelope:
             return [prefix + f'client read={read}s 必須 > 宣告子步 envelope={envelope}s '
                     f'（discovery={discovery}，exec={retries}×{exec_seconds}，'
-                    f'sleep={retries - omitted_sleeps}×{delay}，update={update}）；不是 server 硬上限']
+                    f'sleep={retries - omitted_sleeps}×{delay}，update={update}，'
+                    f'localize={localize}）；不是 server 硬上限']
         return []
     except (OSError, ValueError, SyntaxError, KeyError, AttributeError, TypeError) as exc:
         return [prefix + f'無法驗證：{exc}（#1152；不可 fallback 成固定 805）']

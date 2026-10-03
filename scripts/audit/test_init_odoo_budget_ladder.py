@@ -64,10 +64,11 @@ class InitOdooBudgetCLITests(unittest.TestCase):
             path.write_text(original)
 
     def test_read_budget_must_exceed_server_envelope(self):
+        # 865 ＝ 805（#1152）＋ #1355 在地化 LOCALIZE_TIMEOUT 60。
         self.mutation(CLIENT, 'INIT_ODOO_READ_TIMEOUT = 900',
-                      'INIT_ODOO_READ_TIMEOUT = 120', 'envelope=805', full=True)
+                      'INIT_ODOO_READ_TIMEOUT = 120', 'envelope=865', full=True)
         self.mutation(CLIENT, 'INIT_ODOO_READ_TIMEOUT = 900',
-                      'INIT_ODOO_READ_TIMEOUT = 805', 'envelope=805')
+                      'INIT_ODOO_READ_TIMEOUT = 865', 'envelope=865')
 
     def test_real_tree_passes_full_cli(self):
         result = self.cli()
@@ -91,12 +92,14 @@ class InitOdooBudgetCLITests(unittest.TestCase):
 
     def test_server_substeps_are_read_from_source(self):
         cases = (
-            (OPERATOR, 'MAX_READY_RETRIES = 30', 'MAX_READY_RETRIES = 40', 'envelope=1005'),
-            (OPERATOR, 'READY_RETRY_DELAY = 5', 'READY_RETRY_DELAY = 10', 'envelope=950'),
-            (OPERATOR, 'timeout=15,', 'timeout=20,', 'envelope=955'),
-            (OPERATOR, 'MODULE_UPDATE_TIMEOUT = 120', 'MODULE_UPDATE_TIMEOUT = 300', 'envelope=985'),
+            (OPERATOR, 'MAX_READY_RETRIES = 30', 'MAX_READY_RETRIES = 40', 'envelope=1065'),
+            (OPERATOR, 'READY_RETRY_DELAY = 5', 'READY_RETRY_DELAY = 10', 'envelope=1010'),
+            (OPERATOR, 'timeout=15,', 'timeout=20,', 'envelope=1015'),
+            (OPERATOR, 'MODULE_UPDATE_TIMEOUT = 120', 'MODULE_UPDATE_TIMEOUT = 300', 'envelope=1045'),
+            # #1355：在地化 exec 的專屬上限也進 envelope。
+            (OPERATOR, 'LOCALIZE_TIMEOUT = 60', 'LOCALIZE_TIMEOUT = 120', 'envelope=925'),
             (KUBECTL, 'input_data: Optional[str] = None,\n        timeout: int = 30,',
-             'input_data: Optional[str] = None,\n        timeout: int = 70,', 'envelope=925'),
+             'input_data: Optional[str] = None,\n        timeout: int = 70,', 'envelope=985'),
         )
         for case in cases:
             with self.subTest(source=case[0], change=case[2]):
@@ -114,6 +117,10 @@ class InitOdooBudgetCLITests(unittest.TestCase):
             (OPERATOR, 'result = self._update_module_list(namespace, pod_name, container)',
              'result = self._update_module_list(namespace, pod_name, container)\n        result = self._update_module_list(namespace, pod_name, container)'),
             (OPERATOR, 'timeout=MODULE_UPDATE_TIMEOUT,', 'timeout=999,'),
+            # #1355：在地化 exec 不得改接別的上限、也不得多跑一次。
+            (OPERATOR, 'timeout=LOCALIZE_TIMEOUT,', 'timeout=MODULE_UPDATE_TIMEOUT,'),
+            (OPERATOR, 'localization = self._localize(namespace, pod_name, container)',
+             'localization = self._localize(namespace, pod_name, container)\n        localization = self._localize(namespace, pod_name, container)'),
             (KUBECTL, 'args,\n                input_data=input_data,\n                timeout=timeout,',
              'args,\n                input_data=input_data,\n                timeout=999,'),
             (CLIENT, '                timeout=timeout,', '                timeout=30,'),

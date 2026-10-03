@@ -1,5 +1,5 @@
 {
-  "extra/paas-operator/src/api/init.py:init_odoo": "11a4f33525b84e912ff24050ad196a2e72a68c43b64da4747bbc8fd533b35816",
+  "extra/paas-operator/src/api/init.py:init_odoo": "6f0156324c0e4ac8c5da2bdcdfeb3f88ab936e697516cfee899c42320dcaebfa",
   "extra/paas-operator/src/services/helm.py:KubernetesService._run_command": "9ac7a713ab97ad2ed42f1063e5f352bf0803553789755a2da8beba20d2a91a90",
   "extra/paas-operator/src/services/helm.py:KubernetesService.exec_in_pod": "69adac9a99a4a833537c3988a90c8cf809b432d5f9ef68eeb4de2fe14109db1d",
   "extra/paas-operator/src/services/helm.py:KubernetesService.get_pod": "b5d00aa619b1677254014276db5365e7955ea726052bf9c8999e8802a24d310e",
@@ -8,9 +8,10 @@
   "extra/paas-operator/src/services/odoo_chart_contract.py:validate_fallback_pod": "f1b3ec305e44266caf47b1124b7b510a43ef8686daabfefe631fee01a1a63f6e",
   "extra/paas-operator/src/services/odoo_init.py:OdooInitService.__init__": "e5b3fb1fd4e1d56825b6e03b6216be8853402412e6d28a8f08d786258ab4cf2f",
   "extra/paas-operator/src/services/odoo_init.py:OdooInitService._get_odoo_pod": "4865fea7e3f3d26b83dd9443621e0fb581d98bf87a2c56e38e146648213ec618",
+  "extra/paas-operator/src/services/odoo_init.py:OdooInitService._localize": "6062e7b479c26d0be3ac7ea36738ab478820f4e5223380d1f15eacdd5bb6f834",
   "extra/paas-operator/src/services/odoo_init.py:OdooInitService._update_module_list": "75a0e39cd35596eb55c98fe265e8aa4c9537c66c5ee54502605b775524571b46",
   "extra/paas-operator/src/services/odoo_init.py:OdooInitService._wait_for_ready": "bee58fca75c05cdaa9793713784aee34e0683bd4ffcd327f10a2adcf2ab40ec3",
-  "extra/paas-operator/src/services/odoo_init.py:OdooInitService.initialize": "ee328d1dedb633b76ad91177768fb112eb72a87845db8892d32a057e15bdcb4f",
+  "extra/paas-operator/src/services/odoo_init.py:OdooInitService.initialize": "3785df87287d4000401ba8fbfad158ebe6fe22811f46bc2b2f7ca9a587cc087c",
   "src/services/paas_operator.py:PaaSOperatorClient._request": "5f18c0090216bc193a568b0b7c5fb70290a69f2eb65cc8c16554662d06c41419",
   "src/services/paas_operator.py:PaaSOperatorClient.init_odoo": "4cda916723992266163c6523963b83b4a39b50d168f9e3249b3b88d6b14fc23c"
 }

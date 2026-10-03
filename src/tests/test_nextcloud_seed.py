@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Nextcloud 上架 seed、公開網址注入、與「平台無法重設憑證」形態的守線斷言。
 
-契約來源：woow-paas-charts charts/nextcloud 0.1.2（app :80 是唯一入口、ClusterIP-only、
+契約來源：woow-paas-charts charts/nextcloud 0.1.3（app :80 是唯一入口、ClusterIP-only、
 release 前綴命名、自帶 postgresql(pgvector)＋redis、cron 走 sidecar、
 NEXTCLOUD_TRUSTED_DOMAINS／OVERWRITEHOST 由 nextcloud.publicUrl 衍生）。
 
@@ -52,10 +52,22 @@ class TestNextcloudSeed(TransactionCase):
         self.assertEqual(tpl.helm_repo_url or '', '')
         self.assertEqual(tpl.helm_chart_name, NC_CHART)
         self.assertEqual(
-            tpl.helm_chart_version, '0.1.2',
+            tpl.helm_chart_version, '0.1.3',
             '0.1.2 起 chart 以 before-starting hook 把上傳 chunk（系統鍵 '
             'files.chunked_upload.max_size）設 50 MiB、關 bulk upload'
-            '（Cloudflare 每請求 100 MB 上限）並把背景工作改 cron')
+            '（Cloudflare 每請求 100 MB 上限）並把背景工作改 cron；'
+            '0.1.3 起背景預裝 Calendar／Contacts（#1363／#1364）')
+
+    def test_description_promises_only_what_ships(self):
+        """#1364／#1365：說明只能承諾平台真的給的東西（2026-10-03 正式站實測）。"""
+        desc = self._tpl().full_description
+        self.assertNotIn('線上文件協作等官方應用', desc,
+                         'Office 線上協作需要另一台文件伺服器，平台不附（#1364）')
+        self.assertIn('Collabora', desc, '要說清楚 Office 線上編輯得自備文件伺服器')
+        for app in ('Calendar', 'Contacts'):
+            self.assertIn(app, desc, 'chart 0.1.3 預裝的 App 要寫進說明')
+        self.assertIn('SMTP', desc,
+                      '沒有寄信設定時通知信會靜默失敗，說明要教租戶自己設 SMTP（#1365）')
 
     def test_public_url_is_injected_into_the_chart(self):
         """沒有這條注入，租戶看到的是「不信任的網域」錯誤頁，而部署本身是成功的。"""
