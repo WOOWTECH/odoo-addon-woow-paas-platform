@@ -788,6 +788,28 @@ class TestInjectAllowedOrigins(TransactionCase):
         self.assertEqual(out['config']['allowedOrigins'], 'https://x.woowtech.io')
 
 
+    def test_inject_ha_full_sets_core_config_external_url(self):
+        """#1388：ha-full（含封存的 APPORO 版）把公開網址交給 chart 寫進 HA
+        core.config external_url；同一 seed 區塊的其他鍵（座標等）不得被蓋掉。"""
+        CloudService = self.env['woow_paas_platform.cloud_service']
+        for slug in ('ha-full', 'ha-full-apporo'):
+            out = CloudService._inject_allowed_origins(
+                {'seed': {'coreConfig': {'latitude': 24.1}, 'resources': {}}},
+                slug, 'https://paas-cs-abc-def.woowtech.io')
+            self.assertEqual(
+                out['seed']['coreConfig'],
+                {'latitude': 24.1, 'externalUrl': 'https://paas-cs-abc-def.woowtech.io'},
+                slug)
+            self.assertEqual(out['seed']['resources'], {}, slug)
+            self.assertNotIn('config', out, slug)
+
+    def test_inject_noop_for_ha_paas(self):
+        """ha-paas 是另一顆 chart（home-assistant），沒有 seed.coreConfig。"""
+        CloudService = self.env['woow_paas_platform.cloud_service']
+        out = CloudService._inject_allowed_origins({}, 'ha-paas', 'https://x.woowtech.io')
+        self.assertEqual(out, {})
+
+
 class TestInjectApiServerCidrs(TransactionCase):
     """_inject_apiserver_cidrs opens the console → kube-apiserver egress hole ONLY
     for charts that run kubectl under a tenant NetworkPolicy (open-design); no-op
