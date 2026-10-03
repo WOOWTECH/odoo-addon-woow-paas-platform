@@ -35,6 +35,8 @@ def test_initialize_targets_web_pod_and_uses_image_python_launcher():
     k8s.exec_in_pod.side_effect = [
         MagicMock(stdout=json.dumps({"ready": True, "version": "18.0"})),
         MagicMock(stdout=json.dumps({"success": True, "added": 3, "updated": 2, "cleaned": 1})),
+        # #1355：第三次 exec 是台灣在地化預設
+        MagicMock(stdout=json.dumps({"success": True, "changes": ["lang_installed"]})),
     ]
 
     result = OdooInitService(k8s).initialize("dev-sandbox-1129", "tenant")
@@ -45,12 +47,13 @@ def test_initialize_targets_web_pod_and_uses_image_python_launcher():
         "modules_updated": 2,
         "modules_cleaned": 1,
         "message": "Module list updated successfully",
+        "localization": {"success": True, "changes": ["lang_installed"]},
     }
     k8s.get_pod_name.assert_called_once_with(
         "dev-sandbox-1129",
         "app.kubernetes.io/instance=tenant,app.kubernetes.io/component=server",
     )
-    assert len(k8s.exec_in_pod.call_args_list) == 2
+    assert len(k8s.exec_in_pod.call_args_list) == 3
     for call in k8s.exec_in_pod.call_args_list:
         assert call.kwargs["pod_name"] == "web-0"
         assert call.kwargs["namespace"] == "dev-sandbox-1129"
@@ -79,6 +82,7 @@ def _fallback_k8s(pod):
     k8s.exec_in_pod.side_effect = [
         MagicMock(stdout='{"ready": true}'),
         MagicMock(stdout='{"success": true}'),
+        MagicMock(stdout='{"success": true, "changes": []}'),  # #1355 在地化
     ]
     return k8s
 
@@ -234,7 +238,9 @@ def _ready_k8s(update_result):
     if isinstance(update_result, Exception):
         k8s.exec_in_pod.side_effect = [ready, update_result]
     else:
-        k8s.exec_in_pod.side_effect = [ready, MagicMock(stdout=update_result)]
+        # #1355：module list 之後還有一次在地化 exec（失敗也不影響 init 結果）。
+        k8s.exec_in_pod.side_effect = [ready, MagicMock(stdout=update_result),
+                                       MagicMock(stdout='{"success": true, "changes": []}')]
     return k8s
 
 

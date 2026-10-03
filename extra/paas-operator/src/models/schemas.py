@@ -683,6 +683,9 @@ class OdooInitResponse(BaseModel):
     # #1263：成功時兩者皆為 None；舊平台忽略未知欄位。
     error_step: Optional[str] = None
     error_kind: Optional[InitErrorKind] = None
+    # #1355：台灣在地化預設的結果（success／changes／skipped／error）。失敗不影響
+    # ``success``——在地化不是服務可用的前提；舊平台忽略未知欄位。
+    localization: Optional[Dict[str, Any]] = None
 
 
 # --- Odoo Module Management ---
