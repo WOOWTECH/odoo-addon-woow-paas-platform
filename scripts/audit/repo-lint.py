@@ -704,9 +704,12 @@ RESET_LADDER_FRONTEND = "src/static/src/paas/services/cloud_service.js"
 RESET_LADDER_PLATFORM = "src/services/paas_operator.py"
 RESET_LADDER_OPERATOR = "extra/paas-operator/src/api/releases.py"
 RESET_LADDER_HELM = "extra/paas-operator/src/services/helm.py"
+# #1370：Odoo／n8n 的 Reset 走 operator exec（不 helm），與上面共用同一條前端 route
+# （同一個 RESET_REQUEST_TIMEOUT_MS），平台另有 APP_ADMIN_RESET_TIMEOUT。
+RESET_LADDER_APP_OPERATOR = "extra/paas-operator/src/services/app_admin_password.py"
 RESET_LADDER_FILES = (
     RESET_LADDER_FRONTEND, RESET_LADDER_PLATFORM,
-    RESET_LADDER_OPERATOR, RESET_LADDER_HELM,
+    RESET_LADDER_OPERATOR, RESET_LADDER_HELM, RESET_LADDER_APP_OPERATOR,
 )
 
 # #471：既有實例的隱藏判準（實例層）vs 只擋上架曝光的舊旗標（曝光層）。
@@ -1270,6 +1273,32 @@ def check_reset_budget_ladder(root):
             "前端 RESET_REQUEST_TIMEOUT_MS=%ss 必須 > 平台 RESET_CONFIG_TIMEOUT=%ss"
             "；否則瀏覽器先 abort ⇒ 後端修好了租戶也看不到成功（#459 實測成功案例"
             "也要 49.9s／76.7s）" % (frontend_seconds, platform_budget))
+
+    # #1370：app 自管密碼的 exec 重設（Odoo／n8n）。operator 最壞＝exec 逾時＋找 pod
+    # 的 kubectl 餘裕；平台 APP_ADMIN_RESET_TIMEOUT 必須蓋過它，前端（同一條 route）
+    # 又必須蓋過平台——否則 exec 已 commit、平台卻先斷線 ⇒ 新密碼沒落庫也沒交付。
+    app_src = _read_repo_file(root, RESET_LADDER_APP_OPERATOR)
+    app = _fold_int_constants(app_src or "")
+    needed_app = ("ODOO_RESET_EXEC_TIMEOUT_SECONDS", "N8N_RESET_EXEC_TIMEOUT_SECONDS",
+                  "APP_ADMIN_RESET_LOOKUP_SLACK_SECONDS")
+    missing_app = [k for k in needed_app if k not in app]
+    if app_src is None or missing_app:
+        fail("%s 缺少預算常數 %s" % (RESET_LADDER_APP_OPERATOR, ", ".join(missing_app or needed_app)))
+        return violations
+    if "APP_ADMIN_RESET_TIMEOUT" not in plat:
+        fail("%s 缺少 APP_ADMIN_RESET_TIMEOUT" % RESET_LADDER_PLATFORM)
+        return violations
+    app_platform = plat["APP_ADMIN_RESET_TIMEOUT"]
+    for name in needed_app[:2]:
+        worst = app[name] + app["APP_ADMIN_RESET_LOOKUP_SLACK_SECONDS"]
+        if not app_platform > worst:
+            fail("平台 APP_ADMIN_RESET_TIMEOUT=%ss 必須 > operator %s＋找 pod 餘裕=%ss"
+                 "；否則 exec 已 commit、平台先斷線 ⇒ 新密碼沒落庫也沒交付"
+                 % (app_platform, name, worst))
+    if not frontend_seconds > app_platform:
+        fail("前端 RESET_REQUEST_TIMEOUT_MS=%ss 必須 > 平台 APP_ADMIN_RESET_TIMEOUT=%ss"
+             "（Odoo／n8n 的 Reset 與 reset-config 共用同一條前端 route）"
+             % (frontend_seconds, app_platform))
     return violations
 
 

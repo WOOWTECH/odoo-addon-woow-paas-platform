@@ -142,6 +142,10 @@
             <field name="mcp_api_key_helm_path">main.secret.N8N_API_KEY</field>
             <field name="post_deploy_init_type">n8n</field>
             <field name="post_deploy_init_email">admin@woowtech.io</field>
+            <!-- #1370：owner 密碼活在 n8n DB（owner 由 post-deploy init 建立），Reset 走 operator
+                 exec 直接改 owner 那一列並關 MFA；不用 user-management:reset（會打回公開可搶的
+                 setup 模式）。API key／MCP sidecar 不受影響。 -->
+            <field name="app_admin_reset_kind">n8n_exec</field>
         </record>
 
         <!-- Redis Cache -->
@@ -262,6 +266,9 @@
 
             <!-- Post-Deploy Init: auto-refresh module list after deployment -->
             <field name="post_deploy_init_type">odoo</field>
+            <!-- #1370／#1186：管理員密碼活在租戶 DB（conf.adminPassword 只在首次 -i base 套用），
+                 Reset 走 operator exec 直接改 base.user_admin，不 helm upgrade。 -->
+            <field name="app_admin_reset_kind">odoo_exec</field>
 
             <field name="is_active" eval="True" />
         </record>

@@ -1806,11 +1806,21 @@ class PaasController(HiddenChainMixin, Controller):
                 or service.template_id.conceal_instances):
             return {'success': False, 'error': _('Service not found')}
 
+        # #1370／#1186：app 自管密碼、由 operator exec 改 app DB 的模板（Odoo／n8n）。
+        # 判別器讀 template.app_admin_reset_kind（與 admin_reset_supported 的 compute、
+        # model 端 _reset_app_admin_password 同一欄位）。只做 Reset，不開放自設。
+        app_reset_kind = service.template_id.app_admin_reset_kind or 'none'
+        if app_reset_kind != 'none':
+            if tenant_set:
+                return {
+                    'success': False,
+                    'error': _("This service's admin credentials can only be reset, not set."),
+                }
         # #357 C01：判別器讀 template.has_admin_gui，與 model 端（cloud_service
         # create/_build_mcp_sensitive_values）收斂到同一判準。原本這裡是 slug
         # allowlist、model 端卻判 mcp_enabled → 兩端不一致（controller 放行並生密碼、
         # model 過濾成空集合不建 secret）＝密碼永不生效的根因。
-        if not service.template_id.has_admin_gui:
+        elif not service.template_id.has_admin_gui:
             return {
                 'success': False,
                 'error': _('Reset admin password is only supported on templates '
@@ -1818,7 +1828,7 @@ class PaasController(HiddenChainMixin, Controller):
             }
         # app_managed（omnigent）：平台只給初始密碼、之後由 app 自己保管，平台無從
         # 重設。讀 template.admin_reset_supported（與前端按鈕、model 防線同一欄位）。
-        if not service.template_id.admin_reset_supported:
+        elif not service.template_id.admin_reset_supported:
             return {
                 'success': False,
                 'error': _("This service manages its own admin password. "
@@ -1827,12 +1837,12 @@ class PaasController(HiddenChainMixin, Controller):
         # 租戶自設憑證的能力判準：與 has_admin_gui 同一紀律，讀 template 欄位、不自建
         # slug 名單；payload 的 template.admin_credentials_settable 鏡射同一個欄位。
         # 只有密碼的模板（admin_password_settable，code-server）不收帳號。
-        if tenant_set and not service.template_id.admin_credentials_settable:
+        elif tenant_set and not service.template_id.admin_credentials_settable:
             return {
                 'success': False,
                 'error': _("This service's admin credentials can only be reset, not set."),
             }
-        if (tenant_set and new_username is not None
+        elif (tenant_set and new_username is not None
                 and not service.template_id.admin_username_helm_path):
             return {
                 'success': False,
@@ -1848,7 +1858,11 @@ class PaasController(HiddenChainMixin, Controller):
             # Internal callers retain their ORM rules. Portal uses only the
             # resolved service capability, after membership + admin checks;
             # credential/lifecycle gates in the private model method remain.
-            if tenant_set:
+            app_login = None
+            if app_reset_kind != 'none':
+                # #1370：同樣 private、同樣只有本 endpoint 一個入口（#357 C05）。
+                applied_password, app_login = service._reset_app_admin_password()
+            elif tenant_set:
                 applied_password = service._reset_admin_password(
                     new_password=new_password, new_username=new_username,
                 )
@@ -1959,9 +1973,18 @@ class PaasController(HiddenChainMixin, Controller):
                 'they will not be shown again. Update the Gateway API Key '
                 'wherever you configured it (e.g. your MCP server).'
             )
+        if app_reset_kind != 'none':
+            # #1370：不重啟、立刻生效；舊 session 失效、兩步驟驗證已關。
+            message = (
+                'Admin password reset. Save the new password now — it will not be '
+                'shown again. It works right away; devices signed in with the old '
+                'password are signed out, and two-factor sign-in has been turned off.'
+            )
         # 帳號不是敏感值；讀取失敗只是少一個顯示欄位，不得翻轉「已生效」的回應。
         try:
-            admin_username = service._admin_username()
+            # #1370：app 自管的帳號（Odoo login／n8n owner email）以 operator 實際
+            # 重設的那一個為準；模板沒有 admin_username_helm_path。
+            admin_username = app_login or service._admin_username()
         except Exception:
             _logger.exception(
                 "admin username lookup failed for service %s after credentials "
@@ -1979,6 +2002,7 @@ class PaasController(HiddenChainMixin, Controller):
                     service.template_id.admin_credentials_settable),
                 'admin_username_editable': bool(
                     service.template_id.admin_username_helm_path),
+                'app_admin_reset_kind': service.template_id.app_admin_reset_kind or 'none',
             }
         except Exception:
             _logger.exception(
@@ -3663,8 +3687,8 @@ class PaasController(HiddenChainMixin, Controller):
                 resp_data['admin_password'] = admin_password
                 if template._is_woow_odoo_chart():
                     # #1130：Odoo 的登入帳號就是租戶填的 email，一起交付；
-                    # OneTimeCredentialsModal 依 admin_reset_supported=False 顯示
-                    # 「Initial Password」文案（重設流程在 #1186）。
+                    # OneTimeCredentialsModal 依 template.app_admin_reset_kind 顯示
+                    # 「忘記可在服務頁 Reset」的文案（#1370／#1186）。
                     resp_data['admin_username'] = (
                         merged_values.get('conf') or {}).get('adminEmail')
             # #530/#672: gateway API key ＋ 完整網址、dashboard REST API 的根網址，
@@ -4305,6 +4329,9 @@ class PaasController(HiddenChainMixin, Controller):
                 # admin_username_editable 為 False（對話框不出現帳號欄）。
                 'admin_credentials_settable': bool(
                     service.template_id.admin_credentials_settable),
+                # #1370：Reset 走 operator exec 改 app DB（Odoo／n8n）時的種類；前端用它
+                # 挑文案（不重啟、立刻生效、2FA 已關），不自建 slug 判準。
+                'app_admin_reset_kind': service.template_id.app_admin_reset_kind or 'none',
                 'helm_value_specs': service.template_id._parse_helm_value_specs(),
             },
             # 目前生效的 admin 帳號（非敏感；不開放改帳號的模板為 None），供對話框預填。

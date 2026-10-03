@@ -1867,6 +1867,165 @@ class CloudService(models.Model):
 
         return new_password
 
+    # #1370：operator 腳本回報的原因碼 → 租戶看得懂、能行動的訊息。這些都是「交易已
+    # rollback、密碼未變」的確定失敗（error_kind=failed／not_executed）。
+    def _app_admin_reset_refusal_message(self, code):
+        messages = {
+            'admin_missing': _(
+                "The administrator account could not be found in this service, so the "
+                "password was not changed. Please contact support."),
+            'admin_inactive': _(
+                "The administrator account of this service has been archived, so the "
+                "password was not changed. Please contact support."),
+            'owner_ambiguous': _(
+                "This service has more than one owner account, so the password was not "
+                "changed. Please contact support."),
+        }
+        return messages.get(code) or _(
+            "Reset failed and the password was not changed. Check the service status "
+            "and try again.")
+
+    def _reset_app_admin_password(self):
+        """#1370／#1186：重設 app 自管的管理員密碼（Odoo base.user_admin／n8n owner）。
+
+        與 ``_reset_admin_password``（helm Secret／config.json）是兩條不同的契約：這兩個
+        app 的密碼權威在 app 自己的 DB，operator exec 一支腳本直接改，**不 helm
+        upgrade、不重啟、不改 state**。Odoo 同交易清 TOTP；n8n 同交易關 MFA。
+
+        Returns:
+            ``(new_password, login)``：明文新密碼（一次性交付）與實際被重設的登入帳號。
+
+        #357 C05：**必須維持 ``_`` 開頭（private）**——回傳明文，而授權（workspace
+        role=admin）只存在 controller 層；理由與 ``_reset_admin_password`` docstring 相同。
+
+        提交點＝operator 回 ``success: true``（DB 已 commit，新密碼即權威值）。之後的
+        落庫只是記帳，失敗也不翻轉「已生效」（#525 B3 同一紀律）：
+          - Odoo：``cloud_service_secret.admin_password``（redeploy 會重送 conf.adminPassword，
+            chart 只在首次 -i base 套用，重送新值是 no-op，但保持平台與 app 一致）。
+          - n8n：``n8n_owner_password``／``n8n_owner_email``——post-deploy init（redeploy、
+            addon 變更）用它們 ``POST /rest/login``；不同步的話下一次 init 必在 login 失敗。
+            租戶在 n8n 介面自己改過 owner 密碼／email 的漂移也一併由這裡對齊。
+        """
+        self.ensure_one()
+        from ..services.paas_operator import (
+            get_paas_operator_client,
+            PaaSOperatorAPIError,
+            PaaSOperatorError,
+            PaaSOperatorTimeoutError,
+        )
+
+        kind = self.template_id.app_admin_reset_kind or 'none'
+        if kind not in ('odoo_exec', 'n8n_exec'):
+            raise UserError(_("This service does not support resetting its admin password."))
+
+        # 同 _reset_admin_password：列鎖序列化同一台服務的並發 Reset。
+        self.env.cr.execute(
+            "SELECT id FROM woow_paas_platform_cloud_service WHERE id = %s FOR UPDATE",
+            [self.id],
+        )
+        self.invalidate_recordset()
+        if self.state == 'upgrading':
+            raise UserError(
+                _("Service is finishing an update (usually under a minute). "
+                  "Please wait and try again.")
+            )
+        if self.state != 'running':
+            raise UserError(
+                _("Service must be running before resetting its admin password.")
+            )
+        if not (self.helm_release_name and self.helm_namespace):
+            raise UserError(
+                _("Service has no helm release yet — deploy first before resetting password.")
+            )
+        if kind == 'odoo_exec':
+            # Bitnami 時代的存量服務：conf 路徑與 chart 契約都不同，exec 腳本不適用。
+            legacy_error = self._woow_odoo_legacy_release_error()
+            if legacy_error:
+                raise UserError(legacy_error)
+
+        client = get_paas_operator_client(self.env)
+        if not client:
+            raise UserError(_("PaaS Operator not configured. Contact administrator."))
+
+        new_password = self._generate_admin_password()
+        reset = (client.reset_odoo_admin_password if kind == 'odoo_exec'
+                 else client.reset_n8n_owner_password)
+        unknown_message = _(
+            "Reset status unknown — the request timed out before the service confirmed "
+            "it. The password may already have changed, so it was not saved. Wait a "
+            "minute, then press Reset again to issue a new password.")
+        try:
+            result = reset(
+                namespace=self.helm_namespace,
+                release_name=self.helm_release_name,
+                new_password=new_password,
+            )
+        except PaaSOperatorTimeoutError as e:
+            _logger.error(
+                "app admin password reset timed out for service %s (id=%s): %s — "
+                "new password NOT stored", self.name, self.id, e.detail or e.message,
+            )
+            raise UserError(unknown_message) from e
+        except PaaSOperatorAPIError as e:
+            # 404＝operator 還沒有這個端點（平台先於 operator 上線）：什麼都沒碰。
+            _logger.error(
+                "app admin password reset rejected by operator for service %s (id=%s): "
+                "HTTP %s %s", self.name, self.id, e.status_code, e.detail or e.message,
+            )
+            if e.status_code == 404:
+                raise UserError(_(
+                    "Resetting this service's admin password is not available yet. "
+                    "Please try again later.")) from e
+            if e.status_code and e.status_code < 500:
+                # 其他 4xx（驗證／認證）：請求在 operator 入口就被拒，腳本沒跑。
+                raise UserError(_("Reset failed. Check service status and retry.")) from e
+            # 5xx 帶 detail.error_kind=unknown：腳本可能已經跑完，不能宣稱密碼未變。
+            raise UserError(unknown_message) from e
+        except PaaSOperatorError as e:
+            _logger.error(
+                "app admin password reset failed for service %s (id=%s): %s",
+                self.name, self.id, e.detail or e.message,
+            )
+            raise UserError(_("Reset failed. Check service status and retry.")) from e
+
+        if not (result or {}).get('success'):
+            error_kind = (result or {}).get('error_kind')
+            _logger.error(
+                "app admin password reset not applied for service %s (id=%s): "
+                "kind=%s code=%s step=%s error=%s", self.name, self.id, error_kind,
+                (result or {}).get('error_code'), (result or {}).get('error_step'),
+                (result or {}).get('error'),
+            )
+            if error_kind == 'unknown' or not error_kind:
+                raise UserError(unknown_message)
+            raise UserError(self._app_admin_reset_refusal_message(result.get('error_code')))
+
+        login = result.get('login') or None
+        # ================= 提交點之後：只剩記帳（#525 B3） =================
+        try:
+            with self.env.cr.savepoint():
+                if kind == 'odoo_exec':
+                    self._set_admin_password_secret(new_password)
+                else:
+                    vals = {'n8n_owner_password': new_password}
+                    if login:
+                        vals['n8n_owner_email'] = login
+                    self.sudo().write(vals)
+        except OperationalError:
+            raise
+        except Exception:
+            _logger.exception(
+                "[#1370] app admin password reset could NOT store the new password for "
+                "service %s (id=%s) although the app already applied it — returning it "
+                "to the tenant anyway", self.name, self.id,
+            )
+        _logger.info(
+            "[#1370] app admin password reset for service %s (id=%s, kind=%s, "
+            "second factor cleared=%s)", self.name, self.id, kind,
+            bool(result.get('second_factor_cleared')),
+        )
+        return new_password, login
+
     # ------------------------------------------------------------------ #
     #  Cron: process pending deployments                                  #
     # ------------------------------------------------------------------ #

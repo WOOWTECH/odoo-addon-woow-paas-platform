@@ -23,7 +23,8 @@ export class OneTimeCredentialsModal extends Component {
         // "provision"（開通頁：服務第一次啟動）或 "reset"（服務頁：Reset／自設憑證後重啟）。
         // 兩者的狀態說明不同——開通時對租戶說「重啟中」是錯的（服務從沒跑過），
         // 反之亦然。預設 "reset" 以保持既有呼叫端行為。
-        mode: { type: String, optional: true, validate: (m) => ["provision", "reset"].includes(m) },
+        // "in_place"（#1370：Odoo／n8n 的 Reset 直接改 app DB，不重啟、立刻生效）。
+        mode: { type: String, optional: true, validate: (m) => ["provision", "reset", "in_place"].includes(m) },
     };
     static defaultProps = { mode: "reset" };
 
@@ -49,6 +50,9 @@ export class OneTimeCredentialsModal extends Component {
      * 的服務，並回報成「密碼不對」。
      */
     get statusHint() {
+        if (this.props.mode === "in_place") {
+            return _t("The new password works right away; the service does not restart. Devices signed in with the old password are signed out, and two-factor sign-in has been turned off — turn it on again after you sign in.");
+        }
         if (this.props.mode === "provision") {
             return _t("The service is starting for the first time (usually 1–3 minutes). Sign in with these values once its status shows Running.");
         }
@@ -89,6 +93,28 @@ export class OneTimeCredentialsModal extends Component {
  */
 export function buildOneTimeCredentials(data) {
     const credentials = [];
+    // #1370：app 自管、平台以 operator exec 重設的模板（Odoo／n8n，
+    // template.app_admin_reset_kind）。開通（Odoo 的初始密碼）與 Reset 共用這段：
+    // 帳號是 app 的登入帳號（Odoo login／n8n owner email），忘記時回服務頁 Reset。
+    // 判準鏡射後端欄位，不用 slug；必須排在 admin_reset_supported 分支之前——這類模板
+    // 的 admin_reset_supported 為 true，落到下方會變成 hermes 的 MCP 說明。
+    if (data && data.admin_password && data.template
+            && data.template.app_admin_reset_kind
+            && data.template.app_admin_reset_kind !== "none") {
+        if (data.admin_username) {
+            credentials.push({
+                label: _t("Username"),
+                value: data.admin_username,
+                hint: _t("Signs in to this service, together with the password below."),
+            });
+        }
+        credentials.push({
+            label: _t("Admin Password"),
+            value: data.admin_password,
+            hint: _t("If you forget it, use Reset Admin Password on the service page to issue a new one."),
+        });
+        return credentials;
+    }
     // 帳號可由租戶自設的模板（後端 admin_username 非空，例 open-design）：帳號不一定是
     // admin，連同帳號一起交付，並用那個模板的入口（app ＋ web console）說明。其餘模板
     // 後端回 null，沿用下方原本的文案。

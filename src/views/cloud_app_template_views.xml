@@ -87,6 +87,11 @@
                                 <field name="admin_password_settable"
                                        invisible="not has_admin_gui or admin_password_carrier != 'helm_secret'"/>
                             </group>
+                            <!-- #1370：app 自管密碼、平台以 operator exec 改 app DB（Odoo／n8n）；
+                                 與 has_admin_gui 互斥（constraint _check_app_admin_reset_kind）。 -->
+                            <group string="App Admin Password Reset (operator exec)">
+                                <field name="app_admin_reset_kind"/>
+                            </group>
                             <group invisible="not mcp_enabled">
                                 <group string="Sidecar Image">
                                     <field name="mcp_sidecar_image"

@@ -295,6 +295,20 @@ export class ServiceDetailPage extends Component {
         return this.service?.template?.admin_username_editable === true;
     }
 
+    /**
+     * #1370：Reset 走 operator exec 直接改 app DB（Odoo／n8n）——不重啟、立刻生效、
+     * 舊 session 失效、2FA 關閉。鏡射 payload 的 template.app_admin_reset_kind
+     * （＝後端 template 欄位），不用 slug 判斷；缺欄位視同 none。
+     */
+    get isAppAdminReset() {
+        const kind = this.service?.template?.app_admin_reset_kind;
+        return !!kind && kind !== "none";
+    }
+
+    get credentialsModalMode() {
+        return this.isAppAdminReset ? "in_place" : "reset";
+    }
+
     get isResetAdminPasswordLoading() {
         return !!cloudService.operationLoading.resetAdminPassword;
     }
