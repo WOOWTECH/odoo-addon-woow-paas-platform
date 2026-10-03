@@ -1005,3 +1005,5 @@ from . import test_storage_quota_message_1348
 from . import test_n8n_storage_class_public_url_1334
 # #1370／#1186：Odoo／n8n 管理員密碼重設（app_admin_reset_kind、operator exec、不 helm upgrade）。
 from . import test_app_admin_password_reset_1370
+# #1370 後半：n8n 範本選填 SMTP（忘記密碼／邀請信）。
+from . import test_n8n_smtp_fields_1370
