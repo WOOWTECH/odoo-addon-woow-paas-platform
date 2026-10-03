@@ -187,7 +187,7 @@
 5	test_cloud_service.TestAssembleDeployValues411
 20	test_cloud_service.TestCloudService
 3	test_cloud_service.TestCloudServiceChangePlanTrialMode
-3	test_cloud_service.TestInjectAllowedOrigins
+5	test_cloud_service.TestInjectAllowedOrigins
 8	test_cloud_service.TestInjectApiServerCidrs
 2	test_cloud_service.TestInjectStorageClass
 6	test_cloud_service_acl.TestCloudServiceAdminBypass
