@@ -646,6 +646,28 @@ _DASHBOARD_PUBLIC_URL_VALUE_PATHS = {
 }
 
 
+# #1334：只在**首次安裝**決定、之後永遠沿用的 storageClass 注入點。
+#
+# PVC 的 ``spec.storageClassName`` 建立後不可變。n8n 的 8gears chart 2.0.1 讀的是
+# ``main.persistence.storageClass``（不是頂層 ``persistence``），以前注入錯路徑 ⇒
+# 存量 n8n 的 PVC 都落在叢集預設 SC ``longhorn``（Retain，刪服務後 PV 變 Released）。
+# 若改成每次部署都注入正確路徑，存量服務下一次 helm upgrade 會把 storageClassName
+# 從「未指定」改成 longhorn-delete，API server 拒絕 ⇒ upgrade 失敗、服務轉 error。
+#
+# 所以這張表的語意是「首裝時寫進 ``helm_values``」（``_pin_install_storage_class``）：
+# 新服務從此每次 upgrade 都帶同一個值；存量服務的 helm_values 沒有這個鍵，render
+# 結果與以前一模一樣，PVC 不受影響。
+_INSTALL_PINNED_STORAGE_CLASS_PATHS = {
+    'n8n': [('main', 'persistence', 'storageClass')],
+}
+
+
+# #1334 附帶：n8n 要知道自己的公開網址，否則 webhook 節點顯示的網址、OAuth
+# 憑證的 callback、邀請信連結都會是 ``http://localhost:5678``。8gears chart 的
+# ``main.config`` 每個鍵直接變成容器 env（``toEnvVars``）。
+_N8N_PUBLIC_URL_CONFIG_KEYS = ('WEBHOOK_URL', 'N8N_EDITOR_BASE_URL')
+
+
 # Omnigent BYO host：哪些 chart 在主容器裡內建 omnigent host（woow-paas-charts
 # ``shared/omnigent-host`` 共用套件；host 和產品跑在同一個主容器裡），
 # 要把「同工作區 Omnigent 的叢集內網址」寫進哪個 value path（套件標準 values 區塊
@@ -1894,6 +1916,10 @@ class CloudService(models.Model):
         helm_namespace = self.helm_namespace
         helm_release_name = self.helm_release_name
 
+        # #1334：首裝才決定的 storageClass 先寫進 helm_values，之後每次 upgrade
+        # 都經 `_assemble_deploy_values` 帶同一個值（PVC storageClassName 不可變）。
+        self._pin_install_storage_class()
+
         # #411: values 組裝走單一真相源 helper（與 redeploy / reconfigure /
         # reset admin password 共用同一條全量管線）。expose_config 亦由 helper
         # 重算，取代 create 時存在 deploy_params 的等價值（收斂雙寫）。
@@ -2077,10 +2103,12 @@ class CloudService(models.Model):
            ``config.sensitive`` 子樹（``_strip_mcp_sensitive_values``），再把
            helm_value_specs 帶 ``format`` 的租戶文字欄位轉成 chart 形態
            （``template._apply_spec_formats``，例 code-server git.tokenHosts）。
-        2. storage_class injector（PVC 生命週期）
+        2. storage_class injector（PVC 生命週期；n8n 例外，首裝時已寫進
+           helm_values，見 ``_pin_install_storage_class``／#1334）
         3. image_pull_secrets injector（私有 registry）
         4. allowed_origins injector（open-design 瀏覽器 Origin 白名單，#380）
         5. dashboard_public_url injector（hermes-agent MCP OAuth 回呼，#424①）
+           ＋ n8n 公開網址（main.config.WEBHOOK_URL／N8N_EDITOR_BASE_URL，#1334 附帶）
         6. apiserver_cidrs injector（open-design／hermes-agent console egress，#404）
         7. omnigent_server_url injector（code-server／pi-agent／open-design 主容器內的
            omnigent host：同工作區 running Omnigent 的叢集內網址，只有網址；chart 放進
@@ -2145,6 +2173,10 @@ class CloudService(models.Model):
             # redirect_uri target for external MCP servers). No-op elsewhere.
             # See #424①.
             values = self._inject_dashboard_public_url(
+                values, template.slug, public_base_url,
+            )
+            # n8n 的 webhook／OAuth callback／編輯器連結要用公開網址（#1334 附帶）。
+            values = self._inject_n8n_public_urls(
                 values, template.slug, public_base_url,
             )
 
@@ -2425,9 +2457,10 @@ class CloudService(models.Model):
             'postgresql': [
                 ('primary', 'persistence', 'storageClass'),
             ],
-            'n8n': [
-                ('persistence', 'storageClass'),
-            ],
+            # #1334：n8n 不在每次部署時注入——正確路徑 main.persistence.storageClass
+            # 改由 `_pin_install_storage_class` 在首裝時寫進 helm_values（PVC 的
+            # storageClassName 不可變，存量服務不能被改）。空 list＝不走 fallback。
+            'n8n': [],
             'redis': [
                 ('master', 'persistence', 'storageClass'),
                 ('replica', 'persistence', 'storageClass'),
@@ -2477,6 +2510,60 @@ class CloudService(models.Model):
                 d = d.setdefault(key, {})
             d[path[-1]] = storage_class
 
+        return values
+
+    def _pin_install_storage_class(self):
+        """首次安裝時把 storageClass 寫進 ``helm_values``（#1334）。
+
+        只處理 ``_INSTALL_PINNED_STORAGE_CLASS_PATHS`` 裡的範本。helm_values 已有
+        非空值就不動（重試安裝、或管理員明確指定時沿用原值）。之後的 upgrade 不會
+        再經過這裡——值留在 helm_values，由 ``_assemble_deploy_values`` 原樣帶出，
+        所以同一台服務的 storageClassName 永遠一致。
+        """
+        self.ensure_one()
+        paths = _INSTALL_PINNED_STORAGE_CLASS_PATHS.get(self.template_id.slug)
+        if not paths:
+            return
+        storage_class = self.env['ir.config_parameter'].sudo().get_param(
+            'woow_paas_platform.storage_class_name', 'longhorn-delete'
+        )
+        if not storage_class:
+            return
+        values = self._helm_values_dict()
+        changed = False
+        for path in paths:
+            d = values
+            for key in path[:-1]:
+                if not isinstance(d.get(key), dict):
+                    d[key] = {}
+                d = d[key]
+            if not d.get(path[-1]):
+                d[path[-1]] = storage_class
+                changed = True
+        if changed:
+            self._apply_helm_values(values)
+
+    @staticmethod
+    def _inject_n8n_public_urls(values, template_slug, base_url):
+        """把服務公開網址寫進 n8n 的 ``main.config``（#1334 附帶）。
+
+        ``WEBHOOK_URL``：webhook／表單節點顯示給外部呼叫的網址、OAuth 憑證的
+        callback；``N8N_EDITOR_BASE_URL``：邀請信、重設密碼信裡的連結。兩者都以
+        ``/`` 結尾（n8n 文件寫法）。已有非空值（管理員明確指定，例如自訂網域）就
+        不覆寫。其他範本 no-op。
+        """
+        if template_slug != 'n8n' or not base_url:
+            return values
+        url = base_url.rstrip('/') + '/'
+        main = values.get('main')
+        if not isinstance(main, dict):
+            main = values['main'] = {}
+        config = main.get('config')
+        if not isinstance(config, dict):
+            config = main['config'] = {}
+        for key in _N8N_PUBLIC_URL_CONFIG_KEYS:
+            if not str(config.get(key) or '').strip():
+                config[key] = url
         return values
 
     @staticmethod

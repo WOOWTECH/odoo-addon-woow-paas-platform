@@ -25,7 +25,7 @@
                             An initialization request that was already sent may still complete inside the cluster.
                         </p>
                         <p class="o_woow_delete_hint">
-                            Re-creating the service after deletion starts a fresh release on a fresh disk and does not carry over any data from the original service. The original data disk is kept for 7 days under the platform retention policy and is then reclaimed; after that it cannot be recovered.
+                            Re-creating the service after deletion starts a fresh release on a fresh disk and does not carry over any data from the original service. The original data disk is kept for 90 days under the platform retention policy and is then reclaimed; after that it cannot be recovered.
                         </p>
                     </div>
 

@@ -10901,11 +10901,11 @@ msgstr ""
 msgid ""
 "Re-creating the service after deletion starts a fresh release on a fresh "
 "disk and does not carry over any data from the original service. The "
-"original data disk is kept for 7 days under the platform retention policy "
+"original data disk is kept for 90 days under the platform retention policy "
 "and is then reclaimed; after that it cannot be recovered."
 msgstr ""
 "刪除後若重新建立，將是全新的 release 與全新磁碟，不會沿用原服務資料；原服務的"
-"資料磁碟依平台保留政策保留 7 天後回收，逾期無法復原。"
+"資料磁碟依平台保留政策保留 90 天後回收，逾期無法復原。"
 
 #. module: woow_paas_platform
 #. odoo-javascript

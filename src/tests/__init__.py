@@ -998,3 +998,6 @@ from . import test_omnigent_server_url_injection
 # QA CS-02／CS-03：code-server 的 git 作者身分與 Git Token 適用主機（helm_value_specs
 # 的 ``format``：存檔驗證＋部署時轉成 chart 形態）。
 from . import test_code_server_git_settings
+# #1334：n8n storageClass 改在首裝時釘進 helm_values（PVC 不可變）＋公開網址注入；
+# 範本說明的孤兒磁碟保留天數與正式站 operator 一致。
+from . import test_n8n_storage_class_public_url_1334
