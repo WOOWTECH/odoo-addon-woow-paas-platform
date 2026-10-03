@@ -796,7 +796,7 @@
                 部署時自帶 ANTHROPIC_API_KEY。與 Open Design MCP（mcp-opendesign）形成生態
                 閉環：MCP 的必填欄 od_api_base 可指向本服務於同一 workspace 的內部位址
                 （release 命名，例 http://svc-xxxxxxxx:7457；需帶 basic-auth 憑證）。
-                刪除服務即為全新開通——重新建立將使用全新的 release 與全新磁碟，不會沿用先前的資料（含 Claude 登入態）；原服務的資料磁碟依平台保留政策保留 7 天後回收，逾期無法復原。</field>
+                刪除服務即為全新開通——重新建立將使用全新的 release 與全新磁碟，不會沿用先前的資料（含 Claude 登入態）；原服務的資料磁碟依平台保留政策保留 90 天後回收，逾期無法復原。</field>
             <field name="category">ai_llm</field>
             <field name="tags">["design", "ai", "opendesign", "claude-code", "opencode"]</field>
 
@@ -1008,7 +1008,7 @@
                 agent 的 gateway API 以 /gateway 子路徑對外（Bearer 驗證，不套 basic-auth），
                 對應的 Gateway API Key 於建立服務與重置密碼時一次性顯示，供 MCP 等外部客戶端連線。LLM 供應商金鑰
                 （MiniMax／OpenRouter）由租戶自行填入，存於 Kubernetes Secret、不落磁碟。
-                刪除服務即為全新開通——重新建立將使用全新的 release 與全新磁碟，不會沿用先前的資料；原服務的資料磁碟依平台保留政策保留 7 天後回收，逾期無法復原。</field>
+                刪除服務即為全新開通——重新建立將使用全新的 release 與全新磁碟，不會沿用先前的資料；原服務的資料磁碟依平台保留政策保留 90 天後回收，逾期無法復原。</field>
             <field name="category">ai_llm</field>
             <field name="tags">["hermes", "agent", "ai", "llm", "mcp"]</field>
 
@@ -1180,7 +1180,7 @@
                 對外僅曝露 Home Assistant 網頁介面（8123 埠），MQTT 等其他埠不在本版範圍。
                 欠費停權時虛擬機會關機（資料磁碟保留），恢復繳費後開機、資料原樣還在。
                 刪除服務即為全新開通——重新建立將使用全新的虛擬機與全新磁碟，不會沿用
-                先前的資料；原服務的資料磁碟依平台保留政策保留 7 天後回收，逾期無法復原。</field>
+                先前的資料；原服務的資料磁碟依平台保留政策保留 90 天後回收，逾期無法復原。</field>
             <field name="category">container</field>
             <!-- category 沒有 'vm' 選項（新增選項＝改 model + 前台分類 UI，非本 PR 範圍）；
                  沿用 ha-paas 的 container 分類，讓兩個 Home Assistant 產品在前台同一格。 -->
@@ -1441,7 +1441,7 @@
                 對外僅曝露 Home Assistant 網頁介面（8123 埠）。欠費停權時服務會停止
                 （資料磁碟保留），恢復繳費後啟動、資料原樣還在。
                 刪除服務即為全新開通——重新建立將使用全新的磁碟，不會沿用先前的資料；
-                原服務的資料磁碟依平台保留政策保留 7 天後回收，逾期無法復原。</field>
+                原服務的資料磁碟依平台保留政策保留 90 天後回收，逾期無法復原。</field>
             <field name="category">container</field>
             <!-- 與 cloud_app_haos／cloud_app_ha_paas 同為 container 分類，讓 Home Assistant
                  系列產品在前台同一格；租戶靠上面 full_description 的「沒有這三項」與
@@ -1624,7 +1624,7 @@
                 不代管、頁面回顯時遮罩）。**帳號密碼登入**：預設帳號 admin，密碼於開通時一次性顯示；帳號與密碼都可在服務頁「Admin Credentials」
                 自行修改，修改後服務重啟約一分鐘生效。
                 本版不含影片製作工具鏈。欠費停權時服務停止（磁碟保留），恢復繳費後資料原樣還在；
-                刪除服務即全新開通，原磁碟依平台保留政策 7 天後回收。</field>
+                刪除服務即全新開通，原磁碟依平台保留政策 90 天後回收。</field>
             <field name="category">ai_llm</field>
             <field name="tags">["pi-agent", "coding-agent", "ai", "agent"]</field>
             <field name="documentation_url">https://github.com/WOOWTECH/Woow_k3s_pi_agent_package#readme</field>
@@ -1682,7 +1682,7 @@
                 `omnigent host` 即可把它接成工作機，檔案留在那台機器上。
                 **模型金鑰自備**。**帳號密碼登入**：帳號 admin，初始密碼於開通時一次性顯示；登入後請
                 在 Omnigent 內修改密碼，並可邀請同事加入。欠費停權時服務停止（磁碟保留），恢復繳費後
-                資料原樣還在；刪除服務即全新開通，原磁碟依平台保留政策 7 天後回收。</field>
+                資料原樣還在；刪除服務即全新開通，原磁碟依平台保留政策 90 天後回收。</field>
             <field name="category">ai_llm</field>
             <field name="tags">["omnigent", "coding-agent", "ai", "agent"]</field>
             <field name="documentation_url">https://github.com/WOOWTECH/Woow_omnigent_tutorial_site#readme</field>
@@ -1757,7 +1757,7 @@
                 可把這台接成同工作區 Omnigent 的工作機。**密碼登入**：沒有帳號，密碼於開通時一次性顯示；
                 可在服務頁「Admin Credentials」重設或改成自己的密碼，修改後服務重啟約一分鐘生效。
                 自行安裝的擴充會保留在磁碟上。欠費停權時服務停止（磁碟保留），恢復繳費後資料原樣還在；
-                刪除服務即全新開通，原磁碟依平台保留政策 7 天後回收。</field>
+                刪除服務即全新開通，原磁碟依平台保留政策 90 天後回收。</field>
             <field name="category">ai_llm</field>
             <field name="tags">["code-server", "vscode", "ide", "pi-agent", "claude-code", "ai"]</field>
             <field name="documentation_url">https://github.com/WOOWTECH/Woow_k3s_code_server_package#readme</field>
@@ -1839,7 +1839,7 @@
                 **重啟**：保留訊息（retained）存在磁碟，重啟後仍在；持久 session（clean start = false）
                 的離線佇列在服務重啟（包括每次儲存設定）後不會保留。
                 欠費停權時服務停止（磁碟保留），恢復繳費後資料原樣還在；刪除服務即全新開通，
-                原磁碟依平台保留政策 7 天後回收。</field>
+                原磁碟依平台保留政策 90 天後回收。</field>
             <field name="category">automation</field>
             <field name="tags">["emqx", "mqtt", "iot", "broker", "messaging"]</field>
             <field name="documentation_url">https://github.com/WOOWTECH/Woow_k3s_emqx#readme</field>
@@ -1897,7 +1897,7 @@
                 一次送整個檔案的 WebDAV 用戶端（例如 Windows 網路磁碟機）超過 100 MB 的檔案會失敗。
                 **大版本升級**：Nextcloud 只支援逐版升級，平台會按版次安排，不會跨版跳升。
                 欠費停權時服務停止（磁碟保留），恢復繳費後資料原樣還在；刪除服務即全新開通，
-                原磁碟依平台保留政策 7 天後回收。</field>
+                原磁碟依平台保留政策 90 天後回收。</field>
             <field name="category">web</field>
             <field name="tags">["nextcloud", "files", "storage", "collaboration", "calendar"]</field>
             <field name="documentation_url">https://github.com/WOOWTECH/Woow_k3s_nextcloud#readme</field>
