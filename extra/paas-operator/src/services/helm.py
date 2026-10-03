@@ -2469,6 +2469,32 @@ class KubernetesService:
             return []
         return output.split()
 
+    def get_storage_quota_snapshot(
+        self, namespace: str
+    ) -> Dict[str, List[Dict[str, Any]]]:
+        """#1348：讀 namespace 的 ResourceQuota 與 PVC（原始 JSON items），供開通前檢查。
+
+        純唯讀（兩次 ``kubectl get``）。namespace 還不存在時兩者都回空 list（kubectl
+        對不存在的 ns 做 list 不報錯）。用量的解讀在 ``storage_quota.summarize``。
+
+        Returns:
+            ``{"quotas": [...ResourceQuota items], "pvcs": [...PVC items]}``
+
+        Raises:
+            KubectlException: kubectl 失敗（呼叫端決定 fail-open）。
+        """
+        validate_namespace(namespace)
+        quotas = self._run_command([
+            "get", "resourcequota", "--namespace", namespace, "-o", "json",
+        ])
+        pvcs = self._run_command([
+            "get", "pvc", "--namespace", namespace, "-o", "json",
+        ])
+        return {
+            "quotas": json.loads(quotas.stdout or "{}").get("items", []),
+            "pvcs": json.loads(pvcs.stdout or "{}").get("items", []),
+        }
+
     def list_managed_namespaces(self) -> List[str]:
         """#277 唯讀反向發現：列本 env 帶 paas-managed=true 的 ns 名。
 

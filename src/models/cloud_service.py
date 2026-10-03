@@ -5,8 +5,9 @@ import re
 import secrets
 import time
 import uuid
-from datetime import timedelta
+from datetime import datetime, timedelta
 
+import pytz
 from psycopg2 import OperationalError
 from psycopg2 import errors as pg_errors
 
@@ -83,6 +84,10 @@ BITNAMI_ODOO_VALUE_KEYS = frozenset({
 
 #: #1130：woow-odoo 管理員 login（＝租戶填的 email，`conf.adminEmail`）的格式檢查，
 #: create／reconfigure 共用（#1160）。只擋明顯不是 email 的值；254＝RFC 5321 路徑上限。
+#: #1348：operator 開通前儲存配額檢查的錯誤碼（``extra/paas-operator/src/services/
+#: storage_quota.py`` 的同名常數；改名兩邊一起改）。
+STORAGE_QUOTA_ERROR_CODE = 'workspace_storage_quota_exhausted'
+
 WOOW_ODOO_ADMIN_EMAIL_RE = re.compile(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
 #: #1335：保留給文件／測試、永遠收不到信的網域（RFC 2606 §3 的 example.com／.net／.org
 #: 與其子網域，RFC 2606 §2／RFC 6761 的保留 TLD）。舊版 seed 預填 user@example.com，
@@ -2081,12 +2086,59 @@ class CloudService(models.Model):
 
         except PaaSOperatorError as e:
             _logger.error("Operator error: %s", e)
+            quota_message = self._storage_quota_error_message(e.detail)
             self.write({
                 'state': 'error',
-                'error_message': _(
+                'error_message': quota_message or _(
                     'Deployment failed: %(detail)s',
                     detail=e.detail or e.message),
             })
+
+    def _storage_quota_error_message(self, detail):
+        """#1348：operator 回「工作區儲存配額已滿」時，給租戶看得懂的訊息；其他錯誤回 ``None``。
+
+        operator（``extra/paas-operator/src/services/storage_quota.py``）在 helm install
+        前檢查 namespace ResourceQuota 的 PVC 數量／requests.storage，用滿時回 409、
+        ``detail.error_code == STORAGE_QUOTA_ERROR_CODE``，附用量與保留中的孤兒 PVC
+        （#317：刪除服務後 PVC 保留到保留期滿，仍計入配額）。原本租戶只看到
+        「Helm installation failed. Check operator logs」，無從自助排除。
+
+        ``error_message`` 由 cron 寫入、畫面直接顯示原文，cron 的 env 語言不是租戶的
+        ⇒ 以服務建立者的語言（沒有就用目前 env）組字串，``env._`` 依該 env 的 lang 翻譯。
+        """
+        self.ensure_one()
+        if not isinstance(detail, dict) or detail.get('error_code') != STORAGE_QUOTA_ERROR_CODE:
+            return None
+        lang = self.sudo().create_uid.lang or self.env.lang
+        env = self.with_context(lang=lang).env
+        usage = detail.get('usage') or {}
+        exhausted = detail.get('exhausted') or []
+        pvc = usage.get('persistentvolumeclaims') or {}
+        storage = usage.get('requests.storage') or {}
+        if 'persistentvolumeclaims' in exhausted and pvc.get('hard'):
+            parts = [env._(
+                'Workspace storage quota is full: %(used)s of %(hard)s storage volumes are in use.',
+                used=pvc.get('used', '?'), hard=pvc['hard'])]
+        elif 'requests.storage' in exhausted and storage.get('hard'):
+            parts = [env._(
+                'Workspace storage quota is full: %(used)s of %(hard)s storage capacity is in use.',
+                used=storage.get('used', '?'), hard=storage['hard'])]
+        else:
+            parts = [env._('Workspace storage quota is full.')]
+        orphans = detail.get('orphaned_pvc_count') or 0
+        if orphans:
+            parts.append(env._(
+                '%(count)s of them hold data of deleted services that is still kept for its '
+                'retention period (%(size)s).',
+                count=orphans, size=detail.get('orphaned_storage') or '?'))
+            release_epoch = detail.get('next_release_epoch')
+            if isinstance(release_epoch, int) and release_epoch > 0:
+                tz = pytz.timezone(self.sudo().create_uid.tz or 'Asia/Taipei')
+                when = datetime.fromtimestamp(release_epoch, tz).strftime('%Y-%m-%d')
+                parts.append(env._('The earliest of them is released on %(date)s.', date=when))
+        parts.append(env._(
+            'Contact support to release it early, or deploy this service in another workspace.'))
+        return ' '.join(parts)
 
     # ------------------------------------------------------------------ #
     #  #411 — 全量 values 組裝（單一真相源）                              #

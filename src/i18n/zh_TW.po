@@ -4462,6 +4462,42 @@ msgstr "部署失敗：%(detail)s"
 #. module: woow_paas_platform
 #. odoo-python
 #: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid "Workspace storage quota is full: %(used)s of %(hard)s storage volumes are in use."
+msgstr "工作區儲存配額已滿：已使用 %(used)s／%(hard)s 個儲存空間（PVC）。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid "Workspace storage quota is full: %(used)s of %(hard)s storage capacity is in use."
+msgstr "工作區儲存配額已滿：已使用 %(used)s／%(hard)s 儲存容量。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid "Workspace storage quota is full."
+msgstr "工作區儲存配額已滿。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid "%(count)s of them hold data of deleted services that is still kept for its retention period (%(size)s)."
+msgstr "其中 %(count)s 個是已刪除服務仍在保留期內的資料（共 %(size)s）。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid "The earliest of them is released on %(date)s."
+msgstr "最早將於 %(date)s 釋放。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid "Contact support to release it early, or deploy this service in another workspace."
+msgstr "如需提早釋放請聯絡客服，或改在其他工作區開通此服務。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
 msgid "Deployment timed out after %(minutes)s minutes: %(detail)s"
 msgstr "部署在 %(minutes)s 分鐘後逾時：%(detail)s"
 
