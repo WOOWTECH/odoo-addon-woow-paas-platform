@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
 """EMQX 上架 seed 與「平台無法重設憑證」形態的守線斷言。
 
-契約來源：woow-paas-charts charts/emqx 0.1.2（dashboard :18083 是唯一入口、ClusterIP-only、
-release 前綴命名、built_in_database authenticator ＋ bootstrap_file 種第一組 MQTT 帳密、
-ngrok sidecar 對外轉 1883），以及 paas-odoo-ci mirror-image.yml 鏡像進 JCR 的 image。
+契約來源：woow-paas-charts charts/emqx 0.1.3（:18083 是唯一入口——pod 內 nginx 把 /mqtt 轉給
+WebSocket listener、其餘轉給 dashboard；ClusterIP-only、release 前綴命名、built_in_database
+authenticator 不再種任何 MQTT 帳號（#1361）、retained 存磁碟（#1362）、ngrok sidecar 對外轉 1883），
+以及 paas-odoo-ci mirror-image.yml 鏡像進 JCR 的 image。
 
 核心守線：
 1. **app_managed**：EMQX 的 ``dashboard.default_password`` 依官方文件「只在第一次開機生效、
@@ -67,8 +68,19 @@ class TestEmqxSeed(TransactionCase):
         tpl = self._tpl()
         self.assertEqual(tpl.helm_repo_url or '', '')
         self.assertEqual(tpl.helm_chart_name, EMQX_CHART)
-        self.assertEqual(tpl.helm_chart_version, '0.1.2',
+        self.assertEqual(tpl.helm_chart_version, '0.1.3',
                          'helm_chart_version 留空會被供給閘門靜默擋在購買前（#552）')
+
+    def test_description_matches_chart_013(self):
+        """#1361／#1362／#1366：說明要跟 chart 0.1.3 的實際行為一致。"""
+        tpl = self._tpl()
+        desc = tpl.full_description
+        self.assertIn('wss://', desc, '0.1.3 起 WebSocket 走服務網址的 /mqtt（#1366）')
+        self.assertIn('沒有任何 MQTT 帳號', desc, '0.1.3 起不再預建帳號（#1361）')
+        self.assertIn('retained', desc, '要說明重啟後哪些東西會留下（#1362）')
+        ws = {s['key']: s for s in tpl._parse_helm_value_specs()['optional']}['emqx.listeners.ws.enabled']
+        self.assertIn('/mqtt', ws['description'], 'WS 旋鈕要寫出外部怎麼連')
+
 
     def test_platform_cannot_reset_credentials(self):
         """EMQX 首開之後密碼活在它自己的資料庫，平台重設只會「假裝成功」。"""
