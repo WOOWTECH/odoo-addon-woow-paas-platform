@@ -1276,6 +1276,14 @@ msgstr "管理員 Email 格式不正確"
 #. odoo-python
 #: code:addons/woow_paas_platform/models/cloud_service.py:0
 msgid ""
+"Administrator email must be a mailbox you can receive mail at (%(domain)s is"
+" a reserved example domain, so password reset emails would never arrive)"
+msgstr "管理員 Email 必須是收得到信的信箱（%(domain)s 是保留給範例用的網域，密碼重設信永遠寄不到）"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid ""
 "This Odoo service still runs on the previous Odoo deployment and cannot be "
 "changed or redeployed in place. Please contact support to migrate it."
 msgstr "此 Odoo 服務仍執行於舊版部署，無法直接變更設定或重新部署。請聯絡客服協助遷移。"

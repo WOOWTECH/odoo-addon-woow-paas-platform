@@ -3524,7 +3524,8 @@ class PaasController(HiddenChainMixin, Controller):
 
         # #1130：woow-odoo 的管理員密碼由平台鑄造（下方），租戶表單只剩 login email
         # ——舊的 odooPassword 長度檢查整段移除（#1160）。email 檢查與 reconfigure 共用。
-        email_error = CloudService._woow_odoo_admin_email_error(template, merged_values)
+        email_error = CloudService._woow_odoo_admin_email_error(
+            template, merged_values, reject_reserved=True)
         if email_error:
             return {'success': False, 'error': email_error}
         _logger.info(

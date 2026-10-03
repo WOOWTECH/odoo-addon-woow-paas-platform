@@ -110,6 +110,19 @@ class TestWoowOdooSeedContract1130(TransactionCase):
         self.assertFalse([s for s in all_specs if s.get('type') == 'password'])
         self.assertEqual([s['key'] for s in specs['required']], ['conf.adminEmail'])
 
+    def test_admin_email_has_no_prefilled_default(self):
+        """#1335：login email 不得預填——舊版 ``user@example.com`` 沒改就成了收不到信的管理員。
+
+        兩個來源都要空：spec 的 ``default``（前端 initializeHelmValues 拿它預填表單），
+        以及 helm_default_values 的 ``conf.adminEmail``（create 時與租戶輸入合併，
+        API 呼叫端沒送 email 就會靜默沿用它）。只給 placeholder。
+        """
+        specs = self.tpl._parse_helm_value_specs()
+        spec = next(s for s in specs['required'] if s['key'] == 'conf.adminEmail')
+        self.assertNotIn('default', spec)
+        self.assertTrue(spec.get('placeholder'), '空白欄位要有 placeholder 提示格式')
+        self.assertNotIn('adminEmail', self.values.get('conf', {}))
+
 
 @tagged('post_install', '-at_install')
 class TestWoowOdooInjectors1130(TransactionCase):
@@ -305,6 +318,22 @@ class TestWoowOdooAdminPassword1130(TransactionCase):
         self.assertTrue(check(self.tpl, {}), '缺 conf.adminEmail 也要擋')
         n8n = self.env.ref('woow_paas_platform.cloud_app_n8n')
         self.assertIsNone(check(n8n, {}), '非 woow-odoo template 不檢查')
+
+    def test_admin_email_check_rejects_reserved_domains_only_on_request(self):
+        """#1335：保留網域（RFC 2606／6761）只在 ``reject_reserved=True``（create）時擋。"""
+        check = self.Svc._woow_odoo_admin_email_error
+        for reserved in ('user@example.com', 'a@EXAMPLE.ORG', 'a@mail.example.net',
+                         'a@corp.example', 'a@host.test', 'a@x.invalid', 'a@my.localhost'):
+            with self.subTest(reserved=reserved):
+                self.assertTrue(check(self.tpl, {'conf': {'adminEmail': reserved}},
+                                      reject_reserved=True))
+                self.assertIsNone(check(self.tpl, {'conf': {'adminEmail': reserved}}),
+                                  'reconfigure（預設不擋）不得連坐存量服務')
+        for ok in ('owner@woowtech.io', 'a@notexample.com', 'a@example.com.tw',
+                   'a@testing.tw'):
+            with self.subTest(ok=ok):
+                self.assertIsNone(check(self.tpl, {'conf': {'adminEmail': ok}},
+                                        reject_reserved=True))
 
     def test_redeploy_sends_the_admin_password_as_sensitive(self):
         svc = self._service()
@@ -533,7 +562,8 @@ class TestWoowOdooCreateFlow1130(HttpCase):
 
     def test_create_shows_the_minted_password_once_and_never_stores_it(self):
         result = self._create('svc-1130-create', {
-            'conf.adminEmail': 'owner@example.com',
+            # #1335：create 擋保留網域（example.com 等），fixture 用一般網域
+            'conf.adminEmail': 'owner@tenant1130.tw',
             # 舊表單的鍵：create 靜默丟棄（#1160），不得落庫也不得擋下建立
             'odooPassword': 'LEGACY_FORM_PW_1130',
         })
@@ -546,7 +576,7 @@ class TestWoowOdooCreateFlow1130(HttpCase):
         self.assertTrue(data.get('admin_password'), '建立回應必須一次性帶出初始密碼')
         self.assertEqual(data['admin_password'], secret.admin_password,
                          '顯示的必須是真的會送進 chart 的那一把')
-        self.assertEqual(data.get('admin_username'), 'owner@example.com')
+        self.assertEqual(data.get('admin_username'), 'owner@tenant1130.tw')
         self.assertFalse(data['template']['admin_reset_supported'],
                          '前端依此顯示「Initial Password」文案；重設流程屬 #1186')
 
@@ -555,11 +585,24 @@ class TestWoowOdooCreateFlow1130(HttpCase):
         self.assertNotIn(secret.admin_password, stored_raw, '初始密碼不得落 helm_values')
         self.assertNotIn('LEGACY_FORM_PW_1130', stored_raw)
         self.assertNotIn('odooPassword', stored)
-        self.assertEqual(stored['conf']['adminEmail'], 'owner@example.com')
+        self.assertEqual(stored['conf']['adminEmail'], 'owner@tenant1130.tw')
         self.assertEqual(stored['conf']['workers'], 2, 'plan overlay 寫 typed conf.workers')
         self.assertNotIn(secret.admin_password, json.dumps(data.get('helm_values') or {}))
 
     def test_create_rejects_a_malformed_admin_email(self):
         result = self._create('svc-1130-bad', {'conf.adminEmail': 'not-an-email'})
         self.assertFalse(result.get('success'), result)
+        self.assertFalse(self._services(), '被擋的建立不得留下服務列')
+
+    def test_create_without_admin_email_is_rejected(self):
+        """#1335：seed 不再帶預設 email ⇒ 沒填就擋，不得靜默開出沒有可用 login 的 Odoo。"""
+        result = self._create('svc-1130-noemail', {})
+        self.assertFalse(result.get('success'), result)
+        self.assertFalse(self._services(), '被擋的建立不得留下服務列')
+
+    def test_create_rejects_a_reserved_example_domain(self):
+        """#1335：舊預設值 user@example.com 送進來要擋，訊息點名網域。"""
+        result = self._create('svc-1130-example', {'conf.adminEmail': 'user@example.com'})
+        self.assertFalse(result.get('success'), result)
+        self.assertIn('example.com', result.get('error') or '')
         self.assertFalse(self._services(), '被擋的建立不得留下服務列')
