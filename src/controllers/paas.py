@@ -3434,6 +3434,13 @@ class PaasController(HiddenChainMixin, Controller):
         的 chart 能力（gateway 有子路徑、dashboard 是 root），今天恰好只有
         hermes-agent 兩者兼具。綁在一起的話，哪天有 chart 只具其一，交付就會整組
         消失或整組多出來——而兩種錯法都不會有任何一端報錯。
+
+        ## P3：gateway 兩格的提示（`gateway_api_key_hint`／`gateway_url_hint`）
+
+        前端內建的提示是 hermes-agent 的（「填進 MCP 連線設定的 Gateway API Server
+        區」）。其他有 gateway 的模板（LiteLLM：key 是 master key、URL 是 OpenAI 相容
+        Base URL）在範本的同名欄位寫自己的說明（資料值，seed 原文），這裡跟著 key 一起帶出；空值
+        不帶，前端沿用內建文案。只是顯示字，交付判準不變。
         """
         creds: dict[str, Any] = {}
         secret = service._get_secret_record()
@@ -3441,6 +3448,14 @@ class PaasController(HiddenChainMixin, Controller):
         if secret and secret.gateway_api_key and gateway_url:
             creds['gateway_api_key'] = secret.gateway_api_key
             creds['gateway_url'] = gateway_url
+            # P3：兩格的提示依範本（資料值，seed 原文、不走 .po）。只跟著 key 一起出現：
+            # 沒有交付 key 時沒有那兩格可以掛提示。空值不帶，前端沿用 hermes-agent
+            # 的內建文案（MCP 連線設定）。
+            template = service.template_id
+            if template.gateway_api_key_hint:
+                creds['gateway_api_key_hint'] = template.gateway_api_key_hint
+            if template.gateway_url_hint:
+                creds['gateway_url_hint'] = template.gateway_url_hint
         dashboard_url = service._dashboard_public_url()
         if dashboard_url:
             creds['dashboard_url'] = dashboard_url
@@ -4376,13 +4391,15 @@ class PaasController(HiddenChainMixin, Controller):
                 # 顯示條件本身（`ac_max_access_seats > 0`）走 `subscription`，
                 # 那個 key 兩側都有，所以精簡版不會因此少掉判斷依據。
                 'access': service._access_to_dict(),
-                # 對外 MQTT 位址（charts/emqx）。能力旗標與值分開給：旗標決定前端
-                # 要不要畫這一格（空位址時顯示「尚未取得」而不是整格消失——那會讓
-                # 租戶以為自己沒開成功），值是背景 poll 回讀到的最後一筆。
-                # ⚠ 前端的 gate 必須讀 `has_public_mqtt_address`，不得用 slug 判
+                # 對外位址（ngrok sidecar：EMQX 的 MQTT、Headscale 的控制網址）。
+                # 能力旗標與值分開給：旗標決定前端要不要畫這一格（空位址時顯示
+                # 「尚未取得」而不是整格消失——那會讓租戶以為自己沒開成功），值是
+                # 背景 poll 回讀到的最後一筆，標題是範本的標籤（資料值，seed 原文）。
+                # ⚠ 前端的 gate 必須讀 `has_public_tunnel_address`，不得用 slug 判
                 # （repo-lint 第 7 條；見 cloud_app_template 同名欄位註解）。
-                'has_public_mqtt_address': service._chart_has_public_mqtt_address(),
-                'mqtt_public_url': service.mqtt_public_url or None,
+                'has_public_tunnel_address': service._chart_has_public_tunnel_address(),
+                'public_tunnel_label': service.template_id.public_tunnel_label or None,
+                'public_tunnel_url': service.public_tunnel_url or None,
                 'internal_port': service.internal_port,
                 'allocated_vcpu': service.allocated_vcpu,
                 'allocated_ram_gb': service.allocated_ram_gb,

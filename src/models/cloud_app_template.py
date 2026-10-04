@@ -32,14 +32,21 @@ SPECS_UNPARSEABLE = object()
 # 寫進 /etc/gitconfig（``name = {{ . }}``、``[credential "{{ . }}"]``），所以換行、
 # 引號、反斜線、``;``／``#``（gitconfig 註解）都會把整份 gitconfig 弄壞，git 從此
 # 每個指令都報錯——這裡就是那道閘。
+#
+# ``domain``（Headscale 的 ngrok.domain）：一個 FQDN，存檔時擋下整條網址／埠／路徑，
+# 部署組裝時正規化成小寫（見 ``parse_domain``）。
 SPEC_FORMAT_GIT_HOSTS = 'git_hosts'
 SPEC_FORMAT_GIT_NAME = 'git_name'
 SPEC_FORMAT_EMAIL = 'email'
+SPEC_FORMAT_DOMAIN = 'domain'
 
 _GIT_HOSTS_MAX = 10
 _GIT_NAME_MAX = 100
 _EMAIL_MAX = 254
+_DOMAIN_MAX = 253
 _HOST_LABEL = r'[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?'
+_DOMAIN_LABEL_RE = re.compile(r'^%s\Z' % _HOST_LABEL)
+_DOMAIN_RE = re.compile(r'^%s(?:\.%s)+\Z' % (_HOST_LABEL, _HOST_LABEL))
 _GIT_HOST_RE = re.compile(
     r'^(?P<host>%s(?:\.%s)*)(?::(?P<port>[0-9]{1,5}))?\Z' % (_HOST_LABEL, _HOST_LABEL))
 # gitconfig 未加引號的值：控制字元（含換行）、引號、反斜線會改變解析；``;``／``#``
@@ -167,10 +174,57 @@ def parse_email(raw):
     return email, None
 
 
+def parse_domain(raw):
+    """``domain``：一個完整網域名稱（FQDN）。空 → 不設（選填欄位）。
+
+    第一個用途是 Headscale 的 ``ngrok.domain``：chart 把它組成
+    ``ngrok http … --url https://<domain>`` 與 Headscale 的 ``server_url``。租戶最常
+    貼錯的形態是整條網址（``https://xxx.ngrok-free.app/``）或帶埠，這些要在**存檔**
+    時就擋下並說清楚——靠 chart 在 render 時 ``fail`` 會重演 EMQX 0.1.1「升級失敗、
+    服務進 error」。
+
+    規則：ASCII、每段 1–63 字（字母數字與 ``-``，不得以 ``-`` 開頭或結尾）、至少兩段、
+    總長 ≤ 253、最後一段不得全是數字（擋 IP）；不收 scheme、路徑、query、埠、
+    ``user@``、萬用字元、空白。大小寫不分：正規化成小寫；結尾的一個 ``.``（FQDN 根）
+    去掉。
+
+    Returns:
+        (str | None, (error code, params) | None)
+    """
+    if raw is None:
+        return None, None
+    if not isinstance(raw, str):
+        return None, ('not_text', {})
+    value = raw.strip()
+    if not value:
+        return None, None
+    if not value.isascii():
+        # 先擋再 lower()：有些非 ASCII 字元 lower() 之後會變成 ASCII（例 U+212A
+        # KELVIN SIGN → k），等於把租戶打的同形字悄悄換成另一個網域。IDN 請填 punycode。
+        return None, ('domain_invalid', {'entry': value})
+    if '://' in value:
+        return None, ('domain_scheme', {'entry': value})
+    if any(ch in value for ch in '/?#@'):
+        return None, ('domain_path', {'entry': value})
+    if ':' in value:
+        return None, ('domain_port', {'entry': value})
+    low = value.lower()
+    if low.endswith('.'):
+        low = low[:-1]
+    if len(low) > _DOMAIN_MAX:
+        return None, ('domain_too_long', {'max': _DOMAIN_MAX})
+    if not _DOMAIN_RE.match(low) or low.rsplit('.', 1)[-1].isdigit():
+        if '.' not in low and _DOMAIN_LABEL_RE.match(low):
+            return None, ('domain_single_label', {'entry': value})
+        return None, ('domain_invalid', {'entry': value})
+    return low, None
+
+
 SPEC_FORMAT_PARSERS = {
     SPEC_FORMAT_GIT_HOSTS: parse_git_hosts,
     SPEC_FORMAT_GIT_NAME: parse_git_name,
     SPEC_FORMAT_EMAIL: parse_email,
+    SPEC_FORMAT_DOMAIN: parse_domain,
 }
 
 # #501：限量商品的**內建**全域實例上限（slug → 台數）。
@@ -415,30 +469,67 @@ class CloudAppTemplate(models.Model):
              'has_admin_gui=True.',
     )
 
-    # 對外 MQTT 位址（charts/emqx 0.1.0）——「這個商品有沒有一個平台要回讀並顯示
-    # 給租戶的對外位址」的**唯一事實源**。
+    # 對外位址（chart 的 ngrok sidecar；charts/emqx 0.1.0 起、charts/headscale）——
+    # 「這個商品有沒有一個平台要回讀並顯示給租戶的對外位址」的**唯一事實源**。
+    # （18.0.1.0.205 以前叫 has_public_mqtt_address、只給 EMQX 用；P1 泛化後改名。
+    # 範本由 seed 擁有（noupdate=0 ＋ 檔尾 healer），`-u` 時 seed 會把 EMQX 的新旗標
+    # 寫回 True，所以改名不需要 migration。）
     #
     # 為什麼是 template 欄位而不是在哪裡判 `slug == 'emqx'`：capability gate 一律
     # 收斂成單一欄位（docs/decisions/patterns/capability-gate-single-source-field.md，
     # repo-lint 第 7 條機械守著前端不得用 slug 做集合成員判斷）。model 的
-    # `CloudService._chart_has_public_mqtt_address`、poll 的探測閘門、service payload
+    # `CloudService._chart_has_public_tunnel_address`、poll 的探測閘門、service payload
     # 與前端文案四處都讀它。
     #
-    # 位址怎麼來：平台的 Cloudflare 通道只載 HTTP/WS，原生 MQTT 走租戶自己的 ngrok
-    # agent（chart 的 sidecar）。租戶若填了 ngrok 保留位址，那個值本來就在 helm values
-    # 裡、平台早就知道；本旗標要解的是**隨機指派**那一種——agent 每次連線拿到的位址只有
-    # 它自己知道，它每 60 秒把當前位址印到自己的 container log，operator 的
-    # `GET /api/releases/{ns}/{release}/mqtt-address` 從那裡讀回來。
+    # 位址怎麼來：平台的 Cloudflare 通道只載 HTTP/WS（而且會剝掉 Tailscale 控制協議
+    # 的 Upgrade header），原生 MQTT 與 Headscale 控制面都走租戶自己的 ngrok agent
+    # （chart 的 sidecar）。agent 實際拿到的位址（隨機指派的 TCP 位址、帳號的 dev
+    # domain）只有它自己知道，它每 60 秒把當前位址印到自己的 container log
+    # （`WOOW_PUBLIC_URL=tcp://…`／`https://…`），operator 的
+    # `GET /api/releases/{ns}/{release}/public-address` 從那裡讀回來。
     #
-    # ⚠ 旗標開著不代表一定有位址：租戶沒開對外 MQTT、agent 還沒連上、pod 還在起來，
-    # 都是正常的「沒有位址」狀態（`cloud_service.mqtt_public_url` 為空），不是錯誤。
-    has_public_mqtt_address = fields.Boolean(
-        string='Advertises a public MQTT address',
+    # ⚠ 旗標開著不代表一定有位址：租戶沒開、agent 還沒連上、pod 還在起來，都是正常
+    # 的「沒有位址」狀態（`cloud_service.public_tunnel_url` 為空），不是錯誤。
+    has_public_tunnel_address = fields.Boolean(
+        string='Advertises a public tunnel address',
         default=False,
-        help='The chart runs a tunnel agent that advertises the service\'s public '
-             'MQTT address on its own container log, and the platform reads it back '
-             'and shows it on the service page. Empty address is a normal state '
-             '(the tenant has not enabled it, or the agent has not connected yet).',
+        help='The chart runs an ngrok tunnel sidecar that advertises the service\'s '
+             'public address (tcp://host:port or https://host) on its own container '
+             'log, and the platform reads it back and shows it on the service page. '
+             'Empty address is a normal state (the tenant has not enabled it, or the '
+             'agent has not connected yet).',
+    )
+    # 服務頁那一格的標題（例 EMQX「對外 MQTT 位址」、Headscale「對外控制網址」）。
+    # 這是範本 record 的**資料值**：seed 直接寫中文原文、**不可翻譯、不進 .po**
+    # （docs/decisions/patterns/i18n-scope-data-values-vs-code-strings.md）。空值時前端
+    # 用程式碼字串 `_t("Public address")`（那個走 .po）。只是顯示字，**不是**能力判準
+    # ——gate 一律讀上面的旗標。
+    public_tunnel_label = fields.Char(
+        string='Public Tunnel Address Label',
+        help='Label of the public tunnel address on the service page, e.g. "對外 MQTT '
+             '位址". A data value written in the seed as-is (not translated). Empty '
+             'shows the generic "Public address". Display only; whether the row '
+             'exists is decided by "Advertises a public tunnel address".',
+    )
+
+    # #530 一次性憑證視窗的 gateway 兩格提示（P3）。空值＝沿用前端內建的 hermes-agent
+    # 文案（「填進 MCP 連線設定的 Gateway API Server 區」）；其他有 gateway 的模板
+    # （例 LiteLLM：key 是 master key、URL 是 OpenAI 相容 Base URL）在 seed 寫自己的
+    # 說明。範本 record 的**資料值**：seed 直接寫中文原文、不可翻譯、不進 .po
+    # （i18n-scope-data-values-vs-code-strings.md）；前端內建的 hermes 文案是程式碼字串，
+    # 照常 `_t()`＋po。只是顯示字：交付與否仍只看 `_gateway_external_path()`
+    # （seed 的 gateway.externalPath）。
+    gateway_api_key_hint = fields.Text(
+        string='Gateway API Key Hint',
+        help='Hint under the "Gateway API Key" row of the one-time credentials dialog '
+             '(a data value written in the seed as-is, not translated). Empty keeps the '
+             'built-in hermes-agent text (MCP connection settings).',
+    )
+    gateway_url_hint = fields.Text(
+        string='Gateway API URL Hint',
+        help='Hint under the "Gateway API URL" row of the one-time credentials dialog '
+             '(a data value written in the seed as-is, not translated). Empty keeps the '
+             'built-in hermes-agent text (MCP connection settings).',
     )
 
     # #449 密碼載體：**只影響 reset 路徑，不影響供給路徑**。
@@ -1182,6 +1273,24 @@ class CloudAppTemplate(models.Model):
                      'without " \\ ; # < > or invisible control characters.', **params)
         if code == 'email_invalid':
             return _('Git author email is not a valid email address.')
+        if code == 'domain_scheme':
+            return _('Domain: enter the domain name only, without https:// (for example '
+                     'abc-123.ngrok-free.app instead of "%(entry)s").', **params)
+        if code == 'domain_path':
+            return _('Domain: enter the domain name only, without a path, "/" or "@" '
+                     '("%(entry)s" is not a domain name).', **params)
+        if code == 'domain_port':
+            return _('Domain: enter the domain name only, without a port number '
+                     '("%(entry)s").', **params)
+        if code == 'domain_single_label':
+            return _('Domain: "%(entry)s" is not a full domain name; use a dotted name '
+                     'such as abc-123.ngrok-free.app.', **params)
+        if code == 'domain_too_long':
+            return _('Domain: at most %(max)s characters.', **params)
+        if code == 'domain_invalid':
+            return _('Domain: "%(entry)s" is not a valid domain name. Use letters, digits '
+                     'and hyphens separated by dots, for example abc-123.ngrok-free.app.',
+                     **params)
         return _('Invalid setting value.')
 
     def _validate_spec_formats(self, flat_values):

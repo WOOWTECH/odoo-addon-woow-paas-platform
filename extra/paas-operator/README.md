@@ -51,7 +51,8 @@ The PaaS Operator Service is a secure, high-performance API that wraps Helm CLI 
 - `POST /api/releases/{namespace}/{name}/rollback` - Rollback release
 - `GET /api/releases/{namespace}/{name}/revisions` - Get revision history
 - `GET /api/releases/{namespace}/{name}/status` - Get release and pod status
-- `GET /api/releases/{namespace}/{name}/mqtt-address` - Get the public MQTT address the release's tunnel agent advertises on its container log (charts/emqx). `public_url: null` is a normal state (not enabled / agent not connected yet), not an error.
+- `GET /api/releases/{namespace}/{name}/public-address` - Get the public address the release's ngrok sidecar advertises on its container log: `tcp://host:port` (charts/emqx, native MQTT) or `https://host[:port]` (charts/headscale, control URL). Contract: the sidecar container is named `ngrok` and prints `WOOW_PUBLIC_URL=<url>` (legacy `WOOW_MQTT_PUBLIC_URL=` is still honoured) at the **start of a line**; the last valid line wins and an empty value retracts the address. `public_url: null` is a normal state (not enabled / agent not connected yet / retracted), not an error.
+- `GET /api/releases/{namespace}/{name}/mqtt-address` - **Legacy** (called by platform ≤ 18.0.1.0.205): same contract, `tcp://` addresses only. Keep until no deployed platform calls it.
 
 ### Namespaces
 

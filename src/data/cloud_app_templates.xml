@@ -1901,7 +1901,8 @@
             <field name="has_admin_gui" eval="True"/>
             <field name="admin_password_carrier">app_managed</field>
             <field name="admin_password_settable" eval="False"/>
-            <field name="has_public_mqtt_address" eval="True"/>
+            <field name="has_public_tunnel_address" eval="True"/>
+            <field name="public_tunnel_label">對外 MQTT 位址</field>
             <field name="post_deploy_init_type">none</field>
             <field name="max_per_partner" eval="0"/>
             <field name="is_hidden" eval="False"/>

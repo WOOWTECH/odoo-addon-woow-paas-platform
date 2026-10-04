@@ -52,29 +52,25 @@
                         </span>
                     </div>
 
-                    <!-- Public MQTT address (charts/emqx).
-                         Gate 讀 has_public_mqtt_address —— 能力的唯一事實源是
+                    <!-- 對外位址（ngrok sidecar：EMQX 的 MQTT、Headscale 的控制網址）。
+                         Gate 讀 has_public_tunnel_address —— 能力的唯一事實源是
                          cloud_app_template 的同名欄位；前端不得用 slug 做集合成員
-                         判斷（repo-lint 第 7 條 capability-gate）。
+                         判斷（repo-lint 第 7 條 capability-gate）。標題是範本的標籤
+                         （publicTunnelLabel，資料值），只是顯示字。
                          刻意「旗標在、值空」時仍然畫這一格並說明原因：整格消失會讓
                          剛填完 ngrok token 的租戶以為自己設定失敗，而這裡最可能的
                          狀態就是 agent 還在連線。 -->
-                    <div class="o_woow_info_row" t-if="props.service.has_public_mqtt_address">
-                        <span class="o_woow_info_label">Public MQTT</span>
+                    <div class="o_woow_info_row" t-if="props.service.has_public_tunnel_address">
+                        <span class="o_woow_info_label" t-esc="publicTunnelLabel"/>
                         <span class="o_woow_info_value o_woow_info_copyable">
-                            <t t-if="props.service.mqtt_public_url">
-                                <code t-esc="props.service.mqtt_public_url"/>
-                                <button class="o_woow_copy_btn" t-on-click="() => this.copyToClipboard(props.service.mqtt_public_url, 'mqtt')" title="Copy MQTT address">
-                                    <WoowIcon name="copyIcon('mqtt')" size="16"/>
+                            <t t-if="props.service.public_tunnel_url">
+                                <code t-esc="props.service.public_tunnel_url"/>
+                                <button class="o_woow_copy_btn" t-on-click="() => this.copyToClipboard(props.service.public_tunnel_url, 'tunnel')" t-att-title="publicTunnelCopyTitle">
+                                    <WoowIcon name="copyIcon('tunnel')" size="16"/>
                                 </button>
                             </t>
                             <t t-else="">
-                                <small class="text-muted">
-                                    Not available yet. Public MQTT needs your own ngrok authtoken in
-                                    Configuration; once the agent connects, the address appears here
-                                    (it is re-checked in the background). With a reserved ngrok address
-                                    it stays the same, otherwise it changes whenever the service restarts.
-                                </small>
+                                <small class="text-muted" t-esc="publicTunnelPendingHint"/>
                             </t>
                         </span>
                     </div>

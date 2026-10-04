@@ -1208,10 +1208,16 @@ class KubernetesService:
                 stderr="",
             )
 
-    # ── EMQX 的對外 MQTT 位址（charts/emqx 0.1.0 契約）────────────────────────
+    # ── 對外位址回讀（ngrok sidecar；charts/emqx 0.1.0 起、charts/headscale）──
     #
-    # chart 的 ngrok sidecar 把當前的公開位址每 60 秒印一次到自己的 stdout
-    # （`WOOW_MQTT_PUBLIC_URL=tcp://…`）。平台從 container log 讀它，而不是
+    # chart 的 ngrok sidecar 把當前的公開位址每 60 秒印一次到自己的 stdout，
+    # 一行一筆：`WOOW_PUBLIC_URL=<url>`（通用 marker）或 `WOOW_MQTT_PUBLIC_URL=<url>`
+    # （EMQX 0.1.x 的舊 marker，繼續認）。`<url>` 是
+    #   * `tcp://host:port` —— ngrok TCP endpoint（EMQX 原生 MQTT）；
+    #   * `https://host[:port]` —— ngrok HTTP endpoint（Headscale 控制網址）。
+    # 值是空的（`WOOW_PUBLIC_URL=`）＝撤回：agent 退出、沒填 token、連線失敗。
+    #
+    # 平台從 container log 讀它，而不是
     #   * 開一個 :4040 的 Service —— agent 的本機 API 能**建立**隧道，開成 Service
     #     等於讓同一個租戶 namespace 內的其他服務操作它；
     #   * 讓 sidecar 寫 ConfigMap —— 那需要掛 SA token ＋ RBAC（chart 目前
@@ -1222,26 +1228,79 @@ class KubernetesService:
     # 刻意**不**回傳任何原始 log 內容：只回傳比對成功的那個位址。容器 log 是
     # 第三方（ngrok agent）的輸出，整段轉出去等於把一個不受控的字串管道接到
     # Odoo 的 HTTP 回應上。
+    #
+    # marker 必須在**行首**（sidecar 是 `echo "WOOW_PUBLIC_URL=${url}"`）。同一個
+    # stdout 也印 ngrok agent 自己的 log（`--log stdout`），而 HTTP endpoint 的那幾行
+    # 可能帶外部訪客可控的字串（請求路徑之類）；marker 若能出現在行中間，訪客打一個
+    # `/WOOW_PUBLIC_URL=https://evil.example` 就可能讓平台把攻擊者的網址顯示成
+    # 「你的 Headscale 控制網址」，租戶照著設定裝置＝把整個 tailnet 交出去。
     NGROK_CONTAINER_NAME = "ngrok"
-    NGROK_ADDRESS_MARKER = "WOOW_MQTT_PUBLIC_URL="
+    # 順序無關：同一份 log 裡兩種 marker 一視同仁，取**最後一筆**。
+    NGROK_ADDRESS_MARKERS = ("WOOW_PUBLIC_URL=", "WOOW_MQTT_PUBLIC_URL=")
     NGROK_LOG_TAIL_LINES = 200
     NGROK_LOG_TIMEOUT_SECONDS = 15
-    # ngrok TCP endpoint 的形狀。fail-closed：對不上就當沒有，不把來源字串轉出去。
-    _NGROK_ADDRESS_RE = re.compile(r"^tcp://[A-Za-z0-9][A-Za-z0-9.-]{0,252}:[0-9]{1,5}$")
+    # 對外位址的形狀。fail-closed：對不上就當沒有，不把來源字串轉出去。
+    # 主機名逐段驗（RFC 1123 label、至少一個點、總長 ≤ 253），只收 ASCII；不收
+    # userinfo（`user@`）、路徑、query、fragment、結尾的 `/` 或 `.`。`https` 的埠
+    # 可省略（ngrok HTTP endpoint 的 public_url 本來就不帶埠），`tcp` 必須有埠。
+    _HOST_LABEL = r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
+    _PUBLIC_ADDRESS_RE = re.compile(
+        r"(?P<scheme>tcp|https)://"
+        r"(?P<host>%s(?:\.%s)+)"
+        r"(?::(?P<port>[0-9]{1,5}))?" % (_HOST_LABEL, _HOST_LABEL)
+    )
+    PUBLIC_ADDRESS_SCHEMES = ("tcp", "https")
 
-    def get_advertised_mqtt_address(self, namespace: str, release: str) -> Optional[str]:
-        """Read the public MQTT address the release's ngrok sidecar advertises.
+    @classmethod
+    def _parse_public_address(cls, candidate: str, schemes) -> Optional[str]:
+        """``candidate`` 是合法的對外位址就原樣回傳，否則 None（fail-closed）。"""
+        match = cls._PUBLIC_ADDRESS_RE.fullmatch(candidate)
+        if not match or match.group("scheme") not in schemes:
+            return None
+        if len(match.group("host")) > 253:
+            return None
+        port = match.group("port")
+        if port is None:
+            # TCP endpoint 沒有埠就連不上——那不是一個位址。
+            return None if match.group("scheme") == "tcp" else candidate
+        return candidate if 0 < int(port) < 65536 else None
+
+    @classmethod
+    def _marker_value(cls, line: str) -> Optional[str]:
+        """行首是 marker 就回傳 marker 後面的值（去掉 ASCII 空白；空字串＝撤回），否則 None。
+
+        行首就是第 0 個字元：前面有任何東西（含空白）都不算。只去 ASCII 的空白與
+        ``\r``——``str.strip()`` 會連 U+2028／U+0085 之類一起吃掉，等於讓行中間的
+        Unicode 換行字元重新造出一個「行首」。
+        """
+        line = line.rstrip("\r")
+        for marker in cls.NGROK_ADDRESS_MARKERS:
+            if line.startswith(marker):
+                return line[len(marker):].strip(" \t")
+        return None
+
+    def get_advertised_public_address(
+        self,
+        namespace: str,
+        release: str,
+        schemes=PUBLIC_ADDRESS_SCHEMES,
+    ) -> Optional[str]:
+        """Read the public address the release's ngrok sidecar advertises.
 
         Args:
             namespace: Release namespace
             release: Helm release name (``app.kubernetes.io/instance``)
+            schemes: Accepted URL schemes. The generic endpoint accepts both
+                ``tcp`` and ``https``; the legacy ``/mqtt-address`` endpoint
+                passes ``("tcp",)`` so it keeps returning exactly what it did.
 
         Returns:
-            The advertised ``tcp://host:port``, or None when there is nothing to
-            report — no pod, no ngrok sidecar (the tenant left it off), the agent
-            has not connected yet, or the line did not match the expected shape.
-            All of those are ordinary states, NOT errors: the caller must not
-            treat None as a failure.
+            The advertised ``tcp://host:port`` / ``https://host[:port]``, or None
+            when there is nothing to report — no pod, no ngrok sidecar (the tenant
+            left it off), the agent has not connected yet, the sidecar retracted
+            the address, or the line did not match the expected shape. All of
+            those are ordinary states, NOT errors: the caller must not treat None
+            as a failure.
         """
         validate_namespace(namespace)
 
@@ -1266,7 +1325,7 @@ class KubernetesService:
                 )
             except KubectlException as e:
                 # The usual case: this pod has no `ngrok` container because the
-                # tenant has not enabled public MQTT. Also covers a pod that is
+                # tenant has not enabled the tunnel. Also covers a pod that is
                 # still initialising. Debug-level on purpose — it is not a fault.
                 logger.debug(
                     "No ngrok log for %s/%s: %s", namespace, pod.name, e.message
@@ -1274,15 +1333,18 @@ class KubernetesService:
                 continue
 
             address = None
-            for line in (result.stdout or "").splitlines():
-                marker_at = line.find(self.NGROK_ADDRESS_MARKER)
-                if marker_at == -1:
+            # 只以 "\n" 切行（kubectl logs 的行界）。`splitlines()` 還會在 U+2028、
+            # U+0085、\x1c–\x1e、\r 切開——ngrok 自己那幾行若夾帶這些字元，行中間的
+            # marker 就會被切成「行首」，行首錨定等於失效。
+            for line in (result.stdout or "").split("\n"):
+                candidate = self._marker_value(line)
+                if candidate is None:
                     continue
-                candidate = line[marker_at + len(self.NGROK_ADDRESS_MARKER):].strip()
-                if self._NGROK_ADDRESS_RE.match(candidate):
+                parsed = self._parse_public_address(candidate, schemes) if candidate else None
+                if parsed:
                     # Keep scanning: the sidecar re-prints on an interval, so the
                     # LAST match is the address the agent currently holds.
-                    address = candidate
+                    address = parsed
                 elif not candidate:
                     # An EMPTY announcement is a retraction: the sidecar prints it
                     # whenever the agent exits (bad token, expired account…)
