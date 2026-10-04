@@ -11,7 +11,8 @@ operator（``extra/paas-operator/src/services/storage_capacity.py``）在 helm i
 * 409 ⇒ ``error_message`` 是寫給租戶的說明（平台儲存空間暫時不足、沒有建立任何資源、
   管理員已收到通知、可刪除後稍後再開或聯絡客服；有訂閱時說明刪除會取消訂閱、試用期
   不扣款），依**服務建立者**的語言；同時給系統管理員開 activity（一台一行、未處理前追加）；
-* 拒絕路徑與 #1348 一致：服務停在 error、訂閱不動、沒有扣點／發票；
+* 拒絕路徑與 #1348 一致：服務停在 error、沒有扣點／發票；#1424 起從未 running 過的服務
+  訂閱會被自動取消（細節與其他情境見 ``test_never_running_billing_1424``）；
 * 其他錯誤（含 #1348 的工作區配額）不誤認成叢集額度、不告警；
 * monitor cron：額度低於門檻或節點預訂 > 90% 才告警、附孤兒 PVC 佔用；同 summary 不重開；
   operator 太舊（404）／讀不到 Longhorn ⇒ 安靜略過；
@@ -164,7 +165,7 @@ class TestClusterStorageDeployMessage1415(_Base):
         svc = self._deploy_failing_with(self._service(self._user('en_US')), detail)
         self.assertIn('cannot create the disks this service needs.', svc.error_message)
 
-    def test_trial_subscription_is_left_as_the_1348_path_leaves_it_and_nothing_is_charged(self):
+    def test_trial_subscription_is_cancelled_and_nothing_is_charged(self):
         user = self._user('zh_TW')
         svc = self._service(user, subscription_plan=self._trial_plan())
         sub = svc.sudo().subscription_id
@@ -176,14 +177,14 @@ class TestClusterStorageDeployMessage1415(_Base):
         svc = self._deploy_failing_with(svc, CAPACITY_DETAIL)
 
         self.assertEqual(svc.state, 'error')
-        self.assertIn('取消訂閱', svc.error_message)
-        self.assertIn('試用期內不會扣款', svc.error_message)
-        self.assertEqual(sub.state, 'in_progress', '與 #1348 拒絕路徑相同：訂閱不在這裡動')
+        self.assertIn('訂閱已自動取消，不會扣款', svc.error_message)
+        self.assertNotIn('刪除服務會一併取消訂閱', svc.error_message)
+        self.assertEqual(sub.state, 'cancel', '#1424：operator 明確拒絕、服務從未 running ⇒ 自動取消')
         self.assertFalse(self.env['wallet.transaction'].sudo().search_count([
             ('partner_id', '=', user.partner_id.id), ('transaction_type', '=', 'deduct')]))
         self.assertEqual(self.env['account.move'].sudo().search_count(
             [('partner_id', '=', user.partner_id.id)]), moves_before)
-        self.assertEqual(sub._compute_unused_refund(), 0, '試用期刪除：不扣也不退')
+        self.assertEqual(sub._compute_unused_refund(), 0, '試用期取消：不扣也不退')
 
     def test_admins_get_one_activity_with_a_line_per_rejected_service(self):
         summary = self.Monitor.SUMMARY_STORAGE_REJECTED
