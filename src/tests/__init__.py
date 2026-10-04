@@ -1006,6 +1006,8 @@ from . import test_omnigent_server_url_injection
 from . import test_code_server_git_settings
 # #1348：operator 回儲存配額已滿（孤兒 PVC 仍計入配額）時，租戶看到的說明訊息。
 from . import test_storage_quota_message_1348
+# #1415：叢集儲存（Longhorn）排程額度不足時的租戶訊息、管理員告警與定時監控。
+from . import test_cluster_storage_capacity_1415
 # #1334：n8n storageClass 改在首裝時釘進 helm_values（PVC 不可變）＋公開網址注入；
 # 範本說明的孤兒磁碟保留天數與正式站 operator 一致。
 from . import test_n8n_storage_class_public_url_1334
@@ -1013,5 +1015,3 @@ from . import test_n8n_storage_class_public_url_1334
 from . import test_app_admin_password_reset_1370
 # #1408：Redeploy 帶範本 image、就緒後核對 workload image（#1407 為 operator 側）。
 from . import test_redeploy_images_1408
-# #1415：叢集儲存（Longhorn）排程額度不足時的租戶訊息、管理員告警與定時監控。
-from . import test_cluster_storage_capacity_1415

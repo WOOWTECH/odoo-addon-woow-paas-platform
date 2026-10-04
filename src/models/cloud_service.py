@@ -884,12 +884,6 @@ def _deep_merge(base, override):
     return result
 
 
-def _tenant_size(size):
-    """#1415：operator 的 ``"80Gi"``／``"77.2Gi"`` → 租戶看得懂的 ``"80 GiB"``；其他形狀原樣。"""
-    text = str(size)
-    return text[:-2] + ' GiB' if text.endswith('Gi') else text
-
-
 class CloudService(models.Model):
     _name = 'woow_paas_platform.cloud_service'
     _inherit = ['woow_paas_platform.subscription_lifecycle_mixin']
@@ -2526,8 +2520,10 @@ class CloudService(models.Model):
             return None
         lang = self.sudo().create_uid.lang or self.env.lang
         env = self.with_context(lang=lang).env
+        # operator 的 "80Gi"／"77.2Gi" → 租戶看得懂的 "80 GiB"。
         sizes = [
-            _tenant_size(v.get('size')) for v in detail.get('unschedulable') or []
+            str(v['size'])[:-2] + ' GiB' if str(v['size']).endswith('Gi') else str(v['size'])
+            for v in detail.get('unschedulable') or []
             if isinstance(v, dict) and v.get('size')
         ]
         if sizes:
