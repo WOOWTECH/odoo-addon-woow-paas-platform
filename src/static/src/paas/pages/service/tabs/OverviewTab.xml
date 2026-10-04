@@ -55,8 +55,8 @@
                     <!-- 對外位址（ngrok sidecar：EMQX 的 MQTT、Headscale 的控制網址）。
                          Gate 讀 has_public_tunnel_address —— 能力的唯一事實源是
                          cloud_app_template 的同名欄位；前端不得用 slug 做集合成員
-                         判斷（repo-lint 第 7 條 capability-gate）。標題是範本的可翻譯
-                         標籤（publicTunnelLabel），只是顯示字。
+                         判斷（repo-lint 第 7 條 capability-gate）。標題是範本的標籤
+                         （publicTunnelLabel，資料值），只是顯示字。
                          刻意「旗標在、值空」時仍然畫這一格並說明原因：整格消失會讓
                          剛填完 ngrok token 的租戶以為自己設定失敗，而這裡最可能的
                          狀態就是 agent 還在連線。 -->

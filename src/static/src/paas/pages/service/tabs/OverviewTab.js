@@ -41,9 +41,9 @@ export class OverviewTab extends Component {
     }
 
     /**
-     * 對外位址那一格的標題：範本的可翻譯標籤（後端依請求語言給，例 EMQX「對外 MQTT
-     * 位址」、Headscale「對外控制網址」）；範本沒設時用通用字。只是顯示字——這一格
-     * 畫不畫只看 `has_public_tunnel_address`。
+     * 對外位址那一格的標題：範本的標籤（資料值、seed 原文，例 EMQX「對外 MQTT 位址」、
+     * Headscale「對外控制網址」）；範本沒設時用通用的程式碼字串（_t，走 po）。只是顯示字
+     * ——這一格畫不畫只看 `has_public_tunnel_address`。
      */
     get publicTunnelLabel() {
         return this.props.service.public_tunnel_label || _t("Public address");

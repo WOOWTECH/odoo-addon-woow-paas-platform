@@ -736,9 +736,9 @@ container log 讀回來顯示在服務頁。
 
 - **能力旗標**：`cloud_app_template.has_public_tunnel_address`（唯一事實源；
   18.0.1.0.205 以前叫 `has_public_mqtt_address`）。前端不得用 slug 判（repo-lint 第 7 條）。
-- **顯示標籤**：`cloud_app_template.public_tunnel_label`（可翻譯；seed 寫英文、
-  `zh_TW.po` 給中文，例 EMQX「Public MQTT address／對外 MQTT 位址」）；空值時前端用
-  「Public address／對外位址」。
+- **顯示標籤**：`cloud_app_template.public_tunnel_label`（範本 record 的資料值：seed 直接寫
+  中文原文、不可翻譯、不進 `.po`，見 `docs/decisions/patterns/i18n-scope-data-values-vs-code-strings.md`；
+  例 EMQX「對外 MQTT 位址」）；空值時前端用程式碼字串 `_t("Public address")`（走 `.po`，「對外位址」）。
 - **帳本**：`cloud_service.public_tunnel_url`（唯讀；18.0.1.0.205 以前叫
   `mqtt_public_url`，升級時 `CloudService.init()` 把舊值搬過來）。轉移狀態 poll 每分鐘、
   running 服務由每日對帳 cron 回寫；三態（沒探／探過沒有／位址）見
@@ -757,7 +757,7 @@ container log 讀回來顯示在服務頁。
 
 有 gateway 的模板（`helm_default_values.gateway.externalPath`，#530）在建立與 Reset
 時一次性交付 `gateway_api_key`＋`gateway_url`。兩格的說明文字依範本：
-`cloud_app_template.gateway_api_key_hint`／`gateway_url_hint`（可翻譯），有值時隨
+`cloud_app_template.gateway_api_key_hint`／`gateway_url_hint`（資料值，seed 直接寫中文原文、不進 `.po`），有值時隨
 `_gateway_credentials` 帶出（同名 payload 鍵）；空值時前端沿用 hermes-agent 的內建
 文案（MCP 連線設定的 Gateway API Server 區）。只是顯示字，交付判準不變。
 

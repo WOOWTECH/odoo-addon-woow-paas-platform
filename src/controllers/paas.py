@@ -3439,7 +3439,7 @@ class PaasController(HiddenChainMixin, Controller):
 
         前端內建的提示是 hermes-agent 的（「填進 MCP 連線設定的 Gateway API Server
         區」）。其他有 gateway 的模板（LiteLLM：key 是 master key、URL 是 OpenAI 相容
-        Base URL）在範本的同名可翻譯欄位寫自己的說明，這裡跟著 key 一起帶出；空值
+        Base URL）在範本的同名欄位寫自己的說明（資料值，seed 原文），這裡跟著 key 一起帶出；空值
         不帶，前端沿用內建文案。只是顯示字，交付判準不變。
         """
         creds: dict[str, Any] = {}
@@ -3448,7 +3448,7 @@ class PaasController(HiddenChainMixin, Controller):
         if secret and secret.gateway_api_key and gateway_url:
             creds['gateway_api_key'] = secret.gateway_api_key
             creds['gateway_url'] = gateway_url
-            # P3：兩格的提示依範本（可翻譯欄位，依請求語言）。只跟著 key 一起出現：
+            # P3：兩格的提示依範本（資料值，seed 原文、不走 .po）。只跟著 key 一起出現：
             # 沒有交付 key 時沒有那兩格可以掛提示。空值不帶，前端沿用 hermes-agent
             # 的內建文案（MCP 連線設定）。
             template = service.template_id
@@ -4394,7 +4394,7 @@ class PaasController(HiddenChainMixin, Controller):
                 # 對外位址（ngrok sidecar：EMQX 的 MQTT、Headscale 的控制網址）。
                 # 能力旗標與值分開給：旗標決定前端要不要畫這一格（空位址時顯示
                 # 「尚未取得」而不是整格消失——那會讓租戶以為自己沒開成功），值是
-                # 背景 poll 回讀到的最後一筆，標題是範本的可翻譯標籤（依請求語言）。
+                # 背景 poll 回讀到的最後一筆，標題是範本的標籤（資料值，seed 原文）。
                 # ⚠ 前端的 gate 必須讀 `has_public_tunnel_address`，不得用 slug 判
                 # （repo-lint 第 7 條；見 cloud_app_template 同名欄位註解）。
                 'has_public_tunnel_address': service._chart_has_public_tunnel_address(),

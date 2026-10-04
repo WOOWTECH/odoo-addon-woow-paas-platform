@@ -5,7 +5,8 @@
 Gateway API Server 區」）。LiteLLM 之後也會走 #530 的 gateway 通道（master key ＋
 OpenAI 相容 Base URL），沿用那段文案等於叫租戶去一個不存在的 MCP 設定頁。
 
-- 範本欄位 `gateway_api_key_hint`／`gateway_url_hint`（可翻譯）；
+- 範本欄位 `gateway_api_key_hint`／`gateway_url_hint`（資料值：seed 直接寫中文原文、
+  不可翻譯、不進 .po，見 i18n-scope-data-values-vs-code-strings.md）；
 - `PaasController._gateway_credentials`（建立與 Reset 兩個呼叫點共用）在**交付 key 時**
   一併帶出同名鍵；空值不帶，前端沿用內建文案；
 - 只是顯示字：交付判準不變（seed 的 gateway.externalPath ＋ 服務有對外根位址）。
@@ -17,8 +18,8 @@ from odoo.tests.common import TransactionCase, tagged
 from odoo.addons.woow_paas_platform.controllers.paas import PaasController
 from ..models.cloud_service import _internal_provision
 
-KEY_HINT = 'Master key: the gateway admin key. Give apps a virtual key instead.'
-URL_HINT = 'OpenAI-compatible base URL (base_url / OPENAI_BASE_URL).'
+KEY_HINT = 'master key＝這台閘道的管理金鑰，應用程式請改用虛擬金鑰。'
+URL_HINT = 'OpenAI 相容 API 的 Base URL（填進應用程式的 base_url／OPENAI_BASE_URL）。'
 
 
 @tagged('post_install', '-at_install')
@@ -106,7 +107,8 @@ class TestGatewayHintTemplate(TransactionCase):
         self.assertFalse(hermes.gateway_api_key_hint)
         self.assertFalse(hermes.gateway_url_hint)
 
-    def test_hint_fields_are_translatable(self):
+    def test_hint_fields_are_data_values_not_translated(self):
+        """範本 record 的欄位內容是資料值：單一語言原文，不可翻譯（不走 .po）。"""
         fields = self.env['woow_paas_platform.cloud_app_template']._fields
         for name in ('gateway_api_key_hint', 'gateway_url_hint', 'public_tunnel_label'):
-            self.assertTrue(fields[name].translate, name)
+            self.assertFalse(fields[name].translate, name)

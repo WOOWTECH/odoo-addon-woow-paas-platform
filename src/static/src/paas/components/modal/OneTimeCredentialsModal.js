@@ -163,7 +163,7 @@ export function buildOneTimeCredentials(data) {
         });
     }
     // P3：gateway 兩格的提示依範本（後端 `gateway_api_key_hint`／`gateway_url_hint`，
-    // 範本的可翻譯欄位，已依請求語言）。沒帶時沿用 hermes-agent 的 MCP 說明——
+    // 範本的資料值、seed 原文）。沒帶時沿用 hermes-agent 的 MCP 說明（程式碼字串，走 po）——
     // 其他有 gateway 的模板（例 LiteLLM：master key ＋ OpenAI 相容 Base URL）會帶自己的。
     if (data && data.gateway_api_key) {
         credentials.push({

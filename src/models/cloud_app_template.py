@@ -499,34 +499,37 @@ class CloudAppTemplate(models.Model):
              'Empty address is a normal state (the tenant has not enabled it, or the '
              'agent has not connected yet).',
     )
-    # 服務頁那一格的標題（例 EMQX「Public MQTT address」、Headscale「Public control
-    # URL」）。可翻譯：seed 寫英文原文、zh_TW.po 給中文。空值時前端用通用的
-    # 「Public address」。只是顯示字，**不是**能力判準——gate 一律讀上面的旗標。
+    # 服務頁那一格的標題（例 EMQX「對外 MQTT 位址」、Headscale「對外控制網址」）。
+    # 這是範本 record 的**資料值**：seed 直接寫中文原文、**不可翻譯、不進 .po**
+    # （docs/decisions/patterns/i18n-scope-data-values-vs-code-strings.md）。空值時前端
+    # 用程式碼字串 `_t("Public address")`（那個走 .po）。只是顯示字，**不是**能力判準
+    # ——gate 一律讀上面的旗標。
     public_tunnel_label = fields.Char(
         string='Public Tunnel Address Label',
-        translate=True,
-        help='Label of the public tunnel address on the service page, e.g. "Public '
-             'MQTT address". Empty shows the generic "Public address". Display only; '
-             'whether the row exists is decided by "Advertises a public tunnel '
-             'address".',
+        help='Label of the public tunnel address on the service page, e.g. "對外 MQTT '
+             '位址". A data value written in the seed as-is (not translated). Empty '
+             'shows the generic "Public address". Display only; whether the row '
+             'exists is decided by "Advertises a public tunnel address".',
     )
 
     # #530 一次性憑證視窗的 gateway 兩格提示（P3）。空值＝沿用前端內建的 hermes-agent
     # 文案（「填進 MCP 連線設定的 Gateway API Server 區」）；其他有 gateway 的模板
     # （例 LiteLLM：key 是 master key、URL 是 OpenAI 相容 Base URL）在 seed 寫自己的
-    # 說明。可翻譯：seed 寫英文原文、zh_TW.po 給中文（或直接寫中文，兩者皆可顯示）。
-    # 只是顯示字：交付與否仍只看 `_gateway_external_path()`（seed 的 gateway.externalPath）。
+    # 說明。範本 record 的**資料值**：seed 直接寫中文原文、不可翻譯、不進 .po
+    # （i18n-scope-data-values-vs-code-strings.md）；前端內建的 hermes 文案是程式碼字串，
+    # 照常 `_t()`＋po。只是顯示字：交付與否仍只看 `_gateway_external_path()`
+    # （seed 的 gateway.externalPath）。
     gateway_api_key_hint = fields.Text(
         string='Gateway API Key Hint',
-        translate=True,
-        help='Hint under the "Gateway API Key" row of the one-time credentials dialog. '
-             'Empty keeps the built-in hermes-agent text (MCP connection settings).',
+        help='Hint under the "Gateway API Key" row of the one-time credentials dialog '
+             '(a data value written in the seed as-is, not translated). Empty keeps the '
+             'built-in hermes-agent text (MCP connection settings).',
     )
     gateway_url_hint = fields.Text(
         string='Gateway API URL Hint',
-        translate=True,
-        help='Hint under the "Gateway API URL" row of the one-time credentials dialog. '
-             'Empty keeps the built-in hermes-agent text (MCP connection settings).',
+        help='Hint under the "Gateway API URL" row of the one-time credentials dialog '
+             '(a data value written in the seed as-is, not translated). Empty keeps the '
+             'built-in hermes-agent text (MCP connection settings).',
     )
 
     # #449 密碼載體：**只影響 reset 路徑，不影響供給路徑**。

@@ -19707,11 +19707,6 @@ msgid "Copy address"
 msgstr "複製位址"
 
 #. module: woow_paas_platform
-#: model:woow_paas_platform.cloud_app_template,public_tunnel_label:woow_paas_platform.cloud_app_emqx
-msgid "Public MQTT address"
-msgstr "對外 MQTT 位址"
-
-#. module: woow_paas_platform
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_app_template__has_public_tunnel_address
 msgid "Advertises a public tunnel address"
 msgstr "回報對外通道位址"

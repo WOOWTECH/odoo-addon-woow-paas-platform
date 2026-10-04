@@ -31,7 +31,9 @@ ngrok agent（chart 的 sidecar）。agent 實際拿到的位址只有它自己�
 5. **平台先上也不壞 EMQX**：operator 還沒有 `/public-address`（404）時 client 退回
    `/mqtt-address`。
 
-6. **標籤可翻譯、但不是能力判準**：`public_tunnel_label` 只決定那一格叫什麼。
+6. **標籤是資料值、不是能力判準**：`public_tunnel_label` 只決定那一格叫什麼；它是範本
+   record 的欄位內容，seed 直接寫中文、不可翻譯、不進 .po
+   （docs/decisions/patterns/i18n-scope-data-values-vs-code-strings.md）。
 """
 import json
 import os
@@ -116,7 +118,8 @@ class TestCapabilityGateSingleSource(_Base):
         emqx = self.env.ref('woow_paas_platform.cloud_app_emqx')
         self.assertTrue(emqx.has_public_tunnel_address)
         self.assertEqual(
-            emqx.with_context(lang='en_US').public_tunnel_label, 'Public MQTT address')
+            emqx.public_tunnel_label, '對外 MQTT 位址',
+            '標籤是資料值：seed 直接寫中文原文（不靠 .po 翻譯）')
         self.assertFalse(
             self.env.ref('woow_paas_platform.cloud_app_nextcloud')
             .has_public_tunnel_address)
@@ -447,10 +450,14 @@ class TestClientFallsBackOnOldOperator(TransactionCase):
 class TestZhTwTranslations(TransactionCase):
     """服務頁那一格在中文介面要是中文（舊的 "Public MQTT" 說明一直沒有翻譯）。
 
+    分兩層（docs/decisions/patterns/i18n-scope-data-values-vs-code-strings.md）：
+    - 程式碼字串（OverviewTab 的 `_t()`：通用標題、尚未取得說明、複製）→ 走 .po；
+    - 資料值（範本的 `public_tunnel_label`、gateway 兩格提示）→ seed 原文，⛔ 不進 .po。
+
     用 Odoo 自己的 `PoFileReader` 讀——runtime 就是用它（見 test_lang_zh_tw_activation_107）。
     """
 
-    _JS = 'static/src/paas/pages/service/tabs/OverviewTab.js'
+    _DATA_VALUE_FIELDS = ('public_tunnel_label', 'gateway_api_key_hint', 'gateway_url_hint')
 
     def _entries(self):
         po = os.path.join(
@@ -459,8 +466,7 @@ class TestZhTwTranslations(TransactionCase):
         return list(PoFileReader(po))
 
     def test_overview_strings_are_translated(self):
-        js = {e['src']: e['value'] for e in self._entries()
-              if e['type'] == 'code' and e['name'].endswith(self._JS)}
+        js = {e['src']: e['value'] for e in self._entries() if e.get('type') == 'code'}
         for src in ('Public address', 'Copy address'):
             self.assertTrue(js.get(src), 'OverviewTab 缺中文：%r' % src)
         self.assertTrue(
@@ -468,12 +474,13 @@ class TestZhTwTranslations(TransactionCase):
                 and value for src, value in js.items()),
             '「尚未取得」說明缺中文')
 
-    def test_emqx_label_is_translated(self):
-        model = [e for e in self._entries()
-                 if e['type'] == 'model'
-                 and e['name'] == 'woow_paas_platform.cloud_app_template,public_tunnel_label'
-                 and e['imd_name'] == 'cloud_app_emqx']
-        self.assertEqual(len(model), 1, 'EMQX 標籤的 model 翻譯條目要剛好一筆')
-        self.assertEqual(model[0]['src'], 'Public MQTT address',
-                         'msgid 必須等於 seed 原文，否則 Odoo 對不上')
-        self.assertEqual(model[0]['value'], '對外 MQTT 位址')
+    def test_data_values_stay_out_of_po(self):
+        """範本 record 的欄位內容不可翻譯、不進 .po（欄位 string／help 是 metadata，照常翻）。"""
+        fields = self.env['woow_paas_platform.cloud_app_template']._fields
+        names = {'woow_paas_platform.cloud_app_template,%s' % f
+                 for f in self._DATA_VALUE_FIELDS}
+        for f in self._DATA_VALUE_FIELDS:
+            self.assertFalse(fields[f].translate, '%s 是資料值，不得 translate=True' % f)
+        leaked = [e['src'] for e in self._entries()
+                  if e.get('type') == 'model' and e.get('name') in names]
+        self.assertEqual(leaked, [], '資料值不得出現在 zh_TW.po 的 model: 條目')
