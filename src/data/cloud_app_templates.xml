@@ -1987,8 +1987,12 @@
              1 vCPU／1 GB／1 GB：方案 overlay（頂層 resources）套在 headplane；persistence.size＝唯一一顆 PVC
              （sqlite、noise key、Headplane 資料）。
              鏡像：headscale 20261004.0159（#233）、headscale-debug／headplane 20261004.0502（重新鏡像，
-             digest＝上游 index digest 不變）。隱藏（is_hidden=True）待：chart 0.1.0 發佈、真 ngrok 實測、
-             正式站驗證（#1412 的 operator /public-address 已上 prod）。 -->
+             digest＝上游 index digest 不變）。
+             上架（is_hidden=False，2026-10-04）：2026-10-04 以隱藏卡片進 seed（#1413），隨 .206 上正式站
+             （template／plan 已在 prod DB 對帳）；chart 0.1.0 已發佈；真 ngrok 實測四項通過；operator
+             /public-address（#1412）已上 prod；整合實測（published chart＋JCR image＋本檔 values）10/10 通過。
+             正式站以測試帳號開通驗收在本 PR 上線後進行。test_headscale_seed.test_hidden_until_listed 守線：
+             上架 ⟹ 三顆 image 雙釘。 -->
         <record id="cloud_app_headscale" model="woow_paas_platform.cloud_app_template">
             <field name="name">VPN 控制台（Headscale）</field>
             <field name="slug">headscale</field>
@@ -2054,7 +2058,7 @@
             <field name="public_tunnel_label">VPN 登入網址（login server）</field>
             <field name="post_deploy_init_type">none</field>
             <field name="max_per_partner" eval="0"/>
-            <field name="is_hidden" eval="True"/>
+            <field name="is_hidden" eval="False"/>
             <field name="is_active" eval="True"/>
         </record>
 
@@ -2069,8 +2073,11 @@
              不必重啟。tailscale.authKey 刻意**不在** config.sensitive 底下（平台會剝掉）。
              1 vCPU／0.5 GB／1 GB：方案 overlay 套在 tailscale 容器；persistence.size＝節點身分那顆 PVC。
              image：#240 合併後從 main build 並核可（#244，promote run 14211）＝tailscale:20261004.0747；
-             digest 與沙盒實測的 #239 候選逐位相同（可重現建置）。隱藏（is_hidden=True）待：chart 0.1.0 發佈、
-             正式站驗證。 -->
+             digest 與沙盒實測的 #239 候選逐位相同（可重現建置）。
+             上架（is_hidden=False，2026-10-04）：同 Headscale，#1413 以隱藏卡片進 seed、隨 .206 上正式站；
+             chart 0.1.0 已發佈；整合實測 10/10 通過（含 egress 防線、exit node 鎖死）。⚠ 入口擋 127/8 ⇒
+             kubectl port-forward 一律 403，網頁介面只能從服務網址開（說明已寫）。
+             test_tailscale_seed.test_hidden_until_listed 守線：上架 ⟹ image 雙釘。 -->
         <record id="cloud_app_tailscale" model="woow_paas_platform.cloud_app_template">
             <field name="name">VPN 節點（相容 Tailscale）</field>
             <field name="slug">tailscale</field>
@@ -2084,8 +2091,9 @@
                 **轉發清單**：格式「tailnet 埠=服務名稱:埠」，多筆以逗號分隔，例如 8069=svc-1a2b3c4d:80；只接受同一工作區的服務，
                 IP、外部網址或其他工作區的項目會被略過並寫入服務記錄。
                 **網頁介面**：帳號固定 admin，密碼於開通時一次性顯示；可在服務頁「Admin Credentials」重設或改成自己的密碼
-                （約一分鐘內生效、服務不必重啟）。網頁介面只能查看狀態與發起登入，其他設定一律在服務設定修改；儲存設定時節點會重啟約一分鐘。
-                **限制**：不提供 exit node、子網路由（subnet router）、app connector、Tailscale SSH 與 Funnel；平台出口是共用 NAT，
+                （約一分鐘內生效、服務不必重啟）。網頁介面僅供登入與查看狀態；請從瀏覽器開服務網址操作，其他設定一律在服務設定修改；
+                儲存設定時節點會重啟約一分鐘。
+                **限制**：不提供出口節點（exit node）、子網路由（subnet router）、app connector、Tailscale SSH 與 Funnel；平台出口是共用 NAT，
                 連線多半經 Tailscale 公共中繼（DERP）轉送，速度有限。
                 **身分**：節點身分存在持久磁碟，重啟後不變。欠費停權時服務停止（磁碟保留），恢復繳費後原樣還在；
                 刪除服務即全新節點（要重新登入），原磁碟依平台保留政策 90 天後回收。</field>
@@ -2125,7 +2133,7 @@
             <field name="admin_password_settable" eval="True"/>
             <field name="post_deploy_init_type">none</field>
             <field name="max_per_partner" eval="0"/>
-            <field name="is_hidden" eval="True"/>
+            <field name="is_hidden" eval="False"/>
             <field name="is_active" eval="True"/>
         </record>
 
@@ -2143,8 +2151,11 @@
              不加 _inject_allowed_origins：chart 的 litellm.publicUrl 選配（UI 登入 redirect 由請求推導，
              tunnel 的 X-Forwarded-Proto 由 trustedProxyRanges 信任）。
              1 vCPU／2 GB／10 GB：方案 overlay 套在 litellm 容器；persistence.size＝唯一一顆 PVC。
-             鏡像 litellm 20261004.0502（digest＝上游 index digest）。隱藏（is_hidden=True）待：chart 0.1.0 發佈、
-             正式站驗證。
+             鏡像 litellm 20261004.0502（digest＝上游 index digest）。
+             上架（is_hidden=False，2026-10-04）：同 Headscale，#1413 以隱藏卡片進 seed、隨 .206 上正式站；
+             chart 0.1.0 已發佈；整合實測 10/10 通過（含 1 次真 chat、換 master key）。⚠ workload 為 Recreate ⇒
+             重設帳密／master key 斷線約 2 分 15 秒（說明已寫）。
+             test_litellm_seed.test_hidden_until_listed 守線：上架 ⟹ litellm 與 PG 兩顆 image 雙釘。
              營運：上游只支援最近四條線、半年 3 個未授權漏洞 ⇒ 每月升 minor 並 backfill 既有服務。 -->
         <record id="cloud_app_litellm" model="woow_paas_platform.cloud_app_template">
             <field name="name">AI 模型閘道（LiteLLM）</field>
@@ -2155,7 +2166,7 @@
                 可用模型，並記錄每把金鑰的用量與花費。隨附專屬 PostgreSQL。
                 **帳密**：網頁後台帳號固定 admin，密碼於開通時一次性顯示；同時一次性顯示 master key 與 API Base URL
                 （https://你的服務網址/v1）。可在服務頁「Admin Credentials」重設或改成自己的密碼——重設時 master key 會一起換新、
-                舊的立即失效（已建立的虛擬金鑰與供應商金鑰不受影響），請妥善保存。
+                舊的立即失效（已建立的虛擬金鑰與供應商金鑰不受影響），請妥善保存。重設管理員密碼或 master key 時，服務會重新啟動，約中斷 2 分鐘。
                 **模型與供應商金鑰**：開通時沒有任何模型。請在後台新增模型並填入你自己的供應商 API Key；金鑰加密後存在你自己的資料庫，
                 平台不代管。
                 **使用 API**：應用程式請一律用後台建立的虛擬金鑰，master key 只給管理腳本。經公開網址單次請求上限 100 MB；
@@ -2192,7 +2203,7 @@
             <field name="gateway_url_hint">OpenAI 相容 API 的 Base URL。同工作區其他服務請改用內部網址 http://&lt;服務 release&gt;-litellm:4000/v1。</field>
             <field name="post_deploy_init_type">none</field>
             <field name="max_per_partner" eval="0"/>
-            <field name="is_hidden" eval="True"/>
+            <field name="is_hidden" eval="False"/>
             <field name="is_active" eval="True"/>
         </record>
 

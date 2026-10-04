@@ -142,7 +142,7 @@
                    eval="[(6, 0, [ref('plan_nextcloud_monthly'), ref('plan_nextcloud_yearly')])]"/>
         </record>
 
-        <!-- Headscale／Tailscale／LiteLLM：範本先隱藏（is_hidden=True），方案先掛好（沒掛 plan 會被 _create_service 擋）。 -->
+        <!-- Headscale／Tailscale／LiteLLM：2026-10-04 以隱藏範本＋方案先掛好進 seed（沒掛 plan 會被 _create_service 擋），同日公開上架。 -->
         <record id="cloud_app_headscale" model="woow_paas_platform.cloud_app_template">
             <field name="subscription_plan_ids"
                    eval="[(6, 0, [ref('plan_headscale_monthly'), ref('plan_headscale_yearly')])]"/>
