@@ -17,7 +17,7 @@
 |------|------|
 | [`getting-started.md`](getting-started.md) | 新人快速上手（入口檔） |
 | [`development/`](development/oauth2-architecture.md) | 開發者技術細節（[OAuth2 架構](development/oauth2-architecture.md)、[/woow AI Chat（agent-runtime）資料流與 Secret 關係](development/agent-runtime-chat-architecture.md)、[merge train 每一節的驗收清單](development/merge-train-acceptance.md) 等） |
-| [`deployment/`](deployment/k8s-setup.md) | **[發佈到 Production SOP](deployment/prod-release-sop.md)**（Fleet GitOps 全流程 + 版本矩陣，給人類與自動化 agent）；K8s setup、運維、troubleshooting、admin roles；runbook（[agent-runtime image 升版 SOP](deployment/agent-runtime-image-upgrade-sop.md)、[agent-runtime pilot flip-gate](deployment/agent-runtime-pilot-flip-gate-runbook.md)） |
+| [`deployment/`](deployment/k8s-setup.md) | **[發佈到 Production SOP](deployment/prod-release-sop.md)**（Fleet GitOps 全流程 + 版本矩陣，給人類與自動化 agent）；K8s setup、運維、troubleshooting、admin roles；runbook（[agent-runtime image 升版 SOP](deployment/agent-runtime-image-upgrade-sop.md)、[agent-runtime pilot flip-gate](deployment/agent-runtime-pilot-flip-gate-runbook.md)；平台 Odoo 換 chart 四份（草稿）：[彩排](deployment/platform-odoo-cutover-rehearsal-runbook.md)、[cutover](deployment/platform-odoo-cutover-runbook.md)、[回切](deployment/platform-odoo-cutover-switchback-runbook.md)、[teardown](deployment/platform-odoo-cutover-teardown-runbook.md)） |
 | [`testing/`](testing/TESTING.md) | Odoo test、PaaS operator test、E2E test guide |
 | [`tutorials/`](tutorials/cloud-odoo-addon-management.md) | 完整逐步指引（cloud odoo addon management、[Security Access route 管理與狀態判讀](tutorials/security-access-routes.md)） |
 | [`../archived/guides/frameworks/`](../archived/guides/frameworks/) | 已退役框架（superpowers、SuperClaude）的舊指南；現行 mattpocock/skills 見 [`../agents/`](../agents/issue-tracker.md) |
