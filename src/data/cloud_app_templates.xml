@@ -1986,8 +1986,9 @@
              digest，否則會 render 成雙 digest）。
              1 vCPU／1 GB／1 GB：方案 overlay（頂層 resources）套在 headplane；persistence.size＝唯一一顆 PVC
              （sqlite、noise key、Headplane 資料）。
-             隱藏（is_hidden=True）待：headscale-debug／headplane 鏡像（paas-odoo-ci #234／#235）核可、
-             chart 0.1.0 發佈、#1412（operator /public-address）上線、真 ngrok 實測。 -->
+             鏡像：headscale 20261004.0159（#233）、headscale-debug／headplane 20261004.0502（重新鏡像，
+             digest＝上游 index digest 不變）。隱藏（is_hidden=True）待：chart 0.1.0 發佈、真 ngrok 實測、
+             正式站驗證（#1412 的 operator /public-address 已上 prod）。 -->
         <record id="cloud_app_headscale" model="woow_paas_platform.cloud_app_template">
             <field name="name">VPN 控制台（Headscale）</field>
             <field name="slug">headscale</field>
@@ -2015,7 +2016,7 @@
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/headscale</field>
             <field name="helm_chart_version">0.1.0</field>
-            <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/headscale","tag":"20261004.0159@sha256:8833f828b414c0907b7e5c71da76473216fe17cce0818a166b536ec552c0903f"},"bootstrap":{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/headscale-debug","tag":"20261004.0159@sha256:2380cdb4951e5d63747d5880aeecaf7aea7702f06ea72a6b9d8010b9386195b8"}},"headplane":{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/headplane","tag":"20261004.0159@sha256:394483fd2336ce6b15df360c3e118ddfd45eb8140fe21df9f2611077f5d79d22"}},"entrance":{"basicAuthUsername":"admin"},"persistence":{"size":"1Gi"},"service":{"port":3000}}</field>
+            <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/headscale","tag":"20261004.0159@sha256:8833f828b414c0907b7e5c71da76473216fe17cce0818a166b536ec552c0903f"},"bootstrap":{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/headscale-debug","tag":"20261004.0502@sha256:2380cdb4951e5d63747d5880aeecaf7aea7702f06ea72a6b9d8010b9386195b8"}},"headplane":{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/headplane","tag":"20261004.0502@sha256:394483fd2336ce6b15df360c3e118ddfd45eb8140fe21df9f2611077f5d79d22"}},"entrance":{"basicAuthUsername":"admin"},"persistence":{"size":"1Gi"},"service":{"port":3000}}</field>
             <field name="helm_value_specs">{"required": [], "optional": [
                 {"key": "ngrok.enabled", "label": "對外 VPN 登入網址（ngrok）", "type": "boolean", "default": false,
                 "description": "Tailscale 的登入協定無法經過平台的服務網址，外部裝置要登入必須透過你自己的 ngrok 帳號；未開啟時只有同工作區的 VPN 節點能用內部網址登入"},
@@ -2141,7 +2142,8 @@
              不加 _inject_allowed_origins：chart 的 litellm.publicUrl 選配（UI 登入 redirect 由請求推導，
              tunnel 的 X-Forwarded-Proto 由 trustedProxyRanges 信任）。
              1 vCPU／2 GB／10 GB：方案 overlay 套在 litellm 容器；persistence.size＝唯一一顆 PVC。
-             隱藏（is_hidden=True）待：litellm 鏡像（paas-odoo-ci #236）核可、chart 0.1.0 發佈。
+             鏡像 litellm 20261004.0502（digest＝上游 index digest）。隱藏（is_hidden=True）待：chart 0.1.0 發佈、
+             正式站驗證。
              營運：上游只支援最近四條線、半年 3 個未授權漏洞 ⇒ 每月升 minor 並 backfill 既有服務。 -->
         <record id="cloud_app_litellm" model="woow_paas_platform.cloud_app_template">
             <field name="name">AI 模型閘道（LiteLLM）</field>
@@ -2168,7 +2170,7 @@
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/litellm</field>
             <field name="helm_chart_version">0.1.0</field>
-            <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/litellm","tag":"20261004.0159@sha256:f6eff3e681c841b9fcfd49b552c25e1e0f04f962bfbc5bd47a96859a33a94674"},"postgresql":{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/paas-postgres","tag":"17.11-20260928.1549@sha256:dbd1fed8882043f45bf759e8f7c73092505ef0afef7a23a93b177e6f7c2c840f"}},"gateway":{"externalPath":"/v1"},"persistence":{"size":"10Gi"},"service":{"port":4000}}</field>
+            <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/litellm","tag":"20261004.0502@sha256:f6eff3e681c841b9fcfd49b552c25e1e0f04f962bfbc5bd47a96859a33a94674"},"postgresql":{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/paas-postgres","tag":"17.11-20260928.1549@sha256:dbd1fed8882043f45bf759e8f7c73092505ef0afef7a23a93b177e6f7c2c840f"}},"gateway":{"externalPath":"/v1"},"persistence":{"size":"10Gi"},"service":{"port":4000}}</field>
             <field name="helm_value_specs">{"required": [], "optional": [
                 {"key": "litellm.spendLogRetention", "label": "用量明細保留天數", "type": "select", "default": "90d",
                 "options": [{"value": "7d", "label": "7 天"}, {"value": "30d", "label": "30 天"}, {"value": "90d", "label": "90 天"}, {"value": "180d", "label": "180 天"}, {"value": "365d", "label": "365 天"}],

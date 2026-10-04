@@ -36,11 +36,11 @@ PINNED_TAG_RE = r'^\d{8}\.\d{4}@sha256:[0-9a-f]{64}$'
 # 上游版本對照（JCR 鏡像以 skopeo --preserve-digests 保留上游 index digest）。
 # 換版時：headscale 與 headscale-debug 兩顆**一起**登記同一個版本。
 HEADSCALE_DIGESTS = {
-    # ghcr.io/juanfont/headscale:v0.29.4（paas-odoo-ci #233）
+    # ghcr.io/juanfont/headscale:v0.29.4（JCR headscale:20261004.0159，paas-odoo-ci #233）
     'sha256:8833f828b414c0907b7e5c71da76473216fe17cce0818a166b536ec552c0903f': 'v0.29.4',
 }
 HEADSCALE_DEBUG_DIGESTS = {
-    # ghcr.io/juanfont/headscale:v0.29.4-debug（paas-odoo-ci #234）
+    # ghcr.io/juanfont/headscale:v0.29.4-debug（JCR headscale-debug:20261004.0502）
     'sha256:2380cdb4951e5d63747d5880aeecaf7aea7702f06ea72a6b9d8010b9386195b8': 'v0.29.4',
 }
 TUNNEL_LABEL = 'VPN 登入網址（login server）'
