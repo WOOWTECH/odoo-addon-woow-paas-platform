@@ -859,6 +859,7 @@ class HelmService:
         timeout_seconds: Optional[int] = None,
         subprocess_timeout_seconds: Optional[int] = None,
         dry_run: bool = False,
+        description: Optional[str] = None,
     ) -> ReleaseInfo:
         """Upgrade a Helm release.
 
@@ -948,6 +949,11 @@ class HelmService:
         # default verbatim (behaviour-neutral); only the reset path bounds it.
         if timeout_seconds is not None:
             args.extend(["--timeout", f"{timeout_seconds}s"])
+        # #1433: the preserving rollback is an upgrade; without a description the
+        # revision list would read "Upgrade complete" and the tenant could not tell
+        # it was a rollback.
+        if description:
+            args.extend(["--description", description])
 
         # Classic Helm repo (stateless) — mirrors install(); see its note.
         if repo:
@@ -1031,6 +1037,44 @@ class HelmService:
 
         result = self._run_command(args)
         return {"message": result.stdout.strip()}
+
+    def get_values(
+        self, namespace: str, name: str, revision: Optional[int] = None
+    ) -> Dict[str, Any]:
+        """#1433: user-supplied values of a release revision (``helm get values``).
+
+        Returns the **raw** values — including ``config.sensitive.*``. Callers must
+        never log or return them; the preserving rollback only feeds them back into
+        ``helm upgrade --values <tempfile>``. ``revision=None`` ＝ the current one.
+        """
+        validate_namespace(namespace)
+        args = ["get", "values", name, "--namespace", namespace, "--output", "json"]
+        if revision is not None:
+            args.extend(["--revision", str(int(revision))])
+        result = self._run_command(args)
+        data = json.loads(result.stdout or "null")
+        # helm prints `null` for a revision installed without any values.
+        return data if isinstance(data, dict) else {}
+
+    def get_revision_chart_version(
+        self, namespace: str, name: str, revision: int
+    ) -> Optional[str]:
+        """#1433: the chart version a revision was rendered from.
+
+        Read from the release object itself (``Chart.Metadata.Version``) instead of
+        splitting ``helm history``'s ``<name>-<version>`` string, which is ambiguous
+        for chart names or prerelease versions containing dashes.
+        """
+        validate_namespace(namespace)
+        args = [
+            "get", "all", name,
+            "--namespace", namespace,
+            "--revision", str(int(revision)),
+            "--template", "{{.Release.Chart.Metadata.Version}}",
+        ]
+        result = self._run_command(args)
+        version = (result.stdout or "").strip()
+        return version or None
 
     def history(self, namespace: str, name: str) -> List[ReleaseRevision]:
         """Get release revision history.
@@ -1636,6 +1680,8 @@ class KubernetesService:
         memory_limit: str,
         storage_limit: str,
         workspace_id: Optional[int] = None,
+        ephemeral_storage_request: Optional[str] = None,
+        ephemeral_storage_limit: Optional[str] = None,
     ) -> Dict[str, str]:
         """Create namespace with resource quota.
 
@@ -1669,24 +1715,10 @@ class KubernetesService:
         }
 
         # Create quota manifest using yaml.safe_dump to prevent injection
-        quota_manifest = {
-            "apiVersion": "v1",
-            "kind": "ResourceQuota",
-            "metadata": {
-                "name": f"{name}-quota",
-                "namespace": name,
-            },
-            "spec": {
-                "hard": {
-                    "requests.cpu": cpu_limit,
-                    "requests.memory": memory_limit,
-                    "limits.cpu": cpu_limit,
-                    "limits.memory": memory_limit,
-                    "persistentvolumeclaims": "10",
-                    "requests.storage": storage_limit,
-                },
-            },
-        }
+        quota_manifest = self._build_quota_manifest(
+            name, cpu_limit, memory_limit, storage_limit,
+            ephemeral_storage_request, ephemeral_storage_limit,
+        )
 
         # Apply namespace
         with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
@@ -1698,6 +1730,12 @@ class KubernetesService:
         finally:
             Path(ns_file).unlink(missing_ok=True)
 
+        # #278 A2: CS ns LimitRange — #1434 起排在 quota **之前**：quota 一旦 hard
+        # 宣告 limits.ephemeral-storage，admission 就拒收沒宣告它的容器；既有 ns 重跑
+        # 本流程（每次開通都會）時若先換 quota、後補 LimitRange 預設，中間那一瞬間建的
+        # Pod 會被拒。先補預設、再收緊額度，任何時刻都不會出現「額度要求、預設缺席」。
+        self._apply_limitrange(name)
+
         # Apply quota
         with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
             yaml.safe_dump(quota_manifest, f)
@@ -1707,16 +1745,6 @@ class KubernetesService:
             self._run_command(["apply", "-f", quota_file])
         finally:
             Path(quota_file).unlink(missing_ok=True)
-
-        # #278 A2: CS ns LimitRange（quota 之後、registry secret 之前）
-        limits_manifest = self._build_limitrange_manifest(name)
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
-            yaml.safe_dump(limits_manifest, f)
-            limits_file = f.name
-        try:
-            self._run_command(["apply", "-f", limits_file])
-        finally:
-            Path(limits_file).unlink(missing_ok=True)
 
         self.ensure_registry_secret(name)
 
@@ -1745,37 +1773,92 @@ class KubernetesService:
 
     def _build_limitrange_manifest(self, name: str) -> dict:
         """CS ns LimitRange（#278 A2）：ns quota hard-宣告 limits.cpu/memory 後，
-        admission 拒收未設 limits 的容器；default 補上安全預設讓其可建。"""
+        admission 拒收未設 limits 的容器；default 補上安全預設讓其可建。
+
+        #1434：再補 ephemeral-storage。R8 實測所有租戶容器都沒有 ephemeral-storage
+        上限，/tmp 等 overlay 路徑可無限寫進節點系統碟（含正式站節點）。LimitRange 的
+        default 只補「容器沒宣告」的格子，chart 自己有設的照 chart。"""
         return {
             "apiVersion": "v1",
             "kind": "LimitRange",
             "metadata": {"name": f"{name}-limits", "namespace": name},
             "spec": {"limits": [{
                 "type": "Container",
-                "default": {"cpu": "500m", "memory": "512Mi"},
-                "defaultRequest": {"cpu": "500m", "memory": "512Mi"},
+                "default": {
+                    "cpu": "500m",
+                    "memory": "512Mi",
+                    "ephemeral-storage": settings.tenant_ephemeral_storage_default_limit,
+                },
+                "defaultRequest": {
+                    "cpu": "500m",
+                    "memory": "512Mi",
+                    "ephemeral-storage": settings.tenant_ephemeral_storage_default_request,
+                },
             }]},
         }
 
-    def update_namespace_quota(self, name: str, cpu_limit: str,
-                               memory_limit: str, storage_limit: str) -> Dict[str, str]:
-        """#278 A1：整組 hard overwrite ns ResourceQuota（不動 ns/NP/secret）。
-        apply 完整 6-key hard map（含 pvc=10），無 stale key。"""
-        validate_namespace(name)
+    def _apply_limitrange(self, name: str) -> None:
         import yaml
-        quota_manifest = {
+        limits_manifest = self._build_limitrange_manifest(name)
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+            yaml.safe_dump(limits_manifest, f)
+            limits_file = f.name
+        try:
+            self._run_command(["apply", "-f", limits_file])
+        finally:
+            Path(limits_file).unlink(missing_ok=True)
+
+    @staticmethod
+    def _build_quota_manifest(
+        name: str,
+        cpu_limit: str,
+        memory_limit: str,
+        storage_limit: str,
+        ephemeral_storage_request: Optional[str] = None,
+        ephemeral_storage_limit: Optional[str] = None,
+    ) -> dict:
+        """ns ResourceQuota 的唯一組裝點（create 與 update 共用，避免兩份 hard map 漂移）。
+
+        #1434：``ephemeral_storage_*`` 為 None（舊平台沒送）時**不加**這兩個鍵——
+        行為與 #1434 之前完全相同，operator 可以先於平台發版。"""
+        hard = {
+            "requests.cpu": cpu_limit,
+            "requests.memory": memory_limit,
+            "limits.cpu": cpu_limit,
+            "limits.memory": memory_limit,
+            "persistentvolumeclaims": "10",
+            "requests.storage": storage_limit,
+        }
+        if ephemeral_storage_request:
+            hard["requests.ephemeral-storage"] = ephemeral_storage_request
+        if ephemeral_storage_limit:
+            hard["limits.ephemeral-storage"] = ephemeral_storage_limit
+        return {
             "apiVersion": "v1",
             "kind": "ResourceQuota",
             "metadata": {"name": f"{name}-quota", "namespace": name},
-            "spec": {"hard": {
-                "requests.cpu": cpu_limit,
-                "requests.memory": memory_limit,
-                "limits.cpu": cpu_limit,
-                "limits.memory": memory_limit,
-                "persistentvolumeclaims": "10",
-                "requests.storage": storage_limit,
-            }},
+            "spec": {"hard": hard},
         }
+
+    def update_namespace_quota(self, name: str, cpu_limit: str,
+                               memory_limit: str, storage_limit: str,
+                               ephemeral_storage_request: Optional[str] = None,
+                               ephemeral_storage_limit: Optional[str] = None,
+                               ) -> Dict[str, str]:
+        """#278 A1：整組 hard overwrite ns ResourceQuota（不動 ns/NP/secret）。
+        apply 完整 hard map（含 pvc=10），無 stale key。
+
+        #1434：quota 帶 ephemeral-storage 時先重套 LimitRange（補預設），理由見
+        ``create_namespace`` 同一段——既有 ns 第一次收到含 ephemeral 的 quota 時，
+        LimitRange 可能還是舊的（沒有 ephemeral 預設）。"""
+        validate_namespace(name)
+        import yaml
+        if ephemeral_storage_request or ephemeral_storage_limit:
+            self._apply_limitrange(name)
+        quota_manifest = self._build_quota_manifest(
+            name, cpu_limit, memory_limit, storage_limit,
+            ephemeral_storage_request, ephemeral_storage_limit,
+        )
         with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
             yaml.safe_dump(quota_manifest, f)
             quota_file = f.name

@@ -153,6 +153,9 @@ def test_create_namespace_wires_baseline_when_workspace_id(mock_run, mock_settin
     mock_settings.paas_env = "stg"
     mock_settings.registry_username = ""
     mock_settings.registry_password = ""
+    # #1434：LimitRange 讀這兩個 settings；整顆 MagicMock 化時給字串，否則 yaml 炸開。
+    mock_settings.tenant_ephemeral_storage_default_request = "128Mi"
+    mock_settings.tenant_ephemeral_storage_default_limit = "4Gi"
     mock_run.return_value = Mock(returncode=0, stdout="{}", stderr="")
     k = KubernetesService()
     k._apply_baseline_netpol = MagicMock()
@@ -173,6 +176,9 @@ def test_create_namespace_skips_baseline_when_no_workspace_id(mock_run, mock_set
     mock_settings.paas_env = "stg"
     mock_settings.registry_username = ""
     mock_settings.registry_password = ""
+    # #1434：LimitRange 讀這兩個 settings；整顆 MagicMock 化時給字串，否則 yaml 炸開。
+    mock_settings.tenant_ephemeral_storage_default_request = "128Mi"
+    mock_settings.tenant_ephemeral_storage_default_limit = "4Gi"
     mock_run.return_value = Mock(returncode=0, stdout="{}", stderr="")
     k = KubernetesService()
     k._apply_baseline_netpol = MagicMock()

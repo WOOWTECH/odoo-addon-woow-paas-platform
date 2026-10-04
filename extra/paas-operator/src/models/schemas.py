@@ -94,10 +94,54 @@ class ReleaseUpgradeRequest(BaseModel):
     )
 
 
+#: #1433：``preserve_value_paths`` 每一條的合法形態——點分式、每段是 values 鍵名。
+#: 與平台 ``cloud_app_template.admin_username_helm_path`` 的驗證同形；不收萬用字元、
+#: 不收陣列索引（憑證通道都是 dict 葉節點或子樹）。
+_VALUE_PATH_RE = r"^[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)*$"
+
+
 class ReleaseRollbackRequest(BaseModel):
-    """Request to rollback a Helm release."""
+    """Request to rollback a Helm release.
+
+    #1433：``helm rollback`` 重放的是目標 revision **整份** stored values——包含
+    ``config.sensitive.admin_password`` 等平台管的憑證 ⇒ 租戶換掉（撤銷）的舊密碼會
+    跟著復活、目前的密碼失效。帶 ``preserve_value_paths`` 時 operator 改走
+    「讀目標 revision 的 values ＋ 用**目前** revision 的值覆寫這些路徑 ＋ helm upgrade
+    釘目標 revision 的 chart 版本」，只回復 chart 與一般設定、憑證維持現值。
+
+    不帶（或空清單）＝原本的純 ``helm rollback``，舊平台零行為變化（operator 可先發版）。
+    """
 
     revision: Optional[int] = Field(None, description="Target revision number. If not provided, rolls back to the previous revision.")
+    chart: Optional[str] = Field(
+        default=None,
+        description="#1433: chart reference — required when preserve_value_paths is "
+        "non-empty (the preserving rollback is a helm upgrade, and Helm does not store "
+        "the original chart URL)",
+    )
+    preserve_value_paths: List[str] = Field(
+        default_factory=list,
+        max_length=16,
+        description="#1433: dot-paths whose CURRENT values must survive the rollback "
+        "(e.g. config.sensitive, auth.username). A path absent from the current values "
+        "is removed from the target values as well — current state wins, including absence.",
+    )
+
+    @field_validator("preserve_value_paths")
+    @classmethod
+    def _validate_preserve_paths(cls, paths: List[str]) -> List[str]:
+        import re
+
+        for path in paths:
+            if not isinstance(path, str) or not re.match(_VALUE_PATH_RE, path):
+                raise ValueError(f"invalid value path: {path!r}")
+        return paths
+
+    @model_validator(mode="after")
+    def _preserve_requires_chart(self) -> "ReleaseRollbackRequest":
+        if self.preserve_value_paths and not self.chart:
+            raise ValueError("preserve_value_paths requires chart")
+        return self
 
 
 class ReleaseResetConfigRequest(BaseModel):
@@ -167,6 +211,15 @@ class NamespaceCreateRequest(BaseModel):
     cpu_limit: str = Field(default="2", description="CPU limit (e.g., '2' or '2000m')")
     memory_limit: str = Field(default="4Gi", description="Memory limit")
     storage_limit: str = Field(default="20Gi", description="Storage limit")
+    ephemeral_storage_request: Optional[str] = Field(
+        default=None,
+        description="#1434: requests.ephemeral-storage quota. None (older platform) "
+        "keeps the quota free of ephemeral-storage keys",
+    )
+    ephemeral_storage_limit: Optional[str] = Field(
+        default=None,
+        description="#1434: limits.ephemeral-storage quota. None keeps the key absent",
+    )
     workspace_id: Optional[int] = Field(
         default=None,
         description="Odoo workspace id of the owning CloudService; stamped as the "
@@ -180,6 +233,10 @@ class NamespaceQuotaUpdateRequest(BaseModel):
     cpu_limit: str = Field(..., description="requests.cpu / limits.cpu")
     memory_limit: str = Field(..., description="requests.memory / limits.memory, e.g. 8Gi")
     storage_limit: str = Field(..., description="requests.storage, e.g. 100Gi")
+    ephemeral_storage_request: Optional[str] = Field(
+        default=None, description="#1434: requests.ephemeral-storage, e.g. 4Gi")
+    ephemeral_storage_limit: Optional[str] = Field(
+        default=None, description="#1434: limits.ephemeral-storage, e.g. 80Gi")
 
 
 class BaselineNetpolBackfillRequest(BaseModel):

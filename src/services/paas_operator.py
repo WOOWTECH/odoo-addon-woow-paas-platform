@@ -239,6 +239,8 @@ class PaaSOperatorClient:
         memory_limit: str = '4Gi',
         storage_limit: str = '20Gi',
         workspace_id: Optional[int] = None,
+        ephemeral_storage_request: Optional[str] = None,
+        ephemeral_storage_limit: Optional[str] = None,
     ) -> Dict[str, str]:
         """Create a Kubernetes namespace with resource quota.
 
@@ -265,6 +267,12 @@ class PaaSOperatorClient:
         }
         if workspace_id is not None:
             data['workspace_id'] = workspace_id
+        # #1434：只在有值時送——舊 operator 的 pydantic model 會忽略未知欄位，但不送
+        # 讓 payload 對「沒有 ephemeral 額度」的呼叫端維持原樣。
+        if ephemeral_storage_request:
+            data['ephemeral_storage_request'] = ephemeral_storage_request
+        if ephemeral_storage_limit:
+            data['ephemeral_storage_limit'] = ephemeral_storage_limit
         return self._request('POST', '/api/namespaces', data=data)
 
     def update_namespace_quota(
@@ -273,6 +281,8 @@ class PaaSOperatorClient:
         cpu_limit: str,
         memory_limit: str,
         storage_limit: str,
+        ephemeral_storage_request: Optional[str] = None,
+        ephemeral_storage_limit: Optional[str] = None,
     ) -> Dict[str, Any]:
         """#278 A1：PUT 整組 ns quota（值 = 存活 service 集重算）。
 
@@ -292,6 +302,11 @@ class PaaSOperatorClient:
                 'cpu_limit': cpu_limit,
                 'memory_limit': memory_limit,
                 'storage_limit': storage_limit,
+                # #1434：見 create_namespace 同名欄位。
+                **({'ephemeral_storage_request': ephemeral_storage_request}
+                   if ephemeral_storage_request else {}),
+                **({'ephemeral_storage_limit': ephemeral_storage_limit}
+                   if ephemeral_storage_limit else {}),
             },
             timeout=HELM_OPERATION_TIMEOUT,
         )
@@ -618,13 +633,22 @@ class PaaSOperatorClient:
         namespace: str,
         release_name: str,
         revision: int = 0,
-    ) -> Dict[str, str]:
+        chart: Optional[str] = None,
+        preserve_value_paths: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
         """Rollback a Helm release to a previous revision.
+
+        #1433：帶 ``preserve_value_paths``（必須同時帶 ``chart``）時 operator 改走
+        「目標 revision 的 values ＋ 目前 revision 的這些路徑 ＋ 目標 chart 版本」的
+        helm upgrade，憑證（``config.sensitive`` 等）維持目前的值，不會跟著回到舊版。
+        回應多了 ``mode``／``revision``／``chart_version``。不帶＝純 helm rollback。
 
         Args:
             namespace: Release namespace
             release_name: Release name
             revision: Target revision (0 = previous)
+            chart: Chart reference (required with preserve_value_paths)
+            preserve_value_paths: Dot-paths whose current values must survive
 
         Returns:
             Rollback confirmation
@@ -632,7 +656,10 @@ class PaaSOperatorClient:
         Raises:
             PaaSOperatorError: If rollback fails
         """
-        data = {'revision': revision}
+        data: Dict[str, Any] = {'revision': revision}
+        if preserve_value_paths:
+            data['chart'] = chart
+            data['preserve_value_paths'] = list(preserve_value_paths)
         return self._request(
             'POST',
             f'/api/releases/{namespace}/{release_name}/rollback',

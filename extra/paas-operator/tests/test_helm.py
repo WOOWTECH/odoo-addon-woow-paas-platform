@@ -1191,8 +1191,11 @@ class TestKubernetesService:
         assert m["metadata"]["namespace"] == "paas-ws-test-abc"
         entry = m["spec"]["limits"][0]
         assert entry["type"] == "Container"
-        assert entry["default"] == {"cpu": "500m", "memory": "512Mi"}
-        assert entry["defaultRequest"] == {"cpu": "500m", "memory": "512Mi"}
+        # #1434：多了 ephemeral-storage 預設（值來自 settings，可由 env 調整）。
+        assert entry["default"] == {
+            "cpu": "500m", "memory": "512Mi", "ephemeral-storage": "4Gi"}
+        assert entry["defaultRequest"] == {
+            "cpu": "500m", "memory": "512Mi", "ephemeral-storage": "128Mi"}
 
     @patch("subprocess.run")
     def test_create_namespace_applies_limitrange(self, mock_run, k8s_service):
