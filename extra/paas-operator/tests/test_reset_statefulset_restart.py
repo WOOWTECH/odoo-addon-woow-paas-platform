@@ -174,6 +174,93 @@ class TestResetRollsOptedInStatefulSets:
         assert mock_restart_sts.call_count == 1
 
 
+
+class TestStatefulSetOnlyRelease:
+    """headscale／tailscale 0.1.1：release 只有一顆 opt-in StatefulSet、零 Deployment。
+
+    這兩個 chart 從來沒有 Deployment。改之前正式站的重設必定 500——log 是
+    「No deployments found matching selector」→ rollback。這裡只假 ``_run_command``
+    （kubectl 的唯一出口），``get_deployment_names``／``get_credential_reset_statefulset_names``
+    ／``rollout_restart_*`` 都走真的 ``KubernetesService`` 方法，順便把
+    ``_credential_reset_workloads`` 賴以判斷「可被 StatefulSet 頂替」的那句
+    「No deployments found」訊息契約也釘住。
+    """
+
+    @staticmethod
+    def _fake_kubectl(statefulsets_stdout: str, calls: list):
+        def run(args, *a, **kw):
+            calls.append(list(args))
+            if args[:2] == ["get", "deployments"]:
+                return MagicMock(returncode=0, stdout="", stderr="")
+            if args[:2] == ["get", "statefulsets"]:
+                selector = args[args.index("--selector") + 1]
+                assert f"{CREDENTIAL_RESET_RESTART_LABEL}=true" in selector
+                return MagicMock(returncode=0, stdout=statefulsets_stdout, stderr="")
+            if args[:2] == ["rollout", "restart"]:
+                return MagicMock(returncode=0, stdout="", stderr="")
+            raise AssertionError(f"unexpected kubectl call: {args}")
+        return run
+
+    @staticmethod
+    def _headscale_req() -> ReleaseResetConfigRequest:
+        return ReleaseResetConfigRequest(
+            admin_password_carrier="helm_secret",
+            chart="oci://example/headscale",
+            version="0.1.1",
+            values={"config": {"nonSensitive": {}}},
+            sensitive_values={"config": {"sensitive": {"admin_password": "new-pwd-xyz"}}},
+        )
+
+    @patch("src.api.releases.helm_service.rollback")
+    @patch("src.api.releases.helm_service.upgrade", return_value=MagicMock(revision=3))
+    @patch("src.api.releases.helm_service.get", return_value=MagicMock(revision=2))
+    def test_reset_succeeds_and_rolls_only_that_statefulset(
+        self, mock_get, mock_upgrade, mock_rollback, credential_reset_statefulsets,
+    ):
+        from src.api import releases
+
+        calls: list = []
+        real = releases.k8s_service
+        credential_reset_statefulsets.side_effect = (
+            lambda **kw: KubernetesService.get_credential_reset_statefulset_names(real, **kw)
+        )
+        with patch.object(
+            real, "_run_command", side_effect=self._fake_kubectl("svc-hs-headscale", calls),
+        ):
+            response = reset_release_config("paas-ws-test", "svc-hs", self._headscale_req())
+
+        mock_rollback.assert_not_called()
+        assert response["restarted_deployments"] == []
+        assert response["restarted_statefulsets"] == ["svc-hs-headscale"]
+        assert response["admin_password_carrier"] == "helm_secret"
+        restarts = [c for c in calls if c[:2] == ["rollout", "restart"]]
+        assert restarts == [
+            ["rollout", "restart", "statefulset/svc-hs-headscale", "--namespace", "paas-ws-test"],
+        ]
+
+    @patch("src.api.releases.helm_service.rollback")
+    @patch("src.api.releases.helm_service.upgrade", return_value=MagicMock(revision=3))
+    @patch("src.api.releases.helm_service.get", return_value=MagicMock(revision=2))
+    def test_without_opt_in_label_it_is_the_old_500_and_rollback(
+        self, mock_get, mock_upgrade, mock_rollback, credential_reset_statefulsets,
+    ):
+        """chart 0.1.0（StatefulSet 沒帶 label）：照舊查無 → rollback → 500，什麼都不滾。"""
+        from src.api import releases
+
+        calls: list = []
+        real = releases.k8s_service
+        credential_reset_statefulsets.side_effect = (
+            lambda **kw: KubernetesService.get_credential_reset_statefulset_names(real, **kw)
+        )
+        with patch.object(real, "_run_command", side_effect=self._fake_kubectl("", calls)):
+            with pytest.raises(HTTPException) as error:
+                reset_release_config("paas-ws-test", "svc-hs", self._headscale_req())
+
+        assert error.value.status_code == 500
+        mock_rollback.assert_called_once_with("paas-ws-test", "svc-hs", 2)
+        assert not [c for c in calls if c[:2] == ["rollout", "restart"]]
+
+
 class TestKubernetesServiceStatefulSetPrimitives:
 
     def test_selector_adds_opt_in_label_and_empty_is_a_list(self):

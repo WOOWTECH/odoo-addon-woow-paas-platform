@@ -1492,7 +1492,8 @@ def _reset_via_helm_secret(
                 namespace=namespace,
                 deployment_name=deployment_name,
             )
-        # hermes-agent >= 0.3.0：agent 是 StatefulSet（opt-in label），一樣要滾。
+        # hermes-agent >= 0.3.0、headscale／tailscale >= 0.1.1：吃密碼的是 StatefulSet
+        # （opt-in label），一樣要滾。
         for statefulset_name in statefulset_names:
             k8s_service.rollout_restart_statefulset(
                 namespace=namespace,
@@ -1539,8 +1540,10 @@ def _credential_reset_workloads(
     Deployments: all of the release (#449). StatefulSets: only those carrying
     ``CREDENTIAL_RESET_RESTART_LABEL`` (hermes-agent >= 0.3.0 runs its agent as a
     StatefulSet — platform #1360 follow-up — and reads admin_password at start).
-    A release may now have zero Deployments (hermes-agent with console.enabled=false),
-    so "no Deployment" is only an error when no opted-in StatefulSet exists either:
+    A release may now have zero Deployments (hermes-agent with console.enabled=false;
+    headscale/tailscale >= 0.1.1, which are StatefulSet-only charts — before this,
+    their reset always ended in "No deployments found" → rollback → 500), so
+    "no Deployment" is only an error when no opted-in StatefulSet exists either:
     restarting nothing would report a rotation that never reached a pod.
     """
     try:

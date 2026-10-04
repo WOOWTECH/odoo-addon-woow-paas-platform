@@ -536,7 +536,8 @@ def _dry_run_manifest(release_data: Dict[str, Any]) -> str:
 
 
 # Opt-in label a chart puts on a StatefulSet whose pods consume the admin credential
-# at start, so the helm_secret reset rolls it too (hermes-agent >= 0.3.0).
+# at start, so the helm_secret reset rolls it too (hermes-agent >= 0.3.0;
+# headscale/tailscale >= 0.1.1, which have no Deployment at all).
 CREDENTIAL_RESET_RESTART_LABEL = "paas.woowtech.io/restart-on-credential-reset"
 
 
@@ -3189,7 +3190,8 @@ class KubernetesService:
         hermes-agent 0.3.0 runs its agent as a StatefulSet (fixed pod name so the
         console Role can pin pods/exec with resourceNames — platform #1360 follow-up)
         and reads admin_password from env at start, so a helm_secret reset must roll
-        it like the Deployments. Only StatefulSets labelled
+        it like the Deployments; headscale/tailscale 0.1.1 are StatefulSet-only
+        charts that read it the same way. Only StatefulSets labelled
         ``CREDENTIAL_RESET_RESTART_LABEL=true`` are returned: open-design 0.3.0's daemon
         StatefulSet hot-reloads its htpasswd and must NOT be restarted, and a bundled
         database StatefulSet has nothing to do with the admin password.
