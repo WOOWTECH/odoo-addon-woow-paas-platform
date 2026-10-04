@@ -20308,6 +20308,7 @@ msgstr "PaaS：從未正常運作的服務暫停扣款"
 msgid "[Woow PaaS] A service that never started will not be charged"
 msgstr "[Woow PaaS] 從未正常運作的服務不會扣款"
 
+#. module: woow_paas_platform
 #. odoo-javascript
 #: code:addons/woow_paas_platform/static/src/paas/components/modal/RollbackModal.xml:0
 msgid "Roll back to revision"
