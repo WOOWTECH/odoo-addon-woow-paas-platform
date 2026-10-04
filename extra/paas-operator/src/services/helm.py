@@ -520,6 +520,19 @@ _SA_LOOKUP_ATTEMPTS = 5
 _SA_LOOKUP_BACKOFF_SECONDS = 0.5
 
 
+def _dry_run_manifest(release_data: Dict[str, Any]) -> str:
+    """``helm … --dry-run --output json`` 的 release → manifest 字串（含 hooks 的 manifest）。
+
+    #1415：hook 的物件（例 pre-install Job 帶的 PVC）不在 ``manifest`` 裡，另放在
+    ``hooks[].manifest``；容量預檢要看到它們，所以接在後面。
+    """
+    parts = [release_data.get("manifest") or ""]
+    for hook in release_data.get("hooks") or []:
+        if isinstance(hook, dict) and hook.get("manifest"):
+            parts.append(hook["manifest"])
+    return "\n---\n".join(p for p in parts if p)
+
+
 class HelmException(Exception):
     """Exception raised when Helm command fails."""
 
@@ -687,8 +700,16 @@ class HelmService:
         repo: Optional[str] = None,
         username: Optional[str] = None,
         password: Optional[str] = None,
+        dry_run: bool = False,
+        subprocess_timeout_seconds: Optional[int] = None,
     ) -> ReleaseInfo:
         """Install a Helm chart.
+
+        ``dry_run=True`` (#1415 capacity precheck) runs the exact same command with
+        ``--dry-run`` — same chart, version, values and post-renderer, nothing applied —
+        and returns the rendered manifest **string** (hook manifests appended) instead of a
+        ``ReleaseInfo``. Mirrors ``upgrade(dry_run=True)`` (#1407). The manifest can hold
+        rendered Secrets: callers must never log it.
 
         Args:
             namespace: Target namespace
@@ -702,6 +723,9 @@ class HelmService:
                 Leave None for direct/OCI chart refs (marketplace default).
             username: Optional repo username for a private Helm repo (--username).
             password: Optional repo password/token for a private repo (--password).
+            dry_run: Render only (``--dry-run``); returns the manifest string.
+            subprocess_timeout_seconds: Per-call subprocess ceiling. ``None`` keeps
+                ``settings.helm_timeout``.
 
         Returns:
             Release information
@@ -731,8 +755,10 @@ class HelmService:
         # (keep-annotated, same names) — reuse their live immutable fields too.
         args.extend(_pvc_keep_post_renderer_args(_live_snapshot(namespace)))
 
-        if create_namespace:
+        if create_namespace and not dry_run:
             args.append("--create-namespace")
+        if dry_run:
+            args.append("--dry-run")
 
         if version:
             args.extend(["--version", version])
@@ -764,8 +790,10 @@ class HelmService:
                 temp_file = f.name
 
         try:
-            result = self._run_command(args)
+            result = self._run_command(args, timeout=subprocess_timeout_seconds)
             release_data = json.loads(result.stdout)
+            if dry_run:
+                return _dry_run_manifest(release_data)
             return self._parse_release_info(release_data)
         finally:
             if merged_values:
@@ -2615,6 +2643,75 @@ class KubernetesService:
             "quotas": json.loads(quotas.stdout or "{}").get("items", []),
             "pvcs": json.loads(pvcs.stdout or "{}").get("items", []),
         }
+
+    # #1415：叢集儲存（Longhorn）排程額度。全部唯讀；解讀在 ``storage_capacity``。
+    CAPACITY_KUBECTL_TIMEOUT_SECONDS = 15
+
+    def get_longhorn_capacity_snapshot(self) -> Dict[str, List[Dict[str, Any]]]:
+        """#1415：讀 Longhorn 排程需要的原始資料（三次唯讀 ``kubectl get``）。
+
+        * ``nodes.longhorn.io``（``settings.longhorn_namespace``）：各磁碟的
+          storageMaximum／Available／Scheduled、storageReserved、allowScheduling、tags；
+        * ``settings.longhorn.io``：**只留** ``storage_capacity.LONGHORN_SETTING_NAMES``
+          （其他設定與排程無關，不往外帶）；
+        * StorageClass：provisioner、parameters（numberOfReplicas、selector）、預設註記。
+
+        Raises:
+            KubectlException: CRD 不存在、權限不足（operator ClusterRole 需要 longhorn.io
+                nodes／settings get/list，見 woow-paas-charts charts/paas-operator）、逾時。
+                呼叫端一律當「不知道」放行。
+        """
+        from src.services.storage_capacity import LONGHORN_SETTING_NAMES
+
+        ns = settings.longhorn_namespace
+        timeout = self.CAPACITY_KUBECTL_TIMEOUT_SECONDS
+        nodes = self._run_command(
+            ["get", "nodes.longhorn.io", "--namespace", ns, "-o", "json"], timeout=timeout)
+        lh_settings = self._run_command(
+            ["get", "settings.longhorn.io", "--namespace", ns, "-o", "json"], timeout=timeout)
+        classes = self._run_command(["get", "storageclasses", "-o", "json"], timeout=timeout)
+        wanted = set(LONGHORN_SETTING_NAMES)
+        return {
+            "nodes": json.loads(nodes.stdout or "{}").get("items", []),
+            "settings": [
+                item for item in json.loads(lh_settings.stdout or "{}").get("items", [])
+                if (item.get("metadata") or {}).get("name") in wanted
+            ],
+            "storage_classes": json.loads(classes.stdout or "{}").get("items", []),
+        }
+
+    def list_orphaned_pvcs_all_namespaces(self) -> List[Dict[str, Any]]:
+        """#1415：全叢集帶 ``paas.woowtech.io/orphaned-at`` 的 PVC（唯讀，供額度回報）。
+
+        不呼 validate_namespace：這是跨 namespace 的唯讀盤點，範圍由 label selector 圈定
+        （同 ``list_managed_namespaces``）。
+        """
+        from src.services.storage_quota import ORPHANED_AT_LABEL
+
+        result = self._run_command(
+            ["get", "pvc", "--all-namespaces", "-l", ORPHANED_AT_LABEL, "-o", "json"],
+            timeout=self.CAPACITY_KUBECTL_TIMEOUT_SECONDS,
+        )
+        return json.loads(result.stdout or "{}").get("items", [])
+
+    def get_cdi_filesystem_overhead(self) -> Optional[Dict[str, Any]]:
+        """#1415：CDIConfig 的 ``status.filesystemOverhead``（``{"global": "0.06",
+        "storageClass": {...}}``）；讀不到回 None（呼叫端用 CDI 預設值）。
+
+        叢集內 ``system:authenticated`` 有 ``cdi.kubevirt.io:config-reader``，不需要另給 RBAC。
+        """
+        try:
+            result = self._run_command(
+                ["get", "cdiconfig", "config", "-o", "json"],
+                timeout=self.CAPACITY_KUBECTL_TIMEOUT_SECONDS,
+            )
+            overhead = (json.loads(result.stdout or "{}").get("status") or {}).get(
+                "filesystemOverhead")
+            return overhead if isinstance(overhead, dict) else None
+        except (KubectlException, ValueError) as exc:
+            logger.warning("CDI filesystem overhead unavailable, using CDI default: %s",
+                           getattr(exc, "stderr", None) or exc)
+            return None
 
     def list_managed_namespaces(self) -> List[str]:
         """#277 唯讀反向發現：列本 env 帶 paas-managed=true 的 ns 名。

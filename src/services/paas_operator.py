@@ -1131,6 +1131,25 @@ class PaaSOperatorClient:
         """
         return self._request('GET', '/api/reconcile/inventory')
 
+    def get_cluster_storage_capacity(self, storage_class: Optional[str] = None) -> Dict[str, Any]:
+        """GET /api/cluster/storage-capacity — 叢集儲存（Longhorn）排程額度（#1415，唯讀）。
+
+        Args:
+            storage_class: 以哪個 StorageClass 的 replica 數估「最大可放單顆 volume」；
+                None＝叢集預設 SC。
+
+        Returns:
+            Dict：``{available, reason?, nodes:[{name, limit_bytes, scheduled_bytes,
+            headroom_bytes, scheduled_ratio, ...}], largest_placeable_volume_bytes, replicas,
+            orphaned_pvcs:{count, requested, longhorn_scheduled, ...}|None, ...}``。
+            讀不到 Longhorn 時 operator 仍回 200、``available: false``。
+
+        Raises:
+            PaaSOperatorError（及子類）：404＝operator 太舊、沒有這個端點（呼叫端安靜略過）。
+        """
+        params = {'storage_class': storage_class} if storage_class else None
+        return self._request('GET', '/api/cluster/storage-capacity', params=params)
+
 
 def get_paas_operator_client(env) -> Optional[PaaSOperatorClient]:
     """Get a configured PaaS Operator client from Odoo settings.

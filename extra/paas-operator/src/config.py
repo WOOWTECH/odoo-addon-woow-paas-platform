@@ -28,6 +28,15 @@ class Settings(BaseSettings):
     # PVC Lifecycle
     pvc_grace_period_days: int = 7  # Days before orphaned PVCs are deleted
 
+    # #1415：開通前的叢集儲存（Longhorn）排程額度預檢（src/services/storage_capacity.py）。
+    # 只有「確定放不下」才回 409；讀不到 Longhorn／渲染失敗一律放行。這個開關是 kill switch
+    # （env STORAGE_CAPACITY_PRECHECK_ENABLED=false ⇒ 開通行為回到 #1415 之前）。
+    storage_capacity_precheck_enabled: bool = True
+    # 預檢用 `helm install --dry-run` 渲染（含 OCI 拉 chart）的 subprocess 上限；逾時＝放行。
+    # 平台 install_release 的 HTTP 預算是 120s（HELM_OPERATION_TIMEOUT），這裡留給真正的 install。
+    storage_capacity_render_timeout_seconds: int = Field(default=45, gt=0)
+    longhorn_namespace: str = "longhorn-system"
+
     # Private Registry (for tenant namespace imagePullSecrets)
     registry_server: str = ""
     registry_username: str = ""

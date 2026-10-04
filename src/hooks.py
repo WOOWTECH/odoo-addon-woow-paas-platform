@@ -179,6 +179,10 @@ _CONFIG_PARAMETERS = [
     # （守線＝repo-lint 的 config-parameter-uninstall）。
     'woow_paas_platform.global_instance_cap.haos',
     'woow_paas_platform.sales_paused.haos',
+    # #1415：叢集儲存額度告警的「最大可放單顆 volume」門檻（GiB；'0' 停用該項；缺值走
+    # platform_monitor.py 的內建 80）。「模組常數＋get_param()」寫法 ⇒ 補在
+    # `test_cluster_storage_capacity_1415.py::TestClusterStorageParamRegisteredForUninstall`。
+    'woow_paas_platform.cluster_storage_alert_min_volume_gib',
     # NB: the agent namespace secret moved to the AGENT_RUNTIME_NAMESPACE_SECRET
     # env (F-PC-3 fail-closed) and is no longer an ir.config_parameter.
     # #778：上游 sh_subscription_wallet 的 SSOT 開關——平台 pin '0'（opt-out）。

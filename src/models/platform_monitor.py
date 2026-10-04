@@ -19,6 +19,8 @@ partner（ERP 共用）或 workspace（租戶讀得到）。查找一律以 xmli
 | 結果未知／等待放棄 | 短 poll cron＋事件 | 24h 內 unknown／partial ≥ 1；wait_timeout／fast_fail 發生即追加 |
 | eligible-unclaimed 容量等待 | 短 poll cron | 持續可 dispatch、未獲 claim ≥ 30 分；不扣額度或 D2 預算 |
 | n8n owner 未確認 | 短 poll cron | 首次觀測 ready 後 5 分內沒有可信確認；每 episode 一行 |
+| 叢集儲存額度偏低（#1415） | 獨立 cron（15 分） | 有備援的最大可放單顆 volume ＜ 設定值（預設 80 GiB）或任一節點預訂 ＞ 90% |
+| 開通被叢集儲存額度擋下（#1415） | 事件（``_execute_deploy``） | 發生即追加一行 |
 
 init cron 看 ``active`` 與 ``lastcall``、不看 ``failure_count``：core 停用 cron 時會把
 ``failure_count`` 歸 0，``lastcall`` 也只在正常結束或 FAILED 時更新（被 SIGKILL 的那一趟
@@ -49,6 +51,13 @@ N8N_OWNER_WINDOW_MINUTES = 5
 # 掃描範圍（#1159 owner 裁決 2026-10-01）：等待、失敗（含 wait_timeout）、running（冷補套／
 # 晚到的確認）、停權都掃；deleting 不掃。
 N8N_OWNER_SCAN_STATES = ('initializing', 'error', 'running', 'suspended')
+#: #1415：叢集儲存額度告警。最大可放單顆 volume 的門檻是設定參數（「模組常數＋get_param」，
+#: 卸載清理登記在 hooks.py）：平台現有範本最大的單顆 PVC 是 Nextcloud 資料磁碟 80 GiB；'0' 停用
+#: 這一項。節點預訂率門檻是常數（Longhorn 排程額度＝(磁碟−保留)×over-provisioning%）。
+CLUSTER_STORAGE_MIN_VOLUME_PARAM = 'woow_paas_platform.cluster_storage_alert_min_volume_gib'
+CLUSTER_STORAGE_MIN_VOLUME_GIB_DEFAULT = 80
+CLUSTER_STORAGE_NODE_RATIO_LIMIT = 0.9
+_GIB = 1024 ** 3
 
 
 class PlatformMonitor(models.Model):
@@ -78,6 +87,8 @@ class PlatformMonitor(models.Model):
     SUMMARY_GAVE_UP = 'PaaS monitor: init results unknown or readiness gave up'
     SUMMARY_CAPACITY = 'PaaS monitor: eligible initialization is waiting for capacity'
     SUMMARY_N8N_OWNER = 'PaaS monitor: n8n owner not yet confirmed by the platform'
+    SUMMARY_STORAGE_LOW = 'PaaS monitor: cluster storage scheduling capacity is running low'
+    SUMMARY_STORAGE_REJECTED = 'PaaS monitor: deployments rejected for lack of cluster storage'
 
     @api.model
     def _singleton(self):
@@ -432,6 +443,113 @@ class PlatformMonitor(models.Model):
     # ------------------------------------------------------------------ #
     #  事件型監控項                                                        #
     # ------------------------------------------------------------------ #
+
+    @api.model
+    def _report_storage_capacity_rejection(self, service, detail):
+        """#1415：開通在 helm install 前被叢集儲存（Longhorn）額度擋下——一台一行。"""
+        volumes = ', '.join(
+            '%s %s x%s' % (v.get('name'), v.get('size'), v.get('replicas'))
+            for v in detail.get('unschedulable') or [] if isinstance(v, dict))
+        orphans = detail.get('orphaned_pvcs') or {}
+        line = _(
+            '%(name)s (id=%(id)s, namespace %(ns)s): cannot schedule %(volumes)s; the largest '
+            'new volume that still fits is %(largest)s. Orphaned PVCs: %(orphans)s.',
+            name=service.name, id=service.id, ns=detail.get('namespace') or '?',
+            volumes=volumes or '?', largest=detail.get('largest_placeable_volume') or '?',
+            orphans=self._orphans_text(orphans) if orphans else '?')
+        return self._safe_alert(self.SUMMARY_STORAGE_REJECTED, _(
+            'Deployments were rejected before anything was created because the cluster storage '
+            '(Longhorn) has no room for their disks. The tenants were told to retry later. Free '
+            'scheduling capacity (for example orphaned PVCs still in their retention period) or '
+            'add storage:'), append_line=line)
+
+    @api.model
+    def _orphans_text(self, orphans):
+        return _('%(count)s PVCs, %(size)s requested, %(scheduled)s of Longhorn scheduling '
+                 'capacity including replicas',
+                 count=orphans.get('count', 0), size=orphans.get('requested') or '0Gi',
+                 scheduled=orphans.get('longhorn_scheduled') or '0Gi')
+
+    @api.model
+    def _cluster_storage_min_volume_gib(self):
+        raw = self.env['ir.config_parameter'].sudo().get_param(CLUSTER_STORAGE_MIN_VOLUME_PARAM)
+        try:
+            value = int(raw) if raw not in (None, False, '') else CLUSTER_STORAGE_MIN_VOLUME_GIB_DEFAULT
+        except (TypeError, ValueError):
+            _logger.warning("[#1415] %s=%r is not an integer; using %s GiB",
+                            CLUSTER_STORAGE_MIN_VOLUME_PARAM, raw,
+                            CLUSTER_STORAGE_MIN_VOLUME_GIB_DEFAULT)
+            value = CLUSTER_STORAGE_MIN_VOLUME_GIB_DEFAULT
+        return max(0, value)
+
+    @api.model
+    def _cluster_storage_problems(self, report):
+        """回 (問題行, 細節行)；問題行為空＝不告警。``report`` 是 operator 的額度回報。"""
+        problems, details = [], []
+        min_gib = self._cluster_storage_min_volume_gib()
+        largest = report.get('largest_placeable_volume_bytes')
+        if min_gib and isinstance(largest, int) and largest < min_gib * _GIB:
+            problems.append(_(
+                'The largest new volume with all %(replicas)s replicas that still fits is '
+                '%(largest)s, below the %(min)s GiB the largest template disk needs (StorageClass '
+                '%(sc)s).', replicas=report.get('replicas') or '?',
+                largest=report.get('largest_placeable_volume') or '0Gi', min=min_gib,
+                sc=report.get('storage_class') or '?'))
+        for node in report.get('nodes') or []:
+            ratio = node.get('scheduled_ratio')
+            line = _('%(node)s: %(scheduled)s of %(limit)s reserved, %(headroom)s left on its '
+                     'largest disk', node=node.get('name'), scheduled=node.get('scheduled'),
+                     limit=node.get('limit'), headroom=node.get('headroom'))
+            details.append(line)
+            if node.get('schedulable') and isinstance(ratio, (int, float)) \
+                    and ratio > CLUSTER_STORAGE_NODE_RATIO_LIMIT:
+                problems.append(_(
+                    'Node %(node)s has %(pct)s%% of its Longhorn scheduling limit reserved.',
+                    node=node.get('name'), pct=int(ratio * 100)))
+        if report.get('orphaned_pvcs'):
+            details.append(_('Orphaned PVCs (kept for their retention period): %(orphans)s',
+                             orphans=self._orphans_text(report['orphaned_pvcs'])))
+        return problems, details
+
+    @api.model
+    def _cron_check_cluster_storage_capacity(self):
+        """#1415：定時查 operator 的叢集儲存（Longhorn）排程額度，偏低時告警給系統管理員。
+
+        條件（任一）：有備援的最大可放單顆 volume ＜ ``CLUSTER_STORAGE_MIN_VOLUME_PARAM``
+        （預設 80 GiB，平台範本最大的單顆磁碟），或任一可排程節點的預訂率 ＞ 90%。告警附各節點
+        額度與孤兒 PVC 佔用；同 summary 未處理前不重開（``_alert`` 的規則）。
+
+        operator 太舊（沒有端點、404）安靜略過；operator 連不上或讀不到 Longhorn 只記 log
+        （其他監控項管 operator 健康）。本方法只讀，不碰任何服務狀態。
+        """
+        from ..services.paas_operator import (
+            PaaSOperatorAPIError, PaaSOperatorError, get_paas_operator_client,
+        )
+        client = get_paas_operator_client(self.env)
+        if not client:
+            return
+        storage_class = self.env['ir.config_parameter'].sudo().get_param(
+            'woow_paas_platform.storage_class_name', 'longhorn-delete') or None
+        try:
+            report = client.get_cluster_storage_capacity(storage_class=storage_class)
+        except PaaSOperatorAPIError as e:
+            if e.status_code == 404:
+                _logger.info("[#1415] operator has no /api/cluster/storage-capacity yet; skipped")
+            else:
+                _logger.warning("[#1415] cluster storage capacity check failed: %s", e)
+            return
+        except PaaSOperatorError as e:
+            _logger.warning("[#1415] cluster storage capacity check failed: %s", e)
+            return
+        if not isinstance(report, dict) or not report.get('available'):
+            _logger.info("[#1415] cluster storage capacity not available: %s",
+                         (report or {}).get('reason') if isinstance(report, dict) else report)
+            return
+        problems, details = self._cluster_storage_problems(report)
+        if not problems:
+            return
+        note = Markup('<br/>').join(problems + [''] + details)
+        self.with_context(mail_notify_force_send=False)._alert(self.SUMMARY_STORAGE_LOW, note)
 
     @api.model
     def _report_gave_up(self, service, exit_kind, message):

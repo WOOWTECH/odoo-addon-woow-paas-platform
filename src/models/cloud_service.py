@@ -89,6 +89,9 @@ BITNAMI_ODOO_VALUE_KEYS = frozenset({
 #: #1348：operator 開通前儲存配額檢查的錯誤碼（``extra/paas-operator/src/services/
 #: storage_quota.py`` 的同名常數；改名兩邊一起改）。
 STORAGE_QUOTA_ERROR_CODE = 'workspace_storage_quota_exhausted'
+#: #1415：operator 開通前叢集儲存（Longhorn）排程額度檢查的錯誤碼（``extra/paas-operator/
+#: src/services/storage_capacity.py`` 的 ``CAPACITY_ERROR_CODE``；改名兩邊一起改）。
+CLUSTER_STORAGE_CAPACITY_ERROR_CODE = 'cluster_storage_capacity_exhausted'
 
 WOOW_ODOO_ADMIN_EMAIL_RE = re.compile(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
 #: #1335：保留給文件／測試、永遠收不到信的網域（RFC 2606 §3 的 example.com／.net／.org
@@ -2438,13 +2441,18 @@ class CloudService(models.Model):
 
         except PaaSOperatorError as e:
             _logger.error("Operator error: %s", e)
-            quota_message = self._storage_quota_error_message(e.detail)
+            quota_message = (
+                self._storage_quota_error_message(e.detail)
+                # #1415：叢集儲存排程額度不足（operator 在 helm install 前擋下）。
+                or self._cluster_storage_capacity_error_message(e.detail)
+            )
             self.write({
                 'state': 'error',
                 'error_message': quota_message or _(
                     'Deployment failed: %(detail)s',
                     detail=e.detail or e.message),
             })
+            self._alert_cluster_storage_capacity_rejection(e.detail)
 
     def _storage_quota_error_message(self, detail):
         """#1348：operator 回「工作區儲存配額已滿」時，給租戶看得懂的訊息；其他錯誤回 ``None``。
@@ -2491,6 +2499,60 @@ class CloudService(models.Model):
         parts.append(env._(
             'Contact support to release it early, or deploy this service in another workspace.'))
         return ' '.join(parts)
+
+    def _cluster_storage_capacity_error_message(self, detail):
+        """#1415：operator 回「叢集儲存排程額度不足」時給租戶的訊息；其他錯誤回 ``None``。
+
+        operator（``extra/paas-operator/src/services/storage_capacity.py``）在 helm install
+        前用同一份 chart／values 渲染出這次要建的磁碟，照 Longhorn 的排程規則模擬放置；
+        確定排不下時回 409、``detail.error_code == CLUSTER_STORAGE_CAPACITY_ERROR_CODE``，
+        **什麼都沒建**。原本這種情況 PVC 建了排不上，pod 卡 Init 30 分鐘後逾時（#1415）。
+
+        訊息寫給租戶：這是平台的儲存空間問題、不是他的設定錯；沒有建立任何資源；系統管理員
+        已收到通知（``_alert_cluster_storage_capacity_rejection``）。租戶能做的只有刪除後
+        稍後重開、或聯絡客服。訂閱的說法對照實際行為（與 #1348 拒絕路徑相同，服務停在
+        error、訂閱不動）：刪除服務會取消訂閱（``_settle_on_entity_delete``）——試用期內
+        不扣款，已扣的點數依未使用天數退回。語言同 #1348：以服務建立者的語言組字串。
+        """
+        self.ensure_one()
+        if (not isinstance(detail, dict)
+                or detail.get('error_code') != CLUSTER_STORAGE_CAPACITY_ERROR_CODE):
+            return None
+        lang = self.sudo().create_uid.lang or self.env.lang
+        env = self.with_context(lang=lang).env
+        # operator 的 "80Gi"／"77.2Gi" → 租戶看得懂的 "80 GiB"。
+        sizes = [
+            str(v['size'])[:-2] + ' GiB' if str(v['size']).endswith('Gi') else str(v['size'])
+            for v in detail.get('unschedulable') or []
+            if isinstance(v, dict) and v.get('size')
+        ]
+        if sizes:
+            parts = [env._(
+                'The platform is temporarily short of storage space and cannot create the '
+                'disk this service needs (%(size)s).', size=', '.join(sizes))]
+        else:
+            parts = [env._(
+                'The platform is temporarily short of storage space and cannot create the '
+                'disks this service needs.')]
+        parts.append(env._(
+            'Nothing was created for this deployment, and the platform administrators have '
+            'been notified.'))
+        parts.append(env._(
+            'Please delete this service and deploy it again later, or contact support.'))
+        if self.sudo().subscription_id:
+            parts.append(env._(
+                'Deleting it also cancels its subscription: nothing is charged during the '
+                'trial, and points already paid are refunded for the unused days.'))
+        return ' '.join(parts)
+
+    def _alert_cluster_storage_capacity_rejection(self, detail):
+        """#1415：開通被叢集儲存額度擋下時，告警給系統管理員（一台一行，同 summary 未處理前追加）。"""
+        self.ensure_one()
+        if (not isinstance(detail, dict)
+                or detail.get('error_code') != CLUSTER_STORAGE_CAPACITY_ERROR_CODE):
+            return
+        self.env['woow_paas_platform.platform_monitor']._report_storage_capacity_rejection(
+            self, detail)
 
     # ------------------------------------------------------------------ #
     #  #411 — 全量 values 組裝（單一真相源）                              #
