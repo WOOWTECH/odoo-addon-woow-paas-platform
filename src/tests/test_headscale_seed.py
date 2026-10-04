@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""VPN 控制台（Headscale）上架 seed 的守線斷言（範本先隱藏）。
+"""VPN 控制台（Headscale）上架 seed 的守線斷言（2026-10-04 公開上架）。
 
 契約來源：woow-paas-charts charts/headscale 0.1.0（#124）——一個 Pod：headscale v0.29.4、
 Headplane 0.7.1（只綁 127.0.0.1）、nginx 入口（Service 第一個埠 3000，平台密碼 Basic auth，
@@ -22,6 +22,9 @@ Headplane 0.7.1（只綁 127.0.0.1）、nginx 入口（Service 第一個埠 3000
 5. **規格對帳**：1 vCPU／1 GB／1 GB——template min_*、plan cs_*、chart 唯一一顆 PVC 三處一致。
 6. **租戶旋鈕只限應用層**；ngrok token 不在 config.sensitive（平台會剝掉，EMQX 0.1.1 教訓）；
    ngrok.domain 存檔即擋整條網址。
+7. **上架即雙釘**：#1413 以隱藏卡片進 seed（隨 .206 上正式站），鏡像核可、chart 0.1.0 發佈、真 ngrok
+   與整合實測通過後公開上架；``test_hidden_until_listed`` 從此是實際生效的守線（``is_hidden=False``
+   ⟹ headscale／headscale-debug／headplane 三顆都要 ``tag@sha256``）。
 """
 import json
 import os
@@ -134,7 +137,7 @@ class TestHeadscaleSeed(TransactionCase):
                     'headscale.image helper 只要 digest 非空就再附加一次）' % sub)
 
     def test_hidden_until_listed(self):
-        """鏡像核可、chart 發佈、正式站驗證前不上貨架；要翻 is_hidden 時 pin 必須已經在位。"""
+        """上架 ⟹ 三顆 image 雙釘（2026-10-04 公開上架；之後若翻回隱藏，這條仍要綠）。"""
         tpl = self._tpl()
         self.assertTrue(tpl.is_active)
         self.assertFalse(tpl.conceal_instances, 'hidden-only（曝光層），實例層不設')

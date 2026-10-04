@@ -2248,7 +2248,7 @@
             <field name="taxes_id" eval="[(6, 0, [])]"/>
         </record>
 
-        <!-- VPN 控制台（Headscale）（1 vCPU／1 GB／1 GB）。年繳＝10 個月。範本先隱藏（is_hidden=True）。
+        <!-- VPN 控制台（Headscale）（1 vCPU／1 GB／1 GB）。年繳＝10 個月。範本 2026-10-04 公開上架。
              cs_vcpu／cs_ram_gb 由 chart 套在 headplane（頂層 resources overlay）；cs_storage_gb＝唯一一顆 PVC。 -->
         <record id="plan_headscale_monthly" model="sh.subscription.plan">
             <field name="name">VPN 控制台（Headscale）雲端訂閱服務 月繳</field>
@@ -2313,7 +2313,7 @@
             <field name="taxes_id" eval="[(6, 0, [])]"/>
         </record>
 
-        <!-- VPN 節點（相容 Tailscale）（1 vCPU／0.5 GB／1 GB）。年繳＝10 個月。範本先隱藏（is_hidden=True）。
+        <!-- VPN 節點（相容 Tailscale）（1 vCPU／0.5 GB／1 GB）。年繳＝10 個月。範本 2026-10-04 公開上架。
              cs_ram_gb=0.5 ⇒ overlay 寫 512Mi（套在 tailscale 容器）；cs_storage_gb＝節點身分那顆 PVC。 -->
         <record id="plan_tailscale_monthly" model="sh.subscription.plan">
             <field name="name">VPN 節點（相容 Tailscale）雲端訂閱服務 月繳</field>
@@ -2378,7 +2378,7 @@
             <field name="taxes_id" eval="[(6, 0, [])]"/>
         </record>
 
-        <!-- AI 模型閘道（LiteLLM）（1 vCPU／2 GB／10 GB）。年繳＝10 個月。範本先隱藏（is_hidden=True）。
+        <!-- AI 模型閘道（LiteLLM）（1 vCPU／2 GB／10 GB）。年繳＝10 個月。範本 2026-10-04 公開上架。
              cs_vcpu／cs_ram_gb 套在 litellm 容器（內附 PG 用 chart 自己的 requests／limits）；
              cs_storage_gb＝唯一一顆 PVC（PG 資料＋每日備份）。 -->
         <record id="plan_litellm_monthly" model="sh.subscription.plan">

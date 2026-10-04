@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""AI 模型閘道（LiteLLM）上架 seed 的守線斷言（範本先隱藏）。
+"""AI 模型閘道（LiteLLM）上架 seed 的守線斷言（2026-10-04 公開上架）。
 
 契約來源：woow-paas-charts charts/litellm 0.1.0（#123）——litellm-non_root 1.103.3（uid 65534）
 ＋內附 PostgreSQL（平台 paas-postgres 17.11），唯一入口 ``<release>-litellm:4000``、只有一顆 PVC。
@@ -16,6 +16,8 @@ key（``auth.apiServerKey`` → ``LITELLM_MASTER_KEY``，chart 原樣使用、�
 4. **兩顆 image 都雙釘、都來自 JCR**（litellm 與 PG）。
 5. **規格對帳**：1 vCPU／2 GB／10 GB——template min_*、plan cs_*、唯一一顆 PVC 三處一致。
 6. **租戶旋鈕只有應用層兩個**；provider key 刻意**不是**旋鈕（只在 LiteLLM 後台設、存租戶 DB）。
+7. **上架即雙釘**：#1413 以隱藏卡片進 seed（隨 .206 上正式站），整合實測通過後 2026-10-04 公開上架；
+   ``test_hidden_until_listed`` 從此是實際生效的守線（``is_hidden=False`` ⟹ litellm 與 PG 都要雙釘）。
 """
 import json
 import os
@@ -96,6 +98,7 @@ class TestLitellmSeed(TransactionCase):
                          'PG 也要 tag@sha256 雙釘（chart 的 imageRef 遇到 @ 就不再附加 digest）')
 
     def test_hidden_until_listed(self):
+        """上架 ⟹ litellm 與 PG 兩顆 image 雙釘（2026-10-04 公開上架；之後若翻回隱藏，這條仍要綠）。"""
         tpl = self._tpl()
         self.assertTrue(tpl.is_active)
         self.assertFalse(tpl.conceal_instances, 'hidden-only（曝光層），實例層不設')
@@ -225,6 +228,7 @@ class TestLitellmSeed(TransactionCase):
                 ('-litellm:4000/v1', '同工作區的內部網址'),
                 ('Access 保護', '不要開 CF Access（會擋 API 用戶端）'),
                 ('master key 會一起換新', 'Reset 一起換（PLAN Q8）'),
+                ('約中斷 2 分鐘', '重設帳密／master key 會重啟服務（整合實測斷線約 2 分 15 秒）'),
         ):
             self.assertIn(needle, desc, why)
 

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""VPN 節點（相容 Tailscale）上架 seed 的守線斷言（範本先隱藏）。
+"""VPN 節點（相容 Tailscale）上架 seed 的守線斷言（2026-10-04 公開上架）。
 
 契約來源：woow-paas-charts charts/tailscale 0.1.0（#125）——StatefulSet ×1、userspace
 tailscaled（uid 1000）、唯一入口 Service 8080 → nginx Basic auth（帳號固定 admin）→
@@ -14,8 +14,8 @@ image：paas-odoo-ci ``tailscale/``（#240，官方 1.102.5＋衍生自 podman �
    NetworkPolicy 是 tailnet 經節點能碰到哪裡的唯一護欄，開了等於把叢集網段交給 tailnet。
 3. **authKey 是 password 型、不在 config.sensitive**（平台會整棵剝掉，EMQX 0.1.1 教訓）。
 4. **規格對帳**：1 vCPU／0.5 GB／1 GB——template min_*、plan cs_*、chart 唯一一顆 PVC 三處一致。
-5. **上架即雙釘**：image 為 #240 合併後從 main build 並核可的 20261004.0747（#244）；
-   翻 is_hidden 時 pin 必須在位。
+5. **上架即雙釘**：image 為 #240 合併後從 main build 並核可的 20261004.0747（#244）。2026-10-04 公開上架，
+   ``test_hidden_until_listed`` 從此是實際生效的守線（``is_hidden=False`` ⟹ image 要 ``tag@sha256``）。
 """
 import json
 import re
@@ -80,7 +80,7 @@ class TestTailscaleSeed(TransactionCase):
                          'image 一律 tag@sha256 雙釘（mutable tag 不可重現）')
 
     def test_hidden_until_listed(self):
-        """image 從 main 重 build 並核可、正式站驗證前不上貨架；翻 is_hidden 時 pin 必須在位。"""
+        """上架 ⟹ image 雙釘（2026-10-04 公開上架；之後若翻回隱藏，這條仍要綠）。"""
         tpl = self._tpl()
         self.assertTrue(tpl.is_active)
         self.assertFalse(tpl.conceal_instances, 'hidden-only（曝光層），實例層不設')
@@ -183,11 +183,13 @@ class TestTailscaleSeed(TransactionCase):
         for needle, why in (
                 ('DERP', '流量多半經公共中繼，速度有限'),
                 ('exit node', '明講不提供 exit node'),
+                ('出口節點', '中文也要講：不提供出口節點'),
                 ('子網路由', '明講不提供 subnet router'),
                 ('-headscale:8080', '同工作區 Headscale 的內部網址'),
                 ('新機器', '換控制伺服器＝新節點身分'),
                 ('清空', 'authkey 登入後清掉'),
                 ('帳號固定 admin', '只有密碼可自設'),
+                ('從瀏覽器開服務網址', '入口擋 127/8（port-forward 一律 403），網頁介面只能經服務網址開'),
         ):
             self.assertIn(needle, desc, why)
         auth = self._optional()['tailscale.authKey']['description']
