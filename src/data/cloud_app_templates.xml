@@ -1876,7 +1876,7 @@
                 **裝置連線帳號**：broker 拒絕匿名連線，開通時沒有任何 MQTT 帳號；請在後台的存取控制（Access Control）→
                 認證（Authentication）為裝置建立帳號密碼。
                 **對外連線**：MQTT over WebSocket 直接走服務網址——wss://（你的服務網址）/mqtt，埠 443
-                （後台「诊断工具 → WebSocket 客户端」請把埠改成 443）。原生 MQTT（1883）要讓外部裝置連上，
+                （後台「诊断工具 → WebSocket 客户端」預設就連這個位址，可直接測試）。原生 MQTT（1883）要讓外部裝置連上，
                 需在服務設定填入你自己的 ngrok authtoken；填了 ngrok 保留位址就固定用該位址，
                 沒填則每次重啟由 ngrok 指派，服務頁會顯示目前位址。
                 同一工作區內的其他服務（如 n8n、Home Assistant）可直接連 1883／8083。
@@ -1889,7 +1889,7 @@
             <field name="documentation_url">https://github.com/WOOWTECH/Woow_k3s_emqx#readme</field>
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/emqx</field>
-            <field name="helm_chart_version">0.1.3</field>
+            <field name="helm_chart_version">0.1.4</field>
             <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/emqx","tag":"20261002.0528@sha256:8b92a101d1a1642a191507b9133c46aad095bb64300dba1770108a2c7261b11a"},"ngrok":{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/ngrok","tag":"20261002.0258@sha256:4147f33ead67712d642fde29af4a9e258d7a937ef97be146397b7e2a2e8e8dd1"}},"emqx":{"resources":{"requests":{"cpu":"250m","memory":"512Mi"},"limits":{"cpu":"1","memory":"2Gi"}}},"persistence":{"data":{"size":"10Gi"},"log":{"size":"2Gi"}},"service":{"port":18083,"targetPort":18083}}</field>
             <field name="helm_value_specs">{"required": [], "optional": [{"key": "ngrok.enabled", "label": "對外開放 MQTT（ngrok）", "type": "boolean", "default": false, "description": "平台的通道只載 HTTP／WebSocket：WebSocket 用戶端直接連 wss://服務網址/mqtt 即可；原生 MQTT 1883 要對外必須透過你自己的 ngrok 帳號，未開啟時只能在平台內部連線"}, {"key": "ngrok.authtoken", "label": "ngrok Authtoken", "type": "password", "description": "你 ngrok 帳號的 authtoken（ngrok 後台可取）。開啟對外 MQTT 時要填；沒填時服務照常運作，只是不會有對外位址。清空即撤銷"}, {"key": "ngrok.remoteAddr", "label": "ngrok 保留位址（選填）", "type": "text", "placeholder": "1.tcp.ngrok.io:12345", "description": "填了就固定用這個位址（ngrok 付費的保留 TCP 位址）；留空則每次重啟由 ngrok 隨機指派，服務頁會顯示目前位址"}, {"key": "emqx.listeners.ws.enabled", "label": "MQTT over WebSocket（8083）", "type": "boolean", "default": true, "description": "開啟時，瀏覽器或只能走 WebSocket 的用戶端可連 wss://服務網址/mqtt（443 埠），同工作區內可連 8083；關掉只留原生 TCP"}]}</field>
             <field name="default_port">18083</field>
