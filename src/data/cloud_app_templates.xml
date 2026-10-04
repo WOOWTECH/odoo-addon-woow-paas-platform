@@ -130,14 +130,24 @@
 
             <!-- MCP Configuration -->
             <field name="mcp_enabled" eval="True" />
-            <field name="mcp_sidecar_image">ghcr.io/czlonkowski/n8n-mcp:latest</field>
+            <!-- MCP sidecar：與 n8n 同一個 Pod，經 localhost 呼叫 n8n REST API。
+                 ⚠ 釘 tag@digest，不要再用 :latest——n8n-mcp 自某版起預設
+                 WEBHOOK_SECURITY_MODE=strict（SSRF 防護擋 localhost／私有 IP），:latest
+                 一換版，內建 MCP 的所有 n8n_* 工具全部回「SSRF protection: Localhost access
+                 is blocked in strict mode」（2026-10-03 正式站 2.91.0 實測；只剩文件類工具可用）。
+                 moderate＝允許 localhost、仍擋其他私有網段，正好是 sidecar 的使用情境；
+                 正式站以同一映像加 moderate 實測 59/63 通過（其餘 4 項是授權／選配功能）。
+                 ⚠ operator 的 patch_sidecar 只會「新增」容器：本欄位只影響**新開通**的服務，
+                 既有服務要另外更新 sidecar（見 #1405）。 -->
+            <field name="mcp_sidecar_image">ghcr.io/czlonkowski/n8n-mcp:2.91.0@sha256:f5505daf0d75bba3533c98e148c30f6d2e7482569f75920886b4f6f18937943b</field>
             <field name="mcp_sidecar_port">3000</field>
             <field name="mcp_transport">streamable_http</field>
             <field name="mcp_endpoint_path">/mcp</field>
             <field name="mcp_sidecar_env">{
                 "MCP_MODE": "http",
                 "N8N_API_URL": "http://localhost:5678",
-                "PORT": "3000"
+                "PORT": "3000",
+                "WEBHOOK_SECURITY_MODE": "moderate"
                 }</field>
             <field name="mcp_api_key_helm_path">main.secret.N8N_API_KEY</field>
             <field name="post_deploy_init_type">n8n</field>
