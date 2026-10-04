@@ -71,9 +71,9 @@ class InitN8nBudgetCLITests(unittest.TestCase):
         # 真 envelope＝531（find_pod 60＋readiness 206＋5 次 node 75＋secret／patch／
         # deployment 90＋restart 100）；把 read 壓到 envelope 以下／相等都要紅。
         self.mutation(CLIENT, 'INIT_N8N_READ_TIMEOUT = 600',
-                      'INIT_N8N_READ_TIMEOUT = 120', 'envelope=531', full=True)
+                      'INIT_N8N_READ_TIMEOUT = 120', 'envelope=571', full=True)
         self.mutation(CLIENT, 'INIT_N8N_READ_TIMEOUT = 600',
-                      'INIT_N8N_READ_TIMEOUT = 531', 'envelope=531')
+                      'INIT_N8N_READ_TIMEOUT = 571', 'envelope=571')
 
     def test_dedicated_tuple_wiring_cannot_regress(self):
         original = 'timeout=(INIT_N8N_CONNECT_TIMEOUT, INIT_N8N_READ_TIMEOUT)'
@@ -93,21 +93,21 @@ class InitN8nBudgetCLITests(unittest.TestCase):
     def test_server_substeps_are_read_from_source(self):
         cases = (
             # readiness 20×10 + 19×4 = 276（原 206）
-            (OPERATOR, 'MAX_READY_RETRIES = 15', 'MAX_READY_RETRIES = 20', 'envelope=601'),
+            (OPERATOR, 'MAX_READY_RETRIES = 15', 'MAX_READY_RETRIES = 20', 'envelope=641'),
             # readiness 15×10 + 14×10 = 290
-            (OPERATOR, 'READY_RETRY_DELAY = 4', 'READY_RETRY_DELAY = 10', 'envelope=615'),
+            (OPERATOR, 'READY_RETRY_DELAY = 4', 'READY_RETRY_DELAY = 10', 'envelope=655'),
             # readiness exec 15×20 = 300（原 150）
-            (OPERATOR, 'timeout=10,', 'timeout=20,', 'envelope=681'),
+            (OPERATOR, 'timeout=10,', 'timeout=20,', 'envelope=721'),
             # 5 次沒帶 timeout 的 node request：5×30（原 5×15）
             (OPERATOR, 'capture_headers: bool = False,\n        timeout: int = 15,',
-             'capture_headers: bool = False,\n        timeout: int = 30,', 'envelope=606'),
+             'capture_headers: bool = False,\n        timeout: int = 30,', 'envelope=646'),
             # restart 6×30 + 2×5 = 190（原 3×30 + 2×5 = 100）
-            (OPERATOR, 'for attempt in range(3):', 'for attempt in range(6):', 'envelope=621'),
+            (OPERATOR, 'for attempt in range(3):', 'for attempt in range(6):', 'envelope=661'),
             # restart 間隔 2×60（原 2×5）
-            (OPERATOR, 'time.sleep(5)', 'time.sleep(60)', 'envelope=641'),
+            (OPERATOR, 'time.sleep(5)', 'time.sleep(60)', 'envelope=681'),
             # 8 次沒帶 timeout 的 kubectl：8×40（原 8×30）
             (KUBECTL, 'input_data: Optional[str] = None,\n        timeout: int = 30,',
-             'input_data: Optional[str] = None,\n        timeout: int = 40,', 'envelope=611'),
+             'input_data: Optional[str] = None,\n        timeout: int = 40,', 'envelope=651'),
         )
         for case in cases:
             with self.subTest(source=case[0], change=case[2]):
@@ -132,6 +132,13 @@ class InitN8nBudgetCLITests(unittest.TestCase):
         for case in cases:
             with self.subTest(source=case[0], change=case[2]):
                 self.mutation(*case, '結構變動')
+
+    def test_key_prune_cap_counts_toward_envelope(self):
+        # #1471：刪舊 key 的上限調大，最壞耗時就超過 client read，必須被擋下。
+        self.mutation(OPERATOR, '_MAX_KEY_DELETES = 3', '_MAX_KEY_DELETES = 10', 'envelope')
+
+    def test_key_prune_loop_must_be_capped(self):
+        self.mutation(OPERATOR, 'for key in stale[:_MAX_KEY_DELETES]:', 'for key in stale:', '無法驗證')
 
     def test_reassigned_budget_cannot_keep_the_old_literal(self):
         self.mutation(OPERATOR, 'MAX_READY_RETRIES = 15',

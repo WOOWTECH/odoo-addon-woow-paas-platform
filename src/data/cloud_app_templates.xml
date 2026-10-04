@@ -102,6 +102,10 @@
                  api-keys/scopes、api-keys）已在乾淨的 2.35.3 上逐步實測通過。
                  ⚠ 既有沒有自帶 image 的服務（目前只有 stg svc-16e7ac1a，1.122.4、已縮 0）下次
                  redeploy 會跟著升到 2.x（n8n 資料庫遷移是單向的）。 -->
+            <!-- main.secret.N8N_API_KEY 預留位置（#1471）：8gears chart 只有 main.secret 有值時才建
+                 `<release>-n8n-app-secret`，而 operator 的 n8n init 最後一步要把真的 API key 寫進這個
+                 Secret，找不到就判 partial、服務卡在 initializing。以前這個值是平台在 mcp_enabled 時
+                 注入的；#1429 移除內建 MCP 後改成範本直接帶。值本身不是秘密，init 成功後會被換成真的 key。 -->
             <field name="helm_default_values">{"config": {"database": {"type": "sqlite"}},
                 "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/n8n",
                 "tag": "20261004.1130@sha256:a3693cff4b9fff5ffce6d20470f2d87a905c073c0de46ea65404e89947c6dfa2"},
@@ -110,7 +114,8 @@
                 "N8N_PUBLIC_API_ENABLED": "true"},
                 "resources": {"requests": {"cpu": "100m", "memory": "256Mi"}, "limits": {"cpu":
                 "1000m", "memory": "1Gi"}},
-                "persistence": {"enabled": true, "type": "dynamic", "size": "2Gi"}},
+                "persistence": {"enabled": true, "type": "dynamic", "size": "2Gi"},
+                "secret": {"N8N_API_KEY": "set-by-platform-init"}},
                 "updateStrategy": {"type": "Recreate"}}</field>
             <!-- IMPORTANT: 換行只能落在 JSON token 之間，不可切斷字串值。字串值內夾字面換行
                  會讓 _parse_helm_value_specs 的 json.loads(strict) 拋錯 → 回 {} → 前端
