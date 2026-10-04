@@ -109,8 +109,13 @@ class TestConcealInstancesSeed(TransactionCase):
         # （code-server 2026-09-30 image 釘上 20260930.1503@sha256 後公開上架＝不再 hidden。）
         # （emqx／nextcloud 2026-10-02 #1321 以隱藏卡片進 seed，10-02 image 鏡像與 chart 0.1.1
         #  落地後公開上架＝不再 hidden；當時只翻 is_hidden，實例層從未設。）
+        # headscale／tailscale／litellm：hidden-only（曝光層）——2026-10-04 以隱藏卡片進 seed，
+        # 等 image 鏡像核可、chart 0.1.0 發佈與正式站驗證後另開 PR 公開上架；實例層不設，
+        # 上架時只翻 is_hidden 並把 slug 從這裡拿掉
+        # （work/paas-listing-headscale-tailscale-litellm/PLAN.md §6 階段 6）。
         self.assertEqual(
-            set(hidden.mapped('slug')), {'ha-paas', 'ha-full-apporo'},
+            set(hidden.mapped('slug')),
+            {'ha-paas', 'ha-full-apporo', 'headscale', 'tailscale', 'litellm'},
             '隱藏 template 盤點漂移；新增的請先判定屬曝光層還是實例層')
         concealed = hidden.filtered('conceal_instances')
         self.assertEqual(

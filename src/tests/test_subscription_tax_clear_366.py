@@ -70,7 +70,8 @@ class TestSeedProductCorpusIntact(TransactionCase):
     #            1-3 席、Hermes MCP Server T1/T2/T3 各 1-3／1-6／1-10 席，皆 ×月/年）。
     # 321 → 323：Omnigent 月/年；323 → 325：Code Server 月/年。
     # 325 → 329：EMQX 月/年 ＋ Nextcloud 月/年（皆無加購變體）。
-    _MIN_SEEDED_PRODUCTS = 329
+    # 329 → 335：Headscale、Tailscale、LiteLLM 各月/年（皆無加購變體；範本先隱藏）。
+    _MIN_SEEDED_PRODUCTS = 335
 
     def test_no_seed_product_is_silently_dropped(self):
         imd = self.env['ir.model.data'].sudo().search([
