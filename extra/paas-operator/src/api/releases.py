@@ -5,7 +5,7 @@ import logging
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import yaml
 from fastapi import APIRouter, HTTPException, Query, status
@@ -1478,10 +1478,10 @@ def _reset_via_helm_secret(
             detail="reset-config: failed to update the chart Secret",
         )
 
+    statefulset_names: List[str] = []
     try:
-        deployment_names = k8s_service.get_deployment_names(
-            namespace=namespace,
-            label_selector=label_selector,
+        deployment_names, statefulset_names = _credential_reset_workloads(
+            namespace, label_selector,
         )
         # #461：全部下 restart 後**直接回**，不再逐一等 rollout。原本的「先全部下、
         # 再逐一等」是為了讓兩顆並行推進（總耗時 ≈max 而非 sum）以塞進 120s 預算；
@@ -1491,6 +1491,13 @@ def _reset_via_helm_secret(
             k8s_service.rollout_restart_deployment(
                 namespace=namespace,
                 deployment_name=deployment_name,
+            )
+        # hermes-agent >= 0.3.0、headscale／tailscale >= 0.1.1：吃密碼的是 StatefulSet
+        # （opt-in label），一樣要滾。
+        for statefulset_name in statefulset_names:
+            k8s_service.rollout_restart_statefulset(
+                namespace=namespace,
+                statefulset_name=statefulset_name,
             )
     except KubectlException as e:
         recovery_failed = _rollback_helm_secret_reset(
@@ -1520,8 +1527,45 @@ def _reset_via_helm_secret(
         "rollout_awaited": False,
         "admin_password_carrier": "helm_secret",
         "restarted_deployments": deployment_names,
+        "restarted_statefulsets": statefulset_names,
         "note": "password lives in the chart Secret — no config.json patch",
     }
+
+
+def _credential_reset_workloads(
+    namespace: str, label_selector: str,
+) -> Tuple[List[str], List[str]]:
+    """Every workload a helm_secret reset must roll: (deployments, statefulsets).
+
+    Deployments: all of the release (#449). StatefulSets: only those carrying
+    ``CREDENTIAL_RESET_RESTART_LABEL`` (hermes-agent >= 0.3.0 runs its agent as a
+    StatefulSet — platform #1360 follow-up — and reads admin_password at start).
+    A release may now have zero Deployments (hermes-agent with console.enabled=false;
+    headscale/tailscale >= 0.1.1, which are StatefulSet-only charts — before this,
+    their reset always ended in "No deployments found" → rollback → 500), so
+    "no Deployment" is only an error when no opted-in StatefulSet exists either:
+    restarting nothing would report a rotation that never reached a pod.
+    """
+    try:
+        deployment_names = k8s_service.get_deployment_names(
+            namespace=namespace,
+            label_selector=label_selector,
+        )
+    except KubectlException as e:
+        if "No deployments found" not in (e.message or ""):
+            raise
+        deployment_names = []
+    statefulset_names = k8s_service.get_credential_reset_statefulset_names(
+        namespace=namespace,
+        label_selector=label_selector,
+    )
+    if not deployment_names and not statefulset_names:
+        raise KubectlException(
+            message=f"No deployments or opted-in statefulsets found matching selector '{label_selector}'",
+            command=f"get deployments,statefulsets --namespace {namespace} --selector {label_selector}",
+            stderr="",
+        )
+    return deployment_names, statefulset_names
 
 
 def _rollback_helm_secret_reset(
@@ -1558,12 +1602,13 @@ def _rollback_helm_secret_reset(
         return recovery_failed
 
     try:
-        deployment_names = k8s_service.get_deployment_names(
-            namespace=namespace,
-            label_selector=label_selector,
+        deployment_names, statefulset_names = _credential_reset_workloads(
+            namespace, label_selector,
         )
         for deployment_name in deployment_names:
             k8s_service.rollout_restart_deployment(namespace, deployment_name)
+        for statefulset_name in statefulset_names:
+            k8s_service.rollout_restart_statefulset(namespace, statefulset_name)
     except KubectlException as e:
         logger.error(
             "reset-config (helm_secret) rollback rollout failed for %s/%s: %s",

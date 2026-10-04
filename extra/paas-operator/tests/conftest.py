@@ -36,6 +36,24 @@ def sa_pull_secret_convergence(request):
 
 
 @pytest.fixture(autouse=True)
+def credential_reset_statefulsets(request):
+    """helm_secret reset 會多查一次「opt-in 重啟的 StatefulSet」——那也是真 kubectl。
+
+    預設回 []（＝只有 Deployment，行為與 hermes-agent 0.3.0 之前相同）。要測
+    StatefulSet 也被滾的測試把本 fixture 收進參數、改 ``return_value`` 即可。
+    """
+    if request.node.get_closest_marker("integration"):
+        yield None
+        return
+
+    with patch(
+        "src.api.releases.k8s_service.get_credential_reset_statefulset_names",
+        return_value=[],
+    ) as mock_names:
+        yield mock_names
+
+
+@pytest.fixture(autouse=True)
 def storage_quota_snapshot(request):
     """#1348：``create_release`` 開通前會讀 namespace 的 ResourceQuota／PVC——那也是真 kubectl。
 
