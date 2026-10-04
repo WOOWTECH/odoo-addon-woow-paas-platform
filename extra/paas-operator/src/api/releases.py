@@ -942,6 +942,9 @@ def get_release_status(
             pods = k8s_service.get_pods(
                 namespace=namespace,
                 label_selector=selector,
+                # #1417：未就緒的 Pod 附最近一筆 Warning 事件，讓平台的部署逾時訊息
+                # 說得出「卡在哪」。事件查詢失敗由 get_pods 自己吞掉，不會落到下面。
+                include_warning_events=True,
             )
         except Exception as e:
             logger.error(f"Failed to get pods for {namespace}/{name}: {e}")

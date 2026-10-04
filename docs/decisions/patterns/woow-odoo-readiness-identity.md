@@ -112,6 +112,11 @@ Q45 字面只定前兩筆；後兩筆是 review 發現「woow-odoo 最常卡住�
 - 一顆 Pod 都沒有時沿用通用的 `HARD: no pods found for this release`，接 quota 的 hint。
 - 新增 detail 前綴時，`TestWoowOdooContractPredicate.test_each_new_detail_is_matched_by_its_own_hint_first`
   用判定本身產生的 detail 驗「先比中的是自己那筆」——不要手抄字串進測試。
+- #1417 起 `_TIMEOUT_HINTS` 每筆是 `(needle, hint key, 原因分型)`：文字在 `CloudService._timeout_hint_text`
+  （以服務建立者語言翻譯），分型決定給租戶的那句話。通用判定（`_is_container_ready`）把 Pending 與
+  「Running 未 ready」拆成 `pods not started`／`pods not ready`，並在 Pod 摘要寫入 `waiting=<reason>`／
+  `event=<reason>` 標記（排在通用 needle 之前）；woow-odoo 的 `_describe` **不**寫這些標記——例行 Job 的
+  事件會把方向帶偏，woow-odoo 仍用上表四筆。
 
 ## 分流點只有一個
 

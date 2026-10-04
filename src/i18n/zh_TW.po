@@ -19928,3 +19928,297 @@ msgstr "上次重新部署後，實際執行的 workload 與商品範本的核�
 #: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_service__redeploy_verify_pending
 msgid "Redeploy Verification Pending"
 msgstr "等待重新部署核對"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid ""
+"Deployment timeout recovery fields are managed by the platform: %(fields)s"
+msgstr "部署逾時自動恢復的欄位由平台管理：%(fields)s"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid ""
+"the release runs a different chart than the template expects — an in-place "
+"upgrade cannot switch charts; a fresh install is required (see #1128)"
+msgstr "release 跑的 chart 與範本預期的不同——原地升級換不了 chart，需要重新安裝（見 #1128）"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid ""
+"the operator does not report Pod identity (component/owner) — upgrade paas-"
+"operator first (#1263), woow-odoo readiness fails closed without it"
+msgstr ""
+"operator 沒有回報 Pod 身分（component／owner）——請先升級 paas-operator（#1263），沒有它 woow-"
+"odoo 的就緒判定一律不放行"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid ""
+"the chart's server/postgresql Pod was never created (or is not owned by its "
+"ReplicaSet/StatefulSet) — check the ReplicaSet/StatefulSet events for "
+"FailedCreate (namespace ResourceQuota, admission)"
+msgstr ""
+"chart 的 server／postgresql Pod 從未建立（或不屬於它的 ReplicaSet／StatefulSet）——請查 "
+"ReplicaSet／StatefulSet 事件裡的 FailedCreate（namespace ResourceQuota、admission）"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid ""
+"a required Pod exists but never reached Running — check its pod events "
+"(scheduling, Multi-Attach, image pull); an exempt backup Job listed in the "
+"detail may still hold the RWO data PVC"
+msgstr ""
+"必要的 Pod 存在但從未進入 Running——請查它的 Pod 事件（排程、Multi-Attach、拉 image）；細節裡列出的豁免備份 Job"
+" 可能還佔著 RWO 資料 PVC"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid ""
+"a volume could not be attached to the node — check the Longhorn volume and "
+"whether its replicas can be scheduled (disk space, storage over-"
+"provisioning, orphaned PVCs still holding capacity)"
+msgstr ""
+"磁碟掛不到節點上——請檢查 Longhorn volume 與它的 replica 能否排程（磁碟空間、Storage Over "
+"Provisioning、仍佔著容量的孤兒 PVC）"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid ""
+"a volume could not be mounted — check the PVC/PV binding and the CSI driver "
+"events of the pod"
+msgstr "磁碟無法掛載——請檢查 PVC／PV 的綁定與這個 Pod 的 CSI driver 事件"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid ""
+"the pod could not be scheduled — check node CPU/memory capacity, unbound "
+"PVCs (storage class, Longhorn capacity) and node selectors"
+msgstr ""
+"Pod 排不上節點——請檢查節點 CPU／記憶體容量、未綁定的 PVC（storage class、Longhorn 容量）與 node "
+"selector"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid ""
+"the container image could not be pulled — check the image reference, the "
+"registry credentials (imagePullSecrets) and that the registry is reachable "
+"from the node"
+msgstr ""
+"拉不到容器 image——請檢查 image 參照、registry 憑證（imagePullSecrets），以及節點連不連得到 registry"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid ""
+"a container keeps crashing on start — check its previous logs (kubectl logs "
+"--previous) and its configuration"
+msgstr "容器一啟動就反覆當掉——請查它上一次的 log（kubectl logs --previous）與設定"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid ""
+"the container could not be created — check the Secrets/ConfigMaps it "
+"references and its container spec"
+msgstr "容器建立不起來——請檢查它引用的 Secret／ConfigMap 與容器設定"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid "the operator could not list pods — check its RBAC and the API server"
+msgstr "operator 列不出 Pod——請檢查它的 RBAC 與 API server"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid ""
+"no Pod object was ever created — check the namespace ResourceQuota (a "
+"rejected Pod never materialises) and that the chart labels its pods with "
+"app.kubernetes.io/instance"
+msgstr ""
+"一顆 Pod 都沒有建立——請檢查 namespace 的 ResourceQuota（被拒絕的 Pod 不會出現），以及 chart 有沒有替 Pod"
+" 標上 app.kubernetes.io/instance"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid ""
+"pods exist but none reached Running — check pod events (scheduling, image "
+"pull) and node capacity"
+msgstr "Pod 存在但沒有一顆進入 Running——請查 Pod 事件（排程、拉 image）與節點容量"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid ""
+"pods never started (still Pending) — check the pod events (scheduling, "
+"volume attach/mount, image pull) and node capacity"
+msgstr "Pod 從未啟動（仍是 Pending）——請查 Pod 事件（排程、磁碟掛載、拉 image）與節點容量"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid ""
+"pods are Running but never became ready — check container logs and the "
+"readiness probe"
+msgstr "Pod 已 Running 但一直沒有就緒——請查容器 log 與 readiness probe"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid ""
+"the platform never received VM status — the operator is likely too old to "
+"report it"
+msgstr "平台從未收到 VM 狀態——operator 版本可能太舊、不會回報"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid ""
+"the operator could not read the VirtualMachineInstance — check its RBAC for "
+"virtualmachineinstances"
+msgstr ""
+"operator 讀不到 VirtualMachineInstance——請檢查它對 virtualmachineinstances 的 RBAC"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid ""
+"no VirtualMachineInstance was created — check the DataVolume / CDI importer,"
+" the disk import may have stalled"
+msgstr "沒有建立 VirtualMachineInstance——請檢查 DataVolume／CDI importer，磁碟匯入可能卡住了"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid ""
+"the VM is running but never reported Ready — check the guest boot inside the"
+" VM"
+msgstr "VM 已在執行但一直沒有回報 Ready——請檢查 VM 內的開機狀況"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid ""
+"the helm release never reached \"deployed\" — a killed rollback leaves it "
+"stuck in pending-*; inspect `helm history` for the release"
+msgstr ""
+"helm release 一直沒到 \"deployed\"——rollback 被中斷會卡在 pending-*；請查這個 release 的 "
+"`helm history`"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid ""
+"the service is suspended — its workload is intentionally halted, so it can "
+"never become ready while a deploy/upgrade is pending (see #482)"
+msgstr "服務停權中——workload 被刻意停機，部署／升級等待期間永遠不會就緒（見 #482）"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid ""
+"The service is suspended, so it cannot finish deploying. It will resume "
+"automatically once the subscription is active again."
+msgstr "服務目前停權中，因此無法完成部署；訂閱恢復有效後服務會自動恢復。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid ""
+"The service did not finish starting within %(minutes)s minutes because the "
+"platform could not provide the storage or computing resources it needs in "
+"time. This is a platform-side issue and you do not need to do anything; the "
+"service will recover automatically once it is resolved."
+msgstr ""
+"服務在 %(minutes)s "
+"分鐘內沒能啟動完成：平台沒能及時提供它需要的儲存或運算資源。這是平台端的問題，您不需要做任何操作；問題排除後服務會自動恢復。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid ""
+"The service did not finish starting within %(minutes)s minutes because its "
+"software image could not be downloaded. This is a platform-side issue and "
+"you do not need to do anything; the service will recover automatically once "
+"it is resolved."
+msgstr ""
+"服務在 %(minutes)s 分鐘內沒能啟動完成：服務的程式映像檔下載不下來。這是平台端的問題，您不需要做任何操作；問題排除後服務會自動恢復。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid ""
+"The service did not finish starting within %(minutes)s minutes because it "
+"keeps restarting while starting up. If you recently changed its settings, "
+"please check them; otherwise you do not need to do anything. The service "
+"will recover automatically once the problem is resolved."
+msgstr ""
+"服務在 %(minutes)s "
+"分鐘內沒能啟動完成：服務啟動時一直重新啟動。如果您最近修改過服務設定，請確認設定是否正確；否則您不需要做任何操作。問題排除後服務會自動恢復。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid ""
+"The service started but did not report that it was ready within %(minutes)s "
+"minutes. You do not need to do anything; the service will recover "
+"automatically once it becomes ready."
+msgstr "服務已啟動，但在 %(minutes)s 分鐘內沒有回報可以使用。您不需要做任何操作；服務就緒後會自動恢復。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid ""
+"The service did not finish starting within %(minutes)s minutes. You do not "
+"need to do anything for now; the service will recover automatically once the"
+" problem is resolved. If it does not recover, please contact support."
+msgstr "服務在 %(minutes)s 分鐘內沒能啟動完成。您目前不需要做任何操作；問題排除後服務會自動恢復，若一直沒有恢復，請聯絡客服。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid ""
+"%(summary)s\n"
+"Technical details for the administrator: %(details)s"
+msgstr ""
+"%(summary)s\n"
+"技術細節（給管理員）：%(details)s"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid ""
+"Service %(name)s (id=%(id)s) recovered on its own after the deployment "
+"timeout of %(timed_out_at)s UTC: the release became ready, so it moved to "
+"%(state)s."
+msgstr ""
+"服務 %(name)s（id=%(id)s）在 %(timed_out_at)s UTC 部署逾時後已自行恢復：release 已就緒，狀態改為 "
+"%(state)s。"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_service__transition_timeout_at
+msgid "Deployment Timed Out At"
+msgstr "部署逾時時間"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_cloud_service__transition_timeout_at
+msgid ""
+"Set when the deployment age timeout turned this service into an error. While"
+" set, a background job keeps checking the release for a limited time and "
+"resumes the service as soon as it becomes ready."
+msgstr "部署等候逾時把這個服務轉成錯誤的時間。有值時，背景排程會在一段時間內繼續檢查 release，一就緒就自動恢復服務。"
+
+#. module: woow_paas_platform
+#: model:ir.actions.server,name:woow_paas_platform.ir_cron_recover_timed_out_services_ir_actions_server
+msgid "Cloud Service: Recover Timed-out Deployments"
+msgstr "雲端服務：部署逾時自動恢復"
