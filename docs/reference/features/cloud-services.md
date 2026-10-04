@@ -225,6 +225,16 @@ Example: paas-ws-123-anythingllm-01
 > post-deploy init 在獨立的 init cron 執行。設計見
 > [post-deploy init 執行模型 ADR](../../decisions/refactor/post-deploy-init-execution-model.md)。
 
+> **部署逾時與自動恢復（#489／#1416／#1417）**：`deploying`／`upgrading` 超過門檻（容器 30 分、VM 120 分，
+> `ir.config_parameter` 可調）仍未就緒就轉 `error`，同時記下 `transition_timeout_at`。`error_message` 先給租戶一句
+> 服務建立者語言的說明（發生什麼、通常不需要他做事、問題排除後會自動恢復），再附「技術細節（給管理員）」：
+> 就緒判定的 detail（Pending 的 Pod 與 Running 未就緒分開列，附 operator 報的卡住容器 `waiting` 與最近一筆
+> Warning 事件 `last_warning`）＋依原因分型的檢查方向。逾時只代表「等太久」：背景 cron
+> `_cron_recover_timed_out_services`（每 5 分）在時間窗內（`woow_paas_platform.timeout_recovery_window_hours`，
+> 預設 168 小時）重查有標記、未停權的 error 服務，release 就緒就走同一條 poll 推進（要 init 的進
+> `initializing`，否則 `running`），清掉訊息與標記並在 PaaS Platform Monitor 留紀錄。其他來源的 error
+> （operator 回 failed、刪除／停權失敗、init 額度出口…）沒有標記，永遠不會被這條自癒碰到。
+
 ### Supported Operations
 
 | Operation | Helm Command               | Description                                      |

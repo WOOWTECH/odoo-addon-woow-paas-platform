@@ -174,6 +174,10 @@ _CONFIG_PARAMETERS = [
     # `test_init_execution_control_1257.py::TestInitConfigParametersRegisteredForUninstall`）。
     'woow_paas_platform.init_unknown_limit',
     'woow_paas_platform.init_wait_timeout_minutes',
+    # #1416：部署逾時後背景自癒的重查時間窗（小時；「模組常數＋get_param()」寫法，
+    # lint 掃不到 ⇒ 補在 `test_deploy_timeout_recovery_1416.py::
+    # TestRecoveryConfigParameterRegisteredForUninstall`）。
+    'woow_paas_platform.timeout_recovery_window_hours',
     # #501：限量商品的供給閘門（缺值時走 cloud_app_template.py 的內建預設）。
     # key 由 slug 推導，新增限量商品時這裡要跟著補兩個
     # （守線＝repo-lint 的 config-parameter-uninstall）。

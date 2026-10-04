@@ -333,6 +333,24 @@ def _reject_observation_control_writes(env, vals):
             fields=', '.join(touched)))
 
 
+# #1416：「這筆 error 是部署逾時寫的」標記。背景 cron 以 superuser 依它重查、就緒就把
+# 服務推回 running／initializing——租戶若能自己寫它，就能讓 init 額度出口、刪除失敗等
+# 其他來源的 error 被 cron 推回去（同 `_INIT_CONTROL_FIELDS` 的理由，判準也同樣是
+# `env.is_system()`：平台自己的寫入全走 cron／sudo）。
+_TIMEOUT_RECOVERY_CONTROL_FIELDS = frozenset({'transition_timeout_at'})
+
+
+def _reject_timeout_recovery_control_writes(env, vals):
+    """write() 側：逾時自癒標記只能由平台寫入（#1416）。"""
+    if env.is_system():
+        return
+    touched = sorted(_TIMEOUT_RECOVERY_CONTROL_FIELDS.intersection(vals))
+    if touched:
+        raise AccessError(_(
+            'Deployment timeout recovery fields are managed by the platform: %(fields)s',
+            fields=', '.join(touched)))
+
+
 # ------------------------------------------------------------------------- #
 #  #787：CS Access sync 的抑制鑰匙（private sentinel，形狀抄 #536）           #
 # ------------------------------------------------------------------------- #
@@ -467,6 +485,8 @@ _GLOBAL_CAP_CONFLICT_SQL = (
 # upgrading / initializing 才呼叫，一旦寫進 `error` 就再也沒有任何路徑會把它
 # poll 回 `running`——即使叢集裡的服務在門檻之後其實就緒了。誤殺＝本來會好的
 # 服務被打成 error、租戶得重新下單；晚報＝維運晚 N 分鐘知道。兩者不對稱。
+# （#1416 起逾時造成的 error 由 `_cron_recover_timed_out_services` 在時間窗內低頻
+# 重查、就緒就推回來——那是補救，不是放寬門檻的理由：誤殺期間租戶照樣看到錯誤。）
 #
 # 預設值的實證依據（見 PR 論證）：
 #   * 容器型 30 分 —— 本 repo 沒有容器型的分段計時實測，取 #489 建議值 15 分
@@ -559,64 +579,69 @@ _init_cron_clock = time.monotonic
 # 以 detail 的子字串比對（順序即優先序）。detail 字串日後若改動，
 # `TestTimeoutDiagnosis` 會紅——這個耦合是刻意用測試守住的，而不是靠註解。
 # 未命中時不附 hint（fail-soft：訊息仍有前綴與 detail，只是少了方向）。
+#
+# #1417：每筆是 ``(needle, hint key, 原因分型)``。
+#   * hint 文字在 `CloudService._timeout_hint_text`——要以**服務建立者的語言**翻譯
+#     （cron 的 env 語言不是租戶的），模組常數做不到，所以這裡只放 key。
+#   * 原因分型決定給租戶看的那一句話（`_timeout_tenant_summary`）。
+#   * `waiting=`／`event=` 是 `_describe_unready_pod` 依 operator 回報（PodInfo
+#     `waiting`／`last_warning`）寫進 detail 的標記，排在通用的
+#     `pods not started`／`pods not ready` 之前：有具體原因就不要給籠統的方向。
+#     同一則 detail 有多顆 Pod 時，表上越前面的原因越根本（掛不上磁碟 > 拉不到
+#     image > 反覆重啟 > readiness）。
+TIMEOUT_CAUSE_STORAGE = 'storage'      # 磁碟掛載／Pod 排程（含儲存額度）
+TIMEOUT_CAUSE_IMAGE = 'image'          # 拉不到 image
+TIMEOUT_CAUSE_CRASH = 'crash_loop'     # 容器反覆重啟
+TIMEOUT_CAUSE_READINESS = 'readiness'  # 起來了但沒回報 ready
+TIMEOUT_CAUSE_SUSPENDED = 'suspended'  # 停權中（#482）
+TIMEOUT_CAUSE_OTHER = 'other'
+
 _TIMEOUT_HINTS = (
     # #1251 Q45：woow-odoo 判定專屬的 hint。刻意排在最前面（至少要在 'pods not ready'
     # 之前）：先比中先用，別讓通用 hint 把方向帶偏。
     # detail 字串的撞名規則見 docs/decisions/patterns/woow-odoo-readiness-identity.md
-    ('chart mismatch',
-     'the release runs a different chart than the template expects — an '
-     'in-place upgrade cannot switch charts; a fresh install is required (see '
-     '#1128)'),
-    ('operator lacks pod identity',
-     'the operator does not report Pod identity (component/owner) — upgrade '
-     'paas-operator first (#1263), woow-odoo readiness fails closed without it'),
+    ('chart mismatch', 'chart_mismatch', TIMEOUT_CAUSE_OTHER),
+    ('operator lacks pod identity', 'operator_lacks_identity', TIMEOUT_CAUSE_OTHER),
     # #1251 review S2（使用者裁定，超出 Q45 字面的兩筆）：woow-odoo 最常卡住的兩種
     # 情形。前者只擋 server 的 FailedCreate 不產 Pod，'no pods found' 蓋不到；後者若落到
     # 'pods not ready' 會被帶去看 container log，方向錯。
-    ('required component missing',
-     "the chart's server/postgresql Pod was never created (or is not owned by "
-     'its ReplicaSet/StatefulSet) — check the ReplicaSet/StatefulSet events for '
-     'FailedCreate (namespace ResourceQuota, admission)'),
-    ('required pods not running',
-     'a required Pod exists but never reached Running — check its pod events '
-     '(scheduling, Multi-Attach, image pull); an exempt backup Job listed in '
-     'the detail may still hold the RWO data PVC'),
-    ('pod lookup failed',
-     'the operator could not list pods — check its RBAC and the API server'),
-    ('no pods found',
-     'no Pod object was ever created — check the namespace ResourceQuota (a '
-     'rejected Pod never materialises) and that the chart labels its pods '
-     'with app.kubernetes.io/instance'),
-    ('no active pods',
-     'pods exist but none reached Running — check pod events (scheduling, '
-     'image pull) and node capacity'),
-    ('pods not ready',
-     'pods are Running but never became ready — check container logs and the '
-     'readiness probe'),
-    ('include_vm',
-     'the platform never received VM status — the operator is likely too old '
-     'to report it'),
-    ('VMI lookup failed',
-     'the operator could not read the VirtualMachineInstance — check its RBAC '
-     'for virtualmachineinstances'),
-    ('no VMI yet',
-     'no VirtualMachineInstance was created — check the DataVolume / CDI '
-     'importer, the disk import may have stalled'),
-    ('VMI not ready',
-     'the VM is running but never reported Ready — check the guest boot '
-     'inside the VM'),
-    ('helm release status is',
-     'the helm release never reached "deployed" — a killed rollback leaves it '
-     'stuck in pending-*; inspect `helm history` for the release'),
+    ('required component missing', 'required_component_missing', TIMEOUT_CAUSE_OTHER),
+    ('required pods not running', 'required_pods_not_running', TIMEOUT_CAUSE_OTHER),
+    # #1417：operator 報上來的具體原因（只有通用判定 `_is_container_ready` 會寫這些標記）。
+    ('event=FailedAttachVolume', 'volume_attach', TIMEOUT_CAUSE_STORAGE),
+    ('event=FailedMount', 'volume_mount', TIMEOUT_CAUSE_STORAGE),
+    ('event=FailedScheduling', 'scheduling', TIMEOUT_CAUSE_STORAGE),
+    ('waiting=ErrImagePull', 'image_pull', TIMEOUT_CAUSE_IMAGE),
+    ('waiting=ImagePullBackOff', 'image_pull', TIMEOUT_CAUSE_IMAGE),
+    ('waiting=InvalidImageName', 'image_pull', TIMEOUT_CAUSE_IMAGE),
+    ('waiting=ErrImageNeverPull', 'image_pull', TIMEOUT_CAUSE_IMAGE),
+    ('waiting=CrashLoopBackOff', 'crash_loop', TIMEOUT_CAUSE_CRASH),
+    ('waiting=CreateContainerConfigError', 'container_config', TIMEOUT_CAUSE_OTHER),
+    ('waiting=CreateContainerError', 'container_config', TIMEOUT_CAUSE_OTHER),
+    ('waiting=RunContainerError', 'container_config', TIMEOUT_CAUSE_OTHER),
+    ('event=Unhealthy', 'pods_not_ready', TIMEOUT_CAUSE_READINESS),
+    ('pod lookup failed', 'pod_lookup_failed', TIMEOUT_CAUSE_OTHER),
+    ('no pods found', 'no_pods_found', TIMEOUT_CAUSE_OTHER),
+    ('no active pods', 'no_active_pods', TIMEOUT_CAUSE_OTHER),
+    # #1417：Pod 根本沒跑起來（Pending）與「Running 但未 ready」分開——10-04 事件的 Pod
+    # 從頭到尾停在 Init，卻被下一筆說成 Running、叫人去看 container log。
+    ('pods not started', 'pods_not_started', TIMEOUT_CAUSE_OTHER),
+    ('pods not ready', 'pods_not_ready', TIMEOUT_CAUSE_READINESS),
+    ('include_vm', 'vm_status_missing', TIMEOUT_CAUSE_OTHER),
+    ('VMI lookup failed', 'vmi_lookup_failed', TIMEOUT_CAUSE_OTHER),
+    ('no VMI yet', 'no_vmi_yet', TIMEOUT_CAUSE_OTHER),
+    ('VMI not ready', 'vmi_not_ready', TIMEOUT_CAUSE_OTHER),
+    ('helm release status is', 'helm_status_stuck', TIMEOUT_CAUSE_OTHER),
 )
 
 # 停權中的服務被 redeploy 後會卡在 `deploying`（#482）：VM 被**正確地** Halted
 # 著，所以永遠不會 ready。此時上面那些 hint 全是誤導（叫人去查 pod / quota，
-# 而真因是停權），故停權時**取代**而非附加。
-_SUSPENDED_HINT = (
-    'the service is suspended — its workload is intentionally halted, so it '
-    'can never become ready while a deploy/upgrade is pending (see #482)'
-)
+# 而真因是停權），故停權時**取代**而非附加（hint key ``suspended``）。
+
+# #1416：逾時轉 error 的服務繼續由背景 cron 低頻重查的時間窗（小時，從逾時那一刻算）。
+# 缺值、非正整數一律退回預設——不停用自癒（同 `_transition_timeout_minutes` 的 fail-safe）。
+TIMEOUT_RECOVERY_WINDOW_HOURS_DEFAULT = 7 * 24
+_TIMEOUT_RECOVERY_WINDOW_PARAM = 'woow_paas_platform.timeout_recovery_window_hours'
 
 # #497 一次性收斂的判別式：停權旗標仍在，但 state 已被 #493 合併前的舊碼汙染成
 # 這些「對租戶不可用」的狀態之一。`initializing` 在內是因為容器型被 upgrade 喚醒後
@@ -881,6 +906,43 @@ def _deep_merge(base, override):
     return result
 
 
+# #1417：逾時 detail 裡每類最多列幾顆 Pod、事件訊息最多留幾個字（error_message 會上畫面）。
+_UNREADY_PODS_LISTED = 3
+_UNREADY_EVENT_TEXT_LIMIT = 200
+
+
+def _describe_unready_pod(pod):
+    """detail 用的未就緒 Pod 摘要（#1417）：``name[phase ready waiting=… event=…]``。
+
+    ``waiting=<reason>``／``event=<reason>`` 是 `_TIMEOUT_HINTS` 比對的標記，來源是
+    operator 的 ``PodInfo.waiting``／``last_warning``；舊 operator 沒有這兩個 key ⇒ 只剩
+    名字、phase、ready（照舊可用，只是沒有具體原因）。
+    """
+    parts = [pod.get('phase') or 'Unknown', pod.get('ready') or '?']
+    waiting = pod.get('waiting') or {}
+    if waiting.get('reason'):
+        kind = 'init container' if waiting.get('init_container') else 'container'
+        parts.append('waiting=%s(%s %s)' % (
+            waiting['reason'], kind, waiting.get('container') or '?'))
+    event = pod.get('last_warning') or {}
+    if event.get('reason'):
+        message = ' '.join(str(event.get('message') or '').split())
+        if len(message) > _UNREADY_EVENT_TEXT_LIMIT:
+            message = message[:_UNREADY_EVENT_TEXT_LIMIT - 1] + '…'
+        parts.append('event=%s: %s' % (event['reason'], message) if message
+                     else 'event=%s' % event['reason'])
+    return '%s[%s]' % (pod.get('name') or '?', ' '.join(parts))
+
+
+def _describe_unready_pods(label, pods):
+    """``label: a[…], b[…] (+N more)``；沒有 Pod 回 None。"""
+    if not pods:
+        return None
+    listed = ', '.join(map(_describe_unready_pod, pods[:_UNREADY_PODS_LISTED]))
+    extra = len(pods) - _UNREADY_PODS_LISTED
+    return '%s: %s%s' % (label, listed, ' (+%d more)' % extra if extra > 0 else '')
+
+
 class CloudService(models.Model):
     _name = 'woow_paas_platform.cloud_service'
     _inherit = ['woow_paas_platform.subscription_lifecycle_mixin']
@@ -962,6 +1024,19 @@ class CloudService(models.Model):
     error_message = fields.Text(
         string='Error Message',
         help='Error details if deployment failed',
+    )
+    # #1416：目前這筆 error 是 #489 的部署逾時寫的——以及何時寫的。逾時只代表「等太久」，
+    # 不代表失敗；有值時背景 cron（`_cron_recover_timed_out_services`）會在時間窗內繼續
+    # 重查，release 就緒就照正常路徑推進。它描述的是「現在這則 error_message 的來源」：
+    # 改寫 error_message 或離開 error（停權除外）都會清掉它（`write()`），其他來源的
+    # error 因此永遠不會被這條自癒碰到。只有平台寫得進去（`_reject_timeout_recovery_control_writes`）。
+    transition_timeout_at = fields.Datetime(
+        string='Deployment Timed Out At',
+        copy=False,
+        readonly=True,
+        help='Set when the deployment age timeout turned this service into an error. '
+             'While set, a background job keeps checking the release for a limited '
+             'time and resumes the service as soon as it becomes ready.',
     )
 
     # VM 型服務的開通進度（#423 W5a，design §7.4）。
@@ -4539,13 +4614,24 @@ class CloudService(models.Model):
             return False, 'HARD: no pods found for this release'
         if not active_pods:
             return False, 'no active pods'
-        ready = all(
-            pod.get('phase') == 'Running'
-            and '/' in pod.get('ready', '0/0')
-            and pod.get('ready', '0/0').split('/')[0] == pod.get('ready', '0/0').split('/')[1]
-            for pod in active_pods
-        )
-        return ready, 'pods ready' if ready else 'pods not ready'
+
+        def containers_ready(pod):
+            ready = pod.get('ready', '0/0')
+            return '/' in ready and ready.split('/')[0] == ready.split('/')[1]
+
+        # #1417：沒跑起來（Pending／Unknown，含 initContainer 執行中、等磁碟、等排程）與
+        # 「Running 但未 ready」分開說——兩者該查的地方完全不同（pod events vs container
+        # log／readiness probe）。10-04 svc 147 停在 Init:0/1，舊碼一律回 'pods not ready'，
+        # 逾時訊息就叫人去看 container log。
+        not_started = [p for p in active_pods if p.get('phase') != 'Running']
+        not_ready = [p for p in active_pods
+                     if p.get('phase') == 'Running' and not containers_ready(p)]
+        if not (not_started or not_ready):
+            return True, 'pods ready'
+        return False, '; '.join(filter(None, (
+            _describe_unready_pods('pods not started', not_started),
+            _describe_unready_pods('pods not ready', not_ready),
+        )))
 
     @staticmethod
     def _is_vm_ready(status):
@@ -4936,24 +5022,187 @@ class CloudService(models.Model):
                 _logger.exception(
                     "[#1159] DNS re-probe failed for service %s (id=%s)", *service_label)
 
-    def _timeout_diagnosis(self, detail):
-        """把就緒判定的 ``detail`` 翻成「維運該往哪查」的一句話。
+    def _timeout_classify(self, detail):
+        """detail → ``(原因分型, hint key)``（#1417）；hint key 為 None＝沒有方向可給。
+
+        停權中（#482）優先於一切：那時的 pod／quota 方向全是誤導。
+        """
+        self.ensure_one()
+        if self._is_halted():
+            return TIMEOUT_CAUSE_SUSPENDED, 'suspended'
+        for needle, key, cause in _TIMEOUT_HINTS:
+            if needle in (detail or ''):
+                return cause, key
+        return TIMEOUT_CAUSE_OTHER, None
+
+    def _timeout_hint_text(self, env, key):
+        """hint key → 給維運的方向（以 ``env`` 的語言翻譯）。
+
+        逐條字面呼叫 ``env._``，Odoo 的抽取工具（babel，keywords ``_``）才抓得到——
+        所以不能把英文留在模組常數裡再 ``env._(變數)``。
+        """
+        texts = {
+            'chart_mismatch': env._(
+                'the release runs a different chart than the template expects — an '
+                'in-place upgrade cannot switch charts; a fresh install is required (see '
+                '#1128)'),
+            'operator_lacks_identity': env._(
+                'the operator does not report Pod identity (component/owner) — upgrade '
+                'paas-operator first (#1263), woow-odoo readiness fails closed without it'),
+            'required_component_missing': env._(
+                "the chart's server/postgresql Pod was never created (or is not owned by "
+                'its ReplicaSet/StatefulSet) — check the ReplicaSet/StatefulSet events for '
+                'FailedCreate (namespace ResourceQuota, admission)'),
+            'required_pods_not_running': env._(
+                'a required Pod exists but never reached Running — check its pod events '
+                '(scheduling, Multi-Attach, image pull); an exempt backup Job listed in '
+                'the detail may still hold the RWO data PVC'),
+            'volume_attach': env._(
+                'a volume could not be attached to the node — check the Longhorn volume '
+                'and whether its replicas can be scheduled (disk space, storage '
+                'over-provisioning, orphaned PVCs still holding capacity)'),
+            'volume_mount': env._(
+                'a volume could not be mounted — check the PVC/PV binding and the CSI '
+                'driver events of the pod'),
+            'scheduling': env._(
+                'the pod could not be scheduled — check node CPU/memory capacity, unbound '
+                'PVCs (storage class, Longhorn capacity) and node selectors'),
+            'image_pull': env._(
+                'the container image could not be pulled — check the image reference, the '
+                'registry credentials (imagePullSecrets) and that the registry is reachable '
+                'from the node'),
+            'crash_loop': env._(
+                'a container keeps crashing on start — check its previous logs (kubectl '
+                'logs --previous) and its configuration'),
+            'container_config': env._(
+                'the container could not be created — check the Secrets/ConfigMaps it '
+                'references and its container spec'),
+            'pod_lookup_failed': env._(
+                'the operator could not list pods — check its RBAC and the API server'),
+            'no_pods_found': env._(
+                'no Pod object was ever created — check the namespace ResourceQuota (a '
+                'rejected Pod never materialises) and that the chart labels its pods '
+                'with app.kubernetes.io/instance'),
+            'no_active_pods': env._(
+                'pods exist but none reached Running — check pod events (scheduling, '
+                'image pull) and node capacity'),
+            'pods_not_started': env._(
+                'pods never started (still Pending) — check the pod events (scheduling, '
+                'volume attach/mount, image pull) and node capacity'),
+            'pods_not_ready': env._(
+                'pods are Running but never became ready — check container logs and the '
+                'readiness probe'),
+            'vm_status_missing': env._(
+                'the platform never received VM status — the operator is likely too old '
+                'to report it'),
+            'vmi_lookup_failed': env._(
+                'the operator could not read the VirtualMachineInstance — check its RBAC '
+                'for virtualmachineinstances'),
+            'no_vmi_yet': env._(
+                'no VirtualMachineInstance was created — check the DataVolume / CDI '
+                'importer, the disk import may have stalled'),
+            'vmi_not_ready': env._(
+                'the VM is running but never reported Ready — check the guest boot '
+                'inside the VM'),
+            'helm_status_stuck': env._(
+                'the helm release never reached "deployed" — a killed rollback leaves it '
+                'stuck in pending-*; inspect `helm history` for the release'),
+            'suspended': env._(
+                'the service is suspended — its workload is intentionally halted, so it '
+                'can never become ready while a deploy/upgrade is pending (see #482)'),
+        }
+        return texts[key]
+
+    def _timeout_diagnosis(self, detail, env=None):
+        """把就緒判定的 ``detail`` 翻成「維運該往哪查」的一句話（``env`` 的語言）。
 
         回空字串代表沒有對應的方向可給（fail-soft：訊息仍帶前綴與 detail）。
         """
         self.ensure_one()
-        if self._is_halted():
-            return _SUSPENDED_HINT
-        for needle, hint in _TIMEOUT_HINTS:
-            if needle in (detail or ''):
-                return hint
-        return ''
+        _cause, key = self._timeout_classify(detail)
+        return self._timeout_hint_text(env or self.env, key) if key else ''
+
+    def _timeout_tenant_summary(self, env, cause, minutes):
+        """給租戶的那一句話（#1417）：發生什麼、要不要他做事、之後會怎樣。
+
+        租戶看不懂 readiness probe，也處理不了平台的儲存或排程——除了「反覆重啟」可能
+        是他剛改的設定造成的，其餘都不需要他動手；而問題排除後服務會自己恢復（#1416
+        的背景自癒）。
+        """
+        if cause == TIMEOUT_CAUSE_SUSPENDED:
+            return env._(
+                'The service is suspended, so it cannot finish deploying. It will resume '
+                'automatically once the subscription is active again.')
+        if cause == TIMEOUT_CAUSE_STORAGE:
+            return env._(
+                'The service did not finish starting within %(minutes)s minutes because '
+                'the platform could not provide the storage or computing resources it '
+                'needs in time. This is a platform-side issue and you do not need to do '
+                'anything; the service will recover automatically once it is resolved.',
+                minutes=minutes)
+        if cause == TIMEOUT_CAUSE_IMAGE:
+            return env._(
+                'The service did not finish starting within %(minutes)s minutes because '
+                'its software image could not be downloaded. This is a platform-side '
+                'issue and you do not need to do anything; the service will recover '
+                'automatically once it is resolved.',
+                minutes=minutes)
+        if cause == TIMEOUT_CAUSE_CRASH:
+            return env._(
+                'The service did not finish starting within %(minutes)s minutes because '
+                'it keeps restarting while starting up. If you recently changed its '
+                'settings, please check them; otherwise you do not need to do anything. '
+                'The service will recover automatically once the problem is resolved.',
+                minutes=minutes)
+        if cause == TIMEOUT_CAUSE_READINESS:
+            return env._(
+                'The service started but did not report that it was ready within '
+                '%(minutes)s minutes. You do not need to do anything; the service will '
+                'recover automatically once it becomes ready.',
+                minutes=minutes)
+        return env._(
+            'The service did not finish starting within %(minutes)s minutes. You do not '
+            'need to do anything for now; the service will recover automatically once '
+            'the problem is resolved. If it does not recover, please contact support.',
+            minutes=minutes)
+
+    def _timeout_error_message(self, minutes, detail):
+        """逾時轉 error 的 ``error_message``（#1417）：先一句給租戶，再附給管理員的技術細節。
+
+        ``error_message`` 由 cron 寫入、畫面直接顯示原文，cron 的 env 語言不是租戶的
+        ⇒ 以服務建立者的語言（沒有就用目前 env）組字串（同 `_storage_quota_error_message`）。
+        技術細節沿用 #489 的「Deployment timed out after N minutes: <detail> — <hint>」；
+        detail 本身是 Pod 名稱與 Kubernetes 的原因代碼，不翻。
+
+        Returns:
+            ``(message, cause)``
+        """
+        self.ensure_one()
+        lang = self.sudo().create_uid.lang or self.env.lang
+        env = self.with_context(lang=lang).env
+        cause, key = self._timeout_classify(detail)
+        technical = env._(
+            "Deployment timed out after %(minutes)s minutes: %(detail)s",
+            minutes=minutes, detail=detail,
+        )
+        if key:
+            # 純格式串（無可翻內容）：兩端都已各自翻譯過。
+            technical = '%s — %s' % (technical, self._timeout_hint_text(env, key))
+        # 換行：後台表單（Text）分兩段；/woow 的 t-esc 會把它收成一個空白。
+        message = env._(
+            '%(summary)s\nTechnical details for the administrator: %(details)s',
+            summary=self._timeout_tenant_summary(env, cause, minutes),
+            details=technical,
+        )
+        return message, cause
 
     def _check_transition_timeout(self, detail):
         """轉移狀態逾時就翻 ``error``；回傳「是否已翻」。
 
         **只變狀態與訊息**——不刪任何叢集資源、不觸發 rollback。卡住的 release
-        原樣留在叢集裡供診斷，維運看完再決定要 redeploy 還是清掉。
+        原樣留在叢集裡供診斷，維運看完再決定要 redeploy 還是清掉。#1416 起同時記下
+        ``transition_timeout_at``：逾時只代表「等太久」，release 之後就緒時由
+        `_cron_recover_timed_out_services` 照正常路徑推回來。
 
         呼叫端契約：必須在 poll 的 optimistic locking（re-fetch ＋ 比對
         ``original_state``）**之後**呼叫，且 ``self`` 是 re-fetch 過的 record。
@@ -4973,28 +5222,116 @@ class CloudService(models.Model):
             return False
 
         minutes = self._transition_timeout_minutes()
-        age = fields.Datetime.now() - anchor
+        now = fields.Datetime.now()
+        age = now - anchor
         if age.total_seconds() <= minutes * 60:
             return False
 
-        hint = self._timeout_diagnosis(detail)
-        message = _(
-            "Deployment timed out after %(minutes)s minutes: %(detail)s",
-            minutes=minutes, detail=detail,
-        )
-        if hint:
-            # 純格式串（無可翻內容）：兩端都已各自翻譯過。
-            message = '%s — %s' % (message, hint)
+        message, cause = self._timeout_error_message(minutes, detail)
 
         # error 分兩種來源，log 要能一眼分辨：這條是「平台判定逾時」，
         # `release_status == 'failed'` 那條是「operator 明確回報失敗」。
+        # （log 用英文 detail；error_message 是建立者語言。）
         _logger.error(
             "Service %s (id=%s) timed out in state %s after %s minutes "
-            "(anchor=%s): %s",
-            self.name, self.id, self.state, minutes, anchor, message,
+            "(anchor=%s, cause=%s): %s",
+            self.name, self.id, self.state, minutes, anchor, cause, detail,
         )
-        self.write({'state': 'error', 'error_message': message})
+        # 標記只有平台寫得進去（`_reject_timeout_recovery_control_writes`）；poll 只在 cron
+        # 跑，這裡的 sudo 只是不依賴呼叫端身分。
+        self.sudo().write({
+            'state': 'error',
+            'error_message': message,
+            'transition_timeout_at': now,
+        })
         return True
+
+    # ------------------------------------------------------------------ #
+    #  #1416：部署逾時的有限度自癒                                         #
+    # ------------------------------------------------------------------ #
+
+    def _timeout_recovery_window_hours(self):
+        """逾時後繼續重查多久（小時）。缺值／看不懂一律退回預設，不停用自癒。"""
+        return self._init_positive_int_param(
+            _TIMEOUT_RECOVERY_WINDOW_PARAM, TIMEOUT_RECOVERY_WINDOW_HOURS_DEFAULT)
+
+    @api.model
+    def _timed_out_services_to_recheck(self):
+        """自癒的候選：逾時造成的 error、仍在時間窗內、未停權、有 release 座標。
+
+        停權（``pre_suspend_state`` 有值，#482／#497）刻意排除：停權中的 workload 是
+        被正確地停著，推回 running 就是計費繞過；復權由 `_do_resume` 走自己的路。
+        刪除中的服務 state 是 ``deleting``，天然不在內。
+        """
+        cutoff = fields.Datetime.now() - timedelta(
+            hours=self._timeout_recovery_window_hours())
+        return self.search([
+            ('state', '=', 'error'),
+            ('transition_timeout_at', '!=', False),
+            ('transition_timeout_at', '>=', cutoff),
+            ('pre_suspend_state', '=', False),
+            ('helm_release_name', '!=', False),
+            ('helm_namespace', '!=', False),
+        ], order='transition_timeout_at')
+
+    @api.model
+    def _cron_recover_timed_out_services(self):
+        """#1416：逾時轉 error 的服務低頻重查；release 就緒就照正常路徑推進。
+
+        **重用** `_poll_and_update_status`（#1159 Q1「由觀測推進離開狀態」的唯一寫入者）
+        而不是另寫一份判定：就緒判定、release 事實、需要 init 的進 ``initializing``
+        （否則 ``running``）、Redeploy 後的 image 核對全部同一條路。頻率寫在
+        ``cloud_service_cron.xml``（每 5 分）；時間窗由 `_timeout_recovery_window_hours`。
+
+        每台服務一個回捲單位（同 `_cron_check_deploying_services`，Q36）。
+        """
+        services = self._timed_out_services_to_recheck()
+        if not services:
+            return
+        from ..services.paas_operator import get_paas_operator_client
+
+        client = get_paas_operator_client(self.env)
+        if not client:
+            return
+        for service in services:
+            service_label = (service.name, service.id)
+            try:
+                service._poll_and_update_status(client)
+                self.env.cr.commit()
+            except Exception:
+                # ⚠ #1052 標記（非裁定）：逐筆 batch isolation，同短 poll 的站點。
+                self.env.cr.rollback()
+                _logger.exception(
+                    "[#1416] Error re-checking timed-out service %s (id=%s)",
+                    *service_label)
+
+    def _note_timeout_recovery(self, next_state, timed_out_at):
+        """自癒成功留紀錄：log ＋ PaaS Platform Monitor 的 chatter（#1416）。
+
+        cloud_service 不是 mail.thread（見 platform_monitor.py 檔頭的掛點裁決），所以
+        紀錄掛在只有 ``base.group_system`` 看得到的 monitor 單例上；用 ``_message_log``
+        ——只留紀錄、不通知任何人。留紀錄失敗不得擋住狀態推進。
+        """
+        self.ensure_one()
+        _logger.info(
+            "[#1416] Service %s (id=%s) recovered after the deployment timeout of %s: "
+            "the release became ready, state -> %s",
+            self.name, self.id, timed_out_at, next_state,
+        )
+        try:
+            with self.env.cr.savepoint():
+                monitor = self.env['woow_paas_platform.platform_monitor']._singleton()
+                monitor._message_log(body=_(
+                    'Service %(name)s (id=%(id)s) recovered on its own after the deployment '
+                    'timeout of %(timed_out_at)s UTC: the release became ready, so it moved '
+                    'to %(state)s.',
+                    name=self.name, id=self.id, timed_out_at=timed_out_at, state=next_state))
+        except OperationalError:
+            raise
+        except Exception:  # noqa: BLE001 —— 見 docstring
+            _logger.exception(
+                "[#1416] Could not log the timeout recovery of service %s (id=%s) on the "
+                "platform monitor", self.name, self.id)
 
     @api.model
     def _woow_migrate_refresh_transition_anchor_489(self):
@@ -5006,6 +5343,8 @@ class CloudService(models.Model):
         時間。`-u` 完成後第一次 cron 會拿那個陳舊的錨去判 age，於是**正在正常
         部署**的服務也會被判逾時——而誤殺不可自癒（poll 只撈轉移狀態，寫進
         ``error`` 後沒有任何路徑會把它 poll 回 ``running``）。
+        （#1416 起逾時造成的 error 會被 ``_cron_recover_timed_out_services`` 在時間窗
+        內重查、就緒就推回來；本 method 寫於那之前，描述的是當時的狀況。）
 
         本 method 給它們一個新鮮的起點，把那個窗口降到零。**代價**：真正已經
         卡住的那批（#456 / #482 那類）會晚一個門檻週期才被抓到——一次性，且
@@ -5337,8 +5676,11 @@ class CloudService(models.Model):
         """背景短 poll：向 operator 取一次 status，推進單一服務的轉移狀態。
 
         #1159 Q1：這是「由觀測推進、離開轉移狀態」的**唯一**寫入者——transition 完成、
-        init 分派、deleting 404→unlink 都只在這裡寫；list/get 自 #1159 起純讀。唯一的
-        生產呼叫端是 ``_cron_check_deploying_services``（per-service commit）。
+        init 分派、deleting 404→unlink 都只在這裡寫；list/get 自 #1159 起純讀。生產呼叫端
+        是 ``_cron_check_deploying_services``（轉移狀態）與 #1416 的
+        ``_cron_recover_timed_out_services``（逾時造成的 ``error``，標記
+        ``transition_timeout_at``），兩者都 per-service commit。後者就緒時走與轉移狀態
+        完全相同的推進路徑；未就緒時什麼都不改（``error`` 不受 age timeout 管轄）。
 
         它**不執行 init**（Q4：init 不與短 poll 同 job、同交易）：觀測到 initializing
         的 pods ready 時只記下來、trigger init cron；init 由 ``_cron_run_post_deploy_inits``
@@ -5382,6 +5724,13 @@ class CloudService(models.Model):
                 self._init_settle_expired_lease()
                 if self.state == 'initializing':
                     self._init_check_wait_timeout()
+            elif e.status_code == 404 and original_state == 'error':
+                # #1416：release 已不在叢集 ⇒ 不會再就緒，停止自癒重查（error 與訊息照舊，
+                # 只撤標記）。
+                _logger.info(
+                    "[#1416] Release of timed-out service %s (id=%s) is gone — no "
+                    "longer re-checking it", self.name, self.id)
+                self.sudo().write({'transition_timeout_at': False})
             else:
                 _logger.warning("Error polling status for %s: %s", self.name, e)
             return
@@ -5394,6 +5743,11 @@ class CloudService(models.Model):
         # Re-fetch for optimistic locking
         service = self.browse(self.id)
         if not service.exists() or service.state != original_state:
+            return
+        # #1416：error 只有逾時造成、且標記還在的才推（別的路徑同時改寫了 error_message
+        # ＝來源已換，標記被 write() 清掉）。停權判準同 `_timed_out_services_to_recheck`。
+        timed_out_at = service.transition_timeout_at
+        if original_state == 'error' and (not timed_out_at or service._is_halted()):
             return
 
         # #1159 Q1／Q40：list/get 只回這個「最近觀測」。拿到 status 就 stamp，不論
@@ -5447,12 +5801,15 @@ class CloudService(models.Model):
                 # #1267：去向只由欠 init 標記決定（與 controller 那份共用同一判準）。
                 next_state = service._next_state_when_ready()
                 if next_state != original_state:
-                    # 進 initializing 時的等待錨點由 write() 集中 stamp（Q10）。
+                    # 進 initializing 時的等待錨點由 write() 集中 stamp（Q10）；離開 error
+                    # 時逾時標記也由 write() 清（#1416）。
                     service.write({
                         'state': next_state,
                         **release_facts,
                         'error_message': False,
                     })
+                if original_state == 'error':
+                    service._note_timeout_recovery(next_state, timed_out_at)
                 if next_state == 'initializing':
                     # #1159 Q1「init 分派」：只排進 init cron 的佇列，不在這裡執行。
                     ready_for_init = True
@@ -7377,6 +7734,7 @@ class CloudService(models.Model):
         _reject_cs_access_identity_anchor_writes(self.env, vals)
         _reject_init_control_writes(self.env, vals)
         _reject_observation_control_writes(self.env, vals)
+        _reject_timeout_recovery_control_writes(self.env, vals)
         # #698 反向端：前置檢查（見 `_assert_reverse_binding_authorized` 的
         # docstring——這一端的判準會被寫入本身改掉，事後檢查無效）。
         self._assert_reverse_binding_authorized(vals)
@@ -7481,6 +7839,16 @@ class CloudService(models.Model):
                 and vals['state'] not in ('error', 'suspended')):
             leaving_init_exit = self.filtered(
                 lambda r: r.init_exit and r.state != vals['state'])
+        # #1416：`transition_timeout_at` 說的是「目前這則 error_message 是部署逾時寫的」。
+        # 改寫 error_message（別的來源接手，或推回正常時清空）、或離開 error 都讓它失效——
+        # 自癒 cron 因此只會碰到真正由逾時造成、之後沒人動過的 error。停權（error →
+        # suspended → error，Q25）不算離開：復權回到 error 後仍可自癒。集中在這裡而不是
+        # 逐路徑清（pitfall reaped-since-single-path-stamp-gc-immunity）。
+        leaving_timeout = self.browse()
+        if 'transition_timeout_at' not in vals and (
+                'error_message' in vals
+                or ('state' in vals and vals['state'] not in ('error', 'suspended'))):
+            leaving_timeout = self.filtered('transition_timeout_at')
         # #745：Access 設定的寫入與 operator sync 必須是同一個原子單位。
         #
         # 沒有 savepoint 時的失效形狀：BFF 端點把 sync 的例外收成
@@ -7531,6 +7899,8 @@ class CloudService(models.Model):
                         super(CloudService, reset_capacity).write({'init_capacity_wait_since': False})
             if leaving_init_exit:
                 super(CloudService, leaving_init_exit).write({'init_exit': False})
+            if leaving_timeout:
+                super(CloudService, leaving_timeout).write({'transition_timeout_at': False})
             if rebinding:
                 rebinding._assert_subscription_binding()
             elif 'workspace_id' in vals:
