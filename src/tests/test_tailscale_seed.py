@@ -1,15 +1,18 @@
 # -*- coding: utf-8 -*-
 """VPN 節點（相容 Tailscale）上架 seed 的守線斷言（2026-10-04 公開上架）。
 
-契約來源：woow-paas-charts charts/tailscale 0.1.0（#125）——StatefulSet ×1、userspace
-tailscaled（uid 1000）、唯一入口 Service 8080 → nginx Basic auth（帳號固定 admin）→
+契約來源：woow-paas-charts charts/tailscale 0.1.1（0.1.0＝#125）——StatefulSet ×1、userspace
+tailscaled（uid 1000）、唯一入口 Service 8080 → nginx Basic auth（帳號＝entrance.basicAuthUsername）→
 ``tailscale web``（127.0.0.2:8088，唯讀）；``tailscale serve`` TCP 轉發只接受同 namespace 的
 服務；exit node／app connector／subnet route／SSH／Funnel 一律不開（values 裡沒有這些鍵）。
 image：paas-odoo-ci ``tailscale/``（#240，官方 1.102.5＋衍生自 podman 版的 entrypoint）。
 
 核心守線：
-1. **只有密碼、可自設**（同 code-server）：admin_password_settable=True、沒有
-   admin_username_helm_path；htpasswd 是 Secret volume ⇒ 重設不改 pod template。
+1. **帳號與密碼都可自設**（同 Headscale；0.1.1 起）：admin_username_helm_path＝
+   ``entrance.basicAuthUsername``（範本帶預設 admin ⇒ 一次性視窗顯示帳號，.207 正式站「沒有帳號」缺陷）；
+   htpasswd 是 Secret volume ⇒ 改帳號／密碼不改 pod template。重設要靠 chart 0.1.1 的
+   StatefulSet opt-in label（``paas.woowtech.io/restart-on-credential-reset``）＋operator #1398——
+   0.1.0 沒有 Deployment 也沒有 label，operator 找不到可重啟的 workload ⇒ 回退、重設必失敗。
 2. **定位＝工作區私有入口**（PLAN Q2／Q3）：租戶旋鈕不得出現 exit node／路由／SSH 類的鍵——
    NetworkPolicy 是 tailnet 經節點能碰到哪裡的唯一護欄，開了等於把叢集網段交給 tailnet。
 3. **authKey 是 password 型、不在 config.sensitive**（平台會整棵剝掉，EMQX 0.1.1 教訓）。
@@ -21,6 +24,8 @@ import json
 import re
 
 from odoo.tests.common import TransactionCase, tagged
+
+from ..models.cloud_service import _internal_provision
 
 JCR = 'jcr-prod.woowtech.io/woow-paas-docker-local/'
 TAILSCALE_CHART = 'oci://%stailscale' % JCR
@@ -58,20 +63,44 @@ class TestTailscaleSeed(TransactionCase):
         tpl = self._tpl()
         self.assertEqual(tpl.helm_repo_url or '', '')
         self.assertEqual(tpl.helm_chart_name, TAILSCALE_CHART)
-        self.assertEqual(tpl.helm_chart_version, '0.1.0',
-                         'helm_chart_version 留空會被供給閘門靜默擋在購買前（#552）')
+        self.assertEqual(tpl.helm_chart_version, '0.1.1',
+                         'helm_chart_version 留空會被供給閘門靜默擋在購買前（#552）；0.1.1＝'
+                         'StatefulSet 帶 restart-on-credential-reset label、帳號可設定（.207 缺陷）')
 
     def test_service_port_lockstep(self):
         self.assertEqual(self._values()['service']['port'], self._tpl().default_port)
 
-    def test_password_only_and_settable(self):
+    def test_credentials_helm_secret_and_settable(self):
         tpl = self._tpl()
         self.assertTrue(tpl.has_admin_gui)
         self.assertEqual(tpl.admin_password_carrier, 'helm_secret')
         self.assertTrue(tpl.admin_reset_supported)
         self.assertTrue(tpl.admin_password_settable)
         self.assertTrue(tpl.admin_credentials_settable)
-        self.assertFalse(tpl.admin_username_helm_path, '帳號固定 admin（chart 沒有帳號旋鈕）')
+        self.assertEqual(tpl.admin_username_helm_path, 'entrance.basicAuthUsername',
+                         '登入要帳號（nginx Basic auth）：沒有帳號路徑時一次性視窗會寫「沒有帳號」（.207 缺陷）')
+        self.assertEqual(
+            self._values()['entrance']['basicAuthUsername'], 'admin',
+            '帳號預設值要在範本裡（_admin_username 讀不到時不猜 chart 預設）')
+
+    def test_one_time_window_shows_the_username(self):
+        """_admin_username＝一次性視窗與「管理員帳密」對話框的帳號來源；新服務要讀到 admin。"""
+        tpl = self._tpl()
+        workspace = self.env['woow_paas_platform.workspace'].create({'name': 'tailscale seed WS'})
+        service = _internal_provision(self.env['woow_paas_platform.cloud_service']).create({
+            'name': 'svc-tailscale-seed',
+            'workspace_id': workspace.id,
+            'template_id': tpl.id,
+            'state': 'running',
+            'subdomain': 'svc-tailscale-seed',
+            'helm_namespace': 'paas-ws-test',
+            'helm_release_name': 'svc-tailscale-seed',
+            'helm_values': tpl.helm_default_values,
+        })
+        self.assertEqual(service._admin_username(), 'admin')
+        # 既有服務（建立時範本還沒有這個鍵）讀不到自己的值 ⇒ 退回範本預設，仍是 admin。
+        service.helm_values = json.dumps({'service': {'port': 8080}})
+        self.assertEqual(service._admin_username(), 'admin')
 
     def test_image_from_jcr_and_double_pinned(self):
         image = self._values()['image']
@@ -188,10 +217,14 @@ class TestTailscaleSeed(TransactionCase):
                 ('-headscale:8080', '同工作區 Headscale 的內部網址'),
                 ('新機器', '換控制伺服器＝新節點身分'),
                 ('清空', 'authkey 登入後清掉'),
-                ('帳號固定 admin', '只有密碼可自設'),
+                ('帳號預設 admin', '帳號可改（admin_username_helm_path）'),
+                ('重新啟動，約數十秒', '重設帳密會重啟節點（operator #1398 重啟 opt-in StatefulSet）'),
+                ('仍是同一台', '節點身分在 PVC，重設後不是新機器'),
+                ('最久約 12 分鐘', '同工作區 Headscale 重啟後，靠 chart 0.1.1 的 liveness 看門狗回線'),
                 ('從瀏覽器開服務網址', '入口擋 127/8（port-forward 一律 403），網頁介面只能經服務網址開'),
         ):
             self.assertIn(needle, desc, why)
+        self.assertNotIn('不必重啟', desc, '重設帳密會重啟節點，不能再寫「不必重啟」（與管理員帳密對話框一致）')
         auth = self._optional()['tailscale.authKey']['description']
         for needle in ('一次性', 'tag', '清空'):
             self.assertIn(needle, auth, 'authkey 建議：一次性＋帶 tag＋登入後清空')
