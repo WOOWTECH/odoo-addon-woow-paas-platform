@@ -43,6 +43,19 @@ _MAX_KEY_DELETES = 3
 _KEY_PRUNE_REQUEST_TIMEOUT = 10
 
 
+def _api_key_items(payload) -> list:
+    """取出 ``GET /rest/api-keys`` 回應裡的 key 清單（#1471）。
+
+    n8n 2.x（正式站 2.35.3 實測）回 ``{"data": {"items": [...], "counts": …}}``；
+    舊版回 ``{"data": [...]}``。兩種都接受；其他形狀回空清單（只會變成「不刪」，
+    與修正前行為相同，不會誤刪）。
+    """
+    data = payload.get("data", payload) if isinstance(payload, dict) else payload
+    if isinstance(data, dict):
+        data = data.get("items")
+    return [k for k in data if isinstance(k, dict)] if isinstance(data, list) else []
+
+
 def _http_error_kind(resp: dict) -> str:
     """非 200 的 node 回應 → 分類（#1263）。
 
@@ -470,13 +483,13 @@ class N8nInitService:
             if resp.get("status") != 200:
                 logger.warning("Listing n8n API keys returned HTTP %s; not deleting", resp.get("status"))
                 return 0
-            data = json.loads(resp["body"])
-            keys = data.get("data", data) if isinstance(data, dict) else data
+            keys = _api_key_items(json.loads(resp["body"]))
         except Exception as e:  # noqa: BLE001 — best-effort，見 docstring
             logger.warning("Listing n8n API keys failed (%s); not deleting", e)
             return 0
-        stale = [k for k in (keys if isinstance(keys, list) else [])
-                 if isinstance(k, dict) and k.get("label") == label and k.get("id")]
+        stale = [k for k in keys if k.get("label") == label and k.get("id")]
+        if not keys:
+            logger.info("No existing n8n API keys found before creating %r", label)
         deleted = 0
         for key in stale[:_MAX_KEY_DELETES]:
             try:
