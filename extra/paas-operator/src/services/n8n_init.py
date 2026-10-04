@@ -35,6 +35,14 @@ class N8nInitError(Exception):
         super().__init__(message)
 
 
+#: init 建的 API key 名稱。n8n 2.x 不允許同名，重建前要先刪舊的（#1471）。
+_API_KEY_LABEL = "mcp-sidecar"
+#: 一次 init 最多刪幾把同名舊 key、每個請求的逾時（秒）。有上限才算得出 init 的最壞耗時
+#: （scripts/audit/init_n8n_budget.py 會把 1 次列出＋本上限次刪除計入 envelope）。
+_MAX_KEY_DELETES = 3
+_KEY_PRUNE_REQUEST_TIMEOUT = 10
+
+
 def _http_error_kind(resp: dict) -> str:
     """非 200 的 node 回應 → 分類（#1263）。
 
@@ -439,6 +447,55 @@ class N8nInitService:
             "execution:read", "execution:list",
         ]
 
+    def _delete_api_keys_labelled(
+        self,
+        namespace: str,
+        pod_name: str,
+        container: str,
+        cookie: str,
+        label: str,
+    ) -> int:
+        """刪掉指定 label 的既有 API key，回傳刪了幾把。
+
+        失敗一律只記 warning、不中斷 init：真的刪不掉時，接下來的建 key 會拿到 n8n
+        明確的錯誤回應，分類（failed）與現在相同，不會比不刪更糟。
+        """
+        try:
+            resp = self._node_request(
+                namespace, pod_name, container,
+                "GET", "/rest/api-keys",
+                headers={"Cookie": cookie},
+                timeout=_KEY_PRUNE_REQUEST_TIMEOUT,
+            )
+            if resp.get("status") != 200:
+                logger.warning("Listing n8n API keys returned HTTP %s; not deleting", resp.get("status"))
+                return 0
+            data = json.loads(resp["body"])
+            keys = data.get("data", data) if isinstance(data, dict) else data
+        except Exception as e:  # noqa: BLE001 — best-effort，見 docstring
+            logger.warning("Listing n8n API keys failed (%s); not deleting", e)
+            return 0
+        stale = [k for k in (keys if isinstance(keys, list) else [])
+                 if isinstance(k, dict) and k.get("label") == label and k.get("id")]
+        deleted = 0
+        for key in stale[:_MAX_KEY_DELETES]:
+            try:
+                resp = self._node_request(
+                    namespace, pod_name, container,
+                    "DELETE", f"/rest/api-keys/{key['id']}",
+                    headers={"Cookie": cookie},
+                    timeout=_KEY_PRUNE_REQUEST_TIMEOUT,
+                )
+                if resp.get("status") == 200:
+                    deleted += 1
+                else:
+                    logger.warning("Deleting n8n API key %s returned HTTP %s", key["id"], resp.get("status"))
+            except Exception as e:  # noqa: BLE001
+                logger.warning("Deleting n8n API key %s failed: %s", key["id"], e)
+        if deleted:
+            logger.info("Deleted %d existing n8n API key(s) labelled %r", deleted, label)
+        return deleted
+
     def _create_api_key(
         self,
         namespace: str,
@@ -449,6 +506,11 @@ class N8nInitService:
         """Create an API key via n8n REST API."""
         logger.info("Creating n8n API key")
 
+        # 先刪掉同名的舊 key，再建新的（#1471）。n8n 2.x 不允許兩把 key 同名
+        # （"There is already an entry with this name"）；init 只要重跑（redeploy 開新一代、
+        # partial 之後重試），第二次建 key 就必定失敗，服務永遠卡在 initializing。
+        self._delete_api_keys_labelled(namespace, pod_name, container, cookie, _API_KEY_LABEL)
+
         try:
             # First, discover available scopes
             scopes = self._get_api_key_scopes(namespace, pod_name, container, cookie)
@@ -458,7 +520,7 @@ class N8nInitService:
                 namespace, pod_name, container,
                 "POST", "/rest/api-keys",
                 # expiresAt=null means no expiration; use far-future timestamp if null not accepted
-                body={"label": "mcp-sidecar", "scopes": scopes, "expiresAt": 4102444800},
+                body={"label": _API_KEY_LABEL, "scopes": scopes, "expiresAt": 4102444800},
                 headers={"Cookie": cookie},
             )
 
