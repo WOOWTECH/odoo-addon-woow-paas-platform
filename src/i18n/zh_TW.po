@@ -4498,6 +4498,36 @@ msgstr "如需提早釋放請聯絡客服，或改在其他工作區開通此服
 #. module: woow_paas_platform
 #. odoo-python
 #: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid "The platform is temporarily short of storage space and cannot create the disk this service needs (%(size)s)."
+msgstr "平台儲存空間暫時不足，無法建立這個服務需要的磁碟（%(size)s）。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid "The platform is temporarily short of storage space and cannot create the disks this service needs."
+msgstr "平台儲存空間暫時不足，無法建立這個服務需要的磁碟。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid "Nothing was created for this deployment, and the platform administrators have been notified."
+msgstr "這次開通沒有建立任何資源，系統管理員已收到通知。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid "Please delete this service and deploy it again later, or contact support."
+msgstr "請刪除這個服務後稍後再重新開通，或聯絡客服。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid "Deleting it also cancels its subscription: nothing is charged during the trial, and points already paid are refunded for the unused days."
+msgstr "刪除服務會一併取消訂閱：試用期內不會扣款，已扣的點數會依未使用天數退回。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
 msgid "Deployment timed out after %(minutes)s minutes: %(detail)s"
 msgstr "部署在 %(minutes)s 分鐘後逾時：%(detail)s"
 
@@ -10432,6 +10462,48 @@ msgstr "以下 post-deploy 初始化以 unknown 或 partial 結果結束："
 #: code:addons/woow_paas_platform/models/platform_monitor.py:0
 msgid "Post-deploy initialization gave up on the following service(s):"
 msgstr "以下服務的 post-deploy 初始化已放棄等待："
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/platform_monitor.py:0
+msgid "%(name)s (id=%(id)s, namespace %(ns)s): cannot schedule %(volumes)s; the largest new volume that still fits is %(largest)s. Orphaned PVCs: %(orphans)s."
+msgstr "%(name)s（id=%(id)s，namespace %(ns)s）：無法排程 %(volumes)s；目前還能新建的最大單顆 volume 為 %(largest)s。孤兒 PVC：%(orphans)s。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/platform_monitor.py:0
+msgid "Deployments were rejected before anything was created because the cluster storage (Longhorn) has no room for their disks. The tenants were told to retry later. Free scheduling capacity (for example orphaned PVCs still in their retention period) or add storage:"
+msgstr "以下開通在建立任何資源之前就被擋下：叢集儲存（Longhorn）已經放不下它們的磁碟，租戶已被告知稍後再試。請釋放排程額度（例如仍在保留期內的孤兒 PVC）或增加儲存空間："
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/platform_monitor.py:0
+msgid "%(count)s PVCs, %(size)s requested, %(scheduled)s of Longhorn scheduling capacity including replicas"
+msgstr "%(count)s 個 PVC，請求 %(size)s，連同副本佔用 Longhorn 排程額度 %(scheduled)s"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/platform_monitor.py:0
+msgid "The largest new volume with all %(replicas)s replicas that still fits is %(largest)s, below the %(min)s GiB the largest template disk needs (StorageClass %(sc)s)."
+msgstr "目前還能新建、%(replicas)s 個副本都排得上的最大單顆 volume 為 %(largest)s，低於最大範本磁碟需要的 %(min)s GiB（StorageClass %(sc)s）。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/platform_monitor.py:0
+msgid "%(node)s: %(scheduled)s of %(limit)s reserved, %(headroom)s left on its largest disk"
+msgstr "%(node)s：已預訂 %(scheduled)s／上限 %(limit)s，最大磁碟還剩 %(headroom)s"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/platform_monitor.py:0
+msgid "Node %(node)s has %(pct)s%% of its Longhorn scheduling limit reserved."
+msgstr "節點 %(node)s 的 Longhorn 排程額度已預訂 %(pct)s%%。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/platform_monitor.py:0
+msgid "Orphaned PVCs (kept for their retention period): %(orphans)s"
+msgstr "孤兒 PVC（保留期內）：%(orphans)s"
 
 #. module: woow_paas_platform
 #: model:product.template,name:woow_paas_platform.product_postgresql_monthly_product_template

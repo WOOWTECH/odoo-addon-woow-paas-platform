@@ -1013,3 +1013,5 @@ from . import test_n8n_storage_class_public_url_1334
 from . import test_app_admin_password_reset_1370
 # #1408：Redeploy 帶範本 image、就緒後核對 workload image（#1407 為 operator 側）。
 from . import test_redeploy_images_1408
+# #1415：叢集儲存（Longhorn）排程額度不足時的租戶訊息、管理員告警與定時監控。
+from . import test_cluster_storage_capacity_1415
