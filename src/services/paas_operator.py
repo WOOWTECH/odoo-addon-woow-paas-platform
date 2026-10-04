@@ -840,28 +840,41 @@ class PaaSOperatorClient:
         )
 
 
-    def get_mqtt_address(self, namespace: str, release_name: str) -> Dict[str, Any]:
-        """本服務對外 MQTT 位址（由 chart 的 tunnel agent 廣告的那一個）。
+    def get_public_address(self, namespace: str, release_name: str) -> Dict[str, Any]:
+        """本服務的對外位址（由 chart 的 ngrok sidecar 廣告：EMQX 的 tcp://、Headscale 的 https://）。
 
-        只有 `cloud_app_template.has_public_mqtt_address` 的商品需要問；呼叫端的
-        閘門是 `CloudService._chart_has_public_mqtt_address`，不要在這裡自建判準。
+        只有 `cloud_app_template.has_public_tunnel_address` 的商品需要問；呼叫端的
+        閘門是 `CloudService._chart_has_public_tunnel_address`，不要在這裡自建判準。
+
+        舊 operator（還沒有 ``/public-address``，回 404）時退回舊端點
+        ``/mqtt-address``：那支只回 ``tcp://``，EMQX 照常顯示，Headscale 的 https
+        位址要等 operator 升級後才看得到。部署順序本來就是 operator 先上
+        （見 PR 說明），這個退路只是讓「平台先上了」不至於讓 EMQX 的位址整格消失。
 
         Args:
             namespace: Release namespace
             release_name: Release name
 
         Returns:
-            ``{'public_url': 'tcp://host:port'}``，或 ``{'public_url': None}``
-            —— 後者是**正常狀態**（租戶沒開、agent 還沒連上、pod 還沒起來），
-            不是失敗，呼叫端不得把它當錯誤處理。
+            ``{'public_url': 'tcp://host:port' | 'https://host'}``，或
+            ``{'public_url': None}`` —— 後者是**正常狀態**（租戶沒開、agent 還沒連上、
+            sidecar 撤回、pod 還沒起來），不是失敗，呼叫端不得把它當錯誤處理。
 
         Raises:
             PaaSOperatorError: operator 本身失敗（kubectl 掛了、namespace 越界）
         """
-        return self._request(
-            'GET',
-            f'/api/releases/{namespace}/{release_name}/mqtt-address',
-        )
+        try:
+            return self._request(
+                'GET',
+                f'/api/releases/{namespace}/{release_name}/public-address',
+            )
+        except PaaSOperatorAPIError as e:
+            if e.status_code != 404:
+                raise
+            return self._request(
+                'GET',
+                f'/api/releases/{namespace}/{release_name}/mqtt-address',
+            )
 
 
     # ==================== Tunnel Operations ====================

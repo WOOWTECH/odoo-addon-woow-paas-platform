@@ -14,7 +14,8 @@ from psycopg2 import errors as pg_errors
 
 from odoo import _, api, fields, models
 from odoo.exceptions import AccessError, UserError, ValidationError
-from odoo.tools import mute_logger
+from odoo.tools import SQL, mute_logger
+from odoo.tools.sql import column_exists
 
 from ..services import dns_probe
 from ..services.naming import make_cs_access_canonical_name
@@ -1149,17 +1150,19 @@ class CloudService(models.Model):
     )
 
     # Network
-    # 對外 MQTT 位址（charts/emqx 的 tunnel agent 廣告的那一個）。由背景 poll 經
-    # `_release_facts` 回寫——**唯讀帳本欄位**，不是設定：租戶要改位址是去改
-    # helm values 的 ngrok 設定，不是改這裡。
-    # 空值是正常狀態（商品沒這個能力、租戶沒開對外 MQTT、agent 還沒連上）。
-    mqtt_public_url = fields.Char(
-        string='Public MQTT Address',
+    # 對外位址（chart 的 ngrok sidecar 廣告的那一個：EMQX 的 tcp://、Headscale 的
+    # https://）。由背景 poll 經 `_release_facts` 回寫——**唯讀帳本欄位**，不是設定：
+    # 租戶要改位址是去改 helm values 的 ngrok 設定，不是改這裡。
+    # 空值是正常狀態（商品沒這個能力、租戶沒開、agent 還沒連上、sidecar 撤回）。
+    # 18.0.1.0.205 以前叫 mqtt_public_url；改名後的值搬移見 `init()`。
+    public_tunnel_url = fields.Char(
+        string='Public Tunnel Address',
         readonly=True,
         copy=False,
-        help='The tcp://host:port the chart\'s tunnel agent currently advertises, '
-             'read back from its container log by the background poll. Empty when '
-             'the product has no such address or the agent has not connected.',
+        help='The tcp://host:port or https://host the chart\'s ngrok sidecar currently '
+             'advertises, read back from its container log by the background poll. '
+             'Empty when the product has no such address or the agent has not '
+             'connected.',
     )
     subdomain = fields.Char(
         string='Subdomain',
@@ -1437,6 +1440,46 @@ class CloudService(models.Model):
             ON woow_paas_platform_cloud_service (subscription_id)
             WHERE subscription_id IS NOT NULL
         """)
+        self._carry_over_legacy_tunnel_url()
+
+    def _carry_over_legacy_tunnel_url(self):
+        """P1：帳本欄位改名 mqtt_public_url → public_tunnel_url，把舊值搬過來。
+
+        為什麼在 ``init()`` 而不是 migration：migration 要 bump manifest 版號（規則 B），
+        會和並行的發版 PR 搶號；``init()`` 每次 install／``-u`` 都跑，而且跑在
+        ``_auto_init`` 建好新欄位之後、``ir.model.data._process_end`` 清掉已移除欄位
+        （連同舊 column）之前——正好是舊值還在、新欄位已在的那一刻。
+
+        不搬的後果：EMQX 服務的對外位址在升級後消失，直到每日對帳 cron 重新探到
+        （最多一天），租戶看到「還沒取得位址」。
+
+        冪等：搬完把舊 column 清成 NULL。舊 column 若沒被 Odoo 刪掉，下次 ``-u`` 也
+        不會把一個已經撤回（public_tunnel_url 清空）的舊位址又搬回來。column 不存在
+        （全新安裝、或已被刪）就什麼都不做。
+        """
+        cr = self.env.cr
+        if not column_exists(cr, self._table, 'mqtt_public_url'):
+            return
+        cr.execute(SQL(
+            """
+            UPDATE %(table)s
+               SET public_tunnel_url = mqtt_public_url
+             WHERE public_tunnel_url IS NULL
+               AND mqtt_public_url IS NOT NULL
+               AND mqtt_public_url <> ''
+            """,
+            table=SQL.identifier(self._table),
+        ))
+        moved = cr.rowcount
+        cr.execute(SQL(
+            "UPDATE %(table)s SET mqtt_public_url = NULL WHERE mqtt_public_url IS NOT NULL",
+            table=SQL.identifier(self._table),
+        ))
+        if moved:
+            _logger.info(
+                'P1: carried %s public tunnel address(es) over from mqtt_public_url',
+                moved,
+            )
 
     # ------------------------------------------------------------------ #
     #  Actions                                                            #
@@ -3573,42 +3616,42 @@ class CloudService(models.Model):
         self.ensure_one()
         return bool(self.template_id._gateway_external_path())
 
-    def _chart_has_public_mqtt_address(self):
-        """本服務的 chart 有沒有一個要回讀給租戶看的對外 MQTT 位址。
+    def _chart_has_public_tunnel_address(self):
+        """本服務的 chart 有沒有一個要回讀給租戶看的對外位址（ngrok sidecar）。
 
-        唯一事實源是 `cloud_app_template.has_public_mqtt_address`（能力 gate 一律
+        唯一事實源是 `cloud_app_template.has_public_tunnel_address`（能力 gate 一律
         收斂成單一欄位，見該欄位註解與
         docs/decisions/patterns/capability-gate-single-source-field.md）。
         poll 的探測閘門、service payload 與前端文案都必須讀本方法／本欄位，
         **不得**任何一端自建 slug 名單。
         """
         self.ensure_one()
-        return bool(self.template_id.has_public_mqtt_address)
+        return bool(self.template_id.has_public_tunnel_address)
 
-    def _probe_mqtt_address(self, client):
-        """問 operator 一次：agent 現在廣告的對外 MQTT 位址是什麼。
+    def _probe_public_tunnel_address(self, client):
+        """問 operator 一次：ngrok agent 現在廣告的對外位址是什麼。
 
         回傳值的三態**刻意**與 `_release_facts` 的「只有探過才寫」對齊：
 
         * ``None``  ——「這一輪沒探」：商品沒這個能力，或 operator 掛了。帳本原值不動。
-        * ``''``    ——「探過，現在沒有位址」：租戶關掉對外 MQTT、agent 還沒連上、
-                      隧道斷了。這是**有結論**的觀測，要把帳本清掉，否則租戶會一直
-                      看到一個已經連不上的舊位址（比空值更糟）。
+        * ``''``    ——「探過，現在沒有位址」：租戶關掉 ngrok、agent 還沒連上、
+                      隧道斷了（sidecar 撤回）。這是**有結論**的觀測，要把帳本清掉，
+                      否則租戶會一直看到一個已經連不上的舊位址（比空值更糟）。
         * 位址字串 ——「探過，就是這個」。
 
         operator 失敗一律降級成 ``None`` 並 log：對外位址是服務頁上的一個附帶資訊，
         讓它把整輪 poll 打斷（state 回寫、就緒判定都在同一輪）是完全不成比例的。
         """
         self.ensure_one()
-        if not self._chart_has_public_mqtt_address():
+        if not self._chart_has_public_tunnel_address():
             return None
         try:
-            payload = client.get_mqtt_address(
+            payload = client.get_public_address(
                 self.helm_namespace, self.helm_release_name
             )
         except Exception as e:  # noqa: BLE001 — 見 docstring：附帶資訊不得打斷 poll
             _logger.warning(
-                'Could not read the advertised MQTT address for %s: %s',
+                'Could not read the advertised public address for %s: %s',
                 self.name, e,
             )
             return None
@@ -4228,14 +4271,14 @@ class CloudService(models.Model):
                         release_name=service.helm_release_name,
                         include_vm=service._needs_vm_status(),
                     )
-                    # 對外 MQTT 位址也在這裡對帳：本 cron 是**唯一會看 running 的
-                    # 路徑**，而 ngrok 免費方案每次 agent 重連就換位址——那種變動
-                    # 發生時服務正是 running（poll 的 domain 只收轉移狀態）。
-                    # 無此能力的商品 `_probe_mqtt_address` 直接回 None、不打 operator，
-                    # 所以這行對其餘商品零成本。
+                    # 對外位址也在這裡對帳：本 cron 是**唯一會看 running 的路徑**，
+                    # 而 ngrok 免費方案每次 agent 重連就換 TCP 位址——那種變動發生時
+                    # 服務正是 running（poll 的 domain 只收轉移狀態）。
+                    # 無此能力的商品 `_probe_public_tunnel_address` 直接回 None、不打
+                    # operator，所以這行對其餘商品零成本。
                     facts = service._release_facts(
                         status.get('release', {}),
-                        mqtt_address=service._probe_mqtt_address(client),
+                        tunnel_address=service._probe_public_tunnel_address(client),
                     )
                     # 舊值必須**在寫入之前**收起來：寫完之後 `service[field]` already
                     # 是新值，log 就只印得出「現在是什麼」而不是「從什麼變成什麼」，
@@ -5234,7 +5277,7 @@ class CloudService(models.Model):
         if (self.import_progress or None) != progress:
             self.sudo().write({'import_progress': progress or False})
 
-    def _release_facts(self, release, dns_state=None, mqtt_address=None):
+    def _release_facts(self, release, dns_state=None, tunnel_address=None):
         """operator 回報的 release 事實 → 帳本回寫欄位。**所有寫入者的單一來源。**
 
         （#1159 起 list/get 純讀、controller 那份 poll 已刪除；以下是 #627 當時的背景。）
@@ -5283,11 +5326,11 @@ class CloudService(models.Model):
         # 不該留下任何痕跡。
         if dns_state in ('ok', 'missing'):
             vals['public_url_dns_unverified'] = dns_state == 'missing'
-        # 對外 MQTT 位址同樣走這個咽喉（理由同上：逐 write 分支各列一次正是 #627）。
+        # 對外位址同樣走這個咽喉（理由同上：逐 write 分支各列一次正是 #627）。
         # `None` ＝ 這一輪沒探（商品沒這能力／operator 掛了）⇒ 帳本原值不動；
         # `''` ＝ 探過而且現在沒有位址 ⇒ 清掉（留著一個連不上的舊位址比空值更糟）。
-        if mqtt_address is not None:
-            vals['mqtt_public_url'] = mqtt_address or False
+        if tunnel_address is not None:
+            vals['public_tunnel_url'] = tunnel_address or False
         return vals
 
     def _poll_and_update_status(self, client):
@@ -5377,12 +5420,13 @@ class CloudService(models.Model):
 
         # 與 DNS 同一條紀律：**一輪只探一次**，結果餵進 `_release_facts`。
         # 只在 release 已 deployed 時探——還沒 deploy 的服務裡根本還沒有 agent。
-        mqtt_address = (
-            service._probe_mqtt_address(client) if release_status == 'deployed' else None
+        tunnel_address = (
+            service._probe_public_tunnel_address(client)
+            if release_status == 'deployed' else None
         )
 
         release_facts = service._release_facts(
-            release, dns_state=dns_state, mqtt_address=mqtt_address
+            release, dns_state=dns_state, tunnel_address=tunnel_address
         )
 
         # 進度先落地（與就緒判定無關，且未就緒時才是最有用的時候）。

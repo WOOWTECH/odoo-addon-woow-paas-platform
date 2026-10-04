@@ -124,7 +124,8 @@ rules:
 | POST   | `/api/releases/{namespace}/{name}/rollback`  | helm rollback               |
 | GET    | `/api/releases/{namespace}/{name}/revisions` | helm history                |
 | GET    | `/api/releases/{namespace}/{name}/status`    | Get pod/deployment status   |
-| GET    | `/api/releases/{namespace}/{name}/mqtt-address` | 對外 MQTT 位址回讀（charts/emqx） |
+| GET    | `/api/releases/{namespace}/{name}/public-address` | 對外通道位址回讀（ngrok sidecar：`tcp://` 或 `https://`，見下方「對外通道位址回讀」） |
+| GET    | `/api/releases/{namespace}/{name}/mqtt-address` | 舊端點（平台 ≤ 18.0.1.0.205 呼叫）：同一份契約、只回 `tcp://` |
 | POST   | `/api/namespaces`                            | Create namespace with quota |
 
 **Request/Response Example**：
@@ -422,8 +423,9 @@ Workspace Dashboard → Service Card → Service Detail Page → [Overview | Con
 - help_text: string?
 - required: boolean
 - options: string[]? # For select type
-- format: enum? # git_hosts, git_name, email — 純文字欄位的形態驗證（存檔時擋下）＋部署組裝時轉成 chart 形態
-                #（git_hosts：逗號清單 → https URL list）；helm_values 保留租戶原文。見 cloud_app_template.SPEC_FORMAT_PARSERS
+- format: enum? # git_hosts, git_name, email, domain — 純文字欄位的形態驗證（存檔時擋下）＋部署組裝時轉成 chart 形態
+                #（git_hosts：逗號清單 → https URL list；domain：FQDN 正規化成小寫，不收 scheme／路徑／埠／IP）；
+                # 空值一律放行（選填）；helm_values 保留租戶原文。見 cloud_app_template.SPEC_FORMAT_PARSERS
 ```
 
 **ResourceSpec**:
@@ -724,6 +726,40 @@ class CloudService(models.Model):
 
 template（產品形狀）與 plan（規格檔位）的屬性歸屬邊界見
 `../../decisions/patterns/template-vs-plan-property-boundary.md`。
+
+#### 對外通道位址回讀（ngrok sidecar；EMQX、Headscale）
+
+平台的 Cloudflare 通道只載 HTTP/WS（而且會剝掉 Tailscale 控制協議的 `Upgrade`
+header），所以 EMQX 的原生 MQTT（TCP）與 Headscale 的控制面（HTTPS）走租戶自己的
+ngrok agent（chart 的 sidecar）。agent 實際拿到的位址只有它自己知道，平台從它的
+container log 讀回來顯示在服務頁。
+
+- **能力旗標**：`cloud_app_template.has_public_tunnel_address`（唯一事實源；
+  18.0.1.0.205 以前叫 `has_public_mqtt_address`）。前端不得用 slug 判（repo-lint 第 7 條）。
+- **顯示標籤**：`cloud_app_template.public_tunnel_label`（可翻譯；seed 寫英文、
+  `zh_TW.po` 給中文，例 EMQX「Public MQTT address／對外 MQTT 位址」）；空值時前端用
+  「Public address／對外位址」。
+- **帳本**：`cloud_service.public_tunnel_url`（唯讀；18.0.1.0.205 以前叫
+  `mqtt_public_url`，升級時 `CloudService.init()` 把舊值搬過來）。轉移狀態 poll 每分鐘、
+  running 服務由每日對帳 cron 回寫；三態（沒探／探過沒有／位址）見
+  `_probe_public_tunnel_address`。
+- **payload**（service detail）：`has_public_tunnel_address`、`public_tunnel_label`、
+  `public_tunnel_url`。
+- **chart 端 log 契約**（operator `GET …/public-address` 讀）：sidecar 容器名 `ngrok`；
+  每 60 秒在**行首**印一行 `WOOW_PUBLIC_URL=<url>`，`<url>` 是 `https://<host>[:<port>]`
+  或 `tcp://<host>:<port>`；沒有位址時印 `WOOW_PUBLIC_URL=`（空值＝撤回）。舊 marker
+  `WOOW_MQTT_PUBLIC_URL=` 繼續認。取最後一筆有效值；格式不符的行丟掉（不算撤回）；
+  marker 不在行首不認（ngrok 自己的 log 可能帶訪客可控字串）。
+- **部署順序**：operator 先上（新端點），平台後上；平台遇到舊 operator 的 404 會退回
+  `/mqtt-address`（只有 `tcp://`）。
+
+#### 一次性憑證視窗的 gateway 提示（P3）
+
+有 gateway 的模板（`helm_default_values.gateway.externalPath`，#530）在建立與 Reset
+時一次性交付 `gateway_api_key`＋`gateway_url`。兩格的說明文字依範本：
+`cloud_app_template.gateway_api_key_hint`／`gateway_url_hint`（可翻譯），有值時隨
+`_gateway_credentials` 帶出（同名 payload 鍵）；空值時前端沿用 hermes-agent 的內建
+文案（MCP 連線設定的 Gateway API Server 區）。只是顯示字，交付判準不變。
 
 ### CloudServiceBackup _(Future Phase)_
 

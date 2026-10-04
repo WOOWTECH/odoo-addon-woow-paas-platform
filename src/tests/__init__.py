@@ -364,9 +364,15 @@ from . import test_code_server_seed
 # Nextcloud 另含 publicUrl 注入（缺了它服務會開起來但整站回「不信任的網域」）
 from . import test_emqx_seed
 from . import test_nextcloud_seed
-# feat: EMQX 對外 MQTT 位址回讀 —— 能力 gate 單一事實源（slug 反直覺 fixture）、
-# 探測三態與 _release_facts 的「只有探過才寫」、operator 掛掉降級成沒探、detail payload
-from . import test_mqtt_address_readback
+# feat: 對外通道位址回讀（EMQX 起、P1 泛化給 Headscale）—— 能力 gate 單一事實源
+# （slug 反直覺 fixture）、探測三態與 _release_facts 的「只有探過才寫」、operator 掛掉
+# 降級成沒探、detail payload（旗標／標籤／值）、改名的舊值搬移、舊 operator 404 退路、zh_TW
+from . import test_public_tunnel_address
+# feat: P2 helm_value_specs format=domain（Headscale ngrok.domain）—— 存檔即擋＋中文訊息、
+# 部署組裝正規化
+from . import test_spec_format_domain
+# feat: P3 一次性憑證視窗的 gateway 提示依範本（LiteLLM 前置）
+from . import test_gateway_hint_template
 # fix: #657 project_access 授權補洞 —— identity anchor 缺失 / role 缺省整道
 # 守衛被跳過 / 無 owner 列保護，與 #556 同構但刻意不在該 PR 內順手修
 # （HttpCase，group_user-only）

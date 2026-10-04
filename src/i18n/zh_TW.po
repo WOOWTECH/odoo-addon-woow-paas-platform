@@ -19654,6 +19654,90 @@ msgstr "設定值格式不正確。"
 
 #. module: woow_paas_platform
 #. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_app_template.py:0
+msgid "Domain: enter the domain name only, without https:// (for example abc-123.ngrok-free.app instead of \"%(entry)s\")."
+msgstr "網域：只填網域名稱，不要加 https://（例如填 abc-123.ngrok-free.app，而不是「%(entry)s」）。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_app_template.py:0
+msgid "Domain: enter the domain name only, without a path, \"/\" or \"@\" (\"%(entry)s\" is not a domain name)."
+msgstr "網域：只填網域名稱，不要包含路徑、「/」或「@」（「%(entry)s」不是網域名稱）。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_app_template.py:0
+msgid "Domain: enter the domain name only, without a port number (\"%(entry)s\")."
+msgstr "網域：只填網域名稱，不要加埠號（「%(entry)s」）。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_app_template.py:0
+msgid "Domain: \"%(entry)s\" is not a full domain name; use a dotted name such as abc-123.ngrok-free.app."
+msgstr "網域：「%(entry)s」不是完整的網域名稱，請填含點的完整名稱，例如 abc-123.ngrok-free.app。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_app_template.py:0
+msgid "Domain: at most %(max)s characters."
+msgstr "網域最長 %(max)s 個字元。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_app_template.py:0
+msgid "Domain: \"%(entry)s\" is not a valid domain name. Use letters, digits and hyphens separated by dots, for example abc-123.ngrok-free.app."
+msgstr "網域：「%(entry)s」不是有效的網域名稱。請只用英文字母、數字與連字號，以點分隔，例如 abc-123.ngrok-free.app。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/OverviewTab.js:0
+msgid "Public address"
+msgstr "對外位址"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/OverviewTab.js:0
+msgid "Not available yet. This address needs your own ngrok authtoken in Configuration; once the agent connects it appears here (re-checked in the background). With a reserved ngrok address or your own domain it stays the same; otherwise it may change whenever the service restarts."
+msgstr "尚未取得。這個位址需要你在「配置」填入自己的 ngrok authtoken；agent 連上後就會顯示在這裡（背景會定期重新檢查）。使用 ngrok 保留位址或自己的網域時位址固定，否則服務重啟後可能會改變。"
+
+#. module: woow_paas_platform
+#. odoo-javascript
+#: code:addons/woow_paas_platform/static/src/paas/pages/service/tabs/OverviewTab.js:0
+msgid "Copy address"
+msgstr "複製位址"
+
+#. module: woow_paas_platform
+#: model:woow_paas_platform.cloud_app_template,public_tunnel_label:woow_paas_platform.cloud_app_emqx
+msgid "Public MQTT address"
+msgstr "對外 MQTT 位址"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_app_template__has_public_tunnel_address
+msgid "Advertises a public tunnel address"
+msgstr "回報對外通道位址"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_app_template__public_tunnel_label
+msgid "Public Tunnel Address Label"
+msgstr "對外通道位址標籤"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_app_template__gateway_api_key_hint
+msgid "Gateway API Key Hint"
+msgstr "Gateway API 金鑰提示"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_app_template__gateway_url_hint
+msgid "Gateway API URL Hint"
+msgstr "Gateway API 網址提示"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_service__public_tunnel_url
+msgid "Public Tunnel Address"
+msgstr "對外通道位址"
+
+#. module: woow_paas_platform
+#. odoo-python
 #: code:addons/woow_paas_platform/models/cloud_service.py:0
 msgid ""
 "The administrator account could not be found in this service, so the password was not changed. Please contact support."

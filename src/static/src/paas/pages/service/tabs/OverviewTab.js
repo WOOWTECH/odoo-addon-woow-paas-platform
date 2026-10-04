@@ -1,5 +1,6 @@
 /** @odoo-module **/
 import { Component, useState } from "@odoo/owl";
+import { _t } from "@web/core/l10n/translation";
 import { WoowCard } from "../../../components/card/WoowCard";
 import { WoowIcon } from "../../../components/icon/WoowIcon";
 import { formatDate } from "../../../services/utils";
@@ -37,6 +38,25 @@ export class OverviewTab extends Component {
     get publicUrl() {
         if (!this.props.service.subdomain) return null;
         return `https://${this.props.service.subdomain}.${cloudService.domain}`;
+    }
+
+    /**
+     * 對外位址那一格的標題：範本的可翻譯標籤（後端依請求語言給，例 EMQX「對外 MQTT
+     * 位址」、Headscale「對外控制網址」）；範本沒設時用通用字。只是顯示字——這一格
+     * 畫不畫只看 `has_public_tunnel_address`。
+     */
+    get publicTunnelLabel() {
+        return this.props.service.public_tunnel_label || _t("Public address");
+    }
+
+    // 文案放 JS（_t 單行字串）而不是模板的多行文字節點：模板文字的 msgid 會連同換行
+    // 與縮排一起抽出，排版一動翻譯就對不上（舊的 "Public MQTT" 說明就是這樣一直沒有中文）。
+    get publicTunnelPendingHint() {
+        return _t("Not available yet. This address needs your own ngrok authtoken in Configuration; once the agent connects it appears here (re-checked in the background). With a reserved ngrok address or your own domain it stays the same; otherwise it may change whenever the service restarts.");
+    }
+
+    get publicTunnelCopyTitle() {
+        return _t("Copy address");
     }
 
     get helmNamespace() {
