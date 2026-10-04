@@ -12,9 +12,11 @@ from typing import Any, Dict, List, Optional
 
 from src.config import settings
 from src.models.schemas import (
+    ContainerWaitingInfo,
     DataVolumeInfo,
     PodInfo,
     PodPhase,
+    PodWarningEvent,
     ReleaseInfo,
     ReleaseRevision,
     ReleaseStatus,
@@ -1139,6 +1141,74 @@ def _controller_owner_kind(metadata: Dict[str, Any]) -> Optional[str]:
     return None
 
 
+# #1417：這些 waiting reason 只說「還沒輪到」（前一個容器／volume 還沒好），本身不是
+# 原因。有其他容器帶著實質 reason（ImagePullBackOff、CrashLoopBackOff…）時優先回報那個。
+_GENERIC_WAITING_REASONS = frozenset({"PodInitializing", "ContainerCreating"})
+
+
+def _truncate(text: Optional[str], limit: int) -> Optional[str]:
+    """診斷文字截短：事件訊息可能很長（Longhorn 的 attach 錯誤一行數百字）。"""
+    if not text:
+        return None
+    text = " ".join(str(text).split())
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def _pod_waiting(status: Dict[str, Any], limit: int) -> Optional[ContainerWaitingInfo]:
+    """#1417：Pod 卡住的容器（``state.waiting``）；先看 init 容器再看主要容器。
+
+    回第一個帶實質 reason 的容器；都只有「還沒輪到」的 reason 時回第一個；沒有任何容器
+    在 waiting 回 None。
+    """
+    first_generic = None
+    for is_init, key in ((True, "initContainerStatuses"), (False, "containerStatuses")):
+        for cs in status.get(key) or []:
+            waiting = (cs.get("state") or {}).get("waiting") or {}
+            reason = waiting.get("reason")
+            if not reason:
+                continue
+            info = ContainerWaitingInfo(
+                container=cs.get("name") or "",
+                init_container=is_init,
+                reason=reason,
+                message=_truncate(waiting.get("message"), limit),
+            )
+            if reason not in _GENERIC_WAITING_REASONS:
+                return info
+            if first_generic is None:
+                first_generic = info
+    return first_generic
+
+
+def _pod_is_unready(phase: str, metadata: Dict[str, Any], ready_count: int, total: int) -> bool:
+    """與平台 ``_is_container_ready`` 同一套「有效 Pod」定義：收尾中的 Pod 不算。"""
+    if phase in ("Succeeded", "Failed") or metadata.get("deletionTimestamp"):
+        return False
+    return phase != "Running" or ready_count < total
+
+
+def _event_time(event: Dict[str, Any]) -> str:
+    """事件「最後一次發生」的時間字串（RFC 3339）；排序用，取不到回空字串。
+
+    core/v1 Event 依產生者不同，時間落在不同欄位：舊式 ``lastTimestamp``、新式
+    ``series.lastObservedTime``／``eventTime``，最後退回 ``metadata.creationTimestamp``。
+    """
+    series = event.get("series") or {}
+    return (
+        series.get("lastObservedTime")
+        or event.get("lastTimestamp")
+        or event.get("eventTime")
+        or (event.get("metadata") or {}).get("creationTimestamp")
+        or ""
+    )
+
+
+def _event_sort_key(event: Dict[str, Any]) -> str:
+    """時間字串正規化成可比較的形狀（去掉小數秒，``Z`` 對齊）。"""
+    stamp = _event_time(event)
+    return re.sub(r"\.\d+", "", stamp).replace("+00:00", "Z")
+
+
 class KubernetesService:
     """Service for Kubernetes operations (via kubectl)."""
 
@@ -1364,12 +1434,75 @@ class KubernetesService:
 
         return None
 
-    def get_pods(self, namespace: str, label_selector: Optional[str] = None) -> List[PodInfo]:
+    # #1417：診斷文字（waiting message、事件訊息）的長度上限；事件查詢的 subprocess 上限。
+    # 事件只是錦上添花，查不到不能拖垮 status 端點（平台背景 poll 每分鐘逐台打一次）。
+    DIAGNOSTIC_TEXT_LIMIT = 300
+    POD_EVENTS_TIMEOUT_SECONDS = 10
+
+    def get_pod_warning_events(self, namespace: str) -> Dict[str, PodWarningEvent]:
+        """#1417：namespace 內每顆 Pod 最近一筆 Warning 事件，以 Pod UID 與名字為鍵。
+
+        一次 list（field selector 只取 ``type=Warning`` 且 ``involvedObject.kind=Pod``），
+        再依 ``involvedObject`` 對應——不逐顆 Pod 查。鍵是 ``uid:<uid>``；事件本身沒帶 UID
+        時才用 ``name:<name>``——同名重建的 Pod（StatefulSet）不會拿到前一顆的事件。
+
+        Raises:
+            KubectlException: kubectl 失敗或逾時（呼叫端負責吞掉，見 ``get_pods``）
+        """
+        validate_namespace(namespace)
+        result = self._run_command(
+            [
+                "get",
+                "events",
+                "--namespace",
+                namespace,
+                "--field-selector",
+                "type=Warning,involvedObject.kind=Pod",
+                "--output",
+                "json",
+            ],
+            timeout=self.POD_EVENTS_TIMEOUT_SECONDS,
+        )
+        items = json.loads(result.stdout or "{}").get("items") or []
+        latest: Dict[str, Dict[str, Any]] = {}
+        for event in sorted(items, key=_event_sort_key):
+            obj = event.get("involvedObject") or {}
+            if not event.get("reason"):
+                continue
+            if obj.get("uid"):
+                key = f"uid:{obj['uid']}"
+            elif obj.get("name"):
+                key = f"name:{obj['name']}"
+            else:
+                continue
+            # 排序後逐筆覆寫 ⇒ 留下的是每顆 Pod 最後一筆。
+            latest[key] = event
+        limit = self.DIAGNOSTIC_TEXT_LIMIT
+        out: Dict[str, PodWarningEvent] = {}
+        for key, event in latest.items():
+            count = (event.get("series") or {}).get("count") or event.get("count")
+            out[key] = PodWarningEvent(
+                reason=event["reason"],
+                message=_truncate(event.get("message") or event.get("note"), limit),
+                count=count if isinstance(count, int) else None,
+                last_seen=_event_time(event) or None,
+            )
+        return out
+
+    def get_pods(
+        self,
+        namespace: str,
+        label_selector: Optional[str] = None,
+        include_warning_events: bool = False,
+    ) -> List[PodInfo]:
         """Get pods in a namespace.
 
         Args:
             namespace: Namespace name
             label_selector: Optional label selector
+            include_warning_events: #1417——對未就緒的 Pod 附上最近一筆 Warning 事件
+                （``last_warning``）。只有 status 端點開；全部就緒時不查事件。事件查詢
+                失敗只記 log、``last_warning`` 留 None，**不**讓本方法失敗。
 
         Returns:
             List of pod information
@@ -1392,6 +1525,8 @@ class KubernetesService:
         pods_data = json.loads(result.stdout)
 
         pods = []
+        # #1417：未就緒 Pod 的事件查詢鍵（UID 優先、名字備援），與 pods 同序。
+        unready_keys: List[Optional[tuple]] = []
         for pod in pods_data.get("items", []):
             metadata = pod.get("metadata", {})
             status = pod.get("status", {})
@@ -1401,6 +1536,11 @@ class KubernetesService:
             ready_count = sum(1 for c in container_statuses if c.get("ready"))
             total_count = len(container_statuses)
             ready_str = f"{ready_count}/{total_count}"
+            phase = status.get("phase", "Unknown")
+            unready_keys.append(
+                (metadata.get("uid"), metadata.get("name"))
+                if _pod_is_unready(phase, metadata, ready_count, total_count) else None
+            )
 
             # Calculate restarts
             restarts = sum(c.get("restartCount", 0) for c in container_statuses)
@@ -1428,8 +1568,30 @@ class KubernetesService:
                         c.get("image") for c in (pod.get("spec") or {}).get("containers") or []
                         if c.get("image")
                     ],
+                    # #1417：卡住的容器（就緒的 Pod 自然沒有 waiting 容器）。
+                    waiting=_pod_waiting(status, self.DIAGNOSTIC_TEXT_LIMIT),
                 )
             )
+
+        if include_warning_events and any(unready_keys):
+            # 一次 list namespace 的 Warning 事件，再對到未就緒的 Pod；就緒的 Pod 不附
+            # （它們的舊事件只會誤導）。查詢失敗只記 log：status 端點不能因此失敗。
+            try:
+                events = self.get_pod_warning_events(namespace)
+            except Exception as e:  # noqa: BLE001 —— 見上
+                logger.warning(
+                    "Could not list pod warning events in %s (pod status still "
+                    "reported without them): %s", namespace, getattr(e, "message", e),
+                )
+                events = {}
+            for pod_info, keys in zip(pods, unready_keys):
+                if not keys:
+                    continue
+                uid, name = keys
+                pod_info.last_warning = (
+                    (events.get(f"uid:{uid}") if uid else None)
+                    or events.get(f"name:{name}")
+                )
 
         return pods
 

@@ -73,6 +73,11 @@ def pod_info(**overrides):
         'creation_timestamp': None,
         # #1408：spec.containers 的 image 參照；預設空清單＝不觸發 Redeploy 後的核對。
         'images': [],
+        # #1417：未就緒 Pod 的診斷。``waiting``＝卡住的容器
+        # （``{'container', 'init_container', 'reason', 'message'}``），``last_warning``＝最近
+        # 一筆 Warning 事件（``{'reason', 'message', 'count', 'last_seen'}``）；None＝沒有可報的。
+        'waiting': None,
+        'last_warning': None,
     }
     unknown = set(overrides) - set(pod)
     if unknown:
