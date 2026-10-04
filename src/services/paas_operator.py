@@ -552,6 +552,7 @@ class PaaSOperatorClient:
         namespace: str,
         release_name: str,
         subdomain: Optional[str] = None,
+        grace_period_days: Optional[int] = None,
     ) -> Dict[str, str]:
         """Uninstall a Helm release.
 
@@ -559,6 +560,10 @@ class PaaSOperatorClient:
             namespace: Release namespace
             release_name: Release name
             subdomain: Optional subdomain to delete from Cloudflare
+            grace_period_days: #1431 — keep the release's orphaned PVCs / DataVolumes
+                for only this many days (the platform sends 1 for a service that never
+                reached running). The operator honours ``1..PVC_GRACE_PERIOD_DAYS`` and
+                falls back to its default otherwise; operators older than #1431 ignore it.
 
         Returns:
             Deletion confirmation
@@ -566,12 +571,15 @@ class PaaSOperatorClient:
         Raises:
             PaaSOperatorError: If uninstallation fails
         """
-        url = f'/api/releases/{namespace}/{release_name}'
+        params = {}
         if subdomain:
-            url += f'?subdomain={subdomain}'
+            params['subdomain'] = subdomain
+        if grace_period_days:
+            params['grace_period_days'] = int(grace_period_days)
         return self._request(
             'DELETE',
-            url,
+            f'/api/releases/{namespace}/{release_name}',
+            params=params or None,
             timeout=HELM_OPERATION_TIMEOUT,
         )
 

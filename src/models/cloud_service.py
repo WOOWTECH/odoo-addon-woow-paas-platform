@@ -92,6 +92,10 @@ STORAGE_QUOTA_ERROR_CODE = 'workspace_storage_quota_exhausted'
 #: #1415：operator 開通前叢集儲存（Longhorn）排程額度檢查的錯誤碼（``extra/paas-operator/
 #: src/services/storage_capacity.py`` 的 ``CAPACITY_ERROR_CODE``；改名兩邊一起改）。
 CLUSTER_STORAGE_CAPACITY_ERROR_CODE = 'cluster_storage_capacity_exhausted'
+#: #1431：從未進過 running 的服務刪除時，孤兒 PVC／DataVolume 只保留這麼多天（operator
+#: ``DELETE /api/releases/...?grace_period_days=``；只能縮短預設、不能延長）。沒有租戶資料
+#: 要保護，不必佔 Longhorn 排程額度 90 天（#1415 事件）。
+NEVER_RUNNING_ORPHAN_GRACE_DAYS = 1
 
 WOOW_ODOO_ADMIN_EMAIL_RE = re.compile(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
 #: #1335：保留給文件／測試、永遠收不到信的網域（RFC 2606 §3 的 example.com／.net／.org
@@ -351,6 +355,23 @@ def _reject_timeout_recovery_control_writes(env, vals):
     if touched:
         raise AccessError(_(
             'Deployment timeout recovery fields are managed by the platform: %(fields)s',
+            fields=', '.join(touched)))
+
+
+# #1431／#1424：服務「曾經正常運作過」的事實。平台依它決定刪除後孤兒 PVC 保留多久
+# （從未 running ⇒ 1 天）與要不要扣款（從未 running 的 error 服務暫停扣款）——租戶若能自己
+# 寫它，就能把用過的服務偽裝成沒用過（縮短資料保留、逃避計費）。判準同上：`env.is_system()`。
+_SERVICE_HISTORY_FIELDS = frozenset({'first_running_at'})
+
+
+def _reject_service_history_writes(env, vals):
+    """write() 側：服務歷程事實只能由平台寫入（#1431）。"""
+    if env.is_system():
+        return
+    touched = sorted(_SERVICE_HISTORY_FIELDS.intersection(vals))
+    if touched:
+        raise AccessError(_(
+            'Service history fields are managed by the platform: %(fields)s',
             fields=', '.join(touched)))
 
 
@@ -1040,6 +1061,19 @@ class CloudService(models.Model):
         help='Set when the deployment age timeout turned this service into an error. '
              'While set, a background job keeps checking the release for a limited '
              'time and resumes the service as soon as it becomes ready.',
+    )
+    # #1431：服務第一次進 running 的時間。由 `write()`／`create()` 在 state 第一次變成
+    # running 時統一寫入（不逐路徑 stamp，pitfall reaped-since-single-path-stamp-gc-immunity），
+    # 之後不再改、也不會被清——`init_ready_*` 那類「本段 initializing」的觀測會被清掉，不能
+    # 拿來回答「曾經能用過嗎」。空值＝從未正常運作過：刪除時孤兒 PVC 只留 1 天（#1431）。
+    # 18.0.1.0.209 以前的服務由 migration 保守回填（見 `_woow_migrate_first_running_at_1431`）。
+    first_running_at = fields.Datetime(
+        string='First Running At',
+        copy=False,
+        readonly=True,
+        help='When the service reached the running state for the first time. Empty means '
+             'it never worked: its leftover disks are kept for only 1 day after deletion. '
+             'Services created before version 18.0.1.0.209 were backfilled conservatively.',
     )
 
     # VM 型服務的開通進度（#423 W5a，design §7.4）。
@@ -5542,6 +5576,52 @@ class CloudService(models.Model):
             )
         return stuck
 
+    @api.model
+    def _woow_migrate_first_running_at_1431(self):
+        """回填 ``first_running_at``（18.0.1.0.209 新欄位）——**一律保守**。
+
+        欄位上線前沒有可靠的「曾經 running 過」紀錄（``init_ready_*`` 會被清掉）。回填錯的
+        兩個方向代價不同：
+
+        * 把**用過**的服務當成沒用過 ⇒ 刪除後資料只留 1 天（#1431）、error 時停止扣款
+          （#1424）——資料保護承諾被打破，不可逆；
+        * 把**沒用過**的服務當成用過 ⇒ 照舊保留 90 天、照舊扣款——就是上線前的行為。
+
+        所以只留下「明確還在開通中、而且沒有任何曾經跑過的跡象」的服務為空：state 是
+        pending／deploying／initializing，且沒有升級紀錄（``last_upgraded_at``）、helm
+        revision 沒超過 1、init 沒開過第二代、沒有停權前狀態。其餘（running、error、
+        upgrading、suspended、deleting、state 為空……）一律回填。它們之後第一次進 running
+        時 ``write()`` 才會寫入真正的時間。
+
+        回填值用 ``deployed_at``（首次 helm install 成功），沒有就用 ``create_date``——只是
+        近似值，沒有任何邏輯依賴它的精確時間，只依賴「有沒有值」。
+
+        冪等：只碰 ``first_running_at`` 為空的列；重跑不改已有的值。回傳被回填的服務。
+        """
+        Service = self.sudo().with_context(active_test=False)
+        missing = Service.search([('first_running_at', '=', False)])
+
+        def still_provisioning(svc):
+            return (
+                svc.state in ('pending', 'deploying', 'initializing')
+                and not svc.last_upgraded_at
+                and (svc.helm_revision or 1) <= 1
+                and (svc.init_generation or 0) <= 1
+                and not svc.pre_suspend_state
+            )
+
+        left_empty = missing.filtered(still_provisioning)
+        backfilled = missing - left_empty
+        for svc in backfilled:
+            svc.write({'first_running_at': svc.deployed_at or svc.create_date})
+        _logger.info(
+            "#1431 migration: backfilled first_running_at on %d service(s); left %d "
+            "still-provisioning service(s) empty: %s",
+            len(backfilled), len(left_empty),
+            ', '.join(f"{s.name}(id={s.id},state={s.state})" for s in left_empty) or '-',
+        )
+        return backfilled
+
     def _woow_migrate_init_execution_control_1257(self):
         """#1257 上線過渡（Q15＋Q26）：回填欠 init、替在途的 init 寫合成 legacy lease。
 
@@ -7478,10 +7558,7 @@ class CloudService(models.Model):
         client = get_paas_operator_client(self.env)
         if client and self.helm_release_name and self.helm_namespace:
             try:
-                client.uninstall_release(
-                    self.helm_namespace, self.helm_release_name,
-                    subdomain=self.subdomain,
-                )
+                self._uninstall_release(client)
                 _logger.info(
                     "[CLOUD_SVC] _do_cleanup helm uninstalled service=%s",
                     self.id,
@@ -7523,6 +7600,29 @@ class CloudService(models.Model):
         # 以存活集重算 ns quota 並權威覆寫（best-effort，不影響刪除）。
         self._push_ns_quota(self.workspace_id, self.helm_namespace)
 
+    def _orphan_grace_period_days(self):
+        """#1431：刪除時請 operator 把孤兒 PVC／DataVolume 的保留期縮短成幾天；``None``＝預設。
+
+        從未進過 running（``first_running_at`` 空）的服務沒有租戶資料要保護 ⇒ 1 天；其餘照
+        預設（正式站 90 天，#317）。
+        """
+        self.ensure_one()
+        return None if self.first_running_at else NEVER_RUNNING_ORPHAN_GRACE_DAYS
+
+    def _uninstall_release(self, client):
+        """三條刪除路徑（租戶刪除 `_delete_service`、lifecycle `_do_cleanup`、`unlink` 兜底的
+        `_cleanup_helm`）共用的 operator 呼叫——保留期的判準只在這裡（#1431）。
+
+        曾經 running 的服務呼叫形狀與 #1431 之前完全相同（不帶 ``grace_period_days``）。
+        """
+        self.ensure_one()
+        kwargs = {'subdomain': self.subdomain}
+        grace = self._orphan_grace_period_days()
+        if grace:
+            kwargs['grace_period_days'] = grace
+        return client.uninstall_release(
+            self.helm_namespace, self.helm_release_name, **kwargs)
+
     def _cleanup_helm(self):
         """Idempotent helm uninstall for the direct-unlink / workspace-cascade
         path (F-ENV-5).
@@ -7550,10 +7650,7 @@ class CloudService(models.Model):
         if not client:
             return True  # operator unconfigured — no live release to tear down
         try:
-            client.uninstall_release(
-                self.helm_namespace, self.helm_release_name,
-                subdomain=self.subdomain,
-            )
+            self._uninstall_release(client)
             return True
         except PaaSOperatorError as e:
             if getattr(e, 'status_code', None) == 404:
@@ -7797,6 +7894,7 @@ class CloudService(models.Model):
         _reject_init_control_writes(self.env, vals)
         _reject_observation_control_writes(self.env, vals)
         _reject_timeout_recovery_control_writes(self.env, vals)
+        _reject_service_history_writes(self.env, vals)
         # #698 反向端：前置檢查（見 `_assert_reverse_binding_authorized` 的
         # docstring——這一端的判準會被寫入本身改掉，事後檢查無效）。
         self._assert_reverse_binding_authorized(vals)
@@ -7911,6 +8009,11 @@ class CloudService(models.Model):
                 'error_message' in vals
                 or ('state' in vals and vals['state'] not in ('error', 'suspended'))):
             leaving_timeout = self.filtered('transition_timeout_at')
+        # #1431：第一次進 running 就記下來（之後不再動）。集中在這裡，任何把 state 寫成
+        # running 的路徑（poll、resume、init 完成、逾時自癒……）自動跟上。明寫的呼叫端優先。
+        first_running = self.browse()
+        if vals.get('state') == 'running' and 'first_running_at' not in vals:
+            first_running = self.filtered(lambda r: not r.first_running_at)
         # #745：Access 設定的寫入與 operator sync 必須是同一個原子單位。
         #
         # 沒有 savepoint 時的失效形狀：BFF 端點把 sync 的例外收成
@@ -7963,6 +8066,10 @@ class CloudService(models.Model):
                 super(CloudService, leaving_init_exit).write({'init_exit': False})
             if leaving_timeout:
                 super(CloudService, leaving_timeout).write({'transition_timeout_at': False})
+            if first_running:
+                super(CloudService, first_running).write({
+                    'first_running_at': fields.Datetime.now(),
+                })
             if rebinding:
                 rebinding._assert_subscription_binding()
             elif 'workspace_id' in vals:
@@ -8327,6 +8434,12 @@ class CloudService(models.Model):
                 observation_started if defaulted.get('state') in OBSERVATION_TRANSITION_STATES
                 else False
             )
+            # #1431：直接建成 running 的列（遷移資料、測試）也算「第一次進 running」，與
+            # write() 同一個規則；明寫的值優先（建立閘已保證只有平台程式碼走得到這裡）。
+            if 'first_running_at' not in normalized:
+                normalized['first_running_at'] = (
+                    observation_started if defaulted.get('state') == 'running' else False
+                )
             raw_values = normalized.get('helm_values')
             if raw_values:
                 try:

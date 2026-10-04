@@ -4108,12 +4108,9 @@ class PaasController(HiddenChainMixin, Controller):
         try:
             service.write({'state': 'deleting'})
 
-            # Uninstall Helm release (pass subdomain for Cloudflare cleanup)
-            client.uninstall_release(
-                namespace=service.helm_namespace,
-                release_name=service.helm_release_name,
-                subdomain=service.subdomain,
-            )
+            # Uninstall Helm release (pass subdomain for Cloudflare cleanup；#1431：從未
+            # running 過的服務請 operator 把孤兒 PVC 只留 1 天——判準在 model 的 helper)
+            service._uninstall_release(client)
 
             # Delete the record
             service.unlink()

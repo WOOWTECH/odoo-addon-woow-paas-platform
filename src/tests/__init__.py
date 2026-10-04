@@ -1025,3 +1025,5 @@ from . import test_redeploy_images_1408
 from . import test_deploy_timeout_diagnosis_1417
 # #1416：逾時轉 error 後 release 就緒會自動恢復（背景低頻重查、只碰逾時造成的 error）。
 from . import test_deploy_timeout_recovery_1416
+# #1431：從未 running 過的服務刪除時孤兒 PVC 只留 1 天；first_running_at 的寫入、守衛與保守回填。
+from . import test_never_running_orphan_grace_1431

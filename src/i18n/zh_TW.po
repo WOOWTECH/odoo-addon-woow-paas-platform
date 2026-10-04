@@ -20222,3 +20222,23 @@ msgstr "部署等候逾時把這個服務轉成錯誤的時間。有值時，背
 #: model:ir.actions.server,name:woow_paas_platform.ir_cron_recover_timed_out_services_ir_actions_server
 msgid "Cloud Service: Recover Timed-out Deployments"
 msgstr "雲端服務：部署逾時自動恢復"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid "Service history fields are managed by the platform: %(fields)s"
+msgstr "服務歷程欄位由平台管理：%(fields)s"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_service__first_running_at
+msgid "First Running At"
+msgstr "首次正常運作時間"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_cloud_service__first_running_at
+msgid ""
+"When the service reached the running state for the first time. Empty means "
+"it never worked: its leftover disks are kept for only 1 day after deletion. "
+"Services created before version 18.0.1.0.209 were backfilled conservatively."
+msgstr ""
+"服務第一次進入「執行中」的時間。空白表示從未正常運作過：刪除後留下的磁碟只保留 1 天。18.0.1.0.209 以前建立的服務已保守回填。"
