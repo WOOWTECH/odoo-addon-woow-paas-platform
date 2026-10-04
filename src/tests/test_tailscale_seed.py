@@ -14,8 +14,8 @@ image：paas-odoo-ci ``tailscale/``（#240，官方 1.102.5＋衍生自 podman �
    NetworkPolicy 是 tailnet 經節點能碰到哪裡的唯一護欄，開了等於把叢集網段交給 tailnet。
 3. **authKey 是 password 型、不在 config.sensitive**（平台會整棵剝掉，EMQX 0.1.1 教訓）。
 4. **規格對帳**：1 vCPU／0.5 GB／1 GB——template min_*、plan cs_*、chart 唯一一顆 PVC 三處一致。
-5. **上架即雙釘**：目前 image 是 PR 分支 build 的候選（暫定），#240 合併後從 main 重 build、
-   核可再換；換之前保持隱藏。
+5. **上架即雙釘**：image 為 #240 合併後從 main build 並核可的 20261004.0747（#244）；
+   翻 is_hidden 時 pin 必須在位。
 """
 import json
 import re

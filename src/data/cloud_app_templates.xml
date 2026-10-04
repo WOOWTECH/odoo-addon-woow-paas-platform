@@ -2068,8 +2068,9 @@
              tailscale web（127.0.0.2:8088，唯讀）。htpasswd 是 Secret volume ⇒ 重設密碼 pod template 不變、
              不必重啟。tailscale.authKey 刻意**不在** config.sensitive 底下（平台會剝掉）。
              1 vCPU／0.5 GB／1 GB：方案 overlay 套在 tailscale 容器；persistence.size＝節點身分那顆 PVC。
-             ⚠ image 暫定：20261004.0334 是從 #240 PR 分支 build 的候選（#239，依前例不核可），#240 合併後
-             從 main 重 build、核可，再把下面 image.tag 換成新的 tag@sha256。隱藏（is_hidden=True）直到那時。 -->
+             image：#240 合併後從 main build 並核可（#244，promote run 14211）＝tailscale:20261004.0747；
+             digest 與沙盒實測的 #239 候選逐位相同（可重現建置）。隱藏（is_hidden=True）待：chart 0.1.0 發佈、
+             正式站驗證。 -->
         <record id="cloud_app_tailscale" model="woow_paas_platform.cloud_app_template">
             <field name="name">VPN 節點（相容 Tailscale）</field>
             <field name="slug">tailscale</field>
@@ -2094,7 +2095,7 @@
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/tailscale</field>
             <field name="helm_chart_version">0.1.0</field>
-            <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/tailscale","tag":"20261004.0334@sha256:1868576adfe7a81fb0b36189cc224c6f5f3116971d2d8b32986365fbd4fb28cf"},"persistence":{"size":"1Gi"},"service":{"port":8080}}</field>
+            <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/tailscale","tag":"20261004.0747@sha256:1868576adfe7a81fb0b36189cc224c6f5f3116971d2d8b32986365fbd4fb28cf"},"persistence":{"size":"1Gi"},"service":{"port":8080}}</field>
             <field name="helm_value_specs">{"required": [], "optional": [
                 {"key": "tailscale.loginServer", "label": "控制伺服器（選填）", "type": "text",
                 "placeholder": "http://svc-xxxxxxxx-headscale:8080",
