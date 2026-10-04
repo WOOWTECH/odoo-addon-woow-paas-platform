@@ -552,6 +552,7 @@ class PaaSOperatorClient:
         namespace: str,
         release_name: str,
         subdomain: Optional[str] = None,
+        grace_period_days: Optional[int] = None,
     ) -> Dict[str, str]:
         """Uninstall a Helm release.
 
@@ -559,6 +560,10 @@ class PaaSOperatorClient:
             namespace: Release namespace
             release_name: Release name
             subdomain: Optional subdomain to delete from Cloudflare
+            grace_period_days: #1431 — keep the release's orphaned PVCs / DataVolumes
+                for only this many days (the platform sends 1 for a service that never
+                reached running). The operator honours ``1..PVC_GRACE_PERIOD_DAYS`` and
+                falls back to its default otherwise; operators older than #1431 ignore it.
 
         Returns:
             Deletion confirmation
@@ -566,12 +571,15 @@ class PaaSOperatorClient:
         Raises:
             PaaSOperatorError: If uninstallation fails
         """
-        url = f'/api/releases/{namespace}/{release_name}'
+        params = {}
         if subdomain:
-            url += f'?subdomain={subdomain}'
+            params['subdomain'] = subdomain
+        if grace_period_days:
+            params['grace_period_days'] = int(grace_period_days)
         return self._request(
             'DELETE',
-            url,
+            f'/api/releases/{namespace}/{release_name}',
+            params=params or None,
             timeout=HELM_OPERATION_TIMEOUT,
         )
 
@@ -1130,6 +1138,25 @@ class PaaSOperatorClient:
             （B.0 / §機械守線）。
         """
         return self._request('GET', '/api/reconcile/inventory')
+
+    def get_cluster_storage_capacity(self, storage_class: Optional[str] = None) -> Dict[str, Any]:
+        """GET /api/cluster/storage-capacity — 叢集儲存（Longhorn）排程額度（#1415，唯讀）。
+
+        Args:
+            storage_class: 以哪個 StorageClass 的 replica 數估「最大可放單顆 volume」；
+                None＝叢集預設 SC。
+
+        Returns:
+            Dict：``{available, reason?, nodes:[{name, limit_bytes, scheduled_bytes,
+            headroom_bytes, scheduled_ratio, ...}], largest_placeable_volume_bytes, replicas,
+            orphaned_pvcs:{count, requested, longhorn_scheduled, ...}|None, ...}``。
+            讀不到 Longhorn 時 operator 仍回 200、``available: false``。
+
+        Raises:
+            PaaSOperatorError（及子類）：404＝operator 太舊、沒有這個端點（呼叫端安靜略過）。
+        """
+        params = {'storage_class': storage_class} if storage_class else None
+        return self._request('GET', '/api/cluster/storage-capacity', params=params)
 
 
 def get_paas_operator_client(env) -> Optional[PaaSOperatorClient]:

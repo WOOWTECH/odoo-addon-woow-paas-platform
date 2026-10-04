@@ -1,0 +1,430 @@
+{
+ "_source": "woow-k3s 正式站唯讀 kubectl get（2026-10-04 15:36Z），裁剪成排程需要的欄位；scheduledReplica 清單等與計算無關的欄位已移除",
+ "nodes": [
+  {
+   "apiVersion": "longhorn.io/v1beta2",
+   "kind": "Node",
+   "metadata": {
+    "name": "ubuntuserver-31zix",
+    "namespace": "longhorn-system"
+   },
+   "spec": {
+    "allowScheduling": true,
+    "disks": {
+     "default-disk-450e4bffe70778d2": {
+      "allowScheduling": true,
+      "diskType": "filesystem",
+      "evictionRequested": false,
+      "storageReserved": 31526778470,
+      "tags": []
+     }
+    },
+    "evictionRequested": false,
+    "tags": []
+   },
+   "status": {
+    "conditions": [
+     {
+      "status": "True",
+      "type": "Ready"
+     },
+     {
+      "status": "True",
+      "type": "Schedulable"
+     },
+     {
+      "status": "False",
+      "type": "RequiredPackages"
+     },
+     {
+      "status": "False",
+      "type": "Multipathd"
+     },
+     {
+      "status": "True",
+      "type": "NFSClientInstalled"
+     },
+     {
+      "status": "False",
+      "type": "KernelModulesLoaded"
+     },
+     {
+      "status": "True",
+      "type": "MountPropagation"
+     }
+    ],
+    "diskStatus": {
+     "default-disk-450e4bffe70778d2": {
+      "conditions": [
+       {
+        "status": "True",
+        "type": "Ready"
+       },
+       {
+        "status": "True",
+        "type": "Schedulable"
+       }
+      ],
+      "diskType": "filesystem",
+      "diskUUID": "6b4d9c67-1626-40e8-bf2c-6cf6b3f362c1",
+      "storageAvailable": 379479654400,
+      "storageMaximum": 738673549312,
+      "storageScheduled": 1015759765504
+     }
+    },
+    "zone": ""
+   }
+  },
+  {
+   "apiVersion": "longhorn.io/v1beta2",
+   "kind": "Node",
+   "metadata": {
+    "name": "ubuntuserver-59mqj",
+    "namespace": "longhorn-system"
+   },
+   "spec": {
+    "allowScheduling": true,
+    "disks": {
+     "default-disk-f4bf51c6dbfc6009": {
+      "allowScheduling": true,
+      "diskType": "filesystem",
+      "evictionRequested": false,
+      "storageReserved": 31526778470,
+      "tags": []
+     }
+    },
+    "evictionRequested": false,
+    "tags": []
+   },
+   "status": {
+    "conditions": [
+     {
+      "status": "True",
+      "type": "Ready"
+     },
+     {
+      "status": "True",
+      "type": "Schedulable"
+     },
+     {
+      "status": "False",
+      "type": "RequiredPackages"
+     },
+     {
+      "status": "False",
+      "type": "Multipathd"
+     },
+     {
+      "status": "True",
+      "type": "NFSClientInstalled"
+     },
+     {
+      "status": "False",
+      "type": "KernelModulesLoaded"
+     },
+     {
+      "status": "True",
+      "type": "MountPropagation"
+     }
+    ],
+    "diskStatus": {
+     "default-disk-f4bf51c6dbfc6009": {
+      "conditions": [
+       {
+        "status": "True",
+        "type": "Ready"
+       },
+       {
+        "status": "True",
+        "type": "Schedulable"
+       }
+      ],
+      "diskType": "filesystem",
+      "diskUUID": "403114c2-d2b0-4598-ac66-24e51de68568",
+      "storageAvailable": 512229376000,
+      "storageMaximum": 738673549312,
+      "storageScheduled": 1210375471104
+     }
+    },
+    "zone": ""
+   }
+  },
+  {
+   "apiVersion": "longhorn.io/v1beta2",
+   "kind": "Node",
+   "metadata": {
+    "name": "ubuntuserver-pggrg",
+    "namespace": "longhorn-system"
+   },
+   "spec": {
+    "allowScheduling": true,
+    "disks": {
+     "default-disk-b773708e5cc4bdb0": {
+      "allowScheduling": true,
+      "diskType": "filesystem",
+      "evictionRequested": false,
+      "storageReserved": 31526778470,
+      "tags": []
+     }
+    },
+    "evictionRequested": false,
+    "tags": []
+   },
+   "status": {
+    "conditions": [
+     {
+      "status": "True",
+      "type": "Ready"
+     },
+     {
+      "status": "True",
+      "type": "Schedulable"
+     },
+     {
+      "status": "False",
+      "type": "RequiredPackages"
+     },
+     {
+      "status": "False",
+      "type": "Multipathd"
+     },
+     {
+      "status": "True",
+      "type": "NFSClientInstalled"
+     },
+     {
+      "status": "False",
+      "type": "KernelModulesLoaded"
+     },
+     {
+      "status": "True",
+      "type": "MountPropagation"
+     }
+    ],
+    "diskStatus": {
+     "default-disk-b773708e5cc4bdb0": {
+      "conditions": [
+       {
+        "status": "True",
+        "type": "Ready"
+       },
+       {
+        "status": "True",
+        "type": "Schedulable"
+       }
+      ],
+      "diskType": "filesystem",
+      "diskUUID": "ce15b354-55cc-4c67-ac14-f6bbc6fb1017",
+      "storageAvailable": 609537228800,
+      "storageMaximum": 738673549312,
+      "storageScheduled": 980804435968
+     }
+    },
+    "zone": ""
+   }
+  },
+  {
+   "apiVersion": "longhorn.io/v1beta2",
+   "kind": "Node",
+   "metadata": {
+    "name": "ubuntuserver-z0v3w",
+    "namespace": "longhorn-system"
+   },
+   "spec": {
+    "allowScheduling": true,
+    "disks": {
+     "default-disk-79ff265351ef9c2a": {
+      "allowScheduling": true,
+      "diskType": "filesystem",
+      "evictionRequested": false,
+      "storageReserved": 31526778470,
+      "tags": []
+     }
+    },
+    "evictionRequested": false,
+    "tags": []
+   },
+   "status": {
+    "conditions": [
+     {
+      "status": "True",
+      "type": "Ready"
+     },
+     {
+      "status": "True",
+      "type": "Schedulable"
+     },
+     {
+      "status": "False",
+      "type": "RequiredPackages"
+     },
+     {
+      "status": "False",
+      "type": "Multipathd"
+     },
+     {
+      "status": "True",
+      "type": "NFSClientInstalled"
+     },
+     {
+      "status": "False",
+      "type": "KernelModulesLoaded"
+     },
+     {
+      "status": "True",
+      "type": "MountPropagation"
+     }
+    ],
+    "diskStatus": {
+     "default-disk-79ff265351ef9c2a": {
+      "conditions": [
+       {
+        "status": "True",
+        "type": "Ready"
+       },
+       {
+        "status": "True",
+        "type": "Schedulable"
+       }
+      ],
+      "diskType": "filesystem",
+      "diskUUID": "1bbe3acc-56ac-4aa9-8388-bf8edb812710",
+      "storageAvailable": 523868569600,
+      "storageMaximum": 738673549312,
+      "storageScheduled": 876919914496
+     }
+    },
+    "zone": ""
+   }
+  }
+ ],
+ "settings": [
+  {
+   "metadata": {
+    "name": "allow-empty-disk-selector-volume"
+   },
+   "value": "true"
+  },
+  {
+   "metadata": {
+    "name": "allow-empty-node-selector-volume"
+   },
+   "value": "true"
+  },
+  {
+   "metadata": {
+    "name": "allow-volume-creation-with-degraded-availability"
+   },
+   "value": "true"
+  },
+  {
+   "metadata": {
+    "name": "default-replica-count"
+   },
+   "value": "{\"v1\":\"3\",\"v2\":\"3\"}"
+  },
+  {
+   "metadata": {
+    "name": "replica-disk-soft-anti-affinity"
+   },
+   "value": "true"
+  },
+  {
+   "metadata": {
+    "name": "replica-soft-anti-affinity"
+   },
+   "value": "false"
+  },
+  {
+   "metadata": {
+    "name": "replica-zone-soft-anti-affinity"
+   },
+   "value": "true"
+  },
+  {
+   "metadata": {
+    "name": "storage-minimal-available-percentage"
+   },
+   "value": "25"
+  },
+  {
+   "metadata": {
+    "name": "storage-over-provisioning-percentage"
+   },
+   "value": "200"
+  }
+ ],
+ "storage_classes": [
+  {
+   "metadata": {
+    "annotations": {
+     "storageclass.beta.kubernetes.io/is-default-class": "false",
+     "storageclass.kubernetes.io/is-default-class": "true"
+    },
+    "creationTimestamp": "2026-03-14T08:48:22Z",
+    "name": "local-path"
+   },
+   "parameters": {},
+   "provisioner": "rancher.io/local-path"
+  },
+  {
+   "metadata": {
+    "annotations": {
+     "storageclass.kubernetes.io/is-default-class": "true"
+    },
+    "creationTimestamp": "2026-03-14T17:29:41Z",
+    "name": "longhorn"
+   },
+   "parameters": {
+    "backupTargetName": "default",
+    "dataEngine": "v1",
+    "dataLocality": "disabled",
+    "disableRevisionCounter": "true",
+    "fromBackup": "",
+    "fsType": "ext4",
+    "numberOfReplicas": "2",
+    "staleReplicaTimeout": "30",
+    "unmapMarkSnapChainRemoved": "ignored"
+   },
+   "provisioner": "driver.longhorn.io"
+  },
+  {
+   "metadata": {
+    "annotations": {},
+    "creationTimestamp": "2026-07-20T15:05:59Z",
+    "name": "longhorn-build"
+   },
+   "parameters": {
+    "dataEngine": "v1",
+    "dataLocality": "best-effort",
+    "fsType": "ext4",
+    "numberOfReplicas": "1",
+    "staleReplicaTimeout": "30"
+   },
+   "provisioner": "driver.longhorn.io"
+  },
+  {
+   "metadata": {
+    "annotations": {},
+    "creationTimestamp": "2026-03-16T01:24:06Z",
+    "name": "longhorn-delete"
+   },
+   "parameters": {
+    "numberOfReplicas": "2",
+    "staleReplicaTimeout": "2880"
+   },
+   "provisioner": "driver.longhorn.io"
+  },
+  {
+   "metadata": {
+    "annotations": {},
+    "creationTimestamp": "2026-03-14T15:47:48Z",
+    "name": "longhorn-static"
+   },
+   "parameters": {
+    "staleReplicaTimeout": "30"
+   },
+   "provisioner": "driver.longhorn.io"
+  }
+ ]
+}

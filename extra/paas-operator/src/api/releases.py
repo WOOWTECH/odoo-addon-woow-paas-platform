@@ -5,7 +5,7 @@ import logging
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import yaml
 from fastapi import APIRouter, HTTPException, Query, status
@@ -45,6 +45,18 @@ from src.services.storage_quota import (
     exhausted_resources,
     is_storage_quota_rejection,
     summarize,
+)
+from src.services.storage_capacity import (
+    CapacityDataError,
+    LonghornCluster,
+    build_capacity_error_detail,
+    collect_volume_requests,
+    format_gib,
+    has_storage_datavolume,
+    is_schedulable,
+    parse_storage_classes,
+    simulate,
+    summarize_orphans,
 )
 
 
@@ -156,7 +168,15 @@ def _ensure_image_pull_secrets(
     # CDI 立刻生出 importer pod，屆時再 patch SA 已經來不及（admission 只在 pod
     # 建立當下併入）。
     k8s_service.ensure_default_sa_image_pull_secret(namespace)
+    return _with_default_pull_secrets(values)
 
+
+def _with_default_pull_secrets(values: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """values 淺複本＋預設 imagePullSecrets（純函式；不碰叢集）。
+
+    #1415：容量預檢的 dry-run 要用與真正 install **同一份** values 渲染，但必須在任何
+    叢集寫入（SA patch）之前，所以把「改 values」從 ``_ensure_image_pull_secrets`` 拆出來。
+    """
     merged = dict(values or {})
     merged.setdefault(
         "imagePullSecrets", [{"name": settings.registry_secret_name}]
@@ -208,6 +228,138 @@ def _precheck_storage_quota(namespace: str) -> None:
         raise _storage_quota_conflict(namespace, summary, resources)
 
 
+def _cluster_capacity_conflict_detail(request: ReleaseCreateRequest) -> Optional[Dict[str, Any]]:
+    """#1415：這次 install 要新建的 Longhorn volume 是否「確定」排不進叢集。
+
+    排不進回 409 的 ``detail``；放得下、或任何一步拿不到資料（不知道）回 None＝放行。
+    步驟（全部唯讀，渲染不套用任何東西）：
+
+    1. 讀 Longhorn 節點／設定與 StorageClass（叢集沒有 Longhorn、權限不足、逾時 ⇒ 放行）；
+    2. 用與真正 install **同一組** chart／version／values／post-renderer 跑
+       ``helm install --dry-run``，拿到這次會建的 PVC、StatefulSet volumeClaimTemplates、
+       CDI DataVolume（manifest 可能含渲染後的 Secret，**不得進 log**）；
+    3. 扣掉 namespace 裡已經存在的同名 PVC（重試安裝），只算 provisioner 是 Longhorn 的；
+    4. 照 Longhorn 排程規則模擬放置（``storage_capacity.simulate``）。
+
+    為什麼用 dry-run 而不是在 post-renderer 裡判斷：post-renderer 是 helm 的子程序，拿不到
+    operator 的設定與 kubectl，失敗只能透過 stderr 字串傳回來；dry-run 多一次 chart 渲染
+    （實測數秒），換來資料流單純、任何失敗都能明確放行，形制同 #1407 的 upgrade 預檢。
+    """
+    namespace, name = request.namespace, request.name
+    try:
+        snapshot = k8s_service.get_longhorn_capacity_snapshot()
+    except (KubectlException, ValueError) as exc:
+        logger.warning(
+            "Cluster storage capacity pre-check skipped for %s/%s (Longhorn unreadable): %s",
+            namespace, name, getattr(exc, "stderr", None) or exc,
+        )
+        return None
+    try:
+        cluster = LonghornCluster.from_snapshot(snapshot["nodes"], snapshot["settings"])
+        classes, default_class = parse_storage_classes(snapshot["storage_classes"])
+    except CapacityDataError as exc:
+        logger.warning(
+            "Cluster storage capacity pre-check skipped for %s/%s (unexpected Longhorn data): %s",
+            namespace, name, exc,
+        )
+        return None
+    if not cluster.nodes or not any(sc.is_longhorn for sc in classes.values()):
+        logger.info("Cluster storage capacity pre-check: no Longhorn in this cluster, skipped")
+        return None
+
+    try:
+        manifest = helm_service.install(
+            namespace=namespace,
+            name=name,
+            chart=request.chart,
+            values=_with_default_pull_secrets(request.values),
+            sensitive_values=request.sensitive_values,
+            version=request.version,
+            dry_run=True,
+            subprocess_timeout_seconds=settings.storage_capacity_render_timeout_seconds,
+        )
+    except (HelmException, ValueError) as exc:
+        # 真正的 install 會在同一步失敗並走原本的錯誤處理（含 #1348 的 quota 辨識）。
+        logger.warning(
+            "Cluster storage capacity pre-check skipped for %s/%s (render failed): %s",
+            namespace, name, getattr(exc, "message", None) or exc,
+        )
+        return None
+    if not isinstance(manifest, str):
+        return None
+    try:
+        docs = [d for d in yaml.safe_load_all(manifest) if isinstance(d, dict)]
+    except yaml.YAMLError as exc:
+        logger.warning(
+            "Cluster storage capacity pre-check skipped for %s/%s (manifest unparsable: %s)",
+            namespace, name, type(exc).__name__,
+        )
+        return None
+    try:
+        existing = k8s_service.list_pvcs(namespace)
+    except KubectlException as exc:
+        logger.warning(
+            "Cluster storage capacity pre-check skipped for %s/%s (cannot list PVCs): %s",
+            namespace, name, exc.stderr or exc,
+        )
+        return None
+    overheads = k8s_service.get_cdi_filesystem_overhead() if has_storage_datavolume(docs) else None
+    volumes = collect_volume_requests(
+        docs, classes, default_class, cluster.settings, existing, overheads,
+    )
+    if not volumes:
+        return None
+    placements = simulate(cluster, volumes)
+    degraded = [
+        p for p in placements
+        if is_schedulable(p, cluster.settings) and p.placed < p.volume.replicas
+    ]
+    if degraded:
+        # Longhorn 會建、可以掛載，但少了備援——不擋（不是「確定放不下」），留給監控告警。
+        logger.warning(
+            "Cluster storage capacity: %s/%s will be created DEGRADED: %s", namespace, name,
+            ", ".join(f"{p.volume.name} {p.placed}/{p.volume.replicas} replicas"
+                      for p in degraded),
+        )
+    if all(is_schedulable(p, cluster.settings) for p in placements):
+        logger.info(
+            "Cluster storage capacity pre-check passed for %s/%s: %s", namespace, name,
+            ", ".join(f"{v.name} {format_gib(v.size_bytes)}x{v.replicas}" for v in volumes),
+        )
+        return None
+    try:
+        orphans = summarize_orphans(
+            k8s_service.list_orphaned_pvcs_all_namespaces(), classes, cluster.settings,
+        )
+    except (KubectlException, ValueError):
+        orphans = None
+    return build_capacity_error_detail(namespace, cluster, placements, orphans)
+
+
+def _precheck_cluster_storage_capacity(request: ReleaseCreateRequest) -> None:
+    """#1415：helm install 前確認叢集（Longhorn）排得下這次要建的 volume；排不下 raise 409。
+
+    只有「確定放不下」才擋；預檢本身的任何意外都放行（log），行為與本檢查加入前相同。
+    與 #1348 的工作區配額檢查分工：那邊看 namespace ResourceQuota，這裡看叢集層排程額度。
+    """
+    if not settings.storage_capacity_precheck_enabled:
+        return
+    try:
+        detail = _cluster_capacity_conflict_detail(request)
+    except Exception:  # noqa: BLE001 — 預檢的意外不能變成擋開通
+        logger.exception(
+            "Cluster storage capacity pre-check failed unexpectedly for %s/%s; allowing install",
+            request.namespace, request.name,
+        )
+        return
+    if detail is not None:
+        logger.warning(
+            "Cluster storage capacity exhausted for %s/%s: %s",
+            request.namespace, request.name, detail["message"],
+        )
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=detail)
+
+
 @router.post(
     "",
     response_model=ReleaseInfo,
@@ -224,11 +376,14 @@ async def create_release(request: ReleaseCreateRequest):
         Information about the created release
 
     Raises:
-        HTTPException: If installation fails（儲存配額不足回 409，#1348）
+        HTTPException: If installation fails（儲存配額不足回 409，#1348；叢集儲存
+            排程額度放不下回 409，#1415）
     """
     try:
         # #1348：在任何叢集寫入（SA patch／helm install）之前先檢查儲存配額。
         _precheck_storage_quota(request.namespace)
+        # #1415：再檢查叢集（Longhorn）排程額度——同樣在任何叢集寫入之前。
+        _precheck_cluster_storage_capacity(request)
         # 注入預設 imagePullSecrets（values + ns default SA 兩層，理由見
         # _ensure_image_pull_secrets docstring）。
         values = _ensure_image_pull_secrets(request.namespace, request.values)
@@ -426,18 +581,59 @@ def build_orphan_pvc_labels(release_name: str, grace_period_days: int) -> Dict[s
     }
 
 
+def resolve_orphan_grace_period_days(
+    requested: Optional[str], namespace: str, name: str
+) -> int:
+    """#1431：這次刪除的孤兒 PVC／DataVolume 保留天數。
+
+    平台對「從未正常運作過」的服務會帶 ``grace_period_days=1``（沒有租戶資料要保護，
+    不必佔用 Longhorn 排程額度 90 天）。只接受 ``1 ≤ n ≤ settings.pvc_grace_period_days``
+    ——只能**縮短**、不能延長預設保留期；沒帶、不是整數、超出範圍一律用預設，
+    **不回 422**：刪除是不可重來的操作，參數寫壞不該讓服務刪不掉（超出範圍時記 warning）。
+
+    參數宣告成字串再自己解析，正是為了不讓 FastAPI 對非整數回 422。
+    """
+    default = settings.pvc_grace_period_days
+    if requested is None or requested == "":
+        return default
+    try:
+        days = int(requested)
+    except (TypeError, ValueError):
+        days = None
+    if days is None or not 1 <= days <= default:
+        logger.warning(
+            "Ignoring grace_period_days=%r for %s/%s (allowed 1..%s); using the default %s",
+            requested, namespace, name, default, default,
+        )
+        return default
+    return days
+
+
 @router.delete(
     "/{namespace}/{name}",
     response_model=Dict[str, str],
     summary="Uninstall a Helm release",
 )
-async def delete_release(namespace: str, name: str, subdomain: Optional[str] = None):
+async def delete_release(
+    namespace: str,
+    name: str,
+    subdomain: Optional[str] = None,
+    grace_period_days: Optional[str] = Query(
+        default=None,
+        description=(
+            "#1431: shorten how long the orphaned PVCs / DataVolumes of this release are "
+            "kept (1..PVC_GRACE_PERIOD_DAYS). Anything else is ignored and the default is used."
+        ),
+    ),
+):
     """Uninstall a Helm release.
 
     Args:
         namespace: Release namespace
         name: Release name
         subdomain: Optional subdomain to delete from Cloudflare (if not provided, auto-generated)
+        grace_period_days: #1431 optional shorter retention for the orphaned PVCs /
+            DataVolumes (see ``resolve_orphan_grace_period_days``)
 
     Returns:
         Deletion confirmation message
@@ -445,6 +641,8 @@ async def delete_release(namespace: str, name: str, subdomain: Optional[str] = N
     Raises:
         HTTPException: If uninstallation fails
     """
+    # 先解析（純函式、不會失敗），PVC 與 DataVolume 兩段共用同一個值。
+    orphan_grace_days = resolve_orphan_grace_period_days(grace_period_days, namespace, name)
     try:
         result = helm_service.uninstall(namespace, name)
         logger.info(f"Uninstalled release {name} from {namespace}")
@@ -461,13 +659,11 @@ async def delete_release(namespace: str, name: str, subdomain: Optional[str] = N
                 namespace, label_selector=f"app.kubernetes.io/instance={name}"
             )
             if remaining_pvcs:
-                labels = build_orphan_pvc_labels(
-                    name, settings.pvc_grace_period_days
-                )
+                labels = build_orphan_pvc_labels(name, orphan_grace_days)
                 k8s_service.label_pvcs(namespace, remaining_pvcs, labels)
                 logger.info(
-                    f"Labeled {len(remaining_pvcs)} orphaned PVCs in {namespace}: "
-                    f"{remaining_pvcs}"
+                    f"Labeled {len(remaining_pvcs)} orphaned PVCs in {namespace} "
+                    f"(grace {orphan_grace_days}d): {remaining_pvcs}"
                 )
         except Exception as e:
             logger.warning(f"Failed to label orphaned PVCs in {namespace}: {e}")
@@ -491,9 +687,7 @@ async def delete_release(namespace: str, name: str, subdomain: Optional[str] = N
                 namespace, label_selector=f"app.kubernetes.io/instance={name}"
             )
             if remaining_dvs:
-                labels = build_orphan_pvc_labels(
-                    name, settings.pvc_grace_period_days
-                )
+                labels = build_orphan_pvc_labels(name, orphan_grace_days)
                 labelled = k8s_service.label_datavolumes(
                     namespace, remaining_dvs, labels
                 )
@@ -787,6 +981,9 @@ def get_release_status(
             pods = k8s_service.get_pods(
                 namespace=namespace,
                 label_selector=selector,
+                # #1417：未就緒的 Pod 附最近一筆 Warning 事件，讓平台的部署逾時訊息
+                # 說得出「卡在哪」。事件查詢失敗由 get_pods 自己吞掉，不會落到下面。
+                include_warning_events=True,
             )
         except Exception as e:
             logger.error(f"Failed to get pods for {namespace}/{name}: {e}")
@@ -1320,10 +1517,10 @@ def _reset_via_helm_secret(
             detail="reset-config: failed to update the chart Secret",
         )
 
+    statefulset_names: List[str] = []
     try:
-        deployment_names = k8s_service.get_deployment_names(
-            namespace=namespace,
-            label_selector=label_selector,
+        deployment_names, statefulset_names = _credential_reset_workloads(
+            namespace, label_selector,
         )
         # #461：全部下 restart 後**直接回**，不再逐一等 rollout。原本的「先全部下、
         # 再逐一等」是為了讓兩顆並行推進（總耗時 ≈max 而非 sum）以塞進 120s 預算；
@@ -1333,6 +1530,13 @@ def _reset_via_helm_secret(
             k8s_service.rollout_restart_deployment(
                 namespace=namespace,
                 deployment_name=deployment_name,
+            )
+        # hermes-agent >= 0.3.0、headscale／tailscale >= 0.1.1：吃密碼的是 StatefulSet
+        # （opt-in label），一樣要滾。
+        for statefulset_name in statefulset_names:
+            k8s_service.rollout_restart_statefulset(
+                namespace=namespace,
+                statefulset_name=statefulset_name,
             )
     except KubectlException as e:
         recovery_failed = _rollback_helm_secret_reset(
@@ -1362,8 +1566,45 @@ def _reset_via_helm_secret(
         "rollout_awaited": False,
         "admin_password_carrier": "helm_secret",
         "restarted_deployments": deployment_names,
+        "restarted_statefulsets": statefulset_names,
         "note": "password lives in the chart Secret — no config.json patch",
     }
+
+
+def _credential_reset_workloads(
+    namespace: str, label_selector: str,
+) -> Tuple[List[str], List[str]]:
+    """Every workload a helm_secret reset must roll: (deployments, statefulsets).
+
+    Deployments: all of the release (#449). StatefulSets: only those carrying
+    ``CREDENTIAL_RESET_RESTART_LABEL`` (hermes-agent >= 0.3.0 runs its agent as a
+    StatefulSet — platform #1360 follow-up — and reads admin_password at start).
+    A release may now have zero Deployments (hermes-agent with console.enabled=false;
+    headscale/tailscale >= 0.1.1, which are StatefulSet-only charts — before this,
+    their reset always ended in "No deployments found" → rollback → 500), so
+    "no Deployment" is only an error when no opted-in StatefulSet exists either:
+    restarting nothing would report a rotation that never reached a pod.
+    """
+    try:
+        deployment_names = k8s_service.get_deployment_names(
+            namespace=namespace,
+            label_selector=label_selector,
+        )
+    except KubectlException as e:
+        if "No deployments found" not in (e.message or ""):
+            raise
+        deployment_names = []
+    statefulset_names = k8s_service.get_credential_reset_statefulset_names(
+        namespace=namespace,
+        label_selector=label_selector,
+    )
+    if not deployment_names and not statefulset_names:
+        raise KubectlException(
+            message=f"No deployments or opted-in statefulsets found matching selector '{label_selector}'",
+            command=f"get deployments,statefulsets --namespace {namespace} --selector {label_selector}",
+            stderr="",
+        )
+    return deployment_names, statefulset_names
 
 
 def _rollback_helm_secret_reset(
@@ -1400,12 +1641,13 @@ def _rollback_helm_secret_reset(
         return recovery_failed
 
     try:
-        deployment_names = k8s_service.get_deployment_names(
-            namespace=namespace,
-            label_selector=label_selector,
+        deployment_names, statefulset_names = _credential_reset_workloads(
+            namespace, label_selector,
         )
         for deployment_name in deployment_names:
             k8s_service.rollout_restart_deployment(namespace, deployment_name)
+        for statefulset_name in statefulset_names:
+            k8s_service.rollout_restart_statefulset(namespace, statefulset_name)
     except KubectlException as e:
         logger.error(
             "reset-config (helm_secret) rollback rollout failed for %s/%s: %s",

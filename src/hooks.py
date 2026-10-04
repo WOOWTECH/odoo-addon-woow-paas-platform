@@ -174,11 +174,19 @@ _CONFIG_PARAMETERS = [
     # `test_init_execution_control_1257.py::TestInitConfigParametersRegisteredForUninstall`）。
     'woow_paas_platform.init_unknown_limit',
     'woow_paas_platform.init_wait_timeout_minutes',
+    # #1416：部署逾時後背景自癒的重查時間窗（小時；「模組常數＋get_param()」寫法，
+    # lint 掃不到 ⇒ 補在 `test_deploy_timeout_recovery_1416.py::
+    # TestRecoveryConfigParameterRegisteredForUninstall`）。
+    'woow_paas_platform.timeout_recovery_window_hours',
     # #501：限量商品的供給閘門（缺值時走 cloud_app_template.py 的內建預設）。
     # key 由 slug 推導，新增限量商品時這裡要跟著補兩個
     # （守線＝repo-lint 的 config-parameter-uninstall）。
     'woow_paas_platform.global_instance_cap.haos',
     'woow_paas_platform.sales_paused.haos',
+    # #1415：叢集儲存額度告警的「最大可放單顆 volume」門檻（GiB；'0' 停用該項；缺值走
+    # platform_monitor.py 的內建 80）。「模組常數＋get_param()」寫法 ⇒ 補在
+    # `test_cluster_storage_capacity_1415.py::TestClusterStorageParamRegisteredForUninstall`。
+    'woow_paas_platform.cluster_storage_alert_min_volume_gib',
     # NB: the agent namespace secret moved to the AGENT_RUNTIME_NAMESPACE_SECRET
     # env (F-PC-3 fail-closed) and is no longer an ir.config_parameter.
     # #778：上游 sh_subscription_wallet 的 SSOT 開關——平台 pin '0'（opt-out）。

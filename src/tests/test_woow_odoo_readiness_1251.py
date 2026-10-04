@@ -394,7 +394,7 @@ class TestWoowOdooContractPredicate(BaseCase):
         """S2 裁定：`_TIMEOUT_HINTS` 是子字串比對、先比中先用。每種 woow-odoo detail
         必須先比中自己的那筆，且新 key 排在通用的 'pods not ready' 之前。detail 由判定
         本身產生（不手抄字串），字串改了這裡會紅。"""
-        needles = [needle for needle, _hint in _TIMEOUT_HINTS]
+        needles = [needle for needle, *_rest in _TIMEOUT_HINTS]  # #1417：(needle, key, cause)
         release = {'status': 'deployed', 'revision': 1, 'chart': 'woow-odoo'}
 
         def ready_detail(pods, **overrides):

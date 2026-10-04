@@ -36,6 +36,24 @@ def sa_pull_secret_convergence(request):
 
 
 @pytest.fixture(autouse=True)
+def credential_reset_statefulsets(request):
+    """helm_secret reset 會多查一次「opt-in 重啟的 StatefulSet」——那也是真 kubectl。
+
+    預設回 []（＝只有 Deployment，行為與 hermes-agent 0.3.0 之前相同）。要測
+    StatefulSet 也被滾的測試把本 fixture 收進參數、改 ``return_value`` 即可。
+    """
+    if request.node.get_closest_marker("integration"):
+        yield None
+        return
+
+    with patch(
+        "src.api.releases.k8s_service.get_credential_reset_statefulset_names",
+        return_value=[],
+    ) as mock_names:
+        yield mock_names
+
+
+@pytest.fixture(autouse=True)
 def storage_quota_snapshot(request):
     """#1348：``create_release`` 開通前會讀 namespace 的 ResourceQuota／PVC——那也是真 kubectl。
 
@@ -51,6 +69,28 @@ def storage_quota_snapshot(request):
         "src.api.releases.k8s_service.get_storage_quota_snapshot",
         return_value={"quotas": [], "pvcs": []},
     ) as mock_snapshot:
+        yield mock_snapshot
+
+
+@pytest.fixture(autouse=True)
+def longhorn_capacity_snapshot(request):
+    """#1415：``create_release`` 開通前與 ``/api/cluster/storage-capacity`` 會讀 Longhorn
+    節點／設定與 StorageClass——真 kubectl，同樣擋掉。
+
+    預設回「叢集沒有 Longhorn」（空 snapshot）＝容量預檢放行、而且不會走到 dry-run 渲染，
+    行為與加入檢查前相同（既有測試對 ``helm_service.install`` 的呼叫次數斷言不受影響）。
+    要測容量的測試把本 fixture 收進參數、改 ``return_value``。
+    """
+    if request.node.get_closest_marker("integration"):
+        yield None
+        return
+
+    empty = {"nodes": [], "settings": [], "storage_classes": []}
+    with patch(
+        "src.api.releases.k8s_service.get_longhorn_capacity_snapshot", return_value=empty,
+    ) as mock_snapshot, patch(
+        "src.api.cluster.k8s_service.get_longhorn_capacity_snapshot", new=mock_snapshot,
+    ):
         yield mock_snapshot
 
 

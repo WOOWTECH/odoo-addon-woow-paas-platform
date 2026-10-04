@@ -377,6 +377,10 @@ class ShSubscriptionFix(models.Model):
             ('woow_last_payment_failure_at', '=', False),
             ('woow_last_payment_failure_at', '<', stale_dt),
         ], order='sh_date_of_next_payment asc, id asc')
+        # #1424：暫停扣款中的訂閱本來就不會被碰——那是刻意的，不是計費路徑死掉。
+        held = self._woow_billing_hold_services(frozen)
+        if held:
+            frozen = frozen.filtered(lambda sub: sub.id not in held)
         if not frozen:
             return
         Activity = self.env['mail.activity'].sudo()
@@ -487,12 +491,122 @@ class ShSubscriptionFix(models.Model):
         ])
         threshold = int(self.env['ir.config_parameter'].sudo().get_param(
             'woow_paas_platform.max_consecutive_payment_failures', '6'))
+        # #1424：綁著「從沒正常運作過、停在 error」雲端服務的訂閱不扣款（見
+        # `_hold_billing_for_never_running_service`）。
+        held = self._woow_billing_hold_services(subscriptions)
         _logger.info(
-            "[SUB_FIX] _sh_create_auto_invoice scan due_or_overdue=%s threshold=%s",
-            len(subscriptions), threshold,
+            "[SUB_FIX] _sh_create_auto_invoice scan due_or_overdue=%s held=%s threshold=%s",
+            len(subscriptions), len(held), threshold,
         )
         for subscription in subscriptions:
+            service = held.get(subscription.id)
+            if service:
+                self._hold_billing_for_never_running_service(subscription, service)
+                continue
             self._process_subscription_billing(subscription, threshold)
+
+    @api.model
+    def _woow_billing_hold_services(self, subscriptions):
+        """#1424：這批訂閱裡，哪些綁著「從沒正常運作過、目前停在 error」的雲端服務。
+
+        回傳 ``{subscription_id: cloud_service}``。判準（全部成立才暫停扣款）：
+
+        * 服務 ``state == 'error'``；
+        * 從未進過 running（``first_running_at`` 空，#1431；既有資料已保守回填成「曾經
+          running」，所以只影響 18.0.1.0.209 之後新開的服務）；
+        * 租戶自己管的服務（``_is_tenant_managed``：HA PaaS 這類平台代開、隱藏實例的不算——
+          它們是 0 元方案或租戶看不到、刪不了，暫停與提醒都沒有意義）。
+
+        只看雲端服務（smart_home／security_access 的計費不受影響）。只讀、不寫。
+        """
+        if not subscriptions:
+            return {}
+        services = self.env['woow_paas_platform.cloud_service'].sudo().search([
+            ('subscription_id', 'in', subscriptions.ids),
+            ('state', '=', 'error'),
+            ('first_running_at', '=', False),
+        ])
+        return {
+            service.subscription_id.id: service
+            for service in services if service._is_tenant_managed()
+        }
+
+    def _hold_billing_for_never_running_service(self, subscription, service):
+        """#1424：服務從沒正常運作過——這一輪不開發票、不扣款，並提醒租戶一次。
+
+        **計費起算（恢復 running 之後）**：``sh_date_of_next_payment`` 在暫停期間刻意不動，
+        訂閱維持 ``in_progress``、不累計失敗次數。服務一旦進 running，``first_running_at``
+        被寫入、下一次排程（每天）就不再暫停——它看到的是一筆已到期的訂閱，照正常路徑開票
+        扣款，而 ``_on_payment_success`` 一律以「扣款當天＋一個週期」推進下次付款日。
+        ⇒ 租戶付的第一期從恢復後的扣款日起算（距離恢復最多一天），停在 error 的那些天
+        一天都不收；也不會一次補扣好幾期。
+
+        沒有把付款日改寫成「恢復那天」：那要在服務轉 running 的那一刻回頭改訂閱，多一個寫入
+        點、多一種失敗形狀，換來的只是同一天內的差別。
+
+        提醒只寄一次（``woow_billing_hold_notified_at``；只有信真的排進佇列才蓋章——沒有
+        email 或排信失敗就明天再試）。寫提醒是記帳：失敗只記 log，不影響其他訂閱
+        （savepoint；``OperationalError`` 外拋，同 ``_on_payment_failure`` 的規則）。
+        """
+        _logger.info(
+            "[SUB_FIX] billing held sub=%s service=%s (never ran, state=error, due=%s)",
+            subscription.id, service.id, subscription.sh_date_of_next_payment,
+        )
+        if subscription.woow_billing_hold_notified_at:
+            return
+        try:
+            with self.env.cr.savepoint():
+                mail = self._notify_billing_hold(subscription, service)
+                if mail:
+                    subscription.write({
+                        'woow_billing_hold_notified_at': fields.Datetime.now(),
+                    })
+        except OperationalError:
+            raise
+        except Exception:
+            _logger.exception(
+                "[SUB_FIX] billing-hold notice failed for subscription %s (service %s); "
+                "it will be retried on the next run", subscription.id, service.id,
+            )
+
+    @api.model
+    def _notify_billing_hold(self, subscription, service):
+        """#1424：排一封「這個服務從沒正常運作過，不會扣款」的通知；回傳 ``mail.mail``（失敗回空）。"""
+        Mail = self.env['mail.mail'].sudo()
+        partner = subscription.sh_partner_id
+        if not partner or not partner.email:
+            return Mail
+        template = self.env.ref(
+            'woow_paas_platform.mail_template_billing_hold_never_running',
+            raise_if_not_found=False,
+        )
+        if not template:
+            _logger.warning(
+                "mail_template_billing_hold_never_running not found; skip notification")
+            return Mail
+        base_url = self.env['ir.config_parameter'].sudo().get_param('web.base.url', '')
+        due = subscription.sh_date_of_next_payment
+        ctx = {
+            'service_name': service.name or '',
+            'plan_name': (
+                subscription.sh_subscription_plan_id.name
+                if subscription.sh_subscription_plan_id else ''
+            ),
+            'due_date': fields.Date.to_string(due) if due else '',
+            'service_url': '%s/woow#/workspace/%s/services/%s' % (
+                base_url.rstrip('/'), service.workspace_id.id, service.id),
+        }
+        mail_id = template.with_context(**ctx).send_mail(
+            partner.id,
+            force_send=False,
+            email_layout_xmlid='mail.mail_notification_light',
+        )
+        mail = Mail.browse(mail_id) if mail_id else Mail
+        _logger.info(
+            "[SUB_FIX] billing-hold notice queued partner=%s sub=%s service=%s mail=%s",
+            partner.id, subscription.id, service.id, mail.id or None,
+        )
+        return mail
 
     def _process_subscription_billing(self, subscription, threshold):
         """Per-subscription billing for one cron tick. Isolated for testability."""

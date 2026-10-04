@@ -373,6 +373,12 @@ from . import test_public_tunnel_address
 from . import test_spec_format_domain
 # feat: P3 一次性憑證視窗的 gateway 提示依範本（LiteLLM 前置）
 from . import test_gateway_hint_template
+# feat: Headscale／Tailscale／LiteLLM 上架 seed（範本先隱藏）—— 憑證形態（helm_secret 可自設）、
+# image 雙釘與 headscale／bootstrap 同版、對外通道標籤（中文資料值、不走 .po）、ngrok.domain 存檔即擋、
+# LiteLLM master key 走 gateway 通道＋提示、方案定價、租戶旋鈕白名單（不開 exit node／路由）
+from . import test_headscale_seed
+from . import test_tailscale_seed
+from . import test_litellm_seed
 # fix: #657 project_access 授權補洞 —— identity anchor 缺失 / role 缺省整道
 # 守衛被跳過 / 無 owner 列保護，與 #556 同構但刻意不在該 PR 內順手修
 # （HttpCase，group_user-only）
@@ -1006,6 +1012,8 @@ from . import test_omnigent_server_url_injection
 from . import test_code_server_git_settings
 # #1348：operator 回儲存配額已滿（孤兒 PVC 仍計入配額）時，租戶看到的說明訊息。
 from . import test_storage_quota_message_1348
+# #1415：叢集儲存（Longhorn）排程額度不足時的租戶訊息、管理員告警與定時監控。
+from . import test_cluster_storage_capacity_1415
 # #1334：n8n storageClass 改在首裝時釘進 helm_values（PVC 不可變）＋公開網址注入；
 # 範本說明的孤兒磁碟保留天數與正式站 operator 一致。
 from . import test_n8n_storage_class_public_url_1334
@@ -1013,3 +1021,12 @@ from . import test_n8n_storage_class_public_url_1334
 from . import test_app_admin_password_reset_1370
 # #1408：Redeploy 帶範本 image、就緒後核對 workload image（#1407 為 operator 側）。
 from . import test_redeploy_images_1408
+# #1417：部署逾時訊息分辨 Pending／Running、依原因分型，先給租戶一句建立者語言的話。
+from . import test_deploy_timeout_diagnosis_1417
+# #1416：逾時轉 error 後 release 就緒會自動恢復（背景低頻重查、只碰逾時造成的 error）。
+from . import test_deploy_timeout_recovery_1416
+# #1431：從未 running 過的服務刪除時孤兒 PVC 只留 1 天；first_running_at 的寫入、守衛與保守回填。
+from . import test_never_running_orphan_grace_1431
+# #1424：開通被 operator 拒絕（#1348／#1415）且從未 running ⇒ 自動取消訂閱；一直停在 error、
+# 從未 running 的服務暫停扣款並提醒一次，恢復 running 後照常計費。
+from . import test_never_running_billing_1424

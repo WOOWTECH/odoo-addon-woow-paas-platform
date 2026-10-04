@@ -12,9 +12,11 @@ from typing import Any, Dict, List, Optional
 
 from src.config import settings
 from src.models.schemas import (
+    ContainerWaitingInfo,
     DataVolumeInfo,
     PodInfo,
     PodPhase,
+    PodWarningEvent,
     ReleaseInfo,
     ReleaseRevision,
     ReleaseStatus,
@@ -520,6 +522,25 @@ _SA_LOOKUP_ATTEMPTS = 5
 _SA_LOOKUP_BACKOFF_SECONDS = 0.5
 
 
+def _dry_run_manifest(release_data: Dict[str, Any]) -> str:
+    """``helm … --dry-run --output json`` 的 release → manifest 字串（含 hooks 的 manifest）。
+
+    #1415：hook 的物件（例 pre-install Job 帶的 PVC）不在 ``manifest`` 裡，另放在
+    ``hooks[].manifest``；容量預檢要看到它們，所以接在後面。
+    """
+    parts = [release_data.get("manifest") or ""]
+    for hook in release_data.get("hooks") or []:
+        if isinstance(hook, dict) and hook.get("manifest"):
+            parts.append(hook["manifest"])
+    return "\n---\n".join(p for p in parts if p)
+
+
+# Opt-in label a chart puts on a StatefulSet whose pods consume the admin credential
+# at start, so the helm_secret reset rolls it too (hermes-agent >= 0.3.0;
+# headscale/tailscale >= 0.1.1, which have no Deployment at all).
+CREDENTIAL_RESET_RESTART_LABEL = "paas.woowtech.io/restart-on-credential-reset"
+
+
 class HelmException(Exception):
     """Exception raised when Helm command fails."""
 
@@ -687,8 +708,16 @@ class HelmService:
         repo: Optional[str] = None,
         username: Optional[str] = None,
         password: Optional[str] = None,
+        dry_run: bool = False,
+        subprocess_timeout_seconds: Optional[int] = None,
     ) -> ReleaseInfo:
         """Install a Helm chart.
+
+        ``dry_run=True`` (#1415 capacity precheck) runs the exact same command with
+        ``--dry-run`` — same chart, version, values and post-renderer, nothing applied —
+        and returns the rendered manifest **string** (hook manifests appended) instead of a
+        ``ReleaseInfo``. Mirrors ``upgrade(dry_run=True)`` (#1407). The manifest can hold
+        rendered Secrets: callers must never log it.
 
         Args:
             namespace: Target namespace
@@ -702,6 +731,9 @@ class HelmService:
                 Leave None for direct/OCI chart refs (marketplace default).
             username: Optional repo username for a private Helm repo (--username).
             password: Optional repo password/token for a private repo (--password).
+            dry_run: Render only (``--dry-run``); returns the manifest string.
+            subprocess_timeout_seconds: Per-call subprocess ceiling. ``None`` keeps
+                ``settings.helm_timeout``.
 
         Returns:
             Release information
@@ -731,8 +763,10 @@ class HelmService:
         # (keep-annotated, same names) — reuse their live immutable fields too.
         args.extend(_pvc_keep_post_renderer_args(_live_snapshot(namespace)))
 
-        if create_namespace:
+        if create_namespace and not dry_run:
             args.append("--create-namespace")
+        if dry_run:
+            args.append("--dry-run")
 
         if version:
             args.extend(["--version", version])
@@ -764,8 +798,10 @@ class HelmService:
                 temp_file = f.name
 
         try:
-            result = self._run_command(args)
+            result = self._run_command(args, timeout=subprocess_timeout_seconds)
             release_data = json.loads(result.stdout)
+            if dry_run:
+                return _dry_run_manifest(release_data)
             return self._parse_release_info(release_data)
         finally:
             if merged_values:
@@ -1139,6 +1175,74 @@ def _controller_owner_kind(metadata: Dict[str, Any]) -> Optional[str]:
     return None
 
 
+# #1417：這些 waiting reason 只說「還沒輪到」（前一個容器／volume 還沒好），本身不是
+# 原因。有其他容器帶著實質 reason（ImagePullBackOff、CrashLoopBackOff…）時優先回報那個。
+_GENERIC_WAITING_REASONS = frozenset({"PodInitializing", "ContainerCreating"})
+
+
+def _truncate(text: Optional[str], limit: int) -> Optional[str]:
+    """診斷文字截短：事件訊息可能很長（Longhorn 的 attach 錯誤一行數百字）。"""
+    if not text:
+        return None
+    text = " ".join(str(text).split())
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def _pod_waiting(status: Dict[str, Any], limit: int) -> Optional[ContainerWaitingInfo]:
+    """#1417：Pod 卡住的容器（``state.waiting``）；先看 init 容器再看主要容器。
+
+    回第一個帶實質 reason 的容器；都只有「還沒輪到」的 reason 時回第一個；沒有任何容器
+    在 waiting 回 None。
+    """
+    first_generic = None
+    for is_init, key in ((True, "initContainerStatuses"), (False, "containerStatuses")):
+        for cs in status.get(key) or []:
+            waiting = (cs.get("state") or {}).get("waiting") or {}
+            reason = waiting.get("reason")
+            if not reason:
+                continue
+            info = ContainerWaitingInfo(
+                container=cs.get("name") or "",
+                init_container=is_init,
+                reason=reason,
+                message=_truncate(waiting.get("message"), limit),
+            )
+            if reason not in _GENERIC_WAITING_REASONS:
+                return info
+            if first_generic is None:
+                first_generic = info
+    return first_generic
+
+
+def _pod_is_unready(phase: str, metadata: Dict[str, Any], ready_count: int, total: int) -> bool:
+    """與平台 ``_is_container_ready`` 同一套「有效 Pod」定義：收尾中的 Pod 不算。"""
+    if phase in ("Succeeded", "Failed") or metadata.get("deletionTimestamp"):
+        return False
+    return phase != "Running" or ready_count < total
+
+
+def _event_time(event: Dict[str, Any]) -> str:
+    """事件「最後一次發生」的時間字串（RFC 3339）；排序用，取不到回空字串。
+
+    core/v1 Event 依產生者不同，時間落在不同欄位：舊式 ``lastTimestamp``、新式
+    ``series.lastObservedTime``／``eventTime``，最後退回 ``metadata.creationTimestamp``。
+    """
+    series = event.get("series") or {}
+    return (
+        series.get("lastObservedTime")
+        or event.get("lastTimestamp")
+        or event.get("eventTime")
+        or (event.get("metadata") or {}).get("creationTimestamp")
+        or ""
+    )
+
+
+def _event_sort_key(event: Dict[str, Any]) -> str:
+    """時間字串正規化成可比較的形狀（去掉小數秒，``Z`` 對齊）。"""
+    stamp = _event_time(event)
+    return re.sub(r"\.\d+", "", stamp).replace("+00:00", "Z")
+
+
 class KubernetesService:
     """Service for Kubernetes operations (via kubectl)."""
 
@@ -1364,12 +1468,75 @@ class KubernetesService:
 
         return None
 
-    def get_pods(self, namespace: str, label_selector: Optional[str] = None) -> List[PodInfo]:
+    # #1417：診斷文字（waiting message、事件訊息）的長度上限；事件查詢的 subprocess 上限。
+    # 事件只是錦上添花，查不到不能拖垮 status 端點（平台背景 poll 每分鐘逐台打一次）。
+    DIAGNOSTIC_TEXT_LIMIT = 300
+    POD_EVENTS_TIMEOUT_SECONDS = 10
+
+    def get_pod_warning_events(self, namespace: str) -> Dict[str, PodWarningEvent]:
+        """#1417：namespace 內每顆 Pod 最近一筆 Warning 事件，以 Pod UID 與名字為鍵。
+
+        一次 list（field selector 只取 ``type=Warning`` 且 ``involvedObject.kind=Pod``），
+        再依 ``involvedObject`` 對應——不逐顆 Pod 查。鍵是 ``uid:<uid>``；事件本身沒帶 UID
+        時才用 ``name:<name>``——同名重建的 Pod（StatefulSet）不會拿到前一顆的事件。
+
+        Raises:
+            KubectlException: kubectl 失敗或逾時（呼叫端負責吞掉，見 ``get_pods``）
+        """
+        validate_namespace(namespace)
+        result = self._run_command(
+            [
+                "get",
+                "events",
+                "--namespace",
+                namespace,
+                "--field-selector",
+                "type=Warning,involvedObject.kind=Pod",
+                "--output",
+                "json",
+            ],
+            timeout=self.POD_EVENTS_TIMEOUT_SECONDS,
+        )
+        items = json.loads(result.stdout or "{}").get("items") or []
+        latest: Dict[str, Dict[str, Any]] = {}
+        for event in sorted(items, key=_event_sort_key):
+            obj = event.get("involvedObject") or {}
+            if not event.get("reason"):
+                continue
+            if obj.get("uid"):
+                key = f"uid:{obj['uid']}"
+            elif obj.get("name"):
+                key = f"name:{obj['name']}"
+            else:
+                continue
+            # 排序後逐筆覆寫 ⇒ 留下的是每顆 Pod 最後一筆。
+            latest[key] = event
+        limit = self.DIAGNOSTIC_TEXT_LIMIT
+        out: Dict[str, PodWarningEvent] = {}
+        for key, event in latest.items():
+            count = (event.get("series") or {}).get("count") or event.get("count")
+            out[key] = PodWarningEvent(
+                reason=event["reason"],
+                message=_truncate(event.get("message") or event.get("note"), limit),
+                count=count if isinstance(count, int) else None,
+                last_seen=_event_time(event) or None,
+            )
+        return out
+
+    def get_pods(
+        self,
+        namespace: str,
+        label_selector: Optional[str] = None,
+        include_warning_events: bool = False,
+    ) -> List[PodInfo]:
         """Get pods in a namespace.
 
         Args:
             namespace: Namespace name
             label_selector: Optional label selector
+            include_warning_events: #1417——對未就緒的 Pod 附上最近一筆 Warning 事件
+                （``last_warning``）。只有 status 端點開；全部就緒時不查事件。事件查詢
+                失敗只記 log、``last_warning`` 留 None，**不**讓本方法失敗。
 
         Returns:
             List of pod information
@@ -1392,6 +1559,8 @@ class KubernetesService:
         pods_data = json.loads(result.stdout)
 
         pods = []
+        # #1417：未就緒 Pod 的事件查詢鍵（UID 優先、名字備援），與 pods 同序。
+        unready_keys: List[Optional[tuple]] = []
         for pod in pods_data.get("items", []):
             metadata = pod.get("metadata", {})
             status = pod.get("status", {})
@@ -1401,6 +1570,11 @@ class KubernetesService:
             ready_count = sum(1 for c in container_statuses if c.get("ready"))
             total_count = len(container_statuses)
             ready_str = f"{ready_count}/{total_count}"
+            phase = status.get("phase", "Unknown")
+            unready_keys.append(
+                (metadata.get("uid"), metadata.get("name"))
+                if _pod_is_unready(phase, metadata, ready_count, total_count) else None
+            )
 
             # Calculate restarts
             restarts = sum(c.get("restartCount", 0) for c in container_statuses)
@@ -1428,8 +1602,30 @@ class KubernetesService:
                         c.get("image") for c in (pod.get("spec") or {}).get("containers") or []
                         if c.get("image")
                     ],
+                    # #1417：卡住的容器（就緒的 Pod 自然沒有 waiting 容器）。
+                    waiting=_pod_waiting(status, self.DIAGNOSTIC_TEXT_LIMIT),
                 )
             )
+
+        if include_warning_events and any(unready_keys):
+            # 一次 list namespace 的 Warning 事件，再對到未就緒的 Pod；就緒的 Pod 不附
+            # （它們的舊事件只會誤導）。查詢失敗只記 log：status 端點不能因此失敗。
+            try:
+                events = self.get_pod_warning_events(namespace)
+            except Exception as e:  # noqa: BLE001 —— 見上
+                logger.warning(
+                    "Could not list pod warning events in %s (pod status still "
+                    "reported without them): %s", namespace, getattr(e, "message", e),
+                )
+                events = {}
+            for pod_info, keys in zip(pods, unready_keys):
+                if not keys:
+                    continue
+                uid, name = keys
+                pod_info.last_warning = (
+                    (events.get(f"uid:{uid}") if uid else None)
+                    or events.get(f"name:{name}")
+                )
 
         return pods
 
@@ -2616,6 +2812,75 @@ class KubernetesService:
             "pvcs": json.loads(pvcs.stdout or "{}").get("items", []),
         }
 
+    # #1415：叢集儲存（Longhorn）排程額度。全部唯讀；解讀在 ``storage_capacity``。
+    CAPACITY_KUBECTL_TIMEOUT_SECONDS = 15
+
+    def get_longhorn_capacity_snapshot(self) -> Dict[str, List[Dict[str, Any]]]:
+        """#1415：讀 Longhorn 排程需要的原始資料（三次唯讀 ``kubectl get``）。
+
+        * ``nodes.longhorn.io``（``settings.longhorn_namespace``）：各磁碟的
+          storageMaximum／Available／Scheduled、storageReserved、allowScheduling、tags；
+        * ``settings.longhorn.io``：**只留** ``storage_capacity.LONGHORN_SETTING_NAMES``
+          （其他設定與排程無關，不往外帶）；
+        * StorageClass：provisioner、parameters（numberOfReplicas、selector）、預設註記。
+
+        Raises:
+            KubectlException: CRD 不存在、權限不足（operator ClusterRole 需要 longhorn.io
+                nodes／settings get/list，見 woow-paas-charts charts/paas-operator）、逾時。
+                呼叫端一律當「不知道」放行。
+        """
+        from src.services.storage_capacity import LONGHORN_SETTING_NAMES
+
+        ns = settings.longhorn_namespace
+        timeout = self.CAPACITY_KUBECTL_TIMEOUT_SECONDS
+        nodes = self._run_command(
+            ["get", "nodes.longhorn.io", "--namespace", ns, "-o", "json"], timeout=timeout)
+        lh_settings = self._run_command(
+            ["get", "settings.longhorn.io", "--namespace", ns, "-o", "json"], timeout=timeout)
+        classes = self._run_command(["get", "storageclasses", "-o", "json"], timeout=timeout)
+        wanted = set(LONGHORN_SETTING_NAMES)
+        return {
+            "nodes": json.loads(nodes.stdout or "{}").get("items", []),
+            "settings": [
+                item for item in json.loads(lh_settings.stdout or "{}").get("items", [])
+                if (item.get("metadata") or {}).get("name") in wanted
+            ],
+            "storage_classes": json.loads(classes.stdout or "{}").get("items", []),
+        }
+
+    def list_orphaned_pvcs_all_namespaces(self) -> List[Dict[str, Any]]:
+        """#1415：全叢集帶 ``paas.woowtech.io/orphaned-at`` 的 PVC（唯讀，供額度回報）。
+
+        不呼 validate_namespace：這是跨 namespace 的唯讀盤點，範圍由 label selector 圈定
+        （同 ``list_managed_namespaces``）。
+        """
+        from src.services.storage_quota import ORPHANED_AT_LABEL
+
+        result = self._run_command(
+            ["get", "pvc", "--all-namespaces", "-l", ORPHANED_AT_LABEL, "-o", "json"],
+            timeout=self.CAPACITY_KUBECTL_TIMEOUT_SECONDS,
+        )
+        return json.loads(result.stdout or "{}").get("items", [])
+
+    def get_cdi_filesystem_overhead(self) -> Optional[Dict[str, Any]]:
+        """#1415：CDIConfig 的 ``status.filesystemOverhead``（``{"global": "0.06",
+        "storageClass": {...}}``）；讀不到回 None（呼叫端用 CDI 預設值）。
+
+        叢集內 ``system:authenticated`` 有 ``cdi.kubevirt.io:config-reader``，不需要另給 RBAC。
+        """
+        try:
+            result = self._run_command(
+                ["get", "cdiconfig", "config", "-o", "json"],
+                timeout=self.CAPACITY_KUBECTL_TIMEOUT_SECONDS,
+            )
+            overhead = (json.loads(result.stdout or "{}").get("status") or {}).get(
+                "filesystemOverhead")
+            return overhead if isinstance(overhead, dict) else None
+        except (KubectlException, ValueError) as exc:
+            logger.warning("CDI filesystem overhead unavailable, using CDI default: %s",
+                           getattr(exc, "stderr", None) or exc)
+            return None
+
     def list_managed_namespaces(self) -> List[str]:
         """#277 唯讀反向發現：列本 env 帶 paas-managed=true 的 ns 名。
 
@@ -2917,6 +3182,34 @@ class KubernetesService:
             )
         return names
 
+    def get_credential_reset_statefulset_names(
+        self, namespace: str, label_selector: str
+    ) -> List[str]:
+        """StatefulSets of a release that opted in to a restart on credential reset.
+
+        hermes-agent 0.3.0 runs its agent as a StatefulSet (fixed pod name so the
+        console Role can pin pods/exec with resourceNames — platform #1360 follow-up)
+        and reads admin_password from env at start, so a helm_secret reset must roll
+        it like the Deployments; headscale/tailscale 0.1.1 are StatefulSet-only
+        charts that read it the same way. Only StatefulSets labelled
+        ``CREDENTIAL_RESET_RESTART_LABEL=true`` are returned: open-design 0.3.0's daemon
+        StatefulSet hot-reloads its htpasswd and must NOT be restarted, and a bundled
+        database StatefulSet has nothing to do with the admin password.
+
+        Returns an empty list when nothing matches (unlike ``get_deployment_names``):
+        the caller decides whether "no workload at all" is an error.
+        """
+        validate_namespace(namespace)
+
+        args = [
+            "get", "statefulsets",
+            "--namespace", namespace,
+            "--selector", f"{label_selector},{CREDENTIAL_RESET_RESTART_LABEL}=true",
+            "--output", "jsonpath={.items[*].metadata.name}",
+        ]
+        result = self._run_command(args)
+        return result.stdout.split()
+
     def get_deployment_name(self, namespace: str, label_selector: str) -> str:
         """Resolve **exactly one** Deployment name from a label selector.
 
@@ -3176,6 +3469,19 @@ class KubernetesService:
         self._run_command([
             "rollout", "restart",
             f"deployment/{deployment_name}",
+            "--namespace", namespace,
+        ])
+
+    def rollout_restart_statefulset(
+        self,
+        namespace: str,
+        statefulset_name: str,
+    ) -> None:
+        """``kubectl rollout restart statefulset/<name>`` (pod template annotation bump)."""
+        validate_namespace(namespace)
+        self._run_command([
+            "rollout", "restart",
+            f"statefulset/{statefulset_name}",
             "--namespace", namespace,
         ])
 

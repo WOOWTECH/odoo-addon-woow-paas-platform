@@ -256,6 +256,29 @@ class TunnelConfigUpdateRequest(BaseModel):
 # Response Models
 
 
+class ContainerWaitingInfo(BaseModel):
+    """#1417：Pod 卡在哪個容器、為什麼（``state.waiting``）。
+
+    先看 initContainerStatuses 再看 containerStatuses；``PodInitializing``／
+    ``ContainerCreating`` 這類「只是還沒輪到」的 reason 排在有實質內容的 reason
+    （``ImagePullBackOff``、``CrashLoopBackOff``…）之後。
+    """
+
+    container: str
+    init_container: bool = False
+    reason: str
+    message: Optional[str] = None  # 截短過（見 KubernetesService.DIAGNOSTIC_TEXT_LIMIT）
+
+
+class PodWarningEvent(BaseModel):
+    """#1417：這顆 Pod 最近一筆 Warning 事件（``FailedAttachVolume``、``FailedScheduling``…）。"""
+
+    reason: str
+    message: Optional[str] = None  # 截短過
+    count: Optional[int] = None
+    last_seen: Optional[str] = None  # RFC 3339（lastTimestamp／eventTime 原值）
+
+
 class PodInfo(BaseModel):
     """Information about a pod."""
 
@@ -279,6 +302,12 @@ class PodInfo(BaseModel):
     # #1408：主要容器（``spec.containers``，不含 init）的 image 參照，順序同 spec。
     # 舊 operator 不帶這個 key ⇒ 平台看到 None 就跳過 Redeploy 後的 image 核對。
     images: Optional[List[str]] = None
+    # ---- #1417：未就緒 Pod 的診斷（選填；舊平台忽略即可）----------------------------
+    # 部署逾時訊息要說得出「卡在哪」：Pending 的 Pod 是沒排程、磁碟掛不上，還是拉不到
+    # image。None＝沒有可報的（容器都沒在 waiting／沒有 Warning 事件／事件查詢失敗），
+    # 不是錯誤。``last_warning`` 只在 status 端點、且這顆 Pod 未就緒時才查。
+    waiting: Optional[ContainerWaitingInfo] = None
+    last_warning: Optional[PodWarningEvent] = None
 
 
 class VmiInfo(BaseModel):

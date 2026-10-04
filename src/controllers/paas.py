@@ -1658,7 +1658,9 @@ class PaasController(HiddenChainMixin, Controller):
             if access.role not in [ROLE_OWNER, ROLE_ADMIN]:
                 return {'success': False, 'error': _('Permission denied')}
             try:
-                service._check_operation_allowed(operation='write')
+                # #1424：'delete' 在訂閱閘裡與 write 同級，唯一差別是開通被拒、訂閱已自動
+                # 取消的服務仍可刪除（見 CloudService._check_operation_allowed）。
+                service._check_operation_allowed(operation='delete')
             except OperationalError:
                 raise
             except (AccessDenied, AccessError, MissingError) as e:
@@ -4108,12 +4110,9 @@ class PaasController(HiddenChainMixin, Controller):
         try:
             service.write({'state': 'deleting'})
 
-            # Uninstall Helm release (pass subdomain for Cloudflare cleanup)
-            client.uninstall_release(
-                namespace=service.helm_namespace,
-                release_name=service.helm_release_name,
-                subdomain=service.subdomain,
-            )
+            # Uninstall Helm release (pass subdomain for Cloudflare cleanup；#1431：從未
+            # running 過的服務請 operator 把孤兒 PVC 只留 1 天——判準在 model 的 helper)
+            service._uninstall_release(client)
 
             # Delete the record
             service.unlink()

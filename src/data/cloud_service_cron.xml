@@ -43,6 +43,23 @@
             <field name="interval_type">minutes</field>
             <field name="active" eval="True"/>
         </record>
+        <!-- Cron: 部署逾時的有限度自癒（#1416）
+
+             #489 的 age timeout 只代表「等太久」：卡住的原因（磁碟排程額度、拉 image 慢）
+             解除後 release 會自己起來，但上面那條短 poll 只撈轉移狀態，error 永遠停在
+             error。本條低頻重查「逾時造成、仍在時間窗內、未停權」的 error 服務，就緒就
+             照正常路徑推進（需要 init 的進 initializing，否則 running）。時間窗由
+             woow_paas_platform.timeout_recovery_window_hours（預設 168 小時）調整。
+             ⚠ 本檔是 noupdate：日後改 interval 不會生效（改 DB／後台排程動作）。 -->
+        <record id="ir_cron_recover_timed_out_services" model="ir.cron">
+            <field name="name">Cloud Service: Recover Timed-out Deployments</field>
+            <field name="model_id" ref="model_woow_paas_platform_cloud_service"/>
+            <field name="state">code</field>
+            <field name="code">model._cron_recover_timed_out_services()</field>
+            <field name="interval_number">5</field>
+            <field name="interval_type">minutes</field>
+            <field name="active" eval="True"/>
+        </record>
         <!-- Cron: Public URL 未驗證旗標的背景重探（#1159 Q16／D4）
 
              list/get 純讀之後，放行時寫下的 public_url_dns_unverified 改由這裡清。
