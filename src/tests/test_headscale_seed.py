@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """VPN 控制台（Headscale）上架 seed 的守線斷言（2026-10-04 公開上架）。
 
-契約來源：woow-paas-charts charts/headscale 0.1.0（#124）——一個 Pod：headscale v0.29.4、
+契約來源：woow-paas-charts charts/headscale 0.1.1（0.1.0＝#124）——一個 Pod：headscale v0.29.4、
 Headplane 0.7.1（只綁 127.0.0.1）、nginx 入口（Service 第一個埠 3000，平台密碼 Basic auth，
 固定送 Remote-User: admin）、選配 ngrok sidecar（租戶自己的 token；每 60 秒印
 ``WOOW_PUBLIC_URL=https://…``）。Service 第二個埠 8080＝Headscale（同工作區節點登入）。
@@ -9,8 +9,11 @@ Headplane 0.7.1（只綁 127.0.0.1）、nginx 入口（Service 第一個埠 3000
 ``format: domain``（P2）。
 
 核心守線：
-1. **helm_secret＋帳密皆可自設**：htpasswd 是 Secret volume、nginx 每請求重讀 ⇒ 平台重設只改
-   Secret（StatefulSet 不必重啟）；帳號在 ``entrance.basicAuthUsername``。
+1. **helm_secret＋帳密皆可自設**：htpasswd 是 Secret volume、nginx 每請求重讀 ⇒ 平台重設的
+   helm upgrade 只改 Secret（pod template 不變）；帳號在 ``entrance.basicAuthUsername``。重設之後
+   operator 要有 workload 可重啟：chart 0.1.1 的 StatefulSet 帶
+   ``paas.woowtech.io/restart-on-credential-reset``（operator #1398）——0.1.0 沒有 Deployment 也沒有
+   label，重設在 .207 正式站必定回退失敗。重設會重啟服務（數十秒），說明不能再寫「不必重啟」。
 2. **headscale 與 bootstrap 同一版**：bootstrap 用它自己的 binary 跑 migration，Headscale 拒絕
    在較新 minor 遷移過的資料庫上跑、0.29 起也不能降版 ⇒ 兩顆 digest 必須對到同一個上游版本。
    digest 是唯一不會說謊的識別，所以用 digest→版本對照表守（換版時兩顆一起登記）。
@@ -76,8 +79,9 @@ class TestHeadscaleSeed(TransactionCase):
         tpl = self._tpl()
         self.assertEqual(tpl.helm_repo_url or '', '')
         self.assertEqual(tpl.helm_chart_name, HEADSCALE_CHART)
-        self.assertEqual(tpl.helm_chart_version, '0.1.0',
-                         'helm_chart_version 留空會被供給閘門靜默擋在購買前（#552）')
+        self.assertEqual(tpl.helm_chart_version, '0.1.1',
+                         'helm_chart_version 留空會被供給閘門靜默擋在購買前（#552）；0.1.1＝'
+                         'StatefulSet 帶 restart-on-credential-reset label（.207 重設必失敗的修正）')
 
     def test_service_port_is_the_entrance(self):
         """Service 第一個埠＝入口；operator 依 Service 自己的埠順序挑第一個 HTTP 埠。"""
@@ -272,8 +276,11 @@ class TestHeadscaleSeed(TransactionCase):
                 ('1 GB', '免費額度要講清楚，正式使用建議升級'),
                 ('-headscale:8080', '同工作區節點的內部網址'),
                 ('Admin Credentials', '帳密可重設、可自設'),
+                ('重新啟動，約數十秒', '重設帳密會重啟服務（operator #1398 重啟 opt-in StatefulSet）'),
+                ('同工作區的 VPN 節點最久約', 'Headscale 重啟後內部網址節點要等 tailscale 看門狗才回線'),
         ):
             self.assertIn(needle, desc, why)
+        self.assertNotIn('不必重啟', desc, '重設帳密會重啟服務，不能再寫「不必重啟」（與管理員帳密對話框一致）')
 
     def test_no_public_url_injection(self):
         """chart 不需要平台注入自己的公開網址（Headplane 走相對路徑、server_url 由 ngrok 決定）。"""

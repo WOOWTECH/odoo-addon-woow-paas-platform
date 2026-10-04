@@ -234,6 +234,11 @@ class TestN8nSeedNoBuiltinMcp1426(TransactionCase):
         # 開通時就建立擁有者，不讓別人搶先註冊。
         self.assertEqual(self.template.post_deploy_init_type, 'n8n')
 
+    def test_seed_keeps_api_key_secret_placeholder(self):
+        # #1471：沒有 main.secret，chart 就不建 app-secret，operator init 會卡在 find_secret。
+        values = json.loads(self.template.helm_default_values)
+        self.assertTrue(values['main']['secret'].get('N8N_API_KEY'))
+
 
 @tagged('post_install', '-at_install')
 class TestN8nSeedImagesFromJcr1426(TransactionCase):

@@ -102,6 +102,10 @@
                  api-keys/scopes、api-keys）已在乾淨的 2.35.3 上逐步實測通過。
                  ⚠ 既有沒有自帶 image 的服務（目前只有 stg svc-16e7ac1a，1.122.4、已縮 0）下次
                  redeploy 會跟著升到 2.x（n8n 資料庫遷移是單向的）。 -->
+            <!-- main.secret.N8N_API_KEY 預留位置（#1471）：8gears chart 只有 main.secret 有值時才建
+                 `<release>-n8n-app-secret`，而 operator 的 n8n init 最後一步要把真的 API key 寫進這個
+                 Secret，找不到就判 partial、服務卡在 initializing。以前這個值是平台在 mcp_enabled 時
+                 注入的；#1429 移除內建 MCP 後改成範本直接帶。值本身不是秘密，init 成功後會被換成真的 key。 -->
             <field name="helm_default_values">{"config": {"database": {"type": "sqlite"}},
                 "image": {"repository": "jcr-prod.woowtech.io/woow-paas-docker-local/n8n",
                 "tag": "20261004.1130@sha256:a3693cff4b9fff5ffce6d20470f2d87a905c073c0de46ea65404e89947c6dfa2"},
@@ -110,7 +114,8 @@
                 "N8N_PUBLIC_API_ENABLED": "true"},
                 "resources": {"requests": {"cpu": "100m", "memory": "256Mi"}, "limits": {"cpu":
                 "1000m", "memory": "1Gi"}},
-                "persistence": {"enabled": true, "type": "dynamic", "size": "2Gi"}},
+                "persistence": {"enabled": true, "type": "dynamic", "size": "2Gi"},
+                "secret": {"N8N_API_KEY": "set-by-platform-init"}},
                 "updateStrategy": {"type": "Recreate"}}</field>
             <!-- IMPORTANT: 換行只能落在 JSON token 之間，不可切斷字串值。字串值內夾字面換行
                  會讓 _parse_helm_value_specs 的 json.loads(strict) 拋錯 → 回 {} → 前端
@@ -1971,7 +1976,7 @@
             <field name="is_active" eval="True"/>
         </record>
 
-        <!-- VPN 控制台（Headscale）cloud service。chart woow-paas-charts charts/headscale 0.1.0（#124）：
+        <!-- VPN 控制台（Headscale）cloud service。chart woow-paas-charts charts/headscale 0.1.1（0.1.0＝#124）：
              一個 Pod＝headscale v0.29.4（BSD-3）＋Headplane 0.7.1（MIT）網頁＋nginx 入口＋選配 ngrok sidecar。
              入口 Service 第一個埠 3000＝nginx（平台密碼 Basic auth → Headplane 127.0.0.1:3001，proxy_auth
              固定送 Remote-User: admin），第二個埠 8080＝Headscale（同工作區 Tailscale 節點用
@@ -1983,8 +1988,17 @@
              config.sensitive 底下（EMQX 0.1.1 教訓，平台會整棵剝掉）。ngrok.domain 用 #1412 的
              format=domain（存檔就擋整條網址／埠／路徑），chart 端另在執行時驗證、不 fail render。
              ⚠ 憑證 helm_secret：htpasswd 由 Secret volume 投射（無 subPath），nginx 每個請求重讀 ⇒ 平台
-             重設只改 Secret、pod template 不變、StatefulSet 不必重啟（operator 的 helm_secret reset 只重啟
-             Deployment）。帳號在 entrance.basicAuthUsername（可自設帳密；Headplane 永遠看到常數 admin）。
+             重設只改 Secret、pod template 不變（reset 的 helm upgrade（atomic、逾時 15 秒） 不會等新 pod）。帳號在
+             entrance.basicAuthUsername（可自設帳密；Headplane 永遠看到常數 admin）。
+             ⚠ 重設帳密＝operator helm_secret reset：helm upgrade 後重啟 release 的 Deployment＋帶
+             paas.woowtech.io/restart-on-credential-reset 的 StatefulSet（operator #1398）。本 chart 只有
+             StatefulSet：0.1.0 沒有 label ⇒ operator 找不到可重啟的 workload → 回退 → 重設必失敗（.207 正式站
+             實測）；0.1.1 帶 label，搭配 #1398 的 operator 才會成功（重啟數十秒，資料在 PVC）。reset 釘服務
+             現行 chart 版本（F-461-2），既有 0.1.0 服務要 redeploy 升到 0.1.1 才修好。
+             ⚠ Headscale 每次重啟（儲存設定、重設帳密、升級）後，用內部網址 http://…-headscale:8080 的
+             同工作區節點會卡在只撥 443（Tailscale 用戶端「recent noise dial」啟發式），tailscale chart 0.1.1
+             以 liveness 看門狗（8 分鐘 Out of sync → 重啟 tailscaled）自動恢復，沙盒實測 681 秒回線；外部裝置走
+             ngrok https 不受影響。
              ⚠ image／bootstrap.image 必須同一版 headscale（bootstrap 用它的 binary 跑 migration；0.29 起
              只能逐個 minor 升、不能降）——test_headscale_seed 以 digest→版本對照表鎖步。ngrok／entrance
              image 用 chart 預設（chart 以分開的 digest 欄位釘死；範本若改寫 tag@sha256 必須同時清空
@@ -2005,8 +2019,9 @@
             <field name="full_description">VPN 控制台（Headscale 0.29＋Headplane 網頁後台）：自架一套相容 Tailscale 的 VPN 控制伺服器。
                 手機、電腦、伺服器安裝官方 Tailscale App，把登入伺服器改成你的 VPN 登入網址，就能加入你自己的私人網路（tailnet），
                 裝置之間以 WireGuard 加密互連；優先直連，連不上時經 Tailscale 公共中繼（DERP）轉送，流量不經過平台。
-                **後台登入**：網頁後台帳號預設 admin，密碼於開通時一次性顯示；帳號與密碼都可在服務頁「Admin Credentials」
-                重設或改成自己的，約一分鐘內生效、服務不必重啟。在後台管理使用者、裝置、裝置登入用的 pre-auth key、ACL 與 DNS。
+                **後台登入**：網頁後台帳號預設 admin，帳號與密碼於開通時一次性顯示；帳號與密碼都可在服務頁「Admin Credentials」
+                重設或改成自己的，重設後服務會重新啟動，約數十秒（使用者、裝置與金鑰都保留）。在後台管理使用者、裝置、裝置登入用的
+                pre-auth key、ACL 與 DNS。
                 **VPN 登入網址（外部裝置必看）**：Tailscale 的登入協定無法經過平台的服務網址，外部裝置要登入，必須在服務設定
                 開啟 ngrok 並填入你自己的 ngrok authtoken；網域可留空（自動使用該 ngrok 帳號的免費固定網域），或填你在 ngrok
                 後台的網域。服務頁會顯示目前的 VPN 登入網址。
@@ -2015,7 +2030,8 @@
                 免費 ngrok 每月約 1 GB 流量／2 萬次請求，裝置一多就可能用完，正式使用建議升級 ngrok 付費方案。
                 **同工作區**：同一工作區的「VPN 節點（相容 Tailscale）」可直接用內部網址 http://&lt;服務 release&gt;-headscale:8080
                 登入，不需要 ngrok（&lt;服務 release&gt; 是本服務頁 Helm Release 那一格，例如 svc-1a2b3c4d）。
-                **資料**：使用者、裝置與金鑰存在你的持久磁碟，重啟後仍在；儲存設定時服務會重啟約一分鐘，裝置會自動重連。
+                **資料**：使用者、裝置與金鑰存在你的持久磁碟，重啟後仍在；儲存設定或重設帳密時服務會重新啟動，外部裝置數十秒內
+                自動重連，同工作區的 VPN 節點最久約 12 分鐘自動重連。
                 Headscale 只能逐版升級、不能降版，平台會按版次安排。
                 欠費停權時服務停止（磁碟保留），恢復繳費後資料原樣還在；刪除服務即全新開通（所有裝置要重新登入），
                 原磁碟依平台保留政策 90 天後回收。</field>
@@ -2024,7 +2040,7 @@
             <field name="documentation_url">https://headscale.net/stable/</field>
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/headscale</field>
-            <field name="helm_chart_version">0.1.0</field>
+            <field name="helm_chart_version">0.1.1</field>
             <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/headscale","tag":"20261004.0159@sha256:8833f828b414c0907b7e5c71da76473216fe17cce0818a166b536ec552c0903f"},"bootstrap":{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/headscale-debug","tag":"20261004.0502@sha256:2380cdb4951e5d63747d5880aeecaf7aea7702f06ea72a6b9d8010b9386195b8"}},"headplane":{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/headplane","tag":"20261004.0502@sha256:394483fd2336ce6b15df360c3e118ddfd45eb8140fe21df9f2611077f5d79d22"}},"entrance":{"basicAuthUsername":"admin"},"persistence":{"size":"1Gi"},"service":{"port":3000}}</field>
             <field name="helm_value_specs">{"required": [], "optional": [
                 {"key": "ngrok.enabled", "label": "對外 VPN 登入網址（ngrok）", "type": "boolean", "default": false,
@@ -2067,15 +2083,22 @@
             <field name="is_active" eval="True"/>
         </record>
 
-        <!-- VPN 節點（相容 Tailscale）cloud service。chart woow-paas-charts charts/tailscale 0.1.0（#125）；
+        <!-- VPN 節點（相容 Tailscale）cloud service。chart woow-paas-charts charts/tailscale 0.1.1（0.1.0＝#125）；
              image paas-odoo-ci tailscale/（#240，官方 tailscale 1.102.5＋衍生自 podman 版的 entrypoint，
              uid 1000、userspace）。定位＝工作區私有入口（PLAN Q2）：節點加入租戶自己的 tailnet（官方或
              Headscale），用 tailscale serve TCP 轉發把**同 namespace** 的服務掛上 tailnet。
              exit node／app connector／subnet route／SSH／Funnel 一律不開（Q3，chart 強制，values 沒有這些鍵）；
              egress NetworkPolicy 排除所有私網與 100.64/10，是 tailnet 經節點能碰到哪裡的唯一護欄。
-             入口：唯一 Service 8080 → nginx Basic auth（帳號固定 admin、只有密碼可自設，同 code-server）→
-             tailscale web（127.0.0.2:8088，唯讀）。htpasswd 是 Secret volume ⇒ 重設密碼 pod template 不變、
-             不必重啟。tailscale.authKey 刻意**不在** config.sensitive 底下（平台會剝掉）。
+             入口：唯一 Service 8080 → nginx Basic auth → tailscale web（127.0.0.2:8088，唯讀）。帳號＝
+             entrance.basicAuthUsername（chart 0.1.1 起；預設 admin，admin_username_helm_path 指向它 ⇒
+             一次性視窗會顯示帳號、Admin Credentials 可改帳號與密碼，同 Headscale）。htpasswd 是 Secret
+             volume ⇒ 改帳號／密碼 pod template 不變（reset 的 helm upgrade（atomic、逾時 15 秒） 不會等新 pod）。
+             ⚠ 重設帳密＝operator helm_secret reset：helm upgrade 後重啟 release 的 Deployment＋帶
+             paas.woowtech.io/restart-on-credential-reset 的 StatefulSet（operator #1398）。本 chart 只有
+             StatefulSet：0.1.0 沒有 label ⇒ operator 找不到可重啟的 workload → 回退 → 重設必失敗（.207 正式站
+             實測）；0.1.1 帶 label，搭配 #1398 的 operator 才會成功（重啟數十秒，節點身分在 PVC、回來仍是
+             同一台）。reset 釘服務現行 chart 版本（F-461-2），既有 0.1.0 服務要 redeploy 升到 0.1.1 才修好。
+             tailscale.authKey 刻意**不在** config.sensitive 底下（平台會剝掉）。
              1 vCPU／0.5 GB／1 GB：方案 overlay 套在 tailscale 容器；persistence.size＝節點身分那顆 PVC。
              image：#240 合併後從 main build 並核可（#244，promote run 14211）＝tailscale:20261004.0747；
              digest 與沙盒實測的 #239 候選逐位相同（可重現建置）。
@@ -2095,20 +2118,21 @@
                 填它的內部網址 http://&lt;Headscale 服務的 Helm Release&gt;-headscale:8080。換控制伺服器＝這台節點會登記成一台新機器（新的 tailnet IP）。
                 **轉發清單**：格式「tailnet 埠=服務名稱:埠」，多筆以逗號分隔，例如 8069=svc-1a2b3c4d:80；只接受同一工作區的服務，
                 IP、外部網址或其他工作區的項目會被略過並寫入服務記錄。
-                **網頁介面**：帳號固定 admin，密碼於開通時一次性顯示；可在服務頁「Admin Credentials」重設或改成自己的密碼
-                （約一分鐘內生效、服務不必重啟）。網頁介面僅供登入與查看狀態；請從瀏覽器開服務網址操作，其他設定一律在服務設定修改；
-                儲存設定時節點會重啟約一分鐘。
+                **網頁介面**：帳號預設 admin，帳號與密碼於開通時一次性顯示；帳號與密碼都可在服務頁「Admin Credentials」
+                重設或改成自己的，重設後節點會重新啟動，約數十秒（節點身分保留，回到 tailnet 仍是同一台）。網頁介面僅供登入與查看狀態；
+                請從瀏覽器開服務網址操作，其他設定一律在服務設定修改；儲存設定時節點會重啟約一分鐘。
                 **限制**：不提供出口節點（exit node）、子網路由（subnet router）、app connector、Tailscale SSH 與 Funnel；平台出口是共用 NAT，
                 連線多半經 Tailscale 公共中繼（DERP）轉送，速度有限。
-                **身分**：節點身分存在持久磁碟，重啟後不變。欠費停權時服務停止（磁碟保留），恢復繳費後原樣還在；
+                **身分**：節點身分存在持久磁碟，重啟後不變。使用同工作區的 VPN 控制台時，控制台重新啟動（儲存設定、重設帳密）後
+                本節點最久約 12 分鐘自動重新連上。欠費停權時服務停止（磁碟保留），恢復繳費後原樣還在；
                 刪除服務即全新節點（要重新登入），原磁碟依平台保留政策 90 天後回收。</field>
             <field name="category">devops</field>
             <field name="tags">["tailscale", "vpn", "wireguard", "tailnet"]</field>
             <field name="documentation_url">https://tailscale.com/kb</field>
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/tailscale</field>
-            <field name="helm_chart_version">0.1.0</field>
-            <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/tailscale","tag":"20261004.0747@sha256:1868576adfe7a81fb0b36189cc224c6f5f3116971d2d8b32986365fbd4fb28cf"},"persistence":{"size":"1Gi"},"service":{"port":8080}}</field>
+            <field name="helm_chart_version">0.1.1</field>
+            <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/tailscale","tag":"20261004.0747@sha256:1868576adfe7a81fb0b36189cc224c6f5f3116971d2d8b32986365fbd4fb28cf"},"entrance":{"basicAuthUsername":"admin"},"persistence":{"size":"1Gi"},"service":{"port":8080}}</field>
             <field name="helm_value_specs">{"required": [], "optional": [
                 {"key": "tailscale.loginServer", "label": "控制伺服器（選填）", "type": "text",
                 "placeholder": "http://svc-xxxxxxxx-headscale:8080",
@@ -2136,18 +2160,24 @@
             <field name="has_admin_gui" eval="True"/>
             <field name="admin_password_carrier">helm_secret</field>
             <field name="admin_password_settable" eval="True"/>
+            <field name="admin_username_helm_path">entrance.basicAuthUsername</field>
             <field name="post_deploy_init_type">none</field>
             <field name="max_per_partner" eval="0"/>
             <field name="is_hidden" eval="False"/>
             <field name="is_active" eval="True"/>
         </record>
 
-        <!-- AI 模型閘道（LiteLLM）cloud service。chart woow-paas-charts charts/litellm 0.1.0（#123）：
+        <!-- AI 模型閘道（LiteLLM）cloud service。chart woow-paas-charts charts/litellm 0.1.1（0.1.0＝#123）：
              litellm-non_root 1.103.3（uid 65534）＋內附 PostgreSQL（平台 paas-postgres 17.11，與 woow-odoo
              同一顆 pin），只有一顆 PVC（pgdata＋每日／升級前 pg_dump）。唯一入口 <release>-litellm:4000
              （PG Service 為 headless，operator 不會挑它）。
-             憑證：UI 帳號固定 admin、密碼＝config.sensitive.admin_password（helm_secret，可重設、可自設，
-             workload 是 Deployment ⇒ reset 的 rollout restart 會套到）。master key 走 #530 gateway 通道：
+             憑證：UI 帳號＝auth.adminUser（預設 admin；admin_username_helm_path 指向它 ⇒ 一次性視窗顯示帳號、
+             Admin Credentials 可改帳號）、密碼＝config.sensitive.admin_password（helm_secret，可重設、可自設，
+             workload 是 Deployment ⇒ reset 的 rollout restart 會套到）。⚠ 帳號可改的前提是 chart 0.1.1：
+             0.1.0 的 UI_USERNAME 是 env 字面值，改帳號會改 pod template ⇒ reset 的 helm upgrade（atomic、逾時 15 秒）
+             要等新 pod（Recreate、約 2 分鐘）→ 逾時回退＋斷線兩次；0.1.1 改由 Secret（ui_username）帶入，
+             pod template 不變。reset 釘服務現行 chart 版本（F-461-2）：既有 0.1.0 服務改密碼照常可用，改帳號要先
+             redeploy 升到 0.1.1。master key 走 #530 gateway 通道：
              gateway.externalPath=/v1 讓平台鑄 auth.apiServerKey（→ LITELLM_MASTER_KEY，不需 sk- 前綴，
              沙盒實測），一次性交付 key＋https://<sub>/v1，Reset 一起換（salt key 不動，chart 存進 DB）。
              一次性視窗的兩格提示用 #1412 P3 的 gateway_api_key_hint／gateway_url_hint（資料值，直接寫中文、不走 .po：
@@ -2169,8 +2199,8 @@
             <field name="full_description">AI 模型閘道（LiteLLM 1.103 開源版）：提供 OpenAI 相容的 API（/v1/chat/completions 等，也支援 Anthropic 格式），
                 後面接 OpenAI、Anthropic、Google、OpenRouter 等上百家模型供應商；用虛擬金鑰分給各個應用程式，可設預算、速率上限與
                 可用模型，並記錄每把金鑰的用量與花費。隨附專屬 PostgreSQL。
-                **帳密**：網頁後台帳號固定 admin，密碼於開通時一次性顯示；同時一次性顯示 master key 與 API Base URL
-                （https://你的服務網址/v1）。可在服務頁「Admin Credentials」重設或改成自己的密碼——重設時 master key 會一起換新、
+                **帳密**：網頁後台帳號預設 admin，帳號與密碼於開通時一次性顯示；同時一次性顯示 master key 與 API Base URL
+                （https://你的服務網址/v1）。帳號與密碼都可在服務頁「Admin Credentials」重設或改成自己的——重設時 master key 會一起換新、
                 舊的立即失效（已建立的虛擬金鑰與供應商金鑰不受影響），請妥善保存。重設管理員密碼或 master key 時，服務會重新啟動，約中斷 2 分鐘。
                 **模型與供應商金鑰**：開通時沒有任何模型。請在後台新增模型並填入你自己的供應商 API Key；金鑰加密後存在你自己的資料庫，
                 平台不代管。
@@ -2186,8 +2216,8 @@
             <field name="documentation_url">https://docs.litellm.ai/docs/</field>
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/litellm</field>
-            <field name="helm_chart_version">0.1.0</field>
-            <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/litellm","tag":"20261004.0502@sha256:f6eff3e681c841b9fcfd49b552c25e1e0f04f962bfbc5bd47a96859a33a94674"},"postgresql":{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/paas-postgres","tag":"17.11-20260928.1549@sha256:dbd1fed8882043f45bf759e8f7c73092505ef0afef7a23a93b177e6f7c2c840f"}},"gateway":{"externalPath":"/v1"},"persistence":{"size":"10Gi"},"service":{"port":4000}}</field>
+            <field name="helm_chart_version">0.1.1</field>
+            <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/litellm","tag":"20261004.0502@sha256:f6eff3e681c841b9fcfd49b552c25e1e0f04f962bfbc5bd47a96859a33a94674"},"postgresql":{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/paas-postgres","tag":"17.11-20260928.1549@sha256:dbd1fed8882043f45bf759e8f7c73092505ef0afef7a23a93b177e6f7c2c840f"}},"gateway":{"externalPath":"/v1"},"auth":{"adminUser":"admin"},"persistence":{"size":"10Gi"},"service":{"port":4000}}</field>
             <field name="helm_value_specs">{"required": [], "optional": [
                 {"key": "litellm.spendLogRetention", "label": "用量明細保留天數", "type": "select", "default": "90d",
                 "options": [{"value": "7d", "label": "7 天"}, {"value": "30d", "label": "30 天"}, {"value": "90d", "label": "90 天"}, {"value": "180d", "label": "180 天"}, {"value": "365d", "label": "365 天"}],
@@ -2204,6 +2234,7 @@
             <field name="has_admin_gui" eval="True"/>
             <field name="admin_password_carrier">helm_secret</field>
             <field name="admin_password_settable" eval="True"/>
+            <field name="admin_username_helm_path">auth.adminUser</field>
             <field name="gateway_api_key_hint">這是 LiteLLM 的 master key（等同管理員金鑰）。應用程式請一律在 LiteLLM 後台建立虛擬金鑰使用，master key 只給管理腳本。</field>
             <field name="gateway_url_hint">OpenAI 相容 API 的 Base URL。同工作區其他服務請改用內部網址 http://&lt;服務 release&gt;-litellm:4000/v1。</field>
             <field name="post_deploy_init_type">none</field>

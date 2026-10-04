@@ -1,13 +1,16 @@
 # -*- coding: utf-8 -*-
 """AI 模型閘道（LiteLLM）上架 seed 的守線斷言（2026-10-04 公開上架）。
 
-契約來源：woow-paas-charts charts/litellm 0.1.0（#123）——litellm-non_root 1.103.3（uid 65534）
+契約來源：woow-paas-charts charts/litellm 0.1.1（0.1.0＝#123）——litellm-non_root 1.103.3（uid 65534）
 ＋內附 PostgreSQL（平台 paas-postgres 17.11），唯一入口 ``<release>-litellm:4000``、只有一顆 PVC。
-UI 帳號固定 admin、密碼＝``config.sensitive.admin_password``；master key＝平台 #530 gateway
+UI 帳號＝``auth.adminUser``（預設 admin，可改）、密碼＝``config.sensitive.admin_password``；master key＝平台 #530 gateway
 key（``auth.apiServerKey`` → ``LITELLM_MASTER_KEY``，chart 原樣使用、不需 ``sk-`` 前綴）。
 
 核心守線：
-1. **helm_secret、只有密碼可自設**；workload 是 Deployment ⇒ reset 的 rollout restart 會套到。
+1. **helm_secret、帳號與密碼都可自設**（admin_username_helm_path＝``auth.adminUser``，一次性視窗顯示帳號——
+   .207 正式站「沒有帳號」缺陷）；workload 是 Deployment ⇒ reset 的 rollout restart 會套到。改帳號的前提是
+   chart 0.1.1：UI_USERNAME 由 Secret 帶入，pod template 不變（0.1.0 是 env 字面值，改帳號會讓 reset 的
+   ``helm upgrade --atomic --timeout 15s`` 等新 pod → 逾時回退）。
 2. **master key 走 gateway 通道**：seed 帶 ``gateway.externalPath=/v1`` ⇒ 平台鑄 key、一次性交付
    ``https://<sub>/v1``、Reset 一起換。缺了它 master key 會落到 chart 自產值、租戶永遠拿不到。
 3. **一次性視窗的提示是 LiteLLM 的**（#1412 P3）：不是 hermes-agent 的「填進 MCP 連線設定」。
@@ -72,21 +75,24 @@ class TestLitellmSeed(TransactionCase):
         tpl = self._tpl()
         self.assertEqual(tpl.helm_repo_url or '', '')
         self.assertEqual(tpl.helm_chart_name, LITELLM_CHART)
-        self.assertEqual(tpl.helm_chart_version, '0.1.0',
-                         'helm_chart_version 留空會被供給閘門靜默擋在購買前（#552）')
+        self.assertEqual(tpl.helm_chart_version, '0.1.1',
+                         'helm_chart_version 留空會被供給閘門靜默擋在購買前（#552）；0.1.1＝UI_USERNAME '
+                         '走 Secret，改帳號不改 pod template（admin_username_helm_path 的前提）')
 
     def test_service_port_lockstep(self):
         self.assertEqual(self._values()['service']['port'], self._tpl().default_port)
 
-    def test_password_only_and_settable(self):
+    def test_credentials_helm_secret_and_settable(self):
         tpl = self._tpl()
         self.assertTrue(tpl.has_admin_gui)
         self.assertEqual(tpl.admin_password_carrier, 'helm_secret')
         self.assertTrue(tpl.admin_reset_supported)
         self.assertTrue(tpl.admin_password_settable)
         self.assertTrue(tpl.admin_credentials_settable)
-        self.assertFalse(tpl.admin_username_helm_path,
-                         'UI_USERNAME 固定 admin（LiteLLM 的 env 登入是 bootstrap admin，不是使用者列）')
+        self.assertEqual(tpl.admin_username_helm_path, 'auth.adminUser',
+                         'UI 登入要帳號：沒有帳號路徑時一次性視窗會寫「沒有帳號」（.207 缺陷）')
+        self.assertEqual(self._values()['auth']['adminUser'], 'admin',
+                         '帳號預設值要在範本裡（_admin_username 讀不到時不猜 chart 預設）')
 
     def test_images_from_jcr_and_double_pinned(self):
         v = self._values()
@@ -152,6 +158,8 @@ class TestLitellmSeed(TransactionCase):
         self.assertEqual(creds.get('gateway_url'), 'https://svc-litellm-seed.litellm-seed.invalid/v1')
         self.assertEqual(creds.get('gateway_api_key_hint'), KEY_HINT)
         self.assertEqual(creds.get('gateway_url_hint'), URL_HINT)
+        self.assertEqual(service._admin_username(), 'admin',
+                         '一次性視窗的「使用者名」格（admin_username 非空才會出現）')
 
     def test_spec_matches_plan_and_pvc(self):
         tpl = self._tpl()
@@ -212,11 +220,13 @@ class TestLitellmSeed(TransactionCase):
             'litellm.apiDocs': False,
             'auth.saltKey': 'sk-evil',
             'auth.apiServerKey': 'sk-evil',
+            'auth.adminUser': 'someone',
             'resources.limits.memory': '64Gi',
         })
         self.assertEqual(allowed, {'litellm.apiDocs': False})
         self.assertEqual(sorted(rejected), [
-            'auth.apiServerKey', 'auth.saltKey', 'resources.limits.memory'])
+            'auth.adminUser', 'auth.apiServerKey', 'auth.saltKey', 'resources.limits.memory'],
+            '帳號只能經「管理員帳密」改（會驗格式、一起換密碼），不是設定表單的旋鈕')
 
     def test_description_states_the_api_caveats(self):
         desc = self._tpl().full_description
@@ -229,6 +239,7 @@ class TestLitellmSeed(TransactionCase):
                 ('Access 保護', '不要開 CF Access（會擋 API 用戶端）'),
                 ('master key 會一起換新', 'Reset 一起換（PLAN Q8）'),
                 ('約中斷 2 分鐘', '重設帳密／master key 會重啟服務（整合實測斷線約 2 分 15 秒）'),
+                ('帳號預設 admin', '帳號可改（admin_username_helm_path＝auth.adminUser）'),
         ):
             self.assertIn(needle, desc, why)
 
