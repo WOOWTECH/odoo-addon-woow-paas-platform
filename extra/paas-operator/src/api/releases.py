@@ -46,6 +46,18 @@ from src.services.storage_quota import (
     is_storage_quota_rejection,
     summarize,
 )
+from src.services.storage_capacity import (
+    CapacityDataError,
+    LonghornCluster,
+    build_capacity_error_detail,
+    collect_volume_requests,
+    format_gib,
+    has_storage_datavolume,
+    is_schedulable,
+    parse_storage_classes,
+    simulate,
+    summarize_orphans,
+)
 
 
 # ── #461：reset-config 的時間預算（階梯的最內層，＝單一權威）───────────────
@@ -156,7 +168,15 @@ def _ensure_image_pull_secrets(
     # CDI 立刻生出 importer pod，屆時再 patch SA 已經來不及（admission 只在 pod
     # 建立當下併入）。
     k8s_service.ensure_default_sa_image_pull_secret(namespace)
+    return _with_default_pull_secrets(values)
 
+
+def _with_default_pull_secrets(values: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """values 淺複本＋預設 imagePullSecrets（純函式；不碰叢集）。
+
+    #1415：容量預檢的 dry-run 要用與真正 install **同一份** values 渲染，但必須在任何
+    叢集寫入（SA patch）之前，所以把「改 values」從 ``_ensure_image_pull_secrets`` 拆出來。
+    """
     merged = dict(values or {})
     merged.setdefault(
         "imagePullSecrets", [{"name": settings.registry_secret_name}]
@@ -208,6 +228,138 @@ def _precheck_storage_quota(namespace: str) -> None:
         raise _storage_quota_conflict(namespace, summary, resources)
 
 
+def _cluster_capacity_conflict_detail(request: ReleaseCreateRequest) -> Optional[Dict[str, Any]]:
+    """#1415：這次 install 要新建的 Longhorn volume 是否「確定」排不進叢集。
+
+    排不進回 409 的 ``detail``；放得下、或任何一步拿不到資料（不知道）回 None＝放行。
+    步驟（全部唯讀，渲染不套用任何東西）：
+
+    1. 讀 Longhorn 節點／設定與 StorageClass（叢集沒有 Longhorn、權限不足、逾時 ⇒ 放行）；
+    2. 用與真正 install **同一組** chart／version／values／post-renderer 跑
+       ``helm install --dry-run``，拿到這次會建的 PVC、StatefulSet volumeClaimTemplates、
+       CDI DataVolume（manifest 可能含渲染後的 Secret，**不得進 log**）；
+    3. 扣掉 namespace 裡已經存在的同名 PVC（重試安裝），只算 provisioner 是 Longhorn 的；
+    4. 照 Longhorn 排程規則模擬放置（``storage_capacity.simulate``）。
+
+    為什麼用 dry-run 而不是在 post-renderer 裡判斷：post-renderer 是 helm 的子程序，拿不到
+    operator 的設定與 kubectl，失敗只能透過 stderr 字串傳回來；dry-run 多一次 chart 渲染
+    （實測數秒），換來資料流單純、任何失敗都能明確放行，形制同 #1407 的 upgrade 預檢。
+    """
+    namespace, name = request.namespace, request.name
+    try:
+        snapshot = k8s_service.get_longhorn_capacity_snapshot()
+    except (KubectlException, ValueError) as exc:
+        logger.warning(
+            "Cluster storage capacity pre-check skipped for %s/%s (Longhorn unreadable): %s",
+            namespace, name, getattr(exc, "stderr", None) or exc,
+        )
+        return None
+    try:
+        cluster = LonghornCluster.from_snapshot(snapshot["nodes"], snapshot["settings"])
+        classes, default_class = parse_storage_classes(snapshot["storage_classes"])
+    except CapacityDataError as exc:
+        logger.warning(
+            "Cluster storage capacity pre-check skipped for %s/%s (unexpected Longhorn data): %s",
+            namespace, name, exc,
+        )
+        return None
+    if not cluster.nodes or not any(sc.is_longhorn for sc in classes.values()):
+        logger.info("Cluster storage capacity pre-check: no Longhorn in this cluster, skipped")
+        return None
+
+    try:
+        manifest = helm_service.install(
+            namespace=namespace,
+            name=name,
+            chart=request.chart,
+            values=_with_default_pull_secrets(request.values),
+            sensitive_values=request.sensitive_values,
+            version=request.version,
+            dry_run=True,
+            subprocess_timeout_seconds=settings.storage_capacity_render_timeout_seconds,
+        )
+    except (HelmException, ValueError) as exc:
+        # 真正的 install 會在同一步失敗並走原本的錯誤處理（含 #1348 的 quota 辨識）。
+        logger.warning(
+            "Cluster storage capacity pre-check skipped for %s/%s (render failed): %s",
+            namespace, name, getattr(exc, "message", None) or exc,
+        )
+        return None
+    if not isinstance(manifest, str):
+        return None
+    try:
+        docs = [d for d in yaml.safe_load_all(manifest) if isinstance(d, dict)]
+    except yaml.YAMLError as exc:
+        logger.warning(
+            "Cluster storage capacity pre-check skipped for %s/%s (manifest unparsable: %s)",
+            namespace, name, type(exc).__name__,
+        )
+        return None
+    try:
+        existing = k8s_service.list_pvcs(namespace)
+    except KubectlException as exc:
+        logger.warning(
+            "Cluster storage capacity pre-check skipped for %s/%s (cannot list PVCs): %s",
+            namespace, name, exc.stderr or exc,
+        )
+        return None
+    overheads = k8s_service.get_cdi_filesystem_overhead() if has_storage_datavolume(docs) else None
+    volumes = collect_volume_requests(
+        docs, classes, default_class, cluster.settings, existing, overheads,
+    )
+    if not volumes:
+        return None
+    placements = simulate(cluster, volumes)
+    degraded = [
+        p for p in placements
+        if is_schedulable(p, cluster.settings) and p.placed < p.volume.replicas
+    ]
+    if degraded:
+        # Longhorn 會建、可以掛載，但少了備援——不擋（不是「確定放不下」），留給監控告警。
+        logger.warning(
+            "Cluster storage capacity: %s/%s will be created DEGRADED: %s", namespace, name,
+            ", ".join(f"{p.volume.name} {p.placed}/{p.volume.replicas} replicas"
+                      for p in degraded),
+        )
+    if all(is_schedulable(p, cluster.settings) for p in placements):
+        logger.info(
+            "Cluster storage capacity pre-check passed for %s/%s: %s", namespace, name,
+            ", ".join(f"{v.name} {format_gib(v.size_bytes)}x{v.replicas}" for v in volumes),
+        )
+        return None
+    try:
+        orphans = summarize_orphans(
+            k8s_service.list_orphaned_pvcs_all_namespaces(), classes, cluster.settings,
+        )
+    except (KubectlException, ValueError):
+        orphans = None
+    return build_capacity_error_detail(namespace, cluster, placements, orphans)
+
+
+def _precheck_cluster_storage_capacity(request: ReleaseCreateRequest) -> None:
+    """#1415：helm install 前確認叢集（Longhorn）排得下這次要建的 volume；排不下 raise 409。
+
+    只有「確定放不下」才擋；預檢本身的任何意外都放行（log），行為與本檢查加入前相同。
+    與 #1348 的工作區配額檢查分工：那邊看 namespace ResourceQuota，這裡看叢集層排程額度。
+    """
+    if not settings.storage_capacity_precheck_enabled:
+        return
+    try:
+        detail = _cluster_capacity_conflict_detail(request)
+    except Exception:  # noqa: BLE001 — 預檢的意外不能變成擋開通
+        logger.exception(
+            "Cluster storage capacity pre-check failed unexpectedly for %s/%s; allowing install",
+            request.namespace, request.name,
+        )
+        return
+    if detail is not None:
+        logger.warning(
+            "Cluster storage capacity exhausted for %s/%s: %s",
+            request.namespace, request.name, detail["message"],
+        )
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=detail)
+
+
 @router.post(
     "",
     response_model=ReleaseInfo,
@@ -224,11 +376,14 @@ async def create_release(request: ReleaseCreateRequest):
         Information about the created release
 
     Raises:
-        HTTPException: If installation fails（儲存配額不足回 409，#1348）
+        HTTPException: If installation fails（儲存配額不足回 409，#1348；叢集儲存
+            排程額度放不下回 409，#1415）
     """
     try:
         # #1348：在任何叢集寫入（SA patch／helm install）之前先檢查儲存配額。
         _precheck_storage_quota(request.namespace)
+        # #1415：再檢查叢集（Longhorn）排程額度——同樣在任何叢集寫入之前。
+        _precheck_cluster_storage_capacity(request)
         # 注入預設 imagePullSecrets（values + ns default SA 兩層，理由見
         # _ensure_image_pull_secrets docstring）。
         values = _ensure_image_pull_secrets(request.namespace, request.values)

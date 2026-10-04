@@ -44,7 +44,7 @@ The PaaS Operator Service is a secure, high-performance API that wraps Helm CLI 
 
 ### Releases
 
-- `POST /api/releases` - Install a Helm chart
+- `POST /api/releases` - Install a Helm chart. Before any cluster write it runs two read-only pre-checks and answers **409** with a structured `detail.error_code` when the install could not succeed: `workspace_storage_quota_exhausted` (namespace ResourceQuota already full, #1348) and `cluster_storage_capacity_exhausted` (the PVCs / StatefulSet `volumeClaimTemplates` / CDI DataVolumes this install would create — rendered with `helm install --dry-run` from the same chart, version and values — cannot be scheduled by Longhorn under its own rules, #1415; `detail` lists the volumes, per-node headroom and orphaned PVCs). Both checks let the install through when they cannot read their data. Kill switch: `STORAGE_CAPACITY_PRECHECK_ENABLED=false`.
 - `GET /api/releases/{namespace}/{name}` - Get release info
 - `PATCH /api/releases/{namespace}/{name}` - Upgrade release
 - `DELETE /api/releases/{namespace}/{name}` - Uninstall release
@@ -57,6 +57,10 @@ The PaaS Operator Service is a secure, high-performance API that wraps Helm CLI 
 ### Namespaces
 
 - `POST /api/namespaces` - Create namespace with resource quota
+
+### Cluster (read-only)
+
+- `GET /api/cluster/storage-capacity?storage_class=<sc>` - Longhorn scheduling capacity (#1415): per node limit / scheduled / headroom / ratio, the largest new volume that still fits with all replicas (and degraded), and orphaned PVCs (`paas.woowtech.io/orphaned-at`, all namespaces). Always 200; `available: false` + `reason` when Longhorn cannot be read. Polled by the platform monitor cron.
 
 ### Routes (Cloudflare Tunnel)
 
@@ -270,6 +274,7 @@ The service uses a dedicated ServiceAccount (`paas-system/paas-operator`) bound 
 - `resourcequotas`, `poddisruptionbudgets`, `horizontalpodautoscalers`, `leases`
 - `jobs`, `cronjobs`
 - Cluster-scoped: `persistentvolumes` (get/list/patch/delete), `storageclasses` (get/list)
+- Longhorn (read-only, chart ≥ 0.1.22, #1415): `nodes.longhorn.io`, `settings.longhorn.io` (get/list) — without it the capacity pre-check fails open
 - RBAC: `roles`, `rolebindings` (RWCU — needed for per-tenant Role provisioning)
 
 > The `ClusterRole` is defined and published from the cross-repo **`woow-paas-charts`** `paas-operator` chart and applied via Fleet (`paas-app-bundle-cd`); it is _not_ managed from this repo. Edit it there, not with a local `helm upgrade`.
