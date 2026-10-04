@@ -1005,3 +1005,5 @@ from . import test_storage_quota_message_1348
 from . import test_n8n_storage_class_public_url_1334
 # #1370／#1186：Odoo／n8n 管理員密碼重設（app_admin_reset_kind、operator exec、不 helm upgrade）。
 from . import test_app_admin_password_reset_1370
+# #1408：Redeploy 帶範本 image、就緒後核對 workload image（#1407 為 operator 側）。
+from . import test_redeploy_images_1408

@@ -45,12 +45,53 @@ _PVC_KEEP_POST_RENDERER = str(
 )
 
 
-def _pvc_keep_post_renderer_args() -> List[str]:
-    """Helm CLI flags to run the PVC-keep post-renderer (shared by install/upgrade)."""
-    return [
+def _pvc_keep_post_renderer_args(live_snapshot: Optional[Dict[str, Any]] = None) -> List[str]:
+    """Helm CLI flags to run the PVC-keep post-renderer (shared by install/upgrade).
+
+    #1407: ``live_snapshot`` (``pvc_keep_post_renderer.live_snapshot`` shape) is handed
+    to the renderer as a second arg so objects that already exist render with the live
+    values of their immutable fields (PVC storageClassName/accessModes/volumeMode/size,
+    StatefulSet volumeClaimTemplates). Omitted when there is nothing live to reuse.
+    """
+    args = [
         "--post-renderer", sys.executable,
         "--post-renderer-args", _PVC_KEEP_POST_RENDERER,
     ]
+    if live_snapshot and (live_snapshot.get("pvc") or live_snapshot.get("sts")):
+        args.extend([
+            "--post-renderer-args",
+            json.dumps(live_snapshot, sort_keys=True, separators=(",", ":")),
+        ])
+    return args
+
+
+def _live_objects(namespace: str, kinds: str = "pvc,statefulsets") -> Optional[List[Dict[str, Any]]]:
+    """Live objects of ``kinds`` in ``namespace`` (kubectl ``items``); None on failure.
+
+    #1407. Callers treat None as "unknown" and fall back to the pre-#1407 behaviour,
+    so a failed lookup can never make an install/upgrade fail that would otherwise
+    have succeeded.
+    """
+    try:
+        result = KubernetesService()._run_command(
+            ["get", kinds, "--namespace", namespace, "--output", "json"]
+        )
+        items = json.loads(result.stdout or "{}").get("items")
+        return items if isinstance(items, list) else []
+    except Exception as e:  # noqa: BLE001 — degrade to pre-#1407 behaviour
+        logger.warning(
+            "Could not list %s in %s for live-value reuse (#1407): %s", kinds, namespace, e,
+        )
+        return None
+
+
+def _live_snapshot(namespace: str) -> Dict[str, Any]:
+    """Renderer snapshot of the namespace's PVCs and StatefulSets ({} when unknown)."""
+    from src.pvc_keep_post_renderer import live_snapshot
+
+    items = _live_objects(namespace)
+    return live_snapshot(items) if items else {}
+
 
 # issue #29: the private Helm repo token is passed via ``--password`` on the helm
 # argv. Redact credential values BEFORE they reach the "Executing:" log line and
@@ -686,7 +727,9 @@ class HelmService:
             "json",
         ]
         # #317: PVC-keep post-renderer — before ALL conditional flags.
-        args.extend(_pvc_keep_post_renderer_args())
+        # #1407: a retried install can meet PVCs a failed attempt left behind
+        # (keep-annotated, same names) — reuse their live immutable fields too.
+        args.extend(_pvc_keep_post_renderer_args(_live_snapshot(namespace)))
 
         if create_namespace:
             args.append("--create-namespace")
@@ -779,8 +822,13 @@ class HelmService:
         atomic: bool = False,
         timeout_seconds: Optional[int] = None,
         subprocess_timeout_seconds: Optional[int] = None,
+        dry_run: bool = False,
     ) -> ReleaseInfo:
         """Upgrade a Helm release.
+
+        ``dry_run=True`` (#1407 preflight) runs the exact same command with
+        ``--dry-run`` — same values, same post-renderer, nothing applied — and returns
+        the rendered manifest **string** instead of a ``ReleaseInfo``.
 
         Args:
             namespace: Release namespace
@@ -846,7 +894,8 @@ class HelmService:
         # conditional flags (incl. both the --reset-values and --reuse-values
         # branches) so every upgrade variant rewrites the stored manifest WITH
         # keep; otherwise the next uninstall would delete the PVC.
-        args.extend(_pvc_keep_post_renderer_args())
+        # #1407: existing PVCs/StatefulSets render with their live immutable fields.
+        args.extend(_pvc_keep_post_renderer_args(_live_snapshot(namespace)))
 
         if version:
             args.extend(["--version", version])
@@ -857,6 +906,8 @@ class HelmService:
             args.append("--reuse-values")
         if atomic:
             args.append("--atomic")
+        if dry_run:
+            args.append("--dry-run")
         # #461: omitted when None so every pre-existing caller keeps helm's 5m
         # default verbatim (behaviour-neutral); only the reset path bounds it.
         if timeout_seconds is not None:
@@ -887,6 +938,8 @@ class HelmService:
         try:
             result = self._run_command(args, timeout=subprocess_timeout_seconds)
             release_data = json.loads(result.stdout)
+            if dry_run:
+                return release_data.get("manifest") or ""
             return self._parse_release_info(release_data)
         finally:
             if merged_values:
@@ -1307,6 +1360,12 @@ class KubernetesService:
                     task=labels.get("woow.paas/task"),
                     owner_kind=_controller_owner_kind(metadata),
                     creation_timestamp=created or None,
+                    # #1408：spec 上寫的 image 參照（不是 imageID）——平台拿來核對
+                    # Redeploy 之後 workload 真的換成範本釘的 image。
+                    images=[
+                        c.get("image") for c in (pod.get("spec") or {}).get("containers") or []
+                        if c.get("image")
+                    ],
                 )
             )
 

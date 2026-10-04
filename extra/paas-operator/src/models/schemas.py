@@ -276,6 +276,9 @@ class PodInfo(BaseModel):
     # #1222 升級提早收斂：metadata.creationTimestamp 原值（RFC 3339 UTC）。``age`` 是
     # 人讀字串且隨時間變，不能拿來判斷「Pod 建立於某時刻之後」。
     creation_timestamp: Optional[str] = None
+    # #1408：主要容器（``spec.containers``，不含 init）的 image 參照，順序同 spec。
+    # 舊 operator 不帶這個 key ⇒ 平台看到 None 就跳過 Redeploy 後的 image 核對。
+    images: Optional[List[str]] = None
 
 
 class VmiInfo(BaseModel):

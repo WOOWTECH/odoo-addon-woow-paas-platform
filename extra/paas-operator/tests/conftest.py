@@ -54,6 +54,23 @@ def storage_quota_snapshot(request):
         yield mock_snapshot
 
 
+@pytest.fixture(autouse=True)
+def live_objects_lookup(request):
+    """#1407：install／upgrade 前讀 namespace 的 PVC／StatefulSet／Deployment——也是真 kubectl。
+
+    預設兩個 seam 都回「讀不到」（renderer 不帶 live 快照、preflight 跳過），行為
+    與 #1407 之前相同。要測這條路的測試把本 fixture 收進參數改 ``return_value``，
+    或在測試內 ``patch`` 回真函式（搭配 mock 的 ``subprocess.run``）。
+    """
+    if request.node.get_closest_marker("integration"):
+        yield None
+        return
+
+    with patch("src.services.helm._live_snapshot", return_value={}) as mock_snapshot, \
+            patch("src.api.releases._live_objects", return_value=None) as mock_objects:
+        yield {"snapshot": mock_snapshot, "objects": mock_objects}
+
+
 # ==================== #841 真實 outbound 攔截 ====================
 
 #: 唯一的例外條件。用 **marker** 而不是路徑判斷是有理由的，見

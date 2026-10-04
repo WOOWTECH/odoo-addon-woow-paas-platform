@@ -19744,3 +19744,36 @@ msgstr "Odoo 管理員（operator exec）"
 #: model:ir.model.fields.selection,name:woow_paas_platform.selection__woow_paas_platform_cloud_app_template__app_admin_reset_kind__n8n_exec
 msgid "n8n owner (operator exec)"
 msgstr "n8n 擁有者（operator exec）"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid ""
+"Redeploy finished, but the release runs chart %(actual)s while the product "
+"pins %(expected)s."
+msgstr "已重新部署，但 release 跑的是 chart %(actual)s，商品釘的是 %(expected)s。"
+
+#. module: woow_paas_platform
+#. odoo-python
+#: code:addons/woow_paas_platform/models/cloud_service.py:0
+msgid ""
+"After the redeploy the workload is not running the expected image: "
+"%(detail)s"
+msgstr "重新部署後，workload 跑的不是預期的 image：%(detail)s"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_service__redeploy_check_message
+msgid "Redeploy Check"
+msgstr "重新部署核對"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,help:woow_paas_platform.field_woow_paas_platform_cloud_service__redeploy_check_message
+msgid ""
+"Result of comparing the running workload with the product template after the"
+" last redeploy (chart version and images). Empty when they match."
+msgstr "上次重新部署後，實際執行的 workload 與商品範本的核對結果（chart 版本與 image）。相符時為空。"
+
+#. module: woow_paas_platform
+#: model:ir.model.fields,field_description:woow_paas_platform.field_woow_paas_platform_cloud_service__redeploy_verify_pending
+msgid "Redeploy Verification Pending"
+msgstr "等待重新部署核對"
