@@ -75,3 +75,5 @@ from . import res_lang
 
 # feat: #1159 Q38 post-deploy init 執行面的背景健康監控（mail.thread 單例掛點）
 from . import platform_monitor
+# #1457：/woow、OAuth 頁面的安全標頭（只套本 addon 路徑）。
+from . import ir_http

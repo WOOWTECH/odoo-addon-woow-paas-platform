@@ -147,7 +147,7 @@
                     <div class="o_woow_topup_support_body">
                         <div class="o_woow_topup_support_item">
                             <WoowIcon name="'help'" size="18"/>
-                            <a href="https://docs.woowtech.io" target="_blank" rel="noopener" class="o_woow_topup_support_link">Help &amp; Support</a>
+                            <a t-att-href="helpUrl" target="_blank" rel="noopener" class="o_woow_topup_support_link">Help &amp; Support</a>
                         </div>
                         <div class="o_woow_topup_support_item">
                             <WoowIcon name="'mail'" size="18"/>

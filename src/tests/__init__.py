@@ -1032,3 +1032,6 @@ from . import test_never_running_orphan_grace_1431
 from . import test_never_running_billing_1424
 # #1433：回復版本保留平台管的管理員帳密；#1434：ns 的 ephemeral-storage 額度。
 from . import test_rollback_preserves_credentials_1433
+# R8 平台 UX（#1453 說明網址／documentation_url、#1456 同步時間時區與 helm_revision 回寫、
+# #1457 平台頁面安全標頭）。
+from . import test_platform_ux_r8

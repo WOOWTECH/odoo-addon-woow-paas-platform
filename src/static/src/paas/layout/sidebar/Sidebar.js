@@ -2,7 +2,7 @@
 import { Component, useState, onMounted } from "@odoo/owl";
 import { _t } from "@web/core/l10n/translation";
 import { profileService } from "../../services/profile_service";
-import { showProjects } from "../../core/platform_config";
+import { helpUrl, showProjects } from "../../core/platform_config";
 import { sidebarSection } from "../../core/nav_sections";
 
 const SIDEBAR_SECTION = {
@@ -66,6 +66,7 @@ export class Sidebar extends Component {
     }
 
     openHelp() {
-        window.open("https://docs.woowtech.io", "_blank");
+        // #1453：網址由 core/platform_config 統一提供（原本寫死的網域不存在）。
+        window.open(helpUrl(), "_blank", "noopener");
     }
 }

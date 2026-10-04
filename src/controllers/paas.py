@@ -6,6 +6,7 @@ import logging
 import threading
 import traceback
 import uuid
+from datetime import timezone
 from typing import Any
 from urllib.parse import urlparse
 
@@ -125,6 +126,27 @@ def _show_projects(env) -> bool:
         SHOW_PROJECTS_FLAG) or '').strip().lower() in ('true', '1')
 
 
+# #1453：「說明與支援」的唯一網址來源（側欄、頭像選單、儲值頁共用）。原本三處各自寫死
+# https://docs.woowtech.io，該網域根本不存在（NXDOMAIN）。預設值是現有的幫助中心；
+# 日後有專屬文件站時改 config_parameter 即可，不必發版。
+HELP_URL_PARAM = 'woow_paas_platform.help_url'
+DEFAULT_HELP_URL = 'https://aiot.woowtech.io/blog/help-center-7'
+
+
+def _help_url(env) -> str:
+    """回傳「說明與支援」網址；參數缺值或不是 http(s) 網址時退回預設值。
+
+    只接受 http(s)：這個值會被前端直接 window.open／放進 href，`javascript:` 之類
+    的 scheme 一律不收（設定錯了也只會退回預設，而不是變成可執行的連結）。
+    """
+    raw = (env['ir.config_parameter'].sudo().get_param(HELP_URL_PARAM) or '').strip()
+    if raw:
+        parsed = urlparse(raw)
+        if parsed.scheme in ('http', 'https') and parsed.netloc:
+            return raw
+    return DEFAULT_HELP_URL
+
+
 def _account_denial(env) -> dict[str, Any] | None:
     """Product access is independent of Odoo's internal/Portal identity.
 
@@ -200,6 +222,7 @@ class PaasController(HiddenChainMixin, Controller):
         # 單次頁面載入成本可忽略）；router + nav 同步共用此注入值。
         session_info = dict(request.env['ir.http'].session_info())
         session_info['woow_show_projects'] = _show_projects(request.env)
+        session_info['woow_help_url'] = _help_url(request.env)
         return request.render(
             'woow_paas_platform.paas_app',
             {'session_info': session_info}
@@ -4046,6 +4069,22 @@ class PaasController(HiddenChainMixin, Controller):
                                     or svc.helm_chart_version
                                 ),
                             })
+                        elif svc.exists() and svc.state != 'deleting':
+                            # #1456：背景 poll 可能早一步把服務推回 running——operator 還在
+                            # 拉 chart、helm 尚未進入 pending-upgrade 時，release 仍是上一版
+                            # 的 deployed、pods 也都 ready。舊碼只在 upgrading／suspended 時
+                            # 回寫，於是帳本停在升級前的 revision，直到每日對帳才追上
+                            # （R8：OD 平台 9／實際 10、Code Server 5／6）。這裡只做**單調**
+                            # 回寫：operator 明確回報、且比帳本新才寫，不碰 state。
+                            reported = release_info.get('revision')
+                            if isinstance(reported, int) and reported > (svc.helm_revision or 0):
+                                svc.write({
+                                    'helm_revision': reported,
+                                    'helm_chart_version': (
+                                        release_info.get('chart_version')
+                                        or svc.helm_chart_version
+                                    ),
+                                })
                 except Exception as exc:
                     _logger.error("Background upgrade failed for service %s: %s", service_id, exc)
                     try:
@@ -4335,6 +4374,9 @@ class PaasController(HiddenChainMixin, Controller):
                 'name': service.template_id.name,
                 'slug': service.template_id.slug or '',
                 'category': service.template_id.category,
+                # #1453：配置頁「View Documentation」讀這一格；原本漏帶，連結永遠不出現
+                # （marketplace 的 template API 有帶，服務詳情這份沒有）。
+                'documentation_url': service.template_id.documentation_url or '',
                 # #460 S1：前端 Reset 密碼按鈕的顯示判準（ServiceDetailPage 的
                 # hasAdminGui getter）唯一的資料入口。**直接鏡射模板欄位、不做任何
                 # 推導**——與 reset endpoint 的授權判準（:1293 的
@@ -4386,8 +4428,12 @@ class PaasController(HiddenChainMixin, Controller):
                 # Odoo 的 `json_default`，序列化成 SQL 空格格式（`2026-08-26 12:34:56`），
                 # 與同一份 payload 其他 datetime 欄位的 ISO `T` 格式不一致，
                 # 而前端那格又是裸 `t-esc` ⇒ 原始字串直接印給租戶。
+                # #1456：帶上 UTC offset。前端對「不帶 offset」的時間字串目前仍照 ECMA
+                # 規格當成當地時間讀（全面切換見 #914），這一格因此把 UTC 當台灣時間
+                # 顯示、比同頁回復版本清單（helm 回的值帶 offset）慢 8 小時。帶 offset
+                # 的形狀（SHAPE-4）在兩種讀法下都正確，#914 切換後也不必再改。
                 'last_release_sync_at': (
-                    service.last_release_sync_at.isoformat()
+                    service.last_release_sync_at.replace(tzinfo=timezone.utc).isoformat()
                     if service.last_release_sync_at else None
                 ),
                 # #559：helm_values 有 groups='base.group_system'，屬性直讀會

@@ -7,6 +7,7 @@ import { formatDate } from "../../../services/utils";
 import { formatUserDateTime } from "../../../utils/datetime_helpers";
 import { cloudService } from "../../../services/cloud_service";
 import { copyText } from "../../../utils/clipboard";
+import { formatPoints } from "../../../utils/billing_helpers";
 
 /**
  * OverviewTab Component
@@ -32,7 +33,48 @@ export class OverviewTab extends Component {
     }
 
     get isOnline() {
-        return this.props.service.state === "running";
+        return this.connectionStatus === "online";
+    }
+
+    /**
+     * #1456：連線狀態三態。
+     *
+     * - running → online
+     * - upgrading（改設定／改 addon 的 helm upgrade）→ updating：升級期間舊版本照常服務
+     *   （R8 實測 HA／Omnigent／OD 全程 200），原本卻顯示 OFFLINE。
+     * - deploying／initializing 且曾經升級過（last_upgraded_at 有值＝重新部署、addon 變更
+     *   的 init）→ updating，理由同上；首次開通的 deploying／initializing 服務本來就還
+     *   不能用，維持 offline。
+     * - 其他（error、suspended、deleting…）→ offline。
+     *
+     * ⚠ 這仍是平台「最後一次觀測」的狀態，不是即時探測：running 服務平台不會持續
+     * 探測 HTTP，應用程式自己重啟（例 HA 內按重新啟動）時這裡仍顯示 online（#1456 的
+     * 未修部分，需 chart httpGet probe＋平台對 running 服務的低頻觀測）。
+     */
+    get connectionStatus() {
+        const { state, last_upgraded_at: lastUpgradedAt } = this.props.service;
+        if (state === "running") return "online";
+        if (state === "upgrading") return "updating";
+        if (["deploying", "initializing"].includes(state) && lastUpgradedAt) return "updating";
+        return "offline";
+    }
+
+    get subscription() {
+        return this.props.service.subscription || null;
+    }
+
+    /**
+     * #1454：試用中的首個計費日。訂閱的 start_date 在試用時被設成 trial_end＋1
+     * （subscription_lifecycle_mixin），就是第一次扣款的日子；沒有時退回 next_payment。
+     */
+    get firstBillingDate() {
+        const sub = this.subscription;
+        if (!sub) return null;
+        return sub.start_date || sub.next_payment || null;
+    }
+
+    get formattedPlanPrice() {
+        return formatPoints(this.subscription?.plan_price || 0);
     }
 
     get publicUrl() {
