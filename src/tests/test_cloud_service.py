@@ -427,9 +427,10 @@ class TestCloudService(TransactionCase):
         ):
             service._do_cleanup()
 
+        # #1431：這個 fixture 從未進過 running ⇒ 另帶 grace_period_days=1（孤兒 PVC 只留 1 天）。
         mock_client.uninstall_release.assert_called_once_with(
             'paas-ws-stg-cafef00d', 'svc-deadbeef',
-            subdomain=False,
+            subdomain=False, grace_period_days=1,
         )
         self.assertEqual(service.state, 'deleting')
 
@@ -469,9 +470,10 @@ class TestCloudService(TransactionCase):
         ):
             service._do_cleanup()
 
+        # #1431：從未 running 的 fixture ⇒ 另帶 grace_period_days=1。
         mock_client.uninstall_release.assert_called_once_with(
             'paas-ws-stg-cafef00d', 'svc-deadbeef',
-            subdomain='paas-cs-cafef00d-deadbeef',
+            subdomain='paas-cs-cafef00d-deadbeef', grace_period_days=1,
         )
 
     def test_delete_recomputes_quota_over_survivors(self):

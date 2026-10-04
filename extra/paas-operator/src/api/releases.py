@@ -581,18 +581,59 @@ def build_orphan_pvc_labels(release_name: str, grace_period_days: int) -> Dict[s
     }
 
 
+def resolve_orphan_grace_period_days(
+    requested: Optional[str], namespace: str, name: str
+) -> int:
+    """#1431：這次刪除的孤兒 PVC／DataVolume 保留天數。
+
+    平台對「從未正常運作過」的服務會帶 ``grace_period_days=1``（沒有租戶資料要保護，
+    不必佔用 Longhorn 排程額度 90 天）。只接受 ``1 ≤ n ≤ settings.pvc_grace_period_days``
+    ——只能**縮短**、不能延長預設保留期；沒帶、不是整數、超出範圍一律用預設，
+    **不回 422**：刪除是不可重來的操作，參數寫壞不該讓服務刪不掉（超出範圍時記 warning）。
+
+    參數宣告成字串再自己解析，正是為了不讓 FastAPI 對非整數回 422。
+    """
+    default = settings.pvc_grace_period_days
+    if requested is None or requested == "":
+        return default
+    try:
+        days = int(requested)
+    except (TypeError, ValueError):
+        days = None
+    if days is None or not 1 <= days <= default:
+        logger.warning(
+            "Ignoring grace_period_days=%r for %s/%s (allowed 1..%s); using the default %s",
+            requested, namespace, name, default, default,
+        )
+        return default
+    return days
+
+
 @router.delete(
     "/{namespace}/{name}",
     response_model=Dict[str, str],
     summary="Uninstall a Helm release",
 )
-async def delete_release(namespace: str, name: str, subdomain: Optional[str] = None):
+async def delete_release(
+    namespace: str,
+    name: str,
+    subdomain: Optional[str] = None,
+    grace_period_days: Optional[str] = Query(
+        default=None,
+        description=(
+            "#1431: shorten how long the orphaned PVCs / DataVolumes of this release are "
+            "kept (1..PVC_GRACE_PERIOD_DAYS). Anything else is ignored and the default is used."
+        ),
+    ),
+):
     """Uninstall a Helm release.
 
     Args:
         namespace: Release namespace
         name: Release name
         subdomain: Optional subdomain to delete from Cloudflare (if not provided, auto-generated)
+        grace_period_days: #1431 optional shorter retention for the orphaned PVCs /
+            DataVolumes (see ``resolve_orphan_grace_period_days``)
 
     Returns:
         Deletion confirmation message
@@ -600,6 +641,8 @@ async def delete_release(namespace: str, name: str, subdomain: Optional[str] = N
     Raises:
         HTTPException: If uninstallation fails
     """
+    # 先解析（純函式、不會失敗），PVC 與 DataVolume 兩段共用同一個值。
+    orphan_grace_days = resolve_orphan_grace_period_days(grace_period_days, namespace, name)
     try:
         result = helm_service.uninstall(namespace, name)
         logger.info(f"Uninstalled release {name} from {namespace}")
@@ -616,13 +659,11 @@ async def delete_release(namespace: str, name: str, subdomain: Optional[str] = N
                 namespace, label_selector=f"app.kubernetes.io/instance={name}"
             )
             if remaining_pvcs:
-                labels = build_orphan_pvc_labels(
-                    name, settings.pvc_grace_period_days
-                )
+                labels = build_orphan_pvc_labels(name, orphan_grace_days)
                 k8s_service.label_pvcs(namespace, remaining_pvcs, labels)
                 logger.info(
-                    f"Labeled {len(remaining_pvcs)} orphaned PVCs in {namespace}: "
-                    f"{remaining_pvcs}"
+                    f"Labeled {len(remaining_pvcs)} orphaned PVCs in {namespace} "
+                    f"(grace {orphan_grace_days}d): {remaining_pvcs}"
                 )
         except Exception as e:
             logger.warning(f"Failed to label orphaned PVCs in {namespace}: {e}")
@@ -646,9 +687,7 @@ async def delete_release(namespace: str, name: str, subdomain: Optional[str] = N
                 namespace, label_selector=f"app.kubernetes.io/instance={name}"
             )
             if remaining_dvs:
-                labels = build_orphan_pvc_labels(
-                    name, settings.pvc_grace_period_days
-                )
+                labels = build_orphan_pvc_labels(name, orphan_grace_days)
                 labelled = k8s_service.label_datavolumes(
                     namespace, remaining_dvs, labels
                 )

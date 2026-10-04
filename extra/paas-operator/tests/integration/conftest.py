@@ -128,6 +128,57 @@ def app_client():
         yield client
 
 
+def _reclaim_retained_pvs(owns) -> int:
+    """把 claim 屬於測試 namespace、reclaimPolicy=Retain 的 PV 改成 Delete；回傳改了幾顆。
+
+    #1431：共用叢集的預設 StorageClass（Longhorn）是 Retain。測試 namespace 一刪，PVC 跟著
+    消失，PV 卻停在 ``Released`` 永遠不回收——10-04 兩輪 integration 就留下 14 顆，要人手清。
+    翻成 Delete 之後，PV（與底層 volume）會隨 PVC 一起刪掉（已 Released 的也會被回收）。
+
+    ``owns(claim_namespace)`` 決定範圍：逐測試時是「恰好這個 namespace」，收尾掃描時是
+    「本輪測試前綴」（``integration_namespace_prefix`` 把關，只會是 ``paas-ws-test-op-`` 或
+    具名的 ``dev-sandbox-*-``）。best-effort，失敗不影響測試結果。
+    """
+    try:
+        out = subprocess.run(
+            ["kubectl", "get", "pv", "-o",
+             'jsonpath={range .items[*]}{.metadata.name}{"\\t"}'
+             '{.spec.claimRef.namespace}{"\\t"}{.spec.persistentVolumeReclaimPolicy}{"\\n"}{end}'],
+            capture_output=True, text=True, timeout=30,
+        ).stdout
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return 0
+    patched = 0
+    for line in out.splitlines():
+        parts = line.split("\t")
+        if len(parts) == 3 and parts[1] and owns(parts[1]) and parts[2] == "Retain":
+            subprocess.run(
+                ["kubectl", "patch", "pv", parts[0], "--type=merge",
+                 "-p", '{"spec":{"persistentVolumeReclaimPolicy":"Delete"}}'],
+                capture_output=True, timeout=30,
+            )
+            patched += 1
+    return patched
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _sweep_retained_test_pvs(_check_environment):
+    """收尾：Longhorn 是 Immediate 綁定、非同步建 PV——PVC 剛建好就結束的測試，PV 可能在
+    逐測試的翻轉**之後**才出現，namespace 刪掉後照樣變 Released（實測 1 顆）。所以整輪
+    結束時再對本輪前綴掃幾次，直到連續一段時間沒有新的 Retain PV 為止（最多約 2 分鐘）。
+    """
+    yield
+    prefix = integration_namespace_prefix()
+    deadline = time.time() + 120
+    quiet_since = time.time()
+    while time.time() < deadline:
+        if _reclaim_retained_pvs(lambda ns: ns.startswith(prefix)):
+            quiet_since = time.time()
+        elif time.time() - quiet_since >= 30:
+            break
+        time.sleep(5)
+
+
 @pytest.fixture
 def test_namespace():
     """Isolated namespace per test, deleted (async) on teardown."""
@@ -137,6 +188,7 @@ def test_namespace():
         check=True, capture_output=True,
     )
     yield name
+    _reclaim_retained_pvs(lambda ns: ns == name)
     # --wait=false: kubelet finalizers can take seconds; let CI keep moving.
     subprocess.run(
         ["kubectl", "delete", "namespace", name, "--wait=false"],
