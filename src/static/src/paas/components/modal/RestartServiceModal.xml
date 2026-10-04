@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+  <t t-name="woow_paas_platform.RestartServiceModal">
+    <div class="o_woow_modal_backdrop" t-on-click="onBackdropClick">
+      <div class="o_woow_modal o_woow_modal_sm" t-on-click.stop="">
+        <div class="o_woow_modal_header">
+          <h2>Restart Service</h2>
+          <button
+            class="o_woow_modal_close"
+            t-on-click="props.onClose"
+            t-att-disabled="state.restarting">
+            <WoowIcon name="'close'" size="20"/>
+          </button>
+        </div>
+
+        <div class="o_woow_modal_body">
+          <p>Restart <strong t-esc="props.service.name"/>?</p>
+          <ul class="o_woow_restart_notes">
+            <li>Every component of the service is restarted; this usually takes about a minute.</li>
+            <li>The service is unavailable while it restarts, and work in progress is interrupted.</li>
+            <li>Data and settings are kept.</li>
+          </ul>
+
+          <div t-if="state.error" class="o_woow_error_message">
+            <WoowIcon name="'error'" size="16"/>
+            <span t-esc="state.error"/>
+          </div>
+        </div>
+
+        <div class="o_woow_modal_footer">
+          <WoowButton
+            variant="'secondary'"
+            size="'md'"
+            onClick="props.onClose"
+            disabled="state.restarting">
+            Cancel
+          </WoowButton>
+          <WoowButton
+            variant="'primary'"
+            size="'md'"
+            onClick.bind="onRestart"
+            disabled="state.restarting">
+            <t t-if="state.restarting">
+              <WoowIcon name="'sync'" size="18" class="'o_woow_spin'"/>
+              Restarting...
+            </t>
+            <t t-else="">
+              <WoowIcon name="'restart_alt'" size="18"/>
+              Restart
+            </t>
+          </WoowButton>
+        </div>
+      </div>
+    </div>
+  </t>
+</templates>

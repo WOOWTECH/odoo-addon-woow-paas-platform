@@ -1849,6 +1849,78 @@ class CloudService(models.Model):
 
         return True
 
+    # #1432 — 租戶「重新啟動」
+    # ------------------------------------------------------------------ #
+
+    def _restart_workloads(self):
+        """#1432：rollout restart 這台服務的所有 Deployment／StatefulSet。
+
+        R8：所有範本都沒有租戶可用的重新啟動入口；HA 網頁卡死（tcpSocket liveness
+        偵測不到）時只能找客服，其他服務只能靠「用原密碼重存帳密」之類的繞路。
+
+        - **private**（``_`` 開頭）：授權（workspace owner／admin、訂閱閘）只在
+          controller，``get_public_method`` 擋 RPC 直呼（同 #357 C05、#1185）。
+        - 只接受 ``running``：``upgrading`` 中再重啟會與進行中的 helm／rollout 互踩；
+          ``error`` 的成因（helm 失敗、init 額度用完）重啟救不了，出口是修改配置或
+          回復版本；``suspended`` 是停權（訂閱閘已擋，這裡是第二道）。
+        - VM 型（HAOS）不支援：KubeVirt 沒有 rollout 語意，硬關機重開不是同一種操作。
+        - 列鎖序列化：與 reset 同一招，第二個請求等第一個提交後會看到 ``upgrading``。
+        - 成功後轉 ``upgrading``＋``last_upgraded_at``（#489 的時間錨），poll 在 Pod
+          就緒後轉回 ``running``；前端同時鎖住其他操作。
+        """
+        self.ensure_one()
+        from ..services.paas_operator import (
+            get_paas_operator_client,
+            PaaSOperatorError,
+        )
+
+        if self._needs_vm_status():
+            raise UserError(_("This type of service cannot be restarted from the platform."))
+
+        self.env.cr.execute(
+            "SELECT id FROM woow_paas_platform_cloud_service WHERE id = %s FOR UPDATE",
+            [self.id],
+        )
+        self.invalidate_recordset()
+        if self.state == 'upgrading':
+            raise UserError(
+                _("Service is finishing an update (usually under a minute). "
+                  "Please wait and try again.")
+            )
+        if self.state != 'running':
+            raise UserError(_("Only a running service can be restarted."))
+        if not (self.helm_release_name and self.helm_namespace):
+            raise UserError(
+                _("Service has no helm release yet — deploy first before restarting it.")
+            )
+        if self._init_lease_active():
+            raise UserError(
+                _("An initialization request for this service may still be running. "
+                  "Please try again in a few minutes.")
+            )
+
+        client = get_paas_operator_client(self.env)
+        if not client:
+            raise UserError(_("PaaS Operator not configured. Contact administrator."))
+        try:
+            client.restart_release(
+                namespace=self.helm_namespace,
+                release_name=self.helm_release_name,
+            )
+        except PaaSOperatorError as e:
+            _logger.error(
+                "restart failed for service %s (id=%s): %s",
+                self.name, self.id, e.detail or e.message,
+            )
+            raise UserError(_("Restart failed. Check service status and retry.")) from e
+
+        self.write({
+            'state': 'upgrading',
+            'error_message': False,
+            'last_upgraded_at': fields.Datetime.now(),
+        })
+        return True
+
     # #357 — admin_password 重置
     # ------------------------------------------------------------------ #
 
