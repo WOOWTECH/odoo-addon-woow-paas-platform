@@ -235,7 +235,9 @@
 
             <!-- Helm Configuration：自家 woow-odoo chart（#1130；woow-paas/woow-paas-charts#81）。
                  取代 Bitnami odoo 28.2.10（#1121 耦合盤點）。chart 名 2026-09-27 定案 woow-odoo；
-                 版號 0.2.3（0.2.3 只加 platform profile 下限，tenant 與 0.2.2 相同）。
+                 版號 0.2.7（tenant 相對 0.2.3 只有 scripts 變動：#98 首裝修復、備份／回收 Job 起跑等 PG
+                 ——0.2.3 的 backup／housekeeping 因 NP 生效延遲每次都失敗，woow-paas-charts#99／#136；
+                 values 介面相同，schema 只多允許 conf.limitMemory* 為 null）。
                  ⚠ chart version 不可帶 pre-release 後綴：operator 以 rsplit("-", 1) 拆 helm list
                  的 chart 欄位。
                  values 鍵集合由 chart values.schema.json 鎖死（additionalProperties: false），
@@ -261,7 +263,7 @@
                  schema 擋，dot-path smtp.* 的版本由 #1193 補回。 -->
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/woow-odoo</field>
-            <field name="helm_chart_version">0.2.3</field>
+            <field name="helm_chart_version">0.2.7</field>
             <field name="helm_default_values">{"profile": "tenant", "image": {"registry": "jcr-prod.woowtech.io", "repository": "woow-paas-docker-local/cloud-odoo", "tag": "20260929.0134", "digest": "sha256:8f984434b810c0ebeeea54c460167b8f487ece5ff87286f334c4fd47f43e5cd3"}, "resources": {"requests": {"cpu": "200m", "memory": "512Mi"}, "limits": {"cpu": "2000m", "memory": "2Gi"}}, "persistence": {"size": "10Gi"}, "loadDemoData": false, "conf": {"workers": 0, "maxCronThreads": 2}, "postgres": {"database": "odoo"}}</field>
             <field name="helm_value_specs">{"required": [
                 {"key": "conf.adminEmail", "label": "Administrator Email", "type": "text",
