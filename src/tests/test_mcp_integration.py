@@ -213,29 +213,42 @@ class TestBuildMCPSidecarConfig(TransactionCase):
 
 
 @tagged('post_install', '-at_install')
-class TestN8nSeedSidecarHardening1405(TransactionCase):
-    """#1405：seed 的 n8n sidecar 必須釘版，且 SSRF 模式放行 localhost。
+class TestN8nSeedNoBuiltinMcp1426(TransactionCase):
+    """#1426：n8n 不再附帶內建 MCP sidecar（與「n8n MCP Server」商品重複）。
 
-    sidecar 經 ``http://localhost:5678`` 打同 Pod 的 n8n；n8n-mcp 新版預設
-    ``WEBHOOK_SECURITY_MODE=strict`` 會把 localhost 擋掉，所有 ``n8n_*`` 工具全失敗。
-    ``:latest`` 讓這種行為改變在沒有任何發版的情況下悄悄進到正式站。
+    sidecar 跟 n8n 在同一個 pod，映像拉不下來時 n8n 本身也不可用。欄位必須在 seed 裡
+    明確寫成空值——noupdate=0 的 -u 不會清掉 XML 沒列出的欄位。
     """
 
     def setUp(self):
         super().setUp()
         self.template = self.env.ref('woow_paas_platform.cloud_app_n8n')
 
-    def test_sidecar_image_is_pinned_by_digest(self):
-        image = self.template.mcp_sidecar_image
-        self.assertIn('@sha256:', image)
-        self.assertNotIn(':latest', image)
+    def test_seed_has_no_sidecar(self):
+        self.assertFalse(self.template.mcp_enabled)
+        self.assertFalse(self.template.mcp_sidecar_image)
+        self.assertFalse(self.template.mcp_sidecar_env)
+        self.assertFalse(self.template.mcp_api_key_helm_path)
 
-    def test_built_sidecar_env_allows_localhost(self):
-        config = self.env['woow_paas_platform.cloud_service']._build_mcp_sidecar_config(
-            self.template, 'token-1405')
-        env = {e['name']: e['value'] for e in config['container']['env']}
-        self.assertEqual(env['N8N_API_URL'], 'http://localhost:5678')
-        self.assertEqual(env.get('WEBHOOK_SECURITY_MODE'), 'moderate')
+    def test_owner_init_is_kept(self):
+        # 開通時就建立擁有者，不讓別人搶先註冊。
+        self.assertEqual(self.template.post_deploy_init_type, 'n8n')
+
+
+@tagged('post_install', '-at_install')
+class TestN8nSeedImagesFromJcr1426(TransactionCase):
+    """#1426：n8n 映像從 JCR 拉、釘 digest。
+
+    從 Docker Hub 拉時，pod 換到沒有快取的主機會卡很久（實測含 sidecar 約 21 分鐘）。
+    """
+
+    JCR = 'jcr-prod.woowtech.io/woow-paas-docker-local/'
+
+    def test_n8n_image_is_jcr_and_pinned(self):
+        template = self.env.ref('woow_paas_platform.cloud_app_n8n')
+        image = json.loads(template.helm_default_values)['image']
+        self.assertTrue(image['repository'].startswith(self.JCR), image)
+        self.assertIn('@sha256:', image['tag'])
 
 
 @tagged('post_install', '-at_install')
