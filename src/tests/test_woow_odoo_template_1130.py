@@ -7,7 +7,7 @@
 
 1. **seed 只帶 tenant schema 收的鍵**——woow-odoo 的 ``values.schema.json`` 是
    ``additionalProperties: false``，殘留一個 Bitnami 鍵就在 ``helm install`` 當下失敗；
-   這種錯只有真的部署才看得到，所以在這裡用 0.2.3 schema 的鍵集合先擋。
+   這種錯只有真的部署才看得到，所以在這裡用 chart schema 的鍵集合先擋（0.2.3 與 0.2.7 鍵集合相同）。
 2. **平台注入**：三顆 PVC 的 storageClass、物件形 pull secret、expose 目標（release
    名＋80）、``addons.selected``、``identity.*``。
 3. **初始管理員密碼**：平台鑄造、存 ``cloud_service_secret``、走 sensitive
@@ -36,6 +36,7 @@ _CONTROLLER = 'odoo.addons.woow_paas_platform.controllers.paas'
 
 #: woow-odoo 0.2.3 ``values.schema.json`` 頂層 properties 扣掉 tenant profile 拒收的
 #: （``cron``／``ingress``／``extraEnv``／``networkPolicy`` 在 tenant 分支是 ``false``）。
+#: 0.2.7 鍵集合與 0.2.3 相同（2026-10-04 比對；schema 只多允許 conf.limitMemory* 為 null）。
 #: 抄自 chart 原始碼（woow-paas/woow-paas-charts main b730d3f8）；chart 加鍵時這裡不必跟，
 #: chart **拿掉**鍵時 seed 帶著它會在 install 失敗——那時本表要同步。
 TENANT_TOP_LEVEL_KEYS = {
@@ -59,7 +60,7 @@ def _odoo_seed():
 
 @tagged('post_install', '-at_install')
 class TestWoowOdooSeedContract1130(TransactionCase):
-    """seed 的形狀對齊 woow-odoo 0.2.3 tenant profile。"""
+    """seed 的形狀對齊 woow-odoo 0.2.7 tenant profile。"""
 
     def setUp(self):
         super().setUp()
@@ -68,7 +69,7 @@ class TestWoowOdooSeedContract1130(TransactionCase):
 
     def test_seed_targets_the_woow_odoo_chart(self):
         self.assertEqual(self.tpl.helm_chart_name, WOOW_ODOO_CHART_REF)
-        self.assertEqual(self.tpl.helm_chart_version, '0.2.3')
+        self.assertEqual(self.tpl.helm_chart_version, '0.2.7')
         self.assertTrue(self.tpl._is_woow_odoo_chart())
         self.assertEqual(self.values['profile'], 'tenant')
         self.assertEqual(self.tpl.post_deploy_init_type, 'odoo',
@@ -339,7 +340,7 @@ class TestWoowOdooAdminPassword1130(TransactionCase):
         svc = self._service()
         client = MagicMock()
         client.get_release.return_value = {'status': 'deployed'}
-        client.upgrade_release.return_value = {'revision': 2, 'chart_version': '0.2.3'}
+        client.upgrade_release.return_value = {'revision': 2, 'chart_version': '0.2.7'}
         with patch(_CLIENT_PATH, return_value=client):
             svc.action_redeploy()
         kwargs = client.upgrade_release.call_args.kwargs
