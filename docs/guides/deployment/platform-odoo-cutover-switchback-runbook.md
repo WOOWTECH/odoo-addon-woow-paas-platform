@@ -20,9 +20,8 @@ related: [docs/guides/deployment/platform-odoo-cutover-runbook.md, docs/guides/d
 | S1 | 穩定 Service 名與 raw bundle 目錄（暫名 `paas-odoo-active`／`paas-odoo-edge/`） | woow-paas/paas-app-bundle-cd#143 |
 | S2 | 新 release 名與 bundle 目錄（暫名 `paas-odoo-platform`） | woow-paas/paas-app-bundle-cd#144 |
 | S3 | 搬運 helper pod 形狀與指令（平台還原人工段） | #1217 |
-| S4 | 回切時舊 release 是否改 pin 窗口內最新的 Bitnami build | #1392／#1142（發起人裁定） |
-| S5 | 停機前要停的三支 cron 的 xml id | #1163 scout §5 |
-| S6 | 回切後新 release 的處置（保留待再 cutover，或提前 teardown） | #1142（發起人裁定） |
+| S4 | 停機前要停的三支 cron 的 xml id | #1163 scout §5 |
+| S5 | 回切後新 release 的處置（保留待再 cutover，或提前 teardown） | #1142（發起人裁定） |
 
 另有兩個**待驗**值由彩排 A8 回填，不是佔位：反向 filestore 的 chown（`999:999` 或 `999:0`）、反向 push 的 pod label。
 
@@ -83,7 +82,7 @@ related: [docs/guides/deployment/platform-odoo-cutover-runbook.md, docs/guides/d
 ## C2 凍結新側
 
 1. 【agent】確認新 release 沒有 Running 的 `component=db-backup` Job（含 `woow.paas/task=housekeeping`；13786 D2；chart README §備份／還原）。
-2. 【agent 執行・人類逐步放行】ECPay 前置：停 cleanup／發票／core post-process 三支 cron〔待定：#1163 scout §5（S5）〕，記下 pending tx 清單與 T0；⛔ 不 disable provider（#1163 留言 13476 第 9 點）。
+2. 【agent 執行・人類逐步放行】ECPay 前置：停 cleanup／發票／core post-process 三支 cron〔待定：#1163 scout §5（S4）〕，記下 pending tx 清單與 T0；⛔ 不 disable provider（#1163 留言 13476 第 9 點）。
 3. 【agent 開 PR・人類 merge】新 release **同時** scale `replicas: 0` 與 `cron.replicas: 0`〔待定：woow-paas/paas-app-bundle-cd#144（S2）〕（R2-Q3；14686；14701）。
 4. 【agent】驗新 web 與 cron pod 都已消失，新 postgres 仍 Running。
 
@@ -103,7 +102,7 @@ related: [docs/guides/deployment/platform-odoo-cutover-runbook.md, docs/guides/d
 ## C4 切回流量
 
 1. 【agent 開 PR・人類 merge】`paas-odoo/values-prod.yaml` 刪掉 `replicaCount: 0`（或改 1）——窗口內唯一允許對舊 release 做的變更種類（13439 ③；cd#144 PR-B）。
-   - 是否同時把舊 release image 改 pin 窗口內最新的 Bitnami build〔待定：#1392／#1142（S4）〕。
+   - 舊 release 維持 cutover 前的 image，⛔ 不改 pin：窗口內不雙 build、禁含 migration 的發版，所以回切後只有 addon 程式碼較舊，DB 結構不受影響（2026-10-04 發起人裁決，維持 13439 ③）。
 2. 【agent】驗舊 odoo pod Ready、log 沒有 init（DR 槍未擊發）。
 3. 【agent 開 PR・人類 merge】穩定 Service selector 鍵集合＋targetPort 回到舊形狀（80→8069、8072→8072）。⚠ 不可用具名 targetPort（13439 ②）。緊急模式已 patch 者，本步就是 24h 內的對齊 PR。
 4. 【agent】驗收同 [cutover runbook](platform-odoo-cutover-runbook.md) B7 第 2 步：endpoints 非 0 且只含舊 pod IP、4 host `/web/health` 200、`/websocket` 101（`--http1.1`＋`Origin`，#1032 plan:126）、OAuth、`/woow`、operator webhook。
@@ -125,7 +124,7 @@ related: [docs/guides/deployment/platform-odoo-cutover-runbook.md, docs/guides/d
 ## C7 事後
 
 1. 【agent】在 #1142 與 woow-paas/paas-app-bundle-cd#144 留言記錄：回切原因、各步時間戳、實測停機 vs 彩排量測、C0 斷言結果。
-2. 【人類】決定新 release 的處置〔待定：#1142（S6）〕；新 release 的 PVC 與 Secret 在決定前不得刪除。
+2. 【人類】決定新 release 的處置〔待定：#1142（S5）〕；新 release 的 PVC 與 Secret 在決定前不得刪除。
 3. 【agent 執行・人類逐步放行】**再次 cutover 前**，重寫或刪除 `woow_prod` 的 `woow_paas_platform.upgrade_done`／`upgrade_attempt`：預寫的 marker 會隨反向 dump 回到 Bitnami 側；第二次 cutover 若換了 image digest，升級閘會自動 `-u all`（R2「本輪不裁」第 2 條；14662 C7）。
 4. 【人類】確認回切穩定後，DROP C3 第 2 步改名保留的舊庫；回退窗口重算（下一次 cutover 從頭起算 14 天，13439 ③）。
 

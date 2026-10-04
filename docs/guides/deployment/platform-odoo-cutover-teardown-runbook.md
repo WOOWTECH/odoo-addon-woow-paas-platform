@@ -92,7 +92,7 @@ related: [docs/guides/deployment/platform-odoo-cutover-runbook.md, docs/guides/d
 
 ## D6 後續銜接
 
-1. 【人類】回退窗口結束後把 #1392 的 build 模式切到「只 build `paas-odoo-official`」（#1392 裁決；模式切換載體見 [cutover runbook](platform-odoo-cutover-runbook.md) 佔位 C8）。
+1. 【人類】若平台發版尚未切到只 build `paas-odoo-official`（cutover 時點與載體見 [cutover runbook](platform-odoo-cutover-runbook.md) 佔位 C8），在本步切換〔待定：#1392／定稿裁決〕；之後不再 build Bitnami `paas-odoo`（#1392 改題後的範圍）。
 2. 【agent】列待修清單並另開票（本檔不改寫 SOP；#1231「不在範圍」）：
    - `prod-release-sop.md` 的 S1 三處 pin（:37）對新 chart 已不成立：新 chart 沒有 `module-version-gate` initContainer 寫死的 image（chart README §Pod 啟動順序）。
    - `prod-release-sop.md` §5.1.1 的 PVC 名改成新 release 的 `data-<release>-postgresql-0`／`<release>-data`〔待定：woow-paas/paas-app-bundle-cd#144（T1）〕（#1137 G35）。

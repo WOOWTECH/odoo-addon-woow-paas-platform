@@ -24,8 +24,8 @@ related: [docs/guides/deployment/platform-odoo-cutover-rehearsal-runbook.md, doc
 | C5 | 窗口期間叢集容量、Longhorn snapshot 命名（版號不變時的 `pre{版號}`）與保留政策 | woow-paas/woow-machines-operator#5 |
 | C6 | 「關舊 Ingress」與「開 raw Ingress」的順序是否排進停機窗口（13439 ② 指出同 host 雙 Ingress 的 traefik 仲裁未驗） | woow-paas/paas-app-bundle-cd#143（發起人裁定） |
 | C7 | cron 副本 0→1 走哪張 CD PR（PR-C 二次 merge 或併入 PR-D） | woow-paas/paas-app-bundle-cd#144 留言 14668（「由發起人定」） |
-| C8 | 雙 build 模式的切換載體（repo variable 或 workflow 常數） | #1392 |
-| C9 | 回切時舊 release 是否改 pin 窗口內最新的 Bitnami build（#1392「addon 一致」與 13439 ③「舊 release 只允許動 replicas」的關係） | #1392／#1142（發起人裁定） |
+| C8 | 平台發版改 build `paas-odoo-official` 的切換時點（cutover 當下就切，或回退窗口結束後才切）與載體 | #1392／定稿裁決 |
+| C9 | chart 版號：platform 記憶體預設改為 soft 4GiB／hard 5GiB 的那一版（進行中，暫記 0.2.6） | woow-paas/woow-paas-charts#99 |
 | C10 | 停機前要停的三支 cron 的 xml id | #1163 scout §5 |
 
 ## 操作者圖例
@@ -67,7 +67,7 @@ related: [docs/guides/deployment/platform-odoo-cutover-rehearsal-runbook.md, doc
 
 | 項目 | 值 | 出處 |
 |---|---|---|
-| chart | `woow-odoo` 0.2.5；merge `main` 即同時推 Gitea helm registry（Fleet 用）與 JCR OCI | woow-paas/woow-paas-charts#120；chart README §發佈 |
+| chart | `woow-odoo` 0.2.5 為現行最新；cutover 用含 platform 記憶體新預設的下一版〔待定：woow-paas/woow-paas-charts#99（C9）〕；merge `main` 即同時推 Gitea helm registry（Fleet 用）與 JCR OCI | woow-paas/woow-paas-charts#120；chart README §發佈 |
 | platform cutover gate | `conf.limitTimeRealCron ≥ 1800`、`cron.maxCronThreads ≥ 3`（schema fail-loud） | woow-paas/woow-paas-charts#100；chart README |
 | `addons_path`（platform） | core、`/opt/woow/addons`、`/mnt/extra-addons` | woow-paas/woow-paas-charts#120；chart README 固定契約 |
 | Service／port | port 80 與 8072 都以數字 targetPort **8080** 指向 nginx sidecar | chart README 固定契約 |
@@ -76,7 +76,8 @@ related: [docs/guides/deployment/platform-odoo-cutover-rehearsal-runbook.md, doc
 | 副本鍵 | web `replicas`、cron `cron.replicas` | chart README §values 重點；cc/woowprd#8 留言 17217 |
 | marker | `woow_paas_platform.upgrade_done`＝`{"digest":"sha256:…","core_date":"18.0.YYYYMMDD"}` | chart README 固定契約；chart `files/lib.sh` |
 | 平台 image 線 | `paas-odoo-official`（`Dockerfile.official`，官方 `odoo:18.0-20250807` base，Odoo deb `18.0.20250807`）；Phase B `20261003.1514@sha256:0be8cc62…`（綁 addon .203，cutover 時以當時 prod 版號重 build） | woow-paas/paas-odoo-ci#145；16804 |
-| 雙 build 規則 | 回退窗口內 `paas-odoo`＋`paas-odoo-official` 兩顆都 build、同一 `addon_ref`；窗口後只 build `paas-odoo-official` | #1392 |
+| 回退窗口 build 規則 | **不雙 build**；舊 Bitnami release 只動 `replicas`、image 凍結在 cutover 前那顆；回切時維持該 image（2026-10-04 發起人裁決，維持 13439 ③；#1392 已改題為「平台換 chart 後發版改 build `paas-odoo-official`」） | 13439 ③；#1392 |
+| platform 記憶體預設 | `limit_memory_soft` 4GiB／`limit_memory_hard` 5GiB，由 chart 預設提供、values 不明設（進行中） | woow-paas/woow-paas-charts#99 裁決 |
 | build 快取 | 依賴層先於 addon；只改 addon 時 pip 層 CACHED | woow-paas/paas-odoo-ci#228 |
 | `woow_prod` locale | `UTF8 | en_US.UTF-8 | en_US.UTF-8`、PG 17.6（2026-09-27 唯讀） | R2-Q4；#1162 留言 14676 |
 
@@ -108,7 +109,7 @@ related: [docs/guides/deployment/platform-odoo-cutover-rehearsal-runbook.md, doc
 7. 【agent】確認 woow-paas/woow-machines-operator#5 容量結論為「夠」〔待定：woow-paas/woow-machines-operator#5（C5）〕。
 8. 【agent】確認 woow-paas/woow-machines-operator#4 回報 mcp-odoo ConfigMap（`mcp-admin-config`、`mcp-admin-init-config`）已改指穩定 Service（13439 ⑧；cd#143「交接與盤點」）。
 9. 【agent】確認 woow-paas/paas-app-bundle-cd#145（SOP／`promote-acceptance-checklist.md` 參數化）已落地——窗口內仍可能發 hotfix（13439 ③）。
-10. 【agent】確認 #1392 已落地（`trigger-odoo-build.yml` 可依模式 dispatch 一或兩顆，`/woow:deploy` 與 `prod-release-sop.md` 已同步；#1392「要做」1～2）。
+10. 【agent】確認平台發版改 build `paas-odoo-official` 的切換時點已定稿〔待定：#1392／定稿裁決（C8）〕；若定為「cutover 當下就切」，`trigger-odoo-build.yml`、`/woow:deploy` 與 `prod-release-sop.md` 須已同步（#1392）。
 11. 【agent】確認 Step 1 平台 image 是以「停機窗口當下的 prod 版號」build 的：image 內 addon 版號＝prod 現行 `src/__manifest__.py` 版號（16804「cutover」段）；不是就照 B5 第 1～3 步重 build、重 pin。
 
 ## B1 窗口與公告
@@ -162,6 +163,7 @@ related: [docs/guides/deployment/platform-odoo-cutover-rehearsal-runbook.md, doc
    - `replicas: 0`、`cron.replicas: 0`、postgres 1：restore 前起 odoo 會停在 `Init:Error`（bootstrap exit 3 `platform DB must be restored before first boot`；R2-Q2、14668）。
    - `image.*`＝Step 1 digest；`postgres.image.*`＝chart 預設 paas-postgres（PG 17.11、pgvector 0.8.6、rsync；chart README）；`imagePullSecrets: [jfrog-registry]`（cd#144 PR-A）。
    - `ingress.enabled: false`（Ingress 由 raw bundle 管，13439 ②）。
+   - 記憶體上限（odoo.conf `limit_memory_soft`／`limit_memory_hard`）**不明設**，用 chart 預設 soft 4GiB／hard 5GiB〔待定：woow-paas/woow-paas-charts#99（C9）〕（woow-paas/woow-paas-charts#99 裁決）。
    - `backup.enabled: false`（本階段）、`backup.persistence.existingClaim: paas-odoo-backup-pvc`、`restore.enabled: false`（13786 D7；14201 D11）。
    - PVC 一律明寫 `storageClass`（叢集有兩個 default SC；chart README）。
 5. 【agent】驗 PR-A：新 Bundle `Ready=True`；新 postgres Running；web／cron pod 0；舊 `paas-odoo` 沒有新 helm revision、pod UID 與 restartCount 不變；新舊物件名不相交；`valuesFrom` 已解析（Helm 層 Secret 指紋＝fleet-local 欄位指紋）（cd#144 PR-A 驗收）。
@@ -241,11 +243,11 @@ related: [docs/guides/deployment/platform-odoo-cutover-rehearsal-runbook.md, doc
 ## B8 回退窗口啟動
 
 1. 【agent】在 #1142 與 woow-paas/paas-app-bundle-cd#144 留言記錄窗口起訖：起點＝PR-D 生效時間（新側開始接寫入），訖點＝起點＋14 天（13439 ③；cd#144 PR-D）。
-2. 【人類】把 #1392 的 build 模式切到「兩顆都 build」〔待定：#1392（C8）〕。
+2. 【人類】依 C8 定稿的時點把平台發版切到只 build `paas-odoo-official`〔待定：#1392／定稿裁決（C8）〕；窗口內**不雙 build**（2026-10-04 發起人裁決）。
 3. 【agent】窗口內每次平台發版前檢查 `git diff v<cutover 當下版>..v<新版> -- src/migrations/` 為空（以整個 release 連坐，跟版 seed PR 也會被同 release 的 migration 連坐；13439 ③、14356）。
    - 非空 ⇒ 在 #1142 記錄「窗口提前關閉（單向門）」並通知發起人；反向搬遷不再保證（13439 ③）。
-4. 【agent】窗口內 pin 規則：新 release 只 pin `paas-odoo-official` 的 digest，舊 release 只允許動 `replicas`（image、env、persistence、`postgresql.*` 凍結；13439 ③；#1392 第 3 點）。
-   - 窗口內 build 出的 Bitnami `paas-odoo` 在回切時要不要 pin 上舊 release〔待定：#1392／#1142（C9）〕。
+4. 【agent】窗口內 pin 規則：新 release 只 pin `paas-odoo-official` 的 digest；舊 release 只允許動 `replicas`，image 凍結在 cutover 前那顆（env、persistence、`postgresql.*` 同樣凍結；13439 ③；2026-10-04 發起人裁決）。
+   - 回切時舊 release 維持 cutover 前 image：窗口內禁含 migration 的發版，所以回切後只有 addon 程式碼較舊，DB 結構不受影響（2026-10-04 發起人裁決）。
 5. 【agent】窗口內 `postgres.extensions.vector` 維持 `false`；回退窗口結束後隨 Step 2 的 CD PR 改回 `true`（R2-Q6）。不做 Step 2（13439 ③）。
 6. 【agent】緊急回切入口：[回切 runbook](platform-odoo-cutover-switchback-runbook.md) C1。
 

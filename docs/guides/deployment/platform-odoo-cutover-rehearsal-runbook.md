@@ -25,6 +25,7 @@ related: [docs/guides/deployment/platform-odoo-cutover-runbook.md, docs/guides/d
 | R6 | 平台還原的人工段（helper pod 形狀、指令） | #1217 |
 | R7 | 叢集容量第一版結論（沙盒容量是否放行） | woow-paas/woow-machines-operator#5 |
 | R8 | cc/woowprd#6 一次性升級 Job 與本路徑的關係（新 chart 路徑不經它，是否仍是 #1206 前置） | #1206 留言 14673（「由發起人定」） |
+| R9 | chart 版號：platform 記憶體預設改為 soft 4GiB／hard 5GiB 的那一版（進行中，暫記 0.2.6） | woow-paas/woow-paas-charts#99 |
 
 ## 操作者圖例
 
@@ -66,7 +67,7 @@ related: [docs/guides/deployment/platform-odoo-cutover-runbook.md, docs/guides/d
 - 與 #1206 交付 3 分工：中和段、斷言表、外連證據、PII 與銷毀規則一律**引用** #1206〔待定：#1206（R3）〕；本檔只寫 chart 切換段。
 - 彩排不是正式切換的替身；與正式切換的差異列在 A3 差異表（CONTEXT.md:136）。
 - 彩排使用的現成值（已落地，不必佔位）：
-  - chart：`woow-odoo` **0.2.5**（woow-paas/woow-paas-charts#120 merged；platform `addons_path` 含 `/opt/woow/addons`）。
+  - chart：`woow-odoo` **0.2.5**（woow-paas/woow-paas-charts#120 merged；platform `addons_path` 含 `/opt/woow/addons`）。彩排改用含 platform 記憶體新預設的下一版〔待定：woow-paas/woow-paas-charts#99（R9）〕。
   - 平台 image：`jcr-prod.woowtech.io/woow-paas-docker-local/paas-odoo-official:20261003.1514@sha256:0be8cc620dc457ee81ef804f0b8c974c22ccec37d137576c27d07ecdc63fce87`（官方 `odoo:18.0-20250807` base、Odoo deb `18.0.20250807`、addon `18.0.1.0.203`；16804）。這顆綁 addon .203，只適合彩排與「promote 走通」演練；cutover 時以當時 prod 版號重 build（16804）。
 
 ## A1 授權與稽核
@@ -94,6 +95,7 @@ related: [docs/guides/deployment/platform-odoo-cutover-runbook.md, docs/guides/d
    - `conf.emailFrom`：**中和值**，⛔ 不得帶 prod `odooEmail` 現值（R2-Q5、14676、14673）。
    - `postgres.extensions.vector: false`（R2-Q6）。
    - `conf.limitTimeRealCron ≥ 1800`、`cron.maxCronThreads ≥ 3`（woow-paas/woow-paas-charts#100 cutover gate；chart README §values 重點）。
+   - 記憶體上限不明設，用 chart 預設 soft 4GiB／hard 5GiB〔待定：woow-paas/woow-paas-charts#99（R9）〕（charts#99 裁決；彩排應用含此預設的 chart 版號）。
    - `replicas: 0`、`cron.replicas: 0`（chart README；woowprd#8 留言 17217）。
    - `image.*`＝A0 的 Step 1 image；`credentials.*` 由沙盒工具隨機產生（woowprd#8 留言 17217）。
    - `backup.enabled: true`（沙盒用自己的 PVC，無 #1145 D7 共寫問題；13786 D7）。
