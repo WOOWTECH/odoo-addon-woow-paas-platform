@@ -1065,6 +1065,9 @@ class TestHermesAgentValueInjection(TransactionCase):
         """
         # #686：mcp-hermes（pilot）原本不在這張清單裡——與 has_admin_gui 漏的是
         # 同一格（「複製 hermes 生出來的衍生品」都列了，被複製的那個沒列）。
+        # （2026-10-04 起 cloud_app_litellm 也刻意帶 gateway.externalPath=/v1：
+        #  charts/litellm 0.1.0 把 auth.apiServerKey 當 LITELLM_MASTER_KEY，守線在
+        #  test_litellm_seed.test_master_key_rides_the_gateway_channel。）
         for xmlid in ('cloud_app_mcp_hermes',
                       'cloud_app_mcp_odoo', 'cloud_app_mcp_odoo_manage',
                       'cloud_app_mcp_n8n', 'cloud_app_mcp_k8s', 'cloud_app_mcp_vk',

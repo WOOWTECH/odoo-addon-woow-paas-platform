@@ -1966,6 +1966,232 @@
             <field name="is_active" eval="True"/>
         </record>
 
+        <!-- VPN 控制台（Headscale）cloud service。chart woow-paas-charts charts/headscale 0.1.0（#124）：
+             一個 Pod＝headscale v0.29.4（BSD-3）＋Headplane 0.7.1（MIT）網頁＋nginx 入口＋選配 ngrok sidecar。
+             入口 Service 第一個埠 3000＝nginx（平台密碼 Basic auth → Headplane 127.0.0.1:3001，proxy_auth
+             固定送 Remote-User: admin），第二個埠 8080＝Headscale（同工作區 Tailscale 節點用
+             http://<release>-headscale:8080 登入）。operator 依 Service 自己的埠順序挑第一個 HTTP 埠 ⇒ 3000。
+             ⚠ 控制協定（POST /ts2021 ＋ Upgrade: tailscale-control-protocol）過不了 Cloudflare 通道 ⇒
+             外部裝置走**租戶自己的** ngrok（HTTPS endpoint；沒填網域時用帳號的免費 dev domain），
+             sidecar 每 60 秒印 WOOW_PUBLIC_URL=https://…，平台 P1（#1412）回讀顯示在服務頁
+             （has_public_tunnel_address＋public_tunnel_label）。ngrok.authtoken 刻意**不在**
+             config.sensitive 底下（EMQX 0.1.1 教訓，平台會整棵剝掉）。ngrok.domain 用 #1412 的
+             format=domain（存檔就擋整條網址／埠／路徑），chart 端另在執行時驗證、不 fail render。
+             ⚠ 憑證 helm_secret：htpasswd 由 Secret volume 投射（無 subPath），nginx 每個請求重讀 ⇒ 平台
+             重設只改 Secret、pod template 不變、StatefulSet 不必重啟（operator 的 helm_secret reset 只重啟
+             Deployment）。帳號在 entrance.basicAuthUsername（可自設帳密；Headplane 永遠看到常數 admin）。
+             ⚠ image／bootstrap.image 必須同一版 headscale（bootstrap 用它的 binary 跑 migration；0.29 起
+             只能逐個 minor 升、不能降）——test_headscale_seed 以 digest→版本對照表鎖步。ngrok／entrance
+             image 用 chart 預設（chart 以分開的 digest 欄位釘死；範本若改寫 tag@sha256 必須同時清空
+             digest，否則會 render 成雙 digest）。
+             1 vCPU／1 GB／1 GB：方案 overlay（頂層 resources）套在 headplane；persistence.size＝唯一一顆 PVC
+             （sqlite、noise key、Headplane 資料）。
+             隱藏（is_hidden=True）待：headscale-debug／headplane 鏡像（paas-odoo-ci #234／#235）核可、
+             chart 0.1.0 發佈、#1412（operator /public-address）上線、真 ngrok 實測。 -->
+        <record id="cloud_app_headscale" model="woow_paas_platform.cloud_app_template">
+            <field name="name">VPN 控制台（Headscale）</field>
+            <field name="slug">headscale</field>
+            <field name="description">自架的 VPN 控制台（相容 Tailscale 用戶端）：建立你自己的私人網路，手機、電腦、伺服器用官方 Tailscale App 登入即可互連，附網頁管理後台。外部裝置的登入網址透過你自己的 ngrok 帳號提供。1 vCPU／1 GB RAM／1 GB 磁碟</field>
+            <field name="full_description">VPN 控制台（Headscale 0.29＋Headplane 網頁後台）：自架一套相容 Tailscale 的 VPN 控制伺服器。
+                手機、電腦、伺服器安裝官方 Tailscale App，把登入伺服器改成你的 VPN 登入網址，就能加入你自己的私人網路（tailnet），
+                裝置之間以 WireGuard 加密互連；優先直連，連不上時經 Tailscale 公共中繼（DERP）轉送，流量不經過平台。
+                **後台登入**：網頁後台帳號預設 admin，密碼於開通時一次性顯示；帳號與密碼都可在服務頁「Admin Credentials」
+                重設或改成自己的，約一分鐘內生效、服務不必重啟。在後台管理使用者、裝置、裝置登入用的 pre-auth key、ACL 與 DNS。
+                **VPN 登入網址（外部裝置必看）**：Tailscale 的登入協定無法經過平台的服務網址，外部裝置要登入，必須在服務設定
+                開啟 ngrok 並填入你自己的 ngrok authtoken；網域可留空（自動使用該 ngrok 帳號的免費固定網域），或填你在 ngrok
+                後台的網域。服務頁會顯示目前的 VPN 登入網址。
+                換 ngrok 帳號或網域＝登入網址改變，所有裝置都要重新登入。同一個 ngrok 免費網域同時只能給一台使用：
+                已在別處上線時 ngrok 會回 ERR_NGROK_334，本服務改為只有內部網址可登入（服務頁不顯示對外網址）。
+                免費 ngrok 每月約 1 GB 流量／2 萬次請求，裝置一多就可能用完，正式使用建議升級 ngrok 付費方案。
+                **同工作區**：同一工作區的「VPN 節點（相容 Tailscale）」可直接用內部網址 http://&lt;服務 release&gt;-headscale:8080
+                登入，不需要 ngrok（&lt;服務 release&gt; 是本服務頁 Helm Release 那一格，例如 svc-1a2b3c4d）。
+                **資料**：使用者、裝置與金鑰存在你的持久磁碟，重啟後仍在；儲存設定時服務會重啟約一分鐘，裝置會自動重連。
+                Headscale 只能逐版升級、不能降版，平台會按版次安排。
+                欠費停權時服務停止（磁碟保留），恢復繳費後資料原樣還在；刪除服務即全新開通（所有裝置要重新登入），
+                原磁碟依平台保留政策 90 天後回收。</field>
+            <field name="category">devops</field>
+            <field name="tags">["headscale", "headplane", "vpn", "tailscale", "wireguard"]</field>
+            <field name="documentation_url">https://headscale.net/stable/</field>
+            <field name="helm_repo_url"></field>
+            <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/headscale</field>
+            <field name="helm_chart_version">0.1.0</field>
+            <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/headscale","tag":"20261004.0159@sha256:8833f828b414c0907b7e5c71da76473216fe17cce0818a166b536ec552c0903f"},"bootstrap":{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/headscale-debug","tag":"20261004.0159@sha256:2380cdb4951e5d63747d5880aeecaf7aea7702f06ea72a6b9d8010b9386195b8"}},"headplane":{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/headplane","tag":"20261004.0159@sha256:394483fd2336ce6b15df360c3e118ddfd45eb8140fe21df9f2611077f5d79d22"}},"entrance":{"basicAuthUsername":"admin"},"persistence":{"size":"1Gi"},"service":{"port":3000}}</field>
+            <field name="helm_value_specs">{"required": [], "optional": [
+                {"key": "ngrok.enabled", "label": "對外 VPN 登入網址（ngrok）", "type": "boolean", "default": false,
+                "description": "Tailscale 的登入協定無法經過平台的服務網址，外部裝置要登入必須透過你自己的 ngrok 帳號；未開啟時只有同工作區的 VPN 節點能用內部網址登入"},
+                {"key": "ngrok.authtoken", "label": "ngrok Authtoken", "type": "password",
+                "description": "你 ngrok 帳號的 authtoken（ngrok 後台可取）。開啟對外登入網址時要填；清空即撤銷。換成另一個 ngrok 帳號＝登入網址改變，所有裝置都要重新登入。免費帳號每月約 1 GB 流量／2 萬次請求，正式使用建議升級付費方案"},
+                {"key": "ngrok.domain", "label": "ngrok 網域（選填）", "type": "text", "format": "domain",
+                "placeholder": "xxx.ngrok-free.app",
+                "description": "只填網域、不要加 https://；留空＝自動使用這個 ngrok 帳號的免費固定網域。改網域＝所有裝置都要重新登入。同一個網域同時只能給一台使用：已在別處上線（ERR_NGROK_334）時，本服務改為只有內部網址可登入"},
+                {"key": "headscale.dns.magicDns", "label": "MagicDNS", "type": "boolean", "default": true,
+                "description": "開啟時 tailnet 內的裝置可以用名稱互連（例如 my-laptop.tailnet.internal）"},
+                {"key": "headscale.dns.baseDomain", "label": "MagicDNS 網域", "type": "text", "default": "tailnet.internal",
+                "placeholder": "tailnet.internal",
+                "description": "裝置名稱的後綴，不可與 VPN 登入網址的網域相同或是它的上層網域；格式不合或重疊時自動改用 tailnet.internal（寫入服務記錄）"},
+                {"key": "headscale.dns.nameservers", "label": "DNS 伺服器", "type": "select", "default": "cloudflare",
+                "options": [{"value": "cloudflare", "label": "Cloudflare（1.1.1.1）"}, {"value": "google", "label": "Google（8.8.8.8）"}, {"value": "quad9", "label": "Quad9（9.9.9.9）"}],
+                "description": "tailnet 內裝置查詢網域名稱時使用的 DNS 伺服器"},
+                {"key": "headscale.nodeExpiry", "label": "裝置登入有效期", "type": "select", "default": "0",
+                "options": [{"value": "0", "label": "永不過期"}, {"value": "90d", "label": "90 天"}, {"value": "180d", "label": "180 天"}, {"value": "365d", "label": "365 天"}],
+                "description": "裝置登入後多久需要重新驗證；預設永不過期"},
+                {"key": "headscale.logLevel", "label": "記錄等級", "type": "select", "default": "info",
+                "options": ["info", "warn", "error", "debug"],
+                "description": "Headscale 的記錄詳細程度；排查問題時可暫時改成 debug"}
+                ]}</field>
+            <field name="default_port">3000</field>
+            <field name="ingress_enabled" eval="True"/>
+            <field name="min_vcpu">1</field>
+            <field name="min_ram_gb">1.0</field>
+            <field name="min_storage_gb">1</field>
+            <field name="mcp_enabled" eval="False"/>
+            <field name="has_admin_gui" eval="True"/>
+            <field name="admin_password_carrier">helm_secret</field>
+            <field name="admin_password_settable" eval="True"/>
+            <field name="admin_username_helm_path">entrance.basicAuthUsername</field>
+            <field name="has_public_tunnel_address" eval="True"/>
+            <field name="public_tunnel_label">VPN login server URL</field>
+            <field name="post_deploy_init_type">none</field>
+            <field name="max_per_partner" eval="0"/>
+            <field name="is_hidden" eval="True"/>
+            <field name="is_active" eval="True"/>
+        </record>
+
+        <!-- VPN 節點（相容 Tailscale）cloud service。chart woow-paas-charts charts/tailscale 0.1.0（#125）；
+             image paas-odoo-ci tailscale/（#240，官方 tailscale 1.102.5＋衍生自 podman 版的 entrypoint，
+             uid 1000、userspace）。定位＝工作區私有入口（PLAN Q2）：節點加入租戶自己的 tailnet（官方或
+             Headscale），用 tailscale serve TCP 轉發把**同 namespace** 的服務掛上 tailnet。
+             exit node／app connector／subnet route／SSH／Funnel 一律不開（Q3，chart 強制，values 沒有這些鍵）；
+             egress NetworkPolicy 排除所有私網與 100.64/10，是 tailnet 經節點能碰到哪裡的唯一護欄。
+             入口：唯一 Service 8080 → nginx Basic auth（帳號固定 admin、只有密碼可自設，同 code-server）→
+             tailscale web（127.0.0.2:8088，唯讀）。htpasswd 是 Secret volume ⇒ 重設密碼 pod template 不變、
+             不必重啟。tailscale.authKey 刻意**不在** config.sensitive 底下（平台會剝掉）。
+             1 vCPU／0.5 GB／1 GB：方案 overlay 套在 tailscale 容器；persistence.size＝節點身分那顆 PVC。
+             ⚠ image 暫定：20261004.0334 是從 #240 PR 分支 build 的候選（#239，依前例不核可），#240 合併後
+             從 main 重 build、核可，再把下面 image.tag 換成新的 tag@sha256。隱藏（is_hidden=True）直到那時。 -->
+        <record id="cloud_app_tailscale" model="woow_paas_platform.cloud_app_template">
+            <field name="name">VPN 節點（相容 Tailscale）</field>
+            <field name="slug">tailscale</field>
+            <field name="description">把工作區裡的服務接進你自己的 VPN（tailnet）：節點加入官方 Tailscale 或同工作區的 VPN 控制台，用轉發清單把 Odoo、Home Assistant 等服務掛上 VPN，不必走公開網址。1 vCPU／0.5 GB RAM／1 GB 磁碟</field>
+            <field name="full_description">VPN 節點（相容 Tailscale，tailscale 1.102）：在你的工作區放一台 Tailscale 節點，加入你自己的 tailnet
+                （官方 Tailscale 帳號，或同工作區的「VPN 控制台（Headscale）」），再用轉發清單把同一工作區的服務以 TCP 掛到 tailnet 上——
+                你的裝置經 VPN 直接連線，不必走公開網址，也不受平台入口單次請求 100 MB 的限制。需自備 Tailscale 帳號或同工作區的 Headscale。
+                **登入 tailnet**：二擇一——在服務設定填 auth key（建議用一次性、預先核准並帶 tag 的 key，登入成功後清空這一欄），
+                或開啟服務網址進入節點的網頁介面發起登入，再到控制台核准。控制伺服器留空＝官方 Tailscale；使用同工作區的 Headscale 時
+                填它的內部網址 http://&lt;Headscale 服務的 Helm Release&gt;-headscale:8080。換控制伺服器＝這台節點會登記成一台新機器（新的 tailnet IP）。
+                **轉發清單**：格式「tailnet 埠=服務名稱:埠」，多筆以逗號分隔，例如 8069=svc-1a2b3c4d:80；只接受同一工作區的服務，
+                IP、外部網址或其他工作區的項目會被略過並寫入服務記錄。
+                **網頁介面**：帳號固定 admin，密碼於開通時一次性顯示；可在服務頁「Admin Credentials」重設或改成自己的密碼
+                （約一分鐘內生效、服務不必重啟）。網頁介面只能查看狀態與發起登入，其他設定一律在服務設定修改；儲存設定時節點會重啟約一分鐘。
+                **限制**：不提供 exit node、子網路由（subnet router）、app connector、Tailscale SSH 與 Funnel；平台出口是共用 NAT，
+                連線多半經 Tailscale 公共中繼（DERP）轉送，速度有限。
+                **身分**：節點身分存在持久磁碟，重啟後不變。欠費停權時服務停止（磁碟保留），恢復繳費後原樣還在；
+                刪除服務即全新節點（要重新登入），原磁碟依平台保留政策 90 天後回收。</field>
+            <field name="category">devops</field>
+            <field name="tags">["tailscale", "vpn", "wireguard", "tailnet"]</field>
+            <field name="documentation_url">https://tailscale.com/kb</field>
+            <field name="helm_repo_url"></field>
+            <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/tailscale</field>
+            <field name="helm_chart_version">0.1.0</field>
+            <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/tailscale","tag":"20261004.0334@sha256:1868576adfe7a81fb0b36189cc224c6f5f3116971d2d8b32986365fbd4fb28cf"},"persistence":{"size":"1Gi"},"service":{"port":8080}}</field>
+            <field name="helm_value_specs">{"required": [], "optional": [
+                {"key": "tailscale.loginServer", "label": "控制伺服器（選填）", "type": "text",
+                "placeholder": "http://svc-xxxxxxxx-headscale:8080",
+                "description": "留空＝官方 Tailscale。使用 Headscale 時填它的網址；同工作區的 VPN 控制台請填內部網址 http://&lt;它的 Helm Release&gt;-headscale:8080。換控制伺服器＝這台節點登記成新機器（新的 tailnet IP）；網址格式不正確時維持目前的登入並寫入服務記錄"},
+                {"key": "tailscale.authKey", "label": "Auth key（選填）", "type": "password",
+                "description": "Tailscale 的 tskey-auth-… 或 Headscale 的 pre-auth key，只在節點尚未登入時使用。建議用一次性、預先核准並帶 tag 的 key，登入成功後清空這一欄；也可以不填，改從服務網址的網頁介面登入"},
+                {"key": "tailscale.hostname", "label": "節點名稱（選填）", "type": "text",
+                "placeholder": "woow-office",
+                "description": "tailnet 上顯示的名稱（英文字母、數字與連字號）；留空或格式不合時用 woow-&lt;Helm Release&gt;"},
+                {"key": "tailscale.tags", "label": "標籤 tags（選填）", "type": "text",
+                "placeholder": "tag:server",
+                "description": "逗號分隔的 tag:&lt;名稱&gt;，登入時生效；已登入的節點改標籤通常要重新登入。使用前要先在 tailnet 的 ACL 設定 tagOwners，不合格的標籤會被略過"},
+                {"key": "tailscale.serve", "label": "轉發清單", "type": "text",
+                "placeholder": "8069=svc-1a2b3c4d:80",
+                "description": "格式「tailnet 埠=服務名稱:埠」，多筆用逗號分隔；只接受同一工作區的服務，不合格的項目（IP、外部網址、其他工作區）會被略過並寫入服務記錄"},
+                {"key": "tailscale.noLogs", "label": "不上傳診斷記錄到 Tailscale", "type": "boolean", "default": true,
+                "description": "開啟時節點不把診斷記錄上傳到 Tailscale 公司（--no-logs-no-support）；關閉才能向 Tailscale 官方申請支援"}
+                ]}</field>
+            <field name="default_port">8080</field>
+            <field name="ingress_enabled" eval="True"/>
+            <field name="min_vcpu">1</field>
+            <field name="min_ram_gb">0.5</field>
+            <field name="min_storage_gb">1</field>
+            <field name="mcp_enabled" eval="False"/>
+            <field name="has_admin_gui" eval="True"/>
+            <field name="admin_password_carrier">helm_secret</field>
+            <field name="admin_password_settable" eval="True"/>
+            <field name="post_deploy_init_type">none</field>
+            <field name="max_per_partner" eval="0"/>
+            <field name="is_hidden" eval="True"/>
+            <field name="is_active" eval="True"/>
+        </record>
+
+        <!-- AI 模型閘道（LiteLLM）cloud service。chart woow-paas-charts charts/litellm 0.1.0（#123）：
+             litellm-non_root 1.103.3（uid 65534）＋內附 PostgreSQL（平台 paas-postgres 17.11，與 woow-odoo
+             同一顆 pin），只有一顆 PVC（pgdata＋每日／升級前 pg_dump）。唯一入口 <release>-litellm:4000
+             （PG Service 為 headless，operator 不會挑它）。
+             憑證：UI 帳號固定 admin、密碼＝config.sensitive.admin_password（helm_secret，可重設、可自設，
+             workload 是 Deployment ⇒ reset 的 rollout restart 會套到）。master key 走 #530 gateway 通道：
+             gateway.externalPath=/v1 讓平台鑄 auth.apiServerKey（→ LITELLM_MASTER_KEY，不需 sk- 前綴，
+             沙盒實測），一次性交付 key＋https://<sub>/v1，Reset 一起換（salt key 不動，chart 存進 DB）。
+             一次性視窗的兩格提示用 #1412 P3 的 gateway_api_key_hint／gateway_url_hint（英文原文，zh_TW.po 給中文）。
+             provider key 與模型只在 LiteLLM 後台設（STORE_MODEL_IN_DB，加密存租戶 DB），預設沒有任何模型。
+             不加 _inject_allowed_origins：chart 的 litellm.publicUrl 選配（UI 登入 redirect 由請求推導，
+             tunnel 的 X-Forwarded-Proto 由 trustedProxyRanges 信任）。
+             1 vCPU／2 GB／10 GB：方案 overlay 套在 litellm 容器；persistence.size＝唯一一顆 PVC。
+             隱藏（is_hidden=True）待：litellm 鏡像（paas-odoo-ci #236）核可、chart 0.1.0 發佈。
+             營運：上游只支援最近四條線、半年 3 個未授權漏洞 ⇒ 每月升 minor 並 backfill 既有服務。 -->
+        <record id="cloud_app_litellm" model="woow_paas_platform.cloud_app_template">
+            <field name="name">AI 模型閘道（LiteLLM）</field>
+            <field name="slug">litellm</field>
+            <field name="description">OpenAI 相容的 AI 模型閘道：一個 API 端點接上 OpenAI、Anthropic、Google、OpenRouter 等多家模型，用虛擬金鑰分給各應用程式並控管預算與用量，附網頁管理後台與專屬資料庫。1 vCPU／2 GB RAM／10 GB 磁碟</field>
+            <field name="full_description">AI 模型閘道（LiteLLM 1.103 開源版）：提供 OpenAI 相容的 API（/v1/chat/completions 等，也支援 Anthropic 格式），
+                後面接 OpenAI、Anthropic、Google、OpenRouter 等上百家模型供應商；用虛擬金鑰分給各個應用程式，可設預算、速率上限與
+                可用模型，並記錄每把金鑰的用量與花費。隨附專屬 PostgreSQL。
+                **帳密**：網頁後台帳號固定 admin，密碼於開通時一次性顯示；同時一次性顯示 master key 與 API Base URL
+                （https://你的服務網址/v1）。可在服務頁「Admin Credentials」重設或改成自己的密碼——重設時 master key 會一起換新、
+                舊的立即失效（已建立的虛擬金鑰與供應商金鑰不受影響），請妥善保存。
+                **模型與供應商金鑰**：開通時沒有任何模型。請在後台新增模型並填入你自己的供應商 API Key；金鑰加密後存在你自己的資料庫，
+                平台不代管。
+                **使用 API**：應用程式請一律用後台建立的虛擬金鑰，master key 只給管理腳本。經公開網址單次請求上限 100 MB；
+                長回應請用串流（stream），否則超過約 100 秒沒有任何輸出會被平台入口中斷。同一工作區的其他服務可改用內部網址
+                http://&lt;服務 release&gt;-litellm:4000/v1（&lt;服務 release&gt; 是本服務頁 Helm Release 那一格），不受上述限制。
+                **注意**：不要對這個服務的網址開啟「Access 保護」——它會擋掉 API 用戶端，只剩瀏覽器能通過。
+                **用量紀錄與備份**：每筆請求的明細紀錄保留天數在服務設定調整（預設 90 天）；資料庫每天自動備份到同一顆磁碟，
+                升級前也會先備份。平台會定期升級 LiteLLM 版本（含安全性修正）。
+                欠費停權時服務停止（磁碟保留），恢復繳費後資料原樣還在；刪除服務即全新開通，原磁碟依平台保留政策 90 天後回收。</field>
+            <field name="category">ai_llm</field>
+            <field name="tags">["litellm", "llm", "ai-gateway", "openai", "proxy"]</field>
+            <field name="documentation_url">https://docs.litellm.ai/docs/</field>
+            <field name="helm_repo_url"></field>
+            <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/litellm</field>
+            <field name="helm_chart_version">0.1.0</field>
+            <field name="helm_default_values">{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/litellm","tag":"20261004.0159@sha256:f6eff3e681c841b9fcfd49b552c25e1e0f04f962bfbc5bd47a96859a33a94674"},"postgresql":{"image":{"repository":"jcr-prod.woowtech.io/woow-paas-docker-local/paas-postgres","tag":"17.11-20260928.1549@sha256:dbd1fed8882043f45bf759e8f7c73092505ef0afef7a23a93b177e6f7c2c840f"}},"gateway":{"externalPath":"/v1"},"persistence":{"size":"10Gi"},"service":{"port":4000}}</field>
+            <field name="helm_value_specs">{"required": [], "optional": [
+                {"key": "litellm.spendLogRetention", "label": "用量明細保留天數", "type": "select", "default": "90d",
+                "options": [{"value": "7d", "label": "7 天"}, {"value": "30d", "label": "30 天"}, {"value": "90d", "label": "90 天"}, {"value": "180d", "label": "180 天"}, {"value": "365d", "label": "365 天"}],
+                "description": "每筆請求的明細紀錄（資料庫成長的主因）保留多久，超過的自動刪除。在 LiteLLM 後台改這項不會生效，請在這裡設定"},
+                {"key": "litellm.apiDocs", "label": "API 說明頁（/docs）", "type": "boolean", "default": true,
+                "description": "開啟時任何人都能看到 /docs、/redoc 的 API 說明頁（只列出端點，呼叫仍需金鑰）；關閉後這些頁面回 404"}
+                ]}</field>
+            <field name="default_port">4000</field>
+            <field name="ingress_enabled" eval="True"/>
+            <field name="min_vcpu">1</field>
+            <field name="min_ram_gb">2.0</field>
+            <field name="min_storage_gb">10</field>
+            <field name="mcp_enabled" eval="False"/>
+            <field name="has_admin_gui" eval="True"/>
+            <field name="admin_password_carrier">helm_secret</field>
+            <field name="admin_password_settable" eval="True"/>
+            <field name="gateway_api_key_hint">This is the LiteLLM master key (equivalent to the admin key). Applications should always use virtual keys created in the LiteLLM admin UI; keep the master key for admin scripts only.</field>
+            <field name="gateway_url_hint">Base URL of the OpenAI-compatible API. Other services in the same workspace should use the internal URL http://&lt;service release&gt;-litellm:4000/v1 instead.</field>
+            <field name="post_deploy_init_type">none</field>
+            <field name="max_per_partner" eval="0"/>
+            <field name="is_hidden" eval="True"/>
+            <field name="is_active" eval="True"/>
+        </record>
+
 
         <!-- Healer: DBs first installed under the historical <data noupdate="1"> block
              carry a sticky ir.model.data.noupdate flag on these seeds, so the corrected
