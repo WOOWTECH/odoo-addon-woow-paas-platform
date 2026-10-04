@@ -17,7 +17,8 @@ Headplane 0.7.1（只綁 127.0.0.1）、nginx 入口（Service 第一個埠 3000
 3. **ngrok／entrance image 用 chart 預設**：這兩顆在 chart 裡以分開的 ``digest`` 欄位釘死，
    chart 的 image helper 只要 digest 非空就附加——範本若把 tag 寫成 ``tag@sha256`` 卻沒清空
    digest，會 render 成雙 digest、拉不到 image。
-4. **對外位址**：控制協定過不了 Cloudflare 通道，只能經租戶 ngrok ⇒ 旗標開、標籤有中文。
+4. **對外位址**：控制協定過不了 Cloudflare 通道，只能經租戶 ngrok ⇒ 旗標開；標籤是 record 的資料值，
+   seed 直接寫中文、不走 .po（docs/decisions/patterns/i18n-scope-data-values-vs-code-strings.md）。
 5. **規格對帳**：1 vCPU／1 GB／1 GB——template min_*、plan cs_*、chart 唯一一顆 PVC 三處一致。
 6. **租戶旋鈕只限應用層**；ngrok token 不在 config.sensitive（平台會剝掉，EMQX 0.1.1 教訓）；
    ngrok.domain 存檔即擋整條網址。
@@ -42,7 +43,7 @@ HEADSCALE_DEBUG_DIGESTS = {
     # ghcr.io/juanfont/headscale:v0.29.4-debug（paas-odoo-ci #234）
     'sha256:2380cdb4951e5d63747d5880aeecaf7aea7702f06ea72a6b9d8010b9386195b8': 'v0.29.4',
 }
-TUNNEL_LABEL = 'VPN login server URL'
+TUNNEL_LABEL = 'VPN 登入網址（login server）'
 
 
 @tagged('post_install', '-at_install')
@@ -147,18 +148,18 @@ class TestHeadscaleSeed(TransactionCase):
         """控制協定過不了 Cloudflare 通道 ⇒ 對外登入網址只能經租戶 ngrok，由平台回讀。"""
         tpl = self._tpl()
         self.assertTrue(tpl.has_public_tunnel_address)
-        self.assertEqual(tpl.with_context(lang='en_US').public_tunnel_label, TUNNEL_LABEL)
+        self.assertEqual(tpl.public_tunnel_label, TUNNEL_LABEL,
+                         '服務頁那一格的標題直接寫中文（資料值）')
 
-    def test_tunnel_label_is_translated(self):
+    def test_tunnel_label_is_a_data_value_not_in_po(self):
+        """標籤是 record 的資料值 ⇒ seed 直接寫中文，⛔ 不進 .po（Eugene 定案通則）。"""
         po = os.path.join(
             os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'i18n', 'zh_TW.po')
         entries = [e for e in PoFileReader(po)
                    if e['type'] == 'model'
                    and e['name'] == 'woow_paas_platform.cloud_app_template,public_tunnel_label'
                    and e['imd_name'] == 'cloud_app_headscale']
-        self.assertEqual(len(entries), 1, 'Headscale 標籤的 model 翻譯條目要剛好一筆')
-        self.assertEqual(entries[0]['src'], TUNNEL_LABEL, 'msgid 必須等於 seed 原文')
-        self.assertEqual(entries[0]['value'], 'VPN 登入網址（login server）')
+        self.assertEqual(entries, [], '資料值不走 .po：改 seed 的中文原文即可')
 
     def test_spec_matches_plan_and_pvc(self):
         tpl = self._tpl()

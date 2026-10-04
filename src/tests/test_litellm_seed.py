@@ -11,7 +11,8 @@ key（``auth.apiServerKey`` → ``LITELLM_MASTER_KEY``，chart 原樣使用、�
 2. **master key 走 gateway 通道**：seed 帶 ``gateway.externalPath=/v1`` ⇒ 平台鑄 key、一次性交付
    ``https://<sub>/v1``、Reset 一起換。缺了它 master key 會落到 chart 自產值、租戶永遠拿不到。
 3. **一次性視窗的提示是 LiteLLM 的**（#1412 P3）：不是 hermes-agent 的「填進 MCP 連線設定」。
-   英文原文在 seed、中文在 zh_TW.po，msgid 必須等於 seed 原文（否則 Odoo 對不上、顯示英文）。
+   提示是 record 的資料值 ⇒ seed 直接寫中文、⛔ 不進 .po
+   （docs/decisions/patterns/i18n-scope-data-values-vs-code-strings.md，Eugene 定案通則）。
 4. **兩顆 image 都雙釘、都來自 JCR**（litellm 與 PG）。
 5. **規格對帳**：1 vCPU／2 GB／10 GB——template min_*、plan cs_*、唯一一顆 PVC 三處一致。
 6. **租戶旋鈕只有應用層兩個**；provider key 刻意**不是**旋鈕（只在 LiteLLM 後台設、存租戶 DB）。
@@ -31,11 +32,10 @@ LITELLM_CHART = 'oci://%slitellm' % JCR
 PINNED_TAG_RE = r'^\d{8}\.\d{4}@sha256:[0-9a-f]{64}$'
 # paas-postgres 的 tag 是「上游版本-建置時間」（同 woow-odoo chart 的 pin）。
 PG_PINNED_TAG_RE = r'^\d+\.\d+-\d{8}\.\d{4}@sha256:[0-9a-f]{64}$'
-KEY_HINT = ('This is the LiteLLM master key (equivalent to the admin key). Applications should '
-            'always use virtual keys created in the LiteLLM admin UI; keep the master key for '
-            'admin scripts only.')
-URL_HINT = ('Base URL of the OpenAI-compatible API. Other services in the same workspace should '
-            'use the internal URL http://<service release>-litellm:4000/v1 instead.')
+KEY_HINT = ('這是 LiteLLM 的 master key（等同管理員金鑰）。應用程式請一律在 LiteLLM 後台建立'
+            '虛擬金鑰使用，master key 只給管理腳本。')
+URL_HINT = ('OpenAI 相容 API 的 Base URL。同工作區其他服務請改用內部網址 '
+            'http://<服務 release>-litellm:4000/v1。')
 
 
 @tagged('post_install', '-at_install')
@@ -112,25 +112,20 @@ class TestLitellmSeed(TransactionCase):
         self.assertFalse(tpl.has_public_tunnel_address)
 
     def test_gateway_hints_are_litellm_specific(self):
-        tpl = self._tpl().with_context(lang='en_US')
+        tpl = self._tpl()
         self.assertEqual(tpl.gateway_api_key_hint, KEY_HINT)
         self.assertEqual(tpl.gateway_url_hint, URL_HINT)
         self.assertNotIn('MCP', tpl.gateway_api_key_hint + tpl.gateway_url_hint,
                          '不是 hermes-agent 的 MCP 連線設定')
 
-    def test_gateway_hints_are_translated(self):
-        by_field = {}
-        for entry in self._po_entries():
-            if entry['type'] == 'model' and entry['imd_name'] == 'cloud_app_litellm':
-                by_field.setdefault(entry['name'], []).append(entry)
-        for field, src, needle in (
-                ('gateway_api_key_hint', KEY_HINT, '虛擬金鑰'),
-                ('gateway_url_hint', URL_HINT, '-litellm:4000/v1'),
-        ):
-            entries = by_field.get('woow_paas_platform.cloud_app_template,%s' % field, [])
-            self.assertEqual(len(entries), 1, '%s 的 model 翻譯條目要剛好一筆' % field)
-            self.assertEqual(entries[0]['src'], src, 'msgid 必須等於 seed 原文，否則 Odoo 對不上')
-            self.assertIn(needle, entries[0]['value'])
+    def test_gateway_hints_are_data_values_not_in_po(self):
+        """兩格提示是 record 的資料值 ⇒ seed 直接寫中文，⛔ 不進 .po（Eugene 定案通則）。"""
+        fields = {'woow_paas_platform.cloud_app_template,gateway_api_key_hint',
+                  'woow_paas_platform.cloud_app_template,gateway_url_hint'}
+        entries = [e for e in self._po_entries()
+                   if e['type'] == 'model' and e['imd_name'] == 'cloud_app_litellm'
+                   and e['name'] in fields]
+        self.assertEqual(entries, [], '資料值不走 .po：改 seed 的中文原文即可')
 
     def test_one_time_credentials_carry_the_hints(self):
         """建立／Reset 共用的 _gateway_credentials：key、/v1 網址與 LiteLLM 提示一起交付。"""
@@ -149,7 +144,7 @@ class TestLitellmSeed(TransactionCase):
             'helm_values': tpl.helm_default_values,
         })
         service._set_admin_password_secret('pw-litellm-seed')
-        creds = PaasController._gateway_credentials(service.with_context(lang='en_US'))
+        creds = PaasController._gateway_credentials(service)
         self.assertTrue(creds.get('gateway_api_key'), 'master key 要真的交付')
         self.assertEqual(creds.get('gateway_url'), 'https://svc-litellm-seed.litellm-seed.invalid/v1')
         self.assertEqual(creds.get('gateway_api_key_hint'), KEY_HINT)

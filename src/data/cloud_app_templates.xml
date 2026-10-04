@@ -2050,7 +2050,7 @@
             <field name="admin_password_settable" eval="True"/>
             <field name="admin_username_helm_path">entrance.basicAuthUsername</field>
             <field name="has_public_tunnel_address" eval="True"/>
-            <field name="public_tunnel_label">VPN login server URL</field>
+            <field name="public_tunnel_label">VPN 登入網址（login server）</field>
             <field name="post_deploy_init_type">none</field>
             <field name="max_per_partner" eval="0"/>
             <field name="is_hidden" eval="True"/>
@@ -2135,7 +2135,8 @@
              workload 是 Deployment ⇒ reset 的 rollout restart 會套到）。master key 走 #530 gateway 通道：
              gateway.externalPath=/v1 讓平台鑄 auth.apiServerKey（→ LITELLM_MASTER_KEY，不需 sk- 前綴，
              沙盒實測），一次性交付 key＋https://<sub>/v1，Reset 一起換（salt key 不動，chart 存進 DB）。
-             一次性視窗的兩格提示用 #1412 P3 的 gateway_api_key_hint／gateway_url_hint（英文原文，zh_TW.po 給中文）。
+             一次性視窗的兩格提示用 #1412 P3 的 gateway_api_key_hint／gateway_url_hint（資料值，直接寫中文、不走 .po：
+             docs/decisions/patterns/i18n-scope-data-values-vs-code-strings.md）。
              provider key 與模型只在 LiteLLM 後台設（STORE_MODEL_IN_DB，加密存租戶 DB），預設沒有任何模型。
              不加 _inject_allowed_origins：chart 的 litellm.publicUrl 選配（UI 登入 redirect 由請求推導，
              tunnel 的 X-Forwarded-Proto 由 trustedProxyRanges 信任）。
@@ -2184,8 +2185,8 @@
             <field name="has_admin_gui" eval="True"/>
             <field name="admin_password_carrier">helm_secret</field>
             <field name="admin_password_settable" eval="True"/>
-            <field name="gateway_api_key_hint">This is the LiteLLM master key (equivalent to the admin key). Applications should always use virtual keys created in the LiteLLM admin UI; keep the master key for admin scripts only.</field>
-            <field name="gateway_url_hint">Base URL of the OpenAI-compatible API. Other services in the same workspace should use the internal URL http://&lt;service release&gt;-litellm:4000/v1 instead.</field>
+            <field name="gateway_api_key_hint">這是 LiteLLM 的 master key（等同管理員金鑰）。應用程式請一律在 LiteLLM 後台建立虛擬金鑰使用，master key 只給管理腳本。</field>
+            <field name="gateway_url_hint">OpenAI 相容 API 的 Base URL。同工作區其他服務請改用內部網址 http://&lt;服務 release&gt;-litellm:4000/v1。</field>
             <field name="post_deploy_init_type">none</field>
             <field name="max_per_partner" eval="0"/>
             <field name="is_hidden" eval="True"/>
