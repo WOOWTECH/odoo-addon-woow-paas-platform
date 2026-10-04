@@ -13,6 +13,7 @@ from fastapi import APIRouter, HTTPException, Query, status
 from src.config import settings
 from src.models.schemas import (
     MqttAddressResponse,
+    PublicAddressResponse,
     ReleaseCreateRequest,
     ReleaseInfo,
     ReleaseResetConfigRequest,
@@ -665,36 +666,10 @@ def get_release_revisions(namespace: str, name: str):
         )
 
 
-@router.get(
-    "/{namespace}/{name}/mqtt-address",
-    response_model=MqttAddressResponse,
-    summary="Get the public MQTT address advertised by the release's ngrok sidecar",
-)
-def get_mqtt_address(namespace: str, name: str):
-    """對外 MQTT 位址（charts/emqx）。
-
-    平台的 Cloudflare 通道只載 HTTP/WS，所以原生 MQTT 走租戶自己的 ngrok agent
-    （chart 的 sidecar）。固定位址（ngrok 保留位址）平台本來就知道——它是租戶填進
-    helm values 的；本端點要解的是**隨機指派**那一種：agent 每次連線拿到的位址只有
-    agent 自己知道，它每 60 秒把當前位址印到自己的 stdout，平台從那裡讀回來。
-
-    回 200 ＋ ``public_url: null`` 是正常狀態（租戶沒開、agent 還沒連上、pod 還沒起來），
-    **不是**錯誤；只有 kubectl 本身失敗才會是 5xx。
-
-    Args:
-        namespace: Release namespace
-        name: Release name
-
-    Returns:
-        The advertised address, or ``public_url: null`` when there is none.
-
-    Raises:
-        HTTPException: 403 namespace 越界、500 kubectl 失敗
-    """
+def _read_advertised_address(namespace: str, name: str, schemes) -> Optional[str]:
+    """兩個位址端點共用：403 namespace 越界、500 kubectl 失敗（不外洩 stderr）。"""
     try:
-        return MqttAddressResponse(
-            public_url=k8s_service.get_advertised_mqtt_address(namespace, name)
-        )
+        return k8s_service.get_advertised_public_address(namespace, name, schemes=schemes)
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -702,15 +677,71 @@ def get_mqtt_address(namespace: str, name: str):
         )
     except KubectlException as e:
         logger.error(
-            "Failed to read the advertised MQTT address for %s/%s: %s",
+            "Failed to read the advertised public address for %s/%s: %s",
             namespace,
             name,
             e.message,
         )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to read the advertised MQTT address. Check operator logs.",
+            detail="Failed to read the advertised public address. Check operator logs.",
         )
+
+
+@router.get(
+    "/{namespace}/{name}/public-address",
+    response_model=PublicAddressResponse,
+    summary="Get the public address advertised by the release's ngrok sidecar",
+)
+def get_public_address(namespace: str, name: str):
+    """對外位址（chart 的 ngrok sidecar；EMQX 的 MQTT、Headscale 的控制網址）。
+
+    平台的 Cloudflare 通道只載 HTTP/WS，而且會剝掉 Tailscale 控制協議的
+    ``Upgrade`` header，所以原生 MQTT（TCP）與 Headscale 控制面（HTTPS）都走租戶
+    自己的 ngrok agent（chart 的 sidecar）。agent 實際拿到的位址只有它自己知道
+    （隨機指派、或 dev domain 由 agent API 才查得到），它每 60 秒把當前位址印到
+    自己的 stdout，平台從那裡讀回來。log 契約見
+    ``KubernetesService.get_advertised_public_address``。
+
+    回 200 ＋ ``public_url: null`` 是正常狀態（租戶沒開、agent 還沒連上、sidecar
+    撤回、pod 還沒起來），**不是**錯誤；只有 kubectl 本身失敗才會是 5xx。
+
+    Args:
+        namespace: Release namespace
+        name: Release name
+
+    Returns:
+        The advertised ``tcp://host:port`` / ``https://host[:port]``, or
+        ``public_url: null`` when there is none.
+
+    Raises:
+        HTTPException: 403 namespace 越界、500 kubectl 失敗
+    """
+    return PublicAddressResponse(
+        public_url=_read_advertised_address(
+            namespace, name, KubernetesService.PUBLIC_ADDRESS_SCHEMES
+        )
+    )
+
+
+@router.get(
+    "/{namespace}/{name}/mqtt-address",
+    response_model=MqttAddressResponse,
+    summary="[Legacy] Get the public MQTT address advertised by the release's ngrok sidecar",
+)
+def get_mqtt_address(namespace: str, name: str):
+    """舊端點：對外 MQTT 位址（charts/emqx）。
+
+    平台 ≤ 18.0.1.0.205 呼叫這支；operator 必須比改呼叫 ``/public-address`` 的平台版本
+    先上線，所以這支要留到沒有任何已部署的平台還在呼叫為止。行為與舊版相同：只回
+    ``tcp://`` 位址（marker 新舊兩種都認，見 ``get_public_address``）。
+
+    Raises:
+        HTTPException: 403 namespace 越界、500 kubectl 失敗
+    """
+    return MqttAddressResponse(
+        public_url=_read_advertised_address(namespace, name, ("tcp",))
+    )
 
 
 @router.get(
