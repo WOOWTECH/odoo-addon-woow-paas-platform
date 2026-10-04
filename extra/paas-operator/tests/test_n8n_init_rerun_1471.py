@@ -2,6 +2,9 @@
 
 n8n 2.x 不允許兩把 key 同名；init 重跑（partial 後重試、redeploy 開新一代）時第二次建 key
 會收到 "There is already an entry with this name"，服務永遠卡在 initializing。
+
+⚠ 列表回應的形狀取自正式站 n8n 2.35.3 實測：``{"data": {"items": [...], "counts": …}}``。
+第一版修正只認 ``{"data": [...]}``，單元測試也用了那個假形狀，結果 stg 實測第二次 init 照樣失敗。
 """
 import json
 import re
@@ -10,8 +13,13 @@ from unittest.mock import MagicMock
 from tests.test_init_error_kind_1263 import _http, _n8n_k8s, _post_init_n8n
 
 
+def _n8n2_list(keys):
+    """n8n 2.35.3 GET /rest/api-keys 的真實形狀。"""
+    return _http(200, json.dumps({"data": {"items": keys, "counts": {}, "totals": {}, "owners": {}}}))
+
+
 def _with_existing_keys(keys, delete_status=200, list_answer=None):
-    k8s = _n8n_k8s({("GET", "/rest/api-keys"): list_answer or _http(200, json.dumps({"data": keys}))})
+    k8s = _n8n_k8s({("GET", "/rest/api-keys"): list_answer or _n8n2_list(keys)})
     inner = k8s.exec_in_pod.side_effect
     deleted = []
 
@@ -55,3 +63,28 @@ def test_delete_failure_falls_through_to_create():
 
     assert deleted == ["/rest/api-keys/old1"]
     assert body["success"] is True
+
+
+def test_legacy_list_shape_is_still_understood():
+    k8s, deleted = _with_existing_keys(
+        [], list_answer=_http(200, json.dumps({"data": [{"id": "old1", "label": "mcp-sidecar"}]})))
+    body = _post_init_n8n(k8s).json()
+
+    assert body["success"] is True
+    assert deleted == ["/rest/api-keys/old1"]
+
+
+def test_unrecognised_list_shape_deletes_nothing():
+    k8s, deleted = _with_existing_keys(
+        [], list_answer=_http(200, json.dumps({"data": {"something": "else"}})))
+    body = _post_init_n8n(k8s).json()
+
+    assert body["success"] is True
+    assert deleted == []
+
+
+def test_at_most_three_stale_keys_are_deleted():
+    k8s, deleted = _with_existing_keys([{"id": f"k{i}", "label": "mcp-sidecar"} for i in range(5)])
+    _post_init_n8n(k8s)
+
+    assert deleted == ["/rest/api-keys/k0", "/rest/api-keys/k1", "/rest/api-keys/k2"]

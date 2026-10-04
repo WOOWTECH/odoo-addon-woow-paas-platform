@@ -90,7 +90,7 @@ def _n8n_k8s(overrides=None, secrets="svc-app-secret"):
         ("GET", "/rest/settings"): _http(200, _SETTINGS_NEEDS_SETUP),
         ("POST", "/rest/owner/setup"): _http(200, json.dumps({"data": {"id": "u1"}})),
         ("POST", "/rest/login"): _http(200, "{}", {"set-cookie": ["n8n-auth=tok; Path=/"]}),
-        ("GET", "/rest/api-keys"): _http(200, json.dumps({"data": []})),
+        ("GET", "/rest/api-keys"): _http(200, json.dumps({"data": {"items": [], "counts": {}}})),
         ("GET", "/rest/api-keys/scopes"): _http(200, json.dumps({"data": ["workflow:read"]})),
         ("POST", "/rest/api-keys"): _http(200, json.dumps({"data": {"rawApiKey": "key-1263"}})),
     }
