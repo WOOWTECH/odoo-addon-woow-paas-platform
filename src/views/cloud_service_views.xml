@@ -17,6 +17,11 @@
                            statusbar_visible="pending,deploying,running"/>
                 </header>
                 <sheet>
+                    <!-- #1408：Redeploy 後 chart／image 與範本不符的提示（相符時為空、不顯示）。 -->
+                    <div class="alert alert-warning" role="alert"
+                         invisible="not redeploy_check_message">
+                        <field name="redeploy_check_message" nolabel="1"/>
+                    </div>
                     <div class="oe_title">
                         <h1>
                             <field name="name" placeholder="Service Name"/>

@@ -71,6 +71,8 @@ def pod_info(**overrides):
         'task': None,
         'owner_kind': None,
         'creation_timestamp': None,
+        # #1408：spec.containers 的 image 參照；預設空清單＝不觸發 Redeploy 後的核對。
+        'images': [],
     }
     unknown = set(overrides) - set(pod)
     if unknown:

@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+import yaml
 from fastapi import APIRouter, HTTPException, Query, status
 
 from src.config import settings
@@ -32,7 +33,12 @@ from src.services.helm import (
     KubectlException,
     KubernetesService,
 )
-from src.services.helm import _sanitize_release_values
+from src.services.helm import _live_objects, _sanitize_release_values
+from src.services.upgrade_preflight import (
+    describe_conflicts,
+    describe_helm_failure,
+    find_immutable_conflicts,
+)
 from src.services.storage_quota import (
     build_quota_error_detail,
     exhausted_resources,
@@ -340,7 +346,7 @@ def upgrade_release(
         # 全量 reset values，沒有這行時私有 image 的 CS 任一次 redeploy /
         # reconfigure 都會掉 pull secret → ImagePullBackOff 401。
         # #423：同一個呼叫連帶收斂 ns default SA（VM 型 CS 重跑 import 時要用）。
-        release = helm_service.upgrade(
+        upgrade_kwargs = dict(
             namespace=namespace,
             name=name,
             chart=request.chart,
@@ -350,6 +356,11 @@ def upgrade_release(
             reset_values=request.reset_values,
             reuse_values=request.reuse_values,
         )
+        # #1407：helm upgrade 不是交易——中途被 API server 拒絕時，前面的資源已經
+        # 換成新版、release 卻標 failed。先用同一組參數 dry-run 出 manifest，跟 live
+        # 物件比對不可變欄位；有衝突就在這裡擋下（409，什麼都還沒套用）。
+        _upgrade_preflight(upgrade_kwargs)
+        release = helm_service.upgrade(**upgrade_kwargs)
         if release.values is not None:
             release.values = _sanitize_release_values(release.values)
         logger.info(f"Upgraded release {name} in {namespace}")
@@ -362,9 +373,38 @@ def upgrade_release(
         )
     except HelmException as e:
         logger.error(f"Helm upgrade failed: {e.message}\nStderr: {e.stderr}")
+        # #1407：管理員只看得到 detail——原本是「Check operator logs」，看不出原因。
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Helm upgrade failed. Check operator logs for details.",
+            detail=describe_helm_failure(e.stderr),
+        )
+
+
+def _upgrade_preflight(upgrade_kwargs: Dict[str, Any]) -> None:
+    """#1407：dry-run 比對不可變欄位；有衝突 raise 409（中文、指出物件與欄位）。
+
+    dry-run 本身失敗（chart 拉不到、template 錯）照樣 raise HelmException——真正
+    upgrade 也一定會在同一步失敗，提早回報而且什麼都沒套用。live 物件讀不到時
+    不擋（log warning），行為退回 #1407 之前。
+    """
+    namespace = upgrade_kwargs["namespace"]
+    manifest = helm_service.upgrade(**upgrade_kwargs, dry_run=True)
+    live_items = _live_objects(namespace, "pvc,statefulsets,deployments")
+    if live_items is None:
+        logger.warning(
+            "Upgrade preflight for %s/%s skipped: live objects unavailable",
+            namespace, upgrade_kwargs["name"],
+        )
+        return
+    docs = [d for d in yaml.safe_load_all(manifest or "") if isinstance(d, dict)]
+    conflicts = find_immutable_conflicts(docs, live_items)
+    if conflicts:
+        logger.warning(
+            "Upgrade preflight refused %s/%s: %s", namespace, upgrade_kwargs["name"], conflicts,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=describe_conflicts(conflicts),
         )
 
 

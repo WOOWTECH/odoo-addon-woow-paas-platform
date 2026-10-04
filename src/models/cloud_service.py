@@ -1,4 +1,5 @@
 import contextlib
+import copy
 import json
 import logging
 import re
@@ -679,6 +680,126 @@ _INSTALL_PINNED_STORAGE_CLASS_PATHS = {
 _N8N_PUBLIC_URL_CONFIG_KEYS = ('WEBHOOK_URL', 'N8N_EDITOR_BASE_URL')
 
 
+# #1408：範本 ``helm_default_values`` 裡的 image 參照（含 ``repository`` 與 ``tag``
+# 或 ``digest`` 的 dict）是**商品版本**的一部分，與 chart 版本同進同退（#336）。
+# 開通時它們被 deep-merge 進服務自己的 ``helm_values`` 後就凍結了；管理員 Redeploy
+# 會把 chart 升到範本釘的版本，image 卻永遠停在開通當時 ⇒ 新 chart 配舊 image。
+# Redeploy 時以範本為準覆蓋這幾個鍵（租戶可設定的 spec 鍵除外）。
+_IMAGE_REF_KEYS = ('registry', 'repository', 'tag', 'digest')
+
+
+def _iter_image_refs(values, path=()):
+    """Yield ``(path tuple, ref dict)`` for every image reference in a values tree."""
+    if not isinstance(values, dict):
+        return
+    if isinstance(values.get('repository'), str) and (
+            values.get('tag') or values.get('digest')):
+        yield path, values
+    for key, child in values.items():
+        if isinstance(child, dict):
+            yield from _iter_image_refs(child, path + (key,))
+
+
+def _refresh_image_refs(service_values, template_values, tenant_keys=()):
+    """Copy the template's image refs over the service's values.
+
+    Returns ``(new_values, changes)``; ``changes`` is a list of
+    ``(dotted path, old, new)``. Only ``_IMAGE_REF_KEYS`` are touched, only at paths
+    where the template has an image ref, and never a key a tenant may set
+    (``tenant_keys``: dotted helm_value_specs keys — the key itself or any ancestor).
+    A ref key the service carries but the template no longer does (e.g. a stale
+    ``digest`` after the template moved to ``tag@sha256``) is removed, since the chart
+    would otherwise keep rendering it.
+    """
+    new_values = copy.deepcopy(service_values) if isinstance(service_values, dict) else {}
+    tenant = set(tenant_keys or ())
+    changes = []
+
+    def tenant_owned(dotted):
+        parts = dotted.split('.')
+        return any('.'.join(parts[:i]) in tenant for i in range(1, len(parts) + 1))
+
+    for path, ref in _iter_image_refs(template_values):
+        target = new_values
+        for key in path:
+            if not isinstance(target.get(key), dict):
+                target[key] = {}
+            target = target[key]
+        for key in _IMAGE_REF_KEYS:
+            dotted = '.'.join(path + (key,))
+            if tenant_owned(dotted):
+                continue
+            if key in ref:
+                if target.get(key) != ref[key]:
+                    changes.append((dotted, target.get(key), ref[key]))
+                    target[key] = ref[key]
+            elif key in target:
+                changes.append((dotted, target[key], None))
+                del target[key]
+    return new_values, changes
+
+
+def _split_image(image):
+    """``registry/repo:tag@digest`` → ``(repo without registry host, tag, digest)``."""
+    image = (image or '').strip()
+    digest = None
+    if '@' in image:
+        image, digest = image.split('@', 1)
+    tag = None
+    slash = image.rfind('/')
+    colon = image.rfind(':')
+    if colon > slash:
+        image, tag = image[:colon], image[colon + 1:]
+    parts = image.split('/')
+    if len(parts) > 1 and ('.' in parts[0] or ':' in parts[0] or parts[0] == 'localhost'):
+        parts = parts[1:]
+    if len(parts) == 2 and parts[0] == 'library':
+        parts = parts[1:]
+    return '/'.join(parts), tag, digest
+
+
+def _expected_image(ref):
+    """An image-ref dict → ``(repo, tag, digest)`` the running container should show."""
+    repository = ref.get('repository') or ''
+    if ref.get('registry'):
+        repository = '%s/%s' % (ref['registry'].rstrip('/'), repository)
+    tag = ref.get('tag') or ''
+    digest = ref.get('digest') or None
+    if '@' in tag:
+        tag, digest = tag.split('@', 1)
+    repo, _tag, _digest = _split_image(repository)
+    return repo, (tag or None), digest
+
+
+def _image_mismatches(values, pod_images):
+    """Image refs in ``values`` whose repository runs with a different tag/digest.
+
+    A ref whose repository does not appear in any running container is skipped
+    (that component is disabled or runs elsewhere) — the check only catches
+    "the right container, the wrong version", which is what a stale
+    ``helm_values`` produces. Returns a list of ``(expected str, running list)``.
+    """
+    running = [_split_image(image) for image in pod_images or [] if image]
+    mismatches = []
+    for _path, ref in _iter_image_refs(values):
+        repo, tag, digest = _expected_image(ref)
+        same_repo = [r for r in running if r[0] == repo]
+        if not same_repo:
+            continue
+        if digest:
+            ok = any(r[2] == digest for r in same_repo)
+        else:
+            ok = any(r[1] == tag for r in same_repo)
+        if not ok:
+            expected = repo + (':' + tag if tag else '') + ('@' + digest if digest else '')
+            shown = sorted({
+                r[0] + (':' + r[1] if r[1] else '') + ('@' + r[2] if r[2] else '')
+                for r in same_repo
+            })
+            mismatches.append((expected, shown))
+    return mismatches
+
+
 # Omnigent BYO host：哪些 chart 在主容器裡內建 omnigent host（woow-paas-charts
 # ``shared/omnigent-host`` 共用套件；host 和產品跑在同一個主容器裡），
 # 要把「同工作區 Omnigent 的叢集內網址」寫進哪個 value path（套件標準 values 區塊
@@ -1249,6 +1370,23 @@ class CloudService(models.Model):
         string='Last Upgraded At',
         help='Timestamp of the most recent upgrade',
     )
+    # #1408：Redeploy 之後「實際跑的」是否等於範本預期——helm upgrade 成功不代表
+    # workload 換到了新 image（pi-agent 就是 chart 升了、image 沒動）。pending 在
+    # Redeploy 成功時設起，服務下一次就緒時由 poll 核對並清掉；結果寫進 message。
+    redeploy_verify_pending = fields.Boolean(
+        string='Redeploy Verification Pending',
+        default=False,
+        copy=False,
+        groups='base.group_system',
+    )
+    redeploy_check_message = fields.Text(
+        string='Redeploy Check',
+        copy=False,
+        readonly=True,
+        groups='base.group_system',
+        help='Result of comparing the running workload with the product template '
+             'after the last redeploy (chart version and images). Empty when they match.',
+    )
 
     # Odoo Addons
     odoo_addon_ids = fields.Many2many(
@@ -1432,6 +1570,9 @@ class CloudService(models.Model):
             # #552 層 4：沒釘版就拒絕（理由見 helper）。這條路只有 `action_redeploy`
             # 的 group_system gate（#1185；在那之前連租戶都能經 `call_kw` 打到這裡）。
             self._redeploy_require_pinned_version()
+            # #1408：範本改釘的 image 寫回服務自己的 helm_values（之後租戶儲存設定
+            # 也沿用同一組）。upgrade 失敗時 UserError 讓整筆交易回捲，這次寫入一起撤銷。
+            image_changes = self._refresh_template_images()
             values = self._assemble_deploy_values()['values']
             # #1130：woow-odoo 的 conf.adminPassword 與 MCP 家族平行（各自的 helper）。
             sensitive_values = self._build_deploy_sensitive_values()
@@ -1479,7 +1620,16 @@ class CloudService(models.Model):
                     release_info.get('chart_version') or self.helm_chart_version
                 ),
                 'last_upgraded_at': fields.Datetime.now(),
+                # #1408：就緒後由 poll 核對 image；chart 版本當場就能核對。
+                'redeploy_verify_pending': True,
+                'redeploy_check_message': self._redeploy_chart_check_message(
+                    release_info.get('chart_version')),
             })
+            if image_changes:
+                _logger.info(
+                    "Redeploy of service id=%s refreshed template images: %s",
+                    self.id, image_changes,
+                )
             # #1257 Q24：人工 redeploy 開新的一代（計數歸零、欠 init）。
             self._open_init_generation()
             # #482: upgrade 用 chart 預設把 replicas 渲染回去了，收回停機。
@@ -3665,6 +3815,71 @@ class CloudService(models.Model):
     # docs/decisions/patterns/orm-vs-endpoint-acl-test-coverage.md 講的那種洞。
     # ------------------------------------------------------------------
 
+    def _refresh_template_images(self):
+        """#1408：把範本目前釘的 image 參照寫進服務的 helm_values；回傳變更清單。
+
+        只在管理員 Redeploy 呼叫——租戶儲存設定與重設密碼（15 秒 atomic）不換
+        image，避免 pod template 變動。範本 JSON 壞掉時不動（create 時就擋過）。
+        """
+        self.ensure_one()
+        try:
+            template_values = json.loads(self.template_id.helm_default_values or '{}')
+        except ValueError:
+            _logger.warning(
+                "Service id=%s: template %s has invalid helm_default_values; "
+                "images not refreshed", self.id, self.template_id.id)
+            return []
+        new_values, changes = _refresh_image_refs(
+            self._helm_values_dict(), template_values,
+            self.template_id._tenant_value_keys(),
+        )
+        if changes:
+            self._apply_helm_values(new_values)
+        return changes
+
+    def _redeploy_chart_check_message(self, resolved_version):
+        """Redeploy 後 chart 版本與範本不符時的提示（相符或無從得知回 False）。"""
+        self.ensure_one()
+        expected = self.template_id.helm_chart_version
+        if resolved_version and expected and resolved_version != expected:
+            return _(
+                'Redeploy finished, but the release runs chart %(actual)s while the '
+                'product pins %(expected)s.',
+                actual=resolved_version, expected=expected)
+        return False
+
+    def _verify_redeploy_images(self, pods):
+        """#1408：服務就緒時核對 Redeploy 後 workload 的 image；結果寫進 message。
+
+        舊 operator 的 PodInfo 沒有 ``images``（None）⇒ 無從核對，只清 pending。
+        收尾中的 Pod（deletionTimestamp）不算。
+        """
+        self.ensure_one()
+        live = [p for p in pods or [] if not p.get('deletion_timestamp')]
+        if not live or any(p.get('images') is None for p in live):
+            self.sudo().write({'redeploy_verify_pending': False})
+            return
+        images = [image for p in live for image in p.get('images') or []]
+        try:
+            values = self._helm_values_dict()
+        except ValueError:
+            values = {}
+        mismatches = _image_mismatches(values, images)
+        vals = {'redeploy_verify_pending': False}
+        if mismatches:
+            detail = '; '.join(
+                '%s (running: %s)' % (expected, ', '.join(shown))
+                for expected, shown in mismatches)
+            message = _(
+                'After the redeploy the workload is not running the expected '
+                'image: %(detail)s', detail=detail)
+            previous = self.sudo().redeploy_check_message
+            vals['redeploy_check_message'] = (
+                '%s\n%s' % (previous, message) if previous else message)
+            _logger.warning(
+                "Service id=%s redeploy image check failed: %s", self.id, mismatches)
+        self.sudo().write(vals)
+
     def _helm_values_dict(self):
         """讀出 helm_values 並解析成 dict（空值／未設定回 ``{}``）。
 
@@ -5198,6 +5413,9 @@ class CloudService(models.Model):
                     # #1159 Q1「init 分派」：只排進 init cron 的佇列，不在這裡執行。
                     ready_for_init = True
                     service._init_mark_ready_observed()
+                # #1408：Redeploy 後第一次就緒——核對 workload 真的換到範本 image。
+                if service.sudo().redeploy_verify_pending:
+                    service._verify_redeploy_images(status.get('pods'))
 
         elif release_status == 'failed':
             service.write({

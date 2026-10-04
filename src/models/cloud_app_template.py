@@ -1125,6 +1125,23 @@ class CloudAppTemplate(models.Model):
 
         return filtered, rejected
 
+    def _tenant_value_keys(self):
+        """租戶可設定的 helm value 鍵（helm_value_specs 的 required／optional ``key``）。
+
+        #1408：Redeploy 以範本 image 覆蓋服務值時，這些鍵屬於租戶，不覆蓋。
+        """
+        specs = self._parse_helm_value_specs()
+        keys = set()
+        if not isinstance(specs, dict):
+            return keys
+        for section in ('required', 'optional'):
+            for field in specs.get(section) or []:
+                if isinstance(field, dict) and field.get('key'):
+                    keys.add(field['key'])
+                elif isinstance(field, str):
+                    keys.add(field)
+        return keys
+
     def _formatted_value_specs(self):
         """這個 template 帶 ``format`` 的 spec：``{key: format}``（未知 format 略過）。"""
         specs = self._parse_helm_value_specs()
