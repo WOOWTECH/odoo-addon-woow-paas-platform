@@ -1027,3 +1027,6 @@ from . import test_deploy_timeout_diagnosis_1417
 from . import test_deploy_timeout_recovery_1416
 # #1431：從未 running 過的服務刪除時孤兒 PVC 只留 1 天；first_running_at 的寫入、守衛與保守回填。
 from . import test_never_running_orphan_grace_1431
+# #1424：開通被 operator 拒絕（#1348／#1415）且從未 running ⇒ 自動取消訂閱；一直停在 error、
+# 從未 running 的服務暫停扣款並提醒一次，恢復 running 後照常計費。
+from . import test_never_running_billing_1424

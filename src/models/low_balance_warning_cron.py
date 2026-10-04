@@ -33,11 +33,16 @@ class LowBalanceWarningCron(models.AbstractModel):
             ('sh_date_of_next_payment', '>=', today),
             ('sh_date_of_next_payment', '<=', cutoff),
         ])
+        # #1424：綁著從沒正常運作過、停在 error 的服務的訂閱，到期時不會扣款（扣款排程會
+        # 暫停並另外提醒）——這時叫租戶「為續費儲值」只會讓人困惑。
+        held = Subscription._woow_billing_hold_services(subs)
         _logger.info(
-            "[LOW_BAL] pre-renewal check today=%s cutoff=%s subs_in_window=%s",
-            today, cutoff, len(subs),
+            "[LOW_BAL] pre-renewal check today=%s cutoff=%s subs_in_window=%s held=%s",
+            today, cutoff, len(subs), len(held),
         )
         for sub in subs:
+            if sub.id in held:
+                continue
             try:
                 with self.env.cr.savepoint():
                     self._warn_if_needed(sub)

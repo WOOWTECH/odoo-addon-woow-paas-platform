@@ -1658,7 +1658,9 @@ class PaasController(HiddenChainMixin, Controller):
             if access.role not in [ROLE_OWNER, ROLE_ADMIN]:
                 return {'success': False, 'error': _('Permission denied')}
             try:
-                service._check_operation_allowed(operation='write')
+                # #1424：'delete' 在訂閱閘裡與 write 同級，唯一差別是開通被拒、訂閱已自動
+                # 取消的服務仍可刪除（見 CloudService._check_operation_allowed）。
+                service._check_operation_allowed(operation='delete')
             except OperationalError:
                 raise
             except (AccessDenied, AccessError, MissingError) as e:

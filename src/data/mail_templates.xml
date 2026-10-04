@@ -73,5 +73,49 @@
             </field>
             <field name="auto_delete" eval="True"/>
         </record>
+
+        <!-- #1424：服務開通後從沒正常運作過（一直停在 error），扣款排程暫停扣它的訂閱，並提醒
+             租戶一次（去重：sh.subscription.subscription.woow_billing_hold_notified_at）。
+             `lang` 讓信件依收件人語言渲染（zh_TW 翻譯在 i18n/zh_TW.po）。
+             auto_delete=False：留下載體，維運才查得到這封有沒有送出去。 -->
+        <record id="mail_template_billing_hold_never_running" model="mail.template">
+            <field name="name">PaaS: Billing Paused for a Service That Never Worked</field>
+            <field name="model_id" ref="base.model_res_partner"/>
+            <field name="subject">[Woow PaaS] A service that never started will not be charged</field>
+            <field name="email_from">{{ object.company_id.email_formatted or user.company_id.email_formatted }}</field>
+            <field name="email_to">{{ object.email }}</field>
+            <field name="lang">{{ object.lang }}</field>
+            <field name="body_html" type="html">
+                <div style="font-family: Arial, sans-serif; max-width: 600px;">
+                    <p>Hi <t t-out="object.name"/>,</p>
+                    <p>
+                        Your service <strong t-out="ctx.get('service_name', '')"/>
+                        (<t t-out="ctx.get('plan_name', '')"/>) has not worked since it was
+                        created: its deployment did not complete and it is still in an error state.
+                    </p>
+                    <p>
+                        We are <strong>not charging</strong> its subscription while it stays like
+                        this. The payment that was due on
+                        <strong t-out="ctx.get('due_date', '')"/> has been put on hold.
+                    </p>
+                    <p>
+                        Please delete this service and deploy it again, or contact support if you
+                        would like us to look into it. If the service recovers and starts working,
+                        billing resumes: the next payment is taken then, and a new billing period
+                        starts on that day.
+                    </p>
+                    <p>
+                        <a t-att-href="ctx.get('service_url', '#')"
+                           style="display:inline-block;background:#6366f1;color:#ffffff;padding:10px 16px;text-decoration:none;border-radius:6px;font-weight:600;">
+                            Open the service
+                        </a>
+                    </p>
+                    <p style="color:#6b7280;font-size:12px;">
+                        This notice is sent only once for this service.
+                    </p>
+                </div>
+            </field>
+            <field name="auto_delete" eval="False"/>
+        </record>
     </data>
 </odoo>

@@ -96,6 +96,11 @@ CLUSTER_STORAGE_CAPACITY_ERROR_CODE = 'cluster_storage_capacity_exhausted'
 #: ``DELETE /api/releases/...?grace_period_days=``；只能縮短預設、不能延長）。沒有租戶資料
 #: 要保護，不必佔 Longhorn 排程額度 90 天（#1415 事件）。
 NEVER_RUNNING_ORPHAN_GRACE_DAYS = 1
+#: #1424：operator「明確拒絕開通、沒有建立服務」的錯誤碼。收到時若服務從未 running 過，
+#: 平台自動取消它的訂閱（不扣款），租戶刪除服務後再重新開通即可。
+PROVISION_REJECTION_ERROR_CODES = (
+    STORAGE_QUOTA_ERROR_CODE, CLUSTER_STORAGE_CAPACITY_ERROR_CODE,
+)
 
 WOOW_ODOO_ADMIN_EMAIL_RE = re.compile(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
 #: #1335：保留給文件／測試、永遠收不到信的網域（RFC 2606 §3 的 example.com／.net／.org
@@ -361,7 +366,9 @@ def _reject_timeout_recovery_control_writes(env, vals):
 # #1431／#1424：服務「曾經正常運作過」的事實。平台依它決定刪除後孤兒 PVC 保留多久
 # （從未 running ⇒ 1 天）與要不要扣款（從未 running 的 error 服務暫停扣款）——租戶若能自己
 # 寫它，就能把用過的服務偽裝成沒用過（縮短資料保留、逃避計費）。判準同上：`env.is_system()`。
-_SERVICE_HISTORY_FIELDS = frozenset({'first_running_at'})
+# `provision_rejected_code`（#1424）同理：它讓 lifecycle cron 不去停權、讓已取消訂閱的服務
+# 仍可刪除——租戶自己寫得進去就能讓欠費服務逃過停權。
+_SERVICE_HISTORY_FIELDS = frozenset({'first_running_at', 'provision_rejected_code'})
 
 
 def _reject_service_history_writes(env, vals):
@@ -1074,6 +1081,19 @@ class CloudService(models.Model):
         help='When the service reached the running state for the first time. Empty means '
              'it never worked: its leftover disks are kept for only 1 day after deletion. '
              'Services created before version 18.0.1.0.209 were backfilled conservatively.',
+    )
+    # #1424：operator 明確拒絕開通（#1348 工作區儲存配額、#1415 叢集儲存額度，回 409）、
+    # 服務也從沒 running 過時，平台自動取消它的訂閱，並在這裡記下拒絕的錯誤碼。有值的服務：
+    # lifecycle cron 不對它停權（叢集上沒有可停的東西，打 operator 只會 404、把說明蓋掉）；
+    # 訂閱雖已取消，租戶仍可刪除它（`_check_operation_allowed`）。只有平台寫得進去。
+    provision_rejected_code = fields.Char(
+        string='Provisioning Rejected',
+        copy=False,
+        readonly=True,
+        help='Error code with which the deployment service refused to create this service '
+             '(workspace storage quota or cluster storage capacity). The subscription of a '
+             'service that never ran was cancelled automatically at that moment, so it is '
+             'never charged; the service can still be deleted.',
     )
 
     # VM 型服務的開通進度（#423 W5a，design §7.4）。
@@ -2550,10 +2570,12 @@ class CloudService(models.Model):
 
         except PaaSOperatorError as e:
             _logger.error("Operator error: %s", e)
+            # #1424：operator 明確拒絕開通 ⇒ 先取消訂閱（不扣款），訊息才說得準。
+            rejection = self._cancel_subscription_on_provision_rejection(e.detail)
             quota_message = (
-                self._storage_quota_error_message(e.detail)
+                self._storage_quota_error_message(e.detail, rejection=rejection)
                 # #1415：叢集儲存排程額度不足（operator 在 helm install 前擋下）。
-                or self._cluster_storage_capacity_error_message(e.detail)
+                or self._cluster_storage_capacity_error_message(e.detail, rejection=rejection)
             )
             self.write({
                 'state': 'error',
@@ -2563,8 +2585,12 @@ class CloudService(models.Model):
             })
             self._alert_cluster_storage_capacity_rejection(e.detail)
 
-    def _storage_quota_error_message(self, detail):
+    def _storage_quota_error_message(self, detail, rejection=None):
         """#1348：operator 回「工作區儲存配額已滿」時，給租戶看得懂的訊息；其他錯誤回 ``None``。
+
+        ``rejection``（#1424）：``_cancel_subscription_on_provision_rejection`` 的結果。訂閱真的
+        被自動取消時（``cancelled``），訊息改成說明「訂閱已取消、不會扣款，請刪除這個服務」；
+        沒有訂閱可取消時照舊。
 
         operator（``extra/paas-operator/src/services/storage_quota.py``）在 helm install
         前檢查 namespace ResourceQuota 的 PVC 數量／requests.storage，用滿時回 409、
@@ -2605,11 +2631,19 @@ class CloudService(models.Model):
                 tz = pytz.timezone(self.sudo().create_uid.tz or 'Asia/Taipei')
                 when = datetime.fromtimestamp(release_epoch, tz).strftime('%Y-%m-%d')
                 parts.append(env._('The earliest of them is released on %(date)s.', date=when))
-        parts.append(env._(
-            'Contact support to release it early, or deploy this service in another workspace.'))
+        if rejection and rejection.get('cancelled'):
+            # #1424：訂閱已自動取消；下一步是刪掉這個服務，再到有空間的地方重開。
+            parts.append(self._provision_rejection_billing_note(env, rejection))
+            parts.append(env._(
+                'Please delete this service, then contact support to release the storage '
+                'early, or deploy it again in another workspace.'))
+        else:
+            parts.append(env._(
+                'Contact support to release it early, or deploy this service in another '
+                'workspace.'))
         return ' '.join(parts)
 
-    def _cluster_storage_capacity_error_message(self, detail):
+    def _cluster_storage_capacity_error_message(self, detail, rejection=None):
         """#1415：operator 回「叢集儲存排程額度不足」時給租戶的訊息；其他錯誤回 ``None``。
 
         operator（``extra/paas-operator/src/services/storage_capacity.py``）在 helm install
@@ -2619,9 +2653,10 @@ class CloudService(models.Model):
 
         訊息寫給租戶：這是平台的儲存空間問題、不是他的設定錯；沒有建立任何資源；系統管理員
         已收到通知（``_alert_cluster_storage_capacity_rejection``）。租戶能做的只有刪除後
-        稍後重開、或聯絡客服。訂閱的說法對照實際行為（與 #1348 拒絕路徑相同，服務停在
-        error、訂閱不動）：刪除服務會取消訂閱（``_settle_on_entity_delete``）——試用期內
-        不扣款，已扣的點數依未使用天數退回。語言同 #1348：以服務建立者的語言組字串。
+        稍後重開、或聯絡客服。訂閱的說法對照實際行為：#1424 起從未 running 過的服務在這裡
+        已被自動取消訂閱（``rejection``）——說「已取消、不會扣款」；沒有自動取消的（曾經 running
+        過、平台代管的服務）維持舊說法：刪除服務會取消訂閱（``_settle_on_entity_delete``），
+        試用期內不扣款，已扣的點數依未使用天數退回。語言同 #1348：以服務建立者的語言組字串。
         """
         self.ensure_one()
         if (not isinstance(detail, dict)
@@ -2646,13 +2681,109 @@ class CloudService(models.Model):
         parts.append(env._(
             'Nothing was created for this deployment, and the platform administrators have '
             'been notified.'))
+        cancelled = bool(rejection and rejection.get('cancelled'))
+        if cancelled:
+            parts.append(self._provision_rejection_billing_note(env, rejection))
         parts.append(env._(
             'Please delete this service and deploy it again later, or contact support.'))
-        if self.sudo().subscription_id:
+        if not cancelled and self.sudo().subscription_id:
             parts.append(env._(
                 'Deleting it also cancels its subscription: nothing is charged during the '
                 'trial, and points already paid are refunded for the unused days.'))
         return ' '.join(parts)
+
+    @staticmethod
+    def _provision_rejection_billing_note(env, rejection):
+        """#1424：訂閱已自動取消時，給租戶的計費說明（以呼叫端組好的建立者語言 env）。"""
+        if rejection.get('credited'):
+            return env._(
+                'Its subscription has been cancelled automatically, so it will not be charged '
+                'again; the points already paid have been refunded to your wallet for the '
+                'unused days.')
+        return env._(
+            'Its subscription has been cancelled automatically, so it will not be charged.')
+
+    def _is_tenant_managed(self):
+        """#1424：這台服務的生命週期是不是租戶自己在 /woow 管的。
+
+        平台代開的「每帳號一台」服務（``provision_partner_id``，例如 HA PaaS）與隱藏實例的
+        商品（``template_id.conceal_instances``）不是：租戶在 /woow 看不到、也刪不了它們，
+        HA App 還會在 error 時原地重試開通（error → pending）。對它們自動取消訂閱或寄「請刪除
+        這個服務」的提醒都沒有意義——取消後重試成功的服務反而會被 lifecycle cron 停權。
+        """
+        self.ensure_one()
+        svc = self.sudo()
+        return not svc.provision_partner_id and not svc.template_id.conceal_instances
+
+    def _cancel_subscription_on_provision_rejection(self, detail):
+        """#1424：operator 明確拒絕開通時，取消這台服務的訂閱（不扣款）；不適用回 ``None``。
+
+        只在三個條件同時成立時動手：
+
+        1. 錯誤碼是 ``PROVISION_REJECTION_ERROR_CODES``（#1348 工作區儲存配額、#1415 叢集儲存
+           額度，operator 回 409）——operator 確定開不起來、服務沒有建立；
+        2. 服務從未 running 過（``first_running_at`` 空）——曾經能用的服務不在這裡取消；
+        3. 租戶自己管的服務（``_is_tenant_managed``）。
+
+        取消走 ``_settle_on_entity_delete``（與刪除服務同一個結算點）：試用期內什麼都不扣、
+        也沒有東西可退；已付費的方案依未使用天數退回錢包（剛下單就被拒＝整期退回）。同時記下
+        ``provision_rejected_code``，讓 lifecycle cron 不去停權、讓租戶仍能刪除這台服務。
+
+        取消與記錄在同一個 savepoint：任一步失敗就整組不生效（訂閱照舊、回 ``None``，訊息
+        退回舊說法），開通失敗本身照常寫 error——這裡只是記帳，不能讓它把 error 的落地
+        一起拖垮。``OperationalError`` 一律外拋（post-commit-bookkeeping-rollback-unit 規則一）。
+
+        回傳 ``{'code', 'cancelled', 'credited'}``；``cancelled`` 為 False 表示沒有可取消的
+        進行中訂閱（沒有訂閱、或早已不是 in_progress），仍會記下拒絕碼。
+        """
+        self.ensure_one()
+        code = detail.get('error_code') if isinstance(detail, dict) else None
+        if code not in PROVISION_REJECTION_ERROR_CODES:
+            return None
+        if self.first_running_at or not self._is_tenant_managed():
+            return None
+        sub = self.sudo().subscription_id
+        try:
+            with self.env.cr.savepoint():
+                credited = 0.0
+                cancelled = False
+                if sub and sub.state == 'in_progress':
+                    credited = sub._settle_on_entity_delete(
+                        reason='Provisioning rejected (%s)' % code)
+                    cancelled = True
+                self.sudo().write({'provision_rejected_code': code})
+        except OperationalError:
+            raise
+        except Exception:
+            _logger.exception(
+                "[#1424] could not cancel the subscription of service %s (id=%s) after the "
+                "operator refused provisioning (%s); the subscription is left untouched",
+                self.name, self.id, code)
+            return None
+        _logger.info(
+            "[#1424] operator refused provisioning service %s (id=%s, %s): subscription %s "
+            "cancelled=%s credited=%s", self.name, self.id, code,
+            sub.id if sub else None, cancelled, credited)
+        return {'code': code, 'cancelled': cancelled, 'credited': credited}
+
+    def _provision_rejected_nothing_created(self):
+        """#1424：operator 拒絕開通後一直停在 error、從沒跑起來的服務（沒有可停權的東西）。"""
+        self.ensure_one()
+        return bool(
+            self.provision_rejected_code and not self.first_running_at
+            and self.state == 'error')
+
+    def _check_operation_allowed(self, operation='write'):
+        """#1424：訂閱因為開通被拒而自動取消的服務，租戶仍要能刪除它。
+
+        mixin 的訂閱閘對已取消的訂閱一律拒絕（「訂閱已到期、服務已停權，請續約」）——對
+        這種服務，錯誤訊息正叫租戶「請刪除這個服務」，擋下刪除就是死路。只放行
+        ``operation='delete'``（controller 的刪除分支傳這個值），更新／rollback 照舊擋。
+        """
+        self.ensure_one()
+        if operation == 'delete' and self._provision_rejected_nothing_created():
+            return
+        return super()._check_operation_allowed(operation=operation)
 
     def _alert_cluster_storage_capacity_rejection(self, detail):
         """#1415：開通被叢集儲存額度擋下時，告警給系統管理員（一台一行，同 summary 未處理前追加）。"""
@@ -7370,6 +7501,14 @@ class CloudService(models.Model):
         )
         if self.state == 'suspended':
             return
+        if self._provision_rejected_nothing_created():
+            # #1424：開通被 operator 拒絕、訂閱已自動取消的服務。叢集上沒有可停的 workload，
+            # 打 operator 只會 404、把寫給租戶的說明蓋成「Suspend failed」，而且 lifecycle
+            # cron 每天都會再來一次。維持 error 與說明，等租戶刪除（或 cleanup 期滿）。
+            _logger.info(
+                "[CLOUD_SVC] _do_suspend skipped service=%s: provisioning was rejected "
+                "(%s), nothing to suspend", self.id, self.provision_rejected_code)
+            return
 
         from ..services.paas_operator import get_paas_operator_client
 
@@ -7564,15 +7703,23 @@ class CloudService(models.Model):
                     self.id,
                 )
             except Exception as e:
-                _logger.warning(
-                    "[CLOUD_SVC] _do_cleanup helm uninstall failed service=%s: %s",
-                    self.id, e,
-                )
-                self.write({
-                    'state': 'error',
-                    'error_message': _('Cleanup failed: %(error)s', error=e),
-                })
-                return
+                if getattr(e, 'status_code', None) == 404:
+                    # #1424：release 本來就不在（開通被拒、從沒建立過，或已被別的路徑拆掉）
+                    # ＝要的結果已經成立，與 `_cleanup_helm` 同一個判準。之前會寫成
+                    # 「Cleanup failed」，而 lifecycle cron 每天再撞一次、永遠收不了尾。
+                    _logger.info(
+                        "[CLOUD_SVC] _do_cleanup release already gone service=%s",
+                        self.id)
+                else:
+                    _logger.warning(
+                        "[CLOUD_SVC] _do_cleanup helm uninstall failed service=%s: %s",
+                        self.id, e,
+                    )
+                    self.write({
+                        'state': 'error',
+                        'error_message': _('Cleanup failed: %(error)s', error=e),
+                    })
+                    return
 
         # Step 2.5 — #744：拆掉本服務的 Cloudflare Access app（＋ reusable
         # policies）。放在 helm 之後、狀態改寫之前，理由與 SA 的 `_do_cleanup`
