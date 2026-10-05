@@ -15,6 +15,12 @@ import logging
 import re
 
 from src.services.helm import KubectlException, KubernetesService
+from src.services.odoo_chart_contract import (
+    ODOO_CONF_PATH,
+    ODOO_CONTAINER_NAME,
+    ODOO_PYTHON,
+)
+from src.services.odoo_init import OdooInitError, OdooInitService
 
 logger = logging.getLogger(__name__)
 
@@ -39,14 +45,16 @@ class OdooModuleService:
 
     def __init__(self, k8s_service: KubernetesService | None = None):
         self.k8s = k8s_service or KubernetesService()
+        self._odoo = OdooInitService(k8s_service=self.k8s)
 
     def _get_odoo_pod(
         self, namespace: str, release_name: str
     ) -> tuple[str, str]:
-        """Find the Odoo pod name and container name by label selectors.
+        """Find the Odoo pod name and container name.
 
-        Tries a specific selector first (instance + name=odoo), then
-        falls back to instance-only selector for non-standard charts.
+        #1477：pod 定位委派 ``OdooInitService._get_odoo_pod``——與 init/odoo、
+        admin-password 同一份 woow-odoo 契約（``component=server`` selector、
+        instance-only fallback 經 ``validate_fallback_pod`` 驗身分），不在這裡再寫一份。
 
         Args:
             namespace: Kubernetes namespace.
@@ -56,34 +64,13 @@ class OdooModuleService:
             Tuple of (pod_name, container_name).
 
         Raises:
-            OdooModuleError: If no matching pod is found.
+            OdooModuleError: If no verified Odoo server pod is found.
         """
-        selectors = [
-            f"app.kubernetes.io/instance={release_name},app.kubernetes.io/name=odoo",
-            f"app.kubernetes.io/instance={release_name}",
-        ]
-
-        for selector in selectors:
-            try:
-                pod_name = self.k8s.get_pod_name(namespace, selector)
-                container = f"{release_name}-odoo"
-                logger.debug(
-                    "Found pod '%s' (container: '%s') with selector '%s'",
-                    pod_name,
-                    container,
-                    selector,
-                )
-                return pod_name, container
-            except KubectlException:
-                logger.debug(
-                    "No pod found with selector '%s', trying next", selector
-                )
-                continue
-
-        raise OdooModuleError(
-            f"Cannot find Odoo pod for release {release_name} in {namespace}",
-            step="find_pod",
-        )
+        try:
+            pod_name = self._odoo._get_odoo_pod(namespace, release_name)
+        except OdooInitError as exc:
+            raise OdooModuleError(str(exc), step="find_pod") from exc
+        return pod_name, ODOO_CONTAINER_NAME
 
     def get_module_states(
         self,
@@ -135,7 +122,7 @@ class OdooModuleService:
             "import odoo, json, sys\n"
             "try:\n"
             "    odoo.tools.config.parse_config("
-            "['-c', '/opt/bitnami/odoo/conf/odoo.conf', '--no-http'])\n"
+            f"['-c', {ODOO_CONF_PATH!r}, '--no-http'])\n"
             "    db_name = odoo.tools.config['db_name']\n"
             "    if not db_name:\n"
             '        print(json.dumps({"success": False, '
@@ -166,11 +153,7 @@ class OdooModuleService:
             "    sys.exit(1)\n"
         )
 
-        command = [
-            "/opt/bitnami/odoo/venv/bin/python3",
-            "-c",
-            query_script,
-        ]
+        command = [ODOO_PYTHON, "-c", query_script]
 
         try:
             result = self.k8s.exec_in_pod(
