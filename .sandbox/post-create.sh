@@ -29,6 +29,24 @@ NS_PREFIX="${PAAS_NAMESPACE_PREFIX:-$([ "$MODE" = "stg" ] && echo paas-ws-stg- |
 # stg: auto-enable agent runtime for new projects (runtime-gated by readiness).
 DEFAULT_ENABLE_AR="$([ "$MODE" = "stg" ] && echo True || echo False)"
 
+# lockdown（#1205；prod clone 彩排）：不探索、不讀 operator secret——沙盒裡不留任何真 operator 憑證，
+# 直接寫 #1162 D4 的黑洞 sentinel（與 src/data/neutralize.sql 同值），agent runtime 關閉。
+# 值域與 pre-install.sh 一致；不合法的值在 pre-install 就已 fail-loud，這裡再擋一次。
+case "${SANDBOX_NEUTRALIZE_LOCKDOWN:-}" in
+    1)
+        OPERATOR_URL="http://127.0.0.1:9"
+        OPERATOR_API_KEY="neutralized"
+        NS_PREFIX="paas-ws-stg-"
+        DEFAULT_ENABLE_AR="False"
+        echo "  SANDBOX_NEUTRALIZE_LOCKDOWN=1: operator 寫黑洞 sentinel，不探索叢集內 operator。"
+        ;;
+    ""|0) ;;
+    *)
+        echo "ERROR post-create: SANDBOX_NEUTRALIZE_LOCKDOWN='${SANDBOX_NEUTRALIZE_LOCKDOWN}' 不合法（只收 1／0／未設）。" >&2
+        exit 1
+        ;;
+esac
+
 # --- 探索叢集內 operator（per-environment；docker-desktop: paas-system，stg: paas-stg-system）---
 if [ -z "$OPERATOR_URL" ]; then
     _op_svc=$(kubectl get svc -n "$OPERATOR_NS" -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null | grep -E '^paas-operator' | head -1 || true)

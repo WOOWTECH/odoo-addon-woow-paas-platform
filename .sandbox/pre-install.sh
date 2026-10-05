@@ -17,6 +17,32 @@ set -euo pipefail
 : "${EXTRA_VALUES_FILE:?pre-install hook 需要 EXTRA_VALUES_FILE}"
 MODE="${MODE:-local}"
 
+# --- SANDBOX_NEUTRALIZE_LOCKDOWN（#1205；#1162 裁決 D7）------------------------------
+# prod clone 彩排沙盒專用：由 #1206 的 seed-from-prod.sh 在 create 前 export。只收 1／0／未設——
+# 其他值（true、yes、打錯字）fail-loud：「以為鎖了其實沒鎖」正是這個旗標要防的事。
+# 與 woow-dev plugin（cc/woowprd#5 platform mode、#6 stg mode）讀同一個 env、同一個值域。
+case "${SANDBOX_NEUTRALIZE_LOCKDOWN:-}" in
+  1) LOCKDOWN=1 ;;
+  ""|0) LOCKDOWN=0 ;;
+  *)
+    echo "ERROR pre-install: SANDBOX_NEUTRALIZE_LOCKDOWN='${SANDBOX_NEUTRALIZE_LOCKDOWN}' 不合法（只收 1／0／未設）。" >&2
+    exit 1 ;;
+esac
+if [ "$LOCKDOWN" = 1 ]; then
+  # prod clone 只進 stg mode（plugin 內建 chart）或 platform mode（woow-odoo chart；不跑本 hook，
+  # lockdown 由 plugin 自己套）。local／ci-local 沒有對應的中和流程 ⇒ 拒絕。
+  if [ "$MODE" != "stg" ]; then
+    echo "ERROR pre-install: SANDBOX_NEUTRALIZE_LOCKDOWN=1 只支援 stg mode（收到 MODE=${MODE}）；平台 Odoo 彩排請用 --mode platform。" >&2
+    exit 1
+  fi
+  # agent-runtime 會開 paas-managed 雙向 NP 並注入 operator 共享 secret，與「egress 只留 DNS＋同 ns」
+  # 語意衝突（#1162 D7）⇒ 同時設就 fail-loud，不默默忽略其中一個。
+  if [ -n "${AGENT_RUNTIME_NAMESPACE_SECRET:-}" ]; then
+    echo "ERROR pre-install: SANDBOX_NEUTRALIZE_LOCKDOWN=1 不可同時設 AGENT_RUNTIME_NAMESPACE_SECRET（語意衝突，#1162 D7）。" >&2
+    exit 1
+  fi
+fi
+
 # 只有 stg 模式需要這些平台 values；local/ci-local 直接結束（no-op）。
 [ "$MODE" = "stg" ] || exit 0
 
@@ -29,9 +55,23 @@ yaml_sq() { local v="${1:-}" q="'"; v="${v//$q/$q$q}"; printf "'%s'" "$v"; }
 # --- stg networkPolicy / storageClass / devMode（cloudflare tunnel ingress + operator egress + agent-runtime pods）---
 {
   echo "networkPolicy:"
-  echo "  allowIngressFromNamespaces: [paas-stg-cloudflare-system, paas-stg-system]"
-  echo "  allowEgressToNamespaces: [paas-stg-system]"
-  echo "  allowAgentRuntimePods: true"
+  if [ "$LOCKDOWN" = 1 ]; then
+    # lockdown：egress 只剩 DNS（kube-system:53）＋同 ns——關 internet（cc/woowprd#5）、關 agent-runtime
+    # pod、兩份 namespace 清單清空（含 ingress 鏡射到 egress 的那段；Helm 對 list 整段取代）。
+    # 不能在檔尾再寫一次 networkPolicy 覆蓋：同一份 YAML 重複的頂層鍵會讓 helm 解析失敗。
+    # adminPassword 隨機／list_db=False／拒絕 --pgadmin 與 --ttl never 由 plugin 在 lockdown 下處理
+    # （cc/woowprd#6）——那些是 create.sh 旗標與 chart 值，hook 看不到。
+    echo "  enabled: true"
+    echo "  allowInternetEgress: false"
+    echo "  allowIngressFromNamespaces: []"
+    echo "  allowEgressToNamespaces: []"
+    echo "  allowAgentRuntimePods: false"
+  else
+    # 平時 stg 無條件放行 agent-runtime pod（paas-managed）的問題另見 #1202。
+    echo "  allowIngressFromNamespaces: [paas-stg-cloudflare-system, paas-stg-system]"
+    echo "  allowEgressToNamespaces: [paas-stg-system]"
+    echo "  allowAgentRuntimePods: true"
+  fi
   echo "odoo:"
   # stg 是類正式驗證環境：釘 devMode=false。plugin chart 的 default devMode=true 只對本機
   # local sandbox（hostPath 掛 code、改檔即時生效）合理；stg 是打包 image、code 不變，開
