@@ -247,6 +247,9 @@
                  - image：cloud-odoo 正式 build（paas-odoo-ci#154，官方 odoo:18.0 lineage，
                    paas-odoo-ci#133 c14968），image.{registry,repository,tag,digest}，tenant 的
                    digest 為 schema 必填（#1194 c14349）。換 digest 會觸發 chart 升級閘 -u all。
+                   現釘 20261002.0402（core 18.0.20260926，cloud-v20261002.0402）。⚠ 本 seed
+                   noupdate=0、-u 會把 prod 範本蓋回這裡的值：只能往前換、不可退回較舊 core——
+                   已升上去的租戶 redeploy 到舊 core 會被升級閘 exit 78 擋下（服務起不來）。
                  - conf.workers 0 ＝ 與 Bitnami 版相同的 threaded 預設；odoo plan 一律帶
                    cs_odoo_workers，由 _apply_plan_spec_overlay 寫 conf.workers／limitMemory*。
                  - conf.maxCronThreads 2：tenant 在 web pod 內跑 cron（charts#81 R2-Q3）。
@@ -264,7 +267,7 @@
             <field name="helm_repo_url"></field>
             <field name="helm_chart_name">oci://jcr-prod.woowtech.io/woow-paas-docker-local/woow-odoo</field>
             <field name="helm_chart_version">0.2.7</field>
-            <field name="helm_default_values">{"profile": "tenant", "image": {"registry": "jcr-prod.woowtech.io", "repository": "woow-paas-docker-local/cloud-odoo", "tag": "20260929.0134", "digest": "sha256:8f984434b810c0ebeeea54c460167b8f487ece5ff87286f334c4fd47f43e5cd3"}, "resources": {"requests": {"cpu": "200m", "memory": "512Mi"}, "limits": {"cpu": "2000m", "memory": "2Gi"}}, "persistence": {"size": "10Gi"}, "loadDemoData": false, "conf": {"workers": 0, "maxCronThreads": 2}, "postgres": {"database": "odoo"}}</field>
+            <field name="helm_default_values">{"profile": "tenant", "image": {"registry": "jcr-prod.woowtech.io", "repository": "woow-paas-docker-local/cloud-odoo", "tag": "20261002.0402", "digest": "sha256:69aa54941462b5eb0e6c36541a55c4db27ea153af71e8e2937152e151d21a6bb"}, "resources": {"requests": {"cpu": "200m", "memory": "512Mi"}, "limits": {"cpu": "2000m", "memory": "2Gi"}}, "persistence": {"size": "10Gi"}, "loadDemoData": false, "conf": {"workers": 0, "maxCronThreads": 2}, "postgres": {"database": "odoo"}}</field>
             <field name="helm_value_specs">{"required": [
                 {"key": "conf.adminEmail", "label": "Administrator Email", "type": "text",
                 "placeholder": "you@example.com",
