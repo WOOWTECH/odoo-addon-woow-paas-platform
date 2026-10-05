@@ -1388,6 +1388,70 @@ def scale_release(namespace: str, name: str, replicas: int = Query(default=0, ge
 
 
 @router.post(
+    "/{namespace}/{name}/restart",
+    response_model=Dict[str, Any],
+    summary="#1432: rollout-restart every Deployment and StatefulSet of a release",
+)
+def restart_release(namespace: str, name: str):
+    """#1432：租戶的「重新啟動」——對 release 下**所有** Deployment 與 StatefulSet
+    下 ``kubectl rollout restart``（改 pod template annotation，由 controller 依各自
+    的更新策略重建 Pod；PVC、Secret、values 都不動）。
+
+    - 只「下達」不等待，與 reset-config（#461）同一個理由：收斂交給平台狀態機
+      （``upgrading`` → poll → ``running``），等 Pod 會讓回應時間綁在 image pull 與
+      RWO PVC re-attach 上。
+    - 一律查兩種 workload（scale 端點 #423 W6.3 的教訓：不要猜 chart 拓撲）。
+      open-design 的 daemon 是 StatefulSet，只重啟 Deployment 等於沒重啟主程式。
+    - VirtualMachine **不**處理（KubeVirt 沒有 rollout 語意；硬關機重開屬另一種
+      操作），回應列出略過的 VM，平台據此對 VM 型服務不提供本功能。
+    - 一個都沒有 → 404（靜默成功會讓租戶以為重啟了）。
+    - 任一個下達失敗 → 500，回應不宣稱成功；已下達的那幾個照常收斂（rollout
+      restart 本身是冪等、無害的，沒有需要補償的狀態）。
+    """
+    _validate_namespace_or_raise(namespace)
+    selector = f"app.kubernetes.io/instance={name}"
+    try:
+        deployments = k8s_service.get_deployments(namespace=namespace, label_selector=selector)
+        statefulsets = k8s_service.get_statefulsets(namespace=namespace, label_selector=selector)
+        if not deployments and not statefulsets:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=(
+                    f"No deployments or statefulsets found for release {name} "
+                    f"in namespace {namespace}"
+                ),
+            )
+        restarted_deps = []
+        for dep in deployments:
+            k8s_service.rollout_restart_deployment(namespace, dep["name"])
+            restarted_deps.append(dep["name"])
+        restarted_sts = []
+        for sts in statefulsets:
+            k8s_service.rollout_restart_statefulset(namespace, sts["name"])
+            restarted_sts.append(sts["name"])
+        logger.info(
+            "Restart issued for %s/%s: deployments=%s statefulsets=%s",
+            namespace, name, restarted_deps, restarted_sts,
+        )
+        return {
+            "action": "restart",
+            "namespace": namespace,
+            "release": name,
+            "deployments": restarted_deps,
+            "statefulsets": restarted_sts,
+            "rollout_awaited": False,
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
+    except KubectlException as e:
+        logger.error(f"Restart failed for {namespace}/{name}: {e.message}\nStderr: {e.stderr}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to restart workloads. Check operator logs for details.",
+        )
+
+
+@router.post(
     "/{namespace}/{name}/reset-config",
     response_model=Dict[str, Any],
     summary="#357/#449：reset admin_password（依 admin_password_carrier 分流）",
